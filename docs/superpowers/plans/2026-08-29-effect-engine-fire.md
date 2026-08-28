@@ -28,7 +28,7 @@
 - Create: `tests/effects/state.test.ts`
 
 **Interfaces:**
-- Produces: `Zone` 增加 `'float'`；`TriggerKind`；`ChoiceCard`；`ChoiceRequest`；`ChoiceAnswer`；`Op`；`EffectStep`（注意：既有 `Step` 是回合步骤类型，效果步骤命名为 `EffectStep` 避免冲突）；`StepResult`；`PendingEffect`；`TriggerEntry`；`CandidateFilter`；`EffectCtx`；`EffectGen`；`TriggerDef`；`CardEffects`；`GameState` 新增 5 字段（`pendingEffects` / `pendingPlay: Card | null` / `pendingShift: Card | null` / `resolvedTriggerUids` / `pendingStepAdvance`）。后续所有任务依赖这些名字，不得改名。
+- Produces: `Zone` 增加 `'float'`；`TriggerKind`；`ChoiceCard`；`ChoiceRequest`；`ChoiceAnswer`；`Op`；`EffectStep`（注意：既有 `Step` 是回合步骤类型，效果步骤命名为 `EffectStep` 避免冲突）；`StepResult`；`PendingEffect`；`TriggerEntry`；`CandidateFilter`；`EffectCtx`；`EffectGen`；`TriggerDef`；`CardEffects`；`GameState` 新增 5 字段（`pendingEffects` / `pendingPlay: Card | null` / `pendingShift: { card: Card; beforeCoveredDone: boolean } | null` / `resolvedTriggerUids` / `pendingStepAdvance`）。后续所有任务依赖这些名字，不得改名。
 
 - [ ] **Step 1: 写失败测试** `tests/effects/state.test.ts`
 
@@ -168,8 +168,8 @@ export interface GameState {
   pendingEffects: PendingEffect[];
   /** 打出中的卡（浮空，等"被盖住前"结算后落地）；null = 无 */
   pendingPlay: Card | null;
-  /** 偏转中的卡（浮空，等露出卡结算后落地）；null = 无 */
-  pendingShift: Card | null;
+  /** 偏转中的卡（浮空，等露出卡结算后落地；beforeCoveredDone = "被盖住前"触发是否已推入，一次性守卫防重入） */
+  pendingShift: { card: Card; beforeCoveredDone: boolean } | null;
   /** 本 end/start 步骤已结算的触发卡 uid（避免重复结算） */
   resolvedTriggerUids: string[];
   /** 打出链式结算完毕后需要推进回合步骤（runStack 栈空时消费） */
@@ -495,7 +495,7 @@ export function nextEffectId(): string {
 /** 全状态查找卡牌（含浮空中的 pendingPlay/pendingShift 卡） */
 export function findCard(s: GameState, uid: string): Card | undefined {
   if (s.pendingPlay?.uid === uid) return s.pendingPlay;
-  if (s.pendingShift?.uid === uid) return s.pendingShift;
+  if (s.pendingShift?.card.uid === uid) return s.pendingShift.card;
   for (const p of s.players) {
     for (const zone of ['hand', 'deck', 'trash'] as const) {
       const c = p[zone].find((x) => x.uid === uid);
@@ -704,16 +704,11 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
   }
 }
 
-/** 落牌（"被盖住前"触发先结算，然后落地 + 中指令） */
+/** 落牌（"被盖住前"触发由 playCard 预解析；此处只落地 + 中指令） */
 function completePlay(s: GameState): void {
   const card = s.pendingPlay!;
   const p = s.players[card.owner];
   const stack = p.stacks[card.line!];
-  if (stack.length > 0) {
-    const top = stack[stack.length - 1];
-    const t = top.faceUp ? collectTriggerFor(s, top, 'before-covered') : null;
-    if (t) { resolveTrigger(s, t); return; }
-  }
   card.zone = 'field';
   card.pos = stack.length;
   stack.push(card);
@@ -722,15 +717,16 @@ function completePlay(s: GameState): void {
   if (card.faceUp) pushMiddle(s, card.owner, card);
 }
 
-/** 偏转落地（目标顶卡"被盖住前"先结算，然后落地） */
+/** 偏转落地（目标顶卡"被盖住前"先结算一次——beforeCoveredDone 守卫防重入，然后落地） */
 function completeShift(s: GameState): void {
-  const card = s.pendingShift!;
+  const ps = s.pendingShift!;
+  const card = ps.card;
   const p = s.players[card.owner];
   const stack = p.stacks[card.line!];
-  if (stack.length > 0) {
+  if (stack.length > 0 && !ps.beforeCoveredDone) {
     const top = stack[stack.length - 1];
     const t = top.faceUp ? collectTriggerFor(s, top, 'before-covered') : null;
-    if (t) { resolveTrigger(s, t); return; }
+    if (t) { ps.beforeCoveredDone = true; resolveTrigger(s, t); return; }
   }
   card.zone = 'field';
   card.pos = stack.length;
@@ -1033,7 +1029,7 @@ git commit -m "feat: delete/return ops with reveal-on-uncover chain"
 - Create: `tests/effects/shift.test.ts`
 
 **Interfaces:**
-- Produces: `executeOp` 支持 `{ op: 'shift', uid, targetLine }`：校验在场/未覆盖/目标≠源线 → 移出源堆叠 → `zone='float'`、`line=targetLine`（提交目标，落地前不可变卦）、`pos=null`、`s.pendingShift=card` → 发 `card:shifted`（含 fromLine）→ `revealAfterRemoval`（源线露出卡中指令）→ 栈空时 `completeShift` 落地（目标顶卡"被盖住前"先结算）
+- Produces: `executeOp` 支持 `{ op: 'shift', uid, targetLine }`：校验在场/未覆盖/目标≠源线 → 移出源堆叠 → `zone='float'`、`line=targetLine`（提交目标，落地前不可变卦）、`pos=null`、`s.pendingShift={card, beforeCoveredDone:false}` → 发 `card:shifted`（含 fromLine）→ `revealAfterRemoval`（源线露出卡中指令）→ 栈空时 `completeShift` 落地（目标顶卡"被盖住前"经 beforeCoveredDone 一次性守卫结算一次，再放置）
 
 - [ ] **Step 1: 写失败测试** `tests/effects/shift.test.ts`
 
@@ -1114,7 +1110,7 @@ Expected: FAIL（shift 抛 "op not implemented"）
       card.zone = 'float';
       card.line = op.targetLine; // 提交目标（落地前不可变卦）
       card.pos = null;
-      s.pendingShift = card;
+      s.pendingShift = { card, beforeCoveredDone: false };
       emitCardEvent(s, 'card:shifted', card, { fromLine });
       revealAfterRemoval(s, owner, fromLine);
       break;
