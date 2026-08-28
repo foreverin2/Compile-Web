@@ -15,23 +15,48 @@ body {
 
 .board { display: flex; flex-direction: column; gap: 10px; }
 
-/* ===== 三栏布局：左玩家区 | 中间公共分隔区 | 右玩家区 ===== */
-.board-grid { display: grid; grid-template-columns: 1fr 260px 1fr; gap: 12px; align-items: start; }
+/* ===== 行式布局：顶部条带（信息+控制）→ 3 条线（每线一行）→ 底部条带（手牌+步骤） ===== */
+.board-grid { display: flex; flex-direction: column; gap: 10px; }
 
-.player-col { border: 1px solid #444; border-radius: 8px; padding: 10px; background: #22223a; display: flex; flex-direction: column; gap: 6px; }
-.player-col.active { border-color: #e0a030; box-shadow: 0 0 10px rgba(224, 160, 48, 0.25); }
-.player-col.self { background: #242440; }
+/* 顶部条带：P1 信息 | 控制组件 | P2 信息 */
+.player-strip { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: center; }
+.player-info { border: 1px solid #444; border-radius: 8px; padding: 8px 10px; background: #22223a; display: flex; flex-direction: column; gap: 4px; }
+.player-info.active { border-color: #e0a030; box-shadow: 0 0 10px rgba(224, 160, 48, 0.25); }
+.player-info.self { background: #242440; }
 .area-title { font-weight: bold; margin-bottom: 2px; }
 .meta-row { display: flex; gap: 14px; font-size: 13px; color: #aaa; flex-wrap: wrap; }
 
-/* ===== 堆叠槽（每条线一个横置条带） ===== */
-.stack-slot { border: 1px dashed #555; border-radius: 6px; padding: 6px; min-height: 130px; position: relative; background: rgba(0, 0, 0, 0.15); }
+/* 每条线一个水平行：P1 槽 | P1 协议 | P2 协议 | P2 槽 —— 4 格同一水平带（平行对齐） */
+.lane-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto minmax(0, 1fr); gap: 10px; align-items: stretch; }
+
+/* ===== 堆叠槽（横向条带：每条线一行内的左右两个槽） ===== */
+.stack-slot {
+  border: 1px dashed #555;
+  border-radius: 6px;
+  padding: 6px;
+  min-height: 130px;
+  position: relative;
+  background: rgba(0, 0, 0, 0.15);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+}
+/* 协议侧内边距：旋转后视觉卡盒比布局盒左右各宽约 17.6px，留出补偿避免视觉压到协议 */
+.stack-slot.p1 { padding-right: 20px; }
+.stack-slot.p2 { padding-left: 20px; }
 .stack-slot.interactable { cursor: pointer; }
+.stack-slot.self { border-color: rgba(224, 160, 48, 0.55); }
 .stack-slot.interactable:hover { border-color: #e0a030; background: rgba(224, 160, 48, 0.06); }
 .slot-label { position: absolute; top: 4px; right: 6px; font-size: 11px; color: #888; }
-.stack { display: flex; flex-direction: column; align-items: flex-start; }
+/* 堆叠：横向重叠；P1 向左生长（组右对齐、最新在最左），P2 向右生长（组左对齐、最新在最右） */
+.stack { display: flex; align-items: flex-start; }
+.stack.grow-left { justify-content: flex-end; }
+.stack.grow-right { justify-content: flex-start; }
 .stack-empty { color: #666; font-size: 12px; padding: 20px 6px; }
-.line-value { font-size: 12px; color: #e0a030; margin-top: 4px; text-align: right; }
+.line-value { font-size: 12px; color: #e0a030; margin-top: 4px; }
+.stack-slot.p1 .line-value { text-align: right; }
+.stack-slot.p2 .line-value { text-align: left; }
 
 /* ===== 卡牌正面（官方 PNG 卡面） ===== */
 .card {
@@ -61,14 +86,16 @@ body {
 .cardback-img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .card-back-value { position: absolute; right: 4px; bottom: 4px; background: #111; color: #e0a030; border: 1px solid #e0a030; border-radius: 50%; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: bold; }
 
-/* ===== 场上堆叠：完整卡面 + 46.2% 重叠（R3） ===== */
-/* 每张场上卡牌都以完整卡面渲染（正/背面），堆叠通过负 margin-top 重叠：
-   --card-h 为整卡渲染高度（含边框），上层卡盖住下层卡的底部，
-   被盖住的牌仅露出顶部 46.2% 条带（数值 + 顶部常驻指令自然可见）。
-   margin-top = -(1 - 0.462) × 卡高 = -53.8% 卡高；zIndex 仍由 pos 决定，顶层盖住下层。 */
-.stack { --card-h: 125px; }
+/* ===== 场上堆叠：完整卡面 + 横向 46.2% 重叠（R3） ===== */
+/* 每张场上卡牌以完整卡面渲染（正/背面），堆叠沿线路方向横向重叠：
+   卡盒布局宽 --card-w（transform 不影响布局），旋转 90° 后视觉宽 = --card-h = 125px。
+   后一张牌（更靠外侧）通过负 margin-left 盖住前一张牌的外侧，露出靠协议一侧
+   46.2% × 125px = 57.75px 的横向条带。margin = 露出 − 布局宽 ≈ −32.1px
+   （注意：旋转以盒中心为原点，视觉盒左右各比布局盒宽出约 17.6px，因此不能直接用
+   −53.8% × 125px = −67.25px，那只会露出约 18%）。zIndex 仍由 pos 决定，最新盖住旧牌。 */
+.stack { --card-h: 125px; --card-w: calc((var(--card-h) - 2px) * 0.71429 + 2px); }
 .stack .card {
-  width: auto;   /* 按图片宽高比收缩，宽度随固定高度自动推导 */
+  width: var(--card-w); /* 卡面 750×1050 → 宽/高 = 5/7；固定布局宽使重叠计算精确 */
   padding: 0;
 }
 .stack .card .card-face-img,
@@ -79,11 +106,12 @@ body {
 }
 .stack .card .card-back {
   display: inline-block;
-  width: auto;
+  width: 100%;
   height: calc(var(--card-h) - 2px);
 }
+/* 露出 = 0.462 × 旋转后卡宽(--card-h)；margin = 露出 − 布局宽(--card-w) ≈ −32.1px */
 .stack .card + .card {
-  margin-top: calc(-1 * var(--card-h) * 0.538);
+  margin-left: calc(0.462 * var(--card-h) - var(--card-w));
 }
 
 /* ===== 被盖住的牌：仅保留样式标识（虚框/降透明），渲染为完整卡面 ===== */
@@ -106,23 +134,8 @@ body {
 .card.top-card { border-color: #e0a030; box-shadow: 0 0 8px rgba(224, 160, 48, 0.5); }
 .card.top-card::after { content: '活跃'; position: absolute; top: -8px; right: -6px; background: #e0a030; color: #111; font-size: 9px; font-weight: bold; padding: 1px 5px; border-radius: 8px; z-index: 5; }
 
-/* ===== 中间公共分隔区（协议） ===== */
-/* Gemini 生成：牌桌材质（半透明毛玻璃 + 荧光描边） */
-.mid-col {
-  border: 1px solid rgba(0, 255, 204, 0.25);
-  border-radius: 12px;
-  padding: 10px;
-  background: url('/assets/table-mid.jpg') no-repeat center center;
-  background-size: 100% 100%;
-  box-shadow: 0 0 25px rgba(0, 255, 204, 0.12), inset 0 0 15px rgba(0, 255, 204, 0.08);
-  backdrop-filter: blur(8px);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.mid-title { text-align: center; font-weight: bold; color: #ccc; margin-bottom: 2px; }
-.protocol-row { display: flex; gap: 8px; align-items: stretch; min-height: 130px; }
-.protocol-cell { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+/* ===== 协议格（位于 lane-row 中间两列，行高由协议撑起，槽随之 stretch 对齐） ===== */
+.protocol-cell { display: flex; flex-direction: column; gap: 2px; }
 .protocol-owner { font-size: 10px; color: #999; text-align: center; }
 .protocol {
   position: relative;
@@ -136,7 +149,8 @@ body {
   align-items: center;
   justify-content: center;
 }
-.protocol-img { display: block; width: 130px; max-width: 100%; height: auto; border-radius: 4px; }
+/* 点2/点3：协议放大（130px → 180px 宽；竖版 750×1050 → 高约 252px） */
+.protocol-img { display: block; width: 180px; max-width: 100%; height: auto; border-radius: 4px; }
 .protocol.compiled { border-color: #4caf50; box-shadow: 0 0 8px rgba(76, 175, 80, 0.4); }
 .protocol-check {
   position: absolute; top: 4px; right: 6px;
@@ -169,14 +183,15 @@ body {
 .control-module.held-0 .control-label { color: #f0b040; }
 .control-module.held-1 .control-label { color: #8ab8ff; }
 
-/* ===== 手牌 ===== */
+/* ===== 手牌（底部条带：P1 手牌 | 步骤指示 | P2 手牌） ===== */
+.hand-strip { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: start; }
 .hand { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; min-height: 70px; }
 /* 仅当前玩家（可交互）的手牌显示可点光标；对手隐藏手牌不暗示可点击 */
-.player-col.self .hand .card { cursor: pointer; }
-.player-col.self .hand .card:hover { border-color: #e0a030; }
+.hand.self .card { cursor: pointer; }
+.hand.self .card:hover { border-color: #e0a030; }
 
 /* ===== 指示 / 操作 / 日志 ===== */
-.step-indicator { text-align: center; font-size: 13px; color: #ccc; margin-top: 2px; padding: 4px 0; border-top: 1px solid rgba(255, 255, 255, 0.08); }
+.step-indicator { text-align: center; font-size: 13px; color: #ccc; padding: 4px 0; }
 .action-bar { display: flex; gap: 8px; align-items: center; padding: 8px 0; flex-wrap: wrap; }
 .btn { padding: 6px 12px; border-radius: 6px; border: none; background: #e0a030; color: #111; font-weight: bold; cursor: pointer; }
 .btn:hover { background: #f0b040; }

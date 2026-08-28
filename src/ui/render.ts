@@ -73,12 +73,13 @@ function renderProtocol(p: { defId: string; compiled: boolean }, player: PlayerI
 }
 
 /**
- * 一条线的堆叠槽（横置条带）：stacks[line] 中 pos 0 为底层（最早打出、被盖得最狠），
- * 最后一个元素为顶层（未覆盖）。视觉自上而下：顶层（未覆盖）在上，被盖住的牌在下；
- * zIndex=pos 保证上层盖住下层。所有卡牌均以完整卡面渲染，被盖住的牌通过负 margin-top
- * 重叠在上一张之下（露出顶部 46.2% 条带，见 styles.css .stack .card + .card）。
- * 场上卡牌按归属旋转：P1（owner 0）顺时针 90°（.rot-cw），P2（owner 1）逆时针 90°
- * （.rot-ccw），正反面一致；手牌不旋转。
+ * 一条线的堆叠槽（横向条带）：stacks[line] 中 pos 0 为最早打出（贴协议一侧），
+ * 新牌沿该线从协议向外逐张铺开（横向重叠，见 styles.css .stack .card + .card）：
+ * - P1（左侧，grow-left）：协议在右，pos 0 贴右端，越新的牌越靠左（向左生长）。
+ * - P2（右侧，grow-right）：协议在左，pos 0 贴左端，越新的牌越靠右（向右生长）。
+ * zIndex=pos 保证最新（pos 最大）盖住旧牌。所有卡牌均以完整卡面渲染，被盖住的牌
+ * 露出靠协议一侧的 46.2% 宽条带（横向）。场上卡牌按归属旋转：P1（owner 0）顺时针
+ * 90°（.rot-cw），P2（owner 1）逆时针 90°（.rot-ccw），正反面一致；手牌不旋转。
  */
 function renderStackSlot(
   s: GameState,
@@ -88,12 +89,16 @@ function renderStackSlot(
   onPlay: (line: Line) => void,
   interactable: boolean
 ): HTMLElement {
-  const slot = el('div', 'stack-slot' + (interactable ? ' interactable' : ''));
+  const slot = el('div', `stack-slot p${player + 1}${interactable ? ' interactable self' : ''}`);
   slot.appendChild(el('div', 'slot-label', `线${line + 1}`));
   const cards = s.players[player].stacks[line];
-  const pile = el('div', 'stack');
-  // 视觉自上而下：顶层（未覆盖）在上，被盖住的牌在下；zIndex=pos 保证上层盖住下层
-  for (let i = cards.length - 1; i >= 0; i--) {
+  const pile = el('div', 'stack' + (player === 0 ? ' grow-left' : ' grow-right'));
+  // 放置顺序：pos 0（最旧）贴协议一侧，越新的牌越靠外侧。
+  // P1 渲染从最新到最旧（row + justify-content:flex-end → 整组右对齐，pos 0 贴右端协议）；
+  // P2 渲染从最旧到最新（row + 默认左对齐 → pos 0 贴左端协议）。
+  const order: number[] =
+    player === 0 ? cards.map((_, i) => cards.length - 1 - i) : cards.map((_, i) => i);
+  for (const i of order) {
     const card = cards[i];
     const isTop = i === cards.length - 1;
     // 完整卡面渲染（正面官方图 / 背面 Cardback），不再使用 mini 图 + 徽章
@@ -118,30 +123,29 @@ function renderStackSlot(
   return slot;
 }
 
-function renderPlayerColumn(
-  s: GameState,
-  player: PlayerId,
-  opts: { isSelf: boolean; selected: string | null; onSelect: (uid: string) => void; onPlay: (line: Line) => void }
-): HTMLElement {
+/** 玩家信息条：标题（回合高亮）+ 牌库/弃牌堆/手牌计数（手牌本体在底部条带） */
+function renderPlayerInfo(s: GameState, player: PlayerId, opts: { isSelf: boolean }): HTMLElement {
   const p = s.players[player];
   const active = player === s.turnPlayer;
-  const col = el('div', `player-col${active ? ' active' : ''}${opts.isSelf ? ' self' : ''}`);
-  col.appendChild(el('div', 'area-title', `玩家 ${player + 1}${active ? '（回合中）' : ''}`));
+  const info = el('div', `player-info${active ? ' active' : ''}${opts.isSelf ? ' self' : ''}`);
+  info.appendChild(el('div', 'area-title', `玩家 ${player + 1}${active ? '（回合中）' : ''}`));
 
   const meta = el('div', 'meta-row');
   meta.appendChild(el('span', 'deck-count', `牌库 ${p.deck.length}`));
   meta.appendChild(el('span', 'trash-count', `弃牌堆 ${p.trash.length}`));
   meta.appendChild(el('span', 'hand-count', `手牌 ${p.hand.length}`));
-  col.appendChild(meta);
+  info.appendChild(meta);
+  return info;
+}
 
-  for (const line of [0, 1, 2] as Line[]) {
-    col.appendChild(
-      renderStackSlot(s, player, line, opts.isSelf ? opts.selected : null, opts.isSelf ? opts.onPlay : () => {}, opts.isSelf)
-    );
-  }
-
-  const hand = el('div', 'hand');
-  for (const card of p.hand) {
+/** 手牌条：self（回合玩家）正面可点选，对手背面展示 */
+function renderHand(
+  s: GameState,
+  player: PlayerId,
+  opts: { isSelf: boolean; selected: string | null; onSelect: (uid: string) => void }
+): HTMLElement {
+  const hand = el('div', 'hand' + (opts.isSelf ? ' self' : ''));
+  for (const card of s.players[player].hand) {
     const node = renderCardFace({ defId: card.defId, faceUp: opts.isSelf });
     node.dataset.uid = card.uid;
     if (opts.isSelf && opts.selected === card.uid) node.classList.add('selected');
@@ -153,24 +157,7 @@ function renderPlayerColumn(
     }
     hand.appendChild(node);
   }
-  col.appendChild(hand);
-  return col;
-}
-
-/** 中间公共分隔区：控制组件 + 3 条线，每条线左右并排放置双方协议（共 6 格） */
-function renderMidColumn(s: GameState): HTMLElement {
-  const col = el('div', 'mid-col');
-  col.appendChild(el('div', 'mid-title', '公共分隔区'));
-  // R4 控制组件（控制权卡牌）：以 control-front.png 可视化持有者
-  col.appendChild(renderControlModule(s));
-  for (const line of [0, 1, 2] as Line[]) {
-    const row = el('div', 'protocol-row');
-    row.appendChild(renderProtocolCell(s, 0, line));
-    row.appendChild(renderProtocolCell(s, 1, line));
-    col.appendChild(row);
-  }
-  col.appendChild(el('div', 'step-indicator', `步骤: ${s.step}`));
-  return col;
+  return hand;
 }
 
 /** 控制权卡牌可视化：中立（灰化）或由玩家 1 / 玩家 2 持有（高亮 + 标签） */
@@ -247,32 +234,57 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
     wrap.appendChild(el('div', 'winner-banner', `玩家 ${s.winner + 1} 获胜！`));
   }
 
-  // 固定布局：玩家 1 恒在左、玩家 2 恒在右（左右对称而非上下对称）；
-  // 回合玩家（self）一侧可交互并高亮边框，另一侧手牌显示背面
+  // 行式布局（点2 对齐修复）：不再用「三栏各堆三行」，改为逐线一行——
+  // 每条线是一个水平行：P1 堆叠槽 | P1 协议 | P2 协议 | P2 堆叠槽，
+  // 协议对与其两个堆叠槽落在同一水平带内（平行对齐）。
+  // 牌库/弃牌/手牌计数与手牌本体分别放在顶部条带与底部条带的左右两侧。
   const grid = el('div', 'board-grid');
-  grid.appendChild(
-    renderPlayerColumn(s, 0, {
+
+  // 顶部条带：双方信息 + 中间控制组件
+  const strip = el('div', 'player-strip');
+  strip.appendChild(renderPlayerInfo(s, 0, { isSelf: s.turnPlayer === 0 }));
+  strip.appendChild(renderControlModule(s));
+  strip.appendChild(renderPlayerInfo(s, 1, { isSelf: s.turnPlayer === 1 }));
+  grid.appendChild(strip);
+
+  // 三条线（每线一行，同行 4 格水平对齐）
+  for (const line of [0, 1, 2] as Line[]) {
+    const row = el('div', 'lane-row');
+    row.appendChild(
+      renderStackSlot(s, 0, line, s.turnPlayer === 0 ? selectedUid : null, s.turnPlayer === 0 ? (l) => playToLine(s, cb, l) : () => {}, s.turnPlayer === 0)
+    );
+    row.appendChild(renderProtocolCell(s, 0, line));
+    row.appendChild(renderProtocolCell(s, 1, line));
+    row.appendChild(
+      renderStackSlot(s, 1, line, s.turnPlayer === 1 ? selectedUid : null, s.turnPlayer === 1 ? (l) => playToLine(s, cb, l) : () => {}, s.turnPlayer === 1)
+    );
+    grid.appendChild(row);
+  }
+
+  // 底部条带：双方手牌 + 中间步骤指示
+  const handStrip = el('div', 'hand-strip');
+  handStrip.appendChild(
+    renderHand(s, 0, {
       isSelf: s.turnPlayer === 0,
       selected: s.turnPlayer === 0 ? selectedUid : null,
       onSelect: (uid) => {
         selectedUid = uid;
         renderApp(root, s, cb);
       },
-      onPlay: (line) => playToLine(s, cb, line),
     })
   );
-  grid.appendChild(renderMidColumn(s));
-  grid.appendChild(
-    renderPlayerColumn(s, 1, {
+  handStrip.appendChild(el('div', 'step-indicator', `步骤: ${s.step}`));
+  handStrip.appendChild(
+    renderHand(s, 1, {
       isSelf: s.turnPlayer === 1,
       selected: s.turnPlayer === 1 ? selectedUid : null,
       onSelect: (uid) => {
         selectedUid = uid;
         renderApp(root, s, cb);
       },
-      onPlay: (line) => playToLine(s, cb, line),
     })
   );
+  grid.appendChild(handStrip);
   wrap.appendChild(grid);
 
   const actionBar = el('div', 'action-bar');
