@@ -56,10 +56,13 @@ function renderCardFace(card: { defId: string; faceUp: boolean; uid: string }): 
 
 function renderProtocol(p: { defId: string; compiled: boolean }, player: PlayerId): HTMLElement {
   const box = el('div', 'protocol' + (p.compiled ? ' compiled' : ''));
+  // holder 包裹卡面图：环绕特效环挂在 holder 上（与可见卡面同尺寸），
+  // 不受 .protocol 盒 flex:1 拉伸影响（横版协议/行高不一致时环仍紧贴卡面）
+  const holder = el('div', 'protocol-holder');
   // 已编译协议专属特效类（类随 defId 挂载 → 协议换位/重排时特效跟随对应协议）
   if (p.compiled) {
     box.classList.add(`compiled-fx-${p.defId}`);
-    appendCompiledRing(box, p.defId);
+    appendCompiledRing(holder, p.defId);
   }
   const img = document.createElement('img');
   // R1 协议卡朝向：P1（左）按原图方向展示；P2（右）旋转 180° 使双方协议相对放置。
@@ -67,7 +70,8 @@ function renderProtocol(p: { defId: string; compiled: boolean }, player: PlayerI
   img.className = 'protocol-img' + (player === 1 ? ' rot-180' : '');
   img.src = `/assets/protocols/${p.defId}/protocol-${p.compiled ? 'compiled' : 'loading'}.png`;
   img.alt = p.compiled ? 'compiled protocol' : 'protocol loading';
-  box.appendChild(img);
+  holder.appendChild(img);
+  box.appendChild(holder);
   if (p.compiled) box.appendChild(el('span', 'protocol-check', '✓'));
   // 双击协议卡放大查看（协议无单击动作，直接 dblclick 即可；协议图横向展示）
   box.addEventListener('dblclick', () => openZoom(p.defId, true, true, p.compiled));

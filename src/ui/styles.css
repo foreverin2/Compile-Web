@@ -376,7 +376,13 @@ body {
   border-color: #ff6a00;
   box-shadow: 0 0 12px rgba(255, 61, 0, 0.6), inset 0 0 10px rgba(255, 61, 0, 0.25);
 }
-/* 环绕环容器：比协议卡外扩 7px；负 z 藏在卡面之下，仅外圈环带可见 */
+/* 协议 holder：包裹卡面图（与可见卡面同尺寸），作为环绕环的定位基准 */
+.protocol-holder {
+  position: relative;
+  display: inline-flex;
+  isolation: isolate;
+}
+/* 环绕环容器：比 holder（卡面）外扩 7px；负 z 藏在卡面之下，仅外圈环带可见 */
 .compiled-ring {
   position: absolute;
   inset: -7px;
