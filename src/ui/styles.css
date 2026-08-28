@@ -1,5 +1,16 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: system-ui, sans-serif; background: #1a1a2e; color: #eee; }
+body {
+  font-family: system-ui, sans-serif;
+  color: #e0e6ed;
+  min-height: 100vh;
+  background-color: #0a0e1a;
+  /* Gemini 生成：黑暗赛博虚空背景 */
+  background-image: url('/assets/bg-scene.png');
+  background-size: cover;
+  background-position: center bottom;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
 #app { max-width: 1200px; margin: 0 auto; padding: 12px; }
 
 .board { display: flex; flex-direction: column; gap: 10px; }
@@ -54,6 +65,7 @@ body { font-family: system-ui, sans-serif; background: #1a1a2e; color: #eee; }
 /* ===== 被盖住的牌：完整卡面小图（半透明）+ 数值徽章，错位堆叠 ===== */
 /* 上边距为负实现"嵌在上一张下面"的错位效果；zIndex 仍由 pos 决定，顶层盖住下层 */
 .card.covered {
+  display: flex;
   width: auto;
   min-height: 0;
   flex-direction: row;
@@ -82,7 +94,19 @@ body { font-family: system-ui, sans-serif; background: #1a1a2e; color: #eee; }
 .card.top-card::after { content: '活跃'; position: absolute; top: -8px; right: -6px; background: #e0a030; color: #111; font-size: 9px; font-weight: bold; padding: 1px 5px; border-radius: 8px; z-index: 5; }
 
 /* ===== 中间公共分隔区（协议） ===== */
-.mid-col { border: 1px solid #444; border-radius: 8px; padding: 10px; background: #1e1e34; display: flex; flex-direction: column; gap: 8px; }
+/* Gemini 生成：牌桌材质（半透明毛玻璃 + 荧光描边） */
+.mid-col {
+  border: 1px solid rgba(0, 255, 204, 0.25);
+  border-radius: 12px;
+  padding: 10px;
+  background: url('/assets/table-mid.jpg') no-repeat center center;
+  background-size: 100% 100%;
+  box-shadow: 0 0 25px rgba(0, 255, 204, 0.12), inset 0 0 15px rgba(0, 255, 204, 0.08);
+  backdrop-filter: blur(8px);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 .mid-title { text-align: center; font-weight: bold; color: #ccc; margin-bottom: 2px; }
 .protocol-row { display: flex; gap: 8px; align-items: stretch; min-height: 130px; }
 .protocol-cell { flex: 1; display: flex; flex-direction: column; gap: 2px; }
