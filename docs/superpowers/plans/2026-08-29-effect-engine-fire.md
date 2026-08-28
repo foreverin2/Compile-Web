@@ -1181,16 +1181,16 @@ registerCardEffects('test-start', {
 });
 
 describe('trigger collection', () => {
-  it('collects end triggers from face-up uncovered top cards, skipping resolved uids', () => {
+  it('collects end triggers from own-side face-up uncovered top cards, skipping resolved uids', () => {
     const s = createGame();
-    s.phase = 'turn';
+    s.phase = 'turn'; // turnPlayer = 0
     s.players[0].stacks[0] = [makeCard('test-end', 0, 'field', true, 0, 0)];
     s.players[0].stacks[1] = [makeCard('test-end', 0, 'field', true, 1, 0)];
-    s.players[1].stacks[0] = [makeCard('test-end', 1, 'field', true, 0, 0)]; // 对手的也算
+    s.players[1].stacks[0] = [makeCard('test-end', 1, 'field', true, 0, 0)]; // 对手的：end 只收当前回合玩家场地侧（规则"你场地侧"）
     s.resolvedTriggerUids = [s.players[0].stacks[1][0].uid];
     const ts = collectTriggers(s, 'end');
-    expect(ts).toHaveLength(2);
-    expect(ts.map((t) => t.optional)).toEqual([true, true]);
+    expect(ts).toHaveLength(1); // 自己的 2 张减去已结算 1 张；对手的 1 张不收集
+    expect(ts.map((t) => t.optional)).toEqual([true]);
   });
 
   it('does not collect triggers from face-down or covered cards', () => {
@@ -1241,11 +1241,13 @@ Expected: FAIL（`collectTriggers` 不存在；`advanceStep` 未重置）
 `src/core/effects/triggers.ts` 追加：
 
 ```ts
-/** 收集某类触发：双方场上正面未覆盖顶卡中注册了该触发的卡（跳过已结算 uid） */
+/** 收集某类触发：end/start 只收集当前回合玩家场地侧（规则"结算你场地侧所有'结束'触发"）；
+ *  其余种类（after 等）收集双方。跳过已结算 uid。 */
 export function collectTriggers(s: GameState, kind: TriggerKind): TriggerEntry[] {
   const out: TriggerEntry[] = [];
   const seen = new Set(s.resolvedTriggerUids);
-  for (const p of s.players) {
+  const players = kind === 'end' || kind === 'start' ? [s.players[s.turnPlayer]] : s.players;
+  for (const p of players) {
     for (const line of [0, 1, 2] as Line[]) {
       const stack = p.stacks[line];
       const top = stack[stack.length - 1];
