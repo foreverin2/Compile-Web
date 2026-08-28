@@ -50,7 +50,6 @@ body {
 /* 卡面图不拦截点击/拖拽：点击落到 .card 容器，事件冒泡给手牌选择与堆叠槽打牌 */
 .card-face-img,
 .cardback-img,
-.covered-img,
 .protocol-img {
   pointer-events: none;
   user-select: none;
@@ -62,32 +61,46 @@ body {
 .cardback-img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .card-back-value { position: absolute; right: 4px; bottom: 4px; background: #111; color: #e0a030; border: 1px solid #e0a030; border-radius: 50%; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: bold; }
 
-/* ===== 被盖住的牌：完整卡面小图（半透明）+ 数值徽章，错位堆叠 ===== */
-/* 上边距为负实现"嵌在上一张下面"的错位效果；zIndex 仍由 pos 决定，顶层盖住下层 */
-.card.covered {
-  display: flex;
+/* ===== 场上堆叠：完整卡面 + 46.2% 重叠（R3） ===== */
+/* 每张场上卡牌都以完整卡面渲染（正/背面），堆叠通过负 margin-top 重叠：
+   --card-h 为整卡渲染高度（含边框），上层卡盖住下层卡的底部，
+   被盖住的牌仅露出顶部 46.2% 条带（数值 + 顶部常驻指令自然可见）。
+   margin-top = -(1 - 0.462) × 卡高 = -53.8% 卡高；zIndex 仍由 pos 决定，顶层盖住下层。 */
+.stack { --card-h: 125px; }
+.stack .card {
+  width: auto;   /* 按图片宽高比收缩，宽度随固定高度自动推导 */
+  padding: 0;
+}
+.stack .card .card-face-img,
+.stack .card .cardback-img {
+  display: block;
+  height: calc(var(--card-h) - 2px); /* 减 2px 边框，使整卡盒高恰为 --card-h */
   width: auto;
-  min-height: 0;
-  flex-direction: row;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 6px 2px 2px;
+}
+.stack .card .card-back {
+  display: inline-block;
+  width: auto;
+  height: calc(var(--card-h) - 2px);
+}
+.stack .card + .card {
+  margin-top: calc(-1 * var(--card-h) * 0.538);
+}
+
+/* ===== 被盖住的牌：仅保留样式标识（虚框/降透明），渲染为完整卡面 ===== */
+.card.covered {
   border-style: dashed;
   border-color: #666;
-  background: rgba(51, 51, 90, 0.5);
-  margin-top: -56px;
-  opacity: 0.8;
+  background: rgba(51, 51, 90, 0.45);
+  opacity: 0.85;
 }
-.covered-mini { position: relative; width: 60px; flex-shrink: 0; }
-.covered-img { display: block; width: 60px; height: auto; opacity: 0.6; border-radius: 3px; }
-.covered-badge {
-  position: absolute; right: 2px; bottom: 2px;
-  background: #111; color: #e0a030; border: 1px solid #e0a030; border-radius: 50%;
-  min-width: 18px; height: 18px; padding: 0 3px;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 11px; font-weight: bold; line-height: 1;
-}
-.card-covered-text { font-size: 10px; color: #ccc; white-space: nowrap; }
+
+/* ===== 场上/协议旋转 ===== */
+/* R2 场上卡牌：P1（owner 0）顺时针 90°、P2（owner 1）逆时针 90°，正反面一致；
+   仅堆叠槽内的卡牌容器携带（手牌不旋转）。 */
+.rot-cw { transform: rotate(90deg); }
+.rot-ccw { transform: rotate(-90deg); }
+/* R1 协议卡：P2 侧旋转 180°，使双方 3 张协议相对放置（P1 侧按原方向展示） */
+.rot-180 { transform: rotate(180deg); }
 
 /* ===== 顶层（未覆盖）牌：唯一活跃 ===== */
 .card.top-card { border-color: #e0a030; box-shadow: 0 0 8px rgba(224, 160, 48, 0.5); }
@@ -133,6 +146,28 @@ body {
 }
 .protocol-name { font-weight: bold; font-size: 12px; }
 .protocol-loading { font-size: 10px; color: #aaa; }
+
+/* ===== 控制组件（控制权卡牌 R4） ===== */
+.control-module {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  margin: 2px 0 6px;
+  padding: 4px;
+  border: 1px dashed rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.25);
+}
+.control-img { width: 50px; height: auto; display: block; }
+/* 中立：灰化淡化 */
+.control-module.neutral .control-img { filter: grayscale(0.85) opacity(0.55); }
+/* 持有方高亮 */
+.control-module.held-0 .control-img { box-shadow: 0 0 12px rgba(224, 160, 48, 0.75); border-radius: 4px; }
+.control-module.held-1 .control-img { box-shadow: 0 0 12px rgba(96, 170, 255, 0.75); border-radius: 4px; }
+.control-label { font-size: 11px; color: #ccc; text-align: center; }
+.control-module.held-0 .control-label { color: #f0b040; }
+.control-module.held-1 .control-label { color: #8ab8ff; }
 
 /* ===== 手牌 ===== */
 .hand { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; min-height: 70px; }

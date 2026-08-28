@@ -1,5 +1,4 @@
 import type { GameState, PlayerId, Line } from '../core/models/types';
-import { getCardDef } from '../data/demo';
 import { getLineValue, getDraftPool, getCurrentDrafter } from '../core/state/create';
 import { getLegalActions, type LegalAction } from '../core/game';
 
@@ -53,42 +52,19 @@ function renderCardFace(card: { defId: string; faceUp: boolean }): HTMLElement {
 }
 
 /**
- * 被盖住的牌（堆叠中非顶层）：按规则仅显示数值 + 顶部（常驻）指令；
- * 中部（即时）与底部（辅助）指令被遮蔽失效，不显示。
- * 用官方卡面图实现时无法可靠地从 PNG 裁剪出顶部文字区，故采用：
- * 完整卡面小图（宽度 60px）+ 半透明 + 数值徽章叠加 —— 数值可见，
- * 半透明与小尺寸直观传达"被盖住/失效"（顶部指令文字丢失，见报告权衡）。
- * 背面牌无指令，印刷值按规则为 2，标注"背面"。
+ * 被盖住的牌（堆叠中非顶层）不再使用 mini 小图 + 数值徽章方案（已废弃）：
+ * 所有场上卡牌统一以完整卡面渲染（renderCardFace），堆叠通过负 margin-top
+ * （-53.8% 卡高）重叠，使每张被盖住的牌仅露出顶部 46.2% 条带 —— 数值与顶部
+ * （常驻）指令在条带内自然可见，中部（即时）与底部（辅助）指令被上层盖住而失效。
+ * 背面牌无指令，印刷值按规则为 2，同样以完整卡背重叠。
  */
-function renderCoveredCard(card: { defId: string; faceUp: boolean }): HTMLElement {
-  const box = el('div', 'card covered');
-  if (card.faceUp) box.dataset.defId = card.defId;
-  const mini = el('div', 'covered-mini');
-  const img = document.createElement('img');
-  if (card.faceUp) {
-    const def = getCardDef(card.defId);
-    const [protocol, value] = splitDefId(card.defId);
-    img.src = `/assets/protocols/${protocol}/card-${value}.png`;
-    img.alt = `protocol ${protocol} card ${value}`;
-    img.className = 'covered-img';
-    mini.appendChild(img);
-    mini.appendChild(el('span', 'covered-badge', String(def.value)));
-  } else {
-    img.src = '/assets/Cardback.jpg';
-    img.alt = 'card back';
-    img.className = 'covered-img';
-    mini.appendChild(img);
-    mini.appendChild(el('span', 'covered-badge', '2'));
-    box.appendChild(el('div', 'card-covered-text', '背面'));
-  }
-  box.appendChild(mini);
-  return box;
-}
 
-function renderProtocol(p: { defId: string; compiled: boolean }): HTMLElement {
+function renderProtocol(p: { defId: string; compiled: boolean }, player: PlayerId): HTMLElement {
   const box = el('div', 'protocol' + (p.compiled ? ' compiled' : ''));
   const img = document.createElement('img');
-  img.className = 'protocol-img';
+  // R1 协议卡朝向：P1（左）按原图方向展示；P2（右）旋转 180° 使双方协议相对放置。
+  // PNG 资源为原方向（水/火/光/生 750×1050 竖版，暗/死 1050×750 横版），各按自然比例显示。
+  img.className = 'protocol-img' + (player === 1 ? ' rot-180' : '');
   img.src = `/assets/protocols/${p.defId}/protocol-${p.compiled ? 'compiled' : 'loading'}.png`;
   img.alt = p.compiled ? 'compiled protocol' : 'protocol loading';
   box.appendChild(img);
@@ -98,8 +74,11 @@ function renderProtocol(p: { defId: string; compiled: boolean }): HTMLElement {
 
 /**
  * 一条线的堆叠槽（横置条带）：stacks[line] 中 pos 0 为底层（最早打出、被盖得最狠），
- * 最后一个元素为顶层（未覆盖）。渲染时顶层卡牌完整显示（活跃），
- * 被盖住的牌以压缩条形式堆叠其下（完整卡面小图 + 数值徽章，半透明、错位）。
+ * 最后一个元素为顶层（未覆盖）。视觉自上而下：顶层（未覆盖）在上，被盖住的牌在下；
+ * zIndex=pos 保证上层盖住下层。所有卡牌均以完整卡面渲染，被盖住的牌通过负 margin-top
+ * 重叠在上一张之下（露出顶部 46.2% 条带，见 styles.css .stack .card + .card）。
+ * 场上卡牌按归属旋转：P1（owner 0）顺时针 90°（.rot-cw），P2（owner 1）逆时针 90°
+ * （.rot-ccw），正反面一致；手牌不旋转。
  */
 function renderStackSlot(
   s: GameState,
@@ -117,8 +96,12 @@ function renderStackSlot(
   for (let i = cards.length - 1; i >= 0; i--) {
     const card = cards[i];
     const isTop = i === cards.length - 1;
-    const node = isTop ? renderCardFace(card) : renderCoveredCard(card);
+    // 完整卡面渲染（正面官方图 / 背面 Cardback），不再使用 mini 图 + 徽章
+    const node = renderCardFace(card);
+    if (!isTop) node.classList.add('covered');
     if (isTop) node.classList.add('top-card');
+    // R2 场上卡牌旋转：仅场上堆叠（正反面一致）；手牌 / 草案不受影响
+    node.classList.add(card.owner === 0 ? 'rot-cw' : 'rot-ccw');
     node.dataset.uid = card.uid;
     node.style.zIndex = String(i);
     if (selected === card.uid) node.classList.add('selected');
@@ -174,26 +157,39 @@ function renderPlayerColumn(
   return col;
 }
 
-/** 中间公共分隔区：3 条线，每条线左右并排放置双方协议（共 6 格） */
+/** 中间公共分隔区：控制组件 + 3 条线，每条线左右并排放置双方协议（共 6 格） */
 function renderMidColumn(s: GameState): HTMLElement {
   const col = el('div', 'mid-col');
   col.appendChild(el('div', 'mid-title', '公共分隔区'));
+  // R4 控制组件（控制权卡牌）：以 control-front.png 可视化持有者
+  col.appendChild(renderControlModule(s));
   for (const line of [0, 1, 2] as Line[]) {
     const row = el('div', 'protocol-row');
     row.appendChild(renderProtocolCell(s, 0, line));
     row.appendChild(renderProtocolCell(s, 1, line));
     col.appendChild(row);
   }
-  col.appendChild(
-    el('div', 'step-indicator', `步骤: ${s.step} · 控制组件: ${s.control === -1 ? '中立' : `玩家 ${s.control + 1}`}`)
-  );
+  col.appendChild(el('div', 'step-indicator', `步骤: ${s.step}`));
   return col;
+}
+
+/** 控制权卡牌可视化：中立（灰化）或由玩家 1 / 玩家 2 持有（高亮 + 标签） */
+function renderControlModule(s: GameState): HTMLElement {
+  const neutral = s.control === -1;
+  const ctrl = el('div', 'control-module' + (neutral ? ' neutral' : ` held-${s.control}`));
+  const img = document.createElement('img');
+  img.className = 'control-img';
+  img.src = '/assets/control-front.png';
+  img.alt = 'control module';
+  ctrl.appendChild(img);
+  ctrl.appendChild(el('div', 'control-label', `控制权: ${neutral ? '中立' : `玩家 ${s.control + 1}`}`));
+  return ctrl;
 }
 
 function renderProtocolCell(s: GameState, player: PlayerId, line: Line): HTMLElement {
   const cell = el('div', 'protocol-cell');
   cell.appendChild(el('div', 'protocol-owner', `玩家 ${player + 1}`));
-  cell.appendChild(renderProtocol(s.players[player].protocols[line]));
+  cell.appendChild(renderProtocol(s.players[player].protocols[line], player));
   return cell;
 }
 
