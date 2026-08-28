@@ -46,6 +46,7 @@ export function answerEffect(s: GameState, promptId: string, selected: string[])
     if (selected.length < req.min) throw new Error(`requires at least ${req.min} selection(s)`);
     if (selected.length > req.max) throw new Error(`requires at most ${req.max} selection(s)`);
   }
+  if (new Set(selected).size !== selected.length) throw new Error(`duplicate selection: ${promptId}`);
   for (const uid of selected) {
     if (!req.candidates.some((c) => c.uid === uid)) throw new Error(`invalid selection: ${uid}`);
   }
@@ -69,6 +70,13 @@ export function runStack(s: GameState): void {
       if (r.done) { s.pendingEffects.pop(); continue; }
       const step = r.value;
       if ('kind' in step) {
+        // fizzle 规则：选择请求无合法候选时不挂起 —— 记录日志并以空答案恢复生成器，
+        // 由生成器内守卫跳过该步骤（必选/可选一致；可选空候选本就会跳过）
+        if (step.candidates.length === 0) {
+          s.log.push('无合法目标，该步骤跳过');
+          pe.lastAnswer = { selected: [] };
+          continue;
+        }
         pe.prompt = step;
         pe.lastAnswer = null;
         return; // 挂起：等待玩家选择

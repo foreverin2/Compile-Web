@@ -1,4 +1,4 @@
-import type { Card, GameState, Line, TriggerEntry, TriggerKind } from '../models/types';
+import type { Card, GameState, Line, PlayerId, TriggerEntry, TriggerKind } from '../models/types';
 import { EFFECTS } from './registry';
 import { createCtx, findCard, nextEffectId } from './context';
 
@@ -22,11 +22,14 @@ export function resolveTrigger(s: GameState, t: TriggerEntry): void {
   });
 }
 
-/** 收集某类触发：双方场上正面未覆盖顶卡中注册了该触发的卡（跳过已结算 uid） */
+/** 收集某类触发：end/start 只收集回合玩家场地侧（规则书"结算你场地侧所有'结束'触发"）；
+ *  其他种类（after 等，机制预留）收集双方。取场上正面未覆盖顶卡中注册了该触发的卡（跳过已结算 uid） */
 export function collectTriggers(s: GameState, kind: TriggerKind): TriggerEntry[] {
   const out: TriggerEntry[] = [];
   const seen = new Set(s.resolvedTriggerUids);
-  for (const p of s.players) {
+  const players: PlayerId[] = kind === 'end' || kind === 'start' ? [s.turnPlayer] : [0, 1];
+  for (const pid of players) {
+    const p = s.players[pid];
     for (const line of [0, 1, 2] as Line[]) {
       const stack = p.stacks[line];
       const top = stack[stack.length - 1];

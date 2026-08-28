@@ -4,8 +4,8 @@ import { registerCardEffects } from '../registry';
 function* fire0Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const targets = ctx.candidates({ zone: 'field' });
   const ans = yield { kind: 'select', title: 'fire-0：翻转另1张牌', min: 1, max: 1, optional: false, candidates: targets };
-  const [t] = ans.selected;
-  yield { op: 'flip', uid: t };
+  // fizzle：无合法翻转目标时跳过该步骤（flip），后续 draw 2 仍结算
+  if (ans.selected.length > 0) yield { op: 'flip', uid: ans.selected[0] };
   yield { op: 'draw', count: 2 };
 }
 
@@ -13,30 +13,30 @@ function* fire0BeforeCovered(ctx: EffectCtx): Generator<EffectStep, void, StepRe
   yield { op: 'draw', count: 1 };
   const targets = ctx.candidates({ zone: 'field' });
   const ans = yield { kind: 'select', title: 'fire-0（被盖住前）：翻转另1张牌', min: 1, max: 1, optional: false, candidates: targets };
-  const [t] = ans.selected;
-  yield { op: 'flip', uid: t };
+  if (ans.selected.length === 0) return; // fizzle：无合法目标，跳过翻转
+  yield { op: 'flip', uid: ans.selected[0] };
 }
 
 function* fire1(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const hand = ctx.candidates({ zone: 'hand', owner: ctx.player });
   const ans = yield { kind: 'select', title: 'fire-1：弃1张牌', min: 1, max: 1, optional: false, candidates: hand };
-  const [d] = ans.selected;
-  yield { op: 'discard', uid: d };
+  if (ans.selected.length === 0) return; // fizzle：无牌可弃
+  yield { op: 'discard', uid: ans.selected[0] };
   const targets = ctx.candidates({ zone: 'field' });
   const ans2 = yield { kind: 'select', title: 'fire-1：删除1张牌', min: 1, max: 1, optional: false, candidates: targets };
-  const [t] = ans2.selected;
-  yield { op: 'delete', uid: t };
+  if (ans2.selected.length === 0) return; // fizzle：无删除目标
+  yield { op: 'delete', uid: ans2.selected[0] };
 }
 
 function* fire2(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const hand = ctx.candidates({ zone: 'hand', owner: ctx.player });
   const ans = yield { kind: 'select', title: 'fire-2：弃1张牌', min: 1, max: 1, optional: false, candidates: hand };
-  const [d] = ans.selected;
-  yield { op: 'discard', uid: d };
+  if (ans.selected.length === 0) return; // fizzle：无牌可弃
+  yield { op: 'discard', uid: ans.selected[0] };
   const targets = ctx.candidates({ zone: 'field' });
   const ans2 = yield { kind: 'select', title: 'fire-2：回手1张牌', min: 1, max: 1, optional: false, candidates: targets };
-  const [t] = ans2.selected;
-  yield { op: 'return', uid: t };
+  if (ans2.selected.length === 0) return; // fizzle：无回手目标
+  yield { op: 'return', uid: ans2.selected[0] };
 }
 
 function* fire3End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
@@ -53,6 +53,7 @@ function* fire3End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
 function* fire4(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const hand = ctx.candidates({ zone: 'hand', owner: ctx.player });
   const ans = yield { kind: 'select', title: 'fire-4：弃1张或更多张牌', min: 1, max: hand.length, optional: false, candidates: hand };
+  if (ans.selected.length === 0) return; // fizzle：无牌可弃，不得抽 1
   for (const uid of ans.selected) yield { op: 'discard', uid };
   yield { op: 'draw', count: ans.selected.length + 1 };
 }
@@ -60,8 +61,8 @@ function* fire4(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
 function* fire5(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const hand = ctx.candidates({ zone: 'hand', owner: ctx.player });
   const ans = yield { kind: 'select', title: 'fire-5：弃1张牌', min: 1, max: 1, optional: false, candidates: hand };
-  const [d] = ans.selected;
-  yield { op: 'discard', uid: d };
+  if (ans.selected.length === 0) return; // fizzle：无牌可弃
+  yield { op: 'discard', uid: ans.selected[0] };
 }
 
 registerCardEffects('fire-0', {

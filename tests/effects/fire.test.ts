@@ -77,6 +77,7 @@ describe('fire protocol effects', () => {
     const s = draftFireP1();
     advanceToStep(s, 0, 'action');
     s.players[0].stacks[0] = [makeCard('fire-0', 0, 'field', true, 0, 0)];
+    const fire0 = s.players[0].stacks[0][0];
     const facedown = makeCard('fire-3', 1, 'field', false, 1, 0);
     s.players[1].stacks[1] = [facedown];
     const played = makeCard('fire-1', 0, 'hand');
@@ -89,7 +90,7 @@ describe('fire protocol effects', () => {
       return [discardTarget.uid];
     });
     expect(facedown.faceUp).toBe(true);
-    expect(s.players[0].stacks[0].map((c) => c.uid)).toEqual([s.players[0].stacks[0][0].uid, played.uid]);
+    expect(s.players[0].stacks[0].map((c) => c.uid)).toEqual([fire0.uid, played.uid]);
     expect(s.players[0].trash.map((c) => c.uid)).toEqual([discardTarget.uid]);
   });
 
@@ -123,6 +124,34 @@ describe('fire protocol effects', () => {
     resolveAllChoices(s, pickFirst); // 可选 → 跳过
     expect(s.players[0].hand.map((c) => c.uid)).toEqual([hand1.uid]); // 未弃牌
     expect(s.step).toBe('end');
+  });
+
+  it('fire-0 first card on empty board: flip select fizzles, draw 2 still happens', () => {
+    const s = draftFireP1();
+    advanceToStep(s, 0, 'action');
+    s.players[0].hand = [makeCard('fire-0', 0, 'hand')];
+    const card = s.players[0].hand[0];
+    executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: fireLine(s) });
+    // 场上仅有刚打出的 fire-0（结算中源卡被候选排除）→ flip 候选为空 → 该步骤 fizzle
+    // （无合法目标跳过，不挂起），后续 draw 2 仍结算
+    resolveAllChoices(s, pickFirst);
+    expect(s.pendingEffects).toHaveLength(0);
+    expect(s.step).toBe('check-cache');
+    expect(s.players[0].hand).toHaveLength(2); // 抽 2 仍发生
+  });
+
+  it('fire-1 first card on empty board: both selects fizzle, no hang', () => {
+    const s = draftFireP1();
+    advanceToStep(s, 0, 'action');
+    s.players[0].hand = [makeCard('fire-1', 0, 'hand')];
+    const card = s.players[0].hand[0];
+    executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: fireLine(s) });
+    // 打出后手牌空（弃牌候选空）+ 场上仅源卡（删除候选空）→ 两步都 fizzle，不挂起
+    resolveAllChoices(s, pickFirst);
+    expect(s.pendingEffects).toHaveLength(0);
+    expect(s.step).toBe('check-cache');
+    expect(s.players[0].hand).toHaveLength(0);
+    expect(s.players[0].trash).toHaveLength(0);
   });
 
   it('fire-3 end trigger: discard then flip', () => {

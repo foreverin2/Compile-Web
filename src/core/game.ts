@@ -125,9 +125,10 @@ export function executeAction(s: GameState, player: PlayerId, kind: ActionKind, 
       if (!kind) throw new Error('resolve-trigger only at end/start');
       const t = collectTriggers(s, kind).find((x) => x.cardUid === args.cardUid);
       if (!t) throw new Error(`no pending ${kind} trigger for ${args.cardUid}`);
-      s.resolvedTriggerUids.push(args.cardUid);
       resolveTrigger(s, t);
       runStack(s);
+      // 结算成功后才标记已结算：若解析抛错，触发不会被吞掉（必选触发仍阻止 advance）
+      s.resolvedTriggerUids.push(args.cardUid);
       break;
     }
     case 'advance': {

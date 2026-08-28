@@ -693,16 +693,23 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
     // 候选卡高亮（renderBoard 内所有 .card 已渲染，此时均在 wrap 内）
     for (const node of wrap.querySelectorAll<HTMLElement>('.card[data-uid]')) {
       const uid = node.dataset.uid!;
-      if (prompt.candidates.some((c) => c.uid === uid)) {
+      const candidate = prompt.candidates.find((c) => c.uid === uid);
+      if (candidate) {
         node.classList.add('choice-target');
         if (sel.has(uid)) node.classList.add('choice-selected');
-        // 点击切换选择（单击；双击放大仍可用 → 用 bindClickOrDouble 的 single 分支）
-        node.addEventListener('click', (e) => {
-          e.stopPropagation();
-          if (sel.has(uid)) { sel.delete(uid); choiceSelected = choiceSelected.filter((x) => x !== uid); }
-          else if (choiceSelected.length < prompt.max) { choiceSelected.push(uid); }
-          renderApp(root, s, cb);
-        });
+        // 单击=切换选择，双击=放大查看候选卡；复用 bindClickOrDouble 的单击/双击判别
+        // （单击延迟 320ms > 双击窗口 300ms）。双击窗口内的第二次点击先于延迟的单击触发
+        // 并取消它 → 双击不会误切换选择，且打开遮罩前不会重渲染销毁节点。
+        bindClickOrDouble(
+          node,
+          () => {
+            if (sel.has(uid)) { sel.delete(uid); choiceSelected = choiceSelected.filter((x) => x !== uid); }
+            else if (choiceSelected.length < prompt.max) { choiceSelected.push(uid); }
+            renderApp(root, s, cb);
+          },
+          () => openZoom(candidate.defId, candidate.faceUp, false, false),
+          true
+        );
       } else {
         node.classList.add('choice-dim');
       }

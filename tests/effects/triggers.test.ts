@@ -31,16 +31,17 @@ registerCardEffects('test-start', {
 });
 
 describe('trigger collection', () => {
-  it('collects end triggers from face-up uncovered top cards, skipping resolved uids', () => {
+  it('collects end triggers from face-up uncovered top cards of the turn player only, skipping resolved uids', () => {
     const s = createGame();
     s.phase = 'turn';
     s.players[0].stacks[0] = [makeCard('test-end', 0, 'field', true, 0, 0)];
     s.players[0].stacks[1] = [makeCard('test-end', 0, 'field', true, 1, 0)];
-    s.players[1].stacks[0] = [makeCard('test-end', 1, 'field', true, 0, 0)]; // 对手的也算
+    s.players[1].stacks[0] = [makeCard('test-end', 1, 'field', true, 0, 0)]; // 对手的不算（end 只看回合玩家场地侧）
     s.resolvedTriggerUids = [s.players[0].stacks[1][0].uid];
     const ts = collectTriggers(s, 'end');
-    expect(ts).toHaveLength(2);
-    expect(ts.map((t) => t.optional)).toEqual([true, true]);
+    expect(ts).toHaveLength(1); // 自己 2 张 − 1 张已结算 = 1；对手的不收集
+    expect(ts[0].cardUid).toBe(s.players[0].stacks[0][0].uid);
+    expect(ts[0].optional).toBe(true);
   });
 
   it('does not collect triggers from face-down or covered cards', () => {

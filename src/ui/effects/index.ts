@@ -4,7 +4,7 @@ import { gameBus, type GameEvent } from '../../core/events/bus';
  *  1.2s 后移除。重渲染会销毁原卡 DOM，浮层独立于渲染树不受影响。 */
 function playFireBurn(node: HTMLElement): void {
   const rect = node.getBoundingClientRect();
-  if (rect.width === 0 && rect.height === 0) return;
+  if (rect.width === 0 || rect.height === 0) return;
   const clone = node.cloneNode(true) as HTMLElement;
   clone.classList.add('card-burning');
   clone.style.position = 'fixed';
@@ -14,6 +14,7 @@ function playFireBurn(node: HTMLElement): void {
   clone.style.height = `${rect.height}px`;
   clone.style.margin = '0';
   clone.style.pointerEvents = 'none';
+  clone.style.zIndex = '300'; // 显式置顶：浮层独立于渲染树，须盖过手牌/遮罩等交互层
   clone.querySelector('.play-btns')?.remove();
   const overlay = document.createElement('div');
   overlay.className = 'fire-burn-overlay';
