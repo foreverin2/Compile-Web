@@ -4,6 +4,7 @@ import { executeAction } from './core/game';
 import { getCompilableLines } from './core/rules/compile';
 import { collectTriggers } from './core/effects/triggers';
 import { renderApp, type UiCallbacks } from './ui/render';
+import { initEffects } from './ui/effects';
 import type { PlayerId } from './core/models/types';
 
 const root = document.getElementById('app')!;
@@ -144,4 +145,5 @@ function scheduleAutoAdvance(): void {
   }, AUTO_ADVANCE_DELAY);
 }
 
+initEffects();
 renderApp(root, state, cb);

@@ -657,7 +657,10 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   for (const a of legal) {
     // 打牌通过点击手牌+线完成；刷新手牌在挡板外侧；下一步单独居中渲染
     if (a.kind === 'play' || a.kind === 'refresh' || a.kind === 'advance') continue;
-    const label = a.kind === 'compile' ? `编译线 ${(a.line ?? 0) + 1}` : a.kind;
+    const label =
+      a.kind === 'compile' ? `编译线 ${(a.line ?? 0) + 1}`
+      : a.kind === 'resolve-trigger' ? `结算触发效果`
+      : a.kind;
     const btn = el('button', 'btn', label);
     btn.addEventListener('click', () => cb.onAction(a));
     actionBar.appendChild(btn);
