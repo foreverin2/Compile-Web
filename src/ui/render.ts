@@ -925,10 +925,22 @@ function bindCardDrag(node: HTMLElement, s: GameState, cb: UiCallbacks, uid: str
 export function renderApp(root: HTMLElement, s: GameState, cb: UiCallbacks): void {
   // 拖拽安全网：若重渲染发生在拖拽中（正常流程不会），先清理幽灵卡与高亮
   if (activeDragCancel) activeDragCancel();
+  // 重渲染动画抑制（fix: hover-pop 重放）：每次全量重渲染都会重建 DOM，若鼠标仍停留在
+  // 原位置，新元素会重新触发 mouseenter → hover 过渡（上浮/推开）从初始态再播一遍，
+  // 造成抽帧卡顿。重建期间给根容器加 .no-anim（CSS 对卡牌等元素 transition:none），
+  // 双 rAF 后再移除：保证新元素的首帧绘制（含悬停态应用）发生在 no-anim 窗口内，
+  // 之后的交互恢复正常过渡。仅抑制 transition、不动 animation，故 draft-pick-in /
+  // battery-cell-in 等有意的进场动画不受影响。
+  root.classList.add('no-anim');
   if (s.phase === 'draft') {
     renderDraft(root, s, cb);
   } else {
     renderBoard(root, s, cb);
   }
   cb.onRendered?.();
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      root.classList.remove('no-anim');
+    });
+  });
 }

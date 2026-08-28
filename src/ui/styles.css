@@ -486,6 +486,24 @@ body {
 .hand.self .card { cursor: pointer; }
 .hand.self .card:hover { border-color: #e0a030; }
 
+/* ===== 重渲染动画抑制（.no-anim，fix: hover-pop 重放） =====
+ * renderApp 每次全量重渲染都会重建 DOM：若鼠标仍停留在原位置，新元素会重新触发
+ * mouseenter，悬停上浮/推开等过渡会从初始态再播一遍（抽帧卡顿）。渲染期间根容器
+ * 携带 .no-anim，对这些 hover 过渡元素 transition:none —— 首帧（含悬停态应用）
+ * 即时生效，双 rAF 后类被移除，随后的交互恢复正常过渡。
+ * 只抑制 transition、不碰 animation：draft-pick-in（新选协议进场）、battery-cell-in
+ * （点数变化）等有意的 keyframe 动画照常播放；控制条滑动（.control-slider-img）与
+ * 电池形态渐变是状态驱动的有意过渡，同样不在抑制范围。 */
+.no-anim .hand .card,
+.no-anim .stack .card,
+.no-anim .draft-card,
+.no-anim .draft-pick-card,
+.no-anim .draft-pick-btn,
+.no-anim .shield-refresh-btn,
+.no-anim .play-btn {
+  transition: none !important;
+}
+
 /* ===== R8 手牌挡板（hand-cover shield） =====
  * 从手牌外侧端拉出遮住手牌：P1 左缘固定向右延伸至中线，P2 右缘固定向左延伸至中线
  * （左右定位见 .p1/.p2）。仅当前回合玩家（.hand.self 手牌）的挡板可拖，其余锁定。
@@ -841,3 +859,21 @@ body {
 }
 /* 拖拽中：全局抓取光标 + 禁止文本选中，避免拖过日志/标签时选中文字 */
 body.dragging { cursor: grabbing; user-select: none; }
+
+/* ===== 刷新手牌抽牌飞入动画（draw-ghost） =====
+ * 刷新时由 main.ts 创建 count 张卡背幽灵卡（90×126 = 卡背 1:1.4 比例），fixed 定位
+ * 于手牌区外侧（P1 左侧 / P2 右侧），JS 依次写入 translateX 借助本过渡滑入手牌区，
+ * 每张间隔 120ms；落地后幽灵卡被移除，随即重渲染展示真实手牌。
+ * z-index 500：高于手牌挡板（70）与悬停弹出（50），低于放大遮罩（1000）/拖拽幽灵
+ * （9999）；pointer-events:none 不拦截点击。 */
+.draw-ghost {
+  position: fixed;
+  width: 90px;
+  height: 126px;
+  border-radius: 6px;
+  background: url('/assets/Cardback.jpg') center / cover no-repeat;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  z-index: 500;
+  pointer-events: none;
+  transition: transform 0.25s ease;
+}
