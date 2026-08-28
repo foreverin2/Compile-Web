@@ -2082,7 +2082,8 @@ let choiceSelected: string[] = [];
       }
     }
     const bar = el('div', 'choice-bar');
-    bar.appendChild(el('div', 'choice-title', `${prompt.player === 0 ? 'P1' : 'P2'} 操作 — ${prompt.title}`));
+    // 归属者标签用 topEffect.player（ChoiceRequest 无 player 字段，它在 PendingEffect 上）
+    bar.appendChild(el('div', 'choice-title', `${topEffect.player === 0 ? 'P1' : 'P2'} 操作 — ${prompt.title}`));
     const count = el('span', 'choice-count', `已选 ${choiceSelected.length}/${prompt.max === Infinity ? prompt.candidates.length : prompt.max}`);
     bar.appendChild(count);
     const canConfirm = choiceSelected.length >= prompt.min && choiceSelected.length <= prompt.max;
@@ -2119,6 +2120,8 @@ let choiceSelected: string[] = [];
     if (choicePromptId !== null) return; // 选择模式下禁止拖拽打牌
 ```
 
+(f) `renderHand` 的单击回调（onSelect 选中高亮/翻面按钮）同样加选择模式守卫：单击延迟 320ms 内若进入选择模式，会误触发选中副作用——在 bindClickOrDouble 的 single 回调前判断 `if (choicePromptId !== null) return;`
+
 - [ ] **Step 3: 实现 styles.css 追加**
 
 ```css
@@ -2132,7 +2135,8 @@ let choiceSelected: string[] = [];
 .choice-title { color: #cfeaff; font-size: 14px; }
 .choice-count { color: #ffd76a; font-size: 13px; }
 .choice-confirm.disabled { opacity: 0.4; pointer-events: none; }
-.hand-strip.choice-mode .card { pointer-events: none; }
+/* 仅禁用非候选卡：候选（含手牌弃牌目标）必须可点击 */
+.hand-strip.choice-mode .card:not(.choice-target) { pointer-events: none; }
 ```
 
 - [ ] **Step 4: 运行确认通过**
