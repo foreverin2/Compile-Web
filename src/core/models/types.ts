@@ -166,8 +166,8 @@ export interface GameState {
   pendingEffects: PendingEffect[];
   /** 打出中的卡（浮空，等"被盖住前"结算后落地）；null = 无 */
   pendingPlay: Card | null;
-  /** 偏转中的卡（浮空，等露出卡结算后落地）；null = 无 */
-  pendingShift: Card | null;
+  /** 偏转中的卡（浮空，等露出卡结算后落地）；beforeCoveredDone = 目标顶卡"被盖住前"是否已结算（只结算一次）；null = 无 */
+  pendingShift: { card: Card; beforeCoveredDone: boolean } | null;
   /** 本 end/start 步骤已结算的触发卡 uid（避免重复结算） */
   resolvedTriggerUids: string[];
   /** 打出链式结算完毕后需要推进回合步骤（runStack 栈空时消费） */
