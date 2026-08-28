@@ -1059,8 +1059,8 @@ describe('shift op (float state machine)', () => {
       makeCard('test-reveal', 0, 'field', true, 0, 0), // 露出 → 中指令 draw 1
       makeCard('fire-1', 0, 'field', true, 0, 1),      // 被偏转
     ];
-    // 效果源卡 'src'（放独立线，不被偏转影响）
-    s.players[0].stacks[1] = [{ uid: 'src', defId: 'test-reveal', owner: 0, faceUp: true, zone: 'field', line: 1, pos: 0 }];
+    // 效果源卡 'src'（放 stacks[2]——目标线 1 会被落地占用，不能放那）
+    s.players[0].stacks[2] = [{ uid: 'src', defId: 'test-reveal', owner: 0, faceUp: true, zone: 'field', line: 2, pos: 0 }];
     // 露出卡中指令 draw 需要牌库有牌
     s.players[0].deck = [makeCard('test-reveal', 0, 'deck'), makeCard('test-reveal', 0, 'deck')];
     const shifted = s.players[0].stacks[0][1];
