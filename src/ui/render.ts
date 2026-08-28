@@ -110,6 +110,10 @@ export function renderDraft(root: HTMLElement, s: GameState, cb: UiCallbacks): v
 export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): void {
   root.textContent = '';
   const wrap = el('div', 'board');
+  if (s.phase === 'turn' && s.step === 'start') {
+    const handoff = el('div', 'handoff-banner', `▶ 请将设备交给 玩家 ${s.turnPlayer + 1}，然后点击「下一步」开始`);
+    wrap.appendChild(handoff);
+  }
   if (s.phase === 'gameover' && s.winner !== null) {
     wrap.appendChild(el('div', 'winner-banner', `玩家 ${s.winner + 1} 获胜！`));
   }
@@ -126,8 +130,11 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
     selected: selectedUid,
     onSelect: (uid) => { selectedUid = uid; renderApp(root, s, cb); },
     onPlay: (line) => {
-      if (selectedUid) cb.onAction({ kind: 'play', cardUid: selectedUid, faceUp: true, line });
-      selectedUid = null;
+      if (selectedUid) {
+        cb.onAction({ kind: 'play', cardUid: selectedUid, faceUp: selectedFaceUp, line });
+        selectedUid = null;
+        selectedFaceUp = true;
+      }
     },
   });
   wrap.appendChild(self);
@@ -141,9 +148,18 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
     btn.addEventListener('click', () => cb.onAction(a));
     actionBar.appendChild(btn);
   }
-  // 打牌提示
   if (s.step === 'action') {
-    actionBar.appendChild(el('span', 'hint', selectedUid ? '点击一条线放置卡牌（正面）' : '点击手牌选择卡牌'));
+    if (selectedUid) {
+      const upBtn = el('button', 'btn', '正面打入');
+      upBtn.addEventListener('click', () => { selectedFaceUp = true; renderApp(root, s, cb); });
+      const downBtn = el('button', 'btn', '背面打入');
+      downBtn.addEventListener('click', () => { selectedFaceUp = false; renderApp(root, s, cb); });
+      actionBar.appendChild(upBtn);
+      actionBar.appendChild(downBtn);
+      actionBar.appendChild(el('span', 'hint', `朝向: ${selectedFaceUp ? '正面' : '背面'} — 点击一条线放置`));
+    } else {
+      actionBar.appendChild(el('span', 'hint', '点击手牌选择卡牌'));
+    }
   }
   wrap.appendChild(actionBar);
 
@@ -157,6 +173,7 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
 }
 
 let selectedUid: string | null = null;
+let selectedFaceUp = true;
 
 export function renderApp(root: HTMLElement, s: GameState, cb: UiCallbacks): void {
   if (s.phase === 'draft') {
