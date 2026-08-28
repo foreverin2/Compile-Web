@@ -679,11 +679,6 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
     nextBlock.appendChild(nextBtn);
     actionBar.appendChild(nextBlock);
   }
-  // 导出日志按钮：页面底部操作行（可随时导出诊断日志）
-  const diagBtn = el('button', 'btn diag-btn', '导出日志');
-  diagBtn.title = '导出诊断日志（错误 + 控制台记录 + 事件日志 + 状态快照）';
-  diagBtn.addEventListener('click', () => downloadLog(s));
-  actionBar.appendChild(diagBtn);
   wrap.appendChild(actionBar);
 
   // 选择模式（效果结算挂起且顶部为选择请求时）：候选卡高亮 + 底部确认条
@@ -754,6 +749,12 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
     log.appendChild(el('div', 'log-entry', entry));
   }
   wrap.appendChild(log);
+
+  // 导出日志按钮：页面最底部（简要日志下方）
+  const diagBtn = el('button', 'btn diag-btn', '导出日志');
+  diagBtn.title = '导出诊断日志（错误 + 控制台记录 + 事件日志 + 状态快照）';
+  diagBtn.addEventListener('click', () => downloadLog(s));
+  wrap.appendChild(diagBtn);
 
   root.appendChild(wrap);
 }
