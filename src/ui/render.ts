@@ -402,7 +402,6 @@ function renderControlModule(s: GameState): HTMLElement {
 
 function renderProtocolCell(s: GameState, player: PlayerId, line: Line): HTMLElement {
   const cell = el('div', 'protocol-cell');
-  cell.appendChild(el('div', 'protocol-owner', `玩家 ${player + 1}`));
   cell.appendChild(renderProtocol(s.players[player].protocols[line], player));
   return cell;
 }

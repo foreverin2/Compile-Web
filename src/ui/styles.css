@@ -318,7 +318,6 @@ body {
 
 /* ===== 协议格（位于 lane-row 中间两列，行高由协议撑起，槽随之 stretch 对齐） ===== */
 .protocol-cell { display: flex; flex-direction: column; gap: 2px; }
-.protocol-owner { font-size: 10px; color: #999; text-align: center; }
 .protocol {
   position: relative;
   border: 1px solid #888;
