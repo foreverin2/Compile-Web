@@ -83,9 +83,14 @@ interface ChoiceRequest {
   title: string;            // UI 提示文案（例："选择要弃置的卡牌"）
   min: number;              // 最少选择数（fire-4: 1）
   max: number;              // 最多选择数（fire-4: 无上限 = 候选数）
-  optional: boolean;        // 是否可跳过（fire-3 的"你可以弃1张牌"）
+  optional: boolean;        // 是否可跳过整个事件（fire-3"你可以弃1张牌"= true；fire-1"弃1张牌"= false）
   candidates: ChoiceCard[]; // 渲染候选（含正反面/位置/所属）
 }
+
+// 必选 vs 可选（用户确认 2026-08-29）：
+// - 必选事件（optional=false）：事件**必须执行**，仅目标可选——UI 无[跳过]，确认条在选中数≥min 时即亮
+// - 可选事件（optional=true）：玩家可跳过整个事件——UI 有[跳过]
+// - "有可选目标"（min=1、目标任选其一）≠ "可跳过事件"：fire-1 弃1张牌 必选，fire-3 结束弃牌 可选
 
 interface ChoiceCard {
   uid: string; defId: string; faceUp: boolean;
@@ -157,9 +162,13 @@ collectTriggers(s, kind, event?): Trigger[]  // 遍历双方场上正面朝上�
 resolveTrigger(s, trigger): void             // 把该触发对应的生成器入栈 runStack
 ```
 
+Trigger 含 `optional: boolean`（由卡牌文本判定：含"可以/你可以" → 可选；否则必选）：
+- **必选触发**（如 light-1"结束：抽1张牌"）：必须结算，UI 无跳过，剩余必选触发未清空时不可 advance
+- **可选触发**（如 fire-3"你可以弃1张牌"）：可[结算]也可[跳过]
+
 结算方式区分（重要）：
 - **自动入栈（即时/必发）**：中指令（打出/翻正/揭开）、`before-covered`（fire-0 底命令无"可以"，覆盖前必发）
-- **点击结算（可选）**：`end`/`start` 步骤触发（fire-3"你可以弃1张牌"）——`main.ts` 暂停自动推进，UI 出按钮，玩家点 `resolve-trigger` 结算或 `advance` 跳过剩余
+- **点击结算（可选）**：`end`/`start` 步骤触发——`main.ts` 暂停自动推进，UI 出按钮，玩家点 `resolve-trigger` 结算或 `advance` 跳过剩余；必选触发无跳过
 
 - `before-covered`：打出/偏转落地覆盖前，被盖顶卡（正面+未覆盖+有该底命令）触发
 - `end`：进入 `end` 步骤时，当前回合玩家场上正面未覆盖且有"结束"底命令的卡触发（fire-3）；UI 在 end 步骤暂停自动推进，逐张提供[执行/跳过]（fire-3"你可以"）
@@ -197,27 +206,28 @@ shift(uid, targetLine):
 
 | 卡 | 文本 | 效果实现 | 验证点 |
 |---|---|---|---|
-| fire-0 中 | 翻转另1张牌。抽2张牌。 | askSelect(场上未覆盖卡，排除自身/结算中) → flip → draw 2 | 目标排除；翻正连锁 |
-| fire-0 底 | 被盖住前：先抽1张牌并翻转另1张牌。 | before-covered 触发：draw 1 → askSelect → flip | 覆盖触发时序 |
-| fire-1 中 | 弃1张牌。如果弃了，删除1张牌。 | askSelect(自己手牌) → discard → 若弃了：askSelect(场上未覆盖卡) → deleteCard | 条件式第二步 |
+| fire-0 中 | 翻转另1张牌。抽2张牌。 | askSelect(场上未覆盖卡，**必选**，排除自身/结算中) → flip → draw 2 | 目标排除；翻正连锁 |
+| fire-0 底 | 被盖住前：先抽1张牌并翻转另1张牌。 | before-covered 触发（**必发**）：draw 1 → askSelect(**必选**) → flip | 覆盖触发时序 |
+| fire-1 中 | 弃1张牌。如果弃了，删除1张牌。 | askSelect(自己手牌, **必选**) → discard → 若弃了：askSelect(场上未覆盖卡, **必选**) → deleteCard | 条件式第二步 |
 | fire-2 中 | 弃1张牌。如果弃了，回手1张牌。 | 同上，第二步 returnToHand（进持有者手牌） | 回手归属 |
-| fire-3 底 | 结束：你可以弃1张牌。如果弃了，翻转1张牌。 | end 触发：optional discard（可跳过）→ 若弃了：askSelect → flip | 结束触发 + 跳过 |
-| fire-4 中 | 弃1张或更多张牌。抽弃牌数+1张牌。 | askSelect(自己手牌, min1, max=全部) → discard 全部 → draw n+1 | 多选 |
-| fire-5 中 | 弃1张牌。 | askSelect(自己手牌) → discard | 基础 |
+| fire-3 底 | 结束：你可以弃1张牌。如果弃了，翻转1张牌。 | end 触发（**可选**）：askSelect(自己手牌, optional=true 可跳过) → 若弃了：askSelect(**必选**) → flip | 结束触发 + 跳过 |
+| fire-4 中 | 弃1张或更多张牌。抽弃牌数+1张牌。 | askSelect(自己手牌, **必选**, min1, max=全部) → discard 全部 → draw n+1 | 多选 |
+| fire-5 中 | 弃1张牌。 | askSelect(自己手牌, **必选**) → discard | 基础 |
 
 > 目标选择范围（规则）：默认场上**任意一侧**未覆盖的卡；弃牌目标：自己手牌。规则"被作用卡持有者决定执行"在 Fire 内不产生冲突（所有选择都是行动者自己的牌），引擎预留接口。
 
 ## 5. UI 设计
 
 ### 5.1 选择交互
-- `pendingEffects` 非空 → 渲染选择模式：候选卡加青色呼吸高亮框，可点击（单选点选即高亮；多选切换）
-- 底部确认条：标题（"选择要弃置的卡牌"）+ "已选 n/m" + [确认]（选择数在 [min,max] 内才亮）+ [跳过]（仅 optional）
-- 确认后 `executeAction('effect-choice', {promptId, choice: selectedUids})`
+- `pendingEffects` 非空 → 渲染选择模式：**候选目标高亮**（青色呼吸框，强调可选目标清晰可见）；非候选卡变暗/禁点；多选点击切换
+- 底部确认条：标题（"选择要弃置的卡牌"）+ "已选 n/m" + [确认] + [跳过]（**仅 optional 事件显示**；必选事件选中数≥min 即亮确认）
+- 确认后 `executeAction('effect-choice', {promptId, choice: selectedUids})`；可选事件跳过时 `choice: []`
 - 选择模式期间：其他行动按钮（打牌/刷新/编译/下一步）禁用；`#app.no-anim` 逻辑不变
 
-### 5.2 end 步骤触发结算
-- 进入 `end` 且有待结算"结束"触发 → 自动推进暂停，出按钮组：每张触发卡一个按钮（"结算 fire-3 结束效果"）+ [结束回合]
-- 点触发按钮 → 效果入栈（内部再走选择交互）；全部结算/跳过 → [结束回合] 可用
+### 5.2 end/start 步骤触发结算
+- 进入 `end`/`start` 且存在待结算触发 → 自动推进暂停，出按钮组：每张触发卡一个按钮 + [结束回合/继续]（跳过剩余）
+- 点触发按钮 → 效果入栈（内部再走选择交互）；**必选触发**：无跳过、剩余必选触发未清空时[继续]不可用；**可选触发**：可跳过
+- 全部结算/跳过 → [继续] 可用 → 自动推进恢复
 
 ### 5.3 特效
 - `src/ui/effects/index.ts`：订阅 bus 语义事件；`card:discarded`/`card:deleted` 且 protocol==='fire' → 目标卡添加 `.card-burning` + 挂 `fire-burn` 粒子节点（按 `public/assets/fire/README.md` 结构），1.2s 后移除节点
