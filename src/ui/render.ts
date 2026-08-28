@@ -56,6 +56,8 @@ function renderCardFace(card: { defId: string; faceUp: boolean; uid: string }): 
 
 function renderProtocol(p: { defId: string; compiled: boolean }, player: PlayerId): HTMLElement {
   const box = el('div', 'protocol' + (p.compiled ? ' compiled' : ''));
+  // 已编译协议专属特效类（类随 defId 挂载 → 协议换位/重排时特效跟随对应协议）
+  if (p.compiled) box.classList.add(`compiled-fx-${p.defId}`);
   const img = document.createElement('img');
   // R1 协议卡朝向：P1（左）按原图方向展示；P2（右）旋转 180° 使双方协议相对放置。
   // PNG 资源为原方向（水/火/光/生 750×1050 竖版，暗/死 1050×750 横版），各按自然比例显示。

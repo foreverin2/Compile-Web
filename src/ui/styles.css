@@ -364,6 +364,27 @@ body {
 /* 点2/点3：协议放大（130px → 200px 宽；竖版 750×1050 → 高约 280px） */
 .protocol-img { display: block; width: 200px; max-width: 100%; height: auto; border-radius: 4px; }
 .protocol.compiled { border-color: #4caf50; box-shadow: 0 0 8px rgba(76, 175, 80, 0.4); }
+
+/* ===== 已编译协议专属特效（每协议一个类，类随 defId 挂载 → 协议换位时特效跟随） =====
+ * fire = 流动岩浆边框：旋转 conic-gradient 裁成边框环，@property 驱动角度动画；
+ * 不支持 @property 的浏览器降级为静态岩浆色边框（仍可见）。 */
+@property --lava-angle { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
+.protocol.compiled-fx-fire::before {
+  content: '';
+  position: absolute;
+  inset: -5px;
+  border-radius: 10px;
+  padding: 4px;
+  background: conic-gradient(from var(--lava-angle),
+    #ff3d00 0deg, #ff9100 60deg, #ffd54f 120deg, #7a1d00 210deg, #ff3d00 360deg);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: lava-flow 2.5s linear infinite;
+  pointer-events: none;
+  z-index: 1;
+}
+@keyframes lava-flow { to { --lava-angle: 360deg; } }
 .protocol-check {
   position: absolute; top: 4px; right: 6px;
   background: #4caf50; color: #111; font-size: 11px; font-weight: bold;
@@ -868,8 +889,8 @@ body.dragging { cursor: grabbing; user-select: none; }
  * （9999）；pointer-events:none 不拦截点击。 */
 .draw-ghost {
   position: fixed;
-  width: 90px;
-  height: 126px;
+  width: 130px; /* 与正常手牌卡一致（.card 130px） */
+  height: 178.8px; /* 卡面 122×1.4=170.8 + 8px 内边距/边框 */
   border-radius: 6px;
   background: url('/assets/Cardback.jpg') center / cover no-repeat;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);

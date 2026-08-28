@@ -11,6 +11,11 @@ function cloneCardToBody(node: HTMLElement, zIndex: number): HTMLElement | null 
   const rect = node.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return null;
   const clone = node.cloneNode(true) as HTMLElement;
+  // 场上卡带旋转类（.rot-cw/.rot-ccw）：克隆会继承并再次旋转，导致视觉尺寸突变。
+  // rect 已是旋转后的足迹盒——剥离旋转、用 rect 尺寸即可精确还原原视觉卡位。
+  clone.classList.remove('rot-cw', 'rot-ccw');
+  clone.style.transform = 'none';
+  clone.style.transition = 'none';
   clone.style.position = 'fixed';
   clone.style.left = `${rect.left}px`;
   clone.style.top = `${rect.top}px`;

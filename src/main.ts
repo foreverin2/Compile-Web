@@ -16,6 +16,10 @@ const AUTO_ADVANCE_DELAY = 400;
 let autoTimer: number | null = null;
 /** 抽牌飞入动画进行中标志：防止动画期间再次触发刷新导致并发动画/双重渲染 */
 let drawAnimBusy = false;
+/** 抽牌幽灵卡尺寸与扇形步进（与 styles.css 的 .hand 负 margin 与 .draw-ghost 一致） */
+const GHOST_W = 130;
+const GHOST_H = 178.8;
+const HAND_CARD_SPACING = 102; // 卡宽 130 − 重叠 28
 
 const cb: UiCallbacks = {
   onRendered() {
@@ -72,8 +76,10 @@ const cb: UiCallbacks = {
 
 /**
  * 刷新手牌抽牌飞入动画：drawn 张卡背幽灵卡从手牌区外侧（P1 从左侧、P2 从右侧，
- * 与手牌生长方向一致）依次飞入手牌区，每张间隔 120ms；全部落地后移除幽灵卡并
- * 调用 done()（由调用方触发重渲染，此时状态已更新，手牌以正面展示）。
+ * 与手牌生长方向一致）依次飞入，每张间隔 120ms。
+ * - 终点 = 当前手牌末尾（现有末卡之后逐张按扇形步进延伸），而非固定点
+ * - 幽灵卡尺寸与正常手牌卡一致（130×178.8，见 .draw-ghost）
+ * 全部落地后移除幽灵卡并调用 done()（由调用方触发重渲染）。
  */
 function playDrawAnimation(player: PlayerId, count: number, done: () => void): void {
   const hands = document.querySelectorAll<HTMLElement>('.hand');
@@ -84,23 +90,33 @@ function playDrawAnimation(player: PlayerId, count: number, done: () => void): v
   }
   const rect = hand.getBoundingClientRect();
   const cy = rect.top + rect.height / 2;
-  // 起飞点与落点：P1 手牌左起 → 从左侧外飞入左缘；P2 手牌右起 → 从右侧外飞入右缘
   const fromLeft = player === 0;
-  const startX = fromLeft ? rect.left - 60 : rect.right + 60;
-  const targetX = fromLeft ? rect.left + 24 : rect.right - 24;
-  const dx = targetX - startX;
+  const startX = fromLeft ? rect.left - 90 : rect.right + 90;
+  // 现有末卡（P1 手牌最右 / P2 row-reverse 最左）；空手牌时回退到手牌区起点
+  const cards = hand.querySelectorAll<HTMLElement>('.card');
+  const last = cards[cards.length - 1];
+  const lastRect = last ? last.getBoundingClientRect() : null;
   const ghosts: HTMLElement[] = [];
   for (let i = 0; i < count; i++) {
+    let targetX: number;
+    if (lastRect) {
+      // 扇形步进：新卡中心距 = 卡宽 130 − 重叠 28 = 102px
+      // P1：新卡 1 左缘 = 末卡右缘 − 28（中心 = 右缘 + 37）；P2 反向镜像
+      targetX = fromLeft ? lastRect.right + 37 + HAND_CARD_SPACING * i : lastRect.left - 37 - HAND_CARD_SPACING * i;
+    } else {
+      // 空手牌：P1 落在左 padding 内、P2 落在右 padding 内
+      targetX = fromLeft ? rect.left + 28 + GHOST_W / 2 : rect.right - 28 - GHOST_W / 2;
+    }
     const ghost = document.createElement('div');
     ghost.className = 'draw-ghost';
     ghost.style.left = `${startX}px`;
-    // 用常量（.draw-ghost 高度 126px 的一半）而非 offsetHeight：
-    // 元素尚未 appendChild 时 offsetHeight 恒为 0，读取会导致幽灵卡垂直偏下 63px
-    ghost.style.top = `${cy - 63}px`;
+    // 幽灵卡 top 用常量（GHOST_H 与 .draw-ghost 高度一致）：元素未 appendChild 前 offsetHeight 恒为 0
+    ghost.style.top = `${cy - GHOST_H / 2}px`;
     document.body.appendChild(ghost);
     ghosts.push(ghost);
-    // 依次起飞：首张 30ms（保证初始位置已被绘制一帧）后每 120ms 起飞下一张，
-    // 借助 .draw-ghost 的 transform 过渡从左/右侧滑入手牌区
+    // 以幽灵卡中心对准落点
+    const dx = targetX - (startX + GHOST_W / 2);
+    // 依次起飞：首张 30ms（保证初始位置已被绘制一帧）后每 120ms 起飞下一张
     window.setTimeout(() => {
       ghost.style.transform = `translateX(${dx}px)`;
     }, 30 + i * 120);
