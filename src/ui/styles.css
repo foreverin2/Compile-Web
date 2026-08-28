@@ -20,8 +20,9 @@ body {
 /* ===== 行式布局：顶部条带（信息+控制）→ 3 条线（每线一行）→ 底部条带（手牌+步骤） ===== */
 .board-grid { display: flex; flex-direction: column; gap: 10px; }
 
-/* 顶部条带：P1 信息 | 控制滑动条 | P2 信息 */
-.player-strip { display: grid; grid-template-columns: 1fr minmax(260px, 1.2fr) 1fr; gap: 12px; align-items: center; }
+/* 顶部条带：P1 信息 | 控制滑动条 | P2 信息（R8 控制列加宽：260px→380px 下限、1.2fr→1.4fr，
+   容纳放大的控制卡与轨道） */
+.player-strip { display: grid; grid-template-columns: 1fr minmax(380px, 1.4fr) 1fr; gap: 12px; align-items: center; }
 .player-info { border: 1px solid #444; border-radius: 8px; padding: 8px 10px; background: #22223a; display: flex; flex-direction: column; gap: 4px; }
 /* P2（右侧）信息条内容靠右对齐，与 P1 左侧对称 */
 .player-info.p2 { text-align: right; align-items: flex-end; }
@@ -64,6 +65,148 @@ body {
 .line-value { font-size: 12px; color: #e0a030; margin-top: 4px; }
 .stack-slot.p1 .line-value { text-align: right; }
 .stack-slot.p2 .line-value { text-align: left; }
+
+/* ===== R8 线值电池指示器（纯 CSS，位于堆叠槽外侧端、垂直居中） =====
+   10 格电量 = 该线点值（clamp 0..10，由 renderBattery 生成）；外壳 4 态：
+   stable ≤3（方正平直，青色）/ bulge 4-6（上下微微鼓出，橙黄微光）/
+   full 7-9（明显鼓胀接近圆润，橙色强光 + 应力裂纹）/ burst ≥10（爆裂：径向爆光 +
+   裂纹 + 红橙脉冲动画，10 格仍全部点亮）。pointer-events:none 纯视觉，
+   不拦截下方卡牌点击/悬停与槽位打牌。 */
+.battery {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 40px;
+  z-index: 5;
+  pointer-events: none;
+  user-select: none;
+}
+.stack-slot.p1 .battery { left: 10px; }
+.stack-slot.p2 .battery { right: 10px; }
+.battery-shell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 104px;
+  height: 32px;
+  border: 2px solid #00ffcc;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.6);
+  box-shadow: 0 0 8px rgba(0, 255, 204, 0.35), inset 0 0 6px rgba(0, 255, 204, 0.12);
+  transition: border-radius 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+/* 正极凸头 */
+.battery-cap {
+  width: 9px;
+  height: 14px;
+  border: 2px solid #00ffcc;
+  border-left: none;
+  border-radius: 0 3px 3px 0;
+  background: rgba(0, 0, 0, 0.6);
+  box-shadow: 0 0 6px rgba(0, 255, 204, 0.3);
+}
+.battery-cells { display: flex; gap: 3px; align-items: center; }
+.battery-cell {
+  width: 7px;
+  height: 16px;
+  border-radius: 1px;
+  background: rgba(255, 255, 255, 0.07);
+}
+.battery-cell.filled {
+  background: linear-gradient(180deg, #00ffcc, #007a66);
+  box-shadow: 0 0 4px rgba(0, 255, 204, 0.55);
+}
+/* 点值小标签：外壳下方居中 */
+.battery-value {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: -14px;
+  font-size: 10px;
+  font-weight: bold;
+  line-height: 1;
+  color: #00ffcc;
+  text-shadow: 0 0 4px rgba(0, 255, 204, 0.6);
+}
+/* bulge 4-6：上下边微微鼓出 + 橙黄微光 */
+.battery-bulge .battery-shell {
+  border-color: #ffb000;
+  border-radius: 12px;
+  box-shadow: 0 0 12px rgba(255, 176, 0, 0.5), inset 0 0 8px rgba(255, 176, 0, 0.15);
+}
+.battery-bulge .battery-cap { border-color: #ffb000; box-shadow: 0 0 6px rgba(255, 176, 0, 0.4); }
+.battery-bulge .battery-value { color: #ffb000; text-shadow: 0 0 4px rgba(255, 176, 0, 0.6); }
+/* full 7-9：明显鼓胀接近圆润 + 橙色强光 + 应力裂纹高光 */
+.battery-full .battery-shell {
+  border-color: #ff6b00;
+  border-radius: 16px;
+  box-shadow: 0 0 18px rgba(255, 107, 0, 0.75), inset 0 0 10px rgba(255, 107, 0, 0.25);
+}
+.battery-full .battery-cap { border-color: #ff6b00; box-shadow: 0 0 8px rgba(255, 107, 0, 0.55); }
+.battery-full .battery-value { color: #ff6b00; text-shadow: 0 0 4px rgba(255, 107, 0, 0.7); }
+.battery-full .battery-shell::before,
+.battery-full .battery-shell::after {
+  content: '';
+  position: absolute;
+  top: 22%;
+  left: 30%;
+  width: 13px;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.65);
+  transform: rotate(35deg);
+  box-shadow: 0 0 3px rgba(255, 210, 150, 0.9);
+  pointer-events: none;
+}
+.battery-full .battery-shell::after {
+  top: 60%;
+  left: 60%;
+  width: 9px;
+  transform: rotate(-40deg);
+}
+/* burst ≥10：爆裂（径向爆光 + 斜向裂纹 + 红橙脉冲动画），10 格仍全部点亮 */
+.battery-burst .battery-shell {
+  border-color: #ff3d00;
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(255, 208, 0, 0.4), rgba(255, 61, 0, 0.14) 55%, transparent 78%),
+    rgba(24, 0, 0, 0.65);
+  box-shadow: 0 0 20px rgba(255, 61, 0, 0.85), 0 0 42px rgba(255, 208, 0, 0.4), inset 0 0 12px rgba(255, 120, 0, 0.3);
+  animation: battery-burst-pulse 1.1s ease-in-out infinite;
+}
+.battery-burst .battery-cap { border-color: #ff3d00; box-shadow: 0 0 10px rgba(255, 61, 0, 0.8); }
+.battery-burst .battery-value { color: #ffd000; text-shadow: 0 0 6px rgba(255, 61, 0, 0.8); }
+.battery-burst .battery-cell { background: rgba(255, 80, 0, 0.16); }
+.battery-burst .battery-cell.filled {
+  background: linear-gradient(180deg, #ffd000, #ff3d00);
+  box-shadow: 0 0 6px rgba(255, 120, 0, 0.85);
+}
+.battery-burst .battery-shell::before,
+.battery-burst .battery-shell::after {
+  content: '';
+  position: absolute;
+  top: 18%;
+  left: 24%;
+  width: 20px;
+  height: 2px;
+  background: linear-gradient(90deg, rgba(255, 220, 120, 0.85), rgba(255, 61, 0, 0.35));
+  transform: rotate(50deg);
+  box-shadow: 0 0 4px rgba(255, 200, 80, 0.9);
+  pointer-events: none;
+}
+.battery-burst .battery-shell::after {
+  top: 62%;
+  left: 58%;
+  width: 14px;
+  transform: rotate(-55deg);
+}
+@keyframes battery-burst-pulse {
+  0%, 100% { box-shadow: 0 0 16px rgba(255, 61, 0, 0.7), 0 0 34px rgba(255, 208, 0, 0.3); }
+  50% { box-shadow: 0 0 28px rgba(255, 61, 0, 1), 0 0 56px rgba(255, 208, 0, 0.6); }
+}
 
 /* ===== 卡牌正面（官方 PNG 卡面） ===== */
 .card {
@@ -185,37 +328,37 @@ body {
 .protocol-name { font-weight: bold; font-size: 12px; }
 .protocol-loading { font-size: 10px; color: #aaa; }
 
-/* ===== 控制组件（R6 滑动指示条：控制卡在轨道上滑动表示哪方占优） ===== */
+/* ===== 控制组件（R6 滑动指示条：控制卡在轨道上滑动表示哪方占优；R8 整体放大：控制卡 44→70px） ===== */
 .control-module {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 4px;
+  gap: 6px;
   margin: 2px 0 6px;
-  padding: 8px;
+  padding: 10px;
   border: 1px dashed rgba(255, 255, 255, 0.18);
   border-radius: 8px;
   background: rgba(0, 0, 0, 0.25);
 }
 .control-track {
   position: relative;
-  height: 60px;
+  height: 84px; /* 容纳 70px 高的控制卡 */
   border: 1px solid #444;
-  border-radius: 8px;
+  border-radius: 10px;
   background: rgba(0, 0, 0, 0.35);
-  overflow: visible; /* ITEM 4: 行程扩至 5%..95% 时控制卡（h44 时仅 ~31px 宽）仍不出轨，无需裁切 */
+  overflow: visible; /* ITEM 4: 行程扩至 5%..95% 时控制卡仍不出轨，无需裁切 */
 }
 .control-track-label {
   position: absolute;
   top: 50%;
   transform: translateY(-50%);
-  font-size: 11px;
+  font-size: 13px;
   color: #999;
   pointer-events: none;
   user-select: none;
 }
-.control-track-label.left { left: 8px; }
-.control-track-label.right { right: 8px; }
+.control-track-label.left { left: 10px; }
+.control-track-label.right { right: 10px; }
 /* 中立（50%）位置的中心刻度标记 */
 .control-center-tick {
   position: absolute;
@@ -228,11 +371,11 @@ body {
   pointer-events: none;
 }
 .control-module.neutral .control-center-tick { background: rgba(255, 255, 255, 0.45); }
-/* 滑动控制卡：left 由 JS 按双方总值占比写入，translateX(-50%) 居中于该位置 */
+/* 滑动控制卡：left 由 JS 按双方总值占比写入，translateX(-50%) 居中于该位置（R8 44→70px） */
 .control-slider-img {
   position: absolute;
   top: 50%;
-  height: 44px;
+  height: 70px;
   width: auto;
   transform: translate(-50%, -50%);
   transition: left 0.5s ease;
@@ -244,7 +387,7 @@ body {
 /* 持有方高亮 */
 .control-module.held-0 .control-slider-img { box-shadow: 0 0 12px rgba(224, 160, 48, 0.75); border-radius: 4px; }
 .control-module.held-1 .control-slider-img { box-shadow: 0 0 12px rgba(96, 170, 255, 0.75); border-radius: 4px; }
-.control-label { font-size: 11px; color: #ccc; text-align: center; }
+.control-label { font-size: 12px; color: #ccc; text-align: center; }
 .control-module.held-0 .control-label { color: #f0b040; }
 .control-module.held-1 .control-label { color: #8ab8ff; }
 
@@ -299,6 +442,62 @@ body {
 /* 仅当前玩家（可交互）的手牌显示可点光标；对手隐藏手牌不暗示可点击 */
 .hand.self .card { cursor: pointer; }
 .hand.self .card:hover { border-color: #e0a030; }
+
+/* ===== R8 手牌挡板（hand-cover shield） =====
+ * 从手牌外侧端拉出遮住手牌：P1 左缘固定向右延伸至中线，P2 右缘固定向左延伸至中线
+ * （左右定位见 .p1/.p2）。仅当前回合玩家（.hand.self 手牌）的挡板可拖，其余锁定。
+ * 挡板 z-index 70 > 卡牌（pop 50）且与浮动按钮同层后置（DOM 后序），pointer-events
+ * 默认 auto 拦截指针 —— 被盖住的卡不触发 hover-pop / 单击 / 拖拽打牌。
+ * 收起态（retracted）仅露出 min-width 14px 的可抓取边缘条；挡板中央显示「手牌 N」。 */
+.hand-shield {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  min-width: 14px;
+  background: rgba(10, 14, 26, 0.88);
+  border: 1px solid rgba(0, 255, 204, 0.4);
+  border-radius: 6px;
+  backdrop-filter: blur(4px);
+  box-shadow: 0 0 10px rgba(0, 255, 204, 0.15);
+  z-index: 70;
+  user-select: none;
+  transition: width 0.15s ease;
+}
+.hand-shield.p1 { left: 0; }
+.hand-shield.p2 { right: 0; }
+/* 拖拽手柄：位于挡板内侧（移动端）边缘；拖拽期间关闭 width 过渡避免滞后 */
+.hand-shield .shield-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 16px;
+  cursor: ew-resize;
+  background: repeating-linear-gradient(90deg, rgba(0, 255, 204, 0.45) 0 2px, transparent 2px 6px);
+  opacity: 0.9;
+}
+.hand-shield.p1 .shield-handle { right: 0; border-left: 1px solid rgba(0, 255, 204, 0.55); }
+.hand-shield.p2 .shield-handle { left: 0; border-right: 1px solid rgba(0, 255, 204, 0.55); }
+.hand-shield.dragging { transition: none; }
+.hand-shield.locked .shield-handle { cursor: default; opacity: 0.3; }
+/* 手牌数量徽标：挡板中央；收起（未遮住任何牌）时隐藏 */
+.hand-shield .shield-count {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 13px;
+  font-weight: bold;
+  color: #eafffb;
+  text-shadow: 0 0 6px rgba(0, 255, 204, 0.7);
+  background: rgba(0, 255, 204, 0.12);
+  border: 1px solid rgba(0, 255, 204, 0.35);
+  border-radius: 10px;
+  padding: 2px 8px;
+  white-space: nowrap;
+  opacity: 1;
+  transition: opacity 0.15s ease;
+}
+.hand-shield.retracted .shield-count { opacity: 0; }
 
 /* ===== ITEM 1: 选中卡上方的 正面打入/背面打入 浮动按钮 ===== */
 /* 按钮是卡牌子节点（悬停按钮时指针仍在卡牌子树内，hover-pop 不消失）；

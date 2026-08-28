@@ -66,6 +66,38 @@ function renderProtocol(p: { defId: string; compiled: boolean }, player: PlayerI
 }
 
 /**
+ * 线值电池指示器（纯 CSS，R8）：位于堆叠槽外侧端（远离协议一侧），垂直居中。
+ * 10 格电量 = 该线点值（clamp 0..10）；外壳 4 态按点值：
+ * ≤3 stable（方正平直，青色描边）/ 4-6 bulge（上下微微鼓出，橙黄微光）/
+ * 7-9 full（明显鼓胀接近圆润，橙色强光 + 应力裂纹）/ ≥10 burst（爆裂：径向爆光 +
+ * 裂纹 + 红橙脉冲；10 格仍全部点亮）。pointer-events:none —— 纯视觉，不拦截槽位
+ * 打牌点击与卡牌交互。
+ */
+function batteryState(points: number): 'stable' | 'bulge' | 'full' | 'burst' {
+  if (points >= 10) return 'burst';
+  if (points >= 7) return 'full';
+  if (points >= 4) return 'bulge';
+  return 'stable';
+}
+
+function renderBattery(s: GameState, player: PlayerId, line: Line): HTMLElement {
+  const points = getLineValue(s, player, line);
+  const battery = el('div', `battery battery-${batteryState(points)}`);
+  battery.dataset.points = String(points);
+  const shell = el('div', 'battery-shell');
+  const cells = el('div', 'battery-cells');
+  const filled = Math.min(points, 10);
+  for (let i = 0; i < 10; i++) {
+    cells.appendChild(el('span', 'battery-cell' + (i < filled ? ' filled' : '')));
+  }
+  shell.appendChild(cells);
+  battery.appendChild(shell);
+  battery.appendChild(el('div', 'battery-cap'));
+  battery.appendChild(el('span', 'battery-value', String(points)));
+  return battery;
+}
+
+/**
  * 一条线的堆叠槽（横向条带）：stacks[line] 中 pos 0 为最早打出（贴协议一侧），
  * 新牌沿该线从协议向外逐张铺开（横向重叠，见 styles.css .stack .card + .card）：
  * - P1（左侧，grow-left）：协议在右，pos 0 贴右端，越新的牌越靠左（向左生长）。
@@ -123,6 +155,7 @@ function renderStackSlot(
   }
   slot.appendChild(pile);
   slot.appendChild(el('div', 'line-value', `值 ${getLineValue(s, player, line)}`));
+  slot.appendChild(renderBattery(s, player, line));
   if (interactable) {
     slot.addEventListener('click', () => onPlay(line));
   }
@@ -232,6 +265,11 @@ function renderHand(
   if (cards.length > 10) {
     hand.appendChild(el('div', 'hand-more-badge', `+${cards.length - 10}`));
   }
+  // R8 手牌挡板：当前回合玩家可拉出/推回遮住自己的手牌。被盖住的卡不触发
+  // hover-pop / 单击 / 拖拽（挡板 z-index 高于卡牌并拦截指针）。宽度按玩家持久化
+  // 在 shieldWidth（模块态），重渲染后保留；仅 self（当前回合）手牌的挡板可拖，
+  // 对手挡板锁定但状态保留。
+  hand.appendChild(renderShield(s, player, opts.isSelf, hand));
   const total = nodes.length;
   for (let i = 0; i < total; i++) {
     const node = nodes[i];
@@ -260,6 +298,63 @@ function renderHand(
     }
   });
   return hand;
+}
+
+/* ===== R8 手牌挡板（hand-cover shield） =====
+ * 挡板从手牌外侧端拉出：P1 左缘固定、向右延伸至手牌区中线；P2 右缘固定、向左延伸至
+ * 中线。宽度是 UI 模块态（shieldWidth[player]，默认 0=收起、手牌可见），重渲染后保留；
+ * 拖拽手柄位于挡板内侧（移动端）边缘，拖动时直接改写行内 width 并临时关闭过渡
+ * （避免拖动手感滞后），mouseup 后数值留在模块态。
+ * 挡板 z-index 70 > 卡牌（pop 50）且与浮动按钮同层后置，pointer-events 默认 auto，
+ * 天然拦截指针：被盖住的手牌卡不会触发 hover-pop / 单击 / 拖拽打牌。
+ */
+function renderShield(s: GameState, player: PlayerId, enabled: boolean, hand: HTMLElement): HTMLElement {
+  const shield = el('div', 'hand-shield' + (player === 1 ? ' p2' : ' p1'));
+  shield.dataset.player = String(player);
+  const w = shieldWidth[player];
+  shield.style.width = `${w}px`;
+  if (w <= 0) shield.classList.add('retracted');
+  shield.appendChild(el('div', 'shield-handle'));
+  shield.appendChild(el('div', 'shield-count', `手牌 ${s.players[player].hand.length}`));
+  if (enabled) {
+    bindShieldDrag(shield, player, hand);
+  } else {
+    shield.classList.add('locked');
+  }
+  return shield;
+}
+
+function bindShieldDrag(shield: HTMLElement, player: PlayerId, hand: HTMLElement): void {
+  const handle = shield.querySelector<HTMLElement>('.shield-handle');
+  if (!handle) return;
+  handle.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation(); // 不与卡牌单击/拖拽相互干扰
+    const dir = player === 0 ? 1 : -1; // P1 向右拖加宽；P2 向左拖加宽
+    const maxW = Math.max(0, hand.clientWidth / 2); // 可延伸至手牌区中线
+    const startX = e.clientX;
+    const startWidth = Math.min(Math.max(shieldWidth[player], 0), maxW);
+    const apply = (w: number) => {
+      shieldWidth[player] = w;
+      shield.style.width = `${w}px`;
+      shield.classList.toggle('retracted', w <= 0);
+    };
+    const onMove = (ev: MouseEvent) => {
+      const delta = (ev.clientX - startX) * dir;
+      apply(Math.min(maxW, Math.max(0, startWidth + delta)));
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      window.removeEventListener('blur', onUp);
+      shield.classList.remove('dragging');
+    };
+    shield.classList.add('dragging');
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    window.addEventListener('blur', onUp);
+  });
 }
 
 /**
@@ -452,6 +547,8 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
 
 let selectedUid: string | null = null;
 let selectedFaceUp = true;
+/** R8 手牌挡板宽度（px，模块态：重渲染后保留；0=收起、手牌可见） */
+const shieldWidth: [number, number] = [0, 0];
 
 /* ===== 卡牌放大查看遮罩（双击卡牌：手牌/场上/协议；滚轮缩放；Esc 或点击空白关闭） ===== */
 interface ZoomState {
