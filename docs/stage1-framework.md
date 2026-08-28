@@ -1,7 +1,23 @@
 # 阶段 1 文档：基础运行框架（Compile《译世界》网页版）
 
 > 本文件是阶段 1 的完整交接文档，供**零上下文 agent** 直接续作阶段 2。
-> 日期：2026-08-28 · 分支：`feature/stage1-framework` · HEAD：`bf15050`（父提交 `33372ba`） · 测试：40/40 通过 · 构建：通过
+> 日期：2026-08-28 · 分支：`main`（feature/stage1-framework 已合并删除） · HEAD：`7ef688c` · 测试：41/41 通过 · 构建：通过
+
+---
+
+## 0. 最新状态（2026-08-28 收尾，续作从这里开始）
+
+- **阶段 1 全部完成并已合并回 `main`**（合并提交 `011359e`，16 个提交）；feature 分支已删除。
+- **已推送 GitHub**：`https://github.com/foreverin2/Compile-Web.git`（origin，远程 main = 本地 `7ef688c`，用户已设为**私有仓库**）。
+- 追加提交：`7ef688c` = README.md + .gitattributes（统一 LF，消除 CRLF 警告）。
+- 最终全分支审查发现的 4 项 Important 已修复（提交 `81e29aa`）：
+  1. 强制编译不可跳过（check-compile 有可编译线时 `getLegalActions` 不再提供 `advance`，`executeAction` advance 抛错）
+  2. 草案提示用 `getCurrentDrafter(s)`（原误用 `s.turnPlayer`，草案期间不更新）
+  3. 开局洗牌（`shuffle` 从 deck.ts 导出，草案结束后洗牌再抽起手；新增 1 个非确定性测试 → 共 41 个）
+  4. `getCardDefSafe` 移除，改用 `getCardDef`（原伪循环依赖注释不成立）
+- **环境沙箱注意事项**（重要）：`node_modules` 里的 vite 补丁（optimizeSafeRealPathSync 跳过 net use 探测）**在 `npm ci`/`npm install` 后会丢失**，需重打否则测试/构建报 EPERM；`npm install` 必须加 `--cache node_modules/.npm-cache`；`vite.config.ts` 的 `pool: 'threads'` 勿改。
+- **试玩**：`npm run dev` → http://localhost:5173/（热座双人，草案 → 打牌/刷新/编译 → 3 协议全编译获胜）。
+- **下一步 = 阶段 2（Fire 协议试点）**：Fire 真实文本已在 `src/data/cards.ts`（fire-0..5，含 Codex 勘误 fire-0 底命令）→ **不阻塞**。待办见下文 §5。
 
 ---
 
@@ -40,8 +56,8 @@
 
 ### 1.4 测试
 
-- **40/40 通过**（`npx vitest run`；`vite.config.ts` 固定 `pool: 'threads'`，`environment: 'node'`，include `tests/**/*.test.ts`）。
-- 10 个测试文件，镜像 src 结构：smoke(1) / game(4) / models/types(3) / state/create(4) / engine/turn(3) / engine/deck(4) / rules/compile(7) / actions/base(6) / data/cards(6) / events/bus(2)。
+- **41/41 通过**（`npx vitest run`；`vite.config.ts` 固定 `pool: 'threads'`，`environment: 'node'`，include `tests/**/*.test.ts`）。
+- 10 个测试文件，镜像 src 结构：smoke(1) / game(4) / models/types(3) / state/create(5，含开局洗牌非确定性测试) / engine/turn(3) / engine/deck(4) / rules/compile(7) / actions/base(6) / data/cards(6) / events/bus(2)。
 
 ---
 
