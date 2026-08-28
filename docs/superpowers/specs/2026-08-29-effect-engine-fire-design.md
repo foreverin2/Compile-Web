@@ -174,7 +174,7 @@ resolveTrigger(s, trigger): void             // 把该触发对应的生成器�
 | `src/core/engine/turn.ts` | **只检测不结算**：进入 `end` 时检测待结算"结束"触发、进入 `start` 时检测"开始"触发（供 `getLegalActions`/UI 使用），自动推进由 `main.ts` 暂停 |
 | `src/core/game.ts` | 新增行动 `'effect-choice'`（应答挂起选择）与 `'resolve-trigger'`（玩家点按钮结算 end/start 触发，参数 `{cardUid}`）；`getLegalActions`：`pendingEffects` 非空时不提供其他行动；`end` 步骤有待结算触发时提供各触发的 `resolve-trigger` + `advance`（跳过剩余） |
 | `src/core/state/create.ts` | `createGame` 初始化 `pendingEffects: []` |
-| `src/main.ts` | `runAutoAdvance` 在 `pendingEffects` 非空 / `end` 步骤有待结算触发时暂停；`onAction` 分发 `effect-choice` |
+| `src/main.ts` | 自动推进暂停策略（见 §5.4）：`pendingEffects` 非空 / end·start 步骤有待结算触发 → 暂停并提示对应玩家；全部结算完毕才继续；该层无待结算事件则自动结算该层 |
 | `src/ui/render.ts` | 选择 UI：候选卡青色呼吸高亮 + 底部确认条；end 步骤触发结算按钮组 |
 | `src/ui/effects/`（新） | 订阅语义事件 → Fire 卡挂 `fire-burn` 火焰动画（Gemini 素材 `public/assets/fire/`） |
 
@@ -222,6 +222,18 @@ shift(uid, targetLine):
 ### 5.3 特效
 - `src/ui/effects/index.ts`：订阅 bus 语义事件；`card:discarded`/`card:deleted` 且 protocol==='fire' → 目标卡添加 `.card-burning` + 挂 `fire-burn` 粒子节点（按 `public/assets/fire/README.md` 结构），1.2s 后移除节点
 - 引擎不感知特效（只发语义事件）
+
+### 5.4 自动推进暂停策略（用户确认 2026-08-29）
+
+> **规则**：发现有需要玩家选择的操作 → 取消自动结算，提示**对应的玩家**（选择权归属者，可能是对手）进行操作；直到所有事件结算完毕后才继续；若该层没有检测到需要结算的事件 → 自动结算该层。
+
+实现：
+- **暂停条件**（任一满足即取消自动结算）：
+  1. `pendingEffects` 非空——有挂起的选择请求；提示 `PendingEffect.player`（可能 ≠ 当前回合玩家，规则"被作用卡持有者决定执行"）
+  2. `end`/`start` 步骤存在待结算触发（fire-3 等"你可以"可选触发）——UI 出[结算/跳过]按钮
+- **恢复条件**：上述全部清空（所有挂起选择已应答、所有触发已结算或跳过）→ 自动推进恢复
+- **无事件层**：start/check-control/check-cache 等无交互事件 → 自动结算该层（现状不变）
+- **提示 UI**：选择模式顶部显示"P1 操作 / P2 操作"归属者标签
 
 ## 6. 测试策略（TDD）
 
