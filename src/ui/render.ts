@@ -149,8 +149,8 @@ function renderHand(
     isSelf: boolean;
     selected: string | null;
     onSelect: (uid: string) => void;
-    /** 选中卡上 正面/背面 打入按钮回调（切换 selectedFaceUp 后重渲染） */
-    onToggleFaceUp?: (faceUp: boolean) => void;
+    /** 选中卡上「翻面」按钮回调（切换 selectedFaceUp 正↔背 后重渲染，手牌区即时翻转） */
+    onToggleFaceUp?: () => void;
   }
 ): HTMLElement {
   const reversed = player === 1; // P2 右起、向左延伸；P1 左起、向右延伸（默认左对齐）
@@ -159,10 +159,13 @@ function renderHand(
   const shown = cards.slice(0, 10);
   const nodes: HTMLElement[] = [];
   for (const card of shown) {
-    const node = renderCardFace({ defId: card.defId, faceUp: opts.isSelf });
-    node.dataset.uid = card.uid;
     const i = nodes.length;
     const isSelected = opts.isSelf && opts.selected === card.uid;
+    // 手牌显示：self 手牌默认正面；若该卡被选中且当前朝向为背面（selectedFaceUp=false），
+    // 立即以背面预览显示（点击「翻面」时翻转手牌区外观）。
+    const faceUp = opts.isSelf ? !(isSelected && !selectedFaceUp) : false;
+    const node = renderCardFace({ defId: card.defId, faceUp });
+    node.dataset.uid = card.uid;
     if (isSelected) node.classList.add('selected');
     if (opts.isSelf) {
       node.addEventListener('click', (e) => {
@@ -170,25 +173,20 @@ function renderHand(
         opts.onSelect(card.uid);
       });
     }
-    // ITEM 1: 选中卡且处于 action 步骤 → 卡上缘上方浮动 正面打入/背面打入 按钮。
+    // ITEM 1: 选中卡且处于 action 步骤 → 卡上缘上方浮动「翻面」按钮。
     // 按钮是卡牌子节点：悬停按钮时指针始终位于卡牌子树内，hover-pop 保持不消失
     // （复位只挂在手牌容器 mouseleave 上，穿过卡↔按钮间隙也不会触发复位）。
+    // 按钮仅一个「翻面」：点击切换 selectedFaceUp（正面↔背面），不占用卡面宽度。
     if (isSelected && s.step === 'action' && opts.onToggleFaceUp) {
       const atLeft = reversed ? i === shown.length - 1 : i === 0;
       const atRight = reversed ? i === 0 : i === shown.length - 1;
       const group = el('div', 'play-btns' + (atLeft ? ' at-left' : atRight ? ' at-right' : ''));
-      const up = el('button', 'btn play-btn', '正面打出');
-      up.addEventListener('click', (e) => {
+      const flip = el('button', 'btn play-btn', '翻面');
+      flip.addEventListener('click', (e) => {
         e.stopPropagation();
-        opts.onToggleFaceUp!(true);
+        opts.onToggleFaceUp!();
       });
-      const down = el('button', 'btn play-btn', '背面打出');
-      down.addEventListener('click', (e) => {
-        e.stopPropagation();
-        opts.onToggleFaceUp!(false);
-      });
-      group.appendChild(up);
-      group.appendChild(down);
+      group.appendChild(flip);
       node.appendChild(group);
     }
     hand.appendChild(node);
@@ -363,8 +361,8 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
         selectedUid = uid;
         renderApp(root, s, cb);
       },
-      onToggleFaceUp: (faceUp) => {
-        selectedFaceUp = faceUp;
+      onToggleFaceUp: () => {
+        selectedFaceUp = !selectedFaceUp;
         renderApp(root, s, cb);
       },
     })
@@ -378,8 +376,8 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
         selectedUid = uid;
         renderApp(root, s, cb);
       },
-      onToggleFaceUp: (faceUp) => {
-        selectedFaceUp = faceUp;
+      onToggleFaceUp: () => {
+        selectedFaceUp = !selectedFaceUp;
         renderApp(root, s, cb);
       },
     })

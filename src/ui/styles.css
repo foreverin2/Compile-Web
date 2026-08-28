@@ -314,19 +314,28 @@ body {
 /* 卡位于手牌行左/右边缘时按钮对齐到卡内，避免超出容器被裁掉 */
 .play-btns.at-left { left: 0; transform: none; }
 .play-btns.at-right { right: 0; left: auto; transform: none; }
-/* 打出朝向按钮：小巧、深色半透明（贴合暗色赛博背景），青色细描边，悬停时微微提亮 */
+/* 「翻面」按钮：单个小按钮（宽度远小于卡面），半透明深色底 + 青紫渐变霓虹描边，
+   悬停时霓虹点亮；深色系贴合暗色赛博背景，取代原黄色按钮 */
 .play-btn {
-  padding: 2px 8px;
-  font-size: 11px;
+  padding: 1px 8px;
+  font-size: 10px;
+  line-height: 1.6;
   border-radius: 4px;
-  border: 1px solid rgba(0, 255, 204, 0.35);
-  background: rgba(13, 20, 36, 0.85);
-  color: #9fd8cc;
-  font-weight: normal;
+  border: 1px solid transparent;
+  background: linear-gradient(135deg, rgba(0, 255, 204, 0.35), rgba(124, 77, 255, 0.35));
+  background-clip: padding-box;
+  color: #eafffb;
+  text-shadow: 0 0 4px rgba(0, 255, 204, 0.6);
+  font-weight: 600;
+  letter-spacing: 0.08em;
   cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+  box-shadow: 0 0 6px rgba(0, 255, 204, 0.2);
+  transition: box-shadow 0.12s ease, filter 0.12s ease;
 }
-.play-btn:hover { background: rgba(0, 60, 50, 0.75); color: #d8fff5; border-color: rgba(0, 255, 204, 0.7); }
+.play-btn:hover {
+  box-shadow: 0 0 12px rgba(0, 255, 204, 0.55), 0 0 4px rgba(124, 77, 255, 0.5);
+  filter: brightness(1.25);
+}
 
 /* ===== 指示 / 操作 / 日志 ===== */
 .step-indicator { text-align: center; font-size: 13px; color: #ccc; padding: 4px 0; }
