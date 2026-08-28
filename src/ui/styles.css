@@ -265,6 +265,9 @@ body {
 }
 /* 扇形重叠：首卡 margin 0，其后每张向左叠 28px（左缘露出的宽度 = 130 − 28 = 102px） */
 .hand .card + .card { margin-left: -28px; }
+/* P2 右起手牌（row-reverse）：flex 按主轴起点（右缘）定位，负 margin-left 不生效，
+   改为负 margin-right 使每张后续卡向右叠 28px，镜像复现 P1 的扇形 */
+.hand.reversed .card + .card { margin-left: 0; margin-right: -28px; }
 /* 悬停上浮的平滑过渡（transform 变化：推开相邻卡 / 上浮放大） */
 .hand .card { transition: transform 0.15s ease, border-color 0.15s ease; }
 /* 悬停的卡：上浮 + 放大 + 置顶（其余卡通过 JS 写入 translateX 往两侧推开） */
