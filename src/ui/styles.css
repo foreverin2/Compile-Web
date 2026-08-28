@@ -380,29 +380,31 @@ body {
 .protocol-holder {
   position: relative;
   display: inline-flex;
-  isolation: isolate;
 }
-/* 环绕环容器：比 holder（卡面）外扩 7px；负 z 藏在卡面之下，仅外圈环带可见 */
+/* 环绕环容器：与 holder（卡面）同界，子元素经 offset-path 在卡面外侧边框路径上旅行 */
 .compiled-ring {
   position: absolute;
-  inset: -7px;
-  border-radius: 14px;
-  z-index: -1;
+  inset: 0;
+  z-index: 2; /* 卡面之上；但子元素只落在卡面外的边框环带上，不遮盖卡面 */
   pointer-events: none;
   overflow: visible;
-}
-.compiled-ring-flow {
-  position: absolute;
-  inset: 0;
-  border-radius: 14px;
-  animation: ring-spin 2.5s linear infinite;
-}
-.compiled-ring-rocks {
-  position: absolute;
-  inset: 0;
   border-radius: 14px;
 }
-/* 岩石：不规则黑岩/红岩，沿边框路径（inset 圆角矩形）旅行环绕 */
+/* 岩浆段：渐变小块沿边框路径流动 */
+.lava-seg {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 14px;
+  height: 5px;
+  border-radius: 50%;
+  background: linear-gradient(90deg, #ffd54f, #ff9100, #ff3d00);
+  box-shadow: 0 0 5px rgba(255, 61, 0, 0.7);
+  offset-path: inset(-5px round 15px);
+  animation: ring-travel 2.5s linear infinite;
+  will-change: offset-distance;
+}
+/* 岩石：不规则黑岩/红岩，与岩浆段同路径环绕 */
 .lava-rock {
   position: absolute;
   left: 0;
@@ -410,20 +412,13 @@ body {
   width: 10px;
   height: 8px;
   border-radius: 45% 55% 60% 40% / 50% 45% 55% 50%;
-  offset-path: inset(-4px round 15px);
-  animation: rock-travel 2.5s linear infinite;
+  offset-path: inset(-5px round 15px);
+  animation: ring-travel 2.5s linear infinite;
   will-change: offset-distance;
 }
 .rock-dark { background: #101010; box-shadow: 0 0 3px rgba(0, 0, 0, 0.8); }
 .rock-red { background: #7a1d00; box-shadow: 0 0 4px rgba(255, 69, 0, 0.35); }
-@keyframes ring-spin { to { transform: rotate(360deg); } }
-@keyframes rock-travel { to { offset-distance: 100%; } }
-/* fire = 岩浆配色：红橙黄流动色流 */
-.compiled-ring-fire .compiled-ring-flow {
-  background: conic-gradient(from 0deg,
-    #ff3d00 0deg, #ff9100 60deg, #ffd54f 120deg, #7a1d00 210deg, #ff3d00 360deg);
-  filter: drop-shadow(0 0 4px rgba(255, 61, 0, 0.6));
-}
+@keyframes ring-travel { to { offset-distance: 100%; } }
 .protocol-check {
   position: absolute; top: 4px; right: 6px;
   background: #4caf50; color: #111; font-size: 11px; font-weight: bold;

@@ -457,26 +457,30 @@ function renderProtocolCell(s: GameState, player: PlayerId, line: Line): HTMLEle
 }
 
 /**
- * 已编译协议环绕特效（基础特效骨架，JS 构建 + 纯 CSS 动画，不依赖 mask/@property）：
- * - .compiled-ring（z-index -1，位于协议背景之上、卡面内容之下）外圈露出 7px 环带
- * - .compiled-ring-flow：旋转 conic 渐变 → 岩浆等色流环绕
- * - .compiled-ring-rocks：N 块岩石沿边框路径（offset-path）旅行，同步环绕
+ * 已编译协议环绕特效（基础特效骨架，JS 构建 + 纯 CSS 动画，零 mask/@property/z-index 依赖）：
+ * - 岩浆段 .lava-seg（渐变小块）+ 岩石 .lava-rock（黑岩/红岩）沿边框路径（offset-path）
+ *   旅行环绕——所有元素都落在卡面外侧的边框环带上，在卡面前方但不遮盖卡面。
  * 每协议配色由 .compiled-ring-<defId> 决定（fire = 岩浆黑岩/红岩）。
  */
 function appendCompiledRing(box: HTMLElement, defId: string): void {
   const ring = el('div', `compiled-ring compiled-ring-${defId}`);
-  ring.appendChild(el('div', 'compiled-ring-flow'));
-  const rocks = el('div', 'compiled-ring-rocks');
+  const TRAVEL_S = 2.5;
+  const LAVA_COUNT = 10;
+  for (let i = 0; i < LAVA_COUNT; i++) {
+    const seg = el('div', 'lava-seg');
+    seg.style.animationDelay = `${(-TRAVEL_S / LAVA_COUNT) * i}s`;
+    const s = 0.8 + ((i * 29) % 4) * 0.12;
+    seg.style.transform = `scale(${s.toFixed(2)})`;
+    ring.appendChild(seg);
+  }
   const ROCK_COUNT = 8;
   for (let i = 0; i < ROCK_COUNT; i++) {
     const rock = el('div', 'lava-rock' + (i % 2 === 0 ? ' rock-dark' : ' rock-red'));
-    // 沿边框路径均布起步（负 delay 错开相位）；不规则尺寸与朝向
-    rock.style.animationDelay = `${(-2.5 / ROCK_COUNT) * i}s`;
+    rock.style.animationDelay = `${(-TRAVEL_S / ROCK_COUNT) * i - 0.15}s`;
     const s = 0.7 + ((i * 37) % 5) * 0.15;
     rock.style.transform = `scale(${s.toFixed(2)}) rotate(${i * 47}deg)`;
-    rocks.appendChild(rock);
+    ring.appendChild(rock);
   }
-  ring.appendChild(rocks);
   box.appendChild(ring);
 }
 
