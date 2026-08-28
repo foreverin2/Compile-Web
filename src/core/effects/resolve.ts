@@ -5,6 +5,7 @@ import { gameBus } from '../events/bus';
 import { createCtx, emitCardEvent, findCard, isUncovered, nextEffectId } from './context';
 import { collectTriggerFor, resolveTrigger } from './triggers';
 import { EFFECTS } from './registry';
+import './cards/fire';
 
 function topEffect(s: GameState): PendingEffect | undefined {
   return s.pendingEffects[s.pendingEffects.length - 1];
@@ -39,8 +40,12 @@ export function answerEffect(s: GameState, promptId: string, selected: string[])
   if (!pe || pe.prompt === null) throw new Error(`no pending choice "${promptId}"`);
   if (pe.id !== promptId) throw new Error(`prompt id mismatch: ${promptId}`);
   const req = pe.prompt;
-  if (selected.length < req.min) throw new Error(`requires at least ${req.min} selection(s)`);
-  if (selected.length > req.max) throw new Error(`requires at most ${req.max} selection(s)`);
+  // 可选选择允许跳过（0 选）；非空选择仍需满足 [min, max]
+  const skipped = req.optional && selected.length === 0;
+  if (!skipped) {
+    if (selected.length < req.min) throw new Error(`requires at least ${req.min} selection(s)`);
+    if (selected.length > req.max) throw new Error(`requires at most ${req.max} selection(s)`);
+  }
   for (const uid of selected) {
     if (!req.candidates.some((c) => c.uid === uid)) throw new Error(`invalid selection: ${uid}`);
   }

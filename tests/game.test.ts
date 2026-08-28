@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createGame, getDraftPool, performDraftPick } from '../src/core/state/create';
 import { getLegalActions, executeAction } from '../src/core/game';
+import { resolveAllChoices, pickFirst } from './helpers';
 
 function draftToTurn(): ReturnType<typeof createGame> {
   const s = createGame();
@@ -44,6 +45,8 @@ describe('game facade', () => {
     }
     expect(target).not.toBeNull();
     executeAction(s, 0, 'play', { cardUid: target!.cardUid, faceUp: true, line: target!.line });
+    // 打出卡可能触发已注册效果（Fire 试点）：链式选择全部自动应答后再断言
+    resolveAllChoices(s, pickFirst);
     expect(s.players[0].stacks[target!.line]).toHaveLength(1);
     expect(s.step).toBe('check-cache');
   });
