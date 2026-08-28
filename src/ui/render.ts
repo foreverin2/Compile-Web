@@ -661,6 +661,7 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
     const label =
       a.kind === 'compile' ? `编译线 ${(a.line ?? 0) + 1}`
       : a.kind === 'resolve-trigger' ? `结算触发效果`
+      : a.kind === 'clear-cache' ? `清理缓存`
       : a.kind;
     const btn = el('button', 'btn', label);
     btn.addEventListener('click', () => cb.onAction(a));

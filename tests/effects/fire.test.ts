@@ -41,9 +41,24 @@ describe('fire protocol effects', () => {
       prompts.push(p.title);
       return p.candidates.some((c) => c.uid === victim.uid) ? [victim.uid] : [discardTarget.uid];
     });
-    expect(prompts).toEqual(['fire-1：弃1张牌', 'fire-1：删除1张牌']);
+    expect(prompts).toEqual(['fire-1：你可以弃1张牌', 'fire-1：删除1张牌']);
     expect(s.players[0].trash.map((c) => c.uid)).toEqual([discardTarget.uid]); // 弃掉自己的 fire-2
     expect(s.players[1].trash.map((c) => c.uid)).toEqual([victim.uid]); // 删除对手牌
+  });
+
+  it('fire-1: optional discard can be skipped (no delete happens)', () => {
+    const s = draftFireP1();
+    advanceToStep(s, 0, 'action');
+    s.players[0].hand = [makeCard('fire-1', 0, 'hand')];
+    s.players[1].stacks[0] = [makeCard('fire-1', 1, 'field', true, 0, 0)];
+    const victim = s.players[1].stacks[0][0];
+    const card = s.players[0].hand[0];
+    executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: fireLine(s) });
+    // 可选弃牌：跳过（空应答）→ 第二步"如果弃了"不触发
+    resolveAllChoices(s, () => []);
+    expect(s.players[0].trash).toHaveLength(0); // 未弃牌
+    expect(s.players[1].stacks[0].map((c) => c.uid)).toEqual([victim.uid]); // 对手牌未被删除
+    expect(s.step).toBe('check-cache');
   });
 
   it('fire-2: discard then return to owner hand', () => {

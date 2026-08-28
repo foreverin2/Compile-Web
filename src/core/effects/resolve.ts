@@ -11,8 +11,9 @@ function topEffect(s: GameState): PendingEffect | undefined {
   return s.pendingEffects[s.pendingEffects.length - 1];
 }
 
-/** 效果源卡是否仍有效：在场、正面、未被覆盖；否则剩余效果终止 */
+/** 效果源卡是否仍有效：在场、正面、未被覆盖；否则剩余效果终止（系统效果无源卡，恒有效） */
 function sourceValid(s: GameState, pe: PendingEffect): boolean {
+  if (pe.system) return true;
   const card = findCard(s, pe.sourceUid);
   return card !== undefined && card.zone === 'field' && card.faceUp && isUncovered(s, card);
 }

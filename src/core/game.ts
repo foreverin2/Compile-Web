@@ -1,4 +1,4 @@
-import type { GameState, PlayerId, Line } from './models/types';
+import type { GameState, PlayerId, Line, EffectStep, StepResult } from './models/types';
 import { advanceStep } from './engine/turn';
 import { clearCache } from './engine/deck';
 import { playCard, refreshHand } from './actions/base';
@@ -7,8 +7,9 @@ import { checkControl, resetControlIfHeld } from './rules/control';
 import { getCardDef } from '../data/demo';
 import { collectTriggers, resolveTrigger } from './effects/triggers';
 import { answerEffect, runStack } from './effects/resolve';
+import { listCandidates, nextEffectId } from './effects/context';
 
-export type ActionKind = 'play' | 'refresh' | 'compile' | 'advance' | 'effect-choice' | 'resolve-trigger';
+export type ActionKind = 'play' | 'refresh' | 'compile' | 'advance' | 'effect-choice' | 'resolve-trigger' | 'clear-cache';
 
 export interface PlayArgs {
   cardUid: string;
@@ -58,6 +59,12 @@ export function getLegalActions(s: GameState, player: PlayerId): LegalAction[] {
       out.push({ kind: 'advance' });
     }
     return out; // end/start 的 advance 已处理，不走下方通用逻辑
+  } else if (s.step === 'check-cache') {
+    // 手牌超过 5 张：必须由玩家自选弃牌至 5 张（不提供 advance）
+    if (s.players[player].hand.length > 5) {
+      out.push({ kind: 'clear-cache' });
+      return out;
+    }
   }
   const mustRefresh = s.step === 'action' && s.players[player].hand.length === 0;
   if (
@@ -74,7 +81,7 @@ export function getLegalActions(s: GameState, player: PlayerId): LegalAction[] {
 // （修正 brief 中 PlayArgs 全必填与测试 `compile, { line: 2 }` 的类型冲突）
 export function executeAction(s: GameState, player: PlayerId, kind: 'play', args: PlayArgs): void;
 export function executeAction(s: GameState, player: PlayerId, kind: 'compile', args: { line: Line }): void;
-export function executeAction(s: GameState, player: PlayerId, kind: 'refresh' | 'advance'): void;
+export function executeAction(s: GameState, player: PlayerId, kind: 'refresh' | 'advance' | 'clear-cache'): void;
 export function executeAction(s: GameState, player: PlayerId, kind: 'effect-choice', args: { promptId: string; choice: string[] }): void;
 export function executeAction(s: GameState, player: PlayerId, kind: 'resolve-trigger', args: { cardUid: string }): void;
 export function executeAction(s: GameState, player: PlayerId, kind: ActionKind, args?: PlayArgs | { line: Line } | { promptId: string; choice: string[] } | { cardUid: string }): void {
@@ -131,12 +138,22 @@ export function executeAction(s: GameState, player: PlayerId, kind: ActionKind, 
       s.resolvedTriggerUids.push(args.cardUid);
       break;
     }
+    case 'clear-cache': {
+      if (s.step !== 'check-cache') throw new Error('clear-cache only at check-cache');
+      beginCacheClear(s, player);
+      // 玩家自选弃牌挂起；应答后效果栈排空，pendingStepAdvance 由 runStack 消费推进到 end
+      s.pendingStepAdvance = true;
+      break;
+    }
     case 'advance': {
       if (s.step === 'check-compile' && getCompilableLines(s, player).length > 0) {
         throw new Error('compile is mandatory at check-compile');
       }
       if (s.step === 'action' && s.players[player].hand.length === 0) {
         throw new Error('must refresh with no cards in hand');
+      }
+      if (s.step === 'check-cache' && s.players[player].hand.length > 5) {
+        throw new Error('must clear cache first');
       }
       if (s.step === 'end' || s.step === 'start') {
         const k: 'end' | 'start' = s.step;
@@ -158,4 +175,36 @@ export function executeAction(s: GameState, player: PlayerId, kind: ActionKind, 
 
 export function getWinner(s: GameState): PlayerId | null {
   return s.winner;
+}
+
+/** 系统效果生成器：清理缓存——玩家自选弃牌，直至手牌降到 5 张 */
+function* cacheClearGen(s: GameState, player: PlayerId): Generator<EffectStep, void, StepResult> {
+  const excess = s.players[player].hand.length - 5;
+  const candidates = listCandidates(s, { zone: 'hand', owner: player });
+  const ans = yield {
+    kind: 'select',
+    title: `清理缓存：弃 ${excess} 张牌（手牌超过 5 张上限）`,
+    min: excess,
+    max: excess,
+    optional: false,
+    candidates,
+  };
+  for (const uid of ans.selected) yield { op: 'discard', uid };
+}
+
+/** 进入缓存清理：手牌 > 5 时推入系统效果（挂起选择，无源卡 → system 标志跳过 sourceValid） */
+function beginCacheClear(s: GameState, player: PlayerId): void {
+  const excess = s.players[player].hand.length - 5;
+  if (excess <= 0) throw new Error('cache is within limit');
+  s.pendingEffects.push({
+    id: nextEffectId(),
+    player,
+    gen: cacheClearGen(s, player),
+    sourceUid: 'system-cache',
+    sourceDefId: 'system',
+    system: true,
+    prompt: null,
+    lastAnswer: null,
+  });
+  runStack(s);
 }

@@ -111,6 +111,8 @@ export interface PendingEffect {
   sourceDefId: string;
   prompt: ChoiceRequest | null;
   lastAnswer: ChoiceAnswer | null;
+  /** 系统效果（如清理缓存）：跳过 sourceValid 源卡有效性检查（无源卡） */
+  system?: boolean;
 }
 
 /** 待结算触发条目（getLegalActions 供 UI 出按钮） */

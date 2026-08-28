@@ -93,13 +93,13 @@
 |---|---|---|
 | fire-0 | **中指令**（进厂） | 翻转另 1 张牌（必选 1）→ 抽 2 张牌 |
 | fire-0 | **底指令** = `before-covered`（被盖住前） | 先抽 1 张牌 → 翻转另 1 张牌（必选 1） |
-| fire-1 | 中指令 | 弃 1 张牌（手牌必选 1）→ 删除 1 张牌（场上顶卡必选 1） |
-| fire-2 | 中指令 | 弃 1 张牌 → 回手 1 张牌（回持有者手牌） |
+| fire-1 | 中指令 | **可选**弃 1 张牌（手牌；跳过则不删除）→ 若弃了：删除 1 张牌（场上顶卡必选 1） |
+| fire-2 | 中指令 | **可选**弃 1 张牌（手牌；跳过则不回手）→ 若弃了：回手 1 张牌（回持有者手牌） |
 | fire-3 | **底指令** = `end` 触发（可选） | 可弃 1 张牌；弃了则翻转 1 张牌 |
 | fire-4 | 中指令 | 弃 1 张或更多张牌（min 1 / max 手牌数）→ 抽「弃牌数 + 1」张 |
 | fire-5 | 中指令 | 弃 1 张牌 |
 
-**验证**：`tests/effects/fire.test.ts` 8 用例逐卡覆盖（fire-0 中/底两条链路、fire-1 弃后删除、fire-2 回持有者手牌、fire-3 可选跳过与弃后翻转、fire-4 多弃多抽、fire-5 必弃）；`tests/game-effect.test.ts` / `tests/actions/play-effect.test.ts` 覆盖「打出火卡 → 挂起选择 → 结算 → 自动推进」门面链路；`tests/effects/runner.test.ts` 覆盖栈核心（挂起/恢复/终止/连锁/落牌）。
+**验证**：`tests/effects/fire.test.ts` 9 用例逐卡覆盖（fire-0 中/底两条链路、fire-1 弃后删除 + **可选跳过**、fire-2 回持有者手牌、fire-3 可选跳过与弃后翻转、fire-4 多弃多抽、fire-5 必弃）；`tests/cache.test.ts` 覆盖**检查缓存玩家自选弃牌**（手牌 > 5 时出 `clear-cache` 行动 → 系统效果挂起选择 min=max=超出数 → 弃至 5 张自动推进到 end）；`tests/game-effect.test.ts` / `tests/actions/play-effect.test.ts` 覆盖「打出火卡 → 挂起选择 → 结算 → 自动推进」门面链路；`tests/effects/runner.test.ts` 覆盖栈核心（挂起/恢复/终止/连锁/落牌）。
 
 ---
 
