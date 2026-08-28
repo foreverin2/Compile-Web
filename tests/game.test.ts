@@ -21,6 +21,9 @@ describe('game facade', () => {
     executeAction(s, 0, 'advance'); // check-control → check-compile
     const legal = getLegalActions(s, 0);
     expect(legal.some((a) => a.kind === 'compile' && a.line === 0)).toBe(true);
+    // 编译条件满足时编译为唯一行动：不提供 advance，且执行 advance 被拒绝
+    expect(legal.some((a) => a.kind === 'advance')).toBe(false);
+    expect(() => executeAction(s, 0, 'advance')).toThrow();
   });
 
   it('plays a card and advances to check-cache', () => {

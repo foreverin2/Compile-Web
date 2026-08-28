@@ -3,6 +3,7 @@ import { advanceStep } from './engine/turn';
 import { clearCache } from './engine/deck';
 import { playCard, refreshHand } from './actions/base';
 import { executeCompile, getCompilableLines } from './rules/compile';
+import { getCardDef } from '../data/demo';
 
 export type ActionKind = 'play' | 'refresh' | 'compile' | 'advance';
 
@@ -26,7 +27,7 @@ export function getLegalActions(s: GameState, player: PlayerId): LegalAction[] {
     for (const card of s.players[player].hand) {
       // 正面：只能进匹配线；背面：任意线
       for (const line of [0, 1, 2] as Line[]) {
-        const def = getCardDefSafe(card.defId);
+        const def = getCardDef(card.defId);
         if (def.protocol === s.players[player].protocols[line].defId) {
           out.push({ kind: 'play', cardUid: card.uid, faceUp: true, line });
         }
@@ -41,14 +42,12 @@ export function getLegalActions(s: GameState, player: PlayerId): LegalAction[] {
       out.push({ kind: 'compile', line });
     }
   }
-  // 无玩家输入的步骤（start/check-control/check-cache/end）或本步骤无事可做 → 允许推进
-  out.push({ kind: 'advance' });
+  // 无玩家输入的步骤（start/check-control/check-cache/end）或本步骤无事可做 → 允许推进；
+  // check-compile 存在可编译线时编译为强制且唯一的行动，不再提供 advance
+  if (!(s.step === 'check-compile' && getCompilableLines(s, player).length > 0)) {
+    out.push({ kind: 'advance' });
+  }
   return out;
-}
-
-function getCardDefSafe(defId: string): { protocol: string } {
-  // 内联以避免循环依赖：仅取协议字段
-  return { protocol: defId.split('-')[0] };
 }
 
 // 重载：play 需要完整 args；compile 只需 line；refresh/advance 无 args
@@ -79,6 +78,9 @@ export function executeAction(s: GameState, player: PlayerId, kind: ActionKind, 
       break;
     }
     case 'advance': {
+      if (s.step === 'check-compile' && getCompilableLines(s, player).length > 0) {
+        throw new Error('compile is mandatory at check-compile');
+      }
       if (s.step === 'check-cache') {
         clearCache(s, player);
       }

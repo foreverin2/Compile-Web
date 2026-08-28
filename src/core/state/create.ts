@@ -1,6 +1,6 @@
 import type { GameState, PlayerId, PlayerState, Line, ProtocolDef, Card } from '../models/types';
 import { DEMO_PROTOCOLS, DEMO_CARD_DEFS, getCardDef } from '../../data/demo';
-import { drawCards } from '../engine/deck';
+import { drawCards, shuffle } from '../engine/deck';
 
 let uidCounter = 0;
 export function nextUid(): string {
@@ -79,6 +79,9 @@ export function performDraftPick(s: GameState, defId: string): void {
     assignProtocols(s, 1, p2Picks as ProtocolDef[]);
     s.phase = 'turn';
     s.step = 'start';
+    // 开局前洗牌：起始手牌每局不同（“洗成牌库”）
+    s.players[0].deck = shuffle(s.players[0].deck);
+    s.players[1].deck = shuffle(s.players[1].deck);
     drawCards(s, 0, 5);
     drawCards(s, 1, 5);
     s.log.push('Setup complete. Starting hand drawn (5 each).');

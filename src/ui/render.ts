@@ -1,6 +1,6 @@
 import type { GameState, PlayerId, Line } from '../core/models/types';
 import { getCardDef, getProtocolDef } from '../data/demo';
-import { getLineValue, getDraftPool } from '../core/state/create';
+import { getLineValue, getDraftPool, getCurrentDrafter } from '../core/state/create';
 import { getLegalActions, type LegalAction } from '../core/game';
 
 export interface UiCallbacks {
@@ -91,7 +91,7 @@ export function renderDraft(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   root.textContent = '';
   const wrap = el('div', 'draft-screen');
   wrap.appendChild(el('h1', 'title', 'Compile 译世界 — 协议草案'));
-  wrap.appendChild(el('div', 'draft-hint', `轮到 玩家 ${s.turnPlayer + 1} 选择协议`));
+  wrap.appendChild(el('div', 'draft-hint', `轮到 玩家 ${getCurrentDrafter(s) + 1} 选择协议`));
   const pool = el('div', 'draft-pool');
   for (const proto of getDraftPool(s)) {
     const card = el('div', 'protocol-card');

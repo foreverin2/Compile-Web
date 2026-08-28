@@ -36,6 +36,26 @@ describe('create & draft', () => {
     }
   });
 
+  it('shuffles decks so opening hands differ across games', () => {
+    const openingHand = (): string[] => {
+      const s = createGame();
+      while (s.phase === 'draft') {
+        performDraftPick(s, getDraftPool(s)[0].defId);
+      }
+      return s.players[0].hand.map((c) => c.defId);
+    };
+    const first = openingHand();
+    // 洗牌后两局手牌相同的概率极低；为防极端巧合，最多比对 3 局
+    let differs = false;
+    for (let i = 0; i < 3; i++) {
+      if (JSON.stringify(openingHand()) !== JSON.stringify(first)) {
+        differs = true;
+        break;
+      }
+    }
+    expect(differs).toBe(true);
+  });
+
   it('line value sums the stack', () => {
     const s = createGame();
     while (s.phase === 'draft') {
