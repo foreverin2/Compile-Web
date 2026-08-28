@@ -609,6 +609,7 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
       selected: s.turnPlayer === 0 ? selectedUid : null,
       onSelect: (uid) => {
         selectedUid = uid;
+        selectedFaceUp = true; // 选择新卡时重置为正面（避免继承上一张的翻面状态）
         renderApp(root, s, cb);
       },
       onToggleFaceUp: () => {
@@ -627,6 +628,7 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
       selected: s.turnPlayer === 1 ? selectedUid : null,
       onSelect: (uid) => {
         selectedUid = uid;
+        selectedFaceUp = true; // 选择新卡时重置为正面（避免继承上一张的翻面状态）
         renderApp(root, s, cb);
       },
       onToggleFaceUp: () => {
