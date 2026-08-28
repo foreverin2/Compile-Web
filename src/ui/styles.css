@@ -12,7 +12,8 @@ body {
   background-attachment: fixed;
 }
 /* 主容器：左右 padding 140px 容纳电池外溢；草案界面放大 2.5 倍后较宽，允许横向滚动 */
-#app { max-width: 3400px; margin: 0 auto; padding: 12px 140px; }
+/* 主容器：左右 padding 140px 容纳电池外溢；不设 overflow-x:hidden 防裁剪 */
+#app { max-width: 1780px; margin: 0 auto; padding: 12px 140px; }
 
 .board { display: flex; flex-direction: column; gap: 10px; }
 
@@ -574,10 +575,7 @@ body {
 .draft-step-dot.done { border-color: #00ffcc; color: #00ffcc; box-shadow: 0 0 6px rgba(0, 255, 204, 0.45); }
 .draft-step-dot.current { border-color: #e0a030; color: #e0a030; background: rgba(224, 160, 48, 0.18); box-shadow: 0 0 8px rgba(224, 160, 48, 0.6); }
 
-/* 草案界面整体放大 2.5 倍：中间池 + 双方选择框（zoom 缩放布局尺寸，不重叠） */
-.draft-layout { display: grid; grid-template-columns: 700px minmax(0, 1fr) 700px; gap: 24px; align-items: start; }
-.draft-pool { zoom: 2.5; }
-.draft-picks { zoom: 2.5; }
+.draft-layout { display: grid; grid-template-columns: 280px minmax(0, 1fr) 280px; gap: 16px; align-items: start; }
 
 /* ===== 已选协议列（左 P1 / 右 P2；轮选方高亮） ===== */
 .draft-picks {
