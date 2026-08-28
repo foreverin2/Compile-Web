@@ -80,7 +80,9 @@ body {
   align-items: center;
   gap: 2px;
   height: 40px;
-  z-index: 5;
+  /* z-index 59：高于场上堆叠卡（zIndex=pos，最多几十）使电池始终可见；
+     低于 hover 弹出的卡（60）不遮挡查看 */
+  z-index: 59;
   pointer-events: none;
   user-select: none;
 }
