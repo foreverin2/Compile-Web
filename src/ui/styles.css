@@ -122,17 +122,44 @@ body {
   background: rgba(0, 0, 0, 0.7);
   box-shadow: 0 0 8px rgba(0, 255, 204, 0.3);
 }
-.battery-cells { display: flex; flex-direction: column; gap: 6px; align-items: center; }
+/* 格竖排：column-reverse 使填充从下到上增加（点数变化时最下方的格先亮） */
+.battery-cells { display: flex; flex-direction: column-reverse; gap: 6px; align-items: center; }
 .battery-cell {
   width: 52px;
   height: 11px;
   border-radius: 3px;
   background: rgba(255, 255, 255, 0.07);
+  transition: background 0.25s ease, box-shadow 0.25s ease;
 }
 /* 填充格：默认青色（stable）；bulge/full/burst 分别由下方状态覆盖为外壳同色 */
 .battery-cell.filled {
   background: linear-gradient(90deg, #00ffcc, #007a66);
   box-shadow: 0 0 6px rgba(0, 255, 204, 0.55);
+}
+/* 点数变化时：新亮的格渐入（自下而上错峰淡入 + 轻微上浮） */
+.battery.points-changed .battery-cell.filled {
+  animation: battery-cell-in 0.5s ease backwards;
+}
+.battery.points-changed .battery-cell.filled:nth-last-child(1) { animation-delay: 0s; }
+.battery.points-changed .battery-cell.filled:nth-last-child(2) { animation-delay: 0.05s; }
+.battery.points-changed .battery-cell.filled:nth-last-child(3) { animation-delay: 0.1s; }
+.battery.points-changed .battery-cell.filled:nth-last-child(4) { animation-delay: 0.15s; }
+.battery.points-changed .battery-cell.filled:nth-last-child(5) { animation-delay: 0.2s; }
+.battery.points-changed .battery-cell.filled:nth-last-child(6) { animation-delay: 0.25s; }
+.battery.points-changed .battery-cell.filled:nth-last-child(7) { animation-delay: 0.3s; }
+.battery.points-changed .battery-cell.filled:nth-last-child(8) { animation-delay: 0.35s; }
+.battery.points-changed .battery-cell.filled:nth-last-child(9) { animation-delay: 0.4s; }
+.battery.points-changed .battery-cell.filled:nth-last-child(10) { animation-delay: 0.45s; }
+@keyframes battery-cell-in {
+  from { opacity: 0; transform: translateY(6px); filter: brightness(0.6); }
+  to { opacity: 1; transform: translateY(0); filter: brightness(1); }
+}
+/* 形态切换（stable/bulge/full/burst）丝滑过渡：外壳 + 正极 + 数值 */
+.battery-shell,
+.battery-cap,
+.battery-value {
+  transition: border-color 0.4s ease, border-radius 0.4s ease,
+    box-shadow 0.4s ease, background 0.4s ease, color 0.4s ease, text-shadow 0.4s ease;
 }
 /* 点值标签：外壳上方居中（R9 倒置后在上），放大 */
 .battery-value {
@@ -527,28 +554,30 @@ body {
   position: absolute;
   top: 50%;
   z-index: 71;
-  padding: 2px 8px;
-  font-size: 10px;
-  line-height: 1.6;
-  border-radius: 4px;
+  /* 放大：更清晰可读 */
+  padding: 5px 14px;
+  font-size: 14px;
+  line-height: 1.5;
+  border-radius: 6px;
   border: 1px solid transparent;
-  background: linear-gradient(135deg, rgba(0, 255, 204, 0.35), rgba(124, 77, 255, 0.35));
+  background: linear-gradient(135deg, rgba(0, 255, 204, 0.4), rgba(124, 77, 255, 0.4));
   background-clip: padding-box;
   color: #eafffb;
   text-shadow: 0 0 4px rgba(0, 255, 204, 0.6);
   font-weight: 600;
   letter-spacing: 0.08em;
   cursor: pointer;
-  box-shadow: 0 0 6px rgba(0, 255, 204, 0.2);
+  box-shadow: 0 0 8px rgba(0, 255, 204, 0.25);
   transition: box-shadow 0.12s ease, filter 0.12s ease;
   white-space: nowrap;
 }
 .shield-refresh-btn:hover {
-  box-shadow: 0 0 12px rgba(0, 255, 204, 0.55), 0 0 4px rgba(124, 77, 255, 0.5);
+  box-shadow: 0 0 14px rgba(0, 255, 204, 0.6), 0 0 5px rgba(124, 77, 255, 0.55);
   filter: brightness(1.25);
 }
-.hand-shield.p1 + .shield-refresh-btn { left: -28px; transform: translate(-100%, -50%); }
-.hand-shield.p2 + .shield-refresh-btn { right: -28px; transform: translate(100%, -50%); }
+/* P1 更靠左、P2 更靠右（远离挡板、更贴近手牌区外侧边缘） */
+.hand-shield.p1 + .shield-refresh-btn { left: -60px; transform: translate(-100%, -50%); }
+.hand-shield.p2 + .shield-refresh-btn { right: -60px; transform: translate(100%, -50%); }
 
 /* ===== ITEM 1: 选中卡上方的 正面打入/背面打入 浮动按钮 ===== */
 /* 按钮是卡牌子节点（悬停按钮时指针仍在卡牌子树内，hover-pop 不消失）；
@@ -781,8 +810,8 @@ body {
 }
 .trash-viewer-title { font-size: 15px; font-weight: bold; color: #e0e6ed; text-align: center; }
 .trash-viewer-grid { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
-/* 弃牌堆卡面缩小展示（.card 默认 130px），网格内可容纳更多张 */
-.trash-viewer-grid .card { width: 100px; }
+/* 弃牌堆卡面缩小展示（.card 默认 130px），网格内可容纳更多张；按原图显示不旋转 */
+.trash-viewer-grid .card { width: 100px; transform: none !important; }
 .trash-viewer-empty { color: #888; font-size: 13px; padding: 24px 12px; }
 
 /* ===== 拖拽打牌：合法落点高亮 + 浮空幽灵卡 ===== */

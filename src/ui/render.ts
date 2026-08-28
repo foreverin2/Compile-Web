@@ -74,6 +74,12 @@ function renderProtocol(p: { defId: string; compiled: boolean }, player: PlayerI
  * 裂纹 + 红橙脉冲；10 格仍全部点亮）。pointer-events:none —— 纯视觉，不拦截槽位
  * 打牌点击与卡牌交互。
  */
+/**
+ * 电池状态跟踪：记录每个 (player, line) 的上一次点数与形态，用于在点数变化时
+ * 触发格子的渐入动画与外壳形态切换动画。
+ */
+const batteryPrev = new Map<string, { points: number; state: string }>();
+
 function batteryState(points: number): 'stable' | 'bulge' | 'full' | 'burst' {
   if (points >= 10) return 'burst';
   if (points >= 7) return 'full';
@@ -83,10 +89,18 @@ function batteryState(points: number): 'stable' | 'bulge' | 'full' | 'burst' {
 
 function renderBattery(s: GameState, player: PlayerId, line: Line): HTMLElement {
   const points = getLineValue(s, player, line);
-  const battery = el('div', `battery battery-${batteryState(points)}`);
+  const state = batteryState(points);
+  const battery = el('div', `battery battery-${state}`);
   battery.dataset.points = String(points);
+  // 点数/形态变化检测：变化时加 .points-changed 触发格渐入动画（点 4）
+  const key = `${player}-${line}`;
+  const prev = batteryPrev.get(key);
+  if (prev && prev.points !== points) {
+    battery.classList.add('points-changed');
+  }
+  batteryPrev.set(key, { points, state });
   // DOM 顺序 = 视觉顺序（flex column 自上而下）：正极凸头在上、外壳（10 格竖排）居中、
-  // 值标签在底部。
+  // 值标签在底部。格填充方向由 CSS .battery-cells 的 column-reverse 控制（从下到上增加）。
   battery.appendChild(el('div', 'battery-cap'));
   const shell = el('div', 'battery-shell');
   const cells = el('div', 'battery-cells');
