@@ -431,10 +431,12 @@ function renderPickColumn(s: GameState, player: PlayerId, drafter: PlayerId): HT
       continue;
     }
     const card = el('div', 'draft-pick-card' + (newest && newest.defId === pick.defId ? ' new' : ''));
+    const wrap = el('div', 'pick-img-wrap');
     const img = document.createElement('img');
     img.src = `/assets/protocols/${pick.defId}/protocol-loading.png`;
     img.alt = pick.name;
-    card.appendChild(img);
+    wrap.appendChild(img);
+    card.appendChild(wrap);
     card.appendChild(el('div', 'draft-pick-name', pick.name));
     // 双击放大查看协议图（复用遮罩）
     card.addEventListener('dblclick', () => openZoom(pick.defId, true, true, false));
@@ -452,11 +454,13 @@ function renderDraftPool(s: GameState, cb: UiCallbacks): HTMLElement {
   for (const proto of DEMO_PROTOCOLS) {
     const isPicked = picked.has(proto.defId);
     const card = el('div', 'draft-card' + (isPicked ? ' picked' : ''));
+    const wrap = el('div', 'draft-card-img-wrap');
     const img = document.createElement('img');
     img.className = 'draft-card-img';
     img.src = `/assets/protocols/${proto.defId}/protocol-loading.png`;
     img.alt = proto.name;
-    card.appendChild(img);
+    wrap.appendChild(img);
+    card.appendChild(wrap);
     card.appendChild(el('div', 'draft-card-name', proto.name));
     card.appendChild(el('div', 'draft-card-commands', proto.commands.join(' · ')));
     if (isPicked) {

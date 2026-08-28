@@ -576,7 +576,7 @@ body {
 .draft-step-dot.done { border-color: #00ffcc; color: #00ffcc; box-shadow: 0 0 6px rgba(0, 255, 204, 0.45); }
 .draft-step-dot.current { border-color: #e0a030; color: #e0a030; background: rgba(224, 160, 48, 0.18); box-shadow: 0 0 8px rgba(224, 160, 48, 0.6); }
 
-.draft-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr) 220px; gap: 16px; align-items: start; }
+.draft-layout { display: grid; grid-template-columns: 280px minmax(0, 1fr) 280px; gap: 16px; align-items: start; }
 
 /* ===== 已选协议列（左 P1 / 右 P2；轮选方高亮） ===== */
 .draft-picks {
@@ -595,13 +595,25 @@ body {
 .draft-pick-card {
   position: relative; border: 1px solid #555; border-radius: 8px; padding: 4px;
   background: #1e1e36; cursor: zoom-in;
+  /* 协议图逆时针旋转 90° 后为横置：固定容器尺寸容纳横图 */
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
   transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
 }
 .draft-pick-card:hover { transform: translateY(-4px) scale(1.03); border-color: #e0a030; box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45); }
 .draft-pick-card.new { animation: draft-pick-in 0.3s ease; }
 @keyframes draft-pick-in { from { opacity: 0; transform: translateY(-10px) scale(0.92); } to { opacity: 1; transform: none; } }
-.draft-pick-card img { display: block; width: 100%; height: auto; border-radius: 4px; pointer-events: none; user-select: none; -webkit-user-drag: none; }
-.draft-pick-name { font-size: 11px; color: #bbc; margin-top: 2px; }
+/* 协议图容器：固定高（旋转后视觉宽 = 原高 1.4 倍，此处高约 150px → 视觉宽约 210px） */
+.draft-pick-card .pick-img-wrap {
+  width: 150px; height: 210px;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+}
+.draft-pick-card img {
+  width: 210px; height: 150px; object-fit: contain;
+  transform: rotate(-90deg); /* 逆时针旋转 90° 展示 */
+  border-radius: 4px; pointer-events: none; user-select: none; -webkit-user-drag: none;
+}
+.draft-pick-name { font-size: 11px; color: #bbc; }
 .draft-pick-empty {
   border: 1px dashed #3a3a52; border-radius: 8px; min-height: 86px;
   display: flex; align-items: center; justify-content: center;
@@ -612,11 +624,22 @@ body {
 .draft-pool { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
 .draft-card {
   position: relative; display: flex; flex-direction: column; gap: 6px;
+  align-items: center;
   border: 1px solid #666; border-radius: 10px; padding: 8px;
   background: #23233d; cursor: pointer;
   transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
 }
-.draft-card-img { display: block; width: 100%; height: auto; border-radius: 6px; pointer-events: none; user-select: none; -webkit-user-drag: none; }
+/* 协议图容器：固定尺寸容纳旋转后的横图（旋转后视觉宽 = 原高 1.4 倍） */
+.draft-card-img-wrap {
+  width: 120px; height: 168px;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+}
+.draft-card-img {
+  width: 168px; height: 120px; object-fit: contain;
+  transform: rotate(-90deg); /* 逆时针旋转 90° 展示 */
+  border-radius: 6px; pointer-events: none; user-select: none; -webkit-user-drag: none;
+}
 .draft-card-name { font-weight: bold; font-size: 13px; color: #eef; }
 .draft-card-commands { font-size: 11px; color: #aab; line-height: 1.5; min-height: 16px; }
 /* 悬停聚焦（仅可选项）：上浮 + 放大 + 金边辉光，无兄弟推开（区别于手牌扇形 pop） */
