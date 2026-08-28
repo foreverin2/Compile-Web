@@ -205,7 +205,8 @@ function renderControlModule(s: GameState): HTMLElement {
   const total1 = getLineValue(s, 1, 0) + getLineValue(s, 1, 1) + getLineValue(s, 1, 2);
   let target = 50;
   if (total0 + total1 > 0) {
-    const raw = (total0 / (total0 + total1)) * 100;
+    // raw 取 P2 占比：P1 占优 → total1≈0 → 靠左(12%)；P2 占优 → total1≈total → 靠右(88%)
+    const raw = (total1 / (total0 + total1)) * 100;
     target = Math.min(88, Math.max(12, raw));
   }
   const neutral = s.control === -1;

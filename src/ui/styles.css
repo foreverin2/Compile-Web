@@ -11,7 +11,7 @@ body {
   background-repeat: no-repeat;
   background-attachment: fixed;
 }
-#app { max-width: 1200px; margin: 0 auto; padding: 12px; }
+#app { max-width: 1200px; margin: 0 auto; padding: 12px; overflow-x: hidden; } /* 晚局双方堆叠较满时防横向整页滚动 */
 
 .board { display: flex; flex-direction: column; gap: 10px; }
 
@@ -82,7 +82,10 @@ body {
 }
 
 /* ===== 卡牌背面（官方图 + 印刷值 2 徽章） ===== */
-.card-back { position: relative; width: 100%; height: 148px; border-radius: 4px; overflow: hidden; }
+/* 基础高度与手牌正面一致：110px 卡宽 − 2×3px 内边距 − 2×1px 边框 = 102px 内容宽 × 1.4 纵横比 = 142.8px；
+   整盒 142.8 + 8 = 150.8px，与正面朝上的手牌同高（正面图 102 × 1.4 = 142.8px 内容高）。
+   场上堆叠由下方 .stack .card .card-back 覆写为 148px（= --card-h − 2px 边框），不受此规则影响。 */
+.card-back { position: relative; width: 100%; height: calc((110px - 8px) * 1.4); border-radius: 4px; overflow: hidden; }
 .cardback-img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .card-back-value { position: absolute; right: 4px; bottom: 4px; background: #111; color: #e0a030; border: 1px solid #e0a030; border-radius: 50%; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: bold; }
 
