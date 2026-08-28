@@ -1,17 +1,16 @@
-
 /**
- * 卡牌「弃牌」对角线切割特效挂载模块
+ * 卡牌「弃牌」对角线切割特效挂载模块（Gemini 生成，转换为 TS 后由 src 静态导入）
  * 使用方式:
- *   import { mountCut } from '/assets/fx/discard-cut.js';
+ *   import { mountCut } from './discard-cut';
  *   mountCut(cardCloneNode);
  * 动画时长: ≤ 1.2s 自然结束；宿主约 1.2s 后直接从 DOM 移除卡牌克隆节点。
  */
 
 /**
  * 在克隆卡牌节点上挂载对角线切割特效
- * @param {HTMLElement} node 宿主克隆的卡牌 DOM 节点
+ * @param node 宿主克隆的卡牌 DOM 节点
  */
-export function mountCut(node) {
+export function mountCut(node: HTMLElement): void {
   if (!node || !(node instanceof HTMLElement)) {
     return;
   }
@@ -23,16 +22,15 @@ export function mountCut(node) {
     bgStyle = `url("${imgElement.src}")`;
   } else {
     const computed = window.getComputedStyle(node);
-    bgStyle = computed.backgroundImage !== 'none'
-      ? computed.backgroundImage
-      : (computed.backgroundColor || '#11192e');
+    bgStyle =
+      computed.backgroundImage !== 'none' ? computed.backgroundImage : computed.backgroundColor || '#11192e';
   }
 
   // 2. 根据节点比例计算对角线倾角 (左上至右下)
   const rect = node.getBoundingClientRect();
   const width = rect.width || 120;
   const height = rect.height || 170;
-  const cutAngleDeg = (Math.atan2(height, width) * 180 / Math.PI).toFixed(2);
+  const cutAngleDeg = ((Math.atan2(height, width) * 180) / Math.PI).toFixed(2);
 
   // 3. 创建特效覆盖层
   const overlay = document.createElement('div');
@@ -75,8 +73,8 @@ export function mountCut(node) {
 
     // 垂直于对角线法线向两侧微散
     const normalOffset = (Math.random() - 0.5) * 50;
-    const ctx = normalOffset * Math.sin(cutAngleDeg * Math.PI / 180);
-    const cty = -normalOffset * Math.cos(cutAngleDeg * Math.PI / 180);
+    const ctx = normalOffset * Math.sin((Number(cutAngleDeg) * Math.PI) / 180);
+    const cty = -normalOffset * Math.cos((Number(cutAngleDeg) * Math.PI) / 180);
 
     spark.style.setProperty('--ctx', `${ctx.toFixed(1)}px`);
     spark.style.setProperty('--cty', `${cty.toFixed(1)}px`);

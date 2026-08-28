@@ -1,8 +1,7 @@
-
 /**
- * 卡牌「删去」特效挂载模块
+ * 卡牌「删去」特效挂载模块（Gemini 生成，转换为 TS 后由 src 静态导入）
  * 使用方式:
- *   import { mountShatter } from '/assets/fx/delete-shatter.js';
+ *   import { mountShatter } from './delete-shatter';
  *   mountShatter(cardCloneNode);
  * 动画时长: ≤ 1.2s 自然结束；宿主约 1.2s 后直接从 DOM 移除卡牌克隆节点。
  */
@@ -21,14 +20,14 @@ const PIECE_POLYGONS = [
   // 底部 3 块
   'polygon(0% 55%, 30% 65%, 35% 100%, 0% 100%)',
   'polygon(30% 65%, 50% 70%, 70% 100%, 35% 100%)',
-  'polygon(50% 70%, 100% 65%, 100% 100%, 70% 100%)'
+  'polygon(50% 70%, 100% 65%, 100% 100%, 70% 100%)',
 ];
 
 /**
  * 在克隆卡牌节点上挂载碎片动画
- * @param {HTMLElement} node 宿主克隆的卡牌 DOM 节点
+ * @param node 宿主克隆的卡牌 DOM 节点
  */
-export function mountShatter(node) {
+export function mountShatter(node: HTMLElement): void {
   if (!node || !(node instanceof HTMLElement)) {
     return;
   }
@@ -40,9 +39,8 @@ export function mountShatter(node) {
     bgStyle = `url("${imgElement.src}")`;
   } else {
     const computed = window.getComputedStyle(node);
-    bgStyle = computed.backgroundImage !== 'none' 
-      ? computed.backgroundImage 
-      : (computed.backgroundColor || '#11192e');
+    bgStyle =
+      computed.backgroundImage !== 'none' ? computed.backgroundImage : computed.backgroundColor || '#11192e';
   }
 
   // 2. 创建特效覆盖层
@@ -60,7 +58,7 @@ export function mountShatter(node) {
     const piece = document.createElement('div');
     piece.className = 'shatter-piece';
     piece.style.clipPath = PIECE_POLYGONS[i];
-    piece.style.webkitClipPath = PIECE_POLYGONS[i];
+    piece.style.setProperty('-webkit-clip-path', PIECE_POLYGONS[i]);
 
     if (bgStyle.startsWith('url(')) {
       piece.style.backgroundImage = bgStyle;

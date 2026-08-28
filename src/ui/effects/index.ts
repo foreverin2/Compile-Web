@@ -1,4 +1,6 @@
 import { gameBus, type GameEvent } from '../../core/events/bus';
+import { mountShatter } from '../fx/delete-shatter';
+import { mountCut } from '../fx/discard-cut';
 
 const FX_REMOVE_MS = 1200;
 const BASE_Z = 300; // 基础行为特效层
@@ -40,36 +42,20 @@ function playFireBurnExtra(node: HTMLElement): void {
   window.setTimeout(() => clone.remove(), FX_REMOVE_MS);
 }
 
-/** 基础行为特效：删去 → 破碎消散（Gemini delete-shatter.js 的 mountShatter） */
-async function playShatter(node: HTMLElement): Promise<void> {
+/** 基础行为特效：删去 → 破碎消散（src/ui/fx/delete-shatter.ts 的 mountShatter） */
+function playShatter(node: HTMLElement): void {
   const clone = cloneCardToBody(node, BASE_Z);
   if (!clone) return;
-  // @ts-ignore - Gemini FX 模块位于 public/assets/fx/，运行时按根路径动态加载（bundler 解析不覆盖 public）
-  const mod = (await import(/* @vite-ignore */ '/assets/fx/delete-shatter.js')) as {
-    mountShatter(node: HTMLElement): void;
-  };
-  mod.mountShatter(clone);
+  mountShatter(clone);
   window.setTimeout(() => clone.remove(), FX_REMOVE_MS);
 }
 
-/** 基础行为特效：弃牌 → 沿对角线切成两半（Gemini discard-cut.js 的 mountCut） */
-async function playCut(node: HTMLElement): Promise<void> {
+/** 基础行为特效：弃牌 → 沿对角线切成两半（src/ui/fx/discard-cut.ts 的 mountCut） */
+function playCut(node: HTMLElement): void {
   const clone = cloneCardToBody(node, BASE_Z);
   if (!clone) return;
-  // @ts-ignore - 同 playShatter：public 下 Gemini 模块运行时动态加载
-  const mod = (await import(/* @vite-ignore */ '/assets/fx/discard-cut.js')) as {
-    mountCut(node: HTMLElement): void;
-  };
-  mod.mountCut(clone);
+  mountCut(clone);
   window.setTimeout(() => clone.remove(), FX_REMOVE_MS);
-}
-
-/** 预加载 Gemini FX 模块（首次触发动画无等待） */
-function preloadFx(): void {
-  // @ts-ignore - Gemini FX 模块位于 public/assets/fx/，运行时按根路径动态加载（bundler 解析不覆盖 public）
-  void import(/* @vite-ignore */ '/assets/fx/delete-shatter.js');
-  // @ts-ignore - 同上
-  void import(/* @vite-ignore */ '/assets/fx/discard-cut.js');
 }
 
 /**
@@ -79,7 +65,7 @@ function preloadFx(): void {
  *   （如 fire 协议触发 → 额外火焰焚烧，叠在基础特效之上；与被删/弃的目标卡协议无关）
  */
 export function initEffects(): () => void {
-  preloadFx();
+  // FX 模块为 src 静态导入，无需预加载
   return gameBus.subscribe((e: GameEvent) => {
     const payload = e.payload as
       | { uid?: string; triggerProtocol?: string; triggerDefId?: string }
