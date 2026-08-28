@@ -21,6 +21,21 @@
 
 ---
 
+## 0.4 改进轮 4（2026-08-28，UI 交互 6 项，已完成）
+
+HEAD `dd0e715`，51 测试全绿：
+
+1. **打牌按钮浮动**：正面打入/背面打入按钮移出底部操作栏，改为显示在**选中的手牌上方**（按钮是卡牌的子节点，top:-34px，z-70）；鼠标移到按钮上不会触发卡牌 mouseleave（pop 特效保持）；不遮挡卡面；边缘卡有对齐回退。
+2. **P2 手牌右起点**（用户中途纠正：非 P1）：P2 手牌 `flex-direction: row-reverse`（index 0 在最右、向左延伸）；P1 保持左起点。**双侧裁剪修复**：`.hand` 加 padding-left/right 各 28px，两个手牌区首/末卡边缘不再被裁。悬停推开方向对 P2 镜像。**审查修复**：row-reverse 下负 margin-left 不生效（首对卡不重叠）→ `.hand.reversed .card + .card { margin-left:0; margin-right:-28px }`。
+3. **卡牌再放大**：手牌 110→130px、链路 `--card-h` 150→175px（重叠公式通用化：margin≈−44.7px，露出 80.85px=46.2%）、协议保持 200px（220 会超宽）。
+4. **控制权滑轨位移延长**：clamp 12/88 → **5/95**（偏向更明显），轨道 overflow visible。
+5. **链路卡 hover 弹出**：`.stack .card` 加 transition；`translateY(-18px) rotate(±90deg) scale(1.1)` + z-index 60 !important（覆盖内联 zIndex）；translate 在前 = 屏幕空间垂直弹出。
+6. **链路长度延长 1.5 倍**：lane 槽 `minmax(240px,1fr)` → `minmax(360px,1fr)`。
+
+**遗留**：打牌按钮视觉上可能叠到第 3 条链路行（top:-34px 固有）；4+ 卡/链路会溢出被 #app overflow-x:hidden 裁剪（极端局可接受）。
+
+---
+
 ## 0.3 改进轮 3（2026-08-28，UI 打磨 5 项，已完成）
 
 HEAD `4a73b40`，51 测试全绿：
