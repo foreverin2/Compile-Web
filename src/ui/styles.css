@@ -11,10 +11,8 @@ body {
   background-repeat: no-repeat;
   background-attachment: fixed;
 }
-/* 主容器：左右 padding 140px 容纳电池外溢（R9 电池外移加大后：P1 电池在槽左缘外
-   -120px、P2 对称；140px 留出电池与屏缘的清晰间隔）。
-   不设 overflow-x:hidden —— 那会裁剪手牌/链路边缘；极端晚局若超宽由浏览器滚动。 */
-#app { max-width: 1780px; margin: 0 auto; padding: 12px 140px; }
+/* 主容器：左右 padding 140px 容纳电池外溢；草案界面放大 2.5 倍后较宽，允许横向滚动 */
+#app { max-width: 3400px; margin: 0 auto; padding: 12px 140px; }
 
 .board { display: flex; flex-direction: column; gap: 10px; }
 
@@ -576,7 +574,10 @@ body {
 .draft-step-dot.done { border-color: #00ffcc; color: #00ffcc; box-shadow: 0 0 6px rgba(0, 255, 204, 0.45); }
 .draft-step-dot.current { border-color: #e0a030; color: #e0a030; background: rgba(224, 160, 48, 0.18); box-shadow: 0 0 8px rgba(224, 160, 48, 0.6); }
 
-.draft-layout { display: grid; grid-template-columns: 280px minmax(0, 1fr) 280px; gap: 16px; align-items: start; }
+/* 草案界面整体放大 2.5 倍：中间池 + 双方选择框（zoom 缩放布局尺寸，不重叠） */
+.draft-layout { display: grid; grid-template-columns: 700px minmax(0, 1fr) 700px; gap: 24px; align-items: start; }
+.draft-pool { zoom: 2.5; }
+.draft-picks { zoom: 2.5; }
 
 /* ===== 已选协议列（左 P1 / 右 P2；轮选方高亮） ===== */
 .draft-picks {
@@ -624,14 +625,14 @@ body {
 }
 .draft-pick-name { font-size: 12px; color: #bbc; }
 .draft-pick-empty {
-  border: 1px dashed #3a3a52; border-radius: 8px; min-height: 86px;
+  /* 空槽占位 = 填充协议后的大小（与 .pick-img-wrap 同尺寸 aspect-ratio 1.4/1），
+     布局不因填充而跳动 */
+  border: 1px dashed #3a3a52; border-radius: 8px;
+  width: 100%;
+  aspect-ratio: 1.4 / 1;
   display: flex; align-items: center; justify-content: center;
   color: #555; font-size: 12px; letter-spacing: 0.05em;
-}
-.draft-pick-empty {
-  border: 1px dashed #3a3a52; border-radius: 8px; min-height: 86px;
-  display: flex; align-items: center; justify-content: center;
-  color: #555; font-size: 12px; letter-spacing: 0.05em;
+  background: #17172c;
 }
 
 /* ===== 中间协议池：每行 4 个，悬停聚焦浮现「选择」按钮 ===== */
