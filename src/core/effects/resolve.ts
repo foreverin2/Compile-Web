@@ -96,8 +96,19 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       gameBus.emit({ type: 'card:drawn', state: s, payload: { player: pe.player, count: op.count } });
       break;
     }
-    default:
-      throw new Error(`op not implemented: ${(op as Op).op}`);
+    case 'flip': {
+      const card = findCard(s, op.uid);
+      if (!card || card.zone !== 'field') throw new Error(`cannot flip ${op.uid}: not on field`);
+      if (!isUncovered(s, card)) throw new Error(`cannot flip ${op.uid}: covered card`);
+      card.faceUp = !card.faceUp;
+      emitCardEvent(s, 'card:flipped', card);
+      if (card.faceUp) pushMiddle(s, card.owner, card); // 翻正 → 中指令连锁（LIFO）
+      break;
+    }
+    case 'delete':
+    case 'return':
+    case 'shift':
+      throw new Error(`op not implemented: ${op.op}`);
   }
 }
 
