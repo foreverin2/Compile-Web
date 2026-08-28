@@ -1655,6 +1655,46 @@ import './cards/fire';
 
 （顶部 import 补 `resolveAllChoices, pickFirst` from `./helpers`。）
 
+- [ ] **Step 4b: 适配 Task 8 的 play-effect 测试**（`tests/actions/play-effect.test.ts`，fire 中指令注册后行为变化）
+
+用例 1「plays face-up onto empty line」：手牌补一张弃牌目标，链式应答后断言：
+
+```ts
+  it('plays face-up onto empty line: lands and resolves middle', () => {
+    const s = draftFireP1();
+    const card = makeCard('fire-5', 0, 'hand');
+    const target = makeCard('fire-1', 0, 'hand');
+    s.players[0].hand = [card, target];
+    const ret = playCard(s, 0, card.uid, true, 0);
+    expect(ret.zone).toBe('field');
+    expect(s.pendingPlay).toBeNull();
+    expect(s.players[0].stacks[0].map((c) => c.uid)).toEqual([card.uid]);
+    resolveAllChoices(s, (p) => [target.uid]);
+    expect(s.pendingEffects).toHaveLength(0);
+    expect(s.players[0].trash.map((c) => c.uid)).toEqual([target.uid]);
+  });
+```
+
+用例 2「resolves before-covered trigger」：链为 test-bc 抽1 → 落地 fire-5 → fire-5 弃1（候选=抽到的那张）；全部应答后手牌 0：
+
+```ts
+  it('resolves before-covered trigger of the target top card before landing', () => {
+    const s = draftFireP1();
+    const top = makeCard('test-bc', 0, 'field', true, 0, 0);
+    s.players[0].stacks[0] = [top];
+    const played = makeCard('fire-5', 0, 'hand');
+    s.players[0].hand = [played];
+    playCard(s, 0, played.uid, true, 0);
+    expect(s.pendingPlay).toBeNull();
+    expect(s.players[0].stacks[0].map((c) => c.uid)).toEqual([top.uid, played.uid]);
+    resolveAllChoices(s, pickFirst); // 抽到的 1 张被 fire-5 弃掉
+    expect(s.pendingEffects).toHaveLength(0);
+    expect(s.players[0].hand).toHaveLength(0);
+  });
+```
+
+（顶部 import 补 `pickFirst, resolveAllChoices` from `'../helpers'`。）
+
 - [ ] **Step 5: 运行确认通过**
 
 Run: `npx vitest run tests/effects/fire.test.ts tests/game.test.ts`
