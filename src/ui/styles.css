@@ -384,3 +384,31 @@ body {
   max-height: 80vw;
   transform-origin: center center;
 }
+
+/* ===== 拖拽打牌：合法落点高亮 + 浮空幽灵卡 ===== */
+/* 拖拽中可合法落点的线路槽：青色霓虹发光（描边 + 底色 + 外/内发光），
+   覆盖 .stack-slot.interactable 的默认悬停样式，直观提示"可放置"区域 */
+.stack-slot.drag-target {
+  border-color: #00ffcc;
+  background: rgba(0, 255, 204, 0.08);
+  box-shadow: 0 0 18px rgba(0, 255, 204, 0.45), inset 0 0 14px rgba(0, 255, 204, 0.1);
+}
+.stack-slot.drag-target .slot-label,
+.stack-slot.drag-target .line-value { color: #00ffcc; }
+.stack-slot.drag-target .stack-empty { color: #00ffcc; }
+
+/* 跟随光标的浮空幽灵卡：fixed 不占布局、pointer-events:none 不拦截 elementFromPoint
+   与下方元素的鼠标事件；半透明 + 微缩 0.9（transform 由 JS 按光标位置写入）；
+   关掉 .hand .card 的 transform 过渡避免拖拽时滞后 */
+.drag-ghost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 9999;
+  pointer-events: none;
+  opacity: 0.85;
+  transition: none !important;
+  filter: drop-shadow(0 10px 16px rgba(0, 0, 0, 0.55));
+}
+/* 拖拽中：全局抓取光标 + 禁止文本选中，避免拖过日志/标签时选中文字 */
+body.dragging { cursor: grabbing; user-select: none; }

@@ -83,6 +83,9 @@ function renderStackSlot(
   interactable: boolean
 ): HTMLElement {
   const slot = el('div', `stack-slot p${player + 1}${interactable ? ' interactable self' : ''}`);
+  // 拖拽打牌：data 属性供拖拽期按 (player, line) 查询/高亮/命中合法落点
+  slot.dataset.line = String(line);
+  slot.dataset.player = String(player);
   slot.appendChild(el('div', 'slot-label', `线${line + 1}`));
   const cards = s.players[player].stacks[line];
   const pile = el('div', 'stack' + (player === 0 ? ' grow-left' : ' grow-right'));
@@ -162,6 +165,8 @@ function renderHand(
     onSelect: (uid: string) => void;
     /** 选中卡上「翻面」按钮回调（切换 selectedFaceUp 正↔背 后重渲染，手牌区即时翻转） */
     onToggleFaceUp?: () => void;
+    /** 拖拽打牌：命中合法落点时派发 onAction 的回调 */
+    cb: UiCallbacks;
   }
 ): HTMLElement {
   const reversed = player === 1; // P2 右起、向左延伸；P1 左起、向右延伸（默认左对齐）
@@ -195,6 +200,8 @@ function renderHand(
         () => openZoom(card.defId, faceUp, false, false),
         true
       );
+      // 拖拽打牌：仅 self 手牌且 action 步骤绑定；未超阈值时完全交由单击/双击逻辑
+      if (s.step === 'action') bindCardDrag(node, s, opts.cb, card.uid);
     } else {
       // 对手手牌（背面朝下）：单击无操作、双击放大查看卡背（需求：任意卡均可双击放大）。
       bindClickOrDouble(
@@ -395,6 +402,7 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
         selectedFaceUp = !selectedFaceUp;
         renderApp(root, s, cb);
       },
+      cb,
     })
   );
   handStrip.appendChild(el('div', 'step-indicator', `步骤: ${s.step}`));
@@ -410,6 +418,7 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
         selectedFaceUp = !selectedFaceUp;
         renderApp(root, s, cb);
       },
+      cb,
     })
   );
   grid.appendChild(handStrip);
@@ -425,9 +434,9 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
     actionBar.appendChild(btn);
   }
   if (s.step === 'action') {
-    // ITEM 1: 正面打入/背面打入 已移到选中卡上方的浮动按钮，底栏仅保留提示
+    // 拖拽打牌（DnD）：拖拽手牌卡到高亮的线路直接打出；点击选择 + 翻面仍可用
     actionBar.appendChild(
-      el('span', 'hint', selectedUid ? '已选择卡牌 — 在卡牌上方选择朝向，然后点击一条线放置' : '点击手牌选择卡牌')
+      el('span', 'hint', selectedUid ? '已选择卡牌 — 拖拽到高亮的线路打出（可先点「翻面」切换朝向）' : '拖拽手牌卡到高亮的线路打出（双击放大，点击选择）')
     );
   }
   wrap.appendChild(actionBar);
@@ -522,7 +531,126 @@ function bindClickOrDouble(node: HTMLElement, single: () => void, double: () => 
   });
 }
 
+/* ===== 拖拽打牌（Drag & Drop，手牌卡 → 线路槽） =====
+ * 手动 mousemove/mouseup 追踪（非原生 DnD API，避免与单击/双击事件互相干扰）：
+ * - mousedown 仅记录起点与卡 uid；移动超过 8px 阈值才进入拖拽模式（浮空幽灵卡跟随
+ *   光标 + 当前玩家槽位中该卡可合法落点的线高亮 .drag-target）。
+ * - 未超阈值的按下-释放不干预，单击选择 / 双击放大仍由 bindClickOrDouble 处理。
+ * - 拖拽中 mouseup：elementFromPoint 向上找 .stack-slot[data-player=当前玩家]，命中
+ *   合法线且 s.step==='action' → 复用 playToLine 校验并派发 onAction；否则取消。
+ *   原卡从未离开手牌 DOM，取消即移除幽灵卡（"回到原位"自动成立）。
+ * - Esc / 窗口失焦 / 渲染重建 → 清理幽灵卡、高亮与监听器。
+ * - 翻面按钮（卡牌子节点）上的 mousedown 不启动拖拽。 */
+let activeDragCancel: (() => void) | null = null;
+
+function bindCardDrag(node: HTMLElement, s: GameState, cb: UiCallbacks, uid: string): void {
+  node.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    // 翻面按钮组是卡牌子节点：按钮/按钮组上按下不启动拖拽（点击仍正常触发翻面）
+    const target = e.target as HTMLElement | null;
+    if (target && (target.closest('button') || target.closest('.play-btns'))) return;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    let active = false;
+    let ghost: HTMLElement | null = null;
+    let legalLines = new Set<number>();
+    // 拖拽期间的朝向：被拖卡即已选中卡时沿用翻面状态，否则按正面（未选中卡无翻面操作）
+    let dragFaceUp = true;
+
+    const clearHighlights = () => {
+      for (const slot of document.querySelectorAll<HTMLElement>('.stack-slot.drag-target')) {
+        slot.classList.remove('drag-target');
+      }
+    };
+    const cleanup = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('blur', onBlur);
+      document.body.classList.remove('dragging');
+      ghost?.remove();
+      ghost = null;
+      clearHighlights();
+      activeDragCancel = null;
+    };
+
+    const positionGhost = (ev: MouseEvent) => {
+      if (!ghost) return;
+      // 光标大致位于幽灵卡中心：卡宽 130px 减半后略偏上，卡片不遮住光标
+      ghost.style.transform = `translate(${ev.clientX - 65}px, ${ev.clientY - 50}px) scale(0.9)`;
+    };
+
+    const beginDrag = () => {
+      active = true;
+      dragFaceUp = selectedUid === uid ? selectedFaceUp : true;
+      document.body.classList.add('dragging');
+      // 合法落点：该卡以当前朝向（dragFaceUp）可打的所有线，engine getLegalActions 为准
+      legalLines = new Set<number>();
+      for (const a of getLegalActions(s, s.turnPlayer)) {
+        if (a.kind === 'play' && a.cardUid === uid && a.line !== undefined && a.faceUp === dragFaceUp) {
+          legalLines.add(a.line);
+        }
+      }
+      // 高亮当前玩家槽位中属于合法线的槽
+      for (const slot of document.querySelectorAll<HTMLElement>(`.stack-slot[data-player="${s.turnPlayer}"]`)) {
+        if (legalLines.has(Number(slot.dataset.line))) slot.classList.add('drag-target');
+      }
+      // 幽灵卡：克隆原卡（监听器不会被复制），去掉翻面按钮组与悬停残留样式
+      ghost = node.cloneNode(true) as HTMLElement;
+      ghost.classList.add('drag-ghost');
+      ghost.classList.remove('popped');
+      ghost.style.transform = '';
+      ghost.querySelector('.play-btns')?.remove();
+      document.body.appendChild(ghost);
+      positionGhost(e);
+    };
+
+    const onMove = (ev: MouseEvent) => {
+      if (!active) {
+        // 超过阈值才进入拖拽；之前的移动不 preventDefault，保证单击/双击正常
+        if (Math.hypot(ev.clientX - startX, ev.clientY - startY) > 8) beginDrag();
+        return;
+      }
+      ev.preventDefault(); // 拖拽中阻止文本选择等默认行为
+      positionGhost(ev);
+    };
+
+    const onUp = (ev: MouseEvent) => {
+      if (!active) {
+        cleanup();
+        return;
+      }
+      const hit = document.elementFromPoint(ev.clientX, ev.clientY);
+      const slot = hit
+        ? (hit as HTMLElement).closest<HTMLElement>(`.stack-slot[data-player="${s.turnPlayer}"]`)
+        : null;
+      const line = slot ? Number(slot.dataset.line) : -1;
+      const legalDrop = slot !== null && s.step === 'action' && legalLines.has(line);
+      cleanup(); // 先清理幽灵/高亮/监听，再派发（renderApp 会重建 DOM）
+      if (legalDrop) {
+        // 落点合法：把选中状态提交为被拖的卡（playToLine 校验并派发后复位）
+        selectedUid = uid;
+        selectedFaceUp = dragFaceUp;
+        playToLine(s, cb, line as Line);
+      }
+    };
+
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') cleanup();
+    };
+    const onBlur = () => cleanup();
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('blur', onBlur);
+    activeDragCancel = cleanup;
+  });
+}
+
 export function renderApp(root: HTMLElement, s: GameState, cb: UiCallbacks): void {
+  // 拖拽安全网：若重渲染发生在拖拽中（正常流程不会），先清理幽灵卡与高亮
+  if (activeDragCancel) activeDragCancel();
   if (s.phase === 'draft') {
     renderDraft(root, s, cb);
   } else {
