@@ -902,7 +902,7 @@ describe('delete/return ops with reveal', () => {
     s.pendingEffects.push({ id: 'e1', player: 0, gen: gen(), sourceUid: 'src', sourceDefId: 'test', prompt: null, lastAnswer: null });
     runStack(s);
     expect(s.players[0].stacks[0]).toHaveLength(1);
-    expect(s.players[0].trash.map((c) => c.uid)).toEqual([s.players[0].stacks[0][0].uid === 'x' ? 'tc2' : 'tc2']);
+    expect(s.players[0].trash.map((c) => c.defId)).toEqual(['fire-1']);
     expect(s.players[0].hand).toHaveLength(1); // 露出卡中指令 draw 1
   });
 
@@ -933,8 +933,6 @@ describe('delete/return ops with reveal', () => {
   });
 });
 ```
-
-> 注：第一用例的 trash 断言写死 uid 较脆，改为按 defId 断言更稳：`expect(s.players[0].trash.map((c) => c.defId)).toEqual(['fire-1'])`。
 
 - [ ] **Step 2: 运行确认失败**
 
@@ -1278,8 +1276,7 @@ import { describe, it, expect } from 'vitest';
 import type { Step, StepResult } from '../../src/core/models/types';
 import { registerCardEffects } from '../../src/core/effects/registry';
 import { playCard } from '../../src/core/actions/base';
-import { makeCard, pickFirst, resolveAllChoices } from '../helpers';
-import { createGame, performDraftPick, getDraftPool } from '../../src/core/state/create';
+import { makeCard, draftFireP1 } from '../helpers';
 
 // 被盖住前触发：抽 1 张
 registerCardEffects('test-bc', {
@@ -1293,27 +1290,20 @@ registerCardEffects('test-bc', {
   },
 });
 
-function toTurn(): ReturnType<typeof createGame> {
-  const s = createGame();
-  while (s.phase === 'draft') performDraftPick(s, getDraftPool(s)[0].defId);
-  return s;
-}
-
 describe('playCard with pendingPlay', () => {
-  it('plays face-up onto empty line: lands and resolves middle', () => {
-    const s = toTurn();
+  it('plays face-up onto empty line: lands (no before-covered, no middle registered yet)', () => {
+    const s = draftFireP1(); // P1 协议线 0 = fire
     const card = makeCard('fire-5', 0, 'hand');
     s.players[0].hand = [card];
     const ret = playCard(s, 0, card.uid, true, 0);
     expect(ret.zone).toBe('field');
     expect(s.pendingPlay).toBeNull();
     expect(s.players[0].stacks[0].map((c) => c.uid)).toEqual([card.uid]);
-    // fire-5 中指令未注册（Task 9 前）→ 无挂起
     expect(s.pendingEffects).toHaveLength(0);
   });
 
   it('resolves before-covered trigger of the target top card before landing', () => {
-    const s = toTurn();
+    const s = draftFireP1();
     const top = makeCard('test-bc', 0, 'field', true, 0, 0);
     s.players[0].stacks[0] = [top];
     const played = makeCard('fire-5', 0, 'hand');
@@ -1401,6 +1391,8 @@ git commit -m "feat: playCard pendingPlay flow with before-covered trigger"
 import { describe, it, expect } from 'vitest';
 import type { GameState, Line } from '../../src/core/models/types';
 import { executeAction } from '../../src/core/game';
+import { collectTriggers, resolveTrigger } from '../../src/core/effects/triggers';
+import { runStack } from '../../src/core/effects/resolve';
 import { makeCard, pickFirst, resolveAllChoices, draftFireP1, advanceToStep } from '../helpers';
 
 function fireLine(s: GameState): Line {
@@ -1418,39 +1410,42 @@ describe('fire protocol effects', () => {
     executeAction(s, 0, 'play', { cardUid: target.uid, faceUp: true, line: fireLine(s) });
     // 中指令挂起：选择弃哪张
     expect(s.pendingEffects).toHaveLength(1);
-    resolveAllChoices(s, (p) => [other.uid]); // 弃 fire-1，保留 fire-5 在场
+    resolveAllChoices(s, (p) => [other.uid]); // 弃 fire-1，fire-5 留在场上
     expect(s.players[0].trash.map((c) => c.uid)).toEqual([other.uid]);
-    expect(s.players[0].hand.map((c) => c.uid)).toEqual([target.uid]);
+    expect(s.players[0].hand).toHaveLength(0);
+    expect(s.players[0].stacks[0].map((c) => c.uid)).toEqual([target.uid]);
     expect(s.step).toBe('check-cache'); // 链式结算完毕后自动推进
   });
 
   it('fire-1: discard then delete (conditional second step)', () => {
     const s = draftFireP1();
     advanceToStep(s, 0, 'action');
-    s.players[0].hand = [makeCard('fire-1', 0, 'hand')];
+    s.players[0].hand = [makeCard('fire-1', 0, 'hand'), makeCard('fire-2', 0, 'hand')];
     s.players[1].stacks[0] = [makeCard('fire-1', 1, 'field', true, 0, 0)];
     const victim = s.players[1].stacks[0][0];
-    const card = s.players[0].hand[0];
+    const card = s.players[0].hand.find((c) => c.defId === 'fire-1')!;
+    const discardTarget = s.players[0].hand.find((c) => c.defId === 'fire-2')!;
     executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: fireLine(s) });
     const prompts: string[] = [];
     resolveAllChoices(s, (p) => {
       prompts.push(p.title);
-      return p.candidates.some((c) => c.uid === victim.uid) ? [victim.uid] : pickFirst(p);
+      return p.candidates.some((c) => c.uid === victim.uid) ? [victim.uid] : [discardTarget.uid];
     });
     expect(prompts).toEqual(['fire-1：弃1张牌', 'fire-1：删除1张牌']);
-    expect(s.players[0].trash).toHaveLength(1); // 弃掉的自己手牌
+    expect(s.players[0].trash.map((c) => c.uid)).toEqual([discardTarget.uid]); // 弃掉自己的 fire-2
     expect(s.players[1].trash.map((c) => c.uid)).toEqual([victim.uid]); // 删除对手牌
   });
 
   it('fire-2: discard then return to owner hand', () => {
     const s = draftFireP1();
     advanceToStep(s, 0, 'action');
-    s.players[0].hand = [makeCard('fire-2', 0, 'hand')];
+    s.players[0].hand = [makeCard('fire-2', 0, 'hand'), makeCard('fire-1', 0, 'hand')];
     s.players[1].stacks[0] = [makeCard('fire-2', 1, 'field', true, 0, 0)];
     const victim = s.players[1].stacks[0][0];
-    const card = s.players[0].hand[0];
+    const card = s.players[0].hand.find((c) => c.defId === 'fire-2')!;
+    const discardTarget = s.players[0].hand.find((c) => c.defId === 'fire-1')!;
     executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: fireLine(s) });
-    resolveAllChoices(s, (p) => (p.candidates.some((c) => c.uid === victim.uid) ? [victim.uid] : pickFirst(p)));
+    resolveAllChoices(s, (p) => (p.candidates.some((c) => c.uid === victim.uid) ? [victim.uid] : [discardTarget.uid]));
     expect(s.players[1].hand.map((c) => c.uid)).toEqual([victim.uid]); // 回持有者手牌
   });
 
@@ -1465,6 +1460,26 @@ describe('fire protocol effects', () => {
     resolveAllChoices(s, (p) => (p.candidates.some((c) => c.uid === facedown.uid) ? [facedown.uid] : pickFirst(p)));
     expect(facedown.faceUp).toBe(true);
     expect(s.players[0].hand).toHaveLength(2); // 抽 2
+  });
+
+  it('fire-0 before-covered: draw 1 and flip another card before being covered', () => {
+    const s = draftFireP1();
+    advanceToStep(s, 0, 'action');
+    s.players[0].stacks[0] = [makeCard('fire-0', 0, 'field', true, 0, 0)];
+    const facedown = makeCard('fire-1', 1, 'field', false, 1, 0);
+    s.players[1].stacks[1] = [facedown];
+    const played = makeCard('fire-1', 0, 'hand');
+    const discardTarget = makeCard('fire-5', 0, 'hand');
+    s.players[0].hand = [played, discardTarget];
+    executeAction(s, 0, 'play', { cardUid: played.uid, faceUp: true, line: fireLine(s) });
+    // 链：fire-0 被盖住前（抽1 + 翻转选择）→ 落地 fire-1 → fire-1 中指令（弃1）
+    resolveAllChoices(s, (p) => {
+      if (p.candidates.some((c) => c.uid === facedown.uid)) return [facedown.uid];
+      return [discardTarget.uid];
+    });
+    expect(facedown.faceUp).toBe(true);
+    expect(s.players[0].stacks[0].map((c) => c.uid)).toEqual([s.players[0].stacks[0][0].uid, played.uid]);
+    expect(s.players[0].trash.map((c) => c.uid)).toEqual([discardTarget.uid]);
   });
 
   it('fire-4: discard 1+ cards, draw discarded+1', () => {
@@ -1487,16 +1502,16 @@ describe('fire protocol effects', () => {
     const s = draftFireP1();
     advanceToStep(s, 0, 'action');
     s.players[0].stacks[0] = [makeCard('fire-3', 0, 'field', true, 0, 0)];
-    s.players[0].hand = [makeCard('fire-1', 0, 'hand')];
+    const hand1 = makeCard('fire-1', 0, 'hand');
+    s.players[0].hand = [hand1];
     advanceToStep(s, 0, 'end');
-    const legal = executeAction !== undefined ? s.step : s.step; // 占位：仅编译检查
+    const t = collectTriggers(s, 'end').find((x) => x.cardUid === s.players[0].stacks[0][0].uid);
+    expect(t).toBeDefined();
+    resolveTrigger(s, t!);
+    runStack(s);
+    resolveAllChoices(s, pickFirst); // 可选 → 跳过
+    expect(s.players[0].hand.map((c) => c.uid)).toEqual([hand1.uid]); // 未弃牌
     expect(s.step).toBe('end');
-    // 可选触发：跳过（advance 直接离开 end）
-    const acts = (await import('../../src/core/game')).getLegalActions(s, 0);
-    expect(acts.some((a) => a.kind === 'resolve-trigger' && a.cardUid === s.players[0].stacks[0][0].uid)).toBe(true);
-    executeAction(s, 0, 'advance'); // 跳过剩余触发
-    expect(s.step).toBe('start');
-    expect(s.turnPlayer).toBe(1);
   });
 
   it('fire-3 end trigger: discard then flip', () => {
@@ -1508,15 +1523,19 @@ describe('fire protocol effects', () => {
     const facedown = makeCard('fire-1', 1, 'field', false, 1, 0);
     s.players[1].stacks[1] = [facedown];
     advanceToStep(s, 0, 'end');
-    executeAction(s, 0, 'resolve-trigger', { cardUid: s.players[0].stacks[0][0].uid });
-    resolveAllChoices(s, (p) => (p.candidates.some((c) => c.uid === facedown.uid) ? [facedown.uid] : pickFirst(p)));
+    const t = collectTriggers(s, 'end').find((x) => x.cardUid === s.players[0].stacks[0][0].uid);
+    resolveTrigger(s, t!);
+    runStack(s);
+    // 第一步：可选弃牌（弃 hand1）；第二步：翻转选择（选 facedown）
+    resolveAllChoices(s, (p) => {
+      if (p.candidates.some((c) => c.uid === facedown.uid)) return [facedown.uid];
+      return [hand1.uid];
+    });
     expect(s.players[0].trash.map((c) => c.uid)).toEqual([hand1.uid]); // 弃了
     expect(facedown.faceUp).toBe(true); // 翻转
   });
 });
 ```
-
-> 注：第 6 个用例中 `const legal = ...` 是无效占位——删除该行，改用顶部 `import { getLegalActions } from '../../src/core/game'`。
 
 - [ ] **Step 2: 运行确认失败**
 
@@ -1648,8 +1667,8 @@ describe('game facade effect actions', () => {
   it('blocks standard actions while a choice is pending', () => {
     const s = draftFireP1();
     advanceToStep(s, 0, 'action');
-    s.players[0].hand = [makeCard('fire-5', 0, 'hand')];
-    const card = s.players[0].hand[0];
+    s.players[0].hand = [makeCard('fire-5', 0, 'hand'), makeCard('fire-1', 0, 'hand')];
+    const card = s.players[0].hand.find((c) => c.defId === 'fire-5')!;
     executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: 0 });
     expect(s.pendingEffects.length).toBeGreaterThan(0);
     expect(getLegalActions(s, 0)).toEqual([]);
@@ -1677,18 +1696,21 @@ describe('game facade effect actions', () => {
     expect(legal2.some((a) => a.kind === 'advance')).toBe(true);
   });
 
-  it('effect-choice can be answered by the chooser even when not turn player', () => {
+  it('effect-choice validates the chooser (owner of affected card)', () => {
     const s = draftFireP1();
     advanceToStep(s, 0, 'action');
-    s.players[1].hand = [makeCard('fire-5', 1, 'hand')];
-    // 直接构造一个 P2 的选择挂起（模拟"被作用卡持有者决定"）
-    s.players[0].hand = [makeCard('fire-1', 0, 'hand')];
-    const card = s.players[0].hand[0];
+    s.players[0].hand = [makeCard('fire-5', 0, 'hand'), makeCard('fire-1', 0, 'hand')];
+    const card = s.players[0].hand.find((c) => c.defId === 'fire-5')!;
     executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: 0 });
-    expect(s.pendingEffects.length).toBeGreaterThan(0);
-    // P2（非回合玩家）不允许普通行动
-    expect(getLegalActions(s, 1)).toEqual([]);
-    resolveAllChoices(s, pickFirst);
+    const top = s.pendingEffects[s.pendingEffects.length - 1];
+    expect(top).toBeDefined();
+    const discardTarget = s.players[0].hand[0]; // 打出后手牌剩 fire-1
+    // 非选择权归属者（P2）应答被拒
+    expect(() => executeAction(s, 1, 'effect-choice', { promptId: top!.id, choice: [] })).toThrow(/not your choice/);
+    // 选择权归属者（P1）应答成功
+    executeAction(s, 0, 'effect-choice', { promptId: top!.id, choice: [discardTarget.uid] });
+    expect(s.pendingEffects).toHaveLength(0);
+    expect(s.players[0].trash.map((c) => c.uid)).toEqual([discardTarget.uid]);
   });
 });
 ```
