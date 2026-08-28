@@ -105,10 +105,39 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       if (card.faceUp) pushMiddle(s, card.owner, card); // 翻正 → 中指令连锁（LIFO）
       break;
     }
-    case 'delete':
-    case 'return':
+    case 'delete': {
+      const card = findCard(s, op.uid);
+      if (!card || card.zone !== 'field') throw new Error(`cannot delete ${op.uid}: not on field`);
+      if (!isUncovered(s, card)) throw new Error(`cannot delete ${op.uid}: covered card`);
+      const owner = card.owner;
+      const line = card.line!;
+      s.players[owner].stacks[line].pop();
+      card.zone = 'trash';
+      card.faceUp = true;
+      card.line = null;
+      card.pos = null;
+      s.players[owner].trash.push(card);
+      emitCardEvent(s, 'card:deleted', card);
+      revealAfterRemoval(s, owner, line);
+      break;
+    }
+    case 'return': {
+      const card = findCard(s, op.uid);
+      if (!card || card.zone !== 'field') throw new Error(`cannot return ${op.uid}: not on field`);
+      if (!isUncovered(s, card)) throw new Error(`cannot return ${op.uid}: covered card`);
+      const owner = card.owner;
+      const line = card.line!;
+      s.players[owner].stacks[line].pop();
+      card.zone = 'hand';
+      card.line = null;
+      card.pos = null;
+      s.players[owner].hand.push(card);
+      emitCardEvent(s, 'card:returned', card);
+      revealAfterRemoval(s, owner, line);
+      break;
+    }
     case 'shift':
-      throw new Error(`op not implemented: ${op.op}`);
+      throw new Error(`op not implemented: shift`);
   }
 }
 
@@ -145,4 +174,11 @@ function completeShift(s: GameState): void {
   stack.push(card);
   s.pendingShift = null;
   emitCardEvent(s, 'card:landed', card);
+}
+
+/** 顶卡移除后：新顶卡正面朝上则触发其中指令（被揭开连锁；编译不经过此函数，符合"编译不触发文本"） */
+export function revealAfterRemoval(s: GameState, owner: PlayerId, line: Line): void {
+  const stack = s.players[owner].stacks[line];
+  const top = stack[stack.length - 1];
+  if (top && top.faceUp) pushMiddle(s, owner, top);
 }
