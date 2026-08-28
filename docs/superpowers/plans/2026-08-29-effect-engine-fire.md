@@ -795,6 +795,8 @@ function base(): GameState {
     makeCard('test-flip', 0, 'field', true, 0, 0),
     makeCard('test-flip', 0, 'field', false, 0, 1),
   ];
+  // 中指令 draw 需要牌库有牌
+  s.players[0].deck = [makeCard('test-flip', 0, 'deck'), makeCard('test-flip', 0, 'deck')];
   return s;
 }
 
@@ -900,6 +902,8 @@ function base(): GameState {
     makeCard('test-reveal', 0, 'field', true, 0, 0), // 底层：被揭开 → 中指令
     makeCard('fire-1', 0, 'field', true, 0, 1),      // 顶层：被删除
   ];
+  // 露出卡中指令 draw 需要牌库有牌
+  s.players[0].deck = [makeCard('test-reveal', 0, 'deck'), makeCard('test-reveal', 0, 'deck')];
   return s;
 }
 
@@ -1049,6 +1053,8 @@ describe('shift op (float state machine)', () => {
       makeCard('test-reveal', 0, 'field', true, 0, 0), // 露出 → 中指令 draw 1
       makeCard('fire-1', 0, 'field', true, 0, 1),      // 被偏转
     ];
+    // 露出卡中指令 draw 需要牌库有牌
+    s.players[0].deck = [makeCard('test-reveal', 0, 'deck'), makeCard('test-reveal', 0, 'deck')];
     const shifted = s.players[0].stacks[0][1];
     function* gen(): Generator<EffectStep, void, StepResult> {
       yield { op: 'shift', uid: shifted.uid, targetLine: 1 };
@@ -1196,6 +1202,8 @@ describe('trigger collection', () => {
     const s = createGame();
     s.phase = 'turn';
     s.players[0].stacks[0] = [makeCard('test-end', 0, 'field', true, 0, 0)];
+    // 触发效果 draw 需要牌库有牌
+    s.players[0].deck = [makeCard('test-end', 0, 'deck'), makeCard('test-end', 0, 'deck')];
     const t = collectTriggers(s, 'end')[0];
     resolveTrigger(s, t);
     runStack(s);
@@ -1463,7 +1471,7 @@ describe('fire protocol effects', () => {
     const s = draftFireP1();
     advanceToStep(s, 0, 'action');
     s.players[0].hand = [makeCard('fire-0', 0, 'hand')];
-    const facedown = makeCard('fire-1', 1, 'field', false, 1, 0);
+    const facedown = makeCard('fire-3', 1, 'field', false, 1, 0);
     s.players[1].stacks[1] = [facedown];
     const card = s.players[0].hand[0];
     executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: fireLine(s) });
@@ -1476,7 +1484,7 @@ describe('fire protocol effects', () => {
     const s = draftFireP1();
     advanceToStep(s, 0, 'action');
     s.players[0].stacks[0] = [makeCard('fire-0', 0, 'field', true, 0, 0)];
-    const facedown = makeCard('fire-1', 1, 'field', false, 1, 0);
+    const facedown = makeCard('fire-3', 1, 'field', false, 1, 0);
     s.players[1].stacks[1] = [facedown];
     const played = makeCard('fire-1', 0, 'hand');
     const discardTarget = makeCard('fire-5', 0, 'hand');
@@ -1530,7 +1538,7 @@ describe('fire protocol effects', () => {
     s.players[0].stacks[0] = [makeCard('fire-3', 0, 'field', true, 0, 0)];
     const hand1 = makeCard('fire-1', 0, 'hand');
     s.players[0].hand = [hand1];
-    const facedown = makeCard('fire-1', 1, 'field', false, 1, 0);
+    const facedown = makeCard('fire-3', 1, 'field', false, 1, 0);
     s.players[1].stacks[1] = [facedown];
     advanceToStep(s, 0, 'end');
     const t = collectTriggers(s, 'end').find((x) => x.cardUid === s.players[0].stacks[0][0].uid);
