@@ -11,7 +11,9 @@ body {
   background-repeat: no-repeat;
   background-attachment: fixed;
 }
-#app { max-width: 1200px; margin: 0 auto; padding: 12px; overflow-x: hidden; } /* 晚局双方堆叠较满时防横向整页滚动 */
+/* 主容器：放宽到 1400px 容纳加长的链路（360px×2 槽 + 协议 + 间距），
+   不设 overflow-x:hidden —— 那会裁剪手牌/链路边缘；极端晚局若超宽由浏览器滚动。 */
+#app { max-width: 1400px; margin: 0 auto; padding: 12px; }
 
 .board { display: flex; flex-direction: column; gap: 10px; }
 
@@ -249,8 +251,8 @@ body {
 .hand {
   display: flex;
   flex-wrap: nowrap;
-  overflow-x: clip; /* 横向裁掉超出列宽的部分；clip 不产生滚动容器，纵向溢出仍可见（悬停上浮/浮动按钮不被裁） */
-  overflow-y: visible;
+  /* 不裁剪：容器已放宽（#app 1400px），手牌最多 10 张可完整显示；边缘卡牌不再被挡 */
+  overflow: visible;
   position: relative; /* +N 徽标按右缘定位 */
   margin-top: 6px;
   min-height: 70px;
@@ -309,10 +311,22 @@ body {
   pointer-events: auto; /* 卡面图 pointer-events:none，但按钮自身必须可点 */
   white-space: nowrap;
 }
-/* 卡位于手牌行左/右边缘时按钮对齐到卡内，避免超出容器被 overflow-x: clip 裁掉 */
+/* 卡位于手牌行左/右边缘时按钮对齐到卡内，避免超出容器被裁掉 */
 .play-btns.at-left { left: 0; transform: none; }
 .play-btns.at-right { right: 0; left: auto; transform: none; }
-.play-btn { padding: 4px 10px; font-size: 12px; }
+/* 打出朝向按钮：小巧、深色半透明（贴合暗色赛博背景），青色细描边，悬停时微微提亮 */
+.play-btn {
+  padding: 2px 8px;
+  font-size: 11px;
+  border-radius: 4px;
+  border: 1px solid rgba(0, 255, 204, 0.35);
+  background: rgba(13, 20, 36, 0.85);
+  color: #9fd8cc;
+  font-weight: normal;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+.play-btn:hover { background: rgba(0, 60, 50, 0.75); color: #d8fff5; border-color: rgba(0, 255, 204, 0.7); }
 
 /* ===== 指示 / 操作 / 日志 ===== */
 .step-indicator { text-align: center; font-size: 13px; color: #ccc; padding: 4px 0; }

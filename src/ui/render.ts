@@ -177,12 +177,12 @@ function renderHand(
       const atLeft = reversed ? i === shown.length - 1 : i === 0;
       const atRight = reversed ? i === 0 : i === shown.length - 1;
       const group = el('div', 'play-btns' + (atLeft ? ' at-left' : atRight ? ' at-right' : ''));
-      const up = el('button', 'btn play-btn', '正面打入');
+      const up = el('button', 'btn play-btn', '正面打出');
       up.addEventListener('click', (e) => {
         e.stopPropagation();
         opts.onToggleFaceUp!(true);
       });
-      const down = el('button', 'btn play-btn', '背面打入');
+      const down = el('button', 'btn play-btn', '背面打出');
       down.addEventListener('click', (e) => {
         e.stopPropagation();
         opts.onToggleFaceUp!(false);
