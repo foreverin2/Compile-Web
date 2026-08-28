@@ -57,7 +57,10 @@ function renderCardFace(card: { defId: string; faceUp: boolean; uid: string }): 
 function renderProtocol(p: { defId: string; compiled: boolean }, player: PlayerId): HTMLElement {
   const box = el('div', 'protocol' + (p.compiled ? ' compiled' : ''));
   // 已编译协议专属特效类（类随 defId 挂载 → 协议换位/重排时特效跟随对应协议）
-  if (p.compiled) box.classList.add(`compiled-fx-${p.defId}`);
+  if (p.compiled) {
+    box.classList.add(`compiled-fx-${p.defId}`);
+    appendCompiledRing(box, p.defId);
+  }
   const img = document.createElement('img');
   // R1 协议卡朝向：P1（左）按原图方向展示；P2（右）旋转 180° 使双方协议相对放置。
   // PNG 资源为原方向（水/火/光/生 750×1050 竖版，暗/死 1050×750 横版），各按自然比例显示。
@@ -447,6 +450,30 @@ function renderProtocolCell(s: GameState, player: PlayerId, line: Line): HTMLEle
   const cell = el('div', 'protocol-cell');
   cell.appendChild(renderProtocol(s.players[player].protocols[line], player));
   return cell;
+}
+
+/**
+ * 已编译协议环绕特效（基础特效骨架，JS 构建 + 纯 CSS 动画，不依赖 mask/@property）：
+ * - .compiled-ring（z-index -1，位于协议背景之上、卡面内容之下）外圈露出 7px 环带
+ * - .compiled-ring-flow：旋转 conic 渐变 → 岩浆等色流环绕
+ * - .compiled-ring-rocks：N 块岩石沿边框路径（offset-path）旅行，同步环绕
+ * 每协议配色由 .compiled-ring-<defId> 决定（fire = 岩浆黑岩/红岩）。
+ */
+function appendCompiledRing(box: HTMLElement, defId: string): void {
+  const ring = el('div', `compiled-ring compiled-ring-${defId}`);
+  ring.appendChild(el('div', 'compiled-ring-flow'));
+  const rocks = el('div', 'compiled-ring-rocks');
+  const ROCK_COUNT = 8;
+  for (let i = 0; i < ROCK_COUNT; i++) {
+    const rock = el('div', 'lava-rock' + (i % 2 === 0 ? ' rock-dark' : ' rock-red'));
+    // 沿边框路径均布起步（负 delay 错开相位）；不规则尺寸与朝向
+    rock.style.animationDelay = `${(-2.5 / ROCK_COUNT) * i}s`;
+    const s = 0.7 + ((i * 37) % 5) * 0.15;
+    rock.style.transform = `scale(${s.toFixed(2)}) rotate(${i * 47}deg)`;
+    rocks.appendChild(rock);
+  }
+  ring.appendChild(rocks);
+  box.appendChild(ring);
 }
 
 /** 与引擎一致的 1-2-2-1 轮选归属（第 i 次选择轮到谁），镜像 core/state/create.ts 的 DRAFT_ORDER */

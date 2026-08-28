@@ -351,6 +351,8 @@ body {
 .protocol-cell { display: flex; flex-direction: column; gap: 2px; }
 .protocol {
   position: relative;
+  /* 独立层叠上下文：负 z 的 .compiled-ring 位于协议背景之上、卡面内容之下 */
+  isolation: isolate;
   border: 1px solid #888;
   border-radius: 6px;
   padding: 4px;
@@ -366,57 +368,56 @@ body {
 .protocol.compiled { border-color: #4caf50; box-shadow: 0 0 8px rgba(76, 175, 80, 0.4); }
 
 /* ===== 已编译协议专属特效（每协议一个类，类随 defId 挂载 → 协议换位时特效跟随） =====
- * fire = 流动岩浆边框：旋转 conic-gradient 岩浆色环 + 环绕的不规则黑岩/红岩质感层，
- * 两层同步 2.5s 旋转（@property 驱动角度；不支持时 --lava-angle 默认 0deg → 静态岩浆环）。
- * 静态兜底：类自带岩浆色描边 + 红光晕，即使伪元素/蒙版不支持也能看到边框特效。 */
-@property --lava-angle { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
+ * 实现：JS 构建 .compiled-ring（z-index:-1，位于协议背景之上、卡面内容之下），外圈 7px
+ * 环带露出；.compiled-ring-flow 旋转 conic 渐变形成流动色流，.lava-rock 沿 offset-path
+ * 边框路径旅行（不依赖 mask / @property，兼容现代浏览器）。 */
 .protocol.compiled-fx-fire {
-  --lava-angle: 0deg; /* 无 @property 时 var() 仍可解析 → conic 背景有效 */
+  /* 静态兜底：即使动画层不支持也能看到岩浆色描边 + 红光晕 */
   border-color: #ff6a00;
   box-shadow: 0 0 12px rgba(255, 61, 0, 0.6), inset 0 0 10px rgba(255, 61, 0, 0.25);
 }
-.protocol.compiled-fx-fire::before {
-  content: '';
+/* 环绕环容器：比协议卡外扩 7px；负 z 藏在卡面之下，仅外圈环带可见 */
+.compiled-ring {
   position: absolute;
   inset: -7px;
-  border-radius: 12px;
-  padding: 6px;
-  background: conic-gradient(from var(--lava-angle),
+  border-radius: 14px;
+  z-index: -1;
+  pointer-events: none;
+  overflow: visible;
+}
+.compiled-ring-flow {
+  position: absolute;
+  inset: 0;
+  border-radius: 14px;
+  animation: ring-spin 2.5s linear infinite;
+}
+.compiled-ring-rocks {
+  position: absolute;
+  inset: 0;
+  border-radius: 14px;
+}
+/* 岩石：不规则黑岩/红岩，沿边框路径（inset 圆角矩形）旅行环绕 */
+.lava-rock {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 10px;
+  height: 8px;
+  border-radius: 45% 55% 60% 40% / 50% 45% 55% 50%;
+  offset-path: inset(-4px round 15px);
+  animation: rock-travel 2.5s linear infinite;
+  will-change: offset-distance;
+}
+.rock-dark { background: #101010; box-shadow: 0 0 3px rgba(0, 0, 0, 0.8); }
+.rock-red { background: #7a1d00; box-shadow: 0 0 4px rgba(255, 69, 0, 0.35); }
+@keyframes ring-spin { to { transform: rotate(360deg); } }
+@keyframes rock-travel { to { offset-distance: 100%; } }
+/* fire = 岩浆配色：红橙黄流动色流 */
+.compiled-ring-fire .compiled-ring-flow {
+  background: conic-gradient(from 0deg,
     #ff3d00 0deg, #ff9100 60deg, #ffd54f 120deg, #7a1d00 210deg, #ff3d00 360deg);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  animation: lava-flow 2.5s linear infinite;
-  pointer-events: none;
-  z-index: 1;
+  filter: drop-shadow(0 0 4px rgba(255, 61, 0, 0.6));
 }
-@keyframes lava-flow { to { --lava-angle: 360deg; } }
-/* 岩石质感层：不规则黑岩/红岩斑点沿边框分布，随边框同步旋转（蒙版裁成边框环） */
-.protocol.compiled-fx-fire::after {
-  content: '';
-  position: absolute;
-  inset: -7px;
-  border-radius: 12px;
-  padding: 6px;
-  background:
-    radial-gradient(ellipse 12px 8px at 10% 45%, #101010 0 58%, transparent 59%),
-    radial-gradient(ellipse 9px 12px at 26% 78%, #7a1d00 0 55%, transparent 56%),
-    radial-gradient(ellipse 14px 9px at 48% 12%, #0d0d0d 0 58%, transparent 59%),
-    radial-gradient(ellipse 10px 12px at 63% 70%, #a33a00 0 55%, transparent 56%),
-    radial-gradient(ellipse 12px 8px at 82% 28%, #141414 0 58%, transparent 59%),
-    radial-gradient(ellipse 9px 10px at 92% 66%, #8b1a00 0 55%, transparent 56%),
-    radial-gradient(ellipse 11px 9px at 38% 92%, #111111 0 58%, transparent 59%),
-    radial-gradient(ellipse 10px 7px at 70% 88%, #7a1d00 0 55%, transparent 56%);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  animation: lava-rocks 2.5s linear infinite;
-  pointer-events: none;
-  z-index: 2;
-}
-@keyframes lava-rocks { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 .protocol-check {
   position: absolute; top: 4px; right: 6px;
   background: #4caf50; color: #111; font-size: 11px; font-weight: bold;
