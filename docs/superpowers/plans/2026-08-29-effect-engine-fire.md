@@ -1726,8 +1726,8 @@ git commit -m "feat: fire protocol 6-card effects"
 
 ```ts
 import { describe, it, expect } from 'vitest';
-import { getLegalActions, executeAction } from '../../src/core/game';
-import { makeCard, pickFirst, resolveAllChoices, draftFireP1, advanceToStep } from '../helpers';
+import { getLegalActions, executeAction } from '../src/core/game';
+import { makeCard, pickFirst, resolveAllChoices, draftFireP1, advanceToStep } from './helpers';
 
 describe('game facade effect actions', () => {
   it('blocks standard actions while a choice is pending', () => {
@@ -1743,12 +1743,12 @@ describe('game facade effect actions', () => {
     expect(getLegalActions(s, 0).some((a) => a.kind === 'advance')).toBe(true);
   });
 
-  it('end step offers resolve-trigger for fire-3 and blocks advance while mandatory', () => {
+  it('end step offers resolve-trigger for fire-3 and allows advance skip', () => {
     const s = draftFireP1();
     advanceToStep(s, 0, 'action');
     s.players[0].stacks[0] = [makeCard('fire-3', 0, 'field', true, 0, 0)];
-    s.players[0].hand = [];
     advanceToStep(s, 0, 'end');
+    s.players[0].hand = []; // 手牌须在到达 end 后再清空（action 步空手牌会被 advance 守卫拒绝）
     const legal = getLegalActions(s, 0);
     // fire-3 结束触发是可选（"你可以"）→ advance 允许跳过
     expect(legal.some((a) => a.kind === 'resolve-trigger' && a.cardUid === s.players[0].stacks[0][0].uid)).toBe(true);
@@ -1874,7 +1874,8 @@ export function executeAction(s: GameState, player: PlayerId, kind: ActionKind, 
 
   switch (kind) {
     case 'play': {
-      if (!args || !('cardUid' in args)) throw new Error('play requires args');
+      // 'cardUid' in args 会窄化到 PlayArgs | {cardUid}（resolve-trigger 成员），需再验 'faceUp'
+      if (!args || !('cardUid' in args) || !('faceUp' in args)) throw new Error('play requires args');
       playCard(s, player, args.cardUid, args.faceUp, args.line);
       if (s.pendingEffects.length === 0 && s.pendingPlay === null) {
         advanceStep(s);
@@ -1949,9 +1950,11 @@ Expected: 全部 PASS
 
 Run: `npm test` → 全绿
 ```bash
-git add src/core/game.ts tests/game-effect.test.ts
+git add src/core/game.ts tests/game-effect.test.ts src/main.ts
 git commit -m "feat: game facade effect-choice/resolve-trigger actions with guards"
 ```
+
+> **注**：ActionKind 拓宽后 main.ts 的 else 分支（`executeAction(state, player, a.kind)`）不再通过重载解析，本任务需在 main.ts 做**最小分发**（advance + resolve-trigger 显式调用）以保持 tsc 干净；effect-choice 分发与自动推进暂停策略的完整实现在 Task 11。
 
 ---
 
