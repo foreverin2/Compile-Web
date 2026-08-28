@@ -321,7 +321,8 @@ npm run preview  # 预览构建产物
 
 - **不要**跑 `npm ci` / `npm install`（vite 补丁丢失）；必须装时 `--cache node_modules/.npm-cache`
 - **不要**改 `vite.config.ts` 的 `pool: 'threads'`
-- 测试 `npm test` 预期 87/87（实现新协议后增长）；构建 `npm run build`
+- 测试 `npm test` 预期 91/91（实现新协议后增长）；构建 `npm run build`
+- **诊断日志**：`src/ui/diag.ts`（initDiag 钩住 console 全量记录 + 捕获未捕获异常/拒绝；顶部「导出日志」按钮 / 出错自动提示可下载 `compile-log-*.txt`，含错误+控制台+事件日志+状态快照）——运行时报错导出给开发者分析
 - **不要** `git push`（控制器统一合并推送）
 
 ### 6.4 约定
