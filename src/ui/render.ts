@@ -28,8 +28,10 @@ function splitDefId(defId: string): [string, string] {
  * - 正面：官方卡面图 /assets/protocols/<协议>/card-<分值>.png
  * - 背面：官方 Cardback 图 + 印刷值 2 徽章（规则：背面牌值=2）
  */
-function renderCardFace(card: { defId: string; faceUp: boolean }): HTMLElement {
+function renderCardFace(card: { defId: string; faceUp: boolean; uid: string }): HTMLElement {
   const box = el('div', 'card');
+  // 卡牌实例标识：选择模式 / 拖拽等按 uid 定位（对所有卡牌渲染路径统一写入）
+  box.dataset.uid = card.uid;
   // 背面卡（对手手牌 / 场上的背面堆叠）不暴露身份：仅正面卡携带 data-def-id
   if (card.faceUp) box.dataset.defId = card.defId;
   if (!card.faceUp) {
@@ -243,7 +245,7 @@ function renderHand(
     // 手牌显示：self 手牌默认正面；若该卡被选中且当前朝向为背面（selectedFaceUp=false），
     // 立即以背面预览显示（点击「翻面」时翻转手牌区外观）。
     const faceUp = opts.isSelf ? !(isSelected && !selectedFaceUp) : false;
-    const node = renderCardFace({ defId: card.defId, faceUp });
+    const node = renderCardFace({ defId: card.defId, faceUp, uid: card.uid });
     node.dataset.uid = card.uid;
     if (isSelected) node.classList.add('selected');
     if (opts.isSelf) {
@@ -252,7 +254,12 @@ function renderHand(
       // 时预览卡背，放大也显示卡背）。
       bindClickOrDouble(
         node,
-        () => opts.onSelect(card.uid),
+        () => {
+          // 选择模式下禁用手牌单击选中：候选卡点击由选择条（renderBoard）处理，
+          // 普通手牌已被 CSS pointer-events:none 禁用
+          if (choicePromptId !== null) return;
+          opts.onSelect(card.uid);
+        },
         () => openZoom(card.defId, faceUp, false, false),
         true
       );
@@ -670,6 +677,62 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   }
   wrap.appendChild(actionBar);
 
+  // 选择模式（效果结算挂起且顶部为选择请求时）：候选卡高亮 + 底部确认条
+  const topEffect = s.pendingEffects[s.pendingEffects.length - 1];
+  if (topEffect?.prompt) {
+    const prompt = topEffect.prompt;
+    // 同步本地选择状态（重渲染后保留）；prompt 变化时重置
+    if (choicePromptId !== topEffect.id) {
+      choicePromptId = topEffect.id;
+      choiceSelected = [];
+    }
+    const sel = new Set(choiceSelected);
+    // 候选卡高亮（renderBoard 内所有 .card 已渲染，此时均在 wrap 内）
+    for (const node of wrap.querySelectorAll<HTMLElement>('.card[data-uid]')) {
+      const uid = node.dataset.uid!;
+      if (prompt.candidates.some((c) => c.uid === uid)) {
+        node.classList.add('choice-target');
+        if (sel.has(uid)) node.classList.add('choice-selected');
+        // 点击切换选择（单击；双击放大仍可用 → 用 bindClickOrDouble 的 single 分支）
+        node.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (sel.has(uid)) { sel.delete(uid); choiceSelected = choiceSelected.filter((x) => x !== uid); }
+          else if (choiceSelected.length < prompt.max) { choiceSelected.push(uid); }
+          renderApp(root, s, cb);
+        });
+      } else {
+        node.classList.add('choice-dim');
+      }
+    }
+    const bar = el('div', 'choice-bar');
+    // 归属者标签：出选择请求的效果属主（PendingEffect.player，非 prompt 自身）
+    bar.appendChild(el('div', 'choice-title', `${topEffect.player === 0 ? 'P1' : 'P2'} 操作 — ${prompt.title}`));
+    const count = el('span', 'choice-count', `已选 ${choiceSelected.length}/${prompt.max === Infinity ? prompt.candidates.length : prompt.max}`);
+    bar.appendChild(count);
+    const canConfirm = choiceSelected.length >= prompt.min && choiceSelected.length <= prompt.max;
+    const confirmBtn = el('button', 'btn choice-confirm' + (canConfirm ? '' : ' disabled'), '确认');
+    confirmBtn.addEventListener('click', () => {
+      if (!canConfirm) return;
+      choicePromptId = null;
+      cb.onAction({ kind: 'effect-choice', promptId: topEffect.id, choice: choiceSelected });
+    });
+    bar.appendChild(confirmBtn);
+    if (prompt.optional) {
+      const skipBtn = el('button', 'btn choice-skip', '跳过');
+      skipBtn.addEventListener('click', () => {
+        choicePromptId = null;
+        cb.onAction({ kind: 'effect-choice', promptId: topEffect.id, choice: [] });
+      });
+      bar.appendChild(skipBtn);
+    }
+    wrap.appendChild(bar);
+    // 选择模式下隐藏手牌交互：给 hand-strip 加 .choice-mode（CSS 禁用非候选卡的 hover/单击/拖拽）
+    grid.querySelector('.hand-strip')?.classList.add('choice-mode');
+  } else {
+    choicePromptId = null;
+    choiceSelected = [];
+  }
+
   const log = el('div', 'log');
   for (const entry of s.log.slice(-12)) {
     log.appendChild(el('div', 'log-entry', entry));
@@ -683,6 +746,10 @@ let selectedUid: string | null = null;
 let selectedFaceUp = true;
 /** R8 手牌挡板宽度（px，模块态：重渲染后保留；0=收起、手牌可见） */
 const shieldWidth: [number, number] = [0, 0];
+
+/** 选择模式状态：当前应答的 promptId 与已选 uid（重渲染保留，选择完成后清空） */
+let choicePromptId: string | null = null;
+let choiceSelected: string[] = [];
 
 /* ===== 卡牌放大查看遮罩（双击卡牌：手牌/场上/协议；滚轮缩放；Esc 或点击空白关闭） ===== */
 interface ZoomState {
@@ -758,7 +825,7 @@ function openTrashViewer(s: GameState, player: PlayerId): void {
     grid.appendChild(el('div', 'trash-viewer-empty', '弃牌堆为空'));
   } else {
     for (const card of trash) {
-      const node = renderCardFace({ defId: card.defId, faceUp: true });
+      const node = renderCardFace({ defId: card.defId, faceUp: true, uid: card.uid });
       node.addEventListener('dblclick', () => openZoom(card.defId, true, false, false));
       grid.appendChild(node);
     }
@@ -819,6 +886,7 @@ let activeDragCancel: (() => void) | null = null;
 
 function bindCardDrag(node: HTMLElement, s: GameState, cb: UiCallbacks, uid: string): void {
   node.addEventListener('mousedown', (e) => {
+    if (choicePromptId !== null) return; // 选择模式下禁止拖拽打牌
     if (e.button !== 0) return;
     // 翻面按钮组是卡牌子节点：按钮/按钮组上按下不启动拖拽（点击仍正常触发翻面）
     const target = e.target as HTMLElement | null;

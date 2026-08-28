@@ -877,3 +877,18 @@ body.dragging { cursor: grabbing; user-select: none; }
   pointer-events: none;
   transition: transform 0.25s ease;
 }
+
+/* ===== 选择模式（效果结算：候选卡高亮 + 底部确认条） ===== */
+/* 候选卡：青色霓虹呼吸描边 + 可点光标；已选卡金色描边 + 光晕；非候选卡灰化 */
+.choice-target { outline: 3px solid #4ff0ff; outline-offset: 2px; animation: choice-pulse 1s ease-in-out infinite; cursor: pointer; }
+.choice-selected { outline-color: #ffe14f; box-shadow: 0 0 18px #ffe14f88; }
+.choice-dim { filter: brightness(0.45) saturate(0.4); }
+@keyframes choice-pulse { 0%,100% { outline-color: #4ff0ff; } 50% { outline-color: #4ff0ff66; } }
+/* 底部确认条：fixed 悬浮于视口底部中央，z-index 高于手牌挡板（70）/悬停弹出（50） */
+.choice-bar { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); display: flex; gap: 12px; align-items: center;
+  padding: 10px 18px; background: #101830ee; border: 1px solid #4ff0ff66; border-radius: 12px; z-index: 200; }
+.choice-title { color: #cfeaff; font-size: 14px; }
+.choice-count { color: #ffd76a; font-size: 13px; }
+.choice-confirm.disabled { opacity: 0.4; pointer-events: none; }
+/* 选择模式下隐藏非候选手牌的交互（hover/单击/拖拽）；候选卡保持可点以便勾选 */
+.hand-strip.choice-mode .card:not(.choice-target) { pointer-events: none; }
