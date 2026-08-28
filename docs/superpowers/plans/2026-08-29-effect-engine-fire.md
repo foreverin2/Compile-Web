@@ -28,7 +28,7 @@
 - Create: `tests/effects/state.test.ts`
 
 **Interfaces:**
-- Produces: `Zone` 增加 `'float'`；`TriggerKind`；`ChoiceCard`；`ChoiceRequest`；`ChoiceAnswer`；`Op`；`Step`；`StepResult`；`PendingEffect`；`TriggerEntry`；`CandidateFilter`；`EffectCtx`；`EffectGen`；`TriggerDef`；`CardEffects`；`GameState` 新增 5 字段（`pendingEffects` / `pendingPlay: Card | null` / `pendingShift: Card | null` / `resolvedTriggerUids` / `pendingStepAdvance`）。后续所有任务依赖这些名字，不得改名。
+- Produces: `Zone` 增加 `'float'`；`TriggerKind`；`ChoiceCard`；`ChoiceRequest`；`ChoiceAnswer`；`Op`；`EffectStep`（注意：既有 `Step` 是回合步骤类型，效果步骤命名为 `EffectStep` 避免冲突）；`StepResult`；`PendingEffect`；`TriggerEntry`；`CandidateFilter`；`EffectCtx`；`EffectGen`；`TriggerDef`；`CardEffects`；`GameState` 新增 5 字段（`pendingEffects` / `pendingPlay: Card | null` / `pendingShift: Card | null` / `resolvedTriggerUids` / `pendingStepAdvance`）。后续所有任务依赖这些名字，不得改名。
 
 - [ ] **Step 1: 写失败测试** `tests/effects/state.test.ts`
 
@@ -98,7 +98,8 @@ export type Op =
   | { op: 'draw'; count: number }
   | { op: 'shift'; uid: string; targetLine: Line };
 
-export type Step = ChoiceRequest | Op;
+/** 效果步骤：选择请求 或 操作。既有 types.ts 已占用 Step（回合步骤），此处命名 EffectStep */
+export type EffectStep = ChoiceRequest | Op;
 
 /** 生成器 next() 的入参：选择答案 或 操作结果（操作无返回值） */
 export type StepResult = ChoiceAnswer | Record<string, never>;
@@ -107,7 +108,7 @@ export type StepResult = ChoiceAnswer | Record<string, never>;
 export interface PendingEffect {
   id: string;
   player: PlayerId;
-  gen: Generator<Step, void, StepResult>;
+  gen: Generator<EffectStep, void, StepResult>;
   sourceUid: string;
   sourceDefId: string;
   prompt: ChoiceRequest | null;
@@ -136,7 +137,7 @@ export interface EffectCtx {
   candidates(filter: CandidateFilter): ChoiceCard[];
 }
 
-export type EffectGen = (ctx: EffectCtx) => Generator<Step, void, StepResult>;
+export type EffectGen = (ctx: EffectCtx) => Generator<EffectStep, void, StepResult>;
 
 export interface TriggerDef {
   fn: EffectGen;
@@ -333,13 +334,13 @@ export function makeCard(
 
 ```ts
 import { describe, it, expect } from 'vitest';
-import type { GameState, Step, StepResult } from '../../src/core/models/types';
+import type { GameState, EffectStep, StepResult } from '../../src/core/models/types';
 import { createGame } from '../../src/core/state/create';
 import { runStack, answerEffect } from '../../src/core/effects/resolve';
 import { resolveAllChoices, pickFirst } from '../helpers';
 
 /** 直接构造一个测试生成器入栈（sourceUid='src' 需先放在场上保证 sourceValid） */
-function pushTestEffect(s: GameState, gen: Generator<Step, void, StepResult>): void {
+function pushTestEffect(s: GameState, gen: Generator<EffectStep, void, StepResult>): void {
   s.pendingEffects.push({
     id: 'e1', player: 0, gen, sourceUid: 'src', sourceDefId: 'test', prompt: null, lastAnswer: null,
   });
@@ -366,7 +367,7 @@ describe('effect stack runner', () => {
   it('suspends on a select step and resumes with the answer', () => {
     const s = base();
     let got: string[] = [];
-    function* gen(): Generator<Step, void, StepResult> {
+    function* gen(): Generator<EffectStep, void, StepResult> {
       const a = (yield { kind: 'select', title: 't', min: 1, max: 1, optional: false, candidates: handCandidates() }) as { selected: string[] };
       got = a.selected;
       yield { op: 'draw', count: 1 };
@@ -382,7 +383,7 @@ describe('effect stack runner', () => {
 
   it('rejects answers outside [min,max] and unknown uids', () => {
     const s = base();
-    function* gen(): Generator<Step, void, StepResult> {
+    function* gen(): Generator<EffectStep, void, StepResult> {
       yield { kind: 'select', title: 't', min: 1, max: 1, optional: false, candidates: handCandidates() };
     }
     pushTestEffect(s, gen());
@@ -394,7 +395,7 @@ describe('effect stack runner', () => {
   it('terminates a suspended effect whose source card is covered', () => {
     const s = base();
     let drew = false;
-    function* gen(): Generator<Step, void, StepResult> {
+    function* gen(): Generator<EffectStep, void, StepResult> {
       yield { kind: 'select', title: 't', min: 1, max: 1, optional: false, candidates: handCandidates() };
       drew = true;
       yield { op: 'draw', count: 1 };
@@ -412,7 +413,7 @@ describe('effect stack runner', () => {
 
   it('discard op moves hand card to trash face-up; draw op draws', () => {
     const s = base();
-    function* gen(): Generator<Step, void, StepResult> {
+    function* gen(): Generator<EffectStep, void, StepResult> {
       yield { op: 'discard', uid: 'h1' };
       yield { op: 'draw', count: 2 };
     }
@@ -440,7 +441,7 @@ describe('effect stack runner', () => {
   it('resolveAllChoices drains a full chain including nested selects', () => {
     const s = base();
     s.players[0].hand.push({ uid: 'h2', defId: 'fire-1', owner: 0, faceUp: true, zone: 'hand', line: null, pos: null });
-    function* gen(): Generator<Step, void, StepResult> {
+    function* gen(): Generator<EffectStep, void, StepResult> {
       yield { kind: 'select', title: 'a', min: 1, max: 1, optional: false, candidates: handCandidates() };
       yield { kind: 'select', title: 'b', min: 1, max: 1, optional: false, candidates: handCandidates() };
     }
@@ -765,7 +766,7 @@ git commit -m "feat: effect stack runner core (suspend/resume/termination, disca
 
 ```ts
 import { describe, it, expect } from 'vitest';
-import type { GameState, Step, StepResult } from '../../src/core/models/types';
+import type { GameState, EffectStep, StepResult } from '../../src/core/models/types';
 import { registerCardEffects } from '../../src/core/effects/registry';
 import { runStack, answerEffect } from '../../src/core/effects/resolve';
 import { makeCard, pickFirst, resolveAllChoices } from '../helpers';
@@ -773,7 +774,7 @@ import { createGame } from '../../src/core/state/create';
 
 // 注册合成卡：翻正后中指令抽 1 张
 registerCardEffects('test-flip', {
-  middle: function* (): Generator<Step, void, StepResult> {
+  middle: function* (): Generator<EffectStep, void, StepResult> {
     yield { op: 'draw', count: 1 };
   },
 });
@@ -792,7 +793,7 @@ describe('flip op', () => {
   it('flips a face-down card face-up and resolves its middle (LIFO before outer effect)', () => {
     const s = base();
     const order: string[] = [];
-    function* outer(): Generator<Step, void, StepResult> {
+    function* outer(): Generator<EffectStep, void, StepResult> {
       yield { op: 'flip', uid: s.players[0].stacks[0][1].uid };
       order.push('outer-after-flip');
     }
@@ -806,7 +807,7 @@ describe('flip op', () => {
 
   it('rejects flipping a covered card', () => {
     const s = base();
-    function* outer(): Generator<Step, void, StepResult> {
+    function* outer(): Generator<EffectStep, void, StepResult> {
       yield { op: 'flip', uid: s.players[0].stacks[0][0].uid }; // 底层被覆盖
     }
     s.pendingEffects.push({ id: 'e1', player: 0, gen: outer(), sourceUid: 'src', sourceDefId: 'test', prompt: null, lastAnswer: null });
@@ -871,14 +872,14 @@ git commit -m "feat: flip op with face-up middle LIFO chain"
 
 ```ts
 import { describe, it, expect } from 'vitest';
-import type { GameState, Step, StepResult } from '../../src/core/models/types';
+import type { GameState, EffectStep, StepResult } from '../../src/core/models/types';
 import { registerCardEffects } from '../../src/core/effects/registry';
 import { runStack } from '../../src/core/effects/resolve';
 import { makeCard } from '../helpers';
 import { createGame } from '../../src/core/state/create';
 
 registerCardEffects('test-reveal', {
-  middle: function* (): Generator<Step, void, StepResult> {
+  middle: function* (): Generator<EffectStep, void, StepResult> {
     yield { op: 'draw', count: 1 };
   },
 });
@@ -896,7 +897,7 @@ function base(): GameState {
 describe('delete/return ops with reveal', () => {
   it('delete removes top card and reveals the card below (middle resolves)', () => {
     const s = base();
-    function* gen(): Generator<Step, void, StepResult> {
+    function* gen(): Generator<EffectStep, void, StepResult> {
       yield { op: 'delete', uid: s.players[0].stacks[0][1].uid };
     }
     s.pendingEffects.push({ id: 'e1', player: 0, gen: gen(), sourceUid: 'src', sourceDefId: 'test', prompt: null, lastAnswer: null });
@@ -908,7 +909,7 @@ describe('delete/return ops with reveal', () => {
 
   it('return moves top card to owner hand (reveals below)', () => {
     const s = base();
-    function* gen(): Generator<Step, void, StepResult> {
+    function* gen(): Generator<EffectStep, void, StepResult> {
       yield { op: 'return', uid: s.players[0].stacks[0][1].uid };
     }
     s.pendingEffects.push({ id: 'e1', player: 0, gen: gen(), sourceUid: 'src', sourceDefId: 'test', prompt: null, lastAnswer: null });
@@ -924,7 +925,7 @@ describe('delete/return ops with reveal', () => {
       makeCard('test-reveal', 0, 'field', false, 0, 0), // 反面：不触发
       makeCard('fire-1', 0, 'field', true, 0, 1),
     ];
-    function* gen(): Generator<Step, void, StepResult> {
+    function* gen(): Generator<EffectStep, void, StepResult> {
       yield { op: 'delete', uid: s.players[0].stacks[0][1].uid };
     }
     s.pendingEffects.push({ id: 'e1', player: 0, gen: gen(), sourceUid: 'src', sourceDefId: 'test', prompt: null, lastAnswer: null });
@@ -1019,14 +1020,14 @@ git commit -m "feat: delete/return ops with reveal-on-uncover chain"
 
 ```ts
 import { describe, it, expect } from 'vitest';
-import type { GameState, Step, StepResult } from '../../src/core/models/types';
+import type { GameState, EffectStep, StepResult } from '../../src/core/models/types';
 import { registerCardEffects } from '../../src/core/effects/registry';
 import { runStack } from '../../src/core/effects/resolve';
 import { makeCard } from '../helpers';
 import { createGame } from '../../src/core/state/create';
 
 registerCardEffects('test-reveal', {
-  middle: function* (): Generator<Step, void, StepResult> {
+  middle: function* (): Generator<EffectStep, void, StepResult> {
     yield { op: 'draw', count: 1 };
   },
 });
@@ -1040,7 +1041,7 @@ describe('shift op (float state machine)', () => {
       makeCard('fire-1', 0, 'field', true, 0, 1),      // 被偏转
     ];
     const shifted = s.players[0].stacks[0][1];
-    function* gen(): Generator<Step, void, StepResult> {
+    function* gen(): Generator<EffectStep, void, StepResult> {
       yield { op: 'shift', uid: shifted.uid, targetLine: 1 };
     }
     s.pendingEffects.push({ id: 'e1', player: 0, gen: gen(), sourceUid: 'src', sourceDefId: 'test', prompt: null, lastAnswer: null });
@@ -1060,7 +1061,7 @@ describe('shift op (float state machine)', () => {
       makeCard('fire-1', 0, 'field', true, 0, 1),
     ];
     const covered = s.players[0].stacks[0][0];
-    function* gen1(): Generator<Step, void, StepResult> {
+    function* gen1(): Generator<EffectStep, void, StepResult> {
       yield { op: 'shift', uid: covered.uid, targetLine: 1 }; // 被覆盖卡不可偏转
     }
     s.pendingEffects.push({ id: 'e1', player: 0, gen: gen1(), sourceUid: 'src', sourceDefId: 'test', prompt: null, lastAnswer: null });
@@ -1126,7 +1127,7 @@ git commit -m "feat: shift op with committed float state machine"
 
 ```ts
 import { describe, it, expect } from 'vitest';
-import type { Step, StepResult } from '../../src/core/models/types';
+import type { EffectStep, StepResult } from '../../src/core/models/types';
 import { registerCardEffects } from '../../src/core/effects/registry';
 import { collectTriggers, resolveTrigger } from '../../src/core/effects/triggers';
 import { runStack } from '../../src/core/effects/resolve';
@@ -1139,7 +1140,7 @@ registerCardEffects('test-end', {
   triggers: {
     end: {
       optional: true,
-      fn: function* (): Generator<Step, void, StepResult> {
+      fn: function* (): Generator<EffectStep, void, StepResult> {
         yield { op: 'draw', count: 1 };
       },
     },
@@ -1150,7 +1151,7 @@ registerCardEffects('test-start', {
   triggers: {
     start: {
       optional: false,
-      fn: function* (): Generator<Step, void, StepResult> {
+      fn: function* (): Generator<EffectStep, void, StepResult> {
         yield { op: 'draw', count: 1 };
       },
     },
@@ -1273,7 +1274,7 @@ git commit -m "feat: trigger collection (end/start) with resolved-uid tracking"
 
 ```ts
 import { describe, it, expect } from 'vitest';
-import type { Step, StepResult } from '../../src/core/models/types';
+import type { EffectStep, StepResult } from '../../src/core/models/types';
 import { registerCardEffects } from '../../src/core/effects/registry';
 import { playCard } from '../../src/core/actions/base';
 import { makeCard, draftFireP1 } from '../helpers';
@@ -1283,7 +1284,7 @@ registerCardEffects('test-bc', {
   triggers: {
     'before-covered': {
       optional: false,
-      fn: function* (): Generator<Step, void, StepResult> {
+      fn: function* (): Generator<EffectStep, void, StepResult> {
         yield { op: 'draw', count: 1 };
       },
     },
@@ -1545,24 +1546,24 @@ Expected: FAIL（`fire-*` 未注册：打出后无挂起、`resolve-trigger` 行
 - [ ] **Step 3: 实现 Fire 效果** `src/core/effects/cards/fire.ts`
 
 ```ts
-import type { EffectCtx, EffectGen, Step, StepResult } from '../../models/types';
+import type { EffectCtx, EffectGen, EffectStep, StepResult } from '../../models/types';
 import { registerCardEffects } from '../registry';
 
-function* fire0Middle(ctx: EffectCtx): Generator<Step, void, StepResult> {
+function* fire0Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const targets = ctx.candidates({ zone: 'field' });
   const [t] = yield { kind: 'select', title: 'fire-0：翻转另1张牌', min: 1, max: 1, optional: false, candidates: targets };
   yield { op: 'flip', uid: t.uid };
   yield { op: 'draw', count: 2 };
 }
 
-function* fire0BeforeCovered(ctx: EffectCtx): Generator<Step, void, StepResult> {
+function* fire0BeforeCovered(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   yield { op: 'draw', count: 1 };
   const targets = ctx.candidates({ zone: 'field' });
   const [t] = yield { kind: 'select', title: 'fire-0（被盖住前）：翻转另1张牌', min: 1, max: 1, optional: false, candidates: targets };
   yield { op: 'flip', uid: t.uid };
 }
 
-function* fire1(ctx: EffectCtx): Generator<Step, void, StepResult> {
+function* fire1(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const hand = ctx.candidates({ zone: 'hand', owner: ctx.player });
   const [d] = yield { kind: 'select', title: 'fire-1：弃1张牌', min: 1, max: 1, optional: false, candidates: hand };
   yield { op: 'discard', uid: d.uid };
@@ -1571,7 +1572,7 @@ function* fire1(ctx: EffectCtx): Generator<Step, void, StepResult> {
   yield { op: 'delete', uid: t.uid };
 }
 
-function* fire2(ctx: EffectCtx): Generator<Step, void, StepResult> {
+function* fire2(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const hand = ctx.candidates({ zone: 'hand', owner: ctx.player });
   const [d] = yield { kind: 'select', title: 'fire-2：弃1张牌', min: 1, max: 1, optional: false, candidates: hand };
   yield { op: 'discard', uid: d.uid };
@@ -1580,7 +1581,7 @@ function* fire2(ctx: EffectCtx): Generator<Step, void, StepResult> {
   yield { op: 'return', uid: t.uid };
 }
 
-function* fire3End(ctx: EffectCtx): Generator<Step, void, StepResult> {
+function* fire3End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const hand = ctx.candidates({ zone: 'hand', owner: ctx.player });
   const ans = yield { kind: 'select', title: 'fire-3：你可以弃1张牌', min: 1, max: 1, optional: true, candidates: hand };
   if (ans.selected.length === 0) return; // 跳过
@@ -1590,14 +1591,14 @@ function* fire3End(ctx: EffectCtx): Generator<Step, void, StepResult> {
   yield { op: 'flip', uid: t.uid };
 }
 
-function* fire4(ctx: EffectCtx): Generator<Step, void, StepResult> {
+function* fire4(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const hand = ctx.candidates({ zone: 'hand', owner: ctx.player });
   const ans = yield { kind: 'select', title: 'fire-4：弃1张或更多张牌', min: 1, max: hand.length, optional: false, candidates: hand };
   for (const uid of ans.selected) yield { op: 'discard', uid };
   yield { op: 'draw', count: ans.selected.length + 1 };
 }
 
-function* fire5(ctx: EffectCtx): Generator<Step, void, StepResult> {
+function* fire5(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const hand = ctx.candidates({ zone: 'hand', owner: ctx.player });
   const [d] = yield { kind: 'select', title: 'fire-5：弃1张牌', min: 1, max: 1, optional: false, candidates: hand };
   yield { op: 'discard', uid: d.uid };
