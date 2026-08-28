@@ -3,6 +3,7 @@ import { advanceStep } from './engine/turn';
 import { clearCache } from './engine/deck';
 import { playCard, refreshHand } from './actions/base';
 import { executeCompile, getCompilableLines } from './rules/compile';
+import { checkControl, resetControlIfHeld } from './rules/control';
 import { getCardDef } from '../data/demo';
 
 export type ActionKind = 'play' | 'refresh' | 'compile' | 'advance';
@@ -67,12 +68,14 @@ export function executeAction(s: GameState, player: PlayerId, kind: ActionKind, 
       break;
     }
     case 'refresh': {
+      resetControlIfHeld(s, player);
       refreshHand(s, player);
       advanceStep(s);
       break;
     }
     case 'compile': {
       if (!args) throw new Error('compile requires args.line');
+      resetControlIfHeld(s, player);
       executeCompile(s, player, args.line);
       advanceStep(s); // compiledThisTurn=true → 跳过 action
       break;
@@ -83,6 +86,9 @@ export function executeAction(s: GameState, player: PlayerId, kind: ActionKind, 
       }
       if (s.step === 'check-cache') {
         clearCache(s, player);
+      }
+      if (s.step === 'check-control') {
+        checkControl(s);
       }
       advanceStep(s);
       break;
