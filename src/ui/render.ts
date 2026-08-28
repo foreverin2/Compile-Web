@@ -173,6 +173,12 @@ function renderPlayerInfo(s: GameState, player: PlayerId, opts: { isSelf: boolea
   meta.appendChild(el('span', 'trash-count', `弃牌堆 ${p.trash.length}`));
   meta.appendChild(el('span', 'hand-count', `手牌 ${p.hand.length}`));
   info.appendChild(meta);
+
+  // 弃牌堆查看按钮：P1 贴信息条最右端；P2（内容右对齐）贴最左端（CSS align-self 覆写）。
+  // 点击打开弃牌堆查看遮罩（公开信息：全部正面展示）。
+  const trashBtn = el('button', 'btn trash-view-btn', '查看弃牌堆');
+  trashBtn.addEventListener('click', () => openTrashViewer(s, player));
+  info.appendChild(trashBtn);
   return info;
 }
 
@@ -199,6 +205,10 @@ function renderHand(
     onToggleFaceUp?: () => void;
     /** 拖拽打牌：命中合法落点时派发 onAction 的回调 */
     cb: UiCallbacks;
+    /** 刷新手牌按钮：仅当刷新是合法动作（当前玩家 + action 步骤 + 手牌 < 5）时渲染，
+     *  位于手牌挡板外侧（P1 在挡板左侧、P2 在挡板右侧），点击派发 refresh 动作 */
+    onRefresh?: () => void;
+    refreshEnabled?: boolean;
   }
 ): HTMLElement {
   const reversed = player === 1; // P2 右起、向左延伸；P1 左起、向右延伸（默认左对齐）
@@ -269,6 +279,17 @@ function renderHand(
   // 在 shieldWidth（模块态），重渲染后保留；仅 self（当前回合）手牌的挡板可拖，
   // 对手挡板锁定但状态保留。
   hand.appendChild(renderShield(s, player, opts.isSelf, hand));
+  // 刷新手牌按钮：紧跟挡板之后渲染（相邻兄弟，CSS 用 .hand-shield.p1 + / .p2 + 定位），
+  // 置于挡板外侧（P1 左 / P2 右）。紧凑半透明青色，与「翻面」按钮（.play-btn）同风格；
+  // 仅在刷新是合法动作（refreshEnabled）时出现，点击派发 refresh。
+  if (opts.refreshEnabled && opts.onRefresh) {
+    const refreshBtn = el('button', 'shield-refresh-btn', '刷新手牌');
+    refreshBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      opts.onRefresh!();
+    });
+    hand.appendChild(refreshBtn);
+  }
   const total = nodes.length;
   for (let i = 0; i < total; i++) {
     const node = nodes[i];
@@ -565,6 +586,9 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
 
   // 底部条带：双方手牌 + 中间步骤指示
   const handStrip = el('div', 'hand-strip');
+  const legal = getLegalActions(s, s.turnPlayer);
+  // 刷新手牌：移到当前玩家手牌挡板外侧渲染（renderHand），不再出现在操作行
+  const refreshAction = legal.find((a) => a.kind === 'refresh') ?? null;
   handStrip.appendChild(
     renderHand(s, 0, {
       isSelf: s.turnPlayer === 0,
@@ -578,6 +602,8 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
         renderApp(root, s, cb);
       },
       cb,
+      refreshEnabled: s.turnPlayer === 0 && refreshAction !== null,
+      onRefresh: () => { if (refreshAction) cb.onAction(refreshAction); },
     })
   );
   handStrip.appendChild(el('div', 'step-indicator', `步骤: ${s.step}`));
@@ -594,25 +620,37 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
         renderApp(root, s, cb);
       },
       cb,
+      refreshEnabled: s.turnPlayer === 1 && refreshAction !== null,
+      onRefresh: () => { if (refreshAction) cb.onAction(refreshAction); },
     })
   );
   grid.appendChild(handStrip);
   wrap.appendChild(grid);
 
+  // 操作行：编译线 N（check-compile 强制行动）保留在行内；「下一步」水平居中，
+  // action 步骤的拖拽提示文本置于「下一步」上方（见 .next-block / .hint）。
   const actionBar = el('div', 'action-bar');
-  const legal = getLegalActions(s, s.turnPlayer);
+  const nextAction = legal.find((a) => a.kind === 'advance') ?? null;
   for (const a of legal) {
-    if (a.kind === 'play') continue; // 打牌通过点击手牌+线完成
-    const label = a.kind === 'compile' ? `编译线 ${(a.line ?? 0) + 1}` : a.kind === 'refresh' ? '刷新手牌' : '下一步';
+    // 打牌通过点击手牌+线完成；刷新手牌在挡板外侧；下一步单独居中渲染
+    if (a.kind === 'play' || a.kind === 'refresh' || a.kind === 'advance') continue;
+    const label = a.kind === 'compile' ? `编译线 ${(a.line ?? 0) + 1}` : a.kind;
     const btn = el('button', 'btn', label);
     btn.addEventListener('click', () => cb.onAction(a));
     actionBar.appendChild(btn);
   }
-  if (s.step === 'action') {
-    // 拖拽打牌（DnD）：拖拽手牌卡到高亮的线路直接打出；点击选择 + 翻面仍可用
-    actionBar.appendChild(
-      el('span', 'hint', selectedUid ? '已选择卡牌 — 拖拽到高亮的线路打出（可先点「翻面」切换朝向）' : '拖拽手牌卡到高亮的线路打出（双击放大，点击选择）')
-    );
+  if (nextAction) {
+    const nextBlock = el('div', 'next-block');
+    if (s.step === 'action') {
+      // 拖拽打牌（DnD）：拖拽手牌卡到高亮的线路直接打出；点击选择 + 翻面仍可用
+      nextBlock.appendChild(
+        el('span', 'hint', selectedUid ? '已选择卡牌 — 拖拽到高亮的线路打出（可先点「翻面」切换朝向）' : '拖拽手牌卡到高亮的线路打出（双击放大，点击选择）')
+      );
+    }
+    const nextBtn = el('button', 'btn next-btn', '下一步');
+    nextBtn.addEventListener('click', () => cb.onAction(nextAction));
+    nextBlock.appendChild(nextBtn);
+    actionBar.appendChild(nextBlock);
   }
   wrap.appendChild(actionBar);
 
@@ -683,6 +721,49 @@ function closeZoom(): void {
   document.removeEventListener('keydown', zoomState.onKey);
   zoomState.overlay.remove();
   zoomState = null;
+}
+
+/* ===== 弃牌堆查看遮罩（顶部信息条「查看弃牌堆」按钮） =====
+ * 复用 zoom-overlay 背景样式（点击空白 / Esc 关闭），面板内以网格展示该玩家弃牌堆的
+ * 全部卡牌（弃牌堆为公开信息，全部正面展示）；双击卡牌可进一步放大查看。
+ * 遮罩挂在 document.body 上，重渲染后依然存活（与 openZoom 相同）。
+ */
+let trashViewerOverlay: HTMLElement | null = null;
+let trashViewerOnKey: ((e: KeyboardEvent) => void) | null = null;
+
+function openTrashViewer(s: GameState, player: PlayerId): void {
+  if (trashViewerOverlay) closeTrashViewer();
+  const overlay = el('div', 'zoom-overlay');
+  const panel = el('div', 'trash-viewer');
+  panel.appendChild(el('div', 'trash-viewer-title', `玩家 ${player + 1} 的弃牌堆`));
+  const grid = el('div', 'trash-viewer-grid');
+  const trash = s.players[player].trash;
+  if (trash.length === 0) {
+    grid.appendChild(el('div', 'trash-viewer-empty', '弃牌堆为空'));
+  } else {
+    for (const card of trash) {
+      const node = renderCardFace({ defId: card.defId, faceUp: true });
+      node.addEventListener('dblclick', () => openZoom(card.defId, true, false, false));
+      grid.appendChild(node);
+    }
+  }
+  panel.appendChild(grid);
+  overlay.appendChild(panel);
+  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeTrashViewer(); };
+  // 点击遮罩空白处（target 是 overlay 本身而非面板）退出
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeTrashViewer(); });
+  document.addEventListener('keydown', onKey);
+  document.body.appendChild(overlay);
+  trashViewerOverlay = overlay;
+  trashViewerOnKey = onKey;
+}
+
+function closeTrashViewer(): void {
+  if (!trashViewerOverlay) return;
+  if (trashViewerOnKey) document.removeEventListener('keydown', trashViewerOnKey);
+  trashViewerOverlay.remove();
+  trashViewerOverlay = null;
+  trashViewerOnKey = null;
 }
 
 /**

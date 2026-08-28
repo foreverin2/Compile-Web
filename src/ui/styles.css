@@ -31,6 +31,10 @@ body {
 .player-info.self { background: #242440; }
 .area-title { font-weight: bold; margin-bottom: 2px; }
 .meta-row { display: flex; gap: 14px; font-size: 13px; color: #aaa; flex-wrap: wrap; }
+/* 弃牌堆查看按钮：紧凑小按钮，作为独立行贴面板边缘——
+   P1 贴最右端（align-self:flex-end，覆盖默认 stretch）；P2 内容右对齐，覆写为最左端 */
+.trash-view-btn { align-self: flex-end; padding: 2px 10px; font-size: 11px; border-radius: 5px; }
+.player-info.p2 .trash-view-btn { align-self: flex-start; }
 
 /* 每条线一个水平行：P1 槽 | P1 协议 | P2 协议 | P2 槽 —— 4 格同一水平带（平行对齐）。
    R7 槽位多次加长（240 → 360 → 500px 下限）：175px 卡 + 每张重叠 80.85px，
@@ -514,6 +518,38 @@ body {
 }
 .hand-shield.retracted .shield-count { opacity: 0; }
 
+/* ===== 刷新手牌按钮（手牌挡板外侧：P1 左 / P2 右） =====
+ * 紧跟挡板渲染的相邻兄弟（renderHand 中 shield 之后 append），以手牌容器为定位基准：
+ * P1 挡板从手牌左缘（left:-28px）向右展开 → 按钮在其左侧（再左移自身宽度的 100%）；
+ * P2 挡板从右缘（right:-28px）向左展开 → 按钮在其右侧（再右移自身宽度的 100%）。
+ * 紧凑半透明青色（与「翻面」.play-btn 同风格）；z-index 高于挡板，垂直居中于手牌条。 */
+.shield-refresh-btn {
+  position: absolute;
+  top: 50%;
+  z-index: 71;
+  padding: 2px 8px;
+  font-size: 10px;
+  line-height: 1.6;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  background: linear-gradient(135deg, rgba(0, 255, 204, 0.35), rgba(124, 77, 255, 0.35));
+  background-clip: padding-box;
+  color: #eafffb;
+  text-shadow: 0 0 4px rgba(0, 255, 204, 0.6);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  box-shadow: 0 0 6px rgba(0, 255, 204, 0.2);
+  transition: box-shadow 0.12s ease, filter 0.12s ease;
+  white-space: nowrap;
+}
+.shield-refresh-btn:hover {
+  box-shadow: 0 0 12px rgba(0, 255, 204, 0.55), 0 0 4px rgba(124, 77, 255, 0.5);
+  filter: brightness(1.25);
+}
+.hand-shield.p1 + .shield-refresh-btn { left: -28px; transform: translate(-100%, -50%); }
+.hand-shield.p2 + .shield-refresh-btn { right: -28px; transform: translate(100%, -50%); }
+
 /* ===== ITEM 1: 选中卡上方的 正面打入/背面打入 浮动按钮 ===== */
 /* 按钮是卡牌子节点（悬停按钮时指针仍在卡牌子树内，hover-pop 不消失）；
    绝对定位于卡上缘之上，不遮卡面；z-index 高于悬停上浮卡（50）与相邻卡。 */
@@ -553,7 +589,11 @@ body {
 
 /* ===== 指示 / 操作 / 日志 ===== */
 .step-indicator { text-align: center; font-size: 13px; color: #ccc; padding: 4px 0; }
-.action-bar { display: flex; gap: 8px; align-items: center; padding: 8px 0; flex-wrap: wrap; }
+/* 操作行：编译线按钮与「下一步」整组居中（引擎中二者不同时出现：编译线仅在 check-compile
+   且有可编译线时存在，此时无 advance；action 步骤仅剩「下一步」+ 上方提示文本） */
+.action-bar { display: flex; gap: 8px; align-items: center; justify-content: center; padding: 8px 0; flex-wrap: wrap; }
+/* 「下一步」区块：纵向排列（提示文本在上、按钮在下），整体随操作行水平居中 */
+.next-block { display: flex; flex-direction: column; align-items: center; gap: 3px; }
 .btn { padding: 6px 12px; border-radius: 6px; border: none; background: #e0a030; color: #111; font-weight: bold; cursor: pointer; }
 .btn:hover { background: #f0b040; }
 .hint { font-size: 12px; color: #aaa; }
@@ -723,6 +763,27 @@ body {
   max-height: 80vw;
   transform-origin: center center;
 }
+
+/* ===== 弃牌堆查看器（复用 .zoom-overlay 背景；点击空白 / Esc 关闭） ===== */
+.trash-viewer {
+  background: rgba(10, 14, 26, 0.92);
+  border: 1px solid #444;
+  border-radius: 10px;
+  padding: 14px 16px;
+  max-width: min(86vw, 920px);
+  max-height: 82vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  cursor: default;
+  box-shadow: 0 0 30px rgba(0, 255, 204, 0.12);
+}
+.trash-viewer-title { font-size: 15px; font-weight: bold; color: #e0e6ed; text-align: center; }
+.trash-viewer-grid { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+/* 弃牌堆卡面缩小展示（.card 默认 130px），网格内可容纳更多张 */
+.trash-viewer-grid .card { width: 100px; }
+.trash-viewer-empty { color: #888; font-size: 13px; padding: 24px 12px; }
 
 /* ===== 拖拽打牌：合法落点高亮 + 浮空幽灵卡 ===== */
 /* 拖拽中可合法落点的线路槽：青色霓虹发光（描边 + 底色 + 外/内发光），
