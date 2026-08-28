@@ -136,8 +136,22 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       revealAfterRemoval(s, owner, line);
       break;
     }
-    case 'shift':
-      throw new Error(`op not implemented: shift`);
+    case 'shift': {
+      const card = findCard(s, op.uid);
+      if (!card || card.zone !== 'field') throw new Error(`cannot shift ${op.uid}: not on field`);
+      if (!isUncovered(s, card)) throw new Error(`cannot shift ${op.uid}: covered card`);
+      if (op.targetLine === card.line) throw new Error('must shift to a different line');
+      const owner = card.owner;
+      const fromLine = card.line!;
+      s.players[owner].stacks[fromLine].pop();
+      card.zone = 'float';
+      card.line = op.targetLine; // 提交目标（落地前不可变卦）
+      card.pos = null;
+      s.pendingShift = card;
+      emitCardEvent(s, 'card:shifted', card, { fromLine });
+      revealAfterRemoval(s, owner, fromLine);
+      break;
+    }
   }
 }
 
