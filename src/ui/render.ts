@@ -51,14 +51,6 @@ function renderCardFace(card: { defId: string; faceUp: boolean }): HTMLElement {
   return box;
 }
 
-/**
- * 被盖住的牌（堆叠中非顶层）不再使用 mini 小图 + 数值徽章方案（已废弃）：
- * 所有场上卡牌统一以完整卡面渲染（renderCardFace），堆叠通过负 margin-top
- * （-53.8% 卡高）重叠，使每张被盖住的牌仅露出顶部 46.2% 条带 —— 数值与顶部
- * （常驻）指令在条带内自然可见，中部（即时）与底部（辅助）指令被上层盖住而失效。
- * 背面牌无指令，印刷值按规则为 2，同样以完整卡背重叠。
- */
-
 function renderProtocol(p: { defId: string; compiled: boolean }, player: PlayerId): HTMLElement {
   const box = el('div', 'protocol' + (p.compiled ? ' compiled' : ''));
   const img = document.createElement('img');
