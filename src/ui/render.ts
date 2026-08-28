@@ -1,6 +1,7 @@
-import type { GameState, PlayerId, Line } from '../core/models/types';
-import { getLineValue, getDraftPool, getCurrentDrafter } from '../core/state/create';
+import type { GameState, PlayerId, Line, ProtocolDef } from '../core/models/types';
+import { getLineValue, getCurrentDrafter } from '../core/state/create';
 import { getLegalActions, type LegalAction } from '../core/game';
+import { DEMO_PROTOCOLS } from '../data/demo';
 
 export interface UiCallbacks {
   onAction(a: LegalAction): void;
@@ -84,6 +85,9 @@ function renderBattery(s: GameState, player: PlayerId, line: Line): HTMLElement 
   const points = getLineValue(s, player, line);
   const battery = el('div', `battery battery-${batteryState(points)}`);
   battery.dataset.points = String(points);
+  // R9 电池倒置：DOM 顺序 = 视觉顺序（flex column 自上而下）——值标签在上、
+  // 外壳（10 格竖排）居中、正极凸头在底部。
+  battery.appendChild(el('span', 'battery-value', String(points)));
   const shell = el('div', 'battery-shell');
   const cells = el('div', 'battery-cells');
   const filled = Math.min(points, 10);
@@ -93,7 +97,6 @@ function renderBattery(s: GameState, player: PlayerId, line: Line): HTMLElement 
   shell.appendChild(cells);
   battery.appendChild(shell);
   battery.appendChild(el('div', 'battery-cap'));
-  battery.appendChild(el('span', 'battery-value', String(points)));
   return battery;
 }
 
@@ -403,23 +406,101 @@ function renderProtocolCell(s: GameState, player: PlayerId, line: Line): HTMLEle
   return cell;
 }
 
+/** 与引擎一致的 1-2-2-1 轮选归属（第 i 次选择轮到谁），镜像 core/state/create.ts 的 DRAFT_ORDER */
+const DRAFT_PICK_OWNER: PlayerId[] = [0, 1, 1, 0, 0, 1];
+
+/** 玩家已选协议（按选择顺序）：P1 取第 0/3/4 次、P2 取第 1/2/5 次（与引擎分派一致） */
+function picksOf(s: GameState, player: PlayerId): ProtocolDef[] {
+  return s.draftPicks.filter((_, i) => DRAFT_PICK_OWNER[i] === player);
+}
+
+/** 一方的已选协议列：loading 面 PNG 按选择顺序竖排；空槽显示「尚未选择」占位 */
+function renderPickColumn(s: GameState, player: PlayerId, drafter: PlayerId): HTMLElement {
+  const col = el('div', `draft-picks p${player + 1}${drafter === player ? ' active' : ''}`);
+  const title = el('div', 'draft-picks-title', `玩家 ${player + 1} 已选`);
+  if (drafter === player) title.appendChild(el('span', 'draft-picks-turn', '● 轮选'));
+  col.appendChild(title);
+  const list = el('div', 'draft-picks-list');
+  const picks = picksOf(s, player);
+  // 本轮刚选中的协议（选择列表最后一项）加进场动画
+  const newest = s.draftRound > 0 ? s.draftPicks[s.draftRound - 1] : null;
+  for (let i = 0; i < 3; i++) {
+    const pick = picks[i];
+    if (!pick) {
+      list.appendChild(el('div', 'draft-pick-empty', '尚未选择'));
+      continue;
+    }
+    const card = el('div', 'draft-pick-card' + (newest && newest.defId === pick.defId ? ' new' : ''));
+    const img = document.createElement('img');
+    img.src = `/assets/protocols/${pick.defId}/protocol-loading.png`;
+    img.alt = pick.name;
+    card.appendChild(img);
+    card.appendChild(el('div', 'draft-pick-name', pick.name));
+    // 双击放大查看协议图（复用遮罩）
+    card.addEventListener('dblclick', () => openZoom(pick.defId, true, true, false));
+    list.appendChild(card);
+  }
+  col.appendChild(list);
+  return col;
+}
+
+/** 中间协议池：全部 6 套演示协议，每行 4 个；悬停聚焦并浮现「选择」按钮；
+ *  已选协议变灰禁用（不可悬停/不可点）；点击选择派发 onDraftPick（引擎校验当前轮选者） */
+function renderDraftPool(s: GameState, cb: UiCallbacks): HTMLElement {
+  const pool = el('div', 'draft-pool');
+  const picked = new Set(s.draftPicks.map((p) => p.defId));
+  for (const proto of DEMO_PROTOCOLS) {
+    const isPicked = picked.has(proto.defId);
+    const card = el('div', 'draft-card' + (isPicked ? ' picked' : ''));
+    const img = document.createElement('img');
+    img.className = 'draft-card-img';
+    img.src = `/assets/protocols/${proto.defId}/protocol-loading.png`;
+    img.alt = proto.name;
+    card.appendChild(img);
+    card.appendChild(el('div', 'draft-card-name', proto.name));
+    card.appendChild(el('div', 'draft-card-commands', proto.commands.join(' · ')));
+    if (isPicked) {
+      card.appendChild(el('span', 'draft-picked-badge', '已选'));
+    } else {
+      const btn = el('button', 'btn draft-pick-btn', '选择');
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        cb.onDraftPick(proto.defId);
+      });
+      card.appendChild(btn);
+    }
+    pool.appendChild(card);
+  }
+  return pool;
+}
+
 export function renderDraft(root: HTMLElement, s: GameState, cb: UiCallbacks): void {
   root.textContent = '';
   const wrap = el('div', 'draft-screen');
   wrap.appendChild(el('h1', 'title', 'Compile 译世界 — 协议草案'));
-  wrap.appendChild(el('div', 'draft-hint', `轮到 玩家 ${getCurrentDrafter(s) + 1} 选择协议`));
-  const pool = el('div', 'draft-pool');
-  for (const proto of getDraftPool(s)) {
-    const card = el('div', 'protocol-card');
-    card.appendChild(el('div', 'protocol-name', proto.name));
-    card.appendChild(el('div', 'protocol-commands', proto.commands.join(' · ')));
-    card.appendChild(el('div', 'protocol-loading', proto.loadingText));
-    const btn = el('button', 'btn', '选择');
-    btn.addEventListener('click', () => cb.onDraftPick(proto.defId));
-    card.appendChild(btn);
-    pool.appendChild(card);
+
+  const header = el('div', 'draft-header');
+  const drafter = getCurrentDrafter(s);
+  header.appendChild(el('div', 'draft-hint', `轮到 玩家 ${drafter + 1} 选择协议`));
+  // 轮次进度：第 X/6 次 + 1-2-2-1 步点追踪（当前步高亮、已过步打勾色）
+  const progress = el('div', 'draft-progress');
+  progress.appendChild(
+    el('span', 'draft-progress-text', `第 ${Math.min(s.draftRound + 1, DRAFT_PICK_OWNER.length)} / ${DRAFT_PICK_OWNER.length} 次选择`)
+  );
+  const track = el('div', 'draft-step-track');
+  for (let i = 0; i < DRAFT_PICK_OWNER.length; i++) {
+    const state = i < s.draftRound ? ' done' : i === s.draftRound ? ' current' : '';
+    track.appendChild(el('span', 'draft-step-dot' + state, String(DRAFT_PICK_OWNER[i] + 1)));
   }
-  wrap.appendChild(pool);
+  progress.appendChild(track);
+  header.appendChild(progress);
+  wrap.appendChild(header);
+
+  const layout = el('div', 'draft-layout');
+  layout.appendChild(renderPickColumn(s, 0, drafter));
+  layout.appendChild(renderDraftPool(s, cb));
+  layout.appendChild(renderPickColumn(s, 1, drafter));
+  wrap.appendChild(layout);
   root.appendChild(wrap);
 }
 

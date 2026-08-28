@@ -11,9 +11,10 @@ body {
   background-repeat: no-repeat;
   background-attachment: fixed;
 }
-/* 主容器：左右 padding 90px 容纳电池外溢（P1 电池在槽左缘外 -74px、P2 对称）；
+/* 主容器：左右 padding 140px 容纳电池外溢（R9 电池外移加大后：P1 电池在槽左缘外
+   -120px、P2 对称；140px 留出电池与屏缘的清晰间隔）。
    不设 overflow-x:hidden —— 那会裁剪手牌/链路边缘；极端晚局若超宽由浏览器滚动。 */
-#app { max-width: 1780px; margin: 0 auto; padding: 12px 90px; }
+#app { max-width: 1780px; margin: 0 auto; padding: 12px 140px; }
 
 .board { display: flex; flex-direction: column; gap: 10px; }
 
@@ -66,7 +67,9 @@ body {
 .stack-slot.p1 .line-value { text-align: right; }
 .stack-slot.p2 .line-value { text-align: left; }
 
-/* ===== R8 线值电池指示器（纯 CSS，位于堆叠槽外侧端、垂直居中） =====
+/* ===== R8/R9 线值电池指示器（纯 CSS，位于堆叠槽外侧端、垂直居中） =====
+   R9：倒置（值在上、正极凸头在下）、整体放大（外壳 90×175 / 值 28px）、
+   外移至槽外侧 120px（与槽内卡牌完全分离）。
    10 格电量 = 该线点值（clamp 0..10，由 renderBattery 生成）；外壳 4 态：
    stable ≤3（方正平直，青色）/ bulge 4-6（上下微微鼓出，橙黄微光）/
    full 7-9（明显鼓胀接近圆润，橙色强光 + 应力裂纹）/ burst ≥10（爆裂：径向爆光 +
@@ -79,48 +82,48 @@ body {
   top: 50%;
   transform: translateY(-50%);
   display: flex;
-  flex-direction: column; /* 纵向：正极在上、10 格竖排、值在下方 */
+  flex-direction: column; /* 纵向（R9 倒置）：值在上、10 格竖排、正极凸头在底部 */
   align-items: center;
-  gap: 4px;
-  height: 190px;
+  gap: 5px;
+  height: 226px;
   /* z-index 59：高于场上堆叠卡（zIndex=pos，最多几十）使电池始终可见；
      低于 hover 弹出的卡（60）不遮挡查看 */
   z-index: 59;
   pointer-events: none;
   user-select: none;
 }
-/* P1 电池在槽最左侧外（链路尽头）；P2 在槽最右侧外 */
-.stack-slot.p1 .battery { left: -74px; }
-.stack-slot.p2 .battery { right: -74px; }
+/* R9 电池外移（距槽外侧 120px，与槽内卡牌完全分离）：P1 在槽最左侧外；P2 在槽最右侧外 */
+.stack-slot.p1 .battery { left: -120px; }
+.stack-slot.p2 .battery { right: -120px; }
 .battery-shell {
   position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  width: 76px;
-  height: 148px;
-  border: 3px solid #00ffcc;
-  border-radius: 8px;
+  width: 90px;
+  height: 175px;
+  border: 4px solid #00ffcc;
+  border-radius: 10px;
   background: rgba(0, 0, 0, 0.7);
   box-shadow: 0 0 12px rgba(0, 255, 204, 0.4), inset 0 0 8px rgba(0, 255, 204, 0.12);
   transition: border-radius 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
 }
-/* 正极凸头（竖摆 → 在顶部） */
+/* 正极凸头（R9 倒置 → 在底部：去上边框、下圆角） */
 .battery-cap {
-  width: 26px;
-  height: 11px;
-  border: 3px solid #00ffcc;
-  border-bottom: none;
-  border-radius: 4px 4px 0 0;
+  width: 32px;
+  height: 13px;
+  border: 4px solid #00ffcc;
+  border-top: none;
+  border-radius: 0 0 5px 5px;
   background: rgba(0, 0, 0, 0.7);
   box-shadow: 0 0 8px rgba(0, 255, 204, 0.3);
 }
-.battery-cells { display: flex; flex-direction: column; gap: 5px; align-items: center; }
+.battery-cells { display: flex; flex-direction: column; gap: 6px; align-items: center; }
 .battery-cell {
-  width: 44px;
-  height: 9px;
-  border-radius: 2px;
+  width: 52px;
+  height: 11px;
+  border-radius: 3px;
   background: rgba(255, 255, 255, 0.07);
 }
 /* 填充格：默认青色（stable）；bulge/full/burst 分别由下方状态覆盖为外壳同色 */
@@ -128,9 +131,9 @@ body {
   background: linear-gradient(90deg, #00ffcc, #007a66);
   box-shadow: 0 0 6px rgba(0, 255, 204, 0.55);
 }
-/* 点值标签：外壳下方居中，放大 */
+/* 点值标签：外壳上方居中（R9 倒置后在上），放大 */
 .battery-value {
-  font-size: 20px;
+  font-size: 28px;
   font-weight: bold;
   line-height: 1;
   color: #00ffcc;
@@ -338,8 +341,6 @@ body {
   width: 18px; height: 18px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
 }
-.protocol-name { font-weight: bold; font-size: 12px; }
-.protocol-loading { font-size: 10px; color: #aaa; }
 
 /* ===== 控制组件（R6 滑动指示条：控制卡在轨道上滑动表示哪方占优；R8 整体放大：控制卡 44→70px） ===== */
 .control-module {
@@ -558,13 +559,92 @@ body {
 .log { border-top: 1px solid #444; margin-top: 8px; padding-top: 6px; font-size: 12px; color: #999; max-height: 120px; overflow-y: auto; }
 .winner-banner { font-size: 24px; font-weight: bold; color: #4caf50; text-align: center; padding: 12px; }
 
-/* ===== 草案 ===== */
+/* ===== 草案（R9 三栏重设计：P1 已选 | 协议池 每行 4 个 | P2 已选） ===== */
 .draft-screen { text-align: center; }
-.title { margin-bottom: 12px; }
-.draft-hint { margin-bottom: 12px; color: #e0a030; }
-.draft-pool { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
-.protocol-card { border: 1px solid #888; border-radius: 8px; padding: 10px; background: #2a2a44; width: 180px; }
-.protocol-commands { font-size: 12px; color: #aaa; margin: 6px 0; }
+.title { margin-bottom: 10px; }
+
+.draft-header { display: flex; flex-direction: column; align-items: center; gap: 6px; margin-bottom: 14px; }
+.draft-hint { color: #e0a030; font-weight: bold; font-size: 15px; }
+.draft-progress { display: flex; align-items: center; gap: 12px; font-size: 12px; color: #aaa; }
+.draft-step-track { display: inline-flex; gap: 6px; }
+.draft-step-dot {
+  width: 18px; height: 18px; border-radius: 50%;
+  border: 1px solid #555; background: #181828; color: #888;
+  font-size: 10px; font-weight: bold;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.draft-step-dot.done { border-color: #00ffcc; color: #00ffcc; box-shadow: 0 0 6px rgba(0, 255, 204, 0.45); }
+.draft-step-dot.current { border-color: #e0a030; color: #e0a030; background: rgba(224, 160, 48, 0.18); box-shadow: 0 0 8px rgba(224, 160, 48, 0.6); }
+
+.draft-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr) 220px; gap: 16px; align-items: start; }
+
+/* ===== 已选协议列（左 P1 / 右 P2；轮选方高亮） ===== */
+.draft-picks {
+  border: 1px solid #444; border-radius: 10px; padding: 10px;
+  background: rgba(18, 18, 34, 0.85);
+  display: flex; flex-direction: column; gap: 10px;
+  min-height: 300px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.draft-picks.active { border-color: #e0a030; box-shadow: 0 0 16px rgba(224, 160, 48, 0.35); }
+.draft-picks-title { font-weight: bold; font-size: 13px; color: #dde; display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+.draft-picks.active .draft-picks-title { color: #f0b040; }
+.draft-picks-turn { font-size: 10px; color: #e0a030; text-shadow: 0 0 4px rgba(224, 160, 48, 0.5); animation: draft-turn-pulse 1.6s ease-in-out infinite; }
+@keyframes draft-turn-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+.draft-picks-list { display: flex; flex-direction: column; gap: 8px; }
+.draft-pick-card {
+  position: relative; border: 1px solid #555; border-radius: 8px; padding: 4px;
+  background: #1e1e36; cursor: zoom-in;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+}
+.draft-pick-card:hover { transform: translateY(-4px) scale(1.03); border-color: #e0a030; box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45); }
+.draft-pick-card.new { animation: draft-pick-in 0.3s ease; }
+@keyframes draft-pick-in { from { opacity: 0; transform: translateY(-10px) scale(0.92); } to { opacity: 1; transform: none; } }
+.draft-pick-card img { display: block; width: 100%; height: auto; border-radius: 4px; pointer-events: none; user-select: none; -webkit-user-drag: none; }
+.draft-pick-name { font-size: 11px; color: #bbc; margin-top: 2px; }
+.draft-pick-empty {
+  border: 1px dashed #3a3a52; border-radius: 8px; min-height: 86px;
+  display: flex; align-items: center; justify-content: center;
+  color: #555; font-size: 12px; letter-spacing: 0.05em;
+}
+
+/* ===== 中间协议池：每行 4 个，悬停聚焦浮现「选择」按钮 ===== */
+.draft-pool { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.draft-card {
+  position: relative; display: flex; flex-direction: column; gap: 6px;
+  border: 1px solid #666; border-radius: 10px; padding: 8px;
+  background: #23233d; cursor: pointer;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+}
+.draft-card-img { display: block; width: 100%; height: auto; border-radius: 6px; pointer-events: none; user-select: none; -webkit-user-drag: none; }
+.draft-card-name { font-weight: bold; font-size: 13px; color: #eef; }
+.draft-card-commands { font-size: 11px; color: #aab; line-height: 1.5; min-height: 16px; }
+/* 悬停聚焦（仅可选项）：上浮 + 放大 + 金边辉光，无兄弟推开（区别于手牌扇形 pop） */
+.draft-card:not(.picked):hover {
+  transform: translateY(-10px) scale(1.05);
+  border-color: #e0a030;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.5), 0 0 14px rgba(224, 160, 48, 0.45);
+  z-index: 10;
+}
+/* 「选择」按钮：悬停浮现（透明占位保留，避免布局跳动）；点击派发 onDraftPick（引擎校验轮选者） */
+.draft-pick-btn {
+  opacity: 0; pointer-events: none;
+  transition: opacity 0.15s ease;
+  margin-top: auto; /* 贴卡片底部：各行按钮占位对齐 */
+  padding: 4px 10px; font-size: 12px;
+}
+.draft-card:not(.picked):hover .draft-pick-btn { opacity: 1; pointer-events: auto; }
+/* 已选协议：灰化禁用（图片去色变暗、文字转灰），无悬停效果、无按钮、不可点 */
+.draft-card.picked { border-color: #3a3a4a; background: rgba(35, 35, 61, 0.5); cursor: default; }
+.draft-card.picked:hover { transform: none; box-shadow: none; }
+.draft-card.picked .draft-card-img { filter: grayscale(1) opacity(0.5); }
+.draft-card.picked .draft-card-name,
+.draft-card.picked .draft-card-commands { color: #666; }
+.draft-picked-badge {
+  position: absolute; top: 10px; right: 10px;
+  background: #4caf50; color: #111; font-size: 10px; font-weight: bold;
+  padding: 2px 7px; border-radius: 9px; z-index: 5;
+}
 
 /* ===== 卡牌放大查看遮罩（双击卡牌） ===== */
 .zoom-overlay {
