@@ -21,6 +21,9 @@ export function advanceStep(s: GameState): void {
     next = 'check-cache';
   }
   s.step = next;
+  if (next === 'end' || next === 'start') {
+    s.resolvedTriggerUids = [];
+  }
   if (next === 'start') {
     s.turnPlayer = s.turnPlayer === 0 ? 1 : 0;
     s.compiledThisTurn = false;
