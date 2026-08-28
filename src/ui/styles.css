@@ -465,7 +465,7 @@ body {
   position: absolute;
   top: 0;
   bottom: 0;
-  min-width: 14px;
+  min-width: 24px; /* 收起态也保留足够抓取宽度，便于拖出 */
   /* 完全不透明：完全遮住下方手牌 */
   background: #0a0e1a;
   border: 1px solid rgba(0, 255, 204, 0.5);
@@ -509,6 +509,7 @@ body {
   padding: 2px 8px;
   white-space: nowrap;
   opacity: 1;
+  pointer-events: none; /* 纯显示徽标：不拦截挡板拖拽 */
   transition: opacity 0.15s ease;
 }
 .hand-shield.retracted .shield-count { opacity: 0; }

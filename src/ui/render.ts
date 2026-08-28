@@ -324,11 +324,9 @@ function renderShield(s: GameState, player: PlayerId, enabled: boolean, hand: HT
 }
 
 function bindShieldDrag(shield: HTMLElement, player: PlayerId, hand: HTMLElement): void {
-  // 触发范围：整个挡板可拖（除中间手牌数徽标外），扩大可抓取区域
+  // 触发范围：整个挡板可拖（含中间徽标——收起态徽标 pointer-events:none 由 CSS 处理）
   shield.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return;
-    // 点击中间徽标（shield-count）不触发拖拽
-    if ((e.target as HTMLElement).closest('.shield-count')) return;
     e.preventDefault();
     e.stopPropagation(); // 不与卡牌单击/拖拽相互干扰
     const dir = player === 0 ? 1 : -1; // P1 向右拖加宽；P2 向左拖加宽
