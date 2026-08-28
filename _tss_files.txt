@@ -1,0 +1,115 @@
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\.gitattributes
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\LICENSE
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\其他材质包\GameObjects\cube.obj
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\其他材质包\GameObjects\Main1_Box.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\其他材质包\GameObjects\Main1_Playmat.jpeg
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\其他材质包\GameObjects\Main1_Playmat(1).jpeg
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\其他材质包\GameObjects\table.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\其他材质包\Other\background.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\其他材质包\Other\box.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\其他材质包\Other\Compile_Logo_Black.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\其他材质包\Other\Compile_Logo_White.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Cardback.jpg
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Control（控制模块）\ControlBack.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Control（控制模块）\ControlFront.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Homebrew（自制）\Alchemy\A.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Homebrew（自制）\Alchemy\B.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Homebrew（自制）\Alchemy\CommandSheet.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Homebrew（自制）\Bastion\A.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Homebrew（自制）\Bastion\B.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Homebrew（自制）\Bastion\CommandSheet.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Homebrew（自制）\Equilibrium\A.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Homebrew（自制）\Equilibrium\B.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Homebrew（自制）\Equilibrium\CommandSheet.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Homebrew（自制）\Famine\A.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Homebrew（自制）\Famine\B.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Homebrew（自制）\Famine\CommandSheet.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Homebrew（自制）\Mirage\A.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Homebrew（自制）\Mirage\B.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Homebrew（自制）\Mirage\CommandSheet.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Aux 1\Apathy\A.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Aux 1\Apathy\B.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Aux 1\Apathy\CommandSheet.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Aux 1\Hate\A.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Aux 1\Hate\B.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Aux 1\Hate\CommandSheet.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Aux 1\Love\A.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Aux 1\Love\B.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Aux 1\Love\CommandSheet.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Darkness\A.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Darkness\B.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Darkness\CommandSheet.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Death\A.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Death\B.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Death\CommandSheet.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Fire\A.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Fire\B.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Fire\CommandSheet.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Gravity\A.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Gravity\B.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Gravity\CommandSheet.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Life\A.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Life\B.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Life\CommandSheet.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Light\A.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Light\B.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Light\CommandSheet.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Metal\A.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Metal\B.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Metal\CommandSheet.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Plague\A.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Plague\B.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Plague\CommandSheet.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Psychic\A.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Psychic\B.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Psychic\CommandSheet.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Speed\A.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Speed\Agai(1).png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Speed\B.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Speed\CommandSheet.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Spirit\A.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Spirit\B.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Spirit\CommandSheet.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Water\A.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Water\B.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 1\Water\CommandSheet.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\Chaos\A.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\Chaos\B.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\Chaos\CommandSheet.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\Clarity\A.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\Clarity\B.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\Clarity\CommandSheet.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\Corruption\A.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\Corruption\B.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\Corruption\CommandSheet.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\Courage\A.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\Courage\B.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\Courage\CommandSheet.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\Fear\A.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\Fear\B.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\Fear\CommandSheet.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\Ice\A.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\Ice\B.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\Ice\CommandSheet.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\Luck\A.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\Luck\B.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\Luck\CommandSheet.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\Mirror\A.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\Mirror\B.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\Mirror\CommandSheet.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\Peace\A.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\Peace\B.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\Peace\CommandSheet.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\Smoke\A.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\Smoke\B.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\Smoke\CommandSheet.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\Time\A.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\Time\B.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\Time\CommandSheet.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\War\A.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\War\B.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\卡牌\Cards\Protocols（主要卡牌）\Official（官方）\Main 2\War\CommandSheet.png
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\说明书\EN-COMP-MN01_Rulesheet.pdf
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\说明书\EN-COMP-MN02_Rulesheet.pdf
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Assets\说明书\The Compile Codex.pdf
+E:\studyE\compile\compile(自制compile+正版compile)\TabletopSimulator_Compile-main\TabletopSimulator_Compile-main\Discord\protocols.json
