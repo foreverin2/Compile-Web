@@ -109,6 +109,12 @@ export function renderDraft(root: HTMLElement, s: GameState, cb: UiCallbacks): v
 
 export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): void {
   root.textContent = '';
+  // 清除失效选择：所选卡不在当前回合玩家手牌中（已被打出/刷新生效/回合切换）时复位
+  const sel = selectedUid;
+  if (sel !== null && !s.players[s.turnPlayer].hand.some((c) => c.uid === sel)) {
+    selectedUid = null;
+    selectedFaceUp = true;
+  }
   const wrap = el('div', 'board');
   if (s.phase === 'turn' && s.step === 'start') {
     const handoff = el('div', 'handoff-banner', `▶ 请将设备交给 玩家 ${s.turnPlayer + 1}，然后点击「下一步」开始`);
@@ -130,11 +136,21 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
     selected: selectedUid,
     onSelect: (uid) => { selectedUid = uid; renderApp(root, s, cb); },
     onPlay: (line) => {
-      if (selectedUid) {
-        cb.onAction({ kind: 'play', cardUid: selectedUid, faceUp: selectedFaceUp, line });
-        selectedUid = null;
-        selectedFaceUp = true;
-      }
+      if (!selectedUid) return;
+      const uid = selectedUid;
+      const faceUp = selectedFaceUp;
+      // 先复位选择，避免已打出的牌在重渲染中残留 selected 高亮
+      selectedUid = null;
+      selectedFaceUp = true;
+      // 仅当处于 action 步骤且 (卡牌, 线, 朝向) 是合法动作时才派发；
+      // 越步、线协议不匹配、卡牌已不在手牌等非法点击一律忽略
+      if (s.step !== 'action') return;
+      const legal = getLegalActions(s, s.turnPlayer);
+      const playable = legal.some(
+        (a) => a.kind === 'play' && a.cardUid === uid && a.line === line && a.faceUp === faceUp
+      );
+      if (!playable) return;
+      cb.onAction({ kind: 'play', cardUid: uid, faceUp, line });
     },
   });
   wrap.appendChild(self);
