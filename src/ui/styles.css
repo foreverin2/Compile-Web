@@ -353,3 +353,30 @@ body {
 .draft-pool { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
 .protocol-card { border: 1px solid #888; border-radius: 8px; padding: 10px; background: #2a2a44; width: 180px; }
 .protocol-commands { font-size: 12px; color: #aaa; margin: 6px 0; }
+
+/* ===== 卡牌放大查看遮罩（双击卡牌） ===== */
+.zoom-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 8, 16, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  cursor: zoom-out;
+}
+.zoom-img {
+  max-width: 80vw;
+  max-height: 80vh;
+  object-fit: contain;
+  transform-origin: center center;
+  cursor: zoom-in;
+  transition: transform 0.05s ease;
+  border-radius: 6px;
+  box-shadow: 0 0 40px rgba(0, 255, 204, 0.15);
+  pointer-events: auto;
+}
+.zoom-protocol {
+  /* 协议卡横向显示：原图逆时针旋转 90°（transform 中与 scale 组合） */
+  transform-origin: center center;
+}

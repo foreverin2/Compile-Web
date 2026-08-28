@@ -61,6 +61,8 @@ function renderProtocol(p: { defId: string; compiled: boolean }, player: PlayerI
   img.alt = p.compiled ? 'compiled protocol' : 'protocol loading';
   box.appendChild(img);
   if (p.compiled) box.appendChild(el('span', 'protocol-check', '✓'));
+  // 双击协议卡放大查看（协议无单击动作，直接 dblclick 即可；协议图横向展示）
+  box.addEventListener('dblclick', () => openZoom(p.defId, true, true, p.compiled));
   return box;
 }
 
@@ -102,6 +104,16 @@ function renderStackSlot(
     node.dataset.uid = card.uid;
     node.style.zIndex = String(i);
     if (selected === card.uid) node.classList.add('selected');
+    // 单击=打牌（仅可交互时）、双击=放大查看（双方场上卡均为公开信息）。
+    // 双击判别：第一次点击延迟 240ms 才派发打牌，300ms 内第二次点击会取消它并打开
+    // 遮罩，故双击不会误打牌；stopPropagation 阻断冒泡到槽自身的 click（槽空白处
+    // 点击仍直接打牌，二者不重复触发）。
+    bindClickOrDouble(
+      node,
+      () => { if (interactable) onPlay(line); },
+      () => openZoom(card.defId, card.faceUp, false, false),
+      true
+    );
     pile.appendChild(node);
   }
   if (cards.length === 0) {
@@ -168,10 +180,14 @@ function renderHand(
     node.dataset.uid = card.uid;
     if (isSelected) node.classList.add('selected');
     if (opts.isSelf) {
-      node.addEventListener('click', (e) => {
-        e.stopPropagation();
-        opts.onSelect(card.uid);
-      });
+      // 单击=选中、双击=放大查看（300ms 判别窗内第二次点击取消延迟的单击并打开遮罩）；
+      // faceUp 为当前显示朝向（选中且翻至背面时预览卡背，放大也显示卡背）。
+      bindClickOrDouble(
+        node,
+        () => opts.onSelect(card.uid),
+        () => openZoom(card.defId, faceUp, false, false),
+        true
+      );
     }
     // ITEM 1: 选中卡且处于 action 步骤 → 卡上缘上方浮动「翻面」按钮。
     // 按钮是卡牌子节点：悬停按钮时指针始终位于卡牌子树内，hover-pop 保持不消失
@@ -413,6 +429,80 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
 
 let selectedUid: string | null = null;
 let selectedFaceUp = true;
+
+/* ===== 卡牌放大查看遮罩（双击卡牌：手牌/场上/协议；滚轮缩放；Esc 或点击空白关闭） ===== */
+interface ZoomState {
+  overlay: HTMLElement;
+  img: HTMLImageElement;
+  scale: number;
+  isProtocol: boolean;
+  onKey: (e: KeyboardEvent) => void;
+}
+let zoomState: ZoomState | null = null;
+
+/** 打开卡牌放大查看遮罩。defId: 卡牌定义 id；faceUp: 是否正面；isProtocol: 是否协议卡；compiled: 协议是否已编译 */
+function openZoom(defId: string, faceUp: boolean, isProtocol: boolean, compiled: boolean): void {
+  if (zoomState) closeZoom();
+  const overlay = el('div', 'zoom-overlay');
+  const img = document.createElement('img');
+  img.className = 'zoom-img' + (isProtocol ? ' zoom-protocol' : '');
+  if (isProtocol) {
+    img.src = `/assets/protocols/${defId}/protocol-${compiled ? 'compiled' : 'loading'}.png`;
+  } else if (faceUp) {
+    const [proto, value] = splitDefId(defId);
+    img.src = `/assets/protocols/${proto}/card-${value}.png`;
+  } else {
+    img.src = '/assets/Cardback.jpg';
+  }
+  img.alt = 'card zoom';
+  overlay.appendChild(img);
+  // 滚轮缩放：协议卡横向（rotate(-90deg)）需与 scale 组合在 transform 里
+  let scale = 1;
+  const apply = () => {
+    img.style.transform = isProtocol
+      ? `rotate(-90deg) scale(${scale})`
+      : `scale(${scale})`;
+  };
+  const onWheel = (e: WheelEvent) => {
+    e.preventDefault();
+    scale = Math.min(6, Math.max(1, scale + (e.deltaY < 0 ? 0.25 : -0.25)));
+    apply();
+  };
+  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeZoom(); };
+  // 点击遮罩空白处（target 是 overlay 本身而非 img）退出
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeZoom(); });
+  overlay.addEventListener('wheel', onWheel, { passive: false });
+  document.addEventListener('keydown', onKey);
+  document.body.appendChild(overlay);
+  zoomState = { overlay, img, scale, isProtocol, onKey };
+  apply();
+}
+
+function closeZoom(): void {
+  if (!zoomState) return;
+  document.removeEventListener('keydown', zoomState.onKey);
+  zoomState.overlay.remove();
+  zoomState = null;
+}
+
+/** 单击/双击判别：300ms 内两次点击视为双击（double），否则延迟执行单击（single）。 */
+function bindClickOrDouble(node: HTMLElement, single: () => void, double: () => void, stopPropagation: boolean): void {
+  let timer: number | undefined;
+  let last = 0;
+  node.addEventListener('click', (e) => {
+    if (stopPropagation) e.stopPropagation();
+    const now = Date.now();
+    if (now - last < 300) {
+      if (timer !== undefined) { clearTimeout(timer); timer = undefined; }
+      last = 0;
+      double();
+    } else {
+      last = now;
+      if (timer !== undefined) clearTimeout(timer);
+      timer = window.setTimeout(() => { timer = undefined; single(); }, 240);
+    }
+  });
+}
 
 export function renderApp(root: HTMLElement, s: GameState, cb: UiCallbacks): void {
   if (s.phase === 'draft') {
