@@ -35,7 +35,7 @@
 - 无外部依赖/免插件；动画时长 ≤ 1.2s；不自己移除节点；不触碰宿主逻辑
 - 代码注释用中文
 
-## 交付物清单
+## 交付物清单(以txt文件输出)
 - [ ] `delete-shatter.css`（`.card-shattering` 类 + 碎片/闪光动画 keyframes）
 - [ ] `delete-shatter.js`（`export function mountShatter(node: HTMLElement): void`，内部生成碎片节点、挂载覆盖层、启动动画）
 - [ ] 简短使用说明注释（顶部 3~5 行：调用方式、动画时长、节点结构）
