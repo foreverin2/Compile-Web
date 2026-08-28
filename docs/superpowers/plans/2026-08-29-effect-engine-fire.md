@@ -795,6 +795,8 @@ function base(): GameState {
     makeCard('test-flip', 0, 'field', true, 0, 0),
     makeCard('test-flip', 0, 'field', false, 0, 1),
   ];
+  // 效果源卡 'src'（sourceValid 要求在场且未覆盖；放独立线，不影响线 0 的覆盖断言）
+  s.players[0].stacks[1] = [{ uid: 'src', defId: 'test-flip', owner: 0, faceUp: true, zone: 'field', line: 1, pos: 0 }];
   // 中指令 draw 需要牌库有牌
   s.players[0].deck = [makeCard('test-flip', 0, 'deck'), makeCard('test-flip', 0, 'deck')];
   return s;
@@ -902,6 +904,8 @@ function base(): GameState {
     makeCard('test-reveal', 0, 'field', true, 0, 0), // 底层：被揭开 → 中指令
     makeCard('fire-1', 0, 'field', true, 0, 1),      // 顶层：被删除
   ];
+  // 效果源卡 'src'（sourceValid 要求在场且未覆盖；放独立线）
+  s.players[0].stacks[1] = [{ uid: 'src', defId: 'test-reveal', owner: 0, faceUp: true, zone: 'field', line: 1, pos: 0 }];
   // 露出卡中指令 draw 需要牌库有牌
   s.players[0].deck = [makeCard('test-reveal', 0, 'deck'), makeCard('test-reveal', 0, 'deck')];
   return s;
@@ -938,6 +942,8 @@ describe('delete/return ops with reveal', () => {
       makeCard('test-reveal', 0, 'field', false, 0, 0), // 反面：不触发
       makeCard('fire-1', 0, 'field', true, 0, 1),
     ];
+    // 效果源卡 'src'
+    s.players[0].stacks[1] = [{ uid: 'src', defId: 'test-reveal', owner: 0, faceUp: true, zone: 'field', line: 1, pos: 0 }];
     function* gen(): Generator<EffectStep, void, StepResult> {
       yield { op: 'delete', uid: s.players[0].stacks[0][1].uid };
     }
@@ -1053,6 +1059,8 @@ describe('shift op (float state machine)', () => {
       makeCard('test-reveal', 0, 'field', true, 0, 0), // 露出 → 中指令 draw 1
       makeCard('fire-1', 0, 'field', true, 0, 1),      // 被偏转
     ];
+    // 效果源卡 'src'（放独立线，不被偏转影响）
+    s.players[0].stacks[1] = [{ uid: 'src', defId: 'test-reveal', owner: 0, faceUp: true, zone: 'field', line: 1, pos: 0 }];
     // 露出卡中指令 draw 需要牌库有牌
     s.players[0].deck = [makeCard('test-reveal', 0, 'deck'), makeCard('test-reveal', 0, 'deck')];
     const shifted = s.players[0].stacks[0][1];
@@ -1075,6 +1083,8 @@ describe('shift op (float state machine)', () => {
       makeCard('test-reveal', 0, 'field', true, 0, 0),
       makeCard('fire-1', 0, 'field', true, 0, 1),
     ];
+    // 效果源卡 'src'
+    s.players[0].stacks[1] = [{ uid: 'src', defId: 'test-reveal', owner: 0, faceUp: true, zone: 'field', line: 1, pos: 0 }];
     const covered = s.players[0].stacks[0][0];
     function* gen1(): Generator<EffectStep, void, StepResult> {
       yield { op: 'shift', uid: covered.uid, targetLine: 1 }; // 被覆盖卡不可偏转
