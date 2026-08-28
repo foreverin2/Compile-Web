@@ -2,6 +2,7 @@ import './ui/styles.css';
 import { createGame, performDraftPick } from './core/state/create';
 import { executeAction } from './core/game';
 import { getCompilableLines } from './core/rules/compile';
+import { collectTriggers } from './core/effects/triggers';
 import { renderApp, type UiCallbacks } from './ui/render';
 import type { PlayerId } from './core/models/types';
 
@@ -42,12 +43,17 @@ const cb: UiCallbacks = {
       const handBefore = state.players[player].hand.length;
       executeAction(state, player, a.kind);
       drawAnimCount = state.players[player].hand.length - handBefore;
+    } else if (a.kind === 'effect-choice') {
+      // 应答挂起选择：chooser 可能是对手（规则"被作用卡持有者决定执行"）
+      const top = state.pendingEffects[state.pendingEffects.length - 1];
+      const chooser = top?.player ?? state.turnPlayer;
+      executeAction(state, chooser, 'effect-choice', { promptId: a.promptId!, choice: a.choice! });
     } else if (a.kind === 'advance') {
       executeAction(state, player, a.kind);
     } else if (a.kind === 'resolve-trigger') {
       executeAction(state, player, 'resolve-trigger', { cardUid: a.cardUid! });
     }
-    // effect-choice：getLegalActions 不产生（选择由 UI 直接应答），无需分发
+    // effect-choice：getLegalActions 不产生，由 UI 选择栏应答后经 onAction 分发（chooser 可能是对手）
     if (drawAnimCount > 0) {
       drawAnimBusy = true;
       playDrawAnimation(player, drawAnimCount, () => {
@@ -107,10 +113,17 @@ function playDrawAnimation(player: PlayerId, count: number, done: () => void): v
  * 非 action 步骤自动推进：
  * - draft / gameover → 停止（不自动推进）
  * - action → 停止（轮到玩家行动）
+ * - 有挂起选择 / 落牌·偏转进行中 → 暂停（等对应玩家应答 / 操作完成）
+ * - start/end 有待结算触发 → 暂停（显示触发按钮等玩家点击）
  * - check-compile：有可编译线 → 暂停（编译需玩家点击编译按钮后再执行，不自动编译）
  * - 其余步骤（start/check-control/check-cache/end）→ 自动 advance
  */
 function runAutoAdvance(): void {
+  if (state.pendingEffects.length > 0) return; // 有挂起选择：等对应玩家应答
+  if (state.pendingPlay !== null || state.pendingShift !== null) return; // 落牌/偏转进行中
+  if (state.step === 'end' || state.step === 'start') {
+    if (collectTriggers(state, state.step).length > 0) return; // 有待结算触发：出按钮
+  }
   if (state.phase === 'draft') return;
   if (state.phase === 'gameover' || state.winner !== null) return;
   if (state.step === 'action') return;
