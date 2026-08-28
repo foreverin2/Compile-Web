@@ -356,6 +356,11 @@ function base(): GameState {
   s.players[0].hand.push({
     uid: 'h1', defId: 'fire-1', owner: 0, faceUp: true, zone: 'hand', line: null, pos: null,
   });
+  // draw 操作需要牌库有牌（否则抽 0 / 洗回弃牌堆），种子 2 张
+  s.players[0].deck = [
+    { uid: 'd1', defId: 'fire-1', owner: 0, faceUp: true, zone: 'deck', line: null, pos: null },
+    { uid: 'd2', defId: 'fire-1', owner: 0, faceUp: true, zone: 'deck', line: null, pos: null },
+  ];
   return s;
 }
 
@@ -432,6 +437,7 @@ describe('effect stack runner', () => {
     card.line = 0;
     card.pos = null;
     s.pendingPlay = card;
+    s.players[0].stacks[0] = []; // 落地目标线为空（base 的 'src' 只是 sourceValid 用）
     runStack(s);
     expect(s.pendingPlay).toBeNull();
     expect(card.zone).toBe('field');
@@ -550,6 +556,7 @@ export function emitCardEvent(
   extra?: Record<string, unknown>,
 ): void {
   gameBus.emit({
+    state: s,
     type,
     payload: {
       uid: card.uid, defId: card.defId, protocol: card.defId.split('-')[0],
@@ -657,7 +664,8 @@ export function runStack(s: GameState): void {
       const r = pe.gen.next(result);
       if (r.done) { s.pendingEffects.pop(); continue; }
       const step = r.value;
-      if (step.kind === 'select') {
+      // 'kind' in step 窄化（Op 无 kind 属性，strict 下 step.kind 不合法）
+      if ('kind' in step) {
         pe.prompt = step;
         pe.lastAnswer = null;
         return; // 挂起：等待玩家选择
@@ -687,7 +695,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
     }
     case 'draw': {
       drawCards(s, pe.player, op.count);
-      gameBus.emit({ type: 'card:drawn', payload: { player: pe.player, count: op.count } });
+      gameBus.emit({ state: s, type: 'card:drawn', payload: { player: pe.player, count: op.count } });
       break;
     }
     default:
