@@ -130,14 +130,24 @@ function renderPlayerInfo(s: GameState, player: PlayerId, opts: { isSelf: boolea
   return info;
 }
 
-/** 手牌条：self（回合玩家）正面可点选，对手背面展示 */
+/**
+ * 手牌条：self（回合玩家）正面可点选，对手背面展示。
+ * R6 扇形手牌：单行不换行（.hand 负 margin 重叠）；最多渲染 10 张，超出部分以
+ * 末尾 +N 徽标提示（隐藏的牌仍在状态中，随手牌减少自动露出）。
+ * 悬停第 i 张卡时：前面的卡向左、后面的卡向右各推开 12px/张，悬停卡上浮
+ * translateY(-24px) scale(1.15) 并置顶（z-index 50）；鼠标移出手牌区时全部复位。
+ * 监听器在每次 renderApp 重建 DOM 后重新挂接，点击选择逻辑保持不变。
+ */
 function renderHand(
   s: GameState,
   player: PlayerId,
   opts: { isSelf: boolean; selected: string | null; onSelect: (uid: string) => void }
 ): HTMLElement {
   const hand = el('div', 'hand' + (opts.isSelf ? ' self' : ''));
-  for (const card of s.players[player].hand) {
+  const cards = s.players[player].hand;
+  const shown = cards.slice(0, 10);
+  const nodes: HTMLElement[] = [];
+  for (const card of shown) {
     const node = renderCardFace({ defId: card.defId, faceUp: opts.isSelf });
     node.dataset.uid = card.uid;
     if (opts.isSelf && opts.selected === card.uid) node.classList.add('selected');
@@ -148,19 +158,76 @@ function renderHand(
       });
     }
     hand.appendChild(node);
+    nodes.push(node);
   }
+  if (cards.length > 10) {
+    hand.appendChild(el('div', 'hand-more-badge', `+${cards.length - 10}`));
+  }
+  const total = nodes.length;
+  for (let i = 0; i < total; i++) {
+    const node = nodes[i];
+    node.addEventListener('mouseenter', () => {
+      for (let j = 0; j < total; j++) {
+        const n = nodes[j];
+        if (j === i) {
+          // 悬停卡：仅加 .popped（CSS transform 上浮放大 + 置顶），并清掉残留的行内 transform
+          n.classList.add('popped');
+          n.style.transform = '';
+        } else {
+          n.classList.remove('popped');
+          n.style.transform = `translateX(${(j - i) * 12}px)`;
+        }
+      }
+    });
+  }
+  // 复位挂在整个手牌容器上：鼠标移出手牌区才全部复位。
+  // 不能挂在单卡 mouseleave 上——卡片上浮后可能“滑出”鼠标下方触发抖动循环。
+  hand.addEventListener('mouseleave', () => {
+    for (const n of nodes) {
+      n.classList.remove('popped');
+      n.style.transform = '';
+    }
+  });
   return hand;
 }
 
-/** 控制权卡牌可视化：中立（灰化）或由玩家 1 / 玩家 2 持有（高亮 + 标签） */
+/**
+ * 控制权滑动指示条（R6）：双方三线总值对比决定控制卡在轨道上的位置——
+ * P1 占优靠左、P2 占优靠右（clamp 12%..88% 保证卡不滑出轨道），双方均为 0 时居中。
+ * 控制卡归属（s.control）只影响高亮/灰化：中立灰化，持有方加光晕。
+ * 由于渲染模型每次重建 DOM，直接设置 left 不会触发 transition；因此先写入上一帧
+ * 位置、下一帧再写入目标位置，让 left 0.5s 过渡真正产生滑动动画。
+ */
+let controlSliderPos = 50;
+
 function renderControlModule(s: GameState): HTMLElement {
+  const total0 = getLineValue(s, 0, 0) + getLineValue(s, 0, 1) + getLineValue(s, 0, 2);
+  const total1 = getLineValue(s, 1, 0) + getLineValue(s, 1, 1) + getLineValue(s, 1, 2);
+  let target = 50;
+  if (total0 + total1 > 0) {
+    const raw = (total0 / (total0 + total1)) * 100;
+    target = Math.min(88, Math.max(12, raw));
+  }
   const neutral = s.control === -1;
   const ctrl = el('div', 'control-module' + (neutral ? ' neutral' : ` held-${s.control}`));
+  const track = el('div', 'control-track');
+  track.appendChild(el('span', 'control-track-label left', '玩家 1'));
+  track.appendChild(el('span', 'control-track-label right', '玩家 2'));
+  track.appendChild(el('span', 'control-center-tick'));
   const img = document.createElement('img');
-  img.className = 'control-img';
+  img.className = 'control-slider-img';
   img.src = '/assets/control-front.png';
   img.alt = 'control module';
-  ctrl.appendChild(img);
+  // 先落位到上一帧位置（无动画），再在下一帧过渡到目标位置
+  img.style.left = `${controlSliderPos}%`;
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      img.style.left = `${target}%`;
+    });
+  });
+  controlSliderPos = target;
+  track.appendChild(img);
+  ctrl.appendChild(track);
   ctrl.appendChild(el('div', 'control-label', `控制权: ${neutral ? '中立' : `玩家 ${s.control + 1}`}`));
   return ctrl;
 }
@@ -218,10 +285,6 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
     selectedFaceUp = true;
   }
   const wrap = el('div', 'board');
-  if (s.phase === 'turn' && s.step === 'start') {
-    const handoff = el('div', 'handoff-banner', `▶ 请将设备交给 玩家 ${s.turnPlayer + 1}，然后点击「下一步」开始`);
-    wrap.appendChild(handoff);
-  }
   if (s.phase === 'gameover' && s.winner !== null) {
     wrap.appendChild(el('div', 'winner-banner', `玩家 ${s.winner + 1} 获胜！`));
   }

@@ -18,8 +18,8 @@ body {
 /* ===== 行式布局：顶部条带（信息+控制）→ 3 条线（每线一行）→ 底部条带（手牌+步骤） ===== */
 .board-grid { display: flex; flex-direction: column; gap: 10px; }
 
-/* 顶部条带：P1 信息 | 控制组件 | P2 信息 */
-.player-strip { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: center; }
+/* 顶部条带：P1 信息 | 控制滑动条 | P2 信息 */
+.player-strip { display: grid; grid-template-columns: 1fr minmax(260px, 1.2fr) 1fr; gap: 12px; align-items: center; }
 .player-info { border: 1px solid #444; border-radius: 8px; padding: 8px 10px; background: #22223a; display: flex; flex-direction: column; gap: 4px; }
 .player-info.active { border-color: #e0a030; box-shadow: 0 0 10px rgba(224, 160, 48, 0.25); }
 .player-info.self { background: #242440; }
@@ -27,7 +27,7 @@ body {
 .meta-row { display: flex; gap: 14px; font-size: 13px; color: #aaa; flex-wrap: wrap; }
 
 /* 每条线一个水平行：P1 槽 | P1 协议 | P2 协议 | P2 槽 —— 4 格同一水平带（平行对齐） */
-.lane-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto minmax(0, 1fr); gap: 10px; align-items: stretch; }
+.lane-row { display: grid; grid-template-columns: minmax(240px, 1fr) auto auto minmax(240px, 1fr); gap: 10px; align-items: stretch; }
 
 /* ===== 堆叠槽（横向条带：每条线一行内的左右两个槽） ===== */
 .stack-slot {
@@ -42,9 +42,9 @@ body {
   justify-content: center;
   gap: 4px;
 }
-/* 协议侧内边距：旋转后视觉卡盒比布局盒左右各宽约 17.6px，留出补偿避免视觉压到协议 */
-.stack-slot.p1 { padding-right: 20px; }
-.stack-slot.p2 { padding-left: 20px; }
+/* 协议侧内边距：旋转后视觉卡盒比布局盒左右各宽约 21.1px，留出补偿避免视觉压到协议 */
+.stack-slot.p1 { padding-right: 22px; }
+.stack-slot.p2 { padding-left: 22px; }
 .stack-slot.interactable { cursor: pointer; }
 .stack-slot.self { border-color: rgba(224, 160, 48, 0.55); }
 .stack-slot.interactable:hover { border-color: #e0a030; background: rgba(224, 160, 48, 0.06); }
@@ -60,7 +60,7 @@ body {
 
 /* ===== 卡牌正面（官方 PNG 卡面） ===== */
 .card {
-  width: 96px;
+  width: 110px;
   border: 1px solid #888;
   border-radius: 6px;
   padding: 3px;
@@ -82,18 +82,18 @@ body {
 }
 
 /* ===== 卡牌背面（官方图 + 印刷值 2 徽章） ===== */
-.card-back { position: relative; width: 100%; height: 123px; border-radius: 4px; overflow: hidden; }
+.card-back { position: relative; width: 100%; height: 148px; border-radius: 4px; overflow: hidden; }
 .cardback-img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .card-back-value { position: absolute; right: 4px; bottom: 4px; background: #111; color: #e0a030; border: 1px solid #e0a030; border-radius: 50%; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: bold; }
 
 /* ===== 场上堆叠：完整卡面 + 横向 46.2% 重叠（R3） ===== */
 /* 每张场上卡牌以完整卡面渲染（正/背面），堆叠沿线路方向横向重叠：
-   卡盒布局宽 --card-w（transform 不影响布局），旋转 90° 后视觉宽 = --card-h = 125px。
+   卡盒布局宽 --card-w（transform 不影响布局），旋转 90° 后视觉宽 = --card-h = 150px。
    后一张牌（更靠外侧）通过负 margin-left 盖住前一张牌的外侧，露出靠协议一侧
-   46.2% × 125px = 57.75px 的横向条带。margin = 露出 − 布局宽 ≈ −32.1px
-   （注意：旋转以盒中心为原点，视觉盒左右各比布局盒宽出约 17.6px，因此不能直接用
-   −53.8% × 125px = −67.25px，那只会露出约 18%）。zIndex 仍由 pos 决定，最新盖住旧牌。 */
-.stack { --card-h: 125px; --card-w: calc((var(--card-h) - 2px) * 0.71429 + 2px); }
+   46.2% × 150px = 69.3px 的横向条带。margin = 露出 − 布局宽 ≈ −38.4px
+   （注意：旋转以盒中心为原点，视觉盒左右各比布局盒宽出约 21.1px，因此不能直接用
+   −53.8% × 150px = −80.7px，那只会露出约 18%）。zIndex 仍由 pos 决定，最新盖住旧牌。 */
+.stack { --card-h: 150px; --card-w: calc((var(--card-h) - 2px) * 0.71429 + 2px); }
 .stack .card {
   width: var(--card-w); /* 卡面 750×1050 → 宽/高 = 5/7；固定布局宽使重叠计算精确 */
   padding: 0;
@@ -109,7 +109,7 @@ body {
   width: 100%;
   height: calc(var(--card-h) - 2px);
 }
-/* 露出 = 0.462 × 旋转后卡宽(--card-h)；margin = 露出 − 布局宽(--card-w) ≈ −32.1px */
+/* 露出 = 0.462 × 旋转后卡宽(--card-h)；margin = 露出 − 布局宽(--card-w) ≈ −38.4px */
 .stack .card + .card {
   margin-left: calc(0.462 * var(--card-h) - var(--card-w));
 }
@@ -149,8 +149,8 @@ body {
   align-items: center;
   justify-content: center;
 }
-/* 点2/点3：协议放大（130px → 180px 宽；竖版 750×1050 → 高约 252px） */
-.protocol-img { display: block; width: 180px; max-width: 100%; height: auto; border-radius: 4px; }
+/* 点2/点3：协议放大（130px → 200px 宽；竖版 750×1050 → 高约 280px） */
+.protocol-img { display: block; width: 200px; max-width: 100%; height: auto; border-radius: 4px; }
 .protocol.compiled { border-color: #4caf50; box-shadow: 0 0 8px rgba(76, 175, 80, 0.4); }
 .protocol-check {
   position: absolute; top: 4px; right: 6px;
@@ -161,31 +161,103 @@ body {
 .protocol-name { font-weight: bold; font-size: 12px; }
 .protocol-loading { font-size: 10px; color: #aaa; }
 
-/* ===== 控制组件（控制权卡牌 R4） ===== */
+/* ===== 控制组件（R6 滑动指示条：控制卡在轨道上滑动表示哪方占优） ===== */
 .control-module {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 3px;
+  align-items: stretch;
+  gap: 4px;
   margin: 2px 0 6px;
-  padding: 4px;
+  padding: 8px;
   border: 1px dashed rgba(255, 255, 255, 0.18);
   border-radius: 8px;
   background: rgba(0, 0, 0, 0.25);
 }
-.control-img { width: 50px; height: auto; display: block; }
+.control-track {
+  position: relative;
+  height: 60px;
+  border: 1px solid #444;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.35);
+}
+.control-track-label {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 11px;
+  color: #999;
+  pointer-events: none;
+  user-select: none;
+}
+.control-track-label.left { left: 8px; }
+.control-track-label.right { right: 8px; }
+/* 中立（50%）位置的中心刻度标记 */
+.control-center-tick {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  transform: translateX(-50%);
+  background: rgba(255, 255, 255, 0.15);
+  pointer-events: none;
+}
+.control-module.neutral .control-center-tick { background: rgba(255, 255, 255, 0.45); }
+/* 滑动控制卡：left 由 JS 按双方总值占比写入，translateX(-50%) 居中于该位置 */
+.control-slider-img {
+  position: absolute;
+  top: 50%;
+  height: 44px;
+  width: auto;
+  transform: translate(-50%, -50%);
+  transition: left 0.5s ease;
+  pointer-events: none;
+  user-select: none;
+}
 /* 中立：灰化淡化 */
-.control-module.neutral .control-img { filter: grayscale(0.85) opacity(0.55); }
+.control-module.neutral .control-slider-img { filter: grayscale(0.85) opacity(0.55); }
 /* 持有方高亮 */
-.control-module.held-0 .control-img { box-shadow: 0 0 12px rgba(224, 160, 48, 0.75); border-radius: 4px; }
-.control-module.held-1 .control-img { box-shadow: 0 0 12px rgba(96, 170, 255, 0.75); border-radius: 4px; }
+.control-module.held-0 .control-slider-img { box-shadow: 0 0 12px rgba(224, 160, 48, 0.75); border-radius: 4px; }
+.control-module.held-1 .control-slider-img { box-shadow: 0 0 12px rgba(96, 170, 255, 0.75); border-radius: 4px; }
 .control-label { font-size: 11px; color: #ccc; text-align: center; }
 .control-module.held-0 .control-label { color: #f0b040; }
 .control-module.held-1 .control-label { color: #8ab8ff; }
 
 /* ===== 手牌（底部条带：P1 手牌 | 步骤指示 | P2 手牌） ===== */
 .hand-strip { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: start; }
-.hand { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; min-height: 70px; }
+/* 单行扇形手牌：不换行，后一张卡负 margin 压住前一张（每张露出左缘 ~82px 宽） */
+.hand {
+  display: flex;
+  flex-wrap: nowrap;
+  overflow-x: clip; /* 横向裁掉超出列宽的部分；clip 不产生滚动容器，纵向溢出仍可见（悬停上浮不被裁） */
+  overflow-y: visible;
+  position: relative; /* +N 徽标按右缘定位 */
+  margin-top: 6px;
+  min-height: 70px;
+}
+/* 扇形重叠：首卡 margin 0，其后每张向左叠 28px（左缘露出的宽度 = 110 − 28 = 82px） */
+.hand .card + .card { margin-left: -28px; }
+/* 悬停上浮的平滑过渡（transform 变化：推开相邻卡 / 上浮放大） */
+.hand .card { transition: transform 0.15s ease, border-color 0.15s ease; }
+/* 悬停的卡：上浮 + 放大 + 置顶（其余卡通过 JS 写入 translateX 往两侧推开） */
+.hand .card.popped {
+  transform: translateY(-24px) scale(1.15);
+  z-index: 50;
+}
+/* 超出 10 张时右缘的 +N 徽标（纯视觉提示，剩余卡仍在状态中，未渲染） */
+.hand-more-badge {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: #e0a030;
+  color: #111;
+  font-size: 12px;
+  font-weight: bold;
+  padding: 3px 9px;
+  border-radius: 11px;
+  pointer-events: none; /* 不拦截下方卡片的点击/悬停 */
+}
 /* 仅当前玩家（可交互）的手牌显示可点光标；对手隐藏手牌不暗示可点击 */
 .hand.self .card { cursor: pointer; }
 .hand.self .card:hover { border-color: #e0a030; }
@@ -198,7 +270,6 @@ body {
 .hint { font-size: 12px; color: #aaa; }
 .log { border-top: 1px solid #444; margin-top: 8px; padding-top: 6px; font-size: 12px; color: #999; max-height: 120px; overflow-y: auto; }
 .winner-banner { font-size: 24px; font-weight: bold; color: #4caf50; text-align: center; padding: 12px; }
-.handoff-banner { background: #e0a030; color: #111; font-weight: bold; text-align: center; padding: 8px; border-radius: 6px; margin-bottom: 8px; }
 
 /* ===== 草案 ===== */
 .draft-screen { text-align: center; }
