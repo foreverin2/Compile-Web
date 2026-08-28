@@ -595,25 +595,39 @@ body {
 .draft-pick-card {
   position: relative; border: 1px solid #555; border-radius: 8px; padding: 4px;
   background: #1e1e36; cursor: zoom-in;
-  /* 协议图逆时针旋转 90° 后为横置：固定容器尺寸容纳横图 */
+  /* 协议图逆时针旋转 90° 后为横置：容器 width:100% 撑满卡片 */
   display: flex; flex-direction: column; align-items: center; gap: 4px;
   transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
 }
 .draft-pick-card:hover { transform: translateY(-4px) scale(1.03); border-color: #e0a030; box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45); }
 .draft-pick-card.new { animation: draft-pick-in 0.3s ease; }
 @keyframes draft-pick-in { from { opacity: 0; transform: translateY(-10px) scale(0.92); } to { opacity: 1; transform: none; } }
-/* 协议图容器：固定高（旋转后视觉宽 = 原高 1.4 倍，此处高约 150px → 视觉宽约 210px） */
+/* 协议图容器：width 100% 撑满卡片，aspect-ratio 1.4/1 为旋转后（横置）的视觉比例；
+   内部 flex 居中 + img rotate(-90deg)，旋转后视觉尺寸恰好覆盖容器 */
 .draft-pick-card .pick-img-wrap {
-  width: 150px; height: 210px;
+  width: 100%;
+  aspect-ratio: 1.4 / 1;
   display: flex; align-items: center; justify-content: center;
   overflow: hidden;
+  background: #17172c;
+  border-radius: 6px;
 }
 .draft-pick-card img {
-  width: 210px; height: 150px; object-fit: contain;
+  /* 原图 750×1050（竖 1:1.4）：容器宽 W、高 W/1.4；
+     img 宽 = W/1.4、高 = W（= 容器高 × 1.4），rotate(-90) 后视觉 W × W/1.4 恰好覆盖容器 */
+  width: calc(100% / 1.4);
+  height: calc(100% * 1.4);
+  flex-shrink: 0;
+  object-fit: cover;
   transform: rotate(-90deg); /* 逆时针旋转 90° 展示 */
   border-radius: 4px; pointer-events: none; user-select: none; -webkit-user-drag: none;
 }
-.draft-pick-name { font-size: 11px; color: #bbc; }
+.draft-pick-name { font-size: 12px; color: #bbc; }
+.draft-pick-empty {
+  border: 1px dashed #3a3a52; border-radius: 8px; min-height: 86px;
+  display: flex; align-items: center; justify-content: center;
+  color: #555; font-size: 12px; letter-spacing: 0.05em;
+}
 .draft-pick-empty {
   border: 1px dashed #3a3a52; border-radius: 8px; min-height: 86px;
   display: flex; align-items: center; justify-content: center;
@@ -629,14 +643,23 @@ body {
   background: #23233d; cursor: pointer;
   transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
 }
-/* 协议图容器：固定尺寸容纳旋转后的横图（旋转后视觉宽 = 原高 1.4 倍） */
+/* 协议图容器：width 100% 撑满卡片，aspect-ratio 1.4/1 为旋转后（横置）的视觉比例；
+   内部 flex 居中 + img rotate(-90deg)，旋转后视觉尺寸恰好覆盖容器（细节清晰、几乎占满卡片） */
 .draft-card-img-wrap {
-  width: 120px; height: 168px;
+  width: 100%;
+  aspect-ratio: 1.4 / 1;
   display: flex; align-items: center; justify-content: center;
   overflow: hidden;
+  background: #17172c;
+  border-radius: 8px;
 }
 .draft-card-img {
-  width: 168px; height: 120px; object-fit: contain;
+  /* 原图 750×1050（竖 1:1.4）：容器宽 W、高 W/1.4；
+     img 宽 = W/1.4、高 = W（= 容器高 × 1.4），rotate(-90) 后视觉 W × W/1.4 恰好覆盖容器 */
+  width: calc(100% / 1.4);
+  height: calc(100% * 1.4);
+  flex-shrink: 0;
+  object-fit: cover;
   transform: rotate(-90deg); /* 逆时针旋转 90° 展示 */
   border-radius: 6px; pointer-events: none; user-select: none; -webkit-user-drag: none;
 }
