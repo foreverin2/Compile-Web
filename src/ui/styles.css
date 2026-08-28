@@ -74,81 +74,80 @@ body {
    不拦截下方卡牌点击/悬停与槽位打牌。 */
 .battery {
   position: absolute;
+  /* 竖摆于放置区外部，贴尾部；P1 槽靠左 → 电池在右缘外，P2 槽靠右 → 电池在左缘外 */
   top: 50%;
   transform: translateY(-50%);
   display: flex;
+  flex-direction: column; /* 纵向：正极在上、10 格竖排、值在下方 */
   align-items: center;
-  gap: 2px;
-  height: 40px;
+  gap: 3px;
+  height: 150px;
   /* z-index 59：高于场上堆叠卡（zIndex=pos，最多几十）使电池始终可见；
      低于 hover 弹出的卡（60）不遮挡查看 */
   z-index: 59;
   pointer-events: none;
   user-select: none;
 }
-.stack-slot.p1 .battery { left: 10px; }
-.stack-slot.p2 .battery { right: 10px; }
+.stack-slot.p1 .battery { right: 10px; }
+.stack-slot.p2 .battery { left: 10px; }
 .battery-shell {
   position: relative;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  width: 104px;
-  height: 32px;
-  border: 2px solid #00ffcc;
-  border-radius: 6px;
-  background: rgba(0, 0, 0, 0.6);
-  box-shadow: 0 0 8px rgba(0, 255, 204, 0.35), inset 0 0 6px rgba(0, 255, 204, 0.12);
+  width: 64px;
+  height: 118px;
+  border: 3px solid #00ffcc;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.7);
+  box-shadow: 0 0 12px rgba(0, 255, 204, 0.4), inset 0 0 8px rgba(0, 255, 204, 0.12);
   transition: border-radius 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
 }
-/* 正极凸头 */
+/* 正极凸头（竖摆 → 在顶部） */
 .battery-cap {
-  width: 9px;
-  height: 14px;
-  border: 2px solid #00ffcc;
-  border-left: none;
-  border-radius: 0 3px 3px 0;
-  background: rgba(0, 0, 0, 0.6);
-  box-shadow: 0 0 6px rgba(0, 255, 204, 0.3);
+  width: 20px;
+  height: 9px;
+  border: 3px solid #00ffcc;
+  border-bottom: none;
+  border-radius: 3px 3px 0 0;
+  background: rgba(0, 0, 0, 0.7);
+  box-shadow: 0 0 8px rgba(0, 255, 204, 0.3);
 }
-.battery-cells { display: flex; gap: 3px; align-items: center; }
+.battery-cells { display: flex; flex-direction: column; gap: 4px; align-items: center; }
 .battery-cell {
-  width: 7px;
-  height: 16px;
+  width: 34px;
+  height: 7px;
   border-radius: 1px;
   background: rgba(255, 255, 255, 0.07);
 }
 .battery-cell.filled {
-  background: linear-gradient(180deg, #00ffcc, #007a66);
-  box-shadow: 0 0 4px rgba(0, 255, 204, 0.55);
+  background: linear-gradient(90deg, #00ffcc, #007a66);
+  box-shadow: 0 0 5px rgba(0, 255, 204, 0.55);
 }
-/* 点值小标签：外壳下方居中 */
+/* 点值标签：外壳下方居中 */
 .battery-value {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  bottom: -14px;
-  font-size: 10px;
+  font-size: 13px;
   font-weight: bold;
   line-height: 1;
   color: #00ffcc;
   text-shadow: 0 0 4px rgba(0, 255, 204, 0.6);
 }
-/* bulge 4-6：上下边微微鼓出 + 橙黄微光 */
+/* bulge 4-6：上下边微微鼓出 + 橙黄微光（竖摆 → 左右边鼓出） */
 .battery-bulge .battery-shell {
   border-color: #ffb000;
-  border-radius: 12px;
-  box-shadow: 0 0 12px rgba(255, 176, 0, 0.5), inset 0 0 8px rgba(255, 176, 0, 0.15);
+  border-radius: 14px;
+  box-shadow: 0 0 16px rgba(255, 176, 0, 0.55), inset 0 0 10px rgba(255, 176, 0, 0.15);
 }
-.battery-bulge .battery-cap { border-color: #ffb000; box-shadow: 0 0 6px rgba(255, 176, 0, 0.4); }
+.battery-bulge .battery-cap { border-color: #ffb000; box-shadow: 0 0 8px rgba(255, 176, 0, 0.4); }
 .battery-bulge .battery-value { color: #ffb000; text-shadow: 0 0 4px rgba(255, 176, 0, 0.6); }
 /* full 7-9：明显鼓胀接近圆润 + 橙色强光 + 应力裂纹高光 */
 .battery-full .battery-shell {
   border-color: #ff6b00;
-  border-radius: 16px;
-  box-shadow: 0 0 18px rgba(255, 107, 0, 0.75), inset 0 0 10px rgba(255, 107, 0, 0.25);
+  border-radius: 20px;
+  box-shadow: 0 0 22px rgba(255, 107, 0, 0.8), inset 0 0 12px rgba(255, 107, 0, 0.25);
 }
-.battery-full .battery-cap { border-color: #ff6b00; box-shadow: 0 0 8px rgba(255, 107, 0, 0.55); }
+.battery-full .battery-cap { border-color: #ff6b00; box-shadow: 0 0 10px rgba(255, 107, 0, 0.55); }
 .battery-full .battery-value { color: #ff6b00; text-shadow: 0 0 4px rgba(255, 107, 0, 0.7); }
 .battery-full .battery-shell::before,
 .battery-full .battery-shell::after {
@@ -172,11 +171,11 @@ body {
 /* burst ≥10：爆裂（径向爆光 + 斜向裂纹 + 红橙脉冲动画），10 格仍全部点亮 */
 .battery-burst .battery-shell {
   border-color: #ff3d00;
-  border-radius: 18px;
+  border-radius: 24px;
   background:
     radial-gradient(circle at 50% 50%, rgba(255, 208, 0, 0.4), rgba(255, 61, 0, 0.14) 55%, transparent 78%),
-    rgba(24, 0, 0, 0.65);
-  box-shadow: 0 0 20px rgba(255, 61, 0, 0.85), 0 0 42px rgba(255, 208, 0, 0.4), inset 0 0 12px rgba(255, 120, 0, 0.3);
+    rgba(24, 0, 0, 0.7);
+  box-shadow: 0 0 24px rgba(255, 61, 0, 0.9), 0 0 50px rgba(255, 208, 0, 0.4), inset 0 0 14px rgba(255, 120, 0, 0.3);
   animation: battery-burst-pulse 1.1s ease-in-out infinite;
 }
 .battery-burst .battery-cap { border-color: #ff3d00; box-shadow: 0 0 10px rgba(255, 61, 0, 0.8); }
@@ -456,29 +455,29 @@ body {
   top: 0;
   bottom: 0;
   min-width: 14px;
-  background: rgba(10, 14, 26, 0.88);
-  border: 1px solid rgba(0, 255, 204, 0.4);
+  /* 完全不透明：完全遮住下方手牌 */
+  background: #0a0e1a;
+  border: 1px solid rgba(0, 255, 204, 0.5);
   border-radius: 6px;
-  backdrop-filter: blur(4px);
-  box-shadow: 0 0 10px rgba(0, 255, 204, 0.15);
+  box-shadow: 0 0 12px rgba(0, 255, 204, 0.2);
   z-index: 70;
   user-select: none;
   transition: width 0.15s ease;
 }
-.hand-shield.p1 { left: 0; }
-.hand-shield.p2 { right: 0; }
-/* 拖拽手柄：位于挡板内侧（移动端）边缘；拖拽期间关闭 width 过渡避免滞后 */
+.hand-shield.p1 { left: -28px; } /* 起点更靠左：覆盖手牌区左侧 padding，从更外开始向右拉 */
+.hand-shield.p2 { right: -28px; } /* 对称：覆盖右侧 padding */
+/* 拖拽手柄：位于挡板内侧（移动端）边缘；加宽至 36px 便于抓取；拖拽期间关闭 width 过渡避免滞后 */
 .hand-shield .shield-handle {
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 16px;
+  width: 36px;
   cursor: ew-resize;
-  background: repeating-linear-gradient(90deg, rgba(0, 255, 204, 0.45) 0 2px, transparent 2px 6px);
+  background: repeating-linear-gradient(90deg, rgba(0, 255, 204, 0.5) 0 3px, transparent 3px 9px);
   opacity: 0.9;
 }
-.hand-shield.p1 .shield-handle { right: 0; border-left: 1px solid rgba(0, 255, 204, 0.55); }
-.hand-shield.p2 .shield-handle { left: 0; border-right: 1px solid rgba(0, 255, 204, 0.55); }
+.hand-shield.p1 .shield-handle { right: 0; border-left: 1px solid rgba(0, 255, 204, 0.6); }
+.hand-shield.p2 .shield-handle { left: 0; border-right: 1px solid rgba(0, 255, 204, 0.6); }
 .hand-shield.dragging { transition: none; }
 .hand-shield.locked .shield-handle { cursor: default; opacity: 0.3; }
 /* 手牌数量徽标：挡板中央；收起（未遮住任何牌）时隐藏 */

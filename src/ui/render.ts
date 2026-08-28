@@ -118,7 +118,6 @@ function renderStackSlot(
   // 拖拽打牌：data 属性供拖拽期按 (player, line) 查询/高亮/命中合法落点
   slot.dataset.line = String(line);
   slot.dataset.player = String(player);
-  slot.appendChild(el('div', 'slot-label', `线${line + 1}`));
   const cards = s.players[player].stacks[line];
   const pile = el('div', 'stack' + (player === 0 ? ' grow-left' : ' grow-right'));
   // 放置顺序：pos 0（最旧）贴协议一侧，越新的牌越靠外侧。
@@ -150,11 +149,8 @@ function renderStackSlot(
     );
     pile.appendChild(node);
   }
-  if (cards.length === 0) {
-    pile.appendChild(el('div', 'stack-empty', '空'));
-  }
   slot.appendChild(pile);
-  slot.appendChild(el('div', 'line-value', `值 ${getLineValue(s, player, line)}`));
+  // 电池竖摆于放置区外部（贴尾部），实时显示数值；不再显示 线N/空/值N 文本
   slot.appendChild(renderBattery(s, player, line));
   if (interactable) {
     slot.addEventListener('click', () => onPlay(line));
@@ -332,7 +328,8 @@ function bindShieldDrag(shield: HTMLElement, player: PlayerId, hand: HTMLElement
     e.preventDefault();
     e.stopPropagation(); // 不与卡牌单击/拖拽相互干扰
     const dir = player === 0 ? 1 : -1; // P1 向右拖加宽；P2 向左拖加宽
-    const maxW = Math.max(0, hand.clientWidth / 2); // 可延伸至手牌区中线
+    // 最大宽度 = 整个手牌区宽度（能覆盖全部手牌至协议中线）
+    const maxW = Math.max(0, hand.clientWidth);
     const startX = e.clientX;
     const startWidth = Math.min(Math.max(shieldWidth[player], 0), maxW);
     const apply = (w: number) => {
