@@ -23,3 +23,6 @@ export function createBus(): EventBus {
     },
   };
 }
+
+/** 全局游戏事件总线单例：引擎发语义事件（card:discarded 等），UI 特效层订阅 */
+export const gameBus = createBus();
