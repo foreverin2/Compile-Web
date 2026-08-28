@@ -6,6 +6,7 @@ import { collectTriggers } from './core/effects/triggers';
 import { renderApp, type UiCallbacks } from './ui/render';
 import { initEffects } from './ui/effects';
 import { initDiag } from './ui/diag';
+import { gameBus } from './core/events/bus';
 import type { PlayerId } from './core/models/types';
 
 const root = document.getElementById('app')!;
@@ -20,6 +21,8 @@ let drawAnimBusy = false;
 const GHOST_W = 130;
 const GHOST_H = 178.8;
 const HAND_CARD_SPACING = 102; // 卡宽 130 − 重叠 28
+/** 效果触发的抽牌累计（card:drawn 事件 → 本次行动结算完成后统一播抽牌特效） */
+let pendingDraws: { player: PlayerId; count: number }[] = [];
 
 const cb: UiCallbacks = {
   onRendered() {
@@ -62,9 +65,18 @@ const cb: UiCallbacks = {
       executeAction(state, player, 'resolve-trigger', { cardUid: a.cardUid! });
     }
     // effect-choice：getLegalActions 不产生，由 UI 选择栏应答后经 onAction 分发（chooser 可能是对手）
+    // 效果触发的抽牌（card:drawn 事件，如 fire-0/fire-4）在本次行动结算期间累计，统一播新抽牌特效
+    const effectDraws = pendingDraws;
+    pendingDraws = [];
     if (drawAnimCount > 0) {
       drawAnimBusy = true;
       playDrawAnimation(player, drawAnimCount, () => {
+        drawAnimBusy = false;
+        renderApp(root, state, cb);
+      });
+    } else if (effectDraws.length > 0 && !drawAnimBusy) {
+      drawAnimBusy = true;
+      playDrawSequence(effectDraws, () => {
         drawAnimBusy = false;
         renderApp(root, state, cb);
       });
@@ -73,6 +85,29 @@ const cb: UiCallbacks = {
     }
   },
 };
+
+/**
+ * 效果触发的抽牌序列：按玩家合并计数后逐人播放抽牌飞入动画（同一玩家多次抽牌合并为一次，
+ * 幽灵卡依次落到手牌末尾），全部播完调用 done()。
+ */
+function playDrawSequence(draws: { player: PlayerId; count: number }[], done: () => void): void {
+  const merged: { player: PlayerId; count: number }[] = [];
+  for (const d of draws) {
+    const found = merged.find((m) => m.player === d.player);
+    if (found) found.count += d.count;
+    else merged.push({ ...d });
+  }
+  const first = merged[0];
+  if (!first) {
+    done();
+    return;
+  }
+  playDrawAnimation(first.player, first.count, () => {
+    const rest = merged.slice(1);
+    if (rest.length === 0) done();
+    else playDrawSequence(rest, done);
+  });
+}
 
 /**
  * 刷新手牌抽牌飞入动画：drawn 张卡背幽灵卡从手牌区外侧（P1 从左侧、P2 从右侧，
@@ -104,8 +139,10 @@ function playDrawAnimation(player: PlayerId, count: number, done: () => void): v
       // P1：新卡 1 左缘 = 末卡右缘 − 28（中心 = 右缘 + 37）；P2 反向镜像
       targetX = fromLeft ? lastRect.right + 37 + HAND_CARD_SPACING * i : lastRect.left - 37 - HAND_CARD_SPACING * i;
     } else {
-      // 空手牌：P1 落在左 padding 内、P2 落在右 padding 内
-      targetX = fromLeft ? rect.left + 28 + GHOST_W / 2 : rect.right - 28 - GHOST_W / 2;
+      // 空手牌：P1 落在左 padding 内、P2 落在右 padding 内，逐张按扇形步进向后延伸
+      targetX = fromLeft
+        ? rect.left + 28 + GHOST_W / 2 + HAND_CARD_SPACING * i
+        : rect.right - 28 - GHOST_W / 2 - HAND_CARD_SPACING * i;
     }
     const ghost = document.createElement('div');
     ghost.className = 'draw-ghost';
@@ -170,4 +207,10 @@ function scheduleAutoAdvance(): void {
 initEffects();
 // 诊断日志：全量记录 console + 捕获未捕获异常（出错自动提示导出）
 initDiag(() => state);
+// 效果触发的抽牌：累计 card:drawn 事件，行动结算后统一播新抽牌特效
+gameBus.subscribe((e) => {
+  if (e.type !== 'card:drawn') return;
+  const p = e.payload as { player: PlayerId; count: number };
+  pendingDraws.push({ player: p.player, count: p.count });
+});
 renderApp(root, state, cb);

@@ -366,15 +366,15 @@ body {
 .protocol.compiled { border-color: #4caf50; box-shadow: 0 0 8px rgba(76, 175, 80, 0.4); }
 
 /* ===== 已编译协议专属特效（每协议一个类，类随 defId 挂载 → 协议换位时特效跟随） =====
- * fire = 流动岩浆边框：旋转 conic-gradient 裁成边框环，@property 驱动角度动画；
- * 不支持 @property 的浏览器降级为静态岩浆色边框（仍可见）。 */
+ * fire = 流动岩浆边框：旋转 conic-gradient 岩浆色环 + 环绕的不规则黑岩/红岩质感层，
+ * 两层同步 2.5s 旋转（@property 驱动角度；不支持时降级为静态岩浆色边框）。 */
 @property --lava-angle { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
 .protocol.compiled-fx-fire::before {
   content: '';
   position: absolute;
-  inset: -5px;
-  border-radius: 10px;
-  padding: 4px;
+  inset: -7px;
+  border-radius: 12px;
+  padding: 6px;
   background: conic-gradient(from var(--lava-angle),
     #ff3d00 0deg, #ff9100 60deg, #ffd54f 120deg, #7a1d00 210deg, #ff3d00 360deg);
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
@@ -385,6 +385,30 @@ body {
   z-index: 1;
 }
 @keyframes lava-flow { to { --lava-angle: 360deg; } }
+/* 岩石质感层：不规则黑岩/红岩斑点沿边框分布，随边框同步旋转（蒙版裁成边框环） */
+.protocol.compiled-fx-fire::after {
+  content: '';
+  position: absolute;
+  inset: -7px;
+  border-radius: 12px;
+  padding: 6px;
+  background:
+    radial-gradient(ellipse 12px 8px at 10% 45%, #101010 0 58%, transparent 59%),
+    radial-gradient(ellipse 9px 12px at 26% 78%, #7a1d00 0 55%, transparent 56%),
+    radial-gradient(ellipse 14px 9px at 48% 12%, #0d0d0d 0 58%, transparent 59%),
+    radial-gradient(ellipse 10px 12px at 63% 70%, #a33a00 0 55%, transparent 56%),
+    radial-gradient(ellipse 12px 8px at 82% 28%, #141414 0 58%, transparent 59%),
+    radial-gradient(ellipse 9px 10px at 92% 66%, #8b1a00 0 55%, transparent 56%),
+    radial-gradient(ellipse 11px 9px at 38% 92%, #111111 0 58%, transparent 59%),
+    radial-gradient(ellipse 10px 7px at 70% 88%, #7a1d00 0 55%, transparent 56%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: lava-rocks 2.5s linear infinite;
+  pointer-events: none;
+  z-index: 2;
+}
+@keyframes lava-rocks { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 .protocol-check {
   position: absolute; top: 4px; right: 6px;
   background: #4caf50; color: #111; font-size: 11px; font-weight: bold;
@@ -465,7 +489,8 @@ body {
   overflow: visible;
   position: relative; /* +N 徽标按右缘定位 */
   margin-top: 6px;
-  min-height: 70px;
+  /* 最小高度 = 卡牌整高（130×178.8）：手牌为 0 张时区域不塌缩，挡板保持完整高度 */
+  min-height: 178.8px;
   /* ITEM 2: 手牌区左右两侧各内缩 28px（= 负 margin 重叠量）：首卡与末卡的边缘
      （含悬停放大、浮动按钮、行内溢出）不越过 padding 边缘被 overflow-x: clip 裁掉 */
   padding-left: 28px;

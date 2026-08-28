@@ -6,32 +6,68 @@ const FX_REMOVE_MS = 1200;
 const BASE_Z = 300; // 基础行为特效层
 const EXTRA_Z = 301; // 协议专属额外特效层（叠加在基础特效之上）
 
-/** 克隆目标卡到 body 级浮层（固定定位到原卡位置，不随重渲染销毁）；尺寸为 0（未布局）返回 null */
-function cloneCardToBody(node: HTMLElement, zIndex: number): HTMLElement | null {
+/** 事件载荷里的卡牌面信息（emitCardEvent 已含 defId/faceUp/uid） */
+interface FxCardPayload {
+  uid: string;
+  defId: string;
+  faceUp: boolean;
+  triggerProtocol?: string;
+  triggerDefId?: string;
+}
+
+/**
+ * 在 body 级构建特效浮层卡（固定定位到原卡位置，不随重渲染销毁）。
+ * 卡面直接用【当前卡牌面】按 payload 的 defId/faceUp 构建（官方卡面图 / 卡背），
+ * 不克隆原卡 DOM——避免原卡的旋转类、覆盖残留、悬停态等陈旧渲染混入特效；
+ * 位置/尺寸取自原卡节点 rect（旋转卡的 rect 即其视觉足迹盒）。
+ */
+function buildFxCard(node: HTMLElement, payload: FxCardPayload, zIndex: number): HTMLElement | null {
   const rect = node.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return null;
-  const clone = node.cloneNode(true) as HTMLElement;
-  // 场上卡带旋转类（.rot-cw/.rot-ccw）：克隆会继承并再次旋转，导致视觉尺寸突变。
-  // rect 已是旋转后的足迹盒——剥离旋转、用 rect 尺寸即可精确还原原视觉卡位。
-  clone.classList.remove('rot-cw', 'rot-ccw');
-  clone.style.transform = 'none';
-  clone.style.transition = 'none';
-  clone.style.position = 'fixed';
-  clone.style.left = `${rect.left}px`;
-  clone.style.top = `${rect.top}px`;
-  clone.style.width = `${rect.width}px`;
-  clone.style.height = `${rect.height}px`;
-  clone.style.margin = '0';
-  clone.style.pointerEvents = 'none';
-  clone.style.zIndex = String(zIndex);
-  clone.querySelector('.play-btns')?.remove();
-  document.body.appendChild(clone);
-  return clone;
+  const card = document.createElement('div');
+  card.className = 'card';
+  if (payload.faceUp) {
+    const [proto, value] = payload.defId.split('-');
+    const img = document.createElement('img');
+    img.className = 'card-face-img';
+    img.src = `/assets/protocols/${proto}/card-${value}.png`;
+    img.style.width = '100%';
+    img.style.height = '100%';
+    img.style.objectFit = 'cover';
+    img.style.display = 'block';
+    card.appendChild(img);
+  } else {
+    const back = document.createElement('div');
+    back.style.position = 'absolute';
+    back.style.inset = '0';
+    back.style.overflow = 'hidden';
+    const img = document.createElement('img');
+    img.src = '/assets/Cardback.jpg';
+    img.style.width = '100%';
+    img.style.height = '100%';
+    img.style.objectFit = 'cover';
+    img.style.display = 'block';
+    back.appendChild(img);
+    card.appendChild(back);
+  }
+  card.style.position = 'fixed';
+  card.style.left = `${rect.left}px`;
+  card.style.top = `${rect.top}px`;
+  card.style.width = `${rect.width}px`;
+  card.style.height = `${rect.height}px`;
+  card.style.margin = '0';
+  card.style.padding = '0';
+  card.style.border = 'none';
+  card.style.background = 'transparent';
+  card.style.pointerEvents = 'none';
+  card.style.zIndex = String(zIndex);
+  document.body.appendChild(card);
+  return card;
 }
 
 /** Fire 协议专属额外特效：火焰焚烧（fire-burn.css 覆盖层结构见 public/assets/fire/README.md） */
-function playFireBurnExtra(node: HTMLElement): void {
-  const clone = cloneCardToBody(node, EXTRA_Z);
+function playFireBurnExtra(node: HTMLElement, payload: FxCardPayload): void {
+  const clone = buildFxCard(node, payload, EXTRA_Z);
   if (!clone) return;
   clone.classList.add('card-burning');
   const overlay = document.createElement('div');
@@ -48,16 +84,16 @@ function playFireBurnExtra(node: HTMLElement): void {
 }
 
 /** 基础行为特效：删去 → 破碎消散（src/ui/fx/delete-shatter.ts 的 mountShatter） */
-function playShatter(node: HTMLElement): void {
-  const clone = cloneCardToBody(node, BASE_Z);
+function playShatter(node: HTMLElement, payload: FxCardPayload): void {
+  const clone = buildFxCard(node, payload, BASE_Z);
   if (!clone) return;
   mountShatter(clone);
   window.setTimeout(() => clone.remove(), FX_REMOVE_MS);
 }
 
 /** 基础行为特效：弃牌 → 沿对角线切成两半（src/ui/fx/discard-cut.ts 的 mountCut） */
-function playCut(node: HTMLElement): void {
-  const clone = cloneCardToBody(node, BASE_Z);
+function playCut(node: HTMLElement, payload: FxCardPayload): void {
+  const clone = buildFxCard(node, payload, BASE_Z);
   if (!clone) return;
   mountCut(clone);
   window.setTimeout(() => clone.remove(), FX_REMOVE_MS);
@@ -68,27 +104,24 @@ function playCut(node: HTMLElement): void {
  * - 基础行为特效：弃牌=对切、删去=破碎——目标卡上**总是**播放（与谁触发无关）
  * - 额外协议特效：由**触发弃牌/删去的卡**（triggerProtocol，效果源卡协议）决定是否叠加
  *   （如 fire 协议触发 → 额外火焰焚烧，叠在基础特效之上；与被删/弃的目标卡协议无关）
+ * - 卡面直接用【当前卡牌面】（payload 的 defId/faceUp 构建），不克隆原卡 DOM
  */
 export function initEffects(): () => void {
-  // FX 模块为 src 静态导入，无需预加载
   return gameBus.subscribe((e: GameEvent) => {
-    const payload = e.payload as
-      | { uid?: string; triggerProtocol?: string; triggerDefId?: string }
-      | undefined;
-    if (!payload?.uid) return;
+    const payload = e.payload as FxCardPayload | undefined;
+    if (!payload?.uid || !payload.defId) return;
+    if (e.type !== 'card:discarded' && e.type !== 'card:deleted') return;
     const node = document.querySelector<HTMLElement>(`[data-uid="${payload.uid}"]`);
     if (!node) return;
     // 基础行为特效（总是播放）
     if (e.type === 'card:discarded') {
-      void playCut(node);
-    } else if (e.type === 'card:deleted') {
-      void playShatter(node);
+      playCut(node, payload);
     } else {
-      return;
+      playShatter(node, payload);
     }
     // 额外协议特效（触发卡协议驱动，叠加上层）
     if (payload.triggerProtocol === 'fire') {
-      playFireBurnExtra(node);
+      playFireBurnExtra(node, payload);
     }
   });
 }
