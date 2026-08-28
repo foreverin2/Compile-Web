@@ -27,6 +27,11 @@ function makeState(handSize: number, deckSize: number, trashSize: number): GameS
     control: -1,
     winner: null,
     log: [],
+    pendingEffects: [],
+    pendingPlay: null,
+    pendingShift: null,
+    resolvedTriggerUids: [],
+    pendingStepAdvance: false,
   };
 }
 

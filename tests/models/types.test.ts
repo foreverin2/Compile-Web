@@ -21,6 +21,11 @@ describe('types', () => {
       control: -1,
       winner: null,
       log: [],
+      pendingEffects: [],
+      pendingPlay: null,
+      pendingShift: null,
+      resolvedTriggerUids: [],
+      pendingStepAdvance: false,
     };
     expect(typeof s.turnPlayer).toBe('number');
     expect(Array.isArray(s.players)).toBe(true);

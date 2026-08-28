@@ -24,6 +24,11 @@ function makeState(v0: number, v1: number, line: 0 | 1 | 2 = 0): GameState {
     control: -1,
     winner: null,
     log: [],
+    pendingEffects: [],
+    pendingPlay: null,
+    pendingShift: null,
+    resolvedTriggerUids: [],
+    pendingStepAdvance: false,
   };
 }
 

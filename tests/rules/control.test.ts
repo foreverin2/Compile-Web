@@ -35,6 +35,11 @@ function makeState(
     control: -1,
     winner: null,
     log: [],
+    pendingEffects: [],
+    pendingPlay: null,
+    pendingShift: null,
+    resolvedTriggerUids: [],
+    pendingStepAdvance: false,
     ...overrides,
   };
 }
