@@ -367,8 +367,14 @@ body {
 
 /* ===== 已编译协议专属特效（每协议一个类，类随 defId 挂载 → 协议换位时特效跟随） =====
  * fire = 流动岩浆边框：旋转 conic-gradient 岩浆色环 + 环绕的不规则黑岩/红岩质感层，
- * 两层同步 2.5s 旋转（@property 驱动角度；不支持时降级为静态岩浆色边框）。 */
+ * 两层同步 2.5s 旋转（@property 驱动角度；不支持时 --lava-angle 默认 0deg → 静态岩浆环）。
+ * 静态兜底：类自带岩浆色描边 + 红光晕，即使伪元素/蒙版不支持也能看到边框特效。 */
 @property --lava-angle { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
+.protocol.compiled-fx-fire {
+  --lava-angle: 0deg; /* 无 @property 时 var() 仍可解析 → conic 背景有效 */
+  border-color: #ff6a00;
+  box-shadow: 0 0 12px rgba(255, 61, 0, 0.6), inset 0 0 10px rgba(255, 61, 0, 0.25);
+}
 .protocol.compiled-fx-fire::before {
   content: '';
   position: absolute;
@@ -378,6 +384,7 @@ body {
   background: conic-gradient(from var(--lava-angle),
     #ff3d00 0deg, #ff9100 60deg, #ffd54f 120deg, #7a1d00 210deg, #ff3d00 360deg);
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
   animation: lava-flow 2.5s linear infinite;
@@ -402,6 +409,7 @@ body {
     radial-gradient(ellipse 11px 9px at 38% 92%, #111111 0 58%, transparent 59%),
     radial-gradient(ellipse 10px 7px at 70% 88%, #7a1d00 0 55%, transparent 56%);
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
   animation: lava-rocks 2.5s linear infinite;
@@ -927,7 +935,13 @@ body.dragging { cursor: grabbing; user-select: none; }
 /* ===== 选择模式（效果结算：候选卡高亮 + 底部确认条） ===== */
 /* 候选卡：青色霓虹呼吸描边 + 可点光标；已选卡金色描边 + 光晕；非候选卡灰化 */
 .choice-target { outline: 3px solid #4ff0ff; outline-offset: 2px; animation: choice-pulse 1s ease-in-out infinite; cursor: pointer; }
-.choice-selected { outline-color: #ffe14f; box-shadow: 0 0 18px #ffe14f88; }
+/* 选中卡（基础特效）：显眼静态金框——外层实线描边 + 内层描边环 + 光晕（不闪烁） */
+.choice-selected {
+  outline: 3px solid #ffe14f !important;
+  outline-offset: 3px;
+  box-shadow: 0 0 0 2px #ffe14f inset, 0 0 22px #ffe14fcc, 0 0 8px #ffe14f;
+  animation: none !important;
+}
 .choice-dim { filter: brightness(0.45) saturate(0.4); }
 @keyframes choice-pulse { 0%,100% { outline-color: #4ff0ff; } 50% { outline-color: #4ff0ff66; } }
 /* 底部确认条：fixed 悬浮于视口底部中央，z-index 高于手牌挡板（70）/悬停弹出（50） */
