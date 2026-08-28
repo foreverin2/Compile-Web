@@ -26,15 +26,16 @@ body {
 .area-title { font-weight: bold; margin-bottom: 2px; }
 .meta-row { display: flex; gap: 14px; font-size: 13px; color: #aaa; flex-wrap: wrap; }
 
-/* 每条线一个水平行：P1 槽 | P1 协议 | P2 协议 | P2 槽 —— 4 格同一水平带（平行对齐） */
-.lane-row { display: grid; grid-template-columns: minmax(240px, 1fr) auto auto minmax(240px, 1fr); gap: 10px; align-items: stretch; }
+/* 每条线一个水平行：P1 槽 | P1 协议 | P2 协议 | P2 槽 —— 4 格同一水平带（平行对齐）。
+   R7 槽位列 1.5× 加长（240 → 360px 下限）：容纳 175px 卡 + 横向重叠后的多张卡。 */
+.lane-row { display: grid; grid-template-columns: minmax(360px, 1fr) auto auto minmax(360px, 1fr); gap: 10px; align-items: stretch; }
 
 /* ===== 堆叠槽（横向条带：每条线一行内的左右两个槽） ===== */
 .stack-slot {
   border: 1px dashed #555;
   border-radius: 6px;
   padding: 6px;
-  min-height: 130px;
+  min-height: 220px; /* R7：容纳 175px 高的旋转卡（175 + 线值 + 内边距） */
   position: relative;
   background: rgba(0, 0, 0, 0.15);
   display: flex;
@@ -42,9 +43,9 @@ body {
   justify-content: center;
   gap: 4px;
 }
-/* 协议侧内边距：旋转后视觉卡盒比布局盒左右各宽约 21.1px，留出补偿避免视觉压到协议 */
-.stack-slot.p1 { padding-right: 22px; }
-.stack-slot.p2 { padding-left: 22px; }
+/* 协议侧内边距：旋转后视觉卡盒比布局盒左右各宽约 24.7px，留出补偿避免视觉压到协议 */
+.stack-slot.p1 { padding-right: 25px; }
+.stack-slot.p2 { padding-left: 25px; }
 .stack-slot.interactable { cursor: pointer; }
 .stack-slot.self { border-color: rgba(224, 160, 48, 0.55); }
 .stack-slot.interactable:hover { border-color: #e0a030; background: rgba(224, 160, 48, 0.06); }
@@ -60,7 +61,7 @@ body {
 
 /* ===== 卡牌正面（官方 PNG 卡面） ===== */
 .card {
-  width: 110px;
+  width: 130px; /* R7 手牌卡放大：110 → 130px；场上堆叠由 .stack .card 覆写为 --card-w，不受此影响 */
   border: 1px solid #888;
   border-radius: 6px;
   padding: 3px;
@@ -82,21 +83,21 @@ body {
 }
 
 /* ===== 卡牌背面（官方图 + 印刷值 2 徽章） ===== */
-/* 基础高度与手牌正面一致：110px 卡宽 − 2×3px 内边距 − 2×1px 边框 = 102px 内容宽 × 1.4 纵横比 = 142.8px；
-   整盒 142.8 + 8 = 150.8px，与正面朝上的手牌同高（正面图 102 × 1.4 = 142.8px 内容高）。
-   场上堆叠由下方 .stack .card .card-back 覆写为 148px（= --card-h − 2px 边框），不受此规则影响。 */
-.card-back { position: relative; width: 100%; height: calc((110px - 8px) * 1.4); border-radius: 4px; overflow: hidden; }
+/* 基础高度与手牌正面一致：130px 卡宽 − 2×3px 内边距 − 2×1px 边框 = 122px 内容宽 × 1.4 纵横比 = 170.8px；
+   整盒 170.8 + 8 = 178.8px，与正面朝上的手牌同高（正面图 122 × 1.4 = 170.8px 内容高）。
+   场上堆叠由下方 .stack .card .card-back 覆写为 173px（= --card-h − 2px 边框），不受此规则影响。 */
+.card-back { position: relative; width: 100%; height: calc((130px - 8px) * 1.4); border-radius: 4px; overflow: hidden; }
 .cardback-img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .card-back-value { position: absolute; right: 4px; bottom: 4px; background: #111; color: #e0a030; border: 1px solid #e0a030; border-radius: 50%; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: bold; }
 
-/* ===== 场上堆叠：完整卡面 + 横向 46.2% 重叠（R3） ===== */
+/* ===== 场上堆叠：完整卡面 + 横向 46.2% 重叠（R3，R7 放大） ===== */
 /* 每张场上卡牌以完整卡面渲染（正/背面），堆叠沿线路方向横向重叠：
-   卡盒布局宽 --card-w（transform 不影响布局），旋转 90° 后视觉宽 = --card-h = 150px。
+   卡盒布局宽 --card-w（transform 不影响布局），旋转 90° 后视觉宽 = --card-h = 175px。
    后一张牌（更靠外侧）通过负 margin-left 盖住前一张牌的外侧，露出靠协议一侧
-   46.2% × 150px = 69.3px 的横向条带。margin = 露出 − 布局宽 ≈ −38.4px
-   （注意：旋转以盒中心为原点，视觉盒左右各比布局盒宽出约 21.1px，因此不能直接用
-   −53.8% × 150px = −80.7px，那只会露出约 18%）。zIndex 仍由 pos 决定，最新盖住旧牌。 */
-.stack { --card-h: 150px; --card-w: calc((var(--card-h) - 2px) * 0.71429 + 2px); }
+   46.2% × 175px = 80.85px 的横向条带。margin = 露出 − 布局宽 ≈ −44.7px
+   （注意：旋转以盒中心为原点，视觉盒左右各比布局盒宽出约 24.7px，因此不能直接用
+   −53.8% × 175px = −94.2px，那只会露出约 18%）。zIndex 仍由 pos 决定，最新盖住旧牌。 */
+.stack { --card-h: 175px; --card-w: calc((var(--card-h) - 2px) * 0.71429 + 2px); }
 .stack .card {
   width: var(--card-w); /* 卡面 750×1050 → 宽/高 = 5/7；固定布局宽使重叠计算精确 */
   padding: 0;
@@ -112,7 +113,7 @@ body {
   width: 100%;
   height: calc(var(--card-h) - 2px);
 }
-/* 露出 = 0.462 × 旋转后卡宽(--card-h)；margin = 露出 − 布局宽(--card-w) ≈ −38.4px */
+/* 露出 = 0.462 × 旋转后卡宽(--card-h)；margin = 露出 − 布局宽(--card-w) ≈ −44.7px */
 .stack .card + .card {
   margin-left: calc(0.462 * var(--card-h) - var(--card-w));
 }
@@ -132,6 +133,21 @@ body {
 .rot-ccw { transform: rotate(-90deg); }
 /* R1 协议卡：P2 侧旋转 180°，使双方 3 张协议相对放置（P1 侧按原方向展示） */
 .rot-180 { transform: rotate(180deg); }
+
+/* ===== 场上堆叠：悬停上浮（ITEM 5） ===== */
+/* 与手牌 pop 相同的悬停上浮：旋转 + 上浮 + 放大 + 置顶。transform 列表内 translate 在
+   父坐标（屏幕）系生效，故 translateY(-18px) 始终是竖直上浮，与旋转方向无关。
+   z-index 60 用 !important 覆盖行内 style.zIndex=pos，保证盖住同堆叠全部邻居
+   （.card 为 position:relative，z-index 生效）；.stack 无兄弟推开（重叠即要点）。 */
+.stack .card { transition: transform 0.15s ease; }
+.stack .card.rot-cw:hover {
+  transform: translateY(-18px) rotate(90deg) scale(1.1);
+  z-index: 60 !important;
+}
+.stack .card.rot-ccw:hover {
+  transform: translateY(-18px) rotate(-90deg) scale(1.1);
+  z-index: 60 !important;
+}
 
 /* ===== 顶层（未覆盖）牌：唯一活跃 ===== */
 .card.top-card { border-color: #e0a030; box-shadow: 0 0 8px rgba(224, 160, 48, 0.5); }
@@ -182,6 +198,7 @@ body {
   border: 1px solid #444;
   border-radius: 8px;
   background: rgba(0, 0, 0, 0.35);
+  overflow: visible; /* ITEM 4: 行程扩至 5%..95% 时控制卡（h44 时仅 ~31px 宽）仍不出轨，无需裁切 */
 }
 .control-track-label {
   position: absolute;
@@ -228,17 +245,25 @@ body {
 
 /* ===== 手牌（底部条带：P1 手牌 | 步骤指示 | P2 手牌） ===== */
 .hand-strip { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: start; }
-/* 单行扇形手牌：不换行，后一张卡负 margin 压住前一张（每张露出左缘 ~82px 宽） */
+/* 单行扇形手牌：不换行，后一张卡负 margin 压住前一张（每张露出左缘 ~102px 宽） */
 .hand {
   display: flex;
   flex-wrap: nowrap;
-  overflow-x: clip; /* 横向裁掉超出列宽的部分；clip 不产生滚动容器，纵向溢出仍可见（悬停上浮不被裁） */
+  overflow-x: clip; /* 横向裁掉超出列宽的部分；clip 不产生滚动容器，纵向溢出仍可见（悬停上浮/浮动按钮不被裁） */
   overflow-y: visible;
   position: relative; /* +N 徽标按右缘定位 */
   margin-top: 6px;
   min-height: 70px;
+  /* ITEM 2: 手牌区左右两侧各内缩 28px（= 负 margin 重叠量）：首卡与末卡的边缘
+     （含悬停放大、浮动按钮、行内溢出）不越过 padding 边缘被 overflow-x: clip 裁掉 */
+  padding-left: 28px;
+  padding-right: 28px;
 }
-/* 扇形重叠：首卡 margin 0，其后每张向左叠 28px（左缘露出的宽度 = 110 − 28 = 82px） */
+/* ITEM 2: P2 手牌从右往左排（index 0 在最右、新牌向左延伸）；水平 padding 由 .hand 基础规则统一提供 */
+.hand.reversed {
+  flex-direction: row-reverse;
+}
+/* 扇形重叠：首卡 margin 0，其后每张向左叠 28px（左缘露出的宽度 = 130 − 28 = 102px） */
 .hand .card + .card { margin-left: -28px; }
 /* 悬停上浮的平滑过渡（transform 变化：推开相邻卡 / 上浮放大） */
 .hand .card { transition: transform 0.15s ease, border-color 0.15s ease; }
@@ -261,9 +286,30 @@ body {
   border-radius: 11px;
   pointer-events: none; /* 不拦截下方卡片的点击/悬停 */
 }
+/* P2 右起手牌的 +N 徽标改贴左缘（超出部分在左侧） */
+.hand.reversed .hand-more-badge { right: auto; left: 6px; }
 /* 仅当前玩家（可交互）的手牌显示可点光标；对手隐藏手牌不暗示可点击 */
 .hand.self .card { cursor: pointer; }
 .hand.self .card:hover { border-color: #e0a030; }
+
+/* ===== ITEM 1: 选中卡上方的 正面打入/背面打入 浮动按钮 ===== */
+/* 按钮是卡牌子节点（悬停按钮时指针仍在卡牌子树内，hover-pop 不消失）；
+   绝对定位于卡上缘之上，不遮卡面；z-index 高于悬停上浮卡（50）与相邻卡。 */
+.play-btns {
+  position: absolute;
+  top: -34px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 6px;
+  z-index: 70;
+  pointer-events: auto; /* 卡面图 pointer-events:none，但按钮自身必须可点 */
+  white-space: nowrap;
+}
+/* 卡位于手牌行左/右边缘时按钮对齐到卡内，避免超出容器被 overflow-x: clip 裁掉 */
+.play-btns.at-left { left: 0; transform: none; }
+.play-btns.at-right { right: 0; left: auto; transform: none; }
+.play-btn { padding: 4px 10px; font-size: 12px; }
 
 /* ===== 指示 / 操作 / 日志 ===== */
 .step-indicator { text-align: center; font-size: 13px; color: #ccc; padding: 4px 0; }

@@ -134,28 +134,62 @@ function renderPlayerInfo(s: GameState, player: PlayerId, opts: { isSelf: boolea
  * 手牌条：self（回合玩家）正面可点选，对手背面展示。
  * R6 扇形手牌：单行不换行（.hand 负 margin 重叠）；最多渲染 10 张，超出部分以
  * 末尾 +N 徽标提示（隐藏的牌仍在状态中，随手牌减少自动露出）。
- * 悬停第 i 张卡时：前面的卡向左、后面的卡向右各推开 12px/张，悬停卡上浮
- * translateY(-24px) scale(1.15) 并置顶（z-index 50）；鼠标移出手牌区时全部复位。
- * 监听器在每次 renderApp 重建 DOM 后重新挂接，点击选择逻辑保持不变。
+ * R7 P2 手牌从右往左排（.hand.reversed = flex-direction: row-reverse）：
+ * index 0 在最右、后续卡向左延伸；P1 保持左起（默认左对齐）。悬停第 i 张卡时，
+ * 其余卡向两侧推开 12px/张（P2 为 row-reverse，镜像方向），悬停卡上浮 translateY(-24px)
+ * scale(1.15) 并置顶（z-index 50）；鼠标移出手牌区时全部复位。
+ * R7 选中卡（action 可打步骤）在卡上缘上方浮动 正面打入/背面打入 按钮：按钮作为
+ * 卡牌子节点，指针悬停按钮时仍在卡牌子树内，hover-pop 不消失；按钮绝对定位于
+ * 卡上缘之上（top:-34px）不遮卡面。监听器在每次 renderApp 重建 DOM 后重新挂接。
  */
 function renderHand(
   s: GameState,
   player: PlayerId,
-  opts: { isSelf: boolean; selected: string | null; onSelect: (uid: string) => void }
+  opts: {
+    isSelf: boolean;
+    selected: string | null;
+    onSelect: (uid: string) => void;
+    /** 选中卡上 正面/背面 打入按钮回调（切换 selectedFaceUp 后重渲染） */
+    onToggleFaceUp?: (faceUp: boolean) => void;
+  }
 ): HTMLElement {
-  const hand = el('div', 'hand' + (opts.isSelf ? ' self' : ''));
+  const reversed = player === 1; // P2 右起、向左延伸；P1 左起、向右延伸（默认左对齐）
+  const hand = el('div', 'hand' + (opts.isSelf ? ' self' : '') + (reversed ? ' reversed' : ''));
   const cards = s.players[player].hand;
   const shown = cards.slice(0, 10);
   const nodes: HTMLElement[] = [];
   for (const card of shown) {
     const node = renderCardFace({ defId: card.defId, faceUp: opts.isSelf });
     node.dataset.uid = card.uid;
-    if (opts.isSelf && opts.selected === card.uid) node.classList.add('selected');
+    const i = nodes.length;
+    const isSelected = opts.isSelf && opts.selected === card.uid;
+    if (isSelected) node.classList.add('selected');
     if (opts.isSelf) {
       node.addEventListener('click', (e) => {
         e.stopPropagation();
         opts.onSelect(card.uid);
       });
+    }
+    // ITEM 1: 选中卡且处于 action 步骤 → 卡上缘上方浮动 正面打入/背面打入 按钮。
+    // 按钮是卡牌子节点：悬停按钮时指针始终位于卡牌子树内，hover-pop 保持不消失
+    // （复位只挂在手牌容器 mouseleave 上，穿过卡↔按钮间隙也不会触发复位）。
+    if (isSelected && s.step === 'action' && opts.onToggleFaceUp) {
+      const atLeft = reversed ? i === shown.length - 1 : i === 0;
+      const atRight = reversed ? i === 0 : i === shown.length - 1;
+      const group = el('div', 'play-btns' + (atLeft ? ' at-left' : atRight ? ' at-right' : ''));
+      const up = el('button', 'btn play-btn', '正面打入');
+      up.addEventListener('click', (e) => {
+        e.stopPropagation();
+        opts.onToggleFaceUp!(true);
+      });
+      const down = el('button', 'btn play-btn', '背面打入');
+      down.addEventListener('click', (e) => {
+        e.stopPropagation();
+        opts.onToggleFaceUp!(false);
+      });
+      group.appendChild(up);
+      group.appendChild(down);
+      node.appendChild(group);
     }
     hand.appendChild(node);
     nodes.push(node);
@@ -175,7 +209,9 @@ function renderHand(
           n.style.transform = '';
         } else {
           n.classList.remove('popped');
-          n.style.transform = `translateX(${(j - i) * 12}px)`;
+          // P1 左起：j<i 在左推向左、j>i 在右推向右；P2 右起（row-reverse）镜像相反
+          const dx = reversed ? (i - j) * 12 : (j - i) * 12;
+          n.style.transform = `translateX(${dx}px)`;
         }
       }
     });
@@ -192,8 +228,8 @@ function renderHand(
 }
 
 /**
- * 控制权滑动指示条（R6）：双方三线总值对比决定控制卡在轨道上的位置——
- * P1 占优靠左、P2 占优靠右（clamp 12%..88% 保证卡不滑出轨道），双方均为 0 时居中。
+ * 控制权滑动指示条（R6，R7 行程加长）：双方三线总值对比决定控制卡在轨道上的位置——
+ * P1 占优靠左、P2 占优靠右（clamp 5%..95% 保证卡不滑出轨道），双方均为 0 时居中。
  * 控制卡归属（s.control）只影响高亮/灰化：中立灰化，持有方加光晕。
  * 由于渲染模型每次重建 DOM，直接设置 left 不会触发 transition；因此先写入上一帧
  * 位置、下一帧再写入目标位置，让 left 0.5s 过渡真正产生滑动动画。
@@ -205,9 +241,9 @@ function renderControlModule(s: GameState): HTMLElement {
   const total1 = getLineValue(s, 1, 0) + getLineValue(s, 1, 1) + getLineValue(s, 1, 2);
   let target = 50;
   if (total0 + total1 > 0) {
-    // raw 取 P2 占比：P1 占优 → total1≈0 → 靠左(12%)；P2 占优 → total1≈total → 靠右(88%)
+    // raw 取 P2 占比：P1 占优 → total1≈0 → 靠左(5%)；P2 占优 → total1≈total → 靠右(95%)
     const raw = (total1 / (total0 + total1)) * 100;
-    target = Math.min(88, Math.max(12, raw));
+    target = Math.min(95, Math.max(5, raw));
   }
   const neutral = s.control === -1;
   const ctrl = el('div', 'control-module' + (neutral ? ' neutral' : ` held-${s.control}`));
@@ -327,6 +363,10 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
         selectedUid = uid;
         renderApp(root, s, cb);
       },
+      onToggleFaceUp: (faceUp) => {
+        selectedFaceUp = faceUp;
+        renderApp(root, s, cb);
+      },
     })
   );
   handStrip.appendChild(el('div', 'step-indicator', `步骤: ${s.step}`));
@@ -336,6 +376,10 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
       selected: s.turnPlayer === 1 ? selectedUid : null,
       onSelect: (uid) => {
         selectedUid = uid;
+        renderApp(root, s, cb);
+      },
+      onToggleFaceUp: (faceUp) => {
+        selectedFaceUp = faceUp;
         renderApp(root, s, cb);
       },
     })
@@ -353,23 +397,10 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
     actionBar.appendChild(btn);
   }
   if (s.step === 'action') {
-    if (selectedUid) {
-      const upBtn = el('button', 'btn', '正面打入');
-      upBtn.addEventListener('click', () => {
-        selectedFaceUp = true;
-        renderApp(root, s, cb);
-      });
-      const downBtn = el('button', 'btn', '背面打入');
-      downBtn.addEventListener('click', () => {
-        selectedFaceUp = false;
-        renderApp(root, s, cb);
-      });
-      actionBar.appendChild(upBtn);
-      actionBar.appendChild(downBtn);
-      actionBar.appendChild(el('span', 'hint', `朝向: ${selectedFaceUp ? '正面' : '背面'} — 点击一条线放置`));
-    } else {
-      actionBar.appendChild(el('span', 'hint', '点击手牌选择卡牌'));
-    }
+    // ITEM 1: 正面打入/背面打入 已移到选中卡上方的浮动按钮，底栏仅保留提示
+    actionBar.appendChild(
+      el('span', 'hint', selectedUid ? '已选择卡牌 — 在卡牌上方选择朝向，然后点击一条线放置' : '点击手牌选择卡牌')
+    );
   }
   wrap.appendChild(actionBar);
 
