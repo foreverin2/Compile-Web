@@ -10,7 +10,7 @@
 - **阶段 2 全部完成**：卡牌效果引擎（生成器 + 效果栈 + 6 效果操作 + 触发系统）+ **Fire 协议 6 卡真实效果试点**（fire-0 中/底、fire-1/2/4/5 中、fire-3 底可选结束），全部可结算、可连锁、可挂起选择。
 - **测试 85/85 全绿**（21 个测试文件，含 8 个 effects 新目录 + play-effect/game-effect 接入测试），**build 通过**（`tsc --noEmit && vite build`），**工作区干净**。
 - 分支 `feature/stage2-effects-fire`（相对 `main` 25 个提交，HEAD `d7a8af5`）；**git 远程推送不在本阶段职责内**——由控制器走合并流程后统一推送。
-- **特效已接入**：`index.html` 引入 `public/assets/fire/fire-burn.css`（Gemini 火焰素材，阶段 1 已就绪）；`src/ui/effects/index.ts` 订阅语义事件，`card:discarded` / `card:deleted`（协议=fire）时在卡位播放火焰焚烧动画（克隆卡到 body 浮层，1.2s 后移除）。
+- **特效已接入（分层模型，用户确认 2026-08-29）**：**基础行为特效**——`card:discarded`=沿对角线切成两半（`public/assets/fx/discard-cut.css/js`）、`card:deleted`=破碎消散（`public/assets/fx/delete-shatter.css/js`），目标卡上**总是播放**（与谁触发无关）；**额外协议特效**——由**触发弃牌/删去的卡**（事件 `triggerProtocol`/`triggerDefId` = 效果源卡）决定是否叠加（fire 触发 → 额外火焰焚烧 `fire-burn.css`，叠在基础特效**之上**，z 301 > 300；与被删/弃目标卡协议无关）。克隆卡到 body 浮层播放，1.2s 后移除。
 - **自动推进暂停策略已按用户确认定稿**：「有决策点就停、全部清空才走、没有事件就自动过」（详见 §0.4）。
 - 下一步 = **阶段 3：其余 14 套协议逐个实现**（先 Light / Darkness），入口见 §5/§6。
 

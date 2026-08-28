@@ -102,7 +102,11 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       const card = findCard(s, op.uid);
       if (!card || card.zone !== 'hand') throw new Error(`cannot discard ${op.uid}: not in hand`);
       discardFromHand(s, pe.player, op.uid);
-      emitCardEvent(s, 'card:discarded', card);
+      // triggerProtocol/triggerDefId：触发这张弃牌的卡（效果源），FX 层据此叠加协议专属额外特效
+      emitCardEvent(s, 'card:discarded', card, {
+        triggerDefId: pe.sourceDefId,
+        triggerProtocol: pe.sourceDefId.split('-')[0],
+      });
       break;
     }
     case 'draw': {
@@ -131,7 +135,11 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       card.line = null;
       card.pos = null;
       s.players[owner].trash.push(card);
-      emitCardEvent(s, 'card:deleted', card);
+      // triggerProtocol/triggerDefId：触发这张删去的卡（效果源），FX 层据此叠加协议专属额外特效
+      emitCardEvent(s, 'card:deleted', card, {
+        triggerDefId: pe.sourceDefId,
+        triggerProtocol: pe.sourceDefId.split('-')[0],
+      });
       revealAfterRemoval(s, owner, line);
       break;
     }
