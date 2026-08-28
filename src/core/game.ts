@@ -44,8 +44,13 @@ export function getLegalActions(s: GameState, player: PlayerId): LegalAction[] {
     }
   }
   // 无玩家输入的步骤（start/check-control/check-cache/end）或本步骤无事可做 → 允许推进；
-  // check-compile 存在可编译线时编译为强制且唯一的行动，不再提供 advance
-  if (!(s.step === 'check-compile' && getCompilableLines(s, player).length > 0)) {
+  // check-compile 存在可编译线时编译为强制且唯一的行动，不再提供 advance；
+  // action 步骤且手牌为空时（无牌可打）必须刷新，同样不提供 advance（规则：无牌可打必须补满手牌）
+  const mustRefresh = s.step === 'action' && s.players[player].hand.length === 0;
+  if (
+    !(s.step === 'check-compile' && getCompilableLines(s, player).length > 0) &&
+    !mustRefresh
+  ) {
     out.push({ kind: 'advance' });
   }
   return out;
@@ -83,6 +88,9 @@ export function executeAction(s: GameState, player: PlayerId, kind: ActionKind, 
     case 'advance': {
       if (s.step === 'check-compile' && getCompilableLines(s, player).length > 0) {
         throw new Error('compile is mandatory at check-compile');
+      }
+      if (s.step === 'action' && s.players[player].hand.length === 0) {
+        throw new Error('must refresh with no cards in hand');
       }
       if (s.step === 'check-cache') {
         clearCache(s, player);

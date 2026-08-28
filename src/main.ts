@@ -38,7 +38,7 @@ const cb: UiCallbacks = {
  * 非 action 步骤自动推进：
  * - draft / gameover → 停止（不自动推进）
  * - action → 停止（轮到玩家行动）
- * - check-compile：恰 1 条可编译 → 自动编译该线；多条可编译 → 暂停等玩家选择
+ * - check-compile：有可编译线 → 暂停（编译需玩家点击编译按钮后再执行，不自动编译）
  * - 其余步骤（start/check-control/check-cache/end）→ 自动 advance
  */
 function runAutoAdvance(): void {
@@ -48,11 +48,7 @@ function runAutoAdvance(): void {
   const player = state.turnPlayer;
   if (state.step === 'check-compile') {
     const lines = getCompilableLines(state, player);
-    if (lines.length === 1) {
-      cb.onAction({ kind: 'compile', line: lines[0] });
-      return;
-    }
-    if (lines.length > 1) return; // 多条可编译：暂停，显示编译按钮等玩家选择
+    if (lines.length > 0) return; // 可编译：暂停，显示编译按钮等玩家点击后执行
   }
   cb.onAction({ kind: 'advance' });
 }

@@ -131,7 +131,7 @@ function renderStackSlot(
 function renderPlayerInfo(s: GameState, player: PlayerId, opts: { isSelf: boolean }): HTMLElement {
   const p = s.players[player];
   const active = player === s.turnPlayer;
-  const info = el('div', `player-info${active ? ' active' : ''}${opts.isSelf ? ' self' : ''}`);
+  const info = el('div', `player-info p${player + 1}${active ? ' active' : ''}${opts.isSelf ? ' self' : ''}`);
   info.appendChild(el('div', 'area-title', `玩家 ${player + 1}${active ? '（回合中）' : ''}`));
 
   const meta = el('div', 'meta-row');
@@ -201,11 +201,10 @@ function renderHand(
     // ITEM 1: 选中卡且处于 action 步骤 → 卡上缘上方浮动「翻面」按钮。
     // 按钮是卡牌子节点：悬停按钮时指针始终位于卡牌子树内，hover-pop 保持不消失
     // （复位只挂在手牌容器 mouseleave 上，穿过卡↔按钮间隙也不会触发复位）。
-    // 按钮仅一个「翻面」：点击切换 selectedFaceUp（正面↔背面），不占用卡面宽度。
+    // 按钮仅一个「翻面」：点击切换 selectedFaceUp（正面↔背面），不占用卡面宽度；
+    // 始终居中于卡面顶部中央（.play-btns left:50% + translateX(-50%)）。
     if (isSelected && s.step === 'action' && opts.onToggleFaceUp) {
-      const atLeft = reversed ? i === shown.length - 1 : i === 0;
-      const atRight = reversed ? i === 0 : i === shown.length - 1;
-      const group = el('div', 'play-btns' + (atLeft ? ' at-left' : atRight ? ' at-right' : ''));
+      const group = el('div', 'play-btns');
       const flip = el('button', 'btn play-btn', '翻面');
       flip.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -252,8 +251,8 @@ function renderHand(
 
 /**
  * 控制权滑动指示条（R6，R7 行程加长）：双方三线总值对比决定控制卡在轨道上的位置——
- * P1 占优靠左、P2 占优靠右（clamp 5%..95% 保证卡不滑出轨道），双方均为 0 时居中。
- * 控制卡归属（s.control）只影响高亮/灰化：中立灰化，持有方加光晕。
+ * P1 占优靠左、P2 占优靠右（clamp 1%..99% 使偏向更明显，轨道 overflow visible 保证不出轨），
+ * 双方均为 0 时居中。控制卡归属（s.control）只影响高亮/灰化：中立灰化，持有方加光晕。
  * 由于渲染模型每次重建 DOM，直接设置 left 不会触发 transition；因此先写入上一帧
  * 位置、下一帧再写入目标位置，让 left 0.5s 过渡真正产生滑动动画。
  */
@@ -266,7 +265,7 @@ function renderControlModule(s: GameState): HTMLElement {
   if (total0 + total1 > 0) {
     // raw 取 P2 占比：P1 占优 → total1≈0 → 靠左(5%)；P2 占优 → total1≈total → 靠右(95%)
     const raw = (total1 / (total0 + total1)) * 100;
-    target = Math.min(95, Math.max(5, raw));
+    target = Math.min(99, Math.max(1, raw));
   }
   const neutral = s.control === -1;
   const ctrl = el('div', 'control-module' + (neutral ? ' neutral' : ` held-${s.control}`));

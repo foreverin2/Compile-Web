@@ -13,7 +13,7 @@ body {
 }
 /* 主容器：放宽到 1400px 容纳加长的链路（360px×2 槽 + 协议 + 间距），
    不设 overflow-x:hidden —— 那会裁剪手牌/链路边缘；极端晚局若超宽由浏览器滚动。 */
-#app { max-width: 1400px; margin: 0 auto; padding: 12px; }
+#app { max-width: 1600px; margin: 0 auto; padding: 12px; }
 
 .board { display: flex; flex-direction: column; gap: 10px; }
 
@@ -23,14 +23,18 @@ body {
 /* 顶部条带：P1 信息 | 控制滑动条 | P2 信息 */
 .player-strip { display: grid; grid-template-columns: 1fr minmax(260px, 1.2fr) 1fr; gap: 12px; align-items: center; }
 .player-info { border: 1px solid #444; border-radius: 8px; padding: 8px 10px; background: #22223a; display: flex; flex-direction: column; gap: 4px; }
+/* P2（右侧）信息条内容靠右对齐，与 P1 左侧对称 */
+.player-info.p2 { text-align: right; align-items: flex-end; }
+.player-info.p2 .meta-row { justify-content: flex-end; }
 .player-info.active { border-color: #e0a030; box-shadow: 0 0 10px rgba(224, 160, 48, 0.25); }
 .player-info.self { background: #242440; }
 .area-title { font-weight: bold; margin-bottom: 2px; }
 .meta-row { display: flex; gap: 14px; font-size: 13px; color: #aaa; flex-wrap: wrap; }
 
 /* 每条线一个水平行：P1 槽 | P1 协议 | P2 协议 | P2 槽 —— 4 格同一水平带（平行对齐）。
-   R7 槽位列 1.5× 加长（240 → 360px 下限）：容纳 175px 卡 + 横向重叠后的多张卡。 */
-.lane-row { display: grid; grid-template-columns: minmax(360px, 1fr) auto auto minmax(360px, 1fr); gap: 10px; align-items: stretch; }
+   R7 槽位多次加长（240 → 360 → 500px 下限）：175px 卡 + 每张重叠 80.85px，
+   500px 可容纳约 5 张（500 = 175 + 4×80.85 ≈ 498），第 5 张不再超出链路区域。 */
+.lane-row { display: grid; grid-template-columns: minmax(500px, 1fr) auto auto minmax(500px, 1fr); gap: 10px; align-items: stretch; }
 
 /* ===== 堆叠槽（横向条带：每条线一行内的左右两个槽） ===== */
 .stack-slot {
@@ -311,9 +315,6 @@ body {
   pointer-events: auto; /* 卡面图 pointer-events:none，但按钮自身必须可点 */
   white-space: nowrap;
 }
-/* 卡位于手牌行左/右边缘时按钮对齐到卡内，避免超出容器被裁掉 */
-.play-btns.at-left { left: 0; transform: none; }
-.play-btns.at-right { right: 0; left: auto; transform: none; }
 /* 「翻面」按钮：单个小按钮（宽度远小于卡面），半透明深色底 + 青紫渐变霓虹描边，
    悬停时霓虹点亮；深色系贴合暗色赛博背景，取代原黄色按钮 */
 .play-btn {
