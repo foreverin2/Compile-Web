@@ -42,9 +42,12 @@ const cb: UiCallbacks = {
       const handBefore = state.players[player].hand.length;
       executeAction(state, player, a.kind);
       drawAnimCount = state.players[player].hand.length - handBefore;
-    } else {
+    } else if (a.kind === 'advance') {
       executeAction(state, player, a.kind);
+    } else if (a.kind === 'resolve-trigger') {
+      executeAction(state, player, 'resolve-trigger', { cardUid: a.cardUid! });
     }
+    // effect-choice：getLegalActions 不产生（选择由 UI 直接应答），无需分发
     if (drawAnimCount > 0) {
       drawAnimBusy = true;
       playDrawAnimation(player, drawAnimCount, () => {

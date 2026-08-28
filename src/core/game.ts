@@ -5,8 +5,10 @@ import { playCard, refreshHand } from './actions/base';
 import { executeCompile, getCompilableLines } from './rules/compile';
 import { checkControl, resetControlIfHeld } from './rules/control';
 import { getCardDef } from '../data/demo';
+import { collectTriggers, resolveTrigger } from './effects/triggers';
+import { answerEffect, runStack } from './effects/resolve';
 
-export type ActionKind = 'play' | 'refresh' | 'compile' | 'advance';
+export type ActionKind = 'play' | 'refresh' | 'compile' | 'advance' | 'effect-choice' | 'resolve-trigger';
 
 export interface PlayArgs {
   cardUid: string;
@@ -19,14 +21,17 @@ export interface LegalAction {
   line?: Line;
   cardUid?: string;
   faceUp?: boolean;
+  promptId?: string;
+  choice?: string[];
 }
 
 export function getLegalActions(s: GameState, player: PlayerId): LegalAction[] {
   if (s.phase !== 'turn' || s.turnPlayer !== player || s.winner !== null) return [];
+  // 效果结算挂起 / 落牌（浮空）中：无标准行动（选择经 UI 直接应答）
+  if (s.pendingEffects.length > 0 || s.pendingPlay !== null || s.pendingShift !== null) return [];
   const out: LegalAction[] = [];
   if (s.step === 'action') {
     for (const card of s.players[player].hand) {
-      // 正面：只能进匹配线；背面：任意线
       for (const line of [0, 1, 2] as Line[]) {
         const def = getCardDef(card.defId);
         if (def.protocol === s.players[player].protocols[line].defId) {
@@ -42,10 +47,18 @@ export function getLegalActions(s: GameState, player: PlayerId): LegalAction[] {
     for (const line of getCompilableLines(s, player)) {
       out.push({ kind: 'compile', line });
     }
+  } else if (s.step === 'end' || s.step === 'start') {
+    const kind: 'end' | 'start' = s.step;
+    const triggers = collectTriggers(s, kind);
+    for (const t of triggers) {
+      out.push({ kind: 'resolve-trigger', cardUid: t.cardUid });
+    }
+    // 必选触发未清空时不允许跳过（advance）
+    if (!triggers.some((t) => !t.optional)) {
+      out.push({ kind: 'advance' });
+    }
+    return out; // end/start 的 advance 已处理，不走下方通用逻辑
   }
-  // 无玩家输入的步骤（start/check-control/check-cache/end）或本步骤无事可做 → 允许推进；
-  // check-compile 存在可编译线时编译为强制且唯一的行动，不再提供 advance；
-  // action 步骤且手牌为空时（无牌可打）必须刷新，同样不提供 advance（规则：无牌可打必须补满手牌）
   const mustRefresh = s.step === 'action' && s.players[player].hand.length === 0;
   if (
     !(s.step === 'check-compile' && getCompilableLines(s, player).length > 0) &&
@@ -56,20 +69,33 @@ export function getLegalActions(s: GameState, player: PlayerId): LegalAction[] {
   return out;
 }
 
-// 重载：play 需要完整 args；compile 只需 line；refresh/advance 无 args
+// 重载：play 需要完整 args；compile 只需 line；refresh/advance 无 args；
+// effect-choice 需要 promptId + choice；resolve-trigger 需要 cardUid
 // （修正 brief 中 PlayArgs 全必填与测试 `compile, { line: 2 }` 的类型冲突）
 export function executeAction(s: GameState, player: PlayerId, kind: 'play', args: PlayArgs): void;
 export function executeAction(s: GameState, player: PlayerId, kind: 'compile', args: { line: Line }): void;
 export function executeAction(s: GameState, player: PlayerId, kind: 'refresh' | 'advance'): void;
-export function executeAction(s: GameState, player: PlayerId, kind: ActionKind, args?: PlayArgs | { line: Line }): void {
+export function executeAction(s: GameState, player: PlayerId, kind: 'effect-choice', args: { promptId: string; choice: string[] }): void;
+export function executeAction(s: GameState, player: PlayerId, kind: 'resolve-trigger', args: { cardUid: string }): void;
+export function executeAction(s: GameState, player: PlayerId, kind: ActionKind, args?: PlayArgs | { line: Line } | { promptId: string; choice: string[] } | { cardUid: string }): void {
   if (s.phase !== 'turn' || s.winner !== null) throw new Error('game not in turn phase');
-  if (s.turnPlayer !== player) throw new Error('not your turn');
+  if (s.turnPlayer !== player && kind !== 'effect-choice') throw new Error('not your turn');
+  // 效果结算挂起 / 落牌中：只允许应答选择
+  if (kind !== 'effect-choice') {
+    if (s.pendingEffects.length > 0) throw new Error('resolve pending effect choices first');
+    if (s.pendingPlay !== null || s.pendingShift !== null) throw new Error('pending play/shift in progress');
+  }
 
   switch (kind) {
     case 'play': {
-      if (!args || !('cardUid' in args)) throw new Error('play requires args');
+      // 需收窄到 PlayArgs（'cardUid' in args 不足以排除 resolve-trigger 的 { cardUid }）
+      if (!args || !('cardUid' in args) || !('faceUp' in args)) throw new Error('play requires args');
       playCard(s, player, args.cardUid, args.faceUp, args.line);
-      advanceStep(s);
+      if (s.pendingEffects.length === 0 && s.pendingPlay === null) {
+        advanceStep(s);
+      } else {
+        s.pendingStepAdvance = true; // 链式结算完毕后由 runStack 推进
+      }
       break;
     }
     case 'refresh': {
@@ -79,10 +105,29 @@ export function executeAction(s: GameState, player: PlayerId, kind: ActionKind, 
       break;
     }
     case 'compile': {
-      if (!args) throw new Error('compile requires args.line');
+      // 需收窄（'line' in args 排除 effect-choice / resolve-trigger 的 args 形状）
+      if (!args || !('line' in args)) throw new Error('compile requires args.line');
       resetControlIfHeld(s, player);
       executeCompile(s, player, args.line);
-      advanceStep(s); // compiledThisTurn=true → 跳过 action
+      advanceStep(s);
+      break;
+    }
+    case 'effect-choice': {
+      if (!args || !('promptId' in args)) throw new Error('effect-choice requires args');
+      const top = s.pendingEffects[s.pendingEffects.length - 1];
+      if (!top || top.player !== player) throw new Error('not your choice');
+      answerEffect(s, args.promptId, args.choice);
+      break;
+    }
+    case 'resolve-trigger': {
+      if (!args || !('cardUid' in args)) throw new Error('resolve-trigger requires args');
+      const kind: 'end' | 'start' | null = s.step === 'end' ? 'end' : s.step === 'start' ? 'start' : null;
+      if (!kind) throw new Error('resolve-trigger only at end/start');
+      const t = collectTriggers(s, kind).find((x) => x.cardUid === args.cardUid);
+      if (!t) throw new Error(`no pending ${kind} trigger for ${args.cardUid}`);
+      s.resolvedTriggerUids.push(args.cardUid);
+      resolveTrigger(s, t);
+      runStack(s);
       break;
     }
     case 'advance': {
@@ -91,6 +136,12 @@ export function executeAction(s: GameState, player: PlayerId, kind: ActionKind, 
       }
       if (s.step === 'action' && s.players[player].hand.length === 0) {
         throw new Error('must refresh with no cards in hand');
+      }
+      if (s.step === 'end' || s.step === 'start') {
+        const k: 'end' | 'start' = s.step;
+        if (collectTriggers(s, k).some((t) => !t.optional)) {
+          throw new Error('mandatory trigger must be resolved');
+        }
       }
       if (s.step === 'check-cache') {
         clearCache(s, player);
