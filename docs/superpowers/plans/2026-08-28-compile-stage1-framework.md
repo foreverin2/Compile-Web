@@ -281,7 +281,7 @@ export interface PlayerState {
 
 export interface GameState {
   phase: Phase;
-  /** 草案轮次：0-5（4-2-2-1 共 6 次选择） */
+  /** 草案轮次：0-5（1-2-2-1 共 6 次选择） */
   draftRound: number;
   /** 已选出的协议（按选择顺序） */
   draftPicks: ProtocolDef[];
@@ -324,7 +324,7 @@ git commit -m "feat: core type model (Card/Protocol/Player/GameState)"
   - `export function getCardDef(defId: string): CardDef`（查找，找不到抛错）
   - `export function getProtocolDef(defId: string): ProtocolDef`（查找，找不到抛错）
 
-**说明：** 演示数据共 **6 套协议**（4-2-2-1 草案需 6 次选择，池子必须 ≥6）。Spirit/Death 的命令卡文本取自官方规则书 MN01 卡面示例；Fire/Water/Light/Metal 命令卡为占位文本（标注 `// TODO(fire): 用户提供真实文本`），其协议卡 commands/loadingText 为官方原文（如 Fire: DISCARD FOR EFFECT / BURN AT BOTH ENDS）。真实 Fire 卡牌文本在阶段 2 由用户提供后替换。
+**说明：** 演示数据共 **6 套协议**（1-2-2-1 草案需 6 次选择，池子必须 ≥6）。Spirit/Death 的命令卡文本取自官方规则书 MN01 卡面示例；Fire/Water/Light/Metal 命令卡为占位文本（标注 `// TODO(fire): 用户提供真实文本`），其协议卡 commands/loadingText 为官方原文（如 Fire: DISCARD FOR EFFECT / BURN AT BOTH ENDS）。真实 Fire 卡牌文本在阶段 2 由用户提供后替换。
 
 - [ ] **Step 1: 写失败测试**
 
@@ -663,7 +663,7 @@ git commit -m "feat: deck ops (draw/discard/reshuffle/clearCache)"
 
 ---
 
-### Task 5: 游戏创建与草案引擎（4-2-2-1 轮选）
+### Task 5: 游戏创建与草案引擎（1-2-2-1 轮选）
 
 **Files:**
 - Create: `src/core/state/create.ts`
@@ -674,7 +674,7 @@ git commit -m "feat: deck ops (draw/discard/reshuffle/clearCache)"
 - Produces:
   - `export function createGame(): GameState`（phase='draft'，6 套演示协议池）
   - `export function getDraftPool(s: GameState): ProtocolDef[]`（当前可选协议）
-  - `export function getCurrentDrafter(s: GameState): PlayerId`（4-2-2-1：轮到谁）
+  - `export function getCurrentDrafter(s: GameState): PlayerId`（1-2-2-1：轮到谁）
   - `export function performDraftPick(s: GameState, defId: string): void`（把协议放入当前选者，推进 draftRound；选完自动进入 setup：双方各 3 协议按草案顺序排线，构建 9 张牌库、抽 5 起始手牌）
   - `export function stackValue(p: PlayerState, line: Line): number`（线堆叠总值：未覆盖卡按印刷值，覆盖卡取印刷值——本阶段所有卡正面；面朝下卡值=2，后续任务实现）
   - `export function getLineValue(s: GameState, player: PlayerId, line: Line): number`（委托 stackValue）
@@ -699,7 +699,7 @@ describe('create & draft', () => {
     expect(getCurrentDrafter(s)).toBe(0);
   });
 
-  it('follows 4-2-2-1 draft order', () => {
+  it('follows 1-2-2-1 draft order', () => {
     const s = createGame();
     const order: number[] = [];
     while (s.phase === 'draft') {
@@ -758,7 +758,7 @@ export function nextUid(): string {
   return `c${uidCounter}`;
 }
 
-/** 4-2-2-1 轮选顺序：第 i 次选择轮到谁 */
+/** 1-2-2-1 轮选顺序：第 i 次选择轮到谁 */
 const DRAFT_ORDER: PlayerId[] = [0, 1, 1, 0, 0, 1];
 
 function emptyPlayer(): PlayerState {
@@ -863,7 +863,7 @@ export function getLineValue(s: GameState, player: PlayerId, line: Line): number
 
 ```bash
 git add src/core/state/create.ts tests/state/create.test.ts
-git commit -m "feat: game creation and 4-2-2-1 draft engine"
+git commit -m "feat: game creation and 1-2-2-1 draft engine"
 ```
 
 ---
