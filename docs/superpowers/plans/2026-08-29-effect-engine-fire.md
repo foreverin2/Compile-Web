@@ -423,7 +423,8 @@ describe('effect stack runner', () => {
       yield { op: 'draw', count: 2 };
     }
     pushTestEffect(s, gen());
-    expect(s.players[0].hand).toHaveLength(0);
+    // 链结算后：h1 已弃（不在手牌），抽 2 张 → 手牌 2 张
+    expect(s.players[0].hand.map((c) => c.uid)).not.toContain('h1');
     expect(s.players[0].trash.map((c) => c.uid)).toEqual(['h1']);
     expect(s.players[0].trash[0].faceUp).toBe(true);
     expect(s.players[0].hand).toHaveLength(2);
