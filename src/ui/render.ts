@@ -33,7 +33,8 @@ function renderZone(zone: 'top' | 'middle' | 'bottom', label: string, text: stri
 function renderCardFace(card: { defId: string; faceUp: boolean }): HTMLElement {
   const def = getCardDef(card.defId);
   const box = el('div', 'card');
-  box.dataset.defId = card.defId;
+  // 背面卡（对手手牌 / 场上的背面堆叠）不暴露身份：仅正面卡携带 data-def-id
+  if (card.faceUp) box.dataset.defId = card.defId;
   if (!card.faceUp) {
     const back = el('div', 'card-back');
     const img = document.createElement('img');
@@ -63,7 +64,7 @@ function renderCardFace(card: { defId: string; faceUp: boolean }): HTMLElement {
 function renderCoveredCard(card: { defId: string; faceUp: boolean }): HTMLElement {
   const def = getCardDef(card.defId);
   const box = el('div', 'card covered');
-  box.dataset.defId = card.defId;
+  if (card.faceUp) box.dataset.defId = card.defId;
   box.appendChild(el('div', 'card-value', String(card.faceUp ? def.value : 2)));
   if (card.faceUp && def.top) {
     box.appendChild(el('div', 'card-covered-text', def.top));

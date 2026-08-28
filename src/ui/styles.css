@@ -65,8 +65,9 @@ body { font-family: system-ui, sans-serif; background: #1a1a2e; color: #eee; }
 
 /* ===== 手牌 ===== */
 .hand { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; min-height: 70px; }
-.hand .card { cursor: pointer; }
-.hand .card:hover { border-color: #e0a030; }
+/* 仅当前玩家（可交互）的手牌显示可点光标；对手隐藏手牌不暗示可点击 */
+.player-col.self .hand .card { cursor: pointer; }
+.player-col.self .hand .card:hover { border-color: #e0a030; }
 
 /* ===== 指示 / 操作 / 日志 ===== */
 .step-indicator { text-align: center; font-size: 13px; color: #ccc; margin-top: 2px; padding: 4px 0; border-top: 1px solid rgba(255, 255, 255, 0.08); }
