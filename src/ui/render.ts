@@ -38,7 +38,6 @@ function renderCardFace(card: { defId: string; faceUp: boolean }): HTMLElement {
     img.alt = 'card back';
     img.className = 'cardback-img';
     back.appendChild(img);
-    back.appendChild(el('span', 'card-back-value', '2'));
     box.appendChild(back);
     return box;
   }
@@ -168,7 +167,14 @@ function renderHand(
   const reversed = player === 1; // P2 右起、向左延伸；P1 左起、向右延伸（默认左对齐）
   const hand = el('div', 'hand' + (opts.isSelf ? ' self' : '') + (reversed ? ' reversed' : ''));
   const cards = s.players[player].hand;
-  const shown = cards.slice(0, 10);
+  // 点 4：手牌从左到右按数值升序显示（P1/P2 一致）。
+  // 数值取 defId 后缀（'fire-3' → 3）。排序仅影响显示顺序，引擎 hand 数组不变。
+  // P1 渲染升序（index 0 最左=最小）；P2 为 row-reverse（index 0 在最右），
+  // 故渲染降序使视觉上最左=最小、向右递增。
+  const byValue = [...cards].sort(
+    (a, b) => parseInt(splitDefId(a.defId)[1], 10) - parseInt(splitDefId(b.defId)[1], 10)
+  );
+  const shown = (reversed ? [...byValue].reverse() : byValue).slice(0, 10);
   const nodes: HTMLElement[] = [];
   for (const card of shown) {
     const i = nodes.length;
