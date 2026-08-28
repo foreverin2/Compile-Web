@@ -27,6 +27,7 @@ export function playCard(s: GameState, player: PlayerId, cardUid: string, faceUp
   card.line = line;
   card.pos = null;
   s.pendingPlay = card;
+  s.log.push(`P${player + 1} plays ${card.defId} ${faceUp ? 'face-up' : 'face-down'} to line ${line + 1}`);
   const stack = p.stacks[line];
   if (stack.length > 0) {
     const top = stack[stack.length - 1];
