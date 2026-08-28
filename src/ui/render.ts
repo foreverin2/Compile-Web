@@ -105,9 +105,9 @@ function renderStackSlot(
     node.style.zIndex = String(i);
     if (selected === card.uid) node.classList.add('selected');
     // 单击=打牌（仅可交互时）、双击=放大查看（双方场上卡均为公开信息）。
-    // 双击判别：第一次点击延迟 240ms 才派发打牌，300ms 内第二次点击会取消它并打开
-    // 遮罩，故双击不会误打牌；stopPropagation 阻断冒泡到槽自身的 click（槽空白处
-    // 点击仍直接打牌，二者不重复触发）。
+    // 双击判别：单击延迟 320ms 严格大于 300ms 双击窗口，窗口内第二次点击先于延迟的
+    // 单击触发并取消它，故双击永不误打牌；窗口之外的点击各自成为独立的单击。
+    // stopPropagation 阻断冒泡到槽自身的 click（槽空白处点击仍直接打牌，二者不重复触发）。
     bindClickOrDouble(
       node,
       () => { if (interactable) onPlay(line); },
@@ -180,12 +180,21 @@ function renderHand(
     node.dataset.uid = card.uid;
     if (isSelected) node.classList.add('selected');
     if (opts.isSelf) {
-      // 单击=选中、双击=放大查看（300ms 判别窗内第二次点击取消延迟的单击并打开遮罩）；
-      // faceUp 为当前显示朝向（选中且翻至背面时预览卡背，放大也显示卡背）。
+      // 单击=选中、双击=放大查看（单击延迟 320ms 严格大于 300ms 双击窗口，窗口内
+      // 第二次点击取消延迟的单击并打开遮罩）；faceUp 为当前显示朝向（选中且翻至背面
+      // 时预览卡背，放大也显示卡背）。
       bindClickOrDouble(
         node,
         () => opts.onSelect(card.uid),
         () => openZoom(card.defId, faceUp, false, false),
+        true
+      );
+    } else {
+      // 对手手牌（背面朝下）：单击无操作、双击放大查看卡背（需求：任意卡均可双击放大）。
+      bindClickOrDouble(
+        node,
+        () => {},
+        () => openZoom(card.defId, false, false, false),
         true
       );
     }
@@ -485,7 +494,11 @@ function closeZoom(): void {
   zoomState = null;
 }
 
-/** 单击/双击判别：300ms 内两次点击视为双击（double），否则延迟执行单击（single）。 */
+/**
+ * 单击/双击判别：300ms 窗口内两次点击视为双击（double），否则延迟执行单击（single）。
+ * 单击延迟 320ms 严格大于双击窗口 300ms：窗口内的第二次点击必然先于延迟的单击触发
+ * 并取消它，保证「双击永不触发单击」；窗口之外的点击各自成为独立的单击。
+ */
 function bindClickOrDouble(node: HTMLElement, single: () => void, double: () => void, stopPropagation: boolean): void {
   let timer: number | undefined;
   let last = 0;
@@ -499,7 +512,7 @@ function bindClickOrDouble(node: HTMLElement, single: () => void, double: () => 
     } else {
       last = now;
       if (timer !== undefined) clearTimeout(timer);
-      timer = window.setTimeout(() => { timer = undefined; single(); }, 240);
+      timer = window.setTimeout(() => { timer = undefined; single(); }, 320);
     }
   });
 }

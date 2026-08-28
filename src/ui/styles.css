@@ -377,6 +377,10 @@ body {
   pointer-events: auto;
 }
 .zoom-protocol {
-  /* 协议卡横向显示：原图逆时针旋转 90°（transform 中与 scale 组合） */
+  /* 协议卡横向显示：原图逆时针旋转 90°（transform 中与 scale 组合）。
+     旋转后视觉宽高互换，故布局约束也随之交换：80vh 宽 × 80vw 高，
+     保证横向协议（如 1050×750）在 1x 缩放下完整落入视口不被裁切。 */
+  max-width: 80vh;
+  max-height: 80vw;
   transform-origin: center center;
 }
