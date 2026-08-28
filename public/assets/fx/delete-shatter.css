@@ -1,0 +1,134 @@
+
+/* ==========================================================================
+   卡牌「删去」特效：通用多边形碎裂消散 (Cyber Shatter FX)
+   时长: ≤ 1.2s 单次播放 (含 0.15s 瞬间过载闪光 + 1.0s 碎片/粒子放射飞散)
+   节点结构: 宿主卡牌克隆节点 (.card-shattering) -> 内部自动注入 .shatter-overlay
+   ========================================================================== */
+
+/* 处于碎裂状态的克隆卡牌容器 */
+.card-shattering {
+  position: fixed !important;
+  pointer-events: none !important;
+  user-select: none !important;
+  overflow: visible !important;
+  /* 隐藏原始卡面内容，交由碎片与遮罩渲染 */
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+/* 隐藏原始卡牌内的子节点，只展示碎裂特效层 */
+.card-shattering > *:not(.shatter-overlay) {
+  opacity: 0 !important;
+  visibility: hidden !important;
+}
+
+/* 碎片与粒子特效覆盖层 */
+.shatter-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+}
+
+/* 碎裂瞬间的赛博冷光闪烁层 */
+.shatter-flash {
+  position: absolute;
+  inset: -10px;
+  background: radial-gradient(circle at 50% 50%, #ffffff 0%, #4ff0ff 60%, transparent 80%);
+  border-radius: 8px;
+  mix-blend-mode: screen;
+  opacity: 0;
+  animation: shatterFlashAnim 0.3s cubic-bezier(0.1, 0.9, 0.2, 1) forwards;
+}
+
+@keyframes shatterFlashAnim {
+  0% {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  30% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.2);
+  }
+}
+
+/* 单个碎片通用属性 */
+.shatter-piece {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  background-position: center;
+  box-sizing: border-box;
+  border: 1px solid rgba(79, 240, 255, 0.4);
+  filter: drop-shadow(0 0 6px rgba(79, 240, 255, 0.6));
+  animation: pieceFlyAnim 1.05s cubic-bezier(0.15, 0.85, 0.35, 1) forwards;
+  will-change: transform, opacity;
+}
+
+/* 碎片飞散动画：位移 + 旋转 + 翻滚 + 渐隐 */
+@keyframes pieceFlyAnim {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+    opacity: 1;
+    filter: brightness(2) drop-shadow(0 0 8px #4ff0ff);
+  }
+  20% {
+    opacity: 1;
+    filter: brightness(1.2) drop-shadow(0 0 4px rgba(79, 240, 255, 0.5));
+  }
+  75% {
+    opacity: 0.7;
+  }
+  100% {
+    transform: translate3d(var(--tx, 0px), var(--ty, 0px), 0) 
+               rotate(var(--rot, 0deg)) 
+               scale(var(--scale, 0.6));
+    opacity: 0;
+    filter: brightness(0.5) blur(2px);
+  }
+}
+
+/* 伴随飞散的细小代码能量光点粒子 */
+.shatter-spark {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background-color: #4ff0ff;
+  box-shadow: 0 0 6px #4ff0ff, 0 0 10px #ffffff;
+  pointer-events: none;
+  opacity: 0;
+  animation: sparkBurstAnim 0.9s ease-out forwards;
+  will-change: transform, opacity;
+}
+
+@keyframes sparkBurstAnim {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 0, 0) scale(0.5);
+  }
+  20% {
+    opacity: 1;
+    transform: translate3d(calc(var(--stx) * 0.2), calc(var(--sty) * 0.2), 0) scale(1.4);
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(var(--stx), var(--sty), 0) scale(0);
+  }
+}
+
+

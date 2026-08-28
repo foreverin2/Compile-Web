@@ -1,0 +1,170 @@
+
+/* ==========================================================================
+   卡牌「弃牌」特效：通用对角线切割分离 (Cyber Cut Discard FX)
+   时长: ≤ 1.2s 单次播放 (0.15s 光刃切割 + 1.0s 对角滑开渐隐)
+   节点结构: 宿主卡牌克隆节点 (.card-cut) -> 内部自动注入 .cut-overlay
+   ========================================================================== */
+
+/* 处于切割状态的克隆卡牌容器 */
+.card-cut {
+  position: fixed !important;
+  pointer-events: none !important;
+  user-select: none !important;
+  overflow: visible !important;
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+/* 隐藏原始卡牌内的子节点，交由切割图层渲染 */
+.card-cut > *:not(.cut-overlay) {
+  opacity: 0 !important;
+  visibility: hidden !important;
+}
+
+/* 切割特效覆盖层 */
+.cut-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+}
+
+/* 切割瞬间的高亮光刃闪光线 (左上 -> 右下对角线) */
+.cut-laser-blade {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 141.4%;
+  height: 3px;
+  transform-origin: top left;
+  transform: rotate(var(--cut-angle, 56deg));
+  background: linear-gradient(90deg, transparent 0%, #ffffff 30%, #4ff0ff 70%, transparent 100%);
+  box-shadow: 0 0 8px #ffffff, 0 0 16px #4ff0ff;
+  opacity: 0;
+  animation: laserSlashAnim 0.28s cubic-bezier(0.1, 0.9, 0.2, 1) forwards;
+  mix-blend-mode: screen;
+  z-index: 10;
+}
+
+@keyframes laserSlashAnim {
+  0% {
+    opacity: 0;
+    transform: rotate(var(--cut-angle, 56deg)) scaleX(0.2);
+  }
+  35% {
+    opacity: 1;
+    transform: rotate(var(--cut-angle, 56deg)) scaleX(1.1);
+  }
+  100% {
+    opacity: 0;
+    transform: rotate(var(--cut-angle, 56deg)) scaleX(1.2);
+  }
+}
+
+/* 半片通用基础样式 */
+.cut-slice {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  background-position: center;
+  box-sizing: border-box;
+  will-change: transform, opacity;
+}
+
+/* 上半部三角：左上 -> 右下切割的上侧 (点: 0 0, 100% 0, 0 100%) */
+.cut-slice-top {
+  clip-path: polygon(0% 0%, 100% 0%, 0% 100%);
+  -webkit-clip-path: polygon(0% 0%, 100% 0%, 0% 100%);
+  border-right: 1px solid rgba(79, 240, 255, 0.6);
+  animation: sliceSlideTopAnim 1.05s cubic-bezier(0.16, 0.84, 0.44, 1) forwards;
+  animation-delay: 0.05s;
+}
+
+/* 下半部三角：左上 -> 右下切割的下侧 (点: 100% 0, 100% 100%, 0 100%) */
+.cut-slice-bottom {
+  clip-path: polygon(100% 0%, 100% 100%, 0% 100%);
+  -webkit-clip-path: polygon(100% 0%, 100% 100%, 0% 100%);
+  border-left: 1px solid rgba(79, 240, 255, 0.6);
+  animation: sliceSlideBottomAnim 1.05s cubic-bezier(0.16, 0.84, 0.44, 1) forwards;
+  animation-delay: 0.05s;
+}
+
+/* 上半片滑开：向左上漂移 + 逆时针微旋 + 渐隐 */
+@keyframes sliceSlideTopAnim {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+    opacity: 1;
+    filter: brightness(1.6) drop-shadow(0 0 6px #4ff0ff);
+  }
+  20% {
+    opacity: 1;
+    filter: brightness(1.1);
+  }
+  60% {
+    opacity: 0.8;
+  }
+  100% {
+    transform: translate3d(-45px, -65px, 0) rotate(-6deg) scale(0.95);
+    opacity: 0;
+    filter: brightness(0.6) blur(2px);
+  }
+}
+
+/* 下半片滑开：向右下漂移 + 顺时针微旋 + 渐隐 */
+@keyframes sliceSlideBottomAnim {
+  0% {
+    transform: translate3d(0, 0, 0) rotate(0deg);
+    opacity: 1;
+    filter: brightness(1.6) drop-shadow(0 0 6px #4ff0ff);
+  }
+  20% {
+    opacity: 1;
+    filter: brightness(1.1);
+  }
+  60% {
+    opacity: 0.8;
+  }
+  100% {
+    transform: translate3d(45px, 65px, 0) rotate(6deg) scale(0.95);
+    opacity: 0;
+    filter: brightness(0.6) blur(2px);
+  }
+}
+
+/* 切割边缘溢出的细碎青色光点 */
+.cut-spark {
+  position: absolute;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background-color: #ffffff;
+  box-shadow: 0 0 4px #4ff0ff, 0 0 8px #4ff0ff;
+  pointer-events: none;
+  opacity: 0;
+  animation: cutSparkBurst 0.85s ease-out forwards;
+}
+
+@keyframes cutSparkBurst {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 0, 0) scale(0.6);
+  }
+  25% {
+    opacity: 1;
+    transform: translate3d(calc(var(--ctx) * 0.3), calc(var(--cty) * 0.3), 0) scale(1.2);
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(var(--ctx), var(--cty), 0) scale(0);
+  }
+}
+
+
