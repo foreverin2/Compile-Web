@@ -11,9 +11,9 @@ body {
   background-repeat: no-repeat;
   background-attachment: fixed;
 }
-/* 主容器：放宽到 1400px 容纳加长的链路（360px×2 槽 + 协议 + 间距），
+/* 主容器：左右 padding 90px 容纳电池外溢（P1 电池在槽左缘外 -74px、P2 对称）；
    不设 overflow-x:hidden —— 那会裁剪手牌/链路边缘；极端晚局若超宽由浏览器滚动。 */
-#app { max-width: 1600px; margin: 0 auto; padding: 12px; }
+#app { max-width: 1780px; margin: 0 auto; padding: 12px 90px; }
 
 .board { display: flex; flex-direction: column; gap: 10px; }
 
@@ -74,30 +74,32 @@ body {
    不拦截下方卡牌点击/悬停与槽位打牌。 */
 .battery {
   position: absolute;
-  /* 竖摆于放置区外部，贴尾部；P1 槽靠左 → 电池在右缘外，P2 槽靠右 → 电池在左缘外 */
+  /* 竖摆于链路尽头外侧：P1 链路向左生长（尽头在左）→ 电池在槽最左侧外；
+     P2 链路向右生长（尽头在右）→ 电池在槽最右侧外 */
   top: 50%;
   transform: translateY(-50%);
   display: flex;
   flex-direction: column; /* 纵向：正极在上、10 格竖排、值在下方 */
   align-items: center;
-  gap: 3px;
-  height: 150px;
+  gap: 4px;
+  height: 190px;
   /* z-index 59：高于场上堆叠卡（zIndex=pos，最多几十）使电池始终可见；
      低于 hover 弹出的卡（60）不遮挡查看 */
   z-index: 59;
   pointer-events: none;
   user-select: none;
 }
-.stack-slot.p1 .battery { right: 10px; }
-.stack-slot.p2 .battery { left: 10px; }
+/* P1 电池在槽最左侧外（链路尽头）；P2 在槽最右侧外 */
+.stack-slot.p1 .battery { left: -74px; }
+.stack-slot.p2 .battery { right: -74px; }
 .battery-shell {
   position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  width: 64px;
-  height: 118px;
+  width: 76px;
+  height: 148px;
   border: 3px solid #00ffcc;
   border-radius: 8px;
   background: rgba(0, 0, 0, 0.7);
@@ -106,41 +108,46 @@ body {
 }
 /* 正极凸头（竖摆 → 在顶部） */
 .battery-cap {
-  width: 20px;
-  height: 9px;
+  width: 26px;
+  height: 11px;
   border: 3px solid #00ffcc;
   border-bottom: none;
-  border-radius: 3px 3px 0 0;
+  border-radius: 4px 4px 0 0;
   background: rgba(0, 0, 0, 0.7);
   box-shadow: 0 0 8px rgba(0, 255, 204, 0.3);
 }
-.battery-cells { display: flex; flex-direction: column; gap: 4px; align-items: center; }
+.battery-cells { display: flex; flex-direction: column; gap: 5px; align-items: center; }
 .battery-cell {
-  width: 34px;
-  height: 7px;
-  border-radius: 1px;
+  width: 44px;
+  height: 9px;
+  border-radius: 2px;
   background: rgba(255, 255, 255, 0.07);
 }
+/* 填充格：默认青色（stable）；bulge/full/burst 分别由下方状态覆盖为外壳同色 */
 .battery-cell.filled {
   background: linear-gradient(90deg, #00ffcc, #007a66);
-  box-shadow: 0 0 5px rgba(0, 255, 204, 0.55);
+  box-shadow: 0 0 6px rgba(0, 255, 204, 0.55);
 }
-/* 点值标签：外壳下方居中 */
+/* 点值标签：外壳下方居中，放大 */
 .battery-value {
-  font-size: 13px;
+  font-size: 20px;
   font-weight: bold;
   line-height: 1;
   color: #00ffcc;
-  text-shadow: 0 0 4px rgba(0, 255, 204, 0.6);
+  text-shadow: 0 0 6px rgba(0, 255, 204, 0.7);
 }
-/* bulge 4-6：上下边微微鼓出 + 橙黄微光（竖摆 → 左右边鼓出） */
+/* bulge 4-6：上下边微微鼓出 + 橙黄微光（竖摆 → 左右边鼓出）；能量格跟随橙黄 */
 .battery-bulge .battery-shell {
   border-color: #ffb000;
-  border-radius: 14px;
-  box-shadow: 0 0 16px rgba(255, 176, 0, 0.55), inset 0 0 10px rgba(255, 176, 0, 0.15);
+  border-radius: 16px;
+  box-shadow: 0 0 18px rgba(255, 176, 0, 0.6), inset 0 0 12px rgba(255, 176, 0, 0.15);
 }
 .battery-bulge .battery-cap { border-color: #ffb000; box-shadow: 0 0 8px rgba(255, 176, 0, 0.4); }
 .battery-bulge .battery-value { color: #ffb000; text-shadow: 0 0 4px rgba(255, 176, 0, 0.6); }
+.battery-bulge .battery-cell.filled {
+  background: linear-gradient(90deg, #ffb000, #a86e00);
+  box-shadow: 0 0 6px rgba(255, 176, 0, 0.6);
+}
 /* full 7-9：明显鼓胀接近圆润 + 橙色强光 + 应力裂纹高光 */
 .battery-full .battery-shell {
   border-color: #ff6b00;
@@ -168,6 +175,11 @@ body {
   width: 9px;
   transform: rotate(-40deg);
 }
+/* full 7-9：能量格跟随橙色外壳 */
+.battery-full .battery-cell.filled {
+  background: linear-gradient(90deg, #ff6b00, #b34600);
+  box-shadow: 0 0 7px rgba(255, 107, 0, 0.7);
+}
 /* burst ≥10：爆裂（径向爆光 + 斜向裂纹 + 红橙脉冲动画），10 格仍全部点亮 */
 .battery-burst .battery-shell {
   border-color: #ff3d00;
@@ -182,8 +194,8 @@ body {
 .battery-burst .battery-value { color: #ffd000; text-shadow: 0 0 6px rgba(255, 61, 0, 0.8); }
 .battery-burst .battery-cell { background: rgba(255, 80, 0, 0.16); }
 .battery-burst .battery-cell.filled {
-  background: linear-gradient(180deg, #ffd000, #ff3d00);
-  box-shadow: 0 0 6px rgba(255, 120, 0, 0.85);
+  background: linear-gradient(90deg, #ffd000, #ff3d00);
+  box-shadow: 0 0 7px rgba(255, 120, 0, 0.85);
 }
 .battery-burst .battery-shell::before,
 .battery-burst .battery-shell::after {
