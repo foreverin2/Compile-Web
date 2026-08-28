@@ -21,6 +21,25 @@
 
 ---
 
+## 0.1 改进轮 1（2026-08-28，用户 6 点反馈，已完成）
+
+用户提出的 6 点改进已全部实现并审查通过（HEAD `0908588`，41 测试全绿，build 绿）：
+
+1. **卡面三栏分区**：`src/ui/render.ts` `renderZone()` — 顶部「常驻」/ 中部「即时」（高亮）/ 底部「辅助」三个带边框+标签的分区；空栏不渲染（如 fire-3 只有底部指令）。
+2. **官方卡背**：`public/assets/Cardback.jpg`（从 TTS 项目复制）；背面牌渲染该图 + 金色「2」徽章（规则：背面牌印刷值=2）。
+3. **场地布局改版**：三列网格（`styles.css` `1fr 260px 1fr`）— P1 左侧 / 中间公共区 6 协议格（3 行 × 2）/ P2 右侧；活动方（当前回合玩家）手牌可交互、对手手牌显背面；堆叠槽为打牌目标。
+4. **自动推进**：`src/main.ts` `runAutoAdvance()` — 非 action 阶段自动推进（400ms 单定时器链）：start/check-control/check-cache/end 自动；check-compile 单线可编译时自动编译、多线时暂停等玩家选；draft/gameover/action 停止。新增 `UiCallbacks.onRendered?()` 钩子。
+5. **Gemini 素材提示词**：`docs/gemini-tasks-batch1.md`（任务单 A 背景 / B 牌桌 / C 火焰特效 / D 协议 Loading 面 / E 卡背说明）— 用户复制给 Gemini 生成。
+6. **覆盖机制**：`renderCoveredCard()` — 堆叠中被覆盖的卡只显示数值+顶部（常驻）指令，中部/底部遮蔽失效；顶层卡全卡面+「活跃」徽章（zIndex=pos 保证层叠）；背面被覆盖卡显示「背面」。
+
+**已知遗留（下轮可做）**：
+- 卡牌**效果文本结算**（点 4 提到的连锁触发）→ 阶段 2 效果引擎
+- handoff 横幅在 start 步会被自动推进快速跳过（约 400ms 闪现），提示文案"点击下一步"已过时 → 可暂停 start 或改文案
+- 非活动方手牌无点击但曾有 pointer 光标（已修复 `0908588`：限定 `.player-col.self`）
+- 对手手牌/场上背面牌的 data-def-id 已隐藏（`0908588`）
+
+---
+
 ## 1. 已完成功能清单
 
 ### 1.1 引擎层（`src/core`，纯 TypeScript，零 DOM 依赖）
