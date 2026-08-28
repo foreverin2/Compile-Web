@@ -1,7 +1,7 @@
 # 阶段 1 文档：基础运行框架（Compile《译世界》网页版）
 
 > 本文件是阶段 1 的完整交接文档，供**零上下文 agent** 直接续作阶段 2。
-> 日期：2026-08-28 · 分支：`feature/stage1-framework` · HEAD：`33372ba` · 测试：40/40 通过 · 构建：通过
+> 日期：2026-08-28 · 分支：`feature/stage1-framework` · HEAD：`bf15050`（父提交 `33372ba`） · 测试：40/40 通过 · 构建：通过
 
 ---
 
@@ -94,6 +94,8 @@ compile/
 └── .superpowers/sdd/           # SDD 任务简报/报告/评审记录（开发过程产物，不入库）
 ```
 
+> 注：根目录另有 `_rules_raw.txt` / `_rules_mn02_codex_raw.txt` / `_tss_files.txt`：规则原文与 TTS 资产清单草稿，非代码，可忽略。
+
 ---
 
 ## 3. 如何运行
@@ -101,8 +103,10 @@ compile/
 前置：Node.js + npm。
 
 ```bash
-# 1. 安装依赖（首次）
-npm install
+# 1. 安装依赖（仅首次）：
+#    - 若 node_modules 不存在：npm install --cache node_modules/.npm-cache
+#    - 若 node_modules 已存在（推荐）：跳过安装，直接执行第 2 步 npm run dev
+npm install --cache node_modules/.npm-cache
 ```
 
 > ⚠️ **本开发沙箱环境特殊，勿在普通环境照搬**：
