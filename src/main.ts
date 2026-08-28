@@ -11,6 +11,8 @@ const state = createGame();
 /** 非玩家输入步骤之间自动推进的间隔（毫秒） */
 const AUTO_ADVANCE_DELAY = 400;
 let autoTimer: number | null = null;
+/** 抽牌飞入动画进行中标志：防止动画期间再次触发刷新导致并发动画/双重渲染 */
+let drawAnimBusy = false;
 
 const cb: UiCallbacks = {
   onRendered() {
@@ -32,7 +34,11 @@ const cb: UiCallbacks = {
       executeAction(state, player, 'compile', { line: a.line! });
     } else if (a.kind === 'refresh') {
       // 抽牌飞入动画：记录刷新前手牌数，执行后按差值（= 本次抽了几张）播放动画，
-      // 动画结束后再重渲染展示新手牌
+      // 动画结束后再重渲染展示新手牌；动画进行中忽略再次刷新（防并发）
+      if (drawAnimBusy) {
+        renderApp(root, state, cb);
+        return;
+      }
       const handBefore = state.players[player].hand.length;
       executeAction(state, player, a.kind);
       drawAnimCount = state.players[player].hand.length - handBefore;
@@ -40,7 +46,11 @@ const cb: UiCallbacks = {
       executeAction(state, player, a.kind);
     }
     if (drawAnimCount > 0) {
-      playDrawAnimation(player, drawAnimCount, () => renderApp(root, state, cb));
+      drawAnimBusy = true;
+      playDrawAnimation(player, drawAnimCount, () => {
+        drawAnimBusy = false;
+        renderApp(root, state, cb);
+      });
     } else {
       renderApp(root, state, cb);
     }
@@ -71,7 +81,9 @@ function playDrawAnimation(player: PlayerId, count: number, done: () => void): v
     const ghost = document.createElement('div');
     ghost.className = 'draw-ghost';
     ghost.style.left = `${startX}px`;
-    ghost.style.top = `${cy - ghost.offsetHeight / 2}px`;
+    // 用常量（.draw-ghost 高度 126px 的一半）而非 offsetHeight：
+    // 元素尚未 appendChild 时 offsetHeight 恒为 0，读取会导致幽灵卡垂直偏下 63px
+    ghost.style.top = `${cy - 63}px`;
     document.body.appendChild(ghost);
     ghosts.push(ghost);
     // 依次起飞：首张 30ms（保证初始位置已被绘制一帧）后每 120ms 起飞下一张，
