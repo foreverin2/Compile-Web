@@ -85,9 +85,9 @@ function renderBattery(s: GameState, player: PlayerId, line: Line): HTMLElement 
   const points = getLineValue(s, player, line);
   const battery = el('div', `battery battery-${batteryState(points)}`);
   battery.dataset.points = String(points);
-  // R9 电池倒置：DOM 顺序 = 视觉顺序（flex column 自上而下）——值标签在上、
-  // 外壳（10 格竖排）居中、正极凸头在底部。
-  battery.appendChild(el('span', 'battery-value', String(points)));
+  // DOM 顺序 = 视觉顺序（flex column 自上而下）：正极凸头在上、外壳（10 格竖排）居中、
+  // 值标签在底部。
+  battery.appendChild(el('div', 'battery-cap'));
   const shell = el('div', 'battery-shell');
   const cells = el('div', 'battery-cells');
   const filled = Math.min(points, 10);
@@ -96,7 +96,7 @@ function renderBattery(s: GameState, player: PlayerId, line: Line): HTMLElement 
   }
   shell.appendChild(cells);
   battery.appendChild(shell);
-  battery.appendChild(el('div', 'battery-cap'));
+  battery.appendChild(el('span', 'battery-value', String(points)));
   return battery;
 }
 
@@ -324,10 +324,11 @@ function renderShield(s: GameState, player: PlayerId, enabled: boolean, hand: HT
 }
 
 function bindShieldDrag(shield: HTMLElement, player: PlayerId, hand: HTMLElement): void {
-  const handle = shield.querySelector<HTMLElement>('.shield-handle');
-  if (!handle) return;
-  handle.addEventListener('mousedown', (e) => {
+  // 触发范围：整个挡板可拖（除中间手牌数徽标外），扩大可抓取区域
+  shield.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return;
+    // 点击中间徽标（shield-count）不触发拖拽
+    if ((e.target as HTMLElement).closest('.shield-count')) return;
     e.preventDefault();
     e.stopPropagation(); // 不与卡牌单击/拖拽相互干扰
     const dir = player === 0 ? 1 : -1; // P1 向右拖加宽；P2 向左拖加宽

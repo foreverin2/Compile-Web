@@ -108,13 +108,13 @@ body {
   box-shadow: 0 0 12px rgba(0, 255, 204, 0.4), inset 0 0 8px rgba(0, 255, 204, 0.12);
   transition: border-radius 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
 }
-/* 正极凸头（R9 倒置 → 在底部：去上边框、下圆角） */
+/* 正极凸头（在顶部：无下边框、上圆角） */
 .battery-cap {
   width: 32px;
   height: 13px;
   border: 4px solid #00ffcc;
-  border-top: none;
-  border-radius: 0 0 5px 5px;
+  border-bottom: none;
+  border-radius: 5px 5px 0 0;
   background: rgba(0, 0, 0, 0.7);
   box-shadow: 0 0 8px rgba(0, 255, 204, 0.3);
 }
@@ -474,24 +474,26 @@ body {
   box-shadow: 0 0 12px rgba(0, 255, 204, 0.2);
   z-index: 70;
   user-select: none;
+  cursor: ew-resize; /* 整个挡板可拖：扩大触发范围 */
   transition: width 0.15s ease;
 }
 .hand-shield.p1 { left: -28px; } /* 起点更靠左：覆盖手牌区左侧 padding，从更外开始向右拉 */
 .hand-shield.p2 { right: -28px; } /* 对称：覆盖右侧 padding */
-/* 拖拽手柄：位于挡板内侧（移动端）边缘；加宽至 36px 便于抓取；拖拽期间关闭 width 过渡避免滞后 */
+/* 拖拽手柄：位于挡板内侧（移动端）边缘的可视提示（整个挡板都可拖，手柄仅作视觉指示） */
 .hand-shield .shield-handle {
   position: absolute;
   top: 0;
   bottom: 0;
   width: 36px;
-  cursor: ew-resize;
   background: repeating-linear-gradient(90deg, rgba(0, 255, 204, 0.5) 0 3px, transparent 3px 9px);
   opacity: 0.9;
+  pointer-events: none; /* 拖拽已绑到整个挡板，手柄不拦截事件 */
 }
 .hand-shield.p1 .shield-handle { right: 0; border-left: 1px solid rgba(0, 255, 204, 0.6); }
 .hand-shield.p2 .shield-handle { left: 0; border-right: 1px solid rgba(0, 255, 204, 0.6); }
 .hand-shield.dragging { transition: none; }
-.hand-shield.locked .shield-handle { cursor: default; opacity: 0.3; }
+.hand-shield.locked { cursor: default; }
+.hand-shield.locked .shield-handle { opacity: 0.3; }
 /* 手牌数量徽标：挡板中央；收起（未遮住任何牌）时隐藏 */
 .hand-shield .shield-count {
   position: absolute;
