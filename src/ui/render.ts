@@ -2,6 +2,7 @@ import type { GameState, PlayerId, Line, ProtocolDef } from '../core/models/type
 import { getLineValue, getCurrentDrafter } from '../core/state/create';
 import { getLegalActions, type LegalAction } from '../core/game';
 import { DEMO_PROTOCOLS } from '../data/demo';
+import { downloadLog } from './diag';
 
 export interface UiCallbacks {
   onAction(a: LegalAction): void;
@@ -584,8 +585,12 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   // 牌库/弃牌/手牌计数与手牌本体分别放在顶部条带与底部条带的左右两侧。
   const grid = el('div', 'board-grid');
 
-  // 顶部条带：双方信息 + 中间控制组件
+  // 顶部条带：诊断日志导出 + 双方信息 + 中间控制组件
   const strip = el('div', 'player-strip');
+  const diagBtn = el('button', 'btn diag-btn', '导出日志');
+  diagBtn.title = '导出诊断日志（错误 + 控制台记录 + 事件日志 + 状态快照）';
+  diagBtn.addEventListener('click', () => downloadLog(s));
+  strip.appendChild(diagBtn);
   strip.appendChild(renderPlayerInfo(s, 0, { isSelf: s.turnPlayer === 0 }));
   strip.appendChild(renderControlModule(s));
   strip.appendChild(renderPlayerInfo(s, 1, { isSelf: s.turnPlayer === 1 }));

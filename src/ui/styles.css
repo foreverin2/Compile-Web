@@ -892,3 +892,13 @@ body.dragging { cursor: grabbing; user-select: none; }
 .choice-confirm.disabled { opacity: 0.4; pointer-events: none; }
 /* 选择模式下隐藏非候选手牌的交互（hover/单击/拖拽）；候选卡保持可点以便勾选 */
 .hand-strip.choice-mode .card:not(.choice-target) { pointer-events: none; }
+
+/* ===== 诊断日志导出 ===== */
+.diag-btn { font-size: 12px; padding: 4px 10px; align-self: center; }
+.diag-prompt { position: fixed; right: 20px; bottom: 20px; z-index: 300; width: 360px; max-width: 90vw;
+  background: #2a0f14f2; border: 1px solid #ff6b6b88; border-radius: 10px; padding: 12px 16px;
+  box-shadow: 0 6px 24px #000a; }
+.diag-prompt-title { color: #ffb4b4; font-weight: 600; font-size: 14px; margin-bottom: 6px; }
+.diag-prompt-msg { color: #ffd9d9; font-size: 12px; margin-bottom: 10px; word-break: break-all;
+  max-height: 120px; overflow: auto; white-space: pre-wrap; }
+.diag-prompt-bar { display: flex; gap: 8px; justify-content: flex-end; }

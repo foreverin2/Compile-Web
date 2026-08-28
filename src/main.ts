@@ -5,6 +5,7 @@ import { getCompilableLines } from './core/rules/compile';
 import { collectTriggers } from './core/effects/triggers';
 import { renderApp, type UiCallbacks } from './ui/render';
 import { initEffects } from './ui/effects';
+import { initDiag } from './ui/diag';
 import type { PlayerId } from './core/models/types';
 
 const root = document.getElementById('app')!;
@@ -146,4 +147,6 @@ function scheduleAutoAdvance(): void {
 }
 
 initEffects();
+// 诊断日志：全量记录 console + 捕获未捕获异常（出错自动提示导出）
+initDiag(() => state);
 renderApp(root, state, cb);
