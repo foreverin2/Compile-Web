@@ -67,9 +67,15 @@
 
 ### 0.1.8 触发唯一性（免排序 UI）
 
-- `collectTriggers(s, kind)`：收集双方场上**正面、未覆盖顶卡**中注册了该触发（`before-covered` / `end` / `start`；`after` 机制预留未用）的卡。
+- `collectTriggers(s, kind)`：收集场上**正面、未覆盖顶卡**中注册了该触发（`before-covered` / `end` / `start`；`after` 机制预留未用）的卡。
+- **end/start 只收集当前回合玩家场地侧**（规则"结算你场地侧所有'结束'触发"）；`after` 等其余种类收集双方。
 - 同一张卡在一局中唯一（每 defId 至多一张在场）→ **同一触发至多一条**，UI 直接出按钮、**无需排序**。
 - `s.resolvedTriggerUids` 记录本 end/start 步骤已结算的触发卡（避免重复），`advanceStep` 进入新 end/start 时清空。
+
+### 0.1.10 无合法目标（fizzle 规则，用户确认 2026-08-29）
+
+- **引擎层**（`runStack`）：任何选择步骤（必选或可选）的 `candidates` 为空时，**不挂起**，记日志「无合法目标，该步骤跳过」并以 `{selected:[]}` 续接生成器——从结构上消除"必选选择无候选 → 永久卡死"（fire-0/1/2 空场首张、fire-5/4 手牌最后一张、fire-0 被盖住前独占场等场景）。
+- **生成器契约（阶段 3 必守）**：每个含必选选择步骤的效果生成器，在使用 `ans.selected[0]` 前必须守卫 `if (ans.selected.length === 0) return;`（或等价处理）——fizzle 以空应答续接后，不守卫的生成器会抛错（响亮、可恢复），但契约要求生成器自我防御。fire-0 中指令的守卫只跳过翻转、**抽 2 张仍执行**（两句独立、非条件）；fire-1/2 第二步"如果弃了"条件性 return；fire-4 抽牌数取决于弃牌数，0 弃则整段返回。
 
 ### 0.1.9 必选 / 可选事件（optional 显式注册）
 
@@ -315,7 +321,7 @@ npm run preview  # 预览构建产物
 
 - **不要**跑 `npm ci` / `npm install`（vite 补丁丢失）；必须装时 `--cache node_modules/.npm-cache`
 - **不要**改 `vite.config.ts` 的 `pool: 'threads'`
-- 测试 `npm test` 预期 85/85（实现新协议后增长）；构建 `npm run build`
+- 测试 `npm test` 预期 87/87（实现新协议后增长）；构建 `npm run build`
 - **不要** `git push`（控制器统一合并推送）
 
 ### 6.4 约定
