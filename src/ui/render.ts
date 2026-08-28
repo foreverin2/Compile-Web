@@ -1,5 +1,5 @@
 import type { GameState, PlayerId, Line } from '../core/models/types';
-import { getCardDef, getProtocolDef } from '../data/demo';
+import { getCardDef } from '../data/demo';
 import { getLineValue, getDraftPool, getCurrentDrafter } from '../core/state/create';
 import { getLegalActions, type LegalAction } from '../core/game';
 
@@ -17,21 +17,18 @@ function el(tag: string, cls: string, text?: string): HTMLElement {
   return node;
 }
 
-/** 卡牌正面的一个指令区：顶部=常驻，中部=即时（活跃区），底部=辅助 */
-function renderZone(zone: 'top' | 'middle' | 'bottom', label: string, text: string): HTMLElement {
-  const z = el('div', `card-zone card-zone-${zone}`);
-  z.appendChild(el('span', 'zone-label', label));
-  z.appendChild(el('div', 'zone-text', text));
-  return z;
+/** 卡牌 defId 形如 'fire-3'：协议段 + 分值段即官方图片资源路径的两段 */
+function splitDefId(defId: string): [string, string] {
+  const sep = defId.indexOf('-');
+  return [defId.slice(0, sep), defId.slice(sep + 1)];
 }
 
 /**
  * 卡牌正面/背面：
- * - 正面：数值 + 协议 + 三指令区（常驻/即时/辅助），各带边框与标签
+ * - 正面：官方卡面图 /assets/protocols/<协议>/card-<分值>.png
  * - 背面：官方 Cardback 图 + 印刷值 2 徽章（规则：背面牌值=2）
  */
 function renderCardFace(card: { defId: string; faceUp: boolean }): HTMLElement {
-  const def = getCardDef(card.defId);
   const box = el('div', 'card');
   // 背面卡（对手手牌 / 场上的背面堆叠）不暴露身份：仅正面卡携带 data-def-id
   if (card.faceUp) box.dataset.defId = card.defId;
@@ -46,46 +43,63 @@ function renderCardFace(card: { defId: string; faceUp: boolean }): HTMLElement {
     box.appendChild(back);
     return box;
   }
-  const head = el('div', 'card-head');
-  head.appendChild(el('div', 'card-value', String(def.value)));
-  head.appendChild(el('div', 'card-protocol', getProtocolDef(def.protocol).name));
-  box.appendChild(head);
-  if (def.top) box.appendChild(renderZone('top', '常驻', def.top));
-  if (def.middle) box.appendChild(renderZone('middle', '即时', def.middle));
-  if (def.bottom) box.appendChild(renderZone('bottom', '辅助', def.bottom));
+  const [protocol, value] = splitDefId(card.defId);
+  const img = document.createElement('img');
+  img.className = 'card-face-img';
+  img.src = `/assets/protocols/${protocol}/card-${value}.png`;
+  img.alt = `protocol ${protocol} card ${value}`;
+  box.appendChild(img);
   return box;
 }
 
 /**
  * 被盖住的牌（堆叠中非顶层）：按规则仅显示数值 + 顶部（常驻）指令；
  * 中部（即时）与底部（辅助）指令被遮蔽失效，不显示。
+ * 用官方卡面图实现时无法可靠地从 PNG 裁剪出顶部文字区，故采用：
+ * 完整卡面小图（宽度 60px）+ 半透明 + 数值徽章叠加 —— 数值可见，
+ * 半透明与小尺寸直观传达"被盖住/失效"（顶部指令文字丢失，见报告权衡）。
  * 背面牌无指令，印刷值按规则为 2，标注"背面"。
  */
 function renderCoveredCard(card: { defId: string; faceUp: boolean }): HTMLElement {
-  const def = getCardDef(card.defId);
   const box = el('div', 'card covered');
   if (card.faceUp) box.dataset.defId = card.defId;
-  box.appendChild(el('div', 'card-value', String(card.faceUp ? def.value : 2)));
-  if (card.faceUp && def.top) {
-    box.appendChild(el('div', 'card-covered-text', def.top));
-  } else if (!card.faceUp) {
+  const mini = el('div', 'covered-mini');
+  const img = document.createElement('img');
+  if (card.faceUp) {
+    const def = getCardDef(card.defId);
+    const [protocol, value] = splitDefId(card.defId);
+    img.src = `/assets/protocols/${protocol}/card-${value}.png`;
+    img.alt = `protocol ${protocol} card ${value}`;
+    img.className = 'covered-img';
+    mini.appendChild(img);
+    mini.appendChild(el('span', 'covered-badge', String(def.value)));
+  } else {
+    img.src = '/assets/Cardback.jpg';
+    img.alt = 'card back';
+    img.className = 'covered-img';
+    mini.appendChild(img);
+    mini.appendChild(el('span', 'covered-badge', '2'));
     box.appendChild(el('div', 'card-covered-text', '背面'));
   }
+  box.appendChild(mini);
   return box;
 }
 
 function renderProtocol(p: { defId: string; compiled: boolean }): HTMLElement {
-  const def = getProtocolDef(p.defId);
   const box = el('div', 'protocol' + (p.compiled ? ' compiled' : ''));
-  box.appendChild(el('div', 'protocol-name', p.compiled ? `${def.name} ✓` : def.name));
-  box.appendChild(el('div', 'protocol-loading', p.compiled ? 'COMPILED' : def.loadingText));
+  const img = document.createElement('img');
+  img.className = 'protocol-img';
+  img.src = `/assets/protocols/${p.defId}/protocol-${p.compiled ? 'compiled' : 'loading'}.png`;
+  img.alt = p.compiled ? 'compiled protocol' : 'protocol loading';
+  box.appendChild(img);
+  if (p.compiled) box.appendChild(el('span', 'protocol-check', '✓'));
   return box;
 }
 
 /**
  * 一条线的堆叠槽（横置条带）：stacks[line] 中 pos 0 为底层（最早打出、被盖得最狠），
  * 最后一个元素为顶层（未覆盖）。渲染时顶层卡牌完整显示（活跃），
- * 被盖住的牌以压缩条形式堆叠其下（仅数值+常驻指令，半透明、错位）。
+ * 被盖住的牌以压缩条形式堆叠其下（完整卡面小图 + 数值徽章，半透明、错位）。
  */
 function renderStackSlot(
   s: GameState,
