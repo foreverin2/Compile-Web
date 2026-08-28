@@ -6,6 +6,8 @@ import { getLegalActions, type LegalAction } from '../core/game';
 export interface UiCallbacks {
   onAction(a: LegalAction): void;
   onDraftPick(defId: string): void;
+  /** 每次渲染完成后回调（供 UI 层做自动推进等） */
+  onRendered?(): void;
 }
 
 function el(tag: string, cls: string, text?: string): HTMLElement {
@@ -15,19 +17,59 @@ function el(tag: string, cls: string, text?: string): HTMLElement {
   return node;
 }
 
+/** 卡牌正面的一个指令区：顶部=常驻，中部=即时（活跃区），底部=辅助 */
+function renderZone(zone: 'top' | 'middle' | 'bottom', label: string, text: string): HTMLElement {
+  const z = el('div', `card-zone card-zone-${zone}`);
+  z.appendChild(el('span', 'zone-label', label));
+  z.appendChild(el('div', 'zone-text', text));
+  return z;
+}
+
+/**
+ * 卡牌正面/背面：
+ * - 正面：数值 + 协议 + 三指令区（常驻/即时/辅助），各带边框与标签
+ * - 背面：官方 Cardback 图 + 印刷值 2 徽章（规则：背面牌值=2）
+ */
 function renderCardFace(card: { defId: string; faceUp: boolean }): HTMLElement {
   const def = getCardDef(card.defId);
   const box = el('div', 'card');
   box.dataset.defId = card.defId;
   if (!card.faceUp) {
-    box.appendChild(el('div', 'card-back', '?'));
+    const back = el('div', 'card-back');
+    const img = document.createElement('img');
+    img.src = '/assets/Cardback.jpg';
+    img.alt = 'card back';
+    img.className = 'cardback-img';
+    back.appendChild(img);
+    back.appendChild(el('span', 'card-back-value', '2'));
+    box.appendChild(back);
     return box;
   }
-  box.appendChild(el('div', 'card-value', String(def.value)));
-  box.appendChild(el('div', 'card-protocol', def.protocol));
-  if (def.top) box.appendChild(el('div', 'card-top', def.top));
-  if (def.middle) box.appendChild(el('div', 'card-middle', def.middle));
-  if (def.bottom) box.appendChild(el('div', 'card-bottom', def.bottom));
+  const head = el('div', 'card-head');
+  head.appendChild(el('div', 'card-value', String(def.value)));
+  head.appendChild(el('div', 'card-protocol', getProtocolDef(def.protocol).name));
+  box.appendChild(head);
+  if (def.top) box.appendChild(renderZone('top', '常驻', def.top));
+  if (def.middle) box.appendChild(renderZone('middle', '即时', def.middle));
+  if (def.bottom) box.appendChild(renderZone('bottom', '辅助', def.bottom));
+  return box;
+}
+
+/**
+ * 被盖住的牌（堆叠中非顶层）：按规则仅显示数值 + 顶部（常驻）指令；
+ * 中部（即时）与底部（辅助）指令被遮蔽失效，不显示。
+ * 背面牌无指令，印刷值按规则为 2，标注"背面"。
+ */
+function renderCoveredCard(card: { defId: string; faceUp: boolean }): HTMLElement {
+  const def = getCardDef(card.defId);
+  const box = el('div', 'card covered');
+  box.dataset.defId = card.defId;
+  box.appendChild(el('div', 'card-value', String(card.faceUp ? def.value : 2)));
+  if (card.faceUp && def.top) {
+    box.appendChild(el('div', 'card-covered-text', def.top));
+  } else if (!card.faceUp) {
+    box.appendChild(el('div', 'card-covered-text', '背面'));
+  }
   return box;
 }
 
@@ -39,52 +81,105 @@ function renderProtocol(p: { defId: string; compiled: boolean }): HTMLElement {
   return box;
 }
 
-function renderStackLine(s: GameState, player: PlayerId, line: Line, selected: string | null, onPlay: (line: Line) => void): HTMLElement {
-  const zone = el('div', 'line-zone');
-  zone.appendChild(renderProtocol(s.players[player].protocols[line]));
-  const stack = el('div', 'stack');
-  for (const card of s.players[player].stacks[line]) {
-    const node = renderCardFace(card);
+/**
+ * 一条线的堆叠槽（横置条带）：stacks[line] 中 pos 0 为底层（最早打出、被盖得最狠），
+ * 最后一个元素为顶层（未覆盖）。渲染时顶层卡牌完整显示（活跃），
+ * 被盖住的牌以压缩条形式堆叠其下（仅数值+常驻指令，半透明、错位）。
+ */
+function renderStackSlot(
+  s: GameState,
+  player: PlayerId,
+  line: Line,
+  selected: string | null,
+  onPlay: (line: Line) => void,
+  interactable: boolean
+): HTMLElement {
+  const slot = el('div', 'stack-slot' + (interactable ? ' interactable' : ''));
+  slot.appendChild(el('div', 'slot-label', `线${line + 1}`));
+  const cards = s.players[player].stacks[line];
+  const pile = el('div', 'stack');
+  // 视觉自上而下：顶层（未覆盖）在上，被盖住的牌在下；zIndex=pos 保证上层盖住下层
+  for (let i = cards.length - 1; i >= 0; i--) {
+    const card = cards[i];
+    const isTop = i === cards.length - 1;
+    const node = isTop ? renderCardFace(card) : renderCoveredCard(card);
+    if (isTop) node.classList.add('top-card');
     node.dataset.uid = card.uid;
+    node.style.zIndex = String(i);
     if (selected === card.uid) node.classList.add('selected');
-    stack.appendChild(node);
+    pile.appendChild(node);
   }
-  zone.appendChild(stack);
-  zone.appendChild(el('div', 'line-value', `值 ${getLineValue(s, player, line)}`));
-  zone.addEventListener('click', () => onPlay(line));
-  return zone;
+  if (cards.length === 0) {
+    pile.appendChild(el('div', 'stack-empty', '空'));
+  }
+  slot.appendChild(pile);
+  slot.appendChild(el('div', 'line-value', `值 ${getLineValue(s, player, line)}`));
+  if (interactable) {
+    slot.addEventListener('click', () => onPlay(line));
+  }
+  return slot;
 }
 
-function renderPlayerArea(s: GameState, player: PlayerId, opts: { isSelf: boolean; selected: string | null; onSelect: (uid: string) => void; onPlay: (line: Line) => void }): HTMLElement {
+function renderPlayerColumn(
+  s: GameState,
+  player: PlayerId,
+  opts: { isSelf: boolean; selected: string | null; onSelect: (uid: string) => void; onPlay: (line: Line) => void }
+): HTMLElement {
   const p = s.players[player];
-  const area = el('div', 'player-area' + (player === s.turnPlayer ? ' active' : ''));
-  area.appendChild(el('div', 'area-title', `玩家 ${player + 1}${player === s.turnPlayer ? '（回合中）' : ''}`));
+  const active = player === s.turnPlayer;
+  const col = el('div', `player-col${active ? ' active' : ''}${opts.isSelf ? ' self' : ''}`);
+  col.appendChild(el('div', 'area-title', `玩家 ${player + 1}${active ? '（回合中）' : ''}`));
 
   const meta = el('div', 'meta-row');
   meta.appendChild(el('span', 'deck-count', `牌库 ${p.deck.length}`));
   meta.appendChild(el('span', 'trash-count', `弃牌堆 ${p.trash.length}`));
   meta.appendChild(el('span', 'hand-count', `手牌 ${p.hand.length}`));
-  area.appendChild(meta);
+  col.appendChild(meta);
 
-  const lines = el('div', 'lines');
   for (const line of [0, 1, 2] as Line[]) {
-    lines.appendChild(renderStackLine(s, player, line, opts.selected, opts.onPlay));
+    col.appendChild(
+      renderStackSlot(s, player, line, opts.isSelf ? opts.selected : null, opts.isSelf ? opts.onPlay : () => {}, opts.isSelf)
+    );
   }
-  area.appendChild(lines);
 
   const hand = el('div', 'hand');
   for (const card of p.hand) {
     const node = renderCardFace({ defId: card.defId, faceUp: opts.isSelf });
     node.dataset.uid = card.uid;
-    if (opts.selected === card.uid) node.classList.add('selected');
-    node.addEventListener('click', (e) => {
-      e.stopPropagation();
-      opts.onSelect(card.uid);
-    });
+    if (opts.isSelf && opts.selected === card.uid) node.classList.add('selected');
+    if (opts.isSelf) {
+      node.addEventListener('click', (e) => {
+        e.stopPropagation();
+        opts.onSelect(card.uid);
+      });
+    }
     hand.appendChild(node);
   }
-  area.appendChild(hand);
-  return area;
+  col.appendChild(hand);
+  return col;
+}
+
+/** 中间公共分隔区：3 条线，每条线左右并排放置双方协议（共 6 格） */
+function renderMidColumn(s: GameState): HTMLElement {
+  const col = el('div', 'mid-col');
+  col.appendChild(el('div', 'mid-title', '公共分隔区'));
+  for (const line of [0, 1, 2] as Line[]) {
+    const row = el('div', 'protocol-row');
+    row.appendChild(renderProtocolCell(s, 0, line));
+    row.appendChild(renderProtocolCell(s, 1, line));
+    col.appendChild(row);
+  }
+  col.appendChild(
+    el('div', 'step-indicator', `步骤: ${s.step} · 控制组件: ${s.control === -1 ? '中立' : `玩家 ${s.control + 1}`}`)
+  );
+  return col;
+}
+
+function renderProtocolCell(s: GameState, player: PlayerId, line: Line): HTMLElement {
+  const cell = el('div', 'protocol-cell');
+  cell.appendChild(el('div', 'protocol-owner', `玩家 ${player + 1}`));
+  cell.appendChild(renderProtocol(s.players[player].protocols[line]));
+  return cell;
 }
 
 export function renderDraft(root: HTMLElement, s: GameState, cb: UiCallbacks): void {
@@ -107,6 +202,23 @@ export function renderDraft(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   root.appendChild(wrap);
 }
 
+/** 打牌交互：选手牌 → 点（self 侧）堆叠槽；越步/协议不匹配等非法点击一律忽略 */
+function playToLine(s: GameState, cb: UiCallbacks, line: Line): void {
+  if (!selectedUid) return;
+  const uid = selectedUid;
+  const faceUp = selectedFaceUp;
+  // 先复位选择，避免已打出的牌在重渲染中残留 selected 高亮
+  selectedUid = null;
+  selectedFaceUp = true;
+  if (s.step !== 'action') return;
+  const legal = getLegalActions(s, s.turnPlayer);
+  const playable = legal.some(
+    (a) => a.kind === 'play' && a.cardUid === uid && a.line === line && a.faceUp === faceUp
+  );
+  if (!playable) return;
+  cb.onAction({ kind: 'play', cardUid: uid, faceUp, line });
+}
+
 export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): void {
   root.textContent = '';
   // 清除失效选择：所选卡不在当前回合玩家手牌中（已被打出/刷新生效/回合切换）时复位
@@ -124,36 +236,33 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
     wrap.appendChild(el('div', 'winner-banner', `玩家 ${s.winner + 1} 获胜！`));
   }
 
-  const opp = renderPlayerArea(s, s.turnPlayer === 0 ? 1 : 0, { isSelf: false, selected: null, onSelect: () => {}, onPlay: () => {} });
-  wrap.appendChild(opp);
-
-  const midline = el('div', 'midline');
-  midline.appendChild(el('div', 'step-indicator', `步骤: ${s.step} · 控制组件: ${s.control === -1 ? '中立' : `玩家 ${s.control + 1}`}`));
-  wrap.appendChild(midline);
-
-  const self = renderPlayerArea(s, s.turnPlayer, {
-    isSelf: true,
-    selected: selectedUid,
-    onSelect: (uid) => { selectedUid = uid; renderApp(root, s, cb); },
-    onPlay: (line) => {
-      if (!selectedUid) return;
-      const uid = selectedUid;
-      const faceUp = selectedFaceUp;
-      // 先复位选择，避免已打出的牌在重渲染中残留 selected 高亮
-      selectedUid = null;
-      selectedFaceUp = true;
-      // 仅当处于 action 步骤且 (卡牌, 线, 朝向) 是合法动作时才派发；
-      // 越步、线协议不匹配、卡牌已不在手牌等非法点击一律忽略
-      if (s.step !== 'action') return;
-      const legal = getLegalActions(s, s.turnPlayer);
-      const playable = legal.some(
-        (a) => a.kind === 'play' && a.cardUid === uid && a.line === line && a.faceUp === faceUp
-      );
-      if (!playable) return;
-      cb.onAction({ kind: 'play', cardUid: uid, faceUp, line });
-    },
-  });
-  wrap.appendChild(self);
+  // 固定布局：玩家 1 恒在左、玩家 2 恒在右（左右对称而非上下对称）；
+  // 回合玩家（self）一侧可交互并高亮边框，另一侧手牌显示背面
+  const grid = el('div', 'board-grid');
+  grid.appendChild(
+    renderPlayerColumn(s, 0, {
+      isSelf: s.turnPlayer === 0,
+      selected: s.turnPlayer === 0 ? selectedUid : null,
+      onSelect: (uid) => {
+        selectedUid = uid;
+        renderApp(root, s, cb);
+      },
+      onPlay: (line) => playToLine(s, cb, line),
+    })
+  );
+  grid.appendChild(renderMidColumn(s));
+  grid.appendChild(
+    renderPlayerColumn(s, 1, {
+      isSelf: s.turnPlayer === 1,
+      selected: s.turnPlayer === 1 ? selectedUid : null,
+      onSelect: (uid) => {
+        selectedUid = uid;
+        renderApp(root, s, cb);
+      },
+      onPlay: (line) => playToLine(s, cb, line),
+    })
+  );
+  wrap.appendChild(grid);
 
   const actionBar = el('div', 'action-bar');
   const legal = getLegalActions(s, s.turnPlayer);
@@ -167,9 +276,15 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   if (s.step === 'action') {
     if (selectedUid) {
       const upBtn = el('button', 'btn', '正面打入');
-      upBtn.addEventListener('click', () => { selectedFaceUp = true; renderApp(root, s, cb); });
+      upBtn.addEventListener('click', () => {
+        selectedFaceUp = true;
+        renderApp(root, s, cb);
+      });
       const downBtn = el('button', 'btn', '背面打入');
-      downBtn.addEventListener('click', () => { selectedFaceUp = false; renderApp(root, s, cb); });
+      downBtn.addEventListener('click', () => {
+        selectedFaceUp = false;
+        renderApp(root, s, cb);
+      });
       actionBar.appendChild(upBtn);
       actionBar.appendChild(downBtn);
       actionBar.appendChild(el('span', 'hint', `朝向: ${selectedFaceUp ? '正面' : '背面'} — 点击一条线放置`));
@@ -197,4 +312,5 @@ export function renderApp(root: HTMLElement, s: GameState, cb: UiCallbacks): voi
   } else {
     renderBoard(root, s, cb);
   }
+  cb.onRendered?.();
 }
