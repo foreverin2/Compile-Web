@@ -142,7 +142,10 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       if (!op.allowCovered && !isUncovered(s, card)) throw new Error(`cannot delete ${op.uid}: covered card`);
       const owner = card.owner;
       const line = card.line!;
-      s.players[owner].stacks[line].pop();
+      const stack = s.players[owner].stacks[line];
+      const idx = stack.findIndex((c) => c.uid === op.uid);
+      if (idx === -1) throw new Error(`cannot delete ${op.uid}: not in stack`);
+      stack.splice(idx, 1); // 按目标卡移除（顶卡 splice 末位等价 pop；覆盖卡从堆叠中部移除）
       card.zone = 'trash';
       card.faceUp = true;
       card.line = null;
@@ -162,7 +165,10 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       if (!op.allowCovered && !isUncovered(s, card)) throw new Error(`cannot return ${op.uid}: covered card`);
       const owner = card.owner;
       const line = card.line!;
-      s.players[owner].stacks[line].pop();
+      const stack = s.players[owner].stacks[line];
+      const idx = stack.findIndex((c) => c.uid === op.uid);
+      if (idx === -1) throw new Error(`cannot return ${op.uid}: not in stack`);
+      stack.splice(idx, 1); // 按目标卡移除（顶卡 splice 末位等价 pop；覆盖卡从堆叠中部移除）
       card.zone = 'hand';
       card.line = null;
       card.pos = null;
@@ -178,7 +184,10 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       if (op.targetLine === card.line) throw new Error('must shift to a different line');
       const owner = card.owner;
       const fromLine = card.line!;
-      s.players[owner].stacks[fromLine].pop();
+      const stack = s.players[owner].stacks[fromLine];
+      const idx = stack.findIndex((c) => c.uid === op.uid);
+      if (idx === -1) throw new Error(`cannot shift ${op.uid}: not in stack`);
+      stack.splice(idx, 1); // 按目标卡移除（顶卡 splice 末位等价 pop；覆盖卡从堆叠中部移除）
       card.zone = 'float';
       card.line = op.targetLine; // 提交目标（落地前不可变卦）
       card.pos = null;
