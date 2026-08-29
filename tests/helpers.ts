@@ -12,9 +12,12 @@ export function resolveAllChoices(s: GameState, pick: (prompt: ChoiceRequest) =>
   }
 }
 
-/** 默认选择器：可选事件跳过；必选事件取前 max 个候选（fire-4 会全选，测试可接受） */
+/** 默认选择器：可选事件跳过；必选事件取前 max 个候选（fire-4 会全选，测试可接受）。
+ *  kind 感知：select-line / select-action 的 candidates 为空 → 按线/操作编码自动应答（防 flaky）。 */
 export function pickFirst(prompt: ChoiceRequest): string[] {
   if (prompt.optional) return [];
+  if (prompt.kind === 'select-line') return [`line:${prompt.lines?.[0] ?? 0}`];
+  if (prompt.kind === 'select-action') return [prompt.actions?.[0] ?? ''].filter(Boolean);
   return prompt.candidates.slice(0, prompt.max).map((c) => c.uid);
 }
 
