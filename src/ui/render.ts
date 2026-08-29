@@ -533,11 +533,13 @@ function renderPickColumn(s: GameState, player: PlayerId, drafter: PlayerId): HT
   return col;
 }
 
-/** 中间协议池：全部 6 套演示协议，每行 4 个；悬停聚焦并浮现「选择」按钮；
- *  已选协议变灰禁用（不可悬停/不可点）；点击选择派发 onDraftPick（引擎校验当前轮选者） */
+/** 中间协议池：全部 15 套协议，每行 4 个；悬停聚焦。
+ *  选中方式：拖拽协议卡到【当前轮选者】的选择框松手（选中）；松手位置不在自己的
+ *  选择框区域 → 丝滑平移回原卡位置。双击协议卡可放大查看协议图。已选协议变灰禁用。 */
 function renderDraftPool(s: GameState, cb: UiCallbacks): HTMLElement {
   const pool = el('div', 'draft-pool');
   const picked = new Set(s.draftPicks.map((p) => p.defId));
+  const drafter = getCurrentDrafter(s);
   for (const proto of DEMO_PROTOCOLS) {
     const isPicked = picked.has(proto.defId);
     const card = el('div', 'draft-card' + (isPicked ? ' picked' : ''));
@@ -553,16 +555,80 @@ function renderDraftPool(s: GameState, cb: UiCallbacks): HTMLElement {
     if (isPicked) {
       card.appendChild(el('span', 'draft-picked-badge', '已选'));
     } else {
-      const btn = el('button', 'btn draft-pick-btn', '选择');
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        cb.onDraftPick(proto.defId);
-      });
-      card.appendChild(btn);
+      // 双击放大查看协议图（单击无动作）；拖拽选协议
+      bindClickOrDouble(card, () => {}, () => openZoom(proto.defId, true, true, false), false);
+      bindDraftDrag(card, s, cb, proto.defId, drafter);
     }
     pool.appendChild(card);
   }
   return pool;
+}
+
+/** 拖拽选协议：拖动卡片，落入当前轮选者选择框 → 选中；否则丝滑平移回原卡位置 */
+function bindDraftDrag(card: HTMLElement, s: GameState, cb: UiCallbacks, defId: string, drafter: PlayerId): void {
+  card.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    let active = false;
+    let ghost: HTMLElement | null = null;
+    const targetSel = `.draft-picks.p${drafter + 1}`;
+    const cleanup = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.classList.remove('dragging');
+      card.classList.remove('dragging-src');
+      document.querySelector(targetSel)?.classList.remove('drop-target');
+    };
+    const positionGhost = (ev: MouseEvent) => {
+      if (!ghost) return;
+      ghost.style.transform = `translate(${ev.clientX - startX}px, ${ev.clientY - startY}px)`;
+    };
+    const beginDrag = (ev: MouseEvent) => {
+      active = true;
+      document.body.classList.add('dragging');
+      card.classList.add('dragging-src');
+      const r = card.getBoundingClientRect();
+      ghost = card.cloneNode(true) as HTMLElement;
+      ghost.classList.add('draft-drag-ghost');
+      ghost.style.left = `${r.left}px`;
+      ghost.style.top = `${r.top}px`;
+      ghost.style.width = `${r.width}px`;
+      ghost.style.height = `${r.height}px`;
+      document.body.appendChild(ghost);
+      positionGhost(ev);
+      document.querySelector(targetSel)?.classList.add('drop-target');
+    };
+    const onMove = (ev: MouseEvent) => {
+      if (!active) {
+        if (Math.hypot(ev.clientX - startX, ev.clientY - startY) > 6) beginDrag(ev);
+        return;
+      }
+      ev.preventDefault();
+      positionGhost(ev);
+    };
+    const onUp = (ev: MouseEvent) => {
+      const hit = document.elementFromPoint(ev.clientX, ev.clientY);
+      const inTarget = hit ? (hit as HTMLElement).closest(targetSel) !== null : false;
+      const g = ghost;
+      cleanup();
+      if (inTarget && g) {
+        // 落入自己的选择框：选中（renderApp 重建草案界面）
+        g.remove();
+        cb.onDraftPick(defId);
+      } else if (g) {
+        // 松手位置不是自己的选择框：丝滑平移回原卡位置
+        const r = card.getBoundingClientRect();
+        const gr = g.getBoundingClientRect();
+        g.style.transition = 'transform 0.3s cubic-bezier(0.2, 0.7, 0.3, 1), opacity 0.3s ease';
+        g.style.transform = `translate(${r.left - gr.left}px, ${r.top - gr.top}px)`;
+        g.style.opacity = '0';
+        window.setTimeout(() => g.remove(), 320);
+      }
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
 }
 
 export function renderDraft(root: HTMLElement, s: GameState, cb: UiCallbacks): void {
