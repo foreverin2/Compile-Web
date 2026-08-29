@@ -93,11 +93,11 @@ export interface ChoiceAnswer {
   selected: string[];
 }
 
-/** 揭示产生的幽灵牌：正面复制到对手手牌区末尾，对手回合结束后自动消失；不参与任何事件 */
+/** 揭示产生的幽灵牌：正面复制到效果属主手牌区末尾，其回合结束后自动消失；不参与任何事件 */
 export interface RevealedGhost {
   id: string;
   defId: string;
-  /** 显示在哪位玩家的手牌区末尾 */
+  /** 显示在哪位玩家的手牌区末尾（= 发起揭示的效果属主） */
   shownTo: PlayerId;
   /** 该玩家回合结束时清除 */
   expiresAfterTurn: PlayerId;
@@ -206,6 +206,6 @@ export interface GameState {
   resolvedTriggerUids: string[];
   /** 打出链式结算完毕后需要推进回合步骤（runStack 栈空时消费） */
   pendingStepAdvance: boolean;
-  /** 揭示幽灵牌（显示在对手手牌区末尾；expiresAfterTurn 玩家回合结束时清除） */
+  /** 揭示幽灵牌（显示在效果属主手牌区末尾；expiresAfterTurn 玩家回合结束时清除） */
   revealedGhosts: RevealedGhost[];
 }
