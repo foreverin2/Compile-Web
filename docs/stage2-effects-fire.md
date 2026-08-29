@@ -347,3 +347,46 @@ npm run preview  # 预览构建产物
 - 新效果动作走 TDD：先写 `tests/` 用例再实现
 - 提交信息风格：`feat: …` / `fix: …` / `docs: …`
 - 每个阶段完成后更新本文件与全局记忆 `E:\studyE\Deepseek memory\compile-web-project.md`（工作区外，由控制器更新）
+
+---
+
+## 7. 阶段 3 完成状态（2026-08-29，Light / Darkness 试点 + 已编译特效收尾）
+
+> 本文件至此成为**阶段 2 → 3 交接文档**：§0.1 架构、§0.7 设计修复、§4.9 特效分层模型（阶段 2）+ 本节（阶段 3）为续作必读。阶段 2 内容全部原样保留。
+
+### 7.1 本阶段交付（分支 `feature/stage3-light-darkness`，相对 main 16 个提交）
+
+- **Light 6 卡真实效果**（`src/core/effects/cards/light.ts`）：light-0 抽「其分值」张（数值读取）、light-1 end 抽 1、light-2 揭示 + 平移或翻转、light-5 弃 1 等——全部可结算、可连锁、可挂起选择。
+- **Darkness 6 卡真实效果**（`src/core/effects/cards/darkness.ts`）：darkness-0 抽 3 + 平移对手被盖住牌、darkness-1 翻转对手牌 + 可平移、darkness-2 顶命令（本栈反面牌分值 4，`valueModifier`）+ 可翻转本列反面牌 等。
+- **choice kinds 扩展**（选择请求种类）：`select-line`（点击高亮 lane-row 即答 `['line:N']`，Task 10 补 `.choice-line` 虚线青色高亮样式）、`select-action`（行动按钮选择，Task 1 计划修正恢复重复选择校验）、`chooser`（选择权归属者可 ≠ turnPlayer，取 `top.player`）。
+- **valueModifier 引擎**（`src/core/effects/resolve.ts` `stackValue` 接入）：own-stack / opponent-line 两种作用域的顶命令数值修正（darkness-2「反面分值 4」）。
+- **covered 目标选择**：候选可含被盖住卡（`candidates covered`）+ `op.allowCovered` 放行；shift/delete/return 按**索引**移除目标覆盖卡（修复状态损坏）；fizzle 回归覆盖。
+- **playTopDeck 操作**：牌堆顶直接打出（不经过手牌），带牌库→链路飞入特效（`playDeckPlay`，起点 = 牌库区 rect）。
+- **FIFO 落地队列修正**：pendingShift/pendingPlay 落地改为**排队消费**（`pendingLandings` FIFO，在 op 之间落地），修复连续偏转状态损坏与 deferred-landing 覆盖窗口。
+- **牌库区**（deck area）：`.deck[data-player]` 厚度态 + 计数，抽牌飞入动画起点改到牌库区。
+- **手牌上限 15 + 更宽布局 + 霓虹翻面按钮**（`hand display limit 15`、app 加宽、flip 按钮青紫霓虹风格）。
+- **已编译协议特效 light / darkness**（本任务 Task 10）：复用 `.compiled-ring` 骨架（`.lava-seg` + `.lava-rock` 沿 offset-path 边框路径旅行），新增配色变体：
+  - `.protocol.compiled-fx-light` / `.compiled-fx-darkness`：静态兜底描边 + 光晕（白青 / 暗紫），与 fire 同模式；
+  - `.compiled-ring-light`（柔光白青流动环：白→浅蓝→青渐变段 + 淡色岩石）/ `.compiled-ring-darkness`（暗紫光晕环：紫→深紫渐变段 + 深色岩石）——**骨架中无 `.compiled-ring-flow` 元素**（流动即 `.lava-seg` 自身），故 brief 的 conic 色流意图并入 `.lava-seg` 渐变，无死 CSS；
+  - 类随 `compiled-fx-<defId>` / `compiled-ring-<defId>` 自动挂载（render.ts `appendCompiledRing` 无 fire 特判），light/darkness 编译后自动生效。
+- **协议额外特效 light / darkness**（Task 10）：`src/ui/effects/index.ts` extra 分支扩展——`triggerProtocol === 'light'` → `playLightExtra`（克隆卡挂 `extra-light` 类 = 白色柔光层，`::after` 径向光晕 + 呼吸淡出动画）；`'darkness'` → `playDarknessExtra`（克隆卡挂 `extra-darkness` 类 = 暗紫光晕 + 8 颗 `.darkness-particle` 沿 8 方向爆散飞出，CSS 变量 `--dx/--dy` 控方向）。与 fire 同模式：EXTRA_Z(301) 克隆层，1.2s 后移除，不影响基础行为特效。
+
+### 7.2 验证
+
+- `npm test`（= `npx vitest run`）全绿（数量见 §7.4 收尾批次说明）；`npm run build`（`tsc --noEmit && vite build`）通过；`git status` 干净。
+- 分支 `feature/stage3-light-darkness`，提交见 §7.4；**未推送**（控制器统一合并推送）。
+
+### 7.3 已知限制（阶段 3 范围外，续作注意）
+
+1. 其余 12 套协议（非 light/darkness/fire）效果仍未实现；`after` 触发机制仍预留未用。
+2. 协议重排 UI（water-2/psychic-2）未实现。
+3. 无 AI 对手；UI 仍无单元测试（仅 `tsc --noEmit` 类型门控）。
+4. light/darkness 额外特效为**简易 CSS 版**（白色柔光层 / 暗紫粒子爆散）；如需更精致可另发 Gemini 任务单（模板 `docs/gemini-task-template.md`）。
+
+### 7.4 收尾批次（Task 10，2026-08-29）
+
+- **CSS**（`src/ui/styles.css` 追加）：`.compiled-ring-light` / `.compiled-ring-darkness` 配色变体 + `.protocol.compiled-fx-light` / `.compiled-fx-darkness` 静态兜底 + `.choice-line` 虚线青色线高亮 + `.extra-light`（白色柔光）/ `.extra-darkness`（暗紫粒子）额外特效动画。
+- **特效**（`src/ui/effects/index.ts`）：`playLightExtra` / `playDarknessExtra` 两个简易额外特效（克隆 EXTRA_Z 层 + 类 + 动画），extra 分支按 `triggerProtocol` 分发 fire / light / darkness。
+- **交接文档**：本节（阶段 2 → 3 交接完成）；**全局记忆** `E:\studyE\Deepseek memory\compile-web-project.md` 追加阶段 3 条目。
+- **验证**：`npm test` 全绿（**140/140，33 个测试文件**）、`npm run build` 通过、`git status` 干净。
+- **提交**：`git add -A && git commit -m "docs: stage 3 complete (Light/Darkness pilot)"`（本分支最后一个提交；**未推送**）。

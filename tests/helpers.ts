@@ -29,6 +29,28 @@ export function draftFireP1(): GameState {
   return s;
 }
 
+/** 草案：P1 第 1 选 light（P1 协议线 0 = light），其余自动选池中第一个非 light */
+export function draftLightP1(): GameState {
+  const s = createGame();
+  performDraftPick(s, 'light');
+  while (s.phase === 'draft') {
+    const avail = getDraftPool(s);
+    performDraftPick(s, (avail.find((p) => p.defId !== 'light') ?? avail[0]).defId);
+  }
+  return s;
+}
+
+/** 草案：P1 第 1 选 darkness（P1 协议线 0 = darkness），其余自动选池中第一个非 darkness */
+export function draftDarknessP1(): GameState {
+  const s = createGame();
+  performDraftPick(s, 'darkness');
+  while (s.phase === 'draft') {
+    const avail = getDraftPool(s);
+    performDraftPick(s, (avail.find((p) => p.defId !== 'darkness') ?? avail[0]).defId);
+  }
+  return s;
+}
+
 /** 推进到指定步骤（起始手牌下堆叠为空，不会触发强制编译） */
 export function advanceToStep(s: GameState, player: PlayerId, step: Step): void {
   while (s.phase === 'turn' && s.step !== step) executeAction(s, player, 'advance');

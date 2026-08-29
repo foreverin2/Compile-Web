@@ -75,12 +75,18 @@ export interface ChoiceCard {
 
 /** 选择请求（生成器 yield 的值之一） */
 export interface ChoiceRequest {
-  kind: 'select';
+  kind: 'select' | 'select-line' | 'select-action';
   title: string;
   min: number;
   max: number;
   optional: boolean;
   candidates: ChoiceCard[];
+  /** select-line：可选目标线（编码 'line:N'） */
+  lines?: Line[];
+  /** select-action：可执行操作（编码 'action:<name>'） */
+  actions?: string[];
+  /** 选择权归属者（缺省 = PendingEffect.player；"被作用卡持有者决定"用） */
+  chooser?: PlayerId;
 }
 
 export interface ChoiceAnswer {
@@ -100,11 +106,12 @@ export interface RevealedGhost {
 /** 效果操作（生成器 yield 的值之一；由运行器执行并触发连锁/语义事件） */
 export type Op =
   | { op: 'discard'; uid: string }
-  | { op: 'delete'; uid: string }
-  | { op: 'return'; uid: string }
-  | { op: 'flip'; uid: string }
+  | { op: 'delete'; uid: string; allowCovered?: boolean }
+  | { op: 'return'; uid: string; allowCovered?: boolean }
+  | { op: 'flip'; uid: string; allowCovered?: boolean }
   | { op: 'draw'; count: number }
-  | { op: 'shift'; uid: string; targetLine: Line }
+  | { op: 'shift'; uid: string; targetLine: Line; allowCovered?: boolean }
+  | { op: 'playTopDeck'; line: Line; faceUp: boolean }
   | { op: 'reveal'; uid: string };
 
 /** 效果步骤：选择请求 或 操作。既有 types.ts 已占用 Step（回合步骤），此处命名 EffectStep */
@@ -126,6 +133,12 @@ export interface PendingEffect {
   system?: boolean;
 }
 
+/** 落地中的卡（浮空，等目标顶卡"被盖住前"结算后落地）；beforeCoveredDone = 目标顶卡"被盖住前"是否已结算（只结算一次） */
+export interface PendingLanding {
+  card: Card;
+  beforeCoveredDone: boolean;
+}
+
 /** 待结算触发条目（getLegalActions 供 UI 出按钮） */
 export interface TriggerEntry {
   cardUid: string;
@@ -134,10 +147,11 @@ export interface TriggerEntry {
   optional: boolean;
 }
 
-/** 候选过滤：zone 'hand' 需 owner；'field' 列出双方所有堆叠顶卡（排除结算中源卡） */
+/** 候选过滤：zone 'hand' 需 owner；'field' 列出双方所有堆叠顶卡（排除结算中源卡）；covered:true 时列出堆叠中被覆盖的卡（排除顶卡与结算中源卡） */
 export interface CandidateFilter {
   zone: 'hand' | 'field';
   owner?: PlayerId;
+  covered?: boolean;
 }
 
 /** 效果上下文：生成器通过 ctx.candidates() 获取候选，ctx 持有状态引用 */
@@ -158,6 +172,11 @@ export interface TriggerDef {
 export interface CardEffects {
   middle?: EffectGen;
   triggers?: Partial<Record<TriggerKind, TriggerDef>>;
+  /** 顶命令数值修正：stackValue 计算该线总值时应用（target: own-stack 作用于拥有者总值；opponent-line 作用于对手同线总值） */
+  valueModifier?: {
+    target: 'own-stack' | 'opponent-line';
+    apply(s: GameState, owner: PlayerId, line: Line, total: number): number;
+  };
 }
 
 export interface GameState {
@@ -177,10 +196,10 @@ export interface GameState {
   log: string[];
   /** 效果栈：长度 0 = 无挂起；>0 时顶部为待应答选择 */
   pendingEffects: PendingEffect[];
-  /** 打出中的卡（浮空，等"被盖住前"结算后落地）；null = 无 */
-  pendingPlay: Card | null;
-  /** 偏转中的卡（浮空，等露出卡结算后落地）；beforeCoveredDone = 目标顶卡"被盖住前"是否已结算（只结算一次）；null = 无 */
-  pendingShift: { card: Card; beforeCoveredDone: boolean } | null;
+  /** 打出中的卡队列（FIFO，等"被盖住前"结算后逐一落地）；空 = 无 */
+  pendingPlay: PendingLanding[];
+  /** 偏转中的卡队列（FIFO，等露出卡结算后逐一落地）；空 = 无 */
+  pendingShift: PendingLanding[];
   /** 本 end/start 步骤已结算的触发卡 uid（避免重复结算） */
   resolvedTriggerUids: string[];
   /** 打出链式结算完毕后需要推进回合步骤（runStack 栈空时消费） */

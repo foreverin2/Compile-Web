@@ -89,6 +89,13 @@ function stackEndPos(slot: HTMLElement | null, owner: PlayerId): { x: number; y:
   return { x: owner === 0 ? slotRect.right - 90 : slotRect.left + 90, y };
 }
 
+/** 牌库区位置：取该玩家 .deck[data-player="N"] 的 rect（供牌堆顶打出特效用——Task 4）；
+ *  仅读取 DOM，牌库元素缺失时返回 null。 */
+export function deckPos(player: PlayerId): DOMRect | null {
+  const deck = document.querySelector<HTMLElement>(`.deck[data-player="${player}"]`);
+  return deck ? deck.getBoundingClientRect() : null;
+}
+
 /** Fire 协议专属额外特效：火焰焚烧（fire-burn.css 覆盖层结构见 public/assets/fire/README.md） */
 function playFireBurnExtra(node: HTMLElement, payload: FxCardPayload): void {
   const clone = buildFxCard(node, payload, EXTRA_Z);
@@ -104,6 +111,36 @@ function playFireBurnExtra(node: HTMLElement, payload: FxCardPayload): void {
   overlay.appendChild(flame);
   overlay.appendChild(sparks);
   clone.appendChild(overlay);
+  window.setTimeout(() => clone.remove(), FX_REMOVE_MS);
+}
+
+/** Light 协议专属额外特效（简易版）：白色柔光层（styles.css .extra-light 覆盖层动画） */
+function playLightExtra(node: HTMLElement, payload: FxCardPayload): void {
+  const clone = buildFxCard(node, payload, EXTRA_Z);
+  if (!clone) return;
+  clone.classList.add('extra-light');
+  window.setTimeout(() => clone.remove(), FX_REMOVE_MS);
+}
+
+/** Darkness 协议专属额外特效（简易版）：暗紫粒子爆散（styles.css .extra-darkness + .darkness-particle） */
+function playDarknessExtra(node: HTMLElement, payload: FxCardPayload): void {
+  const clone = buildFxCard(node, payload, EXTRA_Z);
+  if (!clone) return;
+  clone.classList.add('extra-darkness');
+  const particles = document.createElement('div');
+  particles.className = 'darkness-particles';
+  const PARTICLE_COUNT = 8;
+  for (let i = 0; i < PARTICLE_COUNT; i++) {
+    const p = Object.assign(document.createElement('div'), { className: 'darkness-particle' });
+    // 8 方向爆散：每颗粒子沿 (cos/sin) 方向飞离，距离随序号递增
+    const angle = (i / PARTICLE_COUNT) * Math.PI * 2;
+    const dist = 55 + (i % 3) * 20;
+    p.style.setProperty('--dx', `${Math.cos(angle) * dist}px`);
+    p.style.setProperty('--dy', `${Math.sin(angle) * dist}px`);
+    p.style.animationDelay = `${i * 0.04}s`;
+    particles.appendChild(p);
+  }
+  clone.appendChild(particles);
   window.setTimeout(() => clone.remove(), FX_REMOVE_MS);
 }
 
@@ -191,6 +228,27 @@ function playShift(node: HTMLElement, payload: FxCardPayload): void {
   }
 }
 
+/** 基础行为特效：牌堆顶打出——幽灵卡从牌库区丝滑飞入目标链路堆叠末尾
+ *  （复用 playShift 平移逻辑；牌堆顶无 DOM 卡，起点用牌库区 rect（deckPos），buildFxCard 的 node 用牌库区元素） */
+function playDeckPlay(payload: FxCardPayload): void {
+  if (payload.owner === undefined || payload.line === null) return;
+  const deck = document.querySelector<HTMLElement>(`.deck[data-player="${payload.owner}"]`);
+  const from = deckPos(payload.owner);
+  const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${payload.owner}"][data-line="${payload.line}"]`);
+  const target = stackEndPos(slot, payload.owner);
+  if (!deck || !from || !target) return;
+  const clone = buildFxCard(deck, payload, BASE_Z);
+  if (!clone) return;
+  const dx = target.x - (from.left + from.width / 2);
+  const dy = target.y - (from.top + from.height / 2);
+  clone.style.transition = `transform ${MOVE_MS}ms cubic-bezier(0.2, 0.7, 0.3, 1), opacity ${MOVE_MS}ms ease`;
+  requestAnimationFrame(() => {
+    clone.style.transform = `translate(${dx}px, ${dy}px) scale(0.92)`;
+    clone.style.opacity = '0.6';
+  });
+  window.setTimeout(() => clone.remove(), MOVE_MS + 80);
+}
+
 /** 编译清牌：单张卡从原位置升起并渐隐 */
 function playRiseFade(node: HTMLElement, delay: number): void {
   const rect = node.getBoundingClientRect();
@@ -266,7 +324,7 @@ function playProtocolFlip(node: HTMLElement, defId: string): void {
 /**
  * 特效注册表（分层模型）：
  * - 基础行为特效：弃牌=对切、删去=破碎、翻面、回手、偏转——总是播放
- * - 额外协议特效：由触发卡协议（triggerProtocol）决定是否叠加（fire → 火焰焚烧）
+ * - 额外协议特效：由触发卡协议（triggerProtocol）决定是否叠加（fire → 火焰焚烧；light → 白色柔光；darkness → 暗紫粒子）
  * - 卡面用【当前卡牌面】构建，不克隆原卡 DOM
  */
 export function initEffects(): () => void {
@@ -290,12 +348,21 @@ export function initEffects(): () => void {
       case 'card:shifted':
         if (node) playShift(node, payload);
         break;
+      case 'card:deck-played':
+        playDeckPlay(payload);
+        break;
       default:
         return;
     }
     // 额外协议特效（触发卡协议驱动，叠加上层）
-    if ((e.type === 'card:discarded' || e.type === 'card:deleted') && payload.triggerProtocol === 'fire' && node) {
-      playFireBurnExtra(node, payload);
+    if ((e.type === 'card:discarded' || e.type === 'card:deleted') && node) {
+      if (payload.triggerProtocol === 'fire') {
+        playFireBurnExtra(node, payload);
+      } else if (payload.triggerProtocol === 'light') {
+        playLightExtra(node, payload);
+      } else if (payload.triggerProtocol === 'darkness') {
+        playDarknessExtra(node, payload);
+      }
     }
   });
 }

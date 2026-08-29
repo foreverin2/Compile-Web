@@ -116,8 +116,8 @@ export function snapshotState(s: GameState): string {
     }`,
   );
   lines.push(
-    `落牌中=${s.pendingPlay !== null ? s.pendingPlay.defId : '无'} 偏转中=${
-      s.pendingShift !== null ? s.pendingShift.card.defId : '无'
+    `落牌中=${s.pendingPlay.length > 0 ? s.pendingPlay[0].card.defId : '无'} 偏转中=${
+      s.pendingShift.length > 0 ? s.pendingShift[0].card.defId : '无'
     } 待推进=${s.pendingStepAdvance}`,
   );
   for (const [i, p] of s.players.entries()) {

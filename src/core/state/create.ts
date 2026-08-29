@@ -1,6 +1,7 @@
 import type { GameState, PlayerId, PlayerState, Line, ProtocolDef, Card } from '../models/types';
 import { DEMO_PROTOCOLS, DEMO_CARD_DEFS, getCardDef } from '../../data/demo';
 import { drawCards, shuffle } from '../engine/deck';
+import { EFFECTS } from '../effects/registry';
 
 let uidCounter = 0;
 export function nextUid(): string {
@@ -28,8 +29,8 @@ export function createGame(): GameState {
     winner: null,
     log: [],
     pendingEffects: [],
-    pendingPlay: null,
-    pendingShift: null,
+    pendingPlay: [],
+    pendingShift: [],
     resolvedTriggerUids: [],
     pendingStepAdvance: false,
     revealedGhosts: [],
@@ -122,20 +123,27 @@ export function performDraftPick(s: GameState, defId: string): void {
   }
 }
 
-/** 线堆叠总值：本阶段所有卡面朝上，按印刷值求和；面朝下卡值=2（后续任务实现覆盖机制时保持此规则） */
-export function stackValue(p: PlayerState, line: Line): number {
+/** 线堆叠总值：面朝上卡按印刷值求和；面朝下卡值=2。随后应用该线双方堆叠中注册了 valueModifier 的卡
+ *  （own-stack 只作用于拥有者总值；opponent-line 只作用于对手同线总值；own 堆叠先、对手堆叠后） */
+export function stackValue(s: GameState, player: PlayerId, line: Line): number {
+  const p = s.players[player];
   let total = 0;
   for (const card of p.stacks[line]) {
-    if (!card.faceUp) {
-      total += 2;
-    } else {
-      const def = getCardDef(card.defId);
-      total += def.value;
+    total += card.faceUp ? getCardDef(card.defId).value : 2;
+  }
+  const opp: PlayerId = player === 0 ? 1 : 0;
+  for (const owner of [player, opp]) {
+    for (const card of s.players[owner].stacks[line]) {
+      const v = EFFECTS[card.defId]?.valueModifier;
+      // 背面朝下的卡没有协议属性/指令效果 → 修正卡必须正面朝上才生效（被覆盖但正面朝上仍常驻生效）
+      if (!v || !card.faceUp) continue;
+      if (v.target === 'own-stack' && owner === player) total = v.apply(s, owner, line, total);
+      if (v.target === 'opponent-line' && owner !== player) total = v.apply(s, owner, line, total);
     }
   }
   return total;
 }
 
 export function getLineValue(s: GameState, player: PlayerId, line: Line): number {
-  return stackValue(s.players[player], line);
+  return stackValue(s, player, line);
 }

@@ -11,9 +11,9 @@ body {
   background-repeat: no-repeat;
   background-attachment: fixed;
 }
-/* 主容器：左右 padding 140px 容纳电池外溢；草案界面放大 2.5 倍后较宽，允许横向滚动 */
-/* 主容器：左右 padding 140px 容纳电池外溢；不设 overflow-x:hidden 防裁剪 */
-#app { max-width: 1780px; margin: 0 auto; padding: 12px 140px; }
+/* 主容器：左右 padding 100px 容纳电池外溢；草案界面放大 2.5 倍后较宽，允许横向滚动 */
+/* 主容器：左右 padding 100px 容纳电池外溢；不设 overflow-x:hidden 防裁剪 */
+#app { max-width: 2000px; margin: 0 auto; padding: 12px 100px; }
 
 .board { display: flex; flex-direction: column; gap: 10px; }
 
@@ -532,11 +532,41 @@ body {
 
 /* ===== 手牌（底部条带：P1 手牌 | 步骤指示 | P2 手牌） ===== */
 .hand-strip { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: start; }
+/* ===== 牌库区（deck area）：每玩家一个，位于手牌条最外侧（P1 左 / P2 右） =====
+ * 层叠背面卡（.deck-back）厚度随剩余数：deck-1..deck-4（每 4 张一层，封顶 4 层），
+ * 无牌时 deck-empty；最顶层中央 .deck-count 圆形徽标显示剩余张数（空牌库显示 0）。
+ * .hand-side 是手牌条每侧的 flex 容器：P1 [deck][refresh][hand]、P2 [hand][refresh][deck]，
+ * 牌库在最外、刷新手牌次之，间距 = 容器 gap 16px（≥16px）。 */
+.hand-side { display: flex; align-items: center; gap: 16px; }
+/* P2 右侧：整体贴列右缘，牌库落在最外（最右） */
+.hand-side.p2 { justify-content: flex-end; }
+.deck { position: relative; width: 92px; height: 132px; align-self: center; margin: 0 18px; }
+.deck-stack { position: absolute; inset: 0; }
+.deck-back {
+  position: absolute; inset: 0; border-radius: 5px;
+  background: url('/assets/Cardback.jpg') center / cover no-repeat;
+  border: 1px solid #223; box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+}
+.deck-2 .deck-back:nth-child(2) { transform: translate(2px, -2px); }
+.deck-3 .deck-back:nth-child(2) { transform: translate(2px, -2px); }
+.deck-3 .deck-back:nth-child(3) { transform: translate(4px, -4px); }
+.deck-4 .deck-back:nth-child(2) { transform: translate(2px, -2px); }
+.deck-4 .deck-back:nth-child(3) { transform: translate(4px, -4px); }
+.deck-4 .deck-back:nth-child(4) { transform: translate(6px, -6px); }
+/* 注意：.deck-count 也用于顶部信息条的「牌库 N」文本（renderPlayerInfo），故徽标规则
+   限定在 .deck 作用域内，避免把信息条文本也渲染成圆形徽标 */
+.deck .deck-count {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  background: #0a0e1acc; color: #4ff0ff; border: 1px solid #4ff0ff66;
+  border-radius: 50%; width: 34px; height: 34px; display: flex; align-items: center;
+  justify-content: center; font-weight: bold; font-size: 13px; z-index: 2;
+}
+.deck .deck-count.empty { color: #666; border-color: #444; }
 /* 单行扇形手牌：不换行，后一张卡负 margin 压住前一张（每张露出左缘 ~102px 宽） */
 .hand {
   display: flex;
   flex-wrap: nowrap;
-  /* 不裁剪：容器已放宽（#app 1400px），手牌最多 10 张可完整显示；边缘卡牌不再被挡 */
+  /* 不裁剪：容器已放宽（#app 2000px），手牌最多 15 张可完整显示；边缘卡牌不再被挡 */
   overflow: visible;
   position: relative; /* +N 徽标按右缘定位 */
   margin-top: 6px;
@@ -563,7 +593,7 @@ body {
   transform: translateY(-24px) scale(1.15);
   z-index: 50;
 }
-/* 超出 10 张时右缘的 +N 徽标（纯视觉提示，剩余卡仍在状态中，未渲染） */
+/* 超出 15 张时右缘的 +N 徽标（纯视觉提示，剩余卡仍在状态中，未渲染） */
 .hand-more-badge {
   position: absolute;
   right: 6px;
@@ -660,14 +690,12 @@ body {
 }
 .hand-shield.retracted .shield-count { opacity: 0; }
 
-/* ===== 刷新手牌按钮（手牌挡板外侧：P1 左 / P2 右） =====
- * 紧跟挡板渲染的相邻兄弟（renderHand 中 shield 之后 append），以手牌容器为定位基准：
- * P1 挡板从手牌左缘（left:-28px）向右展开 → 按钮在其左侧（再左移自身宽度的 100%）；
- * P2 挡板从右缘（right:-28px）向左展开 → 按钮在其右侧（再右移自身宽度的 100%）。
- * 紧凑半透明青色（与「翻面」.play-btn 同风格）；z-index 高于挡板，垂直居中于手牌条。 */
+/* ===== 刷新手牌按钮（牌库区与手牌之间：P1 牌库右侧 / P2 牌库左侧） =====
+ * 手牌条每侧 .hand-side flex 容器内的常规流元素（renderBoard 在 deck 与 hand 之间渲染），
+ * 与牌库间距 = 容器 gap 16px；position:relative + z-index 高于挡板（.hand-shield z 70），
+ * 避免按钮与手牌外侧挡板边缘重叠时被挡板盖住。紧凑半透明青色（与「翻面」.play-btn 同风格）。 */
 .shield-refresh-btn {
-  position: absolute;
-  top: 50%;
+  position: relative;
   z-index: 71;
   /* 放大：更清晰可读 */
   padding: 5px 14px;
@@ -690,9 +718,6 @@ body {
   box-shadow: 0 0 14px rgba(0, 255, 204, 0.6), 0 0 5px rgba(124, 77, 255, 0.55);
   filter: brightness(1.25);
 }
-/* P1 更靠左、P2 更靠右（远离挡板、更贴近手牌区外侧边缘） */
-.hand-shield.p1 + .shield-refresh-btn { left: -60px; transform: translate(-100%, -50%); }
-.hand-shield.p2 + .shield-refresh-btn { right: -60px; transform: translate(100%, -50%); }
 
 /* ===== ITEM 1: 选中卡上方的 正面打入/背面打入 浮动按钮 ===== */
 /* 按钮是卡牌子节点（悬停按钮时指针仍在卡牌子树内，hover-pop 不消失）；
@@ -708,28 +733,6 @@ body {
   pointer-events: auto; /* 卡面图 pointer-events:none，但按钮自身必须可点 */
   white-space: nowrap;
 }
-/* 「翻面」按钮：单个小按钮（宽度远小于卡面），半透明深色底 + 青紫渐变霓虹描边，
-   悬停时霓虹点亮；深色系贴合暗色赛博背景，取代原黄色按钮 */
-.play-btn {
-  padding: 1px 8px;
-  font-size: 10px;
-  line-height: 1.6;
-  border-radius: 4px;
-  border: 1px solid transparent;
-  background: linear-gradient(135deg, rgba(0, 255, 204, 0.35), rgba(124, 77, 255, 0.35));
-  background-clip: padding-box;
-  color: #eafffb;
-  text-shadow: 0 0 4px rgba(0, 255, 204, 0.6);
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  cursor: pointer;
-  box-shadow: 0 0 6px rgba(0, 255, 204, 0.2);
-  transition: box-shadow 0.12s ease, filter 0.12s ease;
-}
-.play-btn:hover {
-  box-shadow: 0 0 12px rgba(0, 255, 204, 0.55), 0 0 4px rgba(124, 77, 255, 0.5);
-  filter: brightness(1.25);
-}
 
 /* ===== 指示 / 操作 / 日志 ===== */
 .step-indicator { text-align: center; font-size: 13px; color: #ccc; padding: 4px 0; }
@@ -740,6 +743,15 @@ body {
 .next-block { display: flex; flex-direction: column; align-items: center; gap: 3px; }
 .btn { padding: 6px 12px; border-radius: 6px; border: none; background: #e0a030; color: #111; font-weight: bold; cursor: pointer; }
 .btn:hover { background: #f0b040; }
+/* 「翻面」按钮：单个小按钮（宽度远小于卡面），青色霓虹风格（与 .choice-bar 一致）。
+   按钮 class 含 .btn（btn play-btn），且 .btn 声明在前 —— 本组规则必须置于 .btn 之后，
+   层叠（同特异性、后声明胜）才让霓虹配色覆盖 .btn 的黄色底。 */
+.play-btn {
+  background: #0e1c2a; color: #4ff0ff; border: 1px solid #4ff0ff88;
+  border-radius: 6px; font-size: 12px; padding: 4px 12px; cursor: pointer;
+  box-shadow: 0 0 8px rgba(79, 240, 255, 0.35); transition: all 0.15s ease;
+}
+.play-btn:hover { background: #12303f; box-shadow: 0 0 14px rgba(79, 240, 255, 0.7); }
 .hint { font-size: 12px; color: #aaa; }
 .log { border-top: 1px solid #444; margin-top: 8px; padding-top: 6px; font-size: 12px; color: #999; max-height: 120px; overflow-y: auto; }
 .winner-banner { font-size: 24px; font-weight: bold; color: #4caf50; text-align: center; padding: 12px; }
@@ -1075,4 +1087,89 @@ body.dragging { cursor: grabbing; user-select: none; }
 @keyframes board-in {
   from { opacity: 0; transform: translateY(14px) scale(0.985); }
   to { opacity: 1; transform: none; }
+}
+
+/* ===== 已编译协议专属特效：light / darkness 配色变体（Task 10） =====
+ * 复用 .compiled-ring 骨架（.lava-seg + .lava-rock 沿 offset-path 边框路径旅行）：
+ * 每协议静态兜底（.protocol.compiled-fx-<defId>，与 fire 同模式）+ 环带配色覆盖。
+ * 注意：骨架中无 .compiled-ring-flow 元素（流动即 .lava-seg 自身），
+ * 故 brief 的 conic 色流意图并入 .lava-seg 渐变，不引入死 CSS。 */
+.protocol.compiled-fx-light {
+  /* 静态兜底：柔光白青描边 + 光晕 */
+  border-color: #4ff0ff;
+  box-shadow: 0 0 12px rgba(79, 240, 255, 0.6), inset 0 0 10px rgba(180, 240, 255, 0.25);
+}
+.protocol.compiled-fx-darkness {
+  /* 静态兜底：暗紫光晕描边 */
+  border-color: #ab47bc;
+  box-shadow: 0 0 12px rgba(171, 71, 188, 0.6), inset 0 0 10px rgba(123, 31, 162, 0.3);
+}
+/* light：已编译 = 柔光白青流动环（白→浅蓝→青渐变段 + 淡色岩石） */
+.compiled-ring-light .lava-seg {
+  background: linear-gradient(90deg, #ffffff, #b3e5fc, #4ff0ff);
+  box-shadow: 0 0 6px rgba(180, 240, 255, 0.8);
+}
+.compiled-ring-light .rock-dark { background: #e8f4ff; }
+.compiled-ring-light .rock-red { background: #aee6ff; }
+/* darkness：已编译 = 暗紫光晕流动环（紫→深紫渐变段 + 深色岩石） */
+.compiled-ring-darkness .lava-seg {
+  background: linear-gradient(90deg, #ab47bc, #7b1fa2, #4a148c);
+  box-shadow: 0 0 6px rgba(171, 71, 188, 0.7);
+}
+.compiled-ring-darkness .rock-dark { background: #1a0524; }
+.compiled-ring-darkness .rock-red { background: #6a1b9a; }
+/* 线选择高亮（select-line：点击 lane-row 选择目标线） */
+.choice-line {
+  outline: 2px dashed #4ff0ff;
+  outline-offset: -3px;
+  background: rgba(79, 240, 255, 0.05);
+  cursor: pointer;
+}
+
+/* ===== 协议额外特效：light —— 白色柔光层（简易版，盖在基础特效之上，z 301） ===== */
+.extra-light::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 6px;
+  background: radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.55), rgba(180, 240, 255, 0.22) 55%, transparent 78%);
+  pointer-events: none;
+  animation: extra-light-pulse 0.9s ease-out forwards;
+}
+@keyframes extra-light-pulse {
+  from { opacity: 1; filter: brightness(1.4) drop-shadow(0 0 14px rgba(255, 255, 255, 0.9)); }
+  to { opacity: 0; filter: brightness(1) drop-shadow(0 0 4px rgba(180, 240, 255, 0.4)); }
+}
+
+/* ===== 协议额外特效：darkness —— 暗紫粒子（简易版，盖在基础特效之上，z 301） ===== */
+.extra-darkness::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 6px;
+  background: radial-gradient(circle at 50% 50%, rgba(74, 20, 140, 0.5), rgba(123, 31, 162, 0.3) 55%, transparent 78%);
+  pointer-events: none;
+  animation: extra-darkness-fade 1s ease-out forwards;
+}
+@keyframes extra-darkness-fade {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+.darkness-particles { position: absolute; inset: 0; pointer-events: none; }
+.darkness-particle {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin: -3px 0 0 -3px;
+  border-radius: 50%;
+  background: #ab47bc;
+  box-shadow: 0 0 6px rgba(171, 71, 188, 0.9);
+  animation: darkness-particle-burst 1s ease-out forwards;
+  will-change: transform, opacity;
+}
+@keyframes darkness-particle-burst {
+  from { transform: translate(0, 0) scale(1); opacity: 1; }
+  to { transform: translate(var(--dx, 60px), var(--dy, -60px)) scale(0.3); opacity: 0; }
 }

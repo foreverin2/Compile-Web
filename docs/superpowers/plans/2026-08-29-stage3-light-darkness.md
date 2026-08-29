@@ -111,13 +111,14 @@ export interface ChoiceRequest {
   const req = pe.prompt;
   if (!req.optional && selected.length < req.min) throw new Error(`requires at least ${req.min} selection(s)`);
   if (selected.length > req.max) throw new Error(`requires at most ${req.max} selection(s)`);
+  if (new Set(selected).size !== selected.length) throw new Error(`duplicate selection: ${promptId}`);
   if (req.kind === 'select-line') {
     if (selected.length !== 1 || !req.lines?.includes(Number(selected[0].replace('line:', '')) as Line)) {
       throw new Error('invalid line selection');
     }
   } else if (req.kind === 'select-action') {
-    if (selected.length === 1 && !req.actions?.includes(selected[0])) {
-      throw new Error('invalid action selection');
+    for (const act of selected) {
+      if (!req.actions?.includes(act)) throw new Error('invalid action selection');
     }
   } else {
     for (const uid of selected) {
@@ -676,7 +677,7 @@ git commit -m "feat: valueModifier engine (own-stack / opponent-line) in stackVa
 - Create: `tests/effects/covered.test.ts`
 
 **Interfaces:**
-- Produces: `CandidateFilter.covered?: boolean`（true 时列出该侧堆叠全部卡含被覆盖，排除结算中源卡）；op 可选 `allowCovered`（true 时跳过 isUncovered 校验）；**fizzle 回归**：无覆盖卡时 select 候选为空自动跳过（不死锁）
+- Produces: `CandidateFilter.covered?: boolean`（true 时仅列出该侧堆叠被覆盖的卡（排除顶卡），排除结算中源卡）；op 可选 `allowCovered`（true 时跳过 isUncovered 校验）；**fizzle 回归**：无覆盖卡时 select 候选为空自动跳过（不死锁）
 
 - [ ] **Step 1: 写失败测试** `tests/effects/covered.test.ts`
 
@@ -693,12 +694,14 @@ describe('covered targeting', () => {
     s.players[1].stacks[0] = [makeCard('water-1', 1, 'field', true, 0, 0), makeCard('water-2', 1, 'field', true, 0, 1)];
     const all = listCandidates(s, { zone: 'field', covered: true });
     expect(all.some((c) => c.pos === 0)).toBe(true); // 被覆盖的底层也列出
+    expect(all.some((c) => c.pos === 1)).toBe(false); // 顶卡不列出（covered 仅覆盖卡）
   });
 
-  it('shift with allowCovered moves a covered card (fizzles if none covered)', () => {
+  it('shift with allowCovered moves a covered card', () => {
     const s = draftFireP1();
     s.players[1].stacks[0] = [makeCard('water-1', 1, 'field', true, 0, 0), makeCard('water-2', 1, 'field', true, 0, 1)];
     const covered = s.players[1].stacks[0][0];
+    const top = s.players[1].stacks[0][1];
     s.pendingEffects.push({
       id: 'e1', player: 0,
       gen: (function* (): Generator<EffectStep, void, StepResult> {
@@ -711,6 +714,48 @@ describe('covered targeting', () => {
     expect(covered.line).toBe(1);
     expect(s.players[1].stacks[0]).toHaveLength(1);
     expect(s.players[1].stacks[1]).toHaveLength(1);
+    // 源堆叠剩下的是顶卡（未被误移除）
+    expect(s.players[1].stacks[0][0].uid).toBe(top.uid);
+    // 被平移卡不再出现在源堆叠（无重复对象）
+    expect(s.players[1].stacks[0].some((c) => c.uid === covered.uid)).toBe(false);
+  });
+
+  it('delete with allowCovered removes a covered card, top stays on field', () => {
+    const s = draftFireP1();
+    s.players[1].stacks[0] = [makeCard('water-1', 1, 'field', true, 0, 0), makeCard('water-2', 1, 'field', true, 0, 1)];
+    const covered = s.players[1].stacks[0][0];
+    const top = s.players[1].stacks[0][1];
+    s.pendingEffects.push({
+      id: 'e1', player: 0,
+      gen: (function* (): Generator<EffectStep, void, StepResult> {
+        yield { op: 'delete', uid: covered.uid, allowCovered: true };
+      })(),
+      sourceUid: 'src', sourceDefId: 'system', system: true, prompt: null, lastAnswer: null,
+    });
+    runStack(s);
+    expect(covered.zone).toBe('trash'); // 目标卡进墓地
+    expect(s.players[1].stacks[0]).toHaveLength(1);
+    expect(s.players[1].stacks[0][0].uid).toBe(top.uid); // 顶卡仍在源堆叠
+    expect(s.players[1].trash.some((c) => c.uid === covered.uid)).toBe(true);
+  });
+
+  it('return with allowCovered returns a covered card, top stays on field', () => {
+    const s = draftFireP1();
+    s.players[1].stacks[0] = [makeCard('water-1', 1, 'field', true, 0, 0), makeCard('water-2', 1, 'field', true, 0, 1)];
+    const covered = s.players[1].stacks[0][0];
+    const top = s.players[1].stacks[0][1];
+    s.pendingEffects.push({
+      id: 'e1', player: 0,
+      gen: (function* (): Generator<EffectStep, void, StepResult> {
+        yield { op: 'return', uid: covered.uid, allowCovered: true };
+      })(),
+      sourceUid: 'src', sourceDefId: 'system', system: true, prompt: null, lastAnswer: null,
+    });
+    runStack(s);
+    expect(covered.zone).toBe('hand'); // 目标卡回手
+    expect(s.players[1].stacks[0]).toHaveLength(1);
+    expect(s.players[1].stacks[0][0].uid).toBe(top.uid); // 顶卡仍在源堆叠
+    expect(s.players[1].hand.some((c) => c.uid === covered.uid)).toBe(true);
   });
 
   it('select with covered candidates empty fizzles (no deadlock)', () => {
@@ -728,7 +773,7 @@ describe('covered targeting', () => {
     });
     runStack(s);
     expect(s.pendingEffects).toHaveLength(0);
-    expect(ran).toBe(false); // 空候选被 fizzle 跳过，生成器未继续
+    expect(ran).toBe(true); // 空候选被 fizzle 跳过 = runStack 以 {selected:[]} 续接生成器（不挂起）；生成器守卫空应答后自行结束，效果栈排空（无死锁）
   });
 });
 ```
@@ -755,7 +800,9 @@ export interface CandidateFilter { zone: 'hand' | 'field'; owner?: PlayerId; cov
       const stack = p.stacks[line];
       if (stack.length === 0) continue;
       if (filter.covered) {
-        for (const c of stack) {
+        // covered: 仅列出该堆叠被覆盖的卡（排除顶卡——顶卡未被覆盖；排除结算中源卡）
+        for (let i = 0; i < stack.length - 1; i++) {
+          const c = stack[i];
           if (resolving.has(c.uid)) continue;
           out.push(toChoiceCard(c));
         }
@@ -945,3 +992,5 @@ git commit -m "docs: stage 3 complete (Light/Darkness pilot)"
 - **依赖顺序**：Task 6（Light）需要 Task 1（chooser/select-action）+ Task 8（allowCovered——light-3）+ Task 4（light-3 无 playTopDeck；light-2 用 shift）；**若 Task 8 未完成则 Light 的 light-3 会缺 allowCovered**——实施时按 1→2→3→4→5→**8**→6→7→9→10 执行（把 Task 8 提前到 Task 6 之前）
 - **既有测试风险**：`stackValue` 修改后既有 stack 测试（`tests/state/create.test.ts` 等）应不受影响（无 valueModifier 注册时行为不变）；`tests/helpers.ts` 新增 `draftLightP1`
 - **潜在坑**：light-3 循环 shift 覆盖卡（allowCovered 移出堆叠中部）与 darkness-4 源线推导——实现时以测试断言为准，必要时简化（如 darkness-4 的 select-line 用 `ctx.card.line` 作为唯一排除线）
+- **Task 1 修正（评审 amendment）**：`answerEffect` 校验恢复全局重复选择拦截（`new Set` 判重，select max≥2 防 `['a','a']`），select-action 改为逐项校验（原"仅 length===1 时校验"在 max>1 下会放行非列表项）；runStack fizzle 规则按 kind 判定"无合法目标"（select→candidates / select-line→lines / select-action→actions），与 brief 测试一致（新 kind 步骤 `candidates: []` 但 lines/actions 非空时必须挂起）
+- **Task 8 修正（评审 amendment）**：① covered 分支语义修正——`covered: true` 仅列出堆叠中被覆盖的卡（排除顶卡与结算中源卡），原 Step-3 snippet（列出全部卡）与其自身测试自相矛盾（无覆盖卡时 select 会挂死而非 fizzle），与设计文档"仅对手侧被盖住"及 darkness-0 语义一致；② fizzle 回归测试断言与文档契约对齐——空候选被 fizzle 跳过 = runStack 以 `{selected:[]}` 续接生成器（不挂起），生成器守卫空应答后自行结束、效果栈排空（无死锁），故 `ran === true`（非"生成器未继续"）；③ 状态损坏修复（复评）——shift/delete/return 原用 `stacks[line].pop()` 移除顶卡而非目标覆盖卡（目标卡滞留源堆叠且重复落地、顶卡被弹出成孤儿）；改为按 uid `findIndex` + `splice` 移除目标卡（顶卡 splice 末位等价 pop，既有行为不变），covered 测试补强（源堆叠剩顶卡、目标卡不再出现于源堆叠）并新增 delete/return 覆盖卡用例

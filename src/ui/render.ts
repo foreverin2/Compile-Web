@@ -1,4 +1,4 @@
-import type { GameState, PlayerId, Line, ProtocolDef } from '../core/models/types';
+import type { ChoiceRequest, GameState, PendingEffect, PlayerId, Line, ProtocolDef } from '../core/models/types';
 import { getLineValue, getCurrentDrafter, draftTurnRange } from '../core/state/create';
 import { getLegalActions, type LegalAction } from '../core/game';
 import { DEMO_PROTOCOLS } from '../data/demo';
@@ -209,9 +209,37 @@ function renderPlayerInfo(s: GameState, player: PlayerId, opts: { isSelf: boolea
   return info;
 }
 
+/** 牌库区：多张背面卡层叠（厚度随剩余数），顶层中央显示剩余张数 */
+function renderDeck(s: GameState, player: PlayerId): HTMLElement {
+  const count = s.players[player].deck.length;
+  const layers = count === 0 ? 0 : Math.min(4, Math.ceil(count / 4));
+  const deck = el('div', `deck deck-${count === 0 ? 'empty' : layers}`);
+  deck.dataset.player = String(player);
+  if (layers > 0) {
+    const stack = el('div', 'deck-stack');
+    for (let i = 0; i < layers; i++) stack.appendChild(el('div', 'deck-back'));
+    deck.appendChild(stack);
+    deck.appendChild(el('span', 'deck-count', String(count)));
+  } else {
+    deck.appendChild(el('span', 'deck-count empty', '0'));
+  }
+  return deck;
+}
+
+/** 刷新手牌按钮：位于牌库区与手牌之间（P1 在牌库右侧、P2 在牌库左侧），
+ *  仅在刷新是合法动作（refreshAction 非空）时渲染，点击派发 refresh */
+function renderRefreshButton(action: LegalAction, cb: UiCallbacks): HTMLElement {
+  const btn = el('button', 'shield-refresh-btn', '刷新手牌');
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    cb.onAction(action);
+  });
+  return btn;
+}
+
 /**
  * 手牌条：self（回合玩家）正面可点选，对手背面展示。
- * R6 扇形手牌：单行不换行（.hand 负 margin 重叠）；最多渲染 10 张，超出部分以
+ * R6 扇形手牌：单行不换行（.hand 负 margin 重叠）；最多渲染 15 张，超出部分以
  * 末尾 +N 徽标提示（隐藏的牌仍在状态中，随手牌减少自动露出）。
  * R7 P2 手牌从右往左排（.hand.reversed = flex-direction: row-reverse）：
  * index 0 在最右、后续卡向左延伸；P1 保持左起（默认左对齐）。悬停第 i 张卡时，
@@ -232,10 +260,6 @@ function renderHand(
     onToggleFaceUp?: () => void;
     /** 拖拽打牌：命中合法落点时派发 onAction 的回调 */
     cb: UiCallbacks;
-    /** 刷新手牌按钮：仅当刷新是合法动作（当前玩家 + action 步骤 + 手牌 < 5）时渲染，
-     *  位于手牌挡板外侧（P1 在挡板左侧、P2 在挡板右侧），点击派发 refresh 动作 */
-    onRefresh?: () => void;
-    refreshEnabled?: boolean;
   }
 ): HTMLElement {
   const reversed = player === 1; // P2 右起、向左延伸；P1 左起、向右延伸（默认左对齐）
@@ -248,7 +272,7 @@ function renderHand(
   const byValue = [...cards].sort(
     (a, b) => parseInt(splitDefId(a.defId)[1], 10) - parseInt(splitDefId(b.defId)[1], 10)
   );
-  const shown = (reversed ? [...byValue].reverse() : byValue).slice(0, 10);
+  const shown = (reversed ? [...byValue].reverse() : byValue).slice(0, 15);
   const nodes: HTMLElement[] = [];
   for (const card of shown) {
     const i = nodes.length;
@@ -303,8 +327,8 @@ function renderHand(
     hand.appendChild(node);
     nodes.push(node);
   }
-  if (cards.length > 10) {
-    hand.appendChild(el('div', 'hand-more-badge', `+${cards.length - 10}`));
+  if (cards.length > 15) {
+    hand.appendChild(el('div', 'hand-more-badge', `+${cards.length - 15}`));
   }
   // 揭示幽灵牌：把被揭示卡的正面复制到本玩家手牌区末尾（仅视觉提示，不参与任何
   // 事件/手牌计数；对手回合结束后由引擎清除）。data-uid 用 ghost- 前缀避免冲突。
@@ -327,17 +351,6 @@ function renderHand(
   // 在 shieldWidth（模块态），重渲染后保留；仅 self（当前回合）手牌的挡板可拖，
   // 对手挡板锁定但状态保留。
   hand.appendChild(renderShield(s, player, opts.isSelf, hand));
-  // 刷新手牌按钮：紧跟挡板之后渲染（相邻兄弟，CSS 用 .hand-shield.p1 + / .p2 + 定位），
-  // 置于挡板外侧（P1 左 / P2 右）。紧凑半透明青色，与「翻面」按钮（.play-btn）同风格；
-  // 仅在刷新是合法动作（refreshEnabled）时出现，点击派发 refresh。
-  if (opts.refreshEnabled && opts.onRefresh) {
-    const refreshBtn = el('button', 'shield-refresh-btn', '刷新手牌');
-    refreshBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      opts.onRefresh!();
-    });
-    hand.appendChild(refreshBtn);
-  }
   const total = nodes.length;
   for (let i = 0; i < total; i++) {
     const node = nodes[i];
@@ -399,8 +412,9 @@ function bindShieldDrag(shield: HTMLElement, player: PlayerId, hand: HTMLElement
     e.preventDefault();
     e.stopPropagation(); // 不与卡牌单击/拖拽相互干扰
     const dir = player === 0 ? 1 : -1; // P1 向右拖加宽；P2 向左拖加宽
-    // 最大宽度 = 整个手牌区宽度（能覆盖全部手牌至协议中线）
-    const maxW = Math.max(0, hand.clientWidth);
+    // 最大宽度 = 整个手牌区宽度（能覆盖全部手牌至协议中线），
+    // 封顶 SHIELD_MAX_WIDTH（15 张扇形完整宽度 ≈1660px）：超出上限的溢出区无需遮住
+    const maxW = Math.min(Math.max(0, hand.clientWidth), SHIELD_MAX_WIDTH);
     const startX = e.clientX;
     const startWidth = Math.min(Math.max(shieldWidth[player], 0), maxW);
     const apply = (w: number) => {
@@ -810,6 +824,8 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   // 三条线（每线一行，同行 4 格水平对齐）
   for (const line of [0, 1, 2] as Line[]) {
     const row = el('div', 'lane-row');
+    // 线编号：select-line 选择模式据此高亮并即答 ['line:N']
+    row.dataset.line = String(line);
     row.appendChild(
       renderStackSlot(s, 0, line, s.turnPlayer === 0 ? selectedUid : null, s.turnPlayer === 0 ? (l) => playToLine(s, cb, l) : () => {}, s.turnPlayer === 0)
     );
@@ -821,12 +837,16 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
     grid.appendChild(row);
   }
 
-  // 底部条带：双方手牌 + 中间步骤指示
+  // 底部条带：双方（牌库 + 刷新手牌 + 手牌） + 中间步骤指示。
+  // 每侧一个 .hand-side flex 容器：P1 [deck][refresh][hand]、P2 [hand][refresh][deck]
+  // （牌库在最外、刷新手牌次之、与牌库间距 ≥16px；刷新按钮仅当前玩家 action 步骤时出现）。
   const handStrip = el('div', 'hand-strip');
   const legal = getLegalActions(s, s.turnPlayer);
-  // 刷新手牌：移到当前玩家手牌挡板外侧渲染（renderHand），不再出现在操作行
   const refreshAction = legal.find((a) => a.kind === 'refresh') ?? null;
-  handStrip.appendChild(
+  const p1Side = el('div', 'hand-side p1');
+  p1Side.appendChild(renderDeck(s, 0));
+  if (s.turnPlayer === 0 && refreshAction) p1Side.appendChild(renderRefreshButton(refreshAction, cb));
+  p1Side.appendChild(
     renderHand(s, 0, {
       isSelf: s.turnPlayer === 0,
       selected: s.turnPlayer === 0 ? selectedUid : null,
@@ -840,12 +860,12 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
         renderApp(root, s, cb);
       },
       cb,
-      refreshEnabled: s.turnPlayer === 0 && refreshAction !== null,
-      onRefresh: () => { if (refreshAction) cb.onAction(refreshAction); },
     })
   );
+  handStrip.appendChild(p1Side);
   handStrip.appendChild(el('div', 'step-indicator', `步骤: ${s.step}`));
-  handStrip.appendChild(
+  const p2Side = el('div', 'hand-side p2');
+  p2Side.appendChild(
     renderHand(s, 1, {
       isSelf: s.turnPlayer === 1,
       selected: s.turnPlayer === 1 ? selectedUid : null,
@@ -859,10 +879,11 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
         renderApp(root, s, cb);
       },
       cb,
-      refreshEnabled: s.turnPlayer === 1 && refreshAction !== null,
-      onRefresh: () => { if (refreshAction) cb.onAction(refreshAction); },
     })
   );
+  if (s.turnPlayer === 1 && refreshAction) p2Side.appendChild(renderRefreshButton(refreshAction, cb));
+  p2Side.appendChild(renderDeck(s, 1));
+  handStrip.appendChild(p2Side);
   grid.appendChild(handStrip);
   wrap.appendChild(grid);
 
@@ -897,7 +918,7 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   }
   wrap.appendChild(actionBar);
 
-  // 选择模式（效果结算挂起且顶部为选择请求时）：候选卡高亮 + 底部确认条
+  // 选择模式（效果结算挂起且顶部为选择请求时）：按 kind 分支渲染（候选卡高亮 / 线槽高亮 / 操作按钮）
   const topEffect = s.pendingEffects[s.pendingEffects.length - 1];
   if (topEffect?.prompt) {
     const prompt = topEffect.prompt;
@@ -906,53 +927,93 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
       choicePromptId = topEffect.id;
       choiceSelected = [];
     }
-    const sel = new Set(choiceSelected);
-    // 候选卡高亮（renderBoard 内所有 .card 已渲染，此时均在 wrap 内）
-    for (const node of wrap.querySelectorAll<HTMLElement>('.card[data-uid]')) {
-      const uid = node.dataset.uid!;
-      const candidate = prompt.candidates.find((c) => c.uid === uid);
-      if (candidate) {
-        node.classList.add('choice-target');
-        if (sel.has(uid)) node.classList.add('choice-selected');
-        // 单击=切换选择，双击=放大查看候选卡；复用 bindClickOrDouble 的单击/双击判别
-        // （单击延迟 320ms > 双击窗口 300ms）。双击窗口内的第二次点击先于延迟的单击触发
-        // 并取消它 → 双击不会误切换选择，且打开遮罩前不会重渲染销毁节点。
-        bindClickOrDouble(
-          node,
-          () => {
-            if (sel.has(uid)) { sel.delete(uid); choiceSelected = choiceSelected.filter((x) => x !== uid); }
-            else if (choiceSelected.length < prompt.max) { choiceSelected.push(uid); }
-            renderApp(root, s, cb);
-          },
-          () => openZoom(candidate.defId, candidate.faceUp, false, false),
-          true
-        );
-      } else {
-        node.classList.add('choice-dim');
+    if (prompt.kind === 'select') {
+      // —— 现有 select 逻辑（候选卡高亮 + 确认条）保持不变 ——
+      const sel = new Set(choiceSelected);
+      // 候选卡高亮（renderBoard 内所有 .card 已渲染，此时均在 wrap 内）
+      for (const node of wrap.querySelectorAll<HTMLElement>('.card[data-uid]')) {
+        const uid = node.dataset.uid!;
+        const candidate = prompt.candidates.find((c) => c.uid === uid);
+        if (candidate) {
+          node.classList.add('choice-target');
+          if (sel.has(uid)) node.classList.add('choice-selected');
+          // 单击=切换选择，双击=放大查看候选卡；复用 bindClickOrDouble 的单击/双击判别
+          // （单击延迟 320ms > 双击窗口 300ms）。双击窗口内的第二次点击先于延迟的单击触发
+          // 并取消它 → 双击不会误切换选择，且打开遮罩前不会重渲染销毁节点。
+          bindClickOrDouble(
+            node,
+            () => {
+              if (sel.has(uid)) { sel.delete(uid); choiceSelected = choiceSelected.filter((x) => x !== uid); }
+              else if (choiceSelected.length < prompt.max) { choiceSelected.push(uid); }
+              renderApp(root, s, cb);
+            },
+            () => openZoom(candidate.defId, candidate.faceUp, false, false),
+            true
+          );
+        } else {
+          node.classList.add('choice-dim');
+        }
       }
-    }
-    const bar = el('div', 'choice-bar');
-    // 归属者标签：出选择请求的效果属主（PendingEffect.player，非 prompt 自身）
-    bar.appendChild(el('div', 'choice-title', `${topEffect.player === 0 ? 'P1' : 'P2'} 操作 — ${prompt.title}`));
-    const count = el('span', 'choice-count', `已选 ${choiceSelected.length}/${prompt.max === Infinity ? prompt.candidates.length : prompt.max}`);
-    bar.appendChild(count);
-    const canConfirm = choiceSelected.length >= prompt.min && choiceSelected.length <= prompt.max;
-    const confirmBtn = el('button', 'btn choice-confirm' + (canConfirm ? '' : ' disabled'), '确认');
-    confirmBtn.addEventListener('click', () => {
-      if (!canConfirm) return;
-      choicePromptId = null;
-      cb.onAction({ kind: 'effect-choice', promptId: topEffect.id, choice: choiceSelected });
-    });
-    bar.appendChild(confirmBtn);
-    if (prompt.optional) {
-      const skipBtn = el('button', 'btn choice-skip', '跳过');
-      skipBtn.addEventListener('click', () => {
+      const bar = el('div', 'choice-bar');
+      // 归属者标签：出选择请求的效果属主（PendingEffect.player，非 prompt 自身；chooser 覆盖）
+      bar.appendChild(el('div', 'choice-title', `${(prompt.chooser ?? topEffect.player) === 0 ? 'P1' : 'P2'} 操作 — ${prompt.title}`));
+      const count = el('span', 'choice-count', `已选 ${choiceSelected.length}/${prompt.max === Infinity ? prompt.candidates.length : prompt.max}`);
+      bar.appendChild(count);
+      const canConfirm = choiceSelected.length >= prompt.min && choiceSelected.length <= prompt.max;
+      const confirmBtn = el('button', 'btn choice-confirm' + (canConfirm ? '' : ' disabled'), '确认');
+      confirmBtn.addEventListener('click', () => {
+        if (!canConfirm) return;
         choicePromptId = null;
-        cb.onAction({ kind: 'effect-choice', promptId: topEffect.id, choice: [] });
+        cb.onAction({ kind: 'effect-choice', promptId: topEffect.id, choice: choiceSelected });
       });
-      bar.appendChild(skipBtn);
+      bar.appendChild(confirmBtn);
+      if (prompt.optional) {
+        const skipBtn = el('button', 'btn choice-skip', '跳过');
+        skipBtn.addEventListener('click', () => {
+          choicePromptId = null;
+          cb.onAction({ kind: 'effect-choice', promptId: topEffect.id, choice: [] });
+        });
+        bar.appendChild(skipBtn);
+      }
+      wrap.appendChild(bar);
+    } else if (prompt.kind === 'select-line') {
+      // 线槽高亮：点击 lane-row 即答 ['line:N']
+      for (const row of wrap.querySelectorAll<HTMLElement>('.lane-row')) {
+        const ln = Number(row.dataset.line);
+        if (prompt.lines?.includes(ln as Line)) {
+          row.classList.add('choice-target', 'choice-line');
+          row.addEventListener('click', () => {
+            choicePromptId = null;
+            cb.onAction({ kind: 'effect-choice', promptId: topEffect.id, choice: [`line:${ln}`] });
+          });
+        }
+      }
+      const bar = choiceBar(topEffect, prompt, cb, '点击高亮的线路选择目标线');
+      if (prompt.optional) {
+        // 可选 select-line（如 darkness-1 的可选平移）：跳过 = 空应答
+        const skipBtn = el('button', 'btn choice-skip', '跳过');
+        skipBtn.addEventListener('click', () => {
+          choicePromptId = null;
+          cb.onAction({ kind: 'effect-choice', promptId: topEffect.id, choice: [] });
+        });
+        bar.appendChild(skipBtn);
+      }
+      wrap.appendChild(bar);
+    } else if (prompt.kind === 'select-action') {
+      const bar = el('div', 'choice-bar');
+      bar.appendChild(el('div', 'choice-title', `${(prompt.chooser ?? topEffect.player) === 0 ? 'P1' : 'P2'} 操作 — ${prompt.title}`));
+      for (const act of prompt.actions ?? []) {
+        const b = el('button', 'btn choice-action-btn', act.replace('action:', ''));
+        b.addEventListener('click', () => { choicePromptId = null; cb.onAction({ kind: 'effect-choice', promptId: topEffect.id, choice: [act] }); });
+        bar.appendChild(b);
+      }
+      if (prompt.optional) {
+        const skip = el('button', 'btn choice-skip', '跳过');
+        skip.addEventListener('click', () => { choicePromptId = null; cb.onAction({ kind: 'effect-choice', promptId: topEffect.id, choice: [] }); });
+        bar.appendChild(skip);
+      }
+      wrap.appendChild(bar);
     }
-    wrap.appendChild(bar);
     // 选择模式下隐藏手牌交互：给 hand-strip 加 .choice-mode（CSS 禁用非候选卡的 hover/单击/拖拽）
     grid.querySelector('.hand-strip')?.classList.add('choice-mode');
   } else {
@@ -981,10 +1042,20 @@ let selectedFaceUp = true;
 const revealedGhostSeen = new Set<string>();
 /** R8 手牌挡板宽度（px，模块态：重渲染后保留；0=收起、手牌可见） */
 const shieldWidth: [number, number] = [0, 0];
+/** 挡板最大宽度：15 张手牌扇形完整铺开（首卡 130px + 14 张 × 露出 102px）≈ 1660px */
+const SHIELD_MAX_WIDTH = 15 * 102 + 130;
 
 /** 选择模式状态：当前应答的 promptId 与已选 uid（重渲染保留，选择完成后清空） */
 let choicePromptId: string | null = null;
 let choiceSelected: string[] = [];
+
+/** 选择确认条（select-line 用）：归属者标签 + 提示文案；线槽点击即答，无需确认钮 */
+function choiceBar(pe: PendingEffect, prompt: ChoiceRequest, cb: UiCallbacks, hint: string): HTMLElement {
+  const bar = el('div', 'choice-bar');
+  bar.appendChild(el('div', 'choice-title', `${(prompt.chooser ?? pe.player) === 0 ? 'P1' : 'P2'} 操作 — ${prompt.title}`));
+  bar.appendChild(el('div', 'choice-hint', hint));
+  return bar;
+}
 
 /* ===== 卡牌放大查看遮罩（双击卡牌：手牌/场上/协议；滚轮缩放；Esc 或点击空白关闭） ===== */
 interface ZoomState {

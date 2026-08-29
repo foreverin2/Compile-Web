@@ -29,7 +29,7 @@ export interface LegalAction {
 export function getLegalActions(s: GameState, player: PlayerId): LegalAction[] {
   if (s.phase !== 'turn' || s.turnPlayer !== player || s.winner !== null) return [];
   // 效果结算挂起 / 落牌（浮空）中：无标准行动（选择经 UI 直接应答）
-  if (s.pendingEffects.length > 0 || s.pendingPlay !== null || s.pendingShift !== null) return [];
+  if (s.pendingEffects.length > 0 || s.pendingPlay.length > 0 || s.pendingShift.length > 0) return [];
   const out: LegalAction[] = [];
   if (s.step === 'action') {
     for (const card of s.players[player].hand) {
@@ -90,7 +90,7 @@ export function executeAction(s: GameState, player: PlayerId, kind: ActionKind, 
   // 效果结算挂起 / 落牌中：只允许应答选择
   if (kind !== 'effect-choice') {
     if (s.pendingEffects.length > 0) throw new Error('resolve pending effect choices first');
-    if (s.pendingPlay !== null || s.pendingShift !== null) throw new Error('pending play/shift in progress');
+    if (s.pendingPlay.length > 0 || s.pendingShift.length > 0) throw new Error('pending play/shift in progress');
   }
 
   switch (kind) {
@@ -98,7 +98,7 @@ export function executeAction(s: GameState, player: PlayerId, kind: ActionKind, 
       // 需收窄到 PlayArgs（'cardUid' in args 不足以排除 resolve-trigger 的 { cardUid }）
       if (!args || !('cardUid' in args) || !('faceUp' in args)) throw new Error('play requires args');
       playCard(s, player, args.cardUid, args.faceUp, args.line);
-      if (s.pendingEffects.length === 0 && s.pendingPlay === null) {
+      if (s.pendingEffects.length === 0 && s.pendingPlay.length === 0) {
         advanceStep(s);
       } else {
         s.pendingStepAdvance = true; // 链式结算完毕后由 runStack 推进
@@ -122,7 +122,9 @@ export function executeAction(s: GameState, player: PlayerId, kind: ActionKind, 
     case 'effect-choice': {
       if (!args || !('promptId' in args)) throw new Error('effect-choice requires args');
       const top = s.pendingEffects[s.pendingEffects.length - 1];
-      if (!top || top.player !== player) throw new Error('not your choice');
+      // 选择权归属者：prompt.chooser（"被作用卡持有者决定"）缺省 = 效果属主（PendingEffect.player）
+      const chooser = top?.prompt?.chooser ?? top?.player;
+      if (!top || chooser !== player) throw new Error('not your choice');
       answerEffect(s, args.promptId, args.choice);
       break;
     }
