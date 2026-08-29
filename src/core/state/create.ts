@@ -135,7 +135,8 @@ export function stackValue(s: GameState, player: PlayerId, line: Line): number {
   for (const owner of [player, opp]) {
     for (const card of s.players[owner].stacks[line]) {
       const v = EFFECTS[card.defId]?.valueModifier;
-      if (!v) continue;
+      // 背面朝下的卡没有协议属性/指令效果 → 修正卡必须正面朝上才生效（被覆盖但正面朝上仍常驻生效）
+      if (!v || !card.faceUp) continue;
       if (v.target === 'own-stack' && owner === player) total = v.apply(s, owner, line, total);
       if (v.target === 'opponent-line' && owner !== player) total = v.apply(s, owner, line, total);
     }

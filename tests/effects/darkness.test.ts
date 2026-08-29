@@ -46,6 +46,65 @@ describe('darkness protocol effects', () => {
     expect(s.players[0].stacks[darknessLine(s)].map((c) => c.uid)).toEqual([card.uid]);
   });
 
+  it('darkness-0: covered opponent card on the same column is not a shift candidate', () => {
+    const s = draftDarknessP1();
+    advanceToStep(s, 0, 'action');
+    // 对手线 0（= 效果所在列）：被覆盖卡无法平移（目标线固定为本列）→ 从候选排除
+    const sameLine = makeCard('water-1', 1, 'field', true, 0, 0);
+    const sameTop = makeCard('water-2', 1, 'field', true, 0, 1);
+    s.players[1].stacks[0] = [sameLine, sameTop];
+    // 对手线 1：另一张被覆盖卡（唯一合法候选）
+    const other = makeCard('water-3', 1, 'field', true, 1, 0);
+    const otherTop = makeCard('water-4', 1, 'field', true, 1, 1);
+    s.players[1].stacks[1] = [other, otherTop];
+    s.players[0].hand = [makeCard('darkness-0', 0, 'hand')];
+    const card = s.players[0].hand[0];
+    executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: darknessLine(s) });
+    const p = s.pendingEffects[s.pendingEffects.length - 1];
+    expect(p.prompt?.kind).toBe('select');
+    expect(p.prompt?.candidates.map((c) => c.uid)).toEqual([other.uid]); // 同列候选被排除
+    executeAction(s, 0, 'effect-choice', { promptId: p.id, choice: [other.uid] });
+    expect(other.line).toBe(darknessLine(s)); // 平移成功落地
+    expect(s.pendingEffects).toHaveLength(0);
+  });
+
+  it('darkness-0: all covered opponent cards same-column → fizzle, no deadlock', () => {
+    const s = draftDarknessP1();
+    advanceToStep(s, 0, 'action');
+    const covered = makeCard('water-1', 1, 'field', true, 0, 0);
+    const top = makeCard('water-2', 1, 'field', true, 0, 1);
+    s.players[1].stacks[0] = [covered, top];
+    s.players[0].hand = [makeCard('darkness-0', 0, 'hand')];
+    const handBefore = s.players[0].hand.length;
+    const card = s.players[0].hand[0];
+    executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: darknessLine(s) });
+    expect(s.players[0].hand).toHaveLength(handBefore - 1 + 3); // 抽 3 仍结算
+    expect(s.pendingEffects).toHaveLength(0); // 全部候选被过滤 → fizzle：不挂起、不死锁
+    expect(covered.line).toBe(0); // 未被平移
+    expect(s.players[1].stacks[0].map((c) => c.uid)).toEqual([covered.uid, top.uid]);
+  });
+
+  it('darkness-0: shifting a covered card does not re-run the unchanged top middle (fire-0)', () => {
+    const s = draftDarknessP1();
+    advanceToStep(s, 0, 'action');
+    // 对手线 1：顶层正面 fire-0（有中指令），其下是被盖住的覆盖卡 → 平移覆盖卡时顶卡并未被移除
+    const covered = makeCard('water-1', 1, 'field', true, 1, 0);
+    const fire0 = makeCard('fire-0', 1, 'field', true, 1, 1);
+    s.players[1].stacks[1] = [covered, fire0];
+    s.players[0].hand = [makeCard('darkness-0', 0, 'hand')];
+    const handBefore = s.players[0].hand.length;
+    const card = s.players[0].hand[0];
+    executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: darknessLine(s) });
+    const p = s.pendingEffects[s.pendingEffects.length - 1];
+    expect(p.prompt?.kind).toBe('select');
+    executeAction(s, 0, 'effect-choice', { promptId: p.id, choice: [covered.uid] });
+    expect(s.pendingEffects).toHaveLength(0); // fire-0 中指令未被重新触发（无新挂起选择）
+    expect(s.pendingShift).toHaveLength(0);
+    expect(s.players[0].hand).toHaveLength(handBefore - 1 + 3); // 仅 darkness-0 抽 3，fire-0 中指令未跑（无额外抽 2）
+    expect(s.players[1].stacks[1].map((c) => c.uid)).toEqual([fire0.uid]); // 顶卡原样保留
+    expect(covered.line).toBe(darknessLine(s)); // 覆盖卡平移落地
+  });
+
   it('darkness-1: flip an opponent card, then optional line shift moves it', () => {
     const s = draftDarknessP1();
     advanceToStep(s, 0, 'action');

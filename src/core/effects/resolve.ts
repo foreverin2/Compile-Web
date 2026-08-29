@@ -152,6 +152,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       const stack = s.players[owner].stacks[line];
       const idx = stack.findIndex((c) => c.uid === op.uid);
       if (idx === -1) throw new Error(`cannot delete ${op.uid}: not in stack`);
+      const wasTop = idx === stack.length - 1;
       stack.splice(idx, 1); // 按目标卡移除（顶卡 splice 末位等价 pop；覆盖卡从堆叠中部移除）
       card.zone = 'trash';
       card.faceUp = true;
@@ -163,7 +164,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
         triggerDefId: pe.sourceDefId,
         triggerProtocol: pe.sourceDefId.split('-')[0],
       });
-      revealAfterRemoval(s, owner, line);
+      if (wasTop) revealAfterRemoval(s, owner, line); // 仅当移除的是顶卡时新顶卡才被"揭开"
       break;
     }
     case 'return': {
@@ -175,13 +176,14 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       const stack = s.players[owner].stacks[line];
       const idx = stack.findIndex((c) => c.uid === op.uid);
       if (idx === -1) throw new Error(`cannot return ${op.uid}: not in stack`);
+      const wasTop = idx === stack.length - 1;
       stack.splice(idx, 1); // 按目标卡移除（顶卡 splice 末位等价 pop；覆盖卡从堆叠中部移除）
       card.zone = 'hand';
       card.line = null;
       card.pos = null;
       s.players[owner].hand.push(card);
       emitCardEvent(s, 'card:returned', card);
-      revealAfterRemoval(s, owner, line);
+      if (wasTop) revealAfterRemoval(s, owner, line); // 仅当移除的是顶卡时新顶卡才被"揭开"
       break;
     }
     case 'shift': {
@@ -194,13 +196,14 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       const stack = s.players[owner].stacks[fromLine];
       const idx = stack.findIndex((c) => c.uid === op.uid);
       if (idx === -1) throw new Error(`cannot shift ${op.uid}: not in stack`);
+      const wasTop = idx === stack.length - 1;
       stack.splice(idx, 1); // 按目标卡移除（顶卡 splice 末位等价 pop；覆盖卡从堆叠中部移除）
       card.zone = 'float';
       card.line = op.targetLine; // 提交目标（落地前不可变卦）
       card.pos = null;
       s.pendingShift.push({ card, beforeCoveredDone: false });
       emitCardEvent(s, 'card:shifted', card, { fromLine });
-      revealAfterRemoval(s, owner, fromLine);
+      if (wasTop) revealAfterRemoval(s, owner, fromLine); // 仅当移除的是顶卡时新顶卡才被"揭开"
       break;
     }
     case 'playTopDeck': {

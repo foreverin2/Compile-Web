@@ -5,7 +5,10 @@ import { registerCardEffects } from '../registry';
 /** darkness-0：抽 3 张牌，然后平移 1 张你对手的被盖住的牌（到本卡所在列；无覆盖卡则 fizzle） */
 function* darkness0(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   yield { op: 'draw', count: 3 };
-  const covered = ctx.candidates({ zone: 'field', owner: ctx.player === 0 ? 1 : 0, covered: true });
+  // 目标线固定为本卡所在列 → 已在本列的覆盖卡平移不了（同线 shift 非法），从候选排除；全被排除则 fizzle
+  const covered = ctx
+    .candidates({ zone: 'field', owner: ctx.player === 0 ? 1 : 0, covered: true })
+    .filter((c) => c.line !== ctx.card.line);
   const ans = yield { kind: 'select', title: 'darkness-0：平移1张你对手的被盖住的牌', min: 1, max: 1, optional: false, candidates: covered };
   if (ans.selected.length === 0) return; // 无覆盖卡：fizzle（runStack 已跳过空候选，双保险）
   yield { op: 'shift', uid: ans.selected[0], targetLine: ctx.card.line!, allowCovered: true };

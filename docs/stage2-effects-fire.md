@@ -354,7 +354,7 @@ npm run preview  # 预览构建产物
 
 > 本文件至此成为**阶段 2 → 3 交接文档**：§0.1 架构、§0.7 设计修复、§4.9 特效分层模型（阶段 2）+ 本节（阶段 3）为续作必读。阶段 2 内容全部原样保留。
 
-### 7.1 本阶段交付（分支 `feature/stage3-light-darkness`，相对 main 13 个提交）
+### 7.1 本阶段交付（分支 `feature/stage3-light-darkness`，相对 main 14 个提交）
 
 - **Light 6 卡真实效果**（`src/core/effects/cards/light.ts`）：light-0 抽「其分值」张（数值读取）、light-1 end 抽 1、light-2 揭示 + 平移或翻转、light-5 弃 1 等——全部可结算、可连锁、可挂起选择。
 - **Darkness 6 卡真实效果**（`src/core/effects/cards/darkness.ts`）：darkness-0 抽 3 + 平移对手被盖住牌、darkness-1 翻转对手牌 + 可平移、darkness-2 顶命令（本栈反面牌分值 4，`valueModifier`）+ 可翻转本列反面牌 等。

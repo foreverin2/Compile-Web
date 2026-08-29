@@ -89,6 +89,26 @@ describe('light protocol effects', () => {
     expect(s.pendingEffects).toHaveLength(0);
   });
 
+  it('light-2: shift target lines exclude both the effect line and the revealed card line', () => {
+    const s = draftLightP1();
+    advanceToStep(s, 0, 'action');
+    s.players[0].hand = [makeCard('light-2', 0, 'hand')];
+    const facedown = makeCard('light-1', 1, 'field', false, 1, 0); // 被揭示卡在另一列（线 1）
+    s.players[1].stacks[1] = [facedown];
+    const card = s.players[0].hand[0];
+    executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: lightLine(s) }); // 效果线 0
+    const p1 = s.pendingEffects[s.pendingEffects.length - 1];
+    expect(p1.prompt?.kind).toBe('select');
+    executeAction(s, 0, 'effect-choice', { promptId: p1.id, choice: [facedown.uid] });
+    // 被揭示卡持有者（P2）选择平移
+    const p2 = s.pendingEffects[s.pendingEffects.length - 1];
+    expect(p2.prompt?.kind).toBe('select-action');
+    executeAction(s, 1, 'effect-choice', { promptId: p2.id, choice: ['action:shift'] });
+    const p3 = s.pendingEffects[s.pendingEffects.length - 1];
+    expect(p3.prompt?.kind).toBe('select-line');
+    expect(p3.prompt?.lines).toEqual([2]); // 同时排除效果线 0 与被揭示卡线 1（平移必须到不同列）
+  });
+
   it('light-3: shift all facedown cards of own line to target line', () => {
     const s = draftLightP1();
     advanceToStep(s, 0, 'action');
@@ -134,6 +154,31 @@ describe('light protocol effects', () => {
     expect(s.pendingShift).toHaveLength(0);
     const onField = [s.players[0], s.players[1]].flatMap((p) => [...p.stacks[0], ...p.stacks[1], ...p.stacks[2]]);
     expect(onField.map((c) => c.uid).sort()).toEqual([fd1.uid, fd2.uid, fire0.uid, card.uid].sort()); // 无浮空残留
+  });
+
+  it('light-3: exactly one select-line prompt across the whole resolution (no spurious re-triggers)', () => {
+    const s = draftLightP1();
+    advanceToStep(s, 0, 'action');
+    // 本线堆叠：两张反面牌（含被覆盖的底层）→ 打出 light-3 落顶；
+    // 移开被覆盖的反面牌时顶卡（light-3 自身）并未被移除 → 不得重触发其中指令（旧实现每次 +1 次 select-line）
+    const fd1 = makeCard('light-1', 0, 'field', false, 0, 0);
+    const fd2 = makeCard('light-2', 0, 'field', false, 0, 1);
+    s.players[0].stacks[0] = [fd1, fd2];
+    s.players[0].hand = [makeCard('light-3', 0, 'hand')];
+    const card = s.players[0].hand[0];
+    executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: lightLine(s) });
+    let selectLineCount = 0;
+    resolveAllChoices(s, (p) => {
+      if (p.kind === 'select-line') {
+        selectLineCount += 1;
+        return ['line:1'];
+      }
+      return pickFirst(p);
+    });
+    expect(selectLineCount).toBe(1); // 仅目标线选择一次
+    expect(s.players[0].stacks[0].map((c) => c.uid)).toEqual([card.uid]); // 源线只剩 light-3
+    expect(s.players[0].stacks[1].map((c) => c.uid).sort()).toEqual([fd1.uid, fd2.uid].sort());
+    expect(s.pendingEffects).toHaveLength(0);
   });
 
   it('light-4: reveal whole opponent hand (one ghost per card)', () => {
