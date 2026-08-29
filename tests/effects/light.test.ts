@@ -208,6 +208,35 @@ describe('light protocol effects', () => {
     expect(onField.map((c) => c.uid).sort()).toEqual([fd1.uid, fd2.uid, ofd.uid, card.uid].sort());
   });
 
+  it('light-2: can reveal a covered card and an opponent face-down card; covered card owner flips it', () => {
+    const s = draftLightP1();
+    advanceToStep(s, 0, 'action');
+    s.players[0].hand = [makeCard('light-2', 0, 'hand')];
+    // 本线：被盖住的反面卡（底层）+ 正面顶卡
+    const covered = makeCard('water-1', 0, 'field', false, 1, 0);
+    const top = makeCard('water-2', 0, 'field', true, 1, 1);
+    s.players[0].stacks[1] = [covered, top];
+    // 对手线：反面顶卡
+    const oppFd = makeCard('water-3', 1, 'field', false, 2, 0);
+    s.players[1].stacks[2] = [oppFd];
+    const card = s.players[0].hand[0];
+    executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: lightLine(s) });
+    const p1 = s.pendingEffects[s.pendingEffects.length - 1];
+    expect(p1.prompt?.kind).toBe('select');
+    const cands = p1.prompt?.candidates.map((c) => c.uid) ?? [];
+    expect(cands).toContain(covered.uid); // 被盖住的反面卡可选
+    expect(cands).toContain(oppFd.uid); // 对手的反面卡可选
+    // 揭示被盖住的反面卡
+    executeAction(s, 0, 'effect-choice', { promptId: p1.id, choice: [covered.uid] });
+    expect(s.revealedGhosts).toHaveLength(1);
+    const p2 = s.pendingEffects[s.pendingEffects.length - 1];
+    expect(p2.prompt?.kind).toBe('select-action');
+    expect(p2.prompt?.chooser).toBe(0); // 被揭示卡持有者（P1）决定
+    executeAction(s, 0, 'effect-choice', { promptId: p2.id, choice: ['action:flip'] });
+    expect(covered.faceUp).toBe(true); // 被盖住的反面卡可被翻转（allowCovered）
+    expect(s.pendingEffects).toHaveLength(0);
+  });
+
   it('light-4: reveal whole opponent hand (one ghost per card)', () => {
     const s = draftLightP1();
     advanceToStep(s, 0, 'action');

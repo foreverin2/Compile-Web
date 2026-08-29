@@ -16,22 +16,25 @@ function* light1End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
 
 function* light2(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   yield { op: 'draw', count: 2 };
-  // 揭示 1 张反面牌（可选目标：场上任意反面顶卡；fizzle 时无候选自动跳过）
-  const facedown = ctx.candidates({ zone: 'field' }).filter((c) => !c.faceUp);
+  // 揭示 1 张反面牌（可选目标：场上任意反面卡——含被盖住的与对手的；fizzle 时无候选自动跳过）
+  const facedown = [
+    ...ctx.candidates({ zone: 'field' }),
+    ...ctx.candidates({ zone: 'field', covered: true }),
+  ].filter((c) => !c.faceUp);
   const r = yield { kind: 'select', title: 'light-2：揭示1张反面牌', min: 1, max: 1, optional: false, candidates: facedown };
   if (r.selected.length === 0) return;
   const revealed = facedown.find((c) => c.uid === r.selected[0]);
   yield { op: 'reveal', uid: r.selected[0] };
-  // 被揭示卡持有者决定：翻转 / 平移 / 跳过
+  // 被揭示卡持有者决定：翻转 / 平移 / 跳过（持有者现在可能是对手或被盖卡持有者）
   const chooser = revealed?.owner ?? ctx.player;
   const act = yield { kind: 'select-action', title: 'light-2：你可以平移或翻转那张牌', min: 1, max: 1, optional: true, candidates: [], actions: ['action:flip', 'action:shift'], chooser };
   if (act.selected.length === 0) return;
-  if (act.selected[0] === 'action:flip') yield { op: 'flip', uid: r.selected[0] };
+  if (act.selected[0] === 'action:flip') yield { op: 'flip', uid: r.selected[0], allowCovered: true };
   // action:shift → 平移需选目标线（light-2 平移该牌到任意其他线；排除效果线 + 被揭示卡当前线）
   if (act.selected[0] === 'action:shift') {
     const line = yield { kind: 'select-line', title: 'light-2：平移目标线', min: 1, max: 1, optional: false, candidates: [], lines: [0, 1, 2].filter((l) => l !== ctx.card.line && l !== revealed?.line) as Line[], chooser };
     if (line.selected.length > 0) {
-      yield { op: 'shift', uid: r.selected[0], targetLine: Number(line.selected[0].replace('line:', '')) as Line };
+      yield { op: 'shift', uid: r.selected[0], targetLine: Number(line.selected[0].replace('line:', '')) as Line, allowCovered: true };
     }
   }
 }
