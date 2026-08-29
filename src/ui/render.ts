@@ -81,15 +81,16 @@ function renderProtocol(p: { defId: string; compiled: boolean }, player: PlayerI
 }
 
 /**
- * 线值电池指示器（纯 CSS，R8）：位于堆叠槽外侧端（远离协议一侧），垂直居中。
- * 10 格电量 = 该线点值（clamp 0..10）；外壳 4 态按点值：
+ * 线值能量条指示器（纯 CSS）：位于堆叠槽外侧端（远离协议一侧），垂直居中。
+ * 10 格能量 = 该线点值（clamp 0..10）；外壳 4 态按点值：
  * ≤3 stable（方正平直，青色描边）/ 4-6 bulge（上下微微鼓出，橙黄微光）/
  * 7-9 full（明显鼓胀接近圆润，橙色强光 + 应力裂纹）/ ≥10 burst（爆裂：径向爆光 +
- * 裂纹 + 红橙脉冲；10 格仍全部点亮）。pointer-events:none —— 纯视觉，不拦截槽位
- * 打牌点击与卡牌交互。
+ * 裂纹 + 红橙脉冲；10 格仍全部点亮）。分段式能量格外观（暗槽 + 青色填充），
+ * 非电池造型：无正极凸头/LED、无扫描流光。pointer-events:none —— 纯视觉，
+ * 不拦截槽位打牌点击与卡牌交互。
  */
 /**
- * 电池状态跟踪：记录每个 (player, line) 的上一次点数与形态，用于在点数变化时
+ * 能量条状态跟踪：记录每个 (player, line) 的上一次点数与形态，用于在点数变化时
  * 触发格子的渐入动画与外壳形态切换动画。
  */
 const batteryPrev = new Map<string, { points: number; state: string }>();
@@ -113,9 +114,8 @@ function renderBattery(s: GameState, player: PlayerId, line: Line): HTMLElement 
     battery.classList.add('points-changed');
   }
   batteryPrev.set(key, { points, state });
-  // DOM 顺序 = 视觉顺序（flex column 自上而下）：正极凸头在上、外壳（10 格竖排）居中。
+  // DOM 顺序 = 视觉顺序（flex column 自上而下）：仅外壳（10 格竖排）居中。
   // 格填充方向由 CSS .battery-cells 的 column-reverse 控制（从下到上增加）。
-  battery.appendChild(el('div', 'battery-cap'));
   const shell = el('div', 'battery-shell');
   const cells = el('div', 'battery-cells');
   const filled = Math.min(points, 10);
