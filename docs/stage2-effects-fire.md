@@ -290,7 +290,7 @@ npm run preview  # 预览构建产物
 
 ### 5.1 现状澄清
 
-- Light / Darkness 真实中文文本已在 `src/data/cards.ts`（light-0..5、darkness-0..5），demo 草案池也含这两套（`data/demo.ts` DEMO_PROTOCOLS 前 6 套）。
+- 全部 15 套协议已入草案池（`data/demo.ts` DEMO_PROTOCOLS = 全部 15 套，MN01×12 + AX01×3；卡面资源 `public/assets/protocols/<defId>/` 齐全，含 9 套新提取：spirit/gravity/psychic/plague/metal/speed/love/hate/apathy，见 `tools/extract_more_protocols.py`）。协议中文名/关键词/副题已按 `compile1文本.txt` 录入。**其余 14 套效果尚未实现**（打出正面不结算中指令——引擎对未注册协议 no-op；后续按 §5.2 逐个开发）。
 - 效果引擎已具备：discard/delete/return/flip/draw/shift 六操作 + 中指令连锁 + before-covered/end/start 触发 + 挂起选择 + 浮空落地。**Light/Darkness 大多数中指令可直写生成器**（如 light-2 揭示需新增 `reveal` 操作与 UI）。
 
 ### 5.2 建议首个小步（TDD）
