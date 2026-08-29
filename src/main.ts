@@ -4,7 +4,7 @@ import { executeAction } from './core/game';
 import { getCompilableLines } from './core/rules/compile';
 import { collectTriggers } from './core/effects/triggers';
 import { renderApp, type UiCallbacks } from './ui/render';
-import { initEffects } from './ui/effects';
+import { initEffects, initCompileFx } from './ui/effects';
 import { initDiag } from './ui/diag';
 import { gameBus } from './core/events/bus';
 import type { PlayerId } from './core/models/types';
@@ -127,8 +127,8 @@ function playDrawAnimation(player: PlayerId, count: number, done: () => void): v
   const cy = rect.top + rect.height / 2;
   const fromLeft = player === 0;
   const startX = fromLeft ? rect.left - 90 : rect.right + 90;
-  // 现有末卡（P1 手牌最右 / P2 row-reverse 最左）；空手牌时回退到手牌区起点
-  const cards = hand.querySelectorAll<HTMLElement>('.card');
+  // 现有末卡（P1 手牌最右 / P2 row-reverse 最左；排除揭示幽灵牌）；空手牌时回退到手牌区起点
+  const cards = hand.querySelectorAll<HTMLElement>('.card:not(.reveal-ghost)');
   const last = cards[cards.length - 1];
   const lastRect = last ? last.getBoundingClientRect() : null;
   const ghosts: HTMLElement[] = [];
@@ -205,6 +205,7 @@ function scheduleAutoAdvance(): void {
 }
 
 initEffects();
+initCompileFx();
 // 诊断日志：全量记录 console + 捕获未捕获异常（出错自动提示导出）
 initDiag(() => state);
 // 效果触发的抽牌：累计 card:drawn 事件，行动结算后统一播新抽牌特效

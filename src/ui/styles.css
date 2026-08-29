@@ -1006,3 +1006,17 @@ body.dragging { cursor: grabbing; user-select: none; }
   max-height: 120px; overflow: auto; white-space: pre-wrap; }
 .diag-prompt-bar { display: flex; gap: 8px; justify-content: flex-end; }
 
+
+/* ===== 揭示幽灵牌（对手手牌区末尾，仅视觉，不参与事件/手牌计数） ===== */
+.reveal-ghost {
+  opacity: 0.7;
+  filter: saturate(0.7) brightness(0.9);
+  border: 1px dashed #4ff0ff;
+  pointer-events: none;
+  user-select: none;
+  animation: ghost-in 0.45s cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+@keyframes ghost-in {
+  from { transform: translateX(24px) scale(0.8); opacity: 0; }
+  to { transform: translateX(0) scale(1); opacity: 0.7; }
+}

@@ -304,6 +304,13 @@ function renderHand(
   if (cards.length > 10) {
     hand.appendChild(el('div', 'hand-more-badge', `+${cards.length - 10}`));
   }
+  // 揭示幽灵牌：把被揭示卡的正面复制到本玩家手牌区末尾（仅视觉提示，不参与任何
+  // 事件/手牌计数；对手回合结束后由引擎清除）。data-uid 用 ghost- 前缀避免冲突。
+  for (const ghost of s.revealedGhosts.filter((g) => g.shownTo === player)) {
+    const gNode = renderCardFace({ defId: ghost.defId, faceUp: true, uid: `ghost-${ghost.id}` });
+    gNode.classList.add('reveal-ghost');
+    hand.appendChild(gNode);
+  }
   // R8 手牌挡板：当前回合玩家可拉出/推回遮住自己的手牌。被盖住的卡不触发
   // hover-pop / 单击 / 拖拽（挡板 z-index 高于卡牌并拦截指针）。宽度按玩家持久化
   // 在 shieldWidth（模块态），重渲染后保留；仅 self（当前回合）手牌的挡板可拖，
