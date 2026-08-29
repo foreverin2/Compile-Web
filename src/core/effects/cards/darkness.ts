@@ -2,16 +2,18 @@ import type { EffectCtx, EffectStep, GameState, Line, PlayerId, StepResult } fro
 import { findCard } from '../context';
 import { registerCardEffects } from '../registry';
 
-/** darkness-0：抽 3 张牌，然后平移 1 张你对手的被盖住的牌（到本卡所在列；无覆盖卡则 fizzle） */
+/** darkness-0：抽 3 张牌，然后玩家选择 1 张对手被盖住的牌 + 平移目标线（无覆盖卡则 fizzle） */
 function* darkness0(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   yield { op: 'draw', count: 3 };
-  // 目标线固定为本卡所在列 → 已在本列的覆盖卡平移不了（同线 shift 非法），从候选排除；全被排除则 fizzle
-  const covered = ctx
-    .candidates({ zone: 'field', owner: ctx.player === 0 ? 1 : 0, covered: true })
-    .filter((c) => c.line !== ctx.card.line);
+  // 目标线由玩家选择 → 同列覆盖卡平移合法，候选不再排除（C2 时代同列排除规则移除）
+  const covered = ctx.candidates({ zone: 'field', owner: ctx.player === 0 ? 1 : 0, covered: true });
   const ans = yield { kind: 'select', title: 'darkness-0：平移1张你对手的被盖住的牌', min: 1, max: 1, optional: false, candidates: covered };
   if (ans.selected.length === 0) return; // 无覆盖卡：fizzle（runStack 已跳过空候选，双保险）
-  yield { op: 'shift', uid: ans.selected[0], targetLine: ctx.card.line!, allowCovered: true };
+  const srcLine = findCard(ctx.s, ans.selected[0])?.line ?? ctx.card.line;
+  const line = yield { kind: 'select-line', title: 'darkness-0：选择平移目标线', min: 1, max: 1, optional: false, candidates: [], lines: [0, 1, 2].filter((l) => l !== srcLine) as Line[] };
+  if (line.selected.length > 0) {
+    yield { op: 'shift', uid: ans.selected[0], targetLine: Number(line.selected[0].replace('line:', '')) as Line, allowCovered: true };
+  }
 }
 
 /** darkness-1：翻转 1 张你对手的牌，然后可选平移那张牌（跳过 = 留在原线） */

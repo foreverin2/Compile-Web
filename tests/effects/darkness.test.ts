@@ -11,7 +11,7 @@ function darknessLine(s: GameState): Line {
 }
 
 describe('darkness protocol effects', () => {
-  it('darkness-0: draw 3, then shift a covered opponent card to own column', () => {
+  it('darkness-0: draw 3, then shift a covered opponent card to a chosen line', () => {
     const s = draftDarknessP1();
     advanceToStep(s, 0, 'action');
     const covered = makeCard('water-1', 1, 'field', true, 1, 0);
@@ -21,13 +21,17 @@ describe('darkness protocol effects', () => {
     const handBefore = s.players[0].hand.length;
     const card = s.players[0].hand[0];
     executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: darknessLine(s) });
-    resolveAllChoices(s, (p) => (p.candidates.some((c) => c.uid === covered.uid) ? [covered.uid] : pickFirst(p)));
+    resolveAllChoices(s, (p) => {
+      if (p.kind === 'select') return [covered.uid];
+      if (p.kind === 'select-line') return ['line:2']; // 目标线由玩家选择（≠ covered 所在线 1）
+      return pickFirst(p);
+    });
     expect(s.players[0].hand).toHaveLength(handBefore - 1 + 3); // 打出 1 张 + 抽 3
     expect(covered.zone).toBe('field');
-    expect(covered.line).toBe(darknessLine(s)); // 移到本卡所在列（对手侧同列号）
+    expect(covered.line).toBe(2); // 移到所选目标线（对手侧同线号）
     expect(covered.faceUp).toBe(true); // 被盖住的牌保持原状（未翻面）
     expect(s.players[1].stacks[1].map((c) => c.uid)).toEqual([top.uid]); // 源堆叠只剩顶卡
-    expect(s.players[1].stacks[darknessLine(s)].map((c) => c.uid)).toContain(covered.uid);
+    expect(s.players[1].stacks[2].map((c) => c.uid)).toContain(covered.uid);
     expect(s.pendingEffects).toHaveLength(0);
     expect(s.pendingShift).toHaveLength(0);
   });
@@ -46,14 +50,14 @@ describe('darkness protocol effects', () => {
     expect(s.players[0].stacks[darknessLine(s)].map((c) => c.uid)).toEqual([card.uid]);
   });
 
-  it('darkness-0: covered opponent card on the same column is not a shift candidate', () => {
+  it('darkness-0: same-column covered card is selectable; target-line choice excludes its line', () => {
     const s = draftDarknessP1();
     advanceToStep(s, 0, 'action');
-    // 对手线 0（= 效果所在列）：被覆盖卡无法平移（目标线固定为本列）→ 从候选排除
+    // 对手线 0（= 效果所在列）：被盖住的覆盖卡 —— 目标线改为玩家选择后同列卡平移合法，候选不再排除
     const sameLine = makeCard('water-1', 1, 'field', true, 0, 0);
     const sameTop = makeCard('water-2', 1, 'field', true, 0, 1);
     s.players[1].stacks[0] = [sameLine, sameTop];
-    // 对手线 1：另一张被覆盖卡（唯一合法候选）
+    // 对手线 1：另一张被覆盖卡（同样可选）
     const other = makeCard('water-3', 1, 'field', true, 1, 0);
     const otherTop = makeCard('water-4', 1, 'field', true, 1, 1);
     s.players[1].stacks[1] = [other, otherTop];
@@ -62,13 +66,18 @@ describe('darkness protocol effects', () => {
     executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: darknessLine(s) });
     const p = s.pendingEffects[s.pendingEffects.length - 1];
     expect(p.prompt?.kind).toBe('select');
-    expect(p.prompt?.candidates.map((c) => c.uid)).toEqual([other.uid]); // 同列候选被排除
-    executeAction(s, 0, 'effect-choice', { promptId: p.id, choice: [other.uid] });
-    expect(other.line).toBe(darknessLine(s)); // 平移成功落地
+    expect(p.prompt?.candidates.map((c) => c.uid).sort()).toEqual([sameLine.uid, other.uid].sort()); // 同列卡可选
+    executeAction(s, 0, 'effect-choice', { promptId: p.id, choice: [sameLine.uid] });
+    // 目标线排除所选卡所在线（0）→ 可选 [1, 2]
+    const p2 = s.pendingEffects[s.pendingEffects.length - 1];
+    expect(p2.prompt?.kind).toBe('select-line');
+    expect(p2.prompt?.lines).toEqual([1, 2]);
+    executeAction(s, 0, 'effect-choice', { promptId: p2.id, choice: ['line:1'] });
+    expect(sameLine.line).toBe(1); // 同列覆盖卡成功平移到玩家选择的线
     expect(s.pendingEffects).toHaveLength(0);
   });
 
-  it('darkness-0: all covered opponent cards same-column → fizzle, no deadlock', () => {
+  it('darkness-0: covered cards all on one column still work — no fizzle, target line excludes that column', () => {
     const s = draftDarknessP1();
     advanceToStep(s, 0, 'action');
     const covered = makeCard('water-1', 1, 'field', true, 0, 0);
@@ -78,10 +87,18 @@ describe('darkness protocol effects', () => {
     const handBefore = s.players[0].hand.length;
     const card = s.players[0].hand[0];
     executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: darknessLine(s) });
+    // 存在覆盖卡 → 不 fizzle：出现手牌选择（候选 = covered）
+    const p = s.pendingEffects[s.pendingEffects.length - 1];
+    expect(p.prompt?.kind).toBe('select');
+    expect(p.prompt?.candidates.map((c) => c.uid)).toEqual([covered.uid]);
+    executeAction(s, 0, 'effect-choice', { promptId: p.id, choice: [covered.uid] });
+    const p2 = s.pendingEffects[s.pendingEffects.length - 1];
+    expect(p2.prompt?.kind).toBe('select-line');
+    expect(p2.prompt?.lines).toEqual([1, 2]); // 排除覆盖卡所在线 0
+    executeAction(s, 0, 'effect-choice', { promptId: p2.id, choice: ['line:2'] });
+    expect(covered.line).toBe(2); // 平移成功（不再 fizzle）
     expect(s.players[0].hand).toHaveLength(handBefore - 1 + 3); // 抽 3 仍结算
-    expect(s.pendingEffects).toHaveLength(0); // 全部候选被过滤 → fizzle：不挂起、不死锁
-    expect(covered.line).toBe(0); // 未被平移
-    expect(s.players[1].stacks[0].map((c) => c.uid)).toEqual([covered.uid, top.uid]);
+    expect(s.pendingEffects).toHaveLength(0);
   });
 
   it('darkness-0: shifting a covered card does not re-run the unchanged top middle (fire-0)', () => {
@@ -98,11 +115,15 @@ describe('darkness protocol effects', () => {
     const p = s.pendingEffects[s.pendingEffects.length - 1];
     expect(p.prompt?.kind).toBe('select');
     executeAction(s, 0, 'effect-choice', { promptId: p.id, choice: [covered.uid] });
+    // 目标线选择（≠ covered 所在线 1）
+    const p2 = s.pendingEffects[s.pendingEffects.length - 1];
+    expect(p2.prompt?.kind).toBe('select-line');
+    executeAction(s, 0, 'effect-choice', { promptId: p2.id, choice: ['line:2'] });
     expect(s.pendingEffects).toHaveLength(0); // fire-0 中指令未被重新触发（无新挂起选择）
     expect(s.pendingShift).toHaveLength(0);
     expect(s.players[0].hand).toHaveLength(handBefore - 1 + 3); // 仅 darkness-0 抽 3，fire-0 中指令未跑（无额外抽 2）
     expect(s.players[1].stacks[1].map((c) => c.uid)).toEqual([fire0.uid]); // 顶卡原样保留
-    expect(covered.line).toBe(darknessLine(s)); // 覆盖卡平移落地
+    expect(covered.line).toBe(2); // 覆盖卡平移落地到所选线
   });
 
   it('darkness-1: flip an opponent card, then optional line shift moves it', () => {
