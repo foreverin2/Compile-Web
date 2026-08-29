@@ -556,6 +556,54 @@ body {
   justify-content: center; font-weight: bold; font-size: 13px; z-index: 2;
 }
 .deck .deck-count.empty { color: #666; border-color: #444; }
+
+/* ===== 弃牌堆区（ITEM 3：renderTrash，牌库内侧、贴手牌侧） =====
+ * 与 .deck 同款层叠背面卡 + 中央计数（复用 .deck-stack/.deck-back），但为常规流元素
+ * （.hand-side flex 内）：P1 [deck][trash][refresh][hand]、P2 [hand][refresh][trash][deck]，
+ * 位于牌库与手牌之间 → 手牌被推向内侧，挡板（锚定手牌边缘）永远够不到牌库/弃牌堆。
+ * 暖橙描边 + 顶部「弃牌堆」小标签与牌库（青色）区分；点击打开弃牌堆查看遮罩。 */
+.trash-pile {
+  position: relative;
+  width: 92px;
+  height: 132px;
+  cursor: pointer;
+  border: 2px solid #ff8a65;
+  border-radius: 8px;
+  box-shadow: 0 0 10px rgba(255, 138, 101, 0.35);
+  background: rgba(30, 10, 8, 0.55);
+}
+/* 与牌库的间距：P1 贴牌库右侧（margin-left）、P2 贴牌库左侧（margin-right） */
+.trash-pile.p1 { margin-left: 8px; }
+.trash-pile.p2 { margin-right: 8px; }
+.trash-pile .deck-stack { position: absolute; inset: 2px; }
+.trash-pile .deck-back {
+  position: absolute; inset: 0; border-radius: 5px;
+  background: url('/assets/Cardback.jpg') center / cover no-repeat;
+  border: 1px solid #4a2a1a; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+/* 层叠厚度（与 .deck-N 同规则；类名 trash-N 避免与牌库的 .deck-N 串扰） */
+.trash-2 .deck-back:nth-child(2) { transform: translate(2px, -2px); }
+.trash-3 .deck-back:nth-child(2) { transform: translate(2px, -2px); }
+.trash-3 .deck-back:nth-child(3) { transform: translate(4px, -4px); }
+.trash-4 .deck-back:nth-child(2) { transform: translate(2px, -2px); }
+.trash-4 .deck-back:nth-child(3) { transform: translate(4px, -4px); }
+.trash-4 .deck-back:nth-child(4) { transform: translate(6px, -6px); }
+/* 中央计数徽标（类名 trash-pile-count，避免与顶部信息条「弃牌堆 N」的 .trash-count 冲突） */
+.trash-pile .trash-pile-count {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  background: #2a0f08cc; color: #ffb59a; border: 1px solid #ff8a6566;
+  border-radius: 50%; width: 34px; height: 34px; display: flex; align-items: center;
+  justify-content: center; font-weight: bold; font-size: 13px; z-index: 2;
+}
+.trash-pile .trash-pile-count.empty { color: #666; border-color: #444; }
+/* 「弃牌堆」小标签：顶部居中，与牌库（青色徽标）区分 */
+.trash-pile .trash-label {
+  position: absolute; top: 3px; left: 50%; transform: translateX(-50%);
+  font-size: 9px; line-height: 1.4; color: #ffb59a; background: rgba(42, 15, 8, 0.85);
+  border: 1px solid #ff8a6544; border-radius: 7px; padding: 0 5px; z-index: 3;
+  pointer-events: none; white-space: nowrap;
+}
+
 /* 单行扇形手牌：不换行，后一张卡负 margin 压住前一张（每张露出左缘 ~102px 宽） */
 .hand {
   display: flex;
@@ -632,8 +680,10 @@ body {
 }
 
 /* ===== R8 手牌挡板（hand-cover shield） =====
- * 从手牌外侧端拉出遮住手牌：P1 左缘固定向右延伸至中线，P2 右缘固定向左延伸至中线
- * （左右定位见 .p1/.p2）。仅当前回合玩家（.hand.self 手牌）的挡板可拖，其余锁定。
+ * 从手牌外侧端拉出遮住手牌：P1 左缘固定向右延伸，P2 右缘固定向左延伸（左右定位见
+ * .p1/.p2）。ITEM 3：挡板左/右缘锚定手牌边缘（left/right:0，不再外伸 28px）——
+ * 牌库（绝对定位于手牌条外 -92px）与弃牌堆（牌库内侧的常规流元素）永不被挡板覆盖。
+ * 仅当前回合玩家（.hand.self 手牌）的挡板可拖，其余锁定。
  * 挡板 z-index 70 > 卡牌（pop 50）且与浮动按钮同层后置（DOM 后序），pointer-events
  * 默认 auto 拦截指针 —— 被盖住的卡不触发 hover-pop / 单击 / 拖拽打牌。
  * 收起态（retracted）仅露出 min-width 14px 的可抓取边缘条；挡板中央显示「手牌 N」。 */
@@ -652,8 +702,8 @@ body {
   cursor: ew-resize; /* 整个挡板可拖：扩大触发范围 */
   transition: width 0.15s ease;
 }
-.hand-shield.p1 { left: -28px; } /* 起点更靠左：覆盖手牌区左侧 padding，从更外开始向右拉 */
-.hand-shield.p2 { right: -28px; } /* 对称：覆盖右侧 padding */
+.hand-shield.p1 { left: 0; } /* 起点 = 手牌左缘（不外伸）：牌库/弃牌堆永不被覆盖 */
+.hand-shield.p2 { right: 0; } /* 对称：起点 = 手牌右缘 */
 /* 拖拽手柄：位于挡板内侧（移动端）边缘的可视提示（整个挡板都可拖，手柄仅作视觉指示） */
 .hand-shield .shield-handle {
   position: absolute;

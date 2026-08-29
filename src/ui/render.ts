@@ -241,6 +241,29 @@ function renderDeck(s: GameState, player: PlayerId): HTMLElement {
   return deck;
 }
 
+/** 弃牌堆区（renderDeck 的镜像，ITEM 3）：层叠背面卡 + 中央计数，位于牌库内侧
+ *  （P1 在牌库与手牌之间、P2 镜像），常规流元素（.hand-side flex 内）→ 不挤占手牌外的
+ *  绝对定位区、始终不被手牌挡板覆盖。data-player + 点击打开弃牌堆查看遮罩（公开信息）。 */
+function renderTrash(s: GameState, player: PlayerId): HTMLElement {
+  const count = s.players[player].trash.length;
+  const layers = count === 0 ? 0 : Math.min(4, Math.ceil(count / 4));
+  const trash = el('div', `trash-pile p${player + 1} trash-${count === 0 ? 'empty' : layers}`);
+  trash.dataset.player = String(player);
+  if (layers > 0) {
+    const stack = el('div', 'deck-stack');
+    for (let i = 0; i < layers; i++) stack.appendChild(el('div', 'deck-back'));
+    trash.appendChild(stack);
+    trash.appendChild(el('span', 'trash-pile-count', String(count)));
+  } else {
+    trash.appendChild(el('span', 'trash-pile-count empty', '0'));
+  }
+  // 顶部小标签区分「牌库 / 弃牌堆」；点击打开弃牌堆查看遮罩
+  trash.appendChild(el('span', 'trash-label', '弃牌堆'));
+  trash.title = '查看弃牌堆';
+  trash.addEventListener('click', () => openTrashViewer(s, player));
+  return trash;
+}
+
 /** 刷新手牌按钮：位于牌库区与手牌之间（P1 在牌库右侧、P2 在牌库左侧），
  *  仅在刷新是合法动作（refreshAction 非空）时渲染，点击派发 refresh */
 function renderRefreshButton(action: LegalAction, cb: UiCallbacks): HTMLElement {
@@ -432,9 +455,12 @@ function bindShieldDrag(shield: HTMLElement, player: PlayerId, hand: HTMLElement
     e.preventDefault();
     e.stopPropagation(); // 不与卡牌单击/拖拽相互干扰
     const dir = player === 0 ? 1 : -1; // P1 向右拖加宽；P2 向左拖加宽
-    // 最大宽度 = 整个手牌区宽度（能覆盖全部手牌至协议中线），
-    // 封顶 SHIELD_MAX_WIDTH（15 张扇形完整宽度 ≈1660px）：超出上限的溢出区无需遮住
-    const maxW = Math.min(Math.max(0, hand.clientWidth), SHIELD_MAX_WIDTH);
+    // 最大宽度 = 扇形手牌完整宽度（真实卡 + 揭示幽灵卡都参与扇形，见 ITEM 8），
+    // 封顶 SHIELD_MAX_WIDTH（15 张扇形完整宽度 ≈1660px）：超出上限的溢出区无需遮住。
+    // 挡板左/右缘锚定手牌边缘（left/right:0），宽度覆盖整个扇形即遮住全部手牌。
+    const fanN = hand.querySelectorAll<HTMLElement>('.card').length;
+    const fanW = fanN > 0 ? 130 + (fanN - 1) * 102 : 130;
+    const maxW = Math.min(Math.max(0, fanW), SHIELD_MAX_WIDTH);
     const startX = e.clientX;
     const startWidth = Math.min(Math.max(shieldWidth[player], 0), maxW);
     const apply = (w: number) => {
@@ -873,6 +899,7 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   const refreshAction = legal.find((a) => a.kind === 'refresh') ?? null;
   const p1Side = el('div', 'hand-side p1');
   p1Side.appendChild(renderDeck(s, 0));
+  p1Side.appendChild(renderTrash(s, 0)); // 牌库内侧（更靠近手牌）
   if (s.turnPlayer === 0 && refreshAction) p1Side.appendChild(renderRefreshButton(refreshAction, cb));
   p1Side.appendChild(
     renderHand(s, 0, {
@@ -910,6 +937,7 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
     })
   );
   if (s.turnPlayer === 1 && refreshAction) p2Side.appendChild(renderRefreshButton(refreshAction, cb));
+  p2Side.appendChild(renderTrash(s, 1)); // 牌库内侧（更靠近手牌，镜像 P1）
   p2Side.appendChild(renderDeck(s, 1));
   handStrip.appendChild(p2Side);
   grid.appendChild(handStrip);
