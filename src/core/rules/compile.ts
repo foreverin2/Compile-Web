@@ -1,5 +1,6 @@
 import type { GameState, PlayerId, Line } from '../models/types';
 import { getLineValue } from '../state/create';
+import { gameBus } from '../events/bus';
 
 export function canCompileLine(s: GameState, player: PlayerId, line: Line): boolean {
   const own = getLineValue(s, player, line);
@@ -26,6 +27,7 @@ export function executeCompile(s: GameState, player: PlayerId, line: Line): void
   }
   const p = s.players[player];
   const opp = s.players[player === 0 ? 1 : 0];
+  const protocol = p.protocols[line];
   // 同时删除：双方该线堆叠全部入各自 trash
   const ownCards = p.stacks[line].splice(0);
   const oppCards = opp.stacks[line].splice(0);
@@ -38,8 +40,18 @@ export function executeCompile(s: GameState, player: PlayerId, line: Line): void
   p.trash.push(...ownCards);
   opp.trash.push(...oppCards);
   s.log.push(`P${player + 1} compiles line ${line + 1}`);
-
-  const protocol = p.protocols[line];
+  // 语义事件（编译清牌 FX 用）：双方该线卡牌 uid（各按堆叠顶→底顺序）与协议 defId
+  gameBus.emit({
+    type: 'line:compiled',
+    state: s,
+    payload: {
+      player,
+      line,
+      protocolDefId: protocol.defId,
+      ownUids: [...ownCards].reverse().map((c) => c.uid),
+      oppUids: [...oppCards].reverse().map((c) => c.uid),
+    },
+  });
   if (protocol.compiled) {
     // 重新编译：抽对手牌库顶 1 张，所有权变更
     const card = opp.deck.pop();

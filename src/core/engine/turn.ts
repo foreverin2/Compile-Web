@@ -25,7 +25,10 @@ export function advanceStep(s: GameState): void {
     s.resolvedTriggerUids = [];
   }
   if (next === 'start') {
-    s.turnPlayer = s.turnPlayer === 0 ? 1 : 0;
+    const ending = s.turnPlayer;
+    s.turnPlayer = ending === 0 ? 1 : 0;
     s.compiledThisTurn = false;
+    // 揭示幽灵牌：expiresAfterTurn 玩家回合结束时自动消失
+    s.revealedGhosts = s.revealedGhosts.filter((g) => g.expiresAfterTurn !== ending);
   }
 }

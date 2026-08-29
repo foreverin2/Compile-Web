@@ -35,6 +35,7 @@ function makeState(): GameState {
     pendingShift: null,
     resolvedTriggerUids: [],
     pendingStepAdvance: false,
+    revealedGhosts: [],
   };
 }
 
@@ -94,3 +95,4 @@ describe('base actions', () => {
     expect(() => refreshHand(s, 0)).toThrow();
   });
 });
+

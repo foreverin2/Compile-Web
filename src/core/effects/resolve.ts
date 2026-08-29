@@ -174,6 +174,20 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       revealAfterRemoval(s, owner, fromLine);
       break;
     }
+    case 'reveal': {
+      // 揭示：把卡牌正面复制为幽灵牌到对手手牌区末尾（不改变原卡状态）
+      const card = findCard(s, op.uid);
+      if (!card) throw new Error(`cannot reveal ${op.uid}: not found`);
+      const shownTo: PlayerId = pe.player === 0 ? 1 : 0;
+      s.revealedGhosts.push({
+        id: nextEffectId(),
+        defId: card.defId,
+        shownTo,
+        expiresAfterTurn: shownTo,
+      });
+      emitCardEvent(s, 'card:revealed', card, { shownTo });
+      break;
+    }
   }
 }
 

@@ -22,6 +22,7 @@ function makeState(step: Step): GameState {
     pendingShift: null,
     resolvedTriggerUids: [],
     pendingStepAdvance: false,
+    revealedGhosts: [],
   };
 }
 
@@ -52,3 +53,4 @@ describe('turn flow', () => {
     expect(s.step).toBe('check-cache');
   });
 });
+

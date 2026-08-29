@@ -26,6 +26,7 @@ describe('types', () => {
       pendingShift: null,
       resolvedTriggerUids: [],
       pendingStepAdvance: false,
+    revealedGhosts: [],
     };
     expect(typeof s.turnPlayer).toBe('number');
     expect(Array.isArray(s.players)).toBe(true);
@@ -51,3 +52,4 @@ describe('types', () => {
     expect(typeof c.faceUp).toBe('boolean');
   });
 });
+

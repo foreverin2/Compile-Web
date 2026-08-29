@@ -32,6 +32,7 @@ export function createGame(): GameState {
     pendingShift: null,
     resolvedTriggerUids: [],
     pendingStepAdvance: false,
+    revealedGhosts: [],
   };
 }
 

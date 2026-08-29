@@ -451,6 +451,9 @@ function renderControlModule(s: GameState): HTMLElement {
 
 function renderProtocolCell(s: GameState, player: PlayerId, line: Line): HTMLElement {
   const cell = el('div', 'protocol-cell');
+  // data 属性：供编译/翻面等特效按 (player, line) 定位协议元素（协议换位时随渲染重建定位）
+  cell.dataset.player = String(player);
+  cell.dataset.line = String(line);
   cell.appendChild(renderProtocol(s.players[player].protocols[line], player));
   return cell;
 }

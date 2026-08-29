@@ -87,6 +87,16 @@ export interface ChoiceAnswer {
   selected: string[];
 }
 
+/** 揭示产生的幽灵牌：正面复制到对手手牌区末尾，对手回合结束后自动消失；不参与任何事件 */
+export interface RevealedGhost {
+  id: string;
+  defId: string;
+  /** 显示在哪位玩家的手牌区末尾 */
+  shownTo: PlayerId;
+  /** 该玩家回合结束时清除 */
+  expiresAfterTurn: PlayerId;
+}
+
 /** 效果操作（生成器 yield 的值之一；由运行器执行并触发连锁/语义事件） */
 export type Op =
   | { op: 'discard'; uid: string }
@@ -94,7 +104,8 @@ export type Op =
   | { op: 'return'; uid: string }
   | { op: 'flip'; uid: string }
   | { op: 'draw'; count: number }
-  | { op: 'shift'; uid: string; targetLine: Line };
+  | { op: 'shift'; uid: string; targetLine: Line }
+  | { op: 'reveal'; uid: string };
 
 /** 效果步骤：选择请求 或 操作。既有 types.ts 已占用 Step（回合步骤），此处命名 EffectStep */
 export type EffectStep = ChoiceRequest | Op;
@@ -174,4 +185,6 @@ export interface GameState {
   resolvedTriggerUids: string[];
   /** 打出链式结算完毕后需要推进回合步骤（runStack 栈空时消费） */
   pendingStepAdvance: boolean;
+  /** 揭示幽灵牌（显示在对手手牌区末尾；expiresAfterTurn 玩家回合结束时清除） */
+  revealedGhosts: RevealedGhost[];
 }

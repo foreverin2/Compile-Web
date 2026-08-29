@@ -40,6 +40,7 @@ function makeState(
     pendingShift: null,
     resolvedTriggerUids: [],
     pendingStepAdvance: false,
+    revealedGhosts: [],
     ...overrides,
   };
 }
@@ -114,3 +115,4 @@ describe('resetControlIfHeld', () => {
     expect(s.control).toBe(-1);
   });
 });
+

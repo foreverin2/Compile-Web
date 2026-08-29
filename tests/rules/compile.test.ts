@@ -29,6 +29,7 @@ function makeState(v0: number, v1: number, line: 0 | 1 | 2 = 0): GameState {
     pendingShift: null,
     resolvedTriggerUids: [],
     pendingStepAdvance: false,
+    revealedGhosts: [],
   };
 }
 
@@ -91,3 +92,4 @@ describe('compile rules', () => {
     expect(s.phase).toBe('gameover');
   });
 });
+
