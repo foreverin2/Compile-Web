@@ -1189,6 +1189,48 @@ body.dragging { cursor: grabbing; user-select: none; }
 }
 .compiled-ring-darkness .rock-dark { background: #1a0524; }
 .compiled-ring-darkness .rock-red { background: #6a1b9a; }
+
+/* ===== darkness 已编译：环外循环黑雾层（ITEM 4） =====
+ * .mist-blob 沿卡面四周分布、循环 渐现→渐散（mist-puff），位于编译环
+ * （.compiled-ring z 2）外侧（容器 inset:-30px 外扩到环带之外）；
+ * pointer-events:none 不拦截交互；.no-anim 窗口定格为半透明静态
+ * （与 .smoke-puff 同模式，避免重建瞬间闪帧）。仅 darkness 挂载（appendCompiledRing）。 */
+.compiled-mist {
+  position: absolute;
+  inset: -30px;
+  pointer-events: none;
+  z-index: 1; /* 编译环（2）之下、协议背景之上 */
+  filter: blur(7px);
+}
+.mist-blob {
+  position: absolute;
+  width: 76px;
+  height: 76px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(0, 0, 0, 0.9), rgba(10, 3, 18, 0.45) 58%, transparent 76%);
+  opacity: 0;
+  animation: mist-puff 4.8s ease-in-out infinite;
+  will-change: opacity, transform;
+}
+@keyframes mist-puff {
+  0% { opacity: 0; transform: scale(0.55); }
+  40% { opacity: 0.75; }
+  100% { opacity: 0; transform: scale(1.3); }
+}
+/* 8 个锚点沿卡面四周分布（四角 + 四边中点，均在编译环带外侧） */
+.mist-blob:nth-child(1) { left: -14px; top: -18px; }
+.mist-blob:nth-child(2) { right: -14px; top: -18px; }
+.mist-blob:nth-child(3) { left: -18px; bottom: -14px; }
+.mist-blob:nth-child(4) { right: -18px; bottom: -14px; }
+.mist-blob:nth-child(5) { left: 22%; top: -26px; }
+.mist-blob:nth-child(6) { right: 22%; top: -26px; }
+.mist-blob:nth-child(7) { left: 22%; bottom: -24px; }
+.mist-blob:nth-child(8) { right: 22%; bottom: -24px; }
+/* .no-anim 窗口：定格半透明静态（与 .smoke-puff 同模式） */
+.no-anim .mist-blob {
+  animation: none !important;
+  opacity: 0.4;
+}
 /* 线选择高亮（select-line：点击 lane-row 选择目标线） */
 .choice-line {
   outline: 2px dashed #4ff0ff;

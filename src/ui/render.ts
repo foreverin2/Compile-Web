@@ -564,6 +564,19 @@ function appendCompiledRing(box: HTMLElement, defId: string): void {
     ring.appendChild(rock);
   }
   box.appendChild(ring);
+  // ITEM 4：darkness 已编译 → 环外常驻循环黑雾层（渐现→渐散）。8 个模糊黑雾块
+  // 沿卡面四周分布（CSS nth-child 锚点），JS 只写 0.55s 步进的交错 animation-delay；
+  // 与编译环同挂 holder，inset 外扩到环带外侧。absolute + pointer-events:none 不拦截交互。
+  if (defId === 'darkness') {
+    const mist = el('div', 'compiled-mist');
+    const MIST_BLOBS = 8;
+    for (let i = 0; i < MIST_BLOBS; i++) {
+      const blob = el('div', 'mist-blob');
+      blob.style.animationDelay = `${i * 0.55}s`;
+      mist.appendChild(blob);
+    }
+    box.appendChild(mist);
+  }
 }
 
 /** 与引擎一致的 1-2-2-1 轮选归属（第 i 次选择轮到谁），镜像 core/state/create.ts 的 DRAFT_ORDER */
