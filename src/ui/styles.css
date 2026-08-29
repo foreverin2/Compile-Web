@@ -1088,3 +1088,88 @@ body.dragging { cursor: grabbing; user-select: none; }
   from { opacity: 0; transform: translateY(14px) scale(0.985); }
   to { opacity: 1; transform: none; }
 }
+
+/* ===== 已编译协议专属特效：light / darkness 配色变体（Task 10） =====
+ * 复用 .compiled-ring 骨架（.lava-seg + .lava-rock 沿 offset-path 边框路径旅行）：
+ * 每协议静态兜底（.protocol.compiled-fx-<defId>，与 fire 同模式）+ 环带配色覆盖。
+ * 注意：骨架中无 .compiled-ring-flow 元素（流动即 .lava-seg 自身），
+ * 故 brief 的 conic 色流意图并入 .lava-seg 渐变，不引入死 CSS。 */
+.protocol.compiled-fx-light {
+  /* 静态兜底：柔光白青描边 + 光晕 */
+  border-color: #4ff0ff;
+  box-shadow: 0 0 12px rgba(79, 240, 255, 0.6), inset 0 0 10px rgba(180, 240, 255, 0.25);
+}
+.protocol.compiled-fx-darkness {
+  /* 静态兜底：暗紫光晕描边 */
+  border-color: #ab47bc;
+  box-shadow: 0 0 12px rgba(171, 71, 188, 0.6), inset 0 0 10px rgba(123, 31, 162, 0.3);
+}
+/* light：已编译 = 柔光白青流动环（白→浅蓝→青渐变段 + 淡色岩石） */
+.compiled-ring-light .lava-seg {
+  background: linear-gradient(90deg, #ffffff, #b3e5fc, #4ff0ff);
+  box-shadow: 0 0 6px rgba(180, 240, 255, 0.8);
+}
+.compiled-ring-light .rock-dark { background: #e8f4ff; }
+.compiled-ring-light .rock-red { background: #aee6ff; }
+/* darkness：已编译 = 暗紫光晕流动环（紫→深紫渐变段 + 深色岩石） */
+.compiled-ring-darkness .lava-seg {
+  background: linear-gradient(90deg, #ab47bc, #7b1fa2, #4a148c);
+  box-shadow: 0 0 6px rgba(171, 71, 188, 0.7);
+}
+.compiled-ring-darkness .rock-dark { background: #1a0524; }
+.compiled-ring-darkness .rock-red { background: #6a1b9a; }
+/* 线选择高亮（select-line：点击 lane-row 选择目标线） */
+.choice-line {
+  outline: 2px dashed #4ff0ff;
+  outline-offset: -3px;
+  background: rgba(79, 240, 255, 0.05);
+  cursor: pointer;
+}
+
+/* ===== 协议额外特效：light —— 白色柔光层（简易版，盖在基础特效之上，z 301） ===== */
+.extra-light::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 6px;
+  background: radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.55), rgba(180, 240, 255, 0.22) 55%, transparent 78%);
+  pointer-events: none;
+  animation: extra-light-pulse 0.9s ease-out forwards;
+}
+@keyframes extra-light-pulse {
+  from { opacity: 1; filter: brightness(1.4) drop-shadow(0 0 14px rgba(255, 255, 255, 0.9)); }
+  to { opacity: 0; filter: brightness(1) drop-shadow(0 0 4px rgba(180, 240, 255, 0.4)); }
+}
+
+/* ===== 协议额外特效：darkness —— 暗紫粒子（简易版，盖在基础特效之上，z 301） ===== */
+.extra-darkness::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 6px;
+  background: radial-gradient(circle at 50% 50%, rgba(74, 20, 140, 0.5), rgba(123, 31, 162, 0.3) 55%, transparent 78%);
+  pointer-events: none;
+  animation: extra-darkness-fade 1s ease-out forwards;
+}
+@keyframes extra-darkness-fade {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+.darkness-particles { position: absolute; inset: 0; pointer-events: none; }
+.darkness-particle {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  margin: -3px 0 0 -3px;
+  border-radius: 50%;
+  background: #ab47bc;
+  box-shadow: 0 0 6px rgba(171, 71, 188, 0.9);
+  animation: darkness-particle-burst 1s ease-out forwards;
+  will-change: transform, opacity;
+}
+@keyframes darkness-particle-burst {
+  from { transform: translate(0, 0) scale(1); opacity: 1; }
+  to { transform: translate(var(--dx, 60px), var(--dy, -60px)) scale(0.3); opacity: 0; }
+}
