@@ -346,8 +346,10 @@ function renderHand(
     hand.appendChild(el('div', 'hand-more-badge', `+${cards.length - 15}`));
   }
   // 揭示幽灵牌：把被揭示卡的正面复制到本玩家手牌区末尾（仅视觉提示，不参与任何
-  // 事件/手牌计数；对手回合结束后由引擎清除）。data-uid 用 ghost- 前缀避免冲突。
+  // 手牌计数/选择/拖拽；对手回合结束后由引擎清除）。data-uid 用 ghost- 前缀避免冲突。
   // 入场动画仅在幽灵首次出现时播放（模块态记录，重渲染不重放）。
+  // ITEM 8：幽灵加入扇形动态（push 进 nodes → 悬停展开/推开同样作用于幽灵），
+  // 双击可放大查看被揭示卡的正面（仅查看，无单击选择/翻面/拖拽）。
   const ghostIds = s.revealedGhosts.filter((g) => g.shownTo === player).map((g) => g.id);
   for (const id of [...revealedGhostSeen]) {
     if (!ghostIds.includes(id)) revealedGhostSeen.delete(id);
@@ -359,7 +361,10 @@ function renderHand(
       revealedGhostSeen.add(ghost.id);
       gNode.classList.add('ghost-enter'); // 首次出现播放入场动画
     }
+    // 双击放大（直接 dblclick，不经过 bindClickOrDouble 的单击延迟——幽灵无单击动作）
+    gNode.addEventListener('dblclick', () => openZoom(ghost.defId, true, false, false));
     hand.appendChild(gNode);
+    nodes.push(gNode); // 加入扇形：悬停展开/复位同样作用于幽灵牌
   }
   // R8 手牌挡板：当前回合玩家可拉出/推回遮住自己的手牌。被盖住的卡不触发
   // hover-pop / 单击 / 拖拽（挡板 z-index 高于卡牌并拦截指针）。宽度按玩家持久化

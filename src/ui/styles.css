@@ -1019,14 +1019,15 @@ body.dragging { cursor: grabbing; user-select: none; }
 .diag-prompt-bar { display: flex; gap: 8px; justify-content: flex-end; }
 
 
-/* ===== 揭示幽灵牌（对手手牌区末尾，仅视觉，不参与事件/手牌计数） ===== */
+/* ===== 揭示幽灵牌（对手手牌区末尾，仅视觉 + 双击放大，不参与选择/手牌计数） =====
+ * ITEM 8：幽灵加入扇形动态（悬停展开/推开）并支持双击放大查看正面——
+ * 因此移除 pointer-events:none（双击需命中元素），改用 zoom-in 光标提示可放大。 */
 .reveal-ghost {
   opacity: 0.7;
   filter: saturate(0.7) brightness(0.9);
   border: 1px dashed #4ff0ff;
-  pointer-events: none;
+  cursor: zoom-in;
   user-select: none;
-  
 }
 @keyframes ghost-in {
   from { transform: translateX(24px) scale(0.8); opacity: 0; }
