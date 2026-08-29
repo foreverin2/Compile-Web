@@ -1,8 +1,8 @@
 import { ALL_PROTOCOLS, ALL_CARD_DEFS } from './cards';
 import type { CardDef, ProtocolDef } from '../core/models/types';
 
-/** 演示草案池：前 6 套（水 火 光 暗 生 死） */
-const DEMO_PROTOCOL_DEF_IDS = new Set(['water', 'fire', 'light', 'darkness', 'life', 'death']);
+/** 演示草案池：全部 15 套（MN01×12 + AX01×3）——所有协议可被选中，效果逐个开发 */
+const DEMO_PROTOCOL_DEF_IDS = new Set(ALL_PROTOCOLS.map((p) => p.defId));
 
 export const DEMO_PROTOCOLS: ProtocolDef[] = ALL_PROTOCOLS.filter((p) => DEMO_PROTOCOL_DEF_IDS.has(p.defId));
 export const DEMO_CARD_DEFS: CardDef[] = ALL_CARD_DEFS.filter((c) => DEMO_PROTOCOL_DEF_IDS.has(c.protocol));

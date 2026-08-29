@@ -74,7 +74,7 @@ export function performDraftPick(s: GameState, defId: string): void {
   if (!def) throw new Error(`protocol ${defId} not available`);
   const drafter = getCurrentDrafter(s);
   s.draftPicks.push(def);
-  s.log.push(`P${drafter + 1} drafts ${def.name}`);
+  s.log.push(`P${drafter + 1} 选择 ${def.name}`);
   s.draftRound += 1;
   if (s.draftRound >= DRAFT_ORDER.length) {
     // 分配：P1 的第 1、3、4 次选择；P2 的第 2、5、6 次选择

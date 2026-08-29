@@ -9,9 +9,9 @@ import {
 } from '../../src/data/demo';
 
 describe('card data', () => {
-  it('has 15 total protocols and 6 demo protocols (draft needs 6 picks)', () => {
+  it('has 15 total protocols, all available in the draft pool (15 picks pool)', () => {
     expect(ALL_PROTOCOLS).toHaveLength(15);
-    expect(DEMO_PROTOCOLS).toHaveLength(6);
+    expect(DEMO_PROTOCOLS).toHaveLength(15);
   });
 
   it('every protocol has 6 command cards', () => {
@@ -39,7 +39,7 @@ describe('card data', () => {
   });
 
   it('getProtocolDef finds by defId', () => {
-    expect(getProtocolDef('water').name).toBe('Water');
+    expect(getProtocolDef('water').name).toBe('水');
     expect(getProtocolDef('apathy').set).toBe('AX01');
   });
 });

@@ -9,22 +9,22 @@ import type { CardDef, ProtocolDef } from '../core/models/types';
 
 export const ALL_PROTOCOLS: ProtocolDef[] = [
   // 基础版 12 套（MN01）
-  { defId: 'water', name: 'Water', set: 'MN01', commands: ['RETURN', 'DRAW', 'FLIP'], loadingText: 'WASH AWAY AND RENEW.' },
-  { defId: 'fire', name: 'Fire', set: 'MN01', commands: ['DISCARD FOR EFFECT'], loadingText: 'BURN AT BOTH ENDS.' },
-  { defId: 'light', name: 'Light', set: 'MN01', commands: ['DRAW', 'FLIP', 'SHIFT'], loadingText: 'BURN AWAY THE DARK.' },
-  { defId: 'darkness', name: 'Darkness', set: 'MN01', commands: ['DRAW', 'SHIFT', 'MANIPULATE'], loadingText: 'AN ABSENCE OF LIGHT.' },
-  { defId: 'life', name: 'Life', set: 'MN01', commands: ['FLIP', 'TOP DECK PLAY', 'DRAW'], loadingText: 'BRING ABOUT NEW GROWTH.' },
-  { defId: 'death', name: 'Death', set: 'MN01', commands: ['DELETE', 'DRAW'], loadingText: 'NOTHING SHALL SURVIVE.' },
-  { defId: 'spirit', name: 'Spirit', set: 'MN01', commands: ['FLIP', 'SHIFT', 'DRAW'], loadingText: 'TRUE STRENGTH FROM WITHIN.' },
-  { defId: 'gravity', name: 'Gravity', set: 'MN01', commands: ['SHIFT', 'FLIP', 'DRAW'], loadingText: 'DRAW EVER INWARD.' },
-  { defId: 'psychic', name: 'Psychic', set: 'MN01', commands: ['DRAW', 'MANIPULATE', 'SHIFT'], loadingText: "KNOW YOUR FOE'S MIND." },
-  { defId: 'plague', name: 'Plague', set: 'MN01', commands: ['FORCED DISCARD', 'FLIP'], loadingText: 'SLOW DEATH FROM WITHIN.' },
-  { defId: 'metal', name: 'Metal', set: 'MN01', commands: ['PREVENT', 'DRAW', 'FLIP'], loadingText: 'HARDENED AGAINST ALL.' },
-  { defId: 'speed', name: 'Speed', set: 'MN01', commands: ['DRAW', 'PLAY', 'SHIFT'], loadingText: 'QUICKEN WITH EVERY STEP.' },
+  { defId: 'water', name: '水', set: 'MN01', commands: ['回手', '抽牌', '翻转'], loadingText: '涤旧焕新' },
+  { defId: 'fire', name: '火', set: 'MN01', commands: ['弃牌触发效果'], loadingText: '玉石俱焚' },
+  { defId: 'light', name: '光', set: 'MN01', commands: ['抽牌', '翻转', '平移'], loadingText: '灼明驱暗' },
+  { defId: 'darkness', name: '暗', set: 'MN01', commands: ['抽牌', '平移', '操纵'], loadingText: '黯淡无光' },
+  { defId: 'life', name: '生', set: 'MN01', commands: ['翻转', '牌堆顶', '抽牌'], loadingText: '勃勃生机' },
+  { defId: 'death', name: '死', set: 'MN01', commands: ['删除', '抽牌'], loadingText: '万物寂灭' },
+  { defId: 'spirit', name: '灵魂', set: 'MN01', commands: ['翻转', '平移', '抽牌'], loadingText: '力由心生' },
+  { defId: 'gravity', name: '重力', set: 'MN01', commands: ['平移', '翻转', '抽牌'], loadingText: '聚敛坍缩' },
+  { defId: 'psychic', name: '念能', set: 'MN01', commands: ['抽牌', '操纵', '平移'], loadingText: '洞悉敌意' },
+  { defId: 'plague', name: '瘟疫', set: 'MN01', commands: ['强制弃牌', '翻转'], loadingText: '凋亡衰竭' },
+  { defId: 'metal', name: '金属', set: 'MN01', commands: ['阻止', '抽牌', '翻转'], loadingText: '固若金汤' },
+  { defId: 'speed', name: '速度', set: 'MN01', commands: ['抽牌', '出牌', '平移'], loadingText: '愈行愈速' },
   // 拓展包 3 套（AX01）
-  { defId: 'love', name: 'Love', set: 'AX01', commands: ['DRAW', 'GIVE', 'SWAP'], loadingText: '施中有得' },
-  { defId: 'hate', name: 'Hate', set: 'AX01', commands: ['MUTUAL DELETE'], loadingText: '极尽鄙夷' },
-  { defId: 'apathy', name: 'Apathy', set: 'AX01', commands: ['FLIP FACE-DOWN'], loadingText: '不闻不问' },
+  { defId: 'love', name: '爱', set: 'AX01', commands: ['抽牌', '赠予', '交换'], loadingText: '施中有得' },
+  { defId: 'hate', name: '恨', set: 'AX01', commands: ['双方删除'], loadingText: '极尽鄙夷' },
+  { defId: 'apathy', name: '冷漠', set: 'AX01', commands: ['翻转成反面'], loadingText: '不闻不问' },
 ];
 
 export const ALL_CARD_DEFS: CardDef[] = [
