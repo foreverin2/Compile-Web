@@ -1,4 +1,4 @@
-import type { EffectCtx, EffectGen, EffectStep, Line, StepResult } from '../../models/types';
+import type { EffectCtx, EffectGen, EffectStep, Line, PlayerId, StepResult } from '../../models/types';
 import { registerCardEffects } from '../registry';
 
 function* light0(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
@@ -41,15 +41,17 @@ function* light3(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const line = yield { kind: 'select-line', title: 'light-3：平移目标线', min: 1, max: 1, optional: false, candidates: [], lines: [0, 1, 2].filter((l) => l !== srcLine) as Line[] };
   if (line.selected.length === 0) return;
   const target = Number(line.selected[0].replace('line:', '')) as Line;
-  // 反复平移本线最顶的反面牌（含被覆盖的反面牌——先移开其上的牌? 否：allowCovered 直接移）
-  // 简化：循环取本线堆叠中"最靠上的反面牌"平移（allowCovered），直到无反面包
+  // 来源：效果玩家本线 与 对手同列线 双方的反面牌（含被覆盖的——live-stack 循环处理移除，逐张入 pendingShift 队列）
   const s = ctx.s;
-  const stack = s.players[ctx.player].stacks[srcLine];
-  for (;;) {
-    const idx = [...stack].reverse().findIndex((c) => !c.faceUp);
-    if (idx === -1) break;
-    const card = stack[stack.length - 1 - idx];
-    yield { op: 'shift', uid: card.uid, targetLine: target, allowCovered: true };
+  const opp = ctx.player === 0 ? 1 : 0;
+  for (const owner of [ctx.player, opp] as PlayerId[]) {
+    const stack = s.players[owner].stacks[srcLine];
+    for (;;) {
+      const idx = [...stack].reverse().findIndex((c) => !c.faceUp);
+      if (idx === -1) break;
+      const card = stack[stack.length - 1 - idx];
+      yield { op: 'shift', uid: card.uid, targetLine: target, allowCovered: true };
+    }
   }
 }
 

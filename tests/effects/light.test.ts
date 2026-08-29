@@ -181,6 +181,33 @@ describe('light protocol effects', () => {
     expect(s.pendingEffects).toHaveLength(0);
   });
 
+  it('light-3: shifts face-down cards from both sides of the line (owner-relative targets)', () => {
+    const s = draftLightP1();
+    advanceToStep(s, 0, 'action');
+    // 本线（线 0）：两张反面牌 + light-3 落顶
+    const fd1 = makeCard('light-1', 0, 'field', false, 0, 0);
+    const fd2 = makeCard('light-2', 0, 'field', false, 0, 1);
+    s.players[0].stacks[0] = [fd1, fd2];
+    // 对手同列（线 0）：一张反面牌 —— 也应被平移（到对手自己的目标线）
+    const ofd = makeCard('water-1', 1, 'field', false, 0, 0);
+    s.players[1].stacks[0] = [ofd];
+    s.players[0].hand = [makeCard('light-3', 0, 'hand')];
+    const card = s.players[0].hand[0];
+    executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: lightLine(s) });
+    resolveAllChoices(s, (p) => (p.kind === 'select-line' ? ['line:1'] : pickFirst(p)));
+    // 双方各自：线 0 的反面牌 → 各自的线 1（owner-relative）
+    expect(s.players[0].stacks[0].map((c) => c.uid)).toEqual([card.uid]); // 本线只剩 light-3
+    expect(s.players[0].stacks[1].map((c) => c.uid).sort()).toEqual([fd1.uid, fd2.uid].sort());
+    expect(s.players[1].stacks[0]).toHaveLength(0); // 对手线 0 清空
+    expect(s.players[1].stacks[1].map((c) => c.uid)).toEqual([ofd.uid]);
+    expect(ofd.line).toBe(1);
+    expect(ofd.faceUp).toBe(false); // 反面平移（不翻面）
+    expect(s.pendingShift).toHaveLength(0);
+    // 状态损坏签名：所有原场卡都在某堆叠中，无卡残留在浮空态
+    const onField = [s.players[0], s.players[1]].flatMap((p) => [...p.stacks[0], ...p.stacks[1], ...p.stacks[2]]);
+    expect(onField.map((c) => c.uid).sort()).toEqual([fd1.uid, fd2.uid, ofd.uid, card.uid].sort());
+  });
+
   it('light-4: reveal whole opponent hand (one ghost per card)', () => {
     const s = draftLightP1();
     advanceToStep(s, 0, 'action');
