@@ -306,9 +306,18 @@ function renderHand(
   }
   // 揭示幽灵牌：把被揭示卡的正面复制到本玩家手牌区末尾（仅视觉提示，不参与任何
   // 事件/手牌计数；对手回合结束后由引擎清除）。data-uid 用 ghost- 前缀避免冲突。
+  // 入场动画仅在幽灵首次出现时播放（模块态记录，重渲染不重放）。
+  const ghostIds = s.revealedGhosts.filter((g) => g.shownTo === player).map((g) => g.id);
+  for (const id of [...revealedGhostSeen]) {
+    if (!ghostIds.includes(id)) revealedGhostSeen.delete(id);
+  }
   for (const ghost of s.revealedGhosts.filter((g) => g.shownTo === player)) {
     const gNode = renderCardFace({ defId: ghost.defId, faceUp: true, uid: `ghost-${ghost.id}` });
     gNode.classList.add('reveal-ghost');
+    if (!revealedGhostSeen.has(ghost.id)) {
+      revealedGhostSeen.add(ghost.id);
+      gNode.classList.add('ghost-enter'); // 首次出现播放入场动画
+    }
     hand.appendChild(gNode);
   }
   // R8 手牌挡板：当前回合玩家可拉出/推回遮住自己的手牌。被盖住的卡不触发
@@ -874,6 +883,8 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
 
 let selectedUid: string | null = null;
 let selectedFaceUp = true;
+/** 已渲染过的揭示幽灵 id（仅首次出现播放入场动画） */
+const revealedGhostSeen = new Set<string>();
 /** R8 手牌挡板宽度（px，模块态：重渲染后保留；0=收起、手牌可见） */
 const shieldWidth: [number, number] = [0, 0];
 
