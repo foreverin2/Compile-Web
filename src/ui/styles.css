@@ -106,35 +106,82 @@ body {
   justify-content: center;
   width: 90px;
   height: 175px;
-  border: 4px solid #00ffcc;
-  border-radius: 10px;
-  background: rgba(0, 0, 0, 0.7);
-  box-shadow: 0 0 12px rgba(0, 255, 204, 0.4), inset 0 0 8px rgba(0, 255, 204, 0.12);
+  border: 3px solid #00ffcc;
+  border-radius: 12px;
+  /* 科技感：细扫描线底纹 + 顶部能量辉光 + 暗底 + 内框线 */
+  background:
+    repeating-linear-gradient(0deg, rgba(0, 255, 204, 0.06) 0 2px, transparent 2px 5px),
+    radial-gradient(circle at 50% 0%, rgba(0, 255, 204, 0.10), transparent 62%),
+    rgba(0, 0, 0, 0.78);
+  box-shadow:
+    0 0 14px rgba(0, 255, 204, 0.45),
+    inset 0 0 10px rgba(0, 255, 204, 0.15),
+    inset 0 0 0 1px rgba(0, 255, 204, 0.22);
   transition: border-radius 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+/* 科技感：能量扫描流光（自上而下反复扫过能量格；full/burst 的裂纹高光覆盖此规则） */
+.battery-shell::after {
+  content: '';
+  position: absolute;
+  top: 4%;
+  left: 6%;
+  width: 88%;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(0, 255, 204, 0.85), transparent);
+  box-shadow: 0 0 8px rgba(0, 255, 204, 0.7);
+  opacity: 0;
+  animation: battery-scan-sweep 2.4s ease-in-out infinite;
+  pointer-events: none;
+  z-index: 2;
+}
+@keyframes battery-scan-sweep {
+  0% { transform: translateY(0); opacity: 0; }
+  12% { opacity: 0.7; }
+  88% { opacity: 0.7; }
+  100% { transform: translateY(158px); opacity: 0; }
 }
 /* 正极凸头（在顶部：无下边框、上圆角） */
 .battery-cap {
   width: 32px;
   height: 13px;
-  border: 4px solid #00ffcc;
+  border: 3px solid #00ffcc;
   border-bottom: none;
-  border-radius: 5px 5px 0 0;
-  background: rgba(0, 0, 0, 0.7);
-  box-shadow: 0 0 8px rgba(0, 255, 204, 0.3);
+  border-radius: 6px 6px 0 0;
+  background: rgba(0, 0, 0, 0.75);
+  box-shadow: 0 0 8px rgba(0, 255, 204, 0.35);
+  position: relative;
 }
+/* 科技感：正极上的状态 LED 指示灯（呼吸闪烁） */
+.battery-cap::after {
+  content: '';
+  position: absolute;
+  right: 6px;
+  top: 2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #00ffcc;
+  box-shadow: 0 0 6px #00ffcc;
+  animation: battery-led 1.8s ease-in-out infinite;
+}
+@keyframes battery-led { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 /* 格竖排：column-reverse 使填充从下到上增加（点数变化时最下方的格先亮） */
-.battery-cells { display: flex; flex-direction: column-reverse; gap: 6px; align-items: center; }
+.battery-cells { display: flex; flex-direction: column-reverse; gap: 7px; align-items: center; }
+/* 段式 LED 格：内斜面高光 + 细描边，未填充时呈暗槽 */
 .battery-cell {
-  width: 52px;
+  width: 54px;
   height: 11px;
-  border-radius: 3px;
-  background: rgba(255, 255, 255, 0.07);
-  transition: background 0.25s ease, box-shadow 0.25s ease;
+  border-radius: 2px;
+  border: 1px solid rgba(0, 255, 204, 0.15);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.10), rgba(0, 0, 0, 0.25));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10), inset 0 -1px 2px rgba(0, 0, 0, 0.5);
+  transition: background 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
 }
 /* 填充格：默认青色（stable）；bulge/full/burst 分别由下方状态覆盖为外壳同色 */
 .battery-cell.filled {
-  background: linear-gradient(90deg, #00ffcc, #007a66);
-  box-shadow: 0 0 6px rgba(0, 255, 204, 0.55);
+  border-color: rgba(0, 255, 204, 0.6);
+  background: linear-gradient(90deg, #00ffcc, #00b39a 55%, #007a66);
+  box-shadow: 0 0 7px rgba(0, 255, 204, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.5), inset 0 -2px 3px rgba(0, 0, 0, 0.3);
 }
 /* 点数变化时：新亮的格渐入（自下而上错峰淡入 + 轻微上浮） */
 .battery.points-changed .battery-cell.filled {
@@ -154,20 +201,11 @@ body {
   from { opacity: 0; transform: translateY(6px); filter: brightness(0.6); }
   to { opacity: 1; transform: translateY(0); filter: brightness(1); }
 }
-/* 形态切换（stable/bulge/full/burst）丝滑过渡：外壳 + 正极 + 数值 */
+/* 形态切换（stable/bulge/full/burst）丝滑过渡：外壳 + 正极 */
 .battery-shell,
-.battery-cap,
-.battery-value {
+.battery-cap {
   transition: border-color 0.4s ease, border-radius 0.4s ease,
-    box-shadow 0.4s ease, background 0.4s ease, color 0.4s ease, text-shadow 0.4s ease;
-}
-/* 点值标签：外壳上方居中（R9 倒置后在上），放大 */
-.battery-value {
-  font-size: 28px;
-  font-weight: bold;
-  line-height: 1;
-  color: #00ffcc;
-  text-shadow: 0 0 6px rgba(0, 255, 204, 0.7);
+    box-shadow 0.4s ease, background 0.4s ease;
 }
 /* bulge 4-6：上下边微微鼓出 + 橙黄微光（竖摆 → 左右边鼓出）；能量格跟随橙黄 */
 .battery-bulge .battery-shell {
@@ -176,7 +214,7 @@ body {
   box-shadow: 0 0 18px rgba(255, 176, 0, 0.6), inset 0 0 12px rgba(255, 176, 0, 0.15);
 }
 .battery-bulge .battery-cap { border-color: #ffb000; box-shadow: 0 0 8px rgba(255, 176, 0, 0.4); }
-.battery-bulge .battery-value { color: #ffb000; text-shadow: 0 0 4px rgba(255, 176, 0, 0.6); }
+.battery-bulge .battery-cap::after { background: #ffb000; box-shadow: 0 0 6px #ffb000; }
 .battery-bulge .battery-cell.filled {
   background: linear-gradient(90deg, #ffb000, #a86e00);
   box-shadow: 0 0 6px rgba(255, 176, 0, 0.6);
@@ -188,7 +226,7 @@ body {
   box-shadow: 0 0 22px rgba(255, 107, 0, 0.8), inset 0 0 12px rgba(255, 107, 0, 0.25);
 }
 .battery-full .battery-cap { border-color: #ff6b00; box-shadow: 0 0 10px rgba(255, 107, 0, 0.55); }
-.battery-full .battery-value { color: #ff6b00; text-shadow: 0 0 4px rgba(255, 107, 0, 0.7); }
+.battery-full .battery-cap::after { background: #ff6b00; box-shadow: 0 0 6px #ff6b00; }
 .battery-full .battery-shell::before,
 .battery-full .battery-shell::after {
   content: '';
@@ -201,6 +239,7 @@ body {
   transform: rotate(35deg);
   box-shadow: 0 0 3px rgba(255, 210, 150, 0.9);
   pointer-events: none;
+  animation: none; /* 关闭基础扫描流光，改用裂纹高光 */
 }
 .battery-full .battery-shell::after {
   top: 60%;
@@ -219,12 +258,13 @@ body {
   border-radius: 24px;
   background:
     radial-gradient(circle at 50% 50%, rgba(255, 208, 0, 0.4), rgba(255, 61, 0, 0.14) 55%, transparent 78%),
+    repeating-linear-gradient(0deg, rgba(255, 61, 0, 0.07) 0 2px, transparent 2px 5px),
     rgba(24, 0, 0, 0.7);
   box-shadow: 0 0 24px rgba(255, 61, 0, 0.9), 0 0 50px rgba(255, 208, 0, 0.4), inset 0 0 14px rgba(255, 120, 0, 0.3);
   animation: battery-burst-pulse 1.1s ease-in-out infinite;
 }
 .battery-burst .battery-cap { border-color: #ff3d00; box-shadow: 0 0 10px rgba(255, 61, 0, 0.8); }
-.battery-burst .battery-value { color: #ffd000; text-shadow: 0 0 6px rgba(255, 61, 0, 0.8); }
+.battery-burst .battery-cap::after { background: #ffd000; box-shadow: 0 0 6px #ffd000; }
 .battery-burst .battery-cell { background: rgba(255, 80, 0, 0.16); }
 .battery-burst .battery-cell.filled {
   background: linear-gradient(90deg, #ffd000, #ff3d00);
@@ -242,6 +282,7 @@ body {
   transform: rotate(50deg);
   box-shadow: 0 0 4px rgba(255, 200, 80, 0.9);
   pointer-events: none;
+  animation: none; /* 关闭基础扫描流光，改用裂纹高光 */
 }
 .battery-burst .battery-shell::after {
   top: 62%;

@@ -111,8 +111,8 @@ function renderBattery(s: GameState, player: PlayerId, line: Line): HTMLElement 
     battery.classList.add('points-changed');
   }
   batteryPrev.set(key, { points, state });
-  // DOM 顺序 = 视觉顺序（flex column 自上而下）：正极凸头在上、外壳（10 格竖排）居中、
-  // 值标签在底部。格填充方向由 CSS .battery-cells 的 column-reverse 控制（从下到上增加）。
+  // DOM 顺序 = 视觉顺序（flex column 自上而下）：正极凸头在上、外壳（10 格竖排）居中。
+  // 格填充方向由 CSS .battery-cells 的 column-reverse 控制（从下到上增加）。
   battery.appendChild(el('div', 'battery-cap'));
   const shell = el('div', 'battery-shell');
   const cells = el('div', 'battery-cells');
@@ -122,7 +122,6 @@ function renderBattery(s: GameState, player: PlayerId, line: Line): HTMLElement 
   }
   shell.appendChild(cells);
   battery.appendChild(shell);
-  battery.appendChild(el('span', 'battery-value', String(points)));
   return battery;
 }
 
