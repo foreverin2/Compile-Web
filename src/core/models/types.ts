@@ -75,12 +75,18 @@ export interface ChoiceCard {
 
 /** 选择请求（生成器 yield 的值之一） */
 export interface ChoiceRequest {
-  kind: 'select';
+  kind: 'select' | 'select-line' | 'select-action';
   title: string;
   min: number;
   max: number;
   optional: boolean;
   candidates: ChoiceCard[];
+  /** select-line：可选目标线（编码 'line:N'） */
+  lines?: Line[];
+  /** select-action：可执行操作（编码 'action:<name>'） */
+  actions?: string[];
+  /** 选择权归属者（缺省 = PendingEffect.player；"被作用卡持有者决定"用） */
+  chooser?: PlayerId;
 }
 
 export interface ChoiceAnswer {

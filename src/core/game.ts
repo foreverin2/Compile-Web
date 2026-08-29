@@ -122,7 +122,9 @@ export function executeAction(s: GameState, player: PlayerId, kind: ActionKind, 
     case 'effect-choice': {
       if (!args || !('promptId' in args)) throw new Error('effect-choice requires args');
       const top = s.pendingEffects[s.pendingEffects.length - 1];
-      if (!top || top.player !== player) throw new Error('not your choice');
+      // 选择权归属者：prompt.chooser（"被作用卡持有者决定"）缺省 = 效果属主（PendingEffect.player）
+      const chooser = top?.prompt?.chooser ?? top?.player;
+      if (!top || chooser !== player) throw new Error('not your choice');
       answerEffect(s, args.promptId, args.choice);
       break;
     }
