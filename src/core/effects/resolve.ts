@@ -97,6 +97,9 @@ export function runStack(s: GameState): void {
         return; // 挂起：等待玩家选择
       }
       executeOp(s, pe, step);
+      // 落地/落牌前中断效果结算：由外层循环先完成落地（含"被盖住前"连锁）再恢复生成器，
+      // 避免连续 shift/playTopDeck 覆盖单一 pendingShift/pendingPlay 槽位（浮空卡丢失）
+      if (s.pendingShift || s.pendingPlay) break;
     }
     if (s.pendingPlay) { completePlay(s); continue; }
     if (s.pendingShift) { completeShift(s); continue; }
@@ -205,13 +208,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       card.faceUp = op.faceUp;
       card.line = op.line;
       card.pos = null;
-      s.pendingPlay = card;
-      const stack = p.stacks[op.line];
-      if (stack.length > 0) {
-        const top = stack[stack.length - 1];
-        const t = top.faceUp ? collectTriggerFor(s, top, 'before-covered') : null;
-        if (t) resolveTrigger(s, t);
-      }
+      s.pendingPlay = { card, beforeCoveredDone: false };
       emitCardEvent(s, 'card:deck-played', card, { line: op.line });
       break;
     }
@@ -232,11 +229,17 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
   }
 }
 
-/** 落牌（"被盖住前"触发由 playCard 预先入栈，这里只落地 + 中指令） */
+/** 落牌（目标顶卡"被盖住前"先结算一次，然后落地 + 中指令） */
 function completePlay(s: GameState): void {
-  const card = s.pendingPlay!;
+  const ps = s.pendingPlay!;
+  const card = ps.card;
   const p = s.players[card.owner];
   const stack = p.stacks[card.line!];
+  if (stack.length > 0 && !ps.beforeCoveredDone) {
+    const top = stack[stack.length - 1];
+    const t = top.faceUp ? collectTriggerFor(s, top, 'before-covered') : null;
+    if (t) { ps.beforeCoveredDone = true; resolveTrigger(s, t); return; }
+  }
   card.zone = 'field';
   card.pos = stack.length;
   stack.push(card);

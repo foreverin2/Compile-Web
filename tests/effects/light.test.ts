@@ -92,20 +92,25 @@ describe('light protocol effects', () => {
   it('light-3: shift all facedown cards of own line to target line', () => {
     const s = draftLightP1();
     advanceToStep(s, 0, 'action');
-    // 本线堆叠：底层反面牌（被盖住）→ 打出 light-3 落顶
-    const facedown = makeCard('light-1', 0, 'field', false, 0, 0);
-    s.players[0].stacks[0] = [facedown];
+    // 本线堆叠：两张反面牌（含被覆盖的底层）→ 打出 light-3 落顶
+    const fd1 = makeCard('light-1', 0, 'field', false, 0, 0);
+    const fd2 = makeCard('light-2', 0, 'field', false, 0, 1);
+    s.players[0].stacks[0] = [fd1, fd2];
     s.players[0].hand = [makeCard('light-3', 0, 'hand')];
     const card = s.players[0].hand[0];
     executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: lightLine(s) });
-    // 第一步：选目标线（排除源线 0）→ 循环 shift 本线全部反面牌（allowCovered）；
-    // 移开反面包后顶卡 light-3 重新露出会连锁一次其中指令（再次 select-line，选同一条线）
+    // 每移开一张反面包，顶卡 light-3 重新露出都会连锁一次其中指令（再次 select-line）→ 全部答同一条线
     resolveAllChoices(s, (p) => (p.kind === 'select-line' ? ['line:1'] : pickFirst(p)));
-    expect(s.players[0].stacks[0].map((c) => c.uid)).toEqual([card.uid]); // 源线只剩 light-3
-    expect(s.players[0].stacks[1].map((c) => c.uid)).toEqual([facedown.uid]); // 反面牌移到目标线
-    expect(facedown.zone).toBe('field');
-    expect(facedown.line).toBe(1);
+    expect(s.players[0].stacks[0].map((c) => c.uid)).toEqual([card.uid]); // 源线只剩 light-3（无反面包）
+    expect(s.players[0].stacks[1].map((c) => c.uid).sort()).toEqual([fd1.uid, fd2.uid].sort()); // 全部反面牌移到目标线
+    expect(fd1.zone).toBe('field');
+    expect(fd2.zone).toBe('field');
+    expect(fd1.line).toBe(1);
+    expect(fd2.line).toBe(1);
     expect(s.pendingShift).toBeNull();
+    // 状态损坏签名：所有原场卡都在某堆叠中，无卡残留在浮空态
+    const onField = [s.players[0], s.players[1]].flatMap((p) => [...p.stacks[0], ...p.stacks[1], ...p.stacks[2]]);
+    expect(onField.map((c) => c.uid).sort()).toEqual([fd1.uid, fd2.uid, card.uid].sort());
   });
 
   it('light-4: reveal whole opponent hand (one ghost per card)', () => {

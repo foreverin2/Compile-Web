@@ -10,7 +10,7 @@ export function nextEffectId(): string {
 
 /** 全状态查找卡牌（含浮空中的 pendingPlay/pendingShift 卡） */
 export function findCard(s: GameState, uid: string): Card | undefined {
-  if (s.pendingPlay?.uid === uid) return s.pendingPlay;
+  if (s.pendingPlay?.card.uid === uid) return s.pendingPlay.card;
   if (s.pendingShift?.card.uid === uid) return s.pendingShift.card;
   for (const p of s.players) {
     for (const zone of ['hand', 'deck', 'trash'] as const) {

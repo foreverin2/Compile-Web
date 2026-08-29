@@ -103,7 +103,7 @@ describe('effect stack runner', () => {
     card.zone = 'float';
     card.line = 0;
     card.pos = null;
-    s.pendingPlay = card;
+    s.pendingPlay = { card, beforeCoveredDone: false };
     s.players[0].stacks[0] = []; // 落地到空线（"栈清空"场景；brief 缺陷修正）
     runStack(s);
     expect(s.pendingPlay).toBeNull();
