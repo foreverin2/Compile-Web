@@ -187,6 +187,24 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       revealAfterRemoval(s, owner, fromLine);
       break;
     }
+    case 'playTopDeck': {
+      const p = s.players[pe.player];
+      const card = p.deck.pop();
+      if (!card) throw new Error('deck is empty');
+      card.zone = 'float';
+      card.faceUp = op.faceUp;
+      card.line = op.line;
+      card.pos = null;
+      s.pendingPlay = card;
+      const stack = p.stacks[op.line];
+      if (stack.length > 0) {
+        const top = stack[stack.length - 1];
+        const t = top.faceUp ? collectTriggerFor(s, top, 'before-covered') : null;
+        if (t) resolveTrigger(s, t);
+      }
+      emitCardEvent(s, 'card:deck-played', card, { line: op.line });
+      break;
+    }
     case 'reveal': {
       // 揭示：把卡牌正面复制为幽灵牌到对手手牌区末尾（不改变原卡状态）
       const card = findCard(s, op.uid);

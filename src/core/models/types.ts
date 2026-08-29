@@ -111,6 +111,7 @@ export type Op =
   | { op: 'flip'; uid: string }
   | { op: 'draw'; count: number }
   | { op: 'shift'; uid: string; targetLine: Line }
+  | { op: 'playTopDeck'; line: Line; faceUp: boolean }
   | { op: 'reveal'; uid: string };
 
 /** 效果步骤：选择请求 或 操作。既有 types.ts 已占用 Step（回合步骤），此处命名 EffectStep */

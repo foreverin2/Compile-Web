@@ -198,6 +198,27 @@ function playShift(node: HTMLElement, payload: FxCardPayload): void {
   }
 }
 
+/** 基础行为特效：牌堆顶打出——幽灵卡从牌库区丝滑飞入目标链路堆叠末尾
+ *  （复用 playShift 平移逻辑；牌堆顶无 DOM 卡，起点用牌库区 rect（deckPos），buildFxCard 的 node 用牌库区元素） */
+function playDeckPlay(payload: FxCardPayload): void {
+  if (payload.owner === undefined || payload.line === null) return;
+  const deck = document.querySelector<HTMLElement>(`.deck[data-player="${payload.owner}"]`);
+  const from = deckPos(payload.owner);
+  const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${payload.owner}"][data-line="${payload.line}"]`);
+  const target = stackEndPos(slot, payload.owner);
+  if (!deck || !from || !target) return;
+  const clone = buildFxCard(deck, payload, BASE_Z);
+  if (!clone) return;
+  const dx = target.x - (from.left + from.width / 2);
+  const dy = target.y - (from.top + from.height / 2);
+  clone.style.transition = `transform ${MOVE_MS}ms cubic-bezier(0.2, 0.7, 0.3, 1), opacity ${MOVE_MS}ms ease`;
+  requestAnimationFrame(() => {
+    clone.style.transform = `translate(${dx}px, ${dy}px) scale(0.92)`;
+    clone.style.opacity = '0.6';
+  });
+  window.setTimeout(() => clone.remove(), MOVE_MS + 80);
+}
+
 /** 编译清牌：单张卡从原位置升起并渐隐 */
 function playRiseFade(node: HTMLElement, delay: number): void {
   const rect = node.getBoundingClientRect();
@@ -296,6 +317,9 @@ export function initEffects(): () => void {
         break;
       case 'card:shifted':
         if (node) playShift(node, payload);
+        break;
+      case 'card:deck-played':
+        playDeckPlay(payload);
         break;
       default:
         return;
