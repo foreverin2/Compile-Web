@@ -249,6 +249,30 @@ function playDeckPlay(payload: FxCardPayload): void {
   window.setTimeout(() => clone.remove(), MOVE_MS + 80);
 }
 
+/** 基础行为特效：手牌打出（playFromHand）——幽灵卡从手牌中该卡的 rect 丝滑飞入目标
+ *  链路堆叠末尾（与 playDeckPlay 同平移逻辑，仅起点不同：手牌卡仍在 DOM 中，直接以其
+ *  rect 为起点；faceUp 已按打出朝向（正/背）写入 payload，卡面随之正确）。 */
+function playHandPlay(payload: FxCardPayload): void {
+  if (payload.owner === undefined || payload.line === null) return;
+  const cardNode = document.querySelector<HTMLElement>(`.hand .card[data-uid="${payload.uid}"]`);
+  if (!cardNode) return;
+  const from = cardNode.getBoundingClientRect();
+  if (from.width === 0 || from.height === 0) return;
+  const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${payload.owner}"][data-line="${payload.line}"]`);
+  const target = stackEndPos(slot, payload.owner);
+  if (!target) return;
+  const clone = buildFxCard(cardNode, payload, BASE_Z);
+  if (!clone) return;
+  const dx = target.x - (from.left + from.width / 2);
+  const dy = target.y - (from.top + from.height / 2);
+  clone.style.transition = `transform ${MOVE_MS}ms cubic-bezier(0.2, 0.7, 0.3, 1), opacity ${MOVE_MS}ms ease`;
+  requestAnimationFrame(() => {
+    clone.style.transform = `translate(${dx}px, ${dy}px) scale(0.92)`;
+    clone.style.opacity = '0.6';
+  });
+  window.setTimeout(() => clone.remove(), MOVE_MS + 80);
+}
+
 /** 编译清牌：单张卡从原位置升起并渐隐 */
 function playRiseFade(node: HTMLElement, delay: number): void {
   const rect = node.getBoundingClientRect();
@@ -350,6 +374,10 @@ export function initEffects(): () => void {
         break;
       case 'card:deck-played':
         playDeckPlay(payload);
+        break;
+      case 'card:hand-played':
+        // playFromHand：从手牌中该卡的 rect 起飞飞入目标线堆叠末尾（区别于牌堆顶打出）
+        playHandPlay(payload);
         break;
       default:
         return;

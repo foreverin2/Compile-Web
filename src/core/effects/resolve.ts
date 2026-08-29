@@ -230,7 +230,9 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       card.line = op.line;
       card.pos = null;
       s.pendingPlay.push({ card, beforeCoveredDone: false });
-      emitCardEvent(s, 'card:deck-played', card, { line: op.line });
+      // playFromHand（手牌打出）与 playTopDeck（牌堆顶打出）区分事件：
+      // FX 层据此从手牌卡 rect 起飞（而非牌库 rect）飞入目标线堆叠末尾
+      emitCardEvent(s, 'card:hand-played', card, { line: op.line });
       break;
     }
     case 'reveal': {
