@@ -262,7 +262,7 @@ public/assets/fire/                 # Gemini 火焰素材（fire-burn.css/js/REA
 ## 3. 如何运行
 
 ```bash
-npm run test     # = npx vitest run，预期 85/85 通过
+npm run test     # = npx vitest run，预期 103/103 通过（26 文件）
 npm run build    # = tsc --noEmit && vite build → dist/
 npm run dev      # 开发服务器 http://localhost:5173/
 npm run preview  # 预览构建产物
@@ -276,13 +276,27 @@ npm run preview  # 预览构建产物
 
 1. **仅 Fire 6 卡有效果**：其余 14 套卡的效果文本仍是"只展示不结算"（`EFFECTS` 注册表只有 fire-*）；顶命令/限制/数值修正引擎未实现。
 2. **shift 无 UI**：引擎层 `shift` 操作已实现并有测试，UI 尚无"选目标线"交互（Light/Darkness 阶段补）。
-3. **无 `reveal` 效果操作**：light-2 等"揭示"类效果留待阶段 3。
+3. **reveal 接入待做**：引擎 `reveal` 操作 + 幽灵牌（`revealedGhosts`，对手回合结束清除）**已实现并有测试**；light-2 等"揭示"类卡效果待阶段 3 接入。
 4. **无 AI 对手**：纯热座双人。
 5. **协议重排 UI 未实现**（water-2/psychic-2，控制权规则配套）。
-6. **特效仅 fire**：火焰焚烧动画只订阅 fire 协议的 discard/delete；其余协议特效后续按命名空间挂载（`fire:discard` 模式可复用）。
+6. **特效分层模型已完成**：基础行为特效（弃牌=对切、删去=破碎、翻面、回手、偏转、编译清牌+协议翻面、揭示幽灵牌——总是播放）+ 协议额外特效（按触发卡协议叠加，fire=火焰焚烧；见 §0.8）。
 7. **`after` 触发机制预留未用**（`TriggerKind` 含 `'after'`），plague-1/hate-3/speed-1 等"XX后"效果待阶段 3 接。
 8. **UI 无单元测试**：UI 仍只经 `tsc --noEmit` 类型检查（build 门控）。
 9. **背面覆盖语义**：`stackValue` 仍按阶段 1 规则（背面=2）；darkness-2「反面分值 4」等数值修正未接入。
+
+---
+
+## 4.9 阶段 2 收尾批次（2026-08-29 追加，均已完成）
+
+- **全部 15 套协议入草案池**：`data/demo.ts` DEMO_PROTOCOLS = 全部 15 套；协议中文名/关键词/副题按 `compile1文本.txt` 录入（`src/data/cards.ts`）；9 套新卡面资源（`tools/extract_more_protocols.py`，Main 1 的 Spirit/Gravity/Psychic/Plague/Metal/Speed + Aux 1 的 Love/Hate/Apathy；A/B 原图正置不旋转）。
+- **fire-1/2 弃牌改为可选**（用户确认）；**检查缓存玩家自选弃牌**（`clear-cache` 系统效果，`PendingEffect.system` 标志跳过 sourceValid）。
+- **reveal 操作 + 幽灵牌**：`{op:'reveal', uid}` → `s.revealedGhosts`（shownTo=对手，expiresAfterTurn 玩家回合结束清除，turn.ts 处理）；UI 在对手手牌末尾渲染半透明幽灵卡（`.reveal-ghost`，首次出现才播入场动画，不参与任何事件/手牌计数——`handEndPos`/抽牌动画查询已排除 `.reveal-ghost`）。
+- **line:compiled 事件**：`executeCompile` 发出（ownUids/oppUids 顶→底 + protocolDefId）；编译清牌 FX 用。
+- **基础行为特效（分层模型，用户确认）**：`src/ui/effects/index.ts` 统一注册表——`card:discarded`→对切、`card:deleted`→破碎、`card:flipped`→翻面（横置卡 rotateX）、`card:returned`→回手滑入手牌末尾、`card:shifted`→偏转滑入目标链路末尾；`line:compiled`→逐张升起消散（顶→底、两侧并行）+ 编译方协议 3D 翻面；协议额外特效按 `triggerProtocol` 叠加（fire=火焰焚烧 z301 盖在基础 z300 上）。卡面一律用事件 payload 构建（不克隆 DOM）。Gemini FX 模块已转 TS 入 `src/ui/fx/`（delete-shatter.ts / discard-cut.ts；CSS 留 `public/assets/fx/`）。
+- **已编译协议特效**：fire=流动岩浆 + 黑岩/红岩（`.compiled-ring` 内 `.lava-seg` + `.lava-rock`，offset-path 沿边框路径旅行；`renderProtocol` 挂 `compiled-fx-<defId>` 类随 defId 换位跟随；协议格有 `data-player/data-line` 供特效定位）。
+- **草案页交互**：双击协议放大；拖拽选协议（幽灵跟随光标、无过渡延迟、落入轮选者选择框选中、否则丝滑回位）；**本回合已选可拖出取消**（`performDraftUnpick`/`canUnpick`/`draftTurnRange`）；**加载切屏过渡**（`playDraftToGameTransition`：草案淡出→全屏 `public/assets/ui/loading-transition.mp4`（已转码 H.264，原 mp4v 备份 -orig）→ 对战淡入；`transitioning` 暂停自动推进）。
+- **电池科技感重做**：去除数值标签、扫描线底纹、能量扫描流光、正极 LED 指示灯、段式 LED 格。
+- **选中卡显眼静态金框**（选择模式）；**诊断日志导出**按钮在页面最底部。
 
 ---
 
@@ -295,9 +309,11 @@ npm run preview  # 预览构建产物
 
 ### 5.2 建议首个小步（TDD）
 
-1. 读阶段 2 计划修正记录（§0.7）与本文件 §0.1 架构约定；
-2. 新增 `reveal` 效果操作（`Op` 扩展 + `executeOp` + 测试），然后写 `tests/effects/light.test.ts` 实现 light-1（end 抽1）、light-0（抽分值）、light-2（揭示+平移或翻转）；
-3. 顶命令引擎：`CardDef.top` 已存在文本（darkness-2「本栈反面牌分值4」），在 `stackValue` 处接入数值修正 + 测试。
+1. 读阶段 2 计划修正记录（§0.7）、§0.1 架构约定与本文件 §4.9（特效分层/交互已就绪）；
+2. 写 `tests/effects/light.test.ts` 实现 light-1（end 抽1）、light-0（抽分值）、light-2（揭示+平移或翻转——`reveal` 操作已就绪，需补"平移"目标线选择 UI）；`darkness` 随后（含顶命令数值修正）：
+3. **shift UI**：为效果"平移1张牌"提供选目标线交互（引擎 `shift` 已就绪）；
+4. 顶命令引擎：`CardDef.top` 已存在文本（darkness-2「本栈反面牌分值4」），在 `stackValue` 处接入数值修正 + 测试；
+5. 每套协议专属**额外特效**按 `triggerProtocol` 命名空间挂载（参考 fire 火焰焚烧；Gemini 任务单模板 `docs/gemini-task-template.md`）；已编译协议特效按 `compiled-fx-<defId>` 新增 CSS。
 
 ---
 
