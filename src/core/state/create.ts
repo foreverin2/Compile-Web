@@ -45,6 +45,34 @@ export function getCurrentDrafter(s: GameState): PlayerId {
   return DRAFT_ORDER[s.draftRound] ?? 1;
 }
 
+/** 当前回合（同一玩家的连续轮次）的选牌索引范围 [start, end) */
+export function draftTurnRange(round: number): { start: number; end: number } {
+  const player = DRAFT_ORDER[round] ?? 1;
+  let start = round;
+  while (start > 0 && DRAFT_ORDER[start - 1] === player) start--;
+  let end = round + 1;
+  while (end < DRAFT_ORDER.length && DRAFT_ORDER[end] === player) end++;
+  return { start, end };
+}
+
+/** 该 defId 是否是【本回合尚未结束】时选中的协议（可取消拖出；前几个回合选的不行） */
+export function canUnpick(s: GameState, defId: string): boolean {
+  if (s.phase !== 'draft') return false;
+  const { start } = draftTurnRange(s.draftRound);
+  return s.draftPicks.slice(start).some((p) => p.defId === defId);
+}
+
+/** 取消本回合的选择：从已选列表移除并回退轮次（该协议回到协议池，可重新选择） */
+export function performDraftUnpick(s: GameState, defId: string): void {
+  if (s.phase !== 'draft') throw new Error('not in draft phase');
+  const { start } = draftTurnRange(s.draftRound);
+  const idx = s.draftPicks.findIndex((p, i) => i >= start && p.defId === defId);
+  if (idx === -1) throw new Error(`cannot unpick ${defId}: not picked this turn`);
+  const [removed] = s.draftPicks.splice(idx, 1);
+  s.draftRound -= 1;
+  s.log.push(`P${getCurrentDrafter(s) + 1} 取消选择 ${removed.name}`);
+}
+
 /** 每人 3 协议按草案顺序排线：选中的协议按选择顺序依次放入 0/1/2 线 */
 function assignProtocols(s: GameState, player: PlayerId, picks: ProtocolDef[]): void {
   const p = s.players[player];

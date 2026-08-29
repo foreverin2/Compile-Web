@@ -1,5 +1,5 @@
 import type { GameState, PlayerId, Line, ProtocolDef } from '../core/models/types';
-import { getLineValue, getCurrentDrafter } from '../core/state/create';
+import { getLineValue, getCurrentDrafter, draftTurnRange } from '../core/state/create';
 import { getLegalActions, type LegalAction } from '../core/game';
 import { DEMO_PROTOCOLS } from '../data/demo';
 import { downloadLog } from './diag';
@@ -7,6 +7,8 @@ import { downloadLog } from './diag';
 export interface UiCallbacks {
   onAction(a: LegalAction): void;
   onDraftPick(defId: string): void;
+  /** 取消本回合的选择（把已选协议拖出选择框） */
+  onDraftUnpick(defId: string): void;
   /** 每次渲染完成后回调（供 UI 层做自动推进等） */
   onRendered?(): void;
 }
@@ -510,14 +512,18 @@ function picksOf(s: GameState, player: PlayerId): ProtocolDef[] {
   return s.draftPicks.filter((_, i) => DRAFT_PICK_OWNER[i] === player);
 }
 
-/** 一方的已选协议列：loading 面 PNG 按选择顺序竖排；空槽显示「尚未选择」占位 */
-function renderPickColumn(s: GameState, player: PlayerId, drafter: PlayerId): HTMLElement {
+/** 一方的已选协议列：loading 面 PNG 按选择顺序竖排；空槽显示「尚未选择」占位。
+ *  本回合选中的协议（尚未完成该回合）可【拖出选择框】取消选择（回到协议池原位） */
+function renderPickColumn(s: GameState, player: PlayerId, drafter: PlayerId, cb: UiCallbacks): HTMLElement {
   const col = el('div', `draft-picks p${player + 1}${drafter === player ? ' active' : ''}`);
   const title = el('div', 'draft-picks-title', `玩家 ${player + 1} 已选`);
   if (drafter === player) title.appendChild(el('span', 'draft-picks-turn', '● 轮选'));
   col.appendChild(title);
   const list = el('div', 'draft-picks-list');
   const picks = picksOf(s, player);
+  // 本回合（尚未结束）已选的 defId 集合：可拖出取消；前几个回合选的不行
+  const turnStart = draftTurnRange(s.draftRound).start;
+  const currentTurnPicks = new Set(s.draftPicks.slice(turnStart).map((p) => p.defId));
   // 本轮刚选中的协议（选择列表最后一项）加进场动画
   const newest = s.draftRound > 0 ? s.draftPicks[s.draftRound - 1] : null;
   for (let i = 0; i < 3; i++) {
@@ -536,6 +542,12 @@ function renderPickColumn(s: GameState, player: PlayerId, drafter: PlayerId): HT
     card.appendChild(el('div', 'draft-pick-name', pick.name));
     // 双击放大查看协议图（复用遮罩）
     card.addEventListener('dblclick', () => openZoom(pick.defId, true, true, false));
+    if (drafter === player && currentTurnPicks.has(pick.defId)) {
+      // 本回合已选、可取消：拖出选择框取消选择（卡上提示可拖出）
+      card.classList.add('unpickable');
+      card.title = '拖出选择框可取消本回合选择';
+      bindDraftUnpick(card, cb, pick.defId, player);
+    }
     list.appendChild(card);
   }
   col.appendChild(list);
@@ -573,7 +585,8 @@ function renderDraftPool(s: GameState, cb: UiCallbacks): HTMLElement {
   return pool;
 }
 
-/** 拖拽选协议：拖动卡片，落入当前轮选者选择框 → 选中；否则丝滑平移回原卡位置 */
+/** 拖拽选协议（与卡牌拖拽同款：幽灵卡跟随光标、原卡变暗、无过渡延迟）：
+ *  落入当前轮选者选择框 → 选中；否则丝滑平移回原卡位置 */
 function bindDraftDrag(card: HTMLElement, s: GameState, cb: UiCallbacks, defId: string, drafter: PlayerId): void {
   card.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return;
@@ -581,6 +594,8 @@ function bindDraftDrag(card: HTMLElement, s: GameState, cb: UiCallbacks, defId: 
     const startY = e.clientY;
     let active = false;
     let ghost: HTMLElement | null = null;
+    let gw = 0;
+    let gh = 0;
     const targetSel = `.draft-picks.p${drafter + 1}`;
     const cleanup = () => {
       document.removeEventListener('mousemove', onMove);
@@ -591,22 +606,29 @@ function bindDraftDrag(card: HTMLElement, s: GameState, cb: UiCallbacks, defId: 
     };
     const positionGhost = (ev: MouseEvent) => {
       if (!ghost) return;
-      ghost.style.transform = `translate(${ev.clientX - startX}px, ${ev.clientY - startY}px)`;
+      // 幽灵卡中心略偏上跟随光标（与拖拽打牌一致）
+      ghost.style.transform = `translate(${ev.clientX - gw / 2}px, ${ev.clientY - gh / 2 + 40}px) scale(0.9)`;
     };
     const beginDrag = (ev: MouseEvent) => {
       active = true;
       document.body.classList.add('dragging');
       card.classList.add('dragging-src');
       const r = card.getBoundingClientRect();
+      gw = r.width;
+      gh = r.height;
       ghost = card.cloneNode(true) as HTMLElement;
       ghost.classList.add('draft-drag-ghost');
-      ghost.style.left = `${r.left}px`;
-      ghost.style.top = `${r.top}px`;
-      ghost.style.width = `${r.width}px`;
-      ghost.style.height = `${r.height}px`;
+      ghost.style.width = `${gw}px`;
+      ghost.style.height = `${gh}px`;
       document.body.appendChild(ghost);
       positionGhost(ev);
       document.querySelector(targetSel)?.classList.add('drop-target');
+    };
+    const animateBack = (g: HTMLElement, tx: number, ty: number) => {
+      g.classList.add('returning');
+      g.style.transform = `translate(${tx}px, ${ty}px) scale(1)`;
+      g.style.opacity = '0';
+      window.setTimeout(() => g.remove(), 320);
     };
     const onMove = (ev: MouseEvent) => {
       if (!active) {
@@ -628,11 +650,83 @@ function bindDraftDrag(card: HTMLElement, s: GameState, cb: UiCallbacks, defId: 
       } else if (g) {
         // 松手位置不是自己的选择框：丝滑平移回原卡位置
         const r = card.getBoundingClientRect();
-        const gr = g.getBoundingClientRect();
-        g.style.transition = 'transform 0.3s cubic-bezier(0.2, 0.7, 0.3, 1), opacity 0.3s ease';
-        g.style.transform = `translate(${r.left - gr.left}px, ${r.top - gr.top}px)`;
-        g.style.opacity = '0';
-        window.setTimeout(() => g.remove(), 320);
+        animateBack(g, r.left, r.top);
+      }
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+}
+
+/** 拖出取消选协议：把【本回合】已选的选择框内协议拖出 → 动画回到协议池原位 → 取消选择 */
+function bindDraftUnpick(node: HTMLElement, cb: UiCallbacks, defId: string, player: PlayerId): void {
+  node.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    const startX = e.clientX;
+    const startY = e.clientY;
+    let active = false;
+    let ghost: HTMLElement | null = null;
+    let gw = 0;
+    let gh = 0;
+    const colSel = `.draft-picks.p${player + 1}`;
+    const cleanup = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.classList.remove('dragging');
+    };
+    const positionGhost = (ev: MouseEvent) => {
+      if (!ghost) return;
+      ghost.style.transform = `translate(${ev.clientX - gw / 2}px, ${ev.clientY - gh / 2 + 40}px) scale(0.9)`;
+    };
+    const beginDrag = (ev: MouseEvent) => {
+      active = true;
+      document.body.classList.add('dragging');
+      const r = node.getBoundingClientRect();
+      gw = r.width;
+      gh = r.height;
+      ghost = node.cloneNode(true) as HTMLElement;
+      ghost.classList.add('draft-drag-ghost');
+      ghost.style.width = `${gw}px`;
+      ghost.style.height = `${gh}px`;
+      document.body.appendChild(ghost);
+      positionGhost(ev);
+    };
+    const animateBack = (g: HTMLElement, tx: number, ty: number) => {
+      g.classList.add('returning');
+      g.style.transform = `translate(${tx}px, ${ty}px) scale(1)`;
+      g.style.opacity = '0';
+      window.setTimeout(() => g.remove(), 300);
+    };
+    const onMove = (ev: MouseEvent) => {
+      if (!active) {
+        if (Math.hypot(ev.clientX - startX, ev.clientY - startY) > 6) beginDrag(ev);
+        return;
+      }
+      ev.preventDefault();
+      positionGhost(ev);
+    };
+    const onUp = (ev: MouseEvent) => {
+      const hit = document.elementFromPoint(ev.clientX, ev.clientY);
+      const inColumn = hit ? (hit as HTMLElement).closest(colSel) !== null : false;
+      const g = ghost;
+      cleanup();
+      if (!inColumn && g) {
+        // 拖出选择框：动画回到协议池原位后取消选择
+        const poolCards = document.querySelectorAll<HTMLElement>('.draft-pool .draft-card');
+        const idx = DEMO_PROTOCOLS.findIndex((p) => p.defId === defId);
+        const target = poolCards[idx];
+        if (target) {
+          const r = target.getBoundingClientRect();
+          animateBack(g, r.left, r.top);
+          window.setTimeout(() => cb.onDraftUnpick(defId), 300);
+        } else {
+          g.remove();
+          cb.onDraftUnpick(defId);
+        }
+      } else if (g) {
+        // 仍在选择框内：丝滑回原位
+        const r = node.getBoundingClientRect();
+        animateBack(g, r.left, r.top);
       }
     };
     document.addEventListener('mousemove', onMove);
@@ -663,9 +757,9 @@ export function renderDraft(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   wrap.appendChild(header);
 
   const layout = el('div', 'draft-layout');
-  layout.appendChild(renderPickColumn(s, 0, drafter));
+  layout.appendChild(renderPickColumn(s, 0, drafter, cb));
   layout.appendChild(renderDraftPool(s, cb));
-  layout.appendChild(renderPickColumn(s, 1, drafter));
+  layout.appendChild(renderPickColumn(s, 1, drafter, cb));
   wrap.appendChild(layout);
   root.appendChild(wrap);
 }

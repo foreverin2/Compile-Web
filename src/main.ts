@@ -1,5 +1,5 @@
 import './ui/styles.css';
-import { createGame, performDraftPick } from './core/state/create';
+import { createGame, performDraftPick, performDraftUnpick } from './core/state/create';
 import { executeAction } from './core/game';
 import { getCompilableLines } from './core/rules/compile';
 import { collectTriggers } from './core/effects/triggers';
@@ -30,6 +30,10 @@ const cb: UiCallbacks = {
   },
   onDraftPick(defId) {
     performDraftPick(state, defId);
+    renderApp(root, state, cb);
+  },
+  onDraftUnpick(defId) {
+    performDraftUnpick(state, defId);
     renderApp(root, state, cb);
   },
   onAction(a) {
