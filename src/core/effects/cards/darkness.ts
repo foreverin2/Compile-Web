@@ -37,7 +37,8 @@ function* darkness2Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResul
   if (ans.selected.length > 0) yield { op: 'flip', uid: ans.selected[0], allowCovered: true };
 }
 
-/** darkness-2 顶命令数值修正：此栈每张反面牌分值 4（而非 2） */
+/** darkness-2 顶命令数值修正：本线双方估值时，估值方堆叠中每张反面牌分值 4（而非 2）。
+ *  target 'line'：线上任一玩家正面 darkness-2 即对双方估值生效；apply 的 owner 参数 = 估值方（stackValue 传入）。 */
 function darkness2ValueModifier(s: GameState, owner: PlayerId, line: Line, total: number): number {
   const stack = s.players[owner].stacks[line];
   const faceDown = stack.filter((c) => !c.faceUp).length;
@@ -74,7 +75,7 @@ function* darkness5(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
 
 registerCardEffects('darkness-0', { middle: darkness0 });
 registerCardEffects('darkness-1', { middle: darkness1 });
-registerCardEffects('darkness-2', { middle: darkness2Middle, valueModifier: { target: 'own-stack', apply: darkness2ValueModifier } });
+registerCardEffects('darkness-2', { middle: darkness2Middle, valueModifier: { target: 'line', apply: darkness2ValueModifier } });
 registerCardEffects('darkness-3', { middle: darkness3 });
 registerCardEffects('darkness-4', { middle: darkness4 });
 registerCardEffects('darkness-5', { middle: darkness5 });

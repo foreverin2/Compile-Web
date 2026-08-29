@@ -132,6 +132,8 @@ export function stackValue(s: GameState, player: PlayerId, line: Line): number {
     total += card.faceUp ? getCardDef(card.defId).value : 2;
   }
   const opp: PlayerId = player === 0 ? 1 : 0;
+  // line 目标：线上任一玩家堆叠中的正面修正卡即对双方估值生效；每估值只用估值方堆叠应用一次（多张不叠加）
+  let lineMod = false;
   for (const owner of [player, opp]) {
     for (const card of s.players[owner].stacks[line]) {
       const v = EFFECTS[card.defId]?.valueModifier;
@@ -139,9 +141,23 @@ export function stackValue(s: GameState, player: PlayerId, line: Line): number {
       if (!v || !card.faceUp) continue;
       if (v.target === 'own-stack' && owner === player) total = v.apply(s, owner, line, total);
       if (v.target === 'opponent-line' && owner !== player) total = v.apply(s, owner, line, total);
+      // line 目标：apply 的 owner 参数传估值方 player，使修正（如 darkness-2 数反面牌）按估值方堆叠计算
+      if (v.target === 'line' && !lineMod) {
+        lineMod = true;
+        total = v.apply(s, player, line, total);
+      }
     }
   }
   return total;
+}
+
+/** 线顶命令常驻生效判定：该线双方堆叠中是否存在正面朝上的 defId 卡。
+ *  规则：背面卡无任何效果；正面顶命令被覆盖后仍常驻生效 → 只要有正面卡在线上即 active（被覆盖与否无关）。 */
+export function lineTopCommandActive(s: GameState, line: Line, defId: string): boolean {
+  return (
+    s.players[0].stacks[line].some((c) => c.defId === defId && c.faceUp) ||
+    s.players[1].stacks[line].some((c) => c.defId === defId && c.faceUp)
+  );
 }
 
 export function getLineValue(s: GameState, player: PlayerId, line: Line): number {
