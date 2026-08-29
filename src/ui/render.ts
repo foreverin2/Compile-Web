@@ -209,6 +209,34 @@ function renderPlayerInfo(s: GameState, player: PlayerId, opts: { isSelf: boolea
   return info;
 }
 
+/** 牌库区：多张背面卡层叠（厚度随剩余数），顶层中央显示剩余张数 */
+function renderDeck(s: GameState, player: PlayerId): HTMLElement {
+  const count = s.players[player].deck.length;
+  const layers = count === 0 ? 0 : Math.min(4, Math.ceil(count / 4));
+  const deck = el('div', `deck deck-${count === 0 ? 'empty' : layers}`);
+  deck.dataset.player = String(player);
+  if (layers > 0) {
+    const stack = el('div', 'deck-stack');
+    for (let i = 0; i < layers; i++) stack.appendChild(el('div', 'deck-back'));
+    deck.appendChild(stack);
+    deck.appendChild(el('span', 'deck-count', String(count)));
+  } else {
+    deck.appendChild(el('span', 'deck-count empty', '0'));
+  }
+  return deck;
+}
+
+/** 刷新手牌按钮：位于牌库区与手牌之间（P1 在牌库右侧、P2 在牌库左侧），
+ *  仅在刷新是合法动作（refreshAction 非空）时渲染，点击派发 refresh */
+function renderRefreshButton(action: LegalAction, cb: UiCallbacks): HTMLElement {
+  const btn = el('button', 'shield-refresh-btn', '刷新手牌');
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    cb.onAction(action);
+  });
+  return btn;
+}
+
 /**
  * 手牌条：self（回合玩家）正面可点选，对手背面展示。
  * R6 扇形手牌：单行不换行（.hand 负 margin 重叠）；最多渲染 15 张，超出部分以
@@ -232,10 +260,6 @@ function renderHand(
     onToggleFaceUp?: () => void;
     /** 拖拽打牌：命中合法落点时派发 onAction 的回调 */
     cb: UiCallbacks;
-    /** 刷新手牌按钮：仅当刷新是合法动作（当前玩家 + action 步骤 + 手牌 < 5）时渲染，
-     *  位于手牌挡板外侧（P1 在挡板左侧、P2 在挡板右侧），点击派发 refresh 动作 */
-    onRefresh?: () => void;
-    refreshEnabled?: boolean;
   }
 ): HTMLElement {
   const reversed = player === 1; // P2 右起、向左延伸；P1 左起、向右延伸（默认左对齐）
@@ -327,17 +351,6 @@ function renderHand(
   // 在 shieldWidth（模块态），重渲染后保留；仅 self（当前回合）手牌的挡板可拖，
   // 对手挡板锁定但状态保留。
   hand.appendChild(renderShield(s, player, opts.isSelf, hand));
-  // 刷新手牌按钮：紧跟挡板之后渲染（相邻兄弟，CSS 用 .hand-shield.p1 + / .p2 + 定位），
-  // 置于挡板外侧（P1 左 / P2 右）。紧凑半透明青色，与「翻面」按钮（.play-btn）同风格；
-  // 仅在刷新是合法动作（refreshEnabled）时出现，点击派发 refresh。
-  if (opts.refreshEnabled && opts.onRefresh) {
-    const refreshBtn = el('button', 'shield-refresh-btn', '刷新手牌');
-    refreshBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      opts.onRefresh!();
-    });
-    hand.appendChild(refreshBtn);
-  }
   const total = nodes.length;
   for (let i = 0; i < total; i++) {
     const node = nodes[i];
@@ -824,12 +837,16 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
     grid.appendChild(row);
   }
 
-  // 底部条带：双方手牌 + 中间步骤指示
+  // 底部条带：双方（牌库 + 刷新手牌 + 手牌） + 中间步骤指示。
+  // 每侧一个 .hand-side flex 容器：P1 [deck][refresh][hand]、P2 [hand][refresh][deck]
+  // （牌库在最外、刷新手牌次之、与牌库间距 ≥16px；刷新按钮仅当前玩家 action 步骤时出现）。
   const handStrip = el('div', 'hand-strip');
   const legal = getLegalActions(s, s.turnPlayer);
-  // 刷新手牌：移到当前玩家手牌挡板外侧渲染（renderHand），不再出现在操作行
   const refreshAction = legal.find((a) => a.kind === 'refresh') ?? null;
-  handStrip.appendChild(
+  const p1Side = el('div', 'hand-side p1');
+  p1Side.appendChild(renderDeck(s, 0));
+  if (s.turnPlayer === 0 && refreshAction) p1Side.appendChild(renderRefreshButton(refreshAction, cb));
+  p1Side.appendChild(
     renderHand(s, 0, {
       isSelf: s.turnPlayer === 0,
       selected: s.turnPlayer === 0 ? selectedUid : null,
@@ -843,12 +860,12 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
         renderApp(root, s, cb);
       },
       cb,
-      refreshEnabled: s.turnPlayer === 0 && refreshAction !== null,
-      onRefresh: () => { if (refreshAction) cb.onAction(refreshAction); },
     })
   );
+  handStrip.appendChild(p1Side);
   handStrip.appendChild(el('div', 'step-indicator', `步骤: ${s.step}`));
-  handStrip.appendChild(
+  const p2Side = el('div', 'hand-side p2');
+  p2Side.appendChild(
     renderHand(s, 1, {
       isSelf: s.turnPlayer === 1,
       selected: s.turnPlayer === 1 ? selectedUid : null,
@@ -862,10 +879,11 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
         renderApp(root, s, cb);
       },
       cb,
-      refreshEnabled: s.turnPlayer === 1 && refreshAction !== null,
-      onRefresh: () => { if (refreshAction) cb.onAction(refreshAction); },
     })
   );
+  if (s.turnPlayer === 1 && refreshAction) p2Side.appendChild(renderRefreshButton(refreshAction, cb));
+  p2Side.appendChild(renderDeck(s, 1));
+  handStrip.appendChild(p2Side);
   grid.appendChild(handStrip);
   wrap.appendChild(grid);
 

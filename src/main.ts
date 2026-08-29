@@ -122,8 +122,9 @@ function playDrawSequence(draws: { player: PlayerId; count: number }[], done: ()
 }
 
 /**
- * 刷新手牌抽牌飞入动画：drawn 张卡背幽灵卡从手牌区外侧（P1 从左侧、P2 从右侧，
+ * 刷新手牌抽牌飞入动画：drawn 张卡背幽灵卡从牌库区外侧（P1 从牌库左侧、P2 从牌库右侧，
  * 与手牌生长方向一致）依次飞入，每张间隔 120ms。
+ * - 起点 = 牌库区 rect 外侧（牌库元素缺失时回退到手牌区外侧，即原行为）
  * - 终点 = 当前手牌末尾（现有末卡之后逐张按扇形步进延伸），而非固定点
  * - 幽灵卡尺寸与正常手牌卡一致（130×178.8，见 .draw-ghost）
  * 全部落地后移除幽灵卡并调用 done()（由调用方触发重渲染）。
@@ -137,8 +138,13 @@ function playDrawAnimation(player: PlayerId, count: number, done: () => void): v
   }
   const rect = hand.getBoundingClientRect();
   const cy = rect.top + rect.height / 2;
+  // 抽牌起点 = 牌库区外侧（与手牌生长方向一致）：P1 取牌库左缘再左 90px、P2 取右缘再右 90px；
+  // 牌库元素缺失（不应发生）时回退到手牌区外侧（原行为）
+  const deck = document.querySelector<HTMLElement>(`.deck[data-player="${player}"]`);
+  const deckRect = deck ? deck.getBoundingClientRect() : null;
   const fromLeft = player === 0;
-  const startX = fromLeft ? rect.left - 90 : rect.right + 90;
+  const startX = deckRect ? (fromLeft ? deckRect.left - 90 : deckRect.right + 90)
+    : (fromLeft ? rect.left - 90 : rect.right + 90);
   // 现有末卡（P1 手牌最右 / P2 row-reverse 最左；排除揭示幽灵牌）；空手牌时回退到手牌区起点
   const cards = hand.querySelectorAll<HTMLElement>('.card:not(.reveal-ghost)');
   const last = cards[cards.length - 1];

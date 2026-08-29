@@ -532,6 +532,36 @@ body {
 
 /* ===== 手牌（底部条带：P1 手牌 | 步骤指示 | P2 手牌） ===== */
 .hand-strip { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: start; }
+/* ===== 牌库区（deck area）：每玩家一个，位于手牌条最外侧（P1 左 / P2 右） =====
+ * 层叠背面卡（.deck-back）厚度随剩余数：deck-1..deck-4（每 4 张一层，封顶 4 层），
+ * 无牌时 deck-empty；最顶层中央 .deck-count 圆形徽标显示剩余张数（空牌库显示 0）。
+ * .hand-side 是手牌条每侧的 flex 容器：P1 [deck][refresh][hand]、P2 [hand][refresh][deck]，
+ * 牌库在最外、刷新手牌次之，间距 = 容器 gap 16px（≥16px）。 */
+.hand-side { display: flex; align-items: center; gap: 16px; }
+/* P2 右侧：整体贴列右缘，牌库落在最外（最右） */
+.hand-side.p2 { justify-content: flex-end; }
+.deck { position: relative; width: 92px; height: 132px; align-self: center; margin: 0 18px; }
+.deck-stack { position: absolute; inset: 0; }
+.deck-back {
+  position: absolute; inset: 0; border-radius: 5px;
+  background: url('/assets/Cardback.jpg') center / cover no-repeat;
+  border: 1px solid #223; box-shadow: 0 2px 6px rgba(0,0,0,0.5);
+}
+.deck-2 .deck-back:nth-child(2) { transform: translate(2px, -2px); }
+.deck-3 .deck-back:nth-child(2) { transform: translate(2px, -2px); }
+.deck-3 .deck-back:nth-child(3) { transform: translate(4px, -4px); }
+.deck-4 .deck-back:nth-child(2) { transform: translate(2px, -2px); }
+.deck-4 .deck-back:nth-child(3) { transform: translate(4px, -4px); }
+.deck-4 .deck-back:nth-child(4) { transform: translate(6px, -6px); }
+/* 注意：.deck-count 也用于顶部信息条的「牌库 N」文本（renderPlayerInfo），故徽标规则
+   限定在 .deck 作用域内，避免把信息条文本也渲染成圆形徽标 */
+.deck .deck-count {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  background: #0a0e1acc; color: #4ff0ff; border: 1px solid #4ff0ff66;
+  border-radius: 50%; width: 34px; height: 34px; display: flex; align-items: center;
+  justify-content: center; font-weight: bold; font-size: 13px; z-index: 2;
+}
+.deck .deck-count.empty { color: #666; border-color: #444; }
 /* 单行扇形手牌：不换行，后一张卡负 margin 压住前一张（每张露出左缘 ~102px 宽） */
 .hand {
   display: flex;
@@ -660,14 +690,12 @@ body {
 }
 .hand-shield.retracted .shield-count { opacity: 0; }
 
-/* ===== 刷新手牌按钮（手牌挡板外侧：P1 左 / P2 右） =====
- * 紧跟挡板渲染的相邻兄弟（renderHand 中 shield 之后 append），以手牌容器为定位基准：
- * P1 挡板从手牌左缘（left:-28px）向右展开 → 按钮在其左侧（再左移自身宽度的 100%）；
- * P2 挡板从右缘（right:-28px）向左展开 → 按钮在其右侧（再右移自身宽度的 100%）。
- * 紧凑半透明青色（与「翻面」.play-btn 同风格）；z-index 高于挡板，垂直居中于手牌条。 */
+/* ===== 刷新手牌按钮（牌库区与手牌之间：P1 牌库右侧 / P2 牌库左侧） =====
+ * 手牌条每侧 .hand-side flex 容器内的常规流元素（renderBoard 在 deck 与 hand 之间渲染），
+ * 与牌库间距 = 容器 gap 16px；position:relative + z-index 高于挡板（.hand-shield z 70），
+ * 避免按钮与手牌外侧挡板边缘重叠时被挡板盖住。紧凑半透明青色（与「翻面」.play-btn 同风格）。 */
 .shield-refresh-btn {
-  position: absolute;
-  top: 50%;
+  position: relative;
   z-index: 71;
   /* 放大：更清晰可读 */
   padding: 5px 14px;
@@ -690,9 +718,6 @@ body {
   box-shadow: 0 0 14px rgba(0, 255, 204, 0.6), 0 0 5px rgba(124, 77, 255, 0.55);
   filter: brightness(1.25);
 }
-/* P1 更靠左、P2 更靠右（远离挡板、更贴近手牌区外侧边缘） */
-.hand-shield.p1 + .shield-refresh-btn { left: -60px; transform: translate(-100%, -50%); }
-.hand-shield.p2 + .shield-refresh-btn { right: -60px; transform: translate(100%, -50%); }
 
 /* ===== ITEM 1: 选中卡上方的 正面打入/背面打入 浮动按钮 ===== */
 /* 按钮是卡牌子节点（悬停按钮时指针仍在卡牌子树内，hover-pop 不消失）；

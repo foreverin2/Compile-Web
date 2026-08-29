@@ -89,6 +89,13 @@ function stackEndPos(slot: HTMLElement | null, owner: PlayerId): { x: number; y:
   return { x: owner === 0 ? slotRect.right - 90 : slotRect.left + 90, y };
 }
 
+/** 牌库区位置：取该玩家 .deck[data-player="N"] 的 rect（供牌堆顶打出特效用——Task 4）；
+ *  仅读取 DOM，牌库元素缺失时返回 null。 */
+export function deckPos(player: PlayerId): DOMRect | null {
+  const deck = document.querySelector<HTMLElement>(`.deck[data-player="${player}"]`);
+  return deck ? deck.getBoundingClientRect() : null;
+}
+
 /** Fire 协议专属额外特效：火焰焚烧（fire-burn.css 覆盖层结构见 public/assets/fire/README.md） */
 function playFireBurnExtra(node: HTMLElement, payload: FxCardPayload): void {
   const clone = buildFxCard(node, payload, EXTRA_Z);
