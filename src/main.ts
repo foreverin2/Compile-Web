@@ -242,7 +242,7 @@ function playDraftToGameTransition(): void {
 function runAutoAdvance(): void {
   if (transitioning) return; // 草案→游玩过渡中：不自动推进
   if (state.pendingEffects.length > 0) return; // 有挂起选择：等对应玩家应答
-  if (state.pendingPlay !== null || state.pendingShift !== null) return; // 落牌/偏转进行中
+  if (state.pendingPlay.length > 0 || state.pendingShift.length > 0) return; // 落牌/偏转进行中
   if (state.step === 'end' || state.step === 'start') {
     if (collectTriggers(state, state.step).length > 0) return; // 有待结算触发：出按钮
   }

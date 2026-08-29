@@ -107,10 +107,33 @@ describe('light protocol effects', () => {
     expect(fd2.zone).toBe('field');
     expect(fd1.line).toBe(1);
     expect(fd2.line).toBe(1);
-    expect(s.pendingShift).toBeNull();
+    expect(s.pendingShift).toHaveLength(0);
     // 状态损坏签名：所有原场卡都在某堆叠中，无卡残留在浮空态
     const onField = [s.players[0], s.players[1]].flatMap((p) => [...p.stacks[0], ...p.stacks[1], ...p.stacks[2]]);
     expect(onField.map((c) => c.uid).sort()).toEqual([fd1.uid, fd2.uid, card.uid].sort());
+  });
+
+  it('light-3: chained shift during deferred landing (fire-0 target top) lands all cards', () => {
+    const s = draftLightP1();
+    advanceToStep(s, 0, 'action');
+    // 目标线顶卡为正面 fire-0（"被盖住前"触发 → 落地挂起窗口）；
+    // 每次移开反面包后 light-3 重新露出会连锁其中指令 → 在窗口内再发 shift（旧实现覆盖槽位 → fd2 丢失）
+    const fd1 = makeCard('light-1', 0, 'field', false, 0, 0);
+    const fd2 = makeCard('light-2', 0, 'field', false, 0, 1);
+    s.players[0].stacks[0] = [fd1, fd2];
+    const fire0 = makeCard('fire-0', 0, 'field', true, 1, 0);
+    s.players[0].stacks[1] = [fire0];
+    s.players[0].hand = [makeCard('light-3', 0, 'hand')];
+    const card = s.players[0].hand[0];
+    executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: lightLine(s) });
+    resolveAllChoices(s, (p) => (p.kind === 'select-line' ? ['line:1'] : pickFirst(p)));
+    expect(s.players[0].stacks[0].map((c) => c.uid)).toEqual([card.uid]); // 源线只剩 light-3
+    expect(s.players[0].stacks[1].map((c) => c.uid).sort()).toEqual([fire0.uid, fd1.uid, fd2.uid].sort());
+    expect(fd1.zone).toBe('field');
+    expect(fd2.zone).toBe('field');
+    expect(s.pendingShift).toHaveLength(0);
+    const onField = [s.players[0], s.players[1]].flatMap((p) => [...p.stacks[0], ...p.stacks[1], ...p.stacks[2]]);
+    expect(onField.map((c) => c.uid).sort()).toEqual([fd1.uid, fd2.uid, fire0.uid, card.uid].sort()); // 无浮空残留
   });
 
   it('light-4: reveal whole opponent hand (one ghost per card)', () => {

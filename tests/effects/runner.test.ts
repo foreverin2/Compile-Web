@@ -103,10 +103,10 @@ describe('effect stack runner', () => {
     card.zone = 'float';
     card.line = 0;
     card.pos = null;
-    s.pendingPlay = { card, beforeCoveredDone: false };
+    s.pendingPlay.push({ card, beforeCoveredDone: false });
     s.players[0].stacks[0] = []; // 落地到空线（"栈清空"场景；brief 缺陷修正）
     runStack(s);
-    expect(s.pendingPlay).toBeNull();
+    expect(s.pendingPlay).toHaveLength(0);
     expect(card.zone).toBe('field');
     expect(s.players[0].stacks[0].map((c) => c.uid)).toEqual([card.uid]);
   });

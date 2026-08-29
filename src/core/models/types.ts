@@ -133,6 +133,12 @@ export interface PendingEffect {
   system?: boolean;
 }
 
+/** 落地中的卡（浮空，等目标顶卡"被盖住前"结算后落地）；beforeCoveredDone = 目标顶卡"被盖住前"是否已结算（只结算一次） */
+export interface PendingLanding {
+  card: Card;
+  beforeCoveredDone: boolean;
+}
+
 /** 待结算触发条目（getLegalActions 供 UI 出按钮） */
 export interface TriggerEntry {
   cardUid: string;
@@ -185,10 +191,10 @@ export interface GameState {
   log: string[];
   /** 效果栈：长度 0 = 无挂起；>0 时顶部为待应答选择 */
   pendingEffects: PendingEffect[];
-  /** 打出中的卡（浮空，等"被盖住前"结算后落地）；beforeCoveredDone = 目标顶卡"被盖住前"是否已结算（只结算一次）；null = 无 */
-  pendingPlay: { card: Card; beforeCoveredDone: boolean } | null;
-  /** 偏转中的卡（浮空，等露出卡结算后落地）；beforeCoveredDone = 目标顶卡"被盖住前"是否已结算（只结算一次）；null = 无 */
-  pendingShift: { card: Card; beforeCoveredDone: boolean } | null;
+  /** 打出中的卡队列（FIFO，等"被盖住前"结算后逐一落地）；空 = 无 */
+  pendingPlay: PendingLanding[];
+  /** 偏转中的卡队列（FIFO，等露出卡结算后逐一落地）；空 = 无 */
+  pendingShift: PendingLanding[];
   /** 本 end/start 步骤已结算的触发卡 uid（避免重复结算） */
   resolvedTriggerUids: string[];
   /** 打出链式结算完毕后需要推进回合步骤（runStack 栈空时消费） */

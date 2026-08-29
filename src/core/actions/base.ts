@@ -25,7 +25,7 @@ export function playCard(s: GameState, player: PlayerId, cardUid: string, faceUp
   card.faceUp = faceUp;
   card.line = line;
   card.pos = null;
-  s.pendingPlay = { card, beforeCoveredDone: false };
+  s.pendingPlay.push({ card, beforeCoveredDone: false });
   s.log.push(`P${player + 1} plays ${card.defId} ${faceUp ? 'face-up' : 'face-down'} to line ${line + 1}`);
   runStack(s); // 结算 before-covered（若有）→ 栈空时 completePlay 落地 + 中指令
   return card;

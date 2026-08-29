@@ -99,10 +99,10 @@ export function runStack(s: GameState): void {
       executeOp(s, pe, step);
       // 落地/落牌前中断效果结算：由外层循环先完成落地（含"被盖住前"连锁）再恢复生成器，
       // 避免连续 shift/playTopDeck 覆盖单一 pendingShift/pendingPlay 槽位（浮空卡丢失）
-      if (s.pendingShift || s.pendingPlay) break;
+      if (s.pendingShift.length > 0 || s.pendingPlay.length > 0) break;
     }
-    if (s.pendingPlay) { completePlay(s); continue; }
-    if (s.pendingShift) { completeShift(s); continue; }
+    if (s.pendingPlay.length > 0) { completePlay(s); continue; }
+    if (s.pendingShift.length > 0) { completeShift(s); continue; }
     if (s.pendingStepAdvance) {
       s.pendingStepAdvance = false;
       advanceStep(s);
@@ -195,7 +195,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       card.zone = 'float';
       card.line = op.targetLine; // 提交目标（落地前不可变卦）
       card.pos = null;
-      s.pendingShift = { card, beforeCoveredDone: false };
+      s.pendingShift.push({ card, beforeCoveredDone: false });
       emitCardEvent(s, 'card:shifted', card, { fromLine });
       revealAfterRemoval(s, owner, fromLine);
       break;
@@ -208,7 +208,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       card.faceUp = op.faceUp;
       card.line = op.line;
       card.pos = null;
-      s.pendingPlay = { card, beforeCoveredDone: false };
+      s.pendingPlay.push({ card, beforeCoveredDone: false });
       emitCardEvent(s, 'card:deck-played', card, { line: op.line });
       break;
     }
@@ -229,9 +229,10 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
   }
 }
 
-/** 落牌（目标顶卡"被盖住前"先结算一次，然后落地 + 中指令） */
+/** 落牌（目标顶卡"被盖住前"先结算一次，然后落地 + 中指令；队列 FIFO，每次处理队首） */
 function completePlay(s: GameState): void {
-  const ps = s.pendingPlay!;
+  const ps = s.pendingPlay[0];
+  if (!ps) return;
   const card = ps.card;
   const p = s.players[card.owner];
   const stack = p.stacks[card.line!];
@@ -243,14 +244,15 @@ function completePlay(s: GameState): void {
   card.zone = 'field';
   card.pos = stack.length;
   stack.push(card);
-  s.pendingPlay = null;
+  s.pendingPlay.shift();
   emitCardEvent(s, 'card:played', card);
   if (card.faceUp) pushMiddle(s, card.owner, card);
 }
 
-/** 偏转落地（目标顶卡"被盖住前"先结算一次，然后落地） */
+/** 偏转落地（目标顶卡"被盖住前"先结算一次，然后落地；队列 FIFO，每次处理队首） */
 function completeShift(s: GameState): void {
-  const ps = s.pendingShift!;
+  const ps = s.pendingShift[0];
+  if (!ps) return;
   const card = ps.card;
   const p = s.players[card.owner];
   const stack = p.stacks[card.line!];
@@ -262,7 +264,7 @@ function completeShift(s: GameState): void {
   card.zone = 'field';
   card.pos = stack.length;
   stack.push(card);
-  s.pendingShift = null;
+  s.pendingShift.shift();
   emitCardEvent(s, 'card:landed', card);
 }
 

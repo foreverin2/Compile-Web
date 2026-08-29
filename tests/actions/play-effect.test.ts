@@ -24,7 +24,7 @@ describe('playCard with pendingPlay', () => {
     s.players[0].hand = [card, target];
     const ret = playCard(s, 0, card.uid, true, 0);
     expect(ret.zone).toBe('field');
-    expect(s.pendingPlay).toBeNull();
+    expect(s.pendingPlay).toHaveLength(0);
     expect(s.players[0].stacks[0].map((c) => c.uid)).toEqual([card.uid]);
     resolveAllChoices(s, (p) => [target.uid]);
     expect(s.pendingEffects).toHaveLength(0);
@@ -38,7 +38,7 @@ describe('playCard with pendingPlay', () => {
     const played = makeCard('fire-5', 0, 'hand');
     s.players[0].hand = [played];
     playCard(s, 0, played.uid, true, 0);
-    expect(s.pendingPlay).toBeNull();
+    expect(s.pendingPlay).toHaveLength(0);
     expect(s.players[0].stacks[0].map((c) => c.uid)).toEqual([top.uid, played.uid]);
     resolveAllChoices(s, pickFirst); // 抽到的 1 张被 fire-5 弃掉
     expect(s.pendingEffects).toHaveLength(0);
