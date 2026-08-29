@@ -211,7 +211,7 @@ function renderPlayerInfo(s: GameState, player: PlayerId, opts: { isSelf: boolea
 
 /**
  * 手牌条：self（回合玩家）正面可点选，对手背面展示。
- * R6 扇形手牌：单行不换行（.hand 负 margin 重叠）；最多渲染 10 张，超出部分以
+ * R6 扇形手牌：单行不换行（.hand 负 margin 重叠）；最多渲染 15 张，超出部分以
  * 末尾 +N 徽标提示（隐藏的牌仍在状态中，随手牌减少自动露出）。
  * R7 P2 手牌从右往左排（.hand.reversed = flex-direction: row-reverse）：
  * index 0 在最右、后续卡向左延伸；P1 保持左起（默认左对齐）。悬停第 i 张卡时，
@@ -248,7 +248,7 @@ function renderHand(
   const byValue = [...cards].sort(
     (a, b) => parseInt(splitDefId(a.defId)[1], 10) - parseInt(splitDefId(b.defId)[1], 10)
   );
-  const shown = (reversed ? [...byValue].reverse() : byValue).slice(0, 10);
+  const shown = (reversed ? [...byValue].reverse() : byValue).slice(0, 15);
   const nodes: HTMLElement[] = [];
   for (const card of shown) {
     const i = nodes.length;
@@ -303,8 +303,8 @@ function renderHand(
     hand.appendChild(node);
     nodes.push(node);
   }
-  if (cards.length > 10) {
-    hand.appendChild(el('div', 'hand-more-badge', `+${cards.length - 10}`));
+  if (cards.length > 15) {
+    hand.appendChild(el('div', 'hand-more-badge', `+${cards.length - 15}`));
   }
   // 揭示幽灵牌：把被揭示卡的正面复制到本玩家手牌区末尾（仅视觉提示，不参与任何
   // 事件/手牌计数；对手回合结束后由引擎清除）。data-uid 用 ghost- 前缀避免冲突。
@@ -399,8 +399,9 @@ function bindShieldDrag(shield: HTMLElement, player: PlayerId, hand: HTMLElement
     e.preventDefault();
     e.stopPropagation(); // 不与卡牌单击/拖拽相互干扰
     const dir = player === 0 ? 1 : -1; // P1 向右拖加宽；P2 向左拖加宽
-    // 最大宽度 = 整个手牌区宽度（能覆盖全部手牌至协议中线）
-    const maxW = Math.max(0, hand.clientWidth);
+    // 最大宽度 = 整个手牌区宽度（能覆盖全部手牌至协议中线），
+    // 封顶 SHIELD_MAX_WIDTH（15 张扇形完整宽度 ≈1660px）：超出上限的溢出区无需遮住
+    const maxW = Math.min(Math.max(0, hand.clientWidth), SHIELD_MAX_WIDTH);
     const startX = e.clientX;
     const startWidth = Math.min(Math.max(shieldWidth[player], 0), maxW);
     const apply = (w: number) => {
@@ -1013,6 +1014,8 @@ let selectedFaceUp = true;
 const revealedGhostSeen = new Set<string>();
 /** R8 手牌挡板宽度（px，模块态：重渲染后保留；0=收起、手牌可见） */
 const shieldWidth: [number, number] = [0, 0];
+/** 挡板最大宽度：15 张手牌扇形完整铺开（首卡 130px + 14 张 × 露出 102px）≈ 1660px */
+const SHIELD_MAX_WIDTH = 15 * 102 + 130;
 
 /** 选择模式状态：当前应答的 promptId 与已选 uid（重渲染保留，选择完成后清空） */
 let choicePromptId: string | null = null;

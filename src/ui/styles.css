@@ -11,9 +11,9 @@ body {
   background-repeat: no-repeat;
   background-attachment: fixed;
 }
-/* 主容器：左右 padding 140px 容纳电池外溢；草案界面放大 2.5 倍后较宽，允许横向滚动 */
-/* 主容器：左右 padding 140px 容纳电池外溢；不设 overflow-x:hidden 防裁剪 */
-#app { max-width: 1780px; margin: 0 auto; padding: 12px 140px; }
+/* 主容器：左右 padding 100px 容纳电池外溢；草案界面放大 2.5 倍后较宽，允许横向滚动 */
+/* 主容器：左右 padding 100px 容纳电池外溢；不设 overflow-x:hidden 防裁剪 */
+#app { max-width: 2000px; margin: 0 auto; padding: 12px 100px; }
 
 .board { display: flex; flex-direction: column; gap: 10px; }
 
@@ -536,7 +536,7 @@ body {
 .hand {
   display: flex;
   flex-wrap: nowrap;
-  /* 不裁剪：容器已放宽（#app 1400px），手牌最多 10 张可完整显示；边缘卡牌不再被挡 */
+  /* 不裁剪：容器已放宽（#app 2000px），手牌最多 15 张可完整显示；边缘卡牌不再被挡 */
   overflow: visible;
   position: relative; /* +N 徽标按右缘定位 */
   margin-top: 6px;
@@ -563,7 +563,7 @@ body {
   transform: translateY(-24px) scale(1.15);
   z-index: 50;
 }
-/* 超出 10 张时右缘的 +N 徽标（纯视觉提示，剩余卡仍在状态中，未渲染） */
+/* 超出 15 张时右缘的 +N 徽标（纯视觉提示，剩余卡仍在状态中，未渲染） */
 .hand-more-badge {
   position: absolute;
   right: 6px;
@@ -708,28 +708,6 @@ body {
   pointer-events: auto; /* 卡面图 pointer-events:none，但按钮自身必须可点 */
   white-space: nowrap;
 }
-/* 「翻面」按钮：单个小按钮（宽度远小于卡面），半透明深色底 + 青紫渐变霓虹描边，
-   悬停时霓虹点亮；深色系贴合暗色赛博背景，取代原黄色按钮 */
-.play-btn {
-  padding: 1px 8px;
-  font-size: 10px;
-  line-height: 1.6;
-  border-radius: 4px;
-  border: 1px solid transparent;
-  background: linear-gradient(135deg, rgba(0, 255, 204, 0.35), rgba(124, 77, 255, 0.35));
-  background-clip: padding-box;
-  color: #eafffb;
-  text-shadow: 0 0 4px rgba(0, 255, 204, 0.6);
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  cursor: pointer;
-  box-shadow: 0 0 6px rgba(0, 255, 204, 0.2);
-  transition: box-shadow 0.12s ease, filter 0.12s ease;
-}
-.play-btn:hover {
-  box-shadow: 0 0 12px rgba(0, 255, 204, 0.55), 0 0 4px rgba(124, 77, 255, 0.5);
-  filter: brightness(1.25);
-}
 
 /* ===== 指示 / 操作 / 日志 ===== */
 .step-indicator { text-align: center; font-size: 13px; color: #ccc; padding: 4px 0; }
@@ -740,6 +718,15 @@ body {
 .next-block { display: flex; flex-direction: column; align-items: center; gap: 3px; }
 .btn { padding: 6px 12px; border-radius: 6px; border: none; background: #e0a030; color: #111; font-weight: bold; cursor: pointer; }
 .btn:hover { background: #f0b040; }
+/* 「翻面」按钮：单个小按钮（宽度远小于卡面），青色霓虹风格（与 .choice-bar 一致）。
+   按钮 class 含 .btn（btn play-btn），且 .btn 声明在前 —— 本组规则必须置于 .btn 之后，
+   层叠（同特异性、后声明胜）才让霓虹配色覆盖 .btn 的黄色底。 */
+.play-btn {
+  background: #0e1c2a; color: #4ff0ff; border: 1px solid #4ff0ff88;
+  border-radius: 6px; font-size: 12px; padding: 4px 12px; cursor: pointer;
+  box-shadow: 0 0 8px rgba(79, 240, 255, 0.35); transition: all 0.15s ease;
+}
+.play-btn:hover { background: #12303f; box-shadow: 0 0 14px rgba(79, 240, 255, 0.7); }
 .hint { font-size: 12px; color: #aaa; }
 .log { border-top: 1px solid #444; margin-top: 8px; padding-top: 6px; font-size: 12px; color: #999; max-height: 120px; overflow-y: auto; }
 .winner-banner { font-size: 24px; font-weight: bold; color: #4caf50; text-align: center; padding: 12px; }
