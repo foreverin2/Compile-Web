@@ -988,7 +988,17 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
           });
         }
       }
-      wrap.appendChild(choiceBar(topEffect, prompt, cb, '点击高亮的线路选择目标线'));
+      const bar = choiceBar(topEffect, prompt, cb, '点击高亮的线路选择目标线');
+      if (prompt.optional) {
+        // 可选 select-line（如 darkness-1 的可选平移）：跳过 = 空应答
+        const skipBtn = el('button', 'btn choice-skip', '跳过');
+        skipBtn.addEventListener('click', () => {
+          choicePromptId = null;
+          cb.onAction({ kind: 'effect-choice', promptId: topEffect.id, choice: [] });
+        });
+        bar.appendChild(skipBtn);
+      }
+      wrap.appendChild(bar);
     } else if (prompt.kind === 'select-action') {
       const bar = el('div', 'choice-bar');
       bar.appendChild(el('div', 'choice-title', `${(prompt.chooser ?? topEffect.player) === 0 ? 'P1' : 'P2'} 操作 — ${prompt.title}`));

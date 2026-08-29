@@ -48,9 +48,11 @@ export function answerEffect(s: GameState, promptId: string, selected: string[])
   // 重复选择拦截（沿用旧行为；select max≥2 时防 ['a','a']）
   if (new Set(selected).size !== selected.length) throw new Error(`duplicate selection: ${promptId}`);
   if (req.kind === 'select-line') {
-    if (selected.length !== 1 || !req.lines?.includes(Number(selected[0].replace('line:', '')) as Line)) {
-      throw new Error('invalid line selection');
-    }
+    // 可选 select-line：空应答 = 跳过（如 darkness-1 的可选平移）；否则必须恰选 1 条合法线
+    const ok =
+      (req.optional && selected.length === 0) ||
+      (selected.length === 1 && req.lines?.includes(Number(selected[0].replace('line:', '')) as Line));
+    if (!ok) throw new Error('invalid line selection');
   } else if (req.kind === 'select-action') {
     // 逐项校验：每一项都必须属于 req.actions（max>1 时同样拦截非列表项）
     for (const act of selected) {
