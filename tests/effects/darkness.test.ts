@@ -177,34 +177,40 @@ describe('darkness protocol effects', () => {
     expect(s.pendingEffects).toHaveLength(0);
   });
 
-  it('darkness-3: playTopDeck face-down onto a chosen different line', () => {
+  it('darkness-3: plays a chosen hand card face-down onto a chosen different line (deck untouched)', () => {
     const s = draftDarknessP1();
     advanceToStep(s, 0, 'action');
     const deckLen = s.players[0].deck.length;
-    const top = s.players[0].deck[deckLen - 1];
-    s.players[0].hand = [makeCard('darkness-3', 0, 'hand')];
-    const card = s.players[0].hand[0];
+    s.players[0].hand = [makeCard('darkness-3', 0, 'hand'), makeCard('water-1', 0, 'hand')];
+    const chosen = s.players[0].hand.find((c) => c.defId === 'water-1')!;
+    const card = s.players[0].hand.find((c) => c.defId === 'darkness-3')!;
     executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: darknessLine(s) });
-    resolveAllChoices(s, (p) => (p.kind === 'select-line' ? ['line:2'] : pickFirst(p)));
-    expect(s.players[0].deck).toHaveLength(deckLen - 1); // 牌库顶被取出
-    expect(top.zone).toBe('field');
-    expect(top.line).toBe(2);
-    expect(top.faceUp).toBe(false); // 反面落地
-    expect(s.players[0].stacks[2].map((c) => c.uid)).toContain(top.uid);
+    resolveAllChoices(s, (p) => {
+      if (p.kind === 'select') return [chosen.uid]; // 选手牌（候选只剩 water-1）
+      if (p.kind === 'select-line') return ['line:2'];
+      return pickFirst(p);
+    });
+    expect(s.players[0].hand.map((c) => c.uid)).not.toContain(chosen.uid); // 手牌被取走
+    expect(chosen.zone).toBe('field');
+    expect(chosen.line).toBe(2);
+    expect(chosen.faceUp).toBe(false); // 反面落地
+    expect(s.players[0].stacks[2].map((c) => c.uid)).toContain(chosen.uid);
+    expect(s.players[0].deck).toHaveLength(deckLen); // 牌库不变（不再打牌堆顶）
     expect(s.pendingEffects).toHaveLength(0);
     expect(s.pendingPlay).toHaveLength(0);
   });
 
-  it('darkness-3: empty deck fizzles after line select (no playTopDeck throw)', () => {
+  it('darkness-3: empty hand fizzles (no playFromHand, no deadlock)', () => {
     const s = draftDarknessP1();
     advanceToStep(s, 0, 'action');
-    s.players[0].deck = [];
+    const deckLen = s.players[0].deck.length;
     s.players[0].hand = [makeCard('darkness-3', 0, 'hand')];
     const card = s.players[0].hand[0];
     executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: darknessLine(s) });
     resolveAllChoices(s, (p) => (p.kind === 'select-line' ? ['line:2'] : pickFirst(p)));
-    expect(s.players[0].deck).toHaveLength(0);
-    expect(s.players[0].stacks[2]).toHaveLength(0); // 未打出
+    // 手牌已空（darkness-3 打出后）→ 无手牌候选 → 选择步骤自动跳过 → fizzle
+    expect(s.players[0].stacks[2]).toHaveLength(0); // 未打出任何牌
+    expect(s.players[0].deck).toHaveLength(deckLen); // 牌库不变
     expect(s.pendingEffects).toHaveLength(0);
   });
 
