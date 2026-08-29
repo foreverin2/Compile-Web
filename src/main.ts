@@ -3,7 +3,7 @@ import { createGame, performDraftPick, performDraftUnpick } from './core/state/c
 import { executeAction } from './core/game';
 import { getCompilableLines } from './core/rules/compile';
 import { collectTriggers } from './core/effects/triggers';
-import { renderApp, type UiCallbacks } from './ui/render';
+import { renderApp, renderDraft, type UiCallbacks } from './ui/render';
 import { initEffects, initCompileFx } from './ui/effects';
 import { initDiag } from './ui/diag';
 import { gameBus } from './core/events/bus';
@@ -23,6 +23,8 @@ const GHOST_H = 178.8;
 const HAND_CARD_SPACING = 102; // 卡宽 130 − 重叠 28
 /** 效果触发的抽牌累计（card:drawn 事件 → 本次行动结算完成后统一播抽牌特效） */
 let pendingDraws: { player: PlayerId; count: number }[] = [];
+/** 草案 → 游玩过渡进行中：暂停自动推进，避免视频期间后台渲染/推进对战界面 */
+let transitioning = false;
 
 const cb: UiCallbacks = {
   onRendered() {
@@ -30,7 +32,13 @@ const cb: UiCallbacks = {
   },
   onDraftPick(defId) {
     performDraftPick(state, defId);
-    renderApp(root, state, cb);
+    if (state.phase === 'turn') {
+      // 草案完成：先渲染最终草案（6 张全选）→ 渐进离场 → 全屏加载视频 → 对战界面渐进入场
+      renderDraft(root, state, cb);
+      playDraftToGameTransition();
+    } else {
+      renderApp(root, state, cb);
+    }
   },
   onDraftUnpick(defId) {
     performDraftUnpick(state, defId);
@@ -171,6 +179,51 @@ function playDrawAnimation(player: PlayerId, count: number, done: () => void): v
 }
 
 /**
+ * 草案 → 游玩过渡：① 草案界面渐进离场（淡出+微缩+模糊）→
+ * ② 全屏播放加载视频（loading-transition.mp4，播完或超时兜底）→
+ * ③ 对战界面渐进入场（board-enter 淡入）。过渡期间 transitioning 暂停自动推进。
+ */
+function playDraftToGameTransition(): void {
+  transitioning = true;
+  root.classList.add('draft-exit');
+  // 离场动画时长
+  window.setTimeout(() => {
+    const overlay = document.createElement('div');
+    overlay.className = 'loading-overlay';
+    const video = document.createElement('video');
+    video.src = '/assets/ui/loading-transition.mp4';
+    video.autoplay = true;
+    video.muted = true;
+    video.playsInline = true;
+    video.className = 'loading-video';
+    overlay.appendChild(video);
+    document.body.appendChild(overlay);
+
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      window.clearTimeout(safety);
+      video.removeEventListener('ended', finish);
+      // 视频淡出，同时渲染对战界面（渐进入场）
+      overlay.classList.add('loading-out');
+      root.classList.remove('draft-exit');
+      root.classList.add('board-enter');
+      renderApp(root, state, cb);
+      window.setTimeout(() => {
+        overlay.remove();
+        root.classList.remove('board-enter');
+        transitioning = false;
+        scheduleAutoAdvance();
+      }, 420);
+    };
+    // 视频正常播完或 4.5s 兜底（加载失败/静音限制时也能继续）
+    const safety = window.setTimeout(finish, 4500);
+    video.addEventListener('ended', finish);
+  }, 450);
+}
+
+/**
  * 非 action 步骤自动推进：
  * - draft / gameover → 停止（不自动推进）
  * - action → 停止（轮到玩家行动）
@@ -181,6 +234,7 @@ function playDrawAnimation(player: PlayerId, count: number, done: () => void): v
  * - 其余步骤（start/check-control/check-cache 手牌合规/end）→ 自动 advance
  */
 function runAutoAdvance(): void {
+  if (transitioning) return; // 草案→游玩过渡中：不自动推进
   if (state.pendingEffects.length > 0) return; // 有挂起选择：等对应玩家应答
   if (state.pendingPlay !== null || state.pendingShift !== null) return; // 落牌/偏转进行中
   if (state.step === 'end' || state.step === 'start') {
