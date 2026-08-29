@@ -172,6 +172,11 @@ export interface TriggerDef {
 export interface CardEffects {
   middle?: EffectGen;
   triggers?: Partial<Record<TriggerKind, TriggerDef>>;
+  /** 顶命令数值修正：stackValue 计算该线总值时应用（target: own-stack 作用于拥有者总值；opponent-line 作用于对手同线总值） */
+  valueModifier?: {
+    target: 'own-stack' | 'opponent-line';
+    apply(s: GameState, owner: PlayerId, line: Line, total: number): number;
+  };
 }
 
 export interface GameState {
