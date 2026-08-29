@@ -2,16 +2,18 @@ import type { EffectCtx, EffectStep, GameState, Line, PlayerId, StepResult } fro
 import { findCard } from '../context';
 import { registerCardEffects } from '../registry';
 
-/** darkness-0：抽 3 张牌，然后平移 1 张你对手的被盖住的牌（到本卡所在列；无覆盖卡则 fizzle） */
+/** darkness-0：抽 3 张牌，然后玩家选择 1 张对手被盖住的牌 + 平移目标线（无覆盖卡则 fizzle） */
 function* darkness0(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   yield { op: 'draw', count: 3 };
-  // 目标线固定为本卡所在列 → 已在本列的覆盖卡平移不了（同线 shift 非法），从候选排除；全被排除则 fizzle
-  const covered = ctx
-    .candidates({ zone: 'field', owner: ctx.player === 0 ? 1 : 0, covered: true })
-    .filter((c) => c.line !== ctx.card.line);
+  // 目标线由玩家选择 → 同列覆盖卡平移合法，候选不再排除（C2 时代同列排除规则移除）
+  const covered = ctx.candidates({ zone: 'field', owner: ctx.player === 0 ? 1 : 0, covered: true });
   const ans = yield { kind: 'select', title: 'darkness-0：平移1张你对手的被盖住的牌', min: 1, max: 1, optional: false, candidates: covered };
   if (ans.selected.length === 0) return; // 无覆盖卡：fizzle（runStack 已跳过空候选，双保险）
-  yield { op: 'shift', uid: ans.selected[0], targetLine: ctx.card.line!, allowCovered: true };
+  const srcLine = findCard(ctx.s, ans.selected[0])?.line ?? ctx.card.line;
+  const line = yield { kind: 'select-line', title: 'darkness-0：选择平移目标线', min: 1, max: 1, optional: false, candidates: [], lines: [0, 1, 2].filter((l) => l !== srcLine) as Line[] };
+  if (line.selected.length > 0) {
+    yield { op: 'shift', uid: ans.selected[0], targetLine: Number(line.selected[0].replace('line:', '')) as Line, allowCovered: true };
+  }
 }
 
 /** darkness-1：翻转 1 张你对手的牌，然后可选平移那张牌（跳过 = 留在原线） */
@@ -45,12 +47,14 @@ function darkness2ValueModifier(s: GameState, owner: PlayerId, line: Line, total
   return total + faceDown * 2; // 反面 2 → 4
 }
 
-/** darkness-3：在另一列反面打出牌堆顶（牌库空则 fizzle） */
+/** darkness-3：选择 1 张手牌反面打出到另一列（无手牌则 fizzle；牌库不受影响） */
 function* darkness3(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
-  const line = yield { kind: 'select-line', title: 'darkness-3：在另一列反面打出', min: 1, max: 1, optional: false, candidates: [], lines: [0, 1, 2].filter((l) => l !== ctx.card.line) as Line[] };
+  const hand = ctx.candidates({ zone: 'hand', owner: ctx.player });
+  const ans = yield { kind: 'select', title: 'darkness-3：选择1张手牌反面打出', min: 1, max: 1, optional: false, candidates: hand };
+  if (ans.selected.length === 0) return; // fizzle：无手牌
+  const line = yield { kind: 'select-line', title: 'darkness-3：选择目标线路', min: 1, max: 1, optional: false, candidates: [], lines: [0, 1, 2].filter((l) => l !== ctx.card.line) as Line[] };
   if (line.selected.length === 0) return;
-  if (ctx.s.players[ctx.player].deck.length === 0) return; // 空牌库：fizzle
-  yield { op: 'playTopDeck', line: Number(line.selected[0].replace('line:', '')) as Line, faceUp: false };
+  yield { op: 'playFromHand', uid: ans.selected[0], line: Number(line.selected[0].replace('line:', '')) as Line, faceUp: false };
 }
 
 /** darkness-4：平移 1 张反面牌到选定的另一列（源线 = 目标卡当前线，经 findCard 全状态查找） */

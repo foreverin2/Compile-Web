@@ -218,11 +218,28 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       emitCardEvent(s, 'card:deck-played', card, { line: op.line });
       break;
     }
+    case 'playFromHand': {
+      const card = findCard(s, op.uid);
+      if (!card || card.zone !== 'hand') throw new Error(`cannot play ${op.uid}: not in hand`);
+      const hand = s.players[card.owner].hand;
+      const idx = hand.findIndex((c) => c.uid === op.uid);
+      if (idx === -1) throw new Error(`cannot play ${op.uid}: not in hand`);
+      hand.splice(idx, 1); // 从持有者手牌移除
+      card.zone = 'float';
+      card.faceUp = op.faceUp;
+      card.line = op.line;
+      card.pos = null;
+      s.pendingPlay.push({ card, beforeCoveredDone: false });
+      // playFromHand（手牌打出）与 playTopDeck（牌堆顶打出）区分事件：
+      // FX 层据此从手牌卡 rect 起飞（而非牌库 rect）飞入目标线堆叠末尾
+      emitCardEvent(s, 'card:hand-played', card, { line: op.line });
+      break;
+    }
     case 'reveal': {
-      // 揭示：把卡牌正面复制为幽灵牌到对手手牌区末尾（不改变原卡状态）
+      // 揭示：把卡牌正面复制为幽灵牌到效果属主（发起揭示的玩家）手牌区末尾（不改变原卡状态）
       const card = findCard(s, op.uid);
       if (!card) throw new Error(`cannot reveal ${op.uid}: not found`);
-      const shownTo: PlayerId = pe.player === 0 ? 1 : 0;
+      const shownTo: PlayerId = pe.player;
       s.revealedGhosts.push({
         id: nextEffectId(),
         defId: card.defId,

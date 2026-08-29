@@ -105,32 +105,31 @@ body {
 .smoke-puff:nth-child(5) { left: 16%; bottom: 2px; }                  /* 左下 */
 .smoke-puff:nth-child(6) { right: 16%; bottom: 2px; }                 /* 右下 */
 
-/* ===== R8/R9 线值电池指示器（纯 CSS，位于堆叠槽外侧端、垂直居中） =====
-   R9：倒置（值在上、正极凸头在下）、整体放大（外壳 90×175 / 值 28px）、
-   外移至槽外侧 120px（与槽内卡牌完全分离）。
-   10 格电量 = 该线点值（clamp 0..10，由 renderBattery 生成）；外壳 4 态：
+/* ===== 线值能量条（纯 CSS，位于堆叠槽外侧端、垂直居中；ITEM 1 电池→能量格改造） =====
+   10 格能量 = 该线点值（clamp 0..10，由 renderBattery 生成）；外壳 4 态：
    stable ≤3（方正平直，青色）/ bulge 4-6（上下微微鼓出，橙黄微光）/
    full 7-9（明显鼓胀接近圆润，橙色强光 + 应力裂纹）/ burst ≥10（爆裂：径向爆光 +
-   裂纹 + 红橙脉冲动画，10 格仍全部点亮）。pointer-events:none 纯视觉，
-   不拦截下方卡牌点击/悬停与槽位打牌。 */
+   裂纹 + 红橙脉冲动画，10 格仍全部点亮）。
+   能量格造型（非电池）：无正极凸头 / LED 呼吸灯 / 扫描流光 —— 仅分段式暗槽 +
+   青色填充；外壳高度 = 槽位可视高度（top/bottom 6px 对齐 lane-row 视觉高度，
+   随行高伸缩）。pointer-events:none 纯视觉，不拦截下方卡牌点击/悬停与槽位打牌。 */
 .battery {
   position: absolute;
-  /* 竖摆于链路尽头外侧：P1 链路向左生长（尽头在左）→ 电池在槽最左侧外；
-     P2 链路向右生长（尽头在右）→ 电池在槽最右侧外 */
-  top: 50%;
-  transform: translateY(-50%);
+  /* 竖摆于链路尽头外侧：P1 链路向左生长（尽头在左）→ 能量条在槽最左侧外；
+     P2 链路向右生长（尽头在右）→ 能量条在槽最右侧外 */
+  top: 6px;      /* 上下各留槽内边距 */
+  bottom: 6px;   /* 外壳高度 = 槽可视高度（对齐 lane-row 视觉高度） */
   display: flex;
-  flex-direction: column; /* 纵向（R9 倒置）：值在上、10 格竖排、正极凸头在底部 */
+  flex-direction: column; /* 纵向：10 格竖排 */
   align-items: center;
-  gap: 5px;
-  height: 226px;
-  /* z-index 59：高于场上堆叠卡（zIndex=pos，最多几十）使电池始终可见；
+  justify-content: center; /* 外壳垂直居中于槽内 */
+  /* z-index 59：高于场上堆叠卡（zIndex=pos，最多几十）使能量条始终可见；
      低于 hover 弹出的卡（60）不遮挡查看 */
   z-index: 59;
   pointer-events: none;
   user-select: none;
 }
-/* R9 电池外移（距槽外侧 120px，与槽内卡牌完全分离）：P1 在槽最左侧外；P2 在槽最右侧外 */
+/* 能量条外移（距槽外侧 120px，与槽内卡牌完全分离）：P1 在槽最左侧外；P2 在槽最右侧外 */
 .stack-slot.p1 .battery { left: -120px; }
 .stack-slot.p2 .battery { right: -120px; }
 .battery-shell {
@@ -139,74 +138,35 @@ body {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  width: 90px;
-  height: 175px;
+  width: 92px;
+  height: 100%; /* 撑满 .battery（= 槽可视高度 − 内边距），与 lane-row 视觉高度对齐 */
   border: 3px solid #00ffcc;
   border-radius: 12px;
-  /* 科技感：细扫描线底纹 + 顶部能量辉光 + 暗底 + 内框线 */
+  /* 能量舱外观：暗底 + 柔和青色辉光 + 内框线（去除电池扫描线底纹） */
   background:
-    repeating-linear-gradient(0deg, rgba(0, 255, 204, 0.06) 0 2px, transparent 2px 5px),
-    radial-gradient(circle at 50% 0%, rgba(0, 255, 204, 0.10), transparent 62%),
-    rgba(0, 0, 0, 0.78);
+    radial-gradient(circle at 50% 40%, rgba(0, 255, 204, 0.08), transparent 70%),
+    rgba(0, 0, 0, 0.8);
   box-shadow:
     0 0 14px rgba(0, 255, 204, 0.45),
     inset 0 0 10px rgba(0, 255, 204, 0.15),
     inset 0 0 0 1px rgba(0, 255, 204, 0.22);
   transition: border-radius 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
 }
-/* 科技感：能量扫描流光（自上而下反复扫过能量格；full/burst 的裂纹高光覆盖此规则） */
-.battery-shell::after {
-  content: '';
-  position: absolute;
-  top: 4%;
-  left: 6%;
-  width: 88%;
-  height: 2px;
-  background: linear-gradient(90deg, transparent, rgba(0, 255, 204, 0.85), transparent);
-  box-shadow: 0 0 8px rgba(0, 255, 204, 0.7);
-  opacity: 0;
-  animation: battery-scan-sweep 2.4s ease-in-out infinite;
-  pointer-events: none;
-  z-index: 2;
+/* 格竖排：column-reverse 使填充从下到上增加（点数变化时最下方的格先亮）；
+   space-evenly 让 10 格均匀铺满整个外壳高度（随行高伸缩也保持填满） */
+.battery-cells {
+  display: flex;
+  flex-direction: column-reverse;
+  justify-content: space-evenly;
+  gap: 5px;
+  align-items: center;
+  height: 100%;
 }
-@keyframes battery-scan-sweep {
-  0% { transform: translateY(0); opacity: 0; }
-  12% { opacity: 0.7; }
-  88% { opacity: 0.7; }
-  100% { transform: translateY(158px); opacity: 0; }
-}
-/* 正极凸头（在顶部：无下边框、上圆角） */
-.battery-cap {
-  width: 32px;
-  height: 13px;
-  border: 3px solid #00ffcc;
-  border-bottom: none;
-  border-radius: 6px 6px 0 0;
-  background: rgba(0, 0, 0, 0.75);
-  box-shadow: 0 0 8px rgba(0, 255, 204, 0.35);
-  position: relative;
-}
-/* 科技感：正极上的状态 LED 指示灯（呼吸闪烁） */
-.battery-cap::after {
-  content: '';
-  position: absolute;
-  right: 6px;
-  top: 2px;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #00ffcc;
-  box-shadow: 0 0 6px #00ffcc;
-  animation: battery-led 1.8s ease-in-out infinite;
-}
-@keyframes battery-led { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-/* 格竖排：column-reverse 使填充从下到上增加（点数变化时最下方的格先亮） */
-.battery-cells { display: flex; flex-direction: column-reverse; gap: 7px; align-items: center; }
-/* 段式 LED 格：内斜面高光 + 细描边，未填充时呈暗槽 */
+/* 段式能量格：内斜面高光 + 细描边，未填充时呈暗槽（能量格造型，非电池段） */
 .battery-cell {
-  width: 54px;
-  height: 11px;
-  border-radius: 2px;
+  width: 74px;
+  height: 15px;
+  border-radius: 3px;
   border: 1px solid rgba(0, 255, 204, 0.15);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.10), rgba(0, 0, 0, 0.25));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.10), inset 0 -1px 2px rgba(0, 0, 0, 0.5);
@@ -236,9 +196,8 @@ body {
   from { opacity: 0; transform: translateY(6px); filter: brightness(0.6); }
   to { opacity: 1; transform: translateY(0); filter: brightness(1); }
 }
-/* 形态切换（stable/bulge/full/burst）丝滑过渡：外壳 + 正极 */
-.battery-shell,
-.battery-cap {
+/* 形态切换（stable/bulge/full/burst）丝滑过渡：外壳 */
+.battery-shell {
   transition: border-color 0.4s ease, border-radius 0.4s ease,
     box-shadow 0.4s ease, background 0.4s ease;
 }
@@ -248,8 +207,6 @@ body {
   border-radius: 16px;
   box-shadow: 0 0 18px rgba(255, 176, 0, 0.6), inset 0 0 12px rgba(255, 176, 0, 0.15);
 }
-.battery-bulge .battery-cap { border-color: #ffb000; box-shadow: 0 0 8px rgba(255, 176, 0, 0.4); }
-.battery-bulge .battery-cap::after { background: #ffb000; box-shadow: 0 0 6px #ffb000; }
 .battery-bulge .battery-cell.filled {
   background: linear-gradient(90deg, #ffb000, #a86e00);
   box-shadow: 0 0 6px rgba(255, 176, 0, 0.6);
@@ -260,8 +217,6 @@ body {
   border-radius: 20px;
   box-shadow: 0 0 22px rgba(255, 107, 0, 0.8), inset 0 0 12px rgba(255, 107, 0, 0.25);
 }
-.battery-full .battery-cap { border-color: #ff6b00; box-shadow: 0 0 10px rgba(255, 107, 0, 0.55); }
-.battery-full .battery-cap::after { background: #ff6b00; box-shadow: 0 0 6px #ff6b00; }
 .battery-full .battery-shell::before,
 .battery-full .battery-shell::after {
   content: '';
@@ -274,7 +229,6 @@ body {
   transform: rotate(35deg);
   box-shadow: 0 0 3px rgba(255, 210, 150, 0.9);
   pointer-events: none;
-  animation: none; /* 关闭基础扫描流光，改用裂纹高光 */
 }
 .battery-full .battery-shell::after {
   top: 60%;
@@ -298,8 +252,6 @@ body {
   box-shadow: 0 0 24px rgba(255, 61, 0, 0.9), 0 0 50px rgba(255, 208, 0, 0.4), inset 0 0 14px rgba(255, 120, 0, 0.3);
   animation: battery-burst-pulse 1.1s ease-in-out infinite;
 }
-.battery-burst .battery-cap { border-color: #ff3d00; box-shadow: 0 0 10px rgba(255, 61, 0, 0.8); }
-.battery-burst .battery-cap::after { background: #ffd000; box-shadow: 0 0 6px #ffd000; }
 .battery-burst .battery-cell { background: rgba(255, 80, 0, 0.16); }
 .battery-burst .battery-cell.filled {
   background: linear-gradient(90deg, #ffd000, #ff3d00);
@@ -317,7 +269,6 @@ body {
   transform: rotate(50deg);
   box-shadow: 0 0 4px rgba(255, 200, 80, 0.9);
   pointer-events: none;
-  animation: none; /* 关闭基础扫描流光，改用裂纹高光 */
 }
 .battery-burst .battery-shell::after {
   top: 62%;
@@ -566,19 +517,24 @@ body {
 .control-module.held-1 .control-label { color: #8ab8ff; }
 
 /* ===== 手牌（底部条带：P1 手牌 | 步骤指示 | P2 手牌） =====
- * position:relative：作为牌库绝对定位（见 .deck）的包含块（牌库垂直对齐到手牌条中部）。 */
-.hand-strip { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: start; position: relative; }
+ * position:relative：作为 .hand-side 的网格行；min-height 为外侧竖直堆叠的
+ * 牌库 + 弃牌堆两摞（92×132 + 92×112 + 10px 间距 ≈ 286px）留出空间
+ * （不影响手牌/刷新按钮/挡板的位置，也不与上方 lane-row / 下方 action-bar 重叠）。 */
+.hand-strip { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: start; position: relative; min-height: 286px; }
 /* ===== 牌库区（deck area）：每玩家一个，位于手牌条最外侧（P1 左 / P2 右） =====
  * 层叠背面卡（.deck-back）厚度随剩余数：deck-1..deck-4（每 4 张一层，封顶 4 层），
  * 无牌时 deck-empty；最顶层中央 .deck-count 圆形徽标显示剩余张数（空牌库显示 0）。
- * .hand-side 是手牌条每侧的 flex 容器：P1 [deck][refresh][hand]、P2 [hand][refresh][deck]
- * （牌库在最外、刷新手牌次之，间距 = 容器 gap 16px（≥16px）；牌库经 .deck 绝对定位移出流）。 */
-.hand-side { display: flex; align-items: center; gap: 16px; }
+ * .hand-side 是手牌条每侧的 flex 容器（position:relative 作为牌库/弃牌堆的包含块）：
+ * 牌库（.deck）与弃牌堆（.trash-pile）均为绝对定位、移出流式布局，在外侧 −92px 列
+ * 竖直堆叠（牌库在上、弃牌堆在下）；流内仅剩 [refresh][hand]（P1）/ [hand][refresh]（P2），
+ * 手牌/刷新按钮/挡板位置完全不受两摞影响。 */
+.hand-side { position: relative; display: flex; align-items: center; gap: 16px; }
 /* P2 右侧：整体贴列右缘（牌库已绝对定位移出流，见 .deck） */
 .hand-side.p2 { justify-content: flex-end; }
-/* 牌库绝对定位到屏幕边缘（P1 左 / P2 右，Part 3）：移出 .hand-side 流式布局，不再挤占
- * 手牌/刷新手牌/挡板的位置。#app 左右 padding 100px → calc(8px - 100px) = -92px：牌库
- * 完全落在内容区之外的 padding 区内（距屏幕边缘 8px），与手牌、刷新按钮均不重叠。
+/* 牌库绝对定位到屏幕边缘（P1 左 / P2 右，Part 3）：以 .hand-side（position:relative）
+ * 为包含块（top:50% 对齐手牌垂直中心），移出流式布局，不再挤占手牌/刷新手牌/挡板。
+ * #app 左右 padding 100px → calc(8px - 100px) = -92px：牌库完全落在内容区之外的
+ * padding 区内（距屏幕边缘 8px），与手牌、刷新按钮均不重叠。
  * 保留 92×132 尺寸与层叠/计数徽标样式；[data-player] 查询（playDrawAnimation/deckPos）
  * 不受影响，getBoundingClientRect 对绝对定位元素照常有效。 */
 .deck { position: absolute; top: 50%; transform: translateY(-50%); width: 92px; height: 132px; margin: 0; }
@@ -590,12 +546,19 @@ body {
   background: url('/assets/Cardback.jpg') center / cover no-repeat;
   border: 1px solid #223; box-shadow: 0 2px 6px rgba(0,0,0,0.5);
 }
-.deck-2 .deck-back:nth-child(2) { transform: translate(2px, -2px); }
-.deck-3 .deck-back:nth-child(2) { transform: translate(2px, -2px); }
-.deck-3 .deck-back:nth-child(3) { transform: translate(4px, -4px); }
-.deck-4 .deck-back:nth-child(2) { transform: translate(2px, -2px); }
-.deck-4 .deck-back:nth-child(3) { transform: translate(4px, -4px); }
-.deck-4 .deck-back:nth-child(4) { transform: translate(6px, -6px); }
+/* 层叠厚度：牌库与弃牌堆共享同一套规则（trash-pile 复用 .deck-stack/.deck-back） */
+.deck-2 .deck-back:nth-child(2),
+.trash-2 .deck-back:nth-child(2) { transform: translate(2px, -2px); }
+.deck-3 .deck-back:nth-child(2),
+.trash-3 .deck-back:nth-child(2) { transform: translate(2px, -2px); }
+.deck-3 .deck-back:nth-child(3),
+.trash-3 .deck-back:nth-child(3) { transform: translate(4px, -4px); }
+.deck-4 .deck-back:nth-child(2),
+.trash-4 .deck-back:nth-child(2) { transform: translate(2px, -2px); }
+.deck-4 .deck-back:nth-child(3),
+.trash-4 .deck-back:nth-child(3) { transform: translate(4px, -4px); }
+.deck-4 .deck-back:nth-child(4),
+.trash-4 .deck-back:nth-child(4) { transform: translate(6px, -6px); }
 /* 注意：.deck-count 也用于顶部信息条的「牌库 N」文本（renderPlayerInfo），故徽标规则
    限定在 .deck 作用域内，避免把信息条文本也渲染成圆形徽标 */
 .deck .deck-count {
@@ -605,6 +568,49 @@ body {
   justify-content: center; font-weight: bold; font-size: 13px; z-index: 2;
 }
 .deck .deck-count.empty { color: #666; border-color: #444; }
+
+/* ===== 弃牌堆区（ITEM 3：renderTrash，牌库正下方竖直堆叠） =====
+ * 与 .deck 同款层叠背面卡 + 中央计数（复用 .deck-stack/.deck-back 与共享层叠规则），
+ * 绝对定位（同样以 .hand-side 为包含块、对齐手牌垂直中心）于牌库正下方：
+ * deck top:50% → trash top:calc(50% + 132px)（= 牌库半高 66 + 10 间距 + 弃牌堆半高 56）。
+ * 两摞均移出流式布局 → 手牌/刷新按钮/挡板位置不受影响；右缘 = 手牌左缘（挡板锚定手牌
+ * left:0），任何挡板宽度都盖不到两摞。暖橙描边 + 顶部「弃牌堆」小标签与牌库（青色）
+ * 区分；点击打开弃牌堆查看遮罩。 */
+.trash-pile {
+  position: absolute;
+  width: 92px;
+  height: 112px; /* 略小于牌库（132）：竖直堆叠后整体不越界（hand-strip min-height 286） */
+  cursor: pointer;
+  border: 2px solid #ff8a65;
+  border-radius: 8px;
+  box-shadow: 0 0 10px rgba(255, 138, 101, 0.35);
+  background: rgba(30, 10, 8, 0.55);
+}
+.trash-pile.p1 { left: calc(8px - 100px); top: calc(50% + 132px); transform: translateY(-50%); }
+.trash-pile.p2 { right: calc(8px - 100px); top: calc(50% + 132px); transform: translateY(-50%); }
+.trash-pile .deck-stack { position: absolute; inset: 2px; }
+.trash-pile .deck-back {
+  position: absolute; inset: 0; border-radius: 5px;
+  background: url('/assets/Cardback.jpg') center / cover no-repeat;
+  border: 1px solid #4a2a1a; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+/* 层叠厚度与 .deck-N 共享同一套规则（见上方合并选择器） */
+/* 中央计数徽标（类名 trash-pile-count，避免与顶部信息条「弃牌堆 N」的 .trash-count 冲突） */
+.trash-pile .trash-pile-count {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  background: #2a0f08cc; color: #ffb59a; border: 1px solid #ff8a6566;
+  border-radius: 50%; width: 34px; height: 34px; display: flex; align-items: center;
+  justify-content: center; font-weight: bold; font-size: 13px; z-index: 2;
+}
+.trash-pile .trash-pile-count.empty { color: #666; border-color: #444; }
+/* 「弃牌堆」小标签：顶部居中，与牌库（青色徽标）区分 */
+.trash-pile .trash-label {
+  position: absolute; top: 3px; left: 50%; transform: translateX(-50%);
+  font-size: 9px; line-height: 1.4; color: #ffb59a; background: rgba(42, 15, 8, 0.85);
+  border: 1px solid #ff8a6544; border-radius: 7px; padding: 0 5px; z-index: 3;
+  pointer-events: none; white-space: nowrap;
+}
+
 /* 单行扇形手牌：不换行，后一张卡负 margin 压住前一张（每张露出左缘 ~102px 宽） */
 .hand {
   display: flex;
@@ -681,8 +687,10 @@ body {
 }
 
 /* ===== R8 手牌挡板（hand-cover shield） =====
- * 从手牌外侧端拉出遮住手牌：P1 左缘固定向右延伸至中线，P2 右缘固定向左延伸至中线
- * （左右定位见 .p1/.p2）。仅当前回合玩家（.hand.self 手牌）的挡板可拖，其余锁定。
+ * 从手牌外侧端拉出遮住手牌：P1 左缘固定向右延伸，P2 右缘固定向左延伸（左右定位见
+ * .p1/.p2）。ITEM 3：挡板左/右缘锚定手牌边缘（left/right:0，不再外伸 28px）——
+ * 牌库与弃牌堆（绝对定位于手牌条外 −92px 列、竖直堆叠，右缘 = 手牌左缘）永不被挡板覆盖。
+ * 仅当前回合玩家（.hand.self 手牌）的挡板可拖，其余锁定。
  * 挡板 z-index 70 > 卡牌（pop 50）且与浮动按钮同层后置（DOM 后序），pointer-events
  * 默认 auto 拦截指针 —— 被盖住的卡不触发 hover-pop / 单击 / 拖拽打牌。
  * 收起态（retracted）仅露出 min-width 14px 的可抓取边缘条；挡板中央显示「手牌 N」。 */
@@ -701,8 +709,8 @@ body {
   cursor: ew-resize; /* 整个挡板可拖：扩大触发范围 */
   transition: width 0.15s ease;
 }
-.hand-shield.p1 { left: -28px; } /* 起点更靠左：覆盖手牌区左侧 padding，从更外开始向右拉 */
-.hand-shield.p2 { right: -28px; } /* 对称：覆盖右侧 padding */
+.hand-shield.p1 { left: 0; } /* 起点 = 手牌左缘（不外伸）：牌库/弃牌堆永不被覆盖 */
+.hand-shield.p2 { right: 0; } /* 对称：起点 = 手牌右缘 */
 /* 拖拽手柄：位于挡板内侧（移动端）边缘的可视提示（整个挡板都可拖，手柄仅作视觉指示） */
 .hand-shield .shield-handle {
   position: absolute;
@@ -969,6 +977,26 @@ body {
   transform-origin: center center;
 }
 
+/* ===== 查看背面（ITEM 9：自己的反面场上卡放大时的 peek 切换） =====
+ * .zoom-stage 竖排（图像 + 按钮，按钮在图像上方）；stage pointer-events:none 使
+ * 图像四周的空白点击穿透到遮罩（target=overlay → 关闭），按钮自身可点。 */
+.zoom-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  pointer-events: none;
+}
+/* 图像自身可交互（保留原有：点击图像不关闭、可滚轮缩放）；仅 stage 的空白区穿透关闭 */
+.zoom-stage .zoom-img { pointer-events: auto; }
+.zoom-peek-btn {
+  pointer-events: auto;
+  background: #0e1c2a; color: #4ff0ff; border: 1px solid #4ff0ff88;
+  border-radius: 6px; font-size: 13px; padding: 5px 16px; cursor: pointer;
+  box-shadow: 0 0 10px rgba(79, 240, 255, 0.35); transition: all 0.15s ease;
+}
+.zoom-peek-btn:hover { background: #12303f; box-shadow: 0 0 16px rgba(79, 240, 255, 0.7); }
+
 /* ===== 弃牌堆查看器（复用 .zoom-overlay 背景；点击空白 / Esc 关闭） ===== */
 .trash-viewer {
   background: rgba(10, 14, 26, 0.92);
@@ -1068,14 +1096,15 @@ body.dragging { cursor: grabbing; user-select: none; }
 .diag-prompt-bar { display: flex; gap: 8px; justify-content: flex-end; }
 
 
-/* ===== 揭示幽灵牌（对手手牌区末尾，仅视觉，不参与事件/手牌计数） ===== */
+/* ===== 揭示幽灵牌（对手手牌区末尾，仅视觉 + 双击放大，不参与选择/手牌计数） =====
+ * ITEM 8：幽灵加入扇形动态（悬停展开/推开）并支持双击放大查看正面——
+ * 因此移除 pointer-events:none（双击需命中元素），改用 zoom-in 光标提示可放大。 */
 .reveal-ghost {
   opacity: 0.7;
   filter: saturate(0.7) brightness(0.9);
   border: 1px dashed #4ff0ff;
-  pointer-events: none;
+  cursor: zoom-in;
   user-select: none;
-  
 }
 @keyframes ghost-in {
   from { transform: translateX(24px) scale(0.8); opacity: 0; }
@@ -1167,6 +1196,48 @@ body.dragging { cursor: grabbing; user-select: none; }
 }
 .compiled-ring-darkness .rock-dark { background: #1a0524; }
 .compiled-ring-darkness .rock-red { background: #6a1b9a; }
+
+/* ===== darkness 已编译：环外循环黑雾层（ITEM 4） =====
+ * .mist-blob 沿卡面四周分布、循环 渐现→渐散（mist-puff），位于编译环
+ * （.compiled-ring z 2）外侧（容器 inset:-30px 外扩到环带之外）；
+ * pointer-events:none 不拦截交互；.no-anim 窗口定格为半透明静态
+ * （与 .smoke-puff 同模式，避免重建瞬间闪帧）。仅 darkness 挂载（appendCompiledRing）。 */
+.compiled-mist {
+  position: absolute;
+  inset: -30px;
+  pointer-events: none;
+  z-index: 1; /* 编译环（2）之下、协议背景之上 */
+  filter: blur(7px);
+}
+.mist-blob {
+  position: absolute;
+  width: 76px;
+  height: 76px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(0, 0, 0, 0.9), rgba(10, 3, 18, 0.45) 58%, transparent 76%);
+  opacity: 0;
+  animation: mist-puff 4.8s ease-in-out infinite;
+  will-change: opacity, transform;
+}
+@keyframes mist-puff {
+  0% { opacity: 0; transform: scale(0.55); }
+  40% { opacity: 0.75; }
+  100% { opacity: 0; transform: scale(1.3); }
+}
+/* 8 个锚点沿卡面四周分布（四角 + 四边中点，均在编译环带外侧） */
+.mist-blob:nth-child(1) { left: -14px; top: -18px; }
+.mist-blob:nth-child(2) { right: -14px; top: -18px; }
+.mist-blob:nth-child(3) { left: -18px; bottom: -14px; }
+.mist-blob:nth-child(4) { right: -18px; bottom: -14px; }
+.mist-blob:nth-child(5) { left: 22%; top: -26px; }
+.mist-blob:nth-child(6) { right: 22%; top: -26px; }
+.mist-blob:nth-child(7) { left: 22%; bottom: -24px; }
+.mist-blob:nth-child(8) { right: 22%; bottom: -24px; }
+/* .no-anim 窗口：定格半透明静态（与 .smoke-puff 同模式） */
+.no-anim .mist-blob {
+  animation: none !important;
+  opacity: 0.4;
+}
 /* 线选择高亮（select-line：点击 lane-row 选择目标线） */
 .choice-line {
   outline: 2px dashed #4ff0ff;

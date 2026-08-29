@@ -81,15 +81,16 @@ function renderProtocol(p: { defId: string; compiled: boolean }, player: PlayerI
 }
 
 /**
- * 线值电池指示器（纯 CSS，R8）：位于堆叠槽外侧端（远离协议一侧），垂直居中。
- * 10 格电量 = 该线点值（clamp 0..10）；外壳 4 态按点值：
+ * 线值能量条指示器（纯 CSS）：位于堆叠槽外侧端（远离协议一侧），垂直居中。
+ * 10 格能量 = 该线点值（clamp 0..10）；外壳 4 态按点值：
  * ≤3 stable（方正平直，青色描边）/ 4-6 bulge（上下微微鼓出，橙黄微光）/
  * 7-9 full（明显鼓胀接近圆润，橙色强光 + 应力裂纹）/ ≥10 burst（爆裂：径向爆光 +
- * 裂纹 + 红橙脉冲；10 格仍全部点亮）。pointer-events:none —— 纯视觉，不拦截槽位
- * 打牌点击与卡牌交互。
+ * 裂纹 + 红橙脉冲；10 格仍全部点亮）。分段式能量格外观（暗槽 + 青色填充），
+ * 非电池造型：无正极凸头/LED、无扫描流光。pointer-events:none —— 纯视觉，
+ * 不拦截槽位打牌点击与卡牌交互。
  */
 /**
- * 电池状态跟踪：记录每个 (player, line) 的上一次点数与形态，用于在点数变化时
+ * 能量条状态跟踪：记录每个 (player, line) 的上一次点数与形态，用于在点数变化时
  * 触发格子的渐入动画与外壳形态切换动画。
  */
 const batteryPrev = new Map<string, { points: number; state: string }>();
@@ -113,9 +114,8 @@ function renderBattery(s: GameState, player: PlayerId, line: Line): HTMLElement 
     battery.classList.add('points-changed');
   }
   batteryPrev.set(key, { points, state });
-  // DOM 顺序 = 视觉顺序（flex column 自上而下）：正极凸头在上、外壳（10 格竖排）居中。
+  // DOM 顺序 = 视觉顺序（flex column 自上而下）：仅外壳（10 格竖排）居中。
   // 格填充方向由 CSS .battery-cells 的 column-reverse 控制（从下到上增加）。
-  battery.appendChild(el('div', 'battery-cap'));
   const shell = el('div', 'battery-shell');
   const cells = el('div', 'battery-cells');
   const filled = Math.min(points, 10);
@@ -170,11 +170,13 @@ function renderStackSlot(
     // 单击=打牌（仅可交互时）、双击=放大查看（双方场上卡均为公开信息）。
     // 双击判别：单击延迟 320ms 严格大于 300ms 双击窗口，窗口内第二次点击先于延迟的
     // 单击触发并取消它，故双击永不误打牌；窗口之外的点击各自成为独立的单击。
+    // ITEM 9：自己的反面场上卡（owner === s.turnPlayer）双击放大时带 peek 切换按钮，
+    // 背面起显、可切到正面查看（对手的反面卡不提供）。
     // stopPropagation 阻断冒泡到槽自身的 click（槽空白处点击仍直接打牌，二者不重复触发）。
     bindClickOrDouble(
       node,
       () => { if (interactable) onPlay(line); },
-      () => openZoom(card.defId, card.faceUp, false, false),
+      () => openZoom(card.defId, card.faceUp, false, false, !card.faceUp && card.owner === s.turnPlayer),
       true
     );
     pile.appendChild(node);
@@ -239,6 +241,29 @@ function renderDeck(s: GameState, player: PlayerId): HTMLElement {
     deck.appendChild(el('span', 'deck-count empty', '0'));
   }
   return deck;
+}
+
+/** 弃牌堆区（renderDeck 的镜像，ITEM 3）：层叠背面卡 + 中央计数，绝对定位堆叠于牌库
+ *  正下方（P1/P2 各自镜像），与牌库同列（−92px 外侧列）→ 移出流式布局，不挤占手牌/
+ *  刷新按钮/挡板位置。data-player + 点击打开弃牌堆查看遮罩（公开信息）。 */
+function renderTrash(s: GameState, player: PlayerId): HTMLElement {
+  const count = s.players[player].trash.length;
+  const layers = count === 0 ? 0 : Math.min(4, Math.ceil(count / 4));
+  const trash = el('div', `trash-pile p${player + 1} trash-${count === 0 ? 'empty' : layers}`);
+  trash.dataset.player = String(player);
+  if (layers > 0) {
+    const stack = el('div', 'deck-stack');
+    for (let i = 0; i < layers; i++) stack.appendChild(el('div', 'deck-back'));
+    trash.appendChild(stack);
+    trash.appendChild(el('span', 'trash-pile-count', String(count)));
+  } else {
+    trash.appendChild(el('span', 'trash-pile-count empty', '0'));
+  }
+  // 顶部小标签区分「牌库 / 弃牌堆」；点击打开弃牌堆查看遮罩
+  trash.appendChild(el('span', 'trash-label', '弃牌堆'));
+  trash.title = '查看弃牌堆';
+  trash.addEventListener('click', () => openTrashViewer(s, player));
+  return trash;
 }
 
 /** 刷新手牌按钮：位于牌库区与手牌之间（P1 在牌库右侧、P2 在牌库左侧），
@@ -346,8 +371,10 @@ function renderHand(
     hand.appendChild(el('div', 'hand-more-badge', `+${cards.length - 15}`));
   }
   // 揭示幽灵牌：把被揭示卡的正面复制到本玩家手牌区末尾（仅视觉提示，不参与任何
-  // 事件/手牌计数；对手回合结束后由引擎清除）。data-uid 用 ghost- 前缀避免冲突。
+  // 手牌计数/选择/拖拽；对手回合结束后由引擎清除）。data-uid 用 ghost- 前缀避免冲突。
   // 入场动画仅在幽灵首次出现时播放（模块态记录，重渲染不重放）。
+  // ITEM 8：幽灵加入扇形动态（push 进 nodes → 悬停展开/推开同样作用于幽灵），
+  // 双击可放大查看被揭示卡的正面（仅查看，无单击选择/翻面/拖拽）。
   const ghostIds = s.revealedGhosts.filter((g) => g.shownTo === player).map((g) => g.id);
   for (const id of [...revealedGhostSeen]) {
     if (!ghostIds.includes(id)) revealedGhostSeen.delete(id);
@@ -359,7 +386,10 @@ function renderHand(
       revealedGhostSeen.add(ghost.id);
       gNode.classList.add('ghost-enter'); // 首次出现播放入场动画
     }
+    // 双击放大（直接 dblclick，不经过 bindClickOrDouble 的单击延迟——幽灵无单击动作）
+    gNode.addEventListener('dblclick', () => openZoom(ghost.defId, true, false, false));
     hand.appendChild(gNode);
+    nodes.push(gNode); // 加入扇形：悬停展开/复位同样作用于幽灵牌
   }
   // R8 手牌挡板：当前回合玩家可拉出/推回遮住自己的手牌。被盖住的卡不触发
   // hover-pop / 单击 / 拖拽（挡板 z-index 高于卡牌并拦截指针）。宽度按玩家持久化
@@ -427,9 +457,12 @@ function bindShieldDrag(shield: HTMLElement, player: PlayerId, hand: HTMLElement
     e.preventDefault();
     e.stopPropagation(); // 不与卡牌单击/拖拽相互干扰
     const dir = player === 0 ? 1 : -1; // P1 向右拖加宽；P2 向左拖加宽
-    // 最大宽度 = 整个手牌区宽度（能覆盖全部手牌至协议中线），
-    // 封顶 SHIELD_MAX_WIDTH（15 张扇形完整宽度 ≈1660px）：超出上限的溢出区无需遮住
-    const maxW = Math.min(Math.max(0, hand.clientWidth), SHIELD_MAX_WIDTH);
+    // 最大宽度 = 扇形手牌完整宽度（真实卡 + 揭示幽灵卡都参与扇形，见 ITEM 8），
+    // 封顶 SHIELD_MAX_WIDTH（15 张扇形完整宽度 ≈1660px）：超出上限的溢出区无需遮住。
+    // 挡板左/右缘锚定手牌边缘（left/right:0），宽度覆盖整个扇形即遮住全部手牌。
+    const fanN = hand.querySelectorAll<HTMLElement>('.card').length;
+    const fanW = fanN > 0 ? 130 + (fanN - 1) * 102 : 130;
+    const maxW = Math.min(Math.max(0, fanW), SHIELD_MAX_WIDTH);
     const startX = e.clientX;
     const startWidth = Math.min(Math.max(shieldWidth[player], 0), maxW);
     const apply = (w: number) => {
@@ -531,6 +564,19 @@ function appendCompiledRing(box: HTMLElement, defId: string): void {
     ring.appendChild(rock);
   }
   box.appendChild(ring);
+  // ITEM 4：darkness 已编译 → 环外常驻循环黑雾层（渐现→渐散）。8 个模糊黑雾块
+  // 沿卡面四周分布（CSS nth-child 锚点），JS 只写 0.55s 步进的交错 animation-delay；
+  // 与编译环同挂 holder，inset 外扩到环带外侧。absolute + pointer-events:none 不拦截交互。
+  if (defId === 'darkness') {
+    const mist = el('div', 'compiled-mist');
+    const MIST_BLOBS = 8;
+    for (let i = 0; i < MIST_BLOBS; i++) {
+      const blob = el('div', 'mist-blob');
+      blob.style.animationDelay = `${i * 0.55}s`;
+      mist.appendChild(blob);
+    }
+    box.appendChild(mist);
+  }
 }
 
 /** 与引擎一致的 1-2-2-1 轮选归属（第 i 次选择轮到谁），镜像 core/state/create.ts 的 DRAFT_ORDER */
@@ -868,6 +914,7 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   const refreshAction = legal.find((a) => a.kind === 'refresh') ?? null;
   const p1Side = el('div', 'hand-side p1');
   p1Side.appendChild(renderDeck(s, 0));
+  p1Side.appendChild(renderTrash(s, 0)); // 牌库内侧（更靠近手牌）
   if (s.turnPlayer === 0 && refreshAction) p1Side.appendChild(renderRefreshButton(refreshAction, cb));
   p1Side.appendChild(
     renderHand(s, 0, {
@@ -905,6 +952,7 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
     })
   );
   if (s.turnPlayer === 1 && refreshAction) p2Side.appendChild(renderRefreshButton(refreshAction, cb));
+  p2Side.appendChild(renderTrash(s, 1)); // 牌库内侧（更靠近手牌，镜像 P1）
   p2Side.appendChild(renderDeck(s, 1));
   handStrip.appendChild(p2Side);
   grid.appendChild(handStrip);
@@ -1090,8 +1138,10 @@ interface ZoomState {
 }
 let zoomState: ZoomState | null = null;
 
-/** 打开卡牌放大查看遮罩。defId: 卡牌定义 id；faceUp: 是否正面；isProtocol: 是否协议卡；compiled: 协议是否已编译 */
-function openZoom(defId: string, faceUp: boolean, isProtocol: boolean, compiled: boolean): void {
+/** 打开卡牌放大查看遮罩。defId: 卡牌定义 id；faceUp: 是否正面；isProtocol: 是否协议卡；
+ *  compiled: 协议是否已编译；peek: 是否带「查看背面」切换按钮（ITEM 9：自己的反面场上卡
+ *  背面起显，点击在 背面 ↔ 正面 之间切换显示）。 */
+function openZoom(defId: string, faceUp: boolean, isProtocol: boolean, compiled: boolean, peek?: boolean): void {
   if (zoomState) closeZoom();
   const overlay = el('div', 'zoom-overlay');
   const img = document.createElement('img');
@@ -1105,7 +1155,28 @@ function openZoom(defId: string, faceUp: boolean, isProtocol: boolean, compiled:
     img.src = '/assets/Cardback.jpg';
   }
   img.alt = 'card zoom';
-  overlay.appendChild(img);
+  if (peek) {
+    // 图像上方挂「查看背面」切换按钮：点击在 背面 ↔ 正面 间切换 img.src（该牌背面的
+    // 牌面图片 = 官方卡面图）。stage 竖排（按钮在图像上方）；stage pointer-events:none
+    // 使图像四周空白点击穿透到遮罩（target=overlay → 关闭），按钮自身可点（ITEM 9）。
+    const [proto, value] = splitDefId(defId);
+    const faceSrc = `/assets/protocols/${proto}/card-${value}.png`;
+    const backSrc = '/assets/Cardback.jpg';
+    const stage = el('div', 'zoom-stage');
+    const peekBtn = el('button', 'btn zoom-peek-btn', '查看背面');
+    peekBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const showingFace = img.src.endsWith(faceSrc);
+      img.src = showingFace ? backSrc : faceSrc;
+      peekBtn.textContent = showingFace ? '查看背面' : '查看正面';
+    });
+    // 按钮先于图像 append：flex column 首子节点在上 → 「查看背面」按钮位于图像上方
+    stage.appendChild(peekBtn);
+    stage.appendChild(img);
+    overlay.appendChild(stage);
+  } else {
+    overlay.appendChild(img);
+  }
   // 滚轮缩放：协议卡横向（rotate(-90deg)）需与 scale 组合在 transform 里
   let scale = 1;
   const apply = () => {

@@ -6,7 +6,7 @@ import { runStack } from '../../src/core/effects/resolve';
 import { makeCard, draftFireP1, advanceToStep } from '../helpers';
 
 describe('reveal op + revealed ghosts', () => {
-  it('reveal op adds a ghost shown to the opponent, expiring after their turn', () => {
+  it('reveal op adds a ghost shown to the effect player, expiring after their turn', () => {
     const s = draftFireP1();
     s.players[0].hand.push({ uid: 'target-1', defId: 'fire-2', owner: 0, faceUp: true, zone: 'hand', line: null, pos: null });
     s.pendingEffects.push({
@@ -24,8 +24,8 @@ describe('reveal op + revealed ghosts', () => {
     runStack(s);
     expect(s.revealedGhosts).toHaveLength(1);
     expect(s.revealedGhosts[0].defId).toBe('fire-2');
-    expect(s.revealedGhosts[0].shownTo).toBe(1);
-    expect(s.revealedGhosts[0].expiresAfterTurn).toBe(1);
+    expect(s.revealedGhosts[0].shownTo).toBe(0); // 幽灵归揭示发起方（效果属主）手牌区
+    expect(s.revealedGhosts[0].expiresAfterTurn).toBe(0);
     // 原卡不受影响
     expect(s.players[0].hand.some((c) => c.uid === 'target-1')).toBe(true);
   });
