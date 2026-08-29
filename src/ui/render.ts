@@ -1,5 +1,5 @@
 import type { ChoiceRequest, GameState, PendingEffect, PlayerId, Line, ProtocolDef } from '../core/models/types';
-import { getLineValue, getCurrentDrafter, draftTurnRange } from '../core/state/create';
+import { getLineValue, getCurrentDrafter, draftTurnRange, lineTopCommandActive } from '../core/state/create';
 import { getLegalActions, type LegalAction } from '../core/game';
 import { DEMO_PROTOCOLS } from '../data/demo';
 import { downloadLog } from './diag';
@@ -186,6 +186,21 @@ function renderStackSlot(
     slot.addEventListener('click', () => onPlay(line));
   }
   return slot;
+}
+
+/** 常驻黑烟特效层（Part 2）：线上任一玩家有正面 darkness-2（顶命令常驻）时，双方该线
+ *  堆叠槽边框持续浮现又消散的黑烟。6 个 .smoke-puff 沿边框锚点分布（CSS nth-child 定位），
+ *  JS 只写 0.5s 步进的交错 animation-delay。absolute + pointer-events:none：不拦截卡牌
+ *  交互、不影响布局。渲染器每次重建 DOM，动画随重建重启（与编译环特效一致，可接受）。 */
+const SMOKE_PUFFS = 6;
+function renderSmokeOverlay(): HTMLElement {
+  const overlay = el('div', 'smoke-overlay');
+  for (let i = 0; i < SMOKE_PUFFS; i++) {
+    const puff = el('div', 'smoke-puff');
+    puff.style.animationDelay = `${i * 0.5}s`;
+    overlay.appendChild(puff);
+  }
+  return overlay;
 }
 
 /** 玩家信息条：标题（回合高亮）+ 牌库/弃牌堆/手牌计数（手牌本体在底部条带） */
@@ -834,6 +849,14 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
     row.appendChild(
       renderStackSlot(s, 1, line, s.turnPlayer === 1 ? selectedUid : null, s.turnPlayer === 1 ? (l) => playToLine(s, cb, l) : () => {}, s.turnPlayer === 1)
     );
+    // Part 2 常驻黑烟：线上任一玩家有正面 darkness-2 → 双方该线堆叠槽边框持续冒烟
+    // （条件消失后重渲染不再加类，烟雾层随之消失）
+    if (lineTopCommandActive(s, line, 'darkness-2')) {
+      row.classList.add('smoke-line');
+      for (const slot of row.querySelectorAll<HTMLElement>('.stack-slot')) {
+        slot.appendChild(renderSmokeOverlay());
+      }
+    }
     grid.appendChild(row);
   }
 

@@ -172,9 +172,11 @@ export interface TriggerDef {
 export interface CardEffects {
   middle?: EffectGen;
   triggers?: Partial<Record<TriggerKind, TriggerDef>>;
-  /** 顶命令数值修正：stackValue 计算该线总值时应用（target: own-stack 作用于拥有者总值；opponent-line 作用于对手同线总值） */
+  /** 顶命令数值修正：stackValue 计算该线总值时应用
+   *  （target: own-stack 作用于拥有者总值；opponent-line 作用于对手同线总值；
+   *    line 作用于该线双方估值——线上任一玩家堆叠中的正面修正卡即生效，每估值用估值方堆叠只应用一次） */
   valueModifier?: {
-    target: 'own-stack' | 'opponent-line';
+    target: 'own-stack' | 'opponent-line' | 'line';
     apply(s: GameState, owner: PlayerId, line: Line, total: number): number;
   };
 }
