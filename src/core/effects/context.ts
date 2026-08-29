@@ -40,7 +40,7 @@ function toChoiceCard(c: Card): ChoiceCard {
   };
 }
 
-/** 候选列表：手牌（指定 owner）或场上双方所有堆叠顶卡（排除结算中源卡——幽灵状态防护） */
+/** 候选列表：手牌（指定 owner）或场上堆叠卡（默认双方各堆叠顶卡；covered:true 时列被覆盖的卡，均排除结算中源卡——幽灵状态防护） */
 export function listCandidates(s: GameState, filter: CandidateFilter): ChoiceCard[] {
   const resolving = new Set(s.pendingEffects.map((pe) => pe.sourceUid));
   const out: ChoiceCard[] = [];
@@ -50,12 +50,22 @@ export function listCandidates(s: GameState, filter: CandidateFilter): ChoiceCar
     return out;
   }
   for (const p of s.players) {
+    if (filter.owner !== undefined && p !== s.players[filter.owner]) continue;
     for (const line of [0, 1, 2] as Line[]) {
       const stack = p.stacks[line];
       if (stack.length === 0) continue;
-      const top = stack[stack.length - 1];
-      if (resolving.has(top.uid)) continue;
-      out.push(toChoiceCard(top));
+      if (filter.covered) {
+        // covered: 列出该堆叠全部被覆盖的卡（排除顶卡——顶卡未被覆盖；排除结算中源卡）
+        for (let i = 0; i < stack.length - 1; i++) {
+          const c = stack[i];
+          if (resolving.has(c.uid)) continue;
+          out.push(toChoiceCard(c));
+        }
+      } else {
+        const top = stack[stack.length - 1];
+        if (resolving.has(top.uid)) continue;
+        out.push(toChoiceCard(top));
+      }
     }
   }
   return out;

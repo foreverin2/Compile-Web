@@ -130,7 +130,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
     case 'flip': {
       const card = findCard(s, op.uid);
       if (!card || card.zone !== 'field') throw new Error(`cannot flip ${op.uid}: not on field`);
-      if (!isUncovered(s, card)) throw new Error(`cannot flip ${op.uid}: covered card`);
+      if (!op.allowCovered && !isUncovered(s, card)) throw new Error(`cannot flip ${op.uid}: covered card`);
       card.faceUp = !card.faceUp;
       emitCardEvent(s, 'card:flipped', card);
       if (card.faceUp) pushMiddle(s, card.owner, card); // 翻正 → 中指令连锁（LIFO）
@@ -139,7 +139,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
     case 'delete': {
       const card = findCard(s, op.uid);
       if (!card || card.zone !== 'field') throw new Error(`cannot delete ${op.uid}: not on field`);
-      if (!isUncovered(s, card)) throw new Error(`cannot delete ${op.uid}: covered card`);
+      if (!op.allowCovered && !isUncovered(s, card)) throw new Error(`cannot delete ${op.uid}: covered card`);
       const owner = card.owner;
       const line = card.line!;
       s.players[owner].stacks[line].pop();
@@ -159,7 +159,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
     case 'return': {
       const card = findCard(s, op.uid);
       if (!card || card.zone !== 'field') throw new Error(`cannot return ${op.uid}: not on field`);
-      if (!isUncovered(s, card)) throw new Error(`cannot return ${op.uid}: covered card`);
+      if (!op.allowCovered && !isUncovered(s, card)) throw new Error(`cannot return ${op.uid}: covered card`);
       const owner = card.owner;
       const line = card.line!;
       s.players[owner].stacks[line].pop();
@@ -174,7 +174,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
     case 'shift': {
       const card = findCard(s, op.uid);
       if (!card || card.zone !== 'field') throw new Error(`cannot shift ${op.uid}: not on field`);
-      if (!isUncovered(s, card)) throw new Error(`cannot shift ${op.uid}: covered card`);
+      if (!op.allowCovered && !isUncovered(s, card)) throw new Error(`cannot shift ${op.uid}: covered card`);
       if (op.targetLine === card.line) throw new Error('must shift to a different line');
       const owner = card.owner;
       const fromLine = card.line!;

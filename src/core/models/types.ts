@@ -106,11 +106,11 @@ export interface RevealedGhost {
 /** 效果操作（生成器 yield 的值之一；由运行器执行并触发连锁/语义事件） */
 export type Op =
   | { op: 'discard'; uid: string }
-  | { op: 'delete'; uid: string }
-  | { op: 'return'; uid: string }
-  | { op: 'flip'; uid: string }
+  | { op: 'delete'; uid: string; allowCovered?: boolean }
+  | { op: 'return'; uid: string; allowCovered?: boolean }
+  | { op: 'flip'; uid: string; allowCovered?: boolean }
   | { op: 'draw'; count: number }
-  | { op: 'shift'; uid: string; targetLine: Line }
+  | { op: 'shift'; uid: string; targetLine: Line; allowCovered?: boolean }
   | { op: 'playTopDeck'; line: Line; faceUp: boolean }
   | { op: 'reveal'; uid: string };
 
@@ -141,10 +141,11 @@ export interface TriggerEntry {
   optional: boolean;
 }
 
-/** 候选过滤：zone 'hand' 需 owner；'field' 列出双方所有堆叠顶卡（排除结算中源卡） */
+/** 候选过滤：zone 'hand' 需 owner；'field' 列出双方所有堆叠顶卡（排除结算中源卡）；covered:true 时列出堆叠中被覆盖的卡（排除顶卡与结算中源卡） */
 export interface CandidateFilter {
   zone: 'hand' | 'field';
   owner?: PlayerId;
+  covered?: boolean;
 }
 
 /** 效果上下文：生成器通过 ctx.candidates() 获取候选，ctx 持有状态引用 */

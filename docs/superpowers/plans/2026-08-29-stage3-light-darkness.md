@@ -677,7 +677,7 @@ git commit -m "feat: valueModifier engine (own-stack / opponent-line) in stackVa
 - Create: `tests/effects/covered.test.ts`
 
 **Interfaces:**
-- Produces: `CandidateFilter.covered?: boolean`（true 时列出该侧堆叠全部卡含被覆盖，排除结算中源卡）；op 可选 `allowCovered`（true 时跳过 isUncovered 校验）；**fizzle 回归**：无覆盖卡时 select 候选为空自动跳过（不死锁）
+- Produces: `CandidateFilter.covered?: boolean`（true 时仅列出该侧堆叠被覆盖的卡（排除顶卡），排除结算中源卡）；op 可选 `allowCovered`（true 时跳过 isUncovered 校验）；**fizzle 回归**：无覆盖卡时 select 候选为空自动跳过（不死锁）
 
 - [ ] **Step 1: 写失败测试** `tests/effects/covered.test.ts`
 
@@ -729,7 +729,7 @@ describe('covered targeting', () => {
     });
     runStack(s);
     expect(s.pendingEffects).toHaveLength(0);
-    expect(ran).toBe(false); // 空候选被 fizzle 跳过，生成器未继续
+    expect(ran).toBe(true); // 空候选被 fizzle 跳过 = runStack 以 {selected:[]} 续接生成器（不挂起）；生成器守卫空应答后自行结束，效果栈排空（无死锁）
   });
 });
 ```
@@ -756,7 +756,9 @@ export interface CandidateFilter { zone: 'hand' | 'field'; owner?: PlayerId; cov
       const stack = p.stacks[line];
       if (stack.length === 0) continue;
       if (filter.covered) {
-        for (const c of stack) {
+        // covered: 仅列出该堆叠被覆盖的卡（排除顶卡——顶卡未被覆盖；排除结算中源卡）
+        for (let i = 0; i < stack.length - 1; i++) {
+          const c = stack[i];
           if (resolving.has(c.uid)) continue;
           out.push(toChoiceCard(c));
         }
@@ -947,3 +949,4 @@ git commit -m "docs: stage 3 complete (Light/Darkness pilot)"
 - **既有测试风险**：`stackValue` 修改后既有 stack 测试（`tests/state/create.test.ts` 等）应不受影响（无 valueModifier 注册时行为不变）；`tests/helpers.ts` 新增 `draftLightP1`
 - **潜在坑**：light-3 循环 shift 覆盖卡（allowCovered 移出堆叠中部）与 darkness-4 源线推导——实现时以测试断言为准，必要时简化（如 darkness-4 的 select-line 用 `ctx.card.line` 作为唯一排除线）
 - **Task 1 修正（评审 amendment）**：`answerEffect` 校验恢复全局重复选择拦截（`new Set` 判重，select max≥2 防 `['a','a']`），select-action 改为逐项校验（原"仅 length===1 时校验"在 max>1 下会放行非列表项）；runStack fizzle 规则按 kind 判定"无合法目标"（select→candidates / select-line→lines / select-action→actions），与 brief 测试一致（新 kind 步骤 `candidates: []` 但 lines/actions 非空时必须挂起）
+- **Task 8 修正（评审 amendment）**：① covered 分支语义修正——`covered: true` 仅列出堆叠中被覆盖的卡（排除顶卡与结算中源卡），原 Step-3 snippet（列出全部卡）与其自身测试自相矛盾（无覆盖卡时 select 会挂死而非 fizzle），与设计文档"仅对手侧被盖住"及 darkness-0 语义一致；② fizzle 回归测试断言与文档契约对齐——空候选被 fizzle 跳过 = runStack 以 `{selected:[]}` 续接生成器（不挂起），生成器守卫空应答后自行结束、效果栈排空（无死锁），故 `ran === true`（非"生成器未继续"）
