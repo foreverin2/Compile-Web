@@ -243,9 +243,9 @@ function renderDeck(s: GameState, player: PlayerId): HTMLElement {
   return deck;
 }
 
-/** 弃牌堆区（renderDeck 的镜像，ITEM 3）：层叠背面卡 + 中央计数，位于牌库内侧
- *  （P1 在牌库与手牌之间、P2 镜像），常规流元素（.hand-side flex 内）→ 不挤占手牌外的
- *  绝对定位区、始终不被手牌挡板覆盖。data-player + 点击打开弃牌堆查看遮罩（公开信息）。 */
+/** 弃牌堆区（renderDeck 的镜像，ITEM 3）：层叠背面卡 + 中央计数，绝对定位堆叠于牌库
+ *  正下方（P1/P2 各自镜像），与牌库同列（−92px 外侧列）→ 移出流式布局，不挤占手牌/
+ *  刷新按钮/挡板位置。data-player + 点击打开弃牌堆查看遮罩（公开信息）。 */
 function renderTrash(s: GameState, player: PlayerId): HTMLElement {
   const count = s.players[player].trash.length;
   const layers = count === 0 ? 0 : Math.min(4, Math.ceil(count / 4));
@@ -1170,8 +1170,9 @@ function openZoom(defId: string, faceUp: boolean, isProtocol: boolean, compiled:
       img.src = showingFace ? backSrc : faceSrc;
       peekBtn.textContent = showingFace ? '查看背面' : '查看正面';
     });
-    stage.appendChild(img);
+    // 按钮先于图像 append：flex column 首子节点在上 → 「查看背面」按钮位于图像上方
     stage.appendChild(peekBtn);
+    stage.appendChild(img);
     overlay.appendChild(stage);
   } else {
     overlay.appendChild(img);
