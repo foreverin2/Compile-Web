@@ -6,6 +6,7 @@ import { createCtx, emitCardEvent, findCard, isUncovered, nextEffectId } from '.
 import { collectTriggerFor, resolveTrigger } from './triggers';
 import { EFFECTS } from './registry';
 import './cards/fire';
+import './cards/light';
 
 function topEffect(s: GameState): PendingEffect | undefined {
   return s.pendingEffects[s.pendingEffects.length - 1];
