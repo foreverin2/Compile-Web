@@ -43,13 +43,16 @@ export function answerEffect(s: GameState, promptId: string, selected: string[])
   const req = pe.prompt;
   if (!req.optional && selected.length < req.min) throw new Error(`requires at least ${req.min} selection(s)`);
   if (selected.length > req.max) throw new Error(`requires at most ${req.max} selection(s)`);
+  // 重复选择拦截（沿用旧行为；select max≥2 时防 ['a','a']）
+  if (new Set(selected).size !== selected.length) throw new Error(`duplicate selection: ${promptId}`);
   if (req.kind === 'select-line') {
     if (selected.length !== 1 || !req.lines?.includes(Number(selected[0].replace('line:', '')) as Line)) {
       throw new Error('invalid line selection');
     }
   } else if (req.kind === 'select-action') {
-    if (selected.length === 1 && !req.actions?.includes(selected[0])) {
-      throw new Error('invalid action selection');
+    // 逐项校验：每一项都必须属于 req.actions（max>1 时同样拦截非列表项）
+    for (const act of selected) {
+      if (!req.actions?.includes(act)) throw new Error('invalid action selection');
     }
   } else {
     for (const uid of selected) {
