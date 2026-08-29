@@ -970,6 +970,26 @@ body {
   transform-origin: center center;
 }
 
+/* ===== 查看背面（ITEM 9：自己的反面场上卡放大时的 peek 切换） =====
+ * .zoom-stage 竖排（图像 + 按钮，按钮在图像上方）；stage pointer-events:none 使
+ * 图像四周的空白点击穿透到遮罩（target=overlay → 关闭），按钮自身可点。 */
+.zoom-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  pointer-events: none;
+}
+/* 图像自身可交互（保留原有：点击图像不关闭、可滚轮缩放）；仅 stage 的空白区穿透关闭 */
+.zoom-stage .zoom-img { pointer-events: auto; }
+.zoom-peek-btn {
+  pointer-events: auto;
+  background: #0e1c2a; color: #4ff0ff; border: 1px solid #4ff0ff88;
+  border-radius: 6px; font-size: 13px; padding: 5px 16px; cursor: pointer;
+  box-shadow: 0 0 10px rgba(79, 240, 255, 0.35); transition: all 0.15s ease;
+}
+.zoom-peek-btn:hover { background: #12303f; box-shadow: 0 0 16px rgba(79, 240, 255, 0.7); }
+
 /* ===== 弃牌堆查看器（复用 .zoom-overlay 背景；点击空白 / Esc 关闭） ===== */
 .trash-viewer {
   background: rgba(10, 14, 26, 0.92);

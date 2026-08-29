@@ -170,11 +170,13 @@ function renderStackSlot(
     // 单击=打牌（仅可交互时）、双击=放大查看（双方场上卡均为公开信息）。
     // 双击判别：单击延迟 320ms 严格大于 300ms 双击窗口，窗口内第二次点击先于延迟的
     // 单击触发并取消它，故双击永不误打牌；窗口之外的点击各自成为独立的单击。
+    // ITEM 9：自己的反面场上卡（owner === s.turnPlayer）双击放大时带 peek 切换按钮，
+    // 背面起显、可切到正面查看（对手的反面卡不提供）。
     // stopPropagation 阻断冒泡到槽自身的 click（槽空白处点击仍直接打牌，二者不重复触发）。
     bindClickOrDouble(
       node,
       () => { if (interactable) onPlay(line); },
-      () => openZoom(card.defId, card.faceUp, false, false),
+      () => openZoom(card.defId, card.faceUp, false, false, !card.faceUp && card.owner === s.turnPlayer),
       true
     );
     pile.appendChild(node);
@@ -1123,8 +1125,10 @@ interface ZoomState {
 }
 let zoomState: ZoomState | null = null;
 
-/** 打开卡牌放大查看遮罩。defId: 卡牌定义 id；faceUp: 是否正面；isProtocol: 是否协议卡；compiled: 协议是否已编译 */
-function openZoom(defId: string, faceUp: boolean, isProtocol: boolean, compiled: boolean): void {
+/** 打开卡牌放大查看遮罩。defId: 卡牌定义 id；faceUp: 是否正面；isProtocol: 是否协议卡；
+ *  compiled: 协议是否已编译；peek: 是否带「查看背面」切换按钮（ITEM 9：自己的反面场上卡
+ *  背面起显，点击在 背面 ↔ 正面 之间切换显示）。 */
+function openZoom(defId: string, faceUp: boolean, isProtocol: boolean, compiled: boolean, peek?: boolean): void {
   if (zoomState) closeZoom();
   const overlay = el('div', 'zoom-overlay');
   const img = document.createElement('img');
@@ -1138,7 +1142,27 @@ function openZoom(defId: string, faceUp: boolean, isProtocol: boolean, compiled:
     img.src = '/assets/Cardback.jpg';
   }
   img.alt = 'card zoom';
-  overlay.appendChild(img);
+  if (peek) {
+    // 图像上方挂「查看背面」切换按钮：点击在 背面 ↔ 正面 间切换 img.src（该牌背面的
+    // 牌面图片 = 官方卡面图）。stage 竖排（按钮在图像上方）；stage pointer-events:none
+    // 使图像四周空白点击穿透到遮罩（target=overlay → 关闭），按钮自身可点（ITEM 9）。
+    const [proto, value] = splitDefId(defId);
+    const faceSrc = `/assets/protocols/${proto}/card-${value}.png`;
+    const backSrc = '/assets/Cardback.jpg';
+    const stage = el('div', 'zoom-stage');
+    const peekBtn = el('button', 'btn zoom-peek-btn', '查看背面');
+    peekBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const showingFace = img.src.endsWith(faceSrc);
+      img.src = showingFace ? backSrc : faceSrc;
+      peekBtn.textContent = showingFace ? '查看背面' : '查看正面';
+    });
+    stage.appendChild(img);
+    stage.appendChild(peekBtn);
+    overlay.appendChild(stage);
+  } else {
+    overlay.appendChild(img);
+  }
   // 滚轮缩放：协议卡横向（rotate(-90deg)）需与 scale 组合在 transform 里
   let scale = 1;
   const apply = () => {
