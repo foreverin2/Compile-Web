@@ -627,15 +627,16 @@ function appendCompiledRing(box: HTMLElement, defId: string): void {
     }
   }
   box.appendChild(ring);
-  // ITEM 4：darkness 已编译 → 环外常驻循环黑雾层（渐现→渐散）。8 个模糊黑雾块
-  // 沿卡面四周分布（CSS nth-child 锚点），JS 只写 0.55s 步进的交错 animation-delay；
+  // ITEM 4：darkness 已编译 → 环外常驻循环不规则黑雾层（渐现→渐散）。8 块非对称烟云
+  // 沿卡面四周分布（CSS nth-child 锚点 + --wisp-a/--wisp-b 专属形变），JS 只写负
+  // animation-delay 交错（-1.05s/块，跨整 8s 周期 → 各块不同相位、偶发涌现而非齐步）；
   // 与编译环同挂 holder，inset 外扩到环带外侧。absolute + pointer-events:none 不拦截交互。
   if (defId === 'darkness') {
     const mist = el('div', 'compiled-mist');
     const MIST_BLOBS = 8;
     for (let i = 0; i < MIST_BLOBS; i++) {
       const blob = el('div', 'mist-blob');
-      blob.style.animationDelay = `${i * 0.55}s`;
+      blob.style.animationDelay = `${-(i * 1.05)}s`;
       mist.appendChild(blob);
     }
     box.appendChild(mist);
