@@ -58,22 +58,25 @@ function renderCardFace(card: { defId: string; faceUp: boolean; uid: string }): 
 
 function renderProtocol(p: { defId: string; compiled: boolean }, player: PlayerId): HTMLElement {
   const box = el('div', 'protocol' + (p.compiled ? ' compiled' : ''));
-  // holder 包裹卡面图：环绕特效环挂在 holder 上（与可见卡面同尺寸），
+  // holder 包裹卡面图：持久 FX 层每帧渲染按 holder 矩形重定位（syncCompiledFxLayers），
   // 不受 .protocol 盒 flex:1 拉伸影响（横版协议/行高不一致时环仍紧贴卡面）
   const holder = el('div', 'protocol-holder');
   // 已编译协议专属特效类（类随 defId 挂载 → 协议换位/重排时特效跟随对应协议）
   if (p.compiled) {
     box.classList.add(`compiled-fx-${p.defId}`);
-    // R11.3：已编译环特效跨重渲染持久 —— 按 defId 注册，首次编译构建一次，此后每次
-    // 渲染把同一节点重挂到新 holder（appendChild 移动既有节点不重启 CSS 动画 → 结算
-    // 步骤不再"恢复初始状态"卡顿）。每玩家 3 协议 defId 互不相同、双方亦不共享
-    // （草案池每 defId 只出现一次）→ 以 defId 为键安全。
+    // R12：已编译环特效持久层挂在 document.body（position:fixed），按 defId 注册——
+    // 首次编译 get-or-create 构建一次并挂到 body，此后每次渲染只把层重定位到 holder
+    // 矩形（syncCompiledFxLayers，DOM 挂载后测量），节点从不 detach/reattach → CSS
+    // 动画永不重启。不再 appendChild 进 holder：旧树每次重建会随父 detach，把 fx
+    // 重挂回去会重启动画（R11.3"移动既有节点不重启动画"对断连节点不成立 → 步骤切换
+    // "一卡一卡"的根因）。每玩家 3 协议 defId 互不相同、双方亦不共享（草案池每 defId
+    // 只出现一次）→ 以 defId 为键安全。
     let fx = compiledFx.get(p.defId);
     if (!fx) {
       fx = buildCompiledFx(p.defId);
       compiledFx.set(p.defId, fx);
     }
-    holder.appendChild(fx);
+    compiledFxCells.push({ defId: p.defId, holder });
   } else {
     // 未编译：释放该 defId 的持久 FX（若有）
     const fx = compiledFx.get(p.defId);
@@ -88,6 +91,13 @@ function renderProtocol(p: { defId: string; compiled: boolean }, player: PlayerI
   img.className = 'protocol-img' + (player === 1 ? ' rot-180' : '');
   img.src = `/assets/protocols/${p.defId}/protocol-${p.compiled ? 'compiled' : 'loading'}.png`;
   img.alt = p.compiled ? 'compiled protocol' : 'protocol loading';
+  // R12：卡面图异步加载会改变 holder 矩形 —— 编译翻面瞬间 protocol-compiled.png 尚未
+  // 加载，holder 高度为 0，若此后不再重渲染（如最后一次编译即 gameover）body 级层会
+  // 永久塌陷成 0 高。图片加载完成时按当前 holder 矩形重定位一次对应层（幂等：rect
+  // 未变时重写相同值无害；层节点仍不移动，只是坐标/尺寸更新，动画不受影响）。
+  if (p.compiled) {
+    img.addEventListener('load', () => positionCompiledFxLayer(p.defId, holder));
+  }
   holder.appendChild(img);
   box.appendChild(holder);
   if (p.compiled) box.appendChild(el('span', 'protocol-check', '✓'));
@@ -259,6 +269,34 @@ function syncSmokeOverlays(s: GameState): void {
       smokeOverlays.delete(key);
     }
   }
+}
+
+/** R12：每帧渲染把 body 级持久 FX 层重定位到对应 holder 矩形（层节点从不移动，只改
+ *  坐标 left/top/width/height）：
+ *  - 层已由 buildCompiledFx 在创建时挂到 document.body（position:fixed）→ 始终
+ *    connected，CSS 动画永不重启；重定位只改几何属性，不影响动画相位。
+ *  - 与 round6 黑烟 overlay（syncSmokeOverlays）同模式：在 renderBoard 末尾、DOM 已
+ *    挂载后测量 holder 矩形（树构建期节点 detached，getBoundingClientRect 会读 0×0）。
+ *  - 协议换位/重排（移动行）时下一帧渲染把层重定位到新 holder 矩形 → 特效跟随（层
+ *    不动、只是坐标变）。 */
+function syncCompiledFxLayers(): void {
+  for (const { defId, holder } of compiledFxCells) {
+    positionCompiledFxLayer(defId, holder);
+  }
+}
+
+/** 把 body 级持久 FX 层（compiledFx 注册表，key=defId）重定位到 holder 矩形。层节点
+ *  从不移动，只覆写坐标/尺寸（fixed）→ CSS 动画不重启。0×0（图片未加载/节点 detached）
+ *  时跳过：等下一帧渲染或 img load 回调再对齐。 */
+function positionCompiledFxLayer(defId: string, holder: HTMLElement): void {
+  const fx = compiledFx.get(defId);
+  if (!fx || !holder.isConnected) return;
+  const r = holder.getBoundingClientRect();
+  if (r.width === 0 && r.height === 0) return;
+  fx.style.left = `${r.left}px`;
+  fx.style.top = `${r.top}px`;
+  fx.style.width = `${r.width}px`;
+  fx.style.height = `${r.height}px`;
 }
 
 /** 玩家信息条：标题（回合高亮）+ 牌库/弃牌堆/手牌计数（手牌本体在底部条带） */
@@ -603,23 +641,33 @@ function renderProtocolCell(s: GameState, player: PlayerId, line: Line): HTMLEle
 }
 
 /**
- * R11.3：已编译环特效持久注册表。key = 协议 defId（每玩家 3 协议 defId 唯一；双方草案
+ * R12：已编译环特效持久注册表。key = 协议 defId（每玩家 3 协议 defId 唯一；双方草案
  * 池亦不重复 —— 同一 defId 不会同时出现在两个协议格）。跨重渲染复用同一 DOM 节点：
- * appendChild 移动既有节点不会重启其 CSS 动画（与 round6 黑烟 overlay 同模式）→
- * 逐步结算不再"一卡一卡"恢复初始状态。未编译时从本表移除（DOM 随之释放）。
+ * 层自创建起挂在 document.body（position:fixed），每帧渲染仅按 holder 矩形重定位
+ * （syncCompiledFxLayers），节点永不 detach/reattach → CSS 动画不重启（与 round6
+ * 黑烟 overlay 同模式）。未编译时从本表移除（DOM 随之释放）。
  */
 const compiledFx = new Map<string, HTMLElement>();
 
-/** 构建单个 defId 的持久 FX 层（首次编译时创建一次，此后只重挂不重建）：
+/** 本帧渲染中出现的已编译协议 (defId → holder) 对：renderProtocol 收集、renderBoard
+ *  末尾（DOM 已挂载）由 syncCompiledFxLayers 统一重定位 body 级持久 FX 层。 */
+const compiledFxCells: { defId: string; holder: HTMLElement }[] = [];
+
+/** 构建单个 defId 的持久 FX 层（首次编译时创建一次，此后只重定位不重建）：
  *  - fire：背光层 + 岩浆段/岩石（.compiled-fx 包裹，环与 holder 同盒）
  *  - light/darkness：各自环内层（呼吸边框/角光、雾、波浪光晕、圆烟）
+ *  R12：层直接挂到 document.body（CSS position:fixed），创建后永不移动 —— 每帧渲染
+ *  只由 syncCompiledFxLayers 覆写 left/top/width/height。层携带 compiled-fx-<defId>
+ *  类，使 .compiled-fx-fire .lava-seg 等后代选择器继续命中（FX 不再位于 .protocol
+ *  盒子树内，该类从 .protocol 上迁到层上）。
  *  背光由 `.protocol-holder::before` 伪元素改为真实元素 `.fire-backlight`（R11.3）：
  *  伪元素随 holder 每次重建会重启动画；真实元素随持久层存活 → 背光旋转也不重启。
  */
 function buildCompiledFx(defId: string): HTMLElement {
-  const layer = el('div', 'compiled-fx');
+  const layer = el('div', `compiled-fx compiled-fx-${defId}`);
   if (defId === 'fire') layer.appendChild(el('div', 'fire-backlight'));
   appendCompiledRing(layer, defId);
+  document.body.appendChild(layer);
   return layer;
 }
 
@@ -1032,6 +1080,7 @@ function playToLine(s: GameState, cb: UiCallbacks, line: Line): void {
 
 export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): void {
   root.textContent = '';
+  compiledFxCells.length = 0; // 本帧持久 FX 收集器复位（renderProtocol 逐格登记）
   // 清除失效选择：所选卡不在当前回合玩家手牌中（已被打出/刷新生效/回合切换）时复位
   const sel = selectedUid;
   if (sel !== null && !s.players[s.turnPlayer].hand.some((c) => c.uid === sel)) {
@@ -1314,6 +1363,9 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   wrap.appendChild(diagBtn);
 
   root.appendChild(wrap);
+  // R12 已编译环持久 FX：协议格已入 DOM → 按 holder 矩形重定位 body 级层（层跨重渲染
+  // 存活、从不移动 → 动画不重启；协议未编译时 renderProtocol 已移除并注销）
+  syncCompiledFxLayers();
   // Part 2 常驻黑烟：槽位已入 DOM → 创建/复用 body 级 overlay 并重定位到槽位矩形
   // （overlay 跨重渲染存活，动画不重启；条件消失后 syncSmokeOverlays 移除并注销）
   syncSmokeOverlays(s);
