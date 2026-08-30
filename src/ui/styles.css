@@ -434,12 +434,12 @@ body {
 }
 /* ===== 火焰已编译环专属（fire）：慢速岩浆 + 大块黑/红岩 + 岩浆红背光 =====
  * 仅作用 .compiled-fx-fire（挂在 .protocol 上），light/darkness 环（.compiled-ring-light/
- * .compiled-ring-darkness）不受影响。JS 的负 animation-delay 已按 fire 的 14s 换算，
- * 故仅改 duration 即可让整圈岩浆以均匀间距慢速流动（2.5s → 14s，速度减半）。 */
+ * .compiled-ring-darkness）不受影响。JS 的负 animation-delay 已按 fire 的 28s 换算，
+ * 故仅改 duration 即可让整圈岩浆以均匀间距慢速流动（14s → 28s，速度再减半）。 */
 .compiled-fx-fire .lava-seg,
 .compiled-fx-fire .lava-rock {
-  /* 慢速岩浆流动：2.5s → 14s 一圈（7s → 14s，速度减半） */
-  animation-duration: 14s;
+  /* 慢速岩浆流动：14s → 28s 一圈（R10 速度再减半） */
+  animation-duration: 28s;
   /* 旅行环外扩（inset -5px round 15px → -11px round 18px）：容纳 24×20 岩块，
      岩块沿卡面外侧环带旅行、略溢出协议框（brief 明确允许轻微溢出） */
   offset-path: inset(-11px round 18px);
@@ -449,8 +449,9 @@ body {
   width: 24px;
   height: 20px;
 }
-/* 岩浆红背光：卡面后方低透明度红/橙 conic 光晕，14s 缓慢旋转（读作缓慢流动的岩浆辉光）
- * + 柔光径向渐变；挂在 .protocol-holder::before（holder 无 stacking context，
+/* 岩浆红背光：卡面后方低透明度红/橙 conic 光晕，28s 缓慢旋转（与岩石 28s/圈同步，
+ * 读作缓慢流动的岩浆辉光；R10 随旋转减速同步 14s → 28s）+ 柔光径向渐变；挂在
+ * .protocol-holder::before（holder 无 stacking context，
  * z-index:-1 落在卡面图之后、协议背景之上 → 真·背光，不染色卡面；.protocol isolation:
  * isolate 保证不出协议盒）。pointer-events:none 不拦截交互。
  * 圆形元素绕自身中心旋转 → 任何角度都盖满卡面四周，不会露出边角。 */
@@ -478,7 +479,7 @@ body {
   pointer-events: none;
   z-index: -1;
   transform: translate(-50%, -50%);
-  animation: fireBacklightFlow 14s linear infinite;
+  animation: fireBacklightFlow 28s linear infinite;
 }
 @keyframes fireBacklightFlow {
   to { transform: translate(-50%, -50%) rotate(360deg); }
@@ -525,6 +526,10 @@ body {
 }
 .rock-dark { background: #101010; box-shadow: 0 0 3px rgba(0, 0, 0, 0.8); }
 .rock-red { background: #7a1d00; box-shadow: 0 0 4px rgba(255, 69, 0, 0.35); }
+/* 岩色变体（R10，仅 fire）：红岩一半原色暗红、一半更亮红（#ff3d00，与岩浆段亮端同色）；
+ * 黑岩一半原色、一半更深的近黑（#030304）——JS 侧按颜色交替挂类，环上均匀混色 */
+.rock-red-bright { background: #ff3d00; box-shadow: 0 0 5px rgba(255, 61, 0, 0.55); }
+.rock-dark-deep { background: #030304; box-shadow: 0 0 3px rgba(0, 0, 0, 0.9); }
 @keyframes ring-travel { to { offset-distance: 100%; } }
 .protocol-check {
   position: absolute; top: 4px; right: 6px;
