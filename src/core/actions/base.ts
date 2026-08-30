@@ -3,12 +3,18 @@ import { drawCards } from '../engine/deck';
 import { getCardDef } from '../../data/demo';
 import { runStack } from '../effects/resolve';
 
-/** 卡牌 defId 的协议是否与该线协议匹配（正面打入条件） */
+/** 卡牌 defId 的协议是否与该线协议匹配（正面打入条件）。行线上同时携带双方协议
+ *  （P1 协议 | P2 协议）：卡牌协议匹配本侧或对手同线协议任一即可正面打入。
+ *  对手协议缺失（如测试中的空 protocols 数组）时按不匹配处理。 */
 export function isPlayableFaceUp(s: GameState, player: PlayerId, cardUid: string, line: Line): boolean {
   const card = s.players[player].hand.find((c) => c.uid === cardUid);
   if (!card) return false;
   const def = getCardDef(card.defId);
-  return def.protocol === s.players[player].protocols[line].defId;
+  const opp: PlayerId = player === 0 ? 1 : 0;
+  return (
+    def.protocol === s.players[player].protocols[line].defId ||
+    def.protocol === s.players[opp].protocols[line]?.defId
+  );
 }
 
 /** 打出卡牌：正面须匹配协议线；背面任意线。先浮空（pendingPlay），completePlay 结算目标顶卡

@@ -1,10 +1,9 @@
 import type { GameState, PlayerId, Line, EffectStep, StepResult } from './models/types';
 import { advanceStep } from './engine/turn';
 import { clearCache } from './engine/deck';
-import { playCard, refreshHand } from './actions/base';
+import { playCard, refreshHand, isPlayableFaceUp } from './actions/base';
 import { executeCompile, getCompilableLines } from './rules/compile';
 import { checkControl, resetControlIfHeld } from './rules/control';
-import { getCardDef } from '../data/demo';
 import { collectTriggers, resolveTrigger } from './effects/triggers';
 import { answerEffect, runStack } from './effects/resolve';
 import { listCandidates, nextEffectId } from './effects/context';
@@ -34,8 +33,7 @@ export function getLegalActions(s: GameState, player: PlayerId): LegalAction[] {
   if (s.step === 'action') {
     for (const card of s.players[player].hand) {
       for (const line of [0, 1, 2] as Line[]) {
-        const def = getCardDef(card.defId);
-        if (def.protocol === s.players[player].protocols[line].defId) {
+        if (isPlayableFaceUp(s, player, card.uid, line)) {
           out.push({ kind: 'play', cardUid: card.uid, faceUp: true, line });
         }
         out.push({ kind: 'play', cardUid: card.uid, faceUp: false, line });
