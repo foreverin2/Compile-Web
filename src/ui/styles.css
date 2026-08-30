@@ -1087,7 +1087,6 @@ body {
 .dev-results[hidden] { display: none; }
 .dev-result {
   display: flex;
-  justify-content: space-between;
   align-items: center;
   gap: 12px;
   padding: 5px 8px;
@@ -1098,13 +1097,21 @@ body {
   white-space: nowrap;
 }
 .dev-result:hover { background: #16283c; color: #e0e6ed; }
-.dev-result-label { font-weight: 600; color: #4ff0ff; }
+/* 网格式对齐：左列 defId（中文名+分值）固定列宽，各行上下对齐；
+   右列提示占满剩余宽度并在超宽时截断，不挤乱列对齐 */
+.dev-result-label {
+  flex: 0 0 132px;
+  min-width: 0;
+  font-weight: 600;
+  color: #4ff0ff;
+}
 .dev-result-hint {
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: 11px;
   color: #8a94a6;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 55%;
 }
 .dev-result-more {
   justify-content: center;

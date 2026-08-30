@@ -129,3 +129,72 @@ describe('searchCards', () => {
     ]);
   });
 });
+
+/**
+ * 百度式模糊检索（R4）：
+ * - 多 token AND：按空白切分为多个词，每词都必须命中（defKey 或「中文名+分值」）；
+ * - 相关性排序：每词得分 3=精确 / 2=前缀 / 1=子串，按总分降序、同分按 defId 自然序，
+ *   再截取 limit。
+ */
+describe('searchCards — multi-token AND + relevance ranking', () => {
+  it("'light 2' (multi-token AND) matches exactly light-2", () => {
+    expect(searchCards('light 2').map((c) => c.defId)).toEqual(['light-2']);
+  });
+
+  it("'光 2' (multi-token AND via cnKey) matches exactly light-2", () => {
+    expect(searchCards('光 2').map((c) => c.defId)).toEqual(['light-2']);
+  });
+
+  it("AND narrows: 'l 2' keeps only cards whose key has both 'l' and '2'", () => {
+    // 旧实现会连成 'l2'（无匹配）；AND 语义下逐词命中 → 5 张，按 defId 自然序
+    expect(searchCards('l 2').map((c) => c.defId)).toEqual([
+      'life-2',
+      'light-2',
+      'love-2',
+      'metal-2',
+      'plague-2',
+    ]);
+  });
+
+  it("ranking: '5' returns all −5 cards sorted by defId natural order (all substring ties)", () => {
+    expect(searchCards('5', 20).map((c) => c.defId)).toEqual([
+      'apathy-5',
+      'darkness-5',
+      'death-5',
+      'fire-5',
+      'gravity-5',
+      'hate-5',
+      'life-5',
+      'light-5',
+      'love-5',
+      'metal-5',
+      'plague-5',
+      'psychic-5',
+      'speed-5',
+      'spirit-5',
+      'water-5',
+    ]);
+  });
+
+  it("ranking: prefix match beats plain substring — 'a 2' puts apathy-2 first", () => {
+    // apathy-2 的 'a' 是 defKey 前缀（2 分）其余仅子串（1 分）→ 得分 3 vs 2
+    expect(searchCards('a 2').map((c) => c.defId)).toEqual([
+      'apathy-2',
+      'darkness-2',
+      'death-2',
+      'gravity-2',
+      'hate-2',
+      'metal-2',
+      'plague-2',
+      'water-2',
+    ]);
+  });
+
+  it("ranking applies the limit after sorting: 'a 2', 3 → top-3 by score", () => {
+    expect(searchCards('a 2', 3).map((c) => c.defId)).toEqual([
+      'apathy-2',
+      'darkness-2',
+      'death-2',
+    ]);
+  });
+});
