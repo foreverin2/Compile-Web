@@ -267,7 +267,7 @@ function renderTrash(s: GameState, player: PlayerId): HTMLElement {
   return trash;
 }
 
-/** 刷新手牌按钮：位于牌库区与手牌之间（P1 在牌库右侧、P2 在牌库左侧），
+/** 刷新手牌按钮：位于手牌扇形下方（.hand-refresh-wrap 内、居中于手牌之下），
  *  仅在刷新是合法动作（refreshAction 非空）时渲染，点击派发 refresh */
 function renderRefreshButton(action: LegalAction, cb: UiCallbacks): HTMLElement {
   const btn = el('button', 'shield-refresh-btn', '刷新手牌');
@@ -921,17 +921,18 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
     grid.appendChild(row);
   }
 
-  // 底部条带：双方（牌库 + 刷新手牌 + 手牌） + 中间步骤指示。
-  // 每侧一个 .hand-side flex 容器：P1 [deck][refresh][hand]、P2 [hand][refresh][deck]
-  // （牌库在最外、刷新手牌次之、与牌库间距 ≥16px；刷新按钮仅当前玩家 action 步骤时出现）。
+  // 底部条带：双方（牌库 + 手牌 + 刷新手牌） + 中间步骤指示。
+  // 每侧一个 .hand-side flex 容器（column）：牌库/弃牌堆绝对定位在外侧（P1 左 / P2 右），
+  // 流内仅一个 .hand-refresh-wrap（手牌在上、刷新手牌在其下方居中；刷新按钮仅当前
+  // 玩家 action 步骤时出现）。
   const handStrip = el('div', 'hand-strip');
   const legal = getLegalActions(s, s.turnPlayer);
   const refreshAction = legal.find((a) => a.kind === 'refresh') ?? null;
   const p1Side = el('div', 'hand-side p1');
   p1Side.appendChild(renderDeck(s, 0));
   p1Side.appendChild(renderTrash(s, 0)); // 牌库内侧（更靠近手牌）
-  if (s.turnPlayer === 0 && refreshAction) p1Side.appendChild(renderRefreshButton(refreshAction, cb));
-  p1Side.appendChild(
+  const p1Wrap = el('div', 'hand-refresh-wrap');
+  p1Wrap.appendChild(
     renderHand(s, 0, {
       isSelf: s.turnPlayer === 0,
       selected: s.turnPlayer === 0 ? selectedUid : null,
@@ -947,10 +948,13 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
       cb,
     })
   );
+  if (s.turnPlayer === 0 && refreshAction) p1Wrap.appendChild(renderRefreshButton(refreshAction, cb));
+  p1Side.appendChild(p1Wrap);
   handStrip.appendChild(p1Side);
   handStrip.appendChild(el('div', 'step-indicator', `步骤: ${s.step}`));
   const p2Side = el('div', 'hand-side p2');
-  p2Side.appendChild(
+  const p2Wrap = el('div', 'hand-refresh-wrap');
+  p2Wrap.appendChild(
     renderHand(s, 1, {
       isSelf: s.turnPlayer === 1,
       selected: s.turnPlayer === 1 ? selectedUid : null,
@@ -966,7 +970,8 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
       cb,
     })
   );
-  if (s.turnPlayer === 1 && refreshAction) p2Side.appendChild(renderRefreshButton(refreshAction, cb));
+  if (s.turnPlayer === 1 && refreshAction) p2Wrap.appendChild(renderRefreshButton(refreshAction, cb));
+  p2Side.appendChild(p2Wrap);
   p2Side.appendChild(renderTrash(s, 1)); // 牌库内侧（更靠近手牌，镜像 P1）
   p2Side.appendChild(renderDeck(s, 1));
   handStrip.appendChild(p2Side);

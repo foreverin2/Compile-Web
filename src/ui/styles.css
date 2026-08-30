@@ -534,19 +534,37 @@ body {
 /* ===== 手牌（底部条带：P1 手牌 | 步骤指示 | P2 手牌） =====
  * position:relative：作为 .hand-side 的网格行；min-height 为外侧竖直堆叠的
  * 牌库 + 弃牌堆两摞（92×132 + 92×112 + 10px 间距 ≈ 286px）留出空间
- * （不影响手牌/刷新按钮/挡板的位置，也不与上方 lane-row / 下方 action-bar 重叠）。 */
+ * （不影响手牌/刷新按钮/挡板的位置，也不与上方 lane-row / 下方 action-bar 重叠；
+ * 刷新手牌移到手牌下方后整组约 228px，仍低于 min-height，条带高度与弃牌堆
+ * 下方净空保持不变）。 */
 .hand-strip { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: start; position: relative; min-height: 286px; }
 /* ===== 牌库区（deck area）：每玩家一个，位于手牌条最外侧（P1 左 / P2 右） =====
  * 层叠背面卡（.deck-back）厚度随剩余数：deck-1..deck-4（每 4 张一层，封顶 4 层），
  * 无牌时 deck-empty；最顶层中央 .deck-count 圆形徽标显示剩余张数（空牌库显示 0）。
  * .hand-side 是手牌条每侧的 flex 容器（position:relative 作为牌库/弃牌堆的包含块）：
  * 牌库（.deck）与弃牌堆（.trash-pile）均为绝对定位、移出流式布局，在外侧 −92px 列
- * 竖直堆叠（牌库在上、弃牌堆在下）；流内仅剩 [refresh][hand]（P1）/ [hand][refresh]（P2），
+ * 竖直堆叠（牌库在上、弃牌堆在下）；流内仅剩 .hand-refresh-wrap（手牌 + 刷新手牌），
  * 手牌/刷新按钮/挡板位置完全不受两摞影响。 */
-.hand-side { position: relative; display: flex; align-items: center; gap: 16px; padding-left: 20px; }
+.hand-side {
+  position: relative;
+  display: flex;
+  flex-direction: column;  /* 手牌在上、刷新手牌在其下方（见 .hand-refresh-wrap） */
+  justify-content: center; /* 整组（手牌+按钮）在条带内垂直居中，贴近牌库/弃牌堆中心 */
+  align-items: flex-start; /* P1 手牌贴左缘（padding 内侧），与外侧牌库同侧 */
+  gap: 10px;
+  padding-left: 20px;
+}
 /* P2 右侧：整体贴列右缘（牌库已绝对定位移出流，见 .deck）；
-   padding-right 使流内内容（刷新手牌/手牌/挡板）整体内移，与外侧两摞留出空隙 */
-.hand-side.p2 { justify-content: flex-end; padding-right: 20px; }
+   align-items:flex-end 使流内内容（手牌/刷新手牌/挡板）整体贴右，与外侧两摞留出空隙 */
+.hand-side.p2 { align-items: flex-end; padding-right: 20px; }
+/* 手牌 + 刷新手牌 的流内包装：inline-flex 收缩包裹手牌宽度（shrink-to-fit），
+ * 使刷新手牌按钮恰好居中于手牌扇形之下（手牌在上、按钮在下、间距 10px）。 */
+.hand-refresh-wrap {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
 /* 牌库绝对定位到屏幕边缘（P1 左 / P2 右，Part 3）：以 .hand-side（position:relative）
  * 为包含块（top:50% 对齐手牌垂直中心），移出流式布局，不再挤占手牌/刷新手牌/挡板。
  * #app 左右 padding 100px → calc(0px - 100px) = -100px：牌库左/右缘与 app 边缘齐平
@@ -763,10 +781,11 @@ body {
 }
 .hand-shield.retracted .shield-count { opacity: 0; }
 
-/* ===== 刷新手牌按钮（牌库区与手牌之间：P1 牌库右侧 / P2 牌库左侧） =====
- * 手牌条每侧 .hand-side flex 容器内的常规流元素（renderBoard 在 deck 与 hand 之间渲染），
- * 与牌库间距 = 容器 gap 16px；position:relative + z-index 高于挡板（.hand-shield z 70），
- * 避免按钮与手牌外侧挡板边缘重叠时被挡板盖住。紧凑半透明青色（与「翻面」.play-btn 同风格）。 */
+/* ===== 刷新手牌按钮（手牌扇形下方：.hand-refresh-wrap 内、居中于手牌之下） =====
+ * 手牌条每侧 .hand-refresh-wrap（inline-flex column）内的常规流元素，位于手牌之后；
+ * 仅当前玩家 refresh 合法时渲染（renderBoard 条件追加）；position:relative + z-index
+ * 高于挡板（.hand-shield z 70），避免按钮与手牌外侧挡板边缘重叠时被挡板盖住。
+ * 紧凑半透明青色（与「翻面」.play-btn 同风格）。 */
 .shield-refresh-btn {
   position: relative;
   z-index: 71;
