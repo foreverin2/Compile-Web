@@ -193,8 +193,9 @@ function renderStackSlot(
 /** 常驻黑烟特效层（Part 2）：线上任一玩家有正面 darkness-2（顶命令常驻）时，双方该线
  *  堆叠槽边框持续浮现又消散的黑烟。12 个 .smoke-puff 沿边框锚点分布（CSS nth-child 定位），
  *  JS 只写 0.5s 步进的交错 animation-delay（0–5.5s，相对 4s keyframe 周期自动回绕，
- *  任意时刻都有多个 puff 处于飞行中）。absolute + pointer-events:none：不拦截卡牌
- *  交互、不影响布局。渲染器每次重建 DOM，动画随重建重启（与编译环特效一致，可接受）。 */
+ *  任意时刻都有多个 puff 处于飞行中）。
+ *  overlay 本体由 syncSmokeOverlays 挂到 document.body 并跨重渲染复用（同一 DOM 节点），
+ *  每帧渲染只重定位到槽位矩形 → 动画不随 DOM 重建重启（修复逐步骤卡顿/抽搐）。 */
 const SMOKE_PUFFS = 12;
 function renderSmokeOverlay(): HTMLElement {
   const overlay = el('div', 'smoke-overlay');
@@ -204,6 +205,44 @@ function renderSmokeOverlay(): HTMLElement {
     overlay.appendChild(puff);
   }
   return overlay;
+}
+
+/** 常驻黑烟覆盖层注册表：key `${player}-${line}` → 已挂到 body 的 overlay（跨重渲染存活）。
+ *  仅在 renderBoard 末尾调用：条件 active 时创建/复用 overlay 并重定位到当前槽位矩形，
+ *  inactive 时移除并注销（条件消失后烟雾随之消失）。 */
+const smokeOverlays = new Map<string, HTMLElement>();
+function syncSmokeOverlays(s: GameState): void {
+  const activeKeys = new Set<string>();
+  for (const line of [0, 1, 2] as Line[]) {
+    const active = lineTopCommandActive(s, line, 'darkness-2');
+    if (!active) continue;
+    for (const player of [0, 1] as PlayerId[]) {
+      const key = `${player}-${line}`;
+      activeKeys.add(key);
+      const slot = document.querySelector<HTMLElement>(
+        `.stack-slot[data-player="${player}"][data-line="${line}"]`
+      );
+      if (!slot) continue; // 槽位不在 DOM（不应发生）→ 交给下方清理分支移除旧 overlay
+      let overlay = smokeOverlays.get(key);
+      if (!overlay) {
+        overlay = renderSmokeOverlay();
+        overlay.dataset.smokeKey = key;
+        smokeOverlays.set(key, overlay);
+        document.body.appendChild(overlay);
+      }
+      const r = slot.getBoundingClientRect();
+      overlay.style.left = `${r.left}px`;
+      overlay.style.top = `${r.top}px`;
+      overlay.style.width = `${r.width}px`;
+      overlay.style.height = `${r.height}px`;
+    }
+  }
+  for (const [key, overlay] of smokeOverlays) {
+    if (!activeKeys.has(key)) {
+      overlay.remove();
+      smokeOverlays.delete(key);
+    }
+  }
 }
 
 /** 玩家信息条：标题（回合高亮）+ 牌库/弃牌堆/手牌计数（手牌本体在底部条带） */
@@ -561,8 +600,13 @@ function renderProtocolCell(s: GameState, player: PlayerId, line: Line): HTMLEle
  */
 function appendCompiledRing(box: HTMLElement, defId: string): void {
   const ring = el('div', `compiled-ring compiled-ring-${defId}`);
-  const TRAVEL_S = 2.5;
-  const LAVA_COUNT = 10;
+  // 火焰（fire）专属参数：慢速岩浆流（7s/圈，CSS .compiled-fx-fire 覆写 animation-duration）
+  // + 岩石/岩浆段加密（14 岩 / 12 段）→ 环周几乎被黑/红岩覆盖。负 animation-delay 必须按
+  // 实际 duration 换算（-TRAVEL_S/count × i），否则元素会在环上挤成一团而非均匀分布。
+  // light/darkness 保持 2.5s / 8 / 10 不变。
+  const isFire = defId === 'fire';
+  const TRAVEL_S = isFire ? 7 : 2.5;
+  const LAVA_COUNT = isFire ? 12 : 10;
   for (let i = 0; i < LAVA_COUNT; i++) {
     const seg = el('div', 'lava-seg');
     seg.style.animationDelay = `${(-TRAVEL_S / LAVA_COUNT) * i}s`;
@@ -570,7 +614,7 @@ function appendCompiledRing(box: HTMLElement, defId: string): void {
     seg.style.transform = `scale(${s.toFixed(2)})`;
     ring.appendChild(seg);
   }
-  const ROCK_COUNT = 8;
+  const ROCK_COUNT = isFire ? 14 : 8;
   for (let i = 0; i < ROCK_COUNT; i++) {
     const rock = el('div', 'lava-rock' + (i % 2 === 0 ? ' rock-dark' : ' rock-red'));
     rock.style.animationDelay = `${(-TRAVEL_S / ROCK_COUNT) * i - 0.15}s`;
@@ -910,14 +954,6 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
     row.appendChild(
       renderStackSlot(s, 1, line, s.turnPlayer === 1 ? selectedUid : null, s.turnPlayer === 1 ? (l) => playToLine(s, cb, l) : () => {}, s.turnPlayer === 1)
     );
-    // Part 2 常驻黑烟：线上任一玩家有正面 darkness-2 → 双方该线堆叠槽边框持续冒烟
-    // （条件消失后重渲染不再加类，烟雾层随之消失）
-    if (lineTopCommandActive(s, line, 'darkness-2')) {
-      row.classList.add('smoke-line');
-      for (const slot of row.querySelectorAll<HTMLElement>('.stack-slot')) {
-        slot.appendChild(renderSmokeOverlay());
-      }
-    }
     grid.appendChild(row);
   }
 
@@ -1125,6 +1161,9 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   wrap.appendChild(diagBtn);
 
   root.appendChild(wrap);
+  // Part 2 常驻黑烟：槽位已入 DOM → 创建/复用 body 级 overlay 并重定位到槽位矩形
+  // （overlay 跨重渲染存活，动画不重启；条件消失后 syncSmokeOverlays 移除并注销）
+  syncSmokeOverlays(s);
 }
 
 let selectedUid: string | null = null;

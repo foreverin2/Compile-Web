@@ -6,7 +6,7 @@ import { runStack } from '../../src/core/effects/resolve';
 import { makeCard, draftFireP1, advanceToStep } from '../helpers';
 
 describe('reveal op + revealed ghosts', () => {
-  it('reveal op adds a ghost shown to the effect player, expiring after their turn', () => {
+  it('reveal op adds a ghost shown to the caster, expiring at the END of the NEXT turn (opponent turn end)', () => {
     const s = draftFireP1();
     s.players[0].hand.push({ uid: 'target-1', defId: 'fire-2', owner: 0, faceUp: true, zone: 'hand', line: null, pos: null });
     s.pendingEffects.push({
@@ -25,21 +25,27 @@ describe('reveal op + revealed ghosts', () => {
     expect(s.revealedGhosts).toHaveLength(1);
     expect(s.revealedGhosts[0].defId).toBe('fire-2');
     expect(s.revealedGhosts[0].shownTo).toBe(0); // 幽灵归揭示发起方（效果属主）手牌区
-    expect(s.revealedGhosts[0].expiresAfterTurn).toBe(0);
+    expect(s.revealedGhosts[0].expiresAfterTurn).toBe(1); // 下回合回合结束 = 对手（P2）回合结束
     // 原卡不受影响
     expect(s.players[0].hand.some((c) => c.uid === 'target-1')).toBe(true);
   });
 
-  it('revealed ghosts are cleared when the shownTo player finishes their turn', () => {
+  it('revealed ghosts survive the caster turn end and are cleared at the next turn end (opponent turn end)', () => {
     const s = draftFireP1();
     s.phase = 'turn';
-    s.revealedGhosts = [{ id: 'g1', defId: 'fire-2', shownTo: 1, expiresAfterTurn: 1 }];
-    // P2 回合进行中
-    s.turnPlayer = 1;
+    // P1 揭示对手卡 → 幽灵 shownTo=0、expiresAfterTurn=1（下回合回合结束 = P2 回合结束）
+    s.revealedGhosts = [{ id: 'g1', defId: 'fire-2', shownTo: 0, expiresAfterTurn: 1 }];
+    // P1 回合进行中
+    s.turnPlayer = 0;
+    advanceToStep(s, 0, 'check-cache');
+    executeAction(s, 0, 'advance'); // check-cache → end（幽灵仍在）
+    executeAction(s, 0, 'advance'); // end → start（换 P2）→ P1 回合结束，幽灵存活
+    expect(s.turnPlayer).toBe(1);
+    expect(s.revealedGhosts).toHaveLength(1);
+    // P2（对手）整回合进行中
     advanceToStep(s, 1, 'check-cache');
     executeAction(s, 1, 'advance'); // check-cache → end（幽灵仍在）
-    expect(s.revealedGhosts).toHaveLength(1);
-    executeAction(s, 1, 'advance'); // end → start（换回 P1）→ 幽灵清除
+    executeAction(s, 1, 'advance'); // end → start（换回 P1）→ P2 回合结束 → 幽灵清除
     expect(s.turnPlayer).toBe(0);
     expect(s.revealedGhosts).toHaveLength(0);
   });
