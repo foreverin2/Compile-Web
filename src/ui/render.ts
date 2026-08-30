@@ -457,12 +457,26 @@ function bindShieldDrag(shield: HTMLElement, player: PlayerId, hand: HTMLElement
     e.preventDefault();
     e.stopPropagation(); // 不与卡牌单击/拖拽相互干扰
     const dir = player === 0 ? 1 : -1; // P1 向右拖加宽；P2 向左拖加宽
-    // 最大宽度 = 扇形手牌完整宽度（真实卡 + 揭示幽灵卡都参与扇形，见 ITEM 8），
-    // 封顶 SHIELD_MAX_WIDTH（15 张扇形完整宽度 ≈1660px）：超出上限的溢出区无需遮住。
-    // 挡板左/右缘锚定手牌边缘（left/right:0），宽度覆盖整个扇形即遮住全部手牌。
+    // 最大宽度优先 = 挡板内缘拖到「双方协议之间的竖线」（板中心）：协议格 DOM 可得时
+    // 按中心线距离计算（与手牌扇形宽度无关——小手牌也能拖满到板中心）；协议格缺失
+    // （如协议界面）时回退到扇形手牌完整宽度（真实卡 + 揭示幽灵卡都参与扇形，见 ITEM 8）。
+    // 两种情况都封顶 SHIELD_MAX_WIDTH（15 张扇形完整宽度 ≈1660px）：超出上限的溢出区无需遮住。
     const fanN = hand.querySelectorAll<HTMLElement>('.card').length;
     const fanW = fanN > 0 ? 130 + (fanN - 1) * 102 : 130;
-    const maxW = Math.min(Math.max(0, fanW), SHIELD_MAX_WIDTH);
+    const fanMax = Math.min(Math.max(0, fanW), SHIELD_MAX_WIDTH);
+    const p1Proto = document.querySelector<HTMLElement>('.lane-row [data-player="0"] .protocol');
+    const p2Proto = document.querySelector<HTMLElement>('.lane-row [data-player="1"] .protocol');
+    let centerX: number | null = null;
+    if (p1Proto && p2Proto) {
+      const r1 = p1Proto.getBoundingClientRect();
+      const r2 = p2Proto.getBoundingClientRect();
+      centerX = (r1.left + r2.right) / 2; // 双方协议之间的竖线
+    }
+    const sr = shield.getBoundingClientRect();
+    const maxW =
+      centerX !== null
+        ? Math.min(Math.max(0, dir === 1 ? centerX - sr.left : sr.right - centerX), SHIELD_MAX_WIDTH)
+        : fanMax;
     const startX = e.clientX;
     const startWidth = Math.min(Math.max(shieldWidth[player], 0), maxW);
     const apply = (w: number) => {
