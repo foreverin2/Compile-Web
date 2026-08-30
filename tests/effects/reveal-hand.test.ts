@@ -16,6 +16,8 @@ describe('reveal-hand (loop reveal)', () => {
     });
     runStack(s);
     expect(s.revealedGhosts).toHaveLength(oppHand.length);
+    // 系统触发的揭示：lightFx = false（无光之辉光；仅 light 协议揭示为 true）
+    for (const g of s.revealedGhosts) expect(g.lightFx).toBe(false);
     // 对手回合结束后清除（由 turn.ts 已实现，快速验证）
   });
 });

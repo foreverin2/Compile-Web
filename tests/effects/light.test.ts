@@ -249,6 +249,7 @@ describe('light protocol effects', () => {
     expect(s.revealedGhosts).toHaveLength(oppHand.length);
     for (const g of s.revealedGhosts) {
       expect(oppHand.some((c) => c.defId === g.defId)).toBe(true);
+      expect(g.lightFx).toBe(true); // light 协议揭示（light-4）：落地幽灵带光之辉光（十字星 + 边框辉光）
     }
   });
 

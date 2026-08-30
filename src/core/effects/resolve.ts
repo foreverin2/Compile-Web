@@ -261,8 +261,16 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
         defId: card.defId,
         shownTo,
         expiresAtTurn: s.turnCount + (ownReveal ? 2 : 3), // A：对手回合结束；B：发起者下回合结束
+        // light 协议触发的揭示 → 落地幽灵带光之辉光（十字星 + 边框辉光；效果协议不随卡牌易主改变）
+        lightFx: pe.sourceDefId.split('-')[0] === 'light',
       });
-      emitCardEvent(s, 'card:revealed', card, { shownTo });
+      // triggerProtocol/triggerDefId：触发这次揭示的卡（效果源），FX 层据此给飞行幽灵
+      // 叠加协议专属特效（light → 天使翅膀）并决定落地幽灵的辉光
+      emitCardEvent(s, 'card:revealed', card, {
+        shownTo,
+        triggerDefId: pe.sourceDefId,
+        triggerProtocol: pe.sourceDefId.split('-')[0],
+      });
       break;
     }
   }

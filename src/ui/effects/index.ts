@@ -418,6 +418,69 @@ function playHandPlay(payload: FxCardPayload): void {
   window.setTimeout(() => clone.remove(), MOVE_MS + 80);
 }
 
+/* ===== 揭示飞行（reveal fly）：幽灵卡从被揭示方手牌末尾依次飞入 shownTo 手牌末尾 =====
+ * 主线程（main.ts）在行动结算后串行调用（每张 ~400ms，上一张落地即起飞下一张）：
+ * - 起点 = 被揭示卡持有者（source）手牌末尾（handEndPos 同款扇形步进数学）；
+ * - 终点 = shownTo 手牌末尾，逐张按 index 沿目标手牌生长方向 +102px 延伸
+ *   （与重渲染后 .reveal-ghost 的扇形间距一致：卡宽 130 − 重叠 28）；
+ * - 幽灵显示被揭示卡正面（130×178.8）；light 协议触发（triggerProtocol==='light'）时
+ *   卡后带天使翅膀（.reveal-wings），飞行中扑扇，落地后渐隐；
+ * - 落地后幽灵渐隐，由重渲染后的真实幽灵卡（renderHand .reveal-ghost）承接显示。 */
+const REVEAL_FLY_MS = 400; // 单张飞行时长（下一张在此刻起飞）
+const REVEAL_WING_FADE_MS = 400; // 翅膀落地渐隐
+const REVEAL_LAND_FADE_MS = 220; // 幽灵落地渐隐
+const REVEAL_W = 130;
+const REVEAL_H = 178.8;
+const REVEAL_SPACING = 102; // 与 .hand 负 margin 扇形步进一致（130 − 28）
+
+export function playRevealFly(
+  opts: { source: PlayerId; shownTo: PlayerId; defId: string; triggerProtocol: string; index?: number },
+  done: () => void,
+): void {
+  const hands = document.querySelectorAll<HTMLElement>('.hand');
+  const src = hands[opts.source];
+  const dst = hands[opts.shownTo];
+  if (!src || !dst) {
+    done();
+    return;
+  }
+  const from = handEndPos(src, opts.source); // 起点：被揭示方手牌末尾（都以手牌末尾为起点）
+  const to = handEndPos(dst, opts.shownTo);
+  const i = opts.index ?? 0;
+  // 目标手牌生长方向：P1 向右、P2 向左（row-reverse），逐张延伸
+  const endX = to.x + (opts.shownTo === 0 ? REVEAL_SPACING * i : -REVEAL_SPACING * i);
+  const light = opts.triggerProtocol === 'light';
+  const ghost = document.createElement('div');
+  ghost.className = 'reveal-fly-ghost';
+  ghost.style.left = `${from.x - REVEAL_W / 2}px`;
+  ghost.style.top = `${from.y - REVEAL_H / 2}px`;
+  // 翅膀在卡面之后（buildFaceImg 之后 append 会盖住翅膀 → 先加翅膀再加卡面）
+  if (light) {
+    ghost.appendChild(Object.assign(document.createElement('div'), { className: 'reveal-wings' }));
+  }
+  ghost.appendChild(buildFaceImg(cardFaceSrc(opts.defId, true)));
+  document.body.appendChild(ghost);
+  const dx = endX - from.x;
+  const dy = to.y - from.y;
+  // 起飞：淡入 + 飞向目标手牌末尾
+  ghost.style.transition = `transform ${REVEAL_FLY_MS}ms cubic-bezier(0.2, 0.7, 0.3, 1), opacity 120ms ease`;
+  requestAnimationFrame(() => {
+    ghost.style.transform = `translate(${dx}px, ${dy}px)`;
+    ghost.style.opacity = '0.95';
+  });
+  // 落地：翅膀渐隐 + 幽灵渐隐；done() 此刻触发（下一张立即起飞——"上一张落地即起飞下一张"）
+  window.setTimeout(() => {
+    if (light) {
+      const wings = ghost.querySelector('.reveal-wings');
+      if (wings) wings.classList.add('fade');
+    }
+    ghost.style.transition = `opacity ${REVEAL_LAND_FADE_MS}ms ease`;
+    ghost.style.opacity = '0';
+    window.setTimeout(() => ghost.remove(), Math.max(REVEAL_LAND_FADE_MS, REVEAL_WING_FADE_MS) + 40);
+    done();
+  }, REVEAL_FLY_MS);
+}
+
 /** 编译清牌：单张卡从原位置升起并渐隐 */
 function playRiseFade(node: HTMLElement, delay: number): void {
   const rect = node.getBoundingClientRect();

@@ -412,20 +412,14 @@ function renderHand(
   }
   // 揭示幽灵牌：把被揭示卡的正面复制到本玩家手牌区末尾（仅视觉提示，不参与任何
   // 手牌计数/选择/拖拽；对手回合结束后由引擎清除）。data-uid 用 ghost- 前缀避免冲突。
-  // 入场动画仅在幽灵首次出现时播放（模块态记录，重渲染不重放）。
+  // 入场动画已由主线程"揭示飞行"承接（逐张从被揭示方手牌末尾飞入），不再播 ghost-enter；
+  // light 协议揭示（lightFx）的幽灵带光之辉光（.ghost-light：十字星 + 边框辉光）。
   // ITEM 8：幽灵加入扇形动态（push 进 nodes → 悬停展开/推开同样作用于幽灵），
   // 双击可放大查看被揭示卡的正面（仅查看，无单击选择/翻面/拖拽）。
-  const ghostIds = s.revealedGhosts.filter((g) => g.shownTo === player).map((g) => g.id);
-  for (const id of [...revealedGhostSeen]) {
-    if (!ghostIds.includes(id)) revealedGhostSeen.delete(id);
-  }
   for (const ghost of s.revealedGhosts.filter((g) => g.shownTo === player)) {
     const gNode = renderCardFace({ defId: ghost.defId, faceUp: true, uid: `ghost-${ghost.id}` });
     gNode.classList.add('reveal-ghost');
-    if (!revealedGhostSeen.has(ghost.id)) {
-      revealedGhostSeen.add(ghost.id);
-      gNode.classList.add('ghost-enter'); // 首次出现播放入场动画
-    }
+    if (ghost.lightFx) gNode.classList.add('ghost-light');
     // 双击放大（直接 dblclick，不经过 bindClickOrDouble 的单击延迟——幽灵无单击动作）
     gNode.addEventListener('dblclick', () => openZoom(ghost.defId, true, false, false));
     hand.appendChild(gNode);
@@ -1213,8 +1207,6 @@ let selectedFaceUp = true;
 let handFlipAnimBusy = false;
 /** 手牌翻面动画时长（ms，与 styles.css .hand-flipping 的 transition 时长一致） */
 const HAND_FLIP_MS = 380;
-/** 已渲染过的揭示幽灵 id（仅首次出现播放入场动画） */
-const revealedGhostSeen = new Set<string>();
 /** R8 手牌挡板宽度（px，模块态：重渲染后保留；0=收起、手牌可见） */
 const shieldWidth: [number, number] = [0, 0];
 /** 挡板最大宽度：15 张手牌扇形完整铺开（首卡 130px + 14 张 × 露出 102px）≈ 1660px */
