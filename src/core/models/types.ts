@@ -93,13 +93,15 @@ export interface ChoiceAnswer {
   selected: string[];
 }
 
-/** 揭示产生的幽灵牌：正面复制到效果属主手牌区末尾，其回合结束后自动消失；不参与任何事件 */
+/** 揭示产生的幽灵牌：正面复制到效果属主手牌区末尾，不参与任何事件。
+ *  expiresAfterTurn = 效果属主的对手：幽灵撑过属主本回合结束与对手整回合，
+ *  到对手回合结束（= 下回合回合结束）时清除。 */
 export interface RevealedGhost {
   id: string;
   defId: string;
   /** 显示在哪位玩家的手牌区末尾（= 发起揭示的效果属主） */
   shownTo: PlayerId;
-  /** 该玩家回合结束时清除 */
+  /** 该玩家（= 效果属主的对手）回合结束时清除 */
   expiresAfterTurn: PlayerId;
 }
 

@@ -242,7 +242,10 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       break;
     }
     case 'reveal': {
-      // 揭示：把卡牌正面复制为幽灵牌到效果属主（发起揭示的玩家）手牌区末尾（不改变原卡状态）
+      // 揭示：把卡牌正面复制为幽灵牌到效果属主（发起揭示的玩家）手牌区末尾（不改变原卡状态）。
+      // 幽灵在【下回合回合结束】消失：expiresAfterTurn = 效果属主的对手，
+      // 即先撑过属主本回合结束 + 对手整回合，到对手回合结束（= 下回合回合结束）时清除。
+      // 对手揭示（pe.player=1）同理：expiresAfterTurn=0，在其对手 P1 回合结束时清除。
       const card = findCard(s, op.uid);
       if (!card) throw new Error(`cannot reveal ${op.uid}: not found`);
       const shownTo: PlayerId = pe.player;
@@ -250,7 +253,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
         id: nextEffectId(),
         defId: card.defId,
         shownTo,
-        expiresAfterTurn: shownTo,
+        expiresAfterTurn: pe.player === 0 ? 1 : 0,
       });
       emitCardEvent(s, 'card:revealed', card, { shownTo });
       break;
