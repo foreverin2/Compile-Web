@@ -6,6 +6,11 @@ const FX_REMOVE_MS = 1200;
 const BASE_Z = 300; // 基础行为特效层
 const EXTRA_Z = 301; // 协议专属额外特效层（叠加在基础特效之上）
 const MOVE_MS = 450; // 平移类特效时长（回手/偏转）
+// Darkness 偏转烟桥（shift-bridge）节奏：桥渐显 → 卡飞过（MOVE_MS）→ 桥渐隐 → 清理
+const BRIDGE_IN_MS = 350;
+const BRIDGE_OUT_MS = 400;
+const BRIDGE_Z = 290; // 烟桥层：飞行卡克隆（BASE_Z 300）之下、棋盘之上
+const BRIDGE_END_Z = 291; // 端点标记：烟桥之上、飞行卡之下
 
 type PlayerId = 0 | 1;
 
@@ -206,26 +211,128 @@ function playReturn(node: HTMLElement, payload: FxCardPayload): void {
   window.setTimeout(() => clone.remove(), MOVE_MS + 80);
 }
 
-/** 基础行为特效：偏转——从初始位置丝滑平移到目标链路堆叠末尾 */
+/** 幽灵卡平移落地：从初始 rect 丝滑平移到【调用方给定的】目标点（起飞时机与目标点均由调用方决定，
+ *  避免起飞时重查 DOM——重渲染后目标堆叠已含落地卡，stackEndPos 会偏移） */
+function flyCloneToStackEnd(clone: HTMLElement, rect: DOMRect, end: { x: number; y: number }): void {
+  const dx = end.x - (rect.left + rect.width / 2);
+  const dy = end.y - (rect.top + rect.height / 2);
+  clone.style.transition = `transform ${MOVE_MS}ms cubic-bezier(0.2, 0.7, 0.3, 1), opacity ${MOVE_MS}ms ease`;
+  requestAnimationFrame(() => {
+    clone.style.transform = `translate(${dx}px, ${dy}px) scale(0.92)`;
+    clone.style.opacity = '0.6';
+  });
+  window.setTimeout(() => clone.remove(), MOVE_MS + 80);
+}
+
+/** 基础行为特效：偏转——从初始位置丝滑平移到目标链路堆叠末尾（同步调用：emit 时即计算目标点） */
 function playShift(node: HTMLElement, payload: FxCardPayload): void {
   const rect = node.getBoundingClientRect();
-  if (rect.width === 0 || rect.height === 0 || payload.owner === undefined || payload.line === null) return;
+  if (rect.width === 0 || rect.height === 0 || payload.owner === undefined || payload.line == null) return;
   const clone = buildFxCard(node, payload, BASE_Z);
   if (!clone) return;
   const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${payload.owner}"][data-line="${payload.line}"]`);
-  const target = stackEndPos(slot, payload.owner);
-  if (target) {
-    const dx = target.x - (rect.left + rect.width / 2);
-    const dy = target.y - (rect.top + rect.height / 2);
-    clone.style.transition = `transform ${MOVE_MS}ms cubic-bezier(0.2, 0.7, 0.3, 1), opacity ${MOVE_MS}ms ease`;
-    requestAnimationFrame(() => {
-      clone.style.transform = `translate(${dx}px, ${dy}px) scale(0.92)`;
-      clone.style.opacity = '0.6';
-    });
-    window.setTimeout(() => clone.remove(), MOVE_MS + 80);
-  } else {
+  const end = stackEndPos(slot, payload.owner);
+  if (!end) {
     window.setTimeout(() => clone.remove(), 50);
+    return;
   }
+  flyCloneToStackEnd(clone, rect, end);
+}
+
+/**
+ * Darkness 偏转专属特效：烟桥路线（起点→终点）。
+ * 粗黑烟桥 + 起/终点光点先渐显（~350ms），随后卡飞过（MOVE_MS），桥再渐隐（~400ms）后清理。
+ * 关键点：
+ * - 起点 rect 与终点 end 都在事件发出时（重渲染前）一次性计算，桥/终点标记/飞行共用同一个 end
+ *   ——飞行恰好落在终点光点上（起飞时重查 DOM 会因目标堆叠已含落地卡而偏移 ~65px）；
+ * - 飞行克隆也在事件发出时构建（避免延迟调用 playShift 读到已重建的节点 rect 归零），
+ *   桥渐显期间克隆 opacity 0 不可见（源位置不出现"重复卡"），起飞时随飞行过渡淡入至 0.6；
+ * - rect/目标缺失时退回普通 playShift（无桥）；克隆在 end 校验通过后才构建，无泄漏。
+ */
+function playDarknessShiftBridge(node: HTMLElement, payload: FxCardPayload): void {
+  const rect = node.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0 || payload.owner === undefined || payload.line == null) {
+    playShift(node, payload); // rect 缺失 → 退回普通偏转（playShift 内部自兜底）
+    return;
+  }
+  // 捕获局部变量：闭包（定时器）内不做属性收窄，避免 TS 丢失 owner/line 的窄化
+  const owner: PlayerId = payload.owner;
+  const line: number = payload.line;
+  const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${owner}"][data-line="${line}"]`);
+  const end = stackEndPos(slot, owner);
+  if (!end) {
+    playShift(node, payload); // 目标缺失 → 退回普通偏转（克隆尚未构建，无泄漏）
+    return;
+  }
+  const clone = buildFxCard(node, payload, BASE_Z);
+  if (!clone) {
+    playShift(node, payload);
+    return;
+  }
+  // 桥渐显期间克隆不可见（避免源位置出现"重复卡"）；起飞时 flyCloneToStackEnd 的
+  // opacity 过渡会把它从 0 淡入到 0.6（随飞行渐显）
+  clone.style.opacity = '0';
+  const start = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const dist = Math.hypot(dx, dy);
+  const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
+
+  // 烟桥：fixed 定位于起点、按距离定宽、旋转到终点角度（transform-origin:left center 在 CSS）；
+  // z-index 与过渡时长由 JS 常量驱动（BRIDGE_Z / BRIDGE_IN_MS / BRIDGE_OUT_MS，单一来源）
+  const bridge = document.createElement('div');
+  bridge.className = 'shift-bridge';
+  bridge.style.left = `${start.x}px`;
+  bridge.style.top = `${start.y}px`;
+  bridge.style.width = `${dist}px`;
+  bridge.style.transform = `rotate(${angle}deg)`;
+  bridge.style.zIndex = String(BRIDGE_Z);
+  bridge.style.setProperty('--bridge-in-ms', `${BRIDGE_IN_MS}ms`);
+  bridge.style.setProperty('--bridge-out-ms', `${BRIDGE_OUT_MS}ms`);
+  // 起/终点光点（标记起始与终点位置）
+  const mkEnd = (x: number, y: number): HTMLElement => {
+    const m = document.createElement('div');
+    m.className = 'bridge-end';
+    m.style.left = `${x}px`;
+    m.style.top = `${y}px`;
+    m.style.zIndex = String(BRIDGE_END_Z);
+    m.style.setProperty('--bridge-in-ms', `${BRIDGE_IN_MS}ms`);
+    m.style.setProperty('--bridge-out-ms', `${BRIDGE_OUT_MS}ms`);
+    return m;
+  };
+  const startMarker = mkEnd(start.x, start.y);
+  const endMarker = mkEnd(end.x, end.y);
+  document.body.appendChild(bridge);
+  document.body.appendChild(startMarker);
+  document.body.appendChild(endMarker);
+
+  const cleanup = (): void => {
+    bridge.remove();
+    startMarker.remove();
+    endMarker.remove();
+  };
+
+  // ① 桥 + 端点渐显（CSS transition var(--bridge-in-ms) → opacity 0.85）
+  requestAnimationFrame(() => {
+    bridge.classList.add('shift-bridge-in');
+    startMarker.classList.add('bridge-end-in');
+    endMarker.classList.add('bridge-end-in');
+  });
+  // ② 桥显影完成后卡开始飞行——目标点复用 emit 时的 end，与桥/终点标记完全一致
+  window.setTimeout(() => {
+    flyCloneToStackEnd(clone, rect, end);
+    // ③ 飞行结束后桥渐隐
+    window.setTimeout(() => {
+      bridge.classList.remove('shift-bridge-in');
+      bridge.classList.add('shift-bridge-out');
+      startMarker.classList.remove('bridge-end-in');
+      startMarker.classList.add('bridge-end-out');
+      endMarker.classList.remove('bridge-end-in');
+      endMarker.classList.add('bridge-end-out');
+      // ④ 渐隐完成后清理（无论中间发生什么，桥/端点必被移除）
+      window.setTimeout(cleanup, BRIDGE_OUT_MS + 40);
+    }, MOVE_MS);
+  }, BRIDGE_IN_MS);
 }
 
 /** 基础行为特效：牌堆顶打出——幽灵卡从牌库区丝滑飞入目标链路堆叠末尾
@@ -370,7 +477,12 @@ export function initEffects(): () => void {
         if (node) playReturn(node, payload);
         break;
       case 'card:shifted':
-        if (node) playShift(node, payload);
+        // darkness-0/1/4 的偏转（触发卡协议 darkness）：播烟桥路线（起点→终点）；
+        // 其余偏转源（light-2/light-3 带 'light'、系统效果带 'system'）走普通幽灵飞行
+        if (node) {
+          if (payload.triggerProtocol === 'darkness') playDarknessShiftBridge(node, payload);
+          else playShift(node, payload);
+        }
         break;
       case 'card:deck-played':
         playDeckPlay(payload);
