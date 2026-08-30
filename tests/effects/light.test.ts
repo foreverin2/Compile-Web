@@ -191,7 +191,7 @@ describe('light protocol effects', () => {
     expect(s.pendingEffects).toHaveLength(0);
   });
 
-  it('light-2: shift target lines exclude both the effect line and the revealed card line', () => {
+  it('light-2: shift target lines include light-2 own row — only the revealed card line is excluded', () => {
     const s = draftLightP1();
     advanceToStep(s, 0, 'action');
     s.players[0].hand = [makeCard('light-2', 0, 'hand')];
@@ -208,7 +208,25 @@ describe('light protocol effects', () => {
     executeAction(s, 0, 'effect-choice', { promptId: p2.id, choice: ['action:shift'] });
     const p3 = s.pendingEffects[s.pendingEffects.length - 1];
     expect(p3.prompt?.kind).toBe('select-line');
-    expect(p3.prompt?.lines).toEqual([2]); // 同时排除效果线 0 与被揭示卡线 1（平移必须到不同列）
+    // 只排除被揭示卡当前线（1）——光2 自己所在的行（0）是合法目标（shift 仅禁止目标=被移卡原线）
+    expect(p3.prompt?.lines).toEqual([0, 2]);
+  });
+
+  it('light-2: shift target lines still exclude the revealed card line when it is on light-2 own row', () => {
+    const s = draftLightP1();
+    advanceToStep(s, 0, 'action');
+    s.players[0].hand = [makeCard('light-2', 0, 'hand')];
+    const facedown = makeCard('light-1', 1, 'field', false, 0, 0); // 被揭示卡在光2 同一行（线 0）
+    s.players[1].stacks[0] = [facedown];
+    const card = s.players[0].hand[0];
+    executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: lightLine(s) }); // 效果线 0
+    const p1 = s.pendingEffects[s.pendingEffects.length - 1];
+    executeAction(s, 0, 'effect-choice', { promptId: p1.id, choice: [facedown.uid] });
+    const p2 = s.pendingEffects[s.pendingEffects.length - 1];
+    executeAction(s, 0, 'effect-choice', { promptId: p2.id, choice: ['action:shift'] });
+    const p3 = s.pendingEffects[s.pendingEffects.length - 1];
+    expect(p3.prompt?.kind).toBe('select-line');
+    expect(p3.prompt?.lines).toEqual([1, 2]); // 被揭示卡在线 0 → 该线排除（shift 到同线会抛错），其余两线可用
   });
 
   it('light-3: shift all facedown cards of own line to target line', () => {

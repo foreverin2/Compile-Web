@@ -35,9 +35,10 @@ function* light2(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const act = yield { kind: 'select-action', title: 'light-2：你可以平移或翻转那张牌', min: 1, max: 1, optional: true, candidates: [], actions: ['action:flip', 'action:shift'], chooser };
   if (act.selected.length === 0) return;
   if (act.selected[0] === 'action:flip') yield { op: 'flip', uid: r.selected[0], allowCovered: true };
-  // action:shift → 平移需选目标线（light-2 平移该牌到任意其他线；排除效果线 + 被揭示卡当前线）
+  // action:shift → 平移需选目标线（light-2 平移该牌到任意其他线；只排除被揭示卡当前线——
+  // shift 仅禁止目标=被移卡原线（resolve 抛错）；光2 自己所在的行是合法目标，同暗1 修法）
   if (act.selected[0] === 'action:shift') {
-    const line = yield { kind: 'select-line', title: 'light-2：平移目标线', min: 1, max: 1, optional: false, candidates: [], lines: [0, 1, 2].filter((l) => l !== ctx.card.line && l !== revealed?.line) as Line[], chooser };
+    const line = yield { kind: 'select-line', title: 'light-2：平移目标线', min: 1, max: 1, optional: false, candidates: [], lines: [0, 1, 2].filter((l) => l !== revealed?.line) as Line[], chooser };
     if (line.selected.length > 0) {
       yield { op: 'shift', uid: r.selected[0], targetLine: Number(line.selected[0].replace('line:', '')) as Line, allowCovered: true };
     }
