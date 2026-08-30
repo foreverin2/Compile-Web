@@ -656,9 +656,11 @@ function appendCompiledRing(box: HTMLElement, defId: string): void {
     // R10：波浪尺式半圆光晕（暗域专属，保留雾层不变）。卡面 200×280：上/下边各 13 个
     // 半圆（直径 16px，间距 200/13≈15.38px 轻微重叠铺满 200px），左/右边各 18 个
     // （间距 280/18≈15.56px 铺满 280px）。.dark-halo-scallop 默认顶拱（平边在下贴卡边、
-    // 拱顶向外鼓 8px），.bottom/.left/.right 由 CSS rotate 转向；左/右边旋转后平边落点
-    // 会内移半宽（8/2=4px），故 left/right 列用 left:-12 / right:-12、top 减 4px 修正，
-    // 使平边正好贴在卡边、拱顶恰好鼓出 8px（见 styles.css .dark-halo 注释）。
+    // 拱顶向外鼓 8px），.bottom/.left/.right 由 CSS rotate 转向。定位分工：本处 JS 只写
+    // 「沿边坐标」（横向行 left、竖向列 top；左/右列旋转后平边垂直居中于 i*sp，故
+    // top 减 4px 居中修正），「贴边偏移」由 styles.css 各边变体显式提供（.top top:-8 /
+    // .bottom bottom:-8 / .left left:-12 / .right right:-12 —— 左/右列 rotate ±90° 后
+    // 平边落点内移半宽 4px，left:-12/right:-12 再外推 4px 使平边贴卡边、拱顶恰好鼓 8px）。
     const halo = el('div', 'dark-halo');
     const TOP_COUNT = 13; // ceil(200/16) = 13
     const SIDE_COUNT = 18; // ceil(280/16) = 18

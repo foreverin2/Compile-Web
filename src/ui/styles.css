@@ -1668,12 +1668,16 @@ body.dragging { cursor: grabbing; user-select: none; }
  * 小学波浪尺比喻：直边 = 呼吸灰↔黑边框（.compiled-ring-darkness 不变），波浪边 =
  * 沿卡面四周成排的半圆凸起（.dark-halo-scallop，半圆直径 16px、向外鼓出 8px）——
  * 上/下边各 13 个横向铺满 200px 宽（间距 ≈15.38px，轻微重叠），左/右边各 18 个竖向
- * 铺满 280px 高（间距 ≈15.56px）；.bottom/.left/.right 用 rotate 把「顶拱」转到对应
- * 朝向（左/右边 rotate ±90° 后平边贴边、拱顶向外鼓 8px，JS 侧已按旋转位移修正
- * left:-12 / top:i*sp-4 的落点）。每片填充 深灰→黑 渐变并随 darkness-shade 同周期
- * 4s 呼吸（与环边框同步变灰↔黑），soft 边缘辉光静态；.no-anim 窗口定格为灰色静态
- * （与 .mist-blob 同模式）。z 1 在编译环（2）之下、与雾层同层但 DOM 后序 → 覆盖在
- * 雾层之上保持波纹轮廓清晰；pointer-events:none 不拦截交互。 */
+ * 铺满 280px 高（间距 ≈15.56px）。定位分工：JS 只写「沿边坐标」（横向行 left、
+ * 竖向列 top，左/右列 top 减 4px 使平边垂直居中于 i*sp）；本文件各边变体显式提供
+ * 「贴边偏移」——.top { top:-8px }（拱顶在卡边上方 8px）、.bottom { bottom:-8px }
+ * （rotate 180° 拱顶朝下）、.left { left:-12px } / .right { right:-12px }（rotate
+ * ±90° 后 16×8 元素绕中心旋转，平边落点内移半宽 8/2=4px，故再外推 4px → left:-12/
+ * right:-12 恰好平边贴卡边、拱顶向外鼓 8px）。每片填充 深灰→黑 渐变并随
+ * darkness-shade 同周期 4s 呼吸（与环边框同步变灰↔黑），soft 边缘辉光静态；
+ * .no-anim 窗口定格为灰色静态（与 .mist-blob 同模式）。z 1 在编译环（2）之下、
+ * 与雾层同层但 DOM 后序 → 覆盖在雾层之上保持波纹轮廓清晰；pointer-events:none
+ * 不拦截交互。 */
 .dark-halo {
   position: absolute;
   inset: 0;
@@ -1692,9 +1696,11 @@ body.dragging { cursor: grabbing; user-select: none; }
   box-shadow: 0 0 5px rgba(96, 96, 112, 0.55), 0 0 12px rgba(0, 0, 0, 0.5);
   animation: dark-scallop-shade 4s ease-in-out infinite; /* 与环 darkness-shade 同周期同相位 */
 }
-.dark-halo-scallop.bottom { transform: rotate(180deg); }
-.dark-halo-scallop.left { transform: rotate(-90deg); }
-.dark-halo-scallop.right { transform: rotate(90deg); }
+/* 各边贴边偏移（R10 fix）：必须显式给出，否则所有片落在容器 0/0 处（顶拱朝里/互相叠压） */
+.dark-halo-scallop.top { top: -8px; }
+.dark-halo-scallop.bottom { bottom: -8px; transform: rotate(180deg); }
+.dark-halo-scallop.left { left: -12px; transform: rotate(-90deg); }
+.dark-halo-scallop.right { right: -12px; transform: rotate(90deg); }
 @keyframes dark-scallop-shade {
   0%, 100% {
     background: linear-gradient(180deg, #45454f, #000); /* 深灰顶 ↔ 黑底 */
