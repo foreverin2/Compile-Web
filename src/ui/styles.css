@@ -58,8 +58,20 @@ body {
 .stack-slot.p1 { padding-right: 25px; }
 .stack-slot.p2 { padding-left: 25px; }
 .stack-slot.interactable { cursor: pointer; }
-.stack-slot.self { border-color: rgba(224, 160, 48, 0.55); }
-.stack-slot.interactable:hover { border-color: #e0a030; background: rgba(224, 160, 48, 0.06); }
+/* 当前玩家可打牌线路的常驻强调：加粗青色描边 + 淡青底色 + 柔和青光（round5 提亮） */
+.stack-slot.self {
+  border-color: rgba(79, 240, 255, 0.9);
+  border-width: 2px;
+  background: rgba(79, 240, 255, 0.06);
+  box-shadow: 0 0 12px rgba(79, 240, 255, 0.35), inset 0 0 12px rgba(79, 240, 255, 0.08);
+}
+/* 悬停可打线路：更亮的青色描边 + 明显底色 + 青色辉光（round5 提亮，改自暗金 #e0a030） */
+.stack-slot.interactable:hover {
+  border-color: #4ff0ff;
+  border-width: 2px;
+  background: rgba(79, 240, 255, 0.14);
+  box-shadow: 0 0 18px rgba(79, 240, 255, 0.55), inset 0 0 16px rgba(79, 240, 255, 0.16);
+}
 .slot-label { position: absolute; top: 4px; right: 6px; font-size: 11px; color: #888; }
 /* 堆叠：横向重叠；P1 向左生长（组右对齐、最新在最左），P2 向右生长（组左对齐、最新在最右） */
 .stack { display: flex; align-items: flex-start; }
@@ -534,19 +546,40 @@ body {
 /* ===== 手牌（底部条带：P1 手牌 | 步骤指示 | P2 手牌） =====
  * position:relative：作为 .hand-side 的网格行；min-height 为外侧竖直堆叠的
  * 牌库 + 弃牌堆两摞（92×132 + 92×112 + 10px 间距 ≈ 286px）留出空间
- * （不影响手牌/刷新按钮/挡板的位置，也不与上方 lane-row / 下方 action-bar 重叠）。 */
+ * （不影响手牌/刷新按钮/挡板的位置，也不与上方 lane-row / 下方 action-bar 重叠；
+ * 刷新手牌移到手牌下方后，.hand-side 高度钉死为 184.8px（见下），按钮溢出在条带
+ * 286px 的余量内；牌库/弃牌堆锚定的包含块高度恒定 → 两摞不随按钮出现/消失位移）。 */
 .hand-strip { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: start; position: relative; min-height: 286px; }
 /* ===== 牌库区（deck area）：每玩家一个，位于手牌条最外侧（P1 左 / P2 右） =====
  * 层叠背面卡（.deck-back）厚度随剩余数：deck-1..deck-4（每 4 张一层，封顶 4 层），
  * 无牌时 deck-empty；最顶层中央 .deck-count 圆形徽标显示剩余张数（空牌库显示 0）。
  * .hand-side 是手牌条每侧的 flex 容器（position:relative 作为牌库/弃牌堆的包含块）：
  * 牌库（.deck）与弃牌堆（.trash-pile）均为绝对定位、移出流式布局，在外侧 −92px 列
- * 竖直堆叠（牌库在上、弃牌堆在下）；流内仅剩 [refresh][hand]（P1）/ [hand][refresh]（P2），
+ * 竖直堆叠（牌库在上、弃牌堆在下）；流内仅剩 .hand-refresh-wrap（手牌 + 刷新手牌），
  * 手牌/刷新按钮/挡板位置完全不受两摞影响。 */
-.hand-side { position: relative; display: flex; align-items: center; gap: 16px; padding-left: 20px; }
+.hand-side {
+  position: relative;
+  display: flex;
+  flex-direction: column;  /* 手牌在上、刷新手牌在其下方（见 .hand-refresh-wrap） */
+  /* height 钉死为手牌整高（.hand margin-top 6 + min-height 178.8 = 184.8px）：
+     .deck/.trash-pile 以 top:50% 锚定此包含块 → 刷新按钮出现/消失时两摞位置不变；
+     按钮 + 间距（整组约 228px）向下溢出，落在条带 286px 的余量内，不与 action-bar 重叠 */
+  height: 184.8px;
+  justify-content: flex-start; /* 整组贴顶部，溢出向下（条带内可见、可点） */
+  align-items: flex-start;     /* P1 手牌贴左缘（padding 内侧），与外侧牌库同侧 */
+  padding-left: 20px;
+}
 /* P2 右侧：整体贴列右缘（牌库已绝对定位移出流，见 .deck）；
-   padding-right 使流内内容（刷新手牌/手牌/挡板）整体内移，与外侧两摞留出空隙 */
-.hand-side.p2 { justify-content: flex-end; padding-right: 20px; }
+   align-items:flex-end 使流内内容（手牌/刷新手牌/挡板）整体贴右，与外侧两摞留出空隙 */
+.hand-side.p2 { align-items: flex-end; padding-right: 20px; }
+/* 手牌 + 刷新手牌 的流内包装：inline-flex 收缩包裹手牌宽度（shrink-to-fit），
+ * 使刷新手牌按钮恰好居中于手牌扇形之下（手牌在上、按钮在下、间距 10px）。 */
+.hand-refresh-wrap {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
 /* 牌库绝对定位到屏幕边缘（P1 左 / P2 右，Part 3）：以 .hand-side（position:relative）
  * 为包含块（top:50% 对齐手牌垂直中心），移出流式布局，不再挤占手牌/刷新手牌/挡板。
  * #app 左右 padding 100px → calc(0px - 100px) = -100px：牌库左/右缘与 app 边缘齐平
@@ -763,10 +796,11 @@ body {
 }
 .hand-shield.retracted .shield-count { opacity: 0; }
 
-/* ===== 刷新手牌按钮（牌库区与手牌之间：P1 牌库右侧 / P2 牌库左侧） =====
- * 手牌条每侧 .hand-side flex 容器内的常规流元素（renderBoard 在 deck 与 hand 之间渲染），
- * 与牌库间距 = 容器 gap 16px；position:relative + z-index 高于挡板（.hand-shield z 70），
- * 避免按钮与手牌外侧挡板边缘重叠时被挡板盖住。紧凑半透明青色（与「翻面」.play-btn 同风格）。 */
+/* ===== 刷新手牌按钮（手牌扇形下方：.hand-refresh-wrap 内、居中于手牌之下） =====
+ * 手牌条每侧 .hand-refresh-wrap（inline-flex column）内的常规流元素，位于手牌之后；
+ * 仅当前玩家 refresh 合法时渲染（renderBoard 条件追加）；position:relative + z-index
+ * 高于挡板（.hand-shield z 70），避免按钮与手牌外侧挡板边缘重叠时被挡板盖住。
+ * 紧凑半透明青色（与「翻面」.play-btn 同风格）。 */
 .shield-refresh-btn {
   position: relative;
   z-index: 71;
@@ -1137,16 +1171,18 @@ body {
 .dev-result-more:hover { background: transparent; }
 
 /* ===== 拖拽打牌：合法落点高亮 + 浮空幽灵卡 ===== */
-/* 拖拽中可合法落点的线路槽：青色霓虹发光（描边 + 底色 + 外/内发光），
-   覆盖 .stack-slot.interactable 的默认悬停样式，直观提示"可放置"区域 */
-.stack-slot.drag-target {
-  border-color: #00ffcc;
-  background: rgba(0, 255, 204, 0.08);
-  box-shadow: 0 0 18px rgba(0, 255, 204, 0.45), inset 0 0 14px rgba(0, 255, 204, 0.1);
+/* 拖拽中可合法落点的线路槽：青色霓虹发光（加粗描边 + 底色 + 外/内发光，round5 提亮），
+   选择器带 .interactable 使特异性 ≥ .interactable:hover（同特异性靠后胜出），
+   拖拽悬停在合法落点上时保持最强的落点高亮、不被悬停样式覆盖 */
+.stack-slot.interactable.drag-target {
+  border-color: #4ff0ff;
+  border-width: 3px;
+  background: rgba(79, 240, 255, 0.18);
+  box-shadow: 0 0 26px rgba(79, 240, 255, 0.7), inset 0 0 20px rgba(79, 240, 255, 0.24);
 }
-.stack-slot.drag-target .slot-label,
-.stack-slot.drag-target .line-value { color: #00ffcc; }
-.stack-slot.drag-target .stack-empty { color: #00ffcc; }
+.stack-slot.interactable.drag-target .slot-label,
+.stack-slot.interactable.drag-target .line-value { color: #4ff0ff; }
+.stack-slot.interactable.drag-target .stack-empty { color: #4ff0ff; }
 
 /* 跟随光标的浮空幽灵卡：fixed 不占布局、pointer-events:none 不拦截 elementFromPoint
    与下方元素的鼠标事件；半透明 + 微缩 0.9（transform 由 JS 按光标位置写入）；
@@ -1183,8 +1219,9 @@ body.dragging { cursor: grabbing; user-select: none; }
 }
 
 /* ===== 选择模式（效果结算：候选卡高亮 + 底部确认条） ===== */
-/* 候选卡：青色霓虹呼吸描边 + 可点光标；已选卡金色描边 + 光晕；非候选卡灰化 */
-.choice-target { outline: 3px solid #4ff0ff; outline-offset: 2px; animation: choice-pulse 1s ease-in-out infinite; cursor: pointer; }
+/* 候选卡：青色霓虹呼吸描边 + 青色辉光 + 可点光标（round5 提亮：恒带 box-shadow 辉光）；
+   已选卡金色描边 + 光晕；非候选卡灰化 */
+.choice-target { outline: 3px solid #4ff0ff; outline-offset: 2px; box-shadow: 0 0 16px rgba(79, 240, 255, 0.55); animation: choice-pulse 1s ease-in-out infinite; cursor: pointer; }
 /* 选中卡（基础特效）：显眼静态金框——外层实线描边 + 内层描边环 + 光晕（不闪烁） */
 .choice-selected {
   outline: 3px solid #ffe14f !important;
@@ -1193,7 +1230,7 @@ body.dragging { cursor: grabbing; user-select: none; }
   animation: none !important;
 }
 .choice-dim { filter: brightness(0.45) saturate(0.4); }
-@keyframes choice-pulse { 0%,100% { outline-color: #4ff0ff; } 50% { outline-color: #4ff0ff66; } }
+@keyframes choice-pulse { 0%,100% { outline-color: #4ff0ff; } 50% { outline-color: #4ff0ffaa; } }
 /* 底部确认条：fixed 悬浮于视口底部中央，z-index 高于手牌挡板（70）/悬停弹出（50） */
 .choice-bar { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); display: flex; gap: 12px; align-items: center;
   padding: 10px 18px; background: #101830ee; border: 1px solid #4ff0ff66; border-radius: 12px; z-index: 200; }
@@ -1356,11 +1393,12 @@ body.dragging { cursor: grabbing; user-select: none; }
   animation: none !important;
   opacity: 0.4;
 }
-/* 线选择高亮（select-line：点击 lane-row 选择目标线） */
+/* 线选择高亮（select-line：点击 lane-row 选择目标线，round5 提亮） */
 .choice-line {
-  outline: 2px dashed #4ff0ff;
+  outline: 3px dashed #4ff0ff;
   outline-offset: -3px;
-  background: rgba(79, 240, 255, 0.05);
+  background: rgba(79, 240, 255, 0.1);
+  box-shadow: 0 0 22px rgba(79, 240, 255, 0.4), inset 0 0 26px rgba(79, 240, 255, 0.16);
   cursor: pointer;
 }
 
@@ -1416,23 +1454,25 @@ body.dragging { cursor: grabbing; user-select: none; }
  * 仅 darkness-0/1/4 的偏转播放（card:shifted + triggerProtocol=darkness，JS 构建）。
  * 桥元素 fixed 定位于起点（左缘）、按起终距离定宽、rotate 到终点角度；transform-origin:
  * left center + margin-top 负半高使旋转轴恰在起点且桥身垂直居中于起终点连线上。
- * 厚度 50px 的粗烟带：黑核（linear-gradient 中轴暗芯）+ 灰蓝光晕 rim（::before 外扩，
- * 与 .smoke-puff 同系视觉——近黑 UI 上以冷色亮缘显形）+ 中段加密暗芯（::after），
- * 整体 blur 3px 柔和成烟。z-index 由 JS 常量 BRIDGE_Z 写入内联（290：飞行卡克隆 BASE_Z
- * 300 之下、棋盘之上）；过渡时长由 JS 常量 BRIDGE_IN_MS/BRIDGE_OUT_MS 经 CSS 变量
+ * 厚度 178.8px（= 一张卡的长边，与 GHOST_H/卡高常量一致）的粗烟带：黑核（linear-gradient
+ * 中轴暗芯）+ 灰蓝光晕 rim（::before 外扩，与 .smoke-puff 同系视觉——近黑 UI 上以冷色
+ * 亮缘显形）+ 中段加密暗芯（::after），整体 blur 8px 柔和成烟；rim 外扩/暗芯内缩/模糊
+ * 均按厚度比 178.8/50 ≈ 3.58 等比放大，保持 50px 时代的分层观感。z-index 由 JS 常量
+ * BRIDGE_Z 写入内联（290：飞行卡克隆 BASE_Z 300 之下、棋盘之上）；过渡时长由 JS 常量
+ * BRIDGE_IN_MS/BRIDGE_OUT_MS 经 CSS 变量
  * --bridge-in-ms/--bridge-out-ms 驱动（单一来源，避免与 JS 定时器漂移）。
  * 端点为 .bridge-end 小光点（14px 辉光，margin 负半宽居中于坐标，z 由 BRIDGE_END_Z 内联），
  * 标记起止位置。
  * 一次性瞬时特效（与 playShatter 同模式，body 级浮层不参与重渲染树）→ 无需 .no-anim 抑制。 */
 .shift-bridge {
   position: fixed;
-  height: 50px;        /* 桥体厚度（粗烟带） */
-  margin-top: -25px;   /* 垂直居中于起点 */
+  height: 178.8px;       /* 桥体厚度 = 一张卡的长边（与 GHOST_H/卡高常量一致） */
+  margin-top: -89.4px;   /* 垂直居中于起点（负半高：178.8 / 2） */
   pointer-events: none;
   opacity: 0;
   transform-origin: left center;
   border-radius: 999px;
-  filter: blur(3px);
+  filter: blur(8px);     /* 3px → 8px：随厚度等比加柔（178.8/50 ≈ 3.58） */
   transition: opacity var(--bridge-in-ms, 0.35s) ease;
   /* 黑核：整条桥的中轴暗芯，两端渐隐成烟 */
   background: linear-gradient(90deg,
@@ -1441,11 +1481,12 @@ body.dragging { cursor: grabbing; user-select: none; }
     rgba(8, 8, 15, 0.98) 86%,
     rgba(6, 6, 12, 0) 100%);
 }
-/* 灰蓝光晕层：外扩一圈冷色 rim，勾出烟桥剪影（与 .smoke-puff 的灰蓝 rim 同系） */
+/* 灰蓝光晕层：外扩一圈冷色 rim，勾出烟桥剪影（与 .smoke-puff 的灰蓝 rim 同系；
+   外扩量 10px→36px、模糊 2px→7px，随厚度等比放大） */
 .shift-bridge::before {
   content: '';
   position: absolute;
-  inset: -10px -4px;
+  inset: -36px -14px;
   border-radius: 999px;
   background: linear-gradient(90deg,
     rgba(120, 136, 182, 0) 0%,
@@ -1453,13 +1494,13 @@ body.dragging { cursor: grabbing; user-select: none; }
     rgba(150, 165, 205, 0.42) 50%,
     rgba(118, 134, 180, 0.5) 84%,
     rgba(120, 136, 182, 0) 100%);
-  filter: blur(2px);
+  filter: blur(7px);
 }
-/* 第二层堆叠暗芯：中段更黑，烟感更实、密度更高 */
+/* 第二层堆叠暗芯：中段更黑，烟感更实、密度更高（内缩 6px→22px 随厚度等比放大） */
 .shift-bridge::after {
   content: '';
   position: absolute;
-  inset: 6px 12%;
+  inset: 22px 12%;
   border-radius: 999px;
   background: linear-gradient(90deg,
     rgba(0, 0, 0, 0) 0%,
