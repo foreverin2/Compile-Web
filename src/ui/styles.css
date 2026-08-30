@@ -1669,15 +1669,15 @@ body.dragging { cursor: grabbing; user-select: none; }
  * 沿卡面四周成排的半圆凸起（.dark-halo-scallop，半圆直径 16px、向外鼓出 8px）——
  * 上/下边各 13 个横向铺满 200px 宽（间距 ≈15.38px，轻微重叠），左/右边各 18 个竖向
  * 铺满 280px 高（间距 ≈15.56px）。定位分工：JS 只写「沿边坐标」（横向行 left、
- * 竖向列 top，左/右列 top 减 4px 使平边垂直居中于 i*sp）；本文件各边变体显式提供
- * 「贴边偏移」——.top { top:-8px }（拱顶在卡边上方 8px）、.bottom { bottom:-8px }
- * （rotate 180° 拱顶朝下）、.left { left:-12px } / .right { right:-12px }（rotate
- * ±90° 后 16×8 元素绕中心旋转，平边落点内移半宽 8/2=4px，故再外推 4px → left:-12/
- * right:-12 恰好平边贴卡边、拱顶向外鼓 8px）。每片填充 深灰→黑 渐变并随
- * darkness-shade 同周期 4s 呼吸（与环边框同步变灰↔黑），soft 边缘辉光静态；
- * .no-anim 窗口定格为灰色静态（与 .mist-blob 同模式）。z 1 在编译环（2）之下、
- * 与雾层同层但 DOM 后序 → 覆盖在雾层之上保持波纹轮廓清晰；pointer-events:none
- * 不拦截交互。 */
+ * 竖向列 top，左/右列 top = i*15.56 + 3.78 使整列平边覆盖 [−0.22, 280.22]、上下
+ * 两端对称环绕）；本文件各边变体显式提供「贴边偏移」——.top { top:-8px }（拱顶在
+ * 卡边上方 8px）、.bottom { bottom:-8px }（rotate 180° 拱顶朝下）、.left { left:-12px }
+ * / .right { right:-12px }（rotate ±90° 后平边相对元素中心内移半宽 4px——「平边内
+ * 4px/拱顶外 4px」仅对元素中心落在卡边上成立，left:-12/right:-12 把中心推到卡边外
+ * 4px → 平边贴卡边、拱顶向外鼓 8px）。每片填充 深灰→黑 渐变并随 darkness-shade
+ * 同周期 4s 呼吸（与环边框同步变灰↔黑），soft 边缘辉光静态；.no-anim 窗口定格为
+ * 灰色静态（与 .mist-blob 同模式）。z 1 在编译环（2）之下、与雾层同层但 DOM 后序 →
+ * 覆盖在雾层之上保持波纹轮廓清晰；pointer-events:none 不拦截交互。 */
 .dark-halo {
   position: absolute;
   inset: 0;

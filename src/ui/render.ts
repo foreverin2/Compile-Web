@@ -656,11 +656,13 @@ function appendCompiledRing(box: HTMLElement, defId: string): void {
     // R10：波浪尺式半圆光晕（暗域专属，保留雾层不变）。卡面 200×280：上/下边各 13 个
     // 半圆（直径 16px，间距 200/13≈15.38px 轻微重叠铺满 200px），左/右边各 18 个
     // （间距 280/18≈15.56px 铺满 280px）。.dark-halo-scallop 默认顶拱（平边在下贴卡边、
-    // 拱顶向外鼓 8px），.bottom/.left/.right 由 CSS rotate 转向。定位分工：本处 JS 只写
-    // 「沿边坐标」（横向行 left、竖向列 top；左/右列旋转后平边垂直居中于 i*sp，故
-    // top 减 4px 居中修正），「贴边偏移」由 styles.css 各边变体显式提供（.top top:-8 /
-    // .bottom bottom:-8 / .left left:-12 / .right right:-12 —— 左/右列 rotate ±90° 后
-    // 平边落点内移半宽 4px，left:-12/right:-12 再外推 4px 使平边贴卡边、拱顶恰好鼓 8px）。
+    // 拱顶向外鼓 8px），.bottom/.left/.right 由 CSS rotate 转向。定位分工：JS 只写
+    // 「沿边坐标」（横向行 left、竖向列 top），「贴边偏移」由 styles.css 各边变体提供
+    // （.top top:-8 / .bottom bottom:-8 / .left left:-12 / .right right:-12）。
+    // 左/右列旋转落点：16×8 顶拱元素绕中心 rotate ±90° 后，平边相对元素中心内移半宽
+    // 4px——「平边内 4px/拱顶外 4px」仅对元素中心落在卡边上成立；left:-12/right:-12
+    // 把元素中心推到卡边外 4px，故平边贴边、拱顶鼓 8px。top = i*SIDE_SP + 3.78 使整列
+    // 平边覆盖 [−0.22, 280.22]，上下两端对称环绕（避免下角 ~7.5px 无凸起缺口）。
     const halo = el('div', 'dark-halo');
     const TOP_COUNT = 13; // ceil(200/16) = 13
     const SIDE_COUNT = 18; // ceil(280/16) = 18
@@ -678,12 +680,12 @@ function appendCompiledRing(box: HTMLElement, defId: string): void {
     }
     for (let i = 0; i < SIDE_COUNT; i++) {
       const s = el('div', 'dark-halo-scallop left');
-      s.style.top = `${(i * SIDE_SP - 4).toFixed(2)}px`;
+      s.style.top = `${(i * SIDE_SP + 3.78).toFixed(2)}px`;
       halo.appendChild(s);
     }
     for (let i = 0; i < SIDE_COUNT; i++) {
       const s = el('div', 'dark-halo-scallop right');
-      s.style.top = `${(i * SIDE_SP - 4).toFixed(2)}px`;
+      s.style.top = `${(i * SIDE_SP + 3.78).toFixed(2)}px`;
       halo.appendChild(s);
     }
     box.appendChild(halo);
