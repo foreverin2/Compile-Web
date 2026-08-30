@@ -1512,20 +1512,22 @@ body.dragging { cursor: grabbing; user-select: none; }
  * 使用；light/darkness（R9）隐藏岩浆段/岩石，改用呼吸边框 + 角部光支架/不规则黑雾。
  * 每协议静态兜底（.protocol.compiled-fx-<defId>，与 fire 同模式）+ 环带配色覆盖。 */
 .protocol.compiled-fx-light {
-  /* 静态兜底（R9）：暖黄/白描边 + 柔光晕（与呼吸环同主题） */
+  /* 静态兜底（R9 + R10）：暖黄/白描边 + 厚光晕（与呼吸环同主题） */
   border-color: #ffe066;
-  box-shadow: 0 0 12px rgba(255, 224, 102, 0.6), inset 0 0 10px rgba(255, 248, 225, 0.25);
+  box-shadow: 0 0 16px rgba(255, 224, 102, 0.6), 0 0 40px rgba(255, 248, 225, 0.3), inset 0 0 12px rgba(255, 248, 225, 0.3);
 }
 .protocol.compiled-fx-darkness {
   /* 静态兜底（R9）：深灰→黑描边 + 暗光晕（与动态环同主题） */
   border-color: #45454f;
   box-shadow: 0 0 12px rgba(90, 90, 105, 0.55), inset 0 0 10px rgba(30, 30, 40, 0.35);
 }
-/* light：已编译 = 呼吸黄↔白边框（无旋转岩浆流——.lava-seg/.lava-rock 隐藏） */
+/* light：已编译 = 呼吸黄↔白边框 + 厚光晕（无旋转岩浆流——.lava-seg/.lava-rock 隐藏）
+ * R10：呼吸 3s → 2s（更快交替），暖白 ↔ 饱和金黄 高对比（#fffdf5 ↔ #ffc400），
+ * 外晕扩到 30/70px 级 —— 读作厚厚的光晕（小学波浪尺的「直边」对应：整圈厚光晕） */
 .compiled-ring-light {
   border: 2px solid;
   border-radius: 14px;
-  animation: light-breathe 3s ease-in-out infinite;
+  animation: light-breathe 2s ease-in-out infinite;
 }
 .compiled-ring-light .lava-seg,
 .compiled-ring-light .lava-rock {
@@ -1533,36 +1535,39 @@ body.dragging { cursor: grabbing; user-select: none; }
 }
 @keyframes light-breathe {
   0%, 100% {
-    border-color: #fff8e1; /* 暖白 */
+    border-color: #fffdf5; /* 明亮暖白 */
     box-shadow:
-      0 0 8px rgba(255, 248, 225, 0.6),
-      0 0 22px rgba(255, 255, 255, 0.3),
-      inset 0 0 10px rgba(255, 255, 255, 0.14);
+      0 0 20px rgba(255, 253, 245, 0.75),
+      0 0 45px rgba(255, 255, 255, 0.45),
+      0 0 75px rgba(255, 255, 255, 0.25),
+      inset 0 0 16px rgba(255, 253, 245, 0.4);
   }
   50% {
-    border-color: #ffe066; /* 亮黄 */
+    border-color: #ffc400; /* 饱和金黄 */
     box-shadow:
-      0 0 12px rgba(255, 224, 102, 0.95),
-      0 0 30px rgba(255, 200, 60, 0.5),
-      inset 0 0 14px rgba(255, 224, 102, 0.24);
+      0 0 30px rgba(255, 196, 0, 0.85),
+      0 0 70px rgba(255, 196, 0, 0.5),
+      0 0 110px rgba(255, 170, 0, 0.28),
+      inset 0 0 18px rgba(255, 196, 0, 0.4);
   }
 }
-/* 四角发光护边（light 专属）：L 形光支架贴住 holder 四角，微呼吸与边框同步 */
+/* 四角发光护边（light 专属）：L 形光支架贴住 holder 四角，微呼吸与边框同步
+ * R10：支架 30×30 → 36×36、边框 3px → 6px（四角更厚实），呼吸 3s → 2s 同步加快 */
 .light-corner {
   position: absolute;
-  width: 30px;
-  height: 30px;
+  width: 36px;
+  height: 36px;
   pointer-events: none;
   z-index: 2;
-  animation: corner-glow 3s ease-in-out infinite;
+  animation: corner-glow 2s ease-in-out infinite;
 }
-.light-corner.tl { top: -7px; left: -7px; border-top: 3px solid; border-left: 3px solid; border-top-left-radius: 9px; }
-.light-corner.tr { top: -7px; right: -7px; border-top: 3px solid; border-right: 3px solid; border-top-right-radius: 9px; }
-.light-corner.bl { bottom: -7px; left: -7px; border-bottom: 3px solid; border-left: 3px solid; border-bottom-left-radius: 9px; }
-.light-corner.br { bottom: -7px; right: -7px; border-bottom: 3px solid; border-right: 3px solid; border-bottom-right-radius: 9px; }
+.light-corner.tl { top: -8px; left: -8px; border-top: 6px solid; border-left: 6px solid; border-top-left-radius: 12px; }
+.light-corner.tr { top: -8px; right: -8px; border-top: 6px solid; border-right: 6px solid; border-top-right-radius: 12px; }
+.light-corner.bl { bottom: -8px; left: -8px; border-bottom: 6px solid; border-left: 6px solid; border-bottom-left-radius: 12px; }
+.light-corner.br { bottom: -8px; right: -8px; border-bottom: 6px solid; border-right: 6px solid; border-bottom-right-radius: 12px; }
 @keyframes corner-glow {
-  0%, 100% { border-color: #fff8e1; filter: drop-shadow(0 0 5px rgba(255, 248, 225, 0.75)); }
-  50% { border-color: #ffe066; filter: drop-shadow(0 0 10px rgba(255, 224, 102, 0.95)); }
+  0%, 100% { border-color: #fffdf5; filter: drop-shadow(0 0 6px rgba(255, 253, 245, 0.9)); }
+  50% { border-color: #ffc400; filter: drop-shadow(0 0 12px rgba(255, 196, 0, 1)); }
 }
 /* darkness：已编译 = 深灰→纯黑动态边框（无旋转岩浆流——.lava-seg/.lava-rock 隐藏） */
 .compiled-ring-darkness {
@@ -1652,6 +1657,51 @@ body.dragging { cursor: grabbing; user-select: none; }
 .no-anim .mist-blob {
   animation: none !important;
   opacity: 0.4;
+}
+
+/* ===== darkness 已编译：波浪尺式半圆光晕（R10，成排半圆贴卡边向外鼓出） =====
+ * 小学波浪尺比喻：直边 = 呼吸灰↔黑边框（.compiled-ring-darkness 不变），波浪边 =
+ * 沿卡面四周成排的半圆凸起（.dark-halo-scallop，半圆直径 16px、向外鼓出 8px）——
+ * 上/下边各 13 个横向铺满 200px 宽（间距 ≈15.38px，轻微重叠），左/右边各 18 个竖向
+ * 铺满 280px 高（间距 ≈15.56px）；.bottom/.left/.right 用 rotate 把「顶拱」转到对应
+ * 朝向（左/右边 rotate ±90° 后平边贴边、拱顶向外鼓 8px，JS 侧已按旋转位移修正
+ * left:-12 / top:i*sp-4 的落点）。每片填充 深灰→黑 渐变并随 darkness-shade 同周期
+ * 4s 呼吸（与环边框同步变灰↔黑），soft 边缘辉光静态；.no-anim 窗口定格为灰色静态
+ * （与 .mist-blob 同模式）。z 1 在编译环（2）之下、与雾层同层但 DOM 后序 → 覆盖在
+ * 雾层之上保持波纹轮廓清晰；pointer-events:none 不拦截交互。 */
+.dark-halo {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  overflow: visible;
+}
+.dark-halo-scallop {
+  position: absolute;
+  width: 16px;
+  height: 8px;
+  pointer-events: none;
+  /* 顶拱半圆：平边在下（贴卡边），拱顶在上（向外鼓 8px = 半径） */
+  border-radius: 50% 50% 0 0 / 100% 100% 0 0;
+  background: linear-gradient(180deg, #45454f, #000);
+  box-shadow: 0 0 5px rgba(96, 96, 112, 0.55), 0 0 12px rgba(0, 0, 0, 0.5);
+  animation: dark-scallop-shade 4s ease-in-out infinite; /* 与环 darkness-shade 同周期同相位 */
+}
+.dark-halo-scallop.bottom { transform: rotate(180deg); }
+.dark-halo-scallop.left { transform: rotate(-90deg); }
+.dark-halo-scallop.right { transform: rotate(90deg); }
+@keyframes dark-scallop-shade {
+  0%, 100% {
+    background: linear-gradient(180deg, #45454f, #000); /* 深灰顶 ↔ 黑底 */
+  }
+  50% {
+    background: linear-gradient(180deg, #000, #050508); /* 与边框同刻变纯黑 */
+  }
+}
+/* .no-anim 窗口：定格深灰静态（与 .mist-blob 同模式，避免重建瞬间闪帧） */
+.no-anim .dark-halo-scallop {
+  animation: none !important;
+  background: linear-gradient(180deg, #45454f, #000);
 }
 /* 线选择高亮（select-line：点击 lane-row 选择目标线，round5 提亮） */
 .choice-line {

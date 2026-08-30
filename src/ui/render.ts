@@ -640,6 +640,38 @@ function appendCompiledRing(box: HTMLElement, defId: string): void {
       mist.appendChild(blob);
     }
     box.appendChild(mist);
+    // R10：波浪尺式半圆光晕（暗域专属，保留雾层不变）。卡面 200×280：上/下边各 13 个
+    // 半圆（直径 16px，间距 200/13≈15.38px 轻微重叠铺满 200px），左/右边各 18 个
+    // （间距 280/18≈15.56px 铺满 280px）。.dark-halo-scallop 默认顶拱（平边在下贴卡边、
+    // 拱顶向外鼓 8px），.bottom/.left/.right 由 CSS rotate 转向；左/右边旋转后平边落点
+    // 会内移半宽（8/2=4px），故 left/right 列用 left:-12 / right:-12、top 减 4px 修正，
+    // 使平边正好贴在卡边、拱顶恰好鼓出 8px（见 styles.css .dark-halo 注释）。
+    const halo = el('div', 'dark-halo');
+    const TOP_COUNT = 13; // ceil(200/16) = 13
+    const SIDE_COUNT = 18; // ceil(280/16) = 18
+    const TOP_SP = 200 / TOP_COUNT; // ≈15.38
+    const SIDE_SP = 280 / SIDE_COUNT; // ≈15.56
+    for (let i = 0; i < TOP_COUNT; i++) {
+      const s = el('div', 'dark-halo-scallop top');
+      s.style.left = `${(i * TOP_SP).toFixed(2)}px`;
+      halo.appendChild(s);
+    }
+    for (let i = 0; i < TOP_COUNT; i++) {
+      const s = el('div', 'dark-halo-scallop bottom');
+      s.style.left = `${(i * TOP_SP).toFixed(2)}px`;
+      halo.appendChild(s);
+    }
+    for (let i = 0; i < SIDE_COUNT; i++) {
+      const s = el('div', 'dark-halo-scallop left');
+      s.style.top = `${(i * SIDE_SP - 4).toFixed(2)}px`;
+      halo.appendChild(s);
+    }
+    for (let i = 0; i < SIDE_COUNT; i++) {
+      const s = el('div', 'dark-halo-scallop right');
+      s.style.top = `${(i * SIDE_SP - 4).toFixed(2)}px`;
+      halo.appendChild(s);
+    }
+    box.appendChild(halo);
   }
 }
 
