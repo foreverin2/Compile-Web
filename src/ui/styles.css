@@ -58,8 +58,20 @@ body {
 .stack-slot.p1 { padding-right: 25px; }
 .stack-slot.p2 { padding-left: 25px; }
 .stack-slot.interactable { cursor: pointer; }
-.stack-slot.self { border-color: rgba(224, 160, 48, 0.55); }
-.stack-slot.interactable:hover { border-color: #e0a030; background: rgba(224, 160, 48, 0.06); }
+/* 当前玩家可打牌线路的常驻强调：加粗青色描边 + 淡青底色 + 柔和青光（round5 提亮） */
+.stack-slot.self {
+  border-color: rgba(79, 240, 255, 0.9);
+  border-width: 2px;
+  background: rgba(79, 240, 255, 0.06);
+  box-shadow: 0 0 12px rgba(79, 240, 255, 0.35), inset 0 0 12px rgba(79, 240, 255, 0.08);
+}
+/* 悬停可打线路：更亮的青色描边 + 明显底色 + 青色辉光（round5 提亮，改自暗金 #e0a030） */
+.stack-slot.interactable:hover {
+  border-color: #4ff0ff;
+  border-width: 2px;
+  background: rgba(79, 240, 255, 0.14);
+  box-shadow: 0 0 18px rgba(79, 240, 255, 0.55), inset 0 0 16px rgba(79, 240, 255, 0.16);
+}
 .slot-label { position: absolute; top: 4px; right: 6px; font-size: 11px; color: #888; }
 /* 堆叠：横向重叠；P1 向左生长（组右对齐、最新在最左），P2 向右生长（组左对齐、最新在最右） */
 .stack { display: flex; align-items: flex-start; }
@@ -1156,16 +1168,18 @@ body {
 .dev-result-more:hover { background: transparent; }
 
 /* ===== 拖拽打牌：合法落点高亮 + 浮空幽灵卡 ===== */
-/* 拖拽中可合法落点的线路槽：青色霓虹发光（描边 + 底色 + 外/内发光），
-   覆盖 .stack-slot.interactable 的默认悬停样式，直观提示"可放置"区域 */
-.stack-slot.drag-target {
-  border-color: #00ffcc;
-  background: rgba(0, 255, 204, 0.08);
-  box-shadow: 0 0 18px rgba(0, 255, 204, 0.45), inset 0 0 14px rgba(0, 255, 204, 0.1);
+/* 拖拽中可合法落点的线路槽：青色霓虹发光（加粗描边 + 底色 + 外/内发光，round5 提亮），
+   选择器带 .interactable 使特异性 ≥ .interactable:hover（同特异性靠后胜出），
+   拖拽悬停在合法落点上时保持最强的落点高亮、不被悬停样式覆盖 */
+.stack-slot.interactable.drag-target {
+  border-color: #4ff0ff;
+  border-width: 3px;
+  background: rgba(79, 240, 255, 0.18);
+  box-shadow: 0 0 26px rgba(79, 240, 255, 0.7), inset 0 0 20px rgba(79, 240, 255, 0.24);
 }
-.stack-slot.drag-target .slot-label,
-.stack-slot.drag-target .line-value { color: #00ffcc; }
-.stack-slot.drag-target .stack-empty { color: #00ffcc; }
+.stack-slot.interactable.drag-target .slot-label,
+.stack-slot.interactable.drag-target .line-value { color: #4ff0ff; }
+.stack-slot.interactable.drag-target .stack-empty { color: #4ff0ff; }
 
 /* 跟随光标的浮空幽灵卡：fixed 不占布局、pointer-events:none 不拦截 elementFromPoint
    与下方元素的鼠标事件；半透明 + 微缩 0.9（transform 由 JS 按光标位置写入）；
@@ -1202,8 +1216,9 @@ body.dragging { cursor: grabbing; user-select: none; }
 }
 
 /* ===== 选择模式（效果结算：候选卡高亮 + 底部确认条） ===== */
-/* 候选卡：青色霓虹呼吸描边 + 可点光标；已选卡金色描边 + 光晕；非候选卡灰化 */
-.choice-target { outline: 3px solid #4ff0ff; outline-offset: 2px; animation: choice-pulse 1s ease-in-out infinite; cursor: pointer; }
+/* 候选卡：青色霓虹呼吸描边 + 青色辉光 + 可点光标（round5 提亮：恒带 box-shadow 辉光）；
+   已选卡金色描边 + 光晕；非候选卡灰化 */
+.choice-target { outline: 3px solid #4ff0ff; outline-offset: 2px; box-shadow: 0 0 16px rgba(79, 240, 255, 0.55); animation: choice-pulse 1s ease-in-out infinite; cursor: pointer; }
 /* 选中卡（基础特效）：显眼静态金框——外层实线描边 + 内层描边环 + 光晕（不闪烁） */
 .choice-selected {
   outline: 3px solid #ffe14f !important;
@@ -1212,7 +1227,7 @@ body.dragging { cursor: grabbing; user-select: none; }
   animation: none !important;
 }
 .choice-dim { filter: brightness(0.45) saturate(0.4); }
-@keyframes choice-pulse { 0%,100% { outline-color: #4ff0ff; } 50% { outline-color: #4ff0ff66; } }
+@keyframes choice-pulse { 0%,100% { outline-color: #4ff0ff; } 50% { outline-color: #4ff0ffaa; } }
 /* 底部确认条：fixed 悬浮于视口底部中央，z-index 高于手牌挡板（70）/悬停弹出（50） */
 .choice-bar { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); display: flex; gap: 12px; align-items: center;
   padding: 10px 18px; background: #101830ee; border: 1px solid #4ff0ff66; border-radius: 12px; z-index: 200; }
@@ -1375,11 +1390,12 @@ body.dragging { cursor: grabbing; user-select: none; }
   animation: none !important;
   opacity: 0.4;
 }
-/* 线选择高亮（select-line：点击 lane-row 选择目标线） */
+/* 线选择高亮（select-line：点击 lane-row 选择目标线，round5 提亮） */
 .choice-line {
-  outline: 2px dashed #4ff0ff;
+  outline: 3px dashed #4ff0ff;
   outline-offset: -3px;
-  background: rgba(79, 240, 255, 0.05);
+  background: rgba(79, 240, 255, 0.1);
+  box-shadow: 0 0 22px rgba(79, 240, 255, 0.4), inset 0 0 26px rgba(79, 240, 255, 0.16);
   cursor: pointer;
 }
 
