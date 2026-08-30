@@ -12,8 +12,10 @@ body {
   background-attachment: fixed;
 }
 /* 主容器：左右 padding 100px 容纳电池外溢；草案界面放大 2.5 倍后较宽，允许横向滚动 */
-/* 主容器：左右 padding 100px 容纳电池外溢；不设 overflow-x:hidden 防裁剪 */
-#app { max-width: 2000px; margin: 0 auto; padding: 12px 100px; }
+/* 主容器：左右 padding 100px 容纳电池外溢；不设 overflow-x:hidden 防裁剪。
+   底部 padding 110px：为 fixed 底部「操作台」（.action-bar / .choice-bar，bottom 18px、
+   高约 70-90px）预留空间，页面滚到底时最后内容（日志等）不被操作台遮住。 */
+#app { max-width: 2000px; margin: 0 auto; padding: 12px 100px 110px; }
 
 .board { display: flex; flex-direction: column; gap: 10px; }
 
@@ -891,8 +893,13 @@ body {
 /* ===== 指示 / 操作 / 日志 ===== */
 .step-indicator { text-align: center; font-size: 13px; color: #ccc; padding: 4px 0; }
 /* 操作行：编译线按钮与「下一步」整组居中（引擎中二者不同时出现：编译线仅在 check-compile
-   且有可编译线时存在，此时无 advance；action 步骤仅剩「下一步」+ 上方提示文本） */
-.action-bar { display: flex; gap: 8px; align-items: center; justify-content: center; padding: 8px 0; flex-wrap: wrap; }
+   且有可编译线时存在，此时无 advance；action 步骤仅剩「下一步」+ 上方提示文本）。
+   与 .choice-bar 同定位（fixed 视口底部中央，bottom 18px，z-index 200）：所有玩家决策
+   按钮（编译线N / 结算触发效果 / 清理缓存 / 下一步）统一固定在底部「操作台」，滚动不消失。
+   空条隐藏：选择挂起时无合法行动 → 无按钮 → 不渲染占位条。 */
+.action-bar { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 200;
+  display: flex; gap: 8px; align-items: center; justify-content: center; padding: 8px 0; flex-wrap: wrap; }
+.action-bar:empty { display: none; }
 /* 「下一步」区块：纵向排列（提示文本在上、按钮在下），整体随操作行水平居中 */
 .next-block { display: flex; flex-direction: column; align-items: center; gap: 3px; }
 .btn { padding: 6px 12px; border-radius: 6px; border: none; background: #e0a030; color: #111; font-weight: bold; cursor: pointer; }
@@ -1288,7 +1295,16 @@ body.dragging { cursor: grabbing; user-select: none; }
 .hand-strip.choice-mode .card:not(.choice-target) { pointer-events: none; }
 
 /* ===== 诊断日志导出 ===== */
-.diag-btn { font-size: 12px; padding: 4px 10px; margin-top: 10px; }
+/* 导出日志按钮：放大 + 固定于视口右下角（right 16px / bottom 18px），z-index 300 高于底部
+   操作台与选择条（均 200）——滚动时始终可见、不被操作台覆盖。霓虹青色与 .play-btn /
+   .choice-bar 一致（覆盖 .btn 的黄色底，.diag-btn 声明在 .btn 之后、同特异性后声明胜）。 */
+.diag-btn {
+  position: fixed; right: 16px; bottom: 18px; z-index: 300;
+  font-size: 16px; padding: 10px 18px; margin-top: 0;
+  background: #0e1c2a; color: #4ff0ff; border: 1px solid #4ff0ff88;
+  border-radius: 8px; box-shadow: 0 0 8px rgba(79, 240, 255, 0.35); transition: all 0.15s ease;
+}
+.diag-btn:hover { background: #12303f; box-shadow: 0 0 14px rgba(79, 240, 255, 0.7); }
 .diag-prompt { position: fixed; right: 20px; bottom: 20px; z-index: 300; width: 360px; max-width: 90vw;
   background: #2a0f14f2; border: 1px solid #ff6b6b88; border-radius: 10px; padding: 12px 16px;
   box-shadow: 0 6px 24px #000a; }
