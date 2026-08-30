@@ -26,6 +26,7 @@ function makeState(
     draftRound: 6,
     draftPicks: [],
     turnPlayer: 0,
+    turnCount: 0,
     step: 'check-control',
     compiledThisTurn: false,
     players: [

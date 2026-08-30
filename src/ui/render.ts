@@ -978,8 +978,27 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
         renderApp(root, s, cb);
       },
       onToggleFaceUp: () => {
+        // 翻面动画：先切状态，在旧卡节点上播 3D 翻面（.hand-flipping），动画结束后
+        // 再重渲染展示新朝向——替代旧的即时重渲染（卡牌瞬间"弹回"手牌）。
+        // 选中态（selectedUid / selectedFaceUp 模块态）保持不变，翻面后仍保持选中。
+        if (handFlipAnimBusy) return; // 动画进行中忽略重复点击
+        if (selectedUid === null) {
+          selectedFaceUp = !selectedFaceUp;
+          renderApp(root, s, cb);
+          return;
+        }
+        const node = document.querySelector<HTMLElement>(`.hand .card[data-uid="${selectedUid}"]`);
         selectedFaceUp = !selectedFaceUp;
-        renderApp(root, s, cb);
+        if (!node) {
+          renderApp(root, s, cb);
+          return;
+        }
+        handFlipAnimBusy = true;
+        node.classList.add('hand-flipping');
+        window.setTimeout(() => {
+          handFlipAnimBusy = false;
+          renderApp(root, s, cb);
+        }, HAND_FLIP_MS);
       },
       cb,
     })
@@ -1000,8 +1019,27 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
         renderApp(root, s, cb);
       },
       onToggleFaceUp: () => {
+        // 翻面动画：先切状态，在旧卡节点上播 3D 翻面（.hand-flipping），动画结束后
+        // 再重渲染展示新朝向——替代旧的即时重渲染（卡牌瞬间"弹回"手牌）。
+        // 选中态（selectedUid / selectedFaceUp 模块态）保持不变，翻面后仍保持选中。
+        if (handFlipAnimBusy) return; // 动画进行中忽略重复点击
+        if (selectedUid === null) {
+          selectedFaceUp = !selectedFaceUp;
+          renderApp(root, s, cb);
+          return;
+        }
+        const node = document.querySelector<HTMLElement>(`.hand .card[data-uid="${selectedUid}"]`);
         selectedFaceUp = !selectedFaceUp;
-        renderApp(root, s, cb);
+        if (!node) {
+          renderApp(root, s, cb);
+          return;
+        }
+        handFlipAnimBusy = true;
+        node.classList.add('hand-flipping');
+        window.setTimeout(() => {
+          handFlipAnimBusy = false;
+          renderApp(root, s, cb);
+        }, HAND_FLIP_MS);
       },
       cb,
     })
@@ -1168,6 +1206,10 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
 
 let selectedUid: string | null = null;
 let selectedFaceUp = true;
+/** 手牌翻面动画进行中：防止动画期间重复点击/重渲染打断（HAND_FLIP_MS 后由定时器重渲染） */
+let handFlipAnimBusy = false;
+/** 手牌翻面动画时长（ms，与 styles.css .hand-flipping 的 transition 时长一致） */
+const HAND_FLIP_MS = 380;
 /** 已渲染过的揭示幽灵 id（仅首次出现播放入场动画） */
 const revealedGhostSeen = new Set<string>();
 /** R8 手牌挡板宽度（px，模块态：重渲染后保留；0=收起、手牌可见） */

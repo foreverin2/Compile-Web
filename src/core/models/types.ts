@@ -93,16 +93,22 @@ export interface ChoiceAnswer {
   selected: string[];
 }
 
-/** 揭示产生的幽灵牌：正面复制到效果属主手牌区末尾，不参与任何事件。
- *  expiresAfterTurn = 效果属主的对手：幽灵撑过属主本回合结束与对手整回合，
- *  到对手回合结束（= 下回合回合结束）时清除。 */
+/** 揭示产生的幽灵牌：把被揭示卡的正面复制到 shownTo 玩家手牌区末尾，不参与任何事件。
+ *  两个用例（turn-count 过期）：
+ *  - Case A 把自己的卡/手牌揭示给对手看：shownTo = 对手；expiresAtTurn = 揭示时计数 + 2
+ *    （撑过发起者本回合结束 + 对手整回合，对手回合结束转换时清除）。
+ *  - Case B 把对手的卡/手牌揭示给自己看（如 light-4）：shownTo = 发起者；
+ *    expiresAtTurn = 揭示时计数 + 3（撑过发起者本回合结束 + 对手整回合 + 发起者下回合，
+ *    发起者【下】回合结束转换时清除——不是对手回合结束）。
+ *  清除时机：turn.ts 在每次回合结束转换（end → start）时 turnCount +1，
+ *  清除 expiresAtTurn <= 新计数的幽灵。 */
 export interface RevealedGhost {
   id: string;
   defId: string;
-  /** 显示在哪位玩家的手牌区末尾（= 发起揭示的效果属主） */
+  /** 显示在哪位玩家的手牌区末尾（Case A = 对手；Case B = 发起揭示的玩家） */
   shownTo: PlayerId;
-  /** 该玩家（= 效果属主的对手）回合结束时清除 */
-  expiresAfterTurn: PlayerId;
+  /** 过期阈值：turnCount 达到该值时在回合结束转换时被清除 */
+  expiresAtTurn: number;
 }
 
 /** 效果操作（生成器 yield 的值之一；由运行器执行并触发连锁/语义事件） */
@@ -191,6 +197,8 @@ export interface GameState {
   /** 已选出的协议（按选择顺序） */
   draftPicks: ProtocolDef[];
   turnPlayer: PlayerId;
+  /** 回合计数：每次回合结束转换（end → start）单调 +1，揭示幽灵牌按此过期 */
+  turnCount: number;
   step: Step;
   /** 本回合是否已编译（编译后跳过 action 步骤） */
   compiledThisTurn: boolean;
@@ -209,6 +217,6 @@ export interface GameState {
   resolvedTriggerUids: string[];
   /** 打出链式结算完毕后需要推进回合步骤（runStack 栈空时消费） */
   pendingStepAdvance: boolean;
-  /** 揭示幽灵牌（显示在效果属主手牌区末尾；expiresAfterTurn 玩家回合结束时清除） */
+  /** 揭示幽灵牌（显示在 shownTo 玩家手牌区末尾；expiresAtTurn 回合结束转换时清除） */
   revealedGhosts: RevealedGhost[];
 }

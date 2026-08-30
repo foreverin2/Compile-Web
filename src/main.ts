@@ -66,9 +66,12 @@ const cb: UiCallbacks = {
       executeAction(state, player, a.kind);
       drawAnimCount = state.players[player].hand.length - handBefore;
     } else if (a.kind === 'effect-choice') {
-      // 应答挂起选择：chooser 可能是对手（规则"被作用卡持有者决定执行"）
+      // 应答挂起选择：chooser 可能是对手（规则"被作用卡持有者决定执行"）。
+      // 必须用 prompt.chooser 覆盖（与 render.ts 选择条标签一致、与 executeAction 内部
+      // 的 chooser 判定一致）——旧实现只取 top.player（效果属主），light-2 揭示对手反面牌
+      // 时把「被揭示卡持有者（P1）」的选择错误派发给效果属主（P2）→ "not your choice"。
       const top = state.pendingEffects[state.pendingEffects.length - 1];
-      const chooser = top?.player ?? state.turnPlayer;
+      const chooser = top?.prompt?.chooser ?? top?.player ?? state.turnPlayer;
       executeAction(state, chooser, 'effect-choice', { promptId: a.promptId!, choice: a.choice! });
     } else if (a.kind === 'advance') {
       executeAction(state, player, a.kind);

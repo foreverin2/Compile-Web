@@ -12,6 +12,7 @@ describe('types', () => {
       draftRound: 0,
       draftPicks: [],
       turnPlayer: 0,
+      turnCount: 0,
       step: 'start',
       compiledThisTurn: false,
       players: [

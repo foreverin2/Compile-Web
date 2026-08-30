@@ -242,18 +242,25 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       break;
     }
     case 'reveal': {
-      // 揭示：把卡牌正面复制为幽灵牌到效果属主（发起揭示的玩家）手牌区末尾（不改变原卡状态）。
-      // 幽灵在【下回合回合结束】消失：expiresAfterTurn = 效果属主的对手，
-      // 即先撑过属主本回合结束 + 对手整回合，到对手回合结束（= 下回合回合结束）时清除。
-      // 对手揭示（pe.player=1）同理：expiresAfterTurn=0，在其对手 P1 回合结束时清除。
+      // 揭示：把卡牌正面复制为幽灵牌到 shownTo 玩家手牌区末尾（不改变原卡状态）。
+      // 两个用例（turn-count 过期，见 types.ts RevealedGhost 注释）：
+      // - Case A：揭示【自己】的卡 → shownTo = 对手，expiresAtTurn = 计数 + 2
+      //   （第 2 次回合结束转换 = 对手回合结束时清除）。
+      // - Case B：揭示【对手】的卡 → shownTo = 发起者（自己），expiresAtTurn = 计数 + 3
+      //   （第 3 次回合结束转换 = 发起者下回合结束时清除；不是对手回合结束——旧 bug）。
+      // 转换数学：揭示发生在发起者回合（middle/trigger 只在当前回合玩家场上结算）——
+      // 发起者本回合结束（+1，不清 +2/+3）→ 对手回合结束（+2，清 Case A）→
+      // 发起者下回合结束（+3，清 Case B）。
       const card = findCard(s, op.uid);
       if (!card) throw new Error(`cannot reveal ${op.uid}: not found`);
-      const shownTo: PlayerId = pe.player;
+      const caster = pe.player;
+      const ownReveal = card.owner === caster; // Case A：把【我的】卡给对手看
+      const shownTo: PlayerId = ownReveal ? (caster === 0 ? 1 : 0) : caster; // 得知信息的一方
       s.revealedGhosts.push({
         id: nextEffectId(),
         defId: card.defId,
         shownTo,
-        expiresAfterTurn: pe.player === 0 ? 1 : 0,
+        expiresAtTurn: s.turnCount + (ownReveal ? 2 : 3), // A：对手回合结束；B：发起者下回合结束
       });
       emitCardEvent(s, 'card:revealed', card, { shownTo });
       break;
