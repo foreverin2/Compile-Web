@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveCardName } from '../../src/ui/devmode';
+import { resolveCardName, searchCards } from '../../src/ui/devmode';
 
 /**
  * 隐藏开发者模式：卡牌名解析（纯函数，无 DOM 依赖，可在 vitest(node) 下导入）。
@@ -53,5 +53,79 @@ describe('resolveCardName', () => {
 
   it("returns null for ''", () => {
     expect(resolveCardName('')).toBeNull();
+  });
+});
+
+/**
+ * 实时检索（指令页输入时显示匹配列表）：
+ * 归一化子串匹配 defId（'light2'/'light-2'）与「协议中文名+分值」（'光'/'光2'/'暗5'），
+ * 结果按 defId 自然排序（darkness-0..5, fire-0..5, light-0..5 …），默认上限 8。
+ */
+describe('searchCards', () => {
+  it("'光' matches all 6 light cards (light-0..light-5)", () => {
+    expect(searchCards('光').map((c) => c.defId)).toEqual([
+      'light-0',
+      'light-1',
+      'light-2',
+      'light-3',
+      'light-4',
+      'light-5',
+    ]);
+  });
+
+  it("'光1' matches exactly light-1", () => {
+    expect(searchCards('光1').map((c) => c.defId)).toEqual(['light-1']);
+  });
+
+  it("'light' matches all 6 light cards", () => {
+    expect(searchCards('light').map((c) => c.defId)).toEqual([
+      'light-0',
+      'light-1',
+      'light-2',
+      'light-3',
+      'light-4',
+      'light-5',
+    ]);
+  });
+
+  it("'light2' matches exactly light-2", () => {
+    expect(searchCards('light2').map((c) => c.defId)).toEqual(['light-2']);
+  });
+
+  it("'暗5' matches exactly darkness-5", () => {
+    expect(searchCards('暗5').map((c) => c.defId)).toEqual(['darkness-5']);
+  });
+
+  it("'2' returns up to the default limit (8), sorted by defId (natural)", () => {
+    expect(searchCards('2').map((c) => c.defId)).toEqual([
+      'apathy-2',
+      'darkness-2',
+      'death-2',
+      'fire-2',
+      'gravity-2',
+      'hate-2',
+      'life-2',
+      'light-2',
+    ]);
+  });
+
+  it("returns [] for ''", () => {
+    expect(searchCards('')).toEqual([]);
+  });
+
+  it('returns [] for whitespace-only query', () => {
+    expect(searchCards('   ')).toEqual([]);
+  });
+
+  it("returns [] for '不存在' (no match)", () => {
+    expect(searchCards('不存在')).toEqual([]);
+  });
+
+  it("respects an explicit limit: '光', 3 → 3 items", () => {
+    expect(searchCards('光', 3).map((c) => c.defId)).toEqual([
+      'light-0',
+      'light-1',
+      'light-2',
+    ]);
   });
 });

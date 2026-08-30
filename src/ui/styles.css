@@ -1070,6 +1070,49 @@ body {
 .dev-console-input:focus { border-color: #4ff0ff; }
 .dev-console-close { align-self: center; }
 
+/* 实时检索结果列表：位于指令输入框下方；点击行 = get 该牌；
+   最多显示 SEARCH_DEFAULT_LIMIT 行，超出追加「…共 N 张」行（不可点击）。
+   display:flex 会覆盖 hidden 属性，需显式声明 [hidden] 恢复隐藏。 */
+.dev-results {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 220px;
+  overflow-y: auto;
+  background: #0a0f1a;
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 4px;
+}
+.dev-results[hidden] { display: none; }
+.dev-result {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 5px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #c8d2e0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.dev-result:hover { background: #16283c; color: #e0e6ed; }
+.dev-result-label { font-weight: 600; color: #4ff0ff; }
+.dev-result-hint {
+  font-size: 11px;
+  color: #8a94a6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 55%;
+}
+.dev-result-more {
+  justify-content: center;
+  cursor: default;
+  color: #8a94a6;
+}
+.dev-result-more:hover { background: transparent; }
+
 /* ===== 拖拽打牌：合法落点高亮 + 浮空幽灵卡 ===== */
 /* 拖拽中可合法落点的线路槽：青色霓虹发光（描边 + 底色 + 外/内发光），
    覆盖 .stack-slot.interactable 的默认悬停样式，直观提示"可放置"区域 */
