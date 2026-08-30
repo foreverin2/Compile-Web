@@ -894,11 +894,13 @@ body {
 .step-indicator { text-align: center; font-size: 13px; color: #ccc; padding: 4px 0; }
 /* 操作行：编译线按钮与「下一步」整组居中（引擎中二者不同时出现：编译线仅在 check-compile
    且有可编译线时存在，此时无 advance；action 步骤仅剩「下一步」+ 上方提示文本）。
-   与 .choice-bar 同定位（fixed 视口底部中央，bottom 18px，z-index 200）：所有玩家决策
-   按钮（编译线N / 结算触发效果 / 清理缓存 / 下一步）统一固定在底部「操作台」，滚动不消失。
+   与 .choice-bar 完全一致：同定位（fixed 视口底部中央，bottom 18px，z-index 200）+ 同面板
+   （半透明深蓝底 #101830ee、青色描边、圆角 12px、padding 10px 18px）——所有玩家决策
+   按钮（编译线N / 结算触发效果 / 清理缓存 / 下一步）统一在底部「操作台」，滚动不消失。
    空条隐藏：选择挂起时无合法行动 → 无按钮 → 不渲染占位条。 */
 .action-bar { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 200;
-  display: flex; gap: 8px; align-items: center; justify-content: center; padding: 8px 0; flex-wrap: wrap; }
+  display: flex; gap: 8px; align-items: center; justify-content: center; padding: 10px 18px; flex-wrap: wrap;
+  background: #101830ee; border: 1px solid #4ff0ff66; border-radius: 12px; }
 .action-bar:empty { display: none; }
 /* 「下一步」区块：纵向排列（提示文本在上、按钮在下），整体随操作行水平居中 */
 .next-block { display: flex; flex-direction: column; align-items: center; gap: 3px; }
