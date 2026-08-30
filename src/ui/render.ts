@@ -700,6 +700,19 @@ function appendCompiledRing(box: HTMLElement, defId: string): void {
       halo.appendChild(s);
     }
     box.appendChild(halo);
+    // R11：暗2式圆烟（少量）绕框。4 个 .dark-ring-puff 复用暗2卡牌黑烟 .smoke-puff 的
+    // 视觉（黑核 + 灰蓝亮缘剪影、渐现→渐散），沿卡面四周少量锚点（两角 + 两缘中部）
+    // 循环 渐现→渐散（smokePuff 关键帧，6s 周期，负 delay -1.5s/个 交错 → 各烟不同
+    // 时刻飘进飘出）。与 .compiled-mist 同层（z 1）、pointer-events:none；不改动
+    // .mist-blob 与暗2线烟 .smoke-puff/.smoke-line（暗2 线烟保持原样，此处仅复用其视觉）。
+    const smoke = el('div', 'dark-ring-smoke');
+    const SMOKE_COUNT = 4;
+    for (let i = 0; i < SMOKE_COUNT; i++) {
+      const puff = el('div', 'dark-ring-puff');
+      puff.style.animationDelay = `${-(i * 1.5)}s`;
+      smoke.appendChild(puff);
+    }
+    box.appendChild(smoke);
   }
 }
 

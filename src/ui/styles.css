@@ -1684,6 +1684,43 @@ body.dragging { cursor: grabbing; user-select: none; }
   opacity: 0.4;
 }
 
+/* ===== darkness 已编译：少量暗2式圆烟绕框（R11） =====
+ * 复用暗2卡牌常驻黑烟 .smoke-puff 的视觉（黑核 + 灰蓝亮缘圆形剪影、blur 柔边）——
+ * 用户点名"暗2特效中的黑圆形烟"：.dark-ring-puff 复制同一 background/滤镜/剪影，
+ * 但仅 4 个（少量，非暗2 的 12 个密布）绕卡面四周锚点（两角 + 两缘中部），循环
+ * 渐现→渐散（复用 smokePuff 关键帧，6s 周期 + 负 delay -1.5s/个 交错 → 各烟不同
+ * 时刻飘进飘出）。与 .compiled-mist 同层（z 1）、pointer-events:none；.no-anim 窗口
+ * 定格（同 mist-blob 模式）。不改动 .mist-blob 与暗2线烟 .smoke-puff/.smoke-line。 */
+.dark-ring-smoke {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1; /* 与雾层同层：编译环（2）之下、协议背景之上 */
+  overflow: visible;
+}
+.dark-ring-puff {
+  position: absolute;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  /* 与 .smoke-puff 同一视觉：深色剪影 + 冷色亮缘（近黑 UI 上以灰蓝/紫蓝 rim 显形） */
+  background: radial-gradient(circle, rgba(12, 12, 18, 0.95) 38%, rgba(150, 165, 205, 0.55) 62%, rgba(190, 205, 240, 0.35) 74%, transparent 82%);
+  filter: blur(3px);
+  opacity: 0;
+  animation: smokePuff 6s ease-in-out infinite;
+  will-change: opacity, transform;
+}
+/* 4 个锚点绕卡面四周（两角 + 两缘中部；64px 圆烟用负 margin 居中——transform 被动画占用） */
+.dark-ring-puff:nth-child(1) { left: -20px; top: -20px; }                      /* 左上角 */
+.dark-ring-puff:nth-child(2) { right: -20px; top: -20px; }                     /* 右上角 */
+.dark-ring-puff:nth-child(3) { left: -20px; top: 50%; margin-top: -32px; }     /* 左缘中部 */
+.dark-ring-puff:nth-child(4) { left: 50%; bottom: -20px; margin-left: -32px; } /* 下缘中部 */
+/* .no-anim 窗口：定格半透明静态（与 .mist-blob 同模式） */
+.no-anim .dark-ring-puff {
+  animation: none !important;
+  opacity: 0.4;
+}
+
 /* ===== darkness 已编译：波浪尺式半圆光晕（R10，成排半圆贴卡边向外鼓出） =====
  * 小学波浪尺比喻：直边 = 呼吸灰↔黑边框（.compiled-ring-darkness 不变），波浪边 =
  * 沿卡面四周成排的半圆凸起（.dark-halo-scallop，半圆直径 16px、向外鼓出 8px）——
