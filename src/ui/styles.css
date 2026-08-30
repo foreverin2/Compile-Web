@@ -434,20 +434,20 @@ body {
 }
 /* ===== 火焰已编译环专属（fire）：慢速岩浆 + 大块黑/红岩 + 岩浆红背光 =====
  * 仅作用 .compiled-fx-fire（挂在 .protocol 上），light/darkness 环（.compiled-ring-light/
- * .compiled-ring-darkness）不受影响。JS 的负 animation-delay 已按 fire 的 7s 换算，
- * 故仅改 duration 即可让整圈岩浆以均匀间距慢速流动（2.5s → 7s）。 */
+ * .compiled-ring-darkness）不受影响。JS 的负 animation-delay 已按 fire 的 14s 换算，
+ * 故仅改 duration 即可让整圈岩浆以均匀间距慢速流动（2.5s → 14s，速度减半）。 */
 .compiled-fx-fire .lava-seg,
 .compiled-fx-fire .lava-rock {
-  /* 慢速岩浆流动：2.5s → 7s 一圈 */
-  animation-duration: 7s;
-  /* 旅行环外扩（inset -5px round 15px → -14px round 18px）：容纳 36×30 大岩块，
+  /* 慢速岩浆流动：2.5s → 14s 一圈（7s → 14s，速度减半） */
+  animation-duration: 14s;
+  /* 旅行环外扩（inset -5px round 15px → -11px round 18px）：容纳 24×20 岩块，
      岩块沿卡面外侧环带旅行、略溢出协议框（brief 明确允许轻微溢出） */
-  offset-path: inset(-14px round 18px);
+  offset-path: inset(-11px round 18px);
 }
 .compiled-fx-fire .lava-rock {
-  /* 鹅卵石（10×8）→ 大块黑岩/红岩（36×30） */
-  width: 36px;
-  height: 30px;
+  /* 鹅卵石（10×8）→ 黑/红岩（36×30）→ 缩小约 1/3：24×20（R8） */
+  width: 24px;
+  height: 20px;
 }
 /* 岩浆红背光：卡面后方低透明度红/橙 conic 光晕，14s 缓慢旋转（读作缓慢流动的岩浆辉光）
  * + 柔光径向渐变；挂在 .protocol-holder::before（holder 无 stacking context，

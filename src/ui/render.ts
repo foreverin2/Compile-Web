@@ -600,12 +600,12 @@ function renderProtocolCell(s: GameState, player: PlayerId, line: Line): HTMLEle
  */
 function appendCompiledRing(box: HTMLElement, defId: string): void {
   const ring = el('div', `compiled-ring compiled-ring-${defId}`);
-  // 火焰（fire）专属参数：慢速岩浆流（7s/圈，CSS .compiled-fx-fire 覆写 animation-duration）
-  // + 岩石/岩浆段加密（14 岩 / 12 段）→ 环周几乎被黑/红岩覆盖。负 animation-delay 必须按
-  // 实际 duration 换算（-TRAVEL_S/count × i），否则元素会在环上挤成一团而非均匀分布。
-  // light/darkness 保持 2.5s / 8 / 10 不变。
+  // 火焰（fire）专属参数：慢速岩浆流（14s/圈，CSS .compiled-fx-fire 覆写 animation-duration，
+  // 速度减半：7s → 14s）+ 岩石加密（21 岩 = 14 黑 + 7 红，2 黑 1 红交替）→ 环周几乎被黑岩
+  // 覆盖。负 animation-delay 必须按实际 duration 换算（-TRAVEL_S/count × i），否则元素会在
+  // 环上挤成一团而非均匀分布。light/darkness 保持 2.5s / 8 / 10 不变。
   const isFire = defId === 'fire';
-  const TRAVEL_S = isFire ? 7 : 2.5;
+  const TRAVEL_S = isFire ? 14 : 2.5;
   const LAVA_COUNT = isFire ? 12 : 10;
   for (let i = 0; i < LAVA_COUNT; i++) {
     const seg = el('div', 'lava-seg');
@@ -614,9 +614,12 @@ function appendCompiledRing(box: HTMLElement, defId: string): void {
     seg.style.transform = `scale(${s.toFixed(2)})`;
     ring.appendChild(seg);
   }
-  const ROCK_COUNT = isFire ? 14 : 8;
+  const ROCK_COUNT = isFire ? 21 : 8;
   for (let i = 0; i < ROCK_COUNT; i++) {
-    const rock = el('div', 'lava-rock' + (i % 2 === 0 ? ' rock-dark' : ' rock-red'));
+    // fire：2 黑 1 红交替（i%3===0 → 红，其余黑 → 21 岩 = 14 黑 + 7 红）；
+    // light/darkness：黑红交替（8 岩 = 4 黑 + 4 红）
+    const darkHeavy = isFire ? i % 3 !== 0 : i % 2 === 0;
+    const rock = el('div', 'lava-rock' + (darkHeavy ? ' rock-dark' : ' rock-red'));
     rock.style.animationDelay = `${(-TRAVEL_S / ROCK_COUNT) * i - 0.15}s`;
     const s = 0.7 + ((i * 37) % 5) * 0.15;
     rock.style.transform = `scale(${s.toFixed(2)}) rotate(${i * 47}deg)`;
