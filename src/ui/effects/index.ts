@@ -6,6 +6,11 @@ const FX_REMOVE_MS = 1200;
 const BASE_Z = 300; // 基础行为特效层
 const EXTRA_Z = 301; // 协议专属额外特效层（叠加在基础特效之上）
 const MOVE_MS = 450; // 平移类特效时长（回手/偏转）
+// Darkness 偏转烟桥（shift-bridge）节奏：桥渐显 → 卡飞过（MOVE_MS）→ 桥渐隐 → 清理
+const BRIDGE_IN_MS = 350;
+const BRIDGE_OUT_MS = 400;
+const BRIDGE_Z = 290; // 烟桥层：飞行卡克隆（BASE_Z 300）之下、棋盘之上
+const BRIDGE_END_Z = 291; // 端点标记：烟桥之上、飞行卡之下
 
 type PlayerId = 0 | 1;
 
@@ -206,26 +211,109 @@ function playReturn(node: HTMLElement, payload: FxCardPayload): void {
   window.setTimeout(() => clone.remove(), MOVE_MS + 80);
 }
 
+/** 幽灵卡平移落地：从初始 rect 丝滑平移到目标链路堆叠末尾（起飞时机由调用方决定） */
+function flyCloneToStackEnd(clone: HTMLElement, rect: DOMRect, owner: PlayerId, line: number): void {
+  const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${owner}"][data-line="${line}"]`);
+  const target = stackEndPos(slot, owner);
+  if (!target) {
+    window.setTimeout(() => clone.remove(), 50);
+    return;
+  }
+  const dx = target.x - (rect.left + rect.width / 2);
+  const dy = target.y - (rect.top + rect.height / 2);
+  clone.style.transition = `transform ${MOVE_MS}ms cubic-bezier(0.2, 0.7, 0.3, 1), opacity ${MOVE_MS}ms ease`;
+  requestAnimationFrame(() => {
+    clone.style.transform = `translate(${dx}px, ${dy}px) scale(0.92)`;
+    clone.style.opacity = '0.6';
+  });
+  window.setTimeout(() => clone.remove(), MOVE_MS + 80);
+}
+
 /** 基础行为特效：偏转——从初始位置丝滑平移到目标链路堆叠末尾 */
 function playShift(node: HTMLElement, payload: FxCardPayload): void {
   const rect = node.getBoundingClientRect();
-  if (rect.width === 0 || rect.height === 0 || payload.owner === undefined || payload.line === null) return;
+  if (rect.width === 0 || rect.height === 0 || payload.owner === undefined || payload.line == null) return;
   const clone = buildFxCard(node, payload, BASE_Z);
   if (!clone) return;
-  const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${payload.owner}"][data-line="${payload.line}"]`);
-  const target = stackEndPos(slot, payload.owner);
-  if (target) {
-    const dx = target.x - (rect.left + rect.width / 2);
-    const dy = target.y - (rect.top + rect.height / 2);
-    clone.style.transition = `transform ${MOVE_MS}ms cubic-bezier(0.2, 0.7, 0.3, 1), opacity ${MOVE_MS}ms ease`;
-    requestAnimationFrame(() => {
-      clone.style.transform = `translate(${dx}px, ${dy}px) scale(0.92)`;
-      clone.style.opacity = '0.6';
-    });
-    window.setTimeout(() => clone.remove(), MOVE_MS + 80);
-  } else {
-    window.setTimeout(() => clone.remove(), 50);
+  flyCloneToStackEnd(clone, rect, payload.owner, payload.line);
+}
+
+/**
+ * Darkness 偏转专属特效：烟桥路线（起点→终点）。
+ * 粗黑烟桥 + 起/终点光点先渐显（~350ms），随后卡飞过（MOVE_MS），桥再渐隐（~400ms）后清理。
+ * 飞行克隆在事件发出时（重渲染前）构建、起飞才延迟——避免延迟调用 playShift 时源卡节点
+ * 已被 renderApp 重建导致 rect 归零。rect/目标缺失时回退普通 playShift（无桥）。
+ */
+function playDarknessShiftBridge(node: HTMLElement, payload: FxCardPayload): void {
+  const rect = node.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0 || payload.owner === undefined || payload.line == null) {
+    playShift(node, payload); // rect 缺失 → 退回普通偏转（playShift 内部自兜底）
+    return;
   }
+  // 捕获局部变量：闭包（定时器）内不做属性收窄，避免 TS 丢失 owner/line 的窄化
+  const owner: PlayerId = payload.owner;
+  const line: number = payload.line;
+  const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${owner}"][data-line="${line}"]`);
+  const end = stackEndPos(slot, owner);
+  const clone = buildFxCard(node, payload, BASE_Z);
+  if (!end || !clone) {
+    playShift(node, payload); // 目标/克隆缺失 → 退回普通偏转
+    return;
+  }
+  const start = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const dist = Math.hypot(dx, dy);
+  const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
+
+  // 烟桥：fixed 定位于起点、按距离定宽、旋转到终点角度（transform-origin:left center 在 CSS）
+  const bridge = document.createElement('div');
+  bridge.className = 'shift-bridge';
+  bridge.style.left = `${start.x}px`;
+  bridge.style.top = `${start.y}px`;
+  bridge.style.width = `${dist}px`;
+  bridge.style.transform = `rotate(${angle}deg)`;
+  // 起/终点光点（标记起始与终点位置）
+  const mkEnd = (x: number, y: number): HTMLElement => {
+    const m = document.createElement('div');
+    m.className = 'bridge-end';
+    m.style.left = `${x}px`;
+    m.style.top = `${y}px`;
+    return m;
+  };
+  const startMarker = mkEnd(start.x, start.y);
+  const endMarker = mkEnd(end.x, end.y);
+  document.body.appendChild(bridge);
+  document.body.appendChild(startMarker);
+  document.body.appendChild(endMarker);
+
+  const cleanup = (): void => {
+    bridge.remove();
+    startMarker.remove();
+    endMarker.remove();
+  };
+
+  // ① 桥 + 端点渐显（CSS transition 350ms → opacity 0.85）
+  requestAnimationFrame(() => {
+    bridge.classList.add('shift-bridge-in');
+    startMarker.classList.add('bridge-end-in');
+    endMarker.classList.add('bridge-end-in');
+  });
+  // ② 桥显影完成后卡开始飞行（克隆已在事件发出时构建，无陈旧 rect 问题）
+  window.setTimeout(() => {
+    flyCloneToStackEnd(clone, rect, owner, line);
+    // ③ 飞行结束后桥渐隐
+    window.setTimeout(() => {
+      bridge.classList.remove('shift-bridge-in');
+      bridge.classList.add('shift-bridge-out');
+      startMarker.classList.remove('bridge-end-in');
+      startMarker.classList.add('bridge-end-out');
+      endMarker.classList.remove('bridge-end-in');
+      endMarker.classList.add('bridge-end-out');
+      // ④ 渐隐完成后清理（无论中间发生什么，桥/端点必被移除）
+      window.setTimeout(cleanup, BRIDGE_OUT_MS + 40);
+    }, MOVE_MS);
+  }, BRIDGE_IN_MS);
 }
 
 /** 基础行为特效：牌堆顶打出——幽灵卡从牌库区丝滑飞入目标链路堆叠末尾
@@ -370,7 +458,12 @@ export function initEffects(): () => void {
         if (node) playReturn(node, payload);
         break;
       case 'card:shifted':
-        if (node) playShift(node, payload);
+        // darkness-0/1/4 的偏转（触发卡协议 darkness）：播烟桥路线（起点→终点）；
+        // 其余偏转源（light-2/light-3 带 'light'、系统效果带 'system'）走普通幽灵飞行
+        if (node) {
+          if (payload.triggerProtocol === 'darkness') playDarknessShiftBridge(node, payload);
+          else playShift(node, payload);
+        }
         break;
       case 'card:deck-played':
         playDeckPlay(payload);

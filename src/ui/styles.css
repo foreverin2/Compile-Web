@@ -1411,3 +1411,79 @@ body.dragging { cursor: grabbing; user-select: none; }
   from { transform: translate(0, 0) scale(1); opacity: 1; }
   to { transform: translate(var(--dx, 60px), var(--dy, -60px)) scale(0.3); opacity: 0; }
 }
+
+/* ===== Darkness 偏转烟桥（.shift-bridge：标记起点→终点，卡飞过后渐隐） =====
+ * 仅 darkness-0/1/4 的偏转播放（card:shifted + triggerProtocol=darkness，JS 构建）。
+ * 桥元素 fixed 定位于起点（左缘）、按起终距离定宽、rotate 到终点角度；transform-origin:
+ * left center + margin-top 负半高使旋转轴恰在起点且桥身垂直居中于起终点连线上。
+ * 厚度 50px 的粗烟带：黑核（linear-gradient 中轴暗芯）+ 灰蓝光晕 rim（::before 外扩，
+ * 与 .smoke-puff 同系视觉——近黑 UI 上以冷色亮缘显形）+ 中段加密暗芯（::after），
+ * 整体 blur 3px 柔和成烟。z 290：飞行卡克隆（BASE_Z 300）之下、棋盘之上。
+ * 端点为 .bridge-end 小光点（14px 辉光，margin 负半宽居中于坐标），标记起止位置。
+ * 一次性瞬时特效（与 playShatter 同模式，body 级浮层不参与重渲染树）→ 无需 .no-anim 抑制。 */
+.shift-bridge {
+  position: fixed;
+  height: 50px;        /* 桥体厚度（粗烟带） */
+  margin-top: -25px;   /* 垂直居中于起点 */
+  pointer-events: none;
+  z-index: 290;
+  opacity: 0;
+  transform-origin: left center;
+  border-radius: 999px;
+  filter: blur(3px);
+  transition: opacity 0.35s ease;
+  /* 黑核：整条桥的中轴暗芯，两端渐隐成烟 */
+  background: linear-gradient(90deg,
+    rgba(6, 6, 12, 0) 0%,
+    rgba(8, 8, 15, 0.98) 14%,
+    rgba(8, 8, 15, 0.98) 86%,
+    rgba(6, 6, 12, 0) 100%);
+}
+/* 灰蓝光晕层：外扩一圈冷色 rim，勾出烟桥剪影（与 .smoke-puff 的灰蓝 rim 同系） */
+.shift-bridge::before {
+  content: '';
+  position: absolute;
+  inset: -10px -4px;
+  border-radius: 999px;
+  background: linear-gradient(90deg,
+    rgba(120, 136, 182, 0) 0%,
+    rgba(118, 134, 180, 0.5) 16%,
+    rgba(150, 165, 205, 0.42) 50%,
+    rgba(118, 134, 180, 0.5) 84%,
+    rgba(120, 136, 182, 0) 100%);
+  filter: blur(2px);
+}
+/* 第二层堆叠暗芯：中段更黑，烟感更实、密度更高 */
+.shift-bridge::after {
+  content: '';
+  position: absolute;
+  inset: 6px 12%;
+  border-radius: 999px;
+  background: linear-gradient(90deg,
+    rgba(0, 0, 0, 0) 0%,
+    rgba(0, 0, 0, 0.6) 28%,
+    rgba(0, 0, 0, 0.6) 72%,
+    rgba(0, 0, 0, 0) 100%);
+}
+.shift-bridge-in { opacity: 0.85; }
+.shift-bridge-out { opacity: 0; transition: opacity 0.4s ease; }
+
+/* 端点标记：起/终点的小光点（14px 辉光点，margin 负半宽居中于坐标） */
+.bridge-end {
+  position: fixed;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 291;
+  opacity: 0;
+  transition: opacity 0.35s ease;
+  background: radial-gradient(circle,
+    rgba(205, 218, 245, 0.95) 0%,
+    rgba(140, 155, 200, 0.6) 45%,
+    rgba(120, 135, 180, 0) 72%);
+  box-shadow: 0 0 10px rgba(150, 170, 220, 0.75);
+}
+.bridge-end-in { opacity: 1; }
+.bridge-end-out { opacity: 0; transition: opacity 0.4s ease; }

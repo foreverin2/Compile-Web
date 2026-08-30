@@ -202,7 +202,13 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       card.line = op.targetLine; // 提交目标（落地前不可变卦）
       card.pos = null;
       s.pendingShift.push({ card, beforeCoveredDone: false });
-      emitCardEvent(s, 'card:shifted', card, { fromLine });
+      // triggerProtocol/triggerDefId：触发这次偏转的卡（效果源），FX 层据此为
+      // darkness-0/1/4 的偏转播烟桥路线特效（其余偏转源（light-2/light-3）带 'light'）
+      emitCardEvent(s, 'card:shifted', card, {
+        fromLine,
+        triggerDefId: pe.sourceDefId,
+        triggerProtocol: pe.sourceDefId.split('-')[0],
+      });
       if (wasTop) revealAfterRemoval(s, owner, fromLine); // 仅当移除的是顶卡时新顶卡才被"揭开"
       break;
     }
