@@ -84,17 +84,17 @@ body {
 
 /* ===== 常驻黑烟特效（Part 2：darkness-2 顶命令常驻） =====
  * 线上任一玩家堆叠中有正面 darkness-2 时（lineTopCommandActive），双方该线堆叠槽边框
- * 持续浮现又消散的黑烟：.smoke-overlay 挂在每个 .stack-slot 内（absolute inset 0），
- * 12 个 .smoke-puff 沿边框锚点（nth-child 定位）循环冒烟；JS 写入 0.5s 步进交错延迟
- * （0–5.5s 相对 4s 周期回绕，任意时刻多个 puff 飞行中）。
- * pointer-events:none + absolute → 不拦截卡牌交互、不占布局空间。 */
-.smoke-line .smoke-overlay {
-  position: absolute;
-  inset: 0;
+ * 持续浮现又消散的黑烟：.smoke-overlay 挂在 document.body（position:fixed，left/top/
+ * width/height 由 render.ts 每次渲染按槽位矩形重定位），12 个 .smoke-puff 沿边框锚点
+ * （nth-child 定位）循环冒烟；JS 写入 0.5s 步进交错延迟（0–5.5s 相对 4s 周期回绕，
+ * 任意时刻多个 puff 飞行中）。overlay 跨重渲染复用同一 DOM 节点 → 动画不重启。
+ * pointer-events:none + fixed → 不拦截卡牌交互、不占布局空间。 */
+.smoke-overlay {
+  position: fixed;
   pointer-events: none;
   overflow: hidden;
   /* z-index 40：高于场上堆叠卡（zIndex=pos ≤ ~30）使黑烟盖在卡上可见；
-     低于 hover 弹出的卡（50）与电池（59）；烟雾在槽内，不与线尾电池相撞 */
+     低于 hover 弹出的卡（50）与电池（59）；烟雾贴在槽位矩形上，不与线尾电池相撞 */
   z-index: 40;
   /* 边框区域冷光：整个槽位激活时明显泛蓝辉光，puff 间隙也读出"激活"氛围 */
   box-shadow: inset 0 0 24px rgba(140, 160, 210, 0.16);
@@ -728,12 +728,8 @@ body {
 .no-anim .play-btn {
   transition: none !important;
 }
-/* 烟雾 puff 是无限 keyframe 动画（transition 抑制管不到）：.no-anim 窗口内定格为半透明
- * 静态（animation:none + opacity 0.4），双 rAF 后类移除、循环动画恢复（避免重建瞬间闪帧）。 */
-.no-anim .smoke-puff {
-  animation: none !important;
-  opacity: 0.4;
-}
+/* 注：常驻黑烟 .smoke-puff 的 .no-anim 抑制规则已移除——overlay 挂在 document.body 且
+ * 跨重渲染复用同一 DOM 节点（动画不重启），重建瞬间的定格抑制不再需要。 */
 
 /* ===== R8 手牌挡板（hand-cover shield） =====
  * 从手牌外侧端拉出遮住手牌：P1 左缘固定向右延伸，P2 右缘固定向左延伸（左右定位见
