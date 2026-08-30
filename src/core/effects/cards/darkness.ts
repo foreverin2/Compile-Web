@@ -22,10 +22,11 @@ function* darkness1(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const ans = yield { kind: 'select', title: 'darkness-1：翻转1张你对手的牌', min: 1, max: 1, optional: false, candidates: targets };
   if (ans.selected.length === 0) return;
   yield { op: 'flip', uid: ans.selected[0] };
-  // 目标线排除源卡所在列 + 被翻卡当前列（平移必须到不同列，避免 shift 抛错）
+  // 目标线仅排除被翻卡当前列（平移必须到不同列，避免 shift 抛错）；
+  // darkness-1 自己所在列是合法目标（被翻卡在别的列时，可平移到本卡所在列）
   const picked = targets.find((c) => c.uid === ans.selected[0]);
   const cardLine = picked?.line ?? ctx.card.line;
-  const line = yield { kind: 'select-line', title: 'darkness-1：你可以平移那张牌', min: 1, max: 1, optional: true, candidates: [], lines: [0, 1, 2].filter((l) => l !== ctx.card.line && l !== cardLine) as Line[] };
+  const line = yield { kind: 'select-line', title: 'darkness-1：你可以平移那张牌', min: 1, max: 1, optional: true, candidates: [], lines: [0, 1, 2].filter((l) => l !== cardLine) as Line[] };
   if (line.selected.length > 0) {
     yield { op: 'shift', uid: ans.selected[0], targetLine: Number(line.selected[0].replace('line:', '')) as Line };
   }
