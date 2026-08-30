@@ -191,10 +191,11 @@ function renderStackSlot(
 }
 
 /** 常驻黑烟特效层（Part 2）：线上任一玩家有正面 darkness-2（顶命令常驻）时，双方该线
- *  堆叠槽边框持续浮现又消散的黑烟。6 个 .smoke-puff 沿边框锚点分布（CSS nth-child 定位），
- *  JS 只写 0.5s 步进的交错 animation-delay。absolute + pointer-events:none：不拦截卡牌
+ *  堆叠槽边框持续浮现又消散的黑烟。12 个 .smoke-puff 沿边框锚点分布（CSS nth-child 定位），
+ *  JS 只写 0.5s 步进的交错 animation-delay（0–5.5s，相对 4s keyframe 周期自动回绕，
+ *  任意时刻都有多个 puff 处于飞行中）。absolute + pointer-events:none：不拦截卡牌
  *  交互、不影响布局。渲染器每次重建 DOM，动画随重建重启（与编译环特效一致，可接受）。 */
-const SMOKE_PUFFS = 6;
+const SMOKE_PUFFS = 12;
 function renderSmokeOverlay(): HTMLElement {
   const overlay = el('div', 'smoke-overlay');
   for (let i = 0; i < SMOKE_PUFFS; i++) {
