@@ -145,6 +145,7 @@ function openPasswordPrompt(host: DevModeHost): void {
     if (e.target === backdrop) close('密码输入框已关闭（点击空白）');
   });
   input.addEventListener('keydown', (e) => {
+    if (e.isComposing) return; // IME 组合中的回车（确认候选）不算提交
     if (e.key === 'Escape') {
       close('密码输入框已关闭（Esc）');
       return;
@@ -200,6 +201,7 @@ function openCommandPage(host: DevModeHost): void {
   });
   closeBtn.addEventListener('click', () => close('指令页已关闭（点击关闭按钮）'));
   input.addEventListener('keydown', (e) => {
+    if (e.isComposing) return; // IME 组合中的回车（确认候选）不算提交
     if (e.key === 'Escape') {
       close('指令页已关闭（Esc）');
       return;
@@ -218,7 +220,8 @@ function openCommandPage(host: DevModeHost): void {
  */
 export function initDevMode(host: DevModeHost): () => void {
   const onKeyDown = (e: KeyboardEvent): void => {
-    if (e.ctrlKey && e.shiftKey && (e.key === 'p' || e.key === 'P')) {
+    // e.code 与键盘布局无关（非 QWERTY 布局下 Ctrl+Shift+P 的 e.key 可能不同）
+    if (e.ctrlKey && e.shiftKey && e.code === 'KeyP') {
       e.preventDefault(); // 阻止浏览器打印对话框
       if (overlayOpen) return;
       openPasswordPrompt(host);
