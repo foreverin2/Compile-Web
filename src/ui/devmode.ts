@@ -1,16 +1,18 @@
-import type { Card, CardDef, GameState } from '../core/models/types';
+import type { Card, CardDef, GameState, ProtocolDef } from '../core/models/types';
 import { ALL_CARD_DEFS, ALL_PROTOCOLS } from '../data/cards';
 
 /**
  * 隐藏开发者模式（测试辅助）：
  * - Ctrl+Shift+P 弹出密码框（并阻止浏览器打印对话框），密码 `上上下下左右左右BABA`
  *   正确后进入指令页；
- * - 指令页支持 `get 牌名` 把指定卡牌加入当前玩家（state.turnPlayer）手牌；
+ * - 指令页支持 `get 牌名` 把指定卡牌加入当前玩家（state.turnPlayer）手牌，
+ *   输入时实时检索匹配卡牌列表，点击列表行等于执行 get；
  * - 所有动作同时写入 console（被 diag 全量记录）与 state.log（游戏事件日志），
  *   两者都包含在 diag 导出中。
  *
- * 纯函数部分（resolveCardName / 查询表构建）无 DOM 访问，可在 vitest(node) 下导入；
- * 所有 DOM 操作都位于 initDevMode 内部闭包 / 其调用的函数中。
+ * 纯函数部分（resolveCardName / searchCards / 查询表构建）无 DOM 访问，
+ * 可在 vitest(node) 下导入；所有 DOM 操作都位于 initDevMode 内部闭包 /
+ * 其调用的函数中。
  */
 
 export interface DevModeHost {
@@ -38,6 +40,30 @@ function normalizeKey(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]/g, '');
 }
 
+/** 协议 defId → 协议定义（模块加载时构建一次，供查询表与检索索引共用） */
+const PROTOCOL_BY_ID: ReadonlyMap<string, ProtocolDef> = new Map(
+  ALL_PROTOCOLS.map((proto) => [proto.defId, proto]),
+);
+
+/** 检索索引条目：一张牌的两类归一化键（defId / 协议中文名+分值） */
+interface SearchEntry {
+  def: CardDef;
+  /** 归一化 defId，如 'light-2' → 'light2' */
+  defKey: string;
+  /** 归一化「协议中文名+分值」，如 light 的 2 分牌 → '光2' */
+  cnKey: string;
+}
+
+/** 全部卡牌的检索索引（模块加载时构建一次） */
+const SEARCH_INDEX: readonly SearchEntry[] = ALL_CARD_DEFS.map((def) => {
+  const proto = PROTOCOL_BY_ID.get(def.protocol);
+  return {
+    def,
+    defKey: normalizeKey(def.defId),
+    cnKey: proto ? normalizeKey(`${proto.name}${def.value}`) : '',
+  };
+});
+
 /**
  * 卡牌名 → CardDef 查询表（模块加载时构建一次）：
  * - 每个 defId 的归一化键（如 'light2'）；
@@ -46,15 +72,11 @@ function normalizeKey(s: string): string {
  */
 const CARD_LOOKUP: ReadonlyMap<string, CardDef> = (() => {
   const map = new Map<string, CardDef>();
-  for (const def of ALL_CARD_DEFS) {
-    map.set(normalizeKey(def.defId), def);
+  for (const entry of SEARCH_INDEX) {
+    map.set(entry.defKey, entry.def);
   }
-  for (const proto of ALL_PROTOCOLS) {
-    for (const card of ALL_CARD_DEFS) {
-      if (card.protocol === proto.defId) {
-        map.set(normalizeKey(`${proto.name}${card.value}`), card);
-      }
-    }
+  for (const entry of SEARCH_INDEX) {
+    if (entry.cnKey !== '') map.set(entry.cnKey, entry.def);
   }
   return map;
 })();
@@ -70,11 +92,89 @@ export function resolveCardName(name: string): CardDef | null {
   return CARD_LOOKUP.get(key) ?? null;
 }
 
+/**
+ * 自然顺序比较 defId：非数字段按字典序、数字段按数值比较
+ * （'darkness-5' < 'fire-0' < 'light-0'；'gravity-6' > 'gravity-5'）。
+ */
+function compareDefIdNatural(a: string, b: string): number {
+  const partsA = a.match(/\d+|\D+/g) ?? [];
+  const partsB = b.match(/\d+|\D+/g) ?? [];
+  const len = Math.max(partsA.length, partsB.length);
+  for (let i = 0; i < len; i++) {
+    const sa = partsA[i];
+    const sb = partsB[i];
+    if (sa === undefined) return -1;
+    if (sb === undefined) return 1;
+    if (sa === sb) continue;
+    const numericA = /^\d+$/.test(sa);
+    const numericB = /^\d+$/.test(sb);
+    if (numericA && numericB) return parseInt(sa, 10) - parseInt(sb, 10);
+    return sa < sb ? -1 : 1;
+  }
+  return 0;
+}
+
+/** 实时检索默认上限：指令页最多显示的行数 */
+const SEARCH_DEFAULT_LIMIT = 8;
+
+/**
+ * 内部：归一化键 → 全部匹配卡牌（按 defId 去重 + 自然排序）。
+ * 匹配语义：归一化子串命中 defId（'light'/'light2'/'2'）或「协议中文名+分值」
+ * （'光'/'光2'/'暗5'）。空键返回 []。
+ */
+function collectSearchMatches(key: string): CardDef[] {
+  if (key === '') return [];
+  const found = new Map<string, CardDef>();
+  for (const entry of SEARCH_INDEX) {
+    if (entry.defKey.includes(key) || (entry.cnKey !== '' && entry.cnKey.includes(key))) {
+      found.set(entry.def.defId, entry.def);
+    }
+  }
+  return [...found.values()].sort((x, y) => compareDefIdNatural(x.defId, y.defId));
+}
+
+/**
+ * 实时检索（纯函数，无 DOM）：返回匹配 query 的卡牌列表，最多 limit 张
+ * （默认 8），按 defId 自然排序（darkness-0..5, fire-0..5, light-0..5 …）。
+ * 匹配语义与 resolveCardName 相同归一化（小写、去非字母/数字/汉字）后的子串匹配：
+ * - defId：如 'light' / 'light2' / 'ght2' / '2' 命中 light-2；
+ * - 协议中文名 + 分值：如 '光' / '光2' 命中 light-2；'暗5' 命中 darkness-5。
+ * query 为空 / 纯空白 → 返回 []。
+ */
+export function searchCards(query: string, limit: number = SEARCH_DEFAULT_LIMIT): CardDef[] {
+  return collectSearchMatches(normalizeKey(query)).slice(0, limit);
+}
+
 /** 日志：同时写入 console（diag 全量捕获）与 state.log（游戏事件日志，diag 导出含尾部） */
 function log(host: DevModeHost, msg: string): void {
   const full = `[开发者模式] ${msg}`;
   console.log(full);
   host.getState().log.push(full);
+}
+
+/**
+ * 把指定 defId 的卡牌加入当前玩家（state.turnPlayer）手牌并触发重渲染。
+ * get 指令与检索列表点击共用此加牌路径；suffix 追加到日志末尾（如检索来源）。
+ * 找不到 defId 返回 false（不改变状态）。
+ */
+function addCardToCurrentPlayer(host: DevModeHost, defId: string, suffix = ''): boolean {
+  const def = CARD_LOOKUP.get(normalizeKey(defId));
+  if (!def) return false;
+  const state = host.getState();
+  const player = state.turnPlayer;
+  const card: Card = {
+    uid: `dev-${uidCounter++}-${Date.now().toString(36)}`,
+    defId: def.defId,
+    owner: player,
+    faceUp: true,
+    zone: 'hand' as const,
+    line: null,
+    pos: null,
+  };
+  state.players[player].hand.push(card);
+  log(host, `已添加 ${def.defId} 到 P${player + 1} 手牌${suffix}`);
+  host.render();
+  return true;
 }
 
 /**
@@ -97,20 +197,7 @@ function runCommand(host: DevModeHost, line: string): void {
     log(host, `未找到卡牌: ${name}`);
     return;
   }
-  const state = host.getState();
-  const player = state.turnPlayer;
-  const card: Card = {
-    uid: `dev-${uidCounter++}-${Date.now().toString(36)}`,
-    defId: def.defId,
-    owner: player,
-    faceUp: true,
-    zone: 'hand' as const,
-    line: null,
-    pos: null,
-  };
-  state.players[player].hand.push(card);
-  log(host, `已添加 ${def.defId} 到 P${player + 1} 手牌`);
-  host.render();
+  addCardToCurrentPlayer(host, def.defId);
 }
 
 /** 密码输入框：全屏暗色遮罩 + 居中面板；点击遮罩 / Esc / 密码错误 → 立即关闭 */
@@ -162,7 +249,7 @@ function openPasswordPrompt(host: DevModeHost): void {
   });
 }
 
-/** 指令页：遮罩 + 居中面板（标题、提示、输入框、关闭按钮）；回车执行指令并保持打开 */
+/** 指令页：遮罩 + 居中面板（标题、提示、输入框、实时检索列表、关闭按钮）；回车执行指令并保持打开 */
 function openCommandPage(host: DevModeHost): void {
   log(host, '指令页已打开');
   overlayOpen = true;
@@ -179,16 +266,70 @@ function openCommandPage(host: DevModeHost): void {
   const input = document.createElement('input');
   input.className = 'dev-console-input';
   input.placeholder = 'get light-2';
+  const results = document.createElement('div');
+  results.className = 'dev-results';
+  results.hidden = true;
   const closeBtn = document.createElement('button');
   closeBtn.className = 'btn dev-console-close';
   closeBtn.textContent = '关闭';
   panel.appendChild(title);
   panel.appendChild(hint);
   panel.appendChild(input);
+  panel.appendChild(results);
   panel.appendChild(closeBtn);
   backdrop.appendChild(panel);
   document.body.appendChild(backdrop);
   input.focus();
+
+  /**
+   * 渲染实时检索列表：输入框每键一次重绘。空查询 / 无匹配 → 隐藏；
+   * 最多显示 SEARCH_DEFAULT_LIMIT 行，超出追加「…共 N 张」行（不可点击）。
+   */
+  const renderResults = (): void => {
+    const query = input.value;
+    const key = normalizeKey(query);
+    const all = collectSearchMatches(key);
+    results.replaceChildren();
+    if (key === '' || all.length === 0) {
+      results.hidden = true;
+      return;
+    }
+    const shown = all.slice(0, SEARCH_DEFAULT_LIMIT);
+    for (const def of shown) {
+      const proto = PROTOCOL_BY_ID.get(def.protocol);
+      const row = document.createElement('div');
+      row.className = 'dev-result';
+      const label = document.createElement('span');
+      label.className = 'dev-result-label';
+      label.textContent = `${def.defId}（${proto ? `${proto.name}${def.value}` : def.defId}）`;
+      row.appendChild(label);
+      const hintText = def.middle ?? def.top ?? def.bottom;
+      if (hintText) {
+        const hintSpan = document.createElement('span');
+        hintSpan.className = 'dev-result-hint';
+        hintSpan.textContent = hintText;
+        hintSpan.title = hintText;
+        row.appendChild(hintSpan);
+      }
+      row.addEventListener('click', () => {
+        // 与 get 指令共用同一加牌路径（defId 必然有效，忽略返回值）
+        addCardToCurrentPlayer(host, def.defId, '（检索）');
+        input.value = '';
+        results.hidden = true;
+        input.focus(); // 点击行后保持焦点在输入框，便于连续检索
+      });
+      results.appendChild(row);
+    }
+    if (all.length > SEARCH_DEFAULT_LIMIT) {
+      const more = document.createElement('div');
+      more.className = 'dev-result dev-result-more';
+      more.textContent = `…共 ${all.length} 张`;
+      results.appendChild(more);
+    }
+    results.hidden = false;
+  };
+
+  input.addEventListener('input', renderResults);
 
   const close = (msg: string): void => {
     backdrop.remove();
@@ -208,8 +349,9 @@ function openCommandPage(host: DevModeHost): void {
     }
     if (e.key !== 'Enter') return;
     runCommand(host, input.value);
-    // 成功或失败都清空输入并保持指令页打开，便于连续批量 get
+    // 成功或失败都清空输入并隐藏检索列表，保持指令页打开，便于连续批量 get
     input.value = '';
+    results.hidden = true;
     input.focus();
   });
 }
