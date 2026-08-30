@@ -594,13 +594,16 @@ function renderProtocolCell(s: GameState, player: PlayerId, line: Line): HTMLEle
  */
 function appendCompiledRing(box: HTMLElement, defId: string): void {
   const ring = el('div', `compiled-ring compiled-ring-${defId}`);
-  // 火焰（fire）专属参数：慢速岩浆流（14s/圈，CSS .compiled-fx-fire 覆写 animation-duration，
-  // 速度减半：7s → 14s）+ 岩石加密（21 岩 = 14 黑 + 7 红，2 黑 1 红交替）→ 环周几乎被黑岩
-  // 覆盖。负 animation-delay 必须按实际 duration 换算（-TRAVEL_S/count × i），否则元素会在
-  // 环上挤成一团而非均匀分布。light/darkness 保持 2.5s / 8 / 10 不变。
+  // 火焰（fire）专属参数：慢速岩浆流（28s/圈，CSS .compiled-fx-fire 覆写 animation-duration，
+  // 速度再减半：14s → 28s）+ 岩石加密（45 岩 = 30 黑 + 15 红，2 黑 1 红交替）→ 环周被
+  // 岩石基本填平（24px × 45 ≈ 1080px ≥ 环带周长 ≈1017px，轻微重叠）。红岩一半原色暗红
+  // 一半亮红（rock-red ↔ rock-red-bright）、黑岩一半原色一半更深的近黑（rock-dark ↔
+  // rock-dark-deep）交替挂类，边缘均匀混色。负 animation-delay 必须按实际 duration 换算
+  // （-TRAVEL_S/count × i），否则元素会在环上挤成一团而非均匀分布。light/darkness 保持
+  // 2.5s / 10 / 8 不变（其 .lava-seg/.lava-rock 已被 CSS 隐藏）。
   const isFire = defId === 'fire';
-  const TRAVEL_S = isFire ? 14 : 2.5;
-  const LAVA_COUNT = isFire ? 12 : 10;
+  const TRAVEL_S = isFire ? 28 : 2.5;
+  const LAVA_COUNT = isFire ? 20 : 10;
   for (let i = 0; i < LAVA_COUNT; i++) {
     const seg = el('div', 'lava-seg');
     seg.style.animationDelay = `${(-TRAVEL_S / LAVA_COUNT) * i}s`;
@@ -608,12 +611,22 @@ function appendCompiledRing(box: HTMLElement, defId: string): void {
     seg.style.transform = `scale(${s.toFixed(2)})`;
     ring.appendChild(seg);
   }
-  const ROCK_COUNT = isFire ? 21 : 8;
+  const ROCK_COUNT = isFire ? 45 : 8;
+  let redTurn = false; // 红岩变体交替（仅 fire）
+  let darkTurn = false; // 黑岩变体交替（仅 fire）
   for (let i = 0; i < ROCK_COUNT; i++) {
-    // fire：2 黑 1 红交替（i%3===0 → 红，其余黑 → 21 岩 = 14 黑 + 7 红）；
+    // fire：2 黑 1 红交替（i%3===0 → 红，其余黑 → 45 岩 = 30 黑 + 15 红）；
     // light/darkness：黑红交替（8 岩 = 4 黑 + 4 红）
-    const darkHeavy = isFire ? i % 3 !== 0 : i % 2 === 0;
-    const rock = el('div', 'lava-rock' + (darkHeavy ? ' rock-dark' : ' rock-red'));
+    const isRed = isFire ? i % 3 === 0 : i % 2 !== 0;
+    let cls = 'lava-rock';
+    if (isRed) {
+      cls += redTurn ? ' rock-red-bright' : ' rock-red';
+      if (isFire) redTurn = !redTurn;
+    } else {
+      cls += darkTurn ? ' rock-dark-deep' : ' rock-dark';
+      if (isFire) darkTurn = !darkTurn;
+    }
+    const rock = el('div', cls);
     rock.style.animationDelay = `${(-TRAVEL_S / ROCK_COUNT) * i - 0.15}s`;
     const s = 0.7 + ((i * 37) % 5) * 0.15;
     rock.style.transform = `scale(${s.toFixed(2)}) rotate(${i * 47}deg)`;
@@ -640,6 +653,42 @@ function appendCompiledRing(box: HTMLElement, defId: string): void {
       mist.appendChild(blob);
     }
     box.appendChild(mist);
+    // R10：波浪尺式半圆光晕（暗域专属，保留雾层不变）。卡面 200×280：上/下边各 13 个
+    // 半圆（直径 16px，间距 200/13≈15.38px 轻微重叠铺满 200px），左/右边各 18 个
+    // （间距 280/18≈15.56px 铺满 280px）。.dark-halo-scallop 默认顶拱（平边在下贴卡边、
+    // 拱顶向外鼓 8px），.bottom/.left/.right 由 CSS rotate 转向。定位分工：JS 只写
+    // 「沿边坐标」（横向行 left、竖向列 top），「贴边偏移」由 styles.css 各边变体提供
+    // （.top top:-8 / .bottom bottom:-8 / .left left:-12 / .right right:-12）。
+    // 左/右列旋转落点：16×8 顶拱元素绕中心 rotate ±90° 后，平边相对元素中心内移半宽
+    // 4px——「平边内 4px/拱顶外 4px」仅对元素中心落在卡边上成立；left:-12/right:-12
+    // 把元素中心推到卡边外 4px，故平边贴边、拱顶鼓 8px。top = i*SIDE_SP + 3.78 使整列
+    // 平边覆盖 [−0.22, 280.22]，上下两端对称环绕（避免下角 ~7.5px 无凸起缺口）。
+    const halo = el('div', 'dark-halo');
+    const TOP_COUNT = 13; // ceil(200/16) = 13
+    const SIDE_COUNT = 18; // ceil(280/16) = 18
+    const TOP_SP = 200 / TOP_COUNT; // ≈15.38
+    const SIDE_SP = 280 / SIDE_COUNT; // ≈15.56
+    for (let i = 0; i < TOP_COUNT; i++) {
+      const s = el('div', 'dark-halo-scallop top');
+      s.style.left = `${(i * TOP_SP).toFixed(2)}px`;
+      halo.appendChild(s);
+    }
+    for (let i = 0; i < TOP_COUNT; i++) {
+      const s = el('div', 'dark-halo-scallop bottom');
+      s.style.left = `${(i * TOP_SP).toFixed(2)}px`;
+      halo.appendChild(s);
+    }
+    for (let i = 0; i < SIDE_COUNT; i++) {
+      const s = el('div', 'dark-halo-scallop left');
+      s.style.top = `${(i * SIDE_SP + 3.78).toFixed(2)}px`;
+      halo.appendChild(s);
+    }
+    for (let i = 0; i < SIDE_COUNT; i++) {
+      const s = el('div', 'dark-halo-scallop right');
+      s.style.top = `${(i * SIDE_SP + 3.78).toFixed(2)}px`;
+      halo.appendChild(s);
+    }
+    box.appendChild(halo);
   }
 }
 
