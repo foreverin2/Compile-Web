@@ -440,18 +440,19 @@ body {
 .compiled-fx-fire .lava-rock {
   /* 慢速岩浆流动：28s → 56s 一圈（R11 速度再减半） */
   animation-duration: 56s;
-  /* 旅行环外扩（inset -5px round 15px → -11px round 18px）：容纳 24×20 岩块，
+  /* 旅行环外扩（inset -5px round 15px → -11px round 18px）：容纳 12×10 岩块，
      岩块沿卡面外侧环带旅行、略溢出协议框（brief 明确允许轻微溢出） */
   offset-path: inset(-11px round 18px);
 }
 .compiled-fx-fire .lava-rock {
-  /* 鹅卵石（10×8）→ 黑/红岩（36×30）→ 缩小约 1/3：24×20（R8） */
-  width: 24px;
-  height: 20px;
+  /* 鹅卵石（10×8）→ 黑/红岩（36×30）→ 缩小约 1/3：24×20（R8）→ 再缩一半：12×10（R12），
+     配合岩石数量翻倍（45 → 90）保持环周填满（12px × 90 ≈ 1080px ≥ 周长 ≈1017px） */
+  width: 12px;
+  height: 10px;
 }
 /* R11：fire 岩石略微上下浮动。.rock-bob 是全盒占位（position:absolute; inset:0 —— 与
  * .compiled-ring 同盒），内部岩石的 offset-path 包含块不变 → 旅行路径/布局完全不动；
- * 浮动动画只动 wrapper 的 translateY（±3px，3.5s ease-in-out，负 delay 按岩石交错相位），
+ * 浮动动画只动 wrapper 的 translateY（±5px，3.5s ease-in-out，负 delay 按岩石交错相位），
  * 不覆盖岩石自身的内联 transform（scale/rotate）与 ring-travel 偏移路径动画。
  * 仅 fire（JS 只为 fire 生成 wrapper）；light/darkness 岩直接挂环。 */
 .compiled-fx-fire .rock-bob {
@@ -462,8 +463,8 @@ body {
   will-change: transform;
 }
 @keyframes rock-bob {
-  0%, 100% { transform: translateY(-3px); }
-  50% { transform: translateY(3px); }
+  0%, 100% { transform: translateY(-5px); }
+  50% { transform: translateY(5px); }
 }
 /* .no-anim 窗口：bob 暂停定格（R11.3：用 play-state:paused 而非 animation:none ——
  * none 会在类移除时重启动画（负 delay 元素跳回初始相位 → 逐步结算卡顿）；暂停则
