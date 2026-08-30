@@ -88,7 +88,7 @@ function assignProtocols(s: GameState, player: PlayerId, picks: ProtocolDef[]): 
         uid: nextUid(),
         defId: cardDef.defId,
         owner: player,
-        faceUp: true,
+        faceUp: false, // 牌库 = 秘密信息（R11.4）：入牌库的卡一律反面，抽出时 drawCards 置正面
         zone: 'deck',
         line: null,
         pos: null,
@@ -163,4 +163,17 @@ export function lineTopCommandActive(s: GameState, line: Line, defId: string): b
 
 export function getLineValue(s: GameState, player: PlayerId, line: Line): number {
   return stackValue(s, player, line);
+}
+
+/** 单卡当前分值：正面 = 牌面分值；反面 = 2，但所在线有正面 darkness-2 顶命令时 = 4。
+ *  R11.4 例外（light-0 翻面后抽牌，卡可能已离场）：
+ *  - 弃牌堆（公开、正面朝上）→ 牌面分值（delete 置 faceUp=true → 走 faceUp 分支）；
+ *  - 牌库（秘密信息）→ 一律 2（zone 守卫：即使入牌库路径漏设 faceUp=false 也按反面计；
+ *    darkness-2 只作用于场线，牌库卡 line=null 不受其修正）。 */
+export function cardPointValue(s: GameState, card: Card): number {
+  if (card.zone === 'deck') return 2; // 牌库 = 秘密：不随 faceUp 标志变化
+  if (card.faceUp) return getCardDef(card.defId).value;
+  const line = card.line;
+  if (line !== null && lineTopCommandActive(s, line, 'darkness-2')) return 4;
+  return 2;
 }

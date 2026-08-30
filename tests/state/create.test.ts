@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { GameState } from '../../src/core/models/types';
-import { createGame, getDraftPool, getCurrentDrafter, performDraftPick, getLineValue } from '../../src/core/state/create';
+import { createGame, getDraftPool, getCurrentDrafter, performDraftPick, getLineValue, cardPointValue } from '../../src/core/state/create';
+import { makeCard } from '../helpers';
 import { DEMO_PROTOCOLS } from '../../src/data/demo';
 
 describe('create & draft', () => {
@@ -68,5 +69,51 @@ describe('create & draft', () => {
       { uid: 'b', defId: 'fire-1', owner: 0, faceUp: true, zone: 'field', line: 0, pos: 1 },
     ];
     expect(getLineValue(s, 0, 0)).toBe(2);
+  });
+
+  it('cardPointValue: face-up card = printed def value', () => {
+    const s = createGame();
+    const card = makeCard('light-3', 0, 'field', true, 1, 0);
+    s.players[0].stacks[1] = [card];
+    expect(cardPointValue(s, card)).toBe(3);
+  });
+
+  it('cardPointValue: face-down card on a plain line = 2', () => {
+    const s = createGame();
+    const card = makeCard('light-3', 0, 'field', false, 1, 0);
+    s.players[0].stacks[1] = [card];
+    expect(cardPointValue(s, card)).toBe(2);
+  });
+
+  it('cardPointValue: face-down card on a darkness-2 line = 4 (not hardcoded 2)', () => {
+    const s = createGame();
+    // 同线正面 darkness-2（被覆盖但正面朝上 → 常驻生效）
+    const dark2 = makeCard('darkness-2', 0, 'field', true, 1, 0);
+    const card = makeCard('light-3', 0, 'field', false, 1, 1);
+    s.players[0].stacks[1] = [dark2, card];
+    expect(cardPointValue(s, card)).toBe(4);
+  });
+
+  it('cardPointValue: a trash card is public & face-up → printed value (6)', () => {
+    const s = createGame();
+    // 删除进弃牌堆：delete op 置 zone=trash、faceUp=true（弃牌堆公开）→ 抽牌面分值
+    const card = makeCard('metal-6', 0, 'trash', true, null, 0);
+    s.players[0].trash.push(card);
+    expect(cardPointValue(s, card)).toBe(6);
+  });
+
+  it('cardPointValue: a deck card with faceUp=false is secret → 2', () => {
+    const s = createGame();
+    const card = makeCard('metal-6', 0, 'deck', false, null, 0);
+    s.players[0].deck.push(card);
+    expect(cardPointValue(s, card)).toBe(2);
+  });
+
+  it('cardPointValue: a deck card is secret regardless of the faceUp flag → 2 (zone guard)', () => {
+    const s = createGame();
+    // 即使某条入牌库路径漏设 faceUp=false（翻转后正面标志残留）→ 牌库仍是秘密信息 → 2
+    const card = makeCard('metal-6', 0, 'deck', true, null, 0);
+    s.players[0].deck.push(card);
+    expect(cardPointValue(s, card)).toBe(2);
   });
 });

@@ -434,12 +434,12 @@ body {
 }
 /* ===== 火焰已编译环专属（fire）：慢速岩浆 + 大块黑/红岩 + 岩浆红背光 =====
  * 仅作用 .compiled-fx-fire（挂在 .protocol 上），light/darkness 环（.compiled-ring-light/
- * .compiled-ring-darkness）不受影响。JS 的负 animation-delay 已按 fire 的 28s 换算，
- * 故仅改 duration 即可让整圈岩浆以均匀间距慢速流动（14s → 28s，速度再减半）。 */
+ * .compiled-ring-darkness）不受影响。JS 的负 animation-delay 已按 fire 的 56s 换算，
+ * 故仅改 duration 即可让整圈岩浆以均匀间距慢速流动（14s → 28s → 56s，速度再减半）。 */
 .compiled-fx-fire .lava-seg,
 .compiled-fx-fire .lava-rock {
-  /* 慢速岩浆流动：14s → 28s 一圈（R10 速度再减半） */
-  animation-duration: 28s;
+  /* 慢速岩浆流动：28s → 56s 一圈（R11 速度再减半） */
+  animation-duration: 56s;
   /* 旅行环外扩（inset -5px round 15px → -11px round 18px）：容纳 24×20 岩块，
      岩块沿卡面外侧环带旅行、略溢出协议框（brief 明确允许轻微溢出） */
   offset-path: inset(-11px round 18px);
@@ -449,14 +449,36 @@ body {
   width: 24px;
   height: 20px;
 }
-/* 岩浆红背光：卡面后方低透明度红/橙 conic 光晕，28s 缓慢旋转（与岩石 28s/圈同步，
- * 读作缓慢流动的岩浆辉光；R10 随旋转减速同步 14s → 28s）+ 柔光径向渐变；挂在
- * .protocol-holder::before（holder 无 stacking context，
- * z-index:-1 落在卡面图之后、协议背景之上 → 真·背光，不染色卡面；.protocol isolation:
- * isolate 保证不出协议盒）。pointer-events:none 不拦截交互。
- * 圆形元素绕自身中心旋转 → 任何角度都盖满卡面四周，不会露出边角。 */
-.compiled-fx-fire .protocol-holder::before {
-  content: '';
+/* R11：fire 岩石略微上下浮动。.rock-bob 是全盒占位（position:absolute; inset:0 —— 与
+ * .compiled-ring 同盒），内部岩石的 offset-path 包含块不变 → 旅行路径/布局完全不动；
+ * 浮动动画只动 wrapper 的 translateY（±3px，3.5s ease-in-out，负 delay 按岩石交错相位），
+ * 不覆盖岩石自身的内联 transform（scale/rotate）与 ring-travel 偏移路径动画。
+ * 仅 fire（JS 只为 fire 生成 wrapper）；light/darkness 岩直接挂环。 */
+.compiled-fx-fire .rock-bob {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  animation: rock-bob 3.5s ease-in-out infinite;
+  will-change: transform;
+}
+@keyframes rock-bob {
+  0%, 100% { transform: translateY(-3px); }
+  50% { transform: translateY(3px); }
+}
+/* .no-anim 窗口：bob 暂停定格（R11.3：用 play-state:paused 而非 animation:none ——
+ * none 会在类移除时重启动画（负 delay 元素跳回初始相位 → 逐步结算卡顿）；暂停则
+ * 冻结当前帧、类移除后无缝续播。持久 FX 层跨重渲染不再重建，此规则仅防首帧闪帧。） */
+.no-anim .compiled-fx-fire .rock-bob {
+  animation-play-state: paused !important;
+}
+/* 岩浆红背光：卡面后方低透明度红/橙 conic 光晕，56s 缓慢旋转（与岩石 56s/圈同步，
+ * 读作缓慢流动的岩浆辉光；R11 随旋转减速同步 28s → 56s）+ 柔光径向渐变；R11.3 由
+ * .protocol-holder::before 伪元素改为 .compiled-fx 内的真实元素 .fire-backlight
+ * （伪元素随 holder 每次重建会重启动画；真实元素随持久 FX 层存活 → 背光旋转不重启）。
+ * .compiled-fx 无 stacking context（z-index:-1 仍相对 .protocol isolation:isolate
+ * 结算）→ 落在卡面图之后、协议背景之上 → 真·背光，不染色卡面；pointer-events:none
+ * 不拦截交互。圆形元素绕自身中心旋转 → 任何角度都盖满卡面四周，不会露出边角。 */
+.compiled-fx-fire .fire-backlight {
   position: absolute;
   left: 50%;
   top: 50%;
@@ -479,7 +501,7 @@ body {
   pointer-events: none;
   z-index: -1;
   transform: translate(-50%, -50%);
-  animation: fireBacklightFlow 28s linear infinite;
+  animation: fireBacklightFlow 56s linear infinite;
 }
 @keyframes fireBacklightFlow {
   to { transform: translate(-50%, -50%) rotate(360deg); }
@@ -488,6 +510,17 @@ body {
 .protocol-holder {
   position: relative;
   display: inline-flex;
+}
+/* R11.3：持久 FX 层容器 —— 单个 defId 的全部环特效（环/雾/波浪/圆烟/背光）挂在
+ * 同一节点内，跨重渲染复用（appendChild 移动不重启动画 → 结算步骤特效持续不重置）。
+ * 与 holder 同盒（inset:0）；不设 z-index/transform/opacity 等 → 不产生新 stacking
+ * context，子层 z-index（环 2 / 雾·波浪·圆烟 1 / 背光 -1）仍相对 .protocol
+ * （isolation:isolate）结算，与旧结构（特效直挂 holder）行为一致。 */
+.compiled-fx {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
 }
 /* 环绕环容器：与 holder（卡面）同界，子元素经 offset-path 在卡面外侧边框路径上旅行 */
 .compiled-ring {
@@ -1658,9 +1691,48 @@ body.dragging { cursor: grabbing; user-select: none; }
 .mist-blob:nth-child(6) { right: 20%; top: -36px; }
 .mist-blob:nth-child(7) { left: 20%; bottom: -34px; }
 .mist-blob:nth-child(8) { right: 20%; bottom: -34px; }
-/* .no-anim 窗口：定格半透明静态（与 .smoke-puff 同模式） */
+/* .no-anim 窗口：暂停定格（R11.3：play-state:paused 而非 animation:none —— none 在类
+ * 移除时重启动画（负 delay 元素跳回初始相位）；暂停冻结当前帧、移除后无缝续播。
+ * 持久 FX 层跨重渲染不再重建 → 此规则仅防首帧闪帧，不再重启循环特效。 */
 .no-anim .mist-blob {
-  animation: none !important;
+  animation-play-state: paused !important;
+  opacity: 0.4;
+}
+
+/* ===== darkness 已编译：少量暗2式圆烟绕框（R11） =====
+ * 复用暗2卡牌常驻黑烟 .smoke-puff 的视觉（黑核 + 灰蓝亮缘圆形剪影、blur 柔边）——
+ * 用户点名"暗2特效中的黑圆形烟"：.dark-ring-puff 复制同一 background/滤镜/剪影，
+ * 但仅 4 个（少量，非暗2 的 12 个密布）绕卡面四周锚点（两角 + 两缘中部），循环
+ * 渐现→渐散（复用 smokePuff 关键帧，6s 周期 + 负 delay -1.5s/个 交错 → 各烟不同
+ * 时刻飘进飘出）。与 .compiled-mist 同层（z 1）、pointer-events:none；.no-anim 窗口
+ * 定格（同 mist-blob 模式）。不改动 .mist-blob 与暗2线烟 .smoke-puff/.smoke-line。 */
+.dark-ring-smoke {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1; /* 与雾层同层：编译环（2）之下、协议背景之上 */
+  overflow: visible;
+}
+.dark-ring-puff {
+  position: absolute;
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  /* 与 .smoke-puff 同一视觉：深色剪影 + 冷色亮缘（近黑 UI 上以灰蓝/紫蓝 rim 显形） */
+  background: radial-gradient(circle, rgba(12, 12, 18, 0.95) 38%, rgba(150, 165, 205, 0.55) 62%, rgba(190, 205, 240, 0.35) 74%, transparent 82%);
+  filter: blur(3px);
+  opacity: 0;
+  animation: smokePuff 6s ease-in-out infinite;
+  will-change: opacity, transform;
+}
+/* 4 个锚点绕卡面四周（两角 + 两缘中部；64px 圆烟用负 margin 居中——transform 被动画占用） */
+.dark-ring-puff:nth-child(1) { left: -20px; top: -20px; }                      /* 左上角 */
+.dark-ring-puff:nth-child(2) { right: -20px; top: -20px; }                     /* 右上角 */
+.dark-ring-puff:nth-child(3) { left: -20px; top: 50%; margin-top: -32px; }     /* 左缘中部 */
+.dark-ring-puff:nth-child(4) { left: 50%; bottom: -20px; margin-left: -32px; } /* 下缘中部 */
+/* .no-anim 窗口：暂停定格（R11.3：同 mist-blob —— play-state:paused 不重启动画） */
+.no-anim .dark-ring-puff {
+  animation-play-state: paused !important;
   opacity: 0.4;
 }
 
@@ -1709,9 +1781,9 @@ body.dragging { cursor: grabbing; user-select: none; }
     background: linear-gradient(180deg, #000, #050508); /* 与边框同刻变纯黑 */
   }
 }
-/* .no-anim 窗口：定格深灰静态（与 .mist-blob 同模式，避免重建瞬间闪帧） */
+/* .no-anim 窗口：暂停定格（R11.3：同 mist-blob —— play-state:paused 不重启动画） */
 .no-anim .dark-halo-scallop {
-  animation: none !important;
+  animation-play-state: paused !important;
   background: linear-gradient(180deg, #45454f, #000);
 }
 /* 线选择高亮（select-line：点击 lane-row 选择目标线，round5 提亮） */

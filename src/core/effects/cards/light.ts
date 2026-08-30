@@ -1,13 +1,17 @@
 import type { EffectCtx, EffectGen, EffectStep, Line, PlayerId, StepResult } from '../../models/types';
 import { registerCardEffects } from '../registry';
+import { findCard } from '../context';
+import { cardPointValue } from '../../state/create';
 
 function* light0(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const targets = ctx.candidates({ zone: 'field' });
   const ans = yield { kind: 'select', title: 'light-0：翻转1张牌', min: 1, max: 1, optional: false, candidates: targets };
   if (ans.selected.length === 0) return;
-  const picked = targets.find((c) => c.uid === ans.selected[0]);
   yield { op: 'flip', uid: ans.selected[0] };
-  if (picked) yield { op: 'draw', count: Number(picked.label) };
+  // 抽牌数以翻转后的状态为准：翻完正面 → 抽牌面分值；翻完反面 → 抽反面分值
+  // （默认 2；所在线有正面 darkness-2 顶命令时 = 4）
+  const card = findCard(ctx.s, ans.selected[0]);
+  if (card) yield { op: 'draw', count: cardPointValue(ctx.s, card) };
 }
 
 function* light1End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
