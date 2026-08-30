@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { gameBus } from '../../src/core/events/bus';
 import { executeAction } from '../../src/core/game';
-import { makeCard, draftFireP1, advanceToStep, resolveAllChoices } from '../helpers';
+import { makeCard, draftFireP1, draftLightP1, advanceToStep, resolveAllChoices } from '../helpers';
+import type { Line } from '../../src/core/models/types';
 
 /** 捕获弃牌/删去事件（含触发卡协议），返回快照 */
 function captureDiscardDelete(snapshot: { type: string; triggerProtocol?: string; triggerDefId?: string }[]): () => void {
@@ -50,5 +51,28 @@ describe('FX trigger protocol payload', () => {
     expect(seen).toHaveLength(1);
     expect(seen[0].triggerProtocol).toBe('system');
     expect(seen[0].triggerDefId).toBe('system');
+  });
+
+  it('light-4 reveal payload carries triggerProtocol=light + triggerDefId (FX wings + aura)', () => {
+    const s = draftLightP1();
+    advanceToStep(s, 0, 'action');
+    s.players[0].hand = [makeCard('light-4', 0, 'hand')];
+    const card = s.players[0].hand[0];
+    const lightLine: Line = s.players[0].protocols.findIndex((p) => p.defId === 'light') as Line;
+    const seen: { shownTo?: number; triggerProtocol?: string; triggerDefId?: string }[] = [];
+    const off = gameBus.subscribe((e) => {
+      if (e.type !== 'card:revealed') return;
+      const p = e.payload as { shownTo?: number; triggerProtocol?: string; triggerDefId?: string };
+      seen.push(p);
+    });
+    executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: lightLine });
+    resolveAllChoices(s, () => []); // light-4 无选择步骤，无害
+    off();
+    expect(seen.length).toBeGreaterThan(0);
+    for (const p of seen) {
+      expect(p.triggerProtocol).toBe('light'); // 触发卡协议（light-4）
+      expect(p.triggerDefId).toBe('light-4');
+      expect(p.shownTo).toBe(0); // 对手手牌揭示给自己（发起者）
+    }
   });
 });

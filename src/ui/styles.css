@@ -434,20 +434,20 @@ body {
 }
 /* ===== 火焰已编译环专属（fire）：慢速岩浆 + 大块黑/红岩 + 岩浆红背光 =====
  * 仅作用 .compiled-fx-fire（挂在 .protocol 上），light/darkness 环（.compiled-ring-light/
- * .compiled-ring-darkness）不受影响。JS 的负 animation-delay 已按 fire 的 7s 换算，
- * 故仅改 duration 即可让整圈岩浆以均匀间距慢速流动（2.5s → 7s）。 */
+ * .compiled-ring-darkness）不受影响。JS 的负 animation-delay 已按 fire 的 14s 换算，
+ * 故仅改 duration 即可让整圈岩浆以均匀间距慢速流动（2.5s → 14s，速度减半）。 */
 .compiled-fx-fire .lava-seg,
 .compiled-fx-fire .lava-rock {
-  /* 慢速岩浆流动：2.5s → 7s 一圈 */
-  animation-duration: 7s;
-  /* 旅行环外扩（inset -5px round 15px → -14px round 18px）：容纳 36×30 大岩块，
+  /* 慢速岩浆流动：2.5s → 14s 一圈（7s → 14s，速度减半） */
+  animation-duration: 14s;
+  /* 旅行环外扩（inset -5px round 15px → -11px round 18px）：容纳 24×20 岩块，
      岩块沿卡面外侧环带旅行、略溢出协议框（brief 明确允许轻微溢出） */
-  offset-path: inset(-14px round 18px);
+  offset-path: inset(-11px round 18px);
 }
 .compiled-fx-fire .lava-rock {
-  /* 鹅卵石（10×8）→ 大块黑岩/红岩（36×30） */
-  width: 36px;
-  height: 30px;
+  /* 鹅卵石（10×8）→ 黑/红岩（36×30）→ 缩小约 1/3：24×20（R8） */
+  width: 24px;
+  height: 20px;
 }
 /* 岩浆红背光：卡面后方低透明度红/橙 conic 光晕，14s 缓慢旋转（读作缓慢流动的岩浆辉光）
  * + 柔光径向渐变；挂在 .protocol-holder::before（holder 无 stacking context，
@@ -1339,7 +1339,8 @@ body.dragging { cursor: grabbing; user-select: none; }
 
 /* ===== 揭示幽灵牌（对手手牌区末尾，仅视觉 + 双击放大，不参与选择/手牌计数） =====
  * ITEM 8：幽灵加入扇形动态（悬停展开/推开）并支持双击放大查看正面——
- * 因此移除 pointer-events:none（双击需命中元素），改用 zoom-in 光标提示可放大。 */
+ * 因此移除 pointer-events:none（双击需命中元素），改用 zoom-in 光标提示可放大。
+ * 入场动画已由主线程"揭示飞行"承接（逐张从被揭示方手牌末尾飞入，不再播 ghost-enter）。 */
 .reveal-ghost {
   opacity: 0.7;
   filter: saturate(0.7) brightness(0.9);
@@ -1347,9 +1348,108 @@ body.dragging { cursor: grabbing; user-select: none; }
   cursor: zoom-in;
   user-select: none;
 }
-@keyframes ghost-in {
-  from { transform: translateX(24px) scale(0.8); opacity: 0; }
-  to { transform: translateX(0) scale(1); opacity: 0.7; }
+/* light 协议揭示的幽灵（lightFx）：光之辉光——金色边框辉光 + 卡面十字星光，
+ * 幽灵存在期间持续（R8：飞行落地后翅膀渐隐，落地幽灵以本辉光常驻） */
+.reveal-ghost.ghost-light {
+  border-color: #ffe9a8;
+  box-shadow:
+    0 0 6px rgba(255, 236, 180, 0.9),
+    0 0 18px rgba(255, 214, 120, 0.55),
+    inset 0 0 10px rgba(255, 240, 200, 0.4);
+}
+/* 十字星光：卡面中央两段交叉光条（十字）+ 柔光晕，缓脉冲呼吸 */
+.reveal-ghost.ghost-light::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 84px;
+  height: 84px;
+  transform: translate(-50%, -50%);
+  z-index: 2; /* 覆盖在卡面图之上（.card-face-img 无 z-index） */
+  pointer-events: none;
+  background:
+    radial-gradient(circle, rgba(255, 240, 190, 0.5) 0%, rgba(255, 224, 150, 0.16) 45%, transparent 70%),
+    linear-gradient(90deg, transparent 44%, rgba(255, 244, 210, 0.9) 48%, rgba(255, 244, 210, 0.9) 52%, transparent 56%),
+    linear-gradient(0deg, transparent 44%, rgba(255, 244, 210, 0.9) 48%, rgba(255, 244, 210, 0.9) 52%, transparent 56%);
+  filter: blur(0.5px) drop-shadow(0 0 6px rgba(255, 224, 140, 0.95));
+  animation: cross-star-pulse 2.4s ease-in-out infinite;
+}
+@keyframes cross-star-pulse {
+  0%, 100% { opacity: 0.55; transform: translate(-50%, -50%) scale(0.96); }
+  50% { opacity: 1; transform: translate(-50%, -50%) scale(1.06); }
+}
+
+/* ===== 揭示飞行（reveal fly）：幽灵卡从被揭示方手牌末尾飞入接收方手牌末尾 =====
+ * main.ts 在行动结算后串行调用 playRevealFly（ui/effects），逐张起飞（~400ms/张，
+ * 上一张落地即起飞下一张）；落地后幽灵渐隐，由重渲染后的真实幽灵卡（.reveal-ghost）
+ * 承接显示。z-index 520：高于抽牌幽灵（500）/手牌挡板（70），低于放大遮罩（1000）；
+ * pointer-events:none 不拦截点击。 */
+.reveal-fly-ghost {
+  position: fixed;
+  width: 130px;
+  height: 178.8px;
+  z-index: 520;
+  pointer-events: none;
+  opacity: 0; /* 起飞时淡入 */
+}
+.reveal-fly-ghost img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 6px;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.55);
+  z-index: 1; /* 卡面在翅膀之上 */
+}
+/* 天使翅膀（light 协议揭示专属）：一对白色光翅从卡后伸出，飞行中扑扇，落地后渐隐 */
+.reveal-wings {
+  position: absolute;
+  left: 50%;
+  top: 42%;
+  width: 0;
+  height: 0;
+  z-index: 0;
+  pointer-events: none;
+  transition: opacity 0.4s ease;
+}
+.reveal-wings.fade { opacity: 0; }
+.reveal-wings::before,
+.reveal-wings::after {
+  content: '';
+  position: absolute;
+  top: -26px;
+  width: 96px;
+  height: 52px;
+  background: radial-gradient(ellipse at 34% 40%, rgba(255, 255, 255, 0.98) 0%, rgba(255, 255, 255, 0.75) 42%, rgba(255, 255, 255, 0) 72%);
+  filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.7));
+  animation: reveal-wing-flap 0.34s ease-in-out infinite alternate;
+}
+/* 左翅：右缘锚定中心向左展开，上翘；右翅镜像（--wing-rot 取负） */
+.reveal-wings::before {
+  right: 6px;
+  transform-origin: right center;
+  border-radius: 16% 88% 28% 76% / 42% 80% 24% 58%;
+  --wing-rot: 16deg;
+  transform: rotate(var(--wing-rot));
+  animation-name: reveal-wing-flap;
+}
+.reveal-wings::after {
+  left: 6px;
+  transform-origin: left center;
+  border-radius: 88% 16% 76% 28% / 80% 42% 58% 24%;
+  --wing-rot: -16deg;
+  transform: rotate(var(--wing-rot));
+  animation-name: reveal-wing-flap-mirror;
+}
+@keyframes reveal-wing-flap {
+  from { transform: rotate(var(--wing-rot)); }
+  to { transform: rotate(calc(var(--wing-rot) + 12deg)); }
+}
+@keyframes reveal-wing-flap-mirror {
+  from { transform: rotate(var(--wing-rot)); }
+  to { transform: rotate(calc(var(--wing-rot) - 12deg)); }
 }
 
 /* ===== 草案页拖拽选协议 ===== */
@@ -1375,9 +1475,6 @@ body.dragging { cursor: grabbing; user-select: none; }
   border-radius: 10px;
   background: rgba(79, 240, 255, 0.05);
 }
-
-.reveal-ghost.ghost-enter { animation: ghost-in 0.45s cubic-bezier(0.2, 0.7, 0.3, 1); }
-
 
 /* 本回合已选、可拖出取消的协议卡：虚线提示 */
 .draft-pick-card.unpickable { outline: 1px dashed #ffd76a55; outline-offset: 2px; cursor: grab; }

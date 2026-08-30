@@ -25,8 +25,9 @@ function* light2(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   if (r.selected.length === 0) return;
   const revealed = facedown.find((c) => c.uid === r.selected[0]);
   yield { op: 'reveal', uid: r.selected[0] };
-  // 被揭示卡持有者决定：翻转 / 平移 / 跳过（持有者现在可能是对手或被盖卡持有者）
-  const chooser = revealed?.owner ?? ctx.player;
+  // 翻/移/跳过的选择权属于打出光2的玩家（效果属主 ctx.player），而非被揭示卡的持有者——
+  // 卡牌可能易主（易主规则），选择权不随卡牌归属转移
+  const chooser: PlayerId = ctx.player;
   const act = yield { kind: 'select-action', title: 'light-2：你可以平移或翻转那张牌', min: 1, max: 1, optional: true, candidates: [], actions: ['action:flip', 'action:shift'], chooser };
   if (act.selected.length === 0) return;
   if (act.selected[0] === 'action:flip') yield { op: 'flip', uid: r.selected[0], allowCovered: true };

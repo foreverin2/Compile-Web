@@ -4,7 +4,7 @@ import { executeAction } from './core/game';
 import { getCompilableLines } from './core/rules/compile';
 import { collectTriggers } from './core/effects/triggers';
 import { renderApp, renderDraft, type UiCallbacks } from './ui/render';
-import { initEffects, initCompileFx } from './ui/effects';
+import { initEffects, initCompileFx, playRevealFly } from './ui/effects';
 import { initDiag } from './ui/diag';
 import { initDevMode } from './ui/devmode';
 import { gameBus } from './core/events/bus';
@@ -24,6 +24,11 @@ const GHOST_H = 178.8;
 const HAND_CARD_SPACING = 102; // 卡宽 130 − 重叠 28
 /** 效果触发的抽牌累计（card:drawn 事件 → 本次行动结算完成后统一播抽牌特效） */
 let pendingDraws: { player: PlayerId; count: number }[] = [];
+/** 效果触发的揭示累计（card:revealed 事件 → 本次行动结算完成后按序播揭示飞行：
+ *  幽灵从被揭示方手牌末尾逐张飞入接收方手牌末尾，全部落地后再重渲染） */
+let pendingReveals: { owner: PlayerId; shownTo: PlayerId; defId: string; triggerProtocol: string }[] = [];
+/** 揭示飞行进行中标志：防止动画期间再次触发刷新/渲染导致并发动画/双重渲染（同 drawAnimBusy） */
+let revealFlyBusy = false;
 /** 草案 → 游玩过渡进行中：暂停自动推进，避免视频期间后台渲染/推进对战界面 */
 let transitioning = false;
 
@@ -81,23 +86,38 @@ const cb: UiCallbacks = {
       executeAction(state, player, 'resolve-trigger', { cardUid: a.cardUid! });
     }
     // effect-choice：getLegalActions 不产生，由 UI 选择栏应答后经 onAction 分发（chooser 可能是对手）
-    // 效果触发的抽牌（card:drawn 事件，如 fire-0/fire-4）在本次行动结算期间累计，统一播新抽牌特效
+    // 效果触发的抽牌（card:drawn 事件，如 fire-0/fire-4）与揭示（card:revealed 事件，如
+    // light-2/light-4）在本次行动结算期间累计，统一播新抽牌特效 + 揭示飞行序列
     const effectDraws = pendingDraws;
     pendingDraws = [];
+    const effectReveals = pendingReveals;
+    pendingReveals = [];
+    // 揭示飞行在重渲染前完成：幽灵不提前出现在接收方手牌中，飞入后才随重渲染落地显示
+    const afterFx = () => {
+      if (effectReveals.length > 0 && !revealFlyBusy) {
+        revealFlyBusy = true;
+        playRevealFlySequence(effectReveals, () => {
+          revealFlyBusy = false;
+          renderApp(root, state, cb);
+        });
+      } else {
+        renderApp(root, state, cb);
+      }
+    };
     if (drawAnimCount > 0) {
       drawAnimBusy = true;
       playDrawAnimation(player, drawAnimCount, () => {
         drawAnimBusy = false;
-        renderApp(root, state, cb);
+        afterFx();
       });
     } else if (effectDraws.length > 0 && !drawAnimBusy) {
       drawAnimBusy = true;
       playDrawSequence(effectDraws, () => {
         drawAnimBusy = false;
-        renderApp(root, state, cb);
+        afterFx();
       });
     } else {
-      renderApp(root, state, cb);
+      afterFx();
     }
   },
 };
@@ -123,6 +143,28 @@ function playDrawSequence(draws: { player: PlayerId; count: number }[], done: ()
     if (rest.length === 0) done();
     else playDrawSequence(rest, done);
   });
+}
+
+/**
+ * 效果触发的揭示飞行序列：逐张播揭示飞行（每张 ~400ms，上一张落地即起飞下一张），
+ * 全部落地后调用 done()（由调用方触发重渲染——幽灵飞入接收方手牌后才显示）。
+ */
+function playRevealFlySequence(
+  reveals: { owner: PlayerId; shownTo: PlayerId; defId: string; triggerProtocol: string }[],
+  done: () => void,
+): void {
+  const step = (i: number): void => {
+    const r = reveals[i];
+    if (!r) {
+      done();
+      return;
+    }
+    playRevealFly(
+      { source: r.owner, shownTo: r.shownTo, defId: r.defId, triggerProtocol: r.triggerProtocol, index: i },
+      () => step(i + 1),
+    );
+  };
+  step(0);
 }
 
 /**
@@ -284,5 +326,15 @@ gameBus.subscribe((e) => {
   if (e.type !== 'card:drawn') return;
   const p = e.payload as { player: PlayerId; count: number };
   pendingDraws.push({ player: p.player, count: p.count });
+});
+// 效果触发的揭示：累计 card:revealed 事件，行动结算后按序播揭示飞行
+// （source = 被揭示卡持有者手牌末尾，shownTo = 接收方手牌末尾；triggerProtocol 决定
+// 飞行幽灵是否带天使翅膀——light 协议揭示专属）
+gameBus.subscribe((e) => {
+  if (e.type !== 'card:revealed') return;
+  const p = e.payload as { owner?: PlayerId; shownTo?: PlayerId; defId?: string; triggerProtocol?: string } | undefined;
+  if (p?.owner !== undefined && p.shownTo !== undefined && p.defId) {
+    pendingReveals.push({ owner: p.owner, shownTo: p.shownTo, defId: p.defId, triggerProtocol: p.triggerProtocol ?? 'system' });
+  }
 });
 renderApp(root, state, cb);

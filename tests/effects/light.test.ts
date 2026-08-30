@@ -47,7 +47,7 @@ describe('light protocol effects', () => {
     expect(s.pendingEffects).toHaveLength(0);
   });
 
-  it('light-2: revealed card owner (P2) decides — flip', () => {
+  it('light-2: effect player (P1) decides — flip (choice does not follow the revealed card owner)', () => {
     const s = draftLightP1();
     advanceToStep(s, 0, 'action');
     s.players[0].hand = [makeCard('light-2', 0, 'hand')];
@@ -59,20 +59,21 @@ describe('light protocol effects', () => {
     const p1 = s.pendingEffects[s.pendingEffects.length - 1];
     expect(p1.prompt?.kind).toBe('select');
     executeAction(s, 0, 'effect-choice', { promptId: p1.id, choice: [facedown.uid] });
-    // 揭示 → 幽灵牌产生，挂起 select-action，chooser = 被揭示卡持有者（P2）
+    // 揭示 → 幽灵牌产生，挂起 select-action，chooser = 打出 light-2 的玩家（P1），
+    // 无论被揭示卡持有者是谁（卡牌可能易主）
     expect(s.revealedGhosts).toHaveLength(1);
     const p2 = s.pendingEffects[s.pendingEffects.length - 1];
     expect(p2.prompt?.kind).toBe('select-action');
-    expect(p2.prompt?.chooser).toBe(1);
-    // 效果属主 P1 无选择权
-    expect(() => executeAction(s, 0, 'effect-choice', { promptId: p2.id, choice: ['action:flip'] })).toThrow(/not your choice/);
-    // P2 决定：翻转
-    executeAction(s, 1, 'effect-choice', { promptId: p2.id, choice: ['action:flip'] });
+    expect(p2.prompt?.chooser).toBe(0);
+    // 被揭示卡持有者（P2）无选择权
+    expect(() => executeAction(s, 1, 'effect-choice', { promptId: p2.id, choice: ['action:flip'] })).toThrow(/not your choice/);
+    // 效果属主 P1 决定：翻转
+    executeAction(s, 0, 'effect-choice', { promptId: p2.id, choice: ['action:flip'] });
     expect(facedown.faceUp).toBe(true);
     expect(s.pendingEffects).toHaveLength(0);
   });
 
-  it('light-2: revealed card owner (P2) decides — skip (stays facedown)', () => {
+  it('light-2: effect player (P1) decides — skip (stays facedown)', () => {
     const s = draftLightP1();
     advanceToStep(s, 0, 'action');
     s.players[0].hand = [makeCard('light-2', 0, 'hand')];
@@ -83,7 +84,7 @@ describe('light protocol effects', () => {
     const p1 = s.pendingEffects[s.pendingEffects.length - 1];
     executeAction(s, 0, 'effect-choice', { promptId: p1.id, choice: [facedown.uid] });
     const p2 = s.pendingEffects[s.pendingEffects.length - 1];
-    executeAction(s, 1, 'effect-choice', { promptId: p2.id, choice: [] }); // 可选：跳过
+    executeAction(s, 0, 'effect-choice', { promptId: p2.id, choice: [] }); // 可选：跳过
     expect(facedown.faceUp).toBe(false); // 未翻转
     expect(s.revealedGhosts).toHaveLength(1); // 揭示本身仍生效
     expect(s.pendingEffects).toHaveLength(0);
@@ -100,10 +101,10 @@ describe('light protocol effects', () => {
     const p1 = s.pendingEffects[s.pendingEffects.length - 1];
     expect(p1.prompt?.kind).toBe('select');
     executeAction(s, 0, 'effect-choice', { promptId: p1.id, choice: [facedown.uid] });
-    // 被揭示卡持有者（P2）选择平移
+    // 效果属主（P1）选择平移
     const p2 = s.pendingEffects[s.pendingEffects.length - 1];
     expect(p2.prompt?.kind).toBe('select-action');
-    executeAction(s, 1, 'effect-choice', { promptId: p2.id, choice: ['action:shift'] });
+    executeAction(s, 0, 'effect-choice', { promptId: p2.id, choice: ['action:shift'] });
     const p3 = s.pendingEffects[s.pendingEffects.length - 1];
     expect(p3.prompt?.kind).toBe('select-line');
     expect(p3.prompt?.lines).toEqual([2]); // 同时排除效果线 0 与被揭示卡线 1（平移必须到不同列）
@@ -208,7 +209,7 @@ describe('light protocol effects', () => {
     expect(onField.map((c) => c.uid).sort()).toEqual([fd1.uid, fd2.uid, ofd.uid, card.uid].sort());
   });
 
-  it('light-2: can reveal a covered card and an opponent face-down card; covered card owner flips it', () => {
+  it('light-2: can reveal a covered card and an opponent face-down card; effect player flips it', () => {
     const s = draftLightP1();
     advanceToStep(s, 0, 'action');
     s.players[0].hand = [makeCard('light-2', 0, 'hand')];
@@ -231,7 +232,7 @@ describe('light protocol effects', () => {
     expect(s.revealedGhosts).toHaveLength(1);
     const p2 = s.pendingEffects[s.pendingEffects.length - 1];
     expect(p2.prompt?.kind).toBe('select-action');
-    expect(p2.prompt?.chooser).toBe(0); // 被揭示卡持有者（P1）决定
+    expect(p2.prompt?.chooser).toBe(0); // 效果属主（P1）决定（无论被揭示卡持有者是谁）
     executeAction(s, 0, 'effect-choice', { promptId: p2.id, choice: ['action:flip'] });
     expect(covered.faceUp).toBe(true); // 被盖住的反面卡可被翻转（allowCovered）
     expect(s.pendingEffects).toHaveLength(0);
@@ -248,6 +249,7 @@ describe('light protocol effects', () => {
     expect(s.revealedGhosts).toHaveLength(oppHand.length);
     for (const g of s.revealedGhosts) {
       expect(oppHand.some((c) => c.defId === g.defId)).toBe(true);
+      expect(g.lightFx).toBe(true); // light 协议揭示（light-4）：落地幽灵带光之辉光（十字星 + 边框辉光）
     }
   });
 

@@ -165,6 +165,45 @@ describe('darkness protocol effects', () => {
     expect(s.pendingEffects).toHaveLength(0);
   });
 
+  it('darkness-1: shift options include its own row (only exclude the flipped card line)', () => {
+    const s = draftDarknessP1();
+    advanceToStep(s, 0, 'action');
+    // 被翻卡在对手线 1（≠ darkness-1 所在线 0）→ darkness-1 自己的线（0）是合法平移目标
+    const target = makeCard('water-1', 1, 'field', false, 1, 0);
+    s.players[1].stacks[1] = [target];
+    s.players[0].hand = [makeCard('darkness-1', 0, 'hand')];
+    const card = s.players[0].hand[0];
+    executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: darknessLine(s) });
+    const p1 = s.pendingEffects[s.pendingEffects.length - 1];
+    executeAction(s, 0, 'effect-choice', { promptId: p1.id, choice: [target.uid] });
+    const p2 = s.pendingEffects[s.pendingEffects.length - 1];
+    expect(p2.prompt?.kind).toBe('select-line');
+    // 仅排除被翻卡当前线（1）；darkness-1 所在线（0）仍可选（平移到自己的线合法）
+    expect(p2.prompt?.lines).toEqual([0, 2]);
+    executeAction(s, 0, 'effect-choice', { promptId: p2.id, choice: ['line:0'] });
+    expect(target.line).toBe(0); // 平移到 darkness-1 自己的线（对手侧同线号）
+    expect(s.players[1].stacks[0].map((c) => c.uid)).toEqual([target.uid]);
+    expect(s.pendingEffects).toHaveLength(0);
+  });
+
+  it('darkness-1: when the flipped card is on its own line, that line is still excluded (shift-to-same-line throws)', () => {
+    const s = draftDarknessP1();
+    advanceToStep(s, 0, 'action');
+    // 被翻卡在对手线 0（= darkness-1 所在线）→ 该线仍被排除
+    const target = makeCard('water-1', 1, 'field', false, 0, 0);
+    s.players[1].stacks[0] = [target];
+    s.players[0].hand = [makeCard('darkness-1', 0, 'hand')];
+    const card = s.players[0].hand[0];
+    executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: darknessLine(s) });
+    const p1 = s.pendingEffects[s.pendingEffects.length - 1];
+    executeAction(s, 0, 'effect-choice', { promptId: p1.id, choice: [target.uid] });
+    const p2 = s.pendingEffects[s.pendingEffects.length - 1];
+    expect(p2.prompt?.kind).toBe('select-line');
+    expect(p2.prompt?.lines).toEqual([1, 2]);
+    // 平移校验：目标线 = 被翻卡当前线 0 → 抛错（引擎防线）
+    expect(() => executeAction(s, 0, 'effect-choice', { promptId: p2.id, choice: ['line:0'] })).toThrow(/invalid line selection/);
+  });
+
   it('darkness-2: optional flip of a facedown card in own column — flip path', () => {
     const s = draftDarknessP1();
     advanceToStep(s, 0, 'action');

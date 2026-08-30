@@ -109,6 +109,9 @@ export interface RevealedGhost {
   shownTo: PlayerId;
   /** 过期阈值：turnCount 达到该值时在回合结束转换时被清除 */
   expiresAtTurn: number;
+  /** light 协议触发的揭示（light-2/light-4，且效果卡协议随打出者结算——易主不影响）：
+   *  落地幽灵渲染光之辉光（十字星 + 边框辉光），存在期间持续 */
+  lightFx?: boolean;
 }
 
 /** 效果操作（生成器 yield 的值之一；由运行器执行并触发连锁/语义事件） */
