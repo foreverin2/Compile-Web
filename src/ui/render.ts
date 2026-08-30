@@ -64,7 +64,23 @@ function renderProtocol(p: { defId: string; compiled: boolean }, player: PlayerI
   // 已编译协议专属特效类（类随 defId 挂载 → 协议换位/重排时特效跟随对应协议）
   if (p.compiled) {
     box.classList.add(`compiled-fx-${p.defId}`);
-    appendCompiledRing(holder, p.defId);
+    // R11.3：已编译环特效跨重渲染持久 —— 按 defId 注册，首次编译构建一次，此后每次
+    // 渲染把同一节点重挂到新 holder（appendChild 移动既有节点不重启 CSS 动画 → 结算
+    // 步骤不再"恢复初始状态"卡顿）。每玩家 3 协议 defId 互不相同、双方亦不共享
+    // （草案池每 defId 只出现一次）→ 以 defId 为键安全。
+    let fx = compiledFx.get(p.defId);
+    if (!fx) {
+      fx = buildCompiledFx(p.defId);
+      compiledFx.set(p.defId, fx);
+    }
+    holder.appendChild(fx);
+  } else {
+    // 未编译：释放该 defId 的持久 FX（若有）
+    const fx = compiledFx.get(p.defId);
+    if (fx) {
+      fx.remove();
+      compiledFx.delete(p.defId);
+    }
   }
   const img = document.createElement('img');
   // R1 协议卡朝向：P1（左）按原图方向展示；P2（右）旋转 180° 使双方协议相对放置。
@@ -584,6 +600,27 @@ function renderProtocolCell(s: GameState, player: PlayerId, line: Line): HTMLEle
   cell.dataset.line = String(line);
   cell.appendChild(renderProtocol(s.players[player].protocols[line], player));
   return cell;
+}
+
+/**
+ * R11.3：已编译环特效持久注册表。key = 协议 defId（每玩家 3 协议 defId 唯一；双方草案
+ * 池亦不重复 —— 同一 defId 不会同时出现在两个协议格）。跨重渲染复用同一 DOM 节点：
+ * appendChild 移动既有节点不会重启其 CSS 动画（与 round6 黑烟 overlay 同模式）→
+ * 逐步结算不再"一卡一卡"恢复初始状态。未编译时从本表移除（DOM 随之释放）。
+ */
+const compiledFx = new Map<string, HTMLElement>();
+
+/** 构建单个 defId 的持久 FX 层（首次编译时创建一次，此后只重挂不重建）：
+ *  - fire：背光层 + 岩浆段/岩石（.compiled-fx 包裹，环与 holder 同盒）
+ *  - light/darkness：各自环内层（呼吸边框/角光、雾、波浪光晕、圆烟）
+ *  背光由 `.protocol-holder::before` 伪元素改为真实元素 `.fire-backlight`（R11.3）：
+ *  伪元素随 holder 每次重建会重启动画；真实元素随持久层存活 → 背光旋转也不重启。
+ */
+function buildCompiledFx(defId: string): HTMLElement {
+  const layer = el('div', 'compiled-fx');
+  if (defId === 'fire') layer.appendChild(el('div', 'fire-backlight'));
+  appendCompiledRing(layer, defId);
+  return layer;
 }
 
 /**
