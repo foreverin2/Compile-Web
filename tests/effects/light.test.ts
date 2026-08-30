@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import type { GameState, Line } from '../../src/core/models/types';
 import { executeAction, getLegalActions } from '../../src/core/game';
 import { collectTriggers } from '../../src/core/effects/triggers';
+import { EFFECTS } from '../../src/core/effects/registry';
 import { makeCard, pickFirst, resolveAllChoices, draftLightP1, advanceToStep } from '../helpers';
 
 function lightLine(s: GameState): Line {
@@ -61,6 +62,71 @@ describe('light protocol effects', () => {
     });
     expect(faceup.faceUp).toBe(false); // 翻转目标（正面 → 反面）
     expect(s.players[0].hand).toHaveLength(4); // 暗2 顶命令修正：反面分值 4
+  });
+
+  // R11.4：翻面后卡牌被移出游戏时，light-0 抽牌按"翻转后的公开/秘密信息"判定。
+  // 用 metal-6（牌面分值 6，默认无注册效果）临时注册中指令模拟连锁，测试后清理。
+  const saveMetal6 = EFFECTS['metal-6'];
+  afterEach(() => {
+    if (saveMetal6) EFFECTS['metal-6'] = saveMetal6;
+    else delete EFFECTS['metal-6'];
+  });
+
+  it('light-0: chain deletes the flipped card to the trash (public, face-up) → draw its printed value (6)', () => {
+    // 临时中指令：删除自身 → 弃牌堆（公开、正面朝上）。light-0 翻正触发中指令连锁
+    // （pushMiddle LIFO：连锁先结算，light-0 的 draw 在其后）→ 抽牌面分值 6
+    EFFECTS['metal-6'] = {
+      middle: function* (ctx) {
+        yield { op: 'delete', uid: ctx.card.uid };
+      },
+    };
+    const s = draftLightP1();
+    advanceToStep(s, 0, 'action');
+    s.players[0].hand = [makeCard('light-0', 0, 'hand')];
+    const facedown = makeCard('metal-6', 1, 'field', false, 1, 0); // 分值 6 的反面牌（P2 线 1）
+    s.players[1].stacks[1] = [facedown];
+    const card = s.players[0].hand[0];
+    executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: lightLine(s) });
+    resolveAllChoices(s, (p) => {
+      if (p.candidates.some((c) => c.uid === facedown.uid)) return [facedown.uid];
+      return pickFirst(p);
+    });
+    expect(facedown.zone).toBe('trash'); // 连锁删除 → 弃牌堆
+    expect(facedown.faceUp).toBe(true); // 弃牌堆公开且正面朝上
+    expect(s.players[0].hand).toHaveLength(6); // 抽牌面分值 6
+  });
+
+  it('light-0: chain moves the flipped card into the deck WITHOUT resetting faceUp → draw 2 (deck = secret, zone guard)', () => {
+    // 临时中指令：直接把卡移入持有者牌库（不重置 faceUp —— 模拟入牌库路径漏设反面的
+    // 场景：翻转后卡是正面标志）。cardPointValue 的 zone 守卫须按"牌库=秘密"计 2，
+    // 否则会错误地抽牌面分值 6。
+    EFFECTS['metal-6'] = {
+      middle: function* (ctx) {
+        const c = ctx.card;
+        const stack = ctx.s.players[c.owner].stacks[c.line!];
+        const idx = stack.findIndex((x) => x.uid === c.uid);
+        if (idx !== -1) stack.splice(idx, 1);
+        c.zone = 'deck';
+        c.line = null;
+        c.pos = null;
+        // 故意不改 c.faceUp：此时翻转后为 true（正面标志残留于牌库）
+        ctx.s.players[c.owner].deck.push(c);
+      },
+    };
+    const s = draftLightP1();
+    advanceToStep(s, 0, 'action');
+    s.players[0].hand = [makeCard('light-0', 0, 'hand')];
+    const facedown = makeCard('metal-6', 1, 'field', false, 1, 0);
+    s.players[1].stacks[1] = [facedown];
+    const card = s.players[0].hand[0];
+    executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: lightLine(s) });
+    resolveAllChoices(s, (p) => {
+      if (p.candidates.some((c) => c.uid === facedown.uid)) return [facedown.uid];
+      return pickFirst(p);
+    });
+    expect(facedown.zone).toBe('deck'); // 连锁移入牌库
+    expect(facedown.faceUp).toBe(true); // 残留正面标志（路径未重置）
+    expect(s.players[0].hand).toHaveLength(2); // 牌库=秘密 → 抽反面分值 2
   });
 
   it('light-1 end trigger: mandatory draw 1 (no skip)', () => {

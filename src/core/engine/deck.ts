@@ -18,6 +18,9 @@ export function drawCards(s: GameState, player: PlayerId, count: number): Card[]
       if (p.trash.length === 0) break;
       p.deck = shuffle(p.trash);
       p.trash = [];
+      // R11.4：弃牌堆 → 牌库 = 进入秘密信息区：弃牌堆的正面卡回牌库后必须翻回反面
+      // （否则 cardPointValue 会误按牌面分值计；牌库卡一律视为反面 2）
+      for (const c of p.deck) c.faceUp = false;
     }
     const card = p.deck.pop()!;
     card.zone = 'hand';

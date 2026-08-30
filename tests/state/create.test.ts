@@ -93,4 +93,27 @@ describe('create & draft', () => {
     s.players[0].stacks[1] = [dark2, card];
     expect(cardPointValue(s, card)).toBe(4);
   });
+
+  it('cardPointValue: a trash card is public & face-up → printed value (6)', () => {
+    const s = createGame();
+    // 删除进弃牌堆：delete op 置 zone=trash、faceUp=true（弃牌堆公开）→ 抽牌面分值
+    const card = makeCard('metal-6', 0, 'trash', true, null, 0);
+    s.players[0].trash.push(card);
+    expect(cardPointValue(s, card)).toBe(6);
+  });
+
+  it('cardPointValue: a deck card with faceUp=false is secret → 2', () => {
+    const s = createGame();
+    const card = makeCard('metal-6', 0, 'deck', false, null, 0);
+    s.players[0].deck.push(card);
+    expect(cardPointValue(s, card)).toBe(2);
+  });
+
+  it('cardPointValue: a deck card is secret regardless of the faceUp flag → 2 (zone guard)', () => {
+    const s = createGame();
+    // 即使某条入牌库路径漏设 faceUp=false（翻转后正面标志残留）→ 牌库仍是秘密信息 → 2
+    const card = makeCard('metal-6', 0, 'deck', true, null, 0);
+    s.players[0].deck.push(card);
+    expect(cardPointValue(s, card)).toBe(2);
+  });
 });
