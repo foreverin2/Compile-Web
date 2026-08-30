@@ -10,7 +10,7 @@ function lightLine(s: GameState): Line {
 }
 
 describe('light protocol effects', () => {
-  it('light-0: flip a target card, draw its value (3)', () => {
+  it('light-0: flip a face-down card face-up, draw its face value (3)', () => {
     const s = draftLightP1();
     advanceToStep(s, 0, 'action');
     s.players[0].hand = [makeCard('light-0', 0, 'hand')];
@@ -24,8 +24,43 @@ describe('light protocol effects', () => {
       if (p.candidates.some((c) => c.uid === facedown.uid)) return [facedown.uid];
       return pickFirst(p);
     });
-    expect(facedown.faceUp).toBe(true); // 翻转目标
-    expect(s.players[0].hand).toHaveLength(3); // 抽目标分值张（3）
+    expect(facedown.faceUp).toBe(true); // 翻转目标（反面 → 正面）
+    expect(s.players[0].hand).toHaveLength(3); // 抽翻转后（正面）分值张（3）
+  });
+
+  it('light-0: flip a face-up card face-down, draw 2 (the post-flip face-down value)', () => {
+    const s = draftLightP1();
+    advanceToStep(s, 0, 'action');
+    s.players[0].hand = [makeCard('light-0', 0, 'hand')];
+    // 目标：分值 3 的正面牌（light-3）——翻转后成反面 → 抽反面分值 2（不再是 3）
+    const faceup = makeCard('light-3', 1, 'field', true, 1, 0);
+    s.players[1].stacks[1] = [faceup];
+    const card = s.players[0].hand[0];
+    executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: lightLine(s) });
+    resolveAllChoices(s, (p) => {
+      if (p.candidates.some((c) => c.uid === faceup.uid)) return [faceup.uid];
+      return pickFirst(p);
+    });
+    expect(faceup.faceUp).toBe(false); // 翻转目标（正面 → 反面）
+    expect(s.players[0].hand).toHaveLength(2); // 抽反面分值（2）
+  });
+
+  it('light-0: face-down draw is 4 when a face-up darkness-2 tops the same line (not hardcoded 2)', () => {
+    const s = draftLightP1();
+    advanceToStep(s, 0, 'action');
+    s.players[0].hand = [makeCard('light-0', 0, 'hand')];
+    // 同线（线 1）有一张正面 darkness-2（被 light-3 盖住但正面朝上 → 常驻生效）
+    const dark2 = makeCard('darkness-2', 0, 'field', true, 1, 0);
+    const faceup = makeCard('light-3', 0, 'field', true, 1, 1);
+    s.players[0].stacks[1] = [dark2, faceup];
+    const card = s.players[0].hand[0];
+    executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: lightLine(s) });
+    resolveAllChoices(s, (p) => {
+      if (p.candidates.some((c) => c.uid === faceup.uid)) return [faceup.uid];
+      return pickFirst(p);
+    });
+    expect(faceup.faceUp).toBe(false); // 翻转目标（正面 → 反面）
+    expect(s.players[0].hand).toHaveLength(4); // 暗2 顶命令修正：反面分值 4
   });
 
   it('light-1 end trigger: mandatory draw 1 (no skip)', () => {

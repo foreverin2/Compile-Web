@@ -164,3 +164,11 @@ export function lineTopCommandActive(s: GameState, line: Line, defId: string): b
 export function getLineValue(s: GameState, player: PlayerId, line: Line): number {
   return stackValue(s, player, line);
 }
+
+/** 单卡当前分值：正面 = 牌面分值；反面 = 2，但所在线有正面 darkness-2 顶命令时 = 4 */
+export function cardPointValue(s: GameState, card: Card): number {
+  if (card.faceUp) return getCardDef(card.defId).value;
+  const line = card.line;
+  if (line !== null && lineTopCommandActive(s, line, 'darkness-2')) return 4;
+  return 2;
+}
