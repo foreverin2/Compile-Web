@@ -632,8 +632,8 @@ function buildCompiledFx(defId: string): HTMLElement {
 function appendCompiledRing(box: HTMLElement, defId: string): void {
   const ring = el('div', `compiled-ring compiled-ring-${defId}`);
   // 火焰（fire）专属参数：慢速岩浆流（56s/圈，CSS .compiled-fx-fire 覆写 animation-duration，
-  // 速度再减半：28s → 56s）+ 岩石加密（45 岩 = 30 黑 + 15 红，2 黑 1 红交替）→ 环周被
-  // 岩石基本填平（24px × 45 ≈ 1080px ≥ 环带周长 ≈1017px，轻微重叠）。红岩一半原色暗红
+  // 速度再减半：28s → 56s）+ 岩石加密（90 岩 = 60 黑 + 30 红，2 黑 1 红交替）→ 环周被
+  // 岩石基本填平（12px × 90 ≈ 1080px ≥ 环带周长 ≈1017px，轻微重叠）。红岩一半原色暗红
   // 一半亮红（rock-red ↔ rock-red-bright）、黑岩一半原色一半更深的近黑（rock-dark ↔
   // rock-dark-deep）交替挂类，边缘均匀混色。负 animation-delay 必须按实际 duration 换算
   // （-TRAVEL_S/count × i），否则元素会在环上挤成一团而非均匀分布。light/darkness 保持
@@ -648,11 +648,11 @@ function appendCompiledRing(box: HTMLElement, defId: string): void {
     seg.style.transform = `scale(${s.toFixed(2)})`;
     ring.appendChild(seg);
   }
-  const ROCK_COUNT = isFire ? 45 : 8;
+  const ROCK_COUNT = isFire ? 90 : 8;
   let redTurn = false; // 红岩变体交替（仅 fire）
   let darkTurn = false; // 黑岩变体交替（仅 fire）
   for (let i = 0; i < ROCK_COUNT; i++) {
-    // fire：2 黑 1 红交替（i%3===0 → 红，其余黑 → 45 岩 = 30 黑 + 15 红）；
+    // fire：2 黑 1 红交替（i%3===0 → 红，其余黑 → 90 岩 = 60 黑 + 30 红）；
     // light/darkness：黑红交替（8 岩 = 4 黑 + 4 红）
     const isRed = isFire ? i % 3 === 0 : i % 2 !== 0;
     let cls = 'lava-rock';
