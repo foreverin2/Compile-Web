@@ -15,6 +15,7 @@ function makeState(v0: number, v1: number, line: 0 | 1 | 2 = 0): GameState {
     draftRound: 6,
     draftPicks: [],
     turnPlayer: 0,
+    turnCount: 0,
     step: 'check-compile',
     compiledThisTurn: false,
     players: [

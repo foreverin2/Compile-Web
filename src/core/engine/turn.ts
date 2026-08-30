@@ -28,7 +28,12 @@ export function advanceStep(s: GameState): void {
     const ending = s.turnPlayer;
     s.turnPlayer = ending === 0 ? 1 : 0;
     s.compiledThisTurn = false;
-    // 揭示幽灵牌：expiresAfterTurn 玩家回合结束时自动消失
-    s.revealedGhosts = s.revealedGhosts.filter((g) => g.expiresAfterTurn !== ending);
+    // 回合计数：每次回合结束转换（end → start）恰 +1（advanceStep 是唯一换人入口）；
+    // 先计数再清除，expiresAtTurn <= 新计数的揭示幽灵自动消失。
+    // 揭示发生在当前回合的任意步骤（start/end 触发也算）时，计数基准 = 当次回合内
+    // 的当前值；A 用例（自己的牌→对手，第 2 次转换 = 对手回合结束）、B 用例
+    // （对手的牌→自己，第 3 次转换 = 发起者下回合结束）的语义不受步骤影响。
+    s.turnCount += 1;
+    s.revealedGhosts = s.revealedGhosts.filter((g) => g.expiresAtTurn > s.turnCount);
   }
 }
