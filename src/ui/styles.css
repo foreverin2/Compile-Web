@@ -1353,11 +1353,12 @@ body.dragging { cursor: grabbing; user-select: none; }
 .reveal-ghost.ghost-light {
   border-color: #ffe9a8;
   box-shadow:
-    0 0 6px rgba(255, 236, 180, 0.9),
-    0 0 18px rgba(255, 214, 120, 0.55),
-    inset 0 0 10px rgba(255, 240, 200, 0.4);
+    0 0 6px rgba(255, 240, 200, 1),
+    0 0 16px rgba(255, 224, 140, 0.9),
+    0 0 36px rgba(255, 200, 90, 0.55),
+    inset 0 0 12px rgba(255, 240, 200, 0.5);
 }
-/* 十字星光：卡面中央两段交叉光条（十字）+ 柔光晕，缓脉冲呼吸 */
+/* 十字星光：卡面中央两段交叉光条（十字）+ 柔光晕，缓脉冲呼吸（R9：调暗为柔和星芒） */
 .reveal-ghost.ghost-light::before {
   content: '';
   position: absolute;
@@ -1369,15 +1370,15 @@ body.dragging { cursor: grabbing; user-select: none; }
   z-index: 2; /* 覆盖在卡面图之上（.card-face-img 无 z-index） */
   pointer-events: none;
   background:
-    radial-gradient(circle, rgba(255, 240, 190, 0.5) 0%, rgba(255, 224, 150, 0.16) 45%, transparent 70%),
-    linear-gradient(90deg, transparent 44%, rgba(255, 244, 210, 0.9) 48%, rgba(255, 244, 210, 0.9) 52%, transparent 56%),
-    linear-gradient(0deg, transparent 44%, rgba(255, 244, 210, 0.9) 48%, rgba(255, 244, 210, 0.9) 52%, transparent 56%);
-  filter: blur(0.5px) drop-shadow(0 0 6px rgba(255, 224, 140, 0.95));
+    radial-gradient(circle, rgba(255, 240, 190, 0.32) 0%, rgba(255, 224, 150, 0.10) 45%, transparent 70%),
+    linear-gradient(90deg, transparent 44%, rgba(255, 244, 210, 0.6) 48%, rgba(255, 244, 210, 0.6) 52%, transparent 56%),
+    linear-gradient(0deg, transparent 44%, rgba(255, 244, 210, 0.6) 48%, rgba(255, 244, 210, 0.6) 52%, transparent 56%);
+  filter: blur(0.5px) drop-shadow(0 0 6px rgba(255, 224, 140, 0.55));
   animation: cross-star-pulse 2.4s ease-in-out infinite;
 }
 @keyframes cross-star-pulse {
-  0%, 100% { opacity: 0.55; transform: translate(-50%, -50%) scale(0.96); }
-  50% { opacity: 1; transform: translate(-50%, -50%) scale(1.06); }
+  0%, 100% { opacity: 0.38; transform: translate(-50%, -50%) scale(0.96); }
+  50% { opacity: 0.68; transform: translate(-50%, -50%) scale(1.06); }
 }
 
 /* ===== 揭示飞行（reveal fly）：幽灵卡从被揭示方手牌末尾飞入接收方手牌末尾 =====
@@ -1403,7 +1404,8 @@ body.dragging { cursor: grabbing; user-select: none; }
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.55);
   z-index: 1; /* 卡面在翅膀之上 */
 }
-/* 天使翅膀（light 协议揭示专属）：一对白色光翅从卡后伸出，飞行中扑扇，落地后渐隐 */
+/* 天使翅膀（light 协议揭示专属）：一对白色光翅从卡后伸出，飞行中高频扑扇，落地后渐隐。
+ * R9：尺寸翻倍（96×52 → 192×104）、蜻蜓式高频扑扇（0.34s → 0.14s/半程，摆幅 12°→22°） */
 .reveal-wings {
   position: absolute;
   left: 50%;
@@ -1419,12 +1421,12 @@ body.dragging { cursor: grabbing; user-select: none; }
 .reveal-wings::after {
   content: '';
   position: absolute;
-  top: -26px;
-  width: 96px;
-  height: 52px;
+  top: -52px; /* 翅膀垂直中心对齐铰链（高度翻倍后上移），保持贴卡后展开 */
+  width: 192px;
+  height: 104px;
   background: radial-gradient(ellipse at 34% 40%, rgba(255, 255, 255, 0.98) 0%, rgba(255, 255, 255, 0.75) 42%, rgba(255, 255, 255, 0) 72%);
   filter: drop-shadow(0 0 10px rgba(255, 255, 255, 0.7));
-  animation: reveal-wing-flap 0.34s ease-in-out infinite alternate;
+  animation: reveal-wing-flap 0.14s ease-in-out infinite alternate;
 }
 /* 左翅：右缘锚定中心向左展开，上翘；右翅镜像（--wing-rot 取负） */
 .reveal-wings::before {
@@ -1445,11 +1447,11 @@ body.dragging { cursor: grabbing; user-select: none; }
 }
 @keyframes reveal-wing-flap {
   from { transform: rotate(var(--wing-rot)); }
-  to { transform: rotate(calc(var(--wing-rot) + 12deg)); }
+  to { transform: rotate(calc(var(--wing-rot) + 22deg)); }
 }
 @keyframes reveal-wing-flap-mirror {
   from { transform: rotate(var(--wing-rot)); }
-  to { transform: rotate(calc(var(--wing-rot) - 12deg)); }
+  to { transform: rotate(calc(var(--wing-rot) - 22deg)); }
 }
 
 /* ===== 草案页拖拽选协议 ===== */
