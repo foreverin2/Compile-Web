@@ -744,6 +744,27 @@ body {
   transform: translateY(-24px) scale(1.15);
   z-index: 50;
 }
+
+/* ===== ITEM: 手牌「翻面」3D 动画（.hand-flipping） =====
+ * 点击选中卡上方的「翻面」按钮：在旧卡节点上播 rotateY 180° 翻转（透视内建），
+ * 动画期间保持选中/悬停上浮视觉（.popped 组合规则，translateY/scale 在 rotateY 之前
+ * 应用——Y 平移在 rotateY(180°) 下不变号，上浮位置得以保持），动画结束（~380ms，
+ * 与 render.ts HAND_FLIP_MS 一致）后由 renderApp 重渲染展示新朝向——
+ * 替代旧的即时重渲染快照（卡牌瞬间"弹回"手牌）。
+ * transition !important 覆盖 .hand .card 的 0.15s 过渡；翻面期间隐藏浮动按钮组
+ * （否则按钮随卡一起镜像翻转）。 */
+.hand .card.hand-flipping {
+  transition: transform 0.38s cubic-bezier(0.4, 0.15, 0.2, 1) !important;
+  transform: perspective(900px) rotateY(180deg);
+  z-index: 60;
+}
+.hand .card.hand-flipping.popped {
+  transform: perspective(900px) rotateY(180deg) translateY(-24px) scale(1.15);
+}
+.hand .card.hand-flipping .play-btns {
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
 /* 超出 15 张时右缘的 +N 徽标（纯视觉提示，剩余卡仍在状态中，未渲染） */
 .hand-more-badge {
   position: absolute;

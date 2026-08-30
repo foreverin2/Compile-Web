@@ -45,24 +45,44 @@ function buildFaceImg(src: string): HTMLElement {
  * 卡面直接用【当前卡牌面】按 payload 的 defId/faceUp 构建（官方卡面图 / 卡背），
  * 不克隆原卡 DOM——避免原卡的旋转类、覆盖残留、悬停态等陈旧渲染混入特效；
  * 位置/尺寸取自原卡节点 rect（旋转卡的 rect 即其视觉足迹盒）。
+ * 场上横置卡（rot-cw/rot-ccw）：克隆以【未旋转布局盒】尺寸（宽 = rect 高、高 = rect 宽）
+ * 定位于 rect 中心后旋转 ±90°（transform-origin 中心）——视觉盒恰等于原卡 rect、
+ * 卡面朝向与真实场上卡一致（getBoundingClientRect 返回的是旋转后的足迹盒；若直接按
+ * rect 尺寸旋转会得到竖版视觉盒且中心偏移，方向对但占位错）。旋转以 --fx-rot 记录，
+ * 平移类特效（回手/偏转/打出）组合 rotate(var(--fx-rot, 0deg)) 避免覆盖本旋转。
+ * 手牌/牌库节点无 rot 类 → 保持原行为（不旋转）。尺寸 = 原卡 rect（视觉足迹）。
  */
 function buildFxCard(node: HTMLElement, payload: FxCardPayload, zIndex: number): HTMLElement | null {
   const rect = node.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return null;
+  const cw = node.classList.contains('rot-cw');
+  const ccw = node.classList.contains('rot-ccw');
+  const rotated = cw || ccw;
   const card = document.createElement('div');
   card.className = 'card';
   card.appendChild(buildFaceImg(cardFaceSrc(payload.defId, payload.faceUp)));
   card.style.position = 'fixed';
-  card.style.left = `${rect.left}px`;
-  card.style.top = `${rect.top}px`;
-  card.style.width = `${rect.width}px`;
-  card.style.height = `${rect.height}px`;
   card.style.margin = '0';
   card.style.padding = '0';
   card.style.border = 'none';
   card.style.background = 'transparent';
   card.style.pointerEvents = 'none';
   card.style.zIndex = String(zIndex);
+  if (rotated) {
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    card.style.left = `${cx - rect.height / 2}px`;
+    card.style.top = `${cy - rect.width / 2}px`;
+    card.style.width = `${rect.height}px`;
+    card.style.height = `${rect.width}px`;
+    card.style.setProperty('--fx-rot', cw ? '90deg' : '-90deg');
+    card.style.transform = 'rotate(var(--fx-rot, 0deg))';
+  } else {
+    card.style.left = `${rect.left}px`;
+    card.style.top = `${rect.top}px`;
+    card.style.width = `${rect.width}px`;
+    card.style.height = `${rect.height}px`;
+  }
   document.body.appendChild(card);
   return card;
 }
@@ -169,11 +189,25 @@ function playCut(node: HTMLElement, payload: FxCardPayload): void {
 function playFlip(node: HTMLElement, payload: FxCardPayload): void {
   const rect = node.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return;
-  const horizontal = node.classList.contains('rot-cw') || node.classList.contains('rot-ccw');
+  const cw = node.classList.contains('rot-cw');
+  const ccw = node.classList.contains('rot-ccw');
+  const horizontal = cw || ccw;
   const oldSrc = node.querySelector('img')?.src ?? cardFaceSrc(payload.defId, payload.faceUp);
   const newSrc = cardFaceSrc(payload.defId, payload.faceUp);
   const wrap = document.createElement('div');
-  wrap.style.cssText = `position:fixed;left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px;z-index:300;pointer-events:none;perspective:600px;`;
+  // 场上横置卡（rot-cw/rot-ccw）：与 buildFxCard 同一规则——wrap 以未旋转布局盒尺寸
+  // （宽 = rect 高、高 = rect 宽）定位于 rect 中心后旋转 ±90°，翻面期间卡牌朝向与
+  // 真实场上卡一致；已有的 rotateX/Y 面翻在 wrap 局部系内组合，最终仍保持场上朝向。
+  if (horizontal) {
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    wrap.style.cssText =
+      `position:fixed;left:${cx - rect.height / 2}px;top:${cy - rect.width / 2}px;` +
+      `width:${rect.height}px;height:${rect.width}px;z-index:300;pointer-events:none;` +
+      `perspective:600px;transform:rotate(${cw ? 90 : -90}deg);`;
+  } else {
+    wrap.style.cssText = `position:fixed;left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px;z-index:300;pointer-events:none;perspective:600px;`;
+  }
   const inner = document.createElement('div');
   inner.style.cssText = 'position:relative;width:100%;height:100%;transform-style:preserve-3d;transition:transform 0.35s ease;';
   const front = document.createElement('div');
@@ -205,7 +239,8 @@ function playReturn(node: HTMLElement, payload: FxCardPayload): void {
   const dy = target.y - (rect.top + rect.height / 2);
   clone.style.transition = `transform ${MOVE_MS}ms cubic-bezier(0.2, 0.7, 0.3, 1), opacity ${MOVE_MS}ms ease`;
   requestAnimationFrame(() => {
-    clone.style.transform = `translate(${dx}px, ${dy}px) scale(0.85)`;
+    // 组合 --fx-rot：场上横置卡平移时保持 ±90° 朝向（translate 在最外层 → 屏幕系位移）
+    clone.style.transform = `translate(${dx}px, ${dy}px) rotate(var(--fx-rot, 0deg)) scale(0.85)`;
     clone.style.opacity = '0.5';
   });
   window.setTimeout(() => clone.remove(), MOVE_MS + 80);
@@ -218,7 +253,8 @@ function flyCloneToStackEnd(clone: HTMLElement, rect: DOMRect, end: { x: number;
   const dy = end.y - (rect.top + rect.height / 2);
   clone.style.transition = `transform ${MOVE_MS}ms cubic-bezier(0.2, 0.7, 0.3, 1), opacity ${MOVE_MS}ms ease`;
   requestAnimationFrame(() => {
-    clone.style.transform = `translate(${dx}px, ${dy}px) scale(0.92)`;
+    // 组合 --fx-rot：场上横置卡平移时保持 ±90° 朝向
+    clone.style.transform = `translate(${dx}px, ${dy}px) rotate(var(--fx-rot, 0deg)) scale(0.92)`;
     clone.style.opacity = '0.6';
   });
   window.setTimeout(() => clone.remove(), MOVE_MS + 80);
@@ -350,7 +386,8 @@ function playDeckPlay(payload: FxCardPayload): void {
   const dy = target.y - (from.top + from.height / 2);
   clone.style.transition = `transform ${MOVE_MS}ms cubic-bezier(0.2, 0.7, 0.3, 1), opacity ${MOVE_MS}ms ease`;
   requestAnimationFrame(() => {
-    clone.style.transform = `translate(${dx}px, ${dy}px) scale(0.92)`;
+    // 组合 --fx-rot（牌库/手牌无 rot 类 → 恒 0deg，与旧行为一致）
+    clone.style.transform = `translate(${dx}px, ${dy}px) rotate(var(--fx-rot, 0deg)) scale(0.92)`;
     clone.style.opacity = '0.6';
   });
   window.setTimeout(() => clone.remove(), MOVE_MS + 80);
@@ -374,7 +411,8 @@ function playHandPlay(payload: FxCardPayload): void {
   const dy = target.y - (from.top + from.height / 2);
   clone.style.transition = `transform ${MOVE_MS}ms cubic-bezier(0.2, 0.7, 0.3, 1), opacity ${MOVE_MS}ms ease`;
   requestAnimationFrame(() => {
-    clone.style.transform = `translate(${dx}px, ${dy}px) scale(0.92)`;
+    // 组合 --fx-rot（牌库/手牌无 rot 类 → 恒 0deg，与旧行为一致）
+    clone.style.transform = `translate(${dx}px, ${dy}px) rotate(var(--fx-rot, 0deg)) scale(0.92)`;
     clone.style.opacity = '0.6';
   });
   window.setTimeout(() => clone.remove(), MOVE_MS + 80);
