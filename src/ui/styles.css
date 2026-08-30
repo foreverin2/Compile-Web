@@ -430,6 +430,57 @@ body {
   border-color: #ff6a00;
   box-shadow: 0 0 12px rgba(255, 61, 0, 0.6), inset 0 0 10px rgba(255, 61, 0, 0.25);
 }
+/* ===== 火焰已编译环专属（fire）：慢速岩浆 + 大块黑/红岩 + 岩浆红背光 =====
+ * 仅作用 .compiled-fx-fire（挂在 .protocol 上），light/darkness 环（.compiled-ring-light/
+ * .compiled-ring-darkness）不受影响。JS 的负 animation-delay 已按 fire 的 7s 换算，
+ * 故仅改 duration 即可让整圈岩浆以均匀间距慢速流动（2.5s → 7s）。 */
+.compiled-fx-fire .lava-seg,
+.compiled-fx-fire .lava-rock {
+  /* 慢速岩浆流动：2.5s → 7s 一圈 */
+  animation-duration: 7s;
+  /* 旅行环外扩（inset -5px round 15px → -14px round 18px）：容纳 36×30 大岩块，
+     岩块沿卡面外侧环带旅行、略溢出协议框（brief 明确允许轻微溢出） */
+  offset-path: inset(-14px round 18px);
+}
+.compiled-fx-fire .lava-rock {
+  /* 鹅卵石（10×8）→ 大块黑岩/红岩（36×30） */
+  width: 36px;
+  height: 30px;
+}
+/* 岩浆红背光：卡面后方低透明度红/橙 conic 光晕，14s 缓慢旋转（读作缓慢流动的岩浆辉光）
+ * + 柔光径向渐变；挂在 .protocol-holder::before（holder 无 stacking context，
+ * z-index:-1 落在卡面图之后、协议背景之上 → 真·背光，不染色卡面；.protocol isolation:
+ * isolate 保证不出协议盒）。pointer-events:none 不拦截交互。
+ * 圆形元素绕自身中心旋转 → 任何角度都盖满卡面四周，不会露出边角。 */
+.compiled-fx-fire .protocol-holder::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 360px;   /* 直径 > 卡面对角线（200×280 → ≈344px）：旋转时始终覆盖整卡 */
+  height: 360px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle, rgba(255, 90, 0, 0.22) 0%, rgba(255, 61, 0, 0.10) 42%, transparent 68%),
+    conic-gradient(
+      from 0deg,
+      rgba(255, 61, 0, 0) 0deg,
+      rgba(255, 120, 20, 0.30) 55deg,
+      rgba(255, 200, 90, 0.16) 115deg,
+      rgba(255, 61, 0, 0) 180deg,
+      rgba(255, 120, 20, 0.30) 235deg,
+      rgba(255, 200, 90, 0.16) 295deg,
+      rgba(255, 61, 0, 0) 360deg
+    );
+  filter: blur(16px);
+  pointer-events: none;
+  z-index: -1;
+  transform: translate(-50%, -50%);
+  animation: fireBacklightFlow 14s linear infinite;
+}
+@keyframes fireBacklightFlow {
+  to { transform: translate(-50%, -50%) rotate(360deg); }
+}
 /* 协议 holder：包裹卡面图（与可见卡面同尺寸），作为环绕环的定位基准 */
 .protocol-holder {
   position: relative;
