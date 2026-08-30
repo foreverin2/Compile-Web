@@ -1507,28 +1507,63 @@ body.dragging { cursor: grabbing; user-select: none; }
   to { opacity: 1; transform: none; }
 }
 
-/* ===== 已编译协议专属特效：light / darkness 配色变体（Task 10） =====
- * 复用 .compiled-ring 骨架（.lava-seg + .lava-rock 沿 offset-path 边框路径旅行）：
- * 每协议静态兜底（.protocol.compiled-fx-<defId>，与 fire 同模式）+ 环带配色覆盖。
- * 注意：骨架中无 .compiled-ring-flow 元素（流动即 .lava-seg 自身），
- * 故 brief 的 conic 色流意图并入 .lava-seg 渐变，不引入死 CSS。 */
+/* ===== 已编译协议专属特效：fire / light / darkness 变体（Task 10 + R9） =====
+ * 骨架 .compiled-ring（.lava-seg + .lava-rock 沿 offset-path 边框路径旅行）仅 fire
+ * 使用；light/darkness（R9）隐藏岩浆段/岩石，改用呼吸边框 + 角部光支架/不规则黑雾。
+ * 每协议静态兜底（.protocol.compiled-fx-<defId>，与 fire 同模式）+ 环带配色覆盖。 */
 .protocol.compiled-fx-light {
-  /* 静态兜底：柔光白青描边 + 光晕 */
-  border-color: #4ff0ff;
-  box-shadow: 0 0 12px rgba(79, 240, 255, 0.6), inset 0 0 10px rgba(180, 240, 255, 0.25);
+  /* 静态兜底（R9）：暖黄/白描边 + 柔光晕（与呼吸环同主题） */
+  border-color: #ffe066;
+  box-shadow: 0 0 12px rgba(255, 224, 102, 0.6), inset 0 0 10px rgba(255, 248, 225, 0.25);
 }
 .protocol.compiled-fx-darkness {
   /* 静态兜底：暗紫光晕描边 */
   border-color: #ab47bc;
   box-shadow: 0 0 12px rgba(171, 71, 188, 0.6), inset 0 0 10px rgba(123, 31, 162, 0.3);
 }
-/* light：已编译 = 柔光白青流动环（白→浅蓝→青渐变段 + 淡色岩石） */
-.compiled-ring-light .lava-seg {
-  background: linear-gradient(90deg, #ffffff, #b3e5fc, #4ff0ff);
-  box-shadow: 0 0 6px rgba(180, 240, 255, 0.8);
+/* light：已编译 = 呼吸黄↔白边框（无旋转岩浆流——.lava-seg/.lava-rock 隐藏） */
+.compiled-ring-light {
+  border: 2px solid;
+  border-radius: 14px;
+  animation: light-breathe 3s ease-in-out infinite;
 }
-.compiled-ring-light .rock-dark { background: #e8f4ff; }
-.compiled-ring-light .rock-red { background: #aee6ff; }
+.compiled-ring-light .lava-seg,
+.compiled-ring-light .lava-rock {
+  display: none;
+}
+@keyframes light-breathe {
+  0%, 100% {
+    border-color: #fff8e1; /* 暖白 */
+    box-shadow:
+      0 0 8px rgba(255, 248, 225, 0.6),
+      0 0 22px rgba(255, 255, 255, 0.3),
+      inset 0 0 10px rgba(255, 255, 255, 0.14);
+  }
+  50% {
+    border-color: #ffe066; /* 亮黄 */
+    box-shadow:
+      0 0 12px rgba(255, 224, 102, 0.95),
+      0 0 30px rgba(255, 200, 60, 0.5),
+      inset 0 0 14px rgba(255, 224, 102, 0.24);
+  }
+}
+/* 四角发光护边（light 专属）：L 形光支架贴住 holder 四角，微呼吸与边框同步 */
+.light-corner {
+  position: absolute;
+  width: 30px;
+  height: 30px;
+  pointer-events: none;
+  z-index: 2;
+  animation: corner-glow 3s ease-in-out infinite;
+}
+.light-corner.tl { top: -7px; left: -7px; border-top: 3px solid; border-left: 3px solid; border-top-left-radius: 9px; }
+.light-corner.tr { top: -7px; right: -7px; border-top: 3px solid; border-right: 3px solid; border-top-right-radius: 9px; }
+.light-corner.bl { bottom: -7px; left: -7px; border-bottom: 3px solid; border-left: 3px solid; border-bottom-left-radius: 9px; }
+.light-corner.br { bottom: -7px; right: -7px; border-bottom: 3px solid; border-right: 3px solid; border-bottom-right-radius: 9px; }
+@keyframes corner-glow {
+  0%, 100% { border-color: #fff8e1; filter: drop-shadow(0 0 5px rgba(255, 248, 225, 0.75)); }
+  50% { border-color: #ffe066; filter: drop-shadow(0 0 10px rgba(255, 224, 102, 0.95)); }
+}
 /* darkness：已编译 = 暗紫光晕流动环（紫→深紫渐变段 + 深色岩石） */
 .compiled-ring-darkness .lava-seg {
   background: linear-gradient(90deg, #ab47bc, #7b1fa2, #4a148c);

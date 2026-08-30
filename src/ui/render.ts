@@ -619,6 +619,13 @@ function appendCompiledRing(box: HTMLElement, defId: string): void {
     rock.style.transform = `scale(${s.toFixed(2)}) rotate(${i * 47}deg)`;
     ring.appendChild(rock);
   }
+  // light：呼吸黄/白边框 + 四角发光护边（.light-corner tl/tr/bl/br，L 形光支架，
+  // 随 ring 挂 holder 四角，z 与环同层但只占角部；无旋转岩浆——.lava-seg/.lava-rock 已隐藏）
+  if (defId === 'light') {
+    for (const pos of ['tl', 'tr', 'bl', 'br'] as const) {
+      ring.appendChild(el('div', `light-corner ${pos}`));
+    }
+  }
   box.appendChild(ring);
   // ITEM 4：darkness 已编译 → 环外常驻循环黑雾层（渐现→渐散）。8 个模糊黑雾块
   // 沿卡面四周分布（CSS nth-child 锚点），JS 只写 0.55s 步进的交错 animation-delay；
