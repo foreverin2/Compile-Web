@@ -6,6 +6,7 @@ import { collectTriggers } from './core/effects/triggers';
 import { renderApp, renderDraft, type UiCallbacks } from './ui/render';
 import { initEffects, initCompileFx } from './ui/effects';
 import { initDiag } from './ui/diag';
+import { initDevMode } from './ui/devmode';
 import { gameBus } from './core/events/bus';
 import type { PlayerId } from './core/models/types';
 
@@ -272,6 +273,9 @@ initEffects();
 initCompileFx();
 // 诊断日志：全量记录 console + 捕获未捕获异常（出错自动提示导出）
 initDiag(() => state);
+// 隐藏开发者模式：Ctrl+Shift+P 密码进入；get <牌名> 把卡加入当前玩家手牌
+// （返回的卸载函数当前不使用，保持监听常驻）
+initDevMode({ getState: () => state, render: () => renderApp(root, state, cb) });
 // 效果触发的抽牌：累计 card:drawn 事件，行动结算后统一播新抽牌特效
 gameBus.subscribe((e) => {
   if (e.type !== 'card:drawn') return;
