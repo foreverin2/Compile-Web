@@ -1018,6 +1018,58 @@ body {
 .trash-viewer-grid .card { width: 100px; transform: none !important; }
 .trash-viewer-empty { color: #888; font-size: 13px; padding: 24px 12px; }
 
+/* ===== 隐藏开发者模式（Ctrl+Shift+P 密码框 / 指令页 get <牌名> 加牌） =====
+ * 全屏暗色遮罩（复用 .zoom-overlay 背景模式），z-index 高于缩放遮罩(1000)；
+ * 点击遮罩空白（mousedown target === 遮罩自身）关闭，面板内部点击不关闭。 */
+.dev-prompt,
+.dev-console {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 8, 16, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1200;
+}
+.dev-prompt-panel,
+.dev-console-panel {
+  background: #101828;
+  border: 1px solid #4ff0ff66;
+  border-radius: 10px;
+  padding: 20px 24px;
+  min-width: min(80vw, 420px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  cursor: default;
+  box-shadow: 0 0 30px rgba(0, 255, 204, 0.15);
+}
+.dev-prompt-title,
+.dev-console-title {
+  font-size: 16px;
+  font-weight: bold;
+  color: #e0e6ed;
+  text-align: center;
+}
+.dev-console-hint {
+  font-size: 12px;
+  color: #8a94a6;
+  text-align: center;
+}
+.dev-prompt-input,
+.dev-console-input {
+  background: #0a0f1a;
+  color: #e0e6ed;
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 14px;
+  outline: none;
+}
+.dev-prompt-input:focus,
+.dev-console-input:focus { border-color: #4ff0ff; }
+.dev-console-close { align-self: center; }
+
 /* ===== 拖拽打牌：合法落点高亮 + 浮空幽灵卡 ===== */
 /* 拖拽中可合法落点的线路槽：青色霓虹发光（描边 + 底色 + 外/内发光），
    覆盖 .stack-slot.interactable 的默认悬停样式，直观提示"可放置"区域 */
