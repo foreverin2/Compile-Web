@@ -594,15 +594,15 @@ function renderProtocolCell(s: GameState, player: PlayerId, line: Line): HTMLEle
  */
 function appendCompiledRing(box: HTMLElement, defId: string): void {
   const ring = el('div', `compiled-ring compiled-ring-${defId}`);
-  // 火焰（fire）专属参数：慢速岩浆流（28s/圈，CSS .compiled-fx-fire 覆写 animation-duration，
-  // 速度再减半：14s → 28s）+ 岩石加密（45 岩 = 30 黑 + 15 红，2 黑 1 红交替）→ 环周被
+  // 火焰（fire）专属参数：慢速岩浆流（56s/圈，CSS .compiled-fx-fire 覆写 animation-duration，
+  // 速度再减半：28s → 56s）+ 岩石加密（45 岩 = 30 黑 + 15 红，2 黑 1 红交替）→ 环周被
   // 岩石基本填平（24px × 45 ≈ 1080px ≥ 环带周长 ≈1017px，轻微重叠）。红岩一半原色暗红
   // 一半亮红（rock-red ↔ rock-red-bright）、黑岩一半原色一半更深的近黑（rock-dark ↔
   // rock-dark-deep）交替挂类，边缘均匀混色。负 animation-delay 必须按实际 duration 换算
   // （-TRAVEL_S/count × i），否则元素会在环上挤成一团而非均匀分布。light/darkness 保持
   // 2.5s / 10 / 8 不变（其 .lava-seg/.lava-rock 已被 CSS 隐藏）。
   const isFire = defId === 'fire';
-  const TRAVEL_S = isFire ? 28 : 2.5;
+  const TRAVEL_S = isFire ? 56 : 2.5;
   const LAVA_COUNT = isFire ? 20 : 10;
   for (let i = 0; i < LAVA_COUNT; i++) {
     const seg = el('div', 'lava-seg');
@@ -630,7 +630,18 @@ function appendCompiledRing(box: HTMLElement, defId: string): void {
     rock.style.animationDelay = `${(-TRAVEL_S / ROCK_COUNT) * i - 0.15}s`;
     const s = 0.7 + ((i * 37) % 5) * 0.15;
     rock.style.transform = `scale(${s.toFixed(2)}) rotate(${i * 47}deg)`;
-    ring.appendChild(rock);
+    // R11：fire 岩石略微上下浮动（.rock-bob 全盒占位）。wrapper 与环同盒
+    // （position:absolute; inset:0）→ 岩石的 offset-path 包含块不变、旅行路径/布局不动；
+    // 浮动动画只动 wrapper 的 translateY（交错负 delay），不触碰岩石自身的内联
+    // transform（scale/rotate）与 ring-travel 偏移路径动画。light/darkness 岩保持直挂。
+    if (isFire) {
+      const bob = el('div', 'rock-bob');
+      bob.style.animationDelay = `${-(i * 0.25)}s`;
+      bob.appendChild(rock);
+      ring.appendChild(bob);
+    } else {
+      ring.appendChild(rock);
+    }
   }
   // light：呼吸黄/白边框 + 四角发光护边（.light-corner tl/tr/bl/br，L 形光支架，
   // 随 ring 挂 holder 四角，z 与环同层但只占角部；无旋转岩浆——.lava-seg/.lava-rock 已隐藏）
