@@ -32,12 +32,31 @@ let uidCounter = 0;
 /** 是否有开发者浮层打开（打开任一浮层时置 true，关闭时置 false） */
 let overlayOpen = false;
 
+/** 会话内密码解锁标记（本局游戏内）：密码正确一次后，后续 Ctrl+Shift+P 直接进入指令页 */
+let passwordUnlocked = false;
+
 /**
  * 归一化查询键：小写后移除所有非字母（ASCII）/非数字/非汉字字符。
  * 例：'light-2' → 'light2'；'LIGHT-2' → 'light2'；'光-2' → '光2'；' 光 2 ' → '光2'。
  */
 function normalizeKey(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]/g, '');
+}
+
+/** 单个检索 token 对一个归一化键的匹配得分：3=精确、2=前缀、1=子串、0=不匹配 */
+function tokenMatchScore(token: string, key: string): number {
+  if (key === token) return 3;
+  if (key.startsWith(token)) return 2;
+  return key.includes(token) ? 1 : 0;
+}
+
+/** 查询 → 归一化 token 列表：先按空白切分为多词，再逐词归一化（多词 AND 检索用） */
+function tokenizeQuery(query: string): string[] {
+  return query
+    .toLowerCase()
+    .split(/\s+/)
+    .map((t) => t.replace(/[^a-z0-9\u4e00-\u9fff]/g, ''))
+    .filter((t) => t !== '');
 }
 
 /** 协议 defId → 协议定义（模块加载时构建一次，供查询表与检索索引共用） */
@@ -117,32 +136,58 @@ function compareDefIdNatural(a: string, b: string): number {
 /** 实时检索默认上限：指令页最多显示的行数 */
 const SEARCH_DEFAULT_LIMIT = 8;
 
+/** 检索命中：卡牌 + 相关性得分（各 token 得分之和） */
+interface SearchHit {
+  def: CardDef;
+  score: number;
+}
+
 /**
- * 内部：归一化键 → 全部匹配卡牌（按 defId 去重 + 自然排序）。
- * 匹配语义：归一化子串命中 defId（'light'/'light2'/'2'）或「协议中文名+分值」
- * （'光'/'光2'/'暗5'）。空键返回 []。
+ * 内部：查询 → 全部匹配卡牌（按 defId 去重 + 相关性排序）。
+ * 匹配语义（百度式模糊）：
+ * - 多 token AND：查询按空白切分为多个词，每个词都必须命中（defKey 或「协议中文名+分值」
+ *   子串）——'light 2' 同时要求含 'light' 与 '2'；
+ * - 相关性得分：每词 3=精确 / 2=前缀 / 1=子串，求和；按得分降序、同分按 defId 自然序。
+ * 空查询 / 纯空白 → []。
  */
-function collectSearchMatches(key: string): CardDef[] {
-  if (key === '') return [];
-  const found = new Map<string, CardDef>();
+function collectSearchMatches(query: string): SearchHit[] {
+  const tokens = tokenizeQuery(query);
+  if (tokens.length === 0) return [];
+  const found = new Map<string, SearchHit>();
   for (const entry of SEARCH_INDEX) {
-    if (entry.defKey.includes(key) || (entry.cnKey !== '' && entry.cnKey.includes(key))) {
-      found.set(entry.def.defId, entry.def);
+    let score = 0;
+    let matched = true;
+    for (const token of tokens) {
+      const best = Math.max(
+        tokenMatchScore(token, entry.defKey),
+        entry.cnKey !== '' ? tokenMatchScore(token, entry.cnKey) : 0
+      );
+      if (best === 0) {
+        matched = false;
+        break;
+      }
+      score += best;
     }
+    if (matched) found.set(entry.def.defId, { def: entry.def, score });
   }
-  return [...found.values()].sort((x, y) => compareDefIdNatural(x.defId, y.defId));
+  return [...found.values()].sort(
+    (a, b) => b.score - a.score || compareDefIdNatural(a.def.defId, b.def.defId)
+  );
 }
 
 /**
  * 实时检索（纯函数，无 DOM）：返回匹配 query 的卡牌列表，最多 limit 张
- * （默认 8），按 defId 自然排序（darkness-0..5, fire-0..5, light-0..5 …）。
- * 匹配语义与 resolveCardName 相同归一化（小写、去非字母/数字/汉字）后的子串匹配：
+ * （默认 8）。百度式模糊：多词 AND + 相关性排序（精确 > 前缀 > 子串，同分按
+ * defId 自然序），再截取 limit。
  * - defId：如 'light' / 'light2' / 'ght2' / '2' 命中 light-2；
- * - 协议中文名 + 分值：如 '光' / '光2' 命中 light-2；'暗5' 命中 darkness-5。
+ * - 协议中文名 + 分值：如 '光' / '光2' 命中 light-2；'暗5' 命中 darkness-5；
+ * - 多词：'light 2' / '光 2' 命中 light-2（每词都必须命中）。
  * query 为空 / 纯空白 → 返回 []。
  */
 export function searchCards(query: string, limit: number = SEARCH_DEFAULT_LIMIT): CardDef[] {
-  return collectSearchMatches(normalizeKey(query)).slice(0, limit);
+  return collectSearchMatches(query)
+    .slice(0, limit)
+    .map((hit) => hit.def);
 }
 
 /** 日志：同时写入 console（diag 全量捕获）与 state.log（游戏事件日志，diag 导出含尾部） */
@@ -239,6 +284,7 @@ function openPasswordPrompt(host: DevModeHost): void {
     }
     if (e.key !== 'Enter') return;
     if (input.value.trim() === PASSWORD) {
+      passwordUnlocked = true; // 会话内解锁：本局游戏内后续免密进入
       log(host, '密码正确，打开指令页');
       close('密码输入框已关闭（密码正确）');
       openCommandPage(host);
@@ -287,15 +333,15 @@ function openCommandPage(host: DevModeHost): void {
    */
   const renderResults = (): void => {
     const query = input.value;
-    const key = normalizeKey(query);
-    const all = collectSearchMatches(key);
+    const all = collectSearchMatches(query);
     results.replaceChildren();
-    if (key === '' || all.length === 0) {
+    if (all.length === 0) {
       results.hidden = true;
       return;
     }
     const shown = all.slice(0, SEARCH_DEFAULT_LIMIT);
-    for (const def of shown) {
+    for (const hit of shown) {
+      const def = hit.def;
       const proto = PROTOCOL_BY_ID.get(def.protocol);
       const row = document.createElement('div');
       row.className = 'dev-result';
@@ -366,6 +412,12 @@ export function initDevMode(host: DevModeHost): () => void {
     if (e.ctrlKey && e.shiftKey && e.code === 'KeyP') {
       e.preventDefault(); // 阻止浏览器打印对话框
       if (overlayOpen) return;
+      if (passwordUnlocked) {
+        // 本局游戏内已解锁：跳过密码框，直接进入指令模式
+        log(host, '已解锁，直接进入指令模式');
+        openCommandPage(host);
+        return;
+      }
       openPasswordPrompt(host);
     }
   };

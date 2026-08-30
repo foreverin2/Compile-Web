@@ -528,18 +528,19 @@ body {
  * 牌库（.deck）与弃牌堆（.trash-pile）均为绝对定位、移出流式布局，在外侧 −92px 列
  * 竖直堆叠（牌库在上、弃牌堆在下）；流内仅剩 [refresh][hand]（P1）/ [hand][refresh]（P2），
  * 手牌/刷新按钮/挡板位置完全不受两摞影响。 */
-.hand-side { position: relative; display: flex; align-items: center; gap: 16px; }
-/* P2 右侧：整体贴列右缘（牌库已绝对定位移出流，见 .deck） */
-.hand-side.p2 { justify-content: flex-end; }
+.hand-side { position: relative; display: flex; align-items: center; gap: 16px; padding-left: 20px; }
+/* P2 右侧：整体贴列右缘（牌库已绝对定位移出流，见 .deck）；
+   padding-right 使流内内容（刷新手牌/手牌/挡板）整体内移，与外侧两摞留出空隙 */
+.hand-side.p2 { justify-content: flex-end; padding-right: 20px; }
 /* 牌库绝对定位到屏幕边缘（P1 左 / P2 右，Part 3）：以 .hand-side（position:relative）
  * 为包含块（top:50% 对齐手牌垂直中心），移出流式布局，不再挤占手牌/刷新手牌/挡板。
- * #app 左右 padding 100px → calc(8px - 100px) = -92px：牌库完全落在内容区之外的
- * padding 区内（距屏幕边缘 8px），与手牌、刷新按钮均不重叠。
+ * #app 左右 padding 100px → calc(0px - 100px) = -100px：牌库左/右缘与 app 边缘齐平
+ * （app-x 0..92，全屏可见），与流内内容之间由 .hand-side 的 20px padding 留出空隙。
  * 保留 92×132 尺寸与层叠/计数徽标样式；[data-player] 查询（playDrawAnimation/deckPos）
  * 不受影响，getBoundingClientRect 对绝对定位元素照常有效。 */
 .deck { position: absolute; top: 50%; transform: translateY(-50%); width: 92px; height: 132px; margin: 0; }
-.deck[data-player="0"] { left: calc(8px - 100px); }
-.deck[data-player="1"] { right: calc(8px - 100px); }
+.deck[data-player="0"] { left: calc(0px - 100px); }
+.deck[data-player="1"] { right: calc(0px - 100px); }
 .deck-stack { position: absolute; inset: 0; }
 .deck-back {
   position: absolute; inset: 0; border-radius: 5px;
@@ -573,9 +574,9 @@ body {
  * 与 .deck 同款层叠背面卡 + 中央计数（复用 .deck-stack/.deck-back 与共享层叠规则），
  * 绝对定位（同样以 .hand-side 为包含块、对齐手牌垂直中心）于牌库正下方：
  * deck top:50% → trash top:calc(50% + 132px)（= 牌库半高 66 + 10 间距 + 弃牌堆半高 56）。
- * 两摞均移出流式布局 → 手牌/刷新按钮/挡板位置不受影响；右缘 = 手牌左缘（挡板锚定手牌
- * left:0），任何挡板宽度都盖不到两摞。暖橙描边 + 顶部「弃牌堆」小标签与牌库（青色）
- * 区分；点击打开弃牌堆查看遮罩。 */
+ * 两摞均移出流式布局 → 手牌/刷新按钮/挡板位置不受影响；与牌库同列贴 app 边缘
+ * （app-x 0..92），流内内容由 .hand-side 的 20px padding 内移，与两摞留出空隙。
+ * 暖橙描边 + 顶部「弃牌堆」小标签与牌库（青色）区分；点击打开弃牌堆查看遮罩。 */
 .trash-pile {
   position: absolute;
   width: 92px;
@@ -586,8 +587,8 @@ body {
   box-shadow: 0 0 10px rgba(255, 138, 101, 0.35);
   background: rgba(30, 10, 8, 0.55);
 }
-.trash-pile.p1 { left: calc(8px - 100px); top: calc(50% + 132px); transform: translateY(-50%); }
-.trash-pile.p2 { right: calc(8px - 100px); top: calc(50% + 132px); transform: translateY(-50%); }
+.trash-pile.p1 { left: calc(0px - 100px); top: calc(50% + 132px); transform: translateY(-50%); }
+.trash-pile.p2 { right: calc(0px - 100px); top: calc(50% + 132px); transform: translateY(-50%); }
 .trash-pile .deck-stack { position: absolute; inset: 2px; }
 .trash-pile .deck-back {
   position: absolute; inset: 0; border-radius: 5px;
@@ -1087,7 +1088,6 @@ body {
 .dev-results[hidden] { display: none; }
 .dev-result {
   display: flex;
-  justify-content: space-between;
   align-items: center;
   gap: 12px;
   padding: 5px 8px;
@@ -1098,13 +1098,21 @@ body {
   white-space: nowrap;
 }
 .dev-result:hover { background: #16283c; color: #e0e6ed; }
-.dev-result-label { font-weight: 600; color: #4ff0ff; }
+/* 网格式对齐：左列 defId（中文名+分值）固定列宽，各行上下对齐；
+   右列提示占满剩余宽度并在超宽时截断，不挤乱列对齐 */
+.dev-result-label {
+  flex: 0 0 132px;
+  min-width: 0;
+  font-weight: 600;
+  color: #4ff0ff;
+}
 .dev-result-hint {
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: 11px;
   color: #8a94a6;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 55%;
 }
 .dev-result-more {
   justify-content: center;
