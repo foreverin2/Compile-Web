@@ -201,6 +201,7 @@ function buildFlipOverlay(
   if (rect.width === 0 || rect.height === 0) return null;
   const horizontal = cw || ccw;
   const wrap = document.createElement('div');
+  wrap.className = 'flip-overlay-fx'; // resetUiState 清扫兜底（覆盖层最长 ~2.07s，重置时立即移除）
   // 场上横置卡（rot-cw/rot-ccw）：与 buildFxCard 同一规则——wrap 以未旋转布局盒尺寸
   // （宽 = rect 高、高 = rect 宽）定位于 rect 中心后旋转 ±90°，翻面期间卡牌朝向与
   // 真实场上卡一致；已有的 rotateX/Y 面翻在 wrap 局部系内组合，最终仍保持场上朝向。

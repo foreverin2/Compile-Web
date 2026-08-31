@@ -719,7 +719,7 @@ function buildCompiledVine(rot: number, len: number, swayPhase: number): HTMLEle
   svg.setAttribute('height', String(len));
   svg.setAttribute('viewBox', `0 0 30 ${len}`);
   svg.setAttribute('class', 'life-compiled-vine-curve');
-  svg.style.animationDelay = `0s, ${-swayPhase}s`;
+  svg.style.animationDelay = `${-swayPhase}s`; // 单个负 delay 交错相位（svg 只有 sway 一个动画；双值列表多余值会被忽略）
   const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
   path.setAttribute('d', `M7,2 C16,${len * 0.3} 24,${len * 0.62} 12,${len - 3}`);
   path.setAttribute('fill', 'none');
@@ -1573,12 +1573,12 @@ export function resetUiState(): void {
   closeZoom();
   closeTrashViewer();
   winOverlayShown = false;
-  // 飞行中的协议瞬时特效（life 藤蔓容器 / 绿光 / water 水环·光晕·落点框）与
+  // 飞行中的协议瞬时特效（life 藤蔓容器 / 绿光 / water 水环·光晕·落点框 / 翻面覆盖层）与
   // 抽牌/揭示幽灵：自身定时器会在数百毫秒内移除，但重置时立即清扫，避免残留进新局
   // （旧动画的 done() 完成回调由 main.ts resetEpoch 世代守卫放弃渲染）。
   for (const fx of document.querySelectorAll<HTMLElement>(
     '.life-flip-fx, .life-flip-glow, .water-return-ring, .water-return-glow, .water-return-settle, ' +
-      '.water-return-trail, .draw-ghost, .reveal-fly-ghost'
+      '.water-return-trail, .flip-overlay-fx, .draw-ghost, .reveal-fly-ghost'
   )) {
     fx.remove();
   }

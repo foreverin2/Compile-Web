@@ -284,6 +284,7 @@ body {
   box-shadow: 0 0 3px rgba(255, 210, 150, 0.9);
   pointer-events: none;
   animation: none; /* 关闭扫描流光，改用应力裂纹高光（与旧电池版一致） */
+  opacity: 1; /* 覆写基础扫描规则的 opacity:0 —— 否则裂纹随 animation:none 恒不可见 */
 }
 .battery-full .battery-shell::after {
   top: 60%;
@@ -325,6 +326,7 @@ body {
   box-shadow: 0 0 4px rgba(255, 200, 80, 0.9);
   pointer-events: none;
   animation: none; /* 关闭扫描流光，改用应力裂纹高光（与旧电池版一致） */
+  opacity: 1; /* 覆写基础扫描规则的 opacity:0 —— 否则裂纹随 animation:none 恒不可见 */
 }
 .battery-burst .battery-shell::after {
   top: 62%;
