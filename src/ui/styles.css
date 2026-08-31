@@ -1836,11 +1836,14 @@ body.dragging { cursor: grabbing; user-select: none; }
   }
 }
 
-/* ===== life 已编译环（ITEM 5）：绿色框光 + 20+ 根粗长藤蔓缠绕 + 深绿背光 =====
+/* ===== life 已编译环（ITEM 5）：绿色框光 + 20+ 根粗藤蔓缠绕 + 深绿背光 =====
  * - .compiled-ring-life：呼吸绿边框（藤蔓同色 #3ddc84 ↔ 深绿 #157a45），隐藏岩浆段/岩石；
  * - .life-compiled-vine：定位 div（transform-origin 0 0 = 卡框锚点；外层 transform 由 JS
  *   写朝向旋转，使藤蔓垂入协议卡内）；内层 .life-compiled-grow 一次性缠绕生长（scaleY）；
- *   svg .life-compiled-vine-curve 缓慢左右摇摆（绕锚点 ±8°，4.5s，负 delay 交错相位）；
+ *   svg .life-compiled-vine-curve 缓慢左右摇摆（绕锚点 ±8°，4.5s，负 delay 交错相位）。
+ *   R15：藤蔓更短（JS 生成 ≤42px，约为旧 85/90px 的一半；wrap 高度上限随之改为 42px，
+ *   实际高度由 JS 逐根覆写行内 height）——锚点沿边为不规则手挑分数，且同一锚点可发出
+ *   1-3 根藤蔓（同点不同朝向角 → 簇生有机感）；
  * - .compiled-fx-life .life-backlight：深绿背光（radial + conic，blur，慢速旋转 ——
  *   卡面被浓绿辉光笼罩，持续不刺眼）。
  * 静态兜底：.protocol.compiled-fx-life（与 fire/light/darkness 同模式）。 */
@@ -1877,7 +1880,7 @@ body.dragging { cursor: grabbing; user-select: none; }
 .life-compiled-vine {
   position: absolute;
   width: 30px;
-  height: 90px;
+  height: 42px; /* R15：藤蔓 ≤42px（旧 90px 的一半）；实际高度由 JS 逐根覆写 */
   transform-origin: 0 0; /* 锚点 = 卡框边缘点 */
   pointer-events: none;
   z-index: 2; /* 环带同层：缠绕读作覆盖在协议卡上 */
@@ -1930,12 +1933,14 @@ body.dragging { cursor: grabbing; user-select: none; }
   to { transform: translate(-50%, -50%) rotate(360deg); }
 }
 
-/* ===== water 已编译环（ITEM 5）：蓝色框光 + 中心扩散波纹 + 海浪线 =====
+/* ===== water 已编译环（ITEM 5）：蓝色框光 + 中心扩散波纹 + 海浪线 + 框边小水环 =====
  * - .compiled-ring-water：呼吸蓝边框，隐藏岩浆段/岩石；
  * - .water-ripples：卡中心背后的波纹层（5 个圆环交错相位 → 连续不断向外扩散，
- *   接近卡框（scale ≈2.7 ≈ 297px ≥ 280px 卡高）时渐渐消散）；
+ *   接近卡框（scale ≈2.7 ≈ 297px ≥ 280px 卡高）时渐渐消散；峰值透明度 0.8（R15 加深））；
  * - .water-waves：3 条横向正弦海浪线（长周期浮现 9.6s + 交错相位 → "时不时"涌现，
- *   随 dashoffset 流动 + 上下浮动）。
+ *   随 dashoffset 流动 + 上下浮动；峰值透明度 0.8）；
+ * - .water-frame-ripples：R15 小型框边水环（6 个：四角 + 上下缘中点），与中心波纹同款
+ *   环形、小型化，长周期 10s + 交错负 delay → 偶尔渐现→渐散。
  * 静态兜底：.protocol.compiled-fx-water（与其余协议同模式）。 */
 .protocol.compiled-fx-water {
   /* 静态兜底：蓝色描边 + 蓝光晕（与呼吸环同主题） */
@@ -1983,14 +1988,14 @@ body.dragging { cursor: grabbing; user-select: none; }
   margin-left: -55px;
   margin-top: -55px;
   border-radius: 50%;
-  border: 2px solid rgba(64, 180, 255, 0.55);
-  box-shadow: 0 0 12px rgba(64, 180, 255, 0.4), inset 0 0 10px rgba(64, 180, 255, 0.25);
+  border: 2px solid rgba(64, 180, 255, 0.7); /* R15 加深：0.55 → 0.7 */
+  box-shadow: 0 0 12px rgba(64, 180, 255, 0.55), inset 0 0 10px rgba(64, 180, 255, 0.35);
   opacity: 0;
   animation: water-ripple-expand 5.5s ease-out infinite;
 }
 @keyframes water-ripple-expand {
-  0% { transform: scale(0.2); opacity: 0.75; } /* 卡中心出现 */
-  60% { opacity: 0.35; }
+  0% { transform: scale(0.2); opacity: 0.8; } /* R15：峰值 0.75 → 0.8 */
+  60% { opacity: 0.4; }
   100% { transform: scale(2.7); opacity: 0; }  /* 接近卡框时渐渐消散（110×2.7≈297px ≥ 280 卡高） */
 }
 .water-waves {
@@ -2021,8 +2026,8 @@ body.dragging { cursor: grabbing; user-select: none; }
 }
 @keyframes water-wave-show {
   0%, 100% { opacity: 0; }
-  8% { opacity: 0.75; }
-  30% { opacity: 0.5; }
+  8% { opacity: 0.8; } /* R15：峰值 0.75 → 0.8 */
+  30% { opacity: 0.55; }
   38% { opacity: 0; }
 }
 @keyframes water-wave-float {
@@ -2031,6 +2036,35 @@ body.dragging { cursor: grabbing; user-select: none; }
 }
 @keyframes water-wave-flow {
   to { stroke-dashoffset: -42; } /* dash 周期 30+12=42 → 无缝循环流动 */
+}
+
+/* R15：小型框边水环（water 已编译专属）——与 .water-ripple 同款环形、小型化，
+ * 挂在四角 + 上下缘中点（JS 写 left/top 百分比 + 负 delay 交错）。长周期 10s 中
+ * 只有 ~28% 的时间可见（74% 前 opacity 0）→ 偶尔渐渐出现、扩散、渐渐消失。
+ * 容器与 .water-ripples/.water-waves 同层（z 1、pointer-events:none）。 */
+.water-frame-ripples {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1; /* 编译环（2）之下 */
+  overflow: visible;
+}
+.water-frame-ripple {
+  position: absolute;
+  width: 36px;
+  height: 36px;
+  margin-left: -18px;
+  margin-top: -18px;
+  border-radius: 50%;
+  border: 2px solid rgba(64, 180, 255, 0.7);
+  box-shadow: 0 0 10px rgba(64, 180, 255, 0.5), inset 0 0 8px rgba(64, 180, 255, 0.3);
+  opacity: 0;
+  animation: water-frame-ripple-cycle 10s ease-in-out infinite; /* 长周期 → 时不时 */
+}
+@keyframes water-frame-ripple-cycle {
+  0%, 74% { opacity: 0; transform: scale(0.25); }        /* 大部分时间隐没 */
+  82% { opacity: 0.8; transform: scale(1.5); }           /* 渐现 + 扩散 */
+  100% { opacity: 0; transform: scale(2.9); }            /* 渐散（36×2.9≈104px） */
 }
 
 /* ===== darkness 已编译：环外循环不规则黑雾层（R9：圆形泡 → 非对称烟云 wisp） =====
