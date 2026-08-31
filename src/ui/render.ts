@@ -679,6 +679,9 @@ function buildCompiledFx(defId: string): HTMLElement {
  */
 function appendCompiledRing(box: HTMLElement, defId: string): void {
   const ring = el('div', `compiled-ring compiled-ring-${defId}`);
+  // TODO(water/life FX): add protocol-specific compiled-ring variants for 'water'/'life'
+  // here when the user specifies them — currently they render the base 2.5s ring + default
+  // orange gradient + rocks (compiled-fx-<defId> class is already applied for CSS hooks).
   // 火焰（fire）专属参数：慢速岩浆流（56s/圈，CSS .compiled-fx-fire 覆写 animation-duration，
   // 速度再减半：28s → 56s）+ 岩石加密（90 岩 = 60 黑 + 30 红，2 黑 1 红交替）→ 环周被
   // 岩石基本填平（12px × 90 ≈ 1080px ≥ 环带周长 ≈1017px，轻微重叠）。红岩一半原色暗红

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { gameBus } from '../../src/core/events/bus';
 import { executeAction } from '../../src/core/game';
-import { makeCard, draftFireP1, draftLightP1, advanceToStep, resolveAllChoices } from '../helpers';
+import { makeCard, draftFireP1, draftLightP1, draftWaterP1, draftLifeP1, advanceToStep, resolveAllChoices } from '../helpers';
 import type { Line } from '../../src/core/models/types';
 
 /** 捕获弃牌/删去事件（含触发卡协议），返回快照 */
@@ -74,5 +74,37 @@ describe('FX trigger protocol payload', () => {
       expect(p.triggerDefId).toBe('light-4');
       expect(p.shownTo).toBe(0); // 对手手牌揭示给自己（发起者）
     }
+  });
+
+  it('water-5 discard carries triggerProtocol=water + triggerDefId (FX hook ready)', () => {
+    const s = draftWaterP1();
+    advanceToStep(s, 0, 'action');
+    s.players[0].hand = [makeCard('water-5', 0, 'hand'), makeCard('water-1', 0, 'hand')];
+    const water5 = s.players[0].hand.find((c) => c.defId === 'water-5')!;
+    const discardTarget = s.players[0].hand.find((c) => c.defId !== 'water-5')!;
+    const seen: { type: string; triggerProtocol?: string; triggerDefId?: string }[] = [];
+    const off = captureDiscardDelete(seen);
+    executeAction(s, 0, 'play', { cardUid: water5.uid, faceUp: true, line: 0 });
+    resolveAllChoices(s, () => [discardTarget.uid]);
+    off();
+    const discarded = seen.find((x) => x.type === 'card:discarded');
+    expect(discarded?.triggerProtocol).toBe('water');
+    expect(discarded?.triggerDefId).toBe('water-5');
+  });
+
+  it('life-0 before-covered self-delete carries triggerProtocol=life + triggerDefId (FX hook ready)', () => {
+    const s = draftLifeP1();
+    advanceToStep(s, 0, 'action');
+    const life0 = makeCard('life-0', 0, 'field', true, 1, 0);
+    s.players[0].stacks[1] = [life0];
+    const played = makeCard('life-5', 0, 'hand');
+    s.players[0].hand = [played];
+    const seen: { type: string; triggerProtocol?: string; triggerDefId?: string }[] = [];
+    const off = captureDiscardDelete(seen);
+    executeAction(s, 0, 'play', { cardUid: played.uid, faceUp: false, line: 1 }); // 盖住 life-0 → 被盖住前删除
+    off();
+    const deleted = seen.find((x) => x.type === 'card:deleted');
+    expect(deleted?.triggerProtocol).toBe('life');
+    expect(deleted?.triggerDefId).toBe('life-0');
   });
 });

@@ -596,6 +596,8 @@ export function initEffects(): () => void {
         return;
     }
     // 额外协议特效（触发卡协议驱动，叠加上层）
+    // TODO(water/life FX): add `else if (payload.triggerProtocol === 'water'/'life')`
+    // branches here when the user specifies them — today they fall through = silent no-op.
     if ((e.type === 'card:discarded' || e.type === 'card:deleted') && node) {
       if (payload.triggerProtocol === 'fire') {
         playFireBurnExtra(node, payload);
