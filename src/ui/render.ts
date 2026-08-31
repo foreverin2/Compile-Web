@@ -523,6 +523,26 @@ function renderHand(
       n.style.transform = '';
     }
   });
+  // ITEM 6（fix: 翻面卡手——焦点态保持）：选中卡在渲染时就保持上浮/扇形推开。
+  // 点击「翻面」后重渲染重建手牌，指针停在重建的「翻面」按钮上（无新 mouseenter），
+  // 若不主动上浮会从 popped 掉回普通（每翻一次卡都"塌"一下、卡手感）。
+  // 此处按选中卡索引应用与悬停完全相同的 popped + 扇形推开（.no-anim 抑制首帧过渡 →
+  // 落地即保持上浮）；鼠标移出手牌区（mouseleave 全量复位）或改选其它卡（新选中卡接管）
+  // 时自然复位，不会卡死在上浮态。
+  const selectedIdx = nodes.findIndex((n) => n.classList.contains('selected'));
+  if (selectedIdx >= 0) {
+    const node = nodes[selectedIdx];
+    node.classList.add('popped');
+    node.style.transform = '';
+    for (let j = 0; j < total; j++) {
+      if (j === selectedIdx) continue;
+      const n = nodes[j];
+      n.classList.remove('popped');
+      // 与 mouseenter 同款扇形推开：P1 左起 j<sel 推向左、j>sel 推向右；P2 镜像
+      const dx = reversed ? (selectedIdx - j) * 12 : (j - selectedIdx) * 12;
+      n.style.transform = `translateX(${dx}px)`;
+    }
+  }
   return hand;
 }
 
