@@ -230,19 +230,20 @@ function playFlip(node: HTMLElement, payload: FxCardPayload): void {
 /* ===== Life 翻转专属特效：绿色藤蔓缠绕 + 绿光（life-1/life-2 及未来生命翻转） =====
  * 触发：card:flipped 且 payload.triggerProtocol === 'life'。翻面本身复用 playFlip
  * （非 life 翻转保持原样），本函数只在它周围叠加藤蔓特效：
- * ① 翻转前：8 根绿色藤蔓沿卡框四边（每边 2 根）缓慢出现并缠绕上来——SVG S 曲线、
- *    从边缘向卡内生长（transform-origin 0 0 = 锚点），长度 52px ≥ 卡牌半长轴 1/3；
- *    + 卡框绿光（呼吸发光）；
- * ② 翻转完成后（~650ms）：藤蔓逐渐收缩退去；
+ * ① 翻转前：12 根粗长绿色藤蔓沿卡框四边（每边 3 根）缓慢出现并缠绕上来——SVG S 曲线、
+ *    从边缘向卡内生长（transform-origin 0 0 = 锚点），长度 85px（52 → 85：离卡牌中心
+ *    更远、缠绕覆盖更广）+ 卡框绿光（呼吸发光）；
+ * ② 展开动画 1.9s（0.9s + 1s）后（~1.65s）卡面开始翻转，藤蔓同时逐渐收缩退去；
  * ③ 卡框绿光持续 ~2 秒后淡出。
- * 全部 pointer-events:none、JS 定时清理（无泄漏）：8 根藤蔓统一挂在 .life-flip-fx
+ * 全部 pointer-events:none、JS 定时清理（无泄漏）：12 根藤蔓统一挂在 .life-flip-fx
  * 容器（body 级 fixed、无 transform/z-index → 不改变子元素 fixed 视口坐标、不建
  * stacking context），收缩完成后整体移除；容器类也被 render.ts resetUiState 批量
- * 清扫（应用内重置路径兜底）。绿光单独挂 body（需持续 ~2 秒，长于藤蔓容器），
+ * 清扫（应用内重置路径兜底）。绿光单独挂 body（需持续 ~3.6 秒，长于藤蔓容器），
  * 自带移除定时器 + resetUiState 兜底。 */
-const LIFE_AFTER_MS = 2000; // 翻转后卡框绿光持续时间
-const LIFE_VINE_LEN = 52; // 藤蔓长度（≥ 场上/手牌/协议卡半长轴 1/3）
-const LIFE_VINE_SHRINK_MS = 650; // 翻转完成后开始收缩藤蔓的时机
+const LIFE_AFTER_MS = 3600; // 翻转后卡框绿光持续时间（含拉长的展开/消退：翻转 ~1.65s + 持续 ~2s）
+const LIFE_VINE_LEN = 85; // 藤蔓长度（52 → 85px：离卡牌中心更远、缠绕覆盖更广）
+const LIFE_VINE_SHRINK_MS = 1650; // 展开延长 1 秒后翻转 / 开始收缩藤蔓的时机（650 → 1650ms）
+const LIFE_VINE_SHRINK_DUR_MS = 1550; // 藤蔓消退动画时长（0.55s → 1.55s，消退 +1s）
 
 /** 构建一根藤蔓：定位 div（旋转朝向卡内）+ SVG S 曲线（生长/收缩动画作用于其上） */
 function buildLifeVine(rot: number): HTMLElement {
@@ -250,15 +251,15 @@ function buildLifeVine(rot: number): HTMLElement {
   wrap.className = 'life-flip-vine';
   wrap.style.transform = `rotate(${rot}deg)`;
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('width', '22');
+  svg.setAttribute('width', '30');
   svg.setAttribute('height', String(LIFE_VINE_LEN));
-  svg.setAttribute('viewBox', `0 0 22 ${LIFE_VINE_LEN}`);
+  svg.setAttribute('viewBox', `0 0 30 ${LIFE_VINE_LEN}`);
   svg.setAttribute('class', 'life-flip-vine-curve');
   const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  path.setAttribute('d', `M5,2 C12,${LIFE_VINE_LEN * 0.3} 17,${LIFE_VINE_LEN * 0.62} 9,${LIFE_VINE_LEN - 3}`);
+  path.setAttribute('d', `M7,2 C16,${LIFE_VINE_LEN * 0.3} 24,${LIFE_VINE_LEN * 0.62} 12,${LIFE_VINE_LEN - 3}`);
   path.setAttribute('fill', 'none');
   path.setAttribute('stroke', '#3ddc84');
-  path.setAttribute('stroke-width', '3.2');
+  path.setAttribute('stroke-width', '11'); // 3.2 → 11（调粗很多，约 3.4×）
   path.setAttribute('stroke-linecap', 'round');
   svg.appendChild(path);
   wrap.appendChild(svg);
@@ -275,19 +276,23 @@ function playLifeFlip(node: HTMLElement, payload: FxCardPayload): void {
   const T = rect.top;
   const W = rect.width;
   const H = rect.height;
-  // 藤蔓锚点：每边 2 根（20%/80% 处），transform-origin 0 0 = 锚点（卡框边缘点），
-  // 旋转使藤蔓垂入卡内：上边 0°（向下）、右边 90°（向左）、下边 180°（向上）、
-  // 左边 −90°（向右）——局部 +y（藤蔓长度方向）经旋转映射为朝卡内的方向。
-  // （rot 90：局部 (0,52) → 屏幕 (−52,0) = 锚点左侧 = 入卡；rot −90：→ (52,0) = 右侧 = 入卡）
+  // 藤蔓锚点：每边 3 根（15%/50%/85% 处，共 12 根），transform-origin 0 0 = 锚点
+  // （卡框边缘点），旋转使藤蔓垂入卡内：上边 0°（向下）、右边 90°（向左）、
+  // 下边 180°（向上）、左边 −90°（向右）——局部 +y（藤蔓长度方向）经旋转映射为朝卡内的方向。
+  // （rot 90：局部 (0,85) → 屏幕 (−85,0) = 锚点左侧 = 入卡；rot −90：→ (85,0) = 右侧 = 入卡）
   const anchors: { x: number; y: number; rot: number }[] = [
-    { x: L + W * 0.2, y: T, rot: 0 },
-    { x: L + W * 0.8, y: T, rot: 0 },
-    { x: L + W, y: T + H * 0.2, rot: 90 },
-    { x: L + W, y: T + H * 0.8, rot: 90 },
-    { x: L + W * 0.2, y: T + H, rot: 180 },
-    { x: L + W * 0.8, y: T + H, rot: 180 },
-    { x: L, y: T + H * 0.2, rot: -90 },
-    { x: L, y: T + H * 0.8, rot: -90 },
+    { x: L + W * 0.15, y: T, rot: 0 },
+    { x: L + W * 0.5, y: T, rot: 0 },
+    { x: L + W * 0.85, y: T, rot: 0 },
+    { x: L + W, y: T + H * 0.15, rot: 90 },
+    { x: L + W, y: T + H * 0.5, rot: 90 },
+    { x: L + W, y: T + H * 0.85, rot: 90 },
+    { x: L + W * 0.15, y: T + H, rot: 180 },
+    { x: L + W * 0.5, y: T + H, rot: 180 },
+    { x: L + W * 0.85, y: T + H, rot: 180 },
+    { x: L, y: T + H * 0.15, rot: -90 },
+    { x: L, y: T + H * 0.5, rot: -90 },
+    { x: L, y: T + H * 0.85, rot: -90 },
   ];
   // 藤蔓容器（body 级 fixed；无 transform/z-index → 子元素 fixed 坐标仍按视口、
   // 不建 stacking context；pointer-events:none 透传点击）。收缩完成后整体移除。
@@ -313,18 +318,19 @@ function playLifeFlip(node: HTMLElement, payload: FxCardPayload): void {
   glow.style.height = `${H}px`;
   glow.style.zIndex = String(EXTRA_Z);
   document.body.appendChild(glow);
-  // ② 翻转完成后藤蔓收缩退去
+  // ② 展开动画延长 1 秒后：卡面开始翻转 + 藤蔓开始收缩退去（同一时刻触发）
   window.setTimeout(() => {
     for (const vine of fxWrap.querySelectorAll<HTMLElement>('.life-flip-vine')) {
       vine.classList.add('shrinking');
     }
   }, LIFE_VINE_SHRINK_MS);
-  // 收缩（550ms）完成后整体移除藤蔓容器（防 DOM 泄漏；重置路径由 resetUiState 兜底）
-  window.setTimeout(() => fxWrap.remove(), LIFE_VINE_SHRINK_MS + 600);
-  // ③ 卡框绿光持续 ~2 秒后淡出（CSS 动画自带尾部淡出，JS 只负责移除）
+  // 收缩（1.55s）完成后整体移除藤蔓容器（防 DOM 泄漏；重置路径由 resetUiState 兜底）
+  window.setTimeout(() => fxWrap.remove(), LIFE_VINE_SHRINK_MS + LIFE_VINE_SHRINK_DUR_MS + 100);
+  // ③ 卡框绿光持续（覆盖展开 + 翻转 + 消退全程）后淡出（CSS 动画自带尾部淡出，JS 只负责移除）
   window.setTimeout(() => glow.remove(), LIFE_AFTER_MS + 320);
-  // 基础翻面照常（本函数只叠加藤蔓，不替换翻面）
-  playFlip(node, payload);
+  // 基础翻面照常（本函数只叠加藤蔓，不替换翻面）——但延迟到藤蔓充分展开之后
+  // （展开动画 0.9s → 1.9s，翻面在 ~1.65s 才开始，"先展开、后翻转"）
+  window.setTimeout(() => playFlip(node, payload), LIFE_VINE_SHRINK_MS);
 }
 
 /** 基础行为特效：回手——从场上丝滑平移到持有者手牌末尾 */
