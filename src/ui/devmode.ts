@@ -7,6 +7,8 @@ import { ALL_CARD_DEFS, ALL_PROTOCOLS } from '../data/cards';
  *   正确后进入指令页；
  * - 指令页支持 `get 牌名` 把指定卡牌加入当前玩家（state.turnPlayer）手牌，
  *   输入时实时检索匹配卡牌列表，点击列表行等于执行 get；
+ *  - `clean` 指令：直接清空当前玩家全部手牌到弃牌堆（不触发任何卡牌效果/事件，
+ *   方便测试空手牌场景）；
  * - 所有动作同时写入 console（被 diag 全量记录）与 state.log（游戏事件日志），
  *   两者都包含在 diag 导出中。
  *
@@ -24,7 +26,7 @@ export interface DevModeHost {
 const PASSWORD = '上上下下左右左右BABA';
 
 /** 指令页提示行 */
-const HINT = '指令：get 牌名 — 例如 get light-2 或 get 光2（加入当前玩家手牌）';
+const HINT = '指令：get 牌名（加入当前玩家手牌，如 get light-2）· clean（清空当前玩家手牌）';
 
 /** 卡牌实例 uid 计数器（dev- 前缀保证不与正式 uid 冲突） */
 let uidCounter = 0;
@@ -223,14 +225,37 @@ function addCardToCurrentPlayer(host: DevModeHost, defId: string, suffix = ''): 
 }
 
 /**
- * 执行一条指令。目前唯一支持：`get 牌名`（大小写不敏感），
- * 把解析出的牌加入当前玩家（state.turnPlayer）手牌并触发重渲染。
+ * 执行一条指令。支持：
+ * - `get 牌名`（大小写不敏感）：把解析出的牌加入当前玩家（state.turnPlayer）手牌并触发重渲染；
+ * - `clean`（大小写不敏感）：直接清空当前玩家全部手牌到弃牌堆并触发重渲染——
+ *   纯状态操作，不经 executeAction / discard op，不触发任何引擎事件或卡牌效果。
  * 未知指令 / 未找到卡牌：记录日志，不改变状态。
  */
-function runCommand(host: DevModeHost, line: string): void {
+export function runCommand(host: DevModeHost, line: string): void {
   const trimmed = line.trim();
   if (trimmed === '') return;
   log(host, `收到指令: ${trimmed}`);
+  // clean：把当前玩家整手手牌直接 splice 进弃牌堆（zone/faceUp/line/pos 与 discard op
+  // 的落牌一致；手牌 = 已知信息 → 一并清除 secret）。只改 state，不调用引擎。
+  if (/^clean$/i.test(trimmed)) {
+    const state = host.getState();
+    const player = state.turnPlayer;
+    const p = state.players[player];
+    const hand = p.hand;
+    const count = hand.length;
+    for (const card of hand) {
+      card.zone = 'trash';
+      card.faceUp = true;
+      card.line = null;
+      card.pos = null;
+      delete card.secret; // 弃牌堆 = 公开信息，清除牌堆来源的 secret 标记
+    }
+    p.trash.push(...hand);
+    p.hand = [];
+    log(host, `已清空 P${player + 1} 手牌（clean，${count} 张）`);
+    host.render();
+    return;
+  }
   const m = /^get\s+(.+)$/i.exec(trimmed);
   if (!m) {
     log(host, `未知指令: ${trimmed}`);
@@ -311,7 +336,7 @@ function openCommandPage(host: DevModeHost): void {
   hint.textContent = HINT;
   const input = document.createElement('input');
   input.className = 'dev-console-input';
-  input.placeholder = 'get light-2';
+  input.placeholder = 'get light-2 或 clean';
   const results = document.createElement('div');
   results.className = 'dev-results';
   results.hidden = true;
