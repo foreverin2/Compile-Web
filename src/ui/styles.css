@@ -1011,6 +1011,12 @@ body {
   0% { transform: scale(0.2); opacity: 0.95; }
   100% { transform: scale(1.4); opacity: 0; }
 }
+/* 牌堆顶打出幽灵（playDeckPlay）：在 buildFxCard 的 .card 基础上加投影 + 青色微辉，
+   使小尺寸（92×132）卡背在暗背景上清晰可见（draw-ghost 同款观感）。 */
+.deck-play-ghost {
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55);
+  filter: drop-shadow(0 0 6px rgba(79, 240, 255, 0.3));
+}
 .water-return-glow {
   position: fixed;
   pointer-events: none;

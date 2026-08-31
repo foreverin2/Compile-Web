@@ -529,7 +529,26 @@ function playDarknessShiftBridge(node: HTMLElement, payload: FxCardPayload): voi
 }
 
 /** 基础行为特效：牌堆顶打出——幽灵卡从牌库区丝滑飞入目标链路堆叠末尾
- *  （复用 playShift 平移逻辑；牌堆顶无 DOM 卡，起点用牌库区 rect（deckPos），buildFxCard 的 node 用牌库区元素） */
+ *  （复用 playShift 平移逻辑；牌堆顶无 DOM 卡，起点用牌库区 rect（deckPos），buildFxCard 的 node 用牌库区元素）
+ *  可靠性（多线连打，life-0/water-1 及未来任何反面牌堆顶打出）：
+ *  - 同批 card:deck-played 事件同步创建多个幽灵 → 按 90ms 错开起飞（多卡不在牌库位
+ *    完全重叠互相遮挡，逐张可见、逐线飞入）；
+ *  - 起飞前先写初始位并强制回流提交样式（void offsetHeight）——浏览器若延迟提交初始
+ *    样式，transition 会直接跳到终点（飞行不可见）；回流保证 transition 必从牌库位动画；
+ *  - 幽灵带 .deck-play-ghost（投影 + 青辉），小尺寸（92×132）卡背在暗背景上清晰可见。 */
+const DECK_PLAY_STAGGER_MS = 90; // 同批多张牌堆顶打出的起飞错开间隔
+let deckPlayBatchCount = 0; // 同一批（~100ms 窗口内）已创建的幽灵数
+let deckPlayBatchStamp = 0;
+
+/** 同一批 deck-play 事件内的序号：~100ms 窗口内连续创建视为同一批（逐张错开起飞），
+ *  之后重置（新一批从头错开）。 */
+function nextDeckPlayIndex(): number {
+  const now = Date.now();
+  if (now - deckPlayBatchStamp > 100) deckPlayBatchCount = 0;
+  deckPlayBatchStamp = now;
+  return deckPlayBatchCount++;
+}
+
 function playDeckPlay(payload: FxCardPayload): void {
   if (payload.owner === undefined || payload.line === null) return;
   const deck = document.querySelector<HTMLElement>(`.deck[data-player="${payload.owner}"]`);
@@ -539,15 +558,21 @@ function playDeckPlay(payload: FxCardPayload): void {
   if (!deck || !from || !target) return;
   const clone = buildFxCard(deck, payload, BASE_Z);
   if (!clone) return;
+  clone.classList.add('deck-play-ghost');
   const dx = target.x - (from.left + from.width / 2);
   const dy = target.y - (from.top + from.height / 2);
-  clone.style.transition = `transform ${MOVE_MS}ms cubic-bezier(0.2, 0.7, 0.3, 1), opacity ${MOVE_MS}ms ease`;
-  requestAnimationFrame(() => {
-    // 组合 --fx-rot（牌库/手牌无 rot 类 → 恒 0deg，与旧行为一致）
-    clone.style.transform = `translate(${dx}px, ${dy}px) rotate(var(--fx-rot, 0deg)) scale(0.92)`;
-    clone.style.opacity = '0.6';
-  });
-  window.setTimeout(() => clone.remove(), MOVE_MS + 80);
+  const delay = nextDeckPlayIndex() * DECK_PLAY_STAGGER_MS;
+  window.setTimeout(() => {
+    // 先写初始位（translate(0) + 原朝向/尺寸）并强制回流提交 → 起飞 transition 必动画
+    clone.style.transition = `transform ${MOVE_MS}ms cubic-bezier(0.2, 0.7, 0.3, 1), opacity ${MOVE_MS}ms ease`;
+    clone.style.transform = `translate(0, 0) rotate(var(--fx-rot, 0deg)) scale(0.92)`;
+    void clone.offsetHeight; // 强制样式提交（reflow）
+    requestAnimationFrame(() => {
+      clone.style.transform = `translate(${dx}px, ${dy}px) rotate(var(--fx-rot, 0deg)) scale(0.92)`;
+      clone.style.opacity = '0.6';
+    });
+  }, delay);
+  window.setTimeout(() => clone.remove(), delay + MOVE_MS + 120);
 }
 
 /** 基础行为特效：手牌打出（playFromHand）——幽灵卡从手牌中该卡的 rect 丝滑飞入目标

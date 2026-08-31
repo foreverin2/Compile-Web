@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import type { EffectStep, StepResult } from '../../src/core/models/types';
 import { runStack } from '../../src/core/effects/resolve';
 import { registerCardEffects } from '../../src/core/effects/registry';
-import { makeCard, draftFireP1, advanceToStep, pickFirst, resolveAllChoices } from '../helpers';
+import { gameBus } from '../../src/core/events/bus';
+import { executeAction } from '../../src/core/game';
+import { makeCard, draftFireP1, draftLifeP1, advanceToStep, pickFirst, resolveAllChoices } from '../helpers';
 
 // 被盖住前触发：抽 1 张（playTopDeck 落地顺序守卫用）
 registerCardEffects('pdeck-bc', {
@@ -144,5 +146,33 @@ describe('playTopDeck op', () => {
     expect(s.players[0].deck).toHaveLength(10); // 13 − 两次 playTopDeck pop − 触发抽 1
     expect(s.pendingPlay).toHaveLength(0);
     expect(s.players[0].stacks.flat()).toHaveLength(3); // fire-0 + 两张落地，无浮空残留
+  });
+
+  it('life-0 multi-line deck plays emit one card:deck-played per line (face-down basic FX payload)', () => {
+    // 回归：生命0 中指令向【每条有卡的线】反面打出牌堆顶（本线最后打）——FX 层
+    // （playDeckPlay）据此逐线播「牌堆顶打出」基础特效；多线连打时事件必须逐张发出
+    // 且 payload 携带 faceUp=false / owner / line（幽灵卡用卡背飞入对应线）。
+    const s = draftLifeP1();
+    advanceToStep(s, 0, 'action');
+    s.players[0].stacks[0] = [makeCard('water-1', 0, 'field', true, 0, 0)];
+    s.players[0].stacks[1] = [makeCard('water-1', 0, 'field', true, 1, 0)];
+    s.players[0].stacks[2] = [makeCard('water-1', 0, 'field', true, 2, 0)];
+    const life0 = makeCard('life-0', 0, 'hand');
+    s.players[0].hand = [life0];
+    const seen: { line?: number | null; faceUp?: boolean; owner?: number }[] = [];
+    const off = gameBus.subscribe((e) => {
+      if (e.type !== 'card:deck-played') return;
+      const p = e.payload as { line?: number | null; faceUp?: boolean; owner?: number };
+      seen.push({ line: p.line, faceUp: p.faceUp, owner: p.owner });
+    });
+    executeAction(s, 0, 'play', { cardUid: life0.uid, faceUp: true, line: 0 });
+    resolveAllChoices(s, pickFirst);
+    off();
+    // 三条线都有卡 → 三条线各发一次（另线先行、本线最后）；全部反面 + 归属 P1
+    expect(seen.map((p) => p.line)).toEqual([1, 2, 0]);
+    for (const p of seen) {
+      expect(p.faceUp).toBe(false);
+      expect(p.owner).toBe(0);
+    }
   });
 });
