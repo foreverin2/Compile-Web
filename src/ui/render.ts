@@ -277,6 +277,64 @@ export function syncSmokeOverlays(s: GameState): void {
   }
 }
 
+/* ===== 常驻能量扫描线（R16）：修复扫描在步骤切换/效果结算时重启的卡顿 =====
+ * 旧实现 .battery-shell::after 的 CSS 扫描动画随电池元素每次重渲染（renderApp 全量
+ * 重建棋盘 DOM）而重启——与已编译环/黑烟同类的"一卡一卡"问题。
+ * 采用与 syncSmokeOverlays 相同的注册表模式：body 级 fixed 扫描层（.scan-overlay 内
+ * .scan-line）按 key `${player}-${line}` 创建一次、跨重渲染存活，每帧渲染只把层盒
+ * 重定位到 .battery-shell 矩形（层节点从不 detach → CSS 动画不重启）。
+ * full/burst 态沿旧行为关闭扫描（外壳应力裂纹高光接管），overlay 移除；电池元素
+ * 缺失时同样移除并注销。 */
+const scanOverlays = new Map<string, HTMLElement>();
+
+function renderScanOverlay(): HTMLElement {
+  const overlay = el('div', 'scan-overlay');
+  overlay.appendChild(el('div', 'scan-line'));
+  return overlay;
+}
+
+export function syncScanOverlays(s: GameState): void {
+  const activeKeys = new Set<string>();
+  for (const line of [0, 1, 2] as Line[]) {
+    for (const player of [0, 1] as PlayerId[]) {
+      const key = `${player}-${line}`;
+      // 旧行为：扫描流光仅 stable/bulge 播放；full/burst 由外壳裂纹高光接管（animation:none）
+      const state = batteryState(getLineValue(s, player, line));
+      if (state === 'full' || state === 'burst') {
+        const gone = scanOverlays.get(key);
+        if (gone) {
+          gone.remove();
+          scanOverlays.delete(key);
+        }
+        continue;
+      }
+      const shell = document.querySelector<HTMLElement>(
+        `.stack-slot[data-player="${player}"][data-line="${line}"] .battery-shell`
+      );
+      if (!shell) continue; // 电池不在 DOM（不应发生）→ 交给下方清理分支移除旧 overlay
+      activeKeys.add(key);
+      let overlay = scanOverlays.get(key);
+      if (!overlay) {
+        overlay = renderScanOverlay();
+        overlay.dataset.scanKey = key;
+        scanOverlays.set(key, overlay);
+        document.body.appendChild(overlay);
+      }
+      const r = shell.getBoundingClientRect();
+      overlay.style.left = `${r.left}px`;
+      overlay.style.top = `${r.top}px`;
+      overlay.style.width = `${r.width}px`;
+      overlay.style.height = `${r.height}px`;
+    }
+  }
+  for (const [key, overlay] of scanOverlays) {
+    if (!activeKeys.has(key)) {
+      overlay.remove();
+      scanOverlays.delete(key);
+    }
+  }
+}
+
 /** R12：每帧渲染把 body 级持久 FX 层重定位到对应 holder 矩形（层节点从不移动，只改
  *  坐标 left/top/width/height）：
  *  - 层已由 buildCompiledFx 在创建时挂到 document.body（position:fixed）→ 始终
@@ -881,30 +939,44 @@ function appendCompiledRing(box: HTMLElement, defId: string): void {
     }
     box.appendChild(smoke);
   }
-  // ITEM 5（round15 重做）：life 已编译 → 20+ 根粗绿藤蔓从卡框起缠绕协议卡（复用 Item 1 翻转
-  // 藤蔓观感：粗 S 曲线 + 绿光描边）+ 缓慢左右摇摆。本版三处调整：
+  // ITEM 5（round15 重做，round16 加密锚点）：life 已编译 → 20+ 根粗绿藤蔓从卡框起
+  // 缠绕协议卡（复用 Item 1 翻转藤蔓观感：粗 S 曲线 + 绿光描边）+ 缓慢左右摇摆。
+  // 三处关键设计：
   //  1) 更短：长度 ≤42px（旧 85/90 → 至多一半），仍垂入卡内；
   //  2) 不规则：锚点沿边分数为手挑的非等分值（不再是 6 等分）；
-  //  3) 共享锚点：8 个锚点各发出 1-3 根藤蔓（同点不同朝向角 → 有机簇生），共 21 根（≥20）。
-  // 藤蔓为层内 z 2（环带之上、卡面之上）。绿色框光由 .compiled-ring-life 呼吸动画提供、
-  // 深绿背光为 .life-backlight（buildCompiledFx 挂载）。定位用百分比 + margin 居中
-  // （跟随层尺寸，图片未加载时也不飞离卡框）。
+  //  3) ≥14 个锚点（R16：17 个，上 4 / 右 4 / 下 4 / 左 5，均匀绕框）+ 共享锚点特性
+  //     （同点最多 2 根、角度略异 → 簇生）：旧版 8 锚点各 1-3 根（3 根同点重叠成
+  //     一团、锚点间大片空白 → 看起来稀疏）；本版锚点更多、每点更少 → 覆盖更均匀、
+  //     重叠更少，仍共 21 根（≥20）。
+  // 藤蔓为层内 z 2（环带之上、卡面之上）。绿色框光由 .compiled-ring-life 呼吸动画
+  // 提供、深绿背光为 .life-backlight（buildCompiledFx 挂载）。定位用百分比 + margin
+  // 居中（跟随层尺寸，图片未加载时也不飞离卡框）。
   if (defId === 'life') {
     const VINE_LEN_MAX = 42; // 旧 85/90 → 至多一半
     const VW = 30; // wrap 宽 = svg 宽（margin 居中基准）
     const SWAY_CYCLE_S = 4.5; // 摇摆周期（与 CSS .life-compiled-vine-curve 一致）
     // 锚点表：[边(0上/1右/2下/3左), 沿边分数, 藤蔓朝向角(deg，垂入卡内)]。
-    // 分数为手挑的不规则值（避开四角与 1/3 等分）；同锚点连续多行 = 同一点发出多根
-    // 藤蔓（角度略异 → 簇生，不齐整）。
+    // R16：17 个锚点（≥14）均匀绕框——上/右/下各 4 个、左 5 个，分数为手挑的不规则
+    // 值（避开四角与 1/3 等分，边内分布更匀）；每点 1 根，仅 4 个锚点各带第 2 根
+    // （角度略异 ±8~14° → 簇生，不齐整、不重叠成团）。共 21 根（≥20）。
     const ANCHORS: ReadonlyArray<readonly [number, number, number]> = [
-      [0, 0.14, -12], [0, 0.14, 0], [0, 0.14, 12], // 上 0.14：3 根
-      [0, 0.71, -9], [0, 0.71, 11], // 上 0.71：2 根
-      [1, 0.19, 78], [1, 0.19, 90], [1, 0.19, 104], // 右 0.19：3 根
-      [1, 0.83, 84], [1, 0.83, 98], // 右 0.83：2 根
-      [2, 0.31, 166], [2, 0.31, 180], [2, 0.31, 196], // 下 0.31：3 根
-      [2, 0.77, 172], [2, 0.77, 188], // 下 0.77：2 根
-      [3, 0.37, 256], [3, 0.37, 270], [3, 0.37, 285], // 左 0.37：3 根
-      [3, 0.92, 262], [3, 0.92, 274], [3, 0.92, 288], // 左 0.92：3 根
+      [0, 0.10, -8], [0, 0.10, 6], // 上 0.10：2 根（共享锚点）
+      [0, 0.34, 0], // 上 0.34：1 根
+      [0, 0.62, -6], // 上 0.62：1 根
+      [0, 0.88, 4], // 上 0.88：1 根
+      [1, 0.12, 96], // 右 0.12：1 根
+      [1, 0.42, 84], [1, 0.42, 98], // 右 0.42：2 根（共享锚点）
+      [1, 0.68, 90], // 右 0.68：1 根
+      [1, 0.90, 80], // 右 0.90：1 根
+      [2, 0.08, 186], // 下 0.08：1 根
+      [2, 0.32, 172], // 下 0.32：1 根
+      [2, 0.58, 180], [2, 0.58, 194], // 下 0.58：2 根（共享锚点）
+      [2, 0.86, 174], // 下 0.86：1 根
+      [3, 0.14, 266], // 左 0.14：1 根
+      [3, 0.38, 270], // 左 0.38：1 根
+      [3, 0.62, 258], // 左 0.62：1 根
+      [3, 0.86, 274], [3, 0.86, 286], // 左 0.86：2 根（共享锚点）
+      [3, 0.95, 264], // 左 0.95：1 根
     ];
     for (let i = 0; i < ANCHORS.length; i++) {
       const [side, pos, rot] = ANCHORS[i];
@@ -1568,6 +1640,9 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   // Part 2 常驻黑烟：槽位已入 DOM → 创建/复用 body 级 overlay 并重定位到槽位矩形
   // （overlay 跨重渲染存活，动画不重启；条件消失后 syncSmokeOverlays 移除并注销）
   syncSmokeOverlays(s);
+  // R16 常驻能量扫描线：电池已入 DOM → 创建/复用 body 级扫描层并重定位到外壳矩形
+  // （层跨重渲染存活，动画不重启；full/burst 或电池缺失时移除并注销）
+  syncScanOverlays(s);
 }
 
 let selectedUid: string | null = null;
@@ -1604,6 +1679,8 @@ export function resetUiState(): void {
   compiledFxCells.length = 0;
   for (const overlay of smokeOverlays.values()) overlay.remove();
   smokeOverlays.clear();
+  for (const overlay of scanOverlays.values()) overlay.remove();
+  scanOverlays.clear();
   controlSliderPos = 50;
   closeZoom();
   closeTrashViewer();

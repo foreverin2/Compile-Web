@@ -3,7 +3,7 @@ import { createGame, performDraftPick, performDraftUnpick } from './core/state/c
 import { executeAction } from './core/game';
 import { getCompilableLines } from './core/rules/compile';
 import { collectTriggers } from './core/effects/triggers';
-import { renderApp, renderDraft, resetUiState, syncCompiledFxLayers, syncSmokeOverlays, type UiCallbacks } from './ui/render';
+import { renderApp, renderDraft, resetUiState, syncCompiledFxLayers, syncSmokeOverlays, syncScanOverlays, type UiCallbacks } from './ui/render';
 import { initEffects, initCompileFx, initRearrangeFx, playRevealFly } from './ui/effects';
 import { initDiag } from './ui/diag';
 import { initDevMode } from './ui/devmode';
@@ -379,11 +379,12 @@ gameBus.subscribe((e) => {
   }
 });
 renderApp(root, state, cb);
-// 常驻特效层随滚动/缩放重新对齐：已编译环（compiledFx）与暗2 黑烟（smokeOverlays）
-// 都是 body 级 position:fixed 层，只在渲染时按单元格矩形定位——渲染之间的滚动/缩放
-// 会让它们停在陈旧视口坐标（尤其一局胜利后无后续渲染时）。rAF 节流（同帧合并多次
-// 事件）+ passive + capture（覆盖任意可滚动容器）；sync 函数幂等且廉价（≤6 层 +
-// 黑烟 overlay，只读 rect 重写坐标）。在初始渲染之后注册（注册表已就绪）。
+// 常驻特效层随滚动/缩放重新对齐：已编译环（compiledFx）、暗2 黑烟（smokeOverlays）与
+// 能量扫描线（scanOverlays）都是 body 级 position:fixed 层，只在渲染时按单元格矩形
+// 定位——渲染之间的滚动/缩放会让它们停在陈旧视口坐标（尤其一局胜利后无后续渲染时）。
+// rAF 节流（同帧合并多次事件）+ passive + capture（覆盖任意可滚动容器）；sync 函数
+// 幂等且廉价（≤6 层 + 黑烟 overlay + 扫描线，只读 rect 重写坐标）。在初始渲染之后
+// 注册（注册表已就绪）。
 let fxSyncScheduled = false;
 const syncPersistentFx = (): void => {
   if (fxSyncScheduled) return;
@@ -392,6 +393,7 @@ const syncPersistentFx = (): void => {
     fxSyncScheduled = false;
     syncCompiledFxLayers();
     syncSmokeOverlays(state);
+    syncScanOverlays(state);
   });
 };
 window.addEventListener('scroll', syncPersistentFx, { passive: true, capture: true });
