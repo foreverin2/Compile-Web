@@ -246,6 +246,76 @@ function playReturn(node: HTMLElement, payload: FxCardPayload): void {
   window.setTimeout(() => clone.remove(), MOVE_MS + 80);
 }
 
+/* ===== Water 回手专属特效：蓝色水波环 + 光晕 + 游动轨迹环（water-3/water-4 及未来水回手） =====
+ * 触发：card:returned 且 payload.triggerProtocol === 'water'。飞行本身复用 playReturn
+ * （非水回手保持原样），本函数只在它周围叠加水特效：
+ * ① 回手前：卡框周围一圈扩散的蓝色水波环 + 蓝色光晕 + 边框发光（body 级 fixed）；
+ * ② 飞行中：路径 25%/50%/75% 处各出现一个小号扩散水环（模拟鱼在水面游动的轨迹）；
+ * ③ 回手后：落点（手牌末尾）卡框特效持续 2 秒后淡出。
+ * 全部 pointer-events:none、JS 定时清理（无泄漏）。 */
+const WATER_RING_MS = 700; // 单个水环扩散时长
+const WATER_AFTER_MS = 2000; // 回手后落点框特效持续时间
+const WATER_TRAIL_COUNT = 3; // 飞行路径上的轨迹环数量
+
+/** body 级水波环：fixed 定位于 (x,y) 中心、尺寸 size 的圆环，扩散 + 淡出后自清理 */
+function spawnWaterRing(x: number, y: number, size: number, cls: string): void {
+  const ring = document.createElement('div');
+  ring.className = cls;
+  ring.style.left = `${x - size / 2}px`;
+  ring.style.top = `${y - size / 2}px`;
+  ring.style.width = `${size}px`;
+  ring.style.height = `${size}px`;
+  ring.style.zIndex = String(EXTRA_Z);
+  document.body.appendChild(ring);
+  window.setTimeout(() => ring.remove(), WATER_RING_MS + 120);
+}
+
+function playWaterReturn(node: HTMLElement, payload: FxCardPayload): void {
+  const rect = node.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0 || payload.owner === undefined) {
+    playReturn(node, payload); // rect 缺失 → 退回基础回手（playReturn 内部自兜底）
+    return;
+  }
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  const hand = document.querySelectorAll<HTMLElement>('.hand')[payload.owner];
+  const target = handEndPos(hand, payload.owner);
+  const dx = target.x - cx;
+  const dy = target.y - cy;
+  // ① 回手前：大号扩散水环 + 蓝色光晕框（卡框周围，与飞行同时开始）
+  spawnWaterRing(cx, cy, Math.max(rect.width, rect.height) * 2.4, 'water-return-ring big');
+  const glow = document.createElement('div');
+  glow.className = 'water-return-glow';
+  glow.style.left = `${rect.left}px`;
+  glow.style.top = `${rect.top}px`;
+  glow.style.width = `${rect.width}px`;
+  glow.style.height = `${rect.height}px`;
+  glow.style.zIndex = String(EXTRA_Z);
+  document.body.appendChild(glow);
+  window.setTimeout(() => glow.remove(), WATER_RING_MS + 120);
+  // ② 飞行中：路径 25%/50%/75% 处的小号轨迹环（卡经过该点时出现 → 鱼游轨迹）
+  for (let i = 1; i <= WATER_TRAIL_COUNT; i++) {
+    const frac = i / (WATER_TRAIL_COUNT + 1);
+    window.setTimeout(() => {
+      spawnWaterRing(cx + dx * frac, cy + dy * frac, 30, 'water-return-ring trail');
+    }, MOVE_MS * frac);
+  }
+  // ③ 回手后（飞行落地）：落点框特效持续 2 秒后淡出（落点 = 手牌末尾新卡中心）
+  window.setTimeout(() => {
+    const settle = document.createElement('div');
+    settle.className = 'water-return-settle';
+    settle.style.left = `${target.x - 65}px`;
+    settle.style.top = `${target.y - 89.4}px`;
+    settle.style.width = '130px';
+    settle.style.height = '178.8px';
+    settle.style.zIndex = String(EXTRA_Z);
+    document.body.appendChild(settle);
+    window.setTimeout(() => settle.remove(), WATER_AFTER_MS + 300);
+  }, MOVE_MS);
+  // 基础回手飞行照常（本函数只叠加水特效，不替换飞行）
+  playReturn(node, payload);
+}
+
 /** 幽灵卡平移落地：从初始 rect 丝滑平移到【调用方给定的】目标点（起飞时机与目标点均由调用方决定，
  *  避免起飞时重查 DOM——重渲染后目标堆叠已含落地卡，stackEndPos 会偏移） */
 function flyCloneToStackEnd(clone: HTMLElement, rect: DOMRect, end: { x: number; y: number }): void {
@@ -575,7 +645,12 @@ export function initEffects(): () => void {
         if (node) playFlip(node, payload);
         break;
       case 'card:returned':
-        if (node) playReturn(node, payload);
+        // water 协议触发的回手（water-3/water-4 及未来水回手）：蓝色水波环 + 光晕 +
+        // 游动轨迹环（叠加在基础回手飞行之上）；其余回手源走基础飞行
+        if (node) {
+          if (payload.triggerProtocol === 'water') playWaterReturn(node, payload);
+          else playReturn(node, payload);
+        }
         break;
       case 'card:shifted':
         // darkness-0/1/4 的偏转（触发卡协议 darkness）：播烟桥路线（起点→终点）；

@@ -989,6 +989,55 @@ body {
 .log { border-top: 1px solid #444; margin-top: 8px; padding-top: 6px; font-size: 12px; color: #999; max-height: 120px; overflow-y: auto; }
 .winner-banner { font-size: 24px; font-weight: bold; color: #4caf50; text-align: center; padding: 12px; }
 
+/* ===== Water 回手特效（water-3/water-4）：蓝色水波环 + 光晕 + 游动轨迹环 =====
+ * 全部 body 级 fixed + pointer-events:none（JS 定时清理，见 effects/index.ts）：
+ * - .water-return-ring：扩散水环（border 圆环缩放 + 淡出）；big = 回手前大环、
+ *   trail = 飞行路径上的小轨迹环（鱼迹）；
+ * - .water-return-glow：回手前卡框蓝色光晕（呼吸发光 → 飞行期间随行渐弱）；
+ * - .water-return-settle：回手后落点（手牌末尾）框特效，2 秒后淡出。 */
+.water-return-ring {
+  position: fixed;
+  pointer-events: none;
+  border-radius: 50%;
+  border: 3px solid rgba(64, 180, 255, 0.9);
+  box-shadow: 0 0 14px rgba(64, 180, 255, 0.55);
+  animation: water-ring-expand 0.7s ease-out forwards;
+}
+.water-return-ring.trail {
+  border-width: 2px;
+  box-shadow: 0 0 8px rgba(64, 180, 255, 0.45);
+}
+@keyframes water-ring-expand {
+  0% { transform: scale(0.2); opacity: 0.95; }
+  100% { transform: scale(1.4); opacity: 0; }
+}
+.water-return-glow {
+  position: fixed;
+  pointer-events: none;
+  border-radius: 8px;
+  border: 2px solid rgba(64, 180, 255, 0.85);
+  box-shadow: 0 0 22px rgba(64, 180, 255, 0.8), inset 0 0 16px rgba(64, 180, 255, 0.4);
+  animation: water-glow-in 0.7s ease forwards;
+}
+@keyframes water-glow-in {
+  0% { opacity: 0; box-shadow: 0 0 0 rgba(64, 180, 255, 0), inset 0 0 0 rgba(64, 180, 255, 0); }
+  35% { opacity: 1; box-shadow: 0 0 28px rgba(64, 180, 255, 0.95), inset 0 0 22px rgba(64, 180, 255, 0.55); }
+  100% { opacity: 0.7; box-shadow: 0 0 16px rgba(64, 180, 255, 0.6), inset 0 0 12px rgba(64, 180, 255, 0.3); }
+}
+.water-return-settle {
+  position: fixed;
+  pointer-events: none;
+  border-radius: 8px;
+  border: 2px solid rgba(64, 180, 255, 0.85);
+  box-shadow: 0 0 20px rgba(64, 180, 255, 0.75), inset 0 0 16px rgba(64, 180, 255, 0.4);
+  animation: water-settle 2s ease forwards;
+}
+@keyframes water-settle {
+  0% { opacity: 0.95; box-shadow: 0 0 26px rgba(64, 180, 255, 0.9), inset 0 0 20px rgba(64, 180, 255, 0.55); }
+  75% { opacity: 0.85; }
+  100% { opacity: 0; box-shadow: 0 0 4px rgba(64, 180, 255, 0); }
+}
+
 /* ===== 草案（R9 三栏重设计：P1 已选 | 协议池 每行 4 个 | P2 已选） ===== */
 .draft-screen { text-align: center; }
 .title { margin-bottom: 10px; }
