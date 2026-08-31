@@ -1851,8 +1851,9 @@ body.dragging { cursor: grabbing; user-select: none; }
  *   写朝向旋转，使藤蔓垂入协议卡内）；内层 .life-compiled-grow 一次性缠绕生长（scaleY）；
  *   svg .life-compiled-vine-curve 缓慢左右摇摆（绕锚点 ±8°，4.5s，负 delay 交错相位）。
  *   R15：藤蔓更短（JS 生成 ≤42px，约为旧 85/90px 的一半；wrap 高度上限随之改为 42px，
- *   实际高度由 JS 逐根覆写行内 height）——锚点沿边为不规则手挑分数，且同一锚点可发出
- *   1-3 根藤蔓（同点不同朝向角 → 簇生有机感）；
+ *   实际高度由 JS 逐根覆写行内 height）——锚点沿边为不规则手挑分数；R16：锚点加密到
+ *   17 个（≥14）均匀绕框（上/右/下各 4、左 5），每点 1-2 根（共享锚点特性保留）共
+ *   21 根，覆盖更均匀、重叠更少；
  * - .compiled-fx-life .life-backlight：深绿背光（radial + conic，blur，慢速旋转 ——
  *   卡面被浓绿辉光笼罩，持续不刺眼）。
  * 静态兜底：.protocol.compiled-fx-life（与 fire/light/darkness 同模式）。 */
