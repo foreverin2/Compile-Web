@@ -124,7 +124,8 @@ export type Op =
   | { op: 'shift'; uid: string; targetLine: Line; allowCovered?: boolean }
   | { op: 'playTopDeck'; line: Line; faceUp: boolean }
   | { op: 'playFromHand'; uid: string; line: Line; faceUp: boolean }
-  | { op: 'reveal'; uid: string };
+  | { op: 'reveal'; uid: string }
+  | { op: 'rearrangeProtocols'; a: Line; b: Line };
 
 /** 效果步骤：选择请求 或 操作。既有 types.ts 已占用 Step（回合步骤），此处命名 EffectStep */
 export type EffectStep = ChoiceRequest | Op;

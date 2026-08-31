@@ -41,7 +41,7 @@ describe('playFromHand op', () => {
     const s = draftFireP1();
     const top = makeCard('ph-bc', 0, 'field', true, 0, 0);
     s.players[0].stacks[0] = [top];
-    const hc = makeCard('water-1', 0, 'hand');
+    const hc = makeCard('metal-1', 0, 'hand'); // 未注册协议卡：正面落地不触发中指令（水卡已实现，不再惰性）
     s.players[0].hand.push(hc);
     const handBefore = s.players[0].hand.length; // 含 hc
     const deckBefore = s.players[0].deck.length;

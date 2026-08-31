@@ -129,7 +129,7 @@ describe('darkness protocol effects', () => {
   it('darkness-1: flip an opponent card, then optional line shift moves it', () => {
     const s = draftDarknessP1();
     advanceToStep(s, 0, 'action');
-    const target = makeCard('water-1', 1, 'field', false, 1, 0);
+    const target = makeCard('metal-1', 1, 'field', false, 1, 0);
     s.players[1].stacks[1] = [target];
     s.players[0].hand = [makeCard('darkness-1', 0, 'hand')];
     const card = s.players[0].hand[0];
@@ -145,7 +145,7 @@ describe('darkness protocol effects', () => {
   it('darkness-1: optional line shift can be skipped — card stays on its original line', () => {
     const s = draftDarknessP1();
     advanceToStep(s, 0, 'action');
-    const target = makeCard('water-1', 1, 'field', false, 1, 0);
+    const target = makeCard('metal-1', 1, 'field', false, 1, 0);
     s.players[1].stacks[1] = [target];
     s.players[0].hand = [makeCard('darkness-1', 0, 'hand')];
     const card = s.players[0].hand[0];
@@ -169,7 +169,7 @@ describe('darkness protocol effects', () => {
     const s = draftDarknessP1();
     advanceToStep(s, 0, 'action');
     // 被翻卡在对手线 1（≠ darkness-1 所在线 0）→ darkness-1 自己的线（0）是合法平移目标
-    const target = makeCard('water-1', 1, 'field', false, 1, 0);
+    const target = makeCard('metal-1', 1, 'field', false, 1, 0);
     s.players[1].stacks[1] = [target];
     s.players[0].hand = [makeCard('darkness-1', 0, 'hand')];
     const card = s.players[0].hand[0];
@@ -190,7 +190,7 @@ describe('darkness protocol effects', () => {
     const s = draftDarknessP1();
     advanceToStep(s, 0, 'action');
     // 被翻卡在对手线 0（= darkness-1 所在线）→ 该线仍被排除
-    const target = makeCard('water-1', 1, 'field', false, 0, 0);
+    const target = makeCard('metal-1', 1, 'field', false, 0, 0);
     s.players[1].stacks[0] = [target];
     s.players[0].hand = [makeCard('darkness-1', 0, 'hand')];
     const card = s.players[0].hand[0];

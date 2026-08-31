@@ -1,5 +1,5 @@
 import type { Card, GameState, Line, Op, PendingEffect, PlayerId, StepResult } from '../models/types';
-import { drawCards, discardFromHand } from '../engine/deck';
+import { drawCards, discardFromHand, shuffle } from '../engine/deck';
 import { advanceStep } from '../engine/turn';
 import { gameBus } from '../events/bus';
 import { createCtx, emitCardEvent, findCard, isUncovered, nextEffectId } from './context';
@@ -8,6 +8,8 @@ import { EFFECTS } from './registry';
 import './cards/fire';
 import './cards/light';
 import './cards/darkness';
+import './cards/water';
+import './cards/life';
 
 function topEffect(s: GameState): PendingEffect | undefined {
   return s.pendingEffects[s.pendingEffects.length - 1];
@@ -214,6 +216,14 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
     }
     case 'playTopDeck': {
       const p = s.players[pe.player];
+      // R11.4（与 drawCards 一致）：牌库空且弃牌堆有牌时，洗弃牌堆重组为牌库
+      // （回牌库卡必须翻回反面 = 秘密信息区）；两者皆空才抛错（生成器已按
+      // deckTopAvailable 守卫，此处兜底防静默吞牌）
+      if (p.deck.length === 0 && p.trash.length > 0) {
+        p.deck = shuffle(p.trash);
+        p.trash = [];
+        for (const c of p.deck) c.faceUp = false;
+      }
       const card = p.deck.pop();
       if (!card) throw new Error('deck is empty');
       card.zone = 'float';
@@ -239,6 +249,19 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       // playFromHand（手牌打出）与 playTopDeck（牌堆顶打出）区分事件：
       // FX 层据此从手牌卡 rect 起飞（而非牌库 rect）飞入目标线堆叠末尾
       emitCardEvent(s, 'card:hand-played', card, { line: op.line });
+      break;
+    }
+    case 'rearrangeProtocols': {
+      // 重排协议：交换效果玩家两个协议位（defId 与 compiled 状态随数组元素整体移动；
+      // 线堆叠/卡牌留在原位 —— 与参考实现"协议顺序变更、场上卡不动"语义一致）
+      if (op.a === op.b) throw new Error('cannot swap a protocol position with itself');
+      const protos = s.players[pe.player].protocols;
+      const tmp = protos[op.a];
+      protos[op.a] = protos[op.b];
+      protos[op.b] = tmp;
+      s.log.push(`P${pe.player + 1} 重排协议：交换位置 ${op.a + 1} 与 ${op.b + 1}`);
+      // FX hook：未来的协议交换动画订阅 protocols:rearranged（含玩家与交换位置）
+      gameBus.emit({ type: 'protocols:rearranged', state: s, payload: { player: pe.player, a: op.a, b: op.b } });
       break;
     }
     case 'reveal': {
