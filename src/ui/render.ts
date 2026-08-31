@@ -523,6 +523,26 @@ function renderHand(
       n.style.transform = '';
     }
   });
+  // ITEM 6（fix: 翻面卡手——焦点态保持）：选中卡在渲染时就保持上浮/扇形推开。
+  // 点击「翻面」后重渲染重建手牌，指针停在重建的「翻面」按钮上（无新 mouseenter），
+  // 若不主动上浮会从 popped 掉回普通（每翻一次卡都"塌"一下、卡手感）。
+  // 此处按选中卡索引应用与悬停完全相同的 popped + 扇形推开（.no-anim 抑制首帧过渡 →
+  // 落地即保持上浮）；鼠标移出手牌区（mouseleave 全量复位）或改选其它卡（新选中卡接管）
+  // 时自然复位，不会卡死在上浮态。
+  const selectedIdx = nodes.findIndex((n) => n.classList.contains('selected'));
+  if (selectedIdx >= 0) {
+    const node = nodes[selectedIdx];
+    node.classList.add('popped');
+    node.style.transform = '';
+    for (let j = 0; j < total; j++) {
+      if (j === selectedIdx) continue;
+      const n = nodes[j];
+      n.classList.remove('popped');
+      // 与 mouseenter 同款扇形推开：P1 左起 j<sel 推向左、j>sel 推向右；P2 镜像
+      const dx = reversed ? (selectedIdx - j) * 12 : (j - selectedIdx) * 12;
+      n.style.transform = `translateX(${dx}px)`;
+    }
+  }
   return hand;
 }
 
@@ -678,9 +698,57 @@ const compiledFxCells: { defId: string; holder: HTMLElement }[] = [];
 function buildCompiledFx(defId: string): HTMLElement {
   const layer = el('div', `compiled-fx compiled-fx-${defId}`);
   if (defId === 'fire') layer.appendChild(el('div', 'fire-backlight'));
+  // life：深绿背光（真实元素随持久层存活，动画不重启；见 styles.css .compiled-fx-life .life-backlight）
+  if (defId === 'life') layer.appendChild(el('div', 'life-backlight'));
   appendCompiledRing(layer, defId);
   document.body.appendChild(layer);
   return layer;
+}
+
+/** Life 已编译藤蔓（复用 Item 1 翻转藤蔓观感——粗长 S 曲线、绿光描边）：
+ *  定位 div（transform-origin 0 0 = 卡框锚点，外层 transform 专用于朝向旋转，使藤蔓垂入
+ *  协议卡内）+ 内层 .life-compiled-grow（一次性的缠绕生长 scaleY）+ svg .life-compiled-vine-curve
+ *  （缓慢左右摇摆，负 delay 按 i 交错相位 → 各藤蔓不同时刻摇摆，不齐步）。
+ *  三层结构避免 grow（scaleY）与 sway（rotate）两个 transform 动画互相覆盖。 */
+function buildCompiledVine(rot: number, len: number, swayPhase: number): HTMLElement {
+  const wrap = el('div', 'life-compiled-vine');
+  wrap.style.transform = `rotate(${rot}deg)`;
+  const grow = el('div', 'life-compiled-grow');
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('width', '30');
+  svg.setAttribute('height', String(len));
+  svg.setAttribute('viewBox', `0 0 30 ${len}`);
+  svg.setAttribute('class', 'life-compiled-vine-curve');
+  svg.style.animationDelay = `${-swayPhase}s`; // 单个负 delay 交错相位（svg 只有 sway 一个动画；双值列表多余值会被忽略）
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', `M7,2 C16,${len * 0.3} 24,${len * 0.62} 12,${len - 3}`);
+  path.setAttribute('fill', 'none');
+  path.setAttribute('stroke', '#3ddc84');
+  path.setAttribute('stroke-width', '11');
+  path.setAttribute('stroke-linecap', 'round');
+  svg.appendChild(path);
+  grow.appendChild(svg);
+  wrap.appendChild(grow);
+  return wrap;
+}
+
+/** Water 已编译海浪线：横向 SVG 正弦波（preserveAspectRatio none 拉伸铺满容器宽度）。
+ *  流动（dashoffset）作用于 svg path，浮现/浮动作用于 .water-wave 容器。 */
+function buildWaterWave(): HTMLElement {
+  const wrap = el('div', 'water-wave');
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 220 24');
+  svg.setAttribute('preserveAspectRatio', 'none');
+  svg.setAttribute('class', 'water-wave-curve');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', 'M0,12 Q13.75,0 27.5,12 T55,12 T82.5,12 T110,12 T137.5,12 T165,12 T192.5,12 T220,12');
+  path.setAttribute('fill', 'none');
+  path.setAttribute('stroke', 'rgba(64, 180, 255, 0.8)');
+  path.setAttribute('stroke-width', '2.5');
+  path.setAttribute('stroke-linecap', 'round');
+  svg.appendChild(path);
+  wrap.appendChild(svg);
+  return wrap;
 }
 
 /**
@@ -691,9 +759,8 @@ function buildCompiledFx(defId: string): HTMLElement {
  */
 function appendCompiledRing(box: HTMLElement, defId: string): void {
   const ring = el('div', `compiled-ring compiled-ring-${defId}`);
-  // TODO(water/life FX): add protocol-specific compiled-ring variants for 'water'/'life'
-  // here when the user specifies them — currently they render the base 2.5s ring + default
-  // orange gradient + rocks (compiled-fx-<defId> class is already applied for CSS hooks).
+  // 每协议配色由 .compiled-ring-<defId> 决定（fire = 岩浆黑岩/红岩；life/water 各自专属
+  // 变体在函数末尾追加——藤蔓缠绕 / 中心波纹 + 海浪线，见下方 defId === 'life'/'water' 块）。
   // 火焰（fire）专属参数：慢速岩浆流（56s/圈，CSS .compiled-fx-fire 覆写 animation-duration，
   // 速度再减半：28s → 56s）+ 岩石加密（90 岩 = 60 黑 + 30 红，2 黑 1 红交替）→ 环周被
   // 岩石基本填平（12px × 90 ≈ 1080px ≥ 环带周长 ≈1017px，轻微重叠）。红岩一半原色暗红
@@ -813,6 +880,62 @@ function appendCompiledRing(box: HTMLElement, defId: string): void {
       smoke.appendChild(puff);
     }
     box.appendChild(smoke);
+  }
+  // ITEM 5：life 已编译 → 20+ 根粗长绿色藤蔓从卡牌框起缠绕协议卡（复用 Item 1 翻转藤蔓
+  // 观感：粗 S 曲线 + 绿光描边）+ 缓慢左右摇摆；藤蔓为层内 z 2（环带之上、卡面之上——
+  // 缠绕读作覆盖在协议卡上）。绿色框光由 .compiled-ring-life 呼吸动画提供、深绿背光为
+  // .life-backlight（buildCompiledFx 挂载）。定位用百分比 + margin 居中（跟随层尺寸，
+  // 图片未加载时也不飞离卡框）。
+  if (defId === 'life') {
+    const VINES_PER_SIDE = 6; // 4 边 × 6 = 24 根（≥ 20）
+    const VINE_LEN = 90; // 与 Item 1 翻转藤蔓同量级（85/90px）
+    const VW = 30; // wrap 宽 = svg 宽（margin 居中基准）
+    const SWAY_CYCLE_S = 4.5; // 摇摆周期（与 CSS .life-compiled-vine-curve 一致）
+    for (let i = 0; i < VINES_PER_SIDE * 4; i++) {
+      const side = Math.floor(i / VINES_PER_SIDE); // 0 上 1 右 2 下 3 左
+      const pos = (i % VINES_PER_SIDE + 0.5) / VINES_PER_SIDE; // 0..1 沿边位置（避开四角）
+      const vine = buildCompiledVine(side * 90, VINE_LEN, (i * 0.55) % SWAY_CYCLE_S);
+      if (side === 0) {
+        vine.style.left = `${pos * 100}%`;
+        vine.style.marginLeft = `${-VW / 2}px`;
+        vine.style.top = '0px';
+      } else if (side === 1) {
+        vine.style.left = '100%';
+        vine.style.top = `${pos * 100}%`;
+        vine.style.marginTop = `${-VW / 2}px`;
+      } else if (side === 2) {
+        vine.style.left = `${pos * 100}%`;
+        vine.style.marginLeft = `${-VW / 2}px`;
+        vine.style.top = '100%';
+      } else {
+        vine.style.left = '0px';
+        vine.style.top = `${pos * 100}%`;
+        vine.style.marginTop = `${-VW / 2}px`;
+      }
+      box.appendChild(vine);
+    }
+  }
+  // ITEM 5：water 已编译 → 卡中心背后持续扩散的蓝色波纹层（多个圆环交错相位 → 连续不断，
+  // 接近卡框时渐渐消散）+ 时不时出现的海浪线（长周期浮现 + 交错相位 → 偶发涌现）。
+  // 蓝色框光由 .compiled-ring-water 呼吸动画提供。波纹/海浪为层内 z 1（环带之下）。
+  if (defId === 'water') {
+    const ripples = el('div', 'water-ripples');
+    const RIPPLE_COUNT = 5;
+    for (let i = 0; i < RIPPLE_COUNT; i++) {
+      const r = el('div', 'water-ripple');
+      r.style.animationDelay = `${-(i * 1.1)}s`; // 交错相位 → 波纹连续不断出现
+      ripples.appendChild(r);
+    }
+    box.appendChild(ripples);
+    const waves = el('div', 'water-waves');
+    const WAVE_COUNT = 3;
+    for (let i = 0; i < WAVE_COUNT; i++) {
+      const w = buildWaterWave();
+      w.style.animationDelay = `${-(i * 3.2)}s`; // 长周期交错 → "时不时"涌现
+      w.style.top = `${24 + i * 22}%`;
+      waves.appendChild(w);
+    }
+    box.appendChild(waves);
   }
 }
 
@@ -1450,12 +1573,12 @@ export function resetUiState(): void {
   closeZoom();
   closeTrashViewer();
   winOverlayShown = false;
-  // 飞行中的协议瞬时特效（life 藤蔓容器 / 绿光 / water 水环·光晕·落点框）与
+  // 飞行中的协议瞬时特效（life 藤蔓容器 / 绿光 / water 水环·光晕·落点框 / 翻面覆盖层）与
   // 抽牌/揭示幽灵：自身定时器会在数百毫秒内移除，但重置时立即清扫，避免残留进新局
   // （旧动画的 done() 完成回调由 main.ts resetEpoch 世代守卫放弃渲染）。
   for (const fx of document.querySelectorAll<HTMLElement>(
     '.life-flip-fx, .life-flip-glow, .water-return-ring, .water-return-glow, .water-return-settle, ' +
-      '.draw-ghost, .reveal-fly-ghost'
+      '.water-return-trail, .flip-overlay-fx, .draw-ghost, .reveal-fly-ghost'
   )) {
     fx.remove();
   }

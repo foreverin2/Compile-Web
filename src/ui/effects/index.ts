@@ -5,7 +5,8 @@ import { mountCut } from '../fx/discard-cut';
 const FX_REMOVE_MS = 1200;
 const BASE_Z = 300; // 基础行为特效层
 const EXTRA_Z = 301; // 协议专属额外特效层（叠加在基础特效之上）
-const MOVE_MS = 450; // 平移类特效时长（回手/偏转）
+const MOVE_MS = 450; // 平移类特效时长（偏转/打出/重排等）
+const RETURN_MOVE_MS = 700; // 回手专属飞行时长（450 → 700ms：回手更从容、更刻意）
 // Darkness 偏转烟桥（shift-bridge）节奏：桥渐显 → 卡飞过（MOVE_MS）→ 桥渐隐 → 清理
 const BRIDGE_IN_MS = 350;
 const BRIDGE_OUT_MS = 400;
@@ -185,16 +186,22 @@ function playCut(node: HTMLElement, payload: FxCardPayload): void {
   window.setTimeout(() => clone.remove(), FX_REMOVE_MS);
 }
 
-/** 基础行为特效：翻面——旧面翻转到新面（rotateY；场上横置卡用 rotateX 使翻面也横着） */
-function playFlip(node: HTMLElement, payload: FxCardPayload): void {
-  const rect = node.getBoundingClientRect();
-  if (rect.width === 0 || rect.height === 0) return;
-  const cw = node.classList.contains('rot-cw');
-  const ccw = node.classList.contains('rot-ccw');
+/** 构建 3D 翻面覆盖层（旧面 front + 新面 back，透视内建）。调用方决定动画时机与清理：
+ *  - playFlip：构建后立即 rAF 触发 rotate 过渡，420ms 后移除；
+ *  - playLifeFlip：覆盖层在事件时同步构建（原卡 rect 此刻有效——重渲染会重建节点、
+ *    rect 归零），展开动画期间保持旧面静止（与新状态卡同位同尺寸 → 视觉无缝），
+ *    展开完成后（~1.65s）再触发翻转、+420ms 移除。返回 null 表示 rect 无效（调用方跳过）。 */
+function buildFlipOverlay(
+  rect: DOMRect,
+  cw: boolean,
+  ccw: boolean,
+  oldSrc: string,
+  newSrc: string,
+): { wrap: HTMLElement; inner: HTMLElement } | null {
+  if (rect.width === 0 || rect.height === 0) return null;
   const horizontal = cw || ccw;
-  const oldSrc = node.querySelector('img')?.src ?? cardFaceSrc(payload.defId, payload.faceUp);
-  const newSrc = cardFaceSrc(payload.defId, payload.faceUp);
   const wrap = document.createElement('div');
+  wrap.className = 'flip-overlay-fx'; // resetUiState 清扫兜底（覆盖层最长 ~2.07s，重置时立即移除）
   // 场上横置卡（rot-cw/rot-ccw）：与 buildFxCard 同一规则——wrap 以未旋转布局盒尺寸
   // （宽 = rect 高、高 = rect 宽）定位于 rect 中心后旋转 ±90°，翻面期间卡牌朝向与
   // 真实场上卡一致；已有的 rotateX/Y 面翻在 wrap 局部系内组合，最终仍保持场上朝向。
@@ -221,28 +228,41 @@ function playFlip(node: HTMLElement, payload: FxCardPayload): void {
   inner.appendChild(back);
   wrap.appendChild(inner);
   document.body.appendChild(wrap);
+  return { wrap, inner };
+}
+
+/** 基础行为特效：翻面——旧面翻转到新面（rotateY；场上横置卡用 rotateX 使翻面也横着） */
+function playFlip(node: HTMLElement, payload: FxCardPayload): void {
+  const rect = node.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return;
+  const cw = node.classList.contains('rot-cw');
+  const ccw = node.classList.contains('rot-ccw');
+  const oldSrc = node.querySelector('img')?.src ?? cardFaceSrc(payload.defId, payload.faceUp);
+  const overlay = buildFlipOverlay(rect, cw, ccw, oldSrc, cardFaceSrc(payload.defId, payload.faceUp));
+  if (!overlay) return;
   requestAnimationFrame(() => {
-    inner.style.transform = horizontal ? 'rotateX(180deg)' : 'rotateY(180deg)';
+    overlay.inner.style.transform = cw || ccw ? 'rotateX(180deg)' : 'rotateY(180deg)';
   });
-  window.setTimeout(() => wrap.remove(), 420);
+  window.setTimeout(() => overlay.wrap.remove(), 420);
 }
 
 /* ===== Life 翻转专属特效：绿色藤蔓缠绕 + 绿光（life-1/life-2 及未来生命翻转） =====
  * 触发：card:flipped 且 payload.triggerProtocol === 'life'。翻面本身复用 playFlip
  * （非 life 翻转保持原样），本函数只在它周围叠加藤蔓特效：
- * ① 翻转前：8 根绿色藤蔓沿卡框四边（每边 2 根）缓慢出现并缠绕上来——SVG S 曲线、
- *    从边缘向卡内生长（transform-origin 0 0 = 锚点），长度 52px ≥ 卡牌半长轴 1/3；
- *    + 卡框绿光（呼吸发光）；
- * ② 翻转完成后（~650ms）：藤蔓逐渐收缩退去；
+ * ① 翻转前：12 根粗长绿色藤蔓沿卡框四边（每边 3 根）缓慢出现并缠绕上来——SVG S 曲线、
+ *    从边缘向卡内生长（transform-origin 0 0 = 锚点），长度 85px（52 → 85：离卡牌中心
+ *    更远、缠绕覆盖更广）+ 卡框绿光（呼吸发光）；
+ * ② 展开动画 1.9s（0.9s + 1s）后（~1.65s）卡面开始翻转，藤蔓同时逐渐收缩退去；
  * ③ 卡框绿光持续 ~2 秒后淡出。
- * 全部 pointer-events:none、JS 定时清理（无泄漏）：8 根藤蔓统一挂在 .life-flip-fx
+ * 全部 pointer-events:none、JS 定时清理（无泄漏）：12 根藤蔓统一挂在 .life-flip-fx
  * 容器（body 级 fixed、无 transform/z-index → 不改变子元素 fixed 视口坐标、不建
  * stacking context），收缩完成后整体移除；容器类也被 render.ts resetUiState 批量
- * 清扫（应用内重置路径兜底）。绿光单独挂 body（需持续 ~2 秒，长于藤蔓容器），
+ * 清扫（应用内重置路径兜底）。绿光单独挂 body（需持续 ~3.6 秒，长于藤蔓容器），
  * 自带移除定时器 + resetUiState 兜底。 */
-const LIFE_AFTER_MS = 2000; // 翻转后卡框绿光持续时间
-const LIFE_VINE_LEN = 52; // 藤蔓长度（≥ 场上/手牌/协议卡半长轴 1/3）
-const LIFE_VINE_SHRINK_MS = 650; // 翻转完成后开始收缩藤蔓的时机
+const LIFE_AFTER_MS = 3600; // 翻转后卡框绿光持续时间（含拉长的展开/消退：翻转 ~1.65s + 持续 ~2s）
+const LIFE_VINE_LEN = 85; // 藤蔓长度（52 → 85px：离卡牌中心更远、缠绕覆盖更广）
+const LIFE_VINE_SHRINK_MS = 1650; // 展开延长 1 秒后翻转 / 开始收缩藤蔓的时机（650 → 1650ms）
+const LIFE_VINE_SHRINK_DUR_MS = 1550; // 藤蔓消退动画时长（0.55s → 1.55s，消退 +1s）
 
 /** 构建一根藤蔓：定位 div（旋转朝向卡内）+ SVG S 曲线（生长/收缩动画作用于其上） */
 function buildLifeVine(rot: number): HTMLElement {
@@ -250,15 +270,15 @@ function buildLifeVine(rot: number): HTMLElement {
   wrap.className = 'life-flip-vine';
   wrap.style.transform = `rotate(${rot}deg)`;
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('width', '22');
+  svg.setAttribute('width', '30');
   svg.setAttribute('height', String(LIFE_VINE_LEN));
-  svg.setAttribute('viewBox', `0 0 22 ${LIFE_VINE_LEN}`);
+  svg.setAttribute('viewBox', `0 0 30 ${LIFE_VINE_LEN}`);
   svg.setAttribute('class', 'life-flip-vine-curve');
   const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  path.setAttribute('d', `M5,2 C12,${LIFE_VINE_LEN * 0.3} 17,${LIFE_VINE_LEN * 0.62} 9,${LIFE_VINE_LEN - 3}`);
+  path.setAttribute('d', `M7,2 C16,${LIFE_VINE_LEN * 0.3} 24,${LIFE_VINE_LEN * 0.62} 12,${LIFE_VINE_LEN - 3}`);
   path.setAttribute('fill', 'none');
   path.setAttribute('stroke', '#3ddc84');
-  path.setAttribute('stroke-width', '3.2');
+  path.setAttribute('stroke-width', '11'); // 3.2 → 11（调粗很多，约 3.4×）
   path.setAttribute('stroke-linecap', 'round');
   svg.appendChild(path);
   wrap.appendChild(svg);
@@ -275,19 +295,23 @@ function playLifeFlip(node: HTMLElement, payload: FxCardPayload): void {
   const T = rect.top;
   const W = rect.width;
   const H = rect.height;
-  // 藤蔓锚点：每边 2 根（20%/80% 处），transform-origin 0 0 = 锚点（卡框边缘点），
-  // 旋转使藤蔓垂入卡内：上边 0°（向下）、右边 90°（向左）、下边 180°（向上）、
-  // 左边 −90°（向右）——局部 +y（藤蔓长度方向）经旋转映射为朝卡内的方向。
-  // （rot 90：局部 (0,52) → 屏幕 (−52,0) = 锚点左侧 = 入卡；rot −90：→ (52,0) = 右侧 = 入卡）
+  // 藤蔓锚点：每边 3 根（15%/50%/85% 处，共 12 根），transform-origin 0 0 = 锚点
+  // （卡框边缘点），旋转使藤蔓垂入卡内：上边 0°（向下）、右边 90°（向左）、
+  // 下边 180°（向上）、左边 −90°（向右）——局部 +y（藤蔓长度方向）经旋转映射为朝卡内的方向。
+  // （rot 90：局部 (0,85) → 屏幕 (−85,0) = 锚点左侧 = 入卡；rot −90：→ (85,0) = 右侧 = 入卡）
   const anchors: { x: number; y: number; rot: number }[] = [
-    { x: L + W * 0.2, y: T, rot: 0 },
-    { x: L + W * 0.8, y: T, rot: 0 },
-    { x: L + W, y: T + H * 0.2, rot: 90 },
-    { x: L + W, y: T + H * 0.8, rot: 90 },
-    { x: L + W * 0.2, y: T + H, rot: 180 },
-    { x: L + W * 0.8, y: T + H, rot: 180 },
-    { x: L, y: T + H * 0.2, rot: -90 },
-    { x: L, y: T + H * 0.8, rot: -90 },
+    { x: L + W * 0.15, y: T, rot: 0 },
+    { x: L + W * 0.5, y: T, rot: 0 },
+    { x: L + W * 0.85, y: T, rot: 0 },
+    { x: L + W, y: T + H * 0.15, rot: 90 },
+    { x: L + W, y: T + H * 0.5, rot: 90 },
+    { x: L + W, y: T + H * 0.85, rot: 90 },
+    { x: L + W * 0.15, y: T + H, rot: 180 },
+    { x: L + W * 0.5, y: T + H, rot: 180 },
+    { x: L + W * 0.85, y: T + H, rot: 180 },
+    { x: L, y: T + H * 0.15, rot: -90 },
+    { x: L, y: T + H * 0.5, rot: -90 },
+    { x: L, y: T + H * 0.85, rot: -90 },
   ];
   // 藤蔓容器（body 级 fixed；无 transform/z-index → 子元素 fixed 坐标仍按视口、
   // 不建 stacking context；pointer-events:none 透传点击）。收缩完成后整体移除。
@@ -313,21 +337,33 @@ function playLifeFlip(node: HTMLElement, payload: FxCardPayload): void {
   glow.style.height = `${H}px`;
   glow.style.zIndex = String(EXTRA_Z);
   document.body.appendChild(glow);
-  // ② 翻转完成后藤蔓收缩退去
+  // ② 展开动画延长 1 秒后：卡面开始翻转 + 藤蔓开始收缩退去（同一时刻触发）
   window.setTimeout(() => {
     for (const vine of fxWrap.querySelectorAll<HTMLElement>('.life-flip-vine')) {
       vine.classList.add('shrinking');
     }
   }, LIFE_VINE_SHRINK_MS);
-  // 收缩（550ms）完成后整体移除藤蔓容器（防 DOM 泄漏；重置路径由 resetUiState 兜底）
-  window.setTimeout(() => fxWrap.remove(), LIFE_VINE_SHRINK_MS + 600);
-  // ③ 卡框绿光持续 ~2 秒后淡出（CSS 动画自带尾部淡出，JS 只负责移除）
+  // 收缩（1.55s）完成后整体移除藤蔓容器（防 DOM 泄漏；重置路径由 resetUiState 兜底）
+  window.setTimeout(() => fxWrap.remove(), LIFE_VINE_SHRINK_MS + LIFE_VINE_SHRINK_DUR_MS + 100);
+  // ③ 卡框绿光持续（覆盖展开 + 翻转 + 消退全程）后淡出（CSS 动画自带尾部淡出，JS 只负责移除）
   window.setTimeout(() => glow.remove(), LIFE_AFTER_MS + 320);
-  // 基础翻面照常（本函数只叠加藤蔓，不替换翻面）
-  playFlip(node, payload);
+  // 基础翻面照常（本函数只叠加藤蔓，不替换翻面）——但延迟到藤蔓充分展开之后
+  // （展开动画 0.9s → 1.9s，翻面在 ~1.65s 才开始，"先展开、后翻转"）。
+  // 覆盖层必须此刻同步构建：重渲染随后会重建原卡节点（rect 归零），而展开期间
+  // 覆盖层保持旧面静止（与新状态卡同位同尺寸 → 视觉无缝），~1.65s 后再播 3D 翻转。
+  const cw = node.classList.contains('rot-cw');
+  const ccw = node.classList.contains('rot-ccw');
+  const oldSrc = node.querySelector('img')?.src ?? cardFaceSrc(payload.defId, payload.faceUp);
+  const flipOverlay = buildFlipOverlay(rect, cw, ccw, oldSrc, cardFaceSrc(payload.defId, payload.faceUp));
+  if (flipOverlay) {
+    window.setTimeout(() => {
+      flipOverlay.inner.style.transform = cw || ccw ? 'rotateX(180deg)' : 'rotateY(180deg)';
+    }, LIFE_VINE_SHRINK_MS);
+    window.setTimeout(() => flipOverlay.wrap.remove(), LIFE_VINE_SHRINK_MS + 420);
+  }
 }
 
-/** 基础行为特效：回手——从场上丝滑平移到持有者手牌末尾 */
+/** 基础行为特效：回手——从场上丝滑平移到持有者手牌末尾（专属 RETURN_MOVE_MS，更从容） */
 function playReturn(node: HTMLElement, payload: FxCardPayload): void {
   const rect = node.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0 || payload.owner === undefined) return;
@@ -337,24 +373,26 @@ function playReturn(node: HTMLElement, payload: FxCardPayload): void {
   const target = handEndPos(hand, payload.owner);
   const dx = target.x - (rect.left + rect.width / 2);
   const dy = target.y - (rect.top + rect.height / 2);
-  clone.style.transition = `transform ${MOVE_MS}ms cubic-bezier(0.2, 0.7, 0.3, 1), opacity ${MOVE_MS}ms ease`;
+  clone.style.transition = `transform ${RETURN_MOVE_MS}ms cubic-bezier(0.2, 0.7, 0.3, 1), opacity ${RETURN_MOVE_MS}ms ease`;
   requestAnimationFrame(() => {
     // 组合 --fx-rot：场上横置卡平移时保持 ±90° 朝向（translate 在最外层 → 屏幕系位移）
     clone.style.transform = `translate(${dx}px, ${dy}px) rotate(var(--fx-rot, 0deg)) scale(0.85)`;
     clone.style.opacity = '0.5';
   });
-  window.setTimeout(() => clone.remove(), MOVE_MS + 80);
+  window.setTimeout(() => clone.remove(), RETURN_MOVE_MS + 80);
 }
 
-/* ===== Water 回手专属特效：蓝色水波环 + 光晕 + 游动轨迹环（water-3/water-4 及未来水回手） =====
+/* ===== Water 回手专属特效：蓝色水波环 + 光晕 + 游动轨迹环 + 水拖尾（water-3/water-4 及未来水回手） =====
  * 触发：card:returned 且 payload.triggerProtocol === 'water'。飞行本身复用 playReturn
  * （非水回手保持原样），本函数只在它周围叠加水特效：
- * ① 回手前：卡框周围一圈扩散的蓝色水波环 + 蓝色光晕 + 边框发光（body 级 fixed）；
- * ② 飞行中：路径 25%/50%/75% 处各出现一个小号扩散水环（模拟鱼在水面游动的轨迹）；
- * ③ 回手后：落点（手牌末尾）卡框特效持续 2 秒后淡出。
+ * ① 回手前：卡框周围一圈扩散的大号蓝色水波环 + 蓝色光晕 + 边框发光（body 级 fixed）；
+ * ② 飞行中：路径 25%/50%/75% 处各出现一个小号扩散水环 + 一条随行水拖尾
+ *    （.water-return-trail：从起点延伸到卡当前位置的渐变光带，尾端渐隐——鱼在水面游动的尾迹）；
+ * ③ 回手后：落点（手牌末尾）卡框特效持续 3 秒后淡出。
  * 全部 pointer-events:none、JS 定时清理（无泄漏）。 */
-const WATER_RING_MS = 700; // 单个水环扩散时长
-const WATER_AFTER_MS = 2000; // 回手后落点框特效持续时间
+const WATER_RING_MS = 1000; // 单个水环扩散时长（700 → 1000ms，随加长飞行成比例延长）
+const WATER_AFTER_MS = 3000; // 回手后落点框特效持续时间（2s → 3s）
+const TRAIL_Z = BASE_Z - 1; // 水拖尾：飞行卡克隆（BASE_Z）之下——鱼尾迹在卡后
 
 /** body 级水波环：fixed 定位于 (x,y) 中心、尺寸 size 的圆环，扩散 + 淡出后自清理 */
 function spawnWaterRing(x: number, y: number, size: number, cls: string): void {
@@ -369,6 +407,53 @@ function spawnWaterRing(x: number, y: number, size: number, cls: string): void {
   window.setTimeout(() => ring.remove(), WATER_RING_MS + 120);
 }
 
+/** cubic-bezier(0.2, 0.7, 0.3, 1)（与回手飞行同缓动）数值求值：进度 p ∈ [0,1] → 缓动值。
+ *  二分求 t 使 bezierX(t)=p，再代入 bezierY——拖尾头部与卡实时位置对齐。 */
+function returnFlightEase(p: number): number {
+  const x1 = 0.2, y1 = 0.7, x2 = 0.3, y2 = 1;
+  let lo = 0;
+  let hi = 1;
+  for (let i = 0; i < 12; i++) {
+    const t = (lo + hi) / 2;
+    const mt = 1 - t;
+    const x = 3 * mt * mt * t * x1 + 3 * mt * t * t * x2 + t * t * t;
+    if (x < p) lo = t;
+    else hi = t;
+  }
+  const t = (lo + hi) / 2;
+  const mt = 1 - t;
+  return 3 * mt * mt * t * y1 + 3 * mt * t * t * y2 + t * t * t;
+}
+
+/** 水拖尾：飞行期间沿路径跟随卡的渐变光带（rAF 逐帧更新，随卡推进变长，头亮尾淡）。
+ *  起点锚定路径起点（transform-origin left center），宽度 = 已行进距离；渐变右端（亮头）
+ *  始终位于卡当前位置 → 读作卡身后拉出的鱼尾迹。飞行结束自清理。 */
+function spawnWaterTrail(start: { x: number; y: number }, end: { x: number; y: number }, durMs: number): void {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist < 1) return;
+  const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
+  const trail = document.createElement('div');
+  trail.className = 'water-return-trail';
+  trail.style.left = `${start.x}px`;
+  trail.style.top = `${start.y - 8}px`; // 高度 16px → 中心对准路径
+  trail.style.transform = `rotate(${angle}deg)`;
+  trail.style.zIndex = String(TRAIL_Z);
+  document.body.appendChild(trail);
+  const startAt = performance.now();
+  const step = (now: number): void => {
+    const p = Math.min(1, (now - startAt) / durMs);
+    const e = returnFlightEase(p);
+    trail.style.width = `${e * dist}px`;
+    // 头亮尾淡：整体随飞行渐弱（起飞时迅速显现、落地前溶解）
+    trail.style.opacity = String(Math.min(1, e * 8) * (0.9 - 0.55 * e));
+    if (p < 1) requestAnimationFrame(step);
+    else trail.remove();
+  };
+  requestAnimationFrame(step);
+}
+
 function playWaterReturn(node: HTMLElement, payload: FxCardPayload): void {
   const rect = node.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0 || payload.owner === undefined) {
@@ -381,8 +466,8 @@ function playWaterReturn(node: HTMLElement, payload: FxCardPayload): void {
   const target = handEndPos(hand, payload.owner);
   const dx = target.x - cx;
   const dy = target.y - cy;
-  // ① 回手前：大号扩散水环 + 蓝色光晕框（卡框周围，与飞行同时开始）
-  spawnWaterRing(cx, cy, Math.max(rect.width, rect.height) * 2.4, 'water-return-ring big');
+  // ① 回手前：大号扩散水环（放大 1.67×）+ 蓝色光晕框（卡框周围，与飞行同时开始）
+  spawnWaterRing(cx, cy, Math.max(rect.width, rect.height) * 4.0, 'water-return-ring big');
   const glow = document.createElement('div');
   glow.className = 'water-return-glow';
   glow.style.left = `${rect.left}px`;
@@ -392,20 +477,21 @@ function playWaterReturn(node: HTMLElement, payload: FxCardPayload): void {
   glow.style.zIndex = String(EXTRA_Z);
   document.body.appendChild(glow);
   window.setTimeout(() => glow.remove(), WATER_RING_MS + 120);
-  // ② 飞行中：路径 25%/50%/75% 处的小号轨迹环（与卡同步出现 → 鱼游轨迹）。
+  // ② 飞行中：路径 25%/50%/75% 处的小号轨迹环（与卡同步出现 → 鱼游轨迹）+ 水拖尾。
   // 飞行缓动 cubic-bezier(0.2,0.7,0.3,1) 是快启动——线性时间 25/50/75% 时卡已在
   // ~75/90/98% 处；用逆缓动解把「位置比例」映射回「时刻比例」（t≈0.128/0.282/0.488，
   // 即 B_y(t)=0.25/0.5/0.75），环才真正与卡经过同步。
   const WATER_TRAIL_FRACS = [0.25, 0.5, 0.75] as const; // 沿路径的位置比例
-  const WATER_TRAIL_AT = [0.128, 0.282, 0.488] as const; // 逆缓动后的时刻比例（×MOVE_MS）
+  const WATER_TRAIL_AT = [0.128, 0.282, 0.488] as const; // 逆缓动后的时刻比例（×RETURN_MOVE_MS）
   for (let i = 0; i < WATER_TRAIL_FRACS.length; i++) {
     const frac = WATER_TRAIL_FRACS[i];
     const at = WATER_TRAIL_AT[i];
     window.setTimeout(() => {
-      spawnWaterRing(cx + dx * frac, cy + dy * frac, 30, 'water-return-ring trail');
-    }, MOVE_MS * at);
+      spawnWaterRing(cx + dx * frac, cy + dy * frac, 48, 'water-return-ring trail');
+    }, RETURN_MOVE_MS * at);
   }
-  // ③ 回手后（飞行落地）：落点框特效持续 2 秒后淡出（落点 = 手牌末尾新卡中心）
+  spawnWaterTrail({ x: cx, y: cy }, { x: target.x, y: target.y }, RETURN_MOVE_MS);
+  // ③ 回手后（飞行落地）：落点框特效持续 3 秒后淡出（落点 = 手牌末尾新卡中心）
   window.setTimeout(() => {
     const settle = document.createElement('div');
     settle.className = 'water-return-settle';
@@ -416,7 +502,7 @@ function playWaterReturn(node: HTMLElement, payload: FxCardPayload): void {
     settle.style.zIndex = String(EXTRA_Z);
     document.body.appendChild(settle);
     window.setTimeout(() => settle.remove(), WATER_AFTER_MS + 300);
-  }, MOVE_MS);
+  }, RETURN_MOVE_MS);
   // 基础回手飞行照常（本函数只叠加水特效，不替换飞行）
   playReturn(node, payload);
 }
