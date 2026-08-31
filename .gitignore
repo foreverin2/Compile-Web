@@ -4,3 +4,4 @@ dist/
 # Gemini 生成的电池图（最终采用纯 CSS 方案，未使用）
 public/assets/battery/
 log/
+compile-apo/
