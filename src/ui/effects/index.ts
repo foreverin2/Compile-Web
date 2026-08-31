@@ -255,10 +255,11 @@ function playFlip(node: HTMLElement, payload: FxCardPayload): void {
  * ② 展开动画 1.9s（0.9s + 1s）后（~1.65s）卡面开始翻转，藤蔓同时逐渐收缩退去；
  * ③ 卡框绿光持续 ~2 秒后淡出。
  * 全部 pointer-events:none、JS 定时清理（无泄漏）：12 根藤蔓统一挂在 .life-flip-fx
- * 容器（body 级 fixed、无 transform/z-index → 不改变子元素 fixed 视口坐标、不建
- * stacking context），收缩完成后整体移除；容器类也被 render.ts resetUiState 批量
- * 清扫（应用内重置路径兜底）。绿光单独挂 body（需持续 ~3.6 秒，长于藤蔓容器），
- * 自带移除定时器 + resetUiState 兜底。 */
+ * 容器（body 级 fixed、无 transform → 不改变子元素 fixed 视口坐标；容器 z-index 301
+ * 高于翻面覆盖层 300，藤蔓绘制在卡面之上；否则 fixed 自建 stacking context 会把
+ * 整层垫到卡面之下——"翻转前看不到藤蔓"的根因），收缩完成后整体移除；容器类也被
+ * render.ts resetUiState 批量清扫（应用内重置路径兜底）。绿光单独挂 body（需持续
+ * ~3.6 秒，长于藤蔓容器），自带移除定时器 + resetUiState 兜底。 */
 const LIFE_AFTER_MS = 3600; // 翻转后卡框绿光持续时间（含拉长的展开/消退：翻转 ~1.65s + 持续 ~2s）
 const LIFE_VINE_LEN = 85; // 藤蔓长度（52 → 85px：离卡牌中心更远、缠绕覆盖更广）
 const LIFE_VINE_SHRINK_MS = 1650; // 展开延长 1 秒后翻转 / 开始收缩藤蔓的时机（650 → 1650ms）
@@ -313,11 +314,15 @@ function playLifeFlip(node: HTMLElement, payload: FxCardPayload): void {
     { x: L, y: T + H * 0.5, rot: -90 },
     { x: L, y: T + H * 0.85, rot: -90 },
   ];
-  // 藤蔓容器（body 级 fixed；无 transform/z-index → 子元素 fixed 坐标仍按视口、
-  // 不建 stacking context；pointer-events:none 透传点击）。收缩完成后整体移除。
+  // 藤蔓容器（body 级 fixed；无 transform → 子元素 fixed 坐标仍按视口）。
+  // ⚠️ position:fixed 无论 z-index 是否 auto 都自成 stacking context——若容器不写
+  // z-index（auto≈0），整层会垫在翻面覆盖层（buildFlipOverlay z-index:300）之下，
+  // 藤蔓在翻转前被卡面完全遮住（只有 3D 翻转转开正面才露出来）。容器显式 z-index
+  // 设为 EXTRA_Z（301）> 300，整层连同其内全部藤蔓都绘制在卡面之上、读作缠绕在
+  // 卡牌上方。pointer-events:none 透传点击。收缩完成后整体移除。
   const fxWrap = document.createElement('div');
   fxWrap.className = 'life-flip-fx';
-  fxWrap.style.cssText = 'position:fixed;inset:0;pointer-events:none;';
+  fxWrap.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:301;';
   document.body.appendChild(fxWrap);
   for (let i = 0; i < anchors.length; i++) {
     const a = anchors[i];
