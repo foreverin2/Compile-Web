@@ -277,6 +277,64 @@ export function syncSmokeOverlays(s: GameState): void {
   }
 }
 
+/* ===== 常驻能量扫描线（R16）：修复扫描在步骤切换/效果结算时重启的卡顿 =====
+ * 旧实现 .battery-shell::after 的 CSS 扫描动画随电池元素每次重渲染（renderApp 全量
+ * 重建棋盘 DOM）而重启——与已编译环/黑烟同类的"一卡一卡"问题。
+ * 采用与 syncSmokeOverlays 相同的注册表模式：body 级 fixed 扫描层（.scan-overlay 内
+ * .scan-line）按 key `${player}-${line}` 创建一次、跨重渲染存活，每帧渲染只把层盒
+ * 重定位到 .battery-shell 矩形（层节点从不 detach → CSS 动画不重启）。
+ * full/burst 态沿旧行为关闭扫描（外壳应力裂纹高光接管），overlay 移除；电池元素
+ * 缺失时同样移除并注销。 */
+const scanOverlays = new Map<string, HTMLElement>();
+
+function renderScanOverlay(): HTMLElement {
+  const overlay = el('div', 'scan-overlay');
+  overlay.appendChild(el('div', 'scan-line'));
+  return overlay;
+}
+
+export function syncScanOverlays(s: GameState): void {
+  const activeKeys = new Set<string>();
+  for (const line of [0, 1, 2] as Line[]) {
+    for (const player of [0, 1] as PlayerId[]) {
+      const key = `${player}-${line}`;
+      // 旧行为：扫描流光仅 stable/bulge 播放；full/burst 由外壳裂纹高光接管（animation:none）
+      const state = batteryState(getLineValue(s, player, line));
+      if (state === 'full' || state === 'burst') {
+        const gone = scanOverlays.get(key);
+        if (gone) {
+          gone.remove();
+          scanOverlays.delete(key);
+        }
+        continue;
+      }
+      const shell = document.querySelector<HTMLElement>(
+        `.stack-slot[data-player="${player}"][data-line="${line}"] .battery-shell`
+      );
+      if (!shell) continue; // 电池不在 DOM（不应发生）→ 交给下方清理分支移除旧 overlay
+      activeKeys.add(key);
+      let overlay = scanOverlays.get(key);
+      if (!overlay) {
+        overlay = renderScanOverlay();
+        overlay.dataset.scanKey = key;
+        scanOverlays.set(key, overlay);
+        document.body.appendChild(overlay);
+      }
+      const r = shell.getBoundingClientRect();
+      overlay.style.left = `${r.left}px`;
+      overlay.style.top = `${r.top}px`;
+      overlay.style.width = `${r.width}px`;
+      overlay.style.height = `${r.height}px`;
+    }
+  }
+  for (const [key, overlay] of scanOverlays) {
+    if (!activeKeys.has(key)) {
+      overlay.remove();
+      scanOverlays.delete(key);
+    }
+  }
+}
+
 /** R12：每帧渲染把 body 级持久 FX 层重定位到对应 holder 矩形（层节点从不移动，只改
  *  坐标 left/top/width/height）：
  *  - 层已由 buildCompiledFx 在创建时挂到 document.body（position:fixed）→ 始终
@@ -1568,6 +1626,9 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   // Part 2 常驻黑烟：槽位已入 DOM → 创建/复用 body 级 overlay 并重定位到槽位矩形
   // （overlay 跨重渲染存活，动画不重启；条件消失后 syncSmokeOverlays 移除并注销）
   syncSmokeOverlays(s);
+  // R16 常驻能量扫描线：电池已入 DOM → 创建/复用 body 级扫描层并重定位到外壳矩形
+  // （层跨重渲染存活，动画不重启；full/burst 或电池缺失时移除并注销）
+  syncScanOverlays(s);
 }
 
 let selectedUid: string | null = null;
@@ -1604,6 +1665,8 @@ export function resetUiState(): void {
   compiledFxCells.length = 0;
   for (const overlay of smokeOverlays.values()) overlay.remove();
   smokeOverlays.clear();
+  for (const overlay of scanOverlays.values()) overlay.remove();
+  scanOverlays.clear();
   controlSliderPos = 50;
   closeZoom();
   closeTrashViewer();

@@ -140,8 +140,9 @@ body {
    full 7-9（明显鼓胀接近圆润，橙色强光 + 应力裂纹）/ burst ≥10（爆裂：径向爆光 +
    裂纹 + 红橙脉冲动画，10 格仍全部点亮）。
    能量格造型（非电池）：无正极凸头 / LED 呼吸灯 —— 分段式暗槽 + 青色填充；
-   扫描流光恢复自旧电池版（ITEM 5：.battery-shell::after 青色扫描线自上而下反复扫过
-   能量格，battery-scan-sweep 关键帧；full/burst 的应力裂纹高光覆盖此规则，与旧行为
+   扫描流光（ITEM 5 恢复、R16 持久化：青色扫描线自上而下反复扫过能量格，由 body 级
+   常驻 .scan-overlay/.scan-line 提供 —— render.ts syncScanOverlays 跨重渲染复用同一
+   DOM 节点，动画不随电池重建重启；full/burst 的应力裂纹高光接管、扫描关闭，与旧行为
    一致）。外壳高度 = 槽位可视高度（top/bottom 6px 对齐 lane-row 视觉高度，
    随行高伸缩）。pointer-events:none 纯视觉，不拦截下方卡牌点击/悬停与槽位打牌。 */
 .battery {
@@ -183,13 +184,28 @@ body {
     inset 0 0 0 1px rgba(0, 255, 204, 0.22);
   transition: border-radius 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
 }
-/* 扫描流光（ITEM 5 恢复，旧 battery-scan-sweep 适配当前能量格造型）：
-   青色亮线自上而下反复扫过能量格（2.4s 循环，外壳高度动态 → 用 top% 关键帧而非
-   固定 translateY px）。full/burst 的应力裂纹高光（下方 ::after 覆写）关闭本扫描。 */
-.battery-shell::after {
-  content: '';
+/* 扫描流光（R16 持久化）：不再挂在 .battery-shell::after（电池元素随每次渲染重建 →
+   扫描动画逐步骤重启，与已编译环/黑烟同类的卡顿）。改由 body 级常驻层
+   .scan-overlay/.scan-line 提供（render.ts syncScanOverlays 创建一次、跨重渲染复用，
+   节点从不 detach → CSS 动画不重启；每帧渲染只把层盒重定位到 .battery-shell 矩形）。
+   full/burst 的应力裂纹高光（下方 ::after 覆写）保持「关闭扫描」的旧语义。 */
+@keyframes battery-scan-sweep {
+  0% { top: 3%; opacity: 0; }
+  12% { opacity: 0.7; }
+  88% { opacity: 0.7; }
+  100% { top: 94%; opacity: 0; }
+}
+/* 常驻扫描线层：body 级 fixed，尺寸 = .battery-shell 矩形（JS 每帧重定位）；
+   内层 .scan-line 相对层盒播放扫描动画（top% 相对层高度 → 外壳高度动态仍正确）。
+   z-index 61：高于电池外壳（59）与悬停弹出卡（60!important），低于选择/操作条（200）
+   等浮层；pointer-events:none 纯视觉。 */
+.scan-overlay {
+  position: fixed;
+  pointer-events: none;
+  z-index: 61;
+}
+.scan-overlay .scan-line {
   position: absolute;
-  top: 3%;
   left: 6%;
   width: 88%;
   height: 2px;
@@ -198,13 +214,6 @@ body {
   opacity: 0;
   animation: battery-scan-sweep 2.4s ease-in-out infinite;
   pointer-events: none;
-  z-index: 2; /* 能量格之上 */
-}
-@keyframes battery-scan-sweep {
-  0% { top: 3%; opacity: 0; }
-  12% { opacity: 0.7; }
-  88% { opacity: 0.7; }
-  100% { top: 94%; opacity: 0; }
 }
 /* 格竖排：column-reverse 使填充从下到上增加（点数变化时最下方的格先亮）；
    space-evenly 让 10 格均匀铺满整个外壳高度（随行高伸缩也保持填满） */
