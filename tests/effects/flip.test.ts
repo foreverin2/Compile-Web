@@ -72,7 +72,7 @@ describe('flip op', () => {
     expect(secretCard.secret).toBeFalsy();
   });
 
-  it('flipping a secret card face-down keeps secret (only a face-up flip declassifies)', () => {
+  it('flipping a secret card face-down on the field keeps secret (field card: only a face-up flip declassifies; hand entry declassifies too)', () => {
     const s = createGame();
     s.phase = 'turn';
     s.players[0].stacks[1] = [{

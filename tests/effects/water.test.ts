@@ -204,6 +204,23 @@ describe('water protocol effects', () => {
     expect(s.pendingEffects).toHaveLength(0);
   });
 
+  it('water-3: a deck-sourced secret card returned to hand is declassified (secret cleared)', () => {
+    const s = draftWaterP1();
+    advanceToStep(s, 0, 'action');
+    s.players[1].hand = [];
+    s.players[0].hand = [makeCard('water-3', 0, 'hand')];
+    // 对手同线：牌堆来源的反面 secret 卡（反面 = 2 分）→ 被回手
+    const secretFd = makeCard('metal-1', 1, 'field', false, 0, 0);
+    secretFd.secret = true;
+    s.players[1].stacks[0] = [secretFd];
+    const card = s.players[0].hand[0];
+    executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: waterLine(s) });
+    resolveAllChoices(s, pickFirst);
+    expect(s.players[1].hand.map((c) => c.uid)).toEqual([secretFd.uid]); // 回持有者手牌
+    expect(secretFd.secret).toBeFalsy(); // 回手即解禁：手牌可见正面
+    expect(s.pendingEffects).toHaveLength(0);
+  });
+
   it('water-4: returns 1 of your own uncovered cards (opponent cards not selectable)', () => {
     const s = draftWaterP1();
     advanceToStep(s, 0, 'action');

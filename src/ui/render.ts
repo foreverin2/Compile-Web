@@ -415,9 +415,9 @@ function renderHand(
     const isSelected = opts.isSelf && opts.selected === card.uid;
     // 手牌显示：self 手牌默认正面；若该卡被选中且当前朝向为背面（selectedFaceUp=false），
     // 立即以背面预览显示（点击「翻面」时翻转手牌区外观）。
-    // ITEM 1(secret)：牌堆来源的 secret 卡（被效果回手）即使 self 也恒以背面渲染——
-    // secret 只禁「查看牌面」不禁「打出朝向」：翻面按钮仍可切换 selectedFaceUp 以正面
-    // 打出（那是玩家的打出朝向选择，不是揭示），预览与双击放大都只看得到卡背。
+    // secret 守卫 = 防御性安全网（控制器规则：手牌 = 已知信息，回手/抽入/夺取进手时引擎
+    // 一律清 secret → 手牌卡实际恒为正面）；保留以防未来新增的手牌入口忘记解禁，杜绝
+    // secret 卡在 self 手牌误渲染为背面的回归。
     const faceUp = opts.isSelf && !card.secret ? !(isSelected && !selectedFaceUp) : false;
     const node = renderCardFace({ defId: card.defId, faceUp, uid: card.uid });
     node.dataset.uid = card.uid;

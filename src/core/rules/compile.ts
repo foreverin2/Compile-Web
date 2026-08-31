@@ -58,6 +58,8 @@ export function executeCompile(s: GameState, player: PlayerId, line: Line): void
     if (card) {
       card.owner = player;
       card.zone = 'hand';
+      // 手牌 = 已知信息：牌库顶 → 手牌 同样解禁 secret（与 drawCards/return 一致）
+      card.secret = false;
       card.faceUp = true;
       p.hand.push(card);
       s.log.push(`P${player + 1} recompiles and steals a card`);

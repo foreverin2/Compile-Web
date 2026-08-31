@@ -184,6 +184,9 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       const wasTop = idx === stack.length - 1;
       stack.splice(idx, 1); // 按目标卡移除（顶卡 splice 末位等价 pop；覆盖卡从堆叠中部移除）
       card.zone = 'hand';
+      // 回手即解禁：手牌 = 已知信息，牌堆来源的 secret 卡进入持有者手牌后可见正面
+      // （控制器规则：secret 只禁场上反面卡的窥视，不禁回手后查看）
+      card.secret = false;
       card.line = null;
       card.pos = null;
       s.players[owner].hand.push(card);

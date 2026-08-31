@@ -24,6 +24,9 @@ export function drawCards(s: GameState, player: PlayerId, count: number): Card[]
     }
     const card = p.deck.pop()!;
     card.zone = 'hand';
+    // 手牌 = 已知信息：抽入即解禁——即使该卡带牌堆来源的 secret 标记（曾被弃牌堆洗回牌库），
+    // 进入手牌后也可见正面（与 return op 回手即解禁一致）
+    card.secret = false;
     card.line = null;
     card.pos = null;
     card.faceUp = true;

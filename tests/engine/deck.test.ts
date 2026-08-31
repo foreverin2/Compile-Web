@@ -52,6 +52,15 @@ describe('deck ops', () => {
     expect(drawn.every((c) => c.zone === 'hand')).toBe(true);
   });
 
+  it('drawCards declassifies a secret card entering the hand (回手即解禁)', () => {
+    s = makeState(0, 1, 0);
+    const card = s.players[0].deck[0];
+    card.secret = true; // 牌堆来源的反面打出卡（曾被回弃牌堆并洗回牌库）
+    drawCards(s, 0, 1);
+    expect(card.zone).toBe('hand');
+    expect(card.secret).toBeFalsy(); // 手牌 = 已知信息：不再以背面渲染
+  });
+
   it('reshuffles trash into deck when deck empties during draw', () => {
     s = makeState(0, 2, 3);
     const drawn = drawCards(s, 0, 5);
