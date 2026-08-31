@@ -237,9 +237,11 @@ function renderSmokeOverlay(): HTMLElement {
 
 /** 常驻黑烟覆盖层注册表：key `${player}-${line}` → 已挂到 body 的 overlay（跨重渲染存活）。
  *  仅在 renderBoard 末尾调用：条件 active 时创建/复用 overlay 并重定位到当前槽位矩形，
- *  inactive 时移除并注销（条件消失后烟雾随之消失）。 */
+ *  inactive 时移除并注销（条件消失后烟雾随之消失）。
+ *  （导出供 main.ts 的 scroll/resize 监听复用——fixed 层只在渲染时定位，渲染之间的
+ *  滚动/缩放会让它们停在陈旧视口坐标。） */
 const smokeOverlays = new Map<string, HTMLElement>();
-function syncSmokeOverlays(s: GameState): void {
+export function syncSmokeOverlays(s: GameState): void {
   const activeKeys = new Set<string>();
   for (const line of [0, 1, 2] as Line[]) {
     const active = lineTopCommandActive(s, line, 'darkness-2');
@@ -280,8 +282,11 @@ function syncSmokeOverlays(s: GameState): void {
  *  - 与 round6 黑烟 overlay（syncSmokeOverlays）同模式：在 renderBoard 末尾、DOM 已
  *    挂载后测量 holder 矩形（树构建期节点 detached，getBoundingClientRect 会读 0×0）。
  *  - 协议换位/重排（移动行）时下一帧渲染把层重定位到新 holder 矩形 → 特效跟随（层
- *    不动、只是坐标变）。 */
-function syncCompiledFxLayers(): void {
+ *    不动、只是坐标变）。
+ *  - 幂等且廉价（≤6 层 + 黑烟 overlay）：导出供 main.ts 的 scroll/resize 监听复用——
+ *    渲染之间的滚动/缩放会让 fixed 层停在陈旧视口坐标（尤其一局胜利后不再重渲染），
+ *    监听里按当前 holder 矩形重新对齐即可。 */
+export function syncCompiledFxLayers(): void {
   for (const { defId, holder } of compiledFxCells) {
     positionCompiledFxLayer(defId, holder);
   }
