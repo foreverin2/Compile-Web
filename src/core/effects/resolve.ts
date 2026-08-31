@@ -216,6 +216,14 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
     }
     case 'playTopDeck': {
       const p = s.players[pe.player];
+      // R11.4（与 drawCards 一致）：牌库空且弃牌堆有牌时，洗弃牌堆重组为牌库
+      // （回牌库卡必须翻回反面 = 秘密信息区）；两者皆空才抛错（生成器已按
+      // deckTopAvailable 守卫，此处兜底防静默吞牌）
+      if (p.deck.length === 0 && p.trash.length > 0) {
+        p.deck = shuffle(p.trash);
+        p.trash = [];
+        for (const c of p.deck) c.faceUp = false;
+      }
       const card = p.deck.pop();
       if (!card) throw new Error('deck is empty');
       card.zone = 'float';
@@ -252,6 +260,8 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       protos[op.a] = protos[op.b];
       protos[op.b] = tmp;
       s.log.push(`P${pe.player + 1} 重排协议：交换位置 ${op.a + 1} 与 ${op.b + 1}`);
+      // FX hook：未来的协议交换动画订阅 protocols:rearranged（含玩家与交换位置）
+      gameBus.emit({ type: 'protocols:rearranged', state: s, payload: { player: pe.player, a: op.a, b: op.b } });
       break;
     }
     case 'reveal': {

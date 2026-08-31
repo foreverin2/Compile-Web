@@ -82,6 +82,29 @@ describe('playTopDeck op', () => {
     expect(s.pendingPlay).toHaveLength(0);
   });
 
+  it('reshuffles trash into an empty deck (R11.4, like drawCards) instead of throwing', () => {
+    const s = draftFireP1();
+    s.players[0].deck = [];
+    s.players[0].trash = [makeCard('fire-1', 0, 'trash'), makeCard('fire-2', 0, 'trash'), makeCard('fire-3', 0, 'trash')];
+    s.pendingEffects.push({
+      id: 'e1', player: 0,
+      gen: (function* (): Generator<EffectStep, void, StepResult> {
+        yield { op: 'playTopDeck', line: 2, faceUp: false };
+      })(),
+      sourceUid: 'src', sourceDefId: 'system', system: true, prompt: null, lastAnswer: null,
+    });
+    runStack(s);
+    // 弃牌堆洗入牌库 → 弹出顶卡反面落地；其余回牌库（秘密信息区：一律反面）
+    expect(s.players[0].deck).toHaveLength(2);
+    expect(s.players[0].trash).toHaveLength(0);
+    const landed = s.players[0].stacks[2][0];
+    expect(landed.zone).toBe('field');
+    expect(landed.line).toBe(2);
+    expect(landed.faceUp).toBe(false);
+    for (const c of s.players[0].deck) expect(c.faceUp).toBe(false); // 回牌库卡翻回反面
+    expect(s.pendingPlay).toHaveLength(0);
+  });
+
   it('deferred playTopDeck is queued: a play during the before-covered window lands both cards', () => {
     const s = draftFireP1();
     const fire0 = makeCard('fire-0', 0, 'field', true, 0, 0);

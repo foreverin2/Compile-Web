@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { EffectStep, StepResult } from '../../src/core/models/types';
 import { runStack } from '../../src/core/effects/resolve';
-import { makeCard, draftFireP1 } from '../helpers';
+import { draftFireP1 } from '../helpers';
 
 // rearrangeProtocols 系统级测试：生成器直接 yield 该 op，交换两名协议位（defId 与 compiled 一起走）
 describe('rearrangeProtocols op', () => {
@@ -36,11 +36,5 @@ describe('rearrangeProtocols op', () => {
       sourceUid: 'src', sourceDefId: 'system', system: true, prompt: null, lastAnswer: null,
     });
     expect(() => runStack(s)).toThrow(/cannot swap/);
-  });
-
-  it('no-op guard: unused helper import keeps tree-shaking honest', () => {
-    // makeCard 仅用于证明本文件与测试工具链一致（无真实用例）
-    const c = makeCard('fire-5', 0, 'hand');
-    expect(c.uid).toBeTruthy();
   });
 });
