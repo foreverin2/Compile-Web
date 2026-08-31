@@ -678,9 +678,38 @@ const compiledFxCells: { defId: string; holder: HTMLElement }[] = [];
 function buildCompiledFx(defId: string): HTMLElement {
   const layer = el('div', `compiled-fx compiled-fx-${defId}`);
   if (defId === 'fire') layer.appendChild(el('div', 'fire-backlight'));
+  // life：深绿背光（真实元素随持久层存活，动画不重启；见 styles.css .compiled-fx-life .life-backlight）
+  if (defId === 'life') layer.appendChild(el('div', 'life-backlight'));
   appendCompiledRing(layer, defId);
   document.body.appendChild(layer);
   return layer;
+}
+
+/** Life 已编译藤蔓（复用 Item 1 翻转藤蔓观感——粗长 S 曲线、绿光描边）：
+ *  定位 div（transform-origin 0 0 = 卡框锚点，外层 transform 专用于朝向旋转，使藤蔓垂入
+ *  协议卡内）+ 内层 .life-compiled-grow（一次性的缠绕生长 scaleY）+ svg .life-compiled-vine-curve
+ *  （缓慢左右摇摆，负 delay 按 i 交错相位 → 各藤蔓不同时刻摇摆，不齐步）。
+ *  三层结构避免 grow（scaleY）与 sway（rotate）两个 transform 动画互相覆盖。 */
+function buildCompiledVine(rot: number, len: number, swayPhase: number): HTMLElement {
+  const wrap = el('div', 'life-compiled-vine');
+  wrap.style.transform = `rotate(${rot}deg)`;
+  const grow = el('div', 'life-compiled-grow');
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('width', '30');
+  svg.setAttribute('height', String(len));
+  svg.setAttribute('viewBox', `0 0 30 ${len}`);
+  svg.setAttribute('class', 'life-compiled-vine-curve');
+  svg.style.animationDelay = `0s, ${-swayPhase}s`;
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', `M7,2 C16,${len * 0.3} 24,${len * 0.62} 12,${len - 3}`);
+  path.setAttribute('fill', 'none');
+  path.setAttribute('stroke', '#3ddc84');
+  path.setAttribute('stroke-width', '11');
+  path.setAttribute('stroke-linecap', 'round');
+  svg.appendChild(path);
+  grow.appendChild(svg);
+  wrap.appendChild(grow);
+  return wrap;
 }
 
 /**
@@ -691,9 +720,8 @@ function buildCompiledFx(defId: string): HTMLElement {
  */
 function appendCompiledRing(box: HTMLElement, defId: string): void {
   const ring = el('div', `compiled-ring compiled-ring-${defId}`);
-  // TODO(water/life FX): add protocol-specific compiled-ring variants for 'water'/'life'
-  // here when the user specifies them — currently they render the base 2.5s ring + default
-  // orange gradient + rocks (compiled-fx-<defId> class is already applied for CSS hooks).
+  // 每协议配色由 .compiled-ring-<defId> 决定（fire = 岩浆黑岩/红岩；life/water 各自专属
+  // 变体在函数末尾追加——藤蔓缠绕 / 中心波纹 + 海浪线，见下方 defId === 'life'/'water' 块）。
   // 火焰（fire）专属参数：慢速岩浆流（56s/圈，CSS .compiled-fx-fire 覆写 animation-duration，
   // 速度再减半：28s → 56s）+ 岩石加密（90 岩 = 60 黑 + 30 红，2 黑 1 红交替）→ 环周被
   // 岩石基本填平（12px × 90 ≈ 1080px ≥ 环带周长 ≈1017px，轻微重叠）。红岩一半原色暗红
@@ -813,6 +841,40 @@ function appendCompiledRing(box: HTMLElement, defId: string): void {
       smoke.appendChild(puff);
     }
     box.appendChild(smoke);
+  }
+  // ITEM 5：life 已编译 → 20+ 根粗长绿色藤蔓从卡牌框起缠绕协议卡（复用 Item 1 翻转藤蔓
+  // 观感：粗 S 曲线 + 绿光描边）+ 缓慢左右摇摆；藤蔓为层内 z 2（环带之上、卡面之上——
+  // 缠绕读作覆盖在协议卡上）。绿色框光由 .compiled-ring-life 呼吸动画提供、深绿背光为
+  // .life-backlight（buildCompiledFx 挂载）。定位用百分比 + margin 居中（跟随层尺寸，
+  // 图片未加载时也不飞离卡框）。
+  if (defId === 'life') {
+    const VINES_PER_SIDE = 6; // 4 边 × 6 = 24 根（≥ 20）
+    const VINE_LEN = 90; // 与 Item 1 翻转藤蔓同量级（85/90px）
+    const VW = 30; // wrap 宽 = svg 宽（margin 居中基准）
+    const SWAY_CYCLE_S = 4.5; // 摇摆周期（与 CSS .life-compiled-vine-curve 一致）
+    for (let i = 0; i < VINES_PER_SIDE * 4; i++) {
+      const side = Math.floor(i / VINES_PER_SIDE); // 0 上 1 右 2 下 3 左
+      const pos = (i % VINES_PER_SIDE + 0.5) / VINES_PER_SIDE; // 0..1 沿边位置（避开四角）
+      const vine = buildCompiledVine(side * 90, VINE_LEN, (i * 0.55) % SWAY_CYCLE_S);
+      if (side === 0) {
+        vine.style.left = `${pos * 100}%`;
+        vine.style.marginLeft = `${-VW / 2}px`;
+        vine.style.top = '0px';
+      } else if (side === 1) {
+        vine.style.left = '100%';
+        vine.style.top = `${pos * 100}%`;
+        vine.style.marginTop = `${-VW / 2}px`;
+      } else if (side === 2) {
+        vine.style.left = `${pos * 100}%`;
+        vine.style.marginLeft = `${-VW / 2}px`;
+        vine.style.top = '100%';
+      } else {
+        vine.style.left = '0px';
+        vine.style.top = `${pos * 100}%`;
+        vine.style.marginTop = `${-VW / 2}px`;
+      }
+      box.appendChild(vine);
+    }
   }
 }
 

@@ -1807,6 +1807,100 @@ body.dragging { cursor: grabbing; user-select: none; }
   }
 }
 
+/* ===== life 已编译环（ITEM 5）：绿色框光 + 20+ 根粗长藤蔓缠绕 + 深绿背光 =====
+ * - .compiled-ring-life：呼吸绿边框（藤蔓同色 #3ddc84 ↔ 深绿 #157a45），隐藏岩浆段/岩石；
+ * - .life-compiled-vine：定位 div（transform-origin 0 0 = 卡框锚点；外层 transform 由 JS
+ *   写朝向旋转，使藤蔓垂入协议卡内）；内层 .life-compiled-grow 一次性缠绕生长（scaleY）；
+ *   svg .life-compiled-vine-curve 缓慢左右摇摆（绕锚点 ±8°，4.5s，负 delay 交错相位）；
+ * - .compiled-fx-life .life-backlight：深绿背光（radial + conic，blur，慢速旋转 ——
+ *   卡面被浓绿辉光笼罩，持续不刺眼）。
+ * 静态兜底：.protocol.compiled-fx-life（与 fire/light/darkness 同模式）。 */
+.protocol.compiled-fx-life {
+  /* 静态兜底：绿色描边 + 绿光晕（与呼吸环同主题） */
+  border-color: #3ddc84;
+  box-shadow: 0 0 14px rgba(61, 220, 132, 0.6), inset 0 0 10px rgba(61, 220, 132, 0.25);
+}
+.compiled-ring-life {
+  border: 2px solid;
+  border-radius: 14px;
+  animation: life-breathe 2.5s ease-in-out infinite;
+}
+.compiled-ring-life .lava-seg,
+.compiled-ring-life .lava-rock {
+  display: none;
+}
+@keyframes life-breathe {
+  0%, 100% {
+    border-color: #3ddc84; /* 明亮藤蔓绿 */
+    box-shadow:
+      0 0 18px rgba(61, 220, 132, 0.7),
+      0 0 42px rgba(61, 220, 132, 0.35),
+      inset 0 0 14px rgba(61, 220, 132, 0.3);
+  }
+  50% {
+    border-color: #157a45; /* 深绿 */
+    box-shadow:
+      0 0 26px rgba(21, 122, 69, 0.85),
+      0 0 60px rgba(21, 122, 69, 0.45),
+      inset 0 0 16px rgba(21, 122, 69, 0.35);
+  }
+}
+.life-compiled-vine {
+  position: absolute;
+  width: 30px;
+  height: 90px;
+  transform-origin: 0 0; /* 锚点 = 卡框边缘点 */
+  pointer-events: none;
+  z-index: 2; /* 环带同层：缠绕读作覆盖在协议卡上 */
+}
+.life-compiled-grow {
+  width: 100%;
+  height: 100%;
+  transform-origin: 0 0;
+  animation: life-compiled-grow 1.6s ease forwards; /* 编译时一次性缠绕生长 */
+}
+.life-compiled-vine-curve {
+  display: block;
+  transform-origin: 0 0;
+  animation: life-compiled-sway 4.5s ease-in-out infinite; /* 慢慢左右摇摆 */
+  filter: drop-shadow(0 0 6px rgba(61, 220, 132, 0.55));
+}
+@keyframes life-compiled-grow {
+  0% { transform: scaleY(0); }
+  100% { transform: scaleY(1); }
+}
+@keyframes life-compiled-sway {
+  0%, 100% { transform: rotate(-8deg); } /* 绕锚点向左摆 */
+  50% { transform: rotate(8deg); }       /* 向右摆 */
+}
+.compiled-fx-life .life-backlight {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 380px; /* 直径 > 卡面对角线（200×280 → ≈344px）：旋转时始终覆盖整卡 */
+  height: 380px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle, rgba(30, 140, 70, 0.30) 0%, rgba(16, 90, 48, 0.16) 45%, transparent 68%),
+    conic-gradient(
+      from 0deg,
+      rgba(16, 120, 60, 0) 0deg,
+      rgba(61, 220, 132, 0.28) 60deg,
+      rgba(20, 90, 50, 0.15) 130deg,
+      rgba(16, 120, 60, 0) 200deg,
+      rgba(61, 220, 132, 0.28) 260deg,
+      rgba(16, 120, 60, 0) 360deg
+    );
+  filter: blur(18px);
+  pointer-events: none;
+  z-index: -1; /* 环/藤蔓之下 */
+  transform: translate(-50%, -50%);
+  animation: lifeBacklightFlow 40s linear infinite; /* 慢速旋转 → 浓绿辉光缓慢流动 */
+}
+@keyframes lifeBacklightFlow {
+  to { transform: translate(-50%, -50%) rotate(360deg); }
+}
+
 /* ===== darkness 已编译：环外循环不规则黑雾层（R9：圆形泡 → 非对称烟云 wisp） =====
  * .mist-blob 沿卡面四周分布、循环 渐现→渐散（mist-wisp），位于编译环
  * （.compiled-ring z 2）外侧（容器 inset:-30px 外扩到环带之外）；
