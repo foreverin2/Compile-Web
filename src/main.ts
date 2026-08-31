@@ -31,6 +31,10 @@ let pendingReveals: { owner: PlayerId; shownTo: PlayerId; defId: string; trigger
 let revealFlyBusy = false;
 /** 草案 → 游玩过渡进行中：暂停自动推进，避免视频期间后台渲染/推进对战界面 */
 let transitioning = false;
+/** 应用内重置世代号：胜利 → 返回主界面（resetToMainInterface）时 +1。进行中的抽牌/
+ *  揭示动画完成回调据此放弃后续渲染——防止旧动画把新草案状态路由进渲染/飞行流程
+ *  （可达路径：刷新抽牌动画进行中 → 立即胜利 → 动画结束前点「返回主界面」）。 */
+let resetEpoch = 0;
 
 const cb: UiCallbacks = {
   onRendered() {
@@ -56,6 +60,8 @@ const cb: UiCallbacks = {
   onAction(a) {
     if (state.phase === 'gameover') return;
     const player = state.turnPlayer;
+    // 本次行动的世代快照：动画完成回调据此判断重置是否已发生（见 resetEpoch）
+    const epoch = resetEpoch;
     // executeAction 使用窄化重载（play/compile 需 args，refresh/advance 无 args），
     // 而 LegalAction.kind 是联合类型，需按 kind 收窄后再分发
     let drawAnimCount = 0;
@@ -99,8 +105,10 @@ const cb: UiCallbacks = {
     const afterFx = () => {
       if (effectReveals.length > 0 && !revealFlyBusy) {
         revealFlyBusy = true;
+        const revealEpoch = resetEpoch;
         playRevealFlySequence(effectReveals, () => {
           revealFlyBusy = false;
+          if (revealEpoch !== resetEpoch) return; // 重置发生：放弃渲染（幽灵由重置清扫）
           renderApp(root, state, cb);
         });
       } else {
@@ -111,12 +119,14 @@ const cb: UiCallbacks = {
       drawAnimBusy = true;
       playDrawAnimation(player, drawAnimCount, () => {
         drawAnimBusy = false;
+        if (epoch !== resetEpoch) return; // 重置发生：放弃后续渲染（幽灵已在动画内清理）
         afterFx();
       });
     } else if (effectDraws.length > 0 && !drawAnimBusy) {
       drawAnimBusy = true;
       playDrawSequence(effectDraws, () => {
         drawAnimBusy = false;
+        if (epoch !== resetEpoch) return;
         afterFx();
       });
     } else {
@@ -289,6 +299,7 @@ function playDraftToGameTransition(): void {
  * 且全部可重置状态都有明确复位点（resetUiState 覆盖 render.ts 全部模块态）。
  */
 function resetToMainInterface(): void {
+  resetEpoch += 1; // 失效进行中的动画完成回调（epoch 守卫）
   if (autoTimer !== null) {
     window.clearTimeout(autoTimer);
     autoTimer = null;

@@ -1428,8 +1428,9 @@ let choicePromptId: string | null = null;
 let choiceSelected: string[] = [];
 
 /** 应用内重置（胜利遮罩「返回主界面」→ main.ts 调用）：清空全部 UI 模块态并移除
- *  body 级常驻层/遮罩——否则旧局残留（编译环 / 暗2 黑烟 / 放大遮罩 / 弃牌堆查看器）
- *  会在新局（createGame 重建状态）悬空。不触碰引擎（新局由 main.ts 重新 createGame）。 */
+ *  body 级常驻层/遮罩——否则旧局残留（编译环 / 暗2 黑烟 / 放大遮罩 / 弃牌堆查看器 /
+ *  飞行中的协议瞬时特效）会在新局（createGame 重建状态）悬空。不触碰引擎（新局由
+ *  main.ts 重新 createGame）。 */
 export function resetUiState(): void {
   if (activeDragCancel) activeDragCancel();
   selectedUid = null;
@@ -1449,6 +1450,15 @@ export function resetUiState(): void {
   closeZoom();
   closeTrashViewer();
   winOverlayShown = false;
+  // 飞行中的协议瞬时特效（life 藤蔓容器 / 绿光 / water 水环·光晕·落点框）与
+  // 抽牌/揭示幽灵：自身定时器会在数百毫秒内移除，但重置时立即清扫，避免残留进新局
+  // （旧动画的 done() 完成回调由 main.ts resetEpoch 世代守卫放弃渲染）。
+  for (const fx of document.querySelectorAll<HTMLElement>(
+    '.life-flip-fx, .life-flip-glow, .water-return-ring, .water-return-glow, .water-return-settle, ' +
+      '.draw-ghost, .reveal-fly-ghost'
+  )) {
+    fx.remove();
+  }
 }
 
 /** 选择确认条（select-line 用）：归属者标签 + 提示文案；线槽点击即答，无需确认钮 */
