@@ -787,9 +787,10 @@ export function initEffects(): () => void {
       default:
         return;
     }
-    // 额外协议特效（触发卡协议驱动，叠加上层）
-    // TODO(water/life FX): add `else if (payload.triggerProtocol === 'water'/'life')`
-    // branches here when the user specifies them — today they fall through = silent no-op.
+    // 额外协议特效（触发卡协议驱动，叠加上层；仅弃牌/删去走此块）：
+    // fire → 火焰焚烧；light → 白色柔光；darkness → 暗紫粒子。
+    // water（回手水波环）/life（翻转藤蔓）在各自分支内叠加（card:returned /
+    // card:flipped），不属于本块——其余协议触发时落到此处 = 无额外特效。
     if ((e.type === 'card:discarded' || e.type === 'card:deleted') && node) {
       if (payload.triggerProtocol === 'fire') {
         playFireBurnExtra(node, payload);
