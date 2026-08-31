@@ -705,7 +705,7 @@ function buildCompiledFx(defId: string): HTMLElement {
   return layer;
 }
 
-/** Life 已编译藤蔓（复用 Item 1 翻转藤蔓观感——粗长 S 曲线、绿光描边）：
+/** Life 已编译藤蔓（复用 Item 1 翻转藤蔓观感——粗 S 曲线、绿光描边；R15 起更短 ≤42px）：
  *  定位 div（transform-origin 0 0 = 卡框锚点，外层 transform 专用于朝向旋转，使藤蔓垂入
  *  协议卡内）+ 内层 .life-compiled-grow（一次性的缠绕生长 scaleY）+ svg .life-compiled-vine-curve
  *  （缓慢左右摇摆，负 delay 按 i 交错相位 → 各藤蔓不同时刻摇摆，不齐步）。
@@ -881,20 +881,37 @@ function appendCompiledRing(box: HTMLElement, defId: string): void {
     }
     box.appendChild(smoke);
   }
-  // ITEM 5：life 已编译 → 20+ 根粗长绿色藤蔓从卡牌框起缠绕协议卡（复用 Item 1 翻转藤蔓
-  // 观感：粗 S 曲线 + 绿光描边）+ 缓慢左右摇摆；藤蔓为层内 z 2（环带之上、卡面之上——
-  // 缠绕读作覆盖在协议卡上）。绿色框光由 .compiled-ring-life 呼吸动画提供、深绿背光为
-  // .life-backlight（buildCompiledFx 挂载）。定位用百分比 + margin 居中（跟随层尺寸，
-  // 图片未加载时也不飞离卡框）。
+  // ITEM 5（round15 重做）：life 已编译 → 20+ 根粗绿藤蔓从卡框起缠绕协议卡（复用 Item 1 翻转
+  // 藤蔓观感：粗 S 曲线 + 绿光描边）+ 缓慢左右摇摆。本版三处调整：
+  //  1) 更短：长度 ≤42px（旧 85/90 → 至多一半），仍垂入卡内；
+  //  2) 不规则：锚点沿边分数为手挑的非等分值（不再是 6 等分）；
+  //  3) 共享锚点：8 个锚点各发出 1-3 根藤蔓（同点不同朝向角 → 有机簇生），共 21 根（≥20）。
+  // 藤蔓为层内 z 2（环带之上、卡面之上）。绿色框光由 .compiled-ring-life 呼吸动画提供、
+  // 深绿背光为 .life-backlight（buildCompiledFx 挂载）。定位用百分比 + margin 居中
+  // （跟随层尺寸，图片未加载时也不飞离卡框）。
   if (defId === 'life') {
-    const VINES_PER_SIDE = 6; // 4 边 × 6 = 24 根（≥ 20）
-    const VINE_LEN = 90; // 与 Item 1 翻转藤蔓同量级（85/90px）
+    const VINE_LEN_MAX = 42; // 旧 85/90 → 至多一半
     const VW = 30; // wrap 宽 = svg 宽（margin 居中基准）
     const SWAY_CYCLE_S = 4.5; // 摇摆周期（与 CSS .life-compiled-vine-curve 一致）
-    for (let i = 0; i < VINES_PER_SIDE * 4; i++) {
-      const side = Math.floor(i / VINES_PER_SIDE); // 0 上 1 右 2 下 3 左
-      const pos = (i % VINES_PER_SIDE + 0.5) / VINES_PER_SIDE; // 0..1 沿边位置（避开四角）
-      const vine = buildCompiledVine(side * 90, VINE_LEN, (i * 0.55) % SWAY_CYCLE_S);
+    // 锚点表：[边(0上/1右/2下/3左), 沿边分数, 藤蔓朝向角(deg，垂入卡内)]。
+    // 分数为手挑的不规则值（避开四角与 1/3 等分）；同锚点连续多行 = 同一点发出多根
+    // 藤蔓（角度略异 → 簇生，不齐整）。
+    const ANCHORS: ReadonlyArray<readonly [number, number, number]> = [
+      [0, 0.14, -12], [0, 0.14, 0], [0, 0.14, 12], // 上 0.14：3 根
+      [0, 0.71, -9], [0, 0.71, 11], // 上 0.71：2 根
+      [1, 0.19, 78], [1, 0.19, 90], [1, 0.19, 104], // 右 0.19：3 根
+      [1, 0.83, 84], [1, 0.83, 98], // 右 0.83：2 根
+      [2, 0.31, 166], [2, 0.31, 180], [2, 0.31, 196], // 下 0.31：3 根
+      [2, 0.77, 172], [2, 0.77, 188], // 下 0.77：2 根
+      [3, 0.37, 256], [3, 0.37, 270], [3, 0.37, 285], // 左 0.37：3 根
+      [3, 0.92, 262], [3, 0.92, 274], [3, 0.92, 288], // 左 0.92：3 根
+    ];
+    for (let i = 0; i < ANCHORS.length; i++) {
+      const [side, pos, rot] = ANCHORS[i];
+      // 长度 34/38/42 小幅差异（≤ VINE_LEN_MAX）→ 比齐长更自然
+      const len = Math.min(VINE_LEN_MAX, 34 + ((i * 13) % 3) * 4);
+      const vine = buildCompiledVine(rot, len, (i * 0.37) % SWAY_CYCLE_S);
+      vine.style.height = `${len}px`;
       if (side === 0) {
         vine.style.left = `${pos * 100}%`;
         vine.style.marginLeft = `${-VW / 2}px`;

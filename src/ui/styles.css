@@ -1836,11 +1836,14 @@ body.dragging { cursor: grabbing; user-select: none; }
   }
 }
 
-/* ===== life 已编译环（ITEM 5）：绿色框光 + 20+ 根粗长藤蔓缠绕 + 深绿背光 =====
+/* ===== life 已编译环（ITEM 5）：绿色框光 + 20+ 根粗藤蔓缠绕 + 深绿背光 =====
  * - .compiled-ring-life：呼吸绿边框（藤蔓同色 #3ddc84 ↔ 深绿 #157a45），隐藏岩浆段/岩石；
  * - .life-compiled-vine：定位 div（transform-origin 0 0 = 卡框锚点；外层 transform 由 JS
  *   写朝向旋转，使藤蔓垂入协议卡内）；内层 .life-compiled-grow 一次性缠绕生长（scaleY）；
- *   svg .life-compiled-vine-curve 缓慢左右摇摆（绕锚点 ±8°，4.5s，负 delay 交错相位）；
+ *   svg .life-compiled-vine-curve 缓慢左右摇摆（绕锚点 ±8°，4.5s，负 delay 交错相位）。
+ *   R15：藤蔓更短（JS 生成 ≤42px，约为旧 85/90px 的一半；wrap 高度上限随之改为 42px，
+ *   实际高度由 JS 逐根覆写行内 height）——锚点沿边为不规则手挑分数，且同一锚点可发出
+ *   1-3 根藤蔓（同点不同朝向角 → 簇生有机感）；
  * - .compiled-fx-life .life-backlight：深绿背光（radial + conic，blur，慢速旋转 ——
  *   卡面被浓绿辉光笼罩，持续不刺眼）。
  * 静态兜底：.protocol.compiled-fx-life（与 fire/light/darkness 同模式）。 */
@@ -1877,7 +1880,7 @@ body.dragging { cursor: grabbing; user-select: none; }
 .life-compiled-vine {
   position: absolute;
   width: 30px;
-  height: 90px;
+  height: 42px; /* R15：藤蔓 ≤42px（旧 90px 的一半）；实际高度由 JS 逐根覆写 */
   transform-origin: 0 0; /* 锚点 = 卡框边缘点 */
   pointer-events: none;
   z-index: 2; /* 环带同层：缠绕读作覆盖在协议卡上 */
