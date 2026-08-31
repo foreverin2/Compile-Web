@@ -4,7 +4,7 @@ import { executeAction } from './core/game';
 import { getCompilableLines } from './core/rules/compile';
 import { collectTriggers } from './core/effects/triggers';
 import { renderApp, renderDraft, type UiCallbacks } from './ui/render';
-import { initEffects, initCompileFx, playRevealFly } from './ui/effects';
+import { initEffects, initCompileFx, initRearrangeFx, playRevealFly } from './ui/effects';
 import { initDiag } from './ui/diag';
 import { initDevMode } from './ui/devmode';
 import { gameBus } from './core/events/bus';
@@ -316,6 +316,7 @@ function scheduleAutoAdvance(): void {
 
 initEffects();
 initCompileFx();
+initRearrangeFx();
 // 诊断日志：全量记录 console + 捕获未捕获异常（出错自动提示导出）
 initDiag(() => state);
 // 隐藏开发者模式：Ctrl+Shift+P 密码进入；get <牌名> 把卡加入当前玩家手牌
