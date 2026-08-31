@@ -8,6 +8,7 @@ import { EFFECTS } from './registry';
 import './cards/fire';
 import './cards/light';
 import './cards/darkness';
+import './cards/water';
 
 function topEffect(s: GameState): PendingEffect | undefined {
   return s.pendingEffects[s.pendingEffects.length - 1];
