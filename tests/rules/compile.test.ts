@@ -77,10 +77,12 @@ describe('compile rules', () => {
   it('recompile draws opponent top card instead of flipping', () => {
     s.players[0].protocols[0].compiled = true;
     s.players[1].deck = [{ uid: 'd1', defId: 'spirit-1', owner: 1, faceUp: true, zone: 'deck', line: null, pos: null }];
+    s.players[1].deck[0].secret = true; // 牌堆来源的 secret 卡（曾被弃牌堆洗回牌库）
     executeCompile(s, 0, 0);
     expect(s.players[0].protocols[0].compiled).toBe(true);
     expect(s.players[0].hand).toHaveLength(1);
     expect(s.players[0].hand[0].owner).toBe(0);
+    expect(s.players[0].hand[0].secret).toBeFalsy(); // 夺取进手即解禁（手牌 = 已知信息）
     expect(s.players[1].deck).toHaveLength(0);
   });
 

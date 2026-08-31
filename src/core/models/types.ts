@@ -40,8 +40,8 @@ export interface Card {
   /** 在堆叠中的位置：0 = 最底层（贴协议），越大越靠上；null = 不在场上堆叠 */
   pos: number | null;
   /** 牌堆来源的反面打出卡 = 非公开信息，翻开前持有者不可窥视
-   *  （playTopDeck 打出时置 true；翻面 op 翻正为正面时清 false；回手后仍保持 secret，
-   *  直到被某效果翻正解禁。手牌来源（playFromHand）不打此标记 = 已知信息） */
+   *  （playTopDeck 打出时置 true；翻面 op 翻正为正面时清 false；进入手牌即解禁——
+   *  回手/抽入/夺取进手一律清 false，手牌 = 已知信息。手牌来源（playFromHand）不打此标记） */
   secret?: boolean;
 }
 
