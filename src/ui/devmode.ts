@@ -1,5 +1,6 @@
-import type { Card, CardDef, GameState, ProtocolDef } from '../core/models/types';
+import type { Card, CardDef, GameState, Line, ProtocolDef } from '../core/models/types';
 import { ALL_CARD_DEFS, ALL_PROTOCOLS } from '../data/cards';
+import { executeCompileUnchecked } from '../core/rules/compile';
 
 /**
  * 隐藏开发者模式（测试辅助）：
@@ -9,12 +10,16 @@ import { ALL_CARD_DEFS, ALL_PROTOCOLS } from '../data/cards';
  *   输入时实时检索匹配卡牌列表，点击列表行等于执行 get；
  *  - `clean` 指令：直接清空当前玩家全部手牌到弃牌堆（不触发任何卡牌效果/事件，
  *   方便测试空手牌场景）；
+ *  - `Compile 协议名` 指令：在当前玩家回合强制触发当前场上已存在的该协议的编译
+ *   效果（无视线值是否 ≥10；未编译 → 翻协议 + 删双方该线全部卡牌，已编译 →
+ *   重新编译抽对手牌库顶 1 张），调用引擎编译规则本体 executeCompileUnchecked，
+ *   与正式编译同一状态变更/事件路径；
  * - 所有动作同时写入 console（被 diag 全量记录）与 state.log（游戏事件日志），
  *   两者都包含在 diag 导出中。
  *
- * 纯函数部分（resolveCardName / searchCards / 查询表构建）无 DOM 访问，
- * 可在 vitest(node) 下导入；所有 DOM 操作都位于 initDevMode 内部闭包 /
- * 其调用的函数中。
+ * 纯函数部分（resolveCardName / resolveProtocolName / searchCards / 查询表构建）
+ * 无 DOM 访问，可在 vitest(node) 下导入；所有 DOM 操作都位于 initDevMode 内部
+ * 闭包 / 其调用的函数中。
  */
 
 export interface DevModeHost {
@@ -26,7 +31,7 @@ export interface DevModeHost {
 const PASSWORD = '上上下下左右左右BABA';
 
 /** 指令页提示行 */
-const HINT = '指令：get 牌名（加入当前玩家手牌，如 get light-2）· clean（清空当前玩家手牌）';
+const HINT = '指令：get 牌名（加入当前玩家手牌，如 get light-2）· clean（清空当前玩家手牌）· Compile 协议（强制编译当前场上协议，如 Compile life）';
 
 /** 卡牌实例 uid 计数器（dev- 前缀保证不与正式 uid 冲突） */
 let uidCounter = 0;
@@ -111,6 +116,34 @@ export function resolveCardName(name: string): CardDef | null {
   const key = normalizeKey(name.trim());
   if (key === '') return null;
   return CARD_LOOKUP.get(key) ?? null;
+}
+
+/** 协议 defId → 协议定义查询表（模块加载时构建一次）：键 = 归一化 defId（'life'）与
+ *  归一化中文名（'生'），两类键无交集（defId 全 ASCII，协议名全汉字），无歧义。 */
+const PROTOCOL_LOOKUP: ReadonlyMap<string, ProtocolDef> = (() => {
+  const map = new Map<string, ProtocolDef>();
+  for (const proto of ALL_PROTOCOLS) {
+    map.set(normalizeKey(proto.defId), proto);
+    map.set(normalizeKey(proto.name), proto);
+  }
+  return map;
+})();
+
+/**
+ * 解析协议名（纯函数，无 DOM）：接受 `life` / `生` / `LIFE` / ` light-2 ` 等形式
+ * （trim + 大小写不敏感）：
+ * - 直接命中协议 defId 前缀（'life'/'darkness'…）或协议中文名（'生'/'水'/'暗'…）；
+ * - 否则尝试把输入当卡牌名解析（resolveCardName，如 'light-2' → light），取其协议。
+ * 找不到返回 null。
+ */
+export function resolveProtocolName(name: string): ProtocolDef | null {
+  const key = normalizeKey(name.trim());
+  if (key === '') return null;
+  const direct = PROTOCOL_LOOKUP.get(key);
+  if (direct) return direct;
+  const card = resolveCardName(name);
+  if (!card) return null;
+  return PROTOCOL_BY_ID.get(card.protocol) ?? null;
 }
 
 /**
@@ -225,10 +258,41 @@ function addCardToCurrentPlayer(host: DevModeHost, defId: string, suffix = ''): 
 }
 
 /**
+ * Compile 指令（R16）：在当前玩家（state.turnPlayer）回合强制触发【当前场上已存在】
+ * 的指定协议的编译效果——无视线值是否 ≥10/是否可编译。
+ * - 解析协议名（resolveProtocolName：defId 前缀 / 中文名 / 卡牌名回退）；
+ * - 在当前玩家 protocols 中按 defId 定位协议线（不在当前玩家场上 → 记日志并返回）；
+ * - 调用引擎编译规则本体 executeCompileUnchecked（绕过 ≥10 前置校验，直接执行编译
+ *   本体）：未编译 → 删双方该线全部卡牌 + 翻协议；已编译 → 重新编译（删牌 +
+ *   抽对手牌库顶 1 张所有权变更）。与正式编译同一状态变更/事件路径（line:compiled
+ *   事件照发 → 编译清牌 FX 正常播放），不破坏引擎行动流。
+ */
+function forceCompileProtocol(host: DevModeHost, name: string): void {
+  const state = host.getState();
+  const player = state.turnPlayer;
+  const proto = resolveProtocolName(name);
+  if (!proto) {
+    log(host, `未找到协议: ${name}`);
+    return;
+  }
+  const line = state.players[player].protocols.findIndex((p) => p.defId === proto.defId);
+  if (line === -1) {
+    log(host, `P${player + 1} 场上没有协议 ${proto.defId}（${proto.name}）`);
+    return;
+  }
+  executeCompileUnchecked(state, player, line as Line);
+  log(host, `已强制编译 P${player + 1} 的 ${proto.defId}（line ${line + 1}）`);
+  host.render();
+}
+
+/**
  * 执行一条指令。支持：
  * - `get 牌名`（大小写不敏感）：把解析出的牌加入当前玩家（state.turnPlayer）手牌并触发重渲染；
  * - `clean`（大小写不敏感）：直接清空当前玩家全部手牌到弃牌堆并触发重渲染——
  *   纯状态操作，不经 executeAction / discard op，不触发任何引擎事件或卡牌效果。
+ * - `Compile 协议名`（大小写不敏感）：在当前玩家回合强制触发当前场上已存在的该协议
+ *   的编译效果（无视线值；未编译翻协议、已编译重新编译抽对手牌库顶 1 张），调用引擎
+ *   编译规则本体 executeCompileUnchecked 并触发重渲染。
  * 未知指令 / 未找到卡牌：记录日志，不改变状态。
  */
 export function runCommand(host: DevModeHost, line: string): void {
@@ -254,6 +318,11 @@ export function runCommand(host: DevModeHost, line: string): void {
     p.hand = [];
     log(host, `已清空 P${player + 1} 手牌（clean，${count} 张）`);
     host.render();
+    return;
+  }
+  const cm = /^compile\s+(.+)$/i.exec(trimmed);
+  if (cm) {
+    forceCompileProtocol(host, cm[1].trim());
     return;
   }
   const m = /^get\s+(.+)$/i.exec(trimmed);

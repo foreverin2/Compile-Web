@@ -20,11 +20,11 @@ export function mustCompile(s: GameState, player: PlayerId): boolean {
   return getCompilableLines(s, player).length > 0;
 }
 
-/** 编译：同时删除该线双方全部卡牌（"all" 效果，不触发文本），翻协议或抽对手牌库顶 1 张 */
-export function executeCompile(s: GameState, player: PlayerId, line: Line): void {
-  if (!canCompileLine(s, player, line)) {
-    throw new Error(`line ${line} does not meet compile requirements`);
-  }
+/** 编译本体（无前置校验）：同时删除该线双方全部卡牌（"all" 效果，不触发文本），
+ *  翻协议或抽对手牌库顶 1 张，并完成胜利判定。
+ *  供 executeCompile（先校验可编译条件）与开发者模式 Compile 指令（强制编译，无视
+ *  线值是否 ≥10）共用——保证两条路径的底层状态变更/事件完全一致。 */
+export function executeCompileUnchecked(s: GameState, player: PlayerId, line: Line): void {
   const p = s.players[player];
   const opp = s.players[player === 0 ? 1 : 0];
   const protocol = p.protocols[line];
@@ -77,4 +77,12 @@ export function executeCompile(s: GameState, player: PlayerId, line: Line): void
     s.phase = 'gameover';
     s.log.push(`P${player + 1} wins!`);
   }
+}
+
+/** 编译：同时删除该线双方全部卡牌（"all" 效果，不触发文本），翻协议或抽对手牌库顶 1 张 */
+export function executeCompile(s: GameState, player: PlayerId, line: Line): void {
+  if (!canCompileLine(s, player, line)) {
+    throw new Error(`line ${line} does not meet compile requirements`);
+  }
+  executeCompileUnchecked(s, player, line);
 }
