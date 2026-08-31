@@ -1455,7 +1455,7 @@ export function resetUiState(): void {
   // （旧动画的 done() 完成回调由 main.ts resetEpoch 世代守卫放弃渲染）。
   for (const fx of document.querySelectorAll<HTMLElement>(
     '.life-flip-fx, .life-flip-glow, .water-return-ring, .water-return-glow, .water-return-settle, ' +
-      '.draw-ghost, .reveal-fly-ghost'
+      '.water-return-trail, .draw-ghost, .reveal-fly-ghost'
   )) {
     fx.remove();
   }

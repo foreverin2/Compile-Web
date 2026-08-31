@@ -5,7 +5,8 @@ import { mountCut } from '../fx/discard-cut';
 const FX_REMOVE_MS = 1200;
 const BASE_Z = 300; // 基础行为特效层
 const EXTRA_Z = 301; // 协议专属额外特效层（叠加在基础特效之上）
-const MOVE_MS = 450; // 平移类特效时长（回手/偏转）
+const MOVE_MS = 450; // 平移类特效时长（偏转/打出/重排等）
+const RETURN_MOVE_MS = 700; // 回手专属飞行时长（450 → 700ms：回手更从容、更刻意）
 // Darkness 偏转烟桥（shift-bridge）节奏：桥渐显 → 卡飞过（MOVE_MS）→ 桥渐隐 → 清理
 const BRIDGE_IN_MS = 350;
 const BRIDGE_OUT_MS = 400;
@@ -333,7 +334,7 @@ function playLifeFlip(node: HTMLElement, payload: FxCardPayload): void {
   window.setTimeout(() => playFlip(node, payload), LIFE_VINE_SHRINK_MS);
 }
 
-/** 基础行为特效：回手——从场上丝滑平移到持有者手牌末尾 */
+/** 基础行为特效：回手——从场上丝滑平移到持有者手牌末尾（专属 RETURN_MOVE_MS，更从容） */
 function playReturn(node: HTMLElement, payload: FxCardPayload): void {
   const rect = node.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0 || payload.owner === undefined) return;
@@ -343,24 +344,26 @@ function playReturn(node: HTMLElement, payload: FxCardPayload): void {
   const target = handEndPos(hand, payload.owner);
   const dx = target.x - (rect.left + rect.width / 2);
   const dy = target.y - (rect.top + rect.height / 2);
-  clone.style.transition = `transform ${MOVE_MS}ms cubic-bezier(0.2, 0.7, 0.3, 1), opacity ${MOVE_MS}ms ease`;
+  clone.style.transition = `transform ${RETURN_MOVE_MS}ms cubic-bezier(0.2, 0.7, 0.3, 1), opacity ${RETURN_MOVE_MS}ms ease`;
   requestAnimationFrame(() => {
     // 组合 --fx-rot：场上横置卡平移时保持 ±90° 朝向（translate 在最外层 → 屏幕系位移）
     clone.style.transform = `translate(${dx}px, ${dy}px) rotate(var(--fx-rot, 0deg)) scale(0.85)`;
     clone.style.opacity = '0.5';
   });
-  window.setTimeout(() => clone.remove(), MOVE_MS + 80);
+  window.setTimeout(() => clone.remove(), RETURN_MOVE_MS + 80);
 }
 
-/* ===== Water 回手专属特效：蓝色水波环 + 光晕 + 游动轨迹环（water-3/water-4 及未来水回手） =====
+/* ===== Water 回手专属特效：蓝色水波环 + 光晕 + 游动轨迹环 + 水拖尾（water-3/water-4 及未来水回手） =====
  * 触发：card:returned 且 payload.triggerProtocol === 'water'。飞行本身复用 playReturn
  * （非水回手保持原样），本函数只在它周围叠加水特效：
- * ① 回手前：卡框周围一圈扩散的蓝色水波环 + 蓝色光晕 + 边框发光（body 级 fixed）；
- * ② 飞行中：路径 25%/50%/75% 处各出现一个小号扩散水环（模拟鱼在水面游动的轨迹）；
- * ③ 回手后：落点（手牌末尾）卡框特效持续 2 秒后淡出。
+ * ① 回手前：卡框周围一圈扩散的大号蓝色水波环 + 蓝色光晕 + 边框发光（body 级 fixed）；
+ * ② 飞行中：路径 25%/50%/75% 处各出现一个小号扩散水环 + 一条随行水拖尾
+ *    （.water-return-trail：从起点延伸到卡当前位置的渐变光带，尾端渐隐——鱼在水面游动的尾迹）；
+ * ③ 回手后：落点（手牌末尾）卡框特效持续 3 秒后淡出。
  * 全部 pointer-events:none、JS 定时清理（无泄漏）。 */
-const WATER_RING_MS = 700; // 单个水环扩散时长
-const WATER_AFTER_MS = 2000; // 回手后落点框特效持续时间
+const WATER_RING_MS = 1000; // 单个水环扩散时长（700 → 1000ms，随加长飞行成比例延长）
+const WATER_AFTER_MS = 3000; // 回手后落点框特效持续时间（2s → 3s）
+const TRAIL_Z = BASE_Z - 1; // 水拖尾：飞行卡克隆（BASE_Z）之下——鱼尾迹在卡后
 
 /** body 级水波环：fixed 定位于 (x,y) 中心、尺寸 size 的圆环，扩散 + 淡出后自清理 */
 function spawnWaterRing(x: number, y: number, size: number, cls: string): void {
@@ -375,6 +378,53 @@ function spawnWaterRing(x: number, y: number, size: number, cls: string): void {
   window.setTimeout(() => ring.remove(), WATER_RING_MS + 120);
 }
 
+/** cubic-bezier(0.2, 0.7, 0.3, 1)（与回手飞行同缓动）数值求值：进度 p ∈ [0,1] → 缓动值。
+ *  二分求 t 使 bezierX(t)=p，再代入 bezierY——拖尾头部与卡实时位置对齐。 */
+function returnFlightEase(p: number): number {
+  const x1 = 0.2, y1 = 0.7, x2 = 0.3, y2 = 1;
+  let lo = 0;
+  let hi = 1;
+  for (let i = 0; i < 12; i++) {
+    const t = (lo + hi) / 2;
+    const mt = 1 - t;
+    const x = 3 * mt * mt * t * x1 + 3 * mt * t * t * x2 + t * t * t;
+    if (x < p) lo = t;
+    else hi = t;
+  }
+  const t = (lo + hi) / 2;
+  const mt = 1 - t;
+  return 3 * mt * mt * t * y1 + 3 * mt * t * t * y2 + t * t * t;
+}
+
+/** 水拖尾：飞行期间沿路径跟随卡的渐变光带（rAF 逐帧更新，随卡推进变长，头亮尾淡）。
+ *  起点锚定路径起点（transform-origin left center），宽度 = 已行进距离；渐变右端（亮头）
+ *  始终位于卡当前位置 → 读作卡身后拉出的鱼尾迹。飞行结束自清理。 */
+function spawnWaterTrail(start: { x: number; y: number }, end: { x: number; y: number }, durMs: number): void {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist < 1) return;
+  const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
+  const trail = document.createElement('div');
+  trail.className = 'water-return-trail';
+  trail.style.left = `${start.x}px`;
+  trail.style.top = `${start.y - 8}px`; // 高度 16px → 中心对准路径
+  trail.style.transform = `rotate(${angle}deg)`;
+  trail.style.zIndex = String(TRAIL_Z);
+  document.body.appendChild(trail);
+  const startAt = performance.now();
+  const step = (now: number): void => {
+    const p = Math.min(1, (now - startAt) / durMs);
+    const e = returnFlightEase(p);
+    trail.style.width = `${e * dist}px`;
+    // 头亮尾淡：整体随飞行渐弱（起飞时迅速显现、落地前溶解）
+    trail.style.opacity = String(Math.min(1, e * 8) * (0.9 - 0.55 * e));
+    if (p < 1) requestAnimationFrame(step);
+    else trail.remove();
+  };
+  requestAnimationFrame(step);
+}
+
 function playWaterReturn(node: HTMLElement, payload: FxCardPayload): void {
   const rect = node.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0 || payload.owner === undefined) {
@@ -387,8 +437,8 @@ function playWaterReturn(node: HTMLElement, payload: FxCardPayload): void {
   const target = handEndPos(hand, payload.owner);
   const dx = target.x - cx;
   const dy = target.y - cy;
-  // ① 回手前：大号扩散水环 + 蓝色光晕框（卡框周围，与飞行同时开始）
-  spawnWaterRing(cx, cy, Math.max(rect.width, rect.height) * 2.4, 'water-return-ring big');
+  // ① 回手前：大号扩散水环（放大 1.67×）+ 蓝色光晕框（卡框周围，与飞行同时开始）
+  spawnWaterRing(cx, cy, Math.max(rect.width, rect.height) * 4.0, 'water-return-ring big');
   const glow = document.createElement('div');
   glow.className = 'water-return-glow';
   glow.style.left = `${rect.left}px`;
@@ -398,20 +448,21 @@ function playWaterReturn(node: HTMLElement, payload: FxCardPayload): void {
   glow.style.zIndex = String(EXTRA_Z);
   document.body.appendChild(glow);
   window.setTimeout(() => glow.remove(), WATER_RING_MS + 120);
-  // ② 飞行中：路径 25%/50%/75% 处的小号轨迹环（与卡同步出现 → 鱼游轨迹）。
+  // ② 飞行中：路径 25%/50%/75% 处的小号轨迹环（与卡同步出现 → 鱼游轨迹）+ 水拖尾。
   // 飞行缓动 cubic-bezier(0.2,0.7,0.3,1) 是快启动——线性时间 25/50/75% 时卡已在
   // ~75/90/98% 处；用逆缓动解把「位置比例」映射回「时刻比例」（t≈0.128/0.282/0.488，
   // 即 B_y(t)=0.25/0.5/0.75），环才真正与卡经过同步。
   const WATER_TRAIL_FRACS = [0.25, 0.5, 0.75] as const; // 沿路径的位置比例
-  const WATER_TRAIL_AT = [0.128, 0.282, 0.488] as const; // 逆缓动后的时刻比例（×MOVE_MS）
+  const WATER_TRAIL_AT = [0.128, 0.282, 0.488] as const; // 逆缓动后的时刻比例（×RETURN_MOVE_MS）
   for (let i = 0; i < WATER_TRAIL_FRACS.length; i++) {
     const frac = WATER_TRAIL_FRACS[i];
     const at = WATER_TRAIL_AT[i];
     window.setTimeout(() => {
-      spawnWaterRing(cx + dx * frac, cy + dy * frac, 30, 'water-return-ring trail');
-    }, MOVE_MS * at);
+      spawnWaterRing(cx + dx * frac, cy + dy * frac, 48, 'water-return-ring trail');
+    }, RETURN_MOVE_MS * at);
   }
-  // ③ 回手后（飞行落地）：落点框特效持续 2 秒后淡出（落点 = 手牌末尾新卡中心）
+  spawnWaterTrail({ x: cx, y: cy }, { x: target.x, y: target.y }, RETURN_MOVE_MS);
+  // ③ 回手后（飞行落地）：落点框特效持续 3 秒后淡出（落点 = 手牌末尾新卡中心）
   window.setTimeout(() => {
     const settle = document.createElement('div');
     settle.className = 'water-return-settle';
@@ -422,7 +473,7 @@ function playWaterReturn(node: HTMLElement, payload: FxCardPayload): void {
     settle.style.zIndex = String(EXTRA_Z);
     document.body.appendChild(settle);
     window.setTimeout(() => settle.remove(), WATER_AFTER_MS + 300);
-  }, MOVE_MS);
+  }, RETURN_MOVE_MS);
   // 基础回手飞行照常（本函数只叠加水特效，不替换飞行）
   playReturn(node, payload);
 }

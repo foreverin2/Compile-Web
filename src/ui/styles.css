@@ -1026,23 +1026,25 @@ body {
 }
 .win-confirm-btn:hover { background: #2a7a45; }
 
-/* ===== Water 回手特效（water-3/water-4）：蓝色水波环 + 光晕 + 游动轨迹环 =====
+/* ===== Water 回手特效（water-3/water-4）：蓝色水波环 + 光晕 + 游动轨迹环 + 水拖尾 =====
  * 全部 body 级 fixed + pointer-events:none（JS 定时清理，见 effects/index.ts）：
  * - .water-return-ring：扩散水环（border 圆环缩放 + 淡出）；big = 回手前大环、
- *   trail = 飞行路径上的小轨迹环（鱼迹）；
+ *   trail = 飞行路径上的小轨迹环（鱼迹）；放大（border 3→4px、轨迹环 30→48px）；
  * - .water-return-glow：回手前卡框蓝色光晕（呼吸发光 → 飞行期间随行渐弱）；
- * - .water-return-settle：回手后落点（手牌末尾）框特效，2 秒后淡出。 */
+ * - .water-return-trail：飞行中随行的水拖尾（渐变光带，头亮尾淡，rAF 逐帧变长）；
+ * - .water-return-settle：回手后落点（手牌末尾）框特效，3 秒后淡出。
+ * 时长（与 effects/index.ts 常量一致）：环/光晕 0.7s → 1.0s、落点 2s → 3s。 */
 .water-return-ring {
   position: fixed;
   pointer-events: none;
   border-radius: 50%;
-  border: 3px solid rgba(64, 180, 255, 0.9);
-  box-shadow: 0 0 14px rgba(64, 180, 255, 0.55);
-  animation: water-ring-expand 0.7s ease-out forwards;
+  border: 4px solid rgba(64, 180, 255, 0.9);
+  box-shadow: 0 0 16px rgba(64, 180, 255, 0.6);
+  animation: water-ring-expand 1s ease-out forwards;
 }
 .water-return-ring.trail {
-  border-width: 2px;
-  box-shadow: 0 0 8px rgba(64, 180, 255, 0.45);
+  border-width: 3px;
+  box-shadow: 0 0 10px rgba(64, 180, 255, 0.5);
 }
 @keyframes water-ring-expand {
   0% { transform: scale(0.2); opacity: 0.95; }
@@ -1060,12 +1062,29 @@ body {
   border-radius: 8px;
   border: 2px solid rgba(64, 180, 255, 0.85);
   box-shadow: 0 0 22px rgba(64, 180, 255, 0.8), inset 0 0 16px rgba(64, 180, 255, 0.4);
-  animation: water-glow-in 0.7s ease forwards;
+  animation: water-glow-in 1s ease forwards;
 }
 @keyframes water-glow-in {
   0% { opacity: 0; box-shadow: 0 0 0 rgba(64, 180, 255, 0), inset 0 0 0 rgba(64, 180, 255, 0); }
   35% { opacity: 1; box-shadow: 0 0 28px rgba(64, 180, 255, 0.95), inset 0 0 22px rgba(64, 180, 255, 0.55); }
   100% { opacity: 0.7; box-shadow: 0 0 16px rgba(64, 180, 255, 0.6), inset 0 0 12px rgba(64, 180, 255, 0.3); }
+}
+/* 水拖尾：从路径起点延伸到卡当前位置的渐变光带（transform-origin left center 锚定起点，
+   整体按路径角度旋转；渐变左端透明 = 尾、右端亮蓝 = 头随卡推进）。opacity 由 JS rAF 逐帧驱动。 */
+.water-return-trail {
+  position: fixed;
+  height: 16px;
+  transform-origin: left center;
+  pointer-events: none;
+  border-radius: 8px;
+  background: linear-gradient(
+    90deg,
+    rgba(64, 180, 255, 0) 0%,
+    rgba(64, 180, 255, 0.35) 55%,
+    rgba(120, 215, 255, 0.85) 100%
+  );
+  filter: drop-shadow(0 0 6px rgba(64, 180, 255, 0.65));
+  opacity: 0;
 }
 .water-return-settle {
   position: fixed;
@@ -1073,11 +1092,11 @@ body {
   border-radius: 8px;
   border: 2px solid rgba(64, 180, 255, 0.85);
   box-shadow: 0 0 20px rgba(64, 180, 255, 0.75), inset 0 0 16px rgba(64, 180, 255, 0.4);
-  animation: water-settle 2s ease forwards;
+  animation: water-settle 3s ease forwards;
 }
 @keyframes water-settle {
   0% { opacity: 0.95; box-shadow: 0 0 26px rgba(64, 180, 255, 0.9), inset 0 0 20px rgba(64, 180, 255, 0.55); }
-  75% { opacity: 0.85; }
+  82% { opacity: 0.85; }
   100% { opacity: 0; box-shadow: 0 0 4px rgba(64, 180, 255, 0); }
 }
 
