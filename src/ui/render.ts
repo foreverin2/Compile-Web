@@ -932,9 +932,11 @@ function appendCompiledRing(box: HTMLElement, defId: string): void {
       box.appendChild(vine);
     }
   }
-  // ITEM 5：water 已编译 → 卡中心背后持续扩散的蓝色波纹层（多个圆环交错相位 → 连续不断，
-  // 接近卡框时渐渐消散）+ 时不时出现的海浪线（长周期浮现 + 交错相位 → 偶发涌现）。
-  // 蓝色框光由 .compiled-ring-water 呼吸动画提供。波纹/海浪为层内 z 1（环带之下）。
+  // ITEM 5（round15 增补）：water 已编译 → 卡中心背后持续扩散的蓝色波纹层（多个圆环交错
+  // 相位 → 连续不断，接近卡框时渐渐消散）+ 时不时出现的海浪线（长周期浮现 + 交错相位 →
+  // 偶发涌现）+ 框边时不时的小型水环（四角 + 上下缘中点，长周期渐现→渐散，见 CSS
+  // .water-frame-ripples）。波纹/海浪峰值透明度 ~80%（CSS keyframes）。蓝色框光由
+  // .compiled-ring-water 呼吸动画提供。波纹/海浪/框边小环为层内 z 1（环带之下）。
   if (defId === 'water') {
     const ripples = el('div', 'water-ripples');
     const RIPPLE_COUNT = 5;
@@ -953,6 +955,22 @@ function appendCompiledRing(box: HTMLElement, defId: string): void {
       waves.appendChild(w);
     }
     box.appendChild(waves);
+    // R15：时不时的小型框边水环——中心波纹同款环形（小型），挂在四角 + 上下缘中点
+    // （卡框内/框边）。长周期 10s + 交错负 delay（2.3s/个）→ 各环不同时刻渐现→渐散，
+    // 大部分时间不可见（偶发涌现，同 darkness 圆烟模式）。pointer-events:none（层本身）。
+    const frameRipples = el('div', 'water-frame-ripples');
+    const FRAME_RIPPLE_POS: ReadonlyArray<readonly [number, number]> = [
+      [7, 7], [93, 7], [50, 4], [7, 93], [93, 93], [50, 96],
+    ];
+    for (let i = 0; i < FRAME_RIPPLE_POS.length; i++) {
+      const [x, y] = FRAME_RIPPLE_POS[i];
+      const r = el('div', 'water-frame-ripple');
+      r.style.left = `${x}%`;
+      r.style.top = `${y}%`;
+      r.style.animationDelay = `${-(i * 2.3)}s`;
+      frameRipples.appendChild(r);
+    }
+    box.appendChild(frameRipples);
   }
 }
 
