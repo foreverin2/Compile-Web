@@ -1901,6 +1901,109 @@ body.dragging { cursor: grabbing; user-select: none; }
   to { transform: translate(-50%, -50%) rotate(360deg); }
 }
 
+/* ===== water 已编译环（ITEM 5）：蓝色框光 + 中心扩散波纹 + 海浪线 =====
+ * - .compiled-ring-water：呼吸蓝边框，隐藏岩浆段/岩石；
+ * - .water-ripples：卡中心背后的波纹层（5 个圆环交错相位 → 连续不断向外扩散，
+ *   接近卡框（scale ≈2.7 ≈ 297px ≥ 280px 卡高）时渐渐消散）；
+ * - .water-waves：3 条横向正弦海浪线（长周期浮现 9.6s + 交错相位 → "时不时"涌现，
+ *   随 dashoffset 流动 + 上下浮动）。
+ * 静态兜底：.protocol.compiled-fx-water（与其余协议同模式）。 */
+.protocol.compiled-fx-water {
+  /* 静态兜底：蓝色描边 + 蓝光晕（与呼吸环同主题） */
+  border-color: #4fb4ff;
+  box-shadow: 0 0 14px rgba(79, 180, 255, 0.6), inset 0 0 10px rgba(79, 180, 255, 0.25);
+}
+.compiled-ring-water {
+  border: 2px solid;
+  border-radius: 14px;
+  animation: water-breathe 2.5s ease-in-out infinite;
+}
+.compiled-ring-water .lava-seg,
+.compiled-ring-water .lava-rock {
+  display: none;
+}
+@keyframes water-breathe {
+  0%, 100% {
+    border-color: #7fc9ff; /* 明亮水蓝 */
+    box-shadow:
+      0 0 18px rgba(79, 180, 255, 0.7),
+      0 0 42px rgba(79, 180, 255, 0.35),
+      inset 0 0 14px rgba(79, 180, 255, 0.3);
+  }
+  50% {
+    border-color: #1a6fa8; /* 深水蓝 */
+    box-shadow:
+      0 0 26px rgba(26, 111, 168, 0.85),
+      0 0 60px rgba(26, 111, 168, 0.45),
+      inset 0 0 16px rgba(26, 111, 168, 0.35);
+  }
+}
+.water-ripples {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1; /* 编译环（2）之下 */
+  overflow: visible;
+}
+.water-ripple {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 110px;
+  height: 110px;
+  margin-left: -55px;
+  margin-top: -55px;
+  border-radius: 50%;
+  border: 2px solid rgba(64, 180, 255, 0.55);
+  box-shadow: 0 0 12px rgba(64, 180, 255, 0.4), inset 0 0 10px rgba(64, 180, 255, 0.25);
+  opacity: 0;
+  animation: water-ripple-expand 5.5s ease-out infinite;
+}
+@keyframes water-ripple-expand {
+  0% { transform: scale(0.2); opacity: 0.75; } /* 卡中心出现 */
+  60% { opacity: 0.35; }
+  100% { transform: scale(2.7); opacity: 0; }  /* 接近卡框时渐渐消散（110×2.7≈297px ≥ 280 卡高） */
+}
+.water-waves {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  overflow: visible;
+}
+.water-wave {
+  position: absolute;
+  left: 3%;
+  right: 3%;
+  height: 24px;
+  opacity: 0;
+  animation:
+    water-wave-show 9.6s ease-in-out infinite, /* 长周期浮现 → "时不时" */
+    water-wave-float 4.8s ease-in-out infinite; /* 上下浮动 */
+}
+.water-wave-curve {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.water-wave-curve path {
+  stroke-dasharray: 30 12;
+  animation: water-wave-flow 2.6s linear infinite; /* 波浪沿横向流动 */
+}
+@keyframes water-wave-show {
+  0%, 100% { opacity: 0; }
+  8% { opacity: 0.75; }
+  30% { opacity: 0.5; }
+  38% { opacity: 0; }
+}
+@keyframes water-wave-float {
+  0%, 100% { transform: translateY(-4px); }
+  50% { transform: translateY(5px); }
+}
+@keyframes water-wave-flow {
+  to { stroke-dashoffset: -42; } /* dash 周期 30+12=42 → 无缝循环流动 */
+}
+
 /* ===== darkness 已编译：环外循环不规则黑雾层（R9：圆形泡 → 非对称烟云 wisp） =====
  * .mist-blob 沿卡面四周分布、循环 渐现→渐散（mist-wisp），位于编译环
  * （.compiled-ring z 2）外侧（容器 inset:-30px 外扩到环带之外）；

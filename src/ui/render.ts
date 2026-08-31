@@ -712,6 +712,25 @@ function buildCompiledVine(rot: number, len: number, swayPhase: number): HTMLEle
   return wrap;
 }
 
+/** Water 已编译海浪线：横向 SVG 正弦波（preserveAspectRatio none 拉伸铺满容器宽度）。
+ *  流动（dashoffset）作用于 svg path，浮现/浮动作用于 .water-wave 容器。 */
+function buildWaterWave(): HTMLElement {
+  const wrap = el('div', 'water-wave');
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 220 24');
+  svg.setAttribute('preserveAspectRatio', 'none');
+  svg.setAttribute('class', 'water-wave-curve');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', 'M0,12 Q13.75,0 27.5,12 T55,12 T82.5,12 T110,12 T137.5,12 T165,12 T192.5,12 T220,12');
+  path.setAttribute('fill', 'none');
+  path.setAttribute('stroke', 'rgba(64, 180, 255, 0.8)');
+  path.setAttribute('stroke-width', '2.5');
+  path.setAttribute('stroke-linecap', 'round');
+  svg.appendChild(path);
+  wrap.appendChild(svg);
+  return wrap;
+}
+
 /**
  * 已编译协议环绕特效（基础特效骨架，JS 构建 + 纯 CSS 动画，零 mask/@property/z-index 依赖）：
  * - 岩浆段 .lava-seg（渐变小块）+ 岩石 .lava-rock（黑岩/红岩）沿边框路径（offset-path）
@@ -875,6 +894,28 @@ function appendCompiledRing(box: HTMLElement, defId: string): void {
       }
       box.appendChild(vine);
     }
+  }
+  // ITEM 5：water 已编译 → 卡中心背后持续扩散的蓝色波纹层（多个圆环交错相位 → 连续不断，
+  // 接近卡框时渐渐消散）+ 时不时出现的海浪线（长周期浮现 + 交错相位 → 偶发涌现）。
+  // 蓝色框光由 .compiled-ring-water 呼吸动画提供。波纹/海浪为层内 z 1（环带之下）。
+  if (defId === 'water') {
+    const ripples = el('div', 'water-ripples');
+    const RIPPLE_COUNT = 5;
+    for (let i = 0; i < RIPPLE_COUNT; i++) {
+      const r = el('div', 'water-ripple');
+      r.style.animationDelay = `${-(i * 1.1)}s`; // 交错相位 → 波纹连续不断出现
+      ripples.appendChild(r);
+    }
+    box.appendChild(ripples);
+    const waves = el('div', 'water-waves');
+    const WAVE_COUNT = 3;
+    for (let i = 0; i < WAVE_COUNT; i++) {
+      const w = buildWaterWave();
+      w.style.animationDelay = `${-(i * 3.2)}s`; // 长周期交错 → "时不时"涌现
+      w.style.top = `${24 + i * 22}%`;
+      waves.appendChild(w);
+    }
+    box.appendChild(waves);
   }
 }
 
