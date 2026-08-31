@@ -11,6 +11,8 @@ export interface UiCallbacks {
   onDraftUnpick(defId: string): void;
   /** 每次渲染完成后回调（供 UI 层做自动推进等） */
   onRendered?(): void;
+  /** 胜利结算遮罩「返回主界面」按钮：应用内重置回草案主界面（main.ts 实现） */
+  onWinReset?(): void;
 }
 
 function el(tag: string, cls: string, text?: string): HTMLElement {
@@ -237,9 +239,11 @@ function renderSmokeOverlay(): HTMLElement {
 
 /** 常驻黑烟覆盖层注册表：key `${player}-${line}` → 已挂到 body 的 overlay（跨重渲染存活）。
  *  仅在 renderBoard 末尾调用：条件 active 时创建/复用 overlay 并重定位到当前槽位矩形，
- *  inactive 时移除并注销（条件消失后烟雾随之消失）。 */
+ *  inactive 时移除并注销（条件消失后烟雾随之消失）。
+ *  （导出供 main.ts 的 scroll/resize 监听复用——fixed 层只在渲染时定位，渲染之间的
+ *  滚动/缩放会让它们停在陈旧视口坐标。） */
 const smokeOverlays = new Map<string, HTMLElement>();
-function syncSmokeOverlays(s: GameState): void {
+export function syncSmokeOverlays(s: GameState): void {
   const activeKeys = new Set<string>();
   for (const line of [0, 1, 2] as Line[]) {
     const active = lineTopCommandActive(s, line, 'darkness-2');
@@ -280,8 +284,11 @@ function syncSmokeOverlays(s: GameState): void {
  *  - 与 round6 黑烟 overlay（syncSmokeOverlays）同模式：在 renderBoard 末尾、DOM 已
  *    挂载后测量 holder 矩形（树构建期节点 detached，getBoundingClientRect 会读 0×0）。
  *  - 协议换位/重排（移动行）时下一帧渲染把层重定位到新 holder 矩形 → 特效跟随（层
- *    不动、只是坐标变）。 */
-function syncCompiledFxLayers(): void {
+ *    不动、只是坐标变）。
+ *  - 幂等且廉价（≤6 层 + 黑烟 overlay）：导出供 main.ts 的 scroll/resize 监听复用——
+ *    渲染之间的滚动/缩放会让 fixed 层停在陈旧视口坐标（尤其一局胜利后不再重渲染），
+ *    监听里按当前 holder 矩形重新对齐即可。 */
+export function syncCompiledFxLayers(): void {
   for (const { defId, holder } of compiledFxCells) {
     positionCompiledFxLayer(defId, holder);
   }
@@ -1086,6 +1093,31 @@ function playToLine(s: GameState, cb: UiCallbacks, line: Line): void {
   cb.onAction({ kind: 'play', cardUid: uid, faceUp, line });
 }
 
+/** 胜利遮罩是否已显示（防重复创建；返回主界面时由 resetUiState 复位） */
+let winOverlayShown = false;
+
+/** 胜利结算遮罩：玩家 N 获胜！+「返回主界面」按钮。body 级 fixed（z-index 10000 高于
+ *  一切浮层：放大遮罩 1000 / 拖拽幽灵 9999 / 开发者浮层 9999），一次性创建、常驻直到
+ *  用户确认（不自动消失、不随重渲染重建——胜利后本就不再有渲染）。点击按钮 → 移除
+ *  遮罩 + cb.onWinReset（main.ts 应用内重置回草案主界面）。遮罩全屏拦截指针（modal），
+ *  关闭后 diag 按钮等不受影响。 */
+function showWinOverlay(winner: PlayerId, cb: UiCallbacks): void {
+  if (winOverlayShown) return;
+  winOverlayShown = true;
+  const overlay = el('div', 'win-overlay');
+  const panel = el('div', 'win-panel');
+  panel.appendChild(el('div', 'win-title', `玩家 ${winner + 1} 获胜！`));
+  panel.appendChild(el('div', 'win-sub', '本局结束'));
+  const btn = el('button', 'btn win-confirm-btn', '返回主界面');
+  btn.addEventListener('click', () => {
+    overlay.remove();
+    cb.onWinReset?.();
+  });
+  panel.appendChild(btn);
+  overlay.appendChild(panel);
+  document.body.appendChild(overlay);
+}
+
 export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): void {
   root.textContent = '';
   compiledFxCells.length = 0; // 本帧持久 FX 收集器复位（renderProtocol 逐格登记）
@@ -1097,7 +1129,8 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   }
   const wrap = el('div', 'board');
   if (s.phase === 'gameover' && s.winner !== null) {
-    wrap.appendChild(el('div', 'winner-banner', `玩家 ${s.winner + 1} 获胜！`));
+    // 胜利结算 → 模态遮罩（body 级，一次性创建）：玩家 N 获胜！+「返回主界面」按钮
+    showWinOverlay(s.winner, cb);
   }
 
   // 行式布局（点2 对齐修复）：不再用「三栏各堆三行」，改为逐线一行——
@@ -1393,6 +1426,40 @@ const SHIELD_MAX_WIDTH = 15 * 102 + 130;
 /** 选择模式状态：当前应答的 promptId 与已选 uid（重渲染保留，选择完成后清空） */
 let choicePromptId: string | null = null;
 let choiceSelected: string[] = [];
+
+/** 应用内重置（胜利遮罩「返回主界面」→ main.ts 调用）：清空全部 UI 模块态并移除
+ *  body 级常驻层/遮罩——否则旧局残留（编译环 / 暗2 黑烟 / 放大遮罩 / 弃牌堆查看器 /
+ *  飞行中的协议瞬时特效）会在新局（createGame 重建状态）悬空。不触碰引擎（新局由
+ *  main.ts 重新 createGame）。 */
+export function resetUiState(): void {
+  if (activeDragCancel) activeDragCancel();
+  selectedUid = null;
+  selectedFaceUp = true;
+  handFlipAnimBusy = false;
+  shieldWidth[0] = 0;
+  shieldWidth[1] = 0;
+  choicePromptId = null;
+  choiceSelected = [];
+  batteryPrev.clear();
+  for (const fx of compiledFx.values()) fx.remove();
+  compiledFx.clear();
+  compiledFxCells.length = 0;
+  for (const overlay of smokeOverlays.values()) overlay.remove();
+  smokeOverlays.clear();
+  controlSliderPos = 50;
+  closeZoom();
+  closeTrashViewer();
+  winOverlayShown = false;
+  // 飞行中的协议瞬时特效（life 藤蔓容器 / 绿光 / water 水环·光晕·落点框）与
+  // 抽牌/揭示幽灵：自身定时器会在数百毫秒内移除，但重置时立即清扫，避免残留进新局
+  // （旧动画的 done() 完成回调由 main.ts resetEpoch 世代守卫放弃渲染）。
+  for (const fx of document.querySelectorAll<HTMLElement>(
+    '.life-flip-fx, .life-flip-glow, .water-return-ring, .water-return-glow, .water-return-settle, ' +
+      '.draw-ghost, .reveal-fly-ghost'
+  )) {
+    fx.remove();
+  }
+}
 
 /** 选择确认条（select-line 用）：归属者标签 + 提示文案；线槽点击即答，无需确认钮 */
 function choiceBar(pe: PendingEffect, prompt: ChoiceRequest, cb: UiCallbacks, hint: string): HTMLElement {

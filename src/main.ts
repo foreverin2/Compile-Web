@@ -3,7 +3,7 @@ import { createGame, performDraftPick, performDraftUnpick } from './core/state/c
 import { executeAction } from './core/game';
 import { getCompilableLines } from './core/rules/compile';
 import { collectTriggers } from './core/effects/triggers';
-import { renderApp, renderDraft, type UiCallbacks } from './ui/render';
+import { renderApp, renderDraft, resetUiState, syncCompiledFxLayers, syncSmokeOverlays, type UiCallbacks } from './ui/render';
 import { initEffects, initCompileFx, initRearrangeFx, playRevealFly } from './ui/effects';
 import { initDiag } from './ui/diag';
 import { initDevMode } from './ui/devmode';
@@ -11,7 +11,7 @@ import { gameBus } from './core/events/bus';
 import type { PlayerId } from './core/models/types';
 
 const root = document.getElementById('app')!;
-const state = createGame();
+let state = createGame();
 
 /** 非玩家输入步骤之间自动推进的间隔（毫秒） */
 const AUTO_ADVANCE_DELAY = 400;
@@ -31,10 +31,17 @@ let pendingReveals: { owner: PlayerId; shownTo: PlayerId; defId: string; trigger
 let revealFlyBusy = false;
 /** 草案 → 游玩过渡进行中：暂停自动推进，避免视频期间后台渲染/推进对战界面 */
 let transitioning = false;
+/** 应用内重置世代号：胜利 → 返回主界面（resetToMainInterface）时 +1。进行中的抽牌/
+ *  揭示动画完成回调据此放弃后续渲染——防止旧动画把新草案状态路由进渲染/飞行流程
+ *  （可达路径：刷新抽牌动画进行中 → 立即胜利 → 动画结束前点「返回主界面」）。 */
+let resetEpoch = 0;
 
 const cb: UiCallbacks = {
   onRendered() {
     scheduleAutoAdvance();
+  },
+  onWinReset() {
+    resetToMainInterface();
   },
   onDraftPick(defId) {
     performDraftPick(state, defId);
@@ -53,6 +60,8 @@ const cb: UiCallbacks = {
   onAction(a) {
     if (state.phase === 'gameover') return;
     const player = state.turnPlayer;
+    // 本次行动的世代快照：动画完成回调据此判断重置是否已发生（见 resetEpoch）
+    const epoch = resetEpoch;
     // executeAction 使用窄化重载（play/compile 需 args，refresh/advance 无 args），
     // 而 LegalAction.kind 是联合类型，需按 kind 收窄后再分发
     let drawAnimCount = 0;
@@ -96,8 +105,10 @@ const cb: UiCallbacks = {
     const afterFx = () => {
       if (effectReveals.length > 0 && !revealFlyBusy) {
         revealFlyBusy = true;
+        const revealEpoch = resetEpoch;
         playRevealFlySequence(effectReveals, () => {
           revealFlyBusy = false;
+          if (revealEpoch !== resetEpoch) return; // 重置发生：放弃渲染（幽灵由重置清扫）
           renderApp(root, state, cb);
         });
       } else {
@@ -108,12 +119,14 @@ const cb: UiCallbacks = {
       drawAnimBusy = true;
       playDrawAnimation(player, drawAnimCount, () => {
         drawAnimBusy = false;
+        if (epoch !== resetEpoch) return; // 重置发生：放弃后续渲染（幽灵已在动画内清理）
         afterFx();
       });
     } else if (effectDraws.length > 0 && !drawAnimBusy) {
       drawAnimBusy = true;
       playDrawSequence(effectDraws, () => {
         drawAnimBusy = false;
+        if (epoch !== resetEpoch) return;
         afterFx();
       });
     } else {
@@ -276,6 +289,33 @@ function playDraftToGameTransition(): void {
 }
 
 /**
+ * 胜利结算遮罩「返回主界面」→ 应用内重置（无整页刷新/闪烁）：
+ * - 清空本模块的动画标志/队列/定时器（自动推进、抽牌/揭示动画、过渡中标志）；
+ * - resetUiState()：清空 render.ts 全部 UI 模块态并移除 body 级常驻层/遮罩
+ *   （编译环 / 黑烟 / 放大遮罩 / 弃牌堆查看器——旧局残留会悬空）；
+ * - 根容器移除过渡类（draft-exit / board-enter / no-anim）；
+ * - 重建游戏状态（createGame → 全新草案）并渲染草案主界面。
+ * 选择应用内重置而非 location.reload()：无整页闪烁、保留 devmode/诊断常驻，
+ * 且全部可重置状态都有明确复位点（resetUiState 覆盖 render.ts 全部模块态）。
+ */
+function resetToMainInterface(): void {
+  resetEpoch += 1; // 失效进行中的动画完成回调（epoch 守卫）
+  if (autoTimer !== null) {
+    window.clearTimeout(autoTimer);
+    autoTimer = null;
+  }
+  drawAnimBusy = false;
+  revealFlyBusy = false;
+  transitioning = false;
+  pendingDraws = [];
+  pendingReveals = [];
+  resetUiState();
+  root.classList.remove('draft-exit', 'board-enter', 'no-anim');
+  state = createGame();
+  renderDraft(root, state, cb);
+}
+
+/**
  * 非 action 步骤自动推进：
  * - draft / gameover → 停止（不自动推进）
  * - action → 停止（轮到玩家行动）
@@ -339,3 +379,20 @@ gameBus.subscribe((e) => {
   }
 });
 renderApp(root, state, cb);
+// 常驻特效层随滚动/缩放重新对齐：已编译环（compiledFx）与暗2 黑烟（smokeOverlays）
+// 都是 body 级 position:fixed 层，只在渲染时按单元格矩形定位——渲染之间的滚动/缩放
+// 会让它们停在陈旧视口坐标（尤其一局胜利后无后续渲染时）。rAF 节流（同帧合并多次
+// 事件）+ passive + capture（覆盖任意可滚动容器）；sync 函数幂等且廉价（≤6 层 +
+// 黑烟 overlay，只读 rect 重写坐标）。在初始渲染之后注册（注册表已就绪）。
+let fxSyncScheduled = false;
+const syncPersistentFx = (): void => {
+  if (fxSyncScheduled) return;
+  fxSyncScheduled = true;
+  requestAnimationFrame(() => {
+    fxSyncScheduled = false;
+    syncCompiledFxLayers();
+    syncSmokeOverlays(state);
+  });
+};
+window.addEventListener('scroll', syncPersistentFx, { passive: true, capture: true });
+window.addEventListener('resize', syncPersistentFx, { passive: true });

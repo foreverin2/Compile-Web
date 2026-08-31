@@ -144,7 +144,12 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       // 翻开即解禁：翻正为正面时清除牌堆来源的 secret 标记（正面 = 公开信息）。
       // 翻回反面不清 secret（只是重新隐藏，信息仍非公开）。
       if (card.faceUp) card.secret = false;
-      emitCardEvent(s, 'card:flipped', card);
+      // triggerProtocol/triggerDefId：触发这次翻面的卡（效果源），FX 层据此叠加
+      // 协议专属特效（life → 绿色藤蔓缠绕；water-0 的翻转带 'water' → 无藤蔓）
+      emitCardEvent(s, 'card:flipped', card, {
+        triggerDefId: pe.sourceDefId,
+        triggerProtocol: pe.sourceDefId.split('-')[0],
+      });
       if (card.faceUp) pushMiddle(s, card.owner, card); // 翻正 → 中指令连锁（LIFO）
       break;
     }
@@ -190,7 +195,12 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       card.line = null;
       card.pos = null;
       s.players[owner].hand.push(card);
-      emitCardEvent(s, 'card:returned', card);
+      // triggerProtocol/triggerDefId：触发这次回手的卡（效果源），FX 层据此叠加
+      // 协议专属特效（water → 蓝色水波环 + 光晕 + 游动轨迹环）
+      emitCardEvent(s, 'card:returned', card, {
+        triggerDefId: pe.sourceDefId,
+        triggerProtocol: pe.sourceDefId.split('-')[0],
+      });
       if (wasTop) revealAfterRemoval(s, owner, line); // 仅当移除的是顶卡时新顶卡才被"揭开"
       break;
     }

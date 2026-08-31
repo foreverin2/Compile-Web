@@ -107,4 +107,78 @@ describe('FX trigger protocol payload', () => {
     expect(deleted?.triggerProtocol).toBe('life');
     expect(deleted?.triggerDefId).toBe('life-0');
   });
+
+  it('water-3 return carries triggerProtocol=water + triggerDefId (blue ripple FX hook)', () => {
+    const s = draftWaterP1();
+    advanceToStep(s, 0, 'action');
+    const waterLine: Line = s.players[0].protocols.findIndex((p) => p.defId === 'water') as Line;
+    s.players[1].hand = [];
+    s.players[0].hand = [makeCard('water-3', 0, 'hand')];
+    const facedown = makeCard('water-5', 1, 'field', false, 0, 0); // 反面 = 2 分 → 同线回手
+    s.players[1].stacks[0] = [facedown];
+    const water3 = s.players[0].hand[0];
+    const seen: { triggerProtocol?: string; triggerDefId?: string }[] = [];
+    const off = gameBus.subscribe((e) => {
+      if (e.type !== 'card:returned') return;
+      const p = e.payload as { triggerProtocol?: string; triggerDefId?: string };
+      seen.push(p);
+    });
+    executeAction(s, 0, 'play', { cardUid: water3.uid, faceUp: true, line: waterLine });
+    resolveAllChoices(s, () => []); // water-3 无选择步骤，无害
+    off();
+    expect(seen.length).toBeGreaterThan(0);
+    for (const p of seen) {
+      expect(p.triggerProtocol).toBe('water'); // 触发卡协议（water-3）
+      expect(p.triggerDefId).toBe('water-3');
+    }
+  });
+
+  it('water-4 return carries triggerProtocol=water + triggerDefId (FX hook ready)', () => {
+    const s = draftWaterP1();
+    advanceToStep(s, 0, 'action');
+    const waterLine: Line = s.players[0].protocols.findIndex((p) => p.defId === 'water') as Line;
+    const own = makeCard('metal-2', 0, 'field', true, 1, 0); // 自己的未覆盖卡
+    s.players[0].stacks[1] = [own];
+    s.players[0].hand = [makeCard('water-4', 0, 'hand')];
+    const water4 = s.players[0].hand[0];
+    const seen: { triggerProtocol?: string; triggerDefId?: string }[] = [];
+    const off = gameBus.subscribe((e) => {
+      if (e.type !== 'card:returned') return;
+      const p = e.payload as { triggerProtocol?: string; triggerDefId?: string };
+      seen.push(p);
+    });
+    executeAction(s, 0, 'play', { cardUid: water4.uid, faceUp: true, line: waterLine });
+    resolveAllChoices(s, () => [own.uid]); // water-4：回手1张自己的牌
+    off();
+    expect(seen).toHaveLength(1);
+    expect(seen[0].triggerProtocol).toBe('water');
+    expect(seen[0].triggerDefId).toBe('water-4');
+  });
+
+  it('life-1 flips carry triggerProtocol=life + triggerDefId (vine FX hook)', () => {
+    const s = draftLifeP1();
+    advanceToStep(s, 0, 'action');
+    const lifeLine: Line = s.players[0].protocols.findIndex((p) => p.defId === 'life') as Line;
+    s.players[0].hand = [makeCard('life-1', 0, 'hand')];
+    const a = makeCard('metal-2', 1, 'field', true, 1, 0); // 未注册协议：翻正不连锁
+    s.players[1].stacks[1] = [a];
+    const life1 = s.players[0].hand[0];
+    const seen: { triggerProtocol?: string; triggerDefId?: string }[] = [];
+    const off = gameBus.subscribe((e) => {
+      if (e.type !== 'card:flipped') return;
+      const p = e.payload as { triggerProtocol?: string; triggerDefId?: string };
+      seen.push(p);
+    });
+    executeAction(s, 0, 'play', { cardUid: life1.uid, faceUp: true, line: lifeLine });
+    const p1 = s.pendingEffects[s.pendingEffects.length - 1];
+    executeAction(s, 0, 'effect-choice', { promptId: p1.id, choice: [a.uid] }); // 第 1 次翻转
+    const p2 = s.pendingEffects[s.pendingEffects.length - 1];
+    executeAction(s, 0, 'effect-choice', { promptId: p2.id, choice: [a.uid] }); // 第 2 次可再选同一张（翻回）
+    off();
+    expect(seen).toHaveLength(2);
+    for (const p of seen) {
+      expect(p.triggerProtocol).toBe('life'); // 触发卡协议（life-1）
+      expect(p.triggerDefId).toBe('life-1');
+    }
+  });
 });

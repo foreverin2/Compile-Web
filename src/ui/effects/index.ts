@@ -227,6 +227,106 @@ function playFlip(node: HTMLElement, payload: FxCardPayload): void {
   window.setTimeout(() => wrap.remove(), 420);
 }
 
+/* ===== Life 翻转专属特效：绿色藤蔓缠绕 + 绿光（life-1/life-2 及未来生命翻转） =====
+ * 触发：card:flipped 且 payload.triggerProtocol === 'life'。翻面本身复用 playFlip
+ * （非 life 翻转保持原样），本函数只在它周围叠加藤蔓特效：
+ * ① 翻转前：8 根绿色藤蔓沿卡框四边（每边 2 根）缓慢出现并缠绕上来——SVG S 曲线、
+ *    从边缘向卡内生长（transform-origin 0 0 = 锚点），长度 52px ≥ 卡牌半长轴 1/3；
+ *    + 卡框绿光（呼吸发光）；
+ * ② 翻转完成后（~650ms）：藤蔓逐渐收缩退去；
+ * ③ 卡框绿光持续 ~2 秒后淡出。
+ * 全部 pointer-events:none、JS 定时清理（无泄漏）：8 根藤蔓统一挂在 .life-flip-fx
+ * 容器（body 级 fixed、无 transform/z-index → 不改变子元素 fixed 视口坐标、不建
+ * stacking context），收缩完成后整体移除；容器类也被 render.ts resetUiState 批量
+ * 清扫（应用内重置路径兜底）。绿光单独挂 body（需持续 ~2 秒，长于藤蔓容器），
+ * 自带移除定时器 + resetUiState 兜底。 */
+const LIFE_AFTER_MS = 2000; // 翻转后卡框绿光持续时间
+const LIFE_VINE_LEN = 52; // 藤蔓长度（≥ 场上/手牌/协议卡半长轴 1/3）
+const LIFE_VINE_SHRINK_MS = 650; // 翻转完成后开始收缩藤蔓的时机
+
+/** 构建一根藤蔓：定位 div（旋转朝向卡内）+ SVG S 曲线（生长/收缩动画作用于其上） */
+function buildLifeVine(rot: number): HTMLElement {
+  const wrap = document.createElement('div');
+  wrap.className = 'life-flip-vine';
+  wrap.style.transform = `rotate(${rot}deg)`;
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('width', '22');
+  svg.setAttribute('height', String(LIFE_VINE_LEN));
+  svg.setAttribute('viewBox', `0 0 22 ${LIFE_VINE_LEN}`);
+  svg.setAttribute('class', 'life-flip-vine-curve');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', `M5,2 C12,${LIFE_VINE_LEN * 0.3} 17,${LIFE_VINE_LEN * 0.62} 9,${LIFE_VINE_LEN - 3}`);
+  path.setAttribute('fill', 'none');
+  path.setAttribute('stroke', '#3ddc84');
+  path.setAttribute('stroke-width', '3.2');
+  path.setAttribute('stroke-linecap', 'round');
+  svg.appendChild(path);
+  wrap.appendChild(svg);
+  return wrap;
+}
+
+function playLifeFlip(node: HTMLElement, payload: FxCardPayload): void {
+  const rect = node.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) {
+    playFlip(node, payload); // rect 缺失 → 退回基础翻面
+    return;
+  }
+  const L = rect.left;
+  const T = rect.top;
+  const W = rect.width;
+  const H = rect.height;
+  // 藤蔓锚点：每边 2 根（20%/80% 处），transform-origin 0 0 = 锚点（卡框边缘点），
+  // 旋转使藤蔓垂入卡内：上边 0°（向下）、右边 90°（向左）、下边 180°（向上）、
+  // 左边 −90°（向右）——局部 +y（藤蔓长度方向）经旋转映射为朝卡内的方向。
+  // （rot 90：局部 (0,52) → 屏幕 (−52,0) = 锚点左侧 = 入卡；rot −90：→ (52,0) = 右侧 = 入卡）
+  const anchors: { x: number; y: number; rot: number }[] = [
+    { x: L + W * 0.2, y: T, rot: 0 },
+    { x: L + W * 0.8, y: T, rot: 0 },
+    { x: L + W, y: T + H * 0.2, rot: 90 },
+    { x: L + W, y: T + H * 0.8, rot: 90 },
+    { x: L + W * 0.2, y: T + H, rot: 180 },
+    { x: L + W * 0.8, y: T + H, rot: 180 },
+    { x: L, y: T + H * 0.2, rot: -90 },
+    { x: L, y: T + H * 0.8, rot: -90 },
+  ];
+  // 藤蔓容器（body 级 fixed；无 transform/z-index → 子元素 fixed 坐标仍按视口、
+  // 不建 stacking context；pointer-events:none 透传点击）。收缩完成后整体移除。
+  const fxWrap = document.createElement('div');
+  fxWrap.className = 'life-flip-fx';
+  fxWrap.style.cssText = 'position:fixed;inset:0;pointer-events:none;';
+  document.body.appendChild(fxWrap);
+  for (let i = 0; i < anchors.length; i++) {
+    const a = anchors[i];
+    const vine = buildLifeVine(a.rot);
+    vine.style.left = `${a.x}px`;
+    vine.style.top = `${a.y}px`;
+    vine.style.zIndex = String(EXTRA_Z);
+    vine.style.animationDelay = `${i * 0.07}s`; // 逐根错开缓慢出现（缠绕感）
+    fxWrap.appendChild(vine);
+  }
+  // 卡框绿光（呼吸发光 → 持续 ~2 秒 → 淡出；单独挂 body，长于藤蔓容器生命周期）
+  const glow = document.createElement('div');
+  glow.className = 'life-flip-glow';
+  glow.style.left = `${L}px`;
+  glow.style.top = `${T}px`;
+  glow.style.width = `${W}px`;
+  glow.style.height = `${H}px`;
+  glow.style.zIndex = String(EXTRA_Z);
+  document.body.appendChild(glow);
+  // ② 翻转完成后藤蔓收缩退去
+  window.setTimeout(() => {
+    for (const vine of fxWrap.querySelectorAll<HTMLElement>('.life-flip-vine')) {
+      vine.classList.add('shrinking');
+    }
+  }, LIFE_VINE_SHRINK_MS);
+  // 收缩（550ms）完成后整体移除藤蔓容器（防 DOM 泄漏；重置路径由 resetUiState 兜底）
+  window.setTimeout(() => fxWrap.remove(), LIFE_VINE_SHRINK_MS + 600);
+  // ③ 卡框绿光持续 ~2 秒后淡出（CSS 动画自带尾部淡出，JS 只负责移除）
+  window.setTimeout(() => glow.remove(), LIFE_AFTER_MS + 320);
+  // 基础翻面照常（本函数只叠加藤蔓，不替换翻面）
+  playFlip(node, payload);
+}
+
 /** 基础行为特效：回手——从场上丝滑平移到持有者手牌末尾 */
 function playReturn(node: HTMLElement, payload: FxCardPayload): void {
   const rect = node.getBoundingClientRect();
@@ -244,6 +344,81 @@ function playReturn(node: HTMLElement, payload: FxCardPayload): void {
     clone.style.opacity = '0.5';
   });
   window.setTimeout(() => clone.remove(), MOVE_MS + 80);
+}
+
+/* ===== Water 回手专属特效：蓝色水波环 + 光晕 + 游动轨迹环（water-3/water-4 及未来水回手） =====
+ * 触发：card:returned 且 payload.triggerProtocol === 'water'。飞行本身复用 playReturn
+ * （非水回手保持原样），本函数只在它周围叠加水特效：
+ * ① 回手前：卡框周围一圈扩散的蓝色水波环 + 蓝色光晕 + 边框发光（body 级 fixed）；
+ * ② 飞行中：路径 25%/50%/75% 处各出现一个小号扩散水环（模拟鱼在水面游动的轨迹）；
+ * ③ 回手后：落点（手牌末尾）卡框特效持续 2 秒后淡出。
+ * 全部 pointer-events:none、JS 定时清理（无泄漏）。 */
+const WATER_RING_MS = 700; // 单个水环扩散时长
+const WATER_AFTER_MS = 2000; // 回手后落点框特效持续时间
+
+/** body 级水波环：fixed 定位于 (x,y) 中心、尺寸 size 的圆环，扩散 + 淡出后自清理 */
+function spawnWaterRing(x: number, y: number, size: number, cls: string): void {
+  const ring = document.createElement('div');
+  ring.className = cls;
+  ring.style.left = `${x - size / 2}px`;
+  ring.style.top = `${y - size / 2}px`;
+  ring.style.width = `${size}px`;
+  ring.style.height = `${size}px`;
+  ring.style.zIndex = String(EXTRA_Z);
+  document.body.appendChild(ring);
+  window.setTimeout(() => ring.remove(), WATER_RING_MS + 120);
+}
+
+function playWaterReturn(node: HTMLElement, payload: FxCardPayload): void {
+  const rect = node.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0 || payload.owner === undefined) {
+    playReturn(node, payload); // rect 缺失 → 退回基础回手（playReturn 内部自兜底）
+    return;
+  }
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  const hand = document.querySelectorAll<HTMLElement>('.hand')[payload.owner];
+  const target = handEndPos(hand, payload.owner);
+  const dx = target.x - cx;
+  const dy = target.y - cy;
+  // ① 回手前：大号扩散水环 + 蓝色光晕框（卡框周围，与飞行同时开始）
+  spawnWaterRing(cx, cy, Math.max(rect.width, rect.height) * 2.4, 'water-return-ring big');
+  const glow = document.createElement('div');
+  glow.className = 'water-return-glow';
+  glow.style.left = `${rect.left}px`;
+  glow.style.top = `${rect.top}px`;
+  glow.style.width = `${rect.width}px`;
+  glow.style.height = `${rect.height}px`;
+  glow.style.zIndex = String(EXTRA_Z);
+  document.body.appendChild(glow);
+  window.setTimeout(() => glow.remove(), WATER_RING_MS + 120);
+  // ② 飞行中：路径 25%/50%/75% 处的小号轨迹环（与卡同步出现 → 鱼游轨迹）。
+  // 飞行缓动 cubic-bezier(0.2,0.7,0.3,1) 是快启动——线性时间 25/50/75% 时卡已在
+  // ~75/90/98% 处；用逆缓动解把「位置比例」映射回「时刻比例」（t≈0.128/0.282/0.488，
+  // 即 B_y(t)=0.25/0.5/0.75），环才真正与卡经过同步。
+  const WATER_TRAIL_FRACS = [0.25, 0.5, 0.75] as const; // 沿路径的位置比例
+  const WATER_TRAIL_AT = [0.128, 0.282, 0.488] as const; // 逆缓动后的时刻比例（×MOVE_MS）
+  for (let i = 0; i < WATER_TRAIL_FRACS.length; i++) {
+    const frac = WATER_TRAIL_FRACS[i];
+    const at = WATER_TRAIL_AT[i];
+    window.setTimeout(() => {
+      spawnWaterRing(cx + dx * frac, cy + dy * frac, 30, 'water-return-ring trail');
+    }, MOVE_MS * at);
+  }
+  // ③ 回手后（飞行落地）：落点框特效持续 2 秒后淡出（落点 = 手牌末尾新卡中心）
+  window.setTimeout(() => {
+    const settle = document.createElement('div');
+    settle.className = 'water-return-settle';
+    settle.style.left = `${target.x - 65}px`;
+    settle.style.top = `${target.y - 89.4}px`;
+    settle.style.width = '130px';
+    settle.style.height = '178.8px';
+    settle.style.zIndex = String(EXTRA_Z);
+    document.body.appendChild(settle);
+    window.setTimeout(() => settle.remove(), WATER_AFTER_MS + 300);
+  }, MOVE_MS);
+  // 基础回手飞行照常（本函数只叠加水特效，不替换飞行）
+  playReturn(node, payload);
 }
 
 /** 幽灵卡平移落地：从初始 rect 丝滑平移到【调用方给定的】目标点（起飞时机与目标点均由调用方决定，
@@ -372,7 +547,26 @@ function playDarknessShiftBridge(node: HTMLElement, payload: FxCardPayload): voi
 }
 
 /** 基础行为特效：牌堆顶打出——幽灵卡从牌库区丝滑飞入目标链路堆叠末尾
- *  （复用 playShift 平移逻辑；牌堆顶无 DOM 卡，起点用牌库区 rect（deckPos），buildFxCard 的 node 用牌库区元素） */
+ *  （复用 playShift 平移逻辑；牌堆顶无 DOM 卡，起点用牌库区 rect（deckPos），buildFxCard 的 node 用牌库区元素）
+ *  可靠性（多线连打，life-0/water-1 及未来任何反面牌堆顶打出）：
+ *  - 同批 card:deck-played 事件同步创建多个幽灵 → 按 90ms 错开起飞（多卡不在牌库位
+ *    完全重叠互相遮挡，逐张可见、逐线飞入）；
+ *  - 起飞前先写初始位并强制回流提交样式（void offsetHeight）——浏览器若延迟提交初始
+ *    样式，transition 会直接跳到终点（飞行不可见）；回流保证 transition 必从牌库位动画；
+ *  - 幽灵带 .deck-play-ghost（投影 + 青辉），小尺寸（92×132）卡背在暗背景上清晰可见。 */
+const DECK_PLAY_STAGGER_MS = 90; // 同批多张牌堆顶打出的起飞错开间隔
+let deckPlayBatchCount = 0; // 同一批（~100ms 窗口内）已创建的幽灵数
+let deckPlayBatchStamp = 0;
+
+/** 同一批 deck-play 事件内的序号：~100ms 窗口内连续创建视为同一批（逐张错开起飞），
+ *  之后重置（新一批从头错开）。 */
+function nextDeckPlayIndex(): number {
+  const now = Date.now();
+  if (now - deckPlayBatchStamp > 100) deckPlayBatchCount = 0;
+  deckPlayBatchStamp = now;
+  return deckPlayBatchCount++;
+}
+
 function playDeckPlay(payload: FxCardPayload): void {
   if (payload.owner === undefined || payload.line === null) return;
   const deck = document.querySelector<HTMLElement>(`.deck[data-player="${payload.owner}"]`);
@@ -382,15 +576,21 @@ function playDeckPlay(payload: FxCardPayload): void {
   if (!deck || !from || !target) return;
   const clone = buildFxCard(deck, payload, BASE_Z);
   if (!clone) return;
+  clone.classList.add('deck-play-ghost');
   const dx = target.x - (from.left + from.width / 2);
   const dy = target.y - (from.top + from.height / 2);
-  clone.style.transition = `transform ${MOVE_MS}ms cubic-bezier(0.2, 0.7, 0.3, 1), opacity ${MOVE_MS}ms ease`;
-  requestAnimationFrame(() => {
-    // 组合 --fx-rot（牌库/手牌无 rot 类 → 恒 0deg，与旧行为一致）
-    clone.style.transform = `translate(${dx}px, ${dy}px) rotate(var(--fx-rot, 0deg)) scale(0.92)`;
-    clone.style.opacity = '0.6';
-  });
-  window.setTimeout(() => clone.remove(), MOVE_MS + 80);
+  const delay = nextDeckPlayIndex() * DECK_PLAY_STAGGER_MS;
+  window.setTimeout(() => {
+    // 先写初始位（translate(0) + 原朝向/尺寸）并强制回流提交 → 起飞 transition 必动画
+    clone.style.transition = `transform ${MOVE_MS}ms cubic-bezier(0.2, 0.7, 0.3, 1), opacity ${MOVE_MS}ms ease`;
+    clone.style.transform = `translate(0, 0) rotate(var(--fx-rot, 0deg)) scale(0.92)`;
+    void clone.offsetHeight; // 强制样式提交（reflow）
+    requestAnimationFrame(() => {
+      clone.style.transform = `translate(${dx}px, ${dy}px) rotate(var(--fx-rot, 0deg)) scale(0.92)`;
+      clone.style.opacity = '0.6';
+    });
+  }, delay);
+  window.setTimeout(() => clone.remove(), delay + MOVE_MS + 120);
 }
 
 /** 基础行为特效：手牌打出（playFromHand）——幽灵卡从手牌中该卡的 rect 丝滑飞入目标
@@ -572,10 +772,20 @@ export function initEffects(): () => void {
         if (node) playShatter(node, payload);
         break;
       case 'card:flipped':
-        if (node) playFlip(node, payload);
+        // life 协议触发的翻转（life-1/life-2 及未来生命翻转）：绿色藤蔓缠绕 + 绿光；
+        // 其余翻转源（water-0 带 'water'、系统效果带 'system'）走基础翻面
+        if (node) {
+          if (payload.triggerProtocol === 'life') playLifeFlip(node, payload);
+          else playFlip(node, payload);
+        }
         break;
       case 'card:returned':
-        if (node) playReturn(node, payload);
+        // water 协议触发的回手（water-3/water-4 及未来水回手）：蓝色水波环 + 光晕 +
+        // 游动轨迹环（叠加在基础回手飞行之上）；其余回手源走基础飞行
+        if (node) {
+          if (payload.triggerProtocol === 'water') playWaterReturn(node, payload);
+          else playReturn(node, payload);
+        }
         break;
       case 'card:shifted':
         // darkness-0/1/4 的偏转（触发卡协议 darkness）：播烟桥路线（起点→终点）；
@@ -595,9 +805,10 @@ export function initEffects(): () => void {
       default:
         return;
     }
-    // 额外协议特效（触发卡协议驱动，叠加上层）
-    // TODO(water/life FX): add `else if (payload.triggerProtocol === 'water'/'life')`
-    // branches here when the user specifies them — today they fall through = silent no-op.
+    // 额外协议特效（触发卡协议驱动，叠加上层；仅弃牌/删去走此块）：
+    // fire → 火焰焚烧；light → 白色柔光；darkness → 暗紫粒子。
+    // water（回手水波环）/life（翻转藤蔓）在各自分支内叠加（card:returned /
+    // card:flipped），不属于本块——其余协议触发时落到此处 = 无额外特效。
     if ((e.type === 'card:discarded' || e.type === 'card:deleted') && node) {
       if (payload.triggerProtocol === 'fire') {
         playFireBurnExtra(node, payload);
