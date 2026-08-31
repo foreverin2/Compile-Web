@@ -186,15 +186,20 @@ function playCut(node: HTMLElement, payload: FxCardPayload): void {
   window.setTimeout(() => clone.remove(), FX_REMOVE_MS);
 }
 
-/** 基础行为特效：翻面——旧面翻转到新面（rotateY；场上横置卡用 rotateX 使翻面也横着） */
-function playFlip(node: HTMLElement, payload: FxCardPayload): void {
-  const rect = node.getBoundingClientRect();
-  if (rect.width === 0 || rect.height === 0) return;
-  const cw = node.classList.contains('rot-cw');
-  const ccw = node.classList.contains('rot-ccw');
+/** 构建 3D 翻面覆盖层（旧面 front + 新面 back，透视内建）。调用方决定动画时机与清理：
+ *  - playFlip：构建后立即 rAF 触发 rotate 过渡，420ms 后移除；
+ *  - playLifeFlip：覆盖层在事件时同步构建（原卡 rect 此刻有效——重渲染会重建节点、
+ *    rect 归零），展开动画期间保持旧面静止（与新状态卡同位同尺寸 → 视觉无缝），
+ *    展开完成后（~1.65s）再触发翻转、+420ms 移除。返回 null 表示 rect 无效（调用方跳过）。 */
+function buildFlipOverlay(
+  rect: DOMRect,
+  cw: boolean,
+  ccw: boolean,
+  oldSrc: string,
+  newSrc: string,
+): { wrap: HTMLElement; inner: HTMLElement } | null {
+  if (rect.width === 0 || rect.height === 0) return null;
   const horizontal = cw || ccw;
-  const oldSrc = node.querySelector('img')?.src ?? cardFaceSrc(payload.defId, payload.faceUp);
-  const newSrc = cardFaceSrc(payload.defId, payload.faceUp);
   const wrap = document.createElement('div');
   // 场上横置卡（rot-cw/rot-ccw）：与 buildFxCard 同一规则——wrap 以未旋转布局盒尺寸
   // （宽 = rect 高、高 = rect 宽）定位于 rect 中心后旋转 ±90°，翻面期间卡牌朝向与
@@ -222,10 +227,22 @@ function playFlip(node: HTMLElement, payload: FxCardPayload): void {
   inner.appendChild(back);
   wrap.appendChild(inner);
   document.body.appendChild(wrap);
+  return { wrap, inner };
+}
+
+/** 基础行为特效：翻面——旧面翻转到新面（rotateY；场上横置卡用 rotateX 使翻面也横着） */
+function playFlip(node: HTMLElement, payload: FxCardPayload): void {
+  const rect = node.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return;
+  const cw = node.classList.contains('rot-cw');
+  const ccw = node.classList.contains('rot-ccw');
+  const oldSrc = node.querySelector('img')?.src ?? cardFaceSrc(payload.defId, payload.faceUp);
+  const overlay = buildFlipOverlay(rect, cw, ccw, oldSrc, cardFaceSrc(payload.defId, payload.faceUp));
+  if (!overlay) return;
   requestAnimationFrame(() => {
-    inner.style.transform = horizontal ? 'rotateX(180deg)' : 'rotateY(180deg)';
+    overlay.inner.style.transform = cw || ccw ? 'rotateX(180deg)' : 'rotateY(180deg)';
   });
-  window.setTimeout(() => wrap.remove(), 420);
+  window.setTimeout(() => overlay.wrap.remove(), 420);
 }
 
 /* ===== Life 翻转专属特效：绿色藤蔓缠绕 + 绿光（life-1/life-2 及未来生命翻转） =====
@@ -330,8 +347,19 @@ function playLifeFlip(node: HTMLElement, payload: FxCardPayload): void {
   // ③ 卡框绿光持续（覆盖展开 + 翻转 + 消退全程）后淡出（CSS 动画自带尾部淡出，JS 只负责移除）
   window.setTimeout(() => glow.remove(), LIFE_AFTER_MS + 320);
   // 基础翻面照常（本函数只叠加藤蔓，不替换翻面）——但延迟到藤蔓充分展开之后
-  // （展开动画 0.9s → 1.9s，翻面在 ~1.65s 才开始，"先展开、后翻转"）
-  window.setTimeout(() => playFlip(node, payload), LIFE_VINE_SHRINK_MS);
+  // （展开动画 0.9s → 1.9s，翻面在 ~1.65s 才开始，"先展开、后翻转"）。
+  // 覆盖层必须此刻同步构建：重渲染随后会重建原卡节点（rect 归零），而展开期间
+  // 覆盖层保持旧面静止（与新状态卡同位同尺寸 → 视觉无缝），~1.65s 后再播 3D 翻转。
+  const cw = node.classList.contains('rot-cw');
+  const ccw = node.classList.contains('rot-ccw');
+  const oldSrc = node.querySelector('img')?.src ?? cardFaceSrc(payload.defId, payload.faceUp);
+  const flipOverlay = buildFlipOverlay(rect, cw, ccw, oldSrc, cardFaceSrc(payload.defId, payload.faceUp));
+  if (flipOverlay) {
+    window.setTimeout(() => {
+      flipOverlay.inner.style.transform = cw || ccw ? 'rotateX(180deg)' : 'rotateY(180deg)';
+    }, LIFE_VINE_SHRINK_MS);
+    window.setTimeout(() => flipOverlay.wrap.remove(), LIFE_VINE_SHRINK_MS + 420);
+  }
 }
 
 /** 基础行为特效：回手——从场上丝滑平移到持有者手牌末尾（专属 RETURN_MOVE_MS，更从容） */
