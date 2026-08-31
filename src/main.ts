@@ -3,7 +3,7 @@ import { createGame, performDraftPick, performDraftUnpick } from './core/state/c
 import { executeAction } from './core/game';
 import { getCompilableLines } from './core/rules/compile';
 import { collectTriggers } from './core/effects/triggers';
-import { renderApp, renderDraft, syncCompiledFxLayers, syncSmokeOverlays, type UiCallbacks } from './ui/render';
+import { renderApp, renderDraft, resetUiState, syncCompiledFxLayers, syncSmokeOverlays, type UiCallbacks } from './ui/render';
 import { initEffects, initCompileFx, initRearrangeFx, playRevealFly } from './ui/effects';
 import { initDiag } from './ui/diag';
 import { initDevMode } from './ui/devmode';
@@ -11,7 +11,7 @@ import { gameBus } from './core/events/bus';
 import type { PlayerId } from './core/models/types';
 
 const root = document.getElementById('app')!;
-const state = createGame();
+let state = createGame();
 
 /** 非玩家输入步骤之间自动推进的间隔（毫秒） */
 const AUTO_ADVANCE_DELAY = 400;
@@ -35,6 +35,9 @@ let transitioning = false;
 const cb: UiCallbacks = {
   onRendered() {
     scheduleAutoAdvance();
+  },
+  onWinReset() {
+    resetToMainInterface();
   },
   onDraftPick(defId) {
     performDraftPick(state, defId);
@@ -273,6 +276,32 @@ function playDraftToGameTransition(): void {
     const safety = window.setTimeout(finish, 4500);
     video.addEventListener('ended', finish);
   }, 450);
+}
+
+/**
+ * 胜利结算遮罩「返回主界面」→ 应用内重置（无整页刷新/闪烁）：
+ * - 清空本模块的动画标志/队列/定时器（自动推进、抽牌/揭示动画、过渡中标志）；
+ * - resetUiState()：清空 render.ts 全部 UI 模块态并移除 body 级常驻层/遮罩
+ *   （编译环 / 黑烟 / 放大遮罩 / 弃牌堆查看器——旧局残留会悬空）；
+ * - 根容器移除过渡类（draft-exit / board-enter / no-anim）；
+ * - 重建游戏状态（createGame → 全新草案）并渲染草案主界面。
+ * 选择应用内重置而非 location.reload()：无整页闪烁、保留 devmode/诊断常驻，
+ * 且全部可重置状态都有明确复位点（resetUiState 覆盖 render.ts 全部模块态）。
+ */
+function resetToMainInterface(): void {
+  if (autoTimer !== null) {
+    window.clearTimeout(autoTimer);
+    autoTimer = null;
+  }
+  drawAnimBusy = false;
+  revealFlyBusy = false;
+  transitioning = false;
+  pendingDraws = [];
+  pendingReveals = [];
+  resetUiState();
+  root.classList.remove('draft-exit', 'board-enter', 'no-anim');
+  state = createGame();
+  renderDraft(root, state, cb);
 }
 
 /**

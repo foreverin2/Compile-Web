@@ -987,7 +987,44 @@ body {
 .play-btn:hover { background: #12303f; box-shadow: 0 0 14px rgba(79, 240, 255, 0.7); }
 .hint { font-size: 12px; color: #aaa; }
 .log { border-top: 1px solid #444; margin-top: 8px; padding-top: 6px; font-size: 12px; color: #999; max-height: 120px; overflow-y: auto; }
-.winner-banner { font-size: 24px; font-weight: bold; color: #4caf50; text-align: center; padding: 12px; }
+
+/* ===== 胜利结算遮罩（render.ts showWinOverlay）：玩家 N 获胜！+「返回主界面」 =====
+ * body 级 fixed 全屏 modal，z-index 10000 高于一切浮层（放大遮罩 1000 / 拖拽幽灵
+ * 9999 / 开发者浮层 9999）；backdrop 拦截全部指针（按钮可点），关闭后对棋盘其余
+ * 交互（diag 按钮等）无影响。 */
+.win-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: rgba(5, 8, 18, 0.72);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.win-panel {
+  background: #101830ee;
+  border: 2px solid #4caf50;
+  border-radius: 14px;
+  padding: 28px 46px;
+  text-align: center;
+  box-shadow: 0 0 34px rgba(76, 175, 80, 0.45);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.win-title { font-size: 30px; font-weight: bold; color: #4caf50; }
+.win-sub { color: #aaa; font-size: 14px; }
+.win-confirm-btn {
+  font-size: 16px;
+  padding: 10px 32px;
+  margin-top: 8px;
+  background: #1d5c33;
+  border-color: #4caf50;
+  color: #d8ffe8;
+}
+.win-confirm-btn:hover { background: #2a7a45; }
 
 /* ===== Water 回手特效（water-3/water-4）：蓝色水波环 + 光晕 + 游动轨迹环 =====
  * 全部 body 级 fixed + pointer-events:none（JS 定时清理，见 effects/index.ts）：
