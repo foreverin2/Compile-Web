@@ -52,4 +52,42 @@ describe('flip op', () => {
     s.pendingEffects.push({ id: 'e1', player: 0, gen: outer(), sourceUid: 'src', sourceDefId: 'test', prompt: null, lastAnswer: null });
     expect(() => runStack(s)).toThrow(/covered/);
   });
+
+  it('flipping a secret face-down card face-up clears secret (翻开即解禁)', () => {
+    const s = createGame();
+    s.phase = 'turn';
+    s.players[0].stacks[1] = [{
+      uid: 'src', defId: 'test-flip', owner: 0, faceUp: true, zone: 'field', line: 1, pos: 0,
+    }];
+    const secretCard = makeCard('test-flip', 0, 'field', false, 0, 1);
+    secretCard.secret = true; // 牌堆来源的反面打出卡
+    s.players[0].stacks[0] = [makeCard('test-flip', 0, 'field', true, 0, 0), secretCard];
+    s.players[0].deck = [makeCard('test-flip', 0, 'deck'), makeCard('test-flip', 0, 'deck')]; // 中指令 draw 用
+    function* outer(): Generator<EffectStep, void, StepResult> {
+      yield { op: 'flip', uid: secretCard.uid };
+    }
+    s.pendingEffects.push({ id: 'e1', player: 0, gen: outer(), sourceUid: 'src', sourceDefId: 'test', prompt: null, lastAnswer: null });
+    runStack(s);
+    expect(secretCard.faceUp).toBe(true);
+    expect(secretCard.secret).toBeFalsy();
+  });
+
+  it('flipping a secret card face-down keeps secret (only a face-up flip declassifies)', () => {
+    const s = createGame();
+    s.phase = 'turn';
+    s.players[0].stacks[1] = [{
+      uid: 'src', defId: 'test-flip', owner: 0, faceUp: true, zone: 'field', line: 1, pos: 0,
+    }];
+    const secretCard = makeCard('test-flip', 0, 'field', true, 0, 1);
+    secretCard.secret = true;
+    s.players[0].stacks[0] = [makeCard('test-flip', 0, 'field', true, 0, 0), secretCard];
+    s.players[0].deck = [makeCard('test-flip', 0, 'deck')];
+    function* outer(): Generator<EffectStep, void, StepResult> {
+      yield { op: 'flip', uid: secretCard.uid };
+    }
+    s.pendingEffects.push({ id: 'e1', player: 0, gen: outer(), sourceUid: 'src', sourceDefId: 'test', prompt: null, lastAnswer: null });
+    runStack(s);
+    expect(secretCard.faceUp).toBe(false);
+    expect(secretCard.secret).toBe(true); // 翻回反面：仍为秘密
+  });
 });

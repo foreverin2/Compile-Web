@@ -35,6 +35,20 @@ describe('playTopDeck op', () => {
     expect(s.players[0].deck.length).toBe(12);
   });
 
+  it('marks the deck-sourced face-down play as secret (owner cannot peek until flipped)', () => {
+    const s = draftFireP1();
+    const top = s.players[0].deck[s.players[0].deck.length - 1];
+    s.pendingEffects.push({
+      id: 'e1', player: 0,
+      gen: (function* (): Generator<EffectStep, void, StepResult> {
+        yield { op: 'playTopDeck', line: 1, faceUp: false };
+      })(),
+      sourceUid: 'src', sourceDefId: 'system', system: true, prompt: null, lastAnswer: null,
+    });
+    runStack(s);
+    expect(top.secret).toBe(true);
+  });
+
   it('two consecutive playTopDeck ops both land (no pendingPlay overwrite)', () => {
     const s = draftFireP1();
     const deck = s.players[0].deck;

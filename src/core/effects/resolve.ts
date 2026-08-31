@@ -141,6 +141,9 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       if (!card || card.zone !== 'field') throw new Error(`cannot flip ${op.uid}: not on field`);
       if (!op.allowCovered && !isUncovered(s, card)) throw new Error(`cannot flip ${op.uid}: covered card`);
       card.faceUp = !card.faceUp;
+      // 翻开即解禁：翻正为正面时清除牌堆来源的 secret 标记（正面 = 公开信息）。
+      // 翻回反面不清 secret（只是重新隐藏，信息仍非公开）。
+      if (card.faceUp) card.secret = false;
       emitCardEvent(s, 'card:flipped', card);
       if (card.faceUp) pushMiddle(s, card.owner, card); // 翻正 → 中指令连锁（LIFO）
       break;
@@ -228,6 +231,9 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       if (!card) throw new Error('deck is empty');
       card.zone = 'float';
       card.faceUp = op.faceUp;
+      // 牌堆来源的反面打出 = 非公开信息：连持有者都不可窥视（secret），直到某效果
+      // 翻正为正面（flip op 清 secret）。牌堆来源的正面打出本就公开，不打标记。
+      card.secret = !op.faceUp;
       card.line = op.line;
       card.pos = null;
       s.pendingPlay.push({ card, beforeCoveredDone: false });

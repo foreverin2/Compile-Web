@@ -61,6 +61,21 @@ describe('playFromHand op', () => {
     expect(s.pendingPlay).toHaveLength(0);
   });
 
+  it('does NOT mark a hand-sourced play as secret (player chose a known hand card)', () => {
+    const s = draftFireP1();
+    const hc = makeCard('water-1', 0, 'hand');
+    s.players[0].hand.push(hc);
+    s.pendingEffects.push({
+      id: 'e1', player: 0,
+      gen: (function* (): Generator<EffectStep, void, StepResult> {
+        yield { op: 'playFromHand', uid: hc.uid, line: 1, faceUp: false };
+      })(),
+      sourceUid: 'src', sourceDefId: 'system', system: true, prompt: null, lastAnswer: null,
+    });
+    runStack(s);
+    expect(hc.secret).toBeFalsy(); // 手牌来源：已知信息，不打 secret
+  });
+
   it('two consecutive playFromHand ops both land (no pendingPlay overwrite)', () => {
     const s = draftFireP1();
     const h1 = makeCard('water-1', 0, 'hand');
