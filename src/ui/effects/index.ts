@@ -227,6 +227,93 @@ function playFlip(node: HTMLElement, payload: FxCardPayload): void {
   window.setTimeout(() => wrap.remove(), 420);
 }
 
+/* ===== Life 翻转专属特效：绿色藤蔓缠绕 + 绿光（life-1/life-2 及未来生命翻转） =====
+ * 触发：card:flipped 且 payload.triggerProtocol === 'life'。翻面本身复用 playFlip
+ * （非 life 翻转保持原样），本函数只在它周围叠加藤蔓特效：
+ * ① 翻转前：8 根绿色藤蔓沿卡框四边（每边 2 根）缓慢出现并缠绕上来——SVG S 曲线、
+ *    从边缘向卡内生长（transform-origin 0 0 = 锚点），长度 52px ≥ 卡牌半长轴 1/3；
+ *    + 卡框绿光（呼吸发光）；
+ * ② 翻转完成后（~650ms）：藤蔓逐渐收缩退去；
+ * ③ 卡框绿光持续 ~2 秒后淡出。
+ * 全部 pointer-events:none、JS 定时清理（无泄漏）。 */
+const LIFE_AFTER_MS = 2000; // 翻转后卡框绿光持续时间
+const LIFE_VINE_LEN = 52; // 藤蔓长度（≥ 场上/手牌/协议卡半长轴 1/3）
+const LIFE_VINE_SHRINK_MS = 650; // 翻转完成后开始收缩藤蔓的时机
+
+/** 构建一根藤蔓：定位 div（旋转朝向卡内）+ SVG S 曲线（生长/收缩动画作用于其上） */
+function buildLifeVine(rot: number): HTMLElement {
+  const wrap = document.createElement('div');
+  wrap.className = 'life-flip-vine';
+  wrap.style.transform = `rotate(${rot}deg)`;
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('width', '22');
+  svg.setAttribute('height', String(LIFE_VINE_LEN));
+  svg.setAttribute('viewBox', `0 0 22 ${LIFE_VINE_LEN}`);
+  svg.setAttribute('class', 'life-flip-vine-curve');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', `M5,2 C12,${LIFE_VINE_LEN * 0.3} 17,${LIFE_VINE_LEN * 0.62} 9,${LIFE_VINE_LEN - 3}`);
+  path.setAttribute('fill', 'none');
+  path.setAttribute('stroke', '#3ddc84');
+  path.setAttribute('stroke-width', '3.2');
+  path.setAttribute('stroke-linecap', 'round');
+  svg.appendChild(path);
+  wrap.appendChild(svg);
+  return wrap;
+}
+
+function playLifeFlip(node: HTMLElement, payload: FxCardPayload): void {
+  const rect = node.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) {
+    playFlip(node, payload); // rect 缺失 → 退回基础翻面
+    return;
+  }
+  const L = rect.left;
+  const T = rect.top;
+  const W = rect.width;
+  const H = rect.height;
+  // 藤蔓锚点：每边 2 根（20%/80% 处），transform-origin 0 0 = 锚点（卡框边缘点），
+  // 旋转使藤蔓垂入卡内：上边 0°（向下）、右边 -90°（向左）、下边 180°（向上）、
+  // 左边 90°（向右）。
+  const anchors: { x: number; y: number; rot: number }[] = [
+    { x: L + W * 0.2, y: T, rot: 0 },
+    { x: L + W * 0.8, y: T, rot: 0 },
+    { x: L + W, y: T + H * 0.2, rot: -90 },
+    { x: L + W, y: T + H * 0.8, rot: -90 },
+    { x: L + W * 0.2, y: T + H, rot: 180 },
+    { x: L + W * 0.8, y: T + H, rot: 180 },
+    { x: L, y: T + H * 0.2, rot: 90 },
+    { x: L, y: T + H * 0.8, rot: 90 },
+  ];
+  const vines: HTMLElement[] = [];
+  for (let i = 0; i < anchors.length; i++) {
+    const a = anchors[i];
+    const vine = buildLifeVine(a.rot);
+    vine.style.left = `${a.x}px`;
+    vine.style.top = `${a.y}px`;
+    vine.style.zIndex = String(EXTRA_Z);
+    vine.style.animationDelay = `${i * 0.07}s`; // 逐根错开缓慢出现（缠绕感）
+    document.body.appendChild(vine);
+    vines.push(vine);
+  }
+  // 卡框绿光（呼吸发光 → 持续 ~2 秒 → 淡出）
+  const glow = document.createElement('div');
+  glow.className = 'life-flip-glow';
+  glow.style.left = `${L}px`;
+  glow.style.top = `${T}px`;
+  glow.style.width = `${W}px`;
+  glow.style.height = `${H}px`;
+  glow.style.zIndex = String(EXTRA_Z);
+  document.body.appendChild(glow);
+  // ② 翻转完成后藤蔓收缩退去
+  window.setTimeout(() => {
+    for (const v of vines) v.classList.add('shrinking');
+  }, LIFE_VINE_SHRINK_MS);
+  // ③ 卡框绿光持续 ~2 秒后淡出（CSS 动画自带尾部淡出，JS 只负责移除）
+  window.setTimeout(() => glow.remove(), LIFE_AFTER_MS + 320);
+  // 基础翻面照常（本函数只叠加藤蔓，不替换翻面）
+  playFlip(node, payload);
+}
+
 /** 基础行为特效：回手——从场上丝滑平移到持有者手牌末尾 */
 function playReturn(node: HTMLElement, payload: FxCardPayload): void {
   const rect = node.getBoundingClientRect();
@@ -642,7 +729,12 @@ export function initEffects(): () => void {
         if (node) playShatter(node, payload);
         break;
       case 'card:flipped':
-        if (node) playFlip(node, payload);
+        // life 协议触发的翻转（life-1/life-2 及未来生命翻转）：绿色藤蔓缠绕 + 绿光；
+        // 其余翻转源（water-0 带 'water'、系统效果带 'system'）走基础翻面
+        if (node) {
+          if (payload.triggerProtocol === 'life') playLifeFlip(node, payload);
+          else playFlip(node, payload);
+        }
         break;
       case 'card:returned':
         // water 协议触发的回手（water-3/water-4 及未来水回手）：蓝色水波环 + 光晕 +

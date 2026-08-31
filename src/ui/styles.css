@@ -1038,6 +1038,58 @@ body {
   100% { opacity: 0; box-shadow: 0 0 4px rgba(64, 180, 255, 0); }
 }
 
+/* ===== Life 翻转特效（life-1/life-2）：绿色藤蔓缠绕 + 绿光 =====
+ * 全部 body 级 fixed + pointer-events:none（JS 定时清理，见 effects/index.ts）：
+ * - .life-flip-vine：定位 div（transform-origin 0 0 = 卡框边缘锚点，旋转使藤蔓垂入
+ *   卡内）；内层 .life-flip-vine-curve（SVG S 曲线）负责生长/收缩（scaleY，52px 长
+ *   ≥ 卡牌半长轴 1/3）；.shrinking 触发收缩退去；
+ * - .life-flip-glow：卡框绿色呼吸光晕，持续 ~2 秒后淡出。 */
+.life-flip-vine {
+  position: fixed;
+  pointer-events: none;
+  width: 22px;
+  height: 52px;
+  transform-origin: 0 0; /* 锚点 = 卡框边缘点 */
+  opacity: 0;
+  animation: life-vine-in 0.9s ease forwards;
+}
+.life-flip-vine-curve {
+  display: block;
+  filter: drop-shadow(0 0 5px rgba(61, 220, 132, 0.55));
+  transform-origin: 0 0;
+  animation: life-vine-grow 0.9s ease forwards;
+}
+.life-flip-vine.shrinking .life-flip-vine-curve {
+  animation: life-vine-shrink 0.55s ease forwards;
+}
+@keyframes life-vine-in {
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+@keyframes life-vine-grow {
+  0% { transform: scaleY(0); opacity: 0; }
+  60% { opacity: 1; }
+  100% { transform: scaleY(1); opacity: 1; }
+}
+@keyframes life-vine-shrink {
+  0% { transform: scaleY(1); opacity: 1; }
+  100% { transform: scaleY(0.1); opacity: 0; }
+}
+.life-flip-glow {
+  position: fixed;
+  pointer-events: none;
+  border-radius: 8px;
+  border: 2px solid rgba(61, 220, 132, 0.85);
+  box-shadow: 0 0 22px rgba(61, 220, 132, 0.75), inset 0 0 16px rgba(61, 220, 132, 0.35);
+  animation: life-glow-persist 2.3s ease forwards;
+}
+@keyframes life-glow-persist {
+  0% { opacity: 0; box-shadow: 0 0 0 rgba(61, 220, 132, 0), inset 0 0 0 rgba(61, 220, 132, 0); }
+  12% { opacity: 1; box-shadow: 0 0 26px rgba(61, 220, 132, 0.9), inset 0 0 20px rgba(61, 220, 132, 0.5); }
+  80% { opacity: 0.9; }
+  100% { opacity: 0; box-shadow: 0 0 4px rgba(61, 220, 132, 0); }
+}
+
 /* ===== 草案（R9 三栏重设计：P1 已选 | 协议池 每行 4 个 | P2 已选） ===== */
 .draft-screen { text-align: center; }
 .title { margin-bottom: 10px; }
