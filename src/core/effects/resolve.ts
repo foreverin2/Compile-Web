@@ -1,5 +1,5 @@
 import type { Card, GameState, Line, Op, PendingEffect, PlayerId, StepResult } from '../models/types';
-import { drawCards, discardFromHand } from '../engine/deck';
+import { drawCards, discardFromHand, shuffle } from '../engine/deck';
 import { advanceStep } from '../engine/turn';
 import { gameBus } from '../events/bus';
 import { createCtx, emitCardEvent, findCard, isUncovered, nextEffectId } from './context';
@@ -239,6 +239,17 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       // playFromHand（手牌打出）与 playTopDeck（牌堆顶打出）区分事件：
       // FX 层据此从手牌卡 rect 起飞（而非牌库 rect）飞入目标线堆叠末尾
       emitCardEvent(s, 'card:hand-played', card, { line: op.line });
+      break;
+    }
+    case 'rearrangeProtocols': {
+      // 重排协议：交换效果玩家两个协议位（defId 与 compiled 状态随数组元素整体移动；
+      // 线堆叠/卡牌留在原位 —— 与参考实现"协议顺序变更、场上卡不动"语义一致）
+      if (op.a === op.b) throw new Error('cannot swap a protocol position with itself');
+      const protos = s.players[pe.player].protocols;
+      const tmp = protos[op.a];
+      protos[op.a] = protos[op.b];
+      protos[op.b] = tmp;
+      s.log.push(`P${pe.player + 1} 重排协议：交换位置 ${op.a + 1} 与 ${op.b + 1}`);
       break;
     }
     case 'reveal': {
