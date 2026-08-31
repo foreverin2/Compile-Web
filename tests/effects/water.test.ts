@@ -122,6 +122,88 @@ describe('water protocol effects', () => {
     expect(s.pendingEffects).toHaveLength(0);
   });
 
+  it('water-3: a COVERED value-2 card (beneath a non-2 top) is returned to its owner', () => {
+    const s = draftWaterP1();
+    advanceToStep(s, 0, 'action');
+    s.players[1].hand = [];
+    s.players[0].hand = [makeCard('water-3', 0, 'hand')];
+    // 对手同线：底层被覆盖的 2 分卡（metal-2）+ 顶卡 3 分（metal-3）→ 只有覆盖的 2 分卡回手
+    const covered2 = makeCard('metal-2', 1, 'field', true, 0, 0);
+    const top3 = makeCard('metal-3', 1, 'field', true, 0, 1);
+    s.players[1].stacks[0] = [covered2, top3];
+    const card = s.players[0].hand[0];
+    executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: waterLine(s) });
+    resolveAllChoices(s, pickFirst);
+    expect(s.players[1].hand.map((c) => c.uid)).toEqual([covered2.uid]); // 覆盖的 2 分卡回手
+    expect(s.players[1].stacks[0].map((c) => c.uid)).toEqual([top3.uid]); // 3 分顶卡留下
+    expect(s.pendingEffects).toHaveLength(0);
+  });
+
+  it('water-3: a COVERED value-3 card is NOT returned (only value-2 cards go home)', () => {
+    const s = draftWaterP1();
+    advanceToStep(s, 0, 'action');
+    s.players[1].hand = [];
+    s.players[0].hand = [makeCard('water-3', 0, 'hand')];
+    const covered3 = makeCard('metal-3', 1, 'field', true, 0, 0);
+    const top2 = makeCard('metal-2', 1, 'field', true, 0, 1);
+    s.players[1].stacks[0] = [covered3, top2];
+    const card = s.players[0].hand[0];
+    executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: waterLine(s) });
+    resolveAllChoices(s, pickFirst);
+    expect(s.players[1].hand.map((c) => c.uid)).toEqual([top2.uid]); // 顶卡 2 分回手
+    expect(s.players[1].stacks[0].map((c) => c.uid)).toEqual([covered3.uid]); // 覆盖的 3 分留下
+    expect(s.pendingEffects).toHaveLength(0);
+  });
+
+  it('water-3: a face-down value-2 top (uncovered) is still returned', () => {
+    const s = draftWaterP1();
+    advanceToStep(s, 0, 'action');
+    s.players[1].hand = [];
+    s.players[0].hand = [makeCard('water-3', 0, 'hand')];
+    const fd = makeCard('metal-1', 1, 'field', false, 0, 0); // 反面 = 2 分
+    s.players[1].stacks[0] = [fd];
+    const card = s.players[0].hand[0];
+    executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: waterLine(s) });
+    resolveAllChoices(s, pickFirst);
+    expect(s.players[1].hand.map((c) => c.uid)).toEqual([fd.uid]);
+    expect(s.players[1].stacks[0]).toHaveLength(0);
+    expect(s.pendingEffects).toHaveLength(0);
+  });
+
+  it('water-3: fizzles when neither stack on the line has a value-2 card', () => {
+    const s = draftWaterP1();
+    advanceToStep(s, 0, 'action');
+    s.players[1].hand = [];
+    s.players[0].hand = [makeCard('water-3', 0, 'hand')];
+    const covered3 = makeCard('metal-3', 1, 'field', true, 0, 0);
+    const top3 = makeCard('metal-3', 1, 'field', true, 0, 1);
+    s.players[1].stacks[0] = [covered3, top3];
+    const card = s.players[0].hand[0];
+    executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: waterLine(s) });
+    resolveAllChoices(s, pickFirst);
+    expect(s.players[1].hand).toHaveLength(0);
+    expect(s.players[1].stacks[0]).toHaveLength(2); // 原样保留
+    expect(s.pendingEffects).toHaveLength(0);
+  });
+
+  it('water-3: a face-down card under a darkness-2 top command (value 4) is NOT returned', () => {
+    const s = draftWaterP1();
+    advanceToStep(s, 0, 'action');
+    const wl = waterLine(s);
+    s.players[1].hand = [];
+    s.players[0].hand = [makeCard('water-3', 0, 'hand')];
+    // 对手同线：正面 darkness-2（顶命令：本线反面牌 = 4 分）+ 反面卡 → 反面卡按 4 分排除
+    const dark2 = makeCard('darkness-2', 1, 'field', true, wl, 0);
+    const fd = makeCard('metal-1', 1, 'field', false, wl, 1);
+    s.players[1].stacks[wl] = [dark2, fd];
+    const card = s.players[0].hand[0];
+    executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: wl });
+    resolveAllChoices(s, pickFirst);
+    expect(s.players[1].hand.map((c) => c.uid)).toEqual([dark2.uid]); // darkness-2 自己(2分)回手
+    expect(s.players[1].stacks[wl].map((c) => c.uid)).toEqual([fd.uid]); // 反面卡按 4 分排除
+    expect(s.pendingEffects).toHaveLength(0);
+  });
+
   it('water-4: returns 1 of your own uncovered cards (opponent cards not selectable)', () => {
     const s = draftWaterP1();
     advanceToStep(s, 0, 'action');

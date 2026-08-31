@@ -198,11 +198,13 @@ function renderStackSlot(
     // 单击触发并取消它，故双击永不误打牌；窗口之外的点击各自成为独立的单击。
     // ITEM 9：自己的反面场上卡（owner === s.turnPlayer）双击放大时带 peek 切换按钮，
     // 背面起显、可切到正面查看（对手的反面卡不提供）。
+    // ITEM 1(secret)：牌堆来源的反面打出卡 = 非公开信息——即使持有者（owner === turnPlayer）
+    // 也不提供 peek（直到某效果翻正解禁 secret）。
     // stopPropagation 阻断冒泡到槽自身的 click（槽空白处点击仍直接打牌，二者不重复触发）。
     bindClickOrDouble(
       node,
       () => { if (interactable) onPlay(line); },
-      () => openZoom(card.defId, card.faceUp, false, false, !card.faceUp && card.owner === s.turnPlayer),
+      () => openZoom(card.defId, card.faceUp, false, false, !card.faceUp && card.owner === s.turnPlayer && !card.secret),
       true
     );
     pile.appendChild(node);
@@ -413,7 +415,10 @@ function renderHand(
     const isSelected = opts.isSelf && opts.selected === card.uid;
     // 手牌显示：self 手牌默认正面；若该卡被选中且当前朝向为背面（selectedFaceUp=false），
     // 立即以背面预览显示（点击「翻面」时翻转手牌区外观）。
-    const faceUp = opts.isSelf ? !(isSelected && !selectedFaceUp) : false;
+    // ITEM 1(secret)：牌堆来源的 secret 卡（被效果回手）即使 self 也恒以背面渲染——
+    // secret 只禁「查看牌面」不禁「打出朝向」：翻面按钮仍可切换 selectedFaceUp 以正面
+    // 打出（那是玩家的打出朝向选择，不是揭示），预览与双击放大都只看得到卡背。
+    const faceUp = opts.isSelf && !card.secret ? !(isSelected && !selectedFaceUp) : false;
     const node = renderCardFace({ defId: card.defId, faceUp, uid: card.uid });
     node.dataset.uid = card.uid;
     if (isSelected) node.classList.add('selected');

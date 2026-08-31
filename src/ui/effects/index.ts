@@ -618,3 +618,79 @@ export function initCompileFx(): () => void {
     playCompile(p);
   });
 }
+
+/* ===== 重排协议基础特效（protocols:rearranged 事件：water-2 的 rearrangeProtocols op） =====
+ * 引擎在结算期间同步发出该事件（DOM 仍是交换前布局）→ 两张协议卡【同时】平移互换位置：
+ * - 取该玩家 a/b 两个协议格的 .protocol-img（真实协议卡足迹 ~200×280；协议格含 data-player
+ *   /data-line，见 render.ts renderProtocolCell）的 rect 与资源 src（protocol-loading/compiled.png）；
+ * - 构建两张 body 级幽灵卡（position:fixed、pointer-events:none、BASE_Z 基础特效层），
+ *   P2 的协议卡转 180°（.protocol-img.rot-180 同款朝向：P1 0° / P2 180°），尺寸 = 真实协议卡；
+ * - 同时飞行（MOVE_MS，playShift 同款缓动）：A 从 a 中心 → b 中心、B 反向；
+ * - 重渲染随后重建棋盘（协议已互换），幽灵卡落点 = 交换后协议卡的渲染位 → 无缝衔接。 */
+
+/** protocols:rearranged 事件载荷（resolve.ts rearrangeProtocols op 发出） */
+interface RearrangeProtocolsPayload {
+  player: PlayerId;
+  a: number;
+  b: number;
+}
+
+/** body 级协议幽灵卡：fixed 定位于协议卡 rect，尺寸 = 真实协议卡（~200×280），卡面复用
+ *  协议资源 src；P2 幽灵初始转 180°（与场上 .protocol-img.rot-180 朝向一致）。 */
+function buildProtocolGhost(src: string, rect: DOMRect, rot180: boolean): HTMLElement {
+  const ghost = document.createElement('div');
+  ghost.style.cssText =
+    `position:fixed;left:${rect.left}px;top:${rect.top}px;` +
+    `width:${rect.width}px;height:${rect.height}px;` +
+    `z-index:${BASE_Z};pointer-events:none;`;
+  if (rot180) ghost.style.transform = 'rotate(180deg)'; // 初始朝向先落位（此后仅位移在动）
+  const img = document.createElement('img');
+  img.src = src;
+  img.style.cssText =
+    'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;border-radius:4px;';
+  ghost.appendChild(img);
+  document.body.appendChild(ghost);
+  return ghost;
+}
+
+/** 幽灵协议卡平移飞行：从自身 rect 中心平移到目标 rect 中心（MOVE_MS + 80 清理）。
+ *  P2 幽灵初始已转 180°，终点 transform 组合 rotate(180deg) → 过渡期间旋转不变、只动位移。 */
+function flyProtocolGhost(ghost: HTMLElement, from: DOMRect, to: DOMRect, rot180: boolean): void {
+  const dx = to.left + to.width / 2 - (from.left + from.width / 2);
+  const dy = to.top + to.height / 2 - (from.top + from.height / 2);
+  ghost.style.transition = `transform ${MOVE_MS}ms cubic-bezier(0.2, 0.7, 0.3, 1)`;
+  requestAnimationFrame(() => {
+    ghost.style.transform = `translate(${dx}px, ${dy}px)${rot180 ? ' rotate(180deg)' : ''}`;
+  });
+  window.setTimeout(() => ghost.remove(), MOVE_MS + 80);
+}
+
+/** 重排协议：两张协议卡同时平移互换位置 */
+function playRearrangeProtocolsFx(payload: RearrangeProtocolsPayload): void {
+  if (payload.a === payload.b) return;
+  const cellSel = (line: number): string =>
+    `.protocol-cell[data-player="${payload.player}"][data-line="${line}"]`;
+  const cellA = document.querySelector<HTMLElement>(cellSel(payload.a));
+  const cellB = document.querySelector<HTMLElement>(cellSel(payload.b));
+  if (!cellA || !cellB) return;
+  const imgA = cellA.querySelector<HTMLImageElement>('.protocol-img');
+  const imgB = cellB.querySelector<HTMLImageElement>('.protocol-img');
+  if (!imgA || !imgB) return;
+  const rectA = imgA.getBoundingClientRect();
+  const rectB = imgB.getBoundingClientRect();
+  if (rectA.width === 0 || rectA.height === 0 || rectB.width === 0 || rectB.height === 0) return;
+  const rot180 = payload.player === 1; // P2 协议卡转 180°（与场上协议渲染一致）；P1 0°
+  const ghostA = buildProtocolGhost(imgA.src, rectA, rot180);
+  const ghostB = buildProtocolGhost(imgB.src, rectB, rot180);
+  // 同时飞行：A 从 a 中心 → b 中心、B 反向（互换）
+  flyProtocolGhost(ghostA, rectA, rectB, rot180);
+  flyProtocolGhost(ghostB, rectB, rectA, rot180);
+}
+
+/** 重排协议基础特效订阅（protocols:rearranged 事件无 uid/defId，单独注册，同 initCompileFx） */
+export function initRearrangeFx(): () => void {
+  return gameBus.subscribe((e: GameEvent) => {
+    if (e.type !== 'protocols:rearranged') return;
+    playRearrangeProtocolsFx(e.payload as RearrangeProtocolsPayload);
+  });
+}

@@ -33,21 +33,24 @@ function* water2(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   yield { op: 'rearrangeProtocols', a, b };
 }
 
-/** water-3：回手此列所有2分的牌（此列 = 效果卡所在列；双方未覆盖顶卡，分值=2 含正面2分卡与反面卡）。
- *  逐张循环回手（每次回手后重新评估——"所有2分的牌"含逐层揭开后新露出的 2 分卡）；
- *  回持有者手牌（return op 按卡牌 owner 归位）。 */
+/** water-3：回手此列所有2分的牌（此列 = 效果卡所在列；双方堆叠【所有位置】分值=2 的牌，
+ *  含被覆盖的——"所有"包括覆盖在下面的牌，不只未覆盖顶卡）。
+ *  分值按【效果结算开始时】一次性评估（快照目标 uid 后逐张回手）：正面 2 分卡 / 反面卡
+ *  （默认 2）；所在线有正面 darkness-2 顶命令时反面 = 4，仍排除——即使 darkness-2 自身
+ *  （也是 2 分卡）随后被回手，已排除的 4 分卡也不会在效果中途变成 2 分被回手
+ *  （"此列所有2分的牌"以结算时点为准，与 darkness-2 顶命令的排除要求一致）。
+ *  覆盖卡回手必须带 allowCovered（return op 无此标记对覆盖卡抛错——验证过）。
+ *  回持有者手牌（return op 按卡牌 owner 归位）。无 2 分卡 → 无 yield，天然 fizzle。 */
 function* water3(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const line = ctx.card.line!;
-  for (;;) {
-    let target: { uid: string } | undefined;
-    for (const owner of [0, 1] as PlayerId[]) {
-      const stack = ctx.s.players[owner].stacks[line];
-      const top = stack[stack.length - 1];
-      if (top && cardPointValue(ctx.s, top) === 2) { target = top; break; }
+  const s = ctx.s;
+  const targets: string[] = [];
+  for (const owner of [0, 1] as PlayerId[]) {
+    for (const card of s.players[owner].stacks[line]) {
+      if (cardPointValue(s, card) === 2) targets.push(card.uid);
     }
-    if (!target) return; // 无 2 分牌 → 结束
-    yield { op: 'return', uid: target.uid };
   }
+  for (const uid of targets) yield { op: 'return', uid, allowCovered: true };
 }
 
 /** water-4：回手1张你的牌（自己的未覆盖场上卡） */
