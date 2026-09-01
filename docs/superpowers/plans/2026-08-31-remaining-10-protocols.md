@@ -350,7 +350,7 @@ for (const card of hand) for (const line of LINES) {
 |---|---|---|
 | apathy-0 | 顶：此列每张反面牌给你此列总分加1。 | `valueModifier { target: 'own-stack', apply: (s, owner, line, total) => total + countFaceDownInLine(s, line) }`——count 该线**双方堆叠全部反面牌**（拍板口径：此列=双方；含被盖）。顶命令正面上线即生效（含被盖）。 |
 | apathy-1 | 翻转此列所有其他正面牌。 | 收集**自己该线堆叠全部 faceUp 卡**（含被盖，「所有」，排除自己）→ 逐个 `flip allowCovered`。空 fizzle。（「此列」指 apathy-1 所在列；「其他」排除自己。） |
-| apathy-2 | 顶：无效化此列所有牌的中部命令。底：被盖住前：先翻转此牌。 | 顶：A2 `lineMiddleCommandsNullified`（**拍板：该线双方全部牌含被盖**）。底：`triggers['before-covered']`：`{op:'flip', uid:ctx.card.uid}`（翻正 → 顶命令随即生效；翻正触发中指令——apathy-2 无 middle，无害）。 |
+| apathy-2 | 顶：无效化此列所有牌的中部命令。底：被盖住前：先翻转此牌。 | 顶：A2 `lineMiddleCommandsNullified`（**拍板：该线双方全部牌含被盖**）。底：`triggers['before-covered']`：`{op:'flip', uid:ctx.card.uid}`（翻成**反面** → 顶命令随即失效，落地卡中指令正常结算；apathy-2 无 middle，翻转连锁无害）。 |
 | apathy-3 | 翻转1张对手的正面牌。 | select 对手 field 顶卡中 `faceUp` 1 → flip。空 fizzle。 |
 | apathy-4 | 你可以翻转1张你的被盖住的正面牌。 | 可选：候选=自己**被盖**（非顶卡）且 faceUp 的卡 → `flip allowCovered`。空 fizzle（可选自动跳过）。 |
 | apathy-5 | 弃1张牌。 | 模板。 |
