@@ -3355,8 +3355,8 @@ body.dragging { cursor: grabbing; user-select: none; }
   animation: none; /* 渐隐期停止扫光，避免动画覆盖 opacity 过渡 */
 }
 
-/* —— metal-2 常驻：持卡方该线堆叠槽金属铁板 + 斜光扫过（.fx-metal-plate/.fx-metal-sweep，
- *    render.ts syncMetalPlates 挂 body 级 fixed，盒 = 对方 .stack-slot 矩形，跨重渲染存活）。
+/* —— metal-2 常驻：被限制方该线堆叠槽金属铁板 + 斜光扫过（.fx-metal-plate/.fx-metal-sweep，
+ *    render.ts syncMetalPlates 挂 body 级 fixed，盒 = 被限制方 .stack-slot 矩形，跨重渲染存活）。
  *    铁板：钢灰金属渐变盖板（内斜纹 + 上下内阴影 + 高光边）覆盖该线堆叠区域；
  *    .fx-metal-sweep：斜长方形亮条（skewX 斜置）translateX 从左到右循环扫过（2.2s 周期，
  *    0–65% 扫过、65–100% 停留后重现——"扫过 → 短暂停 → 再扫"）。

@@ -2164,7 +2164,7 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   syncSpirit0Glows(s);
   syncSpirit1Cards(s);
   // FX-6 常驻金属特效：metal-0 对方能量槽金属边框（电池已入 DOM → 按 .battery-shell 矩形）/
-  // metal-2 持卡方链路铁板+斜光（槽位已入 DOM）/ metal-6 手牌 man 渐现（手牌已入 DOM →
+  // metal-2 被限制方链路铁板+斜光（槽位已入 DOM）/ metal-6 手牌 man 渐现（手牌已入 DOM →
   // 按 .card[data-uid] 矩形；条件消失后移除并注销）
   syncMetal0Glows(s);
   syncMetalPlates(s);
