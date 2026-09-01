@@ -2579,3 +2579,184 @@ body.dragging { cursor: grabbing; user-select: none; }
   background: radial-gradient(circle at 38% 34%, rgba(214, 20, 40, 0.95), rgba(150, 8, 22, 0.8) 55%, rgba(96, 4, 16, 0.55) 100%);
   box-shadow: 0 0 8px rgba(170, 12, 30, 0.5);
 }
+
+/* ===== Gravity 位移附加特效（card:deck-played 反面打出牌堆顶 / card:shifted + triggerProtocol=gravity，
+ * JS playGravityDeckPlayExtra / playGravityShiftExtra） =====
+ * 时序：牌库区品红光 + 终点黑洞渐现(0~0.3s) → 品红射线由黑洞射向起点(0.3~1.8s，由粗变细、
+ * 过中间后由细变粗，1.5s = GRAVITY_BEAM_MS) → 基础特效(1.8s 起，延后调度) → 收尾（卡到终点后：
+ * 黑洞渐隐 0.4s、卡边框品红光到终点后 1s 熄灭）。过渡时长与 effects/index.ts GRAVITY_* 常量
+ * 一一对应（微调在此集中改）。浮层均为 body 级 fixed + pointer-events:none，JS setTimeout 自清理。 */
+
+/* 牌库区边框品红光：覆盖牌库 rect 的外发光框。渐现 0.25s（20ms 起），随卡起飞（1.8s = GRAVITY_PRE_MS）
+ * 渐隐 0.4s = GRAVITY_HOLE_OUT_MS（-out 由 JS 在 PRE 时刻触发）。 */
+.fx-gravity-deckglow {
+  position: fixed;
+  pointer-events: none;
+  border-radius: 8px;
+  border: 2px solid rgba(216, 26, 236, 0.85);
+  box-shadow: 0 0 18px 4px rgba(216, 26, 236, 0.55), 0 0 40px 14px rgba(236, 48, 255, 0.32), inset 0 0 16px rgba(236, 48, 255, 0.3);
+  opacity: 0;
+  transition: opacity 0.25s ease-out;
+}
+.fx-gravity-deckglow.fx-gravity-deckglow-in { opacity: 1; }
+.fx-gravity-deckglow.fx-gravity-deckglow-out { opacity: 0; transition: opacity 0.4s ease-in; }
+
+/* 终点黑洞：深紫黑圆盘（径向渐变 + 暗紫 rim）+ 中间一条横线（事件视界亮纹），整体 rotate(-18deg)
+ * 倾斜。渐现 0.3s = GRAVITY_HOLE_IN_MS；渐隐 0.4s = GRAVITY_HOLE_OUT_MS（JS 在卡到达后触发）。 */
+.fx-gravity-hole {
+  position: fixed;
+  pointer-events: none;
+  opacity: 0;
+  transform: rotate(-18deg);
+  transition: opacity 0.3s ease-out;
+  will-change: opacity;
+}
+.fx-gravity-hole.fx-gravity-hole-in { opacity: 1; }
+.fx-gravity-hole.fx-gravity-hole-out { opacity: 0; transition: opacity 0.4s ease-in; }
+.fx-gravity-hole-disc {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 50%, #0a0614 0%, #1a0f2e 34%, #2c1647 58%, #120a20 78%, rgba(10, 6, 20, 0.6) 100%);
+  border: 2px solid rgba(120, 40, 180, 0.55);
+  box-shadow: 0 0 18px rgba(90, 24, 160, 0.8), inset 0 0 24px rgba(0, 0, 0, 0.9), inset 0 0 10px rgba(150, 60, 230, 0.4);
+}
+/* 中间横线：白紫渐变亮纹横贯圆盘（整体已随 .fx-gravity-hole 旋转倾斜） */
+.fx-gravity-hole-slit {
+  position: absolute;
+  left: 12%;
+  top: 50%;
+  width: 76%;
+  height: 5px;
+  margin-top: -2.5px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(150, 60, 230, 0) 0%, rgba(214, 140, 255, 0.9) 30%, rgba(244, 190, 255, 1) 50%, rgba(214, 140, 255, 0.9) 70%, rgba(150, 60, 230, 0) 100%);
+  box-shadow: 0 0 10px rgba(200, 110, 255, 0.9), 0 0 22px rgba(180, 80, 245, 0.5);
+}
+
+/* 品红射线（黑洞 → 起点）：容器 fixed 锚定黑洞中心（transform-origin left center）、按起终距离
+ * 定宽、rotate 到起点角度（角度经 --fx-beam-angle 由 JS 内联，动画关键帧组合 rotate+scaleX——
+ * 避免 CSS 动画覆盖内联 transform 丢掉旋转）。animation delay 0.3s + fill-mode backwards →
+ * 0.3s 起自黑洞向起点生长（scaleX 0→1，1.5s = GRAVITY_BEAM_MS）。核心 .fx-gravity-beam-core
+ * 负责「由粗变细、过中间后由细变粗」：scaleY 1 → 0.18 → 1（前段变细、后段变粗，同步 1.5s）。 */
+.fx-gravity-beam {
+  position: fixed;
+  height: 14px;            /* 粗态厚度 */
+  margin-top: -7px;        /* 垂直居中于黑洞中心（负半高） */
+  transform-origin: left center;
+  pointer-events: none;
+  opacity: 0;
+  animation: fx-gravity-beam-grow 1.5s ease-out 0.3s forwards;
+}
+.fx-gravity-beam-core {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  transform-origin: center;
+  background: linear-gradient(90deg,
+    rgba(255, 130, 255, 0.98) 0%,
+    rgba(226, 40, 246, 0.95) 26%,
+    rgba(206, 24, 232, 0.7) 55%,
+    rgba(206, 24, 232, 0.3) 80%,
+    rgba(206, 24, 232, 0) 100%);
+  filter: blur(1px) drop-shadow(0 0 6px rgba(226, 40, 246, 0.85));
+  animation: fx-gravity-beam-pulse 1.5s ease-in-out 0.3s backwards;
+}
+@keyframes fx-gravity-beam-grow {
+  0% { transform: rotate(var(--fx-beam-angle, 0deg)) scaleX(0); opacity: 0; }
+  100% { transform: rotate(var(--fx-beam-angle, 0deg)) scaleX(1); opacity: 1; }
+}
+@keyframes fx-gravity-beam-pulse {
+  0% { transform: scaleY(1); }
+  50% { transform: scaleY(0.18); }  /* 过中间：由粗变细 */
+  100% { transform: scaleY(1); }    /* 后段：由细变粗 */
+}
+
+/* 品红卡框光（延后基础飞行的浮层卡）：随起飞（~450ms = MOVE_MS）→ 到终点后 1s =
+ * GRAVITY_CARDGLOW_LINGER_MS 熄灭（0.4s = GRAVITY_CARDGLOW_FADE_MS）。动画时长 1.9s ≈
+ * MOVE+LINGER+FADE+50，关键帧百分比按此对齐（76% ≈ 到终点后 1s 处开始熄灭）。 */
+.fx-gravity-cardglow {
+  border-radius: 6px;
+  animation: fx-gravity-cardglow 1.9s ease forwards;
+}
+@keyframes fx-gravity-cardglow {
+  0%, 76% {
+    box-shadow: 0 0 10px 3px rgba(216, 26, 236, 0.55), 0 0 28px 9px rgba(236, 48, 255, 0.4), inset 0 0 12px rgba(236, 48, 255, 0.28);
+  }
+  100% {
+    box-shadow: 0 0 0 rgba(216, 26, 236, 0), 0 0 0 rgba(236, 48, 255, 0), inset 0 0 0 rgba(236, 48, 255, 0);
+  }
+}
+
+/* ===== Speed 位移附加特效（card:shifted / card:drawn + triggerProtocol=speed，
+ * JS playSpeedShiftExtra / playSpeedDrawExtra → playSpeedExtra） =====
+ * 时序：卡框灰白光 + 卡中心飓风渐现(0~0.3s = SPEED_TORNADO_IN_MS) → 整体沿起点→终点直线平移
+ * （1.5s = SPEED_MOVE_MS，transition transform translate、linear 匀速）→ 到达后飓风渐隐、
+ * 卡框恢复（0.4s = SPEED_TORNADO_OUT_MS / SPEED_GLOW_FADE_MS，总 ≈ 2.26s）。
+ * 过渡时长与 effects/index.ts SPEED_* 常量一一对应（微调在此集中改）。
+ * 浮层 = body 级 fixed .fx-speed-glow 容器（卡框灰白光本身）+ 内层 .fx-speed-tornado（螺旋
+ * 锥形柱：4 层旋转椭圆带由宽到窄收成锥形 + 中心亮白气柱），JS setTimeout 自清理。 */
+
+/* 卡框灰白光（容器本身）：边框 + 外发光 + 内发光；opacity 由 JS 内联驱动（渐现 0.3s / 渐隐 0.4s） */
+.fx-speed-glow {
+  position: fixed;
+  pointer-events: none;
+  border-radius: 8px;
+  border: 2px solid rgba(226, 230, 242, 0.6);
+  box-shadow: 0 0 14px 3px rgba(226, 230, 242, 0.5), 0 0 32px 10px rgba(208, 216, 232, 0.3), inset 0 0 16px rgba(240, 244, 252, 0.28);
+  opacity: 0;
+  will-change: transform, opacity;
+}
+
+/* 飓风：螺旋锥形柱。容器定位于卡中心（translate(-50%,-50%)），整体呼吸缩放；内层 .fx-speed-band
+ * 为 4 层旋转椭圆（自上而下由宽到窄收成锥形），逐层错相旋转（负延迟）成螺旋；中心 .fx-speed-core
+ * 为亮白气柱（脉动）。 */
+.fx-speed-tornado {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 104px;
+  height: 156px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  animation: fx-speed-breathe 1.4s ease-in-out infinite;
+}
+@keyframes fx-speed-breathe {
+  0%, 100% { transform: translate(-50%, -50%) scale(0.94, 0.9); }
+  50% { transform: translate(-50%, -50%) scale(1.08, 1.05); }
+}
+.fx-speed-band {
+  position: absolute;
+  left: 50%;
+  width: 100%;
+  margin-left: -50%;
+  border-radius: 50%;
+  border: 2px solid rgba(228, 233, 244, 0.5);
+  background: radial-gradient(ellipse at center, rgba(235, 240, 250, 0.18) 0%, rgba(235, 240, 250, 0.06) 52%, rgba(235, 240, 250, 0) 76%);
+  box-shadow: 0 0 10px rgba(220, 228, 244, 0.4), inset 0 0 8px rgba(220, 228, 244, 0.2);
+  animation: fx-speed-band-spin 1.3s linear infinite;
+}
+.fx-speed-band:nth-child(1) { top: 0%; height: 40%; }
+.fx-speed-band:nth-child(2) { top: 22%; height: 35%; animation-delay: -0.33s; }
+.fx-speed-band:nth-child(3) { top: 45%; height: 30%; animation-delay: -0.66s; }
+.fx-speed-band:nth-child(4) { top: 68%; height: 26%; animation-delay: -0.99s; }
+@keyframes fx-speed-band-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.fx-speed-core {
+  position: absolute;
+  left: 50%;
+  top: 6%;
+  width: 8px;
+  height: 88%;
+  margin-left: -4px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(252, 253, 255, 0.95) 0%, rgba(232, 238, 250, 0.5) 55%, rgba(232, 238, 250, 0.12) 100%);
+  box-shadow: 0 0 14px rgba(244, 248, 255, 0.85);
+  animation: fx-speed-core-pulse 0.7s ease-in-out infinite alternate;
+}
+@keyframes fx-speed-core-pulse {
+  from { transform: scaleY(0.9); opacity: 0.8; }
+  to { transform: scaleY(1.08); opacity: 1; }
+}
