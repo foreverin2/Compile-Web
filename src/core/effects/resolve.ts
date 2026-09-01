@@ -16,6 +16,7 @@ import './cards/death';
 import './cards/spirit';
 import './cards/gravity';
 import './cards/psychic';
+import './cards/plague';
 
 function topEffect(s: GameState): PendingEffect | undefined {
   return s.pendingEffects[s.pendingEffects.length - 1];
