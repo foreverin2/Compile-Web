@@ -1,6 +1,7 @@
 import type { ChoiceRequest, GameState, PendingEffect, PlayerId, Line, ProtocolDef } from '../core/models/types';
 import { getLineValue, getCurrentDrafter, draftTurnRange, lineTopCommandActive } from '../core/state/create';
 import { getLegalActions, type LegalAction } from '../core/game';
+import { opponentMustPlayFaceDown, lineBlocksOpponent } from '../core/rules/restrictions';
 import { DEMO_PROTOCOLS } from '../data/demo';
 import { downloadLog } from './diag';
 
@@ -331,6 +332,110 @@ export function syncScanOverlays(s: GameState): void {
     if (!activeKeys.has(key)) {
       overlay.remove();
       scanOverlays.delete(key);
+    }
+  }
+}
+
+/* ===== 常驻念能粒子（FX-3）：psychic-1 顶命令 → 被限制方三条链路粒子闪烁 =====
+ * opponentMustPlayFaceDown(s, player) 为真（该 player 的对手场上有正面 psychic-1 →
+ * player 只能反面打出）期间，被限制方 player 的三条链路堆叠上持续出现小型紫粉粒子
+ * 微微闪烁后消失（循环）。与 syncSmokeOverlays 同模式：body 级 fixed 粒子层
+ * （.fx-psychic-line 内 7 颗 .fx-psychic-line-particle）按 key `${player}-${line}`
+ * 注册表 get-or-create、每帧渲染重定位到 .stack-slot 矩形；条件不满足移除并注销。
+ * 层节点跨重渲染存活（从不 detach/reattach）→ CSS 动画不重启。 */
+const psychicParticles = new Map<string, HTMLElement>();
+const PSYCHIC_LINE_PARTICLE_COUNT = 7;
+
+function renderPsychicParticlesLayer(): HTMLElement {
+  const layer = el('div', 'fx-psychic-line');
+  for (let i = 0; i < PSYCHIC_LINE_PARTICLE_COUNT; i++) {
+    const p = el('i', 'fx-psychic-line-particle');
+    p.style.animationDelay = `${-i * 0.22}s`; // 相位错开（负延迟 → 任意时刻多颗在闪）
+    layer.appendChild(p);
+  }
+  return layer;
+}
+
+export function syncPsychicParticles(s: GameState): void {
+  const activeKeys = new Set<string>();
+  for (const player of [0, 1] as PlayerId[]) {
+    if (!opponentMustPlayFaceDown(s, player)) continue; // 该玩家未被限制（其对手无 psychic-1）
+    for (const line of [0, 1, 2] as Line[]) {
+      const key = `${player}-${line}`;
+      activeKeys.add(key);
+      const slot = document.querySelector<HTMLElement>(
+        `.stack-slot[data-player="${player}"][data-line="${line}"]`
+      );
+      if (!slot) continue; // 槽位不在 DOM（不应发生）→ 交给下方清理分支移除旧层
+      let layer = psychicParticles.get(key);
+      if (!layer) {
+        layer = renderPsychicParticlesLayer();
+        layer.dataset.psychicKey = key;
+        psychicParticles.set(key, layer);
+        document.body.appendChild(layer);
+      }
+      const r = slot.getBoundingClientRect();
+      layer.style.left = `${r.left}px`;
+      layer.style.top = `${r.top}px`;
+      layer.style.width = `${r.width}px`;
+      layer.style.height = `${r.height}px`;
+    }
+  }
+  for (const [key, layer] of psychicParticles) {
+    if (!activeKeys.has(key)) {
+      layer.remove();
+      psychicParticles.delete(key);
+    }
+  }
+}
+
+/* ===== 常驻瘟疫浓雾（FX-3）：plague-0 底命令 → 被限制方该线深绿浓雾循环 =====
+ * lineBlocksOpponent(s, line, player) 为真（该 player 的对手该线堆叠顶卡为未覆盖
+ * 正面 plague-0 → player 此列禁打）期间，被限制方 player 的该线堆叠持续渐现渐消
+ * 深绿浓雾（循环）。key 用 `${player}-${line}`（双方可在同一线互为限制 → key=line
+ * 会撞，见 FX-3 report）；其余与 syncPsychicParticles 同模式。 */
+const plagueMists = new Map<string, HTMLElement>();
+const PLAGUE_LINE_BLOB_COUNT = 6;
+
+function renderPlagueMistLayer(): HTMLElement {
+  const layer = el('div', 'fx-plague-line-mist');
+  for (let i = 0; i < PLAGUE_LINE_BLOB_COUNT; i++) {
+    const blob = el('i', 'fx-plague-line-blob');
+    blob.style.animationDelay = `${-i * 0.5}s`; // 相位错开（负延迟）
+    layer.appendChild(blob);
+  }
+  return layer;
+}
+
+export function syncPlagueMists(s: GameState): void {
+  const activeKeys = new Set<string>();
+  for (const line of [0, 1, 2] as Line[]) {
+    for (const player of [0, 1] as PlayerId[]) {
+      if (!lineBlocksOpponent(s, line, player)) continue; // 该玩家此线未被禁（对手该线无 plague-0）
+      const key = `${player}-${line}`;
+      activeKeys.add(key);
+      const slot = document.querySelector<HTMLElement>(
+        `.stack-slot[data-player="${player}"][data-line="${line}"]`
+      );
+      if (!slot) continue;
+      let layer = plagueMists.get(key);
+      if (!layer) {
+        layer = renderPlagueMistLayer();
+        layer.dataset.plagueKey = key;
+        plagueMists.set(key, layer);
+        document.body.appendChild(layer);
+      }
+      const r = slot.getBoundingClientRect();
+      layer.style.left = `${r.left}px`;
+      layer.style.top = `${r.top}px`;
+      layer.style.width = `${r.width}px`;
+      layer.style.height = `${r.height}px`;
+    }
+  }
+  for (const [key, layer] of plagueMists) {
+    if (!activeKeys.has(key)) {
+      layer.remove();
+      plagueMists.delete(key);
     }
   }
 }
@@ -1643,6 +1748,10 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   // R16 常驻能量扫描线：电池已入 DOM → 创建/复用 body 级扫描层并重定位到外壳矩形
   // （层跨重渲染存活，动画不重启；full/burst 或电池缺失时移除并注销）
   syncScanOverlays(s);
+  // FX-3 常驻协议特效：psychic-1 念能粒子 / plague-0 瘟疫浓雾（暗2 黑烟同模式——
+  // 槽位已入 DOM → 创建/复用 body 级层并重定位到槽位矩形；条件消失后移除并注销）
+  syncPsychicParticles(s);
+  syncPlagueMists(s);
 }
 
 let selectedUid: string | null = null;
@@ -1681,6 +1790,10 @@ export function resetUiState(): void {
   smokeOverlays.clear();
   for (const overlay of scanOverlays.values()) overlay.remove();
   scanOverlays.clear();
+  for (const layer of psychicParticles.values()) layer.remove();
+  psychicParticles.clear();
+  for (const layer of plagueMists.values()) layer.remove();
+  plagueMists.clear();
   controlSliderPos = 50;
   closeZoom();
   closeTrashViewer();
@@ -1691,7 +1804,8 @@ export function resetUiState(): void {
   for (const fx of document.querySelectorAll<HTMLElement>(
     '.life-flip-fx, .life-flip-glow, .water-return-ring, .water-return-glow, .water-return-settle, ' +
       '.water-return-trail, .flip-overlay-fx, .draw-ghost, .reveal-fly-ghost, ' +
-      '.fx-gravity-deckglow, .fx-gravity-hole, .fx-gravity-beam, .fx-gravity-cardglow, .fx-speed-glow'
+      '.fx-gravity-deckglow, .fx-gravity-hole, .fx-gravity-beam, .fx-gravity-cardglow, .fx-speed-glow, ' +
+      '.fx-psychic, .fx-plague'
   )) {
     fx.remove();
   }

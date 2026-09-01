@@ -383,6 +383,111 @@ function playCut(node: HTMLElement, payload: FxCardPayload): void {
   window.setTimeout(() => clone.remove(), FX_REMOVE_MS);
 }
 
+/** 延后基础弃牌切割：念能/瘟疫弃牌附加特效在前置段（粒子环绕 / 浓雾覆盖）播完后调用。
+ *  原卡节点此刻已被重渲染移除（rect 归零）→ 用事件时捕获的 rect 重建浮层（见 buildFxCardAt）。 */
+function playCutAt(rect: DOMRect, cw: boolean, ccw: boolean, payload: FxCardPayload): void {
+  const clone = buildFxCardAt(rect, cw, ccw, payload, BASE_Z);
+  if (!clone) return;
+  mountCut(clone);
+  window.setTimeout(() => clone.remove(), FX_REMOVE_MS);
+}
+
+/* ===== Psychic 弃牌附加特效（用户 #4a）：紫粉粒子环绕汇聚 =====
+ * 触发：card:discarded 且 triggerProtocol === 'psychic'（psychic-0/2/3/5 弃牌）。
+ * 时序（总 ≈ 2.66s）：① 卡周围 24 颗紫粉粒子环形散布、随机相位/大小，环绕并渐现
+ * 1s（= PSYCHIC_ORBIT_MS）；② 1s 后全部粒子同时向卡中心平移汇聚（0.4s =
+ * PSYCHIC_CONVERGE_MS）；③ 汇聚完成（1.4s = PSYCHIC_PRE_MS）起触发基础弃牌
+ * （playCutAt，事件时捕获 rect 重建——重渲染后原卡节点 rect 归零）；④ 粒子随浮层
+ * 淡出，基础切割在下方完整可见。CSS 侧时长与 PSYCHIC_* 常量一一对应
+ * （styles.css .fx-psychic-* 注释标注）。 */
+const PSYCHIC_ORBIT_MS = 1000;     // 粒子环绕渐现（0 → 1s）
+const PSYCHIC_CONVERGE_MS = 400;   // 全部粒子汇聚到卡中心（1 → 1.4s）
+const PSYCHIC_PRE_MS = PSYCHIC_ORBIT_MS + PSYCHIC_CONVERGE_MS; // 1400：前置段完成
+const PSYCHIC_PARTICLE_COUNT = 24; // 粒子数（需求 ≥20）
+const PSYCHIC_TOTAL_MS = PSYCHIC_PRE_MS + FX_REMOVE_MS + 60;   // ≈ 2.66s
+
+/** 念能弃牌附加特效浮层：克隆卡（EXTRA_Z）+ 粒子环（.fx-psychic-ring 内 24 个
+ *  .fx-psychic-orbit 轨道 span——锚定卡中心自转，内嵌 .fx-psychic-particle 由 JS 按
+ *  角度/半径写入 --fx-x/--fx-y 像素偏移 → 环绕；汇聚时轨道停转、粒子过渡到中心）。 */
+function playPsychicDiscardExtra(node: HTMLElement, payload: FxCardPayload): void {
+  const clone = buildFxCard(node, payload, EXTRA_Z);
+  if (!clone) return;
+  const rect = node.getBoundingClientRect();
+  const cw = node.classList.contains('rot-cw');
+  const ccw = node.classList.contains('rot-ccw');
+  clone.classList.add('fx-psychic', 'fx-psychic-glow');
+  // ① 粒子环：24 颗环形散布（角度均匀 + 半径抖动 + 随机大小 6–14px），轨道 span 相位错开
+  const ring = document.createElement('div');
+  ring.className = 'fx-psychic-ring';
+  const baseR = Math.max(clone.clientWidth, clone.clientHeight) * 0.75 + 10;
+  for (let i = 0; i < PSYCHIC_PARTICLE_COUNT; i++) {
+    const angle = (i / PSYCHIC_PARTICLE_COUNT) * Math.PI * 2;
+    const radius = baseR + ((i * 37) % 26) - 13; // 半径抖动（±13px）
+    const size = 6 + ((i * 13) % 9);             // 大小 6–14px
+    const orbit = Object.assign(document.createElement('span'), { className: 'fx-psychic-orbit' });
+    orbit.style.animationDelay = `${-((i * 137) % 100) / 100}s`; // 环绕相位错开
+    const p = Object.assign(document.createElement('i'), { className: 'fx-psychic-particle' });
+    p.style.width = `${size}px`;
+    p.style.height = `${size}px`;
+    p.style.setProperty('--fx-size', `${size}px`);
+    p.style.setProperty('--fx-x', `${(Math.cos(angle) * radius).toFixed(1)}px`);
+    p.style.setProperty('--fx-y', `${(Math.sin(angle) * radius).toFixed(1)}px`);
+    p.style.animationDelay = `${((i % 8) * 0.06).toFixed(2)}s`; // 渐现错开
+    orbit.appendChild(p);
+    ring.appendChild(orbit);
+  }
+  clone.appendChild(ring);
+  // ② 汇聚：1s 后全部粒子同时向卡中心平移（轨道停转 + 粒子 transform 过渡）
+  window.setTimeout(() => ring.classList.add('fx-psychic-converge'), PSYCHIC_ORBIT_MS);
+  // ③ 汇聚完成 → 延后基础弃牌 + ④ 整层（粒子+卡面）淡出露出切割
+  window.setTimeout(() => {
+    playCutAt(rect, cw, ccw, payload);
+    clone.classList.add('fx-psychic-out');
+  }, PSYCHIC_PRE_MS);
+  window.setTimeout(() => clone.remove(), PSYCHIC_TOTAL_MS);
+}
+
+/* ===== Plague 弃牌附加特效（用户 #5a）：深绿光芒 + 深绿浓雾覆盖 =====
+ * 触发：card:discarded 且 triggerProtocol === 'plague'（plague-0/1/2/5 弃牌）。
+ * 时序（总 ≈ 2.76s）：① 卡框深绿光芒 + 7 团半透明深绿 blob 浓雾围绕卡渐现渐扩散、
+ * 渐渐覆盖卡（1.5s = PLAGUE_MIST_IN_MS）；② 浓雾铺满（1.5s = PLAGUE_PRE_MS）起触发
+ * 基础弃牌（playCutAt）；③ 整层（浓雾+卡面）0.5s 渐散，切割随雾退去完整可见。
+ * CSS 侧时长与 PLAGUE_* 常量一一对应（styles.css .fx-plague-* 注释标注）。 */
+const PLAGUE_MIST_IN_MS = 1500;  // 浓雾渐现渐扩散（0 → 1.5s）
+const PLAGUE_MIST_FADE_MS = 500; // 切割开始时整层渐散（0.5s）
+const PLAGUE_PRE_MS = PLAGUE_MIST_IN_MS; // 前置段完成 → 基础弃牌
+const PLAGUE_BLOB_COUNT = 7;
+const PLAGUE_TOTAL_MS = PLAGUE_PRE_MS + FX_REMOVE_MS + 60; // ≈ 2.76s
+
+/** 瘟疫弃牌附加特效浮层：克隆卡（EXTRA_Z）+ 深绿光芒 + 7 团浓雾 blob（.fx-plague-blob
+ *  沿卡四边/角 nth-child 锚点；opacity 走 transition（渐现 1.5s / 随层渐散），扩散
+ *  transform 走 1.5s 动画——避免动画 fill-mode 覆盖消散过渡）。 */
+function playPlagueDiscardExtra(node: HTMLElement, payload: FxCardPayload): void {
+  const clone = buildFxCard(node, payload, EXTRA_Z);
+  if (!clone) return;
+  const rect = node.getBoundingClientRect();
+  const cw = node.classList.contains('rot-cw');
+  const ccw = node.classList.contains('rot-ccw');
+  clone.classList.add('fx-plague', 'fx-plague-glow');
+  // ① 浓雾覆盖层：7 团深绿 blob 围绕卡渐现渐扩散（各 blob 渐现延迟错开）
+  const mist = document.createElement('div');
+  mist.className = 'fx-plague-mist';
+  for (let i = 0; i < PLAGUE_BLOB_COUNT; i++) {
+    const blob = Object.assign(document.createElement('div'), { className: 'fx-plague-blob' });
+    blob.style.animationDelay = `${((i % 4) * 0.18).toFixed(2)}s`;
+    mist.appendChild(blob);
+  }
+  clone.appendChild(mist);
+  // 浓雾渐现（0 → 1.5s；延迟 20ms 保证初始 opacity:0 已被绘制）
+  window.setTimeout(() => mist.classList.add('fx-plague-mist-in'), 20);
+  // ② 浓雾铺满 → 延后基础弃牌 + ③ 整层渐散露出切割
+  window.setTimeout(() => {
+    playCutAt(rect, cw, ccw, payload);
+    clone.classList.add('fx-plague-out');
+  }, PLAGUE_PRE_MS);
+  window.setTimeout(() => clone.remove(), PLAGUE_TOTAL_MS);
+}
+
 /** 构建 3D 翻面覆盖层（旧面 front + 新面 back，透视内建）。调用方决定动画时机与清理：
  *  - playFlip：构建后立即 rAF 触发 rotate 过渡，420ms 后移除；
  *  - playLifeFlip：覆盖层在事件时同步构建（原卡 rect 此刻有效——重渲染会重建节点、
@@ -1326,7 +1431,14 @@ export function initEffects(): () => void {
     const node = document.querySelector<HTMLElement>(`[data-uid="${payload.uid}"]`);
     switch (e.type) {
       case 'card:discarded':
-        if (node) playCut(node, payload);
+        // psychic/plague 弃牌附加特效带【前置段 → 延后基础切割 → 收尾消散】时序：
+        // 基础 playCut 由附加函数内部延后调度（playPsychicDiscardExtra/playPlagueDiscardExtra
+        // 在 PSYCHIC_PRE_MS/PLAGUE_PRE_MS 调 playCutAt）；其余协议保持即时切割 + 附加叠加
+        if (node) {
+          if (payload.triggerProtocol === 'psychic') playPsychicDiscardExtra(node, payload);
+          else if (payload.triggerProtocol === 'plague') playPlagueDiscardExtra(node, payload);
+          else playCut(node, payload);
+        }
         break;
       case 'card:deleted':
         // death/hate 的删除附加特效带【前置段 → 延后破碎 → 收尾段】时序：基础破碎由附加函数
@@ -1380,8 +1492,10 @@ export function initEffects(): () => void {
     // 额外协议特效（触发卡协议驱动，叠加上层；仅弃牌/删去走此块）：
     // fire → 火焰焚烧；light → 白色柔光；darkness → 暗紫粒子。
     // death/hate 仅叠加在删去上（card:deleted，前置段先播、破碎延后——见各自函数）。
-    // water（回手水波环）/life（翻转藤蔓）在各自分支内叠加（card:returned /
-    // card:flipped），不属于本块——其余协议触发时落到此处 = 无额外特效。
+    // psychic/plague 仅叠加在弃牌上（card:discarded，前置段先播、切割延后——已在
+    // card:discarded 分支内分流，不落到本块）。water（回手水波环）/life（翻转藤蔓）在
+    // 各自分支内叠加（card:returned / card:flipped），不属于本块——其余协议触发时
+    // 落到此处 = 无额外特效。
     if ((e.type === 'card:discarded' || e.type === 'card:deleted') && node) {
       if (payload.triggerProtocol === 'fire') {
         playFireBurnExtra(node, payload);
