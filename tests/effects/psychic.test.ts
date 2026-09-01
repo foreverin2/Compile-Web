@@ -67,7 +67,7 @@ describe('psychic protocol effects', () => {
       expect(s.pendingEffects).toHaveLength(0);
     });
 
-    it('opponent hand < 2 → discard skipped, reveal still happens', () => {
+    it('opponent hand < 2 → discards the only card (尽力而为 user ruling), reveal still happens', () => {
       const s = draftPsychicP1();
       advanceToStep(s, 0, 'action');
       const pl = psychicLine(s);
@@ -76,12 +76,11 @@ describe('psychic protocol effects', () => {
       s.players[1].hand = [only];
       const card = s.players[0].hand[0];
       executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: pl });
-      resolveAllChoices(s, pickFirst); // 手牌不足 → 弃牌步骤跳过，无挂起
+      resolveAllChoices(s, pickFirst); // min=min(2,1)=1 → 弃 1 张（无挂起）
       expect(s.players[0].hand).toHaveLength(2); // 抽 2 仍结算
-      expect(s.players[1].hand.map((c) => c.uid)).toEqual([only.uid]); // 未弃牌
-      expect(s.players[1].trash).toHaveLength(0);
-      expect(s.revealedGhosts).toHaveLength(1); // 揭示仍发生（仅剩的 1 张）
-      expect(s.revealedGhosts[0].shownTo).toBe(0);
+      expect(s.players[1].hand).toHaveLength(0); // 尽力弃 1
+      expect(s.players[1].trash.map((c) => c.uid)).toEqual([only.uid]);
+      expect(s.revealedGhosts).toHaveLength(0); // 手牌已空 → 揭示无目标
       expect(s.pendingEffects).toHaveLength(0);
     });
 
@@ -182,23 +181,30 @@ describe('psychic protocol effects', () => {
       expect(s.pendingEffects).toHaveLength(0);
     });
 
-    it('opponent hand < 2 → discard skipped, rearrange still happens', () => {
+    it('opponent hand < 2 → discards the only card (尽力而为 user ruling), rearrange still happens', () => {
       const s = draftPsychicP1();
       advanceToStep(s, 0, 'action');
       const pl = psychicLine(s);
       s.players[0].hand = [makeCard('psychic-2', 0, 'hand')];
-      s.players[1].hand = [makeCard('death-5', 1, 'hand')];
+      const only = makeCard('death-5', 1, 'hand');
+      s.players[1].hand = [only];
       const before = s.players[1].protocols.map((p) => p.defId);
       const card = s.players[0].hand[0];
       executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: pl });
+      // 弃牌（chooser=opp）挂起 → 由对手应答弃 1
+      const disc = s.pendingEffects[s.pendingEffects.length - 1];
+      expect(disc.prompt?.kind).toBe('select');
+      expect(disc.prompt?.min).toBe(1); // min = min(2, hand.length=1) = 1
+      executeAction(s, 1, 'effect-choice', { promptId: disc.id, choice: [only.uid] });
       const p = s.pendingEffects[s.pendingEffects.length - 1];
-      expect(p.prompt?.kind).toBe('select-line'); // 弃牌步骤直接跳过
+      expect(p.prompt?.kind).toBe('select-line'); // 重排仍执行
       expect(p.prompt?.lines).toEqual([0, 1, 2]);
       executeAction(s, 0, 'effect-choice', { promptId: p.id, choice: ['line:0'] });
       const p2 = s.pendingEffects[s.pendingEffects.length - 1];
       executeAction(s, 0, 'effect-choice', { promptId: p2.id, choice: ['line:1'] });
       expect(s.players[1].protocols.map((p) => p.defId)).toEqual([before[1], before[0], before[2]]);
-      expect(s.players[1].hand).toHaveLength(1); // 未弃牌
+      expect(s.players[1].hand).toHaveLength(0); // 尽力弃 1
+      expect(s.players[1].trash.map((c) => c.uid)).toEqual([only.uid]);
       expect(s.pendingEffects).toHaveLength(0);
     });
   });

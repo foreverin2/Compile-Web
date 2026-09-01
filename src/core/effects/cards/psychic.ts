@@ -3,8 +3,8 @@ import { registerCardEffects } from '../registry';
 import { findCard } from '../context';
 
 /** psychic-0 中指令：抽2张牌。对手弃2张牌，然后揭示其手牌。
- *  抽 2（pe.player = 效果属主）→ 对手弃 2：select（chooser: opp，候选=对手手牌，min2 max2；
- *  手牌不足 2 → 弃牌步骤跳过——拍板：弃牌 fizzle 只跳过弃牌，揭示仍执行）→
+ *  抽 2（pe.player = 效果属主）→ 对手弃 2：select（chooser: opp，候选=对手手牌；
+ *  min = min(2, hand.length)——手牌不足 2 时尽力弃剩余（用户拍板「尽力而为」），手牌空 → 跳过）→
  *  discardMany 批量弃（FAQ 94：单次动作，after-discard 只触发一次；弃的是对手的卡，
  *  discardMany 按被弃卡 owner 弃）→ 揭示：循环对手【当前】手牌每张 reveal
  *  （Case B：揭示对手的卡 → 幽灵给自己（shownTo = 发起者），expiresAtTurn = turnCount + 3）。
@@ -13,8 +13,8 @@ function* psychic0(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const opp: PlayerId = ctx.player === 0 ? 1 : 0;
   yield { op: 'draw', count: 2 };
   const hand = ctx.candidates({ zone: 'hand', owner: opp });
-  if (hand.length >= 2) {
-    const ans = yield { kind: 'select', title: 'psychic-0：对手弃2张牌', min: 2, max: 2, optional: false, candidates: hand, chooser: opp };
+  if (hand.length > 0) {
+    const ans = yield { kind: 'select', title: 'psychic-0：对手弃2张牌', min: Math.min(2, hand.length), max: 2, optional: false, candidates: hand, chooser: opp };
     if (ans.selected.length > 0) yield { op: 'discardMany', uids: ans.selected };
   }
   for (const card of [...ctx.s.players[opp].hand]) yield { op: 'reveal', uid: card.uid };
@@ -29,14 +29,14 @@ function* psychic1Start(ctx: EffectCtx): Generator<EffectStep, void, StepResult>
 }
 
 /** psychic-2 中指令：对手弃2张牌。你重排对手的协议。
- *  对手弃 2（chooser=opp，同 psychic-0 弃牌部分；手牌不足 2 → 跳过弃牌）→
+ *  对手弃 2（chooser=opp，同 psychic-0 弃牌部分；min = min(2, hand.length) 尽力弃，手牌空跳过）→
  *  select-line 选位置 a（3 选 1）→ select-line 选位置 b（≠a）→
  *  { op:'rearrangeProtocols', a, b, player: opp }（交换【对手】的协议位，defId 与 compiled 随位置整体交换）。 */
 function* psychic2(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const opp: PlayerId = ctx.player === 0 ? 1 : 0;
   const hand = ctx.candidates({ zone: 'hand', owner: opp });
-  if (hand.length >= 2) {
-    const ans = yield { kind: 'select', title: 'psychic-2：对手弃2张牌', min: 2, max: 2, optional: false, candidates: hand, chooser: opp };
+  if (hand.length > 0) {
+    const ans = yield { kind: 'select', title: 'psychic-2：对手弃2张牌', min: Math.min(2, hand.length), max: 2, optional: false, candidates: hand, chooser: opp };
     if (ans.selected.length > 0) yield { op: 'discardMany', uids: ans.selected };
   }
   const first = yield { kind: 'select-line', title: 'psychic-2：重排对手协议——选择第1个位置', min: 1, max: 1, optional: false, candidates: [], lines: [0, 1, 2] };
