@@ -28,6 +28,8 @@ export function advanceStep(s: GameState): void {
     const ending = s.turnPlayer;
     s.turnPlayer = ending === 0 ? 1 : 0;
     s.compiledThisTurn = false;
+    // metal-1「对手下回合不能编译」只禁一回合：被禁玩家回合结束（end → start 换人）→ 恢复
+    if (s.compileBlocked === ending) s.compileBlocked = null;
     // 回合计数：每次回合结束转换（end → start）恰 +1（advanceStep 是唯一换人入口）；
     // 先计数再清除，expiresAtTurn <= 新计数的揭示幽灵自动消失。
     // 揭示发生在当前回合的任意步骤（start/end 触发也算）时，计数基准 = 当次回合内

@@ -4,6 +4,12 @@ import { clearCache } from './engine/deck';
 import { playCard, refreshHand, isPlayableFaceUp } from './actions/base';
 import { executeCompile, getCompilableLines } from './rules/compile';
 import { checkControl, resetControlIfHeld } from './rules/control';
+import {
+  lineBlocksOpponent,
+  lineBlocksOpponentFaceDown,
+  opponentMustPlayFaceDown,
+  shouldSkipCacheCheck,
+} from './rules/restrictions';
 import { collectTriggers, fireReactive, resolveTrigger } from './effects/triggers';
 import { answerEffect, runStack } from './effects/resolve';
 import { listCandidates, nextEffectId } from './effects/context';
@@ -31,12 +37,17 @@ export function getLegalActions(s: GameState, player: PlayerId): LegalAction[] {
   if (s.pendingEffects.length > 0 || s.pendingPlay.length > 0 || s.pendingShift.length > 0) return [];
   const out: LegalAction[] = [];
   if (s.step === 'action') {
+    // 被动限制（Task A2）：psychic-1 全局禁对手正面打；plague-0 此列完全禁打；metal-2 此列禁反面打
+    const faceUpBanned = opponentMustPlayFaceDown(s, player);
     for (const card of s.players[player].hand) {
       for (const line of [0, 1, 2] as Line[]) {
-        if (isPlayableFaceUp(s, player, card.uid, line)) {
+        if (lineBlocksOpponent(s, line, player)) continue; // plague-0：此列完全禁打
+        if (!faceUpBanned && isPlayableFaceUp(s, player, card.uid, line)) {
           out.push({ kind: 'play', cardUid: card.uid, faceUp: true, line });
         }
-        out.push({ kind: 'play', cardUid: card.uid, faceUp: false, line });
+        if (!lineBlocksOpponentFaceDown(s, line, player)) {
+          out.push({ kind: 'play', cardUid: card.uid, faceUp: false, line });
+        }
       }
     }
     if (s.players[player].hand.length < 5) {
@@ -58,8 +69,9 @@ export function getLegalActions(s: GameState, player: PlayerId): LegalAction[] {
     }
     return out; // end/start 的 advance 已处理，不走下方通用逻辑
   } else if (s.step === 'check-cache') {
-    // 手牌超过 5 张：必须由玩家自选弃牌至 5 张（不提供 advance）
-    if (s.players[player].hand.length > 5) {
+    // 手牌超过 5 张：必须由玩家自选弃牌至 5 张（不提供 advance）；
+    // spirit-0 底「跳过检查缓存阶段」→ 不强制清缓存
+    if (s.players[player].hand.length > 5 && !shouldSkipCacheCheck(s, player)) {
       out.push({ kind: 'clear-cache' });
       return out;
     }
@@ -156,7 +168,7 @@ export function executeAction(s: GameState, player: PlayerId, kind: ActionKind, 
       if (s.step === 'action' && s.players[player].hand.length === 0) {
         throw new Error('must refresh with no cards in hand');
       }
-      if (s.step === 'check-cache' && s.players[player].hand.length > 5) {
+      if (s.step === 'check-cache' && s.players[player].hand.length > 5 && !shouldSkipCacheCheck(s, player)) {
         throw new Error('must clear cache first');
       }
       if (s.step === 'end' || s.step === 'start') {
@@ -165,7 +177,7 @@ export function executeAction(s: GameState, player: PlayerId, kind: ActionKind, 
           throw new Error('mandatory trigger must be resolved');
         }
       }
-      if (s.step === 'check-cache') {
+      if (s.step === 'check-cache' && !shouldSkipCacheCheck(s, player)) {
         // 防御路径（正常手牌>5 走 clear-cache 自选弃牌，advance 被拦截）；真弃了牌才触发
         if (clearCache(s, player).length > 0) fireReactive(s, 'after-clear-cache', player);
       }

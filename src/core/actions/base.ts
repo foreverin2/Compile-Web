@@ -2,11 +2,14 @@ import type { GameState, PlayerId, Line, Card } from '../models/types';
 import { drawCards } from '../engine/deck';
 import { getCardDef } from '../../data/demo';
 import { runStack } from '../effects/resolve';
+import { canPlayFaceUpAnywhere } from '../rules/restrictions';
 
 /** 卡牌 defId 的协议是否与该线协议匹配（正面打入条件）。行线上同时携带双方协议
  *  （P1 协议 | P2 协议）：卡牌协议匹配本侧或对手同线协议任一即可正面打入。
  *  对手协议缺失（如测试中的空 protocols 数组）时按不匹配处理。 */
 export function isPlayableFaceUp(s: GameState, player: PlayerId, cardUid: string, line: Line): boolean {
+  // spirit-1 顶「你可以在任意列打出牌」：持有者任意线正面打（先于协议匹配判断）
+  if (canPlayFaceUpAnywhere(s, player)) return true;
   const card = s.players[player].hand.find((c) => c.uid === cardUid);
   if (!card) return false;
   const def = getCardDef(card.defId);

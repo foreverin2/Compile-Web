@@ -6,6 +6,7 @@ import { createCtx, emitCardEvent, findCard, isUncovered, nextEffectId } from '.
 import { collectTriggerFor, fireReactive, resolveTrigger } from './triggers';
 import { EFFECTS } from './registry';
 import { executeCompileBody } from '../rules/compile-body';
+import { lineMiddleCommandsNullified } from '../rules/restrictions';
 import './cards/fire';
 import './cards/light';
 import './cards/darkness';
@@ -26,8 +27,10 @@ function sourceValid(s: GameState, pe: PendingEffect): boolean {
   return isUncovered(s, card);
 }
 
-/** 打出/翻正/揭开触发中指令：入栈（LIFO 由 runStack 统一结算） */
+/** 打出/翻正/揭开触发中指令：入栈（LIFO 由 runStack 统一结算）。
+ *  apathy-2 顶「无效化此列所有牌的中部命令」→ 该线中指令直接跳过（查 EFFECTS 之前） */
 export function pushMiddle(s: GameState, player: PlayerId, card: Card): void {
+  if (card.line !== null && lineMiddleCommandsNullified(s, card.line)) return;
   const eff = EFFECTS[card.defId]?.middle;
   if (!eff) return;
   const ctx = createCtx(s, player, card);
