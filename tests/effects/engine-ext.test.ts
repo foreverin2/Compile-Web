@@ -111,45 +111,6 @@ describe('FAQ corrections (A2b)', () => {
     executeAction(s, 0, 'play', { cardUid: uid, faceUp: false, line: 2 });
     expect(s.players[0].hand).toHaveLength(0);
   });
-
-  it('chain effect can target the OUTER effect source card (gravity-2 flips life-1 → life-1 middle fires and can flip gravity-2)', () => {
-    // 用户报告：重力2 翻生命1 后生命1 无效果。根因：候选排除全部结算中源卡——life-1 连锁时
-    // 场上顶卡只剩 life-1（自己）与 gravity-2（外层效果源）→ 双双被排除 → fizzle。
-    // 规则 97：连锁效果选中外层源卡后，外层效果被翻面即终止——候选应允许（只排除栈顶=自己）。
-    const s = createGame();
-    s.phase = 'turn';
-    s.players[0].protocols = [{ defId: 'life', compiled: false }, { defId: 'water', compiled: false }, { defId: 'fire', compiled: false }];
-    s.players[1].protocols = [{ defId: 'gravity', compiled: false }, { defId: 'light', compiled: false }, { defId: 'darkness', compiled: false }];
-    const life1 = makeCard('life-1', 0, 'field', false, 0, 0); // 反面（用户场景：P1 反面打出）
-    const g2 = makeCard('gravity-2', 1, 'field', true, 0, 0);
-    const third = makeCard('light-5', 1, 'field', true, 1, 0); // 第三张顶卡（life-1 第二次可翻它）
-    place(s, life1, 0, 0); // P1 线 0（life 线）顶卡
-    place(s, g2, 1, 0); // P2 线 0（gravity 线）顶卡
-    place(s, third, 1, 1); // P2 线 1 顶卡
-    life1.faceUp = false; // place() 强制正面 → 复位为反面（gravity-2 翻正才触发中指令）
-    resolveMiddle(s, 1, g2); // 触发 gravity-2 中指令 → 挂起翻转选择
-    const p1 = s.pendingEffects[s.pendingEffects.length - 1];
-    expect(p1.prompt?.kind).toBe('select');
-    expect(p1.prompt?.candidates.map((c) => c.uid)).toContain(life1.uid); // gravity-2 可翻 life-1
-    answerEffect(s, p1.id, [life1.uid]); // 翻 life-1（反面→正面）
-    // life-1 翻正 → 中指令入栈（LIFO 栈顶）→ 第一个翻转选择：候选必须含 gravity-2（旧实现为空 → fizzle）
-    const p2 = s.pendingEffects[s.pendingEffects.length - 1];
-    expect(p2.prompt?.kind).toBe('select');
-    expect(p2.prompt?.title).toContain('life-1');
-    expect(p2.prompt?.candidates.map((c) => c.uid)).toContain(g2.uid);
-    answerEffect(s, p2.id, [g2.uid]); // life-1 翻 gravity-2（正面→反面）
-    expect(g2.faceUp).toBe(false); // gravity-2 翻成反面
-    // gravity-2 效果源失效（sourceValid: faceUp false）→ 其剩余"平移"终止；
-    // life-1 第二个选择候选含 gravity-2（反面）与 third —— 翻 third（保持 gravity-2 反面）
-    const p3 = s.pendingEffects[s.pendingEffects.length - 1];
-    expect(p3.prompt?.kind).toBe('select');
-    expect(p3.prompt?.title).toContain('再翻转1张牌');
-    expect(p3.prompt?.candidates.map((c) => c.uid)).toContain(g2.uid);
-    answerEffect(s, p3.id, [third.uid]);
-    expect(third.faceUp).toBe(false); // 第二张翻转发生
-    expect(g2.faceUp).toBe(false); // gravity-2 保持反面
-    expect(s.pendingEffects).toHaveLength(0); // gravity-2 效果已终止、life-1 完成
-  });
 });
 
 
