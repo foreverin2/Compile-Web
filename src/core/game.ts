@@ -148,7 +148,8 @@ export function executeAction(s: GameState, player: PlayerId, kind: ActionKind, 
       if (!kind) throw new Error('resolve-trigger only at end/start');
       const t = collectTriggers(s, kind).find((x) => x.cardUid === args.cardUid);
       if (!t) throw new Error(`no pending ${kind} trigger for ${args.cardUid}`);
-      resolveTrigger(s, t);
+      // 顶命令触发（top 标志：被盖的 death-1/life-0 等）→ topCommand 跳过 sourceValid 未覆盖检查
+      resolveTrigger(s, t, { topCommand: t.top });
       runStack(s);
       // 结算成功后才标记已结算：若解析抛错，触发不会被吞掉（必选触发仍阻止 advance）
       s.resolvedTriggerUids.push(args.cardUid);
@@ -194,7 +195,8 @@ export function getWinner(s: GameState): PlayerId | null {
   return s.winner;
 }
 
-/** 系统效果生成器：清理缓存——玩家自选弃牌，直至手牌降到 5 张；弃完触发 after-clear-cache（speed-1） */
+/** 系统效果生成器：清理缓存——玩家自选弃牌，直至手牌降到 5 张；弃完触发 after-clear-cache（speed-1）。
+ *  用 discardMany 一次性弃完（FAQ 94：多张弃牌是单次动作，之后由弃牌触发的效果才生效一次） */
 function* cacheClearGen(s: GameState, player: PlayerId): Generator<EffectStep, void, StepResult> {
   const excess = s.players[player].hand.length - 5;
   const candidates = listCandidates(s, { zone: 'hand', owner: player });
@@ -206,9 +208,11 @@ function* cacheClearGen(s: GameState, player: PlayerId): Generator<EffectStep, v
     optional: false,
     candidates,
   };
-  for (const uid of ans.selected) yield { op: 'discard', uid };
-  // 即时连锁：真弃了牌才触发（speed-1 顶「清理缓存后：抽1张牌」）
-  if (ans.selected.length > 0) fireReactive(s, 'after-clear-cache', player);
+  if (ans.selected.length > 0) {
+    yield { op: 'discardMany', uids: ans.selected };
+    // 即时连锁：真弃了牌才触发（speed-1 顶「清理缓存后：抽1张牌」）
+    fireReactive(s, 'after-clear-cache', player);
+  }
 }
 
 /** 进入缓存清理：手牌 > 5 时推入系统效果（挂起选择，无源卡 → system 标志跳过 sourceValid） */

@@ -32,10 +32,9 @@ export function isUncovered(s: GameState, card: Card): boolean {
   return stack[stack.length - 1]?.uid === card.uid;
 }
 
-/** 牌堆顶可打出性：牌库或弃牌堆有牌（playTopDeck 空牌库时自动洗弃牌堆重组，两者皆空才不可打） */
+/** 牌堆顶可打出性：牌库非空（playTopDeck 不洗弃牌堆——FAQ 142/166：从牌堆顶打出不强制洗牌，仅抽牌洗） */
 export function deckTopAvailable(s: GameState, player: PlayerId): boolean {
-  const p = s.players[player];
-  return p.deck.length > 0 || p.trash.length > 0;
+  return s.players[player].deck.length > 0;
 }
 
 function toChoiceCard(c: Card): ChoiceCard {

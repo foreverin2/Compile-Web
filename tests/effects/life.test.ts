@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { GameState, Line } from '../../src/core/models/types';
-import { executeAction } from '../../src/core/game';
+import { executeAction, getLegalActions } from '../../src/core/game';
 import { makeCard, pickFirst, resolveAllChoices, draftLifeP1, advanceToStep } from '../helpers';
 
 function lifeLine(s: GameState): Line {
@@ -9,7 +9,7 @@ function lifeLine(s: GameState): Line {
 }
 
 describe('life protocol effects', () => {
-  it('life-0: plays deck top face-down to each line where you have a card; its own cover deletes it', () => {
+  it('life-0: plays deck top face-down to each line where you have a card', () => {
     const s = draftLifeP1();
     advanceToStep(s, 0, 'action');
     s.players[0].hand = [makeCard('life-0', 0, 'hand')];
@@ -24,16 +24,18 @@ describe('life protocol effects', () => {
     const ll = lifeLine(s); // 0
     expect(s.players[0].stacks[1].map((c) => c.uid)).toEqual([other.uid, top1.uid]); // 有牌的另线获得反面牌堆顶
     expect(s.players[0].stacks[1][1].faceUp).toBe(false);
-    // 本线（life-0 所在列）也"你有牌"→ 最后打本线：盖住 life-0 前触发其底指令 → 删除自身后落地反面卡
-    expect(s.players[0].stacks[ll].map((c) => c.uid)).toEqual([top2.uid]);
-    expect(s.players[0].stacks[ll][0].faceUp).toBe(false);
-    expect(s.players[0].trash.map((c) => c.uid)).toEqual([card.uid]); // life-0 被删除（弃牌堆）
+    // 本线（life-0 所在列）也"你有牌"→ 最后打本线：反面卡盖住 life-0（顶指令 FAQ 139 改为
+    // 结束阶段删除——被盖后仍留在场上，等 end 触发）
+    expect(s.players[0].stacks[ll].map((c) => c.uid)).toEqual([card.uid, top2.uid]);
+    expect(s.players[0].stacks[ll][0].faceUp).toBe(true); // life-0 正面（被盖）
+    expect(s.players[0].stacks[ll][1].faceUp).toBe(false); // 盖住它的反面卡
+    expect(s.players[0].trash).toHaveLength(0); // 不立即删除
     expect(s.players[0].deck).toHaveLength(deckBefore - 2);
     expect(s.pendingEffects).toHaveLength(0);
     expect(s.pendingPlay).toHaveLength(0);
   });
 
-  it('life-0 bottom: covering the life-0 card deletes it before the covering card lands', () => {
+  it('life-0 top (FAQ 139): when covered, deletes itself at the end step', () => {
     const s = draftLifeP1();
     advanceToStep(s, 0, 'action');
     const life0 = makeCard('life-0', 0, 'field', true, 1, 0);
@@ -42,11 +44,18 @@ describe('life protocol effects', () => {
     s.players[0].hand = [played];
     executeAction(s, 0, 'play', { cardUid: played.uid, faceUp: false, line: 1 }); // 反面盖住 life-0
     resolveAllChoices(s, pickFirst);
-    expect(s.players[0].trash.map((c) => c.uid)).toEqual([life0.uid]); // 被盖住前先删除此牌
-    expect(s.players[0].stacks[1].map((c) => c.uid)).toEqual([played.uid]); // 盖住它的牌落地
-    expect(s.players[0].stacks[1][0].faceUp).toBe(false);
+    // 被盖后不立即删（end 触发）；life-0 顶命令被盖仍生效（top 标志）
+    expect(s.players[0].trash).toHaveLength(0);
+    expect(s.players[0].stacks[1].map((c) => c.uid)).toEqual([life0.uid, played.uid]);
+    // 推进到 end 步骤 → 收集被盖 life-0 的 end 触发（顶命令）
+    advanceToStep(s, 0, 'end');
+    const legal = getLegalActions(s, 0);
+    const trig = legal.find((a) => a.kind === 'resolve-trigger');
+    expect(trig?.cardUid).toBe(life0.uid);
+    executeAction(s, 0, 'resolve-trigger', { cardUid: life0.uid });
+    expect(s.players[0].trash.map((c) => c.uid)).toEqual([life0.uid]); // 结束阶段删除自己
+    expect(s.players[0].stacks[1].map((c) => c.uid)).toEqual([played.uid]);
     expect(s.pendingEffects).toHaveLength(0);
-    expect(s.pendingPlay).toHaveLength(0);
   });
 
   it('life-1: flips two cards — second select can re-target the first', () => {

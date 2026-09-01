@@ -207,7 +207,8 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
         triggerDefId: pe.sourceDefId,
         triggerProtocol: pe.sourceDefId.split('-')[0],
       });
-      if (card.faceUp) pushMiddle(s, card.owner, card); // 翻正 → 中指令连锁（LIFO）
+      // FAQ 127：被覆盖卡翻正不触发中指令（始终被视为被覆盖状态）——仅未被覆盖的翻正连锁中指令
+      if (card.faceUp && isUncovered(s, card)) pushMiddle(s, card.owner, card);
       break;
     }
     case 'delete': {
@@ -294,14 +295,8 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       // player 缺省 = 效果属主（water-1/life-0/life-3）；gravity-6 指定 player=对手（对手牌库打出）
       const target = op.player ?? pe.player;
       const p = s.players[target];
-      // R11.4（与 drawCards 一致）：牌库空且弃牌堆有牌时，洗弃牌堆重组为牌库
-      // （回牌库卡必须翻回反面 = 秘密信息区）；两者皆空才抛错（生成器已按
-      // deckTopAvailable 守卫，此处兜底防静默吞牌）
-      if (p.deck.length === 0 && p.trash.length > 0) {
-        p.deck = shuffle(p.trash);
-        p.trash = [];
-        for (const c of p.deck) c.faceUp = false;
-      }
+      // FAQ 142/166：从牌堆顶打出卡牌不强制洗牌（仅抽牌洗弃牌堆）——牌库空则效果不生效。
+      // 生成器已按 deckTopAvailable（只查牌库）守卫，此处抛错兜底防静默吞牌
       const card = p.deck.pop();
       if (!card) throw new Error('deck is empty');
       card.zone = 'float';
@@ -370,6 +365,25 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       card.owner = pe.player;
       s.players[pe.player].hand.push(card);
       emitCardEvent(s, 'card:given', card, { to: pe.player });
+      break;
+    }
+    case 'discardMany': {
+      // 批量弃牌（FAQ 94：多张弃牌是单次动作——一次性弃完，之后由弃牌触发的效果才生效一次；
+      // 与逐个 discard op（每个都触发 after-discard）区分；psychic-0/2、plague-2、hate-1、
+      // 系统缓存清理用）。弃的卡应同属一人（同一弃牌动作），actor 取首卡 owner。
+      if (op.uids.length === 0) break;
+      let actor: PlayerId | null = null;
+      for (const uid of op.uids) {
+        const card = findCard(s, uid);
+        if (!card || card.zone !== 'hand') throw new Error(`cannot discard ${uid}: not in hand`);
+        if (actor === null) actor = card.owner;
+        discardFromHand(s, card.owner, uid);
+        emitCardEvent(s, 'card:discarded', card, {
+          triggerDefId: pe.sourceDefId,
+          triggerProtocol: pe.sourceDefId.split('-')[0],
+        });
+      }
+      if (actor !== null) fireReactive(s, 'after-discard', actor); // 一次性触发
       break;
     }
     case 'reveal': {

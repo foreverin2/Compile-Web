@@ -98,7 +98,7 @@ describe('playTopDeck op', () => {
     expect(s.pendingPlay).toHaveLength(0);
   });
 
-  it('reshuffles trash into an empty deck (R11.4, like drawCards) instead of throwing', () => {
+  it('does NOT reshuffle trash when deck is empty (FAQ 142/166: deck-top play does not force a reshuffle)', () => {
     const s = draftFireP1();
     s.players[0].deck = [];
     s.players[0].trash = [makeCard('fire-1', 0, 'trash'), makeCard('fire-2', 0, 'trash'), makeCard('fire-3', 0, 'trash')];
@@ -109,15 +109,10 @@ describe('playTopDeck op', () => {
       })(),
       sourceUid: 'src', sourceDefId: 'system', system: true, prompt: null, lastAnswer: null,
     });
-    runStack(s);
-    // 弃牌堆洗入牌库 → 弹出顶卡反面落地；其余回牌库（秘密信息区：一律反面）
-    expect(s.players[0].deck).toHaveLength(2);
-    expect(s.players[0].trash).toHaveLength(0);
-    const landed = s.players[0].stacks[2][0];
-    expect(landed.zone).toBe('field');
-    expect(landed.line).toBe(2);
-    expect(landed.faceUp).toBe(false);
-    for (const c of s.players[0].deck) expect(c.faceUp).toBe(false); // 回牌库卡翻回反面
+    // 生成器守卫：牌库空（deckTopAvailable 只查牌库）→ 效果不生效；此处直接执行 op 兜底抛错
+    expect(() => runStack(s)).toThrow('deck is empty');
+    expect(s.players[0].deck).toHaveLength(0);
+    expect(s.players[0].trash).toHaveLength(3); // 弃牌堆未被洗
     expect(s.pendingPlay).toHaveLength(0);
   });
 

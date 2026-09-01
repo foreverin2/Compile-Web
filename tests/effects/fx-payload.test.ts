@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { gameBus } from '../../src/core/events/bus';
-import { executeAction } from '../../src/core/game';
-import { makeCard, draftFireP1, draftLightP1, draftWaterP1, draftLifeP1, advanceToStep, resolveAllChoices } from '../helpers';
+import { executeAction, getLegalActions } from '../../src/core/game';
+import { makeCard, draftFireP1, draftLightP1, draftWaterP1, draftLifeP1, advanceToStep, resolveAllChoices, pickFirst } from '../helpers';
 import type { Line } from '../../src/core/models/types';
 
 /** 捕获弃牌/删去事件（含触发卡协议），返回快照 */
@@ -92,16 +92,20 @@ describe('FX trigger protocol payload', () => {
     expect(discarded?.triggerDefId).toBe('water-5');
   });
 
-  it('life-0 before-covered self-delete carries triggerProtocol=life + triggerDefId (FX hook ready)', () => {
+  it('life-0 end self-delete (covered, FAQ 139) carries triggerProtocol=life + triggerDefId (FX hook ready)', () => {
     const s = draftLifeP1();
     advanceToStep(s, 0, 'action');
     const life0 = makeCard('life-0', 0, 'field', true, 1, 0);
     s.players[0].stacks[1] = [life0];
     const played = makeCard('life-5', 0, 'hand');
     s.players[0].hand = [played];
+    executeAction(s, 0, 'play', { cardUid: played.uid, faceUp: false, line: 1 }); // 盖住 life-0（end 触发删）
+    resolveAllChoices(s, pickFirst);
+    advanceToStep(s, 0, 'end');
     const seen: { type: string; triggerProtocol?: string; triggerDefId?: string }[] = [];
     const off = captureDiscardDelete(seen);
-    executeAction(s, 0, 'play', { cardUid: played.uid, faceUp: false, line: 1 }); // 盖住 life-0 → 被盖住前删除
+    const trig = getLegalActions(s, 0).find((a) => a.kind === 'resolve-trigger');
+    executeAction(s, 0, 'resolve-trigger', { cardUid: trig!.cardUid! });
     off();
     const deleted = seen.find((x) => x.type === 'card:deleted');
     expect(deleted?.triggerProtocol).toBe('life');

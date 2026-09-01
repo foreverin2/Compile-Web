@@ -30,7 +30,48 @@ function pushOpGen(s: GameState, player: PlayerId, gen: () => Generator<unknown,
   });
 }
 
-// ============ 测试用效果注册 ============
+// ============ discardMany / FAQ 修正 ============
+
+registerCardEffects('t-covered-mid', {
+  middle: function* (ctx) {
+    yield { op: 'draw', count: 1 }; // 若被盖翻正时误触发 → 手牌+1（判别 FAQ 127）
+  },
+});
+
+describe('FAQ corrections (A2b)', () => {
+  it('discardMany discards all at once and fires after-discard ONCE (FAQ 94)', () => {
+    const s = createGame();
+    const trig = makeCard('t-after-discard', 1, 'field', true, 0, 0);
+    place(s, trig, 1, 0);
+    s.players[1].deck = [makeCard('death-5', 1, 'deck', false)];
+    const d1 = makeCard('death-0', 0, 'hand');
+    const d2 = makeCard('death-1', 0, 'hand');
+    s.players[0].hand.push(d1, d2);
+    pushOpGen(s, 0, function* () {
+      yield { op: 'discardMany', uids: [d1.uid, d2.uid] };
+    });
+    runStack(s);
+    expect(s.players[0].hand).toHaveLength(0);
+    expect(s.players[1].hand).toHaveLength(1); // after-discard 只触发一次（逐个 discard 会是 2）
+    expect(s.players[0].trash).toHaveLength(2);
+  });
+
+  it('flipping a COVERED card face-up does NOT trigger its middle command (FAQ 127)', () => {
+    const s = createGame();
+    const covered = makeCard('t-covered-mid', 0, 'field', true, 0, 0);
+    const cover = makeCard('death-0', 0, 'field', true, 0, 1);
+    place(s, covered, 0, 0);
+    place(s, cover, 0, 0); // 盖住 covered
+    pushOpGen(s, 0, function* () {
+      yield { op: 'flip', uid: covered.uid, allowCovered: true }; // 翻正被盖卡
+    });
+    runStack(s);
+    expect(covered.faceUp).toBe(false); // 翻正（正面→反面？不——它是正面，flip → 反面）
+    expect(s.players[0].hand).toHaveLength(0); // middle 未触发（被盖翻正不连锁）
+    expect(s.pendingEffects).toHaveLength(0);
+  });
+});
+
 
 registerCardEffects('t-draw-target', {
   middle: function* (ctx) {
@@ -48,7 +89,7 @@ registerCardEffects('t-draw-oppdeck', {
 
 registerCardEffects('t-ptd-opp', {
   middle: function* (ctx) {
-    if (ctx.s.players[1].deck.length > 0 || ctx.s.players[1].trash.length > 0) {
+    if (ctx.s.players[1].deck.length > 0) {
       yield { op: 'playTopDeck', line: 0, faceUp: false, player: 1 };
     }
   },

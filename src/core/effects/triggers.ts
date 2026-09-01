@@ -38,7 +38,7 @@ export function fireReactive(s: GameState, kind: ReactiveKind, actor: PlayerId):
 export function collectTriggerFor(s: GameState, card: Card, kind: TriggerKind): TriggerEntry | null {
   const def = EFFECTS[card.defId]?.triggers?.[kind];
   if (!def) return null;
-  return { cardUid: card.uid, defId: card.defId, kind, optional: def.optional };
+  return { cardUid: card.uid, defId: card.defId, kind, optional: def.optional, top: def.top };
 }
 
 /** 触发效果入栈（调用方需 runStack；本函数只 push）
@@ -58,7 +58,11 @@ export function resolveTrigger(s: GameState, t: TriggerEntry, opts?: { topComman
 }
 
 /** 收集某类触发：end/start 只收集回合玩家场地侧（规则书"结算你场地侧所有'结束'触发"）；
- *  其他种类（after 等，机制预留）收集双方。取场上正面未覆盖顶卡中注册了该触发的卡（跳过已结算 uid） */
+ *  其他种类（after 等，机制预留）收集双方。取场上正面卡中注册了该触发的卡（跳过已结算 uid）：
+ *  - 顶卡（未覆盖）：top/bottom 触发都收集（bottom 仅未覆盖生效，规则 79 行）
+ *  - 被盖卡：仅收集注册了 top 标志的顶命令触发（FAQ 98/99：顶命令被盖仍生效，如 death-1/life-0）
+ *  记录时点快照（FAQ 68）：start/end 步骤开始时收集，结算中新加入的不收（getLegalActions 每次
+ *  重新收集的既有行为保留；resolvedTriggerUids 在步骤内去重） */
 export function collectTriggers(s: GameState, kind: TriggerKind): TriggerEntry[] {
   const out: TriggerEntry[] = [];
   const seen = new Set(s.resolvedTriggerUids);
@@ -67,11 +71,15 @@ export function collectTriggers(s: GameState, kind: TriggerKind): TriggerEntry[]
     const p = s.players[pid];
     for (const line of [0, 1, 2] as Line[]) {
       const stack = p.stacks[line];
-      const top = stack[stack.length - 1];
-      if (!top || !top.faceUp || seen.has(top.uid)) continue;
-      const def = EFFECTS[top.defId]?.triggers?.[kind];
-      if (!def) continue;
-      out.push({ cardUid: top.uid, defId: top.defId, kind, optional: def.optional });
+      for (let i = 0; i < stack.length; i++) {
+        const card = stack[i];
+        if (!card.faceUp || seen.has(card.uid)) continue;
+        const def = EFFECTS[card.defId]?.triggers?.[kind];
+        if (!def) continue;
+        const isTop = i === stack.length - 1;
+        if (!isTop && !def.top) continue; // 被盖卡仅顶命令（top 标志）触发
+        out.push({ cardUid: card.uid, defId: card.defId, kind, optional: def.optional, top: def.top });
+      }
     }
   }
   return out;

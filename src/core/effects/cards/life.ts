@@ -1,10 +1,13 @@
 import type { EffectCtx, EffectGen, EffectStep, Line, PlayerId, StepResult } from '../../models/types';
 import { registerCardEffects } from '../registry';
 import { deckTopAvailable } from '../context';
+import { isUncovered } from '../context';
 
 /** life-0 中指令：在你有牌的每一列以反面打出你牌堆顶的牌。
  *  当前列包含在内（life-0 自身即"你有牌"）→ 本列最后打：落地会盖住 life-0，触发其
- *  "被盖住前：先删除此牌"；删除后源卡失效将终止本效果——把本列排在最后，保证其余各列先结算。 */
+ *  顶指令（FAQ 139 更正：结束：若此卡被覆盖，则移除此卡）……不——被盖的 life-0 顶命令
+ *  结束阶段才删；本列最后打使其余各列先结算，且打完后本列覆盖 life-0（其顶命令被盖仍生效，
+ *  等结束阶段删自己）。牌库空 → 剩余列 fizzle（FAQ 142：打牌堆顶不洗牌）。 */
 function* life0Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const srcLine = ctx.card.line!;
   const withCards = ([0, 1, 2] as Line[]).filter((l) => ctx.s.players[ctx.player].stacks[l].length > 0);
@@ -13,14 +16,17 @@ function* life0Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
     ...(withCards.includes(srcLine) ? [srcLine] : []),
   ];
   for (const line of ordered) {
-    if (!deckTopAvailable(ctx.s, ctx.player)) break; // 牌库+弃牌堆皆空 → 剩余列 fizzle
+    if (!deckTopAvailable(ctx.s, ctx.player)) break; // 牌库空 → 剩余列 fizzle（不洗弃牌堆）
     yield { op: 'playTopDeck', line, faceUp: false };
   }
 }
 
-/** life-0 底指令：被盖住前——先删除此牌（删除在落地前结算，随后盖住它的牌照常落地） */
-function* life0BeforeCovered(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
-  yield { op: 'delete', uid: ctx.card.uid };
+/** life-0 顶指令（FAQ 139 更正 2024-10）：结束：若此卡被覆盖，则移除此卡。
+ *  top: true —— 顶命令被盖仍生效（被盖时 collectTriggers 也会收集它）；未被覆盖则不删。
+ *  allowCovered：被盖卡删除自身需跳过未覆盖检查 */
+function* life0End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
+  if (isUncovered(ctx.s, ctx.card)) return; // 未被覆盖 → 不删
+  yield { op: 'delete', uid: ctx.card.uid, allowCovered: true };
 }
 
 /** life-1：翻转1张牌。再翻转1张牌。—— 两次各选 1 张未覆盖牌翻转；第二次可再选第一次那张
@@ -66,7 +72,7 @@ function* life5(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
 
 registerCardEffects('life-0', {
   middle: life0Middle,
-  triggers: { 'before-covered': { fn: life0BeforeCovered, optional: false } },
+  triggers: { 'end': { fn: life0End, optional: false, top: true } }, // FAQ 139 更正：顶指令（被盖仍生效）
 });
 registerCardEffects('life-1', { middle: life1 });
 registerCardEffects('life-2', { middle: life2 });

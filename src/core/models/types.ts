@@ -142,6 +142,7 @@ export interface RevealedGhost {
  *  - takeRandom：从 from 玩家手牌随机取 1 张给效果属主（owner 更新） */
 export type Op =
   | { op: 'discard'; uid: string }
+  | { op: 'discardMany'; uids: string[] }
   | { op: 'delete'; uid: string; allowCovered?: boolean }
   | { op: 'return'; uid: string; allowCovered?: boolean }
   | { op: 'flip'; uid: string; allowCovered?: boolean }
@@ -190,6 +191,8 @@ export interface TriggerEntry {
   defId: string;
   kind: TriggerKind;
   optional: boolean;
+  /** 顶命令触发（TriggerDef.top：被盖仍生效）——resolve-trigger 时传给 resolveTrigger 作 topCommand */
+  top?: boolean;
 }
 
 /** 候选过滤：zone 'hand' 需 owner；'field' 列出双方所有堆叠顶卡（排除结算中源卡）；covered:true 时列出堆叠中被覆盖的卡（排除顶卡与结算中源卡） */
@@ -212,6 +215,9 @@ export type EffectGen = (ctx: EffectCtx) => Generator<EffectStep, void, StepResu
 export interface TriggerDef {
   fn: EffectGen;
   optional: boolean;
+  /** 顶命令触发（top 文本，如 death-1 顶「开始：…」、life-0 顶「结束：…」）：被覆盖仍生效
+   *  ——end/start 收集含被盖卡（规则 90 + FAQ 98/99），且触发效果 sourceValid 跳过未覆盖检查 */
+  top?: boolean;
 }
 
 export interface CardEffects {
