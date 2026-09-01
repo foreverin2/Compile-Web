@@ -503,6 +503,64 @@ export function syncApathyMists(s: GameState): void {
   }
 }
 
+/* ===== FX-R3：常驻冷漠2 马赛克（apathy-2 顶「无效化此列所有牌的中部命令」→ 该线双方
+ * 堆叠槽时不时冒出像素马赛克） =====
+ * lineMiddleCommandsNullified(s, line) 为真（任一玩家该线堆叠顶卡为正面 apathy-2——顶命令
+ * 被盖仍生效，口径同 restrictions 与场上卡 .apathy-filter 灰度滤镜）期间，该线【双方】
+ * 堆叠槽铺 body 级马赛克层：多个小方格色块（.fx-apathy-mosaic-tile）随机出现/消失循环
+ * （steps 阶跃闪烁 + JS 负延迟 stagger → 各格不同相位、随时都有几格亮起，读作"像素化
+ * 干扰"）。key 用 `${player}-${line}`（与 apathyMists 同构——apathy-2 是线级判定、双侧
+ * 同时生效，按槽分键可复用同一 get-or-create/重定位/清理框架）。其余与 syncApathyMists
+ * 同模式：body 级 fixed 层跨重渲染存活、每帧渲染只重定位到槽位矩形。 */
+const apathyMosaics = new Map<string, HTMLElement>();
+const APATHY_MOSAIC_TILE_COUNT = 8; // 每槽马赛克小方格数
+const APATHY_MOSAIC_CYCLE_MS = 3200; // 单格出现/消失循环周期（stagger 基准）
+
+function renderApathyMosaicLayer(): HTMLElement {
+  const layer = el('div', 'fx-apathy-mosaic');
+  for (let i = 0; i < APATHY_MOSAIC_TILE_COUNT; i++) {
+    const tile = el('i', 'fx-apathy-mosaic-tile');
+    // 相位错开（负延迟）+ 周期轻微抖动：各格亮起时刻互不重叠 → 随时有几格在闪
+    tile.style.animationDelay = `${-((i * 137) % 100) / 100 * (APATHY_MOSAIC_CYCLE_MS / 1000)}s`;
+    tile.style.animationDuration = `${(APATHY_MOSAIC_CYCLE_MS / 1000 + ((i * 37) % 5) * 0.12).toFixed(2)}s`;
+    layer.appendChild(tile);
+  }
+  return layer;
+}
+
+export function syncApathyMosaics(s: GameState): void {
+  const activeKeys = new Set<string>();
+  for (const line of [0, 1, 2] as Line[]) {
+    if (!lineMiddleCommandsNullified(s, line)) continue;
+    for (const player of [0, 1] as PlayerId[]) {
+      const key = `${player}-${line}`;
+      activeKeys.add(key);
+      const slot = document.querySelector<HTMLElement>(
+        `.stack-slot[data-player="${player}"][data-line="${line}"]`
+      );
+      if (!slot) continue;
+      let layer = apathyMosaics.get(key);
+      if (!layer) {
+        layer = renderApathyMosaicLayer();
+        layer.dataset.apathyMosaicKey = key;
+        apathyMosaics.set(key, layer);
+        document.body.appendChild(layer);
+      }
+      const r = slot.getBoundingClientRect();
+      layer.style.left = `${r.left}px`;
+      layer.style.top = `${r.top}px`;
+      layer.style.width = `${r.width}px`;
+      layer.style.height = `${r.height}px`;
+    }
+  }
+  for (const [key, layer] of apathyMosaics) {
+    if (!activeKeys.has(key)) {
+      layer.remove();
+      apathyMosaics.delete(key);
+    }
+  }
+}
+
 /* ===== FX-5：常驻灵魂-0 手牌区框光芒（spirit-0 底「跳过检查缓存」生效方） =====
  * shouldSkipCacheCheck(s, player) 为真（player 任一线【未覆盖】顶卡为正面 spirit-0——
  * 底命令仅未覆盖生效，口径同 restrictions）期间，该玩家手牌区（.hand[data-player]）
@@ -605,10 +663,15 @@ export function syncSpirit1Cards(s: GameState): void {
  *   「金属2 持续对手链路铁板」中「对手」= 被限制方，与卡面文本同指）。key = `${blocked}-${line}`
  *   （双方可在同一线互为 metal-2 → 同线双板，按槽分键防撞，同 FX-3 瘟疫浓雾先例）。
  * - syncMetal6Mans（metal-6 手牌）：手牌含 metal-6 → 该卡牌面循环渐现 man.png（2s 周期），
- *   key = uid；卡离开手牌（弃/打/回）→ 移除层。 */
+ *   key = uid；卡离开手牌（弃/打/回）→ 移除层。
+ * - syncMetal1LineGlows（FX-R3，metal-1 中指令「对手下回合不能编译」）：s.compileBlocked ===
+ *   player（被禁方；metal-1 打出时引擎设置、被禁玩家回合结束 end→start 转换时清除，turn.ts）
+ *   → 该玩家三条链路边框常驻金属光泽呼吸（.fx-metal-lineglow）。key = `${player}-${line}`；
+ *   纯状态驱动（不再走 card:drawn 一次性触发——metal-3 抽牌同协议段误触发一并消除）。 */
 const metal0Glows = new Map<string, HTMLElement>();
 const metalPlates = new Map<string, HTMLElement>();
 const metal6Mans = new Map<string, HTMLElement>();
+const metal1LineGlows = new Map<string, HTMLElement>();
 
 function renderMetalEnergyGlow(): HTMLElement {
   return el('div', 'fx-metal-energyglow');
@@ -736,6 +799,46 @@ export function syncMetal6Mans(s: GameState): void {
     if (!activeUids.has(uid)) {
       layer.remove();
       metal6Mans.delete(uid);
+    }
+  }
+}
+
+/** FX-R3 metal-1 常驻：s.compileBlocked === player（被禁编译方）→ 该玩家三条链路边框
+ *  金属光泽呼吸（.fx-metal-lineglow，常驻 sheen 循环，无一次性渐隐）。key = `${player}-${line}`
+ *  （compileBlocked 同时只禁一方，但按槽分键与其余金属注册表同构、防未来扩展撞键）。
+ *  纯状态驱动：compileBlocked 由引擎在 metal-1 打出时设置、被禁玩家回合结束 end→start
+ *  转换时清除（turn.ts）→ 特效生命周期天然跟随「封锁编译」区间；不再依赖 card:drawn
+ *  一次性触发（metal-3 抽牌同协议段误触发一并消除）。 */
+export function syncMetal1LineGlows(s: GameState): void {
+  const activeKeys = new Set<string>();
+  if (s.compileBlocked !== null) {
+    const player: PlayerId = s.compileBlocked;
+    for (const line of [0, 1, 2] as Line[]) {
+      const key = `${player}-${line}`;
+      activeKeys.add(key);
+      const slot = document.querySelector<HTMLElement>(
+        `.stack-slot[data-player="${player}"][data-line="${line}"]`
+      );
+      if (!slot) continue; // 槽位不在 DOM（不应发生）→ 交给下方清理分支移除旧层
+      let glow = metal1LineGlows.get(key);
+      if (!glow) {
+        glow = el('div', 'fx-metal-lineglow');
+        glow.dataset.metal1Key = key;
+        metal1LineGlows.set(key, glow);
+        document.body.appendChild(glow);
+      }
+      const r = slot.getBoundingClientRect();
+      // 层盒外扩 5px：金属渐变环读作「链路边框外层一圈」而非覆盖槽位本身
+      glow.style.left = `${r.left - 5}px`;
+      glow.style.top = `${r.top - 5}px`;
+      glow.style.width = `${r.width + 10}px`;
+      glow.style.height = `${r.height + 10}px`;
+    }
+  }
+  for (const [key, glow] of metal1LineGlows) {
+    if (!activeKeys.has(key)) {
+      glow.remove();
+      metal1LineGlows.delete(key);
     }
   }
 }
@@ -2221,18 +2324,21 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   // 槽位已入 DOM → 创建/复用 body 级层并重定位到槽位矩形；条件消失后移除并注销）
   syncPsychicParticles(s);
   syncPlagueMists(s);
-  // FX-5 常驻协议特效：apathy-0 冷漠灰雾（槽位已入 DOM）/ spirit-0 手牌区框光芒 /
-  // spirit-1 手牌卡边框护角（手牌已入 DOM → 按 .hand[data-player] / 手牌卡 rect 重定位；
-  // 条件消失后移除并注销）
+  // FX-5 常驻协议特效：apathy-0 冷漠灰雾（槽位已入 DOM）/ apathy-2 冷漠马赛克（FX-R3）/
+  // spirit-0 手牌区框光芒 / spirit-1 手牌卡边框护角（手牌已入 DOM → 按 .hand[data-player] /
+  // 手牌卡 rect 重定位；条件消失后移除并注销）
   syncApathyMists(s);
+  syncApathyMosaics(s);
   syncSpirit0Glows(s);
   syncSpirit1Cards(s);
   // FX-6 常驻金属特效：metal-0 对方能量槽金属边框（电池已入 DOM → 按 .battery-shell 矩形）/
   // metal-2 被限制方链路铁板+斜光（槽位已入 DOM）/ metal-6 手牌 man 渐现（手牌已入 DOM →
-  // 按 .card[data-uid] 矩形；条件消失后移除并注销）
+  // 按 .card[data-uid] 矩形；条件消失后移除并注销）/ metal-1 被禁编译方三链边框金属光泽
+  // （FX-R3，纯状态驱动：s.compileBlocked 区间常驻，解除即移除）
   syncMetal0Glows(s);
   syncMetalPlates(s);
   syncMetal6Mans(s);
+  syncMetal1LineGlows(s);
 }
 
 let selectedUid: string | null = null;
@@ -2275,21 +2381,27 @@ export function resetUiState(): void {
   psychicParticles.clear();
   for (const layer of plagueMists.values()) layer.remove();
   plagueMists.clear();
-  // FX-5 常驻注册表：冷漠灰雾 / 灵魂-0 手牌区光芒 / 灵魂-1 手牌卡护角（移除层 + 清表）；
-  // check-cache 锁链层（一次性，离开步骤时已置 null 交由定时器清理，此处兜底直清）+ prevStep 复位
+  // FX-5 常驻注册表：冷漠灰雾 / 冷漠2 马赛克（FX-R3）/ 灵魂-0 手牌区光芒 / 灵魂-1 手牌卡护角
+  // （移除层 + 清表）；check-cache 锁链层（一次性，离开步骤时已置 null 交由定时器清理，此处兜底直清）
+  // + prevStep 复位
   for (const layer of apathyMists.values()) layer.remove();
   apathyMists.clear();
+  for (const layer of apathyMosaics.values()) layer.remove();
+  apathyMosaics.clear();
   for (const glow of spirit0Glows.values()) glow.remove();
   spirit0Glows.clear();
   for (const layer of spirit1Cards.values()) layer.remove();
   spirit1Cards.clear();
-  // FX-6 常驻注册表：金属0 能量槽边框 / 金属2 链路铁板 / 金属6 手牌 man（移除层 + 清表）
+  // FX-6 常驻注册表：金属0 能量槽边框 / 金属2 链路铁板 / 金属6 手牌 man / metal-1 三链边框
+  // 金属光泽（FX-R3；移除层 + 清表）
   for (const glow of metal0Glows.values()) glow.remove();
   metal0Glows.clear();
   for (const layer of metalPlates.values()) layer.remove();
   metalPlates.clear();
   for (const layer of metal6Mans.values()) layer.remove();
   metal6Mans.clear();
+  for (const glow of metal1LineGlows.values()) glow.remove();
+  metal1LineGlows.clear();
   if (chainLayer) {
     chainLayer.remove();
     chainLayer = null;

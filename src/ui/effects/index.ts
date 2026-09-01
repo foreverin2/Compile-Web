@@ -358,40 +358,10 @@ function playDarknessExtra(node: HTMLElement, payload: FxCardPayload): void {
 }
 
 /* ===== Metal 金属附加特效（FX-6，用户 #6b）：metal-1 对手三条链路边框金属光泽 =====
- * 触发：card:drawn 且 triggerProtocol === 'metal'（metal-1 中指令「抽2张牌」——打出即抽2；
- * resolve.ts draw op 已带 pe.sourceDefId 协议段 → payload.triggerProtocol === 'metal'）。
- * 效果：对手（metal-1 打出方的对手）三条链路（.stack-slot[data-player=对手][data-line=N]）
- * 边框外层一圈金属光泽（.fx-metal-lineglow body 级 fixed 层，金属渐变描边 + 扫光），
- * 一次性：出现（0.3s 渐现）→ 保持 3 秒 → 渐隐（0.5s）→ 移除。全部浮层 pointer-events:none、
- * JS 定时自清理（重置路径由 resetUiState 按 .fx-metal-lineglow 类批量清扫兜底）。 */
-const METAL_LINE_HOLD_MS = 3000; // 金属光泽保持（出现后 3s 开始渐隐）
-const METAL_LINE_FADE_MS = 500;  // 渐隐时长
-
-/** metal-1 一次性：对手三条链路边框金属光泽（出现 → 3s 渐隐）。player = metal-1 打出方
- *  （card:drawn payload.player = ctx.player = 效果源持有者）→ 对手 = player === 0 ? 1 : 0。 */
-function playMetalLineGlow(player: PlayerId): void {
-  const opp: PlayerId = player === 0 ? 1 : 0;
-  for (const line of [0, 1, 2]) {
-    const slot = document.querySelector<HTMLElement>(
-      `.stack-slot[data-player="${opp}"][data-line="${line}"]`
-    );
-    if (!slot) continue;
-    const r = slot.getBoundingClientRect();
-    if (r.width === 0 || r.height === 0) continue;
-    const glow = document.createElement('div');
-    glow.className = 'fx-metal-lineglow';
-    // 层盒外扩 5px：金属渐变环读作「链路边框外层一圈」而非覆盖槽位本身
-    glow.style.left = `${r.left - 5}px`;
-    glow.style.top = `${r.top - 5}px`;
-    glow.style.width = `${r.width + 10}px`;
-    glow.style.height = `${r.height + 10}px`;
-    glow.style.zIndex = String(EXTRA_Z);
-    document.body.appendChild(glow);
-    window.setTimeout(() => glow.classList.add('fx-metal-lineglow-in'), 20);
-    window.setTimeout(() => glow.classList.add('fx-metal-lineglow-out'), METAL_LINE_HOLD_MS);
-    window.setTimeout(() => glow.remove(), METAL_LINE_HOLD_MS + METAL_LINE_FADE_MS + 60);
-  }
-}
+ * FX-R3：已移除 card:drawn 一次性触发（metal-1 打出时的 3s 三链边框光）——改由 render.ts
+ * syncMetal1LineGlows 常驻注册表纯状态驱动（s.compileBlocked === 被禁方 → 三条链路边框
+ * 金属光泽呼吸，封锁结束即移除）。metal-3 抽牌同协议段（triggerProtocol==='metal'）的
+ * 误触发随之消除。 */
 
 /** 基础行为特效：删去 → 破碎消散（src/ui/fx/delete-shatter.ts 的 mountShatter） */
 function playShatter(node: HTMLElement, payload: FxCardPayload): void {
@@ -1706,11 +1676,11 @@ export function initEffects(): () => void {
     // playDrawSequence 在基础抽牌动画【之前】统一调度（FX-R1 时序重构，见 playSpeedDrawExtra
     // 注释——避免事件时即时播放与 main.ts 调度双播/时序错位）；love 抽牌附加特效（牌库区粉红
     // 光芒 + 手牌末尾落点爱心；抽出的卡背爱心由 main.ts playDrawAnimation love 分支挂 draw-ghost）
-    // 与 metal-1 链路边框光仍在事件时即时播放。
+    // 仍在事件时即时播放。metal-1 链路边框光已在 FX-R3 移除一次性触发——改由 render.ts
+    // syncMetal1LineGlows 常驻注册表纯状态驱动（compileBlocked 区间）。
     if (e.type === 'card:drawn') {
       const p = e.payload as { player: PlayerId; count: number; triggerProtocol?: string } | undefined;
       if (p && p.triggerProtocol === 'love') playLoveDrawExtra(p);
-      else if (p && p.triggerProtocol === 'metal') playMetalLineGlow(p.player);
       return;
     }
     const payload = e.payload as FxCardPayload | undefined;
