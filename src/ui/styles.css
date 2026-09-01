@@ -2724,6 +2724,19 @@ body.dragging { cursor: grabbing; user-select: none; }
   inset: 0;
   will-change: opacity;
 }
+/* speed 平移终点掩盖罩（.fx-speed-end-shroud，body 级 fixed 定位终点矩形，z=EXTRA_Z）：
+ * 与 gravity 黑洞对称——renderApp 后真实卡瞬移到终点，前置/移动段用灰白光罩盖住终点，
+ * 浮层卡到达时渐隐露出真实卡（用户 #6b「到达前不露出」）。 */
+.fx-speed-end-shroud {
+  position: fixed;
+  pointer-events: none;
+  border-radius: 8px;
+  border: 2px solid rgba(226, 230, 242, 0.55);
+  background: rgba(208, 216, 232, 0.35);
+  box-shadow: 0 0 14px 3px rgba(226, 230, 242, 0.5), 0 0 32px 10px rgba(208, 216, 232, 0.3), inset 0 0 16px rgba(240, 244, 252, 0.28);
+  opacity: 0;
+  will-change: opacity;
+}
 /* speed 平移浮层卡标记：仅用于 resetUiState 重置清扫（浮层卡自身是 buildFxCardAt 的 .card，
  * 无 data-uid、不参与渲染；重置时需随定时器之外的路径立即移除，见 render.ts 清扫选择器） */
 .fx-speed-card {

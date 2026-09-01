@@ -1223,7 +1223,13 @@ function playGravityDeckPlayExtra(payload: FxCardPayload): void {
     return;
   }
   const start = { x: from.left + from.width / 2, y: from.top + from.height / 2 };
-  // ① 牌库区边框品红光（body 级 fixed 层定位牌库 rect；随卡起飞渐隐）
+  // ② 立即创建浮层卡（旧位置 = 牌库区 rect）盖住真实卡 + 品红卡框光（前置段全程可见）
+  const ghost = buildGravityGhost(from, false, false, payload);
+  if (!ghost) {
+    playDeckPlay(payload); // 浮层构建失败（实际不可达）→ 退回基础牌堆顶打出
+    return;
+  }
+  // ① 牌库区边框品红光（body 级 fixed 层定位牌库 rect；随卡起飞渐隐）——ghost 成功后才建（防兜底泄漏）
   const deckGlow = document.createElement('div');
   deckGlow.className = 'fx-gravity-deckglow';
   deckGlow.style.left = `${from.left}px`;
@@ -1233,12 +1239,6 @@ function playGravityDeckPlayExtra(payload: FxCardPayload): void {
   deckGlow.style.zIndex = String(EXTRA_Z);
   document.body.appendChild(deckGlow);
   window.setTimeout(() => deckGlow.classList.add('fx-gravity-deckglow-in'), 20);
-  // ② 立即创建浮层卡（旧位置 = 牌库区 rect）盖住真实卡 + 品红卡框光（前置段全程可见）
-  const ghost = buildGravityGhost(from, false, false, payload);
-  if (!ghost) {
-    playDeckPlay(payload); // 浮层构建失败（实际不可达）→ 退回基础牌堆顶打出
-    return;
-  }
   ghost.classList.add('deck-play-ghost');
   // ③ 终点黑洞渐现（0~0.3s）；④ 品红射线（0.3~1.8s，黑洞 → 牌库区中心）
   const hole = spawnGravityHole(end);
@@ -1385,22 +1385,37 @@ function playSpeedShiftExtra(node: HTMLElement, payload: FxCardPayload): void {
   const start = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
   const dx = end.x - start.x;
   const dy = end.y - start.y;
+  // ①b 终点掩盖罩（与 gravity 黑洞对称——用户 #6b「到达前不露出真实卡」）：
+  //    renderApp 后真实卡瞬移到终点，用灰白光罩盖住终点，浮层到达时渐隐露出真实卡
+  const shroud = document.createElement('div');
+  shroud.className = 'fx-speed-end-shroud';
+  shroud.style.left = `${end.x - rect.width / 2}px`;
+  shroud.style.top = `${end.y - rect.height / 2}px`;
+  shroud.style.width = `${rect.width}px`;
+  shroud.style.height = `${rect.height}px`;
+  shroud.style.zIndex = String(EXTRA_Z);
+  document.body.appendChild(shroud);
   // ② 灰白光 + 飓风渐现（0.3s；延迟 20ms 保证初始 opacity:0 已被绘制）
   window.setTimeout(() => {
     glow.style.transition = 'opacity 0.3s ease-out';
     glow.style.opacity = '1';
+    shroud.style.transition = 'opacity 0.3s ease-out';
+    shroud.style.opacity = '1';
   }, 20);
   // ③ 浮层卡随飓风沿起点→终点直线平移（1.5s，linear 匀速；组合 --fx-rot 保留横置卡朝向）
   window.setTimeout(() => {
     ghost.style.transition = 'transform 1.5s linear';
     ghost.style.transform = `translate(${dx}px, ${dy}px) rotate(var(--fx-rot, 0deg))`;
   }, SPEED_TORNADO_IN_MS);
-  // ④ 到达后：飓风渐隐 + 浮层卡整体渐隐（露出真实卡，位置一致无缝）→ 自清理
+  // ④ 到达后：飓风/终点罩渐隐 + 浮层卡整体渐隐（露出真实卡，位置一致无缝）→ 自清理
   window.setTimeout(() => {
     ghost.style.transition = 'opacity 0.4s ease-in';
     ghost.style.opacity = '0';
+    shroud.style.transition = 'opacity 0.4s ease-in';
+    shroud.style.opacity = '0';
   }, SPEED_TORNADO_IN_MS + SPEED_MOVE_MS);
   window.setTimeout(() => ghost.remove(), SPEED_TOTAL_MS);
+  window.setTimeout(() => shroud.remove(), SPEED_TOTAL_MS);
 }
 
 /** card:drawn 载荷（无 uid/defId：抽牌无目标卡节点，特效按 player 定位手牌/牌库；speed/love 共用） */
