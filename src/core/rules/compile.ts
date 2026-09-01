@@ -39,8 +39,9 @@ export function executeCompileUnchecked(s: GameState, player: PlayerId, line: Li
     // 挂起编译：效果栈清空后由 runStack 消费 pendingCompile 执行编译本体（先于 pendingStepAdvance）
     s.pendingCompile = { player, line };
     for (const item of speed2) {
-      // 持有者决定平移（规则 94「被作用卡持有者决定」）；resolveTrigger 设 player=card.owner
-      resolveTrigger(s, { cardUid: item.cardUid, defId: 'speed-2', kind: 'before-compile', optional: false });
+      // 持有者决定平移（规则 94「被作用卡持有者决定」）；resolveTrigger 设 player=card.owner。
+      // topCommand: true —— speed-2 是顶命令，「不论是否被盖住」也生效（被盖时不通过未覆盖检查）
+      resolveTrigger(s, { cardUid: item.cardUid, defId: 'speed-2', kind: 'before-compile', optional: false }, { topCommand: true });
     }
     runStack(s); // 结算 speed-2 平移（可挂起选线 → 应答后继续 → 栈空消费 pendingCompile）
     return;

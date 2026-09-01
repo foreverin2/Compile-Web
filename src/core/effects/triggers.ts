@@ -41,8 +41,10 @@ export function collectTriggerFor(s: GameState, card: Card, kind: TriggerKind): 
   return { cardUid: card.uid, defId: card.defId, kind, optional: def.optional };
 }
 
-/** 触发效果入栈（调用方需 runStack；本函数只 push） */
-export function resolveTrigger(s: GameState, t: TriggerEntry): void {
+/** 触发效果入栈（调用方需 runStack；本函数只 push）
+ *  opts.topCommand：顶命令触发（被覆盖仍生效，sourceValid 跳过未覆盖检查）——before-compile
+ *  （speed-2 顶「通过编译删除此牌前：平移此牌，不论是否被盖住」）等使用 */
+export function resolveTrigger(s: GameState, t: TriggerEntry, opts?: { topCommand?: boolean }): void {
   const card = findCard(s, t.cardUid);
   const def = EFFECTS[t.defId]?.triggers?.[t.kind];
   if (!card || !def) return;
@@ -50,6 +52,7 @@ export function resolveTrigger(s: GameState, t: TriggerEntry): void {
   s.pendingEffects.push({
     id: nextEffectId(), player: card.owner,
     gen: def.fn(ctx), sourceUid: card.uid, sourceDefId: card.defId,
+    topCommand: opts?.topCommand,
     prompt: null, lastAnswer: null,
   });
 }

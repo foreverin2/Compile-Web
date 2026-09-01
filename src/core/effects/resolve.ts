@@ -413,21 +413,18 @@ function completePlay(s: GameState): void {
   const card = ps.card;
   const p = s.players[card.owner];
   const stack = p.stacks[card.line!];
-  if (stack.length > 0 && !ps.beforeCoveredDone) {
+  // belowUid 落点先行解析：插入源卡下方不覆盖顶卡 → 跳过 before-covered 检查；
+  // 回退落顶（源卡已不在，确实覆盖顶卡）→ 保留检查
+  const belowIdx = ps.belowUid !== undefined ? stack.findIndex((c) => c.uid === ps.belowUid) : -1;
+  if ((ps.belowUid === undefined || belowIdx === -1) && stack.length > 0 && !ps.beforeCoveredDone) {
     const top = stack[stack.length - 1];
     const t = top.faceUp ? collectTriggerFor(s, top, 'before-covered') : null;
     if (t) { ps.beforeCoveredDone = true; resolveTrigger(s, t); return; }
   }
   card.zone = 'field';
-  if (ps.belowUid !== undefined) {
-    const idx = stack.findIndex((c) => c.uid === ps.belowUid);
-    if (idx !== -1) {
-      stack.splice(idx, 0, card); // 插到源卡下方（该位置 = 源卡之下、其下卡之上）
-      for (let i = 0; i < stack.length; i++) stack[i].pos = i; // 重索引整堆 pos
-    } else {
-      stack.push(card);
-      card.pos = stack.length - 1; // 源卡已不在 → 回退落顶
-    }
+  if (belowIdx !== -1) {
+    stack.splice(belowIdx, 0, card); // 插到源卡下方（该位置 = 源卡之下、其下卡之上）
+    for (let i = 0; i < stack.length; i++) stack[i].pos = i; // 重索引整堆 pos
   } else {
     stack.push(card);
     card.pos = stack.length - 1;

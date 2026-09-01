@@ -136,6 +136,29 @@ registerCardEffects('t-after-cache', {
   },
 });
 
+// speed-2 的 before-compile 全链路测试注册（与 Task 7 真实实现语义一致：持有者选线 → 平移自己，
+// allowCovered——「不论是否被盖住」；Task 7 合并后此注册被真实实现覆盖，行为相同无害）
+registerCardEffects('speed-2', {
+  triggers: {
+    'before-compile': {
+      fn: function* (ctx) {
+        const line = yield {
+          kind: 'select-line',
+          title: 'speed-2（编译前）：平移此牌到另一列',
+          min: 1,
+          max: 1,
+          optional: false,
+          candidates: [],
+          lines: ([0, 1, 2] as Line[]).filter((l) => l !== ctx.card.line),
+        };
+        if (line.selected.length === 0) return;
+        yield { op: 'shift', uid: ctx.card.uid, targetLine: Number(line.selected[0].replace('line:', '')) as Line, allowCovered: true };
+      },
+      optional: false,
+    },
+  },
+});
+
 // ============ draw op 扩展 ============
 
 describe('draw op extension', () => {
@@ -342,6 +365,36 @@ describe('fireReactive after-* triggers', () => {
     expect(flipTarget.faceUp).toBe(false); // after-draw 触发 → 翻转
   });
 
+  it('after-draw fires on refresh (drawCards path)', () => {
+    const s = createGame();
+    s.phase = 'turn';
+    const trig = makeCard('t-after-draw', 0, 'field', true, 0, 0);
+    const flipTarget = makeCard('death-0', 0, 'field', true, 0, 1);
+    place(s, trig, 0, 0);
+    place(s, flipTarget, 0, 0);
+    s.players[0].deck = [makeCard('death-1', 0, 'deck', false)];
+    s.players[0].hand = [makeCard('death-2', 0, 'hand'), makeCard('death-3', 0, 'hand')];
+    executeAction(s, 0, 'refresh'); // refreshHand → drawCards → after-draw 触发
+    expect(flipTarget.faceUp).toBe(false); // 触发翻转
+    expect(s.players[0].hand.length).toBeLessThanOrEqual(5);
+  });
+
+  it('after-draw does NOT fire for a non-owner player', () => {
+    const s = createGame();
+    s.phase = 'turn';
+    const trig = makeCard('t-after-draw', 1, 'field', true, 0, 0); // P2 场上的触发卡
+    const flipTarget = makeCard('death-0', 1, 'field', true, 0, 1);
+    place(s, trig, 1, 0);
+    place(s, flipTarget, 1, 0);
+    s.players[0].deck = [makeCard('death-1', 0, 'deck', false)];
+    pushOpGen(s, 0, function* () {
+      yield { op: 'draw', count: 1 }; // P1 抽牌
+    });
+    runStack(s);
+    expect(s.players[0].hand).toHaveLength(1);
+    expect(flipTarget.faceUp).toBe(true); // P2 的 after-draw 不触发
+  });
+
   it('after-discard fires on the OPPONENT of the discarding player', () => {
     const s = createGame();
     const trig = makeCard('t-after-discard', 1, 'field', true, 0, 0);
@@ -368,6 +421,22 @@ describe('fireReactive after-* triggers', () => {
     });
     runStack(s);
     expect(s.players[0].hand).toHaveLength(0); // 无触发
+  });
+
+  it('discard op discards from the CARD OWNER hand (opponent discard, ★ discard ownership fix)', () => {
+    const s = createGame();
+    const trig = makeCard('t-after-discard', 0, 'field', true, 0, 0);
+    place(s, trig, 0, 0);
+    s.players[0].deck = [makeCard('death-5', 0, 'deck', false)];
+    const oppCard = makeCard('death-1', 1, 'hand'); // P2 手牌的卡
+    s.players[1].hand.push(oppCard);
+    pushOpGen(s, 0, function* () {
+      yield { op: 'discard', uid: oppCard.uid }; // 效果属主 0 弃 P2 的卡（psychic 对手弃牌语义）
+    });
+    runStack(s);
+    expect(s.players[1].hand).toHaveLength(0); // 从 P2 手牌弃
+    expect(s.players[1].trash).toHaveLength(1);
+    expect(s.players[0].hand).toHaveLength(1); // P1 场上的 after-discard 触发抽 1（弃牌者是 P2）
   });
 
   it('system cache-clear discard also fires after-discard on the opponent', () => {
@@ -435,19 +504,31 @@ describe('fireReactive after-* triggers', () => {
 // ============ before-compile / pendingCompile ============
 
 describe('before-compile / pendingCompile', () => {
-  it('compile with a face-up speed-2 on the line sets pendingCompile and still completes the compile', () => {
+  it('before-compile full chain: COVERED speed-2 shifts first (topCommand), then compile body deletes the line', () => {
     const s = createGame();
     s.phase = 'turn';
     s.step = 'check-compile';
     s.players[0].protocols = [{ defId: 'death', compiled: false }, { defId: 'fire', compiled: false }, { defId: 'light', compiled: false }];
     s.players[1].protocols = [{ defId: 'spirit', compiled: false }, { defId: 'water', compiled: false }, { defId: 'life', compiled: false }];
+    // 线 0：P1 总值 ≥10；speed-2 放线 0 并被顶卡盖住（「不论是否被盖住」场景）
     for (let i = 0; i < 10; i++) place(s, makeCard('death-1', 0, 'field', true, 0, i), 0, 0);
-    place(s, makeCard('death-0', 1, 'field', true, 0, 0), 1, 0);
     place(s, makeCard('speed-2', 0, 'field', true, 0, 10), 0, 0);
+    place(s, makeCard('death-5', 0, 'field', true, 0, 11), 0, 0); // 盖住 speed-2
+    place(s, makeCard('death-0', 1, 'field', true, 0, 0), 1, 0);
     executeAction(s, 0, 'compile', { line: 0 });
+    // 被盖 speed-2 的 before-compile 触发生效 → 挂起选线（I-1 topCommand 修复的判别）
+    expect(s.pendingEffects).toHaveLength(1);
+    const top = s.pendingEffects[s.pendingEffects.length - 1];
+    expect(top.prompt?.kind).toBe('select-line');
+    answerEffect(s, top.id, ['line:1']); // 持有者选线 1
+    // 平移落地 → 编译本体执行：线 0 清空、speed-2 存活于线 1
     expect(s.players[0].protocols[0].compiled).toBe(true);
-    expect(s.pendingCompile).toBeNull(); // 已消费
+    expect(s.players[0].stacks[0]).toHaveLength(0);
+    const speed2 = s.players[0].stacks[1].find((c) => c.defId === 'speed-2');
+    expect(speed2).toBeDefined();
+    expect(speed2!.zone).toBe('field');
     expect(s.pendingEffects).toHaveLength(0);
+    expect(s.step).toBe('check-cache'); // compiledThisTurn → 跳过 action
   });
 
   it('compile without speed-2 keeps the original behavior', () => {
