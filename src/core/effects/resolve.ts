@@ -18,6 +18,7 @@ import './cards/gravity';
 import './cards/psychic';
 import './cards/plague';
 import './cards/metal';
+import './cards/speed';
 
 function topEffect(s: GameState): PendingEffect | undefined {
   return s.pendingEffects[s.pendingEffects.length - 1];

@@ -218,28 +218,9 @@ registerCardEffects('t-after-cache', {
   },
 });
 
-// speed-2 的 before-compile 全链路测试注册（与 Task 7 真实实现语义一致：持有者选线 → 平移自己，
-// allowCovered——「不论是否被盖住」；Task 7 合并后此注册被真实实现覆盖，行为相同无害）
-registerCardEffects('speed-2', {
-  triggers: {
-    'before-compile': {
-      fn: function* (ctx) {
-        const line = yield {
-          kind: 'select-line',
-          title: 'speed-2（编译前）：平移此牌到另一列',
-          min: 1,
-          max: 1,
-          optional: false,
-          candidates: [],
-          lines: ([0, 1, 2] as Line[]).filter((l) => l !== ctx.card.line),
-        };
-        if (line.selected.length === 0) return;
-        yield { op: 'shift', uid: ctx.card.uid, targetLine: Number(line.selected[0].replace('line:', '')) as Line, allowCovered: true };
-      },
-      optional: false,
-    },
-  },
-});
+// speed-2 的 before-compile 由 Task 7 真实实现注册（src/core/effects/cards/speed.ts，
+// 经 resolve import 链载入）——语义与下方 full-chain 测试一致：持有者选线 → 平移自己（allowCovered）。
+// （A1 时期此处的夹具注册已移除：顶层注册会覆盖真实实现，现由真实实现驱动测试）
 
 // ============ draw op 扩展 ============
 
