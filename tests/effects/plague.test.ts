@@ -434,7 +434,7 @@ describe('plague protocol effects', () => {
       expect(s.pendingEffects).toHaveLength(0);
     });
 
-    it('opponent has no face-down top card → whole segment fizzles (no delete, no flip choice)', () => {
+    it('opponent has no face-down top card → delete sentence fizzles, flip-self choice still offered (FAQ 40, user ruling)', () => {
       const s = draftPlagueP1();
       advanceToStep(s, 0, 'end');
       const pl = plagueLine(s);
@@ -444,8 +444,13 @@ describe('plague protocol effects', () => {
       const t = collectTriggers(s, 'end').find((x) => x.cardUid === p4.uid)!;
       resolveTrigger(s, t);
       runStack(s);
-      expect(s.pendingEffects).toHaveLength(0); // 无挂起（整段 fizzle）
-      expect(p4.faceUp).toBe(true); // 未翻转
+      // 删除句 fizzle（无目标）→ 翻自己句独立仍提供选择
+      const p = s.pendingEffects[s.pendingEffects.length - 1];
+      expect(p.prompt?.kind).toBe('select-action');
+      expect(p.prompt?.actions).toEqual(['action:flip', 'action:skip']);
+      executeAction(s, 0, 'effect-choice', { promptId: p.id, choice: ['action:flip'] });
+      expect(p4.faceUp).toBe(false); // 翻自己发生
+      expect(s.pendingEffects).toHaveLength(0);
     });
 
     it('covered plague-4 is NOT collected at end (bottom command: uncovered only)', () => {

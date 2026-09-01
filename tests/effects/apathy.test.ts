@@ -88,7 +88,7 @@ describe('apathy protocol effects', () => {
       expect(s.pendingEffects).toHaveLength(0);
     });
 
-    it('opponent face-up cards on the same line are NOT flipped (此列 = own stack)', () => {
+    it('opponent face-up cards on the same line ARE flipped (此列 = both stacks, user ruling)', () => {
       const s = draftApathyP1();
       advanceToStep(s, 0, 'action');
       const al = apathyLine(s);
@@ -98,8 +98,8 @@ describe('apathy protocol effects', () => {
       const card = s.players[0].hand[0];
       executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: al });
       resolveAllChoices(s, pickFirst);
-      expect(oppUp.faceUp).toBe(true); // 对手卡不动
-      expect(card.faceUp).toBe(true);
+      expect(oppUp.faceUp).toBe(false); // 对手正面卡被翻
+      expect(card.faceUp).toBe(true); // 自己不翻
       expect(s.pendingEffects).toHaveLength(0);
     });
 

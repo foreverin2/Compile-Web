@@ -75,7 +75,7 @@ function* plague3(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
 
 /** plague-4 底指令：结束：对手删除1张对手的反面牌。你可以翻转这张牌。
  *  bottom 触发（不注册 top 标志）：仅未覆盖顶卡生效（collectTriggers 被盖跳过）。
- *  守卫：对手无反面顶卡 → 整段 fizzle（含翻自己）。
+ *  两句话独立（**用户拍板按 FAQ 40**）：对手无反面顶卡 → 跳过删除句，「你可以翻转此牌」仍可选。
  *  对手删自己的反面牌：select（chooser=opp，候选=对手 field 顶卡中 !faceUp，min1 max1）→
  *  {op:'delete', uid} → 「你可以翻转这张牌」= 翻 plague-4 自己：select-action
  *  ['action:flip','action:skip'] 二选一（optional:false min1 max1——"你可以"= 可选，
@@ -83,10 +83,14 @@ function* plague3(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
 function* plague4End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const opp: PlayerId = ctx.player === 0 ? 1 : 0;
   const targets = ctx.candidates({ zone: 'field', owner: opp }).filter((c) => !c.faceUp);
-  if (targets.length === 0) return; // fizzle：对手无反面顶卡 → 删除与翻转整段跳过
-  const ans = yield { kind: 'select', title: 'plague-4（结束）：对手删除1张对手的反面牌', min: 1, max: 1, optional: false, candidates: targets, chooser: opp };
-  if (ans.selected.length === 0) return; // 守卫空应答
-  yield { op: 'delete', uid: ans.selected[0] };
+  if (targets.length > 0) {
+    // 删除句（chooser=opp）：有反面顶卡才执行；删除后连锁可能移走/翻面自己——翻自己前防御复查
+    const ans = yield { kind: 'select', title: 'plague-4（结束）：对手删除1张对手的反面牌', min: 1, max: 1, optional: false, candidates: targets, chooser: opp };
+    if (ans.selected.length > 0) yield { op: 'delete', uid: ans.selected[0] };
+  }
+  // 翻自己句独立（FAQ 40）：删除句 fizzle 不影响此句；自己已被连锁移走/翻面 → 跳过
+  const self = findCard(ctx.s, ctx.card.uid);
+  if (!self || self.zone !== 'field') return;
   const act = yield { kind: 'select-action', title: 'plague-4（结束）：你可以翻转此牌', min: 1, max: 1, optional: false, candidates: [], actions: ['action:flip', 'action:skip'] };
   if (act.selected.length === 0) return; // 兜底
   if (act.selected[0] === 'action:flip') yield { op: 'flip', uid: ctx.card.uid };

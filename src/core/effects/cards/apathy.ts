@@ -21,13 +21,18 @@ function apathy0ValueModifier(s: GameState, _owner: PlayerId, line: Line, total:
 }
 
 /** apathy-1 中指令：翻转此列所有其他正面牌。
- *  「此列」= apathy-1 所在列；「其他」排除自己；「所有」= 自己该线堆叠全部 faceUp 卡（含被盖）。
+ *  「此列」= apathy-1 所在列（**用户拍板：双方堆叠**——与 apathy-0/gravity-0/darkness-2 惯例及
+ *  参考实现 owner:any 一致）；「其他」排除自己；「所有」= 该列双方堆叠全部 faceUp 卡（含被盖）。
  *  快照 uid 后逐个 {op:'flip', allowCovered}（FAQ 116/157：先标记再逐张处理，每张翻转后处理后果
  *  再下一张——逐张前复查卡仍在场，连锁可能已移走/删除）。空 → 无 yield 天然 fizzle。 */
 function* apathy1(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const line = ctx.card.line!;
-  const stack = ctx.s.players[ctx.player].stacks[line];
-  const targets = stack.filter((c) => c.uid !== ctx.card.uid && c.faceUp).map((c) => c.uid);
+  const targets: string[] = [];
+  for (const pid of [ctx.player, ctx.player === 0 ? 1 : 0] as PlayerId[]) {
+    for (const c of ctx.s.players[pid].stacks[line]) {
+      if (c.uid !== ctx.card.uid && c.faceUp) targets.push(c.uid);
+    }
+  }
   for (const uid of targets) {
     const card = findCard(ctx.s, uid);
     if (!card || card.zone !== 'field') continue; // 连锁中已被移走/删除 → 跳过
