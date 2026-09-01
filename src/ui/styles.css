@@ -2967,3 +2967,103 @@ body.dragging { cursor: grabbing; user-select: none; }
   55% { opacity: 0.6; transform: scale(1.4) translateY(-4px); }
   75% { opacity: 0; transform: scale(1.6) translateY(-10px); }
 }
+
+/* ===== FX-4：Love 爱附加特效（card:drawn / card:given / card:revealed + triggerProtocol=love，
+ * JS playLoveDrawExtra / playLoveGiveExtra / main.ts 抽牌 love 分支 / render.ts 幽灵 fx 字段）
+ * 时长与 effects/index.ts LOVE_* 常量一一对应（微调在此集中改）。
+ * 配色：粉红 #ff5fa2 系（边框光 / 爱心渐变 / 辉光）。 */
+
+/* 粉红爱心（通用元素）：两圆+三角 CSS 形状（两个顶部圆角半圆沿底部中心旋转拼合，
+ * 下方自然形成三角尖端），绝对定位居中于父容器（.card 相对定位 / body 级 fixed 容器
+ * 自身定位）；快速跳动 pulse（0.45s 心跳节奏，等比放大缩小）。z-index 2 覆盖卡面图。 */
+.fx-love-heart {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 28px;
+  height: 28px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 2;
+  filter: drop-shadow(0 0 6px rgba(255, 95, 162, 0.9));
+  animation: fx-love-beat 0.45s ease-in-out infinite;
+}
+.fx-love-heart::before,
+.fx-love-heart::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  width: 14px;
+  height: 22px;
+  border-radius: 14px 14px 0 0;
+  background: radial-gradient(circle at 35% 30%, #ffc9e0 0%, #ff5fa2 55%, #e0317c 100%);
+}
+/* 右半：左缘锚定中心（旋转支点 = 盒左下角 (14,22)），-45° 摆入 → 与左半拼出心形 */
+.fx-love-heart::before { left: 14px; transform: rotate(-45deg); transform-origin: 0 100%; }
+/* 左半：右缘锚定中心，+45° 摆入（镜像） */
+.fx-love-heart::after { left: 0; transform: rotate(45deg); transform-origin: 100% 100%; }
+@keyframes fx-love-beat {
+  0%, 100% { transform: translate(-50%, -50%) scale(1); }
+  50% { transform: translate(-50%, -50%) scale(1.3); }
+}
+
+/* 粉红边框呼吸光（通用）：抽出的卡（draw-ghost）/ 所选手牌（给牌源卡）/ 给牌飞行克隆 /
+ * 落点盒 / 落地幽灵共用——box-shadow 呼吸脉冲（0.6s 交替），不与元素自身 transform
+ * 平移过渡冲突（draw-ghost / 飞行克隆的位移走 transform）。 */
+@keyframes fx-love-glow-pulse {
+  0%, 100% {
+    box-shadow: 0 0 8px 2px rgba(255, 95, 162, 0.45), 0 0 22px 7px rgba(255, 60, 140, 0.32), inset 0 0 10px rgba(255, 110, 175, 0.24);
+  }
+  50% {
+    box-shadow: 0 0 15px 4px rgba(255, 95, 162, 0.72), 0 0 36px 13px rgba(255, 60, 140, 0.5), inset 0 0 16px rgba(255, 110, 175, 0.42);
+  }
+}
+
+/* 抽出的卡 / 所选手牌：边框粉红光芒（呼吸脉冲；border-color !important 盖过 .card 默认/
+ * .selected 金框；draw-ghost 无边框 → 仅 box-shadow 生效） */
+.fx-love-cardglow {
+  border-color: #ff5fa2 !important;
+  animation: fx-love-glow-pulse 0.6s ease-in-out infinite;
+}
+
+/* 给牌飞行克隆（buildFxCard + .fx-love-fly）：粉红边框光随克隆平移（box-shadow 动画与
+ * transform 过渡互不冲突），卡面爱心由 buildLoveHeart 追加 */
+.fx-love-fly {
+  border-radius: 6px;
+  animation: fx-love-glow-pulse 0.6s ease-in-out infinite;
+}
+
+/* 牌库区边框粉红光芒：覆盖牌库 rect 的外发光框（body 级 fixed，EXTRA_Z 301）。渐现
+ * 0.25s（20ms 起），呼吸发光（LOVE_GLOW_MS = 2s），-out 由 JS 在 2s 触发渐隐 0.4s =
+ * LOVE_FADE_MS（-out 停掉呼吸动画避免与淡出打架）。 */
+.fx-love-deckglow {
+  position: fixed;
+  pointer-events: none;
+  border-radius: 8px;
+  border: 2px solid rgba(255, 95, 162, 0.9);
+  opacity: 0;
+  transition: opacity 0.25s ease-out;
+  animation: fx-love-glow-pulse 0.6s ease-in-out infinite;
+}
+.fx-love-deckglow.fx-love-deckglow-in { opacity: 1; }
+.fx-love-deckglow.fx-love-deckglow-out { opacity: 0; transition: opacity 0.4s ease-in; animation: none; }
+
+/* 落点边框 + 爱心（给牌到达 / 抽牌手牌末尾）：130×178.8 盒贴落点（与手牌卡同尺寸），
+ * 粉红边框光 + 中间爱心跳动（LOVE_AFTER_MS / LOVE_GLOW_MS = 2s 后 -out 渐隐 0.4s） */
+.fx-love-settle {
+  position: fixed;
+  pointer-events: none;
+  border-radius: 6px;
+  border: 2px solid rgba(255, 95, 162, 0.9);
+  animation: fx-love-glow-pulse 0.6s ease-in-out infinite;
+  transition: opacity 0.4s ease-in;
+}
+.fx-love-settle.fx-love-settle-out { opacity: 0; animation: none; }
+
+/* love 协议揭示的幽灵（RevealedGhost.fx='love'，love-4 Case A）：粉红边框辉光 + 中间
+ * 爱心跳动（.fx-love-heart 子元素由 render.ts 追加）——幽灵存在期间持续（幽灵过期移除
+ * 时随 DOM 消失；呼吸光与 .reveal-ghost 的 opacity 0.7 叠加为常驻光晕） */
+.fx-love-ghost {
+  border-color: #ff5fa2;
+  animation: fx-love-glow-pulse 0.6s ease-in-out infinite;
+}

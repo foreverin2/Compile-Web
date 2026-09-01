@@ -68,6 +68,8 @@ interface FxCardPayload {
   line?: number | null;
   triggerProtocol?: string;
   triggerDefId?: string;
+  /** 给牌/随机拿牌（card:given）的接收方（love-1 底/love-3；uid 对应卡此刻仍在给牌方手牌 DOM） */
+  to?: PlayerId;
 }
 
 /** 卡面资源 URL（按 defId/faceUp；反面用官方卡背） */
@@ -1251,8 +1253,8 @@ function playSpeedShiftExtra(node: HTMLElement, payload: FxCardPayload): void {
   playShift(node, payload);
 }
 
-/** card:drawn 载荷（无 uid/defId：抽牌无目标卡节点，特效按 player 定位手牌/牌库） */
-interface SpeedDrawPayload {
+/** card:drawn 载荷（无 uid/defId：抽牌无目标卡节点，特效按 player 定位手牌/牌库；speed/love 共用） */
+interface DrawPayload {
   player: PlayerId;
   count: number;
   fromOpponentDeck?: boolean;
@@ -1262,7 +1264,7 @@ interface SpeedDrawPayload {
 /** speed 抽牌附加特效（card:drawn + triggerProtocol=speed，speed-1）：卡框灰白光（牌库区 rect，
  *  抽出的卡在牌堆顶）+ 飓风从牌库区中心 → 该玩家手牌末尾 handEndPos；基础抽牌动画由 main.ts
  *  pendingDraws 统一播放（本附加层独立，不干预其调度）。 */
-function playSpeedDrawExtra(payload: SpeedDrawPayload): void {
+function playSpeedDrawExtra(payload: DrawPayload): void {
   const deck = deckPos(payload.player);
   const hand = document.querySelectorAll<HTMLElement>('.hand')[payload.player];
   if (!deck || !hand) return; // 牌库/手牌缺失 → 跳过（基础抽牌仍由 main.ts 播放）
@@ -1271,6 +1273,130 @@ function playSpeedDrawExtra(payload: SpeedDrawPayload): void {
     { x: deck.left + deck.width / 2, y: deck.top + deck.height / 2 },
     handEndPos(hand, payload.player),
   );
+}
+
+/* ===== Love 爱附加特效（FX-4，用户 #8）：粉红爱心（抽牌/给牌/揭示） =====
+ * 触发：card:drawn / card:given / card:revealed 且 triggerProtocol === 'love'
+ * （love-1 中抽对手牌堆顶/底给牌后抽 2、love-2 对手抽+刷新、love-3 随机拿牌+给牌、
+ *  love-4 揭示自己手牌、love-6 对手抽 2）。
+ * 时序常量（CSS 侧 .fx-love-* 注释标注）：
+ * - 抽牌（playLoveDrawExtra）：① 牌库区边框粉红光芒（LOVE_GLOW_MS = 2s 后渐隐消失）；
+ *   ② 抽出的卡边框粉红光芒 + 卡背爱心跳动由 main.ts playDrawAnimation 的 love 分支挂在
+ *   draw-ghost 上（飞行期间跳动，随幽灵清理）；③ 手牌末尾落点爱心在抽牌卡落地时刻出现
+ *   （起飞错开 LOVE_STAGGER_MS + 飞行 LOVE_FLIGHT_MS，与 main.ts 同节奏），闪烁 2s 后消失。
+ * - 给牌/收牌（playLoveGiveExtra）：① 所选手牌边框粉红光芒 + 卡面爱心（跳动，重渲染前
+ *   可见）；② 交换基础特效（buildFxCard + translate 平移 MOVE_MS，同 playHandPlay）——卡
+ *   带粉红光 + 爱心从源卡 rect 飞向接收方手牌末尾 handEndPos（对方给你时同款：payload.to
+ *   决定方向）；③ 到达后落点边框 + 爱心持续 LOVE_AFTER_MS = 2s 后渐隐消失。
+ * - 揭示（love-4 Case A 幽灵给对方）：落地幽灵 .fx-love-ghost 粉红边框辉光 + 中间爱心跳动，
+ *   持续时间 = 幽灵存在期间（render.ts 渲染时读 RevealedGhost.fx 挂类，移除随 DOM 消失）。 */
+
+const LOVE_GLOW_MS = 2000;      // 抽牌：牌库区粉红光芒 / 落点爱心持续时间（2s）
+const LOVE_AFTER_MS = 2000;     // 给牌：到达后落点边框+爱心持续时间（2s）
+const LOVE_CARD_W = 130;        // 落点盒尺寸（与手牌卡一致 130×178.8）
+const LOVE_CARD_H = 178.8;
+const LOVE_STAGGER_MS = 120;    // 与 main.ts draw-ghost 起飞错开间隔一致
+const LOVE_FIRST_TAKEOFF_MS = 30; // 与 main.ts 首张起飞延迟一致
+const LOVE_FLIGHT_MS = 250;     // 与 .draw-ghost transition 0.25s 飞行时长一致
+const LOVE_FADE_MS = 400;       // 粉红光/落点爱心渐隐时长（CSS 过渡 0.4s）
+
+/** 粉红爱心元素（.fx-love-heart：CSS 两圆+三角形状、快速跳动 pulse）——绝对定位居中于
+ *  父容器（.card 相对定位 / body 级 fixed 容器自身定位）。导出供 main.ts 抽牌 love 分支
+ *  给 draw-ghost 卡背挂爱心（类名单一来源）。 */
+export function buildLoveHeart(): HTMLElement {
+  const heart = document.createElement('div');
+  heart.className = 'fx-love-heart';
+  return heart;
+}
+
+/** love 抽牌附加特效（card:drawn + triggerProtocol=love——love-1/2/6 及 love 刷新，含对手抽）：
+ *  牌库区边框粉红光芒（body 级 fixed 层定位牌库 rect，2s 后渐隐）+ 手牌末尾落点爱心（抽牌卡
+ *  落地时刻出现，闪烁 2s 后消失）。抽出的卡背爱心/粉红边框由 main.ts 抽牌动画 love 分支挂
+ *  在 draw-ghost 上（本附加层独立，不干预 pendingDraws 调度）。 */
+function playLoveDrawExtra(payload: DrawPayload): void {
+  const deck = deckPos(payload.player);
+  const hand = document.querySelectorAll<HTMLElement>('.hand')[payload.player];
+  if (!deck || !hand) return; // 牌库/手牌缺失 → 跳过（基础抽牌仍由 main.ts 播放）
+  // ① 牌库区边框粉红光芒（随抽牌持续 2s 后渐隐消失）
+  const glow = document.createElement('div');
+  glow.className = 'fx-love-deckglow';
+  glow.style.left = `${deck.left}px`;
+  glow.style.top = `${deck.top}px`;
+  glow.style.width = `${deck.width}px`;
+  glow.style.height = `${deck.height}px`;
+  glow.style.zIndex = String(EXTRA_Z);
+  document.body.appendChild(glow);
+  window.setTimeout(() => glow.classList.add('fx-love-deckglow-in'), 20);
+  window.setTimeout(() => glow.classList.add('fx-love-deckglow-out'), LOVE_GLOW_MS);
+  window.setTimeout(() => glow.remove(), LOVE_GLOW_MS + LOVE_FADE_MS + 60);
+  // ③ 手牌末尾落点爱心：抽牌卡落地时刻（main.ts 首张 30ms 起飞 + 逐张 120ms 错开 + 250ms
+  // 飞行）出现，闪烁 2s 后渐隐消失
+  const target = handEndPos(hand, payload.player);
+  window.setTimeout(() => {
+    const settle = document.createElement('div');
+    settle.className = 'fx-love-settle';
+    settle.style.left = `${target.x - LOVE_CARD_W / 2}px`;
+    settle.style.top = `${target.y - LOVE_CARD_H / 2}px`;
+    settle.style.width = `${LOVE_CARD_W}px`;
+    settle.style.height = `${LOVE_CARD_H}px`;
+    settle.style.zIndex = String(EXTRA_Z);
+    settle.appendChild(buildLoveHeart());
+    document.body.appendChild(settle);
+    window.setTimeout(() => settle.classList.add('fx-love-settle-out'), LOVE_GLOW_MS);
+    window.setTimeout(() => settle.remove(), LOVE_GLOW_MS + LOVE_FADE_MS + 60);
+  }, LOVE_FIRST_TAKEOFF_MS + Math.max(0, payload.count - 1) * LOVE_STAGGER_MS + LOVE_FLIGHT_MS);
+}
+
+/** love 给牌/收牌附加特效（card:given + triggerProtocol=love——love-1 底给牌、love-3 给牌与
+ *  随机拿牌；payload.to = 接收方，uid 对应卡此刻仍在【给牌方】手牌 DOM 中——重渲染前）：
+ *  ① 所选手牌边框粉红光芒 + 卡面爱心跳动（源卡节点）；
+ *  ② 交换基础特效：buildFxCard 克隆卡带粉红光 + 爱心，从源卡 rect 平移（MOVE_MS，同
+ *  playHandPlay）飞向接收方手牌末尾 handEndPos——对方给你时同款（payload.to 决定方向）；
+ *  ③ 到达后落点边框 + 爱心持续 LOVE_AFTER_MS(2s) 后渐隐消失；源卡光芒/爱心随重渲染消失
+ *  （未重建时 2s 后定时器兜底移除）。全部浮层 pointer-events:none、JS 定时自清理。 */
+function playLoveGiveExtra(node: HTMLElement, payload: FxCardPayload): void {
+  const rect = node.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0 || payload.to === undefined) return;
+  // ① 所选手牌：边框粉红光芒 + 卡面爱心（跳动；重渲染会重建 DOM 移除，-cardglow 类不动 DOM 结构）
+  node.classList.add('fx-love-cardglow');
+  node.appendChild(buildLoveHeart());
+  // ② 交换基础特效：克隆卡（EXTRA_Z）带粉红光 + 爱心飞向接收方手牌末尾
+  const clone = buildFxCard(node, payload, EXTRA_Z);
+  if (clone) {
+    clone.classList.add('fx-love-fly');
+    clone.appendChild(buildLoveHeart());
+    const hand = document.querySelectorAll<HTMLElement>('.hand')[payload.to];
+    const target = handEndPos(hand, payload.to);
+    const dx = target.x - (rect.left + rect.width / 2);
+    const dy = target.y - (rect.top + rect.height / 2);
+    clone.style.transition = `transform ${MOVE_MS}ms cubic-bezier(0.2, 0.7, 0.3, 1), opacity ${MOVE_MS}ms ease`;
+    requestAnimationFrame(() => {
+      // 组合 --fx-rot（手牌无 rot 类 → 恒 0deg，与 playHandPlay 一致）
+      clone.style.transform = `translate(${dx}px, ${dy}px) rotate(var(--fx-rot, 0deg)) scale(0.92)`;
+      clone.style.opacity = '0.6';
+    });
+    // ③ 到达后：落点边框 + 爱心（2s 后渐隐消失）
+    window.setTimeout(() => {
+      const settle = document.createElement('div');
+      settle.className = 'fx-love-settle';
+      settle.style.left = `${target.x - LOVE_CARD_W / 2}px`;
+      settle.style.top = `${target.y - LOVE_CARD_H / 2}px`;
+      settle.style.width = `${LOVE_CARD_W}px`;
+      settle.style.height = `${LOVE_CARD_H}px`;
+      settle.style.zIndex = String(EXTRA_Z);
+      settle.appendChild(buildLoveHeart());
+      document.body.appendChild(settle);
+      window.setTimeout(() => settle.classList.add('fx-love-settle-out'), LOVE_AFTER_MS);
+      window.setTimeout(() => settle.remove(), LOVE_AFTER_MS + LOVE_FADE_MS + 60);
+    }, MOVE_MS);
+    window.setTimeout(() => clone.remove(), MOVE_MS + 80);
+  }
+  // 源卡光芒/爱心：重渲染会重建 DOM 移除源卡（光芒随之消失）；未重建时 2s 后兜底清理
+  const cleanSource = (): void => {
+    node.classList.remove('fx-love-cardglow');
+    node.querySelector('.fx-love-heart')?.remove();
+  };
+  window.setTimeout(cleanSource, LOVE_AFTER_MS + LOVE_FADE_MS + 60);
 }
 
 /* ===== 揭示飞行（reveal fly）：幽灵卡从被揭示方手牌末尾依次飞入 shownTo 手牌末尾 =====
@@ -1420,10 +1546,12 @@ export function initEffects(): () => void {
   return gameBus.subscribe((e: GameEvent) => {
     // card:drawn 无 uid/defId（payload = { player, count, fromOpponentDeck?, triggerProtocol }），
     // 需在 uid/defId 守卫之前处理：speed 抽牌附加特效（卡框灰白光 + 飓风从牌库区到手牌末尾，
-    // 独立于 main.ts pendingDraws 的基础抽牌动画）。其余协议抽牌（love 等）由各自任务实现。
+    // 独立于 main.ts pendingDraws 的基础抽牌动画）与 love 抽牌附加特效（牌库区粉红光芒 +
+    // 手牌末尾落点爱心；抽出的卡背爱心由 main.ts playDrawAnimation love 分支挂 draw-ghost）。
     if (e.type === 'card:drawn') {
       const p = e.payload as { player: PlayerId; count: number; triggerProtocol?: string } | undefined;
       if (p && p.triggerProtocol === 'speed') playSpeedDrawExtra(p);
+      else if (p && p.triggerProtocol === 'love') playLoveDrawExtra(p);
       return;
     }
     const payload = e.payload as FxCardPayload | undefined;
@@ -1485,6 +1613,12 @@ export function initEffects(): () => void {
       case 'card:hand-played':
         // playFromHand：从手牌中该卡的 rect 起飞飞入目标线堆叠末尾（区别于牌堆顶打出）
         playHandPlay(payload);
+        break;
+      case 'card:given':
+        // love 协议给牌/收牌（love-1 底给牌、love-3 给牌与随机拿牌——give/takeRandom op 均发
+        // card:given）：所选手牌粉红边框光 + 卡面爱心 → 交换基础特效（克隆卡飞向对方手牌末尾）
+        // → 落点爱心 2s。其余协议无给牌 → 落空无事
+        if (node && payload.triggerProtocol === 'love') playLoveGiveExtra(node, payload);
         break;
       default:
         return;

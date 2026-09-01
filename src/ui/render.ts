@@ -649,6 +649,12 @@ function renderHand(
     const gNode = renderCardFace({ defId: ghost.defId, faceUp: true, uid: `ghost-${ghost.id}` });
     gNode.classList.add('reveal-ghost');
     if (ghost.lightFx) gNode.classList.add('ghost-light');
+    // FX-4：love 协议揭示（love-4 Case A）的幽灵 → 粉红边框辉光 + 中间爱心跳动
+    // （.fx-love-ghost 边框光 + .fx-love-heart 子元素；幽灵存在期间持续，移除随 DOM 消失）
+    if (ghost.fx === 'love') {
+      gNode.classList.add('fx-love-ghost');
+      gNode.appendChild(el('div', 'fx-love-heart'));
+    }
     // 双击放大（直接 dblclick，不经过 bindClickOrDouble 的单击延迟——幽灵无单击动作）
     gNode.addEventListener('dblclick', () => openZoom(ghost.defId, true, false, false));
     hand.appendChild(gNode);
@@ -1805,7 +1811,7 @@ export function resetUiState(): void {
     '.life-flip-fx, .life-flip-glow, .water-return-ring, .water-return-glow, .water-return-settle, ' +
       '.water-return-trail, .flip-overlay-fx, .draw-ghost, .reveal-fly-ghost, ' +
       '.fx-gravity-deckglow, .fx-gravity-hole, .fx-gravity-beam, .fx-gravity-cardglow, .fx-speed-glow, ' +
-      '.fx-psychic, .fx-plague'
+      '.fx-psychic, .fx-plague, .fx-love-deckglow, .fx-love-fly, .fx-love-settle, .fx-love-heart'
   )) {
     fx.remove();
   }

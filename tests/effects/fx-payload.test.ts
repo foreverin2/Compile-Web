@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { gameBus } from '../../src/core/events/bus';
 import { executeAction, getLegalActions } from '../../src/core/game';
-import { makeCard, draftFireP1, draftLightP1, draftWaterP1, draftLifeP1, advanceToStep, resolveAllChoices, pickFirst } from '../helpers';
+import { collectTriggers, resolveTrigger } from '../../src/core/effects/triggers';
+import { runStack } from '../../src/core/effects/resolve';
+import { makeCard, draftFireP1, draftLightP1, draftWaterP1, draftLifeP1, draftLoveP1, advanceToStep, resolveAllChoices, pickFirst } from '../helpers';
 import type { Line } from '../../src/core/models/types';
 
 /** 捕获弃牌/删去事件（含触发卡协议），返回快照 */
@@ -183,6 +185,78 @@ describe('FX trigger protocol payload', () => {
     for (const p of seen) {
       expect(p.triggerProtocol).toBe('life'); // 触发卡协议（life-1）
       expect(p.triggerDefId).toBe('life-1');
+    }
+  });
+
+  it('love-1 end give carries triggerProtocol=love + triggerDefId + to (heart FX hook)', () => {
+    const s = draftLoveP1();
+    advanceToStep(s, 0, 'end');
+    const loveLine: Line = s.players[0].protocols.findIndex((p) => p.defId === 'love') as Line;
+    const lv1 = makeCard('love-1', 0, 'field', true, loveLine, 0);
+    const giveCard = makeCard('water-2', 0, 'hand');
+    s.players[0].stacks[loveLine] = [lv1];
+    s.players[0].hand = [giveCard];
+    const seen: { to?: number; triggerProtocol?: string; triggerDefId?: string }[] = [];
+    const off = gameBus.subscribe((e) => {
+      if (e.type !== 'card:given') return;
+      seen.push(e.payload as { to?: number; triggerProtocol?: string; triggerDefId?: string });
+    });
+    const t = collectTriggers(s, 'end').find((x) => x.cardUid === lv1.uid)!;
+    resolveTrigger(s, t);
+    runStack(s);
+    const p = s.pendingEffects[s.pendingEffects.length - 1];
+    executeAction(s, 0, 'effect-choice', { promptId: p.id, choice: [giveCard.uid] });
+    off();
+    expect(seen).toHaveLength(1);
+    expect(seen[0].to).toBe(1); // 接收方 = 对手
+    expect(seen[0].triggerProtocol).toBe('love'); // 触发卡协议（love-1 底）
+    expect(seen[0].triggerDefId).toBe('love-1');
+  });
+
+  it('love-3 takeRandom carries triggerProtocol=love + triggerDefId + to (heart FX hook)', () => {
+    const s = draftLoveP1();
+    advanceToStep(s, 0, 'action');
+    const loveLine: Line = s.players[0].protocols.findIndex((p) => p.defId === 'love') as Line;
+    s.players[1].hand = [makeCard('death-0', 1, 'hand'), makeCard('death-1', 1, 'hand')];
+    s.players[0].hand = [makeCard('love-3', 0, 'hand')];
+    const card = s.players[0].hand[0];
+    const seen: { to?: number; triggerProtocol?: string; triggerDefId?: string }[] = [];
+    const off = gameBus.subscribe((e) => {
+      if (e.type !== 'card:given') return;
+      seen.push(e.payload as { to?: number; triggerProtocol?: string; triggerDefId?: string });
+    });
+    executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: loveLine });
+    off(); // takeRandom 即发 card:given（随后的 give 选择仍挂起，不影响断言）
+    expect(seen).toHaveLength(1);
+    expect(seen[0].to).toBe(0); // 接收方 = 效果属主（P1）
+    expect(seen[0].triggerProtocol).toBe('love');
+    expect(seen[0].triggerDefId).toBe('love-3');
+  });
+
+  it('love-4 reveal sets ghost fx=love + card:revealed triggerProtocol=love (heart ghost)', () => {
+    const s = draftLoveP1();
+    advanceToStep(s, 0, 'action');
+    const loveLine: Line = s.players[0].protocols.findIndex((p) => p.defId === 'love') as Line;
+    const secret = makeCard('fire-1', 0, 'hand');
+    s.players[0].hand = [makeCard('love-4', 0, 'hand'), secret];
+    const target = makeCard('water-0', 1, 'field', true, 1, 0); // 翻转目标
+    s.players[1].stacks[1] = [target];
+    const card = s.players[0].hand[0];
+    const seen: { triggerProtocol?: string; triggerDefId?: string }[] = [];
+    const off = gameBus.subscribe((e) => {
+      if (e.type !== 'card:revealed') return;
+      seen.push(e.payload as { triggerProtocol?: string; triggerDefId?: string });
+    });
+    executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: loveLine });
+    const p = s.pendingEffects[s.pendingEffects.length - 1];
+    executeAction(s, 0, 'effect-choice', { promptId: p.id, choice: [secret.uid] }); // 揭示自己手牌
+    off();
+    expect(s.revealedGhosts).toHaveLength(1);
+    expect(s.revealedGhosts[0].fx).toBe('love'); // love 协议揭示 → 粉红爱心幽灵（FX-4）
+    expect(s.revealedGhosts[0].lightFx).toBeFalsy(); // 非 light 协议 → 无光之辉光
+    for (const ev of seen) {
+      expect(ev.triggerProtocol).toBe('love');
+      expect(ev.triggerDefId).toBe('love-4');
     }
   });
 });

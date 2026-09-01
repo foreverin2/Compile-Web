@@ -4,7 +4,7 @@ import { executeAction } from './core/game';
 import { getCompilableLines } from './core/rules/compile';
 import { collectTriggers } from './core/effects/triggers';
 import { renderApp, renderDraft, resetUiState, syncCompiledFxLayers, syncSmokeOverlays, syncScanOverlays, syncPsychicParticles, syncPlagueMists, type UiCallbacks } from './ui/render';
-import { initEffects, initCompileFx, initRearrangeFx, playRevealFly } from './ui/effects';
+import { initEffects, initCompileFx, initRearrangeFx, playRevealFly, buildLoveHeart } from './ui/effects';
 import { initDiag } from './ui/diag';
 import { initDevMode } from './ui/devmode';
 import { gameBus } from './core/events/bus';
@@ -22,8 +22,10 @@ let drawAnimBusy = false;
 const GHOST_W = 130;
 const GHOST_H = 178.8;
 const HAND_CARD_SPACING = 102; // 卡宽 130 − 重叠 28
-/** 效果触发的抽牌累计（card:drawn 事件 → 本次行动结算完成后统一播抽牌特效） */
-let pendingDraws: { player: PlayerId; count: number }[] = [];
+/** 效果触发的抽牌累计（card:drawn 事件 → 本次行动结算完成后统一播抽牌特效）。
+ *  love 标志：该次抽牌是否由 love 协议触发（love-1/2/6 及 love 刷新——含对手抽），
+ *  播放抽牌飞入动画时给 draw-ghost 卡背挂粉红爱心 + 边框粉红光（FX-4） */
+let pendingDraws: { player: PlayerId; count: number; love: boolean }[] = [];
 /** 效果触发的揭示累计（card:revealed 事件 → 本次行动结算完成后按序播揭示飞行：
  *  幽灵从被揭示方手牌末尾逐张飞入接收方手牌末尾，全部落地后再重渲染） */
 let pendingReveals: { owner: PlayerId; shownTo: PlayerId; defId: string; triggerProtocol: string }[] = [];
@@ -117,7 +119,8 @@ const cb: UiCallbacks = {
     };
     if (drawAnimCount > 0) {
       drawAnimBusy = true;
-      playDrawAnimation(player, drawAnimCount, () => {
+      // 刷新按钮抽牌（非效果触发）：love 协议不参与（refresh 动作不产生 card:drawn 事件）→ love=false
+      playDrawAnimation(player, drawAnimCount, false, () => {
         drawAnimBusy = false;
         if (epoch !== resetEpoch) return; // 重置发生：放弃后续渲染（幽灵已在动画内清理）
         afterFx();
@@ -137,21 +140,26 @@ const cb: UiCallbacks = {
 
 /**
  * 效果触发的抽牌序列：按玩家合并计数后逐人播放抽牌飞入动画（同一玩家多次抽牌合并为一次，
- * 幽灵卡依次落到手牌末尾），全部播完调用 done()。
+ * 幽灵卡依次落到手牌末尾；任一抽牌由 love 触发 → 合并结果带 love 标志 → draw-ghost 挂爱心），
+ * 全部播完调用 done()。
  */
-function playDrawSequence(draws: { player: PlayerId; count: number }[], done: () => void): void {
-  const merged: { player: PlayerId; count: number }[] = [];
+function playDrawSequence(draws: { player: PlayerId; count: number; love: boolean }[], done: () => void): void {
+  const merged: { player: PlayerId; count: number; love: boolean }[] = [];
   for (const d of draws) {
     const found = merged.find((m) => m.player === d.player);
-    if (found) found.count += d.count;
-    else merged.push({ ...d });
+    if (found) {
+      found.count += d.count;
+      found.love = found.love || d.love;
+    } else {
+      merged.push({ ...d });
+    }
   }
   const first = merged[0];
   if (!first) {
     done();
     return;
   }
-  playDrawAnimation(first.player, first.count, () => {
+  playDrawAnimation(first.player, first.count, first.love, () => {
     const rest = merged.slice(1);
     if (rest.length === 0) done();
     else playDrawSequence(rest, done);
@@ -186,9 +194,12 @@ function playRevealFlySequence(
  * - 起点 = 牌库区 rect 外侧（牌库元素缺失时回退到手牌区外侧，即原行为）
  * - 终点 = 当前手牌末尾（现有末卡之后逐张按扇形步进延伸），而非固定点
  * - 幽灵卡尺寸与正常手牌卡一致（130×178.8，见 .draw-ghost）
+ * - love（FX-4）：抽出的卡边框粉红光芒（.fx-love-cardglow）+ 卡背粉红爱心跳动
+ *   （.fx-love-heart 子元素，快速 pulse）——随幽灵飞行，落地后随幽灵清理；
+ *   牌库区粉红光芒 / 落点爱心由 effects 层 playLoveDrawExtra 独立播放（持续 2s）
  * 全部落地后移除幽灵卡并调用 done()（由调用方触发重渲染）。
  */
-function playDrawAnimation(player: PlayerId, count: number, done: () => void): void {
+function playDrawAnimation(player: PlayerId, count: number, love: boolean, done: () => void): void {
   const hands = document.querySelectorAll<HTMLElement>('.hand');
   const hand = hands[player];
   if (!hand) {
@@ -226,6 +237,12 @@ function playDrawAnimation(player: PlayerId, count: number, done: () => void): v
     ghost.style.left = `${startX}px`;
     // 幽灵卡 top 用常量（GHOST_H 与 .draw-ghost 高度一致）：元素未 appendChild 前 offsetHeight 恒为 0
     ghost.style.top = `${cy - GHOST_H / 2}px`;
+    // FX-4 love 抽牌：卡背粉红爱心（跳动）+ 边框粉红光芒（.fx-love-heart 子元素居中于卡背，
+    // 与 .draw-ghost 自身的 transform 平移过渡不冲突——动画在子元素上）
+    if (love) {
+      ghost.classList.add('fx-love-cardglow');
+      ghost.appendChild(buildLoveHeart());
+    }
     document.body.appendChild(ghost);
     ghosts.push(ghost);
     // 以幽灵卡中心对准落点
@@ -362,11 +379,12 @@ initDiag(() => state);
 // 隐藏开发者模式：Ctrl+Shift+P 密码进入；get <牌名> 把卡加入当前玩家手牌
 // （返回的卸载函数当前不使用，保持监听常驻）
 initDevMode({ getState: () => state, render: () => renderApp(root, state, cb) });
-// 效果触发的抽牌：累计 card:drawn 事件，行动结算后统一播新抽牌特效
+// 效果触发的抽牌：累计 card:drawn 事件（love 协议触发 → love 标志 → 抽牌动画挂爱心），
+// 行动结算后统一播新抽牌特效
 gameBus.subscribe((e) => {
   if (e.type !== 'card:drawn') return;
-  const p = e.payload as { player: PlayerId; count: number };
-  pendingDraws.push({ player: p.player, count: p.count });
+  const p = e.payload as { player: PlayerId; count: number; triggerProtocol?: string };
+  pendingDraws.push({ player: p.player, count: p.count, love: p.triggerProtocol === 'love' });
 });
 // 效果触发的揭示：累计 card:revealed 事件，行动结算后按序播揭示飞行
 // （source = 被揭示卡持有者手牌末尾，shownTo = 接收方手牌末尾；triggerProtocol 决定
