@@ -35,6 +35,8 @@ export function createGame(): GameState {
     resolvedTriggerUids: [],
     pendingStepAdvance: false,
     revealedGhosts: [],
+    compileBlocked: null,
+    pendingCompile: null,
   };
 }
 

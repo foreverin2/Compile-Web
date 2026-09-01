@@ -34,6 +34,8 @@ function makeState(handSize: number, deckSize: number, trashSize: number): GameS
     resolvedTriggerUids: [],
     pendingStepAdvance: false,
     revealedGhosts: [],
+    compileBlocked: null,
+    pendingCompile: null,
   };
 }
 

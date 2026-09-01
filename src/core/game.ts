@@ -4,7 +4,7 @@ import { clearCache } from './engine/deck';
 import { playCard, refreshHand, isPlayableFaceUp } from './actions/base';
 import { executeCompile, getCompilableLines } from './rules/compile';
 import { checkControl, resetControlIfHeld } from './rules/control';
-import { collectTriggers, resolveTrigger } from './effects/triggers';
+import { collectTriggers, fireReactive, resolveTrigger } from './effects/triggers';
 import { answerEffect, runStack } from './effects/resolve';
 import { listCandidates, nextEffectId } from './effects/context';
 
@@ -106,15 +106,19 @@ export function executeAction(s: GameState, player: PlayerId, kind: ActionKind, 
     case 'refresh': {
       resetControlIfHeld(s, player);
       refreshHand(s, player);
-      advanceStep(s);
+      // refreshHand 内 drawCards 可能触发 after-draw 即时连锁（spirit-3 等）→ 栈非空时
+      // 先结算（可能挂起选择）再推进；与 play 分支同一模式
+      if (s.pendingEffects.length > 0) { s.pendingStepAdvance = true; runStack(s); }
+      else advanceStep(s);
       break;
     }
     case 'compile': {
       // 需收窄（'line' in args 排除 effect-choice / resolve-trigger 的 args 形状）
       if (!args || !('line' in args)) throw new Error('compile requires args.line');
       resetControlIfHeld(s, player);
-      executeCompile(s, player, args.line);
-      advanceStep(s);
+      executeCompile(s, player, args.line); // 内部可能因 speed-2「编译前平移」触发挂起选线
+      if (s.pendingEffects.length > 0) s.pendingStepAdvance = true; // 应答后 runStack 消费（含 pendingCompile）
+      else advanceStep(s);
       break;
     }
     case 'effect-choice': {
@@ -162,7 +166,8 @@ export function executeAction(s: GameState, player: PlayerId, kind: ActionKind, 
         }
       }
       if (s.step === 'check-cache') {
-        clearCache(s, player);
+        // 防御路径（正常手牌>5 走 clear-cache 自选弃牌，advance 被拦截）；真弃了牌才触发
+        if (clearCache(s, player).length > 0) fireReactive(s, 'after-clear-cache', player);
       }
       if (s.step === 'check-control') {
         checkControl(s);
@@ -177,7 +182,7 @@ export function getWinner(s: GameState): PlayerId | null {
   return s.winner;
 }
 
-/** 系统效果生成器：清理缓存——玩家自选弃牌，直至手牌降到 5 张 */
+/** 系统效果生成器：清理缓存——玩家自选弃牌，直至手牌降到 5 张；弃完触发 after-clear-cache（speed-1） */
 function* cacheClearGen(s: GameState, player: PlayerId): Generator<EffectStep, void, StepResult> {
   const excess = s.players[player].hand.length - 5;
   const candidates = listCandidates(s, { zone: 'hand', owner: player });
@@ -190,6 +195,8 @@ function* cacheClearGen(s: GameState, player: PlayerId): Generator<EffectStep, v
     candidates,
   };
   for (const uid of ans.selected) yield { op: 'discard', uid };
+  // 即时连锁：真弃了牌才触发（speed-1 顶「清理缓存后：抽1张牌」）
+  if (ans.selected.length > 0) fireReactive(s, 'after-clear-cache', player);
 }
 
 /** 进入缓存清理：手牌 > 5 时推入系统效果（挂起选择，无源卡 → system 标志跳过 sourceValid） */

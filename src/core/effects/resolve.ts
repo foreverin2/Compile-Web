@@ -3,8 +3,9 @@ import { drawCards, discardFromHand, shuffle } from '../engine/deck';
 import { advanceStep } from '../engine/turn';
 import { gameBus } from '../events/bus';
 import { createCtx, emitCardEvent, findCard, isUncovered, nextEffectId } from './context';
-import { collectTriggerFor, resolveTrigger } from './triggers';
+import { collectTriggerFor, fireReactive, resolveTrigger } from './triggers';
 import { EFFECTS } from './registry';
+import { executeCompileBody } from '../rules/compile-body';
 import './cards/fire';
 import './cards/light';
 import './cards/darkness';
@@ -15,11 +16,14 @@ function topEffect(s: GameState): PendingEffect | undefined {
   return s.pendingEffects[s.pendingEffects.length - 1];
 }
 
-/** 效果源卡是否仍有效：在场、正面、未被覆盖；否则剩余效果终止（系统效果无源卡，恒有效） */
+/** 效果源卡是否仍有效：在场、正面、未被覆盖；否则剩余效果终止（系统效果无源卡，恒有效）。
+ *  topCommand（fireReactive 推入的 after-* 顶命令触发）：跳过未覆盖检查——顶命令被盖仍生效 */
 function sourceValid(s: GameState, pe: PendingEffect): boolean {
   if (pe.system) return true;
   const card = findCard(s, pe.sourceUid);
-  return card !== undefined && card.zone === 'field' && card.faceUp && isUncovered(s, card);
+  if (!card || card.zone !== 'field' || !card.faceUp) return false;
+  if (pe.topCommand) return true;
+  return isUncovered(s, card);
 }
 
 /** 打出/翻正/揭开触发中指令：入栈（LIFO 由 runStack 统一结算） */
@@ -82,7 +86,18 @@ export function runStack(s: GameState): void {
       }
       const result: StepResult = pe.lastAnswer ?? {};
       const r = pe.gen.next(result);
-      if (r.done) { s.pendingEffects.pop(); continue; }
+      if (r.done) {
+        // 按 id 移除当前效果而非 pop 栈顶：生成器内部可能 push 了新的效果
+        // （如 cacheClearGen 末尾 fireReactive 的 after-clear-cache 触发），此时栈顶 ≠ 当前效果
+        const top = s.pendingEffects[s.pendingEffects.length - 1];
+        if (top === pe) {
+          s.pendingEffects.pop();
+        } else {
+          const idx = s.pendingEffects.findIndex((e) => e.id === pe.id);
+          if (idx !== -1) s.pendingEffects.splice(idx, 1);
+        }
+        continue;
+      }
       const step = r.value;
       if ('kind' in step) {
         // fizzle 规则：选择请求无合法目标时不挂起 —— 记录日志并以空答案恢复生成器，
@@ -108,6 +123,13 @@ export function runStack(s: GameState): void {
     }
     if (s.pendingPlay.length > 0) { completePlay(s); continue; }
     if (s.pendingShift.length > 0) { completeShift(s); continue; }
+    // speed-2「通过编译删除此牌前」触发完成后执行编译本体（先于步骤推进；编译删除不触发文本）
+    if (s.pendingCompile) {
+      const pc = s.pendingCompile;
+      s.pendingCompile = null;
+      executeCompileBody(s, pc.player, pc.line);
+      continue;
+    }
     if (s.pendingStepAdvance) {
       s.pendingStepAdvance = false;
       advanceStep(s);
@@ -123,23 +145,55 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
     case 'discard': {
       const card = findCard(s, op.uid);
       if (!card || card.zone !== 'hand') throw new Error(`cannot discard ${op.uid}: not in hand`);
-      discardFromHand(s, pe.player, op.uid);
+      // 按被弃卡 owner 弃（psychic「对手弃牌」需弃对手手牌；普通弃牌 owner=效果属主，行为不变）
+      discardFromHand(s, card.owner, op.uid);
       // triggerProtocol/triggerDefId：触发这张弃牌的卡（效果源），FX 层据此叠加协议专属额外特效
       emitCardEvent(s, 'card:discarded', card, {
         triggerDefId: pe.sourceDefId,
         triggerProtocol: pe.sourceDefId.split('-')[0],
       });
+      // 即时连锁：弃牌者【对手】场上注册了 after-discard 的正面卡触发（plague-1「对手弃牌后：你抽1张」；
+      // 含系统缓存弃牌——用户拍板）
+      fireReactive(s, 'after-discard', card.owner);
       break;
     }
     case 'draw': {
-      drawCards(s, pe.player, op.count);
-      gameBus.emit({ type: 'card:drawn', state: s, payload: { player: pe.player, count: op.count } });
+      const target = op.player ?? pe.player;
+      if (op.fromOpponentDeck) {
+        // love-1「抽对手牌堆顶的牌」：对手牌库空 → 洗对手弃牌堆重组再抽（用户拍板，与 drawCards 一致）；
+        // 两者皆空才抛错（调用方守卫，此处兜底防静默吞牌）
+        const opp: PlayerId = target === 0 ? 1 : 0;
+        const os = s.players[opp];
+        if (os.deck.length === 0 && os.trash.length > 0) {
+          os.deck = shuffle(os.trash);
+          os.trash = [];
+          for (const c of os.deck) c.faceUp = false;
+        }
+        const card = os.deck.pop();
+        if (!card) throw new Error('opponent deck is empty');
+        card.owner = target; // 所有权变更到抽牌者
+        card.zone = 'hand';
+        card.secret = false; // 手牌 = 已知信息：进手牌即解禁
+        card.faceUp = true;
+        card.line = null;
+        card.pos = null;
+        s.players[target].hand.push(card);
+        gameBus.emit({ type: 'card:drawn', state: s, payload: { player: target, count: 1, fromOpponentDeck: true } });
+        fireReactive(s, 'after-draw', target);
+        break;
+      }
+      drawCards(s, target, op.count); // drawCards 内部已 fireReactive after-draw
+      gameBus.emit({ type: 'card:drawn', state: s, payload: { player: target, count: op.count } });
       break;
     }
     case 'flip': {
       const card = findCard(s, op.uid);
       if (!card || card.zone !== 'field') throw new Error(`cannot flip ${op.uid}: not on field`);
       if (!op.allowCovered && !isUncovered(s, card)) throw new Error(`cannot flip ${op.uid}: covered card`);
+      // before-flip 前置触发（metal-6 顶「被盖住或翻转前：先删除这张牌」）：
+      // 触发（删除自己）后 flip 不再执行——卡已被移除，翻转无从谈起
+      const bf = collectTriggerFor(s, card, 'before-flip');
+      if (bf) { resolveTrigger(s, bf); break; }
       card.faceUp = !card.faceUp;
       // 翻开即解禁：翻正为正面时清除牌堆来源的 secret 标记（正面 = 公开信息）。
       // 翻回反面不清 secret（只是重新隐藏，信息仍非公开）。
@@ -174,6 +228,9 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
         triggerDefId: pe.sourceDefId,
         triggerProtocol: pe.sourceDefId.split('-')[0],
       });
+      // 即时连锁：被删卡【持有者】场上注册了 after-delete 的正面卡触发（hate-3「你的牌被删除后：抽1张」；
+      // 编译删除不经此路径 → 不触发——用户拍板「不含编译删除」）
+      fireReactive(s, 'after-delete', owner);
       if (wasTop) revealAfterRemoval(s, owner, line); // 仅当移除的是顶卡时新顶卡才被"揭开"
       break;
     }
@@ -231,7 +288,9 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       break;
     }
     case 'playTopDeck': {
-      const p = s.players[pe.player];
+      // player 缺省 = 效果属主（water-1/life-0/life-3）；gravity-6 指定 player=对手（对手牌库打出）
+      const target = op.player ?? pe.player;
+      const p = s.players[target];
       // R11.4（与 drawCards 一致）：牌库空且弃牌堆有牌时，洗弃牌堆重组为牌库
       // （回牌库卡必须翻回反面 = 秘密信息区）；两者皆空才抛错（生成器已按
       // deckTopAvailable 守卫，此处兜底防静默吞牌）
@@ -249,7 +308,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       card.secret = !op.faceUp;
       card.line = op.line;
       card.pos = null;
-      s.pendingPlay.push({ card, beforeCoveredDone: false });
+      s.pendingPlay.push({ card, beforeCoveredDone: false, belowUid: op.belowUid });
       emitCardEvent(s, 'card:deck-played', card, { line: op.line });
       break;
     }
@@ -271,16 +330,43 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       break;
     }
     case 'rearrangeProtocols': {
-      // 重排协议：交换效果玩家两个协议位（defId 与 compiled 状态随数组元素整体移动；
+      // 重排协议：交换指定玩家两个协议位（defId 与 compiled 状态随数组元素整体移动；
       // 线堆叠/卡牌留在原位 —— 与参考实现"协议顺序变更、场上卡不动"语义一致）
+      // player 缺省 = 效果属主（water-2/spirit-4）；psychic-2 指定 player=对手
       if (op.a === op.b) throw new Error('cannot swap a protocol position with itself');
-      const protos = s.players[pe.player].protocols;
+      const target = op.player ?? pe.player;
+      const protos = s.players[target].protocols;
       const tmp = protos[op.a];
       protos[op.a] = protos[op.b];
       protos[op.b] = tmp;
-      s.log.push(`P${pe.player + 1} 重排协议：交换位置 ${op.a + 1} 与 ${op.b + 1}`);
+      s.log.push(`P${target + 1} 重排协议：交换位置 ${op.a + 1} 与 ${op.b + 1}`);
       // FX hook：未来的协议交换动画订阅 protocols:rearranged（含玩家与交换位置）
-      gameBus.emit({ type: 'protocols:rearranged', state: s, payload: { player: pe.player, a: op.a, b: op.b } });
+      gameBus.emit({ type: 'protocols:rearranged', state: s, payload: { player: target, a: op.a, b: op.b } });
+      break;
+    }
+    case 'give': {
+      // 手牌移交：uid 卡从持有者手牌移给 to 玩家（owner 更新；love-1 底/love-3 给牌）
+      const card = findCard(s, op.uid);
+      if (!card || card.zone !== 'hand') throw new Error(`cannot give ${op.uid}: not in hand`);
+      const from = card.owner;
+      const hand = s.players[from].hand;
+      const idx = hand.findIndex((c) => c.uid === op.uid);
+      if (idx === -1) throw new Error(`cannot give ${op.uid}: not in hand`);
+      hand.splice(idx, 1);
+      card.owner = op.to;
+      s.players[op.to].hand.push(card);
+      emitCardEvent(s, 'card:given', card, { to: op.to });
+      break;
+    }
+    case 'takeRandom': {
+      // 随机取牌：从 from 玩家手牌随机取 1 张给效果属主（owner 更新；love-3 随机拿牌）
+      const hand = s.players[op.from].hand;
+      if (hand.length === 0) throw new Error('no cards to take'); // 调用方守卫（对手无手牌 → 不触发）
+      const idx = Math.floor(Math.random() * hand.length);
+      const [card] = hand.splice(idx, 1);
+      card.owner = pe.player;
+      s.players[pe.player].hand.push(card);
+      emitCardEvent(s, 'card:given', card, { to: pe.player });
       break;
     }
     case 'reveal': {
@@ -318,7 +404,9 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
   }
 }
 
-/** 落牌（目标顶卡"被盖住前"先结算一次，然后落地 + 中指令；队列 FIFO，每次处理队首） */
+/** 落牌（目标顶卡"被盖住前"先结算一次，然后落地 + 中指令；队列 FIFO，每次处理队首）
+ *  belowUid（gravity-0）：落地时插入源卡下方——源卡保持原位未被覆盖，新卡垫在其下；
+ *  源卡已不在（被删/被移）则回退落顶 */
 function completePlay(s: GameState): void {
   const ps = s.pendingPlay[0];
   if (!ps) return;
@@ -331,8 +419,19 @@ function completePlay(s: GameState): void {
     if (t) { ps.beforeCoveredDone = true; resolveTrigger(s, t); return; }
   }
   card.zone = 'field';
-  card.pos = stack.length;
-  stack.push(card);
+  if (ps.belowUid !== undefined) {
+    const idx = stack.findIndex((c) => c.uid === ps.belowUid);
+    if (idx !== -1) {
+      stack.splice(idx, 0, card); // 插到源卡下方（该位置 = 源卡之下、其下卡之上）
+      for (let i = 0; i < stack.length; i++) stack[i].pos = i; // 重索引整堆 pos
+    } else {
+      stack.push(card);
+      card.pos = stack.length - 1; // 源卡已不在 → 回退落顶
+    }
+  } else {
+    stack.push(card);
+    card.pos = stack.length - 1;
+  }
   s.pendingPlay.shift();
   emitCardEvent(s, 'card:played', card);
   if (card.faceUp) pushMiddle(s, card.owner, card);

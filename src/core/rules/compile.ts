@@ -1,6 +1,8 @@
 import type { GameState, PlayerId, Line } from '../models/types';
 import { getLineValue } from '../state/create';
-import { gameBus } from '../events/bus';
+import { executeCompileBody } from './compile-body';
+import { resolveTrigger } from '../effects/triggers';
+import { runStack } from '../effects/resolve';
 
 export function canCompileLine(s: GameState, player: PlayerId, line: Line): boolean {
   const own = getLineValue(s, player, line);
@@ -20,63 +22,30 @@ export function mustCompile(s: GameState, player: PlayerId): boolean {
   return getCompilableLines(s, player).length > 0;
 }
 
-/** 编译本体（无前置校验）：同时删除该线双方全部卡牌（"all" 效果，不触发文本），
- *  翻协议或抽对手牌库顶 1 张，并完成胜利判定。
+/** 编译（无前置校验）：speed-2 顶命令「通过编译删除此牌前：平移此牌」先结算（该线双方正面
+ *  speed-2 各自持有者选目标线平移，可挂起），全部完成后执行编译本体。
  *  供 executeCompile（先校验可编译条件）与开发者模式 Compile 指令（强制编译，无视
  *  线值是否 ≥10）共用——保证两条路径的底层状态变更/事件完全一致。 */
 export function executeCompileUnchecked(s: GameState, player: PlayerId, line: Line): void {
-  const p = s.players[player];
-  const opp = s.players[player === 0 ? 1 : 0];
-  const protocol = p.protocols[line];
-  // 同时删除：双方该线堆叠全部入各自 trash
-  const ownCards = p.stacks[line].splice(0);
-  const oppCards = opp.stacks[line].splice(0);
-  for (const card of [...ownCards, ...oppCards]) {
-    card.zone = 'trash';
-    card.line = null;
-    card.pos = null;
-    card.faceUp = true;
-  }
-  p.trash.push(...ownCards);
-  opp.trash.push(...oppCards);
-  s.log.push(`P${player + 1} compiles line ${line + 1}`);
-  // 语义事件（编译清牌 FX 用）：双方该线卡牌 uid（各按堆叠顶→底顺序）与协议 defId
-  gameBus.emit({
-    type: 'line:compiled',
-    state: s,
-    payload: {
-      player,
-      line,
-      protocolDefId: protocol.defId,
-      ownUids: [...ownCards].reverse().map((c) => c.uid),
-      oppUids: [...oppCards].reverse().map((c) => c.uid),
-    },
-  });
-  if (protocol.compiled) {
-    // 重新编译：抽对手牌库顶 1 张，所有权变更
-    const card = opp.deck.pop();
-    if (card) {
-      card.owner = player;
-      card.zone = 'hand';
-      // 手牌 = 已知信息：牌库顶 → 手牌 同样解禁 secret（与 drawCards/return 一致）
-      card.secret = false;
-      card.faceUp = true;
-      p.hand.push(card);
-      s.log.push(`P${player + 1} recompiles and steals a card`);
+  const opp: PlayerId = player === 0 ? 1 : 0;
+  // 收集该线双方堆叠中正面 speed-2（顶命令，被覆盖仍生效；每张卡唯一 → 双方各至多一张）
+  const speed2: { owner: PlayerId; cardUid: string }[] = [];
+  for (const pid of [player, opp] as PlayerId[]) {
+    for (const card of s.players[pid].stacks[line]) {
+      if (card.defId === 'speed-2' && card.faceUp) speed2.push({ owner: pid, cardUid: card.uid });
     }
-  } else {
-    protocol.compiled = true;
-    s.log.push(`Protocol "${protocol.defId}" compiled`);
   }
-
-  s.compiledThisTurn = true;
-
-  // 胜利判定
-  if (p.protocols.every((pr) => pr.compiled)) {
-    s.winner = player;
-    s.phase = 'gameover';
-    s.log.push(`P${player + 1} wins!`);
+  if (speed2.length > 0) {
+    // 挂起编译：效果栈清空后由 runStack 消费 pendingCompile 执行编译本体（先于 pendingStepAdvance）
+    s.pendingCompile = { player, line };
+    for (const item of speed2) {
+      // 持有者决定平移（规则 94「被作用卡持有者决定」）；resolveTrigger 设 player=card.owner
+      resolveTrigger(s, { cardUid: item.cardUid, defId: 'speed-2', kind: 'before-compile', optional: false });
+    }
+    runStack(s); // 结算 speed-2 平移（可挂起选线 → 应答后继续 → 栈空消费 pendingCompile）
+    return;
   }
+  executeCompileBody(s, player, line);
 }
 
 /** 编译：同时删除该线双方全部卡牌（"all" 效果，不触发文本），翻协议或抽对手牌库顶 1 张 */

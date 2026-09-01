@@ -62,8 +62,24 @@ export interface PlayerState {
   stacks: Card[][];
 }
 
-/** 触发种类：被盖住前 / 结束 / 开始 / XX后（连锁；试点未用 after，机制预留） */
-export type TriggerKind = 'before-covered' | 'end' | 'start' | 'after';
+/** 触发种类：被盖住前 / 结束 / 开始 / XX后（连锁）
+ *  - before-covered：被盖住前（顶卡检查，如 fire-0/life-3/hate-4/apathy-2 底、metal-6 顶）
+ *  - before-flip：翻转前（flip op 前置检查，metal-6 顶）
+ *  - before-compile：通过编译删除前（executeCompile 前置，speed-2 顶）
+ *  - after-draw / after-discard / after-delete / after-clear-cache：即时连锁（fireReactive，
+ *    spirit-3 / plague-1 / hate-3 / speed-1 顶；顶命令被覆盖仍生效）
+ *  - 'after'：旧预留（未用，保留） */
+export type TriggerKind =
+  | 'before-covered'
+  | 'end'
+  | 'start'
+  | 'after'
+  | 'before-flip'
+  | 'before-compile'
+  | 'after-draw'
+  | 'after-discard'
+  | 'after-delete'
+  | 'after-clear-cache';
 
 /** 选择候选卡（供 UI 渲染） */
 export interface ChoiceCard {
@@ -118,18 +134,25 @@ export interface RevealedGhost {
   lightFx?: boolean;
 }
 
-/** 效果操作（生成器 yield 的值之一；由运行器执行并触发连锁/语义事件） */
+/** 效果操作（生成器 yield 的值之一；由运行器执行并触发连锁/语义事件）
+ *  - draw.player 缺省 = 效果属主；fromOpponentDeck = 从 player 的对手牌库抽顶（洗对手弃牌堆）
+ *  - playTopDeck.player 缺省 = 效果属主；belowUid = 落地时插入该卡下方（该卡保持未覆盖）
+ *  - rearrangeProtocols.player 缺省 = 效果属主
+ *  - give：持有者手牌中 uid 卡移交 to 玩家（owner 更新）
+ *  - takeRandom：从 from 玩家手牌随机取 1 张给效果属主（owner 更新） */
 export type Op =
   | { op: 'discard'; uid: string }
   | { op: 'delete'; uid: string; allowCovered?: boolean }
   | { op: 'return'; uid: string; allowCovered?: boolean }
   | { op: 'flip'; uid: string; allowCovered?: boolean }
-  | { op: 'draw'; count: number }
+  | { op: 'draw'; count: number; player?: PlayerId; fromOpponentDeck?: boolean }
   | { op: 'shift'; uid: string; targetLine: Line; allowCovered?: boolean }
-  | { op: 'playTopDeck'; line: Line; faceUp: boolean }
+  | { op: 'playTopDeck'; line: Line; faceUp: boolean; player?: PlayerId; belowUid?: string }
   | { op: 'playFromHand'; uid: string; line: Line; faceUp: boolean }
   | { op: 'reveal'; uid: string }
-  | { op: 'rearrangeProtocols'; a: Line; b: Line };
+  | { op: 'rearrangeProtocols'; a: Line; b: Line; player?: PlayerId }
+  | { op: 'give'; uid: string; to: PlayerId }
+  | { op: 'takeRandom'; from: PlayerId };
 
 /** 效果步骤：选择请求 或 操作。既有 types.ts 已占用 Step（回合步骤），此处命名 EffectStep */
 export type EffectStep = ChoiceRequest | Op;
@@ -148,12 +171,17 @@ export interface PendingEffect {
   lastAnswer: ChoiceAnswer | null;
   /** 系统效果（如清理缓存）：跳过 sourceValid 源卡有效性检查（无源卡） */
   system?: boolean;
+  /** 顶命令触发的效果（fireReactive 推入的 after-*）：sourceValid 只查在场+正面，
+   *  跳过未覆盖检查——顶命令被覆盖仍常驻生效（规则 90 行） */
+  topCommand?: boolean;
 }
 
-/** 落地中的卡（浮空，等目标顶卡"被盖住前"结算后落地）；beforeCoveredDone = 目标顶卡"被盖住前"是否已结算（只结算一次） */
+/** 落地中的卡（浮空，等目标顶卡"被盖住前"结算后落地）；beforeCoveredDone = 目标顶卡"被盖住前"是否已结算（只结算一次）
+ *  belowUid：playTopDeck 指定时插入该卡下方（该卡保持未被覆盖；卡已不在则回退落顶） */
 export interface PendingLanding {
   card: Card;
   beforeCoveredDone: boolean;
+  belowUid?: string;
 }
 
 /** 待结算触发条目（getLegalActions 供 UI 出按钮） */
@@ -227,4 +255,8 @@ export interface GameState {
   pendingStepAdvance: boolean;
   /** 揭示幽灵牌（显示在 shownTo 玩家手牌区末尾；expiresAtTurn 回合结束转换时清除） */
   revealedGhosts: RevealedGhost[];
+  /** metal-1「对手下回合不能编译」：被禁编译的玩家；其回合结束转换（advanceStep end→start）时清除 */
+  compileBlocked: PlayerId | null;
+  /** speed-2「通过编译删除此牌前」触发挂起：效果栈清空后由 runStack 消费执行编译本体 */
+  pendingCompile: { player: PlayerId; line: Line } | null;
 }

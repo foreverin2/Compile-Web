@@ -28,6 +28,8 @@ describe('types', () => {
       resolvedTriggerUids: [],
       pendingStepAdvance: false,
     revealedGhosts: [],
+    compileBlocked: null,
+    pendingCompile: null,
     };
     expect(typeof s.turnPlayer).toBe('number');
     expect(Array.isArray(s.players)).toBe(true);

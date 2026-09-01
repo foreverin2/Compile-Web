@@ -1,4 +1,5 @@
 import type { Card, GameState, PlayerId } from '../models/types';
+import { fireReactive } from '../effects/triggers';
 
 export function shuffle<T>(arr: T[]): T[] {
   const a = [...arr];
@@ -33,6 +34,9 @@ export function drawCards(s: GameState, player: PlayerId, count: number): Card[]
     drawn.push(card);
     p.hand.push(card);
   }
+  // 抽牌完成 → 即时连锁：抽牌者场上注册了 after-draw 的正面卡触发（顶命令，被盖仍生效；
+  // 覆盖所有抽牌路径：效果 draw op / refreshHand / 开局 setup / love 刷新等）
+  fireReactive(s, 'after-draw', player);
   return drawn;
 }
 

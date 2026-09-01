@@ -2,6 +2,38 @@ import type { Card, GameState, Line, PlayerId, TriggerEntry, TriggerKind } from 
 import { EFFECTS } from './registry';
 import { createCtx, findCard, nextEffectId } from './context';
 
+/** 即时连锁触发种类：抽牌后 / 弃牌后 / 删除后 / 清理缓存后 */
+export type ReactiveKind = 'after-draw' | 'after-discard' | 'after-delete' | 'after-clear-cache';
+
+/** 即时连锁触发（只 push 不 runStack——由外层 runStack 循环 LIFO 处理；非 runStack 上下文由调用方负责 runStack）。
+ *  收集注册了该 kind 触发的场上正面卡并 push 触发效果（topCommand 标志：sourceValid 跳过未覆盖检查——
+ *  after-* 全是顶命令，被覆盖仍生效，规则 90 行）：
+ *  - after-discard：遍历 actor 的**对手**（plague-1「对手弃牌后：你抽1张」）
+ *  - 其余：遍历 actor 自己（spirit-3「你抽牌后」/ hate-3「你的牌被删除后」/ speed-1「清理缓存后」）
+ *  遍历全部三条线堆叠的所有卡（不只顶卡） */
+export function fireReactive(s: GameState, kind: ReactiveKind, actor: PlayerId): void {
+  const players: PlayerId[] = kind === 'after-discard' ? [actor === 0 ? 1 : 0] : [actor];
+  for (const pid of players) {
+    for (const line of [0, 1, 2] as Line[]) {
+      for (const card of s.players[pid].stacks[line]) {
+        if (!card.faceUp) continue;
+        const def = EFFECTS[card.defId]?.triggers?.[kind];
+        if (!def) continue;
+        s.pendingEffects.push({
+          id: nextEffectId(),
+          player: card.owner,
+          gen: def.fn(createCtx(s, card.owner, card)),
+          sourceUid: card.uid,
+          sourceDefId: card.defId,
+          topCommand: true,
+          prompt: null,
+          lastAnswer: null,
+        });
+      }
+    }
+  }
+}
+
 /** 单卡触发查找（被盖住前 / 落地检查用）；未注册 → null */
 export function collectTriggerFor(s: GameState, card: Card, kind: TriggerKind): TriggerEntry | null {
   const def = EFFECTS[card.defId]?.triggers?.[kind];

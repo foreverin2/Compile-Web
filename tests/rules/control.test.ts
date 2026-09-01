@@ -42,6 +42,8 @@ function makeState(
     resolvedTriggerUids: [],
     pendingStepAdvance: false,
     revealedGhosts: [],
+    compileBlocked: null,
+    pendingCompile: null,
     ...overrides,
   };
 }

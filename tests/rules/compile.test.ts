@@ -31,6 +31,8 @@ function makeState(v0: number, v1: number, line: 0 | 1 | 2 = 0): GameState {
     resolvedTriggerUids: [],
     pendingStepAdvance: false,
     revealedGhosts: [],
+    compileBlocked: null,
+    pendingCompile: null,
   };
 }
 
