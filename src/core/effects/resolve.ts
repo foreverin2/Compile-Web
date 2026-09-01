@@ -191,12 +191,12 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
         card.line = null;
         card.pos = null;
         s.players[target].hand.push(card);
-        gameBus.emit({ type: 'card:drawn', state: s, payload: { player: target, count: 1, fromOpponentDeck: true } });
+        gameBus.emit({ type: 'card:drawn', state: s, payload: { player: target, count: 1, fromOpponentDeck: true, triggerProtocol: pe.sourceDefId.split('-')[0] } });
         fireReactive(s, 'after-draw', target);
         break;
       }
       drawCards(s, target, op.count); // drawCards 内部已 fireReactive after-draw
-      gameBus.emit({ type: 'card:drawn', state: s, payload: { player: target, count: op.count } });
+      gameBus.emit({ type: 'card:drawn', state: s, payload: { player: target, count: op.count, triggerProtocol: pe.sourceDefId.split('-')[0] } });
       break;
     }
     case 'flip': {
