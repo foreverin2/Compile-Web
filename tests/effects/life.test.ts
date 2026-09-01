@@ -88,7 +88,7 @@ describe('life protocol effects', () => {
     const s = draftLifeP1();
     advanceToStep(s, 0, 'action');
     s.players[0].hand = [makeCard('life-2', 0, 'hand')];
-    const fd = makeCard('metal-5', 1, 'field', false, 1, 0); // 未注册协议：翻正不连锁
+    const fd = makeCard('speed-2', 1, 'field', false, 1, 0); // 顶命令卡（无中指令）：翻正不触发中指令
     s.players[1].stacks[1] = [fd];
     const card = s.players[0].hand[0];
     executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: lifeLine(s) });
@@ -106,7 +106,7 @@ describe('life protocol effects', () => {
     const s = draftLifeP1();
     advanceToStep(s, 0, 'action');
     s.players[0].hand = [makeCard('life-2', 0, 'hand')];
-    const fd = makeCard('metal-5', 1, 'field', false, 1, 0);
+    const fd = makeCard('speed-2', 1, 'field', false, 1, 0);
     s.players[1].stacks[1] = [fd];
     const card = s.players[0].hand[0];
     executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: lifeLine(s) });

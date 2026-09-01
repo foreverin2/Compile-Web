@@ -17,6 +17,7 @@ import './cards/spirit';
 import './cards/gravity';
 import './cards/psychic';
 import './cards/plague';
+import './cards/metal';
 
 function topEffect(s: GameState): PendingEffect | undefined {
   return s.pendingEffects[s.pendingEffects.length - 1];
@@ -199,9 +200,12 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       if (!card || card.zone !== 'field') throw new Error(`cannot flip ${op.uid}: not on field`);
       if (!op.allowCovered && !isUncovered(s, card)) throw new Error(`cannot flip ${op.uid}: covered card`);
       // before-flip 前置触发（metal-6 顶「被盖住或翻转前：先删除这张牌」）：
+      // 仅正面卡有文本——背面卡无任何效果 → 反面卡被翻正不触发，直接翻转；
+      // 顶命令（TriggerDef.top，如 metal-6）被盖仍触发 → topCommand 跳过 sourceValid 的
+      // 未覆盖检查（被盖的正面 metal-6 被 allowCovered 翻转时也要先删自己）。
       // 触发（删除自己）后 flip 不再执行——卡已被移除，翻转无从谈起
-      const bf = collectTriggerFor(s, card, 'before-flip');
-      if (bf) { resolveTrigger(s, bf); break; }
+      const bf = card.faceUp ? collectTriggerFor(s, card, 'before-flip') : null;
+      if (bf) { resolveTrigger(s, bf, { topCommand: bf.top }); break; }
       card.faceUp = !card.faceUp;
       // 翻开即解禁：翻正为正面时清除牌堆来源的 secret 标记（正面 = 公开信息）。
       // 翻回反面不清 secret（只是重新隐藏，信息仍非公开）。

@@ -112,7 +112,7 @@ describe('water protocol effects', () => {
     advanceToStep(s, 0, 'action');
     s.players[1].hand = [];
     s.players[0].hand = [makeCard('water-3', 0, 'hand')];
-    const val3 = makeCard('metal-3', 1, 'field', true, 0, 0);
+    const val3 = makeCard('hate-3', 1, 'field', true, 0, 0); // 3 分且无中指令（顶命令卡）
     s.players[1].stacks[0] = [val3];
     const card = s.players[0].hand[0];
     executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: waterLine(s) });
@@ -127,9 +127,9 @@ describe('water protocol effects', () => {
     advanceToStep(s, 0, 'action');
     s.players[1].hand = [];
     s.players[0].hand = [makeCard('water-3', 0, 'hand')];
-    // 对手同线：底层被覆盖的 2 分卡（metal-2）+ 顶卡 3 分（metal-3）→ 只有覆盖的 2 分卡回手
+    // 对手同线：底层被覆盖的 2 分卡（metal-2）+ 顶卡 3 分（hate-3，无中指令）→ 只有覆盖的 2 分卡回手
     const covered2 = makeCard('metal-2', 1, 'field', true, 0, 0);
-    const top3 = makeCard('metal-3', 1, 'field', true, 0, 1);
+    const top3 = makeCard('hate-3', 1, 'field', true, 0, 1);
     s.players[1].stacks[0] = [covered2, top3];
     const card = s.players[0].hand[0];
     executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: waterLine(s) });
@@ -144,7 +144,7 @@ describe('water protocol effects', () => {
     advanceToStep(s, 0, 'action');
     s.players[1].hand = [];
     s.players[0].hand = [makeCard('water-3', 0, 'hand')];
-    const covered3 = makeCard('metal-3', 1, 'field', true, 0, 0);
+    const covered3 = makeCard('hate-3', 1, 'field', true, 0, 0); // 3 分且无中指令（顶命令卡）
     const top2 = makeCard('metal-2', 1, 'field', true, 0, 1);
     s.players[1].stacks[0] = [covered3, top2];
     const card = s.players[0].hand[0];
@@ -175,8 +175,8 @@ describe('water protocol effects', () => {
     advanceToStep(s, 0, 'action');
     s.players[1].hand = [];
     s.players[0].hand = [makeCard('water-3', 0, 'hand')];
-    const covered3 = makeCard('metal-3', 1, 'field', true, 0, 0);
-    const top3 = makeCard('metal-3', 1, 'field', true, 0, 1);
+    const covered3 = makeCard('hate-3', 1, 'field', true, 0, 0); // 3 分且无中指令（顶命令卡）
+    const top3 = makeCard('hate-3', 1, 'field', true, 0, 1);
     s.players[1].stacks[0] = [covered3, top3];
     const card = s.players[0].hand[0];
     executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: waterLine(s) });
