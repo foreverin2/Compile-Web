@@ -367,7 +367,6 @@ function playDarknessExtra(node: HTMLElement, payload: FxCardPayload): void {
  * 边框外层一圈金属光泽（.fx-metal-lineglow body 级 fixed 层，金属渐变描边 + 扫光），
  * 一次性：出现（0.3s 渐现）→ 保持 3 秒 → 渐隐（0.5s）→ 移除。全部浮层 pointer-events:none、
  * JS 定时自清理（重置路径由 resetUiState 按 .fx-metal-lineglow 类批量清扫兜底）。 */
-const METAL_LINE_IN_MS = 300;   // 金属光泽渐现时长
 const METAL_LINE_HOLD_MS = 3000; // 金属光泽保持（出现后 3s 开始渐隐）
 const METAL_LINE_FADE_MS = 500;  // 渐隐时长
 

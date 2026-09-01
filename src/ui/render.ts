@@ -601,7 +601,8 @@ export function syncSpirit1Cards(s: GameState): void {
  *   （线值能量条，见 renderBattery）→ 按 (target, line) 定位对方 .battery-shell；多条线各有
  *   一槽，天然去重（一条线只建一层）。
  * - syncMetalPlates（metal-2 顶「对手不能在此列以反面打出」）：lineBlocksOpponentFaceDown
- *   为真时，持卡方该线堆叠槽铺金属铁板 + 斜长方形光芒从左到右循环扫过。key = `${holder}-${line}`
+ *   为真时，**被限制方**该线堆叠槽铺金属铁板 + 斜长方形光芒从左到右循环扫过（用户规格
+ *   「金属2 持续对手链路铁板」中「对手」= 被限制方，与卡面文本同指）。key = `${blocked}-${line}`
  *   （双方可在同一线互为 metal-2 → 同线双板，按槽分键防撞，同 FX-3 瘟疫浓雾先例）。
  * - syncMetal6Mans（metal-6 手牌）：手牌含 metal-6 → 该卡牌面循环渐现 man.png（2s 周期），
  *   key = uid；卡离开手牌（弃/打/回）→ 移除层。 */
@@ -662,17 +663,18 @@ export function syncMetal0Glows(s: GameState): void {
 }
 
 /** metal-2：lineBlocksOpponentFaceDown(s, line, player)（player 被对手 metal-2 禁此列反面打）
- *  → 持卡方（player 的对手）该线堆叠槽铺金属铁板 + 斜光扫过（.fx-metal-plate/.fx-metal-sweep） */
+ *  → **被限制方（blocked）**该线堆叠槽铺金属铁板 + 斜光扫过（.fx-metal-plate/.fx-metal-sweep）
+ *  ——用户规格「金属2 持续对手链路铁板」中「对手」= 被限制方（与卡面文本同指；与 metal-0
+ *  播对方能量槽、FX-3 瘟疫雾铺被限制方一致） */
 export function syncMetalPlates(s: GameState): void {
   const activeKeys = new Set<string>();
   for (const line of [0, 1, 2] as Line[]) {
     for (const blocked of [0, 1] as PlayerId[]) {
       if (!lineBlocksOpponentFaceDown(s, line, blocked)) continue;
-      const holder: PlayerId = blocked === 0 ? 1 : 0; // 持 metal-2 的一方（其堆叠被铺铁板）
-      const key = `${holder}-${line}`;
+      const key = `${blocked}-${line}`; // 铁板铺在被限制方槽位
       activeKeys.add(key);
       const slot = document.querySelector<HTMLElement>(
-        `.stack-slot[data-player="${holder}"][data-line="${line}"]`
+        `.stack-slot[data-player="${blocked}"][data-line="${line}"]`
       );
       if (!slot) continue; // 槽位不在 DOM（不应发生）→ 交给下方清理分支移除旧层
       let layer = metalPlates.get(key);
