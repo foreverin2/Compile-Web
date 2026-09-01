@@ -13,6 +13,30 @@ const BRIDGE_OUT_MS = 400;
 const BRIDGE_Z = 290; // 烟桥层：飞行卡克隆（BASE_Z 300）之下、棋盘之上
 const BRIDGE_END_Z = 291; // 端点标记：烟桥之上、飞行卡之下
 
+// Death 删除附加特效（fx-death-*，card:deleted + triggerProtocol=death）时序常量：
+// 前置段（镰刀渐现 → 划过）→ 延后基础破碎 → 收尾段（骷髅渐现 / 镰刀渐隐 → 骷髅 2s 后渐隐、
+// 深紫边框光 2s 消失）。CSS 侧过渡时长与之一一对应（styles.css .fx-death-* 注释标注）。
+const DEATH_SCYTHE_IN_MS = 300;    // 镰刀渐现（0 → 0.3s）
+const DEATH_SCYTHE_SWEEP_MS = 500; // 镰刀划过（0.3 → 0.8s；划完即开播基础破碎）
+const DEATH_PRE_MS = DEATH_SCYTHE_IN_MS + DEATH_SCYTHE_SWEEP_MS; // 800：前置段完成
+const DEATH_SCYTHE_OUT_MS = 400;   // 镰刀渐隐（划过完成后）
+const DEATH_SKULL_LINGER_MS = 2000; // 骷髅停留（渐现后 2s 再渐隐）
+const DEATH_SKULL_FADE_MS = 400;   // 骷髅渐隐
+const DEATH_GLOW_MS = 2000;        // 深紫边框光（与镰刀同起，2s 后消失）
+const DEATH_TOTAL_MS = DEATH_PRE_MS + DEATH_SKULL_LINGER_MS + DEATH_SKULL_FADE_MS + 60; // ≈ 3.26s
+
+// Hate 删除附加特效（fx-hate-*，card:deleted + triggerProtocol=hate）时序常量：
+// 前置段（手指手掌渐现 → 5 指收缩抓住）→ 延后基础破碎 → 收尾段（手掌渐隐 / 血泊渐现 →
+// 血泊 2s 后渐隐、血红边框光 2s 消失）。CSS 侧过渡时长与之一一对应。
+const HATE_HAND_IN_MS = 500;  // 手指手掌渐现（0 → 0.5s）
+const HATE_GRIP_MS = 1000;    // 5 指收缩抓住（0.5 → 1.5s；抓住即开播基础破碎）
+const HATE_PRE_MS = HATE_HAND_IN_MS + HATE_GRIP_MS; // 1500：前置段完成
+const HATE_HAND_OUT_MS = 450; // 手指手掌渐隐（抓住完成后）
+const HATE_BLOOD_LINGER_MS = 2000; // 血泊停留（渐现后 2s 再渐隐）
+const HATE_BLOOD_FADE_MS = 400;    // 血泊渐隐
+const HATE_GLOW_MS = 2000;         // 血红边框光（与手指同起，2s 后消失）
+const HATE_TOTAL_MS = HATE_PRE_MS + HATE_BLOOD_LINGER_MS + HATE_BLOOD_FADE_MS + 60; // ≈ 3.96s
+
 type PlayerId = 0 | 1;
 
 /** 事件载荷里的卡牌面信息（emitCardEvent 已含 defId/faceUp/uid；owner/line 供回手/偏转定位） */
@@ -56,8 +80,21 @@ function buildFaceImg(src: string): HTMLElement {
 function buildFxCard(node: HTMLElement, payload: FxCardPayload, zIndex: number): HTMLElement | null {
   const rect = node.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return null;
-  const cw = node.classList.contains('rot-cw');
-  const ccw = node.classList.contains('rot-ccw');
+  return buildFxCardAt(rect, node.classList.contains('rot-cw'), node.classList.contains('rot-ccw'), payload, zIndex);
+}
+
+/**
+ * buildFxCard 的 rect 版：由【已捕获的原卡 rect + 旋转标志】构建浮层卡。
+ * 死亡/恨删除附加特效的延后基础破碎在事件后 0.8s/1.5s 触发——此刻原卡节点已被重渲染移除
+ * （rect 归零），故在事件时捕获 rect、延后用本函数重建（视觉位置不变）。规则与 buildFxCard 相同。
+ */
+function buildFxCardAt(
+  rect: DOMRect,
+  cw: boolean,
+  ccw: boolean,
+  payload: FxCardPayload,
+  zIndex: number,
+): HTMLElement | null {
   const rotated = cw || ccw;
   const card = document.createElement('div');
   card.className = 'card';
@@ -140,6 +177,137 @@ function playFireBurnExtra(node: HTMLElement, payload: FxCardPayload): void {
   window.setTimeout(() => clone.remove(), FX_REMOVE_MS);
 }
 
+/**
+ * Death 协议专属删除附加特效：死神镰刀划过 + 深紫边框光 + 骷髅收尾
+ * （card:deleted + triggerProtocol=death；styles.css .fx-death-* 结构见类注释）。
+ * 时序（总 ≈ 3.26s）：镰刀渐现(0~0.3s) → 镰刀划过(0.3~0.8s) → 基础破碎(0.8s 起，本函数延后调度)
+ * → 收尾(0.8s 起：镰刀渐隐、原卡位渐现黑骷髅头) → 骷髅 2s 后渐隐、深紫边框光 2s 后消失。
+ * 注意与 fire/light/darkness 不同：本特效【前置段先播、基础 playShatter 延后】，故分发处
+ * 对 death/hate 跳过即时破碎，由本函数在 DEATH_PRE_MS 用事件时捕获的 rect 调度 playShatterAt。
+ */
+function playDeathDeleteExtra(node: HTMLElement, payload: FxCardPayload): void {
+  const clone = buildFxCard(node, payload, EXTRA_Z);
+  if (!clone) return;
+  const rect = node.getBoundingClientRect();
+  const cw = node.classList.contains('rot-cw');
+  const ccw = node.classList.contains('rot-ccw');
+  clone.classList.add('fx-death', 'fx-death-glow');
+  // ① 镰刀：长柄 + 弯月刃，初始悬于卡上方（渐现），随后斜划过卡面
+  const scythe = document.createElement('div');
+  scythe.className = 'fx-death-scythe';
+  const item = document.createElement('div');
+  item.className = 'fx-death-scythe-item';
+  item.appendChild(Object.assign(document.createElement('div'), { className: 'fx-death-scythe-handle' }));
+  item.appendChild(Object.assign(document.createElement('div'), { className: 'fx-death-scythe-blade' }));
+  scythe.appendChild(item);
+  clone.appendChild(scythe);
+  // ⑤ 骷髅：头骨 + 下排牙齿（交替 translateY 上下动），初始隐藏、破碎时渐现
+  const skull = document.createElement('div');
+  skull.className = 'fx-death-skull';
+  const head = document.createElement('div');
+  head.className = 'fx-death-skull-head';
+  head.appendChild(Object.assign(document.createElement('div'), { className: 'fx-death-skull-eye left' }));
+  head.appendChild(Object.assign(document.createElement('div'), { className: 'fx-death-skull-eye right' }));
+  head.appendChild(Object.assign(document.createElement('div'), { className: 'fx-death-skull-nose' }));
+  const jaw = document.createElement('div');
+  jaw.className = 'fx-death-skull-jaw';
+  const TOOTH_COUNT = 5;
+  for (let i = 0; i < TOOTH_COUNT; i++) {
+    jaw.appendChild(Object.assign(document.createElement('div'), { className: 'fx-death-tooth' }));
+  }
+  head.appendChild(jaw);
+  skull.appendChild(head);
+  clone.appendChild(skull);
+  // 阶段调度（setTimeout 链，与 DEATH_* 常量对齐；所有浮层自清理）
+  window.setTimeout(() => item.classList.add('fx-death-scythe-visible'), 20);
+  window.setTimeout(() => item.classList.add('fx-death-scythe-sweep'), DEATH_SCYTHE_IN_MS);
+  window.setTimeout(() => {
+    playShatterAt(rect, cw, ccw, payload);   // ④ 基础破碎（延后）
+    clone.classList.add('fx-death-shattered'); // 卡面淡出，露出破碎层
+    item.classList.add('fx-death-scythe-out'); // 镰刀渐隐
+    skull.classList.add('fx-death-skull-in');  // 骷髅渐现
+  }, DEATH_PRE_MS);
+  window.setTimeout(() => scythe.remove(), DEATH_PRE_MS + DEATH_SCYTHE_OUT_MS + 60);
+  window.setTimeout(() => skull.classList.add('fx-death-skull-out'), DEATH_PRE_MS + DEATH_SKULL_LINGER_MS);
+  window.setTimeout(() => clone.remove(), DEATH_TOTAL_MS);
+}
+
+/**
+ * Hate 协议专属删除附加特效：血红五指抓握 + 血红边框光 + 血泊收尾
+ * （card:deleted + triggerProtocol=hate；styles.css .fx-hate-* 结构见类注释）。
+ * 时序（总 ≈ 3.96s）：手指手掌渐现(0~0.5s) → 5 指收缩抓住(0.5~1.5s) → 基础破碎(1.5s 起，
+ * 本函数延后调度) → 收尾(1.5s 起：手掌渐隐、原卡位渐现一滩血) → 血泊 2s 后渐隐、血红边框光
+ * 2s 后消失。5 指按环形分布、指尖朝向卡中心；收缩 translate 目标为卡中心（JS 按各指起点计算）。
+ */
+function playHateDeleteExtra(node: HTMLElement, payload: FxCardPayload): void {
+  const clone = buildFxCard(node, payload, EXTRA_Z);
+  if (!clone) return;
+  const rect = node.getBoundingClientRect();
+  const cw = node.classList.contains('rot-cw');
+  const ccw = node.classList.contains('rot-ccw');
+  clone.classList.add('fx-hate', 'fx-hate-glow');
+  // ① 血红手掌 + 5 指（环形围卡，指尖朝向卡中心；CSS 血色渐变 + 圆角指节）
+  const hand = document.createElement('div');
+  hand.className = 'fx-hate-hand';
+  hand.appendChild(Object.assign(document.createElement('div'), { className: 'fx-hate-palm' }));
+  const w = clone.clientWidth;
+  const h = clone.clientHeight;
+  const cx = w / 2;
+  const cy = h / 2;
+  const HALF_DIAG = Math.hypot(w, h) / 2;
+  const FINGER_R = HALF_DIAG + 52; // 指心起始半径（卡外）
+  const FINGER_W = 15;
+  const FINGER_H = 92;
+  const GRIP_D = FINGER_R - 34;    // 收缩位移：指心抵达距卡中心 34px（指尖越过中心 → 抓住）
+  const FINGER_COUNT = 5;
+  const fingers: { el: HTMLElement; deg: number; gx: number; gy: number }[] = [];
+  for (let i = 0; i < FINGER_COUNT; i++) {
+    const angle = (i / FINGER_COUNT) * Math.PI * 2 - Math.PI / 2; // 从正上方起顺时针环形分布
+    const deg = (angle * 180) / Math.PI - 90; // 旋转使指尖（本地 top）朝向卡中心
+    const f = Object.assign(document.createElement('div'), { className: 'fx-hate-finger' });
+    f.style.left = `${(cx + Math.cos(angle) * FINGER_R - FINGER_W / 2).toFixed(1)}px`;
+    f.style.top = `${(cy + Math.sin(angle) * FINGER_R - FINGER_H / 2).toFixed(1)}px`;
+    f.style.transform = `rotate(${deg.toFixed(1)}deg)`;
+    hand.appendChild(f);
+    fingers.push({ el: f, deg, gx: -Math.cos(angle) * GRIP_D, gy: -Math.sin(angle) * GRIP_D });
+  }
+  clone.appendChild(hand);
+  // ⑤ 血泊：不规则血色斑块（多径向渐变 blob）+ 卫星血滴，初始隐藏、抓住时渐现
+  const blood = document.createElement('div');
+  blood.className = 'fx-hate-blood';
+  const splat = document.createElement('div');
+  splat.className = 'fx-hate-blood-splat';
+  blood.appendChild(splat);
+  const DROPS: [number, number, number][] = [[16, 78, 10], [86, 26, 8], [70, 90, 7], [8, 30, 6]];
+  for (const [lx, ty, sz] of DROPS) {
+    const drop = Object.assign(document.createElement('div'), { className: 'fx-hate-blood-drop' });
+    drop.style.left = `${lx}%`;
+    drop.style.top = `${ty}%`;
+    drop.style.width = `${sz}px`;
+    drop.style.height = `${sz}px`;
+    splat.appendChild(drop);
+  }
+  clone.appendChild(blood);
+  // 阶段调度（setTimeout 链，与 HATE_* 常量对齐；所有浮层自清理）
+  window.setTimeout(() => hand.classList.add('fx-hate-hand-in'), 20);
+  window.setTimeout(() => {
+    hand.classList.add('fx-hate-grip');
+    for (const f of fingers) {
+      // ② 收缩抓住：各指沿自身方向平移至卡中心（父坐标系位移 + 微缩）
+      f.el.style.transform = `translate(${f.gx.toFixed(1)}px, ${f.gy.toFixed(1)}px) scale(0.9) rotate(${f.deg.toFixed(1)}deg)`;
+    }
+  }, HATE_HAND_IN_MS);
+  window.setTimeout(() => {
+    playShatterAt(rect, cw, ccw, payload);    // ④ 基础破碎（延后）
+    clone.classList.add('fx-hate-shattered'); // 卡面淡出，露出破碎层
+    hand.classList.add('fx-hate-hand-out');   // 手掌渐隐
+    blood.classList.add('fx-hate-blood-in');  // 血泊渐现
+  }, HATE_PRE_MS);
+  window.setTimeout(() => hand.remove(), HATE_PRE_MS + HATE_HAND_OUT_MS + 60);
+  window.setTimeout(() => blood.classList.add('fx-hate-blood-out'), HATE_PRE_MS + HATE_BLOOD_LINGER_MS);
+  window.setTimeout(() => clone.remove(), HATE_TOTAL_MS);
+}
+
 /** Light 协议专属额外特效（简易版）：白色柔光层（styles.css .extra-light 覆盖层动画） */
 function playLightExtra(node: HTMLElement, payload: FxCardPayload): void {
   const clone = buildFxCard(node, payload, EXTRA_Z);
@@ -173,6 +341,15 @@ function playDarknessExtra(node: HTMLElement, payload: FxCardPayload): void {
 /** 基础行为特效：删去 → 破碎消散（src/ui/fx/delete-shatter.ts 的 mountShatter） */
 function playShatter(node: HTMLElement, payload: FxCardPayload): void {
   const clone = buildFxCard(node, payload, BASE_Z);
+  if (!clone) return;
+  mountShatter(clone);
+  window.setTimeout(() => clone.remove(), FX_REMOVE_MS);
+}
+
+/** 延后基础破碎：死亡/恨删除附加特效在前置段（镰刀/手指）播完后调用。
+ *  原卡节点此刻已被重渲染移除 → 用事件时捕获的 rect 重建浮层（见 buildFxCardAt）。 */
+function playShatterAt(rect: DOMRect, cw: boolean, ccw: boolean, payload: FxCardPayload): void {
+  const clone = buildFxCardAt(rect, cw, ccw, payload, BASE_Z);
   if (!clone) return;
   mountShatter(clone);
   window.setTimeout(() => clone.remove(), FX_REMOVE_MS);
@@ -847,7 +1024,9 @@ function playProtocolFlip(node: HTMLElement, defId: string): void {
 /**
  * 特效注册表（分层模型）：
  * - 基础行为特效：弃牌=对切、删去=破碎、翻面、回手、偏转——总是播放
- * - 额外协议特效：由触发卡协议（triggerProtocol）决定是否叠加（fire → 火焰焚烧；light → 白色柔光；darkness → 暗紫粒子）
+ * - 额外协议特效：由触发卡协议（triggerProtocol）决定是否叠加（fire → 火焰焚烧；light → 白色柔光；
+ *   darkness → 暗紫粒子；death → 镰刀+骷髅；hate → 五指抓握+血泊——后两者仅叠加在删去上，
+ *   且【前置段先播、基础破碎延后】由附加函数内部调度）
  * - 卡面用【当前卡牌面】构建，不克隆原卡 DOM
  */
 export function initEffects(): () => void {
@@ -860,7 +1039,13 @@ export function initEffects(): () => void {
         if (node) playCut(node, payload);
         break;
       case 'card:deleted':
-        if (node) playShatter(node, payload);
+        // death/hate 的删除附加特效带【前置段 → 延后破碎 → 收尾段】时序：基础破碎由附加函数
+        // 内部延后调度（playDeathDeleteExtra/playHateDeleteExtra 在 DEATH_PRE_MS/HATE_PRE_MS
+        // 调 playShatterAt），此处跳过即时破碎；其余协议（fire/light/darkness/system）保持
+        // 即时破碎 + 附加叠加
+        if (node && payload.triggerProtocol !== 'death' && payload.triggerProtocol !== 'hate') {
+          playShatter(node, payload);
+        }
         break;
       case 'card:flipped':
         // life 协议触发的翻转（life-1/life-2 及未来生命翻转）：绿色藤蔓缠绕 + 绿光；
@@ -898,6 +1083,7 @@ export function initEffects(): () => void {
     }
     // 额外协议特效（触发卡协议驱动，叠加上层；仅弃牌/删去走此块）：
     // fire → 火焰焚烧；light → 白色柔光；darkness → 暗紫粒子。
+    // death/hate 仅叠加在删去上（card:deleted，前置段先播、破碎延后——见各自函数）。
     // water（回手水波环）/life（翻转藤蔓）在各自分支内叠加（card:returned /
     // card:flipped），不属于本块——其余协议触发时落到此处 = 无额外特效。
     if ((e.type === 'card:discarded' || e.type === 'card:deleted') && node) {
@@ -907,6 +1093,10 @@ export function initEffects(): () => void {
         playLightExtra(node, payload);
       } else if (payload.triggerProtocol === 'darkness') {
         playDarknessExtra(node, payload);
+      } else if (e.type === 'card:deleted' && payload.triggerProtocol === 'death') {
+        playDeathDeleteExtra(node, payload);
+      } else if (e.type === 'card:deleted' && payload.triggerProtocol === 'hate') {
+        playHateDeleteExtra(node, payload);
       }
     }
   });

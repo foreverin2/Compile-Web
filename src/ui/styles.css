@@ -2350,3 +2350,232 @@ body.dragging { cursor: grabbing; user-select: none; }
 }
 .bridge-end-in { opacity: 1; }
 .bridge-end-out { opacity: 0; transition: opacity var(--bridge-out-ms, 0.4s) ease; }
+
+/* ===== Death 协议删除附加特效（card:deleted + triggerProtocol=death，JS playDeathDeleteExtra） =====
+ * 时序：镰刀渐现(0~0.3s) → 划过(0.3~0.8s) → 基础破碎(0.8s 起，延后调度) → 收尾(0.8s 起：
+ * 镰刀渐隐、原卡位渐现黑骷髅头) → 骷髅 2s 后渐隐、深紫边框光 2s 消失（总 ~3.26s）。
+ * 过渡时长与 effects/index.ts DEATH_* 常量一一对应（微调在此集中改）。
+ * 浮层卡 = buildFxCard 的 .card 克隆（EXTRA_Z 301）：卡面淡出用 .fx-death-shattered 触发
+ * （露出下方 BASE_Z 破碎层）；本组类不触碰克隆自身 transform（旋转卡朝向由 --fx-rot 内联）。
+ * 所有节点由 JS setTimeout 自清理。 */
+.fx-death > img { transition: opacity 0.2s ease; }
+.fx-death.fx-death-shattered > img { opacity: 0; }
+
+/* 深紫边框光：box-shadow 外发光呼吸，动画 2s（= DEATH_GLOW_MS），结束后无残留（无 fill-mode） */
+.fx-death-glow { animation: fx-death-glow-pulse 2s ease-in-out; }
+@keyframes fx-death-glow-pulse {
+  0%, 100% { box-shadow: 0 0 6px 2px rgba(76, 12, 158, 0.35), 0 0 18px 5px rgba(104, 26, 200, 0.28); }
+  50% { box-shadow: 0 0 14px 5px rgba(118, 34, 228, 0.85), 0 0 34px 12px rgba(146, 56, 255, 0.5); }
+}
+
+/* 镰刀容器（覆盖卡面；子元素可越界——overflow 默认 visible） */
+.fx-death-scythe { position: absolute; inset: 0; pointer-events: none; }
+/* 镰刀组（长柄 + 弯月刃）：初始悬于卡上方（top 负值），渐现后斜划过卡面。
+   opacity 0.3s = DEATH_SCYTHE_IN_MS；transform 0.5s = DEATH_SCYTHE_SWEEP_MS；
+   划过终点 translate(40%, 80%) rotate(-20deg)（右下斜切，含旋转扫掠感）。 */
+.fx-death-scythe-item {
+  position: absolute;
+  left: -6px;
+  top: -116px;
+  width: 140px;
+  height: 170px;
+  opacity: 0;
+  transform: translate(4%, -2%) rotate(16deg);
+  transform-origin: 50% 68%;
+  transition: opacity 0.3s ease-out, transform 0.5s cubic-bezier(0.4, 0.05, 0.3, 1);
+  will-change: transform, opacity;
+}
+.fx-death-scythe-item.fx-death-scythe-visible { opacity: 1; }
+.fx-death-scythe-item.fx-death-scythe-sweep { transform: translate(40%, 80%) rotate(-20deg); }
+.fx-death-scythe-item.fx-death-scythe-out { opacity: 0; transition: opacity 0.4s ease-in; } /* 0.4s = DEATH_SCYTHE_OUT_MS */
+/* 长柄：木色渐变细杆，斜贯镰刀组 */
+.fx-death-scythe-handle {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 9px;
+  height: 152px;
+  margin-left: -4.5px;
+  border-radius: 5px;
+  background: linear-gradient(90deg, #7a5633, #4a2c16 40%, #2c180b 60%, #5d3a1e);
+  box-shadow: 0 0 5px rgba(0, 0, 0, 0.65), inset 0 0 2px rgba(255, 220, 170, 0.25);
+}
+/* 弯月刃：inset box-shadow 偏移圆咬出月牙（银刃 + 暗 rim），位于柄下端、刃口朝上 */
+.fx-death-scythe-blade {
+  position: absolute;
+  left: 30%;
+  top: 78%;
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  background: transparent;
+  box-shadow: inset -20px 12px 0 -2px #7d8494, inset -13px 7px 0 0 #cdd2dc;
+  transform: rotate(24deg);
+  filter: drop-shadow(0 0 6px rgba(160, 165, 190, 0.5));
+}
+
+/* 黑骷髅头：头骨（黑底紫辉）+ 眼窝/鼻 + 下排牙齿（交替 translateY 上下动，负延迟错半周期）。
+   渐现 0.4s / 渐隐 0.4s = DEATH_SKULL_FADE_MS；停留 2s = DEATH_SKULL_LINGER_MS。 */
+.fx-death-skull {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transform: scale(0.65);
+  transition: opacity 0.4s ease-out, transform 0.4s ease-out;
+  pointer-events: none;
+}
+.fx-death-skull.fx-death-skull-in { opacity: 1; transform: scale(1); }
+.fx-death-skull.fx-death-skull-out { opacity: 0; transform: scale(0.8); }
+.fx-death-skull-head {
+  position: relative;
+  width: 58%;
+  height: 66%;
+  border-radius: 44% 44% 40% 40% / 54% 54% 44% 44%;
+  background: radial-gradient(circle at 50% 34%, #26263a 0%, #10101c 68%, #08080f 100%);
+  border: 2px solid #4b4b6a;
+  box-shadow: 0 0 16px rgba(96, 40, 190, 0.55), inset 0 0 18px rgba(150, 80, 255, 0.18);
+}
+.fx-death-skull-eye {
+  position: absolute;
+  top: 24%;
+  width: 21%;
+  height: 26%;
+  border-radius: 50%;
+  background: #030308;
+  box-shadow: inset 0 0 8px #000, 0 0 10px rgba(130, 60, 240, 0.55);
+}
+.fx-death-skull-eye.left { left: 17%; }
+.fx-death-skull-eye.right { right: 17%; }
+.fx-death-skull-nose {
+  position: absolute;
+  top: 53%;
+  left: 50%;
+  width: 13%;
+  height: 15%;
+  background: #030308;
+  clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
+  box-shadow: 0 0 8px rgba(130, 60, 240, 0.4);
+}
+.fx-death-skull-jaw {
+  position: absolute;
+  bottom: 7%;
+  left: 50%;
+  width: 50%;
+  height: 21%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 5%;
+  border-radius: 0 0 40% 40% / 0 0 70% 70%;
+  background: #14141f;
+  border: 2px solid #3d3d58;
+}
+.fx-death-tooth {
+  width: 10%;
+  height: 60%;
+  background: linear-gradient(180deg, #f4f4f8, #b7bac6);
+  border-radius: 2px 2px 28% 28%;
+  animation: fx-death-teeth 0.6s ease-in-out infinite alternate;
+}
+.fx-death-tooth:nth-child(even) { animation-delay: -0.3s; } /* 负延迟错半周期 → 相邻齿交替上下 */
+@keyframes fx-death-teeth {
+  from { transform: translateY(0); }
+  to { transform: translateY(42%); }
+}
+
+/* ===== Hate 协议删除附加特效（card:deleted + triggerProtocol=hate，JS playHateDeleteExtra） =====
+ * 时序：手指手掌渐现(0~0.5s) → 5 指收缩抓住(0.5~1.5s) → 基础破碎(1.5s 起，延后调度) → 收尾
+ * (1.5s 起：手掌渐隐、原卡位渐现一滩血) → 血泊 2s 后渐隐、血红边框光 2s 消失（总 ~3.96s）。
+ * 过渡时长与 effects/index.ts HATE_* 常量一一对应（微调在此集中改）。
+ * 5 指位置/旋转/收缩位移由 JS 内联计算（环形围卡、指尖朝向卡中心）；本组类只供视觉与过渡。 */
+.fx-hate > img { transition: opacity 0.2s ease; }
+.fx-hate.fx-hate-shattered > img { opacity: 0; }
+
+/* 血红边框光：box-shadow 外发光呼吸，动画 2s（= HATE_GLOW_MS），结束后无残留 */
+.fx-hate-glow { animation: fx-hate-glow-pulse 2s ease-in-out; }
+@keyframes fx-hate-glow-pulse {
+  0%, 100% { box-shadow: 0 0 6px 2px rgba(160, 6, 22, 0.4), 0 0 18px 5px rgba(190, 12, 28, 0.3); }
+  50% { box-shadow: 0 0 14px 5px rgba(214, 18, 38, 0.9), 0 0 34px 12px rgba(240, 40, 60, 0.55); }
+}
+
+/* 手掌 + 5 指容器：inset:0 覆盖卡面（子元素可越界）。opacity 0.45s ≈ HATE_HAND_IN_MS / OUT_MS */
+.fx-hate-hand {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.45s ease-out;
+  will-change: opacity;
+}
+.fx-hate-hand.fx-hate-hand-in { opacity: 1; }
+.fx-hate-hand.fx-hate-hand-out { opacity: 0; transition: opacity 0.45s ease-in; }
+
+/* 掌心：血色径向渐变 blob（手指下层 z 0） */
+.fx-hate-palm {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 58%;
+  height: 52%;
+  transform: translate(-50%, -50%);
+  z-index: 0;
+  border-radius: 46% 54% 50% 50% / 54% 46% 52% 48%;
+  background: radial-gradient(circle at 42% 38%, rgba(214, 26, 48, 0.95), rgba(150, 10, 28, 0.85) 48%, rgba(96, 4, 16, 0.7) 78%, rgba(70, 3, 12, 0.4) 100%);
+  box-shadow: 0 0 22px rgba(190, 16, 40, 0.55), inset 0 0 18px rgba(40, 0, 6, 0.5);
+}
+
+/* 手指：血色渐变 + 圆角指节（两段关节暗纹）。位置/旋转/收缩位移由 JS 内联，
+   transform 过渡 1s = HATE_GRIP_MS（0.5s 起抓 → 1.5s 完成） */
+.fx-hate-finger {
+  position: absolute;
+  width: 15px;
+  height: 92px;
+  z-index: 1;
+  border-radius: 46% 46% 30% 30% / 62% 62% 26% 26%;
+  background:
+    linear-gradient(180deg, rgba(0, 0, 0, 0) 34%, rgba(30, 0, 4, 0.42) 34%, rgba(30, 0, 4, 0.42) 37%, rgba(0, 0, 0, 0) 37%),
+    linear-gradient(180deg, rgba(0, 0, 0, 0) 63%, rgba(30, 0, 4, 0.42) 63%, rgba(30, 0, 4, 0.42) 66%, rgba(0, 0, 0, 0) 66%),
+    linear-gradient(180deg, #c81f35 0%, #9c1226 40%, #6e0a18 78%, #4e0510 100%);
+  box-shadow: inset -3px 0 0 rgba(20, 0, 3, 0.4), inset 3px 0 0 rgba(255, 160, 170, 0.22), 0 0 8px rgba(190, 20, 40, 0.5);
+  transition: transform 1s cubic-bezier(0.45, 0.1, 0.35, 1);
+  will-change: transform;
+}
+
+/* 血泊：多径向渐变不规则斑块 + 卫星血滴。渐现 0.4s / 渐隐 0.4s = HATE_BLOOD_FADE_MS；
+   停留 2s = HATE_BLOOD_LINGER_MS；splat 由 scale(0.4) → 1 放大出现（0.45s） */
+.fx-hate-blood {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.4s ease-out;
+  pointer-events: none;
+}
+.fx-hate-blood.fx-hate-blood-in { opacity: 1; }
+.fx-hate-blood.fx-hate-blood-out { opacity: 0; transition: opacity 0.4s ease-in; }
+.fx-hate-blood-splat {
+  position: relative;
+  width: 82%;
+  height: 74%;
+  transform: scale(0.4);
+  transition: transform 0.45s ease-out;
+  border-radius: 46% 54% 52% 48% / 52% 46% 54% 48%;
+  background:
+    radial-gradient(ellipse at 28% 34%, rgba(196, 12, 30, 0.95) 0%, rgba(150, 8, 22, 0.8) 38%, rgba(90, 4, 14, 0.35) 62%, transparent 72%),
+    radial-gradient(ellipse at 72% 62%, rgba(176, 10, 26, 0.9) 0%, rgba(120, 6, 18, 0.65) 42%, transparent 66%),
+    radial-gradient(ellipse at 52% 48%, rgba(208, 18, 36, 0.98) 0%, rgba(140, 7, 20, 0.8) 46%, rgba(80, 3, 12, 0.45) 68%, transparent 82%);
+  filter: drop-shadow(0 0 14px rgba(170, 12, 30, 0.6));
+}
+.fx-hate-blood.fx-hate-blood-in .fx-hate-blood-splat { transform: scale(1); }
+.fx-hate-blood-drop {
+  position: absolute;
+  border-radius: 50%;
+  background: radial-gradient(circle at 38% 34%, rgba(214, 20, 40, 0.95), rgba(150, 8, 22, 0.8) 55%, rgba(96, 4, 16, 0.55) 100%);
+  box-shadow: 0 0 8px rgba(170, 12, 30, 0.5);
+}
