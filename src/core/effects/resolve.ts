@@ -370,20 +370,23 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
     case 'discardMany': {
       // 批量弃牌（FAQ 94：多张弃牌是单次动作——一次性弃完，之后由弃牌触发的效果才生效一次；
       // 与逐个 discard op（每个都触发 after-discard）区分；psychic-0/2、plague-2、hate-1、
-      // 系统缓存清理用）。弃的卡应同属一人（同一弃牌动作），actor 取首卡 owner。
+      // 系统缓存清理用）。弃的卡必须同属一人（同一弃牌动作），否则抛错
       if (op.uids.length === 0) break;
       let actor: PlayerId | null = null;
       for (const uid of op.uids) {
         const card = findCard(s, uid);
         if (!card || card.zone !== 'hand') throw new Error(`cannot discard ${uid}: not in hand`);
         if (actor === null) actor = card.owner;
+        else if (card.owner !== actor) throw new Error('discardMany uids must share one owner');
         discardFromHand(s, card.owner, uid);
         emitCardEvent(s, 'card:discarded', card, {
           triggerDefId: pe.sourceDefId,
           triggerProtocol: pe.sourceDefId.split('-')[0],
         });
       }
-      if (actor !== null) fireReactive(s, 'after-discard', actor); // 一次性触发
+      // uids 非空且循环内 actor 必被赋值；显式守卫满足 TS 收窄
+      if (actor === null) throw new Error('discardMany requires at least one card');
+      fireReactive(s, 'after-discard', actor); // 一次性触发
       break;
     }
     case 'reveal': {

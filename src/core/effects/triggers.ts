@@ -61,8 +61,9 @@ export function resolveTrigger(s: GameState, t: TriggerEntry, opts?: { topComman
  *  其他种类（after 等，机制预留）收集双方。取场上正面卡中注册了该触发的卡（跳过已结算 uid）：
  *  - 顶卡（未覆盖）：top/bottom 触发都收集（bottom 仅未覆盖生效，规则 79 行）
  *  - 被盖卡：仅收集注册了 top 标志的顶命令触发（FAQ 98/99：顶命令被盖仍生效，如 death-1/life-0）
- *  记录时点快照（FAQ 68）：start/end 步骤开始时收集，结算中新加入的不收（getLegalActions 每次
- *  重新收集的既有行为保留；resolvedTriggerUids 在步骤内去重） */
+ *  每次调用重新收集（resolvedTriggerUids 仅在当次 end/start 步骤内去重——步骤内结算中新
+ *  暴露的触发会出现在后续收集中，由玩家逐个 resolve；FAQ 68 的记录时点快照差异不构成
+ *  当前任何已注册卡的行为差异） */
 export function collectTriggers(s: GameState, kind: TriggerKind): TriggerEntry[] {
   const out: TriggerEntry[] = [];
   const seen = new Set(s.resolvedTriggerUids);

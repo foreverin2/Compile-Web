@@ -16,7 +16,7 @@ function* water0(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
 function* water1(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const srcLine = ctx.card.line!;
   for (const line of ([0, 1, 2] as Line[]).filter((l) => l !== srcLine)) {
-    if (!deckTopAvailable(ctx.s, ctx.player)) break; // 牌库+弃牌堆皆空 → 剩余线 fizzle
+    if (!deckTopAvailable(ctx.s, ctx.player)) break; // 牌库空 → 剩余线 fizzle（FAQ 142：打牌堆顶不洗牌）
     yield { op: 'playTopDeck', line, faceUp: false };
   }
 }

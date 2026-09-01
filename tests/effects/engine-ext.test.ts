@@ -58,16 +58,17 @@ describe('FAQ corrections (A2b)', () => {
 
   it('flipping a COVERED card face-up does NOT trigger its middle command (FAQ 127)', () => {
     const s = createGame();
-    const covered = makeCard('t-covered-mid', 0, 'field', true, 0, 0);
+    const covered = makeCard('t-covered-mid', 0, 'field', false, 0, 0); // 反面被盖卡
     const cover = makeCard('death-0', 0, 'field', true, 0, 1);
     place(s, covered, 0, 0);
     place(s, cover, 0, 0); // 盖住 covered
+    covered.faceUp = false; // 被盖的反面卡
     pushOpGen(s, 0, function* () {
       yield { op: 'flip', uid: covered.uid, allowCovered: true }; // 翻正被盖卡
     });
     runStack(s);
-    expect(covered.faceUp).toBe(false); // 翻正（正面→反面？不——它是正面，flip → 反面）
-    expect(s.players[0].hand).toHaveLength(0); // middle 未触发（被盖翻正不连锁）
+    expect(covered.faceUp).toBe(true); // 翻正发生
+    expect(s.players[0].hand).toHaveLength(0); // middle 未触发（被盖翻正不连锁——旧实现会 pushMiddle 抽 1）
     expect(s.pendingEffects).toHaveLength(0);
   });
 
@@ -82,6 +83,33 @@ describe('FAQ corrections (A2b)', () => {
     expect(() => executeAction(s, 0, 'play', { cardUid: s.players[0].hand[0].uid, faceUp: false, line: 0 }))
       .toThrow('cannot play face-down');
     expect(s.players[0].hand).toHaveLength(1); // 卡未被移出
+  });
+
+  it('execution-layer guard: plague-0 bottom blocks BOTH orientations in its line (A2 Important hardening)', () => {
+    const s = createGame();
+    s.phase = 'turn';
+    s.players[0].protocols = [{ defId: 'fire', compiled: false }, { defId: 'light', compiled: false }, { defId: 'darkness', compiled: false }];
+    s.players[1].protocols = [{ defId: 'plague', compiled: false }, { defId: 'water', compiled: false }, { defId: 'life', compiled: false }];
+    place(s, makeCard('plague-0', 1, 'field', true, 0, 0), 1, 0); // P2 线 0 未覆盖 plague-0 底
+    s.players[0].hand = [makeCard('fire-0', 0, 'hand')];
+    const uid = s.players[0].hand[0].uid;
+    expect(() => executeAction(s, 0, 'play', { cardUid: uid, faceUp: true, line: 0 })).toThrow('blocked line');
+    expect(() => executeAction(s, 0, 'play', { cardUid: uid, faceUp: false, line: 0 })).toThrow('blocked line');
+    expect(s.players[0].hand).toHaveLength(1); // 两次都被拒，卡未移出
+  });
+
+  it('execution-layer guard: psychic-1 top forbids ALL face-up plays for the opponent (A2 Important hardening)', () => {
+    const s = createGame();
+    s.phase = 'turn';
+    s.players[0].protocols = [{ defId: 'fire', compiled: false }, { defId: 'light', compiled: false }, { defId: 'darkness', compiled: false }];
+    s.players[1].protocols = [{ defId: 'psychic', compiled: false }, { defId: 'water', compiled: false }, { defId: 'life', compiled: false }];
+    place(s, makeCard('psychic-1', 1, 'field', true, 1, 0), 1, 1); // P2 场上有 psychic-1 顶（全局）
+    s.players[0].hand = [makeCard('fire-0', 0, 'hand')];
+    const uid = s.players[0].hand[0].uid;
+    expect(() => executeAction(s, 0, 'play', { cardUid: uid, faceUp: true, line: 0 })).toThrow('psychic-1');
+    // 反面打不受限
+    executeAction(s, 0, 'play', { cardUid: uid, faceUp: false, line: 2 });
+    expect(s.players[0].hand).toHaveLength(0);
   });
 });
 
