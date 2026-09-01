@@ -164,6 +164,27 @@ body {
 /* 能量条外移（距槽外侧 120px，与槽内卡牌完全分离）：P1 在槽最左侧外；P2 在槽最右侧外 */
 .stack-slot.p1 .battery { left: -120px; }
 .stack-slot.p2 .battery { right: -120px; }
+/* 点数 >10（能量槽 10 格无法显示）时的数字指示：P1 槽在左 → 数字放电池左侧外；
+   P2 槽在右 → 数字放电池右侧外（用户指定"能量槽左边/右边看玩家"） */
+.battery-overflow {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 34px;
+  font-weight: 800;
+  font-family: 'Orbitron', 'Rajdhani', 'Segoe UI', sans-serif;
+  color: #00ffcc;
+  text-shadow:
+    0 0 8px rgba(0, 255, 204, 0.9),
+    0 0 22px rgba(0, 255, 204, 0.5),
+    0 0 40px rgba(0, 255, 204, 0.3);
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+}
+.stack-slot.p1 .battery-overflow { right: 100%; margin-right: 10px; }
+.stack-slot.p2 .battery-overflow { left: 100%; margin-left: 10px; }
 .battery-shell {
   position: relative;
   display: flex;
@@ -2569,6 +2590,21 @@ body.dragging { cursor: grabbing; user-select: none; }
 }
 .fx-gravity-hole.fx-gravity-hole-in { opacity: 1; }
 .fx-gravity-hole.fx-gravity-hole-out { opacity: 0; transition: opacity 0.4s ease-in; }
+/* gravity 终点完整掩盖罩：黑洞（120px 圆）盖不住整卡（130×178.8）——真实卡瞬移到终点后在黑洞
+ * 旁露出（用户反馈「终点瞬间多出一张卡牌」）。卡尺寸深紫黑半透明罩 + 暗紫外晕盖住终点，
+ * 与黑洞同步渐现，浮层卡到达时渐隐（JS 定时驱动 opacity，见 spawnGravityEndShroud）。 */
+.fx-gravity-end-shroud {
+  position: fixed;
+  pointer-events: none;
+  border-radius: 10px;
+  background: radial-gradient(circle at 50% 45%, rgba(60, 0, 110, 0.55), rgba(16, 0, 34, 0.88) 70%);
+  box-shadow:
+    0 0 18px 4px rgba(150, 40, 255, 0.35),
+    0 0 44px 14px rgba(90, 10, 190, 0.25),
+    inset 0 0 22px rgba(170, 60, 255, 0.22);
+  opacity: 0;
+  will-change: opacity;
+}
 .fx-gravity-hole-disc {
   position: absolute;
   inset: 0;

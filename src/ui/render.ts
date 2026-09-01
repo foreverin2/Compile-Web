@@ -160,6 +160,14 @@ function renderBattery(s: GameState, player: PlayerId, line: Line): HTMLElement 
   }
   shell.appendChild(cells);
   battery.appendChild(shell);
+  // 点数 > 10（能量槽 10 格无法显示）→ 在电池左/右侧用数字直接显示当前链路点数
+  // （P1 槽靠左、P2 槽靠右——见 styles.css .battery-overflow 的 data-player 定位）
+  if (points > 10) {
+    const num = document.createElement('span');
+    num.className = 'battery-overflow';
+    num.textContent = String(points);
+    battery.appendChild(num);
+  }
   return battery;
 }
 
@@ -2417,7 +2425,7 @@ export function resetUiState(): void {
   for (const fx of document.querySelectorAll<HTMLElement>(
     '.life-flip-fx, .life-flip-glow, .water-return-ring, .water-return-glow, .water-return-settle, ' +
       '.water-return-trail, .flip-overlay-fx, .draw-ghost, .reveal-fly-ghost, ' +
-      '.fx-gravity-deckglow, .fx-gravity-hole, .fx-gravity-beam, .fx-gravity-cardglow, .fx-speed-glow, ' +
+      '.fx-gravity-deckglow, .fx-gravity-hole, .fx-gravity-beam, .fx-gravity-cardglow, .fx-gravity-end-shroud, .fx-speed-glow, ' +
       '.fx-speed-card, .fx-speed-card-glow, .fx-speed-end-shroud, ' +
       '.fx-psychic, .fx-plague, .fx-love-deckglow, .fx-love-fly, .fx-love-settle, .fx-love-heart, ' +
       '.fx-apathy, .fx-spirit-chains, .fx-metal-lineglow'

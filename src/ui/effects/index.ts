@@ -1093,6 +1093,31 @@ function spawnGravityHole(end: { x: number; y: number }): HTMLElement {
   return hole;
 }
 
+/** gravity 终点完整掩盖罩：黑洞（120px 圆）盖不住整卡（130×178.8）——真实卡瞬移到终点后
+ *  在黑洞旁露出（用户反馈「终点瞬间多出一张卡牌」）。补一张卡尺寸的深紫黑半透明罩盖住终点，
+ *  与黑洞同步渐现（0.3s），浮层卡到达（GRAVITY_PRE_MS + MOVE_MS）时渐隐露出真实卡（位置一致
+ *  无缝），随后自清理。 */
+function spawnGravityEndShroud(end: { x: number; y: number }, w: number, h: number): HTMLElement {
+  const shroud = document.createElement('div');
+  shroud.className = 'fx-gravity-end-shroud';
+  shroud.style.left = `${end.x - w / 2}px`;
+  shroud.style.top = `${end.y - h / 2}px`;
+  shroud.style.width = `${w}px`;
+  shroud.style.height = `${h}px`;
+  shroud.style.zIndex = String(EXTRA_Z);
+  document.body.appendChild(shroud);
+  window.setTimeout(() => {
+    shroud.style.transition = 'opacity 0.3s ease-out';
+    shroud.style.opacity = '1';
+  }, 20);
+  window.setTimeout(() => {
+    shroud.style.transition = 'opacity 0.4s ease-in';
+    shroud.style.opacity = '0';
+  }, GRAVITY_PRE_MS + MOVE_MS);
+  window.setTimeout(() => shroud.remove(), GRAVITY_PRE_MS + MOVE_MS + GRAVITY_HOLE_OUT_MS + 60);
+  return shroud;
+}
+
 /** 品红射线：黑洞（end）向起点（start）射出的细长条（transform-origin left center 锚定黑洞、
  *  按起终距离定宽、rotate 到起点角度——角度经 --fx-beam-angle 写进动画关键帧，避免 CSS 动画
  *  覆盖内联 transform 丢掉旋转）。CSS animation delay 0.3s + fill-mode backwards →
@@ -1200,8 +1225,11 @@ function playGravityDeckPlayExtra(payload: FxCardPayload): void {
   document.body.appendChild(deckGlow);
   window.setTimeout(() => deckGlow.classList.add('fx-gravity-deckglow-in'), 20);
   ghost.classList.add('deck-play-ghost');
-  // ③ 终点黑洞渐现（0~0.3s）；④ 品红射线（0.3~1.8s，黑洞 → 牌库区中心）
+  // ③ 终点黑洞渐现（0~0.3s）+ 终点完整掩盖罩（黑洞 120px 圆盖不住整卡——真实卡瞬移到
+  //    终点后在黑洞旁露出，用户反馈「终点瞬间多出一张卡牌」；补卡尺寸深紫黑罩盖住终点）；
+  //    ④ 品红射线（0.3~1.8s，黑洞 → 牌库区中心）
   const hole = spawnGravityHole(end);
+  const shroud = spawnGravityEndShroud(end, REVEAL_W, REVEAL_H); // 打牌堆顶落点卡 = 标准卡尺寸
   const beam = spawnGravityBeam(start, end);
   // ⑤ 前置段完成（1.8s）起：浮层卡飞向堆叠末尾（同批多卡按 90ms 错开起飞，同 playDeckPlay）
   const stagger = nextDeckPlayIndex() * DECK_PLAY_STAGGER_MS;
@@ -1242,8 +1270,11 @@ function playGravityShiftExtra(node: HTMLElement, payload: FxCardPayload): void 
     playShift(node, payload); // 浮层构建失败（实际不可达）→ 退回基础平移
     return;
   }
-  // ② 终点黑洞渐现（0~0.3s）；③ 品红射线（0.3~1.8s，黑洞 → 被移卡原 rect 中心）
+  // ② 终点黑洞渐现（0~0.3s）+ 终点完整掩盖罩（黑洞盖不住整卡——真实卡瞬移到终点后在黑洞
+  //    旁露出，用户反馈「终点瞬间多出一张卡牌」；补被移卡尺寸深紫黑罩盖住终点）；
+  //    ③ 品红射线（0.3~1.8s，黑洞 → 被移卡原 rect 中心）
   const hole = spawnGravityHole(end);
+  const shroud = spawnGravityEndShroud(end, rect.width, rect.height);
   const beam = spawnGravityBeam(start, end);
   // ④ 前置段完成（1.8s）起：浮层卡飞向目标堆叠末尾
   flyGravityGhost(ghost, rect, end, 0);

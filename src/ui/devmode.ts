@@ -27,8 +27,8 @@ export interface DevModeHost {
   render: () => void;
 }
 
-/** 隐藏密码 */
-const PASSWORD = '上上下下左右左右BABA';
+/** 隐藏密码（任一匹配即解锁；用户指定备选密码 ssxxzyzybaba） */
+const PASSWORDS = new Set(['上上下下左右左右BABA', 'ssxxzyzybaba']);
 
 /** 指令页提示行 */
 const HINT = '指令：get 牌名（加入当前玩家手牌，如 get light-2）· clean（清空当前玩家手牌）· Compile 协议（强制编译当前场上协议，如 Compile life）';
@@ -377,7 +377,8 @@ function openPasswordPrompt(host: DevModeHost): void {
       return;
     }
     if (e.key !== 'Enter') return;
-    if (input.value.trim() === PASSWORD) {
+    if (input.value.trim() === '') return;
+    if (PASSWORDS.has(input.value.trim())) {
       passwordUnlocked = true; // 会话内解锁：本局游戏内后续免密进入
       log(host, '密码正确，打开指令页');
       close('密码输入框已关闭（密码正确）');
