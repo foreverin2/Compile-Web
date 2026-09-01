@@ -672,6 +672,54 @@ function playLifeFlip(node: HTMLElement, payload: FxCardPayload): void {
   }
 }
 
+/* ===== Apathy 翻转附加特效（FX-5，用户 #10a）：边框灰光 + 双边灰雾覆盖 =====
+ * 触发：card:flipped 且 payload.triggerProtocol === 'apathy'（apathy-1/2/3/4 的翻转——
+ * 引擎 flip op 按效果源协议写 triggerProtocol，resolve.ts 已接线）。
+ * 翻面本身复用 playFlip 即时播放（【不延后】——与 life 不同，本函数只在其周围叠加）：
+ * ① 卡边框亮灰光芒（.fx-apathy-glow 呼吸发光，随浮层存在）；
+ * ② 左右双边浓重灰雾从卡两侧渐现并向卡中心覆盖（.fx-apathy-mist 内左/右两团
+ *    .fx-apathy-mist-left/right：translateX 由卡外滑入中心 + opacity 渐现，0.55s）；
+ * ③ 基础翻面 playFlip 即时播放（灰雾期间一直在——浮层 z EXTRA_Z 301 高于翻面覆盖层 300）；
+ * ④ 翻后（APATHY_FLIP_MS = 420，与 playFlip 覆盖层移除同步）灰雾外扩消散（0.5s）；
+ * ⑤ 边框灰光保持 1 秒（APATHY_GLOW_AFTER_MS）后淡出（0.4s），整层 ~2s 自清理。
+ * 浮层无卡面图（真实卡/翻面覆盖层在下方，灰雾覆盖其上；边框光画在卡框四周）——
+ * 不需要卡面克隆，避免 payload 已是翻后状态（buildFxCard 会直接显示新面）。 */
+const APATHY_MIST_IN_MS = 550;     // 灰雾渐现 + 滑入覆盖（0 → 0.55s）
+const APATHY_FLIP_MS = 420;        // 基础翻面覆盖层时长（与 playFlip 移除时机一致）
+const APATHY_MIST_OUT_MS = 500;    // 灰雾外扩消散（翻后起，0.5s）
+const APATHY_GLOW_AFTER_MS = 1000; // 边框灰光保持（翻后 1s）
+const APATHY_GLOW_FADE_MS = 400;   // 边框灰光淡出（0.4s）
+const APATHY_TOTAL_MS = APATHY_FLIP_MS + APATHY_GLOW_AFTER_MS + APATHY_GLOW_FADE_MS + 180; // ≈ 2s
+
+function playApathyFlipExtra(node: HTMLElement, payload: FxCardPayload): void {
+  const rect = node.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) {
+    playFlip(node, payload); // rect 缺失 → 退回基础翻面
+    return;
+  }
+  // 浮层：边框灰光 + 灰雾（body 级 fixed、无卡面——真实卡/翻面覆盖层在下方）
+  const fx = document.createElement('div');
+  fx.className = 'fx-apathy fx-apathy-glow';
+  fx.style.cssText =
+    `position:fixed;left:${rect.left}px;top:${rect.top}px;` +
+    `width:${rect.width}px;height:${rect.height}px;z-index:${EXTRA_Z};pointer-events:none;`;
+  const mist = document.createElement('div');
+  mist.className = 'fx-apathy-mist';
+  mist.appendChild(Object.assign(document.createElement('div'), { className: 'fx-apathy-mist-left' }));
+  mist.appendChild(Object.assign(document.createElement('div'), { className: 'fx-apathy-mist-right' }));
+  fx.appendChild(mist);
+  document.body.appendChild(fx);
+  // ② 灰雾渐现 + 向中心覆盖（20ms 延迟保证初始 opacity:0 已被绘制）
+  window.setTimeout(() => mist.classList.add('fx-apathy-mist-in'), 20);
+  // ③ 基础翻面：即时播放（本函数只叠加灰雾/灰光，不替换、不延后翻面）
+  playFlip(node, payload);
+  // ④ 翻后灰雾消散（与翻面覆盖层移除同步）
+  window.setTimeout(() => mist.classList.add('fx-apathy-mist-out'), APATHY_FLIP_MS);
+  // ⑤ 边框灰光保持 1s 后淡出 + 整层清理
+  window.setTimeout(() => fx.classList.add('fx-apathy-glow-out'), APATHY_FLIP_MS + APATHY_GLOW_AFTER_MS);
+  window.setTimeout(() => fx.remove(), APATHY_TOTAL_MS);
+}
+
 /** 基础行为特效：回手——从场上丝滑平移到持有者手牌末尾（专属 RETURN_MOVE_MS，更从容） */
 function playReturn(node: HTMLElement, payload: FxCardPayload): void {
   const rect = node.getBoundingClientRect();
@@ -1579,9 +1627,12 @@ export function initEffects(): () => void {
         break;
       case 'card:flipped':
         // life 协议触发的翻转（life-1/life-2 及未来生命翻转）：绿色藤蔓缠绕 + 绿光；
+        // apathy 协议触发的翻转（apathy-1/2/3/4）：边框灰光 + 双边灰雾（基础翻面即时播放，
+        // 灰雾期间一直在）；
         // 其余翻转源（water-0 带 'water'、系统效果带 'system'）走基础翻面
         if (node) {
           if (payload.triggerProtocol === 'life') playLifeFlip(node, payload);
+          else if (payload.triggerProtocol === 'apathy') playApathyFlipExtra(node, payload);
           else playFlip(node, payload);
         }
         break;

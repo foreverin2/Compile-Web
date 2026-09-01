@@ -1,7 +1,13 @@
-import type { ChoiceRequest, GameState, PendingEffect, PlayerId, Line, ProtocolDef } from '../core/models/types';
+import type { ChoiceRequest, GameState, PendingEffect, PlayerId, Line, ProtocolDef, Step } from '../core/models/types';
 import { getLineValue, getCurrentDrafter, draftTurnRange, lineTopCommandActive } from '../core/state/create';
 import { getLegalActions, type LegalAction } from '../core/game';
-import { opponentMustPlayFaceDown, lineBlocksOpponent } from '../core/rules/restrictions';
+import {
+  opponentMustPlayFaceDown,
+  lineBlocksOpponent,
+  lineMiddleCommandsNullified,
+  shouldSkipCacheCheck,
+  canPlayFaceUpAnywhere,
+} from '../core/rules/restrictions';
 import { DEMO_PROTOCOLS } from '../data/demo';
 import { downloadLog } from './diag';
 
@@ -195,6 +201,10 @@ function renderStackSlot(
     node.classList.add(card.owner === 0 ? 'rot-cw' : 'rot-ccw');
     node.dataset.uid = card.uid;
     node.style.zIndex = String(i);
+    // FX-5 冷漠2：apathy-2 顶「无效化此列所有牌的中部命令」→ 该列【双方】链路上所有场上卡
+    // 灰色滤镜（.apathy-filter 静态 grayscale(1)，重渲染重挂类无动画重置；双击放大
+    // openZoom 按 defId 新建 img、不克隆节点 → 查看器不受滤镜影响，见 openZoom 注释）
+    if (lineMiddleCommandsNullified(s, line)) node.classList.add('apathy-filter');
     if (selected === card.uid) node.classList.add('selected');
     // 单击=打牌（仅可交互时）、双击=放大查看（双方场上卡均为公开信息）。
     // 双击判别：单击延迟 320ms 严格大于 300ms 双击窗口，窗口内第二次点击先于延迟的
@@ -440,6 +450,272 @@ export function syncPlagueMists(s: GameState): void {
   }
 }
 
+/* ===== FX-5：常驻冷漠灰雾（apathy-0 顶命令 → 该线双方堆叠浓雾循环） =====
+ * lineTopCommandActive(s, line, 'apathy-0') 为真（任一玩家该线堆叠有正面 apathy-0——
+ * 顶命令被盖仍生效，口径同 darkness-2 黑烟）期间，该线【双方】堆叠槽持续渐现渐消灰色
+ * 浓雾（循环）。key 用 `${player}-${line}`（与 smokeOverlays/plagueMists 同构——apathy-0
+ * 是线级判定、双侧同时生效，key=line 不够分槽；按槽位分键可复用同一 get-or-create/
+ * 重定位/清理框架）。其余与 syncPlagueMists 同模式：body 级 fixed 层跨重渲染存活。 */
+const apathyMists = new Map<string, HTMLElement>();
+const APATHY_LINE_BLOB_COUNT = 6;
+
+function renderApathyMistLayer(): HTMLElement {
+  const layer = el('div', 'fx-apathy-line-mist');
+  for (let i = 0; i < APATHY_LINE_BLOB_COUNT; i++) {
+    const blob = el('i', 'fx-apathy-line-blob');
+    blob.style.animationDelay = `${-i * 0.5}s`; // 相位错开（负延迟）
+    layer.appendChild(blob);
+  }
+  return layer;
+}
+
+export function syncApathyMists(s: GameState): void {
+  const activeKeys = new Set<string>();
+  for (const line of [0, 1, 2] as Line[]) {
+    if (!lineTopCommandActive(s, line, 'apathy-0')) continue;
+    for (const player of [0, 1] as PlayerId[]) {
+      const key = `${player}-${line}`;
+      activeKeys.add(key);
+      const slot = document.querySelector<HTMLElement>(
+        `.stack-slot[data-player="${player}"][data-line="${line}"]`
+      );
+      if (!slot) continue;
+      let layer = apathyMists.get(key);
+      if (!layer) {
+        layer = renderApathyMistLayer();
+        layer.dataset.apathyKey = key;
+        apathyMists.set(key, layer);
+        document.body.appendChild(layer);
+      }
+      const r = slot.getBoundingClientRect();
+      layer.style.left = `${r.left}px`;
+      layer.style.top = `${r.top}px`;
+      layer.style.width = `${r.width}px`;
+      layer.style.height = `${r.height}px`;
+    }
+  }
+  for (const [key, layer] of apathyMists) {
+    if (!activeKeys.has(key)) {
+      layer.remove();
+      apathyMists.delete(key);
+    }
+  }
+}
+
+/* ===== FX-5：常驻灵魂-0 手牌区框光芒（spirit-0 底「跳过检查缓存」生效方） =====
+ * shouldSkipCacheCheck(s, player) 为真（player 任一线【未覆盖】顶卡为正面 spirit-0——
+ * 底命令仅未覆盖生效，口径同 restrictions）期间，该玩家手牌区（.hand[data-player]）
+ * 外框持续亮紫/紫粉交替光芒（.fx-spirit-handglow，CSS 呼吸动画交替 紫 ↔ 紫粉；
+ * renderHand 已写入 data-player 供本层定位）。key = player；与 syncSmokeOverlays 同模式：
+ * body 级 fixed 层跨重渲染存活、每帧渲染只重定位到 .hand 矩形。 */
+const spirit0Glows = new Map<PlayerId, HTMLElement>();
+
+export function syncSpirit0Glows(s: GameState): void {
+  const activePlayers = new Set<PlayerId>();
+  for (const player of [0, 1] as PlayerId[]) {
+    if (!shouldSkipCacheCheck(s, player)) continue;
+    const hand = document.querySelector<HTMLElement>(`.hand[data-player="${player}"]`);
+    if (!hand) continue;
+    activePlayers.add(player);
+    let glow = spirit0Glows.get(player);
+    if (!glow) {
+      glow = el('div', 'fx-spirit-handglow');
+      glow.dataset.spirit0Key = String(player);
+      spirit0Glows.set(player, glow);
+      document.body.appendChild(glow);
+    }
+    const r = hand.getBoundingClientRect();
+    glow.style.left = `${r.left}px`;
+    glow.style.top = `${r.top}px`;
+    glow.style.width = `${r.width}px`;
+    glow.style.height = `${r.height}px`;
+  }
+  for (const [player, glow] of spirit0Glows) {
+    if (!activePlayers.has(player)) {
+      glow.remove();
+      spirit0Glows.delete(player);
+    }
+  }
+}
+
+/* ===== FX-5：常驻灵魂-1 手牌卡边框护角（spirit-1 顶「你可以在任意列打出牌」生效方） =====
+ * canPlayFaceUpAnywhere(s, player) 为真期间，该玩家【所有手牌】边框亮紫/紫粉交替光芒
+ * + 四角加厚紫色护边（.fx-spirit-handcard 框光 + 4 个 .fx-spirit-corner tl/tr/bl/br）。
+ * key = 手牌卡 uid；sync 时只保留当前手牌 uid 集合——手牌卡离开手牌区（弃/打/回）后
+ * 该 uid 层移除；uid 仍活跃但节点不在 DOM（超过 15 张显示上限被隐藏）同样移除层。 */
+const spirit1Cards = new Map<string, HTMLElement>();
+
+function renderSpirit1CardLayer(): HTMLElement {
+  const layer = el('div', 'fx-spirit-handcard');
+  for (const pos of ['tl', 'tr', 'bl', 'br'] as const) {
+    layer.appendChild(el('i', `fx-spirit-corner ${pos}`));
+  }
+  return layer;
+}
+
+export function syncSpirit1Cards(s: GameState): void {
+  const activeUids = new Set<string>();
+  for (const player of [0, 1] as PlayerId[]) {
+    if (!canPlayFaceUpAnywhere(s, player)) continue;
+    for (const card of s.players[player].hand) {
+      activeUids.add(card.uid);
+      const node = document.querySelector<HTMLElement>(
+        `.hand[data-player="${player}"] .card[data-uid="${card.uid}"]`
+      );
+      if (!node) {
+        const stale = spirit1Cards.get(card.uid);
+        if (stale) {
+          stale.remove();
+          spirit1Cards.delete(card.uid);
+        }
+        continue;
+      }
+      let layer = spirit1Cards.get(card.uid);
+      if (!layer) {
+        layer = renderSpirit1CardLayer();
+        layer.dataset.spirit1Key = card.uid;
+        spirit1Cards.set(card.uid, layer);
+        document.body.appendChild(layer);
+      }
+      const r = node.getBoundingClientRect();
+      layer.style.left = `${r.left}px`;
+      layer.style.top = `${r.top}px`;
+      layer.style.width = `${r.width}px`;
+      layer.style.height = `${r.height}px`;
+    }
+  }
+  for (const [uid, layer] of spirit1Cards) {
+    if (!activeUids.has(uid)) {
+      layer.remove();
+      spirit1Cards.delete(uid);
+    }
+  }
+}
+
+/* ===== FX-5：check-cache 锁链（spirit-0 跳过检查缓存，一次性步骤触发） =====
+ * 触发：s.step === 'check-cache' 且 shouldSkipCacheCheck(s, player)（实际只有回合玩家
+ * 会停在 check-cache——runAutoAdvance 在该玩家应跳过时自动 advance）→ 以该玩家手牌区
+ * 边框为起点、朝手牌区中央延伸 20 条亮紫锁链（.fx-spirit-chains：body 级 fixed 层 +
+ * SVG 20 条 <line>，虚线描边 = 锁链节纹理，整体紫辉）。
+ * 实现要点（模块级 prevStep 跟踪步骤转换）：
+ * - 步骤从非 check-cache → check-cache（且条件成立）→ 生成锁链层（一次性，不随重渲染重建）；
+ * - 步骤离开 check-cache → 锁链层加 .fx-spirit-chains-out（1s 缩回消散：向中心微缩 + 淡出），
+ *   1s 后移除（边框恢复为常驻光芒——spirit0Glows 若仍生效继续亮）；
+ * - 随机生成 + 冲突避免：起点在上/下边框随机 x、终点在相对边随机 x（基本倾斜，
+ *   |Δx| ≥ 12px 保证非竖直）；预生成后与既有线段做「线段-线段最短距离」检查
+ *   （端点投影法，交叉线段 ≈ 0），< CHAIN_MIN_GAP 则重试（上限 CHAIN_COUNT × 60 次）。 */
+const CHAIN_COUNT = 20;
+const CHAIN_MIN_GAP = 26;      // 线段间最小间距（px）
+const CHAIN_RETRACT_MS = 1000; // 离开 check-cache 后锁链缩回消散时长
+let prevStep: Step | null = null;
+let chainLayer: HTMLElement | null = null;
+
+/** 点到线段最短距离（投影法） */
+function pointSegDist(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
+  const abx = bx - ax;
+  const aby = by - ay;
+  const len2 = abx * abx + aby * aby;
+  if (len2 === 0) return Math.hypot(px - ax, py - ay);
+  let t = ((px - ax) * abx + (py - ay) * aby) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (ax + t * abx), py - (ay + t * aby));
+}
+
+/** 两线段最短距离：四端点互为投影的最小值（对交叉线段 ≈ 0，足够做重叠检查） */
+function segSegDist(
+  ax: number, ay: number, bx: number, by: number,
+  cx: number, cy: number, dx: number, dy: number,
+): number {
+  return Math.min(
+    pointSegDist(ax, ay, cx, cy, dx, dy),
+    pointSegDist(bx, by, cx, cy, dx, dy),
+    pointSegDist(cx, cy, ax, ay, bx, by),
+    pointSegDist(dx, dy, ax, ay, bx, by),
+  );
+}
+
+/** 构建 20 条锁链层（SVG，viewBox = 手牌区 rect；随机 + 冲突检查重试） */
+function buildChainLayer(rect: DOMRect): HTMLElement {
+  const layer = el('div', 'fx-spirit-chains');
+  layer.style.left = `${rect.left}px`;
+  layer.style.top = `${rect.top}px`;
+  layer.style.width = `${rect.width}px`;
+  layer.style.height = `${rect.height}px`;
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('class', 'fx-spirit-chains-svg');
+  svg.setAttribute('width', String(rect.width));
+  svg.setAttribute('height', String(rect.height));
+  svg.setAttribute('viewBox', `0 0 ${rect.width} ${rect.height}`);
+  svg.setAttribute('preserveAspectRatio', 'none');
+  const segs: { x1: number; y1: number; x2: number; y2: number }[] = [];
+  const W = rect.width;
+  const H = rect.height;
+  const pad = 10;
+  let attempts = 0;
+  while (segs.length < CHAIN_COUNT && attempts < CHAIN_COUNT * 60) {
+    attempts += 1;
+    const fromTop = Math.random() < 0.5;
+    const x1 = pad + Math.random() * Math.max(1, W - pad * 2);
+    const x2 = pad + Math.random() * Math.max(1, W - pad * 2);
+    // 基本倾斜：水平偏移至少 12px（避免完全竖直的平行条）
+    if (Math.abs(x2 - x1) < 12) continue;
+    const y1 = fromTop ? 3 : H - 3;
+    const y2 = fromTop ? H - 3 : 3;
+    let ok = true;
+    for (const o of segs) {
+      if (segSegDist(x1, y1, x2, y2, o.x1, o.y1, o.x2, o.y2) < CHAIN_MIN_GAP) {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok) continue;
+    segs.push({ x1, y1, x2, y2 });
+  }
+  for (const seg of segs) {
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('x1', seg.x1.toFixed(1));
+    line.setAttribute('y1', seg.y1.toFixed(1));
+    line.setAttribute('x2', seg.x2.toFixed(1));
+    line.setAttribute('y2', seg.y2.toFixed(1));
+    svg.appendChild(line);
+  }
+  layer.appendChild(svg);
+  return layer;
+}
+
+/** check-cache 锁链步骤转换驱动：在 renderApp 每次渲染后调用（draft 阶段只记录不播）。
+ *  模块级 prevStep 检测转换：进入 check-cache（且 spirit-0 生效）→ 生成锁链层；
+ *  离开 check-cache → 锁链缩回消散 + 1s 后移除（无论条件此刻是否仍成立）。
+ *  只作用于回合玩家：check-cache 步骤只检查回合玩家手牌（引擎 game.ts 口径），
+ *  非回合玩家的 spirit-0 与此步骤无关（避免双侧同持 spirit-0 时重复/孤儿层）。 */
+export function syncCheckCacheChains(s: GameState): void {
+  if (s.step === prevStep) return;
+  const entering = s.step === 'check-cache';
+  const leaving = prevStep === 'check-cache' && s.step !== 'check-cache';
+  prevStep = s.step;
+  if (s.phase === 'draft') return; // 草案无手牌区 → 只记录转换不播锁链
+  if (entering) {
+    const player = s.turnPlayer;
+    if (!shouldSkipCacheCheck(s, player)) return;
+    const hand = document.querySelector<HTMLElement>(`.hand[data-player="${player}"]`);
+    if (!hand) return;
+    const rect = hand.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return;
+    const layer = buildChainLayer(rect);
+    chainLayer = layer;
+    document.body.appendChild(layer);
+    // 渐现（下一帧加类，保证初始 opacity:0 已被绘制）
+    requestAnimationFrame(() => {
+      if (chainLayer === layer) layer.classList.add('fx-spirit-chains-in');
+    });
+  } else if (leaving && chainLayer) {
+    const layer = chainLayer;
+    chainLayer = null;
+    layer.classList.add('fx-spirit-chains-out');
+    window.setTimeout(() => layer.remove(), CHAIN_RETRACT_MS + 120);
+  }
+}
+
 /** R12：每帧渲染把 body 级持久 FX 层重定位到对应 holder 矩形（层节点从不移动，只改
  *  坐标 left/top/width/height）：
  *  - 层已由 buildCompiledFx 在创建时挂到 document.body（position:fixed）→ 始终
@@ -570,6 +846,9 @@ function renderHand(
 ): HTMLElement {
   const reversed = player === 1; // P2 右起、向左延伸；P1 左起、向右延伸（默认左对齐）
   const hand = el('div', 'hand' + (opts.isSelf ? ' self' : '') + (reversed ? ' reversed' : ''));
+  // FX-5：手牌区定位标识（spirit-0 手牌区框光芒 / check-cache 锁链按 .hand[data-player]
+  // 查询 rect——syncSpirit0Glows / syncCheckCacheChains 使用）
+  hand.dataset.player = String(player);
   const cards = s.players[player].hand;
   // 点 4：手牌从左到右按数值升序显示（P1/P2 一致）。
   // 数值取 defId 后缀（'fire-3' → 3）。排序仅影响显示顺序，引擎 hand 数组不变。
@@ -1758,6 +2037,12 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   // 槽位已入 DOM → 创建/复用 body 级层并重定位到槽位矩形；条件消失后移除并注销）
   syncPsychicParticles(s);
   syncPlagueMists(s);
+  // FX-5 常驻协议特效：apathy-0 冷漠灰雾（槽位已入 DOM）/ spirit-0 手牌区框光芒 /
+  // spirit-1 手牌卡边框护角（手牌已入 DOM → 按 .hand[data-player] / 手牌卡 rect 重定位；
+  // 条件消失后移除并注销）
+  syncApathyMists(s);
+  syncSpirit0Glows(s);
+  syncSpirit1Cards(s);
 }
 
 let selectedUid: string | null = null;
@@ -1800,6 +2085,19 @@ export function resetUiState(): void {
   psychicParticles.clear();
   for (const layer of plagueMists.values()) layer.remove();
   plagueMists.clear();
+  // FX-5 常驻注册表：冷漠灰雾 / 灵魂-0 手牌区光芒 / 灵魂-1 手牌卡护角（移除层 + 清表）；
+  // check-cache 锁链层（一次性，离开步骤时已置 null 交由定时器清理，此处兜底直清）+ prevStep 复位
+  for (const layer of apathyMists.values()) layer.remove();
+  apathyMists.clear();
+  for (const glow of spirit0Glows.values()) glow.remove();
+  spirit0Glows.clear();
+  for (const layer of spirit1Cards.values()) layer.remove();
+  spirit1Cards.clear();
+  if (chainLayer) {
+    chainLayer.remove();
+    chainLayer = null;
+  }
+  prevStep = null;
   controlSliderPos = 50;
   closeZoom();
   closeTrashViewer();
@@ -1811,7 +2109,8 @@ export function resetUiState(): void {
     '.life-flip-fx, .life-flip-glow, .water-return-ring, .water-return-glow, .water-return-settle, ' +
       '.water-return-trail, .flip-overlay-fx, .draw-ghost, .reveal-fly-ghost, ' +
       '.fx-gravity-deckglow, .fx-gravity-hole, .fx-gravity-beam, .fx-gravity-cardglow, .fx-speed-glow, ' +
-      '.fx-psychic, .fx-plague, .fx-love-deckglow, .fx-love-fly, .fx-love-settle, .fx-love-heart'
+      '.fx-psychic, .fx-plague, .fx-love-deckglow, .fx-love-fly, .fx-love-settle, .fx-love-heart, ' +
+      '.fx-apathy, .fx-spirit-chains'
   )) {
     fx.remove();
   }
@@ -1837,7 +2136,9 @@ let zoomState: ZoomState | null = null;
 
 /** 打开卡牌放大查看遮罩。defId: 卡牌定义 id；faceUp: 是否正面；isProtocol: 是否协议卡；
  *  compiled: 协议是否已编译；peek: 是否带「查看背面」切换按钮（ITEM 9：自己的反面场上卡
- *  背面起显，点击在 背面 ↔ 正面 之间切换显示）。 */
+ *  背面起显，点击在 背面 ↔ 正面 之间切换显示）。
+ *  FX-5 冷漠2：放大查看器【不受】场上 .apathy-filter 灰度滤镜影响——本函数按 defId 新建
+ *  img（非克隆场上节点），滤镜类从不被继承（场上/弃牌堆查看的 dblclick 同样走 defId 新建）。 */
 function openZoom(defId: string, faceUp: boolean, isProtocol: boolean, compiled: boolean, peek?: boolean): void {
   if (zoomState) closeZoom();
   const overlay = el('div', 'zoom-overlay');
@@ -2102,6 +2403,9 @@ export function renderApp(root: HTMLElement, s: GameState, cb: UiCallbacks): voi
   } else {
     renderBoard(root, s, cb);
   }
+  // FX-5：check-cache 锁链（步骤转换驱动——进入 check-cache 且 spirit-0 生效时生成 20 条
+  // 亮紫锁链，离开时缩回消散；draft 阶段只记录转换不播；须在 DOM 挂载后调用）
+  syncCheckCacheChains(s);
   cb.onRendered?.();
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
