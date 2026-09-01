@@ -140,6 +140,24 @@ describe('death protocol effects', () => {
     expect(s.pendingEffects).toHaveLength(0);
   });
 
+  it('death-1 start: drew but NO other uncovered card → whole chain aborts, self NOT deleted (user ruling)', () => {
+    const s = draftDeathP1();
+    const dl = deathLine(s);
+    const death1 = makeCard('death-1', 0, 'field', true, dl, 0);
+    s.players[0].stacks[dl] = [death1]; // 场上唯一卡
+    s.players[0].hand = [];
+    const t = collectTriggers(s, 'start').find((x) => x.cardUid === death1.uid)!;
+    resolveTrigger(s, t, { topCommand: t.top });
+    runStack(s);
+    const p = s.pendingEffects[s.pendingEffects.length - 1];
+    executeAction(s, 0, 'effect-choice', { promptId: p.id, choice: ['action:draw'] });
+    expect(s.players[0].hand).toHaveLength(1); // 抽了
+    // 「删除另1张牌」候选为空 → fizzle 空答案 → 整条不执行（用户拍板：不删自己）
+    expect(s.pendingEffects).toHaveLength(0);
+    expect(s.players[0].trash).toHaveLength(0);
+    expect(s.players[0].stacks[dl].map((c) => c.uid)).toEqual([death1.uid]); // 自己仍在场上
+  });
+
   it('death-2: deletes all 1- and 2-point cards in the chosen line (both players, covered included)', () => {
     const s = draftDeathP1();
     advanceToStep(s, 0, 'action');
