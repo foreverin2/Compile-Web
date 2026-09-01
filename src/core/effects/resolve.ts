@@ -320,7 +320,13 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       card.line = op.line;
       card.pos = null;
       s.pendingPlay.push({ card, beforeCoveredDone: false, belowUid: op.belowUid });
-      emitCardEvent(s, 'card:deck-played', card, { line: op.line });
+      // triggerProtocol = 触发这张打牌堆顶的效果源协议（life-0/life-3/water-1/gravity-0/6），
+      // FX 层据此只给 gravity 播黑洞+射线（life/water 打牌堆顶不误播重力特效）
+      emitCardEvent(s, 'card:deck-played', card, {
+        line: op.line,
+        triggerDefId: pe.sourceDefId,
+        triggerProtocol: pe.sourceDefId.split('-')[0],
+      });
       break;
     }
     case 'playFromHand': {

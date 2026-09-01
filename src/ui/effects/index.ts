@@ -1365,9 +1365,10 @@ export function initEffects(): () => void {
         }
         break;
       case 'card:deck-played':
-        // 反面打出牌堆顶（gravity-0/6、life-0/3、water-1）：品红牌库框光 + 终点黑洞 + 品红射线，
-        // 前置段后延后基础打出（deck-played 事件不带 triggerProtocol，本分支即 gravity 附加特效）
-        playGravityDeckPlayExtra(payload);
+        // 反面打出牌堆顶：仅 gravity 触发源（gravity-0/6）播品红牌库框光 + 终点黑洞 + 品红射线
+        // （前置段后延后基础打出）；life-0/3、water-1 的打牌堆顶走基础打出（不误播重力特效）
+        if (payload.triggerProtocol === 'gravity') playGravityDeckPlayExtra(payload);
+        else playDeckPlay(payload);
         break;
       case 'card:hand-played':
         // playFromHand：从手牌中该卡的 rect 起飞飞入目标线堆叠末尾（区别于牌堆顶打出）
