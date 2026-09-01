@@ -601,40 +601,19 @@ export function syncSpirit1Cards(s: GameState): void {
  * - 步骤从非 check-cache → check-cache（且条件成立）→ 生成锁链层（一次性，不随重渲染重建）；
  * - 步骤离开 check-cache → 锁链层加 .fx-spirit-chains-out（1s 缩回消散：向中心微缩 + 淡出），
  *   1s 后移除（边框恢复为常驻光芒——spirit0Glows 若仍生效继续亮）；
- * - 随机生成 + 冲突避免：起点在上/下边框随机 x、终点在相对边随机 x（基本倾斜，
- *   |Δx| ≥ 12px 保证非竖直）；预生成后与既有线段做「线段-线段最短距离」检查
- *   （端点投影法，交叉线段 ≈ 0），< CHAIN_MIN_GAP 则重试（上限 CHAIN_COUNT × 60 次）。 */
+ * - 生成（buildChainLayer）：上/下边各 10 条、起点/终点各在 10 个等分段内随机（起点集合与
+ *   终点集合互不重叠——用户规格「起点与终点互不重叠」）+ 段内偏移保证基本倾斜；
+ *   20 条链都穿越手牌区中央，线段交叉是几何必然，不禁止。 */
 const CHAIN_COUNT = 20;
-const CHAIN_MIN_GAP = 26;      // 线段间最小间距（px）
 const CHAIN_RETRACT_MS = 1000; // 离开 check-cache 后锁链缩回消散时长
 let prevStep: Step | null = null;
 let chainLayer: HTMLElement | null = null;
 
-/** 点到线段最短距离（投影法） */
-function pointSegDist(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
-  const abx = bx - ax;
-  const aby = by - ay;
-  const len2 = abx * abx + aby * aby;
-  if (len2 === 0) return Math.hypot(px - ax, py - ay);
-  let t = ((px - ax) * abx + (py - ay) * aby) / len2;
-  t = Math.max(0, Math.min(1, t));
-  return Math.hypot(px - (ax + t * abx), py - (ay + t * aby));
-}
-
-/** 两线段最短距离：四端点互为投影的最小值（对交叉线段 ≈ 0，足够做重叠检查） */
-function segSegDist(
-  ax: number, ay: number, bx: number, by: number,
-  cx: number, cy: number, dx: number, dy: number,
-): number {
-  return Math.min(
-    pointSegDist(ax, ay, cx, cy, dx, dy),
-    pointSegDist(bx, by, cx, cy, dx, dy),
-    pointSegDist(cx, cy, ax, ay, bx, by),
-    pointSegDist(dx, dy, ax, ay, bx, by),
-  );
-}
-
-/** 构建 20 条锁链层（SVG，viewBox = 手牌区 rect；随机 + 冲突检查重试） */
+/** 构建 20 条锁链层（SVG，viewBox = 手牌区 rect）。
+ *  用户规格「锁链起点与终点互不重叠、基本倾斜」：
+ *  - 上/下边各 10 条；起点边 10 个等分段、每段内随机取起点 → 起点集合互不重叠；
+ *  - 终点在相对边对应段内随机 + 段内偏移保证 |Δx| ≥ 最小倾斜 → 终点集合互不重叠；
+ *  - 20 条链都穿越手牌区中央，线段交叉是几何必然（视觉为散布锁链网），不禁止交叉。 */
 function buildChainLayer(rect: DOMRect): HTMLElement {
   const layer = el('div', 'fx-spirit-chains');
   layer.style.left = `${rect.left}px`;
@@ -647,37 +626,30 @@ function buildChainLayer(rect: DOMRect): HTMLElement {
   svg.setAttribute('height', String(rect.height));
   svg.setAttribute('viewBox', `0 0 ${rect.width} ${rect.height}`);
   svg.setAttribute('preserveAspectRatio', 'none');
-  const segs: { x1: number; y1: number; x2: number; y2: number }[] = [];
   const W = rect.width;
   const H = rect.height;
   const pad = 10;
-  let attempts = 0;
-  while (segs.length < CHAIN_COUNT && attempts < CHAIN_COUNT * 60) {
-    attempts += 1;
-    const fromTop = Math.random() < 0.5;
-    const x1 = pad + Math.random() * Math.max(1, W - pad * 2);
-    const x2 = pad + Math.random() * Math.max(1, W - pad * 2);
-    // 基本倾斜：水平偏移至少 12px（避免完全竖直的平行条）
-    if (Math.abs(x2 - x1) < 12) continue;
-    const y1 = fromTop ? 3 : H - 3;
-    const y2 = fromTop ? H - 3 : 3;
-    let ok = true;
-    for (const o of segs) {
-      if (segSegDist(x1, y1, x2, y2, o.x1, o.y1, o.x2, o.y2) < CHAIN_MIN_GAP) {
-        ok = false;
-        break;
+  const half = CHAIN_COUNT / 2; // 上/下边各 10 条
+  const segW = Math.max(1, (W - pad * 2) / half);
+  const minTilt = Math.min(12, segW * 0.3); // 基本倾斜（窄手牌区退化为段内最小偏移）
+  for (let i = 0; i < half; i++) {
+    for (const fromTop of [true, false]) {
+      const segStart = pad + i * segW;
+      // 段内取起点（留 15% 边距防贴段界重叠）
+      const x1 = segStart + Math.random() * segW * 0.7;
+      // 终点：相对边同段内随机，|Δx| ≥ minTilt（不足则段内重试）
+      let x2 = 0;
+      for (let t = 0; t < 6; t++) {
+        x2 = segStart + Math.random() * segW * 0.7;
+        if (Math.abs(x2 - x1) >= minTilt) break;
       }
+      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      line.setAttribute('x1', x1.toFixed(1));
+      line.setAttribute('y1', fromTop ? '3' : (H - 3).toFixed(1));
+      line.setAttribute('x2', x2.toFixed(1));
+      line.setAttribute('y2', fromTop ? (H - 3).toFixed(1) : '3');
+      svg.appendChild(line);
     }
-    if (!ok) continue;
-    segs.push({ x1, y1, x2, y2 });
-  }
-  for (const seg of segs) {
-    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-    line.setAttribute('x1', seg.x1.toFixed(1));
-    line.setAttribute('y1', seg.y1.toFixed(1));
-    line.setAttribute('x2', seg.x2.toFixed(1));
-    line.setAttribute('y2', seg.y2.toFixed(1));
-    svg.appendChild(line);
   }
   layer.appendChild(svg);
   return layer;
