@@ -19,6 +19,7 @@ import './cards/psychic';
 import './cards/plague';
 import './cards/metal';
 import './cards/speed';
+import './cards/love';
 
 function topEffect(s: GameState): PendingEffect | undefined {
   return s.pendingEffects[s.pendingEffects.length - 1];
