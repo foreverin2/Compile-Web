@@ -744,26 +744,73 @@ export function syncMetal6Mans(s: GameState): void {
  * 触发：s.step === 'check-cache' 且 shouldSkipCacheCheck(s, player)（实际只有回合玩家
  * 会停在 check-cache——runAutoAdvance 在该玩家应跳过时自动 advance）→ 以该玩家手牌区
  * 边框为起点、朝手牌区中央延伸 20 条亮紫锁链（.fx-spirit-chains：body 级 fixed 层 +
- * SVG 20 条 <line>，虚线描边 = 锁链节纹理，整体紫辉）。
+ * SVG 椭圆环链：每条链沿线段方向排布多个小椭圆环、相邻环垂直交错相扣 = ⛓️ 样式）。
  * 实现要点（模块级 prevStep 跟踪步骤转换）：
  * - 步骤从非 check-cache → check-cache（且条件成立）→ 生成锁链层（一次性，不随重渲染重建）；
  * - 步骤离开 check-cache → 锁链层加 .fx-spirit-chains-out（1s 缩回消散：向中心微缩 + 淡出），
  *   1s 后移除（边框恢复为常驻光芒——spirit0Glows 若仍生效继续亮）；
  * - 生成（buildChainLayer）：上/下边各 10 条、起点/终点各在 10 个等分段内随机（起点集合与
  *   终点集合互不重叠——用户规格「起点与终点互不重叠」）+ 段内偏移保证基本倾斜；
- *   20 条链都穿越手牌区中央，线段交叉是几何必然，不禁止。 */
+ *   20 条链都穿越手牌区中央，线段交叉是几何必然，不禁止；
+ * - FX-R2 滚动跟随：生成时在层上记录 data-chain-player（手牌区选择器），
+ *   syncChainLayerPosition 按它重新查询手牌区 rect 更新层盒（幂等，层不存在跳过）。 */
 const CHAIN_COUNT = 20;
+const CHAIN_LINK_W = 18;     // 椭圆环长轴（沿链方向），环环相扣参数集中在此微调
+const CHAIN_LINK_H = 11;     // 椭圆环短轴（垂直方向）
+const CHAIN_LINK_GAP = 9;    // 相邻环中心间距 ≈ 环长的一半 → 视觉相扣
+const CHAIN_LINK_OFFSET = 4; // 相邻环垂直交错量（模拟「扣在一起」）
 const CHAIN_RETRACT_MS = 1000; // 离开 check-cache 后锁链缩回消散时长
 let prevStep: Step | null = null;
 let chainLayer: HTMLElement | null = null;
 
-/** 构建 20 条锁链层（SVG，viewBox = 手牌区 rect）。
+/** 沿线段 (x1,y1)→(x2,y2) 排布环环相扣的小椭圆环（⛓️ 样式）：
+ *  - 环心沿线等距均布（间距 CHAIN_LINK_GAP），每环旋转到线段角度；
+ *  - 相邻环沿线段垂直方向交替错位 CHAIN_LINK_OFFSET → 读作「扣在一起」；
+ *  - 环为细椭圆 stroke 描边（CSS .fx-spirit-chains-svg ellipse），紫调。 */
+function appendChainLinks(
+  svg: SVGSVGElement,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+): void {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len = Math.hypot(dx, dy);
+  if (len < 1) return;
+  const ang = (Math.atan2(dy, dx) * 180) / Math.PI; // 线段角度（度）
+  const nx = -dy / len; // 线段垂直单位向量（错位方向）
+  const ny = dx / len;
+  const rx = CHAIN_LINK_W / 2;
+  const ry = CHAIN_LINK_H / 2;
+  const count = Math.max(1, Math.floor(len / CHAIN_LINK_GAP));
+  const tStep = len / count;
+  for (let i = 0; i < count; i++) {
+    const t = i * tStep + tStep / 2; // 环心沿线均布（首尾留半格）
+    const cx = x1 + (dx / len) * t;
+    const cy = y1 + (dy / len) * t;
+    const off = (i % 2 === 0 ? 1 : -1) * CHAIN_LINK_OFFSET; // 相邻环上下交错
+    const ox = (cx + nx * off).toFixed(1);
+    const oy = (cy + ny * off).toFixed(1);
+    const link = document.createElementNS('http://www.w3.org/2000/svg', 'ellipse');
+    link.setAttribute('cx', ox);
+    link.setAttribute('cy', oy);
+    link.setAttribute('rx', rx.toFixed(1));
+    link.setAttribute('ry', ry.toFixed(1));
+    link.setAttribute('transform', `rotate(${ang.toFixed(1)} ${ox} ${oy})`);
+    svg.appendChild(link);
+  }
+}
+
+/** 构建 20 条锁链层（SVG，viewBox = 手牌区 rect；layer.dataset.chainPlayer 记录目标
+ *  手牌区选择器供滚动/缩放重定位）。
  *  用户规格「锁链起点与终点互不重叠、基本倾斜」：
  *  - 上/下边各 10 条；起点边 10 个等分段、每段内随机取起点 → 起点集合互不重叠；
  *  - 终点在相对边对应段内随机 + 段内偏移保证 |Δx| ≥ 最小倾斜 → 终点集合互不重叠；
  *  - 20 条链都穿越手牌区中央，线段交叉是几何必然（视觉为散布锁链网），不禁止交叉。 */
-function buildChainLayer(rect: DOMRect): HTMLElement {
+function buildChainLayer(rect: DOMRect, player: PlayerId): HTMLElement {
   const layer = el('div', 'fx-spirit-chains');
+  layer.dataset.chainPlayer = String(player); // 滚动/缩放跟随：按此重新查询手牌区 rect
   layer.style.left = `${rect.left}px`;
   layer.style.top = `${rect.top}px`;
   layer.style.width = `${rect.width}px`;
@@ -791,16 +838,33 @@ function buildChainLayer(rect: DOMRect): HTMLElement {
         x2 = segStart + Math.random() * segW * 0.7;
         if (Math.abs(x2 - x1) >= minTilt) break;
       }
-      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-      line.setAttribute('x1', x1.toFixed(1));
-      line.setAttribute('y1', fromTop ? '3' : (H - 3).toFixed(1));
-      line.setAttribute('x2', x2.toFixed(1));
-      line.setAttribute('y2', fromTop ? (H - 3).toFixed(1) : '3');
-      svg.appendChild(line);
+      const y1 = fromTop ? 3 : H - 3;
+      const y2 = fromTop ? H - 3 : 3;
+      appendChainLinks(svg, x1, y1, x2, y2);
     }
   }
   layer.appendChild(svg);
   return layer;
+}
+
+/** FX-R2：锁链层滚动/缩放跟随。锁链是一次性层（check-cache 生成后不随重渲染重建），
+ *  滚动/缩放会让它停在陈旧视口坐标；按生成时记录的 data-chain-player 重新查询
+ *  `.hand[data-player]` 的 rect 更新层盒（left/top/width/height）。幂等且廉价：
+ *  层不存在 / 未记录 player / 手牌区不在 DOM（如草案阶段）时直接跳过；SVG 拉伸由
+ *  .fx-spirit-chains-svg width/height:100% + preserveAspectRatio=none 承接（viewBox
+ *  仍是生成时的手牌区矩形，重定位后整层跟随新矩形）。 */
+export function syncChainLayerPosition(): void {
+  if (!chainLayer) return;
+  const player = chainLayer.dataset.chainPlayer;
+  if (player === undefined) return;
+  const hand = document.querySelector<HTMLElement>(`.hand[data-player="${player}"]`);
+  if (!hand) return;
+  const rect = hand.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return;
+  chainLayer.style.left = `${rect.left}px`;
+  chainLayer.style.top = `${rect.top}px`;
+  chainLayer.style.width = `${rect.width}px`;
+  chainLayer.style.height = `${rect.height}px`;
 }
 
 /** check-cache 锁链步骤转换驱动：在 renderApp 每次渲染后调用（draft 阶段只记录不播）。
@@ -821,7 +885,7 @@ export function syncCheckCacheChains(s: GameState): void {
     if (!hand) return;
     const rect = hand.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return;
-    const layer = buildChainLayer(rect);
+    const layer = buildChainLayer(rect, player);
     chainLayer = layer;
     document.body.appendChild(layer);
     // 渐现（下一帧加类，保证初始 opacity:0 已被绘制）
@@ -2540,6 +2604,8 @@ export function renderApp(root: HTMLElement, s: GameState, cb: UiCallbacks): voi
   // FX-5：check-cache 锁链（步骤转换驱动——进入 check-cache 且 spirit-0 生效时生成 20 条
   // 亮紫锁链，离开时缩回消散；draft 阶段只记录转换不播；须在 DOM 挂载后调用）
   syncCheckCacheChains(s);
+  // FX-R2：渲染间手牌区布局变动（重排/换位等）→ 锁链层重定位跟随（幂等，层不存在跳过）
+  syncChainLayerPosition();
   cb.onRendered?.();
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {

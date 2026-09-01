@@ -2370,15 +2370,15 @@ body.dragging { cursor: grabbing; user-select: none; }
 
 /* 镰刀容器（覆盖卡面；子元素可越界——overflow 默认 visible） */
 .fx-death-scythe { position: absolute; inset: 0; pointer-events: none; }
-/* 镰刀组（长柄 + 弯月刃）：初始悬于卡上方（top 负值），渐现后斜划过卡面。
-   opacity 0.3s = DEATH_SCYTHE_IN_MS；transform 0.5s = DEATH_SCYTHE_SWEEP_MS；
+/* 镰刀组（木棍长柄 + 顶端长条刀片，回旋镖/长柄镰刀造型）：初始悬于卡上方（top 负值），
+   渐现后斜划过卡面。opacity 0.3s = DEATH_SCYTHE_IN_MS；transform 0.5s = DEATH_SCYTHE_SWEEP_MS；
    划过终点 translate(40%, 80%) rotate(-20deg)（右下斜切，含旋转扫掠感）。 */
 .fx-death-scythe-item {
   position: absolute;
   left: -6px;
-  top: -116px;
-  width: 140px;
-  height: 170px;
+  top: -124px;
+  width: 150px;
+  height: 178px;
   opacity: 0;
   transform: translate(4%, -2%) rotate(16deg);
   transform-origin: 50% 68%;
@@ -2388,103 +2388,58 @@ body.dragging { cursor: grabbing; user-select: none; }
 .fx-death-scythe-item.fx-death-scythe-visible { opacity: 1; }
 .fx-death-scythe-item.fx-death-scythe-sweep { transform: translate(40%, 80%) rotate(-20deg); }
 .fx-death-scythe-item.fx-death-scythe-out { opacity: 0; transition: opacity 0.4s ease-in; } /* 0.4s = DEATH_SCYTHE_OUT_MS */
-/* 长柄：木色渐变细杆，斜贯镰刀组 */
+/* 木棍长柄：木色渐变直杆，竖贯镰刀组（柄身 + 顶端刀片） */
 .fx-death-scythe-handle {
   position: absolute;
   left: 50%;
-  top: 0;
-  width: 9px;
-  height: 152px;
-  margin-left: -4.5px;
+  top: 2px;
+  width: 10px;
+  height: 172px;
+  margin-left: -5px;
   border-radius: 5px;
-  background: linear-gradient(90deg, #7a5633, #4a2c16 40%, #2c180b 60%, #5d3a1e);
-  box-shadow: 0 0 5px rgba(0, 0, 0, 0.65), inset 0 0 2px rgba(255, 220, 170, 0.25);
+  background: linear-gradient(90deg, #8a6238, #5d3a1e 30%, #38220f 55%, #6b4423 80%, #4a2c16);
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.6), inset 0 0 3px rgba(255, 214, 150, 0.28);
 }
-/* 弯月刃：inset box-shadow 偏移圆咬出月牙（银刃 + 暗 rim），位于柄下端、刃口朝上 */
+/* 长条刀片：横置长条（垂直柄身、略带弧度，回旋镖感），灰白金属渐变 + 顶部刃口反光、
+   底部暗 rim；位于柄顶端。 */
 .fx-death-scythe-blade {
   position: absolute;
-  left: 30%;
-  top: 78%;
-  width: 58px;
-  height: 58px;
-  border-radius: 50%;
-  background: transparent;
-  box-shadow: inset -20px 12px 0 -2px #7d8494, inset -13px 7px 0 0 #cdd2dc;
-  transform: rotate(24deg);
-  filter: drop-shadow(0 0 6px rgba(160, 165, 190, 0.5));
+  left: 50%;
+  top: -9px;
+  width: 138px;
+  height: 27px;
+  margin-left: -69px;
+  border-radius: 50% 50% 10px 10px / 62% 62% 30% 30%;
+  background: linear-gradient(180deg, #f6f8fc 0%, #cfd5e0 28%, #98a0b2 55%, #6c7487 82%, #474e60 100%);
+  box-shadow:
+    0 0 9px rgba(165, 175, 205, 0.5),
+    inset 0 2px 3px rgba(255, 255, 255, 0.85),
+    inset 0 -3px 4px rgba(28, 32, 46, 0.55);
+  transform: rotate(-7deg);
 }
 
-/* 黑骷髅头：头骨（黑底紫辉）+ 眼窝/鼻 + 下排牙齿（交替 translateY 上下动，负延迟错半周期）。
-   渐现 0.4s / 渐隐 0.4s = DEATH_SKULL_FADE_MS；停留 2s = DEATH_SKULL_LINGER_MS。 */
+/* 💀 emoji 骷髅：大号 emoji 文本节点（JS 直接写 '💀'，白色骷髅头由 emoji 字体渲染），
+   容器 flex 居中覆盖卡面。渐现/渐隐 0.4s = DEATH_SKULL_FADE_MS；停留 2s =
+   DEATH_SKULL_LINGER_MS；上下晃动（fx-death-skull-bob 动画 translateY 往复）。 */
 .fx-death-skull {
   position: absolute;
   inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
+  font-size: 76px;
+  line-height: 1;
   opacity: 0;
-  transform: scale(0.65);
-  transition: opacity 0.4s ease-out, transform 0.4s ease-out;
+  transition: opacity 0.4s ease-out;
   pointer-events: none;
+  animation: fx-death-skull-bob 0.9s ease-in-out infinite alternate;
+  filter: drop-shadow(0 0 8px rgba(150, 80, 255, 0.65));
 }
-.fx-death-skull.fx-death-skull-in { opacity: 1; transform: scale(1); }
-.fx-death-skull.fx-death-skull-out { opacity: 0; transform: scale(0.8); }
-.fx-death-skull-head {
-  position: relative;
-  width: 58%;
-  height: 66%;
-  border-radius: 44% 44% 40% 40% / 54% 54% 44% 44%;
-  background: radial-gradient(circle at 50% 34%, #26263a 0%, #10101c 68%, #08080f 100%);
-  border: 2px solid #4b4b6a;
-  box-shadow: 0 0 16px rgba(96, 40, 190, 0.55), inset 0 0 18px rgba(150, 80, 255, 0.18);
-}
-.fx-death-skull-eye {
-  position: absolute;
-  top: 24%;
-  width: 21%;
-  height: 26%;
-  border-radius: 50%;
-  background: #030308;
-  box-shadow: inset 0 0 8px #000, 0 0 10px rgba(130, 60, 240, 0.55);
-}
-.fx-death-skull-eye.left { left: 17%; }
-.fx-death-skull-eye.right { right: 17%; }
-.fx-death-skull-nose {
-  position: absolute;
-  top: 53%;
-  left: 50%;
-  width: 13%;
-  height: 15%;
-  background: #030308;
-  clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
-  box-shadow: 0 0 8px rgba(130, 60, 240, 0.4);
-}
-.fx-death-skull-jaw {
-  position: absolute;
-  bottom: 7%;
-  left: 50%;
-  width: 50%;
-  height: 21%;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 5%;
-  border-radius: 0 0 40% 40% / 0 0 70% 70%;
-  background: #14141f;
-  border: 2px solid #3d3d58;
-}
-.fx-death-tooth {
-  width: 10%;
-  height: 60%;
-  background: linear-gradient(180deg, #f4f4f8, #b7bac6);
-  border-radius: 2px 2px 28% 28%;
-  animation: fx-death-teeth 0.6s ease-in-out infinite alternate;
-}
-.fx-death-tooth:nth-child(even) { animation-delay: -0.3s; } /* 负延迟错半周期 → 相邻齿交替上下 */
-@keyframes fx-death-teeth {
-  from { transform: translateY(0); }
-  to { transform: translateY(42%); }
+.fx-death-skull.fx-death-skull-in { opacity: 1; }
+.fx-death-skull.fx-death-skull-out { opacity: 0; transition: opacity 0.4s ease-in; }
+@keyframes fx-death-skull-bob {
+  from { transform: translateY(-7px); }
+  to { transform: translateY(9px); }
 }
 
 /* ===== Hate 协议删除附加特效（card:deleted + triggerProtocol=hate，JS playHateDeleteExtra） =====
@@ -3292,10 +3247,12 @@ body.dragging { cursor: grabbing; user-select: none; }
 
 /* —— check-cache 锁链（spirit-0 跳过检查缓存，一次性步骤触发） ——
  * .fx-spirit-chains 挂在 document.body（position:fixed，盒 = 手牌区 rect，内 SVG
- * .fx-spirit-chains-svg 20 条 <line>）；虚线描边（stroke-dasharray 10 6 + round 端点）
- * = 锁链节纹理；整体 drop-shadow 紫辉。进入 check-cache 渐现（-in 0.25s）；离开时
- * -out 1s 缩回消散（向中心微缩 scale(0.85) + 淡出 = CHAIN_RETRACT_MS）；z-index 46
- * 高于手牌卡护角（45），低于 hover 卡（50/60）。 */
+ * .fx-spirit-chains-svg 20 条链）；每条链 = 多个小椭圆环（stroke 描边）沿线段方向
+ * 等距排布 + 相邻环垂直交错相扣（⛓️ 样式，环尺寸/间距常量在 render.ts CHAIN_* 集中）；
+ * 整体 drop-shadow 紫辉。svg width/height 100% + preserveAspectRatio=none → 重定位
+ * （滚动/缩放，syncChainLayerPosition 改 left/top/width/height）时整层跟随手牌区矩形。
+ * 进入 check-cache 渐现（-in 0.25s）；离开时 -out 1s 缩回消散（向中心微缩 scale(0.85)
+ * + 淡出 = CHAIN_RETRACT_MS）；z-index 46 高于手牌卡护角（45），低于 hover 卡（50/60）。 */
 .fx-spirit-chains {
   position: fixed;
   pointer-events: none;
@@ -3313,14 +3270,15 @@ body.dragging { cursor: grabbing; user-select: none; }
 }
 .fx-spirit-chains-svg {
   display: block;
+  width: 100%;
+  height: 100%;
   overflow: visible;
   filter: drop-shadow(0 0 5px rgba(178, 107, 255, 0.9));
 }
-.fx-spirit-chains-svg line {
+.fx-spirit-chains-svg ellipse {
+  fill: none;
   stroke: #b26bff;
-  stroke-width: 3.5;
-  stroke-linecap: round;
-  stroke-dasharray: 10 6;
+  stroke-width: 2.6;
 }
 
 /* ===== FX-6：金属（metal）协议特效 =====

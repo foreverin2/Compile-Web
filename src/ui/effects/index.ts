@@ -210,7 +210,8 @@ function playFireBurnExtra(node: HTMLElement, payload: FxCardPayload): void {
  * Death 协议专属删除附加特效：死神镰刀划过 + 深紫边框光 + 骷髅收尾
  * （card:deleted + triggerProtocol=death；styles.css .fx-death-* 结构见类注释）。
  * 时序（总 ≈ 3.26s）：镰刀渐现(0~0.3s) → 镰刀划过(0.3~0.8s) → 基础破碎(0.8s 起，本函数延后调度)
- * → 收尾(0.8s 起：镰刀渐隐、原卡位渐现黑骷髅头) → 骷髅 2s 后渐隐、深紫边框光 2s 后消失。
+ * → 收尾(0.8s 起：镰刀渐隐、原卡位渐现 💀 emoji 骷髅，上下晃动) → 骷髅 2s 后渐隐、
+ * 深紫边框光 2s 后消失。
  * 注意与 fire/light/darkness 不同：本特效【前置段先播、基础 playShatter 延后】，故分发处
  * 对 death/hate 跳过即时破碎，由本函数在 DEATH_PRE_MS 用事件时捕获的 rect 调度 playShatterAt。
  */
@@ -221,7 +222,8 @@ function playDeathDeleteExtra(node: HTMLElement, payload: FxCardPayload): void {
   const cw = node.classList.contains('rot-cw');
   const ccw = node.classList.contains('rot-ccw');
   clone.classList.add('fx-death', 'fx-death-glow');
-  // ① 镰刀：长柄 + 弯月刃，初始悬于卡上方（渐现），随后斜划过卡面
+  // ① 镰刀：木棍长柄 + 顶端一长条刀片（回旋镖/长柄镰刀造型，见 styles.css），
+  // 初始悬于卡上方（渐现），随后斜划过卡面
   const scythe = document.createElement('div');
   scythe.className = 'fx-death-scythe';
   const item = document.createElement('div');
@@ -230,22 +232,10 @@ function playDeathDeleteExtra(node: HTMLElement, payload: FxCardPayload): void {
   item.appendChild(Object.assign(document.createElement('div'), { className: 'fx-death-scythe-blade' }));
   scythe.appendChild(item);
   clone.appendChild(scythe);
-  // ⑤ 骷髅：头骨 + 下排牙齿（交替 translateY 上下动），初始隐藏、破碎时渐现
+  // ⑤ 骷髅：emoji 💀（大号文本节点，CSS 上下晃动），初始隐藏、破碎时渐现
   const skull = document.createElement('div');
   skull.className = 'fx-death-skull';
-  const head = document.createElement('div');
-  head.className = 'fx-death-skull-head';
-  head.appendChild(Object.assign(document.createElement('div'), { className: 'fx-death-skull-eye left' }));
-  head.appendChild(Object.assign(document.createElement('div'), { className: 'fx-death-skull-eye right' }));
-  head.appendChild(Object.assign(document.createElement('div'), { className: 'fx-death-skull-nose' }));
-  const jaw = document.createElement('div');
-  jaw.className = 'fx-death-skull-jaw';
-  const TOOTH_COUNT = 5;
-  for (let i = 0; i < TOOTH_COUNT; i++) {
-    jaw.appendChild(Object.assign(document.createElement('div'), { className: 'fx-death-tooth' }));
-  }
-  head.appendChild(jaw);
-  skull.appendChild(head);
+  skull.textContent = '💀';
   clone.appendChild(skull);
   // 阶段调度（setTimeout 链，与 DEATH_* 常量对齐；所有浮层自清理）
   window.setTimeout(() => item.classList.add('fx-death-scythe-visible'), 20);
