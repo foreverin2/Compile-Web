@@ -14,9 +14,9 @@ function draftToTurn(): ReturnType<typeof createGame> {
 describe('game facade', () => {
   it('offers compile action in check-compile when forced', () => {
     const s = draftToTurn();
-    // 把线 0 堆成 10 点：10 张 spirit-1
+    // 把线 0 堆成 10 点：10 张 metal-1（值 1；金属协议未注册效果 → 无 start 触发干扰）
     s.players[0].stacks[0] = Array.from({ length: 10 }, (_, i) => ({
-      uid: `x${i}`, defId: 'spirit-1', owner: 0 as const, faceUp: true, zone: 'field' as const, line: 0 as const, pos: i,
+      uid: `x${i}`, defId: 'metal-1', owner: 0 as const, faceUp: true, zone: 'field' as const, line: 0 as const, pos: i,
     }));
     executeAction(s, 0, 'advance'); // start → check-control
     executeAction(s, 0, 'advance'); // check-control → check-compile
@@ -65,11 +65,11 @@ describe('game facade', () => {
 
   it('declares a winner when the third protocol compiles', () => {
     const s = draftToTurn();
-    // 预置：P1 前两条协议已编译，第三条线堆满 10 点
+    // 预置：P1 前两条协议已编译，第三条线堆满 10 点（metal-1 值 1 × 10，无 start 触发）
     s.players[0].protocols[0].compiled = true;
     s.players[0].protocols[1].compiled = true;
     s.players[0].stacks[2] = Array.from({ length: 10 }, (_, i) => ({
-      uid: `w${i}`, defId: 'spirit-1', owner: 0 as const, faceUp: true, zone: 'field' as const, line: 2 as const, pos: i,
+      uid: `w${i}`, defId: 'metal-1', owner: 0 as const, faceUp: true, zone: 'field' as const, line: 2 as const, pos: i,
     }));
     // 推进到 check-compile
     while (s.step !== 'check-compile') {
@@ -97,9 +97,9 @@ describe('game facade', () => {
 
   it('does not auto-compile: single compilable line still offers compile action and no advance', () => {
     const s = draftToTurn();
-    // 线 0 堆满 10 点（spirit-1 值 1 × 10）
+    // 线 0 堆满 10 点（metal-1 值 1 × 10，无 start 触发）
     s.players[0].stacks[0] = Array.from({ length: 10 }, (_, i) => ({
-      uid: `x${i}`, defId: 'spirit-1', owner: 0 as const, faceUp: true, zone: 'field' as const, line: 0 as const, pos: i,
+      uid: `x${i}`, defId: 'metal-1', owner: 0 as const, faceUp: true, zone: 'field' as const, line: 0 as const, pos: i,
     }));
     while (s.step !== 'check-compile') {
       executeAction(s, 0, 'advance');
