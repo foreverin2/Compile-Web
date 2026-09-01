@@ -3287,3 +3287,141 @@ body.dragging { cursor: grabbing; user-select: none; }
   stroke-linecap: round;
   stroke-dasharray: 10 6;
 }
+
+/* ===== FX-6：金属（metal）协议特效 =====
+ * 金属光泽统一为亮银/白 linear-gradient 渐变描边 + 循环扫光（背景位移动画）；
+ * 时长/颜色集中在本节各块顶部，便于 5173 微调。 */
+
+/* —— 金属渐变描边环 + 循环扫光（energyglow/lineglow 共用）——
+ * mask xor/exclude：只保留 border 区域的渐变环（content 区透明露出下方电池/链路），
+ * background-position 动画让亮银带沿环循环扫动（亮银/白渐变 = 金属光泽）。 */
+@keyframes fx-metal-sheen {
+  0% { background-position: 0% 0%; }
+  100% { background-position: 100% 100%; }
+}
+
+/* —— metal-0 常驻：对方能量条金属光泽边框（.fx-metal-energyglow，render.ts
+ *    syncMetal0Glows 挂 body 级 fixed，盒 = 对方 .battery-shell 矩形，跨重渲染存活）。
+ *    z-index 61：与常驻扫描线同层——高于电池外壳（59）与 hover 弹出卡（60!important），
+ *    低于选择/操作条（200）等浮层。金属渐变环 + 循环扫光（2.8s）。 */
+.fx-metal-energyglow {
+  position: fixed;
+  pointer-events: none;
+  z-index: 61;
+  border-radius: 14px;
+  padding: 3px;
+  background: linear-gradient(
+    115deg,
+    #6b6b6b 0%, #e9e9e9 20%, #ffffff 36%, #ffe8b0 46%, #ffffff 55%, #c8c8c8 72%, #565656 100%
+  );
+  background-size: 240% 240%;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: fx-metal-sheen 2.8s linear infinite;
+  filter: drop-shadow(0 0 5px rgba(205, 220, 255, 0.6));
+}
+
+/* —— metal-1 一次性：对手三条链路边框金属光泽（.fx-metal-lineglow，effects/index.ts
+ *    playMetalLineGlow 挂 body 级 fixed，盒 = 对方 .stack-slot 矩形；出现 → 3s 渐隐）。
+ *    同 energyglow 金属渐变环 + 扫光；z-index 由 JS 写 EXTRA_Z(301)（浮于棋盘之上）。
+ *    初始 opacity 0；-in 渐现（0.3s）、-out 渐隐（0.5s），定时器自清理。 */
+.fx-metal-lineglow {
+  position: fixed;
+  pointer-events: none;
+  border-radius: 14px;
+  padding: 4px;
+  opacity: 0;
+  background: linear-gradient(
+    115deg,
+    #6b6b6b 0%, #e9e9e9 20%, #ffffff 36%, #ffe8b0 46%, #ffffff 55%, #c8c8c8 72%, #565656 100%
+  );
+  background-size: 240% 240%;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  filter: drop-shadow(0 0 6px rgba(205, 220, 255, 0.65));
+}
+.fx-metal-lineglow.fx-metal-lineglow-in {
+  opacity: 1;
+  transition: opacity 0.3s ease-out;
+  animation: fx-metal-sheen 2.8s linear infinite;
+}
+.fx-metal-lineglow.fx-metal-lineglow-out {
+  opacity: 0;
+  transition: opacity 0.5s ease-in;
+  animation: none; /* 渐隐期停止扫光，避免动画覆盖 opacity 过渡 */
+}
+
+/* —— metal-2 常驻：持卡方该线堆叠槽金属铁板 + 斜光扫过（.fx-metal-plate/.fx-metal-sweep，
+ *    render.ts syncMetalPlates 挂 body 级 fixed，盒 = 对方 .stack-slot 矩形，跨重渲染存活）。
+ *    铁板：钢灰金属渐变盖板（内斜纹 + 上下内阴影 + 高光边）覆盖该线堆叠区域；
+ *    .fx-metal-sweep：斜长方形亮条（skewX 斜置）translateX 从左到右循环扫过（2.2s 周期，
+ *    0–65% 扫过、65–100% 停留后重现——"扫过 → 短暂停 → 再扫"）。
+ *    z-index 43：高于黑烟（40）/瘟疫（41）/念能（42），低于 hover 弹出卡（50/60）。 */
+.fx-metal-plate {
+  position: fixed;
+  pointer-events: none;
+  z-index: 43;
+  border-radius: 8px;
+  overflow: hidden;
+  background:
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.05) 0 2px, transparent 2px 6px),
+    linear-gradient(115deg, rgba(92, 96, 106, 0.85), rgba(140, 146, 158, 0.85) 32%, rgba(88, 92, 102, 0.85) 62%, rgba(122, 128, 140, 0.85));
+  box-shadow:
+    inset 0 0 14px rgba(0, 0, 0, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.4),
+    0 0 10px rgba(160, 170, 190, 0.22);
+}
+.fx-metal-sweep {
+  position: absolute;
+  top: -8%;
+  bottom: -8%;
+  left: 0;
+  width: 32%;
+  background: linear-gradient(
+    100deg,
+    transparent,
+    rgba(255, 255, 255, 0.45) 42%,
+    rgba(255, 242, 205, 0.85) 50%,
+    rgba(255, 255, 255, 0.45) 58%,
+    transparent
+  );
+  transform: translateX(-160%) skewX(-16deg);
+  animation: fx-metal-sweep-x 2.2s ease-in-out infinite;
+}
+@keyframes fx-metal-sweep-x {
+  0% { transform: translateX(-160%) skewX(-16deg); }
+  65% { transform: translateX(340%) skewX(-16deg); }
+  100% { transform: translateX(340%) skewX(-16deg); }
+}
+
+/* —— metal-6 手牌：该卡牌面循环渐现 man.png（.fx-metal-man，render.ts syncMetal6Mans
+ *    挂 body 级 fixed，盒 = .hand[data-player] 内 .card[data-uid] 矩形，key=uid）。
+ *    man.png 已复制到 public/assets/fx/man.png；2s 周期：0 → 渐现 → 渐隐 → 循环
+ *    （0–22% 渐现、22–62% 保持、62–85% 渐隐、85–100% 空窗）。银边辉光呼应金属主题。
+ *    z-index 48：高于手牌卡面与 spirit-1 护角（45），低于 hover 弹出卡（50/60）。 */
+.fx-metal-man {
+  position: fixed;
+  pointer-events: none;
+  z-index: 48;
+  border-radius: 6px;
+  opacity: 0;
+  background-image: url('/assets/fx/man.png');
+  background-size: cover;
+  background-position: center;
+  box-shadow:
+    0 0 10px rgba(210, 220, 255, 0.35),
+    inset 0 0 0 2px rgba(210, 220, 255, 0.55);
+  animation: fx-metal-man-cycle 2s ease-in-out infinite;
+}
+@keyframes fx-metal-man-cycle {
+  0% { opacity: 0; }
+  22% { opacity: 1; }
+  62% { opacity: 1; }
+  85% { opacity: 0; }
+  100% { opacity: 0; }
+}

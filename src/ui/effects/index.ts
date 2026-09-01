@@ -360,6 +360,43 @@ function playDarknessExtra(node: HTMLElement, payload: FxCardPayload): void {
   window.setTimeout(() => clone.remove(), FX_REMOVE_MS);
 }
 
+/* ===== Metal 金属附加特效（FX-6，用户 #6b）：metal-1 对手三条链路边框金属光泽 =====
+ * 触发：card:drawn 且 triggerProtocol === 'metal'（metal-1 中指令「抽2张牌」——打出即抽2；
+ * resolve.ts draw op 已带 pe.sourceDefId 协议段 → payload.triggerProtocol === 'metal'）。
+ * 效果：对手（metal-1 打出方的对手）三条链路（.stack-slot[data-player=对手][data-line=N]）
+ * 边框外层一圈金属光泽（.fx-metal-lineglow body 级 fixed 层，金属渐变描边 + 扫光），
+ * 一次性：出现（0.3s 渐现）→ 保持 3 秒 → 渐隐（0.5s）→ 移除。全部浮层 pointer-events:none、
+ * JS 定时自清理（重置路径由 resetUiState 按 .fx-metal-lineglow 类批量清扫兜底）。 */
+const METAL_LINE_IN_MS = 300;   // 金属光泽渐现时长
+const METAL_LINE_HOLD_MS = 3000; // 金属光泽保持（出现后 3s 开始渐隐）
+const METAL_LINE_FADE_MS = 500;  // 渐隐时长
+
+/** metal-1 一次性：对手三条链路边框金属光泽（出现 → 3s 渐隐）。player = metal-1 打出方
+ *  （card:drawn payload.player = ctx.player = 效果源持有者）→ 对手 = player === 0 ? 1 : 0。 */
+function playMetalLineGlow(player: PlayerId): void {
+  const opp: PlayerId = player === 0 ? 1 : 0;
+  for (const line of [0, 1, 2]) {
+    const slot = document.querySelector<HTMLElement>(
+      `.stack-slot[data-player="${opp}"][data-line="${line}"]`
+    );
+    if (!slot) continue;
+    const r = slot.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0) continue;
+    const glow = document.createElement('div');
+    glow.className = 'fx-metal-lineglow';
+    // 层盒外扩 5px：金属渐变环读作「链路边框外层一圈」而非覆盖槽位本身
+    glow.style.left = `${r.left - 5}px`;
+    glow.style.top = `${r.top - 5}px`;
+    glow.style.width = `${r.width + 10}px`;
+    glow.style.height = `${r.height + 10}px`;
+    glow.style.zIndex = String(EXTRA_Z);
+    document.body.appendChild(glow);
+    window.setTimeout(() => glow.classList.add('fx-metal-lineglow-in'), 20);
+    window.setTimeout(() => glow.classList.add('fx-metal-lineglow-out'), METAL_LINE_HOLD_MS);
+    window.setTimeout(() => glow.remove(), METAL_LINE_HOLD_MS + METAL_LINE_FADE_MS + 60);
+  }
+}
+
 /** 基础行为特效：删去 → 破碎消散（src/ui/fx/delete-shatter.ts 的 mountShatter） */
 function playShatter(node: HTMLElement, payload: FxCardPayload): void {
   const clone = buildFxCard(node, payload, BASE_Z);
@@ -1600,6 +1637,7 @@ export function initEffects(): () => void {
       const p = e.payload as { player: PlayerId; count: number; triggerProtocol?: string } | undefined;
       if (p && p.triggerProtocol === 'speed') playSpeedDrawExtra(p);
       else if (p && p.triggerProtocol === 'love') playLoveDrawExtra(p);
+      else if (p && p.triggerProtocol === 'metal') playMetalLineGlow(p.player);
       return;
     }
     const payload = e.payload as FxCardPayload | undefined;

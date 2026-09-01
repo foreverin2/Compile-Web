@@ -4,6 +4,7 @@ import { getLegalActions, type LegalAction } from '../core/game';
 import {
   opponentMustPlayFaceDown,
   lineBlocksOpponent,
+  lineBlocksOpponentFaceDown,
   lineMiddleCommandsNullified,
   shouldSkipCacheCheck,
   canPlayFaceUpAnywhere,
@@ -588,6 +589,151 @@ export function syncSpirit1Cards(s: GameState): void {
     if (!activeUids.has(uid)) {
       layer.remove();
       spirit1Cards.delete(uid);
+    }
+  }
+}
+
+/* ===== FX-6：金属协议常驻特效（metal-0 能量槽金属边框 / metal-2 链路铁板+斜光 / metal-6 手牌 man 渐现） =====
+ * 与 FX-3/FX-5 同注册表模式：body 级 fixed 层跨重渲染存活、每帧渲染只重定位到目标矩形
+ * （节点从不 detach/reattach → CSS 动画不重启）；条件消失 → 移除并注销；resetUiState 清表。
+ * - syncMetal0Glows（metal-0 顶命令「对手此列的总分减2」）：该线有正面 metal-0 时，持卡方
+ *   对手的【能量槽】外圈金属光泽边框。本实现无玩家级 .energy 元素——能量槽即每线 .battery
+ *   （线值能量条，见 renderBattery）→ 按 (target, line) 定位对方 .battery-shell；多条线各有
+ *   一槽，天然去重（一条线只建一层）。
+ * - syncMetalPlates（metal-2 顶「对手不能在此列以反面打出」）：lineBlocksOpponentFaceDown
+ *   为真时，持卡方该线堆叠槽铺金属铁板 + 斜长方形光芒从左到右循环扫过。key = `${holder}-${line}`
+ *   （双方可在同一线互为 metal-2 → 同线双板，按槽分键防撞，同 FX-3 瘟疫浓雾先例）。
+ * - syncMetal6Mans（metal-6 手牌）：手牌含 metal-6 → 该卡牌面循环渐现 man.png（2s 周期），
+ *   key = uid；卡离开手牌（弃/打/回）→ 移除层。 */
+const metal0Glows = new Map<string, HTMLElement>();
+const metalPlates = new Map<string, HTMLElement>();
+const metal6Mans = new Map<string, HTMLElement>();
+
+function renderMetalEnergyGlow(): HTMLElement {
+  return el('div', 'fx-metal-energyglow');
+}
+
+function renderMetalPlateLayer(): HTMLElement {
+  const layer = el('div', 'fx-metal-plate');
+  layer.appendChild(el('i', 'fx-metal-sweep'));
+  return layer;
+}
+
+function renderMetal6ManLayer(): HTMLElement {
+  return el('div', 'fx-metal-man');
+}
+
+/** metal-0：该线双方堆叠有正面 metal-0（顶命令常驻，含被盖）→ 持卡方对手该线能量条金属光泽边框 */
+export function syncMetal0Glows(s: GameState): void {
+  const activeKeys = new Set<string>();
+  for (const line of [0, 1, 2] as Line[]) {
+    if (!lineTopCommandActive(s, line, 'metal-0')) continue;
+    for (const holder of [0, 1] as PlayerId[]) {
+      // 谁持有正面 metal-0 → 对方（holder 的对手）该线能量条受金属压制 → 金属光泽边框
+      if (!s.players[holder].stacks[line].some((c) => c.defId === 'metal-0' && c.faceUp)) continue;
+      const target: PlayerId = holder === 0 ? 1 : 0;
+      const key = `${target}-${line}`;
+      activeKeys.add(key);
+      const shell = document.querySelector<HTMLElement>(
+        `.stack-slot[data-player="${target}"][data-line="${line}"] .battery-shell`
+      );
+      if (!shell) continue; // 电池不在 DOM（不应发生）→ 交给下方清理分支移除旧层
+      let glow = metal0Glows.get(key);
+      if (!glow) {
+        glow = renderMetalEnergyGlow();
+        glow.dataset.metal0Key = key;
+        metal0Glows.set(key, glow);
+        document.body.appendChild(glow);
+      }
+      const r = shell.getBoundingClientRect();
+      // 层盒外扩 4px：金属渐变环读作「框外层一圈」而非覆盖电池本身描边
+      glow.style.left = `${r.left - 4}px`;
+      glow.style.top = `${r.top - 4}px`;
+      glow.style.width = `${r.width + 8}px`;
+      glow.style.height = `${r.height + 8}px`;
+    }
+  }
+  for (const [key, glow] of metal0Glows) {
+    if (!activeKeys.has(key)) {
+      glow.remove();
+      metal0Glows.delete(key);
+    }
+  }
+}
+
+/** metal-2：lineBlocksOpponentFaceDown(s, line, player)（player 被对手 metal-2 禁此列反面打）
+ *  → 持卡方（player 的对手）该线堆叠槽铺金属铁板 + 斜光扫过（.fx-metal-plate/.fx-metal-sweep） */
+export function syncMetalPlates(s: GameState): void {
+  const activeKeys = new Set<string>();
+  for (const line of [0, 1, 2] as Line[]) {
+    for (const blocked of [0, 1] as PlayerId[]) {
+      if (!lineBlocksOpponentFaceDown(s, line, blocked)) continue;
+      const holder: PlayerId = blocked === 0 ? 1 : 0; // 持 metal-2 的一方（其堆叠被铺铁板）
+      const key = `${holder}-${line}`;
+      activeKeys.add(key);
+      const slot = document.querySelector<HTMLElement>(
+        `.stack-slot[data-player="${holder}"][data-line="${line}"]`
+      );
+      if (!slot) continue; // 槽位不在 DOM（不应发生）→ 交给下方清理分支移除旧层
+      let layer = metalPlates.get(key);
+      if (!layer) {
+        layer = renderMetalPlateLayer();
+        layer.dataset.metalPlateKey = key;
+        metalPlates.set(key, layer);
+        document.body.appendChild(layer);
+      }
+      const r = slot.getBoundingClientRect();
+      layer.style.left = `${r.left}px`;
+      layer.style.top = `${r.top}px`;
+      layer.style.width = `${r.width}px`;
+      layer.style.height = `${r.height}px`;
+    }
+  }
+  for (const [key, layer] of metalPlates) {
+    if (!activeKeys.has(key)) {
+      layer.remove();
+      metalPlates.delete(key);
+    }
+  }
+}
+
+/** metal-6：手牌含 metal-6 → 该卡牌面循环渐现 man.png（key = uid，定位 .hand[data-player]
+ *  内 .card[data-uid]；卡离开手牌 / 超 15 张隐藏无节点 → 移除层） */
+export function syncMetal6Mans(s: GameState): void {
+  const activeUids = new Set<string>();
+  for (const player of [0, 1] as PlayerId[]) {
+    for (const card of s.players[player].hand) {
+      if (card.defId !== 'metal-6') continue;
+      activeUids.add(card.uid);
+      const node = document.querySelector<HTMLElement>(
+        `.hand[data-player="${player}"] .card[data-uid="${card.uid}"]`
+      );
+      if (!node) {
+        const stale = metal6Mans.get(card.uid);
+        if (stale) {
+          stale.remove();
+          metal6Mans.delete(card.uid);
+        }
+        continue;
+      }
+      let layer = metal6Mans.get(card.uid);
+      if (!layer) {
+        layer = renderMetal6ManLayer();
+        layer.dataset.metal6Key = card.uid;
+        metal6Mans.set(card.uid, layer);
+        document.body.appendChild(layer);
+      }
+      const r = node.getBoundingClientRect();
+      layer.style.left = `${r.left}px`;
+      layer.style.top = `${r.top}px`;
+      layer.style.width = `${r.width}px`;
+      layer.style.height = `${r.height}px`;
+    }
+  }
+  for (const [uid, layer] of metal6Mans) {
+    if (!activeUids.has(uid)) {
+      layer.remove();
+      metal6Mans.delete(uid);
     }
   }
 }
@@ -2015,6 +2161,12 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   syncApathyMists(s);
   syncSpirit0Glows(s);
   syncSpirit1Cards(s);
+  // FX-6 常驻金属特效：metal-0 对方能量槽金属边框（电池已入 DOM → 按 .battery-shell 矩形）/
+  // metal-2 持卡方链路铁板+斜光（槽位已入 DOM）/ metal-6 手牌 man 渐现（手牌已入 DOM →
+  // 按 .card[data-uid] 矩形；条件消失后移除并注销）
+  syncMetal0Glows(s);
+  syncMetalPlates(s);
+  syncMetal6Mans(s);
 }
 
 let selectedUid: string | null = null;
@@ -2065,6 +2217,13 @@ export function resetUiState(): void {
   spirit0Glows.clear();
   for (const layer of spirit1Cards.values()) layer.remove();
   spirit1Cards.clear();
+  // FX-6 常驻注册表：金属0 能量槽边框 / 金属2 链路铁板 / 金属6 手牌 man（移除层 + 清表）
+  for (const glow of metal0Glows.values()) glow.remove();
+  metal0Glows.clear();
+  for (const layer of metalPlates.values()) layer.remove();
+  metalPlates.clear();
+  for (const layer of metal6Mans.values()) layer.remove();
+  metal6Mans.clear();
   if (chainLayer) {
     chainLayer.remove();
     chainLayer = null;
@@ -2082,7 +2241,7 @@ export function resetUiState(): void {
       '.water-return-trail, .flip-overlay-fx, .draw-ghost, .reveal-fly-ghost, ' +
       '.fx-gravity-deckglow, .fx-gravity-hole, .fx-gravity-beam, .fx-gravity-cardglow, .fx-speed-glow, ' +
       '.fx-psychic, .fx-plague, .fx-love-deckglow, .fx-love-fly, .fx-love-settle, .fx-love-heart, ' +
-      '.fx-apathy, .fx-spirit-chains'
+      '.fx-apathy, .fx-spirit-chains, .fx-metal-lineglow'
   )) {
     fx.remove();
   }

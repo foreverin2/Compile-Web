@@ -3,7 +3,7 @@ import { createGame, performDraftPick, performDraftUnpick } from './core/state/c
 import { executeAction } from './core/game';
 import { getCompilableLines } from './core/rules/compile';
 import { collectTriggers } from './core/effects/triggers';
-import { renderApp, renderDraft, resetUiState, syncCompiledFxLayers, syncSmokeOverlays, syncScanOverlays, syncPsychicParticles, syncPlagueMists, syncApathyMists, syncSpirit0Glows, syncSpirit1Cards, type UiCallbacks } from './ui/render';
+import { renderApp, renderDraft, resetUiState, syncCompiledFxLayers, syncSmokeOverlays, syncScanOverlays, syncPsychicParticles, syncPlagueMists, syncApathyMists, syncSpirit0Glows, syncSpirit1Cards, syncMetal0Glows, syncMetalPlates, syncMetal6Mans, type UiCallbacks } from './ui/render';
 import { initEffects, initCompileFx, initRearrangeFx, playRevealFly, buildLoveHeart } from './ui/effects';
 import { initDiag } from './ui/diag';
 import { initDevMode } from './ui/devmode';
@@ -399,7 +399,8 @@ gameBus.subscribe((e) => {
 renderApp(root, state, cb);
 // 常驻特效层随滚动/缩放重新对齐：已编译环（compiledFx）、暗2 黑烟（smokeOverlays）、
 // 能量扫描线（scanOverlays）与 FX-3 念能粒子/瘟疫浓雾（psychicParticles/plagueMists）、
-// FX-5 冷漠灰雾/灵魂-0 手牌区光芒/灵魂-1 手牌卡护角（apathyMists/spirit0Glows/spirit1Cards）
+// FX-5 冷漠灰雾/灵魂-0 手牌区光芒/灵魂-1 手牌卡护角（apathyMists/spirit0Glows/spirit1Cards）、
+// FX-6 金属0 能量槽边框/金属2 链路铁板/金属6 手牌 man（metal0Glows/metalPlates/metal6Mans）
 // 都是 body 级 position:fixed 层，只在渲染时按单元格矩形定位——渲染之间的滚动/缩放
 // 会让它们停在陈旧视口坐标（尤其一局胜利后无后续渲染时）。
 // rAF 节流（同帧合并多次事件）+ passive + capture（覆盖任意可滚动容器）；sync 函数
@@ -418,6 +419,9 @@ const syncPersistentFx = (): void => {
     syncApathyMists(state);
     syncSpirit0Glows(state);
     syncSpirit1Cards(state);
+    syncMetal0Glows(state);
+    syncMetalPlates(state);
+    syncMetal6Mans(state);
   });
 };
 window.addEventListener('scroll', syncPersistentFx, { passive: true, capture: true });
