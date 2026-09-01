@@ -20,6 +20,7 @@ import './cards/plague';
 import './cards/metal';
 import './cards/speed';
 import './cards/love';
+import './cards/hate';
 
 function topEffect(s: GameState): PendingEffect | undefined {
   return s.pendingEffects[s.pendingEffects.length - 1];
