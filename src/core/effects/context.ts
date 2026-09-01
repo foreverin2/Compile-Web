@@ -45,9 +45,15 @@ function toChoiceCard(c: Card): ChoiceCard {
   };
 }
 
-/** 候选列表：手牌（指定 owner）或场上堆叠卡（默认双方各堆叠顶卡；covered:true 时列被覆盖的卡，均排除结算中源卡——幽灵状态防护） */
+/** 候选列表：手牌（指定 owner）或场上堆叠卡（默认双方各堆叠顶卡；covered:true 时列被覆盖的卡）。
+ *  只排除【栈顶效果】的源卡——即"当前结算效果不能选自己"（= 卡面文本「另1张/另牌」的排除语义）。
+ *  栈内其他效果源卡（如连锁时外层 gravity-2 仍在栈中）【不排除】：规则 97 允许连锁效果选中它们
+ *  （选中后它们被翻面/移动 → sourceValid 终止其剩余效果，符合"正在生效的效果被翻面/移除即终止"）。
+ *  旧实现排除全部结算中源卡 → 连锁效果在场上只剩源卡时无目标（gravity-2 翻 life-1 → life-1 的
+ *  「翻转1张牌」选不了 gravity-2 → 双双 fizzle，用户报"未触发生命1的效果"）。 */
 export function listCandidates(s: GameState, filter: CandidateFilter): ChoiceCard[] {
-  const resolving = new Set(s.pendingEffects.map((pe) => pe.sourceUid));
+  const top = s.pendingEffects[s.pendingEffects.length - 1];
+  const resolving = top ? new Set([top.sourceUid]) : new Set<string>();
   const out: ChoiceCard[] = [];
   if (filter.zone === 'hand') {
     const p = s.players[filter.owner!];
