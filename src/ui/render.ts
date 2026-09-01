@@ -2242,6 +2242,7 @@ export function resetUiState(): void {
     '.life-flip-fx, .life-flip-glow, .water-return-ring, .water-return-glow, .water-return-settle, ' +
       '.water-return-trail, .flip-overlay-fx, .draw-ghost, .reveal-fly-ghost, ' +
       '.fx-gravity-deckglow, .fx-gravity-hole, .fx-gravity-beam, .fx-gravity-cardglow, .fx-speed-glow, ' +
+      '.fx-speed-card, .fx-speed-card-glow, ' +
       '.fx-psychic, .fx-plague, .fx-love-deckglow, .fx-love-fly, .fx-love-settle, .fx-love-heart, ' +
       '.fx-apathy, .fx-spirit-chains, .fx-metal-lineglow'
   )) {

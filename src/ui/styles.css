@@ -2602,7 +2602,8 @@ body.dragging { cursor: grabbing; user-select: none; }
 .fx-gravity-deckglow.fx-gravity-deckglow-out { opacity: 0; transition: opacity 0.4s ease-in; }
 
 /* 终点黑洞：深紫黑圆盘（径向渐变 + 暗紫 rim）+ 中间一条横线（事件视界亮纹），整体 rotate(-18deg)
- * 倾斜。渐现 0.3s = GRAVITY_HOLE_IN_MS；渐隐 0.4s = GRAVITY_HOLE_OUT_MS（JS 在卡到达后触发）。 */
+ * 倾斜。直径由 JS 内联 GRAVITY_HOLE_SIZE（72 → 120，用户 #5b 放大；调整集中在 effects/index.ts
+ * 常量区）。渐现 0.3s = GRAVITY_HOLE_IN_MS；渐隐 0.4s = GRAVITY_HOLE_OUT_MS（JS 在卡到达后触发）。 */
 .fx-gravity-hole {
   position: fixed;
   pointer-events: none;
@@ -2619,30 +2620,31 @@ body.dragging { cursor: grabbing; user-select: none; }
   border-radius: 50%;
   background: radial-gradient(circle at 50% 50%, #0a0614 0%, #1a0f2e 34%, #2c1647 58%, #120a20 78%, rgba(10, 6, 20, 0.6) 100%);
   border: 2px solid rgba(120, 40, 180, 0.55);
-  box-shadow: 0 0 18px rgba(90, 24, 160, 0.8), inset 0 0 24px rgba(0, 0, 0, 0.9), inset 0 0 10px rgba(150, 60, 230, 0.4);
+  box-shadow: 0 0 26px rgba(90, 24, 160, 0.8), inset 0 0 34px rgba(0, 0, 0, 0.9), inset 0 0 14px rgba(150, 60, 230, 0.4);
 }
-/* 中间横线：白紫渐变亮纹横贯圆盘（整体已随 .fx-gravity-hole 旋转倾斜） */
+/* 中间横线：白紫渐变亮纹横贯圆盘（整体已随 .fx-gravity-hole 旋转倾斜；随直径 72→120 等比加粗） */
 .fx-gravity-hole-slit {
   position: absolute;
   left: 12%;
   top: 50%;
   width: 76%;
-  height: 5px;
-  margin-top: -2.5px;
+  height: 8px;
+  margin-top: -4px;
   border-radius: 999px;
   background: linear-gradient(90deg, rgba(150, 60, 230, 0) 0%, rgba(214, 140, 255, 0.9) 30%, rgba(244, 190, 255, 1) 50%, rgba(214, 140, 255, 0.9) 70%, rgba(150, 60, 230, 0) 100%);
-  box-shadow: 0 0 10px rgba(200, 110, 255, 0.9), 0 0 22px rgba(180, 80, 245, 0.5);
+  box-shadow: 0 0 14px rgba(200, 110, 255, 0.9), 0 0 30px rgba(180, 80, 245, 0.5);
 }
 
 /* 品红射线（黑洞 → 起点）：容器 fixed 锚定黑洞中心（transform-origin left center）、按起终距离
  * 定宽、rotate 到起点角度（角度经 --fx-beam-angle 由 JS 内联，动画关键帧组合 rotate+scaleX——
  * 避免 CSS 动画覆盖内联 transform 丢掉旋转）。animation delay 0.3s + fill-mode backwards →
  * 0.3s 起自黑洞向起点生长（scaleX 0→1，1.5s = GRAVITY_BEAM_MS）。核心 .fx-gravity-beam-core
- * 负责「由粗变细、过中间后由细变粗」：scaleY 1 → 0.18 → 1（前段变细、后段变粗，同步 1.5s）。 */
+ * 负责「由粗变细、过中间后由细变粗」：scaleY 1 → 0.18 → 1（前段变细、后段变粗，同步 1.5s）。
+ * 粗态厚度 14px → 28px（用户 #5b：射线加粗 ~2 倍；微调集中在此）。 */
 .fx-gravity-beam {
   position: fixed;
-  height: 14px;            /* 粗态厚度 */
-  margin-top: -7px;        /* 垂直居中于黑洞中心（负半高） */
+  height: 28px;            /* 粗态厚度（用户 #5b：14 → 28 加粗） */
+  margin-top: -14px;       /* 垂直居中于黑洞中心（负半高） */
   transform-origin: left center;
   pointer-events: none;
   opacity: 0;
@@ -2659,7 +2661,7 @@ body.dragging { cursor: grabbing; user-select: none; }
     rgba(206, 24, 232, 0.7) 55%,
     rgba(206, 24, 232, 0.3) 80%,
     rgba(206, 24, 232, 0) 100%);
-  filter: blur(1px) drop-shadow(0 0 6px rgba(226, 40, 246, 0.85));
+  filter: blur(1px) drop-shadow(0 0 8px rgba(226, 40, 246, 0.85));
   animation: fx-gravity-beam-pulse 1.5s ease-in-out 0.3s backwards;
 }
 @keyframes fx-gravity-beam-grow {
@@ -2672,12 +2674,15 @@ body.dragging { cursor: grabbing; user-select: none; }
   100% { transform: scaleY(1); }    /* 后段：由细变粗 */
 }
 
-/* 品红卡框光（延后基础飞行的浮层卡）：随起飞（~450ms = MOVE_MS）→ 到终点后 1s =
- * GRAVITY_CARDGLOW_LINGER_MS 熄灭（0.4s = GRAVITY_CARDGLOW_FADE_MS）。动画时长 1.9s ≈
- * MOVE+LINGER+FADE+50，关键帧百分比按此对齐（76% ≈ 到终点后 1s 处开始熄灭）。 */
+/* 品红卡框光（浮层卡）：FX-R1 时序重构后浮层卡在【事件时】即创建（前置段黑洞/射线 1.8s =
+ * GRAVITY_PRE_MS 全程发光），故动画整体顺延：时长/延迟由 JS 内联 --fx-gravity-glow-ms
+ * （GRAVITY_GLOW_MS ≈ 飞行 450 + 停留 1s + 渐隐 0.4s）与 --fx-gravity-glow-delay
+ * （GRAVITY_PRE_MS = 1.8s）注入；backwards 填充 = 延迟期间保持 0% 帧的发光。
+ * 关键帧百分比按 GRAVITY_GLOW_MS 对齐（76% ≈ 飞行结束 + 到终点后 1s 处开始熄灭）。
+ * 未注入变量的旧调用（默认 1.9s / 0ms）行为不变。 */
 .fx-gravity-cardglow {
   border-radius: 6px;
-  animation: fx-gravity-cardglow 1.9s ease forwards;
+  animation: fx-gravity-cardglow var(--fx-gravity-glow-ms, 1.9s) ease var(--fx-gravity-glow-delay, 0ms) backwards forwards;
 }
 @keyframes fx-gravity-cardglow {
   0%, 76% {
@@ -2693,19 +2698,36 @@ body.dragging { cursor: grabbing; user-select: none; }
  * 时序：卡框灰白光 + 卡中心飓风渐现(0~0.3s = SPEED_TORNADO_IN_MS) → 整体沿起点→终点直线平移
  * （1.5s = SPEED_MOVE_MS，transition transform translate、linear 匀速）→ 到达后飓风渐隐、
  * 卡框恢复（0.4s = SPEED_TORNADO_OUT_MS / SPEED_GLOW_FADE_MS，总 ≈ 2.26s）。
- * 过渡时长与 effects/index.ts SPEED_* 常量一一对应（微调在此集中改）。
- * 浮层 = body 级 fixed .fx-speed-glow 容器（卡框灰白光本身）+ 内层 .fx-speed-tornado（螺旋
- * 锥形柱：4 层旋转椭圆带由宽到窄收成锥形 + 中心亮白气柱），JS setTimeout 自清理。 */
+ * FX-R1：平移场景浮层卡（.fx-speed-card）代替基础 playShift 飞行——事件时卡面即时可见盖住
+ * 真实卡，内嵌 .fx-speed-card-glow（光晕 + 飓风）随飓风整体平移；抽牌场景由 main.ts 在基础
+ * draw-ghost 动画【之前】调度 .fx-speed-glow 容器。
+ * 过渡时长与 effects/index.ts SPEED_* 常量一一对应（微调在此集中改）。JS setTimeout 自清理。 */
 
-/* 卡框灰白光（容器本身）：边框 + 外发光 + 内发光；opacity 由 JS 内联驱动（渐现 0.3s / 渐隐 0.4s） */
-.fx-speed-glow {
-  position: fixed;
+/* 卡框灰白光（边框 + 外发光 + 内发光；opacity 由 JS 内联驱动——渐现 0.3s / 渐隐 0.4s）：
+ * - 抽牌场景 = 独立 fixed 容器 .fx-speed-glow（牌库区灰白光 + 飓风 → 手牌末尾，整体渐现/平移/渐隐）；
+ * - speed 平移场景 = 浮层卡（.fx-speed-card，buildFxCardAt 构建）内嵌覆盖层 .fx-speed-card-glow
+ *   （absolute inset 0 —— 卡面即时可见盖住真实卡，光晕 + 飓风随覆盖层 0.3s 渐现）。 */
+.fx-speed-glow,
+.fx-speed-card-glow {
   pointer-events: none;
   border-radius: 8px;
   border: 2px solid rgba(226, 230, 242, 0.6);
   box-shadow: 0 0 14px 3px rgba(226, 230, 242, 0.5), 0 0 32px 10px rgba(208, 216, 232, 0.3), inset 0 0 16px rgba(240, 244, 252, 0.28);
   opacity: 0;
+}
+.fx-speed-glow {
+  position: fixed;
   will-change: transform, opacity;
+}
+.fx-speed-card-glow {
+  position: absolute;
+  inset: 0;
+  will-change: opacity;
+}
+/* speed 平移浮层卡标记：仅用于 resetUiState 重置清扫（浮层卡自身是 buildFxCardAt 的 .card，
+ * 无 data-uid、不参与渲染；重置时需随定时器之外的路径立即移除，见 render.ts 清扫选择器） */
+.fx-speed-card {
+  border-radius: 6px;
 }
 
 /* 飓风：螺旋锥形柱。容器定位于卡中心（translate(-50%,-50%)），整体呼吸缩放；内层 .fx-speed-band

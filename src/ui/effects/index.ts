@@ -47,7 +47,13 @@ const GRAVITY_BEAM_MS = 1500;            // 品红射线（0.3 → 1.8s；由粗
 const GRAVITY_PRE_MS = GRAVITY_HOLE_IN_MS + GRAVITY_BEAM_MS; // 1800：前置段完成 → 基础特效
 const GRAVITY_HOLE_OUT_MS = 400;         // 黑洞渐隐（卡到终点后）
 const GRAVITY_CARDGLOW_LINGER_MS = 1000; // 卡边框品红光保持到终点后 1s
-const GRAVITY_CARDGLOW_FADE_MS = 400;    // 卡边框品红光渐隐（卡框光动画总时长 = MOVE+1000+400+50 ≈ 1.9s）
+const GRAVITY_CARDGLOW_FADE_MS = 400;    // 卡边框品红光渐隐
+// 品红卡框光 CSS 动画总时长（飞行 MOVE_MS + 停留 LINGER + 渐隐 FADE + 50 余量）：
+// 新时序下浮层卡在事件时即创建、前置段（GRAVITY_PRE_MS）全程发光，故动画整体顺延——
+// JS 以 --fx-gravity-glow-ms / --fx-gravity-glow-delay 内联注入（CSS animation 同款默认值兜底）。
+const GRAVITY_GLOW_MS = MOVE_MS + GRAVITY_CARDGLOW_LINGER_MS + GRAVITY_CARDGLOW_FADE_MS + 50; // ≈ 1.9s
+/** 终点黑洞直径（用户 #5b：72 → 120 放大；调整集中在此） */
+const GRAVITY_HOLE_SIZE = 120;
 
 // Speed 位移附加特效（fx-speed-*，card:shifted / card:drawn + triggerProtocol=speed）时序常量：
 // 卡框灰白光 + 卡中心飓风渐现 → 整体沿起点→终点直线平移（1.5s）→ 到达后飓风渐隐、卡框恢复。
@@ -55,7 +61,8 @@ const GRAVITY_CARDGLOW_FADE_MS = 400;    // 卡边框品红光渐隐（卡框光
 const SPEED_TORNADO_IN_MS = 300;  // 飓风渐现（0 → 0.3s）
 const SPEED_MOVE_MS = 1500;       // 飓风沿起点→终点直线平移
 const SPEED_TORNADO_OUT_MS = 400; // 飓风渐隐 + 卡框灰白光恢复（渐隐）
-const SPEED_TOTAL_MS = SPEED_TORNADO_IN_MS + SPEED_MOVE_MS + SPEED_TORNADO_OUT_MS + 60; // ≈ 2.26s
+/** 导出供 main.ts 抽牌时序用：speed 抽牌专属（飓风）完成总时长——基础抽牌动画顺延到此后才播 */
+export const SPEED_TOTAL_MS = SPEED_TORNADO_IN_MS + SPEED_MOVE_MS + SPEED_TORNADO_OUT_MS + 60; // ≈ 2.26s
 
 type PlayerId = 0 | 1;
 
@@ -1100,16 +1107,18 @@ function playHandPlay(payload: FxCardPayload): void {
 /* ===== Gravity 位移附加特效（用户 #3）：品红牌库框光 + 终点黑洞 + 品红射线 + 卡框品红光 =====
  * 触发：card:deck-played（反面打出牌堆顶，payload.owner = 牌库 owner）与 card:shifted 且
  * triggerProtocol === 'gravity'（gravity-1/2/4 的平移）。
- * 时序（总 ≈ 3.7s）：① 牌库区边框品红光（仅打牌堆顶时）；② 终点黑洞渐现（0~0.3s）；③ 品红
- * 射线由黑洞射向起点（0.3~1.8s，由粗变细、过中间后由细变粗）；④ 基础特效延后（1.8s 起：
- * 打牌堆顶 / 平移——重渲染后原节点 rect 归零 → 用事件时捕获的 rect 重建浮层卡，带
- * .fx-gravity-cardglow 品红卡框光）；⑤ 收尾（卡到终点后）：黑洞渐隐；卡边框品红光到终点后
- * 1s 熄灭。全部浮层 pointer-events:none、JS setTimeout 自清理。 */
+ * 时序（总 ≈ 3.7s，FX-R1 时序重构）：① 牌库区边框品红光（仅打牌堆顶时）；② 【事件时立即
+ * 创建浮层卡】（旧位置 rect，z=BASE_Z 盖住真实卡，带 .fx-gravity-cardglow 品红卡框光——重渲染
+ * 后真实卡瞬移到终点，但浮层卡占据旧位置，用户只见"卡在原位被吸入"而非"先瞬移后特效"）；
+ * ③ 终点黑洞渐现（0~0.3s）；④ 品红射线由黑洞射向起点（0.3~1.8s，由粗变细、过中间后由细变粗）；
+ * ⑤ 前置段完成（1.8s）起浮层卡飞向终点（基础平移节奏，MOVE_MS + reflow 起飞）；⑥ 收尾（卡到
+ * 终点后）：黑洞渐隐；卡边框品红光到终点后 1s 熄灭。全部浮层 pointer-events:none、
+ * JS setTimeout 自清理。 */
 
 /** 终点黑洞：深紫黑圆盘 + 中间一条横线（事件视界），整体 rotate 倾斜。渐现 0.3s
  * （GRAVITY_HOLE_IN_MS），卡到达后由调用方触发渐隐（.fx-gravity-hole-out）。 */
 function spawnGravityHole(end: { x: number; y: number }): HTMLElement {
-  const HOLE_SIZE = 72;
+  const HOLE_SIZE = GRAVITY_HOLE_SIZE;
   const hole = document.createElement('div');
   hole.className = 'fx-gravity-hole';
   hole.style.left = `${end.x - HOLE_SIZE / 2}px`;
@@ -1147,47 +1156,56 @@ function spawnGravityBeam(start: { x: number; y: number }, end: { x: number; y: 
   return beam;
 }
 
-/** gravity 延后基础飞行（打牌堆顶 / 平移共用）：事件时捕获的 rect + 旋转标志 + 堆叠末尾 end，
- *  在 GRAVITY_PRE_MS 后重建浮层卡（原节点已重渲染移除、rect 归零 → 必须用捕获 rect 重建），
- *  带 .fx-gravity-cardglow（品红卡框光，CSS 动画内建"飞行 + 到终点后 1s 熄灭"）。起飞用
- *  playDeckPlay 同款 reflow 提交（先写 translate(0) 初始位并强制回流 → transition 必从起点
- *  动画）；delayMs 用于同批多卡错开起飞（同 playDeckPlay 的 DECK_PLAY_STAGGER_MS 节奏）。 */
-function flyGravityGhostAt(
+/** gravity 浮层卡飞行（打牌堆顶 / 平移共用，FX-R1 时序重构）：浮层卡由调用方在【事件时】
+ *  立即创建（旧位置 rect，z=BASE_Z 盖住真实卡——重渲染后真实卡瞬移到终点，但浮层卡始终
+ *  占据旧位置，前置段黑洞/射线播完后才起飞，消除"先瞬移后特效"的观感），本函数只负责
+ *  在 GRAVITY_PRE_MS + delayMs 起飞（playDeckPlay 同款 reflow 提交：先写 translate(0) 初始位
+ *  并强制回流 → transition 必从起点动画）并调度自清理（品红光到终点后 1s 熄灭 → 移除，
+ *  露出真实卡——位置一致无缝）。delayMs 用于同批多卡错开起飞（DECK_PLAY_STAGGER_MS 节奏）。 */
+function flyGravityGhost(
+  ghost: HTMLElement,
   rect: DOMRect,
-  cw: boolean,
-  ccw: boolean,
-  payload: FxCardPayload,
   end: { x: number; y: number },
   delayMs: number,
-  deckGhost: boolean,
 ): void {
+  const dx = end.x - (rect.left + rect.width / 2);
+  const dy = end.y - (rect.top + rect.height / 2);
   window.setTimeout(() => {
-    const clone = buildFxCardAt(rect, cw, ccw, payload, BASE_Z);
-    if (!clone) return;
-    if (deckGhost) clone.classList.add('deck-play-ghost');
-    clone.classList.add('fx-gravity-cardglow');
-    const dx = end.x - (rect.left + rect.width / 2);
-    const dy = end.y - (rect.top + rect.height / 2);
-    window.setTimeout(() => {
-      clone.style.transition = `transform ${MOVE_MS}ms cubic-bezier(0.2, 0.7, 0.3, 1), opacity ${MOVE_MS}ms ease`;
-      clone.style.transform = `translate(0, 0) rotate(var(--fx-rot, 0deg)) scale(0.92)`;
-      void clone.offsetHeight; // 强制样式提交（reflow）：transition 必从起点位动画而非跳终点
-      requestAnimationFrame(() => {
-        clone.style.transform = `translate(${dx}px, ${dy}px) rotate(var(--fx-rot, 0deg)) scale(0.92)`;
-        clone.style.opacity = '0.6';
-      });
-    }, delayMs);
-    window.setTimeout(
-      () => clone.remove(),
-      delayMs + MOVE_MS + GRAVITY_CARDGLOW_LINGER_MS + GRAVITY_CARDGLOW_FADE_MS + 120,
-    );
-  }, GRAVITY_PRE_MS);
+    // 先写初始位（translate(0) + 原朝向/尺寸）并强制回流提交 → 起飞 transition 必动画
+    ghost.style.transition = `transform ${MOVE_MS}ms cubic-bezier(0.2, 0.7, 0.3, 1), opacity ${MOVE_MS}ms ease`;
+    ghost.style.transform = `translate(0, 0) rotate(var(--fx-rot, 0deg)) scale(0.92)`;
+    void ghost.offsetHeight; // 强制样式提交（reflow）
+    requestAnimationFrame(() => {
+      ghost.style.transform = `translate(${dx}px, ${dy}px) rotate(var(--fx-rot, 0deg)) scale(0.92)`;
+      ghost.style.opacity = '0.6';
+    });
+  }, GRAVITY_PRE_MS + delayMs);
+  window.setTimeout(
+    () => ghost.remove(),
+    GRAVITY_PRE_MS + delayMs + MOVE_MS + GRAVITY_CARDGLOW_LINGER_MS + GRAVITY_CARDGLOW_FADE_MS + 120,
+  );
+}
+
+/** 事件时创建 gravity 浮层卡（旧位置 rect + 品红卡框光）——打牌堆顶 / 平移共用。
+ *  卡框光动画（.fx-gravity-cardglow）以 --fx-gravity-glow-ms/--fx-gravity-glow-delay 内联
+ *  注入：延迟 = GRAVITY_PRE_MS（前置段全程发光，backwards 填充保持 0% 帧），时长 =
+ *  GRAVITY_GLOW_MS（飞行 + 到终点后 1s 熄灭）。返回浮层卡（调用方转交 flyGravityGhost）；
+ *  构建失败（rect 归零等，实际不可达）返回 null。 */
+function buildGravityGhost(rect: DOMRect, cw: boolean, ccw: boolean, payload: FxCardPayload): HTMLElement | null {
+  const ghost = buildFxCardAt(rect, cw, ccw, payload, BASE_Z);
+  if (!ghost) return null;
+  ghost.classList.add('fx-gravity-cardglow');
+  ghost.style.setProperty('--fx-gravity-glow-ms', `${GRAVITY_GLOW_MS}ms`);
+  ghost.style.setProperty('--fx-gravity-glow-delay', `${GRAVITY_PRE_MS}ms`);
+  return ghost;
 }
 
 /** gravity 牌堆顶打出附加特效（card:deck-played，反面打出牌堆顶——gravity-0/6、life-0/3、
  *  water-1；deck-played 事件不带 triggerProtocol，本分支即 gravity 特效）。
- *  牌库区边框品红光（仅打牌堆顶时）→ 终点黑洞 + 品红射线 → 1.8s 起延后基础打出（捕获 rect
- *  重建 + 品红卡框光）。牌库/目标缺失 → 退回即时基础 playDeckPlay（无附加特效）。 */
+ *  FX-R1 时序重构：牌库区边框品红光 → 【事件时立即创建浮层卡】（旧位置 = 牌库区 rect，
+ *  z=BASE_Z 盖住真实卡，带品红卡框光——不再等 1.8s 后才凭空出现）→ 终点黑洞 + 品红射线
+ *  （前置 1.8s）→ 前置完成浮层卡飞向堆叠末尾（基础打出节奏）→ 收尾自清理。
+ *  牌库/目标缺失 → 退回即时基础 playDeckPlay（无附加特效）。 */
 function playGravityDeckPlayExtra(payload: FxCardPayload): void {
   if (payload.owner === undefined || payload.line == null) {
     playDeckPlay(payload);
@@ -1215,13 +1233,20 @@ function playGravityDeckPlayExtra(payload: FxCardPayload): void {
   deckGlow.style.zIndex = String(EXTRA_Z);
   document.body.appendChild(deckGlow);
   window.setTimeout(() => deckGlow.classList.add('fx-gravity-deckglow-in'), 20);
-  // ② 终点黑洞渐现（0~0.3s）；③ 品红射线（0.3~1.8s，黑洞 → 牌库区中心）
+  // ② 立即创建浮层卡（旧位置 = 牌库区 rect）盖住真实卡 + 品红卡框光（前置段全程可见）
+  const ghost = buildGravityGhost(from, false, false, payload);
+  if (!ghost) {
+    playDeckPlay(payload); // 浮层构建失败（实际不可达）→ 退回基础牌堆顶打出
+    return;
+  }
+  ghost.classList.add('deck-play-ghost');
+  // ③ 终点黑洞渐现（0~0.3s）；④ 品红射线（0.3~1.8s，黑洞 → 牌库区中心）
   const hole = spawnGravityHole(end);
   const beam = spawnGravityBeam(start, end);
-  // ④ 前置段完成（1.8s）起：延后基础打出（同批多卡按 90ms 错开起飞，同 playDeckPlay）
+  // ⑤ 前置段完成（1.8s）起：浮层卡飞向堆叠末尾（同批多卡按 90ms 错开起飞，同 playDeckPlay）
   const stagger = nextDeckPlayIndex() * DECK_PLAY_STAGGER_MS;
-  flyGravityGhostAt(from, false, false, payload, end, stagger, true);
-  // ⑤ 收尾：牌库区光随卡起飞渐隐；卡到终点（PRE + MOVE_MS）后黑洞渐隐
+  flyGravityGhost(ghost, from, end, stagger);
+  // ⑥ 收尾：牌库区光随卡起飞渐隐；卡到终点（PRE + MOVE_MS）后黑洞渐隐
   window.setTimeout(() => deckGlow.classList.add('fx-gravity-deckglow-out'), GRAVITY_PRE_MS);
   window.setTimeout(() => hole.classList.add('fx-gravity-hole-out'), GRAVITY_PRE_MS + MOVE_MS);
   window.setTimeout(() => deckGlow.remove(), GRAVITY_PRE_MS + GRAVITY_HOLE_OUT_MS + 60);
@@ -1230,8 +1255,10 @@ function playGravityDeckPlayExtra(payload: FxCardPayload): void {
 }
 
 /** gravity 平移附加特效（card:shifted + triggerProtocol=gravity——gravity-1/2/4 的平移）。
- *  终点黑洞 + 品红射线（黑洞 → 被移卡原 rect 中心）→ 1.8s 起延后基础平移（捕获 rect 重建 +
- *  品红卡框光）。rect/目标缺失 → 退回即时基础 playShift（无附加特效）。 */
+ *  FX-R1 时序重构：【事件时立即创建浮层卡】（旧位置 rect，z=BASE_Z 盖住真实卡，带品红
+ *  卡框光——重渲染后真实卡瞬移到终点，但浮层卡占据旧位置，用户只见"卡在原位被吸入"）→
+ *  终点黑洞 + 品红射线（前置 1.8s）→ 前置完成浮层卡飞向目标堆叠末尾（基础平移节奏）→
+ *  收尾自清理。rect/目标缺失 → 退回即时基础 playShift（无附加特效）。 */
 function playGravityShiftExtra(node: HTMLElement, payload: FxCardPayload): void {
   const rect = node.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0 || payload.owner === undefined || payload.line == null) {
@@ -1249,10 +1276,17 @@ function playGravityShiftExtra(node: HTMLElement, payload: FxCardPayload): void 
   const cw = node.classList.contains('rot-cw');
   const ccw = node.classList.contains('rot-ccw');
   const start = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  // ① 事件时立即创建浮层卡（旧位置 rect）盖住真实卡 + 品红卡框光（前置段全程可见）
+  const ghost = buildGravityGhost(rect, cw, ccw, payload);
+  if (!ghost) {
+    playShift(node, payload); // 浮层构建失败（实际不可达）→ 退回基础平移
+    return;
+  }
+  // ② 终点黑洞渐现（0~0.3s）；③ 品红射线（0.3~1.8s，黑洞 → 被移卡原 rect 中心）
   const hole = spawnGravityHole(end);
   const beam = spawnGravityBeam(start, end);
-  // ④ 前置段完成（1.8s）起：延后基础平移（捕获 rect 重建 + 品红卡框光）
-  flyGravityGhostAt(rect, cw, ccw, payload, end, 0, false);
+  // ④ 前置段完成（1.8s）起：浮层卡飞向目标堆叠末尾
+  flyGravityGhost(ghost, rect, end, 0);
   // ⑤ 收尾：卡到终点（PRE + MOVE_MS）后黑洞渐隐
   window.setTimeout(() => hole.classList.add('fx-gravity-hole-out'), GRAVITY_PRE_MS + MOVE_MS);
   window.setTimeout(() => hole.remove(), GRAVITY_PRE_MS + MOVE_MS + GRAVITY_HOLE_OUT_MS + 60);
@@ -1263,14 +1297,31 @@ function playGravityShiftExtra(node: HTMLElement, payload: FxCardPayload): void 
  * 触发：card:shifted 与 card:drawn 且 triggerProtocol === 'speed'（speed-2/3/4 平移、speed-1 抽牌）。
  * 时序（总 ≈ 2.26s）：① 卡框灰白光 + 卡中心飓风渐现（0~0.3s）；② 整体沿起点→终点直线平移
  * （1.5s = SPEED_MOVE_MS，transition transform translate 路径、linear 匀速——平移终点=目标
- * 堆叠末尾，抽牌终点=该玩家手牌末尾 handEndPos）；③ 基础特效照常（平移 playShift 即时播放；
- * 抽牌基础动画由 main.ts pendingDraws 统一播放，本附加层独立）；④ 到达后飓风渐隐、卡框恢复
- * （0.4s）。浮层 = body 级 fixed .fx-speed-glow 容器（卡框灰白光，内含 .fx-speed-tornado
- * 螺旋锥形柱：4 层旋转椭圆带由宽到窄收成锥形 + 中心亮白气柱），整体 translate 平移，
- * JS setTimeout 自清理。 */
+ * 堆叠末尾，抽牌终点=该玩家手牌末尾 handEndPos）；④ 到达后飓风渐隐、卡框恢复（0.4s）。
+ * FX-R1 时序重构（用户 #6b/#6a）：
+ * - 平移（playSpeedShiftExtra）：事件时【立即创建浮层卡】（旧位置 rect，z=BASE_Z 盖住真实卡，
+ *   卡面即时可见）+ 内嵌灰白光/飓风层（渐现 0.3s）→ 浮层卡随飓风整体平移（1.5s）→ 到达后
+ *   渐隐 + 移除（露出真实卡，位置一致无缝）。【不再即时调用 playShift】——浮层卡代替基础飞行。
+ * - 抽牌（playSpeedDrawExtra）：由 main.ts playDrawSequence 在基础抽牌动画【之前】调度
+ *   （speed-1 顶「清理缓存后抽1张」），本函数只负责牌库区灰白光 + 飓风 → 手牌末尾。
+ * 浮层 = body 级 fixed（抽牌场景 .fx-speed-glow 容器 / 平移场景浮层卡 + .fx-speed-card-glow
+ * 覆盖层），内含 .fx-speed-tornado 螺旋锥形柱（4 层旋转椭圆带由宽到窄收成锥形 + 中心亮白
+ * 气柱），整体 translate 平移，JS setTimeout 自清理。 */
 
-/** speed 附加特效浮层主体：起点 rect（卡框光位置）与终点 end（位移终点）均由调用方在事件时
- *  捕获给定；容器整体沿起点→终点直线平移（translate 路径）。 */
+/** 螺旋锥形柱飓风（4 层旋转椭圆带 + 中心亮白气柱），绝对定位于卡/容器中心 */
+function buildSpeedTornado(): HTMLElement {
+  const tornado = document.createElement('div');
+  tornado.className = 'fx-speed-tornado';
+  const BAND_COUNT = 4;
+  for (let i = 0; i < BAND_COUNT; i++) {
+    tornado.appendChild(Object.assign(document.createElement('div'), { className: 'fx-speed-band' }));
+  }
+  tornado.appendChild(Object.assign(document.createElement('div'), { className: 'fx-speed-core' }));
+  return tornado;
+}
+
+/** speed 附加特效浮层主体（抽牌场景）：起点 rect（卡框光位置）与终点 end（位移终点）均由
+ *  调用方在事件时捕获给定；容器整体沿起点→终点直线平移（translate 路径）。 */
 function playSpeedExtra(
   rect: { left: number; top: number; width: number; height: number },
   start: { x: number; y: number },
@@ -1285,14 +1336,7 @@ function playSpeedExtra(
   fx.style.width = `${rect.width}px`;
   fx.style.height = `${rect.height}px`;
   fx.style.zIndex = String(EXTRA_Z);
-  const tornado = document.createElement('div');
-  tornado.className = 'fx-speed-tornado';
-  const BAND_COUNT = 4;
-  for (let i = 0; i < BAND_COUNT; i++) {
-    tornado.appendChild(Object.assign(document.createElement('div'), { className: 'fx-speed-band' }));
-  }
-  tornado.appendChild(Object.assign(document.createElement('div'), { className: 'fx-speed-core' }));
-  fx.appendChild(tornado);
+  fx.appendChild(buildSpeedTornado());
   document.body.appendChild(fx);
   // ① 卡框灰白光 + 飓风渐现（0.3s；延迟 20ms 保证初始 opacity:0 已被绘制）
   window.setTimeout(() => {
@@ -1312,29 +1356,51 @@ function playSpeedExtra(
   window.setTimeout(() => fx.remove(), SPEED_TOTAL_MS);
 }
 
-/** speed 平移附加特效（card:shifted + triggerProtocol=speed）：卡框灰白光 + 飓风从被移卡
- *  原 rect 中心 → 目标堆叠末尾；基础 playShift 照常即时播放（本函数只叠加，不替换飞行）。 */
+/** speed 平移附加特效（card:shifted + triggerProtocol=speed，speed-2/3/4）——FX-R1 时序重构：
+ *  事件时【立即创建浮层卡】（旧位置 rect，z=BASE_Z 盖住真实卡；重渲染后真实卡瞬移到终点，
+ *  但浮层卡占据旧位置，用户只见卡在原位）→ 内嵌灰白光 + 飓风渐现（0.3s）→ 浮层卡随飓风
+ *  沿起点→终点直线平移（1.5s）→ 到达后渐隐 + 移除（露出真实卡）。【不再调用基础 playShift】
+ *  ——浮层卡代替基础飞行，消除"真实卡先瞬移、飓风后播"的时序错误。rect/目标缺失 → 无附加
+ *  特效（引擎落地渲染，浮层无法替代时退化为直接显示）。 */
 function playSpeedShiftExtra(node: HTMLElement, payload: FxCardPayload): void {
   const rect = node.getBoundingClientRect();
-  if (rect.width === 0 || rect.height === 0 || payload.owner === undefined || payload.line == null) {
-    playShift(node, payload); // rect/目标缺失 → 基础平移照常（无附加特效）
-    return;
-  }
+  if (rect.width === 0 || rect.height === 0 || payload.owner === undefined || payload.line == null) return;
   const owner: PlayerId = payload.owner;
   const line: number = payload.line;
   const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${owner}"][data-line="${line}"]`);
   const end = stackEndPos(slot, owner);
-  if (!end) {
-    playShift(node, payload);
-    return;
-  }
-  playSpeedExtra(
-    { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
-    { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 },
-    end,
-  );
-  // 基础平移照常（本函数只叠加飓风，不替换飞行）
-  playShift(node, payload);
+  if (!end) return;
+  const cw = node.classList.contains('rot-cw');
+  const ccw = node.classList.contains('rot-ccw');
+  // ① 事件时立即创建浮层卡（旧位置 rect，z=BASE_Z 盖住真实卡）：卡面即时可见，
+  //    内嵌灰白光 + 飓风覆盖层（.fx-speed-card-glow，初始 opacity:0 → 0.3s 渐现）
+  const ghost = buildFxCardAt(rect, cw, ccw, payload, BASE_Z);
+  if (!ghost) return;
+  ghost.classList.add('fx-speed-card'); // 重置清扫标记（render.ts resetUiState）
+  ghost.style.willChange = 'transform, opacity';
+  const glow = document.createElement('div');
+  glow.className = 'fx-speed-card-glow';
+  glow.appendChild(buildSpeedTornado());
+  ghost.appendChild(glow);
+  const start = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  // ② 灰白光 + 飓风渐现（0.3s；延迟 20ms 保证初始 opacity:0 已被绘制）
+  window.setTimeout(() => {
+    glow.style.transition = 'opacity 0.3s ease-out';
+    glow.style.opacity = '1';
+  }, 20);
+  // ③ 浮层卡随飓风沿起点→终点直线平移（1.5s，linear 匀速；组合 --fx-rot 保留横置卡朝向）
+  window.setTimeout(() => {
+    ghost.style.transition = 'transform 1.5s linear';
+    ghost.style.transform = `translate(${dx}px, ${dy}px) rotate(var(--fx-rot, 0deg))`;
+  }, SPEED_TORNADO_IN_MS);
+  // ④ 到达后：飓风渐隐 + 浮层卡整体渐隐（露出真实卡，位置一致无缝）→ 自清理
+  window.setTimeout(() => {
+    ghost.style.transition = 'opacity 0.4s ease-in';
+    ghost.style.opacity = '0';
+  }, SPEED_TORNADO_IN_MS + SPEED_MOVE_MS);
+  window.setTimeout(() => ghost.remove(), SPEED_TOTAL_MS);
 }
 
 /** card:drawn 载荷（无 uid/defId：抽牌无目标卡节点，特效按 player 定位手牌/牌库；speed/love 共用） */
@@ -1345,10 +1411,12 @@ interface DrawPayload {
   triggerProtocol?: string;
 }
 
-/** speed 抽牌附加特效（card:drawn + triggerProtocol=speed，speed-1）：卡框灰白光（牌库区 rect，
- *  抽出的卡在牌堆顶）+ 飓风从牌库区中心 → 该玩家手牌末尾 handEndPos；基础抽牌动画由 main.ts
- *  pendingDraws 统一播放（本附加层独立，不干预其调度）。 */
-function playSpeedDrawExtra(payload: DrawPayload): void {
+/** speed 抽牌附加特效（card:drawn + triggerProtocol=speed，speed-1 顶「清理缓存后抽1张」）：
+ *  牌库区灰白光（抽出的卡在牌堆顶）+ 飓风从牌库区中心 → 该玩家手牌末尾 handEndPos。
+ *  FX-R1 时序重构：本函数由 main.ts playDrawSequence 在【基础抽牌动画之前】调度（speed 抽牌
+ *  专属先播、draw-ghost 基础飞入顺延到 SPEED_TOTAL_MS 之后），故不再从 card:drawn 事件时
+ *  即时播放（避免与 main.ts 调度双播/时序错位）。牌库/手牌缺失 → 跳过（基础抽牌照常）。 */
+export function playSpeedDrawExtra(payload: DrawPayload): void {
   const deck = deckPos(payload.player);
   const hand = document.querySelectorAll<HTMLElement>('.hand')[payload.player];
   if (!deck || !hand) return; // 牌库/手牌缺失 → 跳过（基础抽牌仍由 main.ts 播放）
@@ -1629,13 +1697,14 @@ function playProtocolFlip(node: HTMLElement, defId: string): void {
 export function initEffects(): () => void {
   return gameBus.subscribe((e: GameEvent) => {
     // card:drawn 无 uid/defId（payload = { player, count, fromOpponentDeck?, triggerProtocol }），
-    // 需在 uid/defId 守卫之前处理：speed 抽牌附加特效（卡框灰白光 + 飓风从牌库区到手牌末尾，
-    // 独立于 main.ts pendingDraws 的基础抽牌动画）与 love 抽牌附加特效（牌库区粉红光芒 +
-    // 手牌末尾落点爱心；抽出的卡背爱心由 main.ts playDrawAnimation love 分支挂 draw-ghost）。
+    // 需在 uid/defId 守卫之前处理：speed 抽牌专属（牌库区灰白光 + 飓风 → 手牌末尾）由 main.ts
+    // playDrawSequence 在基础抽牌动画【之前】统一调度（FX-R1 时序重构，见 playSpeedDrawExtra
+    // 注释——避免事件时即时播放与 main.ts 调度双播/时序错位）；love 抽牌附加特效（牌库区粉红
+    // 光芒 + 手牌末尾落点爱心；抽出的卡背爱心由 main.ts playDrawAnimation love 分支挂 draw-ghost）
+    // 与 metal-1 链路边框光仍在事件时即时播放。
     if (e.type === 'card:drawn') {
       const p = e.payload as { player: PlayerId; count: number; triggerProtocol?: string } | undefined;
-      if (p && p.triggerProtocol === 'speed') playSpeedDrawExtra(p);
-      else if (p && p.triggerProtocol === 'love') playLoveDrawExtra(p);
+      if (p && p.triggerProtocol === 'love') playLoveDrawExtra(p);
       else if (p && p.triggerProtocol === 'metal') playMetalLineGlow(p.player);
       return;
     }

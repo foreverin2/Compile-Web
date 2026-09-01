@@ -4,7 +4,7 @@ import { executeAction } from './core/game';
 import { getCompilableLines } from './core/rules/compile';
 import { collectTriggers } from './core/effects/triggers';
 import { renderApp, renderDraft, resetUiState, syncCompiledFxLayers, syncSmokeOverlays, syncScanOverlays, syncPsychicParticles, syncPlagueMists, syncApathyMists, syncSpirit0Glows, syncSpirit1Cards, syncMetal0Glows, syncMetalPlates, syncMetal6Mans, type UiCallbacks } from './ui/render';
-import { initEffects, initCompileFx, initRearrangeFx, playRevealFly, buildLoveHeart } from './ui/effects';
+import { initEffects, initCompileFx, initRearrangeFx, playRevealFly, buildLoveHeart, playSpeedDrawExtra, SPEED_TOTAL_MS } from './ui/effects';
 import { initDiag } from './ui/diag';
 import { initDevMode } from './ui/devmode';
 import { gameBus } from './core/events/bus';
@@ -24,8 +24,11 @@ const GHOST_H = 178.8;
 const HAND_CARD_SPACING = 102; // 卡宽 130 − 重叠 28
 /** 效果触发的抽牌累计（card:drawn 事件 → 本次行动结算完成后统一播抽牌特效）。
  *  love 标志：该次抽牌是否由 love 协议触发（love-1/2/6 及 love 刷新——含对手抽），
- *  播放抽牌飞入动画时给 draw-ghost 卡背挂粉红爱心 + 边框粉红光（FX-4） */
-let pendingDraws: { player: PlayerId; count: number; love: boolean }[] = [];
+ *  播放抽牌飞入动画时给 draw-ghost 卡背挂粉红爱心 + 边框粉红光（FX-4）。
+ *  speed 标志：该次抽牌是否由 speed 协议触发（speed-1 顶「清理缓存后抽1张」）——
+ *  播放抽牌动画时【先播 speed 专属飓风】（牌库区 → 手牌末尾），基础 draw-ghost 飞入
+ *  顺延到专属完成后（FX-R1 时序修复：不再基础先播、专属后播）。 */
+let pendingDraws: { player: PlayerId; count: number; love: boolean; speed: boolean }[] = [];
 /** 效果触发的揭示累计（card:revealed 事件 → 本次行动结算完成后按序播揭示飞行：
  *  幽灵从被揭示方手牌末尾逐张飞入接收方手牌末尾，全部落地后再重渲染） */
 let pendingReveals: { owner: PlayerId; shownTo: PlayerId; defId: string; triggerProtocol: string }[] = [];
@@ -140,16 +143,22 @@ const cb: UiCallbacks = {
 
 /**
  * 效果触发的抽牌序列：按玩家合并计数后逐人播放抽牌飞入动画（同一玩家多次抽牌合并为一次，
- * 幽灵卡依次落到手牌末尾；任一抽牌由 love 触发 → 合并结果带 love 标志 → draw-ghost 挂爱心），
- * 全部播完调用 done()。
+ * 幽灵卡依次落到手牌末尾；任一抽牌由 love 触发 → 合并结果带 love 标志 → draw-ghost 挂爱心；
+ * 任一抽牌由 speed 触发 → 合并结果带 speed 标志 → 【先播 speed 专属飓风】（牌库区 → 手牌
+ * 末尾，effects.playSpeedDrawExtra），基础 draw-ghost 飞入顺延到专属完成后（SPEED_TOTAL_MS）
+ * ——修复"基础抽牌先播、speed 专属后播"的时序错误）。全部播完调用 done()。
  */
-function playDrawSequence(draws: { player: PlayerId; count: number; love: boolean }[], done: () => void): void {
-  const merged: { player: PlayerId; count: number; love: boolean }[] = [];
+function playDrawSequence(
+  draws: { player: PlayerId; count: number; love: boolean; speed: boolean }[],
+  done: () => void,
+): void {
+  const merged: { player: PlayerId; count: number; love: boolean; speed: boolean }[] = [];
   for (const d of draws) {
     const found = merged.find((m) => m.player === d.player);
     if (found) {
       found.count += d.count;
       found.love = found.love || d.love;
+      found.speed = found.speed || d.speed;
     } else {
       merged.push({ ...d });
     }
@@ -159,11 +168,21 @@ function playDrawSequence(draws: { player: PlayerId; count: number; love: boolea
     done();
     return;
   }
-  playDrawAnimation(first.player, first.count, first.love, () => {
+  const next = (): void => {
     const rest = merged.slice(1);
     if (rest.length === 0) done();
     else playDrawSequence(rest, done);
-  });
+  };
+  if (first.speed) {
+    // speed 抽牌：先播专属飓风（牌库区 → 手牌末尾，SPEED_TOTAL_MS ≈ 2.26s 完成），
+    // 基础 draw-ghost 飞入顺延到专属完成后（DOM 在 renderApp 前始终为旧布局，落点仍正确）
+    playSpeedDrawExtra({ player: first.player, count: first.count, triggerProtocol: 'speed' });
+    window.setTimeout(() => {
+      playDrawAnimation(first.player, first.count, first.love, next);
+    }, SPEED_TOTAL_MS);
+  } else {
+    playDrawAnimation(first.player, first.count, first.love, next);
+  }
 }
 
 /**
@@ -384,7 +403,12 @@ initDevMode({ getState: () => state, render: () => renderApp(root, state, cb) })
 gameBus.subscribe((e) => {
   if (e.type !== 'card:drawn') return;
   const p = e.payload as { player: PlayerId; count: number; triggerProtocol?: string };
-  pendingDraws.push({ player: p.player, count: p.count, love: p.triggerProtocol === 'love' });
+  pendingDraws.push({
+    player: p.player,
+    count: p.count,
+    love: p.triggerProtocol === 'love',
+    speed: p.triggerProtocol === 'speed',
+  });
 });
 // 效果触发的揭示：累计 card:revealed 事件，行动结算后按序播揭示飞行
 // （source = 被揭示卡持有者手牌末尾，shownTo = 接收方手牌末尾；triggerProtocol 决定
