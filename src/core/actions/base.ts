@@ -2,7 +2,12 @@ import type { GameState, PlayerId, Line, Card } from '../models/types';
 import { drawCards } from '../engine/deck';
 import { getCardDef } from '../../data/demo';
 import { runStack } from '../effects/resolve';
-import { canPlayFaceUpAnywhere } from '../rules/restrictions';
+import {
+  canPlayFaceUpAnywhere,
+  lineBlocksOpponent,
+  lineBlocksOpponentFaceDown,
+  opponentMustPlayFaceDown,
+} from '../rules/restrictions';
 
 /** 卡牌 defId 的协议是否与该线协议匹配（正面打入条件）。行线上同时携带双方协议
  *  （P1 协议 | P2 协议）：卡牌协议匹配本侧或对手同线协议任一即可正面打入。
@@ -21,11 +26,22 @@ export function isPlayableFaceUp(s: GameState, player: PlayerId, cardUid: string
 }
 
 /** 打出卡牌：正面须匹配协议线；背面任意线。先浮空（pendingPlay），completePlay 结算目标顶卡
- *  "被盖住前"触发后落地；正面卡落地后结算中指令（可连锁/挂起）。 */
+ *  "被盖住前"触发后落地；正面卡落地后结算中指令（可连锁/挂起）。
+ *  执行层守卫（与 getLegalActions 一致，防直接调引擎绕过）：plague-0 此列禁打（正反）、
+ *  psychic-1 禁正面打、metal-2 此列禁反面打——效果授予的打出（playFromHand op）不受限（卡牌文本优先）。 */
 export function playCard(s: GameState, player: PlayerId, cardUid: string, faceUp: boolean, line: Line): Card {
   const p = s.players[player];
   const idx = p.hand.findIndex((c) => c.uid === cardUid);
   if (idx === -1) throw new Error(`card ${cardUid} not in hand`);
+  if (lineBlocksOpponent(s, line, player)) {
+    throw new Error(`cannot play into blocked line ${line}`);
+  }
+  if (faceUp && opponentMustPlayFaceDown(s, player)) {
+    throw new Error('cannot play face-up (psychic-1)');
+  }
+  if (!faceUp && lineBlocksOpponentFaceDown(s, line, player)) {
+    throw new Error(`cannot play face-down into line ${line}`);
+  }
   if (faceUp && !isPlayableFaceUp(s, player, cardUid, line)) {
     throw new Error(`cannot play face-up into line ${line}`);
   }

@@ -70,6 +70,19 @@ describe('FAQ corrections (A2b)', () => {
     expect(s.players[0].hand).toHaveLength(0); // middle 未触发（被盖翻正不连锁）
     expect(s.pendingEffects).toHaveLength(0);
   });
+
+  it('execution-layer guards reject restricted plays even when called directly (A2 Important hardening)', () => {
+    const s = createGame();
+    s.phase = 'turn';
+    s.players[0].protocols = [{ defId: 'fire', compiled: false }, { defId: 'light', compiled: false }, { defId: 'darkness', compiled: false }];
+    s.players[1].protocols = [{ defId: 'metal', compiled: false }, { defId: 'water', compiled: false }, { defId: 'life', compiled: false }];
+    // P2 线 0 放 metal-2 顶（对手不能在此列反面打）
+    place(s, makeCard('metal-2', 1, 'field', true, 0, 0), 1, 0);
+    s.players[0].hand = [makeCard('fire-0', 0, 'hand')];
+    expect(() => executeAction(s, 0, 'play', { cardUid: s.players[0].hand[0].uid, faceUp: false, line: 0 }))
+      .toThrow('cannot play face-down');
+    expect(s.players[0].hand).toHaveLength(1); // 卡未被移出
+  });
 });
 
 
