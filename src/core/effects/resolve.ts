@@ -14,6 +14,7 @@ import './cards/water';
 import './cards/life';
 import './cards/death';
 import './cards/spirit';
+import './cards/gravity';
 
 function topEffect(s: GameState): PendingEffect | undefined {
   return s.pendingEffects[s.pendingEffects.length - 1];

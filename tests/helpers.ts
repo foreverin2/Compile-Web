@@ -98,6 +98,17 @@ export function draftSpiritP1(): GameState {
   return s;
 }
 
+/** 草案：P1 第 1 选 gravity（P1 协议线 0 = gravity），其余自动选池中第一个非 gravity */
+export function draftGravityP1(): GameState {
+  const s = createGame();
+  performDraftPick(s, 'gravity');
+  while (s.phase === 'draft') {
+    const avail = getDraftPool(s);
+    performDraftPick(s, (avail.find((p) => p.defId !== 'gravity') ?? avail[0]).defId);
+  }
+  return s;
+}
+
 /** 推进到指定步骤（起始手牌下堆叠为空，不会触发强制编译） */
 export function advanceToStep(s: GameState, player: PlayerId, step: Step): void {
   while (s.phase === 'turn' && s.step !== step) executeAction(s, player, 'advance');
