@@ -31,7 +31,7 @@ export interface DevModeHost {
 const PASSWORDS = new Set(['上上下下左右左右BABA', 'ssxxzyzybaba']);
 
 /** 指令页提示行 */
-const HINT = '指令：get 牌名（加入当前玩家手牌，如 get light-2）· clean（清空当前玩家手牌）· Compile 协议（强制编译当前场上协议，如 Compile life）';
+const HINT = '指令：get 牌名 / Compile 协议（输入即模糊预览，点列表行执行）· clean（清空当前玩家手牌）· 如 get light-2、Compile life（中文名 死/生/光 也可）';
 
 /** 卡牌实例 uid 计数器（dev- 前缀保证不与正式 uid 冲突） */
 let uidCounter = 0;
@@ -225,6 +225,46 @@ export function searchCards(query: string, limit: number = SEARCH_DEFAULT_LIMIT)
     .map((hit) => hit.def);
 }
 
+/** 协议检索命中：协议 + 相关性得分 */
+interface ProtocolHit {
+  proto: ProtocolDef;
+  score: number;
+}
+
+/**
+ * 查询 → 全部匹配协议（百度式模糊，纯函数，无 DOM）：token 同时匹配 defId 与协议
+ * 中文名（'life'/'lif'/'死'/'死 ' 均命中），多词 AND + 精确>前缀>子串排序。
+ * 空查询 → 返回全部协议（便于预览页直接点选）。
+ */
+function collectProtocolMatches(query: string): ProtocolHit[] {
+  const tokens = tokenizeQuery(query);
+  const hits: ProtocolHit[] = [];
+  for (const proto of ALL_PROTOCOLS) {
+    const defKey = normalizeKey(proto.defId);
+    const cnKey = normalizeKey(proto.name);
+    let score = 0;
+    let matched = true;
+    for (const token of tokens) {
+      const best = Math.max(tokenMatchScore(token, defKey), tokenMatchScore(token, cnKey));
+      if (best === 0) {
+        matched = false;
+        break;
+      }
+      score += best;
+    }
+    if (matched) hits.push({ proto, score });
+  }
+  hits.sort((a, b) => b.score - a.score || compareDefIdNatural(a.proto.defId, b.proto.defId));
+  return hits;
+}
+
+/** 实时协议检索（供 Compile 指令预览，纯函数，无 DOM）：最多 limit 个 */
+export function searchProtocols(query: string, limit: number = SEARCH_DEFAULT_LIMIT): ProtocolDef[] {
+  return collectProtocolMatches(query)
+    .slice(0, limit)
+    .map((hit) => hit.proto);
+}
+
 /** 日志：同时写入 console（diag 全量捕获）与 state.log（游戏事件日志，diag 导出含尾部） */
 function log(host: DevModeHost, msg: string): void {
   const full = `[开发者模式] ${msg}`;
@@ -406,7 +446,7 @@ function openCommandPage(host: DevModeHost): void {
   hint.textContent = HINT;
   const input = document.createElement('input');
   input.className = 'dev-console-input';
-  input.placeholder = 'get light-2 或 clean';
+  input.placeholder = 'get light-2 / Compile life（输入即模糊预览）';
   const results = document.createElement('div');
   results.className = 'dev-results';
   results.hidden = true;
@@ -425,11 +465,55 @@ function openCommandPage(host: DevModeHost): void {
   /**
    * 渲染实时检索列表：输入框每键一次重绘。空查询 / 无匹配 → 隐藏；
    * 最多显示 SEARCH_DEFAULT_LIMIT 行，超出追加「…共 N 张」行（不可点击）。
+   * 2026-09-03：按命令前缀分流——`compile` 前缀走【协议模糊预览】（defId/中文名，
+   * 点击行 = 强制编译该协议，解决用户"不知道英文对不对"）；其余走卡牌 get 预览。
    */
   const renderResults = (): void => {
     const query = input.value;
-    const all = collectSearchMatches(query);
+    // `compile` / `Compile xxx`（含未加空格的中文名直接输入）都走协议预览
+    const cm = /^compile(?:\s+(.*))?$/i.exec(query.trim());
     results.replaceChildren();
+    if (cm) {
+      // —— Compile 模式：协议模糊预览（空参数 → 列出全部协议供点选）——
+      const all = collectProtocolMatches(cm[1] ?? '');
+      if (all.length === 0) {
+        results.hidden = true;
+        return;
+      }
+      const state = host.getState();
+      const fieldIds = new Set(state.players[state.turnPlayer].protocols.map((p) => p.defId));
+      const shown = all.slice(0, SEARCH_DEFAULT_LIMIT);
+      for (const hit of shown) {
+        const proto = hit.proto;
+        const row = document.createElement('div');
+        row.className = 'dev-result';
+        const label = document.createElement('span');
+        label.className = 'dev-result-label';
+        label.textContent = `compile ${proto.defId}（${proto.name}）`;
+        row.appendChild(label);
+        const hintSpan = document.createElement('span');
+        hintSpan.className = 'dev-result-hint';
+        hintSpan.textContent = fieldIds.has(proto.defId) ? '本局场上 · 点击强制编译' : '不在当前玩家场上';
+        row.appendChild(hintSpan);
+        row.addEventListener('click', () => {
+          forceCompileProtocol(host, proto.defId); // 与 Compile 指令同一执行路径
+          input.value = '';
+          results.hidden = true;
+          input.focus(); // 点击行后保持焦点，便于连续操作
+        });
+        results.appendChild(row);
+      }
+      if (all.length > SEARCH_DEFAULT_LIMIT) {
+        const more = document.createElement('div');
+        more.className = 'dev-result dev-result-more';
+        more.textContent = `…共 ${all.length} 个协议`;
+        results.appendChild(more);
+      }
+      results.hidden = false;
+      return;
+    }
+    // —— get 模式：卡牌模糊预览 ——
+    const all = collectSearchMatches(query);
     if (all.length === 0) {
       results.hidden = true;
       return;

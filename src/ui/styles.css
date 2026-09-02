@@ -3556,27 +3556,28 @@ body.dragging { cursor: grabbing; user-select: none; }
   display: none;
 }
 
-/* 死：深紫 #4a0d8f ↔ 亮紫 #c45bff（闪烁）；灵魂：亮紫 #9b5cff ↔ 紫粉 #e86bff */
-.compiled-ring-death { animation: compiled-death-breathe 2.4s ease-in-out infinite; }
+/* 死（2026-09-03 修改）：深紫 #4a0d8f ↔ 黑 #07030d —— 柔和交替光效（慢速 3.8s，
+ * 外晕收敛低调 → 不闪）；灵魂（2026-09-03 修改）：浅青蓝 #9fe8ff ↔ 深靛蓝 #242f86 */
+.compiled-ring-death { animation: compiled-death-breathe 3.8s ease-in-out infinite; }
 @keyframes compiled-death-breathe {
   0%, 100% {
     border-color: #4a0d8f;
-    box-shadow: 0 0 14px 3px rgba(74, 13, 143, 0.7), 0 0 34px 10px rgba(74, 13, 143, 0.35), inset 0 0 12px rgba(74, 13, 143, 0.3);
+    box-shadow: 0 0 10px 2px rgba(74, 13, 143, 0.6), 0 0 26px 8px rgba(74, 13, 143, 0.3), inset 0 0 10px rgba(74, 13, 143, 0.26);
   }
   50% {
-    border-color: #c45bff;
-    box-shadow: 0 0 18px 5px rgba(196, 91, 255, 0.85), 0 0 42px 14px rgba(196, 91, 255, 0.4), inset 0 0 14px rgba(196, 91, 255, 0.35);
+    border-color: #07030d;
+    box-shadow: 0 0 4px 1px rgba(40, 8, 80, 0.5), 0 0 14px 4px rgba(30, 6, 60, 0.28), inset 0 0 6px rgba(20, 4, 44, 0.3);
   }
 }
-.compiled-ring-spirit { animation: compiled-spirit-breathe 1.9s ease-in-out infinite; }
+.compiled-ring-spirit { animation: compiled-spirit-breathe 2.4s ease-in-out infinite; }
 @keyframes compiled-spirit-breathe {
   0%, 100% {
-    border-color: #9b5cff;
-    box-shadow: 0 0 14px 3px rgba(155, 92, 255, 0.75), 0 0 32px 10px rgba(155, 92, 255, 0.35), inset 0 0 12px rgba(155, 92, 255, 0.3);
+    border-color: #9fe8ff;
+    box-shadow: 0 0 16px 4px rgba(159, 232, 255, 0.75), 0 0 38px 12px rgba(159, 232, 255, 0.38), inset 0 0 12px rgba(159, 232, 255, 0.3);
   }
   50% {
-    border-color: #e86bff;
-    box-shadow: 0 0 18px 5px rgba(255, 111, 238, 0.8), 0 0 40px 13px rgba(232, 107, 255, 0.4), inset 0 0 14px rgba(232, 107, 255, 0.32);
+    border-color: #242f86;
+    box-shadow: 0 0 18px 5px rgba(60, 76, 200, 0.8), 0 0 42px 14px rgba(36, 47, 134, 0.42), inset 0 0 14px rgba(72, 92, 220, 0.34);
   }
 }
 
@@ -3663,33 +3664,29 @@ body.dragging { cursor: grabbing; user-select: none; }
   }
 }
 
-/* ---------- 四角加厚护边（spirit 紫 / plague 深绿 / speed 灰白 / love 粉红 / metal 金属） ---------- */
-.compiled-spirit-corner,
-.compiled-plague-corner,
-.compiled-speed-corner,
-.compiled-love-corner {
+/* ---------- 四角加厚护边（§8：所有 L 形协议都有；几何通用骨架 + 按协议 CSS 变量配色） ----------
+ * metal 除外：其护边是金属渐变 clip-path L（见下方独立块，不走本骨架）。
+ * 颜色 = 对应协议边框发光色之一（--cc 主色 / --ccg 发光色）。 */
+.compiled-l-corner {
   position: absolute;
   width: 46px;
   height: 46px;
   pointer-events: none;
   z-index: 3;
 }
-.compiled-spirit-corner.tl { top: -9px; left: -9px; border-top: 9px solid #9b5cff; border-left: 9px solid #9b5cff; border-top-left-radius: 14px; filter: drop-shadow(0 0 7px rgba(155, 92, 255, 0.85)); }
-.compiled-spirit-corner.tr { top: -9px; right: -9px; border-top: 9px solid #9b5cff; border-right: 9px solid #9b5cff; border-top-right-radius: 14px; filter: drop-shadow(0 0 7px rgba(155, 92, 255, 0.85)); }
-.compiled-spirit-corner.bl { bottom: -9px; left: -9px; border-bottom: 9px solid #9b5cff; border-left: 9px solid #9b5cff; border-bottom-left-radius: 14px; filter: drop-shadow(0 0 7px rgba(155, 92, 255, 0.85)); }
-.compiled-spirit-corner.br { bottom: -9px; right: -9px; border-bottom: 9px solid #9b5cff; border-right: 9px solid #9b5cff; border-bottom-right-radius: 14px; filter: drop-shadow(0 0 7px rgba(155, 92, 255, 0.85)); }
-.compiled-plague-corner.tl { top: -9px; left: -9px; border-top: 9px solid #0d6a36; border-left: 9px solid #0d6a36; border-top-left-radius: 14px; filter: drop-shadow(0 0 7px rgba(20, 140, 70, 0.85)); }
-.compiled-plague-corner.tr { top: -9px; right: -9px; border-top: 9px solid #0d6a36; border-right: 9px solid #0d6a36; border-top-right-radius: 14px; filter: drop-shadow(0 0 7px rgba(20, 140, 70, 0.85)); }
-.compiled-plague-corner.bl { bottom: -9px; left: -9px; border-bottom: 9px solid #0d6a36; border-left: 9px solid #0d6a36; border-bottom-left-radius: 14px; filter: drop-shadow(0 0 7px rgba(20, 140, 70, 0.85)); }
-.compiled-plague-corner.br { bottom: -9px; right: -9px; border-bottom: 9px solid #0d6a36; border-right: 9px solid #0d6a36; border-bottom-right-radius: 14px; filter: drop-shadow(0 0 7px rgba(20, 140, 70, 0.85)); }
-.compiled-speed-corner.tl { top: -9px; left: -9px; border-top: 9px solid #eef1f7; border-left: 9px solid #eef1f7; border-top-left-radius: 14px; filter: drop-shadow(0 0 7px rgba(238, 241, 247, 0.8)); }
-.compiled-speed-corner.tr { top: -9px; right: -9px; border-top: 9px solid #eef1f7; border-right: 9px solid #eef1f7; border-top-right-radius: 14px; filter: drop-shadow(0 0 7px rgba(238, 241, 247, 0.8)); }
-.compiled-speed-corner.bl { bottom: -9px; left: -9px; border-bottom: 9px solid #eef1f7; border-left: 9px solid #eef1f7; border-bottom-left-radius: 14px; filter: drop-shadow(0 0 7px rgba(238, 241, 247, 0.8)); }
-.compiled-speed-corner.br { bottom: -9px; right: -9px; border-bottom: 9px solid #eef1f7; border-right: 9px solid #eef1f7; border-bottom-right-radius: 14px; filter: drop-shadow(0 0 7px rgba(238, 241, 247, 0.8)); }
-.compiled-love-corner.tl { top: -9px; left: -9px; border-top: 9px solid #ff4f9a; border-left: 9px solid #ff4f9a; border-top-left-radius: 14px; filter: drop-shadow(0 0 7px rgba(255, 79, 154, 0.85)); }
-.compiled-love-corner.tr { top: -9px; right: -9px; border-top: 9px solid #ff4f9a; border-right: 9px solid #ff4f9a; border-top-right-radius: 14px; filter: drop-shadow(0 0 7px rgba(255, 79, 154, 0.85)); }
-.compiled-love-corner.bl { bottom: -9px; left: -9px; border-bottom: 9px solid #ff4f9a; border-left: 9px solid #ff4f9a; border-bottom-left-radius: 14px; filter: drop-shadow(0 0 7px rgba(255, 79, 154, 0.85)); }
-.compiled-love-corner.br { bottom: -9px; right: -9px; border-bottom: 9px solid #ff4f9a; border-right: 9px solid #ff4f9a; border-bottom-right-radius: 14px; filter: drop-shadow(0 0 7px rgba(255, 79, 154, 0.85)); }
+.compiled-l-corner.tl { top: -9px; left: -9px; border-top: 9px solid var(--cc, #888); border-left: 9px solid var(--cc, #888); border-top-left-radius: 14px; filter: drop-shadow(0 0 7px var(--ccg, transparent)); }
+.compiled-l-corner.tr { top: -9px; right: -9px; border-top: 9px solid var(--cc, #888); border-right: 9px solid var(--cc, #888); border-top-right-radius: 14px; filter: drop-shadow(0 0 7px var(--ccg, transparent)); }
+.compiled-l-corner.bl { bottom: -9px; left: -9px; border-bottom: 9px solid var(--cc, #888); border-left: 9px solid var(--cc, #888); border-bottom-left-radius: 14px; filter: drop-shadow(0 0 7px var(--ccg, transparent)); }
+.compiled-l-corner.br { bottom: -9px; right: -9px; border-bottom: 9px solid var(--cc, #888); border-right: 9px solid var(--cc, #888); border-bottom-right-radius: 14px; filter: drop-shadow(0 0 7px var(--ccg, transparent)); }
+.compiled-spirit-corner { --cc: #2b3898; --ccg: rgba(159, 232, 255, 0.75); }     /* 深靛蓝（随 2026-09-03 边框改色） */
+.compiled-plague-corner { --cc: #0d6a36; --ccg: rgba(20, 140, 70, 0.85); }
+.compiled-speed-corner { --cc: #eef1f7; --ccg: rgba(238, 241, 247, 0.8); }
+.compiled-love-corner { --cc: #ff4f9a; --ccg: rgba(255, 79, 154, 0.85); }
+.compiled-death-corner { --cc: #5b14ad; --ccg: rgba(150, 80, 255, 0.8); }         /* 深紫（新） */
+.compiled-gravity-corner { --cc: #e63ae0; --ccg: rgba(240, 90, 255, 0.8); }       /* 品红紫（新） */
+.compiled-psychic-corner { --cc: #b14fe0; --ccg: rgba(200, 110, 255, 0.8); }      /* 亮紫（新） */
+.compiled-hate-corner { --cc: #d81f33; --ccg: rgba(220, 40, 60, 0.85); }          /* 血红（新） */
+.compiled-apathy-corner { --cc: #c9ccd6; --ccg: rgba(203, 206, 216, 0.75); }      /* 亮灰（新） */
 
 /* ---------- 1. 死已编译：缕缕黑烟 + 骷髅 ---------- */
 .compiled-death-smoke {
@@ -3739,6 +3736,59 @@ body.dragging { cursor: grabbing; user-select: none; }
 @keyframes compiled-death-skull-bob {
   from { margin-top: -10px; }
   to { margin-top: 8px; }
+}
+/* 死神镰刀（2026-09-03 新增，偶尔出现）：wrapper 定位于卡中心斜置，渐现→停留→渐隐；
+ * art 内为「木柄 + 长条刀片」（复用删除特效镰刀观感，缩小到卡内比例），带紫光描边与轻微摇摆 */
+.compiled-death-scythe {
+  position: absolute;
+  left: 50%;
+  top: 54%;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 3;
+  transform: translate(-50%, -50%) rotate(-16deg);
+  transition: opacity 0.55s ease-out;
+}
+.compiled-death-scythe.in { opacity: 1; }
+.compiled-death-scythe.out { opacity: 0; transition: opacity 0.6s ease-in; }
+.compiled-death-scythe-art {
+  position: absolute;
+  left: -72px;
+  top: -62px;
+  width: 144px;
+  height: 124px;
+  transform-origin: 50% 92%;
+  animation: compiled-death-scythe-sway 2.6s ease-in-out infinite;
+  filter: drop-shadow(0 0 10px rgba(170, 90, 255, 0.6));
+}
+@keyframes compiled-death-scythe-sway {
+  0%, 100% { transform: rotate(-3deg); }
+  50% { transform: rotate(3deg); }
+}
+.compiled-death-scythe-blade {
+  position: absolute;
+  left: 50%;
+  top: 4px;
+  width: 128px;
+  height: 25px;
+  margin-left: -64px;
+  border-radius: 50% 50% 10px 10px / 62% 62% 30% 30%;
+  background: linear-gradient(180deg, #f6f8fc 0%, #cfd5e0 28%, #98a0b2 55%, #6c7487 82%, #474e60 100%);
+  box-shadow: 0 0 9px rgba(180, 150, 220, 0.5), inset 0 2px 3px rgba(255, 255, 255, 0.85), inset 0 -3px 4px rgba(28, 32, 46, 0.55);
+  transform: rotate(-6deg);
+}
+.compiled-death-scythe-handle {
+  position: absolute;
+  left: 50%;
+  top: 14px;
+  width: 10px;
+  height: 104px;
+  margin-left: -5px;
+  border-radius: 5px;
+  background: linear-gradient(90deg, #8a6238, #5d3a1e 30%, #38220f 55%, #6b4423 80%, #4a2c16);
+  box-shadow: 0 0 6px rgba(0, 0, 0, 0.6), inset 0 0 3px rgba(255, 214, 150, 0.28);
 }
 
 /* ---------- 2. 灵魂已编译：锁链伸向中心后缩回（复用 check-cache 椭圆环链观感） ---------- */
@@ -4094,10 +4144,13 @@ body.dragging { cursor: grabbing; user-select: none; }
   transition: transform 0.55s ease-in;
   will-change: transform;
 }
-.compiled-metal-spike.top { top: -5px; clip-path: polygon(50% 0, 100% 100%, 0 100%); transform-origin: 50% 100%; }
-.compiled-metal-spike.bottom { bottom: -5px; clip-path: polygon(50% 100%, 100% 0, 0 0); transform-origin: 50% 0%; }
-.compiled-metal-spike.left { left: -5px; width: 22px; height: 16px; clip-path: polygon(0 0, 100% 50%, 0 100%); transform-origin: 100% 50%; }
-.compiled-metal-spike.right { right: -5px; width: 22px; height: 16px; clip-path: polygon(100% 0, 0 50%, 100% 100%); transform-origin: 0% 50%; }
+/* 刺完全伸出协议边框外（2026-09-03 修正：原先刺体大部分落在卡内=“向里刺”）：
+ * 刺盒整体贴卡框外侧（-24px → 底边距框 2px，落在金属环带上），尖端朝外、底边贴框；
+ * transform-origin 在贴框一侧 → scale 0→1 自框边向外伸出 */
+.compiled-metal-spike.top { top: -24px; clip-path: polygon(50% 0, 100% 100%, 0 100%); transform-origin: 50% 100%; }
+.compiled-metal-spike.bottom { bottom: -24px; clip-path: polygon(50% 100%, 100% 0, 0 0); transform-origin: 50% 0%; }
+.compiled-metal-spike.left { left: -24px; width: 22px; height: 16px; clip-path: polygon(0 50%, 100% 0, 100% 100%); transform-origin: 100% 50%; }
+.compiled-metal-spike.right { right: -24px; width: 22px; height: 16px; clip-path: polygon(100% 50%, 0 0, 0 100%); transform-origin: 0% 50%; }
 .compiled-metal-spikes.on .compiled-metal-spike {
   transition: transform 0.22s ease-out;
   transform: scale(1);
