@@ -88,9 +88,11 @@ function renderProtocol(p: { defId: string; compiled: boolean }, player: PlayerI
     }
     compiledFxCells.push({ defId: p.defId, holder });
   } else {
-    // 未编译：释放该 defId 的持久 FX（若有）
+    // 未编译：释放该 defId 的持久 FX（若有）——先停掉其 JS 周期调度（锁链/黑洞/爆发等），
+    // 再移除层（CSS 无限动画随节点移除自然终止；挂起 timer 不清会悬挂到游戏结束）
     const fx = compiledFx.get(p.defId);
     if (fx) {
+      clearCompiledFxTimers(p.defId);
       fx.remove();
       compiledFx.delete(p.defId);
     }
@@ -1040,6 +1042,13 @@ function positionCompiledFxLayer(defId: string, holder: HTMLElement): void {
   fx.style.top = `${r.top}px`;
   fx.style.width = `${r.width}px`;
   fx.style.height = `${r.height}px`;
+  // 冷漠已编译卡面克隆（故障特效载体）与真实协议图同朝向：P2 侧协议图 rot-180，
+  // 克隆图若不跟随会在故障滤镜下露出方向不一致的重影（幂等：每次重定位同步一次）
+  const face = fx.querySelector<HTMLElement>('.compiled-apathy-face');
+  if (face) {
+    const holderImg = holder.querySelector('img.protocol-img');
+    if (holderImg) face.classList.toggle('rot-180', holderImg.classList.contains('rot-180'));
+  }
 }
 
 /** 玩家信息条：标题（回合高亮）+ 牌库/弃牌堆/手牌计数（手牌本体在底部条带） */
@@ -1428,6 +1437,35 @@ const compiledFx = new Map<string, HTMLElement>();
  *  末尾（DOM 已挂载）由 syncCompiledFxLayers 统一重定位 body 级持久 FX 层。 */
 const compiledFxCells: { defId: string; holder: HTMLElement }[] = [];
 
+/** 已编译特效 JS 调度注册表（key=defId → 挂起 timer ids）：层被移除/重置（未编译分支、
+ *  resetUiState）时统一清除，防止周期性序列（间隔 ≥10s 的大特效与偶发小特效）的
+ *  setTimeout 在层释放后悬挂。CSS 无限动画随节点移除自然终止，无需登记。 */
+const compiledFxTimers = new Map<string, Set<number>>();
+
+/** 登记一个已编译特效 timer（触发时自删；层移除时由 clearCompiledFxTimers 统一清除） */
+function fxTimer(defId: string, fn: () => void, ms: number): void {
+  let set = compiledFxTimers.get(defId);
+  if (!set) {
+    set = new Set<number>();
+    compiledFxTimers.set(defId, set);
+  }
+  const id = window.setTimeout(() => {
+    set.delete(id);
+    if (set.size === 0) compiledFxTimers.delete(defId);
+    fn();
+  }, ms);
+  set.add(id);
+}
+
+/** 清除某 defId 的全部已编译特效挂起 timer（层移除/重置前调用） */
+function clearCompiledFxTimers(defId: string): void {
+  const set = compiledFxTimers.get(defId);
+  if (!set) return;
+  for (const id of set) window.clearTimeout(id);
+  set.clear();
+  compiledFxTimers.delete(defId);
+}
+
 /** 构建单个 defId 的持久 FX 层（首次编译时创建一次，此后只重定位不重建）：
  *  - fire：背光层 + 岩浆段/岩石（.compiled-fx 包裹，环与 holder 同盒）
  *  - light/darkness：各自环内层（呼吸边框/角光、雾、波浪光晕、圆烟）
@@ -1444,6 +1482,9 @@ function buildCompiledFx(defId: string): HTMLElement {
   // life：深绿背光（真实元素随持久层存活，动画不重启；见 styles.css .compiled-fx-life .life-backlight）
   if (defId === 'life') layer.appendChild(el('div', 'life-backlight'));
   appendCompiledRing(layer, defId);
+  // 2026-09-03：新 10 协议已编译专属特效（死/灵魂/重力/念能/瘟疫/金属/速度/爱/恨/冷漠）。
+  // 全部作为持久层子节点（跨重渲染存活 → 动画不重置；层按 holder 重定位 → 跟随协议位置）。
+  appendNewCompiledFx(layer, defId);
   document.body.appendChild(layer);
   return layer;
 }
@@ -1728,6 +1769,710 @@ function appendCompiledRing(box: HTMLElement, defId: string): void {
       frameRipples.appendChild(r);
     }
     box.appendChild(frameRipples);
+  }
+}
+
+/* =====================================================================================
+ * 2026-09-03：新 10 协议「已编译」常驻特效（死/灵魂/重力/念能/瘟疫/金属/速度/爱/恨/冷漠）
+ * -------------------------------------------------------------------------------------
+ * 用户规格要点（实现约束，勿改）：
+ *  - 动画属持续性：全部挂在 body 级持久层（compiledFx）内——层跨重渲染从不 detach/重建，
+ *    只被 syncCompiledFxLayers（渲染 + scroll/resize rAF）按 holder 矩形重定位 → 步骤
+ *    切换不重置动画进度、特效跟随协议位置（绝不挂回每次重建的 .protocol DOM 树）；
+ *  - 周期性大特效（灵魂锁链伸收 / 重力坍缩 / 念能爆发 / 恨意血涌 / 冷漠故障）触发时间
+ *    随机，但「特效结束 → 下次开始」间隔 ≥ COMPILED_MIN_GAP_MS（10s，从结束起计时）；
+ *  - 观感参数集中：颜色/过渡在 styles.css「新 10 协议已编译特效」区块，尺寸/时长常量在
+ *    各 builder 顶部，便于 5173 微调。
+ * ===================================================================================== */
+const COMPILED_MIN_GAP_MS = 10_000;    // 周期大特效：结束 → 下次开始的最小间隔（用户 ≥10s）
+const COMPILED_GAP_JITTER_MS = 16_000; // 随机上界（10s + 0..16s）
+
+/** 层当前几何（px；w/h 由 syncCompiledFxLayers 每帧写入）；未挂载/0 尺寸返回 null */
+function layerGeom(layer: HTMLElement): { w: number; h: number; cx: number; cy: number; diag: number; min: number } | null {
+  if (!layer.isConnected) return null;
+  const w = parseFloat(layer.style.width);
+  const h = parseFloat(layer.style.height);
+  if (!(w > 0) || !(h > 0)) return null;
+  return { w, h, cx: w / 2, cy: h / 2, diag: Math.hypot(w, h), min: Math.min(w, h) };
+}
+
+function rnd(a: number, b: number): number { return a + Math.random() * (b - a); }
+function pick<T>(arr: readonly T[]): T { return arr[Math.floor(Math.random() * arr.length)]; }
+
+/** 强制回流：让刚写入的初始样式先被绘制，随后的 transition 才能从该状态开始 */
+function reflowFx(elToReflow: HTMLElement): void { void elToReflow.offsetWidth; }
+
+/** 四角加厚护边（L 形支架；观感按协议由 CSS 类区分：spirit 紫 / plague 深绿 / metal 金属 /
+ *  speed 灰白 / love 粉红）。持久节点 → 发光不随重渲染重置。 */
+function appendCompiledCorners(layer: HTMLElement, cls: string): void {
+  for (const pos of ['tl', 'tr', 'bl', 'br'] as const) {
+    layer.appendChild(el('div', `${cls} ${pos}`));
+  }
+}
+
+/** 协议边框附近随机点（百分比；供骷髅/爱心/血渍等小元素贴边定位） */
+function nearBorderPoint(): { x: number; y: number } {
+  const edge = Math.floor(Math.random() * 4);
+  const f = rnd(10, 90);
+  const d = rnd(5, 18); // 距边距离（%）
+  switch (edge) {
+    case 0: return { x: f, y: d };
+    case 1: return { x: 100 - d, y: f };
+    case 2: return { x: f, y: 100 - d };
+    default: return { x: d, y: f };
+  }
+}
+
+/** 周期序列驱动器：burst(结束回调) 完成后按「10s + 随机」排下一次；首次延迟 firstMs。
+ *  结束回调只调用一次（各 burst 用 finished 守卫）。 */
+function scheduleCompiledLoop(
+  layer: HTMLElement,
+  defId: string,
+  firstMs: number,
+  burst: (done: () => void) => void,
+): void {
+  const next = (delayMs: number): void => {
+    fxTimer(defId, () => {
+      if (!layer.isConnected) return; // 层已释放（未编译/重置）→ 序列自然终止
+      let finished = false;
+      burst(() => {
+        if (finished) return;
+        finished = true;
+        next(COMPILED_MIN_GAP_MS + rnd(0, COMPILED_GAP_JITTER_MS));
+      });
+    }, delayMs);
+  };
+  next(firstMs);
+}
+
+/* ---------- 1. 死 death：深紫↔亮紫边框闪烁；偶尔骷髅渐现渐隐；缕缕黑烟持续冒出 ---------- */
+function appendDeathCompiled(layer: HTMLElement, defId: string): void {
+  // 缕缕黑烟（持续交错循环）：4 缕沿下缘/下角冒出向上飘散渐隐（负 delay 错相）
+  const smoke = el('div', 'compiled-death-smoke');
+  for (let i = 0; i < 4; i++) {
+    const w = el('div', 'compiled-death-wisp');
+    w.style.animationDelay = `${-(i * 1.7).toFixed(2)}s`;
+    smoke.appendChild(w);
+  }
+  layer.appendChild(smoke);
+  // 骷髅：偶尔在边框附近渐现 → 停留 → 渐隐（💀 emoji，复用删除特效观感）
+  const skull = el('div', 'compiled-death-skull');
+  skull.textContent = '💀';
+  layer.appendChild(skull);
+  const hideDone = (): void => {
+    if (!layer.isConnected) return;
+    skull.classList.remove('out');
+    fxTimer(defId, show, rnd(2600, 7000));
+  };
+  const hide = (): void => {
+    if (!layer.isConnected) return;
+    skull.classList.remove('in');
+    skull.classList.add('out');
+    fxTimer(defId, hideDone, 500);
+  };
+  const show = (): void => {
+    if (!layer.isConnected) return;
+    const g = layerGeom(layer);
+    if (!g) { fxTimer(defId, show, 700); return; }
+    const p = nearBorderPoint();
+    skull.style.fontSize = `${rnd(22, 42).toFixed(1)}px`;
+    skull.style.left = `${p.x.toFixed(1)}%`;
+    skull.style.top = `${p.y.toFixed(1)}%`;
+    skull.classList.add('in');
+    fxTimer(defId, hide, rnd(1400, 2400));
+  };
+  fxTimer(defId, show, rnd(1400, 4200));
+}
+
+/* ---------- 2. 灵魂 spirit：亮紫↔紫粉边框；四角紫护边；锁链周期伸向中心后缩回 ---------- */
+function appendSpiritCompiled(layer: HTMLElement, defId: string): void {
+  appendCompiledCorners(layer, 'compiled-spirit-corner');
+  const host = el('div', 'compiled-spirit-chainhost');
+  layer.appendChild(host);
+  const burst = (done: () => void): void => {
+    if (!layer.isConnected) { done(); return; }
+    const g = layerGeom(layer);
+    if (!g) { fxTimer(defId, () => burst(done), 700); return; }
+    host.textContent = '';
+    host.style.transition = 'none';
+    host.style.opacity = '1';
+    const n = 4 + Math.floor(Math.random() * 3); // 4-6 根锁链
+    const chains: HTMLElement[] = [];
+    for (let i = 0; i < n; i++) {
+      const edge = Math.floor(Math.random() * 4);
+      const f = rnd(8, 92);
+      let ax = 0;
+      let ay = 0;
+      if (edge === 0) ax = (f / 100) * g.w;
+      else if (edge === 2) { ax = (f / 100) * g.w; ay = g.h; }
+      else if (edge === 1) { ax = g.w; ay = (f / 100) * g.h; }
+      else ay = (f / 100) * g.h;
+      const dx = g.cx - ax;
+      const dy = g.cy - ay;
+      const dist = Math.hypot(dx, dy);
+      if (dist < 14) continue;
+      const len = dist * rnd(0.55, 0.8);
+      const ang = (Math.atan2(dy, dx) * 180) / Math.PI;
+      const wrap = el('div', 'compiled-spirit-chain');
+      wrap.style.left = `${ax.toFixed(1)}px`;
+      wrap.style.top = `${ay.toFixed(1)}px`;
+      wrap.style.width = `${len.toFixed(1)}px`;
+      wrap.style.transform = `rotate(${ang.toFixed(1)}deg) scaleX(0)`;
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      svg.setAttribute('viewBox', `0 0 ${Math.ceil(len)} 26`);
+      svg.setAttribute('preserveAspectRatio', 'none');
+      appendChainLinks(svg, 5, 13, Math.max(7, len - 5), 13);
+      wrap.appendChild(svg);
+      host.appendChild(wrap);
+      chains.push(wrap);
+    }
+    if (chains.length === 0) { done(); return; }
+    // 渐伸（0.6s，交错 80ms）→ 停留 → 快速缩回起点并消失
+    requestAnimationFrame(() => {
+      if (!layer.isConnected) return;
+      reflowFx(host); // 先固化 scaleX(0) 初始态，避免同帧内样式合并跳过过渡（链直接弹出）
+      for (let i = 0; i < chains.length; i++) {
+        const c = chains[i];
+        c.style.transition = 'transform 0.6s cubic-bezier(0.2, 0.6, 0.35, 1)';
+        c.style.transitionDelay = `${(i * 80).toFixed(0)}ms`;
+        c.style.transform = c.style.transform.replace('scaleX(0)', 'scaleX(1)');
+      }
+    });
+    const last = chains.length - 1;
+    fxTimer(defId, () => {
+      if (!layer.isConnected) return;
+      host.style.transition = 'opacity 0.35s ease-in';
+      for (const c of chains) {
+        c.style.transition = 'transform 0.4s cubic-bezier(0.75, 0, 0.9, 0.55)'; // 快速缩回
+        c.style.transitionDelay = '0ms';
+        c.style.transform = c.style.transform.replace('scaleX(1)', 'scaleX(0)');
+      }
+      fxTimer(defId, () => {
+        if (host.isConnected) host.style.opacity = '0';
+        done();
+      }, 430);
+    }, 1050 + last * 80);
+  };
+  scheduleCompiledLoop(layer, defId, rnd(2200, 4800), burst);
+}
+
+/* ---------- 3. 重力 gravity：品红↔亮紫边框；黑洞由小到大→射线射出→回收→坍缩→紫尘 ---------- */
+function appendGravityCompiled(layer: HTMLElement, defId: string): void {
+  const host = el('div', 'compiled-gravity-host');
+  layer.appendChild(host);
+  const burst = (done: () => void): void => {
+    if (!layer.isConnected) { done(); return; }
+    const g = layerGeom(layer);
+    if (!g) { fxTimer(defId, () => burst(done), 700); return; }
+    host.textContent = '';
+    const dHole = Math.max(30, g.min * 0.4);   // 黑洞直径（由小到大 → 此基准）
+    const dGrow = Math.max(44, g.min * 0.62);  // 射线回收期黑洞放大到
+    const R = g.min * 0.46;                    // 隐形范围圆半径（射线终点所在圆）
+    const hole = el('div', 'compiled-gravity-hole');
+    hole.style.width = `${dHole.toFixed(1)}px`;
+    hole.style.height = `${dHole.toFixed(1)}px`;
+    hole.style.marginLeft = `${(-dHole / 2).toFixed(1)}px`;
+    hole.style.marginTop = `${(-dHole / 2).toFixed(1)}px`;
+    hole.style.transform = 'scale(0.15)';
+    hole.style.opacity = '0';
+    hole.style.transition = 'transform 0.55s ease-out, opacity 0.3s ease-out';
+    const disc = el('div', 'compiled-gravity-disc');
+    const slit = el('div', 'compiled-gravity-slit');
+    hole.appendChild(disc);
+    hole.appendChild(slit);
+    host.appendChild(hole);
+    const nb = 6 + Math.floor(Math.random() * 3); // 6-8 条方向各异
+    const beams: HTMLElement[] = [];
+    for (let i = 0; i < nb; i++) {
+      const ang = (360 / nb) * i + rnd(-8, 8);
+      const b = el('div', 'compiled-gravity-beam');
+      b.style.width = `${R.toFixed(1)}px`;
+      b.style.transform = `rotate(${ang.toFixed(1)}deg) scaleX(0)`;
+      b.style.opacity = '0';
+      b.style.transition = 'transform 0.9s cubic-bezier(0.55, 0, 0.85, 0.5), opacity 0.35s ease-out';
+      b.style.transitionDelay = `${(0.58 + i * 0.05).toFixed(2)}s, 0.58s`;
+      host.appendChild(b);
+      beams.push(b);
+    }
+    reflowFx(hole);
+    hole.style.transform = 'scale(1)';
+    hole.style.opacity = '1';
+    // 射线伸展（由慢到快；延迟内联在 transitionDelay —— 0.58s 起自黑洞射向范围圆边）
+    requestAnimationFrame(() => {
+      if (!layer.isConnected) return;
+      for (const b of beams) {
+        b.style.transform = b.style.transform.replace('scaleX(0)', 'scaleX(1)');
+        b.style.opacity = '0.95';
+      }
+    });
+    fxTimer(defId, () => {
+      if (!layer.isConnected) return;
+      // 回收：射线由快变慢缩回黑洞、黑洞随之放大
+      for (const b of beams) {
+        b.style.transition = 'transform 0.75s cubic-bezier(0.8, 0.05, 0.95, 0.3), opacity 0.3s ease-in';
+        b.style.transitionDelay = '0s';
+        b.style.transform = b.style.transform.replace('scaleX(1)', 'scaleX(0)');
+        b.style.opacity = '0';
+      }
+      hole.style.transition = 'transform 0.8s ease-out';
+      hole.style.transform = `scale(${(dGrow / dHole).toFixed(3)})`;
+      fxTimer(defId, () => {
+        if (!layer.isConnected) return;
+        // 快速坍缩
+        hole.style.transition = 'transform 0.38s cubic-bezier(0.7, 0, 0.9, 0.6), opacity 0.3s ease-in';
+        hole.style.transform = 'scale(0.04)';
+        hole.style.opacity = '0';
+        fxTimer(defId, () => {
+          if (!layer.isConnected) return;
+          // 坍缩消失后原地留几缕随机紫色曲线（模拟灰尘）
+          host.textContent = '';
+          const dn = 4 + Math.floor(Math.random() * 2);
+          for (let i = 0; i < dn; i++) {
+            const d = el('div', 'compiled-gravity-dust');
+            d.style.setProperty('--fx-dx', `${rnd(-30, 30).toFixed(1)}px`);
+            d.style.setProperty('--fx-dy', `${rnd(-46, -14).toFixed(1)}px`);
+            d.style.animationDuration = `${rnd(1.2, 1.7).toFixed(2)}s`;
+            d.style.animationDelay = `${(i * 0.12).toFixed(2)}s`;
+            // 一缕随机紫色曲线（模拟灰尘）
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.setAttribute('viewBox', '0 0 48 30');
+            const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            path.setAttribute(
+              'd',
+              `M2,26 C10,4 ${rnd(14, 22).toFixed(1)},28 ${rnd(26, 34).toFixed(1)},10 S ${rnd(38, 44).toFixed(1)},4 46,14`,
+            );
+            path.setAttribute('fill', 'none');
+            path.setAttribute('stroke', pick(['#c27bff', '#b26bff', '#d69bff']));
+            path.setAttribute('stroke-width', '2.2');
+            path.setAttribute('stroke-linecap', 'round');
+            svg.appendChild(path);
+            d.appendChild(svg);
+            host.appendChild(d);
+          }
+          fxTimer(defId, () => { host.textContent = ''; done(); }, 2400);
+        }, 420);
+      }, 820);
+    }, 2050);
+  };
+  scheduleCompiledLoop(layer, defId, rnd(2500, 5500), burst);
+}
+
+/* ---------- 4. 念能 psychic：暗紫粉↔亮紫边框；边框周围持续微闪小粒子；周期爆发 ---------- */
+function appendPsychicCompiled(layer: HTMLElement, defId: string): void {
+  // 边框周围持续微闪的紫粉小粒子（交错循环；爆发期间由 .compiled-psychic-bursting 暂停）
+  const amb = el('div', 'compiled-psychic-ambient');
+  for (let i = 0; i < 14; i++) {
+    const p = el('div', 'compiled-psychic-amb-p');
+    p.style.animationDelay = `${-(i * 0.19).toFixed(2)}s`;
+    amb.appendChild(p);
+  }
+  layer.appendChild(amb);
+  const host = el('div', 'compiled-psychic-burst');
+  layer.appendChild(host);
+  const burst = (done: () => void): void => {
+    if (!layer.isConnected) { done(); return; }
+    const g = layerGeom(layer);
+    if (!g) { fxTimer(defId, () => burst(done), 700); return; }
+    layer.classList.add('compiled-psychic-bursting'); // 规格：爆发期间小粒子特效不触发
+    host.textContent = '';
+    host.style.opacity = '1';
+    const R0 = Math.max(26, g.min * 0.3); // 环绕半径
+    const N = 16;
+    const spin = el('div', 'compiled-psychic-spin');
+    const parts: HTMLElement[] = [];
+    for (let i = 0; i < N; i++) {
+      const a = (Math.PI * 2 * i) / N + rnd(-0.06, 0.06);
+      const orb = el('div', 'compiled-psychic-orb');
+      orb.style.transform = `translate(${(Math.cos(a) * R0).toFixed(1)}px, ${(Math.sin(a) * R0).toFixed(1)}px)`;
+      orb.style.opacity = '0';
+      spin.appendChild(orb);
+      parts.push(orb);
+    }
+    host.appendChild(spin);
+    reflowFx(spin);
+    for (const orb of parts) orb.style.opacity = '1';
+    spin.classList.add('orbiting'); // 定住常亮后围绕中心旋转
+    fxTimer(defId, () => {
+      if (!layer.isConnected) return;
+      spin.classList.remove('orbiting'); // 停转
+      spin.style.transition = 'transform 0.3s ease-out';
+      spin.style.transform = 'rotate(0deg)';
+      for (const orb of parts) {
+        orb.style.transition = 'transform 0.4s cubic-bezier(0.35, 0.4, 0.55, 1)';
+        orb.style.transform = 'translate(0px, 0px)'; // 一起向中心收缩
+      }
+      fxTimer(defId, () => {
+        if (!layer.isConnected) return;
+        // 蓄力
+        const charge = el('div', 'compiled-psychic-charge');
+        const core = el('div', 'compiled-psychic-charge-core');
+        charge.appendChild(core);
+        host.appendChild(charge);
+        reflowFx(core);
+        core.classList.add('on');
+        fxTimer(defId, () => {
+          if (!layer.isConnected) return;
+          // 爆发：烟花（粒子四散 + 闪光环 + 蓄力核膨胀消散）
+          host.appendChild(el('div', 'compiled-psychic-flash'));
+          charge.classList.add('go');
+          for (const orb of parts) {
+            const a = Math.random() * Math.PI * 2;
+            const rr = R0 * rnd(0.9, 1.6);
+            orb.style.transition = 'transform 0.85s cubic-bezier(0.12, 0.65, 0.4, 1), opacity 0.75s ease-in 0.05s';
+            orb.style.transform = `translate(${(Math.cos(a) * rr).toFixed(1)}px, ${(Math.sin(a) * rr).toFixed(1)}px) scale(0.6)`;
+            orb.style.opacity = '0';
+          }
+          fxTimer(defId, () => {
+            if (!layer.isConnected) { done(); return; }
+            host.style.opacity = '0';
+            host.textContent = '';
+            layer.classList.remove('compiled-psychic-bursting');
+            done();
+          }, 1000);
+        }, 640);
+      }, 420);
+    }, 2100);
+  };
+  scheduleCompiledLoop(layer, defId, rnd(2600, 6000), burst);
+}
+
+/* ---------- 5. 瘟疫 plague：深绿↔亮绿灰边框；四角深绿护边；边框周围浓雾循环 ---------- */
+function appendPlagueCompiled(layer: HTMLElement, defId: string): void {
+  appendCompiledCorners(layer, 'compiled-plague-corner');
+  // 深绿浓雾团（形状随机：CSS 各 blob 专属不规则 border-radius），渐现→渐散交错循环
+  const mist = el('div', 'compiled-plague-mist');
+  const BLOBS = 6;
+  for (let i = 0; i < BLOBS; i++) {
+    const b = el('div', 'compiled-plague-blob');
+    b.style.animationDelay = `${-(i * 1.15).toFixed(2)}s`;
+    mist.appendChild(b);
+  }
+  layer.appendChild(mist);
+}
+
+/* ---------- 6. 金属 metal：金属光泽边框环 + 四角金属护边 + 卡面 30% 铁板 + 斜光 + 刺 ---------- */
+function appendMetalCompiled(layer: HTMLElement, defId: string): void {
+  layer.appendChild(el('div', 'compiled-metal-ring'));
+  appendCompiledCorners(layer, 'compiled-metal-corner');
+  // 卡面铁板（30% 透明度）+ 偶发斜光扫过（CSS 长周期循环内自含扫过窗口）
+  const plate = el('div', 'compiled-metal-plate');
+  plate.appendChild(el('div', 'compiled-metal-sweep'));
+  layer.appendChild(plate);
+  // 金属刺：沿边框向外突然伸出后收缩（周期随机；SIDES = [位置边, 沿边分数, 方向类]）
+  const spikes = el('div', 'compiled-metal-spikes');
+  const SIDES: ReadonlyArray<readonly [string, string, string]> = [
+    ['top', '18', 'top'], ['top', '50', 'top'], ['top', '82', 'top'],
+    ['bottom', '18', 'bottom'], ['bottom', '50', 'bottom'], ['bottom', '82', 'bottom'],
+    ['left', '28', 'left'], ['left', '72', 'left'],
+    ['right', '28', 'right'], ['right', '72', 'right'],
+  ];
+  for (const [side, frac, dir] of SIDES) {
+    const s = el('div', `compiled-metal-spike ${dir}`);
+    if (side === 'top' || side === 'bottom') {
+      s.style.left = `${frac}%`;
+      s.style.marginLeft = '-8px';
+    } else {
+      s.style.top = `${frac}%`;
+      s.style.marginTop = '-8px';
+    }
+    spikes.appendChild(s);
+  }
+  layer.appendChild(spikes);
+  const spikeLoop = (): void => {
+    if (!layer.isConnected) return;
+    spikes.classList.remove('on');
+    reflowFx(spikes);
+    spikes.classList.add('on');
+    fxTimer(defId, () => {
+      if (spikes.isConnected) spikes.classList.remove('on');
+      fxTimer(defId, spikeLoop, rnd(3600, 8000));
+    }, 820);
+  };
+  fxTimer(defId, spikeLoop, rnd(2200, 5000));
+}
+
+/* ---------- 7. 速度 speed：灰白↔灰边框；四角灰白护边；龙卷风周期生成蛇形走位 ---------- */
+function appendSpeedCompiled(layer: HTMLElement, defId: string): void {
+  appendCompiledCorners(layer, 'compiled-speed-corner');
+  const host = el('div', 'compiled-speed-host');
+  layer.appendChild(host);
+  const TW = 88; // 龙卷风基准盒（视觉由 .fx-speed-tornado 提供，grow 缩放）
+  const TH = 132;
+  /** 生成一个龙卷风：中心由小到大 → 随机方向蛇形走位（由慢到快）→ 渐隐；带风拖尾 */
+  const runOne = (done: () => void): void => {
+    if (!layer.isConnected) { done(); return; }
+    const g = layerGeom(layer);
+    if (!g) { done(); return; }
+    const wrap = el('div', 'compiled-speed-tornado');
+    const grow = el('div', 'compiled-speed-tornado-grow');
+    grow.style.left = `${(-TW / 2).toFixed(0)}px`; // 居中锚定（与 CSS 兜底同步，防常量漂移）
+    grow.style.top = `${(-TH / 2).toFixed(0)}px`;
+    grow.style.width = `${TW}px`;
+    grow.style.height = `${TH}px`;
+    grow.style.transform = 'scale(0.12)';
+    grow.style.transition = 'transform 0.55s cubic-bezier(0.2, 0.7, 0.3, 1)';
+    const vis = el('div', 'fx-speed-tornado');
+    // 螺旋锥形柱本体：4 层旋转椭圆带（由宽到窄收成锥形）+ 中心亮白气柱
+    // （.fx-speed-tornado 只是定位容器，视觉子节点须自建——见 effects/index.ts buildSpeedTornado）
+    for (let i = 0; i < 4; i++) {
+      vis.appendChild(el('div', 'fx-speed-band'));
+    }
+    vis.appendChild(el('div', 'fx-speed-core'));
+    grow.appendChild(vis);
+    wrap.appendChild(grow);
+    host.appendChild(wrap);
+    reflowFx(grow);
+    grow.style.transform = 'scale(1)';
+    const theta = Math.random() * Math.PI * 2; // 随机移动方向
+    const dist = g.min * rnd(0.4, 0.72);       // 移动总距离
+    const amp = g.min * rnd(0.08, 0.16);       // 蛇形振幅
+    const k = pick([2, 3, 4]);                 // 蛇形波数
+    const dur = rnd(1700, 2400);
+    const easeIn = (t: number): number => t * t * t; // 由慢到快
+    const t0 = performance.now();
+    let trailAt = t0;
+    const step = (now: number): void => {
+      if (!layer.isConnected || !wrap.isConnected) { wrap.remove(); done(); return; }
+      const t = (now - t0) / dur;
+      if (t >= 1) { wrap.remove(); done(); return; }
+      const p = easeIn(t);
+      const along = dist * p;
+      const perp = amp * Math.sin(p * Math.PI * k);
+      const c = Math.cos(theta);
+      const sn = Math.sin(theta);
+      const x = c * along - sn * perp;
+      const y = sn * along + c * perp;
+      wrap.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
+      if (p > 0.7) vis.style.opacity = String(Math.max(0, 1 - (p - 0.7) / 0.3)); // 渐隐
+      if (now - trailAt > 110) { // 风的拖尾：每 ~110ms 在当前位置撒一缕渐隐尾迹
+        trailAt = now;
+        const tr = el('div', 'compiled-speed-trail');
+        tr.style.left = `${(g.cx + x).toFixed(1)}px`;
+        tr.style.top = `${(g.cy + y).toFixed(1)}px`;
+        host.appendChild(tr);
+        fxTimer(defId, () => { if (tr.isConnected) tr.remove(); }, 750);
+      }
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  };
+  /** 一次风暴：2-3 个龙卷风依次生成 */
+  const storm = (done: () => void): void => {
+    let left = 2 + Math.floor(Math.random() * 2);
+    const nextOne = (): void => {
+      if (left <= 0 || !layer.isConnected) { done(); return; }
+      left -= 1;
+      runOne(() => fxTimer(defId, nextOne, rnd(380, 800)));
+    };
+    nextOne();
+  };
+  const loop = (): void => {
+    if (!layer.isConnected) return;
+    storm(() => fxTimer(defId, loop, rnd(5200, 11000)));
+  };
+  fxTimer(defId, loop, rnd(2600, 6000));
+}
+
+/* ---------- 8. 爱 love：粉↔粉红边框；四角粉红护边；爱心周期由小变大飘散 ---------- */
+function appendLoveCompiled(layer: HTMLElement, defId: string): void {
+  appendCompiledCorners(layer, 'compiled-love-corner');
+  const host = el('div', 'compiled-love-host');
+  layer.appendChild(host);
+  const spawnHeart = (): void => {
+    if (!layer.isConnected) return;
+    const g = layerGeom(layer);
+    if (!g) { fxTimer(defId, spawnHeart, 800); return; }
+    const p = nearBorderPoint();
+    const wrap = el('div', 'compiled-love-heart-wrap');
+    wrap.style.left = `${p.x.toFixed(1)}%`;
+    wrap.style.top = `${p.y.toFixed(1)}%`;
+    // 向四周飘去：沿「中心 → 锚点」外延方向飞出
+    const px = (p.x / 100) * g.w - g.cx;
+    const py = (p.y / 100) * g.h - g.cy;
+    const pl = Math.hypot(px, py) || 1;
+    const dist = g.diag * rnd(0.28, 0.5);
+    wrap.style.setProperty('--fx-ex', `${((px / pl) * dist).toFixed(1)}px`);
+    wrap.style.setProperty('--fx-ey', `${((py / pl) * dist).toFixed(1)}px`);
+    const heart = el('div', 'compiled-love-heart');
+    heart.style.setProperty('--hs', `${rnd(20, 34).toFixed(1)}px`);
+    wrap.appendChild(heart);
+    wrap.style.animationDuration = `${rnd(2.2, 3.4).toFixed(2)}s`;
+    host.appendChild(wrap);
+    fxTimer(defId, () => { if (wrap.isConnected) wrap.remove(); }, 3600);
+    fxTimer(defId, spawnHeart, rnd(1700, 3800));
+  };
+  fxTimer(defId, spawnHeart, rnd(1400, 3200));
+}
+
+/* ---------- 9. 恨 hate：血红↔深红边框；偶发渗血；10 指收缩 + 血涌覆盖 + 渐隐 ---------- */
+function appendHateCompiled(layer: HTMLElement, defId: string): void {
+  const host = el('div', 'compiled-hate-host');
+  layer.appendChild(host);
+  // 偶发渗血（边框附近渗出 → 渐隐）
+  const seepLoop = (): void => {
+    if (!layer.isConnected) return;
+    const g = layerGeom(layer);
+    if (!g) { fxTimer(defId, seepLoop, 700); return; }
+    const p = nearBorderPoint();
+    const seep = el('div', 'compiled-hate-seep');
+    const s = rnd(22, 46);
+    seep.style.width = `${s.toFixed(1)}px`;
+    seep.style.height = `${(s * 0.92).toFixed(1)}px`;
+    seep.style.left = `${p.x.toFixed(1)}%`;
+    seep.style.top = `${p.y.toFixed(1)}%`;
+    host.appendChild(seep);
+    fxTimer(defId, () => { if (seep.isConnected) seep.remove(); }, 2500);
+    fxTimer(defId, seepLoop, rnd(2800, 6200));
+  };
+  fxTimer(defId, seepLoop, rnd(1800, 4200));
+  // 大特效：10 根血指同时生成 → 缓慢向中心收缩后突然停止 → 中心涌出大滩血覆盖 → 渐隐
+  const burst = (done: () => void): void => {
+    if (!layer.isConnected) { done(); return; }
+    const g = layerGeom(layer);
+    if (!g) { fxTimer(defId, () => burst(done), 700); return; }
+    // 10 根手指：基底贴协议边框外沿（上下各 2、左右各 3，沿边 ±5% 抖动），指尖朝协议中心——
+    // 全部锚在边框带内，无外飘（圆形环绕会超出窄卡左右缘）；Lf 按各指到中心距离等比。
+    const ANCHOR_SIDES: ReadonlyArray<readonly ['top' | 'bottom' | 'left' | 'right', number]> = [
+      ['top', 24], ['top', 76], ['bottom', 24], ['bottom', 76],
+      ['left', 22], ['left', 50], ['left', 78],
+      ['right', 22], ['right', 50], ['right', 78],
+    ];
+    const EDGE = 5; // 基底外贴边框距离（px）
+    const fingers: HTMLElement[] = [];
+    const fingerTargets: number[] = []; // 各指独立收缩目标（与 fingers 同序）
+    for (const [side, frac] of ANCHOR_SIDES) {
+      const jit = rnd(-5, 5); // 沿边抖动（%，防齐整）
+      let bx = 0;
+      let by = 0;
+      if (side === 'top') { bx = ((frac + jit) / 100) * g.w; by = -EDGE; }
+      else if (side === 'bottom') { bx = ((frac + jit) / 100) * g.w; by = g.h + EDGE; }
+      else if (side === 'left') { bx = -EDGE; by = ((frac + jit) / 100) * g.h; }
+      else { bx = g.w + EDGE; by = ((frac + jit) / 100) * g.h; }
+      const dx = g.cx - bx;
+      const dy = g.cy - by;
+      const dist = Math.hypot(dx, dy);
+      if (dist < 20) continue;
+      const Lf = dist * 0.55;           // 手指长度（基 → 指尖，指尖初始伸入卡内 ~45%）
+      const scaleTo = (dist - 10) / Lf; // 收缩到中心 ~10px 的目标伸长
+      const deg = (Math.atan2(dy, dx) * 180) / Math.PI; // +x 由基底指向协议中心
+      const f = el('div', 'compiled-hate-finger');
+      f.style.width = `${Lf.toFixed(1)}px`;
+      f.style.left = `${bx.toFixed(1)}px`;
+      f.style.top = `${(by - 7.5).toFixed(1)}px`; // 7.5 = 半高：transform-origin 0 50% 对准基底环点
+      f.style.transform = `rotate(${deg.toFixed(1)}deg) scaleX(0.001)`;
+      f.style.opacity = '0';
+      host.appendChild(f);
+      fingers.push(f);
+      fingerTargets.push(scaleTo);
+    }
+    reflowFx(host);
+    for (const f of fingers) { // 同时渐渐生成
+      f.style.transition = 'opacity 0.5s ease-out, transform 0.55s ease-out';
+      f.style.opacity = '1';
+      f.style.transform = f.style.transform.replace('scaleX(0.001)', 'scaleX(1)');
+    }
+    fxTimer(defId, () => {
+      if (!layer.isConnected) return;
+      for (let i = 0; i < fingers.length; i++) { // 缓慢向中心收缩（随后突停——transition 结束即静止）
+        const f = fingers[i];
+        f.style.transition = 'transform 1.25s cubic-bezier(0.45, 0.05, 0.6, 1)';
+        f.style.transform = f.style.transform.replace('scaleX(1)', `scaleX(${fingerTargets[i].toFixed(2)})`);
+      }
+      fxTimer(defId, () => {
+        if (!layer.isConnected) return;
+        // 中心突然涌出一大滩血液，快速覆盖整个协议
+        const pool = el('div', 'compiled-hate-pool');
+        pool.appendChild(el('div', 'compiled-hate-splat'));
+        host.appendChild(pool);
+        reflowFx(pool);
+        pool.classList.add('in');
+        for (const f of fingers) {
+          f.style.transition = 'opacity 0.4s ease-in, transform 0.4s ease-in';
+          f.style.opacity = '0';
+        }
+        fxTimer(defId, () => {
+          if (!layer.isConnected) { done(); return; }
+          pool.classList.add('fade'); // 血迹渐渐消失
+          fxTimer(defId, () => {
+            if (host.isConnected) host.textContent = '';
+            done();
+          }, 750);
+        }, 1500);
+      }, 1400);
+    }, 650);
+  };
+  scheduleCompiledLoop(layer, defId, rnd(3000, 6500), burst);
+}
+
+/* ---------- 10. 冷漠 apathy：亮灰↔暗灰边框；偶发马赛克团；周期整卡故障风暴 ---------- */
+function appendApathyCompiled(layer: HTMLElement, defId: string): void {
+  // 卡面克隆（故障滤镜载体）：与真实协议图同像素覆盖；平时隐藏，故障风暴期间显现并滤波。
+  // 朝向（P2 rot-180）由 positionCompiledFxLayer 每次重定位同步。
+  const face = el('div', 'compiled-apathy-face');
+  const img = document.createElement('img');
+  img.src = '/assets/protocols/apathy/protocol-compiled.png';
+  img.alt = '';
+  face.appendChild(img);
+  layer.appendChild(face);
+  const tiles = el('div', 'compiled-apathy-tiles');
+  layer.appendChild(tiles);
+  // 偶发像素马赛克团（协议卡内随机位置，短促闪现）
+  const tileLoop = (): void => {
+    if (!layer.isConnected) return;
+    const g = layerGeom(layer);
+    if (!g) { fxTimer(defId, tileLoop, 700); return; }
+    tiles.textContent = '';
+    const n = 4 + Math.floor(Math.random() * 4);
+    for (let i = 0; i < n; i++) {
+      const t = el('div', 'compiled-apathy-tile');
+      const s = rnd(8, 18);
+      t.style.width = `${s.toFixed(1)}px`;
+      t.style.height = `${s.toFixed(1)}px`;
+      t.style.left = `${rnd(6, 90).toFixed(1)}%`;
+      t.style.top = `${rnd(6, 86).toFixed(1)}%`;
+      t.style.animationDelay = `${rnd(0, 0.25).toFixed(2)}s`;
+      t.style.animationDuration = `${rnd(0.9, 1.5).toFixed(2)}s`;
+      tiles.appendChild(t);
+    }
+    fxTimer(defId, () => { if (tiles.isConnected) tiles.textContent = ''; }, 1900);
+    fxTimer(defId, tileLoop, rnd(1500, 3400));
+  };
+  fxTimer(defId, tileLoop, rnd(900, 2200));
+  // 故障风暴：整卡突然高频交替 全黑/全白/黑白灰度（随机模板 + 随机时长 → 每次观感不同）
+  const GLYPHS = ['a', 'b', 'c'] as const;
+  const storm = (done: () => void): void => {
+    if (!layer.isConnected) { done(); return; }
+    const g = layerGeom(layer);
+    if (!g) { fxTimer(defId, () => storm(done), 700); return; }
+    const dur = rnd(1600, 2800);
+    if (img) {
+      img.style.animation = `apathy-glitch-${pick(GLYPHS)} ${dur.toFixed(0)}ms linear ${rnd(-0.8, 0).toFixed(2)}s both`;
+    }
+    layer.classList.add('compiled-apathy-storm');
+    fxTimer(defId, () => {
+      layer.classList.remove('compiled-apathy-storm');
+      if (img) img.style.animation = 'none';
+      done();
+    }, dur + 300);
+  };
+  scheduleCompiledLoop(layer, defId, rnd(2600, 5600), storm);
+}
+
+/** 新 10 协议已编译特效分发（buildCompiledFx 内调用；fire/light/darkness/water/life
+ *  走既有分支，不在此列）。每个 builder 只建持久子结构 + 起调度，动画全部在层内。 */
+function appendNewCompiledFx(layer: HTMLElement, defId: string): void {
+  switch (defId) {
+    case 'death': appendDeathCompiled(layer, defId); break;
+    case 'spirit': appendSpiritCompiled(layer, defId); break;
+    case 'gravity': appendGravityCompiled(layer, defId); break;
+    case 'psychic': appendPsychicCompiled(layer, defId); break;
+    case 'plague': appendPlagueCompiled(layer, defId); break;
+    case 'metal': appendMetalCompiled(layer, defId); break;
+    case 'speed': appendSpeedCompiled(layer, defId); break;
+    case 'love': appendLoveCompiled(layer, defId); break;
+    case 'hate': appendHateCompiled(layer, defId); break;
+    case 'apathy': appendApathyCompiled(layer, defId); break;
+    default: break;
   }
 }
 
@@ -2378,7 +3123,10 @@ export function resetUiState(): void {
   choicePromptId = null;
   choiceSelected = [];
   batteryPrev.clear();
-  for (const fx of compiledFx.values()) fx.remove();
+  for (const [defId, fx] of compiledFx) {
+    clearCompiledFxTimers(defId);
+    fx.remove();
+  }
   compiledFx.clear();
   compiledFxCells.length = 0;
   for (const overlay of smokeOverlays.values()) overlay.remove();
