@@ -2795,6 +2795,32 @@ body.dragging { cursor: grabbing; user-select: none; }
   55% { opacity: 0.65; transform: translate(var(--in, -5px), var(--up, -13px)) scale(1.15); }
   82% { opacity: 0.12; transform: translate(calc(var(--in, -5px) * 0.4), calc(var(--up, -13px) * 0.4)) scale(0.9); }
 }
+/* 弹簧线条（2026-09-03 用户新增）：递减振幅的螺旋细线绕漏斗（顶部线圈大、向下逐圈收小），
+ * 由 fx-tornado.ts buildSpringLine 生成 SVG polyline（3 条相位均布）；细 stroke + 弱辉光
+ * 读作「线条」而非平面；呼吸明暗错相（负 delay 由 JS 写）增加缠绕活感 */
+.fx-spring-line {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  opacity: 0.55;
+  animation: fx-spring-breathe 3.8s ease-in-out infinite alternate;
+  will-change: opacity;
+}
+.fx-spring-line polyline {
+  fill: none;
+  stroke: rgba(226, 234, 248, 0.55);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 2px rgba(220, 232, 252, 0.55));
+}
+@keyframes fx-spring-breathe {
+  from { opacity: 0.3; }
+  to { opacity: 0.75; }
+}
 
 /* ===== FX-3：Psychic 念能弃牌附加特效（card:discarded + triggerProtocol=psychic，
  * JS playPsychicDiscardExtra；时长与 effects/index.ts PSYCHIC_* 常量一一对应） =====

@@ -27,10 +27,51 @@ const DOT_MAX = 6;
 /** 轨道自转周期（s，与 styles.css .fx-tornado-orbit 动画一致） */
 const ORBIT_S = 1.9;
 
-/** 构造一个粒子龙卷风容器（含全部粒子轨道），绝对定位于调用方坐标系中心 */
+/** 弹簧线条数（环绕漏斗的螺旋细线，相位均布） */
+const SPRING_LINES = 3;
+
+/** 螺旋圈数（顶到底） */
+const SPRING_TURNS = 4;
+
+/** 生成一条弹簧线：递减振幅波形（= 锥形螺旋的 2D 正投影；振幅 r(y) 与粒子包络一致，
+ *  顶部「划的圆」最大、向下逐圈收小 → 弹簧式线圈越往下越小；3 条相位 120° 均布像
+ *  缠绕在漏斗上的弹簧。线身细 stroke，发光弱化（读作线条而非平面），静态跟随粒子
+ *  容器整体缩放/平移；呼吸明暗由 CSS .fx-spring-line 提供（负 delay 错相）。 */
+function buildSpringLine(phaseRad: number): SVGSVGElement {
+  const W = TORNADO_W;
+  const H = TORNADO_H;
+  const cx = W / 2;
+  const rTop = W / 2 - 8; // 顶部（云帽）半径，与粒子 rMax 一致
+  const steps = 64;
+  const pts: string[] = [];
+  for (let i = 0; i <= steps; i++) {
+    const y01 = i / steps;
+    const y = y01 * H;
+    const r = rTop * (0.1 + 0.9 * Math.pow(1 - y01, 1.25)); // 向下递减的线圈半径
+    const th = phaseRad + y01 * SPRING_TURNS * Math.PI * 2;
+    pts.push(`${(cx + r * Math.cos(th)).toFixed(1)},${y.toFixed(1)}`);
+  }
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('class', 'fx-spring-line');
+  svg.setAttribute('width', String(W));
+  svg.setAttribute('height', String(H));
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+  poly.setAttribute('points', pts.join(' '));
+  svg.appendChild(poly);
+  return svg;
+}
+
+/** 构造一个粒子龙卷风容器（含弹簧线条 + 全部粒子轨道），绝对定位于调用方坐标系中心 */
 export function buildTornadoFx(): HTMLElement {
   const tornado = document.createElement('div');
   tornado.className = 'fx-speed-tornado';
+  // 弹簧线条先挂（粒子在上层）；3 条相位均布 + 负 delay 呼吸错相
+  for (let i = 0; i < SPRING_LINES; i++) {
+    const line = buildSpringLine((Math.PI * 2 * i) / SPRING_LINES);
+    line.style.animationDelay = `${-(i * 1.25).toFixed(2)}s`;
+    tornado.appendChild(line);
+  }
   const rMax = TORNADO_W / 2 - 8; // 顶部（云帽）最大半径
   for (let i = 0; i < TORNADO_PARTICLES; i++) {
     const y01 = Math.min(0.97, Math.max(0.03, (i + 0.5) / TORNADO_PARTICLES + (Math.random() - 0.5) * 0.02));
