@@ -1,6 +1,7 @@
 import { gameBus, type GameEvent } from '../../core/events/bus';
 import { mountShatter } from '../fx/delete-shatter';
 import { mountCut } from '../fx/discard-cut';
+import { buildTornadoFx } from '../fx-tornado';
 
 const FX_REMOVE_MS = 1200;
 const BASE_Z = 300; // 基础行为特效层
@@ -1296,19 +1297,13 @@ function playGravityShiftExtra(node: HTMLElement, payload: FxCardPayload): void 
  * - 抽牌（playSpeedDrawExtra）：由 main.ts playDrawSequence 在基础抽牌动画【之前】调度
  *   （speed-1 顶「清理缓存后抽1张」），本函数只负责牌库区灰白光 + 飓风 → 手牌末尾。
  * 浮层 = body 级 fixed（抽牌场景 .fx-speed-glow 容器 / 平移场景浮层卡 + .fx-speed-card-glow
- * 覆盖层），内含 .fx-speed-tornado 螺旋锥形柱（4 层旋转椭圆带由宽到窄收成锥形 + 中心亮白
- * 气柱），整体 translate 平移，JS setTimeout 自清理。 */
+ * 覆盖层），内含粒子漩涡龙卷风（.fx-speed-tornado，2026-09-03 粒子化，见 fx-tornado.ts：
+ * 粒子绕竖直中轴旋转汇聚、向上涌动），整体 translate 平移，JS setTimeout 自清理。 */
 
-/** 螺旋锥形柱飓风（4 层旋转椭圆带 + 中心亮白气柱），绝对定位于卡/容器中心 */
+/** 螺旋锥形柱飓风（2026-09-03 粒子化重做：粒子向中心旋转汇聚、向上涌动，模拟漩涡——
+ *  由共享构建器 fx-tornado.ts 生成；旧 4 层旋转椭圆带 + 中心气柱观感已废弃） */
 function buildSpeedTornado(): HTMLElement {
-  const tornado = document.createElement('div');
-  tornado.className = 'fx-speed-tornado';
-  const BAND_COUNT = 4;
-  for (let i = 0; i < BAND_COUNT; i++) {
-    tornado.appendChild(Object.assign(document.createElement('div'), { className: 'fx-speed-band' }));
-  }
-  tornado.appendChild(Object.assign(document.createElement('div'), { className: 'fx-speed-core' }));
-  return tornado;
+  return buildTornadoFx();
 }
 
 /** speed 附加特效浮层主体（抽牌场景）：起点 rect（卡框光位置）与终点 end（位移终点）均由

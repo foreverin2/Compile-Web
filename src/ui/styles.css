@@ -2734,15 +2734,19 @@ body.dragging { cursor: grabbing; user-select: none; }
   border-radius: 6px;
 }
 
-/* 飓风：螺旋锥形柱。容器定位于卡中心（translate(-50%,-50%)），整体呼吸缩放；内层 .fx-speed-band
- * 为 4 层旋转椭圆（自上而下由宽到窄收成锥形），逐层错相旋转（负延迟）成螺旋；中心 .fx-speed-core
- * 为亮白气柱（脉动）。 */
+/* 飓风（2026-09-03 粒子化重做——旧 4 层旋转椭圆带 + 中心气柱像「棍子+平面图形」）：
+ * 容器定位于卡中心（translate(-50%,-50%)），整体呼吸缩放；每个粒子 = .fx-tornado-orbit
+ * （轴心 = 该高度竖直中轴线，left:50% + JS 内联 top%；绕自身轴心自转 1.9s/圈，负 delay
+ * 错相）→ .fx-tornado-arm（translateX(r) 定半径：顶部云帽半径最大、向下收窄成触地细尖）
+ * → .fx-tornado-flow（光点，在自身坐标系做「向轴(-in) + 母线向上(-up)」涌动 + 明暗闪烁，
+ * 负 delay 错相）→ 整柱读作粒子流绕竖直中轴旋转汇聚上升。尺寸/粒子数参数集中
+ * fx-tornado.ts 顶部常量（TORNADO_W/H/PARTICLES）。 */
 .fx-speed-tornado {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 104px;
-  height: 156px;
+  width: 118px;
+  height: 170px;
   transform: translate(-50%, -50%);
   pointer-events: none;
   animation: fx-speed-breathe 1.4s ease-in-out infinite;
@@ -2751,40 +2755,45 @@ body.dragging { cursor: grabbing; user-select: none; }
   0%, 100% { transform: translate(-50%, -50%) scale(0.94, 0.9); }
   50% { transform: translate(-50%, -50%) scale(1.08, 1.05); }
 }
-.fx-speed-band {
+/* 轨道：轴心 = 该高度的竖直中轴线（left 50% + JS 内联 top%），每环绕自身轴心自转
+ * （负 delay 错相 → 各环不同步的漩涡感；环心恒在竖直轴上 → 漏斗不偏心） */
+.fx-tornado-orbit {
   position: absolute;
   left: 50%;
-  width: 100%;
-  margin-left: -50%;
-  border-radius: 50%;
-  border: 2px solid rgba(228, 233, 244, 0.5);
-  background: radial-gradient(ellipse at center, rgba(235, 240, 250, 0.18) 0%, rgba(235, 240, 250, 0.06) 52%, rgba(235, 240, 250, 0) 76%);
-  box-shadow: 0 0 10px rgba(220, 228, 244, 0.4), inset 0 0 8px rgba(220, 228, 244, 0.2);
-  animation: fx-speed-band-spin 1.3s linear infinite;
+  top: 0;
+  width: 0;
+  height: 0;
+  animation: fx-tornado-orbit-spin 1.9s linear infinite;
+  will-change: transform;
 }
-.fx-speed-band:nth-child(1) { top: 0%; height: 40%; }
-.fx-speed-band:nth-child(2) { top: 22%; height: 35%; animation-delay: -0.33s; }
-.fx-speed-band:nth-child(3) { top: 45%; height: 30%; animation-delay: -0.66s; }
-.fx-speed-band:nth-child(4) { top: 68%; height: 26%; animation-delay: -0.99s; }
-@keyframes fx-speed-band-spin {
-  from { transform: rotate(0deg); }
+@keyframes fx-tornado-orbit-spin {
   to { transform: rotate(360deg); }
 }
-.fx-speed-core {
+/* 臂：定半径（JS 写 translateX(r)，r 随高度锥形分布）——光点在此层之后做涌动动画 */
+.fx-tornado-arm {
   position: absolute;
-  left: 50%;
-  top: 6%;
-  width: 8px;
-  height: 88%;
-  margin-left: -4px;
-  border-radius: 999px;
-  background: linear-gradient(180deg, rgba(252, 253, 255, 0.95) 0%, rgba(232, 238, 250, 0.5) 55%, rgba(232, 238, 250, 0.12) 100%);
-  box-shadow: 0 0 14px rgba(244, 248, 255, 0.85);
-  animation: fx-speed-core-pulse 0.7s ease-in-out infinite alternate;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  will-change: transform;
 }
-@keyframes fx-speed-core-pulse {
-  from { transform: scaleY(0.9); opacity: 0.8; }
-  to { transform: scaleY(1.08); opacity: 1; }
+.fx-tornado-flow {
+  position: absolute;
+  left: 0;
+  top: 0;
+  border-radius: 50%;
+  background: radial-gradient(circle at 40% 40%, #ffffff 0%, rgba(255, 255, 255, 0.9) 28%, rgba(214, 224, 242, 0.42) 62%, rgba(200, 212, 235, 0) 100%);
+  box-shadow: 0 0 6px rgba(238, 244, 252, 0.9), 0 0 12px rgba(212, 226, 246, 0.45);
+  opacity: 0;
+  animation: fx-tornado-flow 2.2s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+@keyframes fx-tornado-flow {
+  0%, 100% { opacity: 0.05; transform: translate(0, 0) scale(0.8); }
+  26% { opacity: 0.95; }
+  55% { opacity: 0.65; transform: translate(var(--in, -5px), var(--up, -13px)) scale(1.15); }
+  82% { opacity: 0.12; transform: translate(calc(var(--in, -5px) * 0.4), calc(var(--up, -13px) * 0.4)) scale(0.9); }
 }
 
 /* ===== FX-3：Psychic 念能弃牌附加特效（card:discarded + triggerProtocol=psychic，
@@ -3353,11 +3362,11 @@ body.dragging { cursor: grabbing; user-select: none; }
   width: 100%;
   height: 100%;
   overflow: visible;
-  filter: drop-shadow(0 0 5px rgba(178, 107, 255, 0.9));
+  filter: drop-shadow(0 0 5px rgba(96, 116, 240, 0.9)); /* 2026-09-03：深靛蓝 */
 }
 .fx-spirit-chains-svg ellipse {
   fill: none;
-  stroke: #b26bff;
+  stroke: #2f3dbb; /* 2026-09-03：深靛蓝（原紫 #b26bff） */
   stroke-width: 2.6;
 }
 
@@ -3813,11 +3822,11 @@ body.dragging { cursor: grabbing; user-select: none; }
   width: 100%;
   height: 26px;
   overflow: visible;
-  filter: drop-shadow(0 0 4px rgba(178, 107, 255, 0.9));
+  filter: drop-shadow(0 0 4px rgba(96, 116, 240, 0.9)); /* 2026-09-03：深靛蓝 */
 }
 .compiled-spirit-chain ellipse {
   fill: none;
-  stroke: #b26bff;
+  stroke: #2f3dbb; /* 2026-09-03：深靛蓝（原紫 #b26bff） */
   stroke-width: 2.6;
 }
 
@@ -4395,4 +4404,86 @@ body.dragging { cursor: grabbing; user-select: none; }
   73.1%, 80.9% { filter: grayscale(1) brightness(2.4); }
   81.1%, 90.9% { filter: grayscale(1) contrast(0.8); }
   91.1%, 100% { filter: brightness(0); }
+}
+
+/* ===== 光（light）已编译专属附加特效（2026-09-03 用户选定 A 日芒 + D 内流光带 + E 星芒）=====
+ * 全部为持久层（.compiled-fx-light）内子节点：跨重渲染不重建 → 动画不重置；随层定位
+ * 跟随协议位置。观感微调集中在本段。 */
+/* A. 日芒射线：16 根金光细射线由卡中心向框外辐射（JS rotate 均匀分布），整层缓慢旋转
+ *    26s/圈 + 柔和呼吸（不闪）；宽度 = 50% 层宽 + 14px 外扩 → 随卡缩放自适应 */
+.compiled-light-rays {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+  z-index: 2;
+  animation: compiled-light-rays-spin 26s linear infinite, compiled-light-rays-breathe 3.2s ease-in-out infinite alternate;
+  will-change: transform, opacity;
+}
+@keyframes compiled-light-rays-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes compiled-light-rays-breathe {
+  from { opacity: 0.24; }
+  to { opacity: 0.55; }
+}
+.compiled-light-ray {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: calc(50% + 14px);
+  height: 3px;
+  margin: -1.5px 0 0 0;
+  transform-origin: 0 50%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(255, 238, 180, 0) 0%, rgba(255, 224, 102, 0.8) 40%, rgba(255, 214, 110, 0.5) 76%, rgba(255, 240, 200, 0) 100%);
+  filter: drop-shadow(0 0 4px rgba(255, 210, 90, 0.55));
+}
+/* D. 边框内侧暖色流光带：细环（inset 3px + 2px 带宽）金→橙→白缓慢流动 */
+.compiled-light-sheen {
+  position: absolute;
+  inset: 3px;
+  padding: 2px;
+  border-radius: 12px;
+  pointer-events: none;
+  z-index: 1;
+  background: linear-gradient(
+    115deg,
+    #fff8e1 0%, #ffd76a 18%, #ffb84d 34%, #ffe9a8 50%, #ffd76a 66%, #fff3c4 82%, #fff8e1 100%
+  );
+  background-size: 260% 260%;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: compiled-light-sheen-flow 7s linear infinite;
+  filter: drop-shadow(0 0 3px rgba(255, 200, 90, 0.5));
+}
+@keyframes compiled-light-sheen-flow {
+  0% { background-position: 0% 0%; }
+  100% { background-position: 100% 100%; }
+}
+/* E. 偶发星芒：白色四芒星（clip-path），pop 出现后停留片刻再淡出（JS 调度 in/out 类） */
+.compiled-light-star {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 3;
+  background: radial-gradient(circle at 50% 50%, #ffffff 0%, rgba(255, 255, 255, 0.95) 42%, rgba(255, 236, 180, 0.55) 78%, transparent 100%);
+  clip-path: polygon(50% 0%, 61% 38%, 100% 50%, 61% 62%, 50% 100%, 39% 62%, 0% 50%, 39% 38%);
+  filter: drop-shadow(0 0 8px rgba(255, 230, 150, 0.9));
+}
+.compiled-light-star.in {
+  opacity: 1;
+  animation: compiled-light-star-pop 0.85s ease-out;
+}
+.compiled-light-star.out {
+  opacity: 0;
+  transition: opacity 0.45s ease-in;
+  animation: none;
+}
+@keyframes compiled-light-star-pop {
+  0% { opacity: 0; transform: scale(0.2) rotate(-10deg); }
+  32% { opacity: 1; transform: scale(1.3) rotate(0deg); }
+  100% { opacity: 1; transform: scale(1) rotate(0deg); }
 }

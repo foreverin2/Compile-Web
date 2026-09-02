@@ -11,6 +11,7 @@ import {
 } from '../core/rules/restrictions';
 import { DEMO_PROTOCOLS } from '../data/demo';
 import { downloadLog } from './diag';
+import { buildTornadoFx } from './fx-tornado';
 
 export interface UiCallbacks {
   onAction(a: LegalAction): void;
@@ -1600,6 +1601,49 @@ function appendCompiledRing(box: HTMLElement, defId: string): void {
     for (const pos of ['tl', 'tr', 'bl', 'br'] as const) {
       ring.appendChild(el('div', `light-corner ${pos}`));
     }
+    // 2026-09-03 用户选定 A+D+E：日芒射线环绕 + 边框内侧暖色流光带 + 偶发星芒闪耀
+    // （全部为持久层内子节点 → 动画不随步骤切换重置、跟随协议位置）
+    // A. 日芒：16 根金光细射线由卡中心向框外辐射（自中心起 width = 50% 层宽 + 外扩），
+    //    整层缓慢旋转 + 随边框节奏柔和呼吸
+    const rays = el('div', 'compiled-light-rays');
+    const RAY_COUNT = 16;
+    for (let i = 0; i < RAY_COUNT; i++) {
+      const ray = el('div', 'compiled-light-ray');
+      ray.style.transform = `rotate(${((360 / RAY_COUNT) * i).toFixed(1)}deg)`;
+      rays.appendChild(ray);
+    }
+    box.appendChild(rays);
+    // D. 边框内侧暖色流光带（金→橙→白，缓慢流动的细环，紧贴卡面内侧）
+    box.appendChild(el('div', 'compiled-light-sheen'));
+    // E. 偶发星芒：随机位置闪现一颗白色四芒星后消失
+    const star = el('div', 'compiled-light-star');
+    box.appendChild(star);
+    const starHide = (): void => {
+      if (!box.isConnected) return;
+      star.classList.remove('in');
+      star.classList.add('out');
+      fxTimer(defId, starDone, 550);
+    };
+    const starDone = (): void => {
+      if (!box.isConnected) return;
+      star.classList.remove('out');
+      fxTimer(defId, starShow, rnd(1600, 4200)); // 偶发：1.6-4.2s 一颗
+    };
+    const starShow = (): void => {
+      if (!box.isConnected) return;
+      const g = layerGeom(box);
+      if (!g) { fxTimer(defId, starShow, 700); return; }
+      const size = rnd(14, 30);
+      star.style.width = `${size.toFixed(1)}px`;
+      star.style.height = `${size.toFixed(1)}px`;
+      star.style.marginLeft = `${(-size / 2).toFixed(1)}px`;
+      star.style.marginTop = `${(-size / 2).toFixed(1)}px`;
+      star.style.left = `${rnd(14, 86).toFixed(1)}%`;
+      star.style.top = `${rnd(14, 84).toFixed(1)}%`;
+      star.classList.add('in');
+      fxTimer(defId, starHide, rnd(850, 1300));
+    };
+    fxTimer(defId, starShow, rnd(900, 2600));
   }
   box.appendChild(ring);
   // ITEM 4：darkness 已编译 → 环外常驻循环不规则黑雾层（渐现→渐散）。8 块非对称烟云
@@ -2253,13 +2297,8 @@ function appendSpeedCompiled(layer: HTMLElement, defId: string): void {
     grow.style.height = `${TH}px`;
     grow.style.transform = 'scale(0.12)';
     grow.style.transition = 'transform 0.55s cubic-bezier(0.2, 0.7, 0.3, 1)';
-    const vis = el('div', 'fx-speed-tornado');
-    // 螺旋锥形柱本体：4 层旋转椭圆带（由宽到窄收成锥形）+ 中心亮白气柱
-    // （.fx-speed-tornado 只是定位容器，视觉子节点须自建——见 effects/index.ts buildSpeedTornado）
-    for (let i = 0; i < 4; i++) {
-      vis.appendChild(el('div', 'fx-speed-band'));
-    }
-    vis.appendChild(el('div', 'fx-speed-core'));
+    // 粒子漩涡龙卷风本体（共享构建器 fx-tornado.ts：粒子向中心旋转汇聚、向上涌动）
+    const vis = buildTornadoFx();
     grow.appendChild(vis);
     wrap.appendChild(grow);
     host.appendChild(wrap);
