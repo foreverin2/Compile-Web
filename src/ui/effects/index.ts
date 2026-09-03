@@ -2,6 +2,7 @@ import { gameBus, type GameEvent } from '../../core/events/bus';
 import { mountShatter } from '../fx/delete-shatter';
 import { mountCut } from '../fx/discard-cut';
 import { buildTornadoFx } from '../fx-tornado';
+import { cardImgSrc, protocolImgSrc } from '../../data/demo';
 
 const FX_REMOVE_MS = 1200;
 const BASE_Z = 300; // 基础行为特效层
@@ -84,7 +85,7 @@ interface FxCardPayload {
 function cardFaceSrc(defId: string, faceUp: boolean): string {
   if (!faceUp) return '/assets/Cardback.jpg';
   const [proto, value] = defId.split('-');
-  return `/assets/protocols/${proto}/card-${value}.png`;
+  return cardImgSrc(proto, value);
 }
 
 /** 填满容器的卡面图节点 */
@@ -1672,11 +1673,11 @@ function playProtocolFlip(node: HTMLElement, defId: string): void {
   inner.style.cssText = 'position:relative;width:100%;height:100%;transform-style:preserve-3d;transition:transform 0.45s ease;';
   const front = document.createElement('div');
   front.style.cssText = 'position:absolute;inset:0;backface-visibility:hidden;border-radius:8px;overflow:hidden;';
-  front.appendChild(buildFaceImg(`/assets/protocols/${defId}/protocol-loading.png`));
+  front.appendChild(buildFaceImg(protocolImgSrc(defId, false)));
   const back = document.createElement('div');
   back.style.cssText = 'position:absolute;inset:0;backface-visibility:hidden;border-radius:8px;overflow:hidden;';
   back.style.transform = 'rotateY(180deg)';
-  back.appendChild(buildFaceImg(`/assets/protocols/${defId}/protocol-compiled.png`));
+  back.appendChild(buildFaceImg(protocolImgSrc(defId, true)));
   inner.appendChild(front);
   inner.appendChild(back);
   wrap.appendChild(inner);

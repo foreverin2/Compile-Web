@@ -9,7 +9,7 @@ import {
   shouldSkipCacheCheck,
   canPlayFaceUpAnywhere,
 } from '../core/rules/restrictions';
-import { DEMO_PROTOCOLS } from '../data/demo';
+import { DEMO_PROTOCOLS, cardImgSrc, protocolImgSrc } from '../data/demo';
 import { downloadLog } from './diag';
 import { buildTornadoFx } from './fx-tornado';
 
@@ -39,7 +39,7 @@ function splitDefId(defId: string): [string, string] {
 
 /**
  * 卡牌正面/背面：
- * - 正面：官方卡面图 /assets/protocols/<协议>/card-<分值>.png
+ * - 正面：官方卡面图 /assets/protocols/<协议>/card-<分值>.<png|jpg>（扩展名随世代，见 data/demo）
  * - 背面：官方 Cardback 图 + 印刷值 2 徽章（规则：背面牌值=2）
  */
 function renderCardFace(card: { defId: string; faceUp: boolean; uid: string }): HTMLElement {
@@ -61,7 +61,7 @@ function renderCardFace(card: { defId: string; faceUp: boolean; uid: string }): 
   const [protocol, value] = splitDefId(card.defId);
   const img = document.createElement('img');
   img.className = 'card-face-img';
-  img.src = `/assets/protocols/${protocol}/card-${value}.png`;
+  img.src = cardImgSrc(protocol, value);
   img.alt = `protocol ${protocol} card ${value}`;
   box.appendChild(img);
   return box;
@@ -102,7 +102,7 @@ function renderProtocol(p: { defId: string; compiled: boolean }, player: PlayerI
   // R1 协议卡朝向：P1（左）按原图方向展示；P2（右）旋转 180° 使双方协议相对放置。
   // PNG 资源为原方向（水/火/光/生 750×1050 竖版，暗/死 1050×750 横版），各按自然比例显示。
   img.className = 'protocol-img' + (player === 1 ? ' rot-180' : '');
-  img.src = `/assets/protocols/${p.defId}/protocol-${p.compiled ? 'compiled' : 'loading'}.png`;
+  img.src = protocolImgSrc(p.defId, p.compiled);
   img.alt = p.compiled ? 'compiled protocol' : 'protocol loading';
   // R12：卡面图异步加载会改变 holder 矩形 —— 编译翻面瞬间 protocol-compiled.png 尚未
   // 加载，holder 高度为 0，若此后不再重渲染（如最后一次编译即 gameover）body 级层会
@@ -2504,7 +2504,7 @@ function appendApathyCompiled(layer: HTMLElement, defId: string): void {
   // 朝向（P2 rot-180）由 positionCompiledFxLayer 每次重定位同步。
   const face = el('div', 'compiled-apathy-face');
   const img = document.createElement('img');
-  img.src = '/assets/protocols/apathy/protocol-compiled.png';
+  img.src = protocolImgSrc('apathy', true);
   img.alt = '';
   face.appendChild(img);
   layer.appendChild(face);
@@ -2601,7 +2601,7 @@ function renderPickColumn(s: GameState, player: PlayerId, drafter: PlayerId, cb:
     const card = el('div', 'draft-pick-card' + (newest && newest.defId === pick.defId ? ' new' : ''));
     const wrap = el('div', 'pick-img-wrap');
     const img = document.createElement('img');
-    img.src = `/assets/protocols/${pick.defId}/protocol-loading.png`;
+    img.src = protocolImgSrc(pick.defId, false);
     img.alt = pick.name;
     wrap.appendChild(img);
     card.appendChild(wrap);
@@ -2620,7 +2620,7 @@ function renderPickColumn(s: GameState, player: PlayerId, drafter: PlayerId, cb:
   return col;
 }
 
-/** 中间协议池：全部 15 套协议，每行 4 个；悬停聚焦。
+/** 中间协议池：全部 30 套协议（1代+2代并池，2026-09-03），每行 4 个；悬停聚焦。
  *  选中方式：拖拽协议卡到【当前轮选者】的选择框松手（选中）；松手位置不在自己的
  *  选择框区域 → 丝滑平移回原卡位置。双击协议卡可放大查看协议图。已选协议变灰禁用。 */
 function renderDraftPool(s: GameState, cb: UiCallbacks): HTMLElement {
@@ -2633,7 +2633,7 @@ function renderDraftPool(s: GameState, cb: UiCallbacks): HTMLElement {
     const wrap = el('div', 'draft-card-img-wrap');
     const img = document.createElement('img');
     img.className = 'draft-card-img';
-    img.src = `/assets/protocols/${proto.defId}/protocol-loading.png`;
+    img.src = protocolImgSrc(proto.defId, false);
     img.alt = proto.name;
     wrap.appendChild(img);
     card.appendChild(wrap);
@@ -3305,10 +3305,10 @@ function openZoom(defId: string, faceUp: boolean, isProtocol: boolean, compiled:
   const img = document.createElement('img');
   img.className = 'zoom-img' + (isProtocol ? ' zoom-protocol' : '');
   if (isProtocol) {
-    img.src = `/assets/protocols/${defId}/protocol-${compiled ? 'compiled' : 'loading'}.png`;
+    img.src = protocolImgSrc(defId, compiled);
   } else if (faceUp) {
     const [proto, value] = splitDefId(defId);
-    img.src = `/assets/protocols/${proto}/card-${value}.png`;
+    img.src = cardImgSrc(proto, value);
   } else {
     img.src = '/assets/Cardback.jpg';
   }
@@ -3318,7 +3318,7 @@ function openZoom(defId: string, faceUp: boolean, isProtocol: boolean, compiled:
     // 牌面图片 = 官方卡面图）。stage 竖排（按钮在图像上方）；stage pointer-events:none
     // 使图像四周空白点击穿透到遮罩（target=overlay → 关闭），按钮自身可点（ITEM 9）。
     const [proto, value] = splitDefId(defId);
-    const faceSrc = `/assets/protocols/${proto}/card-${value}.png`;
+    const faceSrc = cardImgSrc(proto, value);
     const backSrc = '/assets/Cardback.jpg';
     const stage = el('div', 'zoom-stage');
     const peekBtn = el('button', 'btn zoom-peek-btn', '查看背面');
