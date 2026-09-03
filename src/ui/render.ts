@@ -2951,29 +2951,30 @@ function playToLine(s: GameState, cb: UiCallbacks, line: Line): void {
   cb.onAction({ kind: 'play', cardUid: uid, faceUp, line });
 }
 
-/** 胜利遮罩是否已显示（防重复创建；返回主界面时由 resetUiState 复位） */
+/** 胜利结算横幅是否已显示（防重复创建；返回主界面时由 resetUiState 复位） */
 let winOverlayShown = false;
 
-/** 胜利结算遮罩：玩家 N 获胜！+「返回主界面」按钮。body 级 fixed（z-index 10000 高于
- *  一切浮层：放大遮罩 1000 / 拖拽幽灵 9999 / 开发者浮层 9999），一次性创建、常驻直到
- *  用户确认（不自动消失、不随重渲染重建——胜利后本就不再有渲染）。点击按钮 → 移除
- *  遮罩 + cb.onWinReset（main.ts 应用内重置回主页面）。遮罩全屏拦截指针（modal），
- *  关闭后 diag 按钮等不受影响。 */
+/** 胜利结算横幅（2026-09-03 用户反馈）：**不再全屏遮罩挡板**——对局画面保持可见供双方
+ *  复盘；顶部紧凑横幅「玩家 N 获胜！+ 返回主界面」body 级 fixed（z-index 10000），
+ *  常驻直到用户点「返回主界面」（移除横幅 + cb.onWinReset → main 回主页面）。
+ *  横幅自身可点，其余区域不拦截（复盘时仍可放大查看卡牌等）。 */
 function showWinOverlay(winner: PlayerId, cb: UiCallbacks): void {
   if (winOverlayShown) return;
   winOverlayShown = true;
-  const overlay = el('div', 'win-overlay');
+  const banner = el('div', 'win-banner');
   const panel = el('div', 'win-panel');
-  panel.appendChild(el('div', 'win-title', `玩家 ${winner + 1} 获胜！`));
-  panel.appendChild(el('div', 'win-sub', '本局结束'));
+  const title = el('div', 'win-title', `玩家 ${winner + 1} 获胜！`);
+  const sub = el('div', 'win-sub', '本局结束 · 可继续查看场上布局复盘');
   const btn = el('button', 'btn win-confirm-btn', '返回主界面');
   btn.addEventListener('click', () => {
-    overlay.remove();
+    banner.remove();
     cb.onWinReset?.();
   });
+  panel.appendChild(title);
+  panel.appendChild(sub);
   panel.appendChild(btn);
-  overlay.appendChild(panel);
-  document.body.appendChild(overlay);
+  banner.appendChild(panel);
+  document.body.appendChild(banner);
 }
 
 export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): void {

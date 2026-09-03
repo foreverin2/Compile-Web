@@ -1051,27 +1051,26 @@ body {
  * body 级 fixed 全屏 modal，z-index 10000 高于一切浮层（放大遮罩 1000 / 拖拽幽灵
  * 9999 / 开发者浮层 9999）；backdrop 拦截全部指针（按钮可点），关闭后对棋盘其余
  * 交互（diag 按钮等）无影响。 */
-.win-overlay {
+.win-banner {
   position: fixed;
-  inset: 0;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 10000;
-  background: rgba(5, 8, 18, 0.72);
-  backdrop-filter: blur(2px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  pointer-events: none; /* 仅横幅自身可点，其余区域不拦截 → 复盘时可自由查看对局 */
 }
-.win-panel {
-  background: #101830ee;
+.win-banner .win-panel {
+  pointer-events: auto;
+  background: #101830f2;
   border: 2px solid #4caf50;
   border-radius: 14px;
-  padding: 28px 46px;
+  padding: 14px 28px;
   text-align: center;
-  box-shadow: 0 0 34px rgba(76, 175, 80, 0.45);
+  box-shadow: 0 0 30px rgba(76, 175, 80, 0.5);
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
-  gap: 10px;
+  gap: 16px;
 }
 .win-title { font-size: 30px; font-weight: bold; color: #4caf50; }
 .win-sub { color: #aaa; font-size: 14px; }
@@ -4815,3 +4814,8 @@ body.dragging { cursor: grabbing; user-select: none; }
 .draft-turn-banner.p1 { --pcol: #00ffd0; color: var(--pcol); border-color: var(--pcol); background: rgba(0, 255, 208, 0.1); box-shadow: 0 0 20px rgba(0, 255, 208, 0.35); }
 .draft-turn-banner.p2 { --pcol: #ffb45e; color: var(--pcol); border-color: var(--pcol); background: rgba(255, 160, 70, 0.1); box-shadow: 0 0 20px rgba(255, 160, 70, 0.35); }
 .turn-badge { background: var(--pcol); color: #07151c; }
+
+/* ---------- 胜利结算横幅（2026-09-03：不遮板复盘模式） ---------- */
+.win-banner .win-title { font-size: 22px; margin: 0; }
+.win-banner .win-sub { font-size: 12px; margin: 0; max-width: 420px; text-align: left; }
+.win-banner .win-confirm-btn { font-size: 14px; padding: 7px 18px; margin: 0; flex: 0 0 auto; }
