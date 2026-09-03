@@ -2644,10 +2644,12 @@ function renderDraftPool(s: GameState, cb: UiCallbacks, banStep: boolean): HTMLE
     card.appendChild(el('div', 'draft-card-name', proto.name));
     card.appendChild(el('div', 'draft-card-commands', proto.commands.join(' · ')));
     if (banStep) {
+      card.dataset.defId = proto.defId;
       card.title = `点击禁用「${proto.name}」（本局不可选；共需禁用 ${DRAFT_BAN_TOTAL} 个）`;
       card.appendChild(el('span', 'draft-ban-badge', '禁用'));
       bindClickOrDouble(card, () => cb.onDraftBan(proto.defId), () => openZoom(proto.defId, true, true, false), false);
     } else {
+      card.dataset.defId = proto.defId;
       // 双击放大查看协议图（单击无动作）；拖拽选协议
       bindClickOrDouble(card, () => {}, () => openZoom(proto.defId, true, true, false), false);
       bindDraftDrag(card, s, cb, proto.defId, drafter);
@@ -2783,10 +2785,12 @@ function bindDraftUnpick(node: HTMLElement, cb: UiCallbacks, defId: string, play
       const g = ghost;
       cleanup();
       if (!inColumn && g) {
-        // 拖出选择框：动画回到协议池原位后取消选择
-        const poolCards = document.querySelectorAll<HTMLElement>('.draft-pool .draft-card');
-        const idx = DEMO_PROTOCOLS.findIndex((p) => p.defId === defId);
-        const target = poolCards[idx];
+        // 拖出选择框：动画回到协议池原位后取消选择（池为引擎池：随机池/禁用后剩
+        // 余——按 data-def-id 定位，不再按全量池索引）
+        const pool = document.querySelector('.draft-pool');
+        const target = pool
+          ? pool.querySelector<HTMLElement>(`.draft-card[data-def-id="${defId}"]`)
+          : null;
         if (target) {
           const r = target.getBoundingClientRect();
           animateBack(g, r.left, r.top);

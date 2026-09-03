@@ -76,6 +76,16 @@ describe('禁用模式（ban draft）', () => {
     expect(() => performDraftBan(n, n.draftPool[0].defId)).toThrow(/no ban step pending/);
   });
 
+  it('负例：重复/已禁协议禁用被拒；ban 中段 pick 被拒', () => {
+    const s = createGame({ draftMode: 'ban' });
+    const pool0 = getDraftPool(s).map((p) => p.defId);
+    performDraftBan(s, pool0[0]); // 后手第一个禁用
+    expect(() => performDraftBan(s, pool0[0])).toThrow(/not available/); // 重复禁用
+    expect(() => performDraftPick(s, pool0[1])).toThrow(/not a pick step/); // ban 中段禁选
+    expect(s.bannedProtocols).toHaveLength(1);
+    expect(getDraftPool(s).some((p) => p.defId === pool0[0])).toBe(false);
+  });
+
   it('禁用后不可再选/再禁该协议；随机池 + 禁用组合在 12 套池内完成', () => {
     const pool12 = DEMO_PROTOCOLS.slice(0, 12);
     const s = createGame({ draftMode: 'ban', draftPool: pool12 });
