@@ -4,6 +4,7 @@ import { executeAction } from './core/game';
 import { getCompilableLines } from './core/rules/compile';
 import { collectTriggers } from './core/effects/triggers';
 import { renderApp, renderDraft, resetUiState, syncCompiledFxLayers, syncSmokeOverlays, syncScanOverlays, syncPsychicParticles, syncPlagueMists, syncApathyMists, syncApathyMosaics, syncSpirit0Glows, syncSpirit1Cards, syncMetal0Glows, syncMetalPlates, syncMetal6Mans, syncMetal1LineGlows, syncChainLayerPosition, type UiCallbacks } from './ui/render';
+import { renderHome, renderCoin, renderLibrary, renderRules } from './ui/home';
 import { initEffects, initCompileFx, initRearrangeFx, playRevealFly, buildLoveHeart, playSpeedDrawExtra, SPEED_TOTAL_MS } from './ui/effects';
 import { initDiag } from './ui/diag';
 import { initDevMode } from './ui/devmode';
@@ -325,12 +326,36 @@ function playDraftToGameTransition(): void {
 }
 
 /**
+ * 主页面 / 掷硬币 / 图鉴 / 规则图纸 导航（2026-09-03 用户需求）。
+ * - 主页是应用入口（不再一载入即进草稿）；
+ * - 开始游戏 → 掷硬币决定先手：掷胜者先选协议（draftStarter），
+ *   后选择协议的一方先出牌（firstToPlay = 1 - draftStarter，用户拍板）；
+ * - 胜利「返回主界面」→ 回主页（而非直接开新草稿）。
+ */
+function showHome(): void {
+  renderHome(root, {
+    startGame: () => showCoin(),
+    openLibrary: () => renderLibrary(root, showHome),
+    openRules: () => renderRules(root, showHome),
+  });
+}
+
+function showCoin(): void {
+  renderCoin(root, {
+    backHome: showHome,
+    beginGame: (starter) => {
+      state = createGame({ draftStarter: starter, firstToPlay: (1 - starter) as PlayerId });
+      renderApp(root, state, cb);
+    },
+  });
+}
+
+/**
  * 胜利结算遮罩「返回主界面」→ 应用内重置（无整页刷新/闪烁）：
  * - 清空本模块的动画标志/队列/定时器（自动推进、抽牌/揭示动画、过渡中标志）；
  * - resetUiState()：清空 render.ts 全部 UI 模块态并移除 body 级常驻层/遮罩
  *   （编译环 / 黑烟 / 放大遮罩 / 弃牌堆查看器——旧局残留会悬空）；
- * - 根容器移除过渡类（draft-exit / board-enter / no-anim）；
- * - 重建游戏状态（createGame → 全新草案）并渲染草案主界面。
+ * - 回到主页面（下次「开始游戏」重新掷硬币定先手）。
  * 选择应用内重置而非 location.reload()：无整页闪烁、保留 devmode/诊断常驻，
  * 且全部可重置状态都有明确复位点（resetUiState 覆盖 render.ts 全部模块态）。
  */
@@ -346,9 +371,7 @@ function resetToMainInterface(): void {
   pendingDraws = [];
   pendingReveals = [];
   resetUiState();
-  root.classList.remove('draft-exit', 'board-enter', 'no-anim');
-  state = createGame();
-  renderDraft(root, state, cb);
+  showHome();
 }
 
 /**
@@ -420,7 +443,8 @@ gameBus.subscribe((e) => {
     pendingReveals.push({ owner: p.owner, shownTo: p.shownTo, defId: p.defId, triggerProtocol: p.triggerProtocol ?? 'system' });
   }
 });
-renderApp(root, state, cb);
+// 2026-09-03：应用入口 = 主页面（开始游戏 → 掷硬币 → 草稿 → 对局）
+showHome();
 // 常驻特效层随滚动/缩放重新对齐：已编译环（compiledFx）、暗2 黑烟（smokeOverlays）、
 // 能量扫描线（scanOverlays）与 FX-3 念能粒子/瘟疫浓雾（psychicParticles/plagueMists）、
 // FX-5 冷漠灰雾/冷漠2 马赛克/灵魂-0 手牌区光芒/灵魂-1 手牌卡护角
