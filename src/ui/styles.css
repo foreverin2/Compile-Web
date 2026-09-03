@@ -4532,16 +4532,20 @@ body.dragging { cursor: grabbing; user-select: none; }
  * 主页面 / 掷硬币 / 图鉴 / 规则图纸（2026-09-03 用户需求批次）
  * ===================================================================== */
 
-/* ---------- 主页面：菜单 + 已编译卡面背景大平面 ---------- */
-.home-screen { position: relative; min-height: calc(100vh - 60px); overflow: hidden; border-radius: 14px; background: #0b0b16; }
-.home-bg { position: absolute; inset: -40px; overflow: hidden; pointer-events: none; }
-.bg-scroller { position: absolute; left: 0; top: 0; will-change: transform; animation: bgDriftA 170s linear infinite; }
-.home-bg.bg-dir-b .bg-scroller { animation-name: bgDriftB; }
-@keyframes bgDriftA { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(var(--dw), var(--dh), 0); } }
-@keyframes bgDriftB { from { transform: translate3d(var(--dw), var(--dh), 0); } to { transform: translate3d(0, 0, 0); } }
-.bg-sheet { position: relative; display: flex; flex-direction: column; gap: 10px; }
-.bg-row { display: flex; gap: 12px; width: max-content; }
-/* 已编译卡面横置展示：竖版 750×1050 逆时针旋转 90° → 横置（用户指定） */
+/* ---------- 主页面：菜单 + 斜线组背景（2026-09-03 用户修正版：45° 斜线组上下拼接、
+   相邻组反向移动自动交替；主页铺满整屏不露底） ---------- */
+#app.screen-home { padding: 0; }
+.home-screen { position: relative; width: 100%; min-height: 100vh; overflow: hidden; background: #0b0b16; }
+.home-bg { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+/* 旋转平面：内容按组沿斜线排布（平面 +x = 屏幕 ↘ / -x = ↖），边长按视口对角线取足 */
+.bg-plane { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%) rotate(var(--bg-tilt, 45deg)); }
+.bg-band { position: absolute; left: 0; height: 99px; overflow: hidden; }
+.bg-band-move { position: absolute; left: 0; top: 0; height: 100%; display: flex; will-change: transform; animation: bandDriftL 90s linear infinite; }
+.bg-band-move.rev { animation-name: bandDriftR; }
+@keyframes bandDriftL { from { transform: translateX(0); } to { transform: translateX(var(--dx)); } }
+@keyframes bandDriftR { from { transform: translateX(var(--dx)); } to { transform: translateX(0); } }
+.bg-band-content { display: flex; gap: 14px; width: max-content; }
+/* 已编译卡面横置：竖版图逆时针 90° 呈横置（用户指定「横着正置」） */
 .bg-tile {
   position: relative; flex: 0 0 auto; width: 138px; height: 99px;
   overflow: hidden; border-radius: 7px; background: rgba(20, 20, 40, 0.55);
@@ -4556,7 +4560,7 @@ body.dragging { cursor: grabbing; user-select: none; }
 .home-bg-vignette {
   position: absolute; inset: 0;
   background:
-    radial-gradient(ellipse at center, rgba(8, 8, 18, 0.25) 0%, rgba(8, 8, 18, 0.72) 78%, rgba(6, 6, 14, 0.94) 100%);
+    radial-gradient(ellipse at center, rgba(8, 8, 18, 0.22) 0%, rgba(8, 8, 18, 0.66) 78%, rgba(6, 6, 14, 0.9) 100%);
 }
 .home-menu {
   position: relative; z-index: 2;
@@ -4571,10 +4575,6 @@ body.dragging { cursor: grabbing; user-select: none; }
 .home-btn:hover { background: rgba(40, 40, 78, 0.9); border-color: #00ffcc; }
 .home-btn-primary { background: linear-gradient(135deg, #00ffcc, #4dd0ff); color: #071; border: none; font-size: 19px; }
 .home-btn-primary:hover { background: linear-gradient(135deg, #33ffd6, #6fdcff); }
-.home-bg-dir-btn {
-  position: absolute; z-index: 3; left: 16px; top: 16px;
-  font-size: 11px; padding: 4px 10px; opacity: 0.85;
-}
 .home-footer {
   position: absolute; z-index: 3; left: 0; right: 0; bottom: 12px;
   text-align: center; color: rgba(220, 228, 255, 0.62); font-size: 12px; letter-spacing: 0.4px;

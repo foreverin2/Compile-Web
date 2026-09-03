@@ -54,76 +54,34 @@ function showToast(msg: string): void {
   window.setTimeout(() => t.remove(), 2600);
 }
 
-/** 清空根容器（各屏互斥）；同时解绑主页背景 resize 重建 */
+/** 清空根容器（各屏互斥）；解绑主页背景 resize 重建并退出「整屏主页」模式 */
 function clearRoot(root: HTMLElement): void {
   liveBgHost = null;
   root.textContent = '';
-  root.classList.remove('draft-exit', 'board-enter', 'no-anim');
+  root.classList.remove('draft-exit', 'board-enter', 'no-anim', 'screen-home');
 }
 
 /* =====================================================================
- * 背景大平面：30 套已编译卡面横置（逆时针 90°）排成几排上下叠成一个大平面；
- * 整面沿对角线巡回（A：斜上左移出 → 右下角续入；B：反向，左下角切换）。
- * 实现（quality 评审 BUG-1 修复）：sheet 尺寸按视口动态计算（行数/列数保证
- * 周期 ≥ 视口），一张 sheet 以周期 (sheetW,sheetH) 四份平铺（.bg-copy 绝对定位），
- * scroller 在 (0,0) ↔ (-sheetW,-sheetH) 间循环平移（CSS var --dw/--dh），周期内
- * 图案完全一致 → 无缝。行不做横向错位（会破坏平铺无缝）；「斜排」观感由对角
- * 巡回 + 行间隙构成，倾角幅度可后续按用户 5173 观感微调。
- * 图源 = public/assets/bg-thumbs/<defId>.jpg（160px 缩略图，避免 528 张全尺寸
- * 解码 ~1.6GB 峰值；quality 评审 D-2）。
+ * 背景大平面（2026-09-03 用户修正版）：
+ * - 全部协议分成若干组；卡面横置（原图逆时针 90°，见 .bg-tile）后整组再顺时针
+ *   斜转 45°（CSS --bg-tilt 可调），沿一条「左上 → 右下」的斜线排开；
+ * - 这些斜线组在平面内上下拼接；相邻组的移动方向相反（一组向左上、相邻组向右下
+ *   ——按组索引自动交替，无切换按钮）；
+ * - 实现：旋转平面坐标系（rotate(var(--bg-tilt))）内放多条「水平巡回带」，每条带
+ *   内容两份平铺并按 ±x 循环平移（平面 +x 方向 = 屏幕 ↘，-x = ↖，平移即沿斜线
+ *   上/下移动，两份平铺保证巡回无缝）；平面按视口对角线取边长，旋转后仍铺满。
+ * 图源 = public/assets/bg-thumbs/<defId>.jpg 缩略图（避免全尺寸解码峰值）。
  * ===================================================================== */
+const BG_TILT_DEG = 45; // 顺时针斜转角度（0=纯横排；45=沿 45° 斜线）
 const BG_TILE_W = 138; // 卡横置视觉宽
-const BG_GAP_X = 12;
-const BG_TILE_H = 99; // 行高
-const BG_GAP_Y = 10;
+const BG_GAP_X = 14;
+const BG_BAND_H = 99; // 每条斜线带的厚度（= 卡高）
+const BG_BAND_GAP = 16; // 相邻斜线带间距
+const BG_SPEED_SEC = 90; // 基础巡回周期（秒，可调观感）
 
 /** 背景缩略图 src（已编译面） */
 function bgThumbSrc(defId: string): string {
   return `/assets/bg-thumbs/${defId}.jpg`;
-}
-
-/** 按视口动态算 sheet 周期（行/列均保证周期 ≥ 视口 + 余量） */
-function bgLayout(): { tiles: number; rows: number; sheetW: number; sheetH: number } {
-  const vw = Math.max(1400, window.innerWidth || 1400);
-  const vh = Math.max(860, window.innerHeight || 860);
-  const tiles = Math.ceil(vw / (BG_TILE_W + BG_GAP_X)) + 3;
-  const rows = Math.ceil(vh / (BG_TILE_H + BG_GAP_Y)) + 3;
-  return {
-    tiles,
-    rows,
-    sheetW: tiles * (BG_TILE_W + BG_GAP_X),
-    sheetH: rows * (BG_TILE_H + BG_GAP_Y),
-  };
-}
-
-/** 构建/重建 .home-bg 内的 scroller（窗口尺寸变化时重建，保证覆盖） */
-function fillBg(bg: HTMLElement): void {
-  const { tiles, rows, sheetW, sheetH } = bgLayout();
-  const defs = shuffledProtocols();
-  const rowHtml: string[] = [];
-  for (let r = 0; r < rows; r++) {
-    const cells: string[] = [];
-    for (let i = 0; i < tiles; i++) {
-      const def = defs[(r * 5 + i) % defs.length];
-      cells.push(
-        `<span class="bg-tile"><img alt="" decoding="async" src="${bgThumbSrc(def.defId)}"></span>`
-      );
-    }
-    rowHtml.push(`<div class="bg-row">${cells.join('')}</div>`);
-  }
-  const sheet = `<div class="bg-sheet" style="width:${sheetW}px;height:${sheetH}px">${rowHtml.join('')}</div>`;
-  const scroller = el('div', 'bg-scroller');
-  scroller.setAttribute('aria-hidden', 'true');
-  scroller.style.width = `${sheetW * 2}px`;
-  scroller.style.height = `${sheetH * 2}px`;
-  scroller.style.setProperty('--dw', `${-sheetW}px`);
-  scroller.style.setProperty('--dh', `${-sheetH}px`);
-  const copy = (x: number, y: number): string =>
-    `<div class="bg-copy" style="left:${x}px;top:${y}px">${sheet}</div>`;
-  scroller.innerHTML = copy(0, 0) + copy(sheetW, 0) + copy(0, sheetH) + copy(sheetW, sheetH);
-  const old = bg.querySelector('.bg-scroller');
-  if (old) old.remove();
-  bg.insertBefore(scroller, bg.querySelector('.home-bg-vignette') ?? null);
 }
 
 /** 打乱协议顺序（装饰用） */
@@ -136,11 +94,66 @@ function shuffledProtocols(): typeof DEMO_PROTOCOLS {
   return defs;
 }
 
+/** 协议分组（装饰用）：30 套 → 5 组 × 6 套 */
+function bgGroups(): typeof DEMO_PROTOCOLS[] {
+  const defs = shuffledProtocols();
+  const groups: typeof DEMO_PROTOCOLS[] = [];
+  const size = Math.ceil(defs.length / 5);
+  for (let i = 0; i < defs.length; i += size) groups.push(defs.slice(i, i + size));
+  return groups;
+}
+
+/** 重建 .home-bg：旋转平面内的斜线巡回带（进入主页 / 窗口缩放时重建） */
+function fillBg(bg: HTMLElement): void {
+  const vw = Math.max(1200, window.innerWidth || 1200);
+  const vh = Math.max(760, window.innerHeight || 760);
+  // 平面边长按视口对角线取足（旋转 45° 后轴对齐外接盒 ≥ 边长×√2，仍铺满视口）
+  const side = Math.ceil(Math.hypot(vw, vh) * 1.15) + 140;
+  const pitch = BG_BAND_H + BG_BAND_GAP;
+  const bandCount = Math.ceil(side / pitch) + 2;
+  const contentW = side + 240; // 单份内容长 = 巡回距离
+  const tilesPer = Math.ceil(contentW / (BG_TILE_W + BG_GAP_X)) + 2;
+  const groups = bgGroups();
+
+  const bands: string[] = [];
+  for (let k = 0; k < bandCount; k++) {
+    const group = groups[k % groups.length];
+    const cells: string[] = [];
+    for (let i = 0; i < tilesPer; i++) {
+      const def = group[i % group.length];
+      cells.push(
+        `<span class="bg-tile"><img alt="" decoding="async" src="${bgThumbSrc(def.defId)}"></span>`
+      );
+    }
+    const one = `<div class="bg-band-content">${cells.join('')}</div>`;
+    // 相邻组反向自动交替：奇数带向右下（rev），偶数带向左上
+    const move = el('div', 'bg-band-move' + (k % 2 === 1 ? ' rev' : ''));
+    move.style.width = `${contentW * 2}px`;
+    move.style.setProperty('--dx', `${-contentW}px`);
+    move.style.animationDuration = `${BG_SPEED_SEC + (k % 4) * 14}s`;
+    move.innerHTML = one + one;
+    const band = el('div', 'bg-band');
+    band.style.top = `${k * pitch}px`;
+    band.style.width = `${side}px`;
+    band.appendChild(move);
+    bands.push(band.outerHTML);
+  }
+
+  const plane = el('div', 'bg-plane');
+  plane.style.width = `${side}px`;
+  plane.style.height = `${side}px`;
+  plane.style.setProperty('--bg-tilt', `${BG_TILT_DEG}deg`);
+  plane.innerHTML = bands.join('');
+  const old = bg.querySelector('.bg-plane');
+  if (old) old.remove();
+  bg.insertBefore(plane, bg.querySelector('.home-bg-vignette') ?? null);
+}
+
 /** 当前挂载中的背景节点（供窗口 resize 重建；离开主页时置空） */
 let liveBgHost: HTMLElement | null = null;
 let bgResizeTimer: number | null = null;
 
-/** 主页背景容器（含两向巡回模式切换的 data 状态） */
+/** 主页背景容器 */
 function buildHomeBg(): HTMLElement {
   const bg = el('div', 'home-bg');
   bg.setAttribute('aria-hidden', 'true');
@@ -161,9 +174,10 @@ function registerBgResize(bg: HTMLElement): void {
   });
 }
 
-/** 主页面：菜单 + 背景大平面 + 巡回方向切换 + 页脚署名 */
+/** 主页面：菜单 + 斜线组背景 + 页脚署名（铺满整屏，无露底） */
 export function renderHome(root: HTMLElement, nav: HomeNav): void {
   clearRoot(root);
+  root.classList.add('screen-home'); // #app 去内边距 → 主页背景铺满整个可视区
   const screen = el('div', 'home-screen');
 
   const bg = buildHomeBg();
@@ -181,18 +195,11 @@ export function renderHome(root: HTMLElement, nav: HomeNav): void {
   menu.appendChild(btns);
   screen.appendChild(menu);
 
-  // 背景巡回方向切换（A：斜上左 ⇄ B：斜下右）
-  const dirBtn = button('btn home-bg-dir-btn', '背景移动：斜上左', () => {
-    bg.classList.toggle('bg-dir-b');
-    dirBtn.textContent = bg.classList.contains('bg-dir-b') ? '背景移动：斜下右' : '背景移动：斜上左';
-  });
-  screen.appendChild(dirBtn);
-
   screen.appendChild(
     el(
       'footer',
       'home-footer',
-      '本桌游由 Compile 原作者创作 · 本网页版由「我吃吃吃吃」作为非官方粉丝开发'
+      'Compile 桌游由原作者 MICHAEL YANG 创作 · 本网页版由「我吃吃吃吃」作为非官方粉丝开发'
     )
   );
 
