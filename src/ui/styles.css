@@ -4644,3 +4644,7 @@ body.dragging { cursor: grabbing; user-select: none; }
 .pdf-bar { display: flex; align-items: center; gap: 10px; padding: 10px 16px; }
 .pdf-title { flex: 1; color: #fff; font-size: 16px; }
 .pdf-frame { flex: 1; border: none; width: 100%; background: #fff; }
+
+/* BUG-1 修复（quality 评审）：bg-copy 必须绝对定位，四份副本按 left/top 平铺；
+   sheet 尺寸由 JS 按视口计算（周期 ≥ 视口），行内不做横向错位以保无缝 */
+.bg-copy { position: absolute; }

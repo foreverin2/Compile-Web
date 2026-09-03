@@ -53,22 +53,77 @@ function showToast(msg: string): void {
   window.setTimeout(() => t.remove(), 2600);
 }
 
-/** 清空根容器（各屏互斥） */
+/** 清空根容器（各屏互斥）；同时解绑主页背景 resize 重建 */
 function clearRoot(root: HTMLElement): void {
+  liveBgHost = null;
   root.textContent = '';
   root.classList.remove('draft-exit', 'board-enter', 'no-anim');
 }
 
 /* =====================================================================
- * 背景大平面：30 套已编译卡面横置（逆时针 90°）排成几排，行间错位叠成斜排大平面；
- * 整面沿对角线巡回（A：斜上左移出 → 右下角续入；B：反向）。
- * 实现：一张 sheet 四份平铺（2×2）形成无缝周期，scroller 由 (0,0) ↔ (-W,-H) 循环平移
- * （CSS var --dw/--dh；.bg-dir-b 反向）。
+ * 背景大平面：30 套已编译卡面横置（逆时针 90°）排成几排上下叠成一个大平面；
+ * 整面沿对角线巡回（A：斜上左移出 → 右下角续入；B：反向，左下角切换）。
+ * 实现（quality 评审 BUG-1 修复）：sheet 尺寸按视口动态计算（行数/列数保证
+ * 周期 ≥ 视口），一张 sheet 以周期 (sheetW,sheetH) 四份平铺（.bg-copy 绝对定位），
+ * scroller 在 (0,0) ↔ (-sheetW,-sheetH) 间循环平移（CSS var --dw/--dh），周期内
+ * 图案完全一致 → 无缝。行不做横向错位（会破坏平铺无缝）；「斜排」观感由对角
+ * 巡回 + 行间隙构成，倾角幅度可后续按用户 5173 观感微调。
+ * 图源 = public/assets/bg-thumbs/<defId>.jpg（160px 缩略图，避免 528 张全尺寸
+ * 解码 ~1.6GB 峰值；quality 评审 D-2）。
  * ===================================================================== */
-const BG_ROWS = 6;
-const BG_ROW_TILES = 22;
-const BG_TILE_STEP = 150;
-const BG_ROW_STEP = 116;
+const BG_TILE_W = 138; // 卡横置视觉宽
+const BG_GAP_X = 12;
+const BG_TILE_H = 99; // 行高
+const BG_GAP_Y = 10;
+
+/** 背景缩略图 src（已编译面） */
+function bgThumbSrc(defId: string): string {
+  return `/assets/bg-thumbs/${defId}.jpg`;
+}
+
+/** 按视口动态算 sheet 周期（行/列均保证周期 ≥ 视口 + 余量） */
+function bgLayout(): { tiles: number; rows: number; sheetW: number; sheetH: number } {
+  const vw = Math.max(1400, window.innerWidth || 1400);
+  const vh = Math.max(860, window.innerHeight || 860);
+  const tiles = Math.ceil(vw / (BG_TILE_W + BG_GAP_X)) + 3;
+  const rows = Math.ceil(vh / (BG_TILE_H + BG_GAP_Y)) + 3;
+  return {
+    tiles,
+    rows,
+    sheetW: tiles * (BG_TILE_W + BG_GAP_X),
+    sheetH: rows * (BG_TILE_H + BG_GAP_Y),
+  };
+}
+
+/** 构建/重建 .home-bg 内的 scroller（窗口尺寸变化时重建，保证覆盖） */
+function fillBg(bg: HTMLElement): void {
+  const { tiles, rows, sheetW, sheetH } = bgLayout();
+  const defs = shuffledProtocols();
+  const rowHtml: string[] = [];
+  for (let r = 0; r < rows; r++) {
+    const cells: string[] = [];
+    for (let i = 0; i < tiles; i++) {
+      const def = defs[(r * 5 + i) % defs.length];
+      cells.push(
+        `<span class="bg-tile"><img alt="" decoding="async" src="${bgThumbSrc(def.defId)}"></span>`
+      );
+    }
+    rowHtml.push(`<div class="bg-row">${cells.join('')}</div>`);
+  }
+  const sheet = `<div class="bg-sheet" style="width:${sheetW}px;height:${sheetH}px">${rowHtml.join('')}</div>`;
+  const scroller = el('div', 'bg-scroller');
+  scroller.setAttribute('aria-hidden', 'true');
+  scroller.style.width = `${sheetW * 2}px`;
+  scroller.style.height = `${sheetH * 2}px`;
+  scroller.style.setProperty('--dw', `${-sheetW}px`);
+  scroller.style.setProperty('--dh', `${-sheetH}px`);
+  const copy = (x: number, y: number): string =>
+    `<div class="bg-copy" style="left:${x}px;top:${y}px">${sheet}</div>`;
+  scroller.innerHTML = copy(0, 0) + copy(sheetW, 0) + copy(0, sheetH) + copy(sheetW, sheetH);
+  const old = bg.querySelector('.bg-scroller');
+  if (old) old.remove();
+  bg.insertBefore(scroller, bg.querySelector('.home-bg-vignette') ?? null);
+}
 
 /** 打乱协议顺序（装饰用） */
 function shuffledProtocols(): typeof DEMO_PROTOCOLS {
@@ -80,34 +135,29 @@ function shuffledProtocols(): typeof DEMO_PROTOCOLS {
   return defs;
 }
 
-function buildHomeBg(): HTMLElement {
-  const sheetW = BG_ROW_TILES * BG_TILE_STEP;
-  const sheetH = BG_ROWS * BG_ROW_STEP + 24;
-  const defs = shuffledProtocols();
-  const rows: string[] = [];
-  for (let r = 0; r < BG_ROWS; r++) {
-    const shift = r % 2 === 0 ? r * 4 : -(r * 4);
-    const tiles: string[] = [];
-    for (let i = 0; i < BG_ROW_TILES; i++) {
-      const def = defs[(r * 5 + i) % defs.length];
-      tiles.push(`<span class="bg-tile"><img alt="" src="${protocolImgSrc(def.defId, true)}"></span>`);
-    }
-    rows.push(`<div class="bg-row" style="transform:translateX(${shift}px)">${tiles.join('')}</div>`);
-  }
-  const sheet = `<div class="bg-sheet" style="width:${sheetW}px;height:${sheetH}px">${rows.join('')}</div>`;
-  const scroller = el('div', 'bg-scroller');
-  scroller.style.width = `${sheetW * 2}px`;
-  scroller.style.height = `${sheetH * 2}px`;
-  scroller.style.setProperty('--dw', `${-sheetW}px`);
-  scroller.style.setProperty('--dh', `${-sheetH}px`);
-  const copy = (x: number, y: number): string =>
-    `<div class="bg-copy" style="left:${x}px;top:${y}px">${sheet}</div>`;
-  scroller.innerHTML = copy(0, 0) + copy(sheetW, 0) + copy(0, sheetH) + copy(sheetW, sheetH);
+/** 当前挂载中的背景节点（供窗口 resize 重建；离开主页时置空） */
+let liveBgHost: HTMLElement | null = null;
+let bgResizeTimer: number | null = null;
 
+/** 主页背景容器（含两向巡回模式切换的 data 状态） */
+function buildHomeBg(): HTMLElement {
   const bg = el('div', 'home-bg');
-  bg.appendChild(scroller);
+  bg.setAttribute('aria-hidden', 'true');
+  fillBg(bg);
   bg.appendChild(el('div', 'home-bg-vignette'));
   return bg;
+}
+
+function registerBgResize(bg: HTMLElement): void {
+  liveBgHost = bg;
+  if (bgResizeTimer !== null) return; // 监听只挂一次
+  window.addEventListener('resize', () => {
+    if (bgResizeTimer !== null) window.clearTimeout(bgResizeTimer);
+    bgResizeTimer = window.setTimeout(() => {
+      bgResizeTimer = null;
+      if (liveBgHost && liveBgHost.isConnected) fillBg(liveBgHost);
+    }, 300);
+  });
 }
 
 /** 主页面：菜单 + 背景大平面 + 巡回方向切换 + 页脚署名 */
@@ -116,6 +166,7 @@ export function renderHome(root: HTMLElement, nav: HomeNav): void {
   const screen = el('div', 'home-screen');
 
   const bg = buildHomeBg();
+  registerBgResize(bg);
   screen.appendChild(bg);
 
   const menu = el('div', 'home-menu');
@@ -149,7 +200,8 @@ export function renderHome(root: HTMLElement, nav: HomeNav): void {
 
 /* =====================================================================
  * 掷硬币先手：玩家一选 正/反 → 掷币 → 掷胜者先选协议；后选协议者先出牌。
- * 币面资源：public/assets/coin/coin-1.jpg（素材左半 = 正面）、coin-2.jpg（右半 = 反面）。
+ * 币面资源：public/assets/coin/coin-1.jpg（素材 1344×560 的左半）、coin-2.jpg（右半）。
+ * 「左=正面、右=反面」为位置假设 —— 待用户在 5173 目检确认真实正/反归属后可互换。 
  * ===================================================================== */
 const COIN_FACES: ReadonlyArray<{ side: 1 | 2; name: string; src: string }> = [
   { side: 1, name: '正面', src: '/assets/coin/coin-1.jpg' },
@@ -258,6 +310,8 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
     const img = document.createElement('img');
     img.src = protocolImgSrc(proto.defId, false);
     img.alt = proto.name;
+    img.loading = 'lazy';
+    img.decoding = 'async';
     img.title = `查看协议「${proto.name}」放大图`;
     face.appendChild(img);
     face.addEventListener('click', () => openZoom(proto.defId, true, true, false));
@@ -274,6 +328,8 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
       const cimg = document.createElement('img');
       cimg.src = cardImgSrc(proto.defId, c.value);
       cimg.alt = `${proto.name} ${c.value} 分`;
+      cimg.loading = 'lazy';
+      cimg.decoding = 'async';
       cimg.title = `${proto.name} ${c.value} 分指令卡`;
       cell.appendChild(cimg);
       cell.appendChild(el('div', 'lib-card-value', String(c.value)));

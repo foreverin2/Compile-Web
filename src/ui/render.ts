@@ -1,5 +1,5 @@
 import type { ChoiceRequest, GameState, PendingEffect, PlayerId, Line, ProtocolDef, Step } from '../core/models/types';
-import { getLineValue, getCurrentDrafter, draftTurnRange, draftRoundOwner, lineTopCommandActive } from '../core/state/create';
+import { getLineValue, getCurrentDrafter, draftTurnRange, draftRoundOwner, DRAFT_PICK_COUNT, lineTopCommandActive } from '../core/state/create';
 import { getLegalActions, type LegalAction } from '../core/game';
 import {
   opponentMustPlayFaceDown,
@@ -20,7 +20,7 @@ export interface UiCallbacks {
   onDraftUnpick(defId: string): void;
   /** 每次渲染完成后回调（供 UI 层做自动推进等） */
   onRendered?(): void;
-  /** 胜利结算遮罩「返回主界面」按钮：应用内重置回草案主界面（main.ts 实现） */
+  /** 胜利结算遮罩「返回主界面」按钮：应用内重置回主页面（main.ts 实现） */
   onWinReset?(): void;
 }
 
@@ -2570,9 +2570,8 @@ function appendNewCompiledFx(layer: HTMLElement, defId: string): void {
   }
 }
 
-/** 草稿轮选总次数（与引擎 DRAFT_PICK_COUNT 一致，1-2-2-1 = 6 次）。轮选归属按
- *  draftStarter 派生（draftRoundOwner）——掷硬币先手机制（2026-09-03）后不再固定玩家一先选。 */
-const DRAFT_PICK_COUNT = 6;
+/** 草稿轮选总次数（单源于引擎 create.DRAFT_PICK_COUNT；1-2-2-1 = 6 次）。
+ *  轮选归属按 draftStarter 派生（draftRoundOwner）——掷硬币先手机制（2026-09-03）。 */
 
 /** 玩家已选协议（按选择顺序）：归属 = 该轮 owner 座位（starter 派生） */
 function picksOf(s: GameState, player: PlayerId): ProtocolDef[] {
@@ -2902,7 +2901,7 @@ let winOverlayShown = false;
 /** 胜利结算遮罩：玩家 N 获胜！+「返回主界面」按钮。body 级 fixed（z-index 10000 高于
  *  一切浮层：放大遮罩 1000 / 拖拽幽灵 9999 / 开发者浮层 9999），一次性创建、常驻直到
  *  用户确认（不自动消失、不随重渲染重建——胜利后本就不再有渲染）。点击按钮 → 移除
- *  遮罩 + cb.onWinReset（main.ts 应用内重置回草案主界面）。遮罩全屏拦截指针（modal），
+ *  遮罩 + cb.onWinReset（main.ts 应用内重置回主页面）。遮罩全屏拦截指针（modal），
  *  关闭后 diag 按钮等不受影响。 */
 function showWinOverlay(winner: PlayerId, cb: UiCallbacks): void {
   if (winOverlayShown) return;
