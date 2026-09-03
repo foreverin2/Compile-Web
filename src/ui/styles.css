@@ -1301,7 +1301,7 @@ body {
 }
 .draft-filter-chip.on { border-color: #00ffcc; color: #00ffcc; background: rgba(0, 255, 204, 0.08); }
 .draft-filter-chip.off { opacity: 0.55; }
-.draft-filter-chip.locked { opacity: 0.4; cursor: not-allowed; }
+.draft-filter-hint { color: #e0a030; font-size: 12px; margin: -6px 0 10px; text-align: center; }
 .draft-pool { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
 .draft-card {
   position: relative; display: flex; flex-direction: column; gap: 6px;

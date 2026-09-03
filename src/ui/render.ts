@@ -2837,22 +2837,18 @@ export function renderDraft(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   header.appendChild(progress);
   wrap.appendChild(header);
 
-  // 世代筛选条：1代 基础/拓展、2代 基础/拓展 显隐（关闭后可用池需保持 ≥6 套）
+  // 世代筛选条：1代 基础/拓展、2代 基础/拓展 显隐。chip 永不锁定（2026-09-03 用户：
+  // 允许可用池 <6 套）；若当前可用池不足以完成剩余轮选，下方给一行非阻塞提示。
   const filter = el('div', 'draft-filter');
   const enabledTotal = (): number => DEMO_PROTOCOLS.filter((p) => draftEnabledGroups.has(p.set)).length;
   for (const [group, label] of DRAFT_GROUP_LABELS) {
     const count = DEMO_PROTOCOLS.filter((p) => p.set === group).length;
     const on = draftEnabledGroups.has(group);
-    const lock = on && enabledTotal() - count < 6;
-    const chip = el(
-      'button',
-      'draft-filter-chip' + (on ? ' on' : '') + (lock ? ' locked' : ''),
-      label
-    );
+    const chip = el('button', 'draft-filter-chip' + (on ? ' on' : ''), label);
     chip.setAttribute('type', 'button');
-    chip.title = `${label}（${count} 套）${on ? (lock ? '：不可关闭（需保留 ≥6 套可选）' : '：点击隐藏') : '：点击显示'}`;    chip.addEventListener('click', () => {
+    chip.title = `${label}（${count} 套）· ${on ? '点击隐藏' : '点击显示'}`;
+    chip.addEventListener('click', () => {
       if (on) {
-        if (lock) return;
         draftEnabledGroups.delete(group);
       } else {
         draftEnabledGroups.add(group);
@@ -2862,6 +2858,18 @@ export function renderDraft(root: HTMLElement, s: GameState, cb: UiCallbacks): v
     filter.appendChild(chip);
   }
   wrap.appendChild(filter);
+  // 非阻塞提示：剩余轮选 > 可用池时提醒（选空后可随时重新开启被隐藏组）
+  const picksLeft = DRAFT_PICK_OWNER.length - s.draftRound;
+  const available = enabledTotal() - s.draftPicks.length;
+  if (available < picksLeft) {
+    wrap.appendChild(
+      el(
+        'div',
+        'draft-filter-hint',
+        `当前可用协议 ${Math.max(available, 0)} 套，还需选择 ${picksLeft} 次——选空后请重新开启被隐藏的世代组。`
+      )
+    );
+  }
 
   const layout = el('div', 'draft-layout');
   layout.appendChild(renderPickColumn(s, 0, drafter, cb));
