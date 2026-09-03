@@ -4790,3 +4790,28 @@ body.dragging { cursor: grabbing; user-select: none; }
 }
 .turn-verb { text-shadow: 0 0 8px currentColor; }
 @keyframes turnBannerPulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.02); } }
+
+/* ---------- 图鉴细节修正（2026-09-03 用户反馈第二轮） ---------- */
+/* 缩略图：object-fit contain 完整显示整张协议图（暗/死横版原生图不再裁左右） */
+.lib-proto-img-wrap { position: relative; width: 122px; height: 87px; }
+.lib-proto-img {
+  position: absolute; left: 50%; top: 50%;
+  width: 87px; height: 122px;
+  transform: translate(-50%, -50%) rotate(-90deg);
+  object-fit: contain; border-radius: 6px;
+}
+/* 展示框更大：右列 520px；卡牌竖置 340×476、协议横置（旋转后可视 476×340） */
+.library-layout { grid-template-columns: minmax(0, 1fr) 520px; }
+.library-preview { min-height: 560px; }
+.library-preview-img {
+  display: none; object-fit: contain; border-radius: 10px;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.65);
+}
+.library-preview-img.portrait { width: 340px; height: 476px; }
+.library-preview-img.landscape { width: 340px; height: 476px; transform: rotate(-90deg); }
+.library-preview-hint { margin-top: 150px; }
+
+/* ---------- 「轮到谁」横幅细节修正：徽标底色用分色变量（此前 currentColor 导致黑底） ---------- */
+.draft-turn-banner.p1 { --pcol: #00ffd0; color: var(--pcol); border-color: var(--pcol); background: rgba(0, 255, 208, 0.1); box-shadow: 0 0 20px rgba(0, 255, 208, 0.35); }
+.draft-turn-banner.p2 { --pcol: #ffb45e; color: var(--pcol); border-color: var(--pcol); background: rgba(255, 160, 70, 0.1); box-shadow: 0 0 20px rgba(255, 160, 70, 0.35); }
+.turn-badge { background: var(--pcol); color: #07151c; }

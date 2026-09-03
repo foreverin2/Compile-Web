@@ -92,11 +92,13 @@ export interface DraftAction {
  *  禁用顺序（draftStarter=先手）：后手禁2 → 先手选1禁1 → 后手选2禁1 →
  *  先手选2禁2 → 后手选1。选/禁交替由已完成计数 (picks, bans) 派生。 */
 export function draftNextAction(s: GameState): DraftAction | null {
-  const starter = s.draftStarter;
+  return nextActionFrom(s.draftStarter, s.draftMode, s.draftPicks.length, s.bannedProtocols.length);
+}
+
+/** 纯状态派生下一个动作（供 draftNextAction 与前瞻计数复用） */
+function nextActionFrom(starter: PlayerId, mode: 'normal' | 'ban', p: number, b: number): DraftAction | null {
   const second = (1 - starter) as PlayerId;
-  const p = s.draftPicks.length;
-  const b = s.bannedProtocols.length;
-  if (s.draftMode !== 'ban') {
+  if (mode !== 'ban') {
     return p < DRAFT_PICK_COUNT ? { kind: 'pick', player: draftRoundOwner(starter, p) } : null;
   }
   // ① 后手先禁 2
@@ -116,6 +118,29 @@ export function draftNextAction(s: GameState): DraftAction | null {
   // ⑧ 后手选 1（收尾）
   if (p < DRAFT_PICK_COUNT) return { kind: 'pick', player: second };
   return null;
+}
+
+/** 当前玩家在本轮（同玩家连续轮次）还能选几个协议（pick 步骤显示用） */
+export function draftTurnPicksRemaining(s: GameState): number {
+  const { start, end } = draftTurnRange(s.draftStarter, s.draftRound);
+  const pickedInTurn = Math.max(0, s.draftRound - start);
+  return Math.max(0, end - start - pickedInTurn);
+}
+
+/** 当前玩家在本阶段还需禁用几个协议（ban 步骤显示用；前瞻连续 ban 步骤计数，不改状态） */
+export function draftBanBlockRemaining(s: GameState): number {
+  const me = draftNextAction(s)?.player;
+  if (me === undefined) return 0;
+  let p = s.draftPicks.length;
+  let b = s.bannedProtocols.length;
+  let n = 0;
+  for (let guard = 0; guard < DRAFT_BAN_TOTAL; guard++) {
+    const a = nextActionFrom(s.draftStarter, s.draftMode, p, b);
+    if (!a || a.kind !== 'ban' || a.player !== me) break;
+    n += 1;
+    b += 1;
+  }
+  return n;
 }
 
 /** 是否处于「轮到 pick」的草稿动作（引擎守卫：禁用模式下 pick 步骤之外禁止选协议） */

@@ -438,7 +438,9 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
   preview.appendChild(pImg);
   preview.appendChild(pCap);
   preview.appendChild(pHint);
-  const showPreview = (src: string, caption: string): void => {
+  const showPreview = (src: string, caption: string, rotated: boolean): void => {
+    // 协议图：横置（逆时针 90°）展示；卡牌：竖置
+    pImg.className = 'library-preview-img ' + (rotated ? 'landscape' : 'portrait');
     pImg.src = src;
     pImg.alt = caption;
     pCap.textContent = caption;
@@ -468,7 +470,11 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
     img.title = `查看协议「${proto.name}」放大图`;
     face.appendChild(img);
     face.addEventListener('mouseenter', () =>
-      showPreview(protocolImgSrc(proto.defId, false), `${proto.name} · ${SET_LABEL[proto.set] ?? proto.set}`)
+      showPreview(
+        protocolImgSrc(proto.defId, false),
+        `${proto.name} · ${SET_LABEL[proto.set] ?? proto.set}`,
+        true
+      )
     );
     face.addEventListener('click', () => openZoom(proto.defId, true, true, false));
     headRow.appendChild(face);
@@ -490,7 +496,7 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
       cell.appendChild(cimg);
       cell.appendChild(el('div', 'lib-card-value', String(c.value)));
       cell.addEventListener('mouseenter', () =>
-        showPreview(cardImgSrc(proto.defId, c.value), `${proto.name} ${c.value} 分指令卡`)
+        showPreview(cardImgSrc(proto.defId, c.value), `${proto.name} ${c.value} 分指令卡`, false)
       );
       cell.addEventListener('click', () => openZoom(c.defId, true, false, false));
       row.appendChild(cell);

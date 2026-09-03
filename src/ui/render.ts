@@ -1,5 +1,5 @@
 import type { ChoiceRequest, GameState, PendingEffect, PlayerId, Line, ProtocolDef, Step } from '../core/models/types';
-import { getLineValue, getCurrentDrafter, draftTurnRange, draftRoundOwner, DRAFT_PICK_COUNT, DRAFT_BAN_TOTAL, draftNextAction, getDraftPool, lineTopCommandActive } from '../core/state/create';
+import { getLineValue, getCurrentDrafter, draftTurnRange, draftRoundOwner, DRAFT_PICK_COUNT, DRAFT_BAN_TOTAL, draftNextAction, getDraftPool, draftTurnPicksRemaining, draftBanBlockRemaining, lineTopCommandActive } from '../core/state/create';
 import { getLegalActions, type LegalAction } from '../core/game';
 import {
   opponentMustPlayFaceDown,
@@ -2843,8 +2843,8 @@ export function renderDraft(root: HTMLElement, s: GameState, cb: UiCallbacks): v
     'span',
     'turn-verb',
     banStep && action
-      ? `禁用协议（第 ${s.bannedProtocols.length + 1} / ${DRAFT_BAN_TOTAL} 个）`
-      : '选择协议'
+      ? `禁用协议 · 本阶段还需禁用 ${draftBanBlockRemaining(s)} 个（共 ${DRAFT_BAN_TOTAL} 个）`
+      : `选择协议 · 本轮还可选 ${draftTurnPicksRemaining(s)} 个`
   );
   banner.appendChild(badge);
   banner.appendChild(verb);
