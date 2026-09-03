@@ -13,7 +13,8 @@ import { openZoom } from './render';
  * - renderRules：查看 1/2/3 代说明书与 FAQ（public/assets/rules PDF + iframe 查看）。
  */
 export interface HomeNav {
-  startGame(): void; // 开始游戏 → 掷硬币屏
+  /** 开始游戏 → 游戏模式选择页（2026-09-03：热坐/单人/三人 + 禁用/随机池开关） */
+  startGame(): void;
   openLibrary(): void;
   openRules(): void;
 }
@@ -194,6 +195,84 @@ export function renderHome(root: HTMLElement, nav: HomeNav): void {
       '本桌游由 Compile 原作者创作 · 本网页版由「我吃吃吃吃」作为非官方粉丝开发'
     )
   );
+
+  root.appendChild(screen);
+}
+
+/* =====================================================================
+ * 游戏模式选择页（2026-09-03）：热坐（双人，可玩）/ 单人 / 三人（开发中）；
+ * 两个默认关闭的开关：禁用模式（开局按规则禁用协议）、随机池模式（随机抽 12 套）；
+ * 开关左侧带圆形「?」帮助图标（hover 显示说明）。两种模式下草稿页世代筛选仍可用。
+ * ===================================================================== */
+export interface ModeSelectNav {
+  backHome(): void;
+  /** 玩家选定「热坐」并携带两个开关状态继续（→ 掷硬币） */
+  startHotseat(banEnabled: boolean, randomPoolEnabled: boolean): void;
+}
+
+export function renderModeSelect(root: HTMLElement, nav: ModeSelectNav): void {
+  clearRoot(root);
+  const screen = el('div', 'mode-screen');
+  screen.appendChild(el('h1', 'mode-title', '选择游戏模式'));
+
+  const list = el('div', 'mode-list');
+  const mkMode = (label: string, desc: string, enabled: boolean, onClick: () => void): HTMLElement => {
+    const card = el('button', 'mode-card' + (enabled ? ' mode-card-on' : ''));
+    card.setAttribute('type', 'button');
+    const name = el('div', 'mode-card-name', label);
+    const sub = el('div', 'mode-card-desc', desc);
+    card.appendChild(name);
+    card.appendChild(sub);
+    card.addEventListener('click', onClick);
+    return card;
+  };
+  list.appendChild(
+    mkMode('热坐（双人）', '两名玩家轮流在同一设备上对战（当前可用）', true, () => {
+      nav.startHotseat(banBox.checked, randomBox.checked);
+    })
+  );
+  list.appendChild(
+    mkMode('单人模式', '对战 AI 对手', false, () => showToast('单人模式：开发中'))
+  );
+  list.appendChild(
+    mkMode('三人模式', '三人同台对战', false, () => showToast('三人模式：开发中'))
+  );
+  screen.appendChild(list);
+
+  // 两个开关（默认关闭）+ 圆形问号帮助
+  const toggles = el('div', 'mode-toggles');
+  const mkToggle = (label: string, tip: string): { row: HTMLElement; box: HTMLInputElement } => {
+    const row = el('label', 'mode-toggle');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.className = 'mode-check';
+    const help = el('span', 'mode-help', '?');
+    help.dataset.tip = tip;
+    const text = el('span', 'mode-toggle-label', label);
+    row.appendChild(box);
+    row.appendChild(text);
+    row.appendChild(help);
+    toggles.appendChild(row);
+    return { row, box };
+  };
+  const banToggle = mkToggle(
+    '禁用模式',
+    '开局可禁用部分协议：先掷硬币定先手，后手先禁 2 → 先手选 1 禁 1 → 后手选 2 禁 1 → 先手选 2 禁 2 → 后手选 1（选 6 禁 6）。被禁协议本局不可选，世代筛选仍可用。'
+  );
+  const randomToggle = mkToggle(
+    '随机池模式',
+    '开局随机从全部协议中抽取 12 套作为本局可选池（不再全 30 套可选）。世代筛选仍可用；若同时开启禁用模式，则在 12 套内按禁用模式规则选/禁。'
+  );
+  const banBox = banToggle.box;
+  const randomBox = randomToggle.box;
+  screen.appendChild(toggles);
+
+  const actions = el('div', 'mode-actions');
+  actions.appendChild(button('btn mode-next-btn', '下一步：掷硬币定先手', () => {
+    nav.startHotseat(banBox.checked, randomBox.checked);
+  }));
+  actions.appendChild(button('btn', '返回主页面', nav.backHome));
+  screen.appendChild(actions);
 
   root.appendChild(screen);
 }

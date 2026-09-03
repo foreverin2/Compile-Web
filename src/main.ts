@@ -1,10 +1,11 @@
 import './ui/styles.css';
-import { createGame, performDraftPick, performDraftUnpick } from './core/state/create';
+import { createGame, performDraftPick, performDraftUnpick, performDraftBan } from './core/state/create';
 import { executeAction } from './core/game';
 import { getCompilableLines } from './core/rules/compile';
 import { collectTriggers } from './core/effects/triggers';
 import { renderApp, renderDraft, resetUiState, syncCompiledFxLayers, syncSmokeOverlays, syncScanOverlays, syncPsychicParticles, syncPlagueMists, syncApathyMists, syncApathyMosaics, syncSpirit0Glows, syncSpirit1Cards, syncMetal0Glows, syncMetalPlates, syncMetal6Mans, syncMetal1LineGlows, syncChainLayerPosition, type UiCallbacks } from './ui/render';
-import { renderHome, renderCoin, renderLibrary, renderRules } from './ui/home';
+import { renderHome, renderCoin, renderLibrary, renderRules, renderModeSelect } from './ui/home';
+import { DEMO_PROTOCOLS } from './data/demo';
 import { initEffects, initCompileFx, initRearrangeFx, playRevealFly, buildLoveHeart, playSpeedDrawExtra, SPEED_TOTAL_MS } from './ui/effects';
 import { initDiag } from './ui/diag';
 import { initDevMode } from './ui/devmode';
@@ -61,6 +62,10 @@ const cb: UiCallbacks = {
   },
   onDraftUnpick(defId) {
     performDraftUnpick(state, defId);
+    renderApp(root, state, cb);
+  },
+  onDraftBan(defId) {
+    performDraftBan(state, defId);
     renderApp(root, state, cb);
   },
   onAction(a) {
@@ -326,25 +331,56 @@ function playDraftToGameTransition(): void {
 }
 
 /**
- * 主页面 / 掷硬币 / 图鉴 / 规则图纸 导航（2026-09-03 用户需求）。
+ * 主页面 / 模式选择 / 掷硬币 / 图鉴 / 规则图纸 导航（2026-09-03 用户需求）。
  * - 主页是应用入口（不再一载入即进草稿）；
- * - 开始游戏 → 掷硬币决定先手：掷胜者先选协议（draftStarter），
- *   后选择协议的一方先出牌（firstToPlay = 1 - draftStarter，用户拍板）；
+ * - 开始游戏 → 选择游戏模式（热坐可玩；单人/三人开发中）→ 勾选 禁用/随机池 开关
+ *   （默认关）→ 掷硬币定先手：掷胜者先选协议（draftStarter），后选择协议的一方
+ *   先出牌（firstToPlay = 1 - draftStarter，用户拍板）；
+ * - 禁用模式：开局按规则选 6 禁 6（后手先禁 2 → 先手选 1 禁 1 → …）；随机池模式：
+ *   开局从全部协议随机抽 12 套作为本局可选池（两种模式内世代筛选仍可用）；
  * - 胜利「返回主界面」→ 回主页（而非直接开新草稿）。
  */
+/** 本局游戏选项（模式选择页勾选，掷硬币后随 createGame 生效） */
+let gameOptions = { ban: false, randomPool: false };
+
 function showHome(): void {
   renderHome(root, {
-    startGame: () => showCoin(),
+    startGame: () => showModeSelect(),
     openLibrary: () => renderLibrary(root, showHome),
     openRules: () => renderRules(root, showHome),
   });
 }
 
+function showModeSelect(): void {
+  renderModeSelect(root, {
+    backHome: showHome,
+    startHotseat: (ban, randomPool) => {
+      gameOptions = { ban, randomPool };
+      showCoin();
+    },
+  });
+}
+
+/** 随机池：从两代全部协议中随机抽取 12 套 */
+function randomDraftPool(): typeof DEMO_PROTOCOLS {
+  const pool = [...DEMO_PROTOCOLS];
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  return pool.slice(0, 12);
+}
+
 function showCoin(): void {
   renderCoin(root, {
-    backHome: showHome,
+    backHome: showModeSelect,
     beginGame: (starter) => {
-      state = createGame({ draftStarter: starter, firstToPlay: (1 - starter) as PlayerId });
+      state = createGame({
+        draftStarter: starter,
+        firstToPlay: (1 - starter) as PlayerId,
+        draftMode: gameOptions.ban ? 'ban' : 'normal',
+        draftPool: gameOptions.randomPool ? randomDraftPool() : undefined,
+      });
       renderApp(root, state, cb);
     },
   });

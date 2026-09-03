@@ -243,6 +243,16 @@ export interface GameState {
   draftRound: number;
   /** 已选出的协议（按选择顺序） */
   draftPicks: ProtocolDef[];
+  /** 草稿模式（2026-09-03 模式选择页）：
+   *  - normal：常规 1-2-2-1 选 6；
+   *  - ban：开局禁用模式（仍先掷硬币定先手）——后手先禁 2 → 先手选 1 禁 1 →
+   *    后手选 2 禁 1 → 先手选 2 禁 2 → 后手选 1（选 6 禁 6）。 */
+  draftMode: 'normal' | 'ban';
+  /** 本局可选协议池（随机池模式 = 开局随机抽取 12 套；默认两代全部 30 套）。
+   *  世代筛选（草稿页 chips）与禁用动作都只在本池内生效。 */
+  draftPool: ProtocolDef[];
+  /** 已禁用的协议 defId（禁用模式，按禁用顺序） */
+  bannedProtocols: string[];
   /** 掷硬币先手机制（2026-09-03）：首位选择协议的玩家座位（0=玩家一 / 1=玩家二）。
    *  草稿轮选顺序由 draftStarter 派生（1-2-2-1 模式相对先手方展开）。默认 0。 */
   draftStarter: PlayerId;

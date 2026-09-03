@@ -26,6 +26,10 @@ export interface CreateGameOptions {
   draftStarter?: PlayerId;
   /** 对局中先出牌的玩家；默认 0。用户拍板：硬币流程下后选者先出 → 由调用方传 1 - draftStarter */
   firstToPlay?: PlayerId;
+  /** 草稿模式（禁用模式开关）；默认 normal */
+  draftMode?: 'normal' | 'ban';
+  /** 本局可选协议池（随机池模式 = UI 随机抽 12 后传入；默认两代全部） */
+  draftPool?: ProtocolDef[];
 }
 
 function emptyPlayer(): PlayerState {
@@ -40,6 +44,9 @@ export function createGame(opts: CreateGameOptions = {}): GameState {
     draftPicks: [],
     draftStarter,
     firstToPlay: opts.firstToPlay ?? 0,
+    draftMode: opts.draftMode ?? 'normal',
+    draftPool: opts.draftPool ?? [...DEMO_PROTOCOLS],
+    bannedProtocols: [],
     turnPlayer: 0,
     turnCount: 0,
     step: 'start',
@@ -61,11 +68,71 @@ export function createGame(opts: CreateGameOptions = {}): GameState {
 
 export function getDraftPool(s: GameState): ProtocolDef[] {
   const picked = new Set(s.draftPicks.map((p) => p.defId));
-  return DEMO_PROTOCOLS.filter((p) => !picked.has(p.defId));
+  const banned = new Set(s.bannedProtocols);
+  return s.draftPool.filter((p) => !picked.has(p.defId) && !banned.has(p.defId));
 }
 
 export function getCurrentDrafter(s: GameState): PlayerId {
   return draftRoundOwner(s.draftStarter, s.draftRound);
+}
+
+/* ---------- 禁用模式 / 随机池（2026-09-03 模式选择页） ---------- */
+
+/** 禁用模式禁用总数（后手 2+1 + 先手 1+2 = 6） */
+export const DRAFT_BAN_TOTAL = 6;
+
+export type DraftActionKind = 'pick' | 'ban';
+
+export interface DraftAction {
+  kind: DraftActionKind;
+  player: PlayerId;
+}
+
+/** 下一个草稿动作（禁用模式按用户规则展开；normal 模式只有 pick）。
+ *  禁用顺序（draftStarter=先手）：后手禁2 → 先手选1禁1 → 后手选2禁1 →
+ *  先手选2禁2 → 后手选1。选/禁交替由已完成计数 (picks, bans) 派生。 */
+export function draftNextAction(s: GameState): DraftAction | null {
+  const starter = s.draftStarter;
+  const second = (1 - starter) as PlayerId;
+  const p = s.draftPicks.length;
+  const b = s.bannedProtocols.length;
+  if (s.draftMode !== 'ban') {
+    return p < DRAFT_PICK_COUNT ? { kind: 'pick', player: draftRoundOwner(starter, p) } : null;
+  }
+  // ① 后手先禁 2
+  if (b < 2) return { kind: 'ban', player: second };
+  // ② 先手选 1（首轮）
+  if (p === 0) return { kind: 'pick', player: starter };
+  // ③ 先手禁 1
+  if (b < 3) return { kind: 'ban', player: starter };
+  // ④ 后手选 2
+  if (p < 3) return { kind: 'pick', player: second };
+  // ⑤ 后手禁 1
+  if (b < 4) return { kind: 'ban', player: second };
+  // ⑥ 先手选 2
+  if (p < 5) return { kind: 'pick', player: starter };
+  // ⑦ 先手禁 2
+  if (b < DRAFT_BAN_TOTAL) return { kind: 'ban', player: starter };
+  // ⑧ 后手选 1（收尾）
+  if (p < DRAFT_PICK_COUNT) return { kind: 'pick', player: second };
+  return null;
+}
+
+/** 是否处于「轮到 pick」的草稿动作（引擎守卫：禁用模式下 pick 步骤之外禁止选协议） */
+export function draftPickPending(s: GameState): boolean {
+  const action = draftNextAction(s);
+  return action !== null && action.kind === 'pick';
+}
+
+/** 禁用 1 个协议（禁用模式 ban 步骤）：defId 必须仍在池中（未选/未禁） */
+export function performDraftBan(s: GameState, defId: string): void {
+  if (s.phase !== 'draft') throw new Error('not in draft phase');
+  const action = draftNextAction(s);
+  if (!action || action.kind !== 'ban') throw new Error('no ban step pending');
+  const def = getDraftPool(s).find((p) => p.defId === defId);
+  if (!def) throw new Error(`cannot ban ${defId}: not available`);
+  s.bannedProtocols.push(defId);
+  s.log.push(`P${action.player + 1} 禁用 ${def.name}`);
 }
 
 /** 当前回合（同一玩家的连续轮次）的选牌索引范围 [start, end) */
@@ -119,9 +186,12 @@ function assignProtocols(s: GameState, player: PlayerId, picks: ProtocolDef[]): 
   }
 }
 
-/** 草案选择：defId 必须是当前可选协议 */
+/** 草案选择：defId 必须是当前可选协议（禁用模式下仅在轮到 pick 时允许） */
 export function performDraftPick(s: GameState, defId: string): void {
   if (s.phase !== 'draft') throw new Error('not in draft phase');
+  if (s.draftMode === 'ban' && !draftPickPending(s)) {
+    throw new Error('not a pick step (ban pending)');
+  }
   const def = getDraftPool(s).find((p) => p.defId === defId);
   if (!def) throw new Error(`protocol ${defId} not available`);
   const drafter = getCurrentDrafter(s);

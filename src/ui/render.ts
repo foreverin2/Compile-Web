@@ -1,5 +1,5 @@
 import type { ChoiceRequest, GameState, PendingEffect, PlayerId, Line, ProtocolDef, Step } from '../core/models/types';
-import { getLineValue, getCurrentDrafter, draftTurnRange, draftRoundOwner, DRAFT_PICK_COUNT, lineTopCommandActive } from '../core/state/create';
+import { getLineValue, getCurrentDrafter, draftTurnRange, draftRoundOwner, DRAFT_PICK_COUNT, DRAFT_BAN_TOTAL, draftNextAction, getDraftPool, lineTopCommandActive } from '../core/state/create';
 import { getLegalActions, type LegalAction } from '../core/game';
 import {
   opponentMustPlayFaceDown,
@@ -16,6 +16,8 @@ import { buildTornadoFx } from './fx-tornado';
 export interface UiCallbacks {
   onAction(a: LegalAction): void;
   onDraftPick(defId: string): void;
+  /** 禁用模式的禁用动作（草稿 ban 步骤点牌禁用） */
+  onDraftBan(defId: string): void;
   /** 取消本回合的选择（把已选协议拖出选择框） */
   onDraftUnpick(defId: string): void;
   /** 每次渲染完成后回调（供 UI 层做自动推进等） */
@@ -2623,15 +2625,15 @@ function renderPickColumn(s: GameState, player: PlayerId, drafter: PlayerId, cb:
 /** 中间协议池：全部 30 套协议（1代+2代并池，2026-09-03），每行 4 个；悬停聚焦。
  *  选中方式：拖拽协议卡到【当前轮选者】的选择框松手（选中）；松手位置不在自己的
  *  选择框区域 → 丝滑平移回原卡位置。双击协议卡可放大查看协议图。已选协议变灰禁用。 */
-function renderDraftPool(s: GameState, cb: UiCallbacks): HTMLElement {
-  const pool = el('div', 'draft-pool');
-  const picked = new Set(s.draftPicks.map((p) => p.defId));
+/** 中间协议池（引擎池 = 随机池/禁用后的剩余协议；世代筛选 chips 之上再过滤）：
+ *  选择步骤 = 拖拽选中（常规）；禁用步骤（banStep）= 单击直接禁用 */
+function renderDraftPool(s: GameState, cb: UiCallbacks, banStep: boolean): HTMLElement {
+  const pool = el('div', 'draft-pool' + (banStep ? ' draft-pool-ban' : ''));
   const drafter = getCurrentDrafter(s);
-  for (const proto of DEMO_PROTOCOLS) {
-    // 世代筛选：被隐藏组的协议不进池（不渲染 = 不可选/不可拖）
+  for (const proto of getDraftPool(s)) {
+    // 世代筛选：被隐藏组的协议不进池（不渲染 = 不可选/不可禁/不可拖）
     if (!draftEnabledGroups.has(proto.set)) continue;
-    const isPicked = picked.has(proto.defId);
-    const card = el('div', 'draft-card' + (isPicked ? ' picked' : ''));
+    const card = el('div', 'draft-card');
     const wrap = el('div', 'draft-card-img-wrap');
     const img = document.createElement('img');
     img.className = 'draft-card-img';
@@ -2641,8 +2643,10 @@ function renderDraftPool(s: GameState, cb: UiCallbacks): HTMLElement {
     card.appendChild(wrap);
     card.appendChild(el('div', 'draft-card-name', proto.name));
     card.appendChild(el('div', 'draft-card-commands', proto.commands.join(' · ')));
-    if (isPicked) {
-      card.appendChild(el('span', 'draft-picked-badge', '已选'));
+    if (banStep) {
+      card.title = `点击禁用「${proto.name}」（本局不可选；共需禁用 ${DRAFT_BAN_TOTAL} 个）`;
+      card.appendChild(el('span', 'draft-ban-badge', '禁用'));
+      bindClickOrDouble(card, () => cb.onDraftBan(proto.defId), () => openZoom(proto.defId, true, true, false), false);
     } else {
       // 双击放大查看协议图（单击无动作）；拖拽选协议
       bindClickOrDouble(card, () => {}, () => openZoom(proto.defId, true, true, false), false);
@@ -2819,13 +2823,29 @@ export function renderDraft(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   root.textContent = '';
   const wrap = el('div', 'draft-screen');
 
+  // 当前草稿动作：禁用模式在选/禁步骤间交替（normal 只有 pick）
+  const action = draftNextAction(s);
+  const banStep = action !== null && action.kind === 'ban';
+  const activePlayer = banStep && action ? action.player : getCurrentDrafter(s);
+
   const header = el('div', 'draft-header');
-  const drafter = getCurrentDrafter(s);
-  header.appendChild(el('div', 'draft-hint', `轮到 玩家 ${drafter + 1} 选择协议`));
+  header.appendChild(
+    el(
+      'div',
+      'draft-hint' + (banStep ? ' draft-hint-ban' : ''),
+      banStep && action
+        ? `轮到 玩家 ${action.player + 1} 禁用协议（第 ${s.bannedProtocols.length + 1} / ${DRAFT_BAN_TOTAL} 个）`
+        : `轮到 玩家 ${activePlayer + 1} 选择协议`
+    )
+  );
   // 轮次进度：第 X/6 次 + 1-2-2-1 步点追踪（当前步高亮、已过步打勾色）
   const progress = el('div', 'draft-progress');
   progress.appendChild(
-    el('span', 'draft-progress-text', `第 ${Math.min(s.draftRound + 1, DRAFT_PICK_COUNT)} / ${DRAFT_PICK_COUNT} 次选择`)
+    el(
+      'span',
+      'draft-progress-text',
+      `第 ${Math.min(s.draftRound + 1, DRAFT_PICK_COUNT)} / ${DRAFT_PICK_COUNT} 次选择${banStep ? ' · 禁用阶段' : ''}`
+    )
   );
   const track = el('div', 'draft-step-track');
   for (let i = 0; i < DRAFT_PICK_COUNT; i++) {
@@ -2836,16 +2856,19 @@ export function renderDraft(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   header.appendChild(progress);
   wrap.appendChild(header);
 
+  // 引擎池（随机池/禁用后剩余）供筛选计数与可用性判断
+  const poolDefs = getDraftPool(s);
+
   // 世代筛选条：1代 基础/拓展、2代 基础/拓展 显隐。chip 永不锁定（2026-09-03 用户：
-  // 允许可用池 <6 套）；若当前可用池不足以完成剩余轮选，下方给一行非阻塞提示。
+  // 允许可用池 <6 套）；若当前可用池不足以完成剩余选/禁动作，下方给一行非阻塞提示。
   const filter = el('div', 'draft-filter');
-  const enabledTotal = (): number => DEMO_PROTOCOLS.filter((p) => draftEnabledGroups.has(p.set)).length;
+  const visiblePool = (): number => poolDefs.filter((p) => draftEnabledGroups.has(p.set)).length;
   for (const [group, label] of DRAFT_GROUP_LABELS) {
-    const count = DEMO_PROTOCOLS.filter((p) => p.set === group).length;
+    const count = poolDefs.filter((p) => p.set === group).length;
     const on = draftEnabledGroups.has(group);
     const chip = el('button', 'draft-filter-chip' + (on ? ' on' : ''), label);
     chip.setAttribute('type', 'button');
-    chip.title = `${label}（${count} 套）· ${on ? '点击隐藏' : '点击显示'}`;
+    chip.title = `${label}（本局池内 ${count} 套）· ${on ? '点击隐藏' : '点击显示'}`;
     chip.addEventListener('click', () => {
       if (on) {
         draftEnabledGroups.delete(group);
@@ -2857,23 +2880,35 @@ export function renderDraft(root: HTMLElement, s: GameState, cb: UiCallbacks): v
     filter.appendChild(chip);
   }
   wrap.appendChild(filter);
-  // 非阻塞提示：剩余轮选 > 可用池时提醒（选空后可随时重新开启被隐藏组）
-  const picksLeft = DRAFT_PICK_COUNT - s.draftRound;
-  const available = enabledTotal() - s.draftPicks.length;
-  if (available < picksLeft) {
+  // 禁用模式的流程说明
+  if (s.draftMode === 'ban') {
+    wrap.appendChild(
+      el(
+        'div',
+        'draft-mode-note',
+        '禁用模式：后手先禁 2 → 先手选 1 禁 1 → 后手选 2 禁 1 → 先手选 2 禁 2 → 后手选 1'
+      )
+    );
+  }
+  // 非阻塞提示：剩余动作 > 可见池时提醒（可随时重新开启被隐藏组）
+  const actionsLeft =
+    DRAFT_PICK_COUNT - s.draftRound +
+    (s.draftMode === 'ban' ? DRAFT_BAN_TOTAL - s.bannedProtocols.length : 0);
+  const available = visiblePool();
+  if (available < actionsLeft) {
     wrap.appendChild(
       el(
         'div',
         'draft-filter-hint',
-        `当前可用协议 ${Math.max(available, 0)} 套，还需选择 ${picksLeft} 次——选空后请重新开启被隐藏的世代组。`
+        `当前可见协议 ${Math.max(available, 0)} 套，还需完成 ${actionsLeft} 次选/禁动作——请重新开启被隐藏的世代组。`
       )
     );
   }
 
   const layout = el('div', 'draft-layout');
-  layout.appendChild(renderPickColumn(s, 0, drafter, cb));
-  layout.appendChild(renderDraftPool(s, cb));
-  layout.appendChild(renderPickColumn(s, 1, drafter, cb));
+  layout.appendChild(renderPickColumn(s, 0, activePlayer, cb));
+  layout.appendChild(renderDraftPool(s, cb, banStep));
+  layout.appendChild(renderPickColumn(s, 1, activePlayer, cb));
   wrap.appendChild(layout);
   root.appendChild(wrap);
 }
