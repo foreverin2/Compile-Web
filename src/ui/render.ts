@@ -1,5 +1,5 @@
 import type { ChoiceRequest, GameState, PendingEffect, PlayerId, Line, ProtocolDef, Step } from '../core/models/types';
-import { getLineValue, getCurrentDrafter, draftTurnRange, lineTopCommandActive } from '../core/state/create';
+import { getLineValue, getCurrentDrafter, draftTurnRange, draftRoundOwner, lineTopCommandActive } from '../core/state/create';
 import { getLegalActions, type LegalAction } from '../core/game';
 import {
   opponentMustPlayFaceDown,
@@ -2570,12 +2570,13 @@ function appendNewCompiledFx(layer: HTMLElement, defId: string): void {
   }
 }
 
-/** 与引擎一致的 1-2-2-1 轮选归属（第 i 次选择轮到谁），镜像 core/state/create.ts 的 DRAFT_ORDER */
-const DRAFT_PICK_OWNER: PlayerId[] = [0, 1, 1, 0, 0, 1];
+/** 草稿轮选总次数（与引擎 DRAFT_PICK_COUNT 一致，1-2-2-1 = 6 次）。轮选归属按
+ *  draftStarter 派生（draftRoundOwner）——掷硬币先手机制（2026-09-03）后不再固定玩家一先选。 */
+const DRAFT_PICK_COUNT = 6;
 
-/** 玩家已选协议（按选择顺序）：P1 取第 0/3/4 次、P2 取第 1/2/5 次（与引擎分派一致） */
+/** 玩家已选协议（按选择顺序）：归属 = 该轮 owner 座位（starter 派生） */
 function picksOf(s: GameState, player: PlayerId): ProtocolDef[] {
-  return s.draftPicks.filter((_, i) => DRAFT_PICK_OWNER[i] === player);
+  return s.draftPicks.filter((_, i) => draftRoundOwner(s.draftStarter, i) === player);
 }
 
 /** 一方的已选协议列：loading 面 PNG 按选择顺序竖排；空槽显示「尚未选择」占位。
@@ -2588,7 +2589,7 @@ function renderPickColumn(s: GameState, player: PlayerId, drafter: PlayerId, cb:
   const list = el('div', 'draft-picks-list');
   const picks = picksOf(s, player);
   // 本回合（尚未结束）已选的 defId 集合：可拖出取消；前几个回合选的不行
-  const turnStart = draftTurnRange(s.draftRound).start;
+  const turnStart = draftTurnRange(s.draftStarter, s.draftRound).start;
   const currentTurnPicks = new Set(s.draftPicks.slice(turnStart).map((p) => p.defId));
   // 本轮刚选中的协议（选择列表最后一项）加进场动画
   const newest = s.draftRound > 0 ? s.draftPicks[s.draftRound - 1] : null;
@@ -2818,7 +2819,6 @@ let draftEnabledGroups: Set<string> = new Set(DRAFT_GROUP_LABELS.map(([g]) => g)
 export function renderDraft(root: HTMLElement, s: GameState, cb: UiCallbacks): void {
   root.textContent = '';
   const wrap = el('div', 'draft-screen');
-  wrap.appendChild(el('h1', 'title', 'Compile 译世界 — 协议草案'));
 
   const header = el('div', 'draft-header');
   const drafter = getCurrentDrafter(s);
@@ -2826,12 +2826,12 @@ export function renderDraft(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   // 轮次进度：第 X/6 次 + 1-2-2-1 步点追踪（当前步高亮、已过步打勾色）
   const progress = el('div', 'draft-progress');
   progress.appendChild(
-    el('span', 'draft-progress-text', `第 ${Math.min(s.draftRound + 1, DRAFT_PICK_OWNER.length)} / ${DRAFT_PICK_OWNER.length} 次选择`)
+    el('span', 'draft-progress-text', `第 ${Math.min(s.draftRound + 1, DRAFT_PICK_COUNT)} / ${DRAFT_PICK_COUNT} 次选择`)
   );
   const track = el('div', 'draft-step-track');
-  for (let i = 0; i < DRAFT_PICK_OWNER.length; i++) {
+  for (let i = 0; i < DRAFT_PICK_COUNT; i++) {
     const state = i < s.draftRound ? ' done' : i === s.draftRound ? ' current' : '';
-    track.appendChild(el('span', 'draft-step-dot' + state, String(DRAFT_PICK_OWNER[i] + 1)));
+    track.appendChild(el('span', 'draft-step-dot' + state, String(draftRoundOwner(s.draftStarter, i) + 1)));
   }
   progress.appendChild(track);
   header.appendChild(progress);
@@ -2859,7 +2859,7 @@ export function renderDraft(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   }
   wrap.appendChild(filter);
   // 非阻塞提示：剩余轮选 > 可用池时提醒（选空后可随时重新开启被隐藏组）
-  const picksLeft = DRAFT_PICK_OWNER.length - s.draftRound;
+  const picksLeft = DRAFT_PICK_COUNT - s.draftRound;
   const available = enabledTotal() - s.draftPicks.length;
   if (available < picksLeft) {
     wrap.appendChild(
@@ -3350,7 +3350,7 @@ let zoomState: ZoomState | null = null;
  *  背面起显，点击在 背面 ↔ 正面 之间切换显示）。
  *  FX-5 冷漠2：放大查看器【不受】场上 .apathy-filter 灰度滤镜影响——本函数按 defId 新建
  *  img（非克隆场上节点），滤镜类从不被继承（场上/弃牌堆查看的 dblclick 同样走 defId 新建）。 */
-function openZoom(defId: string, faceUp: boolean, isProtocol: boolean, compiled: boolean, peek?: boolean): void {
+export function openZoom(defId: string, faceUp: boolean, isProtocol: boolean, compiled: boolean, peek?: boolean): void {
   if (zoomState) closeZoom();
   const overlay = el('div', 'zoom-overlay');
   const img = document.createElement('img');

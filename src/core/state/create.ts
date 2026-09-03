@@ -9,18 +9,37 @@ export function nextUid(): string {
   return `c${uidCounter}`;
 }
 
-/** 1-2-2-1 轮选顺序：第 i 次选择轮到谁 */
-const DRAFT_ORDER: PlayerId[] = [0, 1, 1, 0, 0, 1];
+/** 1-2-2-1 轮选相对模式：0 = 先手方（draftStarter），1 = 另一方（座位由 draftStarter 派生） */
+const DRAFT_PATTERN: PlayerId[] = [0, 1, 1, 0, 0, 1];
+/** 草稿轮选总次数 */
+export const DRAFT_PICK_COUNT = DRAFT_PATTERN.length;
+
+/** 第 round 次选择轮到谁（座位）：模式 0 → draftStarter，模式 1 → 另一玩家。
+ *  掷硬币流程（2026-09-03）把 draftStarter 设为硬币胜者；默认 0 时即旧固定顺序。 */
+export function draftRoundOwner(draftStarter: PlayerId, round: number): PlayerId {
+  const rel = DRAFT_PATTERN[round] ?? 1;
+  return rel === 0 ? draftStarter : ((1 - draftStarter) as PlayerId);
+}
+
+export interface CreateGameOptions {
+  /** 首位选择协议的玩家（掷硬币胜者）；默认 0 = 玩家一 */
+  draftStarter?: PlayerId;
+  /** 对局中先出牌的玩家；默认 0。用户拍板：硬币流程下后选者先出 → 由调用方传 1 - draftStarter */
+  firstToPlay?: PlayerId;
+}
 
 function emptyPlayer(): PlayerState {
   return { hand: [], deck: [], trash: [], protocols: [], stacks: [[], [], []] };
 }
 
-export function createGame(): GameState {
+export function createGame(opts: CreateGameOptions = {}): GameState {
+  const draftStarter: PlayerId = opts.draftStarter ?? 0;
   return {
     phase: 'draft',
     draftRound: 0,
     draftPicks: [],
+    draftStarter,
+    firstToPlay: opts.firstToPlay ?? 0,
     turnPlayer: 0,
     turnCount: 0,
     step: 'start',
@@ -46,30 +65,30 @@ export function getDraftPool(s: GameState): ProtocolDef[] {
 }
 
 export function getCurrentDrafter(s: GameState): PlayerId {
-  return DRAFT_ORDER[s.draftRound] ?? 1;
+  return draftRoundOwner(s.draftStarter, s.draftRound);
 }
 
 /** 当前回合（同一玩家的连续轮次）的选牌索引范围 [start, end) */
-export function draftTurnRange(round: number): { start: number; end: number } {
-  const player = DRAFT_ORDER[round] ?? 1;
+export function draftTurnRange(draftStarter: PlayerId, round: number): { start: number; end: number } {
+  const player = draftRoundOwner(draftStarter, round);
   let start = round;
-  while (start > 0 && DRAFT_ORDER[start - 1] === player) start--;
+  while (start > 0 && draftRoundOwner(draftStarter, start - 1) === player) start--;
   let end = round + 1;
-  while (end < DRAFT_ORDER.length && DRAFT_ORDER[end] === player) end++;
+  while (end < DRAFT_PICK_COUNT && draftRoundOwner(draftStarter, end) === player) end++;
   return { start, end };
 }
 
 /** 该 defId 是否是【本回合尚未结束】时选中的协议（可取消拖出；前几个回合选的不行） */
 export function canUnpick(s: GameState, defId: string): boolean {
   if (s.phase !== 'draft') return false;
-  const { start } = draftTurnRange(s.draftRound);
+  const { start } = draftTurnRange(s.draftStarter, s.draftRound);
   return s.draftPicks.slice(start).some((p) => p.defId === defId);
 }
 
 /** 取消本回合的选择：从已选列表移除并回退轮次（该协议回到协议池，可重新选择） */
 export function performDraftUnpick(s: GameState, defId: string): void {
   if (s.phase !== 'draft') throw new Error('not in draft phase');
-  const { start } = draftTurnRange(s.draftRound);
+  const { start } = draftTurnRange(s.draftStarter, s.draftRound);
   const idx = s.draftPicks.findIndex((p, i) => i >= start && p.defId === defId);
   if (idx === -1) throw new Error(`cannot unpick ${defId}: not picked this turn`);
   const [removed] = s.draftPicks.splice(idx, 1);
@@ -109,14 +128,18 @@ export function performDraftPick(s: GameState, defId: string): void {
   s.draftPicks.push(def);
   s.log.push(`P${drafter + 1} 选择 ${def.name}`);
   s.draftRound += 1;
-  if (s.draftRound >= DRAFT_ORDER.length) {
-    // 分配：P1 的第 1、3、4 次选择；P2 的第 2、5、6 次选择
-    const p1Picks = [s.draftPicks[0], s.draftPicks[3], s.draftPicks[4]].filter(Boolean);
-    const p2Picks = [s.draftPicks[1], s.draftPicks[2], s.draftPicks[5]].filter(Boolean);
-    assignProtocols(s, 0, p1Picks as ProtocolDef[]);
-    assignProtocols(s, 1, p2Picks as ProtocolDef[]);
+  if (s.draftRound >= DRAFT_PICK_COUNT) {
+    // 分配：按 1-2-2-1 相对模式把 6 次选择归到两个座位（各 3 套，按选择顺序排线）
+    const picksBySeat: [ProtocolDef[], ProtocolDef[]] = [[], []];
+    s.draftPicks.forEach((pick, i) => {
+      picksBySeat[draftRoundOwner(s.draftStarter, i)].push(pick);
+    });
+    assignProtocols(s, 0, picksBySeat[0]);
+    assignProtocols(s, 1, picksBySeat[1]);
     s.phase = 'turn';
     s.step = 'start';
+    // 用户拍板（2026-09-03）：后选协议者先出牌 → firstToPlay（默认 0 兼容旧流程）
+    s.turnPlayer = s.firstToPlay;
     // 开局前洗牌：起始手牌每局不同（“洗成牌库”）
     s.players[0].deck = shuffle(s.players[0].deck);
     s.players[1].deck = shuffle(s.players[1].deck);

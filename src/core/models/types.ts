@@ -243,6 +243,12 @@ export interface GameState {
   draftRound: number;
   /** 已选出的协议（按选择顺序） */
   draftPicks: ProtocolDef[];
+  /** 掷硬币先手机制（2026-09-03）：首位选择协议的玩家座位（0=玩家一 / 1=玩家二）。
+   *  草稿轮选顺序由 draftStarter 派生（1-2-2-1 模式相对先手方展开）。默认 0。 */
+  draftStarter: PlayerId;
+  /** 对局中先出牌的玩家座位。用户拍板（2026-09-03）：后选协议者先出牌 ——
+   *  掷硬币流程下 = 1 - draftStarter；默认 0 保持旧行为（无硬币直接开局）。 */
+  firstToPlay: PlayerId;
   turnPlayer: PlayerId;
   /** 回合计数：每次回合结束转换（end → start）单调 +1，揭示幽灵牌按此过期 */
   turnCount: number;

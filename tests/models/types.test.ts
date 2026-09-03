@@ -11,6 +11,8 @@ describe('types', () => {
       phase: 'turn',
       draftRound: 0,
       draftPicks: [],
+      draftStarter: 0,
+      firstToPlay: 0,
       turnPlayer: 0,
       turnCount: 0,
       step: 'start',

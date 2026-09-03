@@ -7,6 +7,8 @@ function makeState(step: Step): GameState {
     phase: 'turn',
     draftRound: 6,
     draftPicks: [],
+    draftStarter: 0,
+    firstToPlay: 0,
     turnPlayer: 0,
     turnCount: 0,
     step,
