@@ -7,8 +7,10 @@ import type { CardDef, ProtocolDef } from '../core/models/types';
  * 2026-09-03）。文本为中文（游戏 UI 语言）；格式 `甲x：A/B/C`：A=顶部指令、B=中部指令、
  * C=底部指令；「空」= 无该指令。
  *
- * 本模块独立于 `cards.ts`（1代）：本阶段（2026-09-03）只做「资源+数据」，未接入可玩池；
- * 效果实现与世代/池结构接线后续按任务推进（见 docs/handoff）。
+ * 本模块独立于 `cards.ts`（1代）。2026-09-03 用户拍板「直接并入协议选择池」：DEMO 池 =
+ * 1代 + 2代 共 30 套（见 data/demo.ts）。2代 90 张卡效果尚未注册——引擎对未注册效果
+ * 安全空转（EFFECTS[defId]?.middle/triggers 可选链），可正常打出/编译但卡文本无实际
+ * 效果；后续按协议分任务实现（见 docs/handoff §9）。
  *
  * 译名：采用与英文版扫描文件名/自制排版稿一致的现行译名（冰/明镜/和平/混乱/恐惧/明晰/
  * 腐化/时间/战争/勇气/幸运/烟雾/同化/多样性/统一）。defId 与 1代 无冲突。
@@ -30,8 +32,8 @@ import type { CardDef, ProtocolDef } from '../core/models/types';
  * 权威源、暂用 compile2文本.txt 标题（混乱取标准成语「变幻莫测」，docx 作「变换莫测」
  * 疑错字）——以上均为临时值，随后续 UI 定稿可调。
  *
- * 卡面资源为 JPEG（英文扫描源照片；1代 为官方 TTS PNG）——render.ts 现硬编码 .png
- * 扩展名，接线 2代 时需扩展名策略（见 docs/handoff MN02 小节）。
+ * 卡面资源为 JPEG（英文扫描源照片；1代 为官方 TTS PNG）。UI 取图统一走 data/demo 的
+ * cardImgSrc/protocolImgSrc/protocolImgExt（世代扩展名规则：MN01/AX01=.png、MN02/AX02=.jpg）。
  *
  * 分值集合（依 txt 卡文逐条核对）：冰1-6、明镜0-5、和平1-6、混乱0-5、恐惧0-5、明晰0-5、
  * 腐化{0,1,2,3,5,6}、时间0-5、战争0-5、勇气{0,1,2,3,5,6}、幸运0-5、烟雾0-5、

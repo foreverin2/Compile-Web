@@ -10,6 +10,7 @@ import {
   getProtocolDef,
   cardImgSrc,
   protocolImgSrc,
+  protocolImgExt,
 } from '../../src/data/demo';
 
 describe('card data', () => {
@@ -46,6 +47,8 @@ describe('card data', () => {
   it('fire 使用真实卡文（1代 文本未变）', () => {
     const f0 = getCardDef('fire-0');
     expect(f0.middle).toContain('翻转另1张牌');
+    const f4 = getCardDef('fire-4');
+    expect(f4.middle).toContain('弃1张或更多张牌');
   });
 
   it('资源 src 随世代扩展名：1代 .png / 2代 .jpg', () => {
@@ -55,5 +58,24 @@ describe('card data', () => {
     expect(protocolImgSrc('water', false)).toBe('/assets/protocols/water/protocol-loading.png');
     expect(protocolImgSrc('ice', true)).toBe('/assets/protocols/ice/protocol-compiled.jpg');
     expect(protocolImgSrc('ice', false)).toBe('/assets/protocols/ice/protocol-loading.jpg');
+  });
+
+  it('世代 ↔ 资源扩展名全量不变量：MN01/AX01→png、MN02/AX02→jpg（30 套全覆盖）', () => {
+    for (const p of DEMO_PROTOCOLS) {
+      const ext = p.set === 'MN02' || p.set === 'AX02' ? 'jpg' : 'png';
+      expect(protocolImgExt(p.defId), p.defId).toBe(ext);
+      expect(protocolImgSrc(p.defId, false), p.defId).toContain(`.${ext}`);
+      expect(protocolImgSrc(p.defId, true), p.defId).toContain(`.${ext}`);
+      const cards = DEMO_CARD_DEFS.filter((c) => c.protocol === p.defId);
+      for (const c of cards) {
+        expect(cardImgSrc(p.defId, c.value), c.defId).toBe(
+          `/assets/protocols/${p.defId}/card-${c.value}.${ext}`
+        );
+      }
+    }
+    // AX01 → png 分支直接断言（apathy 为 1代 拓展）
+    expect(getProtocolDef('apathy').set).toBe('AX01');
+    expect(protocolImgExt('apathy')).toBe('png');
+    expect(protocolImgExt('assimilation')).toBe('jpg'); // AX02 → jpg
   });
 });

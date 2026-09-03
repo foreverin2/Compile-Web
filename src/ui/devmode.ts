@@ -1,6 +1,6 @@
 import type { Card, CardDef, GameState, Line, ProtocolDef } from '../core/models/types';
 // 2026-09-03：2代（MN02）并入协议池后，开发者模式检索/加牌/编译预览覆盖两代全部
-// 30 套协议与 120 张卡（DEMO = 1代 + 2代）。别名保留函数体内的变量名。
+// 30 套协议与 180 张卡（DEMO = 1代 90 + 2代 90）。别名保留函数体内的变量名。
 import { DEMO_CARD_DEFS as ALL_CARD_DEFS, DEMO_PROTOCOLS as ALL_PROTOCOLS } from '../data/demo';
 import { executeCompileUnchecked } from '../core/rules/compile';
 

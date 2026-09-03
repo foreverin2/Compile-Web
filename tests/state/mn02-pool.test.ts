@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { createGame, getDraftPool, performDraftPick } from '../../src/core/state/create';
+import { pushMiddle } from '../../src/core/effects/resolve';
+import { getCardDef } from '../../src/data/demo';
+import type { Card } from '../../src/core/models/types';
 
 /**
  * MN02（2代）并入协议选择池后可玩性回归（2026-09-03 用户拍板「直接并入协议池」）：
@@ -37,5 +40,21 @@ describe('MN02 并池后可玩性（效果未注册期）', () => {
     const p2All = [...s.players[1].deck, ...s.players[1].hand];
     expect(p2All).toHaveLength(18);
     expect(new Set(p2All.map((c) => c.defId)).size).toBe(18);
+  });
+
+  it('未注册效果的 2代 卡中指令安全空转（pushMiddle 不入栈、不抛错）', () => {
+    const s = createGame();
+    performDraftPick(s, 'ice'); // round0: P1 选冰
+    for (let i = 1; i < 6; i++) {
+      performDraftPick(s, getDraftPool(s)[0].defId);
+    }
+    expect(s.phase).toBe('turn');
+    const def = getCardDef('ice-1'); // EFFECTS 未注册（2代 效果未实现期）
+    const fieldCard: Card = {
+      uid: 'test-field-ice-1', defId: def.defId, owner: 0,
+      faceUp: true, zone: 'field', line: 0, pos: 1,
+    };
+    expect(() => pushMiddle(s, 0, fieldCard)).not.toThrow();
+    expect(s.pendingEffects).toHaveLength(0); // 无效果 → 不入效果栈
   });
 });

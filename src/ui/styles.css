@@ -1231,8 +1231,12 @@ body {
 
 .draft-layout { display: grid; grid-template-columns: 280px minmax(0, 1fr) 280px; gap: 16px; align-items: start; }
 
-/* ===== 已选协议列（左 P1 / 右 P2；轮选方高亮） ===== */
+/* ===== 已选协议列（左 P1 / 右 P2；轮选方高亮） =====
+   position: sticky —— 2026-09-03 用户需求：协议池 30 套页变长后，双方选择框固定于
+   屏幕顶部跟随滚动（top 偏移），避免下滑后拖不到下方协议（拖拽目标始终可见）。 */
 .draft-picks {
+  position: sticky;
+  top: 10px;
   border: 1px solid #444; border-radius: 10px; padding: 10px;
   background: rgba(18, 18, 34, 0.85);
   display: flex; flex-direction: column; gap: 10px;
@@ -1287,7 +1291,17 @@ body {
   background: #17172c;
 }
 
-/* ===== 中间协议池：每行 4 个，悬停聚焦浮现「选择」按钮 ===== */
+/* ===== 中间协议池：每行 4 个，悬停聚焦浮现「选择」按钮 =====
+   上方世代筛选条（2026-09-03）：按 1代/2代 × 基础/拓展 显隐协议组 */
+.draft-filter { display: flex; justify-content: center; gap: 8px; margin: 2px 0 12px; flex-wrap: wrap; }
+.draft-filter-chip {
+  padding: 4px 14px; border-radius: 12px; cursor: pointer; font-size: 12px;
+  border: 1px solid #555; background: transparent; color: #999;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+.draft-filter-chip.on { border-color: #00ffcc; color: #00ffcc; background: rgba(0, 255, 204, 0.08); }
+.draft-filter-chip.off { opacity: 0.55; }
+.draft-filter-chip.locked { opacity: 0.4; cursor: not-allowed; }
 .draft-pool { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
 .draft-card {
   position: relative; display: flex; flex-direction: column; gap: 6px;

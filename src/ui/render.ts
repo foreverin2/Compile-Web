@@ -2628,6 +2628,8 @@ function renderDraftPool(s: GameState, cb: UiCallbacks): HTMLElement {
   const picked = new Set(s.draftPicks.map((p) => p.defId));
   const drafter = getCurrentDrafter(s);
   for (const proto of DEMO_PROTOCOLS) {
+    // 世代筛选：被隐藏组的协议不进池（不渲染 = 不可选/不可拖）
+    if (!draftEnabledGroups.has(proto.set)) continue;
     const isPicked = picked.has(proto.defId);
     const card = el('div', 'draft-card' + (isPicked ? ' picked' : ''));
     const wrap = el('div', 'draft-card-img-wrap');
@@ -2800,6 +2802,19 @@ function bindDraftUnpick(node: HTMLElement, cb: UiCallbacks, defId: string, play
   });
 }
 
+/**
+ * 草稿页世代筛选（2026-09-03 用户需求）：按 set 组（1代/2代 × 基础/拓展）显隐协议池。
+ * 默认全开（1代+2代 并池 30 套）；某组「开」时若关闭会使可用池 <6 套（无法完成 6 次
+ * 轮选）则锁定不可关（chip.locked）。新局由 resetUiState 复位为全开。
+ */
+const DRAFT_GROUP_LABELS: ReadonlyArray<readonly [string, string]> = [
+  ['MN01', '1代 基础'],
+  ['AX01', '1代 拓展'],
+  ['MN02', '2代 基础'],
+  ['AX02', '2代 拓展'],
+];
+let draftEnabledGroups: Set<string> = new Set(DRAFT_GROUP_LABELS.map(([g]) => g));
+
 export function renderDraft(root: HTMLElement, s: GameState, cb: UiCallbacks): void {
   root.textContent = '';
   const wrap = el('div', 'draft-screen');
@@ -2821,6 +2836,32 @@ export function renderDraft(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   progress.appendChild(track);
   header.appendChild(progress);
   wrap.appendChild(header);
+
+  // 世代筛选条：1代 基础/拓展、2代 基础/拓展 显隐（关闭后可用池需保持 ≥6 套）
+  const filter = el('div', 'draft-filter');
+  const enabledTotal = (): number => DEMO_PROTOCOLS.filter((p) => draftEnabledGroups.has(p.set)).length;
+  for (const [group, label] of DRAFT_GROUP_LABELS) {
+    const count = DEMO_PROTOCOLS.filter((p) => p.set === group).length;
+    const on = draftEnabledGroups.has(group);
+    const lock = on && enabledTotal() - count < 6;
+    const chip = el(
+      'button',
+      'draft-filter-chip' + (on ? ' on' : '') + (lock ? ' locked' : ''),
+      label
+    );
+    chip.setAttribute('type', 'button');
+    chip.title = `${label}（${count} 套）${on ? (lock ? '：不可关闭（需保留 ≥6 套可选）' : '：点击隐藏') : '：点击显示'}`;    chip.addEventListener('click', () => {
+      if (on) {
+        if (lock) return;
+        draftEnabledGroups.delete(group);
+      } else {
+        draftEnabledGroups.add(group);
+      }
+      renderDraft(root, s, cb);
+    });
+    filter.appendChild(chip);
+  }
+  wrap.appendChild(filter);
 
   const layout = el('div', 'draft-layout');
   layout.appendChild(renderPickColumn(s, 0, drafter, cb));
@@ -3217,6 +3258,8 @@ export function resetUiState(): void {
   choicePromptId = null;
   choiceSelected = [];
   batteryPrev.clear();
+  // 草稿页世代筛选复位为全开（1代+2代 30 套）
+  draftEnabledGroups = new Set(DRAFT_GROUP_LABELS.map(([g]) => g));
   for (const [defId, fx] of compiledFx) {
     clearCompiledFxTimers(defId);
     fx.remove();
