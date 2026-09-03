@@ -2808,8 +2808,8 @@ function bindDraftUnpick(node: HTMLElement, cb: UiCallbacks, defId: string, play
 
 /**
  * 草稿页世代筛选（2026-09-03 用户需求）：按 set 组（1代/2代 × 基础/拓展）显隐协议池。
- * 默认全开（1代+2代 并池 30 套）；某组「开」时若关闭会使可用池 <6 套（无法完成 6 次
- * 轮选）则锁定不可关（chip.locked）。新局由 resetUiState 复位为全开。
+ * 默认全开（本局池 = 两代并池 30 套，或随机池 12 套）；chip 永不锁定（允许可用池 <6 套，
+ * 仅给非阻塞提示）。新局由 resetUiState 复位为全开。
  */
 const DRAFT_GROUP_LABELS: ReadonlyArray<readonly [string, string]> = [
   ['MN01', '1代 基础'],
@@ -2880,6 +2880,16 @@ export function renderDraft(root: HTMLElement, s: GameState, cb: UiCallbacks): v
     filter.appendChild(chip);
   }
   wrap.appendChild(filter);
+  // 随机池提示（本局池小于全量时）
+  if (s.draftPool.length !== DEMO_PROTOCOLS.length) {
+    wrap.appendChild(
+      el(
+        'div',
+        'draft-mode-note',
+        `本局为随机池：从全部 ${DEMO_PROTOCOLS.length} 套协议中随机抽取 ${s.draftPool.length} 套可选（世代筛选仍可用）`
+      )
+    );
+  }
   // 禁用模式的流程说明
   if (s.draftMode === 'ban') {
     wrap.appendChild(

@@ -256,9 +256,10 @@ export function renderModeSelect(root: HTMLElement, nav: ModeSelectNav): void {
     const help = el('span', 'mode-help', '?');
     help.dataset.tip = tip;
     const text = el('span', 'mode-toggle-label', label);
+    // 问号帮助图标在开关左侧（用户要求「模式选择按钮左边添加圆形问号」）
+    row.appendChild(help);
     row.appendChild(box);
     row.appendChild(text);
-    row.appendChild(help);
     toggles.appendChild(row);
     return { row, box };
   };
@@ -369,7 +370,7 @@ export function renderCoin(root: HTMLElement, nav: CoinNav): void {
     }, 1500);
   });
   actions.appendChild(flipBtn);
-  actions.appendChild(button('btn', '返回主页面', nav.backHome));
+  actions.appendChild(button('btn', '← 返回游戏模式选择', nav.backHome));
   screen.appendChild(actions);
   root.appendChild(screen);
 }
