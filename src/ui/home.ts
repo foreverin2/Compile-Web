@@ -298,6 +298,8 @@ const COIN_FACES: ReadonlyArray<{ side: 1 | 2; name: string; src: string }> = [
 export function renderCoin(root: HTMLElement, nav: CoinNav): void {
   clearRoot(root);
   const screen = el('div', 'coin-screen');
+  // 返回按钮：左上角（回到游戏模式选择）
+  screen.appendChild(button('btn coin-back-btn', '← 返回游戏模式选择', nav.backHome));
   screen.appendChild(el('h1', 'coin-title', '掷硬币决定先手'));
   screen.appendChild(
     el(
@@ -310,27 +312,34 @@ export function renderCoin(root: HTMLElement, nav: CoinNav): void {
 
   let chosen: 1 | 2 | null = null;
   let flipping = false;
+  let flipTimer: number | null = null;
 
+  // 大币展示：掷币时在两枚币面间交替闪现，速度渐慢直至停在某一面
   const stage = el('div', 'coin-stage');
-  const faceEls: HTMLElement[] = [];
+  const disc = el('div', 'coin-disc-big');
+  const img = document.createElement('img');
+  img.src = COIN_FACES[0].src;
+  img.alt = COIN_FACES[0].name;
+  disc.appendChild(img);
+  stage.appendChild(disc);
+  screen.appendChild(stage);
+
+  // 选择正/反面（chip 选择）
+  const pickRow = el('div', 'coin-pick-row');
+  const pickEls: HTMLElement[] = [];
   COIN_FACES.forEach((face) => {
-    const f = el('div', 'coin-face', face.name);
-    f.dataset.side = String(face.side);
-    const coin = el('div', 'coin-disc');
-    const img = document.createElement('img');
-    img.src = face.src;
-    img.alt = face.name;
-    coin.appendChild(img);
-    f.prepend(coin);
-    f.addEventListener('click', () => {
+    const chip = el('button', 'coin-face-chip', face.name);
+    (chip as HTMLButtonElement).type = 'button';
+    chip.addEventListener('click', () => {
       if (flipping) return;
       chosen = face.side;
-      for (const fe of faceEls) fe.classList.toggle('selected', fe === f);
+      for (const pe of pickEls) pe.classList.toggle('selected', pe === chip);
+      img.src = face.src; // 预演玩家所选的那一面
     });
-    faceEls.push(f);
-    stage.appendChild(f);
+    pickEls.push(chip);
+    pickRow.appendChild(chip);
   });
-  screen.appendChild(stage);
+  screen.appendChild(pickRow);
 
   const result = el('div', 'coin-result');
   result.style.display = 'none';
@@ -345,38 +354,66 @@ export function renderCoin(root: HTMLElement, nav: CoinNav): void {
     }
     flipping = true;
     flipBtn.disabled = true;
+    for (const pe of pickEls) (pe as HTMLButtonElement).disabled = true;
     stage.classList.add('flipping');
     const landed: 1 | 2 = Math.random() < 0.5 ? 1 : 2;
     const winner: PlayerId = landed === chosen ? 0 : 1;
-    window.setTimeout(() => {
-      stage.classList.remove('flipping');
-      flipping = false;
-      for (const fe of faceEls) {
-        const side = Number(fe.dataset.side) as 1 | 2;
-        fe.classList.toggle('won', side === landed);
-        fe.classList.toggle('lost', side !== landed);
+    // 交替闪现间隔逐次拉长（模拟硬币逐渐停下），最后停在 landed 面
+    const delays = [90, 90, 110, 130, 160, 190, 230, 280, 340, 420, 520];
+    let shown: 1 | 2 = chosen === 1 ? 2 : 1; // 首跳先翻到另一面
+    let step = 0;
+    const tick = (): void => {
+      shown = shown === 1 ? 2 : 1;
+      img.src = COIN_FACES.find((c) => c.side === shown)!.src;
+      disc.classList.remove('flip-tick');
+      void disc.offsetWidth; // 重启动画
+      disc.classList.add('flip-tick');
+      step += 1;
+      if (step < delays.length) {
+        flipTimer = window.setTimeout(tick, delays[step]);
+      } else {
+        // 收尾：若最后所示 ≠ landed，再来一跳并最终定格
+        const finalize = (): void => {
+          stage.classList.remove('flipping');
+          flipping = false;
+          disc.classList.add('settled');
+          img.src = COIN_FACES.find((c) => c.side === landed)!.src;
+          const faceName = COIN_FACES.find((c) => c.side === landed)!.name;
+          result.style.display = '';
+          result.textContent = '';
+          result.appendChild(
+            el(
+              'div',
+              'coin-result-text',
+              `掷出 ${faceName} —— 玩家 ${winner + 1} 先选协议 · 玩家 ${2 - winner} 先出牌`
+            )
+          );
+          result.appendChild(button('btn coin-begin-btn', '开始对局', () => nav.beginGame(winner)));
+        };
+        if (shown !== landed) {
+          flipTimer = window.setTimeout(() => {
+            shown = shown === 1 ? 2 : 1;
+            img.src = COIN_FACES.find((c) => c.side === shown)!.src;
+            disc.classList.remove('flip-tick');
+            void disc.offsetWidth;
+            disc.classList.add('flip-tick');
+            flipTimer = window.setTimeout(finalize, 650);
+          }, 650);
+        } else {
+          flipTimer = window.setTimeout(finalize, 620);
+        }
       }
-      const faceName = COIN_FACES.find((c) => c.side === landed)!.name;
-      result.style.display = '';
-      result.textContent = '';
-      result.appendChild(
-        el(
-          'div',
-          'coin-result-text',
-          `掷出 ${faceName} —— 玩家 ${winner + 1} 先选协议 · 玩家 ${2 - winner} 先出牌`
-        )
-      );
-      result.appendChild(button('btn coin-begin-btn', '开始对局', () => nav.beginGame(winner)));
-    }, 1500);
+    };
+    flipTimer = window.setTimeout(tick, 120);
   });
   actions.appendChild(flipBtn);
-  actions.appendChild(button('btn', '← 返回游戏模式选择', nav.backHome));
   screen.appendChild(actions);
   root.appendChild(screen);
 }
 
 /* =====================================================================
- * 图鉴：查看协议及其所属卡牌（分组行 + 点卡放大；点协议图放大协议卡）
+ * 图鉴：查看协议及其所属卡牌。右侧固定大展示框：鼠标悬停协议/卡牌 → 自动展示；
+ * 点击仍走 openZoom 放大详情。
  * ===================================================================== */
 export function renderLibrary(root: HTMLElement, back: () => void): void {
   clearRoot(root);
@@ -384,10 +421,37 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
   const head = el('div', 'subpage-head');
   head.appendChild(el('h1', 'subpage-title', '协议与卡牌图鉴'));
   head.appendChild(
-    el('div', 'subpage-sub', `${DEMO_PROTOCOLS.length} 套协议 × 6 张指令卡（点击卡牌 / 协议图可放大查看）`)
+    el('div', 'subpage-sub', `${DEMO_PROTOCOLS.length} 套协议 × 6 张指令卡（悬停实时预览，点击放大详情）`)
   );
   head.appendChild(button('btn', '← 返回主页面', back));
   screen.appendChild(head);
+
+  const layout = el('div', 'library-layout');
+
+  // 右侧大展示框（sticky 跟随滚动）
+  const preview = el('aside', 'library-preview');
+  const pImg = document.createElement('img');
+  pImg.className = 'library-preview-img';
+  pImg.alt = '';
+  const pHint = el('div', 'library-preview-hint', '把鼠标移到左侧的协议或卡牌上\n此处会实时展示');
+  const pCap = el('div', 'library-preview-cap');
+  preview.appendChild(pImg);
+  preview.appendChild(pCap);
+  preview.appendChild(pHint);
+  const showPreview = (src: string, caption: string): void => {
+    pImg.src = src;
+    pImg.alt = caption;
+    pCap.textContent = caption;
+    pImg.style.display = 'block';
+    pHint.style.display = 'none';
+    pCap.style.display = '';
+  };
+  const clearPreview = (): void => {
+    pImg.style.display = 'none';
+    pHint.style.display = '';
+    pCap.style.display = 'none';
+  };
+  layout.appendChild(preview);
 
   const list = el('div', 'library-list');
   for (const proto of DEMO_PROTOCOLS) {
@@ -401,6 +465,9 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
     img.decoding = 'async';
     img.title = `查看协议「${proto.name}」放大图`;
     face.appendChild(img);
+    face.addEventListener('mouseenter', () =>
+      showPreview(protocolImgSrc(proto.defId, false), `${proto.name} · ${SET_LABEL[proto.set] ?? proto.set}`)
+    );
     face.addEventListener('click', () => openZoom(proto.defId, true, true, false));
     headRow.appendChild(face);
     const meta = el('div', 'lib-proto-meta');
@@ -420,13 +487,19 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
       cimg.title = `${proto.name} ${c.value} 分指令卡`;
       cell.appendChild(cimg);
       cell.appendChild(el('div', 'lib-card-value', String(c.value)));
+      cell.addEventListener('mouseenter', () =>
+        showPreview(cardImgSrc(proto.defId, c.value), `${proto.name} ${c.value} 分指令卡`)
+      );
       cell.addEventListener('click', () => openZoom(c.defId, true, false, false));
       row.appendChild(cell);
     }
     group.appendChild(row);
     list.appendChild(group);
   }
-  screen.appendChild(list);
+  // 鼠标离开整个列表（含移入右侧展示框）才清空预览
+  list.addEventListener('mouseleave', clearPreview);
+  layout.appendChild(list);
+  screen.appendChild(layout);
   root.appendChild(screen);
 }
 

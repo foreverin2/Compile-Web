@@ -4586,28 +4586,50 @@ body.dragging { cursor: grabbing; user-select: none; }
   padding: 10px 18px; border-radius: 10px; font-size: 14px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
 }
 
-/* ---------- 掷硬币定先手 ---------- */
-.coin-screen { min-height: calc(100vh - 60px); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 40px 20px; }
+/* ---------- 掷硬币定先手（2026-09-03 重做：单枚大币 + 正反交替渐停动画） ---------- */
+.coin-screen {
+  position: relative; min-height: calc(100vh - 60px);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; padding: 76px 20px 40px;
+}
+.coin-back-btn { position: absolute; left: 6px; top: 14px; z-index: 5; }
 .coin-title { font-size: 34px; color: #fff; letter-spacing: 2px; }
-.coin-rule { color: #bcd; font-size: 14px; text-align: center; max-width: 640px; }
+.coin-rule { color: #bcd; font-size: 14px; text-align: center; max-width: 660px; }
 .coin-rule-2 { color: #e0a030; font-weight: bold; }
-.coin-stage { display: flex; gap: 46px; align-items: flex-start; margin: 18px 0; }
-.coin-face { display: flex; flex-direction: column; align-items: center; gap: 10px; font-size: 16px; color: #ccd; cursor: pointer; user-select: none; padding: 8px 14px; border-radius: 12px; border: 2px solid transparent; transition: border-color 0.15s ease, transform 0.15s ease; }
-.coin-face.selected { border-color: #00ffcc; color: #00ffcc; transform: translateY(-4px); }
-.coin-face.won { border-color: #ffd54a; color: #ffd54a; }
-.coin-face.lost { opacity: 0.42; }
-.coin-disc { width: 160px; height: 160px; border-radius: 50%; overflow: hidden; border: 5px solid #c9a24b; box-shadow: 0 0 0 3px #5b4218, 0 10px 30px rgba(0, 0, 0, 0.55); background: #16162a; }
-.coin-disc img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.coin-face.won .coin-disc { animation: coinWinPulse 1s ease-in-out infinite; border-color: #ffe27a; }
-@keyframes coinWinPulse { 0%, 100% { box-shadow: 0 0 0 3px #ffe27a, 0 0 26px rgba(255, 226, 122, 0.75); } 50% { box-shadow: 0 0 0 3px #ffe27a, 0 0 46px rgba(255, 226, 122, 1); } }
-.coin-stage.flipping .coin-disc { animation: coinToss 0.32s ease-in-out infinite alternate; }
-@keyframes coinToss { from { transform: rotateZ(-7deg) translateY(0); } to { transform: rotateZ(7deg) translateY(-14px); } }
-.coin-actions { display: flex; gap: 14px; align-items: center; }
-.coin-flip-btn { font-size: 16px; padding: 10px 26px; }
-.coin-result { text-align: center; font-size: 18px; color: #ffe2a0; }
+.coin-stage { display: flex; justify-content: center; margin: 4px 0 2px; }
+.coin-disc-big {
+  position: relative; width: 256px; height: 256px; border-radius: 50%; overflow: hidden;
+  border: 6px solid #c9a24b; box-shadow: 0 0 0 3px #5b4218, 0 12px 34px rgba(0, 0, 0, 0.6);
+  background: #10101e;
+}
+.coin-disc-big img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.coin-stage.flipping .coin-disc-big { animation: coinWobble 0.5s ease-in-out infinite alternate; }
+@keyframes coinWobble { from { transform: rotate(-7deg) translateY(0); } to { transform: rotate(7deg) translateY(-18px); } }
+.coin-disc-big.flip-tick { animation: coinTick 0.1s ease-in-out; }
+@keyframes coinTick {
+  0% { transform: scaleY(1); }
+  50% { transform: scaleY(0.16) rotateZ(8deg); }
+  100% { transform: scaleY(1); }
+}
+.coin-disc-big.settled {
+  border-color: #ffe27a;
+  box-shadow: 0 0 0 3px #ffe27a, 0 0 42px rgba(255, 226, 122, 0.85);
+}
+.coin-pick-row { display: flex; gap: 16px; margin-top: 6px; }
+.coin-face-chip {
+  padding: 9px 30px; border-radius: 20px; font-size: 15px;
+  border: 1px solid #556; background: rgba(30, 30, 58, 0.85); color: #ccd; cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+.coin-face-chip:hover { border-color: #8ab; }
+.coin-face-chip.selected { border-color: #00ffcc; color: #00ffcc; box-shadow: 0 0 12px rgba(0, 255, 204, 0.4); background: rgba(0, 255, 204, 0.08); }
+.coin-face-chip:disabled { opacity: 0.45; cursor: default; }
+.coin-actions { display: flex; gap: 14px; align-items: center; margin-top: 10px; }
+.coin-flip-btn { font-size: 17px; padding: 11px 30px; }
+.coin-flip-btn:disabled { opacity: 0.6; }
+.coin-result { text-align: center; font-size: 18px; color: #ffe2a0; min-height: 64px; }
 .coin-result-text { margin-bottom: 12px; }
-.coin-begin-btn { font-size: 16px; padding: 8px 22px; }
-
+.coin-begin-btn { font-size: 16px; padding: 9px 24px; }
 /* ---------- 图鉴（协议 + 卡牌）与规则图纸（共用子页头） ---------- */
 .subpage-head { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 18px 16px 6px; position: relative; }
 .subpage-head .btn { position: absolute; left: 6px; top: 18px; }
@@ -4700,4 +4722,23 @@ body.dragging { cursor: grabbing; user-select: none; }
   position: absolute; top: 10px; right: 10px;
   background: #e05050; color: #fff; font-size: 10px; font-weight: bold;
   padding: 2px 7px; border-radius: 9px; z-index: 5; pointer-events: none;
+}
+
+/* ---------- 图鉴 hover 大展示框（2026-09-03） ---------- */
+.library-layout { display: grid; grid-template-columns: minmax(0, 1fr) 304px; gap: 18px; align-items: start; max-width: 1540px; margin: 0 auto; padding: 0 8px 40px; }
+.library-preview {
+  position: sticky; top: 16px; display: flex; flex-direction: column; align-items: center; gap: 10px;
+  border: 1px solid #3a3a55; border-radius: 14px; padding: 18px 14px;
+  background: rgba(13, 13, 28, 0.9); min-height: 460px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+}
+.library-preview-img { width: 252px; border-radius: 10px; box-shadow: 0 12px 34px rgba(0, 0, 0, 0.65); display: none; }
+.library-preview-cap { font-size: 14px; color: #eef; text-align: center; min-height: 22px; }
+.library-preview-hint {
+  white-space: pre-line; text-align: center; color: #788; font-size: 12px; line-height: 1.9;
+  margin: 110px 6px 0;
+}
+@media (max-width: 1100px) {
+  .library-layout { grid-template-columns: 1fr; }
+  .library-preview { position: static; min-height: 0; }
+  .library-preview-hint { margin-top: 6px; }
 }
