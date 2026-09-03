@@ -451,14 +451,16 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
     pHint.style.display = '';
     pCap.style.display = 'none';
   };
-  layout.appendChild(preview);
-
+  // 列表占主列，展示框占右列（DOM 顺序 = 网格列序：先列表后展示框）
   const list = el('div', 'library-list');
+  layout.appendChild(list);
+  layout.appendChild(preview);
   for (const proto of DEMO_PROTOCOLS) {
     const group = el('div', 'lib-group');
     const headRow = el('div', 'lib-proto');
     const face = el('div', 'lib-proto-img-wrap');
     const img = document.createElement('img');
+    img.className = 'lib-proto-img'; // 协议图逆时针 90° 横置展示（与场上/草稿一致）
     img.src = protocolImgSrc(proto.defId, false);
     img.alt = proto.name;
     img.loading = 'lazy';
@@ -498,7 +500,6 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
   }
   // 鼠标离开整个列表（含移入右侧展示框）才清空预览
   list.addEventListener('mouseleave', clearPreview);
-  layout.appendChild(list);
   screen.appendChild(layout);
   root.appendChild(screen);
 }

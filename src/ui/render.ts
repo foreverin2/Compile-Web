@@ -2833,15 +2833,22 @@ export function renderDraft(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   const activePlayer = banStep && action ? action.player : getCurrentDrafter(s);
 
   const header = el('div', 'draft-header');
-  header.appendChild(
-    el(
-      'div',
-      'draft-hint' + (banStep ? ' draft-hint-ban' : ''),
-      banStep && action
-        ? `轮到 玩家 ${action.player + 1} 禁用协议（第 ${s.bannedProtocols.length + 1} / ${DRAFT_BAN_TOTAL} 个）`
-        : `轮到 玩家 ${activePlayer + 1} 选择协议`
-    )
+  // 醒目「轮到谁」横幅：P1/P2 分色 + 呼吸辉光；禁用步骤额外标注进度
+  const banner = el(
+    'div',
+    'draft-turn-banner' + (banStep ? ' ban' : '') + ` p${activePlayer + 1}`
   );
+  const badge = el('span', 'turn-badge', `玩家 ${activePlayer + 1}`);
+  const verb = el(
+    'span',
+    'turn-verb',
+    banStep && action
+      ? `禁用协议（第 ${s.bannedProtocols.length + 1} / ${DRAFT_BAN_TOTAL} 个）`
+      : '选择协议'
+  );
+  banner.appendChild(badge);
+  banner.appendChild(verb);
+  header.appendChild(banner);
   // 轮次进度：第 X/6 次 + 1-2-2-1 步点追踪（当前步高亮、已过步打勾色）
   const progress = el('div', 'draft-progress');
   progress.appendChild(
