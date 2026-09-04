@@ -67,3 +67,10 @@ export function shouldSkipCacheCheck(s: GameState, player: PlayerId): boolean {
 export function lineMiddleCommandsNullified(s: GameState, line: Line): boolean {
   return lineTopCommandActive(s, line, 'apathy-2');
 }
+
+/** 单卡自引用放行（2代 批1 chaos-3 底「此牌可以无视协议限制打在任意堆叠中」；批2 corruption-0 同款）：
+ *  该卡从手牌正面打出时豁免「协议匹配」限制（其余被动限制——psychic-1 禁正面/plague-0 禁线/
+ *  metal-2 禁反面——照常生效，用户 2026-09-05 裁决 [Q15]） */
+export function cardAllowsFaceUpAnyLine(defId: string): boolean {
+  return defId === 'chaos-3';
+}

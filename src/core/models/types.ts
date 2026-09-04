@@ -69,6 +69,8 @@ export interface PlayerState {
  *  - before-compile：通过编译删除前（executeCompile 前置，speed-2 顶）
  *  - after-draw / after-discard / after-delete / after-clear-cache：即时连锁（fireReactive，
  *    spirit-3 / plague-1 / hate-3 / speed-1 顶；顶命令被覆盖仍生效）
+ *  - after-opponent-draw / after-self-discard：2代 批1 底命令反应（mirror-4/war-0「当对手抽牌时」、
+ *    peace-4「你弃牌时」，未注册 top → 仅未覆盖顶卡触发；fireReactive 专用，不走 collectTriggers）
  *  - 'after'：旧预留（未用，保留） */
 export type TriggerKind =
   | 'before-covered'
@@ -80,7 +82,9 @@ export type TriggerKind =
   | 'after-draw'
   | 'after-discard'
   | 'after-delete'
-  | 'after-clear-cache';
+  | 'after-clear-cache'
+  | 'after-opponent-draw'
+  | 'after-self-discard';
 
 /** 选择候选卡（供 UI 渲染） */
 export interface ChoiceCard {
@@ -150,7 +154,7 @@ export type Op =
   | { op: 'discardMany'; uids: string[] }
   | { op: 'delete'; uid: string; allowCovered?: boolean }
   | { op: 'return'; uid: string; allowCovered?: boolean }
-  | { op: 'flip'; uid: string; allowCovered?: boolean }
+  | { op: 'flip'; uid: string; allowCovered?: boolean; noMiddle?: boolean }
   | { op: 'draw'; count: number; player?: PlayerId; fromOpponentDeck?: boolean }
   | { op: 'shift'; uid: string; targetLine: Line; allowCovered?: boolean }
   | { op: 'playTopDeck'; line: Line; faceUp: boolean; player?: PlayerId; belowUid?: string }
@@ -158,7 +162,19 @@ export type Op =
   | { op: 'reveal'; uid: string }
   | { op: 'rearrangeProtocols'; a: Line; b: Line; player?: PlayerId }
   | { op: 'give'; uid: string; to: PlayerId }
-  | { op: 'takeRandom'; from: PlayerId };
+  | { op: 'takeRandom'; from: PlayerId }
+  // —— 2代 批1 新增（2026-09-05，见 docs/批1规格 §7）——
+  /** 弃牌库顶 1 张（player 缺省=效果属主）：牌库空不洗弃牌堆（FAQ 107），进弃牌堆正面公开 */
+  | { op: 'discardDeckTop'; player?: PlayerId }
+  /** 同玩家两个堆叠整堆换线（mirror-2）：各堆内部顺序不变；不触发任何文本/连锁 */
+  | { op: 'swapStacks'; a: Line; b: Line; player?: PlayerId }
+  /** 复制中央效果（mirror-1）：执行 uid 卡 defId 注册的 middle EffectGen；ctx.card=被复制卡、
+   *  效果 player/源有效性跟踪发起效果（pe.player/pe.sourceUid） */
+  | { op: 'copyMiddle'; uid: string }
+  /** 任意顺序重排协议（chaos-1）：order = 0..2 的排列（新布局）；终态≠初态由调用方保证，执行层兜底校验 */
+  | { op: 'reorderProtocols'; order: Line[]; player?: PlayerId }
+  /** 从牌库任意位抽 1 张入手（clarity-2/3 揭示选抽）：剩余保持顺序；player 缺省=效果属主 */
+  | { op: 'drawFromDeck'; uid: string; player?: PlayerId };
 
 /** 效果步骤：选择请求 或 操作。既有 types.ts 已占用 Step（回合步骤），此处命名 EffectStep */
 export type EffectStep = ChoiceRequest | Op;
@@ -205,6 +221,18 @@ export interface CandidateFilter {
   zone: 'hand' | 'field';
   owner?: PlayerId;
   covered?: boolean;
+}
+
+/** 牌库揭示状态（2代 clarity-1 top 揭示牌库顶 / clarity-2/3 揭示整副牌库；UI 依此弹展示浮层）。
+ *  原卡保持秘密与位置（揭示后恢复原状，FAQ 96-97）；引擎不持久记录内容。
+ *  过期清除：与 revealedGhosts 同点（turn.ts 回合结束转换，expiresAtTurn <= 新计数清除）。 */
+export interface DeckReveal {
+  id: string;
+  /** 被揭示牌库的玩家 */
+  player: PlayerId;
+  /** true = 整副牌库展示（clarity-2/3）；false = 仅牌库顶 1 张（clarity-1 top） */
+  whole: boolean;
+  expiresAtTurn: number;
 }
 
 /** 效果上下文：生成器通过 ctx.candidates() 获取候选，ctx 持有状态引用 */
@@ -282,6 +310,8 @@ export interface GameState {
   pendingStepAdvance: boolean;
   /** 揭示幽灵牌（显示在 shownTo 玩家手牌区末尾；expiresAtTurn 回合结束转换时清除） */
   revealedGhosts: RevealedGhost[];
+  /** 牌库揭示标记（2代 clarity-1/2/3；UI 弹浮层展示牌库，回合转换过期清除） */
+  deckReveals: DeckReveal[];
   /** metal-1「对手下回合不能编译」：被禁编译的玩家；其回合结束转换（advanceStep end→start）时清除 */
   compileBlocked: PlayerId | null;
   /** speed-2「通过编译删除此牌前」触发挂起：效果栈清空后由 runStack 消费执行编译本体 */

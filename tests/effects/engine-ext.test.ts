@@ -181,6 +181,7 @@ registerCardEffects('t-after-draw', {
         if (card) yield { op: 'flip', uid: card.uid };
       },
       optional: false,
+      top: true, // 顶命令：被盖仍触发（与 1代 真实 after-* 注册一致；2026-09-05 fireReactive 尊重 top 改造后必带）
     },
   },
 });
@@ -192,6 +193,7 @@ registerCardEffects('t-after-discard', {
         yield { op: 'draw', count: 1 };
       },
       optional: false,
+      top: true,
     },
   },
 });
@@ -203,6 +205,7 @@ registerCardEffects('t-after-delete', {
         yield { op: 'draw', count: 1 };
       },
       optional: false,
+      top: true,
     },
   },
 });
@@ -214,6 +217,7 @@ registerCardEffects('t-after-cache', {
         yield { op: 'draw', count: 1 };
       },
       optional: false,
+      top: true,
     },
   },
 });

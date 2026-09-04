@@ -37,5 +37,7 @@ export function advanceStep(s: GameState): void {
     // （对手的牌→自己，第 3 次转换 = 发起者下回合结束）的语义不受步骤影响。
     s.turnCount += 1;
     s.revealedGhosts = s.revealedGhosts.filter((g) => g.expiresAtTurn > s.turnCount);
+    // 2代 牌库揭示标记（clarity-1/2/3）：与揭示幽灵同点过期（回合结束转换清除）
+    s.deckReveals = s.deckReveals.filter((d) => d.expiresAtTurn > s.turnCount);
   }
 }

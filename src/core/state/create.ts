@@ -61,6 +61,7 @@ export function createGame(opts: CreateGameOptions = {}): GameState {
     resolvedTriggerUids: [],
     pendingStepAdvance: false,
     revealedGhosts: [],
+    deckReveals: [],
     compileBlocked: null,
     pendingCompile: null,
   };

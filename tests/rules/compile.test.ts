@@ -36,6 +36,7 @@ function makeState(v0: number, v1: number, line: 0 | 1 | 2 = 0): GameState {
     resolvedTriggerUids: [],
     pendingStepAdvance: false,
     revealedGhosts: [],
+    deckReveals: [],
     compileBlocked: null,
     pendingCompile: null,
   };
@@ -102,4 +103,5 @@ describe('compile rules', () => {
     expect(s.phase).toBe('gameover');
   });
 });
+
 

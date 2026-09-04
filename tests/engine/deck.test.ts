@@ -39,6 +39,7 @@ function makeState(handSize: number, deckSize: number, trashSize: number): GameS
     resolvedTriggerUids: [],
     pendingStepAdvance: false,
     revealedGhosts: [],
+    deckReveals: [],
     compileBlocked: null,
     pendingCompile: null,
   };
@@ -93,4 +94,5 @@ describe('deck ops', () => {
     expect(s.players[0].hand).toHaveLength(5);
   });
 });
+
 

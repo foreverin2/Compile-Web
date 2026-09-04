@@ -29,6 +29,7 @@ function makeState(step: Step): GameState {
     resolvedTriggerUids: [],
     pendingStepAdvance: false,
     revealedGhosts: [],
+    deckReveals: [],
     compileBlocked: null,
     pendingCompile: null,
   };
@@ -81,4 +82,5 @@ describe('turn flow', () => {
     expect(s.revealedGhosts).toHaveLength(0);
   });
 });
+
 

@@ -4,6 +4,7 @@ import { getCardDef } from '../../data/demo';
 import { runStack } from '../effects/resolve';
 import {
   canPlayFaceUpAnywhere,
+  cardAllowsFaceUpAnyLine,
   lineBlocksOpponent,
   lineBlocksOpponentFaceDown,
   opponentMustPlayFaceDown,
@@ -13,10 +14,12 @@ import {
  *  （P1 协议 | P2 协议）：卡牌协议匹配本侧或对手同线协议任一即可正面打入。
  *  对手协议缺失（如测试中的空 protocols 数组）时按不匹配处理。 */
 export function isPlayableFaceUp(s: GameState, player: PlayerId, cardUid: string, line: Line): boolean {
-  // spirit-1 顶「你可以在任意列打出牌」：持有者任意线正面打（先于协议匹配判断）
-  if (canPlayFaceUpAnywhere(s, player)) return true;
   const card = s.players[player].hand.find((c) => c.uid === cardUid);
   if (!card) return false;
+  // 2代 chaos-3 底（自引用）：本卡可无视协议匹配正面打任意线（批2 corruption-0 同款）；先于全局豁免与匹配判断
+  if (cardAllowsFaceUpAnyLine(card.defId)) return true;
+  // spirit-1 顶「你可以在任意列打出牌」：持有者任意线正面打（先于协议匹配判断）
+  if (canPlayFaceUpAnywhere(s, player)) return true;
   const def = getCardDef(card.defId);
   const opp: PlayerId = player === 0 ? 1 : 0;
   return (

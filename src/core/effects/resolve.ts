@@ -168,6 +168,8 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       // 即时连锁：弃牌者【对手】场上注册了 after-discard 的正面卡触发（plague-1「对手弃牌后：你抽1张」；
       // 含系统缓存弃牌——用户拍板）
       fireReactive(s, 'after-discard', card.owner);
+      // 2代 peace-4「在对手回合中你弃牌时：你抽1张」：弃牌者【自身】侧 after-self-discard（回合门控在效果内）
+      fireReactive(s, 'after-self-discard', card.owner);
       break;
     }
     case 'draw': {
@@ -193,6 +195,8 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
         s.players[target].hand.push(card);
         gameBus.emit({ type: 'card:drawn', state: s, payload: { player: target, count: 1, fromOpponentDeck: true, triggerProtocol: pe.sourceDefId.split('-')[0] } });
         fireReactive(s, 'after-draw', target);
+        // 2代 mirror-4/war-0 底「当对手抽牌时：…」
+        fireReactive(s, 'after-opponent-draw', target);
         break;
       }
       drawCards(s, target, op.count); // drawCards 内部已 fireReactive after-draw
@@ -220,8 +224,9 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
         triggerDefId: pe.sourceDefId,
         triggerProtocol: pe.sourceDefId.split('-')[0],
       });
-      // FAQ 127：被覆盖卡翻正不触发中指令（始终被视为被覆盖状态）——仅未被覆盖的翻正连锁中指令
-      if (card.faceUp && isUncovered(s, card)) pushMiddle(s, card.owner, card);
+      // FAQ 127：被覆盖卡翻正不触发中指令（始终被视为被覆盖状态）——仅未被覆盖的翻正连锁中指令；
+      // G2（2代 luck-1/chaos-0）：noMiddle=true 时翻正也不连锁中指令（「无视中央效果」/静默翻开）
+      if (card.faceUp && isUncovered(s, card) && !op.noMiddle) pushMiddle(s, card.owner, card);
       break;
     }
     case 'delete': {
@@ -418,6 +423,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       // uids 非空且循环内 actor 必被赋值；显式守卫满足 TS 收窄
       if (actor === null) throw new Error('discardMany requires at least one card');
       fireReactive(s, 'after-discard', actor); // 一次性触发
+      fireReactive(s, 'after-self-discard', actor); // 2代 peace-4（自身侧）
       break;
     }
     case 'reveal': {
@@ -452,6 +458,106 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
         triggerDefId: pe.sourceDefId,
         triggerProtocol: pe.sourceDefId.split('-')[0],
       });
+      break;
+    }
+    case 'discardDeckTop': {
+      // G1（2代 批1：luck-2/4、clarity-1 top）：弃牌库顶 1 张；牌库空 → 抛错（调用方 deckTopAvailable
+      // 守卫；FAQ 107 从牌库顶弃牌不洗弃牌堆）。进弃牌堆正面公开（清 secret——弃牌堆=公开信息）
+      const target = op.player ?? pe.player;
+      const p = s.players[target];
+      const card = p.deck.pop();
+      if (!card) throw new Error('deck is empty');
+      card.zone = 'trash';
+      card.faceUp = true;
+      card.secret = false;
+      card.line = null;
+      card.pos = null;
+      p.trash.push(card);
+      emitCardEvent(s, 'card:discarded', card, {
+        triggerDefId: pe.sourceDefId,
+        triggerProtocol: pe.sourceDefId.split('-')[0],
+      });
+      fireReactive(s, 'after-discard', target); // 弃牌连锁（弃牌者对手侧 plague-1 类）
+      fireReactive(s, 'after-self-discard', target); // 2代 peace-4 类（弃牌者自身侧）
+      break;
+    }
+    case 'swapStacks': {
+      // G3（2代 mirror-2）：同玩家两个堆叠整堆换线；各堆内部顺序不变；无覆盖/落地 → 不触发任何文本/连锁
+      if (op.a === op.b) throw new Error('cannot swap a stack with itself');
+      const target = op.player ?? pe.player;
+      const stacks = s.players[target].stacks;
+      const tmp = stacks[op.a];
+      stacks[op.a] = stacks[op.b];
+      stacks[op.b] = tmp;
+      for (let i = 0; i < stacks[op.a].length; i++) stacks[op.a][i].pos = i;
+      for (let i = 0; i < stacks[op.b].length; i++) stacks[op.b][i].pos = i;
+      for (const c of stacks[op.a]) c.line = op.a;
+      for (const c of stacks[op.b]) c.line = op.b;
+      s.log.push(`P${target + 1} 交换堆叠位置 ${op.a + 1} 与 ${op.b + 1}`);
+      gameBus.emit({ type: 'stacks:swapped', state: s, payload: { player: target, a: op.a, b: op.b } });
+      break;
+    }
+    case 'copyMiddle': {
+      // G4（2代 mirror-1）：执行目标卡 defId 的 middle EffectGen；ctx.card = 被复制卡（「此牌/此列」
+      // 按它解析），效果 player = 发起者（复制者，文本「你」），源有效性跟踪发起效果源卡（sourceUid 不换）
+      const card = findCard(s, op.uid);
+      if (!card) throw new Error(`cannot copy ${op.uid}: not found`);
+      const eff = EFFECTS[card.defId]?.middle;
+      if (!eff) {
+        s.log.push(`复制中央效果：${card.defId} 无中指令，无效果`);
+        break;
+      }
+      s.pendingEffects.push({
+        id: nextEffectId(),
+        player: pe.player,
+        gen: eff(createCtx(s, pe.player, card)),
+        sourceUid: pe.sourceUid,
+        sourceDefId: pe.sourceDefId,
+        prompt: null,
+        lastAnswer: null,
+      });
+      break;
+    }
+    case 'reorderProtocols': {
+      // G7（2代 chaos-1）：按 order 重排目标玩家协议。约定：新位置 i 放原 order[i] 位置的协议
+      // （order 是 0..2 的排列，如 [2,0,1] = 原第 3 位 → 新第 1 位）。终态≠初态（FAQ 60）执行层兜底
+      const target = op.player ?? pe.player;
+      const protos = s.players[target].protocols;
+      const seen = new Set<number>();
+      for (const v of op.order) {
+        if (!Number.isInteger(v) || v < 0 || v > 2 || seen.has(v)) {
+          throw new Error(`invalid order: ${JSON.stringify(op.order)}`);
+        }
+        seen.add(v);
+      }
+      if (seen.size !== 3) throw new Error(`invalid order: ${JSON.stringify(op.order)}`);
+      const same = op.order.every((v, i) => v === i);
+      if (same) throw new Error('reorder must change protocol order (FAQ: 终态≠初态)');
+      const copy = protos.map((x) => ({ ...x }));
+      for (let i = 0; i < 3; i++) protos[i] = copy[op.order[i]];
+      s.log.push(`P${target + 1} 重排协议 → ${op.order.map((x) => x + 1).join('')}`);
+      gameBus.emit({ type: 'protocols:rearranged', state: s, payload: { player: target, order: [...op.order] } });
+      break;
+    }
+    case 'drawFromDeck': {
+      // G8b（2代 clarity-2/3）：从牌库任意位抽 1 张入手（揭示语境已展示牌库供选择）；剩余保持顺序
+      const target = op.player ?? pe.player;
+      const p = s.players[target];
+      const idx = p.deck.findIndex((c) => c.uid === op.uid);
+      if (idx === -1) throw new Error(`card ${op.uid} not in deck`);
+      const [card] = p.deck.splice(idx, 1);
+      card.zone = 'hand';
+      card.faceUp = true;
+      card.secret = false;
+      card.line = null;
+      card.pos = null;
+      p.hand.push(card);
+      emitCardEvent(s, 'card:drawn', card, {
+        triggerDefId: pe.sourceDefId,
+        triggerProtocol: pe.sourceDefId.split('-')[0],
+      });
+      fireReactive(s, 'after-draw', target);
+      fireReactive(s, 'after-opponent-draw', target);
       break;
     }
   }

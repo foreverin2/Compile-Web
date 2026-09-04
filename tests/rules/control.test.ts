@@ -47,6 +47,7 @@ function makeState(
     resolvedTriggerUids: [],
     pendingStepAdvance: false,
     revealedGhosts: [],
+    deckReveals: [],
     compileBlocked: null,
     pendingCompile: null,
     ...overrides,
@@ -123,4 +124,5 @@ describe('resetControlIfHeld', () => {
     expect(s.control).toBe(-1);
   });
 });
+
 

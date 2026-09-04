@@ -33,6 +33,7 @@ describe('types', () => {
       resolvedTriggerUids: [],
       pendingStepAdvance: false,
     revealedGhosts: [],
+    deckReveals: [],
     compileBlocked: null,
     pendingCompile: null,
     };
@@ -60,4 +61,5 @@ describe('types', () => {
     expect(typeof c.faceUp).toBe('boolean');
   });
 });
+
 

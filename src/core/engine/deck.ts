@@ -1,5 +1,6 @@
 import type { Card, GameState, PlayerId } from '../models/types';
 import { fireReactive } from '../effects/triggers';
+import { gameBus } from '../events/bus';
 
 export function shuffle<T>(arr: T[]): T[] {
   const a = [...arr];
@@ -37,8 +38,45 @@ export function drawCards(s: GameState, player: PlayerId, count: number): Card[]
   // 抽牌完成 → 即时连锁：抽牌者场上注册了 after-draw 的正面卡触发（顶命令，被盖仍生效；
   // 覆盖所有抽牌路径：效果 draw op / refreshHand / 开局 setup / love 刷新等）
   // 真抽到牌才触发（牌库+弃牌堆双空抽 0 张不触发——「你抽牌后」语义）
-  if (drawn.length > 0) fireReactive(s, 'after-draw', player);
+  if (drawn.length > 0) {
+    fireReactive(s, 'after-draw', player);
+    // 2代 mirror-4/war-0 底「当对手抽牌时：…」：抽牌者【对手】侧注册的 after-opponent-draw 触发
+    fireReactive(s, 'after-opponent-draw', player);
+  }
   return drawn;
+}
+
+/** 洗牌库（明确洗牌事件点；clarity-2/3 切洗、clarity-4 洗入弃牌堆、批3 time 类共用）。
+ *  牌库卡一律翻回反面（牌库=秘密信息区，cardPointValue 按反面 2 计）。secret 标记不动
+ *  （与 drawCards 洗弃牌堆同惯例）。发 'deck:shuffled' 事件（FX/动画层可选订阅）。 */
+export function shuffleDeck(s: GameState, player: PlayerId): void {
+  const p = s.players[player];
+  if (p.deck.length <= 1) {
+    // 无/单张无需洗，但仍发事件便于 UI 一致呈现（长度 0 也发——time-0 从弃牌堆打出后洗空堆等场景）
+    gameBus.emit({ type: 'deck:shuffled', state: s, payload: { player } });
+    return;
+  }
+  p.deck = shuffle(p.deck);
+  for (const c of p.deck) c.faceUp = false;
+  gameBus.emit({ type: 'deck:shuffled', state: s, payload: { player } });
+  s.log.push(`P${player + 1} 切洗牌库`);
+}
+
+/** 弃牌堆洗入牌库（clarity-4「你可以将弃牌堆洗入牌库」）：trash 全部并入 deck 后切洗；
+ *  弃牌堆空 → 无操作（调用方守卫可选语义）。洗入的卡翻回反面（牌库=秘密）。 */
+export function shuffleTrashIntoDeck(s: GameState, player: PlayerId): void {
+  const p = s.players[player];
+  if (p.trash.length === 0) return;
+  for (const c of p.trash) {
+    c.zone = 'deck';
+    c.line = null;
+    c.pos = null;
+    c.faceUp = false;
+  }
+  p.deck.push(...p.trash);
+  p.trash = [];
+  shuffleDeck(s, player);
+  s.log.push(`P${player + 1} 将弃牌堆洗入牌库`);
 }
 
 /** 手牌 → 弃牌堆（正面朝上） */

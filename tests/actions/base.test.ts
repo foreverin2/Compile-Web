@@ -42,6 +42,7 @@ function makeState(): GameState {
     resolvedTriggerUids: [],
     pendingStepAdvance: false,
     revealedGhosts: [],
+    deckReveals: [],
     compileBlocked: null,
     pendingCompile: null,
   };
@@ -103,4 +104,5 @@ describe('base actions', () => {
     expect(() => refreshHand(s, 0)).toThrow();
   });
 });
+
 
