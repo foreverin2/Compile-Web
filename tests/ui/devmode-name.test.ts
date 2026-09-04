@@ -97,7 +97,7 @@ describe('searchCards', () => {
   });
 
   it("'2' returns up to the default limit (8), sorted by defId (natural)", () => {
-    // 2026-09-03 并池后：值 2 卡两代共 29 张（多样性无 2 分牌），全子串同分 → 取自然序前 8
+    // 2026-09-03 并池后：值 2 卡两代共 29 张（多元无 2 分牌），全子串同分 → 取自然序前 8
     expect(searchCards('2').map((c) => c.defId)).toEqual([
       'apathy-2',
       'assimilation-2',

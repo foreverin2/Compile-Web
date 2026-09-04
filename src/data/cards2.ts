@@ -3,8 +3,9 @@ import type { CardDef, ProtocolDef } from '../core/models/types';
 /**
  * 2代（官方 MN02）全部协议定义（15 套）与全部卡牌定义（每套 6 张）。
  *
- * 权威文本源：`E:\studyE\compile\自制compile\compile1\compile2文本.txt`（用户指定为准，
- * 2026-09-03）。文本为中文（游戏 UI 语言）；格式 `甲x：A/B/C`：A=顶部指令、B=中部指令、
+ * 权威文本源：`E:\studyE\compile\正版compile\compile2\compile2文本.txt`（用户指定为准，
+ * 2026-09-03；2026-09-04 用户再次更新该文件——正版与 `自制compile\compile1\` 下为
+ * 同内容镜像副本）。文本为中文（游戏 UI 语言）；格式 `甲x：A/B/C`：A=顶部指令、B=中部指令、
  * C=底部指令；「空」= 无该指令。
  *
  * 本模块独立于 `cards.ts`（1代）。2026-09-03 用户拍板「直接并入协议选择池」：DEMO 池 =
@@ -12,57 +13,68 @@ import type { CardDef, ProtocolDef } from '../core/models/types';
  * 安全空转（EFFECTS[defId]?.middle/triggers 可选链），可正常打出/编译但卡文本无实际
  * 效果；后续按协议分任务实现（见 docs/handoff §9）。
  *
- * 译名：采用与英文版扫描文件名/自制排版稿一致的现行译名（冰/明镜/和平/混乱/恐惧/明晰/
- * 腐化/时间/战争/勇气/幸运/烟雾/同化/多样性/统一）。defId 与 1代 无冲突。
+ * 译名：现行译名 = 幸运/明镜/和平/混乱/恐惧/明晰/腐化/时间/战争/勇气/寒冰/烟雾/同化/
+ * 多元/统一（defId：luck/mirror/peace/chaos/fear/clarity/corruption/time/war/courage/
+ * ice/smoke/assimilation/diversity/unity，与 1代 无冲突）。2026-09-04 用户拍板：
+ * 除「混乱/腐化」外全部跟随 txt 标题（diversity「多样性」→「多元」、ice「冰」→「寒冰」；
+ * txt「混沌/腐败」不采用）。
  *
  * 转写规则（无损改写，均已注明）：
  *  - 数量词阿拉伯数字化（三→3、两张→2张…）；补全句末句号
  *  - 明显笔误修正（仅剩两处，均为本文件初版独有、txt 未含）：`战争2`「它」→「对手」；
  *    `烟雾2` 衍字「牌」删去（txt 原「每有一张牌正面朝下的卡牌」）
- *  - 自称协议名归一到现行译名：多元→多样性、联合→统一（仅指代本协议处）
+ *  - 自称协议名照 txt：多元/统一 等直接照录（无归一；旧「多元→多样性」归一已随
+ *    2026-09-04 用户改 txt 撤销）
  *  - 术语不改写：偏转/阈值/总阈值/召回/中央效果/切洗/正面朝下 等保留原文——其精确语义
  *    （如偏转=Shift=平移）留待效果实现阶段逐张裁决（按惯例附原文问用户）
  *  - 异文注释：txt 与自制 docx 排版稿语义冲突处以 `// txt:…/docx:…` 注释标记，不自行裁决
  *  - 卡面图片（英文扫描）为唯一视觉权威；本数据文本仅作效果实现语义源
  *
- * commands/loadingText（仅草稿展示用，本轮不接玩法）：commands 依自制 docx 协议正面
- * 关键词（冰=平移,阻止…）并与 2代说明书.PDF 英文关键词（ICE: SHIFT,PREVENT…）交叉，
- * 冲突处取 PDF 语义（如 war=REACT,DISCARD→反击,弃牌，docx 战争词条疑排版误）；
- * loadingText 优先取 docx 协议正面 4 字题（滑腻如冰…），和平与 AX02 三套缺 docx/PDF
- * 权威源、暂用 compile2文本.txt 标题（混乱取标准成语「变幻莫测」，docx 作「变换莫测」
- * 疑错字）——以上均为临时值，随后续 UI 定稿可调。
+ * commands/loadingText：commands 依自制 docx 协议正面关键词（寒冰=平移,阻止…）并与
+ * 2代说明书.PDF 英文关键词（ICE: SHIFT,PREVENT…）交叉，冲突处取 PDF 语义；
+ * loadingText = 各协议四字座右铭，2026-09-04 起跟随 compile2文本.txt 标题副题
+ * （txt「XX——四字」，用户更新版；旧值取自制 docx 协议正面 4 字题，如滑腻如冰/一目了然，
+ * 已整体替换）。loadingText 当前为数据储备（UI 未展示），后续座右铭展示需求用此字段。
  *
  * 卡面资源为 JPEG（英文扫描源照片；1代 为官方 TTS PNG）。UI 取图统一走 data/demo 的
  * cardImgSrc/protocolImgSrc/protocolImgExt（世代扩展名规则：MN01/AX01=.png、MN02/AX02=.jpg）。
  *
- * 分值集合（依 txt 卡文逐条核对）：冰1-6、明镜0-5、和平1-6、混乱0-5、恐惧0-5、明晰0-5、
+ * 分值集合（依 txt 卡文逐条核对）：寒冰1-6、明镜0-5、和平1-6、混乱0-5、恐惧0-5、明晰0-5、
  * 腐化{0,1,2,3,5,6}、时间0-5、战争0-5、勇气{0,1,2,3,5,6}、幸运0-5、烟雾0-5、
- * 同化{0,1,2,4,5,6}、多样性{0,1,3,4,5,6}、统一0-5。
+ * 同化{0,1,2,4,5,6}、多元{0,1,3,4,5,6}、统一0-5。
  *
  * 权威源修订（用户 2026-09-03 23:54 改 txt，本文件已同步）：三处「被覆盖或为被覆盖」
  * →「被覆盖或未被覆盖」（腐化3/同化0，与初版转写修正一致）；「空?」→「空」= 确认无
  * 底部指令（腐化3/时间3/同化0，初版即未落 bottom 字段）；时间3「反面打出」→
  * 「正面朝下打出」（同义，面朝下=反面，跟用户用词）。
+ *
+ * 权威源修订 2（用户 2026-09-04 22:11 改 txt，本文件已同步）：明晰4「弃牌堆吸[错字]入
+ * 牌库」→「洗入牌库」；烟雾1「翻转你的1张卡牌」语序对齐 txt「翻转1张你的卡牌」；
+ * diversity 协议名与卡文指代「多样性」→「多元」；ice 协议名「冰」→「寒冰」；
+ * 15 套 loadingText（座右铭）→ txt 标题副题批（幸运孤注一掷/明镜照见本真/和平暂得安歇/
+ * 混乱祸福难料/明晰吾道已明/寒冰寒锐诡谲/烟雾弥天障雾/恐惧速速退避/腐化独恶殃众/战争
+ * 鏖战何归/勇气逆焰燎原/时间溯往前行/同化互通相契/多元殊异成锋/统一合众则刚）。
  */
 
 export const ALL_PROTOCOLS_2: ProtocolDef[] = [
-  // 2代 基础版 12 套（MN02）
-  { defId: 'ice', name: '冰', set: 'MN02', commands: ['平移', '阻止'], loadingText: '滑腻如冰' },
-  { defId: 'mirror', name: '明镜', set: 'MN02', commands: ['平移', '复制'], loadingText: '见微知著' },
-  { defId: 'peace', name: '和平', set: 'MN02', commands: ['相互弃牌', '抽牌'], loadingText: '尽我们所能暂停危机' },
-  { defId: 'chaos', name: '混乱', set: 'MN02', commands: ['抽牌', '重排', '被覆盖'], loadingText: '变幻莫测' },
-  { defId: 'fear', name: '恐惧', set: 'MN02', commands: ['平移', '弃牌'], loadingText: '落荒而逃' },
-  { defId: 'clarity', name: '明晰', set: 'MN02', commands: ['抽牌', '揭示'], loadingText: '一目了然' },
-  { defId: 'corruption', name: '腐化', set: 'MN02', commands: ['翻转', '弃牌'], loadingText: '害群之马' },
-  { defId: 'time', name: '时间', set: 'MN02', commands: ['弃牌', '弃牌堆'], loadingText: '回溯过往' },
-  { defId: 'war', name: '战争', set: 'MN02', commands: ['反击', '弃牌'], loadingText: '争战何求' },
-  { defId: 'courage', name: '勇气', set: 'MN02', commands: ['抽牌', '对比'], loadingText: '百折不挠' },
+  // 2代 基础版 12 套（MN02）。中文名除「混乱/腐化」外均跟随 compile2文本.txt 标题
+  // （用户 2026-09-04 拍板：txt「混沌/腐败」不采用，保留游戏内「混乱/腐化」；冰→寒冰）。
+  { defId: 'ice', name: '寒冰', set: 'MN02', commands: ['平移', '阻止'], loadingText: '寒锐诡谲' },
+  { defId: 'mirror', name: '明镜', set: 'MN02', commands: ['平移', '复制'], loadingText: '照见本真' },
+  { defId: 'peace', name: '和平', set: 'MN02', commands: ['相互弃牌', '抽牌'], loadingText: '暂得安歇' },
+  { defId: 'chaos', name: '混乱', set: 'MN02', commands: ['抽牌', '重排', '被覆盖'], loadingText: '祸福难料' },
+  { defId: 'fear', name: '恐惧', set: 'MN02', commands: ['平移', '弃牌'], loadingText: '速速退避' },
+  { defId: 'clarity', name: '明晰', set: 'MN02', commands: ['抽牌', '揭示'], loadingText: '吾道已明' },
+  { defId: 'corruption', name: '腐化', set: 'MN02', commands: ['翻转', '弃牌'], loadingText: '独恶殃众' },
+  { defId: 'time', name: '时间', set: 'MN02', commands: ['弃牌', '弃牌堆'], loadingText: '溯往前行' },
+  { defId: 'war', name: '战争', set: 'MN02', commands: ['反击', '弃牌'], loadingText: '鏖战何归' },
+  { defId: 'courage', name: '勇气', set: 'MN02', commands: ['抽牌', '对比'], loadingText: '逆焰燎原' },
   { defId: 'luck', name: '幸运', set: 'MN02', commands: ['随机', '删除', '打出'], loadingText: '孤注一掷' },
-  { defId: 'smoke', name: '烟雾', set: 'MN02', commands: ['反面打出', '平移'], loadingText: '弥漫无际' },
+  { defId: 'smoke', name: '烟雾', set: 'MN02', commands: ['反面打出', '平移'], loadingText: '弥天障雾' },
   // 2代 拓展 3 套（AX02，协议卡面编号待卡面核对）
-  { defId: 'assimilation', name: '同化', set: 'AX02', commands: ['交换', '打出'], loadingText: '完全改变与理解' },
-  { defId: 'diversity', name: '多样性', set: 'AX02', commands: ['打出', '对比', '编译'], loadingText: '不同是我们的力量' },
-  { defId: 'unity', name: '统一', set: 'AX02', commands: ['覆盖', '翻转', '编译'], loadingText: '团结使我们强大' },
+  { defId: 'assimilation', name: '同化', set: 'AX02', commands: ['交换', '打出'], loadingText: '互通相契' },
+  { defId: 'diversity', name: '多元', set: 'AX02', commands: ['打出', '对比', '编译'], loadingText: '殊异成锋' },
+  { defId: 'unity', name: '统一', set: 'AX02', commands: ['覆盖', '翻转', '编译'], loadingText: '合众则刚' },
 ];
 
 export const ALL_CARD_DEFS_2: CardDef[] = [
@@ -77,7 +89,7 @@ export const ALL_CARD_DEFS_2: CardDef[] = [
   // 明镜——真理的映像
   { defId: 'mirror-0', protocol: 'mirror', value: 0, top: '此链路中，对手每有1张牌，你的总阈值就加1。' },
   { defId: 'mirror-1', protocol: 'mirror', value: 1, bottom: '回合结束：你可以选择对手的1张牌，复制其中央效果。' },
-  // 镜像2 异文：docx 作「互换你任意两栈中的所有的牌」（交换两堆叠的所有牌 vs 交换两堆叠位置）
+  // 明镜2 异文：docx 作「互换你任意两栈中的所有的牌」（交换两堆叠的所有牌 vs 交换两堆叠位置）
   { defId: 'mirror-2', protocol: 'mirror', value: 2, middle: '交换你2个堆叠的位置。' },
   { defId: 'mirror-3', protocol: 'mirror', value: 3, middle: '翻转你的1张牌。在同一链路中翻转对手的1张牌。' },
   { defId: 'mirror-4', protocol: 'mirror', value: 4, bottom: '当对手抽牌时：你抽1张牌。' },
@@ -104,7 +116,7 @@ export const ALL_CARD_DEFS_2: CardDef[] = [
   { defId: 'clarity-1', protocol: 'clarity', value: 1, top: '回合开始：揭示你的牌库顶端的卡牌。你可以弃置牌库顶端的卡牌。', middle: '对手揭示其手牌。', bottom: '当此牌被覆盖时：抽3张牌。' },
   { defId: 'clarity-2', protocol: 'clarity', value: 2, middle: '揭示你的牌库。从中抽取1张阈值为1的卡牌。切洗你的牌库。打出1张阈值为1的卡牌。' },
   { defId: 'clarity-3', protocol: 'clarity', value: 3, middle: '揭示你的牌库。从中抽取1张阈值为5的卡牌。切洗你的卡牌。' },
-  { defId: 'clarity-4', protocol: 'clarity', value: 4, middle: '你可以将弃牌堆吸入牌库。' },
+  { defId: 'clarity-4', protocol: 'clarity', value: 4, middle: '你可以将弃牌堆洗入牌库。' },
   { defId: 'clarity-5', protocol: 'clarity', value: 5, middle: '你弃置1张牌。' },
 
   // 冰——寒冷，强大，平滑
@@ -117,7 +129,7 @@ export const ALL_CARD_DEFS_2: CardDef[] = [
 
   // 烟雾——使人迷茫的笼罩
   { defId: 'smoke-0', protocol: 'smoke', value: 0, middle: '从你的牌库顶端向每条有正面朝下的卡牌的链路反面打出1张牌。' },
-  { defId: 'smoke-1', protocol: 'smoke', value: 1, middle: '翻转你的1张卡牌。你可以偏转此牌。' },
+  { defId: 'smoke-1', protocol: 'smoke', value: 1, middle: '翻转1张你的卡牌。你可以偏转此牌。' },
   { defId: 'smoke-2', protocol: 'smoke', value: 2, top: '此链路中，每有1张正面朝下的卡牌，总阈值就加1。' },
   { defId: 'smoke-3', protocol: 'smoke', value: 3, middle: '在1条有正面朝下的卡牌的链路中反面打出1张卡牌。' },
   { defId: 'smoke-4', protocol: 'smoke', value: 4, middle: '偏转1张被覆盖的、正面朝下的卡牌。' },
@@ -168,10 +180,10 @@ export const ALL_CARD_DEFS_2: CardDef[] = [
   { defId: 'time-4', protocol: 'time', value: 4, middle: '抽2张牌。弃置2张牌。' },
   { defId: 'time-5', protocol: 'time', value: 5, middle: '你弃置1张牌。' },
 
-  // 多样性——不同是我们的力量
-  { defId: 'diversity-0', protocol: 'diversity', value: 0, middle: '若场上有6张不同协议的卡牌，将多样性协议翻转至已编译。', bottom: '回合结束：你可以将1张不是多样性协议的卡牌打入此链路。' },
+  // 多元——不同是我们的力量
+  { defId: 'diversity-0', protocol: 'diversity', value: 0, middle: '若场上有6张不同协议的卡牌，将多元协议翻转至已编译。', bottom: '回合结束：你可以将1张不是多元的卡牌打入此链路。' },
   { defId: 'diversity-1', protocol: 'diversity', value: 1, middle: '偏转1张牌。抽取与此链路中不同协议的卡牌数相同的卡牌。' },
-  { defId: 'diversity-3', protocol: 'diversity', value: 3, top: '若此堆叠中有任何非多样性的正面朝上的卡牌，你的总阈值加2。' },
+  { defId: 'diversity-3', protocol: 'diversity', value: 3, top: '若此堆叠中有任何非多元的正面朝上的卡牌，你的总阈值加2。' },
   { defId: 'diversity-4', protocol: 'diversity', value: 4, middle: '翻转1张阈值小于场上不同协议卡牌数目的牌。' },
   { defId: 'diversity-5', protocol: 'diversity', value: 5, middle: '你弃置1张牌。' },
   { defId: 'diversity-6', protocol: 'diversity', value: 6, top: '回合结束：若场上没有至少4种不同协议的卡牌，删除此牌。' },
