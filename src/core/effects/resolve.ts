@@ -32,6 +32,11 @@ import './cards/smoke';
 import './cards/fear';
 import './cards/corruption';
 import './cards/war';
+import './cards/courage';
+import './cards/time';
+import './cards/diversity';
+import './cards/assimilation';
+import './cards/unity';
 
 function topEffect(s: GameState): PendingEffect | undefined {
   return s.pendingEffects[s.pendingEffects.length - 1];
