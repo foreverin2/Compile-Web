@@ -27,6 +27,11 @@ import './cards/mirror';
 import './cards/peace';
 import './cards/chaos';
 import './cards/clarity';
+import './cards/ice';
+import './cards/smoke';
+import './cards/fear';
+import './cards/corruption';
+import './cards/war';
 
 function topEffect(s: GameState): PendingEffect | undefined {
   return s.pendingEffects[s.pendingEffects.length - 1];

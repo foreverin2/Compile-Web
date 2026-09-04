@@ -8,7 +8,8 @@ import type { Card } from '../../src/core/models/types';
  * MN02（2代）并入协议选择池后可玩性回归（2026-09-03 用户拍板「直接并入协议池」）：
  * - 草稿池 30 套含 2代 协议，可正常被选中；
  * - 每人 3 套协议按草案分配后，各自 18 张卡入牌库（2代 卡的 defId/数据走统一管线）；
- * - 2代 卡效果尚未注册（EFFECTS 无条目）——引擎对未注册效果安全空转，仅此测试验证
+ * - 2代 卡效果分批复注册（2026-09-05：批1 幸运/明镜/和平/混乱/明晰 + 批2 寒冰/烟雾/恐惧/腐化/战争
+ *   已注册；批3 勇气/时间/多元/同化/统一 未注册）——引擎对未注册效果安全空转，仅此测试验证
  *   数据/组牌/草稿路径不崩；实际打出行为由 resolve/triggers 的可选链保证无效果。
  */
 describe('MN02 并池后可玩性（效果未注册期）', () => {
@@ -44,14 +45,16 @@ describe('MN02 并池后可玩性（效果未注册期）', () => {
 
   it('未注册效果的 2代 卡中指令安全空转（pushMiddle 不入栈、不抛错）', () => {
     const s = createGame();
-    performDraftPick(s, 'ice'); // round0: P1 选冰
+    performDraftPick(s, 'courage'); // round0: P1 选勇气（批3，尚未注册效果）
     for (let i = 1; i < 6; i++) {
       performDraftPick(s, getDraftPool(s)[0].defId);
     }
     expect(s.phase).toBe('turn');
-    const def = getCardDef('ice-1'); // EFFECTS 未注册（2代 效果未实现期）
+    // 2026-09-05 起 2代 批1（luck/mirror/peace/chaos/clarity）+ 批2（ice/smoke/fear/corruption/war）
+    // 已注册效果；本测试改验批 3（courage 等）未注册卡仍安全空转
+    const def = getCardDef('courage-1'); // EFFECTS 未注册（批3 未实现）
     const fieldCard: Card = {
-      uid: 'test-field-ice-1', defId: def.defId, owner: 0,
+      uid: 'test-field-courage-1', defId: def.defId, owner: 0,
       faceUp: true, zone: 'field', line: 0, pos: 1,
     };
     expect(() => pushMiddle(s, 0, fieldCard)).not.toThrow();
