@@ -1,6 +1,7 @@
 import type { EffectCtx, EffectStep, PlayerId, StepResult } from '../../models/types';
 import { registerCardEffects } from '../registry';
 import { resetControlIfHeld } from '../../rules/control';
+import { fireRefreshReactives } from '../triggers';
 
 /** love-1 中指令：抽对手牌堆顶的牌。
  *  {op:'draw', count:1, fromOpponentDeck:true}——对手牌库空 → 洗对手弃牌堆重组再抽（用户拍板，
@@ -35,6 +36,7 @@ function* love2(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   resetControlIfHeld(ctx.s, ctx.player);
   const need = 5 - ctx.s.players[ctx.player].hand.length;
   if (need > 0) yield { op: 'draw', count: need };
+  fireRefreshReactives(ctx.s, ctx.player); // 批2：刷新动作完成连锁（war-0/1）
 }
 
 /** love-3 中指令：随机拿走1张对手的手牌。你把1张手牌给对手。

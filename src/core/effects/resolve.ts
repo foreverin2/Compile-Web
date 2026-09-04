@@ -2,11 +2,11 @@ import type { Card, GameState, Line, Op, PendingEffect, PlayerId, StepResult } f
 import { drawCards, discardFromHand, shuffle } from '../engine/deck';
 import { advanceStep } from '../engine/turn';
 import { gameBus } from '../events/bus';
-import { createCtx, emitCardEvent, findCard, isUncovered, nextEffectId } from './context';
+import { createCtx, emitCardEvent, findCard, isUncovered, nextEffectId, shouldBlockDraw } from './context';
 import { collectTriggerFor, fireReactive, resolveTrigger } from './triggers';
 import { EFFECTS } from './registry';
 import { executeCompileBody } from '../rules/compile-body';
-import { lineMiddleCommandsNullified } from '../rules/restrictions';
+import { lineMiddleCommandsNullified, opponentBlocksMiddleCommands } from '../rules/restrictions';
 import './cards/fire';
 import './cards/light';
 import './cards/darkness';
@@ -32,6 +32,33 @@ function topEffect(s: GameState): PendingEffect | undefined {
   return s.pendingEffects[s.pendingEffects.length - 1];
 }
 
+/** 即时定向触发（批2 after-play/after-return）：查指定玩家某线（缺省=三线）堆叠【顶卡】faceUp 注册
+ *  kind 的效果并 push（仅顶卡——ice-1/corruption-1 底命令无 top，被盖不触发；push 不带 topCommand，
+ *  源有效性 = 触发卡自身）。after-play 需同线（打出者对手同线）；after-return 三线皆查。 */
+function fireDirectedTop(
+  s: GameState,
+  kind: 'after-play' | 'after-return',
+  pid: PlayerId,
+  line?: Line,
+): void {
+  const stackList: Card[][] = line !== undefined ? [s.players[pid].stacks[line]] : s.players[pid].stacks;
+  for (const stack of stackList) {
+    const top = stack[stack.length - 1];
+    if (!top || !top.faceUp || !isUncovered(s, top)) continue;
+    const def = EFFECTS[top.defId]?.triggers?.[kind];
+    if (!def) continue;
+    s.pendingEffects.push({
+      id: nextEffectId(),
+      player: top.owner,
+      gen: def.fn(createCtx(s, top.owner, top)),
+      sourceUid: top.uid,
+      sourceDefId: top.defId,
+      prompt: null,
+      lastAnswer: null,
+    });
+  }
+}
+
 /** 效果源卡是否仍有效：在场、正面、未被覆盖；否则剩余效果终止（系统效果无源卡，恒有效）。
  *  topCommand（fireReactive 推入的 after-* 顶命令触发）：跳过未覆盖检查——顶命令被盖仍生效 */
 function sourceValid(s: GameState, pe: PendingEffect): boolean {
@@ -43,8 +70,10 @@ function sourceValid(s: GameState, pe: PendingEffect): boolean {
 }
 
 /** 打出/翻正/揭开触发中指令：入栈（LIFO 由 runStack 统一结算）。
- *  apathy-2 顶「无效化此列所有牌的中部命令」→ 该线中指令直接跳过（查 EFFECTS 之前） */
+ *  apathy-2 顶「无效化此列所有牌的中部命令」→ 该线中指令直接跳过（查 EFFECTS 之前）
+ *  fear-0 顶「在你的回合内，对手无法触发中央效果」（批2）→ 结算人中指令直接跳过 */
 export function pushMiddle(s: GameState, player: PlayerId, card: Card): void {
+  if (opponentBlocksMiddleCommands(s, player)) return; // fear-0（裁决批2-Q5 A：含连锁）
   if (card.line !== null && lineMiddleCommandsNullified(s, card.line)) return;
   const eff = EFFECTS[card.defId]?.middle;
   if (!eff) return;
@@ -189,6 +218,10 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
           os.trash = [];
           for (const c of os.deck) c.faceUp = false;
         }
+        if (shouldBlockDraw(s, target)) {
+          s.log.push('ice-6：禁止抽牌，跳过');
+          break;
+        }
         const card = os.deck.pop();
         if (!card) throw new Error('opponent deck is empty');
         card.owner = target; // 所有权变更到抽牌者
@@ -212,6 +245,11 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       const card = findCard(s, op.uid);
       if (!card || card.zone !== 'field') throw new Error(`cannot flip ${op.uid}: not on field`);
       if (!op.allowCovered && !isUncovered(s, card)) throw new Error(`cannot flip ${op.uid}: covered card`);
+      // ice-4 底「此牌不可被翻转」（批2）：仅未覆盖顶卡且正面时生效（底命令规则）——翻转无效，直接跳过
+      if (card.defId === 'ice-4' && card.faceUp && isUncovered(s, card)) {
+        s.log.push('ice-4 不可被翻转，跳过');
+        break;
+      }
       // before-flip 前置触发（metal-6 顶「被盖住或翻转前：先删除这张牌」）：
       // 仅正面卡有文本——背面卡无任何效果 → 反面卡被翻正不触发，直接翻转；
       // 顶命令（TriggerDef.top，如 metal-6）被盖仍触发 → topCommand 跳过 sourceValid 的
@@ -286,6 +324,10 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
         triggerProtocol: pe.sourceDefId.split('-')[0],
       });
       if (wasTop) revealAfterRemoval(s, owner, line); // 仅当移除的是顶卡时新顶卡才被"揭开"
+      // 批2 corruption-1 底「当对手的卡牌被召回时：将那张牌正面朝下放回他的牌库」：
+      // 被召回卡属主【对手】侧注册 after-return 的顶卡触发；被召回 uid 存临时字段供效果读取
+      s.pendingReturnUid = card.uid;
+      fireDirectedTop(s, 'after-return', owner === 0 ? 1 : 0);
       break;
     }
     case 'shift': {
@@ -547,6 +589,10 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
     case 'drawFromDeck': {
       // G8b（2代 clarity-2/3）：从牌库任意位抽 1 张入手（揭示语境已展示牌库供选择）；剩余保持顺序
       const target = op.player ?? pe.player;
+      if (shouldBlockDraw(s, target)) {
+        s.log.push('ice-6：禁止抽牌，跳过');
+        break;
+      }
       const p = s.players[target];
       const idx = p.deck.findIndex((c) => c.uid === op.uid);
       if (idx === -1) throw new Error(`card ${op.uid} not in deck`);
@@ -596,6 +642,8 @@ function completePlay(s: GameState): void {
   s.pendingPlay.shift();
   emitCardEvent(s, 'card:played', card);
   if (card.faceUp) pushMiddle(s, card.owner, card);
+  // 批2 ice-1 底「对手在此链路出牌后：他要弃置1张牌」：打出者【对手】同线顶卡注册 after-play → 触发
+  fireDirectedTop(s, 'after-play', card.owner === 0 ? 1 : 0, card.line!);
 }
 
 /** 偏转落地（目标顶卡"被盖住前"先结算一次，然后落地；队列 FIFO，每次处理队首） */

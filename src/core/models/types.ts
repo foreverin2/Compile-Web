@@ -84,7 +84,15 @@ export type TriggerKind =
   | 'after-delete'
   | 'after-clear-cache'
   | 'after-opponent-draw'
-  | 'after-self-discard';
+  | 'after-self-discard'
+  // 2代 批2（2026-09-05）：刷新/编译后反应（after-refresh 自身侧 / after-opponent-refresh、after-compile
+  //   对手侧，war-0/1/2）；after-play（ice-1 对手在本线打出）、after-return（corruption-1 对手卡被召回）
+  //   为定向触发（resolve completePlay/return 直接查同线/对手侧顶卡），不走 fireReactive 全扫
+  | 'after-refresh'
+  | 'after-opponent-refresh'
+  | 'after-compile'
+  | 'after-play'
+  | 'after-return';
 
 /** 选择候选卡（供 UI 渲染） */
 export interface ChoiceCard {
@@ -312,6 +320,8 @@ export interface GameState {
   revealedGhosts: RevealedGhost[];
   /** 牌库揭示标记（2代 clarity-1/2/3；UI 弹浮层展示牌库，回合转换过期清除） */
   deckReveals: DeckReveal[];
+  /** 最近一次被召回的卡 uid（批2 corruption-1 底 after-return 触发效果读取用；return op 设置，单实例覆盖制） */
+  pendingReturnUid?: string;
   /** metal-1「对手下回合不能编译」：被禁编译的玩家；其回合结束转换（advanceStep end→start）时清除 */
   compileBlocked: PlayerId | null;
   /** speed-2「通过编译删除此牌前」触发挂起：效果栈清空后由 runStack 消费执行编译本体 */

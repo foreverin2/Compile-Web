@@ -68,9 +68,26 @@ export function lineMiddleCommandsNullified(s: GameState, line: Line): boolean {
   return lineTopCommandActive(s, line, 'apathy-2');
 }
 
-/** 单卡自引用放行（2代 批1 chaos-3 底「此牌可以无视协议限制打在任意堆叠中」；批2 corruption-0 同款）：
+/** 单卡自引用放行（2代 chaos-3/corruption-0 底「此牌可以无视协议限制打在任意堆叠中」）：
  *  该卡从手牌正面打出时豁免「协议匹配」限制（其余被动限制——psychic-1 禁正面/plague-0 禁线/
- *  metal-2 禁反面——照常生效，用户 2026-09-05 裁决 [Q15]） */
+ *  metal-2 禁反面——照常生效，用户 2026-09-05 裁决 [Q15] 与批2 同款沿用） */
 export function cardAllowsFaceUpAnyLine(defId: string): boolean {
-  return defId === 'chaos-3';
+  return defId === 'chaos-3' || defId === 'corruption-0';
+}
+
+/** ice-6 顶「如果你有手牌，那么你不可以抽牌」：player 手牌 >0 且其场上任一线堆叠有正面 ice-6
+ *  （顶命令，被盖仍生效——查在场+正面）→ 禁止一切抽牌路径（效果 draw/刷新/fromOpponentDeck/
+ *  drawFromDeck；FAQ 冰6：刷新想抽必须能抽上牌，抽 0 无效）。手牌=0 时不拦截。 */
+export function shouldBlockDraw(s: GameState, player: PlayerId): boolean {
+  if (s.players[player].hand.length === 0) return false;
+  return playerHasTopCommand(s, player, 'ice-6');
+}
+
+/** fear-0 顶「在你的回合内，对手无法触发中央效果」：player（要结算中指令的人）的对手场上有正面
+ *  fear-0（顶命令被盖仍生效）且当前回合玩家 = 该对手（fear-0 拥有者的回合）→ 中指令不结算
+ *  （含翻正/揭开连锁，裁决批2-Q5 A）。 */
+export function opponentBlocksMiddleCommands(s: GameState, player: PlayerId): boolean {
+  const foe = opp(player);
+  if (s.turnPlayer !== foe) return false;
+  return playerHasTopCommand(s, foe, 'fear-0');
 }

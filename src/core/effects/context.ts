@@ -37,6 +37,18 @@ export function deckTopAvailable(s: GameState, player: PlayerId): boolean {
   return s.players[player].deck.length > 0;
 }
 
+/** ice-6 顶「如果你有手牌，那么你不可以抽牌」（批2，裁决见 docs/批2裁决结果.md）：player 手牌 >0 且其
+ *  场上任一线堆叠有正面 ice-6（顶命令被盖仍生效——查在场+正面）→ 禁一切抽牌路径（draw op/刷新/
+ *  fromOpponentDeck/drawFromDeck；FAQ 冰6：刷新想抽必须能抽上牌，抽 0 无效）。手牌=0 不拦截。
+ *  放本文件（而非 restrictions）避免 deck→restrictions→create→deck import 环。 */
+export function shouldBlockDraw(s: GameState, player: PlayerId): boolean {
+  if (s.players[player].hand.length === 0) return false;
+  for (const line of [0, 1, 2] as Line[]) {
+    if (s.players[player].stacks[line].some((c) => c.defId === 'ice-6' && c.faceUp)) return true;
+  }
+  return false;
+}
+
 function toChoiceCard(c: Card): ChoiceCard {
   const def = getCardDef(c.defId);
   return {

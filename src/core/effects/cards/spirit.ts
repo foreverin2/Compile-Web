@@ -1,6 +1,7 @@
 import type { EffectCtx, EffectStep, Line, StepResult } from '../../models/types';
 import { registerCardEffects } from '../registry';
 import { resetControlIfHeld } from '../../rules/control';
+import { fireRefreshReactives } from '../triggers';
 
 /** spirit-0 中指令：刷新。抽1张牌。
  *  刷新 = 完整刷新操作（FAQ 161 拍板：含消耗控制组件——持有者执行刷新控制回中立）：
@@ -10,6 +11,7 @@ function* spirit0(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   resetControlIfHeld(ctx.s, ctx.player);
   const need = 5 - ctx.s.players[ctx.player].hand.length;
   if (need > 0) yield { op: 'draw', count: need };
+  fireRefreshReactives(ctx.s, ctx.player); // 批2：刷新动作完成连锁（war-0/1）
   yield { op: 'draw', count: 1 };
 }
 

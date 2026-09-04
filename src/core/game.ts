@@ -12,7 +12,7 @@ import {
 } from './rules/restrictions';
 import { collectTriggers, fireReactive, resolveTrigger } from './effects/triggers';
 import { answerEffect, runStack } from './effects/resolve';
-import { listCandidates, nextEffectId } from './effects/context';
+import { listCandidates, nextEffectId, shouldBlockDraw } from './effects/context';
 
 export type ActionKind = 'play' | 'refresh' | 'compile' | 'advance' | 'effect-choice' | 'resolve-trigger' | 'clear-cache';
 
@@ -50,7 +50,8 @@ export function getLegalActions(s: GameState, player: PlayerId): LegalAction[] {
         }
       }
     }
-    if (s.players[player].hand.length < 5) {
+    if (s.players[player].hand.length < 5 && !shouldBlockDraw(s, player)) {
+      // ice-6 顶在场且手牌>0 → 不可刷新（FAQ 冰6：刷新想抽必须能抽上牌）
       out.push({ kind: 'refresh' });
     }
   } else if (s.step === 'check-compile') {

@@ -1,5 +1,6 @@
 import type { Card, GameState, PlayerId } from '../models/types';
 import { fireReactive } from '../effects/triggers';
+import { shouldBlockDraw } from '../effects/context';
 import { gameBus } from '../events/bus';
 
 export function shuffle<T>(arr: T[]): T[] {
@@ -11,8 +12,10 @@ export function shuffle<T>(arr: T[]): T[] {
   return a;
 }
 
-/** 从牌库顶抽 count 张；牌库不足则洗弃牌堆重组，再抽满 */
+/** 从牌库顶抽 count 张；牌库不足则洗弃牌堆重组，再抽满。
+ *  ice-6 顶（批2）在场且抽牌者手牌>0 → 禁止抽牌（FAQ 冰6：抽 0 无效；不抽不洗不触发连锁） */
 export function drawCards(s: GameState, player: PlayerId, count: number): Card[] {
+  if (shouldBlockDraw(s, player)) return [];
   const p = s.players[player];
   const drawn: Card[] = [];
   for (let i = 0; i < count; i++) {

@@ -1,5 +1,6 @@
 import type { GameState, Line, PlayerId } from '../models/types';
 import { gameBus } from '../events/bus';
+import { fireReactive } from '../effects/triggers';
 
 /** 编译本体（无前置校验）：同时删除该线双方全部卡牌（"all" 效果，不触发任何文本/连锁），
  *  翻协议或抽对手牌库顶 1 张，并完成胜利判定。
@@ -53,6 +54,9 @@ export function executeCompileBody(s: GameState, player: PlayerId, line: Line): 
   }
 
   s.compiledThisTurn = true;
+
+  // 批2 war-2 底「当对手编译后：对手弃置所有手牌」：编译者【对手】侧注册 after-compile 的顶卡触发
+  fireReactive(s, 'after-compile', player);
 
   // 胜利判定
   if (p.protocols.every((pr) => pr.compiled)) {

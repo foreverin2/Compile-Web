@@ -1,5 +1,6 @@
 import type { GameState, PlayerId, Line, Card } from '../models/types';
 import { drawCards } from '../engine/deck';
+import { fireRefreshReactives } from '../effects/triggers';
 import { getCardDef } from '../../data/demo';
 import { runStack } from '../effects/resolve';
 import {
@@ -63,5 +64,9 @@ export function playCard(s: GameState, player: PlayerId, cardUid: string, faceUp
 export function refreshHand(s: GameState, player: PlayerId): Card[] {
   const p = s.players[player];
   if (p.hand.length >= 5) throw new Error('cannot refresh with 5+ cards in hand');
-  return drawCards(s, player, 5 - p.hand.length);
+  const drawn = drawCards(s, player, 5 - p.hand.length);
+  // 批2：刷新动作完成 → after-refresh（自身侧）/after-opponent-refresh（对手侧）即时连锁
+  // （war-0 顶「当你刷新时」/war-1 底「当对手刷新时」）；1代 效果内刷新同款 fire 见 love-2/spirit-0
+  fireRefreshReactives(s, player);
+  return drawn;
 }
