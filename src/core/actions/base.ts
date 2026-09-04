@@ -9,6 +9,7 @@ import {
   lineBlocksOpponent,
   lineBlocksOpponentFaceDown,
   opponentMustPlayFaceDown,
+  unity1UncoveredLine,
 } from '../rules/restrictions';
 
 /** 卡牌 defId 的协议是否与该线协议匹配（正面打入条件）。行线上同时携带双方协议
@@ -17,11 +18,13 @@ import {
 export function isPlayableFaceUp(s: GameState, player: PlayerId, cardUid: string, line: Line): boolean {
   const card = s.players[player].hand.find((c) => c.uid === cardUid);
   if (!card) return false;
-  // 2代 chaos-3 底（自引用）：本卡可无视协议匹配正面打任意线（批2 corruption-0 同款）；先于全局豁免与匹配判断
+  // 2代 chaos-3/corruption-0 底（自引用）：本卡可无视协议匹配正面打任意线；先于全局豁免与匹配判断
   if (cardAllowsFaceUpAnyLine(card.defId)) return true;
+  const def = getCardDef(card.defId);
+  // unity-1 底「统一卡牌可以正面朝上打在此链路」（批3）：unity 卡可正面落有未覆盖 unity-1 的线
+  if (def.protocol === 'unity' && unity1UncoveredLine(s) === line) return true;
   // spirit-1 顶「你可以在任意列打出牌」：持有者任意线正面打（先于协议匹配判断）
   if (canPlayFaceUpAnywhere(s, player)) return true;
-  const def = getCardDef(card.defId);
   const opp: PlayerId = player === 0 ? 1 : 0;
   return (
     def.protocol === s.players[player].protocols[line].defId ||

@@ -57,12 +57,14 @@ export function shuffleDeck(s: GameState, player: PlayerId): void {
   if (p.deck.length <= 1) {
     // 无/单张无需洗，但仍发事件便于 UI 一致呈现（长度 0 也发——time-0 从弃牌堆打出后洗空堆等场景）
     gameBus.emit({ type: 'deck:shuffled', state: s, payload: { player } });
-    return;
+  } else {
+    p.deck = shuffle(p.deck);
+    for (const c of p.deck) c.faceUp = false;
+    gameBus.emit({ type: 'deck:shuffled', state: s, payload: { player } });
+    s.log.push(`P${player + 1} 切洗牌库`);
   }
-  p.deck = shuffle(p.deck);
-  for (const c of p.deck) c.faceUp = false;
-  gameBus.emit({ type: 'deck:shuffled', state: s, payload: { player } });
-  s.log.push(`P${player + 1} 切洗牌库`);
+  // 批3 time-2 顶「当你切洗牌库时：抽取1张牌」（self 方向，top:true 被盖仍触发）
+  fireReactive(s, 'after-shuffle', player);
 }
 
 /** 弃牌堆洗入牌库（clarity-4「你可以将弃牌堆洗入牌库」）：trash 全部并入 deck 后切洗；

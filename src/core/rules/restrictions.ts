@@ -91,3 +91,16 @@ export function opponentBlocksMiddleCommands(s: GameState, player: PlayerId): bo
   if (s.turnPlayer !== foe) return false;
   return playerHasTopCommand(s, foe, 'fear-0');
 }
+
+/** unity-1 底「统一卡牌可以正面朝上打在此链路」（批3）：查双方所有线堆叠顶卡（未覆盖 faceUp）unity-1
+ *  → 返回该线；unity 协议卡正面可落此线（无视协议匹配） */
+export function unity1UncoveredLine(s: GameState): Line | null {
+  for (const owner of [0, 1] as PlayerId[]) {
+    for (const line of [0, 1, 2] as Line[]) {
+      const stack = s.players[owner].stacks[line];
+      const top = stack[stack.length - 1];
+      if (top && top.defId === 'unity-1' && top.faceUp && isUncovered(s, top)) return line;
+    }
+  }
+  return null;
+}

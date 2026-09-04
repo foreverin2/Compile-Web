@@ -92,7 +92,9 @@ export type TriggerKind =
   | 'after-opponent-refresh'
   | 'after-compile'
   | 'after-play'
-  | 'after-return';
+  | 'after-return'
+  // 2代 批3（2026-09-05）：切洗牌库后反应（time-2 顶「当你切洗牌库时：抽1」，self 方向）
+  | 'after-shuffle';
 
 /** 选择候选卡（供 UI 渲染） */
 export interface ChoiceCard {
@@ -182,7 +184,17 @@ export type Op =
   /** 任意顺序重排协议（chaos-1）：order = 0..2 的排列（新布局）；终态≠初态由调用方保证，执行层兜底校验 */
   | { op: 'reorderProtocols'; order: Line[]; player?: PlayerId }
   /** 从牌库任意位抽 1 张入手（clarity-2/3 揭示选抽）：剩余保持顺序；player 缺省=效果属主 */
-  | { op: 'drawFromDeck'; uid: string; player?: PlayerId };
+  | { op: 'drawFromDeck'; uid: string; player?: PlayerId }
+  // —— 2代 批3 新增（2026-09-05，裁决 docs/批3裁决结果.md）——
+  /** 从弃牌堆打出（time-0/3）：trash 任意位卡 → 落地流程（触发 before-covered/中指令同常规打出）；
+   *  uid 须在效果属主 trash；faceUp 由效果指定（time-0 玩家自选朝向/time-3 反面） */
+  | { op: 'playFromTrash'; uid: string; line: Line; faceUp: boolean }
+  /** 跨方牌库顶转移（assimilation-2/6）：从 from 玩家牌库顶 pop → 卡 owner 变 toPlayer →
+   *  反面（faceDown）→ 落 toPlayer 的 toLine 堆叠（走 pendingPlay 落地流程，覆盖/连锁同打出） */
+  | { op: 'deckTopTransfer'; from: PlayerId; toPlayer: PlayerId; toLine: Line }
+  /** 场卡取入己手（assimilation-0）：目标场卡（正面朝下，含被盖）移除 → owner 变效果属主 → 入手
+   *  （faceUp 公开/secret 清）；被盖移除不影响其上层；faceDown 顶卡移除不触发揭示（新顶 faceDown） */
+  | { op: 'takeFromField'; uid: string };
 
 /** 效果步骤：选择请求 或 操作。既有 types.ts 已占用 Step（回合步骤），此处命名 EffectStep */
 export type EffectStep = ChoiceRequest | Op;

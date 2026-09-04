@@ -616,6 +616,75 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       fireReactive(s, 'after-opponent-draw', target);
       break;
     }
+    case 'playFromTrash': {
+      // 批3 time-0/3：从弃牌堆打出（uid 须在效果属主 trash）→ 落地流程（completePlay 处理
+      // before-covered/落地/中指令连锁）。trash 卡公开 → 反面打出不打 secret（曾公开信息）
+      const card = findCard(s, op.uid);
+      if (!card || card.zone !== 'trash' || card.owner !== pe.player) {
+        throw new Error(`cannot play ${op.uid} from trash`);
+      }
+      const p = s.players[pe.player];
+      const idx = p.trash.findIndex((c) => c.uid === op.uid);
+      if (idx === -1) throw new Error(`cannot play ${op.uid} from trash`);
+      p.trash.splice(idx, 1);
+      card.zone = 'float';
+      card.faceUp = op.faceUp;
+      card.line = op.line;
+      card.pos = null;
+      s.pendingPlay.push({ card, beforeCoveredDone: false });
+      emitCardEvent(s, 'card:deck-played', card, {
+        line: op.line,
+        triggerDefId: pe.sourceDefId,
+        triggerProtocol: pe.sourceDefId.split('-')[0],
+      });
+      break;
+    }
+    case 'deckTopTransfer': {
+      // 批3 assimilation-2/6：从 from 牌库顶 pop → owner 变 toPlayer → 反面 → 落 toPlayer 的 toLine
+      // （走 pendingPlay 落地；覆盖目标顶卡的 before-covered 连锁照常）
+      const fromP = s.players[op.from];
+      const card = fromP.deck.pop();
+      if (!card) throw new Error('deck is empty'); // 调用方 deckTopAvailable 守卫
+      card.owner = op.toPlayer;
+      card.zone = 'float';
+      card.faceUp = false;
+      card.secret = true; // 牌库来源的反面打出 = 秘密（连持有者不可窥视，同 playTopDeck）
+      card.line = op.toLine;
+      card.pos = null;
+      s.pendingPlay.push({ card, beforeCoveredDone: false });
+      emitCardEvent(s, 'card:deck-played', card, {
+        line: op.toLine,
+        triggerDefId: pe.sourceDefId,
+        triggerProtocol: pe.sourceDefId.split('-')[0],
+      });
+      break;
+    }
+    case 'takeFromField': {
+      // 批3 assimilation-0：场卡（正面朝下，含被盖）移除 → 易主效果属主 → 入手（faceUp 公开）
+      const card = findCard(s, op.uid);
+      if (!card || card.zone !== 'field') throw new Error(`cannot take ${op.uid}: not on field`);
+      const owner = card.owner;
+      const line = card.line!;
+      const stack = s.players[owner].stacks[line];
+      const idx = stack.findIndex((c) => c.uid === op.uid);
+      if (idx === -1) throw new Error(`cannot take ${op.uid}: not in stack`);
+      const wasTop = idx === stack.length - 1;
+      stack.splice(idx, 1);
+      card.owner = pe.player;
+      card.zone = 'hand';
+      card.faceUp = true; // 进手牌 = 已知信息
+      card.secret = false;
+      card.line = null;
+      card.pos = null;
+      s.players[pe.player].hand.push(card);
+      emitCardEvent(s, 'card:given', card, {
+        to: pe.player,
+        triggerDefId: pe.sourceDefId,
+        triggerProtocol: pe.sourceDefId.split('-')[0],
+      });
+      if (wasTop) revealAfterRemoval(s, owner, line); // 顶卡被取走 → 新顶揭开（faceDown 顶不触发）
+      break;
+    }
   }
 }
 

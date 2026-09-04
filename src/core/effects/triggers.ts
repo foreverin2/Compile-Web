@@ -3,7 +3,7 @@ import { EFFECTS } from './registry';
 import { createCtx, findCard, isUncovered, nextEffectId } from './context';
 
 /** 即时连锁触发种类：抽牌后 / 弃牌后 / 删除后 / 清理缓存后 / 对手抽牌后（mirror-4/war-0 底）/
- *  自己弃牌后（peace-4 底）/ 刷新后 / 对手刷新后 / 编译后 / 定向 after-play/after-return */
+ *  自己弃牌后（peace-4 底）/ 刷新后 / 对手刷新后 / 编译后 / 切洗后（time-2 顶）/ 定向 after-play/after-return */
 export type ReactiveKind =
   | 'after-draw'
   | 'after-discard'
@@ -14,6 +14,7 @@ export type ReactiveKind =
   | 'after-refresh'
   | 'after-opponent-refresh'
   | 'after-compile'
+  | 'after-shuffle'
   | 'after-play'
   | 'after-return';
 
@@ -41,8 +42,7 @@ export function fireReactive(s: GameState, kind: ReactiveKind, actor: PlayerId):
     kind === 'after-opponent-refresh' ||
     kind === 'after-compile'
       ? [actor === 0 ? 1 : 0]
-      : [actor];
-  for (const pid of players) {
+      : [actor];  for (const pid of players) {
     for (const line of [0, 1, 2] as Line[]) {
       for (const card of s.players[pid].stacks[line]) {
         if (!card.faceUp) continue;
