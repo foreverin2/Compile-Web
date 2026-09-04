@@ -14,14 +14,14 @@ function opp(p: PlayerId): PlayerId {
   return p === 0 ? 1 : 0;
 }
 
-/** 某线【双方堆叠】中被覆盖（非顶卡）且反面的卡 */
-function coveredFaceDownCandidates(s: GameState, line: Line): ChoiceCard[] {
+/** 某线【双方堆叠】中被覆盖（非顶卡）的卡（任意朝向——2026-09-05 用户修正：混沌0 翻任意被盖卡，
+ *  不只反面；flip allowCovered 翻正/翻回皆可） */
+function coveredCandidates(s: GameState, line: Line): ChoiceCard[] {
   const out: ChoiceCard[] = [];
   for (const owner of [0, 1] as PlayerId[]) {
     const stack = s.players[owner].stacks[line];
     for (let i = 0; i < stack.length - 1; i++) {
       const c = stack[i];
-      if (c.faceUp) continue; // 仅反面
       out.push({
         uid: c.uid, defId: c.defId, faceUp: c.faceUp, owner, zone: c.zone, line: c.line ?? line, pos: c.pos,
         label: String(getCardDef(c.defId).value),
@@ -31,18 +31,18 @@ function coveredFaceDownCandidates(s: GameState, line: Line): ChoiceCard[] {
   return out;
 }
 
-/** chaos-0 中：在每条链路中，各翻转1张被覆盖的牌（FAQ 混沌0 勘误：翻开每行中的一张盖牌；
- *  被盖反面卡翻正不连锁中指令——FAQ 127 引擎已保证；裁决 [Q13]） */
+/** chaos-0 中：在每条链路中，各翻转1张被覆盖的牌（用户 2026-09-05 修正：任意被盖卡——含被盖正面卡
+ *  翻成反面与被盖反面卡翻正；被盖翻正不连锁中指令——FAQ 127 引擎已保证） */
 function* chaos0Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
-  // 快照可翻行（含 ≥1 张被盖反面卡），逐行处理（FAQ：标记每行 → 依次选行 → 翻一张 → 处理后果）
-  let rows = ([0, 1, 2] as Line[]).filter((l) => coveredFaceDownCandidates(ctx.s, l).length > 0);
+  // 快照可翻行（含 ≥1 张被盖卡），逐行处理（FAQ：标记每行 → 依次选行 → 翻一张 → 处理后果）
+  let rows = ([0, 1, 2] as Line[]).filter((l) => coveredCandidates(ctx.s, l).length > 0);
   while (rows.length > 0) {
     const rAns = yield { kind: 'select-line', title: 'chaos-0：选择1条要翻开盖牌的链路', min: 1, max: 1, optional: true, candidates: [], lines: [...rows] };
     if (rAns.selected.length === 0) break; // 玩家主动停止（optional）
     const line = Number(rAns.selected[0].replace('line:', '')) as Line;
     rows = rows.filter((x) => x !== line);
-    const cand = coveredFaceDownCandidates(ctx.s, line); // 当前时点（连锁可能已清空该行）
-    const cAns = yield { kind: 'select', title: 'chaos-0：翻开这张盖牌', min: 1, max: 1, optional: false, candidates: cand };
+    const cand = coveredCandidates(ctx.s, line); // 当前时点（连锁可能已清空该行）
+    const cAns = yield { kind: 'select', title: 'chaos-0：翻转这张被覆盖的卡牌', min: 1, max: 1, optional: false, candidates: cand };
     if (cAns.selected.length === 0) continue; // 行内目标已被连锁翻走 → 跳过此行
     yield { op: 'flip', uid: cAns.selected[0], allowCovered: true };
   }
