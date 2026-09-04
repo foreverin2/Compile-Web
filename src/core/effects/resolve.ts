@@ -22,6 +22,11 @@ import './cards/speed';
 import './cards/love';
 import './cards/hate';
 import './cards/apathy';
+import './cards/luck';
+import './cards/mirror';
+import './cards/peace';
+import './cards/chaos';
+import './cards/clarity';
 
 function topEffect(s: GameState): PendingEffect | undefined {
   return s.pendingEffects[s.pendingEffects.length - 1];
