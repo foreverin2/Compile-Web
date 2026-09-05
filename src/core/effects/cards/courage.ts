@@ -39,15 +39,18 @@ function* courage0End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   yield { op: 'discard', uid: fAns.selected[0] };
 }
 
-/** courage-1 中：在1条对手总阈值更大的链路中删除1张牌（先选线，再该线删 1 张任意未覆盖顶卡） */
+/** courage-1 中：在1条对手总阈值更大的链路中删除对手的1张牌（txt 修改记录 2026-09-05【7】补「对手的」
+ *  ——先选线，再该线删对手 1 张未覆盖顶卡；英文 Delete 1 of your opponent's cards in a line where
+ *  they have a higher total value than you do.） */
 function* courage1Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
+  const foe = opp(ctx.player);
   const lines = ([0, 1, 2] as Line[]).filter((l) => oppAhead(ctx.s, ctx.player, l));
   if (lines.length === 0) return;
   const lAns = yield { kind: 'select-line', title: 'courage-1：选择1条对手总阈值更大的链路', min: 1, max: 1, optional: false, candidates: [], lines };
   if (lAns.selected.length === 0) return;
   const line = Number(lAns.selected[0].replace('line:', '')) as Line;
-  const cand = ctx.candidates({ zone: 'field' }).filter((c) => c.line === line);
-  const tAns = yield { kind: 'select', title: 'courage-1：删除1张牌', min: 1, max: 1, optional: false, candidates: cand };
+  const cand = ctx.candidates({ zone: 'field', owner: foe }).filter((c) => c.line === line);
+  const tAns = yield { kind: 'select', title: 'courage-1：删除对手的1张牌', min: 1, max: 1, optional: false, candidates: cand };
   if (tAns.selected.length === 0) return;
   yield { op: 'delete', uid: tAns.selected[0] };
 }

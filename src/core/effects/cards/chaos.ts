@@ -48,8 +48,10 @@ function* chaos0Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> 
   }
 }
 
-/** chaos-0 底（end）：你从对手的牌库中抽取1张牌。对手从你的牌库中抽取1张牌 */
-function* chaos0End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
+/** chaos-0 底（start，无 top 仅顶卡触发）：回合开始：你从对手的牌库中抽取1张牌。对手从你的牌库中
+ *  抽取1张牌（txt 修改记录 2026-09-05【4】：回合结束→回合开始；英文 Start: Draw the top card of
+ *  your opponent's deck. Your opponent draws the top card of your deck.） */
+function* chaos0Start(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const me = ctx.player;
   const foe = opp(me);
   const foeP = ctx.s.players[foe];
@@ -113,7 +115,7 @@ function* chaos5Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> 
 
 registerCardEffects('chaos-0', {
   middle: chaos0Middle,
-  triggers: { end: { fn: chaos0End, optional: false } },
+  triggers: { start: { fn: chaos0Start, optional: false } },
 });
 registerCardEffects('chaos-1', { middle: chaos1Middle });
 registerCardEffects('chaos-2', { middle: chaos2Middle });

@@ -13,8 +13,9 @@ function opp(p: PlayerId): PlayerId {
   return p === 0 ? 1 : 0;
 }
 
-/** corruption-0 顶（start，top:true）：回合开始：在此堆叠中，翻转1张被覆盖或未被覆盖的正面朝上的卡牌
- *  （自己所在堆叠中的其它 faceUp 卡翻成反面；源卡自己排除——候选空则 fizzle） */
+/** corruption-0 顶（start，top:true）：回合开始：在此堆叠中，翻转1张除此牌外的被覆盖或未被覆盖的
+ *  正面朝上的卡牌（txt 修改记录 2026-09-05【2】补「除此牌外」——自己所在堆叠中的其它 faceUp 卡
+ *  翻成反面；源卡自己排除——候选空则 fizzle） */
 function* corruption0Start(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const line = ctx.card.line;
   if (line === null) return;
@@ -81,13 +82,11 @@ function* corruption2Middle(ctx: EffectCtx): Generator<EffectStep, void, StepRes
   yield { op: 'discard', uid: ans.selected[0] };
 }
 
-/** corruption-3 中：你可以翻转1张被覆盖或未被覆盖的正面朝上的卡牌（可选；faceUp 卡翻成反面，含被盖） */
+/** corruption-3 中：你可以翻转1张被覆盖的正面朝上的卡牌（可选；txt 修改记录 2026-09-05【1】撤销
+ *  「或未被覆盖」——仅被盖的 faceUp 卡翻成反面；顶卡 faceUp 不是目标） */
 function* corruption3Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
-  const cand = [
-    ...ctx.candidates({ zone: 'field' }),
-    ...ctx.candidates({ zone: 'field', covered: true }),
-  ].filter((c) => c.faceUp);
-  const tAns = yield { kind: 'select', title: 'corruption-3：你可以翻转1张正面朝上的卡牌', min: 1, max: 1, optional: true, candidates: cand };
+  const cand = ctx.candidates({ zone: 'field', covered: true }).filter((c) => c.faceUp);
+  const tAns = yield { kind: 'select', title: 'corruption-3：你可以翻转1张被覆盖的正面朝上的卡牌', min: 1, max: 1, optional: true, candidates: cand };
   if (tAns.selected.length === 0) return;
   yield { op: 'flip', uid: tAns.selected[0], allowCovered: true };
 }

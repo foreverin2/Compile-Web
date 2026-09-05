@@ -54,6 +54,14 @@ import type { CardDef, ProtocolDef } from '../core/models/types';
  * 15 套 loadingText（座右铭）→ txt 标题副题批（幸运孤注一掷/明镜照见本真/和平暂得安歇/
  * 混乱祸福难料/明晰吾道已明/寒冰寒锐诡谲/烟雾弥天障雾/恐惧速速退避/腐化独恶殃众/战争
  * 鏖战何归/勇气逆焰燎原/时间溯往前行/同化互通相契/多元殊异成锋/统一合众则刚）。
+ *
+ * 权威源修订 3（用户 2026-09-05 改 txt「compile2文本修改记录.txt」，本文件已同步 7/8 处）：
+ *   【1】腐化3 删「或未被覆盖」（仅翻被覆盖的正面卡）；【2】腐化0 补「除此牌外的」；
+ *   【3】恐惧4 →「对手随机弃置1张牌」（原「抽取对手的1张卡牌然后弃置」，操作方式错误）；
+ *   【4】混乱0 底 回合结束→回合开始；【5】统一4 顶 回合结束→回合开始；
+ *   【7】勇气1 补「对手的」（删除对象限对手牌）；【8】多元6 至少4种→至少3种。
+ *   【6】时间2 洗入弃牌堆效果 中部→底部：**未同步**——用户 2026-09-06 拍板维持中部主动
+ *   （compile-apo 亦作 middle on_play；英文卡面待用户复核后再定，见 docs/handoff §12 待办）。
  */
 
 export const ALL_PROTOCOLS_2: ProtocolDef[] = [
@@ -104,7 +112,7 @@ export const ALL_CARD_DEFS_2: CardDef[] = [
   { defId: 'peace-6', protocol: 'peace', value: 6, middle: '若你手牌数超过1，翻转此牌。' },
 
   // 混乱——不可预测，当心！
-  { defId: 'chaos-0', protocol: 'chaos', value: 0, middle: '在每条链路中，各翻转1张被覆盖的牌。', bottom: '回合结束：你从对手的牌库中抽取1张牌。对手从你的牌库中抽取1张牌。' },
+  { defId: 'chaos-0', protocol: 'chaos', value: 0, middle: '在每条链路中，各翻转1张被覆盖的牌。', bottom: '回合开始：你从对手的牌库中抽取1张牌。对手从你的牌库中抽取1张牌。' },
   { defId: 'chaos-1', protocol: 'chaos', value: 1, middle: '重新排列你的协议。重新排列对手的协议。' },
   { defId: 'chaos-2', protocol: 'chaos', value: 2, middle: '偏转1张你的被覆盖的卡牌。' },
   { defId: 'chaos-3', protocol: 'chaos', value: 3, bottom: '此牌可以无视协议限制打在任意堆叠中。' },
@@ -141,16 +149,18 @@ export const ALL_CARD_DEFS_2: CardDef[] = [
   { defId: 'fear-1', protocol: 'fear', value: 1, middle: '抽2张牌。对手弃置所有手牌，然后抽取手牌数-1的卡牌。' },
   { defId: 'fear-2', protocol: 'fear', value: 2, middle: '召回对手的1张牌。' },
   { defId: 'fear-3', protocol: 'fear', value: 3, middle: '偏转1张对手在此链路中的被覆盖或未被覆盖的卡牌。' },
-  // 恐惧4 异文：docx 作「你的对手随机弃掉一张牌」——txt 为「抽取对手的1张卡牌然后弃置」，来源/目标待裁决
-  { defId: 'fear-4', protocol: 'fear', value: 4, middle: '抽取对手的1张卡牌，然后将其弃置。' },
+  // 恐惧4：2026-09-05 txt 修改记录【3】修订（操作方式错误）：「抽取对手的1张卡牌，然后将其弃置」
+  //   →「对手随机弃置1张牌」（英文 Your opponent discards 1 random card.；与 docx「随机弃」口径一致）
+  { defId: 'fear-4', protocol: 'fear', value: 4, middle: '对手随机弃置1张牌。' },
   { defId: 'fear-5', protocol: 'fear', value: 5, middle: '你弃置1张牌。' },
 
   // 腐化——一颗老鼠屎，坏了一锅粥
-  { defId: 'corruption-0', protocol: 'corruption', value: 0, top: '回合开始：在此堆叠中，翻转1张被覆盖或未被覆盖的正面朝上的卡牌。', bottom: '此牌可以打在任意一方的任意协议处。' },
+  { defId: 'corruption-0', protocol: 'corruption', value: 0, top: '回合开始：在此堆叠中，翻转1张除此牌外的被覆盖或未被覆盖的正面朝上的卡牌。', bottom: '此牌可以打在任意一方的任意协议处。' },
   { defId: 'corruption-1', protocol: 'corruption', value: 1, middle: '召回1张卡牌。', bottom: '当对手的卡牌被召回时：将那张牌正面朝下放回他的牌库。' },
   { defId: 'corruption-2', protocol: 'corruption', value: 2, top: '当你弃牌后：对手弃置1张牌。', middle: '抽1张牌。弃置1张牌。' },
-  // 腐化3：用户 2026-09-03 修订 txt（为被覆盖→未被覆盖；空?→空=无底部指令）
-  { defId: 'corruption-3', protocol: 'corruption', value: 3, middle: '你可以翻转1张被覆盖或未被覆盖的正面朝上的卡牌。' },
+  // 腐化3：2026-09-05 txt 修改记录【1】修订（效果范围错误）：2026-09-03 所改「被覆盖或未被覆盖」
+  //  撤销 → 仅「被覆盖」（英文 You may flip 1 face-up covered card.；空?→空=无底部指令）
+  { defId: 'corruption-3', protocol: 'corruption', value: 3, middle: '你可以翻转1张被覆盖的正面朝上的卡牌。' },
   { defId: 'corruption-5', protocol: 'corruption', value: 5, middle: '你弃置1张牌。' },
   { defId: 'corruption-6', protocol: 'corruption', value: 6, top: '回合结束：你弃置1张牌或删除此牌。' },
 
@@ -164,7 +174,7 @@ export const ALL_CARD_DEFS_2: CardDef[] = [
 
   // 勇气——面对逆境的火焰
   { defId: 'courage-0', protocol: 'courage', value: 0, top: '回合开始：若你没有手牌，抽取1张牌。', middle: '抽取1张牌。', bottom: '回合结束：你可以弃置1张牌，若你这么做，对手弃置1张牌。' },
-  { defId: 'courage-1', protocol: 'courage', value: 1, middle: '在1条对手总阈值更大的链路中删除1张牌。' },
+  { defId: 'courage-1', protocol: 'courage', value: 1, middle: '在1条对手总阈值更大的链路中删除对手的1张牌。' },
   { defId: 'courage-2', protocol: 'courage', value: 2, middle: '抽取1张牌。', bottom: '回合结束：此链路中，若对手总阈值更大，抽取1张牌。' },
   { defId: 'courage-3', protocol: 'courage', value: 3, bottom: '回合结束：你可以将此牌偏转进入对手总阈值最大的链路中。' },
   { defId: 'courage-5', protocol: 'courage', value: 5, middle: '你弃置1张牌。' },
@@ -186,7 +196,7 @@ export const ALL_CARD_DEFS_2: CardDef[] = [
   { defId: 'diversity-3', protocol: 'diversity', value: 3, top: '若此堆叠中有任何非多元的正面朝上的卡牌，你的总阈值加2。' },
   { defId: 'diversity-4', protocol: 'diversity', value: 4, middle: '翻转1张阈值小于场上不同协议卡牌数目的牌。' },
   { defId: 'diversity-5', protocol: 'diversity', value: 5, middle: '你弃置1张牌。' },
-  { defId: 'diversity-6', protocol: 'diversity', value: 6, top: '回合结束：若场上没有至少4种不同协议的卡牌，删除此牌。' },
+  { defId: 'diversity-6', protocol: 'diversity', value: 6, top: '回合结束：若场上没有至少3种不同协议的卡牌，删除此牌。' },
 
   // 同化——完全改变与理解
   // 同化0：用户 2026-09-03 修订 txt（为被覆盖→未被覆盖；空?→空=无底部指令）
@@ -202,6 +212,6 @@ export const ALL_CARD_DEFS_2: CardDef[] = [
   { defId: 'unity-1', protocol: 'unity', value: 1, top: '回合开始：若此牌被覆盖，你可以偏转此牌。', middle: '若场上有5张或以上的统一卡牌，编译统一协议并删除那条链路中所有的卡牌。', bottom: '统一卡牌可以正面朝上打在此链路。' },
   { defId: 'unity-2', protocol: 'unity', value: 2, middle: '抽取与场上统一牌数目相等的牌。' },
   { defId: 'unity-3', protocol: 'unity', value: 3, middle: '如果场上有其它统一牌，你可以翻转1张正面朝上的卡牌。' },
-  { defId: 'unity-4', protocol: 'unity', value: 4, top: '回合结束：若你没有手牌，揭示你的牌库，抽取其中所有的统一卡牌，然后切洗你的牌库。' },
+  { defId: 'unity-4', protocol: 'unity', value: 4, top: '回合开始：若你没有手牌，揭示你的牌库，抽取其中所有的统一卡牌，然后切洗你的牌库。' },
   { defId: 'unity-5', protocol: 'unity', value: 5, middle: '你弃置1张牌。' },
 ];

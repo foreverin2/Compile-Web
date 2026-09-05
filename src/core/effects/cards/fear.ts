@@ -4,7 +4,8 @@ import { registerCardEffects } from '../registry';
 /**
  * 2代 恐惧 fear（关键词：偏转、强行弃置）。
  * 权威卡文：src/data/cards2.ts；裁决：docs/批2裁决结果.md（fear-0 顶禁中央效果=引擎 pushMiddle 守卫；
- * fear-1 抽弃前手牌数-1；fear-4 对手手牌随机 1 张弃置）。
+ * fear-1 抽弃前手牌数-1；fear-4 对手随机弃 1 张手牌——2026-09-05 txt 修改记录【3】修订后直接弃
+ * 对手手牌随机 1 张（落对手弃牌堆），不再 takeRandom）。
  */
 
 function opp(p: PlayerId): PlayerId {
@@ -86,14 +87,16 @@ function* fear3Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   yield { op: 'shift', uid, targetLine: to, allowCovered: true };
 }
 
-/** fear-4 中：抽取对手的1张卡牌，然后将其弃置（裁决 Q4：对手手牌随机 1 张弃置；takeRandom 取走再弃） */
+/** fear-4 中：对手随机弃置1张牌（txt 修改记录 2026-09-05【3】：原「抽取对手的1张卡牌，然后将其弃置」
+ *  = 操作方式错误；英文 Your opponent discards 1 random card. = 对手自弃 1 张随机手牌 → 落对手弃牌堆
+ *  （discard 按卡 owner 落弃牌堆），随机由引擎代选（同 time-3 随机揭示口径）；取代裁决 Q4 的
+ *  takeRandom 取走再弃实现） */
 function* fear4Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const foe = opp(ctx.player);
-  if (ctx.s.players[foe].hand.length === 0) return; // 对手无手牌 → fizzle
-  yield { op: 'takeRandom', from: foe }; // 随机取 1 张到效果属主手牌（owner 变更）
-  const mine = ctx.s.players[ctx.player].hand;
-  const taken = mine[mine.length - 1]; // 刚取走的那张（takeRandom push 到末尾）
-  if (taken) yield { op: 'discard', uid: taken.uid };
+  const hand = ctx.s.players[foe].hand;
+  if (hand.length === 0) return; // 对手无手牌 → fizzle
+  const pick = hand[Math.floor(Math.random() * hand.length)];
+  yield { op: 'discard', uid: pick.uid };
 }
 
 /** fear-5 中：你弃置1张牌 */

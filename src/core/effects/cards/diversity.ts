@@ -96,9 +96,11 @@ function* diversity5Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResu
   yield { op: 'discard', uid: ans.selected[0] };
 }
 
-/** diversity-6 顶（end，top:true）：回合结束：若场上没有至少4种不同协议的卡牌，删除此牌 */
+/** diversity-6 顶（end，top:true）：回合结束：若场上没有至少3种不同协议的卡牌，删除此牌
+ *  （txt 修改记录 2026-09-05【8】：至少4种→至少3种；英文 End: If there are not at least 3
+ *  different protocols on cards in the field, delete this card.） */
 function* diversity6End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
-  if (fieldProtocolCount(ctx.s) < 4) yield { op: 'delete', uid: ctx.card.uid };
+  if (fieldProtocolCount(ctx.s) < 3) yield { op: 'delete', uid: ctx.card.uid };
 }
 
 

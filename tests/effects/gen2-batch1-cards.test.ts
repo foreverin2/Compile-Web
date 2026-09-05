@@ -265,6 +265,25 @@ describe('chaos effects', () => {
     expect(s.players[0].trash).toHaveLength(2);
     expect(s.players[0].hand).toHaveLength(2);
   });
+
+  it('chaos-0 bottom start: both players draw top of opponent deck at turn START (txt 修改记录【4】end→start)', () => {
+    const s = setup();
+    s.turnPlayer = 0;
+    s.step = 'start';
+    const src = makeCard('chaos-0', 0, 'field', true, 0, 0);
+    s.players[0].stacks[0] = [src];
+    s.players[0].deck = [makeCard('fire-5', 0, 'deck', false)];
+    s.players[1].deck = [makeCard('death-5', 1, 'deck', false)];
+    const trigs = collectTriggers(s, 'start');
+    const t = trigs.find((x) => x.cardUid === src.uid);
+    expect(t).toBeTruthy(); // start 收 chaos-0 底指令（顶卡）
+    resolveTrigger(s, t!);
+    runStack(s);
+    expect(s.players[0].hand).toHaveLength(1); // 自己从对手牌库抽
+    expect(s.players[1].hand).toHaveLength(1); // 对手从自己牌库抽
+    expect(s.players[0].deck).toHaveLength(0);
+    expect(s.players[1].deck).toHaveLength(0);
+  });
 });
 
 // ============ 明晰 clarity ============

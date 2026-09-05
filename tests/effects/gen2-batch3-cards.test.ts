@@ -96,6 +96,20 @@ describe('courage', () => {
     runStack(s);
     expect(src.faceUp).toBe(false); // 对手总值更大 → 回合结束翻自己
   });
+
+  it('courage-1 middle: deletes an OPPONENT card in a line where opponent total is higher (txt 修改记录【7】)', () => {
+    const s = setup();
+    const src = placeSrc(s, 'courage-1', 0, 1);
+    s.players[0].stacks[1] = [makeCard('death-1', 0, 'field', true, 1, 0), src]; // 自己线1 = 1+1=2
+    const oppTop = makeCard('light-3', 1, 'field', true, 1, 0);
+    const oppUnder = makeCard('fire-5', 1, 'field', true, 1, 0);
+    s.players[1].stacks[1] = [oppUnder, oppTop]; // 对手线1 = 5+3=8 > 2
+    resolveMiddle(s, 0, src);
+    resolveAllChoices(s, eagerPick); // 选线1 → 删对手该线顶卡 light-3
+    expect(s.players[1].stacks[1].some((c) => c.uid === oppTop.uid)).toBe(false); // 对手卡被删
+    expect(s.players[1].stacks[1]).toHaveLength(1);
+    expect(s.players[0].stacks[1]).toHaveLength(2); // 自己的卡不受影响
+  });
 });
 
 // ============ 多元 diversity ============
@@ -121,6 +135,34 @@ describe('diversity', () => {
     resolveMiddle(s, 0, src);
     expect(s.players[0].protocols[2].compiled).toBe(true); // 纯翻面
     void src;
+  });
+
+  it('diversity-6 end: deletes itself when fewer than 3 protocols on field (txt 修改记录【8】4→3)', () => {
+    const s = setup();
+    s.turnPlayer = 0;
+    s.step = 'end';
+    const src = placeSrc(s, 'diversity-6', 0, 0); // 场上仅 diversity 1 种协议
+    const trigs = collectTriggers(s, 'end');
+    const t = trigs.find((x) => x.cardUid === src.uid);
+    expect(t).toBeTruthy();
+    resolveTrigger(s, t!);
+    runStack(s);
+    expect(s.players[0].stacks[0]).toHaveLength(0); // <3 种 → 自删
+  });
+
+  it('diversity-6 end: survives when ≥3 protocols on field', () => {
+    const s = setup();
+    s.turnPlayer = 0;
+    s.step = 'end';
+    const src = placeSrc(s, 'diversity-6', 0, 0);
+    placeSrc(s, 'fire-5', 0, 1); // fire
+    placeSrc(s, 'death-0', 1, 1); // death → 场上 3 种（diversity/fire/death）
+    const trigs = collectTriggers(s, 'end');
+    const t = trigs.find((x) => x.cardUid === src.uid);
+    expect(t).toBeTruthy();
+    resolveTrigger(s, t!);
+    runStack(s);
+    expect(s.players[0].stacks[0].some((c) => c.uid === src.uid)).toBe(true); // ≥3 种 → 不删
   });
 });
 
@@ -176,6 +218,27 @@ describe('unity', () => {
     expect(s.players[0].protocols[0].compiled).toBe(true); // unity 编译完成
     expect(s.players[0].stacks[0]).toHaveLength(0); // 该线全删
     void src;
+  });
+
+  it('unity-4 top start: empty hand reveals deck, draws all Unity cards, shuffles (txt 修改记录【5】end→start)', () => {
+    const s = setup();
+    s.turnPlayer = 0;
+    s.step = 'start';
+    const src = placeSrc(s, 'unity-4', 0, 0);
+    s.players[0].hand = [];
+    s.players[0].deck = [
+      makeCard('unity-5', 0, 'deck', false),
+      makeCard('death-5', 0, 'deck', false),
+      makeCard('unity-3', 0, 'deck', false),
+    ];
+    const trigs = collectTriggers(s, 'start');
+    const t = trigs.find((x) => x.cardUid === src.uid);
+    expect(t).toBeTruthy(); // 回合开始触发（top:true）
+    resolveTrigger(s, t!);
+    runStack(s);
+    expect(s.players[0].hand).toHaveLength(2); // unity-5 + unity-3
+    expect(s.players[0].hand.every((c) => c.defId.startsWith('unity-'))).toBe(true);
+    expect(s.players[0].deck).toHaveLength(1); // death-5 洗后留在牌库
   });
 });
 

@@ -97,8 +97,10 @@ function* unity3Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> 
   yield { op: 'flip', uid: tAns.selected[0] };
 }
 
-/** unity-4 顶（end，top:true）：回合结束：若你没有手牌，揭示你的牌库，抽取其中所有的统一卡牌，然后切洗 */
-function* unity4End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
+/** unity-4 顶（start，top:true）：回合开始：若你没有手牌，揭示你的牌库，抽取其中所有的统一卡牌，然后
+ *  切洗（txt 修改记录 2026-09-05【5】：回合结束→回合开始；英文 Start: If you hand is empty, reveal
+ *  your deck, draw all Unity cards from it, and shuffle your deck.） */
+function* unity4Start(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   if (ctx.s.players[ctx.player].hand.length > 0) return;
   const deck = ctx.s.players[ctx.player].deck;
   if (deck.length === 0) return;
@@ -128,6 +130,6 @@ registerCardEffects('unity-1', {
 // unity-1 底放行：引擎 restrictions.unity1UncoveredLine
 registerCardEffects('unity-2', { middle: unity2Middle });
 registerCardEffects('unity-3', { middle: unity3Middle });
-registerCardEffects('unity-4', { triggers: { end: { fn: unity4End, optional: false, top: true } } });
+registerCardEffects('unity-4', { triggers: { start: { fn: unity4Start, optional: false, top: true } } });
 registerCardEffects('unity-5', { middle: unity5Middle });
 

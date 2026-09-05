@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { ChoiceRequest, GameState, Line, PlayerId } from '../../src/core/models/types';
 import { createGame, stackValue } from '../../src/core/state/create';
 import { pushMiddle, resolveMiddle, runStack } from '../../src/core/effects/resolve';
+import { collectTriggers, resolveTrigger } from '../../src/core/effects/triggers';
 import { refreshHand } from '../../src/core/actions/base';
 import { drawCards } from '../../src/core/engine/deck';
 import { isPlayableFaceUp } from '../../src/core/actions/base';
@@ -129,6 +130,19 @@ describe('fear', () => {
     expect(s.players[1].trash).toHaveLength(3);
     expect(s.players[0].hand).toHaveLength(2); // 自己抽 2
   });
+
+  it('fear-4 middle: opponent randomly discards 1 own hand card into their trash (txt 修改记录【3】)', () => {
+    const s = setup();
+    const src = placeSrc(s, 'fear-4', 0, 0);
+    s.players[1].hand = [makeCard('fire-1', 1, 'hand'), makeCard('death-2', 1, 'hand')];
+    s.players[0].hand = [makeCard('fire-0', 0, 'hand')];
+    resolveMiddle(s, 0, src);
+    expect(s.players[1].hand).toHaveLength(1); // 对手随机弃 1
+    expect(s.players[1].trash).toHaveLength(1); // 落对手弃牌堆（按 owner）
+    expect(s.players[1].trash[0].owner).toBe(1);
+    expect(s.players[0].hand).toHaveLength(1); // 自己不取走（非 takeRandom）
+    expect(s.players[0].trash).toHaveLength(0);
+  });
 });
 
 // ============ 腐化 corruption ============
@@ -157,6 +171,37 @@ describe('corruption', () => {
     expect(back).toBeTruthy();
     expect(back!.faceUp).toBe(false);
     expect(s.players[1].trash).toHaveLength(0);
+  });
+
+  it('corruption-3 middle: may flip only a COVERED face-up card, never an uncovered top (txt 修改记录【1】)', () => {
+    const s = setup();
+    const buried = makeCard('death-0', 0, 'field', true, 0, 0); // 被盖正面卡
+    const src = makeCard('corruption-3', 0, 'field', true, 0, 1); // 顶卡（源卡）
+    s.players[0].stacks[0] = [buried, src];
+    const otherTop = makeCard('fire-5', 1, 'field', true, 1, 0); // 他线顶卡（旧实现会误列）
+    s.players[1].stacks[1] = [otherTop];
+    resolveMiddle(s, 0, src);
+    resolveAllChoices(s, eagerPick); // optional 选第一候选 = buried
+    expect(buried.faceUp).toBe(false); // 仅被盖正面卡被翻
+    expect(src.faceUp).toBe(true); // 源卡自己未被翻
+    expect(otherTop.faceUp).toBe(true); // 未覆盖顶卡不是目标
+  });
+
+  it('corruption-0 top start: flips another face-up card in its stack, never itself (txt 修改记录【2】除此牌外)', () => {
+    const s = setup();
+    s.turnPlayer = 0;
+    s.step = 'start';
+    const buried = makeCard('death-0', 0, 'field', true, 0, 0);
+    const src = makeCard('corruption-0', 0, 'field', true, 0, 1); // 顶卡 top:true
+    s.players[0].stacks[0] = [buried, src];
+    const trigs = collectTriggers(s, 'start');
+    const t = trigs.find((x) => x.cardUid === src.uid);
+    expect(t).toBeTruthy();
+    resolveTrigger(s, t!);
+    runStack(s); // 驱动 fireReactive push 的效果至 select 挂起
+    resolveAllChoices(s, eagerPick); // 选 buried（唯一候选）
+    expect(buried.faceUp).toBe(false); // 同堆叠其它正面卡被翻
+    expect(src.faceUp).toBe(true); // 自身被「除此牌外」排除
   });
 });
 
