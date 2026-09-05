@@ -361,7 +361,7 @@ function showModeSelect(): void {
   });
 }
 
-/** 随机池：从两代全部协议中随机抽取 12 套 */
+/** 随机池：从三代全部协议（45 套）中随机抽取 12 套 */
 function randomDraftPool(): typeof DEMO_PROTOCOLS {
   const pool = [...DEMO_PROTOCOLS];
   for (let i = pool.length - 1; i > 0; i--) {

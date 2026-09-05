@@ -25,12 +25,12 @@ describe('MN02 并池后可玩性', () => {
     }
   });
 
-  it('草稿池含 30 套（1代+2代），冰(ice) 可被首选', () => {
+  it('草稿池含 45 套（1代+2代+3代），冰(ice) 可被首选', () => {
     const s = createGame();
     const pool = getDraftPool(s);
-    expect(pool).toHaveLength(30);
+    expect(pool).toHaveLength(45);
     expect(pool.map((p) => p.defId)).toContain('ice');
-    expect(pool[0].defId).toBe('water'); // 1代 顺序在前，2代 追加在后
+    expect(pool[0].defId).toBe('water'); // 1代 顺序在前，2/3代 追加在后
     performDraftPick(s, 'ice');
     expect(s.draftPicks[0].defId).toBe('ice');
   });

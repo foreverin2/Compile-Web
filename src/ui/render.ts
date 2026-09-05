@@ -102,7 +102,7 @@ function renderProtocol(p: { defId: string; compiled: boolean }, player: PlayerI
   }
   const img = document.createElement('img');
   // R1 协议卡朝向：P1（左）按原图方向展示；P2（右）旋转 180° 使双方协议相对放置。
-  // PNG 资源为原方向（水/火/光/生 750×1050 竖版，暗/死 1050×750 横版），各按自然比例显示。
+  // 三代协议图同规格竖版存储（3代 源横向成品已转竖版入库，2026-09-06 v2）。
   img.className = 'protocol-img' + (player === 1 ? ' rot-180' : '');
   img.src = protocolImgSrc(p.defId, p.compiled);
   img.alt = p.compiled ? 'compiled protocol' : 'protocol loading';
@@ -2820,6 +2820,8 @@ const DRAFT_GROUP_LABELS: ReadonlyArray<readonly [string, string]> = [
   ['AX01', '1代 拓展'],
   ['MN02', '2代 基础'],
   ['AX02', '2代 拓展'],
+  ['MN03', '3代 基础'],
+  ['AX03', '3代 拓展'],
 ];
 let draftEnabledGroups: Set<string> = new Set(DRAFT_GROUP_LABELS.map(([g]) => g));
 

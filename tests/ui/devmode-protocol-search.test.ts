@@ -12,11 +12,11 @@ describe('searchProtocols', () => {
     expect(searchProtocols('psych').map((p) => p.defId)).toEqual(['psychic']);
   });
 
-  it('英文单字母命中多个协议（前缀分 > 子串分，同分 defId 自然序；2026-09-03 并池含 2代）', () => {
-    // 前缀：life/light/love/luck；子串：assimilation/clarity/metal/plague（含 'l'）
+  it('英文单字母命中多个协议（前缀分 > 子串分，同分 defId 自然序；并池含 2/3代）', () => {
+    // 前缀：life/light/love/luck/lust；子串（默认 limit 8 内）：assimilation/clarity/flexibility（含 'l'）
     expect(searchProtocols('l').map((p) => p.defId)).toEqual([
-      'life', 'light', 'love', 'luck',
-      'assimilation', 'clarity', 'metal', 'plague',
+      'life', 'light', 'love', 'luck', 'lust',
+      'assimilation', 'clarity', 'flexibility',
     ]);
   });
 
@@ -25,9 +25,9 @@ describe('searchProtocols', () => {
     expect(searchProtocols('死').map((p) => p.defId)).toEqual(['death']);
   });
 
-  it('空查询 → 返回全部协议（供点选；两代并池共 30 套）', () => {
-    const all = searchProtocols('', 30);
-    expect(all.length).toBe(30);
+  it('空查询 → 返回全部协议（供点选；三代并池共 45 套）', () => {
+    const all = searchProtocols('', 45);
+    expect(all.length).toBe(45);
   });
 
   it('无匹配 / 纯数字 token → 空', () => {

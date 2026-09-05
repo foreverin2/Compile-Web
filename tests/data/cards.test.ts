@@ -4,6 +4,8 @@ import {
   ALL_CARD_DEFS,
   ALL_PROTOCOLS_2,
   ALL_CARD_DEFS_2,
+  ALL_PROTOCOLS_3,
+  ALL_CARD_DEFS_3,
   DEMO_PROTOCOLS,
   DEMO_CARD_DEFS,
   getCardDef,
@@ -14,13 +16,15 @@ import {
 } from '../../src/data/demo';
 
 describe('card data', () => {
-  it('数据分代：ALL=1代 15 套；ALL_2=2代 15 套；DEMO=两代并池 30 套（2026-09-03 用户拍板并入协议选择池）', () => {
+  it('数据分代：ALL=1代 15 套；ALL_2=2代 15 套；ALL_3=3代 15 套；DEMO=三代并池 45 套', () => {
     expect(ALL_PROTOCOLS).toHaveLength(15);
     expect(ALL_CARD_DEFS).toHaveLength(90);
     expect(ALL_PROTOCOLS_2).toHaveLength(15);
     expect(ALL_CARD_DEFS_2).toHaveLength(90);
-    expect(DEMO_PROTOCOLS).toHaveLength(30);
-    expect(DEMO_CARD_DEFS).toHaveLength(180);
+    expect(ALL_PROTOCOLS_3).toHaveLength(15);
+    expect(ALL_CARD_DEFS_3).toHaveLength(90);
+    expect(DEMO_PROTOCOLS).toHaveLength(45);
+    expect(DEMO_CARD_DEFS).toHaveLength(270);
   });
 
   it('并池后每套协议仍恰有 6 张指令卡', () => {
@@ -30,18 +34,20 @@ describe('card data', () => {
     }
   });
 
-  it('两代 defId / 协议 defId 并池无冲突', () => {
+  it('三代 defId / 协议 defId 并池无冲突', () => {
     const ids = DEMO_CARD_DEFS.map((c) => c.defId);
     expect(new Set(ids).size).toBe(ids.length);
     const pids = DEMO_PROTOCOLS.map((p) => p.defId);
     expect(new Set(pids).size).toBe(pids.length);
   });
 
-  it('getCardDef/getProtocolDef 覆盖两代', () => {
+  it('getCardDef/getProtocolDef 覆盖三代', () => {
     expect(getCardDef('fire-1').protocol).toBe('fire');
     expect(getCardDef('ice-1').protocol).toBe('ice'); // 2代
+    expect(getCardDef('envy-2').protocol).toBe('envy'); // 3代
     expect(getProtocolDef('water').name).toBe('水');
     expect(getProtocolDef('unity').name).toBe('统一'); // 2代
+    expect(getProtocolDef('sloth').name).toBe('怠惰'); // 3代（资源图「懒惰」已同步改名）
   });
 
   it('fire 使用真实卡文（1代 文本未变）', () => {
@@ -60,7 +66,7 @@ describe('card data', () => {
     expect(protocolImgSrc('ice', false)).toBe('/assets/protocols/ice/protocol-loading.jpg');
   });
 
-  it('世代 ↔ 资源扩展名全量不变量：MN01/AX01→png、MN02/AX02→jpg（30 套全覆盖）', () => {
+  it('世代 ↔ 资源扩展名全量不变量：MN01/AX01/MN03/AX03→png、MN02/AX02→jpg（45 套全覆盖）', () => {
     for (const p of DEMO_PROTOCOLS) {
       const ext = p.set === 'MN02' || p.set === 'AX02' ? 'jpg' : 'png';
       expect(protocolImgExt(p.defId), p.defId).toBe(ext);
@@ -77,5 +83,6 @@ describe('card data', () => {
     expect(getProtocolDef('apathy').set).toBe('AX01');
     expect(protocolImgExt('apathy')).toBe('png');
     expect(protocolImgExt('assimilation')).toBe('jpg'); // AX02 → jpg
+    expect(protocolImgExt('inertia')).toBe('png'); // AX03 → png
   });
 });

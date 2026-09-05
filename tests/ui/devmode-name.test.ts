@@ -97,8 +97,9 @@ describe('searchCards', () => {
   });
 
   it("'2' returns up to the default limit (8), sorted by defId (natural)", () => {
-    // 2026-09-03 并池后：值 2 卡两代共 29 张（多元无 2 分牌），全子串同分 → 取自然序前 8
+    // 2026-09-06 并池（+3代）后：值 2 卡三代共 44 张，全子串同分 → 取自然序前 8
     expect(searchCards('2').map((c) => c.defId)).toEqual([
+      'ambush-2',
       'apathy-2',
       'assimilation-2',
       'chaos-2',
@@ -106,7 +107,6 @@ describe('searchCards', () => {
       'corruption-2',
       'courage-2',
       'darkness-2',
-      'death-2',
     ]);
   });
 
@@ -147,22 +147,24 @@ describe('searchCards — multi-token AND + relevance ranking', () => {
   });
 
   it("AND narrows: 'l 2' keeps only cards whose key has both 'l' and '2'", () => {
-    // 旧实现会连成 'l2'（无匹配）；AND 语义下逐词命中。并池后：前缀组
-    // life/light/love/luck（得分更高）在前，含 'l' 的子串组按 defId 自然序在后。
+    // 旧实现会连成 'l2'（无匹配）；AND 语义下逐词命中。并池（+3代）后：前缀组
+    // life/light/love/luck/lust（得分更高）在前，含 'l' 的子串组按 defId 自然序在后
+    // （默认 limit 8 → 前缀 5 + 子串前 3：assimilation/clarity/flexibility）。
     expect(searchCards('l 2').map((c) => c.defId)).toEqual([
       'life-2',
       'light-2',
       'love-2',
       'luck-2',
+      'lust-2',
       'assimilation-2',
       'clarity-2',
-      'metal-2',
-      'plague-2',
+      'flexibility-2',
     ]);
   });
 
-  it("ranking: '5' returns the top-20 of 30 value-5 cards by defId natural order", () => {
+  it("ranking: '5' returns the top-20 of 45 value-5 cards by defId natural order", () => {
     expect(searchCards('5', 20).map((c) => c.defId)).toEqual([
+      'ambush-5',
       'apathy-5',
       'assimilation-5',
       'chaos-5',
@@ -172,23 +174,23 @@ describe('searchCards — multi-token AND + relevance ranking', () => {
       'darkness-5',
       'death-5',
       'diversity-5',
+      'envy-5',
       'fear-5',
       'fire-5',
+      'flexibility-5',
+      'fulcrum-5',
+      'gluttony-5',
       'gravity-5',
+      'greed-5',
       'hate-5',
       'ice-5',
-      'life-5',
-      'light-5',
-      'love-5',
-      'luck-5',
-      'metal-5',
-      'mirror-5',
     ]);
   });
 
-  it("ranking: prefix match beats plain substring — 'a 2' puts apathy/assimilation first", () => {
-    // apathy-2/assimilation-2 的 'a' 是 defKey 前缀（2 分）其余仅子串（1 分）→ 得分 3 vs 2
+  it("ranking: prefix match beats plain substring — 'a 2' puts ambush/apathy/assimilation first", () => {
+    // ambush-2/apathy-2/assimilation-2 的 'a' 是 defKey 前缀（2 分）其余仅子串（1 分）→ 得分 3 vs 2
     expect(searchCards('a 2').map((c) => c.defId)).toEqual([
+      'ambush-2',
       'apathy-2',
       'assimilation-2',
       'chaos-2',
@@ -196,15 +198,14 @@ describe('searchCards — multi-token AND + relevance ranking', () => {
       'courage-2',
       'darkness-2',
       'death-2',
-      'fear-2',
     ]);
   });
 
   it("ranking applies the limit after sorting: 'a 2', 3 → top-3 by score", () => {
     expect(searchCards('a 2', 3).map((c) => c.defId)).toEqual([
+      'ambush-2',
       'apathy-2',
       'assimilation-2',
-      'chaos-2',
     ]);
   });
 });

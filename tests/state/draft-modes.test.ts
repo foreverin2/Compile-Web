@@ -115,10 +115,10 @@ describe('随机池模式（draftPool 注入）', () => {
     expect(getDraftPool(s)).toHaveLength(6);
   });
 
-  it('默认池 = 两代全部 30 套（向后兼容）', () => {
+  it('默认池 = 三代全部 45 套（2026-09-06 并入 3代）', () => {
     const s = createGame();
-    expect(s.draftPool).toHaveLength(30);
-    expect(getDraftPool(s)).toHaveLength(30);
+    expect(s.draftPool).toHaveLength(45);
+    expect(getDraftPool(s)).toHaveLength(45);
   });
 
   it('禁用模式下 canUnpick 语义不变（同玩家连续双选内可取消）', () => {

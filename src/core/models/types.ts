@@ -24,8 +24,8 @@ export interface CardDef {
 export interface ProtocolDef {
   defId: string;
   name: string;
-  /** 产品世代：1代=MN01（基础 12）/AX01（拓展 3）；2代=MN02（基础 12）/AX02（拓展 3） */
-  set: 'MN01' | 'AX01' | 'MN02' | 'AX02';
+  /** 产品世代：1代=MN01（基础 12）/AX01（拓展 3）；2代=MN02（基础 12）/AX02（拓展 3）；3代=MN03（基础 12）/AX03（拓展 3） */
+  set: 'MN01' | 'AX01' | 'MN02' | 'AX02' | 'MN03' | 'AX03';
   commands: string[];
   loadingText: string;
 }

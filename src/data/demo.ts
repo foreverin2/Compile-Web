@@ -1,25 +1,33 @@
 import { ALL_PROTOCOLS, ALL_CARD_DEFS } from './cards';
 import { ALL_PROTOCOLS_2, ALL_CARD_DEFS_2 } from './cards2';
+import { ALL_PROTOCOLS_3, ALL_CARD_DEFS_3 } from './cards3';
 import type { CardDef, ProtocolDef } from '../core/models/types';
 
 /**
- * 演示草案池 = 1代 + 2代 全部 30 套协议（MN01×12 + AX01×3 + MN02×12 + AX02×3）。
+ * 演示草案池 = 1代 + 2代 + 3代 全部 45 套协议（MN01×12 + AX01×3 + MN02×12 + AX02×3
+ * + MN03×12 + AX03×3）。
  *
  * 2026-09-03 用户拍板：2代（MN02 英文版）「直接并入协议选择池」（30 套混选）。
- * 注意：2代 90 张卡的效果尚未实现（EFFECTS 未注册）——引擎对未注册卡牌安全空转
- * （resolve/triggers 均 `EFFECTS[defId]?.middle/triggers` 可选链），可正常打出/编译
- * （分值/编译按数据走），但该卡文本无实际效果；后续按协议分任务补齐效果。
+ * 2026-09-06 用户拍板：3代（MN03，卡图成品方向）同样并入（45 套混选），本次仅
+ * 资源+数据入库、不做效果——引擎对未注册卡牌安全空转（resolve/triggers 均
+ * `EFFECTS[defId]?.middle/triggers` 可选链），可正常打出/编译（分值/编译按数据走），
+ * 但该卡文本无实际效果；后续按协议分任务补齐效果（见 docs/handoff §14）。
  *
  * 卡面/协议图资源扩展名随世代：1代（MN01/AX01，官方 TTS PNG）→ .png；
- * 2代（MN02/AX02，英文版扫描）→ .jpg。UI 取图一律走 cardImgSrc/protocolImgSrc。
+ * 2代（MN02/AX02，英文版扫描）→ .jpg；3代（MN03/AX03，扫描 PNG）→ .png。
+ * UI 取图一律走 cardImgSrc/protocolImgSrc。
+ *
+ * 3代 协议图资源 2026-09-06 v2 起与 1/2代 同规格：源横向成品顺时针转 90° 存竖版 750×1050，
+ * UI 显示（池/图鉴 rotate(-90) 横置、场上 P1 直显/P2 rot-180 相对）与 1/2代 完全同一管线
+ * （v1 曾横向存储 + 世代特判，图鉴/场上出现裁切与溢出 → 撤销，改统一竖版存储）。
  */
-export const DEMO_PROTOCOLS: ProtocolDef[] = [...ALL_PROTOCOLS, ...ALL_PROTOCOLS_2];
-export const DEMO_CARD_DEFS: CardDef[] = [...ALL_CARD_DEFS, ...ALL_CARD_DEFS_2];
+export const DEMO_PROTOCOLS: ProtocolDef[] = [...ALL_PROTOCOLS, ...ALL_PROTOCOLS_2, ...ALL_PROTOCOLS_3];
+export const DEMO_CARD_DEFS: CardDef[] = [...ALL_CARD_DEFS, ...ALL_CARD_DEFS_2, ...ALL_CARD_DEFS_3];
 
-export { ALL_PROTOCOLS, ALL_CARD_DEFS, ALL_PROTOCOLS_2, ALL_CARD_DEFS_2 };
+export { ALL_PROTOCOLS, ALL_CARD_DEFS, ALL_PROTOCOLS_2, ALL_CARD_DEFS_2, ALL_PROTOCOLS_3, ALL_CARD_DEFS_3 };
 
-const cardIndex = new Map([...ALL_CARD_DEFS, ...ALL_CARD_DEFS_2].map((c) => [c.defId, c]));
-const protocolIndex = new Map([...ALL_PROTOCOLS, ...ALL_PROTOCOLS_2].map((p) => [p.defId, p]));
+const cardIndex = new Map([...ALL_CARD_DEFS, ...ALL_CARD_DEFS_2, ...ALL_CARD_DEFS_3].map((c) => [c.defId, c]));
+const protocolIndex = new Map([...ALL_PROTOCOLS, ...ALL_PROTOCOLS_2, ...ALL_PROTOCOLS_3].map((p) => [p.defId, p]));
 
 export function getCardDef(defId: string): CardDef {
   const def = cardIndex.get(defId);
@@ -33,7 +41,7 @@ export function getProtocolDef(defId: string): ProtocolDef {
   return def;
 }
 
-/** 协议资源扩展名（世代规则）：MN01/AX01 → png；MN02/AX02 → jpg；未知 defId 兜底 png */
+/** 协议资源扩展名（世代规则）：MN01/AX01 → png；MN02/AX02 → jpg；MN03/AX03 → png；未知 defId 兜底 png */
 export function protocolImgExt(defId: string): 'png' | 'jpg' {
   const def = protocolIndex.get(defId);
   if (!def) return 'png';

@@ -5,8 +5,8 @@ import { openZoom } from './render';
 /**
  * 主界面/掷硬币/图鉴/规则图纸 —— 非对局屏（main.ts 导航）。
  *
- * - renderHome：真正的主页面（2026-09-03 用户需求）：菜单按钮 + 30 套已编译卡面
- *   背景大平面（两向对角巡回动画）+ 页脚署名。
+ * - renderHome：真正的主页面（2026-09-03 用户需求）：菜单按钮 + 全部已编译卡面
+ *   背景大平面（两向对角巡回动画）+ 页脚署名。45 套（1+2+3代，2026-09-06）。
  * - renderCoin：掷硬币先手机制（玩家一选正/反 → 掷币；掷胜者先选协议，后选协议者
  *   先出牌——main 以 createGame({ draftStarter: 胜者, firstToPlay: 1-胜者 }) 开局）。
  * - renderLibrary：查看全部协议及其所属卡牌（分组行 + 点卡放大；复用 render.openZoom）。
@@ -27,7 +27,9 @@ export interface CoinNav {
 
 const SET_LABEL: Record<string, string> = {
   MN01: '1代 基础', AX01: '1代 拓展', MN02: '2代 基础', AX02: '2代 拓展',
+  MN03: '3代 基础', AX03: '3代 拓展',
 };
+void SET_LABEL; // 图鉴改显示座右铭后不再直接使用（保留作 chip/调试标签源）
 
 function el(tag: string, cls: string, text?: string): HTMLElement {
   const node = document.createElement(tag);
@@ -94,7 +96,7 @@ function shuffledProtocols(): typeof DEMO_PROTOCOLS {
   return defs;
 }
 
-/** 协议分组（装饰用）：30 套 → 5 组 × 6 套 */
+/** 协议分组（装饰用）：三代并池（45 套）→ 5 组等分 */
 function bgGroups(): typeof DEMO_PROTOCOLS[] {
   const defs = shuffledProtocols();
   const groups: typeof DEMO_PROTOCOLS[] = [];
@@ -269,7 +271,7 @@ export function renderModeSelect(root: HTMLElement, nav: ModeSelectNav): void {
   );
   const randomToggle = mkToggle(
     '随机池模式',
-    '开局随机从全部协议中抽取 12 套作为本局可选池（不再全 30 套可选）。世代筛选仍可用；若同时开启禁用模式，则在 12 套内按禁用模式规则选/禁。'
+    '开局随机从全部协议中抽取 12 套作为本局可选池（不再全量可选）。世代筛选仍可用；若同时开启禁用模式，则在 12 套内按禁用模式规则选/禁。'
   );
   const banBox = banToggle.box;
   const randomBox = randomToggle.box;
@@ -421,10 +423,38 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
   const head = el('div', 'subpage-head');
   head.appendChild(el('h1', 'subpage-title', '协议与卡牌图鉴'));
   head.appendChild(
-    el('div', 'subpage-sub', `${DEMO_PROTOCOLS.length} 套协议 × 6 张指令卡（悬停实时预览，点击放大详情）`)
+    el('div', 'subpage-sub', `${DEMO_PROTOCOLS.length} 套协议 × 6 张指令卡（按代筛选 · 悬停实时预览，点击放大详情）`)
   );
   head.appendChild(button('btn', '← 返回主页面', back));
   screen.appendChild(head);
+
+  // 按代筛选（2026-09-06 用户需求：同协议选择页的世代 chips）
+  const LIB_GROUP_LABELS: ReadonlyArray<readonly [string, string]> = [
+    ['MN01', '1代 基础'], ['AX01', '1代 拓展'], ['MN02', '2代 基础'], ['AX02', '2代 拓展'],
+    ['MN03', '3代 基础'], ['AX03', '3代 拓展'],
+  ];
+  const libEnabled = new Set(LIB_GROUP_LABELS.map(([g]) => g));
+  const filter = el('div', 'lib-filter');
+  const refreshChips = (): void => {
+    for (const chip of Array.from(filter.querySelectorAll('button'))) {
+      const g = chip.dataset.group!;
+      const on = libEnabled.has(g);
+      chip.classList.toggle('on', on);
+      chip.title = `${chip.textContent}（共 ${DEMO_PROTOCOLS.filter((p) => p.set === g).length} 套）· ${on ? '点击隐藏' : '点击显示'}`;
+    }
+  };
+  for (const [group, label] of LIB_GROUP_LABELS) {
+    const chip = el('button', 'draft-filter-chip on', label);
+    chip.setAttribute('type', 'button');
+    chip.dataset.group = group;
+    chip.addEventListener('click', () => {
+      if (libEnabled.has(group)) libEnabled.delete(group);
+      else libEnabled.add(group);
+      refreshChips();
+      buildList();
+    });
+    filter.appendChild(chip);
+  }
 
   const layout = el('div', 'library-layout');
 
@@ -438,9 +468,9 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
   preview.appendChild(pImg);
   preview.appendChild(pCap);
   preview.appendChild(pHint);
-  const showPreview = (src: string, caption: string, rotated: boolean): void => {
-    // 协议图：横置（逆时针 90°）展示；卡牌：竖置
-    pImg.className = 'library-preview-img ' + (rotated ? 'landscape' : 'portrait');
+  const showPreview = (src: string, caption: string, mode: 'portrait' | 'landscape' | 'natural'): void => {
+    // 协议图：1/2代 竖版存 rotate(-90) 横置展示（landscape）；3代 横向成品直放（natural）；卡牌：竖置
+    pImg.className = 'library-preview-img ' + mode;
     pImg.src = src;
     pImg.alt = caption;
     pCap.textContent = caption;
@@ -457,59 +487,78 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
   const list = el('div', 'library-list');
   layout.appendChild(list);
   layout.appendChild(preview);
-  for (const proto of DEMO_PROTOCOLS) {
-    const group = el('div', 'lib-group');
-    const headRow = el('div', 'lib-proto');
-    const face = el('div', 'lib-proto-img-wrap');
+  screen.appendChild(filter); // 世代筛选条在 head 之后（先于 layout 挂载，勿用 insertBefore 前置）
+
+  /** 协议封面小图（loading/compiled 通用）：竖版存储 + CSS rotate(-90) 横置（三代同规格） */
+  function protoFaceImg(defId: string, compiled: boolean, wrap: HTMLElement): HTMLImageElement {
     const img = document.createElement('img');
-    img.className = 'lib-proto-img'; // 协议图逆时针 90° 横置展示（与场上/草稿一致）
-    img.src = protocolImgSrc(proto.defId, false);
-    img.alt = proto.name;
+    img.className = 'lib-proto-img';
+    img.src = protocolImgSrc(defId, compiled);
+    img.alt = '';
     img.loading = 'lazy';
     img.decoding = 'async';
-    img.title = `查看协议「${proto.name}」放大图`;
-    face.appendChild(img);
-    face.addEventListener('mouseenter', () =>
-      showPreview(
-        protocolImgSrc(proto.defId, false),
-        `${proto.name} · ${SET_LABEL[proto.set] ?? proto.set}`,
-        true
-      )
-    );
-    face.addEventListener('click', () => openZoom(proto.defId, true, true, false));
-    headRow.appendChild(face);
-    const meta = el('div', 'lib-proto-meta');
-    meta.appendChild(el('div', 'lib-proto-name', `${proto.name} · ${SET_LABEL[proto.set] ?? proto.set}`));
-    meta.appendChild(el('div', 'lib-proto-commands', proto.commands.join(' · ')));
-    headRow.appendChild(meta);
-    group.appendChild(headRow);
-
-    const row = el('div', 'lib-cards');
-    for (const c of DEMO_CARD_DEFS.filter((x) => x.protocol === proto.defId)) {
-      const cell = el('div', 'lib-card');
-      const cimg = document.createElement('img');
-      cimg.src = cardImgSrc(proto.defId, c.value);
-      cimg.alt = `${proto.name} ${c.value} 分`;
-      cimg.loading = 'lazy';
-      cimg.decoding = 'async';
-      cimg.title = `${proto.name} ${c.value} 分指令卡`;
-      cell.appendChild(cimg);
-      cell.appendChild(el('div', 'lib-card-value', String(c.value)));
-      cell.addEventListener('mouseenter', () =>
-        showPreview(cardImgSrc(proto.defId, c.value), `${proto.name} ${c.value} 分指令卡`, false)
-      );
-      cell.addEventListener('click', () => openZoom(c.defId, true, false, false));
-      row.appendChild(cell);
-    }
-    group.appendChild(row);
-    list.appendChild(group);
+    wrap.appendChild(img);
+    return img;
   }
+
+  const buildList = (): void => {
+    list.textContent = '';
+    for (const proto of DEMO_PROTOCOLS) {
+      if (!libEnabled.has(proto.set)) continue;
+      const motto = `${proto.name} · ${proto.loadingText}`; // 座右铭（去「X代 基础/拓展」代号）
+      const group = el('div', 'lib-group');
+      const headRow = el('div', 'lib-proto');
+
+      // 未编译（loading）封面
+      const face = el('div', 'lib-proto-img-wrap');
+      protoFaceImg(proto.defId, false, face);
+      face.addEventListener('mouseenter', () => showPreview(protocolImgSrc(proto.defId, false), motto, 'landscape'));
+      face.addEventListener('click', () => openZoom(proto.defId, true, true, false));
+      headRow.appendChild(face);
+
+      // 已编译封面槽（协议右边，2026-09-06 用户需求）
+      const faceC = el('div', 'lib-proto-img-wrap lib-face-compiled');
+      protoFaceImg(proto.defId, true, faceC);
+      faceC.addEventListener('mouseenter', () =>
+        showPreview(protocolImgSrc(proto.defId, true), `${motto} · 已编译`, 'landscape')
+      );
+      faceC.addEventListener('click', () => openZoom(proto.defId, true, true, true));
+      headRow.appendChild(faceC);
+
+      const meta = el('div', 'lib-proto-meta');
+      meta.appendChild(el('div', 'lib-proto-name', motto));
+      meta.appendChild(el('div', 'lib-proto-commands', proto.commands.join(' · ')));
+      headRow.appendChild(meta);
+      group.appendChild(headRow);
+
+      const row = el('div', 'lib-cards');
+      for (const c of DEMO_CARD_DEFS.filter((x) => x.protocol === proto.defId)) {
+        const cell = el('div', 'lib-card');
+        const cimg = document.createElement('img');
+        cimg.src = cardImgSrc(proto.defId, c.value);
+        cimg.alt = `${proto.name} ${c.value} 分`;
+        cimg.loading = 'lazy';
+        cimg.decoding = 'async';
+        cimg.title = `${proto.name} ${c.value} 分指令卡`;
+        cell.appendChild(cimg);
+        cell.appendChild(el('div', 'lib-card-value', String(c.value)));
+        cell.addEventListener('mouseenter', () =>
+          showPreview(cardImgSrc(proto.defId, c.value), `${proto.name} ${c.value} 分指令卡`, 'portrait')
+        );
+        cell.addEventListener('click', () => openZoom(c.defId, true, false, false));
+        row.appendChild(cell);
+      }
+      group.appendChild(row);
+      list.appendChild(group);
+    }
+  };
+  buildList();
+  refreshChips();
   // 鼠标离开整个列表（含移入右侧展示框）才清空预览
   list.addEventListener('mouseleave', clearPreview);
   screen.appendChild(layout);
   root.appendChild(screen);
 }
-
 /* =====================================================================
  * 规则图纸：1/2/3 代说明书 + FAQ（public/assets/rules PDF；iframe 查看 + 新标签打开）
  * ===================================================================== */
