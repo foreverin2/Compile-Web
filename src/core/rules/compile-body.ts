@@ -2,6 +2,7 @@ import { pushLog } from '../log';
 import type { GameState, Line, PlayerId } from '../models/types';
 import { gameBus } from '../events/bus';
 import { fireReactive } from '../effects/triggers';
+import { shuffleTrashIntoDeck } from '../engine/deck';
 
 /** 编译本体（无前置校验）：同时删除该线双方全部卡牌（"all" 效果，不触发任何文本/连锁），
  *  翻协议或抽对手牌库顶 1 张，并完成胜利判定。
@@ -38,7 +39,9 @@ export function executeCompileBody(s: GameState, player: PlayerId, line: Line): 
     },
   });
   if (protocol.compiled) {
-    // 重新编译：抽对手牌库顶 1 张，所有权变更
+    // 重新编译：抽对手牌库顶 1 张，所有权变更（修改提示词 28/29：对手牌库为空 → 先将其弃牌堆
+    // 洗入牌库再抽——与 drawCards 补牌规则一致）
+    if (opp.deck.length === 0 && opp.trash.length > 0) shuffleTrashIntoDeck(s, player === 0 ? 1 : 0);
     const card = opp.deck.pop();
     if (card) {
       card.owner = player;

@@ -362,11 +362,12 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       const card = findCard(s, op.uid);
       if (!card || card.zone !== 'field') throw new Error(`cannot flip ${op.uid}: not on field`);
       if (!op.allowCovered && !isUncovered(s, card)) throw new Error(`cannot flip ${op.uid}: covered card`);
-      // ice-4 底「此牌不可被翻转」（批2）：仅未覆盖顶卡且正面时生效（底命令规则）——翻转无效，直接跳过；
-      // 3代 inertia-1 禁底 → ice-4 底失效可翻（C7）；rigidity-7 底「此牌不能被翻转或平移」同款免疫（C11）
+      // ice-4 底「此牌不可被翻转」（批2；修改提示词 18：效果若触发则【真的】不能被翻转——
+      // faceUp 即免疫，含被覆盖，不再要求顶卡）；3代 inertia-1 禁底 → ice-4 底失效可翻（C7）；
+      // rigidity-7 底「此牌不能被翻转或平移」同款免疫（C11）
       if (
         rigidity7Immune(s, card) ||
-        (card.defId === 'ice-4' && card.faceUp && isUncovered(s, card) && !cardCommandDisabled(s, card, 'bottom'))
+        (card.defId === 'ice-4' && card.faceUp && !cardCommandDisabled(s, card, 'bottom'))
       ) {
         pushLog(s, `${card.defId} 不可被翻转，跳过`);
         break;
