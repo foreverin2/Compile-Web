@@ -1,6 +1,6 @@
 import type { EffectCtx, EffectStep, Line, PlayerId, StepResult } from '../../models/types';
 import { registerCardEffects } from '../registry';
-import { deckTopAvailable } from '../context';
+import { deckTopAvailable, emitCardEvent } from '../context';
 import { fireReactive, fireRefreshReactives } from '../triggers';
 import { canRefreshDraw } from '../../engine/deck';
 import { controlRearrangeFlow } from '../control-rearrange-flow';
@@ -72,6 +72,12 @@ function* assimilation1AfterRefresh(ctx: EffectCtx): Generator<EffectStep, void,
   card.line = null;
   card.pos = null;
   foeP.trash.push(card);
+  // 修改提示词 30：直改路径也发弃牌事件供 FX 播基础弃牌动画（同化1 = 从手牌飞向【对手】弃牌堆）
+  emitCardEvent(ctx.s, 'card:discarded', card, {
+    triggerDefId: 'assimilation-1',
+    triggerProtocol: 'assimilation',
+    toTrashOf: foe,
+  });
   fireReactive(ctx.s, 'after-discard', ctx.player); // 弃牌者（自己）侧连锁
   fireReactive(ctx.s, 'after-self-discard', ctx.player);
 }

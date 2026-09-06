@@ -655,6 +655,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       emitCardEvent(s, 'card:discarded', card, {
         triggerDefId: pe.sourceDefId,
         triggerProtocol: pe.sourceDefId.split('-')[0],
+        fromDeckTop: true, // 修改提示词 5：牌库顶弃牌——FX 从牌库区起飞（该卡无场上/手牌 DOM 节点）
       });
       fireReactive(s, 'after-discard', target); // 弃牌连锁（弃牌者对手侧 plague-1 类）
       fireReactive(s, 'after-self-discard', target); // 2代 peace-4 类（弃牌者自身侧）

@@ -8,7 +8,7 @@ import { openControlRearrangeModal, closeControlRearrangeModal, refreshControlRe
 import { renderHome, renderCoin, renderLibrary, renderRules, renderModeSelect } from './ui/home';
 import { resetControlIfHeld } from './core/rules/control';
 import { DEMO_PROTOCOLS } from './data/demo';
-import { initEffects, initCompileFx, initRearrangeFx, playRevealFly, buildLoveHeart, playSpeedDrawExtra, SPEED_TOTAL_MS } from './ui/effects';
+import { initEffects, initCompileFx, initRearrangeFx, initShuffleFx, playRevealFly, buildLoveHeart, playSpeedDrawExtra, SPEED_TOTAL_MS } from './ui/effects';
 import { initDiag } from './ui/diag';
 import { initDevMode } from './ui/devmode';
 import { gameBus } from './core/events/bus';
@@ -31,8 +31,10 @@ const HAND_CARD_SPACING = 102; // 卡宽 130 − 重叠 28
  *  播放抽牌飞入动画时给 draw-ghost 卡背挂粉红爱心 + 边框粉红光（FX-4）。
  *  speed 标志：该次抽牌是否由 speed 协议触发（speed-1 顶「清理缓存后抽1张」）——
  *  播放抽牌动画时【先播 speed 专属飓风】（牌库区 → 手牌末尾），基础 draw-ghost 飞入
- *  顺延到专属完成后（FX-R1 时序修复：不再基础先播、专属后播）。 */
-let pendingDraws: { player: PlayerId; count: number; love: boolean; speed: boolean }[] = [];
+ *  顺延到专属完成后（FX-R1 时序修复：不再基础先播、专属后播）。
+ *  fromOpp：从【对手】牌库抽（同化1/爱1 效果 fromOpponentDeck）——起点 = 对手牌库侧
+ *  （修改提示词 31：该抽牌要有基础动画，来源视觉上是对手牌库而非自己牌库）。 */
+let pendingDraws: { player: PlayerId; count: number; love: boolean; speed: boolean; fromOpp: boolean }[] = [];
 /** 效果触发的揭示累计（card:revealed 事件 → 本次行动结算完成后按序播揭示飞行：
  *  幽灵从被揭示方手牌末尾逐张飞入接收方手牌末尾，全部落地后再重渲染） */
 let pendingReveals: { owner: PlayerId; shownTo: PlayerId; defId: string; triggerProtocol: string }[] = [];
@@ -175,7 +177,7 @@ const cb: UiCallbacks = {
     if (drawAnimCount > 0) {
       drawAnimBusy = true;
       // 刷新按钮抽牌（非效果触发）：love 协议不参与（refresh 动作不产生 card:drawn 事件）→ love=false
-      playDrawAnimation(player, drawAnimCount, false, () => {
+      playDrawAnimation(player, drawAnimCount, false, false, () => {
         drawAnimBusy = false;
         if (epoch !== resetEpoch) return; // 重置发生：放弃后续渲染（幽灵已在动画内清理）
         afterFx();
@@ -201,16 +203,17 @@ const cb: UiCallbacks = {
  * ——修复"基础抽牌先播、speed 专属后播"的时序错误）。全部播完调用 done()。
  */
 function playDrawSequence(
-  draws: { player: PlayerId; count: number; love: boolean; speed: boolean }[],
+  draws: { player: PlayerId; count: number; love: boolean; speed: boolean; fromOpp: boolean }[],
   done: () => void,
 ): void {
-  const merged: { player: PlayerId; count: number; love: boolean; speed: boolean }[] = [];
+  const merged: { player: PlayerId; count: number; love: boolean; speed: boolean; fromOpp: boolean }[] = [];
   for (const d of draws) {
     const found = merged.find((m) => m.player === d.player);
     if (found) {
       found.count += d.count;
       found.love = found.love || d.love;
       found.speed = found.speed || d.speed;
+      found.fromOpp = found.fromOpp || d.fromOpp; // 混合来源按从对手抽处理（起点视觉不统一时取对手侧）
     } else {
       merged.push({ ...d });
     }
@@ -230,10 +233,10 @@ function playDrawSequence(
     // 基础 draw-ghost 飞入顺延到专属完成后（DOM 在 renderApp 前始终为旧布局，落点仍正确）
     playSpeedDrawExtra({ player: first.player, count: first.count, triggerProtocol: 'speed' });
     window.setTimeout(() => {
-      playDrawAnimation(first.player, first.count, first.love, next);
+      playDrawAnimation(first.player, first.count, first.love, first.fromOpp, next);
     }, SPEED_TOTAL_MS);
   } else {
-    playDrawAnimation(first.player, first.count, first.love, next);
+    playDrawAnimation(first.player, first.count, first.love, first.fromOpp, next);
   }
 }
 
@@ -270,7 +273,7 @@ function playRevealFlySequence(
  *   牌库区粉红光芒 / 落点爱心由 effects 层 playLoveDrawExtra 独立播放（持续 2s）
  * 全部落地后移除幽灵卡并调用 done()（由调用方触发重渲染）。
  */
-function playDrawAnimation(player: PlayerId, count: number, love: boolean, done: () => void): void {
+function playDrawAnimation(player: PlayerId, count: number, love: boolean, fromOpp: boolean, done: () => void): void {
   const hands = document.querySelectorAll<HTMLElement>('.hand');
   const hand = hands[player];
   if (!hand) {
@@ -279,10 +282,14 @@ function playDrawAnimation(player: PlayerId, count: number, love: boolean, done:
   }
   const rect = hand.getBoundingClientRect();
   const cy = rect.top + rect.height / 2;
-  // 抽牌起点 = 牌库区外侧（与手牌生长方向一致）：P1 取牌库左缘再左 90px、P2 取右缘再右 90px；
-  // 牌库元素缺失（不应发生）时回退到手牌区外侧（原行为）
-  const deck = document.querySelector<HTMLElement>(`.deck[data-player="${player}"]`);
-  const deckRect = deck ? deck.getBoundingClientRect() : null;
+  // 抽牌起点：普通抽 = 自己牌库区外侧；fromOpp（修改提示词 31：从对手牌库抽，同化1/爱1）
+  // = 对端牌库区外侧——卡从对手牌库方向飞入自己手牌（来源视觉正确）
+  const deckSel = `.deck[data-player="${player}"]`;
+  const deck = document.querySelector<HTMLElement>(deckSel);
+  const fromDeck = fromOpp
+    ? document.querySelector<HTMLElement>(`.deck[data-player="${player === 0 ? 1 : 0}"]`)
+    : deck;
+  const deckRect = (fromDeck ?? deck) ? (fromDeck ?? deck)!.getBoundingClientRect() : null;
   const fromLeft = player === 0;
   const startX = deckRect ? (fromLeft ? deckRect.left - 90 : deckRect.right + 90)
     : (fromLeft ? rect.left - 90 : rect.right + 90);
@@ -499,6 +506,7 @@ function scheduleAutoAdvance(): void {
 initEffects();
 initCompileFx();
 initRearrangeFx();
+initShuffleFx(); // 修改提示词 4：洗牌/切洗/弃牌堆洗入牌库动画（deck:shuffled 事件）
 // 诊断日志：全量记录 console + 捕获未捕获异常（出错自动提示导出）
 initDiag(() => state);
 // 隐藏开发者模式：Ctrl+Shift+P 密码进入；get <牌名> 把卡加入当前玩家手牌
@@ -508,12 +516,13 @@ initDevMode({ getState: () => state, render: () => renderApp(root, state, cb) })
 // 行动结算后统一播新抽牌特效
 gameBus.subscribe((e) => {
   if (e.type !== 'card:drawn') return;
-  const p = e.payload as { player: PlayerId; count: number; triggerProtocol?: string };
+  const p = e.payload as { player: PlayerId; count: number; triggerProtocol?: string; fromOpponentDeck?: boolean };
   pendingDraws.push({
     player: p.player,
     count: p.count,
     love: p.triggerProtocol === 'love',
     speed: p.triggerProtocol === 'speed',
+    fromOpp: p.fromOpponentDeck === true,
   });
 });
 // 效果触发的揭示：累计 card:revealed 事件，行动结算后按序播揭示飞行

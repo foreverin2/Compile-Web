@@ -789,6 +789,28 @@ body {
   justify-content: center; font-weight: bold; font-size: 13px; z-index: 2;
 }
 .deck .deck-count.empty { color: #666; border-color: #444; }
+/* ===== 洗牌动画（修改提示词 4：deck:shuffled 事件，effects initShuffleFx 挂类） =====
+ * 层叠卡快速上下抖动（模拟切洗）+ 顶部青色微光条扫过，单次播放 ~650ms 后 JS 移除类 */
+.fx-shuffling .deck-stack { animation: fx-deck-shuffle 0.3s ease-in-out 2; }
+.fx-shuffling::after {
+  content: '';
+  position: absolute; left: 8%; right: 8%; top: -4px; height: 5px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, transparent, #4ff0ff, transparent);
+  box-shadow: 0 0 12px #4ff0ffaa;
+  animation: fx-shuffle-glow 0.55s ease-out;
+  pointer-events: none;
+}
+@keyframes fx-deck-shuffle {
+  0%, 100% { transform: translateY(0); }
+  25% { transform: translateY(-4px); }
+  75% { transform: translateY(3px); }
+}
+@keyframes fx-shuffle-glow {
+  0% { opacity: 0; left: 8%; }
+  30% { opacity: 1; }
+  100% { opacity: 0; left: 92%; }
+}
 
 /* ===== 弃牌堆区（ITEM 3：renderTrash，牌库正下方竖直堆叠） =====
  * 与 .deck 同款层叠背面卡 + 中央计数（复用 .deck-stack/.deck-back 与共享层叠规则），

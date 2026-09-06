@@ -399,6 +399,88 @@ function playCutAt(rect: DOMRect, cw: boolean, ccw: boolean, payload: FxCardPayl
   window.setTimeout(() => clone.remove(), FX_REMOVE_MS);
 }
 
+/* ===== 弃牌飞行动画（修改提示词 5/30）：从来源位置飞向指定玩家的弃牌堆，落地切割 =====
+ * 5：牌库顶弃牌（discardDeckTop op，payload.fromDeckTop）——卡在牌库中无 DOM 节点，
+ *    从牌库区中心起飞卡背 → 弃牌堆区（来源 = 牌库 owner = payload.owner）。
+ * 30：同化1 弃手牌到【对手】弃牌堆（payload.toTrashOf = 对手；节点 = 弃牌手牌 DOM）。
+ * 两用 helper：rect（来源位置，可为牌库区/手牌节点 rect）+ 目标玩家弃牌堆 → 飞行 +
+ * 落点切割。飞行时长 MOVE_MS、落点切割复用 mountCut（FX_REMOVE_MS 自清理）。 */
+
+/** 目标弃牌堆区中心位置（.trash-pile[data-player="N"]；缺失 → null） */
+function trashPos(player: PlayerId): { x: number; y: number } | null {
+  const pile = document.querySelector<HTMLElement>(`.trash-pile[data-player="${player}"]`);
+  if (!pile) return null;
+  const r = pile.getBoundingClientRect();
+  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+}
+
+/** 从来源 rect 飞向弃牌堆的公共飞行（卡面按 payload 正反；到点即切割并自清理） */
+function flyToTrashAndCut(
+  rect: DOMRect,
+  payload: FxCardPayload,
+  destPlayer: PlayerId,
+): void {
+  const dest = trashPos(destPlayer);
+  if (!dest || rect.width === 0 || rect.height === 0) return;
+  const clone = buildFxCardAt(rect, false, false, payload, BASE_Z);
+  if (!clone) return;
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  const dx = dest.x - cx;
+  const dy = dest.y - cy;
+  clone.style.transition = `transform ${MOVE_MS}ms cubic-bezier(0.2, 0.7, 0.3, 1), opacity ${MOVE_MS}ms ease`;
+  requestAnimationFrame(() => {
+    clone.style.transform = `translate(${dx}px, ${dy}px) scale(0.75)`;
+    clone.style.opacity = '0.85';
+  });
+  // 落地：在落点重建卡面并切割（克隆已位移不可直接 mountCut——transform 会干扰切片定位）
+  window.setTimeout(() => {
+    clone.remove();
+    const at = {
+      left: dest.x - rect.width / 2, top: dest.y - rect.height / 2,
+      width: rect.width, height: rect.height,
+      right: dest.x + rect.width / 2, bottom: dest.y + rect.height / 2,
+      x: dest.x - rect.width / 2, y: dest.y - rect.height / 2,
+      toJSON: () => ({}),
+    } as DOMRect;
+    const landed = buildFxCardAt(at, false, false, payload, BASE_Z);
+    if (landed) {
+      mountCut(landed);
+      window.setTimeout(() => landed.remove(), FX_REMOVE_MS);
+    }
+  }, MOVE_MS);
+}
+
+/** 修改提示词 5：牌库顶弃牌——从牌库区起飞卡背 → 该玩家弃牌堆（来源视觉 = 牌库） */
+function playDeckTopDiscard(payload: FxCardPayload): void {
+  if (payload.owner === undefined) return;
+  const deck = document.querySelector<HTMLElement>(`.deck[data-player="${payload.owner}"]`);
+  const rect = deck ? deck.getBoundingClientRect() : null;
+  if (!rect || rect.width === 0) return;
+  // 起飞点 = 牌库区右侧中部（卡背朝下视觉）——牌库卡恒 faceDown
+  const src = {
+    left: rect.left + rect.width - 28,
+    top: rect.top + rect.height / 2 - 20,
+    width: 56,
+    height: 40,
+    right: rect.left + rect.width + 28,
+    bottom: rect.top + rect.height / 2 + 20,
+    x: rect.left + rect.width - 28,
+    y: rect.top + rect.height / 2 - 20,
+    toJSON: () => ({}),
+  } as DOMRect;
+  flyToTrashAndCut(src, { uid: payload.uid, defId: payload.defId, faceUp: false, owner: payload.owner }, payload.owner);
+}
+
+/** 修改提示词 30：同化1 弃手牌到【对手】弃牌堆——从弃牌手牌节点（rect 捕获时仍在手牌 DOM）
+ *  飞向对手弃牌堆（payload.toTrashOf）。 */
+function playAssimilationDiscard(node: HTMLElement, payload: FxCardPayload): void {
+  const rect = node.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return;
+  const to = (payload as FxCardPayload & { toTrashOf?: PlayerId }).toTrashOf ?? (payload.owner === 0 ? 1 : 0);
+  flyToTrashAndCut(rect, payload, to);
+}
+
 /* ===== Psychic 弃牌附加特效（用户 #4a）：紫粉粒子环绕汇聚 =====
  * 触发：card:discarded 且 triggerProtocol === 'psychic'（psychic-0/2/3/5 弃牌）。
  * 时序（总 ≈ 2.66s）：① 卡周围 24 颗紫粉粒子环形散布、随机相位/大小，环绕并渐现
@@ -1714,16 +1796,24 @@ export function initEffects(): () => void {
     if (!payload?.uid || !payload.defId) return;
     const node = document.querySelector<HTMLElement>(`[data-uid="${payload.uid}"]`);
     switch (e.type) {
-      case 'card:discarded':
+      case 'card:discarded': {
         // psychic/plague 弃牌附加特效带【前置段 → 延后基础切割 → 收尾消散】时序：
         // 基础 playCut 由附加函数内部延后调度（playPsychicDiscardExtra/playPlagueDiscardExtra
-        // 在 PSYCHIC_PRE_MS/PLAGUE_PRE_MS 调 playCutAt）；其余协议保持即时切割 + 附加叠加
-        if (node) {
+        // 在 PSYCHIC_PRE_MS/PLAGUE_PRE_MS 调 playCutAt）；其余协议保持即时切割 + 附加叠加。
+        // 修改提示词 5/30：牌库顶弃牌（fromDeckTop，无节点→从牌库区起飞）与同化1 弃到
+        // 【对手】弃牌堆（assimilation + toTrashOf）走专属飞行动画，不走原地切割。
+        const fxPayload = payload as FxCardPayload & { fromDeckTop?: boolean; toTrashOf?: PlayerId };
+        if (fxPayload.fromDeckTop) {
+          playDeckTopDiscard(payload);
+        } else if (node && fxPayload.triggerProtocol === 'assimilation') {
+          playAssimilationDiscard(node, payload);
+        } else if (node) {
           if (payload.triggerProtocol === 'psychic') playPsychicDiscardExtra(node, payload);
           else if (payload.triggerProtocol === 'plague') playPlagueDiscardExtra(node, payload);
           else playCut(node, payload);
         }
         break;
+      }
       case 'card:deleted':
         // death/hate 的删除附加特效带【前置段 → 延后破碎 → 收尾段】时序：基础破碎由附加函数
         // 内部延后调度（playDeathDeleteExtra/playHateDeleteExtra 在 DEATH_PRE_MS/HATE_PRE_MS
@@ -1776,8 +1866,11 @@ export function initEffects(): () => void {
       case 'card:given':
         // love 协议给牌/收牌（love-1 底给牌、love-3 给牌与随机拿牌——give/takeRandom op 均发
         // card:given）：所选手牌粉红边框光 + 卡面爱心 → 交换基础特效（克隆卡飞向对方手牌末尾）
-        // → 落点爱心 2s。其余协议无给牌 → 落空无事
+        // → 落点爱心 2s。
+        // 修改提示词 29：同化0 取对手场牌入己方手牌（takeFromField op，payload.owner=取牌者、
+        // 原卡节点仍在对手场）——复用回手飞行动画（场上卡 → owner 手牌），与回手基础特效一致。
         if (node && payload.triggerProtocol === 'love') playLoveGiveExtra(node, payload);
+        else if (node && payload.triggerProtocol === 'assimilation') playReturn(node, payload);
         break;
       default:
         return;
@@ -1880,6 +1973,29 @@ function playRearrangeProtocolsFx(payload: RearrangeProtocolsPayload): void {
   // 同时飞行：A 从 a 中心 → b 中心、B 反向（互换）
   flyProtocolGhost(ghostA, rectA, rectB, rot180);
   flyProtocolGhost(ghostB, rectB, rectA, rot180);
+}
+
+/* ===== 洗牌动画（修改提示词 4：重洗/切洗/弃牌堆洗入牌库共用——deck:shuffled 事件） =====
+ * 对目标玩家 .deck 节点短暂挂 fx-shuffling 类（CSS 层叠卡快速抖动 + 顶部微光扫过，
+ * ~650ms 单次播放），随后移除。重渲染若在事件后发生会重建节点（类随之消失），
+ * 无重渲染时定时移除保证类不残留。弃牌堆洗入（shuffleTrashIntoDeck）也走 shuffleDeck
+ * 发同一事件 → 动画自动覆盖「弃牌堆洗入牌库」。 */
+const SHUFFLE_MS = 650;
+
+function playDeckShuffle(player: PlayerId): void {
+  const deck = document.querySelector<HTMLElement>(`.deck[data-player="${player}"]`);
+  if (!deck) return;
+  deck.classList.add('fx-shuffling');
+  window.setTimeout(() => deck.classList.remove('fx-shuffling'), SHUFFLE_MS + 80);
+}
+
+/** 洗牌特效订阅（deck:shuffled 事件无 uid，单独注册，同 initCompileFx 模式） */
+export function initShuffleFx(): () => void {
+  return gameBus.subscribe((e: GameEvent) => {
+    if (e.type !== 'deck:shuffled') return;
+    const p = e.payload as { player?: PlayerId } | undefined;
+    if (p && (p.player === 0 || p.player === 1)) playDeckShuffle(p.player);
+  });
 }
 
 /** 重排协议基础特效订阅（protocols:rearranged 事件无 uid/defId，单独注册，同 initCompileFx） */
