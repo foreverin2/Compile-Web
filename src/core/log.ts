@@ -106,6 +106,10 @@ export function actionCn(act: string): string {
       return '反面打出';
     case 'skip':
       return '跳过';
+    case 'rearrange-swap':
+      return '继续交换位置';
+    case 'rearrange-done':
+      return '完成此玩家的重排';
     default:
       if (v.startsWith('order:')) return `布局 ${v.slice(6)}`;
       return v;

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { ChoiceRequest, GameState, Line, PlayerId } from '../../src/core/models/types';
 import { createGame, stackValue } from '../../src/core/state/create';
 import { registerCardEffects } from '../../src/core/effects/registry';
-import { resolveMiddle, runStack } from '../../src/core/effects/resolve';
+import { resolveMiddle, runStack, answerEffect } from '../../src/core/effects/resolve';
 import { collectTriggers, collectTriggerFor, resolveTrigger } from '../../src/core/effects/triggers';
 import { executeAction } from '../../src/core/game';
 import { makeCard, pickFirst, resolveAllChoices } from '../helpers';
@@ -240,14 +240,43 @@ describe('chaos effects', () => {
     expect(s.players[0].stacks[0][0].uid).toBe(buried.uid); // 仍被盖在下面
   });
 
-  it('chaos-1 reorders BOTH players protocols (first action applies to self, then opponent)', () => {
+  it('chaos-1 (修改提示词 13): 编译式重排×2 — 自己/对手各至少一次有效交换后完成', () => {
     const s = setup();
     const src = makeCard('chaos-1', 0, 'field', true, 0, 0);
     s.players[0].stacks[0] = [src];
     resolveMiddle(s, 0, src);
-    resolveAllChoices(s, eagerPick); // 自己 order 021 → 再对手 order 021
-    expect(s.players[0].protocols.map((p) => p.defId)).toEqual(['fire', 'darkness', 'light']);
+    // 会话1（自己）：菜单初始布局=初态 → 只提供「继续交换位置」；交换 0↔1 → 终态≠初态 → 可完成
+    let top = s.pendingEffects[s.pendingEffects.length - 1];
+    expect(top?.prompt?.kind).toBe('select-action');
+    expect(top?.prompt?.actions).toEqual(['action:rearrange-swap']); // 未修改前不提供「完成」（FAQ 混沌1）
+    answerEffect(s, top.id, ['action:rearrange-swap']);
+    top = s.pendingEffects[s.pendingEffects.length - 1];
+    expect(top?.prompt?.kind).toBe('select-line'); // 第 1 个位置
+    answerEffect(s, top.id, ['line:0']);
+    top = s.pendingEffects[s.pendingEffects.length - 1];
+    expect(top?.prompt?.kind).toBe('select-line'); // 第 2 个位置（≠0）
+    answerEffect(s, top.id, ['line:1']);
+    expect(s.players[0].protocols.map((p) => p.defId)).toEqual(['light', 'fire', 'darkness']);
+    // 会话1 继续：现在可「完成」
+    top = s.pendingEffects[s.pendingEffects.length - 1];
+    expect(top?.prompt?.kind).toBe('select-action');
+    expect(top?.prompt?.actions).toContain('action:rearrange-done');
+    answerEffect(s, top.id, ['action:rearrange-done']);
+    // 会话2（对手）：同样至少交换一次
+    top = s.pendingEffects[s.pendingEffects.length - 1];
+    expect(top?.prompt?.kind).toBe('select-action');
+    expect(top?.prompt?.actions).toEqual(['action:rearrange-swap']);
+    answerEffect(s, top.id, ['action:rearrange-swap']);
+    top = s.pendingEffects[s.pendingEffects.length - 1];
+    answerEffect(s, top.id, ['line:1']);
+    top = s.pendingEffects[s.pendingEffects.length - 1];
+    answerEffect(s, top.id, ['line:2']);
     expect(s.players[1].protocols.map((p) => p.defId)).toEqual(['fire', 'darkness', 'light']);
+    top = s.pendingEffects[s.pendingEffects.length - 1];
+    expect(top?.prompt?.kind).toBe('select-action');
+    expect(top?.prompt?.actions).toContain('action:rearrange-done');
+    answerEffect(s, top.id, ['action:rearrange-done']);
+    expect(s.pendingEffects.length).toBe(0); // 双方重排完成，栈清空
   });
 
   it('chaos-4 end discards all hand and draws the same count', () => {

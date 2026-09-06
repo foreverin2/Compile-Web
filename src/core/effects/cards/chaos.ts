@@ -64,22 +64,42 @@ function* chaos0Start(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   }
 }
 
-/** chaos-1 中：重新排列你的协议。重新排列对手的协议（FAQ 混沌1：必须对双方都修改；裁决 [Q14] 任意顺序） */
-const PERMS = ['021', '102', '120', '201', '210']; // 0..2 非恒等排列（新位置 i 放原 order[i]）
-
-function* chooseAndReorder(ctx: EffectCtx, target: PlayerId, label: string): Generator<EffectStep, void, StepResult> {
-  const aAns = yield {
-    kind: 'select-action', title: `chaos-1：重新排列${label}的协议（选择新布局）`, min: 1, max: 1, optional: false, candidates: [],
-    actions: PERMS.map((p) => `action:order:${p}`),
-  };
-  if (aAns.selected.length === 0) return;
-  const order = aAns.selected[0].split(':')[2].split('').map(Number) as Line[];
-  yield { op: 'reorderProtocols', order, player: target };
+/** chaos-1 中：重新排列你的协议。重新排列对手的协议。
+ *  修改提示词 13：重排效果参照【编译导致的重排】（controlRearrangeFlow 同款交互——逐步
+ *  两两交换、可多次，直到满意/完成），对双方【连续触发两次】该流程（先自己后对手）。
+ *  FAQ 混沌1：必须对双方玩家的协议进行修改（终态≠初态，FAQ60）→ 布局回到初始时
+ *  菜单只提供「继续交换」（强迫再改），布局改变后提供「完成」。 */
+function* chaos1Session(ctx: EffectCtx, target: PlayerId, label: string): Generator<EffectStep, void, StepResult> {
+  const key = () => ctx.s.players[target].protocols.map((p) => p.defId).join(',');
+  const init = key();
+  for (;;) {
+    const canDone = key() !== init; // 终态≠初态才可完成（FAQ 混沌1/60）
+    const menu = yield {
+      kind: 'select-action', title: `chaos-1：重新排列${label}的协议（可多次交换，直到满意）`,
+      min: 1, max: 1, optional: false, candidates: [],
+      actions: canDone ? ['action:rearrange-swap', 'action:rearrange-done'] : ['action:rearrange-swap'],
+    };
+    if (!menu.selected.length || menu.selected[0] === 'action:rearrange-done') return;
+    const aAns = yield {
+      kind: 'select-line', title: `chaos-1：重新排列${label}的协议——选择要交换的第1个位置`,
+      min: 1, max: 1, optional: false, candidates: [], lines: [0, 1, 2],
+    };
+    if (!aAns.selected.length) return;
+    const a = Number(aAns.selected[0].replace('line:', '')) as Line;
+    const bAns = yield {
+      kind: 'select-line', title: `chaos-1：重新排列${label}的协议——选择要交换的第2个位置`,
+      min: 1, max: 1, optional: false, candidates: [],
+      lines: ([0, 1, 2] as Line[]).filter((l) => l !== a),
+    };
+    if (!bAns.selected.length) return;
+    const b = Number(bAns.selected[0].replace('line:', '')) as Line;
+    yield { op: 'rearrangeProtocols', a, b, player: target };
+  }
 }
 
 function* chaos1Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
-  yield* chooseAndReorder(ctx, ctx.player, '你');
-  yield* chooseAndReorder(ctx, opp(ctx.player), '对手');
+  yield* chaos1Session(ctx, ctx.player, '你的');
+  yield* chaos1Session(ctx, opp(ctx.player), '对手的');
 }
 
 /** chaos-2 中：偏转1张你的被覆盖的卡牌 */
