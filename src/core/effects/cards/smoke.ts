@@ -8,7 +8,7 @@ import { deckTopAvailable, findCard } from '../context';
  * smoke-1「你可以偏转此牌」的「此牌」= 刚翻转的那张卡（compile-apo smoke json 两段串联核对）。
  */
 
-/** 该线【双方堆叠】是否有任意正面朝下（反面）的卡（含被盖与反面顶卡） */
+/** 该线【双方链路】是否有任意正面朝下（反面）的卡（含被盖与反面顶卡） */
 function lineHasFaceDown(s: GameState, line: Line): boolean {
   for (const owner of [0, 1] as PlayerId[]) {
     if (s.players[owner].stacks[line].some((c) => !c.faceUp)) return true;
@@ -43,7 +43,7 @@ function* smoke1Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> 
   yield { op: 'shift', uid, targetLine: to };
 }
 
-/** smoke-2 顶：此链路中，每有1张正面朝下的卡牌，总阈值就加1（own-stack，+该线双方堆叠反面数，
+/** smoke-2 顶：此链路中，每有1张正面朝下的卡牌，总阈值就加1（own-stack，+该线双方链路反面数，
  *  同 apathy-0 countFaceDownInLine 口径） */
 function smoke2ValueModifier(s: GameState, _owner: PlayerId, line: Line, total: number): number {
   let faceDown = 0;
@@ -103,3 +103,4 @@ registerCardEffects('smoke-2', { valueModifier: { target: 'own-stack', apply: sm
 registerCardEffects('smoke-3', { middle: smoke3Middle });
 registerCardEffects('smoke-4', { middle: smoke4Middle });
 registerCardEffects('smoke-5', { middle: smoke5Middle });
+

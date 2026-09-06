@@ -22,7 +22,7 @@ export function isPlayableFaceUp(s: GameState, player: PlayerId, cardUid: string
   if (!card) return false;
   // 2代 chaos-3/corruption-0 底（自引用）：本卡可无视协议匹配正面打任意线；先于全局豁免与匹配判断
   if (cardAllowsFaceUpAnyLine(card.defId)) return true;
-  // 3代 lust-2 底「你的牌可以无视协议限制打在此堆叠中」：本线自己堆叠顶卡 lust-2 → 任意协议可正面打此线
+  // 3代 lust-2 底「你的牌可以无视协议限制打在此链路中」：本线自己链路顶卡 lust-2 → 任意协议可正面打此线
   if (lineAllowsFaceUpIgnoringProtocol(s, line, player)) return true;
   const def = getCardDef(card.defId);
   // unity-1 底「统一卡牌可以正面朝上打在此链路」（批3）：unity 卡可正面落有未覆盖 unity-1 的线
@@ -77,4 +77,5 @@ export function refreshHand(s: GameState, player: PlayerId): Card[] {
   fireRefreshReactives(s, player);
   return drawn;
 }
+
 

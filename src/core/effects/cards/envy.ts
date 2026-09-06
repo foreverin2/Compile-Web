@@ -15,7 +15,7 @@ function opp(p: PlayerId): PlayerId {
 }
 
 /** envy-0 顶（valueModifier line）：此链路中，你的总阈值增加对手在此链路中最高阈值卡牌的阈值。
- *  对手该链堆叠全部卡（含被盖，faceUp/faceDown 均按当前点数值计）取最大者；无卡 → +0。 */
+ *  对手该链链路全部卡（含被盖，faceUp/faceDown 均按当前点数值计）取最大者；无卡 → +0。 */
 function envy0Modifier(s: GameState, owner: PlayerId, line: Line, total: number): number {
   const foe = opp(owner);
   let max = 0;
@@ -47,8 +47,8 @@ function* envy2Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
 }
 
 /** envy-3 底（after-play 定向，无 top 仅顶卡）：当对手在此链路打出1张牌后：
- *  从你的牌库顶端反面打出1张牌到此链路（同 ice-1 接线：对手在本线落地 → 本线己方堆叠顶卡触发）。
- *  落点 = envy-3 所在线（己方堆叠）；牌库顶反打不洗牌（FAQ 142），牌库空 → fizzle。 */
+ *  从你的牌库顶端反面打出1张牌到此链路（同 ice-1 接线：对手在本线落地 → 本线己方链路顶卡触发）。
+ *  落点 = envy-3 所在线（己方链路）；牌库顶反打不洗牌（FAQ 142），牌库空 → fizzle。 */
 function* envy3AfterPlay(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const line = ctx.card.line;
   if (line === null || !deckTopAvailable(ctx.s, ctx.player)) return;
@@ -83,3 +83,4 @@ registerCardEffects('envy-2', { middle: envy2Middle });
 registerCardEffects('envy-3', { triggers: { 'after-play': { fn: envy3AfterPlay, optional: false } } });
 registerCardEffects('envy-4', { middle: envy4Middle });
 registerCardEffects('envy-5', { middle: envy5Middle });
+

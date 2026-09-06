@@ -169,7 +169,7 @@ function handEndPos(hand: HTMLElement | undefined, owner: PlayerId): { x: number
   return { x: owner === 0 ? rect.left + 28 + 65 : rect.right - 28 - 65, y };
 }
 
-/** 目标链路堆叠末尾位置（偏转落地；P1 向左生长 → 末卡左缘外侧，P2 反向） */
+/** 目标链路链路末尾位置（偏转落地；P1 向左生长 → 末卡左缘外侧，P2 反向） */
 function stackEndPos(slot: HTMLElement | null, owner: PlayerId): { x: number; y: number } | null {
   if (!slot) return null;
   const slotRect = slot.getBoundingClientRect();
@@ -870,7 +870,7 @@ function playWaterReturn(node: HTMLElement, payload: FxCardPayload): void {
 }
 
 /** 幽灵卡平移落地：从初始 rect 丝滑平移到【调用方给定的】目标点（起飞时机与目标点均由调用方决定，
- *  避免起飞时重查 DOM——重渲染后目标堆叠已含落地卡，stackEndPos 会偏移） */
+ *  避免起飞时重查 DOM——重渲染后目标链路已含落地卡，stackEndPos 会偏移） */
 function flyCloneToStackEnd(clone: HTMLElement, rect: DOMRect, end: { x: number; y: number }): void {
   const dx = end.x - (rect.left + rect.width / 2);
   const dy = end.y - (rect.top + rect.height / 2);
@@ -883,7 +883,7 @@ function flyCloneToStackEnd(clone: HTMLElement, rect: DOMRect, end: { x: number;
   window.setTimeout(() => clone.remove(), MOVE_MS + 80);
 }
 
-/** 基础行为特效：偏转——从初始位置丝滑平移到目标链路堆叠末尾（同步调用：emit 时即计算目标点） */
+/** 基础行为特效：偏转——从初始位置丝滑平移到目标链路链路末尾（同步调用：emit 时即计算目标点） */
 function playShift(node: HTMLElement, payload: FxCardPayload): void {
   const rect = node.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0 || payload.owner === undefined || payload.line == null) return;
@@ -903,7 +903,7 @@ function playShift(node: HTMLElement, payload: FxCardPayload): void {
  * 粗黑烟桥 + 起/终点光点先渐显（~350ms），随后卡飞过（MOVE_MS），桥再渐隐（~400ms）后清理。
  * 关键点：
  * - 起点 rect 与终点 end 都在事件发出时（重渲染前）一次性计算，桥/终点标记/飞行共用同一个 end
- *   ——飞行恰好落在终点光点上（起飞时重查 DOM 会因目标堆叠已含落地卡而偏移 ~65px）；
+ *   ——飞行恰好落在终点光点上（起飞时重查 DOM 会因目标链路已含落地卡而偏移 ~65px）；
  * - 飞行克隆也在事件发出时构建（避免延迟调用 playShift 读到已重建的节点 rect 归零），
  *   桥渐显期间克隆 opacity 0 不可见（源位置不出现"重复卡"），起飞时随飞行过渡淡入至 0.6；
  * - rect/目标缺失时退回普通 playShift（无桥）；克隆在 end 校验通过后才构建，无泄漏。
@@ -994,7 +994,7 @@ function playDarknessShiftBridge(node: HTMLElement, payload: FxCardPayload): voi
   }, BRIDGE_IN_MS);
 }
 
-/** 基础行为特效：牌堆顶打出——幽灵卡从牌库区丝滑飞入目标链路堆叠末尾
+/** 基础行为特效：牌堆顶打出——幽灵卡从牌库区丝滑飞入目标链路链路末尾
  *  （复用 playShift 平移逻辑；牌堆顶无 DOM 卡，起点用牌库区 rect（deckPos），buildFxCard 的 node 用牌库区元素）
  *  可靠性（多线连打，life-0/water-1 及未来任何反面牌堆顶打出）：
  *  - 同批 card:deck-played 事件同步创建多个幽灵 → 按 90ms 错开起飞（多卡不在牌库位
@@ -1042,7 +1042,7 @@ function playDeckPlay(payload: FxCardPayload): void {
 }
 
 /** 基础行为特效：手牌打出（playFromHand）——幽灵卡从手牌中该卡的 rect 丝滑飞入目标
- *  链路堆叠末尾（与 playDeckPlay 同平移逻辑，仅起点不同：手牌卡仍在 DOM 中，直接以其
+ *  链路链路末尾（与 playDeckPlay 同平移逻辑，仅起点不同：手牌卡仍在 DOM 中，直接以其
  *  rect 为起点；faceUp 已按打出朝向（正/背）写入 payload，卡面随之正确）。 */
 function playHandPlay(payload: FxCardPayload): void {
   if (payload.owner === undefined || payload.line === null) return;
@@ -1191,7 +1191,7 @@ function buildGravityGhost(rect: DOMRect, cw: boolean, ccw: boolean, payload: Fx
  *  water-1；deck-played 事件不带 triggerProtocol，本分支即 gravity 特效）。
  *  FX-R1 时序重构：牌库区边框品红光 → 【事件时立即创建浮层卡】（旧位置 = 牌库区 rect，
  *  z=BASE_Z 盖住真实卡，带品红卡框光——不再等 1.8s 后才凭空出现）→ 终点黑洞 + 品红射线
- *  （前置 1.8s）→ 前置完成浮层卡飞向堆叠末尾（基础打出节奏）→ 收尾自清理。
+ *  （前置 1.8s）→ 前置完成浮层卡飞向链路末尾（基础打出节奏）→ 收尾自清理。
  *  牌库/目标缺失 → 退回即时基础 playDeckPlay（无附加特效）。 */
 function playGravityDeckPlayExtra(payload: FxCardPayload): void {
   if (payload.owner === undefined || payload.line == null) {
@@ -1233,7 +1233,7 @@ function playGravityDeckPlayExtra(payload: FxCardPayload): void {
   const hole = spawnGravityHole(end);
   const shroud = spawnGravityEndShroud(end, REVEAL_W, REVEAL_H); // 打牌堆顶落点卡 = 标准卡尺寸
   const beam = spawnGravityBeam(start, end);
-  // ⑤ 前置段完成（1.8s）起：浮层卡飞向堆叠末尾（同批多卡按 90ms 错开起飞，同 playDeckPlay）
+  // ⑤ 前置段完成（1.8s）起：浮层卡飞向链路末尾（同批多卡按 90ms 错开起飞，同 playDeckPlay）
   const stagger = nextDeckPlayIndex() * DECK_PLAY_STAGGER_MS;
   flyGravityGhost(ghost, from, end, stagger);
   // ⑥ 收尾：牌库区光随卡起飞渐隐；卡到终点（PRE + MOVE_MS）后黑洞渐隐
@@ -1247,7 +1247,7 @@ function playGravityDeckPlayExtra(payload: FxCardPayload): void {
 /** gravity 平移附加特效（card:shifted + triggerProtocol=gravity——gravity-1/2/4 的平移）。
  *  FX-R1 时序重构：【事件时立即创建浮层卡】（旧位置 rect，z=BASE_Z 盖住真实卡，带品红
  *  卡框光——重渲染后真实卡瞬移到终点，但浮层卡占据旧位置，用户只见"卡在原位被吸入"）→
- *  终点黑洞 + 品红射线（前置 1.8s）→ 前置完成浮层卡飞向目标堆叠末尾（基础平移节奏）→
+ *  终点黑洞 + 品红射线（前置 1.8s）→ 前置完成浮层卡飞向目标链路末尾（基础平移节奏）→
  *  收尾自清理。rect/目标缺失 → 退回即时基础 playShift（无附加特效）。 */
 function playGravityShiftExtra(node: HTMLElement, payload: FxCardPayload): void {
   const rect = node.getBoundingClientRect();
@@ -1278,7 +1278,7 @@ function playGravityShiftExtra(node: HTMLElement, payload: FxCardPayload): void 
   const hole = spawnGravityHole(end);
   const shroud = spawnGravityEndShroud(end, rect.width, rect.height);
   const beam = spawnGravityBeam(start, end);
-  // ④ 前置段完成（1.8s）起：浮层卡飞向目标堆叠末尾
+  // ④ 前置段完成（1.8s）起：浮层卡飞向目标链路末尾
   flyGravityGhost(ghost, rect, end, 0);
   // ⑤ 收尾：卡到终点（PRE + MOVE_MS）后黑洞渐隐
   window.setTimeout(() => hole.classList.add('fx-gravity-hole-out'), GRAVITY_PRE_MS + MOVE_MS);
@@ -1290,7 +1290,7 @@ function playGravityShiftExtra(node: HTMLElement, payload: FxCardPayload): void 
  * 触发：card:shifted 与 card:drawn 且 triggerProtocol === 'speed'（speed-2/3/4 平移、speed-1 抽牌）。
  * 时序（总 ≈ 2.26s）：① 卡框灰白光 + 卡中心飓风渐现（0~0.3s）；② 整体沿起点→终点直线平移
  * （1.5s = SPEED_MOVE_MS，transition transform translate 路径、linear 匀速——平移终点=目标
- * 堆叠末尾，抽牌终点=该玩家手牌末尾 handEndPos）；④ 到达后飓风渐隐、卡框恢复（0.4s）。
+ * 链路末尾，抽牌终点=该玩家手牌末尾 handEndPos）；④ 到达后飓风渐隐、卡框恢复（0.4s）。
  * FX-R1 时序重构（用户 #6b/#6a）：
  * - 平移（playSpeedShiftExtra）：事件时【立即创建浮层卡】（旧位置 rect，z=BASE_Z 盖住真实卡，
  *   卡面即时可见）+ 内嵌灰白光/飓风层（渐现 0.3s）→ 浮层卡随飓风整体平移（1.5s）→ 到达后
@@ -1770,7 +1770,7 @@ export function initEffects(): () => void {
         else playDeckPlay(payload);
         break;
       case 'card:hand-played':
-        // playFromHand：从手牌中该卡的 rect 起飞飞入目标线堆叠末尾（区别于牌堆顶打出）
+        // playFromHand：从手牌中该卡的 rect 起飞飞入目标线链路末尾（区别于牌堆顶打出）
         playHandPlay(payload);
         break;
       case 'card:given':
@@ -1889,3 +1889,4 @@ export function initRearrangeFx(): () => void {
     playRearrangeProtocolsFx(e.payload as RearrangeProtocolsPayload);
   });
 }
+

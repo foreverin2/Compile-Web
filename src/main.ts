@@ -47,7 +47,7 @@ let resetEpoch = 0;
 
 /** 控制组件重排模态内的一次交换（2026-09 基础规则）：引擎动作 + 重渲染棋盘 + 模态刷新。
  *  交换基础动画由 protocols:rearranged 事件驱动（effects「重排协议基础特效」——
- *  两张协议卡同时平移互换位置，与"交换堆叠"动画不同）。 */
+ *  两张协议卡同时平移互换位置，与"交换链路"动画不同）。 */
 function applyRearrangeSwap(target: PlayerId, a: Line, b: Line): void {
   executeAction(state, state.turnPlayer, 'rearrange-protocols', { target, a, b });
   renderApp(root, state, cb);
@@ -563,3 +563,4 @@ const syncPersistentFx = (): void => {
 };
 window.addEventListener('scroll', syncPersistentFx, { passive: true, capture: true });
 window.addEventListener('resize', syncPersistentFx, { passive: true });
+

@@ -14,7 +14,7 @@ function opp(p: PlayerId): PlayerId {
   return p === 0 ? 1 : 0;
 }
 
-/** 场上（双方堆叠）去重协议数 */
+/** 场上（双方链路）去重协议数 */
 function fieldProtocolCount(s: GameState): number {
   const set = new Set<string>();
   for (const owner of [0, 1] as PlayerId[]) {
@@ -46,7 +46,7 @@ function* diversity0End(ctx: EffectCtx): Generator<EffectStep, void, StepResult>
   yield { op: 'playFromHand', uid: hAns.selected[0], line, faceUp: true };
 }
 
-/** diversity-1 中：偏转1张牌。抽取与此链路中不同协议的卡牌数相同的卡牌（该线双方堆叠去重协议数） */
+/** diversity-1 中：偏转1张牌。抽取与此链路中不同协议的卡牌数相同的卡牌（该线双方链路去重协议数） */
 function* diversity1Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const cand = ctx.candidates({ zone: 'field' });
   const tAns = yield { kind: 'select', title: 'diversity-1：偏转1张牌', min: 1, max: 1, optional: false, candidates: cand };
@@ -60,7 +60,7 @@ function* diversity1Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResu
   if (lAns.selected.length === 0) return;
   const to = Number(lAns.selected[0].replace('line:', '')) as Line;
   yield { op: 'shift', uid: tAns.selected[0], targetLine: to };
-  // 「此链路」= diversity-1 所在线（结算时该线双方堆叠去重协议数）
+  // 「此链路」= diversity-1 所在线（结算时该线双方链路去重协议数）
   const line = ctx.card.line;
   if (line === null) return;
   const set = new Set<string>();
@@ -70,7 +70,7 @@ function* diversity1Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResu
   if (set.size > 0) yield { op: 'draw', count: set.size };
 }
 
-/** diversity-3 顶（valueModifier own-stack）：若此堆叠中有任何非多元的正面朝上的卡牌，你的总阈值加2 */
+/** diversity-3 顶（valueModifier own-stack）：若此链路中有任何非多元的正面朝上的卡牌，你的总阈值加2 */
 function diversity3ValueModifier(s: GameState, owner: PlayerId, line: Line, total: number): number {
   const stack = s.players[owner].stacks[line];
   const hasNonDiversity = stack.some((c) => c.faceUp && c.defId.split('-')[0] !== 'diversity');
@@ -114,6 +114,7 @@ registerCardEffects('diversity-3', { valueModifier: { target: 'own-stack', apply
 registerCardEffects('diversity-4', { middle: diversity4Middle });
 registerCardEffects('diversity-5', { middle: diversity5Middle });
 registerCardEffects('diversity-6', { triggers: { end: { fn: diversity6End, optional: false, top: true } } });
+
 
 
 

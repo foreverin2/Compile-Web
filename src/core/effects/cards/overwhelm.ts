@@ -20,13 +20,13 @@ function pv(defId: string): number {
   return getCardDef(defId).value;
 }
 
-/** 某玩家全场（全部线堆叠，含被盖）卡数 */
+/** 某玩家全场（全部线链路，含被盖）卡数 */
 function totalFieldCards(s: GameState, player: PlayerId): number {
   return s.players[player].stacks.reduce((acc, st) => acc + st.length, 0);
 }
 
 /** overwhelm-1 中：在每条你总阈值高于对手的链路中，从你的牌库顶端反面打出1张牌。
- *  快照高于线逐线反打己方堆叠；每线前牌库守卫（空 → 该线 fizzle，后续线继续）。
+ *  快照高于线逐线反打己方链路；每线前牌库守卫（空 → 该线 fizzle，后续线继续）。
  *  顺序细节：源卡所在线排最后执行——反打会盖住源卡（sourceValid 仅查未覆盖），若先打源卡线会
  *  中断后续线（2026-09 实测）；txt 无顺序要求，「每条链路」均可后打。 */
 function* overwhelm1Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
@@ -42,7 +42,7 @@ function* overwhelm1Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResu
 }
 
 /** overwhelm-2 顶（end，top 命令被盖仍生效）：结束：在每条链路中从你的牌库顶端反面打出1张牌。翻转此牌。
- *  3 线逐线反打己方堆叠 → 翻转 overwhelm-2 自己（即使刚被新卡盖住 → allowCovered，B6；faceUp→faceDown 后停用）。 */
+ *  3 线逐线反打己方链路 → 翻转 overwhelm-2 自己（即使刚被新卡盖住 → allowCovered，B6；faceUp→faceDown 后停用）。 */
 function* overwhelm2End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   for (const l of [0, 1, 2] as Line[]) {
     if (!deckTopAvailable(ctx.s, ctx.player)) continue;
@@ -60,7 +60,7 @@ function* overwhelm2Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResu
   }
 }
 
-/** overwhelm-3 底（end，无 top 仅顶卡）：结束：若你手牌有5张或以上，从你的牌库顶端反面打出1张牌到此堆叠。 */
+/** overwhelm-3 底（end，无 top 仅顶卡）：结束：若你手牌有5张或以上，从你的牌库顶端反面打出1张牌到此链路。 */
 function* overwhelm3End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const line = ctx.card.line;
   if (line === null || ctx.s.players[ctx.player].hand.length < 5) return;
@@ -107,3 +107,4 @@ registerCardEffects('overwhelm-3', { triggers: { end: { fn: overwhelm3End, optio
 registerCardEffects('overwhelm-4', { middle: overwhelm4Middle });
 registerCardEffects('overwhelm-5', { middle: overwhelm5Middle });
 registerCardEffects('overwhelm-6', { triggers: { start: { fn: overwhelm6Start, optional: false, top: true } } });
+

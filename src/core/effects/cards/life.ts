@@ -55,7 +55,7 @@ function* life3BeforeCovered(ctx: EffectCtx): Generator<EffectStep, void, StepRe
   yield { op: 'playTopDeck', line: Number(line.selected[0].replace('line:', '')) as Line, faceUp: false };
 }
 
-/** life-4：如果此牌盖住了某张牌，抽1张牌。—— 中指令结算时本卡必为所在堆叠顶卡：其下还有牌 = 盖住了牌 */
+/** life-4：如果此牌盖住了某张牌，抽1张牌。—— 中指令结算时本卡必为所在链路顶卡：其下还有牌 = 盖住了牌 */
 function* life4(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const stack = ctx.s.players[ctx.card.owner].stacks[ctx.card.line!];
   if (stack.length >= 2) yield { op: 'draw', count: 1 };
@@ -78,3 +78,4 @@ registerCardEffects('life-2', { middle: life2 });
 registerCardEffects('life-3', { triggers: { 'before-covered': { fn: life3BeforeCovered, optional: false } } });
 registerCardEffects('life-4', { middle: life4 });
 registerCardEffects('life-5', { middle: life5 });
+

@@ -34,7 +34,7 @@ export function mustCompile(s: GameState, player: PlayerId): boolean {
  *  线值是否 ≥10）共用——保证两条路径的底层状态变更/事件完全一致。 */
 export function executeCompileUnchecked(s: GameState, player: PlayerId, line: Line): void {
   const opp: PlayerId = player === 0 ? 1 : 0;
-  // 收集该线双方堆叠中正面 speed-2（顶命令，被覆盖仍生效；每张卡唯一 → 双方各至多一张）
+  // 收集该线双方链路中正面 speed-2（顶命令，被覆盖仍生效；每张卡唯一 → 双方各至多一张）
   const speed2: { owner: PlayerId; cardUid: string }[] = [];
   for (const pid of [player, opp] as PlayerId[]) {
     for (const card of s.players[pid].stacks[line]) {
@@ -62,3 +62,4 @@ export function executeCompile(s: GameState, player: PlayerId, line: Line): void
   }
   executeCompileUnchecked(s, player, line);
 }
+

@@ -12,7 +12,7 @@ function opp(p: PlayerId): PlayerId {
   return p === 0 ? 1 : 0;
 }
 
-/** 全场（双方所有线堆叠）faceUp 卡（含被盖，B2），可排除源卡 */
+/** 全场（双方所有线链路）faceUp 卡（含被盖，B2），可排除源卡 */
 function allFaceUpCards(s: GameState, excludeUid?: string): ChoiceCard[] {
   const out: ChoiceCard[] = [];
   for (const owner of [0, 1] as PlayerId[]) {
@@ -54,7 +54,7 @@ function* fulcrum0Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult
   if (ans.selected.length > 0) yield { op: 'discard', uid: ans.selected[0] };
 }
 
-/** fulcrum-1 中：翻转所有其他正面朝上的牌。交换你的左堆叠与右堆叠。
+/** fulcrum-1 中：翻转所有其他正面朝上的牌。交换你的左链路与右链路。
  *  全场 faceUp（含被盖）除源卡快照逐张翻面（B2）→ swapStacks 线 0 ↔ 线 2（B1，己方两堆整堆换线）。 */
 function* fulcrum1Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const targets = allFaceUpCards(ctx.s, ctx.card.uid);
@@ -98,3 +98,4 @@ registerCardEffects('fulcrum-2', { middle: fulcrum2Middle });
 registerCardEffects('fulcrum-3', { middle: fulcrum3Middle });
 registerCardEffects('fulcrum-4', { middle: fulcrum4Middle });
 registerCardEffects('fulcrum-5', { middle: fulcrum5Middle });
+

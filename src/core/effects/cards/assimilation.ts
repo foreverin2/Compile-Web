@@ -7,7 +7,7 @@ import { controlRearrangeFlow } from '../control-rearrange-flow';
 /**
  * 2代 同化 assimilation（关键词：交换、打出）。
  * 权威卡文：src/data/cards2.ts；裁决：docs/批3裁决结果.md（Q10 场卡取入己手易主 / Q11-12 跨方牌库顶
- * 落对方堆叠易主 / Q13 按 txt 字面：有人刷新（双向）→ 抽对手库顶 + 弃自己手牌进对手弃牌堆）。
+ * 落对方链路易主 / Q13 按 txt 字面：有人刷新（双向）→ 抽对手库顶 + 弃自己手牌进对手弃牌堆）。
  * 引擎 op：takeFromField / deckTopTransfer（已提交）。
  */
 
@@ -73,7 +73,7 @@ function* assimilation1AfterRefresh(ctx: EffectCtx): Generator<EffectStep, void,
   fireReactive(ctx.s, 'after-self-discard', ctx.player);
 }
 
-/** assimilation-2 底（end，无 top）：回合结束：将对手牌库顶端的牌反面打在此堆叠（易主自己，裁决 Q11） */
+/** assimilation-2 底（end，无 top）：回合结束：将对手牌库顶端的牌反面打在此链路（易主自己，裁决 Q11） */
 function* assimilation2End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const foe = opp(ctx.player);
   const line = ctx.card.line;
@@ -124,3 +124,4 @@ registerCardEffects('assimilation-2', { triggers: { end: { fn: assimilation2End,
 registerCardEffects('assimilation-4', { middle: assimilation4Middle });
 registerCardEffects('assimilation-5', { middle: assimilation5Middle });
 registerCardEffects('assimilation-6', { triggers: { end: { fn: assimilation6End, optional: false } } });
+

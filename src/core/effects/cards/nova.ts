@@ -15,7 +15,7 @@ function opp(p: PlayerId): PlayerId {
   return p === 0 ? 1 : 0;
 }
 
-/** 该线双方堆叠全部 faceUp 卡（含被盖，B2/C2）快照候选 */
+/** 该线双方链路全部 faceUp 卡（含被盖，B2/C2）快照候选 */
 function faceUpInLine(s: GameState, line: Line, excludeUid?: string): ChoiceCard[] {
   const out: ChoiceCard[] = [];
   for (const owner of [0, 1] as PlayerId[]) {
@@ -31,7 +31,7 @@ function faceUpInLine(s: GameState, line: Line, excludeUid?: string): ChoiceCard
 }
 
 /** nova-0 顶（start，top 命令被盖仍生效）：开始：在1条你恰好有5张牌的链路中，删除所有正面朝上的牌。
- *  己方堆叠恰 5 张的线（多条选 1，无则 fizzle）→ 删除该线【双方】堆叠全部 faceUp（含被盖，C2）。
+ *  己方链路恰 5 张的线（多条选 1，无则 fizzle）→ 删除该线【双方】链路全部 faceUp（含被盖，C2）。
  *  快照中源卡自身排最后删除（删自己后 sourceValid 中断后续——同 overwhelm-1 处理）。 */
 function* nova0Start(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const lines = ([0, 1, 2] as Line[]).filter((l) => s_len(ctx.s, ctx.player, l) === 5);
@@ -91,7 +91,7 @@ function* nova0End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   if (ans.selected.length === 0) return;
   const picked = cand.find((c) => c.uid === ans.selected[0]);
   if (!picked || picked.line === null) return;
-  // belowUid：牌库顶反打插到所选 nova 卡【正下方】（line = 该 nova 卡所在线——belowUid 落点解析按源卡所在堆叠）
+  // belowUid：牌库顶反打插到所选 nova 卡【正下方】（line = 该 nova 卡所在线——belowUid 落点解析按源卡所在链路）
   yield { op: 'playTopDeck', line: picked.line, faceUp: false, belowUid: picked.uid };
 }
 
@@ -100,7 +100,7 @@ function s_owner(s: GameState, owner: PlayerId) {
   return s.players[owner];
 }
 
-/** nova-1 中：对手弃等同于此堆叠中牌数量的牌（尽力而为）。 */
+/** nova-1 中：对手弃等同于此链路中牌数量的牌（尽力而为）。 */
 function* nova1Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const line = ctx.card.line;
   if (line === null) return;
@@ -158,14 +158,14 @@ function* nova2AfterSelfRearrange(ctx: EffectCtx): Generator<EffectStep, void, S
   yield { op: 'shift', uid: tAns.selected[0], targetLine: Number(lAns.selected[0].replace('line:', '')) as Line };
 }
 
-/** nova-3 中：平移1张阈值小于此堆叠中牌数量的牌。 */
+/** nova-3 中：平移1张阈值小于此链路中牌数量的牌。 */
 function* nova3Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const line = ctx.card.line;
   if (line === null) return;
   const count = s_len(ctx.s, ctx.player, line);
   const cand = ctx.candidates({ zone: 'field' }).filter((c) => getCardDef(c.defId).value < count);
   if (cand.length === 0) return;
-  const tAns = yield { kind: 'select', title: 'nova-3：平移1张阈值小于此堆叠牌数的牌', min: 1, max: 1, optional: false, candidates: cand };
+  const tAns = yield { kind: 'select', title: 'nova-3：平移1张阈值小于此链路牌数的牌', min: 1, max: 1, optional: false, candidates: cand };
   if (tAns.selected.length === 0) return;
   const card = ctx.s.players.flatMap((p) => p.stacks).flat().find((c) => c.uid === tAns.selected[0]);
   const srcLine = card?.line ?? line;
@@ -177,14 +177,14 @@ function* nova3Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   yield { op: 'shift', uid: tAns.selected[0], targetLine: Number(lAns.selected[0].replace('line:', '')) as Line };
 }
 
-/** nova-4 中：翻转1张阈值小于此堆叠中牌数量的牌。 */
+/** nova-4 中：翻转1张阈值小于此链路中牌数量的牌。 */
 function* nova4Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const line = ctx.card.line;
   if (line === null) return;
   const count = s_len(ctx.s, ctx.player, line);
   const cand = ctx.candidates({ zone: 'field' }).filter((c) => c.faceUp && getCardDef(c.defId).value < count);
   if (cand.length === 0) return;
-  const ans = yield { kind: 'select', title: 'nova-4：翻转1张阈值小于此堆叠牌数的牌', min: 1, max: 1, optional: false, candidates: cand };
+  const ans = yield { kind: 'select', title: 'nova-4：翻转1张阈值小于此链路牌数的牌', min: 1, max: 1, optional: false, candidates: cand };
   if (ans.selected.length > 0) yield { op: 'flip', uid: ans.selected[0] };
 }
 
@@ -210,3 +210,4 @@ registerCardEffects('nova-2', {
 registerCardEffects('nova-3', { middle: nova3Middle });
 registerCardEffects('nova-4', { middle: nova4Middle });
 registerCardEffects('nova-5', { middle: nova5Middle });
+

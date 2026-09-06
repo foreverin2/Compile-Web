@@ -9,15 +9,15 @@ import type { CardDef, ProtocolDef } from '../core/models/types';
 
 export const ALL_PROTOCOLS: ProtocolDef[] = [
   // 基础版 12 套（MN01）
-  { defId: 'water', name: '水', set: 'MN01', commands: ['回手', '抽牌', '翻转'], loadingText: '涤旧焕新' },
-  { defId: 'fire', name: '火', set: 'MN01', commands: ['弃牌触发效果'], loadingText: '玉石俱焚' },
-  { defId: 'light', name: '光', set: 'MN01', commands: ['抽牌', '翻转', '平移'], loadingText: '灼明驱暗' },
-  { defId: 'darkness', name: '暗', set: 'MN01', commands: ['抽牌', '平移', '操纵'], loadingText: '黯淡无光' },
-  { defId: 'life', name: '生', set: 'MN01', commands: ['翻转', '牌堆顶', '抽牌'], loadingText: '勃勃生机' },
-  { defId: 'death', name: '死', set: 'MN01', commands: ['删除', '抽牌'], loadingText: '万物寂灭' },
-  { defId: 'spirit', name: '灵魂', set: 'MN01', commands: ['翻转', '平移', '抽牌'], loadingText: '力由心生' },
+  { defId: 'water', name: '流水', set: 'MN01', commands: ['回手', '抽牌', '翻转'], loadingText: '涤旧焕新' },
+  { defId: 'fire', name: '火焰', set: 'MN01', commands: ['弃牌触发效果'], loadingText: '玉石俱焚' },
+  { defId: 'light', name: '明光', set: 'MN01', commands: ['抽牌', '翻转', '平移'], loadingText: '灼明驱暗' },
+  { defId: 'darkness', name: '黑暗', set: 'MN01', commands: ['抽牌', '平移', '操纵'], loadingText: '黯淡无光' },
+  { defId: 'life', name: '生命', set: 'MN01', commands: ['翻转', '牌堆顶', '抽牌'], loadingText: '勃勃生机' },
+  { defId: 'death', name: '死亡', set: 'MN01', commands: ['删除', '抽牌'], loadingText: '万物寂灭' },
+  { defId: 'spirit', name: '精神', set: 'MN01', commands: ['翻转', '平移', '抽牌'], loadingText: '力由心生' },
   { defId: 'gravity', name: '重力', set: 'MN01', commands: ['平移', '翻转', '抽牌'], loadingText: '聚敛坍缩' },
-  { defId: 'psychic', name: '念能', set: 'MN01', commands: ['抽牌', '操纵', '平移'], loadingText: '洞悉敌意' },
+  { defId: 'psychic', name: '灵能', set: 'MN01', commands: ['抽牌', '操纵', '平移'], loadingText: '洞悉敌意' },
   { defId: 'plague', name: '瘟疫', set: 'MN01', commands: ['强制弃牌', '翻转'], loadingText: '凋亡衰竭' },
   { defId: 'metal', name: '金属', set: 'MN01', commands: ['阻止', '抽牌', '翻转'], loadingText: '固若金汤' },
   { defId: 'speed', name: '速度', set: 'MN01', commands: ['抽牌', '出牌', '平移'], loadingText: '愈行愈速' },
@@ -148,3 +148,4 @@ export const ALL_CARD_DEFS: CardDef[] = [
   { defId: 'apathy-4', protocol: 'apathy', value: 4, middle: '你可以翻转1张你的被盖住的正面牌。' },
   { defId: 'apathy-5', protocol: 'apathy', value: 5, middle: '弃1张牌。' },
 ];
+

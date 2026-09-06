@@ -6,7 +6,7 @@ function opp(player: PlayerId): PlayerId {
   return player === 0 ? 1 : 0;
 }
 
-/** 顶命令常驻（规则 90 行）：player 任一线堆叠有正面该卡即 true（被盖也生效——只查在场+正面，不看是否未覆盖；
+/** 顶命令常驻（规则 90 行）：player 任一线链路有正面该卡即 true（被盖也生效——只查在场+正面，不看是否未覆盖；
  *  3代 inertia-0 区域禁顶 → 该卡顶命令失效不算，C7） */
 export function playerHasTopCommand(s: GameState, player: PlayerId, defId: string): boolean {
   for (const line of [0, 1, 2] as Line[]) {
@@ -17,7 +17,7 @@ export function playerHasTopCommand(s: GameState, player: PlayerId, defId: strin
   return false;
 }
 
-/** 底命令仅未覆盖生效（规则 79 行）：player 任一线堆叠【顶卡】正面该卡（isUncovered 判定顶卡；
+/** 底命令仅未覆盖生效（规则 79 行）：player 任一线链路【顶卡】正面该卡（isUncovered 判定顶卡；
  *  3代 inertia-1 区域禁底 → 该卡底命令失效不算，C7） */
 export function playerHasActiveBottom(s: GameState, player: PlayerId, defId: string): boolean {
   for (const line of [0, 1, 2] as Line[]) {
@@ -30,12 +30,12 @@ export function playerHasActiveBottom(s: GameState, player: PlayerId, defId: str
   return false;
 }
 
-/** 对手该线堆叠有正面该卡（含被盖；区域禁顶感知） */
+/** 对手该线链路有正面该卡（含被盖；区域禁顶感知） */
 export function opponentLineHasTop(s: GameState, line: Line, player: PlayerId, defId: string): boolean {
   return s.players[opp(player)].stacks[line].some((c) => c.defId === defId && c.faceUp && !cardCommandDisabled(s, c, 'top'));
 }
 
-/** 对手该线堆叠【顶卡】正面该卡（区域禁底感知） */
+/** 对手该线链路【顶卡】正面该卡（区域禁底感知） */
 export function opponentLineHasActiveBottom(s: GameState, line: Line, player: PlayerId, defId: string): boolean {
   const stack = s.players[opp(player)].stacks[line];
   const top = stack[stack.length - 1];
@@ -74,14 +74,14 @@ export function lineMiddleCommandsNullified(s: GameState, line: Line): boolean {
   return lineTopCommandActive(s, line, 'apathy-2');
 }
 
-/** 单卡自引用放行（2代 chaos-3/corruption-0 底「此牌可以无视协议限制打在任意堆叠中」）：
+/** 单卡自引用放行（2代 chaos-3/corruption-0 底「此牌可以无视协议限制打在任意链路中」）：
  *  该卡从手牌正面打出时豁免「协议匹配」限制（其余被动限制——psychic-1 禁正面/plague-0 禁线/
  *  metal-2 禁反面——照常生效，用户 2026-09-05 裁决 [Q15] 与批2 同款沿用） */
 export function cardAllowsFaceUpAnyLine(defId: string): boolean {
   return defId === 'chaos-3' || defId === 'corruption-0';
 }
 
-/** ice-6 顶「如果你有手牌，那么你不可以抽牌」：player 手牌 >0 且其场上任一线堆叠有正面 ice-6
+/** ice-6 顶「如果你有手牌，那么你不可以抽牌」：player 手牌 >0 且其场上任一线链路有正面 ice-6
  *  （顶命令，被盖仍生效——查在场+正面）→ 禁止一切抽牌路径（效果 draw/刷新/fromOpponentDeck/
  *  drawFromDeck；FAQ 冰6：刷新想抽必须能抽上牌，抽 0 无效）。手牌=0 时不拦截。 */
 export function shouldBlockDraw(s: GameState, player: PlayerId): boolean {
@@ -98,7 +98,7 @@ export function opponentBlocksMiddleCommands(s: GameState, player: PlayerId): bo
   return playerHasTopCommand(s, foe, 'fear-0');
 }
 
-/** unity-1 底「统一卡牌可以正面朝上打在此链路」（批3）：查双方所有线堆叠顶卡（未覆盖 faceUp）unity-1
+/** unity-1 底「统一卡牌可以正面朝上打在此链路」（批3）：查双方所有线链路顶卡（未覆盖 faceUp）unity-1
  *  → 返回该线；unity 协议卡正面可落此线（无视协议匹配）。3代 inertia-1 禁底 → 底命令失效不算（C7）。 */
 export function unity1UncoveredLine(s: GameState): Line | null {
   for (const owner of [0, 1] as PlayerId[]) {
@@ -132,10 +132,11 @@ export function opponentCompileBlockedByControl(s: GameState, player: PlayerId):
   return false;
 }
 
-/** 3代 lust-2 底「你的牌可以无视协议限制打在此堆叠中」：player 自己侧 line 堆叠【顶卡】有
- *  faceUp lust-2（底命令仅未覆盖生效；inertia-1 禁底 → 失效）→ player 正面打出任意协议牌到此堆叠。 */
+/** 3代 lust-2 底「你的牌可以无视协议限制打在此链路中」：player 自己侧 line 链路【顶卡】有
+ *  faceUp lust-2（底命令仅未覆盖生效；inertia-1 禁底 → 失效）→ player 正面打出任意协议牌到此链路。 */
 export function lineAllowsFaceUpIgnoringProtocol(s: GameState, line: Line, player: PlayerId): boolean {
   const stack = s.players[player].stacks[line];
   const top = stack[stack.length - 1];
   return !!top && top.defId === 'lust-2' && top.faceUp && isUncovered(s, top) && !cardCommandDisabled(s, top, 'bottom');
 }
+

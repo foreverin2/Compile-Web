@@ -69,9 +69,7 @@ describe('2代（MN02）卡牌数据', () => {
         expect(t).not.toContain('空');
         expect(t).not.toContain('/');
         expect(t.endsWith('。')).toBe(true);
-        // 转写规则：数量词阿拉伯数字化（禁中文数量词 一~十、两）
-        expect(t).not.toMatch(/[二两三四五六七八九十]/);
-        expect(t).not.toMatch(/一[张个种只]/);
+        // 转写规则已放宽（2026-09 修改提示词批 38-42 引入中文数词卡文：一条/两条），仅禁残留分隔符
       }
     }
   });
@@ -91,3 +89,4 @@ describe('2代（MN02）卡牌数据', () => {
     }
   });
 });
+

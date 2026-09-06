@@ -45,8 +45,8 @@ describe('card data', () => {
     expect(getCardDef('fire-1').protocol).toBe('fire');
     expect(getCardDef('ice-1').protocol).toBe('ice'); // 2代
     expect(getCardDef('envy-2').protocol).toBe('envy'); // 3代
-    expect(getProtocolDef('water').name).toBe('水');
-    expect(getProtocolDef('unity').name).toBe('统一'); // 2代
+    expect(getProtocolDef('water').name).toBe('流水');
+    expect(getProtocolDef('unity').name).toBe('联合'); // 2代
     expect(getProtocolDef('sloth').name).toBe('怠惰'); // 3代（资源图「懒惰」已同步改名）
   });
 
@@ -86,3 +86,4 @@ describe('card data', () => {
     expect(protocolImgExt('inertia')).toBe('png'); // AX03 → png
   });
 });
+

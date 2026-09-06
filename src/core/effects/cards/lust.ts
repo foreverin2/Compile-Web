@@ -37,7 +37,7 @@ function* lust2Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
 
 /** lust-3 中：对手随机揭示手牌中的1张牌。将那张牌反面打出在对手一侧。
  *  真随机（love-3/运气3 先例）取对手手牌 1 张 → reveal（幽灵给对方看）→ 拥有者选线（RQ1-A）
- *  → 该牌反面（faceDown）落【对手自己】的该线堆叠（playFromHand 不变主）。手牌空 → fizzle。 */
+ *  → 该牌反面（faceDown）落【对手自己】的该线链路（playFromHand 不变主）。手牌空 → fizzle。 */
 function* lust3Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const foe = opp(ctx.player);
   const foeHand = ctx.candidates({ zone: 'hand', owner: foe });
@@ -90,7 +90,7 @@ function* lust5Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
 }
 
 /** lust-6 中：弃1张牌。对手在此链路反面打出1张牌。
- *  第二句（裁决 RQ6-A）：对手从手牌自选 1 张反面打出到 lust-6 所在线（落对手自己堆叠）；
+ *  第二句（裁决 RQ6-A）：对手从手牌自选 1 张反面打出到 lust-6 所在线（落对手自己链路）；
  *  无「可以」→ 强制（手牌空 fizzle）。选卡者 = 对手（chooser）。 */
 function* lust6Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const hand = ctx.candidates({ zone: 'hand', owner: ctx.player });
@@ -123,3 +123,4 @@ registerCardEffects('lust-4', {
 });
 registerCardEffects('lust-5', { middle: lust5Middle });
 registerCardEffects('lust-6', { middle: lust6Middle });
+

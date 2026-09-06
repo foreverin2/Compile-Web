@@ -67,7 +67,7 @@ function* courage2End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
 }
 
 /** courage-3 底（end，无 top 仅顶卡，可选）：回合结束：你可以将此牌偏转进入对手总阈值最大的链路中
- *  （FAQ 勇气3：多条总值最高由玩家自选；shift 自己到该线自己堆叠） */
+ *  （FAQ 勇气3：多条总值最高由玩家自选；shift 自己到该线自己链路） */
 function* courage3End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const foe = opp(ctx.player);
   const totals = ([0, 1, 2] as Line[]).map((l) => getLineValue(ctx.s, foe, l));
@@ -87,7 +87,7 @@ function* courage5Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult
   yield { op: 'discard', uid: ans.selected[0] };
 }
 
-/** courage-6 顶（end，top:true）：若此链路中对手总阈值更大，翻转此牌（裁决 Q1：回合结束检查） */
+/** courage-6 底（end，无 top 仅顶卡）：回合结束：若此链路中对手总阈值更大，翻转此牌（修改提示词 39：移至底部槽；裁决 Q1：回合结束检查） */
 function* courage6End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const line = ctx.card.line;
   if (line !== null && oppAhead(ctx.s, ctx.player, line)) {
@@ -109,4 +109,6 @@ registerCardEffects('courage-2', {
 });
 registerCardEffects('courage-3', { triggers: { end: { fn: courage3End, optional: true } } });
 registerCardEffects('courage-5', { middle: courage5Middle });
-registerCardEffects('courage-6', { triggers: { end: { fn: courage6End, optional: false, top: true } } });
+registerCardEffects('courage-6', { triggers: { end: { fn: courage6End, optional: false } } }); // 2026-09 卡文移至底部槽（回合结束，仅未覆盖顶卡）
+
+

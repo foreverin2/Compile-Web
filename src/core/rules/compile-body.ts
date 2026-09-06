@@ -13,7 +13,7 @@ export function executeCompileBody(s: GameState, player: PlayerId, line: Line): 
   const p = s.players[player];
   const opp = s.players[player === 0 ? 1 : 0];
   const protocol = p.protocols[line];
-  // 同时删除：双方该线堆叠全部入各自 trash
+  // 同时删除：双方该线链路全部入各自 trash
   const ownCards = p.stacks[line].splice(0);
   const oppCards = opp.stacks[line].splice(0);
   for (const card of [...ownCards, ...oppCards]) {
@@ -25,7 +25,7 @@ export function executeCompileBody(s: GameState, player: PlayerId, line: Line): 
   p.trash.push(...ownCards);
   opp.trash.push(...oppCards);
   pushLog(s, `P${player + 1} compiles line ${line + 1}`);
-  // 语义事件（编译清牌 FX 用）：双方该线卡牌 uid（各按堆叠顶→底顺序）与协议 defId
+  // 语义事件（编译清牌 FX 用）：双方该线卡牌 uid（各按链路顶→底顺序）与协议 defId
   gameBus.emit({
     type: 'line:compiled',
     state: s,
@@ -70,4 +70,5 @@ export function executeCompileBody(s: GameState, player: PlayerId, line: Line): 
     pushLog(s, `P${player + 1} wins!`);
   }
 }
+
 

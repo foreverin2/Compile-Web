@@ -21,7 +21,7 @@ function* rigidity1Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResul
 }
 
 /** rigidity-1 底（end，无 top 仅顶卡）：结束：在每条对手有未被覆盖的反面朝上牌的其他链路中反面打出1张牌。
- *  遍历非本线：对手该线有未覆盖 faceDown 顶卡 → 自己从手牌反打 1 到己方该线堆叠（C8 逐链选卡）。 */
+ *  遍历非本线：对手该线有未覆盖 faceDown 顶卡 → 自己从手牌反打 1 到己方该线链路（C8 逐链选卡）。 */
 function* rigidity1End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const mine = ctx.card.line;
   const foe = opp(ctx.player);
@@ -41,7 +41,7 @@ function* rigidity1End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> 
 }
 
 /** rigidity-2 底（after-action-face-down-play，无 top 仅顶卡）：在你用行动反面打出1张牌后：
- *  从你的牌库顶端反面打出1张牌到同一堆叠。（行动反打落点线由 completePlay 记录于
+ *  从你的牌库顶端反面打出1张牌到同一链路。（行动反打落点线由 completePlay 记录于
  *  s.pendingActionPlayLine；牌库顶反打盖其上） */
 function* rigidity2AfterActionPlay(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const line = ctx.s.pendingActionPlayLine ?? ctx.card.line;
@@ -127,3 +127,4 @@ registerCardEffects('rigidity-7', {
   middle: rigidity7Middle,
   triggers: { end: { fn: rigidity7End, optional: false, top: true } },
 });
+

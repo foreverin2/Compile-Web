@@ -87,7 +87,7 @@ function* hate3AfterDelete(ctx: EffectCtx): Generator<EffectStep, void, StepResu
 
 /** hate-4 底指令：被盖住前：先删除此列分值最低的被盖住的牌。
  *  before-covered 触发（此时本卡必为顶卡；不注册 top 标志——before-covered 只查顶卡，无影响）。
- *  候选 = 自己该线堆叠中被盖的卡（pos < len-1，不含自己）中 cardPointValue 最低者集合；
+ *  候选 = 自己该线链路中被盖的卡（pos < len-1，不含自己）中 cardPointValue 最低者集合；
  *  唯一 → 直接删；并列 → 玩家选 1 → {op:'delete', allowCovered}。无被盖卡 → fizzle。 */
 function* hate4BeforeCovered(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const stack = ctx.s.players[ctx.card.owner].stacks[ctx.card.line!];
@@ -133,3 +133,4 @@ registerCardEffects('hate-4', {
   triggers: { 'before-covered': { fn: hate4BeforeCovered, optional: false } }, // 底命令：仅未覆盖顶卡触发
 });
 registerCardEffects('hate-5', { middle: hate5 });
+

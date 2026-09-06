@@ -71,17 +71,17 @@ function* greed2Start(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   if (ans.selected.length > 0) yield { op: 'return', uid: ans.selected[0] };
 }
 
-/** greed-3 中：平移你在此堆叠中1张被覆盖的牌（自己该堆叠的被盖卡 → 移到其它线自己堆叠）。 */
+/** greed-3 中：平移你在此链路中1张被覆盖的牌（自己该链路的被盖卡 → 移到其它线自己链路）。 */
 function* greed3Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const line = ctx.card.line;
   if (line === null) return;
   const stack = ctx.s.players[ctx.player].stacks[line];
   const resolving = new Set(ctx.s.pendingEffects.map((pe) => pe.sourceUid));
-  const covered = stack.slice(0, -1).filter((c) => !resolving.has(c.uid)); // 自己该堆叠被盖卡
+  const covered = stack.slice(0, -1).filter((c) => !resolving.has(c.uid)); // 自己该链路被盖卡
   if (covered.length === 0) return;
   const cAns = yield {
     kind: 'select',
-    title: 'greed-3：平移你在此堆叠中1张被覆盖的牌',
+    title: 'greed-3：平移你在此链路中1张被覆盖的牌',
     min: 1, max: 1, optional: false,
     candidates: covered.map((c) => ({
       uid: c.uid, defId: c.defId, faceUp: c.faceUp, owner: ctx.player, zone: 'field' as const, line, pos: c.pos, label: String(c.defId),
@@ -130,3 +130,4 @@ registerCardEffects('greed-2', {
 registerCardEffects('greed-3', { middle: greed3Middle });
 registerCardEffects('greed-4', { middle: greed4Middle });
 registerCardEffects('greed-5', { middle: greed5Middle });
+

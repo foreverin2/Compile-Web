@@ -18,7 +18,7 @@ function pv(defId: string): number {
   return getCardDef(defId).value;
 }
 
-/** 某线双方堆叠全部 faceUp 卡（含被盖，B2）快照 */
+/** 某线双方链路全部 faceUp 卡（含被盖，B2）快照 */
 function faceUpInLine(s: GameState, line: Line, excludeUid?: string): ChoiceCard[] {
   const out: ChoiceCard[] = [];
   for (const owner of [0, 1] as PlayerId[]) {
@@ -77,7 +77,7 @@ function* inertia2Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult
 }
 
 /** inertia-3 中：在每条其他链路中反面打出1张牌。对手在此链路中反面打出1张牌。
- *  非本线两线：自己从手牌逐链选 1 张反面打出（落己方该线堆叠，C8）；然后对手在本线从手牌反打 1
+ *  非本线两线：自己从手牌逐链选 1 张反面打出（落己方该线链路，C8）；然后对手在本线从手牌反打 1
  *  （强制，手牌空 fizzle）。 */
 function* inertia3Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const mine = ctx.card.line;
@@ -118,3 +118,4 @@ registerCardEffects('inertia-2', { middle: inertia2Middle });
 registerCardEffects('inertia-3', { middle: inertia3Middle });
 registerCardEffects('inertia-4', { middle: inertia4Middle });
 registerCardEffects('inertia-5', { middle: inertia5Middle });
+

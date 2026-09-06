@@ -26,7 +26,7 @@ function* metal1(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
 }
 
 /** metal-3 中指令：抽1张牌。删除有至少8张牌的另一列里的所有牌。
- *  符合条件的列 = 排除当前列后、该列双方堆叠合计 ≥ 8 张的列（数牌数，非分值；正反都算）。
+ *  符合条件的列 = 排除当前列后、该列双方链路合计 ≥ 8 张的列（数牌数，非分值；正反都算）。
  *  恰好 1 列 → 直接删；>1 列 → select-line 选一；无 → fizzle（抽牌已结算，删除跳过）。
  *  删除：快照该列双方全部卡（含被盖——「所有」）逐张 {op:'delete', allowCovered}；
  *  逐张前复查卡仍在场（连锁可能已移走/删除）。源卡在线外，永不会被删到自己。 */
@@ -100,3 +100,4 @@ registerCardEffects('metal-6', {
     'before-flip': { fn: metal6DeleteSelf, optional: false, top: true },
   },
 });
+

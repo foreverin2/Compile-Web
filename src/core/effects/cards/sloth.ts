@@ -16,7 +16,7 @@ function opp(p: PlayerId): PlayerId {
   return p === 0 ? 1 : 0;
 }
 
-/** 该线堆叠中某卡上方相邻那张（找 idx+1）是否 sloth 协议卡 */
+/** 该线链路中某卡上方相邻那张（找 idx+1）是否 sloth 协议卡 */
 function coveredBySloth(s: GameState, owner: PlayerId, line: Line, uid: string): boolean {
   const stack = s.players[owner].stacks[line];
   const idx = stack.findIndex((c) => c.uid === uid);
@@ -64,14 +64,14 @@ function* sloth1Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> 
   }
 }
 
-/** sloth-1 底（after-refresh，无 top 仅顶卡）：当你刷新后：从你的牌库顶端反面打出1张牌到此堆叠。 */
+/** sloth-1 底（after-refresh，无 top 仅顶卡）：当你刷新后：从你的牌库顶端反面打出1张牌到此链路。 */
 function* sloth1AfterRefresh(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const line = ctx.card.line;
   if (line === null || !deckTopAvailable(ctx.s, ctx.player)) return;
   yield { op: 'playTopDeck', line, faceUp: false };
 }
 
-/** sloth-2 中：翻转1张你被覆盖的牌。（自己任意堆叠被盖卡选 1 → flip allowCovered） */
+/** sloth-2 中：翻转1张你被覆盖的牌。（自己任意链路被盖卡选 1 → flip allowCovered） */
 function* sloth2Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const covered = ctx.candidates({ zone: 'field', owner: ctx.player, covered: true });
   if (covered.length === 0) return;
@@ -126,3 +126,4 @@ registerCardEffects('sloth-2', {
 registerCardEffects('sloth-3', { middle: sloth3Middle });
 registerCardEffects('sloth-4', { triggers: { 'before-covered': { fn: sloth4BeforeCovered, optional: false } } });
 registerCardEffects('sloth-5', { middle: sloth5Middle });
+

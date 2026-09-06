@@ -75,22 +75,33 @@ const PROTOCOL_BY_ID: ReadonlyMap<string, ProtocolDef> = new Map(
   ALL_PROTOCOLS.map((proto) => [proto.defId, proto]),
 );
 
-/** 检索索引条目：一张牌的两类归一化键（defId / 协议中文名+分值） */
+/** 协议改名前的旧中文名（2026-09 修改提示词批：水→流水/火→火焰/光→明光/暗→黑暗/生→生命/
+ *  死→死亡/灵魂→精神/念能→灵能/明晰→透彻/烟雾→迷雾/统一→联合）——devmode 输入兼容旧名。 */
+const PROTOCOL_OLD_NAMES: ReadonlyMap<string, string> = new Map([
+  ['water', '水'], ['fire', '火'], ['light', '光'], ['darkness', '暗'], ['life', '生'], ['death', '死'],
+  ['spirit', '灵魂'], ['psychic', '念能'], ['clarity', '明晰'], ['smoke', '烟雾'], ['unity', '统一'],
+]);
+
+/** 检索索引条目：一张牌的两类归一化键（defId / 协议中文名+分值；旧名别名另存） */
 interface SearchEntry {
   def: CardDef;
   /** 归一化 defId，如 'light-2' → 'light2' */
   defKey: string;
   /** 归一化「协议中文名+分值」，如 light 的 2 分牌 → '光2' */
   cnKey: string;
+  /** 归一化「协议旧名+分值」（改名兼容，如 '明光2' 仍可输入 '光2'） */
+  aliasKey: string;
 }
 
 /** 全部卡牌的检索索引（模块加载时构建一次） */
 const SEARCH_INDEX: readonly SearchEntry[] = ALL_CARD_DEFS.map((def) => {
   const proto = PROTOCOL_BY_ID.get(def.protocol);
+  const old = proto ? PROTOCOL_OLD_NAMES.get(proto.defId) : undefined;
   return {
     def,
     defKey: normalizeKey(def.defId),
     cnKey: proto ? normalizeKey(`${proto.name}${def.value}`) : '',
+    aliasKey: proto && old ? normalizeKey(`${old}${def.value}`) : '',
   };
 });
 
@@ -104,6 +115,9 @@ const CARD_LOOKUP: ReadonlyMap<string, CardDef> = (() => {
   const map = new Map<string, CardDef>();
   for (const entry of SEARCH_INDEX) {
     map.set(entry.defKey, entry.def);
+  }
+  for (const entry of SEARCH_INDEX) {
+    if (entry.aliasKey !== '') map.set(entry.aliasKey, entry.def); // 旧协议名 + 分值（改名兼容）
   }
   for (const entry of SEARCH_INDEX) {
     if (entry.cnKey !== '') map.set(entry.cnKey, entry.def);
@@ -129,6 +143,8 @@ const PROTOCOL_LOOKUP: ReadonlyMap<string, ProtocolDef> = (() => {
   for (const proto of ALL_PROTOCOLS) {
     map.set(normalizeKey(proto.defId), proto);
     map.set(normalizeKey(proto.name), proto);
+    const old = PROTOCOL_OLD_NAMES.get(proto.defId);
+    if (old) map.set(normalizeKey(old), proto); // 旧名别名（改名兼容）
   }
   return map;
 })();
@@ -199,7 +215,8 @@ function collectSearchMatches(query: string): SearchHit[] {
     for (const token of tokens) {
       const best = Math.max(
         tokenMatchScore(token, entry.defKey),
-        entry.cnKey !== '' ? tokenMatchScore(token, entry.cnKey) : 0
+        entry.cnKey !== '' ? tokenMatchScore(token, entry.cnKey) : 0,
+        entry.aliasKey !== '' ? tokenMatchScore(token, entry.aliasKey) : 0
       );
       if (best === 0) {
         matched = false;
@@ -246,10 +263,12 @@ function collectProtocolMatches(query: string): ProtocolHit[] {
   for (const proto of ALL_PROTOCOLS) {
     const defKey = normalizeKey(proto.defId);
     const cnKey = normalizeKey(proto.name);
+    const old = PROTOCOL_OLD_NAMES.get(proto.defId);
+    const aliasKey = old ? normalizeKey(old) : '';
     let score = 0;
     let matched = true;
     for (const token of tokens) {
-      const best = Math.max(tokenMatchScore(token, defKey), tokenMatchScore(token, cnKey));
+      const best = Math.max(tokenMatchScore(token, defKey), tokenMatchScore(token, cnKey), aliasKey !== '' ? tokenMatchScore(token, aliasKey) : 0);
       if (best === 0) {
         matched = false;
         break;

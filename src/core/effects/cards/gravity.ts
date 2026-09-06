@@ -3,7 +3,7 @@ import { registerCardEffects } from '../registry';
 import { deckTopAvailable, findCard } from '../context';
 
 /** gravity-0 中指令：此列每有2张牌，就在此牌下方以反面打出你牌堆顶的牌。
- *  统计口径 = 该线【双方堆叠合计】（含 gravity-0 自己；参考实现 playExecutor.ts:380-386 确认）；
+ *  统计口径 = 该线【双方链路合计】（含 gravity-0 自己；参考实现 playExecutor.ts:380-386 确认）；
  *  张数 n = Math.floor(总数 / 2)。循环 n 次：每次 deckTopAvailable（只查牌库，不洗弃牌堆——
  *  FAQ 142）守卫，牌库空 → 剩余 fizzle。每张 { playTopDeck, belowUid: 自己 }：插入自己下方、
  *  自己保持未覆盖；落地顺序 = 先弹出的牌在最底（与参考实现 splice 于源卡之下一致）。 */
@@ -80,7 +80,7 @@ function* gravity5(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
 
 /** gravity-6 中指令：对手在此列以反面打出其牌堆顶的牌。
  *  opp = 效果属主的对手。deckTopAvailable(s, opp) 守卫（只查对手牌库，不洗弃牌堆——FAQ 142）；
- *  对手牌库空 → fizzle。playTopDeck 带 player: opp → 从对手牌库弹出、落对手此列堆叠、反面 + secret。 */
+ *  对手牌库空 → fizzle。playTopDeck 带 player: opp → 从对手牌库弹出、落对手此列链路、反面 + secret。 */
 function* gravity6(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const opp: PlayerId = ctx.player === 0 ? 1 : 0;
   if (!deckTopAvailable(ctx.s, opp)) return; // 对手牌库空 → fizzle（不洗弃牌堆）
@@ -93,3 +93,4 @@ registerCardEffects('gravity-2', { middle: gravity2 });
 registerCardEffects('gravity-4', { middle: gravity4 });
 registerCardEffects('gravity-5', { middle: gravity5 });
 registerCardEffects('gravity-6', { middle: gravity6 });
+

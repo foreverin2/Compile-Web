@@ -64,7 +64,7 @@ function* fear3Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const foe = opp(ctx.player);
   const line = ctx.card.line;
   if (line === null) return;
-  // 对手该线堆叠任意位置的卡（顶卡 + 被盖）
+  // 对手该线链路任意位置的卡（顶卡 + 被盖）
   const stack = ctx.s.players[foe].stacks[line];
   const cand = stack
     .filter((c) => c.zone === 'field')
@@ -113,3 +113,4 @@ registerCardEffects('fear-2', { middle: fear2Middle });
 registerCardEffects('fear-3', { middle: fear3Middle });
 registerCardEffects('fear-4', { middle: fear4Middle });
 registerCardEffects('fear-5', { middle: fear5Middle });
+

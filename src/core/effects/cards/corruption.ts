@@ -13,8 +13,8 @@ function opp(p: PlayerId): PlayerId {
   return p === 0 ? 1 : 0;
 }
 
-/** corruption-0 顶（start，top:true）：回合开始：在此堆叠中，翻转1张除此牌外的被覆盖或未被覆盖的
- *  正面朝上的卡牌（txt 修改记录 2026-09-05【2】补「除此牌外」——自己所在堆叠中的其它 faceUp 卡
+/** corruption-0 顶（start，top:true）：回合开始：在此链路中，翻转1张除此牌外的被覆盖或未被覆盖的
+ *  正面朝上的卡牌（txt 修改记录 2026-09-05【2】补「除此牌外」——自己所在链路中的其它 faceUp 卡
  *  翻成反面；源卡自己排除——候选空则 fizzle） */
 function* corruption0Start(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const line = ctx.card.line;
@@ -27,7 +27,7 @@ function* corruption0Start(ctx: EffectCtx): Generator<EffectStep, void, StepResu
       label: '',
     }));
   if (cand.length === 0) return;
-  const tAns = yield { kind: 'select', title: 'corruption-0：翻转1张此堆叠中正面朝上的卡牌', min: 1, max: 1, optional: false, candidates: cand };
+  const tAns = yield { kind: 'select', title: 'corruption-0：翻转1张此链路中正面朝上的卡牌', min: 1, max: 1, optional: false, candidates: cand };
   if (tAns.selected.length === 0) return;
   yield { op: 'flip', uid: tAns.selected[0], allowCovered: true };
 }
@@ -129,3 +129,4 @@ registerCardEffects('corruption-2', {
 registerCardEffects('corruption-3', { middle: corruption3Middle });
 registerCardEffects('corruption-5', { middle: corruption5Middle });
 registerCardEffects('corruption-6', { triggers: { end: { fn: corruption6End, optional: false, top: true } } });
+

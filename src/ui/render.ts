@@ -49,7 +49,7 @@ function renderCardFace(card: { defId: string; faceUp: boolean; uid: string }): 
   const box = el('div', 'card');
   // 卡牌实例标识：选择模式 / 拖拽等按 uid 定位（对所有卡牌渲染路径统一写入）
   box.dataset.uid = card.uid;
-  // 背面卡（对手手牌 / 场上的背面堆叠）不暴露身份：仅正面卡携带 data-def-id
+  // 背面卡（对手手牌 / 场上的背面链路）不暴露身份：仅正面卡携带 data-def-id
   if (card.faceUp) box.dataset.defId = card.defId;
   if (!card.faceUp) {
     const back = el('div', 'card-back');
@@ -123,7 +123,7 @@ function renderProtocol(p: { defId: string; compiled: boolean }, player: PlayerI
 }
 
 /**
- * 线值能量条指示器（纯 CSS）：位于堆叠槽外侧端（远离协议一侧），垂直居中。
+ * 线值能量条指示器（纯 CSS）：位于链路槽外侧端（远离协议一侧），垂直居中。
  * 10 格能量 = 该线点值（clamp 0..10）；外壳 4 态按点值：
  * ≤3 stable（方正平直，青色描边）/ 4-6 bulge（上下微微鼓出，橙黄微光）/
  * 7-9 full（明显鼓胀接近圆润，橙色强光 + 应力裂纹）/ ≥10 burst（爆裂：径向爆光 +
@@ -178,7 +178,7 @@ function renderBattery(s: GameState, player: PlayerId, line: Line): HTMLElement 
 }
 
 /**
- * 一条线的堆叠槽（横向条带）：stacks[line] 中 pos 0 为最早打出（贴协议一侧），
+ * 一条线的链路槽（横向条带）：stacks[line] 中 pos 0 为最早打出（贴协议一侧），
  * 新牌沿该线从协议向外逐张铺开（横向重叠，见 styles.css .stack .card + .card）：
  * - P1（左侧，grow-left）：协议在右，pos 0 贴右端，越新的牌越靠左（向左生长）。
  * - P2（右侧，grow-right）：协议在左，pos 0 贴左端，越新的牌越靠右（向右生长）。
@@ -212,7 +212,7 @@ function renderStackSlot(
     const node = renderCardFace(card);
     if (!isTop) node.classList.add('covered');
     if (isTop) node.classList.add('top-card');
-    // R2 场上卡牌旋转：仅场上堆叠（正反面一致）；手牌 / 草案不受影响
+    // R2 场上卡牌旋转：仅场上链路（正反面一致）；手牌 / 草案不受影响
     node.classList.add(card.owner === 0 ? 'rot-cw' : 'rot-ccw');
     node.dataset.uid = card.uid;
     node.style.zIndex = String(i);
@@ -247,7 +247,7 @@ function renderStackSlot(
 }
 
 /** 常驻黑烟特效层（Part 2）：线上任一玩家有正面 darkness-2（顶命令常驻）时，双方该线
- *  堆叠槽边框持续浮现又消散的黑烟。12 个 .smoke-puff 沿边框锚点分布（CSS nth-child 定位），
+ *  链路槽边框持续浮现又消散的黑烟。12 个 .smoke-puff 沿边框锚点分布（CSS nth-child 定位），
  *  JS 只写 0.5s 步进的交错 animation-delay（0–5.5s，相对 4s keyframe 周期自动回绕，
  *  任意时刻都有多个 puff 处于飞行中）。
  *  overlay 本体由 syncSmokeOverlays 挂到 document.body 并跨重渲染复用（同一 DOM 节点），
@@ -363,7 +363,7 @@ export function syncScanOverlays(s: GameState): void {
 
 /* ===== 常驻念能粒子（FX-3）：psychic-1 顶命令 → 被限制方三条链路粒子闪烁 =====
  * opponentMustPlayFaceDown(s, player) 为真（该 player 的对手场上有正面 psychic-1 →
- * player 只能反面打出）期间，被限制方 player 的三条链路堆叠上持续出现小型紫粉粒子
+ * player 只能反面打出）期间，被限制方 player 的三条链路链路上持续出现小型紫粉粒子
  * 微微闪烁后消失（循环）。与 syncSmokeOverlays 同模式：body 级 fixed 粒子层
  * （.fx-psychic-line 内 7 颗 .fx-psychic-line-particle）按 key `${player}-${line}`
  * 注册表 get-or-create、每帧渲染重定位到 .stack-slot 矩形；条件不满足移除并注销。
@@ -415,8 +415,8 @@ export function syncPsychicParticles(s: GameState): void {
 }
 
 /* ===== 常驻瘟疫浓雾（FX-3）：plague-0 底命令 → 被限制方该线深绿浓雾循环 =====
- * lineBlocksOpponent(s, line, player) 为真（该 player 的对手该线堆叠顶卡为未覆盖
- * 正面 plague-0 → player 此列禁打）期间，被限制方 player 的该线堆叠持续渐现渐消
+ * lineBlocksOpponent(s, line, player) 为真（该 player 的对手该线链路顶卡为未覆盖
+ * 正面 plague-0 → player 此列禁打）期间，被限制方 player 的该线链路持续渐现渐消
  * 深绿浓雾（循环）。key 用 `${player}-${line}`（双方可在同一线互为限制 → key=line
  * 会撞，见 FX-3 report）；其余与 syncPsychicParticles 同模式。 */
 const plagueMists = new Map<string, HTMLElement>();
@@ -465,9 +465,9 @@ export function syncPlagueMists(s: GameState): void {
   }
 }
 
-/* ===== FX-5：常驻冷漠灰雾（apathy-0 顶命令 → 该线双方堆叠浓雾循环） =====
- * lineTopCommandActive(s, line, 'apathy-0') 为真（任一玩家该线堆叠有正面 apathy-0——
- * 顶命令被盖仍生效，口径同 darkness-2 黑烟）期间，该线【双方】堆叠槽持续渐现渐消灰色
+/* ===== FX-5：常驻冷漠灰雾（apathy-0 顶命令 → 该线双方链路浓雾循环） =====
+ * lineTopCommandActive(s, line, 'apathy-0') 为真（任一玩家该线链路有正面 apathy-0——
+ * 顶命令被盖仍生效，口径同 darkness-2 黑烟）期间，该线【双方】链路槽持续渐现渐消灰色
  * 浓雾（循环）。key 用 `${player}-${line}`（与 smokeOverlays/plagueMists 同构——apathy-0
  * 是线级判定、双侧同时生效，key=line 不够分槽；按槽位分键可复用同一 get-or-create/
  * 重定位/清理框架）。其余与 syncPlagueMists 同模式：body 级 fixed 层跨重渲染存活。 */
@@ -518,10 +518,10 @@ export function syncApathyMists(s: GameState): void {
 }
 
 /* ===== FX-R3：常驻冷漠2 马赛克（apathy-2 顶「无效化此列所有牌的中部命令」→ 该线双方
- * 堆叠槽时不时冒出像素马赛克） =====
- * lineMiddleCommandsNullified(s, line) 为真（任一玩家该线堆叠顶卡为正面 apathy-2——顶命令
+ * 链路槽时不时冒出像素马赛克） =====
+ * lineMiddleCommandsNullified(s, line) 为真（任一玩家该线链路顶卡为正面 apathy-2——顶命令
  * 被盖仍生效，口径同 restrictions 与场上卡 .apathy-filter 灰度滤镜）期间，该线【双方】
- * 堆叠槽铺 body 级马赛克层：多个小方格色块（.fx-apathy-mosaic-tile）随机出现/消失循环
+ * 链路槽铺 body 级马赛克层：多个小方格色块（.fx-apathy-mosaic-tile）随机出现/消失循环
  * （steps 阶跃闪烁 + JS 负延迟 stagger → 各格不同相位、随时都有几格亮起，读作"像素化
  * 干扰"）。key 用 `${player}-${line}`（与 apathyMists 同构——apathy-2 是线级判定、双侧
  * 同时生效，按槽分键可复用同一 get-or-create/重定位/清理框架）。其余与 syncApathyMists
@@ -673,7 +673,7 @@ export function syncSpirit1Cards(s: GameState): void {
  *   （线值能量条，见 renderBattery）→ 按 (target, line) 定位对方 .battery-shell；多条线各有
  *   一槽，天然去重（一条线只建一层）。
  * - syncMetalPlates（metal-2 顶「对手不能在此列以反面打出」）：lineBlocksOpponentFaceDown
- *   为真时，**被限制方**该线堆叠槽铺金属铁板 + 斜长方形光芒从左到右循环扫过（用户规格
+ *   为真时，**被限制方**该线链路槽铺金属铁板 + 斜长方形光芒从左到右循环扫过（用户规格
  *   「金属2 持续对手链路铁板」中「对手」= 被限制方，与卡面文本同指）。key = `${blocked}-${line}`
  *   （双方可在同一线互为 metal-2 → 同线双板，按槽分键防撞，同 FX-3 瘟疫浓雾先例）。
  * - syncMetal6Mans（metal-6 手牌）：手牌含 metal-6 → 该卡牌面循环渐现 man.png（2s 周期），
@@ -701,7 +701,7 @@ function renderMetal6ManLayer(): HTMLElement {
   return el('div', 'fx-metal-man');
 }
 
-/** metal-0：该线双方堆叠有正面 metal-0（顶命令常驻，含被盖）→ 持卡方对手该线能量条金属光泽边框 */
+/** metal-0：该线双方链路有正面 metal-0（顶命令常驻，含被盖）→ 持卡方对手该线能量条金属光泽边框 */
 export function syncMetal0Glows(s: GameState): void {
   const activeKeys = new Set<string>();
   for (const line of [0, 1, 2] as Line[]) {
@@ -740,7 +740,7 @@ export function syncMetal0Glows(s: GameState): void {
 }
 
 /** metal-2：lineBlocksOpponentFaceDown(s, line, player)（player 被对手 metal-2 禁此列反面打）
- *  → **被限制方（blocked）**该线堆叠槽铺金属铁板 + 斜光扫过（.fx-metal-plate/.fx-metal-sweep）
+ *  → **被限制方（blocked）**该线链路槽铺金属铁板 + 斜光扫过（.fx-metal-plate/.fx-metal-sweep）
  *  ——用户规格「金属2 持续对手链路铁板」中「对手」= 被限制方（与卡面文本同指；与 metal-0
  *  播对方能量槽、FX-3 瘟疫雾铺被限制方一致） */
 export function syncMetalPlates(s: GameState): void {
@@ -1093,7 +1093,7 @@ function renderDeck(s: GameState, player: PlayerId): HTMLElement {
   return deck;
 }
 
-/** 弃牌堆区（renderDeck 的镜像，ITEM 3）：层叠背面卡 + 中央计数，绝对定位堆叠于牌库
+/** 弃牌堆区（renderDeck 的镜像，ITEM 3）：层叠背面卡 + 中央计数，绝对定位链路于牌库
  *  正下方（P1/P2 各自镜像），与牌库同列（−92px 外侧列）→ 移出流式布局，不挤占手牌/
  *  刷新按钮/挡板位置。data-player + 点击打开弃牌堆查看遮罩（公开信息）。 */
 function renderTrash(s: GameState, player: PlayerId): HTMLElement {
@@ -2939,7 +2939,7 @@ export function renderDraft(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   root.appendChild(wrap);
 }
 
-/** 打牌交互：选手牌 → 点（self 侧）堆叠槽；越步/协议不匹配等非法点击一律忽略 */
+/** 打牌交互：选手牌 → 点（self 侧）链路槽；越步/协议不匹配等非法点击一律忽略 */
 function playToLine(s: GameState, cb: UiCallbacks, line: Line): void {
   if (!selectedUid) return;
   const uid = selectedUid;
@@ -2998,8 +2998,8 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   }
 
   // 行式布局（点2 对齐修复）：不再用「三栏各堆三行」，改为逐线一行——
-  // 每条线是一个水平行：P1 堆叠槽 | P1 协议 | P2 协议 | P2 堆叠槽，
-  // 协议对与其两个堆叠槽落在同一水平带内（平行对齐）。
+  // 每条线是一个水平行：P1 链路槽 | P1 协议 | P2 协议 | P2 链路槽，
+  // 协议对与其两个链路槽落在同一水平带内（平行对齐）。
   // 牌库/弃牌/手牌计数与手牌本体分别放在顶部条带与底部条带的左右两侧。
   const grid = el('div', 'board-grid');
 
@@ -3721,3 +3721,4 @@ export function renderApp(root: HTMLElement, s: GameState, cb: UiCallbacks): voi
     });
   });
 }
+

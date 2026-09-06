@@ -247,8 +247,8 @@ export function performDraftPick(s: GameState, defId: string): void {
   }
 }
 
-/** 线堆叠总值：面朝上卡按印刷值求和；面朝下卡值=2。随后应用该线双方堆叠中注册了 valueModifier 的卡
- *  （own-stack 只作用于拥有者总值；opponent-line 只作用于对手同线总值；own 堆叠先、对手堆叠后） */
+/** 线链路总值：面朝上卡按印刷值求和；面朝下卡值=2。随后应用该线双方链路中注册了 valueModifier 的卡
+ *  （own-stack 只作用于拥有者总值；opponent-line 只作用于对手同线总值；own 链路先、对手链路后） */
 export function stackValue(s: GameState, player: PlayerId, line: Line): number {
   const p = s.players[player];
   let total = 0;
@@ -256,7 +256,7 @@ export function stackValue(s: GameState, player: PlayerId, line: Line): number {
     total += card.faceUp ? getCardDef(card.defId).value : 2;
   }
   const opp: PlayerId = player === 0 ? 1 : 0;
-  // line 目标：线上任一玩家堆叠中的正面修正卡即对双方估值生效；每估值只用估值方堆叠应用一次（多张不叠加）
+  // line 目标：线上任一玩家链路中的正面修正卡即对双方估值生效；每估值只用估值方链路应用一次（多张不叠加）
   let lineMod = false;
   for (const owner of [player, opp]) {
     for (const card of s.players[owner].stacks[line]) {
@@ -267,7 +267,7 @@ export function stackValue(s: GameState, player: PlayerId, line: Line): number {
       if (cardCommandDisabled(s, card, 'top')) continue;
       if (v.target === 'own-stack' && owner === player) total = v.apply(s, owner, line, total);
       if (v.target === 'opponent-line' && owner !== player) total = v.apply(s, owner, line, total);
-      // line 目标：apply 的 owner 参数传估值方 player，使修正（如 darkness-2 数反面牌）按估值方堆叠计算
+      // line 目标：apply 的 owner 参数传估值方 player，使修正（如 darkness-2 数反面牌）按估值方链路计算
       if (v.target === 'line' && !lineMod) {
         lineMod = true;
         total = v.apply(s, player, line, total);
@@ -277,7 +277,7 @@ export function stackValue(s: GameState, player: PlayerId, line: Line): number {
   return total;
 }
 
-/** 线顶命令常驻生效判定：该线双方堆叠中是否存在正面朝上的 defId 卡（且其顶命令未被 3代 inertia-0
+/** 线顶命令常驻生效判定：该线双方链路中是否存在正面朝上的 defId 卡（且其顶命令未被 3代 inertia-0
  *  区域禁用——裁决 C7 全禁）。规则：背面卡无任何效果；正面顶命令被覆盖后仍常驻生效 → 只要有正面卡
  *  在线上即 active（被覆盖与否无关，但被 inertia-0 禁用则该卡顶命令失效）。 */
 export function lineTopCommandActive(s: GameState, line: Line, defId: string): boolean {
@@ -303,4 +303,5 @@ export function cardPointValue(s: GameState, card: Card): number {
   if (line !== null && lineTopCommandActive(s, line, 'darkness-2')) return 4;
   return 2;
 }
+
 

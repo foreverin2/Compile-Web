@@ -138,7 +138,7 @@ describe('devmode Compile command', () => {
     const state = makeState();
     const { host, renderCalls } = makeHost(state);
     runCommand(host, 'compile light'); // P1 场上没有 light
-    expect(state.log.join(' ')).toContain('P1 场上没有协议 light（光）');
+    expect(state.log.join(' ')).toContain('P1 场上没有协议 light（明光）');
     expect(state.players[0].protocols[0].compiled).toBe(false);
     expect(state.players[0].stacks[0]).toHaveLength(2);
     expect(renderCalls()).toBe(0);

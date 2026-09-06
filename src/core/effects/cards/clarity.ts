@@ -15,7 +15,7 @@ function opp(p: PlayerId): PlayerId {
   return p === 0 ? 1 : 0;
 }
 
-/** clarity-0 顶：此链路中，你每有1张牌，总阈值就加1（own-stack，+自己该线堆叠张数；裁决 [Q16]） */
+/** clarity-0 顶：此链路中，你每有1张牌，总阈值就加1（own-stack，+自己该线链路张数；裁决 [Q16]） */
 function clarity0ValueModifier(s: GameState, owner: PlayerId, line: Line, total: number): number {
   return total + s.players[owner].stacks[line].length;
 }
@@ -149,4 +149,5 @@ registerCardEffects('clarity-2', { middle: clarity2Middle });
 registerCardEffects('clarity-3', { middle: clarity3Middle });
 registerCardEffects('clarity-4', { middle: clarity4Middle });
 registerCardEffects('clarity-5', { middle: clarity5Middle });
+
 

@@ -38,7 +38,7 @@ export interface Card {
   faceUp: boolean;
   zone: Zone;
   line: Line | null;
-  /** 在堆叠中的位置：0 = 最底层（贴协议），越大越靠上；null = 不在场上堆叠 */
+  /** 在链路中的位置：0 = 最底层（贴协议），越大越靠上；null = 不在场上链路 */
   pos: number | null;
   /** 牌堆来源的反面打出卡 = 非公开信息，翻开前持有者不可窥视
    *  （playTopDeck 打出时置 true；翻面 op 翻正为正面时清 false；进入手牌即解禁——
@@ -59,7 +59,7 @@ export interface PlayerState {
   trash: Card[];
   /** 长度固定 3，下标即线编号 */
   protocols: ProtocolState[];
-  /** 每条线的堆叠，长度固定 3；stacks[line] 内 pos 0 为底层 */
+  /** 每条线的链路，长度固定 3；stacks[line] 内 pos 0 为底层 */
   stacks: Card[][];
 }
 
@@ -189,7 +189,7 @@ export type Op =
   // —— 2代 批1 新增（2026-09-05，见 docs/批1规格 §7）——
   /** 弃牌库顶 1 张（player 缺省=效果属主）：牌库空不洗弃牌堆（FAQ 107），进弃牌堆正面公开 */
   | { op: 'discardDeckTop'; player?: PlayerId }
-  /** 同玩家两个堆叠整堆换线（mirror-2）：各堆内部顺序不变；不触发任何文本/连锁 */
+  /** 同玩家两个链路整堆换线（mirror-2）：各堆内部顺序不变；不触发任何文本/连锁 */
   | { op: 'swapStacks'; a: Line; b: Line; player?: PlayerId }
   /** 复制中央效果（mirror-1）：执行 uid 卡 defId 注册的 middle EffectGen；ctx.card=被复制卡、
    *  效果 player/源有效性跟踪发起效果（pe.player/pe.sourceUid） */
@@ -203,7 +203,7 @@ export type Op =
    *  uid 须在效果属主 trash；faceUp 由效果指定（time-0 玩家自选朝向/time-3 反面） */
   | { op: 'playFromTrash'; uid: string; line: Line; faceUp: boolean }
   /** 跨方牌库顶转移（assimilation-2/6）：从 from 玩家牌库顶 pop → 卡 owner 变 toPlayer →
-   *  反面（faceDown）→ 落 toPlayer 的 toLine 堆叠（走 pendingPlay 落地流程，覆盖/连锁同打出） */
+   *  反面（faceDown）→ 落 toPlayer 的 toLine 链路（走 pendingPlay 落地流程，覆盖/连锁同打出） */
   | { op: 'deckTopTransfer'; from: PlayerId; toPlayer: PlayerId; toLine: Line }
   /** 场卡取入己手（assimilation-0）：目标场卡（正面朝下，含被盖）移除 → owner 变效果属主 → 入手
    *  （faceUp 公开/secret 清）；被盖移除不影响其上层；faceDown 顶卡移除不触发揭示（新顶 faceDown） */
@@ -259,7 +259,7 @@ export interface TriggerEntry {
   top?: boolean;
 }
 
-/** 候选过滤：zone 'hand' 需 owner；'field' 列出双方所有堆叠顶卡（排除结算中源卡）；covered:true 时列出堆叠中被覆盖的卡（排除顶卡与结算中源卡） */
+/** 候选过滤：zone 'hand' 需 owner；'field' 列出双方所有链路顶卡（排除结算中源卡）；covered:true 时列出链路中被覆盖的卡（排除顶卡与结算中源卡） */
 export interface CandidateFilter {
   zone: 'hand' | 'field';
   owner?: PlayerId;
@@ -301,7 +301,7 @@ export interface CardEffects {
   triggers?: Partial<Record<TriggerKind, TriggerDef>>;
   /** 顶命令数值修正：stackValue 计算该线总值时应用
    *  （target: own-stack 作用于拥有者总值；opponent-line 作用于对手同线总值；
-   *    line 作用于该线双方估值——线上任一玩家堆叠中的正面修正卡即生效，每估值用估值方堆叠只应用一次） */
+   *    line 作用于该线双方估值——线上任一玩家链路中的正面修正卡即生效，每估值用估值方链路只应用一次） */
   valueModifier?: {
     target: 'own-stack' | 'opponent-line' | 'line';
     apply(s: GameState, owner: PlayerId, line: Line, total: number): number;
@@ -365,3 +365,4 @@ export interface GameState {
   /** speed-2「通过编译删除此牌前」触发挂起：效果栈清空后由 runStack 消费执行编译本体 */
   pendingCompile: { player: PlayerId; line: Line } | null;
 }
+

@@ -11,7 +11,7 @@ function opp(p: PlayerId): PlayerId {
   return p === 0 ? 1 : 0;
 }
 
-/** mirror-0 顶：此链路中，对手每有1张牌，你的总阈值就加1（own-stack，+对手该线堆叠张数） */
+/** mirror-0 顶：此链路中，对手每有1张牌，你的总阈值就加1（own-stack，+对手该线链路张数） */
 function mirror0ValueModifier(s: GameState, owner: PlayerId, line: Line, total: number): number {
   return total + s.players[opp(owner)].stacks[line].length;
 }
@@ -26,12 +26,12 @@ function* mirror1End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   yield { op: 'copyMiddle', uid: ans.selected[0] };
 }
 
-/** mirror-2 中：交换你2个堆叠的位置（裁决 [Q9] txt 整堆换线） */
+/** mirror-2 中：交换你2个链路的位置（裁决 [Q9] txt 整堆换线） */
 function* mirror2Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
-  const aAns = yield { kind: 'select-line', title: 'mirror-2：选择第1个要交换的堆叠', min: 1, max: 1, optional: false, candidates: [], lines: [0, 1, 2] };
+  const aAns = yield { kind: 'select-line', title: 'mirror-2：选择第1个要交换的链路', min: 1, max: 1, optional: false, candidates: [], lines: [0, 1, 2] };
   if (aAns.selected.length === 0) return;
   const a = Number(aAns.selected[0].replace('line:', ''));
-  const bAns = yield { kind: 'select-line', title: 'mirror-2：选择第2个要交换的堆叠', min: 1, max: 1, optional: false, candidates: [], lines: ([0, 1, 2] as Line[]).filter((x) => x !== a) };
+  const bAns = yield { kind: 'select-line', title: 'mirror-2：选择第2个要交换的链路', min: 1, max: 1, optional: false, candidates: [], lines: ([0, 1, 2] as Line[]).filter((x) => x !== a) };
   if (bAns.selected.length === 0) return;
   const b = Number(bAns.selected[0].replace('line:', ''));
   yield { op: 'swapStacks', a: a as Line, b: b as Line };
@@ -73,4 +73,5 @@ registerCardEffects('mirror-2', { middle: mirror2Middle });
 registerCardEffects('mirror-3', { middle: mirror3Middle });
 registerCardEffects('mirror-4', { triggers: { 'after-opponent-draw': { fn: mirror4AfterOppDraw, optional: false } } });
 registerCardEffects('mirror-5', { middle: mirror5Middle });
+
 

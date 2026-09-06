@@ -33,7 +33,7 @@ function* water2(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   yield { op: 'rearrangeProtocols', a, b };
 }
 
-/** water-3：回手此列所有2分的牌（此列 = 效果卡所在列；双方堆叠【所有位置】分值=2 的牌，
+/** water-3：回手此列所有2分的牌（此列 = 效果卡所在列；双方链路【所有位置】分值=2 的牌，
  *  含被覆盖的——"所有"包括覆盖在下面的牌，不只未覆盖顶卡）。
  *  分值按【效果结算开始时】一次性评估（快照目标 uid 后逐张回手）：正面 2 分卡 / 反面卡
  *  （默认 2）；所在线有正面 darkness-2 顶命令时反面 = 4，仍排除——即使 darkness-2 自身
@@ -75,3 +75,4 @@ registerCardEffects('water-2', { middle: water2 });
 registerCardEffects('water-3', { middle: water3 });
 registerCardEffects('water-4', { middle: water4 });
 registerCardEffects('water-5', { middle: water5 });
+

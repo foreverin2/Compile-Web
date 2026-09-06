@@ -76,8 +76,8 @@ export function fireRefreshReactives(s: GameState, actor: PlayerId): void {
  *  - after-play / after-return 为**定向触发**（resolve completePlay/return 直接查目标卡），不走本函数。
  *  - 覆盖敏感（2026-09-05 2代）：TriggerDef.top === true（顶命令，1代 after-* 全带）→ 被盖仍触发，
  *    push 带 topCommand:true；top 缺省/非 true（底命令反应，如 mirror-4/peace-4/war-1/war-2 注册于底部槽）→
- *    仅当该卡 isUncovered（其堆叠顶卡）才触发，push 不带 topCommand（源有效性走常规未覆盖检查）。
- *  遍历全部三条线堆叠的所有卡（不只顶卡；命中条件见上） */
+ *    仅当该卡 isUncovered（其链路顶卡）才触发，push 不带 topCommand（源有效性走常规未覆盖检查）。
+ *  遍历全部三条线链路的所有卡（不只顶卡；命中条件见上） */
 export function fireReactive(s: GameState, kind: ReactiveKind, actor: PlayerId): void {
   const dir = FIRE_DIR[kind];
   const players: PlayerId[] =
@@ -167,3 +167,4 @@ export function collectTriggers(s: GameState, kind: TriggerKind): TriggerEntry[]
   }
   return out;
 }
+

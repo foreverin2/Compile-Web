@@ -6,7 +6,7 @@ import { getCardDef } from '../../../data/demo';
  * 2代 混乱 chaos（关键词：抽取、重新排列协议、被覆盖）。
  * 权威卡文：src/data/cards2.ts；规格/裁决：docs/批1规格-幸运明镜和平混沌明晰.md §4 + docs/批1裁决结果.md
  * （[Q13]-[Q15]）。引擎能力 G6 chaos-3 任意线放行 / G7 reorderProtocols（2026-09-05 已实现）。
- * chaos-3 底「此牌可以无视协议限制打在任意堆叠中」由引擎 restrictions.cardAllowsFaceUpAnyLine 放行，
+ * chaos-3 底「此牌可以无视协议限制打在任意链路中」由引擎 restrictions.cardAllowsFaceUpAnyLine 放行，
  * 本文件无需注册效果（见裁决 [Q15]）。
  */
 
@@ -14,7 +14,7 @@ function opp(p: PlayerId): PlayerId {
   return p === 0 ? 1 : 0;
 }
 
-/** 某线【双方堆叠】中被覆盖（非顶卡）的卡（任意朝向——2026-09-05 用户修正：混沌0 翻任意被盖卡，
+/** 某线【双方链路】中被覆盖（非顶卡）的卡（任意朝向——2026-09-05 用户修正：混沌0 翻任意被盖卡，
  *  不只反面；flip allowCovered 翻正/翻回皆可） */
 function coveredCandidates(s: GameState, line: Line): ChoiceCard[] {
   const out: ChoiceCard[] = [];
@@ -122,4 +122,5 @@ registerCardEffects('chaos-2', { middle: chaos2Middle });
 // chaos-3：引擎放行（restrictions.cardAllowsFaceUpAnyLine('chaos-3')），无注册
 registerCardEffects('chaos-4', { triggers: { end: { fn: chaos4End, optional: false } } });
 registerCardEffects('chaos-5', { middle: chaos5Middle });
+
 

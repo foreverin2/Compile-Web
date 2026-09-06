@@ -25,7 +25,7 @@ export function findCard(s: GameState, uid: string): Card | undefined {
   return undefined;
 }
 
-/** 是否为其堆叠顶卡（未被覆盖；仅场上卡有意义） */
+/** 是否为其链路顶卡（未被覆盖；仅场上卡有意义） */
 export function isUncovered(s: GameState, card: Card): boolean {
   if (card.zone !== 'field' || card.line === null) return false;
   const stack = s.players[card.owner].stacks[card.line];
@@ -38,7 +38,7 @@ export function deckTopAvailable(s: GameState, player: PlayerId): boolean {
 }
 
 /** ice-6 顶「如果你有手牌，那么你不可以抽牌」（批2，裁决见 docs/批2裁决结果.md）：player 手牌 >0 且其
- *  场上任一线堆叠有正面 ice-6（顶命令被盖仍生效——查在场+正面）→ 禁一切抽牌路径（draw op/刷新/
+ *  场上任一线链路有正面 ice-6（顶命令被盖仍生效——查在场+正面）→ 禁一切抽牌路径（draw op/刷新/
  *  fromOpponentDeck/drawFromDeck；FAQ 冰6：刷新想抽必须能抽上牌，抽 0 无效）。手牌=0 不拦截。
  *  放本文件（而非 restrictions）避免 deck→restrictions→create→deck import 环。 */
 export function shouldBlockDraw(s: GameState, player: PlayerId): boolean {
@@ -59,7 +59,7 @@ function toChoiceCard(c: Card): ChoiceCard {
   };
 }
 
-/** 候选列表：手牌（指定 owner）或场上堆叠卡（默认双方各堆叠顶卡；covered:true 时列被覆盖的卡，均排除结算中源卡——幽灵状态防护） */
+/** 候选列表：手牌（指定 owner）或场上链路卡（默认双方各链路顶卡；covered:true 时列被覆盖的卡，均排除结算中源卡——幽灵状态防护） */
 export function listCandidates(s: GameState, filter: CandidateFilter): ChoiceCard[] {
   const resolving = new Set(s.pendingEffects.map((pe) => pe.sourceUid));
   const out: ChoiceCard[] = [];
@@ -74,7 +74,7 @@ export function listCandidates(s: GameState, filter: CandidateFilter): ChoiceCar
       const stack = p.stacks[line];
       if (stack.length === 0) continue;
       if (filter.covered) {
-        // covered: 列出该堆叠全部被覆盖的卡（排除顶卡——顶卡未被覆盖；排除结算中源卡）
+        // covered: 列出该链路全部被覆盖的卡（排除顶卡——顶卡未被覆盖；排除结算中源卡）
         for (let i = 0; i < stack.length - 1; i++) {
           const c = stack[i];
           if (resolving.has(c.uid)) continue;
@@ -115,7 +115,7 @@ export function emitCardEvent(
 // —— 3代 区域禁用指令（inertia-0 顶禁顶 / inertia-1 底禁底；裁决 C7 全禁：触发/常驻/值修正）——
 // 放本文件（context）避免 import 环：triggers/restrictions/create/resolve 均已直接或间接依赖 context。
 
-/** 该线是否被 inertia-0 顶命令禁用顶指令：线上任一玩家堆叠有 faceUp inertia-0（顶命令被盖仍生效——faceUp 即可）。 */
+/** 该线是否被 inertia-0 顶命令禁用顶指令：线上任一玩家链路有 faceUp inertia-0（顶命令被盖仍生效——faceUp 即可）。 */
 export function lineTopCommandsDisabled(s: GameState, line: Line): boolean {
   return (
     s.players[0].stacks[line].some((c) => c.defId === 'inertia-0' && c.faceUp) ||
@@ -148,3 +148,4 @@ export function cardCommandDisabled(s: GameState, card: Card, kind: 'top' | 'bot
 export function rigidity7Immune(s: GameState, card: Card): boolean {
   return card.defId === 'rigidity-7' && card.faceUp && isUncovered(s, card) && !cardCommandDisabled(s, card, 'bottom');
 }
+

@@ -62,7 +62,7 @@ function topEffect(s: GameState): PendingEffect | undefined {
   return s.pendingEffects[s.pendingEffects.length - 1];
 }
 
-/** 即时定向触发（批2 after-play/after-return）：查指定玩家某线（缺省=三线）堆叠【顶卡】faceUp 注册
+/** 即时定向触发（批2 after-play/after-return）：查指定玩家某线（缺省=三线）链路【顶卡】faceUp 注册
  *  kind 的效果并 push（仅顶卡——ice-1/corruption-1 底命令无 top，被盖不触发；push 不带 topCommand，
  *  源有效性 = 触发卡自身）。after-play 需同线（打出者对手同线）；after-return 三线皆查。 */
 function fireDirectedTop(
@@ -403,7 +403,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       const idx = stack.findIndex((c) => c.uid === op.uid);
       if (idx === -1) throw new Error(`cannot delete ${op.uid}: not in stack`);
       const wasTop = idx === stack.length - 1;
-      stack.splice(idx, 1); // 按目标卡移除（顶卡 splice 末位等价 pop；覆盖卡从堆叠中部移除）
+      stack.splice(idx, 1); // 按目标卡移除（顶卡 splice 末位等价 pop；覆盖卡从链路中部移除）
       card.zone = 'trash';
       card.faceUp = true;
       card.line = null;
@@ -433,7 +433,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       const idx = stack.findIndex((c) => c.uid === op.uid);
       if (idx === -1) throw new Error(`cannot return ${op.uid}: not in stack`);
       const wasTop = idx === stack.length - 1;
-      stack.splice(idx, 1); // 按目标卡移除（顶卡 splice 末位等价 pop；覆盖卡从堆叠中部移除）
+      stack.splice(idx, 1); // 按目标卡移除（顶卡 splice 末位等价 pop；覆盖卡从链路中部移除）
       card.zone = 'hand';
       // 回手即解禁：手牌 = 已知信息，牌堆来源的 secret 卡进入持有者手牌后可见正面
       // （控制器规则：secret 只禁场上反面卡的窥视，不禁回手后查看）
@@ -470,7 +470,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       const idx = stack.findIndex((c) => c.uid === op.uid);
       if (idx === -1) throw new Error(`cannot shift ${op.uid}: not in stack`);
       const wasTop = idx === stack.length - 1;
-      stack.splice(idx, 1); // 按目标卡移除（顶卡 splice 末位等价 pop；覆盖卡从堆叠中部移除）
+      stack.splice(idx, 1); // 按目标卡移除（顶卡 splice 末位等价 pop；覆盖卡从链路中部移除）
       card.zone = 'float';
       card.line = op.targetLine; // 提交目标（落地前不可变卦）
       card.pos = null;
@@ -524,13 +524,13 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       // belowUid（3代 rigidity-3「在此牌正下方反面打出1张牌」）：落地时插入该卡下方（该卡保持未覆盖）
       s.pendingPlay.push({ card, beforeCoveredDone: false, belowUid: op.belowUid });
       // playFromHand（手牌打出）与 playTopDeck（牌堆顶打出）区分事件：
-      // FX 层据此从手牌卡 rect 起飞（而非牌库 rect）飞入目标线堆叠末尾
+      // FX 层据此从手牌卡 rect 起飞（而非牌库 rect）飞入目标线链路末尾
       emitCardEvent(s, 'card:hand-played', card, { line: op.line });
       break;
     }
     case 'rearrangeProtocols': {
       // 重排协议：交换指定玩家两个协议位（defId 与 compiled 状态随数组元素整体移动；
-      // 线堆叠/卡牌留在原位 —— 与参考实现"协议顺序变更、场上卡不动"语义一致）
+      // 线链路/卡牌留在原位 —— 与参考实现"协议顺序变更、场上卡不动"语义一致）
       // player 缺省 = 效果属主（water-2/spirit-4）；psychic-2 指定 player=对手。
       // 执行/log/动画事件统一走共享入口 rearrangeProtocolSlots（控制组件重排动作同路径）。
       const target = op.player ?? pe.player;
@@ -657,7 +657,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       break;
     }
     case 'swapStacks': {
-      // G3（2代 mirror-2）：同玩家两个堆叠整堆换线；各堆内部顺序不变；无覆盖/落地 → 不触发任何文本/连锁
+      // G3（2代 mirror-2）：同玩家两个链路整堆换线；各堆内部顺序不变；无覆盖/落地 → 不触发任何文本/连锁
       if (op.a === op.b) throw new Error('cannot swap a stack with itself');
       const target = op.player ?? pe.player;
       const stacks = s.players[target].stacks;
@@ -668,7 +668,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       for (let i = 0; i < stacks[op.b].length; i++) stacks[op.b][i].pos = i;
       for (const c of stacks[op.a]) c.line = op.a;
       for (const c of stacks[op.b]) c.line = op.b;
-      pushLog(s, `P${target + 1} 交换堆叠位置 ${op.a + 1} 与 ${op.b + 1}`);
+      pushLog(s, `P${target + 1} 交换链路位置 ${op.a + 1} 与 ${op.b + 1}`);
       gameBus.emit({ type: 'stacks:swapped', state: s, payload: { player: target, a: op.a, b: op.b } });
       break;
     }
@@ -883,7 +883,7 @@ function completePlay(s: GameState): void {
   if (card.faceUp) pushMiddle(s, card.owner, card, '打出');
   // 批2 ice-1 底「对手在此链路出牌后：他要弃置1张牌」：打出者【对手】同线顶卡注册 after-play → 触发
   fireDirectedTop(s, 'after-play', card.owner === 0 ? 1 : 0, card.line!);
-  // 3代 rigidity-2 底「在你用行动反面打出1张牌后：从你的牌库顶端反面打出1张牌到同一堆叠」（E10）：
+  // 3代 rigidity-2 底「在你用行动反面打出1张牌后：从你的牌库顶端反面打出1张牌到同一链路」（E10）：
   // 仅玩家【行动】打出（actions/base playCard 标记 fromAction）且反面 → 触发（打出者自己侧）
   if (ps.fromAction && !card.faceUp) {
     s.pendingActionPlayLine = card.line!;
@@ -921,4 +921,5 @@ export function revealAfterRemoval(s: GameState, owner: PlayerId, line: Line): v
     pushMiddle(s, owner, top, '被揭开');
   }
 }
+
 

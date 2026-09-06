@@ -28,7 +28,7 @@ function* momentum0Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResul
 }
 
 /** momentum-1 顶（after-any-compile，top 命令被盖仍生效）：当任意玩家编译后：
- *  从你的牌库顶端反面打出1张牌到此堆叠（覆盖 momentum-1 自身无妨）。 */
+ *  从你的牌库顶端反面打出1张牌到此链路（覆盖 momentum-1 自身无妨）。 */
 function* momentum1AfterCompile(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const line = ctx.card.line;
   if (line === null || !deckTopAvailable(ctx.s, ctx.player)) return;
@@ -95,3 +95,4 @@ registerCardEffects('momentum-6', {
   middle: momentum6Middle,
   triggers: { 'after-any-compile': { fn: momentum6AfterCompile, optional: false, top: true } },
 });
+

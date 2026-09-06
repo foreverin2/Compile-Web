@@ -2,7 +2,7 @@ import type { EffectCtx, EffectStep, GameState, Line, PlayerId, StepResult } fro
 import { registerCardEffects } from '../registry';
 import { findCard } from '../context';
 
-/** 该线【双方堆叠】全部反面牌数（含被盖——「此列」=整条线双方，口径同 gravity-0/darkness-2） */
+/** 该线【双方链路】全部反面牌数（含被盖——「此列」=整条线双方，口径同 gravity-0/darkness-2） */
 function countFaceDownInLine(s: GameState, line: Line): number {
   let count = 0;
   for (const owner of [0, 1] as PlayerId[]) {
@@ -21,8 +21,8 @@ function apathy0ValueModifier(s: GameState, _owner: PlayerId, line: Line, total:
 }
 
 /** apathy-1 中指令：翻转此列所有其他正面牌。
- *  「此列」= apathy-1 所在列（**用户拍板：双方堆叠**——与 apathy-0/gravity-0/darkness-2 惯例及
- *  参考实现 owner:any 一致）；「其他」排除自己；「所有」= 该列双方堆叠全部 faceUp 卡（含被盖）。
+ *  「此列」= apathy-1 所在列（**用户拍板：双方链路**——与 apathy-0/gravity-0/darkness-2 惯例及
+ *  参考实现 owner:any 一致）；「其他」排除自己；「所有」= 该列双方链路全部 faceUp 卡（含被盖）。
  *  快照 uid 后逐个 {op:'flip', allowCovered}（FAQ 116/157：先标记再逐张处理，每张翻转后处理后果
  *  再下一张——逐张前复查卡仍在场，连锁可能已移走/删除）。空 → 无 yield 天然 fizzle。 */
 function* apathy1(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
@@ -89,3 +89,4 @@ registerCardEffects('apathy-2', {
 registerCardEffects('apathy-3', { middle: apathy3 });
 registerCardEffects('apathy-4', { middle: apathy4 });
 registerCardEffects('apathy-5', { middle: apathy5 });
+

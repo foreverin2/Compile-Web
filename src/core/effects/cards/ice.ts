@@ -58,7 +58,7 @@ function* ice2Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
 function* ice3End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const card = findCard(ctx.s, ctx.card.uid);
   if (!card || card.line === null) return;
-  // 被盖判定：不是其堆叠顶卡
+  // 被盖判定：不是其链路顶卡
   const stack = ctx.s.players[card.owner].stacks[card.line];
   if (stack[stack.length - 1]?.uid === card.uid) return; // 未覆盖 → 条件不满足
   const lAns = yield {
@@ -90,3 +90,4 @@ registerCardEffects('ice-3', { triggers: { end: { fn: ice3End, optional: true, t
 // ice-4：引擎禁翻（flip 守卫）
 registerCardEffects('ice-5', { middle: ice5Middle });
 // ice-6：引擎禁抽（shouldBlockDraw）
+

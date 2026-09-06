@@ -16,7 +16,7 @@ function opp(p: PlayerId): PlayerId {
   return p === 0 ? 1 : 0;
 }
 
-/** 场上（双方堆叠）统一卡总数 */
+/** 场上（双方链路）统一卡总数 */
 function unityCount(s: GameState): number {
   let n = 0;
   for (const owner of [0, 1] as PlayerId[]) {
@@ -136,4 +136,5 @@ registerCardEffects('unity-2', { middle: unity2Middle });
 registerCardEffects('unity-3', { middle: unity3Middle });
 registerCardEffects('unity-4', { triggers: { start: { fn: unity4Start, optional: false, top: true } } });
 registerCardEffects('unity-5', { middle: unity5Middle });
+
 
