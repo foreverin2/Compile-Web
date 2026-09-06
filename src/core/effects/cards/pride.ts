@@ -2,6 +2,7 @@ import type { EffectCtx, EffectStep, GameState, Line, PlayerId, StepResult } fro
 import { registerCardEffects } from '../registry';
 import { getLineValue } from '../../state/create';
 import { fireRefreshReactives } from '../triggers';
+import { canRefreshDraw } from '../../engine/deck';
 
 /**
  * 3代 傲慢 pride（关键词：编译/刷新/平移/翻转/对比总阈值；座右铭：矜己自崇）。
@@ -16,8 +17,10 @@ function opp(p: PlayerId): PlayerId {
 
 /** pride-0 顶（after-self-compile，top 命令被盖仍生效）：当你编译后：刷新。
  *  完整刷新（效果指示刷新语义，love-2/spirit-0 同款：抽至 5 + fireRefreshReactives；
- *  ice-6 禁抽守卫在 draw op 内）。编译动作已归还控制权 → 无需控制组件重排。 */
+ *  ice-6 禁抽守卫在 draw op 内）。编译动作已归还控制权 → 无需控制组件重排。
+ *  修改提示词 19：抽不了牌时刷新无效（不发刷新连锁）。 */
 function* pride0AfterSelfCompile(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
+  if (!canRefreshDraw(ctx.s, ctx.player)) return;
   const need = 5 - ctx.s.players[ctx.player].hand.length;
   if (need > 0) yield { op: 'draw', count: need };
   fireRefreshReactives(ctx.s, ctx.player);

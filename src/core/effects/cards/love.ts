@@ -1,6 +1,7 @@
 import type { EffectCtx, EffectStep, PlayerId, StepResult } from '../../models/types';
 import { registerCardEffects } from '../registry';
 import { fireRefreshReactives } from '../triggers';
+import { canRefreshDraw } from '../../engine/deck';
 import { controlRearrangeFlow } from '../control-rearrange-flow';
 
 /** love-1 中指令：抽对手牌堆顶的牌。
@@ -28,10 +29,13 @@ function* love1End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
 
 /** love-2 中指令：对手抽1张牌。刷新。
  *  刷新 = 完整刷新操作（FAQ 161：含消耗控制组件——执行者持有则归还中立，并可在补满前
- *  选择重排任意一方协议：controlRearrangeFlow；随后抽至 5 张 need = 5 - hand.length）。 */
+ *  选择重排任意一方协议：controlRearrangeFlow；随后抽至 5 张）。
+ *  修改提示词 19：若刷新实际抽不了牌（手牌 ≥5 / ice-6 禁抽 / 无牌可抽）→ 刷新无效：
+ *  不消耗控制组件、不弹协议重排、不触发刷新连锁（canRefreshDraw 先验）。 */
 function* love2(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const opp: PlayerId = ctx.player === 0 ? 1 : 0;
   yield { op: 'draw', count: 1, player: opp };
+  if (!canRefreshDraw(ctx.s, ctx.player)) return; // 对手抽照常；刷新无效则整句到此为止
   yield* controlRearrangeFlow(ctx.s, ctx.player, 'love-2 刷新');
   const need = 5 - ctx.s.players[ctx.player].hand.length;
   if (need > 0) yield { op: 'draw', count: need };

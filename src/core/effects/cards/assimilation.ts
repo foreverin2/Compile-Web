@@ -2,6 +2,7 @@ import type { EffectCtx, EffectStep, Line, PlayerId, StepResult } from '../../mo
 import { registerCardEffects } from '../registry';
 import { deckTopAvailable } from '../context';
 import { fireReactive, fireRefreshReactives } from '../triggers';
+import { canRefreshDraw } from '../../engine/deck';
 import { controlRearrangeFlow } from '../control-rearrange-flow';
 
 /**
@@ -34,11 +35,13 @@ function* assimilation0Middle(ctx: EffectCtx): Generator<EffectStep, void, StepR
 
 /** assimilation-1 中：弃置1张牌。刷新。
  *  刷新 = 完整刷新操作（FAQ 161：含消耗控制组件——执行者持有则归还中立，并可在补满前
- *  选择重排任意一方协议：controlRearrangeFlow），随后抽至 5 张。 */
+ *  选择重排任意一方协议：controlRearrangeFlow），随后抽至 5 张。
+ *  修改提示词 19：弃牌后若刷新抽不了牌 → 刷新无效（不耗控制权/不重排/不连锁）。 */
 function* assimilation1Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const hand = ctx.candidates({ zone: 'hand', owner: ctx.player });
   const dAns = yield { kind: 'select', title: 'assimilation-1：弃置1张牌', min: 1, max: 1, optional: false, candidates: hand };
   if (dAns.selected.length > 0) yield { op: 'discard', uid: dAns.selected[0] };
+  if (!canRefreshDraw(ctx.s, ctx.player)) return;
   yield* controlRearrangeFlow(ctx.s, ctx.player, 'assimilation-1 刷新');
   const need = 5 - ctx.s.players[ctx.player].hand.length;
   if (need > 0) yield { op: 'draw', count: need };

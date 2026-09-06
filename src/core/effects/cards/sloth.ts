@@ -3,6 +3,7 @@ import { registerCardEffects } from '../registry';
 import { deckTopAvailable } from '../context';
 import { getLineValue } from '../../state/create';
 import { fireRefreshReactives } from '../triggers';
+import { canRefreshDraw } from '../../engine/deck';
 import { controlRearrangeFlow } from '../control-rearrange-flow';
 
 /**
@@ -55,8 +56,9 @@ function* sloth1Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> 
   const card = ctx.s.players.flatMap((p) => p.stacks).flat().find((c) => c.uid === uid);
   const returnedMine = !!card && card.owner === ctx.player;
   yield { op: 'return', uid };
-  if (returnedMine) {
-    // 完整刷新（效果指示刷新语义，同 love-2/spirit-0：含控制组件消耗与重排选择）
+  if (returnedMine && canRefreshDraw(ctx.s, ctx.player)) {
+    // 完整刷新（效果指示刷新语义，同 love-2/spirit-0：含控制组件消耗与重排选择；
+    // 修改提示词 19：抽不了牌时刷新无效——不耗控制权/不重排/不连锁）
     yield* controlRearrangeFlow(ctx.s, ctx.player, 'sloth-1 刷新');
     const need = 5 - ctx.s.players[ctx.player].hand.length;
     if (need > 0) yield { op: 'draw', count: need };

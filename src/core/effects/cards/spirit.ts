@@ -1,17 +1,22 @@
 import type { EffectCtx, EffectStep, Line, StepResult } from '../../models/types';
 import { registerCardEffects } from '../registry';
 import { fireRefreshReactives } from '../triggers';
+import { canRefreshDraw } from '../../engine/deck';
 import { controlRearrangeFlow } from '../control-rearrange-flow';
 
 /** spirit-0 中指令：刷新。抽1张牌。
  *  刷新 = 完整刷新操作（FAQ 161：含消耗控制组件——执行者持有则归还中立，并可在补满前
  *  选择重排任意一方协议：controlRearrangeFlow），然后抽至 5 张，再额外抽 1 张。
+ *  修改提示词 19：刷新抽不了牌（手牌≥5 / ice-6 禁抽 / 无牌）→ 刷新无效：不耗控制权、不重排、
+ *  不发刷新连锁（额外「抽1张牌」句照常尝试——ice-6 禁抽时 draw 自然为空）。
  *  两次 draw 分开 yield（各自触发 after-draw 即时连锁——刷新与抽 1 是两次独立抽牌事件）。 */
 function* spirit0(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
-  yield* controlRearrangeFlow(ctx.s, ctx.player, 'spirit-0 刷新');
-  const need = 5 - ctx.s.players[ctx.player].hand.length;
-  if (need > 0) yield { op: 'draw', count: need };
-  fireRefreshReactives(ctx.s, ctx.player); // 批2：刷新动作完成连锁（war-0/1）
+  if (canRefreshDraw(ctx.s, ctx.player)) {
+    yield* controlRearrangeFlow(ctx.s, ctx.player, 'spirit-0 刷新');
+    const need = 5 - ctx.s.players[ctx.player].hand.length;
+    if (need > 0) yield { op: 'draw', count: need };
+    fireRefreshReactives(ctx.s, ctx.player); // 批2：刷新动作完成连锁（war-0/1）
+  }
   yield { op: 'draw', count: 1 };
 }
 

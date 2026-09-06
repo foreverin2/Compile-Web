@@ -13,6 +13,19 @@ export function shuffle<T>(arr: T[]): T[] {
   return a;
 }
 
+/** 刷新（补满手牌）是否实际可执行（修改提示词 19 / FAQ 冰6）：
+ *  - 手牌必须 <5（手握 5 张无法执行「刷新 0 张」——不构成刷新）；
+ *  - 未被 ice-6 禁抽（想刷新必须能抽上牌，抽 0 无效）；
+ *  - 牌库或弃牌堆至少有一张可抽。
+ *  false 时效果指示的「刷新」视为无效：不消耗控制组件、不弹协议重排、不触发刷新连锁。 */
+export function canRefreshDraw(s: GameState, player: PlayerId): boolean {
+  const p = s.players[player];
+  if (p.hand.length >= 5) return false;
+  if (shouldBlockDraw(s, player)) return false;
+  if (p.deck.length === 0 && p.trash.length === 0) return false;
+  return true;
+}
+
 /** 从牌库顶抽 count 张；牌库不足则洗弃牌堆重组，再抽满。
  *  ice-6 顶（批2）在场且抽牌者手牌>0 → 禁止抽牌（FAQ 冰6：抽 0 无效；不抽不洗不触发连锁） */
 export function drawCards(s: GameState, player: PlayerId, count: number): Card[] {

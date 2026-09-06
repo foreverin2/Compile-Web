@@ -1,6 +1,7 @@
 import type { EffectCtx, EffectStep, Line, PlayerId, StepResult } from '../../models/types';
 import { registerCardEffects } from '../registry';
 import { fireRefreshReactives } from '../triggers';
+import { canRefreshDraw } from '../../engine/deck';
 import { controlRearrangeFlow } from '../control-rearrange-flow';
 
 /**
@@ -48,6 +49,9 @@ function* war1AfterOppRefresh(ctx: EffectCtx): Generator<EffectStep, void, StepR
     candidates: hand,
   };
   if (dAns.selected.length > 0) yield { op: 'discardMany', uids: dAns.selected };
+  // 「然后刷新」= 拥有者（执行者）完整刷新（FAQ 161：含控制组件归还+重排；修改提示词 19：
+  // 抽不了牌时刷新无效——不耗控制权/不重排/不连锁）
+  if (!canRefreshDraw(ctx.s, me)) return;
   yield* controlRearrangeFlow(ctx.s, me, 'war-1 刷新');
   const need = 5 - ctx.s.players[me].hand.length;
   if (need > 0) yield { op: 'draw', count: need };
