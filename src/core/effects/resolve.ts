@@ -634,6 +634,9 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
         triggerDefId: pe.sourceDefId,
         triggerProtocol: pe.sourceDefId.split('-')[0],
       });
+      // 修改提示词 25：被揭示的非公开牌 → 解除 secret（场上反面被揭示后持有者双击可翻面查看正面；
+      // 防作弊标记清除，信息已公开给被揭示方）
+      card.secret = false;
       break;
     }
     case 'discardDeckTop': {

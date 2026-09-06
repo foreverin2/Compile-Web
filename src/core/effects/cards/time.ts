@@ -107,7 +107,9 @@ function* time2Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   shuffleTrashIntoDeck(ctx.s, ctx.player);
 }
 
-/** time-3 中：随机揭示1张弃牌堆的牌（裁决 Q5：随机非自选），将其正面朝下打出于（至）其它链路 */
+/** time-3 中：随机揭示1张弃牌堆的牌（裁决 Q5：随机非自选），将其正面朝下打出于（至）其它链路。
+ *  修改提示词 25：揭示 = 把那张牌的幽灵加入对方手牌查看（Case A），且被揭示牌解除 secret
+ *  （双击查看可翻面——reveal op 已统一清 secret）。 */
 function* time3Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const trash = ctx.s.players[ctx.player].trash;
   if (trash.length === 0) return;
@@ -115,7 +117,7 @@ function* time3Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const myLine = ctx.card.line;
   const lines = ([0, 1, 2] as Line[]).filter((l) => l !== myLine); // 「其它」= 非 time-3 所在线
   if (lines.length === 0) return;
-  pushLog(ctx.s, `P${ctx.player + 1}：揭示弃牌堆的 ${pick.defId}`);
+  yield { op: 'reveal', uid: pick.uid }; // 幽灵给对方查看（Case A：自己的弃牌堆牌）
   const lAns = yield { kind: 'select-line', title: 'time-3：将其正面朝下打出到其它链路', min: 1, max: 1, optional: false, candidates: [], lines };
   if (lAns.selected.length === 0) return;
   const line = Number(lAns.selected[0].replace('line:', '')) as Line;
