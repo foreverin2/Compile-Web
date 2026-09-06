@@ -1,3 +1,4 @@
+import { pushLog } from '../../log';
 import type { ChoiceCard, EffectCtx, EffectStep, GameState, Line, PlayerId, StepResult } from '../../models/types';
 import { registerCardEffects } from '../registry';
 import { findCard } from '../context';
@@ -30,7 +31,7 @@ function* diversity0Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResu
   const proto = ctx.s.players[ctx.player].protocols.find((p) => p.defId === 'diversity');
   if (proto) {
     proto.compiled = true;
-    ctx.s.log.push(`P${ctx.player + 1}：多元协议翻转至已编译（diversity-0）`);
+    pushLog(ctx.s, `P${ctx.player + 1}：多元协议翻转至已编译（diversity-0）`);
   }
 }
 
@@ -113,5 +114,7 @@ registerCardEffects('diversity-3', { valueModifier: { target: 'own-stack', apply
 registerCardEffects('diversity-4', { middle: diversity4Middle });
 registerCardEffects('diversity-5', { middle: diversity5Middle });
 registerCardEffects('diversity-6', { triggers: { end: { fn: diversity6End, optional: false, top: true } } });
+
+
 
 

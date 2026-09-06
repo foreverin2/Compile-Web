@@ -1,6 +1,7 @@
 import type { Card, GameState, Line, PlayerId, TriggerEntry, TriggerKind } from '../models/types';
 import { EFFECTS } from './registry';
 import { createCtx, findCard, isUncovered, nextEffectId, cardCommandDisabled } from './context';
+import { pushLog, pushEffectLog, stageLabel } from '../log';
 
 /** 即时连锁触发种类：抽牌后 / 弃牌后 / 删除后 / 清理缓存后 / 对手抽牌后（mirror-4/war-0 底）/
  *  自己弃牌后（peace-4 底）/ 刷新后 / 对手刷新后 / 编译后 / 切洗后（time-2 顶）/ 定向 after-play/after-return
@@ -89,7 +90,10 @@ export function fireReactive(s: GameState, kind: ReactiveKind, actor: PlayerId):
         if (!def) continue;
         // 3代 inertia-0/1 区域禁用（C7 全禁）：顶命令注册（top）被 inertia-0 链禁 → 跳过；
         // 底命令反应（无 top）被 inertia-1 链禁 → 跳过
-        if (cardCommandDisabled(s, card, def.top ? 'top' : 'bottom')) continue;
+        if (cardCommandDisabled(s, card, def.top ? 'top' : 'bottom')) {
+          pushLog(s, `[被禁止] ${card.defId} 的「${stageLabel(kind)}」指令因区域禁用（惰性0 禁顶/惰性1 禁底）未触发`);
+          continue;
+        }
         // 底命令反应（未注册 top）：仅未覆盖顶卡触发（规则 79 行「底命令仅未覆盖生效」）
         if (!def.top && !isUncovered(s, card)) continue;
         s.pendingEffects.push({
@@ -102,6 +106,7 @@ export function fireReactive(s: GameState, kind: ReactiveKind, actor: PlayerId):
           prompt: null,
           lastAnswer: null,
         });
+        pushEffectLog(s, card.defId, stageLabel(kind), `由 P${actor + 1} 引发`);
       }
     }
   }
@@ -129,6 +134,7 @@ export function resolveTrigger(s: GameState, t: TriggerEntry, opts?: { topComman
     topCommand: opts?.topCommand,
     prompt: null, lastAnswer: null,
   });
+  pushEffectLog(s, t.defId, stageLabel(t.kind));
 }
 
 /** 收集某类触发：end/start 只收集回合玩家场地侧（规则书"结算你场地侧所有'结束'触发"）；

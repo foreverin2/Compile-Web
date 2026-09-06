@@ -1,3 +1,4 @@
+import { pushLog } from '../log';
 import type { GameState, PlayerId, Line, Card } from '../models/types';
 import { drawCards } from '../engine/deck';
 import { fireRefreshReactives } from '../effects/triggers';
@@ -61,7 +62,7 @@ export function playCard(s: GameState, player: PlayerId, cardUid: string, faceUp
   card.line = line;
   card.pos = null;
   s.pendingPlay.push({ card, beforeCoveredDone: false, fromAction: true }); // fromAction：玩家行动打出（rigidity-2 底触发依据）
-  s.log.push(`P${player + 1} plays ${card.defId} ${faceUp ? 'face-up' : 'face-down'} to line ${line + 1}`);
+  pushLog(s, `P${player + 1} plays ${card.defId} ${faceUp ? 'face-up' : 'face-down'} to line ${line + 1}`);
   runStack(s); // 结算 before-covered（若有）→ 栈空时 completePlay 落地 + 中指令
   return card;
 }
@@ -76,3 +77,4 @@ export function refreshHand(s: GameState, player: PlayerId): Card[] {
   fireRefreshReactives(s, player);
   return drawn;
 }
+

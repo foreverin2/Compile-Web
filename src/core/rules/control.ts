@@ -1,3 +1,4 @@
+import { pushLog } from '../log';
 import type { GameState, PlayerId, Line } from '../models/types';
 import { getLineValue } from '../state/create';
 import { fireReactive } from '../effects/triggers';
@@ -31,7 +32,7 @@ export function checkControl(s: GameState): void {
     if (getLineValue(s, p, line) > getLineValue(s, foe, line)) wins++;
   }
   if (wins >= 2 && s.control !== p) {
-    s.log.push(`P${p + 1} 控制阶段：${wins} 条线总值高于对手 → 获得控制组件`);
+    pushLog(s, `P${p + 1} 控制阶段：${wins} 条线总值高于对手 → 获得控制组件`);
     setControl(s, p); // 统一变更点：触发 after-opponent-gain-control（3代）
   }
   // 不满足 → 保持现状（中立或当前持有者继续持有）
@@ -43,8 +44,9 @@ export function checkControl(s: GameState): void {
 export function resetControlIfHeld(s: GameState, player: PlayerId): boolean {
   if (s.control === player) {
     setControl(s, -1);
-    s.log.push(`P${player + 1} 归还控制组件至中立（编译/补满手牌）`);
+    pushLog(s, `P${player + 1} 归还控制组件至中立（编译/补满手牌）`);
     return true;
   }
   return false;
 }
+

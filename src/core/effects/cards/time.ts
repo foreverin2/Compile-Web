@@ -1,3 +1,4 @@
+import { pushLog } from '../../log';
 import type { ChoiceCard, EffectCtx, EffectStep, GameState, Line, PlayerId, StepResult } from '../../models/types';
 import { registerCardEffects } from '../registry';
 import { shuffleDeck, shuffleTrashIntoDeck } from '../../engine/deck';
@@ -78,7 +79,7 @@ function* time1Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   }
   p.trash.push(...p.deck);
   p.deck = [];
-  ctx.s.log.push(`P${ctx.player + 1}：牌库全部放入弃牌堆`);
+  pushLog(ctx.s, `P${ctx.player + 1}：牌库全部放入弃牌堆`);
 }
 
 /** time-2 顶（after-shuffle，top:true）：当你切洗牌库时：抽取1张牌。你可以偏转此牌 */
@@ -114,7 +115,7 @@ function* time3Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const myLine = ctx.card.line;
   const lines = ([0, 1, 2] as Line[]).filter((l) => l !== myLine); // 「其它」= 非 time-3 所在线
   if (lines.length === 0) return;
-  ctx.s.log.push(`P${ctx.player + 1}：揭示弃牌堆的 ${pick.defId}`);
+  pushLog(ctx.s, `P${ctx.player + 1}：揭示弃牌堆的 ${pick.defId}`);
   const lAns = yield { kind: 'select-line', title: 'time-3：将其正面朝下打出到其它链路', min: 1, max: 1, optional: false, candidates: [], lines };
   if (lAns.selected.length === 0) return;
   const line = Number(lAns.selected[0].replace('line:', '')) as Line;
@@ -149,4 +150,6 @@ registerCardEffects('time-2', {
 registerCardEffects('time-3', { middle: time3Middle });
 registerCardEffects('time-4', { middle: time4Middle });
 registerCardEffects('time-5', { middle: time5Middle });
+
+
 

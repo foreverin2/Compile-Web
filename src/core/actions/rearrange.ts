@@ -1,3 +1,4 @@
+import { pushLog } from '../log';
 import type { GameState, Line, PlayerId } from '../models/types';
 import { gameBus } from '../events/bus';
 
@@ -15,8 +16,9 @@ export function rearrangeProtocolSlots(s: GameState, target: PlayerId, a: Line, 
   const tmp = protos[a];
   protos[a] = protos[b];
   protos[b] = tmp;
-  s.log.push(`P${target + 1} 重排协议：交换位置 ${a + 1} 与 ${b + 1}`);
+  pushLog(s, `P${target + 1} 重排协议：交换位置 ${a + 1} 与 ${b + 1}`);
   // FX：重排基础动画（两张协议卡同时平移互换位置；重渲染后无缝衔接，见 effects/index.ts
   // 「重排协议基础特效」——与"交换堆叠"（stacks:swapped）不同的独立动画）
   gameBus.emit({ type: 'protocols:rearranged', state: s, payload: { player: target, a, b } });
 }
+

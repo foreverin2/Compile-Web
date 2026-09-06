@@ -1,3 +1,4 @@
+import { pushLog } from '../log';
 import type { Card, GameState, PlayerId } from '../models/types';
 import { fireReactive } from '../effects/triggers';
 import { shouldBlockDraw } from '../effects/context';
@@ -61,7 +62,7 @@ export function shuffleDeck(s: GameState, player: PlayerId): void {
     p.deck = shuffle(p.deck);
     for (const c of p.deck) c.faceUp = false;
     gameBus.emit({ type: 'deck:shuffled', state: s, payload: { player } });
-    s.log.push(`P${player + 1} 切洗牌库`);
+    pushLog(s, `P${player + 1} 切洗牌库`);
   }
   // 批3 time-2 顶「当你切洗牌库时：抽取1张牌」（self 方向，top:true 被盖仍触发）
   fireReactive(s, 'after-shuffle', player);
@@ -81,7 +82,7 @@ export function shuffleTrashIntoDeck(s: GameState, player: PlayerId): void {
   p.deck.push(...p.trash);
   p.trash = [];
   shuffleDeck(s, player);
-  s.log.push(`P${player + 1} 将弃牌堆洗入牌库`);
+  pushLog(s, `P${player + 1} 将弃牌堆洗入牌库`);
 }
 
 /** 手牌 → 弃牌堆（正面朝上） */
@@ -115,3 +116,4 @@ export function clearCache(s: GameState, player: PlayerId): Card[] {
   }
   return discarded;
 }
+

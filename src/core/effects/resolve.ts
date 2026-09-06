@@ -8,6 +8,7 @@ import { EFFECTS } from './registry';
 import { executeCompileBody } from '../rules/compile-body';
 import { lineMiddleCommandsNullified, opponentBlocksMiddleCommands } from '../rules/restrictions';
 import { rearrangeProtocolSlots } from '../actions/rearrange';
+import { pushLog, pushEffectLog } from '../log';
 import './cards/fire';
 import './cards/light';
 import './cards/darkness';
@@ -102,10 +103,17 @@ function sourceValid(s: GameState, pe: PendingEffect): boolean {
 
 /** 打出/翻正/揭开触发中指令：入栈（LIFO 由 runStack 统一结算）。
  *  apathy-2 顶「无效化此列所有牌的中部命令」→ 该线中指令直接跳过（查 EFFECTS 之前）
- *  fear-0 顶「在你的回合内，对手无法触发中央效果」（批2）→ 结算人中指令直接跳过 */
-export function pushMiddle(s: GameState, player: PlayerId, card: Card): void {
-  if (opponentBlocksMiddleCommands(s, player)) return; // fear-0（裁决批2-Q5 A：含连锁）
-  if (card.line !== null && lineMiddleCommandsNullified(s, card.line)) return;
+ *  fear-0 顶「在你的回合内，对手无法触发中央效果」（批2）→ 结算人中指令直接跳过
+ *  reason：触发原因（打出/翻正/被揭开）——入结构化日志标题（2026-09 日志树）。 */
+export function pushMiddle(s: GameState, player: PlayerId, card: Card, reason = ''): void {
+  if (opponentBlocksMiddleCommands(s, player)) {
+    pushLog(s, `[被禁止] ${card.defId} 的中部指令无法结算（恐惧0 在场，对手回合内禁中央效果）`);
+    return;
+  }
+  if (card.line !== null && lineMiddleCommandsNullified(s, card.line)) {
+    pushLog(s, `[被禁止] ${card.defId} 的中部指令无效（冷漠2 此列无效化中部命令）`);
+    return;
+  }
   const eff = EFFECTS[card.defId]?.middle;
   if (!eff) return;
   const ctx = createCtx(s, player, card);
@@ -114,6 +122,7 @@ export function pushMiddle(s: GameState, player: PlayerId, card: Card): void {
     gen: eff(ctx), sourceUid: card.uid, sourceDefId: card.defId,
     prompt: null, lastAnswer: null,
   });
+  pushEffectLog(s, card.defId, '中部', reason ? `原因：${reason}` : '');
 }
 
 export function resolveMiddle(s: GameState, player: PlayerId, card: Card): void {
@@ -149,6 +158,24 @@ export function answerEffect(s: GameState, promptId: string, selected: string[])
   }
   pe.prompt = null;
   pe.lastAnswer = { selected };
+  // 日志树：记录玩家选择（哪张卡/哪条线/哪个动作，或跳过）——树内与当前效果同层缩进
+  {
+    const who = (req.chooser ?? pe.player) + 1;
+    if (selected.length === 0) {
+      pushLog(s, `P${who} 选择：跳过`);
+    } else if (req.kind === 'select-line') {
+      const lines = selected.map((x) => `线 ${Number(x.replace('line:', '')) + 1}`).join('、');
+      pushLog(s, `P${who} 选择：${lines}`);
+    } else if (req.kind === 'select-action') {
+      const acts = selected.map((x) => x.replace(/^action:/, '')).join('、');
+      pushLog(s, `P${who} 选择：${acts}`);
+    } else {
+      const names = selected
+        .map((uid) => req.candidates?.find((c) => c.uid === uid)?.defId ?? uid)
+        .join('、');
+      pushLog(s, `P${who} 选择：${names}`);
+    }
+  }
   runStack(s);
 }
 
@@ -163,7 +190,7 @@ export function runStack(s: GameState): void {
       if (pe.prompt) return;
       if (!sourceValid(s, pe)) {
         s.pendingEffects.pop();
-        s.log.push(`效果终止：${pe.sourceDefId} 被覆盖/翻面/移除`);
+        pushLog(s, `效果终止：${pe.sourceDefId} 被覆盖/翻面/移除`);
         continue;
       }
       const result: StepResult = pe.lastAnswer ?? {};
@@ -190,7 +217,7 @@ export function runStack(s: GameState): void {
           : step.kind === 'select-line' ? (step.lines?.length ?? 0) === 0
           : (step.actions?.length ?? 0) === 0;
         if (noTargets) {
-          s.log.push('无合法目标，该步骤跳过');
+          pushLog(s, '无合法目标，该步骤跳过');
           pe.lastAnswer = { selected: [] };
           continue;
         }
@@ -221,8 +248,63 @@ export function runStack(s: GameState): void {
   }
 }
 
+/** op → 中文动作描述（日志树明细行；内部已有详细 log 的 op 返回 '' 避免双行）。
+ *  目标卡以 defId 标注（不泄牌库秘密——牌库来源不打牌名）。 */
+function describeOp(s: GameState, pe: PendingEffect, op: Op): string {
+  const defIdOf = (uid: string): string => findCard(s, uid)?.defId ?? uid;
+  switch (op.op) {
+    case 'discard':
+      return `弃置 ${defIdOf(op.uid)}`;
+    case 'discardMany':
+      return `弃置 ${op.uids.length} 张牌`;
+    case 'delete':
+      return `删除 ${defIdOf(op.uid)}`;
+    case 'return':
+      return `回手 ${defIdOf(op.uid)}`;
+    case 'flip':
+      return `翻转 ${defIdOf(op.uid)}`;
+    case 'shift':
+      return `平移 ${defIdOf(op.uid)} → 线 ${op.targetLine + 1}`;
+    case 'draw': {
+      const who = op.player ?? pe.player;
+      return `P${who + 1} 抽 ${op.count} 张牌${op.fromOpponentDeck ? '（对手牌库顶）' : ''}`;
+    }
+    case 'playTopDeck':
+      return `从牌库顶打出（${op.faceUp ? '正面' : '反面'}）→ 线 ${op.line + 1}`;
+    case 'playFromHand':
+      return `打出 ${defIdOf(op.uid)}（${op.faceUp ? '正面' : '反面'}）→ 线 ${op.line + 1}`;
+    case 'reveal':
+      return `揭示 ${defIdOf(op.uid)}`;
+    case 'give':
+      return `将 ${defIdOf(op.uid)} 给予 P${op.to + 1}`;
+    case 'takeRandom':
+      return `从 P${op.from + 1} 随机取 1 张手牌`;
+    case 'discardDeckTop':
+      return '弃置牌库顶 1 张';
+    case 'drawFromDeck':
+      return `从牌库抽 ${defIdOf(op.uid)}`;
+    case 'playFromTrash':
+      return `从弃牌堆打出 ${defIdOf(op.uid)}（${op.faceUp ? '正面' : '反面'}）→ 线 ${op.line + 1}`;
+    case 'deckTopTransfer':
+      return `将 P${op.from + 1} 牌库顶牌反面打出到 P${op.toPlayer + 1} 的线 ${op.toLine + 1}`;
+    case 'takeFromField':
+      return `取走场上 ${defIdOf(op.uid)} 加入手牌`;
+    case 'rearrangeProtocols':
+    case 'reorderProtocols':
+    case 'swapStacks':
+    case 'copyMiddle':
+    case 'toDeckBottom':
+    case 'discardWholeDeck':
+      return ''; // 已有详细内部 log
+    default:
+      return '';
+  }
+}
+
 /** 操作执行（Task 4 加 flip、Task 5 加 delete/return、Task 6 加 shift） */
 export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
+  const desc = describeOp(s, pe, op);
+  if (desc !== '') pushLog(s, desc);
   switch (op.op) {
     case 'discard': {
       const card = findCard(s, op.uid);
@@ -254,7 +336,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
           for (const c of os.deck) c.faceUp = false;
         }
         if (shouldBlockDraw(s, target)) {
-          s.log.push('ice-6：禁止抽牌，跳过');
+          pushLog(s, 'ice-6：禁止抽牌，跳过');
           break;
         }
         const card = os.deck.pop();
@@ -286,7 +368,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
         rigidity7Immune(s, card) ||
         (card.defId === 'ice-4' && card.faceUp && isUncovered(s, card) && !cardCommandDisabled(s, card, 'bottom'))
       ) {
-        s.log.push(`${card.defId} 不可被翻转，跳过`);
+        pushLog(s, `${card.defId} 不可被翻转，跳过`);
         break;
       }
       // before-flip 前置触发（metal-6 顶「被盖住或翻转前：先删除这张牌」）：
@@ -308,7 +390,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       });
       // FAQ 127：被覆盖卡翻正不触发中指令（始终被视为被覆盖状态）——仅未被覆盖的翻正连锁中指令；
       // G2（2代 luck-1/chaos-0）：noMiddle=true 时翻正也不连锁中指令（「无视中央效果」/静默翻开）
-      if (card.faceUp && isUncovered(s, card) && !op.noMiddle) pushMiddle(s, card.owner, card);
+      if (card.faceUp && isUncovered(s, card) && !op.noMiddle) pushMiddle(s, card.owner, card, '翻正');
       break;
     }
     case 'delete': {
@@ -379,7 +461,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       if (op.targetLine === card.line) throw new Error('must shift to a different line');
       // 3代 rigidity-7 底「此牌不能被翻转或平移」（C11）：未被覆盖（faceUp 顶卡）时免疫 → 跳过
       if (rigidity7Immune(s, card)) {
-        s.log.push('rigidity-7 不可被平移，跳过');
+        pushLog(s, 'rigidity-7 不可被平移，跳过');
         break;
       }
       const owner = card.owner;
@@ -586,7 +668,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       for (let i = 0; i < stacks[op.b].length; i++) stacks[op.b][i].pos = i;
       for (const c of stacks[op.a]) c.line = op.a;
       for (const c of stacks[op.b]) c.line = op.b;
-      s.log.push(`P${target + 1} 交换堆叠位置 ${op.a + 1} 与 ${op.b + 1}`);
+      pushLog(s, `P${target + 1} 交换堆叠位置 ${op.a + 1} 与 ${op.b + 1}`);
       gameBus.emit({ type: 'stacks:swapped', state: s, payload: { player: target, a: op.a, b: op.b } });
       break;
     }
@@ -597,7 +679,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       if (!card) throw new Error(`cannot copy ${op.uid}: not found`);
       const eff = EFFECTS[card.defId]?.middle;
       if (!eff) {
-        s.log.push(`复制中央效果：${card.defId} 无中指令，无效果`);
+        pushLog(s, `复制中央效果：${card.defId} 无中指令，无效果`);
         break;
       }
       s.pendingEffects.push({
@@ -628,7 +710,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       if (same) throw new Error('reorder must change protocol order (FAQ: 终态≠初态)');
       const copy = protos.map((x) => ({ ...x }));
       for (let i = 0; i < 3; i++) protos[i] = copy[op.order[i]];
-      s.log.push(`P${target + 1} 重排协议 → ${op.order.map((x) => x + 1).join('')}`);
+      pushLog(s, `P${target + 1} 重排协议 → ${op.order.map((x) => x + 1).join('')}`);
       gameBus.emit({ type: 'protocols:rearranged', state: s, payload: { player: target, order: [...op.order] } });
       // 3代「重排协议」事件（C4）：reorder 也算重排（momentum-1 底/新星2 底触发）
       fireReactive(s, 'after-self-rearrange', pe.player);
@@ -639,7 +721,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       // G8b（2代 clarity-2/3）：从牌库任意位抽 1 张入手（揭示语境已展示牌库供选择）；剩余保持顺序
       const target = op.player ?? pe.player;
       if (shouldBlockDraw(s, target)) {
-        s.log.push('ice-6：禁止抽牌，跳过');
+        pushLog(s, 'ice-6：禁止抽牌，跳过');
         break;
       }
       const p = s.players[target];
@@ -745,7 +827,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       card.line = null;
       card.pos = null;
       s.players[owner].deck.unshift(card); // 牌库底部 = index 0（drawCards pop 取顶）
-      s.log.push(`P${owner + 1} 将 ${card.defId} 放回牌库底端`);
+      pushLog(s, `P${owner + 1} 将 ${card.defId} 放回牌库底端`);
       break;
     }
     case 'discardWholeDeck': {
@@ -763,7 +845,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
         c.pos = null;
       }
       p.trash.push(...cards);
-      s.log.push(`P${target + 1} 弃置整个牌库（${cards.length} 张）`);
+      pushLog(s, `P${target + 1} 弃置整个牌库（${cards.length} 张）`);
       fireReactive(s, 'after-discard', target);
       fireReactive(s, 'after-self-discard', target);
       break;
@@ -798,7 +880,7 @@ function completePlay(s: GameState): void {
   }
   s.pendingPlay.shift();
   emitCardEvent(s, 'card:played', card);
-  if (card.faceUp) pushMiddle(s, card.owner, card);
+  if (card.faceUp) pushMiddle(s, card.owner, card, '打出');
   // 批2 ice-1 底「对手在此链路出牌后：他要弃置1张牌」：打出者【对手】同线顶卡注册 after-play → 触发
   fireDirectedTop(s, 'after-play', card.owner === 0 ? 1 : 0, card.line!);
   // 3代 rigidity-2 底「在你用行动反面打出1张牌后：从你的牌库顶端反面打出1张牌到同一堆叠」（E10）：
@@ -828,9 +910,15 @@ function completeShift(s: GameState): void {
   emitCardEvent(s, 'card:landed', card);
 }
 
-/** 顶卡移除后：新顶卡正面朝上则触发其中指令（被揭开连锁；编译不经过此函数，符合"编译不触发文本"） */
+/** 顶卡移除后：新顶卡正面朝上则触发其中指令（被揭开连锁；编译不经过此函数，符合"编译不触发文本"）。
+ *  日志树：移除即记「[揭示] 新顶被揭开」（新顶 faceUp 时；无中段注册也记录——被揭开事件本身），
+ *  随后 pushMiddle（reason 被揭开）使其中段标题成为子层。 */
 export function revealAfterRemoval(s: GameState, owner: PlayerId, line: Line): void {
   const stack = s.players[owner].stacks[line];
   const top = stack[stack.length - 1];
-  if (top && top.faceUp) pushMiddle(s, owner, top);
+  if (top && top.faceUp) {
+    pushLog(s, `[揭示] ${top.defId} 被揭开（其上卡被移除）`);
+    pushMiddle(s, owner, top, '被揭开');
+  }
 }
+

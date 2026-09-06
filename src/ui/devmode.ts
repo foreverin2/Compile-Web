@@ -1,3 +1,4 @@
+import { pushLog } from '../core/log';
 import type { Card, CardDef, GameState, Line, ProtocolDef } from '../core/models/types';
 // 2026-09-06：3代（MN03）并入协议池后，开发者模式检索/加牌/编译预览覆盖三代全部
 // 45 套协议与 270 张卡（DEMO = 1代 90 + 2代 90 + 3代 90）。别名保留函数体内的变量名。
@@ -272,7 +273,7 @@ export function searchProtocols(query: string, limit: number = SEARCH_DEFAULT_LI
 function log(host: DevModeHost, msg: string): void {
   const full = `[开发者模式] ${msg}`;
   console.log(full);
-  host.getState().log.push(full);
+  pushLog(host.getState(), full);
 }
 
 /**
@@ -609,3 +610,4 @@ export function initDevMode(host: DevModeHost): () => void {
   window.addEventListener('keydown', onKeyDown);
   return () => window.removeEventListener('keydown', onKeyDown);
 }
+

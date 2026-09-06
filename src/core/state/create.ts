@@ -1,3 +1,4 @@
+import { pushLog } from '../log';
 import type { GameState, PlayerId, PlayerState, Line, ProtocolDef, Card } from '../models/types';
 import { DEMO_PROTOCOLS, DEMO_CARD_DEFS, getCardDef } from '../../data/demo';
 import { drawCards, shuffle } from '../engine/deck';
@@ -159,7 +160,7 @@ export function performDraftBan(s: GameState, defId: string): void {
   const def = getDraftPool(s).find((p) => p.defId === defId);
   if (!def) throw new Error(`cannot ban ${defId}: not available`);
   s.bannedProtocols.push(defId);
-  s.log.push(`P${action.player + 1} 禁用 ${def.name}`);
+  pushLog(s, `P${action.player + 1} 禁用 ${def.name}`);
 }
 
 /** 当前回合（同一玩家的连续轮次）的选牌索引范围 [start, end) */
@@ -187,7 +188,7 @@ export function performDraftUnpick(s: GameState, defId: string): void {
   if (idx === -1) throw new Error(`cannot unpick ${defId}: not picked this turn`);
   const [removed] = s.draftPicks.splice(idx, 1);
   s.draftRound -= 1;
-  s.log.push(`P${getCurrentDrafter(s) + 1} 取消选择 ${removed.name}`);
+  pushLog(s, `P${getCurrentDrafter(s) + 1} 取消选择 ${removed.name}`);
 }
 
 /** 每人 3 协议按草案顺序排线：选中的协议按选择顺序依次放入 0/1/2 线 */
@@ -223,7 +224,7 @@ export function performDraftPick(s: GameState, defId: string): void {
   if (!def) throw new Error(`protocol ${defId} not available`);
   const drafter = getCurrentDrafter(s);
   s.draftPicks.push(def);
-  s.log.push(`P${drafter + 1} 选择 ${def.name}`);
+  pushLog(s, `P${drafter + 1} 选择 ${def.name}`);
   s.draftRound += 1;
   if (s.draftRound >= DRAFT_PICK_COUNT) {
     // 分配：按 1-2-2-1 相对模式把 6 次选择归到两个座位（各 3 套，按选择顺序排线）
@@ -242,7 +243,7 @@ export function performDraftPick(s: GameState, defId: string): void {
     s.players[1].deck = shuffle(s.players[1].deck);
     drawCards(s, 0, 5);
     drawCards(s, 1, 5);
-    s.log.push('Setup complete. Starting hand drawn (5 each).');
+    pushLog(s, 'Setup complete. Starting hand drawn (5 each).');
   }
 }
 
@@ -302,3 +303,4 @@ export function cardPointValue(s: GameState, card: Card): number {
   if (line !== null && lineTopCommandActive(s, line, 'darkness-2')) return 4;
   return 2;
 }
+

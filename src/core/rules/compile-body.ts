@@ -1,3 +1,4 @@
+import { pushLog } from '../log';
 import type { GameState, Line, PlayerId } from '../models/types';
 import { gameBus } from '../events/bus';
 import { fireReactive } from '../effects/triggers';
@@ -23,7 +24,7 @@ export function executeCompileBody(s: GameState, player: PlayerId, line: Line): 
   }
   p.trash.push(...ownCards);
   opp.trash.push(...oppCards);
-  s.log.push(`P${player + 1} compiles line ${line + 1}`);
+  pushLog(s, `P${player + 1} compiles line ${line + 1}`);
   // 语义事件（编译清牌 FX 用）：双方该线卡牌 uid（各按堆叠顶→底顺序）与协议 defId
   gameBus.emit({
     type: 'line:compiled',
@@ -46,11 +47,11 @@ export function executeCompileBody(s: GameState, player: PlayerId, line: Line): 
       card.secret = false;
       card.faceUp = true;
       p.hand.push(card);
-      s.log.push(`P${player + 1} recompiles and steals a card`);
+      pushLog(s, `P${player + 1} recompiles and steals a card`);
     }
   } else {
     protocol.compiled = true;
-    s.log.push(`Protocol "${protocol.defId}" compiled`);
+    pushLog(s, `Protocol "${protocol.defId}" compiled`);
   }
 
   s.compiledThisTurn = true;
@@ -66,6 +67,7 @@ export function executeCompileBody(s: GameState, player: PlayerId, line: Line): 
   if (p.protocols.every((pr) => pr.compiled)) {
     s.winner = player;
     s.phase = 'gameover';
-    s.log.push(`P${player + 1} wins!`);
+    pushLog(s, `P${player + 1} wins!`);
   }
 }
+

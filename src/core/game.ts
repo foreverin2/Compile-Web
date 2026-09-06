@@ -14,6 +14,7 @@ import {
 import { collectTriggers, fireReactive, resolveTrigger } from './effects/triggers';
 import { answerEffect, runStack } from './effects/resolve';
 import { listCandidates, nextEffectId, shouldBlockDraw } from './effects/context';
+import { pushLog } from './log';
 
 export type ActionKind = 'play' | 'refresh' | 'compile' | 'advance' | 'effect-choice' | 'resolve-trigger' | 'clear-cache' | 'rearrange-protocols';
 
@@ -120,6 +121,8 @@ export function executeAction(s: GameState, player: PlayerId, kind: ActionKind, 
     }
     case 'refresh': {
       resetControlIfHeld(s, player);
+      // 日志树（2026-09）：玩家主动补满手牌动作（效果内刷新由卡效果帧自行记录）
+      pushLog(s, `P${player + 1} 补满手牌`);
       refreshHand(s, player);
       // refreshHand 内 drawCards 可能触发 after-draw 即时连锁（spirit-3 等）→ 栈非空时
       // 先结算（可能挂起选择）再推进；与 play 分支同一模式
@@ -225,6 +228,7 @@ export function getWinner(s: GameState): PlayerId | null {
  *  用 discardMany 一次性弃完（FAQ 94：多张弃牌是单次动作，之后由弃牌触发的效果才生效一次） */
 function* cacheClearGen(s: GameState, player: PlayerId): Generator<EffectStep, void, StepResult> {
   const excess = s.players[player].hand.length - 5;
+  pushLog(s, `P${player + 1} 清理缓存：弃 ${excess} 张牌至 5 张上限`);
   const candidates = listCandidates(s, { zone: 'hand', owner: player });
   const ans = yield {
     kind: 'select',

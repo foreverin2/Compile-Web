@@ -3255,7 +3255,7 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   }
 
   const log = el('div', 'log');
-  for (const entry of s.log.slice(-12)) {
+  for (const entry of s.log.slice(-60)) {
     log.appendChild(el('div', 'log-entry', entry));
   }
   wrap.appendChild(log);

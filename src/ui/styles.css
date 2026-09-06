@@ -4939,3 +4939,6 @@ body.dragging { cursor: grabbing; user-select: none; }
   color: #eafff0;
 }
 .rearrange-done:hover { filter: brightness(1.15); }
+
+/* 日志树（2026-09）：缩进嵌套保真（事件/连锁树，空格缩进）+ 长行折行 */
+.log-entry { white-space: pre-wrap; word-break: break-word; line-height: 1.5; }
