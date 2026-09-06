@@ -63,7 +63,7 @@ describe('修改提示词 B3a', () => {
     s.players[0].protocols[0] = { defId: 'diversity', compiled: false };
     // 场上凑 ≥6 种不同协议卡（场上去重协议数条件）
     const protoIds = ['fire', 'light', 'darkness', 'water', 'life', 'death', 'gravity'];
-    for (let i = 0; i < protoIds.length; i++) placeSrc(s, `${protoIds[i]}-1`, i % 2 === 0 ? 0 : 1, i % 3);
+    for (let i = 0; i < protoIds.length; i++) placeSrc(s, `${protoIds[i]}-1`, (i % 2 === 0 ? 0 : 1) as PlayerId, (i % 3) as Line);
     // 多元0 faceUp 放在线 0 底层并被盖住（非顶卡 → 中段本不因「打出」结算）
     const d0 = makeCard('diversity-0', 0, 'field', true, 0, 0);
     s.players[0].stacks[0].unshift(d0);
