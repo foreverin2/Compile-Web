@@ -68,9 +68,10 @@ describe('控制组件重排流程（效果触发的刷新/编译）', () => {
     top = s.pendingEffects[s.pendingEffects.length - 1];
     expect(top?.prompt?.kind).toBe('select-line');
     answerEffect(s, top.id, ['line:2']);
-    // 交换完成 → 回到菜单（可继续换）→ 跳过
+    // 交换完成 → 回到菜单（可继续换）→ 修改提示词 6：锁侧——菜单只剩「不重排」与已锁定玩家
     top = s.pendingEffects[s.pendingEffects.length - 1];
     expect(top?.prompt?.kind).toBe('select-action');
+    expect(top?.prompt?.actions).toEqual(['action:不重排，继续', 'action:重排玩家1的协议（已锁定）']);
     answerEffect(s, top.id, ['action:不重排，继续']);
     resolveAllChoices(s, pickFirst); // 尾保险
     // 归还中立 + 协议 0↔2 交换（defId 随槽位整体移动）+ 补至 5

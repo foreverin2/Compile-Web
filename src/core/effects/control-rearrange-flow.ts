@@ -12,6 +12,8 @@ import { resetControlIfHeld } from '../rules/control';
  * - 未持有控制组件 → 直接返回（不归还也不弹选择）；
  * - chooser = 真正执行刷新/编译的玩家（love-2 等 = 效果属主；war-1 强制刷新 = 被刷新
  *   的对手）——选择权限与归还对象都对准执行者。
+ * - 修改提示词 6：重排锁侧——完成第 1 次有效交换后锁定该玩家，此后菜单只允许继续
+ *   重排同一位玩家（FAQ 79：每次编译/刷新可重排【一名】玩家的协议，不可换侧）。
  */
 export function* controlRearrangeFlow(
   s: GameState,
@@ -21,7 +23,12 @@ export function* controlRearrangeFlow(
   if (s.control !== chooser) return;
   resetControlIfHeld(s, chooser);
   const who = chooser === 0 ? 'P1' : 'P2';
+  let locked: PlayerId | null = null; // 修改提示词 6：首次交换后锁定的玩家
   for (;;) {
+    const actions =
+      locked === null
+        ? ['action:不重排，继续', 'action:重排玩家1的协议', 'action:重排玩家2的协议']
+        : ['action:不重排，继续', `action:重排玩家${locked + 1}的协议（已锁定）`];
     const menu = yield {
       kind: 'select-action',
       title: `${verb}：${who} 持有控制组件（已归还中立）——可重排一名玩家的协议`,
@@ -30,11 +37,11 @@ export function* controlRearrangeFlow(
       optional: false,
       candidates: [],
       chooser,
-      actions: ['action:不重排，继续', 'action:重排玩家1的协议', 'action:重排玩家2的协议'],
+      actions,
     };
     const sel = menu.selected[0];
     if (!sel || sel === 'action:不重排，继续') return;
-    const side = (sel === 'action:重排玩家1的协议' ? 0 : 1) as PlayerId;
+    const side = (sel === 'action:重排玩家1的协议' || sel === 'action:重排玩家1的协议（已锁定）' ? 0 : 1) as PlayerId;
     const first = yield {
       kind: 'select-line',
       title: `${verb}：重排玩家${side + 1}的协议——选择要交换的第1个位置`,
@@ -60,7 +67,8 @@ export function* controlRearrangeFlow(
     if (second.selected.length === 0) return; // fizzle 兜底
     const b = Number(second.selected[0].replace('line:', '')) as Line;
     // 执行交换（executeOp rearrangeProtocols：log/状态/协议换位动画事件）——完成后回到
-    // 菜单，玩家可继续重排（换侧或同侧再换）直到选择「不重排，继续」
+    // 菜单，玩家可继续重排（修改提示词 6：仅限同一位已锁定玩家）直到选择「不重排，继续」
+    locked = side;
     yield { op: 'rearrangeProtocols', a, b, player: side };
   }
 }

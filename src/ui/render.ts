@@ -9,7 +9,7 @@ import {
   shouldSkipCacheCheck,
   canPlayFaceUpAnywhere,
 } from '../core/rules/restrictions';
-import { DEMO_PROTOCOLS, cardImgSrc, protocolImgSrc, cardTextParts, getCardDef } from '../data/demo';
+import { DEMO_PROTOCOLS, cardImgSrc, protocolImgSrc, cardTextParts, getCardDef, getProtocolDef } from '../data/demo';
 import type { CardTextParts } from '../data/demo';
 import { actionCn } from '../core/log';
 import { downloadLog } from './diag';
@@ -1059,11 +1059,12 @@ function positionCompiledFxLayer(defId: string, holder: HTMLElement): void {
 }
 
 /** 玩家信息条：标题（回合高亮）+ 牌库/弃牌堆/手牌计数（手牌本体在底部条带） */
-function renderPlayerInfo(s: GameState, player: PlayerId, opts: { isSelf: boolean }): HTMLElement {
+function renderPlayerInfo(s: GameState, player: PlayerId, opts: { isSelf: boolean; operator?: boolean }): HTMLElement {
   const p = s.players[player];
   const active = player === s.turnPlayer;
-  const info = el('div', `player-info p${player + 1}${active ? ' active' : ''}${opts.isSelf ? ' self' : ''}`);
-  info.appendChild(el('div', 'area-title', `玩家 ${player + 1}${active ? '（回合中）' : ''}`));
+  // 修改提示词 17：效果挂起等待该玩家操作 → 额外 operator 高亮（醒目提示操作者）
+  const info = el('div', `player-info p${player + 1}${active ? ' active' : ''}${opts.isSelf ? ' self' : ''}${opts.operator ? ' operator' : ''}`);
+  info.appendChild(el('div', 'area-title', `玩家 ${player + 1}${opts.operator ? '（请操作！）' : active ? '（回合中）' : ''}`));
 
   const meta = el('div', 'meta-row');
   meta.appendChild(el('span', 'deck-count', `牌库 ${p.deck.length}`));
@@ -3010,9 +3011,12 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
 
   // 顶部条带：双方信息 + 中间控制组件（导出日志按钮在底部操作行）
   const strip = el('div', 'player-strip');
-  strip.appendChild(renderPlayerInfo(s, 0, { isSelf: s.turnPlayer === 0 }));
+  // 修改提示词 17：效果挂起等待操作时，操作者（chooser ?? 效果属主）的玩家栏高亮提示
+  const topEffect = s.pendingEffects[s.pendingEffects.length - 1];
+  const operator: PlayerId | null = topEffect?.prompt ? (topEffect.prompt.chooser ?? topEffect.player) : null;
+  strip.appendChild(renderPlayerInfo(s, 0, { isSelf: s.turnPlayer === 0, operator: operator === 0 }));
   strip.appendChild(renderControlModule(s));
-  strip.appendChild(renderPlayerInfo(s, 1, { isSelf: s.turnPlayer === 1 }));
+  strip.appendChild(renderPlayerInfo(s, 1, { isSelf: s.turnPlayer === 1, operator: operator === 1 }));
   grid.appendChild(strip);
 
   // 三条线（每线一行，同行 4 格水平对齐）
@@ -3181,7 +3185,6 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   wrap.appendChild(actionBar);
 
   // 选择模式（效果结算挂起且顶部为选择请求时）：按 kind 分支渲染（候选卡高亮 / 线槽高亮 / 操作按钮）
-  const topEffect = s.pendingEffects[s.pendingEffects.length - 1];
   if (topEffect?.prompt) {
     const prompt = topEffect.prompt;
     // 同步本地选择状态（重渲染后保留）；prompt 变化时重置
@@ -3217,6 +3220,9 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
         }
       }
       const bar = el('div', 'choice-bar');
+      // 修改提示词 17：操作者提示横幅（顶部玩家栏已高亮 operator，此处底部操作条再醒目提示）
+      const opName = (prompt.chooser ?? topEffect.player) === 0 ? '玩家 1' : '玩家 2';
+      bar.appendChild(el('div', 'operator-banner', `请 ${opName} 操作`));
       // 归属者标签：出选择请求的效果属主（PendingEffect.player，非 prompt 自身；chooser 覆盖）
       bar.appendChild(el('div', 'choice-title', `${(prompt.chooser ?? topEffect.player) === 0 ? 'P1' : 'P2'} 操作 — ${prompt.title}`));
       const count = el('span', 'choice-count', `已选 ${choiceSelected.length}/${prompt.max === Infinity ? prompt.candidates.length : prompt.max}`);
@@ -3263,6 +3269,8 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
       wrap.appendChild(bar);
     } else if (prompt.kind === 'select-action') {
       const bar = el('div', 'choice-bar');
+      const opName = (prompt.chooser ?? topEffect.player) === 0 ? '玩家 1' : '玩家 2'; // 修改提示词 17
+      bar.appendChild(el('div', 'operator-banner', `请 ${opName} 操作`));
       bar.appendChild(el('div', 'choice-title', `${(prompt.chooser ?? topEffect.player) === 0 ? 'P1' : 'P2'} 操作 — ${prompt.title}`));
       for (const act of prompt.actions ?? []) {
         const b = el('button', 'btn choice-action-btn', actionCn(act)); // 修改提示词 8：动作按钮中文（翻转/抽牌/正面打出…）
@@ -3419,6 +3427,9 @@ export function resetUiState(): void {
 /** 选择确认条（select-line 用）：归属者标签 + 提示文案；线槽点击即答，无需确认钮 */
 function choiceBar(pe: PendingEffect, prompt: ChoiceRequest, cb: UiCallbacks, hint: string): HTMLElement {
   const bar = el('div', 'choice-bar');
+  // 修改提示词 17：操作者提示横幅
+  const opName = (prompt.chooser ?? pe.player) === 0 ? '玩家 1' : '玩家 2';
+  bar.appendChild(el('div', 'operator-banner', `请 ${opName} 操作`));
   bar.appendChild(el('div', 'choice-title', `${(prompt.chooser ?? pe.player) === 0 ? 'P1' : 'P2'} 操作 — ${prompt.title}`));
   bar.appendChild(el('div', 'choice-hint', hint));
   return bar;
@@ -3480,6 +3491,34 @@ export function openZoom(defId: string, faceUp: boolean, isProtocol: boolean, co
     try {
       textEl = buildCardTextEl(cardTextParts(getCardDef(defId)), 'zoom-text');
       textEl.style.display = showingFace ? '' : 'none';
+    } catch {
+      textEl = null;
+    }
+  } else {
+    // 修改提示词 22：协议双击放大查看 → 右侧显示中文（名称/座右铭/关键词/编译状态，
+    // 无论是否已编译均可查看）
+    try {
+      const proto = getProtocolDef(defId);
+      const box = el('div', 'zoom-text protocol-zoom-text');
+      box.appendChild(el('div', 'card-text-title', proto.name));
+      const setLabel =
+        proto.set === 'MN01' || proto.set === 'AX01' ? '1代' :
+        proto.set === 'MN02' || proto.set === 'AX02' ? '2代' : '3代';
+      const meta = el('div', 'card-text-seg');
+      meta.appendChild(el('span', 'card-text-seg-label', `${setLabel} · ${proto.defId}`));
+      box.appendChild(meta);
+      const motto = el('div', 'card-text-seg');
+      motto.appendChild(el('span', 'card-text-seg-label', '座右铭：'));
+      motto.appendChild(document.createTextNode(proto.loadingText));
+      box.appendChild(motto);
+      const kw = el('div', 'card-text-seg');
+      kw.appendChild(el('span', 'card-text-seg-label', '关键词：'));
+      kw.appendChild(document.createTextNode(proto.commands.join(' · ')));
+      box.appendChild(kw);
+      const state = el('div', 'card-text-seg');
+      state.appendChild(el('span', 'card-text-seg-label', compiled ? '已编译' : '未编译'));
+      box.appendChild(state);
+      textEl = box;
     } catch {
       textEl = null;
     }

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { ChoiceRequest, GameState, Line, PlayerId } from '../../src/core/models/types';
 import { createGame, stackValue } from '../../src/core/state/create';
-import { pushMiddle, resolveMiddle, runStack } from '../../src/core/effects/resolve';
+import { pushMiddle, resolveMiddle, runStack, answerEffect } from '../../src/core/effects/resolve';
 import { collectTriggers, resolveTrigger } from '../../src/core/effects/triggers';
 import { refreshHand } from '../../src/core/actions/base';
 import { drawCards } from '../../src/core/engine/deck';
@@ -265,6 +265,33 @@ describe('war', () => {
     runStack(s); // 驱动 fireReactive push 的效果（直接调 refreshHand 无 executeAction 包装）
     resolveAllChoices(s, eagerPick);
     expect(c.faceUp).toBe(false); // 翻了自己
+  });
+
+  it('war-3 (修改提示词 20): 对手【批量】弃牌 = 一次性弃牌动作 → after-discard 只触发 1 次（不随张数多次）', () => {
+    const s = setup();
+    const w3 = placeSrc(s, 'war-3', 0, 0); // P0 场上 war-3 顶卡（after-discard 注册，无 top 仅顶卡）
+    s.players[0].stacks[1] = [makeCard('fire-1', 0, 'field', true, 1, 0)]; // 无关他线顶卡（不应误触发）
+    const foeCards = [makeCard('death-0', 1, 'hand'), makeCard('death-1', 1, 'hand'), makeCard('death-2', 1, 'hand')];
+    s.players[1].hand = foeCards;
+    // P1 手牌备选（war-3 反面打出候选）：war-3 结算由【war-3 拥有者 P0】操作，候选 = P0 手牌
+    s.players[0].hand = [makeCard('light-2', 0, 'hand')];
+    // 对手（P1）一次性弃 2 张（批量弃牌动作，discardMany）
+    pushOp(s, 1, { op: 'discardMany', uids: [foeCards[0].uid, foeCards[1].uid] });
+    runStack(s);
+    // after-discard 只触发 1 次：仅 1 个 war-3 挂起选择（若随张数多次会是 2 个）
+    const war3Pes = s.pendingEffects.filter((pe) => pe.sourceDefId === 'war-3');
+    expect(war3Pes).toHaveLength(1);
+    const top = s.pendingEffects[s.pendingEffects.length - 1];
+    expect(top?.prompt?.kind).toBe('select'); // war-3 挂起：可选反面打出 1 张
+    expect(top?.prompt?.optional).toBe(true);
+    // 结算 war-3：跳过（不打出）→ 效果结束、无其它 war-3 再次挂起
+    answerEffect(s, top.id, []);
+    expect(s.pendingEffects.filter((pe) => pe.sourceDefId === 'war-3')).toHaveLength(0);
+    // 对手 trash 恰好 2 张（批量弃完整）；hand 剩 1 张（foeCards 与 hand 同引用已被 splice 改写，勿引用原数组）
+    expect(s.players[1].trash).toHaveLength(2);
+    expect(s.players[1].hand).toHaveLength(1);
+    expect(s.players[1].hand[0].defId).toBe('death-2');
+    expect(w3.faceUp).toBe(true);
   });
 });
 

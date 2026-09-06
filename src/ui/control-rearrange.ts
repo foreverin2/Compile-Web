@@ -35,12 +35,15 @@ let overlay: HTMLElement | null = null;
 let opts: ControlRearrangeModalOptions | null = null;
 let activeSide: PlayerId | null = null;
 let firstPick: Line | null = null;
+/** 修改提示词 6：重排锁侧——完成第 1 次有效交换后，只能继续操作该玩家的协议（不可换侧） */
+let lockedSide: PlayerId | null = null;
 
 export function openControlRearrangeModal(o: ControlRearrangeModalOptions): void {
   closeControlRearrangeModal();
   opts = o;
   activeSide = null;
   firstPick = null;
+  lockedSide = null;
   overlay = el('div', 'rearrange-overlay');
   document.body.appendChild(overlay);
   renderModal();
@@ -54,13 +57,12 @@ export function closeControlRearrangeModal(): void {
   opts = null;
   activeSide = null;
   firstPick = null;
+  lockedSide = null;
 }
 
 export function isControlRearrangeOpen(): boolean {
   return overlay !== null;
-}
-
-/** 一次交换已提交（main 已执行引擎动作并重渲染棋盘）→ 重建内容显示最新协议顺序 */
+}/** 一次交换已提交（main 已执行引擎动作并重渲染棋盘）→ 重建内容显示最新协议顺序 */
 export function refreshControlRearrangeModal(): void {
   if (!overlay || !opts) return;
   firstPick = null;
@@ -83,21 +85,35 @@ function renderModal(): void {
     el(
       'div',
       'rearrange-hint',
-      '点击要重排的玩家协议（先点一张、再点另一张即交换，可多次交换）；不想调整则直接点下方按钮继续。'
+      lockedSide !== null
+        ? `已锁定重排【玩家 ${lockedSide + 1}】的协议：先点一张、再点另一张即交换，可多次交换；另一名玩家的协议不再可操作。`
+        : '点击要重排的玩家协议（先点一张、再点另一张即交换）；完成第 1 次交换后锁定该玩家，不可换侧。'
     )
   );
 
   const sides = el('div', 'rearrange-sides');
   for (const pid of [0, 1] as PlayerId[]) {
-    const side = el('div', 'rearrange-side' + (activeSide === pid ? ' active' : ''));
+    const isLocked = lockedSide !== null && lockedSide !== pid; // 修改提示词 6：锁侧后另一侧不可操作
+    const side = el(
+      'div',
+      'rearrange-side' +
+        (activeSide === pid ? ' active' : '') +
+        (isLocked ? ' locked' : '')
+    );
     side.dataset.side = String(pid);
     const who = pid === 0 ? '玩家 1' : '玩家 2';
     side.appendChild(el('div', 'rearrange-side-label', activeSide === pid ? `▼ ${who}` : who));
     const protos = el('div', 'rearrange-protos');
     for (const line of [0, 1, 2] as Line[]) {
       const pr = s.players[pid].protocols[line];
-      const btn = el('button', 'rearrange-proto' + (activeSide === pid && firstPick === line ? ' picked' : ''));
+      const btn = el(
+        'button',
+        'rearrange-proto' +
+          (activeSide === pid && firstPick === line ? ' picked' : '') +
+          (isLocked ? ' locked' : '')
+      );
       btn.type = 'button';
+      btn.disabled = isLocked;
       const img = document.createElement('img');
       img.src = protocolImgSrc(pr.defId, pr.compiled);
       img.alt = pr.defId;
@@ -123,8 +139,10 @@ function renderModal(): void {
 
 function onProtoClick(side: PlayerId, line: Line): void {
   if (!opts) return;
+  // 修改提示词 6：锁侧后另一名玩家的协议不可再操作（点击忽略）
+  if (lockedSide !== null && lockedSide !== side) return;
   if (activeSide !== side) {
-    // 换侧：激活新侧并选中该卡作为第一张
+    // 换侧：激活新侧并选中该卡作为第一张（未锁定前允许选择操作哪名玩家）
     activeSide = side;
     firstPick = line;
     renderModal();
@@ -138,5 +156,6 @@ function onProtoClick(side: PlayerId, line: Line): void {
   // 同侧第二张（不同卡）→ 提交交换
   const a = firstPick;
   firstPick = null;
+  lockedSide = side; // 修改提示词 6：完成第 1 次有效交换 → 锁定该玩家
   opts.onSwap(side, a, line);
 }

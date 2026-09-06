@@ -302,7 +302,7 @@ export function renderCoin(root: HTMLElement, nav: CoinNav): void {
   const screen = el('div', 'coin-screen');
   // 返回按钮：左上角（回到游戏模式选择）
   screen.appendChild(button('btn coin-back-btn', '← 返回游戏模式选择', nav.backHome));
-  screen.appendChild(el('h1', 'coin-title', '掷硬币决定先手'));
+  screen.appendChild(el('h1', 'coin-title', '玩家一掷硬币决定先后手')); // 修改提示词 7：标题文案
   screen.appendChild(
     el(
       'p',
