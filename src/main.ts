@@ -4,13 +4,15 @@ import { executeAction } from './core/game';
 import { getCompilableLines } from './core/rules/compile';
 import { collectTriggers } from './core/effects/triggers';
 import { renderApp, renderDraft, resetUiState, syncCompiledFxLayers, syncSmokeOverlays, syncScanOverlays, syncPsychicParticles, syncPlagueMists, syncApathyMists, syncApathyMosaics, syncSpirit0Glows, syncSpirit1Cards, syncMetal0Glows, syncMetalPlates, syncMetal6Mans, syncMetal1LineGlows, syncChainLayerPosition, type UiCallbacks } from './ui/render';
+import { openControlRearrangeModal, closeControlRearrangeModal, refreshControlRearrangeModal } from './ui/control-rearrange';
 import { renderHome, renderCoin, renderLibrary, renderRules, renderModeSelect } from './ui/home';
+import { resetControlIfHeld } from './core/rules/control';
 import { DEMO_PROTOCOLS } from './data/demo';
 import { initEffects, initCompileFx, initRearrangeFx, playRevealFly, buildLoveHeart, playSpeedDrawExtra, SPEED_TOTAL_MS } from './ui/effects';
 import { initDiag } from './ui/diag';
 import { initDevMode } from './ui/devmode';
 import { gameBus } from './core/events/bus';
-import type { PlayerId } from './core/models/types';
+import type { PlayerId, Line } from './core/models/types';
 
 const root = document.getElementById('app')!;
 let state = createGame();
@@ -42,6 +44,15 @@ let transitioning = false;
  *  揭示动画完成回调据此放弃后续渲染——防止旧动画把新草案状态路由进渲染/飞行流程
  *  （可达路径：刷新抽牌动画进行中 → 立即胜利 → 动画结束前点「返回主界面」）。 */
 let resetEpoch = 0;
+
+/** 控制组件重排模态内的一次交换（2026-09 基础规则）：引擎动作 + 重渲染棋盘 + 模态刷新。
+ *  交换基础动画由 protocols:rearranged 事件驱动（effects「重排协议基础特效」——
+ *  两张协议卡同时平移互换位置，与"交换堆叠"动画不同）。 */
+function applyRearrangeSwap(target: PlayerId, a: Line, b: Line): void {
+  executeAction(state, state.turnPlayer, 'rearrange-protocols', { target, a, b });
+  renderApp(root, state, cb);
+  refreshControlRearrangeModal();
+}
 
 const cb: UiCallbacks = {
   onRendered() {
@@ -79,12 +90,47 @@ const cb: UiCallbacks = {
     if (a.kind === 'play') {
       executeAction(state, player, 'play', { cardUid: a.cardUid!, faceUp: a.faceUp!, line: a.line! });
     } else if (a.kind === 'compile') {
+      // 持有控制组件 → 编译前先归还中立并弹「重排协议」模态（FAQ 79：编译时首先归还
+      // 中立，可重排一名玩家的协议——自己或对手——随后完成编译；FAQ 114：即使不重排
+      // 也归还）。归还后提交 compile 不再重弹。devmode 强制编译走 executeCompileUnchecked
+      // 旁路（devmode.ts 内同样归还，但不弹模态）。
+      if (state.control === player) {
+        resetControlIfHeld(state, player);
+        const line = a.line!;
+        openControlRearrangeModal({
+          getState: () => state,
+          title: `P${player + 1} 持有控制组件：编译线 ${line + 1} 前可重排一名玩家的协议（组件已归还中立）`,
+          submitLabel: `完成，编译线 ${line + 1}`,
+          onSwap: applyRearrangeSwap,
+          onCommit: () => {
+            closeControlRearrangeModal();
+            cb.onAction({ kind: 'compile', line });
+          },
+        });
+        return;
+      }
       executeAction(state, player, 'compile', { line: a.line! });
     } else if (a.kind === 'refresh') {
       // 抽牌飞入动画：记录刷新前手牌数，执行后按差值（= 本次抽了几张）播放动画，
       // 动画结束后再重渲染展示新手牌；动画进行中忽略再次刷新（防并发）
       if (drawAnimBusy) {
         renderApp(root, state, cb);
+        return;
+      }
+      // 持有控制组件 → 补满手牌前先归还中立并弹「重排协议」模态（规则文本「控制组件
+      // 相关规则」：执行补满手牌时归还中立，可调整任意一名玩家的协议摆放顺序）。
+      if (state.control === player) {
+        resetControlIfHeld(state, player);
+        openControlRearrangeModal({
+          getState: () => state,
+          title: `P${player + 1} 持有控制组件：补满手牌前可重排一名玩家的协议（组件已归还中立）`,
+          submitLabel: '完成，补满手牌',
+          onSwap: applyRearrangeSwap,
+          onCommit: () => {
+            closeControlRearrangeModal();
+            cb.onAction({ kind: 'refresh' });
+          },
+        });
         return;
       }
       const handBefore = state.players[player].hand.length;
@@ -406,6 +452,7 @@ function resetToMainInterface(): void {
   transitioning = false;
   pendingDraws = [];
   pendingReveals = [];
+  closeControlRearrangeModal(); // 控制组件重排模态（body 级）随局清扫
   resetUiState();
   showHome();
 }

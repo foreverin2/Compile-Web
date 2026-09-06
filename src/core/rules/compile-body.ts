@@ -57,6 +57,10 @@ export function executeCompileBody(s: GameState, player: PlayerId, line: Line): 
 
   // 批2 war-2 底「当对手编译后：对手弃置所有手牌」：编译者【对手】侧注册 after-compile 的顶卡触发
   fireReactive(s, 'after-compile', player);
+  // 3代（2026-09）：傲慢0 顶「当你编译后：刷新」（编译者自己侧）；
+  // 动量1/6 顶「当任意玩家编译后」（双方，批3 注册）
+  fireReactive(s, 'after-self-compile', player);
+  fireReactive(s, 'after-any-compile', player);
 
   // 胜利判定
   if (p.protocols.every((pr) => pr.compiled)) {

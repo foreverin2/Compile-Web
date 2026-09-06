@@ -1,39 +1,45 @@
 import type { GameState, Line, PlayerId } from '../models/types';
 import { lineTopCommandActive } from '../state/create';
-import { isUncovered } from '../effects/context';
+import { isUncovered, cardCommandDisabled } from '../effects/context';
 
 function opp(player: PlayerId): PlayerId {
   return player === 0 ? 1 : 0;
 }
 
-/** 顶命令常驻（规则 90 行）：player 任一线堆叠有正面该卡即 true（被盖也生效——只查在场+正面，不看是否未覆盖） */
+/** 顶命令常驻（规则 90 行）：player 任一线堆叠有正面该卡即 true（被盖也生效——只查在场+正面，不看是否未覆盖；
+ *  3代 inertia-0 区域禁顶 → 该卡顶命令失效不算，C7） */
 export function playerHasTopCommand(s: GameState, player: PlayerId, defId: string): boolean {
   for (const line of [0, 1, 2] as Line[]) {
-    if (s.players[player].stacks[line].some((c) => c.defId === defId && c.faceUp)) return true;
+    if (s.players[player].stacks[line].some((c) => c.defId === defId && c.faceUp && !cardCommandDisabled(s, c, 'top'))) {
+      return true;
+    }
   }
   return false;
 }
 
-/** 底命令仅未覆盖生效（规则 79 行）：player 任一线堆叠【顶卡】正面该卡（isUncovered 判定顶卡） */
+/** 底命令仅未覆盖生效（规则 79 行）：player 任一线堆叠【顶卡】正面该卡（isUncovered 判定顶卡；
+ *  3代 inertia-1 区域禁底 → 该卡底命令失效不算，C7） */
 export function playerHasActiveBottom(s: GameState, player: PlayerId, defId: string): boolean {
   for (const line of [0, 1, 2] as Line[]) {
     const stack = s.players[player].stacks[line];
     const top = stack[stack.length - 1];
-    if (top && top.defId === defId && top.faceUp && isUncovered(s, top)) return true;
+    if (top && top.defId === defId && top.faceUp && isUncovered(s, top) && !cardCommandDisabled(s, top, 'bottom')) {
+      return true;
+    }
   }
   return false;
 }
 
-/** 对手该线堆叠有正面该卡（含被盖） */
+/** 对手该线堆叠有正面该卡（含被盖；区域禁顶感知） */
 export function opponentLineHasTop(s: GameState, line: Line, player: PlayerId, defId: string): boolean {
-  return s.players[opp(player)].stacks[line].some((c) => c.defId === defId && c.faceUp);
+  return s.players[opp(player)].stacks[line].some((c) => c.defId === defId && c.faceUp && !cardCommandDisabled(s, c, 'top'));
 }
 
-/** 对手该线堆叠【顶卡】正面该卡 */
+/** 对手该线堆叠【顶卡】正面该卡（区域禁底感知） */
 export function opponentLineHasActiveBottom(s: GameState, line: Line, player: PlayerId, defId: string): boolean {
   const stack = s.players[opp(player)].stacks[line];
   const top = stack[stack.length - 1];
-  return !!top && top.defId === defId && top.faceUp && isUncovered(s, top);
+  return !!top && top.defId === defId && top.faceUp && isUncovered(s, top) && !cardCommandDisabled(s, top, 'bottom');
 }
 
 // —— 协议语义封装（defId 常量写在函数内，语义注释标明协议）——
@@ -93,14 +99,43 @@ export function opponentBlocksMiddleCommands(s: GameState, player: PlayerId): bo
 }
 
 /** unity-1 底「统一卡牌可以正面朝上打在此链路」（批3）：查双方所有线堆叠顶卡（未覆盖 faceUp）unity-1
- *  → 返回该线；unity 协议卡正面可落此线（无视协议匹配） */
+ *  → 返回该线；unity 协议卡正面可落此线（无视协议匹配）。3代 inertia-1 禁底 → 底命令失效不算（C7）。 */
 export function unity1UncoveredLine(s: GameState): Line | null {
   for (const owner of [0, 1] as PlayerId[]) {
     for (const line of [0, 1, 2] as Line[]) {
       const stack = s.players[owner].stacks[line];
       const top = stack[stack.length - 1];
-      if (top && top.defId === 'unity-1' && top.faceUp && isUncovered(s, top)) return line;
+      if (top && top.defId === 'unity-1' && top.faceUp && isUncovered(s, top) && !cardCommandDisabled(s, top, 'bottom')) {
+        return line;
+      }
     }
   }
   return null;
+}
+
+/** 3代 lust-0 底「若你拥有控制权，对手无法编译」：player 的对手侧任一【顶卡】（未覆盖 faceUp）
+ *  lust-0 存在且该 lust-0 拥有者（对手）持有控制组件 → player 不可【行动】编译
+ *  （只禁行动编译 check-compile；卡牌效果触发的编译——贪婪1/统一1 等走 executeCompileBody——
+ *  照常执行，裁决 RQ4-A；底命令仅未覆盖生效；inertia-1 禁底 → 失效）。 */
+export function opponentCompileBlockedByControl(s: GameState, player: PlayerId): boolean {
+  const foe = opp(player);
+  for (const line of [0, 1, 2] as Line[]) {
+    const stack = s.players[foe].stacks[line];
+    const top = stack[stack.length - 1];
+    if (
+      top && top.defId === 'lust-0' && top.faceUp && isUncovered(s, top) &&
+      !cardCommandDisabled(s, top, 'bottom') && s.control === foe
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** 3代 lust-2 底「你的牌可以无视协议限制打在此堆叠中」：player 自己侧 line 堆叠【顶卡】有
+ *  faceUp lust-2（底命令仅未覆盖生效；inertia-1 禁底 → 失效）→ player 正面打出任意协议牌到此堆叠。 */
+export function lineAllowsFaceUpIgnoringProtocol(s: GameState, line: Line, player: PlayerId): boolean {
+  const stack = s.players[player].stacks[line];
+  const top = stack[stack.length - 1];
+  return !!top && top.defId === 'lust-2' && top.faceUp && isUncovered(s, top) && !cardCommandDisabled(s, top, 'bottom');
 }

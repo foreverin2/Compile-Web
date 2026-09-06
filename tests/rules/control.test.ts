@@ -54,9 +54,9 @@ function makeState(
   };
 }
 
-describe('checkControl', () => {
-  it('gains control for P0 with 2+ lines higher', () => {
-    const s = makeState([5, 5, 0], [1, 1, 9]); // P0 胜线 0、1，输线 2
+describe('checkControl（规则单向判定：只检查当前行动玩家）', () => {
+  it('gains control for acting P0 with 2+ lines higher', () => {
+    const s = makeState([5, 5, 0], [1, 1, 9]); // P0（行动玩家）胜线 0、1，输线 2
     checkControl(s);
     expect(s.control).toBe(0);
   });
@@ -67,10 +67,23 @@ describe('checkControl', () => {
     expect(s.control).toBe(-1);
   });
 
-  it('opponent gains control', () => {
-    const s = makeState([1, 1, 9], [5, 5, 0]); // P1 胜线 0、1
+  it('acting player P1 gains control with 2+ lines higher', () => {
+    const s = makeState([1, 1, 9], [5, 5, 0], { turnPlayer: 1 }); // P1（行动玩家）胜线 0、1
     checkControl(s);
     expect(s.control).toBe(1);
+  });
+
+  it('neutral stays neutral when only the non-acting player leads', () => {
+    // P1 行动、P1 落后（P0 领先）→ 行动玩家不满足 → 保持中立（旧双向实现会给 P0，与规则不符）
+    const s = makeState([5, 5, 0], [1, 1, 9], { turnPlayer: 1 });
+    checkControl(s);
+    expect(s.control).toBe(-1);
+  });
+
+  it('acting player steals control from opponent holder', () => {
+    const s = makeState([5, 5, 0], [1, 1, 9], { control: 1, turnPlayer: 0 }); // P1 持有，P0 行动且满足
+    checkControl(s);
+    expect(s.control).toBe(0);
   });
 
   it('tie keeps current state', () => {
@@ -82,10 +95,12 @@ describe('checkControl', () => {
     expect(s.control).toBe(0);
   });
 
-  it('re-evaluates: holder losing majority hands control to opponent', () => {
+  it('holder keeps control when own check fails (no auto loss to point gap)', () => {
+    // P0 持有控制组件、P0 行动但落后（P1 领先）→ 行动玩家不满足 → 保持持有。
+    // 失权只有：自己编译/补满归还、对手在自己回合满足时夺取、卡牌效果。
     const s = makeState([1, 1, 9], [5, 5, 0], { control: 0 });
     checkControl(s);
-    expect(s.control).toBe(1);
+    expect(s.control).toBe(0);
   });
 
   it('advance at check-control step triggers gain (integration)', () => {

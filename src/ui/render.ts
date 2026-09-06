@@ -1377,24 +1377,26 @@ function bindShieldDrag(shield: HTMLElement, player: PlayerId, hand: HTMLElement
 }
 
 /**
- * 控制权滑动指示条（R6，R7 行程加长）：双方三线总值对比决定控制卡在轨道上的位置——
- * P1 占优靠左、P2 占优靠右（clamp 1%..99% 使偏向更明显，轨道 overflow visible 保证不出轨），
- * 双方均为 0 时居中。控制卡归属（s.control）只影响高亮/灰化：中立灰化，持有方加光晕。
+ * 控制权滑动指示条（2026-09 规则化；R6 引入、R7 行程加长、R8 控制卡放大）：
+ * 滑块位置只反映【控制组件归属】（s.control），三态离散大幅移动——
+ *   中立 → 居中（50%）；玩家 1 持有 → 贴左端；玩家 2 持有 → 贴右端。
+ * 归属不变时滑块【不随双方数值差距连续滑动】（旧实现按双方三线总值占比连续微调，
+ * 造成"有点数差距控制权就在动"的误解——规则上控制权只在控制阶段判定/编译补满归还/
+ * 卡牌效果时才易主，见 core/rules/control.ts）。
+ * 归属易主经 left 0.5s 过渡大幅滑到对应端。控制条归属类（held-0/1/neutral）与位置
+ * 天然一致：中立灰化居中，持有方高亮贴端。
  * 由于渲染模型每次重建 DOM，直接设置 left 不会触发 transition；因此先写入上一帧
  * 位置、下一帧再写入目标位置，让 left 0.5s 过渡真正产生滑动动画。
  */
+const CONTROL_EDGE_PCT = 4; // 持有方贴端距离（左端 4% / 右端 96%，控制卡仍不出轨）
 let controlSliderPos = 50;
 
 function renderControlModule(s: GameState): HTMLElement {
-  const total0 = getLineValue(s, 0, 0) + getLineValue(s, 0, 1) + getLineValue(s, 0, 2);
-  const total1 = getLineValue(s, 1, 0) + getLineValue(s, 1, 1) + getLineValue(s, 1, 2);
-  let target = 50;
-  if (total0 + total1 > 0) {
-    // raw 取 P2 占比：P1 占优 → total1≈0 → 靠左(5%)；P2 占优 → total1≈total → 靠右(95%)
-    const raw = (total1 / (total0 + total1)) * 100;
-    target = Math.min(99, Math.max(1, raw));
-  }
   const neutral = s.control === -1;
+  // 三态目标位置：中立居中；P1（左标签）贴左端；P2（右标签）贴右端
+  let target = 50;
+  if (s.control === 0) target = CONTROL_EDGE_PCT;
+  else if (s.control === 1) target = 100 - CONTROL_EDGE_PCT;
   const ctrl = el('div', 'control-module' + (neutral ? ' neutral' : ` held-${s.control}`));
   const track = el('div', 'control-track');
   track.appendChild(el('span', 'control-track-label left', '玩家 1'));

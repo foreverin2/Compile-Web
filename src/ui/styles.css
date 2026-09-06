@@ -4833,3 +4833,109 @@ body.dragging { cursor: grabbing; user-select: none; }
   background: rgba(0, 0, 0, 0.75); color: #7cff9b; pointer-events: none;
 }
 
+
+/* ===== 控制组件重排模态（2026-09：编译/补满手牌前持有者可重排任意一方协议） ===== */
+.rearrange-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9000;
+  background: rgba(0, 0, 0, 0.74);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.rearrange-panel {
+  background: linear-gradient(160deg, #1c2333 0%, #141a28 100%);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 14px;
+  padding: 18px 22px;
+  max-width: 820px;
+  width: 92%;
+  max-height: 88vh;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+}
+.rearrange-title {
+  font-size: 17px;
+  color: #f0e6c8;
+  font-weight: 600;
+  text-align: center;
+}
+.rearrange-hint { font-size: 13px; color: #9aa3b2; text-align: center; }
+.rearrange-sides {
+  display: flex;
+  gap: 18px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.rearrange-side {
+  border: 1px dashed rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.18);
+}
+.rearrange-side.active {
+  border-color: rgba(224, 160, 48, 0.85);
+  background: rgba(224, 160, 48, 0.09);
+  box-shadow: 0 0 12px rgba(224, 160, 48, 0.3);
+}
+.rearrange-side-label {
+  text-align: center;
+  font-size: 13px;
+  color: #9aa3b2;
+  margin-bottom: 6px;
+}
+.rearrange-side.active .rearrange-side-label { color: #f0b040; }
+.rearrange-protos { display: flex; gap: 8px; }
+.rearrange-proto {
+  position: relative;
+  width: 64px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 6px;
+  background: none;
+  cursor: pointer;
+  overflow: hidden;
+  display: block;
+}
+.rearrange-proto img { width: 100%; display: block; }
+.rearrange-proto:hover { border-color: rgba(255, 255, 255, 0.45); }
+.rearrange-proto.picked {
+  border-color: #4caf50;
+  box-shadow: 0 0 12px rgba(76, 175, 80, 0.8);
+}
+.proto-line-tag {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  font-size: 10px;
+  line-height: 1.4;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  padding: 0 5px;
+  border-radius: 4px;
+  pointer-events: none;
+}
+.proto-compiled-tag {
+  position: absolute;
+  bottom: 2px;
+  right: 2px;
+  font-size: 9px;
+  line-height: 1.4;
+  background: #d8b43c;
+  color: #000;
+  padding: 0 5px;
+  border-radius: 4px;
+  pointer-events: none;
+}
+.rearrange-actions { display: flex; justify-content: center; gap: 12px; }
+.rearrange-done {
+  min-width: 200px;
+  background: linear-gradient(160deg, #3f7f4f 0%, #2c5a38 100%);
+  border: 1px solid rgba(124, 255, 155, 0.35);
+  color: #eafff0;
+}
+.rearrange-done:hover { filter: brightness(1.15); }

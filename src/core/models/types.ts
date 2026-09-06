@@ -94,7 +94,20 @@ export type TriggerKind =
   | 'after-play'
   | 'after-return'
   // 2代 批3（2026-09-05）：切洗牌库后反应（time-2 顶「当你切洗牌库时：抽1」，self 方向）
-  | 'after-shuffle';
+  | 'after-shuffle'
+  // 3代（2026-09，方向见 triggers.ts FIRE_DIR）：after-opponent-gain-control（对手获得控制权后，
+  //   色欲4 底/傲慢6 顶）/ after-self-compile（你编译后，傲慢0 顶）/ after-any-compile（任意玩家编译后，
+  //   动量1/6 顶）/ after-any-clear-cache（任意玩家清缓存后，暴食1 底）/ after-own-delete（你删除牌后，
+  //   贪婪0 底，执行者侧）/ after-self-rearrange（你重排协议后，新星2 底）/ after-any-rearrange（任意玩家
+  //   重排协议后，动量1 底）/ after-action-face-down-play（你用行动反面打出后，刚性2 底）
+  | 'after-opponent-gain-control'
+  | 'after-self-compile'
+  | 'after-any-compile'
+  | 'after-any-clear-cache'
+  | 'after-own-delete'
+  | 'after-self-rearrange'
+  | 'after-any-rearrange'
+  | 'after-action-face-down-play';
 
 /** 选择候选卡（供 UI 渲染） */
 export interface ChoiceCard {
@@ -168,7 +181,7 @@ export type Op =
   | { op: 'draw'; count: number; player?: PlayerId; fromOpponentDeck?: boolean }
   | { op: 'shift'; uid: string; targetLine: Line; allowCovered?: boolean }
   | { op: 'playTopDeck'; line: Line; faceUp: boolean; player?: PlayerId; belowUid?: string }
-  | { op: 'playFromHand'; uid: string; line: Line; faceUp: boolean }
+  | { op: 'playFromHand'; uid: string; line: Line; faceUp: boolean; belowUid?: string }
   | { op: 'reveal'; uid: string }
   | { op: 'rearrangeProtocols'; a: Line; b: Line; player?: PlayerId }
   | { op: 'give'; uid: string; to: PlayerId }
@@ -194,7 +207,15 @@ export type Op =
   | { op: 'deckTopTransfer'; from: PlayerId; toPlayer: PlayerId; toLine: Line }
   /** 场卡取入己手（assimilation-0）：目标场卡（正面朝下，含被盖）移除 → owner 变效果属主 → 入手
    *  （faceUp 公开/secret 清）；被盖移除不影响其上层；faceDown 顶卡移除不触发揭示（新顶 faceDown） */
-  | { op: 'takeFromField'; uid: string };
+  | { op: 'takeFromField'; uid: string }
+  // —— 3代 批2（2026-09，docs/3代-批2-规格与裁决清单.md E6）——
+  /** 手牌 1 张放回牌库底端（sloth-2 底「将手牌中的1张牌放回牌库底端」）：从持卡者手牌移除 →
+   *  己方牌库底部（deck[0]）插入；回牌库 → faceDown 秘密化（同 R11.4 回牌库翻转） */
+  | { op: 'toDeckBottom'; uid: string }
+  // —— 3代 批3（2026-09，docs/3代-批3-规格与裁决清单.md E7）——
+  /** 弃置整个牌库（inertia-4「弃置你的牌库」）：整库一次性批量入弃牌堆（公开 faceUp），
+   *  按单次弃牌动作触发一次弃牌连锁（FAQ 94 / C9） */
+  | { op: 'discardWholeDeck'; player?: PlayerId };
 
 /** 效果步骤：选择请求 或 操作。既有 types.ts 已占用 Step（回合步骤），此处命名 EffectStep */
 export type EffectStep = ChoiceRequest | Op;
@@ -219,11 +240,13 @@ export interface PendingEffect {
 }
 
 /** 落地中的卡（浮空，等目标顶卡"被盖住前"结算后落地）；beforeCoveredDone = 目标顶卡"被盖住前"是否已结算（只结算一次）
- *  belowUid：playTopDeck 指定时插入该卡下方（该卡保持未被覆盖；卡已不在则回退落顶） */
+ *  belowUid：playTopDeck/playFromHand 指定时插入该卡下方（该卡保持未被覆盖；卡已不在则回退落顶）
+ *  fromAction：玩家【行动】打出（actions/base playCard）——rigidity-2 底「你用行动反面打出后」据此触发 */
 export interface PendingLanding {
   card: Card;
   beforeCoveredDone: boolean;
   belowUid?: string;
+  fromAction?: boolean;
 }
 
 /** 待结算触发条目（getLegalActions 供 UI 出按钮） */
@@ -334,6 +357,9 @@ export interface GameState {
   deckReveals: DeckReveal[];
   /** 最近一次被召回的卡 uid（批2 corruption-1 底 after-return 触发效果读取用；return op 设置，单实例覆盖制） */
   pendingReturnUid?: string;
+  /** 最近一次【行动】反面打出落地的线（3代 rigidity-2 底 after-action-face-down-play 触发效果读取用；
+   *  completePlay 设置，触发 gen 读取后清除；单实例覆盖制） */
+  pendingActionPlayLine?: Line;
   /** metal-1「对手下回合不能编译」：被禁编译的玩家；其回合结束转换（advanceStep end→start）时清除 */
   compileBlocked: PlayerId | null;
   /** speed-2「通过编译删除此牌前」触发挂起：效果栈清空后由 runStack 消费执行编译本体 */

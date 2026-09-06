@@ -1,7 +1,7 @@
 import type { EffectCtx, EffectStep, PlayerId, StepResult } from '../../models/types';
 import { registerCardEffects } from '../registry';
-import { resetControlIfHeld } from '../../rules/control';
 import { fireRefreshReactives } from '../triggers';
+import { controlRearrangeFlow } from '../control-rearrange-flow';
 
 /** love-1 中指令：抽对手牌堆顶的牌。
  *  {op:'draw', count:1, fromOpponentDeck:true}——对手牌库空 → 洗对手弃牌堆重组再抽（用户拍板，
@@ -27,13 +27,12 @@ function* love1End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
 }
 
 /** love-2 中指令：对手抽1张牌。刷新。
- *  刷新 = 完整刷新操作（FAQ 161 拍板：含消耗控制组件——持有者执行刷新控制回中立）：
- *  先 resetControlIfHeld，再抽至 5 张（need = 5 - hand.length，need > 0 才抽）。
- *  控制组件协议重排 UI 为已知缺口，不实现。 */
+ *  刷新 = 完整刷新操作（FAQ 161：含消耗控制组件——执行者持有则归还中立，并可在补满前
+ *  选择重排任意一方协议：controlRearrangeFlow；随后抽至 5 张 need = 5 - hand.length）。 */
 function* love2(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const opp: PlayerId = ctx.player === 0 ? 1 : 0;
   yield { op: 'draw', count: 1, player: opp };
-  resetControlIfHeld(ctx.s, ctx.player);
+  yield* controlRearrangeFlow(ctx.s, ctx.player, 'love-2 刷新');
   const need = 5 - ctx.s.players[ctx.player].hand.length;
   if (need > 0) yield { op: 'draw', count: need };
   fireRefreshReactives(ctx.s, ctx.player); // 批2：刷新动作完成连锁（war-0/1）

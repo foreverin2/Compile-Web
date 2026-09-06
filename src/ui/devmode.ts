@@ -3,6 +3,7 @@ import type { Card, CardDef, GameState, Line, ProtocolDef } from '../core/models
 // 45 套协议与 270 张卡（DEMO = 1代 90 + 2代 90 + 3代 90）。别名保留函数体内的变量名。
 import { DEMO_CARD_DEFS as ALL_CARD_DEFS, DEMO_PROTOCOLS as ALL_PROTOCOLS } from '../data/demo';
 import { executeCompileUnchecked } from '../core/rules/compile';
+import { resetControlIfHeld } from '../core/rules/control';
 
 /**
  * 隐藏开发者模式（测试辅助）：
@@ -322,6 +323,9 @@ function forceCompileProtocol(host: DevModeHost, name: string): void {
     log(host, `P${player + 1} 场上没有协议 ${proto.defId}（${proto.name}）`);
     return;
   }
+  // 与正式编译一致：编译玩家若持有控制组件先归还中立（规则文本「控制组件相关规则」；
+  // devmode 旁路不弹重排模态——重排交互在正式 UI 流程 main.ts）
+  resetControlIfHeld(state, player);
   executeCompileUnchecked(state, player, line as Line);
   log(host, `已强制编译 P${player + 1} 的 ${proto.defId}（line ${line + 1}）`);
   host.render();

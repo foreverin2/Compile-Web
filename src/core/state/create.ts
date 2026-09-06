@@ -2,6 +2,7 @@ import type { GameState, PlayerId, PlayerState, Line, ProtocolDef, Card } from '
 import { DEMO_PROTOCOLS, DEMO_CARD_DEFS, getCardDef } from '../../data/demo';
 import { drawCards, shuffle } from '../engine/deck';
 import { EFFECTS } from '../effects/registry';
+import { cardCommandDisabled } from '../effects/context';
 
 let uidCounter = 0;
 export function nextUid(): string {
@@ -259,8 +260,10 @@ export function stackValue(s: GameState, player: PlayerId, line: Line): number {
   for (const owner of [player, opp]) {
     for (const card of s.players[owner].stacks[line]) {
       const v = EFFECTS[card.defId]?.valueModifier;
-      // 背面朝下的卡没有协议属性/指令效果 → 修正卡必须正面朝上才生效（被覆盖但正面朝上仍常驻生效）
+      // 背面朝下的卡没有协议属性/指令效果 → 修正卡必须正面朝上才生效（被覆盖但正面朝上仍常驻生效）；
+      // 3代 inertia-0 顶「此链路中所有其他牌没有顶部指令」（C7 全禁）→ 值修正（顶框文本实现）被禁则跳过
       if (!v || !card.faceUp) continue;
+      if (cardCommandDisabled(s, card, 'top')) continue;
       if (v.target === 'own-stack' && owner === player) total = v.apply(s, owner, line, total);
       if (v.target === 'opponent-line' && owner !== player) total = v.apply(s, owner, line, total);
       // line 目标：apply 的 owner 参数传估值方 player，使修正（如 darkness-2 数反面牌）按估值方堆叠计算
@@ -273,12 +276,13 @@ export function stackValue(s: GameState, player: PlayerId, line: Line): number {
   return total;
 }
 
-/** 线顶命令常驻生效判定：该线双方堆叠中是否存在正面朝上的 defId 卡。
- *  规则：背面卡无任何效果；正面顶命令被覆盖后仍常驻生效 → 只要有正面卡在线上即 active（被覆盖与否无关）。 */
+/** 线顶命令常驻生效判定：该线双方堆叠中是否存在正面朝上的 defId 卡（且其顶命令未被 3代 inertia-0
+ *  区域禁用——裁决 C7 全禁）。规则：背面卡无任何效果；正面顶命令被覆盖后仍常驻生效 → 只要有正面卡
+ *  在线上即 active（被覆盖与否无关，但被 inertia-0 禁用则该卡顶命令失效）。 */
 export function lineTopCommandActive(s: GameState, line: Line, defId: string): boolean {
   return (
-    s.players[0].stacks[line].some((c) => c.defId === defId && c.faceUp) ||
-    s.players[1].stacks[line].some((c) => c.defId === defId && c.faceUp)
+    s.players[0].stacks[line].some((c) => c.defId === defId && c.faceUp && !cardCommandDisabled(s, c, 'top')) ||
+    s.players[1].stacks[line].some((c) => c.defId === defId && c.faceUp && !cardCommandDisabled(s, c, 'top'))
   );
 }
 

@@ -1,7 +1,7 @@
 import type { EffectCtx, EffectStep, Line, PlayerId, StepResult } from '../../models/types';
 import { registerCardEffects } from '../registry';
-import { resetControlIfHeld } from '../../rules/control';
 import { fireRefreshReactives } from '../triggers';
+import { controlRearrangeFlow } from '../control-rearrange-flow';
 
 /**
  * 2代 战争 war（关键词：反击、强行弃置）。
@@ -33,20 +33,25 @@ function* war0AfterOppDraw(ctx: EffectCtx): Generator<EffectStep, void, StepResu
   yield { op: 'delete', uid: tAns.selected[0] };
 }
 
-/** war-1 底（after-opponent-refresh，无 top 仅顶卡）：当对手刷新时：弃置任意数目的卡牌，然后刷新 */
+/** war-1 底（after-opponent-refresh，无 top 仅顶卡）：当对手刷新时：弃置任意数目的卡牌，然后刷新。
+ *  主体 = war-1 拥有者「你」（卡文省略主语 = 你；凡作用于对手的句子卡文都会明写「对手」，
+ *  如 war-2「对手弃置所有手牌」/war-4「对手弃置1张牌」）。
+ *  触发：你的对手刷新（actor = 对手）→ 你弃任意张，然后【你刷新自己的手牌】（补至 5）。
+ *  2026-09 用户拍板：war-1 强制出来的刷新属于刷新自己的手牌，而非刷新对方的——
+ *  因此执行者 = 拥有者自己（控制组件归还/重排检查拥有者；且自己刷新只触发自身侧
+ *  after-refresh（war-0 等），不会再次触发本卡的 after-opponent-refresh，无递归）。 */
 function* war1AfterOppRefresh(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
-  const foe = opp(ctx.player); // 刷新者 = war-1 拥有者的对手
-  const foeHand = ctx.candidates({ zone: 'hand', owner: foe });
+  const me = ctx.player;
+  const hand = ctx.candidates({ zone: 'hand', owner: me });
   const dAns = yield {
-    kind: 'select', title: 'war-1：对手刷新——你（对手）弃置任意数目的卡牌', min: 0, max: foeHand.length, optional: false,
-    candidates: foeHand, chooser: foe,
+    kind: 'select', title: 'war-1：对手刷新——你弃置任意数目的卡牌', min: 0, max: hand.length, optional: false,
+    candidates: hand,
   };
   if (dAns.selected.length > 0) yield { op: 'discardMany', uids: dAns.selected };
-  // 「然后刷新」= 刷新者（foe）执行完整刷新（FAQ 161：含消耗控制组件；补至 5）
-  resetControlIfHeld(ctx.s, foe);
-  const need = 5 - ctx.s.players[foe].hand.length;
-  if (need > 0) yield { op: 'draw', count: need, player: foe };
-  fireRefreshReactives(ctx.s, foe); // 新刷新动作连锁（war-0/1 再次响应——同款刷新语义）
+  yield* controlRearrangeFlow(ctx.s, me, 'war-1 刷新');
+  const need = 5 - ctx.s.players[me].hand.length;
+  if (need > 0) yield { op: 'draw', count: need };
+  fireRefreshReactives(ctx.s, me); // 你的刷新动作连锁（war-0「当你刷新时」同款响应）
 }
 
 /** war-2 中：翻转1张牌 */

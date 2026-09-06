@@ -2,6 +2,7 @@ import type { GameState, PlayerId, Line, EffectStep, StepResult } from './models
 import { advanceStep } from './engine/turn';
 import { clearCache } from './engine/deck';
 import { playCard, refreshHand, isPlayableFaceUp } from './actions/base';
+import { rearrangeProtocolSlots } from './actions/rearrange';
 import { executeCompile, getCompilableLines } from './rules/compile';
 import { checkControl, resetControlIfHeld } from './rules/control';
 import {
@@ -14,7 +15,7 @@ import { collectTriggers, fireReactive, resolveTrigger } from './effects/trigger
 import { answerEffect, runStack } from './effects/resolve';
 import { listCandidates, nextEffectId, shouldBlockDraw } from './effects/context';
 
-export type ActionKind = 'play' | 'refresh' | 'compile' | 'advance' | 'effect-choice' | 'resolve-trigger' | 'clear-cache';
+export type ActionKind = 'play' | 'refresh' | 'compile' | 'advance' | 'effect-choice' | 'resolve-trigger' | 'clear-cache' | 'rearrange-protocols';
 
 export interface PlayArgs {
   cardUid: string;
@@ -95,7 +96,8 @@ export function executeAction(s: GameState, player: PlayerId, kind: 'compile', a
 export function executeAction(s: GameState, player: PlayerId, kind: 'refresh' | 'advance' | 'clear-cache'): void;
 export function executeAction(s: GameState, player: PlayerId, kind: 'effect-choice', args: { promptId: string; choice: string[] }): void;
 export function executeAction(s: GameState, player: PlayerId, kind: 'resolve-trigger', args: { cardUid: string }): void;
-export function executeAction(s: GameState, player: PlayerId, kind: ActionKind, args?: PlayArgs | { line: Line } | { promptId: string; choice: string[] } | { cardUid: string }): void {
+export function executeAction(s: GameState, player: PlayerId, kind: 'rearrange-protocols', args: { target: PlayerId; a: Line; b: Line }): void;
+export function executeAction(s: GameState, player: PlayerId, kind: ActionKind, args?: PlayArgs | { line: Line } | { promptId: string; choice: string[] } | { cardUid: string } | { target: PlayerId; a: Line; b: Line }): void {
   if (s.phase !== 'turn' || s.winner !== null) throw new Error('game not in turn phase');
   if (s.turnPlayer !== player && kind !== 'effect-choice') throw new Error('not your turn');
   // 效果结算挂起 / 落牌中：只允许应答选择
@@ -130,8 +132,26 @@ export function executeAction(s: GameState, player: PlayerId, kind: ActionKind, 
       if (!args || !('line' in args)) throw new Error('compile requires args.line');
       resetControlIfHeld(s, player);
       executeCompile(s, player, args.line); // 内部可能因 speed-2「编译前平移」触发挂起选线
-      if (s.pendingEffects.length > 0) s.pendingStepAdvance = true; // 应答后 runStack 消费（含 pendingCompile）
+      // 编译本体触发的即时连锁（war-2 after-compile / 3代 after-self-compile/after-any-compile 等）
+      // 与 refresh/play 分支同款：栈非空时先 runStack 结算（可能挂起选择）再推进
+      if (s.pendingEffects.length > 0) { s.pendingStepAdvance = true; runStack(s); }
       else advanceStep(s);
+      break;
+    }
+    case 'rearrange-protocols': {
+      // 控制组件重排（基础规则：编译/补满手牌前持有控制组件的玩家可调整任意一方的协议
+      // 摆放顺序，可多次交换直到满意；UI 模态逐次提交本 action）。
+      // 防御校验：编译/刷新确认期（check-compile 或 action 步骤、无挂起）由行动玩家执行。
+      if (!args || !('target' in args) || !('a' in args) || !('b' in args)) {
+        throw new Error('rearrange-protocols requires args.target/a/b');
+      }
+      if (s.step !== 'check-compile' && s.step !== 'action') {
+        throw new Error('rearrange-protocols only usable before compile/refresh');
+      }
+      rearrangeProtocolSlots(s, args.target as PlayerId, args.a as Line, args.b as Line);
+      // 3代「重排协议」事件（C4 控制组件重排也算）：行动玩家为发起者
+      fireReactive(s, 'after-self-rearrange', player);
+      fireReactive(s, 'after-any-rearrange', player);
       break;
     }
     case 'effect-choice': {
@@ -181,10 +201,15 @@ export function executeAction(s: GameState, player: PlayerId, kind: ActionKind, 
       }
       if (s.step === 'check-cache' && !shouldSkipCacheCheck(s, player)) {
         // 防御路径（正常手牌>5 走 clear-cache 自选弃牌，advance 被拦截）；真弃了牌才触发
-        if (clearCache(s, player).length > 0) fireReactive(s, 'after-clear-cache', player);
+        if (clearCache(s, player).length > 0) {
+          fireReactive(s, 'after-clear-cache', player);
+          fireReactive(s, 'after-any-clear-cache', player); // 3代 暴食1 底「任意玩家清缓存后」
+        }
       }
       if (s.step === 'check-control') {
         checkControl(s);
+        // 控制权易主（行动玩家获得）→ after-opponent-gain-control 即时连锁（3代 色欲4 底/傲慢6 顶）
+        if (s.pendingEffects.length > 0) runStack(s);
       }
       advanceStep(s);
       break;
@@ -211,8 +236,9 @@ function* cacheClearGen(s: GameState, player: PlayerId): Generator<EffectStep, v
   };
   if (ans.selected.length > 0) {
     yield { op: 'discardMany', uids: ans.selected };
-    // 即时连锁：真弃了牌才触发（speed-1 顶「清理缓存后：抽1张牌」）
+    // 即时连锁：真弃了牌才触发（speed-1 顶「清理缓存后：抽1张牌」；3代 暴食0 顶/暴食1 底同点）
     fireReactive(s, 'after-clear-cache', player);
+    fireReactive(s, 'after-any-clear-cache', player);
   }
 }
 

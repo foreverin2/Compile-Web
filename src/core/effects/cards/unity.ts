@@ -3,6 +3,7 @@ import { registerCardEffects } from '../registry';
 import { findCard, nextEffectId } from '../context';
 import { shuffleDeck } from '../../engine/deck';
 import { executeCompileBody } from '../../rules/compile-body';
+import { controlRearrangeFlow } from '../control-rearrange-flow';
 
 /**
  * 2代 统一 unity（关键词：覆盖、翻转、编译）。
@@ -79,7 +80,10 @@ function* unity1Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> 
   const protos = ctx.s.players[ctx.player].protocols;
   const idx = protos.findIndex((p) => p.defId === 'unity');
   if (idx === -1) return;
-  executeCompileBody(ctx.s, ctx.player, idx as Line); // 完整编译（删卡/翻面/重编译抽牌/胜利判定；after-compile 连锁已接线）
+  // 效果触发的编译同样走控制组件规则：执行者持有 → 归还中立 + 可重排任意一方协议，
+  // 随后执行编译本体（删卡/翻面/重编译抽牌/胜利判定；after-compile 连锁已接线）
+  yield* controlRearrangeFlow(ctx.s, ctx.player, 'unity-1 编译');
+  executeCompileBody(ctx.s, ctx.player, idx as Line);
 }
 
 /** unity-2 中：抽取与场上统一牌数目相等的牌 */

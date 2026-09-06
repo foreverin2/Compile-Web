@@ -8,6 +8,7 @@ import {
   cardAllowsFaceUpAnyLine,
   lineBlocksOpponent,
   lineBlocksOpponentFaceDown,
+  lineAllowsFaceUpIgnoringProtocol,
   opponentMustPlayFaceDown,
   unity1UncoveredLine,
 } from '../rules/restrictions';
@@ -20,6 +21,8 @@ export function isPlayableFaceUp(s: GameState, player: PlayerId, cardUid: string
   if (!card) return false;
   // 2代 chaos-3/corruption-0 底（自引用）：本卡可无视协议匹配正面打任意线；先于全局豁免与匹配判断
   if (cardAllowsFaceUpAnyLine(card.defId)) return true;
+  // 3代 lust-2 底「你的牌可以无视协议限制打在此堆叠中」：本线自己堆叠顶卡 lust-2 → 任意协议可正面打此线
+  if (lineAllowsFaceUpIgnoringProtocol(s, line, player)) return true;
   const def = getCardDef(card.defId);
   // unity-1 底「统一卡牌可以正面朝上打在此链路」（批3）：unity 卡可正面落有未覆盖 unity-1 的线
   if (def.protocol === 'unity' && unity1UncoveredLine(s) === line) return true;
@@ -57,7 +60,7 @@ export function playCard(s: GameState, player: PlayerId, cardUid: string, faceUp
   card.faceUp = faceUp;
   card.line = line;
   card.pos = null;
-  s.pendingPlay.push({ card, beforeCoveredDone: false });
+  s.pendingPlay.push({ card, beforeCoveredDone: false, fromAction: true }); // fromAction：玩家行动打出（rigidity-2 底触发依据）
   s.log.push(`P${player + 1} plays ${card.defId} ${faceUp ? 'face-up' : 'face-down'} to line ${line + 1}`);
   runStack(s); // 结算 before-covered（若有）→ 栈空时 completePlay 落地 + 中指令
   return card;

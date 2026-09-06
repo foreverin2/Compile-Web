@@ -1,14 +1,14 @@
 import type { EffectCtx, EffectStep, Line, StepResult } from '../../models/types';
 import { registerCardEffects } from '../registry';
-import { resetControlIfHeld } from '../../rules/control';
 import { fireRefreshReactives } from '../triggers';
+import { controlRearrangeFlow } from '../control-rearrange-flow';
 
 /** spirit-0 中指令：刷新。抽1张牌。
- *  刷新 = 完整刷新操作（FAQ 161 拍板：含消耗控制组件——持有者执行刷新控制回中立）：
- *  先 resetControlIfHeld，再抽至 5 张（need = 5 - hand.length，need > 0 才抽），然后额外抽 1 张。
+ *  刷新 = 完整刷新操作（FAQ 161：含消耗控制组件——执行者持有则归还中立，并可在补满前
+ *  选择重排任意一方协议：controlRearrangeFlow），然后抽至 5 张，再额外抽 1 张。
  *  两次 draw 分开 yield（各自触发 after-draw 即时连锁——刷新与抽 1 是两次独立抽牌事件）。 */
 function* spirit0(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
-  resetControlIfHeld(ctx.s, ctx.player);
+  yield* controlRearrangeFlow(ctx.s, ctx.player, 'spirit-0 刷新');
   const need = 5 - ctx.s.players[ctx.player].hand.length;
   if (need > 0) yield { op: 'draw', count: need };
   fireRefreshReactives(ctx.s, ctx.player); // 批2：刷新动作完成连锁（war-0/1）

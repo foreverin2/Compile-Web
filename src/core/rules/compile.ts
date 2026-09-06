@@ -3,10 +3,14 @@ import { getLineValue } from '../state/create';
 import { executeCompileBody } from './compile-body';
 import { resolveTrigger } from '../effects/triggers';
 import { runStack } from '../effects/resolve';
+import { opponentCompileBlockedByControl } from './restrictions';
 
 export function canCompileLine(s: GameState, player: PlayerId, line: Line): boolean {
   // metal-1「对手下回合不能编译」：被禁玩家本回合不可编译（compileBlocked 字段由效果注册方设置）
   if (s.compileBlocked === player) return false;
+  // 3代 lust-0 底「若你拥有控制权，对手无法编译」：只禁【行动】编译（check-compile/executeCompile）；
+  // 卡牌效果触发的编译（贪婪1/统一1 等走 executeCompileBody）照常——裁决 RQ4-A
+  if (opponentCompileBlockedByControl(s, player)) return false;
   const own = getLineValue(s, player, line);
   const opp = getLineValue(s, player === 0 ? 1 : 0, line);
   return own >= 10 && own > opp;

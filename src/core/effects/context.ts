@@ -44,7 +44,9 @@ export function deckTopAvailable(s: GameState, player: PlayerId): boolean {
 export function shouldBlockDraw(s: GameState, player: PlayerId): boolean {
   if (s.players[player].hand.length === 0) return false;
   for (const line of [0, 1, 2] as Line[]) {
-    if (s.players[player].stacks[line].some((c) => c.defId === 'ice-6' && c.faceUp)) return true;
+    for (const c of s.players[player].stacks[line]) {
+      if (c.defId === 'ice-6' && c.faceUp && !cardCommandDisabled(s, c, 'top')) return true;
+    }
   }
   return false;
 }
@@ -108,4 +110,41 @@ export function emitCardEvent(
       line: card.line, pos: card.pos, ...extra,
     },
   });
+}
+
+// —— 3代 区域禁用指令（inertia-0 顶禁顶 / inertia-1 底禁底；裁决 C7 全禁：触发/常驻/值修正）——
+// 放本文件（context）避免 import 环：triggers/restrictions/create/resolve 均已直接或间接依赖 context。
+
+/** 该线是否被 inertia-0 顶命令禁用顶指令：线上任一玩家堆叠有 faceUp inertia-0（顶命令被盖仍生效——faceUp 即可）。 */
+export function lineTopCommandsDisabled(s: GameState, line: Line): boolean {
+  return (
+    s.players[0].stacks[line].some((c) => c.defId === 'inertia-0' && c.faceUp) ||
+    s.players[1].stacks[line].some((c) => c.defId === 'inertia-0' && c.faceUp)
+  );
+}
+
+/** 该线是否被 inertia-1 底命令禁用底指令：仅 inertia-1 顶卡（未覆盖 faceUp）时生效（底命令仅未覆盖）。 */
+export function lineBottomCommandsDisabled(s: GameState, line: Line): boolean {
+  for (const owner of [0, 1] as PlayerId[]) {
+    const stack = s.players[owner].stacks[line];
+    const top = stack[stack.length - 1];
+    if (top && top.defId === 'inertia-1' && top.faceUp && isUncovered(s, top)) return true;
+  }
+  return false;
+}
+
+/** 单卡某框指令是否被区域禁用（顶框 = inertia-0 链；底框 = inertia-1 链）；禁用卡自身免疫。 */
+export function cardCommandDisabled(s: GameState, card: Card, kind: 'top' | 'bottom'): boolean {
+  if (card.zone !== 'field' || card.line === null) return false;
+  if (kind === 'top') {
+    if (card.defId === 'inertia-0') return false;
+    return lineTopCommandsDisabled(s, card.line);
+  }
+  if (card.defId === 'inertia-1') return false;
+  return lineBottomCommandsDisabled(s, card.line);
+}
+
+/** rigidity-7 底「此牌不能被翻转或平移」：未被覆盖（faceUp 顶卡）且底命令未被区域禁用 → 免疫翻/移（C11）。 */
+export function rigidity7Immune(s: GameState, card: Card): boolean {
+  return card.defId === 'rigidity-7' && card.faceUp && isUncovered(s, card) && !cardCommandDisabled(s, card, 'bottom');
 }

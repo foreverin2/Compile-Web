@@ -2,11 +2,12 @@ import type { Card, GameState, Line, Op, PendingEffect, PlayerId, StepResult } f
 import { drawCards, discardFromHand, shuffle } from '../engine/deck';
 import { advanceStep } from '../engine/turn';
 import { gameBus } from '../events/bus';
-import { createCtx, emitCardEvent, findCard, isUncovered, nextEffectId, shouldBlockDraw } from './context';
+import { createCtx, emitCardEvent, findCard, isUncovered, nextEffectId, shouldBlockDraw, cardCommandDisabled, rigidity7Immune } from './context';
 import { collectTriggerFor, fireReactive, resolveTrigger } from './triggers';
 import { EFFECTS } from './registry';
 import { executeCompileBody } from '../rules/compile-body';
 import { lineMiddleCommandsNullified, opponentBlocksMiddleCommands } from '../rules/restrictions';
+import { rearrangeProtocolSlots } from '../actions/rearrange';
 import './cards/fire';
 import './cards/light';
 import './cards/darkness';
@@ -37,6 +38,24 @@ import './cards/time';
 import './cards/diversity';
 import './cards/assimilation';
 import './cards/unity';
+// —— 3代 批1（2026-09，嫉妒/暴食/贪婪/色欲/傲慢）——
+import './cards/envy';
+import './cards/gluttony';
+import './cards/greed';
+import './cards/lust';
+import './cards/pride';
+// —— 3代 批2（2026-09，怠惰/愤怒/伏击/支点/压制）——
+import './cards/sloth';
+import './cards/wrath';
+import './cards/ambush';
+import './cards/fulcrum';
+import './cards/overwhelm';
+// —— 3代 批3（2026-09，动量/新星/惰性/刚性/柔性）——
+import './cards/momentum';
+import './cards/nova';
+import './cards/inertia';
+import './cards/rigidity';
+import './cards/flexibility';
 
 function topEffect(s: GameState): PendingEffect | undefined {
   return s.pendingEffects[s.pendingEffects.length - 1];
@@ -57,6 +76,8 @@ function fireDirectedTop(
     if (!top || !top.faceUp || !isUncovered(s, top)) continue;
     const def = EFFECTS[top.defId]?.triggers?.[kind];
     if (!def) continue;
+    // 3代 inertia-1 区域禁底（C7）：after-play/after-return 均为底命令注册（ice-1/envy-3/corruption-1 等）
+    if (cardCommandDisabled(s, top, 'bottom')) continue;
     s.pendingEffects.push({
       id: nextEffectId(),
       player: top.owner,
@@ -136,6 +157,10 @@ export function runStack(s: GameState): void {
   for (;;) {
     while (s.pendingEffects.length > 0) {
       const pe = topEffect(s)!;
+      // 幂等保护（2026-09 compile case 补 runStack 后发现）：栈顶已有挂起选择（prompt 非空）
+      // → 等待 answerEffect 应答后恢复（answerEffect 会再次 runStack），不重复驱动同一生成器
+      // （重复 next({}) 会让 yield 选择表达式收到空答案 → gen 内 selected undefined 崩溃）。
+      if (pe.prompt) return;
       if (!sourceValid(s, pe)) {
         s.pendingEffects.pop();
         s.log.push(`效果终止：${pe.sourceDefId} 被覆盖/翻面/移除`);
@@ -255,9 +280,13 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       const card = findCard(s, op.uid);
       if (!card || card.zone !== 'field') throw new Error(`cannot flip ${op.uid}: not on field`);
       if (!op.allowCovered && !isUncovered(s, card)) throw new Error(`cannot flip ${op.uid}: covered card`);
-      // ice-4 底「此牌不可被翻转」（批2）：仅未覆盖顶卡且正面时生效（底命令规则）——翻转无效，直接跳过
-      if (card.defId === 'ice-4' && card.faceUp && isUncovered(s, card)) {
-        s.log.push('ice-4 不可被翻转，跳过');
+      // ice-4 底「此牌不可被翻转」（批2）：仅未覆盖顶卡且正面时生效（底命令规则）——翻转无效，直接跳过；
+      // 3代 inertia-1 禁底 → ice-4 底失效可翻（C7）；rigidity-7 底「此牌不能被翻转或平移」同款免疫（C11）
+      if (
+        rigidity7Immune(s, card) ||
+        (card.defId === 'ice-4' && card.faceUp && isUncovered(s, card) && !cardCommandDisabled(s, card, 'bottom'))
+      ) {
+        s.log.push(`${card.defId} 不可被翻转，跳过`);
         break;
       }
       // before-flip 前置触发（metal-6 顶「被盖住或翻转前：先删除这张牌」）：
@@ -306,6 +335,9 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       // 即时连锁：被删卡【持有者】场上注册了 after-delete 的正面卡触发（hate-3「你的牌被删除后：抽1张」；
       // 编译删除不经此路径 → 不触发——用户拍板「不含编译删除」）
       fireReactive(s, 'after-delete', owner);
+      // 3代 greed-0 底「当你删除牌后：抽1张牌」：删除【执行者】自己侧注册 after-own-delete 的顶卡触发
+      // （actor=效果属主 pe.player——「你删除」= 执行者删了任意牌即触发；hate-3 的 after-delete 不变）
+      fireReactive(s, 'after-own-delete', pe.player);
       if (wasTop) revealAfterRemoval(s, owner, line); // 仅当移除的是顶卡时新顶卡才被"揭开"
       break;
     }
@@ -345,6 +377,11 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       if (!card || card.zone !== 'field') throw new Error(`cannot shift ${op.uid}: not on field`);
       if (!op.allowCovered && !isUncovered(s, card)) throw new Error(`cannot shift ${op.uid}: covered card`);
       if (op.targetLine === card.line) throw new Error('must shift to a different line');
+      // 3代 rigidity-7 底「此牌不能被翻转或平移」（C11）：未被覆盖（faceUp 顶卡）时免疫 → 跳过
+      if (rigidity7Immune(s, card)) {
+        s.log.push('rigidity-7 不可被平移，跳过');
+        break;
+      }
       const owner = card.owner;
       const fromLine = card.line!;
       const stack = s.players[owner].stacks[fromLine];
@@ -402,7 +439,8 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       card.faceUp = op.faceUp;
       card.line = op.line;
       card.pos = null;
-      s.pendingPlay.push({ card, beforeCoveredDone: false });
+      // belowUid（3代 rigidity-3「在此牌正下方反面打出1张牌」）：落地时插入该卡下方（该卡保持未覆盖）
+      s.pendingPlay.push({ card, beforeCoveredDone: false, belowUid: op.belowUid });
       // playFromHand（手牌打出）与 playTopDeck（牌堆顶打出）区分事件：
       // FX 层据此从手牌卡 rect 起飞（而非牌库 rect）飞入目标线堆叠末尾
       emitCardEvent(s, 'card:hand-played', card, { line: op.line });
@@ -411,16 +449,14 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
     case 'rearrangeProtocols': {
       // 重排协议：交换指定玩家两个协议位（defId 与 compiled 状态随数组元素整体移动；
       // 线堆叠/卡牌留在原位 —— 与参考实现"协议顺序变更、场上卡不动"语义一致）
-      // player 缺省 = 效果属主（water-2/spirit-4）；psychic-2 指定 player=对手
-      if (op.a === op.b) throw new Error('cannot swap a protocol position with itself');
+      // player 缺省 = 效果属主（water-2/spirit-4）；psychic-2 指定 player=对手。
+      // 执行/log/动画事件统一走共享入口 rearrangeProtocolSlots（控制组件重排动作同路径）。
       const target = op.player ?? pe.player;
-      const protos = s.players[target].protocols;
-      const tmp = protos[op.a];
-      protos[op.a] = protos[op.b];
-      protos[op.b] = tmp;
-      s.log.push(`P${target + 1} 重排协议：交换位置 ${op.a + 1} 与 ${op.b + 1}`);
-      // FX hook：未来的协议交换动画订阅 protocols:rearranged（含玩家与交换位置）
-      gameBus.emit({ type: 'protocols:rearranged', state: s, payload: { player: target, a: op.a, b: op.b } });
+      rearrangeProtocolSlots(s, target, op.a, op.b);
+      // 3代「重排协议」事件（C4 一切重排都算）：重排动作发起者 = pe.player（效果属主）→
+      // 触发自身侧 after-self-rearrange（nova-2 底）与双方 after-any-rearrange（momentum-1 底）
+      fireReactive(s, 'after-self-rearrange', pe.player);
+      fireReactive(s, 'after-any-rearrange', pe.player);
       break;
     }
     case 'give': {
@@ -594,6 +630,9 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       for (let i = 0; i < 3; i++) protos[i] = copy[op.order[i]];
       s.log.push(`P${target + 1} 重排协议 → ${op.order.map((x) => x + 1).join('')}`);
       gameBus.emit({ type: 'protocols:rearranged', state: s, payload: { player: target, order: [...op.order] } });
+      // 3代「重排协议」事件（C4）：reorder 也算重排（momentum-1 底/新星2 底触发）
+      fireReactive(s, 'after-self-rearrange', pe.player);
+      fireReactive(s, 'after-any-rearrange', pe.player);
       break;
     }
     case 'drawFromDeck': {
@@ -690,6 +729,45 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       if (wasTop) revealAfterRemoval(s, owner, line); // 顶卡被取走 → 新顶揭开（faceDown 顶不触发）
       break;
     }
+    case 'toDeckBottom': {
+      // 3代 sloth-2 底「将手牌中的1张牌放回牌库底端」：手牌移除 → 己方牌库底部（deck[0]）插入；
+      // 回牌库 → faceDown 秘密化（R11.4：入牌库一律翻回反面/秘密）
+      const card = findCard(s, op.uid);
+      if (!card || card.zone !== 'hand') throw new Error(`cannot place ${op.uid} under deck: not in hand`);
+      const owner = card.owner;
+      const hand = s.players[owner].hand;
+      const idx = hand.findIndex((c) => c.uid === op.uid);
+      if (idx === -1) throw new Error(`cannot place ${op.uid} under deck: not in hand`);
+      hand.splice(idx, 1);
+      card.zone = 'deck';
+      card.faceUp = false;
+      card.secret = true;
+      card.line = null;
+      card.pos = null;
+      s.players[owner].deck.unshift(card); // 牌库底部 = index 0（drawCards pop 取顶）
+      s.log.push(`P${owner + 1} 将 ${card.defId} 放回牌库底端`);
+      break;
+    }
+    case 'discardWholeDeck': {
+      // 3代 inertia-4「弃置你的牌库」（C9 单次批量）：整库一次性移入弃牌堆（公开 faceUp），
+      // 按单次弃牌动作触发一次弃牌连锁（FAQ 94 与 discardMany 一致）
+      const target = op.player ?? pe.player;
+      const p = s.players[target];
+      if (p.deck.length === 0) break;
+      const cards = p.deck.splice(0);
+      for (const c of cards) {
+        c.zone = 'trash';
+        c.faceUp = true;
+        c.secret = false;
+        c.line = null;
+        c.pos = null;
+      }
+      p.trash.push(...cards);
+      s.log.push(`P${target + 1} 弃置整个牌库（${cards.length} 张）`);
+      fireReactive(s, 'after-discard', target);
+      fireReactive(s, 'after-self-discard', target);
+      break;
+    }
   }
 }
 
@@ -723,6 +801,12 @@ function completePlay(s: GameState): void {
   if (card.faceUp) pushMiddle(s, card.owner, card);
   // 批2 ice-1 底「对手在此链路出牌后：他要弃置1张牌」：打出者【对手】同线顶卡注册 after-play → 触发
   fireDirectedTop(s, 'after-play', card.owner === 0 ? 1 : 0, card.line!);
+  // 3代 rigidity-2 底「在你用行动反面打出1张牌后：从你的牌库顶端反面打出1张牌到同一堆叠」（E10）：
+  // 仅玩家【行动】打出（actions/base playCard 标记 fromAction）且反面 → 触发（打出者自己侧）
+  if (ps.fromAction && !card.faceUp) {
+    s.pendingActionPlayLine = card.line!;
+    fireReactive(s, 'after-action-face-down-play', card.owner);
+  }
 }
 
 /** 偏转落地（目标顶卡"被盖住前"先结算一次，然后落地；队列 FIFO，每次处理队首） */
