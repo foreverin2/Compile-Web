@@ -11,6 +11,7 @@ import {
 } from '../core/rules/restrictions';
 import { DEMO_PROTOCOLS, cardImgSrc, protocolImgSrc, cardTextParts, getCardDef, getProtocolDef } from '../data/demo';
 import type { CardTextParts } from '../data/demo';
+import { PROTOCOL_RATINGS } from '../data/protocolRatings';
 import { actionCn } from '../core/log';
 import { downloadLog } from './diag';
 import { buildTornadoFx } from './fx-tornado';
@@ -231,11 +232,12 @@ function renderStackSlot(
     // 背面起显、可切到正面查看（对手的反面卡不提供）。
     // ITEM 1(secret)：牌堆来源的反面打出卡 = 非公开信息——即使持有者（owner === turnPlayer）
     // 也不提供 peek（直到某效果翻正解禁 secret）。
+    // 修改提示词 14：对局结束（gameover 复盘）→ 场上所有卡（含对手的）双击都可翻面查看正面
     // stopPropagation 阻断冒泡到槽自身的 click（槽空白处点击仍直接打牌，二者不重复触发）。
     bindClickOrDouble(
       node,
       () => { if (interactable) onPlay(line); },
-      () => openZoom(card.defId, card.faceUp, false, false, !card.faceUp && card.owner === s.turnPlayer && !card.secret),
+      () => openZoom(card.defId, card.faceUp, false, false, !card.faceUp && (s.phase === 'gameover' || (card.owner === s.turnPlayer && !card.secret))),
       true
     );
     pile.appendChild(node);
@@ -1094,6 +1096,12 @@ function renderDeck(s: GameState, player: PlayerId): HTMLElement {
   } else {
     deck.appendChild(el('span', 'deck-count empty', '0'));
   }
+  // 修改提示词 14：对局结束（gameover 复盘）→ 点击牌库展开查看剩余牌及抽取顺序
+  // （牌库顶 = 下一张要抽的；自上而下展示全部卡正面）
+  if (s.phase === 'gameover') {
+    deck.title = '对局结束：查看牌库剩余牌及抽取顺序';
+    deck.addEventListener('click', () => openDeckOrderViewer(s, player));
+  }
   return deck;
 }
 
@@ -1201,11 +1209,12 @@ function renderHand(
       // 拖拽打牌：仅 self 手牌且 action 步骤绑定；未超阈值时完全交由单击/双击逻辑
       if (s.step === 'action') bindCardDrag(node, s, opts.cb, card.uid);
     } else {
-      // 对手手牌（背面朝下）：单击无操作、双击放大查看卡背（需求：任意卡均可双击放大）。
+      // 对手手牌（背面朝下）：单击无操作、双击放大查看卡背（需求：任意卡均可双击放大）；
+      // 修改提示词 14：对局结束（gameover 复盘）→ 对手手牌双击也可翻面查看正面（peek）
       bindClickOrDouble(
         node,
         () => {},
-        () => openZoom(card.defId, false, false, false),
+        () => openZoom(card.defId, false, false, false, s.phase === 'gameover'),
         true
       );
     }
@@ -2650,6 +2659,9 @@ function renderDraftPool(s: GameState, cb: UiCallbacks, banStep: boolean): HTMLE
     card.appendChild(wrap);
     card.appendChild(el('div', 'draft-card-name', proto.name));
     card.appendChild(el('div', 'draft-card-commands', proto.commands.join(' · ')));
+    // 修改提示词 21：悬停 → 下方展示框放大图 + 评分/搭配/流派详情
+    card.addEventListener('mouseenter', () => showDraftHover(proto.defId));
+    card.addEventListener('mouseleave', clearDraftHover);
     if (banStep) {
       card.dataset.defId = proto.defId;
       card.title = `点击禁用「${proto.name}」（本局不可选；共需禁用 ${DRAFT_BAN_TOTAL} 个）`;
@@ -2832,6 +2844,62 @@ const DRAFT_GROUP_LABELS: ReadonlyArray<readonly [string, string]> = [
 ];
 let draftEnabledGroups: Set<string> = new Set(DRAFT_GROUP_LABELS.map(([g]) => g));
 
+/* ===== 草稿 hover 展示框（修改提示词 21）：鼠标悬停协议池卡 → 下方展示框放大协议图
+ * + 名称/座右铭/关键词/定位/六维评分/点评/推荐搭配协议/推荐流派（数据：protocolRatings.ts）===== */
+let draftPreviewHost: HTMLElement | null = null; // 当前展示框容器（renderDraft 每次重建，函数调用时重取）
+
+/** 构建评分详情面板（buildCardTextEl 同款视觉；数据缺失的协议（无评分条目）降级显示基础信息） */
+function buildProtocolRatingPanel(defId: string): HTMLElement {
+  const box = el('div', 'draft-preview-body');
+  const proto = getProtocolDef(defId);
+  const rating = PROTOCOL_RATINGS.find((r) => r.defId === defId);
+  const titleRow = el('div', 'draft-preview-head');
+  titleRow.appendChild(el('div', 'draft-preview-name', proto.name));
+  titleRow.appendChild(el('div', 'draft-preview-motto', proto.loadingText));
+  box.appendChild(titleRow);
+  if (rating && rating.position) box.appendChild(el('div', 'draft-preview-position', `定位：${rating.position}`));
+  box.appendChild(el('div', 'draft-preview-commands', `关键词：${proto.commands.join(' · ')}`));
+  if (rating) {
+    const scoreRow = el('div', 'draft-preview-scores');
+    for (const [k, v] of Object.entries(rating.scores)) {
+      scoreRow.appendChild(el('span', 'draft-score-chip', `${k} ${v}`));
+    }
+    box.appendChild(scoreRow);
+    if (rating.review) box.appendChild(el('div', 'draft-preview-review', rating.review));
+    if (rating.pairs.length > 0) {
+      const seg = el('div', 'draft-preview-seg');
+      seg.appendChild(el('div', 'draft-preview-seg-label', '推荐搭配协议'));
+      for (const p of rating.pairs) seg.appendChild(el('div', 'draft-preview-item', p));
+      box.appendChild(seg);
+    }
+    if (rating.styles.length > 0) {
+      const seg = el('div', 'draft-preview-seg');
+      seg.appendChild(el('div', 'draft-preview-seg-label', '推荐流派'));
+      for (const st of rating.styles) seg.appendChild(el('div', 'draft-preview-item', st));
+      box.appendChild(seg);
+    }
+  }
+  return box;
+}
+
+/** 展示某协议卡到 hover 展示框（图 + 详情）；host 不存在（非草稿页）时 no-op */
+function showDraftHover(defId: string): void {
+  if (!draftPreviewHost) return;
+  draftPreviewHost.textContent = '';
+  const proto = getProtocolDef(defId);
+  const img = document.createElement('img');
+  img.className = 'draft-preview-img';
+  img.src = protocolImgSrc(defId, false);
+  img.alt = proto.name;
+  draftPreviewHost.appendChild(img);
+  draftPreviewHost.appendChild(buildProtocolRatingPanel(defId));
+}
+
+function clearDraftHover(): void {
+  if (!draftPreviewHost) return;
+  draftPreviewHost.textContent = '';
+}
+
 export function renderDraft(root: HTMLElement, s: GameState, cb: UiCallbacks): void {
   root.textContent = '';
   const wrap = el('div', 'draft-screen');
@@ -2940,6 +3008,13 @@ export function renderDraft(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   layout.appendChild(renderDraftPool(s, cb, banStep));
   layout.appendChild(renderPickColumn(s, 1, activePlayer, cb));
   wrap.appendChild(layout);
+  // 修改提示词 21：中央池下方的 hover 展示框（悬停协议卡 → 放大图 + 评分/搭配/流派详情）
+  const preview = el('div', 'draft-preview');
+  preview.appendChild(
+    el('div', 'draft-preview-hint', '把鼠标移到中间协议上\n此处放大显示详情（双击协议可看大图）')
+  );
+  wrap.appendChild(preview);
+  draftPreviewHost = preview;
   root.appendChild(wrap);
 }
 
@@ -3365,6 +3440,8 @@ export function resetUiState(): void {
   batteryPrev.clear();
   // 草稿页世代筛选复位为全开（1代+2代 30 套）
   draftEnabledGroups = new Set(DRAFT_GROUP_LABELS.map(([g]) => g));
+  // 草稿 hover 展示框容器引用失效（离开草稿页后悬停回调不得残留写死引用）
+  draftPreviewHost = null;
   for (const [defId, fx] of compiledFx) {
     clearCompiledFxTimers(defId);
     fx.remove();
@@ -3408,6 +3485,7 @@ export function resetUiState(): void {
   controlSliderPos = 50;
   closeZoom();
   closeTrashViewer();
+  closeDeckOrderViewer();
   winOverlayShown = false;
   // 飞行中的协议瞬时特效（life 藤蔓容器 / 绿光 / water 水环·光晕·落点框 / 翻面覆盖层）与
   // 抽牌/揭示幽灵：自身定时器会在数百毫秒内移除，但重置时立即清扫，避免残留进新局
@@ -3618,6 +3696,47 @@ function closeTrashViewer(): void {
   trashViewerOverlay.remove();
   trashViewerOverlay = null;
   trashViewerOnKey = null;
+}
+
+/* ===== 牌库顺序查看（修改提示词 14）：对局结束后点击牌库 → 展示剩余牌及抽取顺序 ===== */
+let deckOrderOverlay: HTMLElement | null = null;
+let deckOrderOnKey: ((e: KeyboardEvent) => void) | null = null;
+
+function openDeckOrderViewer(s: GameState, player: PlayerId): void {
+  if (deckOrderOverlay) closeDeckOrderViewer();
+  const overlay = el('div', 'zoom-overlay');
+  const panel = el('div', 'deck-order-viewer');
+  panel.appendChild(el('div', 'deck-order-title', `玩家 ${player + 1} 的牌库（对局结束 · 自上而下 = 抽取顺序）`));
+  const grid = el('div', 'deck-order-grid');
+  const deck = s.players[player].deck;
+  if (deck.length === 0) {
+    grid.appendChild(el('div', 'trash-viewer-empty', '牌库为空'));
+  } else {
+    // deck 数组约定：索引 0 = 牌库底，末位 = 牌库顶（下一张抽）→ 倒序展示「顶在前」
+    for (let i = deck.length - 1; i >= 0; i--) {
+      const card = deck[i];
+      const cell = el('div', 'deck-order-cell');
+      cell.appendChild(renderCardFace({ defId: card.defId, faceUp: true, uid: card.uid }));
+      cell.appendChild(el('div', 'deck-order-tag', i === deck.length - 1 ? '下一张' : `${deck.length - i} 张后`));
+      grid.appendChild(cell);
+    }
+  }
+  panel.appendChild(grid);
+  overlay.appendChild(panel);
+  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeDeckOrderViewer(); };
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeDeckOrderViewer(); });
+  document.addEventListener('keydown', onKey);
+  document.body.appendChild(overlay);
+  deckOrderOverlay = overlay;
+  deckOrderOnKey = onKey;
+}
+
+function closeDeckOrderViewer(): void {
+  if (!deckOrderOverlay) return;
+  if (deckOrderOnKey) document.removeEventListener('keydown', deckOrderOnKey);
+  deckOrderOverlay.remove();
+  deckOrderOverlay = null;
+  deckOrderOnKey = null;
 }
 
 /**
