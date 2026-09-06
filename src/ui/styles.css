@@ -4942,3 +4942,51 @@ body.dragging { cursor: grabbing; user-select: none; }
 
 /* 日志树（2026-09）：缩进嵌套保真（事件/连锁树，空格缩进）+ 长行折行 */
 .log-entry { white-space: pre-wrap; word-break: break-word; line-height: 1.5; }
+
+/* ===== 卡牌中文效果文本（2026-09：放大查看右侧 + 图鉴展示框；正面才显示防泄露） ===== */
+.zoom-body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 26px;
+  max-width: 96vw;
+  max-height: 92vh;
+  flex-wrap: wrap;
+}
+.zoom-body .zoom-img:not(.zoom-protocol) { max-width: min(80vw, 600px); max-height: 86vh; }
+.zoom-text {
+  width: min(320px, 34vw);
+  min-width: 240px;
+  max-height: 80vh;
+  overflow-y: auto;
+  background: rgba(13, 20, 38, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 12px;
+  padding: 14px 16px;
+  color: #e9edf6;
+  font-size: 13.5px;
+  box-shadow: 0 0 30px rgba(0, 0, 0, 0.5);
+}
+.card-text-title { font-size: 15px; font-weight: 700; color: #ffd98a; margin-bottom: 10px; }
+.card-text-seg { line-height: 1.75; margin-top: 8px; }
+.card-text-seg-label { color: #7fd4ff; font-weight: 600; }
+
+/* 图鉴展示框：图 + 中文文本并排 */
+.library-preview-main {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  justify-content: center;
+}
+.library-preview-text {
+  flex: 1;
+  min-width: 0;
+  max-height: 476px;
+  overflow-y: auto;
+  background: rgba(10, 16, 32, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  padding: 10px 12px;
+  color: #dfe6f2;
+  font-size: 12.5px;
+}

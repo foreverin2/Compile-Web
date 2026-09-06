@@ -57,3 +57,22 @@ export function cardImgSrc(protocol: string, value: number | string): string {
 export function protocolImgSrc(defId: string, compiled: boolean): string {
   return `/assets/protocols/${defId}/protocol-${compiled ? 'compiled' : 'loading'}.${protocolImgExt(defId)}`;
 }
+
+/** 卡牌中文效果分段（放大查看/图鉴展示共用；文本权威 = compile1/2/3文本.txt，cards*.ts 已同步）：
+ *  title = 「协议中文名 · N 分」；segs = 有内容的指令段（顶部/中部/底部）。 */
+export interface CardTextSeg {
+  label: string;
+  text: string;
+}
+export interface CardTextParts {
+  title: string;
+  segs: CardTextSeg[];
+}
+export function cardTextParts(def: CardDef): CardTextParts {
+  const proto = protocolIndex.get(def.protocol);
+  const segs: CardTextSeg[] = [];
+  if (def.top) segs.push({ label: '顶部', text: def.top });
+  if (def.middle) segs.push({ label: '中部', text: def.middle });
+  if (def.bottom) segs.push({ label: '底部', text: def.bottom });
+  return { title: `${proto?.name ?? def.protocol} · ${def.value} 分`, segs };
+}

@@ -9,7 +9,8 @@ import {
   shouldSkipCacheCheck,
   canPlayFaceUpAnywhere,
 } from '../core/rules/restrictions';
-import { DEMO_PROTOCOLS, cardImgSrc, protocolImgSrc } from '../data/demo';
+import { DEMO_PROTOCOLS, cardImgSrc, protocolImgSrc, cardTextParts, getCardDef } from '../data/demo';
+import type { CardTextParts } from '../data/demo';
 import { downloadLog } from './diag';
 import { buildTornadoFx } from './fx-tornado';
 
@@ -3402,28 +3403,59 @@ interface ZoomState {
   scale: number;
   isProtocol: boolean;
   onKey: (e: KeyboardEvent) => void;
+  /** 中文效果文本栏（仅卡牌正面时可见；协议卡为 null） */
+  textEl: HTMLElement | null;
+  /** 当前显示朝向（peek 翻面联动文本显隐；背面不显示中文防信息泄露） */
+  showingFace: boolean;
 }
 let zoomState: ZoomState | null = null;
 
-/** 打开卡牌放大查看遮罩。defId: 卡牌定义 id；faceUp: 是否正面；isProtocol: 是否协议卡；
+/** 卡牌中文效果面板构建（放大查看/图鉴展示共用）：rootCls 控制容器尺寸/底色（zoom-text 或
+ *  library-preview-text），内部结构类固定 card-text-*。 */
+export function buildCardTextEl(parts: CardTextParts, rootCls: string): HTMLElement {
+  const box = el('div', rootCls);
+  box.appendChild(el('div', 'card-text-title', parts.title));
+  for (const seg of parts.segs) {
+    const row = el('div', 'card-text-seg');
+    row.appendChild(el('span', 'card-text-seg-label', `${seg.label}：`));
+    row.appendChild(document.createTextNode(seg.text));
+    box.appendChild(row);
+  }
+  return box;
+}
+
+/** 打开卡牌放大查看遮罩。defId: 卡牌定义 id；faceUp: 是否正面（背面显示时【不】显示中文文本——
+ *  2026-09 用户需求：除非当前查看为正面否则不显示中文，防信息泄露）；isProtocol: 是否协议卡；
  *  compiled: 协议是否已编译；peek: 是否带「查看背面」切换按钮（ITEM 9：自己的反面场上卡
- *  背面起显，点击在 背面 ↔ 正面 之间切换显示）。
+ *  背面起显，点击在 背面 ↔ 正面 之间切换显示；翻面联动中文文本显隐）。
  *  FX-5 冷漠2：放大查看器【不受】场上 .apathy-filter 灰度滤镜影响——本函数按 defId 新建
  *  img（非克隆场上节点），滤镜类从不被继承（场上/弃牌堆查看的 dblclick 同样走 defId 新建）。 */
 export function openZoom(defId: string, faceUp: boolean, isProtocol: boolean, compiled: boolean, peek?: boolean): void {
   if (zoomState) closeZoom();
   const overlay = el('div', 'zoom-overlay');
+  const body = el('div', 'zoom-body');
   const img = document.createElement('img');
   img.className = 'zoom-img' + (isProtocol ? ' zoom-protocol' : '');
+  let showingFace = faceUp;
   if (isProtocol) {
     img.src = protocolImgSrc(defId, compiled);
-  } else if (faceUp) {
+  } else if (showingFace) {
     const [proto, value] = splitDefId(defId);
     img.src = cardImgSrc(proto, value);
   } else {
     img.src = '/assets/Cardback.jpg';
   }
   img.alt = 'card zoom';
+  // 中文效果文本栏：仅卡牌（非协议）且正面显示时可见；peek 翻面联动显隐
+  let textEl: HTMLElement | null = null;
+  if (!isProtocol) {
+    try {
+      textEl = buildCardTextEl(cardTextParts(getCardDef(defId)), 'zoom-text');
+      textEl.style.display = showingFace ? '' : 'none';
+    } catch {
+      textEl = null;
+    }
+  }
   if (peek) {
     // 图像上方挂「查看背面」切换按钮：点击在 背面 ↔ 正面 间切换 img.src（该牌背面的
     // 牌面图片 = 官方卡面图）。stage 竖排（按钮在图像上方）；stage pointer-events:none
@@ -3432,20 +3464,23 @@ export function openZoom(defId: string, faceUp: boolean, isProtocol: boolean, co
     const faceSrc = cardImgSrc(proto, value);
     const backSrc = '/assets/Cardback.jpg';
     const stage = el('div', 'zoom-stage');
-    const peekBtn = el('button', 'btn zoom-peek-btn', '查看背面');
+    const peekBtn = el('button', 'btn zoom-peek-btn', showingFace ? '查看背面' : '查看正面');
     peekBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      const showingFace = img.src.endsWith(faceSrc);
-      img.src = showingFace ? backSrc : faceSrc;
+      showingFace = !showingFace;
+      img.src = showingFace ? faceSrc : backSrc;
       peekBtn.textContent = showingFace ? '查看背面' : '查看正面';
+      if (textEl) textEl.style.display = showingFace ? '' : 'none';
     });
     // 按钮先于图像 append：flex column 首子节点在上 → 「查看背面」按钮位于图像上方
     stage.appendChild(peekBtn);
     stage.appendChild(img);
-    overlay.appendChild(stage);
+    body.appendChild(stage);
   } else {
-    overlay.appendChild(img);
+    body.appendChild(img);
   }
+  if (textEl) body.appendChild(textEl);
+  overlay.appendChild(body);
   // 滚轮缩放：协议卡横向（rotate(-90deg)）需与 scale 组合在 transform 里
   let scale = 1;
   const apply = () => {
@@ -3464,7 +3499,7 @@ export function openZoom(defId: string, faceUp: boolean, isProtocol: boolean, co
   overlay.addEventListener('wheel', onWheel, { passive: false });
   document.addEventListener('keydown', onKey);
   document.body.appendChild(overlay);
-  zoomState = { overlay, img, scale, isProtocol, onKey };
+  zoomState = { overlay, img, scale, isProtocol, onKey, textEl, showingFace };
   apply();
 }
 

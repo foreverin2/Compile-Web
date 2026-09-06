@@ -1,6 +1,6 @@
 import type { PlayerId } from '../core/models/types';
-import { DEMO_PROTOCOLS, DEMO_CARD_DEFS, protocolImgSrc, cardImgSrc } from '../data/demo';
-import { openZoom } from './render';
+import { DEMO_PROTOCOLS, DEMO_CARD_DEFS, protocolImgSrc, cardImgSrc, cardTextParts } from '../data/demo';
+import { openZoom, buildCardTextEl } from './render';
 
 /**
  * 主界面/掷硬币/图鉴/规则图纸 —— 非对局屏（main.ts 导航）。
@@ -458,17 +458,27 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
 
   const layout = el('div', 'library-layout');
 
-  // 右侧大展示框（sticky 跟随滚动）
+  // 右侧大展示框（sticky 跟随滚动）：图 + 中文文本并排（2026-09 卡牌中文效果）
   const preview = el('aside', 'library-preview');
+  const pMain = el('div', 'library-preview-main');
   const pImg = document.createElement('img');
   pImg.className = 'library-preview-img';
   pImg.alt = '';
+  const pText = el('div', 'library-preview-text');
+  pText.style.display = 'none';
+  pMain.appendChild(pImg);
+  pMain.appendChild(pText);
   const pHint = el('div', 'library-preview-hint', '把鼠标移到左侧的协议或卡牌上\n此处会实时展示');
   const pCap = el('div', 'library-preview-cap');
-  preview.appendChild(pImg);
+  preview.appendChild(pMain);
   preview.appendChild(pCap);
   preview.appendChild(pHint);
-  const showPreview = (src: string, caption: string, mode: 'portrait' | 'landscape' | 'natural'): void => {
+  const showPreview = (
+    src: string,
+    caption: string,
+    mode: 'portrait' | 'landscape' | 'natural',
+    text?: HTMLElement | null,
+  ): void => {
     // 协议图：1/2代 竖版存 rotate(-90) 横置展示（landscape）；3代 横向成品直放（natural）；卡牌：竖置
     pImg.className = 'library-preview-img ' + mode;
     pImg.src = src;
@@ -477,6 +487,13 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
     pImg.style.display = 'block';
     pHint.style.display = 'none';
     pCap.style.display = '';
+    pText.textContent = '';
+    if (text) {
+      pText.appendChild(text);
+      pText.style.display = '';
+    } else {
+      pText.style.display = 'none';
+    }
   };
   const clearPreview = (): void => {
     pImg.style.display = 'none';
@@ -543,7 +560,12 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
         cell.appendChild(cimg);
         cell.appendChild(el('div', 'lib-card-value', String(c.value)));
         cell.addEventListener('mouseenter', () =>
-          showPreview(cardImgSrc(proto.defId, c.value), `${proto.name} ${c.value} 分指令卡`, 'portrait')
+          showPreview(
+            cardImgSrc(proto.defId, c.value),
+            `${proto.name} ${c.value} 分指令卡`,
+            'portrait',
+            buildCardTextEl(cardTextParts(c), 'library-preview-text')
+          )
         );
         cell.addEventListener('click', () => openZoom(c.defId, true, false, false));
         row.appendChild(cell);
