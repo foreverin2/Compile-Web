@@ -62,7 +62,7 @@ export function playCard(s: GameState, player: PlayerId, cardUid: string, faceUp
   card.line = line;
   card.pos = null;
   s.pendingPlay.push({ card, beforeCoveredDone: false, fromAction: true }); // fromAction：玩家行动打出（rigidity-2 底触发依据）
-  pushLog(s, `P${player + 1} plays ${card.defId} ${faceUp ? 'face-up' : 'face-down'} to line ${line + 1}`);
+  pushLog(s, `P${player + 1} 打出 ${card.defId}（${faceUp ? '正面' : '反面'}）到线 ${line + 1}`); // 修改提示词 8：操作日志中文
   runStack(s); // 结算 before-covered（若有）→ 栈空时 completePlay 落地 + 中指令
   return card;
 }

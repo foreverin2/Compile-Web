@@ -11,6 +11,7 @@ import {
 } from '../core/rules/restrictions';
 import { DEMO_PROTOCOLS, cardImgSrc, protocolImgSrc, cardTextParts, getCardDef } from '../data/demo';
 import type { CardTextParts } from '../data/demo';
+import { actionCn } from '../core/log';
 import { downloadLog } from './diag';
 import { buildTornadoFx } from './fx-tornado';
 
@@ -3130,7 +3131,7 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
     if (a.kind === 'play' || a.kind === 'refresh' || a.kind === 'advance') continue;
     const label =
       a.kind === 'compile' ? `编译线 ${(a.line ?? 0) + 1}`
-      : a.kind === 'resolve-trigger' ? `结算触发效果`
+      : a.kind === 'resolve-trigger' ? `结算触发：${a.defId ?? ''}` // 修改提示词 28：按钮带触发来源卡牌
       : a.kind === 'clear-cache' ? `清理缓存`
       : a.kind;
     const btn = el('button', 'btn', label);
@@ -3237,7 +3238,7 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
       const bar = el('div', 'choice-bar');
       bar.appendChild(el('div', 'choice-title', `${(prompt.chooser ?? topEffect.player) === 0 ? 'P1' : 'P2'} 操作 — ${prompt.title}`));
       for (const act of prompt.actions ?? []) {
-        const b = el('button', 'btn choice-action-btn', act.replace('action:', ''));
+        const b = el('button', 'btn choice-action-btn', actionCn(act)); // 修改提示词 8：动作按钮中文（翻转/抽牌/正面打出…）
         b.addEventListener('click', () => { choicePromptId = null; cb.onAction({ kind: 'effect-choice', promptId: topEffect.id, choice: [act] }); });
         bar.appendChild(b);
       }

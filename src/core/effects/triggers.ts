@@ -134,7 +134,12 @@ export function resolveTrigger(s: GameState, t: TriggerEntry, opts?: { topComman
     topCommand: opts?.topCommand,
     prompt: null, lastAnswer: null,
   });
-  pushEffectLog(s, t.defId, stageLabel(t.kind));
+  pushEffectLog(
+    s,
+    t.defId,
+    stageLabel(t.kind),
+    t.kind === 'end' || t.kind === 'start' ? `由 P${card.owner + 1} 结算` : '', // 修改提示词 12：注明谁结算
+  );
 }
 
 /** 收集某类触发：end/start 只收集回合玩家场地侧（规则书"结算你场地侧所有'结束'触发"）；

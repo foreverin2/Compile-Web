@@ -83,3 +83,31 @@ export function stageLabel(kind: string): string {
       return kind;
   }
 }
+
+/** select-action 动作值 → 中文按钮/日志文本（修改提示词 8：face-up/face-down/flip 等汉化） */
+export function actionCn(act: string): string {
+  const v = act.replace(/^action:/, '');
+  switch (v) {
+    case 'flip':
+      return '翻转';
+    case 'draw':
+      return '抽牌';
+    case 'discard':
+      return '弃牌';
+    case 'delete':
+      return '删除';
+    case 'shift':
+      return '平移';
+    case 'return':
+      return '回手';
+    case 'face-up':
+      return '正面打出';
+    case 'face-down':
+      return '反面打出';
+    case 'skip':
+      return '跳过';
+    default:
+      if (v.startsWith('order:')) return `布局 ${v.slice(6)}`;
+      return v;
+  }
+}

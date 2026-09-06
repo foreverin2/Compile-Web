@@ -31,6 +31,8 @@ export interface LegalAction {
   faceUp?: boolean;
   promptId?: string;
   choice?: string[];
+  /** 触发来源卡牌 defId（resolve-trigger 按钮文案带来源，修改提示词 28） */
+  defId?: string;
 }
 
 export function getLegalActions(s: GameState, player: PlayerId): LegalAction[] {
@@ -64,7 +66,7 @@ export function getLegalActions(s: GameState, player: PlayerId): LegalAction[] {
     const kind: 'end' | 'start' = s.step;
     const triggers = collectTriggers(s, kind);
     for (const t of triggers) {
-      out.push({ kind: 'resolve-trigger', cardUid: t.cardUid });
+      out.push({ kind: 'resolve-trigger', cardUid: t.cardUid, defId: t.defId });
     }
     // 必选触发未清空时不允许跳过（advance）
     if (!triggers.some((t) => !t.optional)) {

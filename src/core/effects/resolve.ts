@@ -8,7 +8,7 @@ import { EFFECTS } from './registry';
 import { executeCompileBody } from '../rules/compile-body';
 import { lineMiddleCommandsNullified, opponentBlocksMiddleCommands } from '../rules/restrictions';
 import { rearrangeProtocolSlots } from '../actions/rearrange';
-import { pushLog, pushEffectLog } from '../log';
+import { pushLog, pushEffectLog, actionCn } from '../log';
 import './cards/fire';
 import './cards/light';
 import './cards/darkness';
@@ -167,7 +167,7 @@ export function answerEffect(s: GameState, promptId: string, selected: string[])
       const lines = selected.map((x) => `线 ${Number(x.replace('line:', '')) + 1}`).join('、');
       pushLog(s, `P${who} 选择：${lines}`);
     } else if (req.kind === 'select-action') {
-      const acts = selected.map((x) => x.replace(/^action:/, '')).join('、');
+      const acts = selected.map((x) => actionCn(x)).join('、'); // 修改提示词 8：动作日志中文
       pushLog(s, `P${who} 选择：${acts}`);
     } else {
       const names = selected
