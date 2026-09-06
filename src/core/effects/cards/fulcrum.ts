@@ -91,7 +91,17 @@ function* fulcrum5Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult
 
 registerCardEffects('fulcrum-0', {
   middle: fulcrum0Middle,
-  triggers: { start: { fn: fulcrum0Start, optional: false, top: true } },
+  triggers: {
+    start: {
+      fn: fulcrum0Start,
+      optional: false,
+      top: true,
+      // 自动判定：手牌非空 或 对手手牌空 → 无对象（无法让对手弃牌）→ 不收集
+      cond: (s, card) =>
+        s.players[card.owner].hand.length === 0 &&
+        s.players[opp(card.owner)].hand.length > 0,
+    },
+  },
 });
 registerCardEffects('fulcrum-1', { middle: fulcrum1Middle });
 registerCardEffects('fulcrum-2', { middle: fulcrum2Middle });

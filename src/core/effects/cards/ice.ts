@@ -1,6 +1,6 @@
 import type { EffectCtx, EffectStep, Line, PlayerId, StepResult } from '../../models/types';
 import { registerCardEffects } from '../registry';
-import { findCard } from '../context';
+import { findCard, isUncovered } from '../context';
 
 /**
  * 2代 寒冰 ice（关键词：平移/偏转、阻止）。
@@ -86,7 +86,17 @@ registerCardEffects('ice-1', {
   triggers: { 'after-play': { fn: ice1AfterPlay, optional: false } },
 });
 registerCardEffects('ice-2', { middle: ice2Middle });
-registerCardEffects('ice-3', { triggers: { end: { fn: ice3End, optional: true, top: true } } });
+registerCardEffects('ice-3', {
+  triggers: {
+    end: {
+      fn: ice3End,
+      optional: true,
+      top: true,
+      // 自动判定：未被覆盖（顶卡）→ 无「被盖才可偏转」前提 → 收集前自动跳过不弹按钮
+      cond: (s, card) => !isUncovered(s, card),
+    },
+  },
+});
 // ice-4：引擎禁翻（flip 守卫）
 registerCardEffects('ice-5', { middle: ice5Middle });
 // ice-6：引擎禁抽（shouldBlockDraw）

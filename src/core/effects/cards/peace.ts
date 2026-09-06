@@ -75,7 +75,14 @@ function* peace6Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> 
 
 registerCardEffects('peace-1', {
   middle: peace1Middle,
-  triggers: { end: { fn: peace1End, optional: false } },
+  triggers: {
+    end: {
+      fn: peace1End,
+      optional: false,
+      // 自动判定：手牌非空 → 「若你没有手牌」不满足 → 收集前自动跳过不弹按钮
+      cond: (s, card) => s.players[card.owner].hand.length === 0,
+    },
+  },
 });
 registerCardEffects('peace-2', { middle: peace2Middle });
 registerCardEffects('peace-3', { middle: peace3Middle });

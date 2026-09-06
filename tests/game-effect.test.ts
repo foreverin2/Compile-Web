@@ -16,7 +16,7 @@ describe('game facade effect actions', () => {
     expect(getLegalActions(s, 0).some((a) => a.kind === 'advance')).toBe(true);
   });
 
-  it('end step offers resolve-trigger for fire-3 and blocks advance while mandatory', () => {
+  it('end step: fire-3 empty hand → auto-judgment cond skips (no resolve-trigger button, advance free)', () => {
     const s = draftFireP1();
     advanceToStep(s, 0, 'action');
     s.players[0].stacks[0] = [makeCard('fire-3', 0, 'field', true, 0, 0)];
@@ -24,16 +24,9 @@ describe('game facade effect actions', () => {
     advanceToStep(s, 0, 'end');
     s.players[0].hand = [];
     const legal = getLegalActions(s, 0);
-    // fire-3 结束触发是可选（"你可以"）→ advance 允许跳过
-    expect(legal.some((a) => a.kind === 'resolve-trigger' && a.cardUid === s.players[0].stacks[0][0].uid)).toBe(true);
+    // fire-3 结束触发「你可以弃1张」——手牌空 = 无可弃对象 → 收集前 cond 预检跳过：不弹按钮、可 advance
+    expect(legal.some((a) => a.kind === 'resolve-trigger' && a.cardUid === s.players[0].stacks[0][0].uid)).toBe(false);
     expect(legal.some((a) => a.kind === 'advance')).toBe(true);
-    // 结算该触发（内部可选弃牌——手牌空，跳过）
-    executeAction(s, 0, 'resolve-trigger', { cardUid: s.players[0].stacks[0][0].uid });
-    resolveAllChoices(s, pickFirst);
-    // 触发已结算：不再出现，可 advance
-    const legal2 = getLegalActions(s, 0);
-    expect(legal2.some((a) => a.kind === 'resolve-trigger')).toBe(false);
-    expect(legal2.some((a) => a.kind === 'advance')).toBe(true);
   });
 
   it('effect-choice validates the chooser (owner of affected card)', () => {

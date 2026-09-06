@@ -117,7 +117,27 @@ function* rigidity7Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResul
 
 registerCardEffects('rigidity-1', {
   middle: rigidity1Middle,
-  triggers: { end: { fn: rigidity1End, optional: false } },
+  triggers: {
+    end: {
+      fn: rigidity1End,
+      optional: false,
+      // 自动判定（与 gen 内同过滤的纯查询版）：无「对手有未覆盖反面顶卡」的其他链路
+      // 或己方手牌空 → 逐链反打无从开始，效果整体无动作 → 收集前自动跳过不出按钮
+      cond: (s, card) => {
+        const foe = opp(card.owner);
+        const mine = card.line;
+        return (
+          s.players[card.owner].hand.length > 0 &&
+          ([0, 1, 2] as Line[]).some((l) => {
+            if (l === mine) return false;
+            const stack = s.players[foe].stacks[l];
+            const top = stack[stack.length - 1];
+            return !!top && !top.faceUp; // 对手该线未覆盖反面顶卡
+          })
+        );
+      },
+    },
+  },
 });
 registerCardEffects('rigidity-2', { triggers: { 'after-action-face-down-play': { fn: rigidity2AfterActionPlay, optional: false } } });
 registerCardEffects('rigidity-3', { middle: rigidity3Middle });
@@ -125,6 +145,18 @@ registerCardEffects('rigidity-4', { triggers: { 'before-covered': { fn: rigidity
 registerCardEffects('rigidity-5', { middle: rigidity5Middle });
 registerCardEffects('rigidity-7', {
   middle: rigidity7Middle,
-  triggers: { end: { fn: rigidity7End, optional: false, top: true } },
+  triggers: {
+    end: {
+      fn: rigidity7End,
+      optional: false,
+      top: true,
+      // 自动判定（C10）：对手既不能抽（牌库+弃牌堆皆空）也无手牌可打出 → 必选其一无从谈起，
+      // 效果整体无动作 → 收集前自动跳过不出按钮
+      cond: (s, card) => {
+        const p = s.players[opp(card.owner)];
+        return p.deck.length + p.trash.length > 0 || p.hand.length > 0;
+      },
+    },
+  },
 });
 

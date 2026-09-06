@@ -343,18 +343,18 @@ describe('psychic protocol effects', () => {
       expect(ts).toHaveLength(0);
     });
 
-    it('no opponent field top cards → optional select fizzles (no return, no flip)', () => {
+    it('no opponent field top cards → NOT collected at end (无对象自动跳过，不弹结算按钮)', () => {
       const s = draftPsychicP1();
       advanceToStep(s, 0, 'end');
       const pl = psychicLine(s);
       const p4 = makeCard('psychic-4', 0, 'field', true, pl, 0);
       s.players[0].stacks[pl] = [p4];
       s.players[1].stacks = [[], [], []];
-      const t = collectTriggers(s, 'end').find((x) => x.cardUid === p4.uid)!;
-      resolveTrigger(s, t);
-      runStack(s);
-      expect(s.pendingEffects).toHaveLength(0); // 候选空 → 自动跳过
-      expect(p4.faceUp).toBe(true); // 未翻转
+      const ts = collectTriggers(s, 'end');
+      expect(ts.find((x) => x.cardUid === p4.uid)).toBeUndefined(); // 无对象 → 收集前跳过
+      expect(ts).toHaveLength(0);
+      expect(p4.faceUp).toBe(true); // 效果从未运行（无回手、无翻转）
+      expect(s.pendingEffects).toHaveLength(0);
     });
   });
 

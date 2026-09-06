@@ -97,7 +97,14 @@ function* courage6End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
 
 registerCardEffects('courage-0', {
   triggers: {
-    start: { fn: courage0Start, optional: false, top: true },
+    start: {
+      fn: courage0Start,
+      optional: false,
+      top: true,
+      // 修改提示词 23：手牌非空时「若你没有手牌」不满足 → 抽牌句无动作 → 收集前自动跳过
+      cond: (s, card) => s.players[card.owner].hand.length === 0,
+    },
+    // courage-0 底（end）为 optional：可选弃牌，玩家总能跳过 → 无需 cond（有「跳过」按钮）
     end: { fn: courage0End, optional: true },
   },
   middle: courage0Middle,
@@ -105,8 +112,16 @@ registerCardEffects('courage-0', {
 registerCardEffects('courage-1', { middle: courage1Middle });
 registerCardEffects('courage-2', {
   middle: courage2Middle,
-  triggers: { end: { fn: courage2End, optional: false } },
+  triggers: {
+    end: {
+      fn: courage2End,
+      optional: false,
+      // 修改提示词 23：同线对手总阈值未更大 → 抽牌句无动作 → 收集前自动跳过（与 courage-6 同判定）
+      cond: (s, card) => card.line !== null && oppAhead(s, card.owner, card.line),
+    },
+  },
 });
+// courage-3 底（end）为 optional：可选偏转，玩家总能跳过 → 无需 cond（有「跳过」按钮）
 registerCardEffects('courage-3', { triggers: { end: { fn: courage3End, optional: true } } });
 registerCardEffects('courage-5', { middle: courage5Middle });
 registerCardEffects('courage-6', {

@@ -113,7 +113,17 @@ registerCardEffects('diversity-1', { middle: diversity1Middle });
 registerCardEffects('diversity-3', { valueModifier: { target: 'own-stack', apply: diversity3ValueModifier } });
 registerCardEffects('diversity-4', { middle: diversity4Middle });
 registerCardEffects('diversity-5', { middle: diversity5Middle });
-registerCardEffects('diversity-6', { triggers: { end: { fn: diversity6End, optional: false, top: true } } });
+registerCardEffects('diversity-6', {
+  triggers: {
+    end: {
+      fn: diversity6End,
+      optional: false,
+      top: true,
+      // 自动判定：场上已有 ≥3 种不同协议卡 → 删除条件不满足（无动作）→ 不收集不弹按钮
+      cond: (s) => fieldProtocolCount(s) < 3,
+    },
+  },
+});
 
 
 

@@ -82,7 +82,14 @@ function* spirit5(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
 registerCardEffects('spirit-0', { middle: spirit0 });
 registerCardEffects('spirit-1', {
   middle: spirit1Middle,
-  triggers: { start: { fn: spirit1Start, optional: false } }, // 底命令：仅未覆盖顶卡生效（无 top 标志）
+  triggers: {
+    start: {
+      fn: spirit1Start,
+      optional: false, // 底命令：仅未覆盖顶卡生效（无 top 标志）
+      // 不加 cond：恒有动作——「要么弃1张牌，要么翻转此牌」二选一，翻转自己恒可执行
+      // （手牌空时弃牌步 fizzle，翻自己仍可选；spirit.test.ts 空手牌用例即此路径）
+    },
+  },
 });
 registerCardEffects('spirit-2', { middle: spirit2 });
 registerCardEffects('spirit-3', {

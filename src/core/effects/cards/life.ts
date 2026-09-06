@@ -71,7 +71,15 @@ function* life5(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
 
 registerCardEffects('life-0', {
   middle: life0Middle,
-  triggers: { 'end': { fn: life0End, optional: false, top: true } }, // FAQ 139 更正：顶指令（被盖仍生效）
+  triggers: {
+    'end': {
+      fn: life0End,
+      optional: false,
+      top: true, // FAQ 139 更正：顶指令（被盖仍生效）
+      // 自动判定：未被覆盖 → 「若被覆盖则移除」不满足 → 收集前自动跳过不弹按钮（仅被盖时删自己）
+      cond: (s, card) => !isUncovered(s, card),
+    },
+  },
 });
 registerCardEffects('life-1', { middle: life1 });
 registerCardEffects('life-2', { middle: life2 });

@@ -71,6 +71,15 @@ registerCardEffects('fire-0', {
 });
 registerCardEffects('fire-1', { middle: fire1 });
 registerCardEffects('fire-2', { middle: fire2 });
-registerCardEffects('fire-3', { triggers: { end: { fn: fire3End, optional: true } } });
+registerCardEffects('fire-3', {
+  triggers: {
+    end: {
+      fn: fire3End,
+      optional: true,
+      // 自动判定：手牌空 → 弃牌步无对象整体无动作 → 不收集不弹按钮（「你可以弃1张」无可弃）
+      cond: (s, card) => s.players[card.owner].hand.length > 0,
+    },
+  },
+});
 registerCardEffects('fire-4', { middle: fire4 });
 registerCardEffects('fire-5', { middle: fire5 });

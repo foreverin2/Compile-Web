@@ -150,7 +150,7 @@ describe('diversity', () => {
     expect(s.players[0].stacks[0]).toHaveLength(0); // <3 种 → 自删
   });
 
-  it('diversity-6 end: survives when ≥3 protocols on field', () => {
+  it('diversity-6 end: survives when ≥3 protocols on field (cond false → NOT collected)', () => {
     const s = setup();
     s.turnPlayer = 0;
     s.step = 'end';
@@ -158,11 +158,10 @@ describe('diversity', () => {
     placeSrc(s, 'fire-5', 0, 1); // fire
     placeSrc(s, 'death-0', 1, 1); // death → 场上 3 种（diversity/fire/death）
     const trigs = collectTriggers(s, 'end');
-    const t = trigs.find((x) => x.cardUid === src.uid);
-    expect(t).toBeTruthy();
-    resolveTrigger(s, t!);
-    runStack(s);
-    expect(s.players[0].stacks[0].some((c) => c.uid === src.uid)).toBe(true); // ≥3 种 → 不删
+    // 场上 ≥3 种协议 → 删除条件不满足 → 收集前自动跳过（不弹结算按钮），卡自然存活
+    expect(trigs.find((x) => x.cardUid === src.uid)).toBeUndefined();
+    expect(trigs).toHaveLength(0);
+    expect(s.players[0].stacks[0].some((c) => c.uid === src.uid)).toBe(true);
   });
 });
 

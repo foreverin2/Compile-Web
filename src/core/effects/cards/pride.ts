@@ -115,7 +115,16 @@ registerCardEffects('pride-0', {
 });
 registerCardEffects('pride-2', {
   middle: pride2Middle,
-  triggers: { start: { fn: pride2Start, optional: false } },
+  triggers: {
+    start: {
+      fn: pride2Start,
+      optional: false,
+      // 自动判定：本线己方总阈值未高于对手 → 效果整体无动作（不抽）→ 收集前自动跳过不出按钮
+      cond: (s, card) =>
+        card.line !== null &&
+        getLineValue(s, card.owner, card.line) > getLineValue(s, opp(card.owner), card.line),
+    },
+  },
 });
 registerCardEffects('pride-3', { middle: pride3Middle });
 registerCardEffects('pride-4', { middle: pride4Middle });

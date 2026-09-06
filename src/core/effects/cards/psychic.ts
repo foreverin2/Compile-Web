@@ -92,11 +92,30 @@ function* psychic5(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
 
 registerCardEffects('psychic-0', { middle: psychic0 });
 registerCardEffects('psychic-1', {
-  triggers: { start: { fn: psychic1Start, optional: false } }, // 底命令：仅未覆盖顶卡生效（无 top 标志）
+  triggers: {
+    start: {
+      fn: psychic1Start,
+      optional: false, // 底命令：仅未覆盖顶卡生效（无 top 标志）
+      // 不加 cond：恒有动作——「开始：翻转此牌」无条件翻自己（收集时必为场上未覆盖 faceUp 顶卡，
+      // 翻转恒可行）；顶命令「对手只能反面打」由 restrictions.opponentMustPlayFaceDown 接线（A2），
+      // 与 start 触发无关
+    },
+  },
 });
 registerCardEffects('psychic-2', { middle: psychic2 });
 registerCardEffects('psychic-3', { middle: psychic3 });
 registerCardEffects('psychic-4', {
-  triggers: { end: { fn: psychic4End, optional: false } }, // 底命令：仅未覆盖顶卡生效（无 top 标志）
+  triggers: {
+    end: {
+      fn: psychic4End,
+      optional: false, // 底命令：仅未覆盖顶卡生效（无 top 标志）
+      // 自动判定：对手场上无顶卡可回手 → 「你可以回手」无对象、「若如此，翻转此牌」也随之跳过
+      // → 效果整体无动作，收集前自动跳过不出按钮
+      cond: (s, card) => {
+        const foe: PlayerId = card.owner === 0 ? 1 : 0;
+        return ([0, 1, 2] as Line[]).some((l) => s.players[foe].stacks[l].length > 0);
+      },
+    },
+  },
 });
 registerCardEffects('psychic-5', { middle: psychic5 });

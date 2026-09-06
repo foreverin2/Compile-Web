@@ -138,7 +138,21 @@ registerCardEffects('flexibility-0', { middle: flexibility0Middle });
 registerCardEffects('flexibility-1', { middle: flexibility1Middle });
 registerCardEffects('flexibility-2', {
   middle: flexibility2Middle,
-  triggers: { end: { fn: flexibility2End, optional: false, top: true } },
+  triggers: {
+    end: {
+      fn: flexibility2End,
+      optional: false,
+      top: true,
+      // 自动判定：此牌被1张反面朝下的卡覆盖（上方相邻 faceDown 存在）才触发——否则无动作
+      cond: (s, card) => {
+        if (card.line === null) return false;
+        const stack = s.players[card.owner].stacks[card.line];
+        const idx = stack.findIndex((c) => c.uid === card.uid);
+        const cover = idx === -1 ? undefined : stack[idx + 1];
+        return !!cover && !cover.faceUp;
+      },
+    },
+  },
 });
 registerCardEffects('flexibility-3', { middle: flexibility3Middle });
 registerCardEffects('flexibility-4', { triggers: { end: { fn: flexibility4End, optional: false } } });

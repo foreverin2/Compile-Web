@@ -90,7 +90,21 @@ registerCardEffects('gluttony-1', {
 registerCardEffects('gluttony-2', { middle: gluttony2Middle });
 registerCardEffects('gluttony-3', {
   middle: gluttony3Middle,
-  triggers: { end: { fn: gluttony3End, optional: false, top: true } },
+  triggers: {
+    end: {
+      fn: gluttony3End,
+      optional: false,
+      top: true,
+      // 自动判定：自己该链路中此牌上方相邻卡为正面（可删对象）才触发——未覆盖/上方非正面 → 无动作
+      cond: (s, card) => {
+        if (card.line === null) return false;
+        const stack = s.players[card.owner].stacks[card.line];
+        const idx = stack.findIndex((c) => c.uid === card.uid);
+        const cover = idx === -1 ? undefined : stack[idx + 1];
+        return !!cover && cover.faceUp;
+      },
+    },
+  },
 });
 registerCardEffects('gluttony-4', { triggers: { 'after-refresh': { fn: gluttony4AfterRefresh, optional: false } } });
 registerCardEffects('gluttony-5', { middle: gluttony5Middle });

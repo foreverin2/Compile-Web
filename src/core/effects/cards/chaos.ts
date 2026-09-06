@@ -135,12 +135,31 @@ function* chaos5Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> 
 
 registerCardEffects('chaos-0', {
   middle: chaos0Middle,
-  triggers: { start: { fn: chaos0Start, optional: false } },
+  triggers: {
+    start: {
+      fn: chaos0Start,
+      optional: false,
+      // 修改提示词 23：双方 deck 与 trash 全空时两句抽牌都无动作 → 收集前自动跳过；
+      // 任一方 deck/trash 非空则至少有一句生效（draw op 会洗弃牌堆，故按 deck+trash>0 判定）
+      cond: (s, card) =>
+        s.players[card.owner].deck.length + s.players[card.owner].trash.length > 0 ||
+        s.players[opp(card.owner)].deck.length + s.players[opp(card.owner)].trash.length > 0,
+    },
+  },
 });
 registerCardEffects('chaos-1', { middle: chaos1Middle });
 registerCardEffects('chaos-2', { middle: chaos2Middle });
 // chaos-3：引擎放行（restrictions.cardAllowsFaceUpAnyLine('chaos-3')），无注册
-registerCardEffects('chaos-4', { triggers: { end: { fn: chaos4End, optional: false } } });
+registerCardEffects('chaos-4', {
+  triggers: {
+    end: {
+      fn: chaos4End,
+      optional: false,
+      // 修改提示词 23：手牌空 → 弃 0 且抽 0 no-op（效果无实际动作）→ 收集前自动跳过
+      cond: (s, card) => s.players[card.owner].hand.length > 0,
+    },
+  },
+});
 registerCardEffects('chaos-5', { middle: chaos5Middle });
 
 

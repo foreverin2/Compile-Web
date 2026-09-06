@@ -123,7 +123,14 @@ registerCardEffects('sloth-1', {
 });
 registerCardEffects('sloth-2', {
   middle: sloth2Middle,
-  triggers: { start: { fn: sloth2Start, optional: false } },
+  triggers: {
+    start: {
+      fn: sloth2Start,
+      optional: false,
+      // 自动判定：手牌空（无牌可放回牌库底）→ 可选 select 无候选，效果整体无动作 → 收集前自动跳过不出按钮
+      cond: (s, card) => s.players[card.owner].hand.length > 0,
+    },
+  },
 });
 registerCardEffects('sloth-3', { middle: sloth3Middle });
 registerCardEffects('sloth-4', { triggers: { 'before-covered': { fn: sloth4BeforeCovered, optional: false } } });

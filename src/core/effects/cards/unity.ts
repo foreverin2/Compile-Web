@@ -140,7 +140,19 @@ registerCardEffects('unity-1', {
 // unity-1 底放行：引擎 restrictions.unity1UncoveredLine
 registerCardEffects('unity-2', { middle: unity2Middle });
 registerCardEffects('unity-3', { middle: unity3Middle });
-registerCardEffects('unity-4', { triggers: { start: { fn: unity4Start, optional: false, top: true } } });
+registerCardEffects('unity-4', {
+  triggers: {
+    start: {
+      fn: unity4Start,
+      optional: false,
+      top: true,
+      // 自动判定（与 gen 首个动作前守卫等价）：手牌非空（「若你没有手牌」不满足）或牌库空
+      // （抽不了也无需切洗）→ 效果整体无动作 → 收集前自动跳过不出按钮
+      cond: (s, card) =>
+        s.players[card.owner].hand.length === 0 && s.players[card.owner].deck.length > 0,
+    },
+  },
+});
 registerCardEffects('unity-5', { middle: unity5Middle });
 
 

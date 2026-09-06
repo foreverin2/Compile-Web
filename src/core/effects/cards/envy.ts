@@ -77,7 +77,14 @@ function* envy5Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
 registerCardEffects('envy-0', { valueModifier: { target: 'line', apply: envy0Modifier } });
 registerCardEffects('envy-1', {
   middle: envy1Middle,
-  triggers: { start: { fn: envy1Start, optional: false } }, // 底命令：仅未覆盖顶卡
+  triggers: {
+    start: {
+      fn: envy1Start,
+      optional: false,
+      // 自动判定：对手未持控制权 → 无对象（无可夺取）→ 不收集不弹按钮
+      cond: (s, card) => s.control === opp(card.owner),
+    },
+  }, // 底命令：仅未覆盖顶卡
 });
 registerCardEffects('envy-2', { middle: envy2Middle });
 registerCardEffects('envy-3', { triggers: { 'after-play': { fn: envy3AfterPlay, optional: false } } });

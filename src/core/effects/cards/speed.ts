@@ -180,7 +180,14 @@ registerCardEffects('speed-2', {
 });
 registerCardEffects('speed-3', {
   middle: speed3Middle,
-  triggers: { end: { fn: speed3End, optional: false } }, // 底命令：仅未覆盖顶卡生效（无 top 标志）
+  triggers: {
+    end: {
+      fn: speed3End,
+      optional: false, // 底命令：仅未覆盖顶卡生效（无 top 标志）
+      // 不加 cond：恒有动作——「1张你的牌」含自己（源卡被候选排除后手动加回，txt 无「其它」），
+      // 收集时点（己方场未覆盖正面卡）候选必非空，可选平移恒有对象
+    },
+  },
 });
 registerCardEffects('speed-4', { middle: speed4 });
 registerCardEffects('speed-5', { middle: speed5 });

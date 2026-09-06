@@ -108,7 +108,9 @@ function* corruption6End(ctx: EffectCtx): Generator<EffectStep, void, StepResult
   };
   if (actAns.selected.length === 0) return;
   if (actAns.selected[0] === 'action:delete') {
-    yield { op: 'delete', uid: ctx.card.uid };
+    // allowCovered（FAQ 腐化6 / 同 death-1 先例）：顶命令被盖仍生效——被盖的腐化6 自毁删自己
+    // 也合法，删除后其覆盖的卡被揭开连锁中指令（delete → revealAfterRemoval 天然满足）
+    yield { op: 'delete', uid: ctx.card.uid, allowCovered: true };
     return;
   }
   const hand = ctx.candidates({ zone: 'hand', owner: ctx.player });
@@ -139,6 +141,16 @@ registerCardEffects('corruption-2', {
 });
 registerCardEffects('corruption-3', { middle: corruption3Middle });
 registerCardEffects('corruption-5', { middle: corruption5Middle });
-registerCardEffects('corruption-6', { triggers: { end: { fn: corruption6End, optional: false, top: true } } });
+registerCardEffects('corruption-6', {
+  triggers: {
+    end: {
+      fn: corruption6End,
+      optional: false,
+      top: true,
+      // 无 cond：弃1张或删除此牌二选一——删除自己（allowCovered）恒可行（卡必在场 faceUp），
+      // 触发总有合法动作（FAQ 腐化6 被盖自毁合法）
+    },
+  },
+});
 
 

@@ -139,7 +139,13 @@ function* clarity5Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult
 registerCardEffects('clarity-0', { valueModifier: { target: 'own-stack', apply: clarity0ValueModifier } });
 registerCardEffects('clarity-1', {
   triggers: {
-    start: { fn: clarity1Start, optional: false, top: true }, // 顶命令：被盖仍触发
+    start: {
+      fn: clarity1Start,
+      optional: false,
+      top: true, // 顶命令：被盖仍触发
+      // 修改提示词 23：自己牌库空（正文首个守卫 deckTopAvailable，FAQ 107）→ 无牌可揭示/弃 → 收集前自动跳过
+      cond: (s, card) => deckTopAvailable(s, card.owner),
+    },
     'before-covered': { fn: clarity1BeforeCovered, optional: false },
   },
   middle: clarity1Middle,

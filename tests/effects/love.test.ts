@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { GameState, Line } from '../../src/core/models/types';
-import { executeAction } from '../../src/core/game';
+import { executeAction, getLegalActions } from '../../src/core/game';
 import { collectTriggers, resolveTrigger } from '../../src/core/effects/triggers';
 import { runStack } from '../../src/core/effects/resolve';
 import { makeCard, pickFirst, resolveAllChoices, draftLoveP1, advanceToStep } from '../helpers';
@@ -128,7 +128,7 @@ describe('love protocol effects', () => {
       expect(s.pendingEffects).toHaveLength(0);
     });
 
-    it('end trigger: empty hand → fizzles (auto-skip, no give/draw)', () => {
+    it('end trigger: empty hand → auto-judgment cond → NOT collected (no button)', () => {
       const s = draftLoveP1();
       advanceToStep(s, 0, 'end');
       const ll = loveLine(s);
@@ -137,14 +137,15 @@ describe('love protocol effects', () => {
       s.players[0].hand = [];
       const oppHandBefore = s.players[1].hand.length;
       const deckBefore = s.players[0].deck.length;
-      const t = collectTriggers(s, 'end').find((x) => x.cardUid === lv1.uid)!;
-      resolveTrigger(s, t);
-      runStack(s);
-      resolveAllChoices(s, pickFirst); // 手牌空 → select 自动跳过
+      // 无手牌 = 无可给对象 → 收集前 cond 预检不通过 → 不收集、不弹按钮
+      const ts = collectTriggers(s, 'end');
+      expect(ts.find((x) => x.cardUid === lv1.uid)).toBeUndefined();
+      expect(ts).toHaveLength(0);
+      // 无必选触发 → advance 不被拦截（旧行为：必选触发空手 fizzle 需点穿）
+      expect(getLegalActions(s, 0).some((a) => a.kind === 'advance')).toBe(true);
       expect(s.players[1].hand).toHaveLength(oppHandBefore);
       expect(s.players[0].hand).toHaveLength(0);
       expect(s.players[0].deck).toHaveLength(deckBefore);
-      expect(s.pendingEffects).toHaveLength(0);
     });
 
     it('end trigger: covered love-1 is NOT collected (bottom command: uncovered only)', () => {

@@ -112,6 +112,13 @@ registerCardEffects('plague-1', {
 registerCardEffects('plague-2', { middle: plague2 });
 registerCardEffects('plague-3', { middle: plague3 });
 registerCardEffects('plague-4', {
-  triggers: { end: { fn: plague4End, optional: false } }, // 底命令：仅未覆盖顶卡生效（无 top 标志）
+  triggers: {
+    end: {
+      fn: plague4End,
+      optional: false, // 底命令：仅未覆盖顶卡生效（无 top 标志）
+      // 不加 cond：恒有动作——删除句（对手无反面顶卡时跳过，FAQ 40）不影响独立句
+      // 「你可以翻转这张牌」：flip/skip 二选一在收集时点（己方场未覆盖正面卡）恒可执行
+    },
+  },
 });
 registerCardEffects('plague-5', { middle: plague5 });

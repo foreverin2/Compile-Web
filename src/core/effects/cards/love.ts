@@ -89,7 +89,14 @@ function* love6(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
 
 registerCardEffects('love-1', {
   middle: love1Middle,
-  triggers: { end: { fn: love1End, optional: false } }, // 底命令：仅未覆盖顶卡生效（无 top 标志）
+  triggers: {
+    end: {
+      fn: love1End,
+      optional: false, // 底命令：仅未覆盖顶卡生效（无 top 标志）；「可以给」的跳过由效果内可选 select 表达
+      // 自动判定：无手牌 → 无可给对象 → 收集前自动跳过不弹按钮（有手牌时仍可进效果内选择跳过）
+      cond: (s, card) => s.players[card.owner].hand.length > 0,
+    },
+  },
 });
 registerCardEffects('love-2', { middle: love2 });
 registerCardEffects('love-3', { middle: love3 });

@@ -115,7 +115,14 @@ registerCardEffects('lust-0', {
 registerCardEffects('lust-2', { middle: lust2Middle });
 registerCardEffects('lust-3', {
   middle: lust3Middle,
-  triggers: { end: { fn: lust3End, optional: false } },
+  triggers: {
+    end: {
+      fn: lust3End,
+      optional: false, // 「可以失去」的跳过由效果内 select-action 表达；未持有控制权时整句 fizzle
+      // 自动判定：未持有控制权 → 无可失去 → 收集前自动跳过不弹按钮（同 wrath-1 语义）
+      cond: (s, card) => s.control === card.owner,
+    },
+  },
 });
 registerCardEffects('lust-4', {
   middle: lust4Middle,

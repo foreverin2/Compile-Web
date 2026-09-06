@@ -123,8 +123,26 @@ registerCardEffects('assimilation-1', {
     'after-opponent-refresh': { fn: assimilation1AfterRefresh, optional: true },
   },
 });
-registerCardEffects('assimilation-2', { triggers: { end: { fn: assimilation2End, optional: false } } });
+registerCardEffects('assimilation-2', {
+  triggers: {
+    end: {
+      fn: assimilation2End,
+      optional: false,
+      // 修改提示词 23：对手牌库顶无可打（deckTopAvailable=对手 deck 空，正文首个守卫）→ 无对象 → 收集前自动跳过
+      cond: (s, card) => deckTopAvailable(s, opp(card.owner)),
+    },
+  },
+});
 registerCardEffects('assimilation-4', { middle: assimilation4Middle });
 registerCardEffects('assimilation-5', { middle: assimilation5Middle });
-registerCardEffects('assimilation-6', { triggers: { end: { fn: assimilation6End, optional: false } } });
+registerCardEffects('assimilation-6', {
+  triggers: {
+    end: {
+      fn: assimilation6End,
+      optional: false,
+      // 修改提示词 23：自己牌库顶无可打（deckTopAvailable=自己 deck 空，正文首个守卫）→ 无对象 → 收集前自动跳过
+      cond: (s, card) => deckTopAvailable(s, card.owner),
+    },
+  },
+});
 

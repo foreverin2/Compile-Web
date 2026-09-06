@@ -140,7 +140,19 @@ registerCardEffects('greed-1', {
 });
 registerCardEffects('greed-2', {
   middle: greed2Middle,
-  triggers: { start: { fn: greed2Start, optional: false } },
+  triggers: {
+    start: {
+      fn: greed2Start,
+      optional: false,
+      // 自动判定：自己场上无【其它】可回手的顶卡（各链路顶卡除自己）→ 无对象不收集不弹按钮
+      cond: (s, card) =>
+        ([0, 1, 2] as Line[]).some((l) => {
+          const stack = s.players[card.owner].stacks[l];
+          const top = stack[stack.length - 1];
+          return !!top && top.uid !== card.uid;
+        }),
+    },
+  },
 });
 registerCardEffects('greed-3', { middle: greed3Middle });
 registerCardEffects('greed-4', { middle: greed4Middle });

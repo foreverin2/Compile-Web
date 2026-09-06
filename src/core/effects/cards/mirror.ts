@@ -68,7 +68,17 @@ function* mirror5Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult>
 }
 
 registerCardEffects('mirror-0', { valueModifier: { target: 'own-stack', apply: mirror0ValueModifier } });
-registerCardEffects('mirror-1', { triggers: { end: { fn: mirror1End, optional: true } } });
+registerCardEffects('mirror-1', {
+  triggers: {
+    end: {
+      fn: mirror1End,
+      optional: true,
+      // 自动判定：对手无正面顶卡 → 无复制对象 → 收集前自动跳过不弹按钮（可选仍保留跳过语义）
+      cond: (s, card) =>
+        s.players[opp(card.owner)].stacks.some((st) => st.length > 0 && st[st.length - 1].faceUp),
+    },
+  },
+});
 registerCardEffects('mirror-2', { middle: mirror2Middle });
 registerCardEffects('mirror-3', { middle: mirror3Middle });
 registerCardEffects('mirror-4', { triggers: { 'after-opponent-draw': { fn: mirror4AfterOppDraw, optional: false } } });
