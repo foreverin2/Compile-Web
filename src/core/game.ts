@@ -10,6 +10,7 @@ import {
   lineBlocksOpponentFaceDown,
   opponentMustPlayFaceDown,
   shouldSkipCacheCheck,
+  cardCanPlayToOpponentSide,
 } from './rules/restrictions';
 import { collectTriggers, fireReactive, resolveTrigger } from './effects/triggers';
 import { answerEffect, runStack } from './effects/resolve';
@@ -22,6 +23,8 @@ export interface PlayArgs {
   cardUid: string;
   faceUp: boolean;
   line: Line;
+  /** 打出目标玩家（修改提示词 15：corruption-0 可落【对方】链路 = 易主对方进对方场） */
+  target?: PlayerId;
 }
 
 export interface LegalAction {
@@ -29,6 +32,8 @@ export interface LegalAction {
   line?: Line;
   cardUid?: string;
   faceUp?: boolean;
+  /** 打出目标玩家（缺省 = 行动玩家自己；corruption-0 可 target 对方，见 PlayArgs.target） */
+  target?: PlayerId;
   promptId?: string;
   choice?: string[];
   /** 触发来源卡牌 defId（resolve-trigger 按钮文案带来源，修改提示词 28） */
@@ -51,6 +56,17 @@ export function getLegalActions(s: GameState, player: PlayerId): LegalAction[] {
         }
         if (!lineBlocksOpponentFaceDown(s, line, player)) {
           out.push({ kind: 'play', cardUid: card.uid, faceUp: false, line });
+        }
+        // 修改提示词 15：corruption-0 底「此牌可以打在任意一方的任意协议处」→ 落点可扩至
+        // 对方任一链路（target=对方；正面：底放行任意协议匹配已由 isPlayableFaceUp 覆盖；
+        // 反面：打对方场反面无意义——腐化0 以正面落对方场发挥干扰/翻转作用，只出正面）
+        if (
+          cardCanPlayToOpponentSide(card.defId) &&
+          !faceUpBanned &&
+          !lineBlocksOpponent(s, line, player)
+        ) {
+          const opp: PlayerId = player === 0 ? 1 : 0;
+          out.push({ kind: 'play', cardUid: card.uid, faceUp: true, line, target: opp });
         }
       }
     }
@@ -113,7 +129,7 @@ export function executeAction(s: GameState, player: PlayerId, kind: ActionKind, 
     case 'play': {
       // 需收窄到 PlayArgs（'cardUid' in args 不足以排除 resolve-trigger 的 { cardUid }）
       if (!args || !('cardUid' in args) || !('faceUp' in args)) throw new Error('play requires args');
-      playCard(s, player, args.cardUid, args.faceUp, args.line);
+      playCard(s, player, args.cardUid, args.faceUp, args.line, args.target);
       if (s.pendingEffects.length === 0 && s.pendingPlay.length === 0) {
         advanceStep(s);
       } else {

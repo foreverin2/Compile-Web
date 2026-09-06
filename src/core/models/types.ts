@@ -241,12 +241,15 @@ export interface PendingEffect {
 
 /** 落地中的卡（浮空，等目标顶卡"被盖住前"结算后落地）；beforeCoveredDone = 目标顶卡"被盖住前"是否已结算（只结算一次）
  *  belowUid：playTopDeck/playFromHand 指定时插入该卡下方（该卡保持未被覆盖；卡已不在则回退落顶）
- *  fromAction：玩家【行动】打出（actions/base playCard）——rigidity-2 底「你用行动反面打出后」据此触发 */
+ *  fromAction：玩家【行动】打出（actions/base playCard）——rigidity-2 底「你用行动反面打出后」据此触发
+ *  actor：行动打出者（playCard 记录原玩家；腐化0 落对方场易主后 card.owner ≠ 行动玩家，
+ *  completePlay 的 after-play/rigidity-2 视角须用 actor 而非 owner 推导） */
 export interface PendingLanding {
   card: Card;
   beforeCoveredDone: boolean;
   belowUid?: string;
   fromAction?: boolean;
+  actor?: PlayerId;
 }
 
 /** 待结算触发条目（getLegalActions 供 UI 出按钮） */

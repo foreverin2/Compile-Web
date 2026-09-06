@@ -6,6 +6,8 @@ import { collectTriggers, resolveTrigger } from '../../src/core/effects/triggers
 import { refreshHand } from '../../src/core/actions/base';
 import { drawCards } from '../../src/core/engine/deck';
 import { isPlayableFaceUp } from '../../src/core/actions/base';
+import { executeAction } from '../../src/core/game';
+import { getLegalActions } from '../../src/core/game';
 import { makeCard, resolveAllChoices } from '../helpers';
 
 /**
@@ -202,6 +204,47 @@ describe('corruption', () => {
     resolveAllChoices(s, eagerPick); // 选 buried（唯一候选）
     expect(buried.faceUp).toBe(false); // 同堆叠其它正面卡被翻
     expect(src.faceUp).toBe(true); // 自身被「除此牌外」排除
+  });
+
+  it('corruption-0 (修改提示词 15): may be played face-up to ANY opponent line — 易主对方、进对方场地', () => {
+    const s = setup();
+    s.turnPlayer = 0;
+    s.step = 'action';
+    const c = makeCard('corruption-0', 0, 'hand');
+    s.players[0].hand = [c];
+    // getLegalActions 给出落【对方】线的 play action（target=1）
+    const actions = getLegalActions(s, 0).filter(
+      (a) => a.kind === 'play' && a.cardUid === c.uid && a.target === 1
+    );
+    expect(actions.map((a) => a.line).sort()).toEqual([0, 1, 2]);
+    // 行动打出到对方线 1（正面）→ 真落对方场
+    executeAction(s, 0, 'play', { cardUid: c.uid, faceUp: true, line: 1, target: 1 });
+    expect(s.players[0].hand).toHaveLength(0);
+    expect(s.players[0].stacks.flat().some((x) => x.uid === c.uid)).toBe(false); // 不在自己场
+    const placed = s.players[1].stacks[1].find((x) => x.uid === c.uid);
+    expect(placed).toBeTruthy();
+    expect(placed!.owner).toBe(1); // 易主对方
+    expect(placed!.faceUp).toBe(true);
+    expect(placed!.zone).toBe('field');
+  });
+
+  it('corruption-0 on opponent field: its start trigger fires on OPPONENT turn-start and flips the opponent-stack card (owner 结算)', () => {
+    const s = setup();
+    // 对方场上：对方正面卡（被翻目标）+ 我方打过去的腐化0（对方场顶卡，易主对方）
+    const oppCard = makeCard('fire-3', 1, 'field', true, 0, 0);
+    const c = makeCard('corruption-0', 1, 'field', true, 0, 1); // owner=1（易主后）
+    s.players[1].stacks[0] = [oppCard, c];
+    // 对方回合开始：收集对方场地侧 start → corruption-0（owner=1）触发
+    s.turnPlayer = 1;
+    s.step = 'start';
+    const trigs = collectTriggers(s, 'start');
+    const t = trigs.find((x) => x.cardUid === c.uid);
+    expect(t).toBeTruthy();
+    resolveTrigger(s, t!);
+    runStack(s);
+    resolveAllChoices(s, eagerPick); // 翻 oppCard（同堆叠唯一候选，除此牌外）
+    expect(oppCard.faceUp).toBe(false); // 对方场上对方卡被翻（干扰对方）
+    expect(c.faceUp).toBe(true); // 腐化0 自身不被翻
   });
 });
 

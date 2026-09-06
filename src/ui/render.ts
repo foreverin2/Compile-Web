@@ -195,7 +195,9 @@ function renderStackSlot(
   onPlay: (line: Line) => void,
   interactable: boolean
 ): HTMLElement {
-  const slot = el('div', `stack-slot p${player + 1}${interactable ? ' interactable self' : ''}`);
+  // self 高亮仅限自己侧槽；对方槽作为腐化0 落点（修改提示词 15）也可交互但不带 self 常驻高亮
+  const isSelfSlot = player === s.turnPlayer;
+  const slot = el('div', `stack-slot p${player + 1}${interactable ? ' interactable' : ''}${interactable && isSelfSlot ? ' self' : ''}`);
   // 拖拽打牌：data 属性供拖拽期按 (player, line) 查询/高亮/命中合法落点
   slot.dataset.line = String(line);
   slot.dataset.player = String(player);
@@ -2940,8 +2942,8 @@ export function renderDraft(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   root.appendChild(wrap);
 }
 
-/** 打牌交互：选手牌 → 点（self 侧）链路槽；越步/协议不匹配等非法点击一律忽略 */
-function playToLine(s: GameState, cb: UiCallbacks, line: Line): void {
+/** 打牌交互：选手牌 → 点链路槽（打自己场；腐化0 也可点对方槽打对方场）；越步/协议不匹配等非法点击一律忽略 */
+function playToLine(s: GameState, cb: UiCallbacks, line: Line, targetPlayer: PlayerId): void {
   if (!selectedUid) return;
   const uid = selectedUid;
   const faceUp = selectedFaceUp;
@@ -2951,10 +2953,12 @@ function playToLine(s: GameState, cb: UiCallbacks, line: Line): void {
   if (s.step !== 'action') return;
   const legal = getLegalActions(s, s.turnPlayer);
   const playable = legal.some(
-    (a) => a.kind === 'play' && a.cardUid === uid && a.line === line && a.faceUp === faceUp
+    (a) =>
+      a.kind === 'play' && a.cardUid === uid && a.line === line && a.faceUp === faceUp &&
+      (a.target ?? s.turnPlayer) === targetPlayer
   );
   if (!playable) return;
-  cb.onAction({ kind: 'play', cardUid: uid, faceUp, line });
+  cb.onAction({ kind: 'play', cardUid: uid, faceUp, line, target: targetPlayer === s.turnPlayer ? undefined : targetPlayer });
 }
 
 /** 胜利结算横幅是否已显示（防重复创建；返回主界面时由 resetUiState 复位） */
@@ -3012,17 +3016,40 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   grid.appendChild(strip);
 
   // 三条线（每线一行，同行 4 格水平对齐）
+  // 打出交互（修改提示词 15）：自己的槽 = 打自己场；选中 corruption-0（可打对方场的卡）时
+  // 对方槽也作为落点（target=对方，易主落对方场）。interactable 由「该槽当前是否可作为
+  // 打出落点」决定：自己侧 action 步骤即可点（.self 常驻高亮保留）；对方侧仅在选中卡
+  // 存在 target=对方的合法 play action 时可点。
+  const legalActions = getLegalActions(s, s.turnPlayer);
+  const oppSlot: PlayerId = s.turnPlayer === 0 ? 1 : 0;
+  const selectedCanPlayToOpp =
+    selectedUid !== null &&
+    legalActions.some(
+      (a) =>
+        a.kind === 'play' && a.cardUid === selectedUid && a.faceUp === selectedFaceUp &&
+        a.target === oppSlot
+    );
   for (const line of [0, 1, 2] as Line[]) {
     const row = el('div', 'lane-row');
     // 线编号：select-line 选择模式据此高亮并即答 ['line:N']
     row.dataset.line = String(line);
     row.appendChild(
-      renderStackSlot(s, 0, line, s.turnPlayer === 0 ? selectedUid : null, s.turnPlayer === 0 ? (l) => playToLine(s, cb, l) : () => {}, s.turnPlayer === 0)
+      renderStackSlot(
+        s, 0, line,
+        s.turnPlayer === 0 ? selectedUid : null,
+        s.turnPlayer === 0 ? (l) => playToLine(s, cb, l, 0) : selectedCanPlayToOpp && oppSlot === 0 ? (l) => playToLine(s, cb, l, 0) : () => {},
+        s.turnPlayer === 0 || (selectedCanPlayToOpp && oppSlot === 0)
+      )
     );
     row.appendChild(renderProtocolCell(s, 0, line));
     row.appendChild(renderProtocolCell(s, 1, line));
     row.appendChild(
-      renderStackSlot(s, 1, line, s.turnPlayer === 1 ? selectedUid : null, s.turnPlayer === 1 ? (l) => playToLine(s, cb, l) : () => {}, s.turnPlayer === 1)
+      renderStackSlot(
+        s, 1, line,
+        s.turnPlayer === 1 ? selectedUid : null,
+        s.turnPlayer === 1 ? (l) => playToLine(s, cb, l, 1) : selectedCanPlayToOpp && oppSlot === 1 ? (l) => playToLine(s, cb, l, 1) : () => {},
+        s.turnPlayer === 1 || (selectedCanPlayToOpp && oppSlot === 1)
+      )
     );
     grid.appendChild(row);
   }
@@ -3600,7 +3627,7 @@ function bindCardDrag(node: HTMLElement, s: GameState, cb: UiCallbacks, uid: str
     const startY = e.clientY;
     let active = false;
     let ghost: HTMLElement | null = null;
-    let legalLines = new Set<number>();
+    let legalLines = new Set<string>(); // `${player}:${line}` 合法落点（自己/对方槽，修改提示词 15）
     // 拖拽期间的朝向：被拖卡即已选中卡时沿用翻面状态，否则按正面（未选中卡无翻面操作）
     let dragFaceUp = true;
 
@@ -3631,16 +3658,17 @@ function bindCardDrag(node: HTMLElement, s: GameState, cb: UiCallbacks, uid: str
       active = true;
       dragFaceUp = selectedUid === uid ? selectedFaceUp : true;
       document.body.classList.add('dragging');
-      // 合法落点：该卡以当前朝向（dragFaceUp）可打的所有线，engine getLegalActions 为准
-      legalLines = new Set<number>();
+      // 合法落点：该卡以当前朝向（dragFaceUp）可打的所有 (player,line)——自己槽打自己场；
+      // corruption-0（修改提示词 15）还可落对方槽（target=对方），engine getLegalActions 为准
+      legalLines = new Set<string>();
       for (const a of getLegalActions(s, s.turnPlayer)) {
         if (a.kind === 'play' && a.cardUid === uid && a.line !== undefined && a.faceUp === dragFaceUp) {
-          legalLines.add(a.line);
+          legalLines.add(`${a.target ?? s.turnPlayer}:${a.line}`);
         }
       }
-      // 高亮当前玩家槽位中属于合法线的槽
-      for (const slot of document.querySelectorAll<HTMLElement>(`.stack-slot[data-player="${s.turnPlayer}"]`)) {
-        if (legalLines.has(Number(slot.dataset.line))) slot.classList.add('drag-target');
+      // 高亮属于合法 (player,line) 的槽
+      for (const slot of document.querySelectorAll<HTMLElement>('.stack-slot')) {
+        if (legalLines.has(`${slot.dataset.player}:${slot.dataset.line}`)) slot.classList.add('drag-target');
       }
       // 幽灵卡：克隆原卡（监听器不会被复制），去掉翻面按钮组与悬停残留样式
       ghost = node.cloneNode(true) as HTMLElement;
@@ -3668,17 +3696,18 @@ function bindCardDrag(node: HTMLElement, s: GameState, cb: UiCallbacks, uid: str
         return;
       }
       const hit = document.elementFromPoint(ev.clientX, ev.clientY);
-      const slot = hit
-        ? (hit as HTMLElement).closest<HTMLElement>(`.stack-slot[data-player="${s.turnPlayer}"]`)
-        : null;
+      const slot = hit ? (hit as HTMLElement).closest<HTMLElement>('.stack-slot') : null;
+      const slotPlayer = slot ? Number(slot.dataset.player) as PlayerId : null;
       const line = slot ? Number(slot.dataset.line) : -1;
-      const legalDrop = slot !== null && s.step === 'action' && legalLines.has(line);
+      const legalDrop =
+        slot !== null && slotPlayer !== null && s.step === 'action' &&
+        legalLines.has(`${slotPlayer}:${line}`);
       cleanup(); // 先清理幽灵/高亮/监听，再派发（renderApp 会重建 DOM）
-      if (legalDrop) {
+      if (legalDrop && slotPlayer !== null) {
         // 落点合法：把选中状态提交为被拖的卡（playToLine 校验并派发后复位）
         selectedUid = uid;
         selectedFaceUp = dragFaceUp;
-        playToLine(s, cb, line as Line);
+        playToLine(s, cb, line as Line, slotPlayer);
       }
     };
 

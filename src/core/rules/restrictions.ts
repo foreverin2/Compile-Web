@@ -81,6 +81,14 @@ export function cardAllowsFaceUpAnyLine(defId: string): boolean {
   return defId === 'chaos-3' || defId === 'corruption-0';
 }
 
+/** 修改提示词 15：corruption-0 底「此牌可以打在任意一方的任意协议处」（腐化0 特有能力）：
+ *  从手牌打出时可选择落在【对方】的链路（真落对方场 = 易主对方、进对方场地数据，
+ *  用户 2026-09 拍板同批3 assimilation-2/6 deckTopTransfer 语义）；chaos-3 仍只能打自己场
+ *  （其文本为「任意链路」非「任意一方」） */
+export function cardCanPlayToOpponentSide(defId: string): boolean {
+  return defId === 'corruption-0';
+}
+
 /** ice-6 顶「如果你有手牌，那么你不可以抽牌」：player 手牌 >0 且其场上任一线链路有正面 ice-6
  *  （顶命令，被盖仍生效——查在场+正面）→ 禁止一切抽牌路径（效果 draw/刷新/fromOpponentDeck/
  *  drawFromDeck；FAQ 冰6：刷新想抽必须能抽上牌，抽 0 无效）。手牌=0 时不拦截。 */

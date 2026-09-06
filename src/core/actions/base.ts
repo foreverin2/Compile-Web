@@ -7,6 +7,7 @@ import { runStack } from '../effects/resolve';
 import {
   canPlayFaceUpAnywhere,
   cardAllowsFaceUpAnyLine,
+  cardCanPlayToOpponentSide,
   lineBlocksOpponent,
   lineBlocksOpponentFaceDown,
   lineAllowsFaceUpIgnoringProtocol,
@@ -39,8 +40,17 @@ export function isPlayableFaceUp(s: GameState, player: PlayerId, cardUid: string
 /** 打出卡牌：正面须匹配协议线；背面任意线。先浮空（pendingPlay），completePlay 结算目标顶卡
  *  "被盖住前"触发后落地；正面卡落地后结算中指令（可连锁/挂起）。
  *  执行层守卫（与 getLegalActions 一致，防直接调引擎绕过）：plague-0 此列禁打（正反）、
- *  psychic-1 禁正面打、metal-2 此列禁反面打——效果授予的打出（playFromHand op）不受限（卡牌文本优先）。 */
-export function playCard(s: GameState, player: PlayerId, cardUid: string, faceUp: boolean, line: Line): Card {
+ *  psychic-1 禁正面打、metal-2 此列禁反面打——效果授予的打出（playFromHand op）不受限（卡牌文本优先）。
+ *  target（修改提示词 15）：corruption-0 可打出到【对方】任一链路——卡易主对方（owner 变 target）
+ *  并进对方场地数据（completePlay 按 card.owner 定位 stacks），与 deckTopTransfer 语义一致。 */
+export function playCard(
+  s: GameState,
+  player: PlayerId,
+  cardUid: string,
+  faceUp: boolean,
+  line: Line,
+  target?: PlayerId,
+): Card {
   const p = s.players[player];
   const idx = p.hand.findIndex((c) => c.uid === cardUid);
   if (idx === -1) throw new Error(`card ${cardUid} not in hand`);
@@ -56,13 +66,25 @@ export function playCard(s: GameState, player: PlayerId, cardUid: string, faceUp
   if (faceUp && !isPlayableFaceUp(s, player, cardUid, line)) {
     throw new Error(`cannot play face-up into line ${line}`);
   }
+  const dest: PlayerId = target ?? player;
+  if (dest !== player) {
+    // 修改提示词 15：仅腐化0（底「此牌可以打在任意一方的任意协议处」）可落对方场；
+    // 且只正面打出（协议匹配豁免是正面语义；反面打对方场无意义——易主送对方一张秘密卡）
+    if (!cardCanPlayToOpponentSide(p.hand[idx].defId)) {
+      throw new Error('card cannot be played to opponent side');
+    }
+    if (!faceUp) {
+      throw new Error('cannot play face-down to opponent side');
+    }
+  }
   const [card] = p.hand.splice(idx, 1);
+  card.owner = dest; // 落对方场：易主（修改提示词 15 用户拍板，同 deckTopTransfer）
   card.zone = 'float';
   card.faceUp = faceUp;
   card.line = line;
   card.pos = null;
   s.pendingPlay.push({ card, beforeCoveredDone: false, fromAction: true }); // fromAction：玩家行动打出（rigidity-2 底触发依据）
-  pushLog(s, `P${player + 1} 打出 ${card.defId}（${faceUp ? '正面' : '反面'}）到线 ${line + 1}`); // 修改提示词 8：操作日志中文
+  pushLog(s, `P${player + 1} 打出 ${card.defId}（${faceUp ? '正面' : '反面'}）到${dest !== player ? '对方' : ''}线 ${line + 1}`); // 修改提示词 8/15：日志中文 + 落对方标注
   runStack(s); // 结算 before-covered（若有）→ 栈空时 completePlay 落地 + 中指令
   return card;
 }

@@ -88,7 +88,7 @@ const cb: UiCallbacks = {
     // 而 LegalAction.kind 是联合类型，需按 kind 收窄后再分发
     let drawAnimCount = 0;
     if (a.kind === 'play') {
-      executeAction(state, player, 'play', { cardUid: a.cardUid!, faceUp: a.faceUp!, line: a.line! });
+      executeAction(state, player, 'play', { cardUid: a.cardUid!, faceUp: a.faceUp!, line: a.line!, target: a.target });
     } else if (a.kind === 'compile') {
       // 持有控制组件 → 编译前先归还中立并弹「重排协议」模态（FAQ 79：编译时首先归还
       // 中立，可重排一名玩家的协议——自己或对手——随后完成编译；FAQ 114：即使不重排

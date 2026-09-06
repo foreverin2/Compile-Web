@@ -885,13 +885,15 @@ function completePlay(s: GameState): void {
   s.pendingPlay.shift();
   emitCardEvent(s, 'card:played', card);
   if (card.faceUp) pushMiddle(s, card.owner, card, '打出');
-  // 批2 ice-1 底「对手在此链路出牌后：他要弃置1张牌」：打出者【对手】同线顶卡注册 after-play → 触发
-  fireDirectedTop(s, 'after-play', card.owner === 0 ? 1 : 0, card.line!);
+  // 批2 ice-1 底「对手在此链路出牌后：他要弃置1张牌」：打出者【对手】同线顶卡注册 after-play → 触发。
+  // actor（行动打出者）：腐化0 落对方场易主后 card.owner ≠ 打出者——触发侧应看打出者视角
+  const actor: PlayerId = ps.actor ?? card.owner;
+  fireDirectedTop(s, 'after-play', actor === 0 ? 1 : 0, card.line!);
   // 3代 rigidity-2 底「在你用行动反面打出1张牌后：从你的牌库顶端反面打出1张牌到同一链路」（E10）：
   // 仅玩家【行动】打出（actions/base playCard 标记 fromAction）且反面 → 触发（打出者自己侧）
   if (ps.fromAction && !card.faceUp) {
     s.pendingActionPlayLine = card.line!;
-    fireReactive(s, 'after-action-face-down-play', card.owner);
+    fireReactive(s, 'after-action-face-down-play', actor);
   }
 }
 
