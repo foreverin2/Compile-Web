@@ -159,6 +159,8 @@ export function collectTriggers(s: GameState, kind: TriggerKind): TriggerEntry[]
         if (!def) continue;
         // 3代 inertia-0/1 区域禁用（C7）：顶命令（top 标志）被禁顶链跳过 / 底命令被禁底链跳过
         if (cardCommandDisabled(s, card, def.top ? 'top' : 'bottom')) continue;
+        // 修改提示词 23/16/27：收集前条件预检——条件不满足（无对象）→ 自动跳过不弹按钮
+        if (def.cond && !def.cond(s, card)) continue;
         const isTop = i === stack.length - 1;
         if (!isTop && !def.top) continue; // 被盖卡仅顶命令（top 标志）触发
         out.push({ cardUid: card.uid, defId: card.defId, kind, optional: def.optional, top: def.top });

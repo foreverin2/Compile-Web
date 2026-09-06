@@ -1,6 +1,6 @@
 import type { EffectCtx, EffectStep, GameState, Line, PlayerId, StepResult } from '../../models/types';
 import { registerCardEffects } from '../registry';
-import { findCard, nextEffectId } from '../context';
+import { findCard, nextEffectId, isUncovered } from '../context';
 import { shuffleDeck } from '../../engine/deck';
 import { executeCompileBody } from '../../rules/compile-body';
 import { controlRearrangeFlow } from '../control-rearrange-flow';
@@ -127,12 +127,22 @@ registerCardEffects('unity-0', {
 });
 registerCardEffects('unity-1', {
   middle: unity1Middle,
-  triggers: { start: { fn: unity1Start, optional: true, top: true } },
+  triggers: {
+    start: {
+      fn: unity1Start,
+      optional: true,
+      top: true,
+      // 修改提示词 27：未被覆盖（无可偏转对象）→ 收集前自动跳过、不弹结算按钮
+      cond: (s, card) => !isUncovered(s, card),
+    },
+  },
 });
 // unity-1 底放行：引擎 restrictions.unity1UncoveredLine
 registerCardEffects('unity-2', { middle: unity2Middle });
 registerCardEffects('unity-3', { middle: unity3Middle });
 registerCardEffects('unity-4', { triggers: { start: { fn: unity4Start, optional: false, top: true } } });
 registerCardEffects('unity-5', { middle: unity5Middle });
+
+
 
 

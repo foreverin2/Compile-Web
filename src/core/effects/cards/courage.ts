@@ -109,6 +109,16 @@ registerCardEffects('courage-2', {
 });
 registerCardEffects('courage-3', { triggers: { end: { fn: courage3End, optional: true } } });
 registerCardEffects('courage-5', { middle: courage5Middle });
-registerCardEffects('courage-6', { triggers: { end: { fn: courage6End, optional: false } } }); // 2026-09 卡文移至底部槽（回合结束，仅未覆盖顶卡）
+registerCardEffects('courage-6', {
+  triggers: {
+    end: {
+      fn: courage6End,
+      optional: false,
+      // 修改提示词 23：对手总阈值未更大（无对象）→ 收集前自动跳过、不弹结算按钮
+      cond: (s, card) => card.line !== null && oppAhead(s, card.owner, card.line),
+    },
+  },
+});
+
 
 

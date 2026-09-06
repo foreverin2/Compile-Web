@@ -294,6 +294,10 @@ export interface TriggerDef {
   /** 顶命令触发（top 文本，如 death-1 顶「开始：…」、life-0 顶「结束：…」）：被覆盖仍生效
    *  ——end/start 收集含被盖卡（规则 90 + FAQ 98/99），且触发效果 sourceValid 跳过未覆盖检查 */
   top?: boolean;
+  /** 收集前条件预检（修改提示词 23/16/27：无对象触发自动跳过、不弹结算按钮）：
+   *  end/start 收集时 cond(s, card) 为 false → 该触发不收集（玩家无需点按钮；
+   *  效果 gen 内的条件判断保留作双保险）。 */
+  cond?: (s: GameState, card: Card) => boolean;
 }
 
 export interface CardEffects {

@@ -117,7 +117,18 @@ function* corruption6End(ctx: EffectCtx): Generator<EffectStep, void, StepResult
   yield { op: 'discard', uid: ans.selected[0] };
 }
 
-registerCardEffects('corruption-0', { triggers: { start: { fn: corruption0Start, optional: false, top: true } } });
+registerCardEffects('corruption-0', {
+  triggers: {
+    start: {
+      fn: corruption0Start,
+      optional: false,
+      top: true,
+      // 修改提示词 16：此链路无其它正面卡牌可翻（无对象）→ 收集前自动跳过
+      cond: (s, card) =>
+        card.line !== null && s.players[card.owner].stacks[card.line].some((c) => c.faceUp && c.uid !== card.uid),
+    },
+  },
+});
 registerCardEffects('corruption-1', {
   middle: corruption1Middle,
   triggers: { 'after-return': { fn: corruption1AfterReturn, optional: false } },
@@ -129,4 +140,5 @@ registerCardEffects('corruption-2', {
 registerCardEffects('corruption-3', { middle: corruption3Middle });
 registerCardEffects('corruption-5', { middle: corruption5Middle });
 registerCardEffects('corruption-6', { triggers: { end: { fn: corruption6End, optional: false, top: true } } });
+
 
