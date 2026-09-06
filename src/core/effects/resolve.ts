@@ -909,6 +909,12 @@ function completeShift(s: GameState): void {
   stack.push(card);
   s.pendingShift.shift();
   emitCardEvent(s, 'card:landed', card);
+  // 多元0/联合1 中段判定时机（用户澄清 2026-09）：中部指令在【打出 / 反面翻正 / 被偏转移动后
+  // 暴露为未被覆盖的正面顶卡】时判定（普通 middle 已覆盖打出与翻正；此处补偏转落地）。
+  // 偏转落地后卡成为目标堆顶且 faceUp → 其中段重新评估（多元0 纯翻协议；联合1 完整编译）。
+  if (card.faceUp && isUncovered(s, card) && (card.defId === 'diversity-0' || card.defId === 'unity-1')) {
+    pushMiddle(s, card.owner, card, '偏转暴露');
+  }
 }
 
 /** 顶卡移除后：新顶卡正面朝上则触发其中指令（被揭开连锁；编译不经过此函数，符合"编译不触发文本"）。
