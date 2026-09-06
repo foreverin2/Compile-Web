@@ -103,8 +103,29 @@ registerCardEffects('overwhelm-2', {
   middle: overwhelm2Middle,
   triggers: { end: { fn: overwhelm2End, optional: false, top: true } },
 });
-registerCardEffects('overwhelm-3', { triggers: { end: { fn: overwhelm3End, optional: false } } });
+registerCardEffects('overwhelm-3', {
+  triggers: {
+    end: {
+      fn: overwhelm3End,
+      optional: false,
+      // 自动判定：手牌不足 5 张 → 无对象自动跳过不出按钮
+      cond: (s, card) => s.players[card.owner].hand.length >= 5,
+    },
+  },
+});
 registerCardEffects('overwhelm-4', { middle: overwhelm4Middle });
 registerCardEffects('overwhelm-5', { middle: overwhelm5Middle });
-registerCardEffects('overwhelm-6', { triggers: { start: { fn: overwhelm6Start, optional: false, top: true } } });
+registerCardEffects('overwhelm-6', {
+  triggers: {
+    start: {
+      fn: overwhelm6Start,
+      optional: false,
+      top: true,
+      // 自动判定：此链路中对手总阈值未更大 → 无对象自动跳过不出按钮
+      cond: (s, card) =>
+        card.line !== null &&
+        getLineValue(s, opp(card.owner), card.line) > getLineValue(s, card.owner, card.line),
+    },
+  },
+});
 

@@ -131,7 +131,14 @@ registerCardEffects('wrath-0', {
 });
 registerCardEffects('wrath-1', {
   middle: wrath1Middle,
-  triggers: { end: { fn: wrath1End, optional: false } },
+  triggers: {
+    end: {
+      fn: wrath1End,
+      optional: false,
+      // 自动判定（全 start/end 通用语义）：未持有控制权 → 无可失去 → 自动跳过不出按钮
+      cond: (s, card) => s.control === card.owner,
+    },
+  },
 });
 registerCardEffects('wrath-2', { middle: wrath2Middle });
 registerCardEffects('wrath-3', { middle: wrath3Middle });

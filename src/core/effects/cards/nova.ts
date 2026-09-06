@@ -198,8 +198,31 @@ function* nova5Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
 registerCardEffects('nova-0', {
   middle: nova0Middle,
   triggers: {
-    start: { fn: nova0Start, optional: false, top: true },
-    end: { fn: nova0End, optional: false },
+    start: {
+      fn: nova0Start,
+      optional: false,
+      top: true,
+      // 自动判定：己方无任一链路恰 5 张 → 无对象自动跳过不出按钮
+      cond: (s, card) => {
+        const stacks = s.players[card.owner].stacks;
+        return ([0, 1, 2] as Line[]).some((l) => stacks[l].length === 5);
+      },
+    },
+    end: {
+      fn: nova0End,
+      optional: false,
+      // 自动判定：牌库不可抽或己方无未被覆盖的正面新星牌 → 无对象自动跳过
+      cond: (s, card) => {
+        const p = s.players[card.owner];
+        if (p.deck.length === 0) return false;
+        const stacks = p.stacks;
+        return ([0, 1, 2] as Line[]).some((l) => {
+          const st = stacks[l];
+          const top = st[st.length - 1];
+          return !!top && top.defId.startsWith('nova-') && top.faceUp;
+        });
+      },
+    },
   },
 });
 registerCardEffects('nova-1', { middle: nova1Middle });

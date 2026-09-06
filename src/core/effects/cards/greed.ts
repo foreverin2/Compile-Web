@@ -122,7 +122,22 @@ registerCardEffects('greed-0', {
   middle: greed0Middle,
   triggers: { 'after-own-delete': { fn: greed0AfterOwnDelete, optional: false } },
 });
-registerCardEffects('greed-1', { triggers: { end: { fn: greed1End, optional: false } } });
+registerCardEffects('greed-1', {
+  triggers: {
+    end: {
+      fn: greed1End,
+      optional: false,
+      // 自动判定：无满足编译条件的链路（≥10 且高于对手）→ 无对象自动跳过不出按钮
+      cond: (s, card) => {
+        const me = card.owner;
+        const foe = opp(me);
+        return ([0, 1, 2] as Line[]).some(
+          (l) => getLineValue(s, me, l) >= 10 && getLineValue(s, me, l) > getLineValue(s, foe, l),
+        );
+      },
+    },
+  },
+});
 registerCardEffects('greed-2', {
   middle: greed2Middle,
   triggers: { start: { fn: greed2Start, optional: false } },

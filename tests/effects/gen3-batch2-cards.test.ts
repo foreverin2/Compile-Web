@@ -144,17 +144,15 @@ describe('wrath（愤怒）', () => {
     expect(s.control).toBe(-1); // 必失
     expect(s.players[1].stacks[1].some((c) => c.uid === victim.uid)).toBe(false);
 
-    // 未持有 → 整句不执行（不删）
+    // 未持有 → 自动判定无对象：end 收集不含 wrath-1（不弹结算按钮；效果不执行）
     const s2 = setup();
     s2.turnPlayer = 0;
     s2.step = 'end';
     placeSrc(s2, 'wrath-1', 0, 0);
     const keep = placeSrc(s2, 'light-3', 1, 1);
-    const t2 = collectTriggers(s2, 'end').find((x) => x.defId === 'wrath-1')!;
-    resolveTrigger(s2, t2);
-    runStack(s2);
-    expect(s2.pendingEffects).toHaveLength(0);
+    expect(collectTriggers(s2, 'end').some((x) => x.defId === 'wrath-1')).toBe(false);
     expect(s2.players[1].stacks[1].some((c) => c.uid === keep.uid)).toBe(true);
+    expect(s2.control).toBe(-1);
   });
 
   it('wrath-2 middle: flips all face-up cards (incl. covered) in the line with most cards', () => {
