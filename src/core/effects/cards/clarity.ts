@@ -48,13 +48,15 @@ function* clarity1BeforeCovered(ctx: EffectCtx): Generator<EffectStep, void, Ste
   yield { op: 'draw', count: 3 };
 }
 
-/** 牌库中印刷值 === n 的卡（揭示语境下向玩家展示；deck 卡 = 秘密但揭示后由 UI 呈现） */
+/** 牌库中印刷值 === n 的卡（选择抽取；修改提示词 3：向玩家展示牌面以供选择——候选 faceUp=true
+ *  由 UI 正面渲染，不再依赖 deckReveals 浮层；其余卡随后放回牌库重洗） */
 function deckValueCandidates(s: GameState, player: PlayerId, n: number): ChoiceCard[] {
   const out: ChoiceCard[] = [];
   for (const c of s.players[player].deck) {
     if (getCardDef(c.defId).value !== n) continue;
     out.push({
-      uid: c.uid, defId: c.defId, faceUp: c.faceUp, owner: c.owner, zone: c.zone, line: c.line, pos: c.pos,
+      uid: c.uid, defId: c.defId, faceUp: true, // 揭示展示：候选以正面呈现
+      owner: c.owner, zone: c.zone, line: c.line, pos: c.pos,
       label: String(n),
     });
   }
@@ -76,20 +78,17 @@ function faceUpLines(ctx: EffectCtx, uid: string): (0 | 1 | 2)[] {
   return out;
 }
 
-/** clarity-2/3 共用：整副揭示 → 自选 1 张印刷值 n 抽入 → 切洗；clarity-2 再打出刚抽那张（裁决 [Q17]） */
+/** clarity-2/3 共用：牌库中找印刷值 n 的卡 → 玩家正面选 1 张抽入 → 其余放回重洗；
+ *  clarity-2 再打出刚抽那张（裁决 [Q17]；修改提示词 3：不依赖 deckReveals 浮层，候选正面展示可选）。 */
 function* clarityRevealDrawShuffle(ctx: EffectCtx, n: number, playIt: boolean): Generator<EffectStep, void, StepResult> {
   if (ctx.s.players[ctx.player].deck.length === 0) return; // 空牌库无意义（FAQ 107 精神）
-  ctx.s.deckReveals.push({ id: nextEffectId(), player: ctx.player, whole: true, expiresAtTurn: ctx.s.turnCount + 2 });
   const cand = deckValueCandidates(ctx.s, ctx.player, n);
-  const cAns = yield { kind: 'select', title: `clarity：抽取1张阈值为${n}的卡牌`, min: 1, max: 1, optional: false, candidates: cand };
-  if (cAns.selected.length === 0) {
-    // 无值 n 卡：抽取句 fizzle（FAQ 39 每句独立），切洗句仍执行
-    shuffleDeck(ctx.s, ctx.player);
-    return;
-  }
+  if (cand.length === 0) return; // 牌库无值 n 卡 → 整句无对象 fizzle（不切洗）
+  const cAns = yield { kind: 'select', title: `透彻：从牌库中选择1张阈值为${n}的卡牌抽取`, min: 1, max: 1, optional: false, candidates: cand };
+  if (cAns.selected.length === 0) return;
   const uid = cAns.selected[0];
   yield { op: 'drawFromDeck', uid };
-  shuffleDeck(ctx.s, ctx.player);
+  shuffleDeck(ctx.s, ctx.player); // 其余牌放回牌库并重洗
   if (!playIt) return;
   const faceAns = yield {
     kind: 'select-action', title: 'clarity：打出这张牌（朝向）', min: 1, max: 1, optional: true,

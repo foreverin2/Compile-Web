@@ -101,16 +101,14 @@ function* unity3Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> 
   yield { op: 'flip', uid: tAns.selected[0] };
 }
 
-/** unity-4 顶（start，top:true）：回合开始：若你没有手牌，揭示你的牌库，抽取其中所有的统一卡牌，然后
- *  切洗（txt 修改记录 2026-09-05【5】：回合结束→回合开始；英文 Start: If you hand is empty, reveal
- *  your deck, draw all Unity cards from it, and shuffle your deck.） */
+/** unity-4 顶（start，top:true）：回合开始：若你没有手牌，抽取你的牌库中所有的联合卡牌，然后切洗
+ *  （修改提示词 34：无需揭示牌库浮层——直接抽所有联合卡到手并洗牌；txt 修改记录 2026-09-05【5】）。 */
 function* unity4Start(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   if (ctx.s.players[ctx.player].hand.length > 0) return;
   const deck = ctx.s.players[ctx.player].deck;
   if (deck.length === 0) return;
-  ctx.s.deckReveals.push({ id: nextEffectId(), player: ctx.player, whole: true, expiresAtTurn: ctx.s.turnCount + 2 });
   const unityUids = deck.filter((c) => c.defId.startsWith('unity-')).map((c) => c.uid);
-  for (const uid of unityUids) yield { op: 'drawFromDeck', uid }; // 全部统一卡抽入手
+  for (const uid of unityUids) yield { op: 'drawFromDeck', uid }; // 全部联合卡抽入手（牌面入行手即公开可见）
   shuffleDeck(ctx.s, ctx.player);
 }
 
