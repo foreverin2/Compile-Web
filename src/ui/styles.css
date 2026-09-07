@@ -3731,6 +3731,10 @@ body.dragging { cursor: grabbing; user-select: none; }
 .protocol.compiled-fx-time { border-color: #b07f3e; box-shadow: 0 0 16px rgba(176, 127, 62, 0.6), inset 0 0 12px rgba(176, 127, 62, 0.28); }
 /* 2代 assimilation 同化已编译：青碧发光框（呼吸） */
 .protocol.compiled-fx-assimilation { border-color: #2ec9a8; box-shadow: 0 0 16px rgba(46, 201, 168, 0.6), inset 0 0 12px rgba(46, 201, 168, 0.28); }
+/* 2代 unity 联合已编译：亮蓝/银白交替发光框 */
+.protocol.compiled-fx-unity { border-color: #3d8bff; box-shadow: 0 0 16px rgba(61, 139, 255, 0.6), 0 0 16px rgba(230, 235, 250, 0.45), inset 0 0 12px rgba(61, 139, 255, 0.28); }
+/* 2代 diversity 多元已编译：彩色交替发光框（5 色循环） */
+.protocol.compiled-fx-diversity { border-color: #c07bff; animation: compiled-diversity-static 6s linear infinite; }
 
 /* 呼吸边框（隐藏通用岩浆段/岩石骨架；border+box-shadow 交替闪烁两色） */
 .compiled-ring-death,
@@ -3755,7 +3759,9 @@ body.dragging { cursor: grabbing; user-select: none; }
 .compiled-ring-war,
 .compiled-ring-courage,
 .compiled-ring-time,
-.compiled-ring-assimilation {
+.compiled-ring-assimilation,
+.compiled-ring-unity,
+.compiled-ring-diversity {
   border: 2px solid;
   border-radius: 14px;
 }
@@ -3781,7 +3787,9 @@ body.dragging { cursor: grabbing; user-select: none; }
 .compiled-ring-war .lava-seg, .compiled-ring-war .lava-rock,
 .compiled-ring-courage .lava-seg, .compiled-ring-courage .lava-rock,
 .compiled-ring-time .lava-seg, .compiled-ring-time .lava-rock,
-.compiled-ring-assimilation .lava-seg, .compiled-ring-assimilation .lava-rock {
+.compiled-ring-assimilation .lava-seg, .compiled-ring-assimilation .lava-rock,
+.compiled-ring-unity .lava-seg, .compiled-ring-unity .lava-rock,
+.compiled-ring-diversity .lava-seg, .compiled-ring-diversity .lava-rock {
   display: none;
 }
 
@@ -3902,6 +3910,29 @@ body.dragging { cursor: grabbing; user-select: none; }
   50% {
     border-color: #d96b00;
     box-shadow: 0 0 18px 5px rgba(217, 107, 0, 0.85), 0 0 42px 14px rgba(217, 107, 0, 0.42), inset 0 0 14px rgba(217, 107, 0, 0.34);
+  }
+}
+/* 2代 多元 diversity（彩色 5 色交替）：红/黄/青/蓝/紫 逐色循环 */
+@keyframes compiled-diversity-breathe {
+  0% { border-color: #ff5a6e; box-shadow: 0 0 18px 5px rgba(255, 90, 110, 0.85), 0 0 42px 14px rgba(255, 90, 110, 0.4), inset 0 0 14px rgba(255, 90, 110, 0.34); }
+  20% { border-color: #ffd24d; box-shadow: 0 0 18px 5px rgba(255, 210, 77, 0.85), 0 0 42px 14px rgba(255, 210, 77, 0.4), inset 0 0 14px rgba(255, 210, 77, 0.34); }
+  40% { border-color: #4ee0c0; box-shadow: 0 0 18px 5px rgba(78, 224, 192, 0.85), 0 0 42px 14px rgba(78, 224, 192, 0.4), inset 0 0 14px rgba(78, 224, 192, 0.34); }
+  60% { border-color: #5aa0ff; box-shadow: 0 0 18px 5px rgba(90, 160, 255, 0.85), 0 0 42px 14px rgba(90, 160, 255, 0.4), inset 0 0 14px rgba(90, 160, 255, 0.34); }
+  80% { border-color: #c07bff; box-shadow: 0 0 18px 5px rgba(192, 123, 255, 0.85), 0 0 42px 14px rgba(192, 123, 255, 0.4), inset 0 0 14px rgba(192, 123, 255, 0.34); }
+  100% { border-color: #ff5a6e; box-shadow: 0 0 18px 5px rgba(255, 90, 110, 0.85), 0 0 42px 14px rgba(255, 90, 110, 0.4), inset 0 0 14px rgba(255, 90, 110, 0.34); }
+}
+@keyframes compiled-diversity-static {
+  0%, 19% { border-color: #ff5a6e; } 20%, 39% { border-color: #ffd24d; } 40%, 59% { border-color: #4ee0c0; } 60%, 79% { border-color: #5aa0ff; } 80%, 100% { border-color: #c07bff; }
+}
+/* 2代 联合 unity（亮蓝 ↔ 银白交替）：亮蓝 #3d8bff ↔ 银白 #e8ecf8 */
+@keyframes compiled-unity-breathe {
+  0%, 100% {
+    border-color: #e8ecf8;
+    box-shadow: 0 0 15px 3px rgba(232, 236, 248, 0.65), 0 0 34px 10px rgba(232, 236, 248, 0.3), inset 0 0 12px rgba(232, 236, 248, 0.24);
+  }
+  50% {
+    border-color: #3d8bff;
+    box-shadow: 0 0 19px 5px rgba(61, 139, 255, 0.85), 0 0 44px 14px rgba(61, 139, 255, 0.42), inset 0 0 14px rgba(61, 139, 255, 0.34);
   }
 }
 /* 2代 同化 assimilation（青碧呼吸）：亮青 #7ef0d8 ↔ 深青 #147a62 */
@@ -4026,6 +4057,8 @@ body.dragging { cursor: grabbing; user-select: none; }
   }
 }
 /* 2代 明镜 mirror（银白）：亮银 #f2f6ff ↔ 银灰 #b9c2d4 呼吸（无金属光泽——柔和漫射） */
+.compiled-ring-diversity { animation: compiled-diversity-breathe 3.6s linear infinite; }
+.compiled-ring-unity { animation: compiled-unity-breathe 2.2s ease-in-out infinite; }
 .compiled-ring-assimilation { animation: compiled-assimilation-breathe 2.6s ease-in-out infinite; }
 .compiled-ring-time { animation: compiled-time-breathe 3s ease-in-out infinite; }
 .compiled-ring-courage { animation: compiled-courage-breathe 2.4s ease-in-out infinite; }
@@ -4085,6 +4118,8 @@ body.dragging { cursor: grabbing; user-select: none; }
 .compiled-courage-corner { --cc: #e8b13a; --ccg: rgba(255, 220, 120, 0.85); }    /* 2代 勇气鎏金 */
 .compiled-time-corner { --cc: #b07f3e; --ccg: rgba(220, 175, 110, 0.85); }        /* 2代 时间古铜 */
 .compiled-assimilation-corner { --cc: #2ec9a8; --ccg: rgba(110, 235, 205, 0.85); } /* 2代 同化青碧 */
+.compiled-unity-corner { --cc: #3d8bff; --ccg: rgba(150, 200, 255, 0.85); }        /* 2代 联合亮蓝 */
+.compiled-diversity-corner { --cc: #c07bff; --ccg: rgba(220, 160, 255, 0.85); }    /* 2代 多元紫 */
 
 /* ---------- 1. 死已编译：缕缕黑烟 + 骷髅 ---------- */
 .compiled-death-smoke {
@@ -7864,4 +7899,211 @@ body.dragging { cursor: grabbing; user-select: none; }
   0% { transform: scale(0.3); opacity: 0.9; }
   35% { transform: scale(1); opacity: 1; box-shadow: 0 0 26px rgba(80, 220, 190, 0.9); }
   100% { transform: scale(1.5); opacity: 0; }
+}
+
+/* =====================================================================
+ * 2代 unity 联合 FX（fx-gen2）：亮蓝连携光带
+ * ===================================================================== */
+.fx-unity-link {
+  position: fixed;
+  height: 4px;
+  margin-top: -2px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, transparent, rgba(90, 160, 255, 0.95) 30%, rgba(140, 200, 255, 1) 55%, rgba(90, 160, 255, 0.95) 80%, transparent);
+  box-shadow: 0 0 10px rgba(90, 160, 255, 0.75);
+  transform-origin: left center;
+  opacity: 0;
+  pointer-events: none;
+}
+.fx-unity-link.in {
+  opacity: 1;
+  transition: opacity 0.2s ease-out;
+  animation: fx-unity-link-pulse 0.6s ease-in-out infinite;
+}
+.fx-unity-link.out {
+  opacity: 0;
+  transition: opacity 0.3s ease-in;
+}
+@keyframes fx-unity-link-pulse {
+  0%, 100% { opacity: 0.75; }
+  50% { opacity: 1; }
+}
+
+/* =====================================================================
+ * 2代 unity 联合已编译：众星拱月光带 + 光核冲击波（render.ts appendUnityCompiled 驱动）
+ * ===================================================================== */
+.compiled-unity-host {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 4;
+  opacity: 0;
+}
+.compiled-unity-host.in {
+  opacity: 1;
+  transition: opacity 0.35s ease-out;
+}
+.compiled-unity-host.out {
+  opacity: 0;
+  transition: opacity 0.8s ease-in;
+}
+.compiled-unity-band {
+  position: absolute;
+  height: 3px;
+  margin-top: -1.5px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, rgba(61, 139, 255, 0.95), rgba(140, 200, 255, 0.85));
+  box-shadow: 0 0 8px rgba(90, 160, 255, 0.7);
+  transform-origin: left center;
+  opacity: 0;
+  animation: compiled-unity-band-converge 1.4s ease-out forwards;
+}
+@keyframes compiled-unity-band-converge {
+  0% { transform: scaleX(0.05); opacity: 0; }
+  25% { opacity: 0.9; }
+  100% { transform: scaleX(0); opacity: 0; }
+}
+.compiled-unity-core {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 44px;
+  height: 44px;
+  margin-left: -22px;
+  margin-top: -22px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #eaf4ff 0%, #5aa0ff 45%, rgba(40, 100, 220, 0.5) 100%);
+  box-shadow: 0 0 22px rgba(90, 160, 255, 0.9);
+  animation: compiled-unity-core-pulse 2.2s ease-out forwards;
+}
+@keyframes compiled-unity-core-pulse {
+  0% { transform: scale(0.25); opacity: 0.95; }
+  40% { transform: scale(1.1); opacity: 1; }
+  100% { transform: scale(0.4); opacity: 0; }
+}
+.compiled-unity-wave {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 60px;
+  height: 60px;
+  margin-left: -30px;
+  margin-top: -30px;
+  border-radius: 50%;
+  border: 3px solid rgba(235, 240, 252, 0.9);
+  box-shadow: 0 0 14px rgba(230, 235, 250, 0.7);
+  opacity: 0;
+  animation: compiled-unity-wave-expand 2.2s ease-out forwards;
+}
+@keyframes compiled-unity-wave-expand {
+  0% { transform: scale(0.3); opacity: 0.9; }
+  70% { opacity: 0.5; }
+  100% { transform: scale(3.4); opacity: 0; }
+}
+
+/* =====================================================================
+ * 2代 diversity 多元 FX（fx-gen2）：彩色光环 / 彩光尘
+ * ===================================================================== */
+.fx-diversity-ring {
+  position: fixed;
+  border: 3px solid transparent;
+  border-radius: 10px;
+  pointer-events: none;
+  opacity: 0;
+  background:
+    linear-gradient(#141428, #141428) padding-box,
+    conic-gradient(from 0deg, #ff5a6e, #ffd24d, #4ee0c0, #5aa0ff, #c07bff, #ff5a6e) border-box;
+}
+.fx-diversity-ring.in {
+  opacity: 1;
+  animation: fx-diversity-ring-shrink 0.65s cubic-bezier(0.5, 0.1, 0.8, 0.4) forwards;
+}
+@keyframes fx-diversity-ring-shrink {
+  0% { transform: scale(1); opacity: 1; }
+  60% { opacity: 0.9; }
+  100% { transform: scale(0.35); opacity: 0.4; }
+}
+.fx-diversity-dust {
+  position: fixed;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  box-shadow: 0 0 7px currentColor;
+  pointer-events: none;
+  opacity: 0;
+  animation: fx-diversity-dust-fly 0.8s ease-out forwards;
+}
+@keyframes fx-diversity-dust-fly {
+  0% { transform: translate(0, 0) scale(1); opacity: 0; }
+  20% { opacity: 1; }
+  100% { transform: translate(var(--fx-dvx, 30px), var(--fx-dvy, -20px)) scale(0.2); opacity: 0; }
+}
+
+/* =====================================================================
+ * 2代 diversity 多元已编译：中心棱镜旋转折射（render.ts appendDiversityCompiled 驱动）
+ * ===================================================================== */
+.compiled-diversity-host {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 4;
+  opacity: 0;
+}
+.compiled-diversity-host.in {
+  opacity: 1;
+  transition: opacity 0.4s ease-out;
+}
+.compiled-diversity-host.out {
+  opacity: 0;
+  transition: opacity 0.8s ease-in;
+}
+.compiled-diversity-prism {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 64px;
+  height: 64px;
+  margin-left: -32px;
+  margin-top: -32px;
+  animation: compiled-diversity-prism-spin 3s linear infinite;
+}
+@keyframes compiled-diversity-prism-spin {
+  to { transform: rotate(360deg); }
+}
+.compiled-diversity-prism-face {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 34px;
+  height: 34px;
+  margin-left: -17px;
+  margin-top: -17px;
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+  opacity: 0.7;
+  mix-blend-mode: screen;
+}
+.compiled-diversity-gleam {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  margin-top: -5px;
+  border-radius: 50%;
+  opacity: 0;
+  animation: compiled-diversity-gleam-fly 2.4s ease-out forwards;
+}
+.compiled-diversity-gleam:nth-child(6) { animation-delay: 0.1s; }
+.compiled-diversity-gleam:nth-child(7) { animation-delay: 0.3s; }
+.compiled-diversity-gleam:nth-child(8) { animation-delay: 0.55s; }
+.compiled-diversity-gleam:nth-child(9) { animation-delay: 0.8s; }
+.compiled-diversity-gleam:nth-child(10) { animation-delay: 1.05s; }
+.compiled-diversity-gleam:nth-child(11) { animation-delay: 1.3s; }
+@keyframes compiled-diversity-gleam-fly {
+  0% { transform: translate(0, 0) scale(0.4); opacity: 0; }
+  20% { opacity: 0.85; }
+  100% { transform: translate(calc(30px - 60px * var(--fx-glx, 0)), calc(-30px + 60px * var(--fx-gly, 0))) scale(0.2); opacity: 0; }
 }

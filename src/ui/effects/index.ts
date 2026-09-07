@@ -3,7 +3,7 @@ import { mountShatter } from '../fx/delete-shatter';
 import { mountCut } from '../fx/discard-cut';
 import { buildTornadoFx } from '../fx-tornado';
 import { cardImgSrc, protocolImgSrc } from '../../data/demo';
-import { playPeaceDiscardExtra, PEACE_PRE_MS, playChaosDiscardExtra, CHAOS_DISCARD_PRE_MS, playIceShiftBridge, playSmokePlayFx, playFearShiftExtra, playCorruptionDiscardExtra, playCorruptionDeleteExtra, playCorruptionFlipExtra, CORRUPT_DISCARD_PRE_MS, playWarDiscardExtra, playWarFlipExtra, playCourageDiscardExtra, playCourageDeleteExtra, playCourageShiftExtra, playTimeDiscardExtra, playAssimDiscardExtra, playAssimDeckRipple, ASSIM_DISCARD_PRE_MS } from '../fx-gen2';
+import { playPeaceDiscardExtra, PEACE_PRE_MS, playChaosDiscardExtra, CHAOS_DISCARD_PRE_MS, playIceShiftBridge, playSmokePlayFx, playFearShiftExtra, playCorruptionDiscardExtra, playCorruptionDeleteExtra, playCorruptionFlipExtra, CORRUPT_DISCARD_PRE_MS, playWarDiscardExtra, playWarFlipExtra, playCourageDiscardExtra, playCourageDeleteExtra, playCourageShiftExtra, playTimeDiscardExtra, playAssimDiscardExtra, playAssimDeckRipple, ASSIM_DISCARD_PRE_MS, playDiversityDiscardExtra, DIVERSITY_DISCARD_PRE_MS } from '../fx-gen2';
 
 const FX_REMOVE_MS = 1200;
 const BASE_Z = 300; // 基础行为特效层
@@ -1856,6 +1856,13 @@ export function initEffects(): () => void {
             // 2代 time 弃牌（时间弃牌效果）：古铜时间光膜包裹（时间冻结感）+ 基础切割照常
             playTimeDiscardExtra(node);
             playCut(node, payload);
+          } else if (payload.triggerProtocol === 'diversity') {
+            // 2代 diversity 弃牌（多元弃牌效果）：彩色光环套住收缩 → 化作彩色光尘消散（前置）
+            const rect = node.getBoundingClientRect();
+            const cw = node.classList.contains('rot-cw');
+            const ccw = node.classList.contains('rot-ccw');
+            playDiversityDiscardExtra(node);
+            window.setTimeout(() => playCutAt(rect, cw, ccw, payload), DIVERSITY_DISCARD_PRE_MS);
           } else playCut(node, payload);
         }
         break;

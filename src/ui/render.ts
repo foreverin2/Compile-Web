@@ -3574,6 +3574,117 @@ function appendAssimilationCompiled(layer: HTMLElement, defId: string): void {
   scheduleCompiledLoop(layer, defId, rnd(6000, 11000), orbBurst);
 }
 
+/* ---------- 24. 联合 unity（2代，fx-gen2 已编译）：亮蓝/银白交替呼吸框 + 四角护边 ----------
+ * 周期众星拱月：边框四周数道亮蓝光带从四面八方汇聚向协议中心（2s 渐散）；中心光核（偶尔）：
+ * 中心浮现亮蓝光核 → 向四周扩散银白冲击波（2s 消散）。间隔 ≥10s（scheduleCompiledLoop 拆两
+ * 循环）。CSS 见 styles.css .compiled-unity-*。 */
+function appendUnityCompiled(layer: HTMLElement, defId: string): void {
+  appendCompiledCorners(layer, 'compiled-unity-corner'); // §8：四角亮蓝护边
+  const host = el('div', 'compiled-unity-host');
+  layer.appendChild(host);
+  // 众星拱月 burst：8 条光带自四边汇聚中心
+  const convergeBurst = (done: () => void): void => {
+    if (!layer.isConnected) { done(); return; }
+    host.textContent = '';
+    const g = layerGeom(layer);
+    if (!g) { fxTimer(defId, () => convergeBurst(done), 700); return; }
+    const cx = g.cx;
+    const cy = g.cy;
+    const N = 8;
+    for (let i = 0; i < N; i++) {
+      const ang = (i / N) * Math.PI * 2;
+      // 起点在层外（沿方向距中心 diag/2 + 余量）
+      const R = g.diag * 0.62;
+      const sx = cx + Math.cos(ang) * R;
+      const sy = cy + Math.sin(ang) * R;
+      const band = el('div', 'compiled-unity-band');
+      const dist = R;
+      band.style.left = `${sx.toFixed(1)}px`;
+      band.style.top = `${sy.toFixed(1)}px`;
+      band.style.width = `${dist.toFixed(1)}px`;
+      band.style.transform = `rotate(${(Math.atan2(cy - sy, cx - sx) * 180) / Math.PI}deg)`;
+      band.style.animationDelay = `${(i * 0.04).toFixed(2)}s`;
+      host.appendChild(band);
+    }
+    reflowFx(host);
+    host.classList.add('in');
+    fxTimer(defId, () => {
+      if (!layer.isConnected) { done(); return; }
+      host.classList.add('out');
+      fxTimer(defId, () => {
+        host.classList.remove('in', 'out');
+        host.textContent = '';
+        done();
+      }, 800);
+    }, 2200);
+  };
+  // 中心光核 + 银白冲击波
+  const coreBurst = (done: () => void): void => {
+    if (!layer.isConnected) { done(); return; }
+    host.textContent = '';
+    const core = el('div', 'compiled-unity-core');
+    const wave = el('div', 'compiled-unity-wave');
+    host.appendChild(core);
+    host.appendChild(wave);
+    reflowFx(host);
+    host.classList.add('in');
+    fxTimer(defId, () => {
+      if (!layer.isConnected) { done(); return; }
+      host.classList.add('out');
+      fxTimer(defId, () => {
+        host.classList.remove('in', 'out');
+        host.textContent = '';
+        done();
+      }, 800);
+    }, 2200);
+  };
+  scheduleCompiledLoop(layer, defId, rnd(3000, 6500), convergeBurst);
+  scheduleCompiledLoop(layer, defId, rnd(6000, 11000), coreBurst);
+}
+
+/* ---------- 25. 多元 diversity（2代，fx-gen2 已编译）：彩色交替呼吸框 + 四角护边 ----------
+ * 边框交替显示 5 色（CSS conic 边框光交替；取自二代协议主题色集合的固定 5 色——
+ * 提示词「取自场上其他已编译协议」需状态联动，先以固定 5 色循环近似，观感一致）；
+ * 周期中心棱镜：彩色光棱缓缓旋转并向四周折射彩色光斑 2s 后消散。间隔 ≥10s。
+ * CSS 见 styles.css .compiled-diversity-*。 */
+function appendDiversityCompiled(layer: HTMLElement, defId: string): void {
+  appendCompiledCorners(layer, 'compiled-diversity-corner'); // §8：四角多彩护边
+  const host = el('div', 'compiled-diversity-host');
+  layer.appendChild(host);
+  const prismBurst = (done: () => void): void => {
+    if (!layer.isConnected) { done(); return; }
+    host.textContent = '';
+    const prism = el('div', 'compiled-diversity-prism');
+    // 5 面三角（五色棱镜）
+    const COLORS = ['#ff5a6e', '#ffd24d', '#4ee0c0', '#5aa0ff', '#c07bff'];
+    for (let i = 0; i < 5; i++) {
+      const f = el('i', 'compiled-diversity-prism-face');
+      f.style.background = COLORS[i];
+      f.style.transform = `rotate(${i * 72}deg)`;
+      prism.appendChild(f);
+    }
+    host.appendChild(prism);
+    // 折射光斑
+    for (let i = 0; i < 6; i++) {
+      const s = el('i', 'compiled-diversity-gleam');
+      s.style.background = COLORS[i % 5];
+      host.appendChild(s);
+    }
+    reflowFx(host);
+    host.classList.add('in');
+    fxTimer(defId, () => {
+      if (!layer.isConnected) { done(); return; }
+      host.classList.add('out');
+      fxTimer(defId, () => {
+        host.classList.remove('in', 'out');
+        host.textContent = '';
+        done();
+      }, 800);
+    }, 2400);
+  };
+  scheduleCompiledLoop(layer, defId, rnd(3000, 6500), prismBurst);
+}
+
 /** 新 10 协议已编译特效分发（buildCompiledFx 内调用；fire/light/darkness/water/life
  *  走既有分支，不在此列）。每个 builder 只建持久子结构 + 起调度，动画全部在层内。 */
 function appendNewCompiledFx(layer: HTMLElement, defId: string): void {
@@ -3601,6 +3712,8 @@ function appendNewCompiledFx(layer: HTMLElement, defId: string): void {
     case 'courage': appendCourageCompiled(layer, defId); break;
     case 'time': appendTimeCompiled(layer, defId); break;
     case 'assimilation': appendAssimilationCompiled(layer, defId); break;
+    case 'unity': appendUnityCompiled(layer, defId); break;
+    case 'diversity': appendDiversityCompiled(layer, defId); break;
     default: break;
   }
 }

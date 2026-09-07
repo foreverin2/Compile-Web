@@ -11,6 +11,7 @@
 
 import { gameBus } from '../core/events/bus';
 import type { GameEvent } from '../core/events/bus';
+import type { GameState } from '../core/models/types';
 import { cardImgSrc } from '../data/demo';
 
 type PlayerId = 0 | 1;
@@ -1468,9 +1469,111 @@ export function playAssimDeckRipple(player: PlayerId): void {
   }
 }
 
+/* ============================== unity 联合：亮蓝连携光带 ==============================
+ * unity 卡效果触发时（其 op 事件 triggerProtocol=unity）：该卡与场上其它联合卡之间短暂
+ * 连接亮蓝光带（表示联合关系）。源卡 = triggerUid；目标 = 场上其它 unity 卡（state 查询
+ * defId 前缀 → DOM 定位 rect → 源卡向每张目标拉光带，0.7s 渐显消散）。
+ * 层 body 级 fixed、JS 定时自清理（clearGen2Fx 兜底 .fx-unity-*）。 */
+const UNITY_LINK_MS = 750;
+
+/** 场上双方链路中某协议的卡 uid 列表 */
+function fieldUidsOfProtocol(s: GameState, protocol: string): string[] {
+  const out: string[] = [];
+  for (const p of s.players) {
+    for (const line of [0, 1, 2] as const) {
+      for (const c of p.stacks[line]) {
+        if (c.defId.startsWith(`${protocol}-`)) out.push(c.uid);
+      }
+    }
+  }
+  return out;
+}
+
+/** unity 连携光带：源卡向场上其它 unity 卡拉亮蓝光带 */
+function playUnityLink(s: GameState, sourceUid: string): void {
+  const src = document.querySelector<HTMLElement>(`[data-uid="${sourceUid}"]`);
+  if (!src) return;
+  const sr = src.getBoundingClientRect();
+  if (sr.width === 0) return;
+  const sx = sr.left + sr.width / 2;
+  const sy = sr.top + sr.height / 2;
+  const targets = fieldUidsOfProtocol(s, 'unity').filter((u) => u !== sourceUid);
+  for (const uid of targets) {
+    const node = document.querySelector<HTMLElement>(`[data-uid="${uid}"]`);
+    if (!node) continue;
+    const r = node.getBoundingClientRect();
+    if (r.width === 0) continue;
+    const tx = r.left + r.width / 2;
+    const ty = r.top + r.height / 2;
+    const dx = tx - sx;
+    const dy = ty - sy;
+    const dist = Math.hypot(dx, dy);
+    if (dist < 10) continue;
+    const link = document.createElement('div');
+    link.className = 'fx-unity-link';
+    link.style.left = `${sx}px`;
+    link.style.top = `${sy}px`;
+    link.style.width = `${dist}px`;
+    link.style.transform = `rotate(${(Math.atan2(dy, dx) * 180) / Math.PI}deg)`;
+    link.style.zIndex = String(GEN2_Z - 2);
+    document.body.appendChild(link);
+    window.setTimeout(() => link.classList.add('in'), 20);
+    window.setTimeout(() => link.classList.add('out'), 500);
+    window.setTimeout(() => link.remove(), UNITY_LINK_MS + 120);
+  }
+}
+
+/* ============================== diversity 多元：彩色光环 / 光尘 ==============================
+ * 弃牌（card:discarded triggerProtocol=diversity，多元5 弃牌）：被弃卡先被一圈彩色光环
+ * 套住 → 化作彩色光尘消散（前置；effects 延后基础切割）。层 body 级 fixed、JS 自清理。 */
+const DIVERSITY_DISCARD_PRE_MS_FX = 650;
+export const DIVERSITY_DISCARD_PRE_MS = DIVERSITY_DISCARD_PRE_MS_FX + 300;
+
+export function playDiversityDiscardExtra(node: HTMLElement): void {
+  const rect = node.getBoundingClientRect();
+  if (rect.width === 0) return;
+  const ring = document.createElement('div');
+  ring.className = 'fx-diversity-ring';
+  ring.style.left = `${rect.left - 10}px`;
+  ring.style.top = `${rect.top - 10}px`;
+  ring.style.width = `${rect.width + 20}px`;
+  ring.style.height = `${rect.height + 20}px`;
+  ring.style.zIndex = String(GEN2_Z);
+  document.body.appendChild(ring);
+  window.setTimeout(() => ring.classList.add('in'), 20);
+  // 彩光尘四散
+  window.setTimeout(() => {
+    const COLORS = ['#ff5a6e', '#ffd24d', '#4ee0c0', '#5aa0ff', '#c07bff'];
+    for (let i = 0; i < 12; i++) {
+      const s = document.createElement('i');
+      s.className = 'fx-diversity-dust';
+      s.style.left = `${(rect.left + Math.random() * rect.width).toFixed(1)}px`;
+      s.style.top = `${(rect.top + Math.random() * rect.height).toFixed(1)}px`;
+      s.style.background = COLORS[Math.floor(Math.random() * COLORS.length)];
+      s.style.setProperty('--fx-dvx', `${(Math.random() * 80 - 40).toFixed(1)}px`);
+      s.style.setProperty('--fx-dvy', `${(Math.random() * 60 - 30).toFixed(1)}px`);
+      s.style.zIndex = String(GEN2_Z);
+      document.body.appendChild(s);
+      window.setTimeout(() => s.remove(), 900);
+    }
+  }, 420);
+  window.setTimeout(() => ring.remove(), DIVERSITY_DISCARD_PRE_MS + 400);
+}
+
 /** 订阅 luck / mirror / peace / chaos / clarity / corruption 引擎事件 */
 export function initGen2Fx(): () => void {
   return gameBus.subscribe((e: GameEvent) => {
+    // unity 连携：unity 效果触发（action 类事件 + protocol=unity）→ 源卡向场上其它联合卡连亮蓝光带
+    if (
+      (e.type === 'card:flipped' || e.type === 'card:shifted' || e.type === 'card:drawn' ||
+        e.type === 'card:discarded' || e.type === 'card:deleted' || e.type === 'card:deck-played' ||
+        e.type === 'card:hand-played' || e.type === 'card:returned' || e.type === 'card:given' || e.type === 'card:copied')
+    ) {
+      const u = e.payload as { triggerProtocol?: string; triggerUid?: string } | undefined;
+      if (u && u.triggerProtocol === 'unity' && u.triggerUid) {
+        playUnityLink(e.state, u.triggerUid);
+      }
+    }
     if (e.type === 'luck:roll') {
       onLuckRoll(e.payload as LuckPayload);
     } else if (e.type === 'card:copied') {
