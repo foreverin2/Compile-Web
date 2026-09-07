@@ -3643,10 +3643,59 @@ function appendUnityCompiled(layer: HTMLElement, defId: string): void {
 }
 
 /* ---------- 25. 多元 diversity（2代，fx-gen2 已编译）：彩色交替呼吸框 + 四角护边 ----------
- * 边框交替显示 5 色（CSS conic 边框光交替；取自二代协议主题色集合的固定 5 色——
- * 提示词「取自场上其他已编译协议」需状态联动，先以固定 5 色循环近似，观感一致）；
+ * 边框交替显示 5 色——颜色【取自场上其它已编译协议的边框色】（syncDiversityColors 每帧按
+ * state 收集：双方 3 线 compiled 协议的 defId → 主题色表 → 写 CSS 变量 --dv1..5（border）
+ * 与 --dvs1..5（shadow 串）到 body 级层；不足 5 种时在已有色间循环复用，仍 5 段交替）。
  * 周期中心棱镜：彩色光棱缓缓旋转并向四周折射彩色光斑 2s 后消散。间隔 ≥10s。
  * CSS 见 styles.css .compiled-diversity-*。 */
+
+/** 协议已编译主色表（syncDiversityColors 取色用；颜色对齐各协议 .compiled-ring/corner） */
+const COMPILED_PROTOCOL_COLORS: Record<string, string> = {
+  // 1代 MN01/AX01
+  fire: '#ff6a00', light: '#ffe066', darkness: '#45454f', life: '#3ddc84', water: '#4fb4ff',
+  death: '#a142f0', spirit: '#9b5cff', gravity: '#e03ce6', psychic: '#a34fd6', plague: '#178a47',
+  metal: '#b9bec9', speed: '#cdd2dd', love: '#ff5fa2', hate: '#c81f35', apathy: '#9b9ea9',
+  // 2代 MN02/AX02（diversity 自身不算——取自"其它"已编译协议）
+  luck: '#ff9a2e', mirror: '#e2e8f5', peace: '#37a6e0', chaos: '#7a4fe8', clarity: '#e58ac4',
+  ice: '#3d9ad9', smoke: '#7a7a88', fear: '#ff6e1e', corruption: '#2f9e5a', war: '#e02222',
+  courage: '#e8b13a', time: '#b07f3e', assimilation: '#2ec9a8', unity: '#3d8bff',
+};
+
+/** hex → rgba(x, y, z, a) 辅助 */
+function hexToRgba(hex: string, a: number): string {
+  const h = hex.replace('#', '');
+  const n = parseInt(h.length === 3 ? h.split('').map((c) => c + c).join('') : h, 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+}
+
+/** diversity 已编译 5 色取自场上其它已编译协议边框色（每帧渲染调用；变量写 body 级层） */
+export function syncDiversityColors(s: GameState): void {
+  const layer = compiledFx.get('diversity');
+  if (!layer) return;
+  // 收集场上其它已编译协议 defId（排除 diversity 自身），按玩家/线序去重
+  const seen = new Set<string>();
+  const colors: string[] = [];
+  for (const p of s.players) {
+    for (const proto of p.protocols) {
+      if (!proto.compiled) continue;
+      const defId = proto.defId;
+      if (defId === 'diversity' || seen.has(defId)) continue;
+      const c = COMPILED_PROTOCOL_COLORS[defId];
+      if (!c) continue;
+      seen.add(defId);
+      colors.push(c);
+    }
+  }
+  if (colors.length === 0) return; // 无其它已编译协议 → 保留默认 5 色兜底
+  // 不足 5 种：在已有色间循环复用（保持 5 段交替观感）
+  const arr: string[] = [];
+  for (let i = 0; i < 5; i++) arr.push(colors[i % colors.length]);
+  for (let i = 0; i < 5; i++) {
+    layer.style.setProperty(`--dv${i + 1}`, arr[i]);
+    layer.style.setProperty(`--dvs${i + 1}`, hexToRgba(arr[i], 0.85));
+  }
+}
+
 function appendDiversityCompiled(layer: HTMLElement, defId: string): void {
   appendCompiledCorners(layer, 'compiled-diversity-corner'); // §8：四角多彩护边
   const host = el('div', 'compiled-diversity-host');
@@ -4564,6 +4613,8 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   syncFear0TriGlows(s);
   // 2代 war 战争常驻：war-0~3 被动在场交叉双剑 + 卡框赤红发光
   syncWarBlades(s);
+  // 2代 diversity 多元已编译：5 色取自场上其它已编译协议边框色（写 body 级层 CSS 变量）
+  syncDiversityColors(s);
 }
 
 let selectedUid: string | null = null;
