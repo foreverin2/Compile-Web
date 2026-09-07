@@ -3,7 +3,7 @@ import { mountShatter } from '../fx/delete-shatter';
 import { mountCut } from '../fx/discard-cut';
 import { buildTornadoFx } from '../fx-tornado';
 import { cardImgSrc, protocolImgSrc } from '../../data/demo';
-import { playPeaceDiscardExtra, PEACE_PRE_MS, playChaosDiscardExtra, CHAOS_DISCARD_PRE_MS, playIceShiftBridge } from '../fx-gen2';
+import { playPeaceDiscardExtra, PEACE_PRE_MS, playChaosDiscardExtra, CHAOS_DISCARD_PRE_MS, playIceShiftBridge, playSmokePlayFx, playFearShiftExtra } from '../fx-gen2';
 
 const FX_REMOVE_MS = 1200;
 const BASE_Z = 300; // 基础行为特效层
@@ -1871,18 +1871,29 @@ export function initEffects(): () => void {
           else if (payload.triggerProtocol === 'ice') {
             playIceShiftBridge(node, payload);
             playShift(node, payload); // 冰桥只叠加：基础飞行照常
+          } else if (payload.triggerProtocol === 'fear') {
+            // 2代 fear 恐惧偏转：橙红覆盖 + 颤动 + 慢→快移动（浮层卡替代基础飞行）
+            playFearShiftExtra(node, payload);
           } else playShift(node, payload);
         }
         break;
       case 'card:deck-played':
         // 反面打出牌堆顶：仅 gravity 触发源（gravity-0/6）播品红牌库框光 + 终点黑洞 + 品红射线
-        // （前置段后延后基础打出）；life-0/3、water-1 的打牌堆顶走基础打出（不误播重力特效）
+        // （前置段后延后基础打出）；2代 smoke-0 迷雾反打（牌库顶 → 落点灰雾罩 + 卡从雾中现）；
+        // life-0/3、water-1 的打牌堆顶走基础打出（不误播重力特效）
         if (payload.triggerProtocol === 'gravity') playGravityDeckPlayExtra(payload);
-        else playDeckPlay(payload);
+        else if (payload.triggerProtocol === 'smoke') {
+          playSmokePlayFx(payload); // 灰雾罩落点（卡从雾中出现）
+          playDeckPlay(payload);    // 基础打出飞行照常
+        } else playDeckPlay(payload);
         break;
       case 'card:hand-played':
         // playFromHand：从手牌中该卡的 rect 起飞飞入目标线链路末尾（区别于牌堆顶打出）
-        playHandPlay(payload);
+        // 2代 smoke-3 迷雾手牌反打 → 落点灰雾罩 + 卡从雾中现（基础飞行照常）
+        if (payload.triggerProtocol === 'smoke') {
+          playSmokePlayFx(payload);
+          playHandPlay(payload);
+        } else playHandPlay(payload);
         break;
       case 'card:given':
         // love 协议给牌/收牌（love-1 底给牌、love-3 给牌与随机拿牌——give/takeRandom op 均发

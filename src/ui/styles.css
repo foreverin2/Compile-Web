@@ -3717,6 +3717,10 @@ body.dragging { cursor: grabbing; user-select: none; }
 .protocol.compiled-fx-clarity { border-color: #e58ac4; box-shadow: 0 0 16px rgba(229, 138, 196, 0.55), 0 0 16px rgba(120, 190, 255, 0.5), inset 0 0 10px rgba(229, 138, 196, 0.22); }
 /* 2代 ice 寒冰已编译：深蓝发光框（呼吸） */
 .protocol.compiled-fx-ice { border-color: #3d9ad9; box-shadow: 0 0 16px rgba(61, 154, 217, 0.65), inset 0 0 12px rgba(61, 154, 217, 0.3); }
+/* 2代 smoke 迷雾已编译：浓灰发光框 */
+.protocol.compiled-fx-smoke { border-color: #7a7a88; box-shadow: 0 0 16px rgba(122, 122, 136, 0.6), inset 0 0 12px rgba(122, 122, 136, 0.28); }
+/* 2代 fear 恐惧已编译：橙红发光框（呼吸） */
+.protocol.compiled-fx-fear { border-color: #ff6e1e; box-shadow: 0 0 16px rgba(255, 110, 30, 0.6), inset 0 0 12px rgba(255, 110, 30, 0.28); }
 
 /* 呼吸边框（隐藏通用岩浆段/岩石骨架；border+box-shadow 交替闪烁两色） */
 .compiled-ring-death,
@@ -3734,7 +3738,9 @@ body.dragging { cursor: grabbing; user-select: none; }
 .compiled-ring-peace,
 .compiled-ring-chaos,
 .compiled-ring-clarity,
-.compiled-ring-ice {
+.compiled-ring-ice,
+.compiled-ring-smoke,
+.compiled-ring-fear {
   border: 2px solid;
   border-radius: 14px;
 }
@@ -3753,7 +3759,9 @@ body.dragging { cursor: grabbing; user-select: none; }
 .compiled-ring-peace .lava-seg, .compiled-ring-peace .lava-rock,
 .compiled-ring-chaos .lava-seg, .compiled-ring-chaos .lava-rock,
 .compiled-ring-clarity .lava-seg, .compiled-ring-clarity .lava-rock,
-.compiled-ring-ice .lava-seg, .compiled-ring-ice .lava-rock {
+.compiled-ring-ice .lava-seg, .compiled-ring-ice .lava-rock,
+.compiled-ring-smoke .lava-seg, .compiled-ring-smoke .lava-rock,
+.compiled-ring-fear .lava-seg, .compiled-ring-fear .lava-rock {
   display: none;
 }
 
@@ -3876,6 +3884,28 @@ body.dragging { cursor: grabbing; user-select: none; }
     box-shadow: 0 0 18px 5px rgba(217, 107, 0, 0.85), 0 0 42px 14px rgba(217, 107, 0, 0.42), inset 0 0 14px rgba(217, 107, 0, 0.34);
   }
 }
+/* 2代 恐惧 fear（橙红呼吸）：亮橙 #ffb34d ↔ 深橙红 #c22a05 */
+@keyframes compiled-fear-breathe {
+  0%, 100% {
+    border-color: #c22a05;
+    box-shadow: 0 0 16px 4px rgba(194, 42, 5, 0.8), 0 0 40px 12px rgba(194, 42, 5, 0.38), inset 0 0 12px rgba(194, 42, 5, 0.32);
+  }
+  50% {
+    border-color: #ffb34d;
+    box-shadow: 0 0 20px 6px rgba(255, 179, 77, 0.9), 0 0 48px 16px rgba(255, 130, 40, 0.45), inset 0 0 16px rgba(255, 179, 77, 0.38);
+  }
+}
+/* 2代 迷雾 smoke（浓灰呼吸）：浅灰 #a2a2b0 ↔ 浓灰 #4a4a56 */
+@keyframes compiled-smoke-breathe {
+  0%, 100% {
+    border-color: #4a4a56;
+    box-shadow: 0 0 14px 3px rgba(74, 74, 86, 0.75), 0 0 34px 10px rgba(74, 74, 86, 0.36), inset 0 0 12px rgba(74, 74, 86, 0.3);
+  }
+  50% {
+    border-color: #a2a2b0;
+    box-shadow: 0 0 18px 5px rgba(162, 162, 176, 0.7), 0 0 40px 12px rgba(162, 162, 176, 0.34), inset 0 0 14px rgba(162, 162, 176, 0.3);
+  }
+}
 /* 2代 寒冰 ice（深蓝呼吸）：亮冰蓝 #9fd8ff ↔ 深海蓝 #1c4e9e */
 @keyframes compiled-ice-breathe {
   0%, 100% {
@@ -3921,6 +3951,8 @@ body.dragging { cursor: grabbing; user-select: none; }
   }
 }
 /* 2代 明镜 mirror（银白）：亮银 #f2f6ff ↔ 银灰 #b9c2d4 呼吸（无金属光泽——柔和漫射） */
+.compiled-ring-fear { animation: compiled-fear-breathe 2s ease-in-out infinite; }
+.compiled-ring-smoke { animation: compiled-smoke-breathe 2.8s ease-in-out infinite; }
 .compiled-ring-ice { animation: compiled-ice-breathe 2.6s ease-in-out infinite; }
 .compiled-ring-clarity { animation: compiled-clarity-breathe 2.8s ease-in-out infinite; }
 .compiled-ring-chaos { animation: compiled-chaos-breathe 2.2s ease-in-out infinite; }
@@ -3966,6 +3998,8 @@ body.dragging { cursor: grabbing; user-select: none; }
 .compiled-chaos-corner { --cc: #7a4fe8; --ccg: rgba(160, 120, 255, 0.85); }        /* 2代 混乱蓝紫 */
 .compiled-clarity-corner { --cc: #e58ac4; --ccg: rgba(220, 160, 255, 0.85); }      /* 2代 透彻淡粉 */
 .compiled-ice-corner { --cc: #3d9ad9; --ccg: rgba(150, 220, 255, 0.85); }        /* 2代 寒冰深蓝 */
+.compiled-smoke-corner { --cc: #7a7a88; --ccg: rgba(160, 160, 175, 0.8); }       /* 2代 迷雾浓灰 */
+.compiled-fear-corner { --cc: #ff6e1e; --ccg: rgba(255, 140, 60, 0.85); }        /* 2代 恐惧橙红 */
 
 /* ---------- 1. 死已编译：缕缕黑烟 + 骷髅 ---------- */
 .compiled-death-smoke {
@@ -6307,4 +6341,302 @@ body.dragging { cursor: grabbing; user-select: none; }
   pointer-events: none;
   z-index: 4;
   opacity: 0;
+}
+
+/* =====================================================================
+ * 2代 smoke 迷雾 FX（fx-gen2 playSmokePlayFx）：落点浓灰雾罩 → 卡从雾中现 → 雾散
+ * ===================================================================== */
+.fx-smoke-mist {
+  position: fixed;
+  pointer-events: none;
+  opacity: 0;
+  filter: blur(6px);
+  will-change: opacity, transform;
+}
+.fx-smoke-mist.in {
+  opacity: 1;
+  transition: opacity 0.45s ease-in;
+}
+.fx-smoke-mist.out {
+  opacity: 0;
+  transition: opacity 0.6s ease-out;
+}
+.fx-smoke-mist-blob {
+  position: absolute;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(70, 70, 80, 0.95) 0%, rgba(60, 60, 70, 0.75) 55%, rgba(50, 50, 60, 0.3) 100%);
+  animation: fx-smoke-blob-pulse 2.2s ease-in-out infinite alternate;
+}
+.fx-smoke-mist-blob:nth-child(1) { left: -8%; top: 2%; width: 70%; height: 62%; }
+.fx-smoke-mist-blob:nth-child(2) { right: -6%; top: 14%; width: 62%; height: 60%; animation-delay: -0.8s; }
+.fx-smoke-mist-blob:nth-child(3) { left: 6%; bottom: -6%; width: 68%; height: 58%; animation-delay: -1.4s; }
+.fx-smoke-mist-blob:nth-child(4) { right: 10%; bottom: 2%; width: 55%; height: 52%; animation-delay: -0.4s; }
+.fx-smoke-mist-blob:nth-child(5) { left: 26%; top: 12%; width: 54%; height: 66%; animation-delay: -1.9s; }
+@keyframes fx-smoke-blob-pulse {
+  0% { transform: scale(0.9) translate(0, 0); }
+  100% { transform: scale(1.12) translate(6px, -4px); }
+}
+/* 卡落地后边框浓灰发光 2s */
+.fx-smoke-cardglow {
+  position: fixed;
+  border: 2px solid rgba(140, 140, 155, 0.85);
+  border-radius: 8px;
+  box-shadow: 0 0 16px rgba(120, 120, 140, 0.7), inset 0 0 10px rgba(140, 140, 155, 0.35);
+  pointer-events: none;
+  opacity: 0;
+  animation: fx-smoke-cardglow-in 0.4s ease-out forwards;
+  z-index: 599;
+}
+@keyframes fx-smoke-cardglow-in {
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+.fx-smoke-cardglow.out {
+  opacity: 0;
+  transition: opacity 0.6s ease-in;
+}
+
+/* ---- smoke-2 顶常驻：链路边框浓灰发光 + 触手雾（克苏鲁） ---- */
+.fx-smoke2-lineglow {
+  position: fixed;
+  border: 2px solid rgba(130, 130, 145, 0.6);
+  border-radius: 10px;
+  box-shadow: 0 0 12px rgba(110, 110, 130, 0.55), inset 0 0 8px rgba(130, 130, 145, 0.3);
+  pointer-events: none;
+  z-index: 93;
+  animation: fx-smoke2-line-breathe 3s ease-in-out infinite;
+}
+@keyframes fx-smoke2-line-breathe {
+  0%, 100% { border-color: rgba(130, 130, 145, 0.5); box-shadow: 0 0 8px rgba(110, 110, 130, 0.4), inset 0 0 6px rgba(130, 130, 145, 0.24); }
+  50% { border-color: rgba(170, 170, 185, 0.85); box-shadow: 0 0 16px rgba(150, 150, 170, 0.7), inset 0 0 12px rgba(170, 170, 185, 0.4); }
+}
+.fx-smoke2-fog {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: 10px;
+}
+.fx-smoke2-fog-blob {
+  position: absolute;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(60, 60, 70, 0.5) 0%, rgba(55, 55, 65, 0.3) 60%, transparent 100%);
+  animation: fx-smoke2-fog-pulse 5s ease-in-out infinite;
+}
+.fx-smoke2-fog-blob:nth-child(1) { left: -12%; top: -8%; width: 55%; height: 65%; }
+.fx-smoke2-fog-blob:nth-child(2) { right: -10%; bottom: -6%; width: 60%; height: 60%; animation-delay: -2.4s; }
+.fx-smoke2-fog-blob:nth-child(3) { left: 30%; top: 40%; width: 45%; height: 45%; animation-delay: -4.1s; }
+@keyframes fx-smoke2-fog-pulse {
+  0%, 100% { opacity: 0.25; transform: scale(0.9); }
+  50% { opacity: 0.7; transform: scale(1.15); }
+}
+/* 触手：灰色渐细长条，缓慢扭动（rotate 摇摆）——模拟克苏鲁触手 */
+.fx-smoke2-tentacles {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: 10px;
+}
+.fx-smoke2-tentacle {
+  position: absolute;
+  width: 12px;
+  height: 64px;
+  border-radius: 50% 50% 40% 40%;
+  background: linear-gradient(180deg, rgba(80, 80, 92, 0.85), rgba(50, 50, 60, 0.6));
+  box-shadow: 0 0 8px rgba(40, 40, 50, 0.5);
+  transform-origin: 50% 100%;
+  opacity: 0.55;
+  animation: fx-smoke2-tentacle-sway 3.8s ease-in-out infinite;
+}
+.fx-smoke2-tentacle.t1 { left: 6%; top: -20px; animation-delay: 0s; }
+.fx-smoke2-tentacle.t2 { left: 28%; top: -8px; height: 52px; animation-delay: -1.2s; }
+.fx-smoke2-tentacle.t3 { right: 24%; top: -14px; height: 58px; animation-delay: -2.3s; }
+.fx-smoke2-tentacle.t4 { right: 4%; top: -24px; height: 70px; animation-delay: -0.7s; }
+@keyframes fx-smoke2-tentacle-sway {
+  0%, 100% { transform: rotate(-16deg) scaleY(0.9); }
+  50% { transform: rotate(18deg) scaleY(1.06); }
+}
+
+/* =====================================================================
+ * 2代 smoke 迷雾已编译：周期大雾 + 章鱼触手（render.ts appendSmokeCompiled 驱动）
+ * ===================================================================== */
+.compiled-smoke-host {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 4;
+  opacity: 0;
+}
+.compiled-smoke-host.in {
+  opacity: 1;
+  transition: opacity 0.55s ease-in;
+}
+.compiled-smoke-host.out {
+  opacity: 0;
+  transition: opacity 0.8s ease-in;
+}
+.compiled-smoke-bigfog {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 70%;
+  height: 55%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(60, 60, 72, 0.6) 0%, rgba(55, 55, 68, 0.35) 60%, transparent 100%);
+  filter: blur(5px);
+  animation: compiled-smoke-fog-pulse 2s ease-in-out infinite;
+}
+@keyframes compiled-smoke-fog-pulse {
+  0%, 100% { transform: translate(-50%, -50%) scale(0.92); opacity: 0.7; }
+  50% { transform: translate(-50%, -50%) scale(1.1); opacity: 1; }
+}
+/* 触手（5 根均匀径向伸出）：底端在中心，svg/条旋转 + 缓慢扭动 */
+.compiled-smoke-tents {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+}
+.compiled-smoke-tent {
+  position: absolute;
+  width: 14px;
+  height: 84px;
+  left: -7px;
+  top: -10px;
+  border-radius: 50% 50% 40% 40%;
+  background: linear-gradient(180deg, rgba(84, 84, 98, 0.9), rgba(52, 52, 64, 0.65));
+  box-shadow: 0 0 10px rgba(30, 30, 42, 0.6);
+  transform-origin: 50% 100%;
+  opacity: 0.65;
+  animation: compiled-smoke-tent-sway 2.4s ease-in-out infinite alternate;
+}
+.compiled-smoke-tent:nth-child(2) { animation-delay: -0.5s; }
+.compiled-smoke-tent:nth-child(3) { animation-delay: -1s; }
+.compiled-smoke-tent:nth-child(4) { animation-delay: -1.5s; }
+.compiled-smoke-tent:nth-child(5) { animation-delay: -2s; }
+@keyframes compiled-smoke-tent-sway {
+  0% { transform: rotate(-10deg) scaleY(0.88); }
+  100% { transform: rotate(14deg) scaleY(1.06); }
+}
+
+/* =====================================================================
+ * 2代 fear 恐惧 FX（fx-gen2 playFearShiftExtra）：橙红覆盖 + 颤动 + 慢→快移动
+ * ===================================================================== */
+.fx-fear-ghost {
+  position: fixed;
+  pointer-events: none;
+  will-change: transform, opacity;
+  filter: drop-shadow(0 0 14px rgba(255, 110, 40, 0.7));
+  border-radius: 6px;
+}
+.fx-fear-ghost.jitter {
+  animation: fx-fear-jitter 0.1s linear infinite;
+}
+@keyframes fx-fear-jitter {
+  0% { transform: translate(0, 0); }
+  20% { transform: translate(2px, -3px); }
+  40% { transform: translate(-3px, 1px); }
+  60% { transform: translate(3px, 2px); }
+  80% { transform: translate(-2px, -2px); }
+  100% { transform: translate(0, 0); }
+}
+.fx-fear-cover {
+  position: absolute;
+  inset: 0;
+  border-radius: 6px;
+  background: radial-gradient(circle, rgba(255, 120, 50, 0.35) 0%, rgba(255, 80, 20, 0.2) 60%, transparent 100%);
+  box-shadow: inset 0 0 18px rgba(255, 120, 40, 0.55);
+  border: 2px solid rgba(255, 130, 50, 0.85);
+}
+/* 落点边框橙光（到达后保持 2s） */
+.fx-fear-landglow {
+  position: fixed;
+  border: 2px solid rgba(255, 130, 50, 0.8);
+  border-radius: 8px;
+  box-shadow: 0 0 16px rgba(255, 110, 40, 0.7), inset 0 0 10px rgba(255, 130, 50, 0.3);
+  pointer-events: none;
+  opacity: 1;
+  animation: fx-fear-land-breathe 2s ease-in-out infinite;
+  z-index: 597;
+}
+.fx-fear-landglow.out {
+  opacity: 0;
+  transition: opacity 0.5s ease-in;
+}
+@keyframes fx-fear-land-breathe {
+  0%, 100% { opacity: 0.75; }
+  50% { opacity: 1; }
+}
+
+/* ---- fear-0 顶常驻：对手三链橙红闪烁 + 30% 橙红覆盖 ---- */
+.fx-fear0-triglow {
+  position: fixed;
+  border: 2px solid rgba(255, 110, 30, 0.6);
+  border-radius: 10px;
+  background: rgba(255, 90, 20, 0.15);
+  box-shadow: 0 0 14px rgba(255, 100, 30, 0.6), inset 0 0 10px rgba(255, 110, 30, 0.25);
+  pointer-events: none;
+  z-index: 93;
+  animation: fx-fear0-blink 0.8s ease-in-out infinite;
+}
+@keyframes fx-fear0-blink {
+  0%, 100% { border-color: rgba(255, 110, 30, 0.55); background: rgba(255, 90, 20, 0.12); box-shadow: 0 0 10px rgba(255, 100, 30, 0.5), inset 0 0 8px rgba(255, 110, 30, 0.2); }
+  50% { border-color: rgba(255, 150, 60, 0.95); background: rgba(255, 100, 30, 0.24); box-shadow: 0 0 22px rgba(255, 120, 40, 0.9), inset 0 0 14px rgba(255, 150, 60, 0.4); }
+}
+
+/* =====================================================================
+ * 2代 fear 恐惧已编译：周期染色颤抖（render.ts appendFearCompiled 驱动）
+ * ===================================================================== */
+.compiled-fear-host {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 4;
+}
+.compiled-fear-host.shaking {
+  animation: compiled-fear-shake 0.09s linear infinite;
+}
+@keyframes compiled-fear-shake {
+  0% { transform: translate(0, 0); }
+  25% { transform: translate(1.5px, -1.5px); }
+  50% { transform: translate(-2px, 1px); }
+  75% { transform: translate(1px, 2px); }
+  100% { transform: translate(-1.5px, -1px); }
+}
+.compiled-fear-stain {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 120%;
+  height: 90%;
+  margin-left: -60%;
+  margin-top: -45%;
+  border-radius: 18px;
+  background: radial-gradient(circle, rgba(255, 90, 20, 0.42) 0%, rgba(255, 70, 10, 0.3) 55%, transparent 80%);
+  mix-blend-mode: screen;
+  opacity: 0;
+}
+.compiled-fear-after {
+  position: absolute;
+  inset: 0;
+  border: 6px solid rgba(255, 120, 40, 0.5);
+  border-radius: 18px;
+  box-shadow: 0 0 22px rgba(255, 100, 30, 0.55);
+  opacity: 0;
+}
+.compiled-fear-after.in {
+  opacity: 1;
+  transition: opacity 0.5s ease-out;
+  animation: compiled-fear-after-pulse 2s ease-in-out infinite;
+}
+.compiled-fear-after.out {
+  opacity: 0;
+  transition: opacity 0.75s ease-in;
+}
+@keyframes compiled-fear-after-pulse {
+  0%, 100% { box-shadow: 0 0 14px rgba(255, 100, 30, 0.45); }
+  50% { box-shadow: 0 0 30px rgba(255, 130, 40, 0.75); }
 }

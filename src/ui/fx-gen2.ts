@@ -724,6 +724,149 @@ export function playIceShiftBridge(
   }, 900 + ICE_BRIDGE_IN_MS); // 桥保持 ~0.9s（覆盖基础飞行 MOVE_MS 450ms）后渐隐
 }
 
+/* ============================== smoke 迷雾：灰雾出场 ==============================
+ * 反面打出（smoke-0 牌库顶反打多线 / smoke-3 手牌反打，card:deck-played/hand-played +
+ * triggerProtocol=smoke）：落点位置先被浓灰雾完全笼罩（渐现 0.45s）→ 反面打出的卡从灰雾
+ * 中浮现（基础飞行照常，由 effects 播放）→ 雾散（卡到点后 ~0.55s 渐隐）→ 卡边框浓灰
+ * 发光 2s（落点覆框渐现 2s 后消散）。层 body 级 fixed、JS 定时自清理。 */
+const SMOKE_MIST_IN_MS = 450;    // 灰雾渐现
+const SMOKE_MIST_HOLD_MS = 1100; // 保持（覆盖基础飞行 ~450ms 到达）
+const SMOKE_MIST_OUT_MS = 600;   // 雾散
+const SMOKE_GLOW_MS = 2000;      // 卡边框灰光持续
+
+/** 目标槽 stackEnd（同 iceStackEnd：末卡外缘 / 空槽起点） */
+function smokeStackEnd(owner: PlayerId, line: number): { x: number; y: number } | null {
+  const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${owner}"][data-line="${line}"]`);
+  if (!slot) return null;
+  const slotRect = slot.getBoundingClientRect();
+  const y = slotRect.top + slotRect.height / 2;
+  const cards = slot.querySelectorAll<HTMLElement>('.card');
+  const last = cards.length > 0 ? cards[cards.length - 1] : null;
+  if (last) {
+    const r = last.getBoundingClientRect();
+    return { x: owner === 0 ? r.left - 65 : r.right + 65, y };
+  }
+  return { x: owner === 0 ? slotRect.right - 90 : slotRect.left + 90, y };
+}
+
+/** smoke 反打灰雾出场（effects deck-played/hand-played 分流调用；基础飞行由 effects 照常） */
+export function playSmokePlayFx(payload: { owner?: PlayerId; line?: number | null }): void {
+  if (payload.owner === undefined || payload.line == null) return;
+  const end = smokeStackEnd(payload.owner, payload.line);
+  if (!end) return;
+  const W = 150;
+  const H = 200;
+  // 灰雾层：笼罩落点区域（多团浓灰 blob 合成迷雾）
+  const mist = document.createElement('div');
+  mist.className = 'fx-smoke-mist';
+  mist.style.left = `${(end.x - W / 2).toFixed(1)}px`;
+  mist.style.top = `${(end.y - H / 2).toFixed(1)}px`;
+  mist.style.width = `${W}px`;
+  mist.style.height = `${H}px`;
+  mist.style.zIndex = String(GEN2_Z);
+  for (let i = 0; i < 5; i++) {
+    const b = document.createElement('i');
+    b.className = 'fx-smoke-mist-blob';
+    mist.appendChild(b);
+  }
+  document.body.appendChild(mist);
+  window.setTimeout(() => mist.classList.add('in'), 20);
+  // 雾散 + 卡框灰光（落点覆框）
+  window.setTimeout(() => {
+    mist.classList.add('out');
+    const glow = document.createElement('div');
+    glow.className = 'fx-smoke-cardglow';
+    glow.style.left = `${(end.x - 65).toFixed(1)}px`;
+    glow.style.top = `${(end.y - 89.4).toFixed(1)}px`;
+    glow.style.width = '130px';
+    glow.style.height = '178.8px';
+    glow.style.zIndex = String(GEN2_Z - 1);
+    document.body.appendChild(glow);
+    window.setTimeout(() => glow.classList.add('out'), SMOKE_GLOW_MS);
+    window.setTimeout(() => glow.remove(), SMOKE_GLOW_MS + 500);
+  }, SMOKE_MIST_HOLD_MS);
+  window.setTimeout(() => mist.remove(), SMOKE_MIST_HOLD_MS + SMOKE_MIST_OUT_MS + 80);
+}
+
+/* ============================== fear 恐惧：橙红颤动偏转 ==============================
+ * 偏转（fear-0/3 shift op，card:shifted + triggerProtocol=fear）：卡被橙红光芒完全覆盖 +
+ * 边框橙光 → 向四周快速随机颤动 → 以「极慢 → 极快」速度移向目标线末尾 → 到点停止颤动
+ * 恢复正常（边框橙光 2s 后消失）。本函数以浮层卡【替代】基础飞行（同 speed shift extra
+ * 模式）：事件时捕获源 rect 立即建浮层卡（z=BASE 盖住真实卡）→ 颤动（CSS jitter）→
+ * 起飞过渡（cubic-bezier 慢→快）→ 到点渐隐移除，露出真实卡（位置一致无缝）。
+ * 层 body 级 fixed、JS 定时自清理（clearGen2Fx 兜底 .fx-fear-*）。 */
+const FEAR_JITTER_MS = 550;   // 颤动时长（起飞前原地快速随机颤动）
+const FEAR_GLOW_AFTER_MS = 2000; // 到达后边框橙光保持（提示词「2秒后消失」）
+
+export function playFearShiftExtra(
+  node: HTMLElement,
+  payload: { uid?: string; owner?: PlayerId; line?: number | null },
+): void {
+  if (payload.owner === undefined || payload.line == null) return;
+  const rect = node.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return;
+  const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${payload.owner}"][data-line="${payload.line}"]`);
+  if (!slot) return;
+  const slotRect = slot.getBoundingClientRect();
+  const y = slotRect.top + slotRect.height / 2;
+  const cards = slot.querySelectorAll<HTMLElement>('.card');
+  const last = cards.length > 0 ? cards[cards.length - 1] : null;
+  const end = last
+    ? (() => {
+        const r = last.getBoundingClientRect();
+        return { x: payload.owner === 0 ? r.left - 65 : r.right + 65, y };
+      })()
+    : { x: payload.owner === 0 ? slotRect.right - 90 : slotRect.left + 90, y };
+  // 浮层卡（橙红覆盖）
+  const ghost = document.createElement('div');
+  ghost.className = 'fx-fear-ghost';
+  ghost.style.left = `${rect.left}px`;
+  ghost.style.top = `${rect.top}px`;
+  ghost.style.width = `${rect.width}px`;
+  ghost.style.height = `${rect.height}px`;
+  ghost.style.zIndex = String(GEN2_Z - 2);
+  // 卡面（被偏转卡当前面）——payload 无 defId，从节点 img 克隆
+  const srcImg = node.querySelector('img');
+  if (srcImg && srcImg.src) {
+    const img = document.createElement('img');
+    img.src = srcImg.src;
+    img.style.cssText =
+      'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;border-radius:6px;';
+    ghost.appendChild(img);
+  }
+  // 橙红覆盖层（卡上方半透明橙红光）+ 颤动动画（CSS jitter keyframes）
+  const cover = document.createElement('div');
+  cover.className = 'fx-fear-cover';
+  ghost.appendChild(cover);
+  document.body.appendChild(ghost);
+  // ① 颤动：原地快速随机颤动（CSS animation jitter，550ms）——极慢→极快由起飞过渡体现
+  ghost.classList.add('jitter');
+  const start = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  // ② 颤动结束后起飞：cubic-bezier(0.05, 0.1, 0.85, 1) ≈ 极慢起步 → 极快冲线
+  window.setTimeout(() => {
+    ghost.classList.remove('jitter');
+    ghost.style.transition = `transform 900ms cubic-bezier(0.05, 0.12, 0.8, 1), opacity 0.3s ease`;
+    ghost.style.transform = `translate(${dx}px, ${dy}px)`;
+    // ③ 到点停止颤动恢复正常：ghost 渐隐（露出真实卡）；落点边框橙光保持 2s
+    window.setTimeout(() => {
+      ghost.style.opacity = '0';
+      const glow = document.createElement('div');
+      glow.className = 'fx-fear-landglow';
+      glow.style.left = `${(end.x - rect.width / 2).toFixed(1)}px`;
+      glow.style.top = `${(end.y - rect.height / 2).toFixed(1)}px`;
+      glow.style.width = `${rect.width}px`;
+      glow.style.height = `${rect.height}px`;
+      glow.style.zIndex = String(GEN2_Z - 3);
+      document.body.appendChild(glow);
+      window.setTimeout(() => glow.classList.add('out'), FEAR_GLOW_AFTER_MS);
+      window.setTimeout(() => glow.remove(), FEAR_GLOW_AFTER_MS + 500);
+    }, 920);
+    window.setTimeout(() => ghost.remove(), 1250);
+  }, FEAR_JITTER_MS);
+}
+
 /** 订阅 luck / mirror / peace / chaos / clarity 引擎事件 */
 export function initGen2Fx(): () => void {
   return gameBus.subscribe((e: GameEvent) => {

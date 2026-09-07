@@ -1068,6 +1068,102 @@ export function syncIceFx(s: GameState): void {
   }
 }
 
+/* ===== 2代 smoke-2 迷雾顶常驻：所属链路边框浓灰发光 + 克苏鲁触手雾 =====
+ * smoke-2 顶（valueModifier own-stack「此链路中，每有1张正面朝下的卡牌，总阈值就加1」，
+ * faceUp 在场即生效，含被盖——引擎 stackValue gate 一致）→ 该线【持卡方】链路边框常驻
+ * 浓灰发光 + 边框周围偶现大团浓雾渗出灰色章鱼触手（克苏鲁——触手缓慢扭动，CSS 动画）。
+ * key = `${owner}-${line}`；注册表模式同 FX-6。 */
+const smoke2LineGlows = new Map<string, HTMLElement>();
+
+export function syncSmoke2LineGlows(s: GameState): void {
+  const activeKeys = new Set<string>();
+  for (const owner of [0, 1] as PlayerId[]) {
+    for (const line of [0, 1, 2] as Line[]) {
+      const has = s.players[owner].stacks[line].some(
+        (c) => c.defId === 'smoke-2' && c.faceUp && !cardCommandDisabled(s, c, 'top'),
+      );
+      if (!has) continue;
+      const key = `${owner}-${line}`;
+      activeKeys.add(key);
+      const slot = document.querySelector<HTMLElement>(
+        `.stack-slot[data-player="${owner}"][data-line="${line}"]`
+      );
+      if (!slot) continue;
+      let glow = smoke2LineGlows.get(key);
+      if (!glow) {
+        glow = el('div', 'fx-smoke2-lineglow');
+        glow.dataset.smoke2Key = key;
+        // 触手团（克苏鲁）：2 组雾团 + 4 根触手（缓慢扭动）
+        const fog = el('div', 'fx-smoke2-fog');
+        for (let i = 0; i < 3; i++) fog.appendChild(el('i', 'fx-smoke2-fog-blob'));
+        const tent = el('div', 'fx-smoke2-tentacles');
+        for (let i = 0; i < 4; i++) tent.appendChild(el('i', `fx-smoke2-tentacle t${i + 1}`));
+        glow.appendChild(fog);
+        glow.appendChild(tent);
+        smoke2LineGlows.set(key, glow);
+        document.body.appendChild(glow);
+      }
+      const r = slot.getBoundingClientRect();
+      glow.style.left = `${r.left - 6}px`;
+      glow.style.top = `${r.top - 6}px`;
+      glow.style.width = `${r.width + 12}px`;
+      glow.style.height = `${r.height + 12}px`;
+    }
+  }
+  for (const [key, glow] of smoke2LineGlows) {
+    if (!activeKeys.has(key)) {
+      glow.remove();
+      smoke2LineGlows.delete(key);
+    }
+  }
+}
+
+/* ===== 2代 fear-0 恐惧顶常驻：其所属玩家回合内，对手三条链路橙红闪烁 + 30% 橙红覆盖 =====
+ * fear-0 顶「在你的回合内，对手无法触发中央效果」（引擎 pushMiddle 守卫，restrictions 100 行）：
+ * 对手场上有 faceUp fear-0 且当前回合玩家 = fear-0 拥有者 → 拥有者的【对手】三条链路同时
+ * 持续闪烁橙红边框 + 链路区 30% 橙红覆盖。key = `${foe}-${line}`（3 线全亮）；同 FX-6 注册表。 */
+const fear0TriGlows = new Map<string, HTMLElement>();
+
+export function syncFear0TriGlows(s: GameState): void {
+  const activeKeys = new Set<string>();
+  const owner = s.turnPlayer;
+  if (owner === 0 || owner === 1) {
+    // fear-0 拥有者 = 回合玩家（「在你的回合内」）；其场上有 faceUp fear-0 → 对手被禁
+    const hasFear0 = s.players[owner].stacks.some((st) =>
+      st.some((c) => c.defId === 'fear-0' && c.faceUp && !cardCommandDisabled(s, c, 'top')),
+    );
+    if (hasFear0) {
+      const foe: PlayerId = owner === 0 ? 1 : 0;
+      for (const line of [0, 1, 2] as Line[]) {
+        const key = `${foe}-${line}`;
+        activeKeys.add(key);
+        const slot = document.querySelector<HTMLElement>(
+          `.stack-slot[data-player="${foe}"][data-line="${line}"]`
+        );
+        if (!slot) continue;
+        let glow = fear0TriGlows.get(key);
+        if (!glow) {
+          glow = el('div', 'fx-fear0-triglow');
+          glow.dataset.fear0Key = key;
+          fear0TriGlows.set(key, glow);
+          document.body.appendChild(glow);
+        }
+        const r = slot.getBoundingClientRect();
+        glow.style.left = `${r.left - 6}px`;
+        glow.style.top = `${r.top - 6}px`;
+        glow.style.width = `${r.width + 12}px`;
+        glow.style.height = `${r.height + 12}px`;
+      }
+    }
+  }
+  for (const [key, glow] of fear0TriGlows) {
+    if (!activeKeys.has(key)) {
+      glow.remove();
+      fear0TriGlows.delete(key);
+    }
+  }
+}
+
 /* ===== FX-5：check-cache 锁链（spirit-0 跳过检查缓存，一次性步骤触发） =====
  * 触发：s.step === 'check-cache' 且 shouldSkipCacheCheck(s, player)（实际只有回合玩家
  * 会停在 check-cache——runAutoAdvance 在该玩家应跳过时自动 advance）→ 以该玩家手牌区
@@ -3099,6 +3195,105 @@ function appendIceCompiled(layer: HTMLElement, defId: string): void {
   scheduleCompiledLoop(layer, defId, rnd(3000, 6500), burst);
 }
 
+/* ---------- 17. 迷雾 smoke（2代，fx-gen2 已编译）：浓灰呼吸框 + 四角护边 ----------
+ * 周期触手雾：协议边框四周偶现大团浓雾渗出灰色章鱼触手（缓慢扭动）→ 2s 后触手缩回、
+ * 雾渐消；中心大雾（偶尔）：更多触手向四周伸出 → 缩回 → 雾缩小消失。间隔 ≥10s。
+ * CSS 见 styles.css .compiled-smoke-*（触手元素复用 .fx-smoke2-tentacle 视觉）。 */
+const SMOKE_TENTACLE_MS = 2000; // 触手伸出停留
+
+function appendSmokeCompiled(layer: HTMLElement, defId: string): void {
+  appendCompiledCorners(layer, 'compiled-smoke-corner'); // §8：四角浓灰护边
+  const host = el('div', 'compiled-smoke-host');
+  layer.appendChild(host);
+  const burst = (done: () => void): void => {
+    if (!layer.isConnected) { done(); return; }
+    const g = layerGeom(layer);
+    if (!g) { fxTimer(defId, () => burst(done), 700); return; }
+    host.textContent = '';
+    // 雾团（中心大雾）
+    const fog = el('div', 'compiled-smoke-bigfog');
+    host.appendChild(fog);
+    // 触手：5 根向四周伸出（底端在中心附近，rotated 各方向），缓慢扭动
+    const tent = el('div', 'compiled-smoke-tents');
+    for (let i = 0; i < 5; i++) {
+      const t = el('div', 'compiled-smoke-tent');
+      t.style.transform = `rotate(${i * 72}deg)`;
+      tent.appendChild(t);
+    }
+    host.appendChild(tent);
+    reflowFx(host);
+    host.classList.add('in');
+    fxTimer(defId, () => {
+      if (!layer.isConnected) { done(); return; }
+      // 触手缩回 + 雾消散
+      host.classList.add('out');
+      fxTimer(defId, () => {
+        host.classList.remove('in', 'out');
+        host.textContent = '';
+        done();
+      }, 800);
+    }, SMOKE_TENTACLE_MS);
+  };
+  scheduleCompiledLoop(layer, defId, rnd(3000, 6500), burst);
+}
+
+/* ---------- 18. 恐惧 fear（2代，fx-gen2 已编译）：橙红呼吸框 + 四角护边 ----------
+ * 周期染色颤抖：协议中心向四周扩散橙红染色（scale 0.3→1.4）→ 扩散期间协议不断颤抖位移
+ * （.compiled-fear-host 整体 jitter）→ 染色覆盖协议本身后停下 → 持续 2s → 染色渐渐消失并
+ * 留下一圈橙红残影（阴影环）→ 残影 2s 消散。间隔 ≥10s（scheduleCompiledLoop）。CSS 见
+ * styles.css .compiled-fear-*。 */
+const FEAR_STAIN_IN_MS = 900;    // 染色扩散
+const FEAR_STAIN_HOLD_MS = 2000; // 染色覆盖停留（提示词「持续2秒后消失」）
+const FEAR_AFTERIMAGE_MS = 2000; // 残影停留（提示词「留下残影2秒」）
+
+function appendFearCompiled(layer: HTMLElement, defId: string): void {
+  appendCompiledCorners(layer, 'compiled-fear-corner'); // §8：四角橙红护边
+  const host = el('div', 'compiled-fear-host');
+  const stain = el('div', 'compiled-fear-stain');
+  host.appendChild(stain);
+  const after = el('div', 'compiled-fear-after');
+  host.appendChild(after);
+  layer.appendChild(host);
+  const burst = (done: () => void): void => {
+    if (!layer.isConnected) { done(); return; }
+    // ① 染色扩散 + 协议颤抖（染色 scale 0.3→1.4，1s；颤抖 0.5s 高频 jitter 随后渐止）
+    host.classList.add('shaking');
+    stain.style.transition = 'transform 0.5s ease-out, opacity 0.2s ease-out';
+    stain.style.transform = 'scale(0.3)';
+    stain.style.opacity = '0';
+    reflowFx(stain);
+    requestAnimationFrame(() => {
+      stain.style.transition = `transform ${FEAR_STAIN_IN_MS}ms cubic-bezier(0.3, 0.7, 0.5, 1), opacity 0.15s ease-out`;
+      stain.style.transform = 'scale(1.5)';
+      stain.style.opacity = '1';
+    });
+    // ② 染色覆盖协议后停下（颤抖结束）
+    fxTimer(defId, () => {
+      if (!layer.isConnected) return;
+      host.classList.remove('shaking');
+      // ③ 覆盖持续 2s → 染色消失 + 残影浮现
+      fxTimer(defId, () => {
+        if (!layer.isConnected) { done(); return; }
+        stain.style.transition = 'opacity 0.7s ease-out';
+        stain.style.opacity = '0';
+        after.classList.add('in');
+        // 残影 2s 后消散
+        fxTimer(defId, () => {
+          if (!layer.isConnected) { done(); return; }
+          after.classList.remove('in');
+          after.classList.add('out');
+          fxTimer(defId, () => {
+            after.classList.remove('out');
+            stain.style.opacity = '0';
+            done();
+          }, 750);
+        }, FEAR_AFTERIMAGE_MS);
+      }, FEAR_STAIN_HOLD_MS);
+    }, FEAR_STAIN_IN_MS + 200);
+  };
+  scheduleCompiledLoop(layer, defId, rnd(3000, 6500), burst);
+}
+
 /** 新 10 协议已编译特效分发（buildCompiledFx 内调用；fire/light/darkness/water/life
  *  走既有分支，不在此列）。每个 builder 只建持久子结构 + 起调度，动画全部在层内。 */
 function appendNewCompiledFx(layer: HTMLElement, defId: string): void {
@@ -3119,6 +3314,8 @@ function appendNewCompiledFx(layer: HTMLElement, defId: string): void {
     case 'chaos': appendChaosCompiled(layer, defId); break;
     case 'clarity': appendClarityCompiled(layer, defId); break;
     case 'ice': appendIceCompiled(layer, defId); break;
+    case 'smoke': appendSmokeCompiled(layer, defId); break;
+    case 'fear': appendFearCompiled(layer, defId); break;
     default: break;
   }
 }
@@ -3963,6 +4160,10 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   syncClarity0BatteryGlows(s);
   // 2代 ice 寒冰常驻：ice-1 对方链路冰面 / ice-4 卡框冰辉 / ice-6 牌库封冰
   syncIceFx(s);
+  // 2代 smoke-2 迷雾顶常驻：所属链路边框浓灰发光 + 触手雾
+  syncSmoke2LineGlows(s);
+  // 2代 fear-0 恐惧顶常驻：其回合内对手三条链路橙红闪烁 + 覆盖
+  syncFear0TriGlows(s);
 }
 
 let selectedUid: string | null = null;
@@ -4043,6 +4244,10 @@ export function resetUiState(): void {
   ice4CardGlows.clear();
   for (const layer of ice6DeckIces.values()) layer.remove();
   ice6DeckIces.clear();
+  for (const layer of smoke2LineGlows.values()) layer.remove();
+  smoke2LineGlows.clear();
+  for (const glow of fear0TriGlows.values()) glow.remove();
+  fear0TriGlows.clear();
   if (chainLayer) {
     chainLayer.remove();
     chainLayer = null;

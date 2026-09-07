@@ -526,7 +526,11 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       s.pendingPlay.push({ card, beforeCoveredDone: false, belowUid: op.belowUid });
       // playFromHand（手牌打出）与 playTopDeck（牌堆顶打出）区分事件：
       // FX 层据此从手牌卡 rect 起飞（而非牌库 rect）飞入目标线链路末尾
-      emitCardEvent(s, 'card:hand-played', card, { line: op.line });
+      emitCardEvent(s, 'card:hand-played', card, {
+        line: op.line,
+        triggerDefId: pe.sourceDefId,
+        triggerProtocol: pe.sourceDefId.split('-')[0],
+      });
       break;
     }
     case 'rearrangeProtocols': {
