@@ -3729,6 +3729,8 @@ body.dragging { cursor: grabbing; user-select: none; }
 .protocol.compiled-fx-courage { border-color: #e8b13a; box-shadow: 0 0 16px rgba(232, 177, 58, 0.6), inset 0 0 12px rgba(232, 177, 58, 0.28); }
 /* 2代 time 时间已编译：古铜发光框（呼吸） */
 .protocol.compiled-fx-time { border-color: #b07f3e; box-shadow: 0 0 16px rgba(176, 127, 62, 0.6), inset 0 0 12px rgba(176, 127, 62, 0.28); }
+/* 2代 assimilation 同化已编译：青碧发光框（呼吸） */
+.protocol.compiled-fx-assimilation { border-color: #2ec9a8; box-shadow: 0 0 16px rgba(46, 201, 168, 0.6), inset 0 0 12px rgba(46, 201, 168, 0.28); }
 
 /* 呼吸边框（隐藏通用岩浆段/岩石骨架；border+box-shadow 交替闪烁两色） */
 .compiled-ring-death,
@@ -3752,7 +3754,8 @@ body.dragging { cursor: grabbing; user-select: none; }
 .compiled-ring-corruption,
 .compiled-ring-war,
 .compiled-ring-courage,
-.compiled-ring-time {
+.compiled-ring-time,
+.compiled-ring-assimilation {
   border: 2px solid;
   border-radius: 14px;
 }
@@ -3777,7 +3780,8 @@ body.dragging { cursor: grabbing; user-select: none; }
 .compiled-ring-corruption .lava-seg, .compiled-ring-corruption .lava-rock,
 .compiled-ring-war .lava-seg, .compiled-ring-war .lava-rock,
 .compiled-ring-courage .lava-seg, .compiled-ring-courage .lava-rock,
-.compiled-ring-time .lava-seg, .compiled-ring-time .lava-rock {
+.compiled-ring-time .lava-seg, .compiled-ring-time .lava-rock,
+.compiled-ring-assimilation .lava-seg, .compiled-ring-assimilation .lava-rock {
   display: none;
 }
 
@@ -3900,6 +3904,17 @@ body.dragging { cursor: grabbing; user-select: none; }
     box-shadow: 0 0 18px 5px rgba(217, 107, 0, 0.85), 0 0 42px 14px rgba(217, 107, 0, 0.42), inset 0 0 14px rgba(217, 107, 0, 0.34);
   }
 }
+/* 2代 同化 assimilation（青碧呼吸）：亮青 #7ef0d8 ↔ 深青 #147a62 */
+@keyframes compiled-assimilation-breathe {
+  0%, 100% {
+    border-color: #147a62;
+    box-shadow: 0 0 15px 3px rgba(20, 122, 98, 0.8), 0 0 36px 10px rgba(20, 122, 98, 0.38), inset 0 0 12px rgba(20, 122, 98, 0.3);
+  }
+  50% {
+    border-color: #7ef0d8;
+    box-shadow: 0 0 19px 5px rgba(126, 240, 216, 0.85), 0 0 44px 14px rgba(126, 240, 216, 0.4), inset 0 0 14px rgba(126, 240, 216, 0.32);
+  }
+}
 /* 2代 时间 time（古铜呼吸）：铜亮 #d9b06a ↔ 深铜锈 #6e4a1e */
 @keyframes compiled-time-breathe {
   0%, 100% {
@@ -4011,6 +4026,7 @@ body.dragging { cursor: grabbing; user-select: none; }
   }
 }
 /* 2代 明镜 mirror（银白）：亮银 #f2f6ff ↔ 银灰 #b9c2d4 呼吸（无金属光泽——柔和漫射） */
+.compiled-ring-assimilation { animation: compiled-assimilation-breathe 2.6s ease-in-out infinite; }
 .compiled-ring-time { animation: compiled-time-breathe 3s ease-in-out infinite; }
 .compiled-ring-courage { animation: compiled-courage-breathe 2.4s ease-in-out infinite; }
 .compiled-ring-war { animation: compiled-war-breathe 2s ease-in-out infinite; }
@@ -4068,6 +4084,7 @@ body.dragging { cursor: grabbing; user-select: none; }
 .compiled-war-corner { --cc: #e02222; --ccg: rgba(255, 90, 50, 0.85); }          /* 2代 战争赤红 */
 .compiled-courage-corner { --cc: #e8b13a; --ccg: rgba(255, 220, 120, 0.85); }    /* 2代 勇气鎏金 */
 .compiled-time-corner { --cc: #b07f3e; --ccg: rgba(220, 175, 110, 0.85); }        /* 2代 时间古铜 */
+.compiled-assimilation-corner { --cc: #2ec9a8; --ccg: rgba(110, 235, 205, 0.85); } /* 2代 同化青碧 */
 
 /* ---------- 1. 死已编译：缕缕黑烟 + 骷髅 ---------- */
 .compiled-death-smoke {
@@ -7728,4 +7745,123 @@ body.dragging { cursor: grabbing; user-select: none; }
   0% { transform: translate(0, 0) scale(1); opacity: 0; }
   15% { opacity: 0.9; }
   100% { transform: translate(calc(30px - 60px * var(--fx-tx, 0)), calc(-30px + 60px * var(--fx-ty, 0))) scale(0.2); opacity: 0; }
+}
+
+/* =====================================================================
+ * 2代 assimilation 同化 FX（fx-gen2）：青碧光环 / 光点 / 牌库涟漪
+ * ===================================================================== */
+.fx-assim-ring {
+  position: fixed;
+  border: 3px solid rgba(80, 220, 190, 0.9);
+  border-radius: 10px;
+  box-shadow: 0 0 14px rgba(80, 220, 190, 0.55), inset 0 0 12px rgba(80, 220, 190, 0.3);
+  pointer-events: none;
+  opacity: 0;
+}
+.fx-assim-ring.in {
+  opacity: 1;
+  animation: fx-assim-ring-shrink 0.7s cubic-bezier(0.5, 0.1, 0.8, 0.4) forwards;
+}
+@keyframes fx-assim-ring-shrink {
+  0% { transform: scale(1); opacity: 1; }
+  60% { opacity: 0.9; }
+  100% { transform: scale(0.4); opacity: 0.5; }
+}
+.fx-assim-speck {
+  position: fixed;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #c8fff0 0%, #4ee0c0 60%, transparent 100%);
+  box-shadow: 0 0 6px rgba(80, 220, 190, 0.9);
+  pointer-events: none;
+  opacity: 0;
+  animation: fx-assim-speck-fly 0.7s ease-out forwards;
+}
+@keyframes fx-assim-speck-fly {
+  0% { transform: translate(0, 0) scale(1); opacity: 0; }
+  20% { opacity: 1; }
+  100% { transform: translate(var(--fx-adx, 30px), var(--fx-ady, -20px)) scale(0.2); opacity: 0; }
+}
+/* 牌库顶青碧涟漪（assim-2/6 反打） */
+.fx-assim-ripple {
+  position: fixed;
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  border: 2px solid rgba(80, 220, 190, 0.8);
+  box-shadow: 0 0 12px rgba(80, 220, 190, 0.5), inset 0 0 10px rgba(80, 220, 190, 0.3);
+  pointer-events: none;
+  opacity: 0;
+  animation: fx-assim-ripple-expand 0.9s ease-out forwards;
+}
+@keyframes fx-assim-ripple-expand {
+  0% { transform: scale(0.2); opacity: 0.9; }
+  100% { transform: scale(1.8); opacity: 0; }
+}
+
+/* =====================================================================
+ * 2代 assimilation 同化已编译：光带环绕 + 光珠涟漪（render.ts appendAssimilationCompiled）
+ * ===================================================================== */
+.compiled-assimilation-host {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 4;
+  opacity: 0;
+}
+.compiled-assimilation-host.in {
+  opacity: 1;
+  transition: opacity 0.4s ease-out;
+}
+.compiled-assimilation-host.out {
+  opacity: 0;
+  transition: opacity 0.8s ease-in;
+}
+.compiled-assimilation-orbit {
+  position: absolute;
+  inset: -18px;
+  animation: compiled-assimilation-orbit-spin 3.4s linear infinite;
+}
+@keyframes compiled-assimilation-orbit-spin {
+  to { transform: rotate(360deg); }
+}
+.compiled-assimilation-band {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  height: 8px;
+  width: 60%;
+  margin-left: -30%;
+  margin-top: -4px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, transparent, rgba(126, 240, 216, 0.85) 30%, rgba(60, 210, 175, 0.95) 55%, rgba(126, 240, 216, 0.85) 80%, transparent);
+  box-shadow: 0 0 10px rgba(80, 220, 190, 0.6);
+  animation: compiled-assimilation-band-flow 2.4s linear infinite;
+}
+.compiled-assimilation-band.b1 { transform: rotate(0deg); }
+.compiled-assimilation-band.b2 { transform: rotate(120deg); animation-direction: reverse; }
+@keyframes compiled-assimilation-band-flow {
+  0% { background-position: 0 0; }
+  100% { background-position: 120px 0; }
+}
+/* 中心光珠涟漪 */
+.compiled-assimilation-orb {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 46px;
+  height: 46px;
+  margin-left: -23px;
+  margin-top: -23px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #d8fff4 0%, #4ee0c0 45%, rgba(40, 170, 140, 0.4) 100%);
+  box-shadow: 0 0 20px rgba(80, 220, 190, 0.8);
+  animation: compiled-assimilation-orb-pulse 2.2s ease-out forwards;
+}
+@keyframes compiled-assimilation-orb-pulse {
+  0% { transform: scale(0.3); opacity: 0.9; }
+  35% { transform: scale(1); opacity: 1; box-shadow: 0 0 26px rgba(80, 220, 190, 0.9); }
+  100% { transform: scale(1.5); opacity: 0; }
 }

@@ -1401,6 +1401,73 @@ export function playTimeDiscardExtra(node: HTMLElement): void {
   window.setTimeout(() => film.remove(), 1100);
 }
 
+/* ============================== assimilation 同化：青碧涟漪 / 光环 ==============================
+ * ① 弃牌（card:discarded triggerProtocol=assimilation 非 toTrashOf——同化5/1 中弃自己手牌）：
+ *    被弃卡被一圈青碧光环套住 → 光环收缩后卡化青碧光点消散（前置；effects 延后基础切割）。
+ * ② 牌库顶反打（deckTopTransfer 的 card:deck-played triggerProtocol=assimilation）：打出的
+ *    卡从牌库顶带着一圈青碧涟漪浮现 → 缓缓落入堆叠并翻成反面（基础 deck-play 飞行照常，
+ *    本函数在牌库区叠加青碧涟漪层）。
+ * 层 body 级 fixed、JS 定时自清理（clearGen2Fx 兜底 .fx-assim-*）。 */
+const ASSIM_DISCARD_PRE_MS_FX = 700; // 青碧环收缩时长（前置）
+export const ASSIM_DISCARD_PRE_MS = ASSIM_DISCARD_PRE_MS_FX + 300;
+
+/** 青碧光环（CSS 环收缩动画） */
+function buildAssimRing(rect: DOMRect, color = 'rgba(80, 220, 190, 0.9)'): HTMLElement {
+  const ring = document.createElement('div');
+  ring.className = 'fx-assim-ring';
+  ring.style.left = `${rect.left - 10}px`;
+  ring.style.top = `${rect.top - 10}px`;
+  ring.style.width = `${rect.width + 20}px`;
+  ring.style.height = `${rect.height + 20}px`;
+  ring.style.borderColor = color;
+  ring.style.zIndex = String(GEN2_Z);
+  document.body.appendChild(ring);
+  window.setTimeout(() => ring.classList.add('in'), 20);
+  return ring;
+}
+
+/** assimilation 弃牌青碧环（前置段；effects 延后基础切割） */
+export function playAssimDiscardExtra(node: HTMLElement): void {
+  const rect = node.getBoundingClientRect();
+  if (rect.width === 0) return;
+  const ring = buildAssimRing(rect);
+  // 光环收缩后卡化青碧光点（小光点四散）
+  window.setTimeout(() => {
+    for (let i = 0; i < 8; i++) {
+      const s = document.createElement('i');
+      s.className = 'fx-assim-speck';
+      s.style.left = `${(rect.left + Math.random() * rect.width).toFixed(1)}px`;
+      s.style.top = `${(rect.top + Math.random() * rect.height).toFixed(1)}px`;
+      s.style.setProperty('--fx-adx', `${(Math.random() * 70 - 35).toFixed(1)}px`);
+      s.style.setProperty('--fx-ady', `${(Math.random() * 50 - 25).toFixed(1)}px`);
+      s.style.zIndex = String(GEN2_Z);
+      document.body.appendChild(s);
+      window.setTimeout(() => s.remove(), 800);
+    }
+  }, 450);
+  window.setTimeout(() => ring.remove(), ASSIM_DISCARD_PRE_MS + 400);
+}
+
+/** assimilation 牌库顶反打青碧涟漪（牌库区；基础 deck-play 照常） */
+export function playAssimDeckRipple(player: PlayerId): void {
+  const deck = document.querySelector<HTMLElement>(`.deck[data-player="${player}"]`);
+  if (!deck) return;
+  const r = deck.getBoundingClientRect();
+  if (r.width === 0) return;
+  const cx = r.left + r.width / 2;
+  const cy = r.top + r.height / 2;
+  for (let i = 0; i < 2; i++) {
+    const ripple = document.createElement('div');
+    ripple.className = 'fx-assim-ripple';
+    ripple.style.left = `${cx - 40}px`;
+    ripple.style.top = `${cy - 40}px`;
+    ripple.style.zIndex = String(GEN2_Z - 1);
+    ripple.style.animationDelay = `${i * 0.25}s`;
+    document.body.appendChild(ripple);
+    window.setTimeout(() => ripple.remove(), 1200);
+  }
+}
+
 /** 订阅 luck / mirror / peace / chaos / clarity / corruption 引擎事件 */
 export function initGen2Fx(): () => void {
   return gameBus.subscribe((e: GameEvent) => {

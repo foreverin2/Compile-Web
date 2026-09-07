@@ -3523,6 +3523,57 @@ function appendTimeCompiled(layer: HTMLElement, defId: string): void {
   scheduleCompiledLoop(layer, defId, rnd(3000, 6500), clockBurst);
 }
 
+/* ---------- 23. 同化 assimilation（2代，fx-gen2 已编译）：青碧呼吸框 + 四角护边 ----------
+ * 周期光带：边框四周两条青碧光带（首尾相衔游鱼般环绕协议交织盘旋 2s 渐散）；中心光珠
+ * 涟漪（偶尔）：中心浮现青碧光珠向四周扩散涟漪 2s。间隔 ≥10s（scheduleCompiledLoop 拆两
+ * 循环）。CSS 见 styles.css .compiled-assimilation-*。 */
+function appendAssimilationCompiled(layer: HTMLElement, defId: string): void {
+  appendCompiledCorners(layer, 'compiled-assimilation-corner'); // §8：四角青碧护边
+  const host = el('div', 'compiled-assimilation-host');
+  layer.appendChild(host);
+  // 光带环绕 burst：两条弧形光带（圆环轨道错相旋转）
+  const ribbonBurst = (done: () => void): void => {
+    if (!layer.isConnected) { done(); return; }
+    const orbit = el('div', 'compiled-assimilation-orbit');
+    for (let i = 0; i < 2; i++) {
+      const band = el('div', `compiled-assimilation-band b${i + 1}`);
+      orbit.appendChild(band);
+    }
+    host.appendChild(orbit);
+    reflowFx(host);
+    host.classList.add('in');
+    fxTimer(defId, () => {
+      if (!layer.isConnected) { done(); return; }
+      host.classList.add('out');
+      fxTimer(defId, () => {
+        host.classList.remove('in', 'out');
+        host.textContent = '';
+        done();
+      }, 800);
+    }, 2200);
+  };
+  // 光珠涟漪 burst
+  const orbBurst = (done: () => void): void => {
+    if (!layer.isConnected) { done(); return; }
+    host.textContent = '';
+    const orb = el('div', 'compiled-assimilation-orb');
+    host.appendChild(orb);
+    reflowFx(host);
+    host.classList.add('in');
+    fxTimer(defId, () => {
+      if (!layer.isConnected) { done(); return; }
+      host.classList.add('out');
+      fxTimer(defId, () => {
+        host.classList.remove('in', 'out');
+        host.textContent = '';
+        done();
+      }, 800);
+    }, 2200);
+  };
+  scheduleCompiledLoop(layer, defId, rnd(3000, 6500), ribbonBurst);
+  scheduleCompiledLoop(layer, defId, rnd(6000, 11000), orbBurst);
+}
+
 /** 新 10 协议已编译特效分发（buildCompiledFx 内调用；fire/light/darkness/water/life
  *  走既有分支，不在此列）。每个 builder 只建持久子结构 + 起调度，动画全部在层内。 */
 function appendNewCompiledFx(layer: HTMLElement, defId: string): void {
@@ -3549,6 +3600,7 @@ function appendNewCompiledFx(layer: HTMLElement, defId: string): void {
     case 'war': appendWarCompiled(layer, defId); break;
     case 'courage': appendCourageCompiled(layer, defId); break;
     case 'time': appendTimeCompiled(layer, defId); break;
+    case 'assimilation': appendAssimilationCompiled(layer, defId); break;
     default: break;
   }
 }

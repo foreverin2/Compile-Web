@@ -3,7 +3,7 @@ import { mountShatter } from '../fx/delete-shatter';
 import { mountCut } from '../fx/discard-cut';
 import { buildTornadoFx } from '../fx-tornado';
 import { cardImgSrc, protocolImgSrc } from '../../data/demo';
-import { playPeaceDiscardExtra, PEACE_PRE_MS, playChaosDiscardExtra, CHAOS_DISCARD_PRE_MS, playIceShiftBridge, playSmokePlayFx, playFearShiftExtra, playCorruptionDiscardExtra, playCorruptionDeleteExtra, playCorruptionFlipExtra, CORRUPT_DISCARD_PRE_MS, playWarDiscardExtra, playWarFlipExtra, playCourageDiscardExtra, playCourageDeleteExtra, playCourageShiftExtra, playTimeDiscardExtra } from '../fx-gen2';
+import { playPeaceDiscardExtra, PEACE_PRE_MS, playChaosDiscardExtra, CHAOS_DISCARD_PRE_MS, playIceShiftBridge, playSmokePlayFx, playFearShiftExtra, playCorruptionDiscardExtra, playCorruptionDeleteExtra, playCorruptionFlipExtra, CORRUPT_DISCARD_PRE_MS, playWarDiscardExtra, playWarFlipExtra, playCourageDiscardExtra, playCourageDeleteExtra, playCourageShiftExtra, playTimeDiscardExtra, playAssimDiscardExtra, playAssimDeckRipple, ASSIM_DISCARD_PRE_MS } from '../fx-gen2';
 
 const FX_REMOVE_MS = 1200;
 const BASE_Z = 300; // 基础行为特效层
@@ -1806,8 +1806,16 @@ export function initEffects(): () => void {
         const fxPayload = payload as FxCardPayload & { fromDeckTop?: boolean; toTrashOf?: PlayerId };
         if (fxPayload.fromDeckTop) {
           playDeckTopDiscard(payload);
-        } else if (node && fxPayload.triggerProtocol === 'assimilation') {
+        } else if (node && fxPayload.triggerProtocol === 'assimilation' && fxPayload.toTrashOf !== undefined) {
+          // 修改提示词 30：同化1 底弃牌到【对手】弃牌堆 → 专属飞行（assim-1 底手动 emit 带 toTrashOf）
           playAssimilationDiscard(node, payload);
+        } else if (node && fxPayload.triggerProtocol === 'assimilation') {
+          // 普通同化弃牌（同化1 中/同化5）：青碧光环套住收缩化光点（前置）→ 延后基础切割
+          const rect = node.getBoundingClientRect();
+          const cw = node.classList.contains('rot-cw');
+          const ccw = node.classList.contains('rot-ccw');
+          playAssimDiscardExtra(node);
+          window.setTimeout(() => playCutAt(rect, cw, ccw, payload), ASSIM_DISCARD_PRE_MS);
         } else if (node) {
           if (payload.triggerProtocol === 'psychic') playPsychicDiscardExtra(node, payload);
           else if (payload.triggerProtocol === 'plague') playPlagueDiscardExtra(node, payload);
@@ -1918,6 +1926,10 @@ export function initEffects(): () => void {
         else if (payload.triggerProtocol === 'smoke') {
           playSmokePlayFx(payload); // 灰雾罩落点（卡从雾中出现）
           playDeckPlay(payload);    // 基础打出飞行照常
+        } else if (payload.triggerProtocol === 'assimilation') {
+          // 2代 assimilation-2/6 牌库顶反打：牌库顶青碧涟漪浮现（基础打出飞行照常）
+          if (payload.owner === 0 || payload.owner === 1) playAssimDeckRipple(payload.owner);
+          playDeckPlay(payload);
         } else playDeckPlay(payload);
         break;
       case 'card:hand-played':
