@@ -3294,6 +3294,46 @@ function appendFearCompiled(layer: HTMLElement, defId: string): void {
   scheduleCompiledLoop(layer, defId, rnd(3000, 6500), burst);
 }
 
+/* ---------- 19. 腐化 corruption（2代，fx-gen2 已编译）：墨绿呼吸框 + 四角护边 ----------
+ * 周期腐蚀：四角渗出墨绿腐蚀液滴（沿边框向下流淌）→ 表面渐渐浮现腐蚀斑纹从四角向中心
+ * 蔓延 → 中心聚成一团墨绿毒雾（中浮暗紫骷髅虚影）→ 2s 后雾、骷髅与斑纹一起消散。
+ * 间隔 ≥10s（scheduleCompiledLoop）。CSS 见 styles.css .compiled-corruption-*。 */
+const CORRUPTION_BURST_MS = 2000; // 毒雾骷髅停留
+
+function appendCorruptionCompiled(layer: HTMLElement, defId: string): void {
+  appendCompiledCorners(layer, 'compiled-corruption-corner'); // §8：四角墨绿护边
+  // 常驻液滴渗出（四角，慢循环）
+  const drip = el('div', 'compiled-corruption-drip');
+  for (const pos of ['tl', 'tr', 'bl', 'br'] as const) {
+    const d = el('div', `compiled-corruption-drip-drop ${pos}`);
+    drip.appendChild(d);
+  }
+  layer.appendChild(drip);
+  const host = el('div', 'compiled-corruption-host');
+  layer.appendChild(host);
+  const burst = (done: () => void): void => {
+    if (!layer.isConnected) { done(); return; }
+    host.textContent = '';
+    // 毒雾（中心）+ 暗紫骷髅虚影
+    const fog = el('div', 'compiled-corruption-fog');
+    host.appendChild(fog);
+    const skull = el('div', 'compiled-corruption-skull', '☠');
+    host.appendChild(skull);
+    reflowFx(host);
+    host.classList.add('in');
+    fxTimer(defId, () => {
+      if (!layer.isConnected) { done(); return; }
+      host.classList.add('out');
+      fxTimer(defId, () => {
+        host.classList.remove('in', 'out');
+        host.textContent = '';
+        done();
+      }, 800);
+    }, CORRUPTION_BURST_MS);
+  };
+  scheduleCompiledLoop(layer, defId, rnd(3000, 6500), burst);
+}
+
 /** 新 10 协议已编译特效分发（buildCompiledFx 内调用；fire/light/darkness/water/life
  *  走既有分支，不在此列）。每个 builder 只建持久子结构 + 起调度，动画全部在层内。 */
 function appendNewCompiledFx(layer: HTMLElement, defId: string): void {
@@ -3316,6 +3356,7 @@ function appendNewCompiledFx(layer: HTMLElement, defId: string): void {
     case 'ice': appendIceCompiled(layer, defId); break;
     case 'smoke': appendSmokeCompiled(layer, defId); break;
     case 'fear': appendFearCompiled(layer, defId); break;
+    case 'corruption': appendCorruptionCompiled(layer, defId); break;
     default: break;
   }
 }

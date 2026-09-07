@@ -3721,6 +3721,8 @@ body.dragging { cursor: grabbing; user-select: none; }
 .protocol.compiled-fx-smoke { border-color: #7a7a88; box-shadow: 0 0 16px rgba(122, 122, 136, 0.6), inset 0 0 12px rgba(122, 122, 136, 0.28); }
 /* 2代 fear 恐惧已编译：橙红发光框（呼吸） */
 .protocol.compiled-fx-fear { border-color: #ff6e1e; box-shadow: 0 0 16px rgba(255, 110, 30, 0.6), inset 0 0 12px rgba(255, 110, 30, 0.28); }
+/* 2代 corruption 腐化已编译：墨绿发光框（呼吸） */
+.protocol.compiled-fx-corruption { border-color: #2f9e5a; box-shadow: 0 0 16px rgba(47, 158, 90, 0.6), inset 0 0 12px rgba(47, 158, 90, 0.28); }
 
 /* 呼吸边框（隐藏通用岩浆段/岩石骨架；border+box-shadow 交替闪烁两色） */
 .compiled-ring-death,
@@ -3740,7 +3742,8 @@ body.dragging { cursor: grabbing; user-select: none; }
 .compiled-ring-clarity,
 .compiled-ring-ice,
 .compiled-ring-smoke,
-.compiled-ring-fear {
+.compiled-ring-fear,
+.compiled-ring-corruption {
   border: 2px solid;
   border-radius: 14px;
 }
@@ -3761,7 +3764,8 @@ body.dragging { cursor: grabbing; user-select: none; }
 .compiled-ring-clarity .lava-seg, .compiled-ring-clarity .lava-rock,
 .compiled-ring-ice .lava-seg, .compiled-ring-ice .lava-rock,
 .compiled-ring-smoke .lava-seg, .compiled-ring-smoke .lava-rock,
-.compiled-ring-fear .lava-seg, .compiled-ring-fear .lava-rock {
+.compiled-ring-fear .lava-seg, .compiled-ring-fear .lava-rock,
+.compiled-ring-corruption .lava-seg, .compiled-ring-corruption .lava-rock {
   display: none;
 }
 
@@ -3884,6 +3888,17 @@ body.dragging { cursor: grabbing; user-select: none; }
     box-shadow: 0 0 18px 5px rgba(217, 107, 0, 0.85), 0 0 42px 14px rgba(217, 107, 0, 0.42), inset 0 0 14px rgba(217, 107, 0, 0.34);
   }
 }
+/* 2代 腐化 corruption（墨绿呼吸）：腐绿 #2f9e5a ↔ 深墨绿 #145c2e */
+@keyframes compiled-corruption-breathe {
+  0%, 100% {
+    border-color: #145c2e;
+    box-shadow: 0 0 15px 3px rgba(20, 92, 46, 0.8), 0 0 36px 10px rgba(20, 92, 46, 0.38), inset 0 0 12px rgba(20, 92, 46, 0.32);
+  }
+  50% {
+    border-color: #3ec97a;
+    box-shadow: 0 0 19px 5px rgba(62, 201, 122, 0.85), 0 0 44px 14px rgba(62, 201, 122, 0.42), inset 0 0 14px rgba(62, 201, 122, 0.34);
+  }
+}
 /* 2代 恐惧 fear（橙红呼吸）：亮橙 #ffb34d ↔ 深橙红 #c22a05 */
 @keyframes compiled-fear-breathe {
   0%, 100% {
@@ -3951,6 +3966,7 @@ body.dragging { cursor: grabbing; user-select: none; }
   }
 }
 /* 2代 明镜 mirror（银白）：亮银 #f2f6ff ↔ 银灰 #b9c2d4 呼吸（无金属光泽——柔和漫射） */
+.compiled-ring-corruption { animation: compiled-corruption-breathe 2.8s ease-in-out infinite; }
 .compiled-ring-fear { animation: compiled-fear-breathe 2s ease-in-out infinite; }
 .compiled-ring-smoke { animation: compiled-smoke-breathe 2.8s ease-in-out infinite; }
 .compiled-ring-ice { animation: compiled-ice-breathe 2.6s ease-in-out infinite; }
@@ -4000,6 +4016,7 @@ body.dragging { cursor: grabbing; user-select: none; }
 .compiled-ice-corner { --cc: #3d9ad9; --ccg: rgba(150, 220, 255, 0.85); }        /* 2代 寒冰深蓝 */
 .compiled-smoke-corner { --cc: #7a7a88; --ccg: rgba(160, 160, 175, 0.8); }       /* 2代 迷雾浓灰 */
 .compiled-fear-corner { --cc: #ff6e1e; --ccg: rgba(255, 140, 60, 0.85); }        /* 2代 恐惧橙红 */
+.compiled-corruption-corner { --cc: #2f9e5a; --ccg: rgba(90, 220, 130, 0.85); }   /* 2代 腐化墨绿 */
 
 /* ---------- 1. 死已编译：缕缕黑烟 + 骷髅 ---------- */
 .compiled-death-smoke {
@@ -6639,4 +6656,182 @@ body.dragging { cursor: grabbing; user-select: none; }
 @keyframes compiled-fear-after-pulse {
   0%, 100% { box-shadow: 0 0 14px rgba(255, 100, 30, 0.45); }
   50% { box-shadow: 0 0 30px rgba(255, 130, 40, 0.75); }
+}
+
+/* =====================================================================
+ * 2代 corruption 腐化 FX（fx-gen2）：腐蚀液膜 / 斑纹 / 绿光点 / 翻转毒雾
+ * ===================================================================== */
+.fx-corrupt-card {
+  position: fixed;
+  pointer-events: none;
+  overflow: hidden;
+  will-change: opacity, filter;
+  filter: drop-shadow(0 0 8px rgba(40, 200, 90, 0.35));
+}
+.fx-corrupt-card.speckling {
+  filter: brightness(0.7) sepia(0.4) hue-rotate(70deg) drop-shadow(0 0 10px rgba(40, 220, 90, 0.5));
+  transition: filter 0.5s ease;
+}
+/* 腐蚀液膜：半透明墨绿滑盖（top：自上而下滑入 / bottom：自下而上） */
+.fx-corrupt-liquid {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  background: linear-gradient(180deg, rgba(20, 90, 40, 0.55), rgba(30, 140, 60, 0.5) 40%, rgba(60, 200, 90, 0.4) 100%);
+  opacity: 0;
+  pointer-events: none;
+}
+.fx-corrupt-liquid.top {
+  top: 0;
+  height: 100%;
+  transform: translateY(-102%);
+}
+.fx-corrupt-liquid.bottom {
+  bottom: 0;
+  height: 100%;
+  transform: translateY(102%);
+}
+.fx-corrupt-liquid.in {
+  opacity: 1;
+  transform: translateY(0);
+  transition: transform 0.9s cubic-bezier(0.3, 0.7, 0.4, 1), opacity 0.25s ease-out;
+}
+/* 卡面腐蚀斑纹（细密深绿纹理浮现——随 .speckling 可见） */
+.fx-corrupt-liquid::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 20% 30%, rgba(10, 60, 25, 0.5) 0 3px, transparent 4px),
+    radial-gradient(circle at 70% 20%, rgba(10, 70, 30, 0.45) 0 4px, transparent 5px),
+    radial-gradient(circle at 45% 65%, rgba(15, 80, 35, 0.5) 0 3px, transparent 4px),
+    radial-gradient(circle at 85% 80%, rgba(8, 55, 22, 0.45) 0 5px, transparent 6px);
+  background-size: 44px 44px;
+  mix-blend-mode: multiply;
+}
+/* 绿光点（碎裂飘散） */
+.fx-corrupt-speck {
+  position: fixed;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #b9ffcf 0%, #3ee078 60%, transparent 100%);
+  box-shadow: 0 0 6px rgba(60, 240, 110, 0.9);
+  pointer-events: none;
+  opacity: 0;
+  animation: fx-corrupt-speck-fly 1.1s ease-out forwards;
+}
+@keyframes fx-corrupt-speck-fly {
+  0% { transform: translate(0, 0) scale(1); opacity: 0; }
+  15% { opacity: 1; }
+  100% { transform: translate(var(--fx-cdx, 40px), var(--fx-cdy, -30px)) scale(0.15); opacity: 0; }
+}
+/* 翻转毒雾（墨绿笼罩渐隐） */
+.fx-corrupt-mist {
+  position: fixed;
+  pointer-events: none;
+  border-radius: 8px;
+  opacity: 0;
+  filter: blur(5px);
+}
+.fx-corrupt-mist i {
+  position: absolute;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(20, 110, 50, 0.85) 0%, rgba(25, 140, 60, 0.5) 60%, transparent 100%);
+}
+.fx-corrupt-mist i:nth-child(1) { left: 6%; top: 8%; width: 60%; height: 55%; }
+.fx-corrupt-mist i:nth-child(2) { right: 2%; top: 20%; width: 52%; height: 60%; }
+.fx-corrupt-mist i:nth-child(3) { left: 12%; bottom: 2%; width: 62%; height: 52%; }
+.fx-corrupt-mist i:nth-child(4) { right: 10%; bottom: 12%; width: 45%; height: 48%; }
+.fx-corrupt-mist i:nth-child(5) { left: 40%; top: 30%; width: 55%; height: 60%; }
+.fx-corrupt-mist i:nth-child(6) { left: 26%; top: 46%; width: 46%; height: 44%; }
+.fx-corrupt-mist.in {
+  opacity: 1;
+  transition: opacity 0.35s ease-out;
+}
+.fx-corrupt-mist.out {
+  opacity: 0;
+  transition: opacity 0.6s ease-in;
+}
+
+/* =====================================================================
+ * 2代 corruption 腐化已编译：液滴渗出 + 周期毒雾骷髅（render.ts appendCorruptionCompiled）
+ * ===================================================================== */
+.compiled-corruption-drip {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 3;
+}
+.compiled-corruption-drip-drop {
+  position: absolute;
+  width: 7px;
+  height: 9px;
+  border-radius: 50% 50% 55% 55%;
+  background: radial-gradient(circle, rgba(80, 230, 130, 0.95) 0%, rgba(30, 130, 60, 0.8) 70%);
+  box-shadow: 0 0 7px rgba(50, 200, 100, 0.7);
+  opacity: 0;
+  animation: compiled-corruption-drip-fall 4.6s ease-in infinite;
+}
+.compiled-corruption-drip-drop.tl { left: 8px; top: -4px; }
+.compiled-corruption-drip-drop.tr { right: 8px; top: -4px; animation-delay: -1.2s; }
+.compiled-corruption-drip-drop.bl { left: 8px; bottom: -4px; animation-delay: -2.4s; transform: rotate(180deg); }
+.compiled-corruption-drip-drop.br { right: 8px; bottom: -4px; animation-delay: -3.6s; transform: rotate(180deg); }
+@keyframes compiled-corruption-drip-fall {
+  0% { opacity: 0; transform: translateY(-6px); }
+  18% { opacity: 1; }
+  60% { opacity: 0.9; }
+  100% { opacity: 0; transform: translateY(120px); }
+}
+.compiled-corruption-host {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 4;
+  opacity: 0;
+}
+.compiled-corruption-host.in {
+  opacity: 1;
+  transition: opacity 0.6s ease-in;
+}
+.compiled-corruption-host.out {
+  opacity: 0;
+  transition: opacity 0.8s ease-in;
+}
+.compiled-corruption-fog {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 62%;
+  height: 50%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(20, 90, 45, 0.55) 0%, rgba(25, 120, 55, 0.32) 58%, transparent 100%);
+  filter: blur(4px);
+  animation: compiled-corruption-fog-pulse 2s ease-in-out infinite;
+}
+@keyframes compiled-corruption-fog-pulse {
+  0%, 100% { transform: translate(-50%, -50%) scale(0.94); opacity: 0.75; }
+  50% { transform: translate(-50%, -50%) scale(1.08); opacity: 1; }
+}
+.compiled-corruption-skull {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -58%);
+  font-size: 30px;
+  color: rgba(160, 100, 220, 0.85);
+  filter: drop-shadow(0 0 8px rgba(150, 80, 220, 0.6));
+  animation: compiled-corruption-skull-float 2s ease-in-out infinite;
+}
+@keyframes compiled-corruption-skull-float {
+  0%, 100% { transform: translate(-50%, -58%); }
+  50% { transform: translate(-50%, -64%); }
+}
+/* 召回墨绿虚影 */
+.fx-corrupt-return-ghost {
+  filter: sepia(0.7) hue-rotate(80deg) saturate(1.5) drop-shadow(0 0 10px rgba(40, 220, 90, 0.6));
+  opacity: 0.9;
 }

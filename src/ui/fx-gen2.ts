@@ -867,13 +867,159 @@ export function playFearShiftExtra(
   }, FEAR_JITTER_MS);
 }
 
-/** 订阅 luck / mirror / peace / chaos / clarity 引擎事件 */
+/* ============================== corruption 腐化：腐蚀液 / 毒雾 ==============================
+ * 触发（triggerProtocol=corruption 的弃牌/删除/翻转）：
+ * ① 弃牌：被弃卡从上到下渐渐覆盖墨绿腐蚀液膜（覆盖层自上而下滑入）→ 卡面浮现墨绿腐蚀
+ *    斑纹并向四周蔓延 → 卡边缘碎裂化作绿色光点飘散 → 最后整卡腐蚀成绿色光尘消散（前置
+ *    段完成后由 effects 延后基础切割）；本函数只播腐蚀浮层。
+ * ② 翻转：翻转前卡面浮现墨绿腐蚀纹路 → 在墨绿毒雾笼罩下完成翻转（浮层毒雾盖卡→渐隐，
+ *    翻面由 effects 基础 playFlip 照常）。
+ * ③ 删除：墨绿腐蚀液自下而上完全覆盖（corruption-6 删除此牌）→ 碎裂成绿色光点消散
+ *    （基础破碎由 effects 照常）。
+ * 层 body 级 fixed、JS 定时自清理（clearGen2Fx 兜底 .fx-corrupt-*）。 */
+const CORRUPT_COVER_MS = 900;   // 腐蚀液覆盖（自上而下 / 自下而上）
+const CORRUPT_PARTICLE_MS = 1200; // 绿光点飘散时长
+/** corruption 弃牌前置段（腐蚀液膜 + 斑纹 + 光尘）完成 → 基础切割延后时长（effects 分流处） */
+export const CORRUPT_DISCARD_PRE_MS = CORRUPT_COVER_MS + 300 + 500;
+
+/** 被弃卡克隆（腐蚀载体）：同卡位、body 级、带墨绿光晕 */
+function buildCorruptCard(defId: string, rect: DOMRect): HTMLElement {
+  const clone = document.createElement('div');
+  clone.className = 'fx-corrupt-card';
+  clone.style.left = `${rect.left}px`;
+  clone.style.top = `${rect.top}px`;
+  clone.style.width = `${rect.width}px`;
+  clone.style.height = `${rect.height}px`;
+  clone.style.zIndex = String(GEN2_Z - 1);
+  const img = document.createElement('img');
+  img.src = cardFaceUrl(defId);
+  img.style.cssText =
+    'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;border-radius:6px;';
+  clone.appendChild(img);
+  document.body.appendChild(clone);
+  return clone;
+}
+
+/** 墨绿腐蚀液膜层（挂在克隆上，clip 由 CSS 动画驱动） */
+function attachCorrosionLiquid(clone: HTMLElement, fromTop: boolean): HTMLElement {
+  const liq = document.createElement('div');
+  liq.className = fromTop ? 'fx-corrupt-liquid top' : 'fx-corrupt-liquid bottom';
+  clone.appendChild(liq);
+  return liq;
+}
+
+/** 卡面碎裂绿光点（沿卡边缘/全卡随机小绿点向外飘散渐隐） */
+function spawnCorruptSpecks(rect: DOMRect, count = 14): void {
+  for (let i = 0; i < count; i++) {
+    const s = document.createElement('i');
+    s.className = 'fx-corrupt-speck';
+    const x = rect.left + Math.random() * rect.width;
+    const y = rect.top + Math.random() * rect.height;
+    s.style.left = `${x.toFixed(1)}px`;
+    s.style.top = `${y.toFixed(1)}px`;
+    s.style.setProperty('--fx-cdx', `${(Math.random() * 90 - 45).toFixed(1)}px`);
+    s.style.setProperty('--fx-cdy', `${(Math.random() * 90 - 20).toFixed(1)}px`);
+    s.style.animationDelay = `${(Math.random() * 0.4).toFixed(2)}s`;
+    s.style.zIndex = String(GEN2_Z);
+    document.body.appendChild(s);
+    window.setTimeout(() => s.remove(), CORRUPT_PARTICLE_MS + 500);
+  }
+}
+
+/** corruption 弃牌腐蚀（effects card:discarded 分支延后基础切割前调用——前置腐蚀层） */
+export function playCorruptionDiscardExtra(node: HTMLElement, payload: { defId: string }): void {
+  const rect = node.getBoundingClientRect();
+  if (rect.width === 0) return;
+  const clone = buildCorruptCard(payload.defId, rect);
+  // 自上而下滑入腐蚀液膜 → 浮现斑纹 + 绿光点 → 光尘消散
+  const liq = attachCorrosionLiquid(clone, true);
+  window.setTimeout(() => liq.classList.add('in'), 20);
+  window.setTimeout(() => {
+    clone.classList.add('speckling'); // 卡面碎裂淡出，露出下方基础切割
+    spawnCorruptSpecks(rect);
+  }, CORRUPT_COVER_MS + 300);
+  window.setTimeout(() => {
+    clone.remove();
+  }, CORRUPT_COVER_MS + CORRUPT_PARTICLE_MS + 800);
+}
+
+/** corruption-6 删除腐蚀（自下而上覆盖 → 碎成绿光点；基础破碎由 effects 照常） */
+export function playCorruptionDeleteExtra(node: HTMLElement, payload: { defId: string }): void {
+  const rect = node.getBoundingClientRect();
+  if (rect.width === 0) return;
+  const clone = buildCorruptCard(payload.defId, rect);
+  const liq = attachCorrosionLiquid(clone, false);
+  window.setTimeout(() => liq.classList.add('in'), 20);
+  window.setTimeout(() => {
+    clone.classList.add('speckling');
+    spawnCorruptSpecks(rect);
+  }, CORRUPT_COVER_MS + 250);
+  window.setTimeout(() => clone.remove(), CORRUPT_COVER_MS + CORRUPT_PARTICLE_MS + 600);
+}
+
+/** corruption 翻转毒雾（浮层盖卡渐隐；翻面由 effects 基础 playFlip 照常） */
+export function playCorruptionFlipExtra(node: HTMLElement): void {
+  const rect = node.getBoundingClientRect();
+  if (rect.width === 0) return;
+  const mist = document.createElement('div');
+  mist.className = 'fx-corrupt-mist';
+  mist.style.left = `${rect.left - 8}px`;
+  mist.style.top = `${rect.top - 8}px`;
+  mist.style.width = `${rect.width + 16}px`;
+  mist.style.height = `${rect.height + 16}px`;
+  mist.style.zIndex = String(GEN2_Z);
+  for (let i = 0; i < 6; i++) mist.appendChild(document.createElement('i'));
+  document.body.appendChild(mist);
+  window.setTimeout(() => mist.classList.add('in'), 20);
+  // 翻转覆盖层约 420ms 结束 → 毒雾渐隐
+  window.setTimeout(() => mist.classList.add('out'), 700);
+  window.setTimeout(() => mist.remove(), 1300);
+}
+
+/** corruption-1 中召回：被召回卡先被腐蚀成墨绿虚影，以虚影形态飞回持有者牌库并正面朝下落回。
+ *  卡此刻已入手牌（return op）→ 原卡节点 rect 捕获后建虚影 → 飞向持有者牌库中心（deck rect）。 */
+function onCorruptionReturned(p: { uid?: string; defId?: string; owner?: PlayerId }): void {
+  if (!p.uid || !p.defId || p.owner === undefined) return;
+  const node = document.querySelector<HTMLElement>(`[data-uid="${p.uid}"]`);
+  const from = node ? node.getBoundingClientRect() : null;
+  const deck = document.querySelector<HTMLElement>(`.deck[data-player="${p.owner}"]`);
+  if (!from || !deck) return;
+  const dr = deck.getBoundingClientRect();
+  if (from.width === 0 || dr.width === 0) return;
+  const ghost = buildCorruptCard(p.defId, from);
+  ghost.classList.add('fx-corrupt-return-ghost');
+  // 虚影出现（墨绿）+ 飞向牌库中心
+  const cx = from.left + from.width / 2;
+  const cy = from.top + from.height / 2;
+  const tx = dr.left + dr.width / 2;
+  const ty = dr.top + dr.height / 2;
+  const dx = tx - cx;
+  const dy = ty - cy;
+  window.setTimeout(() => {
+    ghost.style.transition = `transform 0.8s cubic-bezier(0.25, 0.7, 0.3, 1), opacity 0.7s ease`;
+    ghost.style.transform = `translate(${dx}px, ${dy}px) scale(0.7)`;
+    ghost.style.opacity = '0.6';
+  }, 60);
+  window.setTimeout(() => {
+    ghost.style.transition = 'opacity 0.4s ease-in';
+    ghost.style.opacity = '0';
+  }, 620);
+  window.setTimeout(() => ghost.remove(), 1100);
+}
+
+/** 订阅 luck / mirror / peace / chaos / clarity / corruption 引擎事件 */
 export function initGen2Fx(): () => void {
   return gameBus.subscribe((e: GameEvent) => {
     if (e.type === 'luck:roll') {
       onLuckRoll(e.payload as LuckPayload);
     } else if (e.type === 'card:copied') {
       onMirrorCopy(e.payload as { uid?: string; defId?: string; copiedToUid?: string });
+    } else if (e.type === 'card:returned') {
+      // corruption-1 中召回对手卡（腐化效果召回）→ 墨绿虚影飞回持有者牌库
+      const p = e.payload as { uid?: string; defId?: string; owner?: PlayerId; triggerProtocol?: string } | undefined;
+      if (p && p.triggerProtocol === 'corruption' && p.uid && p.defId) {
+        onCorruptionReturned(p);
+      }
     } else if (e.type === 'card:drawn') {
       const p = e.payload as
         | { player?: PlayerId; count?: number; owner?: PlayerId; uid?: string; fromOpponentDeck?: boolean; triggerProtocol?: string }

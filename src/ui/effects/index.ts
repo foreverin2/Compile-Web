@@ -3,7 +3,7 @@ import { mountShatter } from '../fx/delete-shatter';
 import { mountCut } from '../fx/discard-cut';
 import { buildTornadoFx } from '../fx-tornado';
 import { cardImgSrc, protocolImgSrc } from '../../data/demo';
-import { playPeaceDiscardExtra, PEACE_PRE_MS, playChaosDiscardExtra, CHAOS_DISCARD_PRE_MS, playIceShiftBridge, playSmokePlayFx, playFearShiftExtra } from '../fx-gen2';
+import { playPeaceDiscardExtra, PEACE_PRE_MS, playChaosDiscardExtra, CHAOS_DISCARD_PRE_MS, playIceShiftBridge, playSmokePlayFx, playFearShiftExtra, playCorruptionDiscardExtra, playCorruptionDeleteExtra, playCorruptionFlipExtra, CORRUPT_DISCARD_PRE_MS } from '../fx-gen2';
 
 const FX_REMOVE_MS = 1200;
 const BASE_Z = 300; // 基础行为特效层
@@ -1827,6 +1827,14 @@ export function initEffects(): () => void {
             const ccw = node.classList.contains('rot-ccw');
             playChaosDiscardExtra(node, payload);
             window.setTimeout(() => playCutAt(rect, cw, ccw, payload), CHAOS_DISCARD_PRE_MS);
+          } else if (payload.triggerProtocol === 'corruption') {
+            // 2代 corruption 弃牌腐蚀（fx-gen2）：墨绿腐蚀液膜 + 斑纹 + 绿光点前置段 →
+            // CORRUPT_DISCARD_PRE_MS 后基础切割
+            const rect = node.getBoundingClientRect();
+            const cw = node.classList.contains('rot-cw');
+            const ccw = node.classList.contains('rot-ccw');
+            playCorruptionDiscardExtra(node, payload);
+            window.setTimeout(() => playCutAt(rect, cw, ccw, payload), CORRUPT_DISCARD_PRE_MS);
           } else playCut(node, payload);
         }
         break;
@@ -1848,7 +1856,11 @@ export function initEffects(): () => void {
         if (node) {
           if (payload.triggerProtocol === 'life') playLifeFlip(node, payload);
           else if (payload.triggerProtocol === 'apathy') playApathyFlipExtra(node, payload);
-          else playFlip(node, payload);
+          else if (payload.triggerProtocol === 'corruption') {
+            // 2代 corruption 翻转（腐化协议翻转效果）：墨绿毒雾笼罩下完成翻面（基础翻面照常）
+            playCorruptionFlipExtra(node);
+            playFlip(node, payload);
+          } else playFlip(node, payload);
         }
         break;
       case 'card:returned':
@@ -1921,6 +1933,9 @@ export function initEffects(): () => void {
         playLightExtra(node, payload);
       } else if (payload.triggerProtocol === 'darkness') {
         playDarknessExtra(node, payload);
+      } else if (payload.triggerProtocol === 'corruption' && e.type === 'card:deleted') {
+        // 2代 corruption-6 删除自毁：墨绿腐蚀液自下而上覆盖 → 碎裂绿光点（基础破碎照常）
+        playCorruptionDeleteExtra(node, payload);
       } else if (e.type === 'card:deleted' && payload.triggerProtocol === 'death') {
         playDeathDeleteExtra(node, payload);
       } else if (e.type === 'card:deleted' && payload.triggerProtocol === 'hate') {
