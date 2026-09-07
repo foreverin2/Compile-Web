@@ -230,10 +230,26 @@ export function clearGen2Fx(): void {
   luckDiceLayers.clear();
   for (const eye of clarityDeckEyes.values()) eye.remove();
   clarityDeckEyes.clear();
+  // 全部 2代 瞬态 FX 层（批1-4；含 luck/mirror/peace/chaos/clarity/ice/smoke/fear/
+  // corruption/war/courage/time/assimilation/unity/diversity 的 body 级浮层）——
+  // 多数自带 setTimeout 自清理，但应用内重置（返回主界面）时立即清扫防残留。
   for (const el of document.querySelectorAll<HTMLElement>(
-    '.fx-luck-spark, .fx-luck-msg, .fx-luck-mushroom, .fx-mirror-copy-ghost, ' +
-      '.fx-mirror-copy-flash, .fx-peace-dove, .fx-peace-card, .fx-chaos-vortex-draw, ' +
-      '.fx-chaos-vortex-discard, .fx-chaos-card, .fx-clarity-eye, .fx-clarity-deck-eye, .fx-clarity-card-eye'
+    '.fx-luck-spark, .fx-luck-msg, .fx-luck-mushroom, .fx-luck-dice, .fx-luck-dice-glow, ' +
+      '.fx-mirror-copy-ghost, .fx-mirror-copy-flash, ' +
+      '.fx-peace-dove, .fx-peace-card, ' +
+      '.fx-chaos-vortex-draw, .fx-chaos-vortex-discard, .fx-chaos-card, ' +
+      '.fx-clarity-eye, .fx-clarity-deck-eye, .fx-clarity-card-eye, ' +
+      '.fx-ice-bridge, .fx-ice-bridge-end, .fx-ice-snow, ' +
+      '.fx-smoke-mist, .fx-smoke-cardglow, ' +
+      '.fx-fear-ghost, .fx-fear-landglow, ' +
+      '.fx-corrupt-card, .fx-corrupt-mist, .fx-corrupt-speck, .fx-corrupt-return-ghost, ' +
+      '.fx-war-slash, .fx-war-spark, .fx-war-flipglow, .fx-war-flag, ' +
+      '.fx-courage-sword, .fx-courage-inferno, .fx-courage-slash, .fx-courage-golddot, ' +
+      '.fx-courage-halo, .fx-courage-ring, .fx-courage-cardglow, ' +
+      '.fx-time-clock, .fx-time-trashglow, .fx-time-band, .fx-time-film, ' +
+      '.fx-assim-ring, .fx-assim-speck, .fx-assim-ripple, ' +
+      '.fx-unity-link, ' +
+      '.fx-diversity-ring, .fx-diversity-dust'
   )) {
     el.remove();
   }
@@ -1402,6 +1418,38 @@ export function playTimeDiscardExtra(node: HTMLElement): void {
   window.setTimeout(() => film.remove(), 1100);
 }
 
+/** time-2 顶沙漏：牌库上方浮现旋转古铜沙漏（沙粒向上倒流 → 旋转一圈后消失）。
+ *  触发：card:drawn + triggerProtocol=time（time-2 顶「当你切洗牌库时：抽取1张牌」）。 */
+export function playTimeHourglass(player: PlayerId): void {
+  const deck = document.querySelector<HTMLElement>(`.deck[data-player="${player}"]`);
+  if (!deck) return;
+  const r = deck.getBoundingClientRect();
+  if (r.width === 0) return;
+  const cx = r.left + r.width / 2;
+  const topY = r.top;
+  const hg = document.createElement('div');
+  hg.className = 'fx-time-hourglass';
+  hg.style.left = `${cx - 30}px`;
+  hg.style.top = `${topY - 84}px`;
+  hg.style.zIndex = String(GEN2_Z);
+  // 上下沙球 + 腰部（古铜）
+  hg.appendChild(Object.assign(document.createElement('i'), { className: 'fx-time-hourglass-top' }));
+  hg.appendChild(Object.assign(document.createElement('i'), { className: 'fx-time-hourglass-waist' }));
+  hg.appendChild(Object.assign(document.createElement('i'), { className: 'fx-time-hourglass-bottom' }));
+  // 沙粒（上球内金色小点向上飘 → 倒流感）
+  for (let i = 0; i < 4; i++) {
+    const g = document.createElement('i');
+    g.className = 'fx-time-sand';
+    g.style.animationDelay = `${(i * 0.3).toFixed(2)}s`;
+    hg.appendChild(g);
+  }
+  document.body.appendChild(hg);
+  window.setTimeout(() => hg.classList.add('in'), 20);
+  // 旋转一圈后消失（提示词：沙漏旋转一圈后渐渐消失）
+  window.setTimeout(() => hg.classList.add('out'), 2400);
+  window.setTimeout(() => hg.remove(), 3000);
+}
+
 /* ============================== assimilation 同化：青碧涟漪 / 光环 ==============================
  * ① 弃牌（card:discarded triggerProtocol=assimilation 非 toTrashOf——同化5/1 中弃自己手牌）：
  *    被弃卡被一圈青碧光环套住 → 光环收缩后卡化青碧光点消散（前置；effects 延后基础切割）。
@@ -1619,6 +1667,10 @@ export function initGen2Fx(): () => void {
       // courage 抽牌（勇气0/2/3 中抽牌）：抽出的卡落点湖中剑 + 卡框鎏金 2s
       if (p && p.triggerProtocol === 'courage' && (p.player === 0 || p.player === 1)) {
         playCourageDrawExtra(p.player);
+      }
+      // time-2 顶「当你切洗牌库时：抽取1张牌」→ 牌库上方旋转古铜沙漏（沙粒向上倒流）
+      if (p && p.triggerProtocol === 'time' && (p.player === 0 || p.player === 1)) {
+        playTimeHourglass(p.player);
       }
     }
   });
