@@ -1007,6 +1007,116 @@ function onCorruptionReturned(p: { uid?: string; defId?: string; owner?: PlayerI
   window.setTimeout(() => ghost.remove(), 1100);
 }
 
+/* ============================== war 战争：双剑 / 刀光 / 战旗 ==============================
+ * ① 弃置（card:discarded triggerProtocol=war，战争弃牌效果 war-1/2/4/5）：被弃卡被一道
+ *    赤红刀光斩中（斜向红刃划过 + 火花），卡被斩成两半化火星消散（前置段后 effects 延后
+ *    基础切割——本函数只播刀光 + 火花层）。
+ * ② 翻转（card:flipped triggerProtocol=war）：翻转前赤红铁灰光芒笼罩 + 铁器交击火花。
+ * ③ 被动触发成功（胜利战旗）：war-0 删卡（card:deleted war）/war-1 弃后刷新（discardMany
+ *    war）/war-2 对手弃手（discardMany war）/war-3 反打（deck-played war）→ 双剑迸发赤金
+ *    光芒 + 残破赤红战旗虚影向两侧展开 2s 后消散。战旗挂在触发源卡位置（triggerDefId 卡）。
+ * 层 body 级 fixed、JS 定时自清理（clearGen2Fx 兜底 .fx-war-*）。 */
+const WAR_SLASH_MS = 420;   // 刀光斩过
+const WAR_FLAG_MS = 2200;   // 战旗展开停留
+
+/** war 弃牌刀光：斜向赤红刀刃扫过被弃卡 + 火花（卡被斩两半化火星） */
+export function playWarDiscardExtra(node: HTMLElement): void {
+  const rect = node.getBoundingClientRect();
+  if (rect.width === 0) return;
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  const slash = document.createElement('div');
+  slash.className = 'fx-war-slash';
+  slash.style.left = `${rect.left - 20}px`;
+  slash.style.top = `${rect.top - 20}px`;
+  slash.style.width = `${rect.width + 40}px`;
+  slash.style.height = `${rect.height + 40}px`;
+  slash.style.zIndex = String(GEN2_Z);
+  document.body.appendChild(slash);
+  // 火花（斩击处飞溅）
+  for (let i = 0; i < 8; i++) {
+    const s = document.createElement('i');
+    s.className = 'fx-war-spark';
+    const ang = Math.random() * Math.PI * 2;
+    const dist = 20 + Math.random() * 46;
+    s.style.left = `${(cx + Math.cos(ang) * 10).toFixed(1)}px`;
+    s.style.top = `${(cy + Math.sin(ang) * 10).toFixed(1)}px`;
+    s.style.setProperty('--fx-wdx', `${(Math.cos(ang) * dist).toFixed(1)}px`);
+    s.style.setProperty('--fx-wdy', `${(Math.sin(ang) * dist).toFixed(1)}px`);
+    s.style.zIndex = String(GEN2_Z);
+    document.body.appendChild(s);
+    window.setTimeout(() => s.remove(), 800);
+  }
+  window.setTimeout(() => slash.classList.add('in'), 20);
+  window.setTimeout(() => slash.remove(), WAR_SLASH_MS + 200);
+}
+
+/** war 翻转（赤红铁灰光芒 + 火花；基础翻面照常） */
+export function playWarFlipExtra(node: HTMLElement): void {
+  const rect = node.getBoundingClientRect();
+  if (rect.width === 0) return;
+  const glow = document.createElement('div');
+  glow.className = 'fx-war-flipglow';
+  glow.style.left = `${rect.left - 8}px`;
+  glow.style.top = `${rect.top - 8}px`;
+  glow.style.width = `${rect.width + 16}px`;
+  glow.style.height = `${rect.height + 16}px`;
+  glow.style.zIndex = String(GEN2_Z - 1);
+  // 火花
+  for (let i = 0; i < 6; i++) {
+    const s = document.createElement('i');
+    s.className = 'fx-war-spark';
+    s.style.left = `${(rect.left + Math.random() * rect.width).toFixed(1)}px`;
+    s.style.top = `${(rect.top + Math.random() * rect.height).toFixed(1)}px`;
+    s.style.setProperty('--fx-wdx', `${(Math.random() * 60 - 30).toFixed(1)}px`);
+    s.style.setProperty('--fx-wdy', `${(Math.random() * 40 - 20).toFixed(1)}px`);
+    s.style.zIndex = String(GEN2_Z);
+    document.body.appendChild(s);
+    window.setTimeout(() => s.remove(), 800);
+  }
+  document.body.appendChild(glow);
+  window.setTimeout(() => glow.remove(), 900);
+}
+
+/** war 被动触发成功战旗（触发源卡位置：双剑迸发赤金光 + 残破赤红战旗展开 2s） */
+export function playWarVictoryFlag(sourceUid?: string, at?: { x: number; y: number }): void {
+  let x: number;
+  let y: number;
+  if (sourceUid) {
+    const node = document.querySelector<HTMLElement>(`[data-uid="${sourceUid}"]`);
+    const r = node ? node.getBoundingClientRect() : null;
+    if (r && r.width > 0) {
+      x = r.left + r.width / 2;
+      y = r.top + r.height / 2;
+    } else if (at) {
+      x = at.x;
+      y = at.y;
+    } else return;
+  } else if (at) {
+    x = at.x;
+    y = at.y;
+  } else return;
+  const flag = document.createElement('div');
+  flag.className = 'fx-war-flag';
+  flag.style.left = `${x}px`;
+  flag.style.top = `${y - 40}px`;
+  flag.style.zIndex = String(GEN2_Z);
+  // 战旗（残破赤红）+ 赤金光柱
+  const banner = document.createElement('i');
+  banner.className = 'fx-war-flag-banner';
+  const pole = document.createElement('i');
+  pole.className = 'fx-war-flag-pole';
+  const light = document.createElement('i');
+  light.className = 'fx-war-flag-light';
+  flag.appendChild(pole);
+  flag.appendChild(banner);
+  flag.appendChild(light);
+  document.body.appendChild(flag);
+  window.setTimeout(() => flag.classList.add('in'), 20);
+  window.setTimeout(() => flag.classList.add('out'), WAR_FLAG_MS);
+  window.setTimeout(() => flag.remove(), WAR_FLAG_MS + 600);
+}
+
 /** 订阅 luck / mirror / peace / chaos / clarity / corruption 引擎事件 */
 export function initGen2Fx(): () => void {
   return gameBus.subscribe((e: GameEvent) => {
@@ -1019,6 +1129,13 @@ export function initGen2Fx(): () => void {
       const p = e.payload as { uid?: string; defId?: string; owner?: PlayerId; triggerProtocol?: string } | undefined;
       if (p && p.triggerProtocol === 'corruption' && p.uid && p.defId) {
         onCorruptionReturned(p);
+      }
+    } else if (e.type === 'card:deleted' || e.type === 'card:discarded' || e.type === 'card:deck-played') {
+      // war 被动触发成功（war-0 删卡 / war-1 弃后刷新 / war-2 对手弃手 / war-3 反打）：
+      // 触发源卡（war-0/1/2/3）位置播放胜利战旗（双剑迸发赤金光 + 残破战旗展开）
+      const p = e.payload as { triggerProtocol?: string; triggerUid?: string } | undefined;
+      if (p && p.triggerProtocol === 'war' && p.triggerUid) {
+        playWarVictoryFlag(p.triggerUid);
       }
     } else if (e.type === 'card:drawn') {
       const p = e.payload as

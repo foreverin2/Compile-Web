@@ -314,6 +314,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       // triggerProtocol/triggerDefId：触发这张弃牌的卡（效果源），FX 层据此叠加协议专属额外特效
       emitCardEvent(s, 'card:discarded', card, {
         triggerDefId: pe.sourceDefId,
+        triggerUid: pe.sourceUid,
         triggerProtocol: pe.sourceDefId.split('-')[0],
       });
       // 即时连锁：弃牌者【对手】场上注册了 after-discard 的正面卡触发（plague-1「对手弃牌后：你抽1张」；
@@ -387,6 +388,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       // 协议专属特效（life → 绿色藤蔓缠绕；water-0 的翻转带 'water' → 无藤蔓）
       emitCardEvent(s, 'card:flipped', card, {
         triggerDefId: pe.sourceDefId,
+        triggerUid: pe.sourceUid,
         triggerProtocol: pe.sourceDefId.split('-')[0],
       });
       // FAQ 127：被覆盖卡翻正不触发中指令（始终被视为被覆盖状态）——仅未被覆盖的翻正连锁中指令；
@@ -413,6 +415,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       // triggerProtocol/triggerDefId：触发这张删去的卡（效果源），FX 层据此叠加协议专属额外特效
       emitCardEvent(s, 'card:deleted', card, {
         triggerDefId: pe.sourceDefId,
+        triggerUid: pe.sourceUid,
         triggerProtocol: pe.sourceDefId.split('-')[0],
       });
       // 即时连锁：被删卡【持有者】场上注册了 after-delete 的正面卡触发（hate-3「你的牌被删除后：抽1张」；
@@ -446,6 +449,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       // 协议专属特效（water → 蓝色水波环 + 光晕 + 游动轨迹环）
       emitCardEvent(s, 'card:returned', card, {
         triggerDefId: pe.sourceDefId,
+        triggerUid: pe.sourceUid,
         triggerProtocol: pe.sourceDefId.split('-')[0],
       });
       if (wasTop) revealAfterRemoval(s, owner, line); // 仅当移除的是顶卡时新顶卡才被"揭开"
@@ -481,6 +485,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       emitCardEvent(s, 'card:shifted', card, {
         fromLine,
         triggerDefId: pe.sourceDefId,
+        triggerUid: pe.sourceUid,
         triggerProtocol: pe.sourceDefId.split('-')[0],
       });
       if (wasTop) revealAfterRemoval(s, owner, fromLine); // 仅当移除的是顶卡时新顶卡才被"揭开"
@@ -507,6 +512,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       emitCardEvent(s, 'card:deck-played', card, {
         line: op.line,
         triggerDefId: pe.sourceDefId,
+        triggerUid: pe.sourceUid,
         triggerProtocol: pe.sourceDefId.split('-')[0],
       });
       break;
@@ -529,6 +535,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       emitCardEvent(s, 'card:hand-played', card, {
         line: op.line,
         triggerDefId: pe.sourceDefId,
+        triggerUid: pe.sourceUid,
         triggerProtocol: pe.sourceDefId.split('-')[0],
       });
       break;
@@ -562,6 +569,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       emitCardEvent(s, 'card:given', card, {
         to: op.to,
         triggerDefId: pe.sourceDefId,
+        triggerUid: pe.sourceUid,
         triggerProtocol: pe.sourceDefId.split('-')[0],
       });
       break;
@@ -579,6 +587,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       emitCardEvent(s, 'card:given', card, {
         to: pe.player,
         triggerDefId: pe.sourceDefId,
+        triggerUid: pe.sourceUid,
         triggerProtocol: pe.sourceDefId.split('-')[0],
       });
       break;
@@ -597,6 +606,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
         discardFromHand(s, card.owner, uid);
         emitCardEvent(s, 'card:discarded', card, {
           triggerDefId: pe.sourceDefId,
+        triggerUid: pe.sourceUid,
           triggerProtocol: pe.sourceDefId.split('-')[0],
         });
       }
@@ -637,6 +647,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       emitCardEvent(s, 'card:revealed', card, {
         shownTo,
         triggerDefId: pe.sourceDefId,
+        triggerUid: pe.sourceUid,
         triggerProtocol: pe.sourceDefId.split('-')[0],
       });
       // 修改提示词 25：被揭示的非公开牌 → 解除 secret（场上反面被揭示后持有者双击可翻面查看正面；
@@ -659,6 +670,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       p.trash.push(card);
       emitCardEvent(s, 'card:discarded', card, {
         triggerDefId: pe.sourceDefId,
+        triggerUid: pe.sourceUid,
         triggerProtocol: pe.sourceDefId.split('-')[0],
         fromDeckTop: true, // 修改提示词 5：牌库顶弃牌——FX 从牌库区起飞（该卡无场上/手牌 DOM 节点）
       });
@@ -712,6 +724,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
           defId: card.defId,
           copiedToUid: pe.sourceUid,
           triggerDefId: pe.sourceDefId,
+        triggerUid: pe.sourceUid,
           triggerProtocol: pe.sourceDefId.split('-')[0],
         },
       });
@@ -760,6 +773,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       p.hand.push(card);
       emitCardEvent(s, 'card:drawn', card, {
         triggerDefId: pe.sourceDefId,
+        triggerUid: pe.sourceUid,
         triggerProtocol: pe.sourceDefId.split('-')[0],
       });
       fireReactive(s, 'after-draw', target);
@@ -785,6 +799,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       emitCardEvent(s, 'card:deck-played', card, {
         line: op.line,
         triggerDefId: pe.sourceDefId,
+        triggerUid: pe.sourceUid,
         triggerProtocol: pe.sourceDefId.split('-')[0],
       });
       break;
@@ -805,6 +820,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       emitCardEvent(s, 'card:deck-played', card, {
         line: op.toLine,
         triggerDefId: pe.sourceDefId,
+        triggerUid: pe.sourceUid,
         triggerProtocol: pe.sourceDefId.split('-')[0],
       });
       break;
@@ -830,6 +846,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       emitCardEvent(s, 'card:given', card, {
         to: pe.player,
         triggerDefId: pe.sourceDefId,
+        triggerUid: pe.sourceUid,
         triggerProtocol: pe.sourceDefId.split('-')[0],
       });
       if (wasTop) revealAfterRemoval(s, owner, line); // 顶卡被取走 → 新顶揭开（faceDown 顶不触发）

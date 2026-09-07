@@ -1164,6 +1164,63 @@ export function syncFear0TriGlows(s: GameState): void {
   }
 }
 
+/* ===== 2代 war 战争常驻：war-0~3 被动在场双剑虚影 + 卡框赤红发光 =====
+ * war-0/1/2/3 faceUp 未覆盖顶卡（被动效果生效前提——after-* 底指令仅顶卡触发；war-0 顶
+ * after-refresh top:true 被盖仍触发——统一按 faceUp 未覆盖顶卡显示，被盖不亮简化）→
+ * 卡上方浮现两把交叉暗红铁剑虚影持续碰撞摩擦（CSS 双剑碰撞）+ 碰撞处迸赤红火星 +
+ * 卡框赤红呼吸发光。key = uid（卡离开/被盖移除）。同 FX-6 注册表模式。 */
+const warBlades = new Map<string, HTMLElement>();
+
+function renderWarBladeLayer(): HTMLElement {
+  const layer = el('div', 'fx-war-blade');
+  const swordL = el('div', 'fx-war-sword l');
+  const swordR = el('div', 'fx-war-sword r');
+  layer.appendChild(swordL);
+  layer.appendChild(swordR);
+  // 碰撞火花（小橙红星点向四周径向飞溅，CSS 循环）
+  const SPARKS: [number, number][] = [[14, -16], [-12, -14], [16, 12], [-15, 14]];
+  for (let i = 0; i < SPARKS.length; i++) {
+    const sp = el('i', 'fx-war-collide-spark');
+    sp.style.setProperty('--fx-sp-dx', `${SPARKS[i][0]}px`);
+    sp.style.setProperty('--fx-sp-dy', `${SPARKS[i][1]}px`);
+    layer.appendChild(sp);
+  }
+  return layer;
+}
+
+export function syncWarBlades(s: GameState): void {
+  const activeUids = new Set<string>();
+  for (const owner of [0, 1] as PlayerId[]) {
+    for (const line of [0, 1, 2] as Line[]) {
+      const stack = s.players[owner].stacks[line];
+      const top = stack[stack.length - 1];
+      if (!top || !top.faceUp) continue;
+      if (!['war-0', 'war-1', 'war-2', 'war-3'].includes(top.defId)) continue;
+      activeUids.add(top.uid);
+      const node = document.querySelector<HTMLElement>(`[data-uid="${top.uid}"]`);
+      if (!node) continue;
+      let layer = warBlades.get(top.uid);
+      if (!layer) {
+        layer = renderWarBladeLayer();
+        layer.dataset.warBladeKey = top.uid;
+        warBlades.set(top.uid, layer);
+        document.body.appendChild(layer);
+      }
+      const r = node.getBoundingClientRect();
+      layer.style.left = `${r.left - 6}px`;
+      layer.style.top = `${r.top - 6}px`;
+      layer.style.width = `${r.width + 12}px`;
+      layer.style.height = `${r.height + 12}px`;
+    }
+  }
+  for (const [uid, layer] of warBlades) {
+    if (!activeUids.has(uid)) {
+      layer.remove();
+      warBlades.delete(uid);
+    }
+  }
+}
+
 /* ===== FX-5：check-cache 锁链（spirit-0 跳过检查缓存，一次性步骤触发） =====
  * 触发：s.step === 'check-cache' 且 shouldSkipCacheCheck(s, player)（实际只有回合玩家
  * 会停在 check-cache——runAutoAdvance 在该玩家应跳过时自动 advance）→ 以该玩家手牌区
@@ -3334,6 +3391,60 @@ function appendCorruptionCompiled(layer: HTMLElement, defId: string): void {
   scheduleCompiledLoop(layer, defId, rnd(3000, 6500), burst);
 }
 
+/* ---------- 20. 战争 war（2代，fx-gen2 已编译）：赤红呼吸框 + 四角护边 ----------
+ * 周期战场特效：边框四周两把巨大暗红铁剑互相碰撞摩擦迸火星（2s 渐隐消散）→ 随后中心
+ * 浮现残破赤红战旗（硝烟中缓缓飘动 2s 消散）。间隔 ≥10s（scheduleCompiledLoop 拆两循环）。
+ * CSS 见 styles.css .compiled-war-*。 */
+function appendWarCompiled(layer: HTMLElement, defId: string): void {
+  appendCompiledCorners(layer, 'compiled-war-corner'); // §8：四角赤红护边
+  const host = el('div', 'compiled-war-host');
+  layer.appendChild(host);
+  // 双剑互碰 burst：两把巨剑斜交碰撞火星 2s 消散
+  const swordsBurst = (done: () => void): void => {
+    if (!layer.isConnected) { done(); return; }
+    const pair = el('div', 'compiled-war-swords');
+    const s1 = el('div', 'compiled-war-sword l');
+    const s2 = el('div', 'compiled-war-sword r');
+    pair.appendChild(s1);
+    pair.appendChild(s2);
+    for (let i = 0; i < 6; i++) {
+      const sp = el('i', 'compiled-war-swordspark');
+      pair.appendChild(sp);
+    }
+    host.appendChild(pair);
+    reflowFx(pair);
+    pair.classList.add('in');
+    fxTimer(defId, () => {
+      if (!layer.isConnected) { done(); return; }
+      pair.classList.add('out');
+      fxTimer(defId, () => {
+        if (pair.isConnected) pair.remove();
+        done();
+      }, 700);
+    }, 2000);
+  };
+  // 战旗 burst：残破赤红战旗在硝烟中飘动
+  const flagBurst = (done: () => void): void => {
+    if (!layer.isConnected) { done(); return; }
+    const flag = el('div', 'compiled-war-flag2');
+    flag.appendChild(el('i', 'compiled-war-flag2-banner'));
+    flag.appendChild(el('i', 'compiled-war-flag2-smoke'));
+    host.appendChild(flag);
+    reflowFx(flag);
+    flag.classList.add('in');
+    fxTimer(defId, () => {
+      if (!layer.isConnected) { done(); return; }
+      flag.classList.add('out');
+      fxTimer(defId, () => {
+        if (flag.isConnected) flag.remove();
+        done();
+      }, 800);
+    }, 2000);
+  };
+  scheduleCompiledLoop(layer, defId, rnd(3000, 6500), swordsBurst);
+  scheduleCompiledLoop(layer, defId, rnd(6000, 11000), flagBurst);
+}
+
 /** 新 10 协议已编译特效分发（buildCompiledFx 内调用；fire/light/darkness/water/life
  *  走既有分支，不在此列）。每个 builder 只建持久子结构 + 起调度，动画全部在层内。 */
 function appendNewCompiledFx(layer: HTMLElement, defId: string): void {
@@ -3357,6 +3468,7 @@ function appendNewCompiledFx(layer: HTMLElement, defId: string): void {
     case 'smoke': appendSmokeCompiled(layer, defId); break;
     case 'fear': appendFearCompiled(layer, defId); break;
     case 'corruption': appendCorruptionCompiled(layer, defId); break;
+    case 'war': appendWarCompiled(layer, defId); break;
     default: break;
   }
 }
@@ -4205,6 +4317,8 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   syncSmoke2LineGlows(s);
   // 2代 fear-0 恐惧顶常驻：其回合内对手三条链路橙红闪烁 + 覆盖
   syncFear0TriGlows(s);
+  // 2代 war 战争常驻：war-0~3 被动在场交叉双剑 + 卡框赤红发光
+  syncWarBlades(s);
 }
 
 let selectedUid: string | null = null;
@@ -4289,6 +4403,8 @@ export function resetUiState(): void {
   smoke2LineGlows.clear();
   for (const glow of fear0TriGlows.values()) glow.remove();
   fear0TriGlows.clear();
+  for (const layer of warBlades.values()) layer.remove();
+  warBlades.clear();
   if (chainLayer) {
     chainLayer.remove();
     chainLayer = null;

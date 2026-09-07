@@ -3,7 +3,7 @@ import { mountShatter } from '../fx/delete-shatter';
 import { mountCut } from '../fx/discard-cut';
 import { buildTornadoFx } from '../fx-tornado';
 import { cardImgSrc, protocolImgSrc } from '../../data/demo';
-import { playPeaceDiscardExtra, PEACE_PRE_MS, playChaosDiscardExtra, CHAOS_DISCARD_PRE_MS, playIceShiftBridge, playSmokePlayFx, playFearShiftExtra, playCorruptionDiscardExtra, playCorruptionDeleteExtra, playCorruptionFlipExtra, CORRUPT_DISCARD_PRE_MS } from '../fx-gen2';
+import { playPeaceDiscardExtra, PEACE_PRE_MS, playChaosDiscardExtra, CHAOS_DISCARD_PRE_MS, playIceShiftBridge, playSmokePlayFx, playFearShiftExtra, playCorruptionDiscardExtra, playCorruptionDeleteExtra, playCorruptionFlipExtra, CORRUPT_DISCARD_PRE_MS, playWarDiscardExtra, playWarFlipExtra } from '../fx-gen2';
 
 const FX_REMOVE_MS = 1200;
 const BASE_Z = 300; // 基础行为特效层
@@ -1835,6 +1835,11 @@ export function initEffects(): () => void {
             const ccw = node.classList.contains('rot-ccw');
             playCorruptionDiscardExtra(node, payload);
             window.setTimeout(() => playCutAt(rect, cw, ccw, payload), CORRUPT_DISCARD_PRE_MS);
+          } else if (payload.triggerProtocol === 'war') {
+            // 2代 war 弃牌（战争弃牌效果）：赤红刀光斩中（卡被斩成两半化火星消散）——刀光
+            // 覆盖层 + 基础切割照常（刀光先斩、切割随火星消散，时序接近即时）
+            playWarDiscardExtra(node);
+            playCut(node, payload);
           } else playCut(node, payload);
         }
         break;
@@ -1859,6 +1864,10 @@ export function initEffects(): () => void {
           else if (payload.triggerProtocol === 'corruption') {
             // 2代 corruption 翻转（腐化协议翻转效果）：墨绿毒雾笼罩下完成翻面（基础翻面照常）
             playCorruptionFlipExtra(node);
+            playFlip(node, payload);
+          } else if (payload.triggerProtocol === 'war') {
+            // 2代 war 翻转：赤红铁灰光芒笼罩 + 铁器交击火花（基础翻面照常）
+            playWarFlipExtra(node);
             playFlip(node, payload);
           } else playFlip(node, payload);
         }
