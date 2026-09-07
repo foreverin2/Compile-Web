@@ -696,6 +696,20 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
         prompt: null,
         lastAnswer: null,
       });
+      // mirror-1 复制 FX：被复制卡（op.uid）→ 复制者源卡（pe.sourceUid）虚影飞行。
+      // 引擎在 push 后发出（复制效果随后结算），FX 层据此在源卡位置播放幽灵浮现 →
+      // 飘向复制者 → 融合闪光（不阻塞结算：动画与复制效果并行，视觉"先特效后效果"）。
+      gameBus.emit({
+        type: 'card:copied',
+        state: s,
+        payload: {
+          uid: card.uid,
+          defId: card.defId,
+          copiedToUid: pe.sourceUid,
+          triggerDefId: pe.sourceDefId,
+          triggerProtocol: pe.sourceDefId.split('-')[0],
+        },
+      });
       break;
     }
     case 'reorderProtocols': {

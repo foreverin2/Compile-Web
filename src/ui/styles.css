@@ -3705,6 +3705,14 @@ body.dragging { cursor: grabbing; user-select: none; }
 .protocol.compiled-fx-love { border-color: #ff5fa2; box-shadow: 0 0 14px rgba(255, 95, 162, 0.55), inset 0 0 10px rgba(255, 95, 162, 0.22); }
 .protocol.compiled-fx-hate { border-color: #c81f35; box-shadow: 0 0 14px rgba(200, 31, 53, 0.55), inset 0 0 10px rgba(200, 31, 53, 0.22); }
 .protocol.compiled-fx-apathy { border-color: #9b9ea9; box-shadow: 0 0 14px rgba(160, 163, 175, 0.5), inset 0 0 10px rgba(160, 163, 175, 0.2); }
+/* 2代 luck 幸运已编译：橘色发光框 */
+.protocol.compiled-fx-luck { border-color: #ff9a2e; box-shadow: 0 0 16px rgba(255, 150, 40, 0.6), inset 0 0 10px rgba(255, 150, 40, 0.25); }
+/* 2代 mirror 明镜已编译：银白发光框（无金属光泽——柔和漫射） */
+.protocol.compiled-fx-mirror { border-color: #e2e8f5; box-shadow: 0 0 14px rgba(226, 232, 245, 0.55), inset 0 0 10px rgba(226, 232, 245, 0.22); }
+/* 2代 peace 和平已编译：海蓝与金币交替闪烁 */
+.protocol.compiled-fx-peace { border-color: #37a6e0; box-shadow: 0 0 14px rgba(55, 166, 224, 0.55), inset 0 0 10px rgba(55, 166, 224, 0.22); }
+/* 2代 chaos 混乱已编译：蓝紫相间发光框 */
+.protocol.compiled-fx-chaos { border-color: #7a4fe8; box-shadow: 0 0 16px rgba(122, 79, 232, 0.6), inset 0 0 10px rgba(122, 79, 232, 0.25); }
 
 /* 呼吸边框（隐藏通用岩浆段/岩石骨架；border+box-shadow 交替闪烁两色） */
 .compiled-ring-death,
@@ -3716,7 +3724,11 @@ body.dragging { cursor: grabbing; user-select: none; }
 .compiled-ring-speed,
 .compiled-ring-love,
 .compiled-ring-hate,
-.compiled-ring-apathy {
+.compiled-ring-apathy,
+.compiled-ring-luck,
+.compiled-ring-mirror,
+.compiled-ring-peace,
+.compiled-ring-chaos {
   border: 2px solid;
   border-radius: 14px;
 }
@@ -3729,7 +3741,11 @@ body.dragging { cursor: grabbing; user-select: none; }
 .compiled-ring-speed .lava-seg, .compiled-ring-speed .lava-rock,
 .compiled-ring-love .lava-seg, .compiled-ring-love .lava-rock,
 .compiled-ring-hate .lava-seg, .compiled-ring-hate .lava-rock,
-.compiled-ring-apathy .lava-seg, .compiled-ring-apathy .lava-rock {
+.compiled-ring-apathy .lava-seg, .compiled-ring-apathy .lava-rock,
+.compiled-ring-luck .lava-seg, .compiled-ring-luck .lava-rock,
+.compiled-ring-mirror .lava-seg, .compiled-ring-mirror .lava-rock,
+.compiled-ring-peace .lava-seg, .compiled-ring-peace .lava-rock,
+.compiled-ring-chaos .lava-seg, .compiled-ring-chaos .lava-rock {
   display: none;
 }
 
@@ -3840,6 +3856,54 @@ body.dragging { cursor: grabbing; user-select: none; }
     box-shadow: 0 0 16px 4px rgba(106, 109, 120, 0.7), 0 0 36px 12px rgba(106, 109, 120, 0.34), inset 0 0 12px rgba(106, 109, 120, 0.26);
   }
 }
+/* 2代 幸运 luck（橘色）：橘 #ffb64d ↔ 深橘 #d96b00 呼吸 */
+.compiled-ring-luck { animation: compiled-luck-breathe 2.6s ease-in-out infinite; }
+@keyframes compiled-luck-breathe {
+  0%, 100% {
+    border-color: #ffb64d;
+    box-shadow: 0 0 16px 4px rgba(255, 182, 77, 0.8), 0 0 38px 12px rgba(255, 182, 77, 0.38), inset 0 0 12px rgba(255, 182, 77, 0.32);
+  }
+  50% {
+    border-color: #d96b00;
+    box-shadow: 0 0 18px 5px rgba(217, 107, 0, 0.85), 0 0 42px 14px rgba(217, 107, 0, 0.42), inset 0 0 14px rgba(217, 107, 0, 0.34);
+  }
+}
+/* 2代 混乱 chaos（蓝紫相间）：蓝紫 #5c3fd8 ↔ 亮蓝紫 #9a7bff 呼吸 */
+@keyframes compiled-chaos-breathe {
+  0%, 100% {
+    border-color: #5c3fd8;
+    box-shadow: 0 0 16px 4px rgba(92, 63, 216, 0.75), 0 0 38px 12px rgba(92, 63, 216, 0.34), inset 0 0 12px rgba(92, 63, 216, 0.3);
+  }
+  50% {
+    border-color: #9a7bff;
+    box-shadow: 0 0 18px 5px rgba(154, 123, 255, 0.85), 0 0 42px 14px rgba(154, 123, 255, 0.42), inset 0 0 14px rgba(154, 123, 255, 0.34);
+  }
+}
+/* 2代 和平 peace（海蓝 ↔ 金币交替）：海蓝 #37a6e0 ↔ 金币 #f2b93e 呼吸 */
+@keyframes compiled-peace-breathe {
+  0%, 100% {
+    border-color: #37a6e0;
+    box-shadow: 0 0 16px 4px rgba(55, 166, 224, 0.8), 0 0 38px 12px rgba(55, 166, 224, 0.36), inset 0 0 12px rgba(55, 166, 224, 0.3);
+  }
+  50% {
+    border-color: #f2b93e;
+    box-shadow: 0 0 18px 5px rgba(242, 185, 62, 0.85), 0 0 42px 14px rgba(242, 185, 62, 0.42), inset 0 0 14px rgba(242, 185, 62, 0.34);
+  }
+}
+/* 2代 明镜 mirror（银白）：亮银 #f2f6ff ↔ 银灰 #b9c2d4 呼吸（无金属光泽——柔和漫射） */
+.compiled-ring-chaos { animation: compiled-chaos-breathe 2.2s ease-in-out infinite; }
+.compiled-ring-peace { animation: compiled-peace-breathe 2.4s ease-in-out infinite; }
+.compiled-ring-mirror { animation: compiled-mirror-breathe 3s ease-in-out infinite; }
+@keyframes compiled-mirror-breathe {
+  0%, 100% {
+    border-color: #e8edf8;
+    box-shadow: 0 0 14px 3px rgba(232, 237, 248, 0.6), 0 0 30px 10px rgba(232, 237, 248, 0.28), inset 0 0 12px rgba(232, 237, 248, 0.22);
+  }
+  50% {
+    border-color: #b9c2d4;
+    box-shadow: 0 0 16px 4px rgba(185, 194, 212, 0.7), 0 0 36px 12px rgba(185, 194, 212, 0.34), inset 0 0 14px rgba(185, 194, 212, 0.28);
+  }
+}
 
 /* ---------- 四角加厚护边（§8：所有 L 形协议都有；几何通用骨架 + 按协议 CSS 变量配色） ----------
  * metal 除外：其护边是金属渐变 clip-path L（见下方独立块，不走本骨架）。
@@ -3864,6 +3928,10 @@ body.dragging { cursor: grabbing; user-select: none; }
 .compiled-psychic-corner { --cc: #b14fe0; --ccg: rgba(200, 110, 255, 0.8); }      /* 亮紫（新） */
 .compiled-hate-corner { --cc: #d81f33; --ccg: rgba(220, 40, 60, 0.85); }          /* 血红（新） */
 .compiled-apathy-corner { --cc: #c9ccd6; --ccg: rgba(203, 206, 216, 0.75); }      /* 亮灰（新） */
+.compiled-luck-corner { --cc: #ff9a2e; --ccg: rgba(255, 170, 70, 0.85); }         /* 2代 幸运橘色 */
+.compiled-mirror-corner { --cc: #dfe6f5; --ccg: rgba(230, 238, 252, 0.8); }        /* 2代 明镜银白 */
+.compiled-peace-corner { --cc: #37a6e0; --ccg: rgba(80, 200, 240, 0.85); }        /* 2代 和平海蓝 */
+.compiled-chaos-corner { --cc: #7a4fe8; --ccg: rgba(160, 120, 255, 0.85); }        /* 2代 混乱蓝紫 */
 
 /* ---------- 1. 死已编译：缕缕黑烟 + 骷髅 ---------- */
 .compiled-death-smoke {
@@ -5130,4 +5198,655 @@ body.dragging { cursor: grabbing; user-select: none; }
   padding: 10px 12px;
   color: #dfe6f2;
   font-size: 12.5px;
+}
+
+/* =====================================================================
+ * 2代 协议专属特效（fx-gen2 模块；二代特效提示词.txt 逐套追加）
+ * ---------------------------------------------------------------------
+ * luck 幸运（橘色）——宣告骰子：declare-start 起转 → roll 判定成败。
+ * 层 = body 级 fixed（fx-gen2.ts 定位到源卡中心）；下方橙色半透明发光圆。
+ * ===================================================================== */
+
+/* 骰子层容器：perspective 供核心 3D 翻滚 */
+.fx-luck-dice {
+  perspective: 220px;
+}
+/* 骰子核心：橙色圆角方块 + 5 个白点（骰子 5 面观感） */
+.fx-luck-dice-core {
+  position: absolute;
+  inset: 0;
+  border-radius: 14px;
+  background: linear-gradient(145deg, #ffb347 0%, #ff8c1a 55%, #e67300 100%);
+  box-shadow:
+    inset 0 0 0 2px rgba(255, 255, 255, 0.35),
+    0 6px 18px rgba(230, 115, 0, 0.55),
+    0 0 26px rgba(255, 140, 26, 0.4);
+  transform-style: preserve-3d;
+}
+/* 白点（5 面布局：中心 + 四角） */
+.fx-luck-pip {
+  position: absolute;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #fff7ec;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+.fx-luck-pip.p1 { left: 50%; top: 50%; transform: translate(-50%, -50%); }
+.fx-luck-pip.p2 { left: 18%; top: 20%; }
+.fx-luck-pip.p3 { right: 18%; top: 20%; }
+.fx-luck-pip.p4 { left: 18%; bottom: 20%; }
+.fx-luck-pip.p5 { right: 18%; bottom: 20%; }
+
+/* 橙色半透明发光圆底（固定不转，呼吸脉动） */
+.fx-luck-dice-glow {
+  position: fixed;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 160, 50, 0.5) 0%, rgba(255, 140, 26, 0.22) 45%, transparent 72%);
+  animation: fx-luck-glow-breathe 1.4s ease-in-out infinite;
+  transition: opacity 0.3s ease;
+}
+@keyframes fx-luck-glow-breathe {
+  0%, 100% { transform: scale(0.92); opacity: 0.75; }
+  50% { transform: scale(1.08); opacity: 1; }
+}
+
+/* 转动中：核心绕 X/Y 持续翻滚（父层 perspective 提供 3D 景深） */
+.fx-luck-dice.rolling .fx-luck-dice-core {
+  animation: fx-luck-dice-roll 0.9s linear infinite;
+}
+@keyframes fx-luck-dice-roll {
+  0% { transform: rotateX(0deg) rotateY(0deg); }
+  25% { transform: rotateX(180deg) rotateY(0deg); }
+  50% { transform: rotateX(180deg) rotateY(180deg); }
+  75% { transform: rotateX(360deg) rotateY(180deg); }
+  100% { transform: rotateX(360deg) rotateY(360deg); }
+}
+
+/* 成功：停转 → 收缩成橙色实心圆（白点淡出），保持后整层淡出 */
+.fx-luck-dice.success .fx-luck-dice-core {
+  animation: none;
+  border-radius: 50%;
+  background: radial-gradient(circle at 38% 34%, #ffcf8f 0%, #ff9a2e 55%, #f07f00 100%);
+  box-shadow: 0 0 30px rgba(255, 165, 60, 0.9), inset 0 0 0 2px rgba(255, 255, 255, 0.4);
+  transform: scale(0.82);
+  transition: transform 0.35s cubic-bezier(0.2, 0.8, 0.3, 1.2), border-radius 0.3s ease, background 0.3s ease;
+}
+.fx-luck-dice.success .fx-luck-pip {
+  opacity: 0;
+  transition: opacity 0.25s ease;
+}
+.fx-luck-dice.gone,
+.fx-luck-dice-glow.gone {
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+/* 失败：停转 → 快速缩小消失（爆炸由蘑菇云承接） */
+.fx-luck-dice.fail .fx-luck-dice-core {
+  animation: none;
+  transform: scale(0.1);
+  opacity: 0;
+  transition: transform 0.3s ease-in, opacity 0.3s ease-in;
+}
+
+/* ---- 成功烟花：橙红火星向外飞散渐隐（JS 定位发射点） ---- */
+.fx-luck-spark {
+  position: fixed;
+  border-radius: 50%;
+  background: radial-gradient(circle, #ffe9b0 0%, #ff9a2e 55%, #ff5a00 100%);
+  box-shadow: 0 0 8px rgba(255, 140, 26, 0.9);
+  animation: fx-luck-spark-fly 0.9s cubic-bezier(0.1, 0.6, 0.4, 1) forwards;
+  z-index: 600;
+  pointer-events: none;
+}
+@keyframes fx-luck-spark-fly {
+  0% { transform: translate(0, 0) scale(1); opacity: 1; }
+  100% { transform: translate(var(--fx-dx, 30px), var(--fx-dy, -40px)) scale(0.2); opacity: 0; }
+}
+
+/* ---- 结果字样（成功 666/888 橙透明 / 失败 囧 红） ---- */
+.fx-luck-msg {
+  position: fixed;
+  transform: translate(-50%, -50%);
+  font-weight: 900;
+  letter-spacing: 2px;
+  z-index: 601;
+  pointer-events: none;
+  animation: fx-luck-msg-pop 0.45s cubic-bezier(0.2, 0.8, 0.3, 1.3) forwards;
+  text-shadow: 0 0 18px currentColor;
+}
+.fx-luck-msg.good {
+  color: rgba(255, 170, 60, 0.85);
+  font-size: 46px;
+}
+.fx-luck-msg.bad {
+  color: rgba(255, 70, 40, 0.92);
+  font-size: 52px;
+}
+.fx-luck-msg.out {
+  opacity: 0;
+  transition: opacity 0.45s ease;
+}
+@keyframes fx-luck-msg-pop {
+  0% { transform: translate(-50%, -50%) scale(0.2); opacity: 0; }
+  70% { transform: translate(-50%, -50%) scale(1.12); opacity: 1; }
+  100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+}
+
+/* ---- 失败红蘑菇云：柱 + 顶盖爆炸扩散 ---- */
+.fx-luck-mushroom {
+  position: fixed;
+  width: 0;
+  height: 0;
+  z-index: 600;
+  pointer-events: none;
+}
+.fx-luck-mushroom-stem {
+  position: absolute;
+  left: -16px;
+  bottom: -14px;
+  width: 32px;
+  height: 60px;
+  background: radial-gradient(ellipse at 50% 100%, #ff3b1f 0%, #c21807 60%, #7a0c04 100%);
+  border-radius: 8px 8px 6px 6px;
+  animation: fx-luck-mushroom-grow 0.5s ease-out forwards;
+  transform-origin: 50% 100%;
+}
+.fx-luck-mushroom-cap {
+  position: absolute;
+  left: -64px;
+  top: -46px;
+  width: 128px;
+  height: 86px;
+  background:
+    radial-gradient(circle at 30% 30%, #ff6a45 0%, #e02010 45%, #8a0a03 100%);
+  border-radius: 50% 50% 42% 42% / 72% 72% 34% 34%;
+  box-shadow: 0 0 40px rgba(255, 60, 20, 0.75);
+  animation: fx-luck-mushroom-grow 0.55s cubic-bezier(0.1, 0.7, 0.3, 1.2) forwards;
+  transform-origin: 50% 100%;
+}
+.fx-luck-mushroom.out {
+  opacity: 0;
+  transition: opacity 0.5s ease;
+}
+@keyframes fx-luck-mushroom-grow {
+  0% { transform: scale(0.1); opacity: 0.4; }
+  60% { transform: scale(1.25); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+/* =====================================================================
+ * luck 幸运已编译：中心偶发红黑转盘（render.ts appendLuckCompiled 驱动）
+ * 圆盘 conic 红黑 8 格 → 铁珠盘缘滚动 1s 随机停格 → 红=橙红烟花 / 黑=红蘑菇云。
+ * ===================================================================== */
+.compiled-luck-host {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 3; /* 与四角护边同层，盘面在卡面上方 */
+}
+.compiled-luck-wheel {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  border-radius: 50%;
+  background:
+    repeating-conic-gradient(
+      from 0deg,
+      #ff7a1a 0deg 45deg,
+      #2b2b33 45deg 90deg
+    );
+  box-shadow:
+    0 0 22px rgba(255, 140, 26, 0.55),
+    inset 0 0 0 3px rgba(255, 220, 160, 0.5),
+    inset 0 0 14px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+}
+/* 铁珠：亮金属珠，随 rotate 绕盘缘滚动 */
+.compiled-luck-ball {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  border-radius: 50%;
+  background: radial-gradient(circle at 34% 30%, #fff 0%, #ffe9c4 28%, #c8b28e 62%, #7a6a52 100%);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6), 0 0 10px rgba(255, 255, 255, 0.5);
+  will-change: transform;
+}
+/* 红格结果：小型橙红烟花（小火星上浮渐隐） */
+.compiled-luck-firework {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #ffe9b0 0%, #ff9a2e 55%, #ff5a00 100%);
+  box-shadow: 0 0 8px rgba(255, 140, 26, 0.9);
+  animation: compiled-luck-fw 0.9s ease-out forwards;
+  opacity: 0;
+}
+@keyframes compiled-luck-fw {
+  0% { transform: translate(0, 0) scale(1); opacity: 1; }
+  60% { opacity: 0.95; }
+  100% { transform: translate(calc(var(--fx-dx, 0px)), -34px) scale(0.15); opacity: 0; }
+}
+/* 黑格结果：小型红蘑菇云 */
+.compiled-luck-cloud {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 74px;
+  height: 52px;
+  margin-left: -37px;
+  margin-top: -30px;
+  background:
+    radial-gradient(circle at 30% 32%, #ff6a45 0%, #e02010 48%, #7a0a02 100%);
+  border-radius: 48% 52% 44% 56% / 64% 62% 40% 38%;
+  box-shadow: 0 0 26px rgba(255, 60, 20, 0.7);
+  animation: compiled-luck-cloud 1.05s ease-out forwards;
+  opacity: 0;
+}
+@keyframes compiled-luck-cloud {
+  0% { transform: scale(0.1); opacity: 0.3; }
+  45% { transform: scale(1.18); opacity: 1; }
+  100% { transform: scale(1.05); opacity: 0; }
+}
+
+/* =====================================================================
+ * 2代 mirror-0 明镜常驻：链路能量槽银白镜框（syncMirror0BatteryGlows 驱动）
+ * 银白边框：柔和漫射光（无金属光泽/无高光扫掠）+ 30% 透明镜纹覆盖层。
+ * ===================================================================== */
+.fx-mirror0-batteryglow {
+  position: fixed;
+  border: 2px solid rgba(226, 232, 245, 0.7);
+  border-radius: 8px;
+  background:
+    repeating-linear-gradient(
+      115deg,
+      rgba(226, 232, 245, 0.3) 0px,
+      rgba(226, 232, 245, 0.3) 2px,
+      rgba(190, 200, 220, 0.12) 2px,
+      rgba(190, 200, 220, 0.12) 5px
+    );
+  box-shadow:
+    0 0 10px rgba(226, 232, 245, 0.45),
+    0 0 22px rgba(226, 232, 245, 0.18),
+    inset 0 0 8px rgba(226, 232, 245, 0.22);
+  pointer-events: none;
+  z-index: 95; /* 略低于 compiled-fx(100)，高于槽位内容 */
+  animation: fx-mirror0-breathe 3.4s ease-in-out infinite;
+}
+@keyframes fx-mirror0-breathe {
+  0%, 100% { border-color: rgba(226, 232, 245, 0.55); box-shadow: 0 0 8px rgba(226, 232, 245, 0.35), inset 0 0 6px rgba(226, 232, 245, 0.18); }
+  50% { border-color: rgba(240, 244, 252, 0.85); box-shadow: 0 0 14px rgba(240, 244, 252, 0.55), 0 0 26px rgba(226, 232, 245, 0.22), inset 0 0 10px rgba(240, 244, 252, 0.28); }
+}
+
+/* =====================================================================
+ * 2代 mirror-1 明镜复制虚影（fx-gen2.ts onMirrorCopy 驱动）
+ * 虚影：被复制卡正面图 + 银白光晕（幽灵感）；融合闪光：白芒扩散。
+ * ===================================================================== */
+.fx-mirror-copy-ghost {
+  position: fixed;
+  pointer-events: none;
+  filter: drop-shadow(0 0 10px rgba(226, 236, 255, 0.75)) saturate(1.15);
+  opacity: 0;
+  will-change: transform, opacity;
+}
+.fx-mirror-copy-ghost img {
+  box-shadow: 0 0 16px rgba(226, 236, 255, 0.6);
+}
+.fx-mirror-copy-flash {
+  position: fixed;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.95) 0%, rgba(226, 236, 255, 0.55) 40%, transparent 72%);
+  pointer-events: none;
+  animation: fx-mirror-copy-flash 0.42s ease-out forwards;
+}
+@keyframes fx-mirror-copy-flash {
+  0% { transform: scale(0.25); opacity: 0.9; }
+  100% { transform: scale(1.15); opacity: 0; }
+}
+
+/* =====================================================================
+ * 2代 mirror 明镜已编译：周期镜纹覆盖（render.ts appendMirrorCompiled 驱动）
+ * 镜面纹理：斜向细线层叠（镜片拼接观感），透明度 0→1 渐实（1.8s）；
+ * 100% 实化瞬间 .compiled-mirror-flash 白芒扩散。
+ * ===================================================================== */
+.compiled-mirror-texture {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 4; /* 覆盖卡面（环带 z 2 / 护边 z 3 之上） */
+  opacity: 0;
+  background:
+    repeating-linear-gradient(
+      115deg,
+      rgba(226, 236, 252, 0.14) 0px,
+      rgba(226, 236, 252, 0.14) 3px,
+      rgba(255, 255, 255, 0.3) 3px,
+      rgba(255, 255, 255, 0.3) 5px,
+      rgba(200, 214, 236, 0.1) 5px,
+      rgba(200, 214, 236, 0.1) 9px
+    ),
+    repeating-linear-gradient(
+      25deg,
+      rgba(255, 255, 255, 0.16) 0px,
+      rgba(255, 255, 255, 0.16) 2px,
+      transparent 2px,
+      transparent 7px
+    );
+  border-radius: 14px;
+  box-shadow: inset 0 0 18px rgba(255, 255, 255, 0.35);
+}
+.compiled-mirror-flash {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 60px;
+  height: 60px;
+  margin-left: -30px;
+  margin-top: -30px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.98) 0%, rgba(230, 240, 255, 0.6) 42%, transparent 72%);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+.compiled-mirror-flash.on {
+  opacity: 1;
+  animation: compiled-mirror-flash-pop 0.5s ease-out forwards;
+}
+@keyframes compiled-mirror-flash-pop {
+  0% { transform: scale(0.2); opacity: 0.95; }
+  100% { transform: scale(4.2); opacity: 0; }
+}
+
+/* =====================================================================
+ * 2代 peace 和平弃牌：和平鸽（fx-gen2.ts playPeaceDiscardExtra 驱动）
+ * 纯 CSS 造型：白身 + 头喙 + 尾 + 双翼（上下扑扇——挥动翅膀的鸽子）。
+ * 容器 .fx-peace-dove 为 body 级 fixed 定位盒（~64×48），JS 控制位移过渡。
+ * ===================================================================== */
+.fx-peace-dove {
+  position: fixed;
+  width: 64px;
+  height: 48px;
+  pointer-events: none;
+  filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.3));
+  will-change: transform, opacity;
+}
+.fx-peace-dove-body {
+  position: absolute;
+  left: 12px;
+  top: 18px;
+  width: 30px;
+  height: 20px;
+  border-radius: 50% 55% 48% 52%;
+  background: linear-gradient(160deg, #ffffff 0%, #f2f4f8 60%, #dde2ea 100%);
+  box-shadow: inset -3px -2px 6px rgba(150, 160, 180, 0.35);
+  transform: rotate(-8deg);
+}
+/* 尾巴：左下三角 */
+.fx-peace-dove-tail {
+  position: absolute;
+  left: -10px;
+  top: 6px;
+  width: 16px;
+  height: 8px;
+  background: linear-gradient(200deg, #eef1f6 0%, #d5dbe5 100%);
+  clip-path: polygon(0 0, 100% 60%, 55% 100%);
+  transform: rotate(-14deg);
+}
+/* 双翼：绕背上缘旋转（transform-origin 底部 → 扑扇上下摆动） */
+.fx-peace-dove-wing {
+  position: absolute;
+  width: 26px;
+  height: 20px;
+  border-radius: 80% 20% 60% 40%;
+  background: linear-gradient(150deg, #ffffff 0%, #eef1f7 70%, #dbe1ec 100%);
+  box-shadow: inset 0 -3px 5px rgba(150, 160, 185, 0.3);
+  transform-origin: 50% 100%;
+}
+.fx-peace-dove-wing.back {
+  left: 8px;
+  top: 2px;
+  transform: rotate(16deg);
+  animation: fx-peace-wing-back 0.34s ease-in-out infinite alternate;
+}
+.fx-peace-dove-wing.front {
+  left: 26px;
+  top: 0px;
+  transform: rotate(28deg);
+  animation: fx-peace-wing-front 0.34s ease-in-out infinite alternate;
+  z-index: 2;
+}
+@keyframes fx-peace-wing-back {
+  from { transform: rotate(10deg); }
+  to { transform: rotate(40deg); }
+}
+@keyframes fx-peace-wing-front {
+  from { transform: rotate(20deg); }
+  to { transform: rotate(52deg); }
+}
+/* 头 + 喙 */
+.fx-peace-dove-head {
+  position: absolute;
+  left: 34px;
+  top: 14px;
+  width: 13px;
+  height: 12px;
+  border-radius: 50%;
+  background: linear-gradient(160deg, #ffffff 0%, #eef1f6 100%);
+}
+.fx-peace-dove-beak {
+  position: absolute;
+  right: -5px;
+  top: 4px;
+  width: 7px;
+  height: 4px;
+  background: #e8b04b;
+  clip-path: polygon(0 0, 100% 50%, 0 100%);
+}
+/* 被弃卡克隆（被抓走缩小贴鸽身下） */
+.fx-peace-card {
+  position: fixed;
+  pointer-events: none;
+  will-change: transform, opacity;
+  filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.35));
+}
+
+/* =====================================================================
+ * 2代 peace 和平已编译：环绕鸽子（render.ts appendPeaceCompiled 驱动）
+ * 已编译层内鸽子 = absolute（弃牌场景 .fx-peace-dove 是 fixed——覆写定位）。
+ * 环绕轨道：2 只鸽子沿层盒椭圆路径绕飞（offset-path + offset-rotate 0 保持水平）。
+ * ===================================================================== */
+.compiled-fx-peace .fx-peace-dove {
+  position: absolute;
+}
+.compiled-peace-orbit {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+  overflow: visible;
+}
+.compiled-peace-orbit-dove {
+  left: 50%;
+  top: 50%;
+  margin-left: -32px;
+  margin-top: -24px;
+  transform: scale(0.5);
+  transform-origin: center;
+  offset-path: ellipse(58% 46% at 50% 50%);
+  offset-rotate: 0deg;
+  animation-name: compiled-peace-orbit-fly;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+@keyframes compiled-peace-orbit-fly {
+  0% { offset-distance: 0%; }
+  100% { offset-distance: 100%; }
+}
+/* 休息鸽：落定框边（JS 控制 transform/opacity 过渡），翅膀 CSS 动画持续扑扇 */
+.compiled-peace-rest {
+  transform-origin: 50% 100%;
+}
+
+/* =====================================================================
+ * 2代 chaos 混乱 FX
+ * ---------------------------------------------------------------------
+ * chaos-3 手牌特效：仅正面显示时——边框紫蓝交替闪烁发光 + 卡面偶发蓝紫雾气。
+ * ===================================================================== */
+.fx-chaos3-hand {
+  animation: fx-chaos3-border 1.6s ease-in-out infinite;
+  border-radius: 8px;
+}
+@keyframes fx-chaos3-border {
+  0%, 100% {
+    box-shadow: 0 0 6px 1px rgba(124, 80, 255, 0.55), inset 0 0 4px rgba(124, 80, 255, 0.2);
+    filter: brightness(1);
+  }
+  50% {
+    box-shadow: 0 0 14px 3px rgba(74, 190, 255, 0.8), inset 0 0 8px rgba(74, 190, 255, 0.3);
+    filter: brightness(1.06);
+  }
+}
+.fx-chaos3-mist {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+  border-radius: 8px;
+}
+.fx-chaos3-mist-blob {
+  position: absolute;
+  width: 70px;
+  height: 54px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(110, 90, 255, 0.4) 0%, rgba(90, 160, 255, 0.18) 55%, transparent 75%);
+  filter: blur(3px);
+  opacity: 0;
+  animation: fx-chaos3-mist-float 5.4s ease-in-out infinite;
+}
+.fx-chaos3-mist-blob:nth-child(1) { left: -18px; top: 18%; }
+.fx-chaos3-mist-blob:nth-child(2) { right: -16px; top: 48%; animation-delay: -1.8s; }
+.fx-chaos3-mist-blob:nth-child(3) { left: 16%; bottom: -12px; animation-delay: -3.6s; }
+@keyframes fx-chaos3-mist-float {
+  0%, 100% { transform: scale(0.5); opacity: 0; }
+  50% { transform: scale(1.15); opacity: 0.7; }
+}
+
+/* ---- chaos 漩涡（抽牌/弃牌共用核心：多层旋转扇片 + 中心黑洞） ---- */
+.fx-chaos-vortex-draw,
+.fx-chaos-vortex-discard {
+  position: fixed;
+  pointer-events: none;
+  opacity: 0;
+  transform: scale(0.3);
+  transition: opacity 0.45s ease-out, transform 0.5s cubic-bezier(0.2, 0.8, 0.3, 1.2);
+}
+.fx-chaos-vortex-draw.in,
+.fx-chaos-vortex-discard.in {
+  opacity: 1;
+  transform: scale(1);
+}
+.fx-chaos-vortex-draw.out,
+.fx-chaos-vortex-discard.out {
+  opacity: 0;
+  transition: opacity 0.7s ease-in, transform 0.7s ease-in;
+  transform: scale(0.7);
+}
+.fx-chaos-vortex {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  animation: fx-chaos-vortex-spin 1.5s linear infinite;
+}
+@keyframes fx-chaos-vortex-spin {
+  to { transform: rotate(360deg); }
+}
+.fx-chaos-vortex-blade {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  mix-blend-mode: screen;
+}
+.fx-chaos-vortex-blade.b1 {
+  background: conic-gradient(from 0deg, rgba(124, 60, 255, 0.65), rgba(60, 160, 255, 0.5), transparent 72%);
+  filter: blur(1px);
+}
+.fx-chaos-vortex-blade.b2 {
+  background: conic-gradient(from 120deg, rgba(80, 200, 255, 0.6), rgba(130, 80, 255, 0.5), transparent 72%);
+  animation: fx-chaos-vortex-spin 2.2s linear infinite reverse;
+  filter: blur(2px);
+}
+.fx-chaos-vortex-blade.b3 {
+  background: conic-gradient(from 240deg, rgba(150, 90, 255, 0.7), rgba(50, 190, 255, 0.55), transparent 70%);
+  filter: blur(1px);
+}
+.fx-chaos-vortex-hole {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 16%;
+  height: 16%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: radial-gradient(circle, #0a0616 0%, #241450 55%, rgba(40, 20, 80, 0.4) 100%);
+  box-shadow: 0 0 12px rgba(90, 50, 220, 0.8);
+}
+/* 弃牌吸入的被弃卡克隆 */
+.fx-chaos-card {
+  position: fixed;
+  pointer-events: none;
+  will-change: transform, opacity;
+  filter: drop-shadow(0 3px 6px rgba(0, 0, 0, 0.4));
+}
+
+/* =====================================================================
+ * 2代 chaos 混乱已编译：中心漩涡扩散爆炸（render.ts appendChaosCompiled 驱动）
+ * ===================================================================== */
+.compiled-chaos-host {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 3;
+}
+.compiled-chaos-vortex {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  border-radius: 50%;
+  background:
+    repeating-conic-gradient(
+      from 0deg,
+      rgba(124, 60, 255, 0.55) 0deg 30deg,
+      rgba(60, 150, 255, 0.5) 30deg 60deg,
+      rgba(30, 20, 60, 0.75) 60deg 90deg
+    );
+  filter: blur(1.5px);
+  mix-blend-mode: screen;
+  box-shadow: 0 0 26px rgba(120, 80, 255, 0.6);
+}
+.compiled-chaos-flash {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 80px;
+  height: 80px;
+  margin-left: -40px;
+  margin-top: -40px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.95) 0%, rgba(170, 140, 255, 0.6) 40%, transparent 72%);
+  opacity: 0;
+}
+.compiled-chaos-flash.on {
+  animation: compiled-chaos-flash-pop 0.4s ease-out forwards;
+}
+@keyframes compiled-chaos-flash-pop {
+  0% { transform: scale(0.2); opacity: 0.95; }
+  100% { transform: scale(5); opacity: 0; }
 }

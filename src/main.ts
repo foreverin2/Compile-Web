@@ -3,12 +3,13 @@ import { createGame, performDraftPick, performDraftUnpick, performDraftBan } fro
 import { executeAction } from './core/game';
 import { getCompilableLines } from './core/rules/compile';
 import { collectTriggers } from './core/effects/triggers';
-import { renderApp, renderDraft, resetUiState, syncCompiledFxLayers, syncSmokeOverlays, syncScanOverlays, syncPsychicParticles, syncPlagueMists, syncApathyMists, syncApathyMosaics, syncSpirit0Glows, syncSpirit1Cards, syncMetal0Glows, syncMetalPlates, syncMetal6Mans, syncMetal1LineGlows, syncChainLayerPosition, type UiCallbacks } from './ui/render';
+import { renderApp, renderDraft, resetUiState, syncCompiledFxLayers, syncSmokeOverlays, syncScanOverlays, syncPsychicParticles, syncPlagueMists, syncApathyMists, syncApathyMosaics, syncSpirit0Glows, syncSpirit1Cards, syncMetal0Glows, syncMetalPlates, syncMetal6Mans, syncMetal1LineGlows, syncMirror0BatteryGlows, syncChainLayerPosition, type UiCallbacks } from './ui/render';
 import { openControlRearrangeModal, closeControlRearrangeModal, refreshControlRearrangeModal } from './ui/control-rearrange';
 import { renderHome, renderCoin, renderLibrary, renderRules, renderModeSelect } from './ui/home';
 import { resetControlIfHeld } from './core/rules/control';
 import { DEMO_PROTOCOLS } from './data/demo';
 import { initEffects, initCompileFx, initRearrangeFx, initShuffleFx, playRevealFly, buildLoveHeart, playSpeedDrawExtra, SPEED_TOTAL_MS } from './ui/effects';
+import { initGen2Fx, clearGen2Fx } from './ui/fx-gen2';
 import { initDiag } from './ui/diag';
 import { initDevMode } from './ui/devmode';
 import { gameBus } from './core/events/bus';
@@ -459,6 +460,7 @@ function resetToMainInterface(): void {
   transitioning = false;
   pendingDraws = [];
   pendingReveals = [];
+  clearGen2Fx(); // 2代 瞬态 FX（luck 骰子/烟花/蘑菇云）随局清扫
   closeControlRearrangeModal(); // 控制组件重排模态（body 级）随局清扫
   resetUiState();
   showHome();
@@ -507,6 +509,7 @@ initEffects();
 initCompileFx();
 initRearrangeFx();
 initShuffleFx(); // 修改提示词 4：洗牌/切洗/弃牌堆洗入牌库动画（deck:shuffled 事件）
+initGen2Fx(); // 2代 协议专属特效（luck 宣告骰子等；事件驱动订阅）
 // 诊断日志：全量记录 console + 捕获未捕获异常（出错自动提示导出）
 initDiag(() => state);
 // 隐藏开发者模式：Ctrl+Shift+P 密码进入；get <牌名> 把卡加入当前玩家手牌
@@ -567,6 +570,7 @@ const syncPersistentFx = (): void => {
     syncMetalPlates(state);
     syncMetal6Mans(state);
     syncMetal1LineGlows(state);
+    syncMirror0BatteryGlows(state);
     syncChainLayerPosition();
   });
 };

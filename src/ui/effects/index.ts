@@ -3,6 +3,7 @@ import { mountShatter } from '../fx/delete-shatter';
 import { mountCut } from '../fx/discard-cut';
 import { buildTornadoFx } from '../fx-tornado';
 import { cardImgSrc, protocolImgSrc } from '../../data/demo';
+import { playPeaceDiscardExtra, PEACE_PRE_MS, playChaosDiscardExtra, CHAOS_DISCARD_PRE_MS } from '../fx-gen2';
 
 const FX_REMOVE_MS = 1200;
 const BASE_Z = 300; // 基础行为特效层
@@ -1810,7 +1811,23 @@ export function initEffects(): () => void {
         } else if (node) {
           if (payload.triggerProtocol === 'psychic') playPsychicDiscardExtra(node, payload);
           else if (payload.triggerProtocol === 'plague') playPlagueDiscardExtra(node, payload);
-          else playCut(node, payload);
+          else if (payload.triggerProtocol === 'peace') {
+            // 2代 peace 弃牌附加特效（fx-gen2）：和平鸽前置段（飞入→停→抓卡飞远）→
+            // PEACE_PRE_MS 后基础切割（事件时捕获 rect 重建浮层，同 psychic/plague 模式）
+            const rect = node.getBoundingClientRect();
+            const cw = node.classList.contains('rot-cw');
+            const ccw = node.classList.contains('rot-ccw');
+            playPeaceDiscardExtra(node, payload);
+            window.setTimeout(() => playCutAt(rect, cw, ccw, payload), PEACE_PRE_MS);
+          } else if (payload.triggerProtocol === 'chaos') {
+            // 2代 chaos 弃牌附加特效（fx-gen2）：紫蓝漩涡前置段（渐现→卡吸入中心）→
+            // CHAOS_DISCARD_PRE_MS 后基础切割（事件时捕获 rect 重建浮层）
+            const rect = node.getBoundingClientRect();
+            const cw = node.classList.contains('rot-cw');
+            const ccw = node.classList.contains('rot-ccw');
+            playChaosDiscardExtra(node, payload);
+            window.setTimeout(() => playCutAt(rect, cw, ccw, payload), CHAOS_DISCARD_PRE_MS);
+          } else playCut(node, payload);
         }
         break;
       }

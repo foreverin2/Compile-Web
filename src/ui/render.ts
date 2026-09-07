@@ -13,8 +13,10 @@ import { DEMO_PROTOCOLS, cardImgSrc, protocolImgSrc, cardTextParts, getCardDef, 
 import type { CardTextParts } from '../data/demo';
 import { PROTOCOL_RATINGS } from '../data/protocolRatings';
 import { actionCn } from '../core/log';
+import { cardCommandDisabled } from '../core/effects/context';
 import { downloadLog } from './diag';
 import { buildTornadoFx } from './fx-tornado';
+import { buildDove, startLuckDiceFx } from './fx-gen2';
 
 export interface UiCallbacks {
   onAction(a: LegalAction): void;
@@ -862,6 +864,55 @@ export function syncMetal1LineGlows(s: GameState): void {
   }
 }
 
+/* ===== 2代 mirror-0 明镜常驻：链路能量槽银白镜框 + 30% 镜纹覆盖 =====
+ * mirror-0 顶（valueModifier own-stack）：持续效果生效时为其所在链路（持卡方该线）的
+ * 能量槽添加一圈银白边框（无金属光泽——柔和漫射光，不用高光扫掠）+ 30% 透明度镜子纹理
+ * 覆盖（mirror-0 正面在场 faceUp 即生效，含被盖——与引擎 valueModifier gate 一致：
+ * faceUp && 顶命令未被区域禁用）。key = `${player}-${line}`；同 FX-6 注册表模式：body 级
+ * fixed 层跨重渲染存活，渲染时按 .battery-shell 矩形重定位；条件消失 → 移除并注销；
+ * resetUiState 清表。 */
+const mirror0BatteryGlows = new Map<string, HTMLElement>();
+
+/** mirror-0 顶「此链路中，对手每有1张牌，你的总阈值就加1」生效方该线能量槽银白镜框。
+ *  常驻（每帧渲染调用）：持卡方（mirror-0 faceUp 在场且顶命令未被禁）所在线电池 → 层。 */
+export function syncMirror0BatteryGlows(s: GameState): void {
+  const activeKeys = new Set<string>();
+  for (const player of [0, 1] as PlayerId[]) {
+    for (const line of [0, 1, 2] as Line[]) {
+      // mirror-0 顶常驻生效判定（与引擎 stackValue gate 一致）：该线持卡方链路有 faceUp mirror-0
+      const has = s.players[player].stacks[line].some(
+        (c) => c.defId === 'mirror-0' && c.faceUp && !cardCommandDisabled(s, c, 'top'),
+      );
+      if (!has) continue;
+      const key = `${player}-${line}`;
+      activeKeys.add(key);
+      const shell = document.querySelector<HTMLElement>(
+        `.stack-slot[data-player="${player}"][data-line="${line}"] .battery-shell`
+      );
+      if (!shell) continue; // 电池不在 DOM（不应发生）→ 交给下方清理分支移除旧层
+      let glow = mirror0BatteryGlows.get(key);
+      if (!glow) {
+        glow = el('div', 'fx-mirror0-batteryglow');
+        glow.dataset.mirror0Key = key;
+        mirror0BatteryGlows.set(key, glow);
+        document.body.appendChild(glow);
+      }
+      const r = shell.getBoundingClientRect();
+      // 层盒外扩 4px：银白边框读作「能量槽外圈」而非覆盖槽位本身
+      glow.style.left = `${r.left - 4}px`;
+      glow.style.top = `${r.top - 4}px`;
+      glow.style.width = `${r.width + 8}px`;
+      glow.style.height = `${r.height + 8}px`;
+    }
+  }
+  for (const [key, glow] of mirror0BatteryGlows) {
+    if (!activeKeys.has(key)) {
+      glow.remove();
+      mirror0BatteryGlows.delete(key);
+    }
+  }
+}
+
 /* ===== FX-5：check-cache 锁链（spirit-0 跳过检查缓存，一次性步骤触发） =====
  * 触发：s.step === 'check-cache' 且 shouldSkipCacheCheck(s, player)（实际只有回合玩家
  * 会停在 check-cache——runAutoAdvance 在该玩家应跳过时自动 advance）→ 以该玩家手牌区
@@ -1191,6 +1242,14 @@ function renderHand(
     const node = renderCardFace({ defId: card.defId, faceUp, uid: card.uid });
     node.dataset.uid = card.uid;
     if (isSelected) node.classList.add('selected');
+    // 2代 chaos-3 手牌特效：仅【正面显示】时边框紫蓝闪烁 + 偶发蓝紫雾气（背面显示不加——
+    // 提示词「在手牌中以背面显示时，特效不显示」；self 手牌正面、对手手牌恒背面）
+    if (card.defId === 'chaos-3' && faceUp) {
+      node.classList.add('fx-chaos3-hand');
+      const mist = el('div', 'fx-chaos3-mist');
+      for (let i = 0; i < 3; i++) mist.appendChild(el('i', 'fx-chaos3-mist-blob'));
+      node.appendChild(mist);
+    }
     if (opts.isSelf) {
       // 单击=选中、双击=放大查看（单击延迟 320ms 严格大于 300ms 双击窗口，窗口内
       // 第二次点击取消延迟的单击并打开遮罩）；faceUp 为当前显示朝向（选中且翻至背面
@@ -2570,6 +2629,227 @@ function appendApathyCompiled(layer: HTMLElement, defId: string): void {
   scheduleCompiledLoop(layer, defId, rnd(2600, 5600), storm);
 }
 
+/* ---------- 11. 幸运 luck（2代，fx-gen2 已编译）：橘色呼吸框 + 四角橘护边；中心偶发红黑转盘 ----------
+ * 转盘大特效：红黑相间 8 格 conic 圆盘渐现 → 铁珠沿盘缘滚动 1s（ease-out 随机落角）→
+ * 停格判定（0° 起红黑交替，每格 45°）→ 红格 = 几朵小型橙红烟花 / 黑格 = 红蘑菇云 →
+ * 盘渐隐消散。间隔 ≥10s 随机（scheduleCompiledLoop）。CSS 见 styles.css .compiled-luck-*。 */
+const LUCK_WHEEL_DEG = 45; // 每格角度
+const LUCK_WHEEL_SPIN_MS = 1000; // 铁珠滚动时长
+
+function appendLuckCompiled(layer: HTMLElement, defId: string): void {
+  appendCompiledCorners(layer, 'compiled-luck-corner'); // §8：四角橘色护边
+  const host = el('div', 'compiled-luck-host');
+  layer.appendChild(host);
+  const burst = (done: () => void): void => {
+    if (!layer.isConnected) { done(); return; }
+    const g = layerGeom(layer);
+    if (!g) { fxTimer(defId, () => burst(done), 700); return; }
+    host.textContent = '';
+    // 转盘尺寸：直径取短边 ~72%（竖版协议卡 200×280 → 约 144px），中心居层
+    const d = Math.max(64, g.min * 0.72);
+    const r = d / 2;
+    const wheel = el('div', 'compiled-luck-wheel');
+    wheel.style.width = `${d.toFixed(1)}px`;
+    wheel.style.height = `${d.toFixed(1)}px`;
+    wheel.style.marginLeft = `${-d / 2}px`;
+    wheel.style.marginTop = `${-d / 2}px`;
+    wheel.style.opacity = '0';
+    wheel.style.transform = 'scale(0.5)';
+    wheel.style.transition = 'opacity 0.35s ease-out, transform 0.4s cubic-bezier(0.2, 0.8, 0.3, 1.2)';
+    // 铁珠：中心定位 + transform rotate(θ) translateY(-r)（先 rotate 后 translate →
+    // 平移方向随旋转角变化 → 铁珠绕盘心画弧滚动；transition 仅动 rotate 角度）
+    const ballSize = Math.max(14, d * 0.13);
+    const ball = el('div', 'compiled-luck-ball');
+    ball.style.width = `${ballSize.toFixed(1)}px`;
+    ball.style.height = `${ballSize.toFixed(1)}px`;
+    ball.style.marginLeft = `${-ballSize / 2}px`;
+    ball.style.marginTop = `${-ballSize / 2}px`;
+    ball.style.transform = `rotate(0deg) translateY(${-r}px)`;
+    ball.style.transition = `transform ${LUCK_WHEEL_SPIN_MS}ms cubic-bezier(0.3, 0.05, 0.7, 1)`;
+    wheel.appendChild(ball);
+    host.appendChild(wheel);
+    reflowFx(wheel);
+    wheel.style.opacity = '1';
+    wheel.style.transform = 'scale(1)';
+    // 铁珠滚动：随机总角（≥1 圈多 + 落格居中偏移）。rotate target（逆时针视觉：
+    // CSS rotate 正角 = 顺时针；落角 = target % 360，红黑格判定随顺时针推进）
+    const fullSpins = 1 + Math.floor(Math.random() * 3); // 1-3 整圈
+    const seg = Math.floor(Math.random() * 8); // 0-7 落格
+    const target = fullSpins * 360 + seg * LUCK_WHEEL_DEG + LUCK_WHEEL_DEG / 2;
+    requestAnimationFrame(() => {
+      if (!layer.isConnected) return;
+      ball.style.transform = `rotate(${target.toFixed(1)}deg) translateY(${-r}px)`;
+    });
+    // 停格后播结果（铁珠顺时针转 target，落角 = target % 360）
+    const isRed = seg % 2 === 0; // 0° 起红黑交替（conic from 0deg 红 0-45）
+    fxTimer(defId, () => {
+      if (!layer.isConnected) return;
+      // 结果特效：红格 = 小型橙红烟花（盘心上方几朵小火星上浮）；黑格 = 红蘑菇云
+      if (isRed) {
+        const n = 10 + Math.floor(Math.random() * 4);
+        for (let i = 0; i < n; i++) {
+          const s = el('div', 'compiled-luck-firework');
+          s.style.left = `${r + rnd(-d * 0.14, d * 0.14)}px`;
+          s.style.top = `${r + rnd(-d * 0.14, d * 0.14)}px`;
+          s.style.animationDelay = `${(i * 0.05).toFixed(2)}s`;
+          wheel.appendChild(s);
+        }
+      } else {
+        const cloud = el('div', 'compiled-luck-cloud');
+        wheel.appendChild(cloud);
+      }
+      // 结果 ~1s 后盘整体消散
+      fxTimer(defId, () => {
+        if (!layer.isConnected) { done(); return; }
+        host.style.transition = 'opacity 0.5s ease-in';
+        host.style.opacity = '0';
+        fxTimer(defId, () => {
+          host.textContent = '';
+          host.style.opacity = '1';
+          done();
+        }, 560);
+      }, 1100);
+    }, LUCK_WHEEL_SPIN_MS + 60);
+  };
+  scheduleCompiledLoop(layer, defId, rnd(3000, 6500), burst);
+}
+
+/* ---------- 12. 明镜 mirror（2代，fx-gen2 已编译）：银白呼吸框 + 四角银白护边 ----------
+ * 周期镜面大特效：卡面渐被镜纹覆盖（透明度从 0 渐增至完全实化——repeating-linear-gradient
+ * 镜面纹理层 opacity 0→1，约 1.8s）→ 100% 实化瞬间发出一道耀眼光芒（白芒扩散）→ 渐隐消失。
+ * 间隔 ≥10s 随机（scheduleCompiledLoop）。CSS 见 styles.css .compiled-mirror-*。 */
+const MIRROR_TEXTURE_IN_MS = 1800; // 镜纹覆盖渐实时长
+const MIRROR_FLASH_MS = 500;       // 实化瞬间耀眼光芒
+
+function appendMirrorCompiled(layer: HTMLElement, defId: string): void {
+  appendCompiledCorners(layer, 'compiled-mirror-corner'); // §8：四角银白护边
+  // 镜面纹理覆盖层（常驻；burst 时透明度渐实）
+  const tex = el('div', 'compiled-mirror-texture');
+  layer.appendChild(tex);
+  const flash = el('div', 'compiled-mirror-flash');
+  layer.appendChild(flash);
+  const burst = (done: () => void): void => {
+    if (!layer.isConnected) { done(); return; }
+    // 镜纹覆盖：0 → 100% 实化（透明度 transition；纹理 = 斜向细线镜面层）
+    tex.style.transition = `opacity ${MIRROR_TEXTURE_IN_MS}ms ease-in`;
+    tex.style.opacity = '1';
+    // 实化瞬间：耀眼光芒扩散 → 随后镜纹渐隐
+    fxTimer(defId, () => {
+      if (!layer.isConnected) { done(); return; }
+      flash.classList.add('on');
+      tex.style.transition = 'opacity 0.9s ease-out';
+      tex.style.opacity = '0';
+      fxTimer(defId, () => {
+        if (!layer.isConnected) { done(); return; }
+        flash.classList.remove('on');
+        done();
+      }, MIRROR_FLASH_MS + 950);
+    }, MIRROR_TEXTURE_IN_MS);
+  };
+  scheduleCompiledLoop(layer, defId, rnd(3000, 6500), burst);
+}
+
+/* ---------- 13. 和平 peace（2代，fx-gen2 已编译）：海蓝↔金币交替呼吸框 + 四角护边 ----------
+ * 环绕鸽子：2 只挥翅小鸽沿协议边框轨道环绕盘旋（CSS offset-path 椭圆轨道 + offset-rotate
+ * 0deg 保持水平；负 delay 错相 → 永远有鸽子在飞）。偶发休息鸽（大特效 ≥10s）：一只鸽子
+ * 从协议框边休息片刻后飞走。鸽子造型复用 fx-gen2 buildDove（CSS .fx-peace-dove）。 */
+const PEACE_ORBIT_COUNT = 2;
+
+function appendPeaceCompiled(layer: HTMLElement, defId: string): void {
+  appendCompiledCorners(layer, 'compiled-peace-corner'); // §8：四角海蓝护边
+  // 环绕轨道：2 只鸽子沿盒子椭圆路径缓速盘旋（各自负 delay 错相）
+  const orbit = el('div', 'compiled-peace-orbit');
+  for (let i = 0; i < PEACE_ORBIT_COUNT; i++) {
+    const dove = buildDove();
+    dove.classList.add('compiled-peace-orbit-dove');
+    dove.style.animationDuration = `${20 + i * 4}s`; // 每只周期不同 → 非齐步
+    dove.style.animationDelay = `${-i * 9}s`;
+    orbit.appendChild(dove);
+  }
+  layer.appendChild(orbit);
+  // 偶发休息鸽：从协议框边（上缘随机位）落定休息 → 飞走消散（≥10s 间隔）
+  const rest = (done: () => void): void => {
+    if (!layer.isConnected) { done(); return; }
+    const g = layerGeom(layer);
+    if (!g) { fxTimer(defId, () => rest(done), 700); return; }
+    const dove = buildDove();
+    dove.classList.add('compiled-peace-rest');
+    const x = rnd(15, 85); // 框内水平位置（%）
+    dove.style.left = `${x.toFixed(1)}%`;
+    dove.style.top = '0px';
+    dove.style.transform = 'translate(-50%, -70px) scale(0.7)';
+    dove.style.opacity = '0';
+    layer.appendChild(dove);
+    reflowFx(dove);
+    // 飞入落定框边休息
+    dove.style.transition = 'transform 0.55s cubic-bezier(0.2, 0.8, 0.3, 1.1), opacity 0.25s ease-out';
+    dove.style.transform = 'translate(-50%, -18px) scale(0.85)';
+    dove.style.opacity = '1';
+    // 停留休息片刻（翅膀持续扑扇）后飞走消散
+    fxTimer(defId, () => {
+      if (!layer.isConnected) { done(); return; }
+      dove.style.transition = 'transform 0.7s cubic-bezier(0.5, 0.1, 0.8, 0.4), opacity 0.35s ease-in';
+      dove.style.transform = 'translate(-50%, -110px) scale(0.6)';
+      dove.style.opacity = '0';
+      fxTimer(defId, () => {
+        if (dove.isConnected) dove.remove();
+        done();
+      }, 760);
+    }, 2600);
+  };
+  scheduleCompiledLoop(layer, defId, rnd(3200, 7000), rest);
+}
+
+/* ---------- 14. 混乱 chaos（2代，fx-gen2 已编译）：蓝紫相间呼吸框 + 四角蓝紫护边 ----------
+ * 周期漩涡大特效：协议中心渐现一团旋转蓝紫漩涡（scale 0.2→1.35 快速扩散 + 旋转）→
+ * 扩散至覆盖整张协议牌面后爆炸消散（亮闪 + 渐隐）。间隔 ≥10s 随机（scheduleCompiledLoop）。
+ * CSS 见 styles.css .compiled-chaos-*。 */
+const CHAOS_BURST_IN_MS = 800;   // 漩涡扩散时长
+const CHAOS_BURST_FLASH_MS = 300; // 扩散到整面后爆炸闪
+
+function appendChaosCompiled(layer: HTMLElement, defId: string): void {
+  appendCompiledCorners(layer, 'compiled-chaos-corner'); // §8：四角蓝紫护边
+  const host = el('div', 'compiled-chaos-host');
+  layer.appendChild(host);
+  const burst = (done: () => void): void => {
+    if (!layer.isConnected) { done(); return; }
+    const g = layerGeom(layer);
+    if (!g) { fxTimer(defId, () => burst(done), 700); return; }
+    host.textContent = '';
+    // 漩涡：中心起 scale 0.2 → 1.35 扩散（覆盖协议面）+ 旋转
+    const size = Math.max(g.w, g.h) * 1.5;
+    const v = el('div', 'compiled-chaos-vortex');
+    v.style.width = `${size.toFixed(1)}px`;
+    v.style.height = `${size.toFixed(1)}px`;
+    v.style.marginLeft = `${-size / 2}px`;
+    v.style.marginTop = `${-size / 2}px`;
+    v.style.opacity = '0';
+    v.style.transform = 'scale(0.2) rotate(0deg)';
+    v.style.transition = `opacity 0.25s ease-out, transform ${CHAOS_BURST_IN_MS}ms cubic-bezier(0.3, 0.9, 0.5, 1)`;
+    host.appendChild(v);
+    reflowFx(v);
+    v.style.opacity = '1';
+    v.style.transform = 'scale(1.35) rotate(320deg)';
+    // 扩散完成 → 爆炸闪 + 渐隐消散
+    fxTimer(defId, () => {
+      if (!layer.isConnected) { done(); return; }
+      const flash = el('div', 'compiled-chaos-flash');
+      host.appendChild(flash);
+      reflowFx(flash);
+      flash.classList.add('on');
+      host.style.transition = 'opacity 0.5s ease-in';
+      host.style.opacity = '0';
+      fxTimer(defId, () => {
+        if (!layer.isConnected) { done(); return; }
+        host.textContent = '';
+        host.style.opacity = '1';
+        done();
+      }, 560);
+    }, CHAOS_BURST_IN_MS + CHAOS_BURST_FLASH_MS);
+  };
+  scheduleCompiledLoop(layer, defId, rnd(3000, 6500), burst);
+}
+
 /** 新 10 协议已编译特效分发（buildCompiledFx 内调用；fire/light/darkness/water/life
  *  走既有分支，不在此列）。每个 builder 只建持久子结构 + 起调度，动画全部在层内。 */
 function appendNewCompiledFx(layer: HTMLElement, defId: string): void {
@@ -2584,6 +2864,10 @@ function appendNewCompiledFx(layer: HTMLElement, defId: string): void {
     case 'love': appendLoveCompiled(layer, defId); break;
     case 'hate': appendHateCompiled(layer, defId); break;
     case 'apathy': appendApathyCompiled(layer, defId); break;
+    case 'luck': appendLuckCompiled(layer, defId); break;
+    case 'mirror': appendMirrorCompiled(layer, defId); break;
+    case 'peace': appendPeaceCompiled(layer, defId); break;
+    case 'chaos': appendChaosCompiled(layer, defId); break;
     default: break;
   }
 }
@@ -3347,6 +3631,15 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
       const opName = (prompt.chooser ?? topEffect.player) === 0 ? '玩家 1' : '玩家 2'; // 修改提示词 17
       bar.appendChild(el('div', 'operator-banner', `请 ${opName} 操作`));
       bar.appendChild(el('div', 'choice-title', `${(prompt.chooser ?? topEffect.player) === 0 ? 'P1' : 'P2'} 操作 — ${prompt.title}`));
+      // 2代 luck 宣告 prompt（luck-0 宣告数字 / luck-3 宣告协议）：宣告卡（效果源卡）中心
+      // 出现骰子持续转动（startLuckDiceFx 幂等：choice-bar 每帧重渲染重复调用只重定位）；
+      // 用户选择后 luck:roll 事件（fx-gen2 订阅）停骰并播成功/失败结果。
+      if (
+        (prompt.title.startsWith('luck-0：宣告') || prompt.title.startsWith('luck-3：宣告')) &&
+        topEffect.sourceUid
+      ) {
+        startLuckDiceFx(topEffect.sourceUid);
+      }
       for (const act of prompt.actions ?? []) {
         const b = el('button', 'btn choice-action-btn', actionCn(act)); // 修改提示词 8：动作按钮中文（翻转/抽牌/正面打出…）
         b.addEventListener('click', () => { choicePromptId = null; cb.onAction({ kind: 'effect-choice', promptId: topEffect.id, choice: [act] }); });
@@ -3407,6 +3700,8 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   syncMetalPlates(s);
   syncMetal6Mans(s);
   syncMetal1LineGlows(s);
+  // 2代 mirror-0 明镜常驻：链路能量槽银白镜框（电池已入 DOM → 按 .battery-shell 矩形）
+  syncMirror0BatteryGlows(s);
 }
 
 let selectedUid: string | null = null;
@@ -3477,6 +3772,8 @@ export function resetUiState(): void {
   metal6Mans.clear();
   for (const glow of metal1LineGlows.values()) glow.remove();
   metal1LineGlows.clear();
+  for (const glow of mirror0BatteryGlows.values()) glow.remove();
+  mirror0BatteryGlows.clear();
   if (chainLayer) {
     chainLayer.remove();
     chainLayer = null;

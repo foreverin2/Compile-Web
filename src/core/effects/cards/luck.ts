@@ -3,6 +3,20 @@ import { registerCardEffects } from '../registry';
 import { deckTopAvailable, findCard } from '../context';
 import { cardPointValue } from '../../state/create';
 import { getCardDef } from '../../../data/demo';
+import { gameBus } from '../../events/bus';
+
+/**
+ * 幸运宣告结果事件（UI FX 层订阅：骰子停止 → 成功烟花/失败爆炸）：
+ * 在 luck-0/luck-3 宣告数字/协议后、成败判定处发出；success = 宣告命中。
+ * payload: { defId, uid（宣告卡源卡）, player, success }。
+ */
+function emitLuckRoll(ctx: EffectCtx, defId: string, success: boolean): void {
+  gameBus.emit({
+    type: 'luck:roll',
+    state: ctx.s,
+    payload: { defId, uid: ctx.card.uid, player: ctx.player, success },
+  });
+}
 
 /**
  * 2代 幸运 luck（关键词：随机、删除、打出）。
@@ -24,6 +38,8 @@ function* luck0Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const matching = ctx.s.players[ctx.player].hand.filter(
     (c) => !before.has(c.uid) && getCardDef(c.defId).value === n,
   );
+  // FX 宣告结果：抽 3 后有匹配 = 成功（揭示可打出）；无匹配 = 失败
+  emitLuckRoll(ctx, 'luck-0', matching.length > 0);
   if (matching.length === 0) return; // 无命中：牌留手牌，效果结束
   const pickAns = yield {
     kind: 'select', title: `luck-0：揭示1张阈值=${n}的牌`, min: 1, max: 1, optional: false,
@@ -108,10 +124,15 @@ function* luck3Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   if (declAns.selected.length === 0) return;
   const proto = declAns.selected[0].replace('action:proto:', '');
   const oppDeck = ctx.s.players[opp].deck;
-  if (oppDeck.length === 0) return; // FAQ 107：对手牌库空则不生效
+  if (oppDeck.length === 0) {
+    emitLuckRoll(ctx, 'luck-3', false); // 对手牌库空 → 无法弃顶判定 → 失败
+    return; // FAQ 107：对手牌库空则不生效
+  }
   const topUid = oppDeck[oppDeck.length - 1].uid;
   yield { op: 'discardDeckTop', player: opp };
   const card = findCard(ctx.s, topUid);
+  // FX 宣告结果：弃顶后与宣告协议相同 = 成功（删除 1 张）；不同 = 失败
+  emitLuckRoll(ctx, 'luck-3', !!card && getCardDef(card.defId).protocol === proto);
   if (!card || getCardDef(card.defId).protocol !== proto) return; // 未命中
   const targets = ctx.candidates({ zone: 'field' }); // 双方未覆盖顶卡
   const tAns = yield { kind: 'select', title: 'luck-3：命中！删除1张牌', min: 1, max: 1, optional: false, candidates: targets };
