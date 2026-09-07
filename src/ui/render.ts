@@ -3484,6 +3484,45 @@ function appendCourageCompiled(layer: HTMLElement, defId: string): void {
   scheduleCompiledLoop(layer, defId, rnd(3000, 6500), swordBurst);
 }
 
+/* ---------- 22. 时间 time（2代，fx-gen2 已编译）：古铜呼吸框 + 斑驳锈质感 + 四角护边 ----------
+ * 周期时钟：中心浮现古铜时钟（时针分针快速旋转后骤然静止）→ 时钟连同周围悬浮青铜齿轮
+ * 碎片与金色沙粒渐渐消散 2s；边框四周偶尔时间倒流（周围光影倒放流动 2s）。
+ * 间隔 ≥10s（scheduleCompiledLoop 拆两循环）。CSS 见 styles.css .compiled-time-*。 */
+function appendTimeCompiled(layer: HTMLElement, defId: string): void {
+  appendCompiledCorners(layer, 'compiled-time-corner'); // §8：四角古铜护边
+  // 斑驳铜锈纹理层（常驻弱覆盖）
+  const rust = el('div', 'compiled-time-rust');
+  layer.appendChild(rust);
+  const host = el('div', 'compiled-time-host');
+  layer.appendChild(host);
+  const clockBurst = (done: () => void): void => {
+    if (!layer.isConnected) { done(); return; }
+    host.textContent = '';
+    const clock = el('div', 'compiled-time-clock');
+    const hour = el('i', 'compiled-time-hand hour');
+    const minute = el('i', 'compiled-time-hand minute');
+    clock.appendChild(hour);
+    clock.appendChild(minute);
+    host.appendChild(clock);
+    // 青铜齿轮碎片 + 金色沙粒
+    for (let i = 0; i < 5; i++) host.appendChild(el('i', 'compiled-time-debris'));
+    reflowFx(host);
+    host.classList.add('in');
+    // 时针分针快速旋转 1.2s 后骤然静止（animation 自然停）
+    clock.classList.add('spin');
+    fxTimer(defId, () => {
+      if (!layer.isConnected) { done(); return; }
+      host.classList.add('out');
+      fxTimer(defId, () => {
+        host.classList.remove('in', 'out');
+        host.textContent = '';
+        done();
+      }, 800);
+    }, 2400);
+  };
+  scheduleCompiledLoop(layer, defId, rnd(3000, 6500), clockBurst);
+}
+
 /** 新 10 协议已编译特效分发（buildCompiledFx 内调用；fire/light/darkness/water/life
  *  走既有分支，不在此列）。每个 builder 只建持久子结构 + 起调度，动画全部在层内。 */
 function appendNewCompiledFx(layer: HTMLElement, defId: string): void {
@@ -3509,6 +3548,7 @@ function appendNewCompiledFx(layer: HTMLElement, defId: string): void {
     case 'corruption': appendCorruptionCompiled(layer, defId); break;
     case 'war': appendWarCompiled(layer, defId); break;
     case 'courage': appendCourageCompiled(layer, defId); break;
+    case 'time': appendTimeCompiled(layer, defId); break;
     default: break;
   }
 }

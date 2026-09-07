@@ -2,6 +2,7 @@ import { pushLog } from '../../log';
 import type { ChoiceCard, EffectCtx, EffectStep, GameState, Line, PlayerId, StepResult } from '../../models/types';
 import { registerCardEffects } from '../registry';
 import { shuffleDeck, shuffleTrashIntoDeck } from '../../engine/deck';
+import { gameBus } from '../../events/bus';
 
 /**
  * 2代 时间 time（关键词：强行弃置、使用弃牌堆）。
@@ -80,6 +81,8 @@ function* time1Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   p.trash.push(...p.deck);
   p.deck = [];
   pushLog(ctx.s, `P${ctx.player + 1}：牌库全部放入弃牌堆`);
+  // time-1 FX：弃牌堆上方时钟 + 牌库卡化作旋转光流汇入弃牌堆（fx-gen2 订阅）
+  gameBus.emit({ type: 'time:deck-to-trash', state: ctx.s, payload: { player: ctx.player } });
 }
 
 /** time-2 顶（after-shuffle，top:true）：当你切洗牌库时：抽取1张牌。你可以偏转此牌 */

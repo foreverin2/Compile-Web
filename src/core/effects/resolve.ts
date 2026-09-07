@@ -798,6 +798,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       s.pendingPlay.push({ card, beforeCoveredDone: false });
       emitCardEvent(s, 'card:deck-played', card, {
         line: op.line,
+        fromTrash: true, // 批3 time-0/3：从弃牌堆打出——弃牌堆时钟 FX 依据
         triggerDefId: pe.sourceDefId,
         triggerUid: pe.sourceUid,
         triggerProtocol: pe.sourceDefId.split('-')[0],

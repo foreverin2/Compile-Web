@@ -3,7 +3,7 @@ import { mountShatter } from '../fx/delete-shatter';
 import { mountCut } from '../fx/discard-cut';
 import { buildTornadoFx } from '../fx-tornado';
 import { cardImgSrc, protocolImgSrc } from '../../data/demo';
-import { playPeaceDiscardExtra, PEACE_PRE_MS, playChaosDiscardExtra, CHAOS_DISCARD_PRE_MS, playIceShiftBridge, playSmokePlayFx, playFearShiftExtra, playCorruptionDiscardExtra, playCorruptionDeleteExtra, playCorruptionFlipExtra, CORRUPT_DISCARD_PRE_MS, playWarDiscardExtra, playWarFlipExtra, playCourageDiscardExtra, playCourageDeleteExtra, playCourageShiftExtra } from '../fx-gen2';
+import { playPeaceDiscardExtra, PEACE_PRE_MS, playChaosDiscardExtra, CHAOS_DISCARD_PRE_MS, playIceShiftBridge, playSmokePlayFx, playFearShiftExtra, playCorruptionDiscardExtra, playCorruptionDeleteExtra, playCorruptionFlipExtra, CORRUPT_DISCARD_PRE_MS, playWarDiscardExtra, playWarFlipExtra, playCourageDiscardExtra, playCourageDeleteExtra, playCourageShiftExtra, playTimeDiscardExtra } from '../fx-gen2';
 
 const FX_REMOVE_MS = 1200;
 const BASE_Z = 300; // 基础行为特效层
@@ -1843,6 +1843,10 @@ export function initEffects(): () => void {
           } else if (payload.triggerProtocol === 'courage') {
             // 2代 courage 弃牌（勇气弃牌效果）：金色逆焰点燃燃烧（覆盖层）+ 基础切割照常
             playCourageDiscardExtra(node);
+            playCut(node, payload);
+          } else if (payload.triggerProtocol === 'time') {
+            // 2代 time 弃牌（时间弃牌效果）：古铜时间光膜包裹（时间冻结感）+ 基础切割照常
+            playTimeDiscardExtra(node);
             playCut(node, payload);
           } else playCut(node, payload);
         }

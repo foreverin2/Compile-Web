@@ -1286,6 +1286,121 @@ export function playCourageShiftExtra(node: HTMLElement, payload: { owner?: Play
   }
 }
 
+/* ============================== time 时间：古铜时钟 / 光流 ==============================
+ * ① 弃牌堆相关效果（time-0 从弃牌堆打出 / time-1 牌库入弃牌堆 / time-2 弃牌堆洗入 /
+ *    time-3 揭示弃牌堆）→ 弃牌堆上方亮起古铜时钟虚影（时针分针不同速旋转 + 表盘古铜光）
+ *    + 弃牌堆边框古铜发光 → 效果结束时钟缓缓消散。
+ * ② time-1 光流（time:deck-to-trash）：牌库卡化作一道古铜时间流光汇入弃牌堆（光带）。
+ * ③ time 弃牌（card:discarded protocol=time）：被弃卡被古铜时间光膜包裹（"时间冻结"感）
+ *    缓慢飞入弃牌堆（effects 基础切割由 flyToTrash 替代？——time 弃牌走基础切割照常，
+ *    本函数叠加光膜层）。
+ * 层 body 级 fixed、JS 定时自清理（clearGen2Fx 兜底 .fx-time-*）。 */
+const TIME_CLOCK_MS = 2400; // 时钟虚影停留
+const TIME_TRASH_W = 120;
+const TIME_TRASH_H = 150;
+
+/** 该玩家弃牌堆区中心 */
+function timeTrashCenter(player: PlayerId): { x: number; y: number } | null {
+  const pile = document.querySelector<HTMLElement>(`.trash-pile[data-player="${player}"]`);
+  if (!pile) return null;
+  const r = pile.getBoundingClientRect();
+  if (r.width === 0) return null;
+  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+}
+
+/** 弃牌堆时钟虚影：古铜圆盘 + 时针 + 分针（不同速旋转） + 齿轮小齿环 */
+function spawnTrashClock(player: PlayerId): void {
+  const c = timeTrashCenter(player);
+  if (!c) return;
+  const clock = document.createElement('div');
+  clock.className = 'fx-time-clock';
+  clock.style.left = `${c.x - 46}px`;
+  clock.style.top = `${c.y - 46 - 40}px`;
+  clock.style.zIndex = String(GEN2_Z);
+  const dial = document.createElement('i');
+  dial.className = 'fx-time-clock-dial';
+  const hour = document.createElement('i');
+  hour.className = 'fx-time-clock-hand hour';
+  const minute = document.createElement('i');
+  minute.className = 'fx-time-clock-hand minute';
+  dial.appendChild(hour);
+  dial.appendChild(minute);
+  clock.appendChild(dial);
+  // 弃牌堆边框古铜光（覆盖弃牌堆区）
+  const glow = document.createElement('div');
+  glow.className = 'fx-time-trashglow';
+  const pile = document.querySelector<HTMLElement>(`.trash-pile[data-player="${player}"]`);
+  if (pile) {
+    const r = pile.getBoundingClientRect();
+    glow.style.left = `${r.left - 6}px`;
+    glow.style.top = `${r.top - 6}px`;
+    glow.style.width = `${r.width + 12}px`;
+    glow.style.height = `${r.height + 12}px`;
+  }
+  glow.style.zIndex = String(GEN2_Z - 1);
+  document.body.appendChild(clock);
+  document.body.appendChild(glow);
+  window.setTimeout(() => {
+    clock.classList.add('in');
+    glow.classList.add('in');
+  }, 20);
+  window.setTimeout(() => {
+    clock.classList.add('out');
+    glow.classList.add('out');
+  }, TIME_CLOCK_MS);
+  window.setTimeout(() => {
+    clock.remove();
+    glow.remove();
+  }, TIME_CLOCK_MS + 700);
+}
+
+/** time-1 光流：弃牌堆上时钟 + 牌库 → 弃牌堆的古铜光带（time:deck-to-trash 事件） */
+function onTimeDeckToTrash(p: { player?: PlayerId }): void {
+  if (p.player === undefined) return;
+  spawnTrashClock(p.player);
+  // 光带：牌库 → 弃牌堆
+  const deck = document.querySelector<HTMLElement>(`.deck[data-player="${p.player}"]`);
+  const trash = document.querySelector<HTMLElement>(`.trash-pile[data-player="${p.player}"]`);
+  if (!deck || !trash) return;
+  const dr = deck.getBoundingClientRect();
+  const tr = trash.getBoundingClientRect();
+  if (dr.width === 0 || tr.width === 0) return;
+  const sx = dr.left + dr.width / 2;
+  const sy = dr.top + dr.height / 2;
+  const tx = tr.left + tr.width / 2;
+  const ty = tr.top + tr.height / 2;
+  const dx = tx - sx;
+  const dy = ty - sy;
+  const dist = Math.hypot(dx, dy);
+  if (dist < 10) return;
+  const band = document.createElement('div');
+  band.className = 'fx-time-band';
+  band.style.left = `${sx}px`;
+  band.style.top = `${sy}px`;
+  band.style.width = `${dist}px`;
+  band.style.transform = `rotate(${(Math.atan2(dy, dx) * 180) / Math.PI}deg)`;
+  band.style.zIndex = String(GEN2_Z - 2);
+  document.body.appendChild(band);
+  window.setTimeout(() => band.classList.add('in'), 20);
+  window.setTimeout(() => band.remove(), 1400);
+}
+
+/** time 弃牌古铜光膜（叠加；effects 基础切割照常） */
+export function playTimeDiscardExtra(node: HTMLElement): void {
+  const rect = node.getBoundingClientRect();
+  if (rect.width === 0) return;
+  const film = document.createElement('div');
+  film.className = 'fx-time-film';
+  film.style.left = `${rect.left - 6}px`;
+  film.style.top = `${rect.top - 6}px`;
+  film.style.width = `${rect.width + 12}px`;
+  film.style.height = `${rect.height + 12}px`;
+  film.style.zIndex = String(GEN2_Z);
+  document.body.appendChild(film);
+  window.setTimeout(() => film.classList.add('in'), 20);
+  window.setTimeout(() => film.remove(), 1100);
+}
+
 /** 订阅 luck / mirror / peace / chaos / clarity / corruption 引擎事件 */
 export function initGen2Fx(): () => void {
   return gameBus.subscribe((e: GameEvent) => {
@@ -1299,9 +1414,22 @@ export function initGen2Fx(): () => void {
       if (p && p.triggerProtocol === 'corruption' && p.uid && p.defId) {
         onCorruptionReturned(p);
       }
-    } else if (e.type === 'card:deleted' || e.type === 'card:discarded' || e.type === 'card:deck-played') {
-      // war 被动触发成功（war-0 删卡 / war-1 弃后刷新 / war-2 对手弃手 / war-3 反打）：
-      // 触发源卡（war-0/1/2/3）位置播放胜利战旗（双剑迸发赤金光 + 残破战旗展开）
+    } else if (e.type === 'card:deck-played') {
+      // time-0/3 从弃牌堆打出（playFromTrash）：弃牌堆上方古铜时钟亮起
+      const p = e.payload as { triggerProtocol?: string; fromTrash?: boolean } | undefined;
+      if (p && p.triggerProtocol === 'time' && p.fromTrash === true) {
+        const owner = (e.payload as { owner?: PlayerId }).owner;
+        if (owner !== undefined) spawnTrashClock(owner);
+      }
+      // war 被动触发成功（war-3 反打）：触发源卡位置胜利战旗
+      const w = e.payload as { triggerProtocol?: string; triggerUid?: string } | undefined;
+      if (w && w.triggerProtocol === 'war' && w.triggerUid) {
+        playWarVictoryFlag(w.triggerUid);
+      }
+    } else if (e.type === 'time:deck-to-trash') {
+      onTimeDeckToTrash(e.payload as { player?: PlayerId });
+    } else if (e.type === 'card:deleted' || e.type === 'card:discarded') {
+      // war 被动触发成功（war-0 删卡 / war-1 弃后刷新 / war-2 对手弃手）
       const p = e.payload as { triggerProtocol?: string; triggerUid?: string } | undefined;
       if (p && p.triggerProtocol === 'war' && p.triggerUid) {
         playWarVictoryFlag(p.triggerUid);
