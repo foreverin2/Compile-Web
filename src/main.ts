@@ -3,7 +3,7 @@ import { createGame, performDraftPick, performDraftUnpick, performDraftBan } fro
 import { executeAction } from './core/game';
 import { getCompilableLines } from './core/rules/compile';
 import { collectTriggers } from './core/effects/triggers';
-import { renderApp, renderDraft, resetUiState, syncCompiledFxLayers, syncSmokeOverlays, syncScanOverlays, syncPsychicParticles, syncPlagueMists, syncApathyMists, syncApathyMosaics, syncSpirit0Glows, syncSpirit1Cards, syncMetal0Glows, syncMetalPlates, syncMetal6Mans, syncMetal1LineGlows, syncMirror0BatteryGlows, syncChainLayerPosition, type UiCallbacks } from './ui/render';
+import { renderApp, renderDraft, resetUiState, syncCompiledFxLayers, syncSmokeOverlays, syncScanOverlays, syncPsychicParticles, syncPlagueMists, syncApathyMists, syncApathyMosaics, syncSpirit0Glows, syncSpirit1Cards, syncMetal0Glows, syncMetalPlates, syncMetal6Mans, syncMetal1LineGlows, syncMirror0BatteryGlows, syncClarity0BatteryGlows, syncIceFx, syncChainLayerPosition, type UiCallbacks } from './ui/render';
 import { openControlRearrangeModal, closeControlRearrangeModal, refreshControlRearrangeModal } from './ui/control-rearrange';
 import { renderHome, renderCoin, renderLibrary, renderRules, renderModeSelect } from './ui/home';
 import { resetControlIfHeld } from './core/rules/control';
@@ -571,6 +571,8 @@ const syncPersistentFx = (): void => {
     syncMetal6Mans(state);
     syncMetal1LineGlows(state);
     syncMirror0BatteryGlows(state);
+    syncClarity0BatteryGlows(state);
+    syncIceFx(state);
     syncChainLayerPosition();
   });
 };

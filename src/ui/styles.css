@@ -3713,6 +3713,10 @@ body.dragging { cursor: grabbing; user-select: none; }
 .protocol.compiled-fx-peace { border-color: #37a6e0; box-shadow: 0 0 14px rgba(55, 166, 224, 0.55), inset 0 0 10px rgba(55, 166, 224, 0.22); }
 /* 2代 chaos 混乱已编译：蓝紫相间发光框 */
 .protocol.compiled-fx-chaos { border-color: #7a4fe8; box-shadow: 0 0 16px rgba(122, 79, 232, 0.6), inset 0 0 10px rgba(122, 79, 232, 0.25); }
+/* 2代 clarity 透彻已编译：淡粉与淡蓝相间发光框 */
+.protocol.compiled-fx-clarity { border-color: #e58ac4; box-shadow: 0 0 16px rgba(229, 138, 196, 0.55), 0 0 16px rgba(120, 190, 255, 0.5), inset 0 0 10px rgba(229, 138, 196, 0.22); }
+/* 2代 ice 寒冰已编译：深蓝发光框（呼吸） */
+.protocol.compiled-fx-ice { border-color: #3d9ad9; box-shadow: 0 0 16px rgba(61, 154, 217, 0.65), inset 0 0 12px rgba(61, 154, 217, 0.3); }
 
 /* 呼吸边框（隐藏通用岩浆段/岩石骨架；border+box-shadow 交替闪烁两色） */
 .compiled-ring-death,
@@ -3728,7 +3732,9 @@ body.dragging { cursor: grabbing; user-select: none; }
 .compiled-ring-luck,
 .compiled-ring-mirror,
 .compiled-ring-peace,
-.compiled-ring-chaos {
+.compiled-ring-chaos,
+.compiled-ring-clarity,
+.compiled-ring-ice {
   border: 2px solid;
   border-radius: 14px;
 }
@@ -3745,7 +3751,9 @@ body.dragging { cursor: grabbing; user-select: none; }
 .compiled-ring-luck .lava-seg, .compiled-ring-luck .lava-rock,
 .compiled-ring-mirror .lava-seg, .compiled-ring-mirror .lava-rock,
 .compiled-ring-peace .lava-seg, .compiled-ring-peace .lava-rock,
-.compiled-ring-chaos .lava-seg, .compiled-ring-chaos .lava-rock {
+.compiled-ring-chaos .lava-seg, .compiled-ring-chaos .lava-rock,
+.compiled-ring-clarity .lava-seg, .compiled-ring-clarity .lava-rock,
+.compiled-ring-ice .lava-seg, .compiled-ring-ice .lava-rock {
   display: none;
 }
 
@@ -3868,6 +3876,28 @@ body.dragging { cursor: grabbing; user-select: none; }
     box-shadow: 0 0 18px 5px rgba(217, 107, 0, 0.85), 0 0 42px 14px rgba(217, 107, 0, 0.42), inset 0 0 14px rgba(217, 107, 0, 0.34);
   }
 }
+/* 2代 寒冰 ice（深蓝呼吸）：亮冰蓝 #9fd8ff ↔ 深海蓝 #1c4e9e */
+@keyframes compiled-ice-breathe {
+  0%, 100% {
+    border-color: #1c4e9e;
+    box-shadow: 0 0 14px 3px rgba(28, 78, 158, 0.75), 0 0 34px 10px rgba(28, 78, 158, 0.36), inset 0 0 12px rgba(28, 78, 158, 0.3);
+  }
+  50% {
+    border-color: #9fd8ff;
+    box-shadow: 0 0 18px 5px rgba(159, 216, 255, 0.85), 0 0 44px 14px rgba(159, 216, 255, 0.4), inset 0 0 14px rgba(159, 216, 255, 0.32);
+  }
+}
+/* 2代 透彻 clarity（淡粉 ↔ 淡蓝）：淡粉 #e58ac4 ↔ 淡蓝 #8ec6ff 呼吸 */
+@keyframes compiled-clarity-breathe {
+  0%, 100% {
+    border-color: #e58ac4;
+    box-shadow: 0 0 15px 3px rgba(229, 138, 196, 0.7), 0 0 34px 10px rgba(229, 138, 196, 0.32), inset 0 0 12px rgba(229, 138, 196, 0.28);
+  }
+  50% {
+    border-color: #8ec6ff;
+    box-shadow: 0 0 16px 4px rgba(142, 198, 255, 0.75), 0 0 38px 12px rgba(142, 198, 255, 0.36), inset 0 0 12px rgba(142, 198, 255, 0.3);
+  }
+}
 /* 2代 混乱 chaos（蓝紫相间）：蓝紫 #5c3fd8 ↔ 亮蓝紫 #9a7bff 呼吸 */
 @keyframes compiled-chaos-breathe {
   0%, 100% {
@@ -3891,6 +3921,8 @@ body.dragging { cursor: grabbing; user-select: none; }
   }
 }
 /* 2代 明镜 mirror（银白）：亮银 #f2f6ff ↔ 银灰 #b9c2d4 呼吸（无金属光泽——柔和漫射） */
+.compiled-ring-ice { animation: compiled-ice-breathe 2.6s ease-in-out infinite; }
+.compiled-ring-clarity { animation: compiled-clarity-breathe 2.8s ease-in-out infinite; }
 .compiled-ring-chaos { animation: compiled-chaos-breathe 2.2s ease-in-out infinite; }
 .compiled-ring-peace { animation: compiled-peace-breathe 2.4s ease-in-out infinite; }
 .compiled-ring-mirror { animation: compiled-mirror-breathe 3s ease-in-out infinite; }
@@ -3932,6 +3964,8 @@ body.dragging { cursor: grabbing; user-select: none; }
 .compiled-mirror-corner { --cc: #dfe6f5; --ccg: rgba(230, 238, 252, 0.8); }        /* 2代 明镜银白 */
 .compiled-peace-corner { --cc: #37a6e0; --ccg: rgba(80, 200, 240, 0.85); }        /* 2代 和平海蓝 */
 .compiled-chaos-corner { --cc: #7a4fe8; --ccg: rgba(160, 120, 255, 0.85); }        /* 2代 混乱蓝紫 */
+.compiled-clarity-corner { --cc: #e58ac4; --ccg: rgba(220, 160, 255, 0.85); }      /* 2代 透彻淡粉 */
+.compiled-ice-corner { --cc: #3d9ad9; --ccg: rgba(150, 220, 255, 0.85); }        /* 2代 寒冰深蓝 */
 
 /* ---------- 1. 死已编译：缕缕黑烟 + 骷髅 ---------- */
 .compiled-death-smoke {
@@ -5849,4 +5883,428 @@ body.dragging { cursor: grabbing; user-select: none; }
 @keyframes compiled-chaos-flash-pop {
   0% { transform: scale(0.2); opacity: 0.95; }
   100% { transform: scale(5); opacity: 0; }
+}
+
+/* =====================================================================
+ * 2代 clarity 透彻 FX
+ * ---------------------------------------------------------------------
+ * clarity-0 链路能量槽常驻：淡粉/淡蓝相间边框 + 30% 透明古埃及眼睛图案。
+ * ===================================================================== */
+.fx-clarity0-batteryglow {
+  position: fixed;
+  border: 2px solid rgba(255, 150, 200, 0.55);
+  border-radius: 8px;
+  background:
+    repeating-linear-gradient(
+      0deg,
+      rgba(255, 150, 200, 0.16) 0px,
+      rgba(255, 150, 200, 0.16) 3px,
+      rgba(130, 200, 255, 0.16) 3px,
+      rgba(130, 200, 255, 0.16) 6px
+    );
+  box-shadow:
+    0 0 10px rgba(255, 150, 200, 0.4),
+    0 0 20px rgba(130, 200, 255, 0.3),
+    inset 0 0 8px rgba(255, 170, 210, 0.25);
+  pointer-events: none;
+  z-index: 95;
+  animation: fx-clarity0-breathe 3s ease-in-out infinite;
+}
+@keyframes fx-clarity0-breathe {
+  0%, 100% { border-color: rgba(255, 150, 200, 0.5); box-shadow: 0 0 8px rgba(255, 150, 200, 0.35), inset 0 0 6px rgba(255, 170, 210, 0.2); }
+  50% { border-color: rgba(130, 200, 255, 0.75); box-shadow: 0 0 13px rgba(130, 200, 255, 0.5), 0 0 24px rgba(255, 150, 200, 0.3), inset 0 0 9px rgba(130, 200, 255, 0.28); }
+}
+
+/* ---- 古埃及眼睛（荷鲁斯之眼风格纯 CSS：细长眼 + 内眼角 + 黑瞳 + 眼线） ---- */
+.fx-clarity-eye {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 58px;
+  height: 30px;
+  transform: translate(-50%, -50%);
+  opacity: 0.5;
+  pointer-events: none;
+}
+.fx-clarity-eye::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50% 50% 50% 50% / 65% 65% 35% 35%;
+  background: linear-gradient(180deg, rgba(230, 250, 255, 0.9), rgba(160, 220, 250, 0.75));
+  box-shadow: 0 0 6px rgba(200, 240, 255, 0.6);
+  transform: rotate(-8deg) skewX(-14deg);
+}
+.fx-clarity-eye::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 13px;
+  height: 13px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: radial-gradient(circle at 40% 35%, #0a1a2a 0%, #04101c 70%);
+  box-shadow: 0 0 4px rgba(0, 20, 40, 0.8);
+}
+/* 内眼角泪痕线（CSS 尾形：斜向左下的细长条） */
+.fx-clarity-eye span {
+  position: absolute;
+  right: -16px;
+  top: 8px;
+  width: 26px;
+  height: 3px;
+  background: rgba(210, 240, 255, 0.85);
+  border-radius: 2px;
+  transform: rotate(-30deg);
+  transform-origin: left center;
+}
+
+/* ---- 透彻1 揭示幽灵：圣光 + 眼睛（.fx-clarity-ghost 挂幽灵卡；.fx-clarity-eye 居中） ---- */
+.fx-clarity-ghost {
+  box-shadow: 0 0 14px rgba(255, 190, 220, 0.65), 0 0 30px rgba(150, 210, 255, 0.45);
+}
+.fx-clarity-ghost::before {
+  content: '';
+  position: absolute;
+  inset: -14px;
+  border-radius: 14px;
+  background: radial-gradient(circle, rgba(255, 230, 245, 0.5) 0%, rgba(170, 220, 255, 0.35) 45%, transparent 75%);
+  animation: fx-clarity-halo 3s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes fx-clarity-halo {
+  0%, 100% { opacity: 0.5; transform: scale(0.96); }
+  50% { opacity: 1; transform: scale(1.05); }
+}
+.fx-clarity-ghost > .fx-clarity-eye {
+  opacity: 0.5;
+  width: 44px;
+  height: 24px;
+}
+.fx-clarity-ghost > .fx-clarity-eye::after {
+  width: 10px;
+  height: 10px;
+}
+
+/* ---- 牌库上方眼睛（clarity-2/3）：39% 级透明，呼吸上下轻飘 ---- */
+.fx-clarity-deck-eye {
+  position: fixed;
+  opacity: 0.6;
+  animation: fx-clarity-deck-eye-float 2.6s ease-in-out infinite;
+}
+.fx-clarity-deck-eye.out,
+.fx-clarity-card-eye.out,
+.fx-clarity-eye.out {
+  opacity: 0;
+  transition: opacity 0.55s ease;
+}
+@keyframes fx-clarity-deck-eye-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
+}
+/* 抽出的卡落点眼睛（clarity-2/3 被抽卡）：手牌末尾浮现 3s */
+.fx-clarity-card-eye {
+  position: fixed;
+  opacity: 0.6;
+  filter: drop-shadow(0 0 8px rgba(200, 240, 255, 0.7));
+}
+
+/* =====================================================================
+ * 2代 clarity 透彻已编译：眼睛圣光 + 金色金字塔（render.ts appendClarityCompiled 驱动）
+ * ===================================================================== */
+.compiled-clarity-host {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 4;
+}
+.compiled-clarity-eye-wrap {
+  position: absolute;
+  width: 90px;
+  height: 90px;
+  margin-left: -45px;
+  margin-top: -45px;
+  opacity: 0;
+  transform: scale(0.6);
+}
+.compiled-clarity-eye-wrap.in {
+  opacity: 1;
+  transform: scale(1);
+  transition: opacity 0.5s ease-out, transform 0.55s cubic-bezier(0.2, 0.8, 0.3, 1.2);
+}
+.compiled-clarity-eye-wrap.out {
+  opacity: 0;
+  transition: opacity 0.6s ease-in;
+}
+.compiled-clarity-eye-wrap .fx-clarity-eye {
+  left: 50%;
+  top: 50%;
+  width: 46px;
+  height: 24px;
+  opacity: 0.8;
+  animation: fx-clarity-halo 2.2s ease-in-out infinite;
+}
+.compiled-clarity-eye-halo {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 90px;
+  height: 90px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 240, 250, 0.55) 0%, rgba(200, 235, 255, 0.35) 45%, transparent 75%);
+  animation: fx-clarity-halo 2.2s ease-in-out infinite;
+}
+/* 金色四面体金字塔（两个三角面 + 底棱，CSS 造型） */
+.compiled-clarity-pyramid {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  opacity: 0;
+}
+.compiled-clarity-pyramid.in {
+  opacity: 1;
+  transition: opacity 0.5s ease-out;
+}
+.compiled-clarity-pyramid.out {
+  opacity: 0;
+  transition: opacity 0.7s ease-in;
+}
+.compiled-clarity-pyramid-face {
+  position: absolute;
+  width: 0;
+  height: 0;
+  border-left: 22px solid transparent;
+  border-right: 22px solid transparent;
+  border-bottom: 40px solid rgba(255, 200, 90, 0.85);
+  filter: drop-shadow(0 0 8px rgba(255, 200, 90, 0.7));
+}
+.compiled-clarity-pyramid-face.l {
+  left: -22px;
+  top: -40px;
+  transform: skewX(-12deg);
+  border-bottom-color: rgba(255, 215, 130, 0.9);
+}
+.compiled-clarity-pyramid-face.r {
+  left: -22px;
+  top: -40px;
+  transform: skewX(12deg) scaleX(-1);
+  border-bottom-color: rgba(235, 170, 60, 0.8);
+}
+
+/* =====================================================================
+ * 2代 ice 寒冰 FX
+ * ---------------------------------------------------------------------
+ * 冰面偏转桥（fx-gen2 playIceShiftBridge）：起点→终点深蓝冰滑道（两条亮蓝滑轨线）。
+ * ===================================================================== */
+.fx-ice-bridge {
+  position: fixed;
+  height: 22px;
+  margin-top: -11px;
+  border-radius: 11px;
+  background: linear-gradient(180deg, rgba(140, 220, 255, 0.55), rgba(30, 110, 200, 0.5) 55%, rgba(90, 190, 250, 0.55));
+  box-shadow: 0 0 14px rgba(80, 180, 255, 0.5), inset 0 0 6px rgba(220, 250, 255, 0.5);
+  transform-origin: left center;
+  opacity: 0;
+  pointer-events: none;
+  will-change: opacity;
+}
+.fx-ice-bridge.in {
+  opacity: 1;
+  transition: opacity 0.38s ease-out;
+}
+.fx-ice-bridge.out {
+  opacity: 0;
+  transition: opacity 0.5s ease-in;
+}
+.fx-ice-bridge-line {
+  position: absolute;
+  left: 2%;
+  right: 2%;
+  height: 3px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, rgba(230, 252, 255, 0.9), rgba(160, 230, 255, 0.7));
+  box-shadow: 0 0 8px rgba(200, 245, 255, 0.9);
+}
+.fx-ice-bridge-line.a { top: 4px; }
+.fx-ice-bridge-line.b { bottom: 4px; }
+/* 起/终点晶点标记 */
+.fx-ice-bridge-end {
+  position: fixed;
+  width: 14px;
+  height: 14px;
+  margin-left: -7px;
+  margin-top: -7px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #eafcff 0%, #9fd8ff 55%, rgba(120, 190, 255, 0.2) 100%);
+  box-shadow: 0 0 12px rgba(160, 230, 255, 0.9);
+  opacity: 0;
+  pointer-events: none;
+}
+.fx-ice-bridge-end.in { opacity: 1; transition: opacity 0.3s ease-out; }
+.fx-ice-bridge-end.out { opacity: 0; transition: opacity 0.5s ease-in; }
+/* 小雪花：六角白色花点（CSS 旋转 + 飘落渐隐） */
+.fx-ice-snow {
+  position: fixed;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #eafcff;
+  box-shadow: 0 0 6px rgba(200, 240, 255, 0.95);
+  pointer-events: none;
+  animation: fx-ice-snow-fall 2.6s ease-in forwards;
+  opacity: 0;
+}
+@keyframes fx-ice-snow-fall {
+  0% { transform: translateY(0) scale(0.6); opacity: 0; }
+  15% { opacity: 0.95; }
+  60% { transform: translateY(26px) translateX(8px) scale(0.9); opacity: 0.85; }
+  100% { transform: translateY(52px) translateX(-4px) scale(0.5); opacity: 0; }
+}
+
+/* ---- ice-1 底：对手链路 30% 深蓝冰面覆盖 + 间歇雪花 ---- */
+.fx-ice-linefreeze {
+  position: fixed;
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, rgba(140, 220, 255, 0.3), rgba(60, 150, 230, 0.32) 55%, rgba(160, 230, 255, 0.28));
+  box-shadow: inset 0 0 16px rgba(180, 235, 255, 0.4), 0 0 10px rgba(90, 180, 255, 0.3);
+  pointer-events: none;
+  z-index: 94;
+  animation: fx-ice-line-breathe 3.2s ease-in-out infinite;
+}
+@keyframes fx-ice-line-breathe {
+  0%, 100% { opacity: 0.85; }
+  50% { opacity: 1; }
+}
+.fx-ice-line-snow {
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #eafcff;
+  box-shadow: 0 0 4px rgba(200, 240, 255, 0.95);
+  animation: fx-ice-line-snowfall 3.4s ease-in infinite;
+  opacity: 0;
+}
+.fx-ice-line-snow:nth-child(1) { left: 12%; top: 10%; animation-delay: 0s; }
+.fx-ice-line-snow:nth-child(2) { left: 42%; top: 18%; animation-delay: -1.2s; }
+.fx-ice-line-snow:nth-child(3) { left: 72%; top: 12%; animation-delay: -2.3s; }
+.fx-ice-line-snow:nth-child(4) { left: 88%; top: 60%; animation-delay: -0.6s; }
+.fx-ice-line-snow:nth-child(5) { left: 28%; top: 78%; animation-delay: -1.8s; }
+@keyframes fx-ice-line-snowfall {
+  0% { transform: translateY(0) scale(0.6); opacity: 0; }
+  20% { opacity: 0.9; }
+  100% { transform: translateY(46px) translateX(6px) scale(0.5); opacity: 0; }
+}
+
+/* ---- ice-4 底：卡框深蓝呼吸发光 + 卡周雪花 ---- */
+.fx-ice4-cardglow {
+  position: fixed;
+  border: 2px solid rgba(120, 210, 255, 0.7);
+  border-radius: 8px;
+  box-shadow: 0 0 12px rgba(90, 180, 255, 0.6), inset 0 0 8px rgba(120, 210, 255, 0.3);
+  pointer-events: none;
+  z-index: 94;
+  animation: fx-ice4-breathe 2.4s ease-in-out infinite;
+}
+@keyframes fx-ice4-breathe {
+  0%, 100% { border-color: rgba(120, 210, 255, 0.55); box-shadow: 0 0 8px rgba(90, 180, 255, 0.45), inset 0 0 6px rgba(120, 210, 255, 0.25); }
+  50% { border-color: rgba(200, 245, 255, 0.9); box-shadow: 0 0 18px rgba(140, 220, 255, 0.8), inset 0 0 12px rgba(200, 245, 255, 0.4); }
+}
+.fx-ice4-snow {
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #eafcff;
+  animation: fx-ice4-snowfall 3s ease-in infinite;
+  opacity: 0;
+}
+.fx-ice4-snow:nth-child(1) { left: -4px; top: 20%; animation-delay: 0s; }
+.fx-ice4-snow:nth-child(2) { right: -4px; top: 55%; animation-delay: -1.4s; }
+.fx-ice4-snow:nth-child(3) { left: 30%; bottom: -4px; animation-delay: -0.7s; }
+@keyframes fx-ice4-snowfall {
+  0% { transform: translate(0, 0) scale(0.6); opacity: 0; }
+  25% { opacity: 0.9; }
+  100% { transform: translate(4px, -30px) scale(0.4); opacity: 0; }
+}
+
+/* ---- ice-6 顶：己方牌库厚冰封（几乎不透明） + 雪花 ---- */
+.fx-ice6-deckice {
+  position: fixed;
+  border-radius: 10px;
+  background:
+    linear-gradient(160deg, rgba(160, 230, 255, 0.55), rgba(50, 130, 220, 0.85) 60%, rgba(30, 90, 180, 0.9));
+  box-shadow: inset 0 0 20px rgba(230, 252, 255, 0.5), 0 0 16px rgba(120, 210, 255, 0.55);
+  pointer-events: none;
+  z-index: 94;
+  animation: fx-ice6-breathe 3.4s ease-in-out infinite;
+}
+@keyframes fx-ice6-breathe {
+  0%, 100% { opacity: 0.92; }
+  50% { opacity: 1; }
+}
+.fx-ice6-snow {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #eafcff;
+  box-shadow: 0 0 5px rgba(210, 245, 255, 0.95);
+  animation: fx-ice6-snowfall 3.6s ease-in infinite;
+  opacity: 0;
+}
+.fx-ice6-snow:nth-child(1) { left: 18%; top: 12%; animation-delay: 0s; }
+.fx-ice6-snow:nth-child(2) { left: 65%; top: 20%; animation-delay: -1.1s; }
+.fx-ice6-snow:nth-child(3) { left: 38%; top: 70%; animation-delay: -2.2s; }
+.fx-ice6-snow:nth-child(4) { left: 82%; top: 55%; animation-delay: -0.5s; }
+@keyframes fx-ice6-snowfall {
+  0% { transform: translateY(0) scale(0.6); opacity: 0; }
+  20% { opacity: 0.9; }
+  100% { transform: translateY(42px) translateX(-5px) scale(0.45); opacity: 0; }
+}
+
+/* =====================================================================
+ * 2代 ice 寒冰已编译：常驻雪花 + 周期冰面覆盖（render.ts appendIceCompiled 驱动）
+ * ===================================================================== */
+.compiled-ice-snow {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 3;
+  overflow: visible;
+}
+.compiled-ice-snowflake {
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #eafcff;
+  box-shadow: 0 0 5px rgba(200, 240, 255, 0.95);
+  animation: compiled-ice-snow-drift 4s ease-in infinite;
+  opacity: 0;
+}
+.compiled-ice-snowflake:nth-child(1) { left: 14%; top: -4px; animation-delay: 0s; }
+.compiled-ice-snowflake:nth-child(2) { left: 55%; top: 8%; animation-delay: -1.6s; }
+.compiled-ice-snowflake:nth-child(3) { left: 82%; top: 2%; animation-delay: -2.8s; }
+@keyframes compiled-ice-snow-drift {
+  0% { transform: translateY(0) scale(0.5); opacity: 0; }
+  18% { opacity: 0.85; }
+  100% { transform: translateY(56px) translateX(7px) scale(0.4); opacity: 0; }
+}
+.compiled-ice-cover {
+  position: absolute;
+  inset: 0;
+  border-radius: 14px;
+  background:
+    linear-gradient(165deg, rgba(180, 235, 255, 0.42), rgba(90, 170, 240, 0.34) 58%, rgba(150, 225, 255, 0.4));
+  box-shadow: inset 0 0 22px rgba(230, 252, 255, 0.6);
+  pointer-events: none;
+  z-index: 4;
+  opacity: 0;
 }

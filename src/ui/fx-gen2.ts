@@ -227,10 +227,12 @@ export function clearGen2Fx(): void {
     layer.remove();
   }
   luckDiceLayers.clear();
+  for (const eye of clarityDeckEyes.values()) eye.remove();
+  clarityDeckEyes.clear();
   for (const el of document.querySelectorAll<HTMLElement>(
     '.fx-luck-spark, .fx-luck-msg, .fx-luck-mushroom, .fx-mirror-copy-ghost, ' +
       '.fx-mirror-copy-flash, .fx-peace-dove, .fx-peace-card, .fx-chaos-vortex-draw, ' +
-      '.fx-chaos-vortex-discard, .fx-chaos-card'
+      '.fx-chaos-vortex-discard, .fx-chaos-card, .fx-clarity-eye, .fx-clarity-deck-eye, .fx-clarity-card-eye'
   )) {
     el.remove();
   }
@@ -524,7 +526,205 @@ export function playChaosDiscardExtra(node: HTMLElement, payload: { defId: strin
   }, CHAOS_DISCARD_PRE_MS + 900);
 }
 
-/** 订阅 luck / mirror / peace / chaos 引擎事件 */
+/* ============================== clarity 透彻：眼睛 FX ==============================
+ * ① clarity-2/3 中（drawFromDeck 抽牌库值卡）：触发后所属玩家牌库上方浮现古埃及眼睛图案
+ *   （render.ts select prompt 标题前缀「透彻：从牌库中选择」渲染期调用 startClarityDeckEye，
+ *    幂等；眼睛持续到玩家选好被抽卡）→ drawFromDeck（card:drawn triggerProtocol=clarity）
+ *    后等待 2s 眼睛消失（stopClarityDeckEye 延后调用）；
+ * ② 被抽出的卡中间出现 39% 透明眼睛图案，持续 3s 后渐隐（手牌落点覆层——被抽卡重渲染前
+ *    无 DOM 节点，以 handEndPos 落点框呈现眼睛，读作"抽出的卡带眼睛"）。
+ * 眼睛造型 = CSS .fx-clarity-eye（见 styles.css；纯 CSS 眼形，body 级 fixed 定位）。 */
+
+const CLARITY_EYE_AFTER_MS = 2000; // 抽卡完成后牌库眼睛再停留（「等待2秒再消失」）
+const CLARITY_CARD_EYE_MS = 3000;  // 被抽卡 39% 眼睛持续时间
+const CLARITY_EYE_W = 58;
+const CLARITY_EYE_H = 30;
+
+/** 活跃的牌库眼睛层（key = player：render 期创建、card:drawn clarity 后 2s 消费） */
+const clarityDeckEyes = new Map<PlayerId, HTMLElement>();
+
+/** 构建古埃及眼睛元素（CSS 造型；定位由调用方决定——作为 fixed 子层或容器内居中） */
+function buildClarityEye(cls = 'fx-clarity-eye'): HTMLElement {
+  const eye = document.createElement('div');
+  eye.className = cls;
+  const tail = document.createElement('span');
+  eye.appendChild(tail);
+  return eye;
+}
+
+/** 玩家牌库上方浮现眼睛（幂等：已存在只重定位；render.ts select prompt 渲染期调用） */
+export function startClarityDeckEye(player: PlayerId): void {
+  const deck = document.querySelector<HTMLElement>(`.deck[data-player="${player}"]`);
+  if (!deck) return;
+  const r = deck.getBoundingClientRect();
+  if (r.width === 0) return;
+  let eye = clarityDeckEyes.get(player);
+  if (!eye) {
+    eye = buildClarityEye();
+    eye.classList.add('fx-clarity-deck-eye');
+    eye.style.zIndex = String(GEN2_Z);
+    document.body.appendChild(eye);
+    clarityDeckEyes.set(player, eye);
+  }
+  // 眼睛浮于牌库区上方（轻微上飘呼吸；39%→透明——提示词「30%透明」级别）
+  eye.style.left = `${(r.left + r.width / 2 - CLARITY_EYE_W / 2).toFixed(1)}px`;
+  eye.style.top = `${(r.top - CLARITY_EYE_H - 6).toFixed(1)}px`;
+}
+
+/** 牌库眼睛消散（立即；抽卡完成后由订阅延后 2s 调用） */
+function stopClarityDeckEye(player: PlayerId): void {
+  const eye = clarityDeckEyes.get(player);
+  if (!eye) return;
+  clarityDeckEyes.delete(player);
+  eye.classList.add('out');
+  window.setTimeout(() => eye.remove(), 600);
+}
+
+/** 抽出的卡落点眼睛（手牌末尾新卡位置；39% 透明眼睛 3s 后渐隐） */
+function spawnClarityCardEye(player: PlayerId): void {
+  const hand = document.querySelectorAll<HTMLElement>('.hand')[player];
+  if (!hand) return;
+  const rect = hand.getBoundingClientRect();
+  // 落点 = 手牌末尾（与 handEndPos 同款：取末卡外缘或空手牌起点）
+  const cards = hand.querySelectorAll<HTMLElement>('.card:not(.reveal-ghost)');
+  const last = cards[cards.length - 1];
+  let x: number;
+  const y = rect.top + rect.height / 2;
+  if (last) {
+    const lr = last.getBoundingClientRect();
+    x = player === 0 ? lr.right + 37 : lr.left - 37;
+  } else {
+    x = player === 0 ? rect.left + 28 + 65 : rect.right - 28 - 65;
+  }
+  const eye = buildClarityEye();
+  eye.classList.add('fx-clarity-card-eye');
+  eye.style.left = `${(x - CLARITY_EYE_W / 2).toFixed(1)}px`;
+  eye.style.top = `${(y - CLARITY_EYE_H / 2).toFixed(1)}px`;
+  eye.style.zIndex = String(GEN2_Z);
+  document.body.appendChild(eye);
+  window.setTimeout(() => eye.classList.add('out'), CLARITY_CARD_EYE_MS);
+  window.setTimeout(() => eye.remove(), CLARITY_CARD_EYE_MS + 600);
+}
+
+/** card:drawn + triggerProtocol=clarity（clarity-2/3 drawFromDeck 抽中卡）：牌库眼睛
+ *  延后 2s 消失 + 落点眼睛 3s */
+function onClarityDrawn(p: { owner?: PlayerId; uid?: string; triggerProtocol?: string }): void {
+  if (p.triggerProtocol !== 'clarity' || p.owner === undefined) return;
+  const player: PlayerId = p.owner;
+  if (clarityDeckEyes.has(player)) {
+    window.setTimeout(() => stopClarityDeckEye(player), CLARITY_EYE_AFTER_MS);
+  }
+  spawnClarityCardEye(player);
+}
+
+/* ============================== ice 寒冰：冰面偏转桥 + 雪花 ==============================
+ * ① 偏转（ice-1/2/3 的 shift op，card:shifted + triggerProtocol=ice）：被偏转卡起点与
+ *    终点间生成一道直连深蓝冰面（两条并排亮线 = 滑道），卡沿冰面滑行时带两道冰面拖尾
+ *    （卡飞行由 effects 基础 playShift 照常——本函数只叠冰桥 + 拖尾观感 + 起点雪花）；
+ * ② 寒冰1 底触发（ice-1 弃牌 discard，triggerProtocol=ice）：对方链路覆盖 30% 深蓝冰面
+ *    偶尔雪花——简化：discard 时在【触发源 ice-1 所在线的对手链路】铺冰面层（3.5s 渐隐）
+ *    ——定位：payload.triggerDefId=ice-1，需源卡 uid → 引擎 discard emit 未带 sourceUid，
+ *    改由 discardMany/普通 discard 的 pe.sourceUid 补齐？——ice-1 弃牌由 ice1AfterPlay 触发
+ *    （discard op 由 effect 属主执行）→ 以 payload.owner（被弃卡属主=打牌者）反查 ice-1 于其
+ *    对手某线？不可靠——ice-1 在 ice-1 拥有者侧、打牌者是 ice-1 拥有者的对手。ice-1 线 =
+ *    ice-1 拥有者的 ice-1 所在线。此处以 FX 层查场：找 faceUp 的 ice-1 卡，取其 line →
+ *    对方（ice-1 owner 的对手 = 打牌者）该线链路 = 刚被打牌者的链路 → 铺冰。ice-1 场上有
+ *    多张时取最近的（简化取第一张）。 */
+const ICE_BRIDGE_IN_MS = 380;
+const ICE_BRIDGE_OUT_MS = 500;
+const ICE_BRIDGE_Z = 290; // 桥在飞行卡（BASE_Z 300）之下
+const ICE_SNOW_MS = 2600;
+
+/** 桥目标（同 effects stackEndPos 简化：目标槽末卡外缘 / 槽内首卡位） */
+function iceStackEnd(owner: PlayerId, line: number): { x: number; y: number } | null {
+  const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${owner}"][data-line="${line}"]`);
+  if (!slot) return null;
+  const slotRect = slot.getBoundingClientRect();
+  const y = slotRect.top + slotRect.height / 2;
+  const cards = slot.querySelectorAll<HTMLElement>('.card');
+  const last = cards.length > 0 ? cards[cards.length - 1] : null;
+  if (last) {
+    const r = last.getBoundingClientRect();
+    return { x: owner === 0 ? r.left - 65 : r.right + 65, y };
+  }
+  return { x: owner === 0 ? slotRect.right - 90 : slotRect.left + 90, y };
+}
+
+/** 某点飘落的几片小雪花（纯 CSS 六角花），duration 后自清理 */
+function spawnSnow(x: number, y: number, w: number, h: number, count = 6): void {
+  for (let i = 0; i < count; i++) {
+    const s = document.createElement('i');
+    s.className = 'fx-ice-snow';
+    s.style.left = `${(x + Math.random() * w).toFixed(1)}px`;
+    s.style.top = `${(y + Math.random() * h).toFixed(1)}px`;
+    s.style.animationDelay = `${(Math.random() * 0.8).toFixed(2)}s`;
+    s.style.zIndex = String(GEN2_Z - 2);
+    document.body.appendChild(s);
+    window.setTimeout(() => s.remove(), ICE_SNOW_MS + 900);
+  }
+}
+
+/** ice 偏转冰桥（card:shifted + triggerProtocol=ice）：起点→终点冰滑道 + 起点雪花。
+ *  卡的基础飞行由 effects 照常 playShift（本函数只叠桥/拖尾/雪，不替换飞行）。 */
+export function playIceShiftBridge(
+  node: HTMLElement,
+  payload: { uid?: string; owner?: PlayerId; line?: number | null; fromLine?: number },
+): void {
+  if (payload.owner === undefined || payload.line == null) return;
+  const rect = node.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return;
+  const start = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  const end = iceStackEnd(payload.owner, payload.line);
+  if (!end) return;
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist < 10) return;
+  const angle = (Math.atan2(dy, dx) * 180) / Math.PI;
+  // 冰桥主体：深蓝半透明冰面（渐变 + 两道亮蓝滑轨线，底为桥色）
+  const bridge = document.createElement('div');
+  bridge.className = 'fx-ice-bridge';
+  bridge.style.left = `${start.x}px`;
+  bridge.style.top = `${start.y}px`;
+  bridge.style.width = `${dist}px`;
+  bridge.style.transform = `rotate(${angle}deg)`;
+  bridge.style.zIndex = String(ICE_BRIDGE_Z);
+  bridge.appendChild(Object.assign(document.createElement('i'), { className: 'fx-ice-bridge-line a' }));
+  bridge.appendChild(Object.assign(document.createElement('i'), { className: 'fx-ice-bridge-line b' }));
+  document.body.appendChild(bridge);
+  // 起点/终点晶点标记
+  const mk = (x: number, y: number): HTMLElement => {
+    const m = document.createElement('i');
+    m.className = 'fx-ice-bridge-end';
+    m.style.left = `${x}px`;
+    m.style.top = `${y}px`;
+    m.style.zIndex = String(ICE_BRIDGE_Z + 1);
+    return m;
+  };
+  const sMark = mk(start.x, start.y);
+  const eMark = mk(end.x, end.y);
+  document.body.appendChild(sMark);
+  document.body.appendChild(eMark);
+  // 起点冰晶雪花
+  spawnSnow(start.x - 30, start.y - 40, 60, 60, 5);
+  // 桥渐显 → 卡飞行由 effects 基础 playShift（MOVE_MS）→ 桥渐隐清理
+  requestAnimationFrame(() => bridge.classList.add('in'));
+  sMark.classList.add('in');
+  eMark.classList.add('in');
+  window.setTimeout(() => {
+    bridge.classList.remove('in');
+    bridge.classList.add('out');
+    sMark.classList.add('out');
+    eMark.classList.add('out');
+    window.setTimeout(() => {
+      bridge.remove();
+      sMark.remove();
+      eMark.remove();
+    }, ICE_BRIDGE_OUT_MS + 60);
+  }, 900 + ICE_BRIDGE_IN_MS); // 桥保持 ~0.9s（覆盖基础飞行 MOVE_MS 450ms）后渐隐
+}
+
+/** 订阅 luck / mirror / peace / chaos / clarity 引擎事件 */
 export function initGen2Fx(): () => void {
   return gameBus.subscribe((e: GameEvent) => {
     if (e.type === 'luck:roll') {
@@ -532,10 +732,16 @@ export function initGen2Fx(): () => void {
     } else if (e.type === 'card:copied') {
       onMirrorCopy(e.payload as { uid?: string; defId?: string; copiedToUid?: string });
     } else if (e.type === 'card:drawn') {
+      const p = e.payload as
+        | { player?: PlayerId; count?: number; owner?: PlayerId; uid?: string; fromOpponentDeck?: boolean; triggerProtocol?: string }
+        | undefined;
       // chaos-0 抽对方牌库卡/对方抽我牌库卡：来源牌库 = 抽牌者的对手
-      const p = e.payload as { player?: PlayerId; fromOpponentDeck?: boolean; triggerProtocol?: string } | undefined;
       if (p && p.fromOpponentDeck === true && p.triggerProtocol === 'chaos' && (p.player === 0 || p.player === 1)) {
         playChaosVortexDraw((p.player === 0 ? 1 : 0) as PlayerId);
+      }
+      // clarity-2/3 drawFromDeck（emitCardEvent 卡级载荷：owner = 抽牌者）
+      if (p && p.triggerProtocol === 'clarity' && p.uid) {
+        onClarityDrawn(p);
       }
     }
   });

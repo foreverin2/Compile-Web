@@ -161,9 +161,10 @@ export interface RevealedGhost {
    *  落地幽灵渲染光之辉光（十字星 + 边框辉光），存在期间持续 */
   lightFx?: boolean;
   /** love 协议触发的揭示（love-4 揭示自己手牌 → Case A 幽灵给对方）：落地幽灵渲染
-   *  粉红边框辉光 + 中间爱心跳动（render.ts 挂 .fx-love-ghost + .fx-love-heart），
-   *  持续时间 = 幽灵存在期间（幽灵过期移除时特效随 DOM 消失） */
-  fx?: 'love';
+   *  粉红边框辉光 + 中间爱心跳动（render.ts 挂 .fx-love-ghost + .fx-love-heart）；
+   *  clarity 协议触发的揭示（透彻1 中对手揭示手牌 → Case B 幽灵给自己）：30% 透明眼睛 +
+   *  背后圣光（render.ts 挂 .fx-clarity-ghost；透彻特效，批2）。持续时间 = 幽灵存在期间 */
+  fx?: 'love' | 'clarity';
 }
 
 /** 效果操作（生成器 yield 的值之一；由运行器执行并触发连锁/语义事件）

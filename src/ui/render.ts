@@ -16,7 +16,7 @@ import { actionCn } from '../core/log';
 import { cardCommandDisabled } from '../core/effects/context';
 import { downloadLog } from './diag';
 import { buildTornadoFx } from './fx-tornado';
-import { buildDove, startLuckDiceFx } from './fx-gen2';
+import { buildDove, startLuckDiceFx, startClarityDeckEye } from './fx-gen2';
 
 export interface UiCallbacks {
   onAction(a: LegalAction): void;
@@ -913,6 +913,161 @@ export function syncMirror0BatteryGlows(s: GameState): void {
   }
 }
 
+/* ===== 2代 clarity-0 透彻常驻：链路能量槽淡粉/淡蓝边框 + 30% 眼睛图案 =====
+ * clarity-0 顶（valueModifier own-stack「此链路中，你每有1张牌，总阈值就加1」）：
+ * 与 mirror-0 同 gate（faceUp 在场即生效，含被盖）；生效时其所在线能量槽外圈淡粉/淡蓝
+ * 相间边框 + 中间浮现 30% 透明古埃及眼睛图案。key = `${player}-${line}`；注册表模式同
+ * mirror-0（body 级 fixed 层跨重渲染存活；条件消失移除；resetUiState 清表）。 */
+const clarity0BatteryGlows = new Map<string, HTMLElement>();
+
+export function syncClarity0BatteryGlows(s: GameState): void {
+  const activeKeys = new Set<string>();
+  for (const player of [0, 1] as PlayerId[]) {
+    for (const line of [0, 1, 2] as Line[]) {
+      const has = s.players[player].stacks[line].some(
+        (c) => c.defId === 'clarity-0' && c.faceUp && !cardCommandDisabled(s, c, 'top'),
+      );
+      if (!has) continue;
+      const key = `${player}-${line}`;
+      activeKeys.add(key);
+      const shell = document.querySelector<HTMLElement>(
+        `.stack-slot[data-player="${player}"][data-line="${line}"] .battery-shell`
+      );
+      if (!shell) continue;
+      let glow = clarity0BatteryGlows.get(key);
+      if (!glow) {
+        glow = el('div', 'fx-clarity0-batteryglow');
+        glow.dataset.clarity0Key = key;
+        clarity0BatteryGlows.set(key, glow);
+        document.body.appendChild(glow);
+      }
+      const r = shell.getBoundingClientRect();
+      glow.style.left = `${r.left - 4}px`;
+      glow.style.top = `${r.top - 4}px`;
+      glow.style.width = `${r.width + 8}px`;
+      glow.style.height = `${r.height + 8}px`;
+    }
+  }
+  for (const [key, glow] of clarity0BatteryGlows) {
+    if (!activeKeys.has(key)) {
+      glow.remove();
+      clarity0BatteryGlows.delete(key);
+    }
+  }
+}
+
+/* ===== 2代 ice 寒冰常驻（批2）：ice-1 对方链路冰面 / ice-4 卡框冰辉 / ice-6 牌库封冰 =====
+ * 注册表模式同 FX-6（body 级 fixed 层跨重渲染存活；条件消失移除；resetUiState 清表）。
+ * - ice-1 底「对手在此链路出牌后：他要弃置1张牌」（bottom，仅未覆盖顶卡生效）→ 生效期间
+ *   **对手同线链路**覆盖 30% 深蓝冰面 + 间歇雪花（威慑显示；key = `${owner}-${line}`）。
+ * - ice-4 底「此牌不可被翻转」（引擎 flip 守卫：faceUp 即免疫，含被盖）→ 该卡边框深蓝呼吸
+ *   发光 + 卡周雪花（key = uid）。
+ * - ice-6 顶「如果你有手牌，那么你不可以抽牌」（engine shouldBlockDraw：faceUp 任意位置）
+ *   → 己方牌库被厚深蓝冰块封住（几乎不透明）+ 牌库周雪花（key = player）。 */
+const iceLineFreezes = new Map<string, HTMLElement>(); // `${owner}-${line}` 对方线冰层
+const ice4CardGlows = new Map<string, HTMLElement>();  // ice-4 uid → 卡框辉层
+const ice6DeckIces = new Map<string, HTMLElement>();   // player → 牌库封冰层
+
+function renderIceLineFreeze(): HTMLElement {
+  const layer = el('div', 'fx-ice-linefreeze');
+  for (let i = 0; i < 5; i++) layer.appendChild(el('i', 'fx-ice-line-snow'));
+  return layer;
+}
+
+function renderIce4CardGlow(): HTMLElement {
+  const layer = el('div', 'fx-ice4-cardglow');
+  for (let i = 0; i < 3; i++) layer.appendChild(el('i', 'fx-ice4-snow'));
+  return layer;
+}
+
+function renderIce6DeckIce(): HTMLElement {
+  const layer = el('div', 'fx-ice6-deckice');
+  for (let i = 0; i < 4; i++) layer.appendChild(el('i', 'fx-ice6-snow'));
+  return layer;
+}
+
+export function syncIceFx(s: GameState): void {
+  const activeFreezes = new Set<string>();
+  const activeIce4 = new Set<string>();
+  const activeIce6 = new Set<PlayerId>();
+  for (const owner of [0, 1] as PlayerId[]) {
+    for (const line of [0, 1, 2] as Line[]) {
+      const stack = s.players[owner].stacks[line];
+      const top = stack[stack.length - 1];
+      // ice-1 底（仅未覆盖顶卡生效）：owner 的 ice-1 顶卡 → 对手同线链路冰面
+      if (top && top.defId === 'ice-1' && top.faceUp && !cardCommandDisabled(s, top, 'bottom')) {
+        const foe: PlayerId = owner === 0 ? 1 : 0;
+        const key = `${owner}-${line}`;
+        activeFreezes.add(key);
+        const slot = document.querySelector<HTMLElement>(
+          `.stack-slot[data-player="${foe}"][data-line="${line}"]`
+        );
+        if (slot) {
+          let layer = iceLineFreezes.get(key);
+          if (!layer) {
+            layer = renderIceLineFreeze();
+            layer.dataset.iceLineKey = key;
+            iceLineFreezes.set(key, layer);
+            document.body.appendChild(layer);
+          }
+          const r = slot.getBoundingClientRect();
+          layer.style.left = `${r.left}px`;
+          layer.style.top = `${r.top}px`;
+          layer.style.width = `${r.width}px`;
+          layer.style.height = `${r.height}px`;
+        }
+      }
+      // ice-4 底（faceUp 即免疫，含被盖）：卡框深蓝呼吸 + 雪花
+      for (const card of stack) {
+        if (card.defId !== 'ice-4' || !card.faceUp) continue;
+        activeIce4.add(card.uid);
+        const node = document.querySelector<HTMLElement>(`[data-uid="${card.uid}"]`);
+        if (!node) continue;
+        let layer = ice4CardGlows.get(card.uid);
+        if (!layer) {
+          layer = renderIce4CardGlow();
+          layer.dataset.ice4Key = card.uid;
+          ice4CardGlows.set(card.uid, layer);
+          document.body.appendChild(layer);
+        }
+        const r = node.getBoundingClientRect();
+        layer.style.left = `${r.left - 6}px`;
+        layer.style.top = `${r.top - 6}px`;
+        layer.style.width = `${r.width + 12}px`;
+        layer.style.height = `${r.height + 12}px`;
+      }
+    }
+    // ice-6 顶（faceUp 任意位置）→ 拥有者牌库封冰
+    if (s.players[owner].stacks.some((st) => st.some((c) => c.defId === 'ice-6' && c.faceUp))) {
+      activeIce6.add(owner);
+      const deck = document.querySelector<HTMLElement>(`.deck[data-player="${owner}"]`);
+      if (deck) {
+        let layer = ice6DeckIces.get(String(owner));
+        if (!layer) {
+          layer = renderIce6DeckIce();
+          layer.dataset.ice6Key = String(owner);
+          ice6DeckIces.set(String(owner), layer);
+          document.body.appendChild(layer);
+        }
+        const r = deck.getBoundingClientRect();
+        layer.style.left = `${r.left - 8}px`;
+        layer.style.top = `${r.top - 8}px`;
+        layer.style.width = `${r.width + 16}px`;
+        layer.style.height = `${r.height + 16}px`;
+      }
+    }
+  }
+  for (const [key, layer] of iceLineFreezes) {
+    if (!activeFreezes.has(key)) { layer.remove(); iceLineFreezes.delete(key); }
+  }
+  for (const [uid, layer] of ice4CardGlows) {
+    if (!activeIce4.has(uid)) { layer.remove(); ice4CardGlows.delete(uid); }
+  }
+  for (const [key, layer] of ice6DeckIces) {
+    if (!activeIce6.has(Number(key) as PlayerId)) { layer.remove(); ice6DeckIces.delete(key); }
+  }
+}
+
 /* ===== FX-5：check-cache 锁链（spirit-0 跳过检查缓存，一次性步骤触发） =====
  * 触发：s.step === 'check-cache' 且 shouldSkipCacheCheck(s, player)（实际只有回合玩家
  * 会停在 check-cache——runAutoAdvance 在该玩家应跳过时自动 advance）→ 以该玩家手牌区
@@ -1313,6 +1468,13 @@ function renderHand(
     if (ghost.fx === 'love') {
       gNode.classList.add('fx-love-ghost');
       gNode.appendChild(el('div', 'fx-love-heart'));
+    }
+    // 2代 透彻1 揭示幽灵（clarity fx，批2）：30% 透明古埃及眼睛 + 背后圣光
+    // （.fx-clarity-ghost 圣光 + .fx-clarity-eye 眼睛图案——眼型 CSS 见 styles.css；
+    //   幽灵存在期间持续，移除随 DOM 消失）
+    if (ghost.fx === 'clarity') {
+      gNode.classList.add('fx-clarity-ghost');
+      gNode.appendChild(el('div', 'fx-clarity-eye'));
     }
     // 双击放大（直接 dblclick，不经过 bindClickOrDouble 的单击延迟——幽灵无单击动作）
     gNode.addEventListener('dblclick', () => openZoom(ghost.defId, true, false, false));
@@ -2850,6 +3012,93 @@ function appendChaosCompiled(layer: HTMLElement, defId: string): void {
   scheduleCompiledLoop(layer, defId, rnd(3000, 6500), burst);
 }
 
+/* ---------- 15. 透彻 clarity（2代，fx-gen2 已编译）：淡粉/淡蓝呼吸框 + 四角护边 ----------
+ * 周期眼睛圣光（偶尔）：边框四周渐现古埃及眼睛（CSS 造型，位置随机贴边）→ 圣光持续
+ * → 2s 后眼睛与圣光渐渐消失；中心金字塔（偶尔）：金色四面体渐现 2s 后消散。间隔 ≥10s
+ * （scheduleCompiledLoop 拆两个独立循环）。CSS 见 styles.css .compiled-clarity-*。 */
+const CLARITY_EYE_SHOW_MS = 2200; // 眼睛 + 圣光持续（渐现→停留→渐隐）
+
+function appendClarityCompiled(layer: HTMLElement, defId: string): void {
+  appendCompiledCorners(layer, 'compiled-clarity-corner'); // §8：四角淡粉/淡蓝护边
+  const host = el('div', 'compiled-clarity-host');
+  layer.appendChild(host);
+  // 眼睛圣光 burst：随机贴边位置生成眼睛 + 圣光，停留后消散
+  const eyeBurst = (done: () => void): void => {
+    if (!layer.isConnected) { done(); return; }
+    const g = layerGeom(layer);
+    if (!g) { fxTimer(defId, () => eyeBurst(done), 700); return; }
+    const wrap = el('div', 'compiled-clarity-eye-wrap');
+    const p = nearBorderPoint();
+    wrap.style.left = `${p.x.toFixed(1)}%`;
+    wrap.style.top = `${p.y.toFixed(1)}%`;
+    const halo = el('div', 'compiled-clarity-eye-halo');
+    const eye = el('div', 'fx-clarity-eye');
+    wrap.appendChild(halo);
+    wrap.appendChild(eye);
+    host.appendChild(wrap);
+    reflowFx(wrap);
+    wrap.classList.add('in');
+    fxTimer(defId, () => {
+      if (!layer.isConnected) { done(); return; }
+      wrap.classList.add('out');
+      fxTimer(defId, () => {
+        if (wrap.isConnected) wrap.remove();
+        done();
+      }, 700);
+    }, CLARITY_EYE_SHOW_MS);
+  };
+  // 金色金字塔 burst：中心渐现金字塔（两个三角面）2s 后消散
+  const pyramidBurst = (done: () => void): void => {
+    if (!layer.isConnected) { done(); return; }
+    const g = layerGeom(layer);
+    if (!g) { fxTimer(defId, () => pyramidBurst(done), 700); return; }
+    const pyr = el('div', 'compiled-clarity-pyramid');
+    pyr.appendChild(el('i', 'compiled-clarity-pyramid-face l'));
+    pyr.appendChild(el('i', 'compiled-clarity-pyramid-face r'));
+    host.appendChild(pyr);
+    reflowFx(pyr);
+    pyr.classList.add('in');
+    fxTimer(defId, () => {
+      if (!layer.isConnected) { done(); return; }
+      pyr.classList.add('out');
+      fxTimer(defId, () => {
+        if (pyr.isConnected) pyr.remove();
+        done();
+      }, 700);
+    }, 2200);
+  };
+  scheduleCompiledLoop(layer, defId, rnd(3000, 7000), eyeBurst);
+  scheduleCompiledLoop(layer, defId, rnd(5000, 10000), pyramidBurst);
+}
+
+/* ---------- 16. 寒冰 ice（2代，fx-gen2 已编译）：深蓝呼吸框 + 四角护边 + 雪花常现 ----------
+ * 周期冰面覆盖：协议表面偶尔渐现深蓝 30% 冰面（透明度渐增覆盖）→ 持续 2s → 渐消。
+ * 间隔 ≥10s（scheduleCompiledLoop）。CSS 见 styles.css .compiled-ice-*。 */
+const ICE_COVER_MS = 2000; // 冰面覆盖持续（渐现后 2s 再渐隐）
+
+function appendIceCompiled(layer: HTMLElement, defId: string): void {
+  appendCompiledCorners(layer, 'compiled-ice-corner'); // §8：四角深蓝护边
+  // 常驻雪花（层内 3 片缓慢飘落循环）
+  const snow = el('div', 'compiled-ice-snow');
+  for (let i = 0; i < 3; i++) snow.appendChild(el('i', 'compiled-ice-snowflake'));
+  layer.appendChild(snow);
+  // 冰面覆盖层（burst 时透明度渐现）
+  const cover = el('div', 'compiled-ice-cover');
+  layer.appendChild(cover);
+  const burst = (done: () => void): void => {
+    if (!layer.isConnected) { done(); return; }
+    cover.style.transition = 'opacity 0.8s ease-in';
+    cover.style.opacity = '1';
+    fxTimer(defId, () => {
+      if (!layer.isConnected) { done(); return; }
+      cover.style.transition = 'opacity 0.9s ease-out';
+      cover.style.opacity = '0';
+      fxTimer(defId, done, 950);
+    }, ICE_COVER_MS);
+  };
+  scheduleCompiledLoop(layer, defId, rnd(3000, 6500), burst);
+}
+
 /** 新 10 协议已编译特效分发（buildCompiledFx 内调用；fire/light/darkness/water/life
  *  走既有分支，不在此列）。每个 builder 只建持久子结构 + 起调度，动画全部在层内。 */
 function appendNewCompiledFx(layer: HTMLElement, defId: string): void {
@@ -2868,6 +3117,8 @@ function appendNewCompiledFx(layer: HTMLElement, defId: string): void {
     case 'mirror': appendMirrorCompiled(layer, defId); break;
     case 'peace': appendPeaceCompiled(layer, defId); break;
     case 'chaos': appendChaosCompiled(layer, defId); break;
+    case 'clarity': appendClarityCompiled(layer, defId); break;
+    case 'ice': appendIceCompiled(layer, defId); break;
     default: break;
   }
 }
@@ -3554,6 +3805,12 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
     if (prompt.kind === 'select') {
       // —— 现有 select 逻辑（候选卡高亮 + 确认条）保持不变 ——
       const sel = new Set(choiceSelected);
+      // 2代 clarity-2/3：从牌库选阈值卡 prompt → 效果属主牌库上方浮现古埃及眼睛
+      // （startClarityDeckEye 幂等；抽取完成由 fx-gen2 在 card:drawn clarity 后 2s 消散）
+      if (prompt.title.startsWith('透彻：从牌库中选择')) {
+        const eyePlayer: PlayerId = (prompt.chooser ?? topEffect.player) as PlayerId;
+        startClarityDeckEye(eyePlayer);
+      }
       // 候选卡高亮（renderBoard 内所有 .card 已渲染，此时均在 wrap 内）
       for (const node of wrap.querySelectorAll<HTMLElement>('.card[data-uid]')) {
         const uid = node.dataset.uid!;
@@ -3702,6 +3959,10 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   syncMetal1LineGlows(s);
   // 2代 mirror-0 明镜常驻：链路能量槽银白镜框（电池已入 DOM → 按 .battery-shell 矩形）
   syncMirror0BatteryGlows(s);
+  // 2代 clarity-0 透彻常驻：链路能量槽淡粉/淡蓝边框 + 眼睛图案
+  syncClarity0BatteryGlows(s);
+  // 2代 ice 寒冰常驻：ice-1 对方链路冰面 / ice-4 卡框冰辉 / ice-6 牌库封冰
+  syncIceFx(s);
 }
 
 let selectedUid: string | null = null;
@@ -3774,6 +4035,14 @@ export function resetUiState(): void {
   metal1LineGlows.clear();
   for (const glow of mirror0BatteryGlows.values()) glow.remove();
   mirror0BatteryGlows.clear();
+  for (const glow of clarity0BatteryGlows.values()) glow.remove();
+  clarity0BatteryGlows.clear();
+  for (const layer of iceLineFreezes.values()) layer.remove();
+  iceLineFreezes.clear();
+  for (const layer of ice4CardGlows.values()) layer.remove();
+  ice4CardGlows.clear();
+  for (const layer of ice6DeckIces.values()) layer.remove();
+  ice6DeckIces.clear();
   if (chainLayer) {
     chainLayer.remove();
     chainLayer = null;

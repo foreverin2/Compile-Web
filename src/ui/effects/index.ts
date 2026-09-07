@@ -3,7 +3,7 @@ import { mountShatter } from '../fx/delete-shatter';
 import { mountCut } from '../fx/discard-cut';
 import { buildTornadoFx } from '../fx-tornado';
 import { cardImgSrc, protocolImgSrc } from '../../data/demo';
-import { playPeaceDiscardExtra, PEACE_PRE_MS, playChaosDiscardExtra, CHAOS_DISCARD_PRE_MS } from '../fx-gen2';
+import { playPeaceDiscardExtra, PEACE_PRE_MS, playChaosDiscardExtra, CHAOS_DISCARD_PRE_MS, playIceShiftBridge } from '../fx-gen2';
 
 const FX_REMOVE_MS = 1200;
 const BASE_Z = 300; // 基础行为特效层
@@ -1862,12 +1862,16 @@ export function initEffects(): () => void {
       case 'card:shifted':
         // 按触发卡协议分流：darkness（darkness-0/1/4）→ 烟桥路线；gravity（gravity-1/2/4）
         // → 品红黑洞+射线（延后基础平移）；speed（speed-2/3/4）→ 灰白卡框光+飓风；
+        // 2代 ice（寒冰1/2/3 偏转）→ 深蓝冰面滑道（起点雪花；卡照常基础飞行）；
         // 其余偏转源（light-2/light-3 带 'light'、系统效果带 'system'）走普通幽灵飞行
         if (node) {
           if (payload.triggerProtocol === 'darkness') playDarknessShiftBridge(node, payload);
           else if (payload.triggerProtocol === 'gravity') playGravityShiftExtra(node, payload);
           else if (payload.triggerProtocol === 'speed') playSpeedShiftExtra(node, payload);
-          else playShift(node, payload);
+          else if (payload.triggerProtocol === 'ice') {
+            playIceShiftBridge(node, payload);
+            playShift(node, payload); // 冰桥只叠加：基础飞行照常
+          } else playShift(node, payload);
         }
         break;
       case 'card:deck-played':
