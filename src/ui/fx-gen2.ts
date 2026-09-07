@@ -1117,6 +1117,175 @@ export function playWarVictoryFlag(sourceUid?: string, at?: { x: number; y: numb
   window.setTimeout(() => flag.remove(), WAR_FLAG_MS + 600);
 }
 
+/* ============================== courage 勇气：湖中剑 / 金逆焰 ==============================
+ * ① 抽牌（card:drawn triggerProtocol=courage，勇气0/2/3 中抽牌）：抽出的卡上方斜斜插下一道
+ *    鎏金湖中剑（剑身缠金色流光 + 飘散金色光羽）→ 大剑化金色光点消散 → 卡框鎏金发光 2s。
+ *    抽牌卡入手牌重渲染前无 DOM → 以手牌末尾落点为承载（同 love settle 观感）。
+ * ② 弃牌（card:discarded courage）：被弃卡被金色逆焰点燃（向下逆风燃烧金火苗）燃烧消散。
+ * ③ 删除（card:deleted courage，勇气1 中）：湖中剑金色剑影横挥而过 → 被删卡化金色光点。
+ * ④ 偏转（card:shifted courage，勇气3 底）：卡先被金圣光笼罩 → 落点炸开金色火环。
+ * 层 body 级 fixed、JS 定时自清理（clearGen2Fx 兜底 .fx-courage-*）。 */
+const COURAGE_GLOW_MS = 2000; // 卡框鎏金发光持续
+
+/** 湖中剑（纯 CSS：鎏金剑身 + 剑柄十字护手 + 光羽），斜插 45° */
+function buildLakeSword(size = 84): HTMLElement {
+  const wrap = document.createElement('div');
+  wrap.className = 'fx-courage-sword';
+  wrap.style.width = `${size}px`;
+  wrap.style.height = `${size}px`;
+  const blade = document.createElement('i');
+  blade.className = 'fx-courage-sword-blade';
+  const guard = document.createElement('i');
+  guard.className = 'fx-courage-sword-guard';
+  const grip = document.createElement('i');
+  grip.className = 'fx-courage-sword-grip';
+  wrap.appendChild(blade);
+  wrap.appendChild(guard);
+  wrap.appendChild(grip);
+  // 光羽（小金星点绕剑飘）
+  for (let i = 0; i < 6; i++) {
+    const f = document.createElement('i');
+    f.className = 'fx-courage-feather';
+    wrap.appendChild(f);
+  }
+  return wrap;
+}
+
+/** 落点框（手牌末尾 / 指定位置） */
+function courageLandPos(player: PlayerId): { x: number; y: number } | null {
+  const hand = document.querySelectorAll<HTMLElement>('.hand')[player];
+  if (!hand) return null;
+  const rect = hand.getBoundingClientRect();
+  const y = rect.top + rect.height / 2;
+  const cards = hand.querySelectorAll<HTMLElement>('.card:not(.reveal-ghost)');
+  const last = cards[cards.length - 1];
+  if (last) {
+    const r = last.getBoundingClientRect();
+    return { x: player === 0 ? r.right + 37 : r.left - 37, y };
+  }
+  return { x: player === 0 ? rect.left + 93 : rect.right - 93, y };
+}
+
+/** courage 抽牌：手牌落点湖中剑斜插 + 卡框鎏金 2s */
+export function playCourageDrawExtra(player: PlayerId): void {
+  const land = courageLandPos(player);
+  if (!land) return;
+  const sword = buildLakeSword();
+  sword.classList.add('fx-courage-draw-sword');
+  sword.style.left = `${land.x}px`;
+  sword.style.top = `${land.y - 30}px`;
+  sword.style.zIndex = String(GEN2_Z);
+  document.body.appendChild(sword);
+  window.setTimeout(() => sword.classList.add('in'), 30);
+  // 剑化金点消散 → 卡框鎏金 2s
+  window.setTimeout(() => sword.classList.add('gone'), 900);
+  const glow = document.createElement('div');
+  glow.className = 'fx-courage-cardglow';
+  glow.style.left = `${(land.x - 65).toFixed(1)}px`;
+  glow.style.top = `${(land.y - 89.4).toFixed(1)}px`;
+  glow.style.width = '130px';
+  glow.style.height = '178.8px';
+  glow.style.zIndex = String(GEN2_Z - 1);
+  document.body.appendChild(glow);
+  window.setTimeout(() => glow.classList.add('on'), 950);
+  window.setTimeout(() => glow.classList.add('out'), COURAGE_GLOW_MS + 950);
+  window.setTimeout(() => {
+    sword.remove();
+    glow.remove();
+  }, COURAGE_GLOW_MS + 1600);
+}
+
+/** courage 弃牌：金逆焰点燃（向下逆风燃烧的火苗盖卡），随后 effects 基础切割 */
+export function playCourageDiscardExtra(node: HTMLElement): void {
+  const rect = node.getBoundingClientRect();
+  if (rect.width === 0) return;
+  const fire = document.createElement('div');
+  fire.className = 'fx-courage-inferno';
+  fire.style.left = `${rect.left - 8}px`;
+  fire.style.top = `${rect.top - 8}px`;
+  fire.style.width = `${rect.width + 16}px`;
+  fire.style.height = `${rect.height + 16}px`;
+  fire.style.zIndex = String(GEN2_Z);
+  document.body.appendChild(fire);
+  window.setTimeout(() => fire.classList.add('in'), 20);
+  window.setTimeout(() => fire.remove(), 1300);
+}
+
+/** courage 删除（勇气1 中）：湖中剑金影横挥 → 化金点（基础破碎照常，本函数叠加剑影） */
+export function playCourageDeleteExtra(node: HTMLElement): void {
+  const rect = node.getBoundingClientRect();
+  if (rect.width === 0) return;
+  const slash = document.createElement('div');
+  slash.className = 'fx-courage-slash';
+  slash.style.left = `${rect.left - 30}px`;
+  slash.style.top = `${rect.top - 20}px`;
+  slash.style.width = `${rect.width + 60}px`;
+  slash.style.height = `${rect.height + 40}px`;
+  slash.style.zIndex = String(GEN2_Z);
+  const blade = document.createElement('i');
+  blade.className = 'fx-courage-slash-blade';
+  slash.appendChild(blade);
+  document.body.appendChild(slash);
+  // 金点爆散（卡化金色光点）
+  for (let i = 0; i < 10; i++) {
+    const p = document.createElement('i');
+    p.className = 'fx-courage-golddot';
+    p.style.left = `${(rect.left + Math.random() * rect.width).toFixed(1)}px`;
+    p.style.top = `${(rect.top + Math.random() * rect.height).toFixed(1)}px`;
+    p.style.setProperty('--fx-gdx', `${(Math.random() * 90 - 45).toFixed(1)}px`);
+    p.style.setProperty('--fx-gdy', `${(Math.random() * 70 - 30).toFixed(1)}px`);
+    p.style.zIndex = String(GEN2_Z);
+    document.body.appendChild(p);
+    window.setTimeout(() => p.remove(), 900);
+  }
+  window.setTimeout(() => slash.classList.add('in'), 20);
+  window.setTimeout(() => slash.remove(), 700);
+}
+
+/** courage 偏转（勇气3 底）：起点金圣光 + 落点金火环（基础飞行照常） */
+export function playCourageShiftExtra(node: HTMLElement, payload: { owner?: PlayerId; line?: number | null }): void {
+  if (payload.owner === undefined || payload.line == null) return;
+  const rect = node.getBoundingClientRect();
+  if (rect.width === 0) return;
+  // 起点金圣光
+  const halo = document.createElement('div');
+  halo.className = 'fx-courage-halo';
+  halo.style.left = `${rect.left - 10}px`;
+  halo.style.top = `${rect.top - 10}px`;
+  halo.style.width = `${rect.width + 20}px`;
+  halo.style.height = `${rect.height + 20}px`;
+  halo.style.zIndex = String(GEN2_Z - 2);
+  document.body.appendChild(halo);
+  window.setTimeout(() => halo.classList.add('in'), 20);
+  window.setTimeout(() => halo.remove(), 900);
+  // 落点金火环（目标槽 stackEnd）
+  const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${payload.owner}"][data-line="${payload.line}"]`);
+  if (slot) {
+    const sr = slot.getBoundingClientRect();
+    const y = sr.top + sr.height / 2;
+    const cards = slot.querySelectorAll<HTMLElement>('.card');
+    const last = cards.length > 0 ? cards[cards.length - 1] : null;
+    const ex = last
+      ? (() => {
+          const r = last.getBoundingClientRect();
+          return payload.owner === 0 ? r.left - 65 : r.right + 65;
+        })()
+      : payload.owner === 0
+        ? sr.right - 90
+        : sr.left + 90;
+    window.setTimeout(() => {
+      const ring = document.createElement('div');
+      ring.className = 'fx-courage-ring';
+      ring.style.left = `${ex - 40}px`;
+      ring.style.top = `${y - 40}px`;
+      ring.style.zIndex = String(GEN2_Z - 1);
+      document.body.appendChild(ring);
+      window.setTimeout(() => ring.classList.add('in'), 20);
+      window.setTimeout(() => ring.remove(), 900);
+    }, 300);
+  }
+}
+
 /** 订阅 luck / mirror / peace / chaos / clarity / corruption 引擎事件 */
 export function initGen2Fx(): () => void {
   return gameBus.subscribe((e: GameEvent) => {
@@ -1148,6 +1317,10 @@ export function initGen2Fx(): () => void {
       // clarity-2/3 drawFromDeck（emitCardEvent 卡级载荷：owner = 抽牌者）
       if (p && p.triggerProtocol === 'clarity' && p.uid) {
         onClarityDrawn(p);
+      }
+      // courage 抽牌（勇气0/2/3 中抽牌）：抽出的卡落点湖中剑 + 卡框鎏金 2s
+      if (p && p.triggerProtocol === 'courage' && (p.player === 0 || p.player === 1)) {
+        playCourageDrawExtra(p.player);
       }
     }
   });

@@ -3,7 +3,7 @@ import { mountShatter } from '../fx/delete-shatter';
 import { mountCut } from '../fx/discard-cut';
 import { buildTornadoFx } from '../fx-tornado';
 import { cardImgSrc, protocolImgSrc } from '../../data/demo';
-import { playPeaceDiscardExtra, PEACE_PRE_MS, playChaosDiscardExtra, CHAOS_DISCARD_PRE_MS, playIceShiftBridge, playSmokePlayFx, playFearShiftExtra, playCorruptionDiscardExtra, playCorruptionDeleteExtra, playCorruptionFlipExtra, CORRUPT_DISCARD_PRE_MS, playWarDiscardExtra, playWarFlipExtra } from '../fx-gen2';
+import { playPeaceDiscardExtra, PEACE_PRE_MS, playChaosDiscardExtra, CHAOS_DISCARD_PRE_MS, playIceShiftBridge, playSmokePlayFx, playFearShiftExtra, playCorruptionDiscardExtra, playCorruptionDeleteExtra, playCorruptionFlipExtra, CORRUPT_DISCARD_PRE_MS, playWarDiscardExtra, playWarFlipExtra, playCourageDiscardExtra, playCourageDeleteExtra, playCourageShiftExtra } from '../fx-gen2';
 
 const FX_REMOVE_MS = 1200;
 const BASE_Z = 300; // 基础行为特效层
@@ -1840,6 +1840,10 @@ export function initEffects(): () => void {
             // 覆盖层 + 基础切割照常（刀光先斩、切割随火星消散，时序接近即时）
             playWarDiscardExtra(node);
             playCut(node, payload);
+          } else if (payload.triggerProtocol === 'courage') {
+            // 2代 courage 弃牌（勇气弃牌效果）：金色逆焰点燃燃烧（覆盖层）+ 基础切割照常
+            playCourageDiscardExtra(node);
+            playCut(node, payload);
           } else playCut(node, payload);
         }
         break;
@@ -1895,6 +1899,10 @@ export function initEffects(): () => void {
           } else if (payload.triggerProtocol === 'fear') {
             // 2代 fear 恐惧偏转：橙红覆盖 + 颤动 + 慢→快移动（浮层卡替代基础飞行）
             playFearShiftExtra(node, payload);
+          } else if (payload.triggerProtocol === 'courage') {
+            // 2代 courage-3 偏转：金圣光笼罩 + 落点金火环（基础飞行照常）
+            playCourageShiftExtra(node, payload);
+            playShift(node, payload);
           } else playShift(node, payload);
         }
         break;
@@ -1945,6 +1953,9 @@ export function initEffects(): () => void {
       } else if (payload.triggerProtocol === 'corruption' && e.type === 'card:deleted') {
         // 2代 corruption-6 删除自毁：墨绿腐蚀液自下而上覆盖 → 碎裂绿光点（基础破碎照常）
         playCorruptionDeleteExtra(node, payload);
+      } else if (payload.triggerProtocol === 'courage' && e.type === 'card:deleted') {
+        // 2代 courage-1 删除：湖中剑金影横挥 → 化金点（基础破碎照常）
+        playCourageDeleteExtra(node);
       } else if (e.type === 'card:deleted' && payload.triggerProtocol === 'death') {
         playDeathDeleteExtra(node, payload);
       } else if (e.type === 'card:deleted' && payload.triggerProtocol === 'hate') {

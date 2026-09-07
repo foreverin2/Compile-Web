@@ -3445,6 +3445,45 @@ function appendWarCompiled(layer: HTMLElement, defId: string): void {
   scheduleCompiledLoop(layer, defId, rnd(6000, 11000), flagBurst);
 }
 
+/* ---------- 21. 勇气 courage（2代，fx-gen2 已编译）：鎏金呼吸框 + 四角护边 ----------
+ * 周期湖中剑：中心斜斜插下一道鎏金湖中剑（剑缠金色流光 + 光羽）→ 剑尖插入后扩散一圈
+ * 金色波纹 → 2s 后大剑消散；边框四周偶尔燃起一圈金色逆焰（火苗向上逆风飘动 2s 熄灭）。
+ * 间隔 ≥10s（scheduleCompiledLoop 拆两循环）。CSS 见 styles.css .compiled-courage-*。 */
+function appendCourageCompiled(layer: HTMLElement, defId: string): void {
+  appendCompiledCorners(layer, 'compiled-courage-corner'); // §8：四角鎏金护边
+  const host = el('div', 'compiled-courage-host');
+  layer.appendChild(host);
+  // 湖中剑 burst
+  const swordBurst = (done: () => void): void => {
+    if (!layer.isConnected) { done(); return; }
+    const g = layerGeom(layer);
+    if (!g) { fxTimer(defId, () => swordBurst(done), 700); return; }
+    const sword = el('div', 'compiled-courage-sword');
+    sword.appendChild(el('i', 'compiled-courage-sword-blade'));
+    sword.appendChild(el('i', 'compiled-courage-sword-guard'));
+    sword.appendChild(el('i', 'compiled-courage-sword-grip'));
+    const ripple = el('div', 'compiled-courage-ripple');
+    host.appendChild(sword);
+    host.appendChild(ripple);
+    reflowFx(host);
+    host.classList.add('in');
+    fxTimer(defId, () => {
+      if (!layer.isConnected) { done(); return; }
+      ripple.classList.add('on');
+      // 大剑渐隐消散
+      fxTimer(defId, () => {
+        host.classList.add('out');
+        fxTimer(defId, () => {
+          host.classList.remove('in', 'out');
+          host.textContent = '';
+          done();
+        }, 800);
+      }, 1800);
+    }, 300);
+  };
+  scheduleCompiledLoop(layer, defId, rnd(3000, 6500), swordBurst);
+}
+
 /** 新 10 协议已编译特效分发（buildCompiledFx 内调用；fire/light/darkness/water/life
  *  走既有分支，不在此列）。每个 builder 只建持久子结构 + 起调度，动画全部在层内。 */
 function appendNewCompiledFx(layer: HTMLElement, defId: string): void {
@@ -3469,6 +3508,7 @@ function appendNewCompiledFx(layer: HTMLElement, defId: string): void {
     case 'fear': appendFearCompiled(layer, defId); break;
     case 'corruption': appendCorruptionCompiled(layer, defId); break;
     case 'war': appendWarCompiled(layer, defId); break;
+    case 'courage': appendCourageCompiled(layer, defId); break;
     default: break;
   }
 }
