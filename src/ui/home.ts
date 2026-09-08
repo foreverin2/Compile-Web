@@ -1,6 +1,6 @@
 import type { PlayerId } from '../core/models/types';
 import { DEMO_PROTOCOLS, DEMO_CARD_DEFS, protocolImgSrc, cardImgSrc, cardTextParts } from '../data/demo';
-import { openZoom, buildCardTextEl, buildProtocolRatingPanel } from './render';
+import { openZoom, buildCardTextEl, buildProtocolRatingPanel, bindClickOrDouble } from './render';
 
 /**
  * 主界面/掷硬币/图鉴/规则图纸 —— 非对局屏（main.ts 导航）。
@@ -473,6 +473,12 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
   preview.appendChild(pMain);
   preview.appendChild(pCap);
   preview.appendChild(pHint);
+  // —— 图鉴点击固定 / 悬浮查看机制（与草稿页同款）——
+  // 单一展示框（图鉴无玩家侧）：hover 即时预览；点击固定（hover 不再覆盖）；
+  // 点其它条目切换固定；再点同一固定条目取消固定（回到 hover 自由预览）。
+  // key：'proto:<defId>:<0|1>'（协议 loading/compiled）| 'card:<defId>'（指令卡）
+  let libPinnedKey: string | null = null;
+
   const showPreview = (
     src: string,
     caption: string,
@@ -499,6 +505,47 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
     pImg.style.display = 'none';
     pHint.style.display = '';
     pCap.style.display = 'none';
+  };
+  /** 按 key 渲染条目到展示框（协议 → 图+详情面板；卡牌 → 图+中文文本） */
+  const previewEntry = (key: string): void => {
+    if (key.startsWith('proto:')) {
+      const [, defId, compiledS] = key.split(':');
+      const compiled = compiledS === '1';
+      const proto = DEMO_PROTOCOLS.find((p) => p.defId === defId);
+      if (!proto) return;
+      const motto = `${proto.name} · ${proto.loadingText}`;
+      showPreview(
+        protocolImgSrc(defId, compiled),
+        compiled ? `${motto} · 已编译` : motto,
+        'landscape',
+        buildProtocolRatingPanel(defId)
+      );
+      return;
+    }
+    const defId = key.slice('card:'.length);
+    const c = DEMO_CARD_DEFS.find((x) => x.defId === defId);
+    if (!c) return;
+    const proto = DEMO_PROTOCOLS.find((p) => p.defId === c.protocol);
+    showPreview(
+      cardImgSrc(c.protocol, c.value),
+      `${proto?.name ?? c.protocol} ${c.value} 分指令卡`,
+      'portrait',
+      buildCardTextEl(cardTextParts(c), 'library-preview-text')
+    );
+  };
+  /** hover 即时预览：本框未固定时才生效（固定内容不被打扰） */
+  const hoverEntry = (key: string): void => {
+    if (libPinnedKey === null) previewEntry(key);
+  };
+  /** 单击固定：同 key 再点 = 取消固定（回 hover）；点其它 key = 切换固定目标 */
+  const togglePin = (key: string): void => {
+    if (libPinnedKey === key) {
+      libPinnedKey = null;
+      clearPreview();
+      return;
+    }
+    libPinnedKey = key;
+    previewEntry(key);
   };
   // 列表占主列，展示框占右列（DOM 顺序 = 网格列序：先列表后展示框）
   const list = el('div', 'library-list');
@@ -529,29 +576,27 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
       // 未编译（loading）封面
       const face = el('div', 'lib-proto-img-wrap');
       protoFaceImg(proto.defId, false, face);
-      face.addEventListener('mouseenter', () =>
-        showPreview(
-          protocolImgSrc(proto.defId, false),
-          motto,
-          'landscape',
-          buildProtocolRatingPanel(proto.defId)
-        )
+      const faceKey = `proto:${proto.defId}:0`;
+      face.addEventListener('mouseenter', () => hoverEntry(faceKey));
+      bindClickOrDouble(
+        face,
+        () => togglePin(faceKey),
+        () => openZoom(proto.defId, true, true, false),
+        false
       );
-      face.addEventListener('click', () => openZoom(proto.defId, true, true, false));
       headRow.appendChild(face);
 
       // 已编译封面槽（协议右边，2026-09-06 用户需求）
       const faceC = el('div', 'lib-proto-img-wrap lib-face-compiled');
       protoFaceImg(proto.defId, true, faceC);
-      faceC.addEventListener('mouseenter', () =>
-        showPreview(
-          protocolImgSrc(proto.defId, true),
-          `${motto} · 已编译`,
-          'landscape',
-          buildProtocolRatingPanel(proto.defId)
-        )
+      const faceCKey = `proto:${proto.defId}:1`;
+      faceC.addEventListener('mouseenter', () => hoverEntry(faceCKey));
+      bindClickOrDouble(
+        faceC,
+        () => togglePin(faceCKey),
+        () => openZoom(proto.defId, true, true, true),
+        false
       );
-      faceC.addEventListener('click', () => openZoom(proto.defId, true, true, true));
       headRow.appendChild(faceC);
 
       const meta = el('div', 'lib-proto-meta');
@@ -571,15 +616,14 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
         cimg.title = `${proto.name} ${c.value} 分指令卡`;
         cell.appendChild(cimg);
         cell.appendChild(el('div', 'lib-card-value', String(c.value)));
-        cell.addEventListener('mouseenter', () =>
-          showPreview(
-            cardImgSrc(proto.defId, c.value),
-            `${proto.name} ${c.value} 分指令卡`,
-            'portrait',
-            buildCardTextEl(cardTextParts(c), 'library-preview-text')
-          )
+        const cardKey = `card:${c.defId}`;
+        cell.addEventListener('mouseenter', () => hoverEntry(cardKey));
+        bindClickOrDouble(
+          cell,
+          () => togglePin(cardKey),
+          () => openZoom(c.defId, true, false, false),
+          false
         );
-        cell.addEventListener('click', () => openZoom(c.defId, true, false, false));
         row.appendChild(cell);
       }
       group.appendChild(row);
@@ -588,8 +632,8 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
   };
   buildList();
   refreshChips();
-  // 鼠标离开整个列表（含移入右侧展示框）才清空预览
-  list.addEventListener('mouseleave', clearPreview);
+  // hover 内容保留（移出列表不清空——可移到右侧展示框细读）；更新由 hover 新条目 /
+  // 点击固定 / 再点取消固定驱动（与草稿页同款机制）
   screen.appendChild(layout);
   root.appendChild(screen);
 }

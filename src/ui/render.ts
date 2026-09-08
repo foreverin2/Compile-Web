@@ -5054,7 +5054,9 @@ function closeDeckOrderViewer(): void {
  * 单击延迟 320ms 严格大于双击窗口 300ms：窗口内的第二次点击必然先于延迟的单击触发
  * 并取消它，保证「双击永不触发单击」；窗口之外的点击各自成为独立的单击。
  */
-function bindClickOrDouble(node: HTMLElement, single: () => void, double: () => void, stopPropagation: boolean): void {
+/** 单击/双击判别（320ms 窗口内第二次点击 = 双击）：单击 single、双击 double。
+ *  导出供图鉴页复用（草稿/图鉴同款：单击固定展示、双击放大）。 */
+export function bindClickOrDouble(node: HTMLElement, single: () => void, double: () => void, stopPropagation: boolean): void {
   let timer: number | undefined;
   let last = 0;
   node.addEventListener('click', (e) => {
