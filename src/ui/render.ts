@@ -3803,8 +3803,15 @@ function renderPickColumn(s: GameState, player: PlayerId, drafter: PlayerId, cb:
     wrap.appendChild(img);
     card.appendChild(wrap);
     card.appendChild(el('div', 'draft-pick-name', pick.name));
-    // 双击放大查看协议图（复用遮罩）
-    card.addEventListener('dblclick', () => openZoom(pick.defId, true, true, false));
+    // 已选协议卡也触发展示框：hover 即时预览 + 单击固定到【本玩家侧】展示框（规则同池卡：
+    // 本侧未固定时 hover 生效；点击固定后 hover 不覆盖；再点同卡取消固定）；双击放大查看。
+    card.addEventListener('mouseenter', () => hoverDraftPreview(player, pick.defId));
+    bindClickOrDouble(
+      card,
+      () => pinDraftPreview(player, pick.defId),
+      () => openZoom(pick.defId, true, true, false),
+      false
+    );
     if (drafter === player && currentTurnPicks.has(pick.defId)) {
       // 本回合已选、可取消：拖出选择框取消选择（卡上提示可拖出）
       card.classList.add('unpickable');
