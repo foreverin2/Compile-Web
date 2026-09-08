@@ -5402,16 +5402,18 @@ body.dragging { cursor: grabbing; user-select: none; }
 .zoom-body .zoom-img.zoom-protocol { flex: 0 1 auto; }
 .protocol-zoom-text { width: min(300px, 30vw); }
 
-/* 图鉴展示框：图 + 中文文本并排 */
+/* 图鉴展示框：图 + 中文文本并排（协议详情面板出现后空间不足时换行——图在上、详情在下） */
 .library-preview-main {
   display: flex;
   gap: 14px;
   align-items: flex-start;
   justify-content: center;
+  flex-wrap: wrap;
 }
 .library-preview-text {
   flex: 1;
   min-width: 0;
+  min-width: 240px; /* 图鉴协议详情（buildProtocolRatingPanel）可读宽度下限——空间不足时折行到图下方 */
   max-height: 476px;
   overflow-y: auto;
   background: rgba(10, 16, 32, 0.62);

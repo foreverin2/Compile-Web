@@ -1,6 +1,6 @@
 import type { PlayerId } from '../core/models/types';
 import { DEMO_PROTOCOLS, DEMO_CARD_DEFS, protocolImgSrc, cardImgSrc, cardTextParts } from '../data/demo';
-import { openZoom, buildCardTextEl } from './render';
+import { openZoom, buildCardTextEl, buildProtocolRatingPanel } from './render';
 
 /**
  * 主界面/掷硬币/图鉴/规则图纸 —— 非对局屏（main.ts 导航）。
@@ -529,7 +529,14 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
       // 未编译（loading）封面
       const face = el('div', 'lib-proto-img-wrap');
       protoFaceImg(proto.defId, false, face);
-      face.addEventListener('mouseenter', () => showPreview(protocolImgSrc(proto.defId, false), motto, 'landscape'));
+      face.addEventListener('mouseenter', () =>
+        showPreview(
+          protocolImgSrc(proto.defId, false),
+          motto,
+          'landscape',
+          buildProtocolRatingPanel(proto.defId)
+        )
+      );
       face.addEventListener('click', () => openZoom(proto.defId, true, true, false));
       headRow.appendChild(face);
 
@@ -537,7 +544,12 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
       const faceC = el('div', 'lib-proto-img-wrap lib-face-compiled');
       protoFaceImg(proto.defId, true, faceC);
       faceC.addEventListener('mouseenter', () =>
-        showPreview(protocolImgSrc(proto.defId, true), `${motto} · 已编译`, 'landscape')
+        showPreview(
+          protocolImgSrc(proto.defId, true),
+          `${motto} · 已编译`,
+          'landscape',
+          buildProtocolRatingPanel(proto.defId)
+        )
       );
       faceC.addEventListener('click', () => openZoom(proto.defId, true, true, true));
       headRow.appendChild(faceC);

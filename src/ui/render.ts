@@ -4047,8 +4047,9 @@ const draftPreviewHosts: (HTMLElement | null)[] = [null, null];
 /** 当前被点击固定的协议（点击池卡 → 显示到操作者侧展示框；重渲染后恢复显示） */
 let draftPinned: { player: PlayerId; defId: string } | null = null;
 
-/** 构建评分详情面板（buildCardTextEl 同款视觉；数据缺失的协议（无评分条目）降级显示基础信息） */
-function buildProtocolRatingPanel(defId: string): HTMLElement {
+/** 构建评分详情面板（buildCardTextEl 同款视觉；数据缺失的协议（无评分条目）降级显示基础信息）。
+ *  导出供图鉴页复用（home.ts：协议封面 hover → 右侧展示框显示该协议详情）。 */
+export function buildProtocolRatingPanel(defId: string): HTMLElement {
   const box = el('div', 'draft-preview-body');
   const proto = getProtocolDef(defId);
   const rating = PROTOCOL_RATINGS.find((r) => r.defId === defId);
