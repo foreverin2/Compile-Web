@@ -3822,7 +3822,7 @@ function renderPickColumn(s: GameState, player: PlayerId, drafter: PlayerId, cb:
  *  选择框区域 → 丝滑平移回原卡位置。双击协议卡可放大查看协议图。已选协议变灰禁用。 */
 /** 中间协议池（引擎池 = 随机池/禁用后的剩余协议；世代筛选 chips 之上再过滤）：
  *  选择步骤 = 拖拽选中（常规）；禁用步骤（banStep）= 单击直接禁用 */
-function renderDraftPool(s: GameState, cb: UiCallbacks, banStep: boolean): HTMLElement {
+function renderDraftPool(s: GameState, cb: UiCallbacks, banStep: boolean, activePlayer: PlayerId): HTMLElement {
   const pool = el('div', 'draft-pool' + (banStep ? ' draft-pool-ban' : ''));
   const drafter = getCurrentDrafter(s);
   for (const proto of getDraftPool(s)) {
@@ -3838,18 +3838,27 @@ function renderDraftPool(s: GameState, cb: UiCallbacks, banStep: boolean): HTMLE
     card.appendChild(wrap);
     card.appendChild(el('div', 'draft-card-name', proto.name));
     card.appendChild(el('div', 'draft-card-commands', proto.commands.join(' · ')));
-    // 修改提示词 21：悬停 → 下方展示框放大图 + 评分/搭配/流派详情
-    card.addEventListener('mouseenter', () => showDraftHover(proto.defId));
-    card.addEventListener('mouseleave', clearDraftHover);
+    // 点击（单击）→ 固定显示到【当前操作者】侧展示框；再点其它协议卡切换显示内容。
+    // 双击仍放大查看（bindClickOrDouble 内部判别，不冲突）。hover 不再触发展示（改为点击固定）。
+    const pinView = (): void => pinDraftPreview(activePlayer, proto.defId);
     if (banStep) {
       card.dataset.defId = proto.defId;
       card.title = `点击禁用「${proto.name}」（本局不可选；共需禁用 ${DRAFT_BAN_TOTAL} 个）`;
       card.appendChild(el('span', 'draft-ban-badge', '禁用'));
-      bindClickOrDouble(card, () => cb.onDraftBan(proto.defId), () => openZoom(proto.defId, true, true, false), false);
+      // 禁用前先把协议固定显示到操作者侧（禁用后卡移出池，展示框仍保留详情供查看）
+      bindClickOrDouble(
+        card,
+        () => {
+          pinView();
+          cb.onDraftBan(proto.defId);
+        },
+        () => openZoom(proto.defId, true, true, false),
+        false
+      );
     } else {
       card.dataset.defId = proto.defId;
-      // 双击放大查看协议图（单击无动作）；拖拽选协议
-      bindClickOrDouble(card, () => {}, () => openZoom(proto.defId, true, true, false), false);
+      // 单击 = 固定展示（选择靠拖拽）；双击放大查看协议图
+      bindClickOrDouble(card, pinView, () => openZoom(proto.defId, true, true, false), false);
       bindDraftDrag(card, s, cb, proto.defId, drafter);
     }
     pool.appendChild(card);
@@ -4025,7 +4034,10 @@ let draftEnabledGroups: Set<string> = new Set(DRAFT_GROUP_LABELS.map(([g]) => g)
 
 /* ===== 草稿 hover 展示框（修改提示词 21）：鼠标悬停协议池卡 → 下方展示框放大协议图
  * + 名称/座右铭/关键词/定位/六维评分/点评/推荐搭配协议/推荐流派（数据：protocolRatings.ts）===== */
-let draftPreviewHost: HTMLElement | null = null; // 当前展示框容器（renderDraft 每次重建，函数调用时重取）
+/** 双方玩家的展示框容器（renderDraft 每次重建并登记；玩家 N → [N]） */
+const draftPreviewHosts: (HTMLElement | null)[] = [null, null];
+/** 当前被点击固定的协议（点击池卡 → 显示到操作者侧展示框；重渲染后恢复显示） */
+let draftPinned: { player: PlayerId; defId: string } | null = null;
 
 /** 构建评分详情面板（buildCardTextEl 同款视觉；数据缺失的协议（无评分条目）降级显示基础信息） */
 function buildProtocolRatingPanel(defId: string): HTMLElement {
@@ -4061,22 +4073,55 @@ function buildProtocolRatingPanel(defId: string): HTMLElement {
   return box;
 }
 
-/** 展示某协议卡到 hover 展示框（图 + 详情）；host 不存在（非草稿页）时 no-op */
-function showDraftHover(defId: string): void {
-  if (!draftPreviewHost) return;
-  draftPreviewHost.textContent = '';
+/** 展示某协议到指定玩家侧展示框（图 + 详情）；host 缺失（非草稿页）时 no-op */
+function renderToPreview(player: PlayerId, defId: string): void {
+  const host = draftPreviewHosts[player];
+  if (!host) return;
+  host.textContent = '';
+  host.dataset.empty = '0';
   const proto = getProtocolDef(defId);
+  // 图容器（竖图逆时针旋转 90° 后横置展示——与选择框卡图同款比例法）
+  const fig = el('div', 'draft-preview-fig');
   const img = document.createElement('img');
   img.className = 'draft-preview-img';
   img.src = protocolImgSrc(defId, false);
   img.alt = proto.name;
-  draftPreviewHost.appendChild(img);
-  draftPreviewHost.appendChild(buildProtocolRatingPanel(defId));
+  fig.appendChild(img);
+  host.appendChild(fig);
+  host.appendChild(buildProtocolRatingPanel(defId));
 }
 
-function clearDraftHover(): void {
-  if (!draftPreviewHost) return;
-  draftPreviewHost.textContent = '';
+/** 侧展示框回到空态提示 */
+function resetPreviewToHint(player: PlayerId): void {
+  const host = draftPreviewHosts[player];
+  if (!host) return;
+  host.textContent = '';
+  host.dataset.empty = '1';
+  host.appendChild(el('div', 'draft-preview-hint', '点击中间协议卡\n在此固定查看详情'));
+}
+
+/** 点击固定：当前操作者侧展示框显示该协议详情（点击其它协议卡即切换）；重渲染按 draftPinned 恢复 */
+function pinDraftPreview(player: PlayerId, defId: string): void {
+  draftPinned = { player, defId };
+  renderToPreview(player, defId);
+  // 另一侧总是清回提示（防止换操作者后旧内容残留）
+  const other: PlayerId = player === 0 ? 1 : 0;
+  if (draftPreviewHosts[other]) resetPreviewToHint(other);
+}
+
+/** 构建单侧展示框容器（空态显示提示；已固定协议在重渲染后恢复显示）。登记到 draftPreviewHosts */
+function buildDraftPreviewBox(player: PlayerId, showPinned: { player: PlayerId; defId: string } | null): HTMLElement {
+  const box = el('div', 'draft-preview' + (player === 0 ? ' p1' : ' p2'));
+  box.dataset.empty = '1';
+  draftPreviewHosts[player] = box;
+  if (showPinned && showPinned.player === player) {
+    renderToPreview(player, showPinned.defId);
+  } else {
+    box.appendChild(
+      el('div', 'draft-preview-hint', '点击中间协议卡\n在此固定查看详情')
+    );
+  }
+  return box;
 }
 
 export function renderDraft(root: HTMLElement, s: GameState, cb: UiCallbacks): void {
@@ -4183,17 +4228,18 @@ export function renderDraft(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   }
 
   const layout = el('div', 'draft-layout');
-  layout.appendChild(renderPickColumn(s, 0, activePlayer, cb));
-  layout.appendChild(renderDraftPool(s, cb, banStep));
-  layout.appendChild(renderPickColumn(s, 1, activePlayer, cb));
+  // 展示框常驻于双方选择列下方：左列 = P1 选择框 + P1 展示框；右列 = P2 同理。
+  // 池卡点击 → 固定显示到【当前操作者】侧展示框（activePlayer 由 renderDraftPool 传入）。
+  const side0 = el('div', 'draft-side p1');
+  side0.appendChild(renderPickColumn(s, 0, activePlayer, cb));
+  side0.appendChild(buildDraftPreviewBox(0, draftPinned));
+  layout.appendChild(side0);
+  layout.appendChild(renderDraftPool(s, cb, banStep, activePlayer));
+  const side1 = el('div', 'draft-side p2');
+  side1.appendChild(renderPickColumn(s, 1, activePlayer, cb));
+  side1.appendChild(buildDraftPreviewBox(1, draftPinned));
+  layout.appendChild(side1);
   wrap.appendChild(layout);
-  // 修改提示词 21：中央池下方的 hover 展示框（悬停协议卡 → 放大图 + 评分/搭配/流派详情）
-  const preview = el('div', 'draft-preview');
-  preview.appendChild(
-    el('div', 'draft-preview-hint', '把鼠标移到中间协议上\n此处放大显示详情（双击协议可看大图）')
-  );
-  wrap.appendChild(preview);
-  draftPreviewHost = preview;
   root.appendChild(wrap);
 }
 
@@ -4648,8 +4694,10 @@ export function resetUiState(): void {
   batteryPrev.clear();
   // 草稿页世代筛选复位为全开（1代+2代 30 套）
   draftEnabledGroups = new Set(DRAFT_GROUP_LABELS.map(([g]) => g));
-  // 草稿 hover 展示框容器引用失效（离开草稿页后悬停回调不得残留写死引用）
-  draftPreviewHost = null;
+  // 草稿展示框容器引用失效（离开草稿页后点击固定回调不得残留写死引用）+ 固定状态复位
+  draftPreviewHosts[0] = null;
+  draftPreviewHosts[1] = null;
+  draftPinned = null;
   for (const [defId, fx] of compiledFx) {
     clearCompiledFxTimers(defId);
     fx.remove();

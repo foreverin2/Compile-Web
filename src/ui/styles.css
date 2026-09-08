@@ -1269,13 +1269,21 @@ body {
    position: sticky —— 2026-09-03 用户需求：协议池 30 套页变长后，双方选择框固定于
    屏幕顶部跟随滚动（top 偏移），避免下滑后拖不到下方协议（拖拽目标始终可见）。 */
 .draft-picks {
-  position: sticky;
-  top: 10px;
   border: 1px solid #444; border-radius: 10px; padding: 10px;
   background: rgba(18, 18, 34, 0.85);
   display: flex; flex-direction: column; gap: 10px;
   min-height: 300px;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+/* 左/右整列包装（选择框 + 下方展示框一起固定于屏幕，跟随滚动）：
+   展示框与选择框同列、同 sticky —— 整个 .draft-side 固定屏顶 */
+.draft-side {
+  position: sticky;
+  top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: stretch;
 }
 .draft-picks.active { border-color: #e0a030; box-shadow: 0 0 16px rgba(224, 160, 48, 0.35); }
 .draft-picks-title { font-weight: bold; font-size: 13px; color: #dde; display: flex; justify-content: space-between; align-items: center; gap: 6px; }
@@ -1393,62 +1401,79 @@ body {
   padding: 2px 7px; border-radius: 9px; z-index: 5;
 }
 
-/* ===== 草稿 hover 展示框（修改提示词 21）：中央池下方，悬停协议卡放大图 + 详情 ===== */
+/* ===== 草稿点击固定展示框（每玩家选择框下方一个；固定于屏幕同列） =====
+   图（逆时针旋转 90° 后横置）+ 详情纵向排布，宽 = 列宽 280px 内 */
 .draft-preview {
-  margin: 18px auto 0;
-  max-width: 1080px;
-  min-height: 150px;
   border: 1px dashed rgba(255, 255, 255, 0.25);
-  border-radius: 14px;
-  background: rgba(16, 22, 40, 0.75);
-  padding: 16px 18px;
+  border-radius: 12px;
+  background: rgba(16, 22, 40, 0.78);
+  padding: 10px 12px;
   display: flex;
-  gap: 20px;
-  align-items: flex-start;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
   text-align: left;
+  min-height: 120px;
+  max-height: 62vh; /* 定屏后防超高：文本区内部滚动 */
+  overflow-y: auto;
+}
+/* 图容器：原图竖 750×1050（1:1.4）；逆时针旋转 90° 后横置（视觉 1.4:1）。
+   与选择框/池卡图同款比例法：img 宽 = 容器宽/1.4、高 = 容器高 × 1.4，rotate(-90) 后恰覆盖 */
+.draft-preview-fig {
+  width: 100%;
+  aspect-ratio: 1.4 / 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: #14142a;
+  border-radius: 8px;
+  flex: 0 0 auto;
+}
+.draft-preview-img {
+  width: calc(100% / 1.4);
+  height: calc(100% * 1.4);
+  flex-shrink: 0;
+  object-fit: cover;
+  transform: rotate(-90deg); /* 逆时针旋转 90° 展示（横置） */
+  border-radius: 6px;
+  box-shadow: 0 0 20px rgba(79, 240, 255, 0.16);
+  pointer-events: none; user-select: none; -webkit-user-drag: none;
 }
 .draft-preview-hint {
   margin: auto;
   color: #7c8aa5;
-  font-size: 13px;
+  font-size: 12px;
   text-align: center;
-  line-height: 1.8;
+  line-height: 1.7;
   white-space: pre-line;
-}
-.draft-preview-img {
-  flex: 0 0 auto;
-  width: 300px;
-  max-height: 340px;
-  object-fit: contain;
-  border-radius: 8px;
-  box-shadow: 0 0 24px rgba(79, 240, 255, 0.18);
+  padding: 10px 0;
 }
 .draft-preview-body {
   flex: 1;
   min-width: 0;
-  max-height: 340px;
-  overflow-y: auto;
-  font-size: 13px;
+  width: 100%;
+  font-size: 12px;
   color: #e6ebf5;
-  line-height: 1.65;
+  line-height: 1.6;
 }
-.draft-preview-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-.draft-preview-name { font-size: 19px; font-weight: 800; color: #ffd98a; }
-.draft-preview-motto { font-size: 14px; color: #9fd8ff; }
-.draft-preview-position { margin-top: 6px; color: #ffcf8a; }
+.draft-preview-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.draft-preview-name { font-size: 16px; font-weight: 800; color: #ffd98a; }
+.draft-preview-motto { font-size: 12px; color: #9fd8ff; }
+.draft-preview-position { margin-top: 4px; color: #ffcf8a; }
 .draft-preview-commands { margin-top: 2px; color: #b9c4d8; }
-.draft-preview-scores { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0 6px; }
+.draft-preview-scores { display: flex; gap: 5px; flex-wrap: wrap; margin: 8px 0 5px; }
 .draft-score-chip {
   background: rgba(79, 240, 255, 0.12);
   border: 1px solid rgba(79, 240, 255, 0.35);
   color: #7fe9ff;
   border-radius: 10px;
-  padding: 1px 8px;
-  font-size: 12px;
+  padding: 1px 7px;
+  font-size: 11px;
 }
-.draft-preview-review { margin-top: 8px; color: #dfe6f2; }
-.draft-preview-seg { margin-top: 10px; }
-.draft-preview-seg-label { color: #ffd98a; font-weight: 700; margin-bottom: 4px; }
+.draft-preview-review { margin-top: 6px; color: #dfe6f2; }
+.draft-preview-seg { margin-top: 8px; }
+.draft-preview-seg-label { color: #ffd98a; font-weight: 700; margin-bottom: 3px; }
 .draft-preview-item { margin-top: 2px; padding-left: 10px; position: relative; color: #cdd6e8; }
 .draft-preview-item::before { content: '·'; position: absolute; left: 0; color: #7fe9ff; }
 
