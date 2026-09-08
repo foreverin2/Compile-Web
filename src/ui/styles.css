@@ -1401,34 +1401,43 @@ body {
   padding: 2px 7px; border-radius: 9px; z-index: 5;
 }
 
-/* ===== 草稿点击固定展示框（每玩家选择框下方一个；固定于屏幕同列） =====
-   图（逆时针旋转 90° 后横置）+ 详情纵向排布，宽 = 列宽 280px 内 */
+/* ===== 草稿点击固定展示框（body 级 fixed 大面板：P1 屏幕左下 / P2 屏幕右下） =====
+   固定于屏幕（不随页面滚动）；大尺寸供细看；图（逆时针旋转 90° 后横置）+ 详情横排。
+   z-index 高于棋盘/池卡但低于放大遮罩（1000+）；pointer-events 仅在内容上。 */
 .draft-preview {
-  border: 1px dashed rgba(255, 255, 255, 0.25);
-  border-radius: 12px;
-  background: rgba(16, 22, 40, 0.78);
-  padding: 10px 12px;
+  position: fixed;
+  bottom: 16px;
+  width: min(560px, 46vw);
+  height: min(60vh, 600px);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 14px;
+  background: rgba(14, 19, 36, 0.94);
+  box-shadow: 0 14px 44px rgba(0, 0, 0, 0.65), 0 0 24px rgba(79, 240, 255, 0.1);
+  padding: 14px 16px;
   display: flex;
-  flex-direction: column;
-  gap: 10px;
-  align-items: center;
+  flex-direction: row;
+  gap: 18px;
+  align-items: flex-start;
   text-align: left;
-  min-height: 120px;
-  max-height: 62vh; /* 定屏后防超高：文本区内部滚动 */
   overflow-y: auto;
+  z-index: 400;
 }
-/* 图容器：原图竖 750×1050（1:1.4）；逆时针旋转 90° 后横置（视觉 1.4:1）。
-   与选择框/池卡图同款比例法：img 宽 = 容器宽/1.4、高 = 容器高 × 1.4，rotate(-90) 后恰覆盖 */
+.draft-preview.p1 { left: 16px; }
+.draft-preview.p2 { right: 16px; }
+/* 图容器：固定宽 260px、高 186px（原竖 1:1.4 旋转 90° 后横置 1.4:1 的可视盒）。
+   img 宽 = 容器宽/1.4 ≈ 186、高 = 容器高 × 1.4 ≈ 260，rotate(-90) 后视觉恰覆盖 */
 .draft-preview-fig {
-  width: 100%;
-  aspect-ratio: 1.4 / 1;
+  flex: 0 0 260px;
+  width: 260px;
+  height: 186px;
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
   background: #14142a;
   border-radius: 8px;
-  flex: 0 0 auto;
+  position: sticky;
+  top: 0;
 }
 .draft-preview-img {
   width: calc(100% / 1.4);
@@ -1437,43 +1446,43 @@ body {
   object-fit: cover;
   transform: rotate(-90deg); /* 逆时针旋转 90° 展示（横置） */
   border-radius: 6px;
-  box-shadow: 0 0 20px rgba(79, 240, 255, 0.16);
+  box-shadow: 0 0 20px rgba(79, 240, 255, 0.18);
   pointer-events: none; user-select: none; -webkit-user-drag: none;
 }
 .draft-preview-hint {
   margin: auto;
   color: #7c8aa5;
-  font-size: 12px;
+  font-size: 14px;
   text-align: center;
-  line-height: 1.7;
+  line-height: 1.8;
   white-space: pre-line;
-  padding: 10px 0;
+  padding: 30px 0;
+  flex: 1;
 }
 .draft-preview-body {
   flex: 1;
   min-width: 0;
-  width: 100%;
-  font-size: 12px;
+  font-size: 13.5px;
   color: #e6ebf5;
-  line-height: 1.6;
+  line-height: 1.7;
 }
-.draft-preview-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-.draft-preview-name { font-size: 16px; font-weight: 800; color: #ffd98a; }
-.draft-preview-motto { font-size: 12px; color: #9fd8ff; }
-.draft-preview-position { margin-top: 4px; color: #ffcf8a; }
+.draft-preview-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.draft-preview-name { font-size: 21px; font-weight: 800; color: #ffd98a; }
+.draft-preview-motto { font-size: 15px; color: #9fd8ff; }
+.draft-preview-position { margin-top: 6px; color: #ffcf8a; }
 .draft-preview-commands { margin-top: 2px; color: #b9c4d8; }
-.draft-preview-scores { display: flex; gap: 5px; flex-wrap: wrap; margin: 8px 0 5px; }
+.draft-preview-scores { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0 6px; }
 .draft-score-chip {
   background: rgba(79, 240, 255, 0.12);
   border: 1px solid rgba(79, 240, 255, 0.35);
   color: #7fe9ff;
   border-radius: 10px;
-  padding: 1px 7px;
-  font-size: 11px;
+  padding: 1px 9px;
+  font-size: 13px;
 }
-.draft-preview-review { margin-top: 6px; color: #dfe6f2; }
-.draft-preview-seg { margin-top: 8px; }
-.draft-preview-seg-label { color: #ffd98a; font-weight: 700; margin-bottom: 3px; }
+.draft-preview-review { margin-top: 8px; color: #dfe6f2; }
+.draft-preview-seg { margin-top: 10px; }
+.draft-preview-seg-label { color: #ffd98a; font-weight: 700; margin-bottom: 4px; }
 .draft-preview-item { margin-top: 2px; padding-left: 10px; position: relative; color: #cdd6e8; }
 .draft-preview-item::before { content: '·'; position: absolute; left: 0; color: #7fe9ff; }
 

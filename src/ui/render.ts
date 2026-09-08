@@ -3838,8 +3838,9 @@ function renderDraftPool(s: GameState, cb: UiCallbacks, banStep: boolean, active
     card.appendChild(wrap);
     card.appendChild(el('div', 'draft-card-name', proto.name));
     card.appendChild(el('div', 'draft-card-commands', proto.commands.join(' · ')));
-    // 点击（单击）→ 固定显示到【当前操作者】侧展示框；再点其它协议卡切换显示内容。
-    // 双击仍放大查看（bindClickOrDouble 内部判别，不冲突）。hover 不再触发展示（改为点击固定）。
+    // 悬浮即时预览：移入协议卡 → 操作者侧展示框显示该协议；移出整池恢复固定/提示。
+    // 点击（单击）→ 固定显示到操作者侧（再点其它卡切换）；双击仍放大查看（不冲突）。
+    card.addEventListener('mouseenter', () => hoverDraftPreview(activePlayer, proto.defId));
     const pinView = (): void => pinDraftPreview(activePlayer, proto.defId);
     if (banStep) {
       card.dataset.defId = proto.defId;
@@ -4109,8 +4110,20 @@ function pinDraftPreview(player: PlayerId, defId: string): void {
   if (draftPreviewHosts[other]) resetPreviewToHint(other);
 }
 
-/** 构建单侧展示框容器（空态显示提示；已固定协议在重渲染后恢复显示）。登记到 draftPreviewHosts */
+/** hover 即时预览：把协议显示到操作者侧展示框（与点击固定共用同一展示框）。
+ *  显示内容保留（不随鼠标移开消失）——直到 hover 到另一张卡、点击固定、或页面重渲染
+ *  （重渲染后仅恢复 draftPinned 的固定内容）。hover 本身不写 draftPinned。 */
+function hoverDraftPreview(player: PlayerId, defId: string): void {
+  // 操作者侧 host 尚未构建（非草稿页）→ no-op
+  if (!draftPreviewHosts[player]) return;
+  renderToPreview(player, defId);
+}
+
+/** 构建单侧展示框容器（大面板，body 级 fixed：P1 屏幕左下 / P2 屏幕右下；空态提示；
+ *  已固定协议在重渲染后恢复显示）。登记到 draftPreviewHosts。旧节点（上一帧）先移除。 */
 function buildDraftPreviewBox(player: PlayerId, showPinned: { player: PlayerId; defId: string } | null): HTMLElement {
+  const old = draftPreviewHosts[player];
+  if (old && old.isConnected) old.remove();
   const box = el('div', 'draft-preview' + (player === 0 ? ' p1' : ' p2'));
   box.dataset.empty = '1';
   draftPreviewHosts[player] = box;
@@ -4121,6 +4134,7 @@ function buildDraftPreviewBox(player: PlayerId, showPinned: { player: PlayerId; 
       el('div', 'draft-preview-hint', '点击中间协议卡\n在此固定查看详情')
     );
   }
+  document.body.appendChild(box);
   return box;
 }
 
@@ -4228,18 +4242,18 @@ export function renderDraft(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   }
 
   const layout = el('div', 'draft-layout');
-  // 展示框常驻于双方选择列下方：左列 = P1 选择框 + P1 展示框；右列 = P2 同理。
-  // 池卡点击 → 固定显示到【当前操作者】侧展示框（activePlayer 由 renderDraftPool 传入）。
+  // 展示框为 body 级 fixed 大面板（P1 左下 / P2 右下，见 buildDraftPreviewBox）——
+  // 固定屏幕、大字可读、不遮挡中间池；hover 即时预览 / 点击固定共用该面板。
   const side0 = el('div', 'draft-side p1');
   side0.appendChild(renderPickColumn(s, 0, activePlayer, cb));
-  side0.appendChild(buildDraftPreviewBox(0, draftPinned));
   layout.appendChild(side0);
   layout.appendChild(renderDraftPool(s, cb, banStep, activePlayer));
   const side1 = el('div', 'draft-side p2');
   side1.appendChild(renderPickColumn(s, 1, activePlayer, cb));
-  side1.appendChild(buildDraftPreviewBox(1, draftPinned));
   layout.appendChild(side1);
   wrap.appendChild(layout);
+  buildDraftPreviewBox(0, draftPinned);
+  buildDraftPreviewBox(1, draftPinned);
   root.appendChild(wrap);
 }
 
@@ -4694,7 +4708,10 @@ export function resetUiState(): void {
   batteryPrev.clear();
   // 草稿页世代筛选复位为全开（1代+2代 30 套）
   draftEnabledGroups = new Set(DRAFT_GROUP_LABELS.map(([g]) => g));
-  // 草稿展示框容器引用失效（离开草稿页后点击固定回调不得残留写死引用）+ 固定状态复位
+  // 草稿展示框容器（body 级 fixed 大面板）随局移除 + 固定状态复位
+  for (const host of draftPreviewHosts) {
+    if (host && host.isConnected) host.remove();
+  }
   draftPreviewHosts[0] = null;
   draftPreviewHosts[1] = null;
   draftPinned = null;
