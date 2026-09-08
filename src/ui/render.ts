@@ -4134,6 +4134,16 @@ function hoverDraftPreview(player: PlayerId, defId: string): void {
   renderToPreview(player, defId);
 }
 
+/** 移除草稿展示框（body 级 fixed 大面板）并复位固定状态：进入游玩/重置/离开草稿页时调用 */
+function removeDraftPreviews(): void {
+  for (const host of draftPreviewHosts) {
+    if (host && host.isConnected) host.remove();
+  }
+  draftPreviewHosts[0] = null;
+  draftPreviewHosts[1] = null;
+  draftPinned = null;
+}
+
 /** 构建单侧展示框容器（大面板，body 级 fixed：P1 屏幕左下 / P2 屏幕右下；空态提示；
  *  已固定协议在重渲染后恢复显示）。登记到 draftPreviewHosts。旧节点（上一帧）先移除。 */
 function buildDraftPreviewBox(player: PlayerId, showPinned: { player: PlayerId; defId: string } | null): HTMLElement {
@@ -4724,12 +4734,7 @@ export function resetUiState(): void {
   // 草稿页世代筛选复位为全开（1代+2代 30 套）
   draftEnabledGroups = new Set(DRAFT_GROUP_LABELS.map(([g]) => g));
   // 草稿展示框容器（body 级 fixed 大面板）随局移除 + 固定状态复位
-  for (const host of draftPreviewHosts) {
-    if (host && host.isConnected) host.remove();
-  }
-  draftPreviewHosts[0] = null;
-  draftPreviewHosts[1] = null;
-  draftPinned = null;
+  removeDraftPreviews();
   for (const [defId, fx] of compiledFx) {
     clearCompiledFxTimers(defId);
     fx.remove();
@@ -5189,6 +5194,9 @@ function bindCardDrag(node: HTMLElement, s: GameState, cb: UiCallbacks, uid: str
 export function renderApp(root: HTMLElement, s: GameState, cb: UiCallbacks): void {
   // 拖拽安全网：若重渲染发生在拖拽中（正常流程不会），先清理幽灵卡与高亮
   if (activeDragCancel) activeDragCancel();
+  // 草稿展示框仅在草稿页存在：进入游玩（或其它页面）时移除 body 级 fixed 面板
+  // （草稿 → 游玩过渡不走 resetUiState——此前面板残留到游玩页，用户反馈）
+  if (s.phase !== 'draft') removeDraftPreviews();
   // 重渲染动画抑制（fix: hover-pop 重放）：每次全量重渲染都会重建 DOM，若鼠标仍停留在
   // 原位置，新元素会重新触发 mouseenter → hover 过渡（上浮/推开）从初始态再播一遍，
   // 造成抽帧卡顿。重建期间给根容器加 .no-anim（CSS 对卡牌等元素 transition:none），
