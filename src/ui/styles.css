@@ -1402,42 +1402,39 @@ body {
 }
 
 /* ===== 草稿点击固定展示框（body 级 fixed 大面板：P1 屏幕左下 / P2 屏幕右下） =====
-   固定于屏幕（不随页面滚动）；大尺寸供细看；图（逆时针旋转 90° 后横置）+ 详情横排。
-   z-index 高于棋盘/池卡但低于放大遮罩（1000+）；pointer-events 仅在内容上。 */
+   结构：上 = 协议图（逆时针旋转 90° 后横置），下 = 协议信息（竖排）。
+   固定于屏幕（不随页面滚动）；高度受限（≤46vh）避免矮窗口顶到顶部 sticky 选择框。 */
 .draft-preview {
   position: fixed;
-  bottom: 16px;
+  bottom: 14px;
   width: min(560px, 46vw);
-  height: min(60vh, 600px);
+  height: min(42vh, 420px);
   border: 1px solid rgba(255, 255, 255, 0.28);
   border-radius: 14px;
-  background: rgba(14, 19, 36, 0.94);
+  background: rgba(14, 19, 36, 0.96);
   box-shadow: 0 14px 44px rgba(0, 0, 0, 0.65), 0 0 24px rgba(79, 240, 255, 0.1);
-  padding: 14px 16px;
+  padding: 12px 14px;
   display: flex;
-  flex-direction: row;
-  gap: 18px;
-  align-items: flex-start;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
   text-align: left;
   overflow-y: auto;
   z-index: 400;
 }
 .draft-preview.p1 { left: 16px; }
 .draft-preview.p2 { right: 16px; }
-/* 图容器：固定宽 260px、高 186px（原竖 1:1.4 旋转 90° 后横置 1.4:1 的可视盒）。
-   img 宽 = 容器宽/1.4 ≈ 186、高 = 容器高 × 1.4 ≈ 260，rotate(-90) 后视觉恰覆盖 */
+/* 上图：协议图横置（旋转 -90）展示盒——宽度随面板自适应、高度随 1.4:1 比例，顶部对齐 */
 .draft-preview-fig {
-  flex: 0 0 260px;
-  width: 260px;
-  height: 186px;
+  flex: 0 0 auto;
+  width: min(300px, 88%);
+  aspect-ratio: 1.4 / 1;
   display: flex;
   align-items: center;
   justify-content: center;
   overflow: hidden;
   background: #14142a;
   border-radius: 8px;
-  position: sticky;
-  top: 0;
 }
 .draft-preview-img {
   width: calc(100% / 1.4);
@@ -1449,6 +1446,7 @@ body {
   box-shadow: 0 0 20px rgba(79, 240, 255, 0.18);
   pointer-events: none; user-select: none; -webkit-user-drag: none;
 }
+/* 下图：协议信息（自身区域超高时滚动——图保持可见） */
 .draft-preview-hint {
   margin: auto;
   color: #7c8aa5;
@@ -1456,19 +1454,21 @@ body {
   text-align: center;
   line-height: 1.8;
   white-space: pre-line;
-  padding: 30px 0;
+  padding: 20px 0;
   flex: 1;
 }
 .draft-preview-body {
   flex: 1;
-  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  overflow-y: auto;
   font-size: 13.5px;
   color: #e6ebf5;
   line-height: 1.7;
 }
 .draft-preview-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-.draft-preview-name { font-size: 21px; font-weight: 800; color: #ffd98a; }
-.draft-preview-motto { font-size: 15px; color: #9fd8ff; }
+.draft-preview-name { font-size: 20px; font-weight: 800; color: #ffd98a; }
+.draft-preview-motto { font-size: 14px; color: #9fd8ff; }
 .draft-preview-position { margin-top: 6px; color: #ffcf8a; }
 .draft-preview-commands { margin-top: 2px; color: #b9c4d8; }
 .draft-preview-scores { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0 6px; }

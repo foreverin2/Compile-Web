@@ -4101,8 +4101,15 @@ function resetPreviewToHint(player: PlayerId): void {
   host.appendChild(el('div', 'draft-preview-hint', '点击中间协议卡\n在此固定查看详情'));
 }
 
-/** 点击固定：当前操作者侧展示框显示该协议详情（点击其它协议卡即切换）；重渲染按 draftPinned 恢复 */
+/** 点击固定：当前操作者侧展示框显示该协议详情；再次点击【同一张】已固定的卡 → 取消固定
+ *  （回到 hover 自由预览）；点击其它卡 → 切换固定目标。重渲染按 draftPinned 恢复。 */
 function pinDraftPreview(player: PlayerId, defId: string): void {
+  // 同卡再点 = 取消固定（hover 恢复可用）
+  if (draftPinned && draftPinned.player === player && draftPinned.defId === defId) {
+    draftPinned = null;
+    resetPreviewToHint(player);
+    return;
+  }
   draftPinned = { player, defId };
   renderToPreview(player, defId);
   // 另一侧总是清回提示（防止换操作者后旧内容残留）
@@ -4111,11 +4118,12 @@ function pinDraftPreview(player: PlayerId, defId: string): void {
 }
 
 /** hover 即时预览：把协议显示到操作者侧展示框（与点击固定共用同一展示框）。
- *  显示内容保留（不随鼠标移开消失）——直到 hover 到另一张卡、点击固定、或页面重渲染
- *  （重渲染后仅恢复 draftPinned 的固定内容）。hover 本身不写 draftPinned。 */
+ *  规则：本侧【未固定】时 hover 自由预览；本侧【已固定】时 hover 不覆盖固定内容
+ *  （固定 = 钉住，需点击其它卡或再点同卡取消后才回到 hover 预览）。 */
 function hoverDraftPreview(player: PlayerId, defId: string): void {
-  // 操作者侧 host 尚未构建（非草稿页）→ no-op
   if (!draftPreviewHosts[player]) return;
+  // 已固定（且固定属于本侧）→ hover 不打扰固定内容
+  if (draftPinned && draftPinned.player === player) return;
   renderToPreview(player, defId);
 }
 
