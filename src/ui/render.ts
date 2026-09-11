@@ -1,4 +1,4 @@
-import type { ChoiceRequest, GameState, PendingEffect, PlayerId, Line, ProtocolDef, Step } from '../core/models/types';
+import type { ChoiceCard, ChoiceRequest, GameState, PendingEffect, PlayerId, Line, ProtocolDef, Step } from '../core/models/types';
 import { getLineValue, getCurrentDrafter, draftTurnRange, draftRoundOwner, DRAFT_PICK_COUNT, DRAFT_BAN_TOTAL, draftNextAction, getDraftPool, draftTurnPicksRemaining, draftBanBlockRemaining, lineTopCommandActive } from '../core/state/create';
 import { getLegalActions, type LegalAction } from '../core/game';
 import {
@@ -976,7 +976,8 @@ function renderIceLineFreeze(): HTMLElement {
 
 function renderIce4CardGlow(): HTMLElement {
   const layer = el('div', 'fx-ice4-cardglow');
-  for (let i = 0; i < 3; i++) layer.appendChild(el('i', 'fx-ice4-snow'));
+  // 用户 2026-09-11：「寒冰4 的边框以及粒子特效需要更加明显」→ 雪花 3 → 7 片
+  for (let i = 0; i < 7; i++) layer.appendChild(el('i', 'fx-ice4-snow'));
   return layer;
 }
 
@@ -1093,11 +1094,12 @@ export function syncSmoke2LineGlows(s: GameState): void {
       if (!glow) {
         glow = el('div', 'fx-smoke2-lineglow');
         glow.dataset.smoke2Key = key;
-        // 触手团（克苏鲁）：2 组雾团 + 4 根触手（缓慢扭动）
+        // 触手团（克苏鲁）：3 组雾团 + 5 根触手分居四条边（缓慢扭动；用户 2026-09-11
+        // 反馈「触手并没有在协议边框四周出现，而是一起出现在一个位置」→ 由 CSS 定位到四边）
         const fog = el('div', 'fx-smoke2-fog');
         for (let i = 0; i < 3; i++) fog.appendChild(el('i', 'fx-smoke2-fog-blob'));
         const tent = el('div', 'fx-smoke2-tentacles');
-        for (let i = 0; i < 4; i++) tent.appendChild(el('i', `fx-smoke2-tentacle t${i + 1}`));
+        for (let i = 0; i < 5; i++) tent.appendChild(el('i', `fx-smoke2-tentacle t${i + 1}`));
         glow.appendChild(fog);
         glow.appendChild(tent);
         smoke2LineGlows.set(key, glow);
@@ -1557,6 +1559,12 @@ function renderHand(
       const mist = el('div', 'fx-chaos3-mist');
       for (let i = 0; i < 3; i++) mist.appendChild(el('i', 'fx-chaos3-mist-blob'));
       node.appendChild(mist);
+      // 用户 2026-09-11：手牌中的混乱3 除了边框发光，还要有四角护边（紫蓝交替闪烁）
+      const corners = el('div', 'fx-chaos3-corners');
+      for (const pos of ['tl', 'tr', 'bl', 'br'] as const) {
+        corners.appendChild(el('i', `fx-chaos3-corner ${pos}`));
+      }
+      node.appendChild(corners);
     }
     if (opts.isSelf) {
       // 单击=选中、双击=放大查看（单击延迟 320ms 严格大于 300ms 双击窗口，窗口内
@@ -2948,7 +2956,8 @@ function appendApathyCompiled(layer: HTMLElement, defId: string): void {
  * 转盘大特效：红黑相间 8 格 conic 圆盘渐现 → 铁珠沿盘缘滚动 1s（ease-out 随机落角）→
  * 停格判定（0° 起红黑交替，每格 45°）→ 红格 = 几朵小型橙红烟花 / 黑格 = 红蘑菇云 →
  * 盘渐隐消散。间隔 ≥10s 随机（scheduleCompiledLoop）。CSS 见 styles.css .compiled-luck-*。 */
-const LUCK_WHEEL_DEG = 45; // 每格角度
+const LUCK_WHEEL_DEG = 22.5; // 每格角度 → 360/22.5 = 16 格（用户：16 区域红黑转盘）
+const LUCK_WHEEL_SEGS = 16;  // 与 CSS repeating-conic-gradient 的 16 格一致
 const LUCK_WHEEL_SPIN_MS = 1000; // 铁珠滚动时长
 
 function appendLuckCompiled(layer: HTMLElement, defId: string): void {
@@ -2989,29 +2998,39 @@ function appendLuckCompiled(layer: HTMLElement, defId: string): void {
     // 铁珠滚动：随机总角（≥1 圈多 + 落格居中偏移）。rotate target（逆时针视觉：
     // CSS rotate 正角 = 顺时针；落角 = target % 360，红黑格判定随顺时针推进）
     const fullSpins = 1 + Math.floor(Math.random() * 3); // 1-3 整圈
-    const seg = Math.floor(Math.random() * 8); // 0-7 落格
+    const seg = Math.floor(Math.random() * LUCK_WHEEL_SEGS); // 0-15 落格（16 格）
     const target = fullSpins * 360 + seg * LUCK_WHEEL_DEG + LUCK_WHEEL_DEG / 2;
     requestAnimationFrame(() => {
       if (!layer.isConnected) return;
       ball.style.transform = `rotate(${target.toFixed(1)}deg) translateY(${-r}px)`;
     });
     // 停格后播结果（铁珠顺时针转 target，落角 = target % 360）
-    const isRed = seg % 2 === 0; // 0° 起红黑交替（conic from 0deg 红 0-45）
+    const isRed = seg % 2 === 0; // 0° 起红黑交替（conic from 0deg 红 0-22.5）
     fxTimer(defId, () => {
       if (!layer.isConnected) return;
-      // 结果特效：红格 = 小型橙红烟花（盘心上方几朵小火星上浮）；黑格 = 红蘑菇云
+      // 结果特效（用户：加强烟花/蘑菇云——数量、尺寸、扩散距离与闪光全部放大）
       if (isRed) {
-        const n = 10 + Math.floor(Math.random() * 4);
+        // 红格：橙红烟花（多层火星向四周炸开 + 中心白橙闪光）
+        const flash = el('div', 'compiled-luck-flash');
+        wheel.appendChild(flash);
+        const n = 22 + Math.floor(Math.random() * 8);
         for (let i = 0; i < n; i++) {
           const s = el('div', 'compiled-luck-firework');
-          s.style.left = `${r + rnd(-d * 0.14, d * 0.14)}px`;
-          s.style.top = `${r + rnd(-d * 0.14, d * 0.14)}px`;
-          s.style.animationDelay = `${(i * 0.05).toFixed(2)}s`;
+          const ang = (i / n) * Math.PI * 2 + rnd(-0.25, 0.25);
+          const dist = d * rnd(0.34, 0.62);
+          s.style.left = `${r + Math.cos(ang) * d * 0.06}px`;
+          s.style.top = `${r + Math.sin(ang) * d * 0.06}px`;
+          s.style.setProperty('--fx-dx', `${(Math.cos(ang) * dist).toFixed(1)}px`);
+          s.style.setProperty('--fx-dy', `${(Math.sin(ang) * dist).toFixed(1)}px`);
+          s.style.animationDelay = `${(i * 0.012).toFixed(3)}s`;
           wheel.appendChild(s);
         }
       } else {
+        // 黑格：红蘑菇云（柱 + 顶盖 + 冲击波环）
         const cloud = el('div', 'compiled-luck-cloud');
+        cloud.appendChild(el('i', 'compiled-luck-cloud-stem'));
         wheel.appendChild(cloud);
+        wheel.appendChild(el('div', 'compiled-luck-shock'));
       }
       // 结果 ~1s 后盘整体消散
       fxTimer(defId, () => {
@@ -3023,7 +3042,7 @@ function appendLuckCompiled(layer: HTMLElement, defId: string): void {
           host.style.opacity = '1';
           done();
         }, 560);
-      }, 1100);
+      }, 1200);
     }, LUCK_WHEEL_SPIN_MS + 60);
   };
   scheduleCompiledLoop(layer, defId, rnd(3000, 6500), burst);
@@ -3035,6 +3054,9 @@ function appendLuckCompiled(layer: HTMLElement, defId: string): void {
  * 间隔 ≥10s 随机（scheduleCompiledLoop）。CSS 见 styles.css .compiled-mirror-*。 */
 const MIRROR_TEXTURE_IN_MS = 1800; // 镜纹覆盖渐实时长
 const MIRROR_FLASH_MS = 500;       // 实化瞬间耀眼光芒
+/** 用户 2026-09-11：明镜已编译特色效果间隔「随机但不小于 3 秒」（全局硬约束 10s → 本协议放宽） */
+const MIRROR_MIN_GAP_MS = 3000;
+const MIRROR_GAP_JITTER_MS = 9000;
 
 function appendMirrorCompiled(layer: HTMLElement, defId: string): void {
   appendCompiledCorners(layer, 'compiled-mirror-corner'); // §8：四角银白护边
@@ -3061,7 +3083,8 @@ function appendMirrorCompiled(layer: HTMLElement, defId: string): void {
       }, MIRROR_FLASH_MS + 950);
     }, MIRROR_TEXTURE_IN_MS);
   };
-  scheduleCompiledLoop(layer, defId, rnd(3000, 6500), burst);
+  // 用户 2026-09-11 修改建议：本协议已编译特色效果连续触发间隔改为随机，但【不小于 3 秒】
+  scheduleCompiledLoop(layer, defId, rnd(3000, 6500), burst, MIRROR_MIN_GAP_MS, MIRROR_GAP_JITTER_MS);
 }
 
 /* ---------- 13. 和平 peace（2代，fx-gen2 已编译）：海蓝↔金币交替呼吸框 + 四角护边 ----------
@@ -3226,8 +3249,10 @@ function appendClarityCompiled(layer: HTMLElement, defId: string): void {
 
 /* ---------- 16. 寒冰 ice（2代，fx-gen2 已编译）：深蓝呼吸框 + 四角护边 + 雪花常现 ----------
  * 周期冰面覆盖：协议表面偶尔渐现深蓝 30% 冰面（透明度渐增覆盖）→ 持续 2s → 渐消。
- * 间隔 ≥10s（scheduleCompiledLoop）。CSS 见 styles.css .compiled-ice-*。 */
+ * 间隔随机但不小于 4 秒（用户 2026-09-11；其它协议仍为 ≥10s）。CSS 见 styles.css .compiled-ice-*。 */
 const ICE_COVER_MS = 2000; // 冰面覆盖持续（渐现后 2s 再渐隐）
+const ICE_MIN_GAP_MS = 4000;   // 用户 2026-09-11：冰面覆盖特效间隔「随机但不小于 4 秒」
+const ICE_GAP_JITTER_MS = 8000;
 
 function appendIceCompiled(layer: HTMLElement, defId: string): void {
   appendCompiledCorners(layer, 'compiled-ice-corner'); // §8：四角深蓝护边
@@ -3249,35 +3274,58 @@ function appendIceCompiled(layer: HTMLElement, defId: string): void {
       fxTimer(defId, done, 950);
     }, ICE_COVER_MS);
   };
-  scheduleCompiledLoop(layer, defId, rnd(3000, 6500), burst);
+  scheduleCompiledLoop(layer, defId, rnd(3000, 6500), burst, ICE_MIN_GAP_MS, ICE_GAP_JITTER_MS);
 }
 
 /* ---------- 17. 迷雾 smoke（2代，fx-gen2 已编译）：浓灰呼吸框 + 四角护边 ----------
- * 周期触手雾：协议边框四周偶现大团浓雾渗出灰色章鱼触手（缓慢扭动）→ 2s 后触手缩回、
- * 雾渐消；中心大雾（偶尔）：更多触手向四周伸出 → 缩回 → 雾缩小消失。间隔 ≥10s。
- * CSS 见 styles.css .compiled-smoke-*（触手元素复用 .fx-smoke2-tentacle 视觉）。 */
+ * 周期触手雾（两式交替，用户 2026-09-11 要求触手必须【分布在协议边框四周】而不是挤在一处）：
+ *  ① 边框式：四条边各一处浓雾团 + 各 2 根灰色章鱼触手（朝框内扭动）；
+ *  ② 中心式：中心一大团浓雾 + 8 根触手向四周放射。
+ * 两式均 2s 后缩回、雾渐消；间隔 ≥10s。CSS 见 styles.css .compiled-smoke-*。 */
 const SMOKE_TENTACLE_MS = 2000; // 触手伸出停留
+const SMOKE_BORDER_SPOTS: Array<{ cls: string; rot: number }> = [
+  { cls: 'tl', rot: 135 },   // 左上角雾团 → 触手朝右下（框内）
+  { cls: 'tr', rot: -135 },  // 右上角 → 左下
+  { cls: 'bl', rot: 45 },    // 左下角 → 右上
+  { cls: 'br', rot: -45 },   // 右下角 → 左上
+];
 
 function appendSmokeCompiled(layer: HTMLElement, defId: string): void {
   appendCompiledCorners(layer, 'compiled-smoke-corner'); // §8：四角浓灰护边
   const host = el('div', 'compiled-smoke-host');
   layer.appendChild(host);
+  let borderMode = true; // 交替：边框四角雾团 ↔ 中心大雾
   const burst = (done: () => void): void => {
     if (!layer.isConnected) { done(); return; }
-    const g = layerGeom(layer);
-    if (!g) { fxTimer(defId, () => burst(done), 700); return; }
     host.textContent = '';
-    // 雾团（中心大雾）
-    const fog = el('div', 'compiled-smoke-bigfog');
-    host.appendChild(fog);
-    // 触手：5 根向四周伸出（底端在中心附近，rotated 各方向），缓慢扭动
-    const tent = el('div', 'compiled-smoke-tents');
-    for (let i = 0; i < 5; i++) {
-      const t = el('div', 'compiled-smoke-tent');
-      t.style.transform = `rotate(${i * 72}deg)`;
-      tent.appendChild(t);
+    if (borderMode) {
+      // ① 边框式：四角雾团 + 各 2 根触手（方向朝框内）
+      const ring = el('div', 'compiled-smoke-ring');
+      for (const spot of SMOKE_BORDER_SPOTS) {
+        const cell = el('div', `compiled-smoke-cell ${spot.cls}`);
+        cell.appendChild(el('i', 'compiled-smoke-cell-fog'));
+        for (let k = 0; k < 2; k++) {
+          const t = el('div', 'compiled-smoke-tent');
+          t.style.setProperty('--rot', `${spot.rot + (k === 0 ? -26 : 22)}deg`);
+          t.style.animationDelay = `${(-k * 0.9).toFixed(2)}s`;
+          cell.appendChild(t);
+        }
+        ring.appendChild(cell);
+      }
+      host.appendChild(ring);
+    } else {
+      // ② 中心式：中心大雾 + 8 根触手向四周放射
+      host.appendChild(el('div', 'compiled-smoke-bigfog'));
+      const tent = el('div', 'compiled-smoke-tents');
+      for (let i = 0; i < 8; i++) {
+        const t = el('div', 'compiled-smoke-tent');
+        t.style.setProperty('--rot', `${i * 45}deg`);
+        t.style.animationDelay = `${(-i * 0.28).toFixed(2)}s`;
+        tent.appendChild(t);
+      }
+      host.appendChild(tent);
     }
-    host.appendChild(tent);
+    borderMode = !borderMode;
     reflowFx(host);
     host.classList.add('in');
     fxTimer(defId, () => {
@@ -4331,6 +4379,11 @@ function showWinOverlay(winner: PlayerId, cb: UiCallbacks): void {
 export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): void {
   root.textContent = '';
   compiledFxCells.length = 0; // 本帧持久 FX 收集器复位（renderProtocol 逐格登记）
+  // 几何型 FX 延迟器：renderBoard 开头已清空 root，构建期棋盘节点尚未入 DOM，
+  // 此时 getBoundingClientRect() 全 0 → 依赖矩形定位的特效会静默失败
+  // （幸运宣告骰子 startLuckDiceFx / 透彻牌库眼睛 startClarityDeckEye 曾因此完全不显示）。
+  // 收集后在 root.appendChild(wrap) 之后统一执行。
+  const deferredFx: Array<() => void> = [];
   // 清除失效选择：所选卡不在当前回合玩家手牌中（已被打出/刷新生效/回合切换）时复位
   const sel = selectedUid;
   if (sel !== null && !s.players[s.turnPlayer].hand.some((c) => c.uid === sel)) {
@@ -4539,7 +4592,7 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
       // （startClarityDeckEye 幂等；抽取完成由 fx-gen2 在 card:drawn clarity 后 2s 消散）
       if (prompt.title.startsWith('透彻：从牌库中选择')) {
         const eyePlayer: PlayerId = (prompt.chooser ?? topEffect.player) as PlayerId;
-        startClarityDeckEye(eyePlayer);
+        deferredFx.push(() => startClarityDeckEye(eyePlayer));
       }
       // 候选卡高亮（renderBoard 内所有 .card 已渲染，此时均在 wrap 内）
       for (const node of wrap.querySelectorAll<HTMLElement>('.card[data-uid]')) {
@@ -4564,6 +4617,15 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
         } else {
           node.classList.add('choice-dim');
         }
+      }
+      // 定向选牌浮层：候选位于牌库/弃牌堆等「棋盘上没有单卡 DOM」的区域时（时间0 弃牌堆自选打出、
+      // 透彻2/3 从牌库选阈值卡…），棋盘高亮循环找不到可点节点 → 确认按钮恒为禁用（已选 0 < 下限）
+      // 导致对局卡死。此处按卡面弹出可点击候选面板（单击勾选 / 双击放大），确认与跳过仍用底部选择条。
+      const onBoard = new Set<string>();
+      for (const node of wrap.querySelectorAll<HTMLElement>('.card[data-uid]')) onBoard.add(node.dataset.uid!);
+      const offBoard = prompt.candidates.filter((c) => !onBoard.has(c.uid));
+      if (offBoard.length > 0) {
+        wrap.appendChild(buildChoicePickOverlay(prompt, offBoard, sel, root, s, cb, topEffect));
       }
       const bar = el('div', 'choice-bar');
       // 修改提示词 17：操作者提示横幅（顶部玩家栏已高亮 operator，此处底部操作条再醒目提示）
@@ -4625,7 +4687,8 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
         (prompt.title.startsWith('luck-0：宣告') || prompt.title.startsWith('luck-3：宣告')) &&
         topEffect.sourceUid
       ) {
-        startLuckDiceFx(topEffect.sourceUid);
+        const srcUid = topEffect.sourceUid;
+        deferredFx.push(() => startLuckDiceFx(srcUid));
       }
       for (const act of prompt.actions ?? []) {
         const b = el('button', 'btn choice-action-btn', actionCn(act)); // 修改提示词 8：动作按钮中文（翻转/抽牌/正面打出…）
@@ -4659,6 +4722,8 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   wrap.appendChild(diagBtn);
 
   root.appendChild(wrap);
+  // 棋盘已入 DOM → 执行本帧收集的几何型 FX（矩形定位有效；幸运骰子/透彻牌库眼睛等）
+  for (const fn of deferredFx) fn();
   // R12 已编译环持久 FX：协议格已入 DOM → 按 holder 矩形重定位 body 级层（层跨重渲染
   // 存活、从不移动 → 动画不重启；协议未编译时 renderProtocol 已移除并注销）
   syncCompiledFxLayers();
@@ -4821,6 +4886,67 @@ function choiceBar(pe: PendingEffect, prompt: ChoiceRequest, cb: UiCallbacks, hi
   bar.appendChild(el('div', 'choice-title', `${(prompt.chooser ?? pe.player) === 0 ? 'P1' : 'P2'} 操作 — ${prompt.title}`));
   bar.appendChild(el('div', 'choice-hint', hint));
   return bar;
+}
+
+/** 定向选牌浮层（时间0 从弃牌堆自选打出 / 透彻2、3 从牌库选阈值卡 等）：
+ *  这类 select prompt 的候选卡位于牌库、弃牌堆等「棋盘上没有单卡 DOM」的区域，棋盘高亮循环
+ *  找不到可点节点 → 玩家无法勾选、确认按钮恒为禁用 → 对局卡死在此处。
+ *  本浮层把候选按卡面正面列出（单击勾选/取消，双击放大），确认与跳过沿用底部 .choice-bar。
+ *  出层时机：已选状态变化后 renderApp 整帧重渲染，浮层随棋盘重建（无残留）。 */
+function buildChoicePickOverlay(
+  prompt: ChoiceRequest,
+  cards: ChoiceCard[],
+  sel: Set<string>,
+  root: HTMLElement,
+  s: GameState,
+  cb: UiCallbacks,
+  pe: PendingEffect,
+): HTMLElement {
+  const overlay = el('div', 'choice-pick-overlay');
+  const panel = el('div', 'choice-pick-panel');
+  const who = (prompt.chooser ?? pe.player) === 0 ? 'P1' : 'P2';
+  panel.appendChild(el('div', 'choice-pick-title', `${who} 操作 — ${prompt.title}`));
+  panel.appendChild(
+    el('div', 'choice-pick-hint', '单击选择 / 再点取消，双击放大查看；选好后点底部「确认」'),
+  );
+  const grid = el('div', 'choice-pick-grid');
+  for (const c of cards) {
+    const cell = el('div', 'choice-pick-card' + (sel.has(c.uid) ? ' selected' : ''));
+    const fig = el('div', 'choice-pick-fig');
+    const img = document.createElement('img');
+    if (c.faceUp) {
+      const [protocol, value] = splitDefId(c.defId);
+      img.src = cardImgSrc(protocol, value);
+      img.alt = c.defId;
+    } else {
+      img.src = '/assets/Cardback.jpg';
+      img.alt = 'card back';
+    }
+    fig.appendChild(img);
+    cell.appendChild(fig);
+    if (c.faceUp) cell.appendChild(el('span', 'choice-pick-label', c.defId));
+    bindClickOrDouble(
+      cell,
+      () => {
+        if (sel.has(c.uid)) {
+          sel.delete(c.uid);
+          choiceSelected = choiceSelected.filter((x) => x !== c.uid);
+        } else if (choiceSelected.length < prompt.max) {
+          choiceSelected.push(c.uid);
+        }
+        renderApp(root, s, cb);
+      },
+      () => openZoom(c.defId, c.faceUp, false, false),
+      true,
+    );
+    grid.appendChild(cell);
+  }
+  panel.appendChild(grid);
+  panel.appendChild(
+    el('div', 'choice-pick-count', `已选 ${sel.size}/${prompt.max === Infinity ? cards.length : prompt.max}`),
+  );
+  overlay.appendChild(panel);
+  return overlay;
 }
 
 /* ===== 卡牌放大查看遮罩（双击卡牌：手牌/场上/协议；滚轮缩放；Esc 或点击空白关闭） ===== */

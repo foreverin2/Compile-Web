@@ -22,6 +22,14 @@ function cardFaceUrl(defId: string): string {
   return cardImgSrc(proto, value);
 }
 
+/** 元素工厂（本模块内部的轻量 helper） */
+function mk(tag: string, cls: string, text?: string): HTMLElement {
+  const node = document.createElement(tag);
+  node.className = cls;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
 /** 骰子层 z：卡面/选择条之上（瞬态宣告 FX），但低于放大遮罩（1000+） */
 const GEN2_Z = 600;
 
@@ -91,19 +99,27 @@ function buildDiceCore(): HTMLElement {
   return core;
 }
 
-/** 放烟花：中心 (cx,cy) 放出 count 组火星（每组小簇，随机方向/距离），全部渐隐自清理 */
-function spawnFireworks(cx: number, cy: number, count = 6): void {
+/** 放烟花（用户：加强——更多火星、更大、飞得更远更分散 + 起爆白橙闪光）：
+ *  中心 (cx,cy) 放出 count 组火星，全部渐隐自清理 */
+function spawnFireworks(cx: number, cy: number, count = 9): void {
+  // 起爆闪光（白橙核心快速扩散渐隐）
+  const flash = document.createElement('i');
+  flash.className = 'fx-luck-flash';
+  flash.style.left = `${cx.toFixed(1)}px`;
+  flash.style.top = `${cy.toFixed(1)}px`;
+  document.body.appendChild(flash);
+  window.setTimeout(() => flash.remove(), 700);
   for (let g = 0; g < count; g++) {
-    // 每簇 8-12 颗火星，绕随机中心角展开
-    const sparks = 8 + Math.floor(Math.random() * 5);
+    // 每簇 16-24 颗火星，绕随机中心角展开
+    const sparks = 16 + Math.floor(Math.random() * 9);
     const baseAng = Math.random() * Math.PI * 2;
-    const centerDist = 26 + Math.random() * 34;
+    const centerDist = 30 + Math.random() * 62;
     const centerX = cx + Math.cos(baseAng) * centerDist;
     const centerY = cy + Math.sin(baseAng) * centerDist;
     for (let s = 0; s < sparks; s++) {
       const ang = (s / sparks) * Math.PI * 2 + (Math.random() - 0.5) * 0.5;
-      const dist = 34 + Math.random() * 52;
-      const size = 5 + Math.random() * 5;
+      const dist = 64 + Math.random() * 104;
+      const size = 7 + Math.random() * 7;
       const p = document.createElement('i');
       p.className = 'fx-luck-spark';
       p.style.width = `${size.toFixed(1)}px`;
@@ -112,9 +128,9 @@ function spawnFireworks(cx: number, cy: number, count = 6): void {
       p.style.top = `${centerY.toFixed(1)}px`;
       p.style.setProperty('--fx-dx', `${(Math.cos(ang) * dist).toFixed(1)}px`);
       p.style.setProperty('--fx-dy', `${(Math.sin(ang) * dist).toFixed(1)}px`);
-      p.style.animationDelay = `${(Math.random() * 0.1).toFixed(2)}s`;
+      p.style.animationDelay = `${(Math.random() * 0.12).toFixed(2)}s`;
       document.body.appendChild(p);
-      window.setTimeout(() => p.remove(), FW_FLY_MS + 160);
+      window.setTimeout(() => p.remove(), FW_FLY_MS + 200);
     }
   }
 }
@@ -131,7 +147,7 @@ function spawnResultText(cx: number, cy: number, text: string, cls: string): voi
   window.setTimeout(() => t.remove(), MSG_HOLD_MS + 500);
 }
 
-/** 红色蘑菇云：柱 + 顶盖 blob（scale 爆炸扩散），自清理 */
+/** 红色蘑菇云（用户：加强——更大柱/顶盖 + 爆闪 + 冲击波环），自清理 */
 function spawnMushroom(cx: number, cy: number): void {
   const m = document.createElement('div');
   m.className = 'fx-luck-mushroom';
@@ -141,12 +157,18 @@ function spawnMushroom(cx: number, cy: number): void {
   stem.className = 'fx-luck-mushroom-stem';
   const cap = document.createElement('i');
   cap.className = 'fx-luck-mushroom-cap';
+  const ring = document.createElement('i');
+  ring.className = 'fx-luck-mushroom-ring';
+  const blaze = document.createElement('i');
+  blaze.className = 'fx-luck-mushroom-blaze';
+  m.appendChild(ring);
   m.appendChild(stem);
   m.appendChild(cap);
+  m.appendChild(blaze);
   document.body.appendChild(m);
   // 爆炸后整体渐隐移除
-  window.setTimeout(() => m.classList.add('out'), 750);
-  window.setTimeout(() => m.remove(), 1350);
+  window.setTimeout(() => m.classList.add('out'), 1100);
+  window.setTimeout(() => m.remove(), 1800);
 }
 
 /** 骰子创建（幂等）：源卡中心出现骰子层（持续 3D 翻滚 + 橙光底）。由 render.ts 在宣告
@@ -234,9 +256,9 @@ export function clearGen2Fx(): void {
   // corruption/war/courage/time/assimilation/unity/diversity 的 body 级浮层）——
   // 多数自带 setTimeout 自清理，但应用内重置（返回主界面）时立即清扫防残留。
   for (const el of document.querySelectorAll<HTMLElement>(
-    '.fx-luck-spark, .fx-luck-msg, .fx-luck-mushroom, .fx-luck-dice, .fx-luck-dice-glow, ' +
+    '.fx-luck-spark, .fx-luck-msg, .fx-luck-flash, .fx-luck-mushroom, .fx-luck-dice, .fx-luck-dice-glow, ' +
       '.fx-mirror-copy-ghost, .fx-mirror-copy-flash, ' +
-      '.fx-peace-dove, .fx-peace-card, ' +
+      '.fx-peace-dove, .fx-peace-card, .fx-peace-frame, .fx-peace-text, ' +
       '.fx-chaos-vortex-draw, .fx-chaos-vortex-discard, .fx-chaos-card, ' +
       '.fx-clarity-eye, .fx-clarity-deck-eye, .fx-clarity-card-eye, ' +
       '.fx-ice-bridge, .fx-ice-bridge-end, .fx-ice-snow, ' +
@@ -350,30 +372,59 @@ const PEACE_DOVE_OUT_MS = 900;   // 抓卡飞远
 /** 前置段完成（鸽子抓卡飞走）→ 基础切割延后时长（effects/index.ts 分流处按此调度 playCutAt） */
 export const PEACE_PRE_MS = PEACE_DOVE_IN_MS + PEACE_DOVE_HOLD_MS + PEACE_GRAB_MS;
 
-/** 构建一只和平鸽（纯 CSS 造型：白身 + 头喙 + 双翼扑扇），尺寸 ~64×48。
+/** 构建一只和平鸽（纯 CSS 造型：白身 + 颈 + 头眼喙 + 三羽扇尾 + 双翼扑扇）。
+ *  2026-09-11 用户反馈「现在的看起来不像」→ 重做造型：拉长流线型身体、加颈/眼、
+ *  尾部改三片羽扇、翅膀改带羽尖缺口的翼形。尺寸 ~72×54。
  *  导出供已编译层（render.ts appendPeaceCompiled 环绕鸽子）复用。 */
 export function buildDove(): HTMLElement {
   const dove = document.createElement('div');
   dove.className = 'fx-peace-dove';
-  const body = document.createElement('div');
-  body.className = 'fx-peace-dove-body';
+  // 后翼（在身体之下）
   const wingBack = document.createElement('i');
   wingBack.className = 'fx-peace-dove-wing back';
+  // 扇尾：三片羽毛（错开角度）
+  const tail = document.createElement('div');
+  tail.className = 'fx-peace-dove-tail';
+  for (let i = 0; i < 3; i++) {
+    const f = document.createElement('i');
+    f.className = 'fx-peace-dove-feather';
+    tail.appendChild(f);
+  }
+  // 身体 + 颈 + 前翼
+  const body = document.createElement('div');
+  body.className = 'fx-peace-dove-body';
+  const neck = document.createElement('i');
+  neck.className = 'fx-peace-dove-neck';
   const wingFront = document.createElement('i');
   wingFront.className = 'fx-peace-dove-wing front';
-  const head = document.createElement('i');
+  body.appendChild(neck);
+  body.appendChild(wingFront);
+  // 头 + 眼 + 喙
+  const head = document.createElement('div');
   head.className = 'fx-peace-dove-head';
+  const eye = document.createElement('i');
+  eye.className = 'fx-peace-dove-eye';
   const beak = document.createElement('i');
   beak.className = 'fx-peace-dove-beak';
+  head.appendChild(eye);
   head.appendChild(beak);
-  const tail = document.createElement('i');
-  tail.className = 'fx-peace-dove-tail';
-  body.appendChild(wingBack);
-  body.appendChild(wingFront);
-  body.appendChild(tail);
+  dove.appendChild(wingBack);
+  dove.appendChild(tail);
   dove.appendChild(body);
   dove.appendChild(head);
   return dove;
+}
+
+/** 弃牌落点「peace!」文字特效（用户：弃掉后在原位置弹出，持续 2 秒后消失） */
+function spawnPeaceText(rect: DOMRect): void {
+  const t = document.createElement('div');
+  t.className = 'fx-peace-text';
+  t.textContent = 'peace!';
+  t.style.left = `${(rect.left + rect.width / 2).toFixed(1)}px`;
+  t.style.top = `${(rect.top + rect.height / 2).toFixed(1)}px`;
+  document.body.appendChild(t);
+  window.setTimeout(() => t.classList.add('out'), 2000);
+  window.setTimeout(() => t.remove(), 2600);
 }
 
 /** peace 弃牌前置鸽子动画（node = 被弃卡节点；事件时 rect 有效——重渲染前）。
@@ -407,6 +458,8 @@ export function playPeaceDiscardExtra(
   img.style.cssText =
     'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;border-radius:6px;';
   clone.appendChild(img);
+  // 用户 2026-09-11：额外特效触发期间，被弃卡边框 = 海蓝与金币色交替闪烁发光外框
+  clone.appendChild(mk('i', 'fx-peace-frame'));
   document.body.appendChild(clone);
   // ① 鸽子飞入：淡入 + 落定在卡框上方（停片刻；CSS 双翼持续扑扇）
   requestAnimationFrame(() => {
@@ -434,6 +487,8 @@ export function playPeaceDiscardExtra(
     clone.style.opacity = '0';
   }, PEACE_PRE_MS);
   // 前置段完成（鸽子已抓卡飞走）→ 基础弃牌切割由 effects/index.ts 延后调度（PEACE_PRE_MS）
+  // 用户 2026-09-11：弃掉后在被弃位置弹出「peace!」文字（基础切割播完即弹，持续 2s 渐隐）
+  window.setTimeout(() => spawnPeaceText(rect), PEACE_PRE_MS + 320);
   // 鸽子层自身清理：
   window.setTimeout(() => {
     dove.remove();
@@ -457,15 +512,45 @@ const CHAOS_VORTEX_MS = 2900; // 抽牌漩涡总时长（浮现→旋转→渐�
 /** chaos 弃牌前置段（漩涡吸入完成）→ 基础切割延后时长（effects/index.ts 分流处调度） */
 export const CHAOS_DISCARD_PRE_MS = 1100;
 
-/** 构建漩涡核心（多层蓝紫旋转扇片 + 中心黑洞） */
+/** 阿基米德螺线路径（viewBox 0..100，中心 50,50）：turns 圈、最大半径 rMax。
+ *  分段折线近似（每圈 60 段）——够平滑且无需外部资源。 */
+function spiralPath(turns: number, rMax: number): string {
+  const steps = Math.round(turns * 60);
+  let d = '';
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const a = t * turns * Math.PI * 2;
+    const r = rMax * t;
+    d += `${i === 0 ? 'M' : 'L'}${(50 + Math.cos(a) * r).toFixed(2)} ${(50 + Math.sin(a) * r).toFixed(2)} `;
+  }
+  return d.trim();
+}
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/** 构建漩涡核心（用户 2026-09-11：改为「类似大棒棒糖的旋风式图案」）：
+ *  一条阿基米德螺线用「紫/蓝交替虚线」描边两遍（第二遍 dashoffset 错开半个周期）→
+ *  糖果旋风条纹；叠加深紫底盘柔光 + 中心黑洞。旋转由 .fx-chaos-vortex 的 CSS 动画带动。 */
 function buildVortex(): HTMLElement {
   const v = document.createElement('div');
   v.className = 'fx-chaos-vortex';
-  for (let i = 1; i <= 3; i++) {
-    const blade = document.createElement('i');
-    blade.className = `fx-chaos-vortex-blade b${i}`;
-    v.appendChild(blade);
-  }
+  const d = spiralPath(3.4, 47);
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('class', 'fx-chaos-swirl');
+  svg.setAttribute('viewBox', '0 0 100 100');
+  const band = (color: string, dashOffset: number): void => {
+    const p = document.createElementNS(SVG_NS, 'path');
+    p.setAttribute('d', d);
+    p.setAttribute('fill', 'none');
+    p.setAttribute('stroke', color);
+    p.setAttribute('stroke-width', '13');
+    p.setAttribute('stroke-dasharray', '15 15');
+    p.setAttribute('stroke-dashoffset', String(dashOffset));
+    svg.appendChild(p);
+  };
+  band('#8b5cff', 0);  // 紫色段
+  band('#4abeff', 15); // 蓝色段（错开半周期 → 紫蓝交替）
+  v.appendChild(svg);
   const hole = document.createElement('i');
   hole.className = 'fx-chaos-vortex-hole';
   v.appendChild(hole);

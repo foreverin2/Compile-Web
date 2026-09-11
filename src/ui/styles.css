@@ -1765,6 +1765,50 @@ body.dragging { cursor: grabbing; user-select: none; }
 /* 选择模式下隐藏非候选手牌的交互（hover/单击/拖拽）；候选卡保持可点以便勾选 */
 .hand-strip.choice-mode .card:not(.choice-target) { pointer-events: none; }
 
+/* ===== 定向选牌浮层（候选来自牌库/弃牌堆——棋盘上没有单卡 DOM 可点） =====
+   修复：时间0「从弃牌堆中打出1张牌」、透彻2/3「从牌库选阈值为X的卡牌」等效果此前没有
+   任何可点击的候选目标 → 确认按钮恒为禁用（已选 0 < 下限）→ 对局卡死。
+   层 z=190 低于底部选择条（200），底部留 96px 让「确认/跳过」始终可见可点；
+   面板以外区域 pointer-events:none，点击透传。 */
+.choice-pick-overlay {
+  position: fixed;
+  inset: 0 0 96px 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5, 8, 16, 0.55);
+  z-index: 190;
+  pointer-events: none;
+}
+.choice-pick-panel {
+  pointer-events: auto;
+  background: rgba(10, 14, 26, 0.96);
+  border: 1px solid #4ff0ff88;
+  border-radius: 12px;
+  padding: 12px 16px 14px;
+  max-width: min(92vw, 1120px);
+  max-height: 62vh;
+  overflow: auto;
+  box-shadow: 0 0 28px rgba(79, 240, 255, 0.28);
+}
+.choice-pick-title { font-size: 15px; font-weight: 700; color: #cfeaff; text-align: center; }
+.choice-pick-hint { font-size: 12px; color: #8fa6bd; text-align: center; margin: 4px 0 10px; }
+.choice-pick-grid { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+.choice-pick-card {
+  cursor: pointer;
+  border: 2px solid transparent;
+  border-radius: 9px;
+  padding: 4px;
+  background: #0d1526;
+  transition: transform 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.choice-pick-card:hover { transform: translateY(-3px); border-color: #4ff0ff88; }
+.choice-pick-card.selected { border-color: #ffe14f; box-shadow: 0 0 14px #ffe14fcc, 0 0 0 2px #ffe14f55 inset; }
+.choice-pick-fig { width: 96px; aspect-ratio: 130 / 178.8; overflow: hidden; border-radius: 5px; }
+.choice-pick-fig img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.choice-pick-label { display: block; text-align: center; font-size: 11px; color: #9fb6cc; margin-top: 3px; }
+.choice-pick-count { text-align: center; font-size: 13px; color: #ffd76a; margin-top: 10px; }
+
 /* ===== 诊断日志导出 ===== */
 /* 导出日志按钮：放大 + 固定于视口右下角（right 16px / bottom 18px），z-index 300 高于底部
    操作台与选择条（均 200）——滚动时始终可见、不被操作台覆盖。霓虹青色与 .play-btn /
@@ -5518,15 +5562,32 @@ body.dragging { cursor: grabbing; user-select: none; }
 .fx-luck-spark {
   position: fixed;
   border-radius: 50%;
-  background: radial-gradient(circle, #ffe9b0 0%, #ff9a2e 55%, #ff5a00 100%);
-  box-shadow: 0 0 8px rgba(255, 140, 26, 0.9);
-  animation: fx-luck-spark-fly 0.9s cubic-bezier(0.1, 0.6, 0.4, 1) forwards;
+  background: radial-gradient(circle, #fff8e0 0%, #ffb02e 50%, #ff4d00 100%);
+  box-shadow: 0 0 12px rgba(255, 150, 30, 0.95), 0 0 22px rgba(255, 90, 0, 0.5);
+  animation: fx-luck-spark-fly 1.15s cubic-bezier(0.12, 0.7, 0.3, 1) forwards;
   z-index: 600;
   pointer-events: none;
 }
 @keyframes fx-luck-spark-fly {
-  0% { transform: translate(0, 0) scale(1); opacity: 1; }
-  100% { transform: translate(var(--fx-dx, 30px), var(--fx-dy, -40px)) scale(0.2); opacity: 0; }
+  0% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+  70% { opacity: 0.92; }
+  100% { transform: translate(calc(-50% + var(--fx-dx, 30px)), calc(-50% + var(--fx-dy, -60px))) scale(0.15); opacity: 0; }
+}
+/* 起爆闪光：白橙核心快速扩散渐隐（烟花/结果共用） */
+.fx-luck-flash {
+  position: fixed;
+  width: 120px;
+  height: 120px;
+  margin: -60px 0 0 -60px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #fffdf0 0%, #ffc04a 40%, rgba(255, 120, 20, 0) 72%);
+  z-index: 601;
+  pointer-events: none;
+  animation: fx-luck-flash 0.6s ease-out forwards;
+}
+@keyframes fx-luck-flash {
+  0% { transform: scale(0.18); opacity: 1; }
+  100% { transform: scale(2.4); opacity: 0; }
 }
 
 /* ---- 结果字样（成功 666/888 橙透明 / 失败 囧 红） ---- */
@@ -5541,12 +5602,12 @@ body.dragging { cursor: grabbing; user-select: none; }
   text-shadow: 0 0 18px currentColor;
 }
 .fx-luck-msg.good {
-  color: rgba(255, 170, 60, 0.85);
-  font-size: 46px;
+  color: rgba(255, 176, 66, 0.92);
+  font-size: 62px;
 }
 .fx-luck-msg.bad {
-  color: rgba(255, 70, 40, 0.92);
-  font-size: 52px;
+  color: rgba(255, 70, 40, 0.95);
+  font-size: 68px;
 }
 .fx-luck-msg.out {
   opacity: 0;
@@ -5558,7 +5619,7 @@ body.dragging { cursor: grabbing; user-select: none; }
   100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
 }
 
-/* ---- 失败红蘑菇云：柱 + 顶盖爆炸扩散 ---- */
+/* ---- 失败红蘑菇云：柱 + 顶盖爆炸扩散 + 爆闪 + 冲击波环（用户：加强放大） ---- */
 .fx-luck-mushroom {
   position: fixed;
   width: 0;
@@ -5568,31 +5629,62 @@ body.dragging { cursor: grabbing; user-select: none; }
 }
 .fx-luck-mushroom-stem {
   position: absolute;
-  left: -16px;
-  bottom: -14px;
-  width: 32px;
-  height: 60px;
-  background: radial-gradient(ellipse at 50% 100%, #ff3b1f 0%, #c21807 60%, #7a0c04 100%);
-  border-radius: 8px 8px 6px 6px;
-  animation: fx-luck-mushroom-grow 0.5s ease-out forwards;
+  left: -26px;
+  bottom: -20px;
+  width: 52px;
+  height: 102px;
+  background: linear-gradient(to top, rgba(140, 18, 8, 0.2) 0%, #c21807 45%, #ff6a3c 100%);
+  border-radius: 10px 10px 8px 8px;
+  animation: fx-luck-mushroom-grow 0.55s ease-out forwards;
   transform-origin: 50% 100%;
 }
 .fx-luck-mushroom-cap {
   position: absolute;
-  left: -64px;
-  top: -46px;
-  width: 128px;
-  height: 86px;
+  left: -108px;
+  top: -96px;
+  width: 216px;
+  height: 146px;
   background:
-    radial-gradient(circle at 30% 30%, #ff6a45 0%, #e02010 45%, #8a0a03 100%);
+    radial-gradient(circle at 30% 30%, #ff8a5c 0%, #e8220f 45%, #8a0a03 100%);
   border-radius: 50% 50% 42% 42% / 72% 72% 34% 34%;
-  box-shadow: 0 0 40px rgba(255, 60, 20, 0.75);
-  animation: fx-luck-mushroom-grow 0.55s cubic-bezier(0.1, 0.7, 0.3, 1.2) forwards;
+  box-shadow: 0 0 66px rgba(255, 70, 20, 0.85), inset 0 -10px 30px rgba(90, 6, 0, 0.55);
+  animation: fx-luck-mushroom-grow 0.6s cubic-bezier(0.1, 0.7, 0.3, 1.2) forwards;
   transform-origin: 50% 100%;
+}
+/* 爆闪（起爆瞬间白红闪光） */
+.fx-luck-mushroom-blaze {
+  position: absolute;
+  left: -70px;
+  top: -70px;
+  width: 140px;
+  height: 140px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #fff2d8 0%, #ff6a30 42%, rgba(200, 30, 10, 0) 74%);
+  animation: fx-luck-mushroom-blaze 0.5s ease-out forwards;
+}
+@keyframes fx-luck-mushroom-blaze {
+  0% { transform: scale(0.2); opacity: 1; }
+  100% { transform: scale(2.1); opacity: 0; }
+}
+/* 冲击波环（贴地扩散） */
+.fx-luck-mushroom-ring {
+  position: absolute;
+  left: -60px;
+  top: -18px;
+  width: 120px;
+  height: 36px;
+  border: 5px solid rgba(255, 130, 70, 0.9);
+  border-radius: 50%;
+  box-shadow: 0 0 26px rgba(255, 90, 30, 0.7);
+  animation: fx-luck-mushroom-ring 0.9s ease-out forwards;
+}
+@keyframes fx-luck-mushroom-ring {
+  0% { transform: scale(0.25); opacity: 0.95; border-width: 9px; }
+  100% { transform: scale(2.9); opacity: 0; border-width: 1px; }
 }
 .fx-luck-mushroom.out {
   opacity: 0;
-  transition: opacity 0.5s ease;
+  transition: opacity 0.6s ease;
 }
 @keyframes fx-luck-mushroom-grow {
   0% { transform: scale(0.1); opacity: 0.4; }
@@ -5602,7 +5694,8 @@ body.dragging { cursor: grabbing; user-select: none; }
 
 /* =====================================================================
  * luck 幸运已编译：中心偶发红黑转盘（render.ts appendLuckCompiled 驱动）
- * 圆盘 conic 红黑 8 格 → 铁珠盘缘滚动 1s 随机停格 → 红=橙红烟花 / 黑=红蘑菇云。
+ * 圆盘 conic 红黑 16 格（22.5°/格，用户 2026-09-11：8 格 → 16 格）→ 铁珠盘缘滚动
+ * 1s 随机停格 → 红=橙红烟花爆开 / 黑=红蘑菇云 + 冲击波环。
  * ===================================================================== */
 .compiled-luck-host {
   position: absolute;
@@ -5619,13 +5712,13 @@ body.dragging { cursor: grabbing; user-select: none; }
   background:
     repeating-conic-gradient(
       from 0deg,
-      #ff7a1a 0deg 45deg,
-      #2b2b33 45deg 90deg
+      #e8402a 0deg 22.5deg,
+      #1b1b22 22.5deg 45deg
     );
   box-shadow:
-    0 0 22px rgba(255, 140, 26, 0.55),
-    inset 0 0 0 3px rgba(255, 220, 160, 0.5),
-    inset 0 0 14px rgba(0, 0, 0, 0.5);
+    0 0 30px rgba(255, 120, 26, 0.6),
+    inset 0 0 0 3px rgba(255, 226, 170, 0.55),
+    inset 0 0 18px rgba(0, 0, 0, 0.55);
   opacity: 0;
 }
 /* 铁珠：亮金属珠，随 rotate 绕盘缘滚动 */
@@ -5638,42 +5731,85 @@ body.dragging { cursor: grabbing; user-select: none; }
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.6), 0 0 10px rgba(255, 255, 255, 0.5);
   will-change: transform;
 }
-/* 红格结果：小型橙红烟花（小火星上浮渐隐） */
+/* 红格结果：中心白橙闪光（烟花起爆点） */
+.compiled-luck-flash {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 46px;
+  height: 46px;
+  margin: -23px 0 0 -23px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #fffbe8 0%, #ffb44a 45%, rgba(255, 120, 20, 0) 72%);
+  animation: compiled-luck-flash 0.55s ease-out forwards;
+  pointer-events: none;
+}
+@keyframes compiled-luck-flash {
+  0% { transform: scale(0.2); opacity: 1; }
+  100% { transform: scale(3.1); opacity: 0; }
+}
+/* 红格结果：橙红烟花（大量火星向四周炸开渐隐，方向/距离由 JS 写入 --fx-dx/--fx-dy） */
 .compiled-luck-firework {
   position: absolute;
-  width: 6px;
-  height: 6px;
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
-  background: radial-gradient(circle, #ffe9b0 0%, #ff9a2e 55%, #ff5a00 100%);
-  box-shadow: 0 0 8px rgba(255, 140, 26, 0.9);
-  animation: compiled-luck-fw 0.9s ease-out forwards;
+  background: radial-gradient(circle, #fff6d6 0%, #ffb02e 45%, #ff4d00 100%);
+  box-shadow: 0 0 12px rgba(255, 150, 30, 0.95), 0 0 22px rgba(255, 90, 0, 0.55);
+  animation: compiled-luck-fw 1.15s cubic-bezier(0.12, 0.7, 0.3, 1) forwards;
   opacity: 0;
 }
 @keyframes compiled-luck-fw {
   0% { transform: translate(0, 0) scale(1); opacity: 1; }
-  60% { opacity: 0.95; }
-  100% { transform: translate(calc(var(--fx-dx, 0px)), -34px) scale(0.15); opacity: 0; }
+  65% { opacity: 0.95; }
+  100% { transform: translate(var(--fx-dx, 0px), var(--fx-dy, -60px)) scale(0.12); opacity: 0; }
 }
-/* 黑格结果：小型红蘑菇云 */
+/* 黑格结果：红蘑菇云（柱 + 顶盖）+ 冲击波环 */
 .compiled-luck-cloud {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 74px;
-  height: 52px;
-  margin-left: -37px;
-  margin-top: -30px;
+  width: 150px;
+  height: 104px;
+  margin-left: -75px;
+  margin-top: -78px;
   background:
-    radial-gradient(circle at 30% 32%, #ff6a45 0%, #e02010 48%, #7a0a02 100%);
+    radial-gradient(circle at 30% 32%, #ff7a52 0%, #e02010 48%, #7a0a02 100%);
   border-radius: 48% 52% 44% 56% / 64% 62% 40% 38%;
-  box-shadow: 0 0 26px rgba(255, 60, 20, 0.7);
-  animation: compiled-luck-cloud 1.05s ease-out forwards;
+  box-shadow: 0 0 46px rgba(255, 70, 20, 0.8);
+  animation: compiled-luck-cloud 1.2s ease-out forwards;
   opacity: 0;
 }
+.compiled-luck-cloud-stem {
+  position: absolute;
+  left: 50%;
+  bottom: -34px;
+  width: 44px;
+  height: 52px;
+  margin-left: -22px;
+  background: linear-gradient(to top, rgba(180, 24, 8, 0.15) 0%, #c21807 55%, #ff5a30 100%);
+  border-radius: 6px;
+}
 @keyframes compiled-luck-cloud {
-  0% { transform: scale(0.1); opacity: 0.3; }
-  45% { transform: scale(1.18); opacity: 1; }
-  100% { transform: scale(1.05); opacity: 0; }
+  0% { transform: scale(0.08); opacity: 0.3; }
+  45% { transform: scale(1.2); opacity: 1; }
+  100% { transform: scale(1.08); opacity: 0; }
+}
+.compiled-luck-shock {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 90px;
+  height: 90px;
+  margin: -45px 0 0 -45px;
+  border-radius: 50%;
+  border: 4px solid rgba(255, 120, 60, 0.9);
+  animation: compiled-luck-shock 0.8s ease-out forwards;
+  pointer-events: none;
+}
+@keyframes compiled-luck-shock {
+  0% { transform: scale(0.25); opacity: 0.95; border-width: 8px; }
+  100% { transform: scale(2.6); opacity: 0; border-width: 1px; }
 }
 
 /* =====================================================================
@@ -5787,95 +5923,171 @@ body.dragging { cursor: grabbing; user-select: none; }
 
 /* =====================================================================
  * 2代 peace 和平弃牌：和平鸽（fx-gen2.ts playPeaceDiscardExtra 驱动）
- * 纯 CSS 造型：白身 + 头喙 + 尾 + 双翼（上下扑扇——挥动翅膀的鸽子）。
- * 容器 .fx-peace-dove 为 body 级 fixed 定位盒（~64×48），JS 控制位移过渡。
+ * 纯 CSS 造型（2026-09-11 用户「现在的看起来不像」→ 重做）：流线型白身 + 颈部 + 头部
+ * 带眼/长喙 + 三片羽扇尾 + 双翼（带羽尖缺口，上下扑扇——挥动翅膀的鸽子）。
+ * 容器 .fx-peace-dove 为 body 级 fixed 定位盒（72×54），JS 控制位移过渡。
  * ===================================================================== */
 .fx-peace-dove {
   position: fixed;
-  width: 64px;
-  height: 48px;
+  width: 72px;
+  height: 54px;
   pointer-events: none;
-  filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.3));
+  filter: drop-shadow(0 5px 9px rgba(0, 0, 0, 0.35));
   will-change: transform, opacity;
 }
+/* 身体：拉长流线（前高后低），微俯冲角 */
 .fx-peace-dove-body {
   position: absolute;
-  left: 12px;
-  top: 18px;
-  width: 30px;
-  height: 20px;
-  border-radius: 50% 55% 48% 52%;
-  background: linear-gradient(160deg, #ffffff 0%, #f2f4f8 60%, #dde2ea 100%);
-  box-shadow: inset -3px -2px 6px rgba(150, 160, 180, 0.35);
-  transform: rotate(-8deg);
+  left: 14px;
+  top: 20px;
+  width: 34px;
+  height: 21px;
+  border-radius: 62% 38% 44% 56% / 66% 48% 52% 34%;
+  background: linear-gradient(160deg, #ffffff 0%, #f4f7fb 52%, #d8dee9 100%);
+  box-shadow: inset -4px -3px 8px rgba(140, 152, 176, 0.35), inset 2px 2px 5px rgba(255, 255, 255, 0.9);
+  transform: rotate(-7deg);
 }
-/* 尾巴：左下三角 */
+/* 颈：胸 → 头的过渡球 */
+.fx-peace-dove-neck {
+  position: absolute;
+  right: -5px;
+  top: -9px;
+  width: 17px;
+  height: 17px;
+  border-radius: 52% 48% 50% 50%;
+  background: linear-gradient(150deg, #ffffff 0%, #eef2f8 100%);
+}
+/* 三片羽扇尾（向左侧后展开） */
 .fx-peace-dove-tail {
   position: absolute;
-  left: -10px;
-  top: 6px;
-  width: 16px;
-  height: 8px;
-  background: linear-gradient(200deg, #eef1f6 0%, #d5dbe5 100%);
-  clip-path: polygon(0 0, 100% 60%, 55% 100%);
-  transform: rotate(-14deg);
+  left: 1px;
+  top: 20px;
+  width: 26px;
+  height: 18px;
+  transform: rotate(-12deg);
+  transform-origin: 100% 50%;
 }
-/* 双翼：绕背上缘旋转（transform-origin 底部 → 扑扇上下摆动） */
+.fx-peace-dove-feather {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  width: 24px;
+  height: 7px;
+  margin-top: -3.5px;
+  border-radius: 7px 2px 2px 7px;
+  background: linear-gradient(90deg, #c9d1de 0%, #e9edf4 55%, #ffffff 100%);
+  box-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.85);
+  transform-origin: 100% 50%;
+}
+.fx-peace-dove-feather:nth-child(1) { transform: rotate(-11deg) translateY(-3px); }
+.fx-peace-dove-feather:nth-child(3) { transform: rotate(11deg) translateY(3px); }
+/* 双翼：带羽尖缺口的水滴翼形，绕肩部（左下）上下扑扇 */
 .fx-peace-dove-wing {
   position: absolute;
-  width: 26px;
-  height: 20px;
-  border-radius: 80% 20% 60% 40%;
-  background: linear-gradient(150deg, #ffffff 0%, #eef1f7 70%, #dbe1ec 100%);
-  box-shadow: inset 0 -3px 5px rgba(150, 160, 185, 0.3);
-  transform-origin: 50% 100%;
+  width: 31px;
+  height: 23px;
+  background: linear-gradient(150deg, #ffffff 0%, #f0f3f9 62%, #d6dde9 100%);
+  clip-path: polygon(2% 4%, 100% 20%, 86% 100%, 62% 70%, 34% 100%, 10% 72%);
+  filter: drop-shadow(0 2px 3px rgba(120, 132, 156, 0.4));
+  transform-origin: 12% 92%;
 }
 .fx-peace-dove-wing.back {
-  left: 8px;
-  top: 2px;
-  transform: rotate(16deg);
+  left: -14px;
+  top: -14px;
+  transform: rotate(6deg) scale(0.94);
   animation: fx-peace-wing-back 0.34s ease-in-out infinite alternate;
 }
 .fx-peace-dove-wing.front {
-  left: 26px;
-  top: 0px;
-  transform: rotate(28deg);
+  right: -12px;
+  top: -17px;
+  transform: rotate(16deg);
   animation: fx-peace-wing-front 0.34s ease-in-out infinite alternate;
-  z-index: 2;
+  z-index: 3;
 }
 @keyframes fx-peace-wing-back {
-  from { transform: rotate(10deg); }
-  to { transform: rotate(40deg); }
+  from { transform: rotate(-4deg) scale(0.94); }
+  to { transform: rotate(32deg) scale(0.94); }
 }
 @keyframes fx-peace-wing-front {
-  from { transform: rotate(20deg); }
-  to { transform: rotate(52deg); }
+  from { transform: rotate(6deg); }
+  to { transform: rotate(46deg); }
 }
-/* 头 + 喙 */
+/* 头（含眼 + 长喙） */
 .fx-peace-dove-head {
   position: absolute;
-  left: 34px;
-  top: 14px;
-  width: 13px;
-  height: 12px;
+  left: 40px;
+  top: 9px;
+  width: 17px;
+  height: 15px;
+  border-radius: 56% 54% 46% 44% / 58% 58% 42% 42%;
+  background: linear-gradient(160deg, #ffffff 0%, #eef2f8 100%);
+  box-shadow: inset -2px -2px 4px rgba(140, 152, 176, 0.3);
+}
+.fx-peace-dove-eye {
+  position: absolute;
+  left: 4px;
+  top: 5px;
+  width: 3.4px;
+  height: 3.4px;
   border-radius: 50%;
-  background: linear-gradient(160deg, #ffffff 0%, #eef1f6 100%);
+  background: #262c3a;
+  box-shadow: 0 0 0 1.2px rgba(255, 255, 255, 0.85);
 }
 .fx-peace-dove-beak {
   position: absolute;
-  right: -5px;
-  top: 4px;
-  width: 7px;
-  height: 4px;
-  background: #e8b04b;
-  clip-path: polygon(0 0, 100% 50%, 0 100%);
+  right: -8px;
+  top: 6px;
+  width: 10px;
+  height: 5px;
+  background: linear-gradient(90deg, #f2bd54 0%, #d3941f 100%);
+  clip-path: polygon(0 0, 100% 58%, 0 100%);
 }
-/* 被弃卡克隆（被抓走缩小贴鸽身下） */
+/* 被弃卡克隆（被抓走缩小贴鸽身下）+ 海蓝/金币交替闪烁发光外框 */
 .fx-peace-card {
   position: fixed;
   pointer-events: none;
   will-change: transform, opacity;
   filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.35));
+}
+.fx-peace-frame {
+  position: absolute;
+  inset: -4px;
+  border: 3px solid #39b6ff;
+  border-radius: 9px;
+  pointer-events: none;
+  animation: fx-peace-frame-alt 0.46s steps(1, end) infinite;
+}
+@keyframes fx-peace-frame-alt {
+  0%, 49% {
+    border-color: #39b6ff;
+    box-shadow: 0 0 20px rgba(57, 182, 255, 0.9), inset 0 0 16px rgba(57, 182, 255, 0.45);
+  }
+  50%, 100% {
+    border-color: #ffd24a;
+    box-shadow: 0 0 20px rgba(255, 210, 74, 0.9), inset 0 0 16px rgba(255, 210, 74, 0.45);
+  }
+}
+/* 弃牌落点「peace!」文字（2s 停留后渐隐） */
+.fx-peace-text {
+  position: fixed;
+  transform: translate(-50%, -50%);
+  font-size: 48px;
+  font-weight: 900;
+  font-style: italic;
+  letter-spacing: 1px;
+  color: #ffe9a8;
+  text-shadow:
+    0 0 10px rgba(255, 210, 74, 0.95), 0 0 22px rgba(57, 182, 255, 0.85),
+    0 3px 6px rgba(0, 0, 0, 0.55);
+  z-index: 602;
+  pointer-events: none;
+  animation: fx-peace-text-pop 0.4s cubic-bezier(0.2, 0.8, 0.3, 1.35) forwards;
+}
+.fx-peace-text.out { opacity: 0; transition: opacity 0.55s ease; }
+@keyframes fx-peace-text-pop {
+  0% { transform: translate(-50%, -50%) scale(0.3) rotate(-8deg); opacity: 0; }
+  70% { transform: translate(-50%, -50%) scale(1.12) rotate(-3deg); opacity: 1; }
+  100% { transform: translate(-50%, -50%) scale(1) rotate(-3deg); opacity: 1; }
 }
 
 /* =====================================================================
@@ -5918,7 +6130,7 @@ body.dragging { cursor: grabbing; user-select: none; }
 /* =====================================================================
  * 2代 chaos 混乱 FX
  * ---------------------------------------------------------------------
- * chaos-3 手牌特效：仅正面显示时——边框紫蓝交替闪烁发光 + 卡面偶发蓝紫雾气。
+ * chaos-3 手牌特效：仅正面显示时——边框紫蓝交替闪烁发光 + 四角护边 + 卡面偶发蓝紫雾气。
  * ===================================================================== */
 .fx-chaos3-hand {
   animation: fx-chaos3-border 1.6s ease-in-out infinite;
@@ -5933,6 +6145,29 @@ body.dragging { cursor: grabbing; user-select: none; }
     box-shadow: 0 0 14px 3px rgba(74, 190, 255, 0.8), inset 0 0 8px rgba(74, 190, 255, 0.3);
     filter: brightness(1.06);
   }
+}
+/* 四角护边（用户 2026-09-11 追加）：紫↔蓝交替闪烁，与边框动画同周期 */
+.fx-chaos3-corners {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 4;
+  overflow: visible;
+}
+.fx-chaos3-corner {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  border-color: #8b5cff;
+  animation: fx-chaos3-corner-alt 1.6s ease-in-out infinite;
+}
+.fx-chaos3-corner.tl { top: -7px; left: -7px; border-top: 6px solid; border-left: 6px solid; border-top-left-radius: 10px; }
+.fx-chaos3-corner.tr { top: -7px; right: -7px; border-top: 6px solid; border-right: 6px solid; border-top-right-radius: 10px; }
+.fx-chaos3-corner.bl { bottom: -7px; left: -7px; border-bottom: 6px solid; border-left: 6px solid; border-bottom-left-radius: 10px; }
+.fx-chaos3-corner.br { bottom: -7px; right: -7px; border-bottom: 6px solid; border-right: 6px solid; border-bottom-right-radius: 10px; }
+@keyframes fx-chaos3-corner-alt {
+  0%, 100% { border-color: #8b5cff; filter: drop-shadow(0 0 7px rgba(139, 92, 255, 0.9)); }
+  50% { border-color: #4abeff; filter: drop-shadow(0 0 7px rgba(74, 190, 255, 0.9)); }
 }
 .fx-chaos3-mist {
   position: absolute;
@@ -5959,7 +6194,7 @@ body.dragging { cursor: grabbing; user-select: none; }
   50% { transform: scale(1.15); opacity: 0.7; }
 }
 
-/* ---- chaos 漩涡（抽牌/弃牌共用核心：多层旋转扇片 + 中心黑洞） ---- */
+/* ---- chaos 漩涡（抽牌/弃牌共用核心：棒棒糖旋风螺线 + 中心黑洞） ---- */
 .fx-chaos-vortex-draw,
 .fx-chaos-vortex-discard {
   position: fixed;
@@ -5983,32 +6218,21 @@ body.dragging { cursor: grabbing; user-select: none; }
   position: absolute;
   inset: 0;
   border-radius: 50%;
+  /* 深紫底盘柔光：填补螺线间隙 → 读作糖果圆盘而非散线 */
+  background: radial-gradient(circle, rgba(38, 20, 84, 0.92) 0%, rgba(30, 24, 96, 0.72) 58%, rgba(20, 16, 60, 0.25) 82%, transparent 92%);
+  box-shadow: 0 0 34px rgba(110, 70, 240, 0.55), inset 0 0 30px rgba(60, 30, 140, 0.6);
   animation: fx-chaos-vortex-spin 1.5s linear infinite;
 }
 @keyframes fx-chaos-vortex-spin {
   to { transform: rotate(360deg); }
 }
-.fx-chaos-vortex-blade {
+/* 螺线风暴（紫蓝交替虚线段的两遍描边，见 fx-gen2 buildVortex） */
+.fx-chaos-swirl {
   position: absolute;
-  left: 0;
-  top: 0;
+  inset: 0;
   width: 100%;
   height: 100%;
-  border-radius: 50%;
-  mix-blend-mode: screen;
-}
-.fx-chaos-vortex-blade.b1 {
-  background: conic-gradient(from 0deg, rgba(124, 60, 255, 0.65), rgba(60, 160, 255, 0.5), transparent 72%);
-  filter: blur(1px);
-}
-.fx-chaos-vortex-blade.b2 {
-  background: conic-gradient(from 120deg, rgba(80, 200, 255, 0.6), rgba(130, 80, 255, 0.5), transparent 72%);
-  animation: fx-chaos-vortex-spin 2.2s linear infinite reverse;
-  filter: blur(2px);
-}
-.fx-chaos-vortex-blade.b3 {
-  background: conic-gradient(from 240deg, rgba(150, 90, 255, 0.7), rgba(50, 190, 255, 0.55), transparent 70%);
-  filter: blur(1px);
+  filter: drop-shadow(0 0 9px rgba(120, 80, 255, 0.75));
 }
 .fx-chaos-vortex-hole {
   position: absolute;
@@ -6289,19 +6513,51 @@ body.dragging { cursor: grabbing; user-select: none; }
 /* =====================================================================
  * 2代 ice 寒冰 FX
  * ---------------------------------------------------------------------
- * 冰面偏转桥（fx-gen2 playIceShiftBridge）：起点→终点深蓝冰滑道（两条亮蓝滑轨线）。
+ * 冰面偏转桥（fx-gen2 playIceShiftBridge）：起点→终点深蓝冰滑道。
+ * 用户 2026-09-11：「冰面宽度不够，现在看起来和一根棍子一样」→ 22px → 58px 宽冰道：
+ * 加宽冰面 + 两道边缘滑轨（8px 亮蓝轨）+ 斜向霜纹 + 中心磨砂高光。
  * ===================================================================== */
 .fx-ice-bridge {
   position: fixed;
-  height: 22px;
-  margin-top: -11px;
-  border-radius: 11px;
-  background: linear-gradient(180deg, rgba(140, 220, 255, 0.55), rgba(30, 110, 200, 0.5) 55%, rgba(90, 190, 250, 0.55));
-  box-shadow: 0 0 14px rgba(80, 180, 255, 0.5), inset 0 0 6px rgba(220, 250, 255, 0.5);
+  height: 58px;
+  margin-top: -29px;
+  border-radius: 29px;
+  background:
+    linear-gradient(180deg, rgba(150, 225, 255, 0.6), rgba(30, 110, 200, 0.55) 55%, rgba(100, 195, 250, 0.6));
+  box-shadow:
+    0 0 24px rgba(80, 180, 255, 0.6),
+    inset 0 0 18px rgba(220, 250, 255, 0.5);
   transform-origin: left center;
   opacity: 0;
   pointer-events: none;
   will-change: opacity;
+  overflow: hidden;
+}
+/* 斜向霜纹（冰面质感，非纯色条） */
+.fx-ice-bridge::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    repeating-linear-gradient(
+      62deg,
+      rgba(240, 253, 255, 0.28) 0px,
+      rgba(240, 253, 255, 0.28) 6px,
+      rgba(255, 255, 255, 0) 6px,
+      rgba(255, 255, 255, 0) 18px
+    );
+}
+/* 中心磨砂高光（读作冰面反光带） */
+.fx-ice-bridge::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 12px;
+  margin-top: -6px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.05), rgba(235, 252, 255, 0.5), rgba(255, 255, 255, 0.05));
+  filter: blur(1px);
 }
 .fx-ice-bridge.in {
   opacity: 1;
@@ -6311,17 +6567,19 @@ body.dragging { cursor: grabbing; user-select: none; }
   opacity: 0;
   transition: opacity 0.5s ease-in;
 }
+/* 两道边缘滑轨（卡在轨间滑行） */
 .fx-ice-bridge-line {
   position: absolute;
-  left: 2%;
-  right: 2%;
-  height: 3px;
-  border-radius: 2px;
-  background: linear-gradient(90deg, rgba(230, 252, 255, 0.9), rgba(160, 230, 255, 0.7));
-  box-shadow: 0 0 8px rgba(200, 245, 255, 0.9);
+  left: 1%;
+  right: 1%;
+  height: 8px;
+  border-radius: 5px;
+  background: linear-gradient(90deg, rgba(235, 253, 255, 0.95), rgba(150, 225, 255, 0.8));
+  box-shadow: 0 0 12px rgba(200, 245, 255, 0.95), inset 0 0 4px rgba(255, 255, 255, 0.9);
+  z-index: 2;
 }
-.fx-ice-bridge-line.a { top: 4px; }
-.fx-ice-bridge-line.b { bottom: 4px; }
+.fx-ice-bridge-line.a { top: 3px; }
+.fx-ice-bridge-line.b { bottom: 3px; }
 /* 起/终点晶点标记 */
 .fx-ice-bridge-end {
   position: fixed;
@@ -6392,32 +6650,53 @@ body.dragging { cursor: grabbing; user-select: none; }
   100% { transform: translateY(46px) translateX(6px) scale(0.5); opacity: 0; }
 }
 
-/* ---- ice-4 底：卡框深蓝呼吸发光 + 卡周雪花 ---- */
+/* ---- ice-4 底：卡框深蓝呼吸发光 + 卡周雪花（用户 2026-09-11：边框与粒子需更明显） ---- */
 .fx-ice4-cardglow {
   position: fixed;
-  border: 2px solid rgba(120, 210, 255, 0.7);
-  border-radius: 8px;
-  box-shadow: 0 0 12px rgba(90, 180, 255, 0.6), inset 0 0 8px rgba(120, 210, 255, 0.3);
+  border: 3px solid rgba(150, 225, 255, 0.85);
+  border-radius: 10px;
+  box-shadow:
+    0 0 26px rgba(90, 190, 255, 0.85),
+    inset 0 0 16px rgba(150, 225, 255, 0.55);
   pointer-events: none;
   z-index: 94;
   animation: fx-ice4-breathe 2.4s ease-in-out infinite;
 }
-@keyframes fx-ice4-breathe {
-  0%, 100% { border-color: rgba(120, 210, 255, 0.55); box-shadow: 0 0 8px rgba(90, 180, 255, 0.45), inset 0 0 6px rgba(120, 210, 255, 0.25); }
-  50% { border-color: rgba(200, 245, 255, 0.9); box-shadow: 0 0 18px rgba(140, 220, 255, 0.8), inset 0 0 12px rgba(200, 245, 255, 0.4); }
+/* 外扩柔光晕（呼吸同步，让发光范围明显可见） */
+.fx-ice4-cardglow::after {
+  content: '';
+  position: absolute;
+  inset: -10px;
+  border-radius: 14px;
+  background: radial-gradient(ellipse at center, rgba(120, 215, 255, 0.22) 40%, transparent 72%);
+  animation: fx-ice4-halo 2.4s ease-in-out infinite;
 }
+@keyframes fx-ice4-halo {
+  0%, 100% { opacity: 0.45; transform: scale(0.97); }
+  50% { opacity: 1; transform: scale(1.06); }
+}
+@keyframes fx-ice4-breathe {
+  0%, 100% { border-color: rgba(130, 215, 255, 0.7); box-shadow: 0 0 18px rgba(90, 190, 255, 0.6), inset 0 0 10px rgba(130, 215, 255, 0.35); }
+  50% { border-color: rgba(225, 250, 255, 0.98); box-shadow: 0 0 32px rgba(150, 230, 255, 0.95), inset 0 0 20px rgba(225, 250, 255, 0.6); }
+}
+/* 卡周雪花（放大 + 更亮 + 7 片散布四边） */
 .fx-ice4-snow {
   position: absolute;
-  width: 4px;
-  height: 4px;
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
-  background: #eafcff;
+  background: radial-gradient(circle, #ffffff 0%, #d8f4ff 60%, rgba(180, 230, 255, 0.3) 100%);
+  box-shadow: 0 0 10px rgba(200, 245, 255, 1);
   animation: fx-ice4-snowfall 3s ease-in infinite;
   opacity: 0;
 }
-.fx-ice4-snow:nth-child(1) { left: -4px; top: 20%; animation-delay: 0s; }
-.fx-ice4-snow:nth-child(2) { right: -4px; top: 55%; animation-delay: -1.4s; }
-.fx-ice4-snow:nth-child(3) { left: 30%; bottom: -4px; animation-delay: -0.7s; }
+.fx-ice4-snow:nth-child(1) { left: -8px; top: 16%; animation-delay: 0s; }
+.fx-ice4-snow:nth-child(2) { right: -8px; top: 50%; animation-delay: -1.4s; }
+.fx-ice4-snow:nth-child(3) { left: 28%; bottom: -8px; animation-delay: -0.7s; }
+.fx-ice4-snow:nth-child(4) { left: 12%; top: -6px; animation-delay: -2.1s; }
+.fx-ice4-snow:nth-child(5) { right: 18%; top: 6%; animation-delay: -1s; }
+.fx-ice4-snow:nth-child(6) { right: 30%; bottom: -6px; animation-delay: -2.6s; }
+.fx-ice4-snow:nth-child(7) { left: 46%; top: 40%; animation-delay: -1.8s; }
 @keyframes fx-ice4-snowfall {
   0% { transform: translate(0, 0) scale(0.6); opacity: 0; }
   25% { opacity: 0.9; }
@@ -6552,19 +6831,24 @@ body.dragging { cursor: grabbing; user-select: none; }
   transition: opacity 0.6s ease-in;
 }
 
-/* ---- smoke-2 顶常驻：链路边框浓灰发光 + 触手雾（克苏鲁） ---- */
+/* ---- smoke-2 顶常驻：链路边框浓灰发光 + 触手雾（克苏鲁）
+ * 用户 2026-09-11：颜色太淡看不清 + 触手「并没有在协议边框四周出现，而是一起出现在一个
+ * 位置上了」+ 触手中心要加深黑。
+ * 修复：① 边框与雾色整体加深提亮；② 触手改为分居四条边（上/下/左/右）且各自朝向不同，
+ * 用 --rot 自定义属性承载基础角（避免被 sway 关键帧的 transform 整体覆盖 → 全部同向）；
+ * ③ 触手 ::after 加一条深黑中心（避免灰调发虚）。 ---- */
 .fx-smoke2-lineglow {
   position: fixed;
-  border: 2px solid rgba(130, 130, 145, 0.6);
+  border: 3px solid rgba(178, 178, 196, 0.92);
   border-radius: 10px;
-  box-shadow: 0 0 12px rgba(110, 110, 130, 0.55), inset 0 0 8px rgba(130, 130, 145, 0.3);
+  box-shadow: 0 0 22px rgba(120, 120, 142, 0.85), inset 0 0 16px rgba(150, 150, 172, 0.5);
   pointer-events: none;
   z-index: 93;
   animation: fx-smoke2-line-breathe 3s ease-in-out infinite;
 }
 @keyframes fx-smoke2-line-breathe {
-  0%, 100% { border-color: rgba(130, 130, 145, 0.5); box-shadow: 0 0 8px rgba(110, 110, 130, 0.4), inset 0 0 6px rgba(130, 130, 145, 0.24); }
-  50% { border-color: rgba(170, 170, 185, 0.85); box-shadow: 0 0 16px rgba(150, 150, 170, 0.7), inset 0 0 12px rgba(170, 170, 185, 0.4); }
+  0%, 100% { border-color: rgba(160, 160, 178, 0.8); box-shadow: 0 0 16px rgba(110, 110, 132, 0.7), inset 0 0 12px rgba(150, 150, 172, 0.42); }
+  50% { border-color: rgba(226, 226, 240, 0.98); box-shadow: 0 0 28px rgba(170, 170, 195, 0.95), inset 0 0 20px rgba(210, 210, 228, 0.6); }
 }
 .fx-smoke2-fog {
   position: absolute;
@@ -6575,41 +6859,55 @@ body.dragging { cursor: grabbing; user-select: none; }
 .fx-smoke2-fog-blob {
   position: absolute;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(60, 60, 70, 0.5) 0%, rgba(55, 55, 65, 0.3) 60%, transparent 100%);
+  background: radial-gradient(circle, rgba(28, 28, 36, 0.85) 0%, rgba(52, 52, 64, 0.6) 55%, transparent 100%);
   animation: fx-smoke2-fog-pulse 5s ease-in-out infinite;
 }
 .fx-smoke2-fog-blob:nth-child(1) { left: -12%; top: -8%; width: 55%; height: 65%; }
 .fx-smoke2-fog-blob:nth-child(2) { right: -10%; bottom: -6%; width: 60%; height: 60%; animation-delay: -2.4s; }
 .fx-smoke2-fog-blob:nth-child(3) { left: 30%; top: 40%; width: 45%; height: 45%; animation-delay: -4.1s; }
 @keyframes fx-smoke2-fog-pulse {
-  0%, 100% { opacity: 0.25; transform: scale(0.9); }
-  50% { opacity: 0.7; transform: scale(1.15); }
+  0%, 100% { opacity: 0.4; transform: scale(0.9); }
+  50% { opacity: 0.92; transform: scale(1.15); }
 }
-/* 触手：灰色渐细长条，缓慢扭动（rotate 摇摆）——模拟克苏鲁触手 */
+/* 触手：灰色渐细长条，缓慢扭动（rotate 摇摆）——四条边各一根，方向各异（--rot 承载基础角） */
 .fx-smoke2-tentacles {
   position: absolute;
   inset: 0;
-  overflow: hidden;
+  overflow: visible;
   border-radius: 10px;
 }
 .fx-smoke2-tentacle {
   position: absolute;
-  width: 12px;
-  height: 64px;
+  width: 14px;
+  height: 68px;
   border-radius: 50% 50% 40% 40%;
-  background: linear-gradient(180deg, rgba(80, 80, 92, 0.85), rgba(50, 50, 60, 0.6));
-  box-shadow: 0 0 8px rgba(40, 40, 50, 0.5);
+  background: linear-gradient(180deg, rgba(148, 148, 166, 0.95), rgba(74, 74, 88, 0.85));
+  box-shadow: 0 0 12px rgba(20, 20, 30, 0.75);
   transform-origin: 50% 100%;
-  opacity: 0.55;
+  opacity: 0.92;
   animation: fx-smoke2-tentacle-sway 3.8s ease-in-out infinite;
 }
-.fx-smoke2-tentacle.t1 { left: 6%; top: -20px; animation-delay: 0s; }
-.fx-smoke2-tentacle.t2 { left: 28%; top: -8px; height: 52px; animation-delay: -1.2s; }
-.fx-smoke2-tentacle.t3 { right: 24%; top: -14px; height: 58px; animation-delay: -2.3s; }
-.fx-smoke2-tentacle.t4 { right: 4%; top: -24px; height: 70px; animation-delay: -0.7s; }
+/* 触手深黑中心（用户要求：避免看起来太淡） */
+.fx-smoke2-tentacle::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 14%;
+  width: 5px;
+  height: 72%;
+  margin-left: -2.5px;
+  border-radius: 40%;
+  background: linear-gradient(180deg, rgba(4, 4, 8, 0.95), rgba(16, 16, 24, 0.6));
+}
+/* 上边两根（朝下伸出）、左右各一根（朝框内）、下边一根（朝上） */
+.fx-smoke2-tentacle.t1 { left: 8%; top: -10px; --rot: -10deg; }
+.fx-smoke2-tentacle.t2 { left: 34%; top: -12px; height: 76px; --rot: 14deg; animation-delay: -1.2s; }
+.fx-smoke2-tentacle.t3 { left: -6px; top: 34%; height: 62px; --rot: 104deg; animation-delay: -2.3s; }
+.fx-smoke2-tentacle.t4 { right: -6px; top: 26%; height: 66px; --rot: -104deg; animation-delay: -0.7s; }
+.fx-smoke2-tentacle.t5 { left: 62%; bottom: -10px; height: 60px; --rot: 186deg; animation-delay: -3s; }
 @keyframes fx-smoke2-tentacle-sway {
-  0%, 100% { transform: rotate(-16deg) scaleY(0.9); }
-  50% { transform: rotate(18deg) scaleY(1.06); }
+  0%, 100% { transform: rotate(calc(var(--rot, 0deg) - 14deg)) scaleY(0.9); }
+  50% { transform: rotate(calc(var(--rot, 0deg) + 16deg)) scaleY(1.06); }
 }
 
 /* =====================================================================
@@ -6635,19 +6933,20 @@ body.dragging { cursor: grabbing; user-select: none; }
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 70%;
-  height: 55%;
+  width: 76%;
+  height: 60%;
   transform: translate(-50%, -50%);
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(60, 60, 72, 0.6) 0%, rgba(55, 55, 68, 0.35) 60%, transparent 100%);
+  background: radial-gradient(circle, rgba(26, 26, 34, 0.88) 0%, rgba(48, 48, 60, 0.6) 58%, transparent 100%);
   filter: blur(5px);
   animation: compiled-smoke-fog-pulse 2s ease-in-out infinite;
 }
 @keyframes compiled-smoke-fog-pulse {
-  0%, 100% { transform: translate(-50%, -50%) scale(0.92); opacity: 0.7; }
+  0%, 100% { transform: translate(-50%, -50%) scale(0.92); opacity: 0.8; }
   50% { transform: translate(-50%, -50%) scale(1.1); opacity: 1; }
 }
-/* 触手（5 根均匀径向伸出）：底端在中心，svg/条旋转 + 缓慢扭动 */
+/* 触手：底端在指定锚点，方向由 --rot 决定（关键帧用 calc 叠加摆动角——不能直接写 rotate，
+   否则会整体覆盖 JS 设定的方向 → 所有触手挤在同一位置，用户 2026-09-11 报告的问题） */
 .compiled-smoke-tents {
   position: absolute;
   left: 50%;
@@ -6657,24 +6956,76 @@ body.dragging { cursor: grabbing; user-select: none; }
 }
 .compiled-smoke-tent {
   position: absolute;
-  width: 14px;
-  height: 84px;
-  left: -7px;
-  top: -10px;
+  width: 15px;
+  height: 88px;
+  left: -7.5px;
+  top: -12px;
   border-radius: 50% 50% 40% 40%;
-  background: linear-gradient(180deg, rgba(84, 84, 98, 0.9), rgba(52, 52, 64, 0.65));
-  box-shadow: 0 0 10px rgba(30, 30, 42, 0.6);
+  background: linear-gradient(180deg, rgba(150, 150, 168, 0.95), rgba(72, 72, 86, 0.85));
+  box-shadow: 0 0 12px rgba(16, 16, 26, 0.8);
   transform-origin: 50% 100%;
-  opacity: 0.65;
+  opacity: 0.95;
   animation: compiled-smoke-tent-sway 2.4s ease-in-out infinite alternate;
 }
-.compiled-smoke-tent:nth-child(2) { animation-delay: -0.5s; }
-.compiled-smoke-tent:nth-child(3) { animation-delay: -1s; }
-.compiled-smoke-tent:nth-child(4) { animation-delay: -1.5s; }
-.compiled-smoke-tent:nth-child(5) { animation-delay: -2s; }
+/* 触手深黑中心（用户 2026-09-11：加黑色中心，避免看起来淡） */
+.compiled-smoke-tent::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 14%;
+  width: 5px;
+  height: 72%;
+  margin-left: -2.5px;
+  border-radius: 40%;
+  background: linear-gradient(180deg, rgba(4, 4, 8, 0.95), rgba(16, 16, 24, 0.6));
+}
+.compiled-smoke-tent:nth-child(2) { animation-delay: -0.3s; }
+.compiled-smoke-tent:nth-child(3) { animation-delay: -0.6s; }
+.compiled-smoke-tent:nth-child(4) { animation-delay: -0.9s; }
+.compiled-smoke-tent:nth-child(5) { animation-delay: -1.2s; }
+.compiled-smoke-tent:nth-child(6) { animation-delay: -1.5s; }
+.compiled-smoke-tent:nth-child(7) { animation-delay: -1.8s; }
+.compiled-smoke-tent:nth-child(8) { animation-delay: -2.1s; }
 @keyframes compiled-smoke-tent-sway {
-  0% { transform: rotate(-10deg) scaleY(0.88); }
-  100% { transform: rotate(14deg) scaleY(1.06); }
+  0% { transform: rotate(calc(var(--rot, 0deg) - 10deg)) scaleY(0.88); }
+  100% { transform: rotate(calc(var(--rot, 0deg) + 14deg)) scaleY(1.06); }
+}
+/* 边框式（用户 2026-09-11）：四角浓雾团 + 各自触手朝框内扭动 */
+.compiled-smoke-ring {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+.compiled-smoke-cell {
+  position: absolute;
+  width: 46%;
+  height: 46%;
+}
+.compiled-smoke-cell.tl { left: -6%; top: -8%; }
+.compiled-smoke-cell.tr { right: -6%; top: -8%; }
+.compiled-smoke-cell.bl { left: -6%; bottom: -8%; }
+.compiled-smoke-cell.br { right: -6%; bottom: -8%; }
+.compiled-smoke-cell-fog {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(24, 24, 32, 0.9) 0%, rgba(52, 52, 66, 0.62) 55%, transparent 100%);
+  filter: blur(4px);
+  animation: compiled-smoke-cell-pulse 2.2s ease-in-out infinite;
+}
+@keyframes compiled-smoke-cell-pulse {
+  0%, 100% { opacity: 0.7; transform: scale(0.88); }
+  50% { opacity: 1; transform: scale(1.12); }
+}
+/* 雾团内触手：锚在角上（底端朝角），尺寸略小 */
+.compiled-smoke-cell .compiled-smoke-tent {
+  left: 50%;
+  top: 50%;
+  width: 13px;
+  height: 58px;
+  margin-left: -6.5px;
+  margin-top: -58px;
 }
 
 /* =====================================================================
@@ -6943,31 +7294,37 @@ body.dragging { cursor: grabbing; user-select: none; }
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 62%;
-  height: 50%;
+  width: 78%;
+  height: 64%;
   transform: translate(-50%, -50%);
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(20, 90, 45, 0.55) 0%, rgba(25, 120, 55, 0.32) 58%, transparent 100%);
+  background: radial-gradient(circle, rgba(10, 72, 34, 0.9) 0%, rgba(18, 118, 52, 0.62) 55%, rgba(20, 90, 45, 0.2) 78%, transparent 100%);
   filter: blur(4px);
   animation: compiled-corruption-fog-pulse 2s ease-in-out infinite;
 }
 @keyframes compiled-corruption-fog-pulse {
-  0%, 100% { transform: translate(-50%, -50%) scale(0.94); opacity: 0.75; }
+  0%, 100% { transform: translate(-50%, -50%) scale(0.94); opacity: 0.85; }
   50% { transform: translate(-50%, -50%) scale(1.08); opacity: 1; }
 }
+/* 暗紫骷髅虚影（用户 2026-09-11：颜色太淡太小「看都看不清是什么」→ 30px → 76px、加深提亮） */
 .compiled-corruption-skull {
   position: absolute;
   left: 50%;
   top: 50%;
   transform: translate(-50%, -58%);
-  font-size: 30px;
-  color: rgba(160, 100, 220, 0.85);
-  filter: drop-shadow(0 0 8px rgba(150, 80, 220, 0.6));
+  font-size: 76px;
+  line-height: 1;
+  color: rgba(196, 130, 255, 0.96);
+  text-shadow:
+    0 0 14px rgba(150, 70, 235, 0.95),
+    0 0 34px rgba(110, 40, 200, 0.85),
+    0 0 60px rgba(60, 180, 110, 0.55);
+  filter: drop-shadow(0 0 16px rgba(150, 80, 230, 0.9));
   animation: compiled-corruption-skull-float 2s ease-in-out infinite;
 }
 @keyframes compiled-corruption-skull-float {
-  0%, 100% { transform: translate(-50%, -58%); }
-  50% { transform: translate(-50%, -64%); }
+  0%, 100% { transform: translate(-50%, -58%) scale(0.96); }
+  50% { transform: translate(-50%, -64%) scale(1.06); }
 }
 /* 召回墨绿虚影 */
 .fx-corrupt-return-ghost {
