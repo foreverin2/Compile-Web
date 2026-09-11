@@ -3990,14 +3990,24 @@ body.dragging { cursor: grabbing; user-select: none; }
     box-shadow: 0 0 18px 5px rgba(217, 107, 0, 0.85), 0 0 42px 14px rgba(217, 107, 0, 0.42), inset 0 0 14px rgba(217, 107, 0, 0.34);
   }
 }
-/* 2代 多元 diversity（彩色 5 色交替）：红/黄/青/蓝/紫 逐色循环 */
+/* 2代 多元 diversity（彩色交替）：颜色由 JS 定时写入 --dvc/--dvs（render.ts applyDiversityColor
+   —— 关键帧里直接引用 var() 在 Chromium 下会随变量反复改写而失效，故改为 JS 驱动切换）；
+   关键帧只负责辉光呼吸，颜色保持当前色不变 → 5 色切换恒定有效。 */
 @keyframes compiled-diversity-breathe {
-  0% { border-color: var(--dv1, #ff5a6e); box-shadow: 0 0 18px 5px var(--dvs1, rgba(255, 90, 110, 0.85)), 0 0 42px 14px var(--dvs1, rgba(255, 90, 110, 0.4)), inset 0 0 14px var(--dvs1, rgba(255, 90, 110, 0.34)); }
-  20% { border-color: var(--dv2, #ffd24d); box-shadow: 0 0 18px 5px var(--dvs2, rgba(255, 210, 77, 0.85)), 0 0 42px 14px var(--dvs2, rgba(255, 210, 77, 0.4)), inset 0 0 14px var(--dvs2, rgba(255, 210, 77, 0.34)); }
-  40% { border-color: var(--dv3, #4ee0c0); box-shadow: 0 0 18px 5px var(--dvs3, rgba(78, 224, 192, 0.85)), 0 0 42px 14px var(--dvs3, rgba(78, 224, 192, 0.4)), inset 0 0 14px var(--dvs3, rgba(78, 224, 192, 0.34)); }
-  60% { border-color: var(--dv4, #5aa0ff); box-shadow: 0 0 18px 5px var(--dvs4, rgba(90, 160, 255, 0.85)), 0 0 42px 14px var(--dvs4, rgba(90, 160, 255, 0.4)), inset 0 0 14px var(--dvs4, rgba(90, 160, 255, 0.34)); }
-  80% { border-color: var(--dv5, #c07bff); box-shadow: 0 0 18px 5px var(--dvs5, rgba(192, 123, 255, 0.85)), 0 0 42px 14px var(--dvs5, rgba(192, 123, 255, 0.4)), inset 0 0 14px var(--dvs5, rgba(192, 123, 255, 0.34)); }
-  100% { border-color: var(--dv1, #ff5a6e); box-shadow: 0 0 18px 5px var(--dvs1, rgba(255, 90, 110, 0.85)), 0 0 42px 14px var(--dvs1, rgba(255, 90, 110, 0.4)), inset 0 0 14px var(--dvs1, rgba(255, 90, 110, 0.34)); }
+  0%, 100% {
+    border-color: var(--dvc, #c07bff);
+    box-shadow:
+      0 0 12px 3px var(--dvs, rgba(192, 123, 255, 0.85)),
+      0 0 28px 9px var(--dvs2, rgba(192, 123, 255, 0.4)),
+      inset 0 0 10px var(--dvs3, rgba(192, 123, 255, 0.32));
+  }
+  50% {
+    border-color: var(--dvc, #c07bff);
+    box-shadow:
+      0 0 20px 6px var(--dvs, rgba(192, 123, 255, 0.85)),
+      0 0 46px 16px var(--dvs2, rgba(192, 123, 255, 0.4)),
+      inset 0 0 16px var(--dvs3, rgba(192, 123, 255, 0.32));
+  }
 }
 @keyframes compiled-diversity-static {
   0%, 19% { border-color: #ff5a6e; } 20%, 39% { border-color: #ffd24d; } 40%, 59% { border-color: #4ee0c0; } 60%, 79% { border-color: #5aa0ff; } 80%, 100% { border-color: #c07bff; }
@@ -4135,7 +4145,7 @@ body.dragging { cursor: grabbing; user-select: none; }
   }
 }
 /* 2代 明镜 mirror（银白）：亮银 #f2f6ff ↔ 银灰 #b9c2d4 呼吸（无金属光泽——柔和漫射） */
-.compiled-ring-diversity { animation: compiled-diversity-breathe 3.6s linear infinite; }
+.compiled-ring-diversity { animation: compiled-diversity-breathe 2.4s ease-in-out infinite; }
 .compiled-ring-unity { animation: compiled-unity-breathe 2.2s ease-in-out infinite; }
 .compiled-ring-assimilation { animation: compiled-assimilation-breathe 2.6s ease-in-out infinite; }
 .compiled-ring-time { animation: compiled-time-breathe 3s ease-in-out infinite; }
@@ -7446,7 +7456,10 @@ body.dragging { cursor: grabbing; user-select: none; }
   50% { opacity: 1; }
 }
 
-/* ---- 常驻双剑（war-0~3 被动在场） ---- */
+/* ---- 常驻双剑（war-0~3 被动在场）----
+ * 用户 2026-09-11：「铁剑的形状和颜色太丑了，整的跟个蜡烛一样」→ 重做：暗红铁剑分部件
+ * （锥形剑尖 + 血槽 + 磨光边 + 十字护手 + 缠绕握柄 + 圆剑柄头）；部件按 em 缩放，
+ * 卡牌常驻 FX（font-size 10px）与已编译层（16px）共用同一套造型。 */
 .fx-war-blade {
   position: fixed;
   pointer-events: none;
@@ -7454,32 +7467,81 @@ body.dragging { cursor: grabbing; user-select: none; }
 }
 .fx-war-sword {
   position: absolute;
-  width: 96px;
-  height: 14px;
+  font-size: 10px;
+  width: 11.4em;
+  height: 3em;
   left: 50%;
   top: 50%;
-  margin-left: -48px;
-  margin-top: -7px;
+  margin-left: -5.7em;
+  margin-top: -1.5em;
   transform-origin: 50% 50%;
-  filter: drop-shadow(0 0 6px rgba(255, 60, 10, 0.6));
+  filter: drop-shadow(0 0 0.6em rgba(255, 60, 10, 0.75));
 }
-.fx-war-sword::before {
-  content: '';
+.compiled-war-sword { font-size: 16px; }
+/* 剑身：暗红铁（上缘磨光 + 下缘暗沉），剑尖朝右 */
+.war-sword-blade {
   position: absolute;
-  inset: 0;
-  background: linear-gradient(90deg, transparent 0%, #8a6a4a 12%, #e0c8a0 30%, #d8b890 55%, #8a6a4a 88%, transparent 100%);
-  clip-path: polygon(0 38%, 6% 0, 88% 0, 100% 50%, 88% 100%, 6% 100%, 0 62%, 14% 50%);
-  box-shadow: 0 0 8px rgba(255, 90, 30, 0.5);
+  left: 3em;
+  top: 0.85em;
+  width: 8.4em;
+  height: 1.3em;
+  background: linear-gradient(180deg, #d9b4b0 0%, #b25a58 16%, #8a3238 45%, #521a20 78%, #2a0d10 100%);
+  clip-path: polygon(0 6%, 84% 0, 100% 50%, 84% 100%, 0 94%);
+  box-shadow: 0 0 0.5em rgba(255, 70, 30, 0.55);
+  overflow: hidden;
 }
-.fx-war-sword::after {
-  content: '';
+/* 中央血槽（暗线，读作剑身凹槽） */
+.war-sword-fuller {
   position: absolute;
-  right: -10px;
-  top: 2px;
-  width: 12px;
-  height: 10px;
-  background: radial-gradient(circle at 50% 50%, #ffd27a, #8a5a20);
-  clip-path: polygon(0 10%, 100% 0, 100% 100%, 0 90%, 20% 50%);
+  left: 2%;
+  top: 40%;
+  width: 78%;
+  height: 22%;
+  background: linear-gradient(180deg, rgba(12, 4, 6, 0.75), rgba(40, 14, 16, 0.45));
+  border-radius: 0.2em;
+}
+/* 十字护手（竖条，两端外张） */
+.war-sword-guard {
+  position: absolute;
+  left: 2.35em;
+  top: 0.1em;
+  width: 0.85em;
+  height: 2.8em;
+  background: linear-gradient(90deg, #240c0a 0%, #6d2f22 30%, #b8724a 50%, #6d2f22 70%, #240c0a 100%);
+  border-radius: 0.25em;
+  box-shadow: 0 0 0.4em rgba(255, 90, 40, 0.5);
+}
+.war-sword-guard-tip {
+  position: absolute;
+  left: -0.25em;
+  width: 1.35em;
+  height: 0.55em;
+  background: linear-gradient(90deg, #240c0a, #8a4430, #240c0a);
+  border-radius: 0.3em;
+}
+.war-sword-guard-tip.t { top: -0.2em; transform: rotate(-12deg); }
+.war-sword-guard-tip.b { bottom: -0.2em; transform: rotate(12deg); }
+/* 缠绕握柄 */
+.war-sword-grip {
+  position: absolute;
+  left: 0.75em;
+  top: 1.12em;
+  width: 1.65em;
+  height: 0.76em;
+  border-radius: 0.18em;
+  background: repeating-linear-gradient(105deg, #2b120e 0 0.2em, #58281c 0.2em 0.4em);
+  box-shadow: inset 0 0 0.2em rgba(0, 0, 0, 0.7);
+}
+/* 圆剑柄头 */
+.war-sword-pommel {
+  position: absolute;
+  left: 0.1em;
+  top: 0.95em;
+  width: 0.8em;
+  height: 1.1em;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 32%, #e0a878 0%, #8a4a2c 55%, #3a140c 100%);
+  box-shadow: 0 0 0.4em rgba(255, 120, 60, 0.55);
 }
 .fx-war-sword.l {
   transform: rotate(28deg);
@@ -7546,21 +7608,16 @@ body.dragging { cursor: grabbing; user-select: none; }
   opacity: 0;
   transition: opacity 0.6s ease-in;
 }
+/* 已编译层铁剑：复用 .war-sword-* 整套部件（font-size 16px → 约 1.6 倍大），仅定位 */
 .compiled-war-sword {
   position: absolute;
-  left: -64px;
-  top: -8px;
-  width: 128px;
-  height: 16px;
-  filter: drop-shadow(0 0 8px rgba(255, 60, 10, 0.7));
-}
-.compiled-war-sword::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(90deg, #6b4a2a 0%, #c8a878 25%, #e8d0a8 50%, #b89068 80%, #5a3a20 100%);
-  clip-path: polygon(0 40%, 4% 2%, 90% 2%, 100% 50%, 90% 98%, 4% 98%, 0 60%, 12% 50%);
-  box-shadow: 0 0 10px rgba(255, 90, 30, 0.6);
+  font-size: 16px;
+  left: -5.7em;
+  top: -1.5em;
+  width: 11.4em;
+  height: 3em;
+  transform-origin: 50% 50%;
+  filter: drop-shadow(0 0 0.7em rgba(255, 60, 10, 0.8));
 }
 .compiled-war-sword.l {
   transform: rotate(38deg);
@@ -7601,11 +7658,13 @@ body.dragging { cursor: grabbing; user-select: none; }
   15% { opacity: 1; }
   100% { transform: translate(calc(30px - 60px * var(--fx-sx, 0)), calc(-40px + 80px * var(--fx-sy, 0))) scale(0.15); opacity: 0; }
 }
-/* 战旗：残破赤红旗面 + 硝烟 */
+/* 战旗：残破赤红旗面 + 硝烟
+ * 用户 2026-09-11：「战旗虚影的位置和铁剑重叠了，我希望位置要插在那个上面才行」
+ * → 锚点由 46% 上移到 26%（旗面整体位于双剑交叉点之上，不再与剑重叠）。 */
 .compiled-war-flag2 {
   position: absolute;
   left: 50%;
-  top: 46%;
+  top: 26%;
   width: 0;
   height: 0;
   opacity: 0;
@@ -7651,11 +7710,12 @@ body.dragging { cursor: grabbing; user-select: none; }
 
 /* =====================================================================
  * 2代 courage 勇气 FX（fx-gen2）：湖中剑 / 金逆焰 / 剑影 / 圣光 / 火环
+ * 湖中剑（用户 2026-09-11：「和根棍子一样，重新优化」）：分部件写实造型——剑身（上宽下尖 +
+ * 血槽 + 亮边磨光）、剑格上肩、宽十字护手（两端上翘）、缠绕握柄、圆剑柄头。
+ * 所有部件按 em 定尺，容器 font-size = size/12 由 JS 设置 → 触发 FX 与已编译层共用同一套造型。
  * ===================================================================== */
 .fx-courage-sword {
   position: fixed;
-  width: 84px;
-  height: 84px;
   pointer-events: none;
   opacity: 0;
   will-change: transform, opacity;
@@ -7678,67 +7738,105 @@ body.dragging { cursor: grabbing; user-select: none; }
   0% { transform: rotate(35deg) translateY(-34px); opacity: 0; }
   100% { transform: rotate(35deg) translateY(0); opacity: 1; }
 }
-/* 剑身 */
+/* 剑身：上宽下尖（剑尖朝下），两侧边缘磨光 + 中央血槽 */
 .fx-courage-sword-blade {
   position: absolute;
-  left: 38px;
-  top: 4px;
-  width: 8px;
-  height: 56px;
-  background: linear-gradient(180deg, #fff6d8 0%, #f5c842 40%, #d99a1e 100%);
-  clip-path: polygon(0 0, 100% 0, 100% 88%, 50% 100%, 0 88%);
-  box-shadow: 0 0 8px rgba(255, 210, 90, 0.9);
-  transform-origin: 50% 100%;
+  left: calc(50% - 1.5em);
+  top: 0.2em;
+  width: 3em;
+  height: 7.6em;
+  background: linear-gradient(90deg, #9c6f12 0%, #f2c94c 14%, #fff8dc 42%, #ffe27a 62%, #d9a520 86%, #8a5f0c 100%);
+  clip-path: polygon(0 0, 100% 0, 100% 84%, 50% 100%, 0 84%);
+  box-shadow: 0 0 1.1em rgba(255, 214, 100, 0.9);
+  overflow: hidden;
 }
-.fx-courage-sword-blade::after {
-  content: '';
+/* 血槽（中央凹槽，深一档的金） */
+.fx-courage-sword-fuller {
   position: absolute;
-  inset: 0;
-  background: linear-gradient(90deg, transparent 30%, rgba(255, 255, 255, 0.85) 50%, transparent 70%);
-  background-size: 200% 100%;
-  animation: fx-courage-blade-sheen 1.4s linear infinite;
+  left: 38%;
+  top: 5%;
+  width: 24%;
+  height: 72%;
+  border-radius: 0.2em;
+  background: linear-gradient(180deg, rgba(120, 78, 6, 0.6), rgba(190, 140, 30, 0.35));
 }
-@keyframes fx-courage-blade-sheen {
-  0% { background-position: -60px 0; }
-  100% { background-position: 60px 0; }
+/* 剑格上肩（护手与剑身之间的收窄段） */
+.fx-courage-sword-ricasso {
+  position: absolute;
+  left: calc(50% - 1.9em);
+  top: 7.5em;
+  width: 3.8em;
+  height: 1.1em;
+  background: linear-gradient(180deg, #ffe9a8 0%, #e0ac36 55%, #96690f 100%);
+  clip-path: polygon(0 0, 100% 0, 88% 100%, 12% 100%);
 }
-/* 剑柄护手（十字） */
+/* 宽十字护手（两端上翘的鎏金条） */
 .fx-courage-sword-guard {
   position: absolute;
-  left: 30px;
-  top: 54px;
-  width: 24px;
-  height: 7px;
-  background: linear-gradient(180deg, #f0c860, #a8741a);
-  border-radius: 3px;
-  box-shadow: 0 0 6px rgba(255, 210, 90, 0.8);
+  left: calc(50% - 3.4em);
+  top: 8.4em;
+  width: 6.8em;
+  height: 0.95em;
+  background: linear-gradient(180deg, #fff2c4 0%, #edc257 40%, #a9761a 100%);
+  border-radius: 0.45em;
+  box-shadow: 0 0 0.5em rgba(255, 210, 90, 0.85), inset 0 -0.15em 0.25em rgba(90, 55, 0, 0.45);
 }
-/* 剑柄 */
+.fx-courage-sword-guard-tip {
+  position: absolute;
+  top: -0.3em;
+  width: 0.8em;
+  height: 1.5em;
+  background: linear-gradient(180deg, #fff2c4, #c99524);
+  border-radius: 0.4em;
+}
+.fx-courage-sword-guard-tip.l { left: -0.2em; transform: rotate(-16deg); }
+.fx-courage-sword-guard-tip.r { right: -0.2em; transform: rotate(16deg); }
+/* 缠绕握柄（皮革缠绳纹 + 金环） */
 .fx-courage-sword-grip {
   position: absolute;
-  left: 39px;
-  top: 60px;
-  width: 6px;
-  height: 18px;
-  background: linear-gradient(180deg, #8a5a20, #5a3810);
-  border-radius: 2px;
+  left: calc(50% - 0.62em);
+  top: 9.3em;
+  width: 1.24em;
+  height: 2.3em;
+  border-radius: 0.25em;
+  background:
+    repeating-linear-gradient(115deg, #6b3f10 0 0.22em, #a3701f 0.22em 0.44em);
+  box-shadow: inset 0 0 0.2em rgba(0, 0, 0, 0.6), 0 0 0.3em rgba(255, 200, 80, 0.5);
 }
+/* 圆剑柄头（鎏金球） */
+.fx-courage-sword-pommel {
+  position: absolute;
+  left: calc(50% - 0.75em);
+  top: 11.4em;
+  width: 1.5em;
+  height: 1.5em;
+  border-radius: 50%;
+  background: radial-gradient(circle at 34% 30%, #fff6d0 0%, #e8bb44 45%, #8a5f0c 100%);
+  box-shadow: 0 0 1em rgba(255, 210, 90, 0.9);
+}
+/* 湖中剑金色虚影（勇气3 偏转：剑尖锚在起点、剑身指向目标链路；半透明金色） */
+.fx-courage-sword-shadow {
+  opacity: 0;
+  filter: drop-shadow(0 0 1.2em rgba(255, 218, 120, 0.95)) saturate(1.2) brightness(1.1);
+}
+.fx-courage-sword-shadow.in { opacity: 0.9; transition: opacity 0.22s ease-out; }
+.fx-courage-sword-shadow.out { opacity: 0; transition: opacity 0.4s ease-in; }
 /* 金色光羽（小星点绕剑飘落） */
 .fx-courage-feather {
   position: absolute;
-  width: 4px;
-  height: 4px;
+  width: 0.5em;
+  height: 0.5em;
   border-radius: 50%;
   background: radial-gradient(circle, #fff3c0 0%, #ffd24d 70%, transparent 100%);
   animation: fx-courage-feather-fall 1.6s ease-in infinite;
   opacity: 0;
 }
-.fx-courage-feather:nth-child(4) { left: 20px; top: 10px; }
-.fx-courage-feather:nth-child(5) { left: 62px; top: 18px; animation-delay: -0.5s; }
-.fx-courage-feather:nth-child(6) { left: 30px; top: 40px; animation-delay: -0.9s; }
-.fx-courage-feather:nth-child(7) { left: 70px; top: 46px; animation-delay: -1.2s; }
-.fx-courage-feather:nth-child(8) { left: 12px; top: 62px; animation-delay: -0.3s; }
-.fx-courage-feather:nth-child(9) { left: 56px; top: 66px; animation-delay: -0.7s; }
+.fx-courage-feather:nth-child(6) { left: 24%; top: 12%; }
+.fx-courage-feather:nth-child(7) { left: 74%; top: 20%; animation-delay: -0.5s; }
+.fx-courage-feather:nth-child(8) { left: 34%; top: 44%; animation-delay: -0.9s; }
+.fx-courage-feather:nth-child(9) { left: 82%; top: 52%; animation-delay: -1.2s; }
+.fx-courage-feather:nth-child(10) { left: 14%; top: 68%; animation-delay: -0.3s; }
+.fx-courage-feather:nth-child(11) { left: 66%; top: 74%; animation-delay: -0.7s; }
 @keyframes fx-courage-feather-fall {
   0% { transform: translate(0, 0) scale(0.6); opacity: 0; }
   30% { opacity: 1; }
@@ -7881,64 +7979,23 @@ body.dragging { cursor: grabbing; user-select: none; }
   opacity: 0;
   transition: opacity 0.7s ease-in;
 }
+/* 已编译层湖中剑：复用 fx-gen2 buildLakeSword 的整套部件（按 em 缩放），仅覆写定位/动画 */
 .compiled-courage-sword {
   position: absolute;
   left: 50%;
   top: 34%;
-  width: 0;
-  height: 0;
   opacity: 0;
   animation: compiled-courage-host-glow 0.2s ease-out forwards;
 }
 .compiled-courage-host.in .compiled-courage-sword {
   opacity: 1;
-  animation: compiled-courage-sword-drop 0.5s cubic-bezier(0.2, 0.9, 0.3, 1) forwards;
+  animation: compiled-courage-sword-drop 0.55s cubic-bezier(0.2, 0.9, 0.3, 1) forwards;
 }
+/* 斜斜插下：落定后保持 -14° 倾斜（剑尖为旋转支点，由 JS 设 transform-origin） */
 @keyframes compiled-courage-sword-drop {
-  0% { transform: translateY(-50px) rotate(-14deg); opacity: 0; }
-  60% { transform: translateY(6px) rotate(4deg); opacity: 1; }
-  100% { transform: translateY(0) rotate(0deg); opacity: 1; }
-}
-.compiled-courage-sword-blade {
-  position: absolute;
-  left: -4px;
-  top: -56px;
-  width: 8px;
-  height: 62px;
-  background: linear-gradient(180deg, #fff6d8 0%, #f5c842 45%, #d99a1e 100%);
-  clip-path: polygon(0 0, 100% 0, 100% 90%, 50% 100%, 0 90%);
-  box-shadow: 0 0 10px rgba(255, 210, 90, 0.9);
-}
-.compiled-courage-sword-blade::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(90deg, transparent 30%, rgba(255, 255, 255, 0.8) 50%, transparent 70%);
-  background-size: 200% 100%;
-  animation: compiled-courage-sheen 1.3s linear infinite;
-}
-@keyframes compiled-courage-sheen {
-  0% { background-position: -60px 0; }
-  100% { background-position: 60px 0; }
-}
-.compiled-courage-sword-guard {
-  position: absolute;
-  left: -12px;
-  top: 2px;
-  width: 24px;
-  height: 7px;
-  background: linear-gradient(180deg, #f0c860, #a8741a);
-  border-radius: 3px;
-  box-shadow: 0 0 6px rgba(255, 210, 90, 0.8);
-}
-.compiled-courage-sword-grip {
-  position: absolute;
-  left: -3px;
-  top: 8px;
-  width: 6px;
-  height: 20px;
-  background: linear-gradient(180deg, #8a5a20, #5a3810);
-  border-radius: 2px;
+  0% { transform: translateY(-56px) rotate(-26deg); opacity: 0; }
+  60% { transform: translateY(6px) rotate(-8deg); opacity: 1; }
+  100% { transform: translateY(0) rotate(-14deg); opacity: 1; }
 }
 /* 剑尖插入后金色波纹扩散 */
 .compiled-courage-ripple {
@@ -8433,6 +8490,252 @@ body.dragging { cursor: grabbing; user-select: none; }
   100% { transform: translate(var(--fx-dvx, 30px), var(--fx-dvy, -20px)) scale(0.2); opacity: 0; }
 }
 
+/* ---- 多元1 偏转：被偏转卡化为彩色光球滑向目标（用户 2026-09-11 补做） ---- */
+.fx-diversity-orb {
+  position: fixed;
+  border-radius: 50%;
+  pointer-events: none;
+  opacity: 0.55;
+  background:
+    radial-gradient(circle at 42% 38%, rgba(255, 255, 255, 0.9) 0%, rgba(255, 255, 255, 0) 40%),
+    conic-gradient(from 0deg, #ff5a6e, #ffd24d, #4ee0c0, #5aa0ff, #c07bff, #ff5a6e);
+  filter: blur(1px) drop-shadow(0 0 18px rgba(255, 255, 255, 0.5));
+  will-change: transform, opacity;
+  animation: fx-diversity-orb-spin 1.4s linear infinite;
+}
+.fx-diversity-orb.out { opacity: 0; transition: opacity 0.5s ease-out; }
+@keyframes fx-diversity-orb-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ---- 多元1 抽牌：每张被抽卡带一圈「该卡所属协议主题色」光晕（用户 2026-09-11 补做） ---- */
+.fx-diversity-halo {
+  position: fixed;
+  width: 130px;
+  height: 178.8px;
+  border: 3px solid var(--dc, #c07bff);
+  border-radius: 10px;
+  box-shadow: 0 0 18px var(--dcg, rgba(192, 123, 255, 0.8)), inset 0 0 14px var(--dcg, rgba(192, 123, 255, 0.5));
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.25s ease-out;
+}
+.fx-diversity-halo.in { opacity: 1; }
+
+/* ---- 多元4 翻转：七彩光环套住 → 缓缓收缩 → 消散（用户 2026-09-11 补做） ---- */
+.fx-diversity-rainbow-ring {
+  position: fixed;
+  border: 4px solid transparent;
+  border-radius: 14px;
+  pointer-events: none;
+  opacity: 0;
+  background:
+    linear-gradient(#141428, #141428) padding-box,
+    conic-gradient(from 0deg, #ff5a6e, #ffd24d, #4ee0c0, #5aa0ff, #c07bff, #ff5a6e) border-box;
+  box-shadow: 0 0 20px rgba(255, 255, 255, 0.35);
+}
+.fx-diversity-rainbow-ring.in {
+  opacity: 1;
+  animation: fx-diversity-rainbow-shrink 0.62s cubic-bezier(0.45, 0.15, 0.7, 0.5) forwards;
+}
+@keyframes fx-diversity-rainbow-shrink {
+  0% { transform: scale(1.5); opacity: 0.9; }
+  55% { transform: scale(1.04); opacity: 1; }
+  100% { transform: scale(1); opacity: 0.85; }
+}
+
+/* =====================================================================
+ * 2代 diversity-3 多元顶常驻（render.ts syncDiversity3Fx 驱动）：
+ * 链路内每张非多元正面卡亮起其协议主题色微光 + 该线能量槽彩色流光
+ * ===================================================================== */
+.fx-div3-cardglow {
+  position: fixed;
+  border: 2px solid var(--dc, #c07bff);
+  border-radius: 9px;
+  box-shadow: 0 0 14px var(--dcg, rgba(192, 123, 255, 0.6)), inset 0 0 10px var(--dcg, rgba(192, 123, 255, 0.4));
+  pointer-events: none;
+  z-index: 93;
+  animation: fx-div3-breathe 2.6s ease-in-out infinite;
+}
+@keyframes fx-div3-breathe {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+.fx-div3-lineflow {
+  position: fixed;
+  border-radius: 8px;
+  pointer-events: none;
+  z-index: 93;
+  opacity: 0.85;
+  background: linear-gradient(
+    115deg,
+    rgba(255, 90, 110, 0.4), rgba(255, 210, 77, 0.4), rgba(78, 224, 192, 0.4),
+    rgba(90, 160, 255, 0.4), rgba(192, 123, 255, 0.4), rgba(255, 90, 110, 0.4)
+  );
+  background-size: 300% 100%;
+  box-shadow: inset 0 0 12px rgba(255, 255, 255, 0.25);
+  animation: fx-div3-flow 4.6s linear infinite;
+}
+@keyframes fx-div3-flow {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 300% 50%; }
+}
+
+/* =====================================================================
+ * 2代 assimilation 同化：卡牌触发特效（fx-gen2，用户 2026-09-11 补做）
+ * 青碧涟漪环 / 青碧光点（弧线飞入） / 落手闪环 / 协议光泽 / 跨库光带
+ * ===================================================================== */
+.fx-assim-ring {
+  position: fixed;
+  border: 3px solid rgba(110, 235, 205, 0.85);
+  border-radius: 12px;
+  pointer-events: none;
+  opacity: 0;
+  box-shadow: 0 0 16px rgba(46, 201, 168, 0.7);
+}
+.fx-assim-ring.in {
+  opacity: 1;
+  animation: fx-assim-ring-expand 0.85s cubic-bezier(0.2, 0.7, 0.4, 1) forwards;
+}
+@keyframes fx-assim-ring-expand {
+  0% { transform: scale(0.82); opacity: 0.95; }
+  100% { transform: scale(1.28); opacity: 0; }
+}
+.fx-assim-dot {
+  position: fixed;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  pointer-events: none;
+  background: radial-gradient(circle, #eafff8 0%, #6eebcd 45%, rgba(46, 201, 168, 0.2) 100%);
+  box-shadow: 0 0 16px rgba(110, 235, 205, 0.95), 0 0 30px rgba(46, 201, 168, 0.6);
+  z-index: 600;
+}
+.fx-assim-land {
+  position: fixed;
+  width: 130px;
+  height: 178.8px;
+  border: 3px solid rgba(110, 235, 205, 0.9);
+  border-radius: 10px;
+  box-shadow: 0 0 22px rgba(46, 201, 168, 0.85), inset 0 0 16px rgba(110, 235, 205, 0.5);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.22s ease-out;
+}
+.fx-assim-land.in { opacity: 1; }
+.fx-assim-gloss {
+  position: fixed;
+  border: 3px solid rgba(110, 235, 205, 0.85);
+  border-radius: 12px;
+  box-shadow: 0 0 20px rgba(46, 201, 168, 0.75), inset 0 0 14px rgba(110, 235, 205, 0.45);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.28s ease-out;
+  z-index: 94;
+}
+.fx-assim-gloss.in { opacity: 1; }
+/* 跨方牌库之间的青碧光带 */
+.fx-assim-band {
+  position: fixed;
+  height: 16px;
+  margin-top: -8px;
+  border-radius: 8px;
+  transform-origin: left center;
+  background: linear-gradient(90deg, rgba(46, 201, 168, 0.15), rgba(110, 235, 205, 0.85), rgba(46, 201, 168, 0.15));
+  box-shadow: 0 0 16px rgba(46, 201, 168, 0.8);
+  opacity: 0;
+  pointer-events: none;
+}
+.fx-assim-band.in { opacity: 1; transition: opacity 0.3s ease-out; }
+.fx-assim-band.out { opacity: 0; transition: opacity 0.5s ease-in; }
+
+/* =====================================================================
+ * 2代 unity 联合：卡牌触发特效（fx-gen2，用户 2026-09-11 补做）
+ * 亮蓝/银白光环 / 抽牌光晕 / 光带 / 光柱 / 弃置光带卷取 + 银白光点
+ * ===================================================================== */
+.fx-unity-ring {
+  position: fixed;
+  border: 3px solid var(--uc, #3d8bff);
+  border-radius: 12px;
+  box-shadow: 0 0 20px var(--ucg, rgba(61, 139, 255, 0.85)), inset 0 0 14px var(--ucg, rgba(61, 139, 255, 0.5));
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.22s ease-out;
+}
+.fx-unity-ring.in { opacity: 1; }
+.fx-unity-halo {
+  position: fixed;
+  width: 130px;
+  height: 178.8px;
+  border: 3px solid rgba(61, 139, 255, 0.9);
+  border-radius: 10px;
+  box-shadow: 0 0 20px rgba(61, 139, 255, 0.8), inset 0 0 14px rgba(61, 139, 255, 0.45);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.22s ease-out;
+}
+.fx-unity-halo.in { opacity: 1; }
+.fx-unity-band {
+  position: fixed;
+  height: 12px;
+  margin-top: -6px;
+  border-radius: 6px;
+  transform-origin: left center;
+  background: linear-gradient(90deg, rgba(61, 139, 255, 0.15), rgba(61, 139, 255, 0.9), rgba(232, 236, 248, 0.85), rgba(61, 139, 255, 0.15));
+  box-shadow: 0 0 14px rgba(61, 139, 255, 0.85);
+  opacity: 0;
+  pointer-events: none;
+}
+.fx-unity-band.in { opacity: 1; transition: opacity 0.3s ease-out; }
+.fx-unity-band.out { opacity: 0; transition: opacity 0.45s ease-in; }
+/* 光柱（联合1 编译：自协议中心向上冲起） */
+.fx-unity-pillar {
+  position: fixed;
+  width: 44px;
+  height: 150px;
+  border-radius: 22px 22px 8px 8px;
+  background: linear-gradient(to top, rgba(61, 139, 255, 0.1), rgba(61, 139, 255, 0.85) 45%, rgba(232, 236, 248, 0.95));
+  filter: blur(2px) drop-shadow(0 0 18px rgba(61, 139, 255, 0.9));
+  opacity: 0;
+  pointer-events: none;
+}
+.fx-unity-pillar.in { opacity: 0.95; transition: opacity 0.3s ease-out; }
+/* 弃置：亮蓝光带卷住卡 + 银白光点 */
+.fx-unity-sash {
+  position: fixed;
+  height: 18px;
+  border-radius: 9px;
+  background: linear-gradient(90deg, rgba(61, 139, 255, 0.2), rgba(61, 139, 255, 0.95), rgba(232, 236, 248, 0.9), rgba(61, 139, 255, 0.2));
+  box-shadow: 0 0 18px rgba(61, 139, 255, 0.9);
+  opacity: 0;
+  pointer-events: none;
+}
+.fx-unity-sash.in {
+  opacity: 1;
+  animation: fx-unity-sash-coil 0.6s ease-in-out forwards;
+}
+@keyframes fx-unity-sash-coil {
+  0% { transform: scaleX(0.35) rotate(-8deg); opacity: 0.4; }
+  60% { transform: scaleX(1) rotate(4deg); opacity: 1; }
+  100% { transform: scaleX(0.5) rotate(0deg); opacity: 0; }
+}
+.fx-unity-speck {
+  position: fixed;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #ffffff 0%, #dfe8ff 55%, rgba(61, 139, 255, 0.25) 100%);
+  box-shadow: 0 0 10px rgba(232, 236, 248, 0.95);
+  pointer-events: none;
+  opacity: 0;
+  animation: fx-unity-speck-fly 0.9s ease-out forwards;
+}
+@keyframes fx-unity-speck-fly {
+  0% { transform: translate(0, 0) scale(0.6); opacity: 0; }
+  20% { opacity: 1; }
+  100% { transform: translate(var(--ux, 30px), var(--uy, -25px)) scale(0.2); opacity: 0; }
+}
+
 /* =====================================================================
  * 2代 diversity 多元已编译：中心棱镜旋转折射（render.ts appendDiversityCompiled 驱动）
  * ===================================================================== */
@@ -8452,15 +8755,17 @@ body.dragging { cursor: grabbing; user-select: none; }
   opacity: 0;
   transition: opacity 0.8s ease-in;
 }
+/* 五色棱镜（用户 2026-09-11：增大彩色棱镜）64 → 132px；光斑同步放大并补全 10 个延迟 */
 .compiled-diversity-prism {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 64px;
-  height: 64px;
-  margin-left: -32px;
-  margin-top: -32px;
+  width: 132px;
+  height: 132px;
+  margin-left: -66px;
+  margin-top: -66px;
   animation: compiled-diversity-prism-spin 3s linear infinite;
+  filter: drop-shadow(0 0 14px rgba(255, 255, 255, 0.45));
 }
 @keyframes compiled-diversity-prism-spin {
   to { transform: rotate(360deg); }
@@ -8469,22 +8774,22 @@ body.dragging { cursor: grabbing; user-select: none; }
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 34px;
-  height: 34px;
-  margin-left: -17px;
-  margin-top: -17px;
+  width: 72px;
+  height: 72px;
+  margin-left: -36px;
+  margin-top: -36px;
   clip-path: polygon(50% 0, 100% 100%, 0 100%);
-  opacity: 0.7;
+  opacity: 0.78;
   mix-blend-mode: screen;
 }
 .compiled-diversity-gleam {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 10px;
-  height: 10px;
-  margin-left: -5px;
-  margin-top: -5px;
+  width: 15px;
+  height: 15px;
+  margin-left: -7.5px;
+  margin-top: -7.5px;
   border-radius: 50%;
   opacity: 0;
   animation: compiled-diversity-gleam-fly 2.4s ease-out forwards;
@@ -8495,10 +8800,14 @@ body.dragging { cursor: grabbing; user-select: none; }
 .compiled-diversity-gleam:nth-child(9) { animation-delay: 0.8s; }
 .compiled-diversity-gleam:nth-child(10) { animation-delay: 1.05s; }
 .compiled-diversity-gleam:nth-child(11) { animation-delay: 1.3s; }
+.compiled-diversity-gleam:nth-child(12) { animation-delay: 1.5s; }
+.compiled-diversity-gleam:nth-child(13) { animation-delay: 1.7s; }
+.compiled-diversity-gleam:nth-child(14) { animation-delay: 1.9s; }
+.compiled-diversity-gleam:nth-child(15) { animation-delay: 2.05s; }
 @keyframes compiled-diversity-gleam-fly {
   0% { transform: translate(0, 0) scale(0.4); opacity: 0; }
-  20% { opacity: 0.85; }
-  100% { transform: translate(calc(30px - 60px * var(--fx-glx, 0)), calc(-30px + 60px * var(--fx-gly, 0))) scale(0.2); opacity: 0; }
+  20% { opacity: 0.9; }
+  100% { transform: translate(calc(46px - 92px * var(--fx-glx, 0)), calc(-46px + 92px * var(--fx-gly, 0))) scale(0.2); opacity: 0; }
 }
 
 /* ---- time-2 顶沙漏：牌库上方古铜沙漏（沙粒向上倒流，旋转一圈后消散） ---- */

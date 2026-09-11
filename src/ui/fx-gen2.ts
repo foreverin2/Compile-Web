@@ -13,6 +13,7 @@ import { gameBus } from '../core/events/bus';
 import type { GameEvent } from '../core/events/bus';
 import type { GameState } from '../core/models/types';
 import { cardImgSrc } from '../data/demo';
+import { protocolColorOf, hexToRgba } from './protocol-colors';
 
 type PlayerId = 0 | 1;
 
@@ -269,9 +270,12 @@ export function clearGen2Fx(): void {
       '.fx-courage-sword, .fx-courage-inferno, .fx-courage-slash, .fx-courage-golddot, ' +
       '.fx-courage-halo, .fx-courage-ring, .fx-courage-cardglow, ' +
       '.fx-time-clock, .fx-time-trashglow, .fx-time-band, .fx-time-film, ' +
-      '.fx-assim-ring, .fx-assim-speck, .fx-assim-ripple, ' +
-      '.fx-unity-link, ' +
-      '.fx-diversity-ring, .fx-diversity-dust'
+      '.fx-assim-ring, .fx-assim-speck, .fx-assim-ripple, .fx-assim-dot, .fx-assim-land, ' +
+      '.fx-assim-gloss, .fx-assim-band, ' +
+      '.fx-unity-link, .fx-unity-ring, .fx-unity-halo, .fx-unity-band, .fx-unity-pillar, ' +
+      '.fx-unity-sash, .fx-unity-speck, ' +
+      '.fx-diversity-ring, .fx-diversity-dust, .fx-diversity-orb, .fx-diversity-halo, ' +
+      '.fx-diversity-rainbow-ring'
   )) {
     el.remove();
   }
@@ -1230,26 +1234,31 @@ export function playWarVictoryFlag(sourceUid?: string, at?: { x: number; y: numb
 const COURAGE_GLOW_MS = 2000; // 卡框鎏金发光持续
 
 /** 湖中剑（纯 CSS：鎏金剑身 + 剑柄十字护手 + 光羽），斜插 45° */
-function buildLakeSword(size = 84): HTMLElement {
-  const wrap = document.createElement('div');
-  wrap.className = 'fx-courage-sword';
+/** 亚瑟王风格湖中剑（双手大剑，竖直、剑尖朝下）——用户 2026-09-11：「和根棍子一样，重新优化」
+ *  → 由「8px 细条 + 小护手」改为分部件写实造型：
+ *  剑身（上宽下尖，带中央血槽 + 亮边磨光）+ 剑格上肩（ricasso）+ 宽十字护手 + 缠绕握柄 +
+ *  圆剑柄头。所有部件尺寸用 em，容器 font-size = size/12 → 整体等比缩放（含已编译层复用）。
+ *  容器默认 fixed（卡牌触发 FX）；已编译层用 .compiled-courage-sword 覆盖为 absolute。 */
+export function buildLakeSword(size = 96): HTMLElement {
+  const wrap = mk('div', 'fx-courage-sword');
   wrap.style.width = `${size}px`;
   wrap.style.height = `${size}px`;
-  const blade = document.createElement('i');
-  blade.className = 'fx-courage-sword-blade';
-  const guard = document.createElement('i');
-  guard.className = 'fx-courage-sword-guard';
-  const grip = document.createElement('i');
-  grip.className = 'fx-courage-sword-grip';
+  wrap.style.fontSize = `${(size / 12).toFixed(2)}px`;
+  const blade = mk('i', 'fx-courage-sword-blade');
+  blade.appendChild(mk('i', 'fx-courage-sword-fuller'));
+  const ricasso = mk('i', 'fx-courage-sword-ricasso');
+  const guard = mk('i', 'fx-courage-sword-guard');
+  guard.appendChild(mk('i', 'fx-courage-sword-guard-tip l'));
+  guard.appendChild(mk('i', 'fx-courage-sword-guard-tip r'));
+  const grip = mk('i', 'fx-courage-sword-grip');
+  const pommel = mk('i', 'fx-courage-sword-pommel');
   wrap.appendChild(blade);
+  wrap.appendChild(ricasso);
   wrap.appendChild(guard);
   wrap.appendChild(grip);
+  wrap.appendChild(pommel);
   // 光羽（小金星点绕剑飘）
-  for (let i = 0; i < 6; i++) {
-    const f = document.createElement('i');
-    f.className = 'fx-courage-feather';
-    wrap.appendChild(f);
-  }
+  for (let i = 0; i < 6; i++) wrap.appendChild(mk('i', 'fx-courage-feather'));
   return wrap;
 }
 
@@ -1272,10 +1281,14 @@ function courageLandPos(player: PlayerId): { x: number; y: number } | null {
 export function playCourageDrawExtra(player: PlayerId): void {
   const land = courageLandPos(player);
   if (!land) return;
-  const sword = buildLakeSword();
+  // 剑身底部（剑尖）= (0.2em + 7.6em) / 12em × size（见 styles.css .fx-courage-sword-blade 定尺）
+  const size = 96;
+  const tipOffset = size * (7.8 / 12);
+  const sword = buildLakeSword(size);
   sword.classList.add('fx-courage-draw-sword');
-  sword.style.left = `${land.x}px`;
-  sword.style.top = `${land.y - 30}px`;
+  sword.style.left = `${(land.x - size / 2).toFixed(1)}px`;
+  sword.style.top = `${(land.y + 12 - tipOffset).toFixed(1)}px`; // 剑尖插在落点下方 12px
+  sword.style.transformOrigin = '50% 65%'; // 以剑尖为旋转支点
   sword.style.zIndex = String(GEN2_Z);
   document.body.appendChild(sword);
   window.setTimeout(() => sword.classList.add('in'), 30);
@@ -1344,11 +1357,33 @@ export function playCourageDeleteExtra(node: HTMLElement): void {
   window.setTimeout(() => slash.remove(), 700);
 }
 
-/** courage 偏转（勇气3 底）：起点金圣光 + 落点金火环（基础飞行照常） */
+/** courage 偏转（勇气3 底）：起点金圣光 + 湖中剑虚影指向目标链路 + 落点金火环
+ *  （提示词：卡牌先被一圈金色圣光笼罩，随后一道湖中剑的金色虚影浮现并指向目标链路，
+ *   卡牌沿剑影所指方向偏转过去，落点炸开一圈金色火环。基础飞行由 effects 照常播放。） */
 export function playCourageShiftExtra(node: HTMLElement, payload: { owner?: PlayerId; line?: number | null }): void {
   if (payload.owner === undefined || payload.line == null) return;
   const rect = node.getBoundingClientRect();
   if (rect.width === 0) return;
+  // 落点（目标槽 stackEnd：末卡外缘 / 槽内首卡位）——剑影与火环共用
+  const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${payload.owner}"][data-line="${payload.line}"]`);
+  const startX = rect.left + rect.width / 2;
+  const startY = rect.top + rect.height / 2;
+  let landX = startX;
+  let landY = startY;
+  if (slot) {
+    const sr = slot.getBoundingClientRect();
+    landY = sr.top + sr.height / 2;
+    const cards = slot.querySelectorAll<HTMLElement>('.card');
+    const last = cards.length > 0 ? cards[cards.length - 1] : null;
+    landX = last
+      ? (() => {
+          const r = last.getBoundingClientRect();
+          return payload.owner === 0 ? r.left - 65 : r.right + 65;
+        })()
+      : payload.owner === 0
+        ? sr.right - 90
+        : sr.left + 90;
+  }
   // 起点金圣光
   const halo = document.createElement('div');
   halo.className = 'fx-courage-halo';
@@ -1360,32 +1395,31 @@ export function playCourageShiftExtra(node: HTMLElement, payload: { owner?: Play
   document.body.appendChild(halo);
   window.setTimeout(() => halo.classList.add('in'), 20);
   window.setTimeout(() => halo.remove(), 900);
-  // 落点金火环（目标槽 stackEnd）
-  const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${payload.owner}"][data-line="${payload.line}"]`);
-  if (slot) {
-    const sr = slot.getBoundingClientRect();
-    const y = sr.top + sr.height / 2;
-    const cards = slot.querySelectorAll<HTMLElement>('.card');
-    const last = cards.length > 0 ? cards[cards.length - 1] : null;
-    const ex = last
-      ? (() => {
-          const r = last.getBoundingClientRect();
-          return payload.owner === 0 ? r.left - 65 : r.right + 65;
-        })()
-      : payload.owner === 0
-        ? sr.right - 90
-        : sr.left + 90;
-    window.setTimeout(() => {
-      const ring = document.createElement('div');
-      ring.className = 'fx-courage-ring';
-      ring.style.left = `${ex - 40}px`;
-      ring.style.top = `${y - 40}px`;
-      ring.style.zIndex = String(GEN2_Z - 1);
-      document.body.appendChild(ring);
-      window.setTimeout(() => ring.classList.add('in'), 20);
-      window.setTimeout(() => ring.remove(), 900);
-    }, 300);
-  }
+  // 湖中剑金色虚影：剑尖锚在起点、剑身指向目标链路（用户 2026-09-11：此剑影此前缺失）
+  const SHADOW_SIZE = 118;
+  const shadow = buildLakeSword(SHADOW_SIZE);
+  shadow.classList.add('fx-courage-sword-shadow');
+  shadow.style.left = `${(startX - SHADOW_SIZE / 2).toFixed(1)}px`;
+  shadow.style.top = `${(startY - SHADOW_SIZE * (7.8 / 12)).toFixed(1)}px`;
+  shadow.style.transformOrigin = '50% 65%'; // 以剑尖为支点
+  const ang = (Math.atan2(landY - startY, landX - startX) * 180) / Math.PI;
+  shadow.style.transform = `rotate(${(ang - 90).toFixed(1)}deg)`; // 剑尖（默认朝下）转向目标
+  shadow.style.zIndex = String(GEN2_Z);
+  document.body.appendChild(shadow);
+  window.setTimeout(() => shadow.classList.add('in'), 30);
+  window.setTimeout(() => shadow.classList.add('out'), 620);
+  window.setTimeout(() => shadow.remove(), 1100);
+  // 落点金火环（基础飞行到达后炸开）
+  window.setTimeout(() => {
+    const ring = document.createElement('div');
+    ring.className = 'fx-courage-ring';
+    ring.style.left = `${landX - 40}px`;
+    ring.style.top = `${landY - 40}px`;
+    ring.style.zIndex = String(GEN2_Z - 1);
+    document.body.appendChild(ring);
+    window.setTimeout(() => ring.classList.add('in'), 20);
+    window.setTimeout(() => ring.remove(), 900);
+  }, 300);
 }
 
 /* ============================== time 时间：古铜时钟 / 光流 ==============================
@@ -1693,6 +1727,381 @@ export function playDiversityDiscardExtra(node: HTMLElement): void {
   window.setTimeout(() => ring.remove(), DIVERSITY_DISCARD_PRE_MS + 400);
 }
 
+/** 多元主题色常量（光球/光晕/彩虹环共用的 5 色） */
+const DIVERSITY_COLORS = ['#ff5a6e', '#ffd24d', '#4ee0c0', '#5aa0ff', '#c07bff'];
+
+/** 手牌落点坐标（第 indexFromEnd 张即将落入手牌的卡；与 effects/index handEndPos 同款算法） */
+function handLandingPos(player: PlayerId, indexFromEnd: number): { x: number; y: number } | null {
+  const hand = document.querySelectorAll<HTMLElement>('.hand')[player];
+  if (!hand) return null;
+  const rect = hand.getBoundingClientRect();
+  if (rect.width === 0) return null;
+  const y = rect.top + rect.height / 2;
+  const cards = hand.querySelectorAll<HTMLElement>('.card:not(.reveal-ghost)');
+  const last = cards.length > 0 ? cards[cards.length - 1] : null;
+  const baseX = last
+    ? (player === 0 ? last.getBoundingClientRect().right + 37 : last.getBoundingClientRect().left - 37)
+    : (player === 0 ? rect.left + 128 : rect.right - 128);
+  // P1 手牌向右排布、P2 向左（row-reverse）→ 后续卡沿排列方向递进 102px（hand 卡距）
+  const step = player === 0 ? 102 : -102;
+  return { x: baseX + step * indexFromEnd, y };
+}
+
+/** 彩光尘（多元通用）：在矩形内随机点炸开 count 颗彩色光点 */
+function spawnDiversityDust(rect: DOMRect, count = 12): void {
+  for (let i = 0; i < count; i++) {
+    const s = mk('i', 'fx-diversity-dust');
+    s.style.left = `${(rect.left + Math.random() * rect.width).toFixed(1)}px`;
+    s.style.top = `${(rect.top + Math.random() * rect.height).toFixed(1)}px`;
+    s.style.background = DIVERSITY_COLORS[Math.floor(Math.random() * DIVERSITY_COLORS.length)];
+    s.style.setProperty('--fx-dvx', `${(Math.random() * 80 - 40).toFixed(1)}px`);
+    s.style.setProperty('--fx-dvy', `${(Math.random() * 60 - 30).toFixed(1)}px`);
+    s.style.zIndex = String(GEN2_Z);
+    document.body.appendChild(s);
+    window.setTimeout(() => s.remove(), 900);
+  }
+}
+
+/** diversity-1 中「偏转1张牌」：被偏转卡化为一颗彩色光球滑向目标位置
+ *  （光球垫在基础飞行卡之下 → 读作卡被光球包裹着滑过去；用户 2026-09-11：此特效此前缺失） */
+export function playDiversityShiftExtra(payload: { uid?: string; owner?: PlayerId; line?: number | null }): void {
+  if (!payload.uid || payload.owner === undefined || payload.line == null) return;
+  const node = document.querySelector<HTMLElement>(`[data-uid="${payload.uid}"]`);
+  if (!node) return;
+  const rect = node.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return;
+  const end = iceStackEnd(payload.owner, payload.line);
+  if (!end) return;
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  const size = Math.max(rect.width, rect.height) * 1.05;
+  const orb = mk('div', 'fx-diversity-orb');
+  orb.style.width = `${size.toFixed(1)}px`;
+  orb.style.height = `${size.toFixed(1)}px`;
+  orb.style.left = `${(cx - size / 2).toFixed(1)}px`;
+  orb.style.top = `${(cy - size / 2).toFixed(1)}px`;
+  orb.style.zIndex = String(GEN2_Z - 1); // 基础飞行卡（BASE_Z 300）之下
+  document.body.appendChild(orb);
+  spawnDiversityDust(rect, 10);
+  // 与基础 MOVE_MS(450ms) 同步滑向目标
+  window.setTimeout(() => {
+    orb.style.transition = 'transform 450ms cubic-bezier(0.25, 0.8, 0.4, 1), opacity 480ms ease-out';
+    orb.style.transform = `translate(${(end.x - cx).toFixed(1)}px, ${(end.y - cy).toFixed(1)}px) scale(0.78)`;
+    orb.style.opacity = '0.9';
+  }, 30);
+  window.setTimeout(() => orb.classList.add('out'), 520);
+  window.setTimeout(() => orb.remove(), 1100);
+}
+
+/** diversity-1「抽取与此链路中不同协议的卡牌数相同的卡牌」：每张被抽卡带一圈
+ *  【该卡所属协议主题色】的光晕（用户 2026-09-11：此特效此前缺失） */
+function onDiversityDrawn(p: { player?: PlayerId; count?: number }, s?: GameState): void {
+  if (p.player === undefined || !s) return;
+  const count = p.count ?? 1;
+  const hand = s.players[p.player].hand;
+  const drawn = hand.slice(-count);
+  for (let k = 0; k < drawn.length; k++) {
+    const color = protocolColorOf(drawn[k].defId);
+    const pos = handLandingPos(p.player, k);
+    if (!pos) continue;
+    window.setTimeout(() => {
+      const halo = mk('div', 'fx-diversity-halo');
+      halo.style.setProperty('--dc', color);
+      halo.style.setProperty('--dcg', hexToRgba(color, 0.8));
+      halo.style.left = `${(pos.x - 65).toFixed(1)}px`;
+      halo.style.top = `${(pos.y - 89.4).toFixed(1)}px`;
+      halo.style.zIndex = String(GEN2_Z - 2);
+      document.body.appendChild(halo);
+      window.setTimeout(() => halo.classList.add('in'), 20);
+      window.setTimeout(() => halo.classList.remove('in'), 620);
+      window.setTimeout(() => halo.remove(), 1100);
+    }, k * 120);
+  }
+}
+
+/** diversity-4 中「翻转1张牌」：被选中的卡先被一圈七彩光环套住 → 光环缓缓收缩 → 翻转 → 消散
+ *  （用户 2026-09-11：此特效此前缺失） */
+export function playDiversityFlipExtra(payload: { uid?: string }): void {
+  if (!payload.uid) return;
+  const node = document.querySelector<HTMLElement>(`[data-uid="${payload.uid}"]`);
+  if (!node) return;
+  const rect = node.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return;
+  const ring = mk('div', 'fx-diversity-rainbow-ring');
+  ring.style.left = `${(rect.left - 14).toFixed(1)}px`;
+  ring.style.top = `${(rect.top - 14).toFixed(1)}px`;
+  ring.style.width = `${(rect.width + 28).toFixed(1)}px`;
+  ring.style.height = `${(rect.height + 28).toFixed(1)}px`;
+  ring.style.zIndex = String(GEN2_Z - 1);
+  document.body.appendChild(ring);
+  window.setTimeout(() => ring.classList.add('in'), 20);
+  window.setTimeout(() => ring.classList.remove('in'), 640);
+  window.setTimeout(() => ring.remove(), 1200);
+}
+
+/* ============================== assimilation 同化：卡牌触发特效（用户 2026-09-11 补做）
+ * 提示词要求：
+ *  - 同化0 中（对手正面朝下卡加入手牌）：选中卡先泛青碧涟漪 → 化为青碧光点弧线飞入手牌 →
+ *    落入手牌闪过一圈青碧光（基础回手飞行由 effects/index 的 playReturn 照常播放）；
+ *  - 同化1 中（弃1 + 刷新）：刷新时自己的协议短暂泛青碧光泽（弃牌光环已由 playAssimDiscardExtra 提供）；
+ *  - 同化1 底 / 同化4 中（跨方牌库抽牌）：两副牌库之间浮现青碧光带，卡沿光带飞向对方手牌。
+ * 事件：card:returned（takeFromField）/ card:drawn（fromOpponentDeck / triggerDefId=assimilation-1）。 */
+const ASSIM_CYAN = '#2ec9a8';
+const ASSIM_CYAN_SOFT = 'rgba(110, 235, 205, 0.85)';
+
+/** 玩家牌库中心（青碧光带端点） */
+function deckCenter(player: PlayerId): { x: number; y: number } | null {
+  const deck = document.querySelector<HTMLElement>(`.deck[data-player="${player}"]`);
+  if (!deck) return null;
+  const r = deck.getBoundingClientRect();
+  if (r.width === 0) return null;
+  return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+}
+
+/** 两点之间的一条光带（旋转矩形，cls 控制配色；dash 为 true 时用虚线纹理） */
+function spawnBand(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  cls: string,
+  holdMs = 900,
+): void {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist < 10) return;
+  const ang = (Math.atan2(dy, dx) * 180) / Math.PI;
+  const band = mk('div', cls);
+  band.style.left = `${from.x.toFixed(1)}px`;
+  band.style.top = `${from.y.toFixed(1)}px`;
+  band.style.width = `${dist.toFixed(1)}px`;
+  band.style.transform = `rotate(${ang.toFixed(1)}deg)`;
+  band.style.zIndex = String(GEN2_Z - 2);
+  document.body.appendChild(band);
+  window.setTimeout(() => band.classList.add('in'), 20);
+  window.setTimeout(() => band.classList.add('out'), holdMs);
+  window.setTimeout(() => band.remove(), holdMs + 650);
+}
+
+/** 同化0：被取卡的青碧涟漪 + 化为光点沿弧线飞向 owner 手牌 + 落点青碧闪环 */
+export function playAssimTakeExtra(payload: { uid?: string; owner?: PlayerId }): void {
+  if (!payload.uid || payload.owner === undefined) return;
+  const node = document.querySelector<HTMLElement>(`[data-uid="${payload.uid}"]`);
+  if (!node) return;
+  const rect = node.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return;
+  // ① 起点青碧涟漪（三圈错相扩散）
+  for (let i = 0; i < 3; i++) {
+    window.setTimeout(() => spawnAssimRing(rect, ASSIM_CYAN_SOFT), i * 130);
+  }
+  const from = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  const to = handLandingPos(payload.owner!, 0);
+  if (!to) return;
+  // ② 青碧光点沿弧线飞入手牌（二次贝塞尔采样，8 段折线过渡）
+  const dot = mk('i', 'fx-assim-dot');
+  dot.style.left = `${(from.x - 9).toFixed(1)}px`;
+  dot.style.top = `${(from.y - 9).toFixed(1)}px`;
+  dot.style.zIndex = String(GEN2_Z);
+  document.body.appendChild(dot);
+  const midX = (from.x + to.x) / 2;
+  const midY = Math.min(from.y, to.y) - 90; // 向上拱起 → 弧线
+  const steps = 8;
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const mt = 1 - t;
+    const x = mt * mt * from.x + 2 * mt * t * midX + t * t * to.x;
+    const y = mt * mt * from.y + 2 * mt * t * midY + t * t * to.y;
+    window.setTimeout(() => {
+      dot.style.transition = `transform 120ms linear, opacity 140ms ease-out`;
+      dot.style.transform = `translate(${(x - from.x).toFixed(1)}px, ${(y - from.y).toFixed(1)}px) scale(${(1 - 0.4 * t).toFixed(2)})`;
+      if (i === steps) dot.style.opacity = '0';
+    }, 30 + i * 120);
+  }
+  window.setTimeout(() => dot.remove(), 1600);
+  // ③ 落入手牌：闪过一圈青碧光
+  window.setTimeout(() => {
+    const flash = mk('div', 'fx-assim-land');
+    flash.style.left = `${(to.x - 65).toFixed(1)}px`;
+    flash.style.top = `${(to.y - 89.4).toFixed(1)}px`;
+    flash.style.zIndex = String(GEN2_Z - 1);
+    document.body.appendChild(flash);
+    window.setTimeout(() => flash.classList.add('in'), 20);
+    window.setTimeout(() => flash.remove(), 900);
+  }, 30 + steps * 120 + 90);
+}
+
+/** 青碧涟漪环（同化通用；rect 处生成一圈扩散环） */
+function spawnAssimRing(rect: DOMRect, color: string): void {
+  const ring = mk('div', 'fx-assim-ring');
+  ring.style.left = `${(rect.left - 10).toFixed(1)}px`;
+  ring.style.top = `${(rect.top - 10).toFixed(1)}px`;
+  ring.style.width = `${(rect.width + 20).toFixed(1)}px`;
+  ring.style.height = `${(rect.height + 20).toFixed(1)}px`;
+  ring.style.borderColor = color;
+  ring.style.zIndex = String(GEN2_Z - 1);
+  document.body.appendChild(ring);
+  window.setTimeout(() => ring.classList.add('in'), 20);
+  window.setTimeout(() => ring.remove(), 1000);
+}
+
+/** 同化1 中：刷新时自己的协议短暂泛起青碧色光泽 */
+export function playAssimRefreshGloss(player: PlayerId): void {
+  const boxes = document.querySelectorAll<HTMLElement>(
+    `.protocol-cell[data-player="${player}"] .protocol-holder`
+  );
+  const nodes: HTMLElement[] = Array.from(boxes);
+  for (const holder of nodes) {
+    const r = holder.getBoundingClientRect();
+    if (r.width === 0) continue;
+    const gloss = mk('div', 'fx-assim-gloss');
+    gloss.style.left = `${r.left - 4}px`;
+    gloss.style.top = `${r.top - 4}px`;
+    gloss.style.width = `${r.width + 8}px`;
+    gloss.style.height = `${r.height + 8}px`;
+    gloss.style.zIndex = String(GEN2_Z - 2);
+    document.body.appendChild(gloss);
+    window.setTimeout(() => gloss.classList.add('in'), 20);
+    window.setTimeout(() => gloss.classList.remove('in'), 900);
+    window.setTimeout(() => gloss.remove(), 1400);
+  }
+}
+
+/** 同化1 底 / 同化4 中：跨方牌库抽牌 → 两副牌库之间浮现青碧光带，卡沿光带飞向对方手牌 */
+export function playAssimExchangeBand(drawer: PlayerId): void {
+  const source = deckCenter(drawer === 0 ? 1 : 0);
+  const target = deckCenter(drawer);
+  if (!source || !target) return;
+  spawnBand(source, target, 'fx-assim-band', 900);
+  // 光带上的青碧光点（沿带滑行）
+  const dot = mk('i', 'fx-assim-dot');
+  dot.style.left = `${(source.x - 9).toFixed(1)}px`;
+  dot.style.top = `${(source.y - 9).toFixed(1)}px`;
+  dot.style.zIndex = String(GEN2_Z - 1);
+  document.body.appendChild(dot);
+  window.setTimeout(() => {
+    dot.style.transition = 'transform 420ms cubic-bezier(0.3, 0.7, 0.4, 1), opacity 300ms ease-out';
+    dot.style.transform = `translate(${(target.x - source.x).toFixed(1)}px, ${(target.y - source.y).toFixed(1)}px) scale(0.6)`;
+    dot.style.opacity = '0';
+  }, 40);
+  window.setTimeout(() => dot.remove(), 900);
+}
+
+/* ============================== unity 联合：卡牌触发特效（用户 2026-09-11 补做）
+ * 提示词要求：
+ *  - 联合卡触发效果时与场上其它联合卡连亮蓝光带（playUnityLink 已实现）；
+ *  - 联合0 顶 / 联合3 中（翻转）：被选卡被一圈亮蓝（unity-0）/ 银白（unity-3）光环笼罩后翻转；
+ *  - 联合0 顶 / 联合2 中 / 联合4 顶（抽牌）：每张抽出的卡带亮蓝光晕飞入手牌；
+ *  - 联合1 中（编译 + 删卡）：场上联合卡齐亮 → 光柱汇聚协议中心 → 被删卡化银白光点被光柱吸收；
+ *  - 联合弃置：被弃卡被亮蓝光带卷住 → 化银白光点消散。
+ * 事件：card:flipped / card:drawn / line:compiled / card:discarded（triggerProtocol=unity）。 */
+const UNITY_BLUE = '#3d8bff';
+const UNITY_SILVER = '#e8ecf8';
+
+/** 联合0/3：被选卡的光环（kind：blue=亮蓝 / silver=银白） */
+export function playUnityRing(payload: { uid?: string; triggerDefId?: string }): void {
+  if (!payload.uid) return;
+  const node = document.querySelector<HTMLElement>(`[data-uid="${payload.uid}"]`);
+  if (!node) return;
+  const rect = node.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return;
+  const silver = payload.triggerDefId === 'unity-3';
+  const color = silver ? UNITY_SILVER : UNITY_BLUE;
+  const ring = mk('div', 'fx-unity-ring');
+  ring.style.setProperty('--uc', color);
+  ring.style.setProperty('--ucg', hexToRgba(color, 0.85));
+  ring.style.left = `${(rect.left - 10).toFixed(1)}px`;
+  ring.style.top = `${(rect.top - 10).toFixed(1)}px`;
+  ring.style.width = `${(rect.width + 20).toFixed(1)}px`;
+  ring.style.height = `${(rect.height + 20).toFixed(1)}px`;
+  ring.style.zIndex = String(GEN2_Z - 1);
+  document.body.appendChild(ring);
+  window.setTimeout(() => ring.classList.add('in'), 20);
+  window.setTimeout(() => ring.classList.remove('in'), 560);
+  window.setTimeout(() => ring.remove(), 1000);
+}
+
+/** 联合抽牌（unity-0 顶合一抽取 / unity-2 中 / unity-4 顶揭示抽全部）：每张抽出卡带亮蓝光晕 */
+export function playUnityDrawHalos(p: { player?: PlayerId; count?: number; uid?: string }, s?: GameState): void {
+  if (p.player === undefined || !s) return;
+  const count = p.uid ? 1 : (p.count ?? 1);
+  const hand = s.players[p.player].hand;
+  const drawn = hand.slice(-count);
+  // 联合4：牌库中的联合卡沿光带依次飞出 → 牌库→手牌方向的光带（一次性）
+  const deck = deckCenter(p.player);
+  const target = handLandingPos(p.player, 0);
+  if (deck && target && count > 1) spawnBand(deck, target, 'fx-unity-band', 900);
+  for (let k = 0; k < drawn.length; k++) {
+    window.setTimeout(() => {
+      const pos = handLandingPos(p.player!, k);
+      if (!pos) return;
+      const halo = mk('div', 'fx-unity-halo');
+      halo.style.left = `${(pos.x - 65).toFixed(1)}px`;
+      halo.style.top = `${(pos.y - 89.4).toFixed(1)}px`;
+      halo.style.zIndex = String(GEN2_Z - 2);
+      document.body.appendChild(halo);
+      window.setTimeout(() => halo.classList.add('in'), 20);
+      window.setTimeout(() => halo.classList.remove('in'), 620);
+      window.setTimeout(() => halo.remove(), 1100);
+    }, k * 110);
+  }
+}
+
+/** 联合1 中：场上联合卡齐亮 → 光柱汇聚协议中心（编译）→ 被删卡化银白光点被光柱吸收 */
+export function playUnityCompilePillar(player: PlayerId, line: number, unityUids: string[]): void {
+  // 该玩家该线的协议格（.protocol-cell 带 data-player/data-line）
+  const cell = document.querySelector<HTMLElement>(
+    `.protocol-cell[data-player="${player}"][data-line="${line}"]`
+  );
+  const targetBox = cell?.querySelector<HTMLElement>('.protocol-holder')
+    ?? document.querySelector<HTMLElement>('.protocol-holder');
+  if (!targetBox) return;
+  const tr = targetBox.getBoundingClientRect();
+  if (tr.width === 0) return;
+  const target = { x: tr.left + tr.width / 2, y: tr.top + tr.height / 2 };
+  // 场上联合卡 → 协议中心的光带（众星拱月）
+  for (const uid of unityUids) {
+    const node = document.querySelector<HTMLElement>(`[data-uid="${uid}"]`);
+    if (!node) continue;
+    const r = node.getBoundingClientRect();
+    if (r.width === 0) continue;
+    spawnBand({ x: r.left + r.width / 2, y: r.top + r.height / 2 }, target, 'fx-unity-band', 1000);
+  }
+  // 光柱（协议中心向上冲起的亮蓝柱）
+  const pillar = mk('div', 'fx-unity-pillar');
+  pillar.style.left = `${(target.x - 22).toFixed(1)}px`;
+  pillar.style.top = `${(target.y - 150).toFixed(1)}px`;
+  pillar.style.zIndex = String(GEN2_Z - 1);
+  document.body.appendChild(pillar);
+  window.setTimeout(() => pillar.classList.add('in'), 20);
+  window.setTimeout(() => pillar.classList.remove('in'), 1100);
+  window.setTimeout(() => pillar.remove(), 1700);
+}
+
+/** 联合弃置：被弃卡被亮蓝光带卷住 → 化银白光点消散（基础切割照常由 effects 播放） */
+export function playUnityDiscardExtra(node: HTMLElement): void {
+  const rect = node.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return;
+  const band = mk('div', 'fx-unity-sash');
+  band.style.left = `${(rect.left - 14).toFixed(1)}px`;
+  band.style.top = `${(rect.top + rect.height / 2 - 9).toFixed(1)}px`;
+  band.style.width = `${(rect.width + 28).toFixed(1)}px`;
+  band.style.zIndex = String(GEN2_Z - 1);
+  document.body.appendChild(band);
+  window.setTimeout(() => band.classList.add('in'), 20);
+  window.setTimeout(() => band.classList.remove('in'), 520);
+  window.setTimeout(() => band.remove(), 900);
+  // 银白光点
+  for (let i = 0; i < 12; i++) {
+    const s = mk('i', 'fx-unity-speck');
+    s.style.left = `${(rect.left + Math.random() * rect.width).toFixed(1)}px`;
+    s.style.top = `${(rect.top + Math.random() * rect.height).toFixed(1)}px`;
+    s.style.setProperty('--ux', `${(Math.random() * 90 - 45).toFixed(1)}px`);
+    s.style.setProperty('--uy', `${(Math.random() * 70 - 35).toFixed(1)}px`);
+    s.style.zIndex = String(GEN2_Z);
+    document.body.appendChild(s);
+    window.setTimeout(() => s.remove(), 950);
+  }
+}
+
 /** 订阅 luck / mirror / peace / chaos / clarity / corruption 引擎事件 */
 export function initGen2Fx(): () => void {
   return gameBus.subscribe((e: GameEvent) => {
@@ -1717,6 +2126,11 @@ export function initGen2Fx(): () => void {
       if (p && p.triggerProtocol === 'corruption' && p.uid && p.defId) {
         onCorruptionReturned(p);
       }
+      // 同化0（场卡取入己手 = takeFromField 走 return 流程）：被取卡青碧涟漪 → 青碧光点
+      // 沿弧线飞入手牌 → 落手闪环（用户 2026-09-11：同化卡牌特效此前缺失）
+      if (p && p.triggerProtocol === 'assimilation' && p.uid) {
+        playAssimTakeExtra({ uid: p.uid, owner: p.owner });
+      }
     } else if (e.type === 'card:deck-played') {
       // time-0/3 从弃牌堆打出（playFromTrash）：弃牌堆上方古铜时钟亮起
       const p = e.payload as { triggerProtocol?: string; fromTrash?: boolean } | undefined;
@@ -1733,9 +2147,15 @@ export function initGen2Fx(): () => void {
       onTimeDeckToTrash(e.payload as { player?: PlayerId });
     } else if (e.type === 'card:deleted' || e.type === 'card:discarded') {
       // war 被动触发成功（war-0 删卡 / war-1 弃后刷新 / war-2 对手弃手）
-      const p = e.payload as { triggerProtocol?: string; triggerUid?: string } | undefined;
+      const p = e.payload as { triggerProtocol?: string; triggerUid?: string; uid?: string } | undefined;
       if (p && p.triggerProtocol === 'war' && p.triggerUid) {
         playWarVictoryFlag(p.triggerUid);
+      }
+      // 联合弃置：被弃卡被亮蓝光带卷住 → 化银白光点消散（用户 2026-09-11 补做；
+      // 基础切割由 effects/index 照常播放）
+      if (e.type === 'card:discarded' && p && p.triggerProtocol === 'unity' && p.uid) {
+        const node = document.querySelector<HTMLElement>(`[data-uid="${p.uid}"]`);
+        if (node) playUnityDiscardExtra(node);
       }
     } else if (e.type === 'card:drawn') {
       const p = e.payload as
@@ -1756,6 +2176,53 @@ export function initGen2Fx(): () => void {
       // time-2 顶「当你切洗牌库时：抽取1张牌」→ 牌库上方旋转古铜沙漏（沙粒向上倒流）
       if (p && p.triggerProtocol === 'time' && (p.player === 0 || p.player === 1)) {
         playTimeHourglass(p.player);
+      }
+      // diversity-1 抽牌：每张被抽卡带一圈「该卡所属协议主题色」光晕（用户 2026-09-11 补做）
+      if (p && p.triggerProtocol === 'diversity') {
+        onDiversityDrawn(p, e.state);
+      }
+      // 同化1 中刷新 → 协议泛青碧光泽；同化1 底 / 同化4 跨方牌库抽牌 → 两库间青碧光带
+      if (p && p.triggerProtocol === 'assimilation') {
+        const a = p as { player?: PlayerId; triggerDefId?: string; fromOpponentDeck?: boolean };
+        if (a.fromOpponentDeck === true && (a.player === 0 || a.player === 1)) {
+          playAssimExchangeBand(a.player);
+        }
+        if (a.triggerDefId === 'assimilation-1' && a.player !== undefined) {
+          playAssimRefreshGloss(a.player);
+        }
+      }
+      // 联合抽牌（unity-0 顶 / unity-2 中 / unity-4 顶）：每张抽出卡带亮蓝光晕（+ 牌库光带）
+      if (p && p.triggerProtocol === 'unity') {
+        playUnityDrawHalos(p as { player?: PlayerId; count?: number; uid?: string }, e.state);
+      }
+    } else if (e.type === 'card:shifted') {
+      // diversity-1 偏转：被偏转卡化为彩色光球滑向目标位置（用户 2026-09-11 补做）
+      const p = e.payload as { triggerProtocol?: string; uid?: string; owner?: PlayerId; line?: number | null } | undefined;
+      if (p && p.triggerProtocol === 'diversity') {
+        playDiversityShiftExtra(p);
+      }
+      // 联合卡触发效果 → 与场上其它联合卡连亮蓝光带（playUnityLink 已在上面统一处理）
+    } else if (e.type === 'card:flipped') {
+      // diversity-4 翻转：七彩光环套住 → 收缩 → 翻转 → 消散（用户 2026-09-11 补做）
+      const p = e.payload as { triggerProtocol?: string; uid?: string; triggerDefId?: string } | undefined;
+      if (p && p.triggerProtocol === 'diversity') {
+        playDiversityFlipExtra(p);
+      }
+      // 联合0 顶 / 联合3 中：被选卡被亮蓝（unity-0）/ 银白（unity-3）光环笼罩后翻转
+      if (p && p.triggerProtocol === 'unity') {
+        playUnityRing(p);
+      }
+    } else if (e.type === 'line:compiled') {
+      // 联合1 中：场上联合卡齐亮 → 光柱汇聚协议中心 → 被删卡化银白光点被光柱吸收
+      const p = e.payload as { player?: PlayerId; line?: number; protocolDefId?: string } | undefined;
+      if (p && p.protocolDefId === 'unity' && p.player !== undefined && p.line !== undefined) {
+        const uids: string[] = [];
+        for (const owner of [0, 1] as PlayerId[]) {
+          for (const st of e.state.players[owner].stacks) {
+            for (const c of st) if (c.defId.startsWith('unity-')) uids.push(c.uid);
+          }
+        }
+        playUnityCompilePillar(p.player, p.line, uids);
       }
     }
   });

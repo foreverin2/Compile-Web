@@ -11,12 +11,13 @@ import {
 } from '../core/rules/restrictions';
 import { DEMO_PROTOCOLS, cardImgSrc, protocolImgSrc, cardTextParts, getCardDef, getProtocolDef } from '../data/demo';
 import type { CardTextParts } from '../data/demo';
+import { COMPILED_PROTOCOL_COLORS, protocolColorOf, hexToRgba } from './protocol-colors';
 import { PROTOCOL_RATINGS } from '../data/protocolRatings';
 import { actionCn } from '../core/log';
 import { cardCommandDisabled } from '../core/effects/context';
 import { downloadLog } from './diag';
 import { buildTornadoFx } from './fx-tornado';
-import { buildDove, startLuckDiceFx, startClarityDeckEye } from './fx-gen2';
+import { buildDove, buildLakeSword, startLuckDiceFx, startClarityDeckEye } from './fx-gen2';
 
 export interface UiCallbacks {
   onAction(a: LegalAction): void;
@@ -1173,10 +1174,28 @@ export function syncFear0TriGlows(s: GameState): void {
  * 卡框赤红呼吸发光。key = uid（卡离开/被盖移除）。同 FX-6 注册表模式。 */
 const warBlades = new Map<string, HTMLElement>();
 
+/** 战争铁剑（横向，剑尖朝右）——用户 2026-09-11：「铁剑的形状和颜色太丑了，整的跟个蜡烛一样」
+ *  → 由单条矩形（::before/::after）改为分部件暗红铁剑：剑身（锥形剑尖 + 中央血槽 + 磨光边）
+ *  + 十字护手 + 缠绕握柄 + 圆剑柄头。部件按 em 定尺，容器 font-size 决定整体大小
+ *  （卡牌常驻 FX 与已编译层共用同一套部件）。 */
+function buildWarSword(cls: string): HTMLElement {
+  const sword = el('div', cls);
+  const blade = el('i', 'war-sword-blade');
+  blade.appendChild(el('i', 'war-sword-fuller'));
+  sword.appendChild(el('i', 'war-sword-pommel'));
+  sword.appendChild(el('i', 'war-sword-grip'));
+  const guard = el('i', 'war-sword-guard');
+  guard.appendChild(el('i', 'war-sword-guard-tip t'));
+  guard.appendChild(el('i', 'war-sword-guard-tip b'));
+  sword.appendChild(guard);
+  sword.appendChild(blade);
+  return sword;
+}
+
 function renderWarBladeLayer(): HTMLElement {
   const layer = el('div', 'fx-war-blade');
-  const swordL = el('div', 'fx-war-sword l');
-  const swordR = el('div', 'fx-war-sword r');
+  const swordL = buildWarSword('fx-war-sword l');
+  const swordR = buildWarSword('fx-war-sword r');
   layer.appendChild(swordL);
   layer.appendChild(swordR);
   // 碰撞火花（小橙红星点向四周径向飞溅，CSS 循环）
@@ -3451,8 +3470,8 @@ function appendWarCompiled(layer: HTMLElement, defId: string): void {
   const swordsBurst = (done: () => void): void => {
     if (!layer.isConnected) { done(); return; }
     const pair = el('div', 'compiled-war-swords');
-    const s1 = el('div', 'compiled-war-sword l');
-    const s2 = el('div', 'compiled-war-sword r');
+    const s1 = buildWarSword('compiled-war-sword l');
+    const s2 = buildWarSword('compiled-war-sword r');
     pair.appendChild(s1);
     pair.appendChild(s2);
     for (let i = 0; i < 6; i++) {
@@ -3506,10 +3525,16 @@ function appendCourageCompiled(layer: HTMLElement, defId: string): void {
     if (!layer.isConnected) { done(); return; }
     const g = layerGeom(layer);
     if (!g) { fxTimer(defId, () => swordBurst(done), 700); return; }
-    const sword = el('div', 'compiled-courage-sword');
-    sword.appendChild(el('i', 'compiled-courage-sword-blade'));
-    sword.appendChild(el('i', 'compiled-courage-sword-guard'));
-    sword.appendChild(el('i', 'compiled-courage-sword-grip'));
+    // 湖中剑：复用 fx-gen2 buildLakeSword 分部件造型（用户 2026-09-11：旧版「和根棍子一样」）
+    // size=130 → 部件按 em 缩放；剑尖落在协议中心（marginTop = 剑尖在容器内的偏移 65%），斜插 -14°
+    const SWORD_SIZE = 130;
+    const sword = buildLakeSword(SWORD_SIZE);
+    sword.classList.add('compiled-courage-sword');
+    sword.style.left = '50%';
+    sword.style.top = '50%';
+    sword.style.marginLeft = `${-SWORD_SIZE / 2}px`;
+    sword.style.marginTop = `${(-SWORD_SIZE * (7.8 / 12)).toFixed(1)}px`;
+    sword.style.transformOrigin = '50% 65%';
     const ripple = el('div', 'compiled-courage-ripple');
     host.appendChild(sword);
     host.appendChild(ripple);
@@ -3697,24 +3722,7 @@ function appendUnityCompiled(layer: HTMLElement, defId: string): void {
  * 周期中心棱镜：彩色光棱缓缓旋转并向四周折射彩色光斑 2s 后消散。间隔 ≥10s。
  * CSS 见 styles.css .compiled-diversity-*。 */
 
-/** 协议已编译主色表（syncDiversityColors 取色用；颜色对齐各协议 .compiled-ring/corner） */
-const COMPILED_PROTOCOL_COLORS: Record<string, string> = {
-  // 1代 MN01/AX01
-  fire: '#ff6a00', light: '#ffe066', darkness: '#45454f', life: '#3ddc84', water: '#4fb4ff',
-  death: '#a142f0', spirit: '#9b5cff', gravity: '#e03ce6', psychic: '#a34fd6', plague: '#178a47',
-  metal: '#b9bec9', speed: '#cdd2dd', love: '#ff5fa2', hate: '#c81f35', apathy: '#9b9ea9',
-  // 2代 MN02/AX02（diversity 自身不算——取自"其它"已编译协议）
-  luck: '#ff9a2e', mirror: '#e2e8f5', peace: '#37a6e0', chaos: '#7a4fe8', clarity: '#e58ac4',
-  ice: '#3d9ad9', smoke: '#7a7a88', fear: '#ff6e1e', corruption: '#2f9e5a', war: '#e02222',
-  courage: '#e8b13a', time: '#b07f3e', assimilation: '#2ec9a8', unity: '#3d8bff',
-};
-
-/** hex → rgba(x, y, z, a) 辅助 */
-function hexToRgba(hex: string, a: number): string {
-  const h = hex.replace('#', '');
-  const n = parseInt(h.length === 3 ? h.split('').map((c) => c + c).join('') : h, 16);
-  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
-}
+/** 协议已编译主色表（syncDiversityColors 取色用；已在 protocol-colors.ts 与 fx-gen2 共用） */
 
 /** diversity 已编译 5 色取自场上其它已编译协议边框色（每帧渲染调用；变量写 body 级层） */
 export function syncDiversityColors(s: GameState): void {
@@ -3738,22 +3746,124 @@ export function syncDiversityColors(s: GameState): void {
   // 不足 5 种：在已有色间循环复用（保持 5 段交替观感）
   const arr: string[] = [];
   for (let i = 0; i < 5; i++) arr.push(colors[i % colors.length]);
-  for (let i = 0; i < 5; i++) {
-    layer.style.setProperty(`--dv${i + 1}`, arr[i]);
-    layer.style.setProperty(`--dvs${i + 1}`, hexToRgba(arr[i], 0.85));
+  setDiversityPalette(arr);
+}
+
+/** 多元 5 色调色板（syncDiversityColors 每帧刷新）+ 当前显示索引（appendDiversityCompiled 的
+ *  JS 定时器轮换）。配色【不】走 CSS 关键帧引用 var()：Chromium 下关键帧内 var() 在变量被
+ *  反复改写后会停止刷新（用户 2026-09-11 反馈「5 色切换隔一段时间之后会失效」），
+ *  改为 JS 定时改写 --dvc/--dvs（当前色）→ 切换恒定有效，且每种色停留时间可控（≥1s）。 */
+let diversityPalette: string[] = [];
+let diversityIdx = 0;
+
+/** 写出当前索引的颜色到已编译层 CSS 变量（--dvc 边框色 / --dvs 主辉光 / --dvs2 外辉光 / --dvs3 内辉光） */
+function applyDiversityColor(): void {
+  const layer = compiledFx.get('diversity');
+  if (!layer || diversityPalette.length === 0) return;
+  const c = diversityPalette[diversityIdx % diversityPalette.length];
+  layer.style.setProperty('--dvc', c);
+  layer.style.setProperty('--dvs', hexToRgba(c, 0.85));
+  layer.style.setProperty('--dvs2', hexToRgba(c, 0.42));
+  layer.style.setProperty('--dvs3', hexToRgba(c, 0.34));
+}
+
+/** 调色板更新入口：色板变化时立即刷新一次（保证列表与场上协议同步） */
+function setDiversityPalette(arr: string[]): void {
+  diversityPalette = arr;
+  applyDiversityColor();
+}
+
+/* ===== 2代 diversity-3 多元顶常驻：该链路中每张不同协议的正面卡亮起「本协议主题色」微光 +
+ *  该线能量槽泛起缓慢流动的彩色流光（用户 2026-09-11：多元3 卡牌特效此前缺失）
+ *  生效口径与引擎 valueModifier 一致（create.ts stackValue）：链路中任一张 faceUp diversity-3
+ *  且顶指令未被 inertia-0 禁用 → 该线生效；且链路中存在 faceUp 非多元卡（"任何非多元的正面
+ *  朝上的卡牌"）。key：卡 uid（微光）/ `${owner}-${line}`（能量槽流光）。 ===== */
+const div3CardGlows = new Map<string, HTMLElement>();
+const div3LineFlows = new Map<string, HTMLElement>();
+
+export function syncDiversity3Fx(s: GameState): void {
+  const activeCards = new Set<string>();
+  const activeLines = new Set<string>();
+  for (const owner of [0, 1] as PlayerId[]) {
+    for (const line of [0, 1, 2] as Line[]) {
+      const stack = s.players[owner].stacks[line];
+      const hasD3 = stack.some(
+        (c) => c.defId === 'diversity-3' && c.faceUp && !cardCommandDisabled(s, c, 'top'),
+      );
+      if (!hasD3) continue;
+      const others = stack.filter((c) => c.faceUp && c.defId.split('-')[0] !== 'diversity');
+      if (others.length === 0) continue;
+      // ① 每张非多元正面卡：边框亮起其所属协议主题色微光
+      for (const card of others) {
+        activeCards.add(card.uid);
+        const node = document.querySelector<HTMLElement>(`[data-uid="${card.uid}"]`);
+        if (!node) continue;
+        let glow = div3CardGlows.get(card.uid);
+        if (!glow) {
+          glow = el('div', 'fx-div3-cardglow');
+          glow.dataset.div3CardKey = card.uid;
+          div3CardGlows.set(card.uid, glow);
+          document.body.appendChild(glow);
+        }
+        const color = protocolColorOf(card.defId);
+        glow.style.setProperty('--dc', color);
+        glow.style.setProperty('--dcg', hexToRgba(color, 0.6));
+        const r = node.getBoundingClientRect();
+        glow.style.left = `${r.left - 5}px`;
+        glow.style.top = `${r.top - 5}px`;
+        glow.style.width = `${r.width + 10}px`;
+        glow.style.height = `${r.height + 10}px`;
+      }
+      // ② 该线能量槽：缓慢流动的彩色流光
+      const key = `${owner}-${line}`;
+      activeLines.add(key);
+      const shell = document.querySelector<HTMLElement>(
+        `.stack-slot[data-player="${owner}"][data-line="${line}"] .battery-shell`
+      );
+      if (!shell) continue;
+      let flow = div3LineFlows.get(key);
+      if (!flow) {
+        flow = el('div', 'fx-div3-lineflow');
+        flow.dataset.div3LineKey = key;
+        div3LineFlows.set(key, flow);
+        document.body.appendChild(flow);
+      }
+      const sr = shell.getBoundingClientRect();
+      flow.style.left = `${sr.left - 3}px`;
+      flow.style.top = `${sr.top - 3}px`;
+      flow.style.width = `${sr.width + 6}px`;
+      flow.style.height = `${sr.height + 6}px`;
+    }
+  }
+  for (const [uid, glow] of div3CardGlows) {
+    if (!activeCards.has(uid)) { glow.remove(); div3CardGlows.delete(uid); }
+  }
+  for (const [key, flow] of div3LineFlows) {
+    if (!activeLines.has(key)) { flow.remove(); div3LineFlows.delete(key); }
   }
 }
 
 function appendDiversityCompiled(layer: HTMLElement, defId: string): void {
   appendCompiledCorners(layer, 'compiled-diversity-corner'); // §8：四角多彩护边
+  // 5 色轮换（用户 2026-09-11：要求切换持续有效、每种色停留 ≥1s、间隔随机）：
+  // JS 自调度改写 --dvc/--dvs，不依赖关键帧内的 var()（后者会失效）
+  const cycle = (): void => {
+    if (!layer.isConnected) return;
+    diversityIdx = (diversityIdx + 1) % 5;
+    applyDiversityColor();
+    fxTimer(defId, cycle, rnd(1300, 2800));
+  };
+  fxTimer(defId, cycle, rnd(1300, 2800));
   const host = el('div', 'compiled-diversity-host');
   layer.appendChild(host);
   const prismBurst = (done: () => void): void => {
     if (!layer.isConnected) { done(); return; }
     host.textContent = '';
     const prism = el('div', 'compiled-diversity-prism');
-    // 5 面三角（五色棱镜）
-    const COLORS = ['#ff5a6e', '#ffd24d', '#4ee0c0', '#5aa0ff', '#c07bff'];
+    // 5 面三角（五色棱镜）——颜色优先取场上其它已编译协议色（与边框 5 色一致）
+    const COLORS = (diversityPalette.length === 5
+      ? diversityPalette
+      : ['#ff5a6e', '#ffd24d', '#4ee0c0', '#5aa0ff', '#c07bff']);
     for (let i = 0; i < 5; i++) {
       const f = el('i', 'compiled-diversity-prism-face');
       f.style.background = COLORS[i];
@@ -3761,8 +3871,8 @@ function appendDiversityCompiled(layer: HTMLElement, defId: string): void {
       prism.appendChild(f);
     }
     host.appendChild(prism);
-    // 折射光斑
-    for (let i = 0; i < 6; i++) {
+    // 折射光斑（数量与大小提升，配合加大后的棱镜）
+    for (let i = 0; i < 10; i++) {
       const s = el('i', 'compiled-diversity-gleam');
       s.style.background = COLORS[i % 5];
       host.appendChild(s);
@@ -4766,6 +4876,8 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   syncWarBlades(s);
   // 2代 diversity 多元已编译：5 色取自场上其它已编译协议边框色（写 body 级层 CSS 变量）
   syncDiversityColors(s);
+  // 2代 diversity-3 多元顶常驻：链路内非多元正面卡协议色微光 + 该线能量槽彩色流光
+  syncDiversity3Fx(s);
 }
 
 let selectedUid: string | null = null;
@@ -4852,6 +4964,11 @@ export function resetUiState(): void {
   fear0TriGlows.clear();
   for (const layer of warBlades.values()) layer.remove();
   warBlades.clear();
+  // 2代 diversity-3 常驻：链路微光 + 能量槽流光
+  for (const glow of div3CardGlows.values()) glow.remove();
+  div3CardGlows.clear();
+  for (const flow of div3LineFlows.values()) flow.remove();
+  div3LineFlows.clear();
   if (chainLayer) {
     chainLayer.remove();
     chainLayer = null;
