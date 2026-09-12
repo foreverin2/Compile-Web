@@ -6484,22 +6484,17 @@ body.dragging { cursor: grabbing; user-select: none; }
   background: radial-gradient(circle, rgba(255, 240, 250, 0.55) 0%, rgba(200, 235, 255, 0.35) 45%, transparent 75%);
   animation: fx-clarity-halo 2.2s ease-in-out infinite;
 }
-/* 金色四面体金字塔（两个三角面 + 底棱，CSS 造型） */
-.compiled-clarity-pyramid {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 0;
-  height: 0;
-  opacity: 0;
-}
 /* ---- 透彻已编译：大型金色金字塔虚影（2026-09-12 二次重做）
    用户要求：金字塔的四个角落在协议四角上 → 底面铺满整张协议卡、顶点冲出卡顶。
    由 render.ts buildClarityPyramidSvg 内联 SVG 绘制（viewBox 0 0 100 128 + preserveAspectRatio=none
-   → 几何随协议卡尺寸拉伸），容器铺满已编译层（= 协议 holder 矩形）。 */
+   → 几何随协议卡尺寸拉伸），容器铺满已编译层（= 协议 holder 矩形）。
+   注意：容器必须铺满（inset:0 + width/height auto）——旧版遗留的 width:0/height:0 曾把
+   整个金字塔压成 0×0 导致「根本不出现」。 */
 .compiled-clarity-pyramid {
   position: absolute;
   inset: 0;
+  width: auto;
+  height: auto;
   opacity: 0;
   pointer-events: none;
   transform-origin: 50% 100%; /* 自底面向上生长 */
@@ -6510,6 +6505,7 @@ body.dragging { cursor: grabbing; user-select: none; }
   animation: compiled-clarity-pyr-rise 2.2s cubic-bezier(0.2, 0.8, 0.3, 1) forwards;
 }
 .compiled-clarity-pyramid.out {
+  animation: none; /* 覆盖 .in 的 forwards 动画，否则淡出无效（动画优先级高于普通声明） */
   opacity: 0;
   transition: opacity 0.7s ease-in;
 }
@@ -6518,7 +6514,9 @@ body.dragging { cursor: grabbing; user-select: none; }
   38% { transform: scaleY(1.03) scaleX(1); opacity: 0.95; }
   100% { transform: scaleY(1) scaleX(1); opacity: 0.9; }
 }
-/* SVG 层：上溢 28%（顶点在卡顶之上），铺满卡面宽度 */
+/* SVG 层：上溢 28%（顶点在卡顶之上），铺满卡面宽度。
+   不使用 mix-blend-mode：已编译层有 isolation:isolate，混色既无效又多一类渲染风险，
+   虚影效果由填充透明度 + drop-shadow 表达。 */
 .compiled-clarity-pyr-svg {
   position: absolute;
   left: 0;
@@ -6527,12 +6525,11 @@ body.dragging { cursor: grabbing; user-select: none; }
   height: 128%;
   overflow: visible;
   filter: drop-shadow(0 0 9px rgba(255, 205, 90, 0.6));
-  mix-blend-mode: screen;
 }
 /* 可见三面（左面受光最亮 / 右面背光最深 / 前面居中；半透明 → 卡面内容仍可读） */
-.compiled-clarity-pyr-svg .pyr-face-left { fill: rgba(255, 240, 190, 0.44); }
-.compiled-clarity-pyr-svg .pyr-face-right { fill: rgba(196, 134, 34, 0.42); }
-.compiled-clarity-pyr-svg .pyr-face-front { fill: rgba(255, 206, 96, 0.34); }
+.compiled-clarity-pyr-svg .pyr-face-left { fill: rgba(255, 240, 190, 0.5); }
+.compiled-clarity-pyr-svg .pyr-face-right { fill: rgba(196, 134, 34, 0.48); }
+.compiled-clarity-pyr-svg .pyr-face-front { fill: rgba(255, 206, 96, 0.4); }
 /* 棱线：外侧两条轮廓棱最亮，内侧两条面界线稍暗 */
 .compiled-clarity-pyr-svg .pyr-edge {
   stroke: rgba(255, 246, 214, 0.9);
