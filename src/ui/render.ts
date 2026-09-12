@@ -18,6 +18,7 @@ import { cardCommandDisabled } from '../core/effects/context';
 import { downloadLog } from './diag';
 import { buildTornadoFx } from './fx-tornado';
 import { buildDove, buildLakeSword, spawnCourageSparks, startLuckDiceFx, startClarityDeckEye } from './fx-gen2';
+import { fitRotatedProtocol } from './zoom-layout';
 
 export interface UiCallbacks {
   onAction(a: LegalAction): void;
@@ -5139,6 +5140,8 @@ interface ZoomState {
   scale: number;
   isProtocol: boolean;
   onKey: (e: KeyboardEvent) => void;
+  /** 视口 resize 重算（协议包装层用固定 px 尺寸；关闭时移除监听） */
+  onResize?: () => void;
   /** 中文效果文本栏（仅卡牌正面时可见；协议卡为 null） */
   textEl: HTMLElement | null;
   /** 当前显示朝向（peek 翻面联动文本显隐；背面不显示中文防信息泄露） */
@@ -5182,6 +5185,16 @@ export function openZoom(defId: string, faceUp: boolean, isProtocol: boolean, co
     img.src = '/assets/Cardback.jpg';
   }
   img.alt = 'card zoom';
+  // 协议图旋转包装层（2026-09-12 修复「中文文本框被协议图挡住」）：
+  // CSS transform 不改变布局盒 → 直接旋转竖版协议图（750×1050）会让视觉盒（1050×750）溢出
+  // 布局盒左右各约 150px，压住右侧的中文面板；且变换元素会形成层叠上下文，静态文本反而被
+  // 绘制在其下方。此包装层由 JS 按「旋转后的视觉尺寸」设定宽高，img 绝对居中，
+  // 使布局盒 = 视觉盒 → 不再溢出、文本面板永不被遮挡。
+  let rotFrame: HTMLElement | null = null;
+  if (isProtocol) {
+    rotFrame = el('div', 'zoom-rot-frame');
+    rotFrame.appendChild(img);
+  }
   // 中文效果文本栏：仅卡牌（非协议）且正面显示时可见；peek 翻面联动显隐
   let textEl: HTMLElement | null = null;
   if (!isProtocol) {
@@ -5238,19 +5251,32 @@ export function openZoom(defId: string, faceUp: boolean, isProtocol: boolean, co
     });
     // 按钮先于图像 append：flex column 首子节点在上 → 「查看背面」按钮位于图像上方
     stage.appendChild(peekBtn);
-    stage.appendChild(img);
+    stage.appendChild(rotFrame ?? img);
     body.appendChild(stage);
   } else {
-    body.appendChild(img);
+    body.appendChild(rotFrame ?? img);
   }
   if (textEl) body.appendChild(textEl);
   overlay.appendChild(body);
-  // 滚轮缩放：协议卡横向（rotate(-90deg)）需与 scale 组合在 transform 里
+  // 滚轮缩放：协议卡横向（rotate(-90deg)）需与 scale 组合在 transform 里；
+  // 包装层内 img 绝对居中 → transform 需带 translate(-50%,-50%)
   let scale = 1;
   const apply = () => {
     img.style.transform = isProtocol
-      ? `rotate(-90deg) scale(${scale})`
+      ? `translate(-50%, -50%) rotate(-90deg) scale(${scale})`
       : `scale(${scale})`;
+  };
+  // 协议：按旋转后的视觉尺寸设定包装层与 img 布局盒（布局盒 = 视觉盒，旋转不溢出；
+  // 公式在 ui/zoom-layout.ts，配套单测保证「图 + 文本面板」在常见视口并排放得下）
+  const fitRotated = () => {
+    if (!isProtocol || !rotFrame) return;
+    const fit = fitRotatedProtocol(img.naturalWidth, img.naturalHeight, window.innerWidth, window.innerHeight);
+    rotFrame.style.width = `${fit.frameW.toFixed(1)}px`;
+    rotFrame.style.height = `${fit.frameH.toFixed(1)}px`;
+    img.style.width = `${fit.imgW.toFixed(1)}px`;
+    img.style.height = `${fit.imgH.toFixed(1)}px`;
+    img.style.maxWidth = 'none';
+    img.style.maxHeight = 'none';
   };
   const onWheel = (e: WheelEvent) => {
     e.preventDefault();
@@ -5258,18 +5284,25 @@ export function openZoom(defId: string, faceUp: boolean, isProtocol: boolean, co
     apply();
   };
   const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') closeZoom(); };
+  // 视口尺寸变化：协议包装层用固定 px（布局盒 = 视觉盒），需按新视口重算
+  const onResize = () => { fitRotated(); apply(); };
   // 点击遮罩空白处（target 是 overlay 本身而非 img）退出
   overlay.addEventListener('click', (e) => { if (e.target === overlay) closeZoom(); });
   overlay.addEventListener('wheel', onWheel, { passive: false });
   document.addEventListener('keydown', onKey);
+  window.addEventListener('resize', onResize);
   document.body.appendChild(overlay);
-  zoomState = { overlay, img, scale, isProtocol, onKey, textEl, showingFace };
+  zoomState = { overlay, img, scale, isProtocol, onKey, onResize, textEl, showingFace };
+  fitRotated();
   apply();
+  // 协议图异步加载完成后再精确量一次（naturalWidth 就绪 → 尺寸精确）
+  if (isProtocol && !img.complete) img.addEventListener('load', () => { fitRotated(); apply(); });
 }
 
 function closeZoom(): void {
   if (!zoomState) return;
   document.removeEventListener('keydown', zoomState.onKey);
+  if (zoomState.onResize) window.removeEventListener('resize', zoomState.onResize);
   zoomState.overlay.remove();
   zoomState = null;
 }

@@ -94,4 +94,22 @@ describe('FX 容器 CSS 守卫', () => {
     expect(/(^|[\s;])width\s*:\s*auto/.test(base!.body)).toBe(true);
     expect(/(^|[\s;])height\s*:\s*auto/.test(base!.body)).toBe(true);
   });
+
+  it('协议放大查看：旋转包装层存在，且在文本面板之下（文本 z-index 更高）', () => {
+    const frame = rulesFor('zoom-rot-frame');
+    expect(frame.length, '.zoom-rot-frame 未定义（协议图旋转溢出会压住文本面板）').toBe(1);
+    expect(/position\s*:\s*relative/.test(frame[0].body)).toBe(true);
+    // 包装层内的 img 必须绝对定位（由 JS 写入尺寸后居中）
+    expect(css).toMatch(/\.zoom-rot-frame\s+\.zoom-img\s*\{[^}]*position\s*:\s*absolute/);
+    // 文本面板显式抬到变换图像之上
+    const text = rulesFor('zoom-text');
+    expect(text.length).toBe(1);
+    expect(/z-index\s*:\s*2/.test(text[0].body)).toBe(true);
+    expect(/position\s*:\s*relative/.test(text[0].body)).toBe(true);
+    // 协议图不再用 CSS 尺寸上限（改由 JS 精确设定布局盒）
+    const proto = rulesFor('zoom-protocol');
+    expect(proto.length).toBe(1);
+    expect(/max-width\s*:\s*none/.test(proto[0].body)).toBe(true);
+    expect(/max-height\s*:\s*none/.test(proto[0].body)).toBe(true);
+  });
 });

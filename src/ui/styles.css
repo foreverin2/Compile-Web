@@ -1510,11 +1510,23 @@ body {
 }
 .zoom-protocol {
   /* 协议卡横向显示：原图逆时针旋转 90°（transform 中与 scale 组合）。
-     旋转后视觉宽高互换，故布局约束也随之交换：80vh 宽 × 80vw 高，
-     保证横向协议（如 1050×750）在 1x 缩放下完整落入视口不被裁切。 */
-  max-width: 80vh;
-  max-height: 80vw;
+     2026-09-12 起尺寸由 JS（openZoom fitRotated）按「旋转后的视觉尺寸」显式设定：
+     布局盒 = 视觉盒，避免旋转溢出压住右侧中文面板；此处只需解除尺寸上限。 */
+  max-width: none;
+  max-height: none;
   transform-origin: center center;
+}
+/* 协议图旋转包装层：宽高 = 旋转后的视觉盒（JS 写入 px），img 绝对居中并旋转 */
+.zoom-rot-frame {
+  position: relative;
+  flex: 0 0 auto;
+  pointer-events: none;
+}
+.zoom-rot-frame .zoom-img {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  pointer-events: auto;
 }
 
 /* ===== 查看背面（ITEM 9：自己的反面场上卡放大时的 peek 切换） =====
@@ -5436,6 +5448,8 @@ body.dragging { cursor: grabbing; user-select: none; }
 }
 .zoom-body .zoom-img:not(.zoom-protocol) { max-width: min(80vw, 600px); max-height: 86vh; }
 .zoom-text {
+  position: relative;
+  z-index: 2; /* 变换后的图像会形成层叠上下文并被绘制在静态文本之上 → 文本显式抬到其上 */
   width: min(320px, 34vw);
   min-width: 240px;
   max-height: 80vh;
