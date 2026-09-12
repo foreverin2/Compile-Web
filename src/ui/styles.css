@@ -6493,59 +6493,74 @@ body.dragging { cursor: grabbing; user-select: none; }
   height: 0;
   opacity: 0;
 }
+/* ---- 透彻已编译：大型金色金字塔虚影（2026-09-12 二次重做）
+   用户要求：金字塔的四个角落在协议四角上 → 底面铺满整张协议卡、顶点冲出卡顶。
+   由 render.ts buildClarityPyramidSvg 内联 SVG 绘制（viewBox 0 0 100 128 + preserveAspectRatio=none
+   → 几何随协议卡尺寸拉伸），容器铺满已编译层（= 协议 holder 矩形）。 */
+.compiled-clarity-pyramid {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  transform-origin: 50% 100%; /* 自底面向上生长 */
+  overflow: visible;
+}
 .compiled-clarity-pyramid.in {
   opacity: 1;
-  transition: opacity 0.5s ease-out;
-  animation: compiled-clarity-pyr-rise 2.2s ease-out forwards;
+  animation: compiled-clarity-pyr-rise 2.2s cubic-bezier(0.2, 0.8, 0.3, 1) forwards;
 }
 .compiled-clarity-pyramid.out {
   opacity: 0;
   transition: opacity 0.7s ease-in;
 }
 @keyframes compiled-clarity-pyr-rise {
-  0% { transform: translateY(12px) scale(0.72); }
-  35% { transform: translateY(0) scale(1); }
-  100% { transform: translateY(-4px) scale(1); }
+  0% { transform: scaleY(0.18) scaleX(0.86); opacity: 0; }
+  38% { transform: scaleY(1.03) scaleX(1); opacity: 0.95; }
+  100% { transform: scaleY(1) scaleX(1); opacity: 0.9; }
 }
-/* 3D 四面体（2026-09-12 用户：旧版是两个同色三角 → 看着像黄色三角形）：
-   左面 = 受光面（亮金渐变）、右面 = 背光面（暗金渐变）、前棱高光 + 底影椭圆
-   —— 两面共享顶点（50%,0%）与前底边 → 读作立体的金字塔 */
-.compiled-clarity-pyramid-face {
+/* SVG 层：上溢 28%（顶点在卡顶之上），铺满卡面宽度 */
+.compiled-clarity-pyr-svg {
   position: absolute;
-  left: -34px;
-  top: -46px;
-  width: 68px;
-  height: 76px;
-  filter: drop-shadow(0 0 10px rgba(255, 200, 90, 0.65));
+  left: 0;
+  top: -28%;
+  width: 100%;
+  height: 128%;
+  overflow: visible;
+  filter: drop-shadow(0 0 9px rgba(255, 205, 90, 0.6));
+  mix-blend-mode: screen;
 }
-.compiled-clarity-pyramid-face.l {
-  clip-path: polygon(50% 0%, 2% 78%, 50% 92%);
-  background: linear-gradient(205deg, #fff8d8 0%, #ffd164 42%, #e0a32c 100%);
+/* 可见三面（左面受光最亮 / 右面背光最深 / 前面居中；半透明 → 卡面内容仍可读） */
+.compiled-clarity-pyr-svg .pyr-face-left { fill: rgba(255, 240, 190, 0.44); }
+.compiled-clarity-pyr-svg .pyr-face-right { fill: rgba(196, 134, 34, 0.42); }
+.compiled-clarity-pyr-svg .pyr-face-front { fill: rgba(255, 206, 96, 0.34); }
+/* 棱线：外侧两条轮廓棱最亮，内侧两条面界线稍暗 */
+.compiled-clarity-pyr-svg .pyr-edge {
+  stroke: rgba(255, 246, 214, 0.9);
+  stroke-width: 1.1;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
 }
-.compiled-clarity-pyramid-face.r {
-  clip-path: polygon(50% 0%, 98% 78%, 50% 92%);
-  background: linear-gradient(155deg, #e9b23c 0%, #b8791a 52%, #6f4306 100%);
+.compiled-clarity-pyr-svg .pyr-edge.inner { stroke: rgba(255, 226, 150, 0.62); stroke-width: 0.9; }
+/* 底面轮廓 = 协议卡边框 */
+.compiled-clarity-pyr-svg .pyr-base-outline {
+  fill: none;
+  stroke: rgba(255, 224, 140, 0.55);
+  stroke-width: 0.9;
+  vector-effect: non-scaling-stroke;
 }
-/* 前棱高光（顶点 → 前底角） */
-.compiled-clarity-pyramid-edge {
+/* 底面地面金光 */
+.compiled-clarity-pyr-glow {
   position: absolute;
-  left: -1.25px;
-  top: -46px;
-  width: 2.5px;
-  height: 76px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(255, 226, 140, 0.18));
+  inset: 0;
+  border-radius: 12px;
+  background: radial-gradient(ellipse at 50% 78%, rgba(255, 216, 120, 0.38) 0%, rgba(255, 190, 60, 0.12) 48%, rgba(255, 180, 40, 0) 74%);
+  animation: compiled-clarity-pyr-glow 2.2s ease-in-out infinite;
 }
-/* 底影 / 底部金光椭圆 */
-.compiled-clarity-pyramid-base {
-  position: absolute;
-  left: -36px;
-  top: 22px;
-  width: 72px;
-  height: 18px;
-  border-radius: 50%;
-  background: radial-gradient(ellipse at center, rgba(255, 210, 100, 0.6) 0%, rgba(255, 180, 40, 0) 72%);
+@keyframes compiled-clarity-pyr-glow {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
 }
-/* 金字塔周围上升的金色粒子 */
+/* 金字塔周围上升的金色粒子（沿底面散布、向上飘） */
 .compiled-clarity-pyr-spark {
   position: absolute;
   width: 5px;
@@ -6559,7 +6574,7 @@ body.dragging { cursor: grabbing; user-select: none; }
 @keyframes compiled-clarity-pyr-spark {
   0% { transform: translateY(6px) scale(0.5); opacity: 0; }
   25% { opacity: 1; }
-  100% { transform: translateY(-36px) scale(0.3); opacity: 0; }
+  100% { transform: translateY(-52px) scale(0.3); opacity: 0; }
 }
 
 /* =====================================================================

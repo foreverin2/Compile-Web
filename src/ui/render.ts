@@ -3213,6 +3213,55 @@ function appendChaosCompiled(layer: HTMLElement, defId: string): void {
  * （scheduleCompiledLoop 拆两个独立循环）。CSS 见 styles.css .compiled-clarity-*。 */
 const CLARITY_EYE_SHOW_MS = 2200; // 眼睛 + 圣光持续（渐现→停留→渐隐）
 
+/** 透彻已编译「大型金色金字塔虚影」内联 SVG（用户 2026-09-12：金字塔的四个角要落在协议四角上）。
+ *  viewBox 0 0 100 128：y=0 = 顶点，y=28 = 协议卡顶边，y=128 = 协议卡底边
+ *  （CSS 让 SVG 铺满整层并上溢 28% → 顶点冲出卡顶）。
+ *  几何：底面矩形 = 协议卡本身（四角对齐协议四角）；顶点在底面中心上方 → 透视投影落在卡顶之上；
+ *  可见三面 = 左面(A,TL,BL) / 右面(A,TR,BR) / 前面(A,BL,BR)（背面被遮挡）；
+ *  另绘 4 条上升棱线 + 底面轮廓。半透明金 → 读作「覆盖整卡的立体虚影」。 */
+function buildClarityPyramidSvg(): SVGSVGElement {
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('class', 'compiled-clarity-pyr-svg');
+  svg.setAttribute('viewBox', '0 0 100 128');
+  svg.setAttribute('preserveAspectRatio', 'none');
+  const A = { x: 50, y: 0 };      // 顶点
+  const TL = { x: 0, y: 28 };
+  const TR = { x: 100, y: 28 };
+  const BL = { x: 0, y: 128 };
+  const BR = { x: 100, y: 128 };
+  const poly = (pts: { x: number; y: number }[], cls: string): void => {
+    const p = document.createElementNS(NS, 'polygon');
+    p.setAttribute('points', pts.map((q) => `${q.x},${q.y}`).join(' '));
+    p.setAttribute('class', cls);
+    svg.appendChild(p);
+  };
+  // 三个可见面（左面受光最亮 → 右面背光最深）
+  poly([A, TL, BL], 'pyr-face-left');
+  poly([A, TR, BR], 'pyr-face-right');
+  poly([A, BL, BR], 'pyr-face-front');
+  // 4 条上升棱线（顶点 → 底面四角）
+  const line = (a: { x: number; y: number }, b: { x: number; y: number }, cls: string): void => {
+    const l = document.createElementNS(NS, 'line');
+    l.setAttribute('x1', String(a.x));
+    l.setAttribute('y1', String(a.y));
+    l.setAttribute('x2', String(b.x));
+    l.setAttribute('y2', String(b.y));
+    l.setAttribute('class', cls);
+    svg.appendChild(l);
+  };
+  line(A, TL, 'pyr-edge outer');
+  line(A, TR, 'pyr-edge outer');
+  line(A, BL, 'pyr-edge inner');
+  line(A, BR, 'pyr-edge inner');
+  // 底面轮廓（= 协议卡边框）
+  const base = document.createElementNS(NS, 'polygon');
+  base.setAttribute('points', `${TL.x},${TL.y} ${TR.x},${TR.y} ${BR.x},${BR.y} ${BL.x},${BL.y}`);
+  base.setAttribute('class', 'pyr-base-outline');
+  svg.appendChild(base);
+  return svg;
+}
+
 function appendClarityCompiled(layer: HTMLElement, defId: string): void {
   appendCompiledCorners(layer, 'compiled-clarity-corner'); // §8：四角淡粉/淡蓝护边
   const host = el('div', 'compiled-clarity-host');
@@ -3242,22 +3291,23 @@ function appendClarityCompiled(layer: HTMLElement, defId: string): void {
       }, 700);
     }, CLARITY_EYE_SHOW_MS);
   };
-  // 金色金字塔 burst（2026-09-12 重做）：3D 四面体 = 受光左面 + 背光右面 + 前棱高光 + 底影
-  // + 上升金色粒子，2s 后消散（旧版两个同色三角看着像黄色三角形，用户反馈）
+  // 金色大型金字塔虚影 burst（2026-09-12 二次重做，用户：金字塔的四个角应落在协议四角上）：
+  // 底面 = 整张协议卡（四角对齐协议四角），顶点冲出卡顶（透视高度 28%），
+  // 三个可见面（受光左面 / 背光右面 / 前面）+ 4 条上升棱线 + 底面轮廓 + 底部金光 + 上升金粒。
+  // 用内联 SVG（viewBox 0 0 100 128 拉伸铺满）绘制 → 面/棱线几何精确，虚影半透明叠在卡面上。
   const pyramidBurst = (done: () => void): void => {
     if (!layer.isConnected) { done(); return; }
     const g = layerGeom(layer);
     if (!g) { fxTimer(defId, () => pyramidBurst(done), 700); return; }
     const pyr = el('div', 'compiled-clarity-pyramid');
-    pyr.appendChild(el('i', 'compiled-clarity-pyramid-base'));
-    pyr.appendChild(el('i', 'compiled-clarity-pyramid-face l'));
-    pyr.appendChild(el('i', 'compiled-clarity-pyramid-face r'));
-    pyr.appendChild(el('i', 'compiled-clarity-pyramid-edge'));
-    for (let i = 0; i < 8; i++) {
+    // 底部地面金光（底面范围）
+    pyr.appendChild(el('i', 'compiled-clarity-pyr-glow'));
+    pyr.appendChild(buildClarityPyramidSvg());
+    for (let i = 0; i < 10; i++) {
       const s = el('i', 'compiled-clarity-pyr-spark');
-      s.style.left = `${rnd(-30, 30).toFixed(1)}px`;
-      s.style.top = `${rnd(6, 26).toFixed(1)}px`;
-      s.style.animationDelay = `${(i * 0.14).toFixed(2)}s`;
+      s.style.left = `${rnd(6, 94).toFixed(1)}%`;
+      s.style.top = `${rnd(70, 98).toFixed(1)}%`;
+      s.style.animationDelay = `${(i * 0.13).toFixed(2)}s`;
       pyr.appendChild(s);
     }
     host.appendChild(pyr);
