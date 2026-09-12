@@ -3,6 +3,8 @@ import type { GameState, Line, PlayerId } from '../models/types';
 import { gameBus } from '../events/bus';
 import { fireReactive } from '../effects/triggers';
 import { shuffleTrashIntoDeck } from '../engine/deck';
+import { stackValue } from '../state/create';
+import { getProtocolDef } from '../../data/demo';
 
 /** 编译本体（无前置校验）：同时删除该线双方全部卡牌（"all" 效果，不触发任何文本/连锁），
  *  翻协议或抽对手牌库顶 1 张，并完成胜利判定。
@@ -12,8 +14,21 @@ import { shuffleTrashIntoDeck } from '../engine/deck';
  *  保证两条路径的底层状态变更/事件完全一致。 */
 export function executeCompileBody(s: GameState, player: PlayerId, line: Line): void {
   const p = s.players[player];
-  const opp = s.players[player === 0 ? 1 : 0];
+  const oppId: PlayerId = player === 0 ? 1 : 0;
+  const opp = s.players[oppId];
   const protocol = p.protocols[line];
+  // 编译判定依据（用户 2026-09-12 反馈「12 vs 16 却编译了」）：规则书「若你在某条线路拥有
+  // ≥10 的总数值，并且该线路你的数值高于对手」——在删卡前取双方线值，写进日志/事件，
+  // 便于事后核对「谁编译、为什么够条件」，也让 UI 横幅能显示归属。
+  const ownValue = stackValue(s, player, line);
+  const oppValue = stackValue(s, oppId, line);
+  const recompiled = protocol.compiled;
+  let protoName = protocol.defId;
+  try {
+    protoName = getProtocolDef(protocol.defId).name;
+  } catch {
+    /* 未知 defId：退回 defId 文本 */
+  }
   // 同时删除：双方该线链路全部入各自 trash
   const ownCards = p.stacks[line].splice(0);
   const oppCards = opp.stacks[line].splice(0);
@@ -25,7 +40,10 @@ export function executeCompileBody(s: GameState, player: PlayerId, line: Line): 
   }
   p.trash.push(...ownCards);
   opp.trash.push(...oppCards);
-  pushLog(s, `P${player + 1} compiles line ${line + 1}`);
+  pushLog(
+    s,
+    `P${player + 1} ${recompiled ? '重编译' : '编译'}线 ${line + 1}（${protoName} ${ownValue} vs 对手 ${oppValue}）`,
+  );
   // 语义事件（编译清牌 FX 用）：双方该线卡牌 uid（各按链路顶→底顺序）与协议 defId
   gameBus.emit({
     type: 'line:compiled',
@@ -36,12 +54,17 @@ export function executeCompileBody(s: GameState, player: PlayerId, line: Line): 
       protocolDefId: protocol.defId,
       ownUids: [...ownCards].reverse().map((c) => c.uid),
       oppUids: [...oppCards].reverse().map((c) => c.uid),
+      // 2026-09-12 追加：归属/依据（UI 编译横幅 + 事后核对）
+      recompiled,
+      ownValue,
+      oppValue,
+      protoName,
     },
   });
-  if (protocol.compiled) {
+  if (recompiled) {
     // 重新编译：抽对手牌库顶 1 张，所有权变更（修改提示词 28/29：对手牌库为空 → 先将其弃牌堆
     // 洗入牌库再抽——与 drawCards 补牌规则一致）
-    if (opp.deck.length === 0 && opp.trash.length > 0) shuffleTrashIntoDeck(s, player === 0 ? 1 : 0);
+    if (opp.deck.length === 0 && opp.trash.length > 0) shuffleTrashIntoDeck(s, oppId);
     const card = opp.deck.pop();
     if (card) {
       card.owner = player;
@@ -50,11 +73,10 @@ export function executeCompileBody(s: GameState, player: PlayerId, line: Line): 
       card.secret = false;
       card.faceUp = true;
       p.hand.push(card);
-      pushLog(s, `P${player + 1} recompiles and steals a card`);
+      pushLog(s, `P${player + 1} 重编译夺取对手牌库顶1张`);
     }
   } else {
     protocol.compiled = true;
-    pushLog(s, `Protocol "${protocol.defId}" compiled`);
   }
 
   s.compiledThisTurn = true;

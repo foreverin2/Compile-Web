@@ -1725,8 +1725,21 @@ function playRiseFade(node: HTMLElement, delay: number): void {
 }
 
 /** 编译：双方该线卡牌从顶到底依次升起消散（两侧并行），随后编译方协议翻面 */
-function playCompile(payload: { player: PlayerId; line: number; protocolDefId: string; ownUids: string[]; oppUids: string[] }): void {
+function playCompile(payload: {
+  player: PlayerId;
+  line: number;
+  protocolDefId: string;
+  ownUids: string[];
+  oppUids: string[];
+  recompiled?: boolean;
+  ownValue?: number;
+  oppValue?: number;
+  protoName?: string;
+}): void {
   const uidNode = (uid: string) => document.querySelector<HTMLElement>(`[data-uid="${uid}"]`);
+  // 编译横幅（2026-09-12 用户反馈「分不清是谁编译了哪条线」）：顶部居中大字
+  // 「P2 重编译线 2 · 贪婪（16 vs 12）」，2s 渐隐
+  showCompileBanner(payload);
   const step = 300;
   const n = Math.max(payload.ownUids.length, payload.oppUids.length);
   let delay = 0;
@@ -1746,8 +1759,39 @@ function playCompile(payload: { player: PlayerId; line: number; protocolDefId: s
   }
 }
 
-/** 协议翻面（loading → compiled）：3D 翻转覆盖在已重渲染的协议上 */
-function playProtocolFlip(node: HTMLElement, defId: string): void {
+/** 编译横幅：明确「谁编译了哪条线、什么协议、双方线值多少」（用户 2026-09-12 需求）。
+ *  body 级 fixed、2s 后渐隐自清理；重编译额外标注「夺取对手牌库顶1张」。 */
+function showCompileBanner(payload: {
+  player: PlayerId;
+  line: number;
+  recompiled?: boolean;
+  ownValue?: number;
+  oppValue?: number;
+  protoName?: string;
+  protocolDefId: string;
+}): void {
+  const banner = document.createElement('div');
+  banner.className = 'fx-compile-banner' + (payload.player === 0 ? ' p1' : ' p2');
+  const head = document.createElement('div');
+  head.className = 'fx-compile-banner-head';
+  head.textContent = `P${payload.player + 1} ${payload.recompiled ? '重编译' : '编译'}线 ${payload.line + 1}`;
+  const sub = document.createElement('div');
+  sub.className = 'fx-compile-banner-sub';
+  const who = payload.protoName ?? payload.protocolDefId;
+  const vals =
+    payload.ownValue !== undefined && payload.oppValue !== undefined
+      ? `（${payload.ownValue} vs 对手 ${payload.oppValue}）`
+      : '';
+  sub.textContent = `${who}${vals}${payload.recompiled ? ' · 夺取对手牌库顶1张' : ''}`;
+  banner.appendChild(head);
+  banner.appendChild(sub);
+  document.body.appendChild(banner);
+  window.setTimeout(() => banner.classList.add('in'), 20);
+  window.setTimeout(() => banner.classList.add('out'), 2000);
+  window.setTimeout(() => banner.remove(), 2700);
+}
+
+/** 协议翻面（loading → compiled）：3D 翻转覆盖在已重渲染的协议上 */function playProtocolFlip(node: HTMLElement, defId: string): void {
   const rect = node.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return;
   const wrap = document.createElement('div');

@@ -4731,10 +4731,11 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
     // 打牌通过点击手牌+线完成；刷新手牌在挡板外侧；下一步单独居中渲染
     if (a.kind === 'play' || a.kind === 'refresh' || a.kind === 'advance') continue;
     const label =
-      a.kind === 'compile' ? `编译线 ${(a.line ?? 0) + 1}`
-      : a.kind === 'resolve-trigger' ? `结算触发：${a.defId ?? ''}` // 修改提示词 28：按钮带触发来源卡牌
-      : a.kind === 'clear-cache' ? `清理缓存`
-      : a.kind;
+      a.kind === 'compile'
+        ? `编译线 ${(a.line ?? 0) + 1}（${getLineValue(s, s.turnPlayer, a.line ?? 0)} vs ${getLineValue(s, s.turnPlayer === 0 ? 1 : 0, a.line ?? 0)}）`
+        : a.kind === 'resolve-trigger' ? `结算触发：${a.defId ?? ''}` // 修改提示词 28：按钮带触发来源卡牌
+        : a.kind === 'clear-cache' ? `清理缓存`
+        : a.kind;
     const btn = el('button', 'btn', label);
     btn.addEventListener('click', () => cb.onAction(a));
     actionBar.appendChild(btn);

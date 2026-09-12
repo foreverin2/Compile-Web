@@ -1821,6 +1821,47 @@ body.dragging { cursor: grabbing; user-select: none; }
 .choice-pick-label { display: block; text-align: center; font-size: 11px; color: #9fb6cc; margin-top: 3px; }
 .choice-pick-count { text-align: center; font-size: 13px; color: #ffd76a; margin-top: 10px; }
 
+/* ===== 编译横幅（2026-09-12）：明确「谁编译了哪条线/什么协议/双方线值」 ===== */
+.fx-compile-banner {
+  position: fixed;
+  left: 50%;
+  top: 12%;
+  transform: translate(-50%, -8px) scale(0.94);
+  padding: 10px 26px 12px;
+  border-radius: 14px;
+  text-align: center;
+  pointer-events: none;
+  z-index: 620;
+  opacity: 0;
+  background: rgba(10, 14, 26, 0.92);
+  border: 2px solid #4ff0ff99;
+  box-shadow: 0 0 26px rgba(79, 240, 255, 0.45), inset 0 0 18px rgba(79, 240, 255, 0.18);
+}
+.fx-compile-banner.p2 { border-color: #ffb45a99; box-shadow: 0 0 26px rgba(255, 180, 90, 0.45), inset 0 0 18px rgba(255, 180, 90, 0.18); }
+.fx-compile-banner.in {
+  opacity: 1;
+  transform: translate(-50%, 0) scale(1);
+  transition: opacity 0.25s ease-out, transform 0.3s cubic-bezier(0.2, 0.8, 0.3, 1.2);
+}
+.fx-compile-banner.out {
+  opacity: 0;
+  transform: translate(-50%, -6px) scale(0.98);
+  transition: opacity 0.6s ease-in, transform 0.6s ease-in;
+}
+.fx-compile-banner-head {
+  font-size: 26px;
+  font-weight: 900;
+  letter-spacing: 2px;
+  color: #d8fbff;
+  text-shadow: 0 0 18px rgba(79, 240, 255, 0.85);
+}
+.fx-compile-banner.p2 .fx-compile-banner-head { color: #ffe6c2; text-shadow: 0 0 18px rgba(255, 180, 90, 0.85); }
+.fx-compile-banner-sub {
+  margin-top: 4px;
+  font-size: 14px;
+  color: #cfe3f5;
+}
+
 /* ===== 诊断日志导出 ===== */
 /* 导出日志按钮：放大 + 固定于视口右下角（right 16px / bottom 18px），z-index 300 高于底部
    操作台与选择条（均 200）——滚动时始终可见、不被操作台覆盖。霓虹青色与 .play-btn /
