@@ -2,6 +2,7 @@ import type { Card, GameState, Line, PlayerId, TriggerEntry, TriggerKind } from 
 import { EFFECTS } from './registry';
 import { createCtx, findCard, isUncovered, nextEffectId, cardCommandDisabled } from './context';
 import { pushLog, pushEffectLog, stageLabel } from '../log';
+import { traceAt, cardBrief } from '../trace';
 
 /** 即时连锁触发种类：抽牌后 / 弃牌后 / 删除后 / 清理缓存后 / 对手抽牌后（mirror-4/war-0 底）/
  *  自己弃牌后（peace-4 底）/ 刷新后 / 对手刷新后 / 编译后 / 切洗后（time-2 顶）/ 定向 after-play/after-return
@@ -107,6 +108,11 @@ export function fireReactive(s: GameState, kind: ReactiveKind, actor: PlayerId):
           lastAnswer: null,
         });
         pushEffectLog(s, card.defId, stageLabel(kind), `由 P${actor + 1} 引发`);
+        traceAt(
+          s,
+          '触发',
+          `即时连锁 [${kind}] ${cardBrief(card)} 由 P${actor + 1} 引发${def.top ? '（顶命令，被盖仍生效）' : ''}`,
+        );
       }
     }
   }
@@ -140,6 +146,12 @@ export function resolveTrigger(s: GameState, t: TriggerEntry, opts?: { topComman
     stageLabel(t.kind),
     t.kind === 'end' || t.kind === 'start' ? `由 P${card.owner + 1} 结算` : '', // 修改提示词 12：注明谁结算
   );
+  traceAt(
+    s,
+    '触发',
+    `结算触发 [${t.kind}] ${t.defId} uid=${t.cardUid} 属主=P${card.owner + 1}` +
+      ` 可选=${t.optional ? 1 : 0} 顶命令=${t.top ? 1 : 0}${opts?.topCommand ? ' 顶命令生效' : ''}`,
+  );
 }
 
 /** 收集某类触发：end/start 只收集回合玩家场地侧（规则书"结算你场地侧所有'结束'触发"）；
@@ -171,6 +183,20 @@ export function collectTriggers(s: GameState, kind: TriggerKind): TriggerEntry[]
         out.push({ cardUid: card.uid, defId: card.defId, kind, optional: def.optional, top: def.top });
       }
     }
+  }
+  // 全量追踪：收集结果（哪些卡、是否必选）——判断「该触发为何没弹/为何弹了」的第一手依据
+  if (out.length > 0 || kind === 'end' || kind === 'start') {
+    traceAt(
+      s,
+      '触发',
+      `收集 [${kind}] 结算方=P${s.turnPlayer + 1} → ${out.length} 条${
+        out.length > 0
+          ? `：${out
+              .map((t) => `${t.defId}(uid=${t.cardUid}${t.optional ? ',可选' : ',必选'}${t.top ? ',顶' : ''})`)
+              .join(' ')}`
+          : ''
+      }`,
+    );
   }
   return out;
 }

@@ -346,7 +346,7 @@ function forceCompileProtocol(host: DevModeHost, name: string): void {
   // 与正式编译一致：编译玩家若持有控制组件先归还中立（规则文本「控制组件相关规则」；
   // devmode 旁路不弹重排模态——重排交互在正式 UI 流程 main.ts）
   resetControlIfHeld(state, player);
-  executeCompileUnchecked(state, player, line as Line);
+  executeCompileUnchecked(state, player, line as Line, { force: true });
   log(host, `已强制编译 P${player + 1} 的 ${proto.defId}（line ${line + 1}）`);
   host.render();
 }

@@ -1,4 +1,5 @@
 import type { GameState, Step, PlayerId } from '../models/types';
+import { trace, stateDigest } from '../trace';
 
 export const STEP_ORDER: Step[] = [
   'start',
@@ -20,7 +21,15 @@ export function advanceStep(s: GameState): void {
   if (next === 'action' && s.compiledThisTurn) {
     next = 'check-cache';
   }
+  const from = s.step;
   s.step = next;
+  // 全量追踪：步骤推进（编译后跳过行动阶段也记录）+ 回合换人时的关键字段变化
+  trace(
+    '步骤',
+    `P${s.turnPlayer + 1} ${from} → ${next}${from === 'end' && next === 'start' ? '（回合结束，换人）' : ''}` +
+      `${from === 'check-compile' && next === 'check-cache' ? '（本回合已编译 → 跳过行动阶段）' : ''}`,
+    s.pendingEffects.length,
+  );
   if (next === 'end' || next === 'start') {
     s.resolvedTriggerUids = [];
   }
@@ -39,5 +48,6 @@ export function advanceStep(s: GameState): void {
     s.revealedGhosts = s.revealedGhosts.filter((g) => g.expiresAtTurn > s.turnCount);
     // 2代 牌库揭示标记（clarity-1/2/3）：与揭示幽灵同点过期（回合结束转换清除）
     s.deckReveals = s.deckReveals.filter((d) => d.expiresAtTurn > s.turnCount);
+    trace('步骤', `回合开始：P${s.turnPlayer + 1}（回合计数=${s.turnCount}） | ${stateDigest(s)}`);
   }
 }

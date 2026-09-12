@@ -33,7 +33,7 @@ describe('diag log formatting', () => {
     expect(text).toContain('落牌中=无');
   });
 
-  it('formatDiagnosticLog includes console entries, errors, s.log and snapshot', () => {
+  it('formatDiagnosticLog includes console entries, errors, full s.log, trace and detailed snapshot', () => {
     const s = draftFireP1();
     s.log.push('P1 plays fire-5');
     const entries: ConsoleEntry[] = [
@@ -43,13 +43,20 @@ describe('diag log formatting', () => {
     const errors: ErrorEntry[] = [{ time: 't3', type: 'error', message: 'boom', stack: 'at x' }];
     const text = formatDiagnosticLog(s, entries, errors);
     expect(text).toContain('===== Compile 诊断日志 =====');
+    expect(text).toContain('---- 环境信息 ----');
     expect(text).toContain('[log] t1 hello');
     expect(text).toContain('[error] t2 boom');
     expect(text).toContain('[error] t3 boom');
     expect(text).toContain('at x');
+    // 游戏日志树：全部条目（不再只导尾部）
+    expect(text).toContain('---- 游戏日志树（全部');
     expect(text).toContain('P1 plays fire-5');
-    expect(text).toContain('---- 状态快照 ----');
+    // 全量追踪流水段（2026-09-12 新增）
+    expect(text).toContain('---- 全量追踪流水');
+    // 详细状态快照（含逐张卡牌/效果栈/线值）
+    expect(text).toContain('---- 详细状态快照 ----');
     expect(text).toContain('phase=turn');
+    expect(text).toContain('线1（总值');
   });
 
   it('handles empty logs gracefully', () => {

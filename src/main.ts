@@ -14,6 +14,7 @@ import { initDiag } from './ui/diag';
 import { initDevMode } from './ui/devmode';
 import { gameBus } from './core/events/bus';
 import { pushLog } from './core/log';
+import { trace, stateDigest, initEventTracing } from './core/trace';
 import type { PlayerId, Line } from './core/models/types';
 
 const root = document.getElementById('app')!;
@@ -91,6 +92,8 @@ const cb: UiCallbacks = {
     // executeAction 使用窄化重载（play/compile 需 args，refresh/advance 无 args），
     // 而 LegalAction.kind 是联合类型，需按 kind 收窄后再分发
     let drawAnimCount = 0;
+    // 全量追踪（2026-09-12）：玩家动作 + 参数 + 行动前状态摘要
+    trace('动作', `P${player + 1} 行动 kind=${a.kind} args=${JSON.stringify(a)} | 前：${stateDigest(state)}`);
     // 引擎抛错守卫（2026-09-12）：效果守卫失败（如 shift 目标线 = 原线）此前会冒泡成
     // Uncaught Error 并把 UI 留在【已失效的选择条】上 → 之后每次点击继续抛
     // "no pending choice" 级联报错（见 log/break_log/compile-log-2026-09-11）。
@@ -161,12 +164,16 @@ const cb: UiCallbacks = {
       executeAction(state, player, 'resolve-trigger', { cardUid: a.cardUid! });
     }
     } catch (err) {
-      // 打印到控制台（诊断日志会一并导出）+ 写入游戏日志树，随后重渲染同步 UI
+      // 打印到控制台（诊断日志会一并导出）+ 写入游戏日志树 + 全量追踪，随后重渲染同步 UI
       console.error('[行动结算异常]', err);
       pushLog(state, `行动结算异常：${err instanceof Error ? err.message : String(err)}`);
+      trace('错误', `行动结算异常 kind=${a.kind}：${err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err)}`);
+      trace('状态', `异常后状态：${stateDigest(state)}`);
       renderApp(root, state, cb);
       return;
     }
+    // 全量追踪：行动后状态摘要（含双方线值/手牌/牌库/弃牌/协议/挂起）
+    trace('动作', `P${player + 1} 行动结束 kind=${a.kind} | 后：${stateDigest(state)}`);
     // effect-choice：getLegalActions 不产生，由 UI 选择栏应答后经 onAction 分发（chooser 可能是对手）
     // 效果触发的抽牌（card:drawn 事件，如 fire-0/fire-4）与揭示（card:revealed 事件，如
     // light-2/light-4）在本次行动结算期间累计，统一播新抽牌特效 + 揭示飞行序列
@@ -523,6 +530,17 @@ initCompileFx();
 initRearrangeFx();
 initShuffleFx(); // 修改提示词 4：洗牌/切洗/弃牌堆洗入牌库动画（deck:shuffled 事件）
 initGen2Fx(); // 2代 协议专属特效（luck 宣告骰子等；事件驱动订阅）
+// 全量追踪（2026-09-12 用户需求「日志要记录所有信息」）：订阅全局事件总线，把每个语义事件 +
+// payload + 当时的步骤/回合写入追踪缓冲区（不进 UI 日志面板，由导出日志全文包含）。
+initEventTracing();
+// 对局阶段变化（草稿/开局/结算）也留痕：每次事件后对比 phase
+let lastPhase: string = state.phase;
+gameBus.subscribe(() => {
+  if (state.phase !== lastPhase) {
+    trace('步骤', `阶段变化：${lastPhase} → ${state.phase} | ${stateDigest(state)}`);
+    lastPhase = state.phase;
+  }
+});
 // 诊断日志：全量记录 console + 捕获未捕获异常（出错自动提示导出）
 initDiag(() => state);
 // 隐藏开发者模式：Ctrl+Shift+P 密码进入；get <牌名> 把卡加入当前玩家手牌

@@ -3,6 +3,7 @@ import type { Card, GameState, PlayerId } from '../models/types';
 import { fireReactive } from '../effects/triggers';
 import { shouldBlockDraw } from '../effects/context';
 import { gameBus } from '../events/bus';
+import { traceAt, cardBrief } from '../trace';
 
 export function shuffle<T>(arr: T[]): T[] {
   const a = [...arr];
@@ -29,7 +30,10 @@ export function canRefreshDraw(s: GameState, player: PlayerId): boolean {
 /** 从牌库顶抽 count 张；牌库不足则洗弃牌堆重组，再抽满。
  *  ice-6 顶（批2）在场且抽牌者手牌>0 → 禁止抽牌（FAQ 冰6：抽 0 无效；不抽不洗不触发连锁） */
 export function drawCards(s: GameState, player: PlayerId, count: number): Card[] {
-  if (shouldBlockDraw(s, player)) return [];
+  if (shouldBlockDraw(s, player)) {
+    traceAt(s, '随机', `抽牌被禁（ice-6 顶在场且 P${player + 1} 有手牌）→ 抽 0 张`);
+    return [];
+  }
   const p = s.players[player];
   const drawn: Card[] = [];
   for (let i = 0; i < count; i++) {
@@ -37,6 +41,7 @@ export function drawCards(s: GameState, player: PlayerId, count: number): Card[]
       if (p.trash.length === 0) break;
       p.deck = shuffle(p.trash);
       p.trash = [];
+      traceAt(s, '随机', `P${player + 1} 牌库空 → 弃牌堆全部洗入牌库（随机顺序 ${p.deck.length} 张）`);
       // R11.4：弃牌堆 → 牌库 = 进入秘密信息区：弃牌堆的正面卡回牌库后必须翻回反面
       // （否则 cardPointValue 会误按牌面分值计；牌库卡一律视为反面 2）
       for (const c of p.deck) c.faceUp = false;
@@ -51,6 +56,7 @@ export function drawCards(s: GameState, player: PlayerId, count: number): Card[]
     card.faceUp = true;
     drawn.push(card);
     p.hand.push(card);
+    traceAt(s, '随机', `P${player + 1} 抽到 ${cardBrief(card)}（牌库剩 ${p.deck.length}）`);
   }
   // 抽牌完成 → 即时连锁：抽牌者场上注册了 after-draw 的正面卡触发（顶命令，被盖仍生效；
   // 覆盖所有抽牌路径：效果 draw op / refreshHand / 开局 setup / love 刷新等）
@@ -76,6 +82,7 @@ export function shuffleDeck(s: GameState, player: PlayerId): void {
     for (const c of p.deck) c.faceUp = false;
     gameBus.emit({ type: 'deck:shuffled', state: s, payload: { player } });
     pushLog(s, `P${player + 1} 切洗牌库`);
+    traceAt(s, '随机', `P${player + 1} 切洗牌库（${p.deck.length} 张，随机重排）`);
   }
   // 批3 time-2 顶「当你切洗牌库时：抽取1张牌」（self 方向，top:true 被盖仍触发）
   fireReactive(s, 'after-shuffle', player);
@@ -96,6 +103,7 @@ export function shuffleTrashIntoDeck(s: GameState, player: PlayerId): void {
   p.trash = [];
   shuffleDeck(s, player);
   pushLog(s, `P${player + 1} 将弃牌堆洗入牌库`);
+  traceAt(s, '随机', `P${player + 1} 弃牌堆洗入牌库（此后牌库 ${p.deck.length} 张）`);
 }
 
 /** 手牌 → 弃牌堆（正面朝上） */

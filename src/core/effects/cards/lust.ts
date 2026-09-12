@@ -1,6 +1,8 @@
 import type { EffectCtx, EffectStep, GameState, Line, PlayerId, StepResult } from '../../models/types';
 import { registerCardEffects } from '../registry';
 import { setControl } from '../../rules/control';
+import { traceAt, cardBrief } from '../../trace';
+import { findCard } from '../context';
 
 /**
  * 3代 色欲 lust（关键词：控制权/揭示/平移/反面打出；座右铭：惑乱人心）。
@@ -43,6 +45,12 @@ function* lust3Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const foeHand = ctx.candidates({ zone: 'hand', owner: foe });
   if (foeHand.length === 0) return;
   const pick = foeHand[Math.floor(Math.random() * foeHand.length)];
+  const pickCard = findCard(ctx.s, pick.uid);
+  traceAt(
+    ctx.s,
+    '随机',
+    `lust-3 随机揭示对手手牌：${pickCard ? cardBrief(pickCard) : pick.uid}（对手手牌 ${foeHand.length} 张）`,
+  );
   yield { op: 'reveal', uid: pick.uid };
   const lAns = yield {
     kind: 'select-line', title: 'lust-3：将随机揭示的那张牌反面打出在对手的哪一侧', min: 1, max: 1, optional: false,

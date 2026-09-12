@@ -9,6 +9,7 @@ import { executeCompileBody } from '../rules/compile-body';
 import { lineMiddleCommandsNullified, opponentBlocksMiddleCommands } from '../rules/restrictions';
 import { rearrangeProtocolSlots } from '../actions/rearrange';
 import { pushLog, pushEffectLog, actionCn } from '../log';
+import { traceAt, cardBrief } from '../trace';
 import './cards/fire';
 import './cards/light';
 import './cards/darkness';
@@ -108,14 +109,19 @@ function sourceValid(s: GameState, pe: PendingEffect): boolean {
 export function pushMiddle(s: GameState, player: PlayerId, card: Card, reason = ''): void {
   if (opponentBlocksMiddleCommands(s, player)) {
     pushLog(s, `[被禁止] ${card.defId} 的中部指令无法结算（恐惧0 在场，对手回合内禁中央效果）`);
+    traceAt(s, '触发', `中部指令被禁止：${cardBrief(card)}（恐惧0 在场，非其拥有者回合）`);
     return;
   }
   if (card.line !== null && lineMiddleCommandsNullified(s, card.line)) {
     pushLog(s, `[被禁止] ${card.defId} 的中部指令无效（冷漠2 此列无效化中部命令）`);
+    traceAt(s, '触发', `中部指令无效：${cardBrief(card)}（冷漠2 此列无效化）`);
     return;
   }
   const eff = EFFECTS[card.defId]?.middle;
-  if (!eff) return;
+  if (!eff) {
+    traceAt(s, '触发', `中部指令入栈跳过：${cardBrief(card)} 未注册中部效果`);
+    return;
+  }
   const ctx = createCtx(s, player, card);
   s.pendingEffects.push({
     id: nextEffectId(), player,
@@ -123,6 +129,7 @@ export function pushMiddle(s: GameState, player: PlayerId, card: Card, reason = 
     prompt: null, lastAnswer: null,
   });
   pushEffectLog(s, card.defId, '中部', reason ? `原因：${reason}` : '');
+  traceAt(s, '触发', `中部指令入栈：${cardBrief(card)} 属主=P${player + 1}${reason ? ` 原因=${reason}` : ''}`);
 }
 
 export function resolveMiddle(s: GameState, player: PlayerId, card: Card): void {
@@ -158,6 +165,15 @@ export function answerEffect(s: GameState, promptId: string, selected: string[])
   }
   pe.prompt = null;
   pe.lastAnswer = { selected };
+  // 全量追踪：记录选择请求的完整信息（kind/标题/范围/候选）+ 实际应答
+  traceAt(
+    s,
+    '选择',
+    `P${(req.chooser ?? pe.player) + 1} 应答 [#${pe.id} ${pe.sourceDefId}] ${req.kind}「${req.title}」` +
+      ` min=${req.min} max=${req.max} 可选=${req.optional ? 1 : 0} 候选=${req.candidates.length}` +
+      `${req.lines ? ` 可线=[${req.lines.join(',')}]` : ''}${req.actions ? ` 可动作=[${req.actions.join(',')}]` : ''}` +
+      ` → 选=[${selected.join(',')}]`,
+  );
   // 日志树：记录玩家选择（哪张卡/哪条线/哪个动作，或跳过）——树内与当前效果同层缩进
   {
     const who = (req.chooser ?? pe.player) + 1;
@@ -191,6 +207,7 @@ export function runStack(s: GameState): void {
       if (!sourceValid(s, pe)) {
         s.pendingEffects.pop();
         pushLog(s, `效果终止：${pe.sourceDefId} 被覆盖/翻面/移除`);
+        traceAt(s, '效果', `源卡失效终止 [#${pe.id} ${pe.sourceDefId} uid=${pe.sourceUid}]（被覆盖/翻面/移除）`);
         continue;
       }
       const result: StepResult = pe.lastAnswer ?? {};
@@ -218,6 +235,7 @@ export function runStack(s: GameState): void {
           : (step.actions?.length ?? 0) === 0;
         if (noTargets) {
           pushLog(s, '无合法目标，该步骤跳过');
+          traceAt(s, '效果', `无合法目标跳过 [#${pe.id} ${pe.sourceDefId}] ${step.kind}「${step.title}」`);
           pe.lastAnswer = { selected: [] };
           continue;
         }
@@ -236,7 +254,7 @@ export function runStack(s: GameState): void {
     if (s.pendingCompile) {
       const pc = s.pendingCompile;
       s.pendingCompile = null;
-      executeCompileBody(s, pc.player, pc.line);
+      executeCompileBody(s, pc.player, pc.line, { force: pc.force });
       continue;
     }
     if (s.pendingStepAdvance) {
@@ -305,6 +323,13 @@ function describeOp(s: GameState, pe: PendingEffect, op: Op): string {
 export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
   const desc = describeOp(s, pe, op);
   if (desc !== '') pushLog(s, desc);
+  // 全量追踪：每个 op 的完整参数（谁发起、作用于哪张卡、目标线/朝向/数量）——排错第一现场
+  traceAt(
+    s,
+    '操作',
+    `op=${op.op} 源=${pe.sourceDefId}(uid=${pe.sourceUid}) 属主=P${pe.player + 1} 参数=${JSON.stringify(op)}` +
+      (desc ? ` 〔${desc}〕` : ''),
+  );
   switch (op.op) {
     case 'discard': {
       const card = findCard(s, op.uid);

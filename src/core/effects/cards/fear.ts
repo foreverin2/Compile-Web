@@ -1,5 +1,6 @@
 import type { EffectCtx, EffectStep, Line, PlayerId, StepResult } from '../../models/types';
 import { registerCardEffects } from '../registry';
+import { traceAt, cardBrief } from '../../trace';
 
 /**
  * 2代 恐惧 fear（关键词：偏转、强行弃置）。
@@ -96,6 +97,7 @@ function* fear4Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const hand = ctx.s.players[foe].hand;
   if (hand.length === 0) return; // 对手无手牌 → fizzle
   const pick = hand[Math.floor(Math.random() * hand.length)];
+  traceAt(ctx.s, '随机', `fear-4 随机选中对手手牌：${cardBrief(pick)}（对手手牌 ${hand.length} 张）`);
   yield { op: 'discard', uid: pick.uid };
 }
 

@@ -1,5 +1,6 @@
 import type { GameState } from '../core/models/types';
 import { getLineValue } from '../core/state/create';
+import { envInfo, formatTrace, stateDetail, traceEntries } from '../core/trace';
 
 /**
  * 运行时诊断日志：全量记录 console 输出、捕获未捕获异常/未处理 Promise 拒绝，
@@ -140,12 +141,18 @@ export function snapshotState(s: GameState): string {
   return lines.join('\n');
 }
 
-/** 完整诊断日志文本（纯函数，可单测；consoleLog/errorLog 由模块缓冲传入） */
+/** 完整诊断日志文本（纯函数，可单测；consoleLog/errorLog 由模块缓冲传入）
+ *  2026-09-12 用户需求「极大程度记录所有信息」——导出内容扩充为：
+ *  环境信息 / 运行时错误 / 控制台全量 / 游戏日志树【全部条目】/ 全量追踪流水 / 详细状态快照
+ *  （逐张卡牌的位置与朝向、效果栈全部帧、揭示幽灵、牌库揭示、草稿信息等）。 */
 export function formatDiagnosticLog(s: GameState, consoleLog: ConsoleEntry[], errorLog: ErrorEntry[]): string {
   const out: string[] = [];
   out.push('===== Compile 诊断日志 =====');
   out.push(`时间: ${now()}`);
   out.push(`URL: ${typeof location !== 'undefined' ? location.href : 'n/a'}`);
+  out.push('');
+  out.push('---- 环境信息 ----');
+  for (const line of envInfo()) out.push(line);
   out.push('');
   out.push('---- 运行时错误 ----');
   if (errorLog.length === 0) out.push('（无）');
@@ -158,12 +165,18 @@ export function formatDiagnosticLog(s: GameState, consoleLog: ConsoleEntry[], er
   if (consoleLog.length === 0) out.push('（无）');
   for (const c of consoleLog) out.push(`[${c.level}] ${c.time} ${c.text}`);
   out.push('');
-  out.push('---- 游戏事件日志（尾部） ----');
+  out.push(`---- 游戏日志树（全部 ${s.log.length} 条；缩进=效果栈深度） ----`);
   if (s.log.length === 0) out.push('（无）');
-  for (const entry of s.log.slice(-500)) out.push(entry);
+  for (const entry of s.log) out.push(entry);
   out.push('');
-  out.push('---- 状态快照 ----');
-  out.push(snapshotState(s));
+  const traceList = traceEntries();
+  out.push(`---- 全量追踪流水（${traceList.length} 条；动作/操作/选择/触发/事件/随机/步骤/规则/错误） ----`);
+  out.push('格式：[+相对ms #序号 d效果栈深] 分类 内容');
+  if (traceList.length === 0) out.push('（无）');
+  for (const line of formatTrace(traceList)) out.push(line);
+  out.push('');
+  out.push('---- 详细状态快照 ----');
+  for (const line of stateDetail(s)) out.push(line);
   return out.join('\n');
 }
 

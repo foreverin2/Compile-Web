@@ -370,7 +370,8 @@ export interface GameState {
   pendingActionPlayLine?: Line;
   /** metal-1「对手下回合不能编译」：被禁编译的玩家；其回合结束转换（advanceStep end→start）时清除 */
   compileBlocked: PlayerId | null;
-  /** speed-2「通过编译删除此牌前」触发挂起：效果栈清空后由 runStack 消费执行编译本体 */
-  pendingCompile: { player: PlayerId; line: Line } | null;
+  /** speed-2「通过编译删除此牌前」触发挂起：效果栈清空后由 runStack 消费执行编译本体。
+   *  force：开发者模式强制编译（跳过重编译线值校验）。 */
+  pendingCompile: { player: PlayerId; line: Line; force?: boolean } | null;
 }
 
