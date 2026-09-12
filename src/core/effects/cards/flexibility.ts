@@ -79,7 +79,8 @@ function* flexibility2End(ctx: EffectCtx): Generator<EffectStep, void, StepResul
     kind: 'select-line', title: 'flexibility-2：把覆盖者偏转到哪条链路', min: 1, max: 1, optional: false, candidates: [],
     lines: ([0, 1, 2] as Line[]).filter((l) => l !== line),
   };
-  if (lAns.selected.length > 0) yield { op: 'shift', uid: cover.uid, targetLine: Number(lAns.selected[0].replace('line:', '')) as Line };
+  // 覆盖者本身可能还压着别的卡（idx+2 存在）→ 它自己是"被覆盖卡"，偏转必须带 allowCovered
+  if (lAns.selected.length > 0) yield { op: 'shift', uid: cover.uid, targetLine: Number(lAns.selected[0].replace('line:', '')) as Line, allowCovered: true };
 }
 
 /** flexibility-2 中：抽1张牌。 */

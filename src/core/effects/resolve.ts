@@ -239,6 +239,32 @@ export function runStack(s: GameState): void {
           pe.lastAnswer = { selected: [] };
           continue;
         }
+        // 2026-09-13 修复（3代 fuzz 发现「requires at least N selection(s)」死锁）：
+        // 请求下限可能超过实际可用目标（如「对手弃2张牌」而对手只剩 1 张手牌；或
+        // select-line 的 min 大于可选线数）——此前会挂起一个**永远无法满足**的选择：
+        // 玩家点确认恒被引擎按 min 拒绝 → 对局卡死。现按「尽可能多地执行」口径**收窄下限**
+        // 至可用目标数（UI 确认按钮随之即可用），并留痕便于追查源头卡。
+        if (step.kind === 'select') {
+          const avail = step.candidates.length;
+          if (step.min > avail) {
+            traceAt(s, '效果', `选择下限收窄 [#${pe.id} ${pe.sourceDefId}] ${step.min} → ${avail}（候选不足）`);
+            step.min = avail;
+          }
+          // max 不收窄：「弃2张而对手只剩1张」等规则文案保留上限 2，玩家按实际数量尽力而为
+          // （tests/effects/plague.test.ts 明确依赖 max=2。选择数 ≤ 候选数，max 大于可用不会卡死。）
+        } else if (step.kind === 'select-line') {
+          const avail = step.lines?.length ?? 0;
+          if (step.min > avail) {
+            traceAt(s, '效果', `选线下限收窄 [#${pe.id} ${pe.sourceDefId}] ${step.min} → ${avail}（可选线不足）`);
+            step.min = avail;
+          }
+        } else {
+          const avail = step.actions?.length ?? 0;
+          if (step.min > avail) {
+            traceAt(s, '效果', `动作下限收窄 [#${pe.id} ${pe.sourceDefId}] ${step.min} → ${avail}（可执行动作不足）`);
+            step.min = avail;
+          }
+        }
         pe.prompt = step;
         pe.lastAnswer = null;
         return; // 挂起：等待玩家选择
@@ -317,6 +343,13 @@ function describeOp(s: GameState, pe: PendingEffect, op: Op): string {
     default:
       return '';
   }
+}
+
+/** 链路 pos 重索引（2026-09-13，3代 fuzz 发现）：任何从链路【中部】移除卡牌的操作
+ *  （shift 移走被盖卡 / delete·return 被盖卡 / takeFromField 取走被盖卡）都必须重排
+ *  剩余卡的 pos，否则 pos 与数组下标脱节 → 渲染 z-index 错乱、后续 push 的 pos 可能重复。 */
+function reindexStack(stack: Card[]): void {
+  for (let i = 0; i < stack.length; i++) stack[i].pos = i;
 }
 
 /** 操作执行（Task 4 加 flip、Task 5 加 delete/return、Task 6 加 shift） */
@@ -432,6 +465,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       if (idx === -1) throw new Error(`cannot delete ${op.uid}: not in stack`);
       const wasTop = idx === stack.length - 1;
       stack.splice(idx, 1); // 按目标卡移除（顶卡 splice 末位等价 pop；覆盖卡从链路中部移除）
+      reindexStack(stack); // 中部移除后重排剩余卡 pos（否则 pos 与下标脱节）
       card.zone = 'trash';
       card.faceUp = true;
       card.line = null;
@@ -463,6 +497,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       if (idx === -1) throw new Error(`cannot return ${op.uid}: not in stack`);
       const wasTop = idx === stack.length - 1;
       stack.splice(idx, 1); // 按目标卡移除（顶卡 splice 末位等价 pop；覆盖卡从链路中部移除）
+      reindexStack(stack); // 中部移除后重排剩余卡 pos（否则 pos 与下标脱节）
       card.zone = 'hand';
       // 回手即解禁：手牌 = 已知信息，牌堆来源的 secret 卡进入持有者手牌后可见正面
       // （控制器规则：secret 只禁场上反面卡的窥视，不禁回手后查看）
@@ -501,6 +536,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       if (idx === -1) throw new Error(`cannot shift ${op.uid}: not in stack`);
       const wasTop = idx === stack.length - 1;
       stack.splice(idx, 1); // 按目标卡移除（顶卡 splice 末位等价 pop；覆盖卡从链路中部移除）
+      reindexStack(stack); // 中部移除后重排剩余卡 pos（否则 pos 与下标脱节）
       card.zone = 'float';
       card.line = op.targetLine; // 提交目标（落地前不可变卦）
       card.pos = null;
@@ -874,6 +910,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       if (idx === -1) throw new Error(`cannot take ${op.uid}: not in stack`);
       const wasTop = idx === stack.length - 1;
       stack.splice(idx, 1);
+      reindexStack(stack);
       card.owner = pe.player;
       card.zone = 'hand';
       card.faceUp = true; // 进手牌 = 已知信息

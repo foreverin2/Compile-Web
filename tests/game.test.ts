@@ -47,7 +47,9 @@ describe('game facade', () => {
     executeAction(s, 0, 'play', { cardUid: target!.cardUid, faceUp: true, line: target!.line });
     // 打出卡可能触发已注册效果（Fire 试点）：链式选择全部自动应答后再断言
     resolveAllChoices(s, pickFirst);
-    expect(s.players[0].stacks[target!.line]).toHaveLength(1);
+    // 不断言「该线恰好 1 张」：部分卡牌效果会追加落牌（如从牌库顶反打/效果回手再打入），
+    // 卡的具体种类随洗牌而变（历史 flake 来源）。只断言目标卡确实落在该线且步骤推进。
+    expect(s.players[0].stacks[target!.line].some((c) => c.uid === target!.cardUid)).toBe(true);
     expect(s.step).toBe('check-cache');
   });
 

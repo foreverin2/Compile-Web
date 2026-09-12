@@ -44,7 +44,15 @@ export function drawCards(s: GameState, player: PlayerId, count: number): Card[]
       traceAt(s, '随机', `P${player + 1} 牌库空 → 弃牌堆全部洗入牌库（随机顺序 ${p.deck.length} 张）`);
       // R11.4：弃牌堆 → 牌库 = 进入秘密信息区：弃牌堆的正面卡回牌库后必须翻回反面
       // （否则 cardPointValue 会误按牌面分值计；牌库卡一律视为反面 2）
-      for (const c of p.deck) c.faceUp = false;
+      // 2026-09-13 修复（3代 fuzz 发现）：此处此前只翻面、未改 zone/line/pos →
+      // 洗回牌库的卡仍带 zone='trash'，与「牌库中卡 zone 必为 deck」不变量冲突
+      // （UI/候选/日志按 zone 判断处会误读）。统一按「入牌库」口径改写三个字段。
+      for (const c of p.deck) {
+        c.zone = 'deck';
+        c.line = null;
+        c.pos = null;
+        c.faceUp = false;
+      }
     }
     const card = p.deck.pop()!;
     card.zone = 'hand';

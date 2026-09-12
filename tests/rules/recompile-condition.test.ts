@@ -3,7 +3,7 @@ import type { GameState, Line, PlayerId } from '../../src/core/models/types';
 import { createGame, getLineValue } from '../../src/core/state/create';
 import { executeCompileBody } from '../../src/core/rules/compile-body';
 import { executeCompileUnchecked } from '../../src/core/rules/compile';
-import { executeAction } from '../../src/core/game';
+import { executeAction, getLegalActions } from '../../src/core/game';
 import { pushMiddle, runStack, answerEffect } from '../../src/core/effects/resolve';
 import { trace, traceReset, traceEntries, formatTrace, stateDetail, stateDigest, initEventTracing } from '../../src/core/trace';
 import { draftFireP1, makeCard } from '../helpers';
@@ -110,8 +110,10 @@ describe('全量追踪与详细快照（2026-09-12 日志强化）', () => {
     const s = draftFireP1();
     s.step = 'action';
     s.turnPlayer = 0;
-    const card = s.players[0].hand.find((c) => c.defId.startsWith('fire-')) ?? s.players[0].hand[0];
-    executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: 0 });
+    // 不写死「线0」：牌库洗牌是随机的（手牌不同不影响协议匹配，但合法行动由引擎判定更稳）
+    const play = getLegalActions(s, 0).find((a) => a.kind === 'play' && a.faceUp);
+    expect(play, '应先手方存在可正面打出的合法行动').toBeTruthy();
+    executeAction(s, 0, 'play', { cardUid: play!.cardUid!, faceUp: true, line: play!.line! });
     // 出牌必经：语义事件 card:played（事件追踪覆盖）
     expect(formatTrace().join('\n')).toContain('事件 card:played');
 

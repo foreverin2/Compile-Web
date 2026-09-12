@@ -27,11 +27,15 @@ function* lust0Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   setControl(ctx.s, ctx.player);
 }
 
-/** lust-2 中：你可以将对手1张被覆盖的牌偏转到此链路（选对手任一被盖卡 → shift 到 lust-2 所在线）。 */
+/** lust-2 中：你可以将对手1张被覆盖的牌偏转到此链路（选对手任一被盖卡 → shift 到 lust-2 所在线）。
+ *  2026-09-13 修复（fuzz 发现「must shift to a different line」崩溃）：**排除已经在该线的对手被盖卡**
+ *  ——把它"偏转到此链路"等于原地不动，引擎会因 targetLine === 原线而抛错。 */
 function* lust2Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const line = ctx.card.line;
   if (line === null) return;
-  const covered = ctx.candidates({ zone: 'field', owner: opp(ctx.player), covered: true });
+  const covered = ctx
+    .candidates({ zone: 'field', owner: opp(ctx.player), covered: true })
+    .filter((c) => c.line !== line);
   if (covered.length === 0) return;
   const ans = yield { kind: 'select', title: 'lust-2：你可以将对手1张被覆盖的牌偏转到此链路', min: 1, max: 1, optional: true, candidates: covered };
   if (ans.selected.length > 0) yield { op: 'shift', uid: ans.selected[0], targetLine: line, allowCovered: true };

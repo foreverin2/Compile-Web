@@ -71,11 +71,15 @@ function* pride3Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> 
   if (ans.selected.length > 0) yield { op: 'flip', uid: ans.selected[0] };
 }
 
-/** pride-4 中：若你拥有控制权，你可以将对手1张牌偏转到此链路。 */
+/** pride-4 中：若你拥有控制权，你可以将对手1张牌偏转到此链路。
+ *  2026-09-13 修复（同 lust-2 的 fuzz 崩溃类）：**排除已经在该线的对手牌**（偏转到原线非法）。 */
 function* pride4Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const line = ctx.card.line;
   if (line === null || ctx.s.control !== ctx.player) return;
-  const cand = ctx.candidates({ zone: 'field', owner: opp(ctx.player) });
+  const cand = ctx
+    .candidates({ zone: 'field', owner: opp(ctx.player) })
+    .filter((c) => c.line !== line);
+  if (cand.length === 0) return;
   const ans = yield { kind: 'select', title: 'pride-4：你拥有控制权——你可以将对手1张牌偏转到此链路', min: 1, max: 1, optional: true, candidates: cand };
   if (ans.selected.length > 0) yield { op: 'shift', uid: ans.selected[0], targetLine: line };
 }
