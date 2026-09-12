@@ -14,6 +14,7 @@
 import type { Card, GameState, Line, PlayerId } from '../core/models/types';
 import { cardPointValue, getLineValue } from '../core/state/create';
 import { cardCommandDisabled, isUncovered } from '../core/effects/context';
+import { visibleRectOf } from './gen3-util';
 
 /* ============================== 小工具 ============================== */
 
@@ -180,9 +181,9 @@ export function syncEnvy0Absorb(s: GameState): string[] {
         thread.style.width = `${Math.hypot(dx, dy)}px`;
         thread.style.transform = `rotate(${Math.atan2(dy, dx)}rad)`;
         rec.node.appendChild(thread);
-        // 源卡标记（橙环）
+        // 源卡标记（橙环）：被盖卡只标露出可见区域
         const mark = el('i', 'g3sync-envy0-mark');
-        place(mark, sr, 3);
+        place(mark, visibleRectOf(s, best.uid) ?? sr, 3);
         rec.node.appendChild(mark);
       }
       // 卡面玉青光 + `+N`
@@ -233,9 +234,8 @@ export function syncWrath0Cull(s: GameState): string[] {
     if (rec.sig === sig) {
       // 只重定位既有划除带
       for (const c of culled) {
-        const node = cardNode(c.uid);
         const band = rec.node.querySelector<HTMLElement>(`[data-band="${c.uid}"]`);
-        const r = node ? rectOf(node) : null;
+        const r = visibleRectOf(s, c.uid);
         if (band && r) place(band, r, 1);
       }
       continue;
@@ -243,8 +243,7 @@ export function syncWrath0Cull(s: GameState): string[] {
     rec.sig = sig;
     rec.node.textContent = '';
     for (const c of culled) {
-      const node = cardNode(c.uid);
-      const r = node ? rectOf(node) : null;
+      const r = visibleRectOf(s, c.uid);
       if (!r) continue;
       const band = el('i', 'g3sync-wrath0-band');
       band.dataset.band = c.uid;

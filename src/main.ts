@@ -11,8 +11,9 @@ import { openControlRearrangeModal, closeControlRearrangeModal, refreshControlRe
 import { renderHome, renderCoin, renderLibrary, renderRules, renderModeSelect } from './ui/home';
 import { resetControlIfHeld } from './core/rules/control';
 import { DEMO_PROTOCOLS } from './data/demo';
-import { initEffects, initCompileFx, initRearrangeFx, initShuffleFx, playRevealFly, buildLoveHeart, playSpeedDrawExtra, SPEED_TOTAL_MS } from './ui/effects';
+import { initEffects, initCompileFx, initRearrangeFx, initGen3StackSwapFx, initShuffleFx, playRevealFly, buildLoveHeart, playSpeedDrawExtra, SPEED_TOTAL_MS } from './ui/effects';
 import { gen3ClearCacheFx, gen3ControlChangedFx, gen3ControlCheckFx, syncGen3Persistent } from './ui/gen3-control';
+import { gen3FulcrumSwapFx, gen3ProtocolSwapFx } from './ui/fx-gen3-swap';
 import { initGen2Fx, clearGen2Fx } from './ui/fx-gen2';
 import { initDiag } from './ui/diag';
 import { initDevMode } from './ui/devmode';
@@ -532,6 +533,7 @@ function scheduleAutoAdvance(): void {
 initEffects();
 initCompileFx();
 initRearrangeFx();
+initGen3StackSwapFx(); // 3代（批次 E）：支点1「交换左右堆叠」整堆沿弧线互换
 initShuffleFx(); // 修改提示词 4：洗牌/切洗/弃牌堆洗入牌库动画（deck:shuffled 事件）
 initGen2Fx(); // 2代 协议专属特效（luck 宣告骰子等；事件驱动订阅）
 // 全量追踪（2026-09-12 用户需求「日志要记录所有信息」）：订阅全局事件总线，把每个语义事件 +

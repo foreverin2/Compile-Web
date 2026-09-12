@@ -23,12 +23,14 @@ describe('3代卡牌效果附加层守卫（批次 B）', () => {
   it('覆盖范围 = 点名的触发点（设计稿 §4 已经你确认；不得擅自扩范围）', () => {
     expect(GEN3_CARD_FX_COVER.discard.sort()).toEqual(['fulcrum', 'greed', 'momentum', 'nova', 'sloth', 'wrath']);
     expect(GEN3_CARD_FX_COVER.delete.sort()).toEqual(['gluttony', 'nova', 'overwhelm', 'wrath']);
-    expect(GEN3_CARD_FX_COVER.flip.sort()).toEqual(['ambush', 'envy', 'flexibility', 'pride', 'sloth', 'wrath']);
+
     expect(GEN3_CARD_FX_COVER.shift.sort()).toEqual(['flexibility', 'nova', 'pride']);
     // 批次 C：抽牌 / 反面打出 / 编译后
     expect(GEN3_CARD_FX_COVER.draw.sort()).toEqual(['fulcrum', 'gluttony']);
     expect(GEN3_CARD_FX_COVER.facedown.sort()).toEqual(['gluttony', 'inertia', 'overwhelm', 'rigidity']);
     expect(GEN3_CARD_FX_COVER.compiled.sort()).toEqual(['greed', 'momentum']);
+    // 批次 E 补齐：惰性翻转（用户清单"惰性触发翻转"= I1 的 inertia-0 中 / inertia-2 中，批次 B 遗漏）
+    expect(GEN3_CARD_FX_COVER.flip.sort()).toEqual(['ambush', 'envy', 'flexibility', 'inertia', 'pride', 'sloth', 'wrath']);
   });
 
   it('批次 C 三个分发点已接入（抽牌 / 反面打出 / 编译后）', () => {

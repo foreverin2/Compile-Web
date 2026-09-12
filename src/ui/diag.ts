@@ -145,6 +145,27 @@ export function snapshotState(s: GameState): string {
  *  2026-09-12 用户需求「极大程度记录所有信息」——导出内容扩充为：
  *  环境信息 / 运行时错误 / 控制台全量 / 游戏日志树【全部条目】/ 全量追踪流水 / 详细状态快照
  *  （逐张卡牌的位置与朝向、效果栈全部帧、揭示幽灵、牌库揭示、草稿信息等）。 */
+/** 3代特效层统计（批次 E 收尾）：按类别统计 body 级活动层 + 元素数。
+ *  纯观测、不做限流（Q6：全部完整特效不降级）；用于性能问题定位（哪类层没被清理）。 */
+export function gen3LayerReport(): string[] {
+  if (typeof document === 'undefined') return ['（非浏览器环境）'];
+  const groups: [string, string][] = [
+    ['协议已编译（gen3-*）', '[class*="compiled-fx-"]'],
+    ['卡牌附加层（g3-*）', '[class^="g3-"], [class*=" g3-"]'],
+    ['控制权族/常驻（g3sync-* / g3ctrl-*）', '[class^="g3sync-"], [class^="g3ctrl-"], [class*=" g3ctrl-"]'],
+    ['交换附加层（g3swap-*）', '[class^="g3swap-"]'],
+  ];
+  const out: string[] = [];
+  for (const [label, sel] of groups) {
+    const layers = document.querySelectorAll<HTMLElement>(sel);
+    let elems = 0;
+    for (const l of layers) elems += l.querySelectorAll('*').length;
+    out.push(`${label}: 层 ${layers.length} 个 / 元素 ${elems} 个`);
+  }
+  const all = document.querySelectorAll<HTMLElement>('[class*="gen3-"], [class^="g3"]');
+  out.push(`合计: ${all.length} 个 3代特效节点（含子元素）`);
+  return out;
+}
 export function formatDiagnosticLog(s: GameState, consoleLog: ConsoleEntry[], errorLog: ErrorEntry[]): string {
   const out: string[] = [];
   out.push('===== Compile 诊断日志 =====');
@@ -153,6 +174,11 @@ export function formatDiagnosticLog(s: GameState, consoleLog: ConsoleEntry[], er
   out.push('');
   out.push('---- 环境信息 ----');
   for (const line of envInfo()) out.push(line);
+  out.push('');
+  // 3代特效（批次 E 收尾）：活动特效层计数——用于"同屏特效过多导致卡顿"时的**数据化**排查
+  // （Q6 要求不降级、不做限流，因此这里只观测不干预；层数异常时据此定位是哪一类特效没被清理）
+  out.push('---- 3代特效层（活动） ----');
+  for (const line of gen3LayerReport()) out.push(line);
   out.push('');
   out.push('---- 运行时错误 ----');
   if (errorLog.length === 0) out.push('（无）');

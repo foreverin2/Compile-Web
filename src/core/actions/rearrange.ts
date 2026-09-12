@@ -19,6 +19,7 @@ export function rearrangeProtocolSlots(s: GameState, target: PlayerId, a: Line, 
   pushLog(s, `P${target + 1} 重排协议：交换位置 ${a + 1} 与 ${b + 1}`);
   // FX：重排基础动画（两张协议卡同时平移互换位置；重渲染后无缝衔接，见 effects/index.ts
   // 「重排协议基础特效」——与"交换链路"（stacks:swapped）不同的独立动画）
+  // 玩家行动重排 = 无源卡（不带 sourceDefId）；3代效果交换（支点3/柔性3）由 resolve.ts 带 sourceDefId
   gameBus.emit({ type: 'protocols:rearranged', state: s, payload: { player: target, a, b } });
 }
 

@@ -2,6 +2,7 @@ import { gameBus, type GameEvent } from '../../core/events/bus';
 import { mountShatter } from '../fx/delete-shatter';
 import { mountCut } from '../fx/discard-cut';
 import { flashRigidity7Guard, noteGreed1Compile } from '../gen3-control';
+import { gen3FulcrumSwapFx, gen3ProtocolSwapFx } from '../fx-gen3-swap';
 import { gen3DiscardFx, gen3DeleteFx, gen3FlipFx, gen3ShiftFx, gen3DrawFx, gen3FaceDownFx, gen3CompiledFx, gen3DeckDiscardFx, type Gen3CardFxApi, type Gen3CardPayload, type Gen3DrawPayload, type Gen3CompiledPayload, type Gen3DeckDiscardPayload } from '../fx-gen3';
 import { buildTornadoFx } from '../fx-tornado';
 import { cardImgSrc, protocolImgSrc } from '../../data/demo';
@@ -2185,6 +2186,20 @@ export function initRearrangeFx(): () => void {
   return gameBus.subscribe((e: GameEvent) => {
     if (e.type !== 'protocols:rearranged') return;
     playRearrangeProtocolsFx(e.payload as RearrangeProtocolsPayload);
+    // 3代（批次 E）交换附加层：支点3 = 青蓝杠杆弧 + 两端砝码；柔性3 = 紫飘带两端打结互换
+    // （sourceDefId 非 fulcrum/flexibility 时返回 false：玩家行动重排与其它协议不受影响）
+    gen3ProtocolSwapFx(e.payload as { player: number; a?: number; b?: number; order?: number[]; sourceDefId?: string });
+  });
+}
+
+/** 3代（批次 E）堆叠交换附加层：stacks:swapped 此前无基础动画（引擎只换数组）——
+ *  fulcrum-1「交换你的左堆叠与右堆叠」由此补上"整堆沿弧线互换 + 逐张错位跟随 + 落点回弹"。 */
+export function initGen3StackSwapFx(): () => void {
+  return gameBus.subscribe((e: GameEvent) => {
+    if (e.type !== 'stacks:swapped') return;
+    const p = e.payload as { player: number; a: number; b: number; sourceDefId?: string };
+    if (!(p.sourceDefId ?? '').startsWith('fulcrum-')) return;
+    gen3FulcrumSwapFx(p, e.state);
   });
 }
 

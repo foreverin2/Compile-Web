@@ -758,7 +758,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       for (const c of stacks[op.a]) c.line = op.a;
       for (const c of stacks[op.b]) c.line = op.b;
       pushLog(s, `P${target + 1} 交换链路位置 ${op.a + 1} 与 ${op.b + 1}`);
-      gameBus.emit({ type: 'stacks:swapped', state: s, payload: { player: target, a: op.a, b: op.b } });
+      gameBus.emit({ type: 'stacks:swapped', state: s, payload: { player: target, a: op.a, b: op.b, sourceDefId: pe.sourceDefId } });
       break;
     }
     case 'copyMiddle': {
@@ -815,7 +815,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       const copy = protos.map((x) => ({ ...x }));
       for (let i = 0; i < 3; i++) protos[i] = copy[op.order[i]];
       pushLog(s, `P${target + 1} 重排协议 → ${op.order.map((x) => x + 1).join('')}`);
-      gameBus.emit({ type: 'protocols:rearranged', state: s, payload: { player: target, order: [...op.order] } });
+      gameBus.emit({ type: 'protocols:rearranged', state: s, payload: { player: target, order: [...op.order], sourceDefId: pe.sourceDefId } });
       // 3代「重排协议」事件（C4）：reorder 也算重排（momentum-1 底/新星2 底触发）
       fireReactive(s, 'after-self-rearrange', pe.player);
       fireReactive(s, 'after-any-rearrange', pe.player);

@@ -19,6 +19,7 @@
  */
 
 import type { GameState } from '../core/models/types';
+import { clipInsetRightPct } from './gen3-util';
 
 /** 事件载荷（= effects/index.ts 的 FxCardPayload + emitCardEvent 附带的 triggerUid） */
 export interface Gen3CardPayload {
@@ -55,7 +56,7 @@ export interface Gen3CardFxApi {
 export const GEN3_CARD_FX_COVER: Record<'discard' | 'delete' | 'flip' | 'shift' | 'draw' | 'facedown' | 'compiled', string[]> = {
   discard: ['greed', 'sloth', 'wrath', 'fulcrum', 'momentum', 'nova'],
   delete: ['gluttony', 'wrath', 'overwhelm', 'nova'],
-  flip: ['pride', 'sloth', 'wrath', 'ambush', 'flexibility', 'envy'],
+  flip: ['pride', 'sloth', 'wrath', 'ambush', 'flexibility', 'envy', 'inertia'],
   shift: ['pride', 'nova', 'flexibility'],
   // —— 批次 C ——
   draw: ['gluttony', 'fulcrum'],
@@ -488,6 +489,11 @@ export function gen3FlipFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3CardF
     case 'ambush': {
       const revealing = p.faceUp; // 事件在翻转后发出：faceUp = 新状态
       const c = overlay(revealing ? 'g3-amb-reveal' : 'g3-amb-hide');
+      // 伏击3 的目标是【被覆盖】的正面卡 → 只在其露出可见区域内播放（批次 E 收尾）
+      if (c && state) {
+        const hidden = clipInsetRightPct(state, p.uid);
+        if (hidden > 0) c.style.clipPath = `inset(0 ${(hidden * 100).toFixed(1)}% 0 0)`;
+      }
       if (c) {
         const grid = api.el('div', 'g3-amb-flip-grid');
         for (let i = 0; i < 9; i++) {
@@ -501,6 +507,24 @@ export function gen3FlipFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3CardF
       }
       api.playFlip(node, p);
       window.setTimeout(() => c?.remove(), 860);
+      return true;
+    }
+    // 惰性0 中（I1 的翻转变体）：被盖正面牌也可被翻 → 只画露出可见区域
+    case 'inertia': {
+      const c = overlay('g3-sloth-flip');
+      if (c && state) {
+        const hidden = clipInsetRightPct(state, p.uid);
+        if (hidden > 0) c.style.clipPath = `inset(0 ${(hidden * 100).toFixed(1)}% 0 0)`;
+      }
+      for (let i = 0; i < 3; i++) {
+        const ember = api.el('i', 'g3-sloth-flip-ember');
+        ember.style.left = `${26 + i * 22}%`;
+        ember.style.top = `${34 + (i % 2) * 24}%`;
+        ember.style.animationDelay = `${420 + i * 140}ms`;
+        c?.appendChild(ember);
+      }
+      api.playFlip(node, p, 750);
+      window.setTimeout(() => c?.remove(), 1900);
       return true;
     }
     // 柔性 X1：飘带缠绕 → 翻面 → 缎带飞散
