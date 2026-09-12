@@ -29,6 +29,19 @@ function unityCount(s: GameState): number {
   return n;
 }
 
+/** 场上【正面朝上】的统一卡数（含被覆盖的正面卡；2026-09-12 用户澄清：统一1 中部只算正面卡） */
+function unityCountFaceUp(s: GameState): number {
+  let n = 0;
+  for (const owner of [0, 1] as PlayerId[]) {
+    for (const line of [0, 1, 2] as Line[]) {
+      for (const c of s.players[owner].stacks[line]) {
+        if (c.faceUp && c.defId.startsWith('unity-')) n++;
+      }
+    }
+  }
+  return n;
+}
+
 /** 二选一「翻转或抽取1张牌」（选择权=效果属主） */
 function* flipOrDraw(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const actAns = yield {
@@ -52,9 +65,11 @@ function* unity0Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> 
   yield* flipOrDraw(ctx);
 }
 
-/** unity-0 底（before-covered）：当此牌被统一牌覆盖时：翻转或抽取1张牌（覆盖者=浮空中的 unity 卡） */
+/** unity-0 底（before-covered）：当此牌被统一牌覆盖时：翻转或抽取1张牌
+ *  （覆盖者 = 浮空中的 unity 卡）。2026-09-12 修复：覆盖可能来自【偏转/平移】
+ *  （pendingShift，如联合1 偏转到联合0 所在线），此前只查 pendingPlay → 偏转覆盖不触发。 */
 function* unity0BeforeCovered(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
-  const incoming = ctx.s.pendingPlay[0]?.card;
+  const incoming = ctx.s.pendingPlay[0]?.card ?? ctx.s.pendingShift[0]?.card;
   if (!incoming || !incoming.defId.startsWith('unity-')) return; // 覆盖者非统一牌 → 不触发
   yield* flipOrDraw(ctx);
 }
@@ -74,9 +89,11 @@ function* unity1Start(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   yield { op: 'shift', uid: card.uid, targetLine: to, allowCovered: true };
 }
 
-/** unity-1 中：若场上有5张或以上的统一卡牌，编译统一协议并删除那条链路中所有的卡牌（裁决 Q14：完整编译） */
+/** unity-1 中：若场上有5张或以上的统一卡牌，编译统一协议并删除那条链路中所有的卡牌（裁决 Q14：完整编译）
+ *  2026-09-12 用户澄清：此处「联合卡牌数」只算【正面朝上】的联合卡（含被覆盖的正面卡），
+ *  反面朝下的场卡不计入（此前 unityCount 把反面卡也算了）。 */
 function* unity1Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
-  if (unityCount(ctx.s) < 5) return;
+  if (unityCountFaceUp(ctx.s) < 5) return;
   const protos = ctx.s.players[ctx.player].protocols;
   const idx = protos.findIndex((p) => p.defId === 'unity');
   if (idx === -1) return;

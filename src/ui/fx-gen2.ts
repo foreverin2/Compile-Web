@@ -268,14 +268,15 @@ export function clearGen2Fx(): void {
       '.fx-corrupt-card, .fx-corrupt-mist, .fx-corrupt-speck, .fx-corrupt-return-ghost, ' +
       '.fx-war-slash, .fx-war-spark, .fx-war-flipglow, .fx-war-flag, ' +
       '.fx-courage-sword, .fx-courage-inferno, .fx-courage-slash, .fx-courage-golddot, ' +
-      '.fx-courage-halo, .fx-courage-ring, .fx-courage-cardglow, ' +
+      '.fx-courage-halo, .fx-courage-ring, .fx-courage-cardglow, .fx-courage-spark, ' +
+      '.fx-courage-sword-shadow, ' +
       '.fx-time-clock, .fx-time-trashglow, .fx-time-band, .fx-time-film, ' +
       '.fx-assim-ring, .fx-assim-speck, .fx-assim-ripple, .fx-assim-dot, .fx-assim-land, ' +
       '.fx-assim-gloss, .fx-assim-band, ' +
       '.fx-unity-link, .fx-unity-ring, .fx-unity-halo, .fx-unity-band, .fx-unity-pillar, ' +
       '.fx-unity-sash, .fx-unity-speck, ' +
       '.fx-diversity-ring, .fx-diversity-dust, .fx-diversity-orb, .fx-diversity-halo, ' +
-      '.fx-diversity-rainbow-ring'
+      '.fx-diversity-rainbow-ring, .fx-div0-pillar, .fx-div0-beam, .fx-div0-burst, .fx-div0-mote'
   )) {
     el.remove();
   }
@@ -383,9 +384,6 @@ export const PEACE_PRE_MS = PEACE_DOVE_IN_MS + PEACE_DOVE_HOLD_MS + PEACE_GRAB_M
 export function buildDove(): HTMLElement {
   const dove = document.createElement('div');
   dove.className = 'fx-peace-dove';
-  // 后翼（在身体之下）
-  const wingBack = document.createElement('i');
-  wingBack.className = 'fx-peace-dove-wing back';
   // 扇尾：三片羽毛（错开角度）
   const tail = document.createElement('div');
   tail.className = 'fx-peace-dove-tail';
@@ -394,13 +392,17 @@ export function buildDove(): HTMLElement {
     f.className = 'fx-peace-dove-feather';
     tail.appendChild(f);
   }
-  // 身体 + 颈 + 前翼
+  // 身体（两翼均以【身体】为坐标基准：后翼先入 DOM → 被身体/前翼压住）
+  // 2026-09-12 修复：后翼此前是 dove 的子元素却按身体坐标写 CSS → 整只翅膀飘到身体外
   const body = document.createElement('div');
   body.className = 'fx-peace-dove-body';
+  const wingBack = document.createElement('i');
+  wingBack.className = 'fx-peace-dove-wing back';
   const neck = document.createElement('i');
   neck.className = 'fx-peace-dove-neck';
   const wingFront = document.createElement('i');
   wingFront.className = 'fx-peace-dove-wing front';
+  body.appendChild(wingBack);
   body.appendChild(neck);
   body.appendChild(wingFront);
   // 头 + 眼 + 喙
@@ -412,7 +414,6 @@ export function buildDove(): HTMLElement {
   beak.className = 'fx-peace-dove-beak';
   head.appendChild(eye);
   head.appendChild(beak);
-  dove.appendChild(wingBack);
   dove.appendChild(tail);
   dove.appendChild(body);
   dove.appendChild(head);
@@ -1257,9 +1258,26 @@ export function buildLakeSword(size = 96): HTMLElement {
   wrap.appendChild(guard);
   wrap.appendChild(grip);
   wrap.appendChild(pommel);
-  // 光羽（小金星点绕剑飘）
-  for (let i = 0; i < 6; i++) wrap.appendChild(mk('i', 'fx-courage-feather'));
+  // 光羽（小金星点绕剑飘；2026-09-12 用户：粒子更多 → 6 → 14 片）
+  for (let i = 0; i < 14; i++) wrap.appendChild(mk('i', 'fx-courage-feather'));
   return wrap;
+}
+
+/** 湖中剑落点金色粒子迸发（用户 2026-09-12：附加上更多粒子效果）：
+ *  以 (x,y) 为中心向四周炸开 count 颗鎏金火星 */
+export function spawnCourageSparks(x: number, y: number, count = 16): void {
+  for (let i = 0; i < count; i++) {
+    const ang = (i / count) * Math.PI * 2 + Math.random() * 0.4;
+    const dist = 34 + Math.random() * 78;
+    const s = mk('i', 'fx-courage-spark');
+    s.style.left = `${(x - 4).toFixed(1)}px`;
+    s.style.top = `${(y - 4).toFixed(1)}px`;
+    s.style.setProperty('--csx', `${(Math.cos(ang) * dist).toFixed(1)}px`);
+    s.style.setProperty('--csy', `${(Math.sin(ang) * dist - 18).toFixed(1)}px`);
+    s.style.animationDelay = `${(Math.random() * 0.12).toFixed(2)}s`;
+    document.body.appendChild(s);
+    window.setTimeout(() => s.remove(), 1200);
+  }
 }
 
 /** 落点框（手牌末尾 / 指定位置） */
@@ -1292,6 +1310,8 @@ export function playCourageDrawExtra(player: PlayerId): void {
   sword.style.zIndex = String(GEN2_Z);
   document.body.appendChild(sword);
   window.setTimeout(() => sword.classList.add('in'), 30);
+  // 剑落定瞬间：金色粒子迸发（用户 2026-09-12：更多粒子）
+  window.setTimeout(() => spawnCourageSparks(land.x, land.y + 10), 430);
   // 剑化金点消散 → 卡框鎏金 2s
   window.setTimeout(() => sword.classList.add('gone'), 900);
   const glow = document.createElement('div');
@@ -1858,12 +1878,13 @@ function deckCenter(player: PlayerId): { x: number; y: number } | null {
   return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
 }
 
-/** 两点之间的一条光带（旋转矩形，cls 控制配色；dash 为 true 时用虚线纹理） */
+/** 两点之间的一条光带（旋转矩形，cls 控制配色；color 可选 → 写 --bc 供 CSS 取色） */
 function spawnBand(
   from: { x: number; y: number },
   to: { x: number; y: number },
   cls: string,
   holdMs = 900,
+  color?: string,
 ): void {
   const dx = to.x - from.x;
   const dy = to.y - from.y;
@@ -1876,10 +1897,83 @@ function spawnBand(
   band.style.width = `${dist.toFixed(1)}px`;
   band.style.transform = `rotate(${ang.toFixed(1)}deg)`;
   band.style.zIndex = String(GEN2_Z - 2);
+  if (color) {
+    band.style.setProperty('--bc', color);
+    band.style.setProperty('--bcg', hexToRgba(color, 0.85));
+  }
   document.body.appendChild(band);
   window.setTimeout(() => band.classList.add('in'), 20);
   window.setTimeout(() => band.classList.add('out'), holdMs);
   window.setTimeout(() => band.remove(), holdMs + 650);
+}
+
+/** 多元0 顶部持续效果达成（场上有 6 张不同协议卡 → 多元协议翻至已编译）：
+ *  场上每种协议的卡各亮一道【本协议主题色】光柱，6 道光柱同时汇聚到多元0 卡上 →
+ *  多元0 迸发一团彩色光芒（用户 2026-09-11 提示词；2026-09-12 补做 + 引擎事件接线）。
+ *  state 由事件携带（结算瞬间的场上构成）。 */
+export function playDiversityConvergence(sourceUid: string, s: GameState): void {
+  const node = document.querySelector<HTMLElement>(`[data-uid="${sourceUid}"]`);
+  const rect = node?.getBoundingClientRect();
+  if (!rect || rect.width === 0) return;
+  const target = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  // 场上一张「各协议代表卡」（去重协议，最多 6 张）
+  const reps: { uid: string; color: string }[] = [];
+  const seen = new Set<string>();
+  for (const owner of [0, 1] as PlayerId[]) {
+    for (const st of s.players[owner].stacks) {
+      for (const c of st) {
+        const proto = c.defId.split('-')[0];
+        if (seen.has(proto) || reps.length >= 6) continue;
+        seen.add(proto);
+        reps.push({ uid: c.uid, color: protocolColorOf(c.defId) });
+      }
+    }
+  }
+  for (const rep of reps) {
+    const n = document.querySelector<HTMLElement>(`[data-uid="${rep.uid}"]`);
+    if (!n) continue;
+    const r = n.getBoundingClientRect();
+    if (r.width === 0) continue;
+    const from = { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    // ① 卡上亮起本协议色光柱（向上冲起）
+    const pillar = mk('div', 'fx-div0-pillar');
+    pillar.style.setProperty('--bc', rep.color);
+    pillar.style.setProperty('--bcg', hexToRgba(rep.color, 0.85));
+    pillar.style.left = `${(from.x - 13).toFixed(1)}px`;
+    pillar.style.top = `${(from.y - 96).toFixed(1)}px`;
+    pillar.style.zIndex = String(GEN2_Z - 3);
+    document.body.appendChild(pillar);
+    window.setTimeout(() => pillar.classList.add('in'), 30);
+    window.setTimeout(() => pillar.classList.remove('in'), 900);
+    window.setTimeout(() => pillar.remove(), 1400);
+    // ② 光柱本体沿直线汇聚到多元0 卡
+    spawnBand(from, target, 'fx-div0-beam', 950, rep.color);
+  }
+  // ③ 多元0 卡：彩光迸发 + 彩色光环
+  window.setTimeout(() => {
+    const burst = mk('div', 'fx-div0-burst');
+    burst.style.left = `${rect.left.toFixed(1)}px`;
+    burst.style.top = `${rect.top.toFixed(1)}px`;
+    burst.style.width = `${rect.width.toFixed(1)}px`;
+    burst.style.height = `${rect.height.toFixed(1)}px`;
+    burst.style.zIndex = String(GEN2_Z);
+    document.body.appendChild(burst);
+    window.setTimeout(() => burst.classList.add('in'), 20);
+    window.setTimeout(() => burst.remove(), 1200);
+    for (let i = 0; i < 18; i++) {
+      const s = mk('i', 'fx-div0-mote');
+      s.style.left = `${(target.x - 5).toFixed(1)}px`;
+      s.style.top = `${(target.y - 5).toFixed(1)}px`;
+      s.style.background = DIVERSITY_COLORS[i % 5];
+      const ang = (i / 18) * Math.PI * 2;
+      const dist = 40 + Math.random() * 90;
+      s.style.setProperty('--dx', `${(Math.cos(ang) * dist).toFixed(1)}px`);
+      s.style.setProperty('--dy', `${(Math.sin(ang) * dist).toFixed(1)}px`);
+      s.style.zIndex = String(GEN2_Z);
+      document.body.appendChild(s);
+      window.setTimeout(() => s.remove(), 1100);
+    }
+  }, 900);
 }
 
 /** 同化0：被取卡的青碧涟漪 + 化为光点沿弧线飞向 owner 手牌 + 落点青碧闪环 */
@@ -2126,10 +2220,14 @@ export function initGen2Fx(): () => void {
       if (p && p.triggerProtocol === 'corruption' && p.uid && p.defId) {
         onCorruptionReturned(p);
       }
-      // 同化0（场卡取入己手 = takeFromField 走 return 流程）：被取卡青碧涟漪 → 青碧光点
-      // 沿弧线飞入手牌 → 落手闪环（用户 2026-09-11：同化卡牌特效此前缺失）
+      // 同化0 取场卡入己手：takeFromField op 发的是 card:given（不是 card:returned）
+      // ——2026-09-12 修复「同化0 中部指令未触发特效」：在 card:given 分支补挂（下方）
+    } else if (e.type === 'card:given') {
+      // 同化0：被取卡青碧涟漪 → 化为青碧光点沿弧线飞入手牌 → 落手闪环
+      // （基础回手飞行由 effects/index 的 card:given → playReturn 照常播放）
+      const p = e.payload as { uid?: string; owner?: PlayerId; to?: PlayerId; triggerProtocol?: string } | undefined;
       if (p && p.triggerProtocol === 'assimilation' && p.uid) {
-        playAssimTakeExtra({ uid: p.uid, owner: p.owner });
+        playAssimTakeExtra({ uid: p.uid, owner: p.to ?? p.owner });
       }
     } else if (e.type === 'card:deck-played') {
       // time-0/3 从弃牌堆打出（playFromTrash）：弃牌堆上方古铜时钟亮起
@@ -2211,6 +2309,12 @@ export function initGen2Fx(): () => void {
       // 联合0 顶 / 联合3 中：被选卡被亮蓝（unity-0）/ 银白（unity-3）光环笼罩后翻转
       if (p && p.triggerProtocol === 'unity') {
         playUnityRing(p);
+      }
+    } else if (e.type === 'protocol:compiled-by-effect') {
+      // 多元0：6 张不同协议卡的光柱汇聚到多元0 → 彩光迸发（引擎 diversity.ts emit）
+      const p = e.payload as { player?: PlayerId; defId?: string; sourceUid?: string } | undefined;
+      if (p && p.defId === 'diversity' && p.sourceUid) {
+        playDiversityConvergence(p.sourceUid, e.state);
       }
     } else if (e.type === 'line:compiled') {
       // 联合1 中：场上联合卡齐亮 → 光柱汇聚协议中心 → 被删卡化银白光点被光柱吸收

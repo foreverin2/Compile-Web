@@ -3,6 +3,7 @@ import type { ChoiceCard, EffectCtx, EffectStep, GameState, Line, PlayerId, Step
 import { registerCardEffects } from '../registry';
 import { findCard } from '../context';
 import { cardPointValue } from '../../state/create';
+import { gameBus } from '../../events/bus';
 
 /**
  * 2代 多元 diversity（关键词：打出、对比、编译）。
@@ -25,6 +26,20 @@ function fieldProtocolCount(s: GameState): number {
   return set.size;
 }
 
+/** 场上【正面朝上】卡的去重协议数（含被覆盖的正面卡；2026-09-12 用户澄清：多元6 只算正面卡，
+ *  反面朝下的场卡不算——反面卡没有协议属性/公开信息）。 */
+function fieldProtocolCountFaceUp(s: GameState): number {
+  const set = new Set<string>();
+  for (const owner of [0, 1] as PlayerId[]) {
+    for (const line of [0, 1, 2] as Line[]) {
+      for (const c of s.players[owner].stacks[line]) {
+        if (c.faceUp) set.add(c.defId.split('-')[0]);
+      }
+    }
+  }
+  return set.size;
+}
+
 /** diversity-0 中：若场上有6张不同协议的卡牌，将多元协议翻转至已编译（裁决 Q6：纯翻面不删卡） */
 function* diversity0Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   if (fieldProtocolCount(ctx.s) < 6) return;
@@ -32,6 +47,12 @@ function* diversity0Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResu
   if (proto) {
     proto.compiled = true;
     pushLog(ctx.s, `P${ctx.player + 1}：多元协议翻转至已编译（diversity-0）`);
+    // 语义事件（2026-09-12）：多元0 效果翻协议 → UI 播「6 道协议色光柱汇聚到多元0 + 彩光迸发」
+    gameBus.emit({
+      type: 'protocol:compiled-by-effect',
+      state: ctx.s,
+      payload: { player: ctx.player, defId: 'diversity', sourceUid: ctx.card.uid },
+    });
   }
 }
 
@@ -99,9 +120,10 @@ function* diversity5Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResu
 
 /** diversity-6 顶（end，top:true）：回合结束：若场上没有至少3种不同协议的卡牌，删除此牌
  *  （txt 修改记录 2026-09-05【8】：至少4种→至少3种；英文 End: If there are not at least 3
- *  different protocols on cards in the field, delete this card.） */
+ *  different protocols on cards in the field, delete this card.
+ *  2026-09-12 用户澄清：计数只算【正面朝上】的卡（含被覆盖的正面卡），反面朝下的场卡不计入） */
 function* diversity6End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
-  if (fieldProtocolCount(ctx.s) < 3) yield { op: 'delete', uid: ctx.card.uid };
+  if (fieldProtocolCountFaceUp(ctx.s) < 3) yield { op: 'delete', uid: ctx.card.uid };
 }
 
 
@@ -119,8 +141,8 @@ registerCardEffects('diversity-6', {
       fn: diversity6End,
       optional: false,
       top: true,
-      // 自动判定：场上已有 ≥3 种不同协议卡 → 删除条件不满足（无动作）→ 不收集不弹按钮
-      cond: (s) => fieldProtocolCount(s) < 3,
+      // 自动判定：场上已有 ≥3 种不同协议【正面】卡 → 删除条件不满足（无动作）→ 不收集不弹按钮
+      cond: (s) => fieldProtocolCountFaceUp(s) < 3,
     },
   },
 });

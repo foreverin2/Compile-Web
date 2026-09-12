@@ -756,6 +756,9 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
     }
     case 'drawFromDeck': {
       // G8b（2代 clarity-2/3）：从牌库任意位抽 1 张入手（揭示语境已展示牌库供选择）；剩余保持顺序
+      // 2026-09-12 稳健性（用户问「联合4 会不会像时间协议那样卡住」）：多次 drawFromDeck 之间
+      // 可能被 after-draw 连锁抽走/洗走目标卡 → 此前直接 throw 会把整局卡死；
+      // 现改为记录日志并跳过该次抽取（该卡已不在牌库 = 无牌可抽，句意上等于无事发生）。
       const target = op.player ?? pe.player;
       if (shouldBlockDraw(s, target)) {
         pushLog(s, 'ice-6：禁止抽牌，跳过');
@@ -763,7 +766,10 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       }
       const p = s.players[target];
       const idx = p.deck.findIndex((c) => c.uid === op.uid);
-      if (idx === -1) throw new Error(`card ${op.uid} not in deck`);
+      if (idx === -1) {
+        pushLog(s, `从牌库抽取失败：${op.uid} 已不在牌库，跳过`);
+        break;
+      }
       const [card] = p.deck.splice(idx, 1);
       card.zone = 'hand';
       card.faceUp = true;
@@ -783,13 +789,19 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
     case 'playFromTrash': {
       // 批3 time-0/3：从弃牌堆打出（uid 须在效果属主 trash）→ 落地流程（completePlay 处理
       // before-covered/落地/中指令连锁）。trash 卡公开 → 反面打出不打 secret（曾公开信息）
+      // 2026-09-12 稳健性：玩家选牌后若经过连锁结算该卡已离开弃牌堆（被洗库/被取走），
+      // 不再抛错中断整局——记录日志并跳过该句（同 drawFromDeck 处理）。
       const card = findCard(s, op.uid);
       if (!card || card.zone !== 'trash' || card.owner !== pe.player) {
-        throw new Error(`cannot play ${op.uid} from trash`);
+        pushLog(s, `从弃牌堆打出失败：${op.uid} 已不在弃牌堆，跳过`);
+        break;
       }
       const p = s.players[pe.player];
       const idx = p.trash.findIndex((c) => c.uid === op.uid);
-      if (idx === -1) throw new Error(`cannot play ${op.uid} from trash`);
+      if (idx === -1) {
+        pushLog(s, `从弃牌堆打出失败：${op.uid} 已不在弃牌堆，跳过`);
+        break;
+      }
       p.trash.splice(idx, 1);
       card.zone = 'float';
       card.faceUp = op.faceUp;

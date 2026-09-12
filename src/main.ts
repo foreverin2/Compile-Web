@@ -13,6 +13,7 @@ import { initGen2Fx, clearGen2Fx } from './ui/fx-gen2';
 import { initDiag } from './ui/diag';
 import { initDevMode } from './ui/devmode';
 import { gameBus } from './core/events/bus';
+import { pushLog } from './core/log';
 import type { PlayerId, Line } from './core/models/types';
 
 const root = document.getElementById('app')!;
@@ -90,6 +91,11 @@ const cb: UiCallbacks = {
     // executeAction 使用窄化重载（play/compile 需 args，refresh/advance 无 args），
     // 而 LegalAction.kind 是联合类型，需按 kind 收窄后再分发
     let drawAnimCount = 0;
+    // 引擎抛错守卫（2026-09-12）：效果守卫失败（如 shift 目标线 = 原线）此前会冒泡成
+    // Uncaught Error 并把 UI 留在【已失效的选择条】上 → 之后每次点击继续抛
+    // "no pending choice" 级联报错（见 log/break_log/compile-log-2026-09-11）。
+    // 现捕获后立刻重渲染：界面回到引擎的真实状态，玩家可继续操作。
+    try {
     if (a.kind === 'play') {
       executeAction(state, player, 'play', { cardUid: a.cardUid!, faceUp: a.faceUp!, line: a.line!, target: a.target });
     } else if (a.kind === 'compile') {
@@ -153,6 +159,13 @@ const cb: UiCallbacks = {
       executeAction(state, player, a.kind);
     } else if (a.kind === 'resolve-trigger') {
       executeAction(state, player, 'resolve-trigger', { cardUid: a.cardUid! });
+    }
+    } catch (err) {
+      // 打印到控制台（诊断日志会一并导出）+ 写入游戏日志树，随后重渲染同步 UI
+      console.error('[行动结算异常]', err);
+      pushLog(state, `行动结算异常：${err instanceof Error ? err.message : String(err)}`);
+      renderApp(root, state, cb);
+      return;
     }
     // effect-choice：getLegalActions 不产生，由 UI 选择栏应答后经 onAction 分发（chooser 可能是对手）
     // 效果触发的抽牌（card:drawn 事件，如 fire-0/fire-4）与揭示（card:revealed 事件，如

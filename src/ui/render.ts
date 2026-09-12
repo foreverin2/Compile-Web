@@ -17,7 +17,7 @@ import { actionCn } from '../core/log';
 import { cardCommandDisabled } from '../core/effects/context';
 import { downloadLog } from './diag';
 import { buildTornadoFx } from './fx-tornado';
-import { buildDove, buildLakeSword, startLuckDiceFx, startClarityDeckEye } from './fx-gen2';
+import { buildDove, buildLakeSword, spawnCourageSparks, startLuckDiceFx, startClarityDeckEye } from './fx-gen2';
 
 export interface UiCallbacks {
   onAction(a: LegalAction): void;
@@ -3242,14 +3242,24 @@ function appendClarityCompiled(layer: HTMLElement, defId: string): void {
       }, 700);
     }, CLARITY_EYE_SHOW_MS);
   };
-  // 金色金字塔 burst：中心渐现金字塔（两个三角面）2s 后消散
+  // 金色金字塔 burst（2026-09-12 重做）：3D 四面体 = 受光左面 + 背光右面 + 前棱高光 + 底影
+  // + 上升金色粒子，2s 后消散（旧版两个同色三角看着像黄色三角形，用户反馈）
   const pyramidBurst = (done: () => void): void => {
     if (!layer.isConnected) { done(); return; }
     const g = layerGeom(layer);
     if (!g) { fxTimer(defId, () => pyramidBurst(done), 700); return; }
     const pyr = el('div', 'compiled-clarity-pyramid');
+    pyr.appendChild(el('i', 'compiled-clarity-pyramid-base'));
     pyr.appendChild(el('i', 'compiled-clarity-pyramid-face l'));
     pyr.appendChild(el('i', 'compiled-clarity-pyramid-face r'));
+    pyr.appendChild(el('i', 'compiled-clarity-pyramid-edge'));
+    for (let i = 0; i < 8; i++) {
+      const s = el('i', 'compiled-clarity-pyr-spark');
+      s.style.left = `${rnd(-30, 30).toFixed(1)}px`;
+      s.style.top = `${rnd(6, 26).toFixed(1)}px`;
+      s.style.animationDelay = `${(i * 0.14).toFixed(2)}s`;
+      pyr.appendChild(s);
+    }
     host.appendChild(pyr);
     reflowFx(pyr);
     pyr.classList.add('in');
@@ -3543,6 +3553,9 @@ function appendCourageCompiled(layer: HTMLElement, defId: string): void {
     fxTimer(defId, () => {
       if (!layer.isConnected) { done(); return; }
       ripple.classList.add('on');
+      // 剑尖插入瞬间：金色粒子迸发（用户 2026-09-12：附加上更多粒子；落点 = 协议中心）
+      const gr = layer.getBoundingClientRect();
+      spawnCourageSparks(gr.left + gr.width / 2, gr.top + gr.height / 2, 20);
       // 大剑渐隐消散
       fxTimer(defId, () => {
         host.classList.add('out');
@@ -3724,16 +3737,16 @@ function appendUnityCompiled(layer: HTMLElement, defId: string): void {
 
 /** 协议已编译主色表（syncDiversityColors 取色用；已在 protocol-colors.ts 与 fx-gen2 共用） */
 
-/** diversity 已编译 5 色取自场上其它已编译协议边框色（每帧渲染调用；变量写 body 级层） */
+/** diversity 已编译 5 色取自【场上另外 5 个协议】的边框色（每帧渲染调用；变量写 body 级层）。
+ *  2026-09-12 用户澄清：不看这些协议是否已编译——双方协议格共 6 个，去掉多元自身正好 5 个，
+ *  直接按这 5 个协议的主题色轮换（旧实现只收已编译协议 → 前期常不足 5 色而重点取色）。 */
 export function syncDiversityColors(s: GameState): void {
   const layer = compiledFx.get('diversity');
   if (!layer) return;
-  // 收集场上其它已编译协议 defId（排除 diversity 自身），按玩家/线序去重
   const seen = new Set<string>();
   const colors: string[] = [];
   for (const p of s.players) {
     for (const proto of p.protocols) {
-      if (!proto.compiled) continue;
       const defId = proto.defId;
       if (defId === 'diversity' || seen.has(defId)) continue;
       const c = COMPILED_PROTOCOL_COLORS[defId];
@@ -3742,7 +3755,7 @@ export function syncDiversityColors(s: GameState): void {
       colors.push(c);
     }
   }
-  if (colors.length === 0) return; // 无其它已编译协议 → 保留默认 5 色兜底
+  if (colors.length === 0) return; // 无其它协议（理论不发生）→ 保留默认 5 色兜底
   // 不足 5 种：在已有色间循环复用（保持 5 段交替观感）
   const arr: string[] = [];
   for (let i = 0; i < 5; i++) arr.push(colors[i % colors.length]);
@@ -3791,8 +3804,11 @@ export function syncDiversity3Fx(s: GameState): void {
         (c) => c.defId === 'diversity-3' && c.faceUp && !cardCommandDisabled(s, c, 'top'),
       );
       if (!hasD3) continue;
+      // 2026-09-12 用户反馈「多元3 的卡牌特效没有被触发」→ 放宽：
+      // ① 只要该线有正面 diversity-3，能量槽彩色流光就常驻（原先要求链路里有非多元正面卡才铺，
+      //    条件不满足时整条线一点特效都没有）；
+      // ② 链路内「非多元正面卡」按各自协议色亮边框（卡文条件句的效果）。
       const others = stack.filter((c) => c.faceUp && c.defId.split('-')[0] !== 'diversity');
-      if (others.length === 0) continue;
       // ① 每张非多元正面卡：边框亮起其所属协议主题色微光
       for (const card of others) {
         activeCards.add(card.uid);

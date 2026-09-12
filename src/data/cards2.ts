@@ -209,7 +209,7 @@ export const ALL_CARD_DEFS_2: CardDef[] = [
 
   // 统一——团结使我们强大
   { defId: 'unity-0', protocol: 'unity', value: 0, middle: '若场上有其它联合牌，翻转或抽取1张牌。', bottom: '当此牌被联合牌覆盖时：翻转或抽取1张牌。' },
-  { defId: 'unity-1', protocol: 'unity', value: 1, top: '回合开始：若此牌被覆盖，你可以偏转此牌。', middle: '若场上有5张或以上的联合卡牌，编译统一协议并删除那条链路中所有的卡牌。', bottom: '联合卡牌可以正面朝上打在此链路。' },
+  { defId: 'unity-1', protocol: 'unity', value: 1, top: '回合开始：若此牌被覆盖，你可以偏转此牌。', middle: '若场上有5张或以上的联合卡牌，编译联合协议并删除那条链路中所有的卡牌。', bottom: '联合卡牌可以正面朝上打在此链路。' },
   { defId: 'unity-2', protocol: 'unity', value: 2, middle: '抽取与场上联合牌数目相等的牌。' },
   { defId: 'unity-3', protocol: 'unity', value: 3, middle: '如果场上有其它联合牌，你可以翻转1张正面朝上的卡牌。' },
   { defId: 'unity-4', protocol: 'unity', value: 4, top: '回合开始：若你没有手牌，揭示你的牌库，抽取其中所有的联合卡牌，然后切洗你的牌库。' },

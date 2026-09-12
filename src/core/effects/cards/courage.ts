@@ -67,12 +67,17 @@ function* courage2End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
 }
 
 /** courage-3 底（end，无 top 仅顶卡，可选）：回合结束：你可以将此牌偏转进入对手总阈值最大的链路中
- *  （FAQ 勇气3：多条总值最高由玩家自选；shift 自己到该线自己链路） */
+ *  （FAQ 勇气3：多条总值最高由玩家自选；shift 自己到该线自己链路）
+ *  2026-09-12 修复崩溃（log/break_log 2026-09-11）：候选线必须【排除此牌当前所在线】——
+ *  否则玩家选到自己所在线 → resolve.executeOp 抛 "must shift to a different line"
+ *  （整个对局卡死且 UI 停在失效选择条上）。最大链路只有自己所在线时 → 无对象，整句跳过。 */
 function* courage3End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const foe = opp(ctx.player);
+  const cur = ctx.card.line;
   const totals = ([0, 1, 2] as Line[]).map((l) => getLineValue(ctx.s, foe, l));
   const max = Math.max(...totals);
-  const lines = ([0, 1, 2] as Line[]).filter((_, i) => totals[i] === max);
+  const lines = ([0, 1, 2] as Line[]).filter((l) => l !== cur && totals[l] === max);
+  if (lines.length === 0) return; // 无处可去（含「唯一最大线 = 自己所在线」）
   const lAns = yield { kind: 'select-line', title: 'courage-3：你可以偏转此牌进入对手总阈值最大的链路', min: 1, max: 1, optional: true, candidates: [], lines };
   if (lAns.selected.length === 0) return;
   const line = Number(lAns.selected[0].replace('line:', '')) as Line;
