@@ -17,6 +17,7 @@ import { actionCn } from '../core/log';
 import { cardCommandDisabled } from '../core/effects/context';
 import { downloadLog } from './diag';
 import { buildTornadoFx } from './fx-tornado';
+import { appendGen3CompiledFx, type Gen3FxApi } from './compiled-gen3';
 import { buildDove, buildLakeSword, spawnCourageSparks, startLuckDiceFx, startClarityDeckEye } from './fx-gen2';
 import { fitRotatedProtocol } from './zoom-layout';
 
@@ -3959,9 +3960,22 @@ function appendDiversityCompiled(layer: HTMLElement, defId: string): void {
   scheduleCompiledLoop(layer, defId, rnd(3000, 6500), prismBurst);
 }
 
+/** 3代（MN03/AX03）已编译特效的宿主能力对象（compiled-gen3.ts 用；保持该模块不反向依赖本文件私有实现） */
+const GEN3_FX_API: Gen3FxApi = {
+  el,
+  layerGeom,
+  reflow: reflowFx,
+  corners: appendCompiledCorners,
+  scheduleLoop: (layer, defId, firstMs, burst) => scheduleCompiledLoop(layer, defId, firstMs, burst),
+  timer: fxTimer,
+  rnd,
+};
+
 /** 新 10 协议已编译特效分发（buildCompiledFx 内调用；fire/light/darkness/water/life
- *  走既有分支，不在此列）。每个 builder 只建持久子结构 + 起调度，动画全部在层内。 */
+ *  走既有分支，不在此列）。每个 builder 只建持久子结构 + 起调度，动画全部在层内。
+ *  3代 15 套（批次 A）走 compiled-gen3.ts，命中即返回。 */
 function appendNewCompiledFx(layer: HTMLElement, defId: string): void {
+  if (appendGen3CompiledFx(layer, defId, GEN3_FX_API)) return;
   switch (defId) {
     case 'death': appendDeathCompiled(layer, defId); break;
     case 'spirit': appendSpiritCompiled(layer, defId); break;

@@ -18,6 +18,11 @@ export const COMPILED_PROTOCOL_COLORS: Record<string, string> = {
   ice: '#3d9ad9', smoke: '#7a7a88', fear: '#ff6e1e', corruption: '#2f9e5a', war: '#e02222',
   courage: '#e8b13a', time: '#b07f3e', assimilation: '#2ec9a8', unity: '#3d8bff',
   diversity: '#c07bff',
+  // 3代 MN03/AX03（2026-09-13 新增：取自官方协议卡图
+  // `…\compile3\卡图\协议\Not Rounded\1*.png` 的像素采样 + 逐张目视核对；即设计稿 §1.2 的 15 组 hex）
+  envy: '#2fb3a8', gluttony: '#c9a227', greed: '#1f8f8a', lust: '#e0344b', pride: '#d9a441',
+  sloth: '#8a5a5a', wrath: '#c0392b', ambush: '#6f93c4', fulcrum: '#2f7f8f', overwhelm: '#1f6f8f',
+  momentum: '#ff8a2b', nova: '#ffb347', inertia: '#d8c9a8', rigidity: '#8f6fd0', flexibility: '#a86fd0',
 };
 
 /** 协议主题色（defId 形如 'diversity-3' / 'fire-0'；未知协议给中性紫） */

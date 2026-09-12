@@ -1,0 +1,610 @@
+/* =============================================================================
+ * 3 代（MN03 / AX03）协议特效样式 · 批次 A（15 套「已编译」常驻特效）
+ *
+ * 结构约定（与 1/2 代一致）：
+ *  - 层 = `.compiled-fx.compiled-fx-<defId>`（document.body 上的 fixed 层，z=100，
+ *    由 render.ts buildCompiledFx 创建、syncCompiledFxLayers 每帧按协议 holder 矩形重定位）；
+ *  - 每个 `.gen3-<proto>-host` 是 inset:0 的占位容器（占满卡面），子元素用 % 定位 → 随卡面自适应；
+ *  - 全部纯 CSS 动画；**不用 mask / @property**，环绕轨迹一律 offset-path（inset/circle）。
+ *
+ * 品质（设计稿 §8.1）：多元素层次（主体+衬光+粒子）/ 渐变+内阴影+高光材质 /
+ * 分阶段缓动与二次运动 / 三阶配色（--c 主色 · --a 强调色 · --hi 高光）/
+ * 起止衔接（.in/.out 与 0.2~0.4s 收束）/ 不遮卡文（贴边件 + 居中件低透明 + 爆发短暂）。
+ * ========================================================================== */
+
+/* ---------------------------------------------------------------- 协议外框与环 */
+
+/* 已编译协议外框发光（与 1/2 代同款：border-color + 外光 + 内光） */
+.protocol.compiled-fx-envy        { border-color: #2fb3a8; box-shadow: 0 0 16px rgba(47, 179, 168, 0.6), inset 0 0 12px rgba(47, 179, 168, 0.28); }
+.protocol.compiled-fx-gluttony    { border-color: #c9a227; box-shadow: 0 0 16px rgba(201, 162, 39, 0.6), inset 0 0 12px rgba(201, 162, 39, 0.28); }
+.protocol.compiled-fx-greed       { border-color: #1f8f8a; box-shadow: 0 0 16px rgba(31, 143, 138, 0.6), inset 0 0 12px rgba(31, 143, 138, 0.28); }
+.protocol.compiled-fx-lust        { border-color: #e0344b; box-shadow: 0 0 16px rgba(224, 52, 75, 0.6), inset 0 0 12px rgba(224, 52, 75, 0.28); }
+.protocol.compiled-fx-pride       { border-color: #d9a441; box-shadow: 0 0 16px rgba(217, 164, 65, 0.6), inset 0 0 12px rgba(217, 164, 65, 0.28); }
+.protocol.compiled-fx-sloth       { border-color: #8a5a5a; box-shadow: 0 0 16px rgba(138, 90, 90, 0.6), inset 0 0 12px rgba(138, 90, 90, 0.28); }
+.protocol.compiled-fx-wrath       { border-color: #c0392b; box-shadow: 0 0 16px rgba(192, 57, 43, 0.6), inset 0 0 12px rgba(192, 57, 43, 0.28); }
+.protocol.compiled-fx-ambush      { border-color: #6f93c4; box-shadow: 0 0 16px rgba(111, 147, 196, 0.6), inset 0 0 12px rgba(111, 147, 196, 0.28); }
+.protocol.compiled-fx-fulcrum     { border-color: #2f7f8f; box-shadow: 0 0 16px rgba(47, 127, 143, 0.6), inset 0 0 12px rgba(47, 127, 143, 0.28); }
+.protocol.compiled-fx-overwhelm   { border-color: #1f6f8f; box-shadow: 0 0 16px rgba(31, 111, 143, 0.6), inset 0 0 12px rgba(31, 111, 143, 0.28); }
+.protocol.compiled-fx-momentum    { border-color: #ff8a2b; box-shadow: 0 0 16px rgba(255, 138, 43, 0.6), inset 0 0 12px rgba(255, 138, 43, 0.28); }
+.protocol.compiled-fx-nova        { border-color: #ffb347; box-shadow: 0 0 16px rgba(255, 179, 71, 0.6), inset 0 0 12px rgba(255, 179, 71, 0.28); }
+.protocol.compiled-fx-inertia     { border-color: #d8c9a8; box-shadow: 0 0 16px rgba(216, 201, 168, 0.55), inset 0 0 12px rgba(216, 201, 168, 0.25); }
+.protocol.compiled-fx-rigidity    { border-color: #8f6fd0; box-shadow: 0 0 16px rgba(143, 111, 208, 0.6), inset 0 0 12px rgba(143, 111, 208, 0.28); }
+.protocol.compiled-fx-flexibility { border-color: #a86fd0; box-shadow: 0 0 16px rgba(168, 111, 208, 0.6), inset 0 0 12px rgba(168, 111, 208, 0.28); }
+
+/* 环绕环：3代一律走"呼吸边框"（隐藏通用岩浆段/岩石骨架） */
+.compiled-ring-envy, .compiled-ring-gluttony, .compiled-ring-greed, .compiled-ring-lust,
+.compiled-ring-pride, .compiled-ring-sloth, .compiled-ring-wrath, .compiled-ring-ambush,
+.compiled-ring-fulcrum, .compiled-ring-overwhelm, .compiled-ring-momentum, .compiled-ring-nova,
+.compiled-ring-inertia, .compiled-ring-rigidity, .compiled-ring-flexibility {
+  border: 2px solid;
+  border-radius: 14px;
+}
+.compiled-ring-envy .lava-seg, .compiled-ring-envy .lava-rock,
+.compiled-ring-gluttony .lava-seg, .compiled-ring-gluttony .lava-rock,
+.compiled-ring-greed .lava-seg, .compiled-ring-greed .lava-rock,
+.compiled-ring-lust .lava-seg, .compiled-ring-lust .lava-rock,
+.compiled-ring-pride .lava-seg, .compiled-ring-pride .lava-rock,
+.compiled-ring-sloth .lava-seg, .compiled-ring-sloth .lava-rock,
+.compiled-ring-wrath .lava-seg, .compiled-ring-wrath .lava-rock,
+.compiled-ring-ambush .lava-seg, .compiled-ring-ambush .lava-rock,
+.compiled-ring-fulcrum .lava-seg, .compiled-ring-fulcrum .lava-rock,
+.compiled-ring-overwhelm .lava-seg, .compiled-ring-overwhelm .lava-rock,
+.compiled-ring-momentum .lava-seg, .compiled-ring-momentum .lava-rock,
+.compiled-ring-nova .lava-seg, .compiled-ring-nova .lava-rock,
+.compiled-ring-inertia .lava-seg, .compiled-ring-inertia .lava-rock,
+.compiled-ring-rigidity .lava-seg, .compiled-ring-rigidity .lava-rock,
+.compiled-ring-flexibility .lava-seg, .compiled-ring-flexibility .lava-rock { display: none; }
+
+.compiled-ring-envy        { animation: gen3-breathe-envy 2.6s ease-in-out infinite; }
+.compiled-ring-gluttony    { animation: gen3-breathe-gluttony 2.8s ease-in-out infinite; }
+.compiled-ring-greed       { animation: gen3-breathe-greed 2.4s ease-in-out infinite; }
+.compiled-ring-lust        { animation: gen3-breathe-lust 2s ease-in-out infinite; }
+.compiled-ring-pride       { animation: gen3-breathe-pride 2.6s ease-in-out infinite; }
+.compiled-ring-sloth       { animation: gen3-breathe-sloth 3.6s ease-in-out infinite; }
+.compiled-ring-wrath       { animation: gen3-breathe-wrath 2s ease-in-out infinite; }
+.compiled-ring-ambush      { animation: gen3-breathe-ambush 3s ease-in-out infinite; }
+.compiled-ring-fulcrum     { animation: gen3-breathe-fulcrum 2.8s ease-in-out infinite; }
+.compiled-ring-overwhelm   { animation: gen3-breathe-overwhelm 2.2s ease-in-out infinite; }
+.compiled-ring-momentum    { animation: gen3-breathe-momentum 2s ease-in-out infinite; }
+.compiled-ring-nova        { animation: gen3-breathe-nova 2.4s ease-in-out infinite; }
+.compiled-ring-inertia     { animation: gen3-breathe-inertia 4s ease-in-out infinite; }
+.compiled-ring-rigidity    { animation: gen3-breathe-rigidity 2.6s ease-in-out infinite; }
+.compiled-ring-flexibility { animation: gen3-breathe-flexibility 2.8s ease-in-out infinite; }
+
+@keyframes gen3-breathe-envy        { 0%,100% { border-color: rgba(47,179,168,.45);  box-shadow: 0 0 8px rgba(47,179,168,.35), inset 0 0 6px rgba(47,179,168,.2); } 50% { border-color: rgba(126,242,224,.95); box-shadow: 0 0 20px rgba(47,179,168,.75), inset 0 0 12px rgba(126,242,224,.35); } }
+@keyframes gen3-breathe-gluttony    { 0%,100% { border-color: rgba(201,162,39,.42); box-shadow: 0 0 8px rgba(201,162,39,.32), inset 0 0 6px rgba(201,162,39,.2); } 50% { border-color: rgba(240,214,120,.92); box-shadow: 0 0 20px rgba(201,162,39,.7), inset 0 0 12px rgba(240,214,120,.3); } }
+@keyframes gen3-breathe-greed       { 0%,100% { border-color: rgba(31,143,138,.45); box-shadow: 0 0 8px rgba(31,143,138,.35), inset 0 0 6px rgba(31,143,138,.2); } 50% { border-color: rgba(217,79,217,.8);  box-shadow: 0 0 20px rgba(31,143,138,.7), 0 0 26px rgba(217,79,217,.45), inset 0 0 12px rgba(217,79,217,.25); } }
+@keyframes gen3-breathe-lust        { 0%,100% { border-color: rgba(224,52,75,.4);   box-shadow: 0 0 8px rgba(224,52,75,.3), inset 0 0 6px rgba(58,16,48,.5); } 50% { border-color: rgba(255,107,107,.95); box-shadow: 0 0 22px rgba(224,52,75,.8), inset 0 0 14px rgba(255,107,107,.3); } }
+@keyframes gen3-breathe-pride       { 0%,100% { border-color: rgba(217,164,65,.45); box-shadow: 0 0 8px rgba(217,164,65,.35), inset 0 0 6px rgba(217,164,65,.2); } 50% { border-color: rgba(255,233,168,.95); box-shadow: 0 0 20px rgba(217,164,65,.75), inset 0 0 12px rgba(255,233,168,.35); } }
+@keyframes gen3-breathe-sloth       { 0%,100% { border-color: rgba(138,90,90,.35);  box-shadow: 0 0 6px rgba(138,90,90,.28), inset 0 0 6px rgba(138,90,90,.18); } 50% { border-color: rgba(190,120,120,.75); box-shadow: 0 0 16px rgba(138,90,90,.55), inset 0 0 10px rgba(255,90,90,.18); } }
+@keyframes gen3-breathe-wrath       { 0%,100% { border-color: rgba(192,57,43,.42);  box-shadow: 0 0 8px rgba(192,57,43,.32), inset 0 0 6px rgba(47,111,143,.2); } 50% { border-color: rgba(255,120,90,.95); box-shadow: 0 0 22px rgba(192,57,43,.8), inset 0 0 12px rgba(47,111,143,.3); } }
+@keyframes gen3-breathe-ambush      { 0%,100% { border-color: rgba(111,147,196,.35); box-shadow: 0 0 8px rgba(111,147,196,.28), inset 0 0 6px rgba(22,32,44,.5); } 50% { border-color: rgba(188,216,255,.85); box-shadow: 0 0 18px rgba(111,147,196,.6), inset 0 0 12px rgba(143,227,255,.25); } }
+@keyframes gen3-breathe-fulcrum     { 0%,100% { border-color: rgba(47,127,143,.45); box-shadow: 0 0 8px rgba(47,127,143,.35), inset 0 0 6px rgba(47,127,143,.2); } 50% { border-color: rgba(216,240,255,.9);  box-shadow: 0 0 20px rgba(47,127,143,.7), inset 0 0 12px rgba(216,240,255,.3); } }
+@keyframes gen3-breathe-overwhelm   { 0%,100% { border-color: rgba(31,111,143,.5);  box-shadow: 0 0 8px rgba(31,111,143,.4), inset 0 0 8px rgba(13,20,24,.6); } 50% { border-color: rgba(232,244,255,.9);  box-shadow: 0 0 22px rgba(31,111,143,.75), inset 0 0 14px rgba(232,244,255,.22); } }
+@keyframes gen3-breathe-momentum    { 0%,100% { border-color: rgba(255,138,43,.45); box-shadow: 0 0 10px rgba(255,138,43,.35); } 50% { border-color: rgba(255,208,138,.95); box-shadow: 0 0 24px rgba(255,138,43,.8), inset 0 0 12px rgba(201,166,232,.25); } }
+@keyframes gen3-breathe-nova        { 0%,100% { border-color: rgba(255,179,71,.45); box-shadow: 0 0 10px rgba(255,179,71,.35); } 50% { border-color: rgba(255,233,192,.95); box-shadow: 0 0 24px rgba(255,179,71,.8), inset 0 0 12px rgba(138,58,42,.35); } }
+@keyframes gen3-breathe-inertia     { 0%,100% { border-color: rgba(216,201,168,.35); box-shadow: 0 0 6px rgba(216,201,168,.25); } 50% { border-color: rgba(255,240,192,.8);  box-shadow: 0 0 14px rgba(216,201,168,.5), inset 0 0 10px rgba(74,74,79,.4); } }
+@keyframes gen3-breathe-rigidity    { 0%,100% { border-color: rgba(143,111,208,.45); box-shadow: 0 0 8px rgba(143,111,208,.35), inset 0 0 6px rgba(36,26,56,.5); } 50% { border-color: rgba(234,255,58,.85); box-shadow: 0 0 20px rgba(143,111,208,.7), inset 0 0 12px rgba(234,255,58,.25); } }
+@keyframes gen3-breathe-flexibility { 0%,100% { border-color: rgba(168,111,208,.45); box-shadow: 0 0 8px rgba(168,111,208,.35); } 50% { border-color: rgba(255,176,224,.92); box-shadow: 0 0 20px rgba(168,111,208,.7), inset 0 0 12px rgba(255,176,224,.28); } }
+
+/* 四角护边配色（几何骨架 .compiled-l-corner 由 appendCompiledCorners 建） */
+.compiled-envy-corner        { --cc: #2fb3a8; --ccg: rgba(126, 242, 224, 0.85); }
+.compiled-gluttony-corner    { --cc: #c9a227; --ccg: rgba(240, 214, 120, 0.85); }
+.compiled-greed-corner       { --cc: #1f8f8a; --ccg: rgba(217, 79, 217, 0.8); }
+.compiled-lust-corner        { --cc: #e0344b; --ccg: rgba(255, 107, 107, 0.85); }
+.compiled-pride-corner       { --cc: #d9a441; --ccg: rgba(255, 233, 168, 0.88); }
+.compiled-sloth-corner       { --cc: #8a5a5a; --ccg: rgba(255, 90, 90, 0.7); }
+.compiled-wrath-corner       { --cc: #c0392b; --ccg: rgba(255, 120, 90, 0.85); }
+.compiled-ambush-corner      { --cc: #6f93c4; --ccg: rgba(188, 216, 255, 0.85); }
+.compiled-fulcrum-corner     { --cc: #2f7f8f; --ccg: rgba(216, 240, 255, 0.85); }
+.compiled-overwhelm-corner   { --cc: #1f6f8f; --ccg: rgba(232, 244, 255, 0.85); }
+.compiled-momentum-corner    { --cc: #ff8a2b; --ccg: rgba(255, 208, 138, 0.88); }
+.compiled-nova-corner        { --cc: #ffb347; --ccg: rgba(255, 233, 192, 0.88); }
+.compiled-inertia-corner     { --cc: #d8c9a8; --ccg: rgba(255, 240, 192, 0.8); }
+.compiled-rigidity-corner    { --cc: #8f6fd0; --ccg: rgba(234, 255, 58, 0.85); }
+.compiled-flexibility-corner { --cc: #a86fd0; --ccg: rgba(255, 176, 224, 0.85); }
+
+/* ---------------------------------------------------------------- 共享零件 */
+
+/* 15 个宿主容器：占满卡面、可溢出（贴边环绕件允许探出卡外） */
+.gen3-envy-host, .gen3-glut-host, .gen3-greed-host, .gen3-lust-host, .gen3-pride-host,
+.gen3-sloth-host, .gen3-wrath-host, .gen3-amb-host, .gen3-ful-host, .gen3-ovw-host,
+.gen3-mom-host, .gen3-nova-host, .gen3-ine-host, .gen3-rig-host, .gen3-flx-host {
+  position: absolute; inset: 0; pointer-events: none; overflow: visible;
+}
+
+/* 粒子爆发（--dx/--dy 由 JS 内联）：多点起飞 + 二次运动（先冲后滑落）+ 收束消散 */
+.gen3-envy-spark-wrap, .gen3-greed-bit-wrap, .gen3-pride-spark-wrap, .gen3-wrath-spark-wrap,
+.gen3-ovw-dust-wrap, .gen3-nova-spark-wrap,
+.gen3-sloth-embers, .gen3-wrath-shards, .gen3-amb-shards, .gen3-nova-chunks, .gen3-ine-dust {
+  position: absolute; inset: 0; pointer-events: none;
+}
+.gen3-envy-spark, .gen3-greed-bit, .gen3-pride-spark, .gen3-wrath-spark,
+.gen3-ovw-dust, .gen3-nova-spark {
+  position: absolute; left: 50%; top: 50%; border-radius: 50%;
+  animation: gen3-particle-fly 620ms cubic-bezier(0.16, 0.9, 0.3, 1) forwards;
+}
+@keyframes gen3-particle-fly {
+  0%   { transform: translate(-50%, -50%) scale(0.35); opacity: 0; }
+  14%  { opacity: 1; }
+  62%  { transform: translate(calc(-50% + var(--dx) * 0.86), calc(-50% + var(--dy) * 0.86)) scale(0.9); opacity: 0.9; }
+  100% { transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy) * 1.18)) scale(0.25); opacity: 0; }
+}
+.gen3-envy-spark   { width: 4px; height: 4px; background: radial-gradient(circle, #ffd9a0, #ffb347 60%, rgba(255,179,71,0) 100%); box-shadow: 0 0 8px rgba(255,179,71,0.9); }
+.gen3-greed-bit    { width: 5px; height: 5px; background: radial-gradient(circle, #ffb0ff, #d94fd9 60%, rgba(217,79,217,0) 100%); box-shadow: 0 0 8px rgba(217,79,217,0.85); }
+.gen3-pride-spark  { width: 3px; height: 7px; border-radius: 45%; background: linear-gradient(180deg, #fff6d8, #d9a441 70%, rgba(217,164,65,0)); box-shadow: 0 0 8px rgba(255,233,168,0.9); }
+.gen3-wrath-spark  { width: 4px; height: 4px; background: radial-gradient(circle, #ffd0b0, #c0392b 60%, rgba(192,57,43,0) 100%); box-shadow: 0 0 8px rgba(255,120,90,0.9); }
+.gen3-ovw-dust     { width: 3px; height: 3px; background: radial-gradient(circle, #ffffff, #cfe6f2 60%, rgba(207,230,242,0) 100%); box-shadow: 0 0 6px rgba(232,244,255,0.8); }
+.gen3-nova-spark   { width: 5px; height: 5px; background: radial-gradient(circle, #fff2d0, #ffb347 55%, rgba(255,179,71,0) 100%); box-shadow: 0 0 10px rgba(255,179,71,0.95); }
+
+/* 冲击环（落点感）：一次扩散 + 内圈残留 */
+.gen3-pride-shock, .gen3-ovw-shock, .gen3-mom-shock, .gen3-lust-wave {
+  position: absolute; left: 50%; top: 50%; border-radius: 50%;
+  pointer-events: none; opacity: 0;
+  transform: translate(-50%, -50%) scale(0.3);
+}
+.gen3-pride-shock.on, .gen3-ovw-shock.on, .gen3-mom-shock.on, .gen3-lust-wave.on {
+  animation: gen3-shock-out 0.72s cubic-bezier(0.2, 0.7, 0.3, 1) forwards;
+}
+@keyframes gen3-shock-out {
+  0%   { opacity: 0.9; transform: translate(-50%, -50%) scale(0.28); }
+  70%  { opacity: 0.35; }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(1.75); }
+}
+.gen3-pride-shock  { width: 60%; aspect-ratio: 1 / 1; border: 2px solid rgba(255, 233, 168, 0.85); box-shadow: 0 0 14px rgba(217, 164, 65, 0.7), inset 0 0 10px rgba(255, 233, 168, 0.4); }
+.gen3-ovw-shock    { width: 66%; aspect-ratio: 1 / 1; border: 3px solid rgba(232, 244, 255, 0.6); box-shadow: 0 0 16px rgba(31, 111, 143, 0.8), inset 0 0 14px rgba(232, 244, 255, 0.25); }
+.gen3-mom-shock    { width: 58%; aspect-ratio: 1 / 1; border: 2px solid rgba(255, 208, 138, 0.8); box-shadow: 0 0 16px rgba(255, 138, 43, 0.8); }
+.gen3-lust-wave    { width: 64%; aspect-ratio: 1 / 1; border: 2px solid rgba(224, 52, 75, 0.8); box-shadow: 0 0 18px rgba(224, 52, 75, 0.7), inset 0 0 16px rgba(58, 16, 48, 0.6); }
+
+/* ============================================================ 1. 嫉妒 envy */
+
+.gen3-envy-host { --c: #2fb3a8; --a: #ffb347; --hi: #7ef2e0; }
+/* 双涡旋：两层线圈段沿不同半径的圆路径反向环绕（弹簧圈观感） */
+.gen3-envy-swirl { position: absolute; inset: 0; }
+.gen3-envy-coil {
+  position: absolute; left: 0; top: 0; width: 9px; height: 3px; border-radius: 2px;
+  background: linear-gradient(90deg, rgba(126, 242, 224, 0.05), var(--hi) 45%, rgba(47, 179, 168, 0.05));
+  box-shadow: 0 0 7px rgba(47, 179, 168, 0.8);
+  offset-path: circle(45% at 50% 50%);
+  animation: gen3-ring-travel 12s linear infinite;
+  will-change: offset-distance;
+}
+.gen3-envy-swirl.a .gen3-envy-coil { offset-path: circle(45% at 50% 50%); animation-duration: 12s; }
+.gen3-envy-swirl.b .gen3-envy-coil { offset-path: circle(30% at 50% 50%); animation-duration: 19s; animation-direction: reverse; height: 2px; opacity: 0.75; }
+@keyframes gen3-ring-travel { to { offset-distance: 100%; } }
+/* 涡心：径向橙金微光（周期白闪 = "被吸进来的东西"消化掉） */
+.gen3-envy-core {
+  position: absolute; left: 50%; top: 50%; width: 26%; aspect-ratio: 1 / 1; border-radius: 50%;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(circle, rgba(255, 217, 160, 0.55) 0%, rgba(255, 179, 71, 0.28) 38%, rgba(15, 79, 74, 0) 70%);
+  box-shadow: inset 0 0 18px rgba(255, 179, 71, 0.35);
+  animation: gen3-envy-core-pulse 3.4s ease-in-out infinite;
+}
+.gen3-envy-core.flash { animation: gen3-envy-core-flash 0.66s ease-out; }
+@keyframes gen3-envy-core-pulse { 0%, 100% { opacity: 0.55; transform: translate(-50%, -50%) scale(0.94); } 50% { opacity: 0.9; transform: translate(-50%, -50%) scale(1.06); } }
+@keyframes gen3-envy-core-flash {
+  0% { opacity: 0.6; transform: translate(-50%, -50%) scale(1); }
+  18% { opacity: 1; transform: translate(-50%, -50%) scale(1.5); filter: brightness(1.9); }
+  100% { opacity: 0.55; transform: translate(-50%, -50%) scale(1); filter: none; }
+}
+/* 数据故障横条：3 条随机高度，各自瞬闪（不齐步） */
+.gen3-envy-glitch { position: absolute; inset: 0; overflow: hidden; }
+.gen3-envy-glitch-bar {
+  position: absolute; left: -6%; width: 112%; height: 3px;
+  background: linear-gradient(90deg, rgba(126, 242, 224, 0) 0%, rgba(126, 242, 224, 0.9) 22%, rgba(47, 179, 168, 0.25) 60%, rgba(126, 242, 224, 0) 100%);
+  box-shadow: 0 0 8px rgba(47, 179, 168, 0.7);
+  opacity: 0; animation: gen3-envy-glitch 4.6s steps(1, end) infinite;
+}
+@keyframes gen3-envy-glitch {
+  0%, 92% { opacity: 0; transform: translateX(0); }
+  93% { opacity: 0.95; transform: translateX(-3%); }
+  95% { opacity: 0.2; transform: translateX(2%); }
+  97% { opacity: 0.85; transform: translateX(-1%); }
+  99%, 100% { opacity: 0; transform: translateX(0); }
+}
+/* 橙金锚点：卡外飞入涡心（transition 由 JS 触发 .suck） */
+.gen3-envy-anchor {
+  position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px;
+  background: linear-gradient(140deg, #ffe0a8, #ffb347 45%, #b06a10);
+  clip-path: polygon(50% 0%, 100% 26%, 100% 74%, 50% 100%, 0% 74%, 0% 26%);
+  box-shadow: 0 0 12px rgba(255, 179, 71, 0.9);
+  transition: left 0.86s cubic-bezier(0.4, 0, 0.6, 1), top 0.86s cubic-bezier(0.4, 0, 0.6, 1),
+              transform 0.86s cubic-bezier(0.5, 0, 0.75, 0), opacity 0.3s ease-in 0.6s;
+}
+.gen3-envy-anchor.suck { left: 50% !important; top: 50% !important; transform: scale(0.3) rotate(240deg); opacity: 0.1; }
+
+/* ============================================================ 2. 暴食 gluttony */
+
+.gen3-glut-host { --c: #c9a227; --a: #7a5c1e; --hi: #f0d678; }
+.gen3-glut-jaw { position: absolute; left: 0; width: 100%; height: 18%; transition: transform 0.34s cubic-bezier(0.5, 0, 0.75, 0); }
+.gen3-glut-jaw.top { top: 0; }
+.gen3-glut-jaw.bottom { bottom: 0; }
+.gen3-glut-tooth {
+  position: absolute; height: 100%; bottom: 0;
+  background: linear-gradient(180deg, #f0d678 0%, #c9a227 45%, #6b5210 100%);
+  box-shadow: inset 0 -3px 5px rgba(43, 43, 51, 0.75), 0 0 6px rgba(201, 162, 39, 0.5);
+  animation: gen3-glut-tooth-breathe 3.8s ease-in-out infinite;
+}
+.gen3-glut-tooth.down { clip-path: polygon(0% 0%, 100% 0%, 50% 100%); bottom: 0; }
+.gen3-glut-tooth.up   { clip-path: polygon(0% 100%, 100% 100%, 50% 0%); bottom: 0; }
+@keyframes gen3-glut-tooth-breathe { 0%, 100% { transform: translateY(0) scaleY(1); opacity: 0.9; } 50% { transform: translateY(8%) scaleY(0.94); opacity: 1; } }
+/* 咬合：上下颚猛然合拢 + 全卡暗金齿痕闪 + 碎屑被吸走 */
+.gen3-glut-host.bite .gen3-glut-jaw.top { transform: translateY(52%); animation: none; }
+.gen3-glut-host.bite .gen3-glut-jaw.bottom { transform: translateY(-52%); animation: none; }
+.gen3-glut-host.bite::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(ellipse at 50% 50%, rgba(255, 248, 220, 0.5) 0%, rgba(255, 248, 220, 0) 62%);
+  animation: gen3-glut-flash 0.4s ease-out;
+}
+.gen3-glut-host.bite .gen3-glut-tooth { animation: none; box-shadow: inset 0 0 10px rgba(255, 248, 220, 0.9), 0 0 12px rgba(255, 230, 150, 0.8); }
+@keyframes gen3-glut-flash { 0% { opacity: 0; } 26% { opacity: 1; } 100% { opacity: 0; } }
+.gen3-glut-crumbs { position: absolute; inset: 0; }
+.gen3-glut-crumb {
+  position: absolute; border-radius: 35% 65% 60% 40% / 50% 45% 55% 50%;
+  background: linear-gradient(160deg, #f0d678, #7a5c1e);
+  box-shadow: 0 0 5px rgba(201, 162, 39, 0.6);
+  transform: translate(-50%, -50%);
+  animation: gen3-glut-crumb-float 4.2s ease-in-out infinite;
+}
+.gen3-glut-crumb.pull {
+  transition: transform 0.46s cubic-bezier(0.55, 0, 0.85, 0), opacity 0.46s ease-in;
+  transform: translate(-50%, -50%) translate(calc((50% - var(--gx, 50%)) * 1), 0) scale(0.3);
+  opacity: 0;
+}
+@keyframes gen3-glut-crumb-float { 0%, 100% { transform: translate(-50%, -50%) translateY(0) rotate(0deg); opacity: 0.75; } 50% { transform: translate(-50%, -50%) translateY(-22%) rotate(24deg); opacity: 1; } }
+
+/* ============================================================ 3. 贪婪 greed */
+
+.gen3-greed-host { --c: #1f8f8a; --a: #d94fd9; --hi: #7ef0e6; }
+.gen3-greed-base {
+  position: absolute; left: 50%; top: 50%; width: 84%; aspect-ratio: 1 / 1; border-radius: 50%;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(circle, rgba(31, 143, 138, 0.4) 0%, rgba(31, 143, 138, 0.16) 45%, rgba(16, 51, 58, 0) 72%);
+  box-shadow: inset 0 0 26px rgba(31, 143, 138, 0.35);
+  animation: gen3-greed-base-pulse 3.2s ease-in-out infinite;
+}
+@keyframes gen3-greed-base-pulse { 0%, 100% { opacity: 0.6; transform: translate(-50%, -50%) scale(0.96); } 50% { opacity: 1; transform: translate(-50%, -50%) scale(1.04); } }
+.gen3-greed-stack { position: absolute; inset: 0; transform-origin: 50% 92%; }
+.gen3-greed-coin {
+  position: absolute; height: 9px; border-radius: 50%;
+  background:
+    radial-gradient(circle at 34% 32%, rgba(255, 255, 255, 0.85) 0%, rgba(255, 255, 255, 0) 42%),
+    linear-gradient(180deg, #ff9df0 0%, #d94fd9 46%, #7a1f7a 100%);
+  box-shadow: inset 0 -2px 4px rgba(58, 16, 48, 0.75), 0 0 8px rgba(217, 79, 217, 0.55);
+  animation: gen3-greed-coin-float 3.6s ease-in-out infinite;
+}
+@keyframes gen3-greed-coin-float { 0%, 100% { transform: translateY(0) scaleY(1); } 50% { transform: translateY(-6%) scaleY(1.04); } }
+/* 增高 → 散落重堆（两段式：先堆高再塌散，落点回弹） */
+.gen3-greed-host .gen3-greed-stack { transition: transform 0.5s cubic-bezier(0.2, 0.9, 0.3, 1); }
+.gen3-greed-host.raise .gen3-greed-stack { transform: translateY(-9%) scaleY(1.18); }
+.gen3-greed-host.raise .gen3-greed-coin { filter: brightness(1.25) drop-shadow(0 0 10px rgba(217, 79, 217, 0.8)); }
+.gen3-greed-host.spill .gen3-greed-coin { animation: gen3-greed-coin-spill 0.68s cubic-bezier(0.3, 0.1, 0.6, 1) forwards; }
+.gen3-greed-host.spill .gen3-greed-coin:nth-child(2n) { animation-delay: 0.05s; }
+.gen3-greed-host.spill .gen3-greed-coin:nth-child(3n) { animation-delay: 0.11s; }
+@keyframes gen3-greed-coin-spill {
+  0% { transform: translate(0, 0) rotate(0deg); opacity: 1; }
+  38% { transform: translate(-34%, -26%) rotate(-40deg); opacity: 1; }
+  74% { transform: translate(18%, 12%) rotate(22deg); opacity: 0.9; }
+  100% { transform: translate(0, 0) rotate(0deg); opacity: 1; }
+}
+
+/* ============================================================ 4. 色欲 lust */
+
+.gen3-lust-host { --c: #e0344b; --a: #ff6b6b; --hi: #ffd0d8; }
+/* 牵引链：3 节链环沿卡外环带环绕（两条不同周期 → 相互追越，有"收紧"张力） */
+.gen3-lust-chain { position: absolute; inset: -6px; }
+.gen3-lust-link {
+  position: absolute; left: 0; top: 0; width: 11px; height: 7px; border-radius: 3px;
+  background: linear-gradient(180deg, #ff8b9c 0%, #e0344b 52%, #6b1024 100%);
+  box-shadow: inset 0 0 4px rgba(58, 16, 48, 0.8), 0 0 8px rgba(224, 52, 75, 0.7);
+  offset-path: inset(-6px round 15px);
+  animation: gen3-ring-travel 9s linear infinite;
+  will-change: offset-distance;
+}
+.gen3-lust-chain.b .gen3-lust-link { animation-duration: 13s; transform: scale(0.82); opacity: 0.85; }
+.gen3-lust-host.tighten .gen3-lust-chain { transition: inset 0.34s cubic-bezier(0.6, 0, 0.9, 0); inset: -2px; }
+.gen3-lust-host.tighten .gen3-lust-link { box-shadow: inset 0 0 4px rgba(58, 16, 48, 0.9), 0 0 14px rgba(255, 107, 107, 0.95); }
+/* 心形手爪徽标：心（两圆 + 旋转方块）+ 3 根渐细爪 */
+.gen3-lust-crest { position: absolute; left: 50%; top: 50%; width: 30%; height: 26%; transform: translate(-50%, -50%); animation: gen3-lust-beat 2.4s ease-in-out infinite; }
+.gen3-lust-heart { position: absolute; left: 34%; top: 12%; width: 32%; aspect-ratio: 1 / 1; background: linear-gradient(150deg, #ff8b9c, #b3122b); transform: rotate(45deg); box-shadow: 0 0 10px rgba(224, 52, 75, 0.7); }
+.gen3-lust-heart::before, .gen3-lust-heart::after { content: ''; position: absolute; width: 100%; height: 100%; border-radius: 50%; background: inherit; }
+.gen3-lust-heart::before { left: -50%; top: 0; }
+.gen3-lust-heart::after { left: 0; top: -50%; }
+.gen3-lust-claw { position: absolute; bottom: 4%; width: 3px; height: 34%; border-radius: 2px 2px 0 0; background: linear-gradient(180deg, #ffd0d8, rgba(224, 52, 75, 0.15)); transform-origin: 50% 100%; }
+.gen3-lust-claw.c0 { left: 30%; transform: rotate(-16deg); }
+.gen3-lust-claw.c1 { left: 49%; transform: rotate(0deg); height: 40%; }
+.gen3-lust-claw.c2 { left: 68%; transform: rotate(16deg); }
+@keyframes gen3-lust-beat { 0%, 100% { transform: translate(-50%, -50%) scale(0.96); opacity: 0.85; } 46% { transform: translate(-50%, -50%) scale(1.07); opacity: 1; } 58% { transform: translate(-50%, -50%) scale(1.02); opacity: 1; } }
+
+/* ============================================================ 5. 傲慢 pride */
+
+.gen3-pride-host { --c: #d9a441; --a: #ffe9a8; --hi: #fff8e6; }
+/* 3 道上升光柱：竖向渐变 + 扫光（自下而上循环） */
+.gen3-pride-beams { position: absolute; inset: 0; overflow: hidden; }
+.gen3-pride-pillar {
+  position: absolute; top: 6%; width: 9%; height: 76%; border-radius: 40% 40% 6px 6px;
+  background: linear-gradient(180deg, rgba(255, 248, 230, 0.05) 0%, rgba(217, 164, 65, 0.35) 42%, rgba(255, 233, 168, 0.75) 100%);
+  box-shadow: 0 0 12px rgba(217, 164, 65, 0.4);
+  animation: gen3-pride-sheen 3.4s ease-in-out infinite;
+}
+@keyframes gen3-pride-sheen { 0%, 100% { opacity: 0.45; transform: scaleY(0.96); } 50% { opacity: 1; transform: scaleY(1.03); } }
+/* 几何塔：3 级白块自下而上依次亮起 */
+.gen3-pride-tower { position: absolute; left: 50%; top: 44%; transform: translateX(-50%); width: 100%; display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.gen3-pride-tier { display: block; height: 7px; background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(245, 245, 245, 0.55) 55%, rgba(217, 164, 65, 0.35)); box-shadow: 0 0 8px rgba(255, 233, 168, 0.5), inset 0 -1px 2px rgba(74, 52, 16, 0.6); animation: gen3-pride-tier 3.6s ease-in-out infinite; }
+.gen3-pride-tier.t1 { animation-delay: 0.5s; }
+.gen3-pride-tier.t2 { animation-delay: 1s; }
+@keyframes gen3-pride-tier { 0%, 70%, 100% { filter: brightness(0.75); } 22% { filter: brightness(1.5); } }
+/* 金冠：自上方落下（.in）→ 收束消散（.out） */
+.gen3-pride-crown { position: absolute; left: 50%; top: 8%; width: 40%; height: 22%; transform: translate(-50%, -140%) scale(0.86); opacity: 0; }
+.gen3-pride-crown.in { transition: transform 0.62s cubic-bezier(0.18, 1.1, 0.3, 1), opacity 0.28s ease-out; transform: translate(-50%, 0) scale(1); opacity: 1; }
+.gen3-pride-crown.out { transition: transform 0.6s cubic-bezier(0.5, 0, 0.8, 0), opacity 0.5s ease-in 0.2s; transform: translate(-50%, 6%) scale(1.16); opacity: 0; }
+.gen3-pride-spike { position: absolute; top: 0; width: 24%; height: 74%; background: linear-gradient(180deg, #fff8e6, #d9a441 62%, rgba(217, 164, 65, 0.15)); clip-path: polygon(50% 0%, 100% 100%, 0% 100%); box-shadow: 0 0 10px rgba(255, 233, 168, 0.8); }
+.gen3-pride-spike:nth-child(1) { left: 2%; }
+.gen3-pride-spike:nth-child(2) { left: 38%; height: 88%; }
+.gen3-pride-spike:nth-child(3) { left: 74%; }
+.gen3-pride-band { position: absolute; left: 0; bottom: 0; width: 100%; height: 22%; border-radius: 3px; background: linear-gradient(180deg, #ffe9a8, #a3762a); box-shadow: 0 0 12px rgba(217, 164, 65, 0.85); }
+
+/* ============================================================ 6. 怠惰 sloth */
+
+.gen3-sloth-host { --c: #8a5a5a; --a: #ff5a5a; --hi: #e8d6c8; }
+/* 3 圈极慢同心涟漪：自中心外扩、极低亮度（"慢"是本协议语法） */
+.gen3-sloth-ripples { position: absolute; inset: 0; }
+.gen3-sloth-ripple {
+  position: absolute; left: 50%; top: 52%; width: 26%; aspect-ratio: 1 / 1; border-radius: 50%;
+  transform: translate(-50%, -50%) scale(0.4);
+  border: 2px solid rgba(138, 90, 90, 0.55);
+  box-shadow: 0 0 12px rgba(138, 90, 90, 0.3), inset 0 0 10px rgba(255, 90, 90, 0.12);
+  animation: gen3-sloth-ripple 3.6s ease-out infinite;
+}
+@keyframes gen3-sloth-ripple {
+  0% { transform: translate(-50%, -50%) scale(0.35); opacity: 0; }
+  18% { opacity: 0.85; }
+  100% { transform: translate(-50%, -50%) scale(3.1); opacity: 0; }
+}
+/* 底部灰红泥浆：不规则斑块缓慢起伏 */
+.gen3-sloth-sludge { position: absolute; left: 0; bottom: 0; width: 100%; height: 30%; overflow: hidden; }
+.gen3-sloth-blob {
+  position: absolute; bottom: -18%; height: 78%;
+  border-radius: 48% 52% 40% 60% / 62% 58% 42% 38%;
+  background: linear-gradient(180deg, rgba(138, 90, 90, 0.5), rgba(38, 38, 42, 0.85));
+  box-shadow: inset 0 6px 12px rgba(255, 90, 90, 0.12);
+  filter: blur(0.6px);
+  animation: gen3-sloth-blob 5.4s ease-in-out infinite;
+}
+@keyframes gen3-sloth-blob { 0%, 100% { transform: translateY(0) scaleY(1); opacity: 0.8; } 50% { transform: translateY(-8%) scaleY(1.08); opacity: 1; } }
+.gen3-sloth-ember { position: absolute; border-radius: 50%; background: radial-gradient(circle, #ffd0b0, #ff5a5a 55%, rgba(255, 90, 90, 0) 100%); box-shadow: 0 0 8px rgba(255, 90, 90, 0.7); transform: translate(-50%, -50%); animation: gen3-soft-blink 4.4s ease-in-out infinite; }
+.gen3-sloth-host.surge .gen3-sloth-ripple { animation-duration: 1.6s; }
+.gen3-sloth-host.surge .gen3-sloth-ripple:nth-child(1) { border-color: rgba(255, 90, 90, 0.75); }
+.gen3-sloth-host.surge .gen3-sloth-ember { animation: gen3-sloth-ember-rise 1.4s ease-out; }
+@keyframes gen3-sloth-ember-rise { 0% { transform: translate(-50%, -50%) scale(0.8); opacity: 0.4; } 40% { transform: translate(-50%, -140%) scale(1.25); opacity: 1; } 100% { transform: translate(-50%, -60%) scale(0.7); opacity: 0.25; } }
+@keyframes gen3-soft-blink { 0%, 100% { opacity: 0.35; } 50% { opacity: 0.95; } }
+
+/* ============================================================ 7. 愤怒 wrath */
+
+.gen3-wrath-host { --c: #c0392b; --a: #2f6f8f; --hi: #ffd0b0; }
+/* 5 根猩红爆刺：自卡面下缘向内生长（缓慢伸缩） */
+.gen3-wrath-spikes { position: absolute; inset: 0; overflow: hidden; }
+.gen3-wrath-spike {
+  position: absolute; bottom: 0; width: 8%; height: 42%;
+  background: linear-gradient(0deg, #7a1a12 0%, #c0392b 42%, #ff8a6a 100%);
+  clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
+  box-shadow: 0 0 10px rgba(192, 57, 43, 0.7);
+  transform-origin: 50% 100%;
+  animation: gen3-wrath-spike 4.6s ease-in-out infinite;
+}
+@keyframes gen3-wrath-spike { 0%, 100% { transform: scaleY(0.62); opacity: 0.55; } 42% { transform: scaleY(1); opacity: 1; } 58% { transform: scaleY(0.92); opacity: 0.95; } }
+/* 青蓝冷残片：漂浮（对比色让猩红更"烫"） */
+.gen3-wrath-shard { position: absolute; background: linear-gradient(140deg, rgba(188, 226, 255, 0.9), rgba(47, 111, 143, 0.35)); clip-path: polygon(0% 22%, 72% 0%, 100% 68%, 28% 100%); transform: translate(-50%, -50%); animation: gen3-drift 5.2s ease-in-out infinite; }
+@keyframes gen3-drift { 0%, 100% { transform: translate(-50%, -50%) rotate(0deg); opacity: 0.6; } 50% { transform: translate(-50%, -62%) rotate(22deg); opacity: 0.95; } }
+/* 锯齿闪电：clip-path 折线，3 帧闪（"啪"地劈下） */
+.gen3-wrath-bolt { position: absolute; left: 50%; top: -8%; width: 18%; height: 116%; margin-left: -9%; opacity: 0; background: linear-gradient(180deg, rgba(232, 244, 255, 0.95), #ffd0b0 45%, rgba(192, 57, 43, 0.9)); clip-path: polygon(46% 0%, 62% 0%, 38% 44%, 58% 44%, 30% 100%, 44% 52%, 26% 52%); filter: drop-shadow(0 0 8px rgba(255, 208, 176, 0.95)); }
+.gen3-wrath-bolt.on { animation: gen3-wrath-bolt 0.44s steps(1, end); }
+@keyframes gen3-wrath-bolt { 0% { opacity: 0; } 8% { opacity: 1; } 20% { opacity: 0.15; } 32% { opacity: 1; } 48% { opacity: 0.2; } 62% { opacity: 0.95; } 100% { opacity: 0; } }
+
+/* ============================================================ 8. 伏击 ambush */
+
+.gen3-amb-host { --c: #6f93c4; --a: #bcd8ff; --hi: #8fe3ff; }
+/* 3×3 潜伏宫格：常态极暗，1 格高亮（周期换格） */
+.gen3-amb-grid {
+  position: absolute; left: 50%; top: 50%; width: 64%; aspect-ratio: 1 / 1; transform: translate(-50%, -50%);
+  display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); gap: 3px;
+}
+.gen3-amb-cell { display: block; border-radius: 2px; background: linear-gradient(150deg, rgba(22, 32, 44, 0.55), rgba(111, 147, 196, 0.12)); box-shadow: inset 0 0 6px rgba(22, 32, 44, 0.7); }
+.gen3-amb-cell.on {
+  background: linear-gradient(150deg, rgba(143, 227, 255, 0.5), rgba(111, 147, 196, 0.3));
+  box-shadow: 0 0 12px rgba(143, 227, 255, 0.75), inset 0 0 8px rgba(188, 216, 255, 0.5);
+  animation: gen3-amb-cell 3.2s ease-in-out infinite;
+}
+@keyframes gen3-amb-cell { 0%, 100% { filter: brightness(0.85); } 50% { filter: brightness(1.35); } }
+.gen3-amb-shard { position: absolute; background: linear-gradient(150deg, rgba(188, 216, 255, 0.35), rgba(22, 32, 44, 0.7)); clip-path: polygon(12% 0%, 100% 24%, 80% 100%, 0% 72%); transform: translate(-50%, -50%); animation: gen3-drift 6s ease-in-out infinite; }
+/* 扫描线：自下而上扫过（"从阴影里被照出来"） */
+.gen3-amb-scan { position: absolute; left: 0; bottom: 0; width: 100%; height: 3px; opacity: 0; background: linear-gradient(90deg, rgba(143, 227, 255, 0), rgba(143, 227, 255, 0.95) 30%, rgba(188, 216, 255, 0.6) 70%, rgba(143, 227, 255, 0)); box-shadow: 0 0 12px rgba(143, 227, 255, 0.85); }
+.gen3-amb-scan.on { animation: gen3-amb-scan 0.74s cubic-bezier(0.3, 0.1, 0.6, 1); }
+@keyframes gen3-amb-scan { 0% { bottom: -2%; opacity: 0; } 12% { opacity: 1; } 88% { opacity: 1; } 100% { bottom: 100%; opacity: 0; } }
+
+/* ============================================================ 9. 支点 fulcrum */
+
+.gen3-ful-host { --c: #2f7f8f; --a: #d8f0ff; --hi: #ffffff; }
+/* 刻度环：虚线圆环缓慢旋转 */
+.gen3-ful-dial {
+  position: absolute; left: 50%; top: 50%; width: 74%; aspect-ratio: 1 / 1; transform: translate(-50%, -50%);
+  border-radius: 50%; border: 2px dashed rgba(47, 127, 143, 0.55);
+  box-shadow: inset 0 0 18px rgba(47, 127, 143, 0.28), 0 0 12px rgba(47, 127, 143, 0.25);
+  animation: gen3-ful-dial 22s linear infinite;
+}
+@keyframes gen3-ful-dial { to { transform: translate(-50%, -50%) rotate(360deg); } }
+/* 杠杆：横梁 + 中央支点 + 两端棋盘砝码（±6° 摆动，二次运动由砝码反向微摆提供） */
+.gen3-ful-lever { position: absolute; left: 50%; top: 52%; width: 84%; height: 6px; margin-left: -42%; transform-origin: 50% 50%; border-radius: 3px; background: linear-gradient(90deg, rgba(47, 127, 143, 0.35), #cfe6f2 50%, rgba(47, 127, 143, 0.35)); box-shadow: 0 0 10px rgba(47, 127, 143, 0.5), inset 0 -1px 2px rgba(16, 28, 38, 0.7); animation: gen3-ful-tilt 6s ease-in-out infinite; }
+.gen3-ful-pivot { position: absolute; left: 50%; top: 50%; width: 12px; height: 12px; margin: -6px 0 0 -6px; transform: rotate(45deg); background: linear-gradient(140deg, #ffffff, #2f7f8f); box-shadow: 0 0 10px rgba(216, 240, 255, 0.8); }
+.gen3-ful-weight { position: absolute; top: -13px; width: 22px; height: 20px; border-radius: 3px; background: repeating-conic-gradient(rgba(216, 240, 255, 0.85) 0% 25%, rgba(16, 28, 38, 0.9) 0% 50%) 0 0 / 10px 10px; box-shadow: 0 0 8px rgba(47, 127, 143, 0.7), inset 0 -2px 3px rgba(16, 28, 38, 0.75); }
+.gen3-ful-weight.l { left: -6px; animation: gen3-ful-counter 6s ease-in-out infinite; }
+.gen3-ful-weight.r { right: -6px; animation: gen3-ful-counter-r 6s ease-in-out infinite; }
+@keyframes gen3-ful-tilt { 0%, 100% { transform: rotate(-6deg); } 50% { transform: rotate(6deg); } }
+@keyframes gen3-ful-counter { 0%, 100% { transform: rotate(6deg); } 50% { transform: rotate(-6deg); } }
+@keyframes gen3-ful-counter-r { 0%, 100% { transform: rotate(-6deg); } 50% { transform: rotate(6deg); } }
+.gen3-ful-host.swing .gen3-ful-lever { animation: gen3-ful-swing 1.2s cubic-bezier(0.3, 0.1, 0.4, 1); }
+.gen3-ful-host.swing .gen3-ful-weight { filter: brightness(1.4) drop-shadow(0 0 8px rgba(216, 240, 255, 0.9)); }
+@keyframes gen3-ful-swing { 0% { transform: rotate(0deg); } 22% { transform: rotate(15deg); } 52% { transform: rotate(-12deg); } 78% { transform: rotate(5deg); } 100% { transform: rotate(0deg); } }
+
+/* ============================================================ 10. 压制 overwhelm */
+
+.gen3-ovw-host { --c: #1f6f8f; --a: #e8f4ff; --hi: #ffffff; }
+/* 4×4 阵列：错相明灭（像机械桁架逐格通电） */
+.gen3-ovw-array {
+  position: absolute; left: 50%; top: 52%; width: 72%; aspect-ratio: 1 / 1; transform: translate(-50%, -50%);
+  display: grid; grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(4, 1fr); gap: 2px;
+}
+.gen3-ovw-cell { display: block; border-radius: 2px; background: linear-gradient(140deg, rgba(31, 111, 143, 0.85), rgba(13, 20, 24, 0.9)); box-shadow: inset 0 0 6px rgba(232, 244, 255, 0.25); animation: gen3-ovw-cell 1.6s ease-in-out infinite; }
+@keyframes gen3-ovw-cell { 0%, 100% { filter: brightness(0.7); } 50% { filter: brightness(1.55); } }
+.gen3-ovw-truss { position: absolute; left: 4%; width: 92%; height: 5px; background: repeating-linear-gradient(90deg, rgba(232, 244, 255, 0.75) 0 6px, rgba(31, 111, 143, 0.25) 6px 12px); box-shadow: 0 0 8px rgba(31, 111, 143, 0.6); }
+.gen3-ovw-truss.top { top: 8%; }
+.gen3-ovw-truss.bottom { bottom: 8%; }
+/* 整阵下压：阵列下移 + 竖向挤压（有"重量"），落定后回弹 */
+.gen3-ovw-host .gen3-ovw-array { transition: transform 0.26s cubic-bezier(0.55, 0, 0.9, 0.2); }
+.gen3-ovw-host.press .gen3-ovw-array { transform: translate(-50%, -42%) scaleY(0.9); filter: brightness(1.3) drop-shadow(0 6px 10px rgba(13, 20, 24, 0.8)); }
+.gen3-ovw-host.press .gen3-ovw-truss { filter: brightness(1.5); }
+
+/* ============================================================ 11. 动量 momentum */
+
+.gen3-mom-host { --c: #ff8a2b; --a: #c9a6e8; --hi: #ffd08a; }
+/* 弧轨：只留 border-top/right 的圆（经典弧线，无 mask 依赖），两条反向旋转 */
+.gen3-mom-track {
+  position: absolute; left: 50%; top: 50%; border-radius: 50%; border: 2px solid transparent;
+  transform: translate(-50%, -50%);
+}
+.gen3-mom-track.a { width: 76%; aspect-ratio: 1 / 1; border-top-color: rgba(255, 138, 43, 0.95); border-right-color: rgba(255, 208, 138, 0.4); box-shadow: 0 0 12px rgba(255, 138, 43, 0.35); animation: gen3-mom-spin 3.2s linear infinite; }
+.gen3-mom-track.b { width: 96%; aspect-ratio: 1 / 1; border-bottom-color: rgba(201, 166, 232, 0.8); border-left-color: rgba(255, 138, 43, 0.25); animation: gen3-mom-spin-r 5.4s linear infinite; }
+@keyframes gen3-mom-spin { to { transform: translate(-50%, -50%) rotate(360deg); } }
+@keyframes gen3-mom-spin-r { to { transform: translate(-50%, -50%) rotate(-360deg); } }
+/* 速度残影：横向光条自左向右扫过（错相） */
+.gen3-mom-streaks { position: absolute; inset: 0; overflow: hidden; }
+.gen3-mom-streak { position: absolute; left: -30%; width: 46%; height: 2px; border-radius: 1px; background: linear-gradient(90deg, rgba(255, 138, 43, 0), rgba(255, 208, 138, 0.95), rgba(255, 138, 43, 0)); box-shadow: 0 0 8px rgba(255, 138, 43, 0.8); animation: gen3-mom-streak 1.9s ease-in-out infinite; }
+@keyframes gen3-mom-streak { 0% { transform: translateX(0); opacity: 0; } 18% { opacity: 1; } 72% { opacity: 0.9; } 100% { transform: translateX(300%); opacity: 0; } }
+/* 蓄力环：两圈自外向内收束（.in）→ 反向爆开（.out） */
+.gen3-mom-charge { position: absolute; inset: 0; opacity: 0; }
+.gen3-mom-charge.in { transition: opacity 0.2s ease-out; opacity: 1; }
+.gen3-mom-charge.out { transition: opacity 0.5s ease-in; opacity: 0; }
+.gen3-mom-charge-ring { position: absolute; left: 50%; top: 50%; border-radius: 50%; border: 2px solid rgba(255, 208, 138, 0.85); box-shadow: 0 0 12px rgba(255, 138, 43, 0.7); }
+.gen3-mom-charge-ring.r1 { width: 88%; aspect-ratio: 1 / 1; margin: -44% 0 0 -44%; animation: gen3-mom-charge 0.72s cubic-bezier(0.35, 0, 0.75, 0) forwards; }
+.gen3-mom-charge-ring.r2 { width: 62%; aspect-ratio: 1 / 1; margin: -31% 0 0 -31%; animation: gen3-mom-charge 0.72s cubic-bezier(0.35, 0, 0.75, 0) 0.1s forwards; }
+@keyframes gen3-mom-charge { 0% { transform: scale(0.42); opacity: 0; } 22% { opacity: 1; } 100% { transform: scale(1.06); opacity: 0.15; } }
+
+/* ============================================================ 12. 新星 nova */
+
+.gen3-nova-host { --c: #ffb347; --a: #8a3a2a; --hi: #ffe9c0; }
+/* 四角星芒：conic 渐变 + 星形 clip-path，缓慢旋转 */
+.gen3-nova-star {
+  position: absolute; left: 50%; top: 50%; width: 46%; aspect-ratio: 1 / 1; transform: translate(-50%, -50%);
+  background: conic-gradient(from 0deg, rgba(255, 233, 192, 0.95) 0deg, rgba(255, 179, 71, 0.25) 42deg, rgba(255, 233, 192, 0.9) 90deg, rgba(255, 179, 71, 0.2) 130deg, rgba(255, 233, 192, 0.95) 180deg, rgba(255, 179, 71, 0.25) 222deg, rgba(255, 233, 192, 0.9) 270deg, rgba(255, 179, 71, 0.2) 310deg, rgba(255, 233, 192, 0.95) 360deg);
+  clip-path: polygon(50% 0%, 61% 39%, 100% 50%, 61% 61%, 50% 100%, 39% 61%, 0% 50%, 39% 39%);
+  filter: drop-shadow(0 0 10px rgba(255, 179, 71, 0.75));
+  animation: gen3-nova-star 8s linear infinite;
+}
+@keyframes gen3-nova-star { to { transform: translate(-50%, -50%) rotate(360deg); } }
+/* 8 道尖刺：径向排布（transform-origin 落在卡面中心），缓慢伸缩 */
+.gen3-nova-rays { position: absolute; inset: 0; }
+.gen3-nova-ray {
+  position: absolute; left: 50%; top: 12%; width: 3px; height: 24%; margin-left: -1.5px;
+  transform-origin: 50% 158%;
+  background: linear-gradient(180deg, rgba(255, 233, 192, 0.95), rgba(255, 179, 71, 0.2));
+  box-shadow: 0 0 8px rgba(255, 179, 71, 0.8);
+  animation: gen3-nova-ray 3.4s ease-in-out infinite;
+}
+@keyframes gen3-nova-ray { 0%, 100% { opacity: 0.5; filter: brightness(0.9); } 50% { opacity: 1; filter: brightness(1.4); } }
+.gen3-nova-chunk { position: absolute; background: linear-gradient(150deg, rgba(255, 233, 192, 0.9), rgba(138, 58, 42, 0.85)); clip-path: polygon(0% 18%, 68% 0%, 100% 62%, 34% 100%); transform: translate(-50%, -50%); animation: gen3-drift 4.6s ease-in-out infinite; }
+/* 临界爆发：全卡白闪 + 尖刺外刺 + 星芒放大 */
+.gen3-nova-host.flare .gen3-nova-rays { animation: gen3-nova-flare 0.86s cubic-bezier(0.2, 0.9, 0.3, 1); }
+.gen3-nova-host.flare .gen3-nova-star { filter: drop-shadow(0 0 22px rgba(255, 233, 192, 1)) brightness(1.6); }
+.gen3-nova-host.flare::after { content: ''; position: absolute; inset: 0; pointer-events: none; background: radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.62) 0%, rgba(255, 233, 192, 0.18) 45%, rgba(255, 255, 255, 0) 72%); animation: gen3-nova-flash 0.5s ease-out; }
+@keyframes gen3-nova-flare { 0% { transform: scale(0.9); } 26% { transform: scale(1.22); } 100% { transform: scale(1); } }
+@keyframes gen3-nova-flash { 0% { opacity: 0; } 22% { opacity: 1; } 100% { opacity: 0; } }
+
+/* ============================================================ 13. 惰性 inertia */
+
+.gen3-ine-host { --c: #d8c9a8; --a: #4a4a4f; --hi: #fff0c0; }
+/* 灰化覆盖：低饱和暖灰渐变（不用 mix-blend-mode，避免与既有层级/合成冲突） */
+.gen3-ine-dull {
+  position: absolute; inset: 0;
+  background: linear-gradient(150deg, rgba(74, 74, 79, 0.42) 0%, rgba(216, 201, 168, 0.16) 46%, rgba(28, 28, 30, 0.4) 100%);
+  animation: gen3-ine-dull 6s ease-in-out infinite;
+}
+@keyframes gen3-ine-dull { 0%, 100% { opacity: 0.62; } 50% { opacity: 0.82; } }
+/* 齿轮：圆锥渐变齿 + 中心孔；闲时极慢转动，爆发时"启动→骤停" */
+.gen3-ine-gear {
+  position: absolute; left: 50%; top: 50%; width: 40%; aspect-ratio: 1 / 1; margin: -20% 0 0 -20%;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle, rgba(28, 28, 30, 0.9) 0 18%, rgba(216, 201, 168, 0) 19%),
+    repeating-conic-gradient(from 0deg, rgba(216, 201, 168, 0.85) 0deg 6deg, rgba(74, 74, 79, 0.35) 6deg 15deg);
+  box-shadow: inset 0 0 14px rgba(28, 28, 30, 0.8), 0 0 10px rgba(216, 201, 168, 0.35);
+  animation: gen3-ine-gear-idle 26s linear infinite;
+}
+.gen3-ine-gear-hub { position: absolute; left: 50%; top: 50%; width: 26%; aspect-ratio: 1 / 1; margin: -13% 0 0 -13%; border-radius: 50%; background: radial-gradient(circle at 36% 32%, #fff0c0, #8a7a58 60%, #3a3630); box-shadow: 0 0 8px rgba(255, 240, 192, 0.6); }
+.gen3-ine-gear.stall { animation: gen3-ine-gear-stall 2.6s cubic-bezier(0.2, 0.8, 0.2, 1); }
+@keyframes gen3-ine-gear-idle { to { transform: rotate(360deg); } }
+@keyframes gen3-ine-gear-stall { 0% { transform: rotate(0deg); } 34% { transform: rotate(680deg); } 42% { transform: rotate(700deg); } 100% { transform: rotate(716deg); } }
+.gen3-ine-speck { position: absolute; border-radius: 50%; background: radial-gradient(circle, rgba(255, 240, 192, 0.9), rgba(216, 201, 168, 0.15)); transform: translate(-50%, -50%); animation: gen3-ine-dust 7s ease-in-out infinite; }
+@keyframes gen3-ine-dust { 0%, 100% { transform: translate(-50%, -50%) translateY(0); opacity: 0.35; } 50% { transform: translate(-50%, -50%) translateY(6px); opacity: 0.7; } }
+
+/* ============================================================ 14. 刚性 rigidity */
+
+.gen3-rig-host { --c: #8f6fd0; --a: #eaff3a; --hi: #f4ffe0; }
+/* 紫护壁：四边内衬渐层（"坚不可摧"的护板感） */
+.gen3-rig-wall {
+  position: absolute; inset: 0; border-radius: 12px;
+  background:
+    linear-gradient(90deg, rgba(143, 111, 208, 0.42) 0%, rgba(143, 111, 208, 0) 12%, rgba(143, 111, 208, 0) 88%, rgba(143, 111, 208, 0.42) 100%),
+    linear-gradient(180deg, rgba(36, 26, 56, 0.55) 0%, rgba(36, 26, 56, 0) 16%, rgba(36, 26, 56, 0) 84%, rgba(36, 26, 56, 0.55) 100%);
+  box-shadow: inset 0 0 18px rgba(36, 26, 56, 0.75);
+}
+/* 迷宫走线：SVG 虚线沿径流动（stroke-dashoffset） */
+.gen3-rig-maze { position: absolute; inset: 6%; width: 88%; height: 88%; opacity: 0.72; filter: drop-shadow(0 0 4px rgba(234, 255, 58, 0.55)); }
+.gen3-rig-maze path { stroke-dasharray: 7 5; animation: gen3-rig-flow 6s linear infinite; }
+@keyframes gen3-rig-flow { to { stroke-dashoffset: -120; } }
+.gen3-rig-anchor { position: absolute; width: 9px; height: 9px; border-radius: 2px; background: linear-gradient(140deg, #f4ffe0, #8f6fd0 62%, #241a38); box-shadow: 0 0 8px rgba(234, 255, 58, 0.7), inset 0 -1px 2px rgba(36, 26, 56, 0.8); }
+.gen3-rig-anchor.tl { left: 6px; top: 6px; }
+.gen3-rig-anchor.tr { right: 6px; top: 6px; }
+.gen3-rig-anchor.bl { left: 6px; bottom: 6px; }
+.gen3-rig-anchor.br { right: 6px; bottom: 6px; }
+.gen3-rig-host.lock .gen3-rig-maze { opacity: 1; filter: drop-shadow(0 0 8px rgba(234, 255, 58, 0.95)); }
+.gen3-rig-host.lock .gen3-rig-anchor { animation: gen3-rig-shake 0.5s ease-in-out 2; }
+@keyframes gen3-rig-shake { 0%, 100% { transform: translate(0, 0); } 30% { transform: translate(-1px, 1px); } 70% { transform: translate(1px, -1px); } }
+/* 扫线：自上而下（"锁定"的一划） */
+.gen3-rig-sweep { position: absolute; left: 4%; width: 92%; height: 2px; top: 0; opacity: 0; background: linear-gradient(90deg, rgba(234, 255, 58, 0), #eaff3a 30%, #f4ffe0 55%, rgba(234, 255, 58, 0)); box-shadow: 0 0 12px rgba(234, 255, 58, 0.9); }
+.gen3-rig-sweep.on { animation: gen3-rig-sweep 0.86s cubic-bezier(0.3, 0.1, 0.6, 1); }
+@keyframes gen3-rig-sweep { 0% { top: 2%; opacity: 0; } 12% { opacity: 1; } 86% { opacity: 1; } 100% { top: 98%; opacity: 0; } }
+
+/* ============================================================ 15. 柔性 flexibility */
+
+.gen3-flx-host { --c: #a86fd0; --a: #ffb0e0; --hi: #1c1430; }
+/* 飘带：大圆角弯折条 + 模糊柔化 + 反向绕卡（缎带的"缠绕"感） */
+.gen3-flx-ribbon {
+  position: absolute; left: 50%; top: 50%; width: 92%; height: 26%; margin: -13% 0 0 -46%;
+  border-radius: 50% 50% 46% 54% / 62% 58% 42% 38%;
+  background: linear-gradient(90deg, rgba(168, 111, 208, 0.15) 0%, rgba(255, 176, 224, 0.75) 32%, rgba(168, 111, 208, 0.85) 58%, rgba(28, 20, 48, 0.4) 100%);
+  box-shadow: 0 0 14px rgba(168, 111, 208, 0.5), inset 0 2px 6px rgba(255, 255, 255, 0.28);
+  filter: blur(0.4px);
+  animation: gen3-flx-ribbon 10s linear infinite;
+}
+.gen3-flx-ribbon.b { height: 18%; margin: -9% 0 0 -42%; width: 84%; opacity: 0.8; animation: gen3-flx-ribbon-r 14s linear infinite; }
+@keyframes gen3-flx-ribbon { to { transform: rotate(360deg); } }
+@keyframes gen3-flx-ribbon-r { to { transform: rotate(-360deg); } }
+/* 深蓝层叠薄板：3 片错位缓慢错动（"多向可变"） */
+.gen3-flx-plates { position: absolute; inset: 0; }
+.gen3-flx-plate {
+  position: absolute; top: 26%; width: 42%; height: 46%; border-radius: 6px;
+  background: linear-gradient(140deg, rgba(58, 74, 138, 0.6) 0%, rgba(28, 20, 48, 0.75) 100%);
+  box-shadow: inset 0 1px 3px rgba(255, 176, 224, 0.25), 0 4px 12px rgba(28, 20, 48, 0.6);
+  animation: gen3-flx-plate 3.6s ease-in-out infinite;
+}
+@keyframes gen3-flx-plate { 0%, 100% { transform: translateY(0) rotate(-2deg); } 50% { transform: translateY(-6px) rotate(2deg); } }
+/* 解开飞散：飘带外扩淡出 + 6 片薄片四散（--dx/--dy 由 JS 给） */
+.gen3-flx-host.loose .gen3-flx-ribbon { animation: none; transition: transform 0.7s cubic-bezier(0.2, 0.9, 0.3, 1), opacity 0.7s ease-in; transform: scale(1.22) rotate(18deg); opacity: 0; }
+.gen3-flx-host.loose .gen3-flx-plate { animation: none; transition: transform 0.6s cubic-bezier(0.3, 0.1, 0.6, 1), opacity 0.6s ease-in; transform: translateY(6px) rotate(-6deg); opacity: 0.4; }
+.gen3-flx-shards { position: absolute; inset: 0; }
+.gen3-flx-shard { position: absolute; left: 50%; top: 50%; width: 9px; height: 5px; border-radius: 40% 60% 55% 45%; background: linear-gradient(120deg, #ffb0e0, #a86fd0 60%, rgba(28, 20, 48, 0.6)); box-shadow: 0 0 8px rgba(255, 176, 224, 0.7); animation: gen3-flx-shard 0.86s cubic-bezier(0.2, 0.9, 0.3, 1) forwards; }
+@keyframes gen3-flx-shard {
+  0% { transform: translate(-50%, -50%) scale(0.5) rotate(0deg); opacity: 0; }
+  16% { opacity: 1; }
+  100% { transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) scale(0.35) rotate(160deg); opacity: 0; }
+}

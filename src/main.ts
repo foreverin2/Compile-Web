@@ -1,4 +1,5 @@
 import './ui/styles.css';
+import './ui/styles-gen3.css'; // 3代（MN03/AX03）协议特效样式（批次 A：15 套已编译常驻特效）
 import { createGame, performDraftPick, performDraftUnpick, performDraftBan } from './core/state/create';
 import { executeAction } from './core/game';
 import { getCompilableLines } from './core/rules/compile';
