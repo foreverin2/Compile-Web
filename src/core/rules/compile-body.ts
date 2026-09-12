@@ -21,7 +21,7 @@ export function executeCompileBody(
   s: GameState,
   player: PlayerId,
   line: Line,
-  opts?: { force?: boolean },
+  opts?: { force?: boolean; sourceDefId?: string },
 ): void {
   const p = s.players[player];
   const oppId: PlayerId = player === 0 ? 1 : 0;
@@ -91,6 +91,9 @@ export function executeCompileBody(
       ownValue,
       oppValue,
       protoName,
+      // 3代 特效（批次 C）：效果编译的来源卡 defId（贪婪1 底 / 联合1 底 等）——UI 据此给
+      // "该卡触发了这次编译"的专属前奏（契约印/联合光带）；规则编译（玩家行动）不带该字段
+      sourceDefId: opts?.sourceDefId,
     },
   });
   if (recompiled) {

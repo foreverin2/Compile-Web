@@ -52,7 +52,7 @@ function* greed1End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   };
   if (lAns.selected.length === 0) return;
   const line = Number(lAns.selected[0].replace('line:', '')) as Line;
-  executeCompileBody(ctx.s, me, line);
+  executeCompileBody(ctx.s, me, line, { sourceDefId: 'greed-1' });
 }
 
 /** greed-2 中：对手弃1张牌（对手自选）。 */

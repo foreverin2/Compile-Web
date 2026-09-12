@@ -1,7 +1,7 @@
 import { gameBus, type GameEvent } from '../../core/events/bus';
 import { mountShatter } from '../fx/delete-shatter';
 import { mountCut } from '../fx/discard-cut';
-import { gen3DiscardFx, gen3DeleteFx, gen3FlipFx, gen3ShiftFx, type Gen3CardFxApi, type Gen3CardPayload } from '../fx-gen3';
+import { gen3DiscardFx, gen3DeleteFx, gen3FlipFx, gen3ShiftFx, gen3DrawFx, gen3FaceDownFx, gen3CompiledFx, gen3DeckDiscardFx, type Gen3CardFxApi, type Gen3CardPayload, type Gen3DrawPayload, type Gen3CompiledPayload, type Gen3DeckDiscardPayload } from '../fx-gen3';
 import { buildTornadoFx } from '../fx-tornado';
 import { cardImgSrc, protocolImgSrc } from '../../data/demo';
 import { playPeaceDiscardExtra, PEACE_PRE_MS, playChaosDiscardExtra, CHAOS_DISCARD_PRE_MS, playIceShiftBridge, playSmokePlayFx, playFearShiftExtra, playCorruptionDiscardExtra, playCorruptionDeleteExtra, playCorruptionFlipExtra, CORRUPT_DISCARD_PRE_MS, playWarDiscardExtra, playWarFlipExtra, playCourageDiscardExtra, playCourageDeleteExtra, playCourageShiftExtra, playTimeDiscardExtra, playAssimDiscardExtra, playAssimDeckRipple, ASSIM_DISCARD_PRE_MS, playDiversityDiscardExtra, DIVERSITY_DISCARD_PRE_MS } from '../fx-gen2';
@@ -1101,7 +1101,7 @@ function nextDeckPlayIndex(): number {
   return deckPlayBatchCount++;
 }
 
-function playDeckPlay(payload: FxCardPayload): void {
+function playDeckPlay(payload: FxCardPayload, durationMs = MOVE_MS): void {
   if (payload.owner === undefined || payload.line === null) return;
   const deck = document.querySelector<HTMLElement>(`.deck[data-player="${payload.owner}"]`);
   const from = deckPos(payload.owner);
@@ -1116,7 +1116,7 @@ function playDeckPlay(payload: FxCardPayload): void {
   const delay = nextDeckPlayIndex() * DECK_PLAY_STAGGER_MS;
   window.setTimeout(() => {
     // 先写初始位（translate(0) + 原朝向/尺寸）并强制回流提交 → 起飞 transition 必动画
-    clone.style.transition = `transform ${MOVE_MS}ms cubic-bezier(0.2, 0.7, 0.3, 1), opacity ${MOVE_MS}ms ease`;
+    clone.style.transition = `transform ${durationMs}ms cubic-bezier(0.2, 0.7, 0.3, 1), opacity ${durationMs}ms ease`;
     clone.style.transform = `translate(0, 0) rotate(var(--fx-rot, 0deg)) scale(0.92)`;
     void clone.offsetHeight; // 强制样式提交（reflow）
     requestAnimationFrame(() => {
@@ -1124,13 +1124,13 @@ function playDeckPlay(payload: FxCardPayload): void {
       clone.style.opacity = '0.6';
     });
   }, delay);
-  window.setTimeout(() => clone.remove(), delay + MOVE_MS + 120);
+  window.setTimeout(() => clone.remove(), delay + durationMs + 120);
 }
 
 /** 基础行为特效：手牌打出（playFromHand）——幽灵卡从手牌中该卡的 rect 丝滑飞入目标
  *  链路链路末尾（与 playDeckPlay 同平移逻辑，仅起点不同：手牌卡仍在 DOM 中，直接以其
  *  rect 为起点；faceUp 已按打出朝向（正/背）写入 payload，卡面随之正确）。 */
-function playHandPlay(payload: FxCardPayload): void {
+function playHandPlay(payload: FxCardPayload, durationMs = MOVE_MS): void {
   if (payload.owner === undefined || payload.line === null) return;
   const cardNode = document.querySelector<HTMLElement>(`.hand .card[data-uid="${payload.uid}"]`);
   if (!cardNode) return;
@@ -1143,13 +1143,13 @@ function playHandPlay(payload: FxCardPayload): void {
   if (!clone) return;
   const dx = target.x - (from.left + from.width / 2);
   const dy = target.y - (from.top + from.height / 2);
-  clone.style.transition = `transform ${MOVE_MS}ms cubic-bezier(0.2, 0.7, 0.3, 1), opacity ${MOVE_MS}ms ease`;
+  clone.style.transition = `transform ${durationMs}ms cubic-bezier(0.2, 0.7, 0.3, 1), opacity ${durationMs}ms ease`;
   requestAnimationFrame(() => {
     // 组合 --fx-rot（牌库/手牌无 rot 类 → 恒 0deg，与旧行为一致）
     clone.style.transform = `translate(${dx}px, ${dy}px) rotate(var(--fx-rot, 0deg)) scale(0.92)`;
     clone.style.opacity = '0.6';
   });
-  window.setTimeout(() => clone.remove(), MOVE_MS + 80);
+  window.setTimeout(() => clone.remove(), durationMs + 80);
 }
 
 /* ===== Gravity 位移附加特效（用户 #3）：品红牌库框光 + 终点黑洞 + 品红射线 + 卡框品红光 =====
@@ -1840,6 +1840,9 @@ const GEN3_CARD_FX_API: Gen3CardFxApi = {
   playShatterAt: (rect, cw, ccw, payload) => playShatterAt(rect, cw, ccw, payload as unknown as FxCardPayload),
   playFlip: (node, payload, durationMs) => playFlip(node, payload as unknown as FxCardPayload, durationMs),
   playShift: (node, payload) => playShift(node, payload as unknown as FxCardPayload),
+  deckPos,
+  playDeckPlay: (payload, durationMs) => playDeckPlay(payload as unknown as FxCardPayload, durationMs),
+  playHandPlay: (payload, durationMs) => playHandPlay(payload as unknown as FxCardPayload, durationMs),
   extraZ: EXTRA_Z,
   rnd: (a, b) => a + Math.random() * (b - a),
 };
@@ -1854,7 +1857,9 @@ export function initEffects(): () => void {
     // 仍在事件时即时播放。metal-1 链路边框光已在 FX-R3 移除一次性触发——改由 render.ts
     // syncMetal1LineGlows 常驻注册表纯状态驱动（compileBlocked 区间）。
     if (e.type === 'card:drawn') {
-      const p = e.payload as { player: PlayerId; count: number; triggerProtocol?: string } | undefined;
+      const p = e.payload as { player: PlayerId; count: number; triggerProtocol?: string; triggerDefId?: string } | undefined;
+      // 3代 抽牌附加层（暴食 G3 食道涡口 / 支点 F2 标尺）：基础抽牌动画由 main.ts 播放，这里只加层
+      if (p && gen3DrawFx(p as unknown as Gen3DrawPayload, GEN3_CARD_FX_API)) return;
       if (p && p.triggerProtocol === 'love') playLoveDrawExtra(p);
       return;
     }
@@ -1997,6 +2002,8 @@ export function initEffects(): () => void {
         }
         break;
       case 'card:deck-played':
+        // 3代点名卡牌反面打出附加层（暴食0 顶 G1 / 压制 O1 / 刚性 Y1 / 惰性 I2，含基础飞行）
+        if (gen3FaceDownFx('deck', payload as unknown as Gen3CardPayload, GEN3_CARD_FX_API)) break;
         // 反面打出牌堆顶：仅 gravity 触发源（gravity-0/6）播品红牌库框光 + 终点黑洞 + 品红射线
         // （前置段后延后基础打出）；2代 smoke-0 迷雾反打（牌库顶 → 落点灰雾罩 + 卡从雾中现）；
         // life-0/3、water-1 的打牌堆顶走基础打出（不误播重力特效）
@@ -2011,12 +2018,18 @@ export function initEffects(): () => void {
         } else playDeckPlay(payload);
         break;
       case 'card:hand-played':
+        // 3代点名卡牌反面打出附加层（同上；刚性3 中「在此牌正下方反面打出」走此路径）
+        if (gen3FaceDownFx('hand', payload as unknown as Gen3CardPayload, GEN3_CARD_FX_API)) break;
         // playFromHand：从手牌中该卡的 rect 起飞飞入目标线链路末尾（区别于牌堆顶打出）
         // 2代 smoke-3 迷雾手牌反打 → 落点灰雾罩 + 卡从雾中现（基础飞行照常）
         if (payload.triggerProtocol === 'smoke') {
           playSmokePlayFx(payload);
           playHandPlay(payload);
         } else playHandPlay(payload);
+        break;
+      case 'deck:discarded':
+        // 3代 惰性4 中「弃置整个牌库」（双方各弃其牌库）：整摞沙化 → 灰砂流飞向弃牌堆
+        gen3DeckDiscardFx(e.payload as unknown as Gen3DeckDiscardPayload, GEN3_CARD_FX_API);
         break;
       case 'card:given':
         // love 协议给牌/收牌（love-1 底给牌、love-3 给牌与随机拿牌——give/takeRandom op 均发
@@ -2063,8 +2076,10 @@ export function initEffects(): () => void {
 export function initCompileFx(): () => void {
   return gameBus.subscribe((e: GameEvent) => {
     if (e.type !== 'line:compiled') return;
-    const p = e.payload as { player: PlayerId; line: number; protocolDefId: string; ownUids: string[]; oppUids: string[] };
+    const p = e.payload as { player: PlayerId; line: number; protocolDefId: string; ownUids: string[]; oppUids: string[]; sourceDefId?: string; sourceUid?: string };
     playCompile(p);
+    // 3代"编译后"附加层（贪婪1 底契约印 / 动量编译后蓄力）：与编译横幅同时刻并列播放
+    gen3CompiledFx(p as unknown as Gen3CompiledPayload, e.state, GEN3_CARD_FX_API);
   });
 }
 

@@ -952,6 +952,8 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       const target = op.player ?? pe.player;
       const p = s.players[target];
       if (p.deck.length === 0) break;
+      // 3代 inertia-4 特效（批次 C）：在卡仍在牌库时发事件，UI 才能取到牌库区矩形做"整摞沙化飞弃"
+      gameBus.emit({ type: 'deck:discarded', state: s, payload: { player: target, count: p.deck.length, sourceDefId: pe.sourceDefId } });
       const cards = p.deck.splice(0);
       for (const c of cards) {
         c.zone = 'trash';

@@ -42,16 +42,25 @@ export interface Gen3CardFxApi {
   playShatterAt(rect: DOMRect, cw: boolean, ccw: boolean, payload: Gen3CardPayload): void;
   playFlip(node: HTMLElement, payload: Gen3CardPayload, durationMs?: number): void;
   playShift(node: HTMLElement, payload: Gen3CardPayload): void;
+  /** 牌库区矩心（牌堆顶打出/抽牌的起点参照，effects/index.ts 已导出同名函数） */
+  deckPos(player: 0 | 1): DOMRect | null;
+  /** 基础反面打出飞行（牌库顶 / 手牌）；durationMs 可放慢（3代 惰性=慢） */
+  playDeckPlay(payload: Gen3CardPayload, durationMs?: number): void;
+  playHandPlay(payload: Gen3CardPayload, durationMs?: number): void;
   extraZ: number;
   rnd(a: number, b: number): number;
 }
 
 /** 3 代卡牌特效覆盖的协议（供守卫测试核对覆盖范围） */
-export const GEN3_CARD_FX_COVER: Record<'discard' | 'delete' | 'flip' | 'shift', string[]> = {
+export const GEN3_CARD_FX_COVER: Record<'discard' | 'delete' | 'flip' | 'shift' | 'draw' | 'facedown' | 'compiled', string[]> = {
   discard: ['greed', 'sloth', 'wrath', 'fulcrum', 'momentum', 'nova'],
   delete: ['gluttony', 'wrath', 'overwhelm', 'nova'],
   flip: ['pride', 'sloth', 'wrath', 'ambush', 'flexibility', 'envy'],
   shift: ['pride', 'nova', 'flexibility'],
+  // —— 批次 C ——
+  draw: ['gluttony', 'fulcrum'],
+  facedown: ['gluttony', 'overwhelm', 'rigidity', 'inertia'],
+  compiled: ['greed', 'momentum'],
 };
 
 /* ============================== 共享工具 ============================== */
@@ -579,4 +588,397 @@ export function gen3ShiftFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3Card
     default:
       return false;
   }
+}
+
+/* ====================== 抽牌（A-DRAW，批次 C） ====================== */
+
+/** card:drawn 载荷（无 uid：main.ts 负责基础抽牌动画，这里只加牌库侧/落点附加层） */
+export interface Gen3DrawPayload {
+  player?: 0 | 1;
+  count?: number;
+  triggerProtocol?: string;
+  triggerDefId?: string;
+  fromOpponentDeck?: boolean;
+}
+
+/** 手牌区容器（落点"饱胀"回弹挂在该容器上） */
+function handEl(player: 0 | 1): HTMLElement | null {
+  return document.querySelector<HTMLElement>(`.hand[data-player="${player}"]`);
+}
+
+/** 手牌区末端落点（取不到卡节点就退化到手牌区右缘） */
+function handEndPos(player: 0 | 1): { x: number; y: number } | null {
+  const hand = handEl(player);
+  if (!hand) return null;
+  const cards = hand.querySelectorAll<HTMLElement>('.card');
+  const last = cards[cards.length - 1];
+  const r = (last ?? hand).getBoundingClientRect();
+  if (r.width === 0 && r.height === 0) return null;
+  return { x: last ? r.right - r.width / 2 : r.right - 24, y: r.top + r.height / 2 };
+}
+
+/**
+ * 3 代抽牌附加层（点名：暴食 G3 / 支点 F2）。基础抽牌动画由 main.ts 播放，本层只加：
+ *  - 暴食：牌库上方暗金"食道涡口"（镂空环 + 内圈齿，缓转）→ 金色碎屑 → 手牌落点闪光 + 手牌饱胀回弹；
+ *  - 支点：青蓝刻度标尺 + 沿刻度滑动的游标 → 落点小环（支点4 命中时游标停在"4"并闪一次）。
+ */
+export function gen3DrawFx(p: Gen3DrawPayload, api: Gen3CardFxApi): boolean {
+  const proto = p.triggerProtocol ?? '';
+  if (!GEN3_CARD_FX_COVER.draw.includes(proto) || p.player === undefined) return false;
+  const deck = api.deckPos(p.player);
+  if (!deck) return false;
+  const layer = bodyLayer(`g3-draw-layer ${proto}`, api.extraZ);
+  const dcx = deck.left + deck.width / 2;
+  const dcy = deck.top + deck.height / 2;
+  const end = handEndPos(p.player);
+
+  if (proto === 'gluttony') {
+    const side = Math.max(84, deck.width * 1.25);
+    const throat = api.el('div', 'g3-throat');
+    throat.style.left = `${dcx}px`;
+    throat.style.top = `${dcy}px`;
+    throat.style.width = `${side}px`;
+    throat.style.height = `${side}px`;
+    throat.appendChild(api.el('i', 'g3-throat-ring outer'));
+    throat.appendChild(api.el('i', 'g3-throat-ring inner'));
+    const teeth = api.el('div', 'g3-throat-teeth');
+    for (let i = 0; i < 8; i++) {
+      const t = api.el('i', 'g3-throat-tooth');
+      t.style.transform = `rotate(${i * 45}deg)`;
+      teeth.appendChild(t);
+    }
+    throat.appendChild(teeth);
+    layer.appendChild(throat);
+    // 金褐碎屑：自涡口向手牌方向飘落（二次运动：先快后缓）
+    for (let i = 0; i < 10; i++) {
+      const c = api.el('i', 'g3-throat-crumb');
+      c.style.left = `${dcx + api.rnd(-deck.width * 0.5, deck.width * 0.5)}px`;
+      c.style.top = `${dcy + api.rnd(-10, 22)}px`;
+      c.style.setProperty('--dx', end ? `${((end.x - dcx) * api.rnd(0.35, 0.75)).toFixed(1)}px` : `${api.rnd(-30, 30).toFixed(1)}px`);
+      c.style.setProperty('--dy', end ? `${((end.y - dcy) * api.rnd(0.3, 0.7)).toFixed(1)}px` : `${api.rnd(40, 90).toFixed(1)}px`);
+      c.style.animationDelay = `${(i * 34).toFixed(0)}ms`;
+      layer.appendChild(c);
+    }
+    if (end) {
+      const flash = api.el('i', 'g3-draw-land');
+      flash.style.left = `${end.x}px`;
+      flash.style.top = `${end.y}px`;
+      layer.appendChild(flash);
+      const hand = handEl(p.player);
+      if (hand) {
+        hand.classList.remove('g3-hand-bulge');
+        void hand.offsetWidth;
+        hand.classList.add('g3-hand-bulge');
+        window.setTimeout(() => hand.classList.remove('g3-hand-bulge'), 320);
+      }
+    }
+    window.setTimeout(() => layer.remove(), 1100);
+    return true;
+  }
+
+  // 支点 F2：青蓝标尺（铺在牌库与手牌之间）+ 游标滑块 + 落点环
+  const to = end ?? { x: dcx + 160, y: dcy };
+  const x1 = Math.min(dcx, to.x);
+  const x2 = Math.max(dcx, to.x);
+  const ruler = api.el('div', 'g3-ruler');
+  ruler.style.left = `${x1 - 8}px`;
+  ruler.style.top = `${(dcy + to.y) / 2 - 16}px`;
+  ruler.style.width = `${Math.max(120, x2 - x1 + 16)}px`;
+  for (let i = 0; i < 9; i++) {
+    const tick = api.el('i', 'g3-ruler-tick');
+    tick.style.left = `${(i / 8) * 100}%`;
+    if (i % 4 === 0) tick.classList.add('major');
+    ruler.appendChild(tick);
+  }
+  ruler.appendChild(api.el('i', 'g3-ruler-marker'));
+  if (p.triggerDefId === 'fulcrum-4') ruler.classList.add('at-four');
+  layer.appendChild(ruler);
+  const land = api.el('i', 'g3-draw-land fulcrum');
+  land.style.left = `${to.x}px`;
+  land.style.top = `${to.y}px`;
+  layer.appendChild(land);
+  window.setTimeout(() => layer.remove(), 900);
+  return true;
+}
+
+/* ====================== 反面打出（A-FACEDOWN，批次 C） ====================== */
+
+/**
+ * 3 代反面打出附加层（点名：暴食0 顶 G1 / 压制 O1 / 刚性 Y1 / 惰性 I2）。
+ * kind：'deck' = 牌库顶反打（card:deck-played）、'hand' = 手牌反打（card:hand-played）。
+ * 基础飞行照常调用（惰性按协议语法放慢到 700ms）。
+ */
+export function gen3FaceDownFx(kind: 'deck' | 'hand', p: Gen3CardPayload, api: Gen3CardFxApi): boolean {
+  const proto = p.triggerProtocol ?? '';
+  if (!GEN3_CARD_FX_COVER.facedown.includes(proto)) return false;
+  const slot = p.owner !== undefined && p.line != null
+    ? document.querySelector<HTMLElement>(`.stack-slot[data-player="${p.owner}"][data-line="${p.line}"]`)
+    : null;
+  const slotRect = slot ? slot.getBoundingClientRect() : null;
+  const base = (): void => {
+    if (kind === 'deck') api.playDeckPlay(p, proto === 'inertia' ? 700 : undefined);
+    else api.playHandPlay(p, proto === 'inertia' ? 700 : undefined);
+  };
+
+  switch (proto) {
+    // 暴食0 顶（清缓存后反打）：齿颚咬合 + 落点金褐碎屑
+    case 'gluttony': {
+      const src = p.triggerUid ? document.querySelector<HTMLElement>(`[data-uid="${p.triggerUid}"]`) : null;
+      if (src) {
+        const c = api.buildFxCard(src, p, api.extraZ);
+        if (c) {
+          c.classList.add('g3-glut-deckplay');
+          for (const side of ['l', 'r'] as const) {
+            const jaw = api.el('div', `g3-bite-jaw ${side}`);
+            for (let i = 0; i < 3; i++) jaw.appendChild(api.el('i', `g3-bite-tooth t${i}`));
+            c.appendChild(jaw);
+          }
+          window.setTimeout(() => c.remove(), 900);
+        }
+      }
+      if (slotRect) {
+        const layer = bodyLayer('g3-glut-crumbs-layer', api.extraZ);
+        for (let i = 0; i < 8; i++) {
+          const crumb = api.el('i', 'g3-glut-crumb-fly');
+          crumb.style.left = `${slotRect.left + api.rnd(6, Math.max(10, slotRect.width - 6))}px`;
+          crumb.style.top = `${slotRect.top + slotRect.height * 0.6}px`;
+          crumb.style.setProperty('--dx', `${api.rnd(-26, 26).toFixed(1)}px`);
+          crumb.style.setProperty('--dy', `${api.rnd(-16, 26).toFixed(1)}px`);
+          crumb.style.animationDelay = `${(i * 30).toFixed(0)}ms`;
+          layer.appendChild(crumb);
+        }
+        window.setTimeout(() => layer.remove(), 900);
+      }
+      base();
+      return true;
+    }
+    // 压制 O1：落点上方 4×4 阵列下压 → 触地碎裂细边 + 压痕冲击环 + 冷白尘埃
+    case 'overwhelm': {
+      if (slotRect) {
+        const layer = bodyLayer('g3-ovw-fall-layer', api.extraZ);
+        const array = api.el('div', 'g3-ovw-drop-array');
+        array.style.left = `${slotRect.left - 6}px`;
+        array.style.top = `${slotRect.top - 40}px`;
+        array.style.width = `${slotRect.width + 12}px`;
+        array.style.height = `${Math.max(60, slotRect.height * 0.6)}px`;
+        for (let i = 0; i < 16; i++) array.appendChild(api.el('i', 'g3-ovw-drop-cell'));
+        layer.appendChild(array);
+        const ring = api.el('i', 'g3-impact-ring');
+        ring.style.left = `${slotRect.left + slotRect.width / 2}px`;
+        ring.style.top = `${slotRect.top + slotRect.height}px`;
+        ring.style.animationDelay = '220ms';
+        layer.appendChild(ring);
+        for (let i = 0; i < 6; i++) {
+          const d = api.el('i', 'g3-ovw-dust-bit');
+          d.style.left = `${slotRect.left + slotRect.width / 2 + api.rnd(-18, 18)}px`;
+          d.style.top = `${slotRect.top + slotRect.height}px`;
+          d.style.setProperty('--dx', `${api.rnd(-40, 40).toFixed(1)}px`);
+          d.style.setProperty('--dy', `${api.rnd(-26, -6).toFixed(1)}px`);
+          d.style.animationDelay = `${240 + i * 22}ms`;
+          layer.appendChild(d);
+        }
+        window.setTimeout(() => layer.remove(), 900);
+      }
+      base();
+      return true;
+    }
+    // 刚性 Y1：紫底荧光黄护板自目标线下方升起（板面迷宫走线）→ 落位后收边 + 荧光黄扫线
+    case 'rigidity': {
+      if (slotRect) {
+        const layer = bodyLayer('g3-rig-plate-layer', api.extraZ);
+        const plate = api.el('div', 'g3-rig-plate');
+        plate.style.left = `${slotRect.left - 4}px`;
+        plate.style.top = `${slotRect.top}px`;
+        plate.style.width = `${slotRect.width + 8}px`;
+        plate.style.height = `${slotRect.height}px`;
+        for (let i = 0; i < 5; i++) {
+          const line = api.el('i', 'g3-rig-plate-line');
+          line.style.top = `${12 + i * 18}%`;
+          line.style.animationDelay = `${(i * 90).toFixed(0)}ms`;
+          plate.appendChild(line);
+        }
+        layer.appendChild(plate);
+        const sweep = api.el('i', 'g3-rig-plate-sweep');
+        sweep.style.left = `${slotRect.left - 4}px`;
+        sweep.style.top = `${slotRect.top + slotRect.height * 0.62}px`;
+        sweep.style.width = `${slotRect.width + 8}px`;
+        layer.appendChild(sweep);
+        window.setTimeout(() => layer.remove(), 900);
+      }
+      base();
+      return true;
+    }
+    // 惰性 I2：慢落（基础飞行放慢到 700ms）+ 灰砂覆盖 + 落地 4 粒砂尘 + 一圈灰环快速即灭（无冲击）
+    case 'inertia': {
+      if (slotRect) {
+        const layer = bodyLayer('g3-ine-sand-layer', api.extraZ);
+        const veil = api.el('i', 'g3-ine-sand-veil');
+        veil.style.left = `${slotRect.left - 6}px`;
+        veil.style.top = `${slotRect.top - 30}px`;
+        veil.style.width = `${slotRect.width + 12}px`;
+        veil.style.height = `${slotRect.height + 40}px`;
+        layer.appendChild(veil);
+        const ring = api.el('i', 'g3-ine-tame-ring');
+        ring.style.left = `${slotRect.left + slotRect.width / 2}px`;
+        ring.style.top = `${slotRect.top + slotRect.height}px`;
+        ring.style.animationDelay = '420ms';
+        layer.appendChild(ring);
+        for (let i = 0; i < 4; i++) {
+          const d = api.el('i', 'g3-ine-sand-bit');
+          d.style.left = `${slotRect.left + slotRect.width / 2 + api.rnd(-14, 14)}px`;
+          d.style.top = `${slotRect.top + slotRect.height}px`;
+          d.style.setProperty('--dx', `${api.rnd(-14, 14).toFixed(1)}px`);
+          d.style.setProperty('--dy', `${api.rnd(6, 18).toFixed(1)}px`);
+          d.style.animationDelay = `${430 + i * 30}ms`;
+          layer.appendChild(d);
+        }
+        window.setTimeout(() => layer.remove(), 1200);
+      }
+      base();
+      return true;
+    }
+    default:
+      return false;
+  }
+}
+
+/* ============ 整摞弃置牌库（inertia-4，批次 C） ============ */
+
+/** deck:discarded 载荷（resolve.ts 在卡仍在牌库时发射，UI 据此取牌库区矩形） */
+export interface Gen3DeckDiscardPayload {
+  player: 0 | 1;
+  count: number;
+  sourceDefId?: string;
+}
+
+/**
+ * 3 代「弃置整个牌库」附加层（点名卡：惰性4 中，双方各弃其牌库）。
+ * 惰性语法 = 去饱和 + 沙化 + 无冲击：整摞卡背先变灰白（沙化覆层）→ 化作灰砂流飞向本家弃牌堆。
+ */
+export function gen3DeckDiscardFx(p: Gen3DeckDiscardPayload, api: Gen3CardFxApi): boolean {
+  if (p.count <= 0) return false;
+  const deck = api.deckPos(p.player);
+  if (!deck) return false;
+  const layer = bodyLayer('g3-ine-deck-layer', api.extraZ);
+  // 沙化覆层：盖在牌库整摞上（略高于牌堆，含顶部错位感）
+  const veil = api.el('div', 'g3-ine-deck-sand');
+  veil.style.left = `${deck.left - 3}px`;
+  veil.style.top = `${deck.top - 4}px`;
+  veil.style.width = `${deck.width + 6}px`;
+  veil.style.height = `${deck.height + 8}px`;
+  layer.appendChild(veil);
+  // 灰砂流：自牌库右缘流向本家弃牌堆（取 .trash-pile 矩形，取不到则向右下漂）
+  const trash = document.querySelector<HTMLElement>(`.trash-pile.p${p.player + 1}`);
+  const tr = trash ? trash.getBoundingClientRect() : null;
+  const sx = deck.left + deck.width * 0.8;
+  const sy = deck.top + deck.height * 0.2;
+  const tx = tr ? tr.left + tr.width / 2 : deck.left + deck.width + 120;
+  const ty = tr ? tr.top + tr.height / 2 : deck.top + deck.height + 40;
+  for (let i = 0; i < 12; i++) {
+    const bit = api.el('i', 'g3-ine-deck-bit');
+    bit.style.left = `${sx + api.rnd(-6, 6)}px`;
+    bit.style.top = `${sy + api.rnd(-4, deck.height * 0.8)}px`;
+    bit.style.setProperty('--dx', `${((tx - sx) * api.rnd(0.75, 1.05) + api.rnd(-14, 14)).toFixed(1)}px`);
+    bit.style.setProperty('--dy', `${((ty - sy) * api.rnd(0.75, 1.05) + api.rnd(-12, 12)).toFixed(1)}px`);
+    bit.style.animationDelay = `${(i * 40).toFixed(0)}ms`;
+    layer.appendChild(bit);
+  }
+  window.setTimeout(() => layer.remove(), 1500);
+  return true;
+}
+/* ====================== 编译后（批次 C） ====================== */
+
+/** line:compiled 载荷（compile-body.ts 发射；批次 C 新增 sourceDefId/sourceUid） */
+export interface Gen3CompiledPayload {
+  player: 0 | 1;
+  line: number;
+  protocolDefId: string;
+  sourceDefId?: string;
+  sourceUid?: string;
+}
+
+/**
+ * 3 代"编译后"附加层（点名：贪婪1 底 R2 / 动量编译后 M2）。
+ *  - 贪婪1（sourceDefId='greed-1'）：青玉契约印自贪婪1 卡面浮出 → 落到所选线的协议卡上（盖章 + 冲击环）；
+ *  - 动量（场上双方任一未覆盖正面动量卡）：编译瞬间卡面橙色蓄力环向内收束 + 牌库区加速条纹 +
+ *    编译线落点冲击环（动量6 的"删除此牌"由引擎照常走 card:deleted，本层不重复）。
+ */
+export function gen3CompiledFx(p: Gen3CompiledPayload, state: GameState, api: Gen3CardFxApi): boolean {
+  let handled = false;
+  const cell = document.querySelector<HTMLElement>(`.protocol-cell[data-player="${p.player}"][data-line="${p.line}"]`);
+  const cellRect = cell ? cell.getBoundingClientRect() : null;
+
+  // ① 贪婪1 底：契约印（自触发卡浮出 → 落到编译线协议卡上盖章）
+  if (p.sourceDefId === 'greed-1') {
+    handled = true;
+    const layer = bodyLayer('g3-greed-seal-layer', api.extraZ);
+    const src = p.sourceUid ? document.querySelector<HTMLElement>(`[data-uid="${p.sourceUid}"]`) : null;
+    const from = src ? src.getBoundingClientRect() : null;
+    const seal = api.el('div', 'g3-greed-seal');
+    seal.style.left = `${from ? from.left + from.width / 2 : (cellRect?.left ?? window.innerWidth / 2)}px`;
+    seal.style.top = `${from ? from.top + from.height / 2 : (cellRect?.top ?? window.innerHeight / 2)}px`;
+    seal.appendChild(api.el('i', 'g3-greed-seal-hex'));
+    seal.appendChild(api.el('i', 'g3-greed-seal-rune'));
+    layer.appendChild(seal);
+    void seal.offsetWidth; // 强制样式提交（起飞 transition 必动画）
+    if (cellRect) {
+      seal.style.left = `${cellRect.left + cellRect.width / 2}px`;
+      seal.style.top = `${cellRect.top + cellRect.height / 2}px`;
+      seal.classList.add('stamp');
+      const ring = api.el('i', 'g3-impact-ring greed');
+      ring.style.left = `${cellRect.left + cellRect.width / 2}px`;
+      ring.style.top = `${cellRect.top + cellRect.height / 2}px`;
+      ring.style.animationDelay = '620ms';
+      layer.appendChild(ring);
+    }
+    window.setTimeout(() => layer.remove(), 1600);
+  }
+
+  // ② 动量：场上动量卡各自的蓄力环 + 编译线落点冲击环 + 牌库加速条纹
+  const momentumUids: string[] = [];
+  for (const pid of [0, 1] as const) {
+    for (const stack of state.players[pid].stacks) {
+      for (const card of stack) {
+        if (card.faceUp && card.defId.startsWith('momentum-')) momentumUids.push(card.uid);
+      }
+    }
+  }
+  if (momentumUids.length > 0) {
+    handled = true;
+    const layer = bodyLayer('g3-mom-compile-layer', api.extraZ);
+    for (const [i, uid] of momentumUids.entries()) {
+      const node = document.querySelector<HTMLElement>(`[data-uid="${uid}"]`);
+      if (!node) continue;
+      const r = node.getBoundingClientRect();
+      if (r.width === 0) continue;
+      const wrap = api.el('div', 'g3-mom-compile-card');
+      wrap.style.left = `${r.left}px`;
+      wrap.style.top = `${r.top}px`;
+      wrap.style.width = `${r.width}px`;
+      wrap.style.height = `${r.height}px`;
+      wrap.style.animationDelay = `${(i * 90).toFixed(0)}ms`;
+      wrap.appendChild(api.el('i', 'g3-mom-compile-ring r1'));
+      wrap.appendChild(api.el('i', 'g3-mom-compile-ring r2'));
+      layer.appendChild(wrap);
+    }
+    const deck = api.deckPos(p.player);
+    if (deck) {
+      for (let i = 0; i < 3; i++) {
+        const s = api.el('i', 'g3-mom-deck-streak');
+        s.style.left = `${deck.left - 10}px`;
+        s.style.top = `${deck.top + api.rnd(6, Math.max(10, deck.height - 6))}px`;
+        s.style.animationDelay = `${(i * 60).toFixed(0)}ms`;
+        layer.appendChild(s);
+      }
+    }
+    if (cellRect) {
+      const ring = api.el('i', 'g3-impact-ring');
+      ring.style.left = `${cellRect.left + cellRect.width / 2}px`;
+      ring.style.top = `${cellRect.top + cellRect.height}px`;
+      ring.style.animationDelay = '160ms';
+      layer.appendChild(ring);
+    }
+    window.setTimeout(() => layer.remove(), 1100);
+  }
+  return handled;
 }
