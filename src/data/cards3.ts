@@ -17,8 +17,9 @@ import type { CardDef, ProtocolDef } from '../core/models/types';
  * 卡牌图「懒惰0-5.png」→「怠惰0-5.png」（本会话已同步改名后入库）。
  *
  * 转写规则（同 cards.ts/cards2.ts）：数量词阿拉伯数字化（一张→1张、两张→2张…）；
- * 句末补句号；「空」= 无该指令不落字段；术语保留（偏转=平移？本代 txt 用「平移」、
- * 「控制权/获得控制权/失去控制权」、「清缓存/刷新/编译/重排协议/回手」等照录）。
+ * 句末补句号；「空」= 无该指令不落字段；术语照录（**不归一**）。
+ * 2026-09-13 文本同步：本代 txt 已把「平移」改写为「偏转」、部分「链路」改写为「堆叠」，
+ * 卡牌文本按 txt 照录（引擎内部仍以 shift/线/堆叠为同一概念，仅文本用词不同）。
  * 分值集合（依卡图文件名与 txt 核对）：嫉妒0-5/暴食0-5/贪婪0-5/色欲{0,2,3,4,5,6}/
  * 傲慢{0,2,3,4,5,6}/怠惰0-5/愤怒0-5/伏击0-5/支点0-5/压制1-6/动量{0,1,3,4,5,6}/
  * 新星0-5/惰性0-5/刚性{1,2,3,4,5,7}/柔性0-5。
@@ -29,22 +30,22 @@ import type { CardDef, ProtocolDef } from '../core/models/types';
  */
 export const ALL_PROTOCOLS_3: ProtocolDef[] = [
   // 3代 基础 12 套（MN03）
-  { defId: 'envy', name: '嫉妒', set: 'MN03', commands: ['对比总阈值', '翻转', '抽牌'], loadingText: '据为己有' },
-  { defId: 'gluttony', name: '暴食', set: 'MN03', commands: ['清缓存', '回手', '抽牌', '删除'], loadingText: '欲壑难填' },
-  { defId: 'greed', name: '贪婪', set: 'MN03', commands: ['弃牌', '删除', '抽牌', '回手', '编译'], loadingText: '贪得无厌' },
-  { defId: 'lust', name: '色欲', set: 'MN03', commands: ['控制权', '揭示', '平移', '反面打出'], loadingText: '惑乱人心' },
-  { defId: 'pride', name: '傲慢', set: 'MN03', commands: ['编译', '刷新', '平移', '翻转', '对比总阈值'], loadingText: '矜己自崇' },
-  { defId: 'sloth', name: '怠惰', set: 'MN03', commands: ['回手', '刷新', '翻转', '弃牌', '对比总阈值'], loadingText: '迁延因循' },
-  { defId: 'wrath', name: '愤怒', set: 'MN03', commands: ['翻转', '删除', '控制权', '抽牌'], loadingText: '睚眦必报' },
-  { defId: 'ambush', name: '伏击', set: 'MN03', commands: ['翻转', '抽牌', '平移'], loadingText: '潜形晦迹' },
-  { defId: 'fulcrum', name: '支点', set: 'MN03', commands: ['翻转', '交换', '删除', '抽牌'], loadingText: '扭转乾坤' },
-  { defId: 'overwhelm', name: '压制', set: 'MN03', commands: ['反面打出', '删除', '翻转', '对比总阈值'], loadingText: '势压万钧' },
-  { defId: 'momentum', name: '动量', set: 'MN03', commands: ['编译', '重排', '抽牌', '弃牌'], loadingText: '蓄势待发' },
-  { defId: 'nova', name: '新星', set: 'MN03', commands: ['删除', '重排', '控制权', '平移', '翻转'], loadingText: '璀璨爆发' },
+  { defId: 'envy', name: '嫉妒', set: 'MN03', commands: ['追赶', '翻转'], loadingText: '据为己有' },
+  { defId: 'gluttony', name: '暴食', set: 'MN03', commands: ['抽牌', '清缓存', '删除'], loadingText: '欲壑难填' },
+  { defId: 'greed', name: '贪婪', set: 'MN03', commands: ['弃牌', '重复效果'], loadingText: '贪得无厌' },
+  { defId: 'lust', name: '色欲', set: 'MN03', commands: ['强制打出', '控制权'], loadingText: '惑乱人心' },
+  { defId: 'pride', name: '傲慢', set: 'MN03', commands: ['领先', '偏转', '抽牌'], loadingText: '矜己自崇' },
+  { defId: 'sloth', name: '怠惰', set: 'MN03', commands: ['弃牌', '翻转'], loadingText: '迁延因循' },
+  { defId: 'wrath', name: '愤怒', set: 'MN03', commands: ['删除', '反面朝下'], loadingText: '睚眦必报' },
+  { defId: 'ambush', name: '伏击', set: 'MN03', commands: ['翻转', '抽牌', '反面朝下'], loadingText: '潜形晦迹' },
+  { defId: 'fulcrum', name: '支点', set: 'MN03', commands: ['抽牌', '交换', '手牌数量'], loadingText: '扭转乾坤' },
+  { defId: 'overwhelm', name: '压制', set: 'MN03', commands: ['反面打出', '放大优势'], loadingText: '势压万钧' },
+  { defId: 'momentum', name: '动量', set: 'MN03', commands: ['编译后', '抽牌'], loadingText: '蓄势待发' },
+  { defId: 'nova', name: '新星', set: 'MN03', commands: ['堆叠数量', '偏转', '重排'], loadingText: '璀璨爆发' },
   // 3代 拓展 3 套（AX03）
-  { defId: 'inertia', name: '惰性', set: 'AX03', commands: ['翻转', '弃牌', '反面打出', '禁用指令'], loadingText: '寂然不动' },
-  { defId: 'rigidity', name: '刚性', set: 'AX03', commands: ['翻转', '反面打出', '抽牌', '不可移动'], loadingText: '坚不可摧' },
-  { defId: 'flexibility', name: '柔性', set: 'AX03', commands: ['回手', '平移', '翻转', '抽牌', '交换'], loadingText: '随机应变' },
+  { defId: 'inertia', name: '惰性', set: 'AX03', commands: ['无效化', '正面朝上', '对称效果'], loadingText: '寂然不动' },
+  { defId: 'rigidity', name: '刚性', set: 'AX03', commands: ['反面打出', '阻止'], loadingText: '坚不可摧' },
+  { defId: 'flexibility', name: '柔性', set: 'AX03', commands: ['选择', '偏转', '抽牌'], loadingText: '随机应变' },
 ];
 
 export const ALL_CARD_DEFS_3: CardDef[] = [
@@ -68,53 +69,53 @@ export const ALL_CARD_DEFS_3: CardDef[] = [
   { defId: 'greed-0', protocol: 'greed', value: 0, middle: '弃置你的手牌。删除1张牌。', bottom: '当你删除牌后：抽1张牌。' },
   { defId: 'greed-1', protocol: 'greed', value: 1, bottom: '结束：在1条你有至少10点阈值且总阈值高于对手的链路中编译。' },
   { defId: 'greed-2', protocol: 'greed', value: 2, middle: '对手弃1张牌。', bottom: '开始：你可以回手1张你的牌。' },
-  { defId: 'greed-3', protocol: 'greed', value: 3, middle: '平移你在此链路中1张被覆盖的牌。' },
-  { defId: 'greed-4', protocol: 'greed', value: 4, middle: '你可以弃置手牌。若你这么做，翻转1张牌。' },
+  { defId: 'greed-3', protocol: 'greed', value: 3, middle: '偏转你在此堆叠中1张被覆盖的牌。' },
+  { defId: 'greed-4', protocol: 'greed', value: 4, middle: '你可以弃置手牌。若你达成该条件，翻转1张牌。' },
   { defId: 'greed-5', protocol: 'greed', value: 5, middle: '弃1张牌。' },
 
   // 色欲——惑乱人心
   { defId: 'lust-0', protocol: 'lust', value: 0, top: '每位玩家在此链路的总阈值增加10。', middle: '获得控制权。', bottom: '若你拥有控制权，对手无法编译。' },
-  { defId: 'lust-2', protocol: 'lust', value: 2, middle: '你可以将对手1张被覆盖的牌平移到此链路。', bottom: '你的牌可以无视协议限制打在此链路中。' },
-  { defId: 'lust-3', protocol: 'lust', value: 3, middle: '对手随机揭示手牌中的1张牌。将那张牌反面打出在对手一侧。', bottom: '结束：你可以失去控制权。若你这么做，翻转1张牌。' },
+  { defId: 'lust-2', protocol: 'lust', value: 2, middle: '你可以将对手1张被覆盖的牌偏转到此链路。', bottom: '你的牌可以无视协议限制打在此堆叠中。' },
+  { defId: 'lust-3', protocol: 'lust', value: 3, middle: '对手随机揭示手牌中的1张牌。将那张牌反面打出在对手一侧。', bottom: '结束：你可以失去控制权。若你达成该条件，翻转1张牌。' },
   { defId: 'lust-4', protocol: 'lust', value: 4, middle: '揭示你的手牌。对手失去控制权。', bottom: '当对手获得控制权后：抽1张牌。' },
   { defId: 'lust-5', protocol: 'lust', value: 5, middle: '弃1张牌。' },
   { defId: 'lust-6', protocol: 'lust', value: 6, middle: '弃1张牌。对手在此链路反面打出1张牌。' },
 
   // 傲慢——矜己自崇
-  { defId: 'pride-0', protocol: 'pride', value: 0, top: '当你编译后：刷新。', middle: '若你拥有控制权，平移1张其他牌。否则，平移1张你的牌。' },
-  { defId: 'pride-2', protocol: 'pride', value: 2, middle: '在每条你总阈值高于对手的链路中抽1张牌。', bottom: '开始：若你在此链路总阈值高于对手，抽1张牌。' },
+  { defId: 'pride-0', protocol: 'pride', value: 0, top: '当你编译后：刷新。', middle: '若你拥有控制权，偏转1张其他牌。否则，偏转1张你的牌。' },
+  { defId: 'pride-2', protocol: 'pride', value: 2, middle: '你每有1条总阈值高于对手的链路就抽1张牌。', bottom: '开始：若你在此链路总阈值高于对手，抽1张牌。' },
   { defId: 'pride-3', protocol: 'pride', value: 3, middle: '翻转1张你的反面朝下的牌。' },
-  { defId: 'pride-4', protocol: 'pride', value: 4, middle: '若你拥有控制权，你可以将对手1张牌平移到此链路。' },
+  { defId: 'pride-4', protocol: 'pride', value: 4, middle: '若你拥有控制权，你可以将对手1张牌偏转到此链路。' },
   { defId: 'pride-5', protocol: 'pride', value: 5, middle: '弃1张牌。' },
   { defId: 'pride-6', protocol: 'pride', value: 6, top: '当对手获得控制权后：翻转此牌。', middle: '若对手拥有控制权，翻转此牌。' },
 
   // 怠惰——迁延因循
-  { defId: 'sloth-0', protocol: 'sloth', value: 0, top: '若此牌被1张怠惰牌覆盖，你在此链路的总阈值增加5。', middle: '在每条你总阈值低于对手的链路中抽1张牌。' },
-  { defId: 'sloth-1', protocol: 'sloth', value: 1, middle: '回手1张其他牌。若回手的是你的牌，刷新。', bottom: '当你刷新后：从你的牌库顶端反面打出1张牌到此链路。' },
+  { defId: 'sloth-0', protocol: 'sloth', value: 0, top: '若此牌被1张怠惰牌覆盖，你在此链路的总阈值增加5。', middle: '你每有1条总阈值低于对手的链路就抽1张牌。' },
+  { defId: 'sloth-1', protocol: 'sloth', value: 1, middle: '回手1张其他牌。若回手的是你的牌，刷新。', bottom: '当你刷新后：从你的牌库顶端反面打出1张牌到此堆叠。' },
   { defId: 'sloth-2', protocol: 'sloth', value: 2, middle: '翻转1张你被覆盖的牌。', bottom: '开始：你可以将手牌中的1张牌放回牌库底端。' },
   { defId: 'sloth-3', protocol: 'sloth', value: 3, middle: '对手弃2张牌。' },
   { defId: 'sloth-4', protocol: 'sloth', value: 4, bottom: '当此牌将被覆盖时：先翻转1张正面朝上的牌。' },
   { defId: 'sloth-5', protocol: 'sloth', value: 5, middle: '弃1张牌。' },
 
   // 愤怒——睚眦必报
-  { defId: 'wrath-0', protocol: 'wrath', value: 0, top: '此链路中所有最高阈值的牌不计入玩家的总阈值。', middle: '从你的牌库顶端反面打出1张牌到此链路。' },
-  { defId: 'wrath-1', protocol: 'wrath', value: 1, middle: '抽1张牌。', bottom: '结束：失去控制权。若你这么做，删除1张正面朝上的牌。' },
+  { defId: 'wrath-0', protocol: 'wrath', value: 0, top: '此链路中所有最高阈值的牌不计入玩家的总阈值。', middle: '从你的牌库顶端反面打出1张牌到此堆叠。' },
+  { defId: 'wrath-1', protocol: 'wrath', value: 1, middle: '抽1张牌。', bottom: '结束：失去控制权。若你达成该条件，删除1张正面朝上的牌。' },
   { defId: 'wrath-2', protocol: 'wrath', value: 2, middle: '翻转牌最多的1条链路中所有正面朝上的牌。' },
   { defId: 'wrath-3', protocol: 'wrath', value: 3, middle: '翻转1张正面朝上的牌。' },
-  { defId: 'wrath-4', protocol: 'wrath', value: 4, middle: '失去控制权。若你这么做，对手弃2张牌。' },
+  { defId: 'wrath-4', protocol: 'wrath', value: 4, middle: '失去控制权。若你达成该条件，对手弃2张牌。' },
   { defId: 'wrath-5', protocol: 'wrath', value: 5, middle: '弃1张牌。' },
 
   // 伏击——潜形晦迹
   { defId: 'ambush-0', protocol: 'ambush', value: 0, middle: '抽3张牌。翻转1张你的反面朝下的牌。' },
   { defId: 'ambush-1', protocol: 'ambush', value: 1, middle: '翻转你所有其他阈值为0和1的牌。每翻转1张牌抽1张牌。' },
-  { defId: 'ambush-2', protocol: 'ambush', value: 2, middle: '平移你阈值最低的被覆盖的牌。' },
+  { defId: 'ambush-2', protocol: 'ambush', value: 2, middle: '偏转你阈值最低的被覆盖的牌。' },
   { defId: 'ambush-3', protocol: 'ambush', value: 3, middle: '翻转对手阈值最高的正面朝上的被覆盖的牌。' },
   { defId: 'ambush-4', protocol: 'ambush', value: 4, middle: '若你有1张未被覆盖的反面朝下的牌，抽1张牌。' },
   { defId: 'ambush-5', protocol: 'ambush', value: 5, middle: '弃1张牌。' },
 
   // 支点——扭转乾坤
   { defId: 'fulcrum-0', protocol: 'fulcrum', value: 0, top: '开始：若你手牌恰好为0张，对手弃2张牌。', middle: '若你手牌恰好为0张，对手弃1张牌。' },
-  { defId: 'fulcrum-1', protocol: 'fulcrum', value: 1, middle: '翻转所有其他正面朝上的牌。交换你的左链路与右链路。' },
+  { defId: 'fulcrum-1', protocol: 'fulcrum', value: 1, middle: '翻转所有其他正面朝上的牌。交换你的左堆叠与右堆叠。' },
   { defId: 'fulcrum-2', protocol: 'fulcrum', value: 2, middle: '若你手牌恰好为2张，删除对手1张牌。' },
   { defId: 'fulcrum-3', protocol: 'fulcrum', value: 3, middle: '抽1张牌。交换你的左协议与右协议的位置。' },
   { defId: 'fulcrum-4', protocol: 'fulcrum', value: 4, middle: '若你手牌恰好为4张，抽1张牌。' },
@@ -123,14 +124,14 @@ export const ALL_CARD_DEFS_3: CardDef[] = [
   // 压制——势压万钧
   { defId: 'overwhelm-1', protocol: 'overwhelm', value: 1, middle: '在每条你总阈值高于对手的链路中，从你的牌库顶端反面打出1张牌。' },
   { defId: 'overwhelm-2', protocol: 'overwhelm', value: 2, top: '结束：在每条链路中从你的牌库顶端反面打出1张牌。翻转此牌。', middle: '对手在每条链路中从其牌库顶端反面打出1张牌。' },
-  { defId: 'overwhelm-3', protocol: 'overwhelm', value: 3, bottom: '结束：若你手牌有5张或以上，从你的牌库顶端反面打出1张牌到此链路。' },
+  { defId: 'overwhelm-3', protocol: 'overwhelm', value: 3, bottom: '结束：若你手牌有5张或以上，从你的牌库顶端反面打出1张牌到此堆叠。' },
   { defId: 'overwhelm-4', protocol: 'overwhelm', value: 4, middle: '若你场上的牌比对手多，删除对手阈值最低的被覆盖的牌。' },
   { defId: 'overwhelm-5', protocol: 'overwhelm', value: 5, middle: '弃1张牌。' },
   { defId: 'overwhelm-6', protocol: 'overwhelm', value: 6, top: '开始：若对手在此链路总阈值高于你，翻转此牌。' },
 
   // 动量——蓄势待发
   { defId: 'momentum-0', protocol: 'momentum', value: 0, middle: '在每条有已编译协议的链路中，从你的牌库顶端反面打出1张牌。' },
-  { defId: 'momentum-1', protocol: 'momentum', value: 1, top: '当任意玩家编译后：从你的牌库顶端反面打出1张牌到此链路。', bottom: '当任意玩家重排协议后：弃1张牌。抽1张牌。' },
+  { defId: 'momentum-1', protocol: 'momentum', value: 1, top: '当任意玩家编译后：从你的牌库顶端反面打出1张牌到此堆叠。', bottom: '当任意玩家重排协议后：弃1张牌。抽1张牌。' },
   { defId: 'momentum-3', protocol: 'momentum', value: 3, middle: '抽2张牌。' },
   { defId: 'momentum-4', protocol: 'momentum', value: 4, middle: '重排你的协议。' },
   { defId: 'momentum-5', protocol: 'momentum', value: 5, middle: '弃1张牌。' },
@@ -138,34 +139,34 @@ export const ALL_CARD_DEFS_3: CardDef[] = [
 
   // 新星——璀璨爆发
   { defId: 'nova-0', protocol: 'nova', value: 0, top: '开始：在1条你恰好有5张牌的链路中，删除所有正面朝上的牌。', middle: '拥有控制权的玩家交换你的2张协议的位置。', bottom: '结束：在1张未被覆盖的新星牌下方，从你的牌库顶端反面打出1张牌。' },
-  { defId: 'nova-1', protocol: 'nova', value: 1, middle: '对手弃等同于此链路中牌数量的牌。' },
-  { defId: 'nova-2', protocol: 'nova', value: 2, middle: '若此牌覆盖着1张新星牌，你可以重排你的协议。否则，获得控制权。', bottom: '当你重排协议后：你可以平移1张反面朝下的牌。' },
-  { defId: 'nova-3', protocol: 'nova', value: 3, middle: '平移1张阈值小于此链路中牌数量的牌。' },
-  { defId: 'nova-4', protocol: 'nova', value: 4, middle: '翻转1张阈值小于此链路中牌数量的牌。' },
+  { defId: 'nova-1', protocol: 'nova', value: 1, middle: '对手弃等同于此堆叠中牌数量的牌。' },
+  { defId: 'nova-2', protocol: 'nova', value: 2, middle: '若此牌覆盖着1张新星牌，你可以重排你的协议。否则，获得控制权。', bottom: '当你重排协议后：你可以偏转1张反面朝下的牌。' },
+  { defId: 'nova-3', protocol: 'nova', value: 3, middle: '偏转1张阈值小于此堆叠中牌数量的牌。' },
+  { defId: 'nova-4', protocol: 'nova', value: 4, middle: '翻转1张阈值小于此堆叠中牌数量的牌。' },
   { defId: 'nova-5', protocol: 'nova', value: 5, middle: '弃1张牌。' },
 
   // 惰性——寂然不动
-  { defId: 'inertia-0', protocol: 'inertia', value: 0, top: '此链路中所有其他牌没有顶部指令。', middle: '翻转另1条链路中1张被覆盖或未被覆盖的正面朝上的牌。' },
-  { defId: 'inertia-1', protocol: 'inertia', value: 1, middle: '对手弃2张牌。', bottom: '此链路中所有其他牌没有底部指令。' },
+  { defId: 'inertia-0', protocol: 'inertia', value: 0, top: '此链路中所有其他牌的顶部指令无效。', middle: '翻转另1条链路中1张无论是否被覆盖的正面朝上的牌。' },
+  { defId: 'inertia-1', protocol: 'inertia', value: 1, middle: '对手弃2张牌。', bottom: '此链路中所有其他牌的底部指令无效。' },
   { defId: 'inertia-2', protocol: 'inertia', value: 2, middle: '翻转1条链路中所有阈值最高的正面朝上的牌。' },
   { defId: 'inertia-3', protocol: 'inertia', value: 3, middle: '在每条其他链路中反面打出1张牌。对手在此链路中反面打出1张牌。' },
   { defId: 'inertia-4', protocol: 'inertia', value: 4, middle: '弃置你的牌库。对手弃置其牌库。' },
   { defId: 'inertia-5', protocol: 'inertia', value: 5, middle: '弃1张牌。' },
 
   // 刚性——坚不可摧
-  { defId: 'rigidity-1', protocol: 'rigidity', value: 1, middle: '翻转对手1张正面朝上的牌。', bottom: '结束：在每条对手有未被覆盖的反面朝上牌的其他链路中反面打出1张牌。' },
-  { defId: 'rigidity-2', protocol: 'rigidity', value: 2, bottom: '在你用行动反面打出1张牌后：从你的牌库顶端反面打出1张牌到同一链路。' },
+  { defId: 'rigidity-1', protocol: 'rigidity', value: 1, middle: '翻转对手1张正面朝上的牌。', bottom: '结束：在每条对手有未被覆盖的反面牌的链路中以反面打出1张牌到己方对应的链路中。' },
+  { defId: 'rigidity-2', protocol: 'rigidity', value: 2, bottom: '在你用行动反面打出1张牌后：从你的牌库顶端反面打出1张牌到同一堆叠。' },
   { defId: 'rigidity-3', protocol: 'rigidity', value: 3, middle: '在此牌正下方反面打出1张牌。' },
   { defId: 'rigidity-4', protocol: 'rigidity', value: 4, bottom: '当此牌将被1张反面朝下的牌覆盖时：先抽1张牌。' },
   { defId: 'rigidity-5', protocol: 'rigidity', value: 5, middle: '弃1张牌。' },
-  { defId: 'rigidity-7', protocol: 'rigidity', value: 7, top: '结束：对手选择抽1张牌或打出1张牌。', middle: '弃1张牌。', bottom: '此牌不能被翻转或平移。' },
+  { defId: 'rigidity-7', protocol: 'rigidity', value: 7, top: '结束：对手选择抽1张牌或打出1张牌。', middle: '弃1张牌。', bottom: '此牌不能被翻转或偏转。' },
 
   // 柔性——随机应变
-  { defId: 'flexibility-0', protocol: 'flexibility', value: 0, middle: '回手或平移1张牌。' },
-  { defId: 'flexibility-1', protocol: 'flexibility', value: 1, middle: '翻转或平移你的1张牌。' },
-  { defId: 'flexibility-2', protocol: 'flexibility', value: 2, top: '结束：若此牌被1张反面朝下的牌覆盖，你可以平移那张牌。', middle: '抽1张牌。' },
-  { defId: 'flexibility-3', protocol: 'flexibility', value: 3, middle: '平移对手的1张牌，或交换你的2个协议。' },
-  { defId: 'flexibility-4', protocol: 'flexibility', value: 4, bottom: '结束：你可以抽2张牌。若你这么做，翻转此牌。' },
+  { defId: 'flexibility-0', protocol: 'flexibility', value: 0, middle: '回手或偏转1张牌。' },
+  { defId: 'flexibility-1', protocol: 'flexibility', value: 1, middle: '翻转或偏转你的1张牌。' },
+  { defId: 'flexibility-2', protocol: 'flexibility', value: 2, top: '结束：若此牌被1张反面朝下的牌覆盖，你可以偏转那张牌。', middle: '抽1张牌。' },
+  { defId: 'flexibility-3', protocol: 'flexibility', value: 3, middle: '偏转对手的1张牌，或交换你的2个协议。' },
+  { defId: 'flexibility-4', protocol: 'flexibility', value: 4, bottom: '结束：你可以抽2张牌。若你达成该条件，翻转此牌。' },
   { defId: 'flexibility-5', protocol: 'flexibility', value: 5, middle: '弃1张牌。' },
 ];
 
