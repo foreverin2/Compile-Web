@@ -1,6 +1,7 @@
 import type { GameState, PlayerId, Line, EffectStep, StepResult } from './models/types';
 import { advanceStep } from './engine/turn';
 import { clearCache } from './engine/deck';
+import { gameBus } from './events/bus';
 import { playCard, refreshHand, isPlayableFaceUp } from './actions/base';
 import { rearrangeProtocolSlots } from './actions/rearrange';
 import { executeCompile, getCompilableLines } from './rules/compile';
@@ -222,7 +223,10 @@ export function executeAction(s: GameState, player: PlayerId, kind: ActionKind, 
       }
       if (s.step === 'check-cache' && !shouldSkipCacheCheck(s, player)) {
         // 防御路径（正常手牌>5 走 clear-cache 自选弃牌，advance 被拦截）；真弃了牌才触发
-        if (clearCache(s, player).length > 0) {
+        const cleared = clearCache(s, player);
+        // 3代 特效（批次 D）：清缓存时刻语义事件——暴食 0 顶 / 1 底的齿颚咬合要精确落在这一刻
+        if (cleared.length > 0) gameBus.emit({ type: 'rule:clear-cache', state: s, payload: { player, count: cleared.length } });
+        if (cleared.length > 0) {
           fireReactive(s, 'after-clear-cache', player);
           fireReactive(s, 'after-any-clear-cache', player); // 3代 暴食1 底「任意玩家清缓存后」
         }
@@ -258,6 +262,8 @@ function* cacheClearGen(s: GameState, player: PlayerId): Generator<EffectStep, v
   };
   if (ans.selected.length > 0) {
     yield { op: 'discardMany', uids: ans.selected };
+    // 3代 特效（批次 D）：清缓存时刻语义事件（正常路径：玩家自选弃牌至 5 张）
+    gameBus.emit({ type: 'rule:clear-cache', state: s, payload: { player, count: ans.selected.length } });
     // 即时连锁：真弃了牌才触发（speed-1 顶「清理缓存后：抽1张牌」；3代 暴食0 顶/暴食1 底同点）
     fireReactive(s, 'after-clear-cache', player);
     fireReactive(s, 'after-any-clear-cache', player);

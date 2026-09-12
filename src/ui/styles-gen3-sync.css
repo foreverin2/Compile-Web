@@ -1,0 +1,320 @@
+/* =============================================================================
+ * 3 代（MN03/AX03）· 批次 D 样式：控制权族（C1~C6）+ 常驻层（5 个 sync + 贪婪1 硬币堆）
+ *
+ * 常驻层（g3sync-*）：由 gen3-control.ts 的 sync 系列按状态增删；层跨重渲染存活、绝不重建
+ *   （重建会重启动画）。可见度与 1/2 代常驻层同级（边框 2~3px / 透明度 0.55~0.95 / 呼吸 0.8~3.2s），
+ *   z=46~49（低于 hover 弹卡），**不遮卡文**（贴边 / 中缝 / 条形标记）。
+ * 瞬态层（g3ctrl-*）：控制权变更 / 判定 / 清缓存时刻，z=620（与编译横幅同级），播完自清理。
+ * ========================================================================== */
+
+/* ---------------------------------------------------------------- 通用小件 */
+
+.g3sync-badge {
+  position: fixed; padding: 1px 5px; border-radius: 4px;
+  font: 700 11px/1.5 ui-monospace, monospace; text-align: center; white-space: nowrap;
+  background: rgba(12, 14, 20, 0.82); border: 1px solid currentColor; color: #fff;
+  box-shadow: 0 0 8px rgba(0, 0, 0, 0.5);
+}
+.g3sync-badge.envy { color: #ffb347; border-color: rgba(255, 179, 71, 0.85); box-shadow: 0 0 10px rgba(255, 179, 71, 0.7); }
+.g3sync-badge.sloth { color: #ff5a5a; border-color: rgba(255, 90, 90, 0.8); box-shadow: 0 0 10px rgba(138, 90, 90, 0.75); }
+.g3sync-badge.lust { color: #ff6b6b; border-color: rgba(224, 52, 75, 0.85); box-shadow: 0 0 10px rgba(224, 52, 75, 0.7); }
+.g3sync-badge.greed { color: #7ef0e6; border-color: rgba(31, 143, 138, 0.9); box-shadow: 0 0 10px rgba(31, 143, 138, 0.75); }
+
+/* ---------------------------------------------------------------- 嫉妒0：汲取丝 + 吸收格 */
+
+.g3sync-envy0-glow {
+  position: fixed; border-radius: 8px; pointer-events: none;
+  border: 2px solid rgba(126, 242, 224, 0.75);
+  box-shadow: 0 0 14px rgba(47, 179, 168, 0.6), inset 0 0 12px rgba(126, 242, 224, 0.25);
+  animation: g3-envy0-breathe 2.2s ease-in-out infinite;
+}
+@keyframes g3-envy0-breathe { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
+.g3sync-envy0-thread {
+  position: fixed; height: 3px; margin-top: -1.5px; transform-origin: 0 50%; pointer-events: none;
+  background: linear-gradient(90deg, rgba(255, 179, 71, 0.15), rgba(255, 179, 71, 0.9) 55%, rgba(126, 242, 224, 0.85));
+  box-shadow: 0 0 8px rgba(255, 179, 71, 0.75);
+  animation: g3-envy0-flow 1.6s ease-in-out infinite;
+}
+@keyframes g3-envy0-flow { 0%, 100% { opacity: 0.55; filter: brightness(0.95); } 50% { opacity: 1; filter: brightness(1.25); } }
+.g3sync-envy0-mark {
+  position: fixed; border-radius: 8px; pointer-events: none;
+  border: 2px solid rgba(255, 179, 71, 0.85);
+  box-shadow: 0 0 12px rgba(255, 179, 71, 0.7);
+  animation: g3-envy0-mark 2.6s ease-in-out infinite;
+}
+@keyframes g3-envy0-mark { 0%, 100% { opacity: 0.5; } 50% { opacity: 0.95; } }
+.g3sync-envy0-ticks { position: fixed; display: flex; gap: 2px; align-items: center; justify-content: flex-end; pointer-events: none; }
+.g3sync-envy0-tick {
+  display: block; width: 3px; height: 10px; border-radius: 1px;
+  background: linear-gradient(180deg, #7ef2e0, rgba(47, 179, 168, 0.35));
+  box-shadow: 0 0 6px rgba(47, 179, 168, 0.8);
+  animation: g3-envy0-tick 2s ease-in-out infinite;
+}
+@keyframes g3-envy0-tick { 0%, 100% { transform: scaleY(0.8); opacity: 0.7; } 50% { transform: scaleY(1); opacity: 1; } }
+
+/* ---------------------------------------------------------------- 愤怒0：斜纹划除带 + 中缝虚线 */
+
+.g3sync-wrath0-band {
+  position: fixed; border-radius: 6px; pointer-events: none;
+  background: repeating-linear-gradient(45deg, rgba(192, 57, 43, 0.42) 0 7px, rgba(26, 15, 16, 0.34) 7px 14px);
+  border: 1px solid rgba(255, 120, 90, 0.6);
+  box-shadow: inset 0 0 10px rgba(26, 15, 16, 0.6);
+  animation: g3-wrath0-band 3.2s ease-in-out infinite;
+}
+@keyframes g3-wrath0-band { 0%, 100% { opacity: 0.55; } 50% { opacity: 0.85; } }
+.g3sync-wrath0-seam {
+  position: fixed; height: 0; pointer-events: none;
+  border-top: 2px dashed rgba(192, 57, 43, 0.85);
+  box-shadow: 0 0 8px rgba(192, 57, 43, 0.6);
+  animation: g3-wrath0-seam 2.4s ease-in-out infinite;
+}
+@keyframes g3-wrath0-seam { 0%, 100% { opacity: 0.45; } 50% { opacity: 0.9; } }
+
+/* ---------------------------------------------------------------- 怠惰0：加成光 + 涟漪 + 覆盖者连线 */
+
+.g3sync-sloth0-glow {
+  position: fixed; border-radius: 8px; pointer-events: none;
+  border: 2px solid rgba(190, 120, 120, 0.8);
+  box-shadow: 0 0 16px rgba(138, 90, 90, 0.6), inset 0 0 12px rgba(255, 90, 90, 0.18);
+  animation: g3-sloth0-glow 2.6s ease-in-out infinite;
+}
+@keyframes g3-slot0-glow { 0%, 100% { opacity: 0.65; } 50% { opacity: 1; } }
+@keyframes g3-sloth0-glow { 0%, 100% { opacity: 0.65; border-color: rgba(190, 120, 120, 0.7); } 50% { opacity: 1; border-color: rgba(255, 150, 150, 0.9); } }
+.g3sync-sloth0-ripple {
+  position: fixed; border-radius: 50%; pointer-events: none;
+  border: 2px solid rgba(138, 90, 90, 0.6);
+  animation: g3-sloth0-ripple 3.2s ease-out infinite;
+}
+@keyframes g3-sloth0-ripple {
+  0% { transform: scale(0.62); opacity: 0; }
+  22% { opacity: 0.85; }
+  100% { transform: scale(1.35); opacity: 0; }
+}
+.g3sync-sloth0-link {
+  position: fixed; width: 2px; transform-origin: 50% 0; pointer-events: none;
+  background: linear-gradient(180deg, rgba(255, 90, 90, 0.85), rgba(138, 90, 90, 0.25));
+  box-shadow: 0 0 8px rgba(255, 90, 90, 0.55);
+  animation: g3-sloth0-link 2.4s ease-in-out infinite;
+}
+@keyframes g3-sloth0-link { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
+
+/* ---------------------------------------------------------------- 惰性0 / 惰性1：断电栅格 / 下缘条纹 */
+
+.g3sync-inertia0-grid {
+  position: fixed; border-radius: 6px; pointer-events: none;
+  background:
+    linear-gradient(45deg, transparent 46%, rgba(216, 201, 168, 0.55) 49%, transparent 52%),
+    linear-gradient(-45deg, transparent 46%, rgba(216, 201, 168, 0.55) 49%, transparent 52%);
+  border: 1px solid rgba(74, 74, 79, 0.6);
+  animation: g3-inertia0-grid 2.8s ease-in-out infinite;
+}
+@keyframes g3-inertia0-grid { 0%, 100% { opacity: 0.5; } 50% { opacity: 0.8; } }
+.g3sync-inertia0-field {
+  position: fixed; border-radius: 10px; pointer-events: none;
+  border: 2px solid rgba(216, 201, 168, 0.55);
+  box-shadow: 0 0 18px rgba(74, 74, 79, 0.6), inset 0 0 16px rgba(216, 201, 168, 0.16);
+  animation: g3-inertia0-field 2.8s ease-in-out infinite;
+}
+@keyframes g3-inertia0-field { 0%, 100% { opacity: 0.55; } 50% { opacity: 0.9; } }
+.g3sync-inertia1-stripe {
+  position: fixed; border-radius: 0 0 6px 6px; pointer-events: none;
+  background: linear-gradient(0deg, rgba(74, 74, 79, 0.75) 0%, rgba(216, 201, 168, 0.28) 42%, transparent 78%);
+  animation: g3-inertia1-stripe 3.4s ease-in-out infinite;
+}
+@keyframes g3-inertia1-stripe { 0%, 100% { opacity: 0.5; } 50% { opacity: 0.8; } }
+.g3sync-inertia1-edge {
+  position: fixed; border-radius: 8px; pointer-events: none;
+  border-bottom: 3px solid rgba(216, 201, 168, 0.75);
+  box-shadow: 0 6px 14px rgba(74, 74, 79, 0.6);
+}
+
+/* ---------------------------------------------------------------- 刚性7：迷宫纹 + 锚钉 + 免疫闪亮 */
+
+.g3sync-rig7-maze {
+  position: fixed; border-radius: 10px; pointer-events: none;
+  background:
+    repeating-linear-gradient(90deg, rgba(234, 255, 58, 0.55) 0 6px, transparent 6px 18px),
+    repeating-linear-gradient(0deg, rgba(234, 255, 58, 0.4) 0 6px, transparent 6px 22px);
+  border: 2px solid rgba(143, 111, 208, 0.7);
+  box-shadow: 0 0 16px rgba(143, 111, 208, 0.55), inset 0 0 14px rgba(234, 255, 58, 0.18);
+  animation: g3-rig7-maze 6s linear infinite;
+}
+@keyframes g3-rig7-maze { 0% { background-position: 0 0, 0 0; } 100% { background-position: 36px 0, 0 44px; } }
+.g3sync-rig7-shield {
+  position: fixed; pointer-events: none;
+  background: radial-gradient(ellipse at 50% 55%, rgba(143, 111, 208, 0.28) 0%, rgba(36, 26, 56, 0) 62%);
+  animation: g3-rig7-shield 2.4s ease-in-out infinite;
+}
+@keyframes g3-rig7-shield { 0%, 100% { opacity: 0.5; } 50% { opacity: 0.9; } }
+.g3sync-rig7-anchor {
+  position: fixed; width: 9px; height: 9px; border-radius: 2px; pointer-events: none;
+  background: linear-gradient(140deg, #f4ffe0, #8f6fd0 62%, #241a38);
+  box-shadow: 0 0 8px rgba(234, 255, 58, 0.75), inset 0 -1px 2px rgba(36, 26, 56, 0.85);
+}
+.g3sync-rig7.immune .g3sync-rig7-maze { animation: none; filter: brightness(1.9) drop-shadow(0 0 10px rgba(234, 255, 58, 0.95)); }
+.g3sync-rig7.immune .g3sync-rig7-anchor { animation: g3-rig7-shake 0.4s ease-in-out 2; }
+@keyframes g3-rig7-shake { 0%, 100% { transform: translate(0, 0); } 30% { transform: translate(-1px, 1px); } 70% { transform: translate(1px, -1px); } }
+
+/* ---------------------------------------------------------------- 色欲：持有常驻 + 禁编译封条 */
+
+.g3sync-lusthold-ring {
+  position: fixed; border-radius: 50%; pointer-events: none;
+  border: 2px solid rgba(224, 52, 75, 0.8);
+  box-shadow: 0 0 18px rgba(224, 52, 75, 0.65), inset 0 0 14px rgba(58, 16, 48, 0.6);
+  animation: g3-lusthold-ring 2.4s ease-in-out infinite;
+}
+@keyframes g3-lusthold-ring { 0%, 100% { opacity: 0.6; transform: scale(0.97); } 50% { opacity: 1; transform: scale(1.03); } }
+.g3sync-lusthold-chain {
+  position: fixed; border-radius: 10px; pointer-events: none;
+  border: 2px dashed rgba(255, 107, 107, 0.75);
+  animation: g3-lusthold-chain 5s linear infinite;
+}
+@keyframes g3-lusthold-chain { to { background-position: 24px 0; } }
+.g3sync-lustblock-seal {
+  position: fixed; border-radius: 6px; pointer-events: none;
+  background: repeating-linear-gradient(-32deg, rgba(58, 16, 48, 0.62) 0 12px, rgba(224, 52, 75, 0.32) 12px 22px);
+  border: 2px solid rgba(224, 52, 75, 0.6);
+  box-shadow: inset 0 0 12px rgba(58, 16, 48, 0.7);
+  animation: g3-lustblock 2.4s ease-in-out infinite;
+}
+.g3sync-lustblock-seal::after {
+  content: '禁编译'; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  font: 700 12px/1.4 ui-monospace, monospace; color: #ffd0d8;
+  text-shadow: 0 0 8px rgba(224, 52, 75, 0.95);
+}
+@keyframes g3-lustblock { 0%, 100% { opacity: 0.72; } 50% { opacity: 1; } }
+
+/* ---------------------------------------------------------------- 贪婪1：硬币堆等级 */
+
+.g3sync-greed1-stack { position: fixed; display: flex; flex-direction: column-reverse; gap: 1px; pointer-events: none; }
+.g3sync-greed1-coin {
+  display: block; width: 14px; height: 5px; border-radius: 50%;
+  background:
+    radial-gradient(circle at 34% 30%, rgba(255, 255, 255, 0.85) 0%, rgba(255, 255, 255, 0) 44%),
+    linear-gradient(180deg, #ff9df0 0%, #d94fd9 48%, #7a1f7a 100%);
+  box-shadow: inset 0 -1px 2px rgba(58, 16, 48, 0.8), 0 0 6px rgba(217, 79, 217, 0.55);
+  animation: g3-greed1-coin 3.4s ease-in-out infinite;
+}
+@keyframes g3-greed1-coin { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-1px); } }
+
+/* ---------------------------------------------------------------- 瞬态：控制权族 C1/C2/C5 */
+
+.g3ctrl-ghost {
+  position: fixed; width: 48px; height: 64px; pointer-events: none;
+  transition: transform 0.66s cubic-bezier(0.25, 0.9, 0.3, 1), opacity 0.4s ease-in 0.3s;
+  filter: drop-shadow(0 0 12px rgba(224, 52, 75, 0.75));
+}
+.g3ctrl-ghost.drift { opacity: 0.75; }
+.g3ctrl-ghost-face {
+  position: absolute; inset: 0; border-radius: 5px;
+  background: linear-gradient(150deg, #ff8b9c 0%, #b3122b 55%, #3a1030 100%);
+  border: 2px solid rgba(255, 208, 216, 0.9);
+  box-shadow: inset 0 0 14px rgba(58, 16, 48, 0.8);
+}
+.g3ctrl-link {
+  position: fixed; width: 16px; height: 9px; margin: -4.5px 0 0 -8px; border-radius: 4px; pointer-events: none;
+  background: linear-gradient(180deg, #ff8b9c, #e0344b 55%, #6b1024);
+  box-shadow: inset 0 0 4px rgba(58, 16, 48, 0.85), 0 0 10px rgba(224, 52, 75, 0.8);
+  animation: g3-ctrl-link-fly 0.7s cubic-bezier(0.2, 0.9, 0.3, 1) forwards;
+}
+@keyframes g3-ctrl-link-fly {
+  0% { transform: translate(0, 0) scale(0.4) rotate(0deg); opacity: 0; }
+  18% { opacity: 1; }
+  100% { transform: translate(var(--tx, 0px), 0) scale(1) rotate(220deg); opacity: 0; }
+}
+.g3ctrl-link.break {
+  animation: g3-ctrl-link-break 0.5s cubic-bezier(0.4, 0, 0.8, 0.2) forwards;
+}
+@keyframes g3-ctrl-link-break {
+  0% { transform: scale(1); opacity: 1; }
+  40% { transform: scale(1.3) rotate(-14deg); opacity: 1; }
+  100% { transform: translate(var(--tx, 0px), 16px) scale(0.7) rotate(38deg); opacity: 0; }
+}
+.g3ctrl-pulse {
+  position: fixed; width: 62px; height: 62px; margin: -31px 0 0 -31px; border-radius: 50%; pointer-events: none; opacity: 0;
+  border: 3px solid rgba(224, 52, 75, 0.85);
+  box-shadow: 0 0 22px rgba(224, 52, 75, 0.8), inset 0 0 18px rgba(58, 16, 48, 0.7);
+  animation: g3-ctrl-pulse 0.7s cubic-bezier(0.2, 0.9, 0.3, 1) forwards;
+}
+@keyframes g3-ctrl-pulse { 0% { transform: scale(0.4); opacity: 0.95; } 60% { opacity: 0.5; } 100% { transform: scale(1.4); opacity: 0; } }
+.g3ctrl-afterglow {
+  position: fixed; width: 80px; height: 120px; border-radius: 12px; pointer-events: none;
+  background: radial-gradient(ellipse at 50% 50%, rgba(58, 16, 48, 0.75) 0%, rgba(224, 52, 75, 0.18) 46%, rgba(58, 16, 48, 0) 74%);
+  animation: g3-ctrl-after 1.4s ease-out forwards;
+}
+@keyframes g3-ctrl-after { 0% { opacity: 0; } 22% { opacity: 1; } 100% { opacity: 0; } }
+.g3ctrl-emblem {
+  position: fixed; border-radius: 8px; pointer-events: none; opacity: 0;
+  border: 2px solid rgba(224, 52, 75, 0.9);
+  box-shadow: 0 0 16px rgba(224, 52, 75, 0.75), inset 0 0 14px rgba(58, 16, 48, 0.6);
+  animation: g3-ctrl-emblem 0.8s ease-out forwards;
+}
+@keyframes g3-ctrl-emblem { 0% { opacity: 0; } 24% { opacity: 1; } 100% { opacity: 0; } }
+.g3ctrl-wave {
+  position: fixed; width: 30px; height: 30px; margin: -15px 0 0 -15px; border-radius: 50%; pointer-events: none; opacity: 0;
+  border: 2px solid rgba(224, 52, 75, 0.8);
+  animation: g3-ctrl-wave 0.66s cubic-bezier(0.25, 0.9, 0.35, 1) forwards;
+}
+@keyframes g3-ctrl-wave {
+  0% { transform: translate(0, 0) scale(0.4); opacity: 0.95; }
+  100% { transform: translate(var(--dx, 0px), var(--dy, 0px)) scale(2.2); opacity: 0; }
+}
+
+/* ---------------------------------------------------------------- 瞬态：C4 判定对比条 */
+
+.g3ctrl-bar {
+  position: fixed; height: 14px; border-radius: 7px; overflow: hidden; pointer-events: none;
+  background: rgba(12, 14, 20, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  animation: g3-ctrl-bar-in 0.34s ease-out;
+}
+@keyframes g3-ctrl-bar-in { from { opacity: 0; transform: scaleX(0.9); } to { opacity: 1; transform: scaleX(1); } }
+.g3ctrl-bar-own { position: absolute; left: 0; top: 0; bottom: 0; background: linear-gradient(90deg, rgba(61, 139, 255, 0.9), rgba(150, 200, 255, 0.75)); }
+.g3ctrl-bar-opp { position: absolute; right: 0; top: 0; bottom: 0; background: linear-gradient(270deg, rgba(224, 52, 75, 0.9), rgba(255, 150, 150, 0.7)); }
+.g3ctrl-bar-scan {
+  position: absolute; top: 0; bottom: 0; width: 3px; left: 50%;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0), #fff, rgba(255, 255, 255, 0));
+  box-shadow: 0 0 12px rgba(255, 255, 255, 0.9);
+  animation: g3-ctrl-scan 0.62s cubic-bezier(0.3, 0.9, 0.35, 1) forwards;
+}
+@keyframes g3-ctrl-scan { 0% { left: 50%; opacity: 0; } 12% { opacity: 1; } 50% { left: 0; } 100% { left: 100%; opacity: 0.2; } }
+.g3ctrl-bar.lead { box-shadow: 0 0 14px rgba(255, 233, 168, 0.75); border-color: rgba(255, 233, 168, 0.85); }
+.g3ctrl-bar.failed { animation: g3-ctrl-bar-in 0.34s ease-out, g3-ctrl-bar-fail 0.5s ease-in-out 0.66s; }
+@keyframes g3-ctrl-bar-fail {
+  0%, 100% { filter: brightness(1); transform: translateX(0); }
+  30% { filter: brightness(0.55); transform: translateX(-2px); }
+  60% { filter: brightness(0.55); transform: translateX(2px); }
+}
+
+/* ---------------------------------------------------------------- 瞬态：清缓存齿颚（暴食0 顶） */
+
+.g3clear-jaws { position: fixed; pointer-events: none; }
+.g3clear-jaw { position: absolute; left: 0; width: 100%; height: 20%; }
+.g3clear-jaw.top { top: 0; animation: g3-clear-bite-top 0.34s cubic-bezier(0.5, 0, 0.75, 0) forwards; }
+.g3clear-jaw.bottom { bottom: 0; animation: g3-clear-bite-bottom 0.34s cubic-bezier(0.5, 0, 0.75, 0) forwards; }
+@keyframes g3-clear-bite-top { 0% { transform: translateY(-10%); } 55% { transform: translateY(52%); } 100% { transform: translateY(0); } }
+@keyframes g3-clear-bite-bottom { 0% { transform: translateY(10%); } 55% { transform: translateY(-52%); } 100% { transform: translateY(0); } }
+.g3clear-tooth {
+  position: absolute; bottom: 0; height: 100%;
+  background: linear-gradient(180deg, #f0d678 0%, #c9a227 46%, #6b5210 100%);
+  box-shadow: inset 0 -3px 5px rgba(43, 43, 51, 0.75), 0 0 6px rgba(201, 162, 39, 0.55);
+}
+.g3clear-jaw.top .g3clear-tooth { clip-path: polygon(0% 0%, 100% 0%, 50% 100%); }
+.g3clear-jaw.bottom .g3clear-tooth { clip-path: polygon(0% 100%, 100% 100%, 50% 0%); }
+.g3clear-flash {
+  position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(ellipse at 50% 50%, rgba(255, 248, 220, 0.55) 0%, rgba(255, 248, 220, 0) 64%);
+  animation: g3-clear-flash 0.42s ease-out 0.2s backwards;
+}
+@keyframes g3-clear-flash { 0% { opacity: 0; } 26% { opacity: 1; } 100% { opacity: 0; } }
+
+/* 瞬态控制权层容器（位置/尺寸由 JS 内联；这里只声明层语义） */
+.g3ctrl-layer, .g3ctrl-check-layer, .g3clear-cache-layer {
+  position: fixed; left: 0; top: 0; width: 100vw; height: 100vh; pointer-events: none;
+}
+
+/* 常驻 sync 层容器（位置/尺寸由 JS 内联；层本身跨重渲染存活） */
+.g3sync-envy0, .g3sync-wrath0, .g3sync-sloth0, .g3sync-inertia0, .g3sync-inertia1,
+.g3sync-rig7, .g3sync-lusthold, .g3sync-lustblock, .g3sync-greed1 {
+  position: fixed; left: 0; top: 0; width: 100vw; height: 100vh; pointer-events: none;
+}

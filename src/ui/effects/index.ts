@@ -1,6 +1,7 @@
 import { gameBus, type GameEvent } from '../../core/events/bus';
 import { mountShatter } from '../fx/delete-shatter';
 import { mountCut } from '../fx/discard-cut';
+import { flashRigidity7Guard, noteGreed1Compile } from '../gen3-control';
 import { gen3DiscardFx, gen3DeleteFx, gen3FlipFx, gen3ShiftFx, gen3DrawFx, gen3FaceDownFx, gen3CompiledFx, gen3DeckDiscardFx, type Gen3CardFxApi, type Gen3CardPayload, type Gen3DrawPayload, type Gen3CompiledPayload, type Gen3DeckDiscardPayload } from '../fx-gen3';
 import { buildTornadoFx } from '../fx-tornado';
 import { cardImgSrc, protocolImgSrc } from '../../data/demo';
@@ -2027,6 +2028,10 @@ export function initEffects(): () => void {
           playHandPlay(payload);
         } else playHandPlay(payload);
         break;
+      case 'card:immune':
+        // 3代（批次 D）刚性7 底「此牌不能被翻转或偏转」挡下时：护壁闪亮 + 锚钉震动
+        flashRigidity7Guard((e.payload as { uid?: string } | undefined)?.uid ?? '');
+        break;
       case 'deck:discarded':
         // 3代 惰性4 中「弃置整个牌库」（双方各弃其牌库）：整摞沙化 → 灰砂流飞向弃牌堆
         gen3DeckDiscardFx(e.payload as unknown as Gen3DeckDiscardPayload, GEN3_CARD_FX_API);
@@ -2080,6 +2085,7 @@ export function initCompileFx(): () => void {
     playCompile(p);
     // 3代"编译后"附加层（贪婪1 底契约印 / 动量编译后蓄力）：与编译横幅同时刻并列播放
     gen3CompiledFx(p as unknown as Gen3CompiledPayload, e.state, GEN3_CARD_FX_API);
+    if (p.sourceDefId === 'greed-1') noteGreed1Compile(p.sourceUid); // 批次 D：硬币堆等级 +1（常驻）
   });
 }
 

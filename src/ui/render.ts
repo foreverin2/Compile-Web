@@ -18,6 +18,7 @@ import { cardCommandDisabled } from '../core/effects/context';
 import { downloadLog } from './diag';
 import { buildTornadoFx } from './fx-tornado';
 import { appendGen3CompiledFx, type Gen3FxApi } from './compiled-gen3';
+import { clearGen3Persistent, syncGen3Persistent } from './gen3-control';
 import { buildDove, buildLakeSword, spawnCourageSparks, startLuckDiceFx, startClarityDeckEye } from './fx-gen2';
 import { fitRotatedProtocol } from './zoom-layout';
 
@@ -4960,6 +4961,9 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   syncDiversityColors(s);
   // 2代 diversity-3 多元顶常驻：链路内非多元正面卡协议色微光 + 该线能量槽彩色流光
   syncDiversity3Fx(s);
+  // 3代（批次 D）常驻层：嫉妒0 汲取丝 / 愤怒0 剔除带 / 怠惰0 加成 / 惰性0·1 断电栅格 /
+  // 刚性7 护壁 / 色欲持有·禁编译封条 / 贪婪1 硬币堆等级（各 sync 返回自己的 active 键，统一 prune）
+  syncGen3Persistent(s);
 }
 
 let selectedUid: string | null = null;
@@ -4995,6 +4999,7 @@ export function resetUiState(): void {
   draftEnabledGroups = new Set(DRAFT_GROUP_LABELS.map(([g]) => g));
   // 草稿展示框容器（body 级 fixed 大面板）随局移除 + 固定状态复位
   removeDraftPreviews();
+  clearGen3Persistent(); // 3代（批次 D）常驻层（控制权族/顶部持续/硬币堆等级）随局清理
   for (const [defId, fx] of compiledFx) {
     clearCompiledFxTimers(defId);
     fx.remove();

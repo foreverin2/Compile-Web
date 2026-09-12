@@ -429,6 +429,10 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
         (card.defId === 'ice-4' && card.faceUp && !cardCommandDisabled(s, card, 'bottom'))
       ) {
         pushLog(s, `${card.defId} 不可被翻转，跳过`);
+        // 3代 特效（批次 D）：免疫反馈事件——UI 据此让"刚性7 挡下翻转"可见
+        if (rigidity7Immune(s, card)) {
+          gameBus.emit({ type: 'card:immune', state: s, payload: { uid: card.uid, defId: card.defId, kind: 'flip' } });
+        }
         break;
       }
       // before-flip 前置触发（metal-6 顶「被盖住或翻转前：先删除这张牌」）：
@@ -527,6 +531,8 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       // 3代 rigidity-7 底「此牌不能被翻转或偏转」（C11）：未被覆盖（faceUp 顶卡）时免疫 → 跳过
       if (rigidity7Immune(s, card)) {
         pushLog(s, 'rigidity-7 不可被偏转，跳过');
+        // 3代 特效（批次 D）：免疫反馈事件（同 flip 分支）
+        gameBus.emit({ type: 'card:immune', state: s, payload: { uid: card.uid, defId: card.defId, kind: 'shift' } });
         break;
       }
       const owner = card.owner;

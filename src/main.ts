@@ -1,6 +1,7 @@
 import './ui/styles.css';
 import './ui/styles-gen3.css'; // 3代（MN03/AX03）协议特效样式（批次 A：15 套已编译常驻特效）
-import './ui/styles-gen3-cards.css'; // 3代卡牌效果附加层样式（批次 B：弃牌/删除/翻转/偏转）
+import './ui/styles-gen3-cards.css'; // 3代卡牌效果附加层样式（批次 B/C：四类动作 + 抽牌/反打/编译后）
+import './ui/styles-gen3-sync.css'; // 3代常驻层与控制权族样式（批次 D）
 import { createGame, performDraftPick, performDraftUnpick, performDraftBan } from './core/state/create';
 import { executeAction } from './core/game';
 import { getCompilableLines } from './core/rules/compile';
@@ -11,6 +12,7 @@ import { renderHome, renderCoin, renderLibrary, renderRules, renderModeSelect } 
 import { resetControlIfHeld } from './core/rules/control';
 import { DEMO_PROTOCOLS } from './data/demo';
 import { initEffects, initCompileFx, initRearrangeFx, initShuffleFx, playRevealFly, buildLoveHeart, playSpeedDrawExtra, SPEED_TOTAL_MS } from './ui/effects';
+import { gen3ClearCacheFx, gen3ControlChangedFx, gen3ControlCheckFx, syncGen3Persistent } from './ui/gen3-control';
 import { initGen2Fx, clearGen2Fx } from './ui/fx-gen2';
 import { initDiag } from './ui/diag';
 import { initDevMode } from './ui/devmode';
@@ -571,6 +573,20 @@ gameBus.subscribe((e) => {
     pendingReveals.push({ owner: p.owner, shownTo: p.shownTo, defId: p.defId, triggerProtocol: p.triggerProtocol ?? 'system' });
   }
 });
+// 3代（批次 D）控制权族：控制权变更（获得=牵引链拉来 / 失去=链断）/ 判定阶段（三线对比条扫描）/
+// 清缓存时刻（暴食0 齿颚咬合）——三条都只加"附加层"，引擎判定与基础 UI 不变
+gameBus.subscribe((e) => {
+  if (e.type === 'control:changed') {
+    gen3ControlChangedFx(e.payload as { from: number; to: number; reason?: string }, e.state);
+  } else if (e.type === 'rule:control-check') {
+    gen3ControlCheckFx(
+      e.payload as { player: 0 | 1; wins: number; leading: (0 | 1 | 2)[]; gained: boolean },
+      e.state,
+    );
+  } else if (e.type === 'rule:clear-cache') {
+    gen3ClearCacheFx(e.payload as { player: 0 | 1; count: number }, e.state);
+  }
+});
 // 2026-09-03：应用入口 = 主页面（开始游戏 → 掷硬币 → 草稿 → 对局）
 showHome();
 // 常驻特效层随滚动/缩放重新对齐：已编译环（compiledFx）、暗2 黑烟（smokeOverlays）、
@@ -609,6 +625,7 @@ const syncPersistentFx = (): void => {
     syncSmoke2LineGlows(state);
     syncFear0TriGlows(state);
     syncWarBlades(state);
+    syncGen3Persistent(state); // 3代（批次 D）常驻层随滚动/缩放重定位
     syncChainLayerPosition();
   });
 };
