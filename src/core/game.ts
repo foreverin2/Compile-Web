@@ -152,7 +152,7 @@ export function executeAction(s: GameState, player: PlayerId, kind: ActionKind, 
       // 需收窄（'line' in args 排除 effect-choice / resolve-trigger 的 args 形状）
       if (!args || !('line' in args)) throw new Error('compile requires args.line');
       resetControlIfHeld(s, player);
-      executeCompile(s, player, args.line); // 内部可能因 speed-2「编译前平移」触发挂起选线
+      executeCompile(s, player, args.line); // 内部可能因 speed-2「编译前偏转」触发挂起选线
       // 编译本体触发的即时连锁（war-2 after-compile / 3代 after-self-compile/after-any-compile 等）
       // 与 refresh/play 分支同款：栈非空时先 runStack 结算（可能挂起选择）再推进
       if (s.pendingEffects.length > 0) { s.pendingStepAdvance = true; runStack(s); }

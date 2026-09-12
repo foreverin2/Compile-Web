@@ -4,59 +4,58 @@ import { fileURLToPath } from 'node:url';
 import { ALL_CARD_DEFS } from '../../src/data/cards';
 import { ALL_CARD_DEFS_2 } from '../../src/data/cards2';
 import { ALL_CARD_DEFS_3 } from '../../src/data/cards3';
+import { DEMO_PROTOCOLS } from '../../src/data/demo';
 import { shiftTerm, actionCn } from '../../src/core/log';
 
 /**
- * 文本用词约定（2026-09-13 用户同步文本后固化）：
- *  - 位移（shift）指令在【卡文】里的用词随世代：1代（MN01/AX01）「平移」；2代/3代「偏转」；
- *  - 引擎 UI/日志（动作按钮、操作日志）必须与**动作来源卡的世代**用词一致（shiftTerm）。
+ * 文本用词约定（2026-09-13 用户拍板：位移指令**全世代统一「偏转」**）：
+ *  - 卡文（1/2/3 代）一律写「偏转」，不得再出现「平移」；
+ *  - 引擎 UI/日志（动作按钮、操作日志、提示标题）同样统一「偏转」（唯一出处 core/log.ts shiftTerm）。
  * 这些断言防止以后再出现「卡文写偏转、提示框写平移」这类不一致。
  */
 
 const cardsText = (defs: { defId: string; top?: string; middle?: string; bottom?: string }[]) =>
   defs.map((d) => `${d.defId}: ${d.top ?? ''}${d.middle ?? ''}${d.bottom ?? ''}`);
 
-describe('文本用词约定：位移指令随世代（1代「平移」/ 2·3代「偏转」）', () => {
-  it('1代卡文只用「平移」，不用「偏转」', () => {
-    const hits = cardsText(ALL_CARD_DEFS).filter((t) => t.includes('平移') || t.includes('偏转'));
-    expect(hits.length).toBeGreaterThan(0);
-    for (const t of hits) {
-      expect(t, `1代卡文应写「平移」`).not.toContain('偏转');
+describe('文本用词约定：位移指令全世代「偏转」', () => {
+  it('1代卡文不再出现「平移」，且确有「偏转」用法', () => {
+    const text = cardsText(ALL_CARD_DEFS);
+    expect(text.filter((t) => t.includes('偏转')).length).toBeGreaterThan(0);
+    for (const t of text) expect(t, `1代卡文应写「偏转」`).not.toContain('平移');
+  });
+
+  it('2代卡文不再出现「平移」，且确有「偏转」用法', () => {
+    const text = cardsText(ALL_CARD_DEFS_2);
+    expect(text.filter((t) => t.includes('偏转')).length).toBeGreaterThan(0);
+    for (const t of text) expect(t, `2代卡文应写「偏转」`).not.toContain('平移');
+  });
+
+  it('3代卡文不再出现「平移」，且确有「偏转」用法', () => {
+    const text = cardsText(ALL_CARD_DEFS_3);
+    expect(text.filter((t) => t.includes('偏转')).length).toBeGreaterThan(0);
+    for (const t of text) expect(t, `3代卡文应写「偏转」`).not.toContain('平移');
+  });
+
+  it('协议关键词（图鉴关键词行）也不含「平移」', () => {
+    for (const p of DEMO_PROTOCOLS) {
+      expect(p.commands.join('，'), `${p.defId} 关键词应写「偏转」`).not.toContain('平移');
     }
   });
 
-  it('2代卡文只用「偏转」，不用「平移」', () => {
-    const hits = cardsText(ALL_CARD_DEFS_2).filter((t) => t.includes('平移') || t.includes('偏转'));
-    expect(hits.length).toBeGreaterThan(0);
-    for (const t of hits) {
-      expect(t, `2代卡文应写「偏转」`).not.toContain('平移');
-    }
-  });
-
-  it('3代卡文只用「偏转」，不用「平移」', () => {
-    const hits = cardsText(ALL_CARD_DEFS_3).filter((t) => t.includes('平移') || t.includes('偏转'));
-    expect(hits.length).toBeGreaterThan(0);
-    for (const t of hits) {
-      expect(t, `3代卡文应写「偏转」`).not.toContain('平移');
-    }
-  });
-
-  it('shiftTerm 按世代给出用词（1代=平移；2/3代=偏转；未知兜底偏转）', () => {
-    expect(shiftTerm('light-2')).toBe('平移');
-    expect(shiftTerm('speed-2')).toBe('平移');
-    expect(shiftTerm('apathy-4')).toBe('平移'); // AX01 拓展属 1代
+  it('shiftTerm 全世代返回「偏转」（含未知协议兜底）', () => {
+    expect(shiftTerm('light-2')).toBe('偏转');
+    expect(shiftTerm('speed-2')).toBe('偏转');
+    expect(shiftTerm('apathy-4')).toBe('偏转');
     expect(shiftTerm('ice-1')).toBe('偏转');
-    expect(shiftTerm('time-2')).toBe('偏转');
     expect(shiftTerm('pride-4')).toBe('偏转');
     expect(shiftTerm('flexibility-3')).toBe('偏转');
     expect(shiftTerm('unknown-0')).toBe('偏转');
   });
 
-  it('actionCn：shift 动作按钮文字随来源卡世代；其它动作不受影响', () => {
-    expect(actionCn('action:shift', 'light-2')).toBe('平移');
+  it('actionCn：shift 动作按钮文字一律「偏转」；其它动作不受影响', () => {
+    expect(actionCn('action:shift', 'light-2')).toBe('偏转');
     expect(actionCn('action:shift', 'pride-0')).toBe('偏转');
-    expect(actionCn('action:shift', 'flexibility-1')).toBe('偏转');
-    expect(actionCn('action:shift')).toBe('偏转'); // 无上下文兜底
+    expect(actionCn('action:shift')).toBe('偏转');
     expect(actionCn('action:flip', 'light-2')).toBe('翻转');
     expect(actionCn('action:face-down', 'pride-2')).toBe('反面打出');
   });

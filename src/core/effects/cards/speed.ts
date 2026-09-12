@@ -53,7 +53,7 @@ function* speed1Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> 
   yield { op: 'draw', count: 2 };
 }
 
-/** speed-2 顶指令：通过编译删除此牌前：平移此牌，不论是否被盖住。
+/** speed-2 顶指令：通过编译删除此牌前：偏转此牌，不论是否被盖住。
  *  由 A1 的 executeCompileUnchecked 收集驱动（该线双方正面 speed-2 → 设 pendingCompile →
  *  resolveTrigger 已传 topCommand → runStack 挂起选线 → 应答 → shift allowCovered 落地 →
  *  runStack 消费 pendingCompile 执行编译本体）。持有者决定选线（resolveTrigger player=card.owner）。
@@ -61,7 +61,7 @@ function* speed1Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> 
 function* speed2BeforeCompile(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const line = yield {
     kind: 'select-line',
-    title: 'speed-2（编译前）：平移此牌到另一列',
+    title: 'speed-2（编译前）：偏转此牌到另一列',
     min: 1,
     max: 1,
     optional: false,
@@ -72,11 +72,11 @@ function* speed2BeforeCompile(ctx: EffectCtx): Generator<EffectStep, void, StepR
   yield { op: 'shift', uid: ctx.card.uid, targetLine: Number(line.selected[0].replace('line:', '')) as Line, allowCovered: true };
 }
 
-/** speed-3 中指令：平移另1张你的牌。—— 选自己 field 顶卡 1 张（排除自己——「另1张」；
+/** speed-3 中指令：偏转另1张你的牌。—— 选自己 field 顶卡 1 张（排除自己——「另1张」；
  *  listCandidates 已排除结算中源卡，显式过滤兜底）→ select-line（排除被移卡当前线）→ shift。 */
 function* speed3Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const targets = ctx.candidates({ zone: 'field', owner: ctx.player }).filter((c) => c.uid !== ctx.card.uid);
-  const ans = yield { kind: 'select', title: 'speed-3：平移另1张你的牌', min: 1, max: 1, optional: false, candidates: targets };
+  const ans = yield { kind: 'select', title: 'speed-3：偏转另1张你的牌', min: 1, max: 1, optional: false, candidates: targets };
   if (ans.selected.length === 0) return; // fizzle：无其他自己的顶卡
   const uid = ans.selected[0];
   const target = findCard(ctx.s, uid);
@@ -93,10 +93,10 @@ function* speed3Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> 
   yield { op: 'shift', uid, targetLine: Number(line.selected[0].replace('line:', '')) as Line };
 }
 
-/** speed-3 底指令：结束：你可以平移1张你的牌。若如此，翻转此牌。
+/** speed-3 底指令：结束：你可以偏转1张你的牌。若如此，翻转此牌。
  *  bottom 触发（不注册 top 标志）：仅未覆盖顶卡生效（collectTriggers 被盖跳过）。
- *  「1张你的牌」任意——含自己（源卡被候选机制排除，手动加回）。若平移：翻自己；平移后
- *  复查自己仍未被覆盖（把另一张牌平移到自己所在列会盖住自己 → 被盖卡不可翻转，物理规则 → 翻转跳过）。 */
+ *  「1张你的牌」任意——含自己（源卡被候选机制排除，手动加回）。若偏转：翻自己；偏转后
+ *  复查自己仍未被覆盖（把另一张牌偏转到自己所在列会盖住自己 → 被盖卡不可翻转，物理规则 → 翻转跳过）。 */
 function* speed3End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const targets = ctx.candidates({ zone: 'field', owner: ctx.player });
   const self = findCard(ctx.s, ctx.card.uid);
@@ -114,7 +114,7 @@ function* speed3End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   }
   const ans = yield {
     kind: 'select',
-    title: 'speed-3（结束）：你可以平移1张你的牌',
+    title: 'speed-3（结束）：你可以偏转1张你的牌',
     min: 1,
     max: 1,
     optional: true,
@@ -140,12 +140,12 @@ function* speed3End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   }
 }
 
-/** speed-4 中指令：平移1张对手的反面牌。—— 选对手 field 顶卡中 !faceUp 的 1 张（空 → fizzle）→
+/** speed-4 中指令：偏转1张对手的反面牌。—— 选对手 field 顶卡中 !faceUp 的 1 张（空 → fizzle）→
  *  select-line（排除被移卡当前线）→ shift。 */
 function* speed4(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const opp: PlayerId = ctx.player === 0 ? 1 : 0;
   const targets = ctx.candidates({ zone: 'field', owner: opp }).filter((c) => !c.faceUp);
-  const ans = yield { kind: 'select', title: 'speed-4：平移1张对手的反面牌', min: 1, max: 1, optional: false, candidates: targets };
+  const ans = yield { kind: 'select', title: 'speed-4：偏转1张对手的反面牌', min: 1, max: 1, optional: false, candidates: targets };
   if (ans.selected.length === 0) return; // fizzle：对手无反面顶卡
   const uid = ans.selected[0];
   const target = findCard(ctx.s, uid);
@@ -185,7 +185,7 @@ registerCardEffects('speed-3', {
       fn: speed3End,
       optional: false, // 底命令：仅未覆盖顶卡生效（无 top 标志）
       // 不加 cond：恒有动作——「1张你的牌」含自己（源卡被候选排除后手动加回，txt 无「其它」），
-      // 收集时点（己方场未覆盖正面卡）候选必非空，可选平移恒有对象
+      // 收集时点（己方场未覆盖正面卡）候选必非空，可选偏转恒有对象
     },
   },
 });

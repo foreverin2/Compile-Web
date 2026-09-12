@@ -1,5 +1,4 @@
 import type { GameState } from './models/types';
-import { getProtocolDef } from '../data/demo';
 
 /**
  * 结构化事件日志（2026-09 日志树改造）：
@@ -85,19 +84,11 @@ export function stageLabel(kind: string): string {
   }
 }
 
-/** 位移（shift）指令在 UI/日志里的用词：**按世代随卡文**——
- *  1代（MN01/AX01）卡文写「平移」；2代/3代（MN02/AX02/MN03/AX03）卡文写「偏转」
- *  （2026-09-13 用户同步文本后统一：提示标题/动作按钮/操作日志与所属卡文用词一致）。
- *  未知协议兜底「偏转」。 */
-export function shiftTerm(protocolDefId: string): string {
-  const proto = protocolDefId.includes('-') ? protocolDefId.split('-')[0] : protocolDefId;
-  try {
-    const set = getProtocolDef(proto).set;
-    if (set === 'MN01' || set === 'AX01') return '平移';
-    return '偏转';
-  } catch {
-    return '偏转';
-  }
+/** 位移（shift）指令在 UI/日志里的用词：**全世代统一「偏转」**。
+ *  2026-09-13 用户拍板：1代文本也由「平移」统一为「偏转」（1/2/3 代 txt 与游戏数据同步改动），
+ *  因此提示标题、动作按钮、操作日志一律用「偏转」；保留本函数作为唯一出处，避免再散落字面量。 */
+export function shiftTerm(_protocolDefId?: string): string {
+  return '偏转';
 }
 
 /** select-action 动作值 → 中文按钮/日志文本（修改提示词 8：face-up/face-down/flip 等汉化）。

@@ -1151,7 +1151,7 @@ function playHandPlay(payload: FxCardPayload): void {
 
 /* ===== Gravity 位移附加特效（用户 #3）：品红牌库框光 + 终点黑洞 + 品红射线 + 卡框品红光 =====
  * 触发：card:deck-played（反面打出牌堆顶，payload.owner = 牌库 owner）与 card:shifted 且
- * triggerProtocol === 'gravity'（gravity-1/2/4 的平移）。
+ * triggerProtocol === 'gravity'（gravity-1/2/4 的偏转）。
  * 时序（总 ≈ 3.7s，FX-R1 时序重构）：① 牌库区边框品红光（仅打牌堆顶时）；② 【事件时立即
  * 创建浮层卡】（旧位置 rect，z=BASE_Z 盖住真实卡，带 .fx-gravity-cardglow 品红卡框光——重渲染
  * 后真实卡瞬移到终点，但浮层卡占据旧位置，用户只见"卡在原位被吸入"而非"先瞬移后特效"）；
@@ -1327,7 +1327,7 @@ function playGravityDeckPlayExtra(payload: FxCardPayload): void {
   window.setTimeout(() => beam?.remove(), GRAVITY_PRE_MS + 80);
 }
 
-/** gravity 平移附加特效（card:shifted + triggerProtocol=gravity——gravity-1/2/4 的平移）。
+/** gravity 偏转附加特效（card:shifted + triggerProtocol=gravity——gravity-1/2/4 的偏转）。
  *  FX-R1 时序重构：【事件时立即创建浮层卡】（旧位置 rect，z=BASE_Z 盖住真实卡，带品红
  *  卡框光——重渲染后真实卡瞬移到终点，但浮层卡占据旧位置，用户只见"卡在原位被吸入"）→
  *  终点黑洞 + 品红射线（前置 1.8s）→ 前置完成浮层卡飞向目标链路末尾（基础平移节奏）→
@@ -1370,7 +1370,7 @@ function playGravityShiftExtra(node: HTMLElement, payload: FxCardPayload): void 
 }
 
 /* ===== Speed 位移附加特效（用户 #7）：卡框灰白光 + 卡中心飓风 =====
- * 触发：card:shifted 与 card:drawn 且 triggerProtocol === 'speed'（speed-2/3/4 平移、speed-1 抽牌）。
+ * 触发：card:shifted 与 card:drawn 且 triggerProtocol === 'speed'（speed-2/3/4 偏转、speed-1 抽牌）。
  * 时序（总 ≈ 2.26s）：① 卡框灰白光 + 卡中心飓风渐现（0~0.3s）；② 整体沿起点→终点直线平移
  * （1.5s = SPEED_MOVE_MS，transition transform translate 路径、linear 匀速——平移终点=目标
  * 链路末尾，抽牌终点=该玩家手牌末尾 handEndPos）；④ 到达后飓风渐隐、卡框恢复（0.4s）。
@@ -1426,7 +1426,7 @@ function playSpeedExtra(
   window.setTimeout(() => fx.remove(), SPEED_TOTAL_MS);
 }
 
-/** speed 平移附加特效（card:shifted + triggerProtocol=speed，speed-2/3/4）——FX-R1 时序重构：
+/** speed 偏转附加特效（card:shifted + triggerProtocol=speed，speed-2/3/4）——FX-R1 时序重构：
  *  事件时【立即创建浮层卡】（旧位置 rect，z=BASE_Z 盖住真实卡；重渲染后真实卡瞬移到终点，
  *  但浮层卡占据旧位置，用户只见卡在原位）→ 内嵌灰白光 + 飓风渐现（0.3s）→ 浮层卡随飓风
  *  沿起点→终点直线平移（1.5s）→ 到达后渐隐 + 移除（露出真实卡）。【不再调用基础 playShift】

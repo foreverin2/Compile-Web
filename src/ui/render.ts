@@ -4844,7 +4844,7 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
       }
       const bar = choiceBar(topEffect, prompt, cb, '点击高亮的线路选择目标线');
       if (prompt.optional) {
-        // 可选 select-line（如 darkness-1 的可选平移）：跳过 = 空应答
+        // 可选 select-line（如 darkness-1 的可选偏转）：跳过 = 空应答
         const skipBtn = el('button', 'btn choice-skip', '跳过');
         skipBtn.addEventListener('click', () => {
           choicePromptId = null;

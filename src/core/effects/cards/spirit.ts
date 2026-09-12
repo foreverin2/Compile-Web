@@ -49,12 +49,12 @@ function* spirit2(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   if (ans.selected.length > 0) yield { op: 'flip', uid: ans.selected[0] };
 }
 
-/** spirit-3 顶指令：你抽牌后：你可以平移此牌，不论是否被盖住。
+/** spirit-3 顶指令：你抽牌后：你可以偏转此牌，不论是否被盖住。
  *  top: true —— 顶命令被盖仍生效（fireReactive 自动收集抽牌者场上全部正面注册卡，含被盖；
  *  且其推入的效果恒带 topCommand → sourceValid 跳过未覆盖检查）。
- *  可选 select-line（排除当前线）→ 平移自己（allowCovered：被盖平移需跳过未覆盖检查）。 */
+ *  可选 select-line（排除当前线）→ 偏转自己（allowCovered：被盖偏转需跳过未覆盖检查）。 */
 function* spirit3AfterDraw(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
-  const line = yield { kind: 'select-line', title: 'spirit-3（你抽牌后）：你可以平移此牌到另一列', min: 1, max: 1, optional: true, candidates: [], lines: ([0, 1, 2] as Line[]).filter((l) => l !== ctx.card.line) };
+  const line = yield { kind: 'select-line', title: 'spirit-3（你抽牌后）：你可以偏转此牌到另一列', min: 1, max: 1, optional: true, candidates: [], lines: ([0, 1, 2] as Line[]).filter((l) => l !== ctx.card.line) };
   if (line.selected.length === 0) return; // 守卫空应答（跳过）
   yield { op: 'shift', uid: ctx.card.uid, targetLine: Number(line.selected[0].replace('line:', '')) as Line, allowCovered: true };
 }

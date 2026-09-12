@@ -26,13 +26,13 @@ import type { CardDef, ProtocolDef } from '../core/models/types';
  *  - 自称协议名照 txt：多元/统一 等直接照录（无归一；旧「多元→多样性」归一已随
  *    2026-09-04 用户改 txt 撤销）
  *  - 术语不改写：偏转/阈值/总阈值/召回/中央效果/切洗/正面朝下 等保留原文——其精确语义
- *    （如偏转=Shift=平移）留待效果实现阶段逐张裁决（按惯例附原文问用户）
+ *    （如偏转 = Shift）留待效果实现阶段逐张裁决（按惯例附原文问用户）
  *  - 异文注释：txt 与自制 docx 排版稿语义冲突处以 `// txt:…/docx:…` 注释标记，不自行裁决
  *  - 卡面图片（英文扫描）为唯一视觉权威；本数据文本仅作效果实现语义源
  *
- * commands/loadingText：commands 依自制 docx 协议正面关键词（寒冰=平移,阻止…）并与
- * 2代说明书.PDF 英文关键词（ICE: SHIFT,PREVENT…）交叉，冲突处取 PDF 语义；
- * loadingText = 各协议四字座右铭，2026-09-04 起跟随 compile2文本.txt 标题副题
+ * commands/loadingText：commands 依 compile2文本.txt「关键词：」行（2026-09-13 重新对齐，
+ * 如 寒冰=偏转、守护；明镜=偏转、复制）并与 2代说明书.PDF 英文关键词（ICE: SHIFT,PREVENT…）
+ * 交叉，冲突处取 PDF 语义；loadingText = 各协议四字座右铭，2026-09-04 起跟随 compile2文本.txt 标题副题
  * （txt「XX——四字」，用户更新版；旧值取自制 docx 协议正面 4 字题，如滑腻如冰/一目了然，
  * 已整体替换）。loadingText 当前为数据储备（UI 未展示），后续座右铭展示需求用此字段。
  *

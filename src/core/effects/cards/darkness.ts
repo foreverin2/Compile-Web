@@ -2,31 +2,31 @@ import type { EffectCtx, EffectStep, GameState, Line, PlayerId, StepResult } fro
 import { findCard } from '../context';
 import { registerCardEffects } from '../registry';
 
-/** darkness-0：抽 3 张牌，然后玩家选择 1 张对手被盖住的牌 + 平移目标线（无覆盖卡则 fizzle） */
+/** darkness-0：抽 3 张牌，然后玩家选择 1 张对手被盖住的牌 + 偏转目标线（无覆盖卡则 fizzle） */
 function* darkness0(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   yield { op: 'draw', count: 3 };
-  // 目标线由玩家选择 → 同列覆盖卡平移合法，候选不再排除（C2 时代同列排除规则移除）
+  // 目标线由玩家选择 → 同列覆盖卡偏转合法，候选不再排除（C2 时代同列排除规则移除）
   const covered = ctx.candidates({ zone: 'field', owner: ctx.player === 0 ? 1 : 0, covered: true });
-  const ans = yield { kind: 'select', title: 'darkness-0：平移1张你对手的被盖住的牌', min: 1, max: 1, optional: false, candidates: covered };
+  const ans = yield { kind: 'select', title: 'darkness-0：偏转1张你对手的被盖住的牌', min: 1, max: 1, optional: false, candidates: covered };
   if (ans.selected.length === 0) return; // 无覆盖卡：fizzle（runStack 已跳过空候选，双保险）
   const srcLine = findCard(ctx.s, ans.selected[0])?.line ?? ctx.card.line;
-  const line = yield { kind: 'select-line', title: 'darkness-0：选择平移目标线', min: 1, max: 1, optional: false, candidates: [], lines: [0, 1, 2].filter((l) => l !== srcLine) as Line[] };
+  const line = yield { kind: 'select-line', title: 'darkness-0：选择偏转目标线', min: 1, max: 1, optional: false, candidates: [], lines: [0, 1, 2].filter((l) => l !== srcLine) as Line[] };
   if (line.selected.length > 0) {
     yield { op: 'shift', uid: ans.selected[0], targetLine: Number(line.selected[0].replace('line:', '')) as Line, allowCovered: true };
   }
 }
 
-/** darkness-1：翻转 1 张你对手的牌，然后可选平移那张牌（跳过 = 留在原线） */
+/** darkness-1：翻转 1 张你对手的牌，然后可选偏转那张牌（跳过 = 留在原线） */
 function* darkness1(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const targets = ctx.candidates({ zone: 'field' }).filter((c) => c.owner !== ctx.player);
   const ans = yield { kind: 'select', title: 'darkness-1：翻转1张你对手的牌', min: 1, max: 1, optional: false, candidates: targets };
   if (ans.selected.length === 0) return;
   yield { op: 'flip', uid: ans.selected[0] };
-  // 目标线仅排除被翻卡当前列（平移必须到不同列，避免 shift 抛错）；
-  // darkness-1 自己所在列是合法目标（被翻卡在别的列时，可平移到本卡所在列）
+  // 目标线仅排除被翻卡当前列（偏转必须到不同列，避免 shift 抛错）；
+  // darkness-1 自己所在列是合法目标（被翻卡在别的列时，可偏转到本卡所在列）
   const picked = targets.find((c) => c.uid === ans.selected[0]);
   const cardLine = picked?.line ?? ctx.card.line;
-  const line = yield { kind: 'select-line', title: 'darkness-1：你可以平移那张牌', min: 1, max: 1, optional: true, candidates: [], lines: [0, 1, 2].filter((l) => l !== cardLine) as Line[] };
+  const line = yield { kind: 'select-line', title: 'darkness-1：你可以偏转那张牌', min: 1, max: 1, optional: true, candidates: [], lines: [0, 1, 2].filter((l) => l !== cardLine) as Line[] };
   if (line.selected.length > 0) {
     yield { op: 'shift', uid: ans.selected[0], targetLine: Number(line.selected[0].replace('line:', '')) as Line };
   }
@@ -58,13 +58,13 @@ function* darkness3(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   yield { op: 'playFromHand', uid: ans.selected[0], line: Number(line.selected[0].replace('line:', '')) as Line, faceUp: false };
 }
 
-/** darkness-4：平移 1 张反面牌到选定的另一列（源线 = 目标卡当前线，经 findCard 全状态查找） */
+/** darkness-4：偏转 1 张反面牌到选定的另一列（源线 = 目标卡当前线，经 findCard 全状态查找） */
 function* darkness4(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const facedown = ctx.candidates({ zone: 'field' }).filter((c) => !c.faceUp);
-  const ans = yield { kind: 'select', title: 'darkness-4：平移1张反面牌', min: 1, max: 1, optional: false, candidates: facedown };
+  const ans = yield { kind: 'select', title: 'darkness-4：偏转1张反面牌', min: 1, max: 1, optional: false, candidates: facedown };
   if (ans.selected.length === 0) return;
   const srcLine = findCard(ctx.s, ans.selected[0])?.line ?? ctx.card.line;
-  const line = yield { kind: 'select-line', title: 'darkness-4：平移目标线', min: 1, max: 1, optional: false, candidates: [], lines: [0, 1, 2].filter((l) => l !== srcLine) as Line[] };
+  const line = yield { kind: 'select-line', title: 'darkness-4：偏转目标线', min: 1, max: 1, optional: false, candidates: [], lines: [0, 1, 2].filter((l) => l !== srcLine) as Line[] };
   if (line.selected.length > 0) {
     yield { op: 'shift', uid: ans.selected[0], targetLine: Number(line.selected[0].replace('line:', '')) as Line };
   }

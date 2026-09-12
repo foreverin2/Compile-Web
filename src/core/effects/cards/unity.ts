@@ -66,7 +66,7 @@ function* unity0Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> 
 }
 
 /** unity-0 底（before-covered）：当此牌被统一牌覆盖时：翻转或抽取1张牌
- *  （覆盖者 = 浮空中的 unity 卡）。2026-09-12 修复：覆盖可能来自【偏转/平移】
+ *  （覆盖者 = 浮空中的 unity 卡）。2026-09-12 修复：覆盖可能来自【偏转/偏转】
  *  （pendingShift，如联合1 偏转到联合0 所在线），此前只查 pendingPlay → 偏转覆盖不触发。 */
 function* unity0BeforeCovered(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const incoming = ctx.s.pendingPlay[0]?.card ?? ctx.s.pendingShift[0]?.card;

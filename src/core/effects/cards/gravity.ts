@@ -17,21 +17,21 @@ function* gravity0(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   }
 }
 
-/** gravity-1 中指令：抽2张牌。把1张牌平移进或平移出此列。
- *  抽 2 → select 1 张场上未覆盖顶卡（双方）→ 若该卡不在此列：select-line 只能选此列（平移进）；
- *  若已在此列：select-line 排除此列（平移出）。选卡与 shift 间无其他 op，卡不会离场/被盖，
+/** gravity-1 中指令：抽2张牌。把1张牌偏转进或偏转出此列。
+ *  抽 2 → select 1 张场上未覆盖顶卡（双方）→ 若该卡不在此列：select-line 只能选此列（偏转进）；
+ *  若已在此列：select-line 排除此列（偏转出）。选卡与 shift 间无其他 op，卡不会离场/被盖，
  *  shift 无需 allowCovered。无场上顶卡 → 选卡步 fizzle（抽牌仍结算）。 */
 function* gravity1(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   yield { op: 'draw', count: 2 };
   const targets = ctx.candidates({ zone: 'field' });
-  const ans = yield { kind: 'select', title: 'gravity-1：把1张牌平移进或平移出此列', min: 1, max: 1, optional: false, candidates: targets };
+  const ans = yield { kind: 'select', title: 'gravity-1：把1张牌偏转进或偏转出此列', min: 1, max: 1, optional: false, candidates: targets };
   if (ans.selected.length === 0) return; // fizzle：无场上顶卡
   const card = findCard(ctx.s, ans.selected[0]);
   if (!card || card.zone !== 'field' || card.line === null) return; // 防御：卡已离场
   const here = card.line === ctx.card.line;
   const line = yield {
     kind: 'select-line',
-    title: here ? 'gravity-1：把该牌平移出此列' : 'gravity-1：把该牌平移进此列',
+    title: here ? 'gravity-1：把该牌偏转出此列' : 'gravity-1：把该牌偏转进此列',
     min: 1, max: 1, optional: false, candidates: [],
     lines: here ? ([0, 1, 2] as Line[]).filter((l) => l !== ctx.card.line) : [ctx.card.line!],
   };
@@ -39,30 +39,30 @@ function* gravity1(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   yield { op: 'shift', uid: card.uid, targetLine: Number(line.selected[0].replace('line:', '')) as Line };
 }
 
-/** gravity-2 中指令：翻转1张牌。把那张牌平移进此列。
+/** gravity-2 中指令：翻转1张牌。把那张牌偏转进此列。
  *  select 1 张场上未覆盖顶卡 → flip（翻正可能触发其中指令连锁——如 life-0 打出垫牌盖住自己、
- *  death-2 选列删自己——连锁先整体结算完）→ findCard 守卫（卡可能已被连锁移除 → 跳过平移）→
+ *  death-2 选列删自己——连锁先整体结算完）→ findCard 守卫（卡可能已被连锁移除 → 跳过偏转）→
  *  若卡不在此列：select-line 只能选此列 → shift 带 allowCovered（FAQ 137：被翻转的卡即使被覆盖
- *  也移动——"那张卡牌"规则优先）。已在此列 → 无平移。 */
+ *  也移动——"那张卡牌"规则优先）。已在此列 → 无偏转。 */
 function* gravity2(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const targets = ctx.candidates({ zone: 'field' });
   const ans = yield { kind: 'select', title: 'gravity-2：翻转1张牌', min: 1, max: 1, optional: false, candidates: targets };
   if (ans.selected.length === 0) return; // fizzle：无场上顶卡
   yield { op: 'flip', uid: ans.selected[0] };
   const card = findCard(ctx.s, ans.selected[0]);
-  if (!card || card.zone !== 'field' || card.line === null) return; // 翻正连锁移除了该卡 → 跳过平移
-  if (card.line === ctx.card.line) return; // 已在此列 → 无需平移
-  const line = yield { kind: 'select-line', title: 'gravity-2：把该牌平移进此列', min: 1, max: 1, optional: false, candidates: [], lines: [ctx.card.line!] };
+  if (!card || card.zone !== 'field' || card.line === null) return; // 翻正连锁移除了该卡 → 跳过偏转
+  if (card.line === ctx.card.line) return; // 已在此列 → 无需偏转
+  const line = yield { kind: 'select-line', title: 'gravity-2：把该牌偏转进此列', min: 1, max: 1, optional: false, candidates: [], lines: [ctx.card.line!] };
   if (line.selected.length === 0) return;
   yield { op: 'shift', uid: card.uid, targetLine: ctx.card.line!, allowCovered: true };
 }
 
-/** gravity-4 中指令：把1张反面牌平移进此列。
+/** gravity-4 中指令：把1张反面牌偏转进此列。
  *  select 场上未覆盖顶卡中 !faceUp 的 1 张（被盖卡不在候选）→ 若已在此列 → 无动作跳过（拍板）
  *  → 否则 shift 进此列（选卡时必为未覆盖顶卡 → 无需 allowCovered）。无反面顶卡 → fizzle。 */
 function* gravity4(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const facedown = ctx.candidates({ zone: 'field' }).filter((c) => !c.faceUp);
-  const ans = yield { kind: 'select', title: 'gravity-4：把1张反面牌平移进此列', min: 1, max: 1, optional: false, candidates: facedown };
+  const ans = yield { kind: 'select', title: 'gravity-4：把1张反面牌偏转进此列', min: 1, max: 1, optional: false, candidates: facedown };
   if (ans.selected.length === 0) return; // fizzle：无反面顶卡
   const card = findCard(ctx.s, ans.selected[0]);
   if (!card || card.zone !== 'field' || card.line === null) return; // 防御：卡已离场

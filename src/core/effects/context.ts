@@ -144,7 +144,7 @@ export function cardCommandDisabled(s: GameState, card: Card, kind: 'top' | 'bot
   return lineBottomCommandsDisabled(s, card.line);
 }
 
-/** rigidity-7 底「此牌不能被翻转或平移」：未被覆盖（faceUp 顶卡）且底命令未被区域禁用 → 免疫翻/移（C11）。 */
+/** rigidity-7 底「此牌不能被翻转或偏转」：未被覆盖（faceUp 顶卡）且底命令未被区域禁用 → 免疫翻/移（C11）。 */
 export function rigidity7Immune(s: GameState, card: Card): boolean {
   return card.defId === 'rigidity-7' && card.faceUp && isUncovered(s, card) && !cardCommandDisabled(s, card, 'bottom');
 }

@@ -48,8 +48,8 @@ function* psychic2(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   yield { op: 'rearrangeProtocols', a, b, player: opp };
 }
 
-/** psychic-3 中指令：对手弃1张牌。平移1张对手的牌。
- *  对手弃 1（chooser=opp，min1 max1；手牌空 → 跳过弃牌——拍板：弃牌 fizzle 只跳过弃牌，平移仍执行）
+/** psychic-3 中指令：对手弃1张牌。偏转1张对手的牌。
+ *  对手弃 1（chooser=opp，min1 max1；手牌空 → 跳过弃牌——拍板：弃牌 fizzle 只跳过弃牌，偏转仍执行）
  *  → select 对手 field 顶卡 1 张（打出者选目标——chooser 缺省 = 效果属主）→
  *  select-line 任意线（排除被移卡当前线——shift op 约束）→ shift。无对手顶卡 → 选卡步 fizzle。 */
 function* psychic3(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
@@ -60,11 +60,11 @@ function* psychic3(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
     if (ans.selected.length > 0) yield { op: 'discard', uid: ans.selected[0] };
   }
   const targets = ctx.candidates({ zone: 'field', owner: opp });
-  const ans = yield { kind: 'select', title: 'psychic-3：平移1张对手的牌', min: 1, max: 1, optional: false, candidates: targets };
+  const ans = yield { kind: 'select', title: 'psychic-3：偏转1张对手的牌', min: 1, max: 1, optional: false, candidates: targets };
   if (ans.selected.length === 0) return; // fizzle：无对手场上顶卡
   const card = findCard(ctx.s, ans.selected[0]);
   if (!card || card.zone !== 'field' || card.line === null) return; // 防御：卡已离场
-  const line = yield { kind: 'select-line', title: 'psychic-3：平移目标线', min: 1, max: 1, optional: false, candidates: [], lines: ([0, 1, 2] as Line[]).filter((l) => l !== card.line) };
+  const line = yield { kind: 'select-line', title: 'psychic-3：偏转目标线', min: 1, max: 1, optional: false, candidates: [], lines: ([0, 1, 2] as Line[]).filter((l) => l !== card.line) };
   if (line.selected.length === 0) return;
   yield { op: 'shift', uid: card.uid, targetLine: Number(line.selected[0].replace('line:', '')) as Line };
 }

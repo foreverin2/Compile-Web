@@ -11,16 +11,16 @@ export const ALL_PROTOCOLS: ProtocolDef[] = [
   // 基础版 12 套（MN01）
   { defId: 'water', name: '流水', set: 'MN01', commands: ['回手', '抽牌', '翻转'], loadingText: '涤旧焕新' },
   { defId: 'fire', name: '火焰', set: 'MN01', commands: ['弃牌触发效果'], loadingText: '玉石俱焚' },
-  { defId: 'light', name: '明光', set: 'MN01', commands: ['抽牌', '翻转', '平移'], loadingText: '灼明驱暗' },
-  { defId: 'darkness', name: '黑暗', set: 'MN01', commands: ['抽牌', '平移', '操纵'], loadingText: '黯淡无光' },
+  { defId: 'light', name: '明光', set: 'MN01', commands: ['抽牌', '翻转', '偏转'], loadingText: '灼明驱暗' },
+  { defId: 'darkness', name: '黑暗', set: 'MN01', commands: ['抽牌', '偏转', '操纵'], loadingText: '黯淡无光' },
   { defId: 'life', name: '生命', set: 'MN01', commands: ['翻转', '牌堆顶', '抽牌'], loadingText: '勃勃生机' },
   { defId: 'death', name: '死亡', set: 'MN01', commands: ['删除', '抽牌'], loadingText: '万物寂灭' },
-  { defId: 'spirit', name: '精神', set: 'MN01', commands: ['翻转', '平移', '抽牌'], loadingText: '力由心生' },
-  { defId: 'gravity', name: '重力', set: 'MN01', commands: ['平移', '翻转', '抽牌'], loadingText: '聚敛坍缩' },
-  { defId: 'psychic', name: '灵能', set: 'MN01', commands: ['抽牌', '操纵', '平移'], loadingText: '洞悉敌意' },
+  { defId: 'spirit', name: '精神', set: 'MN01', commands: ['翻转', '偏转', '抽牌'], loadingText: '力由心生' },
+  { defId: 'gravity', name: '重力', set: 'MN01', commands: ['偏转', '翻转', '抽牌'], loadingText: '聚敛坍缩' },
+  { defId: 'psychic', name: '灵能', set: 'MN01', commands: ['抽牌', '操纵', '偏转'], loadingText: '洞悉敌意' },
   { defId: 'plague', name: '瘟疫', set: 'MN01', commands: ['强制弃牌', '翻转'], loadingText: '凋亡衰竭' },
   { defId: 'metal', name: '金属', set: 'MN01', commands: ['阻止', '抽牌', '翻转'], loadingText: '固若金汤' },
-  { defId: 'speed', name: '速度', set: 'MN01', commands: ['抽牌', '出牌', '平移'], loadingText: '愈行愈速' },
+  { defId: 'speed', name: '速度', set: 'MN01', commands: ['抽牌', '出牌', '偏转'], loadingText: '愈行愈速' },
   // 拓展包 3 套（AX01）
   { defId: 'love', name: '爱', set: 'AX01', commands: ['抽牌', '赠予', '交换'], loadingText: '施中有得' },
   { defId: 'hate', name: '恨', set: 'AX01', commands: ['双方删除'], loadingText: '极尽鄙夷' },
@@ -47,17 +47,17 @@ export const ALL_CARD_DEFS: CardDef[] = [
   // 光——灼明驱暗
   { defId: 'light-0', protocol: 'light', value: 0, middle: '翻转1张牌。抽其分值张牌。' },
   { defId: 'light-1', protocol: 'light', value: 1, bottom: '结束：抽1张牌。' },
-  { defId: 'light-2', protocol: 'light', value: 2, middle: '抽2张牌。揭示1张反面牌。你可以平移或翻转那张牌。' },
-  { defId: 'light-3', protocol: 'light', value: 3, middle: '平移此列所有反面牌到另一列。' },
+  { defId: 'light-2', protocol: 'light', value: 2, middle: '抽2张牌。揭示1张反面牌。你可以偏转或翻转那张牌。' },
+  { defId: 'light-3', protocol: 'light', value: 3, middle: '偏转此列所有反面牌到另一列。' },
   { defId: 'light-4', protocol: 'light', value: 4, middle: '对手揭示其手牌。' },
   { defId: 'light-5', protocol: 'light', value: 5, middle: '弃1张牌。' },
 
   // 暗——黯淡无光
-  { defId: 'darkness-0', protocol: 'darkness', value: 0, middle: '抽3张牌。平移1张你对手的被盖住的牌。' },
-  { defId: 'darkness-1', protocol: 'darkness', value: 1, middle: '翻转1张你对手的牌。你可以平移那张牌。' },
+  { defId: 'darkness-0', protocol: 'darkness', value: 0, middle: '抽3张牌。偏转1张你对手的被盖住的牌。' },
+  { defId: 'darkness-1', protocol: 'darkness', value: 1, middle: '翻转1张你对手的牌。你可以偏转那张牌。' },
   { defId: 'darkness-2', protocol: 'darkness', value: 2, top: '所有此栈的反面牌分值为4。', middle: '你可以翻转1张此列的反面牌。' },
   { defId: 'darkness-3', protocol: 'darkness', value: 3, middle: '在另一列反面打出1张牌。' },
-  { defId: 'darkness-4', protocol: 'darkness', value: 4, middle: '平移1张反面牌。' },
+  { defId: 'darkness-4', protocol: 'darkness', value: 4, middle: '偏转1张反面牌。' },
   { defId: 'darkness-5', protocol: 'darkness', value: 5, middle: '弃1张牌。' },
 
   // 生——勃勃生机
@@ -80,15 +80,15 @@ export const ALL_CARD_DEFS: CardDef[] = [
   { defId: 'spirit-0', protocol: 'spirit', value: 0, middle: '刷新。抽1张牌。', bottom: '跳过检查缓存阶段。' },
   { defId: 'spirit-1', protocol: 'spirit', value: 1, top: '你可以在任意列打出牌。', middle: '抽2张牌。', bottom: '开始：要么弃1张牌，要么翻转此牌。' },
   { defId: 'spirit-2', protocol: 'spirit', value: 2, middle: '你可以翻转1张牌。' },
-  { defId: 'spirit-3', protocol: 'spirit', value: 3, top: '你抽牌后：你可以平移此牌，不论是否被盖住。' },
+  { defId: 'spirit-3', protocol: 'spirit', value: 3, top: '你抽牌后：你可以偏转此牌，不论是否被盖住。' },
   { defId: 'spirit-4', protocol: 'spirit', value: 4, middle: '交换你2个协议卡的位置。' },
   { defId: 'spirit-5', protocol: 'spirit', value: 5, middle: '弃1张牌。' },
 
   // 重力——聚敛坍缩
   { defId: 'gravity-0', protocol: 'gravity', value: 0, middle: '此列每有2张牌，就在此牌下方以反面打出你牌堆顶的牌。' },
-  { defId: 'gravity-1', protocol: 'gravity', value: 1, middle: '抽2张牌。把1张牌平移进或平移出此列。' },
-  { defId: 'gravity-2', protocol: 'gravity', value: 2, middle: '翻转1张牌。把那张牌平移进此列。' },
-  { defId: 'gravity-4', protocol: 'gravity', value: 4, middle: '把1张反面牌平移进此列。' },
+  { defId: 'gravity-1', protocol: 'gravity', value: 1, middle: '抽2张牌。把1张牌偏转进或偏转出此列。' },
+  { defId: 'gravity-2', protocol: 'gravity', value: 2, middle: '翻转1张牌。把那张牌偏转进此列。' },
+  { defId: 'gravity-4', protocol: 'gravity', value: 4, middle: '把1张反面牌偏转进此列。' },
   { defId: 'gravity-5', protocol: 'gravity', value: 5, middle: '弃1张牌。' },
   { defId: 'gravity-6', protocol: 'gravity', value: 6, middle: '对手在此列以反面打出其牌堆顶的牌。' },
 
@@ -96,7 +96,7 @@ export const ALL_CARD_DEFS: CardDef[] = [
   { defId: 'psychic-0', protocol: 'psychic', value: 0, middle: '抽2张牌。对手弃2张牌，然后揭示其手牌。' },
   { defId: 'psychic-1', protocol: 'psychic', value: 1, top: '你的对手只能以反面打出牌。', bottom: '开始：翻转此牌。' },
   { defId: 'psychic-2', protocol: 'psychic', value: 2, middle: '对手弃2张牌。你重排对手的协议。' },
-  { defId: 'psychic-3', protocol: 'psychic', value: 3, middle: '对手弃1张牌。平移1张对手的牌。' },
+  { defId: 'psychic-3', protocol: 'psychic', value: 3, middle: '对手弃1张牌。偏转1张对手的牌。' },
   { defId: 'psychic-4', protocol: 'psychic', value: 4, bottom: '结束：你可以回手1张对手的牌。若如此，翻转此牌。' },
   { defId: 'psychic-5', protocol: 'psychic', value: 5, middle: '弃1张牌。' },
 
@@ -119,9 +119,9 @@ export const ALL_CARD_DEFS: CardDef[] = [
   // 速度——愈行愈速
   { defId: 'speed-0', protocol: 'speed', value: 0, middle: '打出1张牌。' },
   { defId: 'speed-1', protocol: 'speed', value: 1, top: '清理缓存后：抽1张牌。', middle: '抽2张牌。' },
-  { defId: 'speed-2', protocol: 'speed', value: 2, top: '通过编译删除此牌前：平移此牌，不论是否被盖住。' },
-  { defId: 'speed-3', protocol: 'speed', value: 3, middle: '平移另1张你的牌。', bottom: '结束：你可以平移1张你的牌。若如此，翻转此牌。' },
-  { defId: 'speed-4', protocol: 'speed', value: 4, middle: '平移1张对手的反面牌。' },
+  { defId: 'speed-2', protocol: 'speed', value: 2, top: '通过编译删除此牌前：偏转此牌，不论是否被盖住。' },
+  { defId: 'speed-3', protocol: 'speed', value: 3, middle: '偏转另1张你的牌。', bottom: '结束：你可以偏转1张你的牌。若如此，翻转此牌。' },
+  { defId: 'speed-4', protocol: 'speed', value: 4, middle: '偏转1张对手的反面牌。' },
   { defId: 'speed-5', protocol: 'speed', value: 5, middle: '弃1张牌。' },
 
   // 爱——施中有得（AX01）
