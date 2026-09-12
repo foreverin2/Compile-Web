@@ -1,6 +1,7 @@
 import { gameBus, type GameEvent } from '../../core/events/bus';
 import { mountShatter } from '../fx/delete-shatter';
 import { mountCut } from '../fx/discard-cut';
+import { gen3DiscardFx, gen3DeleteFx, gen3FlipFx, gen3ShiftFx, type Gen3CardFxApi, type Gen3CardPayload } from '../fx-gen3';
 import { buildTornadoFx } from '../fx-tornado';
 import { cardImgSrc, protocolImgSrc } from '../../data/demo';
 import { playPeaceDiscardExtra, PEACE_PRE_MS, playChaosDiscardExtra, CHAOS_DISCARD_PRE_MS, playIceShiftBridge, playSmokePlayFx, playFearShiftExtra, playCorruptionDiscardExtra, playCorruptionDeleteExtra, playCorruptionFlipExtra, CORRUPT_DISCARD_PRE_MS, playWarDiscardExtra, playWarFlipExtra, playCourageDiscardExtra, playCourageDeleteExtra, playCourageShiftExtra, playTimeDiscardExtra, playAssimDiscardExtra, playAssimDeckRipple, ASSIM_DISCARD_PRE_MS, playDiversityDiscardExtra, DIVERSITY_DISCARD_PRE_MS } from '../fx-gen2';
@@ -624,7 +625,7 @@ function buildFlipOverlay(
 }
 
 /** 基础行为特效：翻面——旧面翻转到新面（rotateY；场上横置卡用 rotateX 使翻面也横着） */
-function playFlip(node: HTMLElement, payload: FxCardPayload): void {
+function playFlip(node: HTMLElement, payload: FxCardPayload, durationMs = 350): void {
   const rect = node.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return;
   const cw = node.classList.contains('rot-cw');
@@ -632,10 +633,12 @@ function playFlip(node: HTMLElement, payload: FxCardPayload): void {
   const oldSrc = node.querySelector('img')?.src ?? cardFaceSrc(payload.defId, payload.faceUp);
   const overlay = buildFlipOverlay(rect, cw, ccw, oldSrc, cardFaceSrc(payload.defId, payload.faceUp));
   if (!overlay) return;
+  // 3代 怠惰按协议语法放慢翻面（协议"慢"；默认 350 保持 1/2 代观感不变）
+  overlay.inner.style.transition = `transform ${durationMs}ms ease`;
   requestAnimationFrame(() => {
     overlay.inner.style.transform = cw || ccw ? 'rotateX(180deg)' : 'rotateY(180deg)';
   });
-  window.setTimeout(() => overlay.wrap.remove(), 420);
+  window.setTimeout(() => overlay.wrap.remove(), durationMs + 70);
 }
 
 /* ===== Life 翻转专属特效：绿色藤蔓缠绕 + 绿光（life-1/life-2 及未来生命翻转） =====
@@ -1823,6 +1826,24 @@ function showCompileBanner(payload: {
  *   且【前置段先播、基础破碎延后】由附加函数内部调度）
  * - 卡面用【当前卡牌面】构建，不克隆原卡 DOM
  */
+/** 3代卡牌特效宿主能力（fx-gen3.ts 用；保持该模块不反向依赖本文件私有实现） */
+const GEN3_CARD_FX_API: Gen3CardFxApi = {
+  el: (tag, cls, text) => {
+    const node = document.createElement(tag);
+    node.className = cls;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  },
+  buildFxCard: (node, payload, zIndex) => buildFxCard(node, payload as unknown as FxCardPayload, zIndex),
+  playCutAt: (rect, cw, ccw, payload) => playCutAt(rect, cw, ccw, payload as unknown as FxCardPayload),
+  playCut: (node, payload) => playCut(node, payload as unknown as FxCardPayload),
+  playShatterAt: (rect, cw, ccw, payload) => playShatterAt(rect, cw, ccw, payload as unknown as FxCardPayload),
+  playFlip: (node, payload, durationMs) => playFlip(node, payload as unknown as FxCardPayload, durationMs),
+  playShift: (node, payload) => playShift(node, payload as unknown as FxCardPayload),
+  extraZ: EXTRA_Z,
+  rnd: (a, b) => a + Math.random() * (b - a),
+};
+
 export function initEffects(): () => void {
   return gameBus.subscribe((e: GameEvent) => {
     // card:drawn 无 uid/defId（payload = { player, count, fromOpponentDeck?, triggerProtocol }），
@@ -1860,6 +1881,9 @@ export function initEffects(): () => void {
           const ccw = node.classList.contains('rot-ccw');
           playAssimDiscardExtra(node);
           window.setTimeout(() => playCutAt(rect, cw, ccw, payload), ASSIM_DISCARD_PRE_MS);
+        } else if (node && gen3DiscardFx(node, payload as unknown as Gen3CardPayload, GEN3_CARD_FX_API)) {
+          // 3代点名卡牌弃牌附加层（贪婪 R1 / 怠惰 S3 / 愤怒 W2 / 支点 F1 / 动量 M1 / 新星 N2）：
+          // 函数内部按 PRE 调度基础切割（或即时 playCut 后自清理浮层），此处不再重复基础动画
         } else if (node) {
           if (payload.triggerProtocol === 'psychic') playPsychicDiscardExtra(node, payload);
           else if (payload.triggerProtocol === 'plague') playPlagueDiscardExtra(node, payload);
@@ -1912,10 +1936,8 @@ export function initEffects(): () => void {
         break;
       }
       case 'card:deleted':
-        // death/hate 的删除附加特效带【前置段 → 延后破碎 → 收尾段】时序：基础破碎由附加函数
-        // 内部延后调度（playDeathDeleteExtra/playHateDeleteExtra 在 DEATH_PRE_MS/HATE_PRE_MS
-        // 调 playShatterAt），此处跳过即时破碎；其余协议（fire/light/darkness/system）保持
-        // 即时破碎 + 附加叠加
+        // 3代点名卡牌删除附加层（暴食 G2 / 愤怒 W1 / 压制 O2 / 新星 N1）：内部即时或延后基础破碎
+        if (node && gen3DeleteFx(node, payload as unknown as Gen3CardPayload, GEN3_CARD_FX_API)) break;
         if (node && payload.triggerProtocol !== 'death' && payload.triggerProtocol !== 'hate') {
           playShatter(node, payload);
         }
@@ -1926,6 +1948,9 @@ export function initEffects(): () => void {
         // 灰雾期间一直在）；
         // 其余翻转源（water-0 带 'water'、系统效果带 'system'）走基础翻面
         if (node) {
+          // 3代点名卡牌翻转附加层（傲慢 P2/P3/P4、怠惰 S2、愤怒 W3、伏击 A1、柔性 X1、嫉妒 E4）：
+          // 内部调用基础 playFlip（怠惰按协议语法放慢到 750ms）
+          if (gen3FlipFx(node, payload as unknown as Gen3CardPayload, GEN3_CARD_FX_API, e.state)) break;
           if (payload.triggerProtocol === 'life') playLifeFlip(node, payload);
           else if (payload.triggerProtocol === 'apathy') playApathyFlipExtra(node, payload);
           else if (payload.triggerProtocol === 'corruption') {
@@ -1953,6 +1978,8 @@ export function initEffects(): () => void {
         // 2代 ice（寒冰1/2/3 偏转）→ 深蓝冰面滑道（起点雪花；卡照常基础飞行）；
         // 其余偏转源（light-2/light-3 带 'light'、系统效果带 'system'）走普通幽灵飞行
         if (node) {
+          // 3代点名卡牌偏转附加层（傲慢 P5 / 新星 N3 / 柔性 X2·X3）：内部含基础幽灵飞行
+          if (gen3ShiftFx(node, payload as unknown as Gen3CardPayload, GEN3_CARD_FX_API)) break;
           if (payload.triggerProtocol === 'darkness') playDarknessShiftBridge(node, payload);
           else if (payload.triggerProtocol === 'gravity') playGravityShiftExtra(node, payload);
           else if (payload.triggerProtocol === 'speed') playSpeedShiftExtra(node, payload);

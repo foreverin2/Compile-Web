@@ -1,0 +1,478 @@
+/* =============================================================================
+ * 3 代（MN03 / AX03）卡牌效果「附加层」样式 · 批次 B（弃牌 / 删除 / 翻转 / 偏转）
+ *
+ * 与 1/2 代同款做法：附加层挂在【基础动画之上的 EXTRA_Z(301) 浮层卡】里（JS 用
+ * buildFxCard 克隆当前卡面 → 本文件只负责观感）；body 级弧轨/连线另开满屏层。
+ * 约定：`g3-*` 前缀（卡牌特效）；全部 mask-free（渐变 / clip-path / offset-path / 多层阴影）；
+ * 每个元素都有起止衔接（进入 0.1~0.3s、收束 0.2~0.4s），不遮挡卡文（贴边 / 短暂）。
+ * ========================================================================== */
+
+/* ---------------------------------------------------------------- 共享 */
+
+/* body 级满屏弧轨层（偏转用）：SVG 视口坐标 + 沿路径飞行的光点 */
+.g3-arc { position: fixed; left: 0; top: 0; width: 100vw; height: 100vh; pointer-events: none; }
+.g3-arc-svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.g3-arc path { stroke-dasharray: 8 7; opacity: 0.85; animation: g3-arc-dash 0.6s linear infinite; }
+.g3-arc-ribbon { stroke-dasharray: none !important; opacity: 0.28 !important; filter: blur(3px); animation: none !important; }
+@keyframes g3-arc-dash { to { stroke-dashoffset: -30; } }
+.g3-arc-dot {
+  position: absolute; left: 0; top: 0; width: 7px; height: 7px; border-radius: 50%;
+  background: radial-gradient(circle, #ffffff 0%, currentColor 55%, rgba(255, 255, 255, 0) 100%);
+  box-shadow: 0 0 10px currentColor;
+  offset-rotate: 0deg;
+  animation: g3-arc-run linear forwards;
+}
+@keyframes g3-arc-run { from { offset-distance: 0%; opacity: 0; } 12% { opacity: 1; } 88% { opacity: 1; } to { offset-distance: 100%; opacity: 0; } }
+.g3-arc-head {
+  position: absolute; width: 46px; height: 46px; margin: -23px 0 0 -23px; border-radius: 50%;
+  border: 2px solid currentColor; opacity: 0;
+  animation: g3-arc-head 0.44s cubic-bezier(0.2, 0.8, 0.3, 1) forwards;
+}
+@keyframes g3-arc-head { 0% { transform: scale(0.4); opacity: 0.9; } 100% { transform: scale(1.5); opacity: 0; } }
+
+/* 各协议弧轨配色（currentColor 同时驱动光点与落点环） */
+.g3-pride-arc { color: #d9a441; }
+.g3-nova-arc { color: #ffb347; }
+.g3-nova-arc.dim { color: #8a3a2a; opacity: 0.75; }
+.g3-flx-arc { color: #a86fd0; }
+.g3-nova-pull { color: #ffb347; }
+
+/* 落点/覆盖光（柔性2 下方卡亮一下 / 新星0 收尾临界环）：body 级 fixed */
+.g3-flx-below-glow {
+  position: fixed; border-radius: 8px; pointer-events: none; z-index: 301;
+  border: 2px solid rgba(168, 111, 208, 0.9);
+  box-shadow: 0 0 18px rgba(168, 111, 208, 0.8), inset 0 0 14px rgba(255, 176, 224, 0.35);
+  animation: g3-below-glow 0.4s ease-out forwards;
+}
+@keyframes g3-below-glow { 0% { opacity: 0; } 30% { opacity: 1; } 100% { opacity: 0; } }
+.g3-nova-crit-ring {
+  position: fixed; width: 120px; height: 120px; margin: -60px 0 0 -60px; border-radius: 50%;
+  pointer-events: none; z-index: 301;
+  border: 3px solid rgba(255, 233, 192, 0.85);
+  box-shadow: 0 0 26px rgba(255, 179, 71, 0.9), inset 0 0 20px rgba(255, 179, 71, 0.45);
+  animation: g3-crit-ring 0.88s cubic-bezier(0.2, 0.8, 0.3, 1) forwards;
+}
+@keyframes g3-crit-ring {
+  0% { transform: scale(0.35) rotate(-40deg); opacity: 0; }
+  24% { opacity: 1; }
+  100% { transform: scale(1.5) rotate(30deg); opacity: 0; }
+}
+
+/* 通用：卡面浮层内的元素都以浮层卡为定位上下文 */
+.g3-coin, .g3-mud, .g3-mud-veil, .g3-claw, .g3-blood-dot, .g3-scale, .g3-speed-line, .g3-accel-ring,
+.g3-pull-line, .g3-bite-jaw, .g3-bite-frag, .g3-wrath-core, .g3-wrath-spike, .g3-blood-drop,
+.g3-weight-plate, .g3-press-frag, .g3-nova-burst-ray, .g3-nova-burst-flash,
+.g3-pride-beam, .g3-gold-chunk, .g3-sloth-flip-ember, .g3-wrath-bolt, .g3-wrath-scorch,
+.g3-amb-flip-grid, .g3-amb-flip-scan, .g3-flx-wrap-ribbon, .g3-flx-flip-shard, .g3-envy-count {
+  position: absolute; pointer-events: none;
+}
+
+/* 浮层卡本身：淡入 0.18s（避免"啪"地出现），收尾由 JS 移除 */
+.g3-greed-discard, .g3-sloth-discard, .g3-wrath-discard, .g3-fulcrum-discard, .g3-momentum-discard,
+.g3-nova-discard, .g3-gluttony-delete, .g3-wrath-delete, .g3-overwhelm-delete, .g3-nova-delete,
+.g3-pride-prism, .g3-pride-crack, .g3-sloth-flip, .g3-wrath-flip, .g3-amb-reveal, .g3-amb-hide,
+.g3-flx-flip, .g3-envy-curl { animation: g3-layer-in 0.18s ease-out; }
+@keyframes g3-layer-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* ============================================================ 贪婪：硬币滚落 */
+
+.g3-coin {
+  position: absolute; height: 8px; border-radius: 50%;
+  background:
+    radial-gradient(circle at 34% 30%, rgba(255, 255, 255, 0.9) 0%, rgba(255, 255, 255, 0) 44%),
+    linear-gradient(180deg, #ff9df0 0%, #d94fd9 48%, #7a1f7a 100%);
+  box-shadow: inset 0 -2px 3px rgba(58, 16, 48, 0.8), 0 0 8px rgba(217, 79, 217, 0.6);
+  animation: g3-coin-fall 0.46s cubic-bezier(0.4, 0.1, 0.7, 1) forwards;
+}
+@keyframes g3-coin-fall {
+  0% { transform: translate(0, 0) rotate(0deg) scale(0.7); opacity: 0; }
+  18% { opacity: 1; }
+  62% { transform: translate(calc(var(--dx) * 0.7), 46px) rotate(calc(var(--rot) * 0.6)) scale(1); }
+  82% { transform: translate(var(--dx), 76px) rotate(var(--rot)) scale(1.08); }
+  100% { transform: translate(var(--dx), 84px) rotate(var(--rot)) scale(0.96); opacity: 0.9; }
+}
+
+/* ============================================================ 怠惰：泥浆下淌 */
+
+.g3-mud {
+  position: absolute; top: 18%; height: 26%;
+  border-radius: 46% 54% 38% 62% / 58% 62% 38% 42%;
+  background: linear-gradient(180deg, rgba(138, 90, 90, 0.75), rgba(38, 38, 42, 0.9));
+  box-shadow: inset 0 6px 10px rgba(255, 90, 90, 0.14);
+  filter: blur(0.7px);
+  animation: g3-mud-flow 0.62s cubic-bezier(0.5, 0.05, 0.75, 0.2) forwards;
+}
+@keyframes g3-mud-flow {
+  0% { transform: translateY(-16%) scaleY(0.7); opacity: 0; }
+  22% { opacity: 1; }
+  100% { transform: translateY(52%) scaleY(1.25); opacity: 0.92; }
+}
+.g3-mud-veil {
+  position: absolute; inset: 0;
+  background: linear-gradient(180deg, rgba(138, 90, 90, 0.28), rgba(255, 90, 90, 0.12));
+  animation: g3-veil-in 0.5s ease-out forwards;
+}
+@keyframes g3-veil-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* ============================================================ 愤怒：爪痕 / 爆刺 */
+
+.g3-claw {
+  position: absolute; left: -6%; top: 6%; width: 112%; height: 14%;
+  background: linear-gradient(90deg, rgba(192, 57, 43, 0) 0%, rgba(192, 57, 43, 0.9) 22%, rgba(255, 208, 176, 0.95) 48%, rgba(192, 57, 43, 0.85) 74%, rgba(192, 57, 43, 0) 100%);
+  clip-path: polygon(0% 42%, 100% 0%, 100% 26%, 0% 68%);
+  filter: drop-shadow(0 0 6px rgba(192, 57, 43, 0.75));
+  transform-origin: 0% 50%;
+  opacity: 0;
+  animation: g3-claw-slash 0.3s cubic-bezier(0.25, 0.9, 0.3, 1) forwards;
+}
+.g3-claw.s1 { top: 26%; animation-delay: 0.05s !important; }
+.g3-claw.s2 { top: 46%; animation-delay: 0.1s !important; }
+@keyframes g3-claw-slash {
+  0% { transform: translateX(-30%) scaleX(0.2); opacity: 0; }
+  30% { opacity: 1; }
+  100% { transform: translateX(0) scaleX(1); opacity: 0.95; }
+}
+.g3-blood-dot {
+  position: absolute; width: 5px; height: 5px; border-radius: 50% 50% 60% 40%;
+  background: radial-gradient(circle at 34% 30%, #ffd0b0, #c0392b 62%, #6b1a12);
+  box-shadow: 0 0 6px rgba(192, 57, 43, 0.8);
+  animation: g3-dot-pop 0.4s cubic-bezier(0.2, 0.9, 0.3, 1) forwards;
+}
+@keyframes g3-dot-pop { 0% { transform: scale(0.2); opacity: 0; } 30% { opacity: 1; } 100% { transform: scale(1.25); opacity: 0.85; } }
+
+.g3-wrath-core {
+  position: absolute; left: 50%; top: 50%; width: 18%; aspect-ratio: 1 / 1; margin: -9% 0 0 -9%; border-radius: 50%;
+  background: radial-gradient(circle, #fff0e0 0%, #c0392b 45%, rgba(107, 26, 18, 0) 72%);
+  box-shadow: 0 0 18px rgba(255, 120, 90, 0.9);
+  animation: g3-wrath-core 0.34s ease-out forwards;
+}
+@keyframes g3-wrath-core { 0% { transform: scale(0.2); opacity: 0; } 40% { transform: scale(1.15); opacity: 1; } 100% { transform: scale(0.9); opacity: 0.55; } }
+.g3-wrath-spike {
+  position: absolute; left: 50%; top: 50%; width: 5px; height: 46%;
+  margin: -46% 0 0 -2.5px; transform-origin: 50% 100%;
+  background: linear-gradient(0deg, rgba(107, 26, 18, 0.9), #c0392b 45%, #ffd0b0 100%);
+  clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
+  box-shadow: 0 0 8px rgba(192, 57, 43, 0.75);
+  animation: g3-wrath-spike 0.42s cubic-bezier(0.2, 0.9, 0.3, 1) forwards;
+}
+@keyframes g3-wrath-spike { 0% { transform: rotate(var(--r, 0deg)) scaleY(0.1); opacity: 0; } 30% { opacity: 1; } 100% { transform: rotate(var(--r, 0deg)) scaleY(1); opacity: 0.9; } }
+.g3-blood-drop {
+  position: absolute; left: 50%; top: 50%; width: 5px; height: 7px; border-radius: 50% 50% 60% 40%;
+  background: linear-gradient(180deg, #ffd0b0, #a32a1c);
+  box-shadow: 0 0 7px rgba(192, 57, 43, 0.8);
+  animation: g3-drop-fly 0.56s cubic-bezier(0.25, 0.9, 0.35, 1) forwards;
+}
+@keyframes g3-drop-fly {
+  0% { transform: translate(-50%, -50%) scale(0.3); opacity: 0; }
+  20% { opacity: 1; }
+  70% { transform: translate(calc(-50% + var(--dx) * 0.85), calc(-50% + var(--dy) * 0.7)) scale(1); }
+  100% { transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy) * 1.25)) scale(0.6); opacity: 0; }
+}
+
+/* ============================================================ 支点：天平 */
+
+.g3-scale { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+.g3-scale-beam {
+  position: absolute; left: 8%; top: 26%; width: 84%; height: 4px; border-radius: 2px;
+  background: linear-gradient(90deg, rgba(47, 127, 143, 0.35), #d8f0ff 50%, rgba(47, 127, 143, 0.35));
+  box-shadow: 0 0 10px rgba(47, 127, 143, 0.6);
+  transform-origin: 50% 50%;
+  animation: g3-scale-tilt 0.44s cubic-bezier(0.4, 0.1, 0.7, 1) forwards;
+}
+@keyframes g3-scale-tilt { 0% { transform: rotate(0deg); } 100% { transform: rotate(7deg); } }
+.g3-scale.sink .g3-scale-beam { animation: g3-scale-tilt 0.44s cubic-bezier(0.4, 0.1, 0.7, 1) forwards; }
+.g3-scale.empty-lift .g3-scale-beam { animation: g3-scale-lift 0.26s ease-out, g3-scale-tilt 0.44s cubic-bezier(0.4, 0.1, 0.7, 1) 0.26s forwards; }
+@keyframes g3-scale-lift { 0% { transform: rotate(0deg); } 100% { transform: rotate(-9deg); } }
+.g3-scale-pan {
+  position: absolute; top: 32%; width: 26%; height: 12px;
+  border-radius: 2px 2px 12px 12px;
+  background: linear-gradient(180deg, rgba(216, 240, 255, 0.9), rgba(47, 127, 143, 0.75));
+  box-shadow: 0 0 10px rgba(47, 127, 143, 0.6), inset 0 -2px 3px rgba(16, 28, 38, 0.7);
+}
+.g3-scale-pan.l { left: 8%; animation: g3-pan-sink 0.44s cubic-bezier(0.4, 0.1, 0.7, 1) forwards; }
+.g3-scale-pan.r { right: 8%; animation: g3-pan-rise 0.44s cubic-bezier(0.4, 0.1, 0.7, 1) forwards; }
+@keyframes g3-pan-sink { 0% { transform: translateY(-6px); } 100% { transform: translateY(16px); } }
+@keyframes g3-pan-rise { 0% { transform: translateY(6px); } 100% { transform: translateY(-14px); } }
+.g3-scale-pivot {
+  position: absolute; left: 50%; top: 24%; width: 12px; height: 12px; margin-left: -6px;
+  transform: rotate(45deg);
+  background: linear-gradient(140deg, #ffffff, #2f7f8f);
+  box-shadow: 0 0 10px rgba(216, 240, 255, 0.85);
+}
+
+/* ============================================================ 动量：速度线 */
+
+.g3-speed-line {
+  position: absolute; left: -32%; width: 48%; height: 2px; border-radius: 1px;
+  background: linear-gradient(90deg, rgba(255, 138, 43, 0), rgba(255, 208, 138, 0.95), rgba(255, 138, 43, 0));
+  box-shadow: 0 0 8px rgba(255, 138, 43, 0.85);
+  animation: g3-speed-sweep 0.3s cubic-bezier(0.3, 0.1, 0.6, 1) forwards;
+}
+@keyframes g3-speed-sweep { 0% { transform: translateX(0); opacity: 0; } 18% { opacity: 1; } 100% { transform: translateX(300%); opacity: 0; } }
+/* 卡面拖影：必须用 ::after（浮层卡自身背景会被卡面图盖住） */
+.g3-momentum-discard::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(90deg, rgba(255, 138, 43, 0.35), rgba(255, 208, 138, 0.12) 60%, rgba(255, 138, 43, 0));
+  animation: g3-smear 0.22s cubic-bezier(0.3, 0.9, 0.4, 1) forwards;
+}
+@keyframes g3-smear { 0% { opacity: 0; transform: translateX(-16px); } 24% { opacity: 1; } 100% { opacity: 0; transform: translateX(10px); } }
+.g3-accel-ring {
+  position: absolute; left: 50%; top: 50%; width: 84%; aspect-ratio: 1 / 1; margin: -42% 0 0 -42%; border-radius: 50%;
+  border: 2px solid rgba(255, 208, 138, 0.85);
+  box-shadow: 0 0 16px rgba(255, 138, 43, 0.75);
+  animation: g3-accel 0.32s cubic-bezier(0.3, 0.9, 0.4, 1) forwards;
+}
+@keyframes g3-accel { 0% { transform: scale(1.1); opacity: 0; } 30% { opacity: 1; } 100% { transform: scale(0.55); opacity: 0; } }
+
+/* ============================================================ 新星：引力线 / 星芒爆发 */
+
+.g3-pull-line {
+  position: absolute; left: 0; top: 50%; width: 100%; height: 2px;
+  background: linear-gradient(90deg, rgba(255, 179, 71, 0), rgba(255, 233, 192, 0.9), rgba(255, 179, 71, 0));
+  box-shadow: 0 0 8px rgba(255, 179, 71, 0.85);
+  opacity: 0;
+  animation: g3-pull 0.38s ease-out forwards;
+}
+@keyframes g3-pull { 0% { transform: scaleX(0.1) translateX(-20%); opacity: 0; } 30% { opacity: 1; } 100% { transform: scaleX(1) translateX(0); opacity: 0.55; } }
+/* 注意：浮层卡自身的 transform 是内联的（横置卡 rotate ±90°）——**不要**在浮层卡类上做 transform 动画，
+   否则横置卡会在动画期间"立起来"。位移感一律交给子元素/伪元素表达。 */
+.g3-nova-burst-ray {
+  position: absolute; left: 50%; top: 50%; width: 4px; height: 52%;
+  margin: -52% 0 0 -2px; transform-origin: 50% 100%;
+  background: linear-gradient(0deg, rgba(138, 58, 42, 0.8), #ffb347 55%, #fffbef 100%);
+  clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
+  box-shadow: 0 0 10px rgba(255, 179, 71, 0.85);
+  animation: g3-nova-ray-burst 0.34s cubic-bezier(0.15, 1, 0.3, 1) forwards;
+}
+@keyframes g3-nova-ray-burst { 0% { opacity: 0; filter: brightness(2.2); } 30% { opacity: 1; } 100% { opacity: 0.9; filter: brightness(1); } }
+.g3-nova-burst-flash {
+  position: absolute; inset: 0;
+  background: radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.65) 0%, rgba(255, 233, 192, 0.2) 46%, rgba(255, 255, 255, 0) 74%);
+  animation: g3-flash-out 0.34s ease-out forwards;
+}
+@keyframes g3-flash-out { 0% { opacity: 0; } 22% { opacity: 1; } 100% { opacity: 0; } }
+
+/* ============================================================ 暴食：粉碎吞噬 */
+
+.g3-bite-jaw { position: absolute; top: 0; width: 34%; height: 100%; }
+.g3-bite-jaw.l { left: 0; }
+.g3-bite-jaw.r { right: 0; transform: scaleX(-1); }
+.g3-bite-tooth {
+  position: absolute; left: 0; width: 100%; height: 26%;
+  background: linear-gradient(90deg, #f0d678 0%, #c9a227 46%, #5e4708 100%);
+  clip-path: polygon(0% 0%, 100% 50%, 0% 100%);
+  box-shadow: inset -3px 0 5px rgba(43, 43, 51, 0.7);
+  animation: g3-bite-in 0.3s cubic-bezier(0.5, 0, 0.75, 0) forwards;
+}
+.g3-bite-tooth.t0 { top: 6%; animation-delay: 0s; }
+.g3-bite-tooth.t1 { top: 37%; animation-delay: 0.04s; }
+.g3-bite-tooth.t2 { top: 68%; animation-delay: 0.08s; }
+@keyframes g3-bite-in { 0% { transform: translateX(-100%); opacity: 0; } 35% { opacity: 1; } 100% { transform: translateX(0); opacity: 1; } }
+.g3-bite-frag {
+  position: absolute; width: 22%; height: 18%;
+  background: linear-gradient(150deg, #f0d678 0%, #7a5c1e 70%, rgba(43, 43, 51, 0.9) 100%);
+  clip-path: polygon(8% 0%, 100% 18%, 86% 100%, 0% 76%);
+  box-shadow: inset 0 0 6px rgba(43, 43, 51, 0.6);
+  opacity: 0;
+  animation: g3-frag-collapse 0.3s cubic-bezier(0.5, 0, 0.8, 0.2) forwards;
+}
+@keyframes g3-frag-collapse {
+  0% { transform: translate(0, 0) scale(1); opacity: 0; }
+  22% { opacity: 1; }
+  100% { transform: translate(var(--fx, 0px), var(--fy, 0px)) scale(0.35) rotate(24deg); opacity: 0.2; }
+}
+.g3-gluttony-delete::after {
+  content: ''; position: absolute; left: 50%; top: 50%; width: 26%; aspect-ratio: 1 / 1; margin: -13% 0 0 -13%;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 248, 220, 0.95) 0%, rgba(201, 162, 39, 0.4) 48%, rgba(201, 162, 39, 0) 72%);
+  animation: g3-bite-flash 0.34s ease-out 0.56s backwards;
+}
+@keyframes g3-bite-flash { 0% { opacity: 0; } 26% { opacity: 1; } 100% { opacity: 0; } }
+
+/* ============================================================ 压制：配重板 */
+
+.g3-weight-plate {
+  position: absolute; left: 6%; top: 0; width: 88%; height: 30%;
+  border-radius: 4px;
+  background: linear-gradient(180deg, #e8f4ff 0%, #1f6f8f 42%, #0d1418 100%);
+  box-shadow: 0 8px 18px rgba(13, 20, 24, 0.75), inset 0 -3px 6px rgba(232, 244, 255, 0.25);
+  animation: g3-plate-press 0.5s cubic-bezier(0.45, 0, 0.75, 0.2) forwards;
+}
+.g3-weight-plate-ridge {
+  position: absolute; left: 6%; right: 6%; top: 34%; height: 3px;
+  background: repeating-linear-gradient(90deg, rgba(232, 244, 255, 0.8) 0 7px, rgba(31, 111, 143, 0.2) 7px 14px);
+}
+@keyframes g3-plate-press {
+  0% { transform: translateY(-120%) scaleY(1.1); opacity: 0; }
+  18% { opacity: 1; }
+  62% { transform: translateY(24%) scaleY(1); }
+  82% { transform: translateY(22%) scaleY(0.98); }
+  100% { transform: translateY(-140%) scaleY(1); opacity: 0; }
+}
+.g3-press-frag {
+  position: absolute; width: 20%; height: 12%;
+  background: linear-gradient(150deg, #cfe6f2, #1f6f8f 60%, #0d1418);
+  clip-path: polygon(0% 12%, 100% 0%, 88% 100%, 6% 82%);
+  opacity: 0;
+  animation: g3-press-squash 0.42s cubic-bezier(0.5, 0, 0.8, 0.2) forwards;
+}
+@keyframes g3-press-squash {
+  0% { transform: scaleY(1); opacity: 0; }
+  24% { opacity: 1; }
+  100% { transform: translateY(10px) scaleY(0.25) scaleX(1.15); opacity: 0.25; }
+}
+
+/* ============================================================ 傲慢：棱镜 / 金塔裂纹 / 光柱 */
+
+/* 掠光与裂纹必须是 ::after（浮层卡自身背景会被卡面图盖住） */
+.g3-pride-prism::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(105deg, rgba(255, 248, 230, 0) 30%, rgba(255, 233, 168, 0.55) 48%, rgba(217, 164, 65, 0.35) 56%, rgba(255, 248, 230, 0) 70%);
+  background-size: 220% 100%;
+  animation: g3-prism-sweep 0.42s cubic-bezier(0.3, 0.9, 0.4, 1) forwards;
+}
+@keyframes g3-prism-sweep { 0% { background-position: 130% 0; opacity: 0; } 20% { opacity: 1; } 100% { background-position: -30% 0; opacity: 0.15; } }
+.g3-pride-crack::after {
+  content: ''; position: absolute; inset: 0;
+  background:
+    linear-gradient(72deg, rgba(217, 164, 65, 0) 46%, rgba(255, 233, 168, 0.95) 49%, rgba(217, 164, 65, 0) 53%),
+    linear-gradient(-58deg, rgba(217, 164, 65, 0) 40%, rgba(255, 233, 168, 0.8) 44%, rgba(217, 164, 65, 0) 49%);
+  animation: g3-crack-in 0.3s ease-out forwards;
+}
+@keyframes g3-crack-in { 0% { opacity: 0; transform: scale(1.04); } 30% { opacity: 1; } 100% { opacity: 0.5; transform: scale(1); } }
+.g3-pride-beam {
+  position: absolute; left: 50%; top: 4%; width: 46%; height: 62%; margin-left: -23%;
+  background: linear-gradient(180deg, rgba(255, 248, 230, 0.9) 0%, rgba(255, 233, 168, 0.45) 40%, rgba(217, 164, 65, 0) 100%);
+  clip-path: polygon(38% 0%, 62% 0%, 100% 100%, 0% 100%);
+  filter: blur(1px);
+  opacity: 0;
+  animation: g3-beam-rise 0.5s cubic-bezier(0.2, 0.9, 0.3, 1) 0.22s forwards;
+}
+@keyframes g3-beam-rise { 0% { transform: scaleY(0.3) translateY(18%); opacity: 0; } 40% { opacity: 0.95; } 100% { transform: scaleY(1) translateY(0); opacity: 0.5; } }
+.g3-gold-chunk {
+  position: absolute; top: 8%; width: 12%; height: 10%;
+  background: linear-gradient(150deg, #fff8e6, #d9a441 55%, #7a5a1e);
+  clip-path: polygon(0% 18%, 74% 0%, 100% 62%, 26% 100%);
+  box-shadow: 0 0 8px rgba(255, 233, 168, 0.7);
+  animation: g3-chunk-fall 0.5s cubic-bezier(0.4, 0.1, 0.7, 0.3) forwards;
+}
+@keyframes g3-chunk-fall {
+  0% { transform: translate(0, -14px) rotate(0deg); opacity: 0; }
+  24% { opacity: 1; }
+  100% { transform: translate(var(--dx), 66px) rotate(180deg); opacity: 0; }
+}
+
+/* ============================================================ 怠惰：慢翻 + 余烬 */
+
+.g3-sloth-flip::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(160deg, rgba(138, 90, 90, 0.45) 0%, rgba(38, 38, 42, 0.3) 52%, rgba(255, 90, 90, 0.16) 100%);
+  animation: g3-slow-veil 0.9s ease-in-out forwards;
+}
+@keyframes g3-slow-veil { 0% { opacity: 0; } 26% { opacity: 1; } 74% { opacity: 0.9; } 100% { opacity: 0; } }
+.g3-sloth-flip-ember {
+  position: absolute; width: 5px; height: 5px; border-radius: 50%;
+  background: radial-gradient(circle, #ffd0b0, #ff5a5a 55%, rgba(255, 90, 90, 0) 100%);
+  box-shadow: 0 0 8px rgba(255, 90, 90, 0.75);
+  animation: g3-ember-linger 0.9s ease-in-out forwards;
+}
+@keyframes g3-ember-linger { 0% { opacity: 0; transform: scale(0.6); } 32% { opacity: 0.95; } 100% { opacity: 0; transform: scale(1.1); } }
+
+/* ============================================================ 愤怒：闪电 + 焦痕 */
+
+.g3-wrath-bolt {
+  position: absolute; left: 50%; top: -10%; width: 20%; height: 120%; margin-left: -10%;
+  background: linear-gradient(180deg, rgba(232, 244, 255, 0.95), #ffd0b0 46%, rgba(192, 57, 43, 0.9));
+  clip-path: polygon(46% 0%, 64% 0%, 38% 44%, 60% 44%, 30% 100%, 46% 52%, 26% 52%);
+  filter: drop-shadow(0 0 10px rgba(255, 208, 176, 0.95));
+  animation: g3-bolt-strike 0.4s steps(1, end) forwards;
+}
+@keyframes g3-bolt-strike { 0% { opacity: 0; } 10% { opacity: 1; } 24% { opacity: 0.2; } 38% { opacity: 1; } 56% { opacity: 0.15; } 72% { opacity: 0.9; } 100% { opacity: 0; } }
+.g3-wrath-scorch {
+  position: absolute; inset: 0;
+  background: radial-gradient(ellipse at 50% 62%, rgba(58, 20, 14, 0.6) 0%, rgba(138, 58, 42, 0.28) 42%, rgba(26, 15, 16, 0) 72%);
+  animation: g3-scorch 0.7s ease-out 0.3s backwards;
+}
+@keyframes g3-scorch { 0% { opacity: 0; } 24% { opacity: 1; } 100% { opacity: 0; } }
+
+/* ============================================================ 伏击：揭幕 / 合拢 + 九宫格 */
+
+.g3-amb-reveal::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(180deg, rgba(22, 32, 44, 0.92) 0%, rgba(22, 32, 44, 0.55) 60%, rgba(22, 32, 44, 0.2) 100%);
+  animation: g3-amb-open 0.62s cubic-bezier(0.3, 0.9, 0.35, 1) forwards;
+}
+@keyframes g3-amb-open { 0% { opacity: 1; } 100% { opacity: 0; } }
+.g3-amb-hide::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(180deg, rgba(22, 32, 44, 0.2) 0%, rgba(22, 32, 44, 0.6) 45%, rgba(16, 24, 32, 0.95) 100%);
+  animation: g3-amb-close 0.5s cubic-bezier(0.5, 0, 0.75, 0.2) forwards;
+}
+@keyframes g3-amb-close { 0% { opacity: 0; transform: scale(1.06); } 60% { opacity: 0.95; } 100% { opacity: 1; transform: scale(1); } }
+.g3-amb-flip-grid {
+  position: absolute; left: 50%; top: 50%; width: 58%; aspect-ratio: 1 / 1; margin: -29% 0 0 -29%;
+  display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); gap: 3px;
+}
+.g3-amb-flip-cell {
+  display: block; border-radius: 2px;
+  background: linear-gradient(150deg, rgba(22, 32, 44, 0.7), rgba(111, 147, 196, 0.16));
+  opacity: 0;
+  animation: g3-amb-cell 0.44s ease-out forwards;
+}
+.g3-amb-flip-cell.on { background: linear-gradient(150deg, rgba(143, 227, 255, 0.6), rgba(111, 147, 196, 0.34)); box-shadow: 0 0 12px rgba(143, 227, 255, 0.8); }
+@keyframes g3-amb-cell { 0% { opacity: 0; } 40% { opacity: 0.85; } 100% { opacity: 0.35; } }
+.g3-amb-flip-scan {
+  position: absolute; left: 0; bottom: 0; width: 100%; height: 3px;
+  background: linear-gradient(90deg, rgba(143, 227, 255, 0), rgba(143, 227, 255, 0.95) 32%, rgba(188, 216, 255, 0.6) 68%, rgba(143, 227, 255, 0));
+  box-shadow: 0 0 12px rgba(143, 227, 255, 0.9);
+  animation: g3-amb-flip-scan 0.6s cubic-bezier(0.3, 0.1, 0.6, 1) forwards;
+}
+@keyframes g3-amb-flip-scan { 0% { bottom: 0; opacity: 0; } 14% { opacity: 1; } 86% { opacity: 1; } 100% { bottom: 100%; opacity: 0; } }
+
+/* ============================================================ 柔性：缠绕 + 飞散 */
+
+.g3-flx-flip { animation: g3-layer-in 0.18s ease-out; }
+.g3-flx-wrap-ribbon {
+  position: absolute; left: -12%; top: 34%; width: 124%; height: 30%;
+  border-radius: 50% 50% 46% 54% / 62% 58% 42% 38%;
+  background: linear-gradient(90deg, rgba(168, 111, 208, 0.1) 0%, rgba(255, 176, 224, 0.85) 34%, rgba(168, 111, 208, 0.9) 62%, rgba(28, 20, 48, 0.35) 100%);
+  box-shadow: 0 0 14px rgba(168, 111, 208, 0.6), inset 0 2px 6px rgba(255, 255, 255, 0.3);
+  filter: blur(0.4px);
+  transform-origin: 50% 50%;
+  animation: g3-wrap 0.4s cubic-bezier(0.3, 0.9, 0.4, 1) forwards;
+}
+@keyframes g3-wrap { 0% { transform: rotate(-24deg) scaleX(0.3); opacity: 0; } 30% { opacity: 1; } 100% { transform: rotate(6deg) scaleX(1); opacity: 0.95; } }
+.g3-flx-flip-shard {
+  position: absolute; left: 50%; top: 50%; width: 10px; height: 6px; border-radius: 40% 60% 55% 45%;
+  background: linear-gradient(120deg, #ffb0e0, #a86fd0 60%, rgba(28, 20, 48, 0.6));
+  box-shadow: 0 0 8px rgba(255, 176, 224, 0.75);
+  animation: g3-flx-shard-fly 0.6s cubic-bezier(0.2, 0.9, 0.3, 1) forwards;
+}
+@keyframes g3-flx-shard-fly {
+  0% { transform: translate(-50%, -50%) scale(0.5); opacity: 0; }
+  20% { opacity: 1; }
+  100% { transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) scale(0.35) rotate(160deg); opacity: 0; }
+}
+
+/* ============================================================ 嫉妒：卷边光 + 已编译数对比 */
+
+.g3-envy-curl { animation: g3-layer-in 0.18s ease-out; }
+.g3-envy-curl::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(215deg, rgba(126, 242, 224, 0.55) 0%, rgba(47, 179, 168, 0.28) 22%, rgba(15, 79, 74, 0) 46%);
+  animation: g3-curl 0.5s cubic-bezier(0.3, 0.9, 0.4, 1) forwards;
+}
+@keyframes g3-curl { 0% { transform: scale(0.6); transform-origin: 100% 0; opacity: 0; } 26% { opacity: 1; } 100% { transform: scale(1); opacity: 0.35; } }
+.g3-envy-count {
+  position: absolute; left: 50%; top: 8%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 5px;
+}
+.g3-envy-count-chip {
+  display: block; min-width: 20px; padding: 1px 5px; border-radius: 4px;
+  font: 700 12px/1.5 ui-monospace, monospace; text-align: center;
+  background: rgba(15, 79, 74, 0.85); color: #7ef2e0;
+  border: 1px solid rgba(126, 242, 224, 0.7);
+  box-shadow: 0 0 8px rgba(47, 179, 168, 0.6);
+}
+.g3-envy-count-chip.foe { background: rgba(74, 40, 8, 0.85); color: #ffb347; border-color: rgba(255, 179, 71, 0.75); box-shadow: 0 0 8px rgba(255, 179, 71, 0.6); }
+.g3-envy-count-vs { font: 700 11px/1 ui-monospace, monospace; color: rgba(255, 255, 255, 0.75); }
