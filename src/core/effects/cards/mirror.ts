@@ -2,7 +2,7 @@ import type { EffectCtx, EffectStep, GameState, Line, PlayerId, StepResult } fro
 import { registerCardEffects } from '../registry';
 
 /**
- * 2代 明镜 mirror（关键词：平移、复制）。
+ * 2代 明镜 mirror（关键词：偏转、复制；2026-09-13 按 txt 同步）。
  * 权威卡文：src/data/cards2.ts；规格/裁决：docs/批1规格-幸运明镜和平混沌明晰.md §2 + docs/批1裁决结果.md
  * （[Q7]-[Q11]）。引擎能力 G3 swapStacks / G4 copyMiddle / G5 after-opponent-draw（2026-09-05 已实现）。
  */

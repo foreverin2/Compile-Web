@@ -5,7 +5,7 @@ import { getCardDef } from '../../../data/demo';
 import { setControl } from '../../rules/control';
 
 /**
- * 3代 新星 nova（关键词：删除/重排/控制权/平移/翻转；座右铭：璀璨爆发）。
+ * 3代 新星 nova（关键词：删除/重排/控制权/偏转/翻转；座右铭：璀璨爆发）。
  * 权威卡文：src/data/cards3.ts（compile3文本.txt）；裁决：docs/3代-批3-规格与裁决清单.md
  * （C2 删该线双方全部 faceUp；C3 控制权中立 fizzle；C4 重排事件；C5 else 必得控制权；
  *  汉化稿 520 行裁决：无论谁持控制权都只能交换 nova 玩家两个协议——控制权持有者选择 nova 方 2 位）。
@@ -142,35 +142,35 @@ function* nova2Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   }
 }
 
-/** nova-2 底（after-self-rearrange，无 top 仅顶卡）：当你重排协议后：你可以平移1张反面朝下的牌。 */
+/** nova-2 底（after-self-rearrange，无 top 仅顶卡）：当你重排协议后：你可以偏转1张反面朝下的牌。 */
 function* nova2AfterSelfRearrange(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const cand = ctx.candidates({ zone: 'field', owner: ctx.player }).filter((c) => !c.faceUp);
-  const tAns = yield { kind: 'select', title: 'nova-2：你重排协议后——你可以平移1张反面朝下的牌', min: 1, max: 1, optional: true, candidates: cand };
+  const tAns = yield { kind: 'select', title: 'nova-2：你重排协议后——你可以偏转1张反面朝下的牌', min: 1, max: 1, optional: true, candidates: cand };
   if (tAns.selected.length === 0) return;
   const card = ctx.s.players[ctx.player].stacks.flat().find((c) => c.uid === tAns.selected[0]);
   const srcLine = card?.line ?? ctx.card.line;
   if (srcLine === null) return;
   const lAns = yield {
-    kind: 'select-line', title: 'nova-2：平移到哪条链路', min: 1, max: 1, optional: false, candidates: [],
+    kind: 'select-line', title: 'nova-2：偏转到哪条链路', min: 1, max: 1, optional: false, candidates: [],
     lines: ([0, 1, 2] as Line[]).filter((l) => l !== srcLine),
   };
   if (lAns.selected.length === 0) return;
   yield { op: 'shift', uid: tAns.selected[0], targetLine: Number(lAns.selected[0].replace('line:', '')) as Line };
 }
 
-/** nova-3 中：平移1张阈值小于此链路中牌数量的牌。 */
+/** nova-3 中：偏转1张阈值小于此链路中牌数量的牌。 */
 function* nova3Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const line = ctx.card.line;
   if (line === null) return;
   const count = s_len(ctx.s, ctx.player, line);
   const cand = ctx.candidates({ zone: 'field' }).filter((c) => getCardDef(c.defId).value < count);
   if (cand.length === 0) return;
-  const tAns = yield { kind: 'select', title: 'nova-3：平移1张阈值小于此链路牌数的牌', min: 1, max: 1, optional: false, candidates: cand };
+  const tAns = yield { kind: 'select', title: 'nova-3：偏转1张阈值小于此链路牌数的牌', min: 1, max: 1, optional: false, candidates: cand };
   if (tAns.selected.length === 0) return;
   const card = ctx.s.players.flatMap((p) => p.stacks).flat().find((c) => c.uid === tAns.selected[0]);
   const srcLine = card?.line ?? line;
   const lAns = yield {
-    kind: 'select-line', title: 'nova-3：平移到哪条链路', min: 1, max: 1, optional: false, candidates: [],
+    kind: 'select-line', title: 'nova-3：偏转到哪条链路', min: 1, max: 1, optional: false, candidates: [],
     lines: ([0, 1, 2] as Line[]).filter((l) => l !== srcLine),
   };
   if (lAns.selected.length === 0) return;

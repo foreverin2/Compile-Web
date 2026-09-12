@@ -5,7 +5,7 @@ import { fireRefreshReactives } from '../triggers';
 import { canRefreshDraw } from '../../engine/deck';
 
 /**
- * 3代 傲慢 pride（关键词：编译/刷新/平移/翻转/对比总阈值；座右铭：矜己自崇）。
+ * 3代 傲慢 pride（关键词：编译/刷新/偏转/翻转/对比总阈值；座右铭：矜己自崇）。
  * 权威卡文：src/data/cards3.ts（compile3文本.txt）；裁决：docs/3代-批1-规格与裁决清单.md
  * （RQ8 after-self-compile 方向；刷新 = 完整刷新语义（FAQ 161 含控制组件消耗——编译时已归还，
  * 不重复弹重排）；「若你拥有控制权」条件分支；控制权变更统一 setControl）。
@@ -26,7 +26,7 @@ function* pride0AfterSelfCompile(ctx: EffectCtx): Generator<EffectStep, void, St
   fireRefreshReactives(ctx.s, ctx.player);
 }
 
-/** pride-0 中：若你拥有控制权，平移1张其他牌。否则，平移1张你的牌。
+/** pride-0 中：若你拥有控制权，偏转1张其他牌。否则，偏转1张你的牌。
  *  （无「可以」→ 条件分支必移；无目标 fizzle。源卡 pride-0 自动排除于候选） */
 function* pride0Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const hasControl = ctx.s.control === ctx.player;
@@ -34,14 +34,14 @@ function* pride0Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> 
     ? ctx.candidates({ zone: 'field' }) // 任意方未覆盖顶卡
     : ctx.candidates({ zone: 'field', owner: ctx.player }); // 仅自己的
   const tAns = yield {
-    kind: 'select', title: hasControl ? 'pride-0：你拥有控制权——平移1张其他牌' : 'pride-0：平移1张你的牌',
+    kind: 'select', title: hasControl ? 'pride-0：你拥有控制权——偏转1张其他牌' : 'pride-0：偏转1张你的牌',
     min: 1, max: 1, optional: false, candidates: cand,
   };
   if (tAns.selected.length === 0) return;
   const uid = tAns.selected[0];
   const srcLine = findCardLine(ctx.s, uid);
   const lAns = yield {
-    kind: 'select-line', title: 'pride-0：平移到哪条链路', min: 1, max: 1, optional: false, candidates: [],
+    kind: 'select-line', title: 'pride-0：偏转到哪条链路', min: 1, max: 1, optional: false, candidates: [],
     lines: ([0, 1, 2] as Line[]).filter((l) => l !== srcLine),
   };
   if (lAns.selected.length === 0) return;
@@ -71,12 +71,12 @@ function* pride3Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> 
   if (ans.selected.length > 0) yield { op: 'flip', uid: ans.selected[0] };
 }
 
-/** pride-4 中：若你拥有控制权，你可以将对手1张牌平移到此链路。 */
+/** pride-4 中：若你拥有控制权，你可以将对手1张牌偏转到此链路。 */
 function* pride4Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const line = ctx.card.line;
   if (line === null || ctx.s.control !== ctx.player) return;
   const cand = ctx.candidates({ zone: 'field', owner: opp(ctx.player) });
-  const ans = yield { kind: 'select', title: 'pride-4：你拥有控制权——你可以将对手1张牌平移到此链路', min: 1, max: 1, optional: true, candidates: cand };
+  const ans = yield { kind: 'select', title: 'pride-4：你拥有控制权——你可以将对手1张牌偏转到此链路', min: 1, max: 1, optional: true, candidates: cand };
   if (ans.selected.length > 0) yield { op: 'shift', uid: ans.selected[0], targetLine: line };
 }
 
@@ -98,7 +98,7 @@ function* pride6Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> 
   if (ctx.s.control === opp(ctx.player)) yield { op: 'flip', uid: ctx.card.uid };
 }
 
-/** 场上卡所在线（选目标后平移到其它线用） */
+/** 场上卡所在线（选目标后偏转到其它线用） */
 function findCardLine(s: GameState, uid: string): Line | null {
   for (const p of s.players) {
     for (const line of [0, 1, 2] as Line[]) {

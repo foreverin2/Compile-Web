@@ -173,7 +173,7 @@ export const ALL_CARD_DEFS_2: CardDef[] = [
   { defId: 'war-5', protocol: 'war', value: 5, middle: '你弃置1张牌。' },
 
   // 勇气——面对逆境的火焰
-  { defId: 'courage-0', protocol: 'courage', value: 0, top: '回合开始：若你没有手牌，抽取1张牌。', middle: '抽取1张牌。', bottom: '回合结束：你可以弃置1张牌，若你这么做，对手弃置1张牌。' },
+  { defId: 'courage-0', protocol: 'courage', value: 0, top: '回合开始：若你没有手牌，抽取1张牌。', middle: '抽取1张牌。', bottom: '回合结束：你可以弃置1张牌，若你达成该条件，对手弃置1张牌。' },
   { defId: 'courage-1', protocol: 'courage', value: 1, middle: '在1条对手总阈值更大的链路中删除对手的1张牌。' },
   { defId: 'courage-2', protocol: 'courage', value: 2, middle: '抽取1张牌。', bottom: '回合结束：此链路中，若对手总阈值更大，抽取1张牌。' },
   { defId: 'courage-3', protocol: 'courage', value: 3, bottom: '回合结束：你可以将此牌偏转进入对手总阈值最大的链路中。' },

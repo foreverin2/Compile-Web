@@ -8,7 +8,7 @@ import { EFFECTS } from './registry';
 import { executeCompileBody } from '../rules/compile-body';
 import { lineMiddleCommandsNullified, opponentBlocksMiddleCommands } from '../rules/restrictions';
 import { rearrangeProtocolSlots } from '../actions/rearrange';
-import { pushLog, pushEffectLog, actionCn } from '../log';
+import { pushLog, pushEffectLog, actionCn, shiftTerm } from '../log';
 import { traceAt, cardBrief } from '../trace';
 import './cards/fire';
 import './cards/light';
@@ -183,7 +183,7 @@ export function answerEffect(s: GameState, promptId: string, selected: string[])
       const lines = selected.map((x) => `线 ${Number(x.replace('line:', '')) + 1}`).join('、');
       pushLog(s, `P${who} 选择：${lines}`);
     } else if (req.kind === 'select-action') {
-      const acts = selected.map((x) => actionCn(x)).join('、'); // 修改提示词 8：动作日志中文
+      const acts = selected.map((x) => actionCn(x, pe.sourceDefId)).join('、'); // 修改提示词 8：动作日志中文（shift 用词随世代）
       pushLog(s, `P${who} 选择：${acts}`);
     } else {
       const names = selected
@@ -282,7 +282,7 @@ function describeOp(s: GameState, pe: PendingEffect, op: Op): string {
     case 'flip':
       return `翻转 ${defIdOf(op.uid)}`;
     case 'shift':
-      return `平移 ${defIdOf(op.uid)} → 线 ${op.targetLine + 1}`;
+      return `${shiftTerm(pe.sourceDefId)} ${defIdOf(op.uid)} → 线 ${op.targetLine + 1}`;
     case 'draw': {
       const who = op.player ?? pe.player;
       return `P${who + 1} 抽 ${op.count} 张牌${op.fromOpponentDeck ? '（对手牌库顶）' : ''}`;
@@ -489,9 +489,9 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       if (!card || card.zone !== 'field') throw new Error(`cannot shift ${op.uid}: not on field`);
       if (!op.allowCovered && !isUncovered(s, card)) throw new Error(`cannot shift ${op.uid}: covered card`);
       if (op.targetLine === card.line) throw new Error('must shift to a different line');
-      // 3代 rigidity-7 底「此牌不能被翻转或平移」（C11）：未被覆盖（faceUp 顶卡）时免疫 → 跳过
+      // 3代 rigidity-7 底「此牌不能被翻转或偏转」（C11）：未被覆盖（faceUp 顶卡）时免疫 → 跳过
       if (rigidity7Immune(s, card)) {
-        pushLog(s, 'rigidity-7 不可被平移，跳过');
+        pushLog(s, 'rigidity-7 不可被偏转，跳过');
         break;
       }
       const owner = card.owner;

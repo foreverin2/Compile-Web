@@ -9,3 +9,10 @@ declare module 'node:fs' {
 declare module 'node:url' {
   export function fileURLToPath(url: string | URL): string;
 }
+declare module 'node:child_process' {
+  export function execFileSync(
+    file: string,
+    args?: string[],
+    options?: { cwd?: string; encoding?: string },
+  ): string;
+}

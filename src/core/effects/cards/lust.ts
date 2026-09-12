@@ -5,7 +5,7 @@ import { traceAt, cardBrief } from '../../trace';
 import { findCard } from '../context';
 
 /**
- * 3代 色欲 lust（关键词：控制权/揭示/平移/反面打出；座右铭：惑乱人心）。
+ * 3代 色欲 lust（关键词：控制权/揭示/偏转/反面打出；座右铭：惑乱人心）。
  * 权威卡文：src/data/cards3.ts（compile3文本.txt）；裁决：docs/3代-批1-规格与裁决清单.md
  * （RQ1-A 色欲3 随机揭示牌由拥有者选线反打 / RQ4-A 色欲0 底只禁行动编译（restrictions）/
  *  RQ6-A 色欲6 对手手牌自选反打落己侧 / RQ8 控制权统一 setControl + after-opponent-gain-control）。
@@ -27,13 +27,13 @@ function* lust0Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   setControl(ctx.s, ctx.player);
 }
 
-/** lust-2 中：你可以将对手1张被覆盖的牌平移到此链路（选对手任一被盖卡 → shift 到 lust-2 所在线）。 */
+/** lust-2 中：你可以将对手1张被覆盖的牌偏转到此链路（选对手任一被盖卡 → shift 到 lust-2 所在线）。 */
 function* lust2Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const line = ctx.card.line;
   if (line === null) return;
   const covered = ctx.candidates({ zone: 'field', owner: opp(ctx.player), covered: true });
   if (covered.length === 0) return;
-  const ans = yield { kind: 'select', title: 'lust-2：你可以将对手1张被覆盖的牌平移到此链路', min: 1, max: 1, optional: true, candidates: covered };
+  const ans = yield { kind: 'select', title: 'lust-2：你可以将对手1张被覆盖的牌偏转到此链路', min: 1, max: 1, optional: true, candidates: covered };
   if (ans.selected.length > 0) yield { op: 'shift', uid: ans.selected[0], targetLine: line, allowCovered: true };
 }
 

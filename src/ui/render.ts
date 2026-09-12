@@ -4869,7 +4869,7 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
         deferredFx.push(() => startLuckDiceFx(srcUid));
       }
       for (const act of prompt.actions ?? []) {
-        const b = el('button', 'btn choice-action-btn', actionCn(act)); // 修改提示词 8：动作按钮中文（翻转/抽牌/正面打出…）
+        const b = el('button', 'btn choice-action-btn', actionCn(act, topEffect.sourceDefId)); // 修改提示词 8：动作按钮中文（翻转/抽牌/正面打出…；shift 用词随世代）
         b.addEventListener('click', () => { choicePromptId = null; cb.onAction({ kind: 'effect-choice', promptId: topEffect.id, choice: [act] }); });
         bar.appendChild(b);
       }

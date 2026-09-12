@@ -3,7 +3,7 @@ import { registerCardEffects } from '../registry';
 import { getCardDef } from '../../../data/demo';
 
 /**
- * 3代 伏击 ambush（关键词：翻转/抽牌/平移；座右铭：潜形晦迹）。
+ * 3代 伏击 ambush（关键词：翻转/抽牌/偏转；座右铭：潜形晦迹）。
  * 权威卡文：src/data/cards3.ts（compile3文本.txt）；裁决：docs/3代-批2-规格与裁决清单.md
  * （B4 伏击1 含被盖：己方所有印刷值 0/1 的牌任意朝向/层；B5 阈值并列拥有者任选；
  *  「翻转1张你的反面朝下的牌」= 自己未覆盖 faceDown 顶卡，惯例）。
@@ -60,19 +60,19 @@ function* ambush1Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult>
   }
 }
 
-/** ambush-2 中：平移你阈值最低的被覆盖的牌。（自己被盖中印刷值最低；并列拥有者选 → 目标线自选 ≠ 原线） */
+/** ambush-2 中：偏转你阈值最低的被覆盖的牌。（自己被盖中印刷值最低；并列拥有者选 → 目标线自选 ≠ 原线） */
 function* ambush2Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const covered = ctx.candidates({ zone: 'field', owner: ctx.player, covered: true });
   if (covered.length === 0) return;
   const minV = Math.min(...covered.map((c) => pv(c.defId)));
   const cand = covered.filter((c) => pv(c.defId) === minV);
-  const cAns = yield { kind: 'select', title: 'ambush-2：平移你阈值最低的被覆盖的牌', min: 1, max: 1, optional: false, candidates: cand };
+  const cAns = yield { kind: 'select', title: 'ambush-2：偏转你阈值最低的被覆盖的牌', min: 1, max: 1, optional: false, candidates: cand };
   if (cAns.selected.length === 0) return;
   const picked = cand.find((c) => c.uid === cAns.selected[0]);
   const srcLine = picked?.line ?? ctx.card.line;
   if (srcLine === null) return;
   const lAns = yield {
-    kind: 'select-line', title: 'ambush-2：平移到哪条链路', min: 1, max: 1, optional: false, candidates: [],
+    kind: 'select-line', title: 'ambush-2：偏转到哪条链路', min: 1, max: 1, optional: false, candidates: [],
     lines: ([0, 1, 2] as Line[]).filter((l) => l !== srcLine),
   };
   if (lAns.selected.length === 0) return;

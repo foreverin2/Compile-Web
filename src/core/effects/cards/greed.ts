@@ -71,7 +71,7 @@ function* greed2Start(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   if (ans.selected.length > 0) yield { op: 'return', uid: ans.selected[0] };
 }
 
-/** greed-3 中：平移你在此链路中1张被覆盖的牌（自己该链路的被盖卡 → 移到其它线自己链路）。 */
+/** greed-3 中：偏转你在此链路中1张被覆盖的牌（自己该链路的被盖卡 → 移到其它线自己链路）。 */
 function* greed3Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const line = ctx.card.line;
   if (line === null) return;
@@ -81,7 +81,7 @@ function* greed3Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> 
   if (covered.length === 0) return;
   const cAns = yield {
     kind: 'select',
-    title: 'greed-3：平移你在此链路中1张被覆盖的牌',
+    title: 'greed-3：偏转你在此链路中1张被覆盖的牌',
     min: 1, max: 1, optional: false,
     candidates: covered.map((c) => ({
       uid: c.uid, defId: c.defId, faceUp: c.faceUp, owner: ctx.player, zone: 'field' as const, line, pos: c.pos, label: String(c.defId),
@@ -89,7 +89,7 @@ function* greed3Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> 
   };
   if (cAns.selected.length === 0) return;
   const tAns = yield {
-    kind: 'select-line', title: 'greed-3：平移到哪条链路', min: 1, max: 1, optional: false, candidates: [],
+    kind: 'select-line', title: 'greed-3：偏转到哪条链路', min: 1, max: 1, optional: false, candidates: [],
     lines: ([0, 1, 2] as Line[]).filter((l) => l !== line),
   };
   if (tAns.selected.length === 0) return;

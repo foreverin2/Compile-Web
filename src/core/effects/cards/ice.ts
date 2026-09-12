@@ -3,7 +3,7 @@ import { registerCardEffects } from '../registry';
 import { findCard, isUncovered } from '../context';
 
 /**
- * 2代 寒冰 ice（关键词：平移/偏转、阻止）。
+ * 2代 寒冰 ice（关键词：偏转、守护；2026-09-13 按 txt 同步）。
  * 权威卡文：src/data/cards2.ts；裁决/默认：docs/批2裁决结果.md（ice-1 after-play 定向触发、
  * ice-3 end 被盖可偏转、ice-4 禁翻引擎守卫、ice-6 禁抽引擎守卫）。引擎扩展已提交 00e0f4b。
  */

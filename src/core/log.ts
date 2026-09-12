@@ -1,4 +1,5 @@
 import type { GameState } from './models/types';
+import { getProtocolDef } from '../data/demo';
 
 /**
  * 结构化事件日志（2026-09 日志树改造）：
@@ -84,8 +85,24 @@ export function stageLabel(kind: string): string {
   }
 }
 
-/** select-action 动作值 → 中文按钮/日志文本（修改提示词 8：face-up/face-down/flip 等汉化） */
-export function actionCn(act: string): string {
+/** 位移（shift）指令在 UI/日志里的用词：**按世代随卡文**——
+ *  1代（MN01/AX01）卡文写「平移」；2代/3代（MN02/AX02/MN03/AX03）卡文写「偏转」
+ *  （2026-09-13 用户同步文本后统一：提示标题/动作按钮/操作日志与所属卡文用词一致）。
+ *  未知协议兜底「偏转」。 */
+export function shiftTerm(protocolDefId: string): string {
+  const proto = protocolDefId.includes('-') ? protocolDefId.split('-')[0] : protocolDefId;
+  try {
+    const set = getProtocolDef(proto).set;
+    if (set === 'MN01' || set === 'AX01') return '平移';
+    return '偏转';
+  } catch {
+    return '偏转';
+  }
+}
+
+/** select-action 动作值 → 中文按钮/日志文本（修改提示词 8：face-up/face-down/flip 等汉化）。
+ *  protocolDefId：动作来源卡协议（可选）——shift 的用词随世代（见 shiftTerm）。 */
+export function actionCn(act: string, protocolDefId?: string): string {
   const v = act.replace(/^action:/, '');
   switch (v) {
     case 'flip':
@@ -97,7 +114,7 @@ export function actionCn(act: string): string {
     case 'delete':
       return '删除';
     case 'shift':
-      return '平移';
+      return protocolDefId ? shiftTerm(protocolDefId) : '偏转';
     case 'return':
       return '回手';
     case 'face-up':
