@@ -4,6 +4,7 @@ import { registerCardEffects } from '../registry';
 import { shuffleDeck, shuffleTrashIntoDeck } from '../../engine/deck';
 import { gameBus } from '../../events/bus';
 import { traceAt, cardBrief } from '../../trace';
+import { randPick } from '../../rng';
 
 /**
  * 2代 时间 time（关键词：强行弃置、使用弃牌堆）。
@@ -117,7 +118,7 @@ function* time2Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
 function* time3Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const trash = ctx.s.players[ctx.player].trash;
   if (trash.length === 0) return;
-  const pick = trash[Math.floor(Math.random() * trash.length)];
+  const pick = randPick(ctx.s, trash)!;
   traceAt(ctx.s, '随机', `time-3 随机揭示弃牌堆：${cardBrief(pick)}（弃牌堆 ${trash.length} 张）`);
   const myLine = ctx.card.line;
   const lines = ([0, 1, 2] as Line[]).filter((l) => l !== myLine); // 「其它」= 非 time-3 所在线

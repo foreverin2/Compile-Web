@@ -5,9 +5,14 @@ declare module 'node:fs' {
   export function readFileSync(path: string): {
     subarray(start: number, end?: number): { toString(encoding?: string): string };
   };
+  export function readdirSync(path: string): string[];
+  export function statSync(path: string): { isDirectory(): boolean };
 }
 declare module 'node:url' {
   export function fileURLToPath(url: string | URL): string;
+}
+declare module 'node:path' {
+  export function join(...parts: string[]): string;
 }
 declare module 'node:child_process' {
   export function execFileSync(

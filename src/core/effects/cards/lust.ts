@@ -3,6 +3,7 @@ import { registerCardEffects } from '../registry';
 import { setControl } from '../../rules/control';
 import { traceAt, cardBrief } from '../../trace';
 import { findCard } from '../context';
+import { randPick } from '../../rng';
 
 /**
  * 3代 色欲 lust（关键词：控制权/揭示/偏转/反面打出；座右铭：惑乱人心）。
@@ -48,7 +49,7 @@ function* lust3Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const foe = opp(ctx.player);
   const foeHand = ctx.candidates({ zone: 'hand', owner: foe });
   if (foeHand.length === 0) return;
-  const pick = foeHand[Math.floor(Math.random() * foeHand.length)];
+  const pick = randPick(ctx.s, foeHand)!;
   const pickCard = findCard(ctx.s, pick.uid);
   traceAt(
     ctx.s,

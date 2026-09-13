@@ -1,6 +1,6 @@
 import type { Card, GameState, Line, Op, PendingEffect, PlayerId, StepResult } from '../models/types';
 import { drawCards, discardFromHand } from '../engine/deck';
-import { shuffleWith } from '../rng';
+import { randInt, shuffleWith } from '../rng';
 import { advanceStep } from '../engine/turn';
 import { gameBus } from '../events/bus';
 import { createCtx, emitCardEvent, findCard, isUncovered, nextEffectId, shouldBlockDraw, cardCommandDisabled, rigidity7Immune } from './context';
@@ -666,7 +666,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       // 随机取牌：从 from 玩家手牌随机取 1 张给效果属主（owner 更新；love-3 随机拿牌）
       const hand = s.players[op.from].hand;
       if (hand.length === 0) throw new Error('no cards to take'); // 调用方守卫（对手无手牌 → 不触发）
-      const idx = Math.floor(Math.random() * hand.length);
+      const idx = randInt(s, hand.length);
       const [card] = hand.splice(idx, 1);
       card.owner = pe.player;
       s.players[pe.player].hand.push(card);
