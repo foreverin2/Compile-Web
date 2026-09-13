@@ -14,6 +14,7 @@ import type { GameEvent } from '../core/events/bus';
 import type { GameState } from '../core/models/types';
 import { cardImgSrc } from '../data/demo';
 import { protocolColorOf, hexToRgba } from './protocol-colors';
+import { registerFollow } from './fx-follow';
 
 type PlayerId = 0 | 1;
 
@@ -709,6 +710,27 @@ function spawnClarityCardEye(player: PlayerId): void {
   eye.style.top = `${(y - CLARITY_EYE_H / 2).toFixed(1)}px`;
   eye.style.zIndex = String(GEN2_Z);
   document.body.appendChild(eye);
+  // 2026-09-13 用户裁决：3s 的落点眼超出"瞬态可不跟随"的窗口 → 注册跟随（滚动/缩放时重新锚到手牌末尾）
+  const anchoredPlayer = player;
+  registerFollow(eye, (el) => {
+    const hand = document.querySelector<HTMLElement>(`.hand[data-player="${anchoredPlayer}"]`);
+    if (!hand) return;
+    const cards = hand.querySelectorAll<HTMLElement>('.card:not(.reveal-ghost)');
+    const lastCard = cards[cards.length - 1];
+    let nx: number;
+    let ny: number;
+    if (lastCard) {
+      const lr = lastCard.getBoundingClientRect();
+      nx = anchoredPlayer === 0 ? lr.right + 37 : lr.left - 37;
+      ny = lr.top + lr.height / 2;
+    } else {
+      const hr = hand.getBoundingClientRect();
+      nx = anchoredPlayer === 0 ? hr.left + 28 + 65 : hr.right - 28 - 65;
+      ny = hr.top + hr.height / 2;
+    }
+    el.style.left = `${(nx - CLARITY_EYE_W / 2).toFixed(1)}px`;
+    el.style.top = `${(ny - CLARITY_EYE_H / 2).toFixed(1)}px`;
+  });
   window.setTimeout(() => eye.classList.add('out'), CLARITY_CARD_EYE_MS);
   window.setTimeout(() => eye.remove(), CLARITY_CARD_EYE_MS + 600);
 }
@@ -889,6 +911,15 @@ export function playSmokePlayFx(payload: { owner?: PlayerId; line?: number | nul
     glow.style.height = '178.8px';
     glow.style.zIndex = String(GEN2_Z - 1);
     document.body.appendChild(glow);
+    // 2026-09-13 用户裁决：2s 的卡框灰光加跟随（落点由 owner/line 每帧重算，滚动时不再脱离卡面）
+    const glowOwner = payload.owner!;
+    const glowLine = payload.line!;
+    registerFollow(glow, (el) => {
+      const e = smokeStackEnd(glowOwner, glowLine);
+      if (!e) return;
+      el.style.left = `${(e.x - 65).toFixed(1)}px`;
+      el.style.top = `${(e.y - 89.4).toFixed(1)}px`;
+    });
     window.setTimeout(() => glow.classList.add('out'), SMOKE_GLOW_MS);
     window.setTimeout(() => glow.remove(), SMOKE_GLOW_MS + 500);
   }, SMOKE_MIST_HOLD_MS);

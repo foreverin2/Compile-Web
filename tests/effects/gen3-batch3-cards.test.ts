@@ -120,6 +120,16 @@ describe('nova（新星）', () => {
     expect(s2.control).toBe(-1); // 未获得控制权
   });
 
+  it('nova-2 middle：下方是**反面**新星牌不算「覆盖着1张新星牌」（用户 2026-09-13 裁决：必须正面）', () => {
+    const s = setup();
+    const below = placeSrc(s, 'nova-1', 0, 0);
+    below.faceUp = false; // 反面：身份未公开，不能算新星牌
+    const src2 = placeSrc(s, 'nova-2', 0, 0);
+    resolveMiddle(s, 0, src2);
+    expect(s.pendingEffects.filter((e) => e.prompt).length, '反面下方卡不应走"可重排"分支').toBe(0);
+    expect(s.control).toBe(0); // else 分支：必得控制权
+  });
+
   it('nova-0 bottom end: deck top face-down under a chosen uncovered nova card (belowUid)', () => {
     const s = setup();
     s.turnPlayer = 0;
@@ -397,8 +407,7 @@ describe('flexibility（柔性）', () => {
     expect(uids, 'pride-0（无控制权）的候选未包含自身').toContain(src.uid);
   });
 
-  it('rigidity-4 底：覆盖者来自【偏转】（pendingShift）也应触发抽1（与 unity-0 同类，旧版只查 pendingPlay）', () => {
-    const s = setup();
+  it('rigidity-4 底：覆盖者来自【偏转】（pendingShift）也应触发抽1（与 unity-0 同类，旧版只查 pendingPlay）', () => {    const s = setup();
     s.turnPlayer = 0;
     const src = placeSrc(s, 'rigidity-4', 0, 0);
     s.players[0].deck = [makeCard('fire-1', 0, 'deck', false)];

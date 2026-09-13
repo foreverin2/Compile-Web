@@ -194,6 +194,10 @@ export function executeAction(s: GameState, player: PlayerId, kind: ActionKind, 
       if (!t) throw new Error(`no pending ${kind} trigger for ${args.cardUid}`);
       // 顶命令触发（top 标志：被盖的 death-1/life-0 等）→ topCommand 跳过 sourceValid 未覆盖检查
       resolveTrigger(s, t, { topCommand: t.top });
+      // 3代 特效（2026-09-13 用户裁决补齐）：**触发被结算**的语义事件——结算前发（此时卡还在场上、
+      // DOM 节点可定位），供设计稿 §4.1 E2①「嫉妒1 底：卡面玉青镜面斜掠」这类"触发动作本身"的表现。
+      // 放在 resolveTrigger 之后、runStack 之前：生成器还没跑，卡必然还没被效果移走。
+      emitTriggerResolved(s, t, kind);
       runStack(s);
       // 结算成功后才标记已结算：若解析抛错，触发不会被吞掉（必选触发仍阻止 advance）
       s.resolvedTriggerUids.push(args.cardUid);
@@ -259,6 +263,14 @@ function emitTriggerSkipped(s: GameState, t: { cardUid: string; defId: string })
   const card = findCard(s, t.cardUid);
   if (!card) return;
   emitCardEvent(s, 'card:trigger-skipped', card, { step: s.step });
+}
+
+/** 触发被玩家结算（点了触发按钮）→ 语义事件（E2①「触发动作本身」的表现靠它；见 resolve-trigger 分支）。
+ *  比"效果结果事件"（card:returned/card:deleted/line:compiled…）更早：此时源卡仍在场上原位。 */
+function emitTriggerResolved(s: GameState, t: { cardUid: string; defId: string; top?: boolean }, kind: 'start' | 'end'): void {
+  const card = findCard(s, t.cardUid);
+  if (!card) return;
+  emitCardEvent(s, 'card:trigger-resolved', card, { step: kind, topCommand: !!t.top });
 }
 
 /** 系统效果生成器：清理缓存——玩家自选弃牌，直至手牌降到 5 张；弃完触发 after-clear-cache（speed-1）。

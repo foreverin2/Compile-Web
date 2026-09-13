@@ -20,6 +20,7 @@
 
 import type { GameState } from '../core/models/types';
 import { clipInsetRightPct } from './gen3-util';
+import { protocolColorOf } from './protocol-colors';
 
 /** 事件载荷（= effects/index.ts 的 FxCardPayload + emitCardEvent 附带的 triggerUid） */
 export interface Gen3CardPayload {
@@ -1263,6 +1264,83 @@ export function gen3SkipFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3CardF
   }
   window.setTimeout(() => layer.remove(), 950);
   return true;
+}
+
+/* ====================== 触发被结算 / 偏转落地（2026-09-13 用户裁决补齐） ====================== */
+
+/**
+ * 「触发被结算」附加层（引擎 `card:trigger-resolved`，在效果结算前发、源卡还在原位）。
+ *
+ * 设计稿 §4.1 行 E2①：**嫉妒1 底（回合开始）卡面玉青镜面斜掠 0.5s**——这种"触发动作本身"的表现
+ * 此前没有任何钩子（引擎只在效果产生结果时才发事件，若 envy-1 条件不满足则什么都不发）。
+ * 用户 2026-09-13 裁决：新增该事件并补这条表现。只做点名的 envy-1，其余不加层。
+ */
+export function gen3TriggerFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3CardFxApi): boolean {
+  if (p.defId !== 'envy-1') return false;
+  const g = geom(node);
+  if (!g) return false;
+  const { rect } = g;
+  const layer = bodyLayer('g3-trigger-layer', api.extraZ);
+  const sheen = api.el('i', 'g3-envy1-sheen');
+  sheen.style.left = `${rect.left}px`;
+  sheen.style.top = `${rect.top}px`;
+  sheen.style.width = `${rect.width}px`;
+  sheen.style.height = `${rect.height}px`;
+  layer.appendChild(sheen);
+  const rim = api.el('i', 'g3-envy1-rim');
+  rim.style.left = `${rect.left}px`;
+  rim.style.top = `${rect.top}px`;
+  rim.style.width = `${rect.width}px`;
+  rim.style.height = `${rect.height}px`;
+  layer.appendChild(rim);
+  const chip = api.el('i', 'g3-envy1-chip', '夺取控制权');
+  chip.style.left = `${rect.left + rect.width / 2}px`;
+  chip.style.top = `${rect.top - 6}px`;
+  layer.appendChild(chip);
+  window.setTimeout(() => layer.remove(), 900);
+  return true;
+}
+
+/**
+ * 偏转「落地」通用反馈（引擎 `card:landed`；此前该事件**没有任何消费方**）。
+ *
+ * 用户 2026-09-13 裁决：补一条**通用**落地反馈（不绑定协议）。落点取**目标链路槽**——
+ * 落地瞬间 DOM 还是旧序（卡仍在起点槽），用 `payload.owner/line` 定位才是真正的落点。
+ * 表现：协议色冲击环 + 4 粒微尘 + 槽位一圈短边框闪（≤0.55s，不遮卡文）。
+ */
+export function gen3LandFx(node: HTMLElement | null, p: Gen3CardPayload, api: Gen3CardFxApi): boolean {
+  const anchor = slotRectOf(p) ?? (node ? geom(node)?.rect ?? null : null);
+  if (!anchor) return false;
+  const color = protocolColorOf(p.defId ?? '');
+  const layer = bodyLayer('g3-land-layer', api.extraZ);
+  const ring = api.el('i', 'g3-land-ring');
+  ring.style.left = `${(anchor.left + anchor.width / 2).toFixed(1)}px`;
+  ring.style.top = `${(anchor.top + anchor.height).toFixed(1)}px`;
+  ring.style.setProperty('--lc', color);
+  layer.appendChild(ring);
+  for (let i = 0; i < 4; i++) {
+    const dust = api.el('i', 'g3-land-dust');
+    dust.style.left = `${(anchor.left + anchor.width * (0.3 + i * 0.13)).toFixed(1)}px`;
+    dust.style.top = `${(anchor.top + anchor.height * 0.92).toFixed(1)}px`;
+    dust.style.setProperty('--lc', color);
+    dust.style.setProperty('--dx', `${api.rnd(-22, 22).toFixed(1)}px`);
+    dust.style.animationDelay = `${(i * 34).toFixed(0)}ms`;
+    layer.appendChild(dust);
+  }
+  const flash = api.el('i', 'g3-land-flash');
+  placeRect(flash, anchor);
+  flash.style.setProperty('--lc', color);
+  layer.appendChild(flash);
+  window.setTimeout(() => layer.remove(), 820);
+  return true;
+}
+
+/** 把一个 fixed 层元素摆到给定矩形（落点反馈内部用） */
+function placeRect(node: HTMLElement, r: DOMRect): void {
+  node.style.left = `${r.left}px`;
+  node.style.top = `${r.top}px`;
+  node.style.width = `${r.width}px`;
+  node.style.height = `${r.height}px`;
 }
 
 /* ============ 整摞弃置牌库（inertia-4，批次 C） ============ */

@@ -484,8 +484,7 @@ describe('FX trigger protocol payload', () => {
     expect(after[2]).toBe(before[0]);
   });
 
-  it('贪婪1 效果编译的 line:compiled 带 sourceUid（硬币堆 R2④ + 契约印起点依赖它）', () => {
-    const s = setup3();
+  it('贪婪1 效果编译的 line:compiled 带 sourceUid（硬币堆 R2④ + 契约印起点依赖它）', () => {    const s = setup3();
     s.turnPlayer = 0;
     s.step = 'end';
     const src = makeCard('greed-1', 0, 'field', true, 0, 0);
@@ -507,5 +506,51 @@ describe('FX trigger protocol payload', () => {
     expect(seen.length).toBeGreaterThan(0);
     expect(seen[0].sourceDefId).toBe('greed-1');
     expect(seen[0].sourceUid).toBe(src.uid); // ← 审计修复点（此前该字段根本没发）
+  });
+
+  // ——— 2026-09-13 用户裁决补齐：触发被结算事件 + 落地事件载荷 ———
+
+  it('触发被结算 → card:trigger-resolved（E2① 嫉妒1 底镜面斜掠的钩子；结算前发、卡还在原位）', () => {
+    const s = setup3();
+    s.turnPlayer = 0;
+    s.step = 'start';
+    const src = makeCard('envy-1', 0, 'field', true, 0, 0);
+    s.players[0].stacks[0] = [src];
+    s.control = 1; // 对手持有 → 条件成立（触发可收集）
+    const seen: { defId?: string; protocol?: string; uid?: string; step?: string; topCommand?: boolean }[] = [];
+    const off = gameBus.subscribe((e) => {
+      if (e.type !== 'card:trigger-resolved') return;
+      seen.push(e.payload as { defId?: string; protocol?: string; uid?: string; step?: string; topCommand?: boolean });
+    });
+    const t = collectTriggers(s, 'start').find((x) => x.defId === 'envy-1')!;
+    expect(t).toBeTruthy();
+    expect(() => executeAction(s, 0, 'resolve-trigger', { cardUid: src.uid })).not.toThrow();
+    off();
+    expect(seen).toHaveLength(1);
+    expect(seen[0].defId).toBe('envy-1');
+    expect(seen[0].protocol).toBe('envy');
+    expect(seen[0].uid).toBe(src.uid); // FX 层靠它定位卡面
+    expect(seen[0].step).toBe('start');
+  });
+
+  it('偏转落地事件 card:landed 带 owner/line（通用落地反馈按目标槽定位，不能靠旧 DOM）', () => {
+    const s = setup3();
+    s.turnPlayer = 0;
+    s.control = 0; // pride-0：持控制权 → 偏转1张其他牌（走一次真实 shift 落地）
+    const src = makeCard('pride-0', 0, 'field', true, 0, 0);
+    s.players[0].stacks[0] = [src];
+    s.players[1].stacks[1] = [makeCard('light-2', 1, 'field', true, 1, 0)];
+    const seen: { uid?: string; owner?: number; line?: number | null }[] = [];
+    const off = gameBus.subscribe((e) => {
+      if (e.type !== 'card:landed') return;
+      seen.push(e.payload as { uid?: string; owner?: number; line?: number | null });
+    });
+    resolveMiddle(s, 0, src);
+    resolveAllChoices(s, pickFirst); // 选对手那张 → 选目标线（首条 ≠ 原线）
+    off();
+    expect(seen.length, '未捕获 card:landed').toBeGreaterThan(0);
+    // 落点锚定契约：必须带 owner + 目标 line（DOM 此刻还在起点槽 → 只能靠槽定位）
+    expect(seen[0].line, 'card:landed 缺 line → 通用落地反馈无法定位').toBe(0);
+    expect(seen[0].owner).toBe(1); // 被偏转的卡属对手
   });
 });

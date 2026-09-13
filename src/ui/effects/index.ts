@@ -1,9 +1,10 @@
 import { gameBus, type GameEvent } from '../../core/events/bus';
+import { registerFollow } from '../fx-follow';
 import { mountShatter } from '../fx/delete-shatter';
 import { mountCut } from '../fx/discard-cut';
 import { flashRigidity7Guard, noteGreed1Compile } from '../gen3-control';
 import { gen3FulcrumSwapFx, gen3ProtocolSwapFx } from '../fx-gen3-swap';
-import { gen3DiscardFx, gen3DeleteFx, gen3FlipFx, gen3ShiftFx, gen3DrawFx, gen3FaceDownFx, gen3CompiledFx, gen3DeckDiscardFx, gen3ReturnFx, gen3PlayFx, gen3SkipFx, type Gen3CardFxApi, type Gen3CardPayload, type Gen3DrawPayload, type Gen3CompiledPayload, type Gen3DeckDiscardPayload } from '../fx-gen3';
+import { gen3DiscardFx, gen3DeleteFx, gen3FlipFx, gen3ShiftFx, gen3DrawFx, gen3FaceDownFx, gen3CompiledFx, gen3DeckDiscardFx, gen3ReturnFx, gen3PlayFx, gen3SkipFx, gen3TriggerFx, gen3LandFx, type Gen3CardFxApi, type Gen3CardPayload, type Gen3DrawPayload, type Gen3CompiledPayload, type Gen3DeckDiscardPayload } from '../fx-gen3';
 import { buildTornadoFx } from '../fx-tornado';
 import { cardImgSrc, protocolImgSrc } from '../../data/demo';
 import { playPeaceDiscardExtra, PEACE_PRE_MS, playChaosDiscardExtra, CHAOS_DISCARD_PRE_MS, playIceShiftBridge, playSmokePlayFx, playFearShiftExtra, playCorruptionDiscardExtra, playCorruptionDeleteExtra, playCorruptionFlipExtra, CORRUPT_DISCARD_PRE_MS, playWarDiscardExtra, playWarFlipExtra, playCourageDiscardExtra, playCourageDeleteExtra, playCourageShiftExtra, playTimeDiscardExtra, playAssimDiscardExtra, playAssimDeckRipple, ASSIM_DISCARD_PRE_MS, playDiversityDiscardExtra, DIVERSITY_DISCARD_PRE_MS } from '../fx-gen2';
@@ -1568,6 +1569,16 @@ function playLoveDrawExtra(payload: DrawPayload): void {
   glow.style.height = `${deck.height}px`;
   glow.style.zIndex = String(EXTRA_Z);
   document.body.appendChild(glow);
+  // 2026-09-13 用户裁决：2s 的牌库区光芒加跟随（滚动/缩放时重新锚到牌库 rect）
+  const glowPlayer = payload.player;
+  registerFollow(glow, (el) => {
+    const d = deckPos(glowPlayer);
+    if (!d) return;
+    el.style.left = `${d.left}px`;
+    el.style.top = `${d.top}px`;
+    el.style.width = `${d.width}px`;
+    el.style.height = `${d.height}px`;
+  });
   window.setTimeout(() => glow.classList.add('fx-love-deckglow-in'), 20);
   window.setTimeout(() => glow.classList.add('fx-love-deckglow-out'), LOVE_GLOW_MS);
   window.setTimeout(() => glow.remove(), LOVE_GLOW_MS + LOVE_FADE_MS + 60);
@@ -2070,6 +2081,14 @@ export function initEffects(): () => void {
         // 3代 空动作反馈（Q5）：玩家跳过可选触发（advance）/ 跳过可选选择（点"跳过"）时 →
         // 贪婪爪空抓 / 傲慢指针变灰下坠 / 暴食空咬（只做点名的三个协议，其余不加层以免噪音）
         if (node) gen3SkipFx(node, payload as unknown as Gen3CardPayload, GEN3_CARD_FX_API);
+        break;
+      case 'card:trigger-resolved':
+        // 3代「触发被结算」（2026-09-13 用户裁决新增事件）：嫉妒1 底卡面玉青镜面斜掠（设计稿 E2①）
+        if (node) gen3TriggerFx(node, payload as unknown as Gen3CardPayload, GEN3_CARD_FX_API);
+        break;
+      case 'card:landed':
+        // 3代 偏转落地通用反馈（此前该事件没有任何消费方）：协议色冲击环 + 微尘 + 落点槽边框闪
+        gen3LandFx(node, payload as unknown as Gen3CardPayload, GEN3_CARD_FX_API);
         break;
       case 'card:given':
         // love 协议给牌/收牌（love-1 底给牌、love-3 给牌与随机拿牌——give/takeRandom op 均发

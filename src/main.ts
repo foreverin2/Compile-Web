@@ -14,6 +14,7 @@ import { DEMO_PROTOCOLS } from './data/demo';
 import { initEffects, initCompileFx, initRearrangeFx, initGen3StackSwapFx, initShuffleFx, playRevealFly, buildLoveHeart, playSpeedDrawExtra, SPEED_TOTAL_MS } from './ui/effects';
 import { gen3ClearCacheFx, gen3ControlChangedFx, gen3ControlCheckFx, syncGen3Persistent } from './ui/gen3-control';
 import { gen3FulcrumSwapFx, gen3ProtocolSwapFx } from './ui/fx-gen3-swap';
+import { syncFollowers } from './ui/fx-follow';
 import { initGen2Fx, clearGen2Fx } from './ui/fx-gen2';
 import { initDiag } from './ui/diag';
 import { initDevMode } from './ui/devmode';
@@ -684,9 +685,9 @@ const syncPersistentFx = (): void => {
     // （与用户实测的"特效粘在屏幕上"同一类 bug）。
     syncDiversity3Fx(state);
     syncGen3Persistent(state); // 3代（批次 D）常驻层随滚动/缩放重定位
+    syncFollowers(); // 长寿命 FX（>1.5s 的卡框光/落点光）随滚动/缩放跟随
     syncChainLayerPosition();
   });
-};
-window.addEventListener('scroll', syncPersistentFx, { passive: true, capture: true });
+};window.addEventListener('scroll', syncPersistentFx, { passive: true, capture: true });
 window.addEventListener('resize', syncPersistentFx, { passive: true });
 

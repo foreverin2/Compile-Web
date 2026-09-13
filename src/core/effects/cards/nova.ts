@@ -114,14 +114,17 @@ function* nova1Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   if (ans.selected.length > 0) yield { op: 'discardMany', uids: ans.selected };
 }
 
-/** 相邻下方那张是否为 nova 卡（nova-2 条件） */
+/** 相邻下方那张是否为 nova 卡（nova-2 条件）。
+ *  2026-09-13 用户裁决：**必须正面**——反面卡身份未公开，不能算"覆盖着1张新星牌"
+ *  （与 sloth-0「被正面怠惰牌覆盖」/ unity-0 同一口径）。 */
 function belowIsNova(ctx: EffectCtx): boolean {
   const line = ctx.card.line;
   if (line === null) return false;
   const stack = ctx.s.players[ctx.player].stacks[line];
   const idx = stack.findIndex((c) => c.uid === ctx.card.uid);
   if (idx === -1 || idx === 0) return false;
-  return stack[idx - 1].defId.startsWith('nova-');
+  const below = stack[idx - 1];
+  return below.faceUp && below.defId.startsWith('nova-');
 }
 
 const NOVA_PERMS = ['021', '102', '120', '201', '210'];

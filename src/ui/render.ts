@@ -19,6 +19,7 @@ import { downloadLog } from './diag';
 import { buildTornadoFx } from './fx-tornado';
 import { appendGen3CompiledFx, type Gen3FxApi } from './compiled-gen3';
 import { clearGen3Persistent, syncGen3Persistent } from './gen3-control';
+import { syncFollowers } from './fx-follow';
 import { buildDove, buildLakeSword, spawnCourageSparks, startLuckDiceFx, startClarityDeckEye } from './fx-gen2';
 import { fitRotatedProtocol } from './zoom-layout';
 
@@ -4973,6 +4974,8 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   // 3代（批次 D）常驻层：嫉妒0 汲取丝 / 愤怒0 剔除带 / 怠惰0 加成 / 惰性0·1 断电栅格 /
   // 刚性7 护壁 / 色欲持有·禁编译封条 / 贪婪1 硬币堆等级（各 sync 返回自己的 active 键，统一 prune）
   syncGen3Persistent(s);
+  // 2026-09-13（用户裁决）：2~3.6s 的长寿命 FX（迷雾卡框灰光 / 透彻落点眼 / 爱意牌库光芒）也跟随卡面
+  syncFollowers();
 }
 
 let selectedUid: string | null = null;

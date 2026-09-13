@@ -205,4 +205,23 @@ describe('3代卡牌效果附加层守卫（批次 B）', () => {
     // ④ gen3FlipFx 与其它 gen3*Fx 一样有覆盖门控（防"表里有、case 忘了写"）
     expect(ts).toMatch(/GEN3_CARD_FX_COVER\.flip\.includes\(protocol\)/);
   });
+
+  it('触发被结算 / 偏转落地两个新分发点已接入（用户 2026-09-13 裁决）', () => {
+    // E2① 嫉妒1 底「卡面玉青镜面斜掠」：引擎新增 card:trigger-resolved（结算前发、卡还在原位）
+    expect(dispatcher).toContain("case 'card:trigger-resolved'");
+    expect(dispatcher).toContain('gen3TriggerFx(');
+    expect(ts, 'gen3TriggerFx 未做点名门控（应只做 envy-1）').toMatch(/export function gen3TriggerFx[\s\S]{0,400}p\.defId !== 'envy-1'/);
+    const gameSrc = readFileSync(fileURLToPath(new URL('../../src/core/game.ts', import.meta.url))).subarray(0, 1024 * 1024).toString('utf8');
+    const triggerIdx = gameSrc.indexOf('resolveTrigger(s, t, { topCommand: t.top });');
+    const resolvedIdx = gameSrc.indexOf('emitTriggerResolved(s, t, kind);');
+    expect(triggerIdx, 'engine 缺少 resolve-trigger 的 resolveTrigger 调用').toBeGreaterThan(0);
+    expect(resolvedIdx, '引擎未在 resolve-trigger 里发 card:trigger-resolved').toBeGreaterThan(triggerIdx);
+    // 通用落地反馈：card:landed 此前无人消费，现在必须先按 owner/line 定位槽（DOM 还在起点）
+    expect(dispatcher).toContain("case 'card:landed'");
+    expect(dispatcher).toContain('gen3LandFx(');
+    expect(ts, 'gen3LandFx 未优先按目标槽定位').toMatch(/slotRectOf\(p\) \?\? \(node \? geom\(node\)/);
+    for (const cls of ['g3-trigger-layer', 'g3-envy1-sheen', 'g3-envy1-rim', 'g3-envy1-chip', 'g3-land-layer', 'g3-land-ring', 'g3-land-dust', 'g3-land-flash']) {
+      expect(new RegExp(`\\.${cls}(\\s*[,{:. ]|\\s+[a-z])`).test(css), `CSS 缺少 .${cls}`).toBe(true);
+    }
+  });
 });
