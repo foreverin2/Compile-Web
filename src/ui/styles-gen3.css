@@ -296,52 +296,62 @@
 @keyframes gen3-greed-maw-spin { to { transform: rotate(360deg); } }
 
 .gen3-greed-arms { position: absolute; inset: 0; }
+/* 触手 = 与卡面同尺寸的旋转容器：transform-origin 落在**锚点**（--ax/--ay = 卡面坐标 %），
+ * 绕锚点旋转 --r（指向中心）。体（body）摆在锚点上、朝"上"生长 → 旋转后尖端正好指向中心。
+ * 2026-09-13 用户反馈"只有一条边上有触手"→ 由 5 条（锚点全在下方）改为 **8 条对称分布**：
+ * t0 下中 / t1 上中 / t2 右中 / t3 左中 / t4 右下角 / t5 左上角 / t6 右上角 / t7 左下角
+ * （--r = 锚点方位角 - 90°，这样"局部向上"被转到"朝中心"）。 */
 .gen3-greed-tentacle {
-  position: absolute; left: 50%; top: 50%; width: 20%; height: 38%;
-  transform-origin: 50% 100%; /* 根部（底端）固定在锚点，scaleY 让尖端朝中心进出 */
-  transform: translate(var(--x, 0), var(--y, 0)) rotate(var(--r, 0deg));
+  position: absolute; inset: 0;
+  transform-origin: var(--ax, 50%) var(--ay, 50%);
+  transform: rotate(var(--r, 0deg));
   animation: gen3-greed-writhe 5.8s ease-in-out infinite;
 }
-/* 5 条：锚点沿卡边分布、朝向中心；长度/相位各不相同（--x/--y = 相对卡心的锚点偏移） */
-.gen3-greed-tentacle.t0 { --x: -36%; --y: 26%; --r: -20deg; height: 40%; }
-.gen3-greed-tentacle.t1 { --x: 32%; --y: 24%; --r: 22deg; height: 37%; }
-.gen3-greed-tentacle.t2 { --x: -40%; --y: -8%; --r: 56deg; height: 33%; }
-.gen3-greed-tentacle.t3 { --x: 40%; --y: -10%; --r: -58deg; height: 33%; }
-.gen3-greed-tentacle.t4 { --x: 0%; --y: 38%; --r: 0deg; height: 30%; }
+.gen3-greed-tentacle.t0 { --ax: 50%; --ay: 93%; --r: 0deg;    --h: 36%; --w: 16%; } /* 下边 */
+.gen3-greed-tentacle.t1 { --ax: 50%; --ay: 7%;  --r: 180deg;  --h: 36%; --w: 16%; } /* 上边 */
+.gen3-greed-tentacle.t2 { --ax: 93%; --ay: 50%; --r: -90deg;  --h: 34%; --w: 16%; } /* 右边 */
+.gen3-greed-tentacle.t3 { --ax: 7%;  --ay: 50%; --r: 90deg;   --h: 34%; --w: 16%; } /* 左边 */
+.gen3-greed-tentacle.t4 { --ax: 86%; --ay: 86%; --r: -45deg;  --h: 30%; --w: 14%; } /* 右下角 */
+.gen3-greed-tentacle.t5 { --ax: 14%; --ay: 14%; --r: 135deg;  --h: 30%; --w: 14%; } /* 左上角 */
+.gen3-greed-tentacle.t6 { --ax: 86%; --ay: 14%; --r: -135deg; --h: 28%; --w: 14%; } /* 右上角 */
+.gen3-greed-tentacle.t7 { --ax: 14%; --ay: 86%; --r: 45deg;   --h: 28%; --w: 14%; } /* 左下角 */
 @keyframes gen3-greed-writhe {
-  0%, 100% { transform: translate(var(--x, 0), var(--y, 0)) rotate(calc(var(--r, 0deg) - 6deg)) scaleY(0.96); }
-  50% { transform: translate(var(--x, 0), var(--y, 0)) rotate(calc(var(--r, 0deg) + 6deg)) scaleY(1.06); }
+  0%, 100% { transform: rotate(calc(var(--r, 0deg) - 6deg)) scaleY(0.97); }
+  50% { transform: rotate(calc(var(--r, 0deg) + 6deg)) scaleY(1.05); }
 }
 .gen3-greed-tentacle-body {
-  position: absolute; left: 8%; bottom: 0; width: 84%; height: 100%;
+  position: absolute; left: var(--ax, 50%); top: calc(var(--ay, 50%) - var(--h, 32%));
+  width: var(--w, 15%); height: var(--h, 32%);
+  transform: translateX(-50%);
   background: linear-gradient(180deg, #b8fff4 0%, #7ef0e6 14%, #2fb3a8 44%, #1f8f8a 72%, #0b3230 100%);
   clip-path: polygon(34% 0%, 66% 0%, 86% 40%, 76% 100%, 24% 100%, 14% 40%);
   border-radius: 50% 50% 16% 16% / 40% 40% 10% 10%;
   box-shadow: inset 0 0 12px rgba(4, 24, 22, 0.75), 0 0 12px rgba(31, 143, 138, 0.5);
   filter: drop-shadow(0 0 5px rgba(31, 143, 138, 0.45));
 }
-/* 吸盘：品红圆点沿触手体侧排布（错相呼吸 = 有生命感） */
+/* 吸盘：品红圆点沿触手体侧排布（按体长比例定位 → 8 条都对得上；错相呼吸 = 有生命感） */
 .gen3-greed-sucker {
-  position: absolute; left: 50%; width: 24%; aspect-ratio: 1 / 1; margin-left: -12%; border-radius: 50%;
+  position: absolute; left: var(--ax, 50%); width: 5.6%; aspect-ratio: 1 / 1;
+  transform: translateX(-50%); border-radius: 50%;
   background: radial-gradient(circle at 40% 34%, #ffd6f6 0%, #d94fd9 58%, #5c0f52 100%);
   box-shadow: 0 0 7px rgba(217, 79, 217, 0.85), inset 0 -1px 2px rgba(58, 16, 48, 0.8);
   animation: gen3-greed-sucker 2.8s ease-in-out infinite;
 }
-.gen3-greed-sucker.s0 { bottom: 64%; animation-delay: -0.3s; }
-.gen3-greed-sucker.s1 { bottom: 42%; animation-delay: -1.1s; }
-.gen3-greed-sucker.s2 { bottom: 20%; animation-delay: -1.9s; }
-@keyframes gen3-greed-sucker { 0%, 100% { opacity: 0.6; transform: scale(0.86); } 50% { opacity: 1; transform: scale(1.06); } }
+.gen3-greed-sucker.s0 { top: calc(var(--ay, 50%) - var(--h, 32%) * 0.3); animation-delay: -0.3s; }
+.gen3-greed-sucker.s1 { top: calc(var(--ay, 50%) - var(--h, 32%) * 0.54); animation-delay: -1.1s; }
+.gen3-greed-sucker.s2 { top: calc(var(--ay, 50%) - var(--h, 32%) * 0.78); animation-delay: -1.9s; }
+@keyframes gen3-greed-sucker { 0%, 100% { opacity: 0.6; transform: translateX(-50%) scale(0.86); } 50% { opacity: 1; transform: translateX(-50%) scale(1.06); } }
 /* 周期爆发：收拢攫取 → 猛张（两段式：先收再放，收时暗口亮起、放时品红环闪） */
 .gen3-greed-host .gen3-greed-tentacle { transition: transform 0.34s cubic-bezier(0.35, 0, 0.7, 0.2); }
 .gen3-greed-host.clench .gen3-greed-tentacle {
   animation: none;
-  transform: translate(var(--x, 0), var(--y, 0)) rotate(var(--r, 0deg)) scaleY(1.24);
+  transform: rotate(var(--r, 0deg)) scaleY(1.22);
 }
 .gen3-greed-host.clench .gen3-greed-maw-core { filter: brightness(1.75); box-shadow: inset 0 0 16px rgba(0, 0, 0, 0.9), 0 0 24px rgba(217, 79, 217, 0.9); }
 .gen3-greed-host.clench .gen3-greed-sucker { filter: brightness(1.4); }
 .gen3-greed-host.lash .gen3-greed-tentacle {
   animation: none;
-  transform: translate(var(--x, 0), var(--y, 0)) rotate(calc(var(--r, 0deg) + 13deg)) scaleY(0.82);
+  transform: rotate(calc(var(--r, 0deg) + 11deg)) scaleY(0.84);
   transition: transform 0.3s cubic-bezier(0.2, 0.9, 0.3, 1);
 }
 .gen3-greed-host.lash .gen3-greed-maw-ring.inner { border-color: rgba(255, 214, 246, 0.95); border-style: solid; }

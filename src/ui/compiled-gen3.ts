@@ -243,13 +243,15 @@ function appendGreed(layer: HTMLElement, defId: string, api: Gen3FxApi): void {
   maw.appendChild(api.el('i', 'gen3-greed-maw-ring outer'));
   maw.appendChild(api.el('i', 'gen3-greed-maw-ring inner'));
   h.appendChild(maw);
-  // 5 条触手：根部贴卡边、尖端指向中心，各自错相蠕动；吸盘沿体侧排布（品红）
+  // 8 条触手：**四条边都有**（上下左右边中 + 四个角），根部贴卡边、尖端指向中心，各自错相蠕动；
+  // 吸盘沿体侧排布（品红）。2026-09-13 用户反馈"只有一条边上有触手"→ 由 5 条（锚点全在下方）
+  // 改为 8 条对称分布，每条自带 --ax/--ay（卡面坐标锚点）、--r（朝心朝向）、--h/--w（体长宽）。
   const arms = api.el('div', 'gen3-greed-arms');
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 8; i++) {
     const arm = api.el('div', `gen3-greed-tentacle t${i}`);
     arm.appendChild(api.el('i', 'gen3-greed-tentacle-body'));
     for (let k = 0; k < 3; k++) arm.appendChild(api.el('i', `gen3-greed-sucker s${k}`));
-    arm.style.animationDelay = `${(-(i * 0.83)).toFixed(2)}s`;
+    arm.style.animationDelay = `${(-(i * 0.61)).toFixed(2)}s`;
     arms.appendChild(arm);
   }
   h.appendChild(arms);

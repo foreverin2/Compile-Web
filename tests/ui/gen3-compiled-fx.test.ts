@@ -92,9 +92,16 @@ describe('3代 已编译协议特效守卫（批次 A）', () => {
     // 常驻：中心暗口 + 5 条触手（根部贴边、尖端指向中心）+ 吸盘
     expect(ts, '贪婪仍在创建硬币柱（.gen3-greed-stack）').not.toContain("'gen3-greed-stack'");
     expect(ts, '贪婪缺少触手容器').toContain("'gen3-greed-arms'");
-    expect(ts, '贪婪触手数量/结构与约定不符').toMatch(/for \(let i = 0; i < 5; i\+\+\)[\s\S]{0,220}gen3-greed-tentacle/);
+    expect(ts, '贪婪触手数量/结构与约定不符').toMatch(/for \(let i = 0; i < 8; i\+\+\)[\s\S]{0,220}gen3-greed-tentacle/);
     expect(ts, '贪婪缺少中心取物口').toContain("'gen3-greed-maw'");
     expect(ts, '贪婪缺少吸盘').toMatch(/gen3-greed-sucker s\$\{k\}/);
+    // 四条边都要有触手（用户 2026-09-13 二次反馈"只有一条边上有"）：8 条锚点须覆盖上下左右
+    for (const t of ['t0', 't1', 't2', 't3']) {
+      expect(css, `CSS 缺少 .gen3-greed-tentacle.${t}（四边锚点）`).toContain(`.gen3-greed-tentacle.${t} {`);
+    }
+    expect(css, '触手锚点未用卡面坐标 --ax/--ay').toMatch(/\.gen3-greed-tentacle\s*\{[^}]*transform-origin:\s*var\(--ax[^)]*\)\s*var\(--ay/);
+    expect(css, '触手未按锚点方位角旋转（--r）').toMatch(/--r:\s*180deg/);
+    expect(css, '触手体未摆在锚点上').toMatch(/\.gen3-greed-tentacle-body\s*\{[^}]*top:\s*calc\(var\(--ay[^)]*\)\s*-\s*var\(--h/);
     // 周期爆发：收拢攫取 → 猛张（旧 raise/spill 硬币柱写法不得复活）
     expect(ts, '贪婪仍在用旧的 raise/spill 硬币柱动画').not.toMatch(/classList\.add\('raise'\)|classList\.add\('spill'\)/);
     expect(ts).toContain("classList.add('clench')");
