@@ -149,19 +149,30 @@ export function snapshotState(s: GameState): string {
  *  纯观测、不做限流（Q6：全部完整特效不降级）；用于性能问题定位（哪类层没被清理）。 */
 export function gen3LayerReport(): string[] {
   if (typeof document === 'undefined') return ['（非浏览器环境）'];
-  const groups: [string, string][] = [
-    ['协议已编译（gen3-*）', '[class*="compiled-fx-"]'],
-    ['卡牌附加层（g3-*）', '[class^="g3-"], [class*=" g3-"]'],
-    ['控制权族/常驻（g3sync-* / g3ctrl-*）', '[class^="g3sync-"], [class^="g3ctrl-"], [class*=" g3ctrl-"]'],
-    ['交换附加层（g3swap-*）', '[class^="g3swap-"]'],
-  ];
-  const out: string[] = [];
-  for (const [label, sel] of groups) {
-    const layers = document.querySelectorAll<HTMLElement>(sel);
-    let elems = 0;
-    for (const l of layers) elems += l.querySelectorAll('*').length;
-    out.push(`${label}: 层 ${layers.length} 个 / 元素 ${elems} 个`);
+  // 2026-09-13 修正：旧版按前缀统计会把**子元素**也算成"层"（例如 .g3sync-envy0-thread 也以 g3sync- 开头），
+  // 数字虚高、无法判断到底有没有残留层。现在只统计**层容器**（class 含 g3fx-layer），并逐个列出类名与子节点数，
+  // 便于一眼看出"哪个层不该在"（排查用户反馈的"层粘在屏幕上/凭空出现"类问题）。
+  const containers = [...document.querySelectorAll<HTMLElement>('.g3fx-layer')];
+  const buckets = new Map<string, number>();
+  for (const c of containers) {
+    const cls = [...c.classList].find((x) => x !== 'g3fx-layer') ?? '(未命名层)';
+    const family = cls.startsWith('g3sync-') ? '常驻 sync'
+      : cls.startsWith('g3ctrl-') || cls.startsWith('g3clear-') ? '控制权/清缓存瞬态'
+      : cls.startsWith('g3swap-') ? '交换瞬态'
+      : cls.startsWith('g3-') ? '卡牌附加瞬态'
+      : '其它';
+    buckets.set(family, (buckets.get(family) ?? 0) + 1);
   }
+  const out: string[] = [];
+  out.push(`层容器总数: ${containers.length}（层级 class 含 g3fx-layer）`);
+  for (const [k, v] of [...buckets.entries()].sort()) out.push(`  ${k}: ${v} 个`);
+  out.push('逐个层（类名 / 子节点数 / 首个节点尺寸）:');
+  for (const c of containers.slice(0, 40)) {
+    const cls = [...c.classList].find((x) => x !== 'g3fx-layer') ?? '(未命名)';
+    const r = c.getBoundingClientRect();
+    out.push(`  ${cls}  子${c.querySelectorAll('*').length}  ${Math.round(r.left)},${Math.round(r.top)} ${Math.round(r.width)}x${Math.round(r.height)}`);
+  }
+  if (containers.length > 40) out.push(`  …（其余 ${containers.length - 40} 个略）`);
   const all = document.querySelectorAll<HTMLElement>('[class*="gen3-"], [class^="g3"]');
   out.push(`合计: ${all.length} 个 3代特效节点（含子元素）`);
   return out;

@@ -97,15 +97,32 @@ describe('批次 D 守卫：控制权族 + 常驻层', () => {
     expect(used.size).toBeGreaterThan(30); // 防"类名收集正则失效"
   });
 
-  it('常驻层"不重建、只重定位"（避免动画重启）+ 不用 mask', () => {
-    // 签名短路：sig 相同 → 只 place（重定位），**不**重建子节点（重建会重启动画）
-    expect(controlTs).toMatch(/if \(rec\.sig === sig\) \{/);
-    const envy = controlTs.slice(controlTs.indexOf('export function syncEnvy0Absorb'), controlTs.indexOf('export function syncWrath0Cull'));
-    const sameBranch = envy.slice(envy.indexOf('if (rec.sig === sig)'), envy.indexOf('rec.sig = sig;'));
-    expect(sameBranch, '签名相同分支必须只做重定位').toContain('place(');
-    expect(sameBranch, '签名相同分支不得重建子节点').not.toContain("textContent = ''");
+  it('常驻层只重建、但**位置每帧都重算**（禁止"签名相同就 continue"导致漏重定位）', () => {
+    // 2026-09-13 用户实测 bug：旧版在 sig 相同时提前 continue，漏了 glow/mark/badge/seam/ripple 的重定位
+    // → 滚动屏幕时这些会粘在原来的屏幕坐标不跟卡走。以下断言禁止该写法复活。
+    expect(controlTs, '仍有同步器在"签名相同"分支里提前 continue（会漏重定位）').not.toContain('if (rec.sig === sig)');
+    for (const fn of ['syncEnvy0Absorb', 'syncWrath0Cull', 'syncSloth0Bonus', 'syncInertiaNullify', 'syncRigidity7Guard', 'syncLustHold']) {
+      const from = controlTs.indexOf(`export function ${fn}`);
+      const body = controlTs.slice(from, controlTs.indexOf('export function', from + 10));
+      expect(body, `${fn} 缺少每帧重定位（place/placeEnvy0）`).toMatch(/place(Envy0)?\(/);
+    }
     const code = syncCss.replace(/\/\*[\s\S]*?\*\//g, '');
     expect(code.includes('mask:')).toBe(false);
     expect(code.includes('@property')).toBe(false);
+  });
+
+  it('C4 判定特效已改为"贴能量槽的短对比条 + 文字标签"（旧版横铺整条链路 = 用户看到的怪粗线）', () => {
+    expect(controlTs, 'C4 仍在整条 stack-slot 上铺条').not.toMatch(/bar\.style\.width = `\$\{r\.width \+ 12\}px`/);
+    expect(controlTs).toContain("el('div', 'g3ctrl-caption'");
+    expect(controlTs).toContain('g3ctrl-result');
+    expect(controlTs).toMatch(/anchor\.bottom \+ 5/);
+    expect(controlTs).toMatch(/Math\.min\(150,/);
+    expect(controlTs).toContain("el('i', 'g3ctrl-lead-ring')");
+    expect(controlTs).toContain('.stack-slot[data-player="${player}"][data-line="${line}"]');
+    expect(controlTs, 'batteryNode 仍在用不存在的 .line-row 回退').not.toContain('.line-row');
+    // 新 C4 所需的类必须在 CSS 里（含 caption/result/cmp/num/lead-ring）
+    for (const cls of ['g3ctrl-caption', 'g3ctrl-result', 'g3ctrl-cmp', 'g3ctrl-cmp-own', 'g3ctrl-cmp-opp', 'g3ctrl-cmp-scan', 'g3ctrl-cmp-num', 'g3ctrl-lead-ring']) {
+      expect(syncCss, `CSS 缺少 .${cls}`).toContain(`.${cls}`);
+    }
   });
 });

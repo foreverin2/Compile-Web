@@ -52,11 +52,9 @@ function slotNode(player: PlayerId, line: Line): HTMLElement | null {
 }
 
 function batteryNode(player: PlayerId, line: Line): HTMLElement | null {
-  // 能量槽（显示该线总值）在 .battery[data-points]；玩家/线序由渲染顺序决定 → 用行容器定位
-  const row = document.querySelector<HTMLElement>(`.line-row[data-line="${line}"]`) ?? document.body;
-  const list = row.querySelectorAll<HTMLElement>('.battery');
-  if (list.length >= 2) return player === 0 ? list[0] : list[1];
-  return list[0] ?? null;
+  // 能量槽（显示该线总值）是 .stack-slot[data-player][data-line] 的子元素（render.ts renderBattery）
+  const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${player}"][data-line="${line}"]`);
+  return slot ? slot.querySelector<HTMLElement>('.battery') : null;
 }
 
 /** 取某玩家某链路的全部卡（含被盖） */
@@ -163,48 +161,79 @@ export function syncEnvy0Absorb(s: GameState): string[] {
       const bat = batteryNode(owner, line);
       const br = bat ? rectOf(bat) : null;
       if (!tr) continue;
-      if (rec.sig === sig) {
-        // 只重定位（层不重建 → 呼吸/流动动画不重启）
-        if (sr) place(rec.node.querySelector<HTMLElement>('.g3sync-envy0-thread')!, sr, 0);
-        if (br) place(rec.node.querySelector<HTMLElement>('.g3sync-envy0-ticks')!, br, 4);
-        continue;
-      }
-      rec.sig = sig;
-      rec.node.textContent = '';
-      // 汲取丝：从对手最大卡 → envy-0 卡（用一条渐细的斜向光带表示，方向由两端矩形算出）
-      if (sr) {
-        const thread = el('div', 'g3sync-envy0-thread');
-        const dx = tr.left + tr.width / 2 - (sr.left + sr.width / 2);
-        const dy = tr.top + tr.height / 2 - (sr.top + sr.height / 2);
-        thread.style.left = `${sr.left + sr.width / 2}px`;
-        thread.style.top = `${sr.top + sr.height / 2}px`;
-        thread.style.width = `${Math.hypot(dx, dy)}px`;
-        thread.style.transform = `rotate(${Math.atan2(dy, dx)}rad)`;
-        rec.node.appendChild(thread);
-        // 源卡标记（橙环）：被盖卡只标露出可见区域
-        const mark = el('i', 'g3sync-envy0-mark');
-        place(mark, visibleRectOf(s, best.uid) ?? sr, 3);
-        rec.node.appendChild(mark);
-      }
-      // 卡面玉青光 + `+N`
-      const glow = el('i', 'g3sync-envy0-glow');
-      place(glow, tr, 2);
-      rec.node.appendChild(glow);
-      const badge = el('i', 'g3sync-badge envy', `+${bestV}`);
-      badge.style.left = `${tr.right - 14}px`;
-      badge.style.top = `${tr.top - 6}px`;
-      rec.node.appendChild(badge);
-      // 能量槽吸收格
-      if (br) {
+      // 只有"参与元素集合"变化才重建子节点；**位置每帧都重算**——2026-09-13 修复：
+      // 旧版在 sig 相同时只重定位 thread/ticks，漏了 glow（卡面边框）/mark（源卡橙环）/badge（+N），
+      // 结果滚动屏幕时这些会**粘在原来的屏幕坐标**不跟卡走（用户实测复现）。
+      if (rec.sig !== sig) {
+        rec.sig = sig;
+        rec.node.textContent = '';
+        if (sr) {
+          rec.node.appendChild(el('div', 'g3sync-envy0-thread'));
+          rec.node.appendChild(el('i', 'g3sync-envy0-mark'));
+          rec.node.appendChild(el('i', 'g3sync-envy0-borrow'));
+        }
+        rec.node.appendChild(el('i', 'g3sync-envy0-glow'));
+        rec.node.appendChild(el('i', 'g3sync-badge envy', `+${bestV}`));
         const ticks = el('div', 'g3sync-envy0-ticks');
         const n = Math.min(10, Math.max(2, bestV));
         for (let i = 0; i < n; i++) ticks.appendChild(el('i', 'g3sync-envy0-tick'));
-        place(ticks, br, 4);
         rec.node.appendChild(ticks);
       }
+      placeEnvy0(rec.node, s, tr, sr, best.uid, br, bestV);
     }
   }
   return [...active];
+}
+
+/** 嫉妒0 子元素定位（**每帧都调用**，含滚动/缩放重定位） */
+function placeEnvy0(
+  node: HTMLElement,
+  s: GameState,
+  tr: DOMRect,
+  sr: DOMRect | null,
+  sourceUid: string,
+  br: DOMRect | null,
+  bestV: number,
+): void {
+  const thread = node.querySelector<HTMLElement>('.g3sync-envy0-thread');
+  if (thread && sr) {
+    // 2026-09-13：改为**卡片边缘 → 卡片边缘**（旧版中心到中心，长线横穿棋盘，像"怪线"）
+    const sx = sr.left + sr.width / 2;
+    const sy = sr.top + sr.height / 2;
+    const tx = tr.left + tr.width / 2;
+    const ty = tr.top + tr.height / 2;
+    const dx = tx - sx;
+    const dy = ty - sy;
+    const dist = Math.max(1, Math.hypot(dx, dy));
+    const ux = dx / dist;
+    const uy = dy / dist;
+    const sInset = (Math.min(sr.width, sr.height) / 2) * 0.85;
+    const tInset = (Math.min(tr.width, tr.height) / 2) * 0.85;
+    const x1 = sx + ux * sInset;
+    const y1 = sy + uy * sInset;
+    thread.style.left = `${x1}px`;
+    thread.style.top = `${y1}px`;
+    thread.style.width = `${Math.max(8, dist - sInset - tInset)}px`;
+    thread.style.transform = `rotate(${Math.atan2(dy, dx)}rad)`;
+  }
+  // 源卡橙环 + "借 N" 小标（明确"这张卡被借走了阈值"，避免看不出这条线是什么）
+  const mark = node.querySelector<HTMLElement>('.g3sync-envy0-mark');
+  if (mark) place(mark, sr ? (visibleRectOf(s, sourceUid) ?? sr) : null, 3);
+  const borrow = node.querySelector<HTMLElement>('.g3sync-envy0-borrow');
+  if (borrow && sr) {
+    borrow.textContent = `借 ${bestV}`;
+    borrow.style.left = `${sr.left + sr.width - 6}px`;
+    borrow.style.top = `${sr.bottom - 4}px`;
+  }
+  const glow = node.querySelector<HTMLElement>('.g3sync-envy0-glow');
+  if (glow) place(glow, tr, 2);
+  const badge = node.querySelector<HTMLElement>('.g3sync-badge.envy');
+  if (badge) {
+    badge.style.left = `${tr.right - 14}px`;
+    badge.style.top = `${tr.top - 6}px`;
+  }
+  const ticks = node.querySelector<HTMLElement>('.g3sync-envy0-ticks');
+  if (ticks && br) place(ticks, br, 4);
 }
 
 /* ============================== 2. 愤怒0 顶部（W4） ============================== */
@@ -231,38 +260,34 @@ export function syncWrath0Cull(s: GameState): string[] {
     active.add(key);
     const rec = ensure(key, 'g3sync-wrath0', Z_CARD);
     const sig = culled.map((c) => c.uid).join(',') + `|${m}`;
-    if (rec.sig === sig) {
-      // 只重定位既有划除带
+    // 只有"被剔除的卡集合"变化才重建；**位置每帧重算**（2026-09-13 修复：旧版漏了中缝虚线的重定位，
+    // 滚动时会粘在屏幕原位）
+    if (rec.sig !== sig) {
+      rec.sig = sig;
+      rec.node.textContent = '';
       for (const c of culled) {
-        const band = rec.node.querySelector<HTMLElement>(`[data-band="${c.uid}"]`);
-        const r = visibleRectOf(s, c.uid);
-        if (band && r) place(band, r, 1);
+        const band = el('i', 'g3sync-wrath0-band');
+        band.dataset.band = c.uid;
+        rec.node.appendChild(band);
       }
-      continue;
+      rec.node.appendChild(el('i', 'g3sync-wrath0-seam'));
     }
-    rec.sig = sig;
-    rec.node.textContent = '';
     for (const c of culled) {
-      const r = visibleRectOf(s, c.uid);
-      if (!r) continue;
-      const band = el('i', 'g3sync-wrath0-band');
-      band.dataset.band = c.uid;
-      place(band, r, 1);
-      rec.node.appendChild(band);
+      const band = rec.node.querySelector<HTMLElement>(`[data-band="${c.uid}"]`);
+      if (band) place(band, visibleRectOf(s, c.uid), 1);
     }
     // 中缝虚线（表示"这条线的最高档整条被划掉"）
     const slotA = slotNode(0, line);
     const slotB = slotNode(1, line);
     const ra = slotA ? rectOf(slotA) : null;
     const rb = slotB ? rectOf(slotB) : null;
-    if (ra && rb) {
-      const seam = el('i', 'g3sync-wrath0-seam');
+    const seam = rec.node.querySelector<HTMLElement>('.g3sync-wrath0-seam');
+    if (seam && ra && rb) {
       const top = Math.min(ra.top, rb.top);
       const bottom = Math.max(ra.bottom, rb.bottom);
       seam.style.left = `${Math.min(ra.left, rb.left)}px`;
       seam.style.top = `${(top + bottom) / 2}px`;
       seam.style.width = `${Math.max(ra.right, rb.right) - Math.min(ra.left, rb.left)}px`;
-      rec.node.appendChild(seam);
     }
   }
   return [...active];
@@ -288,37 +313,31 @@ export function syncSloth0Bonus(s: GameState): string[] {
         const sr = self ? rectOf(self) : null;
         const cr = cover ? rectOf(cover) : null;
         if (!sr) continue;
-        if (rec.sig === sig) {
-          place(rec.node.querySelector<HTMLElement>('.g3sync-sloth0-glow')!, sr, 2);
-          const line2 = rec.node.querySelector<HTMLElement>('.g3sync-sloth0-link');
-          if (line2 && cr) {
-            const dx = cr.left + cr.width / 2 - (sr.left + sr.width / 2);
-            const dy = cr.top + cr.height * 0.75 - (sr.top + sr.height * 0.25);
-            line2.style.left = `${sr.left + sr.width / 2}px`;
-            line2.style.top = `${sr.top + sr.height * 0.25}px`;
-            line2.style.height = `${Math.hypot(dx, dy)}px`;
-            line2.style.transform = `rotate(${Math.atan2(dy, dx) - Math.PI / 2}rad)`;
-          }
-          const badge2 = rec.node.querySelector<HTMLElement>('.g3sync-badge.sloth');
-          if (badge2) { badge2.style.left = `${sr.right - 14}px`; badge2.style.top = `${sr.top - 6}px`; }
-          continue;
+        // 只有覆盖者变化才重建；**位置每帧重算**（2026-09-13 修复：旧版漏了涟漪的重定位）
+        if (rec.sig !== sig) {
+          rec.sig = sig;
+          rec.node.textContent = '';
+          rec.node.appendChild(el('i', 'g3sync-sloth0-glow'));
+          rec.node.appendChild(el('i', 'g3sync-sloth0-ripple'));
+          if (cr) rec.node.appendChild(el('i', 'g3sync-sloth0-link'));
+          rec.node.appendChild(el('i', 'g3sync-badge sloth', '+5'));
         }
-        rec.sig = sig;
-        rec.node.textContent = '';
-        const glow = el('i', 'g3sync-sloth0-glow');
-        place(glow, sr, 2);
-        rec.node.appendChild(glow);
-        const ripple = el('i', 'g3sync-sloth0-ripple');
-        place(ripple, sr, 6);
-        rec.node.appendChild(ripple);
-        if (cr) {
-          const link = el('i', 'g3sync-sloth0-link');
-          rec.node.appendChild(link);
+        place(rec.node.querySelector<HTMLElement>('.g3sync-sloth0-glow'), sr, 2);
+        place(rec.node.querySelector<HTMLElement>('.g3sync-sloth0-ripple'), sr, 6);
+        const line2 = rec.node.querySelector<HTMLElement>('.g3sync-sloth0-link');
+        if (line2 && cr) {
+          const dx = cr.left + cr.width / 2 - (sr.left + sr.width / 2);
+          const dy = cr.top + cr.height * 0.75 - (sr.top + sr.height * 0.25);
+          line2.style.left = `${sr.left + sr.width / 2}px`;
+          line2.style.top = `${sr.top + sr.height * 0.25}px`;
+          line2.style.height = `${Math.hypot(dx, dy)}px`;
+          line2.style.transform = `rotate(${Math.atan2(dy, dx) - Math.PI / 2}rad)`;
         }
-        const badge = el('i', 'g3sync-badge sloth', '+5');
-        badge.style.left = `${sr.right - 14}px`;
-        badge.style.top = `${sr.top - 6}px`;
-        rec.node.appendChild(badge);
+        const badge = rec.node.querySelector<HTMLElement>('.g3sync-badge.sloth');
+        if (badge) {
+          badge.style.left = `${sr.right - 14}px`;
+          badge.style.top = `${sr.top - 6}px`;
+        }
       }
     }
   }
@@ -692,7 +711,15 @@ export function gen3ControlChangedFx(
   window.setTimeout(() => l.remove(), 1500);
 }
 
-/** C4：控制权判定阶段（三条线对比条自中间向两侧扫描；满足→领先两条亮起，未满足→整体暗下+抖动） */
+/**
+ * C4：控制权判定阶段。
+ * 2026-09-13 重做（用户实测反馈"每回合链路蹦出奇怪粗线条"）：旧版把 14px 高的对比条**横铺整条
+ * `.stack-slot`** 且没有任何文字 → 看起来就是一条横在卡上的怪线。现在改为：
+ *  - 对比条**贴在双方能量槽（数值显示）正下方**，宽度≈能量槽宽（短条，不再横跨链路）；
+ *  - 条上带 `你/对手` 双色填充 + 分隔线 + 扫描线，旁边有"控制权判定"标题；
+ *  - 判定结果用文字明确给出：`获得控制组件` / `未满足 2 条线领先`（Q5 判定失败也要有反馈）；
+ *  - 领先的两条线能量槽加金色光圈，让"哪两条线领先"一眼可见。
+ */
 export function gen3ControlCheckFx(
   p: { player: PlayerId; wins: number; leading: Line[]; gained: boolean },
   s: GameState,
@@ -700,28 +727,67 @@ export function gen3ControlCheckFx(
   const l = layer('g3ctrl-check-layer', Z_CTRL);
   const foe: PlayerId = p.player === 0 ? 1 : 0;
   const leading = new Set(p.leading);
+  // 标题 + 结果（挂在控制组件上方，避免"凭空出现"）
+  const mod = document.querySelector<HTMLElement>('.control-module');
+  const mr = mod ? rectOf(mod) : null;
+  const capX = mr ? mr.left + mr.width / 2 : window.innerWidth / 2;
+  const capY = mr ? mr.top - 26 : 40;
+  const caption = el('div', 'g3ctrl-caption', `控制权判定 · P${p.player + 1}`);
+  caption.style.left = `${capX}px`;
+  caption.style.top = `${capY}px`;
+  l.appendChild(caption);
+  const result = el('div', `g3ctrl-result ${p.gained ? 'ok' : 'no'}`, p.gained ? '获得控制组件' : `未满足（领先 ${p.wins} 条，需 2 条）`);
+  result.style.left = `${capX}px`;
+  result.style.top = `${capY}px`;
+  result.style.animationDelay = '620ms';
+  l.appendChild(result);
+
   for (const line of [0, 1, 2] as Line[]) {
-    const slot = slotNode(p.player, line);
-    const r = slot ? rectOf(slot) : null;
-    if (!r) continue;
     const own = getLineValue(s, p.player, line);
     const opp = getLineValue(s, foe, line);
     const total = Math.max(1, own + opp);
-    const bar = el('div', `g3ctrl-bar${leading.has(line) ? ' lead' : ''}${p.gained ? '' : ' failed'}`);
-    bar.style.left = `${r.left - 6}px`;
-    bar.style.top = `${r.top + r.height / 2 - 7}px`;
-    bar.style.width = `${r.width + 12}px`;
-    const ownFill = el('i', 'g3ctrl-bar-own');
+    const lead = leading.has(line);
+    // 对比条贴在该线【己方能量槽】下方（宽度≈能量槽 → 短条、有归属感）
+    const mine = batteryNode(p.player, line);
+    const mineR = mine ? rectOf(mine) : null;
+    const anchor = mineR
+      ?? (() => { const sl = slotNode(p.player, line); return sl ? rectOf(sl) : null; })();
+    if (!anchor) continue;
+    const barW = Math.max(64, Math.min(150, anchor.width));
+    const cmp = el('div', `g3ctrl-cmp${lead ? ' lead' : ''}${p.gained ? '' : ' failed'}`);
+    cmp.style.left = `${anchor.left + anchor.width / 2 - barW / 2}px`;
+    cmp.style.top = `${anchor.bottom + 5}px`;
+    cmp.style.width = `${barW}px`;
+    const ownFill = el('i', 'g3ctrl-cmp-own');
     ownFill.style.width = `${((own / total) * 100).toFixed(1)}%`;
-    const oppFill = el('i', 'g3ctrl-bar-opp');
+    const oppFill = el('i', 'g3ctrl-cmp-opp');
     oppFill.style.width = `${((opp / total) * 100).toFixed(1)}%`;
-    bar.appendChild(ownFill);
-    bar.appendChild(oppFill);
-    const scan = el('i', 'g3ctrl-bar-scan');
-    bar.appendChild(scan);
-    l.appendChild(bar);
+    cmp.appendChild(ownFill);
+    cmp.appendChild(oppFill);
+    cmp.appendChild(el('i', 'g3ctrl-cmp-scan'));
+    l.appendChild(cmp);
+    // 数值（贴在条两端，明确"这是数值对比"）
+    const ownNum = el('i', 'g3ctrl-cmp-num own', String(own));
+    ownNum.style.left = `${anchor.left + anchor.width / 2 - barW / 2 - 16}px`;
+    ownNum.style.top = `${anchor.bottom + 6}px`;
+    l.appendChild(ownNum);
+    const oppNum = el('i', 'g3ctrl-cmp-num opp', String(opp));
+    oppNum.style.left = `${anchor.left + anchor.width / 2 + barW / 2 + 4}px`;
+    oppNum.style.top = `${anchor.bottom + 6}px`;
+    l.appendChild(oppNum);
+    // 领先线：双方能量槽加金圈
+    if (lead) {
+      for (const pid of [p.player, foe] as PlayerId[]) {
+        const bn = batteryNode(pid, line);
+        const br = bn ? rectOf(bn) : null;
+        if (!br) continue;
+        const ring = el('i', 'g3ctrl-lead-ring');
+        place(ring, br, 4);
+        l.appendChild(ring);
+      }
+    }
   }
-  window.setTimeout(() => l.remove(), 1100);
+  window.setTimeout(() => l.remove(), 1250);
 }
 
 /** 清缓存时刻（rule:clear-cache）：持牌方场上有未覆盖正面 gluttony-0 → 齿颚咬合（G1 的"咬合时刻"） */

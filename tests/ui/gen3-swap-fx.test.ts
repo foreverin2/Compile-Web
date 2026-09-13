@@ -47,7 +47,7 @@ describe('批次 E 守卫：交换附加层 + 收尾', () => {
     expect(utilTs).toContain('export function clipInsetRightPct');
     // 同步层（愤怒0 划除带 / 嫉妒0 源卡标记）
     expect(controlTs).toContain('visibleRectOf(s, c.uid)');
-    expect(controlTs).toContain('visibleRectOf(s, best.uid)');
+    expect(controlTs, '嫉妒0 源卡标记未走可见区域裁剪').toMatch(/visibleRectOf\(s, sourceUid\)/);
     // 浮层卡（伏击3 被挖出的被盖卡 / 惰性0 翻转被盖牌）
     expect(cardFxTs.match(/clipInsetRightPct\(state, p\.uid\)/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
   });
