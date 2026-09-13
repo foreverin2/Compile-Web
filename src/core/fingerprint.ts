@@ -16,6 +16,9 @@
  *
  * undefined 语义：值为 undefined 的键被省略，与 JSON.stringify 一致（见下面的 filter 注释）。
  * 这消除了「显式赋 undefined」与「JSON 往返后丢键」之间的指纹差异。
+ * 已知限制：覆盖的是**对象自身可枚举键**；**数组元素为 undefined 的情形不在覆盖内**
+ * —— `[undefined]` 与 `[null]` 经 stableStringify 后仍不可区分。当前 `src/core` 不可达
+ * （Task 5 第三轮评审确认），故只记录、不加运行时防护。
  */
 
 import type { GameState } from './models/types';
@@ -43,7 +46,7 @@ export function hash64(text: string): string {
   return a.toString(16).padStart(8, '0') + b.toString(16).padStart(8, '0');
 }
 
-/** 状态指纹。全部字段纳入（含 log / rng.n / nextUid）——它们都是确定性的。 */
+/** 状态指纹。全部字段纳入（含 log / rng.n / nextUid / nextEffectId）——它们都是确定性的。 */
 export function stateFingerprint(s: GameState): string {
   return hash64(stableStringify(s));
 }

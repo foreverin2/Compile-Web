@@ -43,7 +43,7 @@ function* lust2Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
 }
 
 /** lust-3 中：对手随机揭示手牌中的1张牌。将那张牌反面打出在对手一侧。
- *  真随机（love-3/运气3 先例）取对手手牌 1 张 → reveal（幽灵给对方看）→ 拥有者选线（RQ1-A）
+ *  随机取自状态种子（randPick，与 love-3/运气3 同源）的对手手牌 1 张 → reveal（幽灵给对方看）→ 拥有者选线（RQ1-A）
  *  → 该牌反面（faceDown）落【对手自己】的该线链路（playFromHand 不变主）。手牌空 → fizzle。 */
 function* lust3Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const foe = opp(ctx.player);

@@ -44,7 +44,7 @@ function* love2(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
 
 /** love-3 中指令：随机拿走1张对手的手牌。你把1张手牌给对手。
  *  对手手牌空 → take 步骤 fizzle（用户拍板：不触发）；否则 {op:'takeRandom', from: opp}
- *  （真随机 Math.random，owner 变更到效果属主）。give 照常（用户拍板：take fizzle 不影响 give）：
+ *  （随机取自状态种子（randInt），owner 变更到效果属主）。give 照常（用户拍板：take fizzle 不影响 give）：
  *  select 自己手牌 1 张（自己手牌空 → give fizzle）→ {op:'give', uid, to: opp}。 */
 function* love3(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const opp: PlayerId = ctx.player === 0 ? 1 : 0;

@@ -9,8 +9,12 @@ import { applyStep, recordRandomSteps } from './lib';
  *
  * 这组测试的观测力来自"两次独立重跑"：若引擎里还存在任何未进种子的随机源
  * （Math.random / Date / 模块级递增计数器等），两次跑出的对局会分叉、指纹不同 ——
- * 本测试就会失败。因此它**不是空转**：删除 tests/fuzz/lib.ts 的 Math.random 补丁之前，
- * 这里的第一个断言必然失败。
+ * 本测试就会失败。
+ *
+ * 注意第一个断言的**牙齿在什么时候生效**：它只在「补丁已删、而引擎仍在用 Math.random」
+ * 时才会咬人。当年 fuzz 库还挂着 Math.random 补丁时，两次运行同样走补丁的种子——断言会
+ * 照常通过，因此"删除补丁之后它必然失败"是把证据关系说反了。真正的证据是**负控**：
+ * 临时把某条选择流的种子去掉（退回 Math.random），D4 的 12 个种子会 12/12 失败。
  */
 
 /** 独立重跑对比的种子数：每局要跑两遍，故取较小值 */
@@ -22,12 +26,19 @@ const MAX_STEPS = 400;
 describe('D4：全域确定性（全卡池 fuzz）', () => {
   it('同种子两次独立重跑指纹相同', () => {
     const bad: string[] = [];
+    // 顺带留下前两个种子的指纹：下面用它做跨种子差异断言，避免再多跑两局
+    const fp = new Map<number, string>();
     for (let seed = 1; seed <= REPEAT_SEEDS; seed++) {
       const a = playRandomGame(seed, MAX_STEPS);
       const b = playRandomGame(seed, MAX_STEPS);
       if (a.fingerprint !== b.fingerprint) bad.push(`seed=${seed}`);
+      if (seed <= 2) fp.set(seed, a.fingerprint);
     }
     expect(bad, `以下种子两次重跑不一致：${bad.join(', ')}`).toEqual([]);
+
+    // 跨种子必须不同：上面的"两次重跑"检测不到「常量型 / 忽略种子的 RNG」
+    // ——那种实现两次运行恒等，D4 会全绿。这条断言补上该盲区。
+    expect(fp.get(1)).not.toBe(fp.get(2));
   }, 300000);
 
   it('录制步骤后重放，指纹与原局相同', () => {
@@ -43,7 +54,7 @@ describe('D4：全域确定性（全卡池 fuzz）', () => {
     expect(bad, `以下种子重放后指纹不一致：${bad.join(', ')}`).toEqual([]);
   }, 300000);
 
-  it('RNG 消耗次数随对局推进单调增长（防"随机被绕过"）', () => {
+  it('同种子两跑的步数相等（防"随机被绕过"）', () => {
     // 同一 seed 两跑必须走出**同一步数**：若某些随机改从种子之外的地方取
     // （补丁/全局/时间），步数就会漂移，此处即报警。
     const a = playRandomGame(7, MAX_STEPS);

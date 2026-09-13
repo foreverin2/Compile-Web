@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import type { ChoiceRequest, GameState, Line, PlayerId } from '../../src/core/models/types';
 import { createGame, getLineValue } from '../../src/core/state/create';
 import { resolveMiddle, runStack, answerEffect } from '../../src/core/effects/resolve';
@@ -41,11 +41,6 @@ function eagerPick(prompt: ChoiceRequest): string[] {
   if (prompt.candidates.length === 0) return [];
   return prompt.candidates.slice(0, prompt.max).map((c) => c.uid);
 }
-
-/** 每张测试后恢复 Math.random（lust-3 随机取牌用） */
-afterEach(() => {
-  vi.restoreAllMocks();
-});
 
 // ============ 嫉妒 envy ============
 
@@ -284,15 +279,21 @@ describe('lust（色欲）', () => {
   it('lust-3 middle: random reveal of opponent hand card then face-down to chosen line (owner side of opponent)', () => {
     const s = setup();
     const src = placeSrc(s, 'lust-3', 0, 0);
-    s.players[1].hand = [makeCard('light-5', 1, 'hand'), makeCard('fire-2', 1, 'hand')];
-    vi.spyOn(Math, 'random').mockReturnValue(0); // 取对手手牌第 1 张
+    const foeHand = [makeCard('light-5', 1, 'hand'), makeCard('fire-2', 1, 'hand')] as const;
+    s.players[1].hand = [...foeHand];
+    // 随机取牌必须走**状态随机源**（randPick(ctx.s, …)），而非 Math.random：
+    // 把 rng.n 归零后跑中指令，它必须被推进，取到的牌也必须是对手手牌中的一张。
+    s.rng.n = 0;
     resolveMiddle(s, 0, src);
+    expect(s.rng.n).toBeGreaterThan(0);
     let top = s.pendingEffects[s.pendingEffects.length - 1];
     expect(top?.prompt?.kind).toBe('select-line'); // 拥有者选线
     answerEffect(s, top.id, ['line:2']);
     resolveAllChoices(s, pickFirst);
     const foeStack = s.players[1].stacks[2];
     expect(foeStack.length).toBe(1); // 随机牌反打到对手线 2（对手自己堆叠）
+    // 反打的那张必须正是从对手手牌里随机取出的那张（随机源可控 → 结果可预期）
+    expect(foeHand.some((c) => c.uid === foeStack[0].uid)).toBe(true);
     expect(foeStack[0].faceUp).toBe(false);
     expect(foeStack[0].owner).toBe(1);
     expect(s.players[1].hand).toHaveLength(1);
