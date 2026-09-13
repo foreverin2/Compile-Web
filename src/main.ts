@@ -2,15 +2,15 @@ import './ui/styles.css';
 import './ui/styles-gen3.css'; // 3代（MN03/AX03）协议特效样式（批次 A：15 套已编译常驻特效）
 import './ui/styles-gen3-cards.css'; // 3代卡牌效果附加层样式（批次 B/C：四类动作 + 抽牌/反打/编译后）
 import './ui/styles-gen3-sync.css'; // 3代常驻层与控制权族样式（批次 D）
-import { createGame, performDraftPick, performDraftUnpick, performDraftBan } from './core/state/create';
+import { createGame, performDraftPick, performDraftUnpick, performDraftBan, randomPoolFromSeed, setSeedNonce } from './core/state/create';
 import { executeAction } from './core/game';
 import { getCompilableLines } from './core/rules/compile';
 import { collectTriggers } from './core/effects/triggers';
 import { renderApp, renderDraft, resetUiState, syncCompiledFxLayers, syncSmokeOverlays, syncScanOverlays, syncPsychicParticles, syncPlagueMists, syncApathyMists, syncApathyMosaics, syncSpirit0Glows, syncSpirit1Cards, syncMetal0Glows, syncMetalPlates, syncMetal6Mans, syncMetal1LineGlows, syncMirror0BatteryGlows, syncClarity0BatteryGlows, syncIceFx, syncSmoke2LineGlows, syncFear0TriGlows, syncWarBlades, syncChainLayerPosition, syncDiversity3Fx, type UiCallbacks } from './ui/render';
 import { openControlRearrangeModal, closeControlRearrangeModal, refreshControlRearrangeModal, isControlRearrangeOpen, orderChanged, orderToAction } from './ui/control-rearrange';
 import { renderHome, renderCoin, renderLibrary, renderRules, renderModeSelect } from './ui/home';
+import { newMatchSeed } from './ui/match-seed';
 import { resetControlIfHeld } from './core/rules/control';
-import { DEMO_PROTOCOLS } from './data/demo';
 import { initEffects, initCompileFx, initRearrangeFx, initGen3StackSwapFx, initShuffleFx, playRevealFly, buildLoveHeart, playSpeedDrawExtra, SPEED_TOTAL_MS } from './ui/effects';
 import { gen3ClearCacheFx, gen3ControlChangedFx, gen3ControlCheckFx, syncGen3Persistent } from './ui/gen3-control';
 import { gen3FulcrumSwapFx, gen3ProtocolSwapFx } from './ui/fx-gen3-swap';
@@ -24,6 +24,8 @@ import { trace, stateDigest, initEventTracing } from './core/trace';
 import type { PlayerId, Line } from './core/models/types';
 
 const root = document.getElementById('app')!;
+// 启动时注入运行期 nonce（G0）：使任何未显式传 seed 的 createGame() 也不会跨重启重复同一牌序
+setSeedNonce(newMatchSeed());
 let state = createGame();
 
 /** 非玩家输入步骤之间自动推进的间隔（毫秒） */
@@ -492,25 +494,20 @@ function showModeSelect(): void {
   });
 }
 
-/** 随机池：从三代全部协议（45 套）中随机抽取 12 套 */
-function randomDraftPool(): typeof DEMO_PROTOCOLS {
-  const pool = [...DEMO_PROTOCOLS];
-  for (let i = pool.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [pool[i], pool[j]] = [pool[j], pool[i]];
-  }
-  return pool.slice(0, 12);
-}
-
+/** 掷硬币页：先生成本局种子，硬币与随机池都由它派生（G0） */
 function showCoin(): void {
+  // G0：种子在开局前生成一次，硬币与随机池都由它派生 → 可复现、可联机
+  const seed = newMatchSeed();
   renderCoin(root, {
     backHome: showModeSelect,
+    seed,
     beginGame: (starter) => {
       state = createGame({
+        seed,
         draftStarter: starter,
         firstToPlay: (1 - starter) as PlayerId,
         draftMode: gameOptions.ban ? 'ban' : 'normal',
-        draftPool: gameOptions.randomPool ? randomDraftPool() : undefined,
+        draftPool: gameOptions.randomPool ? randomPoolFromSeed(seed, 12) : undefined,
       });
       renderApp(root, state, cb);
     },

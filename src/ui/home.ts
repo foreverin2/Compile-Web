@@ -1,4 +1,5 @@
 import type { PlayerId } from '../core/models/types';
+import { deriveInt } from '../core/rng';
 import { DEMO_PROTOCOLS, DEMO_CARD_DEFS, protocolImgSrc, cardImgSrc, cardTextParts } from '../data/demo';
 import { openZoom, buildCardTextEl, buildProtocolRatingPanel, bindClickOrDouble } from './render';
 
@@ -21,6 +22,8 @@ export interface HomeNav {
 
 export interface CoinNav {
   backHome(): void;
+  /** 本局种子（G0）：硬币结果由它派生，保证双方一致、且可复现 */
+  seed: string;
   /** 掷币结束：draftStarter = 掷胜玩家座位（0/1）；firstToPlay 由 main 置 1 - draftStarter */
   beginGame(draftStarter: PlayerId): void;
 }
@@ -358,7 +361,8 @@ export function renderCoin(root: HTMLElement, nav: CoinNav): void {
     flipBtn.disabled = true;
     for (const pe of pickEls) (pe as HTMLButtonElement).disabled = true;
     stage.classList.add('flipping');
-    const landed: 1 | 2 = Math.random() < 0.5 ? 1 : 2;
+    // G0：硬币结果由种子派生（原来是 Math.random）—— 动画只是把已确定的结果演出来
+    const landed: 1 | 2 = deriveInt(nav.seed, 'coin', 2) === 0 ? 1 : 2;
     const winner: PlayerId = landed === chosen ? 0 : 1;
     // 交替闪现间隔逐次拉长（模拟硬币逐渐停下），最后停在 landed 面
     const delays = [90, 90, 110, 130, 160, 190, 230, 280, 340, 420, 520];

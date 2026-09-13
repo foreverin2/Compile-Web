@@ -2,7 +2,7 @@ import { pushLog } from '../log';
 import type { GameState, PlayerId, PlayerState, Line, ProtocolDef, Card } from '../models/types';
 import { DEMO_PROTOCOLS, DEMO_CARD_DEFS, getCardDef } from '../../data/demo';
 import { drawCards } from '../engine/deck';
-import { shuffleWith } from '../rng';
+import { deriveInt, shuffleWith } from '../rng';
 import { EFFECTS } from '../effects/registry';
 import { cardCommandDisabled } from '../effects/context';
 
@@ -93,6 +93,21 @@ export function createGame(opts: CreateGameOptions = {}): GameState {
     compileBlocked: null,
     pendingCompile: null,
   };
+}
+
+/** 随机池：由种子派生 count 套（G0）。用命名流派生，因此与调用时机无关 ——
+ *  UI 可以"先掷硬币、再决定要不要随机池"，结果不变。 */
+export function randomPoolFromSeed(
+  seed: string,
+  count = 12,
+  pool: ProtocolDef[] = DEMO_PROTOCOLS,
+): ProtocolDef[] {
+  const a = [...pool];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = deriveInt(seed, `pool:${i}`, i + 1);
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a.slice(0, count);
 }
 
 export function getDraftPool(s: GameState): ProtocolDef[] {
