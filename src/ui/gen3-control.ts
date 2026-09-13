@@ -15,6 +15,7 @@ import type { Card, GameState, Line, PlayerId } from '../core/models/types';
 import { cardPointValue, getLineValue } from '../core/state/create';
 import { cardCommandDisabled, isUncovered } from '../core/effects/context';
 import { visibleRectOf } from './gen3-util';
+import { protocolColorOf } from './protocol-colors';
 
 /* ============================== 小工具 ============================== */
 
@@ -660,17 +661,22 @@ function lustDrivenControl(p: { reason?: string; sourceDefId?: string }): boolea
   return p.reason === 'effect' && (p.sourceDefId ?? '').startsWith('lust-');
 }
 
-/** C1/C2 轻量版：不牵链条，只在组件卡新位置播脉冲 + 文字标（判定阶段/其他协议的易主） */
-function controlMiniFx(p: { from: number; to: number; reason?: string }, cx: number, cy: number, x: number): void {
+/** C1/C2 轻量版：不牵链条，只在组件卡新位置播脉冲 + 文字标（判定阶段/其他协议的易主）。
+ *  2026-09-13：颜色取**效果源卡协议**的主题色（如嫉妒1 底易主 = 玉青/橙），判定阶段（无源卡）用中性灰——
+ *  这样既满足用户 #8「只有色欲才牵链条」，又保留了设计稿 E2② 那种"有来源的易主要能看出是谁做的"。 */
+function controlMiniFx(p: { from: number; to: number; reason?: string; sourceDefId?: string }, cx: number, cy: number, x: number): void {
   const l = layer('g3ctrl-layer', Z_CTRL);
+  const color = p.sourceDefId ? protocolColorOf(p.sourceDefId) : '#b4bac4';
   const pulse = el('i', 'g3ctrl-mini-pulse');
   pulse.style.left = `${x}px`;
   pulse.style.top = `${cy}px`;
+  pulse.style.setProperty('--mc', color);
   l.appendChild(pulse);
   const gained = p.to === 0 || p.to === 1;
   const chip = el('i', 'g3ctrl-mini-chip', gained ? `控制组件 → P${p.to + 1}` : '控制组件归还中立');
   chip.style.left = `${x}px`;
   chip.style.top = `${cy - 54}px`;
+  chip.style.setProperty('--mc', color);
   chip.style.animationDelay = '120ms';
   l.appendChild(chip);
   void cx;

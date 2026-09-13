@@ -484,3 +484,13 @@
   22% { opacity: 1; }
   100% { opacity: 0; transform: translate(-50%, -128%); }
 }
+
+/* 轻量版控制权易主的配色（--mc = 效果源卡协议主题色；判定阶段为中性灰） */
+.g3ctrl-mini-pulse {
+  border-color: var(--mc, #d8c9a8) !important;
+  box-shadow: 0 0 16px var(--mc, #d8c9a8), inset 0 0 14px rgba(20, 22, 26, 0.5) !important;
+}
+.g3ctrl-mini-chip {
+  color: var(--mc, #f0e6d2) !important;
+  border-color: var(--mc, #d8c9a8) !important;
+}
