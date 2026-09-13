@@ -387,5 +387,7 @@ export interface GameState {
   rng: RngState;
   /** 卡牌 uid 计数器（G0）：原为模块级全局 uidCounter，会让"同一串操作"在不同进程得到不同 uid */
   nextUid: number;
+  /** 效果/揭示 id 计数器（G0 补漏）：原为 context.ts 的模块级全局「效果 id 计数器」 */
+  nextEffectId: number;
 }
 

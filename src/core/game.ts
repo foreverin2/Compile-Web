@@ -302,7 +302,7 @@ function beginCacheClear(s: GameState, player: PlayerId): void {
   const excess = s.players[player].hand.length - 5;
   if (excess <= 0) throw new Error('cache is within limit');
   s.pendingEffects.push({
-    id: nextEffectId(),
+    id: nextEffectId(s),
     player,
     gen: cacheClearGen(s, player),
     sourceUid: 'system-cache',

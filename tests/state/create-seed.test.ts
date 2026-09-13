@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createGame, nextUid, nextAutoSeed, setSeedNonce } from '../../src/core/state/create';
+import { nextEffectId } from '../../src/core/effects/context';
 
 describe('createGame 的种子与 uid 计数器（G0）', () => {
   it('显式 seed 写进状态', () => {
@@ -24,6 +25,22 @@ describe('createGame 的种子与 uid 计数器（G0）', () => {
     nextUid(s);
     const restored = JSON.parse(JSON.stringify(s)) as typeof s;
     expect(nextUid(restored)).toBe('c2');
+  });
+
+  it('效果 id 计数器在状态里：两局都从 e1 开始', () => {
+    const a = createGame({ seed: 'A' });
+    const b = createGame({ seed: 'B' });
+    expect(nextEffectId(a)).toBe('e1');
+    expect(nextEffectId(b)).toBe('e1');
+    expect(nextEffectId(a)).toBe('e2');
+    expect(a.nextEffectId).toBe(3);
+  });
+
+  it('效果 id 计数器随状态序列化一起恢复', () => {
+    const s = createGame({ seed: 'A' });
+    nextEffectId(s);
+    const restored = JSON.parse(JSON.stringify(s)) as typeof s;
+    expect(nextEffectId(restored)).toBe('e2');
   });
 
   it('draftStarter 默认仍为 0（不得改成种子派生）', () => {

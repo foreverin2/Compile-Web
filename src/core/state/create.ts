@@ -67,6 +67,7 @@ export function createGame(opts: CreateGameOptions = {}): GameState {
   return {
     rng: { seed, n: 0 },
     nextUid: 1,
+    nextEffectId: 1,
     phase: 'draft',
     draftRound: 0,
     draftPicks: [],

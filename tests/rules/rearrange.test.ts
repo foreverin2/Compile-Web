@@ -57,6 +57,7 @@ function makeState(overrides: Partial<GameState> = {}): GameState {
     pendingCompile: null,
     rng: { seed: 'test', n: 0 },
     nextUid: 1,
+    nextEffectId: 1,
     ...overrides,
   };
 }

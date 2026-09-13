@@ -98,7 +98,7 @@ export function fireReactive(s: GameState, kind: ReactiveKind, actor: PlayerId):
         // 底命令反应（未注册 top）：仅未覆盖顶卡触发（规则 79 行「底命令仅未覆盖生效」）
         if (!def.top && !isUncovered(s, card)) continue;
         s.pendingEffects.push({
-          id: nextEffectId(),
+          id: nextEffectId(s),
           player: card.owner,
           gen: def.fn(createCtx(s, card.owner, card)),
           sourceUid: card.uid,
@@ -135,7 +135,7 @@ export function resolveTrigger(s: GameState, t: TriggerEntry, opts?: { topComman
   if (!card || !def) return;
   const ctx = createCtx(s, card.owner, card);
   s.pendingEffects.push({
-    id: nextEffectId(), player: card.owner,
+    id: nextEffectId(s), player: card.owner,
     gen: def.fn(ctx), sourceUid: card.uid, sourceDefId: card.defId,
     topCommand: opts?.topCommand,
     prompt: null, lastAnswer: null,

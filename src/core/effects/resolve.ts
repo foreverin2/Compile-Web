@@ -82,7 +82,7 @@ function fireDirectedTop(
     // 3代 inertia-1 区域禁底（C7）：after-play/after-return 均为底命令注册（ice-1/envy-3/corruption-1 等）
     if (cardCommandDisabled(s, top, 'bottom')) continue;
     s.pendingEffects.push({
-      id: nextEffectId(),
+      id: nextEffectId(s),
       player: top.owner,
       gen: def.fn(createCtx(s, top.owner, top)),
       sourceUid: top.uid,
@@ -125,7 +125,7 @@ export function pushMiddle(s: GameState, player: PlayerId, card: Card, reason = 
   }
   const ctx = createCtx(s, player, card);
   s.pendingEffects.push({
-    id: nextEffectId(), player,
+    id: nextEffectId(s), player,
     gen: eff(ctx), sourceUid: card.uid, sourceDefId: card.defId,
     prompt: null, lastAnswer: null,
   });
@@ -721,7 +721,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       const ownReveal = card.owner === caster; // Case A：把【我的】卡给对手看
       const shownTo: PlayerId = ownReveal ? (caster === 0 ? 1 : 0) : caster; // 得知信息的一方
       s.revealedGhosts.push({
-        id: nextEffectId(),
+        id: nextEffectId(s),
         defId: card.defId,
         shownTo,
         expiresAtTurn: s.turnCount + (ownReveal ? 2 : 3), // A：对手回合结束；B：发起者下回合结束
@@ -794,7 +794,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
         break;
       }
       s.pendingEffects.push({
-        id: nextEffectId(),
+        id: nextEffectId(s),
         player: pe.player,
         gen: eff(createCtx(s, pe.player, card)),
         sourceUid: pe.sourceUid,

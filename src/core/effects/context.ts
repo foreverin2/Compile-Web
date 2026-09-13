@@ -2,10 +2,12 @@ import type { Card, ChoiceCard, EffectCtx, GameState, Line, PlayerId, CandidateF
 import { getCardDef } from '../../data/demo';
 import { gameBus } from '../events/bus';
 
-let effectIdCounter = 0;
-export function nextEffectId(): string {
-  effectIdCounter += 1;
-  return `e${effectIdCounter}`;
+/** 效果/揭示 id：计数器进状态（G0）。模块级全局会让"开局前历史不同"的两端产生不同 id，
+ *  联机的 effect-choice 应答（按 promptId 匹配）会因此对不上号。 */
+export function nextEffectId(s: GameState): string {
+  const id = `e${s.nextEffectId}`;
+  s.nextEffectId += 1;
+  return id;
 }
 
 /** 全状态查找卡牌（含浮空中的 pendingPlay/pendingShift 卡） */

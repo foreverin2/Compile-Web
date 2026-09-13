@@ -27,7 +27,7 @@ function* clarity1Start(ctx: EffectCtx): Generator<EffectStep, void, StepResult>
   const p = ctx.s.players[ctx.player];
   const topUid = p.deck[p.deck.length - 1].uid;
   // 牌库揭示标记（与揭示幽灵同过期口径：Case A = 对手回合结束清除）
-  ctx.s.deckReveals.push({ id: nextEffectId(), player: ctx.player, whole: false, expiresAtTurn: ctx.s.turnCount + 2 });
+  ctx.s.deckReveals.push({ id: nextEffectId(ctx.s), player: ctx.player, whole: false, expiresAtTurn: ctx.s.turnCount + 2 });
   yield { op: 'reveal', uid: topUid }; // 幽灵给对手（Case A：自己的牌）
   const actAns = yield {
     kind: 'select-action', title: 'clarity-1：你可以弃置牌库顶端的卡牌', min: 1, max: 1, optional: false,

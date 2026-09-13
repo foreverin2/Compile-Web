@@ -5,7 +5,13 @@ import { rng, setupGen3Game } from '../fuzz/lib';
 import { applyStep, recordRandomSteps, type Step } from './lib';
 
 const SEED = 20260913;
-const STEPS = 80;
+/**
+ * ⚠️ 400 而非 80（Task 7 评审 Finding 1）：80 步录到的基准局
+ * `{advance:68,play:10,compile:1,refresh:1,answer:0}`、effectIdsMinted=0、80 步全是安全点 ——
+ * 于是 `applyStep` 的 answer 分支与 `recordRandomSteps` 的 prompt 分支都不可达，
+ * D2 的安全点守卫永不触发，整个台子对"对局中的状态"没有观测力。
+ */
+const STEPS = 400;
 /** 选择流种子：与引擎流分开（引擎流现由状态种子决定） */
 const PICK_SEED = SEED ^ 0x5bf03635;
 
@@ -71,6 +77,9 @@ describe('确定性测试台 D1~D3（G0）', () => {
     const { steps, fp } = baseline();
     expect(steps.length).toBeGreaterThan(0);
     expect(fp).toMatch(/^[0-9a-f]{16}$/);
+    // 基准必须真的走到"应答"分支：否则 applyStep 的 answer 分支 / recordRandomSteps 的 prompt
+    // 分支不可达，D1~D3 全都只覆盖开局区（评审 Finding 1 的病根）。
+    expect(steps.some((s) => s.t === 'answer')).toBe(true);
   });
 
   it('D1 重放一致：同种子 + 同步骤 → 同指纹', () => {
@@ -97,6 +106,9 @@ describe('确定性测试台 D1~D3（G0）', () => {
     }
     // 兜底：确保这条断言不是空转（若一次安全点都没有，测试本身失效）
     expect(roundTrips).toBeGreaterThan(0);
+    // 反向守卫：安全点必须**少于**总步数，否则"只在安全点往返"这条规则从未被检验过
+    // （80 步基准局里 80 步全是安全点 = 守卫形同虚设）。
+    expect(roundTrips).toBeLessThan(steps.length);
     expect(stateFingerprint(s)).toBe(fp);
   });
 
