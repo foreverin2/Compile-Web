@@ -9,20 +9,62 @@
 
 /* ---------------------------------------------------------------- 共享 */
 
-/* body 级满屏弧轨层（偏转用）：SVG 视口坐标 + 沿路径飞行的光点 */
+/* body 级满屏弧轨层（偏转用）：SVG 视口坐标 + 沿路径飞行的运载件。
+ * 2026-09-13 差异化（用户 #3/#16）：基础 path 不再默认虚线（否则三条轨道 + 嫉妒0 汲取丝全长一样），
+ * 虚线只作为「星轨芯」的专属材质。 */
 .g3-arc { position: fixed; left: 0; top: 0; width: 100vw; height: 100vh; pointer-events: none; }
 .g3-arc-svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
-.g3-arc path { stroke-dasharray: 8 7; opacity: 0.85; animation: g3-arc-dash 0.6s linear infinite; }
-.g3-arc-ribbon { stroke-dasharray: none !important; opacity: 0.28 !important; filter: blur(3px); animation: none !important; }
+.g3-arc path { opacity: 0.9; }
 @keyframes g3-arc-dash { to { stroke-dashoffset: -30; } }
-.g3-arc-dot {
-  position: absolute; left: 0; top: 0; width: 7px; height: 7px; border-radius: 50%;
-  background: radial-gradient(circle, #ffffff 0%, currentColor 55%, rgba(255, 255, 255, 0) 100%);
-  box-shadow: 0 0 10px currentColor;
-  offset-rotate: 0deg;
+
+/* —— 傲慢「金缆」：实心光缆（外鞘 + 亮芯 + 白芯），无虚线，配箭形滑块 —— */
+.g3-arc-cable-shell { stroke-width: 9; opacity: 0.26; filter: blur(3px); }
+.g3-arc-cable-core { stroke: #f6d488; filter: drop-shadow(0 0 7px rgba(217, 164, 65, 0.95)); }
+.g3-arc-cable-spark { stroke: #fffaf0; opacity: 0.9; }
+.g3-arc-chevron {
+  position: absolute; left: 0; top: 0; width: 16px; height: 11px; margin: -5.5px 0 0 -8px;
+  background: linear-gradient(90deg, rgba(255, 246, 219, 0.98), rgba(217, 164, 65, 0.35));
+  clip-path: polygon(0 0, 100% 50%, 0 100%, 26% 50%);
+  filter: drop-shadow(0 0 7px rgba(246, 212, 136, 0.95));
   animation: g3-arc-run linear forwards;
 }
-@keyframes g3-arc-run { from { offset-distance: 0%; opacity: 0; } 12% { opacity: 1; } 88% { opacity: 1; } to { offset-distance: 100%; opacity: 0; } }
+
+/* —— 新星「星轨」：暗橙拖尾 + 亮橙虚线芯 + 四角星 —— */
+.g3-arc-tail { stroke: #ffb347; opacity: 0.3; filter: blur(5px); }
+.g3-arc-comet {
+  stroke: #ffd9a0; stroke-dasharray: 14 9;
+  filter: drop-shadow(0 0 8px rgba(255, 179, 71, 0.95));
+  animation: g3-arc-dash 0.5s linear infinite, g3-arc-comet-in 0.3s ease-out;
+}
+@keyframes g3-arc-comet-in { from { opacity: 0; } to { opacity: 1; } }
+.g3-arc-star {
+  position: absolute; left: 0; top: 0; width: 12px; height: 12px; margin: -6px 0 0 -6px;
+  background: radial-gradient(circle, #fffdf5 0%, #ffb347 46%, rgba(255, 179, 71, 0) 74%);
+  clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);
+  filter: drop-shadow(0 0 6px rgba(255, 179, 71, 0.9));
+  animation: g3-arc-run linear forwards;
+}
+
+/* —— 柔性「绶带」：正弦波动宽柔光带 + 亮芯 + 落点缎带结（无箭头） —— */
+.g3-arc-silk-wide { stroke: #c79bec; opacity: 0.32; filter: blur(6px); }
+.g3-arc-silk-core { stroke: #ecd6ff; filter: drop-shadow(0 0 8px rgba(168, 111, 208, 0.95)); }
+.g3-arc-bead {
+  position: absolute; left: 0; top: 0; width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%;
+  background: radial-gradient(circle at 34% 30%, #ffffff, #c79bec 58%, rgba(168, 111, 208, 0) 100%);
+  box-shadow: 0 0 9px rgba(199, 155, 236, 0.9);
+  animation: g3-arc-run linear forwards;
+}
+.g3-arc-knot {
+  position: absolute; width: 34px; height: 34px; margin: -17px 0 0 -17px;
+  border: 3px solid rgba(236, 214, 255, 0.95); border-radius: 46% 54% 52% 48% / 54% 46% 54% 46%;
+  box-shadow: 0 0 16px rgba(168, 111, 208, 0.9), inset 0 0 10px rgba(255, 200, 255, 0.45);
+  animation: g3-arc-knot 0.62s cubic-bezier(0.2, 0.85, 0.3, 1) forwards;
+}
+@keyframes g3-arc-knot {
+  0% { transform: scale(0.3) rotate(-50deg); opacity: 0; }
+  30% { opacity: 1; }
+  100% { transform: scale(1.35) rotate(22deg); opacity: 0; }
+}
 .g3-arc-head {
   position: absolute; width: 46px; height: 46px; margin: -23px 0 0 -23px; border-radius: 50%;
   border: 2px solid currentColor; opacity: 0;
@@ -30,10 +72,11 @@
 }
 @keyframes g3-arc-head { 0% { transform: scale(0.4); opacity: 0.9; } 100% { transform: scale(1.5); opacity: 0; } }
 
-/* 各协议弧轨配色（currentColor 同时驱动光点与落点环） */
+/* 各协议弧轨配色（currentColor 同时驱动落点环） */
 .g3-pride-arc { color: #d9a441; }
 .g3-nova-arc { color: #ffb347; }
 .g3-nova-arc.dim { color: #8a3a2a; opacity: 0.75; }
+.g3-nova-arc.dim .g3-arc-comet { stroke-dasharray: 9 12; opacity: 0.7; }
 .g3-flx-arc { color: #a86fd0; }
 .g3-nova-pull { color: #ffb347; }
 
@@ -209,6 +252,32 @@
   animation: g3-speed-sweep 0.3s cubic-bezier(0.3, 0.1, 0.6, 1) forwards;
 }
 @keyframes g3-speed-sweep { 0% { transform: translateX(0); opacity: 0; } 18% { opacity: 1; } 100% { transform: translateX(300%); opacity: 0; } }
+/* 2026-09-13 加强（用户实测"动量弃牌没看到特效"）：贯穿全卡的斜向疾风 + 一条高光加速带 */
+.g3-speed-gust {
+  position: absolute; left: -60%; top: -10%; width: 220%; height: 120%;
+  background: linear-gradient(105deg,
+    rgba(255, 138, 43, 0) 0%, rgba(255, 138, 43, 0.1) 34%, rgba(255, 208, 138, 0.42) 50%,
+    rgba(255, 138, 43, 0.1) 66%, rgba(255, 138, 43, 0) 100%);
+  filter: blur(3px);
+  animation: g3-speed-gust 0.44s cubic-bezier(0.2, 0.9, 0.3, 1) forwards;
+}
+@keyframes g3-speed-gust {
+  0% { transform: translateX(-38%) skewX(-14deg); opacity: 0; }
+  22% { opacity: 1; }
+  100% { transform: translateX(34%) skewX(-14deg); opacity: 0; }
+}
+.g3-speed-band {
+  position: absolute; left: 0; right: 0; top: 50%; height: 3px; margin-top: -1.5px;
+  background: linear-gradient(90deg,
+    rgba(255, 138, 43, 0) 0%, rgba(255, 255, 255, 0.95) 46%, rgba(255, 208, 138, 0.9) 62%, rgba(255, 138, 43, 0) 100%);
+  box-shadow: 0 0 12px rgba(255, 138, 43, 0.9);
+  animation: g3-speed-band 0.36s cubic-bezier(0.15, 0.95, 0.3, 1) forwards;
+}
+@keyframes g3-speed-band {
+  0% { transform: scaleX(0.15); opacity: 0; }
+  24% { opacity: 1; }
+  100% { transform: scaleX(1.12); opacity: 0.35; }
+}
 /* 卡面拖影：必须用 ::after（浮层卡自身背景会被卡面图盖住） */
 .g3-momentum-discard::after {
   content: ''; position: absolute; inset: 0;
@@ -409,8 +478,9 @@
   animation: g3-amb-close 0.5s cubic-bezier(0.5, 0, 0.75, 0.2) forwards;
 }
 @keyframes g3-amb-close { 0% { opacity: 0; transform: scale(1.06); } 60% { opacity: 0.95; } 100% { opacity: 1; transform: scale(1); } }
+/* 2026-09-13（用户清单 #9）：九宫格由 58% 放大到 68%，解决"太淡看不出"。 */
 .g3-amb-flip-grid {
-  position: absolute; left: 50%; top: 50%; width: 58%; aspect-ratio: 1 / 1; margin: -29% 0 0 -29%;
+  position: absolute; left: 50%; top: 50%; width: 68%; aspect-ratio: 1 / 1; margin: -34% 0 0 -34%;
   display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 1fr); gap: 3px;
 }
 .g3-amb-flip-cell {
@@ -737,4 +807,345 @@
   0% { transform: translate(0, 0) scale(0.6); opacity: 0; }
   14% { opacity: 0.9; }
   100% { transform: translate(var(--dx), var(--dy)) scale(0.7); opacity: 0; }
+}
+
+/* ============================================================ 回手 R3：贪婪2 底（用户清单 #2 补做）
+ * ①青玉抓取爪（3 指自源卡探出）②品红绳线（源卡 → 被回手卡，边到边）③手牌末尾落点青玉环。
+ * 注意：rotate 一律走 --r 自定义属性（keyframe 的 transform 会覆盖内联 rotate）。 */
+.g3-return-greed { position: fixed; left: 0; top: 0; width: 100vw; height: 100vh; pointer-events: none; }
+.g3-greed-claw { position: absolute; pointer-events: none; }
+.g3-greed-claw-finger {
+  position: absolute; bottom: 0; width: 14%; height: 100%;
+  border-radius: 44% 44% 8px 8px / 62% 62% 8px 8px;
+  background: linear-gradient(180deg, #7ef0e6 0%, #1f8f8a 58%, #0d3f3c 100%);
+  box-shadow: inset 0 -3px 5px rgba(6, 32, 30, 0.8), 0 0 12px rgba(31, 143, 138, 0.75);
+  transform-origin: 50% 100%; opacity: 0;
+  animation: g3-greed-claw 0.42s cubic-bezier(0.2, 0.9, 0.3, 1) forwards;
+}
+.g3-greed-claw-finger.f0 { left: 6%; --r: -15deg; animation-delay: 0.02s; }
+.g3-greed-claw-finger.f1 { left: 43%; height: 116%; --r: 0deg; animation-delay: 0.08s; }
+.g3-greed-claw-finger.f2 { right: 6%; --r: 15deg; animation-delay: 0.14s; }
+@keyframes g3-greed-claw {
+  0% { transform: rotate(var(--r, 0deg)) translateY(46%) scaleY(0.4); opacity: 0; }
+  35% { opacity: 1; }
+  62% { transform: rotate(var(--r, 0deg)) translateY(-7%) scaleY(1.05); opacity: 1; }
+  100% { transform: rotate(var(--r, 0deg)) translateY(0) scaleY(1); opacity: 0.92; }
+}
+.g3-greed-rope {
+  position: absolute; height: 4px; margin-top: -2px; transform-origin: 0 50%; pointer-events: none; border-radius: 2px;
+  background-image: linear-gradient(90deg, rgba(217, 79, 217, 0.95) 0 8px, rgba(217, 79, 217, 0.16) 8px 15px);
+  background-size: 15px 100%;
+  box-shadow: 0 0 10px rgba(217, 79, 217, 0.8), 0 0 4px rgba(126, 240, 230, 0.7);
+  animation: g3-greed-rope-flow 0.9s linear infinite, g3-greed-rope-in 0.32s ease-out both;
+}
+@keyframes g3-greed-rope-flow { to { background-position: 15px 0; } }
+@keyframes g3-greed-rope-in { from { opacity: 0; } to { opacity: 1; } }
+.g3-return-jade-ring {
+  position: absolute; width: 56px; height: 56px; margin: -28px 0 0 -28px; border-radius: 50%;
+  border: 3px solid rgba(126, 240, 230, 0.95);
+  box-shadow: 0 0 18px rgba(31, 143, 138, 0.9), inset 0 0 14px rgba(126, 240, 230, 0.5);
+  opacity: 0;
+  animation: g3-return-jade 0.6s cubic-bezier(0.2, 0.85, 0.3, 1) both;
+}
+@keyframes g3-return-jade { 0% { transform: scale(1.5); opacity: 0; } 30% { opacity: 1; } 100% { transform: scale(0.58); opacity: 0; } }
+
+/* ============================================================ 嫉妒 E3：嫉妒3 底反打（用户清单 #2 补做）
+ * ①该线玉青故障横条横扫一次 + 「夺取」字样上浮 ②牌库顶被橙色光线拉出 ③落点玉青涟漪。 */
+.g3-envy-fd-layer { position: fixed; left: 0; top: 0; width: 100vw; height: 100vh; pointer-events: none; }
+.g3-envy-glitch-bar {
+  position: absolute; height: 28px; margin-top: -14px; pointer-events: none; overflow: hidden;
+  animation: g3-envy-glitch-sweep 0.5s ease-out both;
+}
+@keyframes g3-envy-glitch-sweep {
+  0% { opacity: 0; clip-path: inset(0 100% 0 0); }
+  26% { opacity: 1; clip-path: inset(0 0 0 0); }
+  100% { opacity: 0; clip-path: inset(0 0 0 0); }
+}
+.g3-envy-glitch-line {
+  position: absolute; left: 0; width: 100%; height: 3px;
+  background: linear-gradient(90deg, rgba(47, 179, 168, 0) 0%, rgba(126, 242, 224, 0.95) 32%, rgba(255, 179, 71, 0.9) 64%, rgba(47, 179, 168, 0) 100%);
+  box-shadow: 0 0 8px rgba(47, 179, 168, 0.8);
+  animation: g3-envy-gline 0.34s steps(4, end) infinite;
+}
+.g3-envy-glitch-line.l0 { top: 2px; }
+.g3-envy-glitch-line.l1 { top: 7px; animation-delay: 0.05s; opacity: 0.8; }
+.g3-envy-glitch-line.l2 { top: 13px; animation-delay: 0.1s; }
+.g3-envy-glitch-line.l3 { top: 19px; animation-delay: 0.15s; opacity: 0.75; }
+.g3-envy-glitch-line.l4 { top: 24px; animation-delay: 0.2s; }
+@keyframes g3-envy-gline { 0% { transform: translateX(-16%); } 50% { transform: translateX(13%); } 100% { transform: translateX(-5%); } }
+.g3-envy-seize-chip {
+  position: absolute; transform: translate(-50%, -100%); padding: 1px 6px; border-radius: 4px; pointer-events: none;
+  font: 700 12px/1.5 ui-monospace, monospace; color: #d8fff8; white-space: nowrap;
+  background: rgba(10, 40, 38, 0.9); border: 1px solid rgba(126, 242, 224, 0.9);
+  box-shadow: 0 0 10px rgba(47, 179, 168, 0.8);
+  animation: g3-envy-seize 0.8s ease-out both;
+}
+@keyframes g3-envy-seize {
+  0% { opacity: 0; transform: translate(-50%, -55%); }
+  22% { opacity: 1; }
+  100% { opacity: 0; transform: translate(-50%, -140%); }
+}
+.g3-envy-pull-beam {
+  position: absolute; height: 3px; margin-top: -1.5px; transform-origin: 0 50%; border-radius: 2px;
+  background: linear-gradient(90deg, rgba(255, 179, 71, 0.15) 0%, rgba(255, 179, 71, 0.95) 62%, rgba(255, 233, 192, 0.95) 100%);
+  box-shadow: 0 0 10px rgba(255, 179, 71, 0.85);
+  animation: g3-envy-beam 0.55s ease-out both;
+}
+@keyframes g3-envy-beam { 0% { opacity: 0; } 26% { opacity: 1; } 100% { opacity: 0.35; } }
+.g3-envy-land-ripple {
+  position: absolute; width: 62px; height: 62px; margin: -31px 0 0 -31px; border-radius: 50%;
+  border: 3px solid rgba(126, 242, 224, 0.9);
+  box-shadow: 0 0 16px rgba(47, 179, 168, 0.85), inset 0 0 12px rgba(126, 242, 224, 0.4);
+  opacity: 0;
+  animation: g3-envy-land 0.62s cubic-bezier(0.2, 0.85, 0.3, 1) both;
+}
+@keyframes g3-envy-land { 0% { transform: scale(0.3); opacity: 0; } 24% { opacity: 1; } 100% { transform: scale(1.75); opacity: 0; } }
+
+/* ============================================================ 嫉妒 E4：嫉妒4 中打出瞬间（用户清单 #2 补做）
+ * 卡面上方浮出「已编译数对比」；对手多 → 抖动 + 玉青故障闪 3 帧；条件不成立 → 灰色快速淡出。 */
+.g3-envy-play-layer { position: fixed; left: 0; top: 0; width: 100vw; height: 100vh; pointer-events: none; }
+.g3-envy-play-count {
+  position: absolute; transform: translate(-50%, -100%); display: flex; align-items: center; gap: 4px;
+  padding: 3px 7px; border-radius: 6px; pointer-events: none; white-space: nowrap;
+  background: rgba(8, 20, 24, 0.9); border: 1px solid rgba(126, 242, 224, 0.75);
+  box-shadow: 0 0 14px rgba(0, 0, 0, 0.6), 0 0 12px rgba(47, 179, 168, 0.5);
+  animation: g3-envy-play-in 0.5s cubic-bezier(0.2, 0.9, 0.3, 1) both;
+}
+.g3-envy-play-count.more { animation: g3-envy-play-in 0.5s cubic-bezier(0.2, 0.9, 0.3, 1) both, g3-envy-play-shake 0.3s ease-in-out 0.5s 3; }
+.g3-envy-play-count.less { border-color: rgba(150, 160, 175, 0.6); box-shadow: 0 0 10px rgba(0, 0, 0, 0.6); filter: grayscale(0.75); animation: g3-envy-play-fade 0.4s ease-out both; }
+@keyframes g3-envy-play-in {
+  0% { opacity: 0; transform: translate(-50%, -62%) scale(0.86); }
+  42% { opacity: 1; }
+  100% { opacity: 1; transform: translate(-50%, -100%) scale(1); }
+}
+@keyframes g3-envy-play-fade {
+  0% { opacity: 0; transform: translate(-50%, -92%) scale(0.94); }
+  34% { opacity: 0.9; }
+  100% { opacity: 0; transform: translate(-50%, -116%) scale(0.98); }
+}
+@keyframes g3-envy-play-shake {
+  0%, 100% { transform: translate(-50%, -100%); }
+  30% { transform: translate(calc(-50% - 5px), -100%); }
+  70% { transform: translate(calc(-50% + 5px), -100%); }
+}
+.g3-envy-play-chip {
+  padding: 1px 5px; border-radius: 4px; font: 700 11px/1.5 ui-monospace, monospace;
+  background: rgba(6, 16, 20, 0.85);
+}
+.g3-envy-play-chip.mine { color: #7ef2e0; border: 1px solid rgba(47, 179, 168, 0.9); }
+.g3-envy-play-chip.foe { color: #ffb347; border: 1px solid rgba(255, 179, 71, 0.9); }
+.g3-envy-play-vs { font: 700 10px/1.5 ui-monospace, monospace; color: #9fb0b8; }
+.g3-envy-play-hint { font: 700 10px/1.5 ui-monospace, monospace; color: #aab4bd; }
+.g3-envy-play-glitch {
+  position: absolute; pointer-events: none;
+  background: repeating-linear-gradient(0deg, rgba(126, 242, 224, 0.75) 0 2px, rgba(47, 179, 168, 0.1) 2px 7px, rgba(255, 179, 71, 0.45) 7px 9px);
+  mix-blend-mode: screen;
+  animation: g3-envy-play-glitch 0.3s steps(2, end) both;
+}
+@keyframes g3-envy-play-glitch { 0% { opacity: 0; } 34% { opacity: 0.85; } 68% { opacity: 0.2; } 100% { opacity: 0; } }
+
+/* ============================================================ 伏击翻面加强（用户清单 #9）
+ * 翻面时长 350→620/500ms；九宫格放大（见下方覆盖规则）；白闪横扫 + 字样标 + 阴影碎片外飞。 */
+.g3-amb-flip-flash {
+  position: absolute; left: 0; right: 0; height: 26%;
+  background: linear-gradient(180deg, rgba(143, 227, 255, 0) 0%, rgba(232, 248, 255, 0.85) 45%, rgba(143, 227, 255, 0) 100%);
+  filter: blur(1px);
+  opacity: 0;
+  animation: g3-amb-flash 0.7s cubic-bezier(0.3, 0.9, 0.4, 1) forwards;
+}
+@keyframes g3-amb-flash { 0% { bottom: -18%; opacity: 0; } 22% { opacity: 1; } 100% { bottom: 96%; opacity: 0; } }
+.g3-amb-flip-chip {
+  position: absolute; left: 50%; top: 6%; transform: translateX(-50%);
+  padding: 1px 7px; border-radius: 4px; pointer-events: none; white-space: nowrap;
+  font: 700 12px/1.6 ui-monospace, monospace;
+  background: rgba(12, 22, 32, 0.9); border: 1px solid rgba(143, 227, 255, 0.85); color: #d8f4ff;
+  box-shadow: 0 0 12px rgba(111, 147, 196, 0.8);
+  animation: g3-amb-chip 1.05s ease-out both;
+}
+.g3-amb-flip-chip.hide { border-color: rgba(111, 147, 196, 0.9); color: #b9c9dd; box-shadow: 0 0 10px rgba(30, 42, 56, 0.9); }
+@keyframes g3-amb-chip {
+  0% { opacity: 0; transform: translate(-50%, -8px) scale(0.9); }
+  18% { opacity: 1; transform: translate(-50%, 0) scale(1); }
+  78% { opacity: 1; }
+  100% { opacity: 0; transform: translate(-50%, -6px) scale(0.98); }
+}
+.g3-amb-flip-shard {
+  position: absolute; left: 50%; top: 50%; width: 12px; height: 16px;
+  background: linear-gradient(150deg, rgba(30, 44, 60, 0.9), rgba(111, 147, 196, 0.35));
+  clip-path: polygon(0% 20%, 78% 0%, 100% 72%, 24% 100%);
+  filter: drop-shadow(0 0 6px rgba(30, 44, 60, 0.8));
+  animation: g3-amb-shard-fly 0.6s cubic-bezier(0.25, 0.9, 0.35, 1) both;
+}
+@keyframes g3-amb-shard-fly {
+  0% { transform: translate(-50%, -50%) scale(0.4) rotate(0deg); opacity: 0; }
+  24% { opacity: 1; }
+  100% { transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) scale(0.9) rotate(160deg); opacity: 0; }
+}
+
+/* ============================================================ 惰性翻面加强（用户清单 #18）
+ * 独立材质：灰砂覆层（去饱和）+ 停转齿轮 + 砂尘 + 「惰性·停转」标。 */
+.g3-ine-flip { animation: g3-layer-in 0.2s ease-out; }
+.g3-ine-flip::after {
+  content: ''; position: absolute; inset: 0;
+  background:
+    linear-gradient(160deg, rgba(216, 201, 168, 0.5) 0%, rgba(74, 74, 79, 0.42) 46%, rgba(122, 118, 104, 0.3) 100%);
+  animation: g3-ine-veil 1.15s ease-in-out forwards;
+}
+@keyframes g3-ine-veil { 0% { opacity: 0; } 24% { opacity: 1; } 70% { opacity: 0.9; } 100% { opacity: 0; } }
+.g3-ine-flip-gear {
+  position: absolute; left: 50%; top: 50%; width: 40%; aspect-ratio: 1 / 1; margin: -20% 0 0 -20%;
+  background: repeating-conic-gradient(from 0deg, rgba(255, 240, 192, 0.85) 0deg 9deg, rgba(74, 74, 79, 0) 9deg 18deg);
+  clip-path: circle(48% at 50% 50%);
+  filter: drop-shadow(0 0 10px rgba(216, 201, 168, 0.7));
+  opacity: 0;
+  animation: g3-ine-gear 1.6s cubic-bezier(0.2, 0.6, 0.2, 1) forwards;
+}
+.g3-ine-flip-gear-hub {
+  position: absolute; left: 50%; top: 50%; width: 44%; aspect-ratio: 1 / 1; margin: -22% 0 0 -22%;
+  border-radius: 50%; border: 3px solid rgba(216, 201, 168, 0.9);
+  background: radial-gradient(circle, rgba(38, 38, 42, 0.9) 0%, rgba(122, 118, 104, 0.55) 100%);
+  box-shadow: inset 0 0 10px rgba(0, 0, 0, 0.8);
+}
+@keyframes g3-ine-gear {
+  0% { transform: rotate(0deg) scale(0.8); opacity: 0; }
+  18% { opacity: 0.95; }
+  62% { transform: rotate(150deg) scale(1); opacity: 0.9; }
+  78% { transform: rotate(158deg) scale(1); opacity: 0.9; }
+  100% { transform: rotate(158deg) scale(0.92); opacity: 0; }
+}
+.g3-ine-flip-dust {
+  position: absolute; width: 6px; height: 6px; border-radius: 46% 54% 55% 45%;
+  background: linear-gradient(150deg, #fff0c0, rgba(216, 201, 168, 0.45) 60%, rgba(74, 74, 79, 0.5));
+  box-shadow: 0 0 7px rgba(216, 201, 168, 0.6);
+  animation: g3-ine-dust 0.95s ease-out both;
+}
+@keyframes g3-ine-dust {
+  0% { opacity: 0; transform: scale(0.5) translateY(4px); }
+  26% { opacity: 0.95; }
+  100% { opacity: 0; transform: scale(1.05) translateY(-12px); }
+}
+.g3-ine-flip-chip {
+  position: absolute; left: 50%; bottom: 6%; transform: translateX(-50%);
+  padding: 1px 7px; border-radius: 4px; pointer-events: none; white-space: nowrap;
+  font: 700 12px/1.6 ui-monospace, monospace; color: #fff0c0;
+  background: rgba(30, 30, 34, 0.9); border: 1px solid rgba(216, 201, 168, 0.85);
+  box-shadow: 0 0 12px rgba(74, 74, 79, 0.9);
+  animation: g3-ine-chip 1.5s ease-out both;
+}
+@keyframes g3-ine-chip {
+  0% { opacity: 0; transform: translate(-50%, 8px); }
+  20% { opacity: 1; transform: translate(-50%, 0); }
+  76% { opacity: 1; }
+  100% { opacity: 0; transform: translate(-50%, 6px); }
+}
+
+/* ============================================================ 支点弃牌加强（用户清单 #11）
+ * 补立柱/底座（可读的"天平"）+ 梁上刻度 + 砸落砝码 + 卡滑落光带 + 整卡青玉描边。 */
+.g3-scale-post {
+  position: absolute; left: 50%; top: 28%; width: 4px; height: 58%; margin-left: -2px; border-radius: 2px;
+  background: linear-gradient(180deg, rgba(216, 240, 255, 0.9), rgba(47, 127, 143, 0.6));
+  box-shadow: 0 0 8px rgba(47, 127, 143, 0.6);
+}
+.g3-scale-base {
+  position: absolute; left: 22%; bottom: 6%; width: 56%; height: 8px; border-radius: 4px;
+  background: linear-gradient(180deg, rgba(216, 240, 255, 0.85), rgba(16, 46, 56, 0.9));
+  box-shadow: 0 0 12px rgba(47, 127, 143, 0.7);
+}
+.g3-scale-tick {
+  position: absolute; top: 22%; width: 2px; height: 10px; border-radius: 1px;
+  background: linear-gradient(180deg, rgba(216, 240, 255, 0.95), rgba(47, 127, 143, 0.3));
+  box-shadow: 0 0 6px rgba(47, 127, 143, 0.75);
+  opacity: 0;
+  animation: g3-scale-tick 0.5s ease-out both;
+}
+.g3-scale-tick.mid { height: 15px; background: linear-gradient(180deg, #ffffff, rgba(47, 127, 143, 0.4)); }
+@keyframes g3-scale-tick { 0% { opacity: 0; transform: scaleY(0.3); } 30% { opacity: 1; } 100% { opacity: 0.75; transform: scaleY(1); } }
+.g3-scale-weight {
+  position: absolute; left: 12%; top: -6%; width: 20%; height: 11%; border-radius: 3px;
+  background: linear-gradient(160deg, #e8f4ff 0%, #2f7f8f 55%, #102e38 100%);
+  box-shadow: inset 0 -2px 4px rgba(8, 26, 32, 0.8), 0 0 12px rgba(47, 127, 143, 0.8);
+  opacity: 0;
+  animation: g3-scale-weight 0.5s cubic-bezier(0.4, 0.1, 0.7, 0.25) forwards;
+}
+@keyframes g3-scale-weight {
+  0% { transform: translateY(-26px) scale(0.85); opacity: 0; }
+  22% { opacity: 1; }
+  100% { transform: translateY(0) scale(1); opacity: 1; }
+}
+.g3-scale-slip {
+  position: absolute; left: -10%; top: 34%; width: 120%; height: 26%;
+  background: linear-gradient(100deg, rgba(216, 240, 255, 0) 0%, rgba(216, 240, 255, 0.75) 46%, rgba(47, 127, 143, 0) 100%);
+  filter: blur(1px); opacity: 0;
+  animation: g3-scale-slip 0.56s cubic-bezier(0.3, 0.9, 0.4, 1) 0.18s forwards;
+}
+@keyframes g3-scale-slip {
+  0% { opacity: 0; transform: translate(-18%, 0) skewX(-12deg); }
+  30% { opacity: 0.9; }
+  100% { opacity: 0; transform: translate(24%, 14%) skewX(-12deg); }
+}
+.g3-scale-rim {
+  position: absolute; inset: 0; border-radius: 6px; pointer-events: none;
+  border: 2px solid rgba(216, 240, 255, 0.75);
+  box-shadow: inset 0 0 16px rgba(47, 127, 143, 0.5), 0 0 14px rgba(216, 240, 255, 0.6);
+  animation: g3-scale-rim 0.62s ease-out forwards;
+}
+@keyframes g3-scale-rim { 0% { opacity: 0; } 24% { opacity: 0.95; } 100% { opacity: 0.25; } }
+
+/* ============================================================ 新星弃牌·陨石撞击（用户清单 #17b）
+ * 引力束锁住 → 陨石自右上斜砸入卡心 → 撞击白闪 + 冲击环 + 灼痕 + 碎屑（切割延后到撞击瞬间）。 */
+.g3-meteor-layer { position: fixed; left: 0; top: 0; width: 100vw; height: 100vh; pointer-events: none; }
+.g3-meteor { position: absolute; width: 36px; height: 36px; margin: -18px 0 0 -18px; pointer-events: none; opacity: 0; }
+.g3-meteor.fly { animation: g3-meteor-fly 0.34s cubic-bezier(0.55, 0, 0.9, 0.4) forwards; }
+@keyframes g3-meteor-fly {
+  0% { transform: translate(0, 0) scale(0.45) rotate(0deg); opacity: 0; }
+  16% { opacity: 1; }
+  100% { transform: translate(var(--mx), var(--my)) scale(1) rotate(38deg); opacity: 1; }
+}
+.g3-meteor-core {
+  position: absolute; inset: 0; border-radius: 46% 54% 52% 48%;
+  background:
+    radial-gradient(circle at 36% 32%, rgba(255, 251, 239, 0.98) 0%, rgba(255, 179, 71, 0.9) 34%, rgba(138, 58, 42, 0.95) 72%, rgba(58, 20, 14, 0.98) 100%);
+  box-shadow: 0 0 22px rgba(255, 138, 43, 0.95), inset 0 -4px 8px rgba(58, 20, 14, 0.9);
+}
+.g3-meteor-tail {
+  position: absolute; right: 76%; top: 50%; width: 130px; height: 16px; margin-top: -8px;
+  background: linear-gradient(270deg, rgba(255, 233, 192, 0.95) 0%, rgba(255, 138, 43, 0.55) 42%, rgba(138, 58, 42, 0) 100%);
+  clip-path: polygon(100% 32%, 100% 68%, 0% 100%, 0% 0%);
+  filter: blur(1.5px);
+  transform: rotate(-38deg); transform-origin: 100% 50%;
+  animation: g3-meteor-tail 0.16s steps(2, end) infinite;
+}
+@keyframes g3-meteor-tail { 0% { opacity: 0.75; } 100% { opacity: 1; } }
+.g3-meteor-impact { position: absolute; width: 0; height: 0; pointer-events: none; }
+.g3-meteor-flash {
+  position: absolute; left: -70px; top: -70px; width: 140px; height: 140px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.98) 0%, rgba(255, 233, 192, 0.8) 26%, rgba(255, 138, 43, 0.35) 54%, rgba(255, 138, 43, 0) 76%);
+  opacity: 0;
+  animation: g3-meteor-flash 0.42s ease-out 0.3s both;
+}
+@keyframes g3-meteor-flash { 0% { opacity: 0; transform: scale(0.3); } 14% { opacity: 1; } 100% { opacity: 0; transform: scale(1.5); } }
+.g3-meteor-shock {
+  position: absolute; left: -58px; top: -58px; width: 116px; height: 116px; border-radius: 50%;
+  border: 4px solid rgba(255, 233, 192, 0.95);
+  box-shadow: 0 0 24px rgba(255, 138, 43, 0.95), inset 0 0 18px rgba(255, 179, 71, 0.6);
+  opacity: 0;
+  animation: g3-meteor-shock 0.62s cubic-bezier(0.2, 0.85, 0.3, 1) 0.3s both;
+}
+@keyframes g3-meteor-shock { 0% { transform: scale(0.24); opacity: 0; } 18% { opacity: 1; } 100% { transform: scale(1.75); opacity: 0; } }
+.g3-meteor-scorch {
+  position: absolute; left: -46px; top: -46px; width: 92px; height: 92px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(58, 20, 14, 0.85) 0%, rgba(138, 58, 42, 0.5) 44%, rgba(26, 15, 16, 0) 74%);
+  animation: g3-meteor-scorch 1.05s ease-out 0.32s both;
+}
+@keyframes g3-meteor-scorch { 0% { opacity: 0; transform: scale(0.5); } 18% { opacity: 1; } 100% { opacity: 0; transform: scale(1.12); } }
+.g3-meteor-debris {
+  position: absolute; left: -4px; top: -4px; width: 8px; height: 8px; border-radius: 40% 60% 45% 55%;
+  background: linear-gradient(150deg, #fffbef 0%, #ffb347 46%, #8a3a2a 100%);
+  box-shadow: 0 0 8px rgba(255, 138, 43, 0.85);
+  animation: g3-meteor-debris 0.62s cubic-bezier(0.25, 0.9, 0.35, 1) both;
+}
+@keyframes g3-meteor-debris {
+  0% { opacity: 0; transform: translate(0, 0) scale(0.5); }
+  20% { opacity: 1; }
+  100% { opacity: 0; transform: translate(var(--dx), var(--dy)) scale(0.8) rotate(140deg); }
 }

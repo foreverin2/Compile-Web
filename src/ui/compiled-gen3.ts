@@ -224,8 +224,13 @@ function appendGluttony(layer: HTMLElement, defId: string, api: Gen3FxApi): void
 }
 
 /* ============================ 3. 贪婪 greed ============================ */
-/** 青玉底座脉动 + 品红硬币柱（6 枚，错相微浮动）；
- *  周期：柱体增高一级（.raise）→ 整柱散落重堆（.spill）+ 品红硬币飞散。 */
+/**
+ * 青玉底座脉动 + 品红硬币柱（6 枚，错相微浮动）；
+ *  周期：柱体增高一级（.raise）→ 整柱散落重堆（.spill）+ 品红硬币飞散。
+ *
+ * 用户清单 #4（2026-09-13）：**硬币自卡牌边框偶尔呈抛物线喷发**（4~9 枚，起点取四边随机点、
+ * 先升后落、带旋转，落点在卡面/卡外），比"中心一团碎屑"更有"财宝溢出"的读感。
+ */
 function appendGreed(layer: HTMLElement, defId: string, api: Gen3FxApi): void {
   api.corners(layer, 'compiled-greed-corner');
   const h = host(layer, 'gen3-greed-host', api);
@@ -251,6 +256,7 @@ function appendGreed(layer: HTMLElement, defId: string, api: Gen3FxApi): void {
       h.classList.remove('raise');
       h.classList.add('spill');
       burstParticles(h, 'gen3-greed-bit', 9, api, 34, 700, defId);
+      greedCoinShower(layer, h, api, defId);
       api.timer(defId, () => {
         if (!layer.isConnected) { done(); return; }
         h.classList.remove('spill');
@@ -262,9 +268,40 @@ function appendGreed(layer: HTMLElement, defId: string, api: Gen3FxApi): void {
   api.scheduleLoop(layer, defId, api.rnd(4200, 8400), burst);
 }
 
+/** #4：硬币自边框抛物线喷发（起点贴四边 → 顶点 → 落点；--dx/--peak/--fall 由卡面尺寸算出） */
+function greedCoinShower(layer: HTMLElement, h: HTMLElement, api: Gen3FxApi, defId: string): void {
+  const g = api.layerGeom(layer);
+  const w = g?.w ?? 120;
+  const hh = g?.h ?? 170;
+  const wrap = api.el('div', 'gen3-greed-shower-wrap');
+  const n = 4 + Math.round(api.rnd(0, 5)); // 4~9 枚（"偶尔"多喷几枚）
+  for (let i = 0; i < n; i++) {
+    const coin = api.el('i', 'gen3-greed-shower-coin');
+    const edge = Math.floor(api.rnd(0, 4)) % 4;
+    const t = api.rnd(0.12, 0.88);
+    if (edge === 0) { coin.style.left = `${(t * 100).toFixed(1)}%`; coin.style.top = '0%'; }
+    else if (edge === 1) { coin.style.left = '100%'; coin.style.top = `${(t * 100).toFixed(1)}%`; }
+    else if (edge === 2) { coin.style.left = `${(t * 100).toFixed(1)}%`; coin.style.top = '100%'; }
+    else { coin.style.left = '0%'; coin.style.top = `${(t * 100).toFixed(1)}%`; }
+    coin.style.setProperty('--dx', `${(api.rnd(-0.3, 0.3) * w).toFixed(1)}px`);
+    coin.style.setProperty('--peak', `${(api.rnd(0.18, 0.44) * hh).toFixed(1)}px`);
+    coin.style.setProperty('--fall', `${(api.rnd(0.34, 0.78) * hh).toFixed(1)}px`);
+    coin.style.setProperty('--rot', `${api.rnd(-320, 320).toFixed(0)}deg`);
+    coin.style.animationDelay = `${(i * 0.07).toFixed(2)}s`;
+    wrap.appendChild(coin);
+  }
+  h.appendChild(wrap);
+  api.timer(defId, () => wrap.remove(), 1600);
+}
+
 /* ============================ 4. 色欲 lust ============================ */
-/** 两条血红牵引链沿卡外环带环绕（3 节/条，缓慢收紧感）+ 心形手爪徽标脉动；
- *  周期：链条猛收（.tighten）+ 暗紫余温波纹。 */
+/**
+ * 两条血红牵引链沿卡外环带环绕（3 节/条，缓慢收紧感）+ 心形手爪徽标脉动；
+ *  周期：链条猛收（.tighten）+ 暗紫余温波纹。
+ *
+ * 用户清单 #7（2026-09-13）：**爱心太少**（旧版只有徽标里 1 颗）→ 徽标周围补 2 颗小爱心环绕，
+ * 周期爆发时再喷 5 颗飞行爱心（上升 + 摇摆 + 渐隐）。
+ */
 function appendLust(layer: HTMLElement, defId: string, api: Gen3FxApi): void {
   api.corners(layer, 'compiled-lust-corner');
   const h = host(layer, 'gen3-lust-host', api);
@@ -277,6 +314,14 @@ function appendLust(layer: HTMLElement, defId: string, api: Gen3FxApi): void {
   crest.appendChild(api.el('i', 'gen3-lust-heart'));
   for (let i = 0; i < 3; i++) crest.appendChild(api.el('i', `gen3-lust-claw c${i}`));
   h.appendChild(crest);
+  // #7：徽标两侧的小爱心（环绕漂浮，静止状态也能看出"色欲"）
+  const swarm = api.el('div', 'gen3-lust-hearts');
+  for (let i = 0; i < 4; i++) {
+    const heart = api.el('i', `gen3-lust-heart-orb h${i}`);
+    heart.style.animationDelay = `${(-i * 0.9).toFixed(2)}s`;
+    swarm.appendChild(heart);
+  }
+  h.appendChild(swarm);
 
   const burst = (done: () => void): void => {
     if (!layer.isConnected) { done(); return; }
@@ -284,11 +329,24 @@ function appendLust(layer: HTMLElement, defId: string, api: Gen3FxApi): void {
     api.reflow(h);
     h.classList.add('tighten');
     const wave = shockRing(h, 'gen3-lust-wave', api);
+    // #7：喷出飞行爱心（--dx/--dy 决定外散方向，上升 → 摇摆 → 渐隐）
+    const fly = api.el('div', 'gen3-lust-heartfly-wrap');
+    for (let i = 0; i < 5; i++) {
+      const f = api.el('i', 'gen3-lust-heartfly');
+      f.style.left = `${(30 + i * 9).toFixed(0)}%`;
+      f.style.top = `${(48 + (i % 2) * 8).toFixed(0)}%`;
+      f.style.setProperty('--dx', `${api.rnd(-30, 30).toFixed(1)}px`);
+      f.style.setProperty('--dy', `${api.rnd(-70, -34).toFixed(1)}px`);
+      f.style.animationDelay = `${(i * 0.09).toFixed(2)}s`;
+      fly.appendChild(f);
+    }
+    h.appendChild(fly);
     api.timer(defId, () => {
       wave.remove();
+      fly.remove();
       h.classList.remove('tighten');
       done();
-    }, 760);
+    }, 860);
   };
   api.scheduleLoop(layer, defId, api.rnd(3400, 7000), burst);
 }
@@ -340,13 +398,18 @@ function appendPride(layer: HTMLElement, defId: string, api: Gen3FxApi): void {
 }
 
 /* ============================ 6. 怠惰 sloth ============================ */
-/** 3 圈极慢同心涟漪 + 底部灰红泥浆（起伏）+ 3 点余烬；
- *  周期：大涟漪（.surge）＋余烬聚起再沉落。 */
+/**
+ * 4 圈极慢同心涟漪 + 底部灰红泥浆（起伏）+ 3 点余烬；
+ *  周期：大涟漪（.surge）+ 泥浆整体上涌 + 余烬聚起再沉落 + 一圈沉浊冲击环。
+ *
+ * 用户清单 #6（2026-09-13）：**怠惰已编译特效太弱**（旧版 surge 只改了一个 CSS 类，肉眼几乎无变化）
+ * → 补：4 圈涟漪（原 3）、爆发时 5 团上涌泥浆 + 6 点余烬 + 沉浊环 + 整卡暗化脉动。
+ */
 function appendSloth(layer: HTMLElement, defId: string, api: Gen3FxApi): void {
   api.corners(layer, 'compiled-sloth-corner');
   const h = host(layer, 'gen3-sloth-host', api);
   const ripples = api.el('div', 'gen3-sloth-ripples');
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 4; i++) {
     const r = api.el('i', 'gen3-sloth-ripple');
     r.style.animationDelay = `${(-i * 1.2).toFixed(2)}s`;
     ripples.appendChild(r);
@@ -372,26 +435,54 @@ function appendSloth(layer: HTMLElement, defId: string, api: Gen3FxApi): void {
     h.classList.remove('surge');
     api.reflow(h);
     h.classList.add('surge');
+    // #6：上涌泥浆团（自底部抬起 → 摊平回落）+ 沉浊扩散环
+    const rise = api.el('div', 'gen3-sloth-surge-wrap');
+    for (let i = 0; i < 5; i++) {
+      const b = api.el('i', 'gen3-sloth-surge-blob');
+      b.style.left = `${6 + i * 18 + api.rnd(-3, 3)}%`;
+      b.style.width = `${20 + (i % 3) * 8}%`;
+      b.style.animationDelay = `${(i * 0.11).toFixed(2)}s`;
+      rise.appendChild(b);
+    }
+    for (let i = 0; i < 6; i++) {
+      const e = api.el('i', 'gen3-sloth-surge-ember');
+      e.style.left = `${14 + i * 12}%`;
+      e.style.top = `${58 - (i % 3) * 9}%`;
+      e.style.animationDelay = `${(0.1 + i * 0.06).toFixed(2)}s`;
+      rise.appendChild(e);
+    }
+    h.appendChild(rise);
+    shockRing(h, 'gen3-sloth-wave', api);
     api.timer(defId, () => {
+      rise.remove();
+      h.querySelector('.gen3-sloth-wave')?.remove();
       h.classList.remove('surge');
       done();
-    }, 1500);
+    }, 1600);
   };
-  api.scheduleLoop(layer, defId, api.rnd(4400, 8800), burst);
+  api.scheduleLoop(layer, defId, api.rnd(3600, 7200), burst);
 }
 
 /* ============================ 7. 愤怒 wrath ============================ */
-/** 5 根猩红爆刺（缓慢伸缩）+ 3 片青蓝冷残片（漂浮）；
- *  周期：锯齿闪电自上而下劈下（3 帧闪）+ 猩红火星。 */
+/**
+ * 猩红爆刺（**四条边**都长，3 根/边 = 12 根，缓慢伸缩）+ 3 片青蓝冷残片（漂浮）；
+ *  周期：3 道锯齿闪电自上而下错开劈下（3 帧闪）+ 猩红火星。
+ *
+ * 用户清单 #13（2026-09-13）：旧版只有下缘 5 根刺、闪电只有 1 道 → 现在四边各 3 根、闪电 3 道。
+ */
 function appendWrath(layer: HTMLElement, defId: string, api: Gen3FxApi): void {
   api.corners(layer, 'compiled-wrath-corner');
   const h = host(layer, 'gen3-wrath-host', api);
   const spikes = api.el('div', 'gen3-wrath-spikes');
-  for (let i = 0; i < 5; i++) {
-    const s = api.el('i', 'gen3-wrath-spike');
-    s.style.left = `${10 + i * 19.5}%`;
-    s.style.animationDelay = `${-api.rnd(0, 4).toFixed(2)}s`;
-    spikes.appendChild(s);
+  for (const edge of ['bottom', 'top', 'left', 'right'] as const) {
+    for (let i = 0; i < 3; i++) {
+      const s = api.el('i', `gen3-wrath-spike e-${edge}`);
+      const f = 18 + i * 32; // 沿该边的位置（%）
+      if (edge === 'bottom' || edge === 'top') s.style.left = `${f}%`;
+      else s.style.top = `${f}%`;
+      s.style.animationDelay = `${-api.rnd(0, 4).toFixed(2)}s`;
+      spikes.appendChild(s);
+    }
   }
   h.appendChild(spikes);
   const shards = api.el('div', 'gen3-wrath-shards');
@@ -402,16 +493,22 @@ function appendWrath(layer: HTMLElement, defId: string, api: Gen3FxApi): void {
 
   const burst = (done: () => void): void => {
     if (!layer.isConnected) { done(); return; }
-    const bolt = api.el('div', 'gen3-wrath-bolt');
-    h.appendChild(bolt);
-    api.reflow(bolt);
-    bolt.classList.add('on');
-    burstParticles(h, 'gen3-wrath-spark', 10, api, 30, 560, defId);
+    const bolts = api.el('div', 'gen3-wrath-bolts');
+    for (let i = 0; i < 3; i++) {
+      const bolt = api.el('div', 'gen3-wrath-bolt');
+      bolt.style.left = `${api.rnd(24, 76).toFixed(0)}%`;
+      bolt.style.animationDelay = `${(i * 70).toFixed(0)}ms`;
+      bolts.appendChild(bolt);
+      api.reflow(bolt);
+      bolt.classList.add('on');
+    }
+    h.appendChild(bolts);
+    burstParticles(h, 'gen3-wrath-spark', 16, api, 34, 560, defId);
     api.timer(defId, () => {
-      bolt.remove();
+      bolts.remove();
       h.querySelector('.gen3-wrath-spark-wrap')?.remove();
       done();
-    }, 520);
+    }, 560);
   };
   api.scheduleLoop(layer, defId, api.rnd(3000, 6400), burst);
 }

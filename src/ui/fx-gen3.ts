@@ -38,11 +38,16 @@ export interface Gen3CardPayload {
 export interface Gen3CardFxApi {
   el(tag: string, cls: string, text?: string): HTMLElement;
   buildFxCard(node: HTMLElement, payload: Gen3CardPayload, zIndex: number): HTMLElement | null;
+  /** 用**事件时定格的 rect** 建浮层卡（DOM 节点可能已被重渲染替换 → 延迟播放必须用它） */
+  buildFxCardAt(rect: DOMRect, cw: boolean, ccw: boolean, payload: Gen3CardPayload, zIndex: number): HTMLElement | null;
   playCutAt(rect: DOMRect, cw: boolean, ccw: boolean, payload: Gen3CardPayload): void;
   playCut(node: HTMLElement, payload: Gen3CardPayload): void;
   playShatterAt(rect: DOMRect, cw: boolean, ccw: boolean, payload: Gen3CardPayload): void;
   playFlip(node: HTMLElement, payload: Gen3CardPayload, durationMs?: number): void;
   playShift(node: HTMLElement, payload: Gen3CardPayload): void;
+  playReturn(node: HTMLElement, payload: Gen3CardPayload): void;
+  /** 用定格 rect 播翻面（node 已失效时用） */
+  playFlipAt(rect: DOMRect, cw: boolean, ccw: boolean, payload: Gen3CardPayload, durationMs?: number): void;
   /** 牌库区矩心（牌堆顶打出/抽牌的起点参照，effects/index.ts 已导出同名函数） */
   deckPos(player: 0 | 1): DOMRect | null;
   /** 基础反面打出飞行（牌库顶 / 手牌）；durationMs 可放慢（3代 惰性=慢） */
@@ -53,14 +58,15 @@ export interface Gen3CardFxApi {
 }
 
 /** 3 代卡牌特效覆盖的协议（供守卫测试核对覆盖范围） */
-export const GEN3_CARD_FX_COVER: Record<'discard' | 'delete' | 'flip' | 'shift' | 'draw' | 'facedown' | 'compiled', string[]> = {
+export const GEN3_CARD_FX_COVER: Record<'discard' | 'delete' | 'flip' | 'shift' | 'draw' | 'facedown' | 'compiled' | 'return', string[]> = {
   discard: ['greed', 'sloth', 'wrath', 'fulcrum', 'momentum', 'nova'],
   delete: ['gluttony', 'wrath', 'overwhelm', 'nova'],
   flip: ['pride', 'sloth', 'wrath', 'ambush', 'flexibility', 'envy', 'inertia'],
   shift: ['pride', 'nova', 'flexibility'],
   // —— 批次 C ——
   draw: ['gluttony', 'fulcrum'],
-  facedown: ['gluttony', 'overwhelm', 'rigidity', 'inertia'],
+  facedown: ['gluttony', 'overwhelm', 'rigidity', 'inertia', 'envy'],
+  return: ['greed'],
   compiled: ['greed', 'momentum'],
 };
 
@@ -86,8 +92,18 @@ function bodyLayer(cls: string, z: number): HTMLElement {
   return layer;
 }
 
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
 /**
- * 两点之间的弧轨（偏转用）：SVG 路径 + N 个沿路径飞行的光点（offset-path: path）。
+ * 两点之间的弧轨（偏转用）：SVG 路径 + 沿路径飞行的运载件（offset-path: path）。
+ *
+ * 2026-09-13 差异化重做（用户清单 #3「傲慢金色缆线和嫉妒0 长一样」、#16「柔性/傲慢/嫉妒的偏转
+ * 看起来都是同一条虚线」）：旧版所有弧轨共用 `.g3-arc path` 的 8/7 虚线 + 圆点，只有颜色不同，
+ * 与嫉妒0 的「汲取丝」（橙金移动虚线 + 箭头，styles-gen3-sync.css）撞脸。现在每条轨道各有一套材质：
+ *   傲慢 = **金缆**：外鞘(9px 半透明) + 亮金实心芯(2.4px) + 白芯(1px)，**不用虚线**；3 枚箭形滑块
+ *          沿轨滑行（offset-rotate: auto 自动转向）；
+ *   新星 = **星轨**：暗橙拖尾(11px 模糊) + 亮橙虚线芯(2.4px) + N 枚四角星；
+ *   柔性 = **绶带**：两条正弦波动的宽柔光带(13px 模糊 / 3px 芯) + 落点缎带结（不是箭头）。
  * 返回清理函数；调用方按 ms 自行移除。
  */
 function arcTrack(
@@ -98,7 +114,6 @@ function arcTrack(
   dots: number,
   ms: number,
   z: number,
-  ribbon: boolean,
   api: Gen3CardFxApi,
 ): () => void {
   const x1 = from.left + from.width / 2;
@@ -115,40 +130,81 @@ function arcTrack(
   const cx = mx - (dy / len) * bow;
   const cy = my + (dx / len) * bow;
   const d = `M ${x1.toFixed(1)} ${y1.toFixed(1)} Q ${cx.toFixed(1)} ${cy.toFixed(1)} ${x2.toFixed(1)} ${y2.toFixed(1)}`;
+  const color = PROTO_STROKE[proto] ?? '#c07bff';
   const layer = bodyLayer(`g3-arc ${cls}`, z);
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  const svg = document.createElementNS(SVG_NS, 'svg');
   svg.setAttribute('class', 'g3-arc-svg');
   svg.setAttribute('viewBox', `0 0 ${window.innerWidth} ${window.innerHeight}`);
-  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  path.setAttribute('d', d);
-  path.setAttribute('fill', 'none');
-  path.setAttribute('stroke', PROTO_STROKE[proto] ?? '#c07bff');
-  path.setAttribute('stroke-width', '2');
-  path.setAttribute('stroke-linecap', 'round');
-  svg.appendChild(path);
-  if (ribbon) {
-    const wide = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    wide.setAttribute('d', d);
-    wide.setAttribute('fill', 'none');
-    wide.setAttribute('stroke', PROTO_STROKE[proto] ?? '#c07bff');
-    wide.setAttribute('stroke-width', '11');
-    wide.setAttribute('stroke-linecap', 'round');
-    wide.setAttribute('class', 'g3-arc-ribbon');
-    svg.appendChild(wide);
+  const addPath = (dAttr: string, width: number, extra: string): void => {
+    const p = document.createElementNS(SVG_NS, 'path');
+    p.setAttribute('d', dAttr);
+    p.setAttribute('fill', 'none');
+    p.setAttribute('stroke', color);
+    p.setAttribute('stroke-width', String(width));
+    p.setAttribute('stroke-linecap', 'round');
+    if (extra) p.setAttribute('class', extra);
+    svg.appendChild(p);
+  };
+  /** 沿二次贝塞尔做正弦横向偏移 → 飘带波形（两端收敛，否则会甩出卡外） */
+  const wavy = (amp: number, waves: number): string => {
+    const N = 22;
+    const pts: string[] = [];
+    for (let i = 0; i <= N; i++) {
+      const t = i / N;
+      const bx = (1 - t) * (1 - t) * x1 + 2 * (1 - t) * t * cx + t * t * x2;
+      const by = (1 - t) * (1 - t) * y1 + 2 * (1 - t) * t * cy + t * t * y2;
+      const txv = 2 * (1 - t) * (cx - x1) + 2 * t * (x2 - cx);
+      const tyv = 2 * (1 - t) * (cy - y1) + 2 * t * (y2 - cy);
+      const tl = Math.max(1e-3, Math.hypot(txv, tyv));
+      const off = Math.sin(t * Math.PI * 2 * waves) * amp * Math.sin(Math.PI * t);
+      pts.push(`${(bx + (-tyv / tl) * off).toFixed(1)} ${(by + (txv / tl) * off).toFixed(1)}`);
+    }
+    return `M ${pts[0]} L ${pts.slice(1).join(' L ')}`;
+  };
+
+  if (proto === 'flexibility') {
+    addPath(wavy(6, 1.3), 13, 'g3-arc-silk-wide');
+    addPath(wavy(6, 1.3), 3, 'g3-arc-silk-core');
+  } else if (proto === 'nova') {
+    addPath(d, 11, 'g3-arc-tail');
+    addPath(d, 2.4, 'g3-arc-comet');
+  } else {
+    addPath(d, 9, 'g3-arc-cable-shell');
+    addPath(d, 2.4, 'g3-arc-cable-core');
+    addPath(d, 1, 'g3-arc-cable-spark');
   }
   layer.appendChild(svg);
-  for (let i = 0; i < dots; i++) {
-    const dot = api.el('i', 'g3-arc-dot');
-    dot.style.offsetPath = `path("${d}")`;
-    dot.style.animationDuration = `${ms}ms`;
-    dot.style.animationDelay = `${((i * ms) / (dots * 2.2)).toFixed(0)}ms`;
-    layer.appendChild(dot);
+
+  const rider = (cls2: string, i: number, total: number): HTMLElement => {
+    const node = api.el('i', cls2);
+    node.style.offsetPath = `path("${d}")`;
+    node.style.offsetRotate = 'auto';
+    node.style.animationDuration = `${ms}ms`;
+    node.style.animationDelay = `${((i * ms) / (total * 1.6)).toFixed(0)}ms`;
+    layer.appendChild(node);
+    return node;
+  };
+  if (proto === 'pride') {
+    for (let i = 0; i < 3; i++) rider('g3-arc-chevron', i, 3); // 箭形滑块（金缆在"送"东西）
+  } else if (proto === 'flexibility') {
+    for (let i = 0; i < Math.max(2, dots); i++) rider('g3-arc-bead', i, Math.max(2, dots));
+  } else {
+    for (let i = 0; i < Math.max(3, dots); i++) rider('g3-arc-star', i, Math.max(3, dots));
   }
-  const head = api.el('i', 'g3-arc-head');
-  head.style.left = `${x2.toFixed(1)}px`;
-  head.style.top = `${y2.toFixed(1)}px`;
-  head.style.animationDelay = `${Math.max(0, ms - 180)}ms`;
-  layer.appendChild(head);
+
+  if (proto === 'flexibility') {
+    // 落点缎带结（不用箭头，避免和嫉妒0 的箭头丝混淆）
+    const knot = api.el('i', 'g3-arc-knot');
+    knot.style.left = `${x2.toFixed(1)}px`;
+    knot.style.top = `${y2.toFixed(1)}px`;
+    layer.appendChild(knot);
+  } else {
+    const head = api.el('i', `g3-arc-head ${proto}`);
+    head.style.left = `${x2.toFixed(1)}px`;
+    head.style.top = `${y2.toFixed(1)}px`;
+    head.style.animationDelay = `${Math.max(0, ms - 180)}ms`;
+    layer.appendChild(head);
+  }
   window.setTimeout(() => layer.remove(), ms + 420);
   return () => layer.remove();
 }
@@ -186,6 +242,39 @@ function lineCenterX(node: HTMLElement, p: Gen3CardPayload): number {
   if (!slot) return rect.left + rect.width / 2;
   const sr = slot.getBoundingClientRect();
   return Math.abs(rect.left + rect.width / 2 - (sr.left + sr.width / 2));
+}
+
+/**
+ * 两点之间的**直线连接件**（边到边，不穿卡）：用于「品红绳线」（贪婪2 回手）/「橙色引力光线」
+ * （嫉妒3 反打）——与嫉妒0 常驻汲取丝同款几何（边缘→边缘），但材质/动效由类各自决定。
+ */
+function edgeLine(layer: HTMLElement, from: DOMRect, to: DOMRect, cls: string, delayMs = 0): void {
+  const sx = from.left + from.width / 2;
+  const sy = from.top + from.height / 2;
+  const tx = to.left + to.width / 2;
+  const ty = to.top + to.height / 2;
+  const dx = tx - sx;
+  const dy = ty - sy;
+  const dist = Math.max(1, Math.hypot(dx, dy));
+  const ux = dx / dist;
+  const uy = dy / dist;
+  const sInset = (Math.min(from.width, from.height) / 2) * 0.8;
+  const tInset = (Math.min(to.width, to.height) / 2) * 0.8;
+  const node = document.createElement('i');
+  node.className = cls;
+  node.style.left = `${(sx + ux * sInset).toFixed(1)}px`;
+  node.style.top = `${(sy + uy * sInset).toFixed(1)}px`;
+  node.style.width = `${Math.max(8, dist - sInset - tInset).toFixed(1)}px`;
+  node.style.transform = `rotate(${Math.atan2(dy, dx)}rad)`;
+  if (delayMs > 0) node.style.animationDelay = `${delayMs}ms`;
+  layer.appendChild(node);
+}
+
+/** 链路槽矩形（按 owner/line 定位；取不到返回 null） */
+function slotRectOf(p: Gen3CardPayload): DOMRect | null {
+  if (p.owner === undefined || p.line == null) return null;
+  const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${p.owner}"][data-line="${p.line}"]`);
+  return slot ? slot.getBoundingClientRect() : null;
 }
 
 /* ============================== 弃牌（A-DISCARD） ============================== */
@@ -253,47 +342,97 @@ export function gen3DiscardFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3Ca
       }
       return finish(380, 'g3-wrath-discard');
     }
-    // 支点 F1：天平秤盘下沉 → 卡自秤盘滑落 → 切割（支点0 = 手牌恰好 0 张 → 先播一次空载上扬）
+    // 支点 F1：天平细节加强（用户清单 #11「更细致、更可见」）：刻度量尺 + 砝码砸落左盘 +
+    // 卡自倾覆的秤盘滑落 + 整卡青玉描边。支点0 = 手牌恰好 0 张 → 先播一次空载上扬。
     case 'fulcrum': {
       const scale = api.el('div', 'g3-scale');
+      // 立柱 + 底座（让天平"站得住"，否则两条盘 + 一根梁看不出是天平）
+      scale.appendChild(api.el('i', 'g3-scale-post'));
+      scale.appendChild(api.el('i', 'g3-scale-base'));
       scale.appendChild(api.el('i', 'g3-scale-beam'));
+      for (let i = 0; i < 7; i++) {
+        const tick = api.el('i', 'g3-scale-tick');
+        tick.style.left = `${8 + i * 14}%`;
+        if (i === 3) tick.classList.add('mid');
+        tick.style.animationDelay = `${(120 + i * 24).toFixed(0)}ms`;
+        scale.appendChild(tick);
+      }
       scale.appendChild(api.el('i', 'g3-scale-pan l'));
       scale.appendChild(api.el('i', 'g3-scale-pan r'));
       scale.appendChild(api.el('i', 'g3-scale-pivot'));
+      const weight = api.el('i', 'g3-scale-weight');
+      scale.appendChild(weight);
       clone.appendChild(scale);
+      // 卡自秤盘滑落（斜向滑出卡面 → 切割）
+      clone.appendChild(api.el('i', 'g3-scale-slip'));
+      clone.appendChild(api.el('i', 'g3-scale-rim'));
       if (p.triggerDefId === 'fulcrum-0') scale.classList.add('empty-lift');
       scale.classList.add('sink');
-      return finish(420, 'g3-fulcrum-discard');
+      return finish(460, 'g3-fulcrum-discard');
     }
     // 动量 M1：速度线 + 卡面拖影（即时切割）；重排后连锁（动量1）加加速环
     case 'momentum': {
-      for (let i = 0; i < 3; i++) {
+      // 2026-09-13 加强（用户实测"没看到特效"）：3→6 条速度线 + 贯穿全卡的橙色疾风条 + 拖影 + 加速带
+      for (let i = 0; i < 6; i++) {
         const s = api.el('i', 'g3-speed-line');
-        s.style.top = `${26 + i * 22}%`;
-        s.style.animationDelay = `${(i * 40).toFixed(0)}ms`;
+        s.style.top = `${12 + i * 15}%`;
+        s.style.animationDelay = `${(i * 26).toFixed(0)}ms`;
         clone.appendChild(s);
       }
+      clone.appendChild(api.el('i', 'g3-speed-gust'));
+      clone.appendChild(api.el('i', 'g3-speed-band'));
       if (p.triggerDefId === 'momentum-1') clone.appendChild(api.el('i', 'g3-accel-ring'));
       clone.classList.add('g3-momentum-discard');
       api.playCut(node, p); // 基础切割即时并播
-      window.setTimeout(() => clone.remove(), 460);
+      window.setTimeout(() => clone.remove(), 520);
       return true;
     }
-    // 新星 N2：从新星卡面伸出橙色引力线牵向被弃卡并拉出（即时切割）
+    // 新星 N2：引力束先把卡"锁住"（自新星卡伸出的橙色引力线）→ **陨石**自右上斜砸到卡面 →
+    // 撞击白闪 + 冲击环 + 灼痕 + 碎屑 → 基础切割在**撞击瞬间**才播（不再是"细虚线一闪"）。
+    // 2026-09-13 用户清单 #17b：旧版只有 3 条 pull-line + 即时切割，观感廉价 → 改为陨石撞击式。
     case 'nova': {
       const src = p.triggerUid ? document.querySelector<HTMLElement>(`[data-uid="${p.triggerUid}"]`) : null;
       if (src) {
         const sr = src.getBoundingClientRect();
-        arcTrack(sr, rect, 'g3-nova-pull', 'nova', 2, 380, api.extraZ, false, api);
+        arcTrack(sr, rect, 'g3-nova-pull', 'nova', 3, 420, api.extraZ, api);
       }
       for (let i = 0; i < 3; i++) {
         const line = api.el('i', 'g3-pull-line');
         line.style.animationDelay = `${(i * 50).toFixed(0)}ms`;
         clone.appendChild(line);
       }
+      // 陨石（浮层卡之外，挂在 body 级：要从卡外斜飞进来）
+      const layer = bodyLayer('g3-meteor-layer', api.extraZ);
+      const meteor = api.el('div', 'g3-meteor');
+      meteor.style.left = `${rect.left + rect.width / 2 + rect.width * 1.5}px`;
+      meteor.style.top = `${rect.top - rect.height * 1.5}px`;
+      meteor.appendChild(api.el('i', 'g3-meteor-tail'));
+      meteor.appendChild(api.el('i', 'g3-meteor-core'));
+      layer.appendChild(meteor);
+      void meteor.offsetWidth;
+      // 撞击点 = 卡面中心（CSS 动画把它从右上带到中心）
+      meteor.style.setProperty('--mx', `${(-rect.width * 1.5).toFixed(1)}px`);
+      meteor.style.setProperty('--my', `${(rect.height * 1.5).toFixed(1)}px`);
+      meteor.classList.add('fly');
+      const impact = api.el('div', 'g3-meteor-impact');
+      impact.style.left = `${rect.left + rect.width / 2}px`;
+      impact.style.top = `${rect.top + rect.height / 2}px`;
+      impact.appendChild(api.el('i', 'g3-meteor-shock'));
+      impact.appendChild(api.el('i', 'g3-meteor-flash'));
+      impact.appendChild(api.el('i', 'g3-meteor-scorch'));
+      for (let i = 0; i < 10; i++) {
+        const d = api.el('i', 'g3-meteor-debris');
+        d.style.setProperty('--dx', `${api.rnd(-64, 64).toFixed(1)}px`);
+        d.style.setProperty('--dy', `${api.rnd(-58, 46).toFixed(1)}px`);
+        d.style.animationDelay = `${(300 + i * 16).toFixed(0)}ms`;
+        impact.appendChild(d);
+      }
+      layer.appendChild(impact);
       clone.classList.add('g3-nova-discard');
-      api.playCut(node, p);
-      window.setTimeout(() => clone.remove(), 460);
+      // 基础切割延后到撞击瞬间（用事件时定格的 rect，避免重渲染后节点失效）
+      window.setTimeout(() => api.playCutAt(rect, cw, ccw, p), 320);
+      window.setTimeout(() => clone.remove(), 760);
+      window.setTimeout(() => layer.remove(), 1200);
       return true;
     }
     default:
@@ -381,10 +520,11 @@ export function gen3DeleteFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3Car
     // 新星 N1：星芒尖刺爆开 + 白闪；新星0（整线删除）按位置从中间向两侧连锁 + 收尾临界环
     case 'nova': {
       const centerX = lineCenterX(node, p);
+      // 2026-09-13 修复（用户实测"新星删除特效未触发"）：延迟播放时 DOM 可能已重渲染 → 原节点失效
+      // → 必须在**事件时刻**定格 rect/cw/ccw，延迟回调里用 buildFxCardAt 建浮层。
+      const shot = { rect, cw, ccw };
       queueStaggered(`gen3-nova-delete-${p.owner}-${p.line}`, centerX, () => {
-        const g2 = geom(node);
-        if (!g2) return;
-        const c = api.buildFxCard(node, p, api.extraZ);
+        const c = api.buildFxCardAt(shot.rect, shot.cw, shot.ccw, p, api.extraZ);
         if (!c) return;
         for (let i = 0; i < 4; i++) {
           const ray = api.el('i', 'g3-nova-burst-ray');
@@ -393,7 +533,7 @@ export function gen3DeleteFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3Car
         }
         c.appendChild(api.el('i', 'g3-nova-burst-flash'));
         c.classList.add('g3-nova-delete');
-        api.playShatterAt(g2.rect, g2.cw, g2.ccw, p);
+        api.playShatterAt(shot.rect, shot.cw, shot.ccw, p);
         window.setTimeout(() => c.remove(), 560);
       }, {
         windowMs: 40, gapMs: 70,
@@ -472,20 +612,22 @@ export function gen3FlipFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3CardF
     // 愤怒 W3：锯齿闪电劈中 + 白闪 + 焦痕（整线翻转时逐张连劈，错开 80ms）
     case 'wrath': {
       const centerX = lineCenterX(node, p);
+      // 同新星删除：延迟播放必须用事件时定格的 rect（DOM 可能已重渲染）
+      const shot = { rect: g.rect, cw: g.cw, ccw: g.ccw };
       queueStaggered(`gen3-wrath-flip-${p.owner}-${p.line}`, centerX, () => {
-        const g2 = geom(node);
-        if (!g2) return;
-        const c = api.buildFxCard(node, p, api.extraZ);
+        const c = api.buildFxCardAt(shot.rect, shot.cw, shot.ccw, p, api.extraZ);
         if (!c) return;
         c.classList.add('g3-wrath-flip');
         c.appendChild(api.el('i', 'g3-wrath-bolt'));
         c.appendChild(api.el('i', 'g3-wrath-scorch'));
-        api.playFlip(node, p);
+        api.playFlipAt(shot.rect, shot.cw, shot.ccw, p);
         window.setTimeout(() => c.remove(), 900);
       }, { windowMs: 40, gapMs: 80 });
       return true;
     }
-    // 伏击 A1：翻正 = 黑幕 + 自下而上扫描线 + 9 宫格亮 1 格；翻面 = 黑幕合拢 + 九格熄灭
+    // 伏击 A1：翻正 = 黑幕 + 自下而上扫描线 + 9 宫格亮 1 格；翻面 = 黑幕合拢 + 九格熄灭。
+    // 2026-09-13 用户清单 #9（"翻面太快太淡"）：翻面时长 350 → 620/500ms、九宫格放大到 68%、
+    // 加白闪横线与「伏击·现身 / 伏击·潜伏」字样标、4 片阴影碎片外飞；层存活 860 → 1180ms。
     case 'ambush': {
       const revealing = p.faceUp; // 事件在翻转后发出：faceUp = 新状态
       const c = overlay(revealing ? 'g3-amb-reveal' : 'g3-amb-hide');
@@ -498,33 +640,53 @@ export function gen3FlipFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3CardF
         const grid = api.el('div', 'g3-amb-flip-grid');
         for (let i = 0; i < 9; i++) {
           const cell = api.el('i', 'g3-amb-flip-cell');
-          cell.style.animationDelay = `${(revealing ? 60 + i * 30 : 120 + i * 28).toFixed(0)}ms`;
+          cell.style.animationDelay = `${(revealing ? 80 + i * 42 : 140 + i * 36).toFixed(0)}ms`;
           if (revealing && i === 4) cell.classList.add('on');
+          if (!revealing && (i === 1 || i === 5 || i === 7)) cell.classList.add('on');
           grid.appendChild(cell);
         }
         c.appendChild(grid);
-        if (revealing) c.appendChild(api.el('i', 'g3-amb-flip-scan'));
+        if (revealing) {
+          c.appendChild(api.el('i', 'g3-amb-flip-scan'));
+          c.appendChild(api.el('i', 'g3-amb-flip-flash'));
+        }
+        c.appendChild(api.el('i', `g3-amb-flip-chip ${revealing ? 'reveal' : 'hide'}`, revealing ? '伏击·现身' : '伏击·潜伏'));
+        for (let i = 0; i < 4; i++) {
+          const shard = api.el('i', 'g3-amb-flip-shard');
+          shard.style.setProperty('--dx', `${api.rnd(-52, 52).toFixed(1)}px`);
+          shard.style.setProperty('--dy', `${api.rnd(-42, 42).toFixed(1)}px`);
+          shard.style.animationDelay = `${(200 + i * 40).toFixed(0)}ms`;
+          c.appendChild(shard);
+        }
       }
-      api.playFlip(node, p);
-      window.setTimeout(() => c?.remove(), 860);
+      api.playFlip(node, p, revealing ? 620 : 500);
+      window.setTimeout(() => c?.remove(), 1180);
       return true;
     }
-    // 惰性0 中（I1 的翻转变体）：被盖正面牌也可被翻 → 只画露出可见区域
+    // 惰性0 中 / 惰性2 中（I1/I2 的翻转变体）：被盖正面牌也可被翻 → 只画露出可见区域。
+    // 2026-09-13 用户清单 #18（"惰性翻面太淡"）：改用独立 `g3-ine-flip` 材质（灰砂覆层 + 停转齿轮 +
+    // 5 粒砂尘 + 「惰性·停转」标）+ 慢翻 900ms，层存活 2100ms。
     case 'inertia': {
-      const c = overlay('g3-sloth-flip');
+      const c = overlay('g3-ine-flip');
       if (c && state) {
         const hidden = clipInsetRightPct(state, p.uid);
         if (hidden > 0) c.style.clipPath = `inset(0 ${(hidden * 100).toFixed(1)}% 0 0)`;
       }
-      for (let i = 0; i < 3; i++) {
-        const ember = api.el('i', 'g3-sloth-flip-ember');
-        ember.style.left = `${26 + i * 22}%`;
-        ember.style.top = `${34 + (i % 2) * 24}%`;
-        ember.style.animationDelay = `${420 + i * 140}ms`;
-        c?.appendChild(ember);
+      if (c) {
+        const gear = api.el('i', 'g3-ine-flip-gear');
+        gear.appendChild(api.el('i', 'g3-ine-flip-gear-hub'));
+        c.appendChild(gear);
+        for (let i = 0; i < 5; i++) {
+          const dust = api.el('i', 'g3-ine-flip-dust');
+          dust.style.left = `${18 + i * 16}%`;
+          dust.style.top = `${30 + (i % 3) * 18}%`;
+          dust.style.animationDelay = `${(240 + i * 110).toFixed(0)}ms`;
+          c.appendChild(dust);
+        }
+        c.appendChild(api.el('i', 'g3-ine-flip-chip', '惰性·停转'));
       }
-      api.playFlip(node, p, 750);
-      window.setTimeout(() => c?.remove(), 1900);
+      api.playFlip(node, p, 900);
+      window.setTimeout(() => c?.remove(), 2100);
       return true;
     }
     // 柔性 X1：飘带缠绕 → 翻面 → 缎带飞散
@@ -566,7 +728,6 @@ export function gen3FlipFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3CardF
 }
 
 /* ============================== 偏转（A-SHIFT） ============================== */
-
 /** 3 代偏转附加层（内部调用基础 playShift=幽灵飞行照常，附加弧轨/星轨/飘带）。 */
 export function gen3ShiftFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3CardFxApi): boolean {
   const g = geom(node);
@@ -581,18 +742,18 @@ export function gen3ShiftFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3Card
   switch (protocol) {
     // 傲慢 P5：金色轨道弧（3 金点）+ 落点金环
     case 'pride':
-      if (toRect) arcTrack(g.rect, toRect, 'g3-pride-arc', 'pride', 3, 520, api.extraZ, false, api);
+      if (toRect) arcTrack(g.rect, toRect, 'g3-pride-arc', 'pride', 3, 520, api.extraZ, api);
       api.playShift(node, p);
       return true;
     // 新星 N3：橙色星轨（5 星点拖尾）；偏转反面卡时暗橙（不点亮卡面）
     case 'nova': {
-      if (toRect) arcTrack(g.rect, toRect, `g3-nova-arc${p.faceUp ? '' : ' dim'}`, 'nova', 5, 560, api.extraZ, false, api);
+      if (toRect) arcTrack(g.rect, toRect, `g3-nova-arc${p.faceUp ? '' : ' dim'}`, 'nova', 5, 560, api.extraZ, api);
       api.playShift(node, p);
       return true;
     }
     // 柔性 X2/X3：紫罗兰飘带（宽柔光 + 亮细线）+ 落点缎带小结；柔性2 特化=起点取覆盖者 + 下方柔2 亮一下
     case 'flexibility': {
-      if (toRect) arcTrack(g.rect, toRect, 'g3-flx-arc', 'flexibility', 3, 540, api.extraZ, true, api);
+      if (toRect) arcTrack(g.rect, toRect, 'g3-flx-arc', 'flexibility', 3, 540, api.extraZ, api);
       if (p.triggerDefId === 'flexibility-2' && p.triggerUid) {
         const below = document.querySelector<HTMLElement>(`[data-uid="${p.triggerUid}"]`);
         if (below) {
@@ -607,6 +768,60 @@ export function gen3ShiftFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3Card
         }
       }
       api.playShift(node, p);
+      return true;
+    }
+    default:
+      return false;
+  }
+}
+
+/* ====================== 回手（R3，第 18 项修复补做） ====================== */
+
+/**
+ * 3 代「回手」附加层（点名：贪婪2 底·回合开始可回手你1张牌 → op return）。
+ *
+ * 设计稿 §4.3 行 R3：①源卡卡面探出**青玉抓取爪**（3 指，伸出 0.25s）；②被选卡被**品红绳线**
+ * 拉回手牌（0.5s，基础回手飞行照常，绳线拖尾）；③手牌末尾落点**青玉圆环**收束 0.3s。
+ *
+ * 背景（2026-09-13 用户清单 #2「贪婪2 回手特效从未触发」）：引擎一直有发 `card:returned`
+ * （resolve.ts 的 return op，triggerProtocol='greed'），但 UI 分发只在 `card:returned` 里特判了
+ * water，`GEN3_CARD_FX_COVER.return=['greed']` 是空头条目（无实现、无调用）→ 本次补齐。
+ * 注意：回手时 `payload.line` 已被引擎清空（卡已离开链路），所以定位只能用 owner + triggerUid。
+ */
+export function gen3ReturnFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3CardFxApi): boolean {
+  const protocol = p.triggerProtocol ?? '';
+  if (!GEN3_CARD_FX_COVER.return.includes(protocol)) return false;
+  const g = geom(node);
+  if (!g) return false;
+
+  switch (protocol) {
+    case 'greed': {
+      const layer = bodyLayer('g3-return-greed', api.extraZ);
+      const src = p.triggerUid ? document.querySelector<HTMLElement>(`[data-uid="${p.triggerUid}"]`) : null;
+      const sr = src ? src.getBoundingClientRect() : null;
+      // ① 青玉抓取爪（贴在贪婪2 卡面：3 指自卡面探出）
+      if (sr && sr.width > 0) {
+        const claw = api.el('div', 'g3-greed-claw');
+        claw.style.left = `${sr.left + sr.width * 0.16}px`;
+        claw.style.top = `${sr.top + sr.height * 0.22}px`;
+        claw.style.width = `${sr.width * 0.68}px`;
+        claw.style.height = `${sr.height * 0.56}px`;
+        for (let i = 0; i < 3; i++) claw.appendChild(api.el('i', `g3-greed-claw-finger f${i}`));
+        layer.appendChild(claw);
+        // ② 品红绳线（源卡 → 被回手的卡；边到边，不穿卡文）
+        edgeLine(layer, sr, g.rect, 'g3-greed-rope', 120);
+      }
+      // ③ 手牌末尾落点青玉圆环
+      const end = p.owner !== undefined ? handEndPos(p.owner) : null;
+      if (end) {
+        const ring = api.el('i', 'g3-return-jade-ring');
+        ring.style.left = `${end.x}px`;
+        ring.style.top = `${end.y}px`;
+        ring.style.animationDelay = '240ms';
+        layer.appendChild(ring);
+      }
+      api.playReturn(node, p); // 基础回手飞行照常（叠加不替换）
+      window.setTimeout(() => layer.remove(), 1100);
       return true;
     }
     default:
@@ -861,9 +1076,89 @@ export function gen3FaceDownFx(kind: 'deck' | 'hand', p: Gen3CardPayload, api: G
       base();
       return true;
     }
+    // 嫉妒 E3（嫉妒3 底「对手在此线打出后 → 己方牌库顶反面打出1张到此线」）：
+    // ①该线玉青故障横条横扫一次 + 卡面上浮「夺取」小字样；②牌库顶被橙色光线拉出（拖尾）；③落点玉青涟漪。
+    // 2026-09-13 用户清单 #2「嫉妒3 特效从未触发」：引擎一直发 card:deck-played（protocol='envy'），
+    // 但本 switch 缺 envy 分支（覆盖表却已列 envy）→ 只播了基础飞行，本次补齐。
+    case 'envy': {
+      if (slotRect) {
+        const layer = bodyLayer('g3-envy-fd-layer', api.extraZ);
+        const bar = api.el('div', 'g3-envy-glitch-bar');
+        bar.style.left = `${slotRect.left - 8}px`;
+        bar.style.top = `${slotRect.top + slotRect.height * 0.44}px`;
+        bar.style.width = `${slotRect.width + 16}px`;
+        for (let i = 0; i < 5; i++) bar.appendChild(api.el('i', `g3-envy-glitch-line l${i}`));
+        layer.appendChild(bar);
+        const chip = api.el('i', 'g3-envy-seize-chip', '夺取');
+        chip.style.left = `${slotRect.left + slotRect.width / 2}px`;
+        chip.style.top = `${slotRect.top + slotRect.height * 0.26}px`;
+        layer.appendChild(chip);
+        const deck = p.owner !== undefined ? api.deckPos(p.owner) : null;
+        if (deck) edgeLine(layer, deck, slotRect, 'g3-envy-pull-beam', 60);
+        const ripple = api.el('i', 'g3-envy-land-ripple');
+        ripple.style.left = `${slotRect.left + slotRect.width / 2}px`;
+        ripple.style.top = `${slotRect.top + slotRect.height / 2}px`;
+        ripple.style.animationDelay = '300ms';
+        layer.appendChild(ripple);
+        window.setTimeout(() => layer.remove(), 1400);
+      }
+      base();
+      return true;
+    }
     default:
       return false;
   }
+}
+
+/* ====================== 打出瞬间（E4：嫉妒4，第 18 项补做） ====================== */
+
+/**
+ * 3 代「打出瞬间」附加层（点名：嫉妒4 中·若对手已编译协议比你多 → 翻转1张）。
+ * 设计稿 §4.1 行 E4：①打出瞬间卡面上方浮出**已编译数对比**（己方青 / 对手橙两个计数块，0.6s）；
+ * ②对手多 → 计数条抖动 + 玉青故障闪 3 帧；③条件不成立 → 只播计数（灰、快速淡出）。
+ *
+ * 背景（2026-09-13 用户清单 #2「嫉妒4 额外特效从未触发」）：翻转分支（card:flipped → gen3FlipFx
+ * case 'envy'）一直是通的，但**打出瞬间**的计数对比锚在 `card:played` 上，而分发器此前没有
+ * `case 'card:played'`（直接落到 default return）→ 这半段从未播过。本次补上。
+ * 定位优先用目标链路槽（打出瞬间卡节点可能还是手牌里的旧节点），退化用传入节点。
+ */
+export function gen3PlayFx(
+  node: HTMLElement | null,
+  p: Gen3CardPayload,
+  state: GameState,
+  api: Gen3CardFxApi,
+): boolean {
+  if (p.defId !== 'envy-4') return false;
+  const anchor = slotRectOf(p) ?? (node ? geom(node)?.rect ?? null : null);
+  if (!anchor) return false;
+  const owner: 0 | 1 = p.owner ?? 0;
+  const mine = state.players[owner].protocols.filter((x) => x.compiled).length;
+  const foe = state.players[owner === 0 ? 1 : 0].protocols.filter((x) => x.compiled).length;
+  const more = foe > mine;
+  const layer = bodyLayer('g3-envy-play-layer', api.extraZ);
+  const box = api.el('div', more ? 'g3-envy-play-count more' : 'g3-envy-play-count less');
+  box.style.left = `${(anchor.left + anchor.width / 2).toFixed(1)}px`;
+  box.style.top = `${(anchor.top - 28).toFixed(1)}px`;
+  box.appendChild(api.el('i', 'g3-envy-play-chip mine', `己方 ${mine}`));
+  box.appendChild(api.el('i', 'g3-envy-play-vs', 'vs'));
+  box.appendChild(api.el('i', 'g3-envy-play-chip foe', `对手 ${foe}`));
+  layer.appendChild(box);
+  if (more) {
+    // 条件成立：玉青故障闪 3 帧（叠在目标线槽上）
+    for (let i = 0; i < 3; i++) {
+      const glitch = api.el('i', 'g3-envy-play-glitch');
+      glitch.style.left = `${anchor.left.toFixed(1)}px`;
+      glitch.style.top = `${(anchor.top + anchor.height * 0.3).toFixed(1)}px`;
+      glitch.style.width = `${anchor.width.toFixed(1)}px`;
+      glitch.style.height = `${(anchor.height * 0.4).toFixed(1)}px`;
+      glitch.style.animationDelay = `${(i * 90).toFixed(0)}ms`;
+      layer.appendChild(glitch);
+    }
+  } else {
+    box.appendChild(api.el('i', 'g3-envy-play-hint', '条件未满足'));
+  }
+  window.setTimeout(() => layer.remove(), more ? 1000 : 620);
+  return true;
 }
 
 /* ============ 整摞弃置牌库（inertia-4，批次 C） ============ */

@@ -3,7 +3,7 @@ import { mountShatter } from '../fx/delete-shatter';
 import { mountCut } from '../fx/discard-cut';
 import { flashRigidity7Guard, noteGreed1Compile } from '../gen3-control';
 import { gen3FulcrumSwapFx, gen3ProtocolSwapFx } from '../fx-gen3-swap';
-import { gen3DiscardFx, gen3DeleteFx, gen3FlipFx, gen3ShiftFx, gen3DrawFx, gen3FaceDownFx, gen3CompiledFx, gen3DeckDiscardFx, type Gen3CardFxApi, type Gen3CardPayload, type Gen3DrawPayload, type Gen3CompiledPayload, type Gen3DeckDiscardPayload } from '../fx-gen3';
+import { gen3DiscardFx, gen3DeleteFx, gen3FlipFx, gen3ShiftFx, gen3DrawFx, gen3FaceDownFx, gen3CompiledFx, gen3DeckDiscardFx, gen3ReturnFx, gen3PlayFx, type Gen3CardFxApi, type Gen3CardPayload, type Gen3DrawPayload, type Gen3CompiledPayload, type Gen3DeckDiscardPayload } from '../fx-gen3';
 import { buildTornadoFx } from '../fx-tornado';
 import { cardImgSrc, protocolImgSrc } from '../../data/demo';
 import { playPeaceDiscardExtra, PEACE_PRE_MS, playChaosDiscardExtra, CHAOS_DISCARD_PRE_MS, playIceShiftBridge, playSmokePlayFx, playFearShiftExtra, playCorruptionDiscardExtra, playCorruptionDeleteExtra, playCorruptionFlipExtra, CORRUPT_DISCARD_PRE_MS, playWarDiscardExtra, playWarFlipExtra, playCourageDiscardExtra, playCourageDeleteExtra, playCourageShiftExtra, playTimeDiscardExtra, playAssimDiscardExtra, playAssimDeckRipple, ASSIM_DISCARD_PRE_MS, playDiversityDiscardExtra, DIVERSITY_DISCARD_PRE_MS } from '../fx-gen2';
@@ -1837,11 +1837,23 @@ const GEN3_CARD_FX_API: Gen3CardFxApi = {
     return node;
   },
   buildFxCard: (node, payload, zIndex) => buildFxCard(node, payload as unknown as FxCardPayload, zIndex),
+  buildFxCardAt: (rect, cw, ccw, payload, zIndex) => buildFxCardAt(rect, cw, ccw, payload as unknown as FxCardPayload, zIndex),
   playCutAt: (rect, cw, ccw, payload) => playCutAt(rect, cw, ccw, payload as unknown as FxCardPayload),
   playCut: (node, payload) => playCut(node, payload as unknown as FxCardPayload),
   playShatterAt: (rect, cw, ccw, payload) => playShatterAt(rect, cw, ccw, payload as unknown as FxCardPayload),
   playFlip: (node, payload, durationMs) => playFlip(node, payload as unknown as FxCardPayload, durationMs),
   playShift: (node, payload) => playShift(node, payload as unknown as FxCardPayload),
+  playReturn: (node, payload) => playReturn(node, payload as unknown as FxCardPayload),
+  playFlipAt: (rect, cw, ccw, payload, durationMs) => {
+    const overlay = buildFlipOverlay(rect, cw, ccw, cardFaceSrc(payload.defId, !payload.faceUp), cardFaceSrc(payload.defId, payload.faceUp));
+    if (!overlay) return;
+    const dur = durationMs ?? 350;
+    overlay.inner.style.transition = `transform ${dur}ms ease`;
+    requestAnimationFrame(() => {
+      overlay.inner.style.transform = cw || ccw ? 'rotateX(180deg)' : 'rotateY(180deg)';
+    });
+    window.setTimeout(() => overlay.wrap.remove(), dur + 70);
+  },
   deckPos,
   playDeckPlay: (payload, durationMs) => playDeckPlay(payload as unknown as FxCardPayload, durationMs),
   playHandPlay: (payload, durationMs) => playHandPlay(payload as unknown as FxCardPayload, durationMs),
@@ -1975,6 +1987,8 @@ export function initEffects(): () => void {
         // water 协议触发的回手（water-3/water-4 及未来水回手）：蓝色水波环 + 光晕 +
         // 游动轨迹环（叠加在基础回手飞行之上）；其余回手源走基础飞行
         if (node) {
+          // 3代点名回手（贪婪 R3：贪婪2 底 → 青玉抓取爪 + 品红绳线 + 落点青玉环；内部含基础 playReturn）
+          if (gen3ReturnFx(node, payload as unknown as Gen3CardPayload, GEN3_CARD_FX_API)) break;
           if (payload.triggerProtocol === 'water') playWaterReturn(node, payload);
           else playReturn(node, payload);
         }
@@ -2036,6 +2050,12 @@ export function initEffects(): () => void {
       case 'deck:discarded':
         // 3代 惰性4 中「弃置整个牌库」（双方各弃其牌库）：整摞沙化 → 灰砂流飞向弃牌堆
         gen3DeckDiscardFx(e.payload as unknown as Gen3DeckDiscardPayload, GEN3_CARD_FX_API);
+        break;
+      case 'card:played':
+        // 3代 嫉妒4 中「打出瞬间」（设计稿 §4.1 E4 ①~③）：卡面上方浮出"已编译数对比"计数块，
+        // 对手多 → 计数条抖动 + 玉青故障闪 3 帧；条件不成立 → 灰色计数快速淡出。
+        // 2026-09-13 用户清单 #2：此前分发器没有 card:played 分支（落到 default）→ 该半段特效从未播过。
+        gen3PlayFx(node, payload as unknown as Gen3CardPayload, e.state, GEN3_CARD_FX_API);
         break;
       case 'card:given':
         // love 协议给牌/收牌（love-1 底给牌、love-3 给牌与随机拿牌——give/takeRandom op 均发
