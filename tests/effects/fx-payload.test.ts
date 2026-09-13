@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { gameBus } from '../../src/core/events/bus';
 import { executeAction, getLegalActions } from '../../src/core/game';
 import { collectTriggers, resolveTrigger } from '../../src/core/effects/triggers';
-import { runStack, answerEffect } from '../../src/core/effects/resolve';
+import { runStack, answerEffect, resolveMiddle } from '../../src/core/effects/resolve';
 import { makeCard, draftFireP1, draftLightP1, draftWaterP1, draftLifeP1, draftLoveP1, advanceToStep, resolveAllChoices, pickFirst } from '../helpers';
 import type { GameState, Line, PlayerId } from '../../src/core/models/types';
 import { createGame } from '../../src/core/state/create';
@@ -430,5 +430,82 @@ describe('FX trigger protocol payload', () => {
     expect(() => executeAction(s, 0, 'advance')).toThrow(/mandatory trigger/);
     off();
     expect(seen).toHaveLength(0);
+  });
+
+  // ——— 2026-09-13 覆盖审计：三处"整条点名特效静默不播"的引擎载荷缺口 ———
+
+  it('惰性4 整摞弃置牌库事件能被 UI 收到（deck:discarded 无 uid/defId，分发器要提前处理）', () => {
+    const s = setup3();
+    s.turnPlayer = 0;
+    const src = makeCard('inertia-4', 0, 'field', true, 0, 0);
+    s.players[0].stacks[0] = [src];
+    s.players[0].deck = [makeCard('fire-1', 0, 'deck', false), makeCard('light-2', 0, 'deck', false)];
+    const seen: { player?: number; count?: number; sourceDefId?: string; uid?: string }[] = [];
+    const off = gameBus.subscribe((e) => {
+      if (e.type !== 'deck:discarded') return;
+      seen.push(e.payload as { player?: number; count?: number; sourceDefId?: string; uid?: string });
+    });
+    resolveMiddle(s, 0, src);
+    resolveAllChoices(s, pickFirst);
+    off();
+    expect(seen).toHaveLength(1);
+    expect(seen[0].count).toBe(2);
+    expect(seen[0].player).toBe(0);
+    // 关键：该事件**没有** uid/defId（UI 侧必须在 uid/defId 守卫之前处理，否则 case 不可达）
+    expect(seen[0].uid).toBeUndefined();
+  });
+
+  it('支点3 协议交换的 protocols:rearranged 带 sourceDefId（否则交换附加层永不接管）', () => {
+    const s = setup3();
+    s.turnPlayer = 0;
+    s.players[0].protocols = [
+      { defId: 'fire', compiled: false },
+      { defId: 'light', compiled: false },
+      { defId: 'darkness', compiled: false },
+    ];
+    const src = makeCard('fulcrum-3', 0, 'field', true, 0, 0);
+    s.players[0].stacks[0] = [src];
+    s.players[0].deck = [makeCard('fire-1', 0, 'deck', false)];
+    const before = s.players[0].protocols.map((p) => p.defId);
+    const seen: { player?: number; a?: number; b?: number; sourceDefId?: string }[] = [];
+    const off = gameBus.subscribe((e) => {
+      if (e.type !== 'protocols:rearranged') return;
+      seen.push(e.payload as { player?: number; a?: number; b?: number; sourceDefId?: string });
+    });
+    resolveMiddle(s, 0, src);
+    resolveAllChoices(s, pickFirst);
+    off();
+    expect(seen).toHaveLength(1);
+    expect(seen[0].sourceDefId).toBe('fulcrum-3'); // ← 审计修复点（此前恒为 undefined）
+    expect(seen[0].a).toBe(0);
+    expect(seen[0].b).toBe(2);
+    const after = s.players[0].protocols.map((p) => p.defId);
+    expect(after[0]).toBe(before[2]); // 0↔2 真的换了
+    expect(after[2]).toBe(before[0]);
+  });
+
+  it('贪婪1 效果编译的 line:compiled 带 sourceUid（硬币堆 R2④ + 契约印起点依赖它）', () => {
+    const s = setup3();
+    s.turnPlayer = 0;
+    s.step = 'end';
+    const src = makeCard('greed-1', 0, 'field', true, 0, 0);
+    // 底线先放高值卡（≥10 且高于对手 0），greed-1 必须是**未覆盖顶卡**（底触发要求）
+    const below = [makeCard('fire-5', 0, 'field', true, 0, 0), makeCard('fire-5', 0, 'field', true, 0, 1), makeCard('fire-5', 0, 'field', true, 0, 2)];
+    src.pos = 3;
+    s.players[0].stacks[0] = [...below, src];
+    const seen: { sourceDefId?: string; sourceUid?: string; line?: number }[] = [];
+    const off = gameBus.subscribe((e) => {
+      if (e.type !== 'line:compiled') return;
+      seen.push(e.payload as { sourceDefId?: string; sourceUid?: string; line?: number });
+    });
+    const t = collectTriggers(s, 'end').find((x) => x.defId === 'greed-1')!;
+    expect(t, 'greed-1 底 end 触发未收集（该线应满足编译条件）').toBeTruthy();
+    resolveTrigger(s, t);
+    runStack(s);
+    resolveAllChoices(s, pickFirst);
+    off();
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen[0].sourceDefId).toBe('greed-1');
+    expect(seen[0].sourceUid).toBe(src.uid); // ← 审计修复点（此前该字段根本没发）
   });
 });

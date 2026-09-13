@@ -171,4 +171,38 @@ describe('3代卡牌效果附加层守卫（批次 B）', () => {
     const resolveSrc = readFileSync(fileURLToPath(new URL('../../src/core/effects/resolve.ts', import.meta.url))).subarray(0, 4 * 1024 * 1024).toString('utf8');
     expect(resolveSrc, 'card:deleted 未回填 line（新星0 整线删除排序/收尾环会失效）').toMatch(/emitCardEvent\(s, 'card:deleted', card, \{\s*line,/);
   });
+
+  it('无 uid/defId 的事件必须在分发器守卫之前处理（1988 覆盖审计抓出的"整条特效静默不播"）', () => {
+    // deck:discarded（惰性4 整摞沙化）没有 uid/defId —— 若排在 `if (!payload?.uid || !payload.defId) return;`
+    // 之后，它的 case 永远不可达（本轮审计前就是这样，I2 后半 100% 不播）。
+    const guardIdx = dispatcher.indexOf('if (!payload?.uid || !payload.defId) return;');
+    const deckIdx = dispatcher.indexOf("if (e.type === 'deck:discarded')");
+    expect(guardIdx, '分发器缺少 uid/defId 守卫').toBeGreaterThan(0);
+    expect(deckIdx, 'deck:discarded 未在守卫之前提前处理（case 将不可达）').toBeGreaterThan(0);
+    expect(deckIdx, 'deck:discarded 处理位置仍在 uid/defId 守卫之后').toBeLessThan(guardIdx);
+    expect(dispatcher).toContain('gen3DeckDiscardFx(');
+    // 同类：card:drawn 也在守卫之前（无 uid）——锁住这条约定
+    expect(dispatcher.indexOf("if (e.type === 'card:drawn')")).toBeLessThan(guardIdx);
+  });
+
+  it('三个"整条点名特效静默不播"的载荷缺口已补（覆盖审计 2.1/2.2/2.3）', () => {
+    const swap = readFileSync(fileURLToPath(new URL('../../src/ui/fx-gen3-swap.ts', import.meta.url))).subarray(0, 1024 * 1024).toString('utf8');
+    const resolveSrc = readFileSync(fileURLToPath(new URL('../../src/core/effects/resolve.ts', import.meta.url))).subarray(0, 4 * 1024 * 1024).toString('utf8');
+    const compileBody = readFileSync(fileURLToPath(new URL('../../src/core/rules/compile-body.ts', import.meta.url))).subarray(0, 1024 * 1024).toString('utf8');
+    const greedSrc = readFileSync(fileURLToPath(new URL('../../src/core/effects/cards/greed.ts', import.meta.url))).subarray(0, 1024 * 1024).toString('utf8');
+    // ① 支点3/柔性3：rearrangeProtocolSlots 必须能带 sourceDefId，且 resolve 的效果路径要传
+    expect(swap).toContain("startsWith('fulcrum-')");
+    const rearrange = readFileSync(fileURLToPath(new URL('../../src/core/actions/rearrange.ts', import.meta.url))).subarray(0, 1024 * 1024).toString('utf8');
+    expect(rearrange, 'rearrangeProtocolSlots 未接收 sourceDefId 参数').toMatch(/rearrangeProtocolSlots\([\s\S]{0,160}sourceDefId\?: string/);
+    expect(rearrange).toMatch(/payload: \{ player: target, a, b, sourceDefId \}/);
+    expect(resolveSrc, '效果重排未把 sourceDefId 传下去').toMatch(/rearrangeProtocolSlots\(s, target, op\.a, op\.b, pe\.sourceDefId\)/);
+    // ② 贪婪1：line:compiled 必须带 sourceUid（硬币堆 R2④ + 契约印起点）
+    expect(compileBody, 'executeCompileBody opts 缺 sourceUid').toMatch(/sourceDefId\?: string; sourceUid\?: string/);
+    expect(compileBody).toMatch(/sourceUid: opts\?\.sourceUid/);
+    expect(greedSrc, '贪婪1 未把自身 uid 作为 sourceUid 传入').toMatch(/sourceDefId: 'greed-1', sourceUid: ctx\.card\.uid/);
+    // ③ 两个"按 defId 判定"的 UI 分支现在能拿到 triggerDefId（支点4 at-four / 同化1 刷新光泽）
+    expect(resolveSrc, 'draw op 的 card:drawn 未带 triggerDefId').toMatch(/count: op\.count, triggerProtocol: pe\.sourceDefId\.split\('-'\)\[0\], triggerDefId: pe\.sourceDefId/);
+    // ④ gen3FlipFx 与其它 gen3*Fx 一样有覆盖门控（防"表里有、case 忘了写"）
+    expect(ts).toMatch(/GEN3_CARD_FX_COVER\.flip\.includes\(protocol\)/);
+  });
 });

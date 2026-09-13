@@ -52,7 +52,8 @@ function* greed1End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   };
   if (lAns.selected.length === 0) return;
   const line = Number(lAns.selected[0].replace('line:', '')) as Line;
-  executeCompileBody(ctx.s, me, line, { sourceDefId: 'greed-1' });
+  // sourceUid：UI 靠它把"青玉契约印"的起点锚到这张贪婪1 上，并给卡面硬币堆 +1 级（R2④）
+  executeCompileBody(ctx.s, me, line, { sourceDefId: 'greed-1', sourceUid: ctx.card.uid });
 }
 
 /** greed-2 中：对手弃1张牌（对手自选）。 */

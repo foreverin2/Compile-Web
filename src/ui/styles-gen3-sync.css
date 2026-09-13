@@ -494,3 +494,10 @@
   color: var(--mc, #f0e6d2) !important;
   border-color: var(--mc, #d8c9a8) !important;
 }
+
+/* 常驻层退场（设计稿 §8.1 起止衔接：0.15~0.3s 收束，不硬切） */
+.g3sync-envy0, .g3sync-wrath0, .g3sync-sloth0, .g3sync-inertia0, .g3sync-inertia1,
+.g3sync-rig7, .g3sync-lusthold, .g3sync-lustblock, .g3sync-greed1 {
+  transition: opacity 0.3s ease-out;
+}
+.g3sync-out { opacity: 0 !important; pointer-events: none; }

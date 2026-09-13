@@ -122,8 +122,8 @@ export function gen3FulcrumSwapFx(p: { player: number; a: number; b: number }, s
       ghost.appendChild(face);
       ghost.style.transitionDelay = `${(i * 40).toFixed(0)}ms`;
       l.appendChild(ghost);
-      const dx = (to === p.b ? rb.left + rb.width / 2 : ra.left + ra.width / 2) - (r.left + r.width / 2);
-      const dy = (to === p.b ? rb.top + rb.height / 2 : ra.top + ra.height / 2) - (r.top + r.height / 2);
+      const dx = (from === p.a ? ra.left + ra.width / 2 : rb.left + rb.width / 2) - (r.left + r.width / 2);
+      const dy = (from === p.a ? ra.top + ra.height / 2 : rb.top + rb.height / 2) - (r.top + r.height / 2);
       void ghost.offsetWidth;
       requestAnimationFrame(() => {
         ghost.style.transform = `translate(${dx}px, ${dy}px) scale(1)`;

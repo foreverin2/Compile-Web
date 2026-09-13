@@ -1877,6 +1877,14 @@ export function initEffects(): () => void {
       if (p && p.triggerProtocol === 'love') playLoveDrawExtra(p);
       return;
     }
+    // deck:discarded 同样**没有 uid/defId**（payload = { player, count, sourceDefId }）——必须与 card:drawn
+    // 一样放在 uid/defId 守卫之前，否则下面的 case 永远不可达。
+    // 2026-09-13（审计修复）：此前它排在守卫之后 → 惰性4 中「弃置整个牌库」的整摞沙化飞弃（I2 后半）
+    // 100% 静默不播。
+    if (e.type === 'deck:discarded') {
+      gen3DeckDiscardFx(e.payload as unknown as Gen3DeckDiscardPayload, GEN3_CARD_FX_API);
+      return;
+    }
     const payload = e.payload as FxCardPayload | undefined;
     if (!payload?.uid || !payload.defId) return;
     const node = document.querySelector<HTMLElement>(`[data-uid="${payload.uid}"]`);

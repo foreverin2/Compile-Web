@@ -9,7 +9,13 @@ import { gameBus } from '../events/bus';
  *  与 UI 控制组件重排动作（game.ts executeAction 'rearrange-protocols'，编译/补满前
  *  持有控制组件的玩家可重排任意一方）共用——两条路径的状态变更 / log / 动画事件
  *  （protocols:rearranged → 现有重排基础动画）完全一致。 */
-export function rearrangeProtocolSlots(s: GameState, target: PlayerId, a: Line, b: Line): void {
+export function rearrangeProtocolSlots(
+  s: GameState,
+  target: PlayerId,
+  a: Line,
+  b: Line,
+  sourceDefId?: string,
+): void {
   if (a === b) throw new Error('cannot swap a protocol position with itself');
   if (a < 0 || a > 2 || b < 0 || b > 2) throw new Error('protocol position out of range');
   const protos = s.players[target].protocols;
@@ -19,8 +25,11 @@ export function rearrangeProtocolSlots(s: GameState, target: PlayerId, a: Line, 
   pushLog(s, `P${target + 1} 重排协议：交换位置 ${a + 1} 与 ${b + 1}`);
   // FX：重排基础动画（两张协议卡同时平移互换位置；重渲染后无缝衔接，见 effects/index.ts
   // 「重排协议基础特效」——与"交换链路"（stacks:swapped）不同的独立动画）
-  // 玩家行动重排 = 无源卡（不带 sourceDefId）；3代效果交换（支点3/柔性3）由 resolve.ts 带 sourceDefId
-  gameBus.emit({ type: 'protocols:rearranged', state: s, payload: { player: target, a, b } });
+  // 玩家行动重排 = 无源卡（不带 sourceDefId）；3代效果交换（支点3/柔性3）由 resolve.ts 带 sourceDefId。
+  // 2026-09-13（审计修复）：此前**没有** sourceDefId 参数 → 效果交换也发不出该字段，
+  // `fx-gen3-swap.ts` 的 `g3ProtocolSwapFx` 门控（src.startsWith('fulcrum-'|'flexibility-')）
+  // 永远为假 → 支点3/柔性3 的交换附加层 100% 静默不播（"特效从不出现"类）。
+  gameBus.emit({ type: 'protocols:rearranged', state: s, payload: { player: target, a, b, sourceDefId } });
 }
 
 

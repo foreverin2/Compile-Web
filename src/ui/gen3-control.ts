@@ -72,12 +72,13 @@ function maxPointBothSides(s: GameState, line: Line): number {
   return m;
 }
 
-/** sloth-0 是否被一张怠惰牌覆盖（= 引擎 sloth0Modifier 的判定：相邻上方那张为怠惰牌） */
+/** sloth-0 是否被一张**正面**怠惰牌覆盖（= 引擎 sloth0Modifier 的判定：相邻上方那张为正面怠惰牌。
+ *  2026-09-13 审计：引擎要求覆盖者 faceUp（反面牌无协议信息），UI 漏了这一项 → 会多显示 +5/边框光。 */
 function coveredBySlothCard(s: GameState, owner: PlayerId, line: Line, uid: string): string | null {
   const stack = stackOf(s, owner, line);
   const idx = stack.findIndex((c) => c.uid === uid);
   const above = idx === -1 ? undefined : stack[idx + 1];
-  return above && above.defId.startsWith('sloth-') ? above.uid : null;
+  return above && above.faceUp && above.defId.startsWith('sloth-') ? above.uid : null;
 }
 
 /* ============================== 常驻层注册表 ============================== */
@@ -97,12 +98,15 @@ function ensure(key: string, cls: string, z: number): Rec {
   return rec;
 }
 
-/** 条件消失 → 移除层并从注册表删除（避免残影） */
+/** 条件消失 → 移除层并从注册表删除（避免残影）。
+ *  2026-09-13：改为**先淡出再移除**（设计稿 §8.1 起止衔接：消失要有 0.15~0.3s 收束，禁止硬切）。
+ *  注册表立刻删除 → 若条件在同一帧回来会新建一层，旧层由定时器自行收尾。 */
 function drop(key: string): void {
   const rec = layerRecs.get(key);
   if (rec) {
-    rec.node.remove();
     layerRecs.delete(key);
+    rec.node.classList.add('g3sync-out');
+    window.setTimeout(() => rec.node.remove(), 320);
   }
 }
 
@@ -862,9 +866,11 @@ export function gen3ControlCheckFx(
   window.setTimeout(() => l.remove(), 1250);
 }
 
-/** 清缓存时刻（rule:clear-cache）：持牌方场上有未覆盖正面 gluttony-0 → 齿颚咬合（G1 的"咬合时刻"） */
+/** 清缓存时刻（rule:clear-cache）：**清缓存那位玩家**场上有未覆盖正面 gluttony-0 → 齿颚咬合（G1"咬合时刻"）。
+ *  2026-09-13 审计修复：此前忽略 payload.player，扫全场取第一个 gluttony-0 → 对方清缓存时会在**你的**
+ *  gluttony-0 上咬一口（位置/归属都错）。 */
 export function gen3ClearCacheFx(p: { player: PlayerId; count: number }, s: GameState): void {
-  const own = ([0, 1] as PlayerId[]).flatMap((pid) => s.players[pid].stacks.flat());
+  const own = s.players[p.player].stacks.flat();
   const gluttony0 = own.find((c) => c.defId === 'gluttony-0' && c.faceUp && isUncovered(s, c));
   const node = gluttony0 ? cardNode(gluttony0.uid) : null;
   const r = node ? rectOf(node) : null;

@@ -286,6 +286,17 @@ function slotRectOf(p: Gen3CardPayload): DOMRect | null {
   return slot ? slot.getBoundingClientRect() : null;
 }
 
+/** 触发源卡的持有者（"己方/对手"视角要用它，不能用写死的 players[0]/[1]）。
+ *  找不到（系统效果/卡已离场）时退化为 payload.owner，再退化为 0。 */
+function triggerOwnerInState(state: GameState, triggerUid?: string, fallback?: 0 | 1): 0 | 1 {
+  if (triggerUid) {
+    for (const pid of [0, 1] as const) {
+      if (state.players[pid].stacks.flat().some((c) => c.uid === triggerUid)) return pid;
+    }
+  }
+  return fallback ?? 0;
+}
+
 /* ============================== 弃牌（A-DISCARD） ============================== */
 
 /**
@@ -576,6 +587,9 @@ export function gen3FlipFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3CardF
   const g = geom(node);
   if (!g) return false;
   const protocol = p.triggerProtocol ?? '';
+  // 2026-09-13 审计补强：与其它 gen3*Fx 对齐加覆盖门控——否则"覆盖表里加了协议但忘了写 case"
+  // 会静默落到 default（只播基础翻面），正是 #2 那类静默失效的形态。
+  if (!GEN3_CARD_FX_COVER.flip.includes(protocol)) return false;
   const overlay = (cls: string): HTMLElement | null => {
     const c = api.buildFxCard(node, p, api.extraZ);
     if (c) c.classList.add(cls);
@@ -715,12 +729,16 @@ export function gen3FlipFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3CardF
       window.setTimeout(() => c?.remove(), 940);
       return true;
     }
-    // 嫉妒 E4 翻转分支：玉青卷边光 + 已编译数对比（己方 vs 对手）
+    // 嫉妒 E4 翻转分支：玉青卷边光 +（仅 envy-4 的翻转）已编译数对比（己方 vs 对手）
+    // 2026-09-13 审计修复：① 计数对比此前对**所有** envy 翻转都画（含未点名的 envy-1 中），
+    // 现在按 triggerDefId==='envy-4' 门控；② 己方/对手此前硬编码 players[0]/[1] —— 由 P2 触发时
+    // 两侧会反（改从触发源卡 envy-4 的持有者取视角，与 gen3PlayFx 一致）。
     case 'envy': {
       const c = overlay('g3-envy-curl');
-      if (c && state) {
-        const mine = state.players[0].protocols.filter((x) => x.compiled).length;
-        const foe = state.players[1].protocols.filter((x) => x.compiled).length;
+      if (c && state && p.triggerDefId === 'envy-4') {
+        const actor: 0 | 1 = triggerOwnerInState(state, p.triggerUid, p.owner);
+        const mine = state.players[actor].protocols.filter((x) => x.compiled).length;
+        const foe = state.players[actor === 0 ? 1 : 0].protocols.filter((x) => x.compiled).length;
         const box = api.el('div', 'g3-envy-count');
         box.appendChild(api.el('i', 'g3-envy-count-chip mine', String(mine)));
         box.appendChild(api.el('i', 'g3-envy-count-vs', 'vs'));
@@ -973,7 +991,10 @@ export function gen3FaceDownFx(kind: 'deck' | 'hand', p: Gen3CardPayload, api: G
     case 'gluttony': {
       const src = p.triggerUid ? document.querySelector<HTMLElement>(`[data-uid="${p.triggerUid}"]`) : null;
       if (src) {
-        const c = api.buildFxCard(src, p, api.extraZ);
+        // 2026-09-13 审计修复：浮层卡的面**必须描述触发源卡（gluttony-0）**，不能沿用 payload——
+        // payload 是那张"反面打出"的牌，直接传会把一张卡背盖在 gluttony-0 上 900ms（设计稿 G1①
+        // 要的是"暴食0 卡面上下两排暗金锯齿合拢"）。
+        const c = api.buildFxCard(src, { ...p, uid: p.triggerUid ?? p.uid, defId: 'gluttony-0', faceUp: true }, api.extraZ);
         if (c) {
           c.classList.add('g3-glut-deckplay');
           for (const side of ['l', 'r'] as const) {

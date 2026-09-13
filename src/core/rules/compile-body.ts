@@ -21,7 +21,7 @@ export function executeCompileBody(
   s: GameState,
   player: PlayerId,
   line: Line,
-  opts?: { force?: boolean; sourceDefId?: string },
+  opts?: { force?: boolean; sourceDefId?: string; sourceUid?: string },
 ): void {
   const p = s.players[player];
   const oppId: PlayerId = player === 0 ? 1 : 0;
@@ -91,9 +91,13 @@ export function executeCompileBody(
       ownValue,
       oppValue,
       protoName,
-      // 3代 特效（批次 C）：效果编译的来源卡 defId（贪婪1 底 / 联合1 底 等）——UI 据此给
-      // "该卡触发了这次编译"的专属前奏（契约印/联合光带）；规则编译（玩家行动）不带该字段
+      // 3代 特效（批次 C）：效果编译的来源卡 defId / uid（贪婪1 底 / 联合1 底 等）——UI 据此给
+      // "该卡触发了这次编译"的专属前奏（契约印/联合光带），**且 ui 需要 uid 才能把契约印的起点锚到
+      // 那张卡上 + 记录贪婪1 硬币堆等级**；规则编译（玩家行动）不带这两个字段。
+      // 2026-09-13（审计修复）：此前只发了 sourceDefId、漏了 sourceUid → 贪婪1 硬币堆（R2④）与
+      // 契约印"自贪婪1 卡面浮出"（R2①）全部静默降级/不出现。
       sourceDefId: opts?.sourceDefId,
+      sourceUid: opts?.sourceUid,
     },
   });
   if (recompiled) {

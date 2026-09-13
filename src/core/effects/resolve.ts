@@ -415,14 +415,16 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
         card.line = null;
         card.pos = null;
         s.players[target].hand.push(card);
-        gameBus.emit({ type: 'card:drawn', state: s, payload: { player: target, count: 1, fromOpponentDeck: true, triggerProtocol: pe.sourceDefId.split('-')[0] } });
+        gameBus.emit({ type: 'card:drawn', state: s, payload: { player: target, count: 1, fromOpponentDeck: true, triggerProtocol: pe.sourceDefId.split('-')[0], triggerDefId: pe.sourceDefId, triggerUid: pe.sourceUid } });
         fireReactive(s, 'after-draw', target);
         // 2代 mirror-4/war-0 底「当对手抽牌时：…」
         fireReactive(s, 'after-opponent-draw', target);
         break;
       }
       drawCards(s, target, op.count); // drawCards 内部已 fireReactive after-draw
-      gameBus.emit({ type: 'card:drawn', state: s, payload: { player: target, count: op.count, triggerProtocol: pe.sourceDefId.split('-')[0] } });
+      // triggerDefId/triggerUid（2026-09-13 审计修复）：UI 的两个分支靠它判定"是哪张卡触发的抽牌"
+      // （支点4「游标停在 4」/ 同化1 刷新光泽）——此前只发 triggerProtocol，这两个分支永远不成立。
+      gameBus.emit({ type: 'card:drawn', state: s, payload: { player: target, count: op.count, triggerProtocol: pe.sourceDefId.split('-')[0], triggerDefId: pe.sourceDefId, triggerUid: pe.sourceUid } });
       break;
     }
     case 'flip': {
@@ -627,7 +629,8 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       // player 缺省 = 效果属主（water-2/spirit-4）；psychic-2 指定 player=对手。
       // 执行/log/动画事件统一走共享入口 rearrangeProtocolSlots（控制组件重排动作同路径）。
       const target = op.player ?? pe.player;
-      rearrangeProtocolSlots(s, target, op.a, op.b);
+      // sourceDefId：3代支点3/柔性3 的交换附加层靠它区分"效果交换"与"玩家行动重排"（后者不带）
+      rearrangeProtocolSlots(s, target, op.a, op.b, pe.sourceDefId);
       // 3代「重排协议」事件（C4 一切重排都算）：重排动作发起者 = pe.player（效果属主）→
       // 触发自身侧 after-self-rearrange（nova-2 底）与双方 after-any-rearrange（momentum-1 底）
       fireReactive(s, 'after-self-rearrange', pe.player);
