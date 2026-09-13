@@ -53,4 +53,24 @@ describe('状态指纹（G0）', () => {
     performDraftPick(b, getDraftPool(b)[0].defId);
     expect(stateFingerprint(b)).toBe(stateFingerprint(a));
   });
+
+  it('undefined 语义与 JSON 一致：值为 undefined 的键被省略', () => {
+    expect(stableStringify({ a: undefined })).toBe('{}');
+    expect(stableStringify({ a: undefined })).toBe(stableStringify({}));
+    expect(stableStringify({ a: undefined, b: 1 })).toBe(stableStringify({ b: 1 }));
+  });
+
+  it('序列化对 JSON 往返稳定（D2 的前提）', () => {
+    const roundTrip = (v: unknown): unknown => JSON.parse(JSON.stringify(v));
+    expect(stableStringify(roundTrip({ a: undefined, b: 1 }))).toBe(stableStringify({ a: undefined, b: 1 }));
+    expect(stableStringify(roundTrip({ z: [1, { q: null }] }))).toBe(stableStringify({ z: [1, { q: null }] }));
+  });
+
+  it('显式 undefined 的可选字段不破坏往返稳定性（rigidity.ts 的真实赋值形态）', () => {
+    const s = createGame({ seed: 'F5' });
+    s.pendingActionPlayLine = undefined; // 引擎里真实存在的形态（rigidity.ts:48）
+    const before = stateFingerprint(s);
+    const restored = JSON.parse(JSON.stringify(s)) as typeof s;
+    expect(stateFingerprint(restored)).toBe(before);
+  });
 });
