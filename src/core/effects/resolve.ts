@@ -464,6 +464,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       if (!op.allowCovered && !isUncovered(s, card)) throw new Error(`cannot delete ${op.uid}: covered card`);
       const owner = card.owner;
       const line = card.line!;
+      const pos = card.pos;
       const stack = s.players[owner].stacks[line];
       const idx = stack.findIndex((c) => c.uid === op.uid);
       if (idx === -1) throw new Error(`cannot delete ${op.uid}: not in stack`);
@@ -475,8 +476,13 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       card.line = null;
       card.pos = null;
       s.players[owner].trash.push(card);
-      // triggerProtocol/triggerDefId：触发这张删去的卡（效果源），FX 层据此叠加协议专属额外特效
+      // triggerProtocol/triggerDefId：触发这张删去的卡（效果源），FX 层据此叠加协议专属额外特效。
+      // 2026-09-13 修复（用户清单 #17a 复查）：line/pos 在 emit 之前已被清空 → payload.line 恒为 null，
+      // 导致新星0「整线删除」的**从线中心向两侧连锁**排序与收尾临界环失效（FX 层按 payload.line 定位）。
+      // 这里把删除前的 line/pos 显式回填（emitCardEvent 的 extra 在基础字段之后展开 → 覆盖 null）。
       emitCardEvent(s, 'card:deleted', card, {
+        line,
+        pos,
         triggerDefId: pe.sourceDefId,
         triggerUid: pe.sourceUid,
         triggerProtocol: pe.sourceDefId.split('-')[0],

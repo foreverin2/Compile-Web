@@ -59,9 +59,12 @@ function toChoiceCard(c: Card): ChoiceCard {
   };
 }
 
-/** 候选列表：手牌（指定 owner）或场上链路卡（默认双方各链路顶卡；covered:true 时列被覆盖的卡，均排除结算中源卡——幽灵状态防护） */
+/** 候选列表：手牌（指定 owner）或场上链路卡（默认双方各链路顶卡；covered:true 时列被覆盖的卡，
+ *  默认排除结算中源卡——幽灵状态防护；includeSelf:true 时不排除，供"文案含自身"的卡使用） */
 export function listCandidates(s: GameState, filter: CandidateFilter): ChoiceCard[] {
-  const resolving = new Set(s.pendingEffects.map((pe) => pe.sourceUid));
+  // 2026-09-13（用户实测）：flexibility-1「翻转或偏转**你的**1张牌」、inertia-2/wrath-2「**所有**正面朝上的牌」
+  // 文案含卡自身 → 这些卡传 includeSelf:true，此时不排除结算中源卡。
+  const resolving = filter.includeSelf ? new Set<string>() : new Set(s.pendingEffects.map((pe) => pe.sourceUid));
   const out: ChoiceCard[] = [];
   if (filter.zone === 'hand') {
     const p = s.players[filter.owner!];

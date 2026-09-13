@@ -70,7 +70,9 @@ function* unity0Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> 
  *  （pendingShift，如联合1 偏转到联合0 所在线），此前只查 pendingPlay → 偏转覆盖不触发。 */
 function* unity0BeforeCovered(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const incoming = ctx.s.pendingPlay[0]?.card ?? ctx.s.pendingShift[0]?.card;
-  if (!incoming || !incoming.defId.startsWith('unity-')) return; // 覆盖者非统一牌 → 不触发
+  // 2026-09-13 修复（与 sloth-0 同类，用户要求顺带排查）：覆盖者必须**正面朝上**——
+  // 反面卡无协议属性、身份未公开，不算「联合牌」。
+  if (!incoming || !incoming.faceUp || !incoming.defId.startsWith('unity-')) return; // 覆盖者非正面统一牌 → 不触发
   yield* flipOrDraw(ctx);
 }
 

@@ -52,6 +52,18 @@ describe('sloth（怠惰）', () => {
     expect(getLineValue(s, 0, 0)).toBe(1 + 2 + 5);
   });
 
+  it('sloth-0 top：覆盖者是【反面】怠惰牌时**不**触发（2026-09-13 用户实测修复）', () => {
+    const s = setup();
+    placeSrc(s, 'sloth-0', 0, 0);
+    // 反面盖上的怠惰牌：背面卡无协议属性、身份未公开 → 不算「被1张怠惰牌覆盖」
+    const s1 = makeCard('sloth-1', 0, 'field', false, 0, 1);
+    s.players[0].stacks[0].push(s1);
+    expect(getLineValue(s, 0, 0)).toBe(2); // sloth-1 反面按 2 计，但**无** +5（旧实现会得到 2+5=7）
+    // 同一张翻正后 → 加成生效
+    s1.faceUp = true;
+    expect(getLineValue(s, 0, 0)).toBe(1 + 5);
+  });
+
   it('sloth-1 middle: returning own card refreshes to 5; opponent card does not', () => {
     const s = setup();
     s.players[0].deck = Array.from({ length: 8 }, () => makeCard('fire-1', 0, 'deck', false));

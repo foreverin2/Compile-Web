@@ -69,7 +69,9 @@ function* inertia2Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult
   };
   if (lAns.selected.length === 0) return;
   const line = Number(lAns.selected[0].replace('line:', '')) as Line;
-  const faceUp = faceUpInLine(ctx.s, line, ctx.card.uid);
+  // 2026-09-13（用户实测）：卡文「翻转1条链路中**所有**阈值最高的正面朝上的牌」含此牌自身；
+  // 自身排最后（翻面后 sourceValid 会中断后续 op，先把其它目标翻完）
+  const faceUp = faceUpInLine(ctx.s, line).sort((a, b) => (a.uid === ctx.card.uid ? 1 : b.uid === ctx.card.uid ? -1 : 0));
   if (faceUp.length === 0) return;
   const maxV = Math.max(...faceUp.map((c) => pv(c.defId)));
   const targets = faceUp.filter((c) => pv(c.defId) === maxV);

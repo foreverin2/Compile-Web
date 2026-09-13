@@ -135,6 +135,10 @@ export interface ChoiceRequest {
   actions?: string[];
   /** 选择权归属者（缺省 = PendingEffect.player；"被作用卡持有者决定"用） */
   chooser?: PlayerId;
+  /** UI 提示（2026-09-13 用户清单 #10）：本选择请求应由**重排模态**承接（动量4「重排你的协议」）。
+   *  值 = 可重排的玩家侧；UI 在读到时不再渲染 `action:order:*` 按钮，改为打开编译期同款重排窗口，
+   *  完成后回填一条 `action:order:XYZ`（引擎行为不变）。缺省 = 普通选择请求。 */
+  rearrangeSide?: PlayerId;
 }
 
 export interface ChoiceAnswer {
@@ -268,6 +272,10 @@ export interface CandidateFilter {
   zone: 'hand' | 'field';
   owner?: PlayerId;
   covered?: boolean;
+  /** 允许把【结算中的源卡自己】列入候选（默认排除，防幽灵状态）。
+   *  2026-09-13 用户实测新增：3代 flexibility-1「翻转或偏转**你的**1张牌」、inertia-2/wrath-2
+   *  「…中**所有**正面朝上的牌」等文案含自身 → 这些卡需要 includeSelf:true。 */
+  includeSelf?: boolean;
 }
 
 /** 牌库揭示状态（2代 clarity-1 top 揭示牌库顶 / clarity-2/3 揭示整副牌库；UI 依此弹展示浮层）。

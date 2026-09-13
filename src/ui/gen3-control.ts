@@ -648,20 +648,67 @@ function controlImgRect(): DOMRect | null {
   return img ? rectOf(img) : mod ? rectOf(mod) : null;
 }
 
+/**
+ * 2026-09-13 用户清单 #1（"特效粘在屏幕固定位置"的一种形态）：控制组件卡本身在 `.control-track` 上
+ * **滑动**（render.ts 按 CONTROL_EDGE_PCT=4% 把它推向持有者一侧），所以"组件被拉走后的落点"必须
+ * **按轨道实测矩形**算，而不是拿视口 22%/78% 猜——否则窗口尺寸/布局一变，落点就和组件真实位置错位。
+ */
+function controlTrackSideX(to: PlayerId): number | null {
+  const track = document.querySelector<HTMLElement>('.control-track');
+  const r = track ? rectOf(track) : null;
+  if (!r) return null;
+  // 与 render.ts 一致：P1 贴左端 4%、P2 贴右端 96%
+  const pct = to === 0 ? 0.04 : 0.96;
+  return r.left + r.width * pct;
+}
+
+/**
+ * 2026-09-13 用户清单 #8：控制权"牵引链"是**色欲**的视觉语法（色欲 = 控制控制权）。
+ * 只有**色欲卡效果**引发的变更才播链条/断链/幽灵飞卡；判定阶段或其他协议（嫉妒1/新星2/愤怒1·4）
+ * 造成的易主只播轻量提示（组件脉冲 + 文字标）——用户实测反馈"没打色欲也每次判定都蹦链条"。
+ * 判定依据：引擎 `control:changed` 载荷新增的 `sourceDefId`（setControl 第 4 参）。
+ */
+function lustDrivenControl(p: { reason?: string; sourceDefId?: string }): boolean {
+  return p.reason === 'effect' && (p.sourceDefId ?? '').startsWith('lust-');
+}
+
+/** C1/C2 轻量版：不牵链条，只在组件卡新位置播脉冲 + 文字标（判定阶段/其他协议的易主） */
+function controlMiniFx(p: { from: number; to: number; reason?: string }, cx: number, cy: number, x: number): void {
+  const l = layer('g3ctrl-layer', Z_CTRL);
+  const pulse = el('i', 'g3ctrl-mini-pulse');
+  pulse.style.left = `${x}px`;
+  pulse.style.top = `${cy}px`;
+  l.appendChild(pulse);
+  const gained = p.to === 0 || p.to === 1;
+  const chip = el('i', 'g3ctrl-mini-chip', gained ? `控制组件 → P${p.to + 1}` : '控制组件归还中立');
+  chip.style.left = `${x}px`;
+  chip.style.top = `${cy - 54}px`;
+  chip.style.animationDelay = '120ms';
+  l.appendChild(chip);
+  void cx;
+  window.setTimeout(() => l.remove(), 900);
+}
+
 /** C1/C2/C5：控制权变更（获得 = 牵引链拉来 / 失去 = 链断 / 归还中立） */
 export function gen3ControlChangedFx(
-  p: { from: number; to: number; reason?: string },
+  p: { from: number; to: number; reason?: string; sourceDefId?: string },
   s: GameState,
 ): void {
   const r = controlImgRect();
   if (!r) return;
-  const l = layer('g3ctrl-layer', Z_CTRL);
   const cx = r.left + r.width / 2;
   const cy = r.top + r.height / 2;
 
   if (p.to === 0 || p.to === 1) {
+    // 落点 = 轨道上"持有者一侧"的实测位置（#1：不再用视口百分比猜）
+    const targetX = controlTrackSideX(p.to) ?? (p.to === 0 ? Math.max(80, window.innerWidth * 0.22) : Math.min(window.innerWidth - 80, window.innerWidth * 0.78));
+    // #8：非色欲驱动的易主 → 只播轻量提示（不牵链条、不飞幽灵卡）
+    if (!lustDrivenControl(p)) {
+      controlMiniFx(p, cx, cy, targetX);
+      return;
+    }
+    const l = layer('g3ctrl-layer', Z_CTRL);
     // 获得：组件卡幽灵沿弧线飞到新持有者一侧 + 3 节红色牵引链 + 落位脉冲/冲击环
-    const targetX = p.to === 0 ? Math.max(80, window.innerWidth * 0.22) : Math.min(window.innerWidth - 80, window.innerWidth * 0.78);
     const ghost = el('div', 'g3ctrl-ghost');
     ghost.style.left = `${cx - 24}px`;
     ghost.style.top = `${cy - 32}px`;
@@ -713,7 +760,13 @@ export function gen3ControlChangedFx(
   }
 
   // 失去/归还中立：3 节链条依次崩断 + 暗紫余温（留在原持有者一侧）
-  const side = p.from === 0 ? Math.max(60, window.innerWidth * 0.18) : Math.min(window.innerWidth - 60, window.innerWidth * 0.82);
+  const side = (p.from === 0 || p.from === 1 ? controlTrackSideX(p.from) : null)
+    ?? (p.from === 0 ? Math.max(60, window.innerWidth * 0.18) : Math.min(window.innerWidth - 60, window.innerWidth * 0.82));
+  if (!lustDrivenControl(p)) {
+    controlMiniFx(p, cx, cy, p.from === 0 || p.from === 1 ? side : cx);
+    return;
+  }
+  const l = layer('g3ctrl-layer', Z_CTRL);
   for (let i = 0; i < 3; i++) {
     const link = el('i', 'g3ctrl-link break');
     link.style.left = `${(side + cx) / 2}px`;

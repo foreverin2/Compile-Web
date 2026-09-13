@@ -138,7 +138,7 @@ function* nova2Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
     const order = aAns.selected[0].split(':')[2].split('').map(Number) as Line[];
     yield { op: 'reorderProtocols', order };
   } else {
-    setControl(ctx.s, ctx.player); // 必得
+    setControl(ctx.s, ctx.player, 'effect', ctx.card.defId); // 必得
   }
 }
 

@@ -43,8 +43,9 @@ function* flexibility1Middle(ctx: EffectCtx): Generator<EffectStep, void, StepRe
     actions: ['action:flip', 'action:shift'],
   };
   if (act.selected.length === 0) return;
-  const cand = ctx.candidates({ zone: 'field', owner: ctx.player });
-  const tAns = yield { kind: 'select', title: 'flexibility-1：选择你的1张牌', min: 1, max: 1, optional: false, candidates: cand };
+  // 2026-09-13（用户实测）：卡文「翻转或偏转**你的**1张牌」含此牌自身 → includeSelf
+  const cand = ctx.candidates({ zone: 'field', owner: ctx.player, includeSelf: true });
+  const tAns = yield { kind: 'select', title: 'flexibility-1：选择你的1张牌（含此牌自身）', min: 1, max: 1, optional: false, candidates: cand };
   if (tAns.selected.length === 0) return;
   if (act.selected[0] === 'action:flip') {
     yield { op: 'flip', uid: tAns.selected[0] };

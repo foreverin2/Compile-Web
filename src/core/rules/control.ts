@@ -8,13 +8,16 @@ import { gameBus } from '../events/bus';
  *  某玩家（0/1）成为持有者 → 其【对手侧】注册 after-opponent-gain-control 的顶卡触发
  *  （3代 色欲4 底/傲慢6 顶「当对手获得控制权后」）；回中立（-1）不产生「获得」事件。
  *  事件只 push，由调用方 runStack（效果上下文在 runStack 循环内自然结算）。 */
-export function setControl(s: GameState, holder: PlayerId | -1, reason = 'effect'): void {
+export function setControl(s: GameState, holder: PlayerId | -1, reason = 'effect', sourceDefId?: string): void {
   if (s.control === holder) return;
   const from = s.control;
   s.control = holder;
   // 3代 特效（批次 D）：控制权变更语义事件——UI 据此播"获得（牵引链拉来）/ 失去（链断）/ 归还中立"。
   // reason：'check'（控制阶段判定）/ 'compile'（编译归还）/ 'refresh'（补满手牌归还）/ 'effect'（卡牌效果）
-  gameBus.emit({ type: 'control:changed', state: s, payload: { from, to: holder, reason } });
+  // sourceDefId（2026-09-13 用户清单 #8）：卡牌效果引发时的**效果源卡 defId**。UI 用它区分
+  // 「色欲在控制控制权」（牵引链是色欲的视觉语法）与「判定阶段/其他协议导致的易主」——
+  // 后者只播轻量提示，避免"没打色欲也每次判定蹦链条"。
+  gameBus.emit({ type: 'control:changed', state: s, payload: { from, to: holder, reason, sourceDefId } });
   if (holder === 0 || holder === 1) {
     fireReactive(s, 'after-opponent-gain-control', holder);
   }

@@ -85,6 +85,10 @@ describe('momentum（动量）', () => {
     // 弹布局选择（eager 取 'action:order:021'）
     let top = s.pendingEffects[s.pendingEffects.length - 1];
     expect(top?.prompt?.kind).toBe('select-action');
+    // 2026-09-13（用户清单 #10）：该请求标记 rearrangeSide → UI 由重排窗口承接（不再弹 5 个布局按钮）；
+    // 引擎侧仍是同一条 action:order:XYZ（窗口完成后回填），所以下面这条应答路径保持不变。
+    expect(top?.prompt?.rearrangeSide).toBe(0);
+    expect(top?.prompt?.actions?.length).toBe(5);
     answerEffect(s, top.id, ['action:order:210']);
     // after-any-rearrange → momentum-1 底弃 1 抽 1
     resolveAllChoices(s, pickFirst);
@@ -200,6 +204,17 @@ describe('inertia（惰性）', () => {
     resolveAllChoices(s, eagerPick); // 选线 0 → 翻值 4 那张
     expect(buried.faceUp).toBe(false);
     expect(low.faceUp).toBe(true);
+  });
+
+  it('inertia-2 middle：目标含【自身】（卡文"所有正面朝上的牌"）——2026-09-13 用户实测', () => {
+    const s = setup();
+    // 线 0：先放己方 fire-1（值 1），再放 inertia-2（印刷值 2）使其为**顶卡**（未被盖 → 中部指令可结算）
+    const low = placeSrc(s, 'fire-1', 0, 0);
+    const src = placeSrc(s, 'inertia-2', 0, 0);
+    resolveMiddle(s, 0, src);
+    resolveAllChoices(s, eagerPick); // 选线 0
+    expect(src.faceUp, 'inertia-2 自身未被翻（旧实现排除了源卡）').toBe(false);
+    expect(low.faceUp, '低值卡不应被翻').toBe(true);
   });
 
   it('inertia-4 middle: discards whole decks (both) in one batch', () => {
@@ -336,6 +351,21 @@ describe('flexibility（柔性）', () => {
     resolveAllChoices(s, pickFirst);
     expect(s.players[0].hand).toHaveLength(2);
     expect(f4.faceUp).toBe(false); // 翻转此牌
+  });
+
+  it('flexibility-1 middle：候选含【自身】（卡文"翻转或偏转你的1张牌"）——2026-09-13 用户实测', () => {
+    const s = setup();
+    const src = placeSrc(s, 'flexibility-1', 0, 0); // 己方唯一场牌 = 此牌自身（顶卡）
+    resolveMiddle(s, 0, src);
+    runStack(s);
+    const act = s.pendingEffects[s.pendingEffects.length - 1];
+    expect(act?.prompt?.kind).toBe('select-action');
+    answerEffect(s, act!.id, ['action:flip']);
+    runStack(s);
+    const sel = s.pendingEffects[s.pendingEffects.length - 1];
+    expect(sel?.prompt?.kind).toBe('select');
+    const uids = (sel?.prompt?.candidates ?? []).map((c) => c.uid);
+    expect(uids, 'flexibility-1 的候选未包含自身（旧实现排除源卡）').toContain(src.uid);
   });
 });
 

@@ -43,7 +43,7 @@ function* envy1Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
 /** envy-1 底（start，无 top 仅顶卡）：开始：若对手拥有控制权，获得控制权。
  *  无「可以」→ 条件成立必须获得（从对手处夺取；setControl 统一变更点发 after-opponent-gain-control 事件）。 */
 function* envy1Start(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
-  if (ctx.s.control === opp(ctx.player)) setControl(ctx.s, ctx.player);
+  if (ctx.s.control === opp(ctx.player)) setControl(ctx.s, ctx.player, 'effect', ctx.card.defId);
 }
 
 /** envy-2 中：抽取等同于对手手牌数量的牌。 */

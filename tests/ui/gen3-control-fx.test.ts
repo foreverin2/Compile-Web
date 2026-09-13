@@ -27,10 +27,13 @@ const effectsTs = read('ui/effects/index.ts');
 
 describe('批次 D 守卫：控制权族 + 常驻层', () => {
   it('引擎事件齐备且语义正确（控制权/判定/清缓存/免疫）', () => {
-    // 控制权变更：唯一入口 setControl 发射，带 from/to/reason；三种 reason 至少覆盖 check/return/effect
+    // 控制权变更：唯一入口 setControl 发射，带 from/to/reason/sourceDefId；三种 reason 至少覆盖 check/return/effect
+    // 2026-09-13（用户清单 #8）：新增 sourceDefId（效果源卡 defId）——UI 据此只让"色欲卡"造成的
+    // 易主播牵引链，判定阶段/其他协议只播轻量提示。
     expect(controlCore).toContain("type: 'control:changed'");
-    expect(controlCore).toMatch(/payload: \{ from, to: holder, reason \}/);
+    expect(controlCore).toMatch(/payload: \{ from, to: holder, reason, sourceDefId \}/);
     expect(controlCore).toContain("reason = 'effect'");
+    expect(controlCore).toMatch(/sourceDefId\?: string/);
     expect(controlCore).toContain("setControl(s, p, 'check')");
     expect(controlCore).toContain("setControl(s, -1, 'return')");
     // 判定阶段：无论是否获得都要发（Q5 判定失败也要有反馈）
@@ -136,6 +139,22 @@ describe('批次 D 守卫：控制权族 + 常驻层', () => {
     // 新 C4 所需的类必须在 CSS 里（含 caption/result/cmp/num/lead-ring）
     for (const cls of ['g3ctrl-caption', 'g3ctrl-result', 'g3ctrl-cmp', 'g3ctrl-cmp-own', 'g3ctrl-cmp-opp', 'g3ctrl-cmp-scan', 'g3ctrl-cmp-num', 'g3ctrl-lead-ring']) {
       expect(syncCss, `CSS 缺少 .${cls}`).toContain(`.${cls}`);
+    }
+  });
+
+  it('C1/C2 落点锚定轨道实测位置 + 仅色欲驱动时才牵链条（2026-09-13 用户清单 #1/#8）', () => {
+    // #1：控制组件卡在 .control-track 上滑动 → 落点必须按轨道矩形算（不再用视口 22%/78% 猜）
+    expect(controlTs, '缺少按 .control-track 实测位置计算落点').toContain("document.querySelector<HTMLElement>('.control-track')");
+    expect(controlTs).toContain('controlTrackSideX(');
+    // #8：牵引链只在"色欲卡效果"造成的易主时播；否则走轻量提示（不牵链条）
+    expect(controlTs).toContain('lustDrivenControl(');
+    expect(controlTs).toMatch(/p\.reason === 'effect' && \(p\.sourceDefId \?\? ''\)\.startsWith\('lust-'\)/);
+    expect(controlTs).toContain('controlMiniFx(');
+    expect(syncCss, 'CSS 缺少轻量版脉冲/文字标').toContain('.g3ctrl-mini-pulse');
+    expect(syncCss).toContain('.g3ctrl-mini-chip');
+    // 引擎侧：卡牌效果必须带上效果源 defId（否则 UI 无法判定"是不是色欲在控制控制权"）
+    for (const f of ['core/effects/cards/lust.ts', 'core/effects/cards/envy.ts', 'core/effects/cards/nova.ts', 'core/effects/cards/wrath.ts']) {
+      expect(read(f), `${f} 的 setControl 未带效果源 defId`).toMatch(/setControl\(ctx\.s,[^)]*ctx\.card\.defId\)/);
     }
   });
 });

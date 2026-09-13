@@ -24,7 +24,7 @@ function lust0Modifier(_s: GameState, _owner: PlayerId, _line: Line, total: numb
 
 /** lust-0 中：获得控制权。（无「可以」→ 必得：中立→持有 / 对手持有→夺取 / 已持有→无变化） */
 function* lust0Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
-  setControl(ctx.s, ctx.player);
+  setControl(ctx.s, ctx.player, 'effect', ctx.card.defId);
 }
 
 /** lust-2 中：你可以将对手1张被覆盖的牌偏转到此链路（选对手任一被盖卡 → shift 到 lust-2 所在线）。
@@ -74,7 +74,7 @@ function* lust3End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
     actions: ['action:失去控制权'],
   };
   if (act.selected.length === 0) return; // 跳过
-  setControl(ctx.s, -1);
+  setControl(ctx.s, -1, 'effect', ctx.card.defId);
   const cand = ctx.candidates({ zone: 'field' });
   const fAns = yield { kind: 'select', title: 'lust-3：若你这么做，翻转1张牌', min: 1, max: 1, optional: false, candidates: cand };
   if (fAns.selected.length > 0) yield { op: 'flip', uid: fAns.selected[0] };
@@ -86,7 +86,7 @@ function* lust4Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const myHand = [...ctx.s.players[ctx.player].hand];
   for (const card of myHand) yield { op: 'reveal', uid: card.uid };
   const foe = opp(ctx.player);
-  if (ctx.s.control === foe) setControl(ctx.s, -1);
+  if (ctx.s.control === foe) setControl(ctx.s, -1, 'effect', ctx.card.defId);
 }
 
 /** lust-4 底（after-opponent-gain-control，无 top 仅顶卡）：当对手获得控制权后：抽1张牌。 */

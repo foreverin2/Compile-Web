@@ -4,7 +4,8 @@ import { executeAction, getLegalActions } from '../../src/core/game';
 import { collectTriggers, resolveTrigger } from '../../src/core/effects/triggers';
 import { runStack } from '../../src/core/effects/resolve';
 import { makeCard, draftFireP1, draftLightP1, draftWaterP1, draftLifeP1, draftLoveP1, advanceToStep, resolveAllChoices, pickFirst } from '../helpers';
-import type { Line } from '../../src/core/models/types';
+import type { GameState, Line, PlayerId } from '../../src/core/models/types';
+import { createGame } from '../../src/core/state/create';
 
 /** 捕获弃牌/删去事件（含触发卡协议），返回快照 */
 function captureDiscardDelete(snapshot: { type: string; triggerProtocol?: string; triggerDefId?: string }[]): () => void {
@@ -258,5 +259,112 @@ describe('FX trigger protocol payload', () => {
       expect(ev.triggerProtocol).toBe('love');
       expect(ev.triggerDefId).toBe('love-4');
     }
+  });
+
+  // ——— 2026-09-13（用户清单 #2 / #17a 复查）：3 代"回手 / 反打 / 打出 / 删除"载荷补齐后必须可定位 ———
+
+  /** 3 代协议线（fire/light/darkness 三条，effect 逻辑与协议 defId 无关） */
+  function setup3(): GameState {
+    const s = createGame();
+    for (const pid of [0, 1] as PlayerId[]) {
+      s.players[pid].protocols = [
+        { defId: 'fire', compiled: false },
+        { defId: 'light', compiled: false },
+        { defId: 'darkness', compiled: false },
+      ];
+    }
+    s.phase = 'turn';
+    return s;
+  }
+
+  it('greed-2 start return carries triggerProtocol=greed + triggerDefId（回手 R3 特效钩子）', () => {
+    const s = setup3();
+    s.turnPlayer = 0;
+    s.step = 'start';
+    const src = makeCard('greed-2', 0, 'field', true, 0, 0);
+    s.players[0].stacks[0] = [src];
+    const victim = makeCard('light-3', 0, 'field', true, 1, 0); // 另一条线的顶卡（回手目标）
+    s.players[0].stacks[1] = [victim];
+    const seen: { triggerProtocol?: string; triggerDefId?: string; triggerUid?: string }[] = [];
+    const off = gameBus.subscribe((e) => {
+      if (e.type !== 'card:returned') return;
+      seen.push(e.payload as { triggerProtocol?: string; triggerDefId?: string; triggerUid?: string });
+    });
+    const t = collectTriggers(s, 'start').find((x) => x.defId === 'greed-2')!;
+    expect(t, 'greed-2 底 start 触发未收集（cond 应满足）').toBeTruthy();
+    resolveTrigger(s, t);
+    runStack(s); // 先把生成器跑到第一个选择点
+    resolveAllChoices(s, (p) => (p.candidates.some((c) => c.uid === victim.uid) ? [victim.uid] : []));
+    off();
+    expect(seen).toHaveLength(1);
+    expect(seen[0].triggerProtocol).toBe('greed'); // 触发卡协议（greed-2）
+    expect(seen[0].triggerDefId).toBe('greed-2');
+    expect(seen[0].triggerUid).toBe(src.uid); // FX 层靠它定位"青玉抓取爪"贴在源卡上
+    expect(s.players[0].hand.some((c) => c.uid === victim.uid)).toBe(true);
+  });
+
+  it('envy-3 after-play deck play carries triggerProtocol=envy + faceDown + line（E3 特效钩子）', () => {
+    const s = setup3();
+    s.turnPlayer = 1;
+    s.players[1].hand = [makeCard('fire-3', 1, 'hand')];
+    s.players[0].deck = [makeCard('light-5', 0, 'deck', false)]; // 己方（envy-3 持有者）牌库顶
+    const src = makeCard('envy-3', 0, 'field', true, 0, 0);
+    s.players[0].stacks[0] = [src];
+    const seen: { triggerProtocol?: string; triggerDefId?: string; triggerUid?: string; line?: number | null; faceUp?: boolean }[] = [];
+    const off = gameBus.subscribe((e) => {
+      if (e.type !== 'card:deck-played') return;
+      seen.push(e.payload as { triggerProtocol?: string; triggerDefId?: string; triggerUid?: string; line?: number | null; faceUp?: boolean });
+    });
+    executeAction(s, 1, 'play', { cardUid: s.players[1].hand[0].uid, faceUp: false, line: 0 });
+    resolveAllChoices(s, pickFirst);
+    off();
+    expect(seen).toHaveLength(1);
+    expect(seen[0].triggerProtocol).toBe('envy');
+    expect(seen[0].triggerDefId).toBe('envy-3');
+    expect(seen[0].triggerUid).toBe(src.uid);
+    expect(seen[0].faceUp).toBe(false); // 反面打出（E3 是"牌库顶卡背被拉出"）
+    expect(seen[0].line).toBe(0); // FX 层按 owner+line 定位落点涟漪
+  });
+
+  it('card:deleted 回填 line（新星0「整线删除」按线中心连锁 + 收尾临界环依赖它）', () => {
+    const s = draftLifeP1();
+    advanceToStep(s, 0, 'action');
+    const life0 = makeCard('life-0', 0, 'field', true, 1, 0);
+    s.players[0].stacks[1] = [life0];
+    const played = makeCard('life-5', 0, 'hand');
+    s.players[0].hand = [played];
+    executeAction(s, 0, 'play', { cardUid: played.uid, faceUp: false, line: 1 });
+    resolveAllChoices(s, pickFirst);
+    advanceToStep(s, 0, 'end');
+    let payload: { line?: number | null } | undefined;
+    const off = gameBus.subscribe((e) => {
+      if (e.type === 'card:deleted') payload = e.payload as { line?: number | null };
+    });
+    const trig = getLegalActions(s, 0).find((a) => a.kind === 'resolve-trigger');
+    executeAction(s, 0, 'resolve-trigger', { cardUid: trig!.cardUid! });
+    off();
+    expect(payload, '未捕获 card:deleted').toBeTruthy();
+    // 旧版在 emit 之前清空 card.line → payload.line 恒为 null（3 代删除特效定位/排序全部退化）
+    expect(payload!.line).toBe(1);
+  });
+
+  it('card:played 打出瞬间载荷带 defId/protocol/line（嫉妒4 E4 计数对比特效钩子）', () => {
+    const s = setup3();
+    s.turnPlayer = 0;
+    s.players[0].protocols[2] = { defId: 'envy', compiled: false }; // 正面打入要求协议匹配
+    const played = makeCard('envy-4', 0, 'hand');
+    s.players[0].hand = [played];
+    const seen: { defId?: string; protocol?: string; line?: number | null; faceUp?: boolean }[] = [];
+    const off = gameBus.subscribe((e) => {
+      if (e.type !== 'card:played') return;
+      seen.push(e.payload as { defId?: string; protocol?: string; line?: number | null; faceUp?: boolean });
+    });
+    executeAction(s, 0, 'play', { cardUid: played.uid, faceUp: true, line: 2 });
+    off();
+    expect(seen).toHaveLength(1);
+    expect(seen[0].defId).toBe('envy-4');
+    expect(seen[0].protocol).toBe('envy');
+    expect(seen[0].line).toBe(2);
+    expect(seen[0].faceUp).toBe(true);
   });
 });

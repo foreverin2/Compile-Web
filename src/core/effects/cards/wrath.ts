@@ -54,7 +54,7 @@ function* wrath1Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> 
  *  未持有 → 整句不执行（B3）。 */
 function* wrath1End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   if (ctx.s.control !== ctx.player) return; // 未持有 → 无可失去 → fizzle
-  setControl(ctx.s, -1);
+  setControl(ctx.s, -1, 'effect', ctx.card.defId);
   const cand = ctx.candidates({ zone: 'field' }).filter((c) => c.faceUp);
   const ans = yield { kind: 'select', title: 'wrath-1（结束）：失去控制权——删除1张正面朝上的牌', min: 1, max: 1, optional: false, candidates: cand };
   if (ans.selected.length > 0) yield { op: 'delete', uid: ans.selected[0] };
@@ -95,7 +95,9 @@ function* wrath2Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> 
     if (lAns.selected.length === 0) return;
     line = Number(lAns.selected[0].replace('line:', '')) as Line;
   }
-  const targets = faceUpInLine(ctx.s, line, ctx.card.uid); // 快照（含被盖）
+  // 2026-09-13 审计（与 inertia-2 同类）：卡文「翻转牌最多的1条链路中**所有**正面朝上的牌」含此牌自身
+  // → 不再传 excludeUid；自身排最后（翻到自身后 sourceValid 会中断后续 op，先把其它目标翻完）
+  const targets = faceUpInLine(ctx.s, line).sort((a, b) => (a.uid === ctx.card.uid ? 1 : b.uid === ctx.card.uid ? -1 : 0));
   for (const t of targets) yield { op: 'flip', uid: t.uid, allowCovered: true };
 }
 
@@ -109,7 +111,7 @@ function* wrath3Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> 
 /** wrath-4 中：失去控制权。若你这么做，对手弃2张牌。（B3：持有必失 → 失则对手弃 2 尽力而为） */
 function* wrath4Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   if (ctx.s.control !== ctx.player) return; // 未持有 → fizzle
-  setControl(ctx.s, -1);
+  setControl(ctx.s, -1, 'effect', ctx.card.defId);
   const foe = opp(ctx.player);
   const hand = ctx.candidates({ zone: 'hand', owner: foe });
   if (hand.length === 0) return;

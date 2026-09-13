@@ -48,13 +48,18 @@ function* momentum3Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResul
   yield { op: 'draw', count: 2 };
 }
 
-/** 自由重排协议 UI（chaos-1 同款：5 种非恒等排列布局选择） */
+/** 自由重排协议：引擎仍用 `action:order:XYZ` 编码（XYZ[i] = 摆到第 i 位的原协议下标）。
+ *  2026-09-13（用户清单 #10）：UI 不再弹 5 个布局按钮，而是**复用编译期的重排窗口**
+ *  （点击两张协议交换），完成后回填同一条 `action:order:XYZ` → 引擎零改动。 */
 const PERMS = ['021', '102', '120', '201', '210'];
 
-/** momentum-4 中：重排你的协议。（reorderProtocols；触发 after-self/any-rearrange 由引擎统一处理） */
+/** momentum-4 中：重排你的协议。（reorderProtocols；触发 after-self/any-rearrange 由引擎统一处理）
+ *  `rearrangeSide` = UI 提示：该选择请求由重排模态承接（render.ts 不渲染 order 按钮）。 */
 function* momentum4Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const aAns = yield {
-    kind: 'select-action', title: 'momentum-4：重排你的协议（选择新布局）', min: 1, max: 1, optional: false, candidates: [],
+    kind: 'select-action', title: 'momentum-4：重排你的协议', min: 1, max: 1, optional: false, candidates: [],
+    chooser: ctx.player,
+    rearrangeSide: ctx.player,
     actions: PERMS.map((p) => `action:order:${p}`),
   };
   if (aAns.selected.length === 0) return;

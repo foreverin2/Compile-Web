@@ -23,7 +23,9 @@ function coveredBySloth(s: GameState, owner: PlayerId, line: Line, uid: string):
   const idx = stack.findIndex((c) => c.uid === uid);
   if (idx === -1) return false;
   const above = stack[idx + 1];
-  return !!above && above.defId.startsWith('sloth-');
+  // 2026-09-13 用户实测修复：反面覆盖者不算「怠惰牌」——背面卡无协议属性、身份未公开，
+  // 故必须要求覆盖者 faceUp（同类条件的 unity-0 底一并修正）。
+  return !!above && above.faceUp && above.defId.startsWith('sloth-');
 }
 
 /** sloth-0 顶（valueModifier own-stack）：若此牌被1张怠惰牌覆盖，你在此链路的总阈值增加5。
