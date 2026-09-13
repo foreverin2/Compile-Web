@@ -91,7 +91,7 @@ export function checkInvariants(s: GameState, ctx: string): void {
 /** 建局：强制协议池 = 3代 15 套 → 随机草稿 → 随机先手 */
 export function setupGen3Game(seed: number): GameState {
   const r = rng(seed);
-  const s = createGame();
+  const s = createGame({ seed: String(seed) });
   s.draftPool = [...ALL_PROTOCOLS_3];
   let guard = 0;
   while (s.phase === 'draft' && guard++ < 100) {
