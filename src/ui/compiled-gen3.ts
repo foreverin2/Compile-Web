@@ -11,7 +11,7 @@
  *    与 `border-*`/`clip-path`/渐变/多层阴影实现，避免兼容性坑。
  *
  * 视觉语法（设计稿 §1.3，取自官方协议卡图意象）：
- *  嫉妒=玉青双涡旋+数据故障条+橙金锚点被吸入 ｜ 暴食=齿颚开合+碎屑内收 ｜ 贪婪=青玉底+品红硬币柱
+ *  嫉妒=玉青双涡旋+数据故障条+橙金锚点被吸入 ｜ 暴食=齿颚开合+碎屑内收 ｜ 贪婪=中心取物口+触手环抱攫取
  *  色欲=血红牵引链环卡+心形手爪徽标 ｜ 傲慢=金色光柱+几何塔+金冠落下 ｜ 怠惰=极慢涟漪+泥浆+余烬
  *  愤怒=猩红爆刺+青蓝残片+锯齿闪电 ｜ 伏击=冷蓝 9 宫格+阴影碎片+扫描线 ｜ 支点=杠杆+砝码+刻度环
  *  压制=4×4 阵列+桁架（周期整阵下压） ｜ 动量=弧轨+速度残影+蓄力环 ｜ 新星=旋转星芒+8 尖刺+碎块
@@ -225,41 +225,49 @@ function appendGluttony(layer: HTMLElement, defId: string, api: Gen3FxApi): void
 
 /* ============================ 3. 贪婪 greed ============================ */
 /**
- * 青玉底座脉动 + 品红硬币柱（6 枚，错相微浮动）；
- *  周期：柱体增高一级（.raise）→ 整柱散落重堆（.spill）+ 品红硬币飞散。
+ * 青玉底盘脉动 + **中心「取物口」+ 5 条青玉触手环抱中心**（吸盘沿线，错相蠕动）；
+ *  周期：触手收拢攫取（.clench，中心暗口亮起）→ 攫取后猛张（.lash，品红环闪）
+ *        + 9 枚品红碎粒 + **硬币自卡牌边框呈抛物线喷发**（4~9 枚）。
  *
- * 用户清单 #4（2026-09-13）：**硬币自卡牌边框偶尔呈抛物线喷发**（4~9 枚，起点取四边随机点、
- * 先升后落、带旋转，落点在卡面/卡外），比"中心一团碎屑"更有"财宝溢出"的读感。
+ * 2026-09-13 用户反馈：「硬币堆看起来一点都不像硬币」→ 常驻主体由"品红硬币柱"改为
+ * **环绕中心的触手**（贪婪的"攫取"语义；硬币只在周期爆发里作为"喷出的财货"出现，
+ * 并补了币缘/币面细节，见 .gen3-greed-shower-coin）。
  */
 function appendGreed(layer: HTMLElement, defId: string, api: Gen3FxApi): void {
   api.corners(layer, 'compiled-greed-corner');
   const h = host(layer, 'gen3-greed-host', api);
   h.appendChild(api.el('div', 'gen3-greed-base'));
-  const stack = api.el('div', 'gen3-greed-stack');
-  for (let i = 0; i < 6; i++) {
-    const coin = api.el('i', 'gen3-greed-coin');
-    coin.style.bottom = `${9 + i * 7.5}%`;
-    coin.style.left = `${30 + (i % 2) * 5}%`;
-    coin.style.width = `${34 + (i % 3) * 6}%`;
-    coin.style.animationDelay = `${-(i * 0.42).toFixed(2)}s`;
-    stack.appendChild(coin);
+  // 中心「取物口」：触手环抱的暗口 + 玉青外环 + 品红虚线内环（缓慢逆向转）
+  const maw = api.el('div', 'gen3-greed-maw');
+  maw.appendChild(api.el('i', 'gen3-greed-maw-core'));
+  maw.appendChild(api.el('i', 'gen3-greed-maw-ring outer'));
+  maw.appendChild(api.el('i', 'gen3-greed-maw-ring inner'));
+  h.appendChild(maw);
+  // 5 条触手：根部贴卡边、尖端指向中心，各自错相蠕动；吸盘沿体侧排布（品红）
+  const arms = api.el('div', 'gen3-greed-arms');
+  for (let i = 0; i < 5; i++) {
+    const arm = api.el('div', `gen3-greed-tentacle t${i}`);
+    arm.appendChild(api.el('i', 'gen3-greed-tentacle-body'));
+    for (let k = 0; k < 3; k++) arm.appendChild(api.el('i', `gen3-greed-sucker s${k}`));
+    arm.style.animationDelay = `${(-(i * 0.83)).toFixed(2)}s`;
+    arms.appendChild(arm);
   }
-  h.appendChild(stack);
+  h.appendChild(arms);
 
   const burst = (done: () => void): void => {
     if (!layer.isConnected) { done(); return; }
-    h.classList.remove('raise', 'spill');
+    h.classList.remove('clench', 'lash');
     api.reflow(h);
-    h.classList.add('raise');
+    h.classList.add('clench');
     api.timer(defId, () => {
       if (!layer.isConnected) { done(); return; }
-      h.classList.remove('raise');
-      h.classList.add('spill');
+      h.classList.remove('clench');
+      h.classList.add('lash');
       burstParticles(h, 'gen3-greed-bit', 9, api, 34, 700, defId);
       greedCoinShower(layer, h, api, defId);
       api.timer(defId, () => {
         if (!layer.isConnected) { done(); return; }
-        h.classList.remove('spill');
+        h.classList.remove('lash');
         h.querySelector('.gen3-greed-bit-wrap')?.remove();
         done();
       }, 760);
