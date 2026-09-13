@@ -41,4 +41,31 @@ describe('src/core 纯确定性守卫（G0）', () => {
     const bad = FILES.filter((f) => /\bMath\s*\.\s*random\s*\(/.test(read(f))).map(rel);
     expect(bad, `以下 core 文件调用了 Math.random（会破坏联机确定性）：${bad.join(', ')}`).toEqual([]);
   });
+
+  it('不得出现时钟调用（仅 trace.ts 豁免 Date.now）', () => {
+    const bad: string[] = [];
+    for (const f of FILES) {
+      const src = read(f);
+      // 一律只匹配"调用"形式：注释里提到 Date.now 不构成违规
+      if (rel(f) !== 'trace.ts' && /\bDate\s*\.\s*now\s*\(|\bnew\s+Date\s*\(/.test(src)) bad.push(rel(f));
+      if (/\bperformance\s*\.\s*now\s*\(/.test(src)) bad.push(rel(f));
+    }
+    expect(bad, `以下 core 文件使用了时钟（诊断请走 trace.ts）：${bad.join(', ')}`).toEqual([]);
+  });
+
+  it('不得自行取随机（种子由平台层提供）', () => {
+    const bad = FILES.filter((f) => /getRandomValues\s*\(|randomUUID\s*\(/.test(read(f))).map(rel);
+    expect(bad, `以下 core 文件自行取随机（应由 src/ui/match-seed.ts 提供种子）：${bad.join(', ')}`).toEqual([]);
+  });
+
+  it('不得引用 UI 层或 DOM（core 保持 DOM-free）', () => {
+    const bad: string[] = [];
+    for (const f of FILES) {
+      const src = read(f);
+      if (/from\s+['"][^'"]*\/ui\//.test(src)) bad.push(rel(f));
+      // 只匹配真实成员调用，避免命中注释（如 render 相关说明里的字面量）
+      if (/\bdocument\s*\.\s*\w+\s*\(|\bwindow\s*\.\s*\w+\s*\(/.test(src)) bad.push(rel(f));
+    }
+    expect(bad, `以下 core 文件引用了 UI/DOM：${bad.join(', ')}`).toEqual([]);
+  });
 });
