@@ -6,7 +6,7 @@ import { createGame, performDraftPick, performDraftUnpick, performDraftBan } fro
 import { executeAction } from './core/game';
 import { getCompilableLines } from './core/rules/compile';
 import { collectTriggers } from './core/effects/triggers';
-import { renderApp, renderDraft, resetUiState, syncCompiledFxLayers, syncSmokeOverlays, syncScanOverlays, syncPsychicParticles, syncPlagueMists, syncApathyMists, syncApathyMosaics, syncSpirit0Glows, syncSpirit1Cards, syncMetal0Glows, syncMetalPlates, syncMetal6Mans, syncMetal1LineGlows, syncMirror0BatteryGlows, syncClarity0BatteryGlows, syncIceFx, syncSmoke2LineGlows, syncFear0TriGlows, syncWarBlades, syncChainLayerPosition, type UiCallbacks } from './ui/render';
+import { renderApp, renderDraft, resetUiState, syncCompiledFxLayers, syncSmokeOverlays, syncScanOverlays, syncPsychicParticles, syncPlagueMists, syncApathyMists, syncApathyMosaics, syncSpirit0Glows, syncSpirit1Cards, syncMetal0Glows, syncMetalPlates, syncMetal6Mans, syncMetal1LineGlows, syncMirror0BatteryGlows, syncClarity0BatteryGlows, syncIceFx, syncSmoke2LineGlows, syncFear0TriGlows, syncWarBlades, syncChainLayerPosition, syncDiversity3Fx, type UiCallbacks } from './ui/render';
 import { openControlRearrangeModal, closeControlRearrangeModal, refreshControlRearrangeModal, isControlRearrangeOpen, orderChanged, orderToAction } from './ui/control-rearrange';
 import { renderHome, renderCoin, renderLibrary, renderRules, renderModeSelect } from './ui/home';
 import { resetControlIfHeld } from './core/rules/control';
@@ -679,6 +679,10 @@ const syncPersistentFx = (): void => {
     syncSmoke2LineGlows(state);
     syncFear0TriGlows(state);
     syncWarBlades(state);
+    // 2026-09-13（审计补漏）：多元3 卡面框光/能量槽流光的同步此前**只在 renderApp 里调用**
+    // → 滚动/缩放（以及胜利后不再渲染）时这两个 body 级 fixed 层会粘在陈旧视口坐标
+    // （与用户实测的"特效粘在屏幕上"同一类 bug）。
+    syncDiversity3Fx(state);
     syncGen3Persistent(state); // 3代（批次 D）常驻层随滚动/缩放重定位
     syncChainLayerPosition();
   });

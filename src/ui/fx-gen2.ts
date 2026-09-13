@@ -2145,8 +2145,9 @@ export function playUnityCompilePillar(player: PlayerId, line: number, unityUids
   const cell = document.querySelector<HTMLElement>(
     `.protocol-cell[data-player="${player}"][data-line="${line}"]`
   );
-  const targetBox = cell?.querySelector<HTMLElement>('.protocol-holder')
-    ?? document.querySelector<HTMLElement>('.protocol-holder');
+  // 2026-09-13（审计补漏）：**不要**回退到"文档里第一个 .protocol-holder"——那会把光柱锚到
+  // 某个毫不相干的协议上（P1 线 0）；协议格取不到就整体不播。
+  const targetBox = cell?.querySelector<HTMLElement>('.protocol-holder');
   if (!targetBox) return;
   const tr = targetBox.getBoundingClientRect();
   if (tr.width === 0) return;

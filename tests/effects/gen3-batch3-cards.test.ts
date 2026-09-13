@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { ChoiceRequest, GameState, Line, PlayerId } from '../../src/core/models/types';
 import { createGame, getLineValue } from '../../src/core/state/create';
 import { resolveMiddle, runStack, answerEffect } from '../../src/core/effects/resolve';
-import { collectTriggers, resolveTrigger, fireReactive } from '../../src/core/effects/triggers';
+import { collectTriggers, resolveTrigger, fireReactive, collectTriggerFor } from '../../src/core/effects/triggers';
 import { executeAction } from '../../src/core/game';
 import { makeCard, pickFirst, resolveAllChoices } from '../helpers';
 
@@ -366,6 +366,51 @@ describe('flexibility（柔性）', () => {
     expect(sel?.prompt?.kind).toBe('select');
     const uids = (sel?.prompt?.candidates ?? []).map((c) => c.uid);
     expect(uids, 'flexibility-1 的候选未包含自身（旧实现排除源卡）').toContain(src.uid);
+  });
+
+  // ——— 2026-09-13 全协议同类审计（用户要求"看看别的卡有没有同样的没修的 bug"）———
+
+  it('greed-2 底：回手候选含【自身】（卡文"回手1张你的牌"无"其他"，与 flexibility-1 同构）', () => {
+    const s = setup();
+    s.turnPlayer = 0;
+    s.step = 'start';
+    const src = placeSrc(s, 'greed-2', 0, 0);
+    placeSrc(s, 'fire-1', 0, 1); // 另一条线有顶卡 → 触发 cond 成立（自身仍是合法候选）
+    const t = collectTriggers(s, 'start').find((x) => x.defId === 'greed-2')!;
+    resolveTrigger(s, t);
+    runStack(s);
+    const sel = s.pendingEffects[s.pendingEffects.length - 1];
+    expect(sel?.prompt?.kind).toBe('select');
+    const uids = (sel?.prompt?.candidates ?? []).map((c) => c.uid);
+    expect(uids, 'greed-2 的候选未包含自身').toContain(src.uid);
+  });
+
+  it('pride-0 中（无控制权分支）：偏转候选含【自身】（持控制权分支文本写"其他牌"→ 排除自身）', () => {
+    const s = setup();
+    const src = placeSrc(s, 'pride-0', 0, 0);
+    s.control = -1; // 无控制权 → 「偏转1张你的牌」
+    resolveMiddle(s, 0, src);
+    runStack(s);
+    const sel = s.pendingEffects[s.pendingEffects.length - 1];
+    expect(sel?.prompt?.kind).toBe('select');
+    const uids = (sel?.prompt?.candidates ?? []).map((c) => c.uid);
+    expect(uids, 'pride-0（无控制权）的候选未包含自身').toContain(src.uid);
+  });
+
+  it('rigidity-4 底：覆盖者来自【偏转】（pendingShift）也应触发抽1（与 unity-0 同类，旧版只查 pendingPlay）', () => {
+    const s = setup();
+    s.turnPlayer = 0;
+    const src = placeSrc(s, 'rigidity-4', 0, 0);
+    s.players[0].deck = [makeCard('fire-1', 0, 'deck', false)];
+    // 一张反面牌被"偏转"到本线（浮空中、line 已指向目标线，尚未落地）
+    const incoming = makeCard('light-2', 1, 'float', false, 0, 0);
+    s.pendingShift.push({ card: incoming, beforeCoveredDone: false });
+    // 走引擎真实路径：偏转落地前收集 before-covered 触发（completeShift 同款调用）
+    const t = collectTriggerFor(s, src, 'before-covered');
+    expect(t, 'rigidity-4 的 before-covered 触发未被收集').toBeTruthy();
+    resolveTrigger(s, t!);
+    runStack(s);
+    expect(s.players[0].hand).toHaveLength(1); // 抽了 1 张（旧实现：pendingPlay 为空 → 不抽）
   });
 });
 

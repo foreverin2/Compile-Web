@@ -97,7 +97,12 @@ export function createCtx(s: GameState, player: PlayerId, card: Card): EffectCtx
   return { s, player, card, candidates: (filter) => listCandidates(s, filter) };
 }
 
-/** 发语义事件（特效层订阅；payload 含 protocol 供协议命名空间分发） */
+/** 发语义事件（特效层订阅；payload 含 protocol 供协议命名空间分发）。
+ *  注意两条约定（2026-09-13 审计补充，避免踩坑）：
+ *  ① base 字段是**事件时刻的现值**（zone/faceUp/line/pos 都可能是"已变更后"的状态，例如删除时
+ *     zone=trash、faceUp 被强制 true；回手时 line/pos 已清空）→ FX 层不要假设它是"玩家看到的状态"；
+ *  ② `...extra` 在 base **之后**展开 → extra 可覆盖 base（`card:deleted` 就是靠这个把删除前的
+ *     line/pos 回填进去的，新星0 整线删除的排序/收尾环依赖它，不要改动展开顺序）。 */
 export function emitCardEvent(
   s: GameState,
   type: string,

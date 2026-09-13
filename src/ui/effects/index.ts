@@ -3,7 +3,7 @@ import { mountShatter } from '../fx/delete-shatter';
 import { mountCut } from '../fx/discard-cut';
 import { flashRigidity7Guard, noteGreed1Compile } from '../gen3-control';
 import { gen3FulcrumSwapFx, gen3ProtocolSwapFx } from '../fx-gen3-swap';
-import { gen3DiscardFx, gen3DeleteFx, gen3FlipFx, gen3ShiftFx, gen3DrawFx, gen3FaceDownFx, gen3CompiledFx, gen3DeckDiscardFx, gen3ReturnFx, gen3PlayFx, type Gen3CardFxApi, type Gen3CardPayload, type Gen3DrawPayload, type Gen3CompiledPayload, type Gen3DeckDiscardPayload } from '../fx-gen3';
+import { gen3DiscardFx, gen3DeleteFx, gen3FlipFx, gen3ShiftFx, gen3DrawFx, gen3FaceDownFx, gen3CompiledFx, gen3DeckDiscardFx, gen3ReturnFx, gen3PlayFx, gen3SkipFx, type Gen3CardFxApi, type Gen3CardPayload, type Gen3DrawPayload, type Gen3CompiledPayload, type Gen3DeckDiscardPayload } from '../fx-gen3';
 import { buildTornadoFx } from '../fx-tornado';
 import { cardImgSrc, protocolImgSrc } from '../../data/demo';
 import { playPeaceDiscardExtra, PEACE_PRE_MS, playChaosDiscardExtra, CHAOS_DISCARD_PRE_MS, playIceShiftBridge, playSmokePlayFx, playFearShiftExtra, playCorruptionDiscardExtra, playCorruptionDeleteExtra, playCorruptionFlipExtra, CORRUPT_DISCARD_PRE_MS, playWarDiscardExtra, playWarFlipExtra, playCourageDiscardExtra, playCourageDeleteExtra, playCourageShiftExtra, playTimeDiscardExtra, playAssimDiscardExtra, playAssimDeckRipple, ASSIM_DISCARD_PRE_MS, playDiversityDiscardExtra, DIVERSITY_DISCARD_PRE_MS } from '../fx-gen2';
@@ -2056,6 +2056,12 @@ export function initEffects(): () => void {
         // 对手多 → 计数条抖动 + 玉青故障闪 3 帧；条件不成立 → 灰色计数快速淡出。
         // 2026-09-13 用户清单 #2：此前分发器没有 card:played 分支（落到 default）→ 该半段特效从未播过。
         gen3PlayFx(node, payload as unknown as Gen3CardPayload, e.state, GEN3_CARD_FX_API);
+        break;
+      case 'card:trigger-skipped':
+      case 'card:effect-skipped':
+        // 3代 空动作反馈（Q5）：玩家跳过可选触发（advance）/ 跳过可选选择（点"跳过"）时 →
+        // 贪婪爪空抓 / 傲慢指针变灰下坠 / 暴食空咬（只做点名的三个协议，其余不加层以免噪音）
+        if (node) gen3SkipFx(node, payload as unknown as Gen3CardPayload, GEN3_CARD_FX_API);
         break;
       case 'card:given':
         // love 协议给牌/收牌（love-1 底给牌、love-3 给牌与随机拿牌——give/takeRandom op 均发

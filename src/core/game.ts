@@ -15,7 +15,8 @@ import {
 } from './rules/restrictions';
 import { collectTriggers, fireReactive, resolveTrigger } from './effects/triggers';
 import { answerEffect, runStack } from './effects/resolve';
-import { listCandidates, nextEffectId, shouldBlockDraw } from './effects/context';
+import { listCandidates, nextEffectId, shouldBlockDraw, emitCardEvent } from './effects/context';
+import { findCard } from './effects/context';
 import { pushLog } from './log';
 
 export type ActionKind = 'play' | 'refresh' | 'compile' | 'advance' | 'effect-choice' | 'resolve-trigger' | 'clear-cache' | 'rearrange-protocols';
@@ -217,9 +218,15 @@ export function executeAction(s: GameState, player: PlayerId, kind: ActionKind, 
       }
       if (s.step === 'end' || s.step === 'start') {
         const k: 'end' | 'start' = s.step;
-        if (collectTriggers(s, k).some((t) => !t.optional)) {
+        const pending = collectTriggers(s, k);
+        if (pending.some((t) => !t.optional)) {
           throw new Error('mandatory trigger must be resolved');
         }
+        // 3代 特效（Q5「空动作反馈」，2026-09-13 批次 F 追加）：玩家**不结算可选触发**直接推进时，
+        // 为每个被放弃的可选触发放一条语义事件 `card:trigger-skipped`。UI 据此播"空动作"反馈
+        // （贪婪2 底的青玉爪空抓一下、傲慢金色指针变灰下坠、暴食空咬等）——否则玩家完全看不出
+        // "这张卡的触发被跳过了"。只发**可选**触发：必选触发在上面的守卫里已被拦下。
+        for (const t of pending) emitTriggerSkipped(s, t);
       }
       if (s.step === 'check-cache' && !shouldSkipCacheCheck(s, player)) {
         // 防御路径（正常手牌>5 走 clear-cache 自选弃牌，advance 被拦截）；真弃了牌才触发
@@ -244,6 +251,14 @@ export function executeAction(s: GameState, player: PlayerId, kind: ActionKind, 
 
 export function getWinner(s: GameState): PlayerId | null {
   return s.winner;
+}
+
+/** 可选触发被跳过 → 语义事件（Q5 空动作反馈；见 advance 分支）。
+ *  payload 由 emitCardEvent 补齐（uid/defId/protocol/owner/line/pos/faceUp），额外带 step。 */
+function emitTriggerSkipped(s: GameState, t: { cardUid: string; defId: string }): void {
+  const card = findCard(s, t.cardUid);
+  if (!card) return;
+  emitCardEvent(s, 'card:trigger-skipped', card, { step: s.step });
 }
 
 /** 系统效果生成器：清理缓存——玩家自选弃牌，直至手牌降到 5 张；弃完触发 after-clear-cache（speed-1）。

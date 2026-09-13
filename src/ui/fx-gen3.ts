@@ -70,6 +70,15 @@ export const GEN3_CARD_FX_COVER: Record<'discard' | 'delete' | 'flip' | 'shift' 
   compiled: ['greed', 'momentum'],
 };
 
+/** 3 代 15 套协议（仅用于文档/守卫对照；"空动作反馈"只做点名的三个协议 → `GEN3_SKIP_BESPOKE`） */
+const GEN3_PROTOCOLS_FX = [
+  'envy', 'gluttony', 'greed', 'lust', 'pride', 'sloth', 'wrath', 'ambush',
+  'fulcrum', 'overwhelm', 'momentum', 'nova', 'inertia', 'rigidity', 'flexibility',
+];
+
+/** 可选触发/可选选择被跳过时**有专属空动作**的协议（设计稿 §7 Q5：贪婪爪空抓 / 傲慢指针变灰下坠 / 暴食空咬） */
+export const GEN3_SKIP_BESPOKE = ['greed', 'pride', 'gluttony'];
+
 /* ============================== 共享工具 ============================== */
 
 function geom(node: HTMLElement): { rect: DOMRect; cw: boolean; ccw: boolean } | null {
@@ -1158,6 +1167,80 @@ export function gen3PlayFx(
     box.appendChild(api.el('i', 'g3-envy-play-hint', '条件未满足'));
   }
   window.setTimeout(() => layer.remove(), more ? 1000 : 620);
+  return true;
+}
+
+/* ====================== 空动作反馈（可选触发被跳过，Q5） ====================== */
+
+/**
+ * 3 代「空动作反馈」：玩家**跳过可选选择**时播放（引擎 `card:effect-skipped` / `card:trigger-skipped`）。
+ *
+ * 设计稿 §7 Q5 明确要求"空动作也要有反馈"（贪婪爪空抓 / 傲慢指针变灰下坠 / 暴食空咬 / 嫉妒计数失败变灰）。
+ * 之前这条无法实现——引擎对"点了跳过"不发任何事件。批次 F 补上事件后，这里只给**点名的三个协议**
+ * 做专属空动作（贪婪抓空 / 傲慢指针下坠 / 暴食空咬），其余协议**不加层**（避免每次跳过都蹦提示 = 噪音）。
+ */
+export function gen3SkipFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3CardFxApi): boolean {
+  const proto = (p.defId ?? '').split('-')[0];
+  if (!GEN3_SKIP_BESPOKE.includes(proto)) return false;
+  const g = geom(node);
+  if (!g) return false;
+  const { rect } = g;
+  const layer = bodyLayer('g3-skip-layer', api.extraZ);
+  // 通用衬底：卡面一圈灰脉冲 + 底部「未触发」小标（让"空动作"一眼可读）
+  const pulse = api.el('i', 'g3-skip-pulse');
+  pulse.style.left = `${rect.left}px`;
+  pulse.style.top = `${rect.top}px`;
+  pulse.style.width = `${rect.width}px`;
+  pulse.style.height = `${rect.height}px`;
+  layer.appendChild(pulse);
+  const chip = api.el('i', 'g3-skip-chip', '未触发');
+  chip.style.left = `${rect.left + rect.width / 2}px`;
+  chip.style.top = `${rect.bottom + 4}px`;
+  layer.appendChild(chip);
+
+  if (proto === 'greed') {
+    // 青玉抓取爪"空抓一下"：3 指自卡面探出 → 什么都没抓到 → 收回（指间落灰）
+    const claw = api.el('div', 'g3-skip-claw');
+    claw.style.left = `${rect.left + rect.width * 0.18}px`;
+    claw.style.top = `${rect.top + rect.height * 0.26}px`;
+    claw.style.width = `${rect.width * 0.64}px`;
+    claw.style.height = `${rect.height * 0.5}px`;
+    for (let i = 0; i < 3; i++) claw.appendChild(api.el('i', `g3-skip-finger f${i}`));
+    layer.appendChild(claw);
+    for (let i = 0; i < 4; i++) {
+      const dust = api.el('i', 'g3-skip-dust');
+      dust.style.left = `${rect.left + rect.width * (0.24 + i * 0.17)}px`;
+      dust.style.top = `${rect.top + rect.height * 0.72}px`;
+      dust.style.setProperty('--dx', `${api.rnd(-14, 14).toFixed(1)}px`);
+      dust.style.animationDelay = `${(140 + i * 40).toFixed(0)}ms`;
+      layer.appendChild(dust);
+    }
+  } else if (proto === 'pride') {
+    // 金色指针：自卡面探出 → 指针变灰 → 下坠（"这次没升起来"）
+    const pointer = api.el('div', 'g3-skip-pointer');
+    pointer.style.left = `${rect.left + rect.width * 0.42}px`;
+    pointer.style.top = `${rect.top + rect.height * 0.3}px`;
+    pointer.style.width = `${rect.width * 0.16}px`;
+    pointer.style.height = `${rect.height * 0.46}px`;
+    pointer.appendChild(api.el('i', 'g3-skip-pointer-needle'));
+    layer.appendChild(pointer);
+  } else if (proto === 'gluttony') {
+    // 齿颚空咬：上下颚合拢咬了个空 → 张开（无碎屑、无咬合闪光）
+    for (const side of ['top', 'bottom'] as const) {
+      const jaw = api.el('div', `g3-skip-jaw ${side}`);
+      jaw.style.left = `${rect.left - 4}px`;
+      jaw.style.top = `${rect.top}px`;
+      jaw.style.width = `${rect.width + 8}px`;
+      jaw.style.height = `${rect.height}px`;
+      for (let i = 0; i < 5; i++) {
+        const tooth = api.el('i', 'g3-skip-tooth');
+        tooth.style.left = `${6 + i * 18.5}%`;
+        jaw.appendChild(tooth);
+      }
+      layer.appendChild(jaw);
+    }
+  }
+  window.setTimeout(() => layer.remove(), 950);
   return true;
 }
 

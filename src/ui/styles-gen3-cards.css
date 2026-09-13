@@ -1149,3 +1149,87 @@
   20% { opacity: 1; }
   100% { opacity: 0; transform: translate(var(--dx), var(--dy)) scale(0.8) rotate(140deg); }
 }
+
+/* ============================================================ 空动作反馈（Q5：可选触发被跳过）
+ * 引擎 card:trigger-skipped → 贪婪爪空抓 / 傲慢指针变灰下坠 / 暴食空咬 / 其余 3 代协议通用灰脉冲。
+ * 全部 ≤0.95s 瞬态、不遮卡文（贴边或半透明）。 */
+.g3-skip-layer { position: fixed; left: 0; top: 0; width: 100vw; height: 100vh; pointer-events: none; }
+.g3-skip-pulse {
+  position: absolute; border-radius: 8px; pointer-events: none;
+  border: 2px solid rgba(180, 186, 196, 0.7);
+  box-shadow: inset 0 0 14px rgba(120, 126, 136, 0.28), 0 0 12px rgba(0, 0, 0, 0.45);
+  animation: g3-skip-pulse 0.42s ease-out both;
+}
+@keyframes g3-skip-pulse { 0% { opacity: 0.95; transform: scale(1); } 100% { opacity: 0; transform: scale(1.06); } }
+.g3-skip-chip {
+  position: absolute; transform: translate(-50%, 0);
+  padding: 1px 6px; border-radius: 4px; pointer-events: none; white-space: nowrap;
+  font: 700 11px/1.6 ui-monospace, monospace; color: #c8ccd4;
+  background: rgba(20, 22, 26, 0.9); border: 1px solid rgba(150, 156, 166, 0.75);
+  box-shadow: 0 0 8px rgba(0, 0, 0, 0.6);
+  animation: g3-skip-chip 0.85s ease-out both;
+}
+@keyframes g3-skip-chip {
+  0% { opacity: 0; transform: translate(-50%, -4px); }
+  20% { opacity: 1; transform: translate(-50%, 0); }
+  72% { opacity: 1; }
+  100% { opacity: 0; transform: translate(-50%, 4px); }
+}
+/* 贪婪：青玉爪"空抓一下"（伸出 → 抓空 → 收回） */
+.g3-skip-claw { position: absolute; pointer-events: none; }
+.g3-skip-finger {
+  position: absolute; bottom: 0; width: 15%; height: 100%;
+  border-radius: 44% 44% 8px 8px / 62% 62% 8px 8px;
+  background: linear-gradient(180deg, rgba(126, 240, 230, 0.85) 0%, rgba(31, 143, 138, 0.7) 58%, rgba(13, 63, 60, 0.6) 100%);
+  box-shadow: inset 0 -3px 5px rgba(6, 32, 30, 0.6), 0 0 10px rgba(31, 143, 138, 0.5);
+  opacity: 0;
+  animation: g3-skip-finger 0.5s cubic-bezier(0.3, 0.9, 0.4, 1) both;
+}
+.g3-skip-finger.f0 { left: 8%; --r: -14deg; }
+.g3-skip-finger.f1 { left: 43%; height: 112%; --r: 0deg; animation-delay: 0.04s; }
+.g3-skip-finger.f2 { right: 8%; --r: 14deg; animation-delay: 0.08s; }
+@keyframes g3-skip-finger {
+  0% { opacity: 0; transform: rotate(var(--r, 0deg)) translateY(52%) scaleY(0.5); }
+  26% { opacity: 0.95; }
+  46% { transform: rotate(var(--r, 0deg)) translateY(-4%) scaleY(1.04); }
+  62% { transform: rotate(var(--r, 0deg)) translateY(-4%) scale(0.96); opacity: 0.9; }
+  100% { transform: rotate(var(--r, 0deg)) translateY(62%) scaleY(0.7); opacity: 0; }
+}
+.g3-skip-dust {
+  position: absolute; width: 5px; height: 5px; border-radius: 50%; pointer-events: none;
+  background: radial-gradient(circle, rgba(126, 240, 230, 0.9), rgba(31, 143, 138, 0.35) 60%, rgba(31, 143, 138, 0) 100%);
+  animation: g3-skip-dust 0.52s ease-in both;
+}
+@keyframes g3-skip-dust {
+  0% { opacity: 0; transform: translate(0, -6px) scale(0.6); }
+  26% { opacity: 0.9; }
+  100% { opacity: 0; transform: translate(var(--dx, 0px), 12px) scale(0.8); }
+}
+/* 傲慢：金色指针探出 → 变灰 → 下坠 */
+.g3-skip-pointer { position: absolute; pointer-events: none; }
+.g3-skip-pointer-needle {
+  position: absolute; left: 50%; top: 0; width: 6px; height: 100%; margin-left: -3px; border-radius: 3px;
+  background: linear-gradient(180deg, #ffe9a8 0%, #d9a441 46%, #a3762a 100%);
+  box-shadow: 0 0 10px rgba(217, 164, 65, 0.8);
+  transform-origin: 50% 100%;
+  animation: g3-skip-needle 0.72s cubic-bezier(0.4, 0.1, 0.7, 0.3) both;
+}
+@keyframes g3-skip-needle {
+  0% { opacity: 0; transform: translateY(30%) scaleY(0.4) rotate(0deg); }
+  24% { opacity: 1; transform: translateY(0) scaleY(1) rotate(0deg); filter: grayscale(0); }
+  52% { transform: translateY(0) scaleY(1) rotate(-6deg); filter: grayscale(0.2); }
+  100% { opacity: 0; transform: translateY(58%) scaleY(1) rotate(74deg); filter: grayscale(1) brightness(0.7); }
+}
+/* 暴食：上下颚空咬（合拢 → 张开，无碎屑） */
+.g3-skip-jaw { position: absolute; height: 26%; pointer-events: none; }
+.g3-skip-jaw.top { top: 0; animation: g3-skip-jaw-top 0.4s cubic-bezier(0.5, 0, 0.75, 0) both; }
+.g3-skip-jaw.bottom { top: auto; bottom: 0; animation: g3-skip-jaw-bottom 0.4s cubic-bezier(0.5, 0, 0.75, 0) both; }
+@keyframes g3-skip-jaw-top { 0% { transform: translateY(-100%); } 46% { transform: translateY(0); } 100% { transform: translateY(-100%); } }
+@keyframes g3-skip-jaw-bottom { 0% { transform: translateY(100%); } 46% { transform: translateY(0); } 100% { transform: translateY(100%); } }
+.g3-skip-tooth {
+  position: absolute; top: 0; width: 9%; height: 100%;
+  background: linear-gradient(180deg, rgba(255, 248, 220, 0.85), rgba(201, 162, 39, 0.55));
+  clip-path: polygon(0% 0%, 100% 0%, 50% 100%);
+  opacity: 0.85;
+}
+.g3-skip-jaw.bottom .g3-skip-tooth { top: auto; bottom: 0; clip-path: polygon(0% 100%, 100% 100%, 50% 0%); }

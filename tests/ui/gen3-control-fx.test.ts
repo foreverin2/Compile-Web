@@ -157,4 +157,21 @@ describe('批次 D 守卫：控制权族 + 常驻层', () => {
       expect(read(f), `${f} 的 setControl 未带效果源 defId`).toMatch(/setControl\(ctx\.s,[^)]*ctx\.card\.defId\)/);
     }
   });
+
+  it('全协议同类审计修正（2026-09-13）：常驻子件无条件创建 + 归属/滚动路径补漏', () => {
+    // ① 常驻层"子件只在 rect 非空时创建"= 重建帧取不到 rect 就永远缺失（与"滚动后特效消失"同类）。
+    //    三个 sync 的源卡/覆盖者相关子件必须无条件 append，位置交给每帧的 place*/守卫。
+    expect(controlTs, 'envy0 的 thread/mark/borrow 仍按 rect 条件创建').not.toMatch(/if \(sr\) \{\s*rec\.node\.appendChild\(el\('div', 'g3sync-envy0-thread'\)\)/);
+    expect(controlTs, 'sloth0 的覆盖者连线仍按 rect 条件创建').not.toMatch(/if \(cr\) rec\.node\.appendChild\(el\('i', 'g3sync-sloth0-link'\)\)/);
+    expect(controlTs, 'inertia0 的栅格仍按 rect 条件创建').not.toMatch(/if \(!r\) continue;\s*const grid = el\('i', 'g3sync-inertia0-grid'\)/);
+    // ② 多元3 常驻层（body 级 fixed）此前只在 renderApp 里同步 → 滚动/缩放时粘在旧坐标
+    expect(mainTs, 'syncDiversity3Fx 未接进滚动/缩放重定位').toMatch(/syncWarBlades\(state\);[\s\S]{0,400}syncDiversity3Fx\(state\);/);
+    // ③ 联合1 编译光柱不得回退到"文档里第一个 .protocol-holder"（会锚到不相干的协议）
+    expect(read('ui/fx-gen2.ts'), 'fx-gen2 仍有 .protocol-holder 全局回退').not.toContain("?? document.querySelector<HTMLElement>('.protocol-holder')");
+  });
+
+  it('rigidity-4 的覆盖者既可能来自打出（pendingPlay）也可能来自偏转（pendingShift）', () => {
+    expect(read('core/effects/cards/rigidity.ts')).toMatch(/pendingPlay\[0\]\?\.card \?\? ctx\.s\.pendingShift\[0\]\?\.card/);
+    expect(read('core/effects/cards/unity.ts')).toMatch(/pendingPlay\[0\]\?\.card \?\? ctx\.s\.pendingShift\[0\]\?\.card/);
+  });
 });

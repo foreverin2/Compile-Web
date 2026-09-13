@@ -64,10 +64,12 @@ function* greed2Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> 
   if (ans.selected.length > 0) yield { op: 'discard', uid: ans.selected[0] };
 }
 
-/** greed-2 底（start，无 top 仅顶卡）：开始：你可以回手1张你的牌（自己场上未覆盖顶卡——含正面/反面）。 */
+/** greed-2 底（start，无 top 仅顶卡）：开始：你可以回手1张你的牌（自己场上未覆盖顶卡——含正面/反面）。
+ *  2026-09-13（用户清单 #15 同类审计）：文本「你的1张牌」无「其他」→ 与 flexible-1 同构，
+ *  按用户裁定**含此牌自身**（可以把自己回手）。 */
 function* greed2Start(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
-  const cand = ctx.candidates({ zone: 'field', owner: ctx.player });
-  const ans = yield { kind: 'select', title: 'greed-2（开始）：你可以回手1张你的牌', min: 1, max: 1, optional: true, candidates: cand };
+  const cand = ctx.candidates({ zone: 'field', owner: ctx.player, includeSelf: true });
+  const ans = yield { kind: 'select', title: 'greed-2（开始）：你可以回手1张你的牌（含此牌自身）', min: 1, max: 1, optional: true, candidates: cand };
   if (ans.selected.length > 0) yield { op: 'return', uid: ans.selected[0] };
 }
 

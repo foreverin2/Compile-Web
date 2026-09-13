@@ -167,11 +167,13 @@ export function syncEnvy0Absorb(s: GameState): string[] {
       if (rec.sig !== sig) {
         rec.sig = sig;
         rec.node.textContent = '';
-        if (sr) {
-          rec.node.appendChild(el('div', 'g3sync-envy0-thread'));
-          rec.node.appendChild(el('i', 'g3sync-envy0-mark'));
-          rec.node.appendChild(el('i', 'g3sync-envy0-borrow'));
-        }
+        // 2026-09-13（审计补漏）：三个"源卡相关"子件**无条件创建**——旧版写成 `if (sr) {...}`，
+        // 若重建那一帧源卡 rect 取不到（刚重渲染/卡面图未加载）则这些节点永远不会出现，
+        // 且签名不再变化 → 之后也无法补建（与"滚动后特效消失"同一类静默失效）。
+        // 位置由 placeEnvy0 每帧算（它对 sr 为空已有守卫）。
+        rec.node.appendChild(el('div', 'g3sync-envy0-thread'));
+        rec.node.appendChild(el('i', 'g3sync-envy0-mark'));
+        rec.node.appendChild(el('i', 'g3sync-envy0-borrow'));
         rec.node.appendChild(el('i', 'g3sync-envy0-glow'));
         rec.node.appendChild(el('i', 'g3sync-badge envy', `+${bestV}`));
         const ticks = el('div', 'g3sync-envy0-ticks');
@@ -344,7 +346,9 @@ export function syncSloth0Bonus(s: GameState): string[] {
           rec.node.textContent = '';
           rec.node.appendChild(el('i', 'g3sync-sloth0-glow'));
           rec.node.appendChild(el('i', 'g3sync-sloth0-ripple'));
-          if (cr) rec.node.appendChild(el('i', 'g3sync-sloth0-link'));
+          // 2026-09-13（审计补漏）：覆盖者连线**无条件创建**（旧版 `if (cr)` → 重建帧取不到
+          // 覆盖者 rect 时该连线永不出现且无法补建）；位置每帧算，其中已对 cr 为空做了守卫。
+          rec.node.appendChild(el('i', 'g3sync-sloth0-link'));
           rec.node.appendChild(el('i', 'g3sync-badge sloth', '+5'));
         }
         place(rec.node.querySelector<HTMLElement>('.g3sync-sloth0-glow'), sr, 2);
@@ -391,30 +395,22 @@ export function syncInertiaNullify(s: GameState): string[] {
       if (rec.sig !== sig) {
         rec.sig = sig;
         rec.node.textContent = '';
+        // 2026-09-13（审计补漏）：栅格/自身光框**无条件创建**（旧版按 rect 是否为 null 决定是否创建
+        // → 重建帧取不到 rect 的卡永远没有栅格，且签名不再变化无法补建）。位置统一在下面每帧算。
         for (const c of cards) {
-          const node = cardNode(c.uid);
-          const r = node ? rectOf(node) : null;
-          if (!r) continue;
           const grid = el('i', 'g3sync-inertia0-grid');
           grid.dataset.band = c.uid;
-          place(grid, r, 1);
           rec.node.appendChild(grid);
         }
-        const self = stackOf(s, nulled, line).find((c) => c.defId === 'inertia-0');
-        const sr = self ? (cardNode(self.uid)?.getBoundingClientRect() ?? null) : null;
-        const slot = slotNode(nulled, line);
-        if (sr && slot) {
-          const ring = el('i', 'g3sync-inertia0-field');
-          place(ring, sr, 4);
-          rec.node.appendChild(ring);
-        }
-      } else {
-        for (const c of cards) {
-          const node = cardNode(c.uid);
-          const r = node ? rectOf(node) : null;
-          const grid = rec.node.querySelector<HTMLElement>(`[data-band="${c.uid}"]`);
-          if (grid && r) place(grid, r, 1);
-        }
+        rec.node.appendChild(el('i', 'g3sync-inertia0-field'));
+      }
+      for (const c of cards) {
+        const node = cardNode(c.uid);
+        const r = node ? rectOf(node) : null;
+        const grid = rec.node.querySelector<HTMLElement>(`[data-band="${c.uid}"]`);
+        if (grid && r) place(grid, r, 1);
+      }
+      {
         const self = stackOf(s, nulled, line).find((c) => c.defId === 'inertia-0');
         const sr = self ? (cardNode(self.uid)?.getBoundingClientRect() ?? null) : null;
         const ring = rec.node.querySelector<HTMLElement>('.g3sync-inertia0-field');
@@ -434,29 +430,21 @@ export function syncInertiaNullify(s: GameState): string[] {
       if (rec.sig !== sig) {
         rec.sig = sig;
         rec.node.textContent = '';
+        // 2026-09-13（审计补漏）：同上——条纹与自身下缘粗灰边无条件创建，位置每帧算
         for (const c of others) {
-          const node = cardNode(c.uid);
-          const r = node ? rectOf(node) : null;
-          if (!r) continue;
           const stripe = el('i', 'g3sync-inertia1-stripe');
           stripe.dataset.band = c.uid;
-          place(stripe, r, 1);
           rec.node.appendChild(stripe);
         }
-        const self = cardNode(top.uid);
-        const sr = self ? rectOf(self) : null;
-        if (sr) {
-          const edge = el('i', 'g3sync-inertia1-edge');
-          place(edge, sr, 3);
-          rec.node.appendChild(edge);
-        }
-      } else {
-        for (const c of others) {
-          const node = cardNode(c.uid);
-          const r = node ? rectOf(node) : null;
-          const stripe = rec.node.querySelector<HTMLElement>(`[data-band="${c.uid}"]`);
-          if (stripe && r) place(stripe, r, 1);
-        }
+        rec.node.appendChild(el('i', 'g3sync-inertia1-edge'));
+      }
+      for (const c of others) {
+        const node = cardNode(c.uid);
+        const r = node ? rectOf(node) : null;
+        const stripe = rec.node.querySelector<HTMLElement>(`[data-band="${c.uid}"]`);
+        if (stripe && r) place(stripe, r, 1);
+      }
+      {
         const self = cardNode(top.uid);
         const sr = self ? rectOf(self) : null;
         const edge = rec.node.querySelector<HTMLElement>('.g3sync-inertia1-edge');

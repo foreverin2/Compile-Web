@@ -165,6 +165,14 @@ export function answerEffect(s: GameState, promptId: string, selected: string[])
   }
   pe.prompt = null;
   pe.lastAnswer = { selected };
+  // 3代 特效（Q5「空动作反馈」，2026-09-13 批次 F 追加）：**可选**选择被玩家跳过（空应答）→
+  // 语义事件 `card:effect-skipped`（源卡 = 效果源卡）。UI 据此播"空动作"（贪婪2 底空抓 /
+  // 傲慢指针变灰下坠 / 暴食空咬）——否则"你点了跳过"在画面上完全不可见。
+  // 注意：仅 optional 且空应答才发（必选请求的空应答在上面的守卫里已被拒绝）。
+  if (req.optional && selected.length === 0 && pe.sourceUid) {
+    const srcCard = findCard(s, pe.sourceUid);
+    if (srcCard) emitCardEvent(s, 'card:effect-skipped', srcCard, { promptTitle: req.title });
+  }
   // 全量追踪：记录选择请求的完整信息（kind/标题/范围/候选）+ 实际应答
   traceAt(
     s,

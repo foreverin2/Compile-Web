@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { gameBus } from '../../src/core/events/bus';
 import { executeAction, getLegalActions } from '../../src/core/game';
 import { collectTriggers, resolveTrigger } from '../../src/core/effects/triggers';
-import { runStack } from '../../src/core/effects/resolve';
+import { runStack, answerEffect } from '../../src/core/effects/resolve';
 import { makeCard, draftFireP1, draftLightP1, draftWaterP1, draftLifeP1, draftLoveP1, advanceToStep, resolveAllChoices, pickFirst } from '../helpers';
 import type { GameState, Line, PlayerId } from '../../src/core/models/types';
 import { createGame } from '../../src/core/state/create';
@@ -348,8 +348,7 @@ describe('FX trigger protocol payload', () => {
     expect(payload!.line).toBe(1);
   });
 
-  it('card:played 打出瞬间载荷带 defId/protocol/line（嫉妒4 E4 计数对比特效钩子）', () => {
-    const s = setup3();
+  it('card:played 打出瞬间载荷带 defId/protocol/line（嫉妒4 E4 计数对比特效钩子）', () => {    const s = setup3();
     s.turnPlayer = 0;
     s.players[0].protocols[2] = { defId: 'envy', compiled: false }; // 正面打入要求协议匹配
     const played = makeCard('envy-4', 0, 'hand');
@@ -366,5 +365,70 @@ describe('FX trigger protocol payload', () => {
     expect(seen[0].protocol).toBe('envy');
     expect(seen[0].line).toBe(2);
     expect(seen[0].faceUp).toBe(true);
+  });
+
+  it('可选选择被跳过 → card:effect-skipped（Q5 空动作反馈：贪婪2 底空抓）', () => {
+    const s = setup3();
+    s.turnPlayer = 0;
+    s.step = 'start';
+    const src = makeCard('greed-2', 0, 'field', true, 0, 0);
+    s.players[0].stacks[0] = [src];
+    s.players[0].stacks[1] = [makeCard('light-3', 0, 'field', true, 1, 0)]; // 让触发 cond 成立
+    const seen: { defId?: string; protocol?: string; uid?: string; promptTitle?: string }[] = [];
+    const off = gameBus.subscribe((e) => {
+      if (e.type !== 'card:effect-skipped') return;
+      seen.push(e.payload as { defId?: string; protocol?: string; uid?: string; promptTitle?: string });
+    });
+    // 触发按钮（greed-2 底注册为必点按钮）→ 效果内的"你可以回手1张你的牌"选「跳过」
+    const t = collectTriggers(s, 'start').find((x) => x.defId === 'greed-2')!;
+    resolveTrigger(s, t);
+    runStack(s);
+    const top = s.pendingEffects[s.pendingEffects.length - 1];
+    expect(top?.prompt?.optional).toBe(true);
+    answerEffect(s, top.id, []); // 跳过
+    off();
+    expect(seen).toHaveLength(1);
+    expect(seen[0].defId).toBe('greed-2');
+    expect(seen[0].protocol).toBe('greed');
+    expect(seen[0].uid).toBe(src.uid); // FX 层靠它定位"空抓"的源卡
+    expect(seen[0].promptTitle).toContain('回手1张你的牌');
+    expect(s.players[0].stacks[1]).toHaveLength(1); // 没回手：牌还在场上
+  });
+
+  it('可选触发被跳过（未结算直接推进）→ card:trigger-skipped（Q5 空动作反馈）', () => {
+    const s = setup3();
+    s.turnPlayer = 0;
+    s.step = 'end';
+    // diversity-0 底注册为 optional:true 的 end 触发 → 玩家可以直接推进（不结算）
+    s.players[0].stacks[0] = [makeCard('diversity-0', 0, 'field', true, 0, 0)];
+    s.players[0].hand = [makeCard('fire-1', 0, 'hand')];
+    const seen: { defId?: string; protocol?: string; step?: string }[] = [];
+    const off = gameBus.subscribe((e) => {
+      if (e.type !== 'card:trigger-skipped') return;
+      seen.push(e.payload as { defId?: string; protocol?: string; step?: string });
+    });
+    expect(collectTriggers(s, 'end').some((x) => x.defId === 'diversity-0' && x.optional)).toBe(true);
+    executeAction(s, 0, 'advance');
+    off();
+    expect(seen).toHaveLength(1);
+    expect(seen[0].defId).toBe('diversity-0');
+    expect(seen[0].protocol).toBe('diversity');
+    expect(seen[0].step).toBe('end');
+  });
+
+  it('必选触发未结算时 advance 仍被拦下（不会误发"被跳过"反馈）', () => {
+    const s = setup3();
+    s.turnPlayer = 0;
+    s.step = 'start';
+    const src = makeCard('greed-2', 0, 'field', true, 0, 0);
+    s.players[0].stacks[0] = [src];
+    s.players[0].stacks[1] = [makeCard('light-3', 0, 'field', true, 1, 0)];
+    const seen: string[] = [];
+    const off = gameBus.subscribe((e) => {
+      if (e.type === 'card:trigger-skipped' || e.type === 'card:effect-skipped') seen.push(e.type);
+    });
+    expect(() => executeAction(s, 0, 'advance')).toThrow(/mandatory trigger/);
+    off();
+    expect(seen).toHaveLength(0);
   });
 });

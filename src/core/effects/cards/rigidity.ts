@@ -62,9 +62,11 @@ function* rigidity3Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResul
 }
 
 /** rigidity-4 底（before-covered，仅顶卡）：当此牌将被1张反面朝下的牌覆盖时：先抽1张牌。
- *  覆盖者（浮空中）faceDown 才抽（faceUp 覆盖 → 不抽、覆盖照常）。 */
+ *  覆盖者（浮空中）faceDown 才抽（faceUp 覆盖 → 不抽、覆盖照常）。
+ *  2026-09-13（同类审计）：覆盖者也可能来自【偏转】（pendingShift，把一张反面牌偏转到本线）——
+ *  旧版只查 pendingPlay → 偏转覆盖不触发（与 unity-0 底 2026-09-12 修的是同一个洞）。 */
 function* rigidity4BeforeCovered(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
-  const incoming = ctx.s.pendingPlay[0]?.card;
+  const incoming = ctx.s.pendingPlay[0]?.card ?? ctx.s.pendingShift[0]?.card;
   if (!incoming || incoming.faceUp) return; // 覆盖者非反面 → 不抽
   yield { op: 'draw', count: 1 };
 }

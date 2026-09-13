@@ -27,14 +27,17 @@ function* pride0AfterSelfCompile(ctx: EffectCtx): Generator<EffectStep, void, St
 }
 
 /** pride-0 中：若你拥有控制权，偏转1张其他牌。否则，偏转1张你的牌。
- *  （无「可以」→ 条件分支必移；无目标 fizzle。源卡 pride-0 自动排除于候选） */
+ *  （无「可以」→ 条件分支必移；无目标 fizzle。源卡 pride-0 自动排除于候选）
+ *  2026-09-13（用户清单 #15 同类审计）：else 分支文本写的是「你的1张牌」而**没有「其他」**，
+ *  与 flexible-1「翻转或偏转你的1张牌」同构 → 用户已裁定按字面**含此牌自身**；这里保持一致
+ *  （控制权分支文本明写「其他牌」→ 保持默认排除）。 */
 function* pride0Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const hasControl = ctx.s.control === ctx.player;
   const cand = hasControl
-    ? ctx.candidates({ zone: 'field' }) // 任意方未覆盖顶卡
-    : ctx.candidates({ zone: 'field', owner: ctx.player }); // 仅自己的
+    ? ctx.candidates({ zone: 'field' }) // 任意方未覆盖顶卡（文本「其他牌」→ 排除自身）
+    : ctx.candidates({ zone: 'field', owner: ctx.player, includeSelf: true }); // 仅自己的（含自身）
   const tAns = yield {
-    kind: 'select', title: hasControl ? 'pride-0：你拥有控制权——偏转1张其他牌' : 'pride-0：偏转1张你的牌',
+    kind: 'select', title: hasControl ? 'pride-0：你拥有控制权——偏转1张其他牌' : 'pride-0：偏转1张你的牌（含此牌自身）',
     min: 1, max: 1, optional: false, candidates: cand,
   };
   if (tAns.selected.length === 0) return;
