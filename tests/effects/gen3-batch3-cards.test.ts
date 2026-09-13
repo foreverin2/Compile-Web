@@ -173,9 +173,9 @@ describe('inertia（惰性）', () => {
     const s3 = setup();
     placeSrc(s3, 'envy-0', 1, 0);
     placeSrc(s3, 'light-4', 1, 0);
-    placeSrc(s3, 'fire-3', 0, 0); // 己方线 0 有卡 → envy-0 生效（target line：对双方估值各加其对手最高卡）
-    expect(getLineValue(s3, 1, 0)).toBe(4 + 3); // P2 估值：light-4(4) + 对手（P1）最高 fire-3
-    expect(getLineValue(s3, 0, 0)).toBe(3 + 4); // P1 估值：fire-3(3) + 对手（P2）最高 light-4
+    placeSrc(s3, 'fire-3', 0, 0); // 己方线 0 有卡 → envy-0 生效（own-stack：**只加持有者自己**）
+    expect(getLineValue(s3, 1, 0)).toBe(4 + 3); // P2（嫉妒0 持有者）：light-4(4) + 对手（P1）最高 fire-3
+    expect(getLineValue(s3, 0, 0)).toBe(3); // P1：**不吃** P2 的嫉妒0 加成（2026-09-13 修正 line→own-stack）
   });
 
   it('inertia-1 bottom disables lust-0 compile-block guard on that line', () => {

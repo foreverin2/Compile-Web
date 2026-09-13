@@ -14,8 +14,14 @@ function opp(p: PlayerId): PlayerId {
   return p === 0 ? 1 : 0;
 }
 
-/** envy-0 顶（valueModifier line）：此链路中，你的总阈值增加对手在此链路中最高阈值卡牌的阈值。
- *  对手该链链路全部卡（含被盖，faceUp/faceDown 均按当前点数值计）取最大者；无卡 → +0。 */
+/** envy-0 顶（valueModifier **own-stack**）：此链路中，**你的**总阈值增加对手在此链路中最高阈值卡牌的阈值。
+ *  对手该链路全部卡（含被盖，faceUp/faceDown 均按当前点数值计）取最大者；无卡 → +0。
+ *
+ *  ⚠️ 2026-09-13 修正（用户实测）：必须用 `own-stack`，**不是** `line`。
+ *  `line` 的语义 = "线上任一玩家链路的正面修正卡对**双方估值**都生效"（lust-0「每位玩家+10」、
+ *  wrath-0「所有最高阈值的牌不计入玩家总阈值」属此类，各自正确）；而 envy-0 卡文是"**你的**总阈值
+ *  增加对手…"，只加**持有者自己**。用 `line` 会让对手也被加上"你链路上的最高阈值"（对手白拿加成）。
+ *  `own-stack` 下：仅当估值方 == 卡主时应用，且 apply 的 owner = 卡主 → 加的是卡主对手的最高卡。 */
 function envy0Modifier(s: GameState, owner: PlayerId, line: Line, total: number): number {
   const foe = opp(owner);
   let max = 0;
@@ -74,7 +80,7 @@ function* envy5Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   if (ans.selected.length > 0) yield { op: 'discard', uid: ans.selected[0] };
 }
 
-registerCardEffects('envy-0', { valueModifier: { target: 'line', apply: envy0Modifier } });
+registerCardEffects('envy-0', { valueModifier: { target: 'own-stack', apply: envy0Modifier } });
 registerCardEffects('envy-1', {
   middle: envy1Middle,
   triggers: {

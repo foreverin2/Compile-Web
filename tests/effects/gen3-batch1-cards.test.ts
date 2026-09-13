@@ -59,6 +59,15 @@ describe('envy（嫉妒）', () => {
     expect(getLineValue(s, 1, 0)).toBe(5); // 对手 = 1 + 4（对方估值时最高卡看己方堆叠 = envy-0 值 0 → +0）
   });
 
+  it('envy-0 top 只加【持有者自己】：对手不被加成（2026-09-13 修正 line→own-stack）', () => {
+    const s = setup();
+    placeSrc(s, 'envy-0', 1, 0); // P2 持有嫉妒0（线 0）
+    placeSrc(s, 'light-4', 1, 0); // P2 该线还有一张 4 —— 旧版（target:'line'）会把这张 4 也加给 P1
+    placeSrc(s, 'fire-1', 0, 0); // P1 该线 1
+    expect(getLineValue(s, 1, 0)).toBe(4 + 1); // 持有者 P2 = 自身 4 + 对手(P1)最高 1
+    expect(getLineValue(s, 0, 0)).toBe(1); // 对手 P1 = 1（**不**享受嫉妒0；旧版会错误得到 1+4=5）
+  });
+
   it('envy-1 bottom start: gains control from opponent when opponent holds it', () => {
     const s = setup();
     s.turnPlayer = 0;
