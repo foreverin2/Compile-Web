@@ -7,7 +7,7 @@ import { executeAction } from './core/game';
 import { getCompilableLines } from './core/rules/compile';
 import { collectTriggers } from './core/effects/triggers';
 import { renderApp, renderDraft, resetUiState, syncCompiledFxLayers, syncSmokeOverlays, syncScanOverlays, syncPsychicParticles, syncPlagueMists, syncApathyMists, syncApathyMosaics, syncSpirit0Glows, syncSpirit1Cards, syncMetal0Glows, syncMetalPlates, syncMetal6Mans, syncMetal1LineGlows, syncMirror0BatteryGlows, syncClarity0BatteryGlows, syncIceFx, syncSmoke2LineGlows, syncFear0TriGlows, syncWarBlades, syncChainLayerPosition, type UiCallbacks } from './ui/render';
-import { openControlRearrangeModal, closeControlRearrangeModal, refreshControlRearrangeModal } from './ui/control-rearrange';
+import { openControlRearrangeModal, closeControlRearrangeModal, refreshControlRearrangeModal, isControlRearrangeOpen, orderChanged, orderToAction } from './ui/control-rearrange';
 import { renderHome, renderCoin, renderLibrary, renderRules, renderModeSelect } from './ui/home';
 import { resetControlIfHeld } from './core/rules/control';
 import { DEMO_PROTOCOLS } from './data/demo';
@@ -64,8 +64,59 @@ function applyRearrangeSwap(target: PlayerId, a: Line, b: Line): void {
   refreshControlRearrangeModal();
 }
 
+/**
+ * 2026-09-13（用户清单 #10）：**效果内重排**（动量4「重排你的协议」）改用编译期同款重排窗口。
+ * 卡牌效果的重排发生在效果栈挂起期间——此时 `rearrange-protocols` 会被引擎硬拒
+ * （game.ts：pendingEffects 非空 → "resolve pending effect choices first"），所以窗口用
+ * **draft 模式**：本地摆好布局，完成时一次性回填 `action:order:XYZ`（引擎行为零改动）。
+ * sessionKey = `effect:<pendingId>`：每帧 render 都会 sync 调用，同键只刷新内容、不重置会话。
+ */
+let effectRearrangeKey: string | null = null;
+
+function commitEffectRearrange(promptId: string, order: Line[]): void {
+  const top = state.pendingEffects[state.pendingEffects.length - 1];
+  // 栈顶已变（效果被别的路径结算/重置）→ 只关窗口，不提交
+  if (!top || top.id !== promptId || !top.prompt) {
+    effectRearrangeKey = null;
+    closeControlRearrangeModal();
+    renderApp(root, state, cb);
+    return;
+  }
+  effectRearrangeKey = null;
+  closeControlRearrangeModal();
+  // 走统一的 onAction 分发：错误守卫 + 渲染/FX 时序与其它 effect-choice 完全一致
+  cb.onAction({ kind: 'effect-choice', promptId, choice: [orderToAction(order)] });
+}
+
+/** 每帧渲染后同步"效果内重排"窗口：栈顶是带 rearrangeSide 的选择请求 → 打开/保持；否则关闭 */
+function syncRearrangeModalForEffect(): void {
+  const top = state.pendingEffects[state.pendingEffects.length - 1];
+  const prompt = top?.prompt;
+  const side = prompt?.rearrangeSide;
+  if (top && prompt && side !== undefined) {
+    effectRearrangeKey = `effect:${top.id}`;
+    openControlRearrangeModal({
+      getState: () => state,
+      title: prompt.title,
+      submitLabel: '完成重排',
+      mode: 'draft',
+      sides: [side],
+      sessionKey: effectRearrangeKey,
+      canCommit: orderChanged,
+      onCommit: (order) => commitEffectRearrange(top.id, order),
+    });
+    return;
+  }
+  if (effectRearrangeKey !== null) {
+    effectRearrangeKey = null;
+    if (isControlRearrangeOpen()) closeControlRearrangeModal();
+  }
+}
+
 const cb: UiCallbacks = {
   onRendered() {
+    // 效果内重排窗口（动量4）随每帧渲染同步：栈顶是重排请求 → 打开；结算完毕 → 自动关闭
+    syncRearrangeModalForEffect();
     scheduleAutoAdvance();
   },
   onWinReset() {
@@ -487,6 +538,7 @@ function resetToMainInterface(): void {
   pendingReveals = [];
   clearGen2Fx(); // 2代 瞬态 FX（luck 骰子/烟花/蘑菇云）随局清扫
   closeControlRearrangeModal(); // 控制组件重排模态（body 级）随局清扫
+  effectRearrangeKey = null; // 效果内重排窗口的会话键随局清空
   resetUiState();
   showHome();
 }

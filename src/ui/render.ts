@@ -4883,6 +4883,14 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
         const srcUid = topEffect.sourceUid;
         deferredFx.push(() => startLuckDiceFx(srcUid));
       }
+      // 2026-09-13（用户清单 #10）：效果内重排（动量4）由 body 级**重排窗口**承接
+      // （点击两张协议交换 → 完成时回填 action:order:XYZ）→ 这里不渲染 5 个布局按钮，
+      // 只给一行提示；窗口由 main.ts 的 syncRearrangeModalForEffect 按栈顶请求打开/关闭。
+      if (prompt.rearrangeSide !== undefined) {
+        bar.appendChild(el('div', 'choice-note', '请在「重排协议」窗口中点击两张协议交换位置，摆好后点「完成重排」。'));
+        wrap.appendChild(bar);
+        grid.querySelector('.hand-strip')?.classList.add('choice-mode');
+      } else {
       for (const act of prompt.actions ?? []) {
         const b = el('button', 'btn choice-action-btn', actionCn(act, topEffect.sourceDefId)); // 修改提示词 8：动作按钮中文（翻转/抽牌/正面打出…；shift 用词随世代）
         b.addEventListener('click', () => { choicePromptId = null; cb.onAction({ kind: 'effect-choice', promptId: topEffect.id, choice: [act] }); });
@@ -4894,6 +4902,7 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
         bar.appendChild(skip);
       }
       wrap.appendChild(bar);
+      }
     }
     // 选择模式下隐藏手牌交互：给 hand-strip 加 .choice-mode（CSS 禁用非候选卡的 hover/单击/拖拽）
     grid.querySelector('.hand-strip')?.classList.add('choice-mode');

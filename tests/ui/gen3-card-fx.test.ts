@@ -27,7 +27,8 @@ describe('3代卡牌效果附加层守卫（批次 B）', () => {
     expect(GEN3_CARD_FX_COVER.shift.sort()).toEqual(['flexibility', 'nova', 'pride']);
     // 批次 C：抽牌 / 反面打出 / 编译后
     expect(GEN3_CARD_FX_COVER.draw.sort()).toEqual(['fulcrum', 'gluttony']);
-    expect(GEN3_CARD_FX_COVER.facedown.sort()).toEqual(['gluttony', 'inertia', 'overwhelm', 'rigidity']);
+    // 2026-09-13 补：嫉妒3 反打分支（用户清单 #2「嫉妒3 翻面/反打特效缺失」）→ facedown 增 envy
+    expect(GEN3_CARD_FX_COVER.facedown.sort()).toEqual(['envy', 'gluttony', 'inertia', 'overwhelm', 'rigidity']);
     expect(GEN3_CARD_FX_COVER.compiled.sort()).toEqual(['greed', 'momentum']);
     // 批次 E 补齐：惰性翻转（用户清单"惰性触发翻转"= I1 的 inertia-0 中 / inertia-2 中，批次 B 遗漏）
     expect(GEN3_CARD_FX_COVER.flip.sort()).toEqual(['ambush', 'envy', 'flexibility', 'inertia', 'pride', 'sloth', 'wrath']);
@@ -111,5 +112,63 @@ describe('3代卡牌效果附加层守卫（批次 B）', () => {
     expect(code.includes('mask:')).toBe(false);
     expect(code.includes('-webkit-mask')).toBe(false);
     expect(code.includes('@property')).toBe(false);
+  });
+
+  // ——— 2026-09-13 新增（用户清单 #2 的根因就是"覆盖表有、实现/接线没有"）：把覆盖表与实现绑死 ———
+
+  /** 取某个导出函数的源码段（到下一个 export function 为止） */
+  function bodyOf(fn: string): string {
+    const from = ts.indexOf(`export function ${fn}`);
+    if (from === -1) return '';
+    const to = ts.indexOf('export function ', from + 10);
+    return ts.slice(from, to === -1 ? undefined : to);
+  }
+
+  it('覆盖表的每一项都在对应函数里真的有实现（防"空头覆盖表"）', () => {
+    // 历史 bug：`return:['greed']`（贪婪2 回手）与 `facedown` 里的 envy（嫉妒3 反打）都只是表里有、
+    // 实现里没有 case → 引擎事件照发、UI 静默什么都不播，测试却全绿。
+    const impl: Record<string, (body: string, proto: string) => boolean> = {
+      discard: (b, p) => b.includes(`case '${p}'`),
+      delete: (b, p) => b.includes(`case '${p}'`),
+      flip: (b, p) => b.includes(`case '${p}'`),
+      shift: (b, p) => b.includes(`case '${p}'`),
+      facedown: (b, p) => b.includes(`case '${p}'`),
+      return: (b, p) => b.includes(`case '${p}'`),
+      // 抽牌是 if 分支（暴食）与默认段（支点标尺）而非 case
+      draw: (b, p) => (p === 'gluttony' ? b.includes("'gluttony'") : b.includes('g3-ruler')),
+      // 编译后按来源卡 defId 判定，不按协议 case
+      compiled: (b, p) => (p === 'greed' ? b.includes("'greed-1'") : b.includes("startsWith('momentum-')")),
+    };
+    const fns: [keyof typeof GEN3_CARD_FX_COVER, string][] = [
+      ['discard', 'gen3DiscardFx'], ['delete', 'gen3DeleteFx'], ['flip', 'gen3FlipFx'], ['shift', 'gen3ShiftFx'],
+      ['draw', 'gen3DrawFx'], ['facedown', 'gen3FaceDownFx'], ['compiled', 'gen3CompiledFx'], ['return', 'gen3ReturnFx'],
+    ];
+    for (const [key, fn] of fns) {
+      const body = bodyOf(fn);
+      expect(body, `fx-gen3.ts 缺少 ${fn}`).not.toBe('');
+      for (const proto of GEN3_CARD_FX_COVER[key]) {
+        expect(impl[key](body, proto), `${fn} 覆盖表列了 ${proto}，但函数内没有对应实现`).toBe(true);
+      }
+    }
+  });
+
+  it('每个导出的 gen3*Fx 都被 effects/index.ts 调用（防"写了没接线"）', () => {
+    const exported = [...ts.matchAll(/export function (gen3\w+Fx)\(/g)].map((m) => m[1]);
+    expect(exported.length, '导出的 gen3*Fx 数量异常').toBeGreaterThanOrEqual(9);
+    for (const fn of exported) expect(dispatcher, `effects/index.ts 未调用 ${fn}`).toContain(`${fn}(`);
+  });
+
+  it('回手（贪婪2 底 R3）与打出瞬间（嫉妒4 E4）两个新分发点已接入', () => {
+    // 回手：gen3ReturnFx 必须在water 分支**之前**（否则永远轮不到色欲之外的 3 代回手）
+    const retIdx = dispatcher.indexOf("case 'card:returned'");
+    expect(retIdx, "分发器缺少 case 'card:returned'").toBeGreaterThan(0);
+    expect(dispatcher).toContain('gen3ReturnFx(');
+    expect(dispatcher.indexOf('gen3ReturnFx(', retIdx)).toBeLessThan(dispatcher.indexOf("payload.triggerProtocol === 'water'", retIdx));
+    // 打出瞬间：此前分发器完全没有 card:played 分支
+    expect(dispatcher).toContain("case 'card:played'");
+    expect(dispatcher).toContain('gen3PlayFx(');
+    // 引擎侧修复：删除事件必须回填 line（新星0「整线删除」按线中心连锁 + 收尾临界环依赖它）
+    const resolveSrc = readFileSync(fileURLToPath(new URL('../../src/core/effects/resolve.ts', import.meta.url))).subarray(0, 4 * 1024 * 1024).toString('utf8');
+    expect(resolveSrc, 'card:deleted 未回填 line（新星0 整线删除排序/收尾环会失效）').toMatch(/emitCardEvent\(s, 'card:deleted', card, \{\s*line,/);
   });
 });
