@@ -5,10 +5,19 @@ import { drawCards, shuffle } from '../engine/deck';
 import { EFFECTS } from '../effects/registry';
 import { cardCommandDisabled } from '../effects/context';
 
-let uidCounter = 0;
-export function nextUid(): string {
-  uidCounter += 1;
-  return `c${uidCounter}`;
+/** uid 计数器进状态（G0）：原为模块级全局，跨进程/重放会错位 */
+export function nextUid(s: GameState): string {
+  const uid = `c${s.nextUid}`;
+  s.nextUid += 1;
+  return uid;
+}
+
+/** 未显式传 seed 时的兜底种子：进程内单调，保证"每局不同"（保持旧行为）。
+ *  **联机与重放必须显式传 seed** —— 否则两端拿不到同一个洗牌顺序。 */
+let autoSeedCounter = 0;
+export function nextAutoSeed(): string {
+  autoSeedCounter += 1;
+  return `auto-${autoSeedCounter}`;
 }
 
 /** 1-2-2-1 轮选相对模式：0 = 先手方（draftStarter），1 = 另一方（座位由 draftStarter 派生） */
@@ -32,6 +41,8 @@ export interface CreateGameOptions {
   draftMode?: 'normal' | 'ban';
   /** 本局可选协议池（随机池模式 = UI 随机抽 12 后传入；默认两代全部） */
   draftPool?: ProtocolDef[];
+  /** 对局种子（G0）：决定洗牌与全部对局内随机；联机/重放必须显式传入 */
+  seed?: string;
 }
 
 function emptyPlayer(): PlayerState {
@@ -40,7 +51,10 @@ function emptyPlayer(): PlayerState {
 
 export function createGame(opts: CreateGameOptions = {}): GameState {
   const draftStarter: PlayerId = opts.draftStarter ?? 0;
+  const seed = opts.seed ?? nextAutoSeed();
   return {
+    rng: { seed, n: 0 },
+    nextUid: 1,
     phase: 'draft',
     draftRound: 0,
     draftPicks: [],
@@ -201,7 +215,7 @@ function assignProtocols(s: GameState, player: PlayerId, picks: ProtocolDef[]): 
     const cards = DEMO_CARD_DEFS.filter((c) => c.protocol === def.defId);
     for (const cardDef of cards) {
       const card: Card = {
-        uid: nextUid(),
+        uid: nextUid(s),
         defId: cardDef.defId,
         owner: player,
         faceUp: false, // 牌库 = 秘密信息（R11.4）：入牌库的卡一律反面，抽出时 drawCards 置正面

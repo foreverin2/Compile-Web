@@ -1,3 +1,5 @@
+import type { RngState } from '../rng';
+
 export type PlayerId = 0 | 1;
 export type Line = 0 | 1 | 2;
 export type Zone = 'hand' | 'deck' | 'field' | 'trash' | 'float';
@@ -381,5 +383,9 @@ export interface GameState {
   /** speed-2「通过编译删除此牌前」触发挂起：效果栈清空后由 runStack 消费执行编译本体。
    *  force：开发者模式强制编译（跳过重编译线值校验）。 */
   pendingCompile: { player: PlayerId; line: Line; force?: boolean } | null;
+  /** 确定性随机源（G0）：进状态 → 进指纹；重放/存盘恢复靠它，不得放在模块作用域 */
+  rng: RngState;
+  /** 卡牌 uid 计数器（G0）：原为模块级全局 uidCounter，会让"同一串操作"在不同进程得到不同 uid */
+  nextUid: number;
 }
 

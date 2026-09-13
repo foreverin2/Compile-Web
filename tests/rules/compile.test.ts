@@ -39,6 +39,8 @@ function makeState(v0: number, v1: number, line: 0 | 1 | 2 = 0): GameState {
     deckReveals: [],
     compileBlocked: null,
     pendingCompile: null,
+    rng: { seed: 'test', n: 0 },
+    nextUid: 1,
   };
 }
 

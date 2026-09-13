@@ -50,6 +50,8 @@ function makeState(
     deckReveals: [],
     compileBlocked: null,
     pendingCompile: null,
+    rng: { seed: 'test', n: 0 },
+    nextUid: 1,
     ...overrides,
   };
 }

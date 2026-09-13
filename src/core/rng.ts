@@ -1,3 +1,5 @@
+import type { GameState } from './models/types';
+
 /**
  * 确定性随机源（G0；见 docs/2026-09-13-联机与多端-设计稿.md §2.3）。
  *
@@ -76,4 +78,21 @@ export function shuffleArr<T>(r: RngState, arr: readonly T[]): T[] {
     [a[i], a[j]] = [a[j], a[i]];
   }
   return a;
+}
+
+/* ---------- GameState 便捷包装（引擎调用点统一用这三个） ---------- */
+
+/** 顺序流派生：[0, bound) */
+export function randInt(s: GameState, bound: number): number {
+  return nextInt(s.rng, bound);
+}
+
+/** 从数组确定性取一个；空数组返回 undefined */
+export function randPick<T>(s: GameState, arr: readonly T[]): T | undefined {
+  return pickFrom(s.rng, arr);
+}
+
+/** 确定性洗牌：返回新数组，不修改入参 */
+export function shuffleWith<T>(s: GameState, arr: readonly T[]): T[] {
+  return shuffleArr(s.rng, arr);
 }

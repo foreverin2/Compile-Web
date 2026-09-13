@@ -42,6 +42,8 @@ function makeState(handSize: number, deckSize: number, trashSize: number): GameS
     deckReveals: [],
     compileBlocked: null,
     pendingCompile: null,
+    rng: { seed: 'test', n: 0 },
+    nextUid: 1,
   };
 }
 

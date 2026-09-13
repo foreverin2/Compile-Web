@@ -36,6 +36,8 @@ describe('types', () => {
     deckReveals: [],
     compileBlocked: null,
     pendingCompile: null,
+    rng: { seed: 'test', n: 0 },
+    nextUid: 1,
     };
     expect(typeof s.turnPlayer).toBe('number');
     expect(Array.isArray(s.players)).toBe(true);
