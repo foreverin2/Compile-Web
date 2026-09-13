@@ -33,6 +33,8 @@ export interface Gen3CardPayload {
   triggerDefId?: string;
   /** 触发这次动作的源卡 uid（新星引力线/柔性2 亮卡等需要跨卡定位） */
   triggerUid?: string;
+  /** 易主类事件的**原持有者**（2026-09-13 用户裁决新增；牌库顶易主的起点牌库用它） */
+  fromOwner?: 0 | 1;
 }
 
 /** effects/index.ts 传入的宿主能力（避免本模块反向依赖其私有实现） */
@@ -1124,7 +1126,8 @@ export function gen3FaceDownFx(kind: 'deck' | 'hand', p: Gen3CardPayload, api: G
         chip.style.left = `${slotRect.left + slotRect.width / 2}px`;
         chip.style.top = `${slotRect.top + slotRect.height * 0.26}px`;
         layer.appendChild(chip);
-        const deck = p.owner !== undefined ? api.deckPos(p.owner) : null;
+        // 牌库顶反打的"拉出光束"起点 = **提供那张牌的牌库**（易主时牌库属于 fromOwner）
+        const deck = p.owner !== undefined ? api.deckPos(p.fromOwner ?? p.owner) : null;
         if (deck) edgeLine(layer, deck, slotRect, 'g3-envy-pull-beam', 60);
         const ripple = api.el('i', 'g3-envy-land-ripple');
         ripple.style.left = `${slotRect.left + slotRect.width / 2}px`;

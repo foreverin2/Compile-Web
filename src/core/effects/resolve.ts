@@ -652,6 +652,9 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       // 额外特效（love → 粉红爱心飞行；payload.to = 接收方，uid 对应卡此刻仍在给牌方手牌 DOM）
       emitCardEvent(s, 'card:given', card, {
         to: op.to,
+        // fromOwner（2026-09-13 用户裁决）：改 owner **之前**的持有者。payload.owner 已是接收方，
+        // 而卡节点此刻仍在给牌方 DOM 里 → 需要按"从哪来"定向的 FX 用 fromOwner ?? owner。
+        fromOwner: from,
         triggerDefId: pe.sourceDefId,
         triggerUid: pe.sourceUid,
         triggerProtocol: pe.sourceDefId.split('-')[0],
@@ -670,6 +673,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       // payload.to = 接收方（效果属主），uid 对应卡此刻仍在被拿方手牌 DOM）
       emitCardEvent(s, 'card:given', card, {
         to: pe.player,
+        fromOwner: op.from, // 见 give op：改 owner 前的持有者（FX 定向用）
         triggerDefId: pe.sourceDefId,
         triggerUid: pe.sourceUid,
         triggerProtocol: pe.sourceDefId.split('-')[0],
@@ -916,6 +920,9 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       s.pendingPlay.push({ card, beforeCoveredDone: false });
       emitCardEvent(s, 'card:deck-played', card, {
         line: op.toLine,
+        // fromOwner（2026-09-13 用户裁决）：牌库顶易主——owner 已改成接收方，但**牌库还是原持有者的**
+        // （起点必须取 fromOwner 的牌库，否则"从对方牌库抽出"会变成"从自己牌库抽出"）。
+        fromOwner: op.from,
         triggerDefId: pe.sourceDefId,
         triggerUid: pe.sourceUid,
         triggerProtocol: pe.sourceDefId.split('-')[0],
@@ -943,6 +950,9 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       s.players[pe.player].hand.push(card);
       emitCardEvent(s, 'card:given', card, {
         to: pe.player,
+        // 场卡被取走：起点是**原持有者的场地**（owner + line 已被清空 → fromOwner 是唯一线索）
+        fromOwner: owner,
+        fromLine: line,
         triggerDefId: pe.sourceDefId,
         triggerUid: pe.sourceUid,
         triggerProtocol: pe.sourceDefId.split('-')[0],

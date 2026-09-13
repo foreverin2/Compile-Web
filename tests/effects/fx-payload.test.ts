@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { gameBus } from '../../src/core/events/bus';
 import { executeAction, getLegalActions } from '../../src/core/game';
 import { collectTriggers, resolveTrigger } from '../../src/core/effects/triggers';
@@ -221,10 +223,10 @@ describe('FX trigger protocol payload', () => {
     s.players[1].hand = [makeCard('death-0', 1, 'hand'), makeCard('death-1', 1, 'hand')];
     s.players[0].hand = [makeCard('love-3', 0, 'hand')];
     const card = s.players[0].hand[0];
-    const seen: { to?: number; triggerProtocol?: string; triggerDefId?: string }[] = [];
+    const seen: { to?: number; owner?: number; fromOwner?: number; triggerProtocol?: string; triggerDefId?: string }[] = [];
     const off = gameBus.subscribe((e) => {
       if (e.type !== 'card:given') return;
-      seen.push(e.payload as { to?: number; triggerProtocol?: string; triggerDefId?: string });
+      seen.push(e.payload as { to?: number; owner?: number; fromOwner?: number; triggerProtocol?: string; triggerDefId?: string });
     });
     executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: loveLine });
     off(); // takeRandom 即发 card:given（随后的 give 选择仍挂起，不影响断言）
@@ -232,6 +234,9 @@ describe('FX trigger protocol payload', () => {
     expect(seen[0].to).toBe(0); // 接收方 = 效果属主（P1）
     expect(seen[0].triggerProtocol).toBe('love');
     expect(seen[0].triggerDefId).toBe('love-3');
+    // 2026-09-13 用户裁决：易主事件的 fromOwner = 改 owner 前的持有者（这里 = 被拿牌的 P2）
+    expect(seen[0].owner).toBe(0); // payload.owner = 新持有者（P1）
+    expect(seen[0].fromOwner).toBe(1); // ← 新增字段：原持有者（P2）
   });
 
   it('love-4 reveal sets ghost fx=love + card:revealed triggerProtocol=love (heart ghost)', () => {
@@ -552,5 +557,26 @@ describe('FX trigger protocol payload', () => {
     // 落点锚定契约：必须带 owner + 目标 line（DOM 此刻还在起点槽 → 只能靠槽定位）
     expect(seen[0].line, 'card:landed 缺 line → 通用落地反馈无法定位').toBe(0);
     expect(seen[0].owner).toBe(1); // 被偏转的卡属对手
+  });
+
+  // ——— 2026-09-13 用户裁决：易主类事件补 fromOwner（owner 已是接收方，卡节点/牌库还在原侧）———
+
+  it('card:given（给牌/拿牌）都带 fromOwner（源码契约：三处 emit 各一行）', () => {
+    const src = readFileSync(fileURLToPath(new URL('../../src/core/effects/resolve.ts', import.meta.url))).subarray(0, 4 * 1024 * 1024).toString('utf8');
+    expect(src, 'give op 未带 fromOwner').toMatch(/fromOwner: from,/);
+    expect(src, 'takeRandom op 未带 fromOwner').toMatch(/fromOwner: op\.from,/);
+    expect(src, 'takeFromField op 未带 fromOwner').toMatch(/fromOwner: owner,/);
+  });
+
+  it('牌库顶易主（deckTopTransfer）带 fromOwner = 原牌库持有者（起点牌库靠它）', () => {
+    const src = readFileSync(fileURLToPath(new URL('../../src/core/effects/resolve.ts', import.meta.url))).subarray(0, 4 * 1024 * 1024).toString('utf8');
+    expect(src, 'deckTopTransfer 未带 fromOwner').toMatch(/fromOwner: op\.from,/);
+    // 消费方契约：playDeckPlay 的起点牌库必须用 fromOwner ?? owner（否则"从对方牌库抽出"画成自己牌库）
+    const fx = readFileSync(fileURLToPath(new URL('../../src/ui/effects/index.ts', import.meta.url))).subarray(0, 8 * 1024 * 1024).toString('utf8');
+    expect(fx, 'playDeckPlay 未用 fromOwner 取起点牌库').toMatch(/const srcOwner = payload\.fromOwner \?\? payload\.owner;/);
+    expect(fx, 'playDeckPlay 的起点牌库未使用 srcOwner').toMatch(/\.deck\[data-player="\$\{srcOwner\}"\]/);
+    // 3代 反打附加层的牌库光束同样要认 fromOwner
+    const gen3 = readFileSync(fileURLToPath(new URL('../../src/ui/fx-gen3.ts', import.meta.url))).subarray(0, 4 * 1024 * 1024).toString('utf8');
+    expect(gen3, 'gen3 反打牌库光束未认 fromOwner').toContain('api.deckPos(p.fromOwner ?? p.owner)');
   });
 });

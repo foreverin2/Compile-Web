@@ -84,6 +84,11 @@ interface FxCardPayload {
   triggerDefId?: string;
   /** 给牌/随机拿牌（card:given）的接收方（love-1 底/love-3；uid 对应卡此刻仍在给牌方手牌 DOM） */
   to?: PlayerId;
+  /** 易主类事件的**原持有者**（2026-09-13 用户裁决新增）：owner 已是新持有者，而卡节点/牌库还在原侧。
+   *  需要按"从哪来"定向的 FX 用 `fromOwner ?? owner`（牌库顶易主的起点牌库必须用它）。 */
+  fromOwner?: PlayerId;
+  /** 场卡被取走时的原链路（takeFromField：owner/line 已被清空，此字段是唯一线索） */
+  fromLine?: number;
 }
 
 /** 卡面资源 URL（按 defId/faceUp；反面用官方卡背） */
@@ -1106,8 +1111,12 @@ function nextDeckPlayIndex(): number {
 
 function playDeckPlay(payload: FxCardPayload, durationMs = MOVE_MS): void {
   if (payload.owner === undefined || payload.line === null) return;
-  const deck = document.querySelector<HTMLElement>(`.deck[data-player="${payload.owner}"]`);
-  const from = deckPos(payload.owner);
+  // 2026-09-13 用户裁决：牌库顶易主（同化2/6 deckTopTransfer）的 payload.owner 已是**接收方**，
+  // 而牌库仍属于**原持有者** → 起点牌库必须用 fromOwner（没有该字段=普通牌库顶反打，起点=自己牌库）。
+  const srcOwner = payload.fromOwner ?? payload.owner;
+  const deck = document.querySelector<HTMLElement>(`.deck[data-player="${srcOwner}"]`);
+  const from = deckPos(srcOwner);
+  // 落点仍是接收方的目标线（owner = 接收方、line = 目标线）
   const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${payload.owner}"][data-line="${payload.line}"]`);
   const target = stackEndPos(slot, payload.owner);
   if (!deck || !from || !target) return;
