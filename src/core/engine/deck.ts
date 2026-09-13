@@ -4,15 +4,7 @@ import { fireReactive } from '../effects/triggers';
 import { shouldBlockDraw } from '../effects/context';
 import { gameBus } from '../events/bus';
 import { traceAt, cardBrief } from '../trace';
-
-export function shuffle<T>(arr: T[]): T[] {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-}
+import { shuffleWith } from '../rng';
 
 /** 刷新（补满手牌）是否实际可执行（修改提示词 19 / FAQ 冰6）：
  *  - 手牌必须 <5（手握 5 张无法执行「刷新 0 张」——不构成刷新）；
@@ -39,7 +31,7 @@ export function drawCards(s: GameState, player: PlayerId, count: number): Card[]
   for (let i = 0; i < count; i++) {
     if (p.deck.length === 0) {
       if (p.trash.length === 0) break;
-      p.deck = shuffle(p.trash);
+      p.deck = shuffleWith(s, p.trash);
       p.trash = [];
       traceAt(s, '随机', `P${player + 1} 牌库空 → 弃牌堆全部洗入牌库（随机顺序 ${p.deck.length} 张）`);
       // R11.4：弃牌堆 → 牌库 = 进入秘密信息区：弃牌堆的正面卡回牌库后必须翻回反面
@@ -86,7 +78,7 @@ export function shuffleDeck(s: GameState, player: PlayerId): void {
     // 无/单张无需洗，但仍发事件便于 UI 一致呈现（长度 0 也发——time-0 从弃牌堆打出后洗空堆等场景）
     gameBus.emit({ type: 'deck:shuffled', state: s, payload: { player } });
   } else {
-    p.deck = shuffle(p.deck);
+    p.deck = shuffleWith(s, p.deck);
     for (const c of p.deck) c.faceUp = false;
     gameBus.emit({ type: 'deck:shuffled', state: s, payload: { player } });
     pushLog(s, `P${player + 1} 切洗牌库`);

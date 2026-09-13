@@ -1,7 +1,8 @@
 import { pushLog } from '../log';
 import type { GameState, PlayerId, PlayerState, Line, ProtocolDef, Card } from '../models/types';
 import { DEMO_PROTOCOLS, DEMO_CARD_DEFS, getCardDef } from '../../data/demo';
-import { drawCards, shuffle } from '../engine/deck';
+import { drawCards } from '../engine/deck';
+import { shuffleWith } from '../rng';
 import { EFFECTS } from '../effects/registry';
 import { cardCommandDisabled } from '../effects/context';
 
@@ -264,8 +265,8 @@ export function performDraftPick(s: GameState, defId: string): void {
     // 用户拍板（2026-09-03）：后选协议者先出牌 → firstToPlay（默认 0 兼容旧流程）
     s.turnPlayer = s.firstToPlay;
     // 开局前洗牌：起始手牌每局不同（“洗成牌库”）
-    s.players[0].deck = shuffle(s.players[0].deck);
-    s.players[1].deck = shuffle(s.players[1].deck);
+    s.players[0].deck = shuffleWith(s, s.players[0].deck);
+    s.players[1].deck = shuffleWith(s, s.players[1].deck);
     drawCards(s, 0, 5);
     drawCards(s, 1, 5);
     pushLog(s, 'Setup complete. Starting hand drawn (5 each).');

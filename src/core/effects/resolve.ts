@@ -1,5 +1,6 @@
 import type { Card, GameState, Line, Op, PendingEffect, PlayerId, StepResult } from '../models/types';
-import { drawCards, discardFromHand, shuffle } from '../engine/deck';
+import { drawCards, discardFromHand } from '../engine/deck';
+import { shuffleWith } from '../rng';
 import { advanceStep } from '../engine/turn';
 import { gameBus } from '../events/bus';
 import { createCtx, emitCardEvent, findCard, isUncovered, nextEffectId, shouldBlockDraw, cardCommandDisabled, rigidity7Immune } from './context';
@@ -398,7 +399,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
         const opp: PlayerId = target === 0 ? 1 : 0;
         const os = s.players[opp];
         if (os.deck.length === 0 && os.trash.length > 0) {
-          os.deck = shuffle(os.trash);
+          os.deck = shuffleWith(s, os.trash);
           os.trash = [];
           for (const c of os.deck) c.faceUp = false;
         }
