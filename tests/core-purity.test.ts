@@ -38,34 +38,51 @@ describe('src/core 纯确定性守卫（G0）', () => {
   it('不得出现 Math.random 调用', () => {
     // 只匹配"调用"（后跟左括号）：注释里提到 Math.random 不构成违规
     // （src/core/rng.ts 的文档注释里就写着这条铁律，宽松正则会把它误判为违规）
-    const bad = FILES.filter((f) => /\bMath\s*\.\s*random\s*\(/.test(read(f))).map(rel);
-    expect(bad, `以下 core 文件调用了 Math.random（会破坏联机确定性）：${bad.join(', ')}`).toEqual([]);
+    // 用 Set 去重：同一文件重复违规只报告一次
+    const bad = new Set<string>();
+    for (const f of FILES) {
+      if (/\bMath\s*\.\s*random\s*\(/.test(read(f))) bad.add(rel(f));
+    }
+    expect([...bad], `以下 core 文件调用了 Math.random（会破坏联机确定性）：${[...bad].join(', ')}`).toEqual([]);
   });
 
   it('不得出现时钟调用（仅 trace.ts 豁免 Date.now）', () => {
-    const bad: string[] = [];
+    // 用 Set 去重：Date.now + performance.now 可能命中同一文件
+    const bad = new Set<string>();
     for (const f of FILES) {
+      const r = rel(f);
       const src = read(f);
       // 一律只匹配"调用"形式：注释里提到 Date.now 不构成违规
-      if (rel(f) !== 'trace.ts' && /\bDate\s*\.\s*now\s*\(|\bnew\s+Date\s*\(/.test(src)) bad.push(rel(f));
-      if (/\bperformance\s*\.\s*now\s*\(/.test(src)) bad.push(rel(f));
+      // trace.ts 的 Date.now 豁免**仅限该文件的诊断用途**（envInfo / 日志时间戳）；
+      // 该文件此后新增的时钟调用同样落在豁免内，是刻意为之，不是漏网。
+      if (r !== 'trace.ts' && /\bDate\s*\.\s*now\s*\(|\bnew\s+Date\s*\(/.test(src)) bad.add(r);
+      if (/\bperformance\s*\.\s*now\s*\(/.test(src)) bad.add(r);
     }
-    expect(bad, `以下 core 文件使用了时钟（诊断请走 trace.ts）：${bad.join(', ')}`).toEqual([]);
+    expect([...bad], `以下 core 文件使用了时钟（诊断请走 trace.ts）：${[...bad].join(', ')}`).toEqual([]);
   });
 
   it('不得自行取随机（种子由平台层提供）', () => {
-    const bad = FILES.filter((f) => /getRandomValues\s*\(|randomUUID\s*\(/.test(read(f))).map(rel);
-    expect(bad, `以下 core 文件自行取随机（应由 src/ui/match-seed.ts 提供种子）：${bad.join(', ')}`).toEqual([]);
+    // 同风格去重
+    const bad = new Set<string>();
+    for (const f of FILES) {
+      if (/getRandomValues\s*\(|randomUUID\s*\(/.test(read(f))) bad.add(rel(f));
+    }
+    expect([...bad], `以下 core 文件自行取随机（应由 src/ui/match-seed.ts 提供种子）：${[...bad].join(', ')}`).toEqual([]);
   });
 
-  it('不得引用 UI 层或 DOM（core 保持 DOM-free）', () => {
-    const bad: string[] = [];
+  it('不得引用 DOM（core 保持 DOM-free；trace.ts 的诊断读取显式豁免）', () => {
+    const bad = new Set<string>();
     for (const f of FILES) {
+      const r = rel(f);
       const src = read(f);
-      if (/from\s+['"][^'"]*\/ui\//.test(src)) bad.push(rel(f));
-      // 只匹配真实成员调用，避免命中注释（如 render 相关说明里的字面量）
-      if (/\bdocument\s*\.\s*\w+\s*\(|\bwindow\s*\.\s*\w+\s*\(/.test(src)) bad.push(rel(f));
+      if (/from\s+['"][^'"]*\/ui\//.test(src)) bad.add(r);
+      // 匹配**成员访问**（含属性读取），不只是调用：trace.ts 的
+      // navigator.userAgent / window.innerWidth / document.documentElement 都是属性读取，
+      // 旧正则只看调用形式，因此这条断言当时是"因为看不见才通过"。
+      // trace.ts 是唯一豁免（诊断用；且都包在 typeof 守卫 + try/catch 内）——
+      // 显式豁免，不靠正则侥幸。
+      if (r !== 'trace.ts' && /\b(?:window|document|navigator)\s*(?:\.|\[)/.test(src)) bad.add(r);
     }
-    expect(bad, `以下 core 文件引用了 UI/DOM：${bad.join(', ')}`).toEqual([]);
+    expect([...bad], `以下 core 文件引用了 UI/DOM：${[...bad].join(', ')}`).toEqual([]);
   });
 });
