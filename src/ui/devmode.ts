@@ -5,6 +5,7 @@ import type { Card, CardDef, GameState, Line, ProtocolDef } from '../core/models
 import { DEMO_CARD_DEFS as ALL_CARD_DEFS, DEMO_PROTOCOLS as ALL_PROTOCOLS } from '../data/demo';
 import { executeCompileUnchecked } from '../core/rules/compile';
 import { resetControlIfHeld } from '../core/rules/control';
+import { nextUid } from '../core/state/create';
 
 /**
  * 隐藏开发者模式（测试辅助）：
@@ -36,9 +37,6 @@ const PASSWORDS = new Set(['上上下下左右左右BABA', 'ssxxzyzybaba']);
 
 /** 指令页提示行 */
 const HINT = '指令：get 牌名 / Compile 协议（输入即模糊预览，点列表行执行）· clean（清空当前玩家手牌）· 如 get light-2、Compile life（中文名 死/生/光 也可）';
-
-/** 卡牌实例 uid 计数器（dev- 前缀保证不与正式 uid 冲突） */
-let uidCounter = 0;
 
 /** 是否有开发者浮层打开（打开任一浮层时置 true，关闭时置 false） */
 let overlayOpen = false;
@@ -299,6 +297,12 @@ function log(host: DevModeHost, msg: string): void {
  * 把指定 defId 的卡牌加入当前玩家（state.turnPlayer）手牌并触发重渲染。
  * get 指令与检索列表点击共用此加牌路径；suffix 追加到日志末尾（如检索来源）。
  * 找不到 defId 返回 false（不改变状态）。
+ *
+ * ⚠️ uid 走引擎的 `nextUid(state)`（G0：uid 计数器已进状态）。此前这里是
+ * `dev-` + 模块计数器 + 时钟时间戳拼出来的 uid —— 全项目唯一一个既绕过 `nextUid(s)`、
+ * 又自带时钟熵的加牌路径（时间戳部分写法见本文件历史版本），任何其它客户端都无法派生出同一张卡。
+ * 另注：**开发者模式注入绕过行动日志**（直接 push 进手牌，不经 executeAction），
+ * 因此注入过的对局不可重放/不可联机校验 —— 这是调试工具，不是对局路径。
  */
 function addCardToCurrentPlayer(host: DevModeHost, defId: string, suffix = ''): boolean {
   const def = CARD_LOOKUP.get(normalizeKey(defId));
@@ -306,7 +310,7 @@ function addCardToCurrentPlayer(host: DevModeHost, defId: string, suffix = ''): 
   const state = host.getState();
   const player = state.turnPlayer;
   const card: Card = {
-    uid: `dev-${uidCounter++}-${Date.now().toString(36)}`,
+    uid: nextUid(state),
     defId: def.defId,
     owner: player,
     faceUp: true,

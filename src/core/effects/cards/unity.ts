@@ -1,6 +1,6 @@
 import type { EffectCtx, EffectStep, GameState, Line, PlayerId, StepResult } from '../../models/types';
 import { registerCardEffects } from '../registry';
-import { findCard, nextEffectId, isUncovered } from '../context';
+import { findCard, isUncovered } from '../context';
 import { shuffleDeck } from '../../engine/deck';
 import { executeCompileBody } from '../../rules/compile-body';
 import { controlRearrangeFlow } from '../control-rearrange-flow';

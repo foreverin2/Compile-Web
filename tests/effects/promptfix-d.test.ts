@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import type { GameState, Line, PlayerId } from '../../src/core/models/types';
 import { createGame } from '../../src/core/state/create';
 import { resolveMiddle, answerEffect } from '../../src/core/effects/resolve';
@@ -24,10 +24,6 @@ function placeSrc(s: GameState, defId: string, owner: PlayerId, line: Line) {
   s.players[owner].stacks[line].push(c);
   return c;
 }
-
-afterEach(() => {
-  vi.restoreAllMocks();
-});
 
 describe('修改提示词 B3d（时间0/时间3）', () => {
   it('时间0：从弃牌堆选卡反面打出，剩余弃牌堆洗入牌库', () => {
@@ -59,8 +55,15 @@ describe('修改提示词 B3d（时间0/时间3）', () => {
     const src = placeSrc(s, 'time-3', 0, 0);
     const t1 = makeCard('fire-3', 0, 'trash', true);
     s.players[0].trash = [t1];
-    vi.spyOn(Math, 'random').mockReturnValue(0); // 随机取第 1 张
+    // 随机揭示走**状态随机源**（time.ts:121 `randPick(ctx.s, trash)`），不经过 Math.random：
+    // 这里原来挂的 `vi.spyOn(Math, 'random')` 什么也控制不了，只是看起来像控制了
+    // （与 gen3-batch1-cards.test.ts 同一处旧病，M1 一并清除）。
+    // 改为钉住状态随机源（seed + n=0）并断言**恰好消耗一次** —— 弃牌堆只有 1 张，
+    // 取哪张由状态唯一决定，但"有没有真的走随机源、走几次"这句话只有这条断言能钉住。
+    s.rng.seed = 'time-3-pin';
+    s.rng.n = 0;
     resolveMiddle(s, 0, src);
+    expect(s.rng.n).toBe(1); // 恰好消耗一次随机（没消耗/多消耗都算偏离）
     // 幽灵已加入对方手牌区查看（Case A：shownTo = 对手）
     expect(s.revealedGhosts.some((g) => g.defId === 'fire-3' && g.shownTo === 1)).toBe(true);
     const top = s.pendingEffects[s.pendingEffects.length - 1];

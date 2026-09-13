@@ -81,7 +81,19 @@ describe('src/core 纯确定性守卫（G0）', () => {
       // 旧正则只看调用形式，因此这条断言当时是"因为看不见才通过"。
       // trace.ts 是唯一豁免（诊断用；且都包在 typeof 守卫 + try/catch 内）——
       // 显式豁免，不靠正则侥幸。
-      if (r !== 'trace.ts' && /\b(?:window|document|navigator)\s*(?:\.|\[)/.test(src)) bad.add(r);
+      // 补齐「自由全局」（M2）：fetch/localStorage/sessionStorage/indexedDB/
+      // XMLHttpRequest/WebSocket/requestAnimationFrame/cancelAnimationFrame 不需要任何前缀
+      // 就能用，旧模式（只有 window/document/navigator）对它们完全盲；globalThis.document
+      // 则是换个前缀绕开同一个洞。自由全局按「成员访问或调用」两种形态匹配：
+      // localStorage.getItem / fetch(...) 命中，注释里提到名字不命中（与上面两条同一口径）。
+      if (
+        r !== 'trace.ts' &&
+        /\b(?:window|document|navigator|localStorage|sessionStorage|indexedDB|XMLHttpRequest|WebSocket)\s*(?:\.|\[)|\b(?:fetch|requestAnimationFrame|cancelAnimationFrame)\s*\(|globalThis\s*\.\s*(?:window|document|navigator|fetch|localStorage|sessionStorage|indexedDB|XMLHttpRequest|WebSocket|requestAnimationFrame|cancelAnimationFrame)\b/.test(
+          src,
+        )
+      ) {
+        bad.add(r);
+      }
     }
     expect([...bad], `以下 core 文件引用了 UI/DOM：${[...bad].join(', ')}`).toEqual([]);
   });

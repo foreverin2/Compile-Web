@@ -1,5 +1,12 @@
-import type { ChoiceRequest, GameState, Line, PlayerId } from '../../src/core/models/types';
-import { createGame, getDraftPool, performDraftPick, getLineValue } from '../../src/core/state/create';
+import type { ChoiceRequest, GameState, Line, PlayerId, ProtocolDef } from '../../src/core/models/types';
+import {
+  createGame,
+  getDraftPool,
+  performDraftBan,
+  performDraftPick,
+  draftNextAction,
+  getLineValue,
+} from '../../src/core/state/create';
 import { getLegalActions, executeAction, type LegalAction } from '../../src/core/game';
 import { answerEffect, runStack } from '../../src/core/effects/resolve';
 import { stateFingerprint } from '../../src/core/fingerprint';
@@ -89,18 +96,44 @@ export function checkInvariants(s: GameState, ctx: string): void {
   }
 }
 
-/** 建局：强制协议池 = 3代 15 套 → 随机草稿 → 随机先手 */
-export function setupGen3Game(seed: number): GameState {
+/** setupGen3Game 可选参数：**不传 = 既有语义，逐次随机数消耗都不变**（D1~D4 依赖这一点）。 */
+export interface Gen3SetupOptions {
+  /** 草稿模式；'ban' 时草稿含**交错**禁用步骤（draftNextAction / performDraftBan） */
+  draftMode?: 'normal' | 'ban';
+  /** 首位选择协议的玩家（硬币胜者）；默认 0 */
+  draftStarter?: PlayerId;
+  /** 先出牌方。**显式给出时不再随机覆盖 turnPlayer** —— 用于检验"后选协议者先出牌"
+   *  （firstToPlay = 1 - draftStarter）这条开局耦合；不给则保持既有的随机先手语义 */
+  firstToPlay?: PlayerId;
+  /** 协议池覆盖；默认 ALL_PROTOCOLS_3（3代 15 套） */
+  draftPool?: ProtocolDef[];
+}
+
+/** 建局：协议池 = 3代 15 套（或调用方给定）→ 随机草稿 → 随机先手。
+ *  草稿按 `draftNextAction` 逐步推进，因此 `draftMode: 'ban'` 的交错禁用步骤也被走全
+ *  （normal 模式下 draftNextAction 恒为 pick，与旧实现逐次等价）。 */
+export function setupGen3Game(seed: number, opts: Gen3SetupOptions = {}): GameState {
   const r = rng(seed);
-  const s = createGame({ seed: String(seed) });
-  s.draftPool = [...ALL_PROTOCOLS_3];
+  const s = createGame({
+    seed: String(seed),
+    draftStarter: opts.draftStarter,
+    firstToPlay: opts.firstToPlay,
+    draftMode: opts.draftMode,
+  });
+  s.draftPool = opts.draftPool ? [...opts.draftPool] : [...ALL_PROTOCOLS_3];
   let guard = 0;
   while (s.phase === 'draft' && guard++ < 100) {
+    const next = draftNextAction(s);
+    if (!next) break;
     const avail = getDraftPool(s);
     if (avail.length === 0) break;
-    performDraftPick(s, avail[Math.floor(r() * avail.length)].defId);
+    const target = avail[Math.floor(r() * avail.length)].defId;
+    if (next.kind === 'ban') performDraftBan(s, target);
+    else performDraftPick(s, target);
   }
-  s.turnPlayer = r() < 0.5 ? 0 : 1;
+  // 默认路径保持既有语义（随机先手）。调用方显式传 firstToPlay 时不覆盖：否则"硬币→先手"
+  // 这条耦合会被随机先手抹掉，用例等于没测（I3）。
+  if (opts.firstToPlay === undefined) s.turnPlayer = r() < 0.5 ? 0 : 1;
   return s;
 }
 
