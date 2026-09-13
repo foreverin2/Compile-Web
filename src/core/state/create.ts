@@ -12,12 +12,23 @@ export function nextUid(s: GameState): string {
   return uid;
 }
 
-/** 未显式传 seed 时的兜底种子：进程内单调，保证"每局不同"（保持旧行为）。
- *  **联机与重放必须显式传 seed** —— 否则两端拿不到同一个洗牌顺序。 */
+/** 运行期 nonce：core 不产生熵，由平台层在启动时注入一次（src/ui/match-seed.ts）。
+ *  未注入时用 'p0' 兜底 —— 此时**仅保证进程内每局不同**。 */
+let seedNonce = 'p0';
+
+/** 平台层注入运行期 nonce（src/main.ts 启动处调用）。
+ *  幂等：重复注入直接覆盖。 */
+export function setSeedNonce(nonce: string): void {
+  seedNonce = nonce;
+}
+
+/** 未显式传 seed 时的兜底种子：运行期 nonce + 进程内单调计数。
+ *  nonce 已注入 → 跨进程/跨重启也不同；未注入 → 仅保证进程内每局不同。
+ *  ⚠️ **联机与重放必须显式传 seed** —— 否则两端拿不到同一个洗牌顺序。 */
 let autoSeedCounter = 0;
 export function nextAutoSeed(): string {
   autoSeedCounter += 1;
-  return `auto-${autoSeedCounter}`;
+  return `auto-${seedNonce}-${autoSeedCounter}`;
 }
 
 /** 1-2-2-1 轮选相对模式：0 = 先手方（draftStarter），1 = 另一方（座位由 draftStarter 派生） */

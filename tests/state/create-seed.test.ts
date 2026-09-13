@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createGame, nextUid } from '../../src/core/state/create';
+import { createGame, nextUid, nextAutoSeed, setSeedNonce } from '../../src/core/state/create';
 
 describe('createGame 的种子与 uid 计数器（G0）', () => {
   it('显式 seed 写进状态', () => {
@@ -28,5 +28,29 @@ describe('createGame 的种子与 uid 计数器（G0）', () => {
 
   it('draftStarter 默认仍为 0（不得改成种子派生）', () => {
     expect(createGame({ seed: 'Z' }).draftStarter).toBe(0);
+  });
+
+  it('兜底种子格式为 auto-<nonce>-<n>', () => {
+    expect(createGame().rng.seed).toMatch(/^auto-.+-\d+$/);
+  });
+
+  it('注入运行期 nonce 后，兜底种子跨进程/跨重启也不同', () => {
+    setSeedNonce('runA');
+    const a = createGame().rng.seed;
+    setSeedNonce('runB');
+    const b = createGame().rng.seed;
+    expect(a).not.toBe(b);
+    expect(a).toContain('runA');
+    expect(b).toContain('runB');
+  });
+
+  it('显式 seed 不消耗兜底计数器', () => {
+    setSeedNonce('counter');
+    const first = nextAutoSeed();
+    createGame({ seed: 'explicit' });
+    const second = nextAutoSeed();
+    const n1 = Number(first.slice(first.lastIndexOf('-') + 1));
+    const n2 = Number(second.slice(second.lastIndexOf('-') + 1));
+    expect(n2).toBe(n1 + 1);
   });
 });
