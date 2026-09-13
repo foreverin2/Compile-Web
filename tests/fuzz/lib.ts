@@ -2,6 +2,7 @@ import type { ChoiceRequest, GameState, Line, PlayerId } from '../../src/core/mo
 import { createGame, getDraftPool, performDraftPick, getLineValue } from '../../src/core/state/create';
 import { getLegalActions, executeAction, type LegalAction } from '../../src/core/game';
 import { answerEffect, runStack } from '../../src/core/effects/resolve';
+import { stateFingerprint } from '../../src/core/fingerprint';
 import { ALL_PROTOCOLS_3 } from '../../src/data/cards3';
 
 /**
@@ -104,21 +105,22 @@ export function setupGen3Game(seed: number): GameState {
 }
 
 /** 单局驱动：随机合法行动 / 随机应答，直至分出胜负或步数上限。
- *  注意：引擎内部（洗牌/随机揭示等）也用 Math.random，因此单局开始前**同时替换 Math.random**
- *  为同种子的可复现流——否则同一 seed 每次跑出的对局不同，失败无法复现。
+ *  G0 之后引擎随机已完全由状态种子决定，**不再需要替换 Math.random**：
+ *  同一 seed 两次调用必然得到同一个 fingerprint。
  *  stats（可选）：收集本局所有进过场的 card defId，用于覆盖率断言。 */
 export interface GameStats {
   played: Set<string>;
 }
 
-export function playRandomGame(seed: number, maxSteps: number, stats?: GameStats): { steps: number; finished: boolean } {
-  const origRandom = Math.random;
-  Math.random = rng(seed);
-  try {
-    return playRandomGameInner(seed, maxSteps, stats);
-  } finally {
-    Math.random = origRandom;
-  }
+export function playRandomGame(
+  seed: number,
+  maxSteps: number,
+  stats?: GameStats,
+): { steps: number; finished: boolean; fingerprint: string } {
+  const s = setupGen3Game(seed);
+  const r = rng(seed ^ 0x9e3779b9);
+  const res = driveGame(s, r, seed, maxSteps, stats);
+  return { ...res, fingerprint: stateFingerprint(s) };
 }
 
 /** 覆盖统计：记录当前场上所有卡的 defId（进过场即算被本局覆盖） */
@@ -127,9 +129,14 @@ function collectField(s: GameState, stats?: GameStats): void {
   for (const p of s.players) for (const stack of p.stacks) for (const c of stack) stats.played.add(c.defId);
 }
 
-function playRandomGameInner(seed: number, maxSteps: number, stats?: GameStats): { steps: number; finished: boolean } {
-  const r = rng(seed ^ 0x9e3779b9); // 选择流与引擎流分开（都已固定种子 → 整体可复现）
-  const s = setupGen3Game(seed);
+/** 驱动一局已建好的状态：选择流由调用方注入（选择流与引擎流分开，两者都固定种子 → 整体可复现） */
+function driveGame(
+  s: GameState,
+  r: () => number,
+  seed: number,
+  maxSteps: number,
+  stats?: GameStats,
+): { steps: number; finished: boolean } {
   let steps = 0;
   while (s.winner === null && s.phase === 'turn' && steps < maxSteps) {
     steps += 1;

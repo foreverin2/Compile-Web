@@ -48,7 +48,7 @@ export function applyStep(s: GameState, step: Step): void {
 }
 
 /** 用可复现选择流推进并记录步骤。
- *  与 tests/fuzz/lib.ts 的 playRandomGameInner 保持同一判断顺序。 */
+ *  与 tests/fuzz/lib.ts 的 driveGame 保持同一判断顺序。 */
 export function recordRandomSteps(s: GameState, r: () => number, max: number): Step[] {
   const steps: Step[] = [];
   for (let i = 0; i < max; i++) {
