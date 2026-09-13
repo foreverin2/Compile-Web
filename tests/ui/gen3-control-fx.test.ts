@@ -111,6 +111,19 @@ describe('批次 D 守卫：控制权族 + 常驻层', () => {
     expect(code.includes('@property')).toBe(false);
   });
 
+  it('常驻视觉不再出现"跨链路长线/卡面网格"（2026-09-13 审计后的两条改进）', () => {
+    // ① 愤怒0 中缝：只跨两条能量槽（旧版跨双方槽位并集 = 整行宽，像怪线），并挂"最高档剔除"文字标
+    const wrath = controlTs.slice(controlTs.indexOf('export function syncWrath0Cull'), controlTs.indexOf('export function syncSloth0Bonus'));
+    expect(wrath, '中缝未按能量槽定位').toMatch(/const b0 = batteryNode\(0, line\)/);
+    expect(wrath, '中缝未按能量槽定位').toMatch(/const b1 = batteryNode\(1, line\)/);
+    expect(wrath, '中缝缺少文字标').toContain("'g3sync-wrath0-chip'");
+    expect(syncCss, 'CSS 缺少 .g3sync-wrath0-chip').toContain('.g3sync-wrath0-chip');
+    // ② 刚性7 迷宫纹：必须是"卡外一圈边框"（border-image 重复渐变），不能再是铺满卡面的网格
+    const mazeBlock = syncCss.slice(syncCss.indexOf('.g3sync-rig7-maze {'), syncCss.indexOf('@keyframes g3-rig7-maze'));
+    expect(mazeBlock, '迷宫纹未改为卡外边框（border-image）').toContain('border-image: repeating-linear-gradient');
+    expect(mazeBlock, '迷宫纹仍在铺满卡面（background 重复渐变）').not.toMatch(/background:\s*\n?\s*repeating-linear-gradient/);
+  });
+
   it('C4 判定特效已改为"贴能量槽的短对比条 + 文字标签"（旧版横铺整条链路 = 用户看到的怪粗线）', () => {
     expect(controlTs, 'C4 仍在整条 stack-slot 上铺条').not.toMatch(/bar\.style\.width = `\$\{r\.width \+ 12\}px`/);
     expect(controlTs).toContain("el('div', 'g3ctrl-caption'");

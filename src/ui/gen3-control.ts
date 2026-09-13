@@ -271,23 +271,48 @@ export function syncWrath0Cull(s: GameState): string[] {
         rec.node.appendChild(band);
       }
       rec.node.appendChild(el('i', 'g3sync-wrath0-seam'));
+      rec.node.appendChild(el('i', 'g3sync-wrath0-chip', '最高档剔除'));
     }
     for (const c of culled) {
       const band = rec.node.querySelector<HTMLElement>(`[data-band="${c.uid}"]`);
       if (band) place(band, visibleRectOf(s, c.uid), 1);
     }
-    // 中缝虚线（表示"这条线的最高档整条被划掉"）
-    const slotA = slotNode(0, line);
-    const slotB = slotNode(1, line);
-    const ra = slotA ? rectOf(slotA) : null;
-    const rb = slotB ? rectOf(slotB) : null;
+    // 中缝虚线 + 文字标（表示"这条线的最高档整条被划掉"）。
+    // 2026-09-13 改进：旧版横跨【双方槽位并集】= 整行宽，看起来就是一条横在链路里的怪线；
+    // 现在改为**只跨两条能量槽之间**、两端带箭头、中央挂「最高档剔除」文字标 → 一眼看懂是规则提示。
+    const b0 = batteryNode(0, line);
+    const b1 = batteryNode(1, line);
+    const r0 = b0 ? rectOf(b0) : null;
+    const r1 = b1 ? rectOf(b1) : null;
     const seam = rec.node.querySelector<HTMLElement>('.g3sync-wrath0-seam');
-    if (seam && ra && rb) {
-      const top = Math.min(ra.top, rb.top);
-      const bottom = Math.max(ra.bottom, rb.bottom);
-      seam.style.left = `${Math.min(ra.left, rb.left)}px`;
-      seam.style.top = `${(top + bottom) / 2}px`;
-      seam.style.width = `${Math.max(ra.right, rb.right) - Math.min(ra.left, rb.left)}px`;
+    const chip = rec.node.querySelector<HTMLElement>('.g3sync-wrath0-chip');
+    if (seam) {
+      let left: number;
+      let right: number;
+      let midY: number;
+      if (r0 && r1) {
+        const cx0 = r0.left + r0.width / 2;
+        const cx1 = r1.left + r1.width / 2;
+        left = Math.min(cx0, cx1) - 34;
+        right = Math.max(cx0, cx1) + 34;
+        midY = (r0.top + r0.height / 2 + r1.top + r1.height / 2) / 2;
+      } else {
+        const slotA = slotNode(0, line);
+        const slotB = slotNode(1, line);
+        const ra = slotA ? rectOf(slotA) : null;
+        const rb = slotB ? rectOf(slotB) : null;
+        if (!ra || !rb) continue;
+        left = Math.min(ra.left, rb.left);
+        right = Math.max(ra.right, rb.right);
+        midY = (ra.top + ra.bottom + rb.top + rb.bottom) / 4;
+      }
+      seam.style.left = `${left}px`;
+      seam.style.top = `${midY}px`;
+      seam.style.width = `${Math.max(40, right - left)}px`;
+      if (chip) {
+        chip.style.left = `${(left + right) / 2}px`;
+        chip.style.top = `${midY}px`;
+      }
     }
   }
   return [...active];
