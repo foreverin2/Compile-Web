@@ -38,6 +38,9 @@ describe('D4：全域确定性（全卡池 fuzz）', () => {
 
     // 跨种子必须不同：上面的"两次重跑"检测不到「常量型 / 忽略种子的 RNG」
     // ——那种实现两次运行恒等，D4 会全绿。这条断言补上该盲区。
+    // 先把这个前提钉成结构性的：若把 REPEAT_SEEDS 调到 1，fp.get(2) 会变成 undefined、
+    // 与 fp.get(1) 天然不等 → 断言会静默失效。故显式断言指纹表里确实有两个种子。
+    expect(fp.size).toBe(2);
     expect(fp.get(1)).not.toBe(fp.get(2));
   }, 300000);
 
@@ -60,5 +63,8 @@ describe('D4：全域确定性（全卡池 fuzz）', () => {
     const a = playRandomGame(7, MAX_STEPS);
     const b = playRandomGame(7, MAX_STEPS);
     expect(a.steps).toBe(b.steps);
+    // 步数相等本身在"两跑都撞上 MAX_STEPS 上限"时是空转的——必须同时比 finished：
+    // 一跑分出胜负、另一跑没分出来（步数同为上限）才算真正同轨。
+    expect(a.finished).toBe(b.finished);
   }, 300000);
 });

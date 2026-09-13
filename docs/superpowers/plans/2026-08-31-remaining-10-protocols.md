@@ -106,6 +106,7 @@ case 'draw': {
 - `give`：查 uid（须在手牌）→ 从原 owner 手牌移除 → `card.owner = op.to` → 入 to 手牌 → `emitCardEvent(s, 'card:given', card, { to: op.to })`。
 - `takeRandom`：`const hand = s.players[op.from].hand;` 空 → throw（调用方守卫）；`idx = Math.floor(Math.random() * hand.length)` → 移除 → `card.owner = pe.player` → 入效果属主手牌 → `emitCardEvent(s, 'card:given', card, { to: pe.player })`。
 - **拍板（love-3）**：真随机 `Math.random`；对手手牌空 → take 步骤不触发（fizzle），give 步骤照常执行。
+  > **G0 后订正（2026-09-13）**：本节记录的是当时的实现与拍板，**其中的 `Math.random` 已失效**——该用法会让联机两端分叉，现由 `tests/core-purity.test.ts` 守卫禁止。`takeRandom` 已改走状态种子随机源 `randInt(s, hand.length)`（`src/core/effects/resolve.ts:669`）；新增随机效果一律用 `randInt(s, n)` / `randPick(s, arr)`（`src/core/rng.ts`），勿照抄本节旧代码。
 
 ### A1.8 before-compile（speed-2）+ pendingCompile
 
