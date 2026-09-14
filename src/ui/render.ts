@@ -234,29 +234,31 @@ export function renderStackSlot(
     /** 卡牌朝向。默认 ±90°（按 owner：P0 顺时针 / P1 逆时针）—— 热座页两位玩家同屏各看得正。
      *  远程页传 0（自己）/ 180（对手）。**热座路径仍产出 rot-cw / rot-ccw**；0°/180° 之外不产出任何朝向类。 */
     orient?: CardOrient;
-    /** **竖向生长**（G2 修正 R1，远程页三列纵向布局）。默认 `false` = 热座页的横向生长，逐字等价：
-     *  - `false`：`.stack` 保持 `.grow-left`（P0）/`.grow-right`（P1），DOM 顺序按绝对玩家（旧行为）；
-     *  - `true`：`.stack` 改挂 `.grow-up`（**对手**）/`.grow-down`（**自己**），并把**渲染顺序反转**
-     *    成「最新 → 最旧」。哪一号是自己由 `selfPlayer` 给（**按侧**，不是按绝对玩家号）。
+    /** **竖向生长**（G2 修正 R1 引入；`'down' | 'up'` 是 R-F2 的改法，见下）。
+     *  缺省 `undefined` = 热座页的横向生长，逐字等价：`.stack` 保持 `.grow-left`（P0）/
+     *  `.grow-right`（P1），DOM 顺序按绝对玩家（旧行为）。
+     *  - `'down'`：`.stack` 挂 `.grow-down` + DOM 顺序 **[最旧 … 最新]**（最新落到**下端**，自己侧）；
+     *  - `'up'`：`.stack` 挂 `.grow-up` + DOM 顺序 **[最新 … 最旧]**（最新落到**上端**，对手侧）。
      *
-     *  ⚠️ 为什么渲染顺序必须一起反转（这是本参数存在的一半理由，另一半是类名）：
+     *  ⚠️ 为什么渲染顺序必须**按侧**分别给（这是本参数存在的一半理由，另一半是类名）：
      *  `pos 0`（最旧）永远贴协议一侧、越新的越向外长，与横排的语义完全一致。横排时 `.card + .card`
      *  的**负 margin-left** 让"后一张 DOM 兄弟"从左侧压住前一张，于是"最新在 DOM 最后"刚好等于
      *  "最新在最外侧、且 z-index 最大盖住旧牌"。竖排时负 margin 走 **margin-top**（覆盖在
-     *  `styles-net.css` 里），同一个 DOM 顺序会让**最新的牌跑到最内层（贴协议）**、与"越新越往外"
-     *  相反。所以竖排必须把顺序反过来 —— 且两种竖排（grow-up / grow-down）都用同一顺序，
-     *  因为 `justify-content: flex-end` 会负责把整组推到底部（对手侧）。
+     *  `styles-net.css` 里）—— 同一条负 margin 让**后一个 DOM 兄弟更低**，所以方向**完全由 DOM 顺序
+     *  决定**（`.stack` 高度由内容决定、没有自由空间 ⇒ `justify-content` 是**死 CSS**，改类名救不了方向）。
+     *
+     *  ⚠️ **R-F2 · I-3**：R1 曾对两侧都用同一个「最新 → 最旧」顺序（当时的注释以为 `justify-content`
+     *  能把对手侧整组推到底部），于是**自己侧的最新牌落到内端（贴协议）** —— 与规格 §1 第 5 行
+     *  「自己越新的牌越往下长」相反，并连带让自己侧被盖卡的可见条带取反了一端。改法就是上面的按侧顺序。
+     *
+     *  ⚠️ **R-F2 · Nit 消除**：R-F 用的是一对 `vGrow?: boolean` + `selfPlayer?: PlayerId`，于是
+     *  "传了 `vGrow` 却忘传 `selfPlayer`"会**静默按 P0 = 自己**（又一处"绝对玩家默认值"坑）。
+     *  改成 `'down' | 'up'` 后由 `render-net.ts`（它**已经知道**侧别）直接给方向
+     *  ⇒ **共享助手彻底不需要知道座位**，与 R3 的"方向只在 `fx-seat.ts` 里算"纪律最一致。
      *
      *  ⚠️ 契约红线：`.stack` **不是** A 类钩子（`fx-dom-contract.ts` §D 的说明），
      *  `.grow-*` 纯 CSS 语义，故 FX 读侧不受影响。 */
-    vGrow?: boolean;
-    /** 竖向生长时**哪一号是"自己"**（缺省 `0` ⇒ 与 R1 的 `player === 0 ? grow-down : grow-up` 逐字等价）。
-     *
-     *  ⚠️ 为什么必须有这个参数（G2 修正 R-F · C-2 的同族缺陷）：`grow-*` 是**侧别**语义
-     *  （规格 §1 第 2/5 行：自己越新越**下**、对手越新越**上**），而"哪一号是自己"由**座位**决定。
-     *  按绝对玩家号给会让 `viewSeat = 1`（我是 P2）时**自己向上长、对手向下长** —— 与"垂直镜像"相反。
-     *  远程页传 `viewSeat`；热座页**不传** `vGrow`，故这个字段在热座路径上不可达。 */
-    selfPlayer?: PlayerId;
+    vGrow?: 'down' | 'up';
     /** **特效朝向标记**（G2 修正 R1 只负责**产出**，读侧是 R2 的 `fxOrientOf`）。
      *  给了就逐张卡写 `data-fx-rot="…"`。默认不写 ⇒ 热座页 DOM 上**一个字节都不多**，
      *  于是「热座零变化」是构造性的（R2 的回退分支走 `orientOf`），
@@ -277,23 +279,26 @@ export function renderStackSlot(
   const cards = s.players[player].stacks[line];
   // G2 修正 R1：竖向生长（远程页）改挂 `.grow-up`（对手，向上长）/ `.grow-down`（自己，向下长）。
   // 类名是**纯 CSS 语义**（规则在 styles-net.css），契约不涉及（`.stack` 不是 A 类钩子）。
-  // G2 修正 R-F · C-2：**哪一号是自己**由 `opts.selfPlayer` 给（远程页按座位传 `viewSeat`）——
-  // 按绝对玩家号会让换席位后"自己向上长、对手向下长"。缺省 `0` 与 R1 逐字等价。
-  // 默认分支与改动前逐字等价：`player === 0 ? ' grow-left' : ' grow-right'`。
-  const selfPlayer = opts?.selfPlayer ?? 0;
+  // G2 修正 R-F2：语义由调用方**按侧**直接给（`'down'` = 自己侧 / `'up'` = 对手侧）——
+  // 共享助手**不需要知道座位**（R-F 那对 `vGrow + selfPlayer` 会因"忘传 selfPlayer"静默按 P0 = 自己）。
+  // 缺省分支与改动前逐字等价：`player === 0 ? ' grow-left' : ' grow-right'`。
   const growCls = opts?.vGrow
-    ? (player === selfPlayer ? ' grow-down' : ' grow-up')
+    ? ` grow-${opts.vGrow}`
     : (player === 0 ? ' grow-left' : ' grow-right');
   const pile = el('div', 'stack' + growCls);
   // 放置顺序：pos 0（最旧）贴协议一侧，越新的牌越靠外侧。
   // P1 渲染从最新到最旧（row + justify-content:flex-end → 整组右对齐，pos 0 贴右端协议）；
   // P2 渲染从最旧到最新（row + 默认左对齐 → pos 0 贴左端协议）。
-  // G2 修正 R1：竖排（vGrow）两种座位都用"最新 → 最旧"（理由见 opts.vGrow 的说明：负 margin 走
-  // margin-top，DOM 后一张会盖住前一张，所以"最新在最后"= "最新在最内层"，与语义相反）。
+  // G2 修正 R-F2 · I-3：竖排必须**按侧**给顺序 ——
+  //  · `.grow-down`（自己）：DOM [最旧 → 最新]，负 margin-top 让最新的一张落到**下端**（越新越往外）；
+  //  · `.grow-up`（对手）：DOM [最新 → 最旧]，最新的一张落在**上端**。
+  //  （R1 曾对两侧都用"最新 → 最旧" ⇒ 自己侧最新牌贴协议、与规格 §1 相反；理由见 opts.vGrow 的说明。）
   const order: number[] =
-    opts?.vGrow
-      ? cards.map((_, i) => cards.length - 1 - i)
-      : player === 0 ? cards.map((_, i) => cards.length - 1 - i) : cards.map((_, i) => i);
+    opts?.vGrow === 'down'
+      ? cards.map((_, i) => i)
+      : opts?.vGrow === 'up'
+        ? cards.map((_, i) => cards.length - 1 - i)
+        : player === 0 ? cards.map((_, i) => cards.length - 1 - i) : cards.map((_, i) => i);
   for (const i of order) {
     const card = cards[i];
     const isTop = i === cards.length - 1;

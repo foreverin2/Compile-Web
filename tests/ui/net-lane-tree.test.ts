@@ -250,8 +250,13 @@ function installDom(): () => void {
 /** 跑完渲染器排下的双 rAF 收尾（否则会以"未处理异常"的形式在 restore 之后爆出来）。 */
 const drainRaf = (): Promise<void> => new Promise((r) => { setTimeout(r, 10); });
 
-/** 一帧合成局（与评审探针同）：只要"三列 + 两侧 + 能量槽"的结构都在，够本文件用。 */
-function renderFrame(viewSeat: 0 | 1): StubNode {
+/** 一帧合成局（与评审探针同）：只要"三列 + 两侧 + 能量槽"的结构都在，够本文件用。
+ *
+ *  `cardsPerStack`（**R-F2 新增**）：> 0 时给**双方每条线**都铺 n 张卡
+ *  （uid 后缀 = 引擎下标：`c0` 最旧 … `c{n-1}` 最新，与 `stacks` 的追加语义一致）。
+ *  旧版这一帧**场上无卡**（`createGame` 后 stacks 全空）—— 正因如此，"链路卡序"这件事
+ *  在 R1→R2→R3→R-F **四轮**里从未被任何机检覆盖（I-3 的根因）。 */
+function renderFrame(viewSeat: 0 | 1, cardsPerStack = 0): StubNode {
   const s = createGame({ seed: 'rf-tree-seed', draftStarter: 0, firstToPlay: 1 });
   for (const p of [0, 1] as const) {
     s.players[p].protocols = [
@@ -259,6 +264,11 @@ function renderFrame(viewSeat: 0 | 1): StubNode {
       { defId: 'ice-0', compiled: false },
       { defId: 'light-0', compiled: false },
     ] as never;
+    if (cardsPerStack > 0) {
+      s.players[p].stacks = [0, 1, 2].map((line) => Array.from({ length: cardsPerStack }, (_, i) => ({
+        uid: `p${p}l${line}c${i}`, defId: 'fire-0', faceUp: true, owner: p, zone: 'field', line, pos: i,
+      }))) as never;
+    }
   }
   (s as { phase: string }).phase = 'turn';
   const root = makeEl('div');
@@ -292,17 +302,26 @@ const label = (l: Layer): string => `${l.side === 'foe' ? '对手' : '自己'}${
 
 const isClass = (n: StubNode, c: string): boolean => classesOf(n).includes(c);
 
-/** 一列（`.net-lane-band`）里**自上而下的六层**（DOM 顺序 + CSS `order`）。 */
-function layersOfColumn(col: StubNode, rules: CssRule[]): Layer[] {
+/**
+ * 一列（`.net-lane-band`）里**自上而下的六层**（DOM 顺序 + CSS `order`）。
+ *
+ * ⚠️ **R-F2 · 守卫洞 1**：`chain` = 该列的**完整祖先链**（`root → .net-board → .net-grid`，
+ * 见 `firstColumnWithChain`）。旧版把它写死成"从列开始"（`[]`），于是**列以上祖先才匹配的规则
+ * 对解算器完全不可见** —— 实测往 `styles-net.css` 插一条
+ * `.net-board .net-lane-band .stack-slot .battery { order: 1; }`（与按侧那两条**同权重**、
+ * 源序靠后 ⇒ 浏览器里它会赢 ⇒ 自己能量槽跑到链路上方）守卫仍然**绿**。
+ * 本文件已有 11 条 `.net-board` 前缀规则，这个写法很现实，所以必须把链带全。
+ */
+function layersOfColumn(col: StubNode, chain: StubNode[], rules: CssRule[]): Layer[] {
   const out: Layer[] = [];
-  for (const sideNode of visualChildren(col, [], rules)) {
+  for (const sideNode of visualChildren(col, chain, rules)) {
     const side: Side | null = isClass(sideNode, 'net-side-foe') ? 'foe'
       : isClass(sideNode, 'net-side-self') ? 'self' : null;
     if (!side) continue;   // 中线等
-    for (const cell of visualChildren(sideNode, [col], rules)) {
+    for (const cell of visualChildren(sideNode, [...chain, col], rules)) {
       if (isClass(cell, 'protocol-cell')) { out.push({ side, kind: 'protocol' }); continue; }
       if (!isClass(cell, 'stack-slot')) continue;
-      for (const inner of visualChildren(cell, [col, sideNode], rules)) {
+      for (const inner of visualChildren(cell, [...chain, col, sideNode], rules)) {
         if (isClass(inner, 'battery')) out.push({ side, kind: 'battery' });
         else if (isClass(inner, 'stack')) out.push({ side, kind: 'stack' });
       }
@@ -320,28 +339,36 @@ const SPEC_ORDER: readonly Layer[] = [
   { side: 'self', kind: 'battery' },  // 6
 ];
 
-/** 取第一列（三条线同构，第一列足够；三条列的一致性由 renderNetBoard 的循环与既有计数守卫保证）。 */
-const firstColumn = (root: StubNode): StubNode => {
-  const found: StubNode[] = [];
-  const visit = (n: StubNode): void => {
-    if (isClass(n, 'net-lane-band')) found.push(n);
-    for (const c of n.children) visit(c);
+/** 取第一列 + 它**从 root 起的完整祖先链**（三条线同构，第一列足够；
+ *  三条列的一致性由 renderNetBoard 的循环与既有计数守卫保证）。
+ *
+ *  ⚠️ 返回祖先链是**守卫洞 1 的修法**：`visualChildren(node, chain, rules)` 给子项拼的链是
+ *  `[...chain, node, 子项]`，所以 `chain` 必须是"从根到父节点"的真实祖先序列，
+ *  `.net-board` 这类**列以上**的选择器片段才可能匹配上（旧版漏掉 → 覆盖规则隐形）。 */
+function firstColumnWithChain(root: StubNode): { col: StubNode; chain: StubNode[] } {
+  const found: Array<{ col: StubNode; chain: StubNode[] }> = [];
+  const visit = (n: StubNode, chain: StubNode[]): void => {
+    if (isClass(n, 'net-lane-band')) found.push({ col: n, chain });
+    for (const c of n.children) visit(c, [...chain, n]);
   };
-  visit(root);
+  visit(root, []);
   expect(found.length, '元素树里找不到 3 条 .net-lane-band（三列结构被改？）').toBe(3);
+  // 反空集合：祖先链至少要含 `.net-board` 与 `.net-grid` —— 否则"带全祖先"这件事会静默退化成旧行为
+  expect(found[0].chain.some((n) => isClass(n, 'net-board')),
+    '第一列的祖先链里没有 .net-board（带全祖先的修法没生效 → 列以上的 CSS 覆盖又会隐形）').toBe(true);
   return found[0];
-};
+}
 
-/** 在列内按视觉顺序找某个「侧 + 层」的节点（能量槽/链路/协议都能取到）。 */
-function findLayer(col: StubNode, rules: CssRule[], want: Layer): StubNode | null {
-  for (const sideNode of visualChildren(col, [], rules)) {
+/** 在列内按视觉顺序找某个「侧 + 层」的节点（能量槽/链路/协议都能取到）。`chain` 同 `layersOfColumn`。 */
+function findLayer(col: StubNode, chain: StubNode[], rules: CssRule[], want: Layer): StubNode | null {
+  for (const sideNode of visualChildren(col, chain, rules)) {
     const side: Side | null = isClass(sideNode, 'net-side-foe') ? 'foe'
       : isClass(sideNode, 'net-side-self') ? 'self' : null;
     if (side !== want.side) continue;
-    for (const cell of visualChildren(sideNode, [col], rules)) {
+    for (const cell of visualChildren(sideNode, [...chain, col], rules)) {
       if (want.kind === 'protocol' && isClass(cell, 'protocol-cell')) return cell;
       if (want.kind !== 'protocol' && isClass(cell, 'stack-slot')) {
-        for (const inner of visualChildren(cell, [col, sideNode], rules)) {
+        for (const inner of visualChildren(cell, [...chain, col, sideNode], rules)) {
           if (want.kind === 'battery' && isClass(inner, 'battery')) return inner;
           if (want.kind === 'stack' && isClass(inner, 'stack')) return inner;
         }
@@ -363,12 +390,12 @@ describe('R-F · C-2：真跑 renderNetBoard 的元素树层序（viewSeat 0/1�
     try {
       for (const seat of [0, 1] as const) {
         const root = renderFrame(seat);
-        const col = firstColumn(root);
+        const { col, chain } = firstColumnWithChain(root);
         const tree: string[] = [];
         walk(col, 0, tree, 4);
         // 报告里要贴的元素树（真实产出，非手写）
         console.log(`\n===== viewSeat=${seat} · 第一列元素树（DOM 顺序）=====\n${tree.join('\n')}`);
-        const layers = layersOfColumn(col, RULES);
+        const layers = layersOfColumn(col, chain, RULES);
         console.log(`----- viewSeat=${seat} · 自上而下（DOM 顺序 + CSS order）-----\n`
           + layers.map((l, i) => `  ${i + 1}. ${label(l)}`).join('\n'));
 
@@ -392,20 +419,85 @@ describe('R-F · C-2：真跑 renderNetBoard 的元素树层序（viewSeat 0/1�
         expect(iSelfStack, `viewSeat=${seat}：自己链路必须在中线之下（第 5 层）`).toBe(4);
 
         // ③ 归属：能量槽/链路槽各自挂在自己的侧里，**不是**按绝对玩家猜的
-        const foeSide = visualChildren(col, [], RULES).find((n) => isClass(n, 'net-side-foe'))!;
-        const selfSide = visualChildren(col, [], RULES).find((n) => isClass(n, 'net-side-self'))!;
+        const foeSide = visualChildren(col, chain, RULES).find((n) => isClass(n, 'net-side-foe'))!;
+        const selfSide = visualChildren(col, chain, RULES).find((n) => isClass(n, 'net-side-self'))!;
         expect(foeSide.dataset.player, `viewSeat=${seat}：对手侧的 data-player 应是绝对的 ${1 - seat}`)
           .toBe(String(1 - seat));
         expect(selfSide.dataset.player, `viewSeat=${seat}：自己侧的 data-player 应是绝对的 ${seat}`)
           .toBe(String(seat));
 
         // ④ 竖向生长类**按侧**（不是按绝对玩家）：自己恒 .grow-down、对手恒 .grow-up
-        const selfStack = findLayer(col, RULES, { side: 'self', kind: 'stack' })!;
-        const foeStack = findLayer(col, RULES, { side: 'foe', kind: 'stack' })!;
+        const selfStack = findLayer(col, chain, RULES, { side: 'self', kind: 'stack' })!;
+        const foeStack = findLayer(col, chain, RULES, { side: 'foe', kind: 'stack' })!;
         expect(classesOf(selfStack), `viewSeat=${seat}：自己链路必须向上端协议生长（.grow-down）`)
           .toContain('grow-down');
         expect(classesOf(foeStack), `viewSeat=${seat}：对手链路必须向下端协议生长（.grow-up）`)
           .toContain('grow-up');
+      }
+    } finally {
+      await drainRaf();
+      restore();
+    }
+  });
+
+  /**
+   * **R-F2 · I-3 的行为守卫**：链路里的**卡序**（本文件此前只覆盖**空链路**的六层，
+   * 这就是 I-3 躲过 R1→R2→R3→R-F 四轮的**唯一**原因 —— `renderFrame` 用的 `createGame()` 场上无卡）。
+   *
+   * ## 为什么"卡序"就是"生长方向"（可复算，不依赖浏览器）
+   *
+   * 1. 引擎里 `stacks[line]` 的顺序恒为「最旧 → 最新」（`pos` = 追加序号）；
+   * 2. 竖排的重叠规则是 `.net-lane-band .stack .card + .card { margin-top: calc(0.462*var(--card-w) - var(--card-h)) }`
+   *    = 60.3 − 182 = **−121.7px**。flex column 里，`margin-top` 为负 ⇒ **后面那个 DOM 兄弟更靠下**
+   *    （第 k 个兄弟顶边 = 第 k−1 个顶边 + 60.3）⇒ **DOM 顺序直接决定谁在上、谁在下**；
+   * 3. `z-index = pos`（`render.ts`）⇒ 最新的那张永远盖住更旧的 ⇒ 视觉上"链路从 pos 0 向最新那张延伸"。
+   *
+   * ⇒ 「pos 0（最旧）贴协议、越新的越往外」这条语义在竖排下**只能**由 DOM 顺序实现：
+   *  - **自己侧**（协议在上端、向下长）⇒ DOM 必须是 **[最旧 … 最新]**（最新在**末位** = 最下）；
+   *  - **对手侧**（协议在下端、向上长）⇒ DOM 必须是 **[最新 … 最旧]**（最新在**首位** = 最上）。
+   *
+   * ⚠️ `justify-content: flex-start/flex-end` 那两条声明**救不了方向**：`.stack` 的高度由内容决定、
+   * 没有自由空间可分配 ⇒ 它们是**死 CSS**，唯一的杠杆就是上面这条 DOM 顺序（I-3 的成因）。
+   *
+   * **只查顺序、不查几何**：桩的 `getBoundingClientRect()` 恒 0，本文件不做任何几何断言。
+   * 这两条断言加上"负 margin-top + z-index=pos"这两条**可复算**的 CSS/源码事实，就足以确定
+   * 最新牌落在链路的哪一端（人眼项仍然保留：见 R-F2 报告清单第 1~3 条）。
+   */
+  it('两个席位下，链路卡序必须是「pos 0 贴协议、越新越往外」：自己侧最新在**末位**、对手侧最新在**首位**', async () => {
+    const restore = installDom();
+    try {
+      for (const seat of [0, 1] as const) {
+        const root = renderFrame(seat, 3);
+        const { col, chain } = firstColumnWithChain(root);
+        const printed: string[] = [];
+        for (const side of ['self', 'foe'] as const) {
+          const stack = findLayer(col, chain, RULES, { side, kind: 'stack' })!;
+          const cards = stack.children.filter((c) => isClass(c, 'card'));
+          expect(cards.length, `viewSeat=${seat} · ${side}：合成局里每条链路应恰好 3 张卡（桩/构造被改？）`)
+            .toBe(3);
+          const uids = cards.map((c) => String(c.dataset.uid));
+          const zs = cards.map((c) => Number(c.style.zIndex));
+          const player = side === 'self' ? seat : (1 - seat);
+          // 引擎序 = 最旧 → 最新（uid 后缀就是引擎下标）
+          const oldestFirst = [0, 1, 2].map((i) => `p${player}l0c${i}`);
+          const expected = side === 'self' ? oldestFirst : [...oldestFirst].reverse();
+          printed.push(`  ${side === 'self' ? '自己侧' : '对手侧'}（P${player + 1}）`
+            + ` class="${stack.cls.split(/\s+/).filter((c) => c === 'stack' || c.startsWith('grow-')).join(' ')}"`
+            + ` 卡序: ${cards.map((c, i) => `#${i} ${String(c.dataset.uid)} z=${String(c.style.zIndex)}`).join(' | ')}`);
+          // ① 完整 DOM 卡序（含"自己侧最新在末位 / 对手侧最新在首位"）
+          expect(uids, `viewSeat=${seat} · ${side === 'self' ? '自己' : '对手'}侧：DOM 卡序与规格 §1 不符`
+            + `（自己侧必须 [最旧→最新]、对手侧必须 [最新→最旧]，否则最新的一张会落在链路的**错端** —— I-3）`)
+            .toEqual(expected);
+          // ② 最新那张的 z-index 最大（保证"最新盖住更旧的"这条视觉语义，横竖排都是它）
+          const newest = `p${player}l0c2`;
+          const iNewest = uids.indexOf(newest);
+          expect(zs[iNewest], `viewSeat=${seat} · ${side === 'self' ? '自己' : '对手'}侧：`
+            + `最新那张（${newest}）的 z-index 必须是最大（实际 z=${zs[iNewest]}，全部 z=${zs.join(',')}）`)
+            .toBe(Math.max(...zs));
+        }
+        console.log(`\n===== viewSeat=${seat} · 第 1 条线的链路卡序（DOM 顺序 + z-index）=====\n`
+          + printed.join('\n')
+          + '\n  （引擎 stacks 数组顺序 = 最旧 → 最新：c0, c1, c2）');
       }
     } finally {
       await drainRaf();
@@ -420,8 +512,13 @@ describe('R-F · C-2：真跑 renderNetBoard 的元素树层序（viewSeat 0/1�
     const byPlayer = batteryOrderRules.filter((r) => /\.p[12]\b/.test(r.selector)).map((r) => r.selector);
     expect(byPlayer, 'styles-net.css 里仍有"按绝对玩家号"给能量槽定 order 的规则'
       + '（默认席位下会让两个能量槽都跑到内侧 —— C-2）').toEqual([]);
+    // ⚠️ **R-F2 · 守卫洞 2**：这里原来写 `toBe(2)`（"恰好两条按侧的 order 规则"），是**过度指定** ——
+    //    一条语义等价的重构（自己侧改用 `flex-direction: column-reverse`、或"一条基础规则 + 一条对手侧覆盖"
+    //    = 只有 1 条 `.net-side-*` 电池规则）会**假红**。真正要防的回归是"**按绝对玩家号给 order**"，
+    //    那条已由上面的 `byPlayer === []` 单独钉住；这里只保留**反空集合**（>= 1）：
+    //    抓"按侧给 order 这件事整个消失了"，不抓"用几条规则表达它"。
     const bySide = batteryOrderRules.filter((r) => /\.net-side-(foe|self)\b/.test(r.selector));
     expect(bySide.length, 'styles-net.css 未按侧（.net-side-foe/.net-side-self）给能量槽定 order')
-      .toBe(2);
+      .toBeGreaterThanOrEqual(1);
   });
 });

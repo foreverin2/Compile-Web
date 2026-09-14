@@ -203,8 +203,8 @@ export interface FxEndPoint { x: number; y: number }
 
 /**
  * **竖向**链路末端落点（远程页）：`x` = 槽的水平中心（竖排列里卡自己居中），
- * `y` = **末卡的下/上缘外侧**（末卡 = DOM 顺序最后一张 = 链路里最新的一张，R1 的 `vGrow`
- * 让它落在**外侧**）；空槽退化为"槽的下/上缘外侧"。
+ * `y` = **最外端那张卡的下/上缘外侧**（`outer` 那一端，见下面的 `last` 取法 —— G2 修正 R-F2 · I-3 的
+ * 第二处：卡序**按侧**给之后，"最外端"不再等于"最后一个 DOM 子节点"）；空槽退化为"槽的下/上缘外侧"。
  *
  * ⚠️ `owner` = **这张卡所属的绝对玩家**，**不是**视角座位（G2 修正 R-F · Minor M-2：
  * 这个参数原来叫 `seat`，而它被直接喂给 `fxOuterFor` —— 命名与语义不符正是 C-1 的入口）。
@@ -222,7 +222,15 @@ export function vStackEndPoint(
   const outer = fxOuterForSeat(owner, seat);
   const x = vCenterOf(slotRect, 'x');
   const cards = slot.querySelectorAll<HTMLElement>('.card');
-  const last = cards.length > 0 ? cards[cards.length - 1] : null;
+  // ⚠️ **「末卡」= 生长方向最外端的那一张**（G2 修正 R-F2 · I-3 的第二处）：
+  //    竖排的 DOM 顺序是**按侧**给的（`render.ts` 的 `opts.vGrow`）——
+  //      · 自己侧（`'end'`，向下长）：DOM [最旧 … 最新] ⇒ 最外端 = **最后**一个 DOM 子节点；
+  //      · 对手侧（`'start'`，向上长）：DOM [最新 … 最旧] ⇒ 最外端 = **第一个** DOM 子节点。
+  //    R1 的注释把「DOM 最后一张」当作「链路里最新的一张」，那只在"两侧同一个顺序"的旧局面下
+  //    对**自己侧**侥幸成立：对手侧取到的是**最旧**那张（它贴在协议一侧 = 内端），
+  //    落点于是被算到链路**内部**（2 张卡时偏 ~121px），幽灵卡会盖在链路上而不是链路上方。
+  //    负 margin-top ⇒ **后一个 DOM 兄弟更低**，故"上端 = 首个子节点、下端 = 末个子节点"。
+  const last = cards.length > 0 ? (outer === 'end' ? cards[cards.length - 1] : cards[0]) : null;
   const step = outer === 'end' ? 1 : -1;   // 沿屏幕坐标的"再往外"方向：大端 +、小端 −
   if (last) {
     return { x, y: vOuterEdgeOf(last.getBoundingClientRect(), outer, 'y') + step * lead };

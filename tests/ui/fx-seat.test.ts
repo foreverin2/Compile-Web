@@ -146,6 +146,27 @@ describe('R3 · 链路落点（自己向下 / 对手向上）', () => {
     expect(self.y).toBeGreaterThan(foe.y);
   });
 
+  it('vStackEndPoint（R-F2 · I-3 第二处）：卡序按侧给之后，"最外端"取**极值卡**而不是"DOM 末位"', () => {
+    const slot = rect(200, 400, 140, 500);
+    // DOM 顺序按侧（与 `render.ts` 的 `order` 同源），负 margin-top ⇒ 后一个兄弟低 60.3px：
+    //  · 自己侧（向下长）：[最旧 top=700, 最新 top=760.3] ⇒ 最外端 = **末位**（最新）的下缘；
+    //  · 对手侧（向上长）：[最新 top=400, 最旧 top=460.3] ⇒ 最外端 = **首位**（最新）的上缘。
+    const selfCards = [rect(205, 700, 130, 182), rect(205, 760.3, 130, 182)];
+    const foeCards = [rect(205, 400, 130, 182), rect(205, 460.3, 130, 182)];
+    setFxViewSeat(0);
+    expect(vStackEndPoint(slotStub(slot, selfCards), 0).y,
+      '自己侧（向下长）落点 = **末位**（最新）那卡的下缘外侧')
+      .toBe(760.3 + 182 + 65);
+    expect(vStackEndPoint(slotStub(slot, foeCards), 1).y,
+      '对手侧（向上长）落点 = **首位**（最新）那卡的上缘外侧 —— 若取"DOM 末位"，'
+      + '拿到的会是**最旧**那张（贴在协议一侧 = 内端），落点被算到链路**内部**')
+      .toBe(400 - 65);
+    // 反向留痕：对手侧若沿用"取末位"，期望值是 460.3 − 65（差一整张卡的步进），必须不是这个值
+    expect(vStackEndPoint(slotStub(slot, foeCards), 1).y).not.toBe(460.3 - 65);
+    // 单卡时两种取法等价（既有用例的形态 —— 这也是这条缺口一直没被看见的原因）
+    expect(vStackEndPoint(slotStub(slot, [foeCards[0]]), 1).y).toBe(vStackEndPoint(slotStub(slot, [foeCards[0], foeCards[1]]), 1).y);
+  });
+
   it('vStackEndPoint：空槽退化到槽的外缘外侧（自己 bottom(900) + 90 / 对手 top(400) − 90）', () => {
     const slot = rect(200, 400, 140, 500);
     const stub = slotStub(slot, []);

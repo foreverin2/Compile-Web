@@ -642,11 +642,13 @@ function renderSide(
       // 缺省值用的是 `s.turnPlayer`（那是回合），在远程页会让高亮每回合翻面。
       isSelfSlot: isSelfSeat,
       orient: isSelfSeat ? 0 : 180,
-      // 竖向生长（R1/R-F）：自己向下（`.grow-down`）/ 对手向上（`.grow-up`）。
-      // ⚠️ 方向必须按**侧**给：`selfPlayer` 告诉共享助手"哪一号是下半部"（本页 = `viewSeat`）。
-      //    按绝对玩家号给会让 `viewSeat = 1` 时"自己向上长、对手向下长"（C-2 的同族缺陷）。
-      vGrow: true,
-      selfPlayer: viewSeat,
+      // 竖向生长（R1/R-F/R-F2）：自己向下（`.grow-down`）/ 对手向上（`.grow-up`）。
+      // ⚠️ 语义必须按**侧**给，且由本页（**唯一知道侧别**的地方）直接给方向：
+      //    `vGrow: 'down' | 'up'` 一次说清"挂哪个类"+"DOM 卡序往哪边"（见 `renderStackSlot` 的 opts 说明）。
+      //    R-F 曾用 `vGrow: true + selfPlayer: viewSeat`（按座位算配对）—— 那会留下
+      //    "传了 vGrow 忘传 selfPlayer ⇒ 静默按 P0 = 自己"的坑（R-F2 采纳的设计建议），
+      //    也会让共享助手读到一个它本不该知道的"座位"概念。
+      vGrow: kind === 'self' ? 'down' : 'up',
       // 特效朝向标记（约束 8；R1 只产出、R2 才读）：自己 ccw、对手 cw。
       fxRot: isSelfSeat ? 'ccw' : 'cw',
     },

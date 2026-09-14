@@ -852,27 +852,40 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
    *
    * 守卫对照：旧版零覆盖（`.grow-left/.grow-right` 由 `renderStackSlot` 内部按绝对玩家给，
    * 热座页也在用，所以"本页是否改成了竖排"根本无从判断 —— 这正是重做前那条横排布局
-   * 能一路全绿的原因之一）。现在钉：① `vGrow: true` 的真实参；② `.grow-*` **按侧**给
-   * （`selfPlayer: viewSeat`）；③ 两个类名的 CSS 规则；④ 竖向重叠用 `margin-top`。
+   * 能一路全绿的原因之一）。现在钉：① 本页给 `renderStackSlot` 传了竖向生长参数；
+   * ② 方向**按侧**给（不是按绝对玩家号）；③ 两个类名的 CSS 规则；④ 竖向重叠用 `margin-top`。
    *
    * ⚠️ **R-F · C-2 的守卫修正**：旧版只看"两边都传了 vGrow"，于是漏掉了另一半 ——
    * `grow-*` 的配对当时在 `render.ts` 里按**绝对玩家号**做（`player === 0 ? grow-down : grow-up`），
-   * `viewSeat = 1` 时"自己向上长、对手向下长"，与 §1 的垂直镜像相反。现在 ② 把
-   * "哪一号是自己由**座位**给"钉住；真正的元素树层序与 `.grow-*` 归属由
-   * `tests/ui/net-lane-tree.test.ts` 真跑 `renderNetBoard` 后逐列断言。
+   * `viewSeat = 1` 时"自己向上长、对手向下长"，与 §1 的垂直镜像相反。
+   *
+   * ⚠️ **R-F2 的两处收敛**（本条随之改写，**判据的机检力不降**）：
+   *  - **语义从"哪一号是自己"换成"往哪边长"**：`vGrow: true + selfPlayer: viewSeat` →
+   *    `vGrow: 'down' | 'up'`（由本页按 `kind` 给）。原断言钉的是"座位被交给共享助手"，
+   *    新断言钉的是"**方向**由本页按侧给" —— **同一件事**（自己侧恒 `'down'`、对手侧恒 `'up'`），
+   *    而且顺带消掉了"传了 vGrow 忘传 selfPlayer ⇒ 静默按 P0 = 自己"这个默认值坑：
+   *    反空断言 `selfPlayer` 全仓不得再出现（共享助手**不需要**知道座位）。
+   *  - **真正的方向判据在行为腿**：`tests/ui/net-lane-tree.test.ts` 真跑 `renderNetBoard` 后
+   *    逐列断言**六层层序 + 链路卡序（DOM 顺序 + z-index）** —— 源码腿只能证明"参数传了"。
    */
-  it('R1-3. 竖向生长：vGrow 真实参 + selfPlayer 按座位 + .grow-down/.grow-up 规则 + 竖向重叠（margin-top）', () => {
+  it('R1-3. 竖向生长：vGrow 按侧给（down/up）+ .grow-down/.grow-up 规则 + 竖向重叠（margin-top）', () => {
     const code = netCode();
-    expect(code, 'renderStackSlot 未传 vGrow: true（本页会退回热座页的横向生长）').toMatch(/vGrow:\s*true/);
-    // 竖向生长必须**两种座位都**生效，且"哪一号是自己"必须由**座位**给（不是按绝对玩家号）
+    // ① 竖向生长参数真的传给了 renderStackSlot（本页不传就会退回热座页的横向生长）
     const iSlot = code.indexOf('renderStackSlot(');
     expect(iSlot, '找不到 renderStackSlot( 的调用（结构被改？）').toBeGreaterThanOrEqual(0);
     const stackOpts = code.slice(iSlot, iSlot + 2000);
-    expect(stackOpts, 'vGrow 不在 renderStackSlot 的 opts 里（传给了别的调用？）')
-      .toMatch(/vGrow:\s*true/);
-    expect(stackOpts, '竖向生长未把"哪一号是自己"按**座位**交给共享助手（selfPlayer: viewSeat）'
+    expect(stackOpts, 'vGrow 不在 renderStackSlot 的 opts 里（传给了别的调用？）—— 本页会退回横向生长')
+      .toMatch(/vGrow:/);
+    // ② 方向必须按**侧**给：自己侧 'down'、对手侧 'up'（`kind` 就是本页的侧别真值）
+    expect(stackOpts, "竖向生长未按**侧**给方向（应为 `vGrow: kind === 'self' ? 'down' : 'up'`）"
       + '—— 按绝对玩家号会让 viewSeat=1 时"自己向上长、对手向下长"（规格 §1 的垂直镜像不成立）')
-      .toMatch(/selfPlayer:\s*viewSeat/);
+      .toMatch(/vGrow:\s*kind === 'self'\s*\?\s*'down'\s*:\s*'up'/);
+    // ②b 反空断言：座位不得再被喂进共享助手（R-F2 的设计建议：共享助手不需要知道座位）
+    expect(code, 'render-net.ts 又把座位交给共享助手了（selfPlayer）—— 方向语义已改为 `vGrow` 二字面量')
+      .not.toMatch(/selfPlayer/);
+    expect(stripComments(read('render.ts')), 'render.ts 里仍有 selfPlayer（共享助手不应知道"哪一号是自己"）'
+      + '—— 那正是"传了 vGrow 忘传 selfPlayer 就静默按 P0 = 自己"这个 Nit 的载体')
+      .not.toMatch(/selfPlayer/);
     const css = read('styles-net.css');
     expect(css, 'styles-net.css 未定义 .stack.grow-down（自己：向下长）')
       .toMatch(/\.stack\.grow-down\s*\{[^}]*flex-direction:\s*column/);
@@ -881,7 +894,7 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
     expect(css, 'styles-net.css 未定义竖向重叠（`.card + .card` 的 margin-top）—— 卡会 100% 全展、一列撑爆')
       .toMatch(/\.stack \.card \+ \.card\s*\{[^}]*margin-top:\s*calc\(/);
     // ⚠️ 这仍然是**源码代理**：`.grow-*` 只是类名，真正的方向由运行期 flex 布局算出来。
-    // 哪一侧拿哪个类（按座位）的**行为**判据在 tests/ui/net-lane-tree.test.ts（真跑 + 查元素树）。
+    // 哪一侧拿哪个类（按侧）+ **链路卡序**的**行为**判据在 tests/ui/net-lane-tree.test.ts（真跑 + 查元素树）。
   });
 
   /**

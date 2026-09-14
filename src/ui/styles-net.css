@@ -139,21 +139,29 @@
 .net-lane-band .stack .card .card-back { height: auto; aspect-ratio: 5 / 7; }
 
 /* ── 竖向生长（R1 新语义，替代热座的 .grow-left/.grow-right）──
-   类名是**侧别**语义，由 `render.ts` 的 `vGrow` + `selfPlayer` 配对
-   （`.grow-down` = **自己**那一侧、`.grow-up` = **对手**那一侧），而"哪一号是自己"由**座位**给
-   （`render-net.ts` 传 `selfPlayer: viewSeat`）—— **不是**按绝对玩家号（G2 修正 R-F · C-2：
-   按绝对号会让 `viewSeat = 1` 时"自己向上长、对手向下长"，与规格 §1 的垂直镜像相反）。
-   DOM 顺序在 `vGrow` 下恒为「最新 → 最旧」：
-   · `.grow-down`（自己）：`flex-start`，`pos 0`（最旧）贴**上端协议**，越新的越往下长；
-   · `.grow-up`（对手）：`flex-end`，`pos 0`（最旧）贴**下端协议**，组整体靠下端 ——
-     于是越新的牌越往上长（与用户的"对手的牌往上长"一致）。
-   两者都由"最新的一张固定贴协议、组向另一侧延伸"推出：新牌入列时整组的**外端**延伸、
-   协议端不动，故观感上是"越长越远"。 */
+   类名是**侧别**语义，由 `render-net.ts` 按侧给（它**已经知道**侧别）：
+   `.grow-down` = **自己**那一侧、`.grow-up` = **对手**那一侧 —— **不是**按绝对玩家号
+   （G2 修正 R-F · C-2：按绝对号会让 `viewSeat = 1` 时"自己向上长、对手向下长"，与规格 §1 的垂直镜像相反）。
+   ⚠️ G2 修正 R-F2：`renderStackSlot` 的入参从"`vGrow: true` + `selfPlayer: 座位`"改成
+   **直接给方向** `vGrow: 'down' | 'up'` ⇒ 共享助手不需要知道座位（消掉"忘传 selfPlayer 就静默按 P0 = 自己"）。
+
+   **DOM 顺序是按侧的**（R-F2 · I-3 的修法，`renderStackSlot` 的 `order`）：
+   · `.grow-down`（自己）：DOM **[最旧 … 最新]** ⇒ 负 margin-top 让**最新的一张落到下端**（越新越往下长）；
+   · `.grow-up`（对手）：DOM **[最新 … 最旧]** ⇒ **最新的一张落到上端**（越新越往上长）。
+   两者的共同语义都是"`pos 0`（最旧）贴协议、越新的越向外"。
+
+   ⚠️ 下面两条 `flex-direction` / `justify-content` 里，只有 `flex-direction: column` 是**承重**的；
+   两条 `justify-content` 是**惰性（死）CSS** —— `.net-lane-band .stack` 的高度由内容决定
+   （没有 height / flex-grow），没有自由空间可分配 ⇒ 它们**不产生任何视觉差异**。
+   真正决定生长方向的杠杆**只有 DOM 顺序**（R1 曾以为 `flex-end` 能把对手侧整组推到底部，
+   于是对两侧用了同一个顺序 ⇒ 自己侧长反 —— 这就是 I-3）。保留这两条只为"意图可读"，
+   **不要**靠它们改方向；改方向请改 `render.ts` 的 `order`。 */
 .net-lane-band .stack.grow-down { flex-direction: column; justify-content: flex-start; }
 .net-lane-band .stack.grow-up { flex-direction: column; justify-content: flex-end; }
-/* 竖向重叠：DOM 里**后一张（更旧）**用负 margin-top 向上盖住前一张（更新的一张）
-   ⇒ 更新的一张露出**贴协议一侧协议外侧**的 46.2% **高**条带（横排时露出的是 46.2% 宽，故
-   这里必须用 `--card-w` 而不是 styles.css 那条公式里的 `--card-h`）。
+/* 竖向重叠：负 margin-top 让**后一个 DOM 兄弟更低**（第 k 个顶边 = 第 k−1 个顶边 + 60.3px）。
+   ⇒ 「哪一个 DOM 子节点在上/在下」完全由 `order` 决定：首个子节点 = 最上、末个子节点 = 最下。
+   于是更新的一张（`z-index = pos` 最大）压住更旧的一张，露出的是靠协议一侧的 46.2% **高**条带
+   （横排时露出的是 46.2% 宽，故这里必须用 `--card-w` 而不是 styles.css 那条公式里的 `--card-h`）。
    （热座页的对应值见 styles.css:438-441，那里算的是 ±90° 旋转后的视觉宽 --card-h。）
    ⚠️ 只覆盖 `+ .card` 的 **margin-top**，并把热座页的 `margin-left` 中和为 0：
    横排的负 margin-left 会让竖排的卡横向错位（同一张卡既被"上移"又被"左移"）。 */
