@@ -1588,8 +1588,10 @@ export function renderHand(
     /** 手牌可见性。默认 `'all'` = 现状（自己正面、对手背面）。
      *  `'count'` = 信息遮蔽（设计稿 §6.4）：**只产出空 .hand + data-hand-count + 数量文本，不渲染任何 .card**。
      *  ⚠️ 但**仍然产出 .hand[data-player] 占位节点** —— 否则 `querySelectorAll('.hand')[player]`
-     *  的 6 处按索引读取（effects/index.ts:849/942/1541/1590/1650、fx-gen2.ts:693/1316/1786）
-     *  会取到 `undefined` → 效果静默跳过或飞到错误坐标。 */
+     *  的 **8 处按下标读取**（effects/index.ts:849/942/1541/1590/1650、fx-gen2.ts:693/1316/1786）
+     *  会取到 `undefined` → 效果静默跳过或飞到错误坐标；另有 effects/index.ts:1703
+     *  （playRevealFly）**一次取两手**（`hands[opts.source]` 与 `hands[opts.shownTo]`），
+     *  少一条 `.hand` 同样会让它提前 `done()` 跳过飞行。 */
     handVisibility?: 'all' | 'count';
     /** 是否产出挡板（.hand-shield）。默认 true = 现状；远程页传 false（设计稿 §6.1 已删挡板）。 */
     shield?: boolean;

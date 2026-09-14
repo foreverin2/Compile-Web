@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { FX_DOM_CONTRACT, hooksOfCategory, RENDERERS, type FxDomHook } from '../../src/ui/fx-dom-contract';
+import { stripComments, stripArrayDecl } from './source-text';
 
 /**
  * G1 守卫：FX DOM 契约必须「出处真实 + 现热座渲染器确实提供 + 分类互斥」。
@@ -13,67 +14,15 @@ const read = (rel: string): string =>
   readFileSync(fileURLToPath(new URL(rel, root))).subarray(0, 8 * 1024 * 1024).toString('utf8');
 
 /**
- * 去掉行注释（双斜杠起）与块注释（斜杠星号起），**引号与模板串里的内容一律保留**。
+ * `stripComments`（去注释助手）**G2 Task 3F 起移到 `./source-text`**，由本文件、
+ * `tests/ui/fx-orient.test.ts` 与 `tests/ui/render-net.test.ts` 共用**同一份实现**。
  *
- * 为什么不用正则：`'//'`、`"/*"`、模板串里的注释样式字符会被正则误吃，把真实代码当成注释删掉
- * （那会制造**假红**）；而在别处又会把注释留下（假绿）。
- *
- * 为什么必须去注释（这是本助手存在的全部理由）：
- *   - `effects/index.ts` 里 `rot-cw` **只出现在两行中文注释**（:115、:620）。只要把 `.rot-cw` 的
- *     `requiredBy` 加回 `['effects/index.ts']`，原来的 `src.includes(probe)` 会**全绿** —— 出处机检
- *     被注释骗过。评审已实测：注释在则 13/13 绿，只把那两行注释的 `（rot-cw/rot-ccw）` 改成
- *     `（横置）`（零代码改动）才立刻变红。
- *   - 同理 `render.ts:196` 的注释、`effects/index.ts:164` 的 `--fx-rot`/`cloneTransformOf` 注释
- *     （Minor-3）也都只能靠去注释才拦得住。
- *
- * 行号保持：注释内容替换为**等长空白**（注释起始的两个字符本身留在原位，只是不再是注释），
- * 于是 `split('\n').length` 与原文一致，报错里的行号可直接对照源码。
- *
- * **已知局限（有意接受，不在本轮修）** —— 两处的失败方向都已实测，且当前真实树**零命中**：
- *  1. **模板串 `${}` 插值里的注释不会被删** → **假绿**方向。实现把反引号到反引号整段当字符串，
- *     不解析插值，所以「模板串里嵌一个块注释再跟 `1`」这种写法里的注释会留在结果里。
- *     为什么接受：要正确解析需要维护花括号配对深度（`${ {a:1} }`），引入的状态机比重更大；
- *     本仓 22 个被扫文件里此类写法 0 命中。
- *  2. **正则字面量里含未转义的 `//` 会截断该行** → **假红**方向。`const re = /\//;` 后面紧跟的
- *     `/` 会被当成行注释起点。为什么接受：真正消歧需要完整的词法器（区分除法与正则）；
- *     本仓 22 个被扫文件里没有任何真实正则含 `//` 或 `/*`（已逐字符复核）。
- *  （注意：正则里的 `\/` 只是**转义斜杠**、不构成 `//` —— 那种形态实测**通过**，见单测。）
+ * 为什么必须共用：它是"去注释判据"的唯一实现。两份拷贝一旦漂移，其中一边会因为
+ * "注释没被删掉"而**假绿** —— G2 Task 3 的 I-2 就是这个形态（`fx-orient.test.ts` 的产出方
+ * 守卫读裸源码，被 `render.ts` 里一句新增的中文注释满足，实测反转缺省朝向 / 删掉 180° 分支
+ * 后全套 945 项仍全绿）。它的单测留在本文件末尾（`G2 Task 2F · stripComments` 那一段），
+ * 测的正是共用实现本身。
  */
-function stripComments(src: string): string {
-  const out: string[] = new Array(src.length);
-  let i = 0;
-  while (i < src.length) {
-    const c = src[i];
-    const n = src[i + 1];
-    if (c === '/' && n === '/') {                       // 行注释：替换到行尾（不含换行）
-      while (i < src.length && src[i] !== '\n') { out[i] = ' '; i += 1; }
-      continue;
-    }
-    if (c === '/' && n === '*') {                       // 块注释：替换到闭合处（含），保留换行
-      out[i] = '/'; out[i + 1] = '*'; i += 2;
-      while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) {
-        out[i] = src[i] === '\n' ? '\n' : ' ';
-        i += 1;
-      }
-      if (i < src.length) { out[i] = '*'; out[i + 1] = '/'; i += 2; }
-      continue;
-    }
-    if (c === "'" || c === '"' || c === '`') {          // 字符串 / 模板串：整段原样保留
-      const quote = c;
-      out[i] = c; i += 1;
-      while (i < src.length) {
-        const ch = src[i];
-        out[i] = ch;
-        i += 1;
-        if (ch === '\\') { if (i < src.length) { out[i] = src[i]; i += 1; } continue; }
-        if (ch === quote) break;
-      }
-      continue;
-    }
-    out[i] = c; i += 1;
-  }
-  return out.join('');
-}
 
 /** FX 层模块（契约的消费方） */
 const FX_MODULES = [
@@ -107,8 +56,44 @@ const rendererFiles = new Set<string>(RENDERERS.map((r) => r.file));
 // 去注释后，判据变成「这个模块的代码（非注释）真的出现该判别子串」。
 const fxSources = new Map<string, string>(FX_MODULES.map((m): [string, string] => [m, stripComments(read(m))]));
 
-/** 当前渲染器源码（去注释口径，理由见 stripComments 与下方两条渲染器断言）。key = 注册表里的 file */
+/** 当前渲染器源码（去注释口径，理由见 source-text.ts 与下方两条渲染器断言）。key = 注册表里的 file */
 const rendererSources = new Map<string, string>(RENDERERS.map((r): [string, string] => [r.file, stripComments(read(r.file))]));
+
+/**
+ * G2 Task 3F · C-3：**复用助手型渲染器**——"本文件提供 A 类钩子"的判据改成**调用链**。
+ *
+ * 背景（评审 Critical C-3，变异实测）：远程页 `render-net.ts` 刻意最大化复用 `render.ts` 的叶子
+ * 助手，钩子的**产出表达式**都在 `render.ts` 里，本页只负责"把这些助手挂进渲染链路"。原实现为了
+ * 让"本文件出现该 token"成立，在 `render-net.ts` 里放了一张逐字写着 19 条 hook 选择器的数据表
+ * `NET_PAGE_HOOKS` —— 于是**表本身**满足了断言：把 `renderStackSlot(` / `renderProtocolCell(`
+ * 的真实挂载删掉（页面上因此没有链路槽与协议格），契约测试 20 + render-net 守卫 11 **全绿（31/31）**。
+ *
+ * 修法：要求清单放在**这里**（与证据所在的 `render-net.ts` 分开，因此不可能自我满足），
+ * 证据是"该文件（**剔除自己的数据表体后**）的代码里真的出现这些助手调用字面量"。
+ * `renderStackSlot(` 这类带左括号的字面量只可能来自**调用点**（import 列表里没有括号），
+ * 所以删掉真实挂载 → 立刻红。
+ *
+ * ⚠️ 已知边界（如实写明）：这一条证明的是"本页调用了产出这些钩子的助手"，
+ * **不**逐条证明"钩子 X 由助手 Y 产出"（那是本文件的 `hook → call` 映射，属文档性声明）；
+ * 钩子的**拼写**由 `render.ts` 自己那条注册项逐条守住（同一个 `rendererProvides` 循环）。
+ */
+const ASSISTANT_CALLS: ReadonlyMap<string, readonly string[]> = new Map([
+  ['render-net.ts', [
+    'renderStackSlot(', 'renderProtocolCell(', 'renderDeck(', 'renderTrash(',
+    'renderHand(s, 0', 'renderHand(s, 1', 'renderControlModule(', 'renderPlayerInfo(',
+    'renderRefreshButton(', 'choiceBar(', 'buildChoicePickOverlay(',
+  ]],
+]);
+
+/**
+ * 渲染器的"判据面"：去掉注释，并**剔除它自己的钩子数据表**（若有）。
+ * 表里逐字写着 hook 选择器字符串，留着就等于让表给"本文件提供这些钩子"作证（C-3 的根因）。
+ */
+function judgeSourceOf(file: string): string {
+  const raw = rendererSources.get(file) ?? stripComments(read(file));
+  return stripArrayDecl(raw, 'NET_PAGE_HOOKS');
+}
+
 
 /**
  * 取钩子的「判别子串」。必须能唯一定位到这个钩子，否则守卫形同虚设：
@@ -258,20 +243,39 @@ describe('G1 · FX DOM 契约', () => {
     expect(absent, `RENDERERS 里登记了磁盘上不存在的渲染器（文件名拼错？）：${absent.join(', ')}`).toEqual([]);
   });
 
-  it('A 类钩子必须被当前渲染器提供（这是 G2 的验收基准）', () => {
-    const missing: string[] = [];
+  it('A 类钩子必须被当前渲染器提供（复用助手型渲染器按**调用链**判定 —— G2 Task 3F · C-3）', () => {
+    const problems: string[] = [];
     for (const r of RENDERERS) {
-      const src = rendererSources.get(r.file) ?? stripComments(read(r.file));
+      // ⚠️ 判据面：去注释 + **剔除渲染器自己的钩子数据表**（表不得充当"提供"的证据）
+      const src = judgeSourceOf(r.file);
+      const calls = ASSISTANT_CALLS.get(r.file);
+      if (calls) {
+        // 复用助手型渲染器：钩子产出表达式在共享助手里，本页的贡献是"把助手挂进链路"。
+        // 证据 = 这些**调用字面量**（含左括号，故 import 列表不会误满足）出现在真实代码里。
+        if (calls.length === 0) problems.push(`${r.file} 的助手调用清单为空（等于关掉这条断言）`);
+        for (const c of calls) {
+          if (!src.includes(c)) {
+            problems.push(`${r.file} 未调用产出 A 类钩子的共享助手 ${JSON.stringify(c)}（本页应把它挂进渲染链路）`);
+          }
+        }
+        continue;
+      }
       const exempt = new Set<string>(r.exempt ?? []);
       for (const h of hooksOfCategory('A')) {
         if (exempt.has(h.hook)) continue;   // 该渲染器有意不提供（exempt 必须在契约文档写明理由）
         if (rendererProvides(src, h)) continue;
         const alts = datasetAlternativesOf(h);
-        missing.push(`${r.file} 未提供 ${h.hook}（判别子串 ${rendererTokensOf(h).join(' + ')}`
+        problems.push(`${r.file} 未提供 ${h.hook}（判别子串 ${rendererTokensOf(h).join(' + ')}`
           + `${alts.length === 0 ? '' : `，data-* 项也接受 ${alts.join(' / ')}`}）`);
       }
     }
-    expect(missing, `以下 A 类钩子当前渲染器缺失：\n${missing.join('\n')}`).toEqual([]);
+    expect(problems, `以下 A 类钩子当前渲染器缺失：\n${problems.join('\n')}`).toEqual([]);
+  });
+
+  it('助手调用清单的键必须都是已登记渲染器（拼错文件名不得让要求静默失效）', () => {
+    const unknown = [...ASSISTANT_CALLS.keys()].filter((f) => !rendererFiles.has(f));
+    expect(unknown, `ASSISTANT_CALLS 里登记了未注册的渲染器（要求被静默忽略）：${unknown.join(', ')}`).toEqual([]);
+    expect(ASSISTANT_CALLS.size, 'ASSISTANT_CALLS 为空（复用助手型渲染器失去判据）').toBeGreaterThan(0);
   });
 
   it('A/B/C 类 requiredBy 的每个模块都必须自己含该钩子的判别子串（出处可机检，不是只查名单）', () => {
@@ -439,5 +443,46 @@ describe('G2 Task 2F · stripComments（去注释助手自身）', () => {
     expect(stripped, 'effects/index.ts 去注释后仍有 rot-cw 字样（出处数据其实不诚实？）').not.toContain('rot-cw');
     // 行号必须保持（否则去注释后的报错行号会误导人）
     expect(stripped.split('\n').length).toBe(raw.split('\n').length);
+  });
+});
+
+/**
+ * G2 Task 3F · C-3 的助手：`stripArrayDecl`（剔除 `render-net.ts` 的钩子数据表体）。
+ *
+ * 没有这一条，这个助手就成了新的静默风险：它若删除过多（把真实代码也剔掉 → 假红）或没剔到
+ * （表留下 → 断言继续被表满足 → 假绿），上面"调用链判定"的断言会跟着一起错，而且看起来正常。
+ */
+describe('G2 Task 3F · stripArrayDecl（剔除数据表体的助手自身）', () => {
+  const decl = [
+    'const KEEP_A = 1;',
+    'export const NET_PAGE_HOOKS: readonly X[] = [',
+    "  { hook: '.a[b][c]', call: ['renderA('] },",
+    "  { hook: '.d' },",
+    '];',
+    'const KEEP_B = 2;',
+  ].join('\n');
+
+  it('整段剔除数组字面量声明（类型标注里的 [] 不被当表体、字符串里的方括号不干扰配对）', () => {
+    const out = stripArrayDecl(decl, 'NET_PAGE_HOOKS');
+    expect(out, '表体没被剔干净（断言会继续被表满足）').not.toContain('.a[b][c]');
+    expect(out).not.toContain('renderA(');
+    // 声明前后的真实代码必须原样保留
+    expect(out).toContain('const KEEP_A = 1;');
+    expect(out).toContain('const KEEP_B = 2;');
+    // 行号保持
+    expect(out.split('\n').length).toBe(decl.split('\n').length);
+  });
+
+  it('找不到声明时**原样返回**（上层以"缺 token"报红，而不是在这里抛异常）', () => {
+    expect(stripArrayDecl('const X = 1;', 'NET_PAGE_HOOKS')).toBe('const X = 1;');
+  });
+
+  it('对真实 render-net.ts：剔除后表里的 hook 字符串消失，但真实调用与注释都不受影响', () => {
+    const code = stripArrayDecl(stripComments(read('render-net.ts')), 'NET_PAGE_HOOKS');
+    expect(code, '表体没被剔除（hook 字符串仍在 → 契约断言继续被表满足）').not.toContain('.trash-pile.p1/.p2');
+    expect(code).not.toContain('stack-slot[data-player]');
+    // 真实调用必须留下（否则"调用链判定"会因剔多了而假红）
+    expect(code).toContain('renderStackSlot(');
+    expect(code).toContain('renderHand(s, 0');
   });
 });

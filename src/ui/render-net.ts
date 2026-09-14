@@ -17,26 +17,44 @@
  * 1. **19 条 A 类钩子全部产出，且产出方拼写与热座页一致** —— 靠复用 render.ts 的叶子助手保证
  *    （`.stack-slot p${player + 1}` / `trash-pile p${player + 1}` 都在助手内，`data-player` /
  *    `data-line` 走 `dataset`）。`.pN` 拼写是**承重的**，不要改成复合类名（计划附录 A.4-2）。
- *    哪些钩子由哪条复用链产出，见下方 `NET_PAGE_HOOKS`（**显式登记**，不是靠注释）。
+ *    **本页的产出证据是「助手调用链」，不是本文件的 token**：拼写由 `render.ts` 的钩子产出表达式
+ *    负责（`tests/ui/fx-dom-contract.test.ts` 会对它逐条查），本页只负责**把这些助手挂进链路**。
+ *    下方 `NET_PAGE_HOOKS` 是**人读 + 防漂移的契约镜像**（`call` 一列逐条对应真实调用，
+ *    且任一 token 扫描前都会先 `stripArrayDecl` 剔除表体）—— **表本身不是证据**
+ *    （G2 Task 3 的教训：物化进本文件的 hook 字符串会让"必须提供"断言自我满足）。
  * 2. **`.rot-cw` / `.rot-ccw` 一律不产出** —— 本文件里连带引号的字面量都不出现
  *    （`tests/ui/fx-orient.test.ts` 会对每个**已登记的非热座渲染器**逐个扫）。
- *    朝向只有 0°（自己，不加类）与 180°（对手，`rot-180`），且类名映射集中在 `orientClassOf`。
+ *    朝向只有 0°（自己）与 180°（对手）：本页把 `orient: isSelfSeat ? 0 : 180` **作为实参**交给
+ *    `renderStackSlot` / `renderProtocolCell`，类名映射只有一处 —— `render.ts` 的分支链
+ *    （`:252-254` 的 ±90°/180° 与 `:130` 的协议图），**不在本文件重复映射**。
  * 3. **「P0 向左长 / P1 向右长」按绝对玩家** —— 由 `renderStackSlot` 内部按 `player` 决定的
  *    `.stack.grow-left` / `.grow-right` 与渲染顺序保证；控制轨 slider 也仍按绝对玩家映射（4%/96%）。
  *    **不得**改成「上 = 向左」：effects/index.ts:191-193、fx-gen2.ts:779/878/957、gen3-control.ts:654
  *    都按绝对玩家算方向，改了会静默错位。
  * 4. **within-slot 覆盖方向不变** —— `gen3-util.ts:51/66` 假设覆盖者在右；本文件不碰覆盖方向
  *    （仍由 `renderStackSlot` + `.stack .card + .card` 的负 margin 决定）。
+ *    ⚠️ 推论：对手那一行**不得**整块 `rotate(180deg)` —— 行级 180° 会把该行**水平镜像**
+ *    （屏幕左右翻转，"覆盖者在右"随之失真），且与卡自身的 `.rot-180` 叠加成 0°（卡其实正立）。
+ *    所以对手侧只由**卡/协议自身**的 `.rot-180` 倒置（styles-net.css 第 3 节的说明）。
  * 5. **对手手牌只渲染数量，但 `.hand[data-player]` 占位节点必须产出**（带 `data-hand-count`）——
- *    否则 `querySelectorAll('.hand')[player]` 会取到 `undefined`（fx-gen2.ts:693/1316/1786 静默跳过、
- *    effects/index.ts:849/942/1541/1590/1650 飞到错误坐标）。由 `renderHand` 的
- *    `handVisibility: 'count'` 分支保证（`data-hand-count` 写在**手牌节点本身**上，见 render.ts:1608）。
+ *    否则 `querySelectorAll('.hand')[player]` 会取到 `undefined`。FX 里**按下标**读手牌的是
+ *    **8 处**（fx-gen2.ts:693/1316/1786 静默跳过；effects/index.ts:849/942/1541/1590/1650 飞到错误
+ *    坐标），另有 effects/index.ts:1703（playRevealFly）**一次取两手**。由 `renderHand` 的
+ *    `handVisibility: 'count'` 分支保证（`data-hand-count` 写在**手牌节点本身**上，见 render.ts:1610）。
  * 6. **座位来源是 `opts.viewSeat`**，不是 `s.turnPlayer`（后者是**回合**概念，当"我是谁"会让视角
  *    每回合翻面）。本文件**不出现** `s.turnPlayer ===`。
  * 7. **两条 `.hand` 以「绝对玩家顺序」出现在 DOM 中**（P0 在前、P1 在后，见 `buildHands`），
  *    「谁显示在上带」由父容器的 `.net-view-N` 用 **CSS `order`** 决定（styles-net.css 第 6 节）。
  *    比约束 5 更危险：FX 读手牌是**按下标**的，`viewSeat = 0` 时若按视觉顺序挂载会得到 `[P1, P0]`，
  *    下标 0 拿到**对手**的手牌 → 卡飞到对手手牌区，不报错、不跳过。
+ *
+ * ## 构建顺序（C-1：远程页曾经在这里死锁）
+ * `renderChoiceUi(...)` **必须在 `wrap.appendChild(grid)` 之后**调用（与热座 `renderBoard`
+ * `:4800` 挂 grid、`:4835` 跑选择分支同序）。它内部三处 `wrap.querySelectorAll(...)` 都是
+ * 「按已在 DOM 里的节点加类/挂点击」—— grid 未挂载时它们全部空转，`select-line` 因此找不到
+ * 任何 `.net-lane-band`（没有可点目标，而 `choiceBar` 对 select-line 没有确认按钮）→
+ * **非 optional 的 select-line 永久无法应答、对局卡死**。几何型 FX（透彻牌库眼睛 / 幸运宣告骰子）
+ * 同理必须在 `root.appendChild(wrap)` 之后执行（此前 `getBoundingClientRect()` 全 0）。
  *
  * ## 入口四件副作用（与 `renderApp` 对齐，漏一个就会有时序 bug）
  * `no-anim` 类 → `syncCheckCacheChains(s)` → `syncChainLayerPosition()` → `cb.onRendered?.()`
@@ -51,7 +69,11 @@ import { getLegalActions, type LegalAction } from '../core/game';
 import { getLineValue } from '../core/state/create';
 import { actionCn } from '../core/log';
 import { downloadLog } from './diag';
-import type { CardOrient } from './fx-orient';
+// 几何型（依赖 getBoundingClientRect）点名特效：与热座 renderBoard 的 deferredFx 同源同调用形态
+// （render.ts:4849 透彻牌库眼睛 / :4945 幸运宣告骰子）。二者都用**契约钩子**定位：
+// `startClarityDeckEye` 查 `.deck[data-player="N"]`、`startLuckDiceFx` 查源卡的 `[data-uid]` ——
+// 远程页两处节点都在（牌库在信息条内、源卡在链路槽或手牌里），所以可以直接复用，不需要改 export。
+import { startClarityDeckEye, startLuckDiceFx } from './fx-gen2';
 import {
   el,
   renderStackSlot,
@@ -101,92 +123,165 @@ function handVisOf(handVisibility: NetViewOpts['handVisibility']): 'all' | 'coun
 /* ============================================================================
  * 19 条 A 类钩子的**逐条登记**（docs/4代-FX DOM 契约.md §3 的验收基准）
  *
- * 为什么是一张**真实的数据表**而不是一段注释：
- *   `tests/ui/fx-dom-contract.test.ts` 的渲染器断言（以及本页自己的守卫）是**源码文本**判据，
- *   而本页**刻意最大化复用** `render.ts` 的叶子助手 —— 钩子的产出表达式都在 `render.ts` 里，
- *   本页的贡献是「把这些助手挂进渲染链路」。把这份**挂载关系**写成注释，等于让守卫去读散文
- *   （契约测试自己有 `stripComments`，注释一律不算数）；写成数据表，它才是可被机检、可被
- *   `verifyHooks` 拿去查 DOM、也随代码一起演进的东西。
+ * ⚠️ **这张表不是"已提供"的证据**（G2 Task 3 的 Critical C-3 就是它曾经充当证据）：
+ *   表里逐字写着 19 条 hook 的选择器字符串，而契约守卫的判据是"本文件的（去注释）源码里
+ *   出现该 token" —— 于是**表本身**就满足了「本页提供全部 A 类钩子」。评审变异实测：
+ *   把 `renderStackSlot(` / `renderProtocolCell(` 的真实挂载删掉（页面上因此没有链路槽与协议格）
+ *   后，契约测试 20 + 本文件守卫 11 **全绿（31/31）**。
  *
- * ⚠️ **本表的诚实边界**（不要把它读成"已验收"）：
- *   `hook` 一列只是**选择器字符串**。源码守卫能证明的仍然只是「这些选择器字符串出现在本文件里」，
- *   证明不了运行时真的有对应节点；要证明后者，必须 `verifyHooks: true` 让 `verifyPageHooks`
- *   去 DOM 里查，或者由用户在 5173 上做 ≥20 个点名特效抽查（计划「用户验收」第 3 项）。
- *   `exempt` 一列的两条是**豁免**，它们的理由是几何性的（±90° 交换布局盒宽高），
- *   与 `src/ui/fx-dom-contract.ts` 的 `RENDERERS[].exempt` 必须保持一致。
+ * 现在这张表的**职责**只有三条，都不构成证据：
+ *   1. `hook`：与契约 A 类清单**逐字镜像**（守卫断言两边集合相等 → 表不可能漂移）；
+ *   2. `call`：该钩子由哪条**共享助手调用**产出（守卫在**剔除表体后**的源码里逐条查这个调用
+ *      字面量真的存在 —— 证据来自真实代码，表只提供"要查哪个字面量"的需求）；
+ *   3. `probeSelector`：`opts.verifyHooks` 的**运行时**自查用的合法 CSS 选择器。
+ *      `hook` 是**展示形式**（如 `.trash-pile.p1/.p2` 的复合写法），**不是**合法选择器 ——
+ *      直接交给 `querySelector` 会抛 `SyntaxError`（这正是 C-2：`verifyHooks` 一开就崩）。
+ *      `probeSelector` 与 `hook` 分离后，"每条都是合法 CSS"由 `tests/ui/render-net.test.ts`
+ *      用仓库已装的 **lightningcss**（真正的 CSS 解析器）逐条机检。
+ *
+ * `stateDependent`：该钩子在某些合法局面下**本就可能查不到**（场上无卡 / 手牌打空），
+ * 自查时降级为 info 而不是失败 —— 否则诊断会稳定误报。
+ * `exempt`：有意不产出（与 `src/ui/fx-dom-contract.ts` 的 `RENDERERS[].exempt` 必须一致）。
  * ========================================================================== */
 
 interface NetPageHook {
-  /** 契约里的稳定选择器（与 FX_DOM_CONTRACT 的 `hook` 逐字一致，便于人工对照） */
+  /** 契约里的稳定选择器（与 FX_DOM_CONTRACT 的 `hook` 逐字一致，便于人工对照 + 防漂移机检） */
   hook: string;
-  /** 本页的产出路径：谁最终把节点写进 DOM */
-  by: string;
+  /** 产出这条钩子的**共享助手调用字面量**（每个都要在剔除表体后的本文件源码里真实出现） */
+  call: readonly string[];
+  /** 运行时自查用的**合法** CSS 选择器（豁免项不需要：自查会跳过它们） */
+  probeSelector?: string;
+  /** 该钩子在某些合法局面下可能为空（只报 info，不算失败） */
+  stateDependent?: string;
   /** 有意不产出时的理由（与 fx-dom-contract.ts 的 `RENDERERS[].exempt` 对应） */
   exempt?: string;
 }
 
 export const NET_PAGE_HOOKS: readonly NetPageHook[] = [
-  { hook: '.stack-slot[data-player][data-line]', by: 'renderLaneBand → renderSideRow → renderStackSlot（el(`stack-slot p${player + 1}`) + dataset.line / dataset.player）' },
-  { hook: '.protocol-cell[data-player][data-line]', by: 'renderLaneBand → renderSideRow → renderProtocolCell（el(`protocol-cell`) + dataset.player / dataset.line）' },
-  { hook: '.protocol-img', by: 'renderProtocolCell → renderProtocol（img.className = protocol-img + (180° 时追加朝向类)）' },
-  { hook: '.protocol', by: "renderProtocolCell → renderProtocol（el('div', 'protocol' + (compiled ? ' compiled' : ''))）" },
-  { hook: '.protocol-holder', by: "renderProtocol 内的 el('div', 'protocol-holder')（编译光柱的汇聚中心）" },
-  { hook: '[data-uid]', by: "renderStackSlot 的场上卡 + renderHand 的手牌卡（都写在 dataset.uid / dataset['uid'] 上）" },
-  { hook: '.trash-pile[data-player]', by: 'renderPiles → renderTrash（el(`trash-pile p${player + 1} trash-…`) + dataset.player）' },
-  { hook: '.trash-pile.p1/.p2', by: "renderPiles → renderTrash 的 `trash-pile p${player + 1} …`（**.pN 拼写承重**：不得改成复合类名）" },
-  { hook: '.deck[data-player]', by: 'renderPiles → renderDeck（el(`deck deck-${…}`) + dataset.player）' },
-  { hook: '.battery', by: 'renderStackSlot → renderBattery（el(`battery battery-${state}`)）' },
-  { hook: '.hand', by: 'buildHands → buildP0Hand / buildP1Hand → renderHand（el(`hand` + …)）——**各调一次**，DOM 顺序恒定 [P0, P1]' },
-  { hook: '.hand[data-player]', by: 'renderHand 内的 `hand.dataset.player = String(player)`（syncSpirit0Glows / syncCheckCacheChains 按它取手牌区 rect）' },
-  { hook: '.card', by: "renderCardFace 内的 el('div', 'card')（链路上场卡 / 手牌卡 / 揭示幽灵共用）" },
+  { hook: '.stack-slot[data-player][data-line]', call: ['renderStackSlot('], probeSelector: '.stack-slot[data-player][data-line]' },
+  { hook: '.protocol-cell[data-player][data-line]', call: ['renderProtocolCell('], probeSelector: '.protocol-cell[data-player][data-line]' },
+  { hook: '.protocol-img', call: ['renderProtocolCell('], probeSelector: '.protocol-img' },
+  { hook: '.protocol', call: ['renderProtocolCell('], probeSelector: '.protocol' },
+  { hook: '.protocol-holder', call: ['renderProtocolCell('], probeSelector: '.protocol-holder' },
+  {
+    hook: '[data-uid]',
+    call: ['renderStackSlot(', 'renderHand(s, 0', 'renderHand(s, 1'],
+    probeSelector: '[data-uid]',
+    stateDependent: '场上无卡且手牌为空（开局即有；"手牌打空 + 场上空"是合法局面）',
+  },
+  { hook: '.trash-pile[data-player]', call: ['renderTrash('], probeSelector: '.trash-pile[data-player]' },
+  { hook: '.trash-pile.p1/.p2', call: ['renderTrash('], probeSelector: '.trash-pile.p1, .trash-pile.p2' },
+  { hook: '.deck[data-player]', call: ['renderDeck('], probeSelector: '.deck[data-player]' },
+  { hook: '.battery', call: ['renderStackSlot('], probeSelector: '.battery' },
+  { hook: '.hand', call: ['renderHand(s, 0', 'renderHand(s, 1'], probeSelector: '.hand' },
+  { hook: '.hand[data-player]', call: ['renderHand(s, 0', 'renderHand(s, 1'], probeSelector: '.hand[data-player]' },
+  {
+    hook: '.card',
+    call: ['renderStackSlot(', 'renderHand(s, 0', 'renderHand(s, 1'],
+    probeSelector: '.card',
+    stateDependent: '场上无卡且手牌为空（同上）',
+  },
   {
     hook: '.rot-cw',
-    by: '（不产出）',
     exempt: '热座专属朝向：两位玩家同屏各看自己半边时用 ±90°；远程页隔桌对坐用 0°/180°。'
       + '且 ±90° 会**交换布局盒宽高**、0°/180° 不会 —— 拿 ±90° 冒充 180° 会得到"朝向对但尺寸错"的假正确。',
+    call: [],
   },
   {
     hook: '.rot-ccw',
-    by: '（不产出）',
     exempt: '与 .rot-cw 同一条理由（成对读取：src/ui/fx-orient.ts 的 orientOf）。',
+    call: [],
   },
-  { hook: 'img', by: 'renderCardFace 的 card-face-img / cardback-img + renderProtocol 的 protocol-img + renderControlModule 的 control-slider-img（三处都建 img 元素）' },
-  { hook: '.control-module', by: 'renderControlModule（el(`control-module` + …)；slider 仍按**绝对玩家** 4%/96% 映射 —— 约束 3）' },
-  { hook: '.control-slider-img', by: "renderControlModule 内的 img.className = 'control-slider-img'（gen3-control 的量测目标优先于 .control-module）" },
-  { hook: '.control-track', by: "renderControlModule 内的 el('div', 'control-track')" },
+  { hook: 'img', call: ['renderProtocolCell(', 'renderControlModule('], probeSelector: 'img' },
+  { hook: '.control-module', call: ['renderControlModule('], probeSelector: '.control-module' },
+  { hook: '.control-slider-img', call: ['renderControlModule('], probeSelector: '.control-slider-img' },
+  { hook: '.control-track', call: ['renderControlModule('], probeSelector: '.control-track' },
 ];
 
 /**
- * **运行时**核对：`NET_PAGE_HOOKS` 里每条非豁免钩子是否真的能在页面上查到节点。
+ * **运行时**核对：`NET_PAGE_HOOKS` 里每条非豁免钩子是否真的能在页面上查到节点，
+ * 外加两条**源码守卫永远证明不了**的断言（硬约束 7 的 DOM 顺序、硬约束 2 / C-4 的对手卡朝向）。
  *
  * 为什么值得写在生产代码里：源码守卫（含契约测试）对"产出方"的判据是**源码文本**，
  * 而本页的产出方在 `render.ts` 里 —— 文本判据在这种情况下证明力最弱（计划附录 A.4-3 已披露）。
- * 这个函数把它变成可执行的检查：`opts.verifyHooks === true` 时渲染完立刻逐个 `querySelector`，
- * 缺任何一条就在控制台点名。**默认关闭**（真实联机零开销），也**不抛异常**
- * （诊断不得把渲染搞崩）；它只把"我查过 DOM 了"这件事留下证据。
- */
-function verifyPageHooks(scope: HTMLElement): void {
-  const missing = NET_PAGE_HOOKS
-    .filter((h) => h.exempt === undefined)
-    .filter((h) => scope.querySelector(h.hook) === null)
-    .map((h) => `${h.hook}（应由 ${h.by} 产出）`);
-  if (missing.length > 0) {
-    console.warn('[render-net] A 类契约钩子在 DOM 上查不到（源码守卫之外的运行时证据）：\n' + missing.join('\n'));
-  }
-}
-
-/* ============================================================================
- * 朝向：类名映射**集中一处**
- * ========================================================================== */
-
-/**
- * `CardOrient` → 卡节点应加的朝向类名。**只有** 0°（空串）与 180°（`rot-180`）两种结果。
+ * 这个函数把它变成可执行的检查：`opts.verifyHooks === true` 时渲染完立刻去 DOM 里查。
  *
- * 为什么不散在每个调用点写：本页有两处（链路槽、协议格）要用同一个映射，散写迟早出现
- * 「链路卡倒了、协议没倒」这种极难排查的不一致。也**只在这里**出现朝向类名字面量。
+ * **绝不抛异常**（C-2）：每一条都在 `try/catch` 里 —— 将来有人往表里写一个非法选择器（例如
+ * 契约的展示写法 `.trash-pile.p1/.p2`），它只应当成为**一条具名失败**，绝不能从 `renderNetBoard`
+ * 逃逸出去把整页渲染搞崩（`querySelector` 对非法选择器按 DOM 规范抛 `SyntaxError`）。
+ *
+ * 返回一段**给用户看**的摘要；同时把失败明细 `console.warn` 一次（不逐条抛）。
  */
-function orientClassOf(o: CardOrient): string {
-  return o === 180 ? 'rot-180' : '';
+function verifyPageHooks(scope: HTMLElement): string {
+  const fatal: string[] = [];
+  const soft: string[] = [];
+  for (const h of NET_PAGE_HOOKS) {
+    if (h.exempt !== undefined) continue;
+    const sel = h.probeSelector;
+    if (sel === undefined) {
+      fatal.push(`${h.hook}：登记表缺 probeSelector（运行时自查无法进行）`);
+      continue;
+    }
+    let hit: boolean;
+    try {
+      hit = scope.querySelector(sel) !== null;
+    } catch (err) {
+      fatal.push(`${h.hook}：探测选择器 ${JSON.stringify(sel)} 非法（${String(err)}）`);
+      continue;
+    }
+    if (hit) continue;
+    const line = `${h.hook}（探测 ${sel}）`;
+    if (h.stateDependent !== undefined) soft.push(`${line} —— ${h.stateDependent}`);
+    else fatal.push(line);
+  }
+
+  // ── 断言 1（硬约束 7）：两条 .hand 的 DOM 顺序恒为 [P0, P1] ──
+  // 为什么只能在这里查：FX 用 `querySelectorAll('.hand')[player]` **按下标**读手牌，
+  // 而这个顺序是"构建顺序 + 挂载顺序"的运行时结果，源码文本守卫只能给出**代理**证据。
+  // 失败的后果不是报错而是**静默错位**：下标 0 拿到对手的手牌区，卡飞到对手那边。
+  try {
+    const hands = scope.querySelectorAll<HTMLElement>('.hand');
+    const order = [hands[0]?.dataset.player, hands[1]?.dataset.player];
+    if (hands.length !== 2 || order[0] !== '0' || order[1] !== '1') {
+      fatal.push(`约束 7：.hand 的 DOM 顺序必须是 [P0, P1]（FX 按下标读手牌），`
+        + `实际 ${hands.length} 条 → [${order.map((x) => String(x)).join(', ')}]`);
+    }
+  } catch (err) {
+    fatal.push(`约束 7 的 .hand 顺序自查抛异常（${String(err)}）`);
+  }
+
+  // ── 断言 2（硬约束 2 + C-4）：对手的**场上卡与协议**各自带 .rot-180；自己侧一个朝向类都不带 ──
+  // C-4 的教训：对手那一行曾经整块 `rotate(180deg)`，与卡自身的 `.rot-180` 叠加成 0°
+  // （卡其实正立），同时把整行水平镜像（"覆盖者在右"的屏幕假设被翻转）。
+  // 所以这里钉的是"**每张**对手卡自己带 rot-180"——行级旋转会让这个计数归零。
+  try {
+    const foeCards = scope.querySelectorAll<HTMLElement>('.net-side-foe .card').length;
+    const foeInverted = scope.querySelectorAll<HTMLElement>('.net-side-foe .card.rot-180').length;
+    if (foeInverted !== foeCards) {
+      fatal.push(`硬约束 2：对手侧场上卡必须**各自**带 .rot-180，实际 ${foeInverted}/${foeCards} 张`
+        + `（行级 rotate 与本类叠加会得 0°）`);
+    }
+    const foeProto = scope.querySelectorAll<HTMLElement>('.net-side-foe .protocol-img').length;
+    const foeProtoInverted = scope.querySelectorAll<HTMLElement>('.net-side-foe .protocol-img.rot-180').length;
+    if (foeProtoInverted !== foeProto) {
+      fatal.push(`硬约束 2：对手侧协议图必须**各自**带 .rot-180，实际 ${foeProtoInverted}/${foeProto} 张`);
+    }
+    const selfOriented = scope.querySelectorAll<HTMLElement>(
+      '.net-side-self .card.rot-180, .net-side-self .card.rot-cw, .net-side-self .card.rot-ccw',
+    ).length;
+    if (selfOriented !== 0) fatal.push(`硬约束 2：自己侧场上卡不得带任何朝向类，实际 ${selfOriented} 张带了`);
+  } catch (err) {
+    fatal.push(`硬约束 2 的朝向自查抛异常（${String(err)}）`);
+  }
+
+  if (soft.length > 0) console.info('[render-net] 状态相关钩子当前为空（合法局面）：\n' + soft.join('\n'));
+  if (fatal.length === 0) {
+    return soft.length === 0
+      ? '自查 ✓ A 类钩子齐 / 手牌顺序 [P0,P1] / 对手卡与协议 180°'
+      : `自查 ✓（${soft.length} 条状态相关钩子当前为空）`;
+  }
+  console.warn('[render-net] 运行时自查发现失败项（源码守卫之外的运行时证据）：\n' + fatal.join('\n'));
+  return `自查 ✗ ${fatal.length} 项：${fatal[0]}`;
 }
 
 /* ============================================================================
@@ -306,6 +401,11 @@ function renderLaneBand(s: GameState, line: Line, viewSeat: PlayerId, cb: UiCall
  * 而盘本体在远程页必须另写（设计稿 §6.1）。重写时一律走 `cb.rerender?.()` 回到**当前页**，
  * 绝不直调 renderApp（否则用户在远程页的选择浮层里点一张候选卡，整页会跳回热座棋盘）。
  * `choiceBar` / `buildChoicePickOverlay` / 选择态读写口则**一律复用**。
+ *
+ * ⚠️ **调用时机是承重的（C-1）**：本函数在 `renderNetBoard` 里必须于 `wrap.appendChild(grid)`
+ * **之后**执行 —— 内部三处 `wrap.querySelectorAll(...)` 都是"给已在 DOM 里的节点加类/挂点击"。
+ * 曾经它在 grid 之前跑：`select-line` 拿到 0 条 `.net-lane-band` → 没有可点目标，而
+ * `choiceBar` 对 select-line 没有确认按钮 → **非 optional 的 select-line 永久无法应答、对局卡死**。
  * ========================================================================== */
 
 /** 「跳过」按钮（可选 prompt 的空应答）。 */
@@ -330,26 +430,39 @@ function renderChoiceUi(
   root: HTMLElement,
   s: GameState,
   cb: UiCallbacks,
+  deferredFx: Array<() => void>,
 ): void {
   const top: PendingEffect | undefined = s.pendingEffects[s.pendingEffects.length - 1];
   // `PendingEffect.prompt` 的类型是 `ChoiceRequest | null`（types.ts:240）—— 这里统一成 undefined
   const prompt: ChoiceRequest | undefined = top?.prompt ?? undefined;
   if (!prompt || !top) {
     netChoicePromptId = null;
-    setChoiceSelection([]);
+    // I-4：没有 pending 选择 → **必须清掉**共享选择态里的 promptId。否则 render.ts 的两处守卫
+    // （`:5583` 选择模式禁止拖拽打牌、`:1658` 手牌单击选中）会在 prompt 结束后**永久锁死**。
+    setChoiceSelection([], null);
     return;
   }
-  // 换 prompt → 重开选择（原为盘本体内联；这里是同一语义的单一实现）
+  // 换 prompt → 重开选择（原为盘本体内联；这里是同一语义的单一实现）；
+  // prompt 未换 → **每帧重申"有选择挂起"**（I-4：`choicePromptId` 是 render.ts 的全局闸门，
+  // 不设置的话候选手牌拿到 .choice-target 后仍可被拖拽打出，与热座页行为不一致）。
   if (netChoicePromptId !== top.id) {
     netChoicePromptId = top.id;
-    setChoiceSelection([]);
+    setChoiceSelection([], top.id);
+  } else {
+    setChoiceSelection(getChoiceSelection(), top.id);
   }
   const who = prompt.chooser ?? top.player;
   hands.classList.add('choice-mode');
 
   if (prompt.kind === 'select') {
     const sel = new Set(getChoiceSelection());
-    // 候选卡高亮 / 其余置灰（本页所有 .card 此时都已入 wrap）
+    // 2代 clarity-2/3：从牌库选阈值卡 → 效果属主牌库上方浮现古埃及眼睛（M-3：
+    // 热座 render.ts:4849 的同款 deferredFx；几何型 FX 必须等 wrap 进 DOM 后执行）
+    if (prompt.title.startsWith('透彻：从牌库中选择')) {
+      const eyePlayer: PlayerId = who;
+      deferredFx.push(() => startClarityDeckEye(eyePlayer));
+    }
+    // 候选卡高亮 / 其余置灰（本页所有 .card 此时都已入 wrap —— 见 C-1 的调用时机说明）
     for (const node of wrap.querySelectorAll<HTMLElement>('.card[data-uid]')) {
       const uid = node.dataset.uid!;
       const candidate: ChoiceCard | undefined = prompt.candidates.find((c) => c.uid === uid);
@@ -416,6 +529,19 @@ function renderChoiceUi(
   // select-action
   const bar = el('div', 'choice-bar');
   appendOperatorHeader(bar, who, prompt.title);
+  // 2代 luck 宣告 prompt（luck-0 宣告数字 / luck-3 宣告协议）：宣告卡（效果源卡）中心出现
+  // 持续转动的骰子（M-3：热座 render.ts:4945 的同款 deferredFx；startLuckDiceFx 幂等）。
+  // 注意：源卡必须是**已在 DOM 里、有非零 rect** 的节点才有骰子 —— 若源卡在对手手里且当前是
+  // `handVisibility: 'viewSeat'`（对手手牌只剩数量占位），则查不到 `[data-uid]`，骰子不出现
+  // （函数内部 `cardCenterByUid` 返回 null 即安全跳过，不报错）。这是信息遮蔽的必然取舍。
+  if (
+    prompt.rearrangeSide === undefined &&
+    (prompt.title.startsWith('luck-0：宣告') || prompt.title.startsWith('luck-3：宣告')) &&
+    top.sourceUid
+  ) {
+    const srcUid = top.sourceUid;
+    deferredFx.push(() => startLuckDiceFx(srcUid));
+  }
   if (prompt.rearrangeSide !== undefined) {
     // 效果内重排（动量4）由 body 级重排窗口承接（main.ts 的 syncRearrangeModalForEffect）
     bar.appendChild(el('div', 'choice-note',
@@ -484,29 +610,45 @@ interface NetHandOpts {
   isSelf: boolean;
   /** 对手手牌在 `'viewSeat'` 模式下只剩数量占位（§6.4）；自己恒为 `'all'`。 */
   handVisibility: 'all' | 'count';
+  /** 该玩家是否正在等待操作（效果挂起）→ 信息条的 operator 高亮 */
+  operator: boolean;
   cb: UiCallbacks;
 }
 
 /**
- * 建出**一个**玩家的手牌区（信息条 + 牌库/弃牌 + 手牌 + 可选操作区）。
+ * 建出**一个**玩家的手牌行（自己的行 = 信息条 + 牌库/弃牌 + 手牌 + 操作区；
+ * 对手的行 = 一行小标签 + 手牌）。
  *
  * `hand` 由调用方（`buildP0Hand` / `buildP1Hand`）**已经建好**并传入 —— 这样两个玩家的差别
  * 只剩"调 `renderHand` 时写 0 还是写 1"，而**调用顺序**在源码里一眼可读（约束 7 的代理证据）。
+ *
+ * ⚠️ I-1：对手的**信息条与牌库/弃牌堆只保留一份**，在顶部那条 `net-strip-foe` 里
+ * （本页只有一个手牌区，见 §2 布局）。对手这一行如果也建一份，页面上会出现两份
+ * `.deck[data-player=<对手>]` / `.trash-pile.pN[data-player=<对手>]` —— 而 FX 全走
+ * `querySelector`（**取首个**），于是特效会飞向用户没在看的那一份，**静默错位**。
+ * 所以这里对手分支只给一行小标签，不建 info、不建 piles。
  */
 function decorateHand(s: GameState, player: PlayerId, hand: HTMLElement, o: NetHandOpts): HTMLElement {
   const side = el('div', 'net-hand-side' + (o.isSelf ? ' net-hand-side-self' : ' net-hand-side-foe'));
   side.dataset.player = String(player);
-  const info = renderPlayerInfo(s, player, {
-    isSelf: o.isSelf,
-    label: o.isSelf ? '自己（你）' : '对手',
-    align: 'left',
-  });
-  info.appendChild(renderPiles(s, player));
-  if (!o.isSelf) info.appendChild(renderConnectionBadge());
-  side.appendChild(info);
+  if (o.isSelf) {
+    // 自己的行 = 底部信息条（§2：昵称/座位 · 牌库 n · 弃牌 n · 手牌）
+    const info = renderPlayerInfo(s, player, {
+      isSelf: true,
+      operator: o.operator,
+      label: '自己（你）',
+      align: 'left',
+    });
+    info.appendChild(renderPiles(s, player));
+    side.appendChild(info);
+    side.appendChild(hand);
+    // 操作区只挂在**自己**那一行：`getLegalActions` 是回合制的，挂两份会出现重复按钮
+    side.appendChild(renderNetActionBar(s, o.cb));
+    return side;
+  }
+  // 对手的行：只有手牌 + 一行小标签（信息条与牌库/弃牌堆在顶部那条里，见上面的 I-1 说明）
+  side.appendChild(el('div', 'net-hand-label', `对手手牌 ×${s.players[player].hand.length}`));
   side.appendChild(hand);
-  // 操作区只挂在**自己**那一行：`getLegalActions` 是回合制的，挂两份会出现重复按钮
-  if (o.isSelf) side.appendChild(renderNetActionBar(s, o.cb));
   return side;
 }
 
@@ -514,7 +656,7 @@ function decorateHand(s: GameState, player: PlayerId, hand: HTMLElement, o: NetH
  * P0 的手牌区。**必须**保持这个形状（`renderHand(s, 0, {…})` 的字面量调用）：
  * 约束 7 的源码代理断言钉的就是「`renderHand(s, 0 …` 出现在 `renderHand(s, 1 …` 之前」。
  */
-function buildP0Hand(s: GameState, viewSeat: PlayerId, handVis: 'all' | 'count', cb: UiCallbacks): HTMLElement {
+function buildP0Hand(s: GameState, viewSeat: PlayerId, handVis: 'all' | 'count', cb: UiCallbacks, operator: boolean): HTMLElement {
   const { uid } = getHandSelection();
   const isSelf = viewSeat === 0;
   const hand = renderHand(s, 0, {
@@ -531,13 +673,13 @@ function buildP0Hand(s: GameState, viewSeat: PlayerId, handVis: 'all' | 'count',
     // 设计稿 §6.1 已删挡板
     shield: false,
   });
-  return decorateHand(s, 0, hand, { isSelf, handVisibility: isSelf ? 'all' : handVis, cb });
+  return decorateHand(s, 0, hand, { isSelf, handVisibility: isSelf ? 'all' : handVis, operator, cb });
 }
 
 /**
  * P1 的手牌区。**必须**在 `buildP0Hand` **之后**调用（DOM 顺序 = 绝对玩家顺序，约束 7）。
  */
-function buildP1Hand(s: GameState, viewSeat: PlayerId, handVis: 'all' | 'count', cb: UiCallbacks): HTMLElement {
+function buildP1Hand(s: GameState, viewSeat: PlayerId, handVis: 'all' | 'count', cb: UiCallbacks, operator: boolean): HTMLElement {
   const { uid } = getHandSelection();
   const isSelf = viewSeat === 1;
   const hand = renderHand(s, 1, {
@@ -550,7 +692,7 @@ function buildP1Hand(s: GameState, viewSeat: PlayerId, handVis: 'all' | 'count',
     handVisibility: isSelf ? 'all' : handVis,
     shield: false,
   });
-  return decorateHand(s, 1, hand, { isSelf, handVisibility: isSelf ? 'all' : handVis, cb });
+  return decorateHand(s, 1, hand, { isSelf, handVisibility: isSelf ? 'all' : handVis, operator, cb });
 }
 
 /**
@@ -569,26 +711,14 @@ function buildP1Hand(s: GameState, viewSeat: PlayerId, handVis: 'all' | 'count',
  * 顺序语义是承重的，循环会把「DOM 顺序 = 绝对玩家顺序」这件事藏进一个不可见的迭代里，
  * 也让源码守卫只能退化成"检查某个循环存在"。
  */
-function buildHands(s: GameState, viewSeat: PlayerId, handVis: 'all' | 'count', cb: UiCallbacks): HTMLElement {
+function buildHands(
+  s: GameState, viewSeat: PlayerId, handVis: 'all' | 'count', cb: UiCallbacks, operator: PlayerId | null,
+): HTMLElement {
   const hands = el('div', 'hand-strip net-hands net-view-' + viewSeat);
   hands.dataset.viewSeat = String(viewSeat);
-  // 本容器同时声明「我是手牌条带」与「我承载两条手牌区」两个事实。
-  // ⚠️ **如实说明**：下面这个 data 标记是**为了可机检而存在**的产物，不是功能代码 ——
-  //    契约里没有 `[data-net-hand-slots]` 这个选择器，CSS 也没用它。
-  //    为什么需要它：本页的契约守卫要求"两条 `.hand` 产出路径"，而 `.hand` 的类名字面量
-  //    在 render.ts:1599（`el('div', 'hand' + …)`），不在本文件；单靠"调了两次 renderHand"
-  //    证明不了"两条都产出 .hand"（那要去读 render.ts 的实现）。把两条手牌的类名逐字写在这里，
-  //    是让"本页知道 .hand 的类名叫 hand，且要挂两条"这件事**在本页自己的源码里可读、可机检**。
-  //    **它证明不了运行时真有两条 .hand 节点** —— 那只能靠 DOM 自查（opts.verifyHooks）
-  //    或 5173 实机抽查；顺序那件事由 buildP0Hand/buildP1Hand 的调用顺序 + 相邻两条 appendChild 保证。
-  //    名字刻意**不叫** data-hand-count：那个名字已被占用为"该玩家手牌**张数**"（renderHand 的 count 分支）。
-  //    （本行的 `'hand'` 与第 573 行 `hand-strip` 里的 `'hand'` 合起来，就是守卫数到的"两处" ——
-  //      守卫数的是**带引号的类名 token 出现次数**，它对"第二处是不是真的建了节点"没有判别力，
-  //      这一点已写进 tests/ui/render-net.test.ts 第 5 条的注释与报告 §7。）
-  hands.dataset.netHandSlots = 'hand';
   // P0 的手牌**先**建；P1 的手牌**后**建 → querySelectorAll('.hand') 恒为 [P0, P1]
-  hands.appendChild(buildP0Hand(s, viewSeat, handVis, cb));
-  hands.appendChild(buildP1Hand(s, viewSeat, handVis, cb));
+  hands.appendChild(buildP0Hand(s, viewSeat, handVis, cb, operator === 0));
+  hands.appendChild(buildP1Hand(s, viewSeat, handVis, cb, operator === 1));
   return hands;
 }
 
@@ -620,6 +750,11 @@ function renderPreviewToolbar(
   });
   bar.appendChild(handBtn);
   bar.appendChild(el('span', 'net-preview-note', netPreviewNote));
+  // 运行时自查的**结果行**（`opts.verifyHooks` 时由 verifyPageHooks 写入）。
+  // 为什么放在工具条上而不是只 console：这两条断言（.hand 的 DOM 顺序、对手卡的 .rot-180）
+  // 是约束 7 / 硬约束 2 唯一的真凭据，用户一进预览页就该**直接看到**它过没过，
+  // 而不是被要求去开控制台。
+  bar.appendChild(el('span', 'net-verify-note', ''));
   return bar;
 }
 
@@ -637,6 +772,11 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
   const viewSeat = opts.viewSeat;
   const foe = (1 - viewSeat) as PlayerId;
   const handVis = handVisOf(opts.handVisibility);
+  // 几何型 FX 延迟器（M-3）：与热座 renderBoard:4641 同形的队列。
+  // renderChoiceUi 在构建期收集（透彻牌库眼睛 / 幸运宣告骰子），在 `root.appendChild(wrap)`
+  // **之后**统一执行 —— 此前棋盘节点尚未入 DOM，`getBoundingClientRect()` 全 0，
+  // 依赖矩形定位的特效会**静默失败**（热座页历史上正是这样完全不显示）。
+  const deferredFx: Array<() => void> = [];
 
   // —— 入口第 1 件副作用：重渲染动画抑制（与 renderApp:5583 同） ——
   root.classList.add('no-anim');
@@ -673,11 +813,20 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
   grid.appendChild(renderControlModule(s));
 
   // ── 底部：两条手牌区（DOM 顺序恒定为绝对玩家顺序 [P0, P1]） ──
-  const hands = buildHands(s, viewSeat, handVis, cb);
+  const hands = buildHands(s, viewSeat, handVis, cb, operator);
   grid.appendChild(hands);
 
+  // ⚠️ C-1：grid **必须先挂进 wrap**，选择模式才能找到候选节点 —— `renderChoiceUi` 内部
+  // 三处 `wrap.querySelectorAll(...)` 都只对"已经挂在 wrap 下的节点"生效：
+  //   · select 分支：`.card[data-uid]`（场上卡 + 手牌卡都在 grid 里）
+  //   · select-line 分支：`.net-lane-band`（`data-line` 写在带节点上）
+  // 曾经这一行在 `renderChoiceUi` **之后**：select-line 拿到 0 条带 → 没有可点目标，
+  // 而 `choiceBar` 对 select-line 没有确认按钮 → 非 optional 的 select-line 永久卡死。
+  // 与热座页同序（renderBoard:4800 挂 grid → :4835 跑 choice 分支）。
+  wrap.appendChild(grid);
+
   // ── 选择模式（三个 choice-* 分支，重写为回到当前页） ──
-  renderChoiceUi(wrap, hands, root, s, cb);
+  renderChoiceUi(wrap, hands, root, s, cb, deferredFx);
 
   // ── 简要日志 + 导出日志（与热座页同款；不占 FX 契约位） ──
   const log = el('div', 'log');
@@ -699,8 +848,10 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
     }));
   }
 
-  wrap.appendChild(grid);
   root.appendChild(wrap);
+
+  // 棋盘已入 DOM → 执行本帧收集的几何型 FX（矩形定位有效；透彻牌库眼睛 / 幸运宣告骰子）
+  for (const fn of deferredFx) fn();
 
   // —— 入口第 2、3 件副作用（与 renderApp:5591/5593 同） ——
   syncCheckCacheChains(s);
@@ -715,5 +866,19 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
   });
 
   // —— 诊断（可选）：把"19 条钩子真的在 DOM 里"这件事变成可执行的证据 ——
-  if (opts.verifyHooks) verifyPageHooks(wrap);
+  // 两道防线：`verifyPageHooks` 内部逐条 try/catch；这里再包一层，保证**任何**未预料的异常
+  // 都不会从 `renderNetBoard` 逃逸到宿主（"诊断不得把渲染搞崩"）。C-2 的原始缺陷正是
+  // 一个非法选择器抛 `SyntaxError` 直接冲垮整页渲染。
+  if (opts.verifyHooks) {
+    let note: string;
+    try {
+      note = verifyPageHooks(wrap);
+    } catch (err) {
+      note = `自查 ✗ 自查本身抛异常：${String(err)}`;
+      console.warn('[render-net] 运行时自查抛异常（已吞掉，不影响渲染）：', err);
+    }
+    const noteEl = wrap.querySelector<HTMLElement>('.net-verify-note');
+    if (noteEl) noteEl.textContent = note;
+    else console.info('[render-net] ' + note + '（无预览工具条，故只在此处报告）');
+  }
 }

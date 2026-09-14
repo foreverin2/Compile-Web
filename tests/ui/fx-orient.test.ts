@@ -4,6 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { RENDERERS } from '../../src/ui/fx-dom-contract';
 import { orientOf, orientToCwCcw, orientToFxRot, stripOrientClasses, cloneTransformOf, cloneBoxSwaps, type CardOrient } from '../../src/ui/fx-orient';
 import { cloneBoxFrom } from '../../src/ui/fx/clone-orient';
+// G2 Task 3F · I-2：产出方守卫必须读**去注释后**的源码（否则会被描述性注释满足）。
+// 与 tests/ui/fx-dom-contract.test.ts 共用**同一份实现**，不再各存一份拷贝。
+import { stripComments } from './source-text';
 
 /** 最小桩：只需 classList.contains —— 避免引入 jsdom */
 const node = (...cls: string[]) => ({ classList: { contains: (c: string) => cls.includes(c) } }) as unknown as Element;
@@ -429,29 +432,27 @@ describe('G2 · 朝向判定单一出处（源码守卫）', () => {
 
   // 3) 产出方仍在产出：render.ts 必须仍在**产出点**上挂三种朝向类（防止靠删/改产出过关）
   it('render.ts 仍在产出三种朝向类（防止靠删产出过关）', () => {
-    const src = readFileSync(fileURLToPath(new URL('../../src/ui/render.ts', import.meta.url))).subarray(0, 8 * 1024 * 1024).toString('utf8');
-    // ⚠️ 必须钉**产出表达式**，不能对整文件做子串查找。两个假绿来源（评审实测）：
+    // ⚠️ G2 Task 3F · I-2：判据必须读**去注释后**的源码。
+    //    原实现读裸源码，而 G2 Task 3 恰好新增了一条注释（render.ts:1905）逐字写着
+    //    `player === 1 ? 180 : 0` → 断言被**注释**满足。评审变异实测：把缺省朝向反转
+    //    （`player === 1 ? 0 : 180`）或删掉 `orient === 180` 分支，`npx vitest run` 仍
+    //    **101 files / 945 passed 全绿**（测试注释里"删掉任一分支都会指名道姓地失败"不成立）。
+    //    去注释由 `./source-text` 的共用实现提供（与 fx-dom-contract.test.ts 同一份，不复制）。
+    const raw = readFileSync(fileURLToPath(new URL('../../src/ui/render.ts', import.meta.url))).subarray(0, 8 * 1024 * 1024).toString('utf8');
+    const src = stripComments(raw);
+    // ⚠️ 必须钉**产出表达式**，不能对整文件做子串查找。假绿来源（评审实测）：
     //    - `rot-cw` 会被**中文注释** render.ts:196（`.rot-cw`）满足；
-    //    - `rot-180` 会被**类名镜像行** render.ts:1443（把邻居的类名 toggle 到编译卡面克隆上）满足。
+    //    - `rot-180` 会被**类名镜像行** render.ts:1470（把邻居的类名 toggle 到编译卡面克隆上）满足。
     //    两条都与"产出"无关，所以 `expect(src).toContain('rot-cw')` 这类写法对产出点完全失效
-    //    （把 :227 改成 'rot-clockwise' —— 热座页所有场上卡立刻直立 —— 仍然全绿）。
+    //    （把 :252 改成 'rot-clockwise' —— 热座页所有场上卡立刻直立 —— 仍然全绿）。
     //
-    // 两个产出点（BASE 实际写法，行号仅作参考）：
-    //    - renderStackSlot 内，场上卡按 owner 挂 ±90°：
-    //      `node.classList.add(card.owner === 0 ? 'rot-cw' : 'rot-ccw');`
-    //    - renderProtocol 内，P2 协议图 180°（`.protocol-img`）：
-    //      `img.className = 'protocol-img' + (player === 1 ? ' rot-180' : '');`
+    // 三个产出点（BASE 实际写法，行号仅作参考）：
+    //    - renderStackSlot 内，场上卡按 owner 挂 ±90°（缺省值）+ 180° 分支：
+    //      `opts?.orient ?? (card.owner === 0 ? 90 : -90)` 与
+    //      `orient === 90 → 'rot-cw'` / `orient === -90 → 'rot-ccw'` / `orient === 180 → 'rot-180'`
+    //    - renderProtocol 内，协议图按 orient 挂 180°：`orient === 180 ? ' rot-180' : ''`
     // 条件分支与类名一起钉住：只钉类名的话，把 `card.owner === 0` 反过来（P1/P2 朝向互换）
     // 仍然全绿 —— 那同样会让热座页所有场上卡朝向错。
-    //
-    // ⚠️ G2 Task 3 起，这两处的形状都变了（朝向成为**带默认值**的入参，远程页传 0°/180°）。
-    //    所以这里钉的是「**缺省分支**仍然复现热座语义」，而不是某一种书写形态：
-    //      - renderStackSlot：缺省值 = owner 映射（`card.owner === 0 ? 90 : -90`），
-    //        且三个朝向类**都仍在产出**（90/-90 两个缺省分支 + 180 分支）；
-    //      - renderProtocol：缺省值 = `player === 1 ? 180 : 0`，且 `rot-180` 只在 180 时追加。
-    //    仍然钉住"条件与类名的配对"，只是把"三元表达式"放宽成"缺省值表达式 + 分支"——
-    //    放宽的理由与 2F2 放开 `--fx-rot` 写入值形态同一条原则：**拒绝正确重构的守卫会被绕过**。
-    //    保护由下半段（三个类名逐个点名）补回：删掉任一分支都会指名道姓地失败。
     const missing: string[] = [];
     if (!/opts\?\.orient\s*\?\?\s*\(card\.owner === 0 \? 90 : -90\)/.test(src)) {
       missing.push('场上卡朝向的缺省值表达式（renderStackSlot 的 `opts?.orient ?? (card.owner === 0 ? 90 : -90)`）');
@@ -462,6 +463,14 @@ describe('G2 · 朝向判定单一出处（源码守卫）', () => {
       || !/orient === -90\)\s*node\.classList\.add\('rot-ccw'\)/.test(src)) {
       missing.push("场上卡 ±90° 的分支条件与类名配对（`orient === 90` → 'rot-cw'、`orient === -90` → 'rot-ccw'）");
     }
+    // ⚠️ G2 Task 3F · I-2 收紧：180° 那一支原来只由末尾的裸 `toContain('rot-180')` 覆盖，
+    //    而 `rot-180` 在 render.ts 里另有**类名镜像行**（positionCompiledFxLayer 的
+    //    `classList.toggle('rot-180', …)`）与**注释**两个来源 → 删掉真正的产出分支仍然全绿
+    //    （评审变异 G-2）。这里改成与 ±90° 同形的**条件与类名配对**断言。
+    if (!/orient === 180\)\s*node\.classList\.add\('rot-180'\)/.test(src)) {
+      missing.push("场上卡 180° 的分支条件与类名配对（`orient === 180` → 'rot-180'）—— "
+        + '远程页的对手卡倒置全靠这一支（C-4 删掉行级 rotate 之后更是唯一来源）');
+    }
     if (!/player === 1 \? 180 : 0/.test(src)) {
       missing.push('协议图朝向的缺省值表达式（renderProtocol 的 `player === 1 ? 180 : 0`）');
     }
@@ -469,8 +478,9 @@ describe('G2 · 朝向判定单一出处（源码守卫）', () => {
       missing.push("协议图 180° 产出表达式（`orient === 180 ? ' rot-180' : ''`）");
     }
     expect(missing, `render.ts 丢失/改变了朝向产出表达式（产出点是热座观感的唯一来源，不得顺手删）：\n${missing.join('\n')}`).toEqual([]);
-    // 两个产出表达式已覆盖全部三个类名（rot-cw/rot-ccw 在第一条，rot-180 在第二条）；
-    // 这里再逐个给出可读的失败信息，防止有人只改其中一支
+    // 下面这一组是**逐类名点名**（比上面两条表达式更可读的失败信息），判据同样是去注释源码。
+    // ⚠️ 它比上面弱（`rot-180` 有"类名镜像行"这个非产出来源），保留它只为可读性；
+    //    真正有判别力的是上面那两条"条件 + 类名"配对断言。
     for (const c of ['rot-cw', 'rot-ccw', 'rot-180']) {
       expect(src, `render.ts 丢失产出类 ${c}（产出点是热座观感的唯一来源，不得顺手删）`).toContain(c);
     }

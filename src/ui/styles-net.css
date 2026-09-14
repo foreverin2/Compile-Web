@@ -33,7 +33,7 @@
 
 .net-strip { display: block; }
 .net-piles { display: flex; align-items: center; gap: 14px; margin: 4px 0; }
-.net-piles .deck {
+.net-piles .deck[data-player] {
   position: relative;
   top: auto;
   left: auto;
@@ -44,7 +44,10 @@
   margin: 0;              /* styles.css:761 的 .deck 无 margin，这里显式钉住，避免 UA 默认值 */
   flex: 0 0 auto;
 }
-.net-piles .trash-pile {
+/* 特异性说明（M-5）：styles.css:762-763 的 `.deck[data-player="0"]` 与这里的裸 `.net-piles .deck`
+   **同为 (0,2,0)** —— 覆盖只靠"本文件在 main.ts 里最后一个 import"。给选择器补上 `[data-player]`
+   （(0,3,0)）后，覆盖不再依赖 import 顺序（任何一次 CSS 挪位都不会让对手牌库跳回绝对定位）。 */
+.net-piles .trash-pile[data-player] {
   position: relative;
   left: auto;
   right: auto;
@@ -62,6 +65,18 @@
 
 /* ============================================================================
  * 3. 一条线 = 一整条横带（上 = 对手 / 中线 / 下 = 自己）
+ *
+ * ⚠️ **不要**给对手侧加行级 `transform: rotate(180deg)`（G2 Task 3 的 Critical C-4）：
+ *   1. 行内每张卡/协议图**自己**带 `.rot-180`（`render.ts:254` / `:130`，由本页传入的
+ *      `orient: isSelfSeat ? 0 : 180` 触发）→ 行级 180° 与它叠加成 **360° = 恒等**，
+ *      结果是"对手的卡其实仍然正立"，只有不吃类旋转的槽内文字/电量条倒过来；
+ *   2. 行级 180° 会把该行**水平镜像**（左右次序翻转）→ `gen3-util.ts:51/66` 的
+ *      「覆盖者在右」屏幕假设被翻转，对手被覆盖卡的可见区被 `Math.max(6,…)` 压成 6px、
+ *      `clipInsetRightPct` 顶到 0.94 —— 与硬约束 3/4 直接冲突。
+ *   对手的倒置**只**由 `.rot-180` 承担（见 styles.css:457），左右几何保持未镜像。
+ *   `tests/ui/render-net.test.ts` 有一条守卫：凡作用于本页**容器节点**的规则不得带
+ *   `transform`/`rotate`（容器包括 .net-lane-band / .net-side / .net-side-foe / .net-hands /
+ *   .net-hand-side / .net-grid / .net-board）。
  * ========================================================================== */
 
 .net-lane-band {
@@ -73,8 +88,6 @@
   border-radius: 8px;
   background: rgba(0, 0, 0, 0.18);
 }
-/* 对手侧（上带）：整块翻转 180°，使对手看到的卡正立（隔桌对坐） */
-.net-lane-band .net-side-foe { transform: rotate(180deg); }
 
 .net-side {
   display: grid;
@@ -96,9 +109,14 @@
  * styles.css 的 `.stack { --card-h: 175px; --card-w: calc((var(--card-h) - 2px) * 0.71429 + 2px) }`
  * 与 `.stack .card + .card { margin-left: calc(0.462 * var(--card-h) - var(--card-w)) }` 是**为旋转
  * 90° 的视觉宽度**推导的（卡高 175px 就是横置后的视觉宽）。远程页的卡不旋转，所以：
- *  - `--card-h` 改为正常卡高（130 内容 + 8 = 138），`--card-w` 随之 = 130 + 2 = 132；
- *  - 重叠量重推为「露出 46.2% × 视觉宽(130)  − 布局宽(132)」≈ −71.9px（见下）。
+ *  - `--card-h` 改为 182，`--card-w = (182 − 2) × 0.71429 + 2 ≈ 130.57`；
+ *  - 重叠量重推为「露出 46.2% × 视觉宽(130.57) − 布局宽(130.57)」= 0.462 × 130 − 130.57
+ *    ≈ **−70.5px**（见下一条规则；这里用整数 130 参与计算，与下一行的表达式逐字一致）。
  * 这样 0° 与 180° 的**布局盒与视觉盒一致**，露出条带就是真正的 46.2%，与热座页的可见语义对齐。
+ *
+ * ⚠️ `--card-h` 在本页**只用来推导 `--card-w`**：`.stack .card` 没有显式 height
+ * （`height:auto` + `padding:3px` + `box-sizing:border-box`），所以 182 不是"实测卡高"，
+ * 而是一个**比例基准**（卡面 5:7 → 182 × 0.71429 ≈ 130）。改卡面比例时才需要动它。
  * ========================================================================== */
 
 .net-lane-band .stack { --card-h: 182px; --card-w: calc((var(--card-h) - 2px) * 0.71429 + 2px); }
@@ -106,13 +124,16 @@
 .net-lane-band .stack .card .card-face-img,
 .net-lane-band .stack .card .cardback-img { height: auto; width: 100%; }
 .net-lane-band .stack .card .card-back { height: auto; aspect-ratio: 5 / 7; }
-/* 重叠：未旋转时"视觉宽" = 布局宽 130px，故 露出 = 0.462 × 130 ≈ 60.1px → margin = 60.1 − 130 ≈ −69.9px
-   （热座页的对应值见 styles.css:438-441，那里算的是 ±90° 旋转后的视觉宽 --card-h）
+/* 重叠：未旋转时"视觉宽" = 布局宽 ≈ 130.57px，故 露出 = 0.462 × 130 ≈ 60.1px
+   → margin = 60.1 − 130.57 ≈ −70.5px（热座页的对应值见 styles.css:438-441，
+   那里算的是 ±90° 旋转后的视觉宽 --card-h）
 
-   ⚠️ 180° 的卡**照用**这条负 margin，不要为它单独清零：
-   `.stack .card + .card` 的负 margin-left 让后一张卡**从左侧**盖住前一张。对手侧整块做过
-   180°（见第 3 节），"链路的生长方向"随之镜像 —— 清零负 margin 会让对手的链路**不再重叠**
-   （露出 100% 宽，一长串卡把带撑爆），而不是"更正确"。 */
+   180° 的卡**照用**这条负 margin，不要为它单独清零：
+   `.stack .card + .card` 的负 margin-left 让后一张卡**从左侧**盖住前一张
+   （覆盖者在**屏幕右侧**，`gen3-util.ts:51/66` 的可见区计算就按这个方向）。
+   对手侧的卡只是**各自**多带一个 `.rot-180`（内容倒置、布局盒不变），
+   链路的生长方向与覆盖方向都**不镜像**（C-4 删掉了行级 180°）；
+   清零负 margin 会让链路不再重叠（露出 100% 宽，一长串卡把带撑爆），而不是"更正确"。 */
 .net-lane-band .stack .card + .card { margin-left: calc(0.462 * 130px - var(--card-w)); }
 
 /* 悬停：styles.css 只为 .rot-cw/.rot-ccw 写了悬停组合（把旋转写进 transform）。
@@ -174,6 +195,12 @@
 }
 /* 自己那一行：与对方的视觉区分（回合中额外高亮由 .player-info.active 提供） */
 .net-hand-side-self { border-color: rgba(79, 240, 255, 0.45); background: rgba(79, 240, 255, 0.04); }
+/* 对手那一行（C-4 之后这里**没有**任何 transform —— 对手的卡由 .rot-180 各自倒置）。
+   I-1：这一行**只有手牌 + 一行小标签**：对手的信息条与牌库/弃牌堆只在上方 `net-strip-foe`
+   里出现一份。两份会让 `.deck[data-player]` / `.trash-pile.pN[data-player]` 各有两个 A 类节点，
+   而 FX 全走 `querySelector`（取首个）→ 特效飞向用户没在看的那一份，静默错位。 */
+.net-hand-side-foe { border-style: solid; background: rgba(255, 255, 255, 0.02); }
+.net-hand-label { font-size: 12px; color: #9fb0c8; letter-spacing: 0.06em; }
 /* 操作区在每条手牌行内（不是 body 级 fixed） */
 .net-action-bar { position: static; transform: none; left: auto; bottom: auto; }
 
@@ -195,8 +222,10 @@
  * 错误矩形 / 取得 undefined）。占位块给出手牌区的"足印"，让手牌落点特效落在一个合理位置。
  * ========================================================================== */
 
-.hand-count-only { justify-content: center; align-items: center; min-width: 130px; width: auto; }
-.hand-count-placeholder {
+/* 作用域限定在 .net-hands 内（本文件自称"只服务 render-net.ts"）：这两个类只在远程页
+   `handVisibility: 'count'` 分支产出，裸类名会泄漏到将来别处的同名用法上。 */
+.net-hands .hand-count-only { justify-content: center; align-items: center; min-width: 130px; width: auto; }
+.net-hands .hand-count-placeholder {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -235,3 +264,7 @@
 .net-preview-title { color: #00ffcc; font-weight: 700; letter-spacing: 0.08em; }
 .net-preview-btn { font-size: 12px; padding: 4px 8px; cursor: pointer; }
 .net-preview-note { flex: 1 0 100%; color: #9fb0c8; }
+/* 运行时自查结果行（opts.verifyHooks 时写入）：约束 7 的 DOM 顺序 / 硬约束 2 的对手卡 180°
+   唯一真凭据 —— 用户一进预览页就直接看到它过没过，不必开控制台。 */
+.net-verify-note { flex: 1 0 100%; color: #7fd4ff; font-variant-numeric: tabular-nums; word-break: break-all; }
+.net-verify-note:empty { display: none; }
