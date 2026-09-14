@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { RENDERERS } from '../../src/ui/fx-dom-contract';
 import { orientOf, orientToCwCcw, orientToFxRot, stripOrientClasses, cloneTransformOf, cloneBoxSwaps, type CardOrient } from '../../src/ui/fx-orient';
 import { cloneBoxFrom } from '../../src/ui/fx/clone-orient';
 
@@ -172,6 +173,82 @@ describe('orientToFxRot / stripOrientClasses（G2 Task 2 新增出口）', () =>
 });
 
 /**
+ * 取出源码里每个 `setProperty('--fx-rot', X)` 调用：`arg` = 第二实参 X（已 trim），
+ * `text` = **整个调用**（`setProperty(` 到配对闭括号，含跨行内容，已折叠空白以便比较）。
+ *
+ * 为什么不用一条正则（G2 Task 2F2 · Important-A 的假红/假绿都出在这里）：
+ *  - `[^)]*`：实参里含括号（`orientToFxRot(orient)`）会被截断成 `orientToFxRot(orient`；
+ *  - `[^;]*?`：要求整句同行 —— 把写入折成多行（合法的格式化写法）会让它一个都取不到；
+ *  - 尾随逗号：多行实参常写成 `setProperty(\n  '--fx-rot',\n  orientToFxRot(orient),\n)`，
+ *    实参后面多一个 `,` —— 拿到的字符串就成了 `orientToFxRot(orient),`；
+ *  - **属性名与 `(` 之间可能有换行/缩进** —— 所以锚点是 `setProperty(`，属性名要**解析出来后校验**，
+ *    不能把 `setProperty('--fx-rot'` 当成一个字面量去找（我第一版就是这么错的：多行写法会被
+ *    **整条跳过**，于是"两个写入点"只找到 1 个 → 守卫对多行混用 `cloneTransformOf` 完全瞎掉）。
+ * 所以这里**按括号配对扫描**，再按**顶层逗号**切分，天然容忍换行、尾随逗号与嵌套括号。
+ *
+ * `text` 同时喂给 5a 的"同现"检查：只按**行**判同现会被"把实参折到下一行"绕过
+ * （实测：`setProperty(\n '--fx-rot',\n cloneTransformOf(orient),\n)` 在旧的逐行 5a 下全绿）。
+ */
+function rotWritesOf(src: string): Array<{ arg: string; text: string }> {
+  const out: Array<{ arg: string; text: string }> = [];
+  const head = 'setProperty(';
+  let from = 0;
+  for (;;) {
+    const at = src.indexOf(head, from);
+    if (at === -1) break;
+    from = at + head.length;
+    const open = at + head.length - 1;                 // `(` 的位置
+    let depth = 0;
+    let end = -1;
+    for (let i = open; i < src.length; i += 1) {
+      const ch = src[i];
+      if (ch === "'" || ch === '"' || ch === '`') {     // 跳过字符串里的括号/逗号
+        const quote = ch;
+        i += 1;
+        while (i < src.length) {
+          if (src[i] === '\\') { i += 2; continue; }
+          if (src[i] === quote) break;
+          i += 1;
+        }
+        continue;
+      }
+      if (ch === '(') depth += 1;
+      else if (ch === ')') { depth -= 1; if (depth === 0) { end = i; break; } }
+    }
+    if (end === -1) continue;
+    // 按**顶层**逗号切分实参列表（嵌套括号里的逗号不算）
+    const args: string[] = [];
+    let cur = '';
+    let d = 0;
+    for (let i = open + 1; i < end; i += 1) {
+      const ch = src[i];
+      if (ch === "'" || ch === '"' || ch === '`') {
+        const quote = ch;
+        cur += ch;
+        i += 1;
+        while (i < end) {
+          cur += src[i];
+          if (src[i] === '\\') { i += 1; if (i < end) cur += src[i]; i += 1; continue; }
+          if (src[i] === quote) break;
+          i += 1;
+        }
+        continue;
+      }
+      if (ch === '(' || ch === '[' || ch === '{') d += 1;
+      if (ch === ')' || ch === ']' || ch === '}') d -= 1;
+      if (ch === ',' && d === 0) { args.push(cur); cur = ''; continue; }
+      cur += ch;
+    }
+    args.push(cur);
+    // 属性名必须**正好**是 '--fx-rot'（`'--fx-rotation'` 不算）；属性名与 `(` 之间的换行/缩进被 trim 掉
+    if (args.length > 1 && args[0].trim() === "'--fx-rot'") {
+      out.push({ arg: args[1].trim(), text: src.slice(at, end + 1).replace(/\s+/g, ' ') });
+    }
+  }
+  return out;
+}
+
+/**
  * G2 源码守卫：朝向判定必须走单一出处。
  * 起因：加 180° 时若只改其中几处，会出现"有的浮层卡正、有的倒"这种极难排查的不一致。
  * 局限（必须如实写在注释里）：源码文本守卫只能证明"类名不再被裸写"与"单一出处被引用"，
@@ -188,14 +265,15 @@ describe('G2 · 朝向判定单一出处（源码守卫）', () => {
    * 「漏登记比没有守卫更糟，因为它读起来像已验收」。
    *
    * 三类（互斥）：
-   *   - **单一出处** `fx-orient.ts`：唯一允许命名这三个类名的地方（`ORIENT_CLASSES` + `orientOf` 的读取）；
-   *     它的存在理由就是"朝向判定只能在这里发生"，所以必须命名这些类名。
-   *   - **产出方** 磁盘上所有 `render*.ts`：渲染器要挂朝向类名（render.ts:116/:227），允许。
-   *   - **FX 消费者** 其余全部 `src/ui/` 与 `src/ui/fx/` 下的 `.ts`：**零命中**带引号的
-   *     `'rot-cw'`/`'rot-ccw'`/`'rot-180'` 字面量
+   *   - **单一出处** `fx-orient.ts`：唯一的**读取**出处（判定侧）—— `ORIENT_CLASSES` + `orientOf` 的
+   *     读取必须命名这三个类名；它的存在理由就是"朝向判定只能在这里发生"。
+   *   - **产出方** = **在 `RENDERERS` 注册表里登记过**的渲染器（G2 Task 2F2 起不再按文件名判定）：
+   *     渲染器要挂朝向类名（render.ts:116/:227），允许。
+   *   - **FX 消费者** 其余全部（`src/ui/`、`src/ui/fx/`、`src/ui/effects/` 下的 `.ts`）：**零命中**
+   *     带引号的 `'rot-cw'`/`'rot-ccw'`/`'rot-180'` 字面量
    *     （沿用原有正则 `/['"]rot-(cw|ccw|180)['"]/`，抓带引号的字面量，避开中文注释里的 `.rot-cw` 散文）。
    *
-   * 豁免集合**恰好**是 `fx-orient.ts` ∪ 磁盘 `render*.ts` ∪ 契约数据文件的精确文件名
+   * 豁免集合**恰好**是 `fx-orient.ts` ∪ 已登记渲染器 ∪ 契约数据文件的精确文件名
    * （不是"名字里含 render 就算"这类宽匹配）：
    *   - `src/ui/fx-dom-contract.ts`：契约**数据**，把 `'.rot-cw'` 这类钩子字符串当数据登记，
    *     是"声明"不是"判定"；它出现在豁免里是**精确文件名**，不是模式匹配。
@@ -217,6 +295,10 @@ describe('G2 · 朝向判定单一出处（源码守卫）', () => {
     // `src/ui/effects/index.ts` —— 而它正是最大的 FX 消费者（2285 行）。只扫两个目录会
     // 把它从消费者的发现结果里漏掉（原 FX_FILES 清单里有它），那等于**缩小**守卫面。
     // 故按实际目录结构扫三个；若将来新增目录，`LEGACY_CONSUMERS` 覆盖断言会立刻报红。
+    // ⚠️ 发现是**非递归**的（复评 §5.3 提示）：若把新模块放进更深的子目录（如
+    // `src/ui/net/render-net.ts`），它既不会被扫到、也不会出现在豁免断言里 —— 不报红，
+    // 但也**不受守卫**。新增目录时必须同步这份前缀清单。计划 Task 3 用的是顶层
+    // `src/ui/render-net.ts`，按计划执行是安全的。
     for (const prefix of ['', 'fx/', 'effects/'] as const) {
       // 目录路径写错/改名 → 发现结果为空 → 下面「三类都非空」的断言立刻报红（而不是静默全绿）。
       // 这里吞掉 readdirSync 的异常（目录不存在会 throw）：让守卫以**断言失败**的形式报红，
@@ -231,34 +313,71 @@ describe('G2 · 朝向判定单一出处（源码守卫）', () => {
     return { discovered: out, perDirCounts: counts };
   })();
 
-  /** 单一出处：唯一豁免的模块（见上方注释）。 */
+  /** 单一出处：唯一的**读取**出处（判定侧）—— 必须在 `ORIENT_CLASSES` / `orientOf` 里命名这三个类名。
+   *  （产出方 `render*.ts` 与契约数据 `fx-dom-contract.ts` 也会出现这些字符串，但它们不是"读取侧"。） */
   const SOLE_SOURCE = 'fx-orient.ts';
-  /** 产出方：磁盘上所有 `render*.ts`（含 Task 3 将新建的 `render-net.ts`，无需改这个清单）。 */
-  const producers = discovered.filter((f) => /^render.*\.ts$/.test(f));
   /** 契约数据文件：登记钩子字符串为数据，不做朝向判定（精确文件名豁免）。 */
   const CONTRACT_DATA = 'fx-dom-contract.ts';
+  /**
+   * 产出方 = **在契约数据文件的 `RENDERERS` 注册表里登记过**的文件（不是"名字匹配 render*"）。
+   *
+   * 为什么不能按名字豁免（G2 Task 2F2 · Important-B）：
+   *   `/^render.*\.ts$/` 同时承担了「发现」与「豁免」两个职责，于是任何名字以 render 开头、
+   *   但其实不是渲染器的模块（如 `render-net-utils.ts`）会被静默豁免出「FX 消费者零命中」；
+   *   而 ±90° 断言只查 cw|ccw、不查 180 → 它里面的 `'rot-180'` 落在**两条断言之间的缝隙**里。
+   *   评审实测：新建 `render-net-probe2.ts` 只写 `classList.add('rot-180')` 时 20/20 全绿。
+   * 结论：**发现可以用文件名，豁免必须用注册表**。注册表是 `src/ui/fx-dom-contract.ts` 导出的
+   * `RENDERERS`（唯一出处，两个测试文件共用），未登记者自动落回 `consumers` 被零命中断言扫到。
+   */
+  const registered = new Set<string>(RENDERERS.map((r) => r.file));
+  const producers = discovered.filter((f) => registered.has(f));
+  /** 热座渲染器：唯一允许产出 ±90° 的渲染器（两位玩家坐在同一块屏幕前，各自看得正）。
+   *  显式具名常量而不是宽模式 —— 「谁能豁免」必须是逐文件名的、可复核的决定。 */
+  const HOTSEAT = 'render.ts';
   /** FX 消费者：其余全部 —— 必须零命中带引号的朝向类名字面量。 */
   const consumers = discovered.filter((f) => f !== SOLE_SOURCE && !producers.includes(f) && f !== CONTRACT_DATA);
 
   /** 原有 6 个消费者必须仍在发现结果里（保留原语义：这些模块不能被漏扫） */
   const LEGACY_CONSUMERS = ['effects/index.ts', 'fx-gen2.ts', 'fx-gen3.ts', 'fx-gen3-swap.ts', 'gen3-control.ts', 'compiled-gen3.ts'];
 
-  it('磁盘发现的三类都非空，且豁免集合恰好等于 单一出处 ∪ 磁盘 render*.ts ∪ 契约数据（防目录写错静默全绿 / 防宽匹配扩大豁免）', () => {
+  it('磁盘发现的三类都非空，且豁免集合恰好等于 单一出处 ∪ 已登记渲染器 ∪ 契约数据（防目录写错静默全绿 / 防宽匹配扩大豁免）', () => {
     // 每个被扫的目录都必须发现到 .ts（路径写错 → 空 → 报红；发现结果为空则下面全部静默绿）
     const emptyDirs = perDirCounts.filter(([, n]) => n === 0).map(([d]) => d);
     expect(emptyDirs, `以下目录发现 0 个 .ts（路径写错/改名？发现结果为空则守卫静默全绿）：\n${emptyDirs.join('\n')}`).toEqual([]);
-    const groups: Array<[string, string[]]> = [['单一出处', [SOLE_SOURCE]], ['产出方 render*.ts', producers], ['FX 消费者', consumers]];
+    const groups: Array<[string, string[]]> = [['单一出处', [SOLE_SOURCE]], ['产出方（已登记渲染器）', producers], ['FX 消费者', consumers]];
     const empty = groups.filter(([, files]) => files.length === 0).map(([name]) => name);
     expect(empty, `以下类别在磁盘上发现 0 个文件（目录路径写错？发现结果为空则守卫静默全绿）：\n${empty.join('\n')}`).toEqual([]);
     // 豁免集合必须**恰好**是这三类里的非消费者部分 —— 任何额外豁免都会体现在这里
     const exempt = [...discovered].filter((f) => !consumers.includes(f)).sort();
-    expect(exempt, '豁免集合不等于 单一出处 ∪ 磁盘 render*.ts ∪ 契约数据（不得扩大豁免）')
+    expect(exempt, '豁免集合不等于 单一出处 ∪ 已登记渲染器 ∪ 契约数据（不得扩大豁免）')
       .toEqual([SOLE_SOURCE, CONTRACT_DATA, ...producers].sort());
     for (const f of LEGACY_CONSUMERS) {
       expect(consumers, `原有的 FX 消费者 ${f} 未被磁盘发现结果覆盖`).toContain(f);
     }
-    expect(producers, '当前生产渲染器 render.ts 未被磁盘发现').toContain('render.ts');
+    expect(producers, '当前生产渲染器 render.ts 未被认定为产出方').toContain(HOTSEAT);
     expect(discovered.length, '磁盘发现结果过少（目录路径可能写错）').toBeGreaterThan(LEGACY_CONSUMERS.length);
+  });
+
+  /**
+   * G2 Task 2F2 · Important-B：注册表与磁盘的**双向**一致性。
+   *
+   * 豁免判据从「名字匹配 `render*`」改成「在 `RENDERERS` 里登记过」之后，必须补这两条，
+   * 否则"名字像渲染器"仍能逃过（未登记 → 落回 consumers，被零命中断言扫到 → 其实已经安全了），
+   * 而更危险的反方向是：注册表里写了一个**磁盘上不存在**的文件 → 它被当作"已登记产出方"
+   * 而静默缩小了「消费者零命中」的检查面（豁免面被拼写错误撑大）。
+   */
+  it('磁盘上每个 render*.ts 都必须在 RENDERERS 里登记（否则"名字像渲染器"就能逃过豁免判据）', () => {
+    const discoveredRenderers = discovered.filter((f) => /^render.*\.ts$/.test(f));
+    const unregistered = discoveredRenderers.filter((f) => !registered.has(f));
+    expect(unregistered, `以下 src/ui/render*.ts 未登记进 RENDERERS（注册表在 src/ui/fx-dom-contract.ts）：\n${unregistered.join('\n')}`).toEqual([]);
+    // 发现侧本身不能空（否则这条断言恒真）
+    expect(discoveredRenderers.length, '磁盘上一个 render*.ts 都没发现（发现路径写错？）').toBeGreaterThan(0);
+  });
+
+  it('RENDERERS 里每个 file 都必须在磁盘上存在（拼错文件名不得静默缩小豁免面）', () => {
+    const absent = [...registered].filter((f) => !discovered.includes(f));
+    expect(absent, `RENDERERS 里登记了磁盘上不存在的文件（拼错？豁免面被撑大）：\n${absent.join('\n')}`).toEqual([]);
+    expect(registered.size, 'RENDERERS 为空（豁免判据失效）').toBeGreaterThan(0);
   });
 
   // 1) 反向：FX 消费者不得裸写朝向类名（注释里写 `.rot-cw` 不算 —— 只抓带引号的字面量）
@@ -281,13 +400,16 @@ describe('G2 · 朝向判定单一出处（源码守卫）', () => {
    * （自己不加类 = 0°，对手加 `.rot-180`）」——理由：远程页自己正立、对手 180°，
    * ±90° 会**交换布局盒宽高**故不适用。
    *
-   * 于是：磁盘上除 `render.ts`（热座页）之外的任何 `render*.ts`，不得含 `'rot-cw'`/`'rot-ccw'` 字面量。
+   * 于是：**已登记的渲染器**里除热座页（`HOTSEAT`）之外的任何文件，不得含 `'rot-cw'`/`'rot-ccw'` 字面量。
    * 这条守卫会在 Task 3 阶段自动抓错（`render-net.ts` 一写 ±90° 就红），无需再往清单里加名字。
+   *
+   * ⚠️ 判据是**带引号的**字面量：中文注释里写 `.rot-cw`（不带引号）不会命中 ——
+   * 但**不要把带引号的类名写进注释**（如 `// 不产出 'rot-cw'`），那会被当成产出而报红。
    */
-  it('除 render.ts 外的 render*.ts（远程页渲染器）不得产出热座专属的 ±90° 朝向类', () => {
+  it('除热座渲染器外的已登记渲染器（远程页）不得产出热座专属的 ±90° 朝向类', () => {
     const bad: string[] = [];
     for (const f of producers) {
-      if (f === 'render.ts') continue; // 热座页的产出方，允许 ±90°
+      if (f === HOTSEAT) continue; // 热座页的产出方，允许 ±90°
       const src = readUiFile(f);
       src.split('\n').forEach((line, i) => {
         if (/['"]rot-(cw|ccw)['"]/.test(line)) bad.push(`${f}:${i + 1}: ${line.trim()}`);
@@ -342,25 +464,61 @@ describe('G2 · 朝向判定单一出处（源码守卫）', () => {
   });
 
   // 5) orientToFxRot 只产出**裸角度**：不得出现 --fx-rot 与 cloneTransformOf 同现的行，
-  //    且**每个**写入 --fx-rot 的表达式都必须是裸角度（不得塞 rotate(…) 完整函数串）
+  //    且**每个**写入 --fx-rot 的值都不得是完整 transform 函数串（`rotate(…)`）
   it('--fx-rot 不得与完整 transform 函数串（cloneTransformOf）混用', () => {
     const src = readUiFile('effects/index.ts');
-    // 5a) 逐行：`--fx-rot` 与 `cloneTransformOf` 不得同现
-    const bad = src.split('\n')
-      .map((line, i) => ({ no: i + 1, line }))
-      .filter(({ line }) => line.includes('--fx-rot') && line.includes('cloneTransformOf'))
-      .map(({ no, line }) => `${no}: ${line.trim()}`);
+    // 每个 `setProperty('--fx-rot', …)` 调用：arg = 第二实参，text = 整个调用（已折叠空白）
+    const calls = rotWritesOf(src);
+    // 5a) `--fx-rot` 与 `cloneTransformOf` 不得出现在**同一个调用**里。
+    //     原实现是逐行比较；这里改成按**调用**比较 —— 逐行版对一个完全等价的多行写法
+    //     （`setProperty(\n '--fx-rot',\n cloneTransformOf(orient),\n)`）是瞎的（我实测过：全绿）。
+    const bad = calls
+      .filter(({ text }) => text.includes('cloneTransformOf'))
+      .map(({ text }) => text);
     expect(bad, `--fx-rot 只吃裸角度，混用完整函数串会让整条内联 transform 静默失效：\n${bad.join('\n')}`).toEqual([]);
-    // 5b) 钉**写入表达式本身**。原实现只做 5a，而 effects/index.ts:164 的注释里同时含
-    //     `--fx-rot` 与 `cloneTransformOf` —— 也就是说 5a 完全可以被注释解释，且它证明不了
-    //     「真正写值的那一行没被换成完整函数串」。这里改成对每个写入点逐一断言形态。
-    //     当前两个写入点（BASE 行号 165/173，±90° 与 180° 分支各一次）：
-    //       card.style.setProperty('--fx-rot', orientToFxRot(orient));
-    //     用 `[^;]*` 而不是 `[^)]*`：实参里含括号（`orientToFxRot(orient)`），`[^)]*` 会截断成
-    //     `orientToFxRot(orient` 从而假红。
-    const writes = [...src.matchAll(/setProperty\(\s*'--fx-rot'\s*,\s*([^;]*?)\)\s*;/g)].map((m) => m[1].trim());
-    expect(writes.length, 'effects/index.ts 里找不到 --fx-rot 的写入点（产出路径被删？）').toBeGreaterThan(0);
-    const badForms = writes.filter((w) => !/^orientToFxRot\(orient\)$/.test(w));
-    expect(badForms, `--fx-rot 的写入值必须是 orientToFxRot(orient) 的裸角度（不得是 cloneTransformOf 的函数串）：\n${badForms.join('\n')}`).toEqual([]);
+    // 5b) 钉**写入值的不变量**（而不是某个具体写法）。原实现只做 5a，而 effects/index.ts:164 的注释里
+    //     同时含 `--fx-rot` 与 `cloneTransformOf` —— 5a 完全可以被注释解释，且它证明不了
+    //     「真正写值的那一处没被换成完整函数串」。
+    //
+    // ⚠️ G2 Task 2F2 · Important-A：这里**不能**把写法钉死成 `orientToFxRot(orient)`。
+    //     评审实测：改成中间变量 `const fxRot = orientToFxRot(orient); setProperty('--fx-rot', fxRot)`
+    //     是语义完全等价、且更易调试的写法，却被旧正则判红（假红），失败消息还误述成"混入了
+    //     cloneTransformOf 的函数串"。**拒绝正确代码的守卫会被绕过或删掉** —— 那正是它要防的事。
+    //     所以断言改成两条**不变量**：
+    //       (i)  写入值必须是「对 `orientToFxRot` 的调用」或「一个标识符」（= 上游已算好的裸角度），
+    //            变量名不限（`orient` / `fxRot` / `currentOrient` 都合法）；
+    //       (ii) 写入值**不得含 `rotate(`**（完整 transform 函数串的判别特征）—— 这条才是真正要防的，
+    //            它同时覆盖「将来合法的第三种写入形态」（例如 `FX_ROT[orient]` 只要不含 rotate( 就通过）。
+    // 提取：见 rotWritesOf（括号配对 + 顶层逗号切分）—— 容忍实参里的括号、跨行写入与尾随逗号。
+    const writes = calls.map(({ arg }) => arg);
+    // 「找不到写入点」的失败消息必须**带上实际找到的写入点清单** —— 否则删掉两个写入点中的一个
+    // （如只删 ±90° 分支、留下 180° 分支）时，读者只看得到"数量不对"，看不出漏了哪一个。
+    expect(writes.length, `effects/index.ts 里找不到 --fx-rot 的写入点（产出路径被删/改了写法？）；实际找到 ${writes.length} 处：\n`
+      + writes.map((w, i) => `  [${i + 1}] ${w}`).join('\n')).toBeGreaterThan(0);
+    const isOrientCall = (w: string): boolean => /^orientToFxRot\([A-Za-z_$][\w$]*\)$/.test(w);
+    const isIdentifier = (w: string): boolean => /^[A-Za-z_$][\w$]*$/.test(w);
+    const badForms = writes.filter((w) => !(isOrientCall(w) || isIdentifier(w)));
+    expect(badForms, '--fx-rot 的写入值必须是 对 orientToFxRot(<标识符>) 的调用 或 一个标识符（上游已算好的裸角度）：\n'
+      + badForms.map((w) => `  实际取到的实参：${w}`).join('\n')).toEqual([]);
+    // 连写两次会拿到字符串再进属性值（`'0degdeg'` 之类），也是错形态 —— 单独点出来，别让它蒙混
+    const nested = writes.filter((w) => (w.match(/orientToFxRot\(/g) ?? []).length > 1);
+    expect(nested, '--fx-rot 的写入值把 orientToFxRot 套了两次（会得到非法角度串）：\n'
+      + nested.map((w) => `  实际取到的实参：${w}`).join('\n')).toEqual([]);
+    const withRotate = writes.filter((w) => w.includes('rotate('));
+    expect(withRotate, '--fx-rot 的写入值含 rotate( —— 那是完整 transform 函数串，会让整条内联 transform 静默失效：\n'
+      + withRotate.map((w) => `  实际取到的实参：${w}`).join('\n')).toEqual([]);
+    // 反空集合守卫（二）：**每个** `setProperty(` 之后紧跟的第一实参如果是 `'--fx-rot'`，都必须被提取到；
+    // 漏掉任何一处（例如属性名与 `(` 之间被折行）就报红，而不是静默少查一处。
+    // （不能用「setProperty( 的总出现次数 == calls.length」—— 该文件里还有 12 处与 --fx-rot 无关的
+    //  setProperty 调用，那样会恒红。见上面 rotWritesOf 注释里我踩过的那个坑。）
+    const expectedRotWrites = (src.match(/setProperty\(\s*'--fx-rot'/g) ?? []).length;
+    expect(calls.length, `rotWritesOf 漏掉了写入点：源码里 setProperty( 后紧跟 '--fx-rot' 有 ${expectedRotWrites} 处，只提取到 ${calls.length} 处`)
+      .toBe(expectedRotWrites);
+    // 反空集合守卫（三）：两个旋转分支（±90° 与 180°）**各有一处** `--fx-rot` 写入。
+    // 数量少于 2 → 说明有人删掉了其中一个分支的写入（只删一处时上面的 `> 0` 抓不到）。
+    // 这是**有意**的数量约束：新增第三个朝向分支时必须同步更新这里的数字，失败消息会说明。
+    expect(writes.length, `--fx-rot 的写入点数应为 2（±90° 与 180° 分支各一处），实际 ${writes.length} 处：\n`
+      + writes.map((w, i) => `  [${i + 1}] ${w}`).join('\n')
+      + '\n（若本次有意新增/删除旋转分支，请同步更新本断言的期望值）').toBe(2);
   });
 });

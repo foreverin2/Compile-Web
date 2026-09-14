@@ -48,6 +48,18 @@ export interface FxDomHook {
   note?: string;
 }
 
+/** 结构钩子的提供方（渲染器注册表）——「谁必须满足本契约」的**唯一出处**。
+ *  - tests/ui/fx-dom-contract.test.ts 用它做验收基准（每个 src/ui/render*.ts 都必须在册，
+ *    磁盘发现守卫会报红；反向地，每个注册项也必须在磁盘上存在，拼错文件名不得静默缩小检查面）；
+ *  - tests/ui/fx-orient.test.ts 用它判定哪些文件是「产出方」（允许命名朝向类名）——
+ *    **发现可以用文件名，豁免必须用这张登记表**，否则「名字像渲染器」的模块会被静默豁免出
+ *    「FX 消费者零命中」而留下盲区。
+ *  exempt = 该渲染器**有意不提供**的 A 类钩子（必须在契约文档 docs/4代-FX DOM 契约.md 写明理由）。
+ *  G2 Task 4 只需在此登记 `render-net.ts` 与其 exempt（远程页有意不产出 ±90° 朝向类）。 */
+export interface FxRenderer { file: string; exempt?: readonly string[] }
+
+export const RENDERERS: readonly FxRenderer[] = [{ file: 'render.ts' }];
+
 export const FX_DOM_CONTRACT: readonly FxDomHook[] = [
   // ============================ A 结构钩子（远程页必须提供） ============================
 

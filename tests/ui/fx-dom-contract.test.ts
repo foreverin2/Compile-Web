@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { FX_DOM_CONTRACT, hooksOfCategory, type FxDomHook } from '../../src/ui/fx-dom-contract';
+import { FX_DOM_CONTRACT, hooksOfCategory, RENDERERS, type FxDomHook } from '../../src/ui/fx-dom-contract';
 
 /**
  * G1 守卫：FX DOM 契约必须「出处真实 + 现热座渲染器确实提供 + 分类互斥」。
@@ -28,6 +28,16 @@ const read = (rel: string): string =>
  *
  * 行号保持：注释内容替换为**等长空白**（注释起始的两个字符本身留在原位，只是不再是注释），
  * 于是 `split('\n').length` 与原文一致，报错里的行号可直接对照源码。
+ *
+ * **已知局限（有意接受，不在本轮修）** —— 两处的失败方向都已实测，且当前真实树**零命中**：
+ *  1. **模板串 `${}` 插值里的注释不会被删** → **假绿**方向。实现把反引号到反引号整段当字符串，
+ *     不解析插值，所以「模板串里嵌一个块注释再跟 `1`」这种写法里的注释会留在结果里。
+ *     为什么接受：要正确解析需要维护花括号配对深度（`${ {a:1} }`），引入的状态机比重更大；
+ *     本仓 22 个被扫文件里此类写法 0 命中。
+ *  2. **正则字面量里含未转义的 `//` 会截断该行** → **假红**方向。`const re = /\//;` 后面紧跟的
+ *     `/` 会被当成行注释起点。为什么接受：真正消歧需要完整的词法器（区分除法与正则）；
+ *     本仓 22 个被扫文件里没有任何真实正则含 `//` 或 `/*`（已逐字符复核）。
+ *  （注意：正则里的 `\/` 只是**转义斜杠**、不构成 `//` —— 那种形态实测**通过**，见单测。）
  */
 function stripComments(src: string): string {
   const out: string[] = new Array(src.length);
@@ -83,8 +93,12 @@ const FX_MODULES = [
   'fx-orient.ts',
 ] as const;
 
-/** 结构钩子的提供方（当前唯一渲染器；G2 会新增远程页渲染器） */
-const RENDERERS = ['render.ts'] as const;
+/** 结构钩子的提供方（渲染器注册表）—— G2 Task 2F2 起**唯一出处**是契约数据文件
+ *  `src/ui/fx-dom-contract.ts` 导出的 `RENDERERS`（tests/ui/fx-orient.test.ts 也 import 同一份，
+ *  用它判定「产出方」= 允许命名朝向类名的文件）。
+ *  ⚠️ 不要再写 `(RENDERERS as readonly string[]).includes(f)` 这类断言：注册项现在是对象，
+ *  那种写法**在运行期恒为 false**（假红），而且正是 `as` 让类型检查失效、把问题推到运行期。 */
+const rendererFiles = new Set<string>(RENDERERS.map((r) => r.file));
 
 // 显式 Map<string, string>：requiredBy 里的模块名是普通 string，需要能按名查回源码。
 //
@@ -93,8 +107,8 @@ const RENDERERS = ['render.ts'] as const;
 // 去注释后，判据变成「这个模块的代码（非注释）真的出现该判别子串」。
 const fxSources = new Map<string, string>(FX_MODULES.map((m): [string, string] => [m, stripComments(read(m))]));
 
-/** 当前渲染器源码（去注释口径，理由见 stripComments 与下方两条渲染器断言） */
-const rendererSources = new Map<string, string>(RENDERERS.map((r): [string, string] => [r, stripComments(read(r))]));
+/** 当前渲染器源码（去注释口径，理由见 stripComments 与下方两条渲染器断言）。key = 注册表里的 file */
+const rendererSources = new Map<string, string>(RENDERERS.map((r): [string, string] => [r.file, stripComments(read(r.file))]));
 
 /**
  * 取钩子的「判别子串」。必须能唯一定位到这个钩子，否则守卫形同虚设：
@@ -229,24 +243,31 @@ describe('G1 · FX DOM 契约', () => {
     expect(missing, `以下 A 类钩子找不到引用出处：\n${missing.join('\n')}`).toEqual([]);
   });
 
-  it('每个渲染器文件都必须登记进 RENDERERS（否则守卫会静默只验旧渲染器）', () => {
+  it('每个渲染器文件都必须登记进 RENDERERS，且每个注册项都必须在磁盘上存在（双向，防静默只验旧渲染器）', () => {
     // RENDERERS 是**opt-in** 的：G2 新增远程页渲染器却忘了登记，下面所有断言都会继续只验
     // render.ts 然后报绿 —— 这比没有守卫更糟，因为它读起来像"已验收"。
     // 所以这里反向发现磁盘上的渲染器文件，漏登记即报红。
     const dir = fileURLToPath(new URL('../../src/ui/', import.meta.url));
     const found = readdirSync(dir).filter((f) => /^render.*\.ts$/.test(f));
-    const missing = found.filter((f) => !(RENDERERS as readonly string[]).includes(f));
+    // G2 Task 2F2：按注册项的 `.file` 比较（不是 `as readonly string[]` —— 那在运行期恒 false）
+    const missing = found.filter((f) => !rendererFiles.has(f));
     expect(missing, `以下渲染器未登记进 RENDERERS：${missing.join(', ')}`).toEqual([]);
+    // 反向：注册项拼错文件名 → 它对应的源码断言会去读一个不存在的文件（渲染期抛），
+    // 或者在别处被当作"已登记"而静默缩小检查面。显式断言存在性。
+    const absent = [...rendererFiles].filter((f) => !found.includes(f));
+    expect(absent, `RENDERERS 里登记了磁盘上不存在的渲染器（文件名拼错？）：${absent.join(', ')}`).toEqual([]);
   });
 
   it('A 类钩子必须被当前渲染器提供（这是 G2 的验收基准）', () => {
     const missing: string[] = [];
     for (const r of RENDERERS) {
-      const src = rendererSources.get(r) ?? stripComments(read(r));
+      const src = rendererSources.get(r.file) ?? stripComments(read(r.file));
+      const exempt = new Set<string>(r.exempt ?? []);
       for (const h of hooksOfCategory('A')) {
+        if (exempt.has(h.hook)) continue;   // 该渲染器有意不提供（exempt 必须在契约文档写明理由）
         if (rendererProvides(src, h)) continue;
         const alts = datasetAlternativesOf(h);
-        missing.push(`${r} 未提供 ${h.hook}（判别子串 ${rendererTokensOf(h).join(' + ')}`
+        missing.push(`${r.file} 未提供 ${h.hook}（判别子串 ${rendererTokensOf(h).join(' + ')}`
           + `${alts.length === 0 ? '' : `，data-* 项也接受 ${alts.join(' / ')}`}）`);
       }
     }
@@ -318,7 +339,7 @@ describe('G1 · FX DOM 契约', () => {
     // G2 Task 2F：这里**故意**沿用裸源码（不去注释）—— 该断言要的正是「渲染器确实产出这些
     // 钩子」，而 D 类的三条判别子串在 render.ts 的注释里也出现（描述性提及）。去注释会让它
     // 更严，但那属于 Task 4 的契约结构改动范围，本任务只按简报修 I-1 指定的两处。
-    const rendererSrc = RENDERERS.map((r) => read(r)).join('\n');
+    const rendererSrc = RENDERERS.map((r) => read(r.file)).join('\n');
     const problems: string[] = [];
     for (const h of hooksOfCategory('D')) {
       const probe = probeOf(h.hook);
@@ -373,11 +394,48 @@ describe('G2 Task 2F · stripComments（去注释助手自身）', () => {
     expect(out.split('\n')[3]).toContain('const b = 2;');
   });
 
-  it('对真实源码：effects/index.ts 的 rot-cw 仅来自注释，去注释后归零（I-1 的决定性证据）', () => {
+  it('CRLF 行尾：行注释被移除、\\r 也变空白、后续代码保留、行数不变', () => {
+    // 为什么必须有这条：本仓工作区的 src/ui/effects/index.ts 就是 CRLF（git ls-files --eol = i/lf w/crlf）。
+    // 若有人把行注释循环里的 `src[i] !== '\n'` 改成 `\r` 感知逻辑，CRLF 文件会被**整文件吃掉**
+    // （后面所有去注释断言全部假绿）。这条单测钉住这个行为。
+    const src = 'const a = 1; // rot-cw\r\nconst b = 2;\r\nconst c = 3;';
+    const out = stripComments(src);
+    expect(out).not.toContain('rot-cw');
+    expect(out.split('\n').length).toBe(src.split('\n').length);
+    expect(out.split('\n')[1]).toContain('const b = 2;');
+    expect(out.split('\n')[2]).toContain('const c = 3;');
+  });
+
+  it('正则字面量里的转义斜杠：该行不得被整行截断（不用正则去注释的理由）', () => {
+    // `/ab\/\/cd/` 里的 `\/` 只是一个**转义斜杠**，字符序列是 `/ a b \ / \ / c d /`，
+    // 并不含连续的 `//`；朴素地找 `//` 会把这一行从中间截断（把真实代码当注释删 = 假红）。
+    const src = 'const re = /ab\\/\\/cd/; // rot-cw';
+    const out = stripComments(src);
+    // 正则字面量必须完好保留（转义斜杠仍在）
+    expect(out).toContain('/ab\\/\\/cd/');
+    // 行注释仍被移除
+    expect(out).not.toContain('rot-cw');
+  });
+
+  it('块注释体内含未配对引号：注释被移除且其后代码完好保留', () => {
+    // 这是该状态机最可能出错的输入：注释里的撇号不能让扫描器"进入字符串态"而吃掉后面的代码。
+    // 评审对全部 22 个真实文件的块注释做过引号奇偶检查，0 处奇数 —— 这条既补单测，
+    // 也留下「当前树为何安全」的证据。
+    const out1 = stripComments("/* it's a note */ const a = 'x';");
+    expect(out1).not.toContain("it's a note");
+    expect(out1).toContain("const a = 'x';");
+    const out2 = stripComments('/* don\'t */ const b = 1; // rot-cw');
+    expect(out2).not.toContain('rot-cw');
+    expect(out2).toContain('const b = 1;');
+  });
+
+  it('对真实源码：effects/index.ts 去注释后不含裸 rot-cw（出处判据不看注释）', () => {
+    // ⚠️ 这里**故意不**断言「裸源码里一定有 rot-cw（注释）」。那会把「今天注释里恰好写着 rot-cw」
+    // 这一**历史证据**固化成对**将来**的约束 —— Task 4 或任何一次注释整理都会让它无理由变红
+    // （复评 Minor-4 实测）。「注释会被去掉」这条能力已由上面几组**合成输入**单测充分覆盖。
+    // 这里只保留有价值的那一半：真实文件去注释后**不得**再有 rot-cw 字样（否则出处数据不诚实）。
     const raw = read('effects/index.ts');
     const stripped = stripComments(raw);
-    // 原文件里 "rot-cw"（不带引号）确实存在 —— 评审实测只有 :115/:620 两行中文注释
-    expect(raw, 'effects/index.ts 里本应有 rot-cw（注释）').toContain('rot-cw');
     expect(stripped, 'effects/index.ts 去注释后仍有 rot-cw 字样（出处数据其实不诚实？）').not.toContain('rot-cw');
     // 行号必须保持（否则去注释后的报错行号会误导人）
     expect(stripped.split('\n').length).toBe(raw.split('\n').length);
