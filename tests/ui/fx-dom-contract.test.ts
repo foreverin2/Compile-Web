@@ -39,8 +39,11 @@ const fxSources = new Map<string, string>(FX_MODULES.map((m): [string, string] =
  *  - `.cls` / `img.cls` → 类名（`.stack-slot` → `stack-slot`；`img.protocol-img` → `protocol-img`）
  *  - `.cls[attr]…` → **类名**（属性名在多处通用，用它证明不了出处 —— 这正是原实现被评审判为不成立的漏洞）
  *  - `.clsA.clsB`（类开头多段，如 `.trash-pile.p1/.p2`）→ **第一段**类名。旧规则机械取 `parts[1]`
- *    会得到 `p1/` / `p1` 这种**值形态的短串**：它同时命中 render.ts:1732 的 `hand-shield p1`
- *    与 :4394 的 `draft-preview p1`，等于没有判别力。类开头的选择器里，第一段才是标识性的那个。
+ *    会得到 `p1/` / `p1` 这种**值形态的短串**：它同时命中 render.ts:1732 的 hand-shield 归属类构造
+ *    （`'hand-shield' + (player === 1 ? ' p2' : ' p1')`）与 :4394 的 draft-preview 构造
+ *    （`'draft-preview' + (player === 0 ? ' p1' : ' p2')`）—— 两处的 `p1` / `p2` 都是**拼接出来的
+ *    后缀**，不是独立字面量，所以它证明不了「弃牌堆带了 pN」还是「别的节点带了 p1」，等于没有判别力。
+ *    类开头的选择器里，第一段才是标识性的那个。
  *  - 纯标签名（`img`）→ 该标签名
  */
 function probeOf(hook: string): string {
@@ -53,16 +56,25 @@ function probeOf(hook: string): string {
 }
 
 /**
- * `[data-uid]` 的渲染器产出形式是 `node.dataset.uid = card.uid`（render.ts:60/228/1576），
- * 源码里**没有**字面量 `data-uid` —— render.ts 里出现的每一处 `data-uid` 都是查询或注释。
- * 于是一个「只写属性、从不查询」的**正确**远程页渲染器会被误判成缺钩子。
- * 故 kind=attr 时额外接受 `dataset.<camelCase>` 这一产出形式。
+ * probe 里形如 `data-*` 的项，其**产出形式**是 `node.dataset.uid = …`（render.ts:60/228/1576）——
+ * 源码里"写属性"与"查属性"长得不一样。以 `[data-uid]` 为例，render.ts 里 12 行字面量 `data-uid`
+ * （:648/:792/:800/:1030/:1225/:1641/:3869/:4677/:4718/:4792/:4819/:4952）**全部是查询或注释**，
+ * 一处产出点都没有。于是「只写属性、从不查询」的**正确**远程页渲染器会被误判成缺钩子。
+ * 故 `data-*` 项额外接受 `dataset.<camelCase>` 这一产出形式。
+ *
+ * **按 token 精确映射**：`data-uid` → `dataset.uid`、`data-player` → `dataset.player`；
+ * 不接受「任意 `dataset.*` 都算数」——`dataset.other` 不能满足 `data-uid`。
  */
-function datasetFormOf(attrHook: string): string | null {
-  const m = /^\[(data-[a-z-]+)\]$/.exec(attrHook);
+function datasetFormOf(attrToken: string): string | null {
+  const m = /^data-[a-z-]+$/.exec(attrToken);
   if (!m) return null;
-  const camel = m[1].slice('data-'.length).replace(/-([a-z])/g, (_all, c: string) => c.toUpperCase());
+  const camel = m[0].slice('data-'.length).replace(/-([a-z])/g, (_all, c: string) => c.toUpperCase());
   return `dataset.${camel}`;
+}
+
+/** 源码里出现了该 dataset 产出形式，且其后不是标识符字符（`dataset.uidCounter` 不算 `dataset.uid`） */
+function hasDatasetForm(src: string, form: string): boolean {
+  return new RegExp(`${form.replace(/\./g, '\\.')}(?![A-Za-z0-9_$])`).test(src);
 }
 
 /** 渲染器提供的判别子串：显式 probe 优先（**每一项都要出现**），否则退回自动推导 */
@@ -70,11 +82,27 @@ function rendererTokensOf(h: FxDomHook): string[] {
   return [...(h.probe ?? [probeOf(h.hook)])];
 }
 
-/** 渲染器是否提供了这条钩子；attr 钩子额外接受 `dataset.<camel>` 产出形式 */
+/** 报告用：这条钩子 probe 各项的 dataset 备选形式（无则空数组） */
+function datasetAlternativesOf(h: FxDomHook): string[] {
+  return rendererTokensOf(h).map((t) => datasetFormOf(t)).filter((x): x is string => x !== null);
+}
+
+/**
+ * 渲染器是否提供了这条钩子：probe **每一项**都要在渲染器源码里找到，其中形如 `data-*` 的项
+ * 额外接受 `dataset.<camelCase>` 产出形式（render.ts 用 `dataset.player` / `dataset.line` **写**
+ * 属性，字面量 `data-player` / `data-line` 只出现在查询选择器里；旧实现把这条备选挂在
+ * `kind === 'attr'` 上，于是复合钩子 `.stack-slot[data-player][data-line]` 只写 dataset 时被假红，
+ * 而任何一处查询又能让「根本不写属性」的渲染器蒙混过关）。
+ *
+ * 注意：它证明的仍只是"书写形式出现在源码文本里"，**不**证明属性真的写在节点上、
+ * 值是否与状态一致、节点在特效读取那一刻是否存在。
+ */
 function rendererProvides(src: string, h: FxDomHook): boolean {
-  if (rendererTokensOf(h).every((t) => src.includes(t))) return true;
-  const alt = h.kind === 'attr' ? datasetFormOf(h.hook) : null;
-  return alt !== null && src.includes(alt);
+  return rendererTokensOf(h).every((t) => {
+    if (src.includes(t)) return true;
+    const alt = datasetFormOf(t);
+    return alt !== null && hasDatasetForm(src, alt);
+  });
 }
 
 describe('G1 · FX DOM 契约', () => {
@@ -103,6 +131,16 @@ describe('G1 · FX DOM 契约', () => {
       for (const t of h.probe ?? []) {
         expect(t.length, `${h.hook} 的 probe 含空子串（等于没有机检力）`).toBeGreaterThan(1);
       }
+    }
+  });
+
+  it('显式 probe 不得是空数组（`.every()` 对空数组恒真 —— 空 probe 等于静默关掉这条断言）', () => {
+    // rendererTokensOf 里写的是 `h.probe ?? [probeOf(h.hook)]`：`probe: []` 是**存在**的显式 probe，
+    // 于是不会退回自动推导；而 `.every()` 对空数组恒真 → rendererProvides 永远返回 true。
+    // 上面那条「probe 每项非空」的循环遍历空数组一次都不进，因此抓不到这个**静默绿**路径 ——
+    // 在一个专门用来消灭静默绿的守卫里，这是必须堵死的一条。
+    for (const h of FX_DOM_CONTRACT) {
+      if (h.probe) expect(h.probe.length, `${h.hook} 的 probe 为空数组（等于关闭这条断言）`).toBeGreaterThan(0);
     }
   });
 
@@ -141,9 +179,9 @@ describe('G1 · FX DOM 契约', () => {
       const src = read(r);
       for (const h of hooksOfCategory('A')) {
         if (rendererProvides(src, h)) continue;
-        const alt = h.kind === 'attr' ? datasetFormOf(h.hook) : null;
+        const alts = datasetAlternativesOf(h);
         missing.push(`${r} 未提供 ${h.hook}（判别子串 ${rendererTokensOf(h).join(' + ')}`
-          + `${alt === null ? '' : `，也不含 ${alt}`}）`);
+          + `${alts.length === 0 ? '' : `，data-* 项也接受 ${alts.join(' / ')}`}）`);
       }
     }
     expect(missing, `以下 A 类钩子当前渲染器缺失：\n${missing.join('\n')}`).toEqual([]);

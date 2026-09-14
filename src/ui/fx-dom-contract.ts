@@ -33,9 +33,15 @@ export interface FxDomHook {
   /** FX 消费方模块名（见 tests/ui/fx-dom-contract.test.ts 的 FX_MODULES）；
    *  D 类无 FX 消费方 → 必须是空数组 */
   requiredBy: readonly string[];
-  /** 显式判别子串（覆盖自动推导）；**每一项都必须出现在渲染器源码里**。
+  /** 显式判别子串（覆盖自动推导）；**每一项都必须作为源码文本出现在渲染器里**。
    *  复合选择器（`.cls[attr][attr2]`）必须逐段列出，否则自动推导只取类名，
-   *  渲染器丢掉 `dataset.player` / `dataset.line` 也照样过守卫（见 `.stack-slot` 等条目）。
+   *  渲染器只产 `stack-slot` 而丢掉两个归属属性也不报红（见 `.stack-slot` 等条目）。
+   *  其中形如 `data-*` 的项接受两种书写：字面量 `data-player`，或产出形式 `dataset.player`
+   *  （渲染器用 `node.dataset.player = …` **写**属性，字面量 `data-player` 在 render.ts 里
+   *  只出现在**查询选择器**里；只认字面量会把「只写 dataset、从不查询」的正确远程页判红）。
+   *  **它证明的只是「这两种书写形式有一个出现在源码文本里」**：渲染器从头到尾只查
+   *  `[data-player=…]`、一次都没写该属性，同样算通过；属性是否真的写在节点上、值是否与
+   *  状态一致、节点在特效读取那一刻是否存在，源码文本守卫一概证明不了（靠 G2 实机抽查）。
    *  只有「渲染器断言」用它；出处断言（requiredBy 模块）仍用 probeOf(h.hook)。 */
   probe?: readonly string[];
   /** 一句话：这个钩子供什么特效定位用 */
@@ -69,6 +75,12 @@ export const FX_DOM_CONTRACT: readonly FxDomHook[] = [
   {
     hook: '.protocol', kind: 'class', category: 'A',
     requiredBy: ['effects/index.ts'],
+    // probe 取**带单引号的字面量**（`'protocol'`）而不是裸词 `protocol`：裸词在 render.ts 里命中 68 行，
+    // 含 `protocol-cell`（:1843）、`protocol-img`（:116）、`protocol-holder`（:86）、`protocolImgSrc`（:12）——
+    // 完全非判别性：远程页把协议盒改名成 `protocol-box`、却仍产 protocol-cell / protocol-img 时会照样报绿，
+    // 而这正是本条要防的「编译侧协议翻面静默不播」。带引号的形式在渲染器里**恰好只出现一次**
+    // （render.ts:83 `el('div', 'protocol' + …)`），即产出点本身，故能真正区分协议盒与其它 protocol* 钩子。
+    probe: ["'protocol'"],
     note: '协议盒：编译翻面动画的锚点 —— effects/index.ts:1780 的复合选择器 '
       + '`.protocol-cell[data-player=…][data-line=…] .protocol` 的第二段，:1783 把它交给 playProtocolFlip。'
       + '**它不是 D 类**：虽然同一条类名也被 render.ts:1761/1762 自己查询，但判 A 只看「渲染器产出 且 '
@@ -84,8 +96,10 @@ export const FX_DOM_CONTRACT: readonly FxDomHook[] = [
     hook: '[data-uid]', kind: 'attr', category: 'A',
     requiredBy: ['gen3-util.ts', 'fx-gen2.ts', 'fx-gen3.ts', 'fx-gen3-swap.ts', 'gen3-control.ts', 'effects/index.ts'],
     note: '按 uid 取卡节点 rect（nodeOf → visibleRectOf / clipInsetRightPct）；手牌与链路卡都要带。'
-      + '渲染器产出形式是 `node.dataset.uid = card.uid`（render.ts:60/228/1576）—— 没有字面量 data-uid，'
-      + '故渲染器断言对 kind=attr 额外接受 `dataset.uid` 这种 camelCase 产出形式（见测试里的 datasetFormOf）',
+      + '属性是**写**出来的：`node.dataset.uid = card.uid`（render.ts:60/228/1576）；字面量 `data-uid` 确实出现，'
+      + '但 render.ts 里的 12 行（:648/:792/:800/:1030/:1225/:1641/:3869/:4677/:4718/:4792/:4819/:4952）'
+      + '**全部是查询或注释**，没有一处是产出点。故渲染器断言接受 `dataset.uid` 这种 camelCase 产出形式，'
+      + '免得「只写属性、从不查询」的正确远程页渲染器被误判成缺钩子（见测试里的 datasetFormOf）',
   },
   {
     hook: '.trash-pile[data-player]', kind: 'class', category: 'A',
@@ -101,7 +115,9 @@ export const FX_DOM_CONTRACT: readonly FxDomHook[] = [
       + '与上一条的 `[data-player]` 是两个独立 conjunct，各自登记免得其中一个被丢还全绿。'
       + 'probe 取**生产者书写形式** `trash-pile p`（render.ts:1498 是 `trash-pile p${player + 1} …`，'
       + '类名以空格分隔，不是复合 `.trash-pile.pN`）。**故意不把 probe 写成裸 `p1`** —— '
-      + '裸 `p1` 同时命中 render.ts:1732 的 `hand-shield p1` 与 :4394 的 `draft-preview p1`，'
+      + '裸 `p1` 在 render.ts 里同时命中 :1732 的 hand-shield 归属类构造 '
+      + '（`\'hand-shield\' + (player === 1 ? \' p2\' : \' p1\')`）与 :4394 的 draft-preview 构造 '
+      + '（`\'draft-preview\' + (player === 0 ? \' p1\' : \' p2\')`），'
       + '于是「pN 类被丢」和「别的节点带 p1」无法区分，等于没查；'
       + '测试里的 probeOf 也据此收紧：类开头的多段钩子取**第一段**类名（`trash-pile`），不再机械取 `p1`',
   },

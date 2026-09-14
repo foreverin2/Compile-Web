@@ -86,11 +86,11 @@ G1 首轮正是把「渲染器产出」当成了充分条件，于是把 `.hand-
 |---|---|---|---|
 | 1 | `.stack-slot[data-player][data-line]` | `fx-gen3.ts`、`fx-gen2.ts`、`fx-gen3-swap.ts`、`gen3-control.ts`、`effects/index.ts` | **链路槽几何：3 代飞行 / 连接件 / 常驻层的落点**（`slotRectOf` / `lineCenterX`），最核心的一条。`probe` 逐段：`stack-slot` + `data-player` + `data-line` |
 | 2 | `.protocol-cell[data-player][data-line]` | `fx-gen3.ts`、`fx-gen2.ts`、`fx-gen3-swap.ts`、`gen3-control.ts`、`effects/index.ts` | 协议格：协议交换 / 重排、同化编译光柱、色欲封条按 `(player,line)` 定位。`probe` 逐段：`protocol-cell` + `data-player` + `data-line` |
-| 3 | `[data-uid]` | `gen3-util.ts`、`fx-gen2.ts`、`fx-gen3.ts`、`fx-gen3-swap.ts`、`gen3-control.ts`、`effects/index.ts` | 按 uid 取卡节点 rect（`nodeOf` → `visibleRectOf` / `clipInsetRightPct`）；**手牌与链路卡都要带**。渲染器产出形式是 `node.dataset.uid = …`（`render.ts:60/228/1576`），源码里没有字面量 `data-uid`，故渲染器断言对 `kind=attr` 额外接受 `dataset.uid` 这种 camelCase 产出形式 |
+| 3 | `[data-uid]` | `gen3-util.ts`、`fx-gen2.ts`、`fx-gen3.ts`、`fx-gen3-swap.ts`、`gen3-control.ts`、`effects/index.ts` | 按 uid 取卡节点 rect（`nodeOf` → `visibleRectOf` / `clipInsetRightPct`）；**手牌与链路卡都要带**。属性是用 `node.dataset.uid = …` **写**出来的（`render.ts:60/228/1576`）；字面量 `data-uid` 确实出现，但 `render.ts` 里的 12 行（`:648/:792/:800/:1030/:1225/:1641/:3869/:4677/:4718/:4792/:4819/:4952`）**全部是查询或注释**，没有一处是产出点 —— 故渲染器断言对 `data-*` 项额外接受 `dataset.uid` 这种 camelCase 产出形式 |
 | 4 | `img` | `fx-gen2.ts`、`fx-gen3-swap.ts`、`fx/delete-shatter.ts`、`fx/discard-cut.ts`、`effects/index.ts` | 卡面图：偏转 / 破碎 / 切割 / 翻面 / 交换取卡面图的唯一来源（`render.ts` 造 `.card-face-img` / `.protocol-img`）。读取点全在渲染器产出的卡节点（或它的克隆）上：`effects/index.ts:641/764`、`fx-gen2.ts:967`、`fx-gen3-swap.ts:120`、`fx/delete-shatter.ts:36`、`fx/discard-cut.ts:19` |
 | 5 | `.deck[data-player]` | `fx-gen2.ts`、`effects/index.ts` | 牌库位置：牌库顶打出 / 洗牌 / 冰封牌库等特效的起点或终点（`deckPos`），全库被读约 60 处。`probe` 逐段：`deck` + `data-player` |
 | 6 | `.trash-pile[data-player]` | `fx-gen3.ts`、`fx-gen2.ts`、`effects/index.ts` | 弃牌堆位置：弃牌 / 回溯飞行的终点（`trashPos`）。`probe` 逐段：`trash-pile` + `data-player` |
-| 7 | `.trash-pile.p1/.p2` | `fx-gen3.ts` | 弃牌堆的 **`.pN` 归属类**：`fx-gen3.ts:1375` 读 `` `.trash-pile.p${p.player + 1}` ``（灰砂流自牌库流向本家弃牌堆，取不到就退化成向右下漂）。与上一条的 `[data-player]` 是**两个独立 conjunct**，各自登记，免得其中一个被丢还全绿。`probe` 取**生产者书写形式** `trash-pile p`（`render.ts:1498` 是 `` `trash-pile p${player + 1} …` ``，类名以空格分隔，**不是**复合 `.trash-pile.pN`）；**故意不用裸 `p1` 当 probe**：它同时命中 `render.ts:1732` 的 `hand-shield p1` 与 `:4394` 的 `draft-preview p1`，等于没查 |
+| 7 | `.trash-pile.p1/.p2` | `fx-gen3.ts` | 弃牌堆的 **`.pN` 归属类**：`fx-gen3.ts:1375` 读 `` `.trash-pile.p${p.player + 1}` ``（灰砂流自牌库流向本家弃牌堆，取不到就退化成向右下漂）。与上一条的 `[data-player]` 是**两个独立 conjunct**，各自登记，免得其中一个被丢还全绿。`probe` 取**生产者书写形式** `trash-pile p`（`render.ts:1498` 是 `` `trash-pile p${player + 1} …` ``，类名以空格分隔，**不是**复合 `.trash-pile.pN`）；**故意不用裸 `p1` 当 probe**：裸 `p1` 在 `render.ts` 里同时命中 `:1732` 的 hand-shield 归属类构造（`'hand-shield' + (player === 1 ? ' p2' : ' p1')`）与 `:4394` 的 draft-preview 构造（`'draft-preview' + (player === 0 ? ' p1' : ' p2')`），等于没查 |
 | 8 | `.hand` | `fx-gen2.ts`、`effects/index.ts`、`fx-gen3.ts` | 手牌区：抽牌幽灵终点、扇形末卡位置、手牌区 rect（多处用 `querySelectorAll(".hand")[player]`） |
 | 9 | `.card` | `fx-gen2.ts`、`effects/index.ts`、`fx-gen3.ts` | 卡节点：卡面克隆、扇形末卡位置、链路末卡位置（多处写作 `.card:not(.reveal-ghost)`） |
 | 10 | `.control-track` | `gen3-control.ts` | 控制轨道：易主落点按轨道**实测矩形**算（`controlTrackSideX`），不能拿视口百分比猜 |
@@ -98,7 +98,7 @@ G1 首轮正是把「渲染器产出」当成了充分条件，于是把 `.hand-
 | 12 | `.control-slider-img` | `gen3-control.ts` | 控制组件滑块图：优先于 `.control-module` 作为量测目标（`controlImgRect`） |
 | 13 | `.battery` | `gen3-control.ts` | 能量槽：愤怒0 中缝虚线要跨「两条能量槽之间」而非整行；惰性0 也要能量槽 rect（`batteryNode`） |
 | 14 | `.protocol-img` | `fx-gen3-swap.ts`、`effects/index.ts` | 协议卡面图：协议交换幽灵卡取它的 rect 与卡面图（`render.ts:116` 是 `img.className = "protocol-img"`，故按书写形式是 class 选择器；清单里真正的 element 只有纯标签名 `img`） |
-| 15 | `.protocol` | `effects/index.ts` | **协议盒：编译翻面动画的锚点** —— `effects/index.ts:1780` 的复合选择器 `` `.protocol-cell[data-player=…][data-line=…] .protocol` `` 的第二段，`:1783` 交给 `playProtocolFlip`。它**不是** D 类：产出是 `render.ts:83`，读取是 `effects/index.ts:1780`，A 的两个条件都成立（同一条类名也被 `render.ts:1761/1762` 自查，与判定无关）。读到的结果被 `if (proto)` 套住，所以**丢掉它不会报错，只会让编译侧的协议翻面静默不播** |
+| 15 | `.protocol` | `effects/index.ts` | **协议盒：编译翻面动画的锚点** —— `effects/index.ts:1780` 的复合选择器 `` `.protocol-cell[data-player=…][data-line=…] .protocol` `` 的第二段，`:1783` 交给 `playProtocolFlip`。它**不是** D 类：产出是 `render.ts:83`，读取是 `effects/index.ts:1780`，A 的两个条件都成立（同一条类名也被 `render.ts:1761/1762` 自查，与判定无关）。读到的结果被 `if (proto)` 套住，所以**丢掉它不会报错，只会让编译侧的协议翻面静默不播**。机检的 `probe` 取**带引号的产出形式** `'protocol'`：裸词 `protocol` 在 `render.ts` 里命中 68 行（含 `protocol-cell` / `protocol-img` / `protocol-holder` / `protocolImgSrc`），完全非判别性 —— 远程页把协议盒改名 `protocol-box` 却仍产 `protocol-cell` / `protocol-img` 时会照样报绿；带引号的形式在渲染器里**恰好只出现一次**（`render.ts:83` 的 `el('div', 'protocol' + …)`），即产出点本身 |
 | 16 | `.protocol-holder` | `fx-gen2.ts` | 协议持卡盒：同化1 编译光柱的汇聚中心（**取不到就整体不播**，见 `fx-gen2.ts:2179` 审计注释） |
 | 17 | `.hand[data-player]` | `fx-gen3.ts` | 手牌区（带归属）：3 代按玩家取手牌容器（`fx-gen3.ts:875`）。`probe` 与 `.hand` 相同（`hand` + `data-player`），**故这条不提供额外机检力，只是文档登记** |
 | 18 | `.rot-cw` | `effects/index.ts`、`fx-gen3.ts` | 场上卡横置态（P1 顺时针，`render.ts:227` 按 owner 挂）：浮层卡按它重建朝向，**漏挂则特效卡立着** |
@@ -214,11 +214,18 @@ G1 首轮正是把「渲染器产出」当成了充分条件，于是把 `.hand-
 其中「**A 类钩子必须被当前渲染器提供**」这条断言会遍历 `RENDERERS` 里的每个渲染器，对每条 A 钩子取其
 **判别子串**并逐个断言渲染器源码里出现：
 
-- 钩子带显式 `probe`（所有复合钩子，如 `.stack-slot[data-player][data-line]`）→ **`probe` 里每一项都必须出现**
-  （`stack-slot` + `data-player` + `data-line`）；
-- 否则退回自动推导 `probeOf(hook)`（`.protocol` → `protocol`；`img` → `img`）；
-- `kind: 'attr'` 的钩子额外接受 `dataset.<camelCase>` 产出形式（`[data-uid]` ⇄ `dataset.uid`），
-  因为渲染器是用 `node.dataset.uid = …` **写**属性的，源码里可能一个 `data-uid` 字面量都没有。
+- 钩子带显式 `probe`（所有复合钩子，如 `.stack-slot[data-player][data-line]`，以及靠裸词无法判别的
+  `.protocol`）→ **`probe` 里每一项都必须出现**（`stack-slot` + `data-player` + `data-line`）；
+- 否则退回自动推导 `probeOf(hook)`（`img` → `img`；`[data-uid]` → `data-uid`）；
+- **probe 里形如 `data-*` 的项**（不论钩子 `kind` 是 `attr` 还是 `class`）额外接受
+  `dataset.<camelCase>` 产出形式：`data-uid` ⇄ `dataset.uid`、`data-player` ⇄ `dataset.player`、
+  `data-line` ⇄ `dataset.line`。理由是渲染器**写**属性用的是 `node.dataset.uid = …`：字面量
+  `data-uid`（12 行）在 `render.ts` 里全是查询/注释，而字面量 `data-player` / `data-line` 也**只出现在
+  查询选择器**里（`:293` 等），真正写它们的是 `dataset.line` / `dataset.player`（`slot.dataset.*`，`:210/211`）。
+  只认字面量会
+  两头都错：把「只写 dataset、从不查询」的**正确**远程页判成缺钩子（假红），而任何一处查询又能让
+  「根本不写属性」的渲染器蒙混过关（假绿）。映射按 token 精确进行（`dataset.other` 不能满足
+  `data-uid`），且要求其后不是标识符字符（`dataset.uidCounter` 不算 `dataset.uid`）。
 
 失败时打印 `render-net.ts 未提供 <钩子>（判别子串 <a> + <b>…）`。
 
@@ -237,8 +244,9 @@ G1 首轮正是把「渲染器产出」当成了充分条件，于是把 `.hand-
 的 `probe` 完全相同，**后一条不提供任何额外机检力，只是文档登记**（登记的意义在于把"无归属的 `.hand`"
 与"按玩家取的那一个"两种读法都记下来）。即使带上 `probe`，断言的仍只是"这些 token 在**渲染器源码里
 出现过**"：`render.ts` 自己也在查询 `data-player` / `data-line`（如 `:293`），所以"生产者**真的写**了
-这个属性"仍不是文本守卫能证明的（`data-uid` 那条之所以要额外接受 `dataset.uid`，
-就是因为"写"和"查"在源码里长得不一样）。**不要**为了"修"这些而发明新 token：那只会制造假的安全感。
+这个属性"仍不是文本守卫能证明的（`data-*` 项之所以额外接受 `dataset.<camelCase>`，就是因为"写"和
+"查"在源码里长得不一样；但这条备选是**双向**妥协 —— 它同时放行"只查不写"和"只写不查"两种渲染器，
+换来的只是不再假红，**换不来**"属性确实被写出去了"这一结论）。**不要**为了"修"这些而发明新 token：那只会制造假的安全感。
 真正的兜底是上一条的实机抽查。
 
 **建议 G2 补的长期机制（本次**未**实现，属新机制而非修复）**：**token 级守卫** —— 把 FX 选择器字面量里
