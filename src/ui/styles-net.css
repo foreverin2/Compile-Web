@@ -5,8 +5,10 @@
  * 三条线 = **三个纵向的列**，并排。每列自上而下严格是：
  *   对手能量槽 → 对手链路（卡 180°、越新越上）→ 对手协议（顺时针 90°）
  *   → 自己协议（逆时针 90°）→ 自己链路（卡 0°、越新越下）→ 自己能量槽
- * 它等价于把热座页的"每条线一行"整体旋转 −90°（推导见设计说明 §1），故**整体更窄更高**；
- * 手牌区在页面**底部水平中置**。
+ * 它等价于把热座页的"每条线一行"整体旋转 −90°（推导见设计说明 §1），故**整体更窄更高**。
+ *
+ * **底部行**（G2 修正 **R6**）：`信息块（左=自己）· 手牌区（中）· 信息块（右=对手）`，
+ * **顶部信息条已取消**（用户裁决，规格 §8.4 第 2 条）—— 见第 2 节与第 6 节。
  *
  * **`styles.css` 一行都不改**：本文件通过**限定作用域**的选择器（`.net-*` 前缀 + 后代）覆盖，
  * 热座页的规则原样保留、继续生效。⚠️ 每条规则都要带 `.net-*` 前缀（或限定在 `.net-*` 后代里），
@@ -19,8 +21,9 @@
  *  2. 能量槽从"槽的左右外侧"挪到"链路的上/下外侧"（规格 §1 第 1/6 行）→ 在槽内用 `order` 实现；
  *  3. 协议图 **∓90°**（自己 `.net-rot-ccw` / 对手 `.net-rot-cw`）—— 用**自己的**类名，
  *     不产出热座专属的 `.rot-cw/.rot-ccw`（那两个会被 `orientOf` 当**卡面**朝向读，见 §8.2）；
- *  4. **两条 `.hand` 的 DOM 顺序恒定 [P0, P1]**，「谁显示在上」由 CSS `order` 决定
- *     —— 这不是装饰：FX 用 `querySelectorAll('.hand')[player]` 按下标读手牌（见 render-net.ts 头注）。
+ *  4. **两条 `.hand` 的 DOM 顺序恒定 [P0, P1]**，「谁显示在上」由 CSS `order` 决定，
+ *     信息块的左右则由 `grid-column` 决定 —— 都不是装饰：FX 用
+ *     `querySelectorAll('.hand')[player]` 按下标读手牌（见 render-net.ts 头注）。
  * ========================================================================== */
 
 /* ============================================================================
@@ -33,7 +36,14 @@
 
 .net-board { position: relative; }
 .net-grid {
-  /* 热座页 .board-grid 是 flex column（每条线一行的堆叠方向）；本页三列并排 → grid */
+  /* 热座页 .board-grid 是 flex column（每条线一行的堆叠方向）；本页三列并排 → grid。
+     ⚠️ `display: grid` 与 `grid-auto-flow: column` 是**承重**的（R6 复查补上）：`.board-grid`
+     只给了 `display: flex; flex-direction: column`，本文件若只覆盖 gap/max-width，三条线会被
+     **纵向堆成三行**（"三个纵向的列"退化成"三条横带"，正是 R1 要修掉的那个观感），
+     而任何源码/层序守卫都看不出来 —— 那类守卫查的是元素树与 `order`，不查容器是不是 grid。 */
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   max-width: 1010px;
   margin: 0 auto;
@@ -41,17 +51,18 @@
 }
 
 /* ============================================================================
- * 2. 信息条（顶部对手条 / 自己行内）：昵称 · 手牌 ×n · 牌库 · 弃牌 · 连接状态
+ * 2. 信息块（G2 修正 R6：**底部行**里，与手牌区同一行）
+ *
+ * ⚠️ **顶部信息条已取消**（用户裁决）；`.net-strip` / `.net-strip-foe` 的规则随之删除 ——
+ * 留着它们只会让"顶部还有一条"这件事在样式表里留存证据（源码守卫会读样式表）。
+ * 现在双方的信息条各自是底部行里的一块 `.net-info-block`（左 = 自己 / 右 = 对手，见第 6 节）。
  *
  * 牌库（.deck）与弃牌堆（.trash-pile）在 styles.css 里是绝对定位、挂在 .hand-side 外侧
- * 的屏幕边缘列（styles.css:761-763 / 824-835）。远程页只有一个手牌区，没有"外侧列"，
- * 所以它们被重新安放到信息条内的 .net-piles 里 —— 用**限定作用域**的规则覆盖绝对定位。
+ * 的屏幕边缘列（styles.css:761-763 / 824-835）。远程页没有"外侧列"，所以它们被重新安放到
+ * 信息块的 .net-piles 里 —— 用**限定作用域**的规则覆盖绝对定位。
  * ⚠️ 覆盖必须限定在 `.net-piles` 内：`.piles` 也被热座页复用，裸写 `.deck` 会改到热座页。
  * ========================================================================== */
 
-.net-strip { display: block; }
-/* 对手信息条水平中置（与底部手牌区的"中置"对称；窄容器里块级贴左会显得歪） */
-.net-strip-foe { display: flex; justify-content: center; }
 .net-piles { display: flex; align-items: center; gap: 14px; margin: 4px 0; }
 .net-piles .deck[data-player] {
   position: relative;
@@ -77,11 +88,27 @@
   height: 86px;
   flex: 0 0 auto;
 }
-/* 缩小后顶部「弃牌堆」小标签会压住计数徽标：改为贴底的小字 */
+/* 缩小后「弃牌堆」小标签会压住计数徽标：改为贴底的小字 */
 .net-piles .trash-label { font-size: 9px; }
 
-.net-conn { font-size: 12px; color: #7fd4ff; align-self: flex-start; }
-.net-strip-foe .net-conn { margin-top: 2px; }
+.net-info-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid #333a4d;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.18);
+}
+/* 自己那一块与对手的视觉区分（颜色与 .net-hand-area-self 同源，保持"自己=青"的一致语汇） */
+.net-info-self { border-color: rgba(79, 240, 255, 0.45); background: rgba(79, 240, 255, 0.04); }
+/* 信息条自身在**窄列**里必须能换行：styles.css 的 .meta-row 是横排，三组计数在 ~170px 里会挤成
+   一条（`牌库 12弃牌堆 3手牌 5` 糊在一起）。这里只在本页允许换行，热座页那份一行未改。 */
+.net-info-block .player-info { display: block; }
+.net-info-block .meta-row { flex-wrap: wrap; gap: 4px 10px; }
+.net-info-block .area-title { font-size: 13px; }
+/* 连接状态占位（只挂在对手那一块里）：块内竖直排列，故不再需要 align-self */
+.net-conn { font-size: 12px; color: #7fd4ff; }
 
 /* ============================================================================
  * 3. 一条线 = **一个纵向的列**（列内自上而下：对手侧 / 中线 / 自己侧）
@@ -93,7 +120,7 @@
  *   对手的倒置**只**由 `.rot-180`（卡面）与 `.net-rot-cw`（协议图）承担，左右几何保持未镜像。
  *   `tests/ui/render-net.test.ts` 有一条守卫：凡作用于本页**容器节点**的规则不得带
  *   `transform`/`rotate`（容器包括 .net-lane-band / .net-side / .net-side-foe / .net-hands /
- *   .net-hand-side / .net-grid / .net-board / .net-strip / .net-strip-foe）。
+ *   .net-hand-area / .net-bottom / .net-grid / .net-board / .net-info-block / .net-info-self）。
  * ========================================================================== */
 
 .net-lane-band {
@@ -257,49 +284,89 @@
 .net-grid > .control-module { width: 100%; max-width: 460px; margin: 0 auto; }
 
 /* ============================================================================
- * 6. 手牌区：底部**水平中置**；DOM 顺序恒定 [P0, P1]，视觉归属由 order 决定
+ * 6. 底部行（G2 修正 **R6**）：**信息块 · 手牌区（中） · 信息块**
  *
- * ⚠️ 约束 7（本页最危险的一条）：FX 用 `querySelectorAll('.hand')[player]` **按下标**读手牌，
- * 所以两条 .hand 的 DOM 顺序必须恒定是 [P0, P1]（render-net.ts 的 buildHands 保证）。
- * 「谁显示在上」用 `order` 实现：
- *   viewSeat = 0 → 自己是 P0 → 对手 P1 在上（P1 的 order 小）
- *   viewSeat = 1 → 自己是 P1 → 对手 P0 在上（P0 的 order 小）
- * **不得**用 display:none 换位 —— 隐藏节点 getBoundingClientRect() 全 0，FX 落点会塌。
+ * 用户裁决（规格 §8.4 第 2 条 / §8.6 的 R6）：双方信息条与手牌区**同一行、一左一右**，
+ * **顶部信息条取消**。所以这一节是"三列"而不是"上下两带"：
+ *
+ *   | grid-column | 1（左）      | 2（中）    | 3（右）      |
+ *   |---|---|---|---|
+ *   | 内容 | 自己信息块 | **两条手牌** | 对手信息块 |
+ *
+ * ## 三件事必须分开（这是 R6 最容易静默搞坏的地方）
+ * 1. **谁在左/右** = `grid-column`，由 `data-net-seat`（`self`/`foe`）选中 —— 而那个属性由
+ *    `render-net.ts` 的 `NET_BOTTOM_SIDES` 给。**改左右归属要同时改常量与这两条规则**；
+ *    改一处就会出现"DOM 顺序对、看着反"（或反过来）—— 那正是本项目最怕的静默形态。
+ * 2. **`.hand` 的 DOM 顺序恒为 [P0, P1]**（约束 7：FX 用 `querySelectorAll('.hand')[player]`
+ *    **按下标**读手牌）。⚠️ **不要**用 `order` 去"把对手的手牌挪到左边/右边"来配合信息条 ——
+ *    那会顺手改掉视觉手序，与"两条手牌都水平中置"的规格冲突（且一旦有人误以为 `order`
+ *    能重排 `.net-hands` 的子项，就会去动 DOM 顺序）。手牌左右归属**不在本任务的范围内**。
+ *    `order` 只用于"两条手牌谁在上/下"（`viewSeat = 0` 时对手在上），与本节的列无关。
+ * 3. **中列宽度**：`minmax(max-content, auto)` —— 手牌区**不得被两侧信息块挤窄**（规格要求
+ *    手牌区水平中置、左右留白对称）。1fr 会让中列在手牌很宽时截断，max-content 则让中心列
+ *    随内容撑到足够宽，整个 `fit-content` 网格再整体居中 ⇒ 左右留白天然对称。
+ *
+ * 窄屏（断点见本节末尾的 `@media`）：三列放不下时**退回上下堆叠**（自己信息块 → 手牌 → 对手
+ * 信息块），信息块恢复满宽 —— 中心列优先保手牌完整。这是**取舍**（人眼验收项）：真机上若觉得
+ * 断点不合适，只改那一个 `max-width` 数字。
  * ========================================================================== */
+
+.net-bottom {
+  display: grid;
+  /* 左右列由内容定宽、中列按手牌内容定宽（见上面第 3 点）；整块 fit-content + auto 居中
+     ⇒ 页面左右留白对称，且中列两侧的留白相等（信息块同宽同 gap） */
+  grid-template-columns: max-content minmax(max-content, auto) max-content;
+  justify-content: center;
+  align-items: start;
+  gap: 12px;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 auto;
+  min-width: 0;
+}
+/* 左右归属：**列**决定视觉左右（DOM 顺序由 NET_BOTTOM_SIDES 决定，两者必须一致）。
+   写成 `[data-net-seat="…"]` 而不是按绝对玩家号：`data-player` 会随 viewSeat 翻转，
+   而"这一块是谁的"才是布局语义（与能量槽按侧给 order 同一条理由，见第 4 节）。 */
+.net-bottom > .net-info-block[data-net-seat='self'] { grid-column: 1; }
+.net-bottom > .net-info-block[data-net-seat='foe'] { grid-column: 3; }
+/* 中列：手牌区。`grid-column: 2` 是**显式**的 —— 不写它，手牌区会退回自动放置，
+   而自动放置遇到"被显式摆到第 1/3 列的两个兄弟"时同样落在第 2 列（今天的写法下等价），
+   但那是**推断**出来的；写出来才是"手牌区在中间"这条规格本身。 */
+.net-bottom > .net-hands { grid-column: 2; }
 
 .net-hands {
   /* 覆盖 .hand-strip（styles.css:724 是 1fr auto 1fr 的**左右三列**）→ 单列上下两块 */
   display: grid;
   grid-template-columns: 1fr;
   justify-items: center;   /* ← 手牌区**水平中置**（规格 §1：左右留白对称） */
+  justify-self: center;
   gap: 10px;
   min-height: 0;
 }
-.net-hands.net-view-0 > .net-hand-side[data-player="1"] { order: 1; }
-.net-hands.net-view-0 > .net-hand-side[data-player="0"] { order: 2; }
-.net-hands.net-view-1 > .net-hand-side[data-player="0"] { order: 1; }
-.net-hands.net-view-1 > .net-hand-side[data-player="1"] { order: 2; }
+.net-hands.net-view-0 > .net-hand-area[data-player="1"] { order: 1; }
+.net-hands.net-view-0 > .net-hand-area[data-player="0"] { order: 2; }
+.net-hands.net-view-1 > .net-hand-area[data-player="0"] { order: 1; }
+.net-hands.net-view-1 > .net-hand-area[data-player="1"] { order: 2; }
 
-.net-hand-side {
+/* 一块手牌区：只有手牌（对手那块多一行"张数"小标签）。
+   ⚠️ 信息条与牌库/弃牌堆**不在这里**（R6 搬到 `.net-info-block`）—— 同一玩家出现两份
+   `.deck[data-player]` / `.trash-pile.pN[data-player]` 会让取首个的 FX 静默错位（I-1 的教训）。 */
+.net-hand-area {
   display: flex;
   flex-direction: column;
-  align-items: center;     /* 信息条 / 小标签 / 手牌 / 操作区统一中置 */
-  width: 100%;
+  align-items: center;     /* 小标签 / 手牌统一中置 */
   max-width: 940px;
   gap: 6px;
   padding: 8px;
   border: 1px dashed #3a4257;
   border-radius: 8px;
 }
-/* 自己那一块：与对方的视觉区分（回合中额外高亮由 .player-info.active 提供） */
-.net-hand-side-self { border-color: rgba(79, 240, 255, 0.45); background: rgba(79, 240, 255, 0.04); }
-/* 对手那一块（C-4 之后这里**没有**任何 transform —— 对手的卡由 .rot-180 各自倒置）。
-   I-1：这一块**只有手牌 + 一行小标签**：对手的信息条与牌库/弃牌堆只在上方 `net-strip-foe`
-   里出现一份。两份会让 `.deck[data-player]` / `.trash-pile.pN[data-player]` 各有两个 A 类节点，
-   而 FX 全走 `querySelector`（取首个）→ 特效飞向用户没在看的那一份，静默错位。 */
-.net-hand-side-foe { border-style: solid; background: rgba(255, 255, 255, 0.02); }
+/* 自己那一块：与对手的视觉区分（回合中额外高亮由 .player-info.active 提供） */
+.net-hand-area-self { border-color: rgba(79, 240, 255, 0.45); background: rgba(79, 240, 255, 0.04); }
+/* 对手那一块（C-4 之后这里**没有**任何 transform —— 对手的卡由 .rot-180 各自倒置）。 */
+.net-hand-area-foe { border-style: solid; background: rgba(255, 255, 255, 0.02); }
 .net-hand-label { font-size: 12px; color: #9fb0c8; letter-spacing: 0.06em; }
-/* 操作区在每块手牌区里（不是 body 级 fixed） */
+/* 操作区在自己那一块信息块里（不是 body 级 fixed） */
 .net-action-bar { position: static; transform: none; left: auto; bottom: auto; }
 
 /* 两条手牌都左起（"左右"与座位无关，默认 flex 行方向即可）；手牌块整体水平中置，
@@ -312,6 +379,27 @@
    它只依赖本页自己的 `.net-hands` 类，将来即使手牌条不再复用 `hand-strip`（或那条热座规则被改动），
    远程页的"非候选卡不可点"也不会静默失效。 */
 .net-hands.choice-mode .card:not(.choice-target) { pointer-events: none; }
+
+/* ── 窄屏取舍（**只能人眼验**：桩里没有布局引擎）──
+   三列（信息块 + 手牌 + 信息块）在窄窗口里会把中列挤到不可用；断点取 1180px：
+   宁可让信息块**上下堆叠**（自己信息块 → 手牌 → 对手信息块），也**不**把两条手牌挤窄。
+   堆叠时三块退回按 DOM 顺序单列（左块在上、手牌在中、右块在下）—— 信息块的左右语义消失，
+   所以这里给它们满宽 + 文字居中；真要保留左右语义就只能牺牲手牌宽度（取舍，见报告）。
+   ⚠️ 本文件没有 `@media` 之外的条件块；`tests/ui/net-lane-tree.test.ts` 的 CSS 解析器
+   **会跳过 @media 的整块**（简版解析器不递归），所以这里只写"堆叠"，不在这里写任何 `order`
+   —— 否则解算器会把媒体查询内的规则当成无条件规则，把竖排层序/上下手序判错。 */
+@media (max-width: 1180px) {
+  .net-bottom {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    width: auto;
+    max-width: 100%;
+  }
+  .net-bottom > .net-info-block[data-net-seat='self'],
+  .net-bottom > .net-info-block[data-net-seat='foe'],
+  .net-bottom > .net-hands { grid-column: auto; }
+  .net-info-block { width: 100%; margin: 0 auto; }
+}
 
 /* ============================================================================
  * 7. 信息遮蔽（设计稿 §6.4）：对手手牌只显示数量

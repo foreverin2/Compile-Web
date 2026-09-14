@@ -13,8 +13,13 @@ import { fileURLToPath } from 'node:url';
 //   那时再决定"新增显式依赖"或"换一个等价解析器"。
 import { transform } from 'lightningcss';
 import { hooksOfCategory, RENDERERS } from '../../src/ui/fx-dom-contract';
-import { NET_PAGE_HOOKS, verifyPageHooks } from '../../src/ui/render-net';
+import { createGame } from '../../src/core/state/create';
+import { NET_BOTTOM_SIDES, NET_PAGE_HOOKS, renderNetBoard, verifyPageHooks } from '../../src/ui/render-net';
+import { setFxViewSeat } from '../../src/ui/fx-seat';
 import { stripComments, stripArrayDecl, codePositions } from './source-text';
+import {
+  classOf, classListOf, drainRaf, installStubDom, makeStubEl, type StubNode,
+} from './net-dom-stub';
 
 /**
  * G2 Task 3/3F 守卫：远程对战页渲染器 `src/ui/render-net.ts`（源码文本守卫，**无 jsdom**）。
@@ -103,16 +108,23 @@ function parseSelector(selector: string): void {
 }
 
 /**
- * 1. 本页的**容器节点**（信息条 / 带 / 行 / 手牌条）不得被任何 `transform`/`rotate` 作用 ——
+ * 1. 本页的**容器节点**（底部行 / 信息块 / 带 / 手牌区）不得被任何 `transform`/`rotate` 作用 ——
  *    C-4 的原始形态是 `.net-lane-band .net-side-foe { transform: rotate(180deg) }`：
  *    它与卡自身的 `.rot-180` 叠加成 0°（对手的卡其实**正立**），并把整行**水平镜像**
  *    （"覆盖者在右"的屏幕假设被翻转 → 被覆盖卡可见区被压成 6px）。
  *    卡级 hover（`.stack .card:hover`）的 transform 是**允许**的：它的最后一个复合选择器是
  *    `.card`，不在容器名单里。
+ *
+ *    ⚠️ **R6 的名单变更**：`net-strip` / `net-strip-foe`（顶部信息条）**已取消** → 从名单删除；
+ *    新增 `net-bottom`（底部行）、`net-info-block` / `net-info-self`（两块信息块）、
+ *    `net-hand-area`（手牌区，原 `net-hand-side`）。名单必须跟着**真实存在的容器**走：
+ *    留着已取消的类名只会在样式表里"证明"顶部条还在；漏掉新容器则新容器可以被静默旋转
+ *    （信息块一旦被 rotate，块内所有节点一起转，与 C-4 同族）。
  */
 const CONTAINER_LAST = [
-  'net-board', 'net-grid', 'net-strip', 'net-strip-foe', 'net-lane-band', 'net-side',
-  'net-side-self', 'net-side-foe', 'net-hands', 'net-hand-side', 'net-hand-side-self', 'net-hand-side-foe',
+  'net-board', 'net-grid', 'net-bottom', 'net-lane-band', 'net-side',
+  'net-side-self', 'net-side-foe', 'net-hands', 'net-hand-area', 'net-hand-area-self', 'net-hand-area-foe',
+  'net-info-block', 'net-info-self',
 ];
 function rotatedContainers(css: string): string[] {
   return cssRules(css)
@@ -125,10 +137,17 @@ function rotatedContainers(css: string): string[] {
     .map((r) => r.selector);
 }
 
-/** 2. 承载/就是两条 `.hand` 的节点不得用 `display:none`（隐藏节点 `getBoundingClientRect()` 全 0） */
+/**
+ * 2. 承载/就是两条 `.hand` 的节点不得用 `display:none`（隐藏节点 `getBoundingClientRect()` 全 0）
+ *
+ *    ⚠️ **R6**：手牌区的外层容器由 `.net-hand-side` 改名成 `.net-hand-area`（它现在只包手牌，
+ *    信息条搬去了底部行的 `.net-info-block`）。两个名字都留在判据里：`.net-hand-side` 是本页
+ *    **曾经**用过的名字，若将来有人把它加回来（复制粘贴旧规则）并配上 `display:none`，
+ *    这条断言照样要红 —— 判据针对的是"**承载手牌的节点**"，不是某个具体的类名。
+ */
 function hiddenHandRules(css: string): string[] {
   return cssRules(css)
-    .filter((r) => /(net-hands|net-hand-side|\.hand\b)/.test(r.selector) && /display:\s*none/.test(r.body))
+    .filter((r) => /(net-hands|net-hand-area|net-hand-side|\.hand\b)/.test(r.selector) && /display:\s*none/.test(r.body))
     .map((r) => r.selector);
 }
 
@@ -241,6 +260,34 @@ function codeTextBetween(text: string, isCode: boolean[], from: number, to: numb
   let out = '';
   for (let i = Math.max(0, from); i < Math.min(to, text.length); i += 1) if (isCode[i]) out += text[i];
   return out;
+}
+
+/** 用最小 DOM 桩**真跑一帧** `renderNetBoard`，返回元素树（**无 jsdom**；`net-lane-tree.test.ts` 同源）。
+ *
+ *  为什么要在这一份"源码文本守卫"的测试里也真跑一帧：第 14 条（R6 重写）要判的是
+ *  "每个玩家的牌库/弃牌堆在页面上**恰好一份**" —— 那是**元素树**的性质，源码文本只能给代理
+ *  （原来那两处 `renderPiles(s, foe)` / `renderPiles(s, player)` 字面量就是代理，R6 之后它们
+ *  已经不存在）。桩的边界（不做几何、`querySelector` 恒空）见 `./net-dom-stub` 头注。
+ *
+ *  ⚠️ 调用方负责 `installStubDom()` / `restore()` / `await drainRaf()`（同一个用例里要复用，
+ *  故这里不自己装 —— 装了两次会让 restore 还原错对象）。 */
+function renderNetTree(viewSeat: 0 | 1): StubNode {
+  const s = createGame({ seed: 'r6-render-net-seed', draftStarter: 0, firstToPlay: 1 });
+  for (const p of [0, 1] as const) {
+    s.players[p].protocols = [
+      { defId: 'fire-0', compiled: false },
+      { defId: 'ice-0', compiled: false },
+      { defId: 'light-0', compiled: false },
+    ] as never;
+  }
+  (s as { phase: string }).phase = 'turn';
+  const root = makeStubEl('div');
+  const noop = (): void => { /* noop */ };
+  renderNetBoard(root as unknown as HTMLElement, s, {
+    onAction: noop, onRendered: noop, rerender: noop, onDraftPick: noop, onDraftUnpick: noop,
+    onDraftBan: noop, onWinReset: noop,
+  } as never, { viewSeat, verifyHooks: false });
+  return root;
 }
 
 describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () => {
@@ -506,6 +553,9 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
     // display:none 的检查**扩到所有承载/就是手牌的节点**（评审变异 D-1：只查 `.net-hands` 时
     // `.net-hand-side-foe { display:none }` 仍然全绿，而它正是"rect 全 0"的真实危险形态）。
     // 这里用"对合成 CSS 的阳性/阴性对照"证明仪器本身有判别力，再对真实样式表跑一遍。
+    // ⚠️ R6：外层容器改名 `.net-hand-side` → `.net-hand-area`，两个名字的阳性对照都保留
+    //    （旧名字是"复制粘贴回来的旧规则"这一族的哨兵）。
+    expect(hiddenHandRules('.net-hand-area-foe { display: none; }')).toEqual(['.net-hand-area-foe']);
     expect(hiddenHandRules('.net-hand-side-foe { display: none; }')).toEqual(['.net-hand-side-foe']);
     expect(hiddenHandRules('.net-hands .hand { display: none; }')).toEqual(['.net-hands .hand']);
     expect(hiddenHandRules('.net-hands { display: grid; }')).toEqual([]);
@@ -662,31 +712,80 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
   });
 
   /**
-   * I-1：对手的**牌库/弃牌堆只保留一份**（顶部信息条），对手那一行只有手牌 + 一行小标签。
+   * I-1（R6 重写）：**每个玩家的牌库 / 弃牌堆在整个页面上只出现一份**，且每个玩家**都有一份**。
+   *
    * 为什么是承重的：FX 取牌库/弃牌堆全走 `querySelector`（**取首个**，如
    * effects/index.ts:215/435/483/1138/1323/2249、fx-gen2.ts:568/665/1123/…），两份 A 类节点
    * 会让特效飞向用户**没在看**的那一份 —— 不报错、不跳过，纯静默错位。
+   *
+   * ## 原断言能抓什么 / 现在还能抓什么（R6 的改写论证）
+   * 原断言（一）：`renderDeck(` / `renderTrash(` 各**恰好一处调用** —— 那是"每个玩家恰好一份"的
+   * **源码代理**（一个调用点在 `renderPiles` 里，参数是变量 ⇒ 天然每玩家一份）。它抓得住
+   * "有人又加了一处 `renderDeck(s, foe)`"，抓不住"参数写错（两次都传同一个玩家）"。
+   * 原断言（二）：`renderPiles(s, foe)` / `renderPiles(s, player)` 两处字面量 —— 那是 R6 **之前**
+   * 的**非对称**布局（对手在顶部条、自己在手牌行）的产物；R6 之后两侧对称，由
+   * `NET_BOTTOM_SIDES` 的循环产出，那两个字面量**不存在了**。把断言改成别的字面量只会
+   * 退化成"钉住某一种写法"。
+   *
+   * 现在的判据换成**两层**，都比原版强：
+   *  ① **行为（真跑一帧）**：`.deck[data-player]` / `.trash-pile[data-player]` 在元素树里
+   *     每个玩家**恰好一个** —— 这正是"取首个的 FX 会不会飞错"的**直接**判据，原版只是代理；
+   *  ② **源码（唯一调用点 + 调用形态）**：`renderDeck(` / `renderTrash(` 仍各恰好一处（防"再加一处"），
+   *     且 `renderPiles(` 的**唯一**调用点落在信息块助手（`renderInfoBlock`）里 —— 只有"每侧各调一次"
+   *     才可能得到 ① 的"每玩家恰好一份"。
+   *  代价（诚实披露）：② 不再钉"两处调用点分别传哪个玩家"（那两个字面量已经不存在）。
+   *  ① 用元素树**逐玩家**计数覆盖了同一件事，且顺带覆盖了"两次都传同一个玩家"这种原版抓不到的错。
    */
-  it('14. I-1：renderDeck/renderTrash 各只有一处调用；两个玩家各覆盖一次（互补不重复）', () => {
+  it('14. I-1（R6 重写）：每个玩家的牌库/弃牌堆在元素树里恰好一份（行为腿）+ 唯一调用点（源码腿）', async () => {
     const code = netCode();
+    // ── ② 源码腿：唯一调用点 ──
     expect((code.match(/renderDeck\(/g) ?? []).length,
       'renderDeck( 必须**恰好一处**调用（两份 .deck[data-player] 会让取首个的 FX 静默错位）').toBe(1);
     expect((code.match(/renderTrash\(/g) ?? []).length,
       'renderTrash( 必须**恰好一处**调用（同上）').toBe(1);
-    // 两处调用点：顶部对手条用 foe，自己那一行用 player（= viewSeat）→ 玩家集合互补
-    expect(code, '对手信息条未渲染对手的牌库/弃牌堆').toContain('renderPiles(s, foe)');
-    expect(code, '自己那一行未渲染自己的牌库/弃牌堆').toContain('renderPiles(s, player)');
-    expect((code.match(/renderPiles\(s, /g) ?? []).length,
-      'renderPiles 的调用点应恰好两处（对手条 + 自己行）').toBe(2);
-    // 对手那一行（decorateHand 的非自己分支）不得再渲染 piles：唯一一处 renderPiles 必须在
-    // `if (o.isSelf) {` 之后（否则对手行里又出现第二份）
-    const decorate = between(code, 'function decorateHand', 'function buildP0Hand');
-    expect((decorate.match(/renderPiles\(/g) ?? []).length, 'decorateHand 里只应有一处 renderPiles').toBe(1);
-    expect(decorate.indexOf('renderPiles('), 'renderPiles 未落在 `if (o.isSelf)` 分支内（对手行会多一份）')
-      .toBeGreaterThan(decorate.indexOf('if (o.isSelf) {'));
-    // `.net-hand-side-foe` 必须在样式表里有规则（评审 I-1：原实现里它零规则、两份都可见）
-    expect(read('styles-net.css'), '.net-hand-side-foe 在 CSS 里零规则（I-1：重复渲染因此完全可见）')
-      .toMatch(/\.net-hand-side-foe\s*\{/);
+    expect((code.match(/renderPiles\(/g) ?? []).length,
+      'renderPiles 应恰好两处出现（函数声明 + 唯一调用点；每侧一次靠循环，不是靠复制粘贴）').toBe(2);
+    const block = between(code, 'function renderInfoBlock', 'function decorateHand');
+    expect(block, 'renderPiles 的唯一调用点不在信息块助手里（牌库/弃牌堆不再属于信息块？）')
+      .toContain('renderPiles(s, player)');
+    // 每次调用必须覆盖**该块的玩家**（`renderInfoBlock` 的形参）—— 写死 0/1 会让两个玩家拿同一份
+    expect(block, 'renderInfoBlock 里的 renderPiles 不是按该块的玩家渲染的（两块的牌库会相同）')
+      .not.toMatch(/renderPiles\(s,\s*[01]\s*\)/);
+    // ── ① 行为腿：真跑（两个席位），逐玩家数 A 类节点 ──
+    const restore = installStubDom();
+    try {
+      for (const seat of [0, 1] as const) {
+        const tree = renderNetTree(seat);
+        for (const cls of ['deck', 'net-piles']) {
+          const perPlayer = [0, 1].map((p) => classOf(tree, cls, (n) => n.dataset.player === String(p)).length);
+          expect(perPlayer, `viewSeat=${seat}：.${cls} 的每个玩家必须恰好一个`
+            + `（实际 P1=${perPlayer[0]}、P2=${perPlayer[1]}；两份 = FX 取首个时静默错位）`)
+            .toEqual([1, 1]);
+        }
+        // 弃牌堆：A 类钩子同时是 `.trash-pile` + `.pN` + `[data-player]` 三种写法，都要逐玩家唯一
+        const trash = classOf(tree, 'trash-pile');
+        expect(trash.length, `viewSeat=${seat}：整个页面的 .trash-pile 必须恰好两个（双方各一个）`).toBe(2);
+        const p1Trash = trash.filter((n) => classListOf(n).includes('p1'));
+        const p2Trash = trash.filter((n) => classListOf(n).includes('p2'));
+        expect([p1Trash.length, p2Trash.length], `viewSeat=${seat}：.trash-pile 的 .p1/.p2 计数必须各为 1`
+          + '（A 类钩子的产出方拼写承重：`trash-pile p${player + 1}`）').toEqual([1, 1]);
+      }
+      // ── 两块信息块都必须存在且互补（"只留一份"不能退化成"一份都没有"）──
+      const blocks = classOf(renderNetTree(0), 'net-info-block');
+      expect(blocks.length, '底部行必须恰好两块 .net-info-block（自己 / 对手各一块）').toBe(2);
+      expect(blocks.map((n) => n.dataset.netSeat).sort(), '两块信息块必须座位互补（self/foe）')
+        .toEqual(['foe', 'self']);
+    } finally {
+      await drainRaf();
+      restore();
+      setFxViewSeat(null);
+    }
+    // `.net-info-block` / `.net-info-self` 必须在样式表里有规则（原判据是 `.net-hand-side-foe`；
+    // 评审 I-1 的教训是"对手那一块零规则 ⇒ 两份都可见"，本页现在把两块都做成了可见的正经块，
+    // 故判据换成"新容器必须真的被样式表接管"，并由上面两条行为断言保证"只有两块"）
+    const css = read('styles-net.css');
+    expect(css, '.net-info-block 在 CSS 里零规则（信息块布局不生效）').toMatch(/\.net-info-block\s*\{/);
+    expect(css, '.net-info-self 在 CSS 里零规则（自己/对手的信息块无法区分）').toMatch(/\.net-info-self\s*\{/);
   });
 
   /**
@@ -922,24 +1021,35 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
   });
 
   /**
-   * R1-5：**手牌中置**（规格 §1）与"协议图的 180° 只属热座页"。
+   * R1-5（R6 更新）：**手牌中置**（规格 §1）与"协议图的 180° 只属热座页"。
    *
    * 手牌中置的判据必须是"样式表里真的把这一块居中"：
-   *  - `.net-hands` 的 `justify-items: center`（块级子项水平中置）；
-   *  - `.net-hand-side` 的 `align-items: center`（块内信息条/标签/手牌统一中置，否则窄容器里贴左会显得歪）。
-   * 两条腿分开查、且指名到选择器：只查 `align-items: center` 会被**任何**一条 flex 规则满足
-   * （`.hand` 自己就是 `align-items: flex-start`）。
+   *  - `.net-hands` 的 `justify-items: center`（手牌区的子项水平中置）；
+   *  - `.net-hand-area` 的 `align-items: center`（块内小标签/手牌统一中置，否则窄容器里贴左会显得歪）。
+   *  R6 追加两条：`.net-bottom` 的 `justify-content: center`（**底部行整体**居中）与 `.net-hands`
+   *  的 `justify-self: center`（手牌区在**中列**里居中）。为什么必须分开查：R6 之后"手牌区到底居不居中"
+   *  由**两层**决定，只查 `justify-items` 会被"信息块把手牌区挤到一边"瞒过去（R6 的新风险）。
+   *  三条腿分开查、且指名到选择器：只查 `align-items: center` 会被**任何**一条 flex 规则满足
+   *  （`.hand` 自己就是 `align-items: flex-start`）。
    *
-   * 第二条：远程页的协议**不**走 180°（那是卡面朝向），而热座页确实仍在产出
-   * `.protocol-img.rot-180` —— 必须两边都钉，否则"协议 ∓90° 改对了"与"热座被顺手改坏"
-   * 这两种情况在删掉任一条断言后都会静默。
+   *  第二条：远程页的协议**不**走 180°（那是卡面朝向），而热座页确实仍在产出
+   *  `.protocol-img.rot-180` —— 必须两边都钉，否则"协议 ∓90° 改对了"与"热座被顺手改坏"
+   *  这两种情况在删掉任一条断言后都会静默。
    */
   it('R1-5. 手牌区水平中置（选择器级判据）+ 协议 180° 仍在热座页产出（∓90° 只属远程页）', () => {
     const css = read('styles-net.css');
     expect(css, 'styles-net.css 未把 .net-hands 的子项水平中置（手牌区没有中置）')
       .toMatch(/\.net-hands\s*\{[^}]*justify-items:\s*center/);
-    expect(css, 'styles-net.css 未把 .net-hand-side 的内容水平中置（信息条/小标签会贴左）')
-      .toMatch(/\.net-hand-side\s*\{[^}]*align-items:\s*center/);
+    // ⚠️ R6：手牌区的外层容器改名 `.net-hand-side` → `.net-hand-area`（它现在只包手牌，
+    //    信息条搬去了底部行的信息块）。"块内内容中置"这条判据仍然必须存在 —— 只是换了对象。
+    expect(css, 'styles-net.css 未把 .net-hand-area 的内容水平中置（小标签会贴左）')
+      .toMatch(/\.net-hand-area\s*\{[^}]*align-items:\s*center/);
+    // R6 新增：中置现在是**两层**（底部行 fit-content 居中 + 手牌区 justify-self）——
+    // 只查 `justify-items` 会被"手牌区被两侧信息块挤到一边"瞒过去（那正是 R6 的新风险）。
+    expect(css, '底部行未整体居中（手牌区左右留白不对称）')
+      .toMatch(/\.net-bottom\s*\{[^}]*justify-content:\s*center/);
+    expect(css, '手牌区未在底部行的中列里居中')
+      .toMatch(/\.net-hands\s*\{[^}]*justify-self:\s*center/);
     // 热座页的协议 180° 产出点**一行未改**（`orient === 180 ? ' rot-180' : ''`）——
     // 它是 A 类钩子 `.rot-180` 在热座页的唯一产出点，也是"远程页 ∓90° 不能借用 .rot-cw/.rot-ccw"
     // 这条裁决的对照面（两种朝向并存，谁也不许吃掉谁）。
@@ -1016,7 +1126,8 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
    *   - 一帧 = `for (const line of [0, 1, 2])` 三条线 × `band.appendChild(renderSideRow(…))` 两侧；
    *   - 每侧的链路槽/协议格各 1 → `.stack-slot`/`.protocol-cell`/`.battery`/`.protocol`/
    *     `.protocol-holder`/`.protocol-img` = 3 × 2 = 6；
-   *   - 牌库/弃牌堆来自 `renderPiles`（唯一调用点，两处挂载互补）→ 2；手牌来自 `renderHand(` → 2；
+   *   - 牌库/弃牌堆来自 `renderPiles`（**R6：唯一调用点，在 `NET_BOTTOM_SIDES` 的循环里**，
+   *     每侧一次 ⇒ 调用点数 × 侧数 = 2）→ 2；手牌来自 `renderHand(` → 2；
    *     控制轨来自 `renderControlModule(` → 1。
    * 这样"删掉一侧挂载"会同时打破 ①两个挂载字面量、②推导出的数量，而**数字本身也不可能被悄悄改小**
    * （表里少一个 `expected` 字段或改小数字都会在下面对比里报红）。
@@ -1036,10 +1147,23 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
     expect(code, '三条线必须由 `for (const line of [0, 1, 2] as Line[])` 产出').toMatch(/for \(const line of \[0, 1, 2\] as Line\[\]\)/);
     const LANES = 3;
     const perFrame = LANES * sideMounts;                       // 6
-    const pilesCalls = (code.match(/renderPiles\(s, /g) ?? []).length;
     const handCalls = (code.match(/renderHand\(/g) ?? []).length;
     const controlCalls = (code.match(/renderControlModule\(/g) ?? []).length;
-    expect(pilesCalls, 'renderPiles 的调用点应恰好两处（对手条 + 自己行）').toBe(2);
+    // ⚠️ **R6 的推导改动（论证：原能抓什么 / 现在还能抓什么）**：
+    //    原来数的是 `renderPiles(s, ` 的**两处字面量调用**（对手顶部条 + 自己手牌行）——
+    //    那是 R6 之前**非对称**布局的产物；R6 之后两侧对称、由 `NET_BOTTOM_SIDES` 的 `for` 循环产出，
+    //    "两处字面量"不存在了。若把它改成"数某一处字面量"，判据就退化成"钉住某一种写法"（本仓
+    //    反复栽在这种写法上）。现在改成数**循环里那一处调用点 × 侧数**：
+    //      `renderPiles(` 的出现次数（助手定义 0 + 调用 1）→ 每侧调一次 ⇒ 每玩家一份。
+    //    它仍然抓得住原判据真正要防的东西："少一处挂载"（改侧数/删调用都会让推导出的 2 与实际不符），
+    //    并且**多了一条**：`NET_BOTTOM_SIDES` 的侧数本身就是推导输入（不再是硬编码的 2）。
+    //    ⚠️ 口径：`renderPiles` 在源码里出现 **2** 次 = 函数声明 1 + 唯一调用 1 ⇒ 每帧调用 = 2 − 1。
+    const pilesHits = (code.match(/renderPiles\(/g) ?? []).length;
+    const pilesCalls = pilesHits - 1;                                  // 减去函数声明那一处
+    const pilesPerFrame = pilesCalls * NET_BOTTOM_SIDES.length;        // 1 × 2 = 2
+    expect(NET_BOTTOM_SIDES.length, '底部行的侧数必须是 2（自己 + 对手）—— 少于 2 就有一方的信息块消失')
+      .toBe(2);
+    expect(pilesHits, 'renderPiles 在源码里应恰好两处（函数声明 + 唯一调用点）').toBe(2);
     expect(handCalls, 'renderHand 的调用点应恰好两处（P0 / P1）').toBe(2);
     expect(controlCalls, 'renderControlModule 的调用点应恰好一处').toBe(1);
 
@@ -1052,7 +1176,8 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
       expect(expectOf(hook), `${hook} 的 expected 必须等于 线数 × 侧数 = ${perFrame}`).toBe(perFrame);
     }
     for (const hook of ['.deck[data-player]', '.trash-pile[data-player]', '.trash-pile.p1/.p2']) {
-      expect(expectOf(hook), `${hook} 的 expected 必须等于 renderPiles 的调用点数 = ${pilesCalls}`).toBe(pilesCalls);
+      expect(expectOf(hook), `${hook} 的 expected 必须等于 renderPiles 的调用点数 × 侧数 = ${pilesPerFrame}`)
+        .toBe(pilesPerFrame);
     }
     for (const hook of ['.hand', '.hand[data-player]']) {
       expect(expectOf(hook), `${hook} 的 expected 必须等于 renderHand 的调用点数 = ${handCalls}`).toBe(handCalls);
@@ -1178,6 +1303,10 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
       '.net-side-foe .protocol-img': foeProto,
       '.net-side-foe .protocol-img.rot-180': inv ?? foeProto,
       '.net-side-self .card.rot-180, .net-side-self .card.rot-cw, .net-side-self .card.rot-ccw': 0,
+      // ── R6 断言 5 的探测：底部行 + 两块信息块（座位互补）──
+      // 数量含义：`.net-bottom` 一帧恰好一个；`.net-info-block` 两块（自己 / 对手各一）。
+      '.net-bottom': 1,
+      '.net-info-block': 2,
     };
   }
 
@@ -1191,6 +1320,10 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
    *
    * G2 修正 R2：加了 `getAttribute`（约束 8 的"取值按座位"断言要读它 —— `querySelectorAll`
    * 只能证明"带了属性"，证明不了"值对不对"）。
+   *
+   * G2 修正 **R6**：`.net-info-block` 与 `.hand` 都按**每一块的座位/玩家**造出**各自的 dataset**
+   * （不再共用同一个 `dataset` 对象）—— 断言 5（R6 的底部行）要读 `dataset.netSeat` 判两块是否
+   * **座位互补**，共用一份 dataset 会让"两块都是 self"这种缺陷查不出来。
    */
   function fakeScope(counts: Record<string, number>, handOrder: number[] = [0, 1]): HTMLElement {
     /** 选择器里可能带 `[attr="value"]` / `[attr=value]`（约束 8 的合成树用它验取值） */
@@ -1201,12 +1334,31 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
       }
       return out;
     };
-    const listOf = (sel: string): Array<{ dataset: Record<string, string>; getAttribute: (n: string) => string | null }> => {
+    // R6：两块信息块必须**挂在底部行下**（断言 5 的 `parentElement` 判据）。合成桩给两块
+    //     同一个父对象 —— 与真实 DOM 同构（两块都是 `.net-bottom` 的子节点）。
+    const bottomRow = { dataset: {}, getAttribute: () => null };
+    const listOf = (sel: string): Array<{
+      dataset: Record<string, string>;
+      getAttribute: (n: string) => string | null;
+      parentElement?: unknown;
+    }> => {
       // 带值的属性选择器（`.card[data-fx-rot="ccw"]`）在计数表里没有自己的键 → 取"基础选择器"
       // 的数量，再把属性值喂给桩（真实 DOM 里这两条查询返回的是**同一批节点**，桩必须同构）。
       const baseline = sel.replace(/\[[a-z-]+(?:=["'][^"']*["'])?\]\s*$/, '');
       const n = counts[sel] ?? counts[baseline] ?? 0;
       if (sel === '.hand') return handOrder.slice(0, n).map((p) => ({ dataset: { player: String(p) }, getAttribute: () => null }));
+      // R6：两块信息块的**座位互补**（真实产出由 NET_BOTTOM_SIDES 决定，这里按"一帧完整页"的
+      // 语义给 self/foe 各一块）—— 若不互补（例如两块都是 self），断言 5 必须报红。
+      if (sel === '.net-info-block') {
+        return ['self', 'foe'].slice(0, n).map((seat) => ({
+          dataset: { netSeat: seat }, getAttribute: () => null, parentElement: bottomRow,
+        }));
+      }
+      if (sel === '.net-bottom') {
+        // 断言 5 还要 `blocks.every(b => b.parentElement === rows[0])` ⇒ 这里返回的必须与
+        // 上面 `.net-info-block` 的 `parentElement` 是**同一个对象**（真实 DOM 里也如此）。
+        return Array.from({ length: n }, () => bottomRow);
+      }
       // ⚠️ 无值形式（`.card[data-fx-rot]`）的选择器**不携带值** ⇒ 桩从"该侧约定值"补上，
       //    否则 `getAttribute('data-fx-rot')` 恒为 null、取值断言永远报红（我第一版就踩了这里：
       //    以为选择器字符串里会带 `="ccw"`，实际运行时那条查询是无值形式）。
@@ -1283,6 +1435,25 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
       expect(verifyPageHooks(fakeScope(syntheticPage({ fxRot: { self: 'cw', foe: 'ccw' }, foeInverted: true }))),
         '自己侧的标记取值不是 ccw 却没报（特效朝向与座位相反）')
         .toContain("必须是 'ccw'");
+      // ⑥ G2 修正 R6 · 断言 5：底部行的两块信息块。两条反面用例 ——
+      //    (a) 信息块整个消失（顶部条取消、底部也没了 ⇒ 页面上一条信息都没有，用户看不见任何计数）；
+      //    (b) 两块**不是座位互补**（例如都画成自己那一块 ⇒ 对手的牌库/弃牌堆与手牌数消失，
+      //        而页面看着仍有"两条信息"，是这一族里最难用肉眼发现的形态）。
+      const noBlocks = syntheticPage();
+      noBlocks['.net-info-block'] = 0; noBlocks['.net-bottom'] = 0;
+      expect(verifyPageHooks(fakeScope(noBlocks)), '顶部/底部都没有信息块却没报 —— 页面上一条信息都没有')
+        .toContain('R6');
+      const sameSeat = fakeScope(syntheticPage());
+      // 把"两块"改成"两块都是自己"（座位不互补）：只改 `.net-info-block` 的返回，其余不变
+      const orig = sameSeat.querySelectorAll.bind(sameSeat);
+      (sameSeat as unknown as { querySelectorAll: (s: string) => unknown }).querySelectorAll = (s: string) => (
+        s === '.net-info-block'
+          ? [{ dataset: { netSeat: 'self' }, getAttribute: () => null, parentElement: {} },
+            { dataset: { netSeat: 'self' }, getAttribute: () => null, parentElement: {} }]
+          : orig(s)
+      );
+      expect(verifyPageHooks(sameSeat), '两块信息块都是 self（不如座位互补）却没报 —— 对手的信息会整块消失')
+        .toContain('R6');
       // 阳性对照：取值正确时不得报约束 8
       const ok = verifyPageHooks(fakeScope(syntheticPage()));
       expect(ok, '取值正确却报了约束 8（假红）').toMatch(/^自查 ✓/);

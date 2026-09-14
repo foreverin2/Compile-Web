@@ -18,7 +18,16 @@
  * `viewSeat = 1`（我是 P2）= **垂直镜像**：我的链路在下半部、对手在上半部，与 P1 视角完全对称
  * —— 本文件用 `foe = 1 - viewSeat` 换算，`data-player` 永远写**绝对值**。
  *
- * 手牌区在页面**底部水平中置**（`styles-net.css` 第 6 节：`.net-hands { justify-items: center }`）。
+ * ## 底部行（G2 修正 **R6**：信息条与手牌区同一行、一左一右）
+ * **顶部信息条已取消**（用户裁决）。底部那一行由三块组成：
+ *   **信息块（左）· 手牌区（中）· 信息块（右）**
+ * 每侧的信息块 = `renderPlayerInfo`（昵称 / 座位 · 牌库 n · 弃牌堆 n · 手牌 n）+ `renderPiles`
+ * （该玩家自己的 `.deck[data-player]` / `.trash-pile.pN`）—— 对手那份也因此从顶部移到底部。
+ *
+ * **左右归属 = `NET_BOTTOM_SIDES`（**唯一一处**，见它上面的说明）**：本说明取 **左 = 自己、右 = 对手**
+ * （自左向右的自然读法；用户未指定左右，规格 §8.4 第 2 条已声明"要反过来改一处常量即可"）。
+ * ⚠️ 该常量只决定"信息块以什么顺序**插进 DOM**"；视觉左右由 `styles-net.css` 的
+ * **grid 列**决定（第 6 节）。两条腿都要在（顺序 + 列），缺一条就会出现"DOM 对、看着反"。
  *
  * ## 为什么**不**复用 render.ts 的盘本体（设计稿 §6.1，R1 后仍然成立）
  * 热座页的盘是「左右分栏」（P1 槽 | P1 协议 | P2 协议 | P2 槽），两位玩家坐在**同一块屏幕前**、
@@ -81,6 +90,10 @@
  *    「谁显示在上」由父容器的 `.net-view-N` 用 **CSS `order`** 决定（styles-net.css 第 6 节）。
  *    比约束 5 更危险：FX 读手牌是**按下标**的，`viewSeat = 0` 时若按视觉顺序挂载会得到 `[P1, P0]`，
  *    下标 0 拿到**对手**的手牌 → 卡飞到对手手牌区，不报错、不跳过。
+ *    ⚠️ **R6 之后这条红线扩到"底部行"**：信息条的左右归属**也**不许改变两条 `.hand` 的 DOM 顺序
+ *    ——`buildP0Hand` 仍先于 `buildP1Hand`，且 `buildHands` 里仍是"先 append P0、再 append P1"
+ *    紧随相邻的两条语句。左右摆放**只能**由 CSS 决定（信息块用 `grid-column`、手牌用 `order`）。
+ *    这与"信息条在左/右"是**两件独立的事**：底部行的三块里，手牌区的 DOM 位置**恒在中间**。
  * 8. **特效朝向标记 `data-fx-rot`（R1 只负责产出，读侧是 R2）** —— 远程页场上卡带
  *    `data-fx-rot="ccw"`（自己）/ `"cw"`（对手），由 `renderStackSlot` 的 `fxRot` 参数逐卡写。
  *    **它与卡面朝向是两套**（规格 §2 的朝向表）：自己卡面 0° 而特效 −90°、对手卡面 180° 而特效 +90°。
@@ -511,6 +524,27 @@ export function verifyPageHooks(scope: HTMLElement, appliedSeat: 0 | 1 | null = 
     fatal.push(`约束 9 的方向性自查抛异常（${String(err)}）`);
   }
 
+  // ── 断言 5（G2 修正 R6 · 底部行重排）：信息块**恰好两块**、座位互补、且**没有顶部条** ──
+  // 为什么必须在运行时查（源码守卫证不了的那一半）：R6 把顶部信息条取消、两块信息块移进底部行。
+  // 源码文本能钉住"某个函数里有一处 `NET_BOTTOM_SIDES` 的循环"，钉不住**运行期真的产出两块**、
+  // 两块**座位互补**（不是同一侧画两遍 —— 那会让对手的牌库/弃牌堆消失而页面看着仍有两条信息）、
+  // 以及"顶部条节点确实不再存在"。R6 的关键红线是 `.hand` DOM 顺序不变，但**信息块复制/缺失**
+  // 同样是静默错位族（FX 取首个 `.deck[data-player]`）—— 所以这一条与断言 1 并列。
+  try {
+    const blocks = [...scope.querySelectorAll<HTMLElement>('.net-info-block')];
+    const seats = blocks.map((b) => b.dataset.netSeat);
+    const rows = [...scope.querySelectorAll<HTMLElement>('.net-bottom')];
+    if (blocks.length !== 2 || seats.slice().sort().join(',') !== 'foe,self' || rows.length !== 1) {
+      fatal.push(`R6：底部行必须恰好一块 .net-bottom、两块 .net-info-block（座位互补 self/foe），`
+        + `实际 .net-bottom=${rows.length}，信息块=${blocks.length} → 座位 [${seats.join(', ')}]`);
+    }
+    if (blocks.length === 2 && !blocks.every((b) => b.parentElement === rows[0])) {
+      fatal.push('R6：两块信息块必须都挂在底部行 .net-bottom 下（顶部条已取消，别处不该再有信息条）');
+    }
+  } catch (err) {
+    fatal.push(`R6 的底部行自查抛异常（${String(err)}）`);
+  }
+
   if (soft.length > 0) console.info('[render-net] 状态相关钩子当前为空（合法局面）：\n' + soft.join('\n'));
   if (fatal.length === 0) {
     return soft.length === 0
@@ -569,7 +603,11 @@ function isTurn(s: GameState, player: PlayerId): boolean {
   return turn === player;
 }
 
-/** 连接状态占位（真实联机由 G5 提供；本阶段恒为「本地预览」）。 */
+/** 连接状态占位（真实联机由 G5 提供；本阶段恒为「本地预览」）。
+ *
+ *  R6：它原来挂在**顶部**对手条上（那条已取消）→ 移到**对手信息块**里（底部行右块的最下方）。
+ *  它是"本页到底是本地预览还是真联机"唯一的页面内反馈，**不是**装饰：删掉它，用户在预览页
+ *  就无从判断对局是不是真的联上了（真实联机时 G5 会把这段文本换成会话状态）。 */
 function renderConnectionBadge(): HTMLElement {
   return el('span', 'net-conn net-conn-local', '● 本地预览（未联机）');
 }
@@ -594,13 +632,8 @@ function netControlHolder(s: GameState, viewSeat: PlayerId): -1 | PlayerId {
   return s.control === -1 ? -1 : fxSeatEndToPlayer(s.control, viewSeat);
 }
 
-/** 对手的牌库 / 弃牌堆**重新安放**到信息条内（远程页只有一个手牌区，不能再用 .hand-side 外侧列）。 */
-function renderPiles(s: GameState, player: PlayerId): HTMLElement {
-  const piles = el('div', 'net-piles');
-  piles.appendChild(renderDeck(s, player));
-  piles.appendChild(renderTrash(s, player));
-  return piles;
-}
+// （`renderPiles` 原来在这里；G2 修正 R6 把它随"信息块"一起挪到下方的底部行一节 ——
+//   它的两个挂载点现在**对称**了（每侧各一次），注释与不重复产出的论证都写在那里。）
 
 /** 一侧的「链路槽（含能量槽）」+「协议格」两份。
  *
@@ -922,53 +955,120 @@ function renderNetActionBar(s: GameState, cb: UiCallbacks): HTMLElement {
 }
 
 /* ============================================================================
- * 手牌区（约束 5 / 7 的落点）
+ * 底部行：**信息块 · 手牌区（中） · 信息块**（G2 修正 R6）
+ *
+ * 用户裁决（规格 §8.4 第 2 条 / §8.6 的 R6）：**双方信息条与手牌区同一行、一左一右**，
+ * **顶部信息条取消**（对手的牌库/弃牌堆随之移进底部那一行）。三块的分工：
+ *   · 左块 / 右块：`.net-info-block`（信息条 + **该玩家自己的**牌库/弃牌堆）；
+ *   · 中块：`.net-hands`（两条手牌，**DOM 顺序恒 [P0, P1]**，见约束 7）。
  * ========================================================================== */
+
+/** 底部行的**侧**。不是"绝对玩家号"：哪一号是自己由 `opts.viewSeat` 决定（`bottomPlayerOf`）。 */
+type NetBottomSide = 'self' | 'foe';
+
+/** 某侧对应的**绝对玩家号**（视图座位 → 绝对号的唯一换算，与 `renderLaneColumn` 的 `foe` 同源）。 */
+const bottomPlayerOf = (side: NetBottomSide, viewSeat: PlayerId): PlayerId =>
+  (side === 'self' ? viewSeat : (1 - viewSeat) as PlayerId);
+
+/**
+ * ⚠️⚠️ **左右归属 = 这个数组的顺序**（R6 规格留的"一处常量"）。
+ *
+ * 本说明取 **左 = 自己、右 = 对手**（自左向右的自然读法）。**用户未指定左右** —— 规格 §8.4
+ * 第 2 条原话："若你要反过来，改一处常量即可"。要反过来就把下面两行**对调**（`['foe', 'self']`）。
+ *
+ * 这个常量决定两件事，且**必须同时**由它决定（否则会出现"DOM 对、看着反"这种最难查的形态）：
+ *  1. **信息块进 DOM 的顺序**（本文件 `buildBottomRow` 里那两条
+ *     `for (const side of NET_BOTTOM_SIDES.slice(…))` 循环）；
+ *  2. **它们的网格列** —— `styles-net.css` 第 6 节用
+ *     `grid-column: 1` / `grid-column: 3` 把 `.net-info-block[data-net-seat="self"]` 钉在**左/右列**，
+ *     而 `data-net-seat` 就是这里的侧别 ⇒ 改这个常量会**同时**改 DOM 顺序与左右列，
+ *     两条腿不可能脱钩。`tests/ui/net-lane-tree.test.ts` 的 R6 条把两条腿**都**从本常量推导。
+ *
+ * ⚠️ 它**不**决定、也**不许**影响两条 `.hand` 的 DOM 顺序：手牌区在底部行的 DOM 位置**恒定在中间**
+ * （`buildHands` 先 append P0、再 append P1，约束 7）。左右摆放是 CSS 的事。
+ */
+export const NET_BOTTOM_SIDES: readonly NetBottomSide[] = ['self', 'foe'];
+
+/** 该玩家的牌库 / 弃牌堆（**A 类钩子 `.deck[data-player]` / `.trash-pile.pN` 的唯一产出点**）。
+ *
+ *  R6 之前它只服务"对手那条顶部信息条 + 自己那一行"两处**不对称**的挂载点；现在两侧对称，
+ *  由底部的 `for (const side of NET_BOTTOM_SIDES)` 每侧调一次 ⇒ 每个玩家**恰好一份**。
+ *  ⚠️ 这一点是承重的：FX 取牌库/弃牌堆全走 `querySelector`（**取首个**），
+ *  同一玩家出现两份 ⇒ 特效飞向用户没在看的那一份，**不报错、不跳过**。 */
+function renderPiles(s: GameState, player: PlayerId): HTMLElement {
+  const piles = el('div', 'net-piles');
+  // `data-player` 写在**容器**上（.deck / .trash-pile 各自也有）：R6 之后两侧对称，
+  // "这一堆是谁的"必须能从容器本身读出来（测试与将来任何遍历都不必回读子节点）。
+  piles.dataset.player = String(player);
+  piles.appendChild(renderDeck(s, player));
+  piles.appendChild(renderTrash(s, player));
+  return piles;
+}
+
+/**
+ * **一块信息块** = 信息条（昵称 / 座位 · 牌库 n · 弃牌堆 n · 手牌 n）+ 该玩家自己的牌库 / 弃牌堆。
+ *
+ * `data-net-seat="self" | "foe"` 是**可机检的侧别真值**：`data-player` 随 `viewSeat` 变，而
+ * "这一块是谁的"才是布局语义 —— 测试与 `verifyPageHooks` 都按它判左右归属（规格 §8.4 第 2 条）。
+ *
+ * `align` 总给 `'left'`（两块的内部排版一致；`styles.css:30-31` 的 `.p1/.p2` 右对齐语义会让右侧
+ * 那一块的标题/计数/按钮**分散到两头**，在窄列里很难看）。传 `align` 时 `renderPlayerInfo`
+ * 用的是**显式**分支，与热座页（不传）逐字无关。
+ *
+ * 操作区（`renderNetActionBar`）挂在**自己**那一块里：`getLegalActions` 是回合制的，
+ * 挂两份会出现重复按钮（这是 R6 之前 `decorateHand` 的既定语义，一行未改地搬过来）。
+ */
+function renderInfoBlock(
+  s: GameState, player: PlayerId, side: NetBottomSide, operator: PlayerId | null,
+  cb: UiCallbacks,
+): HTMLElement {
+  const isSelf = side === 'self';
+  const block = el('div', 'net-info-block net-info-' + side);
+  block.dataset.player = String(player);
+  block.dataset.netSeat = side;
+  const info = renderPlayerInfo(s, player, {
+    isSelf,
+    operator: operator === player,
+    label: isSelf ? '自己（你）' : '对手',
+    align: 'left',
+  });
+  info.appendChild(renderPiles(s, player));
+  // 连接状态占位只挂在对手那块（R6 之前它在顶部对手条上）：它是"本页是本地预览还是真联机"
+  // 唯一的页面内反馈；真实联机由 G5 换成会话状态。
+  if (!isSelf) info.appendChild(renderConnectionBadge());
+  block.appendChild(info);
+  if (isSelf) block.appendChild(renderNetActionBar(s, cb));
+  return block;
+}
+
+/**
+ * 一块**手牌区**（`.net-hands` 的一个子项）：手牌 + 对手那一行的"张数"小标签。
+ *
+ * 创建顺序恒为 **P0 先、P1 后**（`buildP0Hand` / `buildP1Hand` 的字面量调用顺序，约束 7 的代理证据）；
+ * 视觉上谁在上/下由 `.net-hands` 的 CSS `order` 决定（styles-net.css 第 6 节）。
+ *
+ * ⚠️ **R6 之后这里不再有信息条与牌库/弃牌堆**（它们搬到 `.net-info-block` 里了）。
+ * 两块手牌区**对称**（都只包一层 `.net-hand-area`）—— R6 之前自己那块不对称地多带信息条与操作区，
+ * 那种不对称正是"信息条只能挂在手牌行里"这个旧布局假设的残留。
+ */
+function decorateHand(s: GameState, player: PlayerId, hand: HTMLElement, o: NetHandOpts): HTMLElement {
+  const area = el('div', 'net-hand-area' + (o.isSelf ? ' net-hand-area-self' : ' net-hand-area-foe'));
+  area.dataset.player = String(player);
+  if (!o.isSelf) {
+    // 对手手牌只剩数量占位：补一行小标签说明"这块是什么"（信息条在底部行的信息块里，见上）
+    area.appendChild(el('div', 'net-hand-label', `对手手牌 ×${s.players[player].hand.length}`));
+  }
+  area.appendChild(hand);
+  return area;
+}
 
 /** `renderHand` 的入参（两个玩家只有 `isSelf` 不同，其余共用；**可见性按 `isSelf` 决定**：
  *  自己 = `'all'`（真实卡、可点），对手 = `NET_HAND_VIS`（数量占位）。见 `NET_HAND_VIS` 的警告）。 */
 interface NetHandOpts {
   isSelf: boolean;
-  /** 该玩家是否正在等待操作（效果挂起）→ 信息条的 operator 高亮 */
+  /** 该玩家是否正在等待操作（效果挂起）→ 信息块的 operator 高亮 */
   operator: boolean;
   cb: UiCallbacks;
-}
-
-/**
- * 建出**一个**玩家的手牌行（自己的行 = 信息条 + 牌库/弃牌 + 手牌 + 操作区；
- * 对手的行 = 一行小标签 + 手牌）。
- *
- * `hand` 由调用方（`buildP0Hand` / `buildP1Hand`）**已经建好**并传入 —— 这样两个玩家的差别
- * 只剩"调 `renderHand` 时写 0 还是写 1"，而**调用顺序**在源码里一眼可读（约束 7 的代理证据）。
- *
- * ⚠️ I-1：对手的**信息条与牌库/弃牌堆只保留一份**，在顶部那条 `net-strip-foe` 里
- * （本页只有一个手牌区，见 §2 布局）。对手这一行如果也建一份，页面上会出现两份
- * `.deck[data-player=<对手>]` / `.trash-pile.pN[data-player=<对手>]` —— 而 FX 全走
- * `querySelector`（**取首个**），于是特效会飞向用户没在看的那一份，**静默错位**。
- * 所以这里对手分支只给一行小标签，不建 info、不建 piles。
- */
-function decorateHand(s: GameState, player: PlayerId, hand: HTMLElement, o: NetHandOpts): HTMLElement {
-  const side = el('div', 'net-hand-side' + (o.isSelf ? ' net-hand-side-self' : ' net-hand-side-foe'));
-  side.dataset.player = String(player);
-  if (o.isSelf) {
-    // 自己的行 = 底部信息条（§2：昵称/座位 · 牌库 n · 弃牌 n · 手牌）
-    const info = renderPlayerInfo(s, player, {
-      isSelf: true,
-      operator: o.operator,
-      label: '自己（你）',
-      align: 'left',
-    });
-    info.appendChild(renderPiles(s, player));
-    side.appendChild(info);
-    side.appendChild(hand);
-    // 操作区只挂在**自己**那一行：`getLegalActions` 是回合制的，挂两份会出现重复按钮
-    side.appendChild(renderNetActionBar(s, o.cb));
-    return side;
-  }
-  // 对手的行：只有手牌 + 一行小标签（信息条与牌库/弃牌堆在顶部那条里，见上面的 I-1 说明）
-  side.appendChild(el('div', 'net-hand-label', `对手手牌 ×${s.players[player].hand.length}`));
-  side.appendChild(hand);
-  return side;
 }
 
 /**
@@ -1044,6 +1144,38 @@ function buildHands(
   return hands;
 }
 
+/**
+ * **底部行**（R6）：`[左信息块, 手牌区, 右信息块]` —— 三块的**顺序**就是"谁在左/中/右"，
+ * 而"左/右是哪个座位"由 `NET_BOTTOM_SIDES` 的单元素切片决定（见下面两条 `for`）。
+ *
+ * 为什么中间那块必须由**本函数** append、而不是让两侧的信息块各自把手牌"夹"进去：
+ * 手牌区只有一个节点（`.net-hands`），它必须**恰好 append 一次**（多一次 = 页面两份 `.hand` ×2
+ * ⇒ FX 按下标取手牌全部拿到旧副本）。所以顺序写死为「左块 → 手牌区 → 右块」。
+ *
+ * ⚠️ **DOM 顺序与视觉左右同构**：`styles-net.css` 第 6 节用
+ * `[data-net-seat="self"] → grid-column: 1`、`[data-net-seat="foe"] → grid-column: 3` 把两块
+ * 钉在左右列，而 `data-net-seat` 就是 `NET_BOTTOM_SIDES` 给的侧别 ⇒ 改常量会**同时**改
+ * DOM 顺序与 CSS 列，两条腿不可能脱钩。`tests/ui/net-lane-tree.test.ts` 的 R6 条把
+ * 两条腿（DOM 顺序 + `grid-column` 解算出的视觉左右）**都**从那个常量推导，改任一条都报红。
+ *
+ * ⚠️ 两条 `for (... of NET_BOTTOM_SIDES.slice(0, 1))` / `.slice(1)` 是**有意分两段**的：
+ * 只有把"手牌区恰好挂在两块之间"写成**单次** `row.appendChild(hands)`，才能同时满足
+ * "DOM 顺序 = [信息块, 手牌, 信息块]" 与 "手牌区恰好挂载一次"。
+ */
+function buildBottomRow(
+  s: GameState, viewSeat: PlayerId, cb: UiCallbacks, operator: PlayerId | null,
+): HTMLElement {
+  const row = el('div', 'net-bottom');
+  row.dataset.viewSeat = String(viewSeat);
+  const blockOf = (side: NetBottomSide): HTMLElement =>
+    renderInfoBlock(s, bottomPlayerOf(side, viewSeat), side, operator, cb);
+  for (const side of NET_BOTTOM_SIDES.slice(0, 1)) row.appendChild(blockOf(side));
+  // 手牌区恒在中间（DOM 位置固定；视觉左右是信息块的事，见本函数的头注）
+  row.appendChild(buildHands(s, viewSeat, cb, operator));
+  for (const side of NET_BOTTOM_SIDES.slice(1)) row.appendChild(blockOf(side));
+  return row;
+}
+
 /* ============================================================================
  * 预览工具条（仅 `opts.onPreviewChange` 存在时渲染）
  *
@@ -1111,7 +1243,8 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
   // ── 入口职责 3/7：本渲染器自己清空并重建 root（F-1：少了它会逐帧线性叠加） ──
   root.textContent = '';
   const viewSeat = opts.viewSeat;
-  const foe = (1 - viewSeat) as PlayerId;
+  // （`foe` 的换算原来在这里，供顶部对手条用；R6 取消顶部条后它已无用 —— 对手侧现在由
+  //   `renderLaneColumn` 与 `bottomPlayerOf` 各自按座位换算。删掉局部变量以免"看起来还在用"。）
   // ── G2 修正 R3：把**当前视角座位**交给 FX 层（**唯一调用点**，幂等）──
   // 必须在任何几何计算 / 任何 FX 播放之前设好：它决定 `stackEndPos` 的落点轴、`gen3-util` 的
   // 覆盖条带方向、以及 `fx-seat.ts` 里全部"自己在下 / 对手在上"的判断。
@@ -1145,20 +1278,9 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
   const wrap = el('div', 'board net-board net-view-' + viewSeat);
   const grid = el('div', 'board-grid net-grid');
 
-  // ── 顶部：对手信息条（昵称/座位 · 手牌 ×n · 牌库 · 弃牌 · 连接状态） ──
-  const foeStrip = el('div', 'player-strip net-strip net-strip-foe');
-  const foeInfo = renderPlayerInfo(s, foe, {
-    isSelf: false,
-    operator: operator === foe,
-    label: '对手',
-    align: 'left',
-  });
-  foeInfo.appendChild(renderPiles(s, foe));
-  foeInfo.appendChild(renderConnectionBadge());
-  foeStrip.appendChild(foeInfo);
-  grid.appendChild(foeStrip);
-
   // ── 3 个纵向的列（每个列 = 对手侧 / 中线 / 自己侧，见 renderLaneColumn 的六层顺序） ──
+  // ⚠️ R6：**顶部信息条已取消**（用户裁决：双方信息条与手牌区同一行、一左一右）。
+  //    对手的信息条与牌库/弃牌堆现在在底部行的那一块里（`buildBottomRow` → `renderInfoBlock`）。
   for (const line of [0, 1, 2] as Line[]) {
     grid.appendChild(renderLaneColumn(s, line, viewSeat, cb));
   }
@@ -1171,9 +1293,15 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
   //    "结果真的进了 DOM"这条证据从源码里消失（我第一版就是套了包装 → 守卫报"结果被丢掉"）。
   grid.appendChild(renderControlModule(s, { axis: 'y', holder: netControlHolder(s, viewSeat) }));
 
-  // ── 底部：两条手牌区（DOM 顺序恒定为绝对玩家顺序 [P0, P1]） ──
-  const hands = buildHands(s, viewSeat, cb, operator);
-  grid.appendChild(hands);
+  // ── 底部行（R6）：信息块（左=自己 / 右=对手，见 NET_BOTTOM_SIDES）· 手牌区（中）· 信息块 ──
+  // 手牌区仍由 `buildHands` 产出，且**两条 `.hand` 的 DOM 顺序恒为绝对玩家顺序 [P0, P1]**（约束 7）；
+  //    `hands` 变量要交给 `renderChoiceUi`（给手牌条加 .choice-mode），故这里保留局部绑定。
+  const bottom = buildBottomRow(s, viewSeat, cb, operator);
+  // `.net-hands` 恒是底部行的**最后一个子节点**（`buildBottomRow` 的挂载顺序：两块信息块 → 手牌区），
+  // 所以这里用 `lastElementChild` 而不是 `querySelector('.net-hands')`：少一次 DOM 查询，
+  // 也避免"若查不到就静默退化成 `bottom`"这种把 `.choice-mode` 加到错误节点上的写法。
+  const hands = bottom.lastElementChild as HTMLElement;
+  grid.appendChild(bottom);
 
   // ⚠️ C-1：grid **必须先挂进 wrap**，选择模式才能找到候选节点 —— `renderChoiceUi` 内部
   // 三处 `wrap.querySelectorAll(...)` 都只对"已经挂在 wrap 下的节点"生效：

@@ -2,9 +2,13 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createGame } from '../../src/core/state/create';
-import { renderNetBoard } from '../../src/ui/render-net';
+import { NET_BOTTOM_SIDES, renderNetBoard } from '../../src/ui/render-net';
 import { setFxViewSeat } from '../../src/ui/fx-seat';
 import { stripComments } from './source-text';
+import {
+  classListOf, descendants, drainRaf, installStubDom, isClass as isClassShared,
+  makeStubEl, walk, type StubNode,
+} from './net-dom-stub';
 
 /**
  * G2 修正 R-F · **C-2 的行为守卫**：用最小 DOM 桩**真跑一遍 `renderNetBoard`**，
@@ -103,19 +107,32 @@ function specificityOf(selector: string): number {
   return n;
 }
 
-/** 该节点（在 `chain` 这一条祖先链下）生效的 `order` 值：权重优先、同权重取**源序靠后**者。 */
-function cssOrderOf(node: StubNode, chain: StubNode[], rules: CssRule[]): number {
-  let best: { spec: number; no: number; val: number } | null = null;
+/** 该节点（在 `chain` 这一条祖先链下）生效的**任意属性**值：权重优先、同权重取**源序靠后**者。
+ *
+ *  `order` 那一份（`cssOrderOf`）是它的前身；R6 需要 `grid-column` —— 与 `order` **完全同一个**
+ *  解算规则（权重 + 源序），所以这里抽成通用版，`order` 也走它（一处实现，不会漂移）。
+ *  返回 `null` = 没有规则命中（用**声明的缺省值**，不要猜）。 */
+function cssPropOf(
+  node: StubNode, chain: StubNode[], rules: CssRule[], prop: string,
+): string | null {
+  let best: { spec: number; no: number; raw: string } | null = null;
+  const re = new RegExp(`(?:^|;|\\s)${prop}\\s*:\\s*([^;]+)`);
   for (const r of rules) {
-    const m = /(?:^|;|\s)order\s*:\s*(-?\d+)/.exec(r.body);
+    const m = re.exec(r.body);
     if (!m) continue;
     if (!selectorMatches(r.selector, chain)) continue;
     const spec = specificityOf(r.selector);
     if (!best || spec > best.spec || (spec === best.spec && r.no > best.no)) {
-      best = { spec, no: r.no, val: Number(m[1]) };
+      best = { spec, no: r.no, raw: m[1].trim() };
     }
   }
-  return best ? best.val : 0;
+  return best ? best.raw : null;
+}
+
+/** 该节点（在 `chain` 这一条祖先链下）生效的 `order` 值（无声明 = 0，CSS 缺省）。 */
+function cssOrderOf(node: StubNode, chain: StubNode[], rules: CssRule[]): number {
+  const raw = cssPropOf(node, chain, rules, 'order');
+  return raw === null ? 0 : Number.parseInt(raw, 10);
 }
 
 /** flex column 的**视觉顺序**：按 `order` 稳定排序（相同 order 保持文档顺序 —— CSS 规范语义）。
@@ -130,125 +147,13 @@ function visualChildren(node: StubNode, chain: StubNode[], rules: CssRule[]): St
 }
 
 /* ============================================================================
- * 最小 DOM 桩（与评审探针同形：只记录结构，不模拟布局）
+ * 最小 DOM 桩（**与 render-net.test.ts 共用同一份** —— 见 ./net-dom-stub 头注：
+ * 复制成两份就会漂移，而漂移的表现恰好是"一个文件绿、另一个红"）
  * ========================================================================== */
 
-interface StubNode {
-  tag: string;
-  cls: string;
-  children: StubNode[];
-  text: string;
-  dataset: Record<string, string>;
-  classList: { add(...c: string[]): void; remove(...c: string[]): void; contains(c: string): boolean };
-  style: Record<string, unknown>;
-  [k: string]: unknown;
-}
-
-function makeEl(tag: string): StubNode {
-  const set = new Set<string>();
-  const node: StubNode = {
-    tag,
-    cls: '',
-    children: [],
-    text: '',
-    classList: {
-      add: (...c: string[]) => { c.forEach((x) => x && set.add(x)); node.cls = [...set].join(' '); },
-      remove: (...c: string[]) => { c.forEach((x) => set.delete(x)); node.cls = [...set].join(' '); },
-      contains: (c: string) => set.has(c),
-    },
-    dataset: {},
-    style: { setProperty: () => { /* 桩只记结构 */ } },
-  };
-  const extra: Record<string, unknown> = {
-    appendChild: (c: StubNode) => { node.children.push(c); return c; },
-    insertBefore: (c: StubNode) => { node.children.unshift(c); return c; },
-    removeChild: () => { /* noop */ },
-    remove: () => { /* noop */ },
-    setAttribute: () => { /* noop */ },
-    getAttribute: () => null,
-    addEventListener: () => { /* noop */ },
-    removeEventListener: () => { /* noop */ },
-    querySelector: () => null,
-    querySelectorAll: () => [],
-    closest: () => null,
-    getBoundingClientRect: () => ({ left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0 }),
-    getContext: () => null,
-    focus: () => { /* noop */ },
-    click: () => { /* noop */ },
-    contains: () => false,
-    innerHTML: '',
-    title: '',
-    alt: '',
-    src: '',
-    width: 0,
-    height: 0,
-    offsetHeight: 0,
-    offsetWidth: 0,
-    firstChild: null,
-    parentNode: null,
-  };
-  Object.assign(node, extra);
-  Object.defineProperty(node, 'className', {
-    get: () => node.cls,
-    set: (v: string) => {
-      node.cls = String(v);
-      set.clear();
-      String(v).split(/\s+/).filter(Boolean).forEach((x) => set.add(x));
-    },
-  });
-  Object.defineProperty(node, 'textContent', {
-    get: () => node.text,
-    set: (v: string) => { node.text = String(v); node.children.length = 0; },
-  });
-  return node;
-}
-
-/** 装一个最小 `document`/`window`（只够 `renderNetBoard` 走完一帧；**不**模拟任何布局）。 */
-function installDom(): () => void {
-  const g = globalThis as { document?: unknown; window?: unknown; requestAnimationFrame?: unknown };
-  const prevDoc = g.document;
-  const prevWin = g.window;
-  const prevRaf = g.requestAnimationFrame;
-  const doc = {
-    createElement: (t: string) => makeEl(t),
-    createElementNS: (_ns: string, t: string) => makeEl(t),
-    createTextNode: (t: string) => ({ text: t }),
-    body: makeEl('body'),
-    documentElement: makeEl('html'),
-    getElementById: () => null,
-    querySelector: () => null,
-    querySelectorAll: () => [],
-    addEventListener: () => { /* noop */ },
-    removeEventListener: () => { /* noop */ },
-  };
-  g.document = doc;
-  g.window = {
-    setTimeout: (fn: () => void, ms?: number) => setTimeout(fn, ms) as unknown as number,
-    clearTimeout: (id: number) => clearTimeout(id),
-    innerWidth: 1920,
-    innerHeight: 1080,
-    addEventListener: () => { /* noop */ },
-    removeEventListener: () => { /* noop */ },
-    requestAnimationFrame: (fn: () => void) => setTimeout(fn, 0) as unknown as number,
-    cancelAnimationFrame: () => { /* noop */ },
-    location: { href: 'http://localhost/' },
-    document: doc,
-    matchMedia: () => ({ matches: false, addEventListener: () => { /* noop */ } }),
-  };
-  g.requestAnimationFrame = (fn: () => void) => setTimeout(fn, 0) as unknown as number;
-  // ⚠️ 渲染器会在**双 rAF** 之后做收尾（移除 no-anim / 滑块过渡），那些回调排在 `restore()` 之后。
-  //    若把 `requestAnimationFrame` 还原成 `undefined`，它们会抛 `TypeError` 并被 vitest 记为
-  //    **未处理异常**（让整份套件变红）。所以还原时留一个**无害的空实现**，并让用例在 restore
-  //    之前先 `await` 一小段把队列跑完（见 `drainRaf`）。
-  return () => {
-    g.document = prevDoc;
-    g.window = prevWin;
-    g.requestAnimationFrame = prevRaf ?? (() => 0);
-  };
-}
-
-/** 跑完渲染器排下的双 rAF 收尾（否则会以"未处理异常"的形式在 restore 之后爆出来）。 */
-const drainRaf = (): Promise<void> => new Promise((r) => { setTimeout(r, 10); });
+const makeEl = makeStubEl;
+const installDom = installStubDom;
+const isClass = isClassShared;
 
 /** 一帧合成局（与评审探针同）：只要"三列 + 两侧 + 能量槽"的结构都在，够本文件用。
  *
@@ -280,16 +185,6 @@ function renderFrame(viewSeat: 0 | 1, cardsPerStack = 0): StubNode {
   return root;
 }
 
-/** 打印用：元素树（深度受控）。 */
-function walk(n: StubNode, depth: number, out: string[], maxDepth: number): void {
-  if (depth > maxDepth) return;
-  const label = `${'  '.repeat(depth)}<${n.tag}${n.cls ? ' class="' + n.cls + '"' : ''}`
-    + `${Object.keys(n.dataset).length ? ' data=' + JSON.stringify(n.dataset) : ''}>`
-    + `${n.text ? ' "' + n.text + '"' : ''}`;
-  out.push(label);
-  for (const c of n.children) walk(c, depth + 1, out, maxDepth);
-}
-
 /* ============================================================================
  * 层序求解：一列 = 六层
  * ========================================================================== */
@@ -299,8 +194,6 @@ type LayerKind = 'battery' | 'stack' | 'protocol';
 interface Layer { side: Side; kind: LayerKind }
 
 const label = (l: Layer): string => `${l.side === 'foe' ? '对手' : '自己'}${l.kind === 'battery' ? '能量槽' : l.kind === 'stack' ? '链路' : '协议'}`;
-
-const isClass = (n: StubNode, c: string): boolean => classesOf(n).includes(c);
 
 /**
  * 一列（`.net-lane-band`）里**自上而下的六层**（DOM 顺序 + CSS `order`）。
@@ -520,5 +413,227 @@ describe('R-F · C-2：真跑 renderNetBoard 的元素树层序（viewSeat 0/1�
     const bySide = batteryOrderRules.filter((r) => /\.net-side-(foe|self)\b/.test(r.selector));
     expect(bySide.length, 'styles-net.css 未按侧（.net-side-foe/.net-side-self）给能量槽定 order')
       .toBeGreaterThanOrEqual(1);
+  });
+
+  /* ==========================================================================
+   * G2 修正 R6：**底部行重排**（信息块 · 手牌区（中） · 信息块）
+   *
+   * 用户裁决（规格 §8.4 第 2 条 / §8.6 的 R6）：双方信息条与手牌区**同一行、一左一右**，
+   * **顶部信息条取消**。这一组是它的**行为机检** —— 用同一份最小 DOM 桩真跑，再按元素树 +
+   * 样式表里的 `grid-column` / `order` 解出"谁在左、谁在右、`.hand` 的 DOM 顺序是什么"。
+   *
+   * ⚠️ 两条**最容易静默搞坏**的地方（本组各有一条专门断言）：
+   *  1. **`.hand` 的 DOM 顺序必须仍是 [P0, P1]**（FX 用 `querySelectorAll('.hand')[player]`
+   *     **按下标**读手牌）—— 左右摆放只能由 CSS 决定，**绝不能让 DOM 顺序跟着视觉左右走**。
+   *     这是"看起来只是 CSS、实际会静默搞坏特效"的唯一一处。
+   *  2. **左右归属**：`NET_BOTTOM_SIDES`（render-net.ts 的**唯一**一处常量）与样式表的
+   *     `grid-column` 必须**同向**。只改一处会出现"DOM 顺序对、看着反"（或反过来）。
+   *     下面把两条腿**都从那个常量推导** ⇒ 改常量、改 CSS、改 DOM 挂载顺序，任一处都会红。
+   * ======================================================================== */
+
+  /** 底部行（`.net-bottom`）里**类名命中 `cls` 的**直接子节点，按 DOM 顺序。 */
+  const blocksIn = (bottom: StubNode, cls: string): StubNode[] =>
+    bottom.children.filter((c) => isClass(c, cls));
+
+  /**
+   * 底部行里各块的**视觉左右顺序**：按样式表实际生效的 `grid-column` 排序
+   * （相同列值 = 同一列，退化为 DOM 顺序；本页三块各占一列，不存在并列）。
+   *
+   * ⚠️ 为什么必须**解算 CSS**而不是"看 DOM 顺序就算视觉顺序"：R6 的左右归属正是**由 CSS 决定**的
+   * （红线：DOM 顺序不得跟着视觉左右走）。只查 DOM 就等于把这条红线当成了实现细节。
+   */
+  function visualOrderOfBottom(bottom: StubNode, chain: StubNode[], rules: CssRule[]): StubNode[] {
+    return bottom.children
+      .map((c, i) => ({
+        c, i,
+        col: (() => {
+          const raw = cssPropOf(c, [...chain, bottom, c], rules, 'grid-column');
+          // `grid-column: 1` / `3`（本页只写单值）；没声明 = `auto`（本页的 `@media` 单列模式）
+          return raw === null || !/^\d+$/.test(raw) ? Number.POSITIVE_INFINITY : Number(raw);
+        })(),
+      }))
+      .sort((a, b) => (a.col - b.col) || (a.i - b.i))
+      .map((x) => x.c);
+  }
+
+  /** `NET_BOTTOM_SIDES` 的**座位 → 绝对玩家**（与 render-net.ts 的 `bottomPlayerOf` 同式）。 */
+  const playerOfSide = (side: string, seat: 0 | 1): number => (side === 'self' ? seat : 1 - seat);
+
+  it('R6-1. 底部行三块：信息块（左）· 手牌区（中）· 信息块（右），左右 = NET_BOTTOM_SIDES', async () => {
+    const restore = installDom();
+    try {
+      for (const seat of [0, 1] as const) {
+        const root = renderFrame(seat);
+        const bottom = descendants(root).find((n) => isClass(n, 'net-bottom'));
+        expect(bottom, `viewSeat=${seat}：元素树里找不到 .net-bottom（底部行没产出 → 信息条无处安放）`)
+          .toBeTruthy();
+        // 祖先链：从 `.net-board` 到 `.net-bottom`（CSS 规则的匹配需要它；与 firstColumnWithChain 同理由）
+        const chain = descendants(root).filter((n) => isClass(n, 'net-board'));
+        const tree: string[] = [];
+        walk(bottom!, 0, tree, 3);
+        console.log(`\n===== viewSeat=${seat} · 底部行元素树（DOM 顺序）=====\n${tree.join('\n')}`);
+
+        const infoBlocks = blocksIn(bottom!, 'net-info-block');
+        const handsBlocks = blocksIn(bottom!, 'net-hands');
+        // ① 三块**恰好**各就位：信息块 ×2 + 手牌区 ×1（多一块就是"两份牌库/弃牌堆"那一族）
+        expect(infoBlocks.length, `viewSeat=${seat}：底部行必须恰好两块 .net-info-block`).toBe(2);
+        expect(handsBlocks.length, `viewSeat=${seat}：底部行必须恰好一块 .net-hands（两条手牌在它里面）`)
+          .toBe(1);
+        // ② 座位互补（不是同一侧画两遍 —— 那会让对手的牌库/弃牌堆与手牌数整块消失）
+        expect(infoBlocks.map((n) => String(n.dataset.netSeat)).sort(),
+          `viewSeat=${seat}：两块信息块的座位必须互补（self/foe）`).toEqual(['foe', 'self']);
+        // ③ 每块挂的是**该侧**的玩家（data-player 是绝对值：viewSeat=1 时 self = P2）
+        for (const block of infoBlocks) {
+          const side = String(block.dataset.netSeat);
+          expect(block.dataset.player, `viewSeat=${seat}：${side} 信息块的 data-player 应是绝对的 `
+            + `${playerOfSide(side, seat)}（实际 ${String(block.dataset.player)}）`)
+            .toBe(String(playerOfSide(side, seat)));
+        }
+        // ④ **左右归属**（R6 的核心）：视觉左→右 必须等于 `NET_BOTTOM_SIDES`
+        const visual = visualOrderOfBottom(bottom!, chain, RULES);
+        const visualSides = visual.map((n) => (isClass(n, 'net-info-block') ? String(n.dataset.netSeat) : 'hands'));
+        const expectedVisual = [...NET_BOTTOM_SIDES.slice(0, 1), 'hands', ...NET_BOTTOM_SIDES.slice(1)];
+        console.log(`  ----- viewSeat=${seat} · 底部行视觉左→右（grid-column 解算）-----\n`
+          + `  ${visualSides.join(' · ')}`);
+        expect(visualSides, `viewSeat=${seat}：底部行的视觉左右必须与 NET_BOTTOM_SIDES `
+          + `（现为 [${NET_BOTTOM_SIDES.join(', ')}]）一致，且手牌区在**中间**`
+          + `（实际：${visualSides.join(' · ')}）`).toEqual(expectedVisual);
+        // ⑤ 手牌区在 DOM 里也**恒在中间**（与视觉一致；DOM 位置不是红线的对象，但两处不一致就是
+        //    "DOM 对、看着反"的温床 —— 例如有人把信息块 append 到手牌区**之后**又靠 order 挪回来）
+        const domOrder = bottom!.children.map((n) => (isClass(n, 'net-info-block') ? 'info' : isClass(n, 'net-hands') ? 'hands' : '?'));
+        expect(domOrder, `viewSeat=${seat}：底部行的 DOM 顺序必须是 [信息块, 手牌区, 信息块]`).toEqual(['info', 'hands', 'info']);
+        // ⑥ DOM 顺序里的侧别必须等于 `NET_BOTTOM_SIDES`（**改常量必须同时改这两条腿**）
+        expect(infoBlocks.map((n) => String(n.dataset.netSeat)), `viewSeat=${seat}：信息块进 DOM 的顺序`
+          + `必须等于 NET_BOTTOM_SIDES（现为 [${NET_BOTTOM_SIDES.join(', ')}]）`)
+          .toEqual([...NET_BOTTOM_SIDES]);
+      }
+    } finally {
+      await drainRaf();
+      restore();
+    }
+  });
+
+  it('R6-2. 顶部信息条已取消（元素树里不得再有顶部条；信息条只存在于底部行的两块里）', async () => {
+    const restore = installDom();
+    try {
+      for (const seat of [0, 1] as const) {
+        const root = renderFrame(seat);
+        const all = descendants(root);
+        // ① 顶部条的两个类名（R6 之前的 `net-strip` / `net-strip-foe`）**一个都不许再产出**。
+        //    为什么这条必须在**行为层**（而不是只查源码文本）：源码删掉 `renderPlayerInfo` 的
+        //    顶部调用之后，旧类名仍可能被别处复制回去；而用户的裁决是"顶部信息条取消"。
+        const strips = all.filter((n) => isClass(n, 'net-strip') || isClass(n, 'net-strip-foe'));
+        expect(strips.map((n) => n.cls), `viewSeat=${seat}：顶部信息条（.net-strip*）仍在产出 `
+          + `—— 用户裁决是"顶部信息条取消"（规格 §8.4 第 2 条）`).toEqual([]);
+        // ② 样式表里也不得残留顶部条的**规则**（否则"顶部还有一条"这件事在 CSS 里留着证据，且
+        //    将来有人把节点加回来就会**静默生效**）。
+        //    ⚠️ 判据必须走**规则选择器**（`cssRules` 去注释后解析），不能拿整份 CSS 文本做子串匹配：
+        //    本文件的注释里**故意**留着"`.net-strip` 的规则随之删除"这句话（给读者交代历史），
+        //    文本匹配会因此假红（我第一版就踩了）。
+        const stripRules = RULES.filter((r) => /\.net-strip\b|\.net-strip-foe\b/.test(r.selector));
+        expect(stripRules.map((r) => r.selector), 'styles-net.css 里仍有 .net-strip / .net-strip-foe 的规则'
+          + '（顶部条已取消；残留规则会让"加回顶部条"变成静默生效）').toEqual([]);
+        // ③ 反空集合：顶部条没了，但**信息条本身必须还在**（在底部行的两块里）——
+        //    否则"取消顶部条"会退化成"整页没有任何信息条"
+        const infos = all.filter((n) => isClass(n, 'player-info'));
+        expect(infos.length, `viewSeat=${seat}：页面上必须仍有两条 .player-info（底部行左/右各一条）`)
+          .toBe(2);
+        const bottom = all.find((n) => isClass(n, 'net-bottom'))!;
+        expect(all.filter((n) => isClass(n, 'player-info') && bottom.children.some((b) => b === n
+          || descendants(b).includes(n))).length,
+        `viewSeat=${seat}：两条 .player-info 必须都挂在底部行（.net-bottom）下`).toBe(2);
+      }
+    } finally {
+      await drainRaf();
+      restore();
+    }
+  });
+
+  it('R6-3. 红线：`.hand` 的 DOM 顺序恒为 [P0, P1]（左右摆放只能由 CSS 决定）', async () => {
+    const restore = installDom();
+    try {
+      for (const seat of [0, 1] as const) {
+        const root = renderFrame(seat);
+        // ① 全页 `.hand` 的**DOM 顺序**（前序遍历 = 文档顺序）必须是 [P0, P1]
+        const hands = descendants(root).filter((n) => isClass(n, 'hand'));
+        expect(hands.length, `viewSeat=${seat}：页面上必须恰好两条 .hand`).toBe(2);
+        expect(hands.map((n) => String(n.dataset.player)), `viewSeat=${seat}：.hand 的 DOM 顺序必须是 `
+          + `[P0, P1]（FX 用 querySelectorAll('.hand')[player] **按下标**读手牌：顺序反了会把特效`
+          + `飞到对手手牌区，不报错也不跳过）`).toEqual(['0', '1']);
+        // ② 两条手牌必须在**同一个** `.net-hands` 里（不是各自散落）—— 否则 `[player]` 的下标语义
+        //    虽然还对，但"一块手牌区"的布局前提被破坏
+        const handsRoot = descendants(root).find((n) => isClass(n, 'net-hands'))!;
+        const inside = descendants(handsRoot).filter((n) => isClass(n, 'hand'));
+        expect(inside.length, `viewSeat=${seat}：两条 .hand 必须都在同一个 .net-hands 里`).toBe(2);
+        // ③ **视觉手序由 CSS `order` 决定**（不是 DOM 顺序）：`.net-hand-area` 上必须有按座位的
+        //    order 规则，且解算出的视觉顺序与"对手在上"一致（`viewSeat=0` → P1 在上、P0 在下）
+        const handsChain = descendants(root).filter((n) => isClass(n, 'net-board'));
+        const areas = handsRoot.children.filter((n) => isClass(n, 'net-hand-area'));
+        expect(areas.length, `viewSeat=${seat}：.net-hands 里应有两块 .net-hand-area`).toBe(2);
+        const visualAreas = areas
+          .map((a, i) => ({ p: String(a.dataset.player), i, o: cssOrderOf(a, [...handsChain, handsRoot, a], RULES) }))
+          .sort((x, y) => (x.o - y.o) || (x.i - y.i));
+        // 对手的牌在上面（viewSeat=0 时对手 = P1、viewSeat=1 时对手 = P0）
+        const foePlayer = String(1 - seat);
+        console.log(`  viewSeat=${seat} · 手牌区视觉上→下（CSS order 解算）: P${visualAreas.map((x) => Number(x.p) + 1).join(' 然后 P')}`);
+        expect(visualAreas[0].p, `viewSeat=${seat}：视觉**上**带必须是**对手**的手牌（P${Number(foePlayer) + 1}）`
+          + `—— 这一条只能由 CSS order 表达，DOM 顺序必须恒 [P0, P1]`)
+          .toBe(foePlayer);
+        // ④ 反空集合：order 必须**真的**来自样式表（若两条规则都没了，解算会退化成 DOM 顺序，
+        //    而 DOM 顺序恰好也是 [P0, P1]，上面那条会**碰巧**绿 —— 所以钉住"按侧/按座位的 order 规则存在"）
+        const orderRules = RULES.filter((r) => /(?:^|;|\s)order\s*:/.test(r.body) && /\.net-hand-area/.test(r.selector));
+        expect(orderRules.length, 'styles-net.css 里没有针对 .net-hand-area 的 order 规则'
+          + '（"谁在上/下"只剩 DOM 顺序这一条腿，而这正是红线不许动的）').toBeGreaterThanOrEqual(2);
+      }
+    } finally {
+      await drainRaf();
+      restore();
+    }
+  });
+
+  /**
+   * R6 的**CSS 解析边界**（诚实披露）：本文件的解析器是简版（`选择器 { 体 }`，不递归 `@media`），
+   * 于是 `@media` 里的规则**整块被跳过** —— 这里替它把话说清楚，免得有人把"解算结果"读成
+   * "所有断点都验过了"。
+   *
+   * 为什么这是**对的**（不是偷懒）：桩没有布局引擎，判不了"窗口够不够宽"；而媒体查询里的规则若
+   * 被当成无条件规则参与解算，会把竖排层序/上下手序判错。所以 R6 的窄屏规则**故意**只写
+   * "退回单列 + 清掉 grid-column"，不写任何 `order`（见 styles-net.css 第 6 节末尾）。
+   * 窄屏观感只能人眼验 —— 这是本任务明确保留的人眼项。
+   */
+  it('R6-4. CSS 解析器跳过 @media（窄屏规则不参与解算）—— 边界声明，防"以为验过了"', () => {
+    expect(netCss, 'styles-net.css 已不再包含 @media 断点（R6 的窄屏取舍被删？）').toContain('@media');
+    const mediaSelectorRules = RULES.filter((r) => /@media/.test(r.selector) || /@media/.test(r.body));
+    expect(mediaSelectorRules.map((r) => r.selector), '@media 的规则漏进了解算器的规则表'
+      + '（简版解析器应整块跳过它；否则其内部的 order/grid-column 会被当成无条件规则）').toEqual([]);
+  });
+
+  /**
+   * R6-5：**布局引擎之外的两条承重声明**（桩查不到、但一旦丢了页面就整体走样）。
+   *
+   * 为什么必须单列一条（诚实边界：桩只解算 `order` / `grid-column`，**不模拟 flex/grid 的盒模型**）：
+   *  - **`.net-grid` 的 `display: grid`**：R1 的"三个纵向的列"是 grid 语义，但样式表里**没有**
+   *    写 `display`（`styles.css:23` 的 `.board-grid` 是 `display: flex; flex-direction: column`）
+   *    ⇒ 三条线会被**纵向堆成三行**（"三个纵向的列"退化成"三条横带"，正是 R1 要修的观感）。
+   *    本文件的层序解算器**看不见**这个（它只查列内的 `order`），所以必须有一条源码级判据。
+   *  - **`.net-bottom` 的列模板**：`max-content minmax(max-content, auto) max-content`
+   *    —— 中列必须是 `max-content` 下界（否则手牌区会被两侧信息块挤窄，R6 的"手牌区居中、
+   *    左右留白对称"就不成立）。
+   *  这两条都是**文本代理**（证明"声明写了"，证明不了浏览器算出来的观感）—— 观感属于人眼项。
+   */
+  it('R6-5. 承重布局声明：.net-grid 必须是三列 grid、.net-bottom 的列模板必须让中列按内容定宽', () => {
+    const gridRule = RULES.find((r) => r.selector.trim() === '.net-grid');
+    expect(gridRule, 'styles-net.css 里找不到 .net-grid 的规则').toBeTruthy();
+    expect(gridRule!.body, '.net-grid 没写 display: grid —— 会继承 .board-grid 的 flex column，'
+      + '三条线被纵向堆成三行（"三个纵向的列"失效）').toMatch(/display:\s*grid/);
+    expect(gridRule!.body, '.net-grid 没有三列模板（三条线并排靠 grid-auto-flow: column，'
+      + '写死模板更稳）').toMatch(/grid-template-columns:\s*repeat\(3,/);
+    const bottomRule = RULES.find((r) => r.selector.trim() === '.net-bottom');
+    expect(bottomRule, 'styles-net.css 里找不到 .net-bottom 的规则（底部行没有布局）').toBeTruthy();
+    expect(bottomRule!.body, '.net-bottom 的列模板必须让中列（手牌区）按**内容**定宽：'
+      + '`max-content minmax(max-content, auto) max-content`（用 1fr 会把手牌区挤窄）')
+      .toMatch(/grid-template-columns:\s*max-content\s+minmax\(max-content,\s*auto\)\s+max-content/);
+    // 手牌区不得被两侧信息块挤歪：中列的两侧留白对称 ⇒ 左右列必须**同宽**（同一份 max-content）
+    //   —— 这条由列模板的字面量承载（两个 max-content 必须完全一样），上面那条正则已钉死。
   });
 });
