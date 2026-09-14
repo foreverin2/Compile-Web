@@ -108,7 +108,8 @@
   background: rgba(0, 0, 0, 0.18);
 }
 
-/* 一侧 = 纵向两层：链路槽 + 协议格（顺序即视觉顺序，能量槽在槽内由 order 摆到外侧端） */
+/* 一侧 = 纵向两层：**对手 = 链路槽 → 协议格**、**自己 = 协议格 → 链路槽**（DOM 顺序即视觉顺序；
+   两侧镜像的理由：中线两边**都是协议** —— 见 `renderSide`。能量槽在槽内由 `order` 摆到外侧端） */
 .net-side { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 
 /* 选中线路/线槽高亮（选择模式 select-line）：整列可点 */
@@ -138,8 +139,10 @@
 .net-lane-band .stack .card .card-back { height: auto; aspect-ratio: 5 / 7; }
 
 /* ── 竖向生长（R1 新语义，替代热座的 .grow-left/.grow-right）──
-   由 `render.ts` 的 `vGrow` 与**绝对玩家号**配对（`.grow-down` = P0 = 自己那一侧、
-   `.grow-up` = P1 = 对手那一侧），与座位无关；座位只决定"哪一侧在上面那一层"。
+   类名是**侧别**语义，由 `render.ts` 的 `vGrow` + `selfPlayer` 配对
+   （`.grow-down` = **自己**那一侧、`.grow-up` = **对手**那一侧），而"哪一号是自己"由**座位**给
+   （`render-net.ts` 传 `selfPlayer: viewSeat`）—— **不是**按绝对玩家号（G2 修正 R-F · C-2：
+   按绝对号会让 `viewSeat = 1` 时"自己向上长、对手向下长"，与规格 §1 的垂直镜像相反）。
    DOM 顺序在 `vGrow` 下恒为「最新 → 最旧」：
    · `.grow-down`（自己）：`flex-start`，`pos 0`（最旧）贴**上端协议**，越新的越往下长；
    · `.grow-up`（对手）：`flex-end`，`pos 0`（最旧）贴**下端协议**，组整体靠下端 ——
@@ -162,13 +165,17 @@
 /* ── 能量槽（`renderBattery` 产出，仍在 `.stack-slot` 内）──
    styles.css:161-179 把它做成**绝对定位**、贴在槽的左右外侧（`left/right: -120px`），
    那是横排槽的形状。竖排后它必须成为**流内子项**并摆在链路的上/下外侧（规格 §1 第 1/6 行）：
-   对手（P1，`.grow-up`）在上、自己（P0，`.grow-down`）在下。
+   **对手在上（层 1）、自己在下（层 6）**。
+   ⚠️ 端归属必须**按侧**（`.net-side-foe` / `.net-side-self`）给，**不能**按绝对玩家号
+   （`.p1`/`.p2` —— R1 曾这么写）：默认预览席位是 `viewSeat = 0`（自己 = P0），
+   于是 `.p1` 那条会把**自己**的能量槽摆到上端、`.p2` 把**对手**的摆到下端
+   —— **两个能量槽双双跑到内侧**，与 §1 相反（G2 修正 R-F · **C-2**；评审用最小 DOM 桩真跑
+   `renderNetBoard` 查元素树实测，现在由 `tests/ui/net-lane-tree.test.ts` 机检）。
    用 `order` 而不是改 DOM：`renderStackSlot` 的产出顺序（链路 → 电池）是**两个渲染器共享**的，
    改它就要动热座页；`order` 是纯 CSS，热座页那条规则一个字都不用改。 */
 .net-lane-band .stack-slot { display: flex; flex-direction: column; min-width: 0; }
 .net-lane-band .stack-slot .stack { order: 2; min-width: 0; }
 .net-lane-band .stack-slot .battery {
-  order: 1;
   position: static;
   left: auto;
   right: auto;
@@ -180,8 +187,8 @@
   align-self: center;
   margin: 0;
 }
-.net-lane-band .stack-slot.p1 .battery { order: 1; }   /* 对手：能量槽在链路**上**方 */
-.net-lane-band .stack-slot.p2 .battery { order: 3; }   /* 自己：能量槽在链路**下**方 */
+.net-lane-band .net-side-foe .stack-slot .battery { order: 1; }   /* 对手：能量槽在链路**上**方（层 1） */
+.net-lane-band .net-side-self .stack-slot .battery { order: 3; }  /* 自己：能量槽在链路**下**方（层 6） */
 /* 外壳：styles.css:201-220 是"宽 92px × 高 100%（撑满槽高）"的**竖条**（10 格竖排）。
    本页把它交回内容高度（10 格 × 15px + 间隙 ≈ 200px）—— 不改 10 格的排列方向本身，
    那属于热座页的观感，不在 R1 范围内（R1 只挪位置）。 */

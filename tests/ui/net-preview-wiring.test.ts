@@ -133,6 +133,52 @@ describe('G2 Task 4 · 接线：远程页进入产物 + 重渲染路由唯一入
       .toMatch(/renderMode\s*=\s*'hotseat'/);
   });
 
+  /**
+   * **R-F · I-1**：FX 视角座位（`fx-seat.ts` 的模块态）必须随"离开远程页的每一条路径"复位。
+   *
+   * ## 这条守卫为什么必须有（评审实测：反向变异**绿**）
+   *
+   * `resetToMainInterface()` 复位了 `renderMode` / `netViewSeat` / `resetNetUiState()`，
+   * 却**没有** `setFxViewSeat(null)`（当时全仓零生产调用）。于是"远程页预览跑过一帧 →
+   * 返回主界面 → 开热座"这条**用户验收必走**的路径上，热座 FX 读到非 null 座位、
+   * 走竖向分支：落点翻边、覆盖条带变横带、控制轨特效变竖向 —— 而且**不报任何错**。
+   * 评审的变异 M-A3（**补上**这行复位）当时的全套测试**全绿**，证明**没有任何断言要求它**。
+   *
+   * ## 判据（钉规格，不钉某一行）
+   *
+   * "进入热座"在 `main.ts` 里恰好有两个入口（`resetToMainInterface` 与 `showModeSelect`
+   * 的 `startHotseat`），**每一个**都必须把座位复位成 `null` —— 也就是"每当
+   * `renderMode = 'hotseat'` 被赋值，同一条路径上都要复位座位"。
+   * 数量断言（= 2）是**反空集合**：将来新增第三个入口时它会立刻要求同步，
+   * 而不是让新入口悄悄漏掉复位（这正是 I-1 的形态）。
+   */
+  it('5b. 进入热座的**每一条路径**都必须复位 FX 视角座位（跨页残留 = 热座零变化不成立）', () => {
+    const main = mainSrc();
+    // ① 返回主界面那条路径
+    expect(functionBody(main, 'resetToMainInterface'),
+      'resetToMainInterface 未复位 FX 视角座位（预览过一帧后返回主界面再开热座，'
+      + '热座 FX 会走竖向分支：落点翻边 / 覆盖条带变横带 / 控制轨变竖向）')
+      .toMatch(/setFxViewSeat\(\s*null\s*\)/);
+    // ② "直接开热座"那条路径（幂等复位：任何历史路径进来都不带上一页的座位）
+    const mode = functionBody(main, 'showModeSelect');
+    const hotseat = mode.slice(mode.indexOf('startHotseat:'));
+    expect(hotseat, 'startHotseat 未复位 FX 视角座位（从"开发中"或任何历史路径进来会带着上一页的座位）')
+      .toMatch(/setFxViewSeat\(\s*null\s*\)/);
+    // ③ 反空集合：`renderMode = 'hotseat'` 的赋值点必须**恰好**两处（多一处就会漏复位 → 报红要求同步）
+    const setters = occurrences(main, "renderMode = 'hotseat'");
+    expect(setters.length, `进入热座的入口数量变了（${setters.length} 处）—— 每一个新入口都必须同时复位`
+      + ` FX 视角座位：\n${setters.join('\n')}`).toBe(2);
+    // ④ 复位的**来源**必须是 fx-seat（不是本地糊一个同名函数）
+    expect(main, 'main.ts 未 import setFxViewSeat（复位的是别的东西？）')
+      .toMatch(/import \{[^}]*setFxViewSeat[^}]*\} from '\.\/ui\/fx-seat'/);
+    // ⑤ 反向：热座页源码仍不许出现座位写入（否则"热座恒 null"的构造性证明失效）
+    expect(stripComments(read('src/ui/render.ts')), 'render.ts 出现了座位写入（热座页会读到非 null 座位）')
+      .not.toMatch(/\b(apply|set)FxViewSeat\s*\(/);
+    // ⑥ 反向：远程页仍必须在渲染时设座位（否则"复位"会退化成"永远 null"、远程页方向全错）
+    expect(read('src/ui/render-net.ts'), '远程页不再设座位（FX 会永远按热座左右算）')
+      .toMatch(/applyFxViewSeat\(/);
+  });
+
   it('6. 预览入口：home.ts 的模式卡 + main.ts 的 startNetPreview 三件事', () => {
     const home = stripComments(read('src/ui/home.ts'));
     expect(home, 'ModeSelectNav 未定义 startNetPreview（宿主无法接上预览入口）')

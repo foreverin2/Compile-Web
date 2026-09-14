@@ -14,6 +14,9 @@ import { renderApp, renderDraft, resetUiState, syncCompiledFxLayers, syncSmokeOv
 // 在此之前它没有任何生产代码引用它（Task 3/3F/3F2 改了 700+ 行而产物哈希一字未动），
 // 也就是说 build 那道门此前对整个远程页是瞎的。
 import { renderNetBoard, resetNetUiState } from './ui/render-net';
+// G2 修正 R-F · I-1：离开远程页时要复位 **FX 视角座位**（`fx-seat.ts` 的模块态）。
+// 它是本模块唯一需要知道的 FX 层状态 —— 与 `renderMode`/`netViewSeat` 一样属于"页面级开关"。
+import { setFxViewSeat } from './ui/fx-seat';
 import { openControlRearrangeModal, closeControlRearrangeModal, refreshControlRearrangeModal, isControlRearrangeOpen, orderChanged, orderToAction } from './ui/control-rearrange';
 import { renderHome, renderCoin, renderLibrary, renderRules, renderModeSelect } from './ui/home';
 import { newMatchSeed } from './ui/match-seed';
@@ -560,6 +563,11 @@ function showModeSelect(): void {
       // 显式复位（幂等）：从"单人/三人开发中"或任何历史路径过来时，保证是热座模式。
       // 防的是"预览模式泄漏到热座"这一类串味（另一个堵点是 resetToMainInterface）。
       renderMode = 'hotseat';
+      // G2 修正 R-F · **I-1 的第二个堵点**：FX 视角座位也必须一并复位（"直接开热座"这条路径）。
+      // 它与 `renderMode` 是**两件事**：`renderMode` 决定画哪一页，座位决定 FX 走竖向还是横向分支。
+      // 漏掉这一句时，页面画的是热座盘，而 FX 仍按上一页的座位算 —— 落点翻边、覆盖条带变横带、
+      // 控制轨特效变竖向，**不报任何错**。
+      setFxViewSeat(null);
       gameOptions = { ban, randomPool };
       showCoin();
     },
@@ -638,6 +646,15 @@ function resetToMainInterface(): void {
   effectRearrangeKey = null; // 效果内重排窗口的会话键随局清空
   resetUiState();
   resetNetUiState(); // 远程页自有模块态（与上一行并排：两页的状态分属两个模块）
+  // ── G2 修正 R-F · I-1：**FX 视角座位也必须复位**（与上面两行并排：三种模块态各归各的模块）──
+  // 它是"离开远程页"这条路径上的**第三个**必须清掉的跨页状态：
+  //   · `resetUiState()`  清 render.ts（热座页）的 UI 模块态；
+  //   · `resetNetUiState()` 清 render-net.ts（远程页）的模块态；
+  //   · `setFxViewSeat(null)` 清 **FX 层的视角座位**（`fx-seat.ts`）—— 它由远程页渲染时写入，
+  //     热座页从不写；漏掉它就会出现「远程页预览跑过一帧 → 返回主界面 → 开热座」时
+  //     热座 FX 仍走**竖向**分支：落点翻边、覆盖条带变横带、控制轨特效变竖向，且**不报任何错**。
+  //     （R3 报告当时宣称"热座页观感零变化 ✅"—— 那只在"本次会话从未渲染过远程页"时成立。）
+  setFxViewSeat(null);
   renderMode = 'hotseat'; // 防"预览模式泄漏到热座"（见本节注释）
   netViewSeat = 0;
   // 手牌可见性无需复位：本页无该选项（档位字段已删，恒为信息遮蔽，I-2/N4）。

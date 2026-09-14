@@ -8,7 +8,9 @@
  *   ① 对手能量槽 → ② 对手链路（卡 180°，越新越**上**）→ ③ 对手协议（顺时针 90°）
  *   → ④ 自己协议（逆时针 90°）→ ⑤ 自己链路（卡 0°，越新越**下**）→ ⑥ 自己能量槽
  * （能量槽由 `renderBattery` 产出在**槽内**，靠 CSS 的 `order` 摆到链路外侧端 —— 见
- * `styles-net.css` 第 4 节；这样"一格一卡"的 A 类钩子产出方拼写完全不用动。）
+ * `styles-net.css` 第 4 节；那两条 `order` 规则**按侧**给（`.net-side-foe` / `.net-side-self`），
+ * 不按绝对玩家号（R-F · C-2）；这样"一格一卡"的 A 类钩子产出方拼写完全不用动。
+ * 中线两侧**都是协议**，故 `renderSide` 的挂载顺序**按侧镜像**（对手 = 链路→协议、自己 = 协议→链路）。
  *
  * 推导依据（规格 §1 的复核）：这套规格**等价于把热座页的"每条线一行"整体旋转 −90°** ——
  * 热座自己卡 +90° → 0°；对手卡 −90° → 180°；自己协议 0° → −90°；对手协议 180° → +90°；
@@ -602,11 +604,19 @@ function renderPiles(s: GameState, player: PlayerId): HTMLElement {
 
 /** 一侧的「链路槽（含能量槽）」+「协议格」两份。
  *
- *  ⚠️ **产出顺序 = 视觉顺序**（`styles-net.css` 第 4 节）：链路槽在前、协议格在后，
- *  能量槽由 `renderBattery` 生在**槽内**、再由 CSS `order` 挪到槽的**上边**（对手）或**下边**（自己）。
- *  这样"一格一卡"的 A 类钩子产出方拼写一个字符都不用改（约束 1）。
+ *  ⚠️ **DOM 顺序 = 视觉顺序（列内自上而下），而两侧是镜像的**（G2 修正 R-F · **C-2**）：
+ *  - **对手侧**（上半）：链路槽（§1 层 2）在**前**、协议格（层 3）在后 ⇒ 协议**贴中线**；
+ *  - **自己侧**（下半）：协议格（层 4）在**前**、链路槽（层 5）在后 ⇒ 协议**贴中线**。
  *
- *  `kind`：`'foe' | 'self'`（**只用来选类名与朝向**，`data-player` 仍写绝对玩家号）。 */
+ *  R1 曾对两侧都挂 `[链路槽, 协议格]`（那只对上半成立），于是**自己协议落到整列最外端**
+ *  —— 这正是 C-2，评审用最小 DOM 桩真跑 `renderNetBoard` 查元素树才发现。
+ *  现在 `tests/ui/net-lane-tree.test.ts` 把"一列自上而下 = §1 的六层"钉成**行为机检**。
+ *
+ *  能量槽在**链路槽内部**，由 CSS `order` 摆到自己链路的**外端**（对手在上 / 自己在下）；
+ *  那两条规则**按侧**（`.net-side-foe` / `.net-side-self`）给，**不是**按绝对玩家号
+ *  （`.p1`/`.p2`）—— "哪一侧是自己"由**座位**决定，绝对号会随席位翻转（C-2 的第二个成因）。
+ *
+ *  `kind`：`'foe' | 'self'` —— 选类名、朝向、挂载顺序与生长类；`data-player` 仍写**绝对玩家号**。 */
 function renderSide(
   s: GameState,
   player: PlayerId,
@@ -621,7 +631,9 @@ function renderSide(
   const { uid } = getHandSelection();
   // 只有当前回合玩家的链路槽可交互（与热座页一致：interactable 由引擎回合归属决定）
   const myTurn = isTurn(s, player);
-  side.appendChild(renderStackSlot(
+  // ⚠️ 两个节点**先建后按侧挂载**：本页守卫第 2 条的判据是 `appendChild(<call>` 或 `= <call>`
+  //    （"结果真的流进 DOM"）—— 绑定成局部变量再挂载仍然满足，而顺序由下面的 `kind` 分支决定。
+  const slotNode = renderStackSlot(
     s, player, line, myTurn ? uid : null,
     (l) => playToLine(s, cb, l, player),
     myTurn,
@@ -630,20 +642,29 @@ function renderSide(
       // 缺省值用的是 `s.turnPlayer`（那是回合），在远程页会让高亮每回合翻面。
       isSelfSlot: isSelfSeat,
       orient: isSelfSeat ? 0 : 180,
-      // 竖向生长（R1）：自己向下（`.grow-down`）/ 对手向上（`.grow-up`）。
-      // ⚠️ 这里用 `player`（绝对玩家号）而不是 `isSelfSeat`：`grow-*` 的 CSS 语义是"P0 向下 / P1 向上"，
-      // 与座位无关 —— 座位只决定"哪一侧在上面那一层"。
+      // 竖向生长（R1/R-F）：自己向下（`.grow-down`）/ 对手向上（`.grow-up`）。
+      // ⚠️ 方向必须按**侧**给：`selfPlayer` 告诉共享助手"哪一号是下半部"（本页 = `viewSeat`）。
+      //    按绝对玩家号给会让 `viewSeat = 1` 时"自己向上长、对手向下长"（C-2 的同族缺陷）。
       vGrow: true,
+      selfPlayer: viewSeat,
       // 特效朝向标记（约束 8；R1 只产出、R2 才读）：自己 ccw、对手 cw。
       fxRot: isSelfSeat ? 'ccw' : 'cw',
     },
-  ));
+  );
   // 协议格朝向同样按座位：自己逆时针 90°（`.net-rot-ccw`）、对手顺时针 90°（`.net-rot-cw`）。
   // ⚠️ `orient`（0 / 180）是**卡面**朝向，`extraClass` 是**协议图**的 ∓90° —— 两套朝向并存，
   // 理由见文件头约束 2（`.rot-cw/.rot-ccw` 会被 `orientOf` 当卡面朝向读，故协议用自己的类）。
-  side.appendChild(renderProtocolCell(
+  const protoNode = renderProtocolCell(
     s, player, line, isSelfSeat ? 0 : 180, isSelfSeat ? 'net-rot-ccw' : 'net-rot-cw',
-  ));
+  );
+  // ── 层序（§1）：中线两侧**都是协议**，所以两侧的挂载顺序必须镜像 ──
+  if (kind === 'self') {
+    side.appendChild(protoNode);   // 层 4：自己协议（贴中线）
+    side.appendChild(slotNode);    // 层 5：自己链路（协议外侧）
+  } else {
+    side.appendChild(slotNode);    // 层 2：对手链路（协议外侧）
+    side.appendChild(protoNode);   // 层 3：对手协议（贴中线）
+  }
   return side;
 }
 
@@ -670,9 +691,10 @@ function renderLaneMid(s: GameState, line: Line): HTMLElement {
  * 一条线 = **一个纵向的列**（G2 修正 R1）。列内自上而下严格是规格 §1 的六层：
  *   对手能量槽 → 对手链路 → 对手协议 → 自己协议 → 自己链路 → 自己能量槽
  *
- * 本函数只负责**其中四层的挂载顺序**（对手侧 / 中线 / 自己侧）—— 能量槽在链路**槽内**，
- * 由 CSS `order` 摆到外侧端（见 `renderSide` 的说明）。三个列由 `renderNetBoard` 的
- * `for (const line of [0, 1, 2])` 并排产出 ⇒ **整块棋盘从"三条横带"变成"三个竖列"**。
+ * 本函数只负责**三段的挂载顺序**（对手侧 → 中线 → 自己侧）—— 每一侧内部的层序（链路/协议）
+ * 由 `renderSide` 按 `kind` 镜像，能量槽在链路**槽内**由 CSS `order` 摆到外侧端（见两者说明）。
+ * 三个列由 `renderNetBoard` 的 `for (const line of [0, 1, 2])` 并排产出
+ * ⇒ **整块棋盘从"三条横带"变成"三个竖列"**。
  *
  * 视觉上的"上/下"按 `viewSeat` 换算成绝对玩家号（`foe = 1 - viewSeat`，故 `viewSeat = 1` 时
  * 整列垂直镜像），但 `data-player` 永远写**绝对值**（设计稿 §6.2）。

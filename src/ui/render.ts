@@ -25,6 +25,10 @@ import { fitRotatedProtocol } from './zoom-layout';
 // G2 Task 3：朝向类型（单一出处 src/ui/fx-orient.ts）。这里只**用类型**驱动朝向参数，
 // 运行时判定仍全部走 orientOf（FX 侧）；本文件是**产出方**，允许命名朝向类名。
 import type { CardOrient } from './fx-orient';
+// G2 修正 R-F · Minor M-4：控制轨"贴端距离"的**单一出处**（`fx-seat.ts` 的常量）。
+// ⚠️ 只 import 这个**纯数据常量** —— 本文件（热座页）**不得**读 `fxViewSeat()` / 调用
+// `setFxViewSeat`（那会破坏"热座零变化是构造性的"这条红线，守卫会报红）。
+import { FX_TRACK_EDGE_PCT } from './fx-seat';
 
 export interface UiCallbacks {
   onAction(a: LegalAction): void;
@@ -232,8 +236,8 @@ export function renderStackSlot(
     orient?: CardOrient;
     /** **竖向生长**（G2 修正 R1，远程页三列纵向布局）。默认 `false` = 热座页的横向生长，逐字等价：
      *  - `false`：`.stack` 保持 `.grow-left`（P0）/`.grow-right`（P1），DOM 顺序按绝对玩家（旧行为）；
-     *  - `true`：`.stack` 改挂 `.grow-up`（P1/对手）/`.grow-down`（P0/自己），并把**渲染顺序反转**
-     *    成「最新 → 最旧」。
+     *  - `true`：`.stack` 改挂 `.grow-up`（**对手**）/`.grow-down`（**自己**），并把**渲染顺序反转**
+     *    成「最新 → 最旧」。哪一号是自己由 `selfPlayer` 给（**按侧**，不是按绝对玩家号）。
      *
      *  ⚠️ 为什么渲染顺序必须一起反转（这是本参数存在的一半理由，另一半是类名）：
      *  `pos 0`（最旧）永远贴协议一侧、越新的越向外长，与横排的语义完全一致。横排时 `.card + .card`
@@ -246,6 +250,13 @@ export function renderStackSlot(
      *  ⚠️ 契约红线：`.stack` **不是** A 类钩子（`fx-dom-contract.ts` §D 的说明），
      *  `.grow-*` 纯 CSS 语义，故 FX 读侧不受影响。 */
     vGrow?: boolean;
+    /** 竖向生长时**哪一号是"自己"**（缺省 `0` ⇒ 与 R1 的 `player === 0 ? grow-down : grow-up` 逐字等价）。
+     *
+     *  ⚠️ 为什么必须有这个参数（G2 修正 R-F · C-2 的同族缺陷）：`grow-*` 是**侧别**语义
+     *  （规格 §1 第 2/5 行：自己越新越**下**、对手越新越**上**），而"哪一号是自己"由**座位**决定。
+     *  按绝对玩家号给会让 `viewSeat = 1`（我是 P2）时**自己向上长、对手向下长** —— 与"垂直镜像"相反。
+     *  远程页传 `viewSeat`；热座页**不传** `vGrow`，故这个字段在热座路径上不可达。 */
+    selfPlayer?: PlayerId;
     /** **特效朝向标记**（G2 修正 R1 只负责**产出**，读侧是 R2 的 `fxOrientOf`）。
      *  给了就逐张卡写 `data-fx-rot="…"`。默认不写 ⇒ 热座页 DOM 上**一个字节都不多**，
      *  于是「热座零变化」是构造性的（R2 的回退分支走 `orientOf`），
@@ -266,9 +277,12 @@ export function renderStackSlot(
   const cards = s.players[player].stacks[line];
   // G2 修正 R1：竖向生长（远程页）改挂 `.grow-up`（对手，向上长）/ `.grow-down`（自己，向下长）。
   // 类名是**纯 CSS 语义**（规则在 styles-net.css），契约不涉及（`.stack` 不是 A 类钩子）。
+  // G2 修正 R-F · C-2：**哪一号是自己**由 `opts.selfPlayer` 给（远程页按座位传 `viewSeat`）——
+  // 按绝对玩家号会让换席位后"自己向上长、对手向下长"。缺省 `0` 与 R1 逐字等价。
   // 默认分支与改动前逐字等价：`player === 0 ? ' grow-left' : ' grow-right'`。
+  const selfPlayer = opts?.selfPlayer ?? 0;
   const growCls = opts?.vGrow
-    ? (player === 0 ? ' grow-down' : ' grow-up')
+    ? (player === selfPlayer ? ' grow-down' : ' grow-up')
     : (player === 0 ? ' grow-left' : ' grow-right');
   const pile = el('div', 'stack' + growCls);
   // 放置顺序：pos 0（最旧）贴协议一侧，越新的牌越靠外侧。
@@ -1911,7 +1925,11 @@ function bindShieldDrag(shield: HTMLElement, player: PlayerId, hand: HTMLElement
  * 由于渲染模型每次重建 DOM，直接设置 left 不会触发 transition；因此先写入上一帧
  * 位置、下一帧再写入目标位置，让 left 0.5s 过渡真正产生滑动动画。
  */
-const CONTROL_EDGE_PCT = 4; // 持有方贴端距离（左端 4% / 右端 96%，控制卡仍不出轨）
+// ⚠️ G2 修正 R-F · Minor M-4：这个"贴端距离"（左端 4% / 右端 96%）**不是**本文件自己的数字 ——
+//    它是 `fx-seat.ts` 的 `FX_TRACK_EDGE_PCT`（**单一出处**），因为 FX 侧的控制轨落点
+//    （`fxTrackEndFor`）必须与滑块的贴端位置**逐字一致**，否则"滑块贴 4%、特效算在别处"。
+//    R3 之前两处各写死一个 4，靠注释说"同源"，没有任何机检连起来（评审 Minor M-4）。
+const CONTROL_EDGE_PCT = FX_TRACK_EDGE_PCT; // 持有方贴端距离（左端 4% / 右端 96%，控制卡仍不出轨）
 let controlSliderPos = 50;
 
 /**

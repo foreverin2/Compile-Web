@@ -30,10 +30,28 @@
  */
 
 import type { Card, GameState, Line, PlayerId } from '../core/models/types';
-import { fxOrientOf } from './fx-orient';
+import { fxRotMarkerOf } from './fx-orient';
 import {
-  domRectOf, fxViewSeat, vClipInsetCss, vClipInsetPct, vVisibleStripRect, type FxOuter,
+  domRectOf, fxOuterFor, fxViewSeat, vClipInsetCss, vClipInsetPct, vVisibleStripRect, type FxOuter,
 } from './fx-seat';
+
+/**
+ * "覆盖卡的 `data-fx-rot` 标记缺失"的**诊断信号**（G2 修正 R-F · Minor M-3）。
+ *
+ * 为什么需要：`coveredOuterOf` 的兜底虽然方向正确，但它意味着**渲染期少产出了一条属性**
+ * （`renderStackSlot` 的 `fxRot`）—— 那是 R2 那套"特效朝向"机制的输入。少了它，
+ * 覆盖方向这一处还能自愈，别处（`fxOrientOf`）会静默回退到卡面朝向 ⇒ 整类特效差 90°。
+ * 所以这里留一条**控制台痕迹**，并且**按 uid 去重**（每张卡最多一条，避免逐帧刷屏）。
+ */
+const warnedMissingFxRot = new Set<string>();
+
+function warnMissingFxRot(coverUid: string): void {
+  if (warnedMissingFxRot.has(coverUid)) return;
+  warnedMissingFxRot.add(coverUid);
+  console.warn(`[gen3-util] 覆盖卡 ${coverUid} 上读不到 data-fx-rot：`
+    + '覆盖方向已按"该卡属主 + 座位"兜底（方向仍正确），但远程页场上卡本应逐卡带标记'
+    + '（renderStackSlot 的 fxRot ⇒ render.ts 的 data-fx-rot）—— 别处会静默退回卡面朝向');
+}
 
 /** 找到该卡所在链路与下标（找不到返回 null） */
 export function locate(s: GameState, uid: string): { player: PlayerId; line: Line; index: number; card: Card } | null {
@@ -61,14 +79,27 @@ function nodeOf(uid: string): HTMLElement | null {
 }
 
 /**
- * **覆盖方向**的单一判定（G2 修正 R3）。
+ * **覆盖方向**的单一判定（G2 修正 R3；兜底策略见下面的"显式契约"）。
  *
  * @returns `null` = 热座（走原来的"覆盖者在右"逻辑）；`'start'` = 覆盖者在小端（远程自己侧，
  *          露出**上段**）；`'end'` = 覆盖者在大端（远程对手侧，露出**下段**）。
  *
- * 判据来自覆盖卡自己的 `data-fx-rot`（见文件头）。读不到标记时兜底为 `'end'`（= 对手侧语义）——
- * 这个兜底**只在远程页**可达，且 `render-net.ts` 的运行时断言 4（约束 9）会逐卡核对标记存在性，
- * 所以它不会静默发生；写成确定值而不是抛异常，是为了守住"诊断/特效绝不把渲染搞崩"这条既有纪律。
+ * ## 判据链（逐级）
+ * 1. 覆盖卡自己的 `data-fx-rot`（`ccw` = 自己 ⇒ `'end'`、`cw` = 对手 ⇒ `'start'`）；
+ * 2. **标记读不到**（G2 修正 R-F · Minor M-3）⇒ 按**本卡属主 + 座位**兜底
+ *    （`fxOuterFor(loc.player)`：自己 ⇒ `'end'`、对手 ⇒ `'start'` —— 与标记**同义**，
+ *    因为 `render-net.ts` 的标记就是按"这张卡在哪个视觉侧"给的），并 `console.warn` **一次**。
+ *
+ * ## 显式契约：为什么可以兜底、以及为什么不再是"静默按对手侧"
+ *
+ * - 远程页的场上卡**结构上必然带标记**（R1 逐卡产出；`render-net.ts` 的运行时断言 3 会逐卡核对），
+ *   所以第 2 级在正确实现下**不可达**；它存在只是为了守住既有纪律"**诊断/特效绝不把渲染搞崩**"
+ *   （抛异常会把整帧特效链条打断，比方向错更糟）。
+ * - R3 的旧兜底是一个**常量 `'start'`**（恒等于"对手侧"）—— 自己列被覆盖时会**静默反向**。
+ *   现在兜底值由"属主 + 座位"算出：即使标记真的丢了，方向**仍然是正确的**（只是失去了
+ *   "一条链路里混朝向"这类将来的可扩展性）。
+ * - `console.warn` **按覆盖卡 uid 去重**（每张卡最多一条）：它是"标记丢了"这件事在控制台里的
+ *   唯一痕迹 —— 没有它，这类退化在页面上完全无声。
  */
 export function coveredOuterOf(s: GameState, uid: string): FxOuter | null {
   const cover = coverUidOf(s, uid);
@@ -76,9 +107,19 @@ export function coveredOuterOf(s: GameState, uid: string): FxOuter | null {
   // 热座（`fxViewSeat() === null`）⇒ 返回 null，调用方走原来的"覆盖者在右"逻辑。
   if (fxViewSeat() === null) return null;
   const coverNode = nodeOf(cover);
-  // `ccw` = 自己（−90°，下半部）⇒ 新牌在**下方** ⇒ 覆盖者在**下** ⇒ 屏幕大坐标端 `'end'`；
-  // 其余（`cw` = 对手）⇒ 覆盖者在**上** ⇒ `'start'`。与 fx-seat 的 `fxOuterFor` 同一套屏幕语义。
-  return fxOrientOf(coverNode) === -90 ? 'end' : 'start';
+  // 用 `fxRotMarkerOf`（而不是 `fxOrientOf`）：后者会把"标记缺失"回退成**卡面**朝向
+  // （远程页卡面是 0°/180°）⇒ 于是一切都会被判成"不是 ccw" ⇒ 恒 `'start'`。这里要的就是
+  // "缺失"这个事实本身。
+  const marker = fxRotMarkerOf(coverNode);
+  if (marker === 'ccw') return 'end';    // 自己（−90°，下半部）⇒ 新牌在**下方** ⇒ 覆盖者在下 ⇒ 大坐标端
+  if (marker === 'cw') return 'start';   // 对手（+90°，上半部）⇒ 新牌在**上方** ⇒ 覆盖者在上
+  // ── 第 2 级：标记缺失/取值不认识（见上面的显式契约）──
+  warnMissingFxRot(cover);
+  // `coverUidOf` 取的是**同一条链路**里紧邻上方的那张 ⇒ 与本卡恒同属主、同侧，
+  // 所以"按本卡属主 + 座位"兜底与标记同义。
+  const loc = locate(s, uid);
+  if (!loc) return 'end';               // 理论上不可达（coverUidOf 已经要求能定位本卡）
+  return fxOuterFor(loc.player);
 }
 
 /**

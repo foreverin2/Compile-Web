@@ -16,7 +16,7 @@ import { cardPointValue, getLineValue } from '../core/state/create';
 import { cardCommandDisabled, isUncovered } from '../core/effects/context';
 import { visibleRectOf } from './gen3-util';
 // G2 修正 R3：控制轨**端归属**按座位判（自己端在下 / 对手端在上）；热座 `null` ⇒ 走改动前的左右逻辑。
-import { fxTrackEndPos, fxViewSeat } from './fx-seat';
+import { fxTrackEndPos, fxTrackFallbackPct, fxViewSeat } from './fx-seat';
 import { protocolColorOf } from './protocol-colors';
 
 /* ============================== 小工具 ============================== */
@@ -678,12 +678,18 @@ function controlTrackAxis(): 'x' | 'y' {
 /**
  * 轨道取不到时的兜底坐标（视口百分比）。G2 修正 R3：轴向不同，兜底轴也不同 ——
  * 热座用改动前的 22%/78%（x），远程页用 82%/18%（y：自己端在下）。**改动前的两个数字原样保留**。
+ *
+ * ⚠️ **G2 修正 R-F · Minor M-5**：原来这里就地按座位算方向
+ * （`const self = fxViewSeat() === null ? to === 0 : to === fxViewSeat()`）—— 评审 §D 的
+ * "方向判断是否已全部集中"普查里的**漏网处**，且**无单测**。现在判据与两个量都收进
+ * `fx-seat.ts` 的 `fxTrackFallbackPct`（走 `fxIsSelfSide`，六个组合都有绝对断言）——
+ * 它与 `fxTrackEndFor`（滑块端归属）永远同向，不会再"改一处忘另一处"。
+ * 横向的 22%/78% 仍留在这里：那是**绝对玩家号 0/1 ⇒ 视口左右**的映射（与视角无关）。
  */
 function viewportFallback(to: PlayerId): { x: number; y: number } {
-  const self = fxViewSeat() === null ? to === 0 : to === fxViewSeat();
   return {
     x: to === 0 ? Math.max(80, window.innerWidth * 0.22) : Math.min(window.innerWidth - 80, window.innerWidth * 0.78),
-    y: self ? window.innerHeight * 0.82 : window.innerHeight * 0.18,
+    y: window.innerHeight * fxTrackFallbackPct(fxViewSeat(), to),
   };
 }
 

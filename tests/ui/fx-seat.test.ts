@@ -1,11 +1,12 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
-  applyFxViewSeat, domRectOf, fxHandEndPoint, fxOuterFor, fxStackEndPoint, fxTrackEndFor, fxTrackEndPos,
-  fxViewSeat, handOuterFor, handReversed, setFxViewSeat, vClipInsetCss, vClipInsetPct,
-  vOuterEdgeOf, vStackEndPoint, vVisibleStripRect,
+  applyFxViewSeat, domRectOf, fxHandEndPoint, fxIsSelfSide, fxOuterFor, fxOuterForSeat, fxStackEndPoint,
+  fxTrackEndFor, fxTrackEndPos, fxTrackFallbackPct, fxViewSeat, FX_TRACK_EDGE_PCT, handOuterFor,
+  handReversed, setFxViewSeat, vClipInsetCss, vClipInsetPct, vOuterEdgeOf, vStackEndPoint, vVisibleStripRect,
 } from '../../src/ui/fx-seat';
+import { fxOrientOf, fxRotMarkerOf } from '../../src/ui/fx-orient';
 import { clipInsetCss, clipInsetRightPct, coverUidOf, coveredOuterOf, visibleRectOf } from '../../src/ui/gen3-util';
 import { stripComments } from './source-text';
 
@@ -167,10 +168,17 @@ describe('R3 · 链路落点（自己向下 / 对手向上）', () => {
     const empty = slotStub(slot, []);
     expect(fxStackEndPoint(empty, null, 1, 65, 90), '热座空槽落点与改动前不一致')
       .toEqual({ x: 200 + 90, y: 400 + 250 });
-    // 对照：**远程页**同一入参必须给出竖向结果（否则"改了但没生效"）
+    // 对照：**远程页**同一入参必须给出竖向结果（否则"改了但没生效"），且**按该卡属主分侧**（C-1）
     setFxViewSeat(0);
-    expect(fxStackEndPoint(withCard, fxViewSeat()), '远程页（我是 P1）时 P0 是自己 ⇒ 落点在末卡下缘外侧')
+    expect(fxStackEndPoint(withCard, fxViewSeat(), 0), '远程页（我是 P1）时 owner=P0 是**自己** ⇒ 末卡下缘外侧')
       .toEqual({ x: 270, y: 980 + 65 });
+    // ⚠️ **C-1 的核心断言**：同一张末卡、同一个座位，只换"这张卡属于谁"，落点必须换到另一端。
+    //    旧实现的 `outer = fxOuterFor(seat)` 让 `owner` 被吞掉 ⇒ 两侧给出**同一个点**。
+    //    原守卫（本行）**故意不传 owner**，于是把"远程页恒 'end'"固化成了期望值 —— 已改成传属主。
+    expect(fxStackEndPoint(withCard, fxViewSeat(), 1), '远程页（我是 P1）时 owner=P1 是**对手** ⇒ 末卡上缘外侧')
+      .toEqual({ x: 270, y: 800 - 65 });
+    expect(fxStackEndPoint(withCard, fxViewSeat(), 1), '自己列与对手列的落点必须落在**不同**的一端（C-1 的探针）')
+      .not.toEqual(fxStackEndPoint(withCard, fxViewSeat(), 0));
     expect(fxStackEndPoint(withCard, fxViewSeat())).not.toEqual(fxStackEndPoint(withCard, null));
   });
 
@@ -194,6 +202,59 @@ describe('R3 · 链路落点（自己向下 / 对手向上）', () => {
     expect(fxStackEndPoint(empty, null, 1), 'owner 1 空槽 ⇒ 槽左缘 + 90（内侧）').toEqual({ x: 200 + 90, y: 650 });
     // 省略 owner 时的兜底 = 大端（与改动前"默认非 0 ⇒ 右"一致）
     expect(fxStackEndPoint(stub, null)).toEqual(fxStackEndPoint(stub, null, 1));
+  });
+
+  /**
+   * **C-1（G2 修正 R-F）**：远程页的落点必须由「**这张卡所属的绝对玩家** + 当前座位」共同决定。
+   *
+   * 旧实现 `const outer = seat !== null ? fxOuterFor(seat) : …` 把 `owner` 整个吞掉
+   * （`fxOuterFor(currentSeat)` 的比较恒真 ⇒ 恒 `'end'`）⇒ 远程页**所有**落点都算在下端。
+   * 评审探针实测"自己列与对手列给出同一个点"；可达路径见 `fxStackEndPoint` 的注释。
+   *
+   * 这里把**两个席位 × 自己/对手 = 四个组合**都写成**绝对断言**（不是"两者不同"这种相对断言
+   * —— 一起写反时相对断言会互相抵消，本仓为此栽过两次）。
+   */
+  it('C-1：远程页按**该卡所属的绝对玩家**分侧（两个席位 × 自己/对手，四个绝对断言）', () => {
+    const slot = rect(200, 400, 140, 500);
+    const last = rect(205, 800, 130, 180);
+    const withCard = slotStub(slot, [last]);
+    const empty = slotStub(slot, []);
+    // [座位, 这张卡的属主, 期望的末卡落点 y]
+    const CASES: Array<[0 | 1, 0 | 1, string, number]> = [
+      [0, 0, 'viewSeat=0：P0 是**自己** ⇒ 末卡**下缘**外侧（bottom 980 + 65）', 1045],
+      [0, 1, 'viewSeat=0：P1 是**对手** ⇒ 末卡**上缘**外侧（top 800 − 65）', 735],
+      [1, 1, 'viewSeat=1：P1 是**自己** ⇒ 末卡**下缘**外侧（bottom 980 + 65）', 1045],
+      [1, 0, 'viewSeat=1：P0 是**对手** ⇒ 末卡**上缘**外侧（top 800 − 65）', 735],
+    ];
+    for (const [seat, owner, msg, want] of CASES) {
+      setFxViewSeat(seat);
+      expect(fxStackEndPoint(withCard, fxViewSeat(), owner), msg).toEqual({ x: 270, y: want });
+      // 空槽同源：自己 = 槽下缘 + 90、对手 = 槽上缘 − 90（两种席位都查）
+      const wantEmpty = owner === seat ? slot.bottom + 90 : slot.top - 90;
+      expect(fxStackEndPoint(empty, fxViewSeat(), owner), `${msg}（空槽）`)
+        .toEqual({ x: 270, y: wantEmpty });
+      // 同一张卡：自己与对手必须落在**不同**的一端
+      expect(fxStackEndPoint(withCard, fxViewSeat(), owner)).not.toEqual(
+        fxStackEndPoint(withCard, fxViewSeat(), (1 - owner) as 0 | 1),
+      );
+    }
+  });
+
+  it('fxOuterForSeat（纯函数版）：座位由实参给（不读模块态）—— 模块态为 null 时也能按远程座位算', () => {
+    // 模块态故意留成热座：纯函数版必须**不受影响**（这是 C-1 能"指名道姓"的前提）
+    setFxViewSeat(null);
+    expect(fxOuterForSeat(0, 0), 'viewSeat=0：P0 是自己 ⇒ 大坐标端（下）').toBe('end');
+    expect(fxOuterForSeat(1, 0), 'viewSeat=0：P1 是对手 ⇒ 小坐标端（上）').toBe('start');
+    expect(fxOuterForSeat(1, 1), 'viewSeat=1：P1 是自己 ⇒ 大坐标端（下）').toBe('end');
+    expect(fxOuterForSeat(0, 1), 'viewSeat=1：P0 是对手 ⇒ 小坐标端（上）').toBe('start');
+    // 热座（null）：与改动前的左右规则同源
+    expect(fxOuterForSeat(0, null)).toBe('start');
+    expect(fxOuterForSeat(1, null)).toBe('end');
+    // `fxOuterFor` 是它的模块态版本：座位设成同一个值时两者必须逐字段相等
+    for (const seat of [null, 0, 1] as const) {
+      setFxViewSeat(seat);
+      for (const p of [0, 1] as const) expect(fxOuterFor(p)).toBe(fxOuterForSeat(p, seat));
+    }
   });
 });
 
@@ -444,6 +505,67 @@ describe('R3 · 覆盖方向的 DOM 读取路径（gen3-util，合成 document �
       expect(coveredOuterOf(state, 'nope')).toBe(null);
     } finally { restore(); }
   });
+
+  /**
+   * **Minor M-3（G2 修正 R-F）**：`data-fx-rot` **读不到**时必须"显式契约 + 可诊断信号"，
+   * 不能静默按常量 `'start'`（= 对手侧）兜底 —— 那会让自己列的被盖卡**静默反向**。
+   *
+   * 两条腿：
+   *  ① `fxRotMarkerOf` 如实交回 `null`（与 `fxOrientOf` 的**回退**区分开："标记是 0°"和
+   *     "没有标记"在 `fxOrientOf` 上不可区分）；
+   *  ② 覆盖方向在缺失时按"**本卡属主 + 座位**"兜底（与标记同义）并 `console.warn` 一次。
+   */
+  it('Minor M-3：标记缺失可诊断 —— fxRotMarkerOf 交出 null，覆盖方向按属主兜底并 console.warn', () => {
+    // ① 纯函数：合法取值原样、缺失/不认识 ⇒ null；而 fxOrientOf 会**回退**卡面朝向
+    const node = (attrs: Record<string, string | null>): HTMLElement => ({
+      classList: { contains: (): boolean => false },
+      getAttribute: (n: string): string | null => attrs[n] ?? null,
+    }) as unknown as HTMLElement;
+    expect(fxRotMarkerOf(node({ 'data-fx-rot': 'ccw' }))).toBe('ccw');
+    expect(fxRotMarkerOf(node({ 'data-fx-rot': 'cw' }))).toBe('cw');
+    expect(fxRotMarkerOf(node({ 'data-fx-rot': 'nope' })), '不认识的值必须如实交回 null').toBe(null);
+    expect(fxRotMarkerOf(node({})), '标记缺失必须如实交回 null（不能回退成卡面朝向）').toBe(null);
+    expect(fxRotMarkerOf(null)).toBe(null);
+    expect(fxOrientOf(node({})), 'fxOrientOf 在无标记时回退卡面朝向（这里无 rot 类 ⇒ 0）').toBe(0);
+    expect(fxOrientOf(node({ 'data-fx-rot': 'ccw' })), '有标记时以标记为准（−90°）').toBe(-90);
+    expect(fxOrientOf(node({ 'data-fx-rot': 'cw' }))).toBe(90);
+
+    // ② 覆盖方向：标记缺失 ⇒ 按属主兜底（**不是**常量 'start'）
+    const mkState = (player: 0 | 1, u1: string, u2: string): Parameters<typeof coveredOuterOf>[0] => ({
+      players: [
+        { stacks: player === 0 ? [[{ uid: u1 }, { uid: u2 }], [], []] : [[], [], []], hand: [] },
+        { stacks: player === 1 ? [[{ uid: u1 }, { uid: u2 }], [], []] : [[], [], []], hand: [] },
+      ],
+    }) as unknown as Parameters<typeof coveredOuterOf>[0];
+    const warned: string[] = [];
+    const warn = vi.spyOn(console, 'warn').mockImplementation((...a: unknown[]) => {
+      warned.push(a.map((x) => String(x)).join(' '));
+    });
+    try {
+      setFxViewSeat(0);   // 我是 P0：P0 = 自己（下 / end）、P1 = 对手（上 / start）
+      // uid 刻意用新值：诊断按 uid 去重，别让前面用例的调用把这条吞掉
+      for (const [player, u1, u2, want] of [
+        [0, 'm3-self-a', 'm3-self-b', 'end'],
+        [1, 'm3-foe-a', 'm3-foe-b', 'start'],
+      ] as const) {
+        const st = mkState(player, u1, u2);
+        const restore = withFakeDocument(() => null);   // 两张卡都**没有**标记
+        try {
+          expect(coveredOuterOf(st, u1), `属主 P${player + 1} 的兜底方向（旧实现恒 'start'）`).toBe(want);
+        } finally { restore(); }
+      }
+      expect(warned.length, '标记缺失必须留下可诊断的 console.warn（否则这类退化完全无声）')
+        .toBeGreaterThan(0);
+      expect(warned.join('\n')).toContain('data-fx-rot');
+      // 阳性对照：标记在时**不得**报警（否则诊断会变成噪声，没人再看它）
+      warned.length = 0;
+      const restoreOk = withFakeDocument((uid) => (uid === 'b' ? 'ccw' : null));
+      try {
+        expect(coveredOuterOf(state, 'a')).toBe('end');
+      } finally { restoreOk(); }
+      expect(warned, '标记存在时不应产生任何 warn').toEqual([]);
+    } finally { warn.mockRestore(); }
+  });
 });
 
 describe('R3 · 控制轨端归属（用户裁决：竖向，自己端在下 / 对手端在上）', () => {
@@ -490,6 +612,59 @@ describe('R3 · 控制轨端归属（用户裁决：竖向，自己端在下 / �
     expect(fxTrackEndFor(fxViewSeat(), 1)).toEqual({ pct: 0.96, axis: 'x' });
     // 与竖向的取值**不同轴也不同端**（同值会让"没改"与"改了"看起来一样）
     expect(fxTrackEndFor(fxViewSeat(), 0).axis).not.toBe(fxTrackEndFor(0, 0).axis);
+  });
+
+  /**
+   * **Minor M-5**：`fxIsSelfSide` —— "哪一端是自己"的**唯一判据**（原来这一句在
+   * `gen3-control.ts` 的 `viewportFallback` 里就地写着，且**无单测**：评审 §D 的漏网处）。
+   * 六个组合全部写成绝对断言。
+   */
+  it('Minor M-5：fxIsSelfSide 是"哪一端是自己"的唯一判据（六个组合，绝对断言）', () => {
+    // 热座：自己 = 绝对 P0（与改动前的左右逻辑同源）
+    expect(fxIsSelfSide(null, 0), '热座：P0 = 自己').toBe(true);
+    expect(fxIsSelfSide(null, 1), '热座：P1 = 对手').toBe(false);
+    // 远程页：自己 = 视角座位那一号（绝对号随席位翻转）
+    expect(fxIsSelfSide(0, 0), 'viewSeat=0：P0 = 自己').toBe(true);
+    expect(fxIsSelfSide(0, 1), 'viewSeat=0：P1 = 对手').toBe(false);
+    expect(fxIsSelfSide(1, 1), 'viewSeat=1：P1 = 自己（绝对号反了，但"自己"不变）').toBe(true);
+    expect(fxIsSelfSide(1, 0), 'viewSeat=1：P0 = 对手').toBe(false);
+    // 与端归属**同向**：`fxTrackEndFor` 的"自己是哪一端"必须与它一致（改一处忘另一处就报红）
+    for (const seat of [null, 0, 1] as const) {
+      for (const p of [0, 1] as const) {
+        const isSelf = fxIsSelfSide(seat, p);
+        const at = fxTrackEndFor(seat, p);
+        // 热座（x）：自己贴**小**端 4%；远程页（y）：自己贴**大**端 96%
+        const selfAtSmallEnd = isSelf === (seat === null);
+        expect(at.pct, `seat=${String(seat)} p=${p}：端归属与 fxIsSelfSide 不同向`)
+          .toBe(selfAtSmallEnd ? 0.04 : 0.96);
+      }
+    }
+  });
+
+  /** **Minor M-5**：视口兜底的百分比（原来 0.82/0.18 就地写在 `gen3-control.ts`，无单测）。 */
+  it('Minor M-5：fxTrackFallbackPct 自己在下（0.82）、对手在上（0.18），两个席位都对', () => {
+    expect(fxTrackFallbackPct(null, 0), '热座：P0 = 自己 ⇒ 下端').toBe(0.82);
+    expect(fxTrackFallbackPct(null, 1), '热座：P1 = 对手 ⇒ 上端').toBe(0.18);
+    expect(fxTrackFallbackPct(0, 0), 'viewSeat=0：P0 = 自己 ⇒ 0.82').toBe(0.82);
+    expect(fxTrackFallbackPct(0, 1), 'viewSeat=0：P1 = 对手 ⇒ 0.18').toBe(0.18);
+    expect(fxTrackFallbackPct(1, 1), 'viewSeat=1：P1 = 自己 ⇒ 0.82（绝对号反了、端不变）').toBe(0.82);
+    expect(fxTrackFallbackPct(1, 0), 'viewSeat=1：P0 = 对手 ⇒ 0.18').toBe(0.18);
+    // 远程页：兜底端与端归属**同向**（自己都在大端/下）—— 改坏一个就会在这里报红
+    for (const seat of [0, 1] as const) {
+      for (const p of [0, 1] as const) {
+        expect(fxTrackFallbackPct(seat, p) > 0.5, `viewSeat=${seat} p=${p}：兜底端与"自己在下"不同向`)
+          .toBe(fxIsSelfSide(seat, p));
+      }
+    }
+  });
+
+  /** **Minor M-4**：贴端距离是**单一出处**（`render.ts` 的滑块从同一个常量取）。 */
+  it('Minor M-4：FX_TRACK_EDGE_PCT 是贴端距离的单一出处（4% ⇒ 两条分支都派生自它）', () => {
+    expect(FX_TRACK_EDGE_PCT, '贴端距离常量必须是 4（改动前的数值）').toBe(4);
+    expect(fxTrackEndFor(null, 0).pct).toBe(FX_TRACK_EDGE_PCT / 100);
+    expect(fxTrackEndFor(null, 1).pct).toBe(1 - FX_TRACK_EDGE_PCT / 100);
+    expect(fxTrackEndFor(0, 0).pct).toBe(1 - FX_TRACK_EDGE_PCT / 100);
+    expect(fxTrackEndFor(0, 1).pct).toBe(FX_TRACK_EDGE_PCT / 100);
   });
 });
 
@@ -561,12 +736,25 @@ describe('R3 · 源码守卫（方向模型的接线）', () => {
 
   it('gen3-util 的覆盖方向按**覆盖卡自己的** data-fx-rot 判（而不是按绝对玩家号）', () => {
     const src = read('gen3-util.ts');
-    expect(src, 'coveredOuterOf 未读覆盖卡的特效朝向标记').toMatch(/fxOrientOf\(coverNode\)/);
+    // ⚠️ **R-F（Minor M-3）的判据修正**：读取口由 `fxOrientOf(coverNode)` 改成
+    //    `fxRotMarkerOf(coverNode)`。理由：`fxOrientOf` 会把"标记缺失"**回退**成**卡面**朝向
+    //    （远程页卡面 0°/180°）⇒ 恒判成"不是 ccw" ⇒ 静默按对手侧兜底（自己列反向）。
+    //    **原能抓什么**：覆盖方向不读覆盖卡**自己**的标记（改成按绝对玩家号/按本卡朝向）。
+    //    **现在还能抓什么**：同上（仍必须读**覆盖卡节点自己**的标记），并多一条：
+    //    必须用"能如实区分缺失"的读取口。
+    //    **为什么新的更贴规格**：§8.2 把标记定为承重输入，缺失必须能被发现而不是被回退吃掉。
+    expect(src, 'coveredOuterOf 未读覆盖卡**自己**的特效朝向标记').toMatch(/fxRotMarkerOf\(coverNode\)/);
     expect(src, '覆盖方向又按绝对玩家号判了（竖排下"哪一侧在上"取决于座位，不是绝对号）')
       .not.toMatch(/coveredOuterOf[\s\S]{0,300}player === 0 \?/);
     // 热座开关必须在：没有它，"覆盖者在右"的原逻辑就再也走不到了
     expect(src, 'coveredOuterOf 缺"热座 ⇒ null"的开分支（热座会走竖向覆盖）')
       .toMatch(/fxViewSeat\(\)\s*===\s*null\)\s*return null/);
+    // **兜底的显式契约**（Minor M-3）：标记缺失 ⇒ 按"该卡属主 + 座位"兜底（`fxOuterFor(loc.player)`，
+    // 与标记**同义**），**不能**是常量 'start'（那会让自己列静默反向）；且必须留下可诊断信号。
+    expect(src, '覆盖方向在标记缺失时又退化成常量方向了（自己列会静默反向）')
+      .toMatch(/warnMissingFxRot\(cover\)[\s\S]{0,500}fxOuterFor\(loc\.player\)/);
+    expect(src, '标记缺失没有可诊断信号（console.warn）—— 这类退化在页面上完全无声')
+      .toMatch(/console\.warn\(/);
     // 两处旧算式必须真的还在（热座零变化是"搬运"而不是"重写"）
     expect(src, '热座分支的"覆盖者在右"算式被删了').toMatch(/cr\.left - r\.left/);
     expect(src, '热座分支的"裁右缘"算式被删了').toMatch(/\(r\.right - cr\.left\) \/ r\.width/);
@@ -574,18 +762,39 @@ describe('R3 · 源码守卫（方向模型的接线）', () => {
 
   it('fx-seat.ts 提供热座与竖向两套分支（把 null 分支删掉 = 热座观感变化）', () => {
     const src = read('fx-seat.ts');
-    // 热座那一支必须**仍是横向**（`seat === null` 之后走 x 轴），且必须由 owner 决定左右
-    expect(src, 'fxStackEndPoint 缺"seat === null ⇒ 横向按 owner"这一支')
-      .toMatch(/if \(seat === null\) \{[\s\S]{0,400}vOuterEdgeOf\(r, outer, 'x'\) \+ step \* lead/);
-    expect(src, 'fxStackEndPoint 缺"seat !== null ⇒ 竖向"这一支')
-      .toMatch(/const x = vCenterOf\(slotRect, 'x'\);[\s\S]{0,200}vOuterEdgeOf\(last\.getBoundingClientRect\(\), outer, 'y'\)/);
-    expect(src, '热座方向未由绝对玩家号决定（owner ?? 1 的兜底没了 ⇒ 热座 P0 会翻边）')
-      .toMatch(/seat !== null \? fxOuterFor\(seat\) : \(owner \?\? 1\) === 0 \? 'start' : 'end'/);
+    // 热座那一支必须**仍是横向**（走 x 轴），且必须由 owner 决定左右
+    expect(src, 'fxStackEndPoint 缺"热座 ⇒ 横向按 owner"这一支（x 轴的末卡落点算式不见了）')
+      .toMatch(/vOuterEdgeOf\(r, outer, 'x'\) \+ step \* lead/);
     // 竖向变体自己的算式（与统一入口共用同一套"外侧边 + 沿轴外移"）
-    expect(src, 'vStackEndPoint 缺 minPx/lead 的外移算式').toMatch(/vOuterEdgeOf\(last\.getBoundingClientRect\(\), outer, 'y'\) \+ step \* lead/);
+    expect(src, 'vStackEndPoint 缺 lead 的外移算式').toMatch(/vOuterEdgeOf\(last\.getBoundingClientRect\(\), outer, 'y'\) \+ step \* lead/);
+    expect(src, 'vStackEndPoint 缺空槽的 lift 算式').toMatch(/vOuterEdgeOf\(slotRect, outer, 'y'\) \+ step \* lift/);
+    // ⚠️ **C-1 的判据修正（钉规格，不再钉那句错表达式）**：
+    //    原判据逐字钉住 `seat !== null ? fxOuterFor(seat) : (owner ?? 1) === 0 ? 'start' : 'end'`
+    //    —— 那正是**吞掉 owner** 的写法：`fxOuterFor(seat)` 里的比较用的是**模块态座位**，
+    //    而实参也是当前座位 ⇒ 恒真 ⇒ 远程页恒 `'end'`（对手列落点算在下端）。
+    //    把它改对（按 owner 分侧）反而报红，失败信息还误导成"热座 P0 会翻边"。
+    //    **现在钉的是规格**：外端一律由**该卡所属的绝对玩家**（owner）与座位共同决定 ——
+    //      · 热座分支：`fxOuterForSeat(owner ?? 1, null)`（owner 0 ⇒ 左、1 ⇒ 右，兜底保留）；
+    //      · 远程分支：把 **owner**（不是 seat）交给竖向落点助手。
+    //    **原能抓什么**：`owner ?? 1` 的兜底被删（热座 P0 翻边）。**现在还能抓什么**：同上，
+    //    外加 C-1 本身（远程分支必须用 owner 定外端、且判定只经 `fxOuterForSeat` 这一个纯函数）。
+    expect(src, '热座方向未由绝对玩家号决定（owner ?? 1 的兜底没了 ⇒ 热座 P0 会翻边）')
+      .toMatch(/fxOuterForSeat\(owner \?\? 1, null\)/);
+    expect(src, '远程方向未由**该卡所属的绝对玩家**决定（C-1：owner 被吞掉 ⇒ 远程页所有落点都算在下端）')
+      .toMatch(/if \(seat !== null\) return vStackEndPoint\(slot, owner \?\? seat, lead, lift, seat\)/);
+    // 竖向落点助手的第一个参数**是属主**（Minor M-2：它曾叫 `seat`，与实参语义不符）
+    expect(src, 'vStackEndPoint 的参数名/语义又退回"座位"了（Minor M-2 的命名混乱会复发）')
+      .toMatch(/vStackEndPoint\(\s*slot: HTMLElement, owner: PlayerId/);
+    expect(src, 'vStackEndPoint 未显式吃座位（实参座位与模块态座位可能不一致 ⇒ 落点静默算错）')
+      .toMatch(/seat: FxViewSeat = fxViewSeat\(\)/);
+    expect(src, '外端的唯一判据不是 fxOuterForSeat（纯函数版）')
+      .toMatch(/export function fxOuterForSeat\(player: PlayerId, seat: FxViewSeat\): FxOuter/);
     expect(src, 'vVisibleStripRect 缺 minPx 下限').toMatch(/Math\.max\(minPx,/);
     expect(src, 'vClipInsetPct 缺 0.94 上限').toMatch(/Math\.min\(maxPct,/);
     expect(src, '热座默认值是 null（热座零变化的开关）').toMatch(/FX_VIEW_SEAT_HOTSEAT: FxViewSeat = null/);
+    // Minor M-1：两个零调用的导出已删（留着会让人以为它们是方向模型的入口）
+    expect(src, 'seatIndexFor / isSelfViewOf 又出现了（零调用死代码，会误导下一个人）')
+      .not.toMatch(/export function (seatIndexFor|isSelfViewOf)\(/);
   });
 
   it('控制轨端归属走**单一出处**（fx-seat 的 fxTrackEndFor），且 gen3-control 不再自己按绝对玩家选边', () => {
@@ -595,12 +804,28 @@ describe('R3 · 源码守卫（方向模型的接线）', () => {
     expect(ctrl, 'gen3-control 里又自己写了绝对玩家的 4%/96%（两处口径会打架）')
       .not.toMatch(/const pct = to === 0 \? 0\.04 : 0\.96;/);
     expect(ctrl, '轴向判据未按座位分支').toMatch(/fxViewSeat\(\) === null \? 'x' : 'y'/);
-    // 热座的那两个数字必须**仍在源码里**（只是搬到了 fx-seat 的单一出处）
+    // Minor M-5：视口兜底的**方向**必须来自 fx-seat（原来就地 `to === fxViewSeat()`，无单测）
+    expect(ctrl, '视口兜底又在原地按座位算方向了（评審 §D 的漏网处会复发）')
+      .toMatch(/y: window\.innerHeight \* fxTrackFallbackPct\(fxViewSeat\(\), to\)/);
+    expect(ctrl, 'viewportFallback 里仍留着就地判方向的表达式')
+      .not.toMatch(/fxViewSeat\(\) === null \? to === 0 : to === fxViewSeat\(\)/);
     const seat = read('fx-seat.ts');
+    // ⚠️ **判据修正（Minor M-4）**：热座那两个数字（4%/96%）现在由**一个常量**派生，
+    //    不再是字面量 `0.04`/`0.96`。原判据逐字钉 `{ pct: to === 0 ? 0.04 : 0.96, axis: 'x' }`
+    //    —— 那样"单一出处"这条要求本身（render.ts 也必须从这里取）就永远钉不住。
+    //    现在钉的是**语义**：两条分支的取值都必须经 `fxIsSelfSide`（唯一方向判据）、
+    //    贴端距离必须来自 `FX_TRACK_EDGE_PCT`，且 `render.ts` 必须引用同一个常量。
     expect(seat, 'fxTrackEndFor 的热座分支被删（热座控制轨会换端）')
-      .toMatch(/seat === null\) return \{ pct: to === 0 \? 0\.04 : 0\.96, axis: 'x' \}/);
+      .toMatch(/seat === null\s*\n?\s*\? \{ pct: fxIsSelfSide\(seat, to\) \? FX_TRACK_EDGE : 1 - FX_TRACK_EDGE, axis: 'x' \}/);
     expect(seat, 'fxTrackEndFor 缺"自己在下、对手在上"的竖向分支')
-      .toMatch(/return \{ pct: to === seat \? 0\.96 : 0\.04, axis: 'y' \}/);
+      .toMatch(/: \{ pct: fxIsSelfSide\(seat, to\) \? 1 - FX_TRACK_EDGE : FX_TRACK_EDGE, axis: 'y' \}/);
+    expect(seat, '贴端距离不是单一出处常量（Minor M-4）').toMatch(/export const FX_TRACK_EDGE_PCT = 4;/);
+    // Minor M-4 的另一半：render.ts 必须**从这个常量取值**（两边各写死一个 4 就是原缺陷）
+    const renderSrc = read('render.ts');
+    expect(renderSrc, 'render.ts 的控制轨贴端距离又写死成字面量了（两处会各自漂移）')
+      .toMatch(/const CONTROL_EDGE_PCT = FX_TRACK_EDGE_PCT;/);
+    expect(renderSrc, 'render.ts 未 import fx-seat 的贴端常量')
+      .toMatch(/import \{ FX_TRACK_EDGE_PCT \} from '\.\/fx-seat';/);
     // 渲染页必须把"座位→绝对玩家号"的换算交给助手（而不是让共享助手读座位）
     expect(read('render-net.ts'), '远程页未按座位换算控制组件的持有者')
       .toMatch(/renderControlModule\(s, \{ axis: 'y', holder: netControlHolder\(s, viewSeat\) \}\)/);

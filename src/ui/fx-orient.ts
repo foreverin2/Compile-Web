@@ -54,6 +54,20 @@ export const FX_ROT_ATTR = 'data-fx-rot';
 const FX_ROT_VALUES: Readonly<Record<string, CardOrient>> = { ccw: -90, cw: 90 };
 
 /**
+ * 读**特效朝向标记**的原始取值：只有 `'cw' | 'ccw'` 两种合法值；**读不到 / 取值不认识 ⇒ `null`**。
+ *
+ * ⚠️ 与 `fxOrientOf` 的分工（G2 修正 R-F · Minor M-3）：`fxOrientOf` 读不到标记时会**回退**
+ * 卡面朝向（那是"热座零变化"的机制）—— 于是"标记缺失"与"标记本来就是 0°/180°"在它的返回值上
+ * **不可区分**。凡是需要**区分**这件事的地方（例如覆盖方向要给出可诊断的信号、而不是静默按
+ * 某一侧兜底）必须用本函数：它把"缺失"如实交回 `null`。
+ */
+export function fxRotMarkerOf(node: Element | null | undefined): 'cw' | 'ccw' | null {
+  const raw = (node as { getAttribute?(name: string): string | null } | null | undefined)
+    ?.getAttribute?.(FX_ROT_ATTR);
+  return raw === 'cw' || raw === 'ccw' ? raw : null;
+}
+
+/**
  * 读**特效朝向**：优先 `data-fx-rot`（`"ccw"` → −90°、`"cw"` → +90°），**读不到或值不认识时
  * 回退 `orientOf(node)`**（= 卡面朝向）。
  *
@@ -66,12 +80,11 @@ const FX_ROT_VALUES: Readonly<Record<string, CardOrient>> = { ccw: -90, cw: 90 }
  *
  * ⚠️ **不要**把它用在"卡面本身"的读取点上：远程页自己卡面 0° 而特效 −90°（规格 §2 的朝向表），
  * 两者相差 90°。卡面朝向继续走 `orientOf`。
+ * ⚠️ **不要**用它来判"标记在不在" —— 那要 `fxRotMarkerOf`（本函数会把缺失回退掉）。
  */
 export function fxOrientOf(node: Element | null | undefined): CardOrient {
-  const raw = (node as { getAttribute?(name: string): string | null } | null | undefined)
-    ?.getAttribute?.(FX_ROT_ATTR);
-  const mapped = raw == null ? undefined : FX_ROT_VALUES[raw];
-  return mapped ?? orientOf(node);
+  const marker = fxRotMarkerOf(node);
+  return marker === null ? orientOf(node) : FX_ROT_VALUES[marker];
 }
 
 /** 与既有 buildFxCardAt(rect, orient, …) 的参数形状对齐 */

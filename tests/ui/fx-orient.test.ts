@@ -232,15 +232,27 @@ describe('G2 修正 R2 · 读侧调用点（源码守卫）', () => {
   const readUi = (rel: string): string =>
     stripComments(readFileSync(fileURLToPath(new URL(rel, uiRoot))).subarray(0, 8 * 1024 * 1024).toString('utf8'));
 
-  /** ① 回退分支：fx-orient.ts 里 `orientOf` 的**唯一**允许出现处（`fxOrientOf` 的最后一行） */
+  /** ① 回退分支：fx-orient.ts 里 `orientOf` 的**唯一**允许出现处（`fxOrientOf` 的回退那一行） */
   it('fx-orient.ts：orientOf 只作为 fxOrientOf 的**回退**出现，且 fxOrientOf 优先读标记', () => {
     const src = readUi('fx-orient.ts');
     // 回退表达式必须真的存在（去掉它 = 热座浮层卡全部朝向错，见变异表）
+    //
+    // ⚠️ **R-F 的判据修正（钉语义，不钉变量形态）**：原判据是逐字的
+    //    `/return\s+mapped\s*\?\?\s*orientOf\(node\)/`。R-F 把"有没有标记"拆成一步独立的读取
+    //    （`fxRotMarkerOf` 如实交回 `null`，让"标记缺失"与"标记是 0°"可区分 —— Minor M-3
+    //    要在标记缺失时给出可诊断信号），于是 `fxOrientOf` 变成"先判 `marker === null` 再回退"。
+    //    语义**完全没变**（仍然是"读不到标记 ⇒ 回退卡面朝向"），但逐字判据会假红。
+    //    **原能抓什么**：回退表达式被删/被换成 `return 0`。**现在还能抓什么**：同上 ——
+    //    回退必须**依赖标记读取的结果**（`… === null ? orientOf(…)`），换成 `return 0`
+    //    或把回退挪出条件都会报红。
     expect(src, 'fxOrientOf 的回退分支不见了（热座无标记时会拿到 0 而不是卡面朝向）')
-      .toMatch(/return\s+mapped\s*\?\?\s*orientOf\(node\)/);
+      .toMatch(/===\s*null\s*\?\s*orientOf\([A-Za-z_$][\w$]*\)/);
+    // "读不到标记"这件事必须有一个**如实**的出口（不是回退掉的 `fxOrientOf`）
+    expect(src, 'fx-orient.ts 缺 fxRotMarkerOf：无法区分"标记缺失"与"标记值是 0°"（覆盖方向的兜底诊断靠它）')
+      .toMatch(/return\s+raw\s*===\s*'cw'\s*\|\|\s*raw\s*===\s*'ccw'\s*\?\s*raw\s*:\s*null/);
     // 标记读取必须在回退**之前**（顺序反了就等于永远回退）
     const iRead = src.indexOf('FX_ROT_ATTR)');
-    const iFallback = src.indexOf('?? orientOf(node)');
+    const iFallback = src.indexOf('? orientOf(');
     expect(iRead, '找不到标记读取点（getAttribute(FX_ROT_ATTR)）').toBeGreaterThanOrEqual(0);
     expect(iFallback, '找不到回退点').toBeGreaterThanOrEqual(0);
     expect(iRead, '标记读取排在回退之后 —— fxOrientOf 会永远走回退（标记形同不存在）')
@@ -833,5 +845,77 @@ describe('G2 · 朝向判定单一出处（源码守卫）', () => {
       + '（`orientToFxRot` 的 `90deg`/`-90deg`/`180deg`），完整 transform 函数串只属于 cloneBoxFrom 一族。'
       + '注意：经中间变量洗白（`const fxRot = cloneTransformOf(orient); setProperty(\'--fx-rot\', fxRot)`）'
       + '会让整条内联 transform 静默失效，本断言就是封这条路的：\n' + cloneTransformHits.join('\n')).toEqual([]);
+  });
+
+  /**
+   * **R-F · I-2（Important）：`--fx-rot` 的写入必须覆盖"所有非零朝向"** —— 这是一条**语义**断言，
+   * 专门补回 R2 把写入点从 2 收敛成 1 之后**丢掉的那一份机检力**。
+   *
+   * ## 覆盖缺口（评审实测 M-B3）
+   *
+   * 旧结构（`1cf6caa`）是"±90° 分支写一次 + 180° 分支写一次"，`writes.length === 2` 抓的是
+   * "**只删掉其中一个分支的写入**"。R2 收敛成
+   * `if (box.transform !== '') { setProperty('--fx-rot', …); transform = … }` —— 数字改成 1 是**忠实**的
+   * （`box.transform` 由 `cloneBoxFrom(rect, orient)` 给，90/−90/180 都非空 ⇒ 一处覆盖全部），
+   * 但把条件换成 `box.swapped`（**180° 不交换宽高 ⇒ 该分支对它恒 false**）时：
+   * 180° 浮层**既丢 `--fx-rot`、也丢整条内联 `transform`**（连 `translate/scale` 一起丢），
+   * 而当时**整套 1019 项测试全绿**（M-B3 实测 GREEN）。新加的"写入与使用成对"断言替代不了它：
+   * 它只查"两个文本都在"，而那种变异里两个文本**都还在**（只是被挪进了错误的 if 条件）。
+   *
+   * ## 判据（两条腿，缺一不可）
+   *
+   * ① **几何腿（真跑纯函数）**：`cloneBoxFrom(rect, o).transform` 对 90/−90/180 **非空**、
+   *    对 0 **为空** —— 也就是"**卡面朝向 ≠ 0 ⇔ 布局盒有 transform**"这个等价关系本身；
+   * ② **源码腿**：`--fx-rot` 的写入必须（a）被**恰好** `box.transform !== ''` 这一条条件守卫
+   *    （多一个 `&& orient !== 180` ⇒ 就是被禁的形态），（b）与
+   *    `card.style.transform = 'rotate(var(--fx-rot, 0deg))'` 在**同一个守卫块**里。
+   * 由 ①+② 推出旧结构那条不变量：**凡非零朝向的浮层盒，一定写了 `--fx-rot` 且一定组合进了 transform**。
+   *
+   * ⚠️ **代价（如实说明）**：②钉的是"条件就是这个表达式"。把条件提取成中间变量
+   * （`const hasBoxTransform = box.transform !== ''; if (hasBoxTransform) {…}`）是**语义等价**的合法重构，
+   * 但会假红 —— 失败信息里点明了这一点，请连同本断言一起改（这正是 2F2 那次的处理方式）。
+   * 之所以接受这个代价：R2 的收敛把"覆盖所有非零朝向"这件事**压缩进了这一条条件**，
+   * 条件一旦被别的写法代替，本断言就必须重新判一次，否则覆盖缺口就只能靠人眼看 180° 浮层。
+   */
+  it('I-2：--fx-rot 的写入必须被"布局盒有 transform"守卫 ⇒ 覆盖**所有**非零朝向（180° 不得丢 transform）', () => {
+    // ① 几何腿：非零朝向 ⇔ 布局盒有 transform（0° 必须为空，否则热座浮层会凭空多一条 transform）
+    const box100x60 = { width: 100, height: 60 };
+    for (const o of [90, -90, 180] as CardOrient[]) {
+      expect(cloneBoxFrom(box100x60, o).transform, `${o}° 的布局盒必须有非空 transform`)
+        .not.toBe('');
+    }
+    expect(cloneBoxFrom(box100x60, 0).transform, '0° 的布局盒必须没有 transform（热座浮层零变化）')
+      .toBe('');
+
+    // ② 源码腿（去注释，避免被描述性注释满足）
+    const src = stripComments(readUiFile('effects/index.ts'));
+    const iWrite = src.indexOf("setProperty('--fx-rot'");
+    expect(iWrite, 'effects/index.ts 里找不到 --fx-rot 的写入点').toBeGreaterThanOrEqual(0);
+    const iIf = src.lastIndexOf('if (', iWrite);
+    expect(iIf, '--fx-rot 的写入不在任何 if 守卫里（无条件写入 = 0° 也会被写，且条件不再表达"非零朝向"）')
+      .toBeGreaterThanOrEqual(0);
+    // 配平取条件（守卫条件里可能带括号）
+    let depth = 0;
+    let close = -1;
+    const open = src.indexOf('(', iIf);
+    for (let i = open; i < src.length; i += 1) {
+      if (src[i] === '(') depth += 1;
+      else if (src[i] === ')') { depth -= 1; if (depth === 0) { close = i; break; } }
+    }
+    expect(close, '--fx-rot 的守卫条件括号不配平（源码结构被改？）').toBeGreaterThan(0);
+    const cond = src.slice(open + 1, close).replace(/\s+/g, ' ').trim();
+    expect(cond, `--fx-rot 的写入条件不是"布局盒有 transform"（实际：\`${cond}\`）—— `
+      + '这正是评审变异 M-B3 的形态（`box.swapped` 对 180° 恒 false ⇒ 180° 浮层连整条 transform 一起丢）。'
+      + '若这是把条件提取成中间变量的**等价重构**，请连同本断言一起改（见本用例的注释）。')
+      .toBe("box.transform !== ''");
+    // 写入必须来自"该朝向的布局盒"（几何单一出处）
+    expect(src, 'box 不是 cloneBoxFrom(rect, orient) 的产物（几何单一出处被绕过）')
+      .toMatch(/const box = cloneBoxFrom\(rect, orient\)/);
+    // 同一守卫块里必须把 --fx-rot 组合进 transform（否则"记下来"没有消费者）
+    const block = src.slice(close, src.indexOf('}', close) + 1);
+    expect(block, '守卫块里没有用 --fx-rot 组合 transform（180° 浮层仍会直立）')
+      .toMatch(/card\.style\.transform = 'rotate\(var\(--fx-rot, 0deg\)\)'/);
+    expect(block, '写入与使用不在同一个守卫块里（条件一变就会只丢其中一个）')
+      .toMatch(/setProperty\('--fx-rot'/);
   });
 });

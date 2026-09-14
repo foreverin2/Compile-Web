@@ -724,9 +724,10 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
    *
    * 判据（三条腿，缺一条就会被"结构被改回去"瞒过去）：
    *  ① `renderLaneColumn` 里**对手侧 / 中线 / 自己侧**三个 append 的顺序；
-   *  ② `renderSide` 里**链路槽 → 协议格**的 append 顺序（能量槽在槽内，由 ③ 钉）；
+   *  ② `renderSide` 里**两侧镜像**的挂载顺序（中线两侧都是协议：自己 = 协议→链路槽）；
    *  ③ 样式表里 `.net-side` 是**纵向** flex、`.stack-slot` 的 `order` 让能量槽落在链路**外侧**
-   *     （对手 p1 = order 1 在上、自己 p2 = order 3 在下），且 `.stack-slot` 自身是纵向 flex。
+   *     （按**侧**给：对手 `.net-side-foe` order 1 在上、自己 `.net-side-self` order 3 在下），
+   *     且 `.stack-slot` 自身是纵向 flex。
    *
    * 「旧布局 → 新布局」的守卫对照：旧版这条位置上是**第 17 条**（`band.appendChild(renderSideRow(…))`
    * 两次 + `for (const line of [0, 1, 2])`）。它抓的是"整条对手侧行没了"（F-2 的计数盲区），
@@ -748,14 +749,30 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
     expect(iMid, '列内顺序错：中线必须在自己侧**之前**（规格 §1 第 4 层的分界）').toBeLessThan(iSelf);
     expect((col.match(/col\.appendChild\(renderSide\(/g) ?? []).length,
       'renderSide 必须恰好挂载两次（对手 / 自己各一次 —— 少一次就是半个棋盘，F-2 的计数盲区）').toBe(2);
-    // ② 一侧之内：链路槽 → 协议格（能量槽由 CSS order 摆到外侧，不走 DOM 顺序）
+    // ② 一侧之内：**两侧的挂载顺序必须镜像**（规格 §1：中线两侧**都是协议**）
+    //
+    // ⚠️ **R-F · C-2 的守卫修正（这条旧断言把错误钉成了正确）**：
+    //   旧判据是"链路槽必须在协议格之前"——对**两侧**同一句话，失败信息还写着
+    //   "层 5 在层 4 之后靠列顺序实现"。那是一句**空推理**：列顺序只是把三"段"排成
+    //   对手侧/中线/自己侧，**无法**重排某一侧内部的两层。于是它把
+    //   "自己协议落到整列最外端（应在层 4、紧贴中线）"这个 C-2 缺陷**固化成了期望值**
+    //   （改对反而报红）。现在钉规格本身：
+    //     · 自己侧（下半）= 协议格（层 4）在前、链路槽（层 5）在后；
+    //     · 对手侧（上半）= 链路槽（层 2）在前、协议格（层 3）在后。
+    //   **原能抓什么**：两侧共用一个无条件顺序时的"整段挂载被删"（已由第 17 条的计数表承担）。
+    //   **现在还能抓什么**：把两侧写成同一个顺序（= C-2 回归）、或把两侧顺序对调（自己协议跑到最外端）。
+    //   **为什么新的更贴规格**：它约束的是"中线两侧都是协议"这条**版面事实**的镜像，
+    //   而不是"某个 appendChild 在第几行"。
+    //   ⚠️ 层序的**行为**判据（真跑 `renderNetBoard` 后按元素树 + CSS `order` 数六层）在
+    //   `tests/ui/net-lane-tree.test.ts` —— 源码文本只能证明"分支这么写"，证明不了产出顺序。
     const side = between(code, 'function renderSide(', 'function renderLaneMid');
-    const iSlot = side.indexOf('side.appendChild(renderStackSlot(');
-    const iProto = side.indexOf('side.appendChild(renderProtocolCell(');
-    expect(iSlot, '一侧之内找不到链路槽的挂载').toBeGreaterThanOrEqual(0);
-    expect(iProto, '一侧之内找不到协议格的挂载').toBeGreaterThanOrEqual(0);
-    expect(iSlot, '一侧之内顺序错：链路槽必须在协议格之前（层 2 在层 3 之前 / 层 5 在层 4 之后靠列顺序实现）')
-      .toBeLessThan(iProto);
+    expect(side, '自己侧必须**协议格在前**（层 4 贴中线、链路槽层 5 在其外）—— 两侧共用一个顺序 = C-2 回归')
+      .toMatch(/kind === 'self'\)\s*\{[\s\S]{0,300}side\.appendChild\(protoNode\)[\s\S]{0,150}side\.appendChild\(slotNode\)/);
+    expect(side, '对手侧必须**链路槽在前**（层 2 在外、协议格层 3 贴中线）—— 两侧共用一个顺序 = C-2 回归')
+      .toMatch(/\}\s*else\s*\{[\s\S]{0,300}side\.appendChild\(slotNode\)[\s\S]{0,150}side\.appendChild\(protoNode\)/);
+    // 两个节点确实来自那两个助手（挂载顺序钉的是"哪一份先挂"，这里把"哪一份是谁"补上）
+    expect(side, '链路槽不是 renderStackSlot 的产物（顺序判据失去意义）').toMatch(/=\s*renderStackSlot\(/);
+    expect(side, '协议格不是 renderProtocolCell 的产物（顺序判据失去意义）').toMatch(/=\s*renderProtocolCell\(/);
     // ③ 样式表：列/侧都是纵向，能量槽用 order 落在链路外侧端
     const css = read('styles-net.css');
     // ⚠️ `cssRules` 对这份样式表**不是**先去掉注释再解析（它按 `{}` 切块，块注释里的 `*`/`/`
@@ -774,11 +791,20 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
       .toMatch(/flex-direction:\s*column/);
     expect(ruleBody('.net-lane-band .stack-slot'), '`.stack-slot` 不是纵向 flex（能量槽没法用 order 挪到上/下）')
       .toMatch(/flex-direction:\s*column/);
-    // 能量槽的外侧端：对手（p1）order 1（链路 order 2 之下 ⇒ 在**上**）；自己（p2）order 3（在**下**）
-    expect(ruleBody('.net-lane-band .stack-slot.p1 .battery'), '对手能量槽未定 order（应在上外侧端）')
+    // 能量槽的**外侧端归属**：对手 order 1（在链路 order 2 之上 ⇒ 列的**最上端**）、
+    // 自己 order 3（在**最下端**）。**规格没变，选择器必须按侧给**（R-F · C-2）：
+    // ⚠️ 旧判据钉的是 `.stack-slot.p1/.p2`（**绝对玩家号**）—— 而"哪一侧是自己"由**座位**决定，
+    //    默认预览席位（`viewSeat = 0`，自己 = P0）下那两条会把**两个能量槽都摆到内侧**，
+    //    与 §1 相反（评审真跑元素树实测）。按侧的钩子 `.net-side-foe` / `.net-side-self` 本来就在产出。
+    expect(ruleBody('.net-lane-band .net-side-foe .stack-slot .battery'),
+      '对手能量槽未**按侧**定 order（应在链路上方的外侧端 = 层 1）')
       .toMatch(/order:\s*1/);
-    expect(ruleBody('.net-lane-band .stack-slot.p2 .battery'), '自己能量槽未定 order（应在下外侧端）')
+    expect(ruleBody('.net-lane-band .net-side-self .stack-slot .battery'),
+      '自己能量槽未**按侧**定 order（应在链路下方的外侧端 = 层 6）')
       .toMatch(/order:\s*3/);
+    // 反空集合 + 反回归：**不得**再有按绝对玩家号给能量槽定 order 的规则（C-2 的第二个成因）
+    expect(css, 'styles-net.css 仍按绝对玩家号（.p1/.p2）给能量槽定 order —— 默认席位下两个能量槽都会跑到内侧')
+      .not.toMatch(/\.stack-slot\.p[12]\s*(?:,|\{)[^}]*order/);
     expect(ruleBody('.net-lane-band .stack-slot .battery'),
       '能量槽仍是绝对定位（styles.css:161 的 left/right:-120px 会把竖排的能量槽甩到列外）')
       .toMatch(/position:\s*static/);
@@ -826,16 +852,27 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
    *
    * 守卫对照：旧版零覆盖（`.grow-left/.grow-right` 由 `renderStackSlot` 内部按绝对玩家给，
    * 热座页也在用，所以"本页是否改成了竖排"根本无从判断 —— 这正是重做前那条横排布局
-   * 能一路全绿的原因之一）。现在钉：① `vGrow: true` 的真实参；② 两个类名的 CSS 规则；
-   * ③ 竖向重叠用 `margin-top`（若沿用横排的 `margin-left`，竖排的卡会横向错位、且不再重叠）。
+   * 能一路全绿的原因之一）。现在钉：① `vGrow: true` 的真实参；② `.grow-*` **按侧**给
+   * （`selfPlayer: viewSeat`）；③ 两个类名的 CSS 规则；④ 竖向重叠用 `margin-top`。
+   *
+   * ⚠️ **R-F · C-2 的守卫修正**：旧版只看"两边都传了 vGrow"，于是漏掉了另一半 ——
+   * `grow-*` 的配对当时在 `render.ts` 里按**绝对玩家号**做（`player === 0 ? grow-down : grow-up`），
+   * `viewSeat = 1` 时"自己向上长、对手向下长"，与 §1 的垂直镜像相反。现在 ② 把
+   * "哪一号是自己由**座位**给"钉住；真正的元素树层序与 `.grow-*` 归属由
+   * `tests/ui/net-lane-tree.test.ts` 真跑 `renderNetBoard` 后逐列断言。
    */
-  it('R1-3. 竖向生长：vGrow 真实参 + .grow-down/.grow-up 规则 + 竖向重叠（margin-top）', () => {
+  it('R1-3. 竖向生长：vGrow 真实参 + selfPlayer 按座位 + .grow-down/.grow-up 规则 + 竖向重叠（margin-top）', () => {
     const code = netCode();
     expect(code, 'renderStackSlot 未传 vGrow: true（本页会退回热座页的横向生长）').toMatch(/vGrow:\s*true/);
-    // 竖向生长必须**两种座位都**生效（写死成一侧 = 另一半棋盘还是横排）
-    const stackOpts = code.slice(code.indexOf('side.appendChild(renderStackSlot('));
-    expect(stackOpts.slice(0, 600), 'vGrow 不在 renderStackSlot 的 opts 里（传给了别的调用？）')
+    // 竖向生长必须**两种座位都**生效，且"哪一号是自己"必须由**座位**给（不是按绝对玩家号）
+    const iSlot = code.indexOf('renderStackSlot(');
+    expect(iSlot, '找不到 renderStackSlot( 的调用（结构被改？）').toBeGreaterThanOrEqual(0);
+    const stackOpts = code.slice(iSlot, iSlot + 2000);
+    expect(stackOpts, 'vGrow 不在 renderStackSlot 的 opts 里（传给了别的调用？）')
       .toMatch(/vGrow:\s*true/);
+    expect(stackOpts, '竖向生长未把"哪一号是自己"按**座位**交给共享助手（selfPlayer: viewSeat）'
+      + '—— 按绝对玩家号会让 viewSeat=1 时"自己向上长、对手向下长"（规格 §1 的垂直镜像不成立）')
+      .toMatch(/selfPlayer:\s*viewSeat/);
     const css = read('styles-net.css');
     expect(css, 'styles-net.css 未定义 .stack.grow-down（自己：向下长）')
       .toMatch(/\.stack\.grow-down\s*\{[^}]*flex-direction:\s*column/);
@@ -844,7 +881,7 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
     expect(css, 'styles-net.css 未定义竖向重叠（`.card + .card` 的 margin-top）—— 卡会 100% 全展、一列撑爆')
       .toMatch(/\.stack \.card \+ \.card\s*\{[^}]*margin-top:\s*calc\(/);
     // ⚠️ 这仍然是**源码代理**：`.grow-*` 只是类名，真正的方向由运行期 flex 布局算出来。
-    // 哪种座位用哪个类（绝对玩家号配对）由 render.ts 的 `vGrow` 分支决定，这里只看"两边都传了"。
+    // 哪一侧拿哪个类（按座位）的**行为**判据在 tests/ui/net-lane-tree.test.ts（真跑 + 查元素树）。
   });
 
   /**

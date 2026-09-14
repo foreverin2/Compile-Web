@@ -152,10 +152,19 @@ describe('批次 D 守卫：控制权族 + 常驻层', () => {
     expect(controlTs, '轨道端点必须按座位选轴（热座 x / 远程页 y）').toContain('controlTrackAxis(');
     const seatTs = read('ui/fx-seat.ts');
     expect(seatTs, 'fx-seat 缺控制轨端归属的判据').toContain('export function fxTrackEndFor');
-    expect(seatTs, '控制轨端归属缺"热座 ⇒ 改动前的 4%/96%"这一支')
-      .toMatch(/seat === null\) return \{ pct: to === 0 \? 0\.04 : 0\.96, axis: 'x' \}/);
+    // ⚠️ **R-F（Minor M-4）的判据修正**：贴端距离改成了**单一出处常量** `FX_TRACK_EDGE_PCT`
+    //    （`render.ts` 也从它取值），所以这里的逐字 `0.04` / `0.96` 判据会假红。
+    //    改钉**语义**：热座支 → 自己（`fxIsSelfSide`）贴小端、对手贴大端；竖向支 → 自己贴大端、
+    //    对手贴小端；两条都只经 `fxIsSelfSide`（唯一方向判据）。
+    //    **原能抓什么**：热座支被删/被改成竖向取值（热座控制轨换端）。
+    //    **现在还能抓什么**：同上 —— "自己/对手各贴哪一端"仍然是绝对断言（下面 fx-seat.test.ts
+    //    另有逐字段的 `toEqual({pct: 0.04/0.96})` 单测兜底，数值本身没变）。
+    expect(seatTs, '控制轨端归属缺"热座 ⇒ 自己贴小端 4%、对手贴大端 96%"这一支')
+      .toMatch(/seat === null[\s\S]{0,120}\{ pct: fxIsSelfSide\(seat, to\) \? FX_TRACK_EDGE : 1 - FX_TRACK_EDGE, axis: 'x' \}/);
     expect(seatTs, '控制轨端归属缺"自己在下（96%）、对手在上（4%）"的竖向支')
-      .toMatch(/return \{ pct: to === seat \? 0\.96 : 0\.04, axis: 'y' \}/);
+      .toMatch(/pct: fxIsSelfSide\(seat, to\) \? 1 - FX_TRACK_EDGE : FX_TRACK_EDGE, axis: 'y' \}/);
+    // 贴端距离必须是**单一出处**的常量（Minor M-4）：render.ts 的滑块位置也从它取
+    expect(seatTs, '贴端距离不是单一出处常量（Minor M-4）').toMatch(/export const FX_TRACK_EDGE_PCT = 4;/);
     // #8：牵引链只在"色欲卡效果"造成的易主时播；否则走轻量提示（不牵链条）
     expect(controlTs).toContain('lustDrivenControl(');
     expect(controlTs).toMatch(/p\.reason === 'effect' && \(p\.sourceDefId \?\? ''\)\.startsWith\('lust-'\)/);

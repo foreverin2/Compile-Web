@@ -80,15 +80,11 @@ export function applyFxViewSeat(seat: PlayerId): PlayerId {
   return seat;
 }
 
-/** 把绝对玩家号换算成**视觉座位**：远程页自己 = `0`（下半部）、对手 = `1`（上半部）；热座保持原值。 */
-export function seatIndexFor(player: PlayerId): PlayerId {
-  return currentSeat === null ? player : ((player === currentSeat ? 0 : 1) as PlayerId);
-}
-
-/** 该绝对玩家在**当前视角**下是否"自己"（下半 / 向下生长）。热座下"自己"= 绝对 P0（与旧逻辑同源）。 */
-export function isSelfViewOf(player: PlayerId): boolean {
-  return currentSeat === null ? player === 0 : player === currentSeat;
-}
+/* ⚠️ **R-F · Minor M-1：这里原有两个导出 `seatIndexFor(player)` / `isSelfViewOf(player)`，
+ * 现已删除** —— 全仓（含测试）零调用。它们的存在只有一个害处：让下一个读代码的人以为
+ * "方向模型的入口"是它们，而真正的入口是 `fxOuterForSeat` / `fxIsSelfSide` / `fxTrackEndFor`
+ * 这几个**纯函数**（不读模块态）。真正的判据（哪一端是自己、外端在哪）都在下面，
+ * 且都有单测；留着的死代码只会让"到底该调哪个"再多一种错误答案。 */
 
 /** "端"的语义：`0` = **自己端**（视觉小端：下半 / 向下 / 轨道下端），`1` = **对手端**（大端）。 */
 export type FxEndSide = PlayerId;
@@ -105,6 +101,22 @@ export type FxEndSide = PlayerId;
  */
 export function fxSeatEndToPlayer(side: FxEndSide, seat: PlayerId): PlayerId {
   return (side === 0 ? seat : 1 - seat) as PlayerId;
+}
+
+/**
+ * **哪一端是"自己"**的单一判据（G2 修正 R-F · Minor M-5）。
+ *
+ * - 热座（`seat === null`）：自己 = **绝对 P0**（与改动前的左右逻辑同源）；
+ * - 远程页（座位非 null）：自己 = **视角座位那一号**（`viewSeat = 1` 时 P1 才是自己）。
+ *
+ * 为什么值得一个独立出口：这是"方向模型单一出处"的**最后一条就地判断** ——
+ * `gen3-control.ts` 的 `viewportFallback` 原来自己写着
+ * `fxViewSeat() === null ? to === 0 : to === fxViewSeat()`（评审 §D 普查的漏网处，且**无单测**）。
+ * 收进来之后，"哪一端是自己"只有这一处：控制轨的**端归属**（`fxTrackEndFor`）与
+ * **视口兜底**（`fxTrackFallbackPct`）都从它派生，换视角时不会"改一处忘另一处"。
+ */
+export function fxIsSelfSide(seat: FxViewSeat, to: PlayerId): boolean {
+  return seat === null ? to === 0 : to === seat;
 }
 
 /* ============================================================================
@@ -127,9 +139,22 @@ export type FxOuter = 'start' | 'end';
  *    `PlayerId`/座位号描述的是"上下半部的序号"（0=上半），而 `FxOuter` 描述的是"屏幕坐标方向"。
  *    把这两者混为一谈，就是"上下对调"这类 bug 的唯一入口；故这里显式写出来并配了守卫。
  */
+/**
+ * `fxOuterFor` 的**纯函数版**：座位由实参给（**不读模块态**）。
+ *
+ * 为什么必须有一个不读模块态的版本（G2 修正 R-F · **C-1** 的修法）：`fxStackEndPoint(slot, seat, owner)`
+ * 的调用方已经把座位当**实参**交给它了，而"外侧"要由"**这张卡所属的绝对玩家**"决定。
+ * 只要在判定里改回读模块态，就多出一个"实参座位与模块态座位不一致时静默算错"的窗口
+ * （测试里最容易踩：忘了先 `setFxViewSeat` 就调用）。做成纯函数后，
+ * `fxStackEndPoint` 的两种输入（**座位** + **该卡属主**）都有唯一、可复算的出口。
+ */
+export function fxOuterForSeat(player: PlayerId, seat: FxViewSeat): FxOuter {
+  if (seat === null) return player === 0 ? 'start' : 'end';
+  return player === seat ? 'end' : 'start';
+}
+
 export function fxOuterFor(player: PlayerId): FxOuter {
-  if (currentSeat === null) return player === 0 ? 'start' : 'end';
-  return player === currentSeat ? 'end' : 'start';
+  return fxOuterForSeat(player, currentSeat);
 }
 
 /**
@@ -181,12 +206,20 @@ export interface FxEndPoint { x: number; y: number }
  * `y` = **末卡的下/上缘外侧**（末卡 = DOM 顺序最后一张 = 链路里最新的一张，R1 的 `vGrow`
  * 让它落在**外侧**）；空槽退化为"槽的下/上缘外侧"。
  *
+ * ⚠️ `owner` = **这张卡所属的绝对玩家**，**不是**视角座位（G2 修正 R-F · Minor M-2：
+ * 这个参数原来叫 `seat`，而它被直接喂给 `fxOuterFor` —— 命名与语义不符正是 C-1 的入口）。
+ * 外端由 **`owner` 与 `seat` 共同**决定（`fxOuterForSeat`）：自己 ⇒ 下端、对手 ⇒ 上端。
+ * `seat` 缺省 = 模块态座位（渲染期由 `render-net.ts` 设好）；生产路径由 `fxStackEndPoint` **显式**传，
+ * 于是"传进来的座位"与"算外端用的座位"永远是同一个值。
+ *
  * `lead` 与 `lift` 沿用改动前 `stackEndPos` 的两个不同偏移（末卡 65 / 空槽 90）——
  * 它们是**观感微调量**，本任务不重新标定（规格没给数）。
  */
-export function vStackEndPoint(slot: HTMLElement, seat: PlayerId, lead = 65, lift = 90): FxEndPoint {
+export function vStackEndPoint(
+  slot: HTMLElement, owner: PlayerId, lead = 65, lift = 90, seat: FxViewSeat = fxViewSeat(),
+): FxEndPoint {
   const slotRect = slot.getBoundingClientRect();
-  const outer = fxOuterFor(seat);
+  const outer = fxOuterForSeat(owner, seat);
   const x = vCenterOf(slotRect, 'x');
   const cards = slot.querySelectorAll<HTMLElement>('.card');
   const last = cards.length > 0 ? cards[cards.length - 1] : null;
@@ -198,20 +231,28 @@ export function vStackEndPoint(slot: HTMLElement, seat: PlayerId, lead = 65, lif
 }
 
 /**
- * 统一入口：热座走**改动前那两行**（左右，按绝对玩家号），远程页走竖向。
+ * 统一入口：热座走**改动前那两行**（左右，按绝对玩家号），远程页走竖向（`vStackEndPoint`）。
  *
  * ## `owner` 参数为什么必须留着（这是"热座零变化"的**构造性**那一环）
  *
  * 改动前的 `stackEndPos(slot, owner)` **在热座页也被两个 owner 用到**（`owner === 0` ⇒ 左、
  * `owner === 1` ⇒ 右）。若只看 `fxViewSeat()`（热座恒 `null`），这两个 owner 会被抹平 ⇒
- * 热座页的 `owner === 0` 那一半落点会**静默翻边** —— 那正是本任务的红线。
- * 所以：
- *  - `seat !== null`（远程页）⇒ 用座位算屏幕方向（`fxOuterFor`）；
+ * 热座页的 `owner === 0` 那一半落点会**静默翻边** —— 那正是本任务的红线。所以：
+ *  - `seat !== null`（远程页）⇒ 外端 = `fxOuterForSeat(owner, seat)`（自己向下 / 对手向上）；
  *  - `seat === null`（热座）⇒ 用**调用方给的绝对玩家号**算方向（`owner ?? 1` 是安全兜底；
  *    `stackEndPos` 的调用方从不省略它，省略时按改动前"非 0 即大端"的默认路径走）。
  *
- * 两条路最终都归到同一套"屏幕方向 → 外侧边 + 沿轴外移"的算式（`vOuterEdgeOf` + `step`），
- * 因此"上下对调"这类变异只可能出现在 `fxOuterFor` 或 `vOuterEdgeOf` **一处**，可以指名道姓。
+ * ## ⚠️ C-1（G2 修正 R-F）：远程页**曾经吞掉 `owner`**
+ *
+ * 原文是 `seat !== null ? fxOuterFor(seat) : (owner ?? 1) === 0 ? 'start' : 'end'` ——
+ * 传进去的 `seat` **就是**当前座位，而 `fxOuterFor(currentSeat)` 的 `player === currentSeat`
+ * **恒真** ⇒ 远程页的 `outer` **恒为 `'end'`**、`owner` 被完全忽略 ⇒ **所有**链路落点都算在下端
+ * （对手列应向上长）。评审探针实测：自己列与对手列给出**同一个点**。
+ * 可达路径：同化 2/6 的牌库顶易主（`payload.owner` 是**接收方**，可以是对手）、
+ * `shift` 偏转（`owner = card.owner`，可偏转**对手**的场上卡）。
+ *
+ * 现在两种分支的外端都由**同一个纯函数** `fxOuterForSeat` 给出（只是走哪条轴不同），
+ * 所以"上下对调"只可能出现在那一处，可以指名道姓。
  */
 export function fxStackEndPoint(
   slot: HTMLElement | null,
@@ -221,29 +262,24 @@ export function fxStackEndPoint(
   lift = 90,
 ): FxEndPoint | null {
   if (!slot) return null;
-  const outer: FxOuter = seat !== null ? fxOuterFor(seat) : (owner ?? 1) === 0 ? 'start' : 'end';
+  // ── 远程页：竖向（y 轴）—— 外端 = fxOuterForSeat(**该卡属主**, 座位)（C-1 的修法）──
+  //    走 `vStackEndPoint` 本体（不是复制一份算式）：那个函数现在显式吃 `seat`，两者不可能漂移。
+  if (seat !== null) return vStackEndPoint(slot, owner ?? seat, lead, lift, seat);
+  // ── 热座：横向（x 轴）—— 与改动前 `stackEndPos` 逐字段等价（方向由调用方给的绝对玩家号定）──
+  const outer = fxOuterForSeat(owner ?? 1, null);
   const step = outer === 'end' ? 1 : -1;
   const slotRect = slot.getBoundingClientRect();
   const cards = slot.querySelectorAll<HTMLElement>('.card');
   const last = cards.length > 0 ? cards[cards.length - 1] : null;
-  if (seat === null) {
-    // ── 热座：横向（x 轴）—— 与改动前 `stackEndPos` 逐字段等价 ──
-    const y = slotRect.top + slotRect.height / 2;
-    if (last) {
-      const r = last.getBoundingClientRect();
-      return { x: vOuterEdgeOf(r, outer, 'x') + step * lead, y };
-    }
-    // ⚠️ 改动前的空槽算式与"末卡"那一支**不对称**（`owner === 0 ? right − lift : left + lift`）：
-    //    它锚在**槽的内侧**（P0 槽的空位在槽的右端、P1 槽的空位在左端）。这不是打字错误，
-    //    是"空槽时卡会落在靠协议那一侧"的观感选择；R3 按原样保留，只把方向参数化。
-    return { x: vOuterEdgeOf(slotRect, outer === 'start' ? 'end' : 'start', 'x') + step * lift, y };
-  }
-  // ── 远程页：竖向（y 轴）—— 与 `vStackEndPoint` 同一套算式，座位已在上方解析成 outer ──
-  const x = vCenterOf(slotRect, 'x');
+  const y = slotRect.top + slotRect.height / 2;
   if (last) {
-    return { x, y: vOuterEdgeOf(last.getBoundingClientRect(), outer, 'y') + step * lead };
+    const r = last.getBoundingClientRect();
+    return { x: vOuterEdgeOf(r, outer, 'x') + step * lead, y };
   }
-  return { x, y: vOuterEdgeOf(slotRect, outer, 'y') + step * lift };
+  // ⚠️ 改动前的空槽算式与"末卡"那一支**不对称**（`owner === 0 ? right − lift : left + lift`）：
+  //    它锚在**槽的内侧**（P0 槽的空位在槽的右端、P1 槽的空位在左端）。这不是打字错误，
+  //    是"空槽时卡会落在靠协议那一侧"的观感选择；R3 按原样保留，只把方向参数化。
+  return { x: vOuterEdgeOf(slotRect, outer === 'start' ? 'end' : 'start', 'x') + step * lift, y };
 }
 
 /* ============================================================================
@@ -366,15 +402,52 @@ export function vClipInsetCss(pct: number, outer: FxOuter): string {
 export interface FxTrackEnd { pct: number; axis: 'x' | 'y' }
 
 /**
- * 端归属判据：
- *  - `null`（热座）：**横向**（`axis: 'x'`），`player 0` 贴左端 4%、`player 1` 贴右端 96%
- *    （与 `render.ts` 的 `CONTROL_EDGE_PCT` 同源 —— 两处必须一致，否则落点与滑块会错开）；
- *  - 座位（远程页）：**竖向**（`axis: 'y'`），`to === seat` = **自己** ⇒ 下端 96%，
- *    否则 = 对手 ⇒ 上端 4%。
+ * 控制轨"贴端距离"的**单一出处**（G2 修正 R-F · Minor M-4）。
+ *
+ * 它同时被两处消费，而这两处**必须逐字一致**（不一致的后果是"滑块贴 4%、而特效落点算在 5%"
+ * —— 落点与组件错开，观感上像"特效没打在滑块上"）：
+ *  - `render.ts` 的 `CONTROL_EDGE_PCT`（滑块位置：横 左 4% / 右 96%；竖 上 4% / 下 96%）；
+ *  - 本文件的 `fxTrackEndFor`（FX 落点的端百分比）。
+ *  R3 之前在两边各写死一个字面量 `4`，靠注释说"同源"，没有任何机检把它们连起来；
+ *  现在 `render.ts` **从这个常量取值**（`const CONTROL_EDGE_PCT = FX_TRACK_EDGE_PCT;`），
+ *  改一处另一处一定跟着走。
+ */
+export const FX_TRACK_EDGE_PCT = 4;
+
+/** 贴端距离（比例）。`4 / 100` 与字面量 `0.04`、`1 - 4 / 100` 与 `0.96` 在 IEEE 双精度下**逐位相等**
+ *  （已实测），所以下式的取值与 R3 之前的字面量完全一致。 */
+const FX_TRACK_EDGE = FX_TRACK_EDGE_PCT / 100;
+
+/**
+ * 端归属判据（**方向走的都是 `fxIsSelfSide` 这一处**）：
+ *  - `null`（热座）：**横向**（`axis: 'x'`），**自己 = 绝对 P0** 贴小端 4%、对手贴大端 96%
+ *    （与改动前的左右算式逐字等价；贴端距离见 `FX_TRACK_EDGE_PCT`）；
+ *  - 座位（远程页）：**竖向**（`axis: 'y'`），**自己 = 视角座位那一号** ⇒ 大端（下）96%、
+ *    对手 ⇒ 小端（上）4%（§8.4 的用户裁决）。
+ *
+ * ⚠️ 两类页面里"自己在哪一端"的**映射是相反的**（横排的自己在小端、竖排的自己在大端），
+ * 所以这里保留两条分支；但两条分支的**判据**都只经 `fxIsSelfSide` —— 换视角时不可能只改半边。
  */
 export function fxTrackEndFor(seat: FxViewSeat, to: PlayerId): FxTrackEnd {
-  if (seat === null) return { pct: to === 0 ? 0.04 : 0.96, axis: 'x' };
-  return { pct: to === seat ? 0.96 : 0.04, axis: 'y' };
+  return seat === null
+    ? { pct: fxIsSelfSide(seat, to) ? FX_TRACK_EDGE : 1 - FX_TRACK_EDGE, axis: 'x' }
+    : { pct: fxIsSelfSide(seat, to) ? 1 - FX_TRACK_EDGE : FX_TRACK_EDGE, axis: 'y' };
+}
+
+/**
+ * 竖向轨道**取不到实测矩形**时的视口兜底比例（G2 修正 R-F · Minor M-5）。
+ *
+ * `gen3-control.ts` 的 `viewportFallback` 原来自己写着
+ * `const self = fxViewSeat() === null ? to === 0 : to === fxViewSeat()` 再配 0.82 / 0.18 ——
+ * 评审 §D 的"方向是否已全部集中"普查里它是**唯一漏网处**，而且**没有任何单测**。
+ * 收进这里之后：判据（`fxIsSelfSide`）与两个量都在同一处，六个组合都有绝对断言（见 fx-seat.test.ts）。
+ *
+ * 语义：**自己端 = 视口 82%（下）、对手端 = 18%（上）** —— 与 `fxTrackEndFor` 的竖向分支同向
+ * （自己在大端 / 下端）。横向的兜底（22% / 78%）**不在这里**：它只服务热座，且横向位置由
+ * 绝对玩家号 0/1 直接给，与"哪一端是自己"无关（留在 `gen3-control.ts`）。
+ */
+export function fxTrackFallbackPct(seat: FxViewSeat, to: PlayerId): number {
+  return fxIsSelfSide(seat, to) ? 0.82 : 0.18;
 }
 
 /**
