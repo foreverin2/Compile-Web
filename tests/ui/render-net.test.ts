@@ -308,7 +308,17 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
      */
     const topLevelPlainStatement = (at: number): boolean => {
       if (braceDepthBefore(body, isCode, at) !== 0) return false;
-      return !/\b(if|for|while|switch)\s*\(|=>|\bfunction\b/.test(statementHeadBefore(body, isCode, at));
+      // ⚠️ 黑名单里**必须**含 `&&`/`||`/`?`（G2 Task 3F3 终轮复评的残留绕过）：
+      //    深度 0 + 无 if/for/while + 无 `=>` 仍挡不住**短路求值**——
+      //    `false && (root.textContent = '');` 与 `false ? (…) : null;` 是独立语句、在代码位、深度 0，
+      //    于是守卫全绿而**清空永不执行**（页面照旧逐帧叠加）。补上这三个运算符后，该族封口：
+      //    深度 0 + 语句头空白 ⇒ "语句不执行"只剩两种可能 —— 被 return/throw 跳过（那挂载也跳过了，
+      //    已由 noEarlyExitBetween 覆盖），或它根本不是独立语句（表达式前缀，被本条挡掉）。
+      //    代价：同时拒掉"带条件的清空"（`(s.phase !== 'draft') && clear`）——**方向正确**，
+      //    本守卫的口号就是"无条件清空 root"（Task 4 的分派已经保证 net 路径下 phase ≠ draft）。
+      return !/\b(if|for|while|switch)\s*\(|=>|\bfunction\b|&&|\|\||\?/.test(
+        statementHeadBefore(body, isCode, at)
+      );
     };
     // 清空与挂载之间**不得有 return/throw**：否则存在"挂载了却没清空"的路径（原来的
     // "前缀里没有 if/for/while" 想挡的就是这个，这里换成更精确的本地判据）
