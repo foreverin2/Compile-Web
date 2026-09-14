@@ -10,6 +10,10 @@ import { executeAction } from './core/game';
 import { getCompilableLines } from './core/rules/compile';
 import { collectTriggers } from './core/effects/triggers';
 import { renderApp, renderDraft, resetUiState, syncCompiledFxLayers, syncSmokeOverlays, syncScanOverlays, syncPsychicParticles, syncPlagueMists, syncApathyMists, syncApathyMosaics, syncSpirit0Glows, syncSpirit1Cards, syncMetal0Glows, syncMetalPlates, syncMetal6Mans, syncMetal1LineGlows, syncMirror0BatteryGlows, syncClarity0BatteryGlows, syncIceFx, syncSmoke2LineGlows, syncFear0TriGlows, syncWarBlades, syncChainLayerPosition, syncDiversity3Fx, type UiCallbacks } from './ui/render';
+// G2 Task 4：远程对战页（单视角预览）。**本 import 是 render-net.ts 第一次进入 JS 产物** ——
+// 在此之前它没有任何生产代码引用它（Task 3/3F/3F2 改了 700+ 行而产物哈希一字未动），
+// 也就是说 build 那道门此前对整个远程页是瞎的。
+import { renderNetBoard, resetNetUiState } from './ui/render-net';
 import { openControlRearrangeModal, closeControlRearrangeModal, refreshControlRearrangeModal, isControlRearrangeOpen, orderChanged, orderToAction } from './ui/control-rearrange';
 import { renderHome, renderCoin, renderLibrary, renderRules, renderModeSelect } from './ui/home';
 import { newMatchSeed } from './ui/match-seed';
@@ -61,12 +65,62 @@ let transitioning = false;
  *  （可达路径：刷新抽牌动画进行中 → 立即胜利 → 动画结束前点「返回主界面」）。 */
 let resetEpoch = 0;
 
-/** 控制组件重排模态内的一次交换（2026-09 基础规则）：引擎动作 + 重渲染棋盘 + 模态刷新。
+/**
+ * G2 Task 4：**当前页面模式** —— 热座棋盘（默认）或远程页单视角预览。
+ * 这是"整帧重渲染该画哪一页"的唯一开关，只由三个入口改写：
+ *   - `showModeSelect` 的 `startNetPreview` → `'net'`（单视角预览）；
+ *   - `showModeSelect` 的 `startHotseat` → `'hotseat'`（显式复位，幂等）；
+ *   - `resetToMainInterface` → `'hotseat'`（**必须**，否则"打完一局预览 → 返回主页面 → 开热座"
+ *     会渲染成远程页 —— 那是最难自查的一类串味）。
+ */
+let renderMode: 'hotseat' | 'net' = 'hotseat';
+/** 预览视角座位（**绝对玩家号**；仅 `renderMode === 'net'` 时有意义）。页内工具条可切换。 */
+let netViewSeat: PlayerId = 0;
+/** 预览时对手手牌可见性（仅 `renderMode === 'net'` 时有意义）。默认 `'viewSeat'` = 对手只手牌数量
+ *  （远程页 §6.4 的信息遮蔽形态，也是 G2 用户验收第 1 项要看的形态）；工具条可切 `'all'` 以便
+ *  轮到对手时仍能操作（否则预览会卡死、无法做 ≥20 个点名特效抽查）。 */
+let netHandVisibility: 'all' | 'viewSeat' = 'viewSeat';
+
+/**
+ * **整帧重渲染的唯一入口**：按 `renderMode` 路由到当前页面。
+ *
+ * - `renderMode === 'net' && state.phase !== 'draft'` → `renderNetBoard`（远程页单视角预览）；
+ * - 否则 → `renderApp`（热座页；**草稿阶段恒走这里** —— 草稿页在 G2 不分支，预览沿用完整热座流程）。
+ *
+ * 为什么必须统一入口：远程页要**可玩**（用户验收第 3 项要求把牌真的打出去看特效），
+ * 而热座页的每次状态变更都会 `renderApp(root, state, cb)` 整帧重画 —— 只要有一处漏改，
+ * 那一处就会把远程页**悄悄换回热座棋盘**（不报错、只是一屏布局突变）。
+ *
+ * ⚠️ 本函数**不做 DOM 清理**：清空 root 是渲染器自己的契约（`renderNetBoard` 首行
+ * `root.textContent = ''`，与 `renderApp`/`renderDraft`/`renderBoard` 同形）。
+ */
+function rerender(): void {
+  if (renderMode === 'net' && state.phase !== 'draft') {
+    // 预览工具条只在传了 onPreviewChange 时渲染（真实联机不传 → 完全不存在）；
+    // verifyHooks 打开**运行时自查**：渲染后立刻去 DOM 里查 A 类钩子 + 两条源码守卫证不了的断言，
+    // 结果写进工具条的 `.net-verify-note`（用户一进预览页就能看见，不必开控制台）。
+    renderNetBoard(root, state, cb, {
+      viewSeat: netViewSeat,
+      handVisibility: netHandVisibility,
+      onPreviewChange: (next) => {
+        if (next.viewSeat !== undefined) netViewSeat = next.viewSeat;
+        if (next.handVisibility !== undefined) netHandVisibility = next.handVisibility;
+        rerender();
+      },
+      verifyHooks: true,
+    });
+    return;
+  }
+  renderApp(root, state, cb);
+}
+
+/**
+ * 控制组件重排模态内的一次交换（2026-09 基础规则）：引擎动作 + 重渲染棋盘 + 模态刷新。
  *  交换基础动画由 protocols:rearranged 事件驱动（effects「重排协议基础特效」——
  *  两张协议卡同时平移互换位置，与"交换链路"动画不同）。 */
 function applyRearrangeSwap(target: PlayerId, a: Line, b: Line): void {
   executeAction(state, state.turnPlayer, 'rearrange-protocols', { target, a, b });
-  renderApp(root, state, cb);
+  rerender();
   refreshControlRearrangeModal();
 }
 
@@ -85,7 +139,7 @@ function commitEffectRearrange(promptId: string, order: Line[]): void {
   if (!top || top.id !== promptId || !top.prompt) {
     effectRearrangeKey = null;
     closeControlRearrangeModal();
-    renderApp(root, state, cb);
+    rerender();
     return;
   }
   effectRearrangeKey = null;
@@ -128,6 +182,14 @@ const cb: UiCallbacks = {
   onWinReset() {
     resetToMainInterface();
   },
+  /**
+   * G2 Task 4：渲染器（`render.ts` 的选择浮层 / 拖拽 / 工具条）触发的"回当前页"回调。
+   * 没有它，远程页里选择浮层点候选卡后仍会 `renderApp` 把页面换回热座棋盘。
+   * 实现是**转调本模块的 `rerender()`**（唯一入口），因此路由规则只有一处。
+   */
+  rerender() {
+    rerender();
+  },
   onDraftPick(defId) {
     performDraftPick(state, defId);
     if (state.phase === 'turn') {
@@ -135,16 +197,16 @@ const cb: UiCallbacks = {
       renderDraft(root, state, cb);
       playDraftToGameTransition();
     } else {
-      renderApp(root, state, cb);
+      rerender();
     }
   },
   onDraftUnpick(defId) {
     performDraftUnpick(state, defId);
-    renderApp(root, state, cb);
+    rerender();
   },
   onDraftBan(defId) {
     performDraftBan(state, defId);
-    renderApp(root, state, cb);
+    rerender();
   },
   onAction(a) {
     if (state.phase === 'gameover') return;
@@ -188,7 +250,7 @@ const cb: UiCallbacks = {
       // 抽牌飞入动画：记录刷新前手牌数，执行后按差值（= 本次抽了几张）播放动画，
       // 动画结束后再重渲染展示新手牌；动画进行中忽略再次刷新（防并发）
       if (drawAnimBusy) {
-        renderApp(root, state, cb);
+        rerender();
         return;
       }
       // 持有控制组件 → 补满手牌前先归还中立并弹「重排协议」模态（规则文本「控制组件
@@ -231,7 +293,7 @@ const cb: UiCallbacks = {
       pushLog(state, `行动结算异常：${err instanceof Error ? err.message : String(err)}`);
       trace('错误', `行动结算异常 kind=${a.kind}：${err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err)}`);
       trace('状态', `异常后状态：${stateDigest(state)}`);
-      renderApp(root, state, cb);
+      rerender();
       return;
     }
     // 全量追踪：行动后状态摘要（含双方线值/手牌/牌库/弃牌/协议/挂起）
@@ -251,10 +313,10 @@ const cb: UiCallbacks = {
         playRevealFlySequence(effectReveals, () => {
           revealFlyBusy = false;
           if (revealEpoch !== resetEpoch) return; // 重置发生：放弃渲染（幽灵由重置清扫）
-          renderApp(root, state, cb);
+          rerender();
         });
       } else {
-        renderApp(root, state, cb);
+        rerender();
       }
     };
     if (drawAnimCount > 0) {
@@ -452,7 +514,7 @@ function playDraftToGameTransition(): void {
       overlay.classList.add('loading-out');
       root.classList.remove('draft-exit');
       root.classList.add('board-enter');
-      renderApp(root, state, cb);
+      rerender();
       window.setTimeout(() => {
         overlay.remove();
         root.classList.remove('board-enter');
@@ -491,7 +553,26 @@ function showModeSelect(): void {
   renderModeSelect(root, {
     backHome: showHome,
     startHotseat: (ban, randomPool) => {
+      // 显式复位（幂等）：从"单人/三人开发中"或任何历史路径过来时，保证是热座模式。
+      // 防的是"预览模式泄漏到热座"这一类串味（另一个堵点是 resetToMainInterface）。
+      renderMode = 'hotseat';
       gameOptions = { ban, randomPool };
+      showCoin();
+    },
+    /**
+     * G2 Task 4：**单视角预览（本地、零联机）** —— 远程对战页的视觉验收入口。
+     *
+     * 设计取舍（为什么不另写一套"直接进对战"的捷径）：预览**沿用完整的热座流程**
+     * （掷硬币 → 草稿页 → 过渡视频 → 对战阶段），只在**对战阶段**把布局换成远程页：
+     *   - 不需要写"自动选完 6 张草稿"的逻辑（那是另一套要维护的状态机）；
+     *   - 不会绕过过渡动画（绕过就等于让"远程页与过渡时序"这条路径永远不被执行）；
+     *   - 切换点由 `rerender()` 的 `state.phase !== 'draft'` 守卫单点决定，规则只有一处。
+     */
+    startNetPreview: (viewSeat, ban, randomPool) => {
+      gameOptions = { ban, randomPool };
+      renderMode = 'net';
+      netViewSeat = viewSeat;
+      netHandVisibility = 'viewSeat'; // 验收第 1 项要看的形态：对手手牌只显示数量
       showCoin();
     },
   });
@@ -512,7 +593,7 @@ function showCoin(): void {
         draftMode: gameOptions.ban ? 'ban' : 'normal',
         draftPool: gameOptions.randomPool ? randomPoolFromSeed(seed, 12) : undefined,
       });
-      renderApp(root, state, cb);
+      rerender();
     },
   });
 }
@@ -522,9 +603,20 @@ function showCoin(): void {
  * - 清空本模块的动画标志/队列/定时器（自动推进、抽牌/揭示动画、过渡中标志）；
  * - resetUiState()：清空 render.ts 全部 UI 模块态并移除 body 级常驻层/遮罩
  *   （编译环 / 黑烟 / 放大遮罩 / 弃牌堆查看器——旧局残留会悬空）；
+ * - resetNetUiState()（G2 Task 4）：清空**远程页自有**的模块态（上次选择请求 id、预览工具条反馈文本）
+ *   —— 与 resetUiState() 并排调用：两页的模块态分属两个模块，谁都不清对方的（见 render-net.ts 注释）；
+ * - **复位页面模式**（G2 Task 4）：`renderMode` 回 `'hotseat'`、视角与手牌可见性回默认。
+ *   不复位就会出现「打完一局**预览** → 返回主界面 → 开**热座**」渲染成**远程页**：
+ *   下一局的 `createGame` 之后每次 `rerender()` 都还会走进 net 分支，而热座页期待的是
+ *   `renderApp` —— 症状是"明明点的热坐，进去却是远程布局"，且不报任何错。
  * - 回到主页面（下次「开始游戏」重新掷硬币定先手）。
  * 选择应用内重置而非 location.reload()：无整页闪烁、保留 devmode/诊断常驻，
  * 且全部可重置状态都有明确复位点（resetUiState 覆盖 render.ts 全部模块态）。
+ *
+ * ⚠️ 复位**必须排在 `showHome()` 之前**：`showHome()` 是本函数渲染出的"干净主页面"，
+ * 而它与 `renderMode` 无关（直调 `renderHome`）—— 把复位放在它之后虽然当前也能跑通，
+ * 却把"主页面已在屏上、模式还没复位"这个中间态留给了将来任何在 `showHome()` 之后
+ * 追加的渲染逻辑（例如"返回后自动重开一局"），那会立刻变成同一个 bug。复位在前 = 无中间态。
  */
 function resetToMainInterface(): void {
   resetEpoch += 1; // 失效进行中的动画完成回调（epoch 守卫）
@@ -541,6 +633,10 @@ function resetToMainInterface(): void {
   closeControlRearrangeModal(); // 控制组件重排模态（body 级）随局清扫
   effectRearrangeKey = null; // 效果内重排窗口的会话键随局清空
   resetUiState();
+  resetNetUiState(); // 远程页自有模块态（与上一行并排：两页的状态分属两个模块）
+  renderMode = 'hotseat'; // 防"预览模式泄漏到热座"（见本节注释）
+  netViewSeat = 0;
+  netHandVisibility = 'viewSeat';
   showHome();
 }
 

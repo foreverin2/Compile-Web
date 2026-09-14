@@ -26,6 +26,12 @@ import { stripComments, stripArrayDecl, codePositions } from './source-text';
  * 19 条 A 类钩子与两条运行时断言（`.hand` 顺序 / 对手卡 `.rot-180`）的真实验证靠
  * `opts.verifyHooks`（`verifyPageHooks`）与用户在 5173 上的 ≥20 个点名特效抽查。
  *
+ * ## G2 Task 4
+ * A 类清单补入 `.rot-180`（远程页对手侧的倒置态）→ `NET_PAGE_HOOKS` 同步镜像（20 条），
+ * 第 2b 条的条数断言改为**从契约推导**（硬编码数字只会与契约文档永久打架）。
+ * 本页的自查侧：`.rot-180` 走 `stateDependent`（场上无卡合法为 0），**逐卡计数**仍由
+ * 第 13b/19 条钉住的断言 2（硬约束 2：对手侧每张卡/协议各自带 `.rot-180`）承担。
+ *
  * ## G2 Task 3F 对三条守卫可信度的修正（每条都在报告里有变异实测）
  * 1. **C-3 / I-3**：`NET_PAGE_HOOKS` 表里逐字写着 19 条 hook 字符串，而"本文件提供全部 A 类钩子"
  *    的判据是"本文件源码里出现 token" → **表满足了断言本身**（变异：删掉 `renderStackSlot(` /
@@ -398,7 +404,13 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
     const aHooks = hooksOfCategory('A').map((h) => h.hook).slice().sort();
     const tableHooks = NET_PAGE_HOOKS.map((h) => h.hook).slice().sort();
     expect(tableHooks, 'NET_PAGE_HOOKS 与契约 A 类清单不一致（表已漂移）').toEqual(aHooks);
-    expect(NET_PAGE_HOOKS.length, 'A 类钩子条数变了？请同步本守卫与报告').toBe(19);
+    // G2 Task 4：期望值改为**从契约推导**（原来硬编码 19）。理由有两条：
+    //   ① 硬编码数字与上一行的集合相等断言**重复**（集合相等已经蕴含条数相等），删掉它不丢机检力；
+    //   ② 硬编码会**主动制造漂移** —— Task 4 把 `.rot-180` 登记为 A 类后条数变成 20，而契约测试
+    //      的「契约文档必须逐一登记全部 A 类钩子」会**逼**文档写 20；若这里仍写 19，两处就永久打架。
+    // 保留下来的仍然是一条**跨文件**断言（表 vs 契约），不是"抄一遍数字"。
+    expect(NET_PAGE_HOOKS.length, 'A 类钩子条数变了？请同步 NET_PAGE_HOOKS 与 docs/4代-FX DOM 契约.md')
+      .toBe(hooksOfCategory('A').length);
     // 豁免项必须与 RENDERERS 里 render-net.ts 的 exempt 逐字一致（两处都是"有意不提供"的声明）
     const netRenderer = RENDERERS.find((r) => r.file === 'render-net.ts');
     expect(netRenderer, 'render-net.ts 未登记进 RENDERERS').toBeTruthy();

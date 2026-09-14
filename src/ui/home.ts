@@ -220,6 +220,17 @@ export interface ModeSelectNav {
   backHome(): void;
   /** 玩家选定「热坐」并携带两个开关状态继续（→ 掷硬币） */
   startHotseat(banEnabled: boolean, randomPoolEnabled: boolean): void;
+  /**
+   * G2 Task 4：进入**远程对战页单视角预览**（本地、零联机）—— G2 视觉验收用。
+   *
+   * 与 `startHotseat` 的**唯一区别**是宿主会把页面模式切成远程页（`renderMode = 'net'`）；
+   * 流程本身完全沿用热座（掷硬币 → 草稿页 → 过渡 → 对战阶段）。
+   *
+   * `viewSeat` 只给**起始**视角：进预览即 `0`（P1 视角 = 验收第 1 项要看的形态：对手手牌只显示数量）。
+   * 切到 P2 视角、把对手手牌改成全部可见，都靠**页内工具条**（`NetViewOpts.onPreviewChange`）——
+   * 有意不为这两个开关再加模式卡：模式选择页已经够挤，而工具条只在预览时出现，语义更准。
+   */
+  startNetPreview(viewSeat: 0 | 1, banEnabled: boolean, randomPoolEnabled: boolean): void;
 }
 
 export function renderModeSelect(root: HTMLElement, nav: ModeSelectNav): void {
@@ -242,6 +253,20 @@ export function renderModeSelect(root: HTMLElement, nav: ModeSelectNav): void {
     mkMode('热坐（双人）', '两名玩家轮流在同一设备上对战（当前可用）', true, () => {
       nav.startHotseat(banBox.checked, randomBox.checked);
     })
+  );
+  // G2 Task 4：远程对战页的**单视角预览**（本地、零联机）。放在热坐卡之后 —— 它是热坐流程的
+  // 一个"看布局"变体，视觉上从属于它；热坐卡的文案与行为一行未改。
+  list.appendChild(
+    mkMode(
+      '单视角预览（本地）',
+      '远程对战页布局预览：上方是对手、下方是你；你的卡正立、对手的卡倒置。'
+        + '仍是本地热座流程，零联机。页内工具条可切换视角与对手手牌可见性。',
+      true,
+      () => {
+        // P1 视角起手：一进预览就是验收第 1 项要看的形态（对手手牌只显示数量）。
+        nav.startNetPreview(0, banBox.checked, randomBox.checked);
+      }
+    )
   );
   list.appendChild(
     mkMode('单人模式', '对战 AI 对手', false, () => showToast('单人模式：开发中'))

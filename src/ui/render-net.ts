@@ -14,7 +14,7 @@
  * 选择浮层 / 拖拽 / 手牌区 / 选择态）。
  *
  * ## 七条硬约束（违反 → 静默退化；逐条对应本文件的实现）
- * 1. **19 条 A 类钩子全部产出，且产出方拼写与热座页一致** —— 靠复用 render.ts 的叶子助手保证
+ * 1. **20 条 A 类钩子全部产出，且产出方拼写与热座页一致** —— 靠复用 render.ts 的叶子助手保证
  *    （`.stack-slot p${player + 1}` / `trash-pile p${player + 1}` 都在助手内，`data-player` /
  *    `data-line` 走 `dataset`）。`.pN` 拼写是**承重的**，不要改成复合类名（计划附录 A.4-2）。
  *    **本页的产出证据是「助手调用链」，不是本文件的 token**：拼写由 `render.ts` 的钩子产出表达式
@@ -121,10 +121,10 @@ function handVisOf(handVisibility: NetViewOpts['handVisibility']): 'all' | 'coun
 }
 
 /* ============================================================================
- * 19 条 A 类钩子的**逐条登记**（docs/4代-FX DOM 契约.md §3 的验收基准）
+ * 20 条 A 类钩子的**逐条登记**（docs/4代-FX DOM 契约.md §3 的验收基准）
  *
  * ⚠️ **这张表不是"已提供"的证据**（G2 Task 3 的 Critical C-3 就是它曾经充当证据）：
- *   表里逐字写着 19 条 hook 的选择器字符串，而契约守卫的判据是"本文件的（去注释）源码里
+ *   表里逐字写着 19 条 hook 的选择器字符串（Task 4 补 `.rot-180` 后为 20 条），而契约守卫的判据是"本文件的（去注释）源码里
  *   出现该 token" —— 于是**表本身**就满足了「本页提供全部 A 类钩子」。评审变异实测：
  *   把 `renderStackSlot(` / `renderProtocolCell(` 的真实挂载删掉（页面上因此没有链路槽与协议格）
  *   后，契约测试 20 + 本文件守卫 11 **全绿（31/31）**。
@@ -200,6 +200,17 @@ export const NET_PAGE_HOOKS: readonly NetPageHook[] = [
     hook: '.rot-ccw',
     exempt: '与 .rot-cw 同一条理由（成对读取：src/ui/fx-orient.ts 的 orientOf）。',
     call: [],
+  },
+  {
+    hook: '.rot-180',
+    // 非豁免：远程页**正是**它的产出方（对手侧每张卡/协议各自带它），而热座页也有产出点
+    // （render.ts:130 的 `.protocol-img.rot-180`）→ 两个渲染器都提供，无需豁免。
+    // 运行时自查只做"存在性 + 状态相关降级"：对手侧场上卡与协议各自的 **.rot-180 计数**
+    // 由 verifyPageHooks 的断言 2（硬约束 2）承担（数量随场面变化，故这里不给定 expected）。
+    call: ['renderStackSlot(', 'renderProtocolCell('],
+    probeSelector: '.rot-180',
+    stateDependent: '场上无卡时合法为 0（开局即有；"场上空"是合法局面）——'
+      + '对手侧的逐卡倒置计数由断言 2（硬约束 2）另行核对',
   },
   {
     hook: 'img',
@@ -911,7 +922,7 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
     });
   });
 
-  // —— 诊断（可选）：把"19 条钩子真的在 DOM 里"这件事变成可执行的证据 ——
+  // —— 诊断（可选）：把"20 条钩子真的在 DOM 里"这件事变成可执行的证据 ——
   // 两道防线：`verifyPageHooks` 内部逐条 try/catch；这里再包一层，保证**任何**未预料的异常
   // 都不会从 `renderNetBoard` 逃逸到宿主（"诊断不得把渲染搞崩"）。C-2 的原始缺陷正是
   // 一个非法选择器抛 `SyntaxError` 直接冲垮整页渲染。

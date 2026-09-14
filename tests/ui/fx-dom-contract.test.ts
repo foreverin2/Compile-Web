@@ -64,7 +64,7 @@ const rendererSources = new Map<string, string>(RENDERERS.map((r): [string, stri
  *
  * 背景（评审 Critical C-3，变异实测）：远程页 `render-net.ts` 刻意最大化复用 `render.ts` 的叶子
  * 助手，钩子的**产出表达式**都在 `render.ts` 里，本页只负责"把这些助手挂进渲染链路"。原实现为了
- * 让"本文件出现该 token"成立，在 `render-net.ts` 里放了一张逐字写着 19 条 hook 选择器的数据表
+ * 让"本文件出现该 token"成立，在 `render-net.ts` 里放了一张逐字写着 A 类 hook 选择器的数据表
  * `NET_PAGE_HOOKS` —— 于是**表本身**满足了断言：把 `renderStackSlot(` / `renderProtocolCell(`
  * 的真实挂载删掉（页面上因此没有链路槽与协议格），契约测试 20 + render-net 守卫 11 **全绿（31/31）**。
  *
@@ -276,6 +276,49 @@ describe('G1 · FX DOM 契约', () => {
     const unknown = [...ASSISTANT_CALLS.keys()].filter((f) => !rendererFiles.has(f));
     expect(unknown, `ASSISTANT_CALLS 里登记了未注册的渲染器（要求被静默忽略）：${unknown.join(', ')}`).toEqual([]);
     expect(ASSISTANT_CALLS.size, 'ASSISTANT_CALLS 为空（复用助手型渲染器失去判据）').toBeGreaterThan(0);
+  });
+
+  /**
+   * G2 Task 4（来自 Task 2 终审的延后清单 N-5）：`exempt` 的**每一项都必须是真实的 A 类钩子**。
+   *
+   * 为什么必须有这条：`exempt` 是「该渲染器**有意**不提供这条契约项」的声明，上面那条
+   * 「A 类钩子必须被当前渲染器提供」正是靠 `exempt.has(h.hook)` 跳过它的。于是**拼错一个键**
+   * （`.rot-cw` 写成 `.rot-cw ` / `.rotcw`）不会报任何红 —— 它只是在集合里多出一个**永不匹配**
+   * 的字符串，而它本该豁免的那条钩子**照旧被正常验收**（这一半是安全的），真正危险的是反方向：
+   * 有人为了让一条**真的缺失**的钩子变绿，往 `exempt` 里塞一个不存在的钩子名（或塞一个 B/C/D 类
+   * 的钩子）—— 这条断言让「豁免面」只能由**真实的 A 类钩子**构成，豁免因此是**逐条可复核**的决定，
+   * 而不是一个能兜住任意拼写的垃圾桶。
+   *
+   * 本任务是 `exempt` 的**首次真正使用**（Task 3 登记 `render-net.ts` 时加的），所以现在补。
+   */
+  it('RENDERERS 里 exempt 的每一项都必须是真的 A 类钩子（拼错键 = 静默扩大豁免面）', () => {
+    const aHooks = new Set<string>(hooksOfCategory('A').map((h) => h.hook));
+    const problems: string[] = [];
+    // 反空集合：当前至少有一个渲染器带 exempt（否则这条断言变成空转）——
+    // 失败信息说明「若非有意删除全部豁免，请同步本条与契约文档」
+    expect(RENDERERS.filter((r) => (r.exempt ?? []).length > 0).length,
+      'RENDERERS 里没有任何带 exempt 的渲染器（豁免断言空转；若有意删除请同步本条）').toBeGreaterThan(0);
+    for (const r of RENDERERS) {
+      for (const e of r.exempt ?? []) {
+        if (!aHooks.has(e)) {
+          problems.push(`${r.file} 的 exempt 项 ${JSON.stringify(e)} 不是 A 类钩子 —— `
+            + '拼错键会静默扩大豁免面（豁免必须逐条对应一条真实契约项）');
+        }
+      }
+      // 同一渲染器内不得重复豁免（重复说明有一条是抄错的）
+      const dup = (r.exempt ?? []).filter((e, i) => (r.exempt ?? []).indexOf(e) !== i);
+      if (dup.length > 0) problems.push(`${r.file} 的 exempt 有重复项：${dup.join(', ')}`);
+    }
+    expect(problems, `以下 exempt 登记不成立：\n${problems.join('\n')}`).toEqual([]);
+    // 义务守恒：被豁免的钩子仍然必须**被别的渲染器提供**（exempt 只豁免这一个渲染器，
+    // 不得让一条契约项在**全部**渲染器上都不验收 —— 那等于悄悄删掉一条契约）
+    const missingEverywhere: string[] = [];
+    for (const h of hooksOfCategory('A')) {
+      const exemptedBy = RENDERERS.filter((r) => (r.exempt ?? []).includes(h.hook));
+      if (exemptedBy.length === RENDERERS.length) missingEverywhere.push(h.hook);
+    }
+    expect(missingEverywhere, `以下 A 类钩子在**所有**渲染器上都被豁免（契约项被静默删除）：\n${missingEverywhere.join('\n')}`)
+      .toEqual([]);
   });
 
   it('A/B/C 类 requiredBy 的每个模块都必须自己含该钩子的判别子串（出处可机检，不是只查名单）', () => {

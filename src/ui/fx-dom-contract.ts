@@ -232,6 +232,14 @@ export const FX_DOM_CONTRACT: readonly FxDomHook[] = [
       + '**G2 Task 2 起** 同样只由 src/ui/fx-orient.ts 读取（见 .rot-cw 条）',
   },
   {
+    hook: '.rot-180', kind: 'class', category: 'A',
+    requiredBy: ['fx-orient.ts'],
+    note: '场上卡 180° 倒置态（远程页对手一侧；render-net.ts 按座位挂）。'
+      + '与 ±90° 的区别：180° **不交换布局盒宽高**、只绕中心转 180°（cloneBoxSwaps(180)===false）——'
+      + '所以它不能复用 ±90° 的浮层卡路径。热座页唯一产出点 render.ts:116 是 .protocol-img（非 FX 节点），'
+      + '故本钩子在热座页对 FX 不可达。',
+  },
+  {
     hook: 'img', kind: 'element', category: 'A',
     requiredBy: ['fx-gen2.ts', 'fx-gen3-swap.ts', 'fx/delete-shatter.ts', 'fx/discard-cut.ts', 'effects/index.ts'],
     note: '卡面图：偏转/破碎/切割/翻面/交换取卡面图的唯一来源（render.ts 造 .card-face-img / .protocol-img）；'
@@ -366,7 +374,9 @@ export function hooksOfCategory(c: 'A' | 'B' | 'C' | 'D'): FxDomHook[] {
  *    历史成因：控制器最初的选择器普查把 render.ts 自己的查询也算成了 FX 依赖，于是给了 7 条
  *    「已确认锚点」，其中这三条与「A 类必须被 FX 模块引用」这条机检互相冲突；纠正后控制器给的
  *    锚点表缩到 6 条（那是**锚点表**，不是完整清单）。终审补入 `.protocol` 与 `.trash-pile.p1/.p2`
- *    两个漏项后，完整 A 类共 **19** 条（见 docs/4代-FX DOM 契约.md §3）。
+ *    两个漏项后 A 类为 19 条；**G2 Task 4 再补 `.rot-180`**（远程页对手侧的倒置态，
+ *    `cloneBoxSwaps(180) === false` 故不可由 ±90° 代替），完整 A 类共 **20** 条
+ *    （见 docs/4代-FX DOM 契约.md §3）。
  *    远程页若不提供它们，坏掉的是**拖拽 / 选择模式 / 线选择高亮**，而不是某条点名特效。
  *
  * 2. **（2026-09-13 终审纠正）**「只被 render.ts / diag.ts / home.ts / control-rearrange.ts 引用的
