@@ -1307,6 +1307,12 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
       // 数量含义：`.net-bottom` 一帧恰好一个；`.net-info-block` 两块（自己 / 对手各一）。
       '.net-bottom': 1,
       '.net-info-block': 2,
+      // ── R7 断言 6 的探测：`.net-hands`（约束 9 的座位锚点之一）──
+      // ⚠️ 它**不在** NET_PAGE_HOOKS 里（不是 A 类钩子），只有约束 9 的运行时断言读它。
+      //    一帧远程页只有**一个** `.net-hands` 容器（两条 `.hand` 都在它里面，见 `buildHands`）——
+      //    R7 之前那条断言写的是"恰好 2 个"，与真实产出不符 ⇒ 实机上它**也**恒红
+      //    （与 `.net-board` 命中 0 个挤在同一条 fatal 里，所以人眼只看到前半句）。
+      '.net-hands': 1,
     };
   }
 
@@ -1325,7 +1331,15 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
    * （不再共用同一个 `dataset` 对象）—— 断言 5（R6 的底部行）要读 `dataset.netSeat` 判两块是否
    * **座位互补**，共用一份 dataset 会让"两块都是 self"这种缺陷查不出来。
    */
-  function fakeScope(counts: Record<string, number>, handOrder: number[] = [0, 1]): HTMLElement {
+  function fakeScope(
+    counts: Record<string, number>,
+    handOrder: number[] = [0, 1],
+    /** R7：**渲染根自己的类名**（真实页面里 `scope` 就是 `wrap` = `board net-board net-view-N`）
+     *  与 `.net-hands` 的 `data-view-seat`。默认 `[]` / `'0'` —— 见下面断言 6 的两条反面用例。 */
+    page: { boardClasses?: string[]; handsViewSeat?: string } = {},
+  ): HTMLElement {
+    const boardClasses = page.boardClasses ?? [];
+    const handsViewSeat = page.handsViewSeat ?? '0';
     /** 选择器里可能带 `[attr="value"]` / `[attr=value]`（约束 8 的合成树用它验取值） */
     const attrOf = (sel: string): Record<string, string> => {
       const out: Record<string, string> = {};
@@ -1359,6 +1373,13 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
         // 上面 `.net-info-block` 的 `parentElement` 是**同一个对象**（真实 DOM 里也如此）。
         return Array.from({ length: n }, () => bottomRow);
       }
+      // R7：`.net-hands` 的 `data-view-seat`（约束 9 的座位锚点之一）。真实页面里一帧只有**一个**
+      // `.net-hands`（两条 `.hand` 都在它里面）⇒ 每个返回项都带上同一个座位值。
+      if (sel === '.net-hands') {
+        return Array.from({ length: n }, () => ({
+          dataset: { viewSeat: handsViewSeat }, getAttribute: () => null,
+        }));
+      }
       // ⚠️ 无值形式（`.card[data-fx-rot]`）的选择器**不携带值** ⇒ 桩从"该侧约定值"补上，
       //    否则 `getAttribute('data-fx-rot')` 恒为 null、取值断言永远报红（我第一版就踩了这里：
       //    以为选择器字符串里会带 `="ccw"`，实际运行时那条查询是无值形式）。
@@ -1379,6 +1400,9 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
       }));
     };
     return {
+      // R7：**渲染根自己**也要能被识别成 `.net-board`（`classList.contains` 是产出代码用的判据 ——
+      // 它必须有对应的桩能力，否则"渲染根算进去了"这件事在合成页上无法复现）。
+      classList: { contains: (c: string) => boardClasses.includes(c), add: () => {}, remove: () => {} },
       querySelectorAll: (sel: string) => listOf(sel),
       querySelector: (sel: string) => listOf(sel)[0] ?? null,
     } as unknown as HTMLElement;
@@ -1461,6 +1485,51 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
     } finally {
       warn.mockRestore();
       info.mockRestore();
+    }
+  });
+
+  /**
+   * **R7 断言 6：这台自查在正常页面上必须通过**（约束 9 的两处假红已修）。
+   *
+   * 为什么单列一条：R7 之前 约束 9 里有**两处**判据与真实产出不符，两处都恒红，而且挤在
+   * **同一条** fatal 里（消息只在工具条上显示 `fatal[0]`）⇒ 实机常年写着
+   * 「自查 ✗ 1 项：约束 9：座位类/CSS 锚点与 FX 座位不一致（.net-board.net-view-* 命中 0 个…）」，
+   * 被当成真问题，白花了一轮人眼排查：
+   *  ① `scope.querySelectorAll('.net-board[class*="net-view-"]')` **只搜后代**，而 `scope` 自己就是
+   *     那个 `.net-board.net-view-N` ⇒ 恒命中 0 个；
+   *  ② `.net-hands` 被判成"必须恰好 2 个"，而一帧远程页只有**一个** `.net-hands` 容器
+   *     （两条 `.hand` 都在它里面）⇒ 恒不满足。
+   * 所以这里钉两件事：**正常形态必须 ✓**（任一处误报回归都会让这条红），**外加三条反面用例**
+   * （缺座位类 / 座位值不对 / 两份手牌区 ⇒ 必须报约束 9）—— 否则"把判据改成恒 ✓"也能让上面那条变绿。
+   */
+  it('20. R7：约束 9 的座位自查必须在**正常页面**上通过（渲染根自己算进去 + .net-hands 恰好一个）', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    try {
+      // 真实页面里 scope 就是 `wrap`：`el('div', 'board net-board net-view-' + viewSeat)`
+      const boardClasses = ['board', 'net-board', 'net-view-0'];
+      // ① 正常页面（渲染根 = .net-board.net-view-0、.net-hands 的 data-view-seat=0）⇒ 整份自查必须 ✓
+      setFxViewSeat(0);
+      expect(verifyPageHooks(fakeScope(syntheticPage(), [0, 1], { boardClasses, handsViewSeat: '0' }), 0),
+        '正常页面的自查不是 ✓ —— 约束 9 又不认渲染根自己（或 .net-hands 的个数判据又写错了）')
+        .toMatch(/^自查 ✓/);
+      // ② 反面（缺座位类）：渲染根带的是 net-view-1 而 FX 座位是 0 ⇒ 必须报约束 9
+      expect(verifyPageHooks(fakeScope(syntheticPage(), [0, 1],
+        { boardClasses: ['board', 'net-board', 'net-view-1'], handsViewSeat: '0' }), 0),
+      '渲染根的座位类与 FX 座位不一致却没报（判据退化成恒真）').toContain('约束 9');
+      // ③ 反面（`.net-hands` 的座位值不对）⇒ 必须报约束 9
+      expect(verifyPageHooks(fakeScope(syntheticPage(), [0, 1], { boardClasses, handsViewSeat: '1' }), 0),
+        '.net-hands 的 data-view-seat 与 FX 座位不一致却没报').toContain('约束 9');
+      // ④ 反面（两份手牌区）：`.net-hands` 出现 2 个 ⇒ 必须报约束 9（两份 `.hand` ⇒ FX 按下标取到副本）
+      const twoHands = syntheticPage();
+      twoHands['.net-hands'] = 2;
+      expect(verifyPageHooks(fakeScope(twoHands, [0, 1], { boardClasses, handsViewSeat: '0' }), 0),
+        '页面上出现两个 .net-hands 却没报（会产出两份 .hand ⇒ FX 按下标取到旧副本）').toContain('约束 9');
+      expect(warn, '失败必须留下 console.warn 证据（不能只在返回值里）').toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+      info.mockRestore();
+      setFxViewSeat(null);
     }
   });
 });

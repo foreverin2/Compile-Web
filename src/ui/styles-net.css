@@ -10,6 +10,13 @@
  * **底部行**（G2 修正 **R6**）：`信息块（左=自己）· 手牌区（中）· 信息块（右=对手）`，
  * **顶部信息条已取消**（用户裁决，规格 §8.4 第 2 条）—— 见第 2 节与第 6 节。
  *
+ * **容器层级**（G2 修正 **R7**；用户实机截图确认过它崩塌）：
+ *   `.net-board`（flex column，第 1 节）= `[.net-grid, .net-bottom, .log, .diag-btn, .net-preview-bar]`；
+ *   `.net-grid` = 四个**并排**的显式轨道（3 条线 + 控制轨），**不含**底部行。
+ *   ⚠️ 轨道数必须等于子节点数：R6 时 `.net-grid` 挂了 5 个子节点而模板只有 3 条 ⇒ 第 4/5 个
+ *   成为**隐式列**，整页塌成"一行五格、下方大片空白"。行为腿在
+ *   `tests/ui/net-lane-tree.test.ts` 的 R7 条（真跑渲染器 + 从本文件解算列模板）。
+ *
  * **`styles.css` 一行都不改**：本文件通过**限定作用域**的选择器（`.net-*` 前缀 + 后代）覆盖，
  * 热座页的规则原样保留、继续生效。⚠️ 每条规则都要带 `.net-*` 前缀（或限定在 `.net-*` 后代里），
  * 否则会串到热座页 —— 本文件的存在理由就是"只服务 render-net.ts"。
@@ -34,17 +41,47 @@
  * 且唯一不会在别的断点上错的实现。页面上/下留白交给 #app（styles.css:18，不改）。
  * ========================================================================== */
 
-.net-board { position: relative; }
+/* ── R7：`.net-board` 的**子节点布局**（这个容器此前一条布局规则都没有）──
+   `.board`（styles.css:20）本来就是 flex column，所以"纵向堆叠"不是新行为；这里**显式钉住**它，
+   因为 R7 的事故（用户实机截图：整页挤成上方一条横带、只有一列、下方大片空白）**在样式表里
+   完全没有痕迹** —— 崩塌全部发生在 `.net-grid` 内部（子节点数 > 显式轨道数）。
+   现在的层级：`[.net-grid, .net-bottom, .log, .diag-btn, .net-preview-bar]`（见 render-net.ts 的挂载点）：
+     · `.net-grid` = 三列并排（4 条轨道，见下）；
+     · `.net-bottom` = 底部行，**是 `.net-grid` 的兄弟**，纵向堆在它下面；
+     · `.log` / `.diag-btn`（fixed）/ `.net-preview-bar`（fixed）继续排在最后。 */
+.net-board {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;   /* 横向铺满 → `.net-grid`/`.net-bottom` 的 `margin: 0 auto` 才能真的居中 */
+  gap: 12px;
+  min-width: 0;
+}
 .net-grid {
-  /* 热座页 .board-grid 是 flex column（每条线一行的堆叠方向）；本页三列并排 → grid。
+  /* 热座页 .board-grid 是 flex column（每条线一行的堆叠方向）；本页（三列 + 控制轨）并排 → grid。
      ⚠️ `display: grid` 与 `grid-auto-flow: column` 是**承重**的（R6 复查补上）：`.board-grid`
      只给了 `display: flex; flex-direction: column`，本文件若只覆盖 gap/max-width，三条线会被
      **纵向堆成三行**（"三个纵向的列"退化成"三条横带"，正是 R1 要修掉的那个观感），
-     而任何源码/层序守卫都看不出来 —— 那类守卫查的是元素树与 `order`，不查容器是不是 grid。 */
+     而任何源码/层序守卫都看不出来 —— 那类守卫查的是元素树与 `order`，不查容器是不是 grid。
+
+     ── R7：列模板从 **3 条**改成 **4 条显式轨道** ──
+     子节点恰好 4 个（3 个 `.net-lane-band` + 1 个控制轨容器，见 render-net.ts 的挂载点）。
+     ⚠️ **轨道数必须等于子节点数**：模板只有 3 条而挂了 5 个子节点时，第 4/5 个会变成**隐式列**
+     （`grid-auto-flow: column`）排在同一行右侧 ⇒ "一行五格"的容器层级崩塌（用户实机截图确认）。
+     第 4 条轨道 = 控制轨的固定宽（`--net-rail-w`，**一处定义**，`.net-board .control-module`
+     也用它 ⇒ 列宽与轨道宽不可能脱钩）。⚠️ 控制轨放在**第 4 列（三列右侧）**是**我的判断**，
+     用户只裁决了"竖向 + 自己端在下/对手端在上"、**没有指定摆放位置** ⇒ 详见报告 §5：
+     要挪到左侧只改两处 —— 这里的模板写成 `var(--net-rail-w) repeat(3, minmax(0, 1fr))`，
+     并在 render-net.ts 里把那一行 `grid.appendChild(renderControlModule(…))` 挪到三列循环**之前**。 */
+  --net-rail-w: 160px;
   display: grid;
   grid-auto-flow: column;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr)) var(--net-rail-w);
   gap: 12px;
+  /* `width: 100%` + `max-width` + `margin: 0 auto`：宽度由容器决定（被 1010px 截断），
+     两侧自动外边距再把它居中 —— 只写 `max-width` + `margin: 0 auto` 时宽度会退化成
+     **fit-content**（flex/grid 项有横向 auto 外边距时不再 stretch），三列 `1fr` 就无处分配。 */
+  width: 100%;
   max-width: 1010px;
   margin: 0 auto;
   min-width: 0;
@@ -275,13 +312,23 @@
 .net-lane-points { color: #00ffcc; font-size: 15px; }
 
 /* ============================================================================
- * 5. 控制轨（横向；绝对玩家映射不变，styles.css 的 .control-* 规则继续生效）
+ * 5. 控制轨（**竖向**；绝对玩家映射不变，styles.css 的 .control-* 规则继续生效）
  *
- * 容器已收窄到 1010px，这里再给控制轨一个上限并居中 —— 它横跨整页宽度会在窄布局里
- * 显得特别"宽"，与"整体更窄"的观感要求相冲。
+ * **R7：它是 `.net-grid` 的**第 4 条显式轨道**（三列右侧），不再是"横跨整页宽度的一块"** ——
+ * 列宽 = `--net-rail-w`（第 1 节的列模板），轨道宽 = 同一个变量 ⇒ 两处不可能脱钩。
+ * ⚠️ 摆放位置（第 4 列）是**我的判断**（用户未指定，只裁决了"竖向 + 自己端在下/对手端在上"）：
+ * 挪位置只动两处 —— 第 1 节的列模板 + `render-net.ts` 里那一行 `grid.appendChild(renderControlModule(…))`。
+ * `align-self: start`：控制轨（轨道高 158px）比三条线（一列 ~1000px 高）矮得多，
+ * grid 默认的 `stretch` 会把它拉成一根上下全空的虚线框 ⇒ 让它按自身高度贴顶排。
  * ========================================================================== */
 
-.net-grid > .control-module { width: 100%; max-width: 460px; margin: 0 auto; }
+.net-grid > .control-module {
+  /* 与第 9 节的 `.net-board .control-module` **同值同形**（两条都是 `var(--net-rail-w)`）：
+     两份声明刻意保持一致，免得"哪条赢"变成一条隐式依赖（顺序一改宽度就变）。 */
+  width: var(--net-rail-w);
+  margin: 0 auto;
+  align-self: start;
+}
 
 /* ============================================================================
  * 6. 底部行（G2 修正 **R6**）：**信息块 · 手牌区（中） · 信息块**
@@ -472,7 +519,7 @@
  *    改写成"底边对齐该坐标"后，4% 与 96% 两端都落在轨道内（滑块高 70px、轨道高 ≈158px）。
  * ========================================================================== */
 
-.net-board .control-module { width: 160px; margin: 0 auto; }
+.net-board .control-module { width: var(--net-rail-w); margin: 0 auto; }   /* 同第 5 节：轨道宽 */
 .net-board .control-track {
   width: 100%;
   height: 158px;                    /* 竖向行程（热座是 width:100% + height:84px，方向对调） */

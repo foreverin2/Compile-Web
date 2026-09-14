@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createGame } from '../../src/core/state/create';
-import { NET_BOTTOM_SIDES, renderNetBoard } from '../../src/ui/render-net';
+import { NET_BOTTOM_SIDES, renderNetBoard, verifyPageHooks } from '../../src/ui/render-net';
 import { setFxViewSeat } from '../../src/ui/fx-seat';
 import { stripComments } from './source-text';
 import {
@@ -133,6 +133,74 @@ function cssPropOf(
 function cssOrderOf(node: StubNode, chain: StubNode[], rules: CssRule[]): number {
   const raw = cssPropOf(node, chain, rules, 'order');
   return raw === null ? 0 : Number.parseInt(raw, 10);
+}
+
+/* ============================================================================
+ * CSS：`grid-template-columns` 的**轨道展开**（G2 修正 R7）
+ *
+ * 为什么必须"真的解析"而不是拿声明文本做子串匹配：R7 的事故形态是**轨道数 < 子节点数**
+ * （模板 3 条、`.net-grid` 挂了 5 个子节点 ⇒ 第 4/5 个成为隐式列 ⇒ 整页"一行五格"）。
+ * `repeat(3, …)` 在文本上"看着就是三条"，任何子串断言对"少一条轨道"都零判别力 ——
+ * 必须把 `repeat(n, …)` 展开成 n 条轨道再数。
+ * ========================================================================== */
+
+/** 按**顶层**空白切分（括号内的空白不是分隔符）：
+ *  `repeat(3, minmax(0, 1fr)) var(--net-rail-w)` → `['repeat(3, minmax(0, 1fr))', 'var(--net-rail-w)']`。 */
+function splitTopLevel(value: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let cur = '';
+  for (const ch of value) {
+    if (ch === '(') depth += 1;
+    else if (ch === ')') depth -= 1;
+    if (/\s/.test(ch) && depth === 0) {
+      if (cur !== '') out.push(cur);
+      cur = '';
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur !== '') out.push(cur);
+  return out;
+}
+
+/** `grid-template-columns` 的声明值 → **轨道列表**（只支持本页用到的 `repeat(n, …)`）。 */
+function gridTracks(raw: string): string[] {
+  const out: string[] = [];
+  for (const token of splitTopLevel(raw)) {
+    const m = /^repeat\(\s*(\d+)\s*,([\s\S]*)\)$/.exec(token);
+    if (m === null) {
+      out.push(token);
+      continue;
+    }
+    const inner = splitTopLevel(m[2]);
+    const n = Number.parseInt(m[1], 10);
+    for (let i = 0; i < n; i += 1) out.push(...inner);
+  }
+  return out;
+}
+
+/** 该节点（或它任一祖先）声明的**自定义属性**值（`var()` 解算用；本页只有 `--net-rail-w`）。 */
+function cssVarOf(chain: StubNode[], rules: CssRule[], name: string): string | null {
+  for (let i = chain.length - 1; i >= 0; i -= 1) {
+    const raw = cssPropOf(chain[i], chain.slice(0, i + 1), rules, name);
+    if (raw !== null) return raw.trim();
+  }
+  return null;
+}
+
+/** `var(--x)` / 普通值 → 解算后的字面量；解不出来就原样返回（让断言报出真实值，别报 `undefined`）。 */
+function resolveCssValue(chain: StubNode[], rules: CssRule[], raw: string): string {
+  const m = /^var\(\s*(--[A-Za-z0-9_-]+)\s*\)$/.exec(raw.trim());
+  if (m === null) return raw.trim();
+  return cssVarOf(chain, rules, m[1]) ?? raw.trim();
+}
+
+/** 造一个只带类名的桩节点（纯 CSS 解算用；不装 DOM、不渲染）。 */
+function cssNode(...classes: string[]): StubNode {
+  const n = makeStubEl('div');
+  n.classList.add(...classes);
+  return n;
 }
 
 /** flex column 的**视觉顺序**：按 `order` 稳定排序（相同 order 保持文档顺序 —— CSS 规范语义）。
@@ -635,5 +703,184 @@ describe('R-F · C-2：真跑 renderNetBoard 的元素树层序（viewSeat 0/1�
       .toMatch(/grid-template-columns:\s*max-content\s+minmax\(max-content,\s*auto\)\s+max-content/);
     // 手牌区不得被两侧信息块挤歪：中列的两侧留白对称 ⇒ 左右列必须**同宽**（同一份 max-content）
     //   —— 这条由列模板的字面量承载（两个 max-content 必须完全一样），上面那条正则已钉死。
+  });
+
+  /* ==========================================================================
+   * G2 修正 R7：**容器层级**（用户实机截图确认"各种组件位置完全错误"）
+   *
+   * 事故形态（已确诊，不重排查）：`renderNetBoard` 把 **5 个子节点**都挂进了 `.net-grid`
+   * （3 条线的列 + 控制轨 + **底部行**），而 `.net-grid` 的列模板只有 **3 条显式轨道** ⇒
+   * 第 4、5 个成为**隐式列**排在同一行右侧 ⇒ 整页"一行五格、下方大片空白、右侧多出滚动条"。
+   * 另一处并行成因：`.net-board` **一条子节点布局规则都没有**（纵向堆叠靠 `.board` 的 flex，
+   * 所以那次崩塌在样式表里不留痕迹）。
+   *
+   * 这一组是它的**行为腿**（桩里没有布局引擎，但元素树、父子归属、以及从样式表解出的
+   * **列模板轨道数**都是确定性的）：
+   *  · R7-1 真跑 `renderNetBoard` 查元素树（4 个子节点 / 兄弟关系 / 顺序 / 手牌红线）；
+   *  · R7-2 从 `styles-net.css` **真实解析**列模板（4 条轨道、3 条等宽、控制轨固定宽）；
+   *  · R7-3 把两条腿**互钉**：轨道数 == 真实渲染出的 `.net-grid` 子节点数（两个席位）。
+   *    ⚠️ 这一条是变异杀手：把 `bottom` 挂回 `grid`（5 ≠ 4）或把控制轨从列模板里去掉
+   *    （3 ≠ 4）都立刻红。
+   * ⚠️ 诚实边界：桩没有布局引擎 —— "画面到底对不对"仍只能人眼（见报告 §7/§8）。
+   * ======================================================================== */
+
+  it('R7-1. 真跑 renderNetBoard：.net-grid 恰好 4 个子节点（3 条线 + 控制轨），底部行是它的**兄弟**', async () => {
+    const restore = installDom();
+    try {
+      for (const seat of [0, 1] as const) {
+        const root = renderFrame(seat);
+        const wrap = root.children[0];
+        expect(wrap, `viewSeat=${seat}：root 下没有渲染根（renderNetBoard 没挂 wrap？）`).toBeTruthy();
+        expect(isClass(wrap, 'net-board'), `viewSeat=${seat}：渲染根不是 .net-board`).toBe(true);
+        expect(isClass(wrap, `net-view-${seat}`),
+          `viewSeat=${seat}：渲染根缺 net-view-${seat} 类（约束 9 的座位锚点）`).toBe(true);
+
+        const tree: string[] = [];
+        walk(wrap, 0, tree, 2);
+        console.log(`\n===== viewSeat=${seat} · 渲染根 .net-board 的元素树（DOM 顺序，深度 2）=====\n${tree.join('\n')}`);
+
+        const grid = wrap.children.find((n) => isClass(n, 'net-grid'));
+        const bottom = wrap.children.find((n) => isClass(n, 'net-bottom'));
+        expect(grid, `viewSeat=${seat}：.net-board 下找不到 .net-grid`).toBeTruthy();
+        expect(bottom, `viewSeat=${seat}：.net-board 下找不到 .net-bottom（底部行被挂到哪儿去了？）`).toBeTruthy();
+
+        // ── ① `.net-grid` 的子节点**恰好 4 个**：3 条线 + 1 个控制轨（**不得**含底部行）──
+        expect(grid!.children.length, `viewSeat=${seat}：.net-grid 必须恰好 4 个子节点（3 条 .net-lane-band `
+          + `+ 1 个控制轨），实际 ${grid!.children.length} 个 → ${grid!.children.map((n) => n.cls).join(' | ')}`
+          + '（列模板只有 4 条显式轨道，多出来的子节点会变成**隐式列** ⇒ 整页"一行五格"）').toBe(4);
+        expect(grid!.children.filter((n) => isClass(n, 'net-lane-band')).length,
+          `viewSeat=${seat}：.net-grid 里必须有 3 条 .net-lane-band`).toBe(3);
+        expect(grid!.children.filter((n) => isClass(n, 'control-module')).length,
+          `viewSeat=${seat}：.net-grid 里必须有 1 个控制轨容器 .control-module（A 类钩子的产出方）`).toBe(1);
+        // 反面（R7 的缺陷形态本身）：底部行**不得**出现在 `.net-grid` 的子树里
+        expect(descendants(grid!).some((n) => isClass(n, 'net-bottom')),
+          `viewSeat=${seat}：.net-bottom 出现在 .net-grid 的**子树**里 —— 它必须是 .net-grid 的兄弟`
+          + '（挂回 grid = 第 5 个隐式列，R7 的崩塌形态）').toBe(false);
+
+        // ── ② 底部行是 `.net-grid` 的**兄弟**：父节点就是 `.net-board` ──
+        expect(bottom!.parentElement, `viewSeat=${seat}：.net-bottom 的父节点不是 .net-board`)
+          .toBe(wrap);
+        expect(bottom!.parentElement, `viewSeat=${seat}：.net-bottom 的父节点居然是 .net-grid`)
+          .not.toBe(grid);
+
+        // ── ③ `.net-board` 的子节点顺序：[.net-grid, .net-bottom, …]（其余是 log / 导出按钮 / 工具条）──
+        const kinds = wrap.children.map((n) => (isClass(n, 'net-grid') ? 'grid'
+          : isClass(n, 'net-bottom') ? 'bottom'
+            : isClass(n, 'log') ? 'log'
+              : isClass(n, 'diag-btn') ? 'diag-btn'
+                : isClass(n, 'net-preview-bar') ? 'preview-bar' : `?${n.cls}`));
+        console.log(`  viewSeat=${seat} · .net-board 子节点顺序（DOM）: ${kinds.join(' → ')}`);
+        expect(kinds[0], `viewSeat=${seat}：.net-board 的第一个子节点必须是 .net-grid`).toBe('grid');
+        expect(kinds[1], `viewSeat=${seat}：.net-board 的第二个子节点必须是 .net-bottom（纵向堆在网格之下）`)
+          .toBe('bottom');
+        expect(kinds.slice(2).every((k) => k === 'log' || k === 'diag-btn' || k === 'preview-bar'),
+          `viewSeat=${seat}：.net-board 下出现了未登记的容器：${kinds.slice(2).join(', ')}`).toBe(true);
+        // 反空集合：日志块与导出按钮必须仍在渲染根下（"搬到 grid 外面"不许顺手把它们弄丢）
+        expect(kinds.filter((k) => k === 'log').length, '日志块必须仍挂在 .net-board 下').toBe(1);
+        expect(kinds.filter((k) => k === 'diag-btn').length, '导出日志按钮必须仍挂在 .net-board 下').toBe(1);
+        expect([kinds.filter((k) => k === 'grid').length, kinds.filter((k) => k === 'bottom').length],
+          `viewSeat=${seat}：.net-grid / .net-bottom 在渲染根下必须各恰好一个`).toEqual([1, 1]);
+
+        // ── ④ 红线：`.net-hands` 仍在底部行里，且 `.hand` 的 DOM 顺序仍恒为 [P0, P1] ──
+        const handsRoot = descendants(bottom!).filter((n) => isClass(n, 'net-hands'));
+        expect(handsRoot.length, `viewSeat=${seat}：底部行里必须恰好一个 .net-hands`).toBe(1);
+        expect(handsRoot[0].parentElement, `viewSeat=${seat}：.net-hands 的直接父节点必须是 .net-bottom`)
+          .toBe(bottom);
+        const hands = descendants(handsRoot[0]).filter((n) => isClass(n, 'hand'));
+        expect(hands.length, `viewSeat=${seat}：页面上必须恰好两条 .hand`).toBe(2);
+        expect(hands.map((n) => String(n.dataset.player)),
+          `viewSeat=${seat}：.hand 的 DOM 顺序必须是 [P0, P1]（FX 用 querySelectorAll('.hand')[player] `
+          + '**按下标**读手牌 —— 搬动容器时不许顺手改这个顺序）').toEqual(['0', '1']);
+      }
+    } finally {
+      await drainRaf();
+      restore();
+    }
+  });
+
+  it('R7-2. CSS：.net-grid 的列模板必须解出**4 条轨道**（3 条等宽 + 控制轨固定宽，且与控制轨同宽）', () => {
+    const board = cssNode('board', 'net-board');
+    const grid = cssNode('board-grid', 'net-grid');
+    const rail = cssNode('control-module');
+    const raw = cssPropOf(grid, [board, grid], RULES, 'grid-template-columns');
+    expect(raw, 'styles-net.css 里 .net-grid 没有 grid-template-columns（列模板被删？）').toBeTruthy();
+    const tracks = gridTracks(raw!);
+    console.log(`\n===== .net-grid 的列模板（由 styles-net.css 真实解析）=====\n  ${raw}`
+      + `\n  轨道数 = ${tracks.length}：${tracks.join(' | ')}`);
+
+    // ① 轨道数 = 3 条线 + 控制轨（**显式**轨道；隐式列不在这里出现 —— 那正是缺陷）
+    expect(tracks.length, `列模板必须恰好 4 条显式轨道（3 条线 + 控制轨），实际 ${tracks.length} 条：`
+      + `${tracks.join(' | ')}（少于 .net-grid 的子节点数时，多出来的子节点会成为**隐式列**）`).toBe(4);
+    // ②③ 前 3 条 = 三条线，**等宽**且是 1fr 族（`minmax(0, 1fr)` 与 `1fr` 都接受 —— 判据不绑定写法）
+    const laneTracks = tracks.slice(0, 3);
+    expect(laneTracks.every((t) => /1fr/.test(t)),
+      `前 3 条轨道必须是三条线的等宽列，实际 ${laneTracks.join(' | ')}`).toBe(true);
+    expect(new Set(laneTracks).size, `三条线的列必须**同宽**（同一份轨迹值），实际 ${laneTracks.join(' | ')}`).toBe(1);
+    // ④ 第 4 条 = 控制轨的固定宽（px；不能是 1fr/auto —— 那会让控制轨被拉伸或塌掉）
+    const railW = resolveCssValue([board, grid], RULES, tracks[3]);
+    expect(railW, `第 4 条轨道（控制轨）必须是固定宽，实际 ${tracks[3]}（解算后 ${railW}）`)
+      .toMatch(/^\d+(?:\.\d+)?px$/);
+    // ⑤ 列宽与**控制轨自己的宽**必须同值（`100%` = 填满轨道，也算同值）——
+    //    R6 的遗留 `max-width: 460px` 这种"轨道 160px、内容 460px"就是被这一条抓住的
+    const railChain = [board, grid, rail];
+    const ctrlW = cssPropOf(rail, railChain, RULES, 'width');
+    expect(ctrlW, '控制轨（.control-module）没有 width —— 它会退回 .control-module 的默认宽度')
+      .toBeTruthy();
+    const ctrlWResolved = resolveCssValue(railChain, RULES, ctrlW!);
+    expect([railW, '100%'], `控制轨的宽（${ctrlW} → 解算 ${ctrlWResolved}）既不是第 4 条轨道的宽`
+      + `（${railW}）也不是 100%（填满轨道）—— 轨道与内容会错位`).toContain(ctrlWResolved);
+  });
+
+  it('R7-3. 两条腿互钉：列模板的**轨道数** == 真实渲染出的 `.net-grid` 子节点数（两个席位）', async () => {
+    const board = cssNode('board', 'net-board');
+    const grid = cssNode('board-grid', 'net-grid');
+    const raw = cssPropOf(grid, [board, grid], RULES, 'grid-template-columns');
+    expect(raw, 'styles-net.css 里 .net-grid 没有 grid-template-columns').toBeTruthy();
+    const tracks = gridTracks(raw!);
+    const restore = installDom();
+    try {
+      for (const seat of [0, 1] as const) {
+        const root = renderFrame(seat);
+        const rendered = root.children[0].children.find((n) => isClass(n, 'net-grid'));
+        expect(rendered, `viewSeat=${seat}：渲染树里找不到 .net-grid`).toBeTruthy();
+        expect(rendered!.children.length, `viewSeat=${seat}：列模板有 ${tracks.length} 条显式轨道，`
+          + `而 .net-grid 真实挂了 ${rendered!.children.length} 个子节点`
+          + `（${rendered!.children.map((n) => n.cls).join(' | ')}）—— 多出来的会成为**隐式列**`
+          + '排在同一行右侧（R7 的崩塌形态）；少一条轨道则会扯掉一个组件').toBe(tracks.length);
+      }
+    } finally {
+      await drainRaf();
+      restore();
+    }
+  });
+
+  /**
+   * R7-4：把"座位锚点自查不再误报"钉在**真跑出来的那棵树**上。
+   *
+   * 为什么 R7-1/2/3 不够：那三条钉的是**容器层级**；而 约束 9 的假红是**自查代码自己**的缺陷
+   * （`scope.querySelectorAll` 只搜后代，而 `scope` 就是那个 `.net-board`）。它只能靠"把真实渲染出的
+   * 渲染根喂回 `verifyPageHooks`"证明 —— 合成页（`render-net.test.ts` 第 20 条）证明的是同一件事的
+   * 另一半：**整份**自查在正常形态下 ✓、且三条反面用例仍会报错。
+   *
+   * ⚠️ 诚实边界（写在用例里）：本桩不实现选择器引擎 ⇒ A 类钩子的探针恒 0 ⇒ 整份自查在桩上必然 ✗。
+   * 所以这里**只**断言"座位锚点那一条不再出现"（它只需要 `scope` 自己的类名，桩完全够用）。
+   */
+  it('R7-4. 真跑一帧：约束 9 的**座位锚点**自查不得再误报（渲染根自己就是一个 .net-board）', async () => {
+    const restore = installDom();
+    try {
+      for (const seat of [0, 1] as const) {
+        const root = renderFrame(seat);
+        const wrap = root.children[0] as unknown as HTMLElement;
+        const note = verifyPageHooks(wrap, seat);
+        console.log(`\n===== viewSeat=${seat} · 桩上真跑 verifyPageHooks 的返回 =====\n  ${note}`);
+        expect(note, `viewSeat=${seat}：verifyPageHooks 什么都没返回（自查没跑起来？）`).toMatch(/^自查/);
+        expect(note, `viewSeat=${seat}：渲染根就是 .net-board.net-view-${seat}，却仍报"座位锚点"不一致 ——`
+          + '这正是 R7 修掉的那处假红（`querySelectorAll` 只搜后代、不搜自身）')
+          .not.toContain('视图座位锚点');
+      }
+    } finally {
+      await drainRaf();
+      restore();
+    }
   });
 });

@@ -511,13 +511,35 @@ export function verifyPageHooks(scope: HTMLElement, appliedSeat: 0 | 1 | null = 
       // 远程页（座位已设）：座位类必须落在 wrap 上，且**与 FX 座位同值** —— `.net-view-N` 是
       // CSS 侧"哪一半在上面"的锚点，`data-view-seat` 是同一件事的机读形式。两者与 FX 座位不一致
       // ⇒ "布局按 A 座位、方向按 B 座位"这种静默错配（最危险的形态：页面看着正常、特效全反）。
-      const viewBoards = [...scope.querySelectorAll<HTMLElement>('.net-board[class*="net-view-"]')];
-      const handsSeat = [...scope.querySelectorAll<HTMLElement>('.net-hands')].map((h) => h.dataset.viewSeat);
+      //
+      // ⚠️ **R7 修正（这条自查曾在实机上稳定误报）**：`scope` 就是 `renderNetBoard` 的 `wrap`，
+      //    而 `wrap` **自己就是** `.net-board.net-view-N`；`querySelectorAll` **只搜后代、不搜自身**，
+      //    于是旧写法恒命中 0 个 ⇒ 预览工具条上永远写着
+      //    「自查 ✗ 1 项：约束 9：座位类/CSS 锚点与 FX 座位不一致（.net-board.net-view-* 命中 0 个…）」，
+      //    而页面其实是对的 —— 它已经浪费过一轮人眼排查。修法：**把 scope 自己算进来**
+      //    （scope 也可能是 `#app` 这类"棋盘是后代"的宿主，所以两条都要留）。
+      //    判据用 `classList.contains` 而不是 `matches()`：与桩的能力面一致（`net-dom-stub` 只实现
+      //    `classList`），且这条检查因此可以在**真跑渲染器**的测试里被执行到。
       const want = String(fxViewSeat());
-      if (viewBoards.length !== 1 || !viewBoards[0].classList.contains(`net-view-${want}`)
-        || handsSeat.length !== 2 || handsSeat.some((v) => v !== want)) {
-        fatal.push(`约束 9：座位类/CSS 锚点与 FX 座位不一致（.net-board.net-view-* 命中 ${viewBoards.length} 个，`
-          + `.net-hands 的 data-view-seat=${handsSeat.join(',') || '无'}，FX 座位=${want}）`);
+      const viewBoards: HTMLElement[] = [
+        ...(scope.classList?.contains('net-board') === true ? [scope] : []),
+        ...scope.querySelectorAll<HTMLElement>('.net-board[class*="net-view-"]'),
+      ];
+      if (viewBoards.length !== 1 || !viewBoards[0].classList.contains(`net-view-${want}`)) {
+        fatal.push(`约束 9：视图座位锚点（.net-view-N 类）与 FX 座位不一致`
+          + `（.net-board.net-view-* 命中 ${viewBoards.length} 个，FX 座位=${want}`
+          + '；渲染根自己也算一个 —— 只按后代查会恒得 0）');
+      }
+      const handsSeat = [...scope.querySelectorAll<HTMLElement>('.net-hands')].map((h) => h.dataset.viewSeat);
+      // ⚠️ **R7 修正（同一族误报的第二处）**：这里原来要求 `.net-hands` **恰好 2 个** —— 但一帧远程页
+      //    只有**一个** `.net-hands` 容器（`buildHands` 把两条 `.hand` 放进同一个容器，见它的头注；
+      //    元素树里的"恰好一块 .net-hands"由 `tests/ui/net-lane-tree.test.ts` 的 R6-1 钉住）。
+      //    于是这条与上面那条一样恒红，并挤在**同一条** fatal 里（消息只看 fatal[0] 时看不出是两处）。
+      //    正确的判据是"页面上**每一个** `.net-hands` 的 data-view-seat 都等于 FX 座位"，
+      //    而个数判据应当是 1（多一个就是两份手牌 ⇒ FX 按下标取手牌静默错位）。
+      if (handsSeat.length !== 1 || handsSeat.some((v) => v !== want)) {
+        fatal.push(`约束 9：.net-hands 必须恰好一个、且它的 data-view-seat 与 FX 座位一致`
+          + `（实际 ${handsSeat.length} 个 → [${handsSeat.join(',') || '无'}]，FX 座位=${want}）`);
       }
     }
   } catch (err) {
@@ -1301,16 +1323,30 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
   // 所以这里用 `lastElementChild` 而不是 `querySelector('.net-hands')`：少一次 DOM 查询，
   // 也避免"若查不到就静默退化成 `bottom`"这种把 `.choice-mode` 加到错误节点上的写法。
   const hands = bottom.lastElementChild as HTMLElement;
-  grid.appendChild(bottom);
 
   // ⚠️ C-1：grid **必须先挂进 wrap**，选择模式才能找到候选节点 —— `renderChoiceUi` 内部
   // 三处 `wrap.querySelectorAll(...)` 都只对"已经挂在 wrap 下的节点"生效：
-  //   · select 分支：`.card[data-uid]`（场上卡 + 手牌卡都在 grid 里）
+  //   · select 分支：`.card[data-uid]`（场上卡在 grid 里、手牌卡在 bottom 里 —— R7 之后
+  //     bottom 是 grid 的**兄弟**，两者都在 wrap 下，故查 wrap 仍能同时命中）
   //   · select-line 分支：`.net-lane-band`（`data-line` 写在带节点上）
   // 曾经这一行在 `renderChoiceUi` **之后**：select-line 拿到 0 条带 → 没有可点目标，
   // 而 `choiceBar` 对 select-line 没有确认按钮 → 非 optional 的 select-line 永久卡死。
   // 与热座页同序（renderBoard:4800 挂 grid → :4835 跑 choice 分支）。
   wrap.appendChild(grid);
+
+  // ── R7 修正：底部行是 `.net-grid` 的**兄弟**（挂 `wrap` = `.net-board`），**不是**它的子节点 ──
+  // 为什么这是承重的（用户实机截图确认的容器层级崩塌）：`bottom` 曾经 `grid.appendChild(bottom)`，
+  // 于是 `.net-grid` 有了**5 个**子节点，而样式表只给了 **3 条显式轨道** ⇒ 第 4、5 个子节点成为
+  // **隐式列**，整页塌成"一行五格、下方大片空白、右侧多出滚动条"。
+  // 现在的层级（styles-net.css 第 1 节是它的样式腿，`tests/ui/net-lane-tree.test.ts` 的 R7 条是行为腿）：
+  //   .net-board（flex column）
+  //     ├─ .net-grid（4 条显式轨道：3 条线 + 控制轨）
+  //     ├─ .net-bottom（信息块 · 手牌区 · 信息块）
+  //     └─ .log / .diag-btn / .net-preview-bar
+  // ⚠️ 挂载顺序：[grid, bottom, …] —— 底部行必须在 grid **之后**（它在视觉上在下）。
+  // ⚠️ 必须在 `renderChoiceUi` **之前**：选择模式要按 `wrap.querySelectorAll` 找**已入 DOM** 的
+  //    候选卡，而自己的手牌卡就在 `bottom` 里（理由与上面 C-1 的 grid 完全相同）。
+  wrap.appendChild(bottom);
 
   // ── 选择模式（三个 choice-* 分支，重写为回到当前页） ──
   renderChoiceUi(wrap, hands, root, s, cb, deferredFx);

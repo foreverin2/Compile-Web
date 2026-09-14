@@ -10,9 +10,13 @@
  *  - `getBoundingClientRect()` 恒返回全 0（所以**任何文件都不得**在此之上做几何断言）；
  *  - `querySelector` / `querySelectorAll` **恒空**（桩不实现选择器引擎）—— 因此被校验的产出代码
  *    不得依赖它们（`renderNetBoard` 只用 `lastElementChild` 与直接子节点，见该文件的说明）；
- *  - `appendChild` **不维护 `parentElement`**（同上：产出代码不得回读它）。
- *  能证明的：元素树的顺序与归属、`class`/`dataset`/`text`、以及**由样式表 `order`/`grid-column`
- *  解算出的视觉顺序**（解算器在两个消费方各自实现，本文件只提供树）。
+ *  - `appendChild` **维护 `parentElement`**（G2 修正 **R7** 加上的；此前**不维护**）。
+ *    ⚠️ 这一条在 R7 之前写的是"产出代码不得回读它"—— 那个限制的**真实目的**是"别让产出代码依赖
+ *    桩没有的能力"，而 R7 的证据 2（`.net-bottom` 的父节点必须是 `.net-board`）**必须**能读它，
+ *    否则"是兄弟、不是子节点"这句话在行为层只能靠"网格子节点数"间接推断。
+ *    维护它**不放松**任何现有守卫：全仓没有一个用例断言 `parentElement` 为空/undefined。
+ *  能证明的：元素树的顺序与归属（含父子指针）、`class`/`dataset`/`text`、以及**由样式表
+ *  `order`/`grid-column` 解算出的视觉顺序**（解算器在两个消费方各自实现，本文件只提供树）。
  */
 
 /** 桩节点（结构 + 类名 + dataset；不含布局）。 */
@@ -44,8 +48,10 @@ export function makeStubEl(tag: string): StubNode {
     style: { setProperty: () => { /* 桩只记结构 */ } },
   };
   const extra: Record<string, unknown> = {
-    appendChild: (c: StubNode) => { node.children.push(c); return c; },
-    insertBefore: (c: StubNode) => { node.children.unshift(c); return c; },
+    // R7：`appendChild` / `insertBefore` 维护**父子指针**（见文件头注）——
+    // R7 的证据 2（`.net-bottom` 的父节点必须是 `.net-board`）靠它。
+    appendChild: (c: StubNode) => { c.parentElement = node; node.children.push(c); return c; },
+    insertBefore: (c: StubNode) => { c.parentElement = node; node.children.unshift(c); return c; },
     removeChild: () => { /* noop */ },
     remove: () => { /* noop */ },
     setAttribute: () => { /* noop */ },
@@ -70,6 +76,8 @@ export function makeStubEl(tag: string): StubNode {
     offsetWidth: 0,
     firstChild: null,
     parentNode: null,
+    /** R7：父子指针（由 `appendChild`/`insertBefore`/`textContent=''` 维护） */
+    parentElement: null,
   };
   Object.assign(node, extra);
   Object.defineProperty(node, 'className', {
@@ -82,7 +90,12 @@ export function makeStubEl(tag: string): StubNode {
   });
   Object.defineProperty(node, 'textContent', {
     get: () => node.text,
-    set: (v: string) => { node.text = String(v); node.children.length = 0; },
+    set: (v: string) => {
+      node.text = String(v);
+      // R7：清空时**同时**解除被移除子节点的父子指针（否则它们会指向一个已经不要它们的父节点）
+      for (const c of node.children) c.parentElement = null;
+      node.children.length = 0;
+    },
   });
   // `lastElementChild`：`renderNetBoard` 用它取底部行里的手牌区（比 `querySelector` 可靠 ——
   // 桩的 `querySelector` 恒空，若产出代码走查询，这里会**静默**拿到 null）。
