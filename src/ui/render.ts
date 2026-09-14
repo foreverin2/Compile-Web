@@ -5594,11 +5594,15 @@ let activeDragCancel: (() => void) | null = null;
  * 拖拽安全网（**G2 Task 4F 新增的唯一一个非 `export` 改动**）：清理进行中的拖拽幽灵卡、
  * 落点高亮与监听器。`renderApp` 在每次整帧重渲染的**第一步**调用它。
  *
- * 为什么需要这个包装（而不是把 `activeDragCancel` 直接 `export`）：简报只批准"加 `export` 关键字"，
- * 而 `activeDragCancel` 是**可变模块变量**（`bindCardDrag` 里赋值、清理时置 null）。
- * 导出裸变量会让任何 import 方都能**覆写**它（把 render.ts 的拖拽安全网换成任意函数）——
- * 那不是"加 export"，那是把内部状态交出去。所以这里新增一个**只读**包装：语义与
- * `if (activeDragCancel) activeDragCancel();` 逐字等价（空值即无操作），调用方拿不到写权限。
+ * 为什么需要这个包装（而不是把 `activeDragCancel` 直接 `export`）：
+ * ⚠️ **理由更正（G2 终审最终核对 N6）**：本注释最初写的是"导出裸变量会让 import 方覆写它" ——
+ * **那个理由不成立**：ES 模块的导入绑定是**只读**的，`import { activeDragCancel }` 之后赋值会被
+ * TypeScript 直接拒绝（实测 `error TS2632: Cannot assign to 'x' because it is an import.`），
+ * 所以 `export let` 也不可能被导入方覆写。真正的理由只有三条，且都成立：
+ *   ① **封装判空** —— 调用方不必知道它可能是 null（少一个写错的机会）；
+ *   ② **API 语义** —— 导出"一个动作"而不是"一个可变内部状态"，接口面更干净；
+ *   ③ 给"等价但不同形"的调用一个正式位置（`ENTRY_DUTIES` 里的 `netCall` 就是为它存在的）。
+ * 语义与 `if (activeDragCancel) activeDragCancel();` 逐字等价（空值即无操作）。
  * `renderApp` 体内的那一行**一行未改**（`renderBoard` 亦然）。
  */
 export function cancelActiveDrag(): void {

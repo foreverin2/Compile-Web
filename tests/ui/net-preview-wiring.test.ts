@@ -69,7 +69,7 @@ describe('G2 Task 4 · 接线：远程页进入产物 + 重渲染路由唯一入
     expect(code, "main.ts 未 import './ui/styles.css'（热座样式被顶掉了？）").toMatch(/import\s+'\.\/ui\/styles\.css'/);
   });
 
-  it('3. main.ts 定义 rerender()，且裸 renderApp( 的出现次数降到 2 处（每处都列出来）', () => {
+  it('3. main.ts 定义 rerender()，且裸 renderApp( 的出现次数降到 1 处（每处都列出来）', () => {
     const code = mainSrc();
     expect(code, 'main.ts 未定义 rerender（页面路由的唯一入口）').toMatch(/\bfunction rerender\(\)/);
     const sites = occurrences(code, 'renderApp(');
@@ -167,25 +167,31 @@ describe('G2 Task 4 · 接线：远程页进入产物 + 重渲染路由唯一入
       .toMatch(/verifyHooks:\s*true/);
     expect(rerender, 'rerender 未传 onPreviewChange（预览工具条完全不渲染 → 无法切视角 / 看自查行）')
       .toMatch(/onPreviewChange/);
-    expect(rerender, 'rerender 未把 netHandVisibility 传给 renderNetBoard（信息遮蔽形态丢失）')
-      .toMatch(/handVisibility:\s*netHandVisibility/);
-    expect(rerender, 'rerender 未按状态传 viewSeat').toMatch(/viewSeat:\s*netViewSeat/);
+    expect(rerender, 'rerender 不再传 onPreviewChange / viewSeat / verifyHooks 之一')
+      .toMatch(/viewSeat:\s*netViewSeat/);
+    // ── G2 Task 4F 终审 · Critical C-2（**必须留在这一组里**）──
+    // 手牌可见性**按座位**决定：自己 = 'all'（真实卡、可点），对手 = NET_HAND_VIS（数量占位）。
+    // 曾经把两处都写成常量 `NET_HAND_VIS`（='count'），而 `renderHand` 的 'count' 分支是
+    // **与 isSelf 无关的无条件提前返回** → 自己的手牌也变成「手牌 ×n」占位、一张 `.card` 都没有
+    // → 预览不可玩（而运行时自查照样 ✓）。**判据必须是这个三元映射本身，不能只看出现次数。**
+    const netSrcAll = stripComments(read('src/ui/render-net.ts'));
+    const selfMap = [...netSrcAll.matchAll(/handVisibility:\s*isSelf\s*\?\s*'all'\s*:\s*NET_HAND_VIS/g)].length;
+    expect(selfMap, `render-net.ts 里"自己='all' / 对手=数量占位"的映射有 ${selfMap} 处（应为恰好 2 处：P0 与 P1）`)
+      .toBe(2);
     // 草稿阶段的守卫必须在：预览沿用热座草稿页（否则草稿期会画远程页）
     expect(rerender, "rerender 缺少 state.phase !== 'draft' 守卫（草稿阶段会被画成远程页）")
       .toMatch(/state\.phase\s*!==\s*'draft'/);
-    // ── G2 Task 4F · I-2 + D-2 ──
-    // 信息遮蔽是**唯一**形态：`netHandVisibility` 是 `const`（值恒 'viewSeat'），
-    // 因此**类型层**就不存在"被切走"的可能。原先它可以被工具条的第二个开关切到 'all' ——
-    // 而那一档实测既不"可见"也不"可操作"（I-2）。
-    expect(main, "netHandVisibility 不是恒 'viewSeat' 的 const（I-2 之后不应存在可切取值）")
-      .toMatch(/const\s+netHandVisibility\s*:\s*'all'\s*\|\s*'viewSeat'\s*=\s*'viewSeat'\s*;/);
-    const handWrites = main.split('\n')
-      .map((line, i) => ({ no: i + 1, line }))
-      // ⚠️ 判据用 `netHandVisibility = '` 而不是 `netHandVisibility\s*=[^=]`：后者会把**声明行自身**
-      // 的类型标注 `'all' | 'viewSeat' = 'viewSeat';` 也算成一次赋值（实测假红）。
-      .filter(({ line }) => /netHandVisibility\s*=\s*'/.test(line) && !/const\s+netHandVisibility/.test(line));
-    expect(handWrites.map((w) => `src/main.ts:${w.no}: ${w.line.trim()}`),
-      'netHandVisibility 出现了声明点之外的赋值（I-2 之后它只应是 const）').toEqual([]);
+    // ── G2 Task 4F · I-2 + N4 + D-2 ──
+    // 信息遮蔽是**唯一**形态，而且**根本不存在"档位"这个量**：
+    // Task 4F 终审 N4 指出 `NetViewOpts.handVisibility` 已成死参数（传 `'all'` 静默无效），
+    // 于是把 `netHandVisibility` 常量与那个字段**一起删掉** —— 现在既没有可切取值、也没有可传参数，
+    // "预览恒为信息遮蔽"不再依赖"某个 const 恰好等于 'viewSeat'"，而是**结构上不存在别的可能**。
+    // （原来的判据是"它是 const 且只能声明一次"，那仍然留着一个可以被读错的入口；删掉更强。）
+    expect(main, 'main.ts 仍有 netHandVisibility 档位常量（N4 之后应已删除 —— 死参数比没有更误导）')
+      .not.toMatch(/netHandVisibility/);
+    expect(stripComments(read('src/ui/render-net.ts')),
+      'render-net.ts 的 NetViewOpts 仍有 page 级 handVisibility 档位字段（死参数，N4）')
+      .not.toMatch(/^\s*handVisibility:\s*'all'\s*\|\s*'viewSeat'\s*;/m);
     // D-2：devmode 注入必须走唯一入口 `rerender()`（否则远程页里用 devmode 加牌会把页面画回热座）
     const devmodeLines = main.split('\n')
       .map((line, i) => ({ no: i + 1, line: line.trim() }))
@@ -263,9 +269,10 @@ describe('G2 Task 4 · 接线：远程页进入产物 + 重渲染路由唯一入
     appDelegates?: readonly string[];
   }> = [
     // 拖拽安全网：`renderApp` 直接读模块变量（`if (activeDragCancel) activeDragCancel();`），
-    // 本页走 `render.ts` 新增的**只读包装** `cancelActiveDrag()`（语义逐字等价：空值即无操作）。
-    // 为什么不让本页也 `import { activeDragCancel }`：那会把一个**可变模块变量**导出成
-    // 任何 import 方都能覆写的写入口 —— 见 `render.ts` 里 `cancelActiveDrag` 的说明。
+    // 本页走 `render.ts` 新增的包装 `cancelActiveDrag()`（语义逐字等价：空值即无操作）。
+    // ⚠️ 理由更正（G2 终审 N6）：**不是**"导出裸变量会被 import 方覆写" —— ESM 导入绑定只读，
+    // `export let` 同样改不了（`error TS2632`）。真正的理由：封装判空 / 导出动作而非可变状态 /
+    // 给"等价但不同形"的调用一个正式位置（`netCall` 就是为它存在的）。见 render.ts 的说明。
     { id: '拖拽安全网', call: 'activeDragCancel(', netCall: 'cancelActiveDrag(' },
     { id: '清 body 级草稿展示框', call: 'removeDraftPreviews(' },
     // ⚠️ "③ 清空并重建 root" 在两个渲染器里的**落点不同**，这不是偏差而是委托：
@@ -438,7 +445,8 @@ describe('G2 Task 4 · 接线：远程页进入产物 + 重渲染路由唯一入
    * 裁决：删开关，靠**切视角**推进（切过去对手变 self ⇒ 正面 + 可点）。
    *
    * 判据：工具条函数体里**恰好只有一个** `.net-preview-btn` 按钮（视角），且
-   * `onPreviewChange` 的类型只回传 `viewSeat`；`handVisibility` 仍作为**入参**存在（留给真实联机）。
+   * `onPreviewChange` 的类型只回传 `viewSeat`；page 级的 `handVisibility` 档位字段**已删除**
+   * （N4：它成了死参数、传 `'all'` 静默无效）。"自己='all' / 对手=数量占位"的映射由上面的三元断言钉住。
    */
   it('11. I-2：预览工具条只有"视角"一个开关；onPreviewChange 只回传 viewSeat', () => {
     const netSrc = stripComments(read('src/ui/render-net.ts'));
@@ -454,11 +462,15 @@ describe('G2 Task 4 · 接线：远程页进入产物 + 重渲染路由唯一入
       .not.toContain('全部可见');
     expect(netSrc, 'render-net.ts 仍有按 handVisibility 切换的回传（I-2 未修净）')
       .not.toMatch(/onChange\(\s*\{\s*handVisibility/);
-    // onPreviewChange 的**类型**只回传 viewSeat；handVisibility 仍作为入参保留（留给将来真实联机）
+    // onPreviewChange 的**类型**只回传 viewSeat。
+    // 并且 **page 级的 `handVisibility` 档位字段必须不存在** —— G2 Task 4F 终审 N4：
+    // 那个字段在 4F 之后已成**死参数**（`render-net.ts` 不再读 `opts.handVisibility`），
+    // 传 `'all'` 会**静默无效**；留着它就是"看起来能用、实际没有任何效果"的第二个半成品。
+    // 门与守卫都发现不了"参数被静默忽略"，所以这里把它钉死：档位不存在，行为恒为信息遮蔽。
     expect(netSrc, 'NetViewOpts.onPreviewChange 的类型仍带 handVisibility（I-2 未修净）')
       .not.toMatch(/onPreviewChange\?\(next:\s*\{[^}]*handVisibility/);
-    expect(netSrc, 'NetViewOpts 不再有 handVisibility 入参（将来真实联机的接口面被删掉了）')
-      .toMatch(/handVisibility:\s*'all'\s*\|\s*'viewSeat'\s*;/);
+    expect(netSrc, 'NetViewOpts 仍有 page 级 handVisibility 档位字段（死参数 → 传值静默无效，N4）')
+      .not.toMatch(/^\s*handVisibility:\s*'all'\s*\|\s*'viewSeat'\s*;/m);
     // 视角开关必须真的回传 viewSeat（两态都覆盖）
     expect(bar, '视角开关未回传 viewSeat').toMatch(/onChange\(\s*\{\s*viewSeat:\s*opts\.viewSeat === 0 \? 1 : 0\s*\}\s*\)/);
   });

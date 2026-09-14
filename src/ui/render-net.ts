@@ -143,29 +143,30 @@ import {
 export interface NetViewOpts {
   /** 我的座位（**绝对玩家号**）。绝不可用 `s.turnPlayer` 冒充 —— 那是回合概念，视角会每回合翻面。 */
   viewSeat: 0 | 1;
-  /** 信息遮蔽：`'viewSeat'` = 只有自己正面、对手只手牌数量（设计稿 §6.4）。
-   *
-   *  ⚠️ **G2 Task 4F（终审 I-2）：本页当前只支持 `'viewSeat'`，预览入口恒传它。**
-   *  `'all'` 这一档实测**等价于**"对手手牌改画最多 15 张**卡背**、且仍不可点" —— 因为
-   *  `render.ts:1633` 的 `faceUp` 与 `:1651-1677` 的单击/拖拽绑定都以 **`isSelf`** 为条件，
-   *  `styles-net.css:210` 又对非 self 手牌 `pointer-events:none`。既然"全部可见"既不"可见"
-   *  也不"可操作"，G2 就**不把它暴露成用户开关**（半成品比没有更误导）。
-   *  **推进对手回合的正确做法：切 `viewSeat`**（切过去后对手变 self ⇒ 正面 + 可点）。
-   *  字段保留是为了**将来的真实联机**（对端本地视角可能就是 `'all'`）；要真正支持可见+可操作，
-   *  得给 `renderHand` 解耦 `isSelf`（那是共享助手，超出 G2 范围）→ 记入遗留。 */
-  handVisibility: 'all' | 'viewSeat';
   /** 预览工具条的**视角**开关回调。**真实联机时不传** → 工具条不渲染（零联机预览专用）。
-   *  G2 Task 4F：原先还带 `handVisibility`（已按 I-2 删除该开关），现在只回传 `viewSeat`。 */
+   *
+   *  ⚠️ **信息遮蔽没有开关**：本页恒为"只有自己正面、对手只手牌数量"（设计稿 §6.4）。
+   *  **G2 Task 4F（终审 I-2）删掉了原先的 `handVisibility: 'all' | 'viewSeat'` 字段** ——
+   *  `'all'` 那一档实测**等价于**"对手手牌改画最多 15 张**卡背**、且仍不可点"（`render.ts` 的 `faceUp`
+   *  与单击/拖拽绑定都以 `isSelf` 为条件，`styles-net.css` 又对非 self 手牌 `pointer-events:none`）。
+   *  既然"全部可见"既不"可见"也不"可操作"，就不该暴露成选项（**半成品比没有更误导**），
+   *  留着字段只会让人以为传 `'all'` 有用。**推进对手回合的正确做法：切 `viewSeat`**
+   *  （切过去后对手变 self ⇒ 正面 + 可点）。字段删除记录见 `.superpowers/sdd/G2-final-review-2.md`（N4）。 */
   onPreviewChange?(next: { viewSeat?: 0 | 1 }): void;
   /** 诊断：渲染后**真的去 DOM 里查**一遍 `NET_PAGE_HOOKS`（真实产出力的运行时证据）。
    *  默认关（真实联机零开销）；预览入口可在开发时打开。不通过时只 warning，不改变渲染结果。 */
   verifyHooks?: boolean;
 }
 
-/** 远程页的手牌可见性**恒为** `'count'`（设计稿 §6.4 信息遮蔽；I-2 之后不再有用户开关）。
- *  出参形状仍是 `renderHand` 的 `'all' | 'count'` —— 两处命名不同只是为了让 §6.4 的语义在入口可读。
- *  ⚠️ 自己一侧也走 `'count'`：`renderHand` 内部对 self 恒画正面，所以 `'count'` 只影响非 self
- *  （这正是本页要的"对手只手牌数量"），**不是**把自己也遮蔽掉。 */
+/** **对手**一侧手牌传给 `renderHand` 的可见性：`'count'` = 只产出数量占位（设计稿 §6.4 信息遮蔽）。
+ *
+ *  ⚠️ 关键区分（G2 Task 4F 的 Critical C-2 就是踩在这里）：`renderHand` 的 `'count'` 分支是
+ *  **与 `isSelf` 无关的无条件提前返回**（`render.ts` 里 `if (opts.handVisibility === 'count') { … return hand; }`），
+ *  它**早于**决定正反面的 `const faceUp = opts.isSelf && …` 与绑定单击/拖拽的 `if (opts.isSelf) {`。
+ *  所以**给自己一侧传 `'count'` 会把自己的手牌也变成「手牌 ×n」占位 —— 一张 `.card` 都不产出**：
+ *  看不了牌、点不了、拖不了 → 预览不可玩、特效抽查做不了；而**运行时自查照样 ✓**（`.card` 登记为
+ *  stateDependent），所以这条只能靠"自己一侧必须传 `'all'`"的源码守卫钉住。
+ *  两处调用点都写作 `isSelf ? 'all' : NET_HAND_VIS`，由 `tests/ui/render-net.test.ts` 钉住（改成常量即红）。 */
 const NET_HAND_VIS: 'all' | 'count' = 'count';
 
 /* ============================================================================
@@ -641,8 +642,8 @@ function renderChoiceUi(
   appendOperatorHeader(bar, who, prompt.title);
   // 2代 luck 宣告 prompt（luck-0 宣告数字 / luck-3 宣告协议）：宣告卡（效果源卡）中心出现
   // 持续转动的骰子（M-3：热座 render.ts:4945 的同款 deferredFx；startLuckDiceFx 幂等）。
-  // 注意：源卡必须是**已在 DOM 里、有非零 rect** 的节点才有骰子 —— 若源卡在对手手里且当前是
-  // `handVisibility: 'viewSeat'`（对手手牌只剩数量占位），则查不到 `[data-uid]`，骰子不出现
+  // 注意：源卡必须是**已在 DOM 里、有非零 rect** 的节点才有骰子 —— 若源卡在对手手里（对手手牌
+  // 只剩数量占位、查不到 `[data-uid]`），骰子不出现
   // （函数内部 `cardCenterByUid` 返回 null 即安全跳过，不报错）。这是信息遮蔽的必然取舍。
   if (
     prompt.rearrangeSide === undefined &&
@@ -715,7 +716,8 @@ function renderNetActionBar(s: GameState, cb: UiCallbacks): HTMLElement {
  * 手牌区（约束 5 / 7 的落点）
  * ========================================================================== */
 
-/** `renderHand` 的入参（两个玩家只有 `isSelf` 不同，其余共用；可见性恒为 `NET_HAND_VIS`）。 */
+/** `renderHand` 的入参（两个玩家只有 `isSelf` 不同，其余共用；**可见性按 `isSelf` 决定**：
+ *  自己 = `'all'`（真实卡、可点），对手 = `NET_HAND_VIS`（数量占位）。见 `NET_HAND_VIS` 的警告）。 */
 interface NetHandOpts {
   isSelf: boolean;
   /** 该玩家是否正在等待操作（效果挂起）→ 信息条的 operator 高亮 */
@@ -777,8 +779,9 @@ function buildP0Hand(s: GameState, viewSeat: PlayerId, cb: UiCallbacks, operator
     // 甲读法下**双方手牌都左起**：上下带由 CSS 决定，"左右"与座位无关
     reversed: false,
     // 对手手牌只剩数量占位（§6.4）；但仍产出 .hand[data-player] 节点。
-    // self 侧传 'count' 也仍画正面（renderHand 内部按 isSelf 决定 faceUp）。
-    handVisibility: NET_HAND_VIS,
+    // ⚠️ **自己一侧必须传 `'all'`**：`'count'` 是无条件提前返回（与 isSelf 无关），给自己传会连自己的手牌
+    //    也变成占位 → 没有 .card、打不出牌（C-2）。不要把它简化成常量。
+    handVisibility: isSelf ? 'all' : NET_HAND_VIS,
     // 设计稿 §6.1 已删挡板
     shield: false,
   });
@@ -798,7 +801,8 @@ function buildP1Hand(s: GameState, viewSeat: PlayerId, cb: UiCallbacks, operator
     onToggleFaceUp: () => { setHandSelection(getHandSelection().uid, !getHandSelection().faceUp); cb.rerender?.(); },
     cb,
     reversed: false,
-    handVisibility: NET_HAND_VIS,
+    // 同上：自己一侧 `'all'`，对手一侧数量占位（C-2 的守卫会钉住这两处）
+    handVisibility: isSelf ? 'all' : NET_HAND_VIS,
     shield: false,
   });
   return decorateHand(s, 1, hand, { isSelf, operator, cb });
@@ -835,7 +839,7 @@ function buildHands(
  * 预览工具条（仅 `opts.onPreviewChange` 存在时渲染）
  *
  * 为什么必须有（别当成装饰）：用户验收第 3 项要做「≥20 个点名特效抽查」，而那必须能真的把牌
- * 打出去 —— 但 `handVisibility: 'viewSeat'` 时对手手牌只剩数量占位，轮到对手就无人可操作、
+ * 打出去 —— 但对手手牌只剩数量占位（信息遮蔽），轮到对手就无人可操作、预览会卡死。
  * 预览会卡死。**推进对手回合的正确做法是切「视角」开关**：切过去后对手就是 self（手牌正面 +
  * 可点 + 可打牌），本页两态都会正确渲染布局与朝向。`viewSeat` 固定为 0 又无法检查
  * 「我是 P2 时」的上下带与 180° 是否也对。

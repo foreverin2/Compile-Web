@@ -76,19 +76,15 @@ let resetEpoch = 0;
 let renderMode: 'hotseat' | 'net' = 'hotseat';
 /** 预览视角座位（**绝对玩家号**；仅 `renderMode === 'net'` 时有意义）。页内工具条可切换。 */
 let netViewSeat: PlayerId = 0;
-/** 预览时对手手牌的可见性（仅 `renderMode === 'net'` 时有意义）。
- *
- *  **G2 Task 4F（终审 I-2）：恒为 `'viewSeat'`，不是用户可切的开关 —— 因此是 `const`。**
- *  预览工具条上原本还有一个"对手手牌：全部可见 ⇄ 只显示数量"按钮，实测那一档**只等于**
- *  "去掉数量占位、改画最多 15 张**卡背**、仍不可点"（`render.ts` 的 `faceUp` 与点击绑定都以
- *  `isSelf` 为条件；`styles-net.css` 对非 self 手牌 `pointer-events:none`）——
- *  既不"可见"也不"可操作"，比没有更误导，故删掉。
- *  **推进对手回合的正确做法是切「视角」**（切过去后对手变 self ⇒ 手牌正面 + 可点）。
- *  这一项**故意不做成可复位量**：它的值在 G2 里永远不变，写成 `const` 让"预览入口恒为信息遮蔽"
- *  这件事**在类型层就成立**（守卫另钉一条：不得有人把它改回 `let` 或写出第二个赋值点）。
- *  `NetViewOpts.handVisibility` 字段保留是为了**将来的真实联机**（对端本地视角可能就是 `'all'`）；
- *  要真正支持"可见且可点"得给 `renderHand` 解耦 `isSelf`（共享助手，超出 G2 范围）→ 记入遗留。 */
-const netHandVisibility: 'all' | 'viewSeat' = 'viewSeat';
+/* G2 Task 4F（终审 I-2 + N4）：**这里原先还有一个 `netHandVisibility` 常量，现已删除。**
+ * 它承载的"信息遮蔽档位"不是一个用户可选项，因此不该有"量"：本页恒为"自己正面、对手只手牌数量"。
+ * 原先工具条上的"对手手牌：全部可见 ⇄ 只显示数量"按钮**只等于**"去掉数量占位、改画最多 15 张
+ * **卡背**、仍不可点"（`render.ts` 的 `faceUp` 与点击绑定都以 `isSelf` 为条件；`styles-net.css`
+ * 对非 self 手牌 `pointer-events:none`）—— 既不"可见"也不"可操作"，比没有更误导，故删掉。
+ * **推进对手回合的正确做法是切「视角」**（切过去后对手变 self ⇒ 手牌正面 + 可点）。
+ * 相应地 `NetViewOpts.handVisibility` 字段也已删除（留着只会让人以为传 `'all'` 有用 →
+ * 终审 N4：那是**静默无效**的死参数）。要真正支持"可见且可点"得给 `renderHand` 解耦 `isSelf`
+ * （共享助手，超出 G2 范围）→ 记入遗留。 */
 
 /**
  * **整帧重渲染的唯一入口**：按 `renderMode` 路由到当前页面。
@@ -111,7 +107,6 @@ function rerender(): void {
     // 结果写进工具条的 `.net-verify-note`（用户一进预览页就能看见，不必开控制台）。
     renderNetBoard(root, state, cb, {
       viewSeat: netViewSeat,
-      handVisibility: netHandVisibility,
       onPreviewChange: (next) => {
         if (next.viewSeat !== undefined) netViewSeat = next.viewSeat;
         rerender();
@@ -581,7 +576,7 @@ function showModeSelect(): void {
       gameOptions = { ban, randomPool };
       renderMode = 'net';
       netViewSeat = viewSeat;
-      // 手牌可见性不在这里设：`netHandVisibility` 是 const（I-2 之后预览恒为信息遮蔽形态）。
+      // 手牌可见性不在这里设：本页无该选项（I-2/N4 已把档位字段删掉，恒为信息遮蔽形态）。
       showCoin();
     },
   });
@@ -645,7 +640,7 @@ function resetToMainInterface(): void {
   resetNetUiState(); // 远程页自有模块态（与上一行并排：两页的状态分属两个模块）
   renderMode = 'hotseat'; // 防"预览模式泄漏到热座"（见本节注释）
   netViewSeat = 0;
-  // 手牌可见性无需复位：`netHandVisibility` 是 const，全程恒为 'viewSeat'（I-2）。
+  // 手牌可见性无需复位：本页无该选项（档位字段已删，恒为信息遮蔽，I-2/N4）。
   showHome();
 }
 
