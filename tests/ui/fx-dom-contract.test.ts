@@ -485,4 +485,33 @@ describe('G2 Task 3F · stripArrayDecl（剔除数据表体的助手自身）', 
     expect(code).toContain('renderStackSlot(');
     expect(code).toContain('renderHand(s, 0');
   });
+
+  /**
+   * G2 Task 3F2 · F-4 / §4-1：**固化已知局限的当前行为**（不是"期望行为"）。
+   *
+   * 复评喂了 9 例刁钻输入，8 过 1 错；错的是"声明之前有代码位提前引用同名标识符"。本任务
+   * **有意不重构**该助手（复评建议：定位钉声明头 + 把 `=` 的搜索限制在同一条语句内 —— 已写进
+   * `tests/ui/source-text.ts` 的实现注释）。这条单测的作用是**把当前（不正确的）行为钉住**：
+   * 将来若有人顺手改好了它，这里会红 —— 红的含义是"请同步更新注释里的已知局限与本节说明"，
+   * 而不是"你改错了"。没有这条，这个缺口会随一次无声重构悄悄变样，谁也说不清现状。
+   */
+  it('已知局限（F-4，本轮不修）：声明前有代码位提前引用同名标识符时会剔错区间', () => {
+    const src = [
+      'function useHooks() { return NET_PAGE_HOOKS.length; }',
+      'const OTHER = [1, 2];',
+      'export const NET_PAGE_HOOKS: readonly X[] = [',
+      "  { hook: '.a' },",
+      '];',
+    ].join('\n');
+    const out = stripArrayDecl(src, 'NET_PAGE_HOOKS');
+    // ① 假红方向：无关的 `const OTHER = [1, 2];` 被当成表体吃掉
+    expect(out, 'F-4 的当前行为变了（无关声明不再被吃）→ 请同步 source-text.ts 的已知局限注释')
+      .not.toContain('const OTHER = [1, 2];');
+    // ② 假绿方向：真正的表体**留在结果里**
+    expect(out, 'F-4 的当前行为变了（真表体被正确剔除）→ 请同步 source-text.ts 的已知局限注释')
+      .toContain("hook: '.a'");
+    // ③ 行号仍然保持（这条能力与缺口无关，必须一直成立）
+    expect(out.split('\n').length).toBe(src.split('\n').length);
+    // 今天真实树零命中：render-net.ts 里该名字的第一个代码位命中就是声明本身（由上面那条单测保证）
+  });
 });

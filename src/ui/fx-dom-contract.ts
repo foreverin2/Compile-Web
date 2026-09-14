@@ -81,7 +81,16 @@ export const FX_DOM_CONTRACT: readonly FxDomHook[] = [
   {
     hook: '.stack-slot[data-player][data-line]', kind: 'class', category: 'A',
     requiredBy: ['fx-gen3.ts', 'fx-gen2.ts', 'fx-gen3-swap.ts', 'gen3-control.ts', 'effects/index.ts'],
-    probe: ['stack-slot', 'data-player', 'data-line'],
+    // G2 Task 3F2 · R2 同类风险审计：第一段从裸 `stack-slot` 收紧成 `stack-slot p`。
+    // 理由（变异 A06 实测）：裸 `stack-slot` 在 render.ts 里还被**查询**满足 —— `syncSmokeOverlays`
+    // 的 `.stack-slot[data-player="…"][data-line="…"]`（:320）—— 于是把产出点 (:230) 的类名改成
+    // `slotbox p${player+1}…` 时契约守卫**仍然全绿**（24/24），而页面上一个链路槽都没有。
+    // 形式与 `.trash-pile.p1/.p2` 的 `trash-pile p` 同源：钉**相邻的两个类 token**
+    // （`stack-slot` + 那个**承重**的 `.p${player+1}`），既排除查询写法与更长同类名，
+    // 也不绑定引号/模板的具体写法（`'stack-slot ' + …` 与 `` `stack-slot p…` `` 都行）。
+    // ⚠️ 不用"类名 + 尾空格"：那个形式会被**局部变量名**满足（`const slot = …` 之类），实测
+    // `deck ` / `battery ` 就是这么假绿的（见下两条的注释）。
+    probe: ['stack-slot p', 'data-player', 'data-line'],
     note: '链路槽几何：3 代飞行/连接件/常驻层的落点（slotRectOf / lineCenterX），最核心的一条。'
       + 'probe 逐段列出：渲染器只产 stack-slot 而丢掉 data-player/data-line 时，slotRectOf 全线失效，'
       + '自动推导的类名判别子串抓不到这种退化',
@@ -95,8 +104,13 @@ export const FX_DOM_CONTRACT: readonly FxDomHook[] = [
   {
     hook: '.protocol-img', kind: 'class', category: 'A',
     requiredBy: ['fx-gen3-swap.ts', 'effects/index.ts'],
-    note: '协议卡面图：协议交换幽灵卡取它的 rect 与卡面图（render.ts:116 是 img.className = "protocol-img"，'
-      + '故按书写形式是 class 选择器；清单里真正的 element 只有纯标签名 `img`）',
+    // G2 Task 3F2 · R2 同类风险审计：加显式 probe（带单引号的**产出形式**）。
+    // 变异 A10 实测：自动推导的裸词 `protocol-img` 被 render.ts:1469 的**查询**
+    // （`holder.querySelector('img.protocol-img')`）满足 —— 把产出点 :130 改成 `'protocolimg'`
+    // 时契约守卫仍绿（24/24），而协议卡面图没了（协议交换幽灵卡的 rect 与卡面图全丢）。
+    probe: ["'protocol-img'"],
+    note: '协议卡面图：协议交换幽灵卡取它的 rect 与卡面图（render.ts:130 是 img.className = '
+      + "'protocol-img' + …，故按书写形式是 class 选择器；清单里真正的 element 只有纯标签名 `img`）",
   },
   {
     hook: '.protocol', kind: 'class', category: 'A',
@@ -150,12 +164,26 @@ export const FX_DOM_CONTRACT: readonly FxDomHook[] = [
   {
     hook: '.deck[data-player]', kind: 'class', category: 'A',
     requiredBy: ['fx-gen2.ts', 'effects/index.ts'],
-    probe: ['deck', 'data-player'],
+    // G2 Task 3F2 · R2 同类风险审计：`deck` → `deck deck-`（**相邻两个类 token**）。理由（变异 A02 实测）：
+    // 裸 `deck` 被 `deck-count` / `deck-stack` / `deck-back` / `deck-order-*` 等**更长同类名**满足
+    // （renderDeck 自己就产 `deck-count`），于是把产出点 :1509 的 `deck` 改成 `deckbox` 时守卫仍绿
+    // （25/25），而牌库位置（deckPos）全线失效。产出点永远是 `` `deck deck-${…}` ``（`.deck-N`/`.deck-empty`
+    // 是 styles.css:771-779 的承重类，必然紧跟其后）。
+    // ⚠️ 先试过"`deck ` + 尾空格"，**实测无效**：`const deck = …` 这个**局部变量名**后面也是空格，
+    // 于是变异后照样绿（这是本轮踩到的坑，已由 A02 复跑确认；`stack-slot `/`battery ` 同病）。
+    probe: ['deck deck-', 'data-player'],
     note: '牌库位置：牌库顶打出/洗牌/冰封牌库等特效的起点或终点（deckPos），全库被读约 60 处',
   },
   {
     hook: '.battery', kind: 'class', category: 'A',
     requiredBy: ['gen3-control.ts'],
+    // G2 Task 3F2 · R2 同类风险审计：`battery` → `battery battery-`（**相邻两个类 token**）。
+    // 变异 A03 实测：裸 `battery` 被 `battery-shell` / `battery-cells` / `battery-cell` / `battery-overflow`
+    // 满足（都在 renderBattery 内部），于是把产出点 :173 改成 `batterybox` 时守卫仍绿，而 batteryNode
+    // 取不到 → 愤怒0 中缝虚线与惰性0 的能量槽 rect 全丢。产出点永远是 `` `battery battery-${state}` ``
+    // （`.battery-bulge/full/burst` 是 styles.css:302-354 的承重类，必然紧跟其后）。
+    // （同样不能用"尾空格"：`const battery = …` 会被满足 —— 见 `.deck` 那条的注释。）
+    probe: ['battery battery-'],
     note: '能量槽：愤怒0 中缝虚线要跨「两条能量槽之间」而非整行，惰性0 也要能量槽 rect（batteryNode）',
   },
 
@@ -163,12 +191,18 @@ export const FX_DOM_CONTRACT: readonly FxDomHook[] = [
   {
     hook: '.hand', kind: 'class', category: 'A',
     requiredBy: ['fx-gen2.ts', 'effects/index.ts', 'fx-gen3.ts'],
+    // G2 Task 3F2 · R2 同类风险审计：加显式 probe（带单引号的**产出形式**）。变异 A04 实测：
+    // 裸 `hand` 被 `.hand-strip` 的**类名与查询**双重满足（render.ts 里 `grid.querySelector('.hand-strip')`，
+    // 且 `hand-count` / `hand-more-badge` / `hand-side` / `hand-shield` 等更长同类名一堆）→ 把产出点
+    // :1601 改成 `'handbox'` 时守卫仍绿，而 FX 的 `querySelectorAll('.hand')[player]` 取到 undefined。
+    // 带引号的形式在 render.ts 里**恰好只出现一次**（:1601 `el('div', 'hand' + …)`），即产出点本身。
+    probe: ["'hand'"],
     note: '手牌区：抽牌幽灵终点、扇形末卡位置、手牌区 rect（多处用 querySelectorAll(".hand")[player]）',
   },
   {
     hook: '.hand[data-player]', kind: 'class', category: 'A',
     requiredBy: ['fx-gen3.ts'],
-    probe: ['hand', 'data-player'],
+    probe: ["'hand'", 'data-player'],
     note: '手牌区（带归属）：3 代按玩家取手牌容器（fx-gen3.ts:875）。**注意**：probe 与上一条 `.hand` 相同，'
       + '故这条的渲染器断言与 `.hand` 完全重合、不提供额外机检力 —— 它只作文档登记（区分「无归属的 .hand」'
       + '与「按玩家取的那一个」两种读法）',
@@ -176,6 +210,11 @@ export const FX_DOM_CONTRACT: readonly FxDomHook[] = [
   {
     hook: '.card', kind: 'class', category: 'A',
     requiredBy: ['fx-gen2.ts', 'effects/index.ts', 'fx-gen3.ts'],
+    // G2 Task 3F2 · R2 同类风险审计：加显式 probe（带单引号的**产出形式**）。变异 A05 实测：
+    // 裸 `card` 被 `card-face-img` / `card-back` / `cardback-img` / `card-text-*` 与查询 `'.card[data-uid]'`
+    // 满足 → 把产出点 :66 改成 `'cardbox'` 时守卫仍绿，而卡节点整类没了（克隆/扇形末卡/链路末卡全丢）。
+    // 带引号的形式在 render.ts 里恰好只出现一次（:66 `el('div', 'card')`），即产出点本身。
+    probe: ["'card'"],
     note: '卡节点：卡面克隆、扇形末卡位置、链路末卡位置（多处写作 .card:not(.reveal-ghost)）',
   },
   {
@@ -216,6 +255,12 @@ export const FX_DOM_CONTRACT: readonly FxDomHook[] = [
   {
     hook: '.control-track', kind: 'class', category: 'A',
     requiredBy: ['gen3-control.ts'],
+    // G2 Task 3F2 · R2（复评点名的既有假绿）：加显式 probe（带单引号的**产出形式**）。
+    // 变异 A01 实测：自动推导的裸词 `control-track` 被同一函数内的 `control-track-label left/right`
+    // 两个 span（render.ts:1880/1881）满足 → 把产出点 :1879 改成 `'controltrack'` 时守卫仍绿（24/24），
+    // 而 controlTrackSideX 取不到轨道 rect（易主落点退化成猜）。带引号的形式在 render.ts 里
+    // **恰好只出现一次**（:1879 `el('div', 'control-track')`），即产出点本身。
+    probe: ["'control-track'"],
     note: '控制轨道：易主落点按轨道实测矩形算（controlTrackSideX），不能拿视口百分比猜',
   },
 

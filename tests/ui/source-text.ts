@@ -105,6 +105,27 @@ function codePositions(src: string): boolean[] {
  * 括号配对是**字符串感知**的（表里就有 `'.stack-slot[data-player][data-line]'` 这种带方括号
  * 的字符串，朴素计数会把表尾找错）。找不到声明时**返回原文**（让上层断言以"缺 token"的形式
  * 报红，而不是在这里抛异常）。
+ *
+ * ## 已知局限（G2 Task 3F2 · F-4；**本轮有意不修**，只固化行为）
+ *
+ * 定位 `NAME` 取的是**第一个代码位命中**，而 `=` 是从那里一路向后搜的 —— 于是当**声明之前**
+ * 有代码提前引用同名标识符时（函数声明会提升，TS 合法），会从那个引用处开始吃、到**下一个**
+ * `= [...]` 结束：
+ *
+ * ```
+ * function useHooks() { return NET_PAGE_HOOKS.length; }   // ← at 落在这里
+ * const OTHER = [1, 2];                                   // ← 被当成"表体"整段吃掉（假红）
+ * export const NET_PAGE_HOOKS: readonly X[] = [ … ];       // ← 真表体**没被剔掉**（假绿方向）
+ * ```
+ *
+ * 评审喂了 9 例刁钻输入，8 过 1 错（错的就是上面这例）。影响面：**今天真实树零命中**
+ * （`NET_PAGE_HOOKS` 的第一个代码位命中就是声明本身），且失败方向主要是**假红**（响亮、
+ * 不会伪装成"已验收"）。当前行为已由一条**固化单测**钉住
+ * （`tests/ui/fx-dom-contract.test.ts` 的 `stripArrayDecl` 组），免得它无声漂移。
+ *
+ * 改进方向（留给下一轮，**本轮不重构**）：把定位钉到声明头
+ * `/(?:^|\n)\s*(?:export\s+)?const\s+NAME\b/`，并把 `=` 的搜索限制在**同一条语句内**
+ * （遇 `;` 或换行即停）；找不到就返回原文。
  */
 export function stripArrayDecl(src: string, name: string): string {
   const isCode = codePositions(src);

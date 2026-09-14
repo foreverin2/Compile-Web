@@ -129,7 +129,7 @@ function handVisOf(handVisibility: NetViewOpts['handVisibility']): 'all' | 'coun
  *   把 `renderStackSlot(` / `renderProtocolCell(` 的真实挂载删掉（页面上因此没有链路槽与协议格）
  *   后，契约测试 20 + 本文件守卫 11 **全绿（31/31）**。
  *
- * 现在这张表的**职责**只有三条，都不构成证据：
+ * 现在这张表的**职责**只有四条，都不构成证据：
  *   1. `hook`：与契约 A 类清单**逐字镜像**（守卫断言两边集合相等 → 表不可能漂移）；
  *   2. `call`：该钩子由哪条**共享助手调用**产出（守卫在**剔除表体后**的源码里逐条查这个调用
  *      字面量真的存在 —— 证据来自真实代码，表只提供"要查哪个字面量"的需求）；
@@ -138,6 +138,12 @@ function handVisOf(handVisibility: NetViewOpts['handVisibility']): 'all' | 'coun
  *      直接交给 `querySelector` 会抛 `SyntaxError`（这正是 C-2：`verifyHooks` 一开就崩）。
  *      `probeSelector` 与 `hook` 分离后，"每条都是合法 CSS"由 `tests/ui/render-net.test.ts`
  *      用仓库已装的 **lightningcss**（真正的 CSS 解析器）逐条机检。
+ *   4. `expected`：该钩子在**一帧完整远程页**里的确定数量（F-2）。只对**结构钩子**给值；
+ *      状态相关钩子（`.card` / `[data-uid]` / `img`）**不给**——它们空局面合法为 0。
+ *      ⚠️ 这些数字不是"拍脑袋"：`tests/ui/render-net.test.ts` 第 17 条把每一个都**从源码结构推出来**
+ *      （`3 线 × 2 侧 = 6`；牌库/弃牌/手牌来自各自的唯一挂载点 = 2；控制轨 1），
+ *      并用第 18/19 条把"缺了对手侧的合成树"喂给 `verifyPageHooks` 真跑一遍（必须报 ✗）。
+ *      没有那两条腿，这张表就只是"声明"——无 jsdom 时谁也证明不了它被用上了。
  *
  * `stateDependent`：该钩子在某些合法局面下**本就可能查不到**（场上无卡 / 手牌打空），
  * 自查时降级为 info 而不是失败 —— 否则诊断会稳定误报。
@@ -151,6 +157,8 @@ interface NetPageHook {
   call: readonly string[];
   /** 运行时自查用的**合法** CSS 选择器（豁免项不需要：自查会跳过它们） */
   probeSelector?: string;
+  /** 一帧完整远程页里的**确定数量**（结构钩子）。省略 = 只查存在性、不查个数 */
+  expected?: number;
   /** 该钩子在某些合法局面下可能为空（只报 info，不算失败） */
   stateDependent?: string;
   /** 有意不产出时的理由（与 fx-dom-contract.ts 的 `RENDERERS[].exempt` 对应） */
@@ -158,23 +166,24 @@ interface NetPageHook {
 }
 
 export const NET_PAGE_HOOKS: readonly NetPageHook[] = [
-  { hook: '.stack-slot[data-player][data-line]', call: ['renderStackSlot('], probeSelector: '.stack-slot[data-player][data-line]' },
-  { hook: '.protocol-cell[data-player][data-line]', call: ['renderProtocolCell('], probeSelector: '.protocol-cell[data-player][data-line]' },
-  { hook: '.protocol-img', call: ['renderProtocolCell('], probeSelector: '.protocol-img' },
-  { hook: '.protocol', call: ['renderProtocolCell('], probeSelector: '.protocol' },
-  { hook: '.protocol-holder', call: ['renderProtocolCell('], probeSelector: '.protocol-holder' },
+  // 甲读法 3 条线 × 双方 = 6；牌库/弃牌/手牌各 2；控制轨 1（与第 17 条的源码推导逐条对应）
+  { hook: '.stack-slot[data-player][data-line]', call: ['renderStackSlot('], probeSelector: '.stack-slot[data-player][data-line]', expected: 6 },
+  { hook: '.protocol-cell[data-player][data-line]', call: ['renderProtocolCell('], probeSelector: '.protocol-cell[data-player][data-line]', expected: 6 },
+  { hook: '.protocol-img', call: ['renderProtocolCell('], probeSelector: '.protocol-img', expected: 6 },
+  { hook: '.protocol', call: ['renderProtocolCell('], probeSelector: '.protocol', expected: 6 },
+  { hook: '.protocol-holder', call: ['renderProtocolCell('], probeSelector: '.protocol-holder', expected: 6 },
   {
     hook: '[data-uid]',
     call: ['renderStackSlot(', 'renderHand(s, 0', 'renderHand(s, 1'],
     probeSelector: '[data-uid]',
     stateDependent: '场上无卡且手牌为空（开局即有；"手牌打空 + 场上空"是合法局面）',
   },
-  { hook: '.trash-pile[data-player]', call: ['renderTrash('], probeSelector: '.trash-pile[data-player]' },
-  { hook: '.trash-pile.p1/.p2', call: ['renderTrash('], probeSelector: '.trash-pile.p1, .trash-pile.p2' },
-  { hook: '.deck[data-player]', call: ['renderDeck('], probeSelector: '.deck[data-player]' },
-  { hook: '.battery', call: ['renderStackSlot('], probeSelector: '.battery' },
-  { hook: '.hand', call: ['renderHand(s, 0', 'renderHand(s, 1'], probeSelector: '.hand' },
-  { hook: '.hand[data-player]', call: ['renderHand(s, 0', 'renderHand(s, 1'], probeSelector: '.hand[data-player]' },
+  { hook: '.trash-pile[data-player]', call: ['renderTrash('], probeSelector: '.trash-pile[data-player]', expected: 2 },
+  { hook: '.trash-pile.p1/.p2', call: ['renderTrash('], probeSelector: '.trash-pile.p1, .trash-pile.p2', expected: 2 },
+  { hook: '.deck[data-player]', call: ['renderDeck('], probeSelector: '.deck[data-player]', expected: 2 },
+  { hook: '.battery', call: ['renderStackSlot('], probeSelector: '.battery', expected: 6 },
+  { hook: '.hand', call: ['renderHand(s, 0', 'renderHand(s, 1'], probeSelector: '.hand', expected: 2 },
+  { hook: '.hand[data-player]', call: ['renderHand(s, 0', 'renderHand(s, 1'], probeSelector: '.hand[data-player]', expected: 2 },
   {
     hook: '.card',
     call: ['renderStackSlot(', 'renderHand(s, 0', 'renderHand(s, 1'],
@@ -192,27 +201,47 @@ export const NET_PAGE_HOOKS: readonly NetPageHook[] = [
     exempt: '与 .rot-cw 同一条理由（成对读取：src/ui/fx-orient.ts 的 orientOf）。',
     call: [],
   },
-  { hook: 'img', call: ['renderProtocolCell(', 'renderControlModule('], probeSelector: 'img' },
-  { hook: '.control-module', call: ['renderControlModule('], probeSelector: '.control-module' },
-  { hook: '.control-slider-img', call: ['renderControlModule('], probeSelector: '.control-slider-img' },
-  { hook: '.control-track', call: ['renderControlModule('], probeSelector: '.control-track' },
+  {
+    hook: 'img',
+    call: ['renderProtocolCell(', 'renderControlModule('],
+    probeSelector: 'img',
+    // 结构上"本页至少 13 个 img"（6 张协议图 + 6 张卡面/cardback + 1 个滑块图），但**不给数量**：
+    // 这条 probe 是**标签名**（契约自己已披露它退化 —— 任何 img 都算命中），数量还随卡面朝向、
+    // 手牌张数、选择浮层变化。定了数量只会在合法局面下误报。与 `.card`/`[data-uid]` 同走 info 通道。
+    stateDependent: '标签钩子：probe 退化为"存在任一 img"，且数量随卡面/手牌/浮层变化 → 不计数，只报 info',
+  },
+  { hook: '.control-module', call: ['renderControlModule('], probeSelector: '.control-module', expected: 1 },
+  { hook: '.control-slider-img', call: ['renderControlModule('], probeSelector: '.control-slider-img', expected: 1 },
+  { hook: '.control-track', call: ['renderControlModule('], probeSelector: '.control-track', expected: 1 },
 ];
 
 /**
- * **运行时**核对：`NET_PAGE_HOOKS` 里每条非豁免钩子是否真的能在页面上查到节点，
- * 外加两条**源码守卫永远证明不了**的断言（硬约束 7 的 DOM 顺序、硬约束 2 / C-4 的对手卡朝向）。
+ * **运行时**核对：`NET_PAGE_HOOKS` 里每条非豁免钩子是否真的能在页面上查到节点（**数量确定的结构钩子
+ * 连数量一起查**），外加两条**源码守卫永远证明不了**的断言（硬约束 7 的 DOM 顺序、
+ * 硬约束 2 / C-4 的对手卡朝向）。
  *
  * 为什么值得写在生产代码里：源码守卫（含契约测试）对"产出方"的判据是**源码文本**，
  * 而本页的产出方在 `render.ts` 里 —— 文本判据在这种情况下证明力最弱（计划附录 A.4-3 已披露）。
  * 这个函数把它变成可执行的检查：`opts.verifyHooks === true` 时渲染完立刻去 DOM 里查。
+ *
+ * **F-2（3F 复评）：只问"存在"不问"个数"是半个盲区** —— 评审变异 R4 删掉**整条对手侧行**
+ * （对手的 6 个 `.stack-slot` / 6 个 `.protocol-cell` / 6 个 `.battery` 全没）时，自己侧每类仍有
+ * 一个 → 存在性自查报 `自查 ✓`，而页面上少了**半个棋盘**。所以 `expected` 不为空的钩子改成
+ * **计数断言**（`数量 N，期望 M`）；`.card` / `[data-uid]` / `img` 等**状态相关**钩子仍然只报
+ * info（空局面下合法为 0），不给定数量 —— 否则诊断会稳定误报。
  *
  * **绝不抛异常**（C-2）：每一条都在 `try/catch` 里 —— 将来有人往表里写一个非法选择器（例如
  * 契约的展示写法 `.trash-pile.p1/.p2`），它只应当成为**一条具名失败**，绝不能从 `renderNetBoard`
  * 逃逸出去把整页渲染搞崩（`querySelector` 对非法选择器按 DOM 规范抛 `SyntaxError`）。
  *
  * 返回一段**给用户看**的摘要；同时把失败明细 `console.warn` 一次（不逐条抛）。
+ *
+ * **为什么 `export`**：无 jsdom 的环境里，只有把它导出、用一份**合成 scope 桩**在 vitest 里真跑
+ * 一遍，才能证明"计数逻辑本身有牙齿"（`tests/ui/render-net.test.ts` 第 19 条：缺了对手侧的合成树
+ * 必须报 ✗ 并说出 `数量 … / 期望 …`）。它**不是**公开 API 的一部分 —— 真实入口只有
+ * `renderNetBoard` 的 `opts.verifyHooks`。
  */
-function verifyPageHooks(scope: HTMLElement): string {
+export function verifyPageHooks(scope: HTMLElement): string {
   const fatal: string[] = [];
   const soft: string[] = [];
   for (const h of NET_PAGE_HOOKS) {
@@ -222,14 +251,22 @@ function verifyPageHooks(scope: HTMLElement): string {
       fatal.push(`${h.hook}：登记表缺 probeSelector（运行时自查无法进行）`);
       continue;
     }
-    let hit: boolean;
+    let found: number;
     try {
-      hit = scope.querySelector(sel) !== null;
+      // 统一用 querySelectorAll：存在性 = `count > 0`。为什么不用两次 API：
+      // 一次遍历就能同时支撑"存在性"与"计数"两种判据，也不会出现两处口径不一致。
+      found = scope.querySelectorAll<HTMLElement>(sel).length;
     } catch (err) {
       fatal.push(`${h.hook}：探测选择器 ${JSON.stringify(sel)} 非法（${String(err)}）`);
       continue;
     }
-    if (hit) continue;
+    const want = h.expected;
+    if (want !== undefined) {
+      // 结构钩子：数量是确定的（甲读法 3 线 × 双方；牌库/弃牌/手牌各 2；控制轨 1）
+      if (found !== want) fatal.push(`${h.hook}：数量 ${found}，期望 ${want}（探测 ${sel}）`);
+      continue;
+    }
+    if (found > 0) continue;
     const line = `${h.hook}（探测 ${sel}）`;
     if (h.stateDependent !== undefined) soft.push(`${line} —— ${h.stateDependent}`);
     else fatal.push(line);
@@ -381,8 +418,10 @@ function renderLaneMid(s: GameState, line: Line): HTMLElement {
 /**
  * 一条线 = 一整条横带：**上 = 对手 / 中线 / 下 = 自己**。
  * 视觉上的"上/下"按 `viewSeat` 换算成绝对玩家号，但 `data-player` 永远写**绝对值**（设计稿 §6.2）。
- * 「对手侧 180°」这一视觉变换由 styles-net.css 挂在 `.net-side-foe` 上（**不是** `display:none`
- * 换位，那样取不到 rect）；这里只负责"谁在上带"。
+ * 「对手侧 180°」由**卡/协议自身**的 `.rot-180` 承担（本页传 `orient: isSelfSeat ? 0 : 180`，
+ * 类名映射在 `render.ts:252-254` 的 180° 分支与 `:130` 的协议图）——**不是**父级 transform：
+ * 行级 `rotate(180deg)` 会与卡自身的 `.rot-180` 叠加成 0°（对手的卡其实正立）并把该行水平镜像
+ * （G2 Task 3 的 C-4；`styles-net.css` 第 3 节有完整说明）。这里只负责"谁在上带"。
  */
 function renderLaneBand(s: GameState, line: Line, viewSeat: PlayerId, cb: UiCallbacks): HTMLElement {
   const foe = (1 - viewSeat) as PlayerId;
@@ -767,8 +806,15 @@ function renderPreviewToolbar(
  *
  * `opts` 每次渲染都是权威来源：座位、手牌可见性都**只**从这里读，不保留任何"上次的视角"，
  * 因此不存在"内部状态与 opts 不一致"这一类 bug（预览工具条切换后由 `main.ts` 重新传入）。
+ *
+ * **入口约定（F-1）**：与 `render.ts` 的 `renderDraft`（`:4472`）/ `renderBoard`（`:4637`）与
+ * `home.ts:65` 一致 —— 渲染器**自己清空 root 再重建**。少了第一行的 `root.textContent = ''`
+ * 会（a）从热座/草稿切进远程预览时把新棋盘**叠在旧那一屏下面**，（b）之后每次 `cb.rerender?.()`
+ * 都**线性叠加**一份，而 FX 全走 `querySelector`（取第一个）→ 特效全部打在旧副本上。
+ * 复评实测：Task 4 的单行 `rerender()` dispatch 不做清理，所以这里必须自己清。
  */
 export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks, opts: NetViewOpts): void {
+  root.textContent = '';
   const viewSeat = opts.viewSeat;
   const foe = (1 - viewSeat) as PlayerId;
   const handVis = handVisOf(opts.handVisibility);

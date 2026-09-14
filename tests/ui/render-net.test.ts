@@ -1,9 +1,19 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+// ⚠️ `lightningcss` 是 **vite 的传递依赖**（`node_modules/vite/package.json` 里声明），不在本仓
+// `package.json` 的 devDependencies 里。**这是有意接受的**（G2 Task 3F2 · §4-2，复评实测确认）：
+//   1. 缺失时失败是**响亮的** —— 静态 import 不存在的包 → `Failed Suites` / `Tests no tests` / exit 1，
+//      不会被吞、不会静默跳过整条守卫；
+//   2. 为什么**不**动 `package.json`：本仓禁止 `npm install`（零运行时依赖纪律），手写一条声明会让
+//      `package-lock.json` 失同步（lockfile 里它挂在 vite 下面）；
+//   3. 为什么**不**改成 `await import()` + try/catch：那会把"包没了"变成**静默跳过**（守卫读起来仍绿），
+//      正是本项目反复出现的失效模式 —— 宁可响亮地红。
+//   风险与对策：若 vite 将来弃用 lightningcss，本文件会立刻红（而不是静默失去 CSS 校验），
+//   那时再决定"新增显式依赖"或"换一个等价解析器"。
 import { transform } from 'lightningcss';
 import { hooksOfCategory, RENDERERS } from '../../src/ui/fx-dom-contract';
-import { NET_PAGE_HOOKS } from '../../src/ui/render-net';
+import { NET_PAGE_HOOKS, verifyPageHooks } from '../../src/ui/render-net';
 import { stripComments, stripArrayDecl } from './source-text';
 
 /**
@@ -24,6 +34,15 @@ import { stripComments, stripArrayDecl } from './source-text';
  *    职责，并对它加了两条机检（第 2b 条）。
  * 2. **I-2 的镜像修正**在 `tests/ui/fx-orient.test.ts`（读去注释源码 + 180° 分支与类名配对）。
  * 3. **I-1 / C-4 / M-3** 各加了机检（第 15/16/17 条）。
+ *
+ * ## G2 Task 3F2 新增的三条（复评 F-1 / F-2）
+ * - **第 1b 条**：`renderNetBoard` 必须**第一件事**清空 root（清空早于任何 `root.appendChild`，
+ *   且不在条件/循环里）。原缺陷（`aba8944` 就有）：入口不清 root → 接线第一帧叠一份棋盘、
+ *   每次 `rerender` 线性叠加（兄弟入口 `renderDraft`/`renderBoard`/`home.ts` 全都清）。
+ * - **第 17 条**：`verifyPageHooks` 的**期望数量表**必须能从源码结构**推导出来**
+ *   （`3 线 × 2 侧 = 6` 等），并钉住两侧 `renderSideRow` 的**真实挂载**。
+ * - **第 18/19 条**：把合成 DOM 桩喂给 `verifyPageHooks()` **真跑一遍** —— 缺了对手侧的树必须报 ✗
+ *   并说出 `数量 …，期望 …`。没有这两条，`expected` 表在无 jsdom 下只是一句声明。
  */
 
 const root = new URL('../../src/ui/', import.meta.url);
@@ -119,6 +138,49 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
     expect(src.length, 'src/ui/render-net.ts 不存在或为空（先建文件，再登记进 RENDERERS）').toBeGreaterThan(0);
     expect(stripComments(src)).toContain('export function renderNetBoard');
     expect(stripComments(src)).toContain('export function resetNetUiState');
+  });
+
+  /**
+   * F-1（复评 Critical，`aba8944` 起的既有缺陷）：`renderNetBoard` 必须**自己清空 root**。
+   *
+   * 为什么：`renderApp` 的契约是"渲染器自己清空并重建 root 内容"，兄弟入口全都清
+   * （`render.ts:4472` renderDraft / `:4637` renderBoard / `home.ts:65`），而 Task 4 计划的
+   * 单行 `rerender()` dispatch **不做清理**。少了这一行 → 从热座/草稿切进远程预览时**叠一屏**，
+   * 之后每次 `cb.rerender?.()` 再叠一份（线性增长），而 FX 全走 `querySelector`（取首个）
+   * → 特效全部打在旧副本上。运行时断言 1 会把它报成"4 条 .hand"（用户可见），但那时页面已经叠坏。
+   *
+   * ⚠️ 判据不是"文件里有 `textContent = ''`"（那种写法会被**别的函数**或注释满足 ——
+   * `renderPreviewToolbar` 的 `.net-verify-note` 写入就含 `textContent`）。这里做三件事：
+   *   ① 定位到 `renderNetBoard` 的**函数体**；
+   *   ② 断言它出现在**任何** `root.appendChild(` 之前（顺序）；
+   *   ③ 断言清空语句之前的前缀里**没有** `if/for/while/switch`（不得被包进条件或循环，
+   *      也不得藏在 `if (x) return;` 之后）。
+   */
+  it('1b. F-1：renderNetBoard 必须**第一件事**清空 root（早于任何 root.appendChild，且无条件）', () => {
+    const code = netCode();
+    const entryAt = code.indexOf('export function renderNetBoard');
+    expect(entryAt, '找不到 export function renderNetBoard').toBeGreaterThanOrEqual(0);
+    const entry = code.slice(entryAt);
+    const bodyStart = entry.indexOf('{');
+    expect(bodyStart, '找不到 renderNetBoard 的函数体起始 `{`').toBeGreaterThan(0);
+    const body = entry.slice(bodyStart + 1);
+
+    const iClear = body.indexOf("root.textContent = ''");
+    const iAppend = body.indexOf('root.appendChild(');
+    expect(iClear, 'renderNetBoard 里没有 `root.textContent = \'\'`（入口不清空 root → 每次渲染叠一份棋盘）')
+      .toBeGreaterThanOrEqual(0);
+    expect(iAppend, 'renderNetBoard 里找不到 root.appendChild(（结构被改？）').toBeGreaterThan(0);
+    expect(iClear, 'F-1：清空 root 必须发生在**任何** root.appendChild 之前')
+      .toBeLessThan(iAppend);
+    // ③ 不得条件化 / 循环化 / 被 early-return 绕过
+    const prefix = body.slice(0, iClear);
+    expect(prefix, 'F-1：清空 root 不得被包进条件或循环（也不得排在 early return 之后）')
+      .not.toMatch(/\b(if|for|while|switch)\s*\(/);
+    // 与兄弟入口同形（这条把"这是全仓约定"写进守卫，防止有人"顺手"只在这里去掉）。
+    // 判据写成两种等价清空形式都接受（`textContent = ''` / `replaceChildren()`）—— 不绑定写法。
+    const renderSrc = stripComments(read('render.ts'));
+    expect(renderSrc, 'render.ts 的 renderBoard/renderDraft 也不再清空 root（全仓约定被改？）')
+      .toMatch(/root\.(?:textContent = ''|replaceChildren\()/);
   });
 
   /**
@@ -483,5 +545,176 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
     // 两个特效必须由**选择分支**触发（与热座同条件），而不是无条件播
     expect(code).toMatch(/prompt\.title\.startsWith\('透彻：从牌库中选择'\)/);
     expect(code).toMatch(/prompt\.title\.startsWith\('luck-0：宣告'\)/);
+  });
+
+  /**
+   * F-2（复评 Important）：**计数盲区** —— 只查"存在"不查"个数"。
+   *
+   * 评审变异 R4：删掉 `band.appendChild(renderSideRow(s, foe, …))`（对手的 6 个 `.stack-slot`、
+   * 6 个 `.protocol-cell`、6 个 `.battery` 全没）→ 契约 24 + 本文件 18 = **42/42 全绿**，
+   * 而运行时自查也报 `自查 ✓`（自己侧每类仍各有一个）。
+   *
+   * 本条的职责：把 `verifyPageHooks` 的**期望数量表**从**源码结构推导出来**，而不是把数字再抄一遍。
+   *   - 一帧 = `for (const line of [0, 1, 2])` 三条线 × `band.appendChild(renderSideRow(…))` 两侧；
+   *   - 每侧的链路槽/协议格各 1 → `.stack-slot`/`.protocol-cell`/`.battery`/`.protocol`/
+   *     `.protocol-holder`/`.protocol-img` = 3 × 2 = 6；
+   *   - 牌库/弃牌堆来自 `renderPiles`（唯一调用点，两处挂载互补）→ 2；手牌来自 `renderHand(` → 2；
+   *     控制轨来自 `renderControlModule(` → 1。
+   * 这样"删掉一侧挂载"会同时打破 ①两个挂载字面量、②推导出的数量，而**数字本身也不可能被悄悄改小**
+   * （表里少一个 `expected` 字段或改小数字都会在下面对比里报红）。
+   */
+  it('17. F-2：verifyPageHooks 的**期望数量表**必须与源码结构一致（无 jsdom 下的结构腿）', () => {
+    const code = netCode();
+    // ① 两侧 `renderSideRow` 的真实挂载（评审变异 R4 正是删掉了其中一条）
+    expect(code, '对手侧的整行挂载不见了（对手 6 个 .stack-slot / 6 个 .protocol-cell 全没）')
+      .toMatch(/band\.appendChild\(renderSideRow\(s,\s*foe,/);
+    expect(code, '自己侧的整行挂载不见了').toMatch(/band\.appendChild\(renderSideRow\(s,\s*viewSeat,/);
+    const sideMounts = (code.match(/band\.appendChild\(renderSideRow\(/g) ?? []).length;
+    expect(sideMounts, 'renderSideRow 必须恰好挂载两次（对手 / 自己各一次）').toBe(2);
+    // 三条线来自同一个循环（写死 `[0, 1, 2]`；改成别的长度必须同步改期望表）
+    expect(code, '三条线必须由 `for (const line of [0, 1, 2] as Line[])` 产出').toMatch(/for \(const line of \[0, 1, 2\] as Line\[\]\)/);
+    const LANES = 3;
+    const perFrame = LANES * sideMounts;                       // 6
+    const pilesCalls = (code.match(/renderPiles\(s, /g) ?? []).length;
+    const handCalls = (code.match(/renderHand\(/g) ?? []).length;
+    const controlCalls = (code.match(/renderControlModule\(/g) ?? []).length;
+    expect(pilesCalls, 'renderPiles 的调用点应恰好两处（对手条 + 自己行）').toBe(2);
+    expect(handCalls, 'renderHand 的调用点应恰好两处（P0 / P1）').toBe(2);
+    expect(controlCalls, 'renderControlModule 的调用点应恰好一处').toBe(1);
+
+    const expectOf = (hook: string): number | undefined => NET_PAGE_HOOKS.find((h) => h.hook === hook)?.expected;
+    // ② 数量 = 结构推导值（不是抄一遍数字）
+    for (const hook of [
+      '.stack-slot[data-player][data-line]', '.protocol-cell[data-player][data-line]',
+      '.protocol-img', '.protocol', '.protocol-holder', '.battery',
+    ]) {
+      expect(expectOf(hook), `${hook} 的 expected 必须等于 线数 × 侧数 = ${perFrame}`).toBe(perFrame);
+    }
+    for (const hook of ['.deck[data-player]', '.trash-pile[data-player]', '.trash-pile.p1/.p2']) {
+      expect(expectOf(hook), `${hook} 的 expected 必须等于 renderPiles 的调用点数 = ${pilesCalls}`).toBe(pilesCalls);
+    }
+    for (const hook of ['.hand', '.hand[data-player]']) {
+      expect(expectOf(hook), `${hook} 的 expected 必须等于 renderHand 的调用点数 = ${handCalls}`).toBe(handCalls);
+    }
+    for (const hook of ['.control-module', '.control-slider-img', '.control-track']) {
+      expect(expectOf(hook), `${hook} 的 expected 必须等于 renderControlModule 的调用点数 = ${controlCalls}`).toBe(controlCalls);
+    }
+    // ③ 分类完备：每条非豁免钩子**要么**定数量、**要么**标状态相关（不许两头都不占）
+    const classified = NET_PAGE_HOOKS.filter((h) => h.exempt === undefined);
+    expect(classified.filter((h) => h.expected === undefined && h.stateDependent === undefined).map((h) => h.hook),
+      '以下钩子既没定数量、也没标"状态相关"（自查会对它既不报错也不计数）').toEqual([]);
+    // ④ 反之：状态相关钩子**不得**定数量（`.card`/`[data-uid]`/`img` 在空局面合法为 0，定了会稳定误报）
+    expect(NET_PAGE_HOOKS.filter((h) => h.stateDependent !== undefined && h.expected !== undefined).map((h) => h.hook),
+      '状态相关钩子被定了数量（空局面会稳定误报）').toEqual([]);
+    // ⑤ 定数量的恰好是这 14 条（少一条或多一条都要在这里说清楚）
+    expect(NET_PAGE_HOOKS.filter((h) => h.expected !== undefined).map((h) => h.hook).sort()).toEqual([
+      '.battery', '.control-module', '.control-slider-img', '.control-track',
+      '.deck[data-player]', '.hand', '.hand[data-player]',
+      '.protocol', '.protocol-cell[data-player][data-line]', '.protocol-holder', '.protocol-img',
+      '.stack-slot[data-player][data-line]', '.trash-pile.p1/.p2', '.trash-pile[data-player]',
+    ].sort());
+    // ⑥ `verifyPageHooks` 必须真的**用**这个字段（不是只声明）
+    expect(code, 'verifyPageHooks 未使用 expected（计数判据被关掉）').toMatch(/const want = h\.expected;/);
+    expect(code, 'verifyPageHooks 未把实际数量与期望数量对比').toMatch(/found !== want/);
+    expect(code, 'verifyPageHooks 未把数量写进报告文本').toMatch(/数量 \$\{found\}，期望 \$\{want\}/);
+  });
+
+  /** 合成「一帧远程页」的选择器计数（`sides: 1` = 评审变异 R4：对手侧整行消失） */
+  function syntheticPage(o: { sides?: number; foeInverted?: boolean } = {}): Record<string, number> {
+    const sides = o.sides ?? 2;
+    const perLine = 3 * sides;      // 每类"每线每侧各一个"
+    const foeCards = sides === 2 ? 2 : 0;
+    const foeProto = sides === 2 ? 3 : 0;
+    const inv = o.foeInverted === false ? 0 : undefined;
+    return {
+      '.stack-slot[data-player][data-line]': perLine,
+      '.protocol-cell[data-player][data-line]': perLine,
+      '.protocol-img': perLine,
+      '.protocol': perLine,
+      '.protocol-holder': perLine,
+      '.battery': perLine,
+      '[data-uid]': 4,                                   // 状态相关：不计数
+      '.trash-pile[data-player]': 2,
+      '.trash-pile.p1, .trash-pile.p2': 2,
+      '.deck[data-player]': 2,
+      '.hand': 2,
+      '.hand[data-player]': 2,
+      '.card': 4,                                        // 状态相关：不计数
+      img: 20,                                           // 状态相关：不计数
+      '.control-module': 1,
+      '.control-slider-img': 1,
+      '.control-track': 1,
+      '.net-side-foe .card': foeCards,
+      '.net-side-foe .card.rot-180': inv ?? foeCards,
+      '.net-side-foe .protocol-img': foeProto,
+      '.net-side-foe .protocol-img.rot-180': inv ?? foeProto,
+      '.net-side-self .card.rot-180, .net-side-self .card.rot-cw, .net-side-self .card.rot-ccw': 0,
+    };
+  }
+
+  /**
+   * 合成 DOM 桩：**只**实现 `verifyPageHooks` 用到的两个方法（无 jsdom）。
+   *
+   * ⚠️ 它证明的是「**计数逻辑本身有牙齿**」（缺了对手侧的合成树必须报 ✗ 并说出期望数量），
+   * **不是**"真实 DOM 里有这些节点" —— 后者只能靠 `opts.verifyHooks` 在预览页真跑 +
+   * 用户在 5173 上做点名特效抽查。它是"期望值表在无 jsdom 下也有牙齿"的第二条腿：
+   * 第一条腿是第 17 条（数字从源码结构推导），这一条把 `verifyPageHooks` **真的执行一遍**。
+   */
+  function fakeScope(counts: Record<string, number>, handOrder: number[] = [0, 1]): HTMLElement {
+    const listOf = (sel: string): Array<{ dataset: Record<string, string> }> => {
+      const n = counts[sel] ?? 0;
+      if (sel === '.hand') return handOrder.slice(0, n).map((p) => ({ dataset: { player: String(p) } }));
+      return Array.from({ length: n }, () => ({ dataset: {} }));
+    };
+    return {
+      querySelectorAll: (sel: string) => listOf(sel),
+      querySelector: (sel: string) => listOf(sel)[0] ?? null,
+    } as unknown as HTMLElement;
+  }
+
+  it('18. F-2：把合成 DOM 桩喂给 verifyPageHooks() 真跑 —— 正常 ✓ / 状态相关为空仍 ✓ / 非法选择器不抛', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    try {
+      expect(verifyPageHooks(fakeScope(syntheticPage()))).toMatch(/^自查 ✓/);
+      // 状态相关钩子为空（合法局面：手牌打空 + 场上空）→ 仍 ✓，只走 info 通道，不进失败计数
+      const empty = syntheticPage();
+      empty['.card'] = 0; empty['[data-uid]'] = 0; empty.img = 0;
+      expect(verifyPageHooks(fakeScope(empty))).toMatch(/^自查 ✓/);
+      expect(info, '状态相关钩子为空时应留下 info 记录（而不是静默）').toHaveBeenCalled();
+      // C-2 回归：非法选择器（querySelectorAll 抛 SyntaxError）不得让函数抛异常，只报一条具名失败
+      const boom = {
+        querySelectorAll: () => { throw new SyntaxError("Unexpected token Delim('/')"); },
+        querySelector: () => null,
+      } as unknown as HTMLElement;
+      let out = '';
+      expect(() => { out = verifyPageHooks(boom); }, '非法选择器让 verifyPageHooks 抛异常（C-2 回归）').not.toThrow();
+      expect(out).toContain('非法');
+      expect(warn, '失败必须留下 console.warn 证据（不能只在返回值里）').toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+      info.mockRestore();
+    }
+  });
+
+  it('19. F-2：缺对手侧整行 / 手牌顺序反了 / 对手卡没倒置 —— 运行时自查都必须报 ✗', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    try {
+      // ① 评审变异 R4 的**运行时等价形态**：对手侧整行消失（每类只剩 3）
+      const missingFoe = verifyPageHooks(fakeScope(syntheticPage({ sides: 1 })));
+      expect(missingFoe, '缺了对手侧整行却报 ✓ —— 计数判据没生效（这就是 F-2）').toMatch(/^自查 ✗/);
+      expect(missingFoe, '失败信息必须同时给出实际数量与期望数量').toContain('数量 3，期望 6');
+      // ② `.hand` 顺序反了（[P1, P0]）→ 约束 7
+      expect(verifyPageHooks(fakeScope(syntheticPage(), [1, 0])), '手牌顺序反了没报（FX 会飞错手牌区）')
+        .toContain('约束 7');
+      // ③ 对手卡没带 .rot-180 → 硬约束 2
+      expect(verifyPageHooks(fakeScope(syntheticPage({ foeInverted: false }))), '对手卡没倒置没报')
+        .toContain('硬约束 2');
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+      info.mockRestore();
+    }
   });
 });

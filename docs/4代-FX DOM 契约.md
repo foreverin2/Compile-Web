@@ -84,23 +84,23 @@ G1 首轮正是把「渲染器产出」当成了充分条件，于是把 `.hand-
 
 | # | 钩子 | 出处模块（FX 消费方） | 用途 |
 |---|---|---|---|
-| 1 | `.stack-slot[data-player][data-line]` | `fx-gen3.ts`、`fx-gen2.ts`、`fx-gen3-swap.ts`、`gen3-control.ts`、`effects/index.ts` | **链路槽几何：3 代飞行 / 连接件 / 常驻层的落点**（`slotRectOf` / `lineCenterX`），最核心的一条。`probe` 逐段：`stack-slot` + `data-player` + `data-line` |
+| 1 | `.stack-slot[data-player][data-line]` | `fx-gen3.ts`、`fx-gen2.ts`、`fx-gen3-swap.ts`、`gen3-control.ts`、`effects/index.ts` | **链路槽几何：3 代飞行 / 连接件 / 常驻层的落点**（`slotRectOf` / `lineCenterX`），最核心的一条。`probe` 逐段：`stack-slot p`（**相邻两个类 token**，G2 Task 3F2 收紧）+ `data-player` + `data-line` |
 | 2 | `.protocol-cell[data-player][data-line]` | `fx-gen3.ts`、`fx-gen2.ts`、`fx-gen3-swap.ts`、`gen3-control.ts`、`effects/index.ts` | 协议格：协议交换 / 重排、同化编译光柱、色欲封条按 `(player,line)` 定位。`probe` 逐段：`protocol-cell` + `data-player` + `data-line` |
 | 3 | `[data-uid]` | `gen3-util.ts`、`fx-gen2.ts`、`fx-gen3.ts`、`fx-gen3-swap.ts`、`gen3-control.ts`、`effects/index.ts` | 按 uid 取卡节点 rect（`nodeOf` → `visibleRectOf` / `clipInsetRightPct`）；**手牌与链路卡都要带**。属性是用 `node.dataset.uid = …` **写**出来的（`render.ts:60/228/1576`）；字面量 `data-uid` 确实出现，但 `render.ts` 里的 12 行（`:648/:792/:800/:1030/:1225/:1641/:3869/:4677/:4718/:4792/:4819/:4952`）**全部是查询或注释**，没有一处是产出点 —— 故渲染器断言对 `data-*` 项额外接受 `dataset.uid` 这种 camelCase 产出形式 |
 | 4 | `img` | `fx-gen2.ts`、`fx-gen3-swap.ts`、`fx/delete-shatter.ts`、`fx/discard-cut.ts`、`effects/index.ts` | 卡面图：偏转 / 破碎 / 切割 / 翻面 / 交换取卡面图的唯一来源（`render.ts` 造 `.card-face-img` / `.protocol-img`）。读取点全在渲染器产出的卡节点（或它的克隆）上：`effects/index.ts:641/764`、`fx-gen2.ts:967`、`fx-gen3-swap.ts:120`、`fx/delete-shatter.ts:36`、`fx/discard-cut.ts:19` |
-| 5 | `.deck[data-player]` | `fx-gen2.ts`、`effects/index.ts` | 牌库位置：牌库顶打出 / 洗牌 / 冰封牌库等特效的起点或终点（`deckPos`），全库被读约 60 处。`probe` 逐段：`deck` + `data-player` |
+| 5 | `.deck[data-player]` | `fx-gen2.ts`、`effects/index.ts` | 牌库位置：牌库顶打出 / 洗牌 / 冰封牌库等特效的起点或终点（`deckPos`），全库被读约 60 处。`probe` 逐段：`deck deck-`（**相邻两个类 token**，G2 Task 3F2 收紧 —— 裸 `deck` 会被 `deck-count` / `deck-stack` / `deck-back` 这些更长同类名满足）+ `data-player` |
 | 6 | `.trash-pile[data-player]` | `fx-gen3.ts`、`fx-gen2.ts`、`effects/index.ts` | 弃牌堆位置：弃牌 / 回溯飞行的终点（`trashPos`）。`probe` 逐段：`trash-pile` + `data-player` |
 | 7 | `.trash-pile.p1/.p2` | `fx-gen3.ts` | 弃牌堆的 **`.pN` 归属类**：`fx-gen3.ts:1375` 读 `` `.trash-pile.p${p.player + 1}` ``（灰砂流自牌库流向本家弃牌堆，取不到就退化成向右下漂）。与上一条的 `[data-player]` 是**两个独立 conjunct**，各自登记，免得其中一个被丢还全绿。`probe` 取**生产者书写形式** `trash-pile p`（`render.ts:1498` 是 `` `trash-pile p${player + 1} …` ``，类名以空格分隔，**不是**复合 `.trash-pile.pN`）；**故意不用裸 `p1` 当 probe**：裸 `p1` 在 `render.ts` 里同时命中 `:1732` 的 hand-shield 归属类构造（`'hand-shield' + (player === 1 ? ' p2' : ' p1')`）与 `:4394` 的 draft-preview 构造（`'draft-preview' + (player === 0 ? ' p1' : ' p2')`），等于没查 |
-| 8 | `.hand` | `fx-gen2.ts`、`effects/index.ts`、`fx-gen3.ts` | 手牌区：抽牌幽灵终点、扇形末卡位置、手牌区 rect（多处用 `querySelectorAll(".hand")[player]`） |
-| 9 | `.card` | `fx-gen2.ts`、`effects/index.ts`、`fx-gen3.ts` | 卡节点：卡面克隆、扇形末卡位置、链路末卡位置（多处写作 `.card:not(.reveal-ghost)`） |
-| 10 | `.control-track` | `gen3-control.ts` | 控制轨道：易主落点按轨道**实测矩形**算（`controlTrackSideX`），不能拿视口百分比猜 |
+| 8 | `.hand` | `fx-gen2.ts`、`effects/index.ts`、`fx-gen3.ts` | 手牌区：抽牌幽灵终点、扇形末卡位置、手牌区 rect（多处用 `querySelectorAll(".hand")[player]`）。`probe` 取**带引号的产出形式** `'hand'`（G2 Task 3F2 收紧：裸 `hand` 被 `.hand-strip` 与本文件里一堆 `hand-*` 类名满足） |
+| 9 | `.card` | `fx-gen2.ts`、`effects/index.ts`、`fx-gen3.ts` | 卡节点：卡面克隆、扇形末卡位置、链路末卡位置（多处写作 `.card:not(.reveal-ghost)`）。`probe` 取**带引号的产出形式** `'card'`（G2 Task 3F2 收紧：裸 `card` 被 `card-face-img` / `cardback-img` / `card-text-*` 与查询 `'.card[data-uid]'` 满足） |
+| 10 | `.control-track` | `gen3-control.ts` | 控制轨道：易主落点按轨道**实测矩形**算（`controlTrackSideX`），不能拿视口百分比猜。`probe` 取**带引号的产出形式** `'control-track'`（G2 Task 3F2：裸 `control-track` 被同函数内的 `control-track-label left/right` 满足 —— 复评变异 R2 实测改名后守卫仍绿） |
 | 11 | `.control-module` | `gen3-control.ts` | 控制组件：色欲持有牵引环、控制权判定标题的锚点（取不到则回退视口中心） |
 | 12 | `.control-slider-img` | `gen3-control.ts` | 控制组件滑块图：优先于 `.control-module` 作为量测目标（`controlImgRect`） |
-| 13 | `.battery` | `gen3-control.ts` | 能量槽：愤怒0 中缝虚线要跨「两条能量槽之间」而非整行；惰性0 也要能量槽 rect（`batteryNode`） |
-| 14 | `.protocol-img` | `fx-gen3-swap.ts`、`effects/index.ts` | 协议卡面图：协议交换幽灵卡取它的 rect 与卡面图（`render.ts:116` 是 `img.className = "protocol-img"`，故按书写形式是 class 选择器；清单里真正的 element 只有纯标签名 `img`） |
+| 13 | `.battery` | `gen3-control.ts` | 能量槽：愤怒0 中缝虚线要跨「两条能量槽之间」而非整行；惰性0 也要能量槽 rect（`batteryNode`）。`probe` 取 `battery battery-`（**相邻两个类 token**，G2 Task 3F2 收紧：裸 `battery` 被 `battery-shell` / `battery-cells` / `battery-cell` / `battery-overflow` 满足） |
+| 14 | `.protocol-img` | `fx-gen3-swap.ts`、`effects/index.ts` | 协议卡面图：协议交换幽灵卡取它的 rect 与卡面图（`render.ts:130` 是 `img.className = 'protocol-img' + …`，故按书写形式是 class 选择器；清单里真正的 element 只有纯标签名 `img`）。`probe` 取**带引号的产出形式** `'protocol-img'`（G2 Task 3F2 收紧：裸 `protocol-img` 被 `render.ts:1469` 的查询 `querySelector('img.protocol-img')` 满足） |
 | 15 | `.protocol` | `effects/index.ts` | **协议盒：编译翻面动画的锚点** —— `effects/index.ts:1780` 的复合选择器 `` `.protocol-cell[data-player=…][data-line=…] .protocol` `` 的第二段，`:1783` 交给 `playProtocolFlip`。它**不是** D 类：产出是 `render.ts:83`，读取是 `effects/index.ts:1780`，A 的两个条件都成立（同一条类名也被 `render.ts:1761/1762` 自查，与判定无关）。读到的结果被 `if (proto)` 套住，所以**丢掉它不会报错，只会让编译侧的协议翻面静默不播**。机检的 `probe` 取**带引号的产出形式** `'protocol'`：裸词 `protocol` 在 `render.ts` 里命中 68 行（含 `protocol-cell` / `protocol-img` / `protocol-holder` / `protocolImgSrc`），完全非判别性 —— 远程页把协议盒改名 `protocol-box` 却仍产 `protocol-cell` / `protocol-img` 时会照样报绿；带引号的形式在渲染器里**恰好只出现一次**（`render.ts:83` 的 `el('div', 'protocol' + …)`），即产出点本身 |
 | 16 | `.protocol-holder` | `fx-gen2.ts` | 协议持卡盒：同化1 编译光柱的汇聚中心（**取不到就整体不播**，见 `fx-gen2.ts:2179` 审计注释） |
-| 17 | `.hand[data-player]` | `fx-gen3.ts` | 手牌区（带归属）：3 代按玩家取手牌容器（`fx-gen3.ts:875`）。`probe` 与 `.hand` 相同（`hand` + `data-player`），**故这条不提供额外机检力，只是文档登记** |
+| 17 | `.hand[data-player]` | `fx-gen3.ts` | 手牌区（带归属）：3 代按玩家取手牌容器（`fx-gen3.ts:875`）。`probe` 与 `.hand` 相同（`'hand'` + `data-player`），**故这条不提供额外机检力，只是文档登记** |
 | 18 | `.rot-cw` | `fx-orient.ts` | 场上卡横置态（P1 顺时针，`render.ts:227` 按 owner 挂）：浮层卡按它重建朝向，**漏挂则特效卡立着**。**G2 Task 2 起**：朝向类名只由 `src/ui/fx-orient.ts`（朝向单一出处）读取 —— `effects/index.ts` / `fx-gen3.ts` 改经 `orientOf()` 间接消费，源码里不再出现类名字面量；`requiredBy` 跟着代码走，否则出处机检（`tests/ui/fx-dom-contract.test.ts:190`）会红 |
 | 19 | `.rot-ccw` | `fx-orient.ts` | 场上卡横置态（P2 逆时针，`render.ts:227` 按 owner 挂）：与 `.rot-cw` 成对读取。**G2 Task 2 起**同样只由 `src/ui/fx-orient.ts` 读取（见上一条） |
 
@@ -116,9 +116,11 @@ G1 首轮正是把「渲染器产出」当成了充分条件，于是把 `.hand-
 
 改错这一条不是"某个特效偏一点"，而是**整个 3 代特效族 + 常驻层一起失去落点**。G2 请把这条当第一优先级的验收项。
 
-**注意**：它的机检就是 `probe: ['stack-slot', 'data-player', 'data-line']` —— 只产 `stack-slot` 而丢掉两个
+**注意**：它的机检就是 `probe: ['stack-slot ', 'data-player', 'data-line']` —— 只产 `stack-slot` 而丢掉两个
 `dataset` 属性会**直接报红**（这正是终审加 `probe` 的原因：旧的自动推导只看类名，
-`el('div','stack-slot')` 不带任何属性也能过守卫）。
+`el('div','stack-slot')` 不带任何属性也能过守卫）。G2 Task 3F2 把第一段从裸 `stack-slot` 收紧成
+`stack-slot `（尾空格）：裸词会被 `syncSmokeOverlays` 的**查询**（`.stack-slot[data-player=…]`）满足，
+于是把产出点的类名改掉时守卫仍然全绿（变异 A06 实测）。
 
 其余高风险项：`img`（卡面图唯一来源，6 个读取点跨 4 个模块）、`[data-uid]`（手牌与链路卡都必须带，缺了则 `nodeOf` 全线失效）、`.protocol-holder`（取不到就整体不播）、`.protocol`（取不到则编译翻面静默不播）。
 
@@ -215,7 +217,22 @@ G1 首轮正是把「渲染器产出」当成了充分条件，于是把 `.hand-
 **判别子串**并逐个断言渲染器源码里出现：
 
 - 钩子带显式 `probe`（所有复合钩子，如 `.stack-slot[data-player][data-line]`，以及靠裸词无法判别的
-  `.protocol`）→ **`probe` 里每一项都必须出现**（`stack-slot` + `data-player` + `data-line`）；
+  `.protocol` / `.card` / `.hand` / `.control-track` / `.protocol-img` / `.deck[data-player]` / `.battery`）
+  → **`probe` 里每一项都必须出现**（`stack-slot p` + `data-player` + `data-line`）；
+  - **两种收紧形式**（G2 Task 3F2 的 R2 同类风险审计，逐条都由变异实测驱动）：
+    ① **带引号的产出形式**（`"'protocol'"` / `"'card'"` / `"'hand'"` / `"'control-track'"` / `"'protocol-img'"`）
+    —— 生产点写成 `el('div', 'X')` 或 `'X' + …`，该形式在渲染器里恰好只出现一次；
+    ② **相邻两个类 token**（`'stack-slot p'` / `'deck deck-'` / `'battery battery-'`，与 `.trash-pile.p1/.p2`
+    的 `'trash-pile p'` 同源）—— 生产点是模板串，且**后面必然紧跟一个承重修饰类**
+    （`.pN` / `.deck-N` / `.battery-state`）。这样既排除 `deck-count` 这类更长同类名与 `[...]` 查询写法，
+    也不绑定引号/模板的具体写法。
+    ⚠️ **踩过的坑（勿重蹈）**：先试过"类名 + 尾空格"（`'deck '` / `'battery '`），**实测无效** ——
+    同名**局部变量**（`const deck = …` / `const battery = …`）后面也是空格，变异后照样绿（A02/A03 复跑红）。
+    只有 `'stack-slot '` 侥幸成立（没有同名局部变量）；现在统一改成形式 ②。
+  - ⚠️ 收紧**只做变异证明会假绿的那些**（A01–A06、A10）。`img` 是**故意不收紧**的：它是标签名钩子，
+    任何"更严"的写法（`createElement('img')` / `"'img'"`）都会拒绝合法等价写法（`new Image()`、
+    双引号、`createElement( 'img' )`），而它今天已被 `.protocol-img` / `.control-slider-img` 两条
+    产出形式**部分兜住**；这一条的兜底仍是实机抽查；
 - 否则退回自动推导 `probeOf(hook)`（`img` → `img`；`[data-uid]` → `data-uid`）；
 - **probe 里形如 `data-*` 的项**（不论钩子 `kind` 是 `attr` 还是 `class`）额外接受
   `dataset.<camelCase>` 产出形式：`data-uid` ⇄ `dataset.uid`、`data-player` ⇄ `dataset.player`、
@@ -238,16 +255,25 @@ G1 首轮正是把「渲染器产出」当成了充分条件，于是把 `.hand-
 控制权牵引、弧轨三态）——源码守卫只能证明"选择器字符串在渲染器源码里出现"，不能证明运行时真的挂在了
 正确的节点上、且在正确的时机存在。这条与 §6.6 的验收标准一致，**是绿之后的必要步骤，不是可选项**。
 
-**已知局限（不修，只披露）**：部分判别子串是退化的，只能证明"这个词在源码里出现过"，证明不了语义。
-实测命中行数：`img` 在 `render.ts` 里 80 行、`card` 158 行、`hand` 79 行；且 `hand` 是 D 类
-`.hand-strip` 的子串 —— 只要有人在本文件里写了 `hand`，检查就过。此外 `.hand` 与 `.hand[data-player]`
-的 `probe` 完全相同，**后一条不提供任何额外机检力，只是文档登记**（登记的意义在于把"无归属的 `.hand`"
-与"按玩家取的那一个"两种读法都记下来）。即使带上 `probe`，断言的仍只是"这些 token 在**渲染器源码里
-出现过**"：`render.ts` 自己也在查询 `data-player` / `data-line`（如 `:293`），所以"生产者**真的写**了
-这个属性"仍不是文本守卫能证明的（`data-*` 项之所以额外接受 `dataset.<camelCase>`，就是因为"写"和
-"查"在源码里长得不一样；但这条备选是**双向**妥协 —— 它同时放行"只查不写"和"只写不查"两种渲染器，
-换来的只是不再假红，**换不来**"属性确实被写出去了"这一结论）。**不要**为了"修"这些而发明新 token：那只会制造假的安全感。
-真正的兜底是上一条的实机抽查。
+**已知局限（只披露，不修）**：即使带上 `probe`，断言的仍只是"这些 token 在**渲染器源码里
+出现过**"，证明不了语义。三处必须记住：
+
+1. **写 vs 查分不开**：`render.ts` 自己也在查询 `data-player` / `data-line`（如 `:293`），所以
+   "生产者**真的写**了这个属性"仍不是文本守卫能证明的（`data-*` 项之所以额外接受
+   `dataset.<camelCase>`，就是因为"写"和"查"在源码里长得不一样；但这条备选是**双向**妥协 ——
+   它同时放行"只查不写"和"只写不查"两种渲染器，换来的只是不再假红，**换不来**"属性确实被写出去了"）。
+2. **`img` 是退化的、且故意不收紧**（G2 Task 3F2 审计结论）：实测命中 `render.ts` 80 行；任何更严的
+   写法都会拒绝合法等价写法（`new Image()` / 双引号 / 带空格的实参），代价大于收益。它部分由
+   `.protocol-img`、`.control-slider-img` 两条已收紧的产出形式兜住，最终兜底是实机抽查。
+3. **`.hand` 与 `.hand[data-player]` 的 `probe` 完全相同**，**后一条不提供任何额外机检力，
+   只是文档登记**（登记的意义在于把"无归属的 `.hand`"与"按玩家取的那一个"两种读法都记下来）。
+4. **G2 Task 3F2 已收紧 7 条**（`'stack-slot p'` / `'deck deck-'` / `'battery battery-'` / `'card'` /
+   `'hand'` / `'protocol-img'` / `'control-track'`）：都由"把产出点类名改掉、守卫是否仍绿"的**变异实测**驱动
+   （旧 probe 分别被查询、`deck-count`/`battery-cell` 这类更长同类名、`control-track-label` 满足）。
+   收紧后 7 条对照变异全部变红；`card`/`hand` 的命中行数（158/79）因此**不再**是问题 —— 现在查的是
+   带引号的产出形态本身。
+   代价（如实说明）：这些形式**绑定产出写法**（`'card ' + x` / `` `card${x}` `` / `` `deck${x}` `` 这类
+   等价重构会假红）。这是有意的取舍：**假红是响亮的**，而"类名被改掉却全绿"是静默的。
 
 **建议 G2 补的长期机制（本次**未**实现，属新机制而非修复）**：**token 级守卫** —— 把 FX 选择器字面量里
 的每个 `.class` / `[attr]` token 都抽出来，断言"已登记进本契约，或在白名单里（特效自建 / 渲染器自有）"。
