@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createGame } from '../../src/core/state/create';
@@ -862,25 +862,36 @@ describe('R-F · C-2：真跑 renderNetBoard 的元素树层序（viewSeat 0/1�
    * 渲染根喂回 `verifyPageHooks`"证明 —— 合成页（`render-net.test.ts` 第 20 条）证明的是同一件事的
    * 另一半：**整份**自查在正常形态下 ✓、且三条反面用例仍会报错。
    *
-   * ⚠️ 诚实边界（写在用例里）：本桩不实现选择器引擎 ⇒ A 类钩子的探针恒 0 ⇒ 整份自查在桩上必然 ✗。
-   * 所以这里**只**断言"座位锚点那一条不再出现"（它只需要 `scope` 自己的类名，桩完全够用）。
+   * ⚠️ **诚实边界（写在用例里）**：本桩不实现选择器引擎 ⇒ A 类钩子的探针恒 0 ⇒ 整份自查在桩上必然 ✗。
+   * ⚠️ **本轮变异实测的教训（第一版这条断言是空的）**：`verifyPageHooks` 的返回值只带 `fatal[0]`
+   *    （工具条只有一行），而桩上的 `fatal[0]` 永远是 A 类钩子的"数量 0，期望 6" ⇒ 对**返回值**做
+   *    `not.toContain('视图座位锚点')` 是**恒真**的，M3 变异（退回只搜后代）时它照样绿。
+   *    所以这里改成读 `console.warn` 的**完整失败清单**（`fatal.join('\n')` 全在里面），
+   *    并用"warn 必须真的被调用过"保证`not.toContain` 不是被空输出满足的。
    */
   it('R7-4. 真跑一帧：约束 9 的**座位锚点**自查不得再误报（渲染根自己就是一个 .net-board）', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const restore = installDom();
     try {
       for (const seat of [0, 1] as const) {
         const root = renderFrame(seat);
         const wrap = root.children[0] as unknown as HTMLElement;
         const note = verifyPageHooks(wrap, seat);
-        console.log(`\n===== viewSeat=${seat} · 桩上真跑 verifyPageHooks 的返回 =====\n  ${note}`);
+        const warned = warn.mock.calls.map((c) => c.map(String).join(' ')).join('\n');
+        console.log(`\n===== viewSeat=${seat} · 桩上真跑 verifyPageHooks =====\n  返回值：${note}\n`
+          + `  完整失败清单（console.warn）：\n${warned.split('\n').map((l) => '    ' + l).join('\n')}`);
         expect(note, `viewSeat=${seat}：verifyPageHooks 什么都没返回（自查没跑起来？）`).toMatch(/^自查/);
-        expect(note, `viewSeat=${seat}：渲染根就是 .net-board.net-view-${seat}，却仍报"座位锚点"不一致 ——`
-          + '这正是 R7 修掉的那处假红（`querySelectorAll` 只搜后代、不搜自身）')
+        // 反空集合：桩上必然有失败项（A 类钩子探针恒 0）—— 有失败项，下面那句 not.toContain 才有意义
+        expect(warned, `viewSeat=${seat}：桩上居然没有任何失败项？那下面的判据是被"空输出"满足的`)
+          .not.toBe('');
+        expect(warned, `viewSeat=${seat}：渲染根就是 .net-board.net-view-${seat}，完整失败清单里却仍报`
+          + '"座位锚点"不一致 —— 这正是 R7 修掉的那处假红（`querySelectorAll` 只搜后代、不搜自身）')
           .not.toContain('视图座位锚点');
       }
     } finally {
       await drainRaf();
       restore();
+      warn.mockRestore();
     }
   });
 });
