@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { FX_DOM_CONTRACT, hooksOfCategory } from '../../src/ui/fx-dom-contract';
+import { FX_DOM_CONTRACT, hooksOfCategory, type FxDomHook } from '../../src/ui/fx-dom-contract';
 
 /**
  * G1 守卫：FX DOM 契约必须「出处真实 + 现热座渲染器确实提供 + 分类互斥」。
@@ -36,16 +36,45 @@ const fxSources = new Map<string, string>(FX_MODULES.map((m): [string, string] =
 /**
  * 取钩子的「判别子串」。必须能唯一定位到这个钩子，否则守卫形同虚设：
  *  - `[attr]` / `[attr][attr2]` → 属性名（`data-player`）
- *  - `.cls` / `img.cls` → 标签名 + 类名里**最能定位**的部分，即类名
+ *  - `.cls` / `img.cls` → 类名（`.stack-slot` → `stack-slot`；`img.protocol-img` → `protocol-img`）
  *  - `.cls[attr]…` → **类名**（属性名在多处通用，用它证明不了出处 —— 这正是原实现被评审判为不成立的漏洞）
+ *  - `.clsA.clsB`（类开头多段，如 `.trash-pile.p1/.p2`）→ **第一段**类名。旧规则机械取 `parts[1]`
+ *    会得到 `p1/` / `p1` 这种**值形态的短串**：它同时命中 render.ts:1732 的 `hand-shield p1`
+ *    与 :4394 的 `draft-preview p1`，等于没有判别力。类开头的选择器里，第一段才是标识性的那个。
  *  - 纯标签名（`img`）→ 该标签名
  */
 function probeOf(hook: string): string {
   if (hook.startsWith('[')) return /^\[([a-z-]+)/.exec(hook)?.[1] ?? hook;
   const head = hook.split('[')[0];          // 去掉属性选择器部分
   const parts = head.split('.').filter(Boolean);
-  if (parts.length >= 2) return parts[1];    // img.protocol-img → protocol-img
-  return parts[0] ?? hook;                   // .deck → deck；img → img
+  if (head.startsWith('.')) return parts[0] ?? hook;  // .stack-slot → stack-slot；.trash-pile.p1 → trash-pile
+  if (parts.length >= 2) return parts[1];             // img.protocol-img → protocol-img
+  return parts[0] ?? hook;                            // img → img
+}
+
+/**
+ * `[data-uid]` 的渲染器产出形式是 `node.dataset.uid = card.uid`（render.ts:60/228/1576），
+ * 源码里**没有**字面量 `data-uid` —— render.ts 里出现的每一处 `data-uid` 都是查询或注释。
+ * 于是一个「只写属性、从不查询」的**正确**远程页渲染器会被误判成缺钩子。
+ * 故 kind=attr 时额外接受 `dataset.<camelCase>` 这一产出形式。
+ */
+function datasetFormOf(attrHook: string): string | null {
+  const m = /^\[(data-[a-z-]+)\]$/.exec(attrHook);
+  if (!m) return null;
+  const camel = m[1].slice('data-'.length).replace(/-([a-z])/g, (_all, c: string) => c.toUpperCase());
+  return `dataset.${camel}`;
+}
+
+/** 渲染器提供的判别子串：显式 probe 优先（**每一项都要出现**），否则退回自动推导 */
+function rendererTokensOf(h: FxDomHook): string[] {
+  return [...(h.probe ?? [probeOf(h.hook)])];
+}
+
+/** 渲染器是否提供了这条钩子；attr 钩子额外接受 `dataset.<camel>` 产出形式 */
+function rendererProvides(src: string, h: FxDomHook): boolean {
+  if (rendererTokensOf(h).every((t) => src.includes(t))) return true;
+  const alt = h.kind === 'attr' ? datasetFormOf(h.hook) : null;
+  return alt !== null && src.includes(alt);
 }
 
 describe('G1 · FX DOM 契约', () => {
@@ -69,6 +98,12 @@ describe('G1 · FX DOM 契约', () => {
       expect(h.requiredBy.length, `${h.hook} 的 requiredBy 为空`).toBeGreaterThan(0);
       for (const m of h.requiredBy) expect(names.has(m), `${h.hook} 的出处 ${m} 不在 FX_MODULES 内`).toBe(true);
     }
+    // 显式 probe 的每一项都必须是非空子串：`probe: ['']` 会让渲染器断言永远为真。
+    for (const h of FX_DOM_CONTRACT) {
+      for (const t of h.probe ?? []) {
+        expect(t.length, `${h.hook} 的 probe 含空子串（等于没有机检力）`).toBeGreaterThan(1);
+      }
+    }
   });
 
   it('钩子字符串不重复（同名钩子不得出现在两个分类里）', () => {
@@ -90,13 +125,25 @@ describe('G1 · FX DOM 契约', () => {
     expect(missing, `以下 A 类钩子找不到引用出处：\n${missing.join('\n')}`).toEqual([]);
   });
 
+  it('每个渲染器文件都必须登记进 RENDERERS（否则守卫会静默只验旧渲染器）', () => {
+    // RENDERERS 是**opt-in** 的：G2 新增远程页渲染器却忘了登记，下面所有断言都会继续只验
+    // render.ts 然后报绿 —— 这比没有守卫更糟，因为它读起来像"已验收"。
+    // 所以这里反向发现磁盘上的渲染器文件，漏登记即报红。
+    const dir = fileURLToPath(new URL('../../src/ui/', import.meta.url));
+    const found = readdirSync(dir).filter((f) => /^render.*\.ts$/.test(f));
+    const missing = found.filter((f) => !(RENDERERS as readonly string[]).includes(f));
+    expect(missing, `以下渲染器未登记进 RENDERERS：${missing.join(', ')}`).toEqual([]);
+  });
+
   it('A 类钩子必须被当前渲染器提供（这是 G2 的验收基准）', () => {
     const missing: string[] = [];
     for (const r of RENDERERS) {
       const src = read(r);
       for (const h of hooksOfCategory('A')) {
-        const probe = probeOf(h.hook);
-        if (!src.includes(probe)) missing.push(`${r} 未提供 ${h.hook}（判别子串 ${probe}）`);
+        if (rendererProvides(src, h)) continue;
+        const alt = h.kind === 'attr' ? datasetFormOf(h.hook) : null;
+        missing.push(`${r} 未提供 ${h.hook}（判别子串 ${rendererTokensOf(h).join(' + ')}`
+          + `${alt === null ? '' : `，也不含 ${alt}`}）`);
       }
     }
     expect(missing, `以下 A 类钩子当前渲染器缺失：\n${missing.join('\n')}`).toEqual([]);

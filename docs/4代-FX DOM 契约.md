@@ -4,7 +4,11 @@
 > 机读版在同名模块 `src/ui/fx-dom-contract.ts`；两者由 `tests/ui/fx-dom-contract.test.ts` 强制一致。
 > 依据：`docs/2026-09-13-联机与多端-设计稿.md` §6.3。
 
-当前结论（HEAD）：**A=17 / B=34 / C=1 / D=3**，共 55 条钩子。其中只有 A 类是契约项。
+当前结论（HEAD，2026-09-13 终审补漏后）：**A=19 / B=34 / C=1 / D=3**，共 57 条钩子。其中只有 A 类是契约项。
+
+> **终审补漏（本次变更）**：A 类原为 17 条，补入两条被"每行一处读取点"的普查漏掉的钩子 ——
+> `.protocol`（复合选择器第二段，effects/index.ts:1780）与 `.trash-pile.p1/.p2`（fx-gen3.ts:1375 的
+> `.pN` 归属类）。两条都能让 G2 悄悄打断一整条点名特效而不触发任何断言，详见 §3 对应行。
 
 ---
 
@@ -58,33 +62,47 @@ G1 首轮正是把「渲染器产出」当成了充分条件，于是把 `.hand-
 
 - 同一条钩子在不同模块可能被读多次，但**钩子字符串只登记一次**（守卫测试禁止重名）。
 - `requiredBy` 只登记 **FX 消费方**；D 类没有 FX 消费方，故为空数组（守卫测试强制这一点）。
-- 只被 `render.ts` / `diag.ts` / `home.ts` / `control-rearrange.ts` 引用的选择器（如 `.protocol` / `.stack` / `.draft-pool`）不进 A 类。
+- **旧版的错误口径（保留在此仅为警示，切勿再引用）**：「只被 `render.ts` / `diag.ts` / `home.ts` /
+  `control-rearrange.ts` 引用的选择器（如 `.protocol` / `.stack` / `.draft-pool`）不进 A 类。」
+  这句话是错的，已于终审删除 —— 它举的 `.protocol` **恰恰是 A 类**。判 A 只有两个条件：
+  **渲染器产出** 且 **至少一个 FX 模块真的读它**；「还有谁也在查它」与判定无关，
+  同一条类名完全可以既被渲染器自查（`render.ts:1761/1762`）又被 FX 读（`effects/index.ts:1780`）。
+  这句话原本就是 G2 拿去重命名协议盒的许可证，删掉。
+  真正的非契约例子（各自 grep 过，11 个 FX 模块零引用）：`.draft-pool`（`render.ts:4074` 产出、
+  `:4246` 自读）、`.stack`（`render.ts:213` 产出；FX 侧只读 `.stack-slot`，裸 `.stack` 仅出现在
+  `gen3-util.ts:4` 的注释里）。已被点名的渲染器自有节点（`.hand-strip` / `.play-btns` / `.lane-row`）归 D 类。
 
 ---
 
 ## 3. A 类：结构钩子（**远程页必须提供**）
 
-共 **17** 条。按重要性排序；**钩子字符串必须与机读清单逐字一致**（守卫测试按 `doc.includes(hook)` 逐条核对），改写措辞或换写法即报红。
+共 **19** 条。按重要性排序；**钩子字符串必须与机读清单逐字一致**（守卫测试按 `doc.includes(hook)` 逐条核对），改写措辞或换写法即报红。
+
+**复合钩子逐段机检**：凡形如 `.cls[attr]` / `.cls[attr][attr2]` 的条目在机读清单里带 `probe` 数组，
+渲染器断言要求 **`probe` 里每一项都出现**（不是只看类名）。否则渲染器只产 `stack-slot` 而丢掉
+`data-player` / `data-line`，守卫照样全绿，而 `slotRectOf` / `lineCenterX` 已经全线失效。
 
 | # | 钩子 | 出处模块（FX 消费方） | 用途 |
 |---|---|---|---|
-| 1 | `.stack-slot[data-player][data-line]` | `fx-gen3.ts`、`fx-gen2.ts`、`fx-gen3-swap.ts`、`gen3-control.ts`、`effects/index.ts` | **链路槽几何：3 代飞行 / 连接件 / 常驻层的落点**（`slotRectOf` / `lineCenterX`），最核心的一条 |
-| 2 | `.protocol-cell[data-player][data-line]` | `fx-gen3.ts`、`fx-gen2.ts`、`fx-gen3-swap.ts`、`gen3-control.ts`、`effects/index.ts` | 协议格：协议交换 / 重排、同化编译光柱、色欲封条按 `(player,line)` 定位 |
-| 3 | `[data-uid]` | `gen3-util.ts`、`fx-gen2.ts`、`fx-gen3.ts`、`fx-gen3-swap.ts`、`gen3-control.ts`、`effects/index.ts` | 按 uid 取卡节点 rect（`nodeOf` → `visibleRectOf` / `clipInsetRightPct`）；**手牌与链路卡都要带** |
-| 4 | `img` | `fx-gen2.ts`、`fx-gen3-swap.ts`、`fx/delete-shatter.ts`、`fx/discard-cut.ts` | 卡面图：偏转 / 破碎 / 切割 / 翻面 / 交换取卡面图的唯一来源（`render.ts` 造 `.card-face-img` / `.protocol-img`）。6 个读取点全在渲染器产出的卡节点（或它的克隆）上 |
-| 5 | `.deck[data-player]` | `fx-gen2.ts`、`effects/index.ts` | 牌库位置：牌库顶打出 / 洗牌 / 冰封牌库等特效的起点或终点（`deckPos`），全库被读约 60 处 |
-| 6 | `.trash-pile[data-player]` | `fx-gen3.ts`、`fx-gen2.ts`、`effects/index.ts` | 弃牌堆位置：弃牌 / 回溯飞行的终点（`trashPos`）；`fx-gen3` 另有按 `.trash-pile.p1/.p2` 取的一种写法 |
-| 7 | `.hand` | `fx-gen2.ts`、`effects/index.ts`、`fx-gen3.ts` | 手牌区：抽牌幽灵终点、扇形末卡位置、手牌区 rect（多处用 `querySelectorAll(".hand")[player]`） |
-| 8 | `.card` | `fx-gen2.ts`、`effects/index.ts`、`fx-gen3.ts` | 卡节点：卡面克隆、扇形末卡位置、链路末卡位置（多处写作 `.card:not(.reveal-ghost)`） |
-| 9 | `.control-track` | `gen3-control.ts` | 控制轨道：易主落点按轨道**实测矩形**算（`controlTrackSideX`），不能拿视口百分比猜 |
-| 10 | `.control-module` | `gen3-control.ts` | 控制组件：色欲持有牵引环、控制权判定标题的锚点（取不到则回退视口中心） |
-| 11 | `.control-slider-img` | `gen3-control.ts` | 控制组件滑块图：优先于 `.control-module` 作为量测目标（`controlImgRect`） |
-| 12 | `.battery` | `gen3-control.ts` | 能量槽：愤怒0 中缝虚线要跨「两条能量槽之间」而非整行；惰性0 也要能量槽 rect（`batteryNode`） |
-| 13 | `.protocol-img` | `fx-gen3-swap.ts`、`effects/index.ts` | 协议卡面图：协议交换幽灵卡取它的 rect 与卡面图（`render.ts:116` 是 `img.className = "protocol-img"`，故按书写形式是 class 选择器；清单里真正的 element 只有纯标签名 `img`） |
-| 14 | `.protocol-holder` | `fx-gen2.ts` | 协议持卡盒：同化1 编译光柱的汇聚中心（**取不到就整体不播**，见 `fx-gen2.ts:2179` 审计注释） |
-| 15 | `.hand[data-player]` | `fx-gen3.ts` | 手牌区（带归属）：3 代按玩家取手牌容器（`fx-gen3.ts:875`） |
-| 16 | `.rot-cw` | `effects/index.ts`、`fx-gen3.ts` | 场上卡横置态（P1 顺时针，`render.ts:227` 按 owner 挂）：浮层卡按它重建朝向，**漏挂则特效卡立着** |
-| 17 | `.rot-ccw` | `effects/index.ts`、`fx-gen3.ts` | 场上卡横置态（P2 逆时针，`render.ts:227` 按 owner 挂）：与 `.rot-cw` 成对读取 |
+| 1 | `.stack-slot[data-player][data-line]` | `fx-gen3.ts`、`fx-gen2.ts`、`fx-gen3-swap.ts`、`gen3-control.ts`、`effects/index.ts` | **链路槽几何：3 代飞行 / 连接件 / 常驻层的落点**（`slotRectOf` / `lineCenterX`），最核心的一条。`probe` 逐段：`stack-slot` + `data-player` + `data-line` |
+| 2 | `.protocol-cell[data-player][data-line]` | `fx-gen3.ts`、`fx-gen2.ts`、`fx-gen3-swap.ts`、`gen3-control.ts`、`effects/index.ts` | 协议格：协议交换 / 重排、同化编译光柱、色欲封条按 `(player,line)` 定位。`probe` 逐段：`protocol-cell` + `data-player` + `data-line` |
+| 3 | `[data-uid]` | `gen3-util.ts`、`fx-gen2.ts`、`fx-gen3.ts`、`fx-gen3-swap.ts`、`gen3-control.ts`、`effects/index.ts` | 按 uid 取卡节点 rect（`nodeOf` → `visibleRectOf` / `clipInsetRightPct`）；**手牌与链路卡都要带**。渲染器产出形式是 `node.dataset.uid = …`（`render.ts:60/228/1576`），源码里没有字面量 `data-uid`，故渲染器断言对 `kind=attr` 额外接受 `dataset.uid` 这种 camelCase 产出形式 |
+| 4 | `img` | `fx-gen2.ts`、`fx-gen3-swap.ts`、`fx/delete-shatter.ts`、`fx/discard-cut.ts`、`effects/index.ts` | 卡面图：偏转 / 破碎 / 切割 / 翻面 / 交换取卡面图的唯一来源（`render.ts` 造 `.card-face-img` / `.protocol-img`）。读取点全在渲染器产出的卡节点（或它的克隆）上：`effects/index.ts:641/764`、`fx-gen2.ts:967`、`fx-gen3-swap.ts:120`、`fx/delete-shatter.ts:36`、`fx/discard-cut.ts:19` |
+| 5 | `.deck[data-player]` | `fx-gen2.ts`、`effects/index.ts` | 牌库位置：牌库顶打出 / 洗牌 / 冰封牌库等特效的起点或终点（`deckPos`），全库被读约 60 处。`probe` 逐段：`deck` + `data-player` |
+| 6 | `.trash-pile[data-player]` | `fx-gen3.ts`、`fx-gen2.ts`、`effects/index.ts` | 弃牌堆位置：弃牌 / 回溯飞行的终点（`trashPos`）。`probe` 逐段：`trash-pile` + `data-player` |
+| 7 | `.trash-pile.p1/.p2` | `fx-gen3.ts` | 弃牌堆的 **`.pN` 归属类**：`fx-gen3.ts:1375` 读 `` `.trash-pile.p${p.player + 1}` ``（灰砂流自牌库流向本家弃牌堆，取不到就退化成向右下漂）。与上一条的 `[data-player]` 是**两个独立 conjunct**，各自登记，免得其中一个被丢还全绿。`probe` 取**生产者书写形式** `trash-pile p`（`render.ts:1498` 是 `` `trash-pile p${player + 1} …` ``，类名以空格分隔，**不是**复合 `.trash-pile.pN`）；**故意不用裸 `p1` 当 probe**：它同时命中 `render.ts:1732` 的 `hand-shield p1` 与 `:4394` 的 `draft-preview p1`，等于没查 |
+| 8 | `.hand` | `fx-gen2.ts`、`effects/index.ts`、`fx-gen3.ts` | 手牌区：抽牌幽灵终点、扇形末卡位置、手牌区 rect（多处用 `querySelectorAll(".hand")[player]`） |
+| 9 | `.card` | `fx-gen2.ts`、`effects/index.ts`、`fx-gen3.ts` | 卡节点：卡面克隆、扇形末卡位置、链路末卡位置（多处写作 `.card:not(.reveal-ghost)`） |
+| 10 | `.control-track` | `gen3-control.ts` | 控制轨道：易主落点按轨道**实测矩形**算（`controlTrackSideX`），不能拿视口百分比猜 |
+| 11 | `.control-module` | `gen3-control.ts` | 控制组件：色欲持有牵引环、控制权判定标题的锚点（取不到则回退视口中心） |
+| 12 | `.control-slider-img` | `gen3-control.ts` | 控制组件滑块图：优先于 `.control-module` 作为量测目标（`controlImgRect`） |
+| 13 | `.battery` | `gen3-control.ts` | 能量槽：愤怒0 中缝虚线要跨「两条能量槽之间」而非整行；惰性0 也要能量槽 rect（`batteryNode`） |
+| 14 | `.protocol-img` | `fx-gen3-swap.ts`、`effects/index.ts` | 协议卡面图：协议交换幽灵卡取它的 rect 与卡面图（`render.ts:116` 是 `img.className = "protocol-img"`，故按书写形式是 class 选择器；清单里真正的 element 只有纯标签名 `img`） |
+| 15 | `.protocol` | `effects/index.ts` | **协议盒：编译翻面动画的锚点** —— `effects/index.ts:1780` 的复合选择器 `` `.protocol-cell[data-player=…][data-line=…] .protocol` `` 的第二段，`:1783` 交给 `playProtocolFlip`。它**不是** D 类：产出是 `render.ts:83`，读取是 `effects/index.ts:1780`，A 的两个条件都成立（同一条类名也被 `render.ts:1761/1762` 自查，与判定无关）。读到的结果被 `if (proto)` 套住，所以**丢掉它不会报错，只会让编译侧的协议翻面静默不播** |
+| 16 | `.protocol-holder` | `fx-gen2.ts` | 协议持卡盒：同化1 编译光柱的汇聚中心（**取不到就整体不播**，见 `fx-gen2.ts:2179` 审计注释） |
+| 17 | `.hand[data-player]` | `fx-gen3.ts` | 手牌区（带归属）：3 代按玩家取手牌容器（`fx-gen3.ts:875`）。`probe` 与 `.hand` 相同（`hand` + `data-player`），**故这条不提供额外机检力，只是文档登记** |
+| 18 | `.rot-cw` | `effects/index.ts`、`fx-gen3.ts` | 场上卡横置态（P1 顺时针，`render.ts:227` 按 owner 挂）：浮层卡按它重建朝向，**漏挂则特效卡立着** |
+| 19 | `.rot-ccw` | `effects/index.ts`、`fx-gen3.ts` | 场上卡横置态（P2 逆时针，`render.ts:227` 按 owner 挂）：与 `.rot-cw` 成对读取 |
 
 ### 3.1 最高风险的一条
 
@@ -98,7 +116,11 @@ G1 首轮正是把「渲染器产出」当成了充分条件，于是把 `.hand-
 
 改错这一条不是"某个特效偏一点"，而是**整个 3 代特效族 + 常驻层一起失去落点**。G2 请把这条当第一优先级的验收项。
 
-其余高风险项：`img`（卡面图唯一来源，6 个读取点跨 4 个模块）、`[data-uid]`（手牌与链路卡都必须带，缺了则 `nodeOf` 全线失效）、`.protocol-holder`（取不到就整体不播）。
+**注意**：它的机检就是 `probe: ['stack-slot', 'data-player', 'data-line']` —— 只产 `stack-slot` 而丢掉两个
+`dataset` 属性会**直接报红**（这正是终审加 `probe` 的原因：旧的自动推导只看类名，
+`el('div','stack-slot')` 不带任何属性也能过守卫）。
+
+其余高风险项：`img`（卡面图唯一来源，6 个读取点跨 4 个模块）、`[data-uid]`（手牌与链路卡都必须带，缺了则 `nodeOf` 全线失效）、`.protocol-holder`（取不到就整体不播）、`.protocol`（取不到则编译翻面静默不播）。
 
 ---
 
@@ -173,7 +195,7 @@ G1 首轮正是把「渲染器产出」当成了充分条件，于是把 `.hand-
 
 ## 6. G2 的验收用法
 
-**具体做法（三步，无歧义）：**
+**具体做法（四步，无歧义）：**
 
 1. G2 写完远程页渲染器（例如 `src/ui/render-net.ts`）。
 2. 把该文件名加进 `tests/ui/fx-dom-contract.test.ts` 的 `RENDERERS` 数组：
@@ -182,13 +204,48 @@ G1 首轮正是把「渲染器产出」当成了充分条件，于是把 `.hand-
    const RENDERERS = ['render.ts', 'render-net.ts'] as const;
    ```
 
+   > **忘登记会被抓**：`RENDERERS` 是 opt-in 的，忘了登记就等于所有断言继续只验旧渲染器还报绿 ——
+   > 比没有守卫更糟，因为它读起来像"已验收过"。为此有专门的**反向发现**断言：
+   > 它 `readdirSync` 扫 `src/ui/` 下所有 `/^render.*\.ts$/` 的文件，凡不在 `RENDERERS` 里就报红
+   > （`以下渲染器未登记进 RENDERERS：…`）。新增渲染器文件后即使一句话都不改测试，也会立刻红。
 3. 跑 `npx vitest run tests/ui/fx-dom-contract.test.ts`。
+4. 抽查 ≥20 个点名特效的**实机播放**（见下方"建议补充"）。
 
-其中「**A 类钩子必须被当前渲染器提供**」这条断言会遍历 `RENDERERS` 里的每个渲染器，用 `probeOf(hook)` 取判别子串（`.stack-slot[data-player][data-line]` → `stack-slot`；`[data-uid]` → `data-uid`；`img` → `img`），逐个断言渲染器源码里出现该子串；失败时打印 `render-net.ts 未提供 <钩子>（判别子串 <probe>）`。
+其中「**A 类钩子必须被当前渲染器提供**」这条断言会遍历 `RENDERERS` 里的每个渲染器，对每条 A 钩子取其
+**判别子串**并逐个断言渲染器源码里出现：
 
-**结论口径**：这条断言绿 = 远程页在**源码层面**满足了 FX DOM 契约；红 = 报告里列出的钩子就是远程页缺的，补齐后重跑即可。这是 G2 判断"远程页是否满足契约"的**唯一机检入口**，不需要人工逐条比对本文档。
+- 钩子带显式 `probe`（所有复合钩子，如 `.stack-slot[data-player][data-line]`）→ **`probe` 里每一项都必须出现**
+  （`stack-slot` + `data-player` + `data-line`）；
+- 否则退回自动推导 `probeOf(hook)`（`.protocol` → `protocol`；`img` → `img`）；
+- `kind: 'attr'` 的钩子额外接受 `dataset.<camelCase>` 产出形式（`[data-uid]` ⇄ `dataset.uid`），
+  因为渲染器是用 `node.dataset.uid = …` **写**属性的，源码里可能一个 `data-uid` 字面量都没有。
 
-**建议补充（机检之外）**：G2 完成后抽查 **≥20 个点名特效**在远程页实际页面上的播放（含三代已编译特效、控制权牵引、弧轨三态）——源码守卫只能证明"选择器字符串在渲染器源码里出现"，不能证明运行时真的挂在了正确的节点上、且在正确的时机存在。这条与 §6.6 的验收标准一致。
+失败时打印 `render-net.ts 未提供 <钩子>（判别子串 <a> + <b>…）`。
+
+**结论口径（终审收紧）**：这条断言绿只等于 —— **每个钩子的判别子串都出现在了渲染器源码里**。
+它**不等于**"契约已满足"：源码文本守卫既证明不了运行时的属性**值**（`data-player` 是不是真的等于
+状态里的 `player`），也证明不了节点在特效读取的那一刻真的存在、真的挂在正确的祖先上。
+红 = 报告里列出的钩子就是远程页缺的，补齐后重跑即可；**绿之后仍必须做实机抽查**（下一条）。
+
+**建议补充（机检之外，强制）**：G2 完成后抽查 **≥20 个点名特效**在远程页实际页面上的播放（含三代已编译特效、
+控制权牵引、弧轨三态）——源码守卫只能证明"选择器字符串在渲染器源码里出现"，不能证明运行时真的挂在了
+正确的节点上、且在正确的时机存在。这条与 §6.6 的验收标准一致，**是绿之后的必要步骤，不是可选项**。
+
+**已知局限（不修，只披露）**：部分判别子串是退化的，只能证明"这个词在源码里出现过"，证明不了语义。
+实测命中行数：`img` 在 `render.ts` 里 80 行、`card` 158 行、`hand` 79 行；且 `hand` 是 D 类
+`.hand-strip` 的子串 —— 只要有人在本文件里写了 `hand`，检查就过。此外 `.hand` 与 `.hand[data-player]`
+的 `probe` 完全相同，**后一条不提供任何额外机检力，只是文档登记**（登记的意义在于把"无归属的 `.hand`"
+与"按玩家取的那一个"两种读法都记下来）。即使带上 `probe`，断言的仍只是"这些 token 在**渲染器源码里
+出现过**"：`render.ts` 自己也在查询 `data-player` / `data-line`（如 `:293`），所以"生产者**真的写**了
+这个属性"仍不是文本守卫能证明的（`data-uid` 那条之所以要额外接受 `dataset.uid`，
+就是因为"写"和"查"在源码里长得不一样）。**不要**为了"修"这些而发明新 token：那只会制造假的安全感。
+真正的兜底是上一条的实机抽查。
+
+**建议 G2 补的长期机制（本次**未**实现，属新机制而非修复）**：**token 级守卫** —— 把 FX 选择器字面量里
+的每个 `.class` / `[attr]` token 都抽出来，断言"已登记进本契约，或在白名单里（特效自建 / 渲染器自有）"。
+这才是"根因"（普查按**一行一处读取点**登记，复合选择器会丢掉尾段）的彻底解法。本次不做，是因为它是
+一套新机制，不是本轮修复项；且要注意**多行模板字面量**正是逐行普查的天敌 ——
+`effects/index.ts:1779-1781` 的选择器跨三行，`.protocol` 这一段因此整段漏登记。
 
 **漂移防护**：本文档的 A 类钩子由 `tests/ui/fx-dom-contract.test.ts` 的「契约文档必须逐一登记全部 A 类钩子」断言强制核对（`doc.includes(hook)`，逐字）；改了 `src/ui/fx-dom-contract.ts` 的 A 类钩子却忘记改本文档，测试立刻报红。
 
@@ -216,10 +273,10 @@ G1 首轮正是把「渲染器产出」当成了充分条件，于是把 `.hand-
 
 | 类别 | 条数 | 机读版 |
 |---|---|---|
-| A 结构钩子（远程页必须提供） | 17 | `hooksOfCategory('A')` |
+| A 结构钩子（远程页必须提供） | 19 | `hooksOfCategory('A')` |
 | B 特效自建节点 | 34 | `hooksOfCategory('B')` |
 | C 内部注册键 | 1 | `hooksOfCategory('C')` |
 | D 渲染器自有、FX 不读 | 3 | `hooksOfCategory('D')` |
-| **合计** | **55** | `FX_DOM_CONTRACT.length` |
+| **合计** | **57** | `FX_DOM_CONTRACT.length` |
 
 本文档的 A 类清单是契约的**权威人读版**；如与机读清单冲突，以 `src/ui/fx-dom-contract.ts` 为准，并应立刻修正本文档（否则守卫报红）。

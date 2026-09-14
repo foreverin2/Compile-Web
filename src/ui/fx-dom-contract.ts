@@ -33,6 +33,11 @@ export interface FxDomHook {
   /** FX 消费方模块名（见 tests/ui/fx-dom-contract.test.ts 的 FX_MODULES）；
    *  D 类无 FX 消费方 → 必须是空数组 */
   requiredBy: readonly string[];
+  /** 显式判别子串（覆盖自动推导）；**每一项都必须出现在渲染器源码里**。
+   *  复合选择器（`.cls[attr][attr2]`）必须逐段列出，否则自动推导只取类名，
+   *  渲染器丢掉 `dataset.player` / `dataset.line` 也照样过守卫（见 `.stack-slot` 等条目）。
+   *  只有「渲染器断言」用它；出处断言（requiredBy 模块）仍用 probeOf(h.hook)。 */
+  probe?: readonly string[];
   /** 一句话：这个钩子供什么特效定位用 */
   note?: string;
 }
@@ -44,18 +49,31 @@ export const FX_DOM_CONTRACT: readonly FxDomHook[] = [
   {
     hook: '.stack-slot[data-player][data-line]', kind: 'class', category: 'A',
     requiredBy: ['fx-gen3.ts', 'fx-gen2.ts', 'fx-gen3-swap.ts', 'gen3-control.ts', 'effects/index.ts'],
-    note: '链路槽几何：3 代飞行/连接件/常驻层的落点（slotRectOf / lineCenterX），最核心的一条',
+    probe: ['stack-slot', 'data-player', 'data-line'],
+    note: '链路槽几何：3 代飞行/连接件/常驻层的落点（slotRectOf / lineCenterX），最核心的一条。'
+      + 'probe 逐段列出：渲染器只产 stack-slot 而丢掉 data-player/data-line 时，slotRectOf 全线失效，'
+      + '自动推导的类名判别子串抓不到这种退化',
   },
   {
     hook: '.protocol-cell[data-player][data-line]', kind: 'class', category: 'A',
     requiredBy: ['fx-gen3.ts', 'fx-gen2.ts', 'fx-gen3-swap.ts', 'gen3-control.ts', 'effects/index.ts'],
-    note: '协议格：协议交换/重排、同化编译光柱、色欲封条按 (player,line) 定位',
+    probe: ['protocol-cell', 'data-player', 'data-line'],
+    note: '协议格：协议交换/重排、同化编译光柱、色欲封条按 (player,line) 定位（probe 逐段列出，理由同上条）',
   },
   {
     hook: '.protocol-img', kind: 'class', category: 'A',
     requiredBy: ['fx-gen3-swap.ts', 'effects/index.ts'],
     note: '协议卡面图：协议交换幽灵卡取它的 rect 与卡面图（render.ts:116 是 img.className = "protocol-img"，'
       + '故按书写形式是 class 选择器；清单里真正的 element 只有纯标签名 `img`）',
+  },
+  {
+    hook: '.protocol', kind: 'class', category: 'A',
+    requiredBy: ['effects/index.ts'],
+    note: '协议盒：编译翻面动画的锚点 —— effects/index.ts:1780 的复合选择器 '
+      + '`.protocol-cell[data-player=…][data-line=…] .protocol` 的第二段，:1783 把它交给 playProtocolFlip。'
+      + '**它不是 D 类**：虽然同一条类名也被 render.ts:1761/1762 自己查询，但判 A 只看「渲染器产出 且 '
+      + '至少一个 FX 模块真的读它」，两个条件都成立（产出：render.ts:83；读取：effects/index.ts:1780）。'
+      + '被 proto 变量接住、外面套着 `if (proto)`，所以丢掉它不会报错，只会让编译侧的协议翻面静默不播',
   },
   {
     hook: '.protocol-holder', kind: 'class', category: 'A',
@@ -65,16 +83,32 @@ export const FX_DOM_CONTRACT: readonly FxDomHook[] = [
   {
     hook: '[data-uid]', kind: 'attr', category: 'A',
     requiredBy: ['gen3-util.ts', 'fx-gen2.ts', 'fx-gen3.ts', 'fx-gen3-swap.ts', 'gen3-control.ts', 'effects/index.ts'],
-    note: '按 uid 取卡节点 rect（nodeOf → visibleRectOf / clipInsetRightPct）；手牌与链路卡都要带',
+    note: '按 uid 取卡节点 rect（nodeOf → visibleRectOf / clipInsetRightPct）；手牌与链路卡都要带。'
+      + '渲染器产出形式是 `node.dataset.uid = card.uid`（render.ts:60/228/1576）—— 没有字面量 data-uid，'
+      + '故渲染器断言对 kind=attr 额外接受 `dataset.uid` 这种 camelCase 产出形式（见测试里的 datasetFormOf）',
   },
   {
     hook: '.trash-pile[data-player]', kind: 'class', category: 'A',
     requiredBy: ['fx-gen3.ts', 'fx-gen2.ts', 'effects/index.ts'],
-    note: '弃牌堆位置：弃牌/回溯飞行的终点（trashPos）；fx-gen3 另有按 .trash-pile.p1/.p2 取的一种写法',
+    probe: ['trash-pile', 'data-player'],
+    note: '弃牌堆位置：弃牌/回溯飞行的终点（trashPos）；fx-gen3 另有按 `.trash-pile.p1/.p2` 取的一种写法（见下一条）',
+  },
+  {
+    hook: '.trash-pile.p1/.p2', kind: 'class', category: 'A',
+    requiredBy: ['fx-gen3.ts'],
+    probe: ['trash-pile p'],
+    note: '弃牌堆的 `.pN` 归属类：fx-gen3.ts:1375 读 `.trash-pile.p${p.player + 1}`（灰砂流终点），'
+      + '与上一条的 `[data-player]` 是两个独立 conjunct，各自登记免得其中一个被丢还全绿。'
+      + 'probe 取**生产者书写形式** `trash-pile p`（render.ts:1498 是 `trash-pile p${player + 1} …`，'
+      + '类名以空格分隔，不是复合 `.trash-pile.pN`）。**故意不把 probe 写成裸 `p1`** —— '
+      + '裸 `p1` 同时命中 render.ts:1732 的 `hand-shield p1` 与 :4394 的 `draft-preview p1`，'
+      + '于是「pN 类被丢」和「别的节点带 p1」无法区分，等于没查；'
+      + '测试里的 probeOf 也据此收紧：类开头的多段钩子取**第一段**类名（`trash-pile`），不再机械取 `p1`',
   },
   {
     hook: '.deck[data-player]', kind: 'class', category: 'A',
     requiredBy: ['fx-gen2.ts', 'effects/index.ts'],
+    probe: ['deck', 'data-player'],
     note: '牌库位置：牌库顶打出/洗牌/冰封牌库等特效的起点或终点（deckPos），全库被读约 60 处',
   },
   {
@@ -92,7 +126,10 @@ export const FX_DOM_CONTRACT: readonly FxDomHook[] = [
   {
     hook: '.hand[data-player]', kind: 'class', category: 'A',
     requiredBy: ['fx-gen3.ts'],
-    note: '手牌区（带归属）：3 代按玩家取手牌容器（fx-gen3.ts:875）',
+    probe: ['hand', 'data-player'],
+    note: '手牌区（带归属）：3 代按玩家取手牌容器（fx-gen3.ts:875）。**注意**：probe 与上一条 `.hand` 相同，'
+      + '故这条的渲染器断言与 `.hand` 完全重合、不提供额外机检力 —— 它只作文档登记（区分「无归属的 .hand」'
+      + '与「按玩家取的那一个」两种读法）',
   },
   {
     hook: '.card', kind: 'class', category: 'A',
@@ -111,10 +148,12 @@ export const FX_DOM_CONTRACT: readonly FxDomHook[] = [
   },
   {
     hook: 'img', kind: 'element', category: 'A',
-    requiredBy: ['fx-gen2.ts', 'fx-gen3-swap.ts', 'fx/delete-shatter.ts', 'fx/discard-cut.ts'],
+    requiredBy: ['fx-gen2.ts', 'fx-gen3-swap.ts', 'fx/delete-shatter.ts', 'fx/discard-cut.ts', 'effects/index.ts'],
     note: '卡面图：偏转/破碎/切割/翻面/交换取卡面图的唯一来源（render.ts 造 .card-face-img / .protocol-img）；'
-      + '6 个读取点全在渲染器产出的卡节点（或它的克隆）上：effects/index.ts:641/764（playFlip 源卡，缺失则回退 cardFaceSrc）、'
-      + 'fx-gen2.ts:967、fx-gen3-swap.ts:120、fx/delete-shatter.ts:36、fx/discard-cut.ts:19',
+      + '读取点全在渲染器产出的卡节点（或它的克隆）上：effects/index.ts:641/764（playFlip 源卡，缺失则回退 cardFaceSrc）、'
+      + 'fx-gen2.ts:967、fx-gen3-swap.ts:120、fx/delete-shatter.ts:36、fx/discard-cut.ts:19。'
+      + '**注意**：判别子串 `img` 是退化的（render.ts 里 80 行命中），它只能证明「文档/清单里有 img 这个词」，'
+      + '证明不了卡面图真的挂上了 —— 这条靠 G2 的 ≥20 特效实机抽查兜底',
   },
 
   // —— 控制组件（gen3-control 定位锚点） ——
@@ -234,12 +273,34 @@ export function hooksOfCategory(c: 'A' | 'B' | 'C' | 'D'): FxDomHook[] {
  *    产出，读取点 render.ts:1761/4851），也归 D。核对用：
  *    `git grep -n "hand-strip" -- src` / `"play-btns"` / `"lane-row"` 只返回 render.ts 与 styles.css。
  *    历史成因：控制器最初的选择器普查把 render.ts 自己的查询也算成了 FX 依赖，于是给了 7 条
- *    「已确认锚点」，其中这三条与「A 类必须被 FX 模块引用」这条机检互相冲突；纠正后 A 类锚点是 6 条。
+ *    「已确认锚点」，其中这三条与「A 类必须被 FX 模块引用」这条机检互相冲突；纠正后控制器给的
+ *    锚点表缩到 6 条（那是**锚点表**，不是完整清单）。终审补入 `.protocol` 与 `.trash-pile.p1/.p2`
+ *    两个漏项后，完整 A 类共 **19** 条（见 docs/4代-FX DOM 契约.md §3）。
  *    远程页若不提供它们，坏掉的是**拖拽 / 选择模式 / 线选择高亮**，而不是某条点名特效。
  *
- * 2. 只有 render.ts / diag.ts / home.ts / control-rearrange.ts 引用的选择器不进 A 类
- *    （如 .protocol、.stack、.draft-pool）：本清单的 A 类只收录 FX 层真的读的钩子；
- *    其中已被点名的 renderer 自有节点登记为 D 类。
+ * 2. **（2026-09-13 终审纠正）**「只被 render.ts / diag.ts / home.ts / control-rearrange.ts 引用的
+ *    选择器不进 A 类」这句话是**错的**，原文还拿 `.protocol` 当例子 —— 而 `.protocol` 恰恰是 A 类：
+ *    产出方是 render.ts:83，读取方是 effects/index.ts:1780 的
+ *    `.protocol-cell[data-player=…][data-line=…] .protocol`（复合选择器的第二段，交给 playProtocolFlip）。
+ *    判 A 的规则只有两条：**渲染器产出** 且 **至少一个 FX 模块真的读它**；「还有谁也在查它」与判定无关，
+ *    同一条类名完全可以既被渲染器自查（render.ts:1761/1762）又被 FX 读（effects/index.ts:1780）。
+ *    原文那句话正是 G2 拿去重命名协议盒的许可证，已删除。
+ *
+ *    真正的「不是 A 类」例子（各自 grep 过，11 个 FX 模块里零引用）：
+ *     - `.draft-pool`：render.ts:4074 产出，读取点只有 render.ts:4246；
+ *     - `.stack`：render.ts:213 产出，FX 侧只读 `.stack-slot`（裸 `.stack` 只在 gen3-util.ts:4 的注释里出现）。
+ *    已被点名的 renderer 自有节点（`.hand-strip` / `.play-btns` / `.lane-row`）登记为 D 类。
+ * 2b. **复合选择器必须逐段登记 probe**：自动推导（probeOf）对 `.cls[attr][attr2]` 只取类名，
+ *    于是渲染器丢掉 `data-player` / `data-line` 也能过守卫。凡复合 A 钩子都显式给 `probe`，
+ *    渲染器断言要求**每一项**都出现。这条对 `.stack-slot[data-player][data-line]` 尤其致命：
+ *    它是最核心的几何锚点，少了属性就等于 slotRectOf / lineCenterX 全线失效。
+ * 2c. 退化的 probe 是**已知且已披露**的局限：`img`（render.ts 80 行命中）、`card`（158 行）、
+ *    `hand`（79 行，且是 D 类 `.hand-strip` 的子串）—— 它们只能证明「这个词在源码里出现过」。
+ *    不靠发明新 token 去修，靠 G2 的 ≥20 特效实机抽查兜底。其中 `.hand` 与 `.hand[data-player]`
+ *    的 probe 相同，后一条是**纯文档登记**，不提供额外机检力。
+ * 2d. **未做的长期机制（G2 建议）**：token 级守卫 —— 把 FX 选择器字面量里的每个 `.class` / `[attr]`
+ *    都抽出来，断言「已登记或在白名单里」。它才是「一行一处读取点」这条根因的解法；
+ *    多行模板字面量（effects/index.ts:1779-1781）正是让逐行普查漏掉 `.protocol` 的原因。
  * 3. render.ts 里的 23 个 `dataset.*Key`（smokeKey / ice4Key / …）是渲染器给自己的常驻层
  *    记的账，只有 render.ts:1364 读回 chainPlayer 一处，FX 模块从不读 → 不在契约内。
  */
