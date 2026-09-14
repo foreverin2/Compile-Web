@@ -59,7 +59,13 @@ export interface FxDomHook {
 export interface FxRenderer { file: string; exempt?: readonly string[] }
 
 export const RENDERERS: readonly FxRenderer[] = [
-  { file: 'render.ts' },
+  // G2 修正 R2：热座页**不产出** `[data-fx-rot]`（那是远程页专属的**特效**朝向标记）——
+  //   热座自己在场卡上的 ±90° 类**就是**它的特效朝向，`fxOrientOf` 读不到标记即回退 `orientOf`
+  //   ⇒ 「热座零变化」是构造性的（见 src/ui/fx-orient.ts 的 fxOrientOf）。
+  //   注意 `render.ts` **仍然**是 `[data-fx-rot]` 的**物理产出点**（`node.dataset.fxRot = opts.fxRot`），
+  //   但那条写入被 `if (opts?.fxRot !== undefined)` 守卫住，热座调用点不传 `fxRot` ⇒ DOM 上无此属性。
+  //   豁免表达的是"这个渲染器**有意**不提供这条钩子"，与"产出点写在哪个文件"无关。
+  { file: 'render.ts', exempt: ['[data-fx-rot]'] },
   // G2 Task 3：远程对战页渲染器（甲读法）—— 自己一侧 0°、对手一侧 .rot-180。
   // 豁免 .rot-cw / .rot-ccw 的理由（不是"省略"，是**不能**产出）：
   //   1. 语义：±90° 是「两位玩家坐在同一块屏幕前、各自看自己那半边」的**热座专属**方案；
@@ -232,6 +238,24 @@ export const FX_DOM_CONTRACT: readonly FxDomHook[] = [
       + '**G2 Task 2 起** 同样只由 src/ui/fx-orient.ts 读取（见 .rot-cw 条）',
   },
   {
+    hook: '[data-fx-rot]', kind: 'attr', category: 'A',
+    requiredBy: ['fx-orient.ts'],
+    // probe 取**产出/读取形式** `data-fx-rot`：它在 fx-orient.ts 里**恰好出现一次**
+    //（`export const FX_ROT_ATTR = 'data-fx-rot'`，即唯一读取出处），故有判别力。
+    // 注意出处判据（requiredBy）走的是 probeOf(hook) = `data-fx-rot`，与这里同串。
+    probe: ['data-fx-rot'],
+    note: '**特效朝向标记**（G2 修正 R2；规格 §8.2 钉死的名字）：远程页场上卡带 '
+      + '`data-fx-rot="ccw"`（自己 −90°）/ `"cw"`（对手 +90°），`fx-orient.ts` 的 `fxOrientOf` 读它 —— '
+      + '**它决定了浮层卡根元素的朝向与装饰层继承的 ∓90°**。'
+      + '⚠️ 它与**卡面**朝向是两套（自己卡面 0° 而特效 −90°、对手卡面 180° 而特效 +90°）：'
+      + '远程页的卡面仍由 `.rot-180` 决定，本钩子只管特效。'
+      + '**热座页有意不产出它**（`RENDERERS` 给 render.ts 一条 `exempt`）：热座没有这个标记 ⇒ '
+      + '`fxOrientOf` 回退 `orientOf` ⇒ 热座浮层卡几何走原分支（"热座零变化"是构造性的）。'
+      + '产出写入在 `render.ts`（`node.dataset.fxRot = opts.fxRot`，被 `if (opts?.fxRot !== undefined)` '
+      + '守卫），而**值**由 `render-net.ts` 按座位给（`fxRot: isSelfSeat ? \'ccw\' : \'cw\'`）——'
+      + '这也正是"豁免 render.ts"的含义：它的产出点存在，但热座调用点**不传值**。',
+  },
+  {
     hook: '.rot-180', kind: 'class', category: 'A',
     requiredBy: ['fx-orient.ts'],
     note: '场上卡 180° 倒置态（远程页对手一侧；render-net.ts 按座位挂）。'
@@ -378,7 +402,8 @@ export function hooksOfCategory(c: 'A' | 'B' | 'C' | 'D'): FxDomHook[] {
  *    「已确认锚点」，其中这三条与「A 类必须被 FX 模块引用」这条机检互相冲突；纠正后控制器给的
  *    锚点表缩到 6 条（那是**锚点表**，不是完整清单）。终审补入 `.protocol` 与 `.trash-pile.p1/.p2`
  *    两个漏项后 A 类为 19 条；**G2 Task 4 再补 `.rot-180`**（远程页对手侧的倒置态，
- *    `cloneBoxSwaps(180) === false` 故不可由 ±90° 代替），完整 A 类共 **20** 条
+ *    `cloneBoxSwaps(180) === false` 故不可由 ±90° 代替）；**G2 修正 R2 再补 `[data-fx-rot]`**
+ *    （特效朝向标记，规格 §8.2 —— 它与卡面朝向是两套，见该条目）。完整 A 类共 **21** 条
  *    （见 docs/4代-FX DOM 契约.md §3）。
  *    远程页若不提供它们，坏掉的是**拖拽 / 选择模式 / 线选择高亮**，而不是某条点名特效。
  *

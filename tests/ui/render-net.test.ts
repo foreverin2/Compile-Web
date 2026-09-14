@@ -651,6 +651,11 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
     expect(body, '缺少"手牌 DOM 顺序 [P0,P1]"的运行时断言').toContain("dataset.player");
     expect(body, '缺少"对手侧场上卡各自带 .rot-180"的运行时断言').toContain('.net-side-foe .card.rot-180');
     expect(body, '缺少"对手侧协议图各自带 .rot-180"的运行时断言').toContain('.net-side-foe .protocol-img.rot-180');
+    // G2 修正 R2 · 约束 8：**特效朝向标记**的逐卡断言（读侧的回退机制意味着"忘了产出标记"
+    // 不会有任何报错 —— 只会静默退回卡面朝向 ⇒ 整类特效差 90°；所以这条运行时证据是必要的）
+    expect(body, '缺少"对手侧每张场上卡各自带 [data-fx-rot]"的运行时断言').toContain('.net-side-foe .card[data-fx-rot]');
+    expect(body, '缺少"自己侧每张场上卡各自带 [data-fx-rot]"的运行时断言').toContain('.net-side-self .card[data-fx-rot]');
+    expect(body, '缺少"标记取值按座位（自己 ccw / 对手 cw）"的运行时断言').toContain("v !== 'ccw'");
     // 外层兜底：任何未预料的异常都不得从 renderNetBoard 逃逸（"诊断不得把渲染搞崩"）
     const entry = code.slice(code.indexOf('export function renderNetBoard'));
     expect(entry, '调用 verifyPageHooks 的地方没有兜底 try/catch').toMatch(/try\s*\{\s*note\s*=\s*verifyPageHooks\(/);
@@ -1001,13 +1006,72 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
     expect(code, 'verifyPageHooks 未把数量写进报告文本').toMatch(/数量 \$\{found\}，期望 \$\{want\}/);
   });
 
+  /**
+   * `syntheticPage` 与 `fakeScope` 共享的"该侧约定的标记取值"。
+   * 为什么要共享：`render-net.ts` 的取值断言用的是**无值形式**选择器
+   * （`.net-side-self .card[data-fx-rot]` —— 真实 DOM 里选择器不会带值），桩因此拿不到值，
+   * 必须由合成页告诉它"这一侧应该是什么值"。`null` = 标记整个缺失（回退路径的合成形态）。
+   */
+  let selfFxRot: string | null = 'ccw';
+  let foeFxRot: string | null = 'cw';
+
+  /**
+   * R2-1（G2 修正 R2）：**特效朝向标记**在 `NET_PAGE_HOOKS` 里的登记形态。
+   *
+   * 为什么单列一条：镜像相等（第 2b 条）只保证"表里有这一条"，证明不了**它怎么被判**。
+   * `[data-fx-rot]` 是**逐卡**挂在场上卡上的（数量随场面变化），若有人给它顺手填一个
+   * `expected: 6`，空局面会**稳定误报**（页面上那 6 个槽里可能一张卡都没有）——
+   * 而空局面是**合法**的。反过来，若把它删掉，第 2b 条的集合相等会红，但那条消息指向"契约漂移"，
+   * 读起来不知道是"远程页少了这条钩子"。
+   *
+   * 另一条腿：`exempt` 在热座页那一侧（`RENDERERS` 的 `render.ts`），本页**必须提供**它 ——
+   * 由上一条（第 2 条）的 `renderStackSlot(` 调用链与运行时断言 3（约束 8）共同承担。
+   */
+  it('R2-1. [data-fx-rot] 在表里登记为 stateDependent（不计数）且产出链条锚在 renderStackSlot(', () => {
+    const entry = NET_PAGE_HOOKS.find((h) => h.hook === '[data-fx-rot]');
+    expect(entry, '[data-fx-rot] 未登记进 NET_PAGE_HOOKS（契约漂移）').toBeTruthy();
+    expect(entry?.expected, '[data-fx-rot] 定了数量 —— 它是**逐卡**标记，空局面合法为 0，定死会稳定误报')
+      .toBeUndefined();
+    expect(entry?.stateDependent, '[data-fx-rot] 既没定数量也没标状态相关（自查会对它既不报错也不计数）')
+      .toBeTruthy();
+    expect(entry?.call, '[data-fx-rot] 的产出链条不对（值经 renderStackSlot 的 fxRot 参数逐卡写入）')
+      .toEqual(['renderStackSlot(']);
+    expect(entry?.probeSelector, '[data-fx-rot] 缺运行时探测选择器')?.toBe('[data-fx-rot]');
+    // 反空集合：热座那条豁免必须与本页的"必须提供"成对（两边都缺就等于这条契约无人验收）
+    const hotseat = RENDERERS.find((r) => r.file === 'render.ts');
+    expect(hotseat?.exempt, 'render.ts 没有豁免 [data-fx-rot]（热座页会产出标记 ⇒ 回退机制失效）')
+      .toContain('[data-fx-rot]');
+    const net = RENDERERS.find((r) => r.file === 'render-net.ts');
+    expect(net?.exempt ?? [], 'render-net.ts 不得豁免 [data-fx-rot]（它是唯一产出方）')
+      .not.toContain('[data-fx-rot]');
+  });
+
   /** 合成「一帧远程页」的选择器计数（`sides: 1` = 评审变异 R4：对手侧整行消失） */
-  function syntheticPage(o: { sides?: number; foeInverted?: boolean } = {}): Record<string, number> {
+  function syntheticPage(o: {
+    sides?: number;
+    foeInverted?: boolean;
+    /** `null` = 标记整个缺失（回退路径）；字符串 = 两套卡的标记取值（默认按座位正确） */
+    fxRot?: { self: string; foe: string } | null;
+  } = {}): Record<string, number> {
     const sides = o.sides ?? 2;
     const perLine = 3 * sides;      // 每类"每线每侧各一个"
     const foeCards = sides === 2 ? 2 : 0;
+    const selfCards = sides === 2 ? 2 : 0;
     const foeProto = sides === 2 ? 3 : 0;
     const inv = o.foeInverted === false ? 0 : undefined;
+    // G2 修正 R2 · 约束 8：标记**逐卡**挂。`fxRot === null` 模拟"标记缺失"（回退路径）；
+    // 取值由调用方给（默认按座位正确），供"取值反了"的断言使用。
+    const selfVal = o.fxRot === null ? null : (o.fxRot?.self ?? 'ccw');
+    const foeVal = o.fxRot === null ? null : (o.fxRot?.foe ?? 'cw');
+    // 带值的键：**只在有值时**追加。⚠️ 无值时**不写**这个键 —— 否则 `Object.fromEntries` 会用
+    // 0 覆盖上面 `.net-side-foe .card` 的计数（我第一版就是这么错的：标记缺失时卡片数也变成 0，
+    // 于是硬约束 2 抢在约束 8 前面报红）。
+    const keyOf = (sel: string, val: string | null, n: number): Array<[string, number]> =>
+      val === null ? [] : [[`${sel}[data-fx-rot="${val}"]`, n]];
+    // 无值形式的选择器（`.card[data-fx-rot]`）不携带值 —— 桩需要知道"这一侧约定值是多少"。
+    // 放在模块作用域的兄弟变量里，`fakeScope` 读它（`fxRot: null` 时置 null = 标记缺失）。
+    selfFxRot = selfVal;
+    foeFxRot = foeVal;
     return {
       '.stack-slot[data-player][data-line]': perLine,
       '.protocol-cell[data-player][data-line]': perLine,
@@ -1016,6 +1080,7 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
       '.protocol-holder': perLine,
       '.battery': perLine,
       '[data-uid]': 4,                                   // 状态相关：不计数
+      '[data-fx-rot]': foeVal === null ? 0 : foeCards + selfCards, // 21 条 A 类里的新钩子（存在性自查）
       '.trash-pile[data-player]': 2,
       '.trash-pile.p1, .trash-pile.p2': 2,
       '.deck[data-player]': 2,
@@ -1027,7 +1092,15 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
       '.control-slider-img': 1,
       '.control-track': 1,
       '.net-side-foe .card': foeCards,
+      '.net-side-self .card': selfCards,
       '.net-side-foe .card.rot-180': inv ?? foeCards,
+      // ── 约束 8 的三条探测：无值的（计数用）+ 带具体值的（取值用；桩按"基础选择器"取数量）──
+      '.net-side-foe .card[data-fx-rot]': foeVal === null ? 0 : foeCards,
+      '.net-side-self .card[data-fx-rot]': selfVal === null ? 0 : selfCards,
+      ...Object.fromEntries([
+        ...keyOf('.net-side-self .card', selfVal, selfVal === null ? 0 : selfCards),
+        ...keyOf('.net-side-foe .card', foeVal, foeVal === null ? 0 : foeCards),
+      ]),
       '.net-side-foe .protocol-img': foeProto,
       '.net-side-foe .protocol-img.rot-180': inv ?? foeProto,
       '.net-side-self .card.rot-180, .net-side-self .card.rot-cw, .net-side-self .card.rot-ccw': 0,
@@ -1035,18 +1108,49 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
   }
 
   /**
-   * 合成 DOM 桩：**只**实现 `verifyPageHooks` 用到的两个方法（无 jsdom）。
+   * 合成 DOM 桩：**只**实现 `verifyPageHooks` 用到的三个方法（无 jsdom）。
    *
    * ⚠️ 它证明的是「**计数逻辑本身有牙齿**」（缺了对手侧的合成树必须报 ✗ 并说出期望数量），
    * **不是**"真实 DOM 里有这些节点" —— 后者只能靠 `opts.verifyHooks` 在预览页真跑 +
    * 用户在 5173 上做点名特效抽查。它是"期望值表在无 jsdom 下也有牙齿"的第二条腿：
    * 第一条腿是第 17 条（数字从源码结构推导），这一条把 `verifyPageHooks` **真的执行一遍**。
+   *
+   * G2 修正 R2：加了 `getAttribute`（约束 8 的"取值按座位"断言要读它 —— `querySelectorAll`
+   * 只能证明"带了属性"，证明不了"值对不对"）。
    */
   function fakeScope(counts: Record<string, number>, handOrder: number[] = [0, 1]): HTMLElement {
-    const listOf = (sel: string): Array<{ dataset: Record<string, string> }> => {
-      const n = counts[sel] ?? 0;
-      if (sel === '.hand') return handOrder.slice(0, n).map((p) => ({ dataset: { player: String(p) } }));
-      return Array.from({ length: n }, () => ({ dataset: {} }));
+    /** 选择器里可能带 `[attr="value"]` / `[attr=value]`（约束 8 的合成树用它验取值） */
+    const attrOf = (sel: string): Record<string, string> => {
+      const out: Record<string, string> = {};
+      for (const m of sel.matchAll(/\[([a-z-]+)=["']?([^"'\]]+)["']?\]/g)) {
+        out[m[1].replace(/^data-/, '').replace(/-([a-z])/g, (_a, c: string) => c.toUpperCase())] = m[2];
+      }
+      return out;
+    };
+    const listOf = (sel: string): Array<{ dataset: Record<string, string>; getAttribute: (n: string) => string | null }> => {
+      // 带值的属性选择器（`.card[data-fx-rot="ccw"]`）在计数表里没有自己的键 → 取"基础选择器"
+      // 的数量，再把属性值喂给桩（真实 DOM 里这两条查询返回的是**同一批节点**，桩必须同构）。
+      const baseline = sel.replace(/\[[a-z-]+(?:=["'][^"']*["'])?\]\s*$/, '');
+      const n = counts[sel] ?? counts[baseline] ?? 0;
+      if (sel === '.hand') return handOrder.slice(0, n).map((p) => ({ dataset: { player: String(p) }, getAttribute: () => null }));
+      // ⚠️ 无值形式（`.card[data-fx-rot]`）的选择器**不携带值** ⇒ 桩从"该侧约定值"补上，
+      //    否则 `getAttribute('data-fx-rot')` 恒为 null、取值断言永远报红（我第一版就踩了这里：
+      //    以为选择器字符串里会带 `="ccw"`，实际运行时那条查询是无值形式）。
+      //    `null` = 该侧没有标记（约束 8 的反面用例）；显示为 `dataset` 时剔除 null 项。
+      const attrs: Record<string, string | null> = {
+        ...(baseline === '.net-side-self .card' ? { fxRot: selfFxRot } : {}),
+        ...(baseline === '.net-side-foe .card' ? { fxRot: foeFxRot } : {}),
+        ...attrOf(sel),
+      };
+      const dataset: Record<string, string> = {};
+      for (const [k, v] of Object.entries(attrs)) if (v !== null) dataset[k] = v;
+      return Array.from({ length: n }, () => ({
+        dataset,
+        getAttribute: (name: string): string | null => {
+          const key = name.replace(/^data-/, '').replace(/-([a-z])/g, (_a, c: string) => c.toUpperCase());
+          return attrs[key] ?? null;
+        },
+      }));
     };
     return {
       querySelectorAll: (sel: string) => listOf(sel),
@@ -1093,6 +1197,21 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
       // ③ 对手卡没带 .rot-180 → 硬约束 2
       expect(verifyPageHooks(fakeScope(syntheticPage({ foeInverted: false }))), '对手卡没倒置没报')
         .toContain('硬约束 2');
+      // ④ G2 修正 R2 · 约束 8：特效朝向标记整个缺失（远程页忘了产出 ⇒ fxOrientOf 静默回退卡面朝向
+      //    ⇒ 整类特效差 90°、且**不会有任何报错** —— 这正是这条运行时断言存在的唯一理由）
+      //    ⚠️ `foeInverted: true` 是必须的：合成页的 **rot-180 计数与 [data-fx-rot] 计数是同源的**，
+      //    不显式给真值的话"标记缺失"会同时打红硬约束 2，fatal[0] 就不是约束 8（测试看不到它）。
+      expect(verifyPageHooks(fakeScope(syntheticPage({ fxRot: null, foeInverted: true }))),
+        '特效朝向标记缺失却没报 —— R2 最危险的静默退化')
+        .toContain('约束 8');
+      // ⑤ 标记存在但**取值反了**（自己拿到 cw、对手拿到 ccw）：计数断言看不见这个，
+      //    只有"逐卡读 getAttribute 比对座位值"的断言能抓 —— 故必须有这条反面用例。
+      expect(verifyPageHooks(fakeScope(syntheticPage({ fxRot: { self: 'cw', foe: 'ccw' }, foeInverted: true }))),
+        '自己侧的标记取值不是 ccw 却没报（特效朝向与座位相反）')
+        .toContain("必须是 'ccw'");
+      // 阳性对照：取值正确时不得报约束 8
+      const ok = verifyPageHooks(fakeScope(syntheticPage()));
+      expect(ok, '取值正确却报了约束 8（假红）').toMatch(/^自查 ✓/);
       expect(warn).toHaveBeenCalled();
     } finally {
       warn.mockRestore();

@@ -4,9 +4,18 @@
 > 机读版在同名模块 `src/ui/fx-dom-contract.ts`；两者由 `tests/ui/fx-dom-contract.test.ts` 强制一致。
 > 依据：`docs/2026-09-13-联机与多端-设计稿.md` §6.3。
 
-当前结论（HEAD，G2 Task 4 接入预览入口后）：**A=20 / B=34 / C=1 / D=3**，共 58 条钩子。其中只有 A 类是契约项。
+当前结论（HEAD，G2 修正 R2 分离特效朝向后）：**A=21 / B=34 / C=1 / D=3**，共 59 条钩子。其中只有 A 类是契约项。
 
-> **G2 Task 4 补入（本次变更）**：A 类新增 **`.rot-180`**（远程页对手侧的 180° 倒置态）。
+> **G2 修正 R2 补入（本次变更）**：A 类新增 **`[data-fx-rot]`**（**特效朝向标记**）。
+> 规格依据 `docs/2026-09-14-G2修正-竖向布局与朝向分离-设计说明.md` §2 / §3.1 / §8.2。
+> 它是"**特效朝向 ≠ 卡面朝向**"这条规则的**唯一运行时载体**：远程页自己卡面 0° 而特效 −90°、
+> 对手卡面 180° 而特效 +90°，FX 层的浮层卡/破碎/切割/翻面**全部**按它构建（`fx-orient.ts` 的
+> `fxOrientOf`）。热座页**有意不产出**它 —— 于是 `fxOrientOf` 回退 `orientOf`，
+> 「热座零变化」是**构造性**的（`RENDERERS` 里给 `render.ts` 一条 `exempt`，见 §3.2）。
+> ⚠️ 读不到标记**不会报错**，只会让远程页的整类特效退回卡面朝向、静默差 90° ——
+> 所以除了源码守卫，`verifyPageHooks` 另加**运行时**逐卡断言（约束 8，见 §6.1）。
+
+> **G2 Task 4 补入（历史）**：A 类新增 **`.rot-180`**（远程页对手侧的 180° 倒置态）。
 > 它不是"多登记一条"，而是把 Task 3 的硬约束 2 从**源码守卫**提升为**契约项 + 运行时自查**：
 > `.rot-180` 与 ±90° 的几何不同（`cloneBoxSwaps(180) === false`，**不交换布局盒宽高**），
 > 拿 ±90° 冒充会得到"朝向对但尺寸错"的假正确 —— 详见 §3 末行与 §3.2。
@@ -81,7 +90,7 @@ G1 首轮正是把「渲染器产出」当成了充分条件，于是把 `.hand-
 
 ## 3. A 类：结构钩子（**远程页必须提供**）
 
-共 **20** 条。按重要性排序；**钩子字符串必须与机读清单逐字一致**（守卫测试按 `doc.includes(hook)` 逐条核对），改写措辞或换写法即报红。
+共 **21** 条。按重要性排序；**钩子字符串必须与机读清单逐字一致**（守卫测试按 `doc.includes(hook)` 逐条核对），改写措辞或换写法即报红。
 
 > **超集规则（G2 Task 4）**：本节列的是**两个渲染器合起来**必须覆盖的 A 类钩子全集，**不是**"每个渲染器要产出的清单"。
 > 某个渲染器可以用 `RENDERERS[].exempt` **有意不提供**其中某几条（必须在 §3.2 写明理由），
@@ -114,6 +123,7 @@ G1 首轮正是把「渲染器产出」当成了充分条件，于是把 `.hand-
 | 18 | `.rot-cw` | `fx-orient.ts` | 场上卡横置态（P1 顺时针，`render.ts:227` 按 owner 挂）：浮层卡按它重建朝向，**漏挂则特效卡立着**。**G2 Task 2 起**：朝向类名只由 `src/ui/fx-orient.ts`（朝向单一出处）读取 —— `effects/index.ts` / `fx-gen3.ts` 改经 `orientOf()` 间接消费，源码里不再出现类名字面量；`requiredBy` 跟着代码走，否则出处机检（`tests/ui/fx-dom-contract.test.ts:190`）会红 |
 | 19 | `.rot-ccw` | `fx-orient.ts` | 场上卡横置态（P2 逆时针，`render.ts:227` 按 owner 挂）：与 `.rot-cw` 成对读取。**G2 Task 2 起**同样只由 `src/ui/fx-orient.ts` 读取（见上一条） |
 | 20 | `.rot-180` | `fx-orient.ts` | **场上卡 180° 倒置态（远程页对手一侧；`render-net.ts` 按座位挂）**。产出点两处：`render.ts:254`（`orient === 180 → node.classList.add('rot-180')`，由 `render-net.ts` 的 `orient: isSelfSeat ? 0 : 180` 驱动）与 `render.ts:130`（`.protocol-img.rot-180`）。**⚠️ 2026-09-14（G2 修正 R1）后 `render.ts:130` 那个产出点只归热座页** —— 远程页在"三个纵向的列"重做中改用 `.net-rot-ccw`（自己）/ `.net-rot-cw`（对手）承担**协议图**的 ∓90°（规格 §8.2），故远程页的 `.rot-180` 只出现在**场上卡**上。**与 ±90° 的区别（这是本条的登记理由）**：180° **不交换布局盒宽高**、只绕中心转 180°（`cloneBoxSwaps(180) === false`，见 `src/ui/fx-orient.ts:51` 与 `tests/ui/fx-orient.test.ts` 的"足迹公式"一节）—— 所以它**不能**复用 ±90° 的浮层卡建盒路径：拿 ±90° 冒充 180° 会得到"朝向对但尺寸错"的假正确，反之亦然。小注：热座页那个产出点（`render.ts:130`）的节点是 `.protocol-img`，**不是 FX 节点**（FX 侧的协议图走 `img` 钩子 + 克隆），故本钩子在热座页对 FX 实际不可达 —— 它是**远程页专属**的契约项 |
+| — | `[data-fx-rot]` | `fx-orient.ts` | **特效朝向标记（G2 修正 R2）**：远程页场上卡带 `data-fx-rot="ccw"`（自己 −90°）/ `"cw"`（对手 +90°），由 `renderStackSlot` 的 `fxRot` 参数逐卡写入（值来自 `render-net.ts` 的 `fxRot: isSelfSeat ? 'ccw' : 'cw'`，**写入点**在 `render.ts` 的 `node.dataset.fxRot = opts.fxRot`，被 `if (opts?.fxRot !== undefined)` 守卫）。**它决定浮层卡根元素的朝向与装饰层继承的 ∓90°** —— `fx-orient.ts` 的 `fxOrientOf` 优先读它、读不到回退 `orientOf`（卡面朝向）。**它与卡面朝向是两套**（自己卡面 0° 而特效 −90°），故 `.rot-180` 管卡面、本钩子管特效，二者不可互替。**热座页有意不产出**（`RENDERERS` 给 `render.ts` 一条 `exempt`，见 §3.2），于是 `fxOrientOf` 每次回退 ⇒ 热座零变化是构造性的。⚠️ **读不到标记不会报错**：远程页若漏产，整类特效静默退回卡面朝向、差 90° —— 故另有运行时逐卡断言（约束 8）与 `verifyPageHooks` 的断言 3 |
 | — | `.net-rot-ccw` / `.net-rot-cw` | （尚无人读） | **不是契约项，本节只是登记**：远程页**协议图**的 ∓90° 视觉类（自己 `.net-rot-ccw` = −90°、对手 `.net-rot-cw` = +90°，规格 §8.2 第 3 行）。规则在 `src/ui/styles-net.css`，由 `render-net.ts` 经 `renderProtocol` 的**通用** `extraClass` 参数传入（**不写进 `render.ts`**）。它**故意不叫** `.rot-cw`/`.rot-ccw`：那两个的语义是"**卡牌**横置"且 `fx-orient.ts` 的 `orientOf` 会把它们当作**卡面**朝向读，协议图借用同名类会让 FX 把协议误判成横置的卡。R1（布局重做）只产出它，**读侧与契约登记**在后续任务（特效朝向分离 / 方向按座位）里落地 |
 
 ### 3.2 按渲染器区分要求（G2 Task 4）
@@ -125,10 +135,23 @@ G1 首轮正是把「渲染器产出」当成了充分条件，于是把 `.hand-
 
 ```ts
 export const RENDERERS: readonly FxRenderer[] = [
-  { file: 'render.ts' },                                        // 热座页：提供全部 20 条
+  { file: 'render.ts',     exempt: ['[data-fx-rot]'] },         // 热座页：有意不产出特效朝向标记
   { file: 'render-net.ts', exempt: ['.rot-cw', '.rot-ccw'] },   // 远程页：有意不产出 ±90°
 ];
 ```
+
+**`render.ts`（热座页）为什么有意不产出 `[data-fx-rot]`（G2 修正 R2）：**
+
+1. **它是远程页专属的"特效朝向"载体**。热座页自己一侧的卡**就是** ±90°（`render.ts:227` 按 `card.owner` 挂），
+   特效朝向与卡面朝向**同一套** ⇒ 不需要第二个标记。
+2. **产出它会让"热座零变化"不再是构造性的**：`fxOrientOf` 一旦在热座上读到标记，就不再回退 `orientOf`
+   —— 而回退分支正是"热座浮层卡几何走原分支"的全部依据（`fx-orient.ts` 的 `fxOrientOf` 注释）。
+3. **写入点仍在 `render.ts`，但被守卫住**：`node.dataset.fxRot = opts.fxRot` 外面套着
+   `if (opts?.fxRot !== undefined)`，热座调用点不传 `fxRot` ⇒ **DOM 上一个字节都不多**。
+   `exempt` 表达的是"这个渲染器**有意**不提供这条钩子"，与"产出表达式写在哪个文件"无关。
+
+**注意义务守恒**：`[data-fx-rot]` 只被 `render.ts` 豁免，`render-net.ts` **必须**提供它
+（`renderStackSlot(` 调用链 + `fxRot` 实参）—— 契约测试有专门断言禁止"某条钩子被所有渲染器同时豁免"。
 
 **`render-net.ts` 为什么有意不产出 `.rot-cw` / `.rot-ccw`（三条理由，缺一条都不足以豁免）：**
 
@@ -153,6 +176,10 @@ export const RENDERERS: readonly FxRenderer[] = [
 **`.rot-180` 对两个渲染器都成立、因此不需要豁免**：`render-net.ts` 是它的主要产出方（对手侧），
 `render.ts` 也有产出点（`render.ts:130` 的 `.protocol-img`）。这是"超集规则"的直接例子：
 A 类清单是两个渲染器的**并集**要求。
+
+**`[data-fx-rot]` 反过来：只有远程页提供、热座豁免**（理由见上）—— 这才是 `exempt` 机制要表达的
+"**某条钩子只属于某个渲染器**"（G2 修正 §8.3 的那条裁决）。两个方向都有实例之后，"豁免"就不再是
+"±90° 的特例"，而是一条通用机制。
 
 ### 3.1 最高风险的一条
 
@@ -257,7 +284,7 @@ A 类清单是两个渲染器的**并集**要求。
 
    ```ts
    export const RENDERERS: readonly FxRenderer[] = [
-     { file: 'render.ts' },
+     { file: 'render.ts',     exempt: ['[data-fx-rot]'] },
      { file: 'render-net.ts', exempt: ['.rot-cw', '.rot-ccw'] },
    ];
    ```
@@ -295,6 +322,12 @@ A 类清单是两个渲染器的**并集**要求。
 读手牌，反了会把卡飞到对手手牌区且不报错）；② 对手侧场上卡与协议**各自**带 `.rot-180`（行级
 `rotate(180deg)` 会与卡自身的倒置叠加成 0°，导致对手的卡其实正立）。结构钩子还做**数量**核对
 （`3 线 × 2 侧 = 6` 等，期望值从源码结构推导）。
+
+**断言 3（G2 修正 R2 · 约束 8）**：`[data-fx-rot]` **逐卡**挂在两侧的每一张场上卡上，且**取值按座位**
+（自己 `'ccw'`、对手 `'cw'`）。为什么必须放在运行时：`fxOrientOf` 的**回退**机制意味着
+"远程页忘了产出标记"**不会有任何报错** —— 它只会静默把卡面朝向当成特效朝向（自己差 90°、
+对手差 90°，且对手的 180° 卡面会被当成 180° 特效朝向）。契约里 `[data-fx-rot]` 是 `stateDependent`
+的存在性检查，查不出这件事；只有"逐卡计数 + 逐卡读值"能。
 
 ⚠️ **真实联机时不传 `onPreviewChange` → 工具条完全不渲染**，自查行随之消失（联机零开销）。
 
@@ -393,10 +426,10 @@ A 类清单是两个渲染器的**并集**要求。
 
 | 类别 | 条数 | 机读版 |
 |---|---|---|
-| A 结构钩子（远程页必须提供；`render-net.ts` 豁免其中 `.rot-cw` / `.rot-ccw`） | 20 | `hooksOfCategory('A')` |
+| A 结构钩子（远程页必须提供；`render.ts` 豁免 `[data-fx-rot]`、`render-net.ts` 豁免 `.rot-cw` / `.rot-ccw`） | 21 | `hooksOfCategory('A')` |
 | B 特效自建节点 | 34 | `hooksOfCategory('B')` |
 | C 内部注册键 | 1 | `hooksOfCategory('C')` |
 | D 渲染器自有、FX 不读 | 3 | `hooksOfCategory('D')` |
-| **合计** | **58** | `FX_DOM_CONTRACT.length` |
+| **合计** | **59** | `FX_DOM_CONTRACT.length` |
 
 本文档的 A 类清单是契约的**权威人读版**；如与机读清单冲突，以 `src/ui/fx-dom-contract.ts` 为准，并应立刻修正本文档（否则守卫报红）。

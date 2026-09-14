@@ -26,7 +26,7 @@
  * 选择浮层 / 拖拽 / 手牌区 / 选择态）。
  *
  * ## 八条硬约束（违反 → 静默退化；逐条对应本文件的实现）
- * 1. **20 条 A 类钩子全部产出，且产出方拼写与热座页一致** —— 靠复用 render.ts 的叶子助手保证
+ * 1. **21 条 A 类钩子全部产出，且产出方拼写与热座页一致** —— 靠复用 render.ts 的叶子助手保证
  *    （`.stack-slot p${player + 1}` / `trash-pile p${player + 1}` 都在助手内，`data-player` /
  *    `data-line` 走 `dataset`）。`.pN` 拼写是**承重的**，不要改成复合类名（计划附录 A.4-2）。
  *    **本页的产出证据是「助手调用链」，不是本文件的 token**：拼写由 `render.ts` 的钩子产出表达式
@@ -198,10 +198,11 @@ export interface NetViewOpts {
 const NET_HAND_VIS: 'all' | 'count' = 'count';
 
 /* ============================================================================
- * 20 条 A 类钩子的**逐条登记**（docs/4代-FX DOM 契约.md §3 的验收基准）
+ * 21 条 A 类钩子的**逐条登记**（docs/4代-FX DOM 契约.md §3 的验收基准）
  *
  * ⚠️ **这张表不是"已提供"的证据**（G2 Task 3 的 Critical C-3 就是它曾经充当证据）：
- *   表里逐字写着 19 条 hook 的选择器字符串（Task 4 补 `.rot-180` 后为 20 条），而契约守卫的判据是"本文件的（去注释）源码里
+ *   表里逐字写着 19 条 hook 的选择器字符串（Task 4 补 `.rot-180` 后为 20 条，G2 修正 R2 补
+ *   `[data-fx-rot]` 后为 21 条），而契约守卫的判据是"本文件的（去注释）源码里
  *   出现该 token" —— 于是**表本身**就满足了「本页提供全部 A 类钩子」。评审变异实测：
  *   把 `renderStackSlot(` / `renderProtocolCell(` 的真实挂载删掉（页面上因此没有链路槽与协议格）
  *   后，契约测试 20 + 本文件守卫 11 **全绿（31/31）**。
@@ -266,6 +267,18 @@ export const NET_PAGE_HOOKS: readonly NetPageHook[] = [
     call: ['renderStackSlot(', 'renderHand(s, 0', 'renderHand(s, 1'],
     probeSelector: '.card',
     stateDependent: '场上无卡且手牌为空（同上）',
+  },
+  {
+    hook: '[data-fx-rot]',
+    // 产出链：`renderStackSlot` 的 `fxRot` 参数 ⇒ `render.ts` 的 `node.dataset.fxRot = opts.fxRot`。
+    // 本页只负责把**按座位的两个值**交给那个参数（`renderSide` 里 `fxRot: isSelfSeat ? 'ccw' : 'cw'`）。
+    call: ['renderStackSlot('],
+    probeSelector: '[data-fx-rot]',
+    // 数量：它**逐卡**挂在场上卡节点上（不是每槽一个）⇒ 数量随场面变化，这里只做存在性/状态相关；
+    // **逐卡计数与取值**由 `verifyPageHooks` 的断言 3（约束 8）承担（`.net-side-foe/.net-side-self`
+    // 的每张卡都必须带标记，且自己 'ccw' / 对手 'cw'）——与 `.rot-180` 走 "stateDependent + 逐卡断言" 同形。
+    stateDependent: '场上无卡时合法为 0（开局即有；"场上空"是合法局面）——'
+      + '逐卡覆盖与两种取值由断言 3（约束 8）另行核对',
   },
   {
     hook: '.rot-cw',
@@ -399,10 +412,48 @@ export function verifyPageHooks(scope: HTMLElement): string {
     fatal.push(`硬约束 2 的朝向自查抛异常（${String(err)}）`);
   }
 
+  // ── 断言 3（G2 修正 R2 · 约束 8）：**特效朝向标记**逐卡挂在场上卡上，且两种取值按座位 ──
+  // 为什么必须在运行时查：`fxOrientOf` 读不到标记就**回退** `orientOf` —— 那是"热座零变化"的
+  // 机制，同时也意味着**远程页忘了产出标记时不会有任何报错**，只会静默退回卡面朝向
+  // （自己卡 0°、对手 180° 被当成特效朝向 ⇒ 整类特效差 90°）。A 类钩子的存在性自查
+  // （`.card` 状态相关）也证明不了这件事：它只查 `.card` 在不在。
+  // 判据取"**每一张**场上卡都带标记"（按侧分别计数）——与断言 2 的 rot-180 逐卡计数同形。
+  try {
+    for (const side of ['foe', 'self'] as const) {
+      const cards = scope.querySelectorAll<HTMLElement>(`.net-side-${side} .card`).length;
+      const marked = scope.querySelectorAll<HTMLElement>(`.net-side-${side} .card[data-fx-rot]`).length;
+      if (marked !== cards) {
+        fatal.push(`约束 8：.net-side-${side} 的场上卡必须**各自**带 [data-fx-rot]（特效朝向标记），`
+          + `实际 ${marked}/${cards} 张（缺标记 ⇒ fxOrientOf 回退卡面朝向 ⇒ 特效差 90°）`);
+      }
+    }
+    // 取值断言**只在确实有标记时**才有意义：一张卡都没有（合法空局面）时"没有任何一张的取值不对"
+    // 是真命题，但读起来像"查过了"。所以先要求"两张卡**都**带标记且**都**等于座位值"，
+    // 再用长度相等排除"空集合恒真"（否则 `selfFxRot=[]` 会让这条断言恒绿）。
+    const selfVals = scope.querySelectorAll<HTMLElement>('.net-side-self .card[data-fx-rot]');
+    const selfFxRot = [...selfVals].map((c) => c.getAttribute('data-fx-rot'));
+    const selfCardsN = scope.querySelectorAll<HTMLElement>('.net-side-self .card').length;
+    const badSelf = selfFxRot.filter((v) => v !== 'ccw').length;
+    if (selfFxRot.length !== selfCardsN || badSelf > 0) {
+      fatal.push(`约束 8：自己侧卡的 data-fx-rot 必须是 'ccw'（−90°），`
+        + `实际 ${selfFxRot.length}/${selfCardsN} 张带标记、其中 ${badSelf} 张取值不是 'ccw'`);
+    }
+    const foeVals = scope.querySelectorAll<HTMLElement>('.net-side-foe .card[data-fx-rot]');
+    const foeFxRot = [...foeVals].map((c) => c.getAttribute('data-fx-rot'));
+    const foeCardsN = scope.querySelectorAll<HTMLElement>('.net-side-foe .card').length;
+    const badFoe = foeFxRot.filter((v) => v !== 'cw').length;
+    if (foeFxRot.length !== foeCardsN || badFoe > 0) {
+      fatal.push(`约束 8：对手侧卡的 data-fx-rot 必须是 'cw'（+90°），`
+        + `实际 ${foeFxRot.length}/${foeCardsN} 张带标记、其中 ${badFoe} 张取值不是 'cw'`);
+    }
+  } catch (err) {
+    fatal.push(`约束 8 的特效朝向标记自查抛异常（${String(err)}）`);
+  }
+
   if (soft.length > 0) console.info('[render-net] 状态相关钩子当前为空（合法局面）：\n' + soft.join('\n'));
   if (fatal.length === 0) {
     return soft.length === 0
-      ? '自查 ✓ A 类钩子齐 / 手牌顺序 [P0,P1] / 对手卡与协议 180°'
+      ? '自查 ✓ A 类钩子齐 / 手牌顺序 [P0,P1] / 对手卡与协议 180° / 特效朝向标记齐'
       : `自查 ✓（${soft.length} 条状态相关钩子当前为空）`;
   }
   console.warn('[render-net] 运行时自查发现失败项（源码守卫之外的运行时证据）：\n' + fatal.join('\n'));
@@ -1055,7 +1106,7 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
     });
   });
 
-  // —— 诊断（可选）：把"20 条钩子真的在 DOM 里"这件事变成可执行的证据 ——
+  // —— 诊断（可选）：把"21 条钩子真的在 DOM 里"这件事变成可执行的证据 ——
   // 两道防线：`verifyPageHooks` 内部逐条 try/catch；这里再包一层，保证**任何**未预料的异常
   // 都不会从 `renderNetBoard` 逃逸到宿主（"诊断不得把渲染搞崩"）。C-2 的原始缺陷正是
   // 一个非法选择器抛 `SyntaxError` 直接冲垮整页渲染。

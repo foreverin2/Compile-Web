@@ -6,7 +6,10 @@ import { flashRigidity7Guard, noteGreed1Compile } from '../gen3-control';
 import { gen3FulcrumSwapFx, gen3ProtocolSwapFx } from '../fx-gen3-swap';
 import { gen3DiscardFx, gen3DeleteFx, gen3FlipFx, gen3ShiftFx, gen3DrawFx, gen3FaceDownFx, gen3CompiledFx, gen3DeckDiscardFx, gen3ReturnFx, gen3PlayFx, gen3SkipFx, gen3TriggerFx, gen3LandFx, type Gen3CardFxApi, type Gen3CardPayload, type Gen3DrawPayload, type Gen3CompiledPayload, type Gen3DeckDiscardPayload } from '../fx-gen3';
 import { buildTornadoFx } from '../fx-tornado';
-import { orientOf, orientToCwCcw, orientToFxRot, stripOrientClasses, type CardOrient } from '../fx-orient';
+import { fxOrientOf, orientOf, orientToCwCcw, orientToFxRot, stripOrientClasses, type CardOrient } from '../fx-orient';
+// 浮层卡的「未旋转布局盒 + 中心旋转」几何单一出处（G2 Task 1；R2 起 buildFxCardAt 也用它 —— 避免
+// 本文件再手写一份"宽 = rect 高"的交换算式，两份一旦漂移就是"朝向对但尺寸错"的假正确）。
+import { cloneBoxFrom } from '../fx/clone-orient';
 import { cardImgSrc, protocolImgSrc } from '../../data/demo';
 import { playPeaceDiscardExtra, PEACE_PRE_MS, playChaosDiscardExtra, CHAOS_DISCARD_PRE_MS, playIceShiftBridge, playSmokePlayFx, playFearShiftExtra, playCorruptionDiscardExtra, playCorruptionDeleteExtra, playCorruptionFlipExtra, CORRUPT_DISCARD_PRE_MS, playWarDiscardExtra, playWarFlipExtra, playCourageDiscardExtra, playCourageDeleteExtra, playCourageShiftExtra, playTimeDiscardExtra, playAssimDiscardExtra, playAssimDeckRipple, ASSIM_DISCARD_PRE_MS, playDiversityDiscardExtra, DIVERSITY_DISCARD_PRE_MS } from '../fx-gen2';
 
@@ -107,25 +110,71 @@ function buildFaceImg(src: string): HTMLElement {
   return img;
 }
 
+/** 浮层卡根元素里承载卡面的盒子（`buildFxCardAt` 用）。
+ *
+ *  G2 修正 R2：浮层卡的**根元素 = 特效朝向**（远程页 ∓90°），而**卡面 = 卡牌朝向**（0°/180°）
+ *  —— 两者相差 90°，所以卡面必须在根元素内部**再本地转 +90°**（`0 − (−90) = +90`、
+ *  `180 − 90 = +90`，**两处都是 +90°**，故可复用同一段代码）。
+ *
+ *  几何：盒子的**未旋转布局尺寸**恒为 (rect.width, rect.height)，再本地转 `localDeg` —— 于是它的
+ *  屏幕足迹恒等于原卡 rect（±90° 的 |cos|/|sin| 互换后仍是同一块轴对齐矩形）。这正是"卡面占了
+ *  原卡的位、而装饰层继承根元素的 ∓90°"两件事能同时成立的原因：不需要任何百分比尺寸，
+ *  `width/height` 是确定的像素值，浏览器直接算。
+ *
+ *  ⚠️ 只在 `localDeg !== 0` 时加这一层包装：`localDeg === 0`（热座页全路径 + 手牌/牌库节点）
+ *  时**一个 div 都不多**，返回的 `<img>` 就是原来的卡面节点 —— 热座构造性零变化。 */
+function buildFaceLayer(src: string, width: number, height: number, localDeg: number): HTMLElement {
+  const img = buildFaceImg(src);
+  if (localDeg === 0) return img;
+  const box = document.createElement('div');
+  box.style.cssText =
+    `position:absolute;left:0;top:0;width:${width}px;height:${height}px;` +
+    `transform:rotate(${localDeg}deg);transform-origin:center center;`;
+  box.appendChild(img);
+  return box;
+}
+
+/** 卡面相对特效朝向的**本地旋转**：`卡牌朝向 − 特效朝向`。
+ *
+ *  两个方向都算过（规格 §3.1）：
+ *   - 自己：卡面 **0**°，特效 **−90**° ⇒ `0 − (−90) = +90`
+ *   - 对手：卡面 **180**°，特效 **+90**° ⇒ `180 − 90 = +90`
+ *  ⇒ 远程页两处**都是 +90°**（这就是"可复用同一段代码"的依据）；热座（两套朝向同值）恒 0。
+ *
+ *  ⚠️ 它**不是**"恒 90"：将来若有人给热座卡也打 `data-fx-rot`（或新增第三种取值），
+ *  差值会变，硬编码 90 就会错 —— 所以这里按差值算，而不是写常量。 */
+function faceLocalRot(fx: CardOrient, face: CardOrient): number {
+  return ((face - fx) % 360 + 360) % 360;
+}
+
 /**
  * 在 body 级构建特效浮层卡（固定定位到原卡位置，不随重渲染销毁）。
  * 卡面直接用【当前卡牌面】按 payload 的 defId/faceUp 构建（官方卡面图 / 卡背），
  * 不克隆原卡 DOM——避免原卡的旋转类、覆盖残留、悬停态等陈旧渲染混入特效；
  * 位置/尺寸取自原卡节点 rect（旋转卡的 rect 即其视觉足迹盒）。
- * 场上横置卡（rot-cw/rot-ccw）：克隆以【未旋转布局盒】尺寸（宽 = rect 高、高 = rect 宽）
- * 定位于 rect 中心后旋转 ±90°（transform-origin 中心）——视觉盒恰等于原卡 rect、
- * 卡面朝向与真实场上卡一致（getBoundingClientRect 返回的是旋转后的足迹盒；若直接按
- * rect 尺寸旋转会得到竖版视觉盒且中心偏移，方向对但占位错）。旋转以 --fx-rot 记录，
- * 平移类特效（回手/偏转/打出）组合 rotate(var(--fx-rot, 0deg)) 避免覆盖本旋转。
- * 场上 180° 卡（rot-180，远程页对手侧）：布局盒**不**交换，按 rect 原样建盒后绕中心转 180°
+ *
+ * ## 两套朝向（G2 修正 R2 的核心；设计说明 §2/§3.1）
+ * 入参 `orient` 是**特效朝向**（调用方经 `fxOrientOf(node)` 读出：远程页 ∓90°、热座回退卡面朝向）：
+ *  - **根元素**按它用「未旋转布局盒 + 中心旋转」建盒（±90° 才交换宽高，见 `cloneBoxFrom`）——
+ *    视觉足迹恰等于原卡 rect；旋转以 `--fx-rot` 记录，平移类特效（回手/偏转/打出）组合
+ *    `rotate(var(--fx-rot, 0deg))` 避免覆盖本旋转。
+ *  - **卡面**在根元素内部再本地转 `faceLocalRot(orient, faceOrient)`（远程页两处都是 +90°），
+ *    于是"自己浮层卡：根 −90° × 卡面 +90° ⇒ 卡面 0°（与场上卡一致）"、
+ *    "对手：根 +90° × 卡面 +90° ⇒ 卡面 180°"。
+ *  - **装饰层**（调用方随后 `appendChild` 的刀光/粒子/边框光/飓风/闪电…）**不加任何额外旋转**，
+ *    它们直接继承根元素的 ∓90° ⇒ 特效朝向正确。**这是选这个机制的全部理由：几十个特效函数一行都不用改。**
+ *
+ * 场上 180° 卡（rot-180）在**热座**路径下：布局盒**不**交换，按 rect 原样建盒后绕中心转 180°
  * —— 180° 的 |cos|/|sin| 与 0° 相同，几何与 0° 一致、仅朝向不同（见 fx-orient.ts 头部约定）。
- * 手牌/牌库节点无 rot 类 → 保持原行为（不旋转）。尺寸 = 原卡 rect（视觉足迹）。
- * 朝向一律经 orientOf() 读出（单一出处，G2 Task 2）：本模块不再裸判朝向类名。
+ * 手牌/牌库节点无标记也无 rot 类 → 恒 0°/0°（不加包装层、不旋转），与改动前逐字一致。
+ *
+ * 朝向一律经 `fxOrientOf` / `orientOf` 读出（单一出处，G2 Task 2）：本模块不再裸判朝向类名。
  */
 function buildFxCard(node: HTMLElement, payload: FxCardPayload, zIndex: number): HTMLElement | null {
   const rect = node.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return null;
-  return buildFxCardAt(rect, orientOf(node), payload, zIndex);
+  // 特效朝向（远程页读 data-fx-rot；热座无标记 ⇒ 回退 orientOf = 改动前的值）
+  return buildFxCardAt(rect, fxOrientOf(node), payload, zIndex, orientOf(node));
 }
 
 /**
@@ -135,18 +184,36 @@ function buildFxCard(node: HTMLElement, payload: FxCardPayload, zIndex: number):
  *
  * 入参用 `CardOrient` 单一朝向而非 `(cw, ccw)` 布尔对：布尔对无法表达 180°，
  * 会出现「cw=false, ccw=false 却其实是 180°」的非法组合 → 朝向被静默丢弃。
+ *
+ * `orient` = **特效**朝向（根元素 / 装饰层）；`faceOrient` = **卡牌**朝向（卡面本地旋转的基准），
+ * 缺省等于 `orient` ⇒ 本地旋转 0°、卡面与根元素同向 = **改动前的行为**（热座/手牌/牌库全路径）。
  */
 function buildFxCardAt(
   rect: DOMRect,
   orient: CardOrient,
   payload: FxCardPayload,
   zIndex: number,
+  faceOrient: CardOrient = orient,
 ): HTMLElement | null {
-  const { cw, ccw, flip180 } = orientToCwCcw(orient);
+  const { cw, ccw } = orientToCwCcw(orient);
   const horizontal = cw || ccw;
   const card = document.createElement('div');
   card.className = 'card';
-  card.appendChild(buildFaceImg(cardFaceSrc(payload.defId, payload.faceUp)));
+  // 几何单一出处：`cloneBoxFrom` 就是为"屏幕足迹 → 未旋转布局盒"准备的（±90° 交换宽高）
+  const box = cloneBoxFrom(rect, orient);
+  if (box.swapped) {
+    // 根元素绕**中心**旋转 ⇒ 布局盒左上角要让开半个（足迹宽 − 布局盒宽）
+    card.style.left = `${rect.left + (rect.width - box.w) / 2}px`;
+    card.style.top = `${rect.top + (rect.height - box.h) / 2}px`;
+  } else {
+    card.style.left = `${rect.left}px`;
+    card.style.top = `${rect.top}px`;
+  }
+  card.style.width = `${box.w}px`;
+  card.style.height = `${box.h}px`;
+  // 卡面：本地旋转 = 卡牌朝向 − 特效朝向（远程页两处都是 +90°；热座恒 0 ⇒ 与改动前逐字一致）
+  const localDeg = faceLocalRot(orient, faceOrient);
+  card.appendChild(buildFaceLayer(cardFaceSrc(payload.defId, payload.faceUp), rect.width, rect.height, localDeg));
   card.style.position = 'fixed';
   card.style.margin = '0';
   card.style.padding = '0';
@@ -154,29 +221,10 @@ function buildFxCardAt(
   card.style.background = 'transparent';
   card.style.pointerEvents = 'none';
   card.style.zIndex = String(zIndex);
-  if (horizontal) {
-    const cx = rect.left + rect.width / 2;
-    const cy = rect.top + rect.height / 2;
-    card.style.left = `${cx - rect.height / 2}px`;
-    card.style.top = `${cy - rect.width / 2}px`;
-    card.style.width = `${rect.height}px`;
-    card.style.height = `${rect.width}px`;
+  if (box.transform !== '') {
     // 裸角度：orientToFxRot 只产出 '90deg'/'-90deg'/'180deg'，切勿换成 cloneTransformOf 的函数串
     card.style.setProperty('--fx-rot', orientToFxRot(orient));
     card.style.transform = 'rotate(var(--fx-rot, 0deg))';
-  } else if (flip180) {
-    // 180°：布局盒不交换（与 0° 同尺寸），绕中心转 180° 使卡面倒置（远程页对手侧）
-    card.style.left = `${rect.left}px`;
-    card.style.top = `${rect.top}px`;
-    card.style.width = `${rect.width}px`;
-    card.style.height = `${rect.height}px`;
-    card.style.setProperty('--fx-rot', orientToFxRot(orient));
-    card.style.transform = 'rotate(var(--fx-rot, 0deg))';
-  } else {
-    card.style.left = `${rect.left}px`;
-    card.style.top = `${rect.top}px`;
-    card.style.width = `${rect.width}px`;
-    card.style.height = `${rect.height}px`;
   }
   document.body.appendChild(card);
   return card;
@@ -247,7 +295,7 @@ function playDeathDeleteExtra(node: HTMLElement, payload: FxCardPayload): void {
   const clone = buildFxCard(node, payload, EXTRA_Z);
   if (!clone) return;
   const rect = node.getBoundingClientRect();
-  const orient = orientOf(node);
+  const orient = fxOrientOf(node);
   clone.classList.add('fx-death', 'fx-death-glow');
   // ① 镰刀：木棍长柄 + 顶端一长条刀片（回旋镖/长柄镰刀造型，见 styles.css），
   // 初始悬于卡上方（渐现），随后斜划过卡面
@@ -268,7 +316,7 @@ function playDeathDeleteExtra(node: HTMLElement, payload: FxCardPayload): void {
   window.setTimeout(() => item.classList.add('fx-death-scythe-visible'), 20);
   window.setTimeout(() => item.classList.add('fx-death-scythe-sweep'), DEATH_SCYTHE_IN_MS);
   window.setTimeout(() => {
-    playShatterAt(rect, orient, payload);   // ④ 基础破碎（延后）
+    playShatterAt(rect, orient, payload, orientOf(node));   // ④ 基础破碎（延后）
     clone.classList.add('fx-death-shattered'); // 卡面淡出，露出破碎层
     item.classList.add('fx-death-scythe-out'); // 镰刀渐隐
     skull.classList.add('fx-death-skull-in');  // 骷髅渐现
@@ -289,7 +337,7 @@ function playHateDeleteExtra(node: HTMLElement, payload: FxCardPayload): void {
   const clone = buildFxCard(node, payload, EXTRA_Z);
   if (!clone) return;
   const rect = node.getBoundingClientRect();
-  const orient = orientOf(node);
+  const orient = fxOrientOf(node);
   clone.classList.add('fx-hate', 'fx-hate-glow');
   // ① 血红手掌 + 5 指（环形围卡，指尖朝向卡中心；CSS 血色渐变 + 圆角指节）
   const hand = document.createElement('div');
@@ -343,7 +391,7 @@ function playHateDeleteExtra(node: HTMLElement, payload: FxCardPayload): void {
     }
   }, HATE_HAND_IN_MS);
   window.setTimeout(() => {
-    playShatterAt(rect, orient, payload);    // ④ 基础破碎（延后）
+    playShatterAt(rect, orient, payload, orientOf(node));    // ④ 基础破碎（延后）
     clone.classList.add('fx-hate-shattered'); // 卡面淡出，露出破碎层
     hand.classList.add('fx-hate-hand-out');   // 手掌渐隐
     blood.classList.add('fx-hate-blood-in');  // 血泊渐现
@@ -398,9 +446,12 @@ function playShatter(node: HTMLElement, payload: FxCardPayload): void {
 }
 
 /** 延后基础破碎：死亡/恨删除附加特效在前置段（镰刀/手指）播完后调用。
- *  原卡节点此刻已被重渲染移除 → 用事件时捕获的 rect 重建浮层（见 buildFxCardAt）。 */
-function playShatterAt(rect: DOMRect, orient: CardOrient, payload: FxCardPayload): void {
-  const clone = buildFxCardAt(rect, orient, payload, BASE_Z);
+ *  原卡节点此刻已被重渲染移除 → 用事件时捕获的 rect 重建浮层（见 buildFxCardAt）。
+ *
+ *  `faceOrient` = **卡牌**朝向（与 `orient` = 特效朝向分离；缺省 = `orient` ⇒ 本地旋转 0°）。
+ *  ⚠️ 同 playCutAt：两个朝向必须在事件时刻一起定格、一起传进来。 */
+function playShatterAt(rect: DOMRect, orient: CardOrient, payload: FxCardPayload, faceOrient: CardOrient = orient): void {
+  const clone = buildFxCardAt(rect, orient, payload, BASE_Z, faceOrient);
   if (!clone) return;
   mountShatter(clone);
   window.setTimeout(() => clone.remove(), FX_REMOVE_MS);
@@ -415,9 +466,13 @@ function playCut(node: HTMLElement, payload: FxCardPayload): void {
 }
 
 /** 延后基础弃牌切割：念能/瘟疫弃牌附加特效在前置段（粒子环绕 / 浓雾覆盖）播完后调用。
- *  原卡节点此刻已被重渲染移除（rect 归零）→ 用事件时捕获的 rect 重建浮层（见 buildFxCardAt）。 */
-function playCutAt(rect: DOMRect, orient: CardOrient, payload: FxCardPayload): void {
-  const clone = buildFxCardAt(rect, orient, payload, BASE_Z);
+ *  原卡节点此刻已被重渲染移除（rect 归零）→ 用事件时捕获的 rect 重建浮层（见 buildFxCardAt）。
+ *
+ *  `faceOrient` = **卡牌**朝向（与 `orient` = 特效朝向分离；缺省 = `orient` ⇒ 本地旋转 0°）。
+ *  ⚠️ 两个朝向必须在**事件时刻**从同一个节点一起读出、一起传进来：重渲染会替换节点，
+ *  回调触发时再读只会读到"新卡"（甚至 null）。 */
+function playCutAt(rect: DOMRect, orient: CardOrient, payload: FxCardPayload, faceOrient: CardOrient = orient): void {
+  const clone = buildFxCardAt(rect, orient, payload, BASE_Z, faceOrient);
   if (!clone) return;
   mountCut(clone);
   window.setTimeout(() => clone.remove(), FX_REMOVE_MS);
@@ -528,7 +583,7 @@ function playPsychicDiscardExtra(node: HTMLElement, payload: FxCardPayload): voi
   const clone = buildFxCard(node, payload, EXTRA_Z);
   if (!clone) return;
   const rect = node.getBoundingClientRect();
-  const orient = orientOf(node);
+  const orient = fxOrientOf(node);
   clone.classList.add('fx-psychic', 'fx-psychic-glow');
   // ① 粒子环：24 颗环形散布（角度均匀 + 半径抖动 + 随机大小 6–14px），轨道 span 相位错开
   const ring = document.createElement('div');
@@ -555,7 +610,7 @@ function playPsychicDiscardExtra(node: HTMLElement, payload: FxCardPayload): voi
   window.setTimeout(() => ring.classList.add('fx-psychic-converge'), PSYCHIC_ORBIT_MS);
   // ③ 汇聚完成 → 延后基础弃牌 + ④ 整层（粒子+卡面）淡出露出切割
   window.setTimeout(() => {
-    playCutAt(rect, orient, payload);
+    playCutAt(rect, orient, payload, orientOf(node));
     clone.classList.add('fx-psychic-out');
   }, PSYCHIC_PRE_MS);
   window.setTimeout(() => clone.remove(), PSYCHIC_TOTAL_MS);
@@ -580,7 +635,7 @@ function playPlagueDiscardExtra(node: HTMLElement, payload: FxCardPayload): void
   const clone = buildFxCard(node, payload, EXTRA_Z);
   if (!clone) return;
   const rect = node.getBoundingClientRect();
-  const orient = orientOf(node);
+  const orient = fxOrientOf(node);
   clone.classList.add('fx-plague', 'fx-plague-glow');
   // ① 浓雾覆盖层：7 团深绿 blob 围绕卡渐现渐扩散（各 blob 渐现延迟错开）
   const mist = document.createElement('div');
@@ -595,7 +650,7 @@ function playPlagueDiscardExtra(node: HTMLElement, payload: FxCardPayload): void
   window.setTimeout(() => mist.classList.add('fx-plague-mist-in'), 20);
   // ② 浓雾铺满 → 延后基础弃牌 + ③ 整层渐散露出切割
   window.setTimeout(() => {
-    playCutAt(rect, orient, payload);
+    playCutAt(rect, orient, payload, orientOf(node));
     clone.classList.add('fx-plague-out');
   }, PLAGUE_PRE_MS);
   window.setTimeout(() => clone.remove(), PLAGUE_TOTAL_MS);
@@ -605,40 +660,49 @@ function playPlagueDiscardExtra(node: HTMLElement, payload: FxCardPayload): void
  *  - playFlip：构建后立即 rAF 触发 rotate 过渡，420ms 后移除；
  *  - playLifeFlip：覆盖层在事件时同步构建（原卡 rect 此刻有效——重渲染会重建节点、
  *    rect 归零），展开动画期间保持旧面静止（与新状态卡同位同尺寸 → 视觉无缝），
- *    展开完成后（~1.65s）再触发翻转、+420ms 移除。返回 null 表示 rect 无效（调用方跳过）。 */
+ *    展开完成后（~1.65s）再触发翻转、+420ms 移除。返回 null 表示 rect 无效（调用方跳过）。
+ *
+ *  `orient` 是**特效朝向**（`fxOrientOf`）：它同时决定两件事，两者必须**同源**否则翻面会
+ *  沿错误的轴翻（G2 修正 R2）：
+ *  ① 外层布局盒与旋转（±90° 交换宽高；中心旋转 ⇒ 足迹 = 原卡 rect）；
+ *  ② 内层 `rotateX` / `rotateY` 的选择 —— 局部 X 轴随 wrap 旋转，所以**横置（±90°）必须用
+ *     `rotateX`** 才能在屏幕上读作"沿卡面横向翻"。 */
 function buildFlipOverlay(
   rect: DOMRect,
   orient: CardOrient,
   oldSrc: string,
   newSrc: string,
+  faceOrient: CardOrient = orient,
 ): { wrap: HTMLElement; inner: HTMLElement } | null {
   if (rect.width === 0 || rect.height === 0) return null;
-  const { cw, ccw, flip180 } = orientToCwCcw(orient);
+  const { cw, ccw } = orientToCwCcw(orient);
   const horizontal = cw || ccw;
   const wrap = document.createElement('div');
   wrap.className = 'flip-overlay-fx'; // resetUiState 清扫兜底（覆盖层最长 ~2.07s，重置时立即移除）
-  // 场上横置卡（rot-cw/rot-ccw）：与 buildFxCard 同一规则——wrap 以未旋转布局盒尺寸
-  // （宽 = rect 高、高 = rect 宽）定位于 rect 中心后旋转 ±90°，翻面期间卡牌朝向与
-  // 真实场上卡一致；已有的 rotateX/Y 面翻在 wrap 局部系内组合，最终仍保持场上朝向。
-  if (horizontal) {
-    const cx = rect.left + rect.width / 2;
-    const cy = rect.top + rect.height / 2;
-    wrap.style.cssText =
-      `position:fixed;left:${cx - rect.height / 2}px;top:${cy - rect.width / 2}px;` +
-      `width:${rect.height}px;height:${rect.width}px;z-index:300;pointer-events:none;` +
-      `perspective:600px;transform:rotate(${cw ? 90 : -90}deg);`;
-  } else if (flip180) {
-    // 180°：布局盒按 rect 原样（与 0° 同尺寸），wrap 绕中心转 180° 使卡面倒置；
-    // 内层 rotateY 面翻在 wrap 局部系内组合（局部 Y 轴与屏幕 Y 轴同向）→ 仍是"相对卡面横向翻"。
-    wrap.style.cssText =
-      `position:fixed;left:${rect.left}px;top:${rect.top}px;` +
-      `width:${rect.width}px;height:${rect.height}px;z-index:300;pointer-events:none;` +
-      `perspective:600px;transform:rotate(180deg);`;
-  } else {
-    wrap.style.cssText = `position:fixed;left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px;z-index:300;pointer-events:none;perspective:600px;`;
-  }
+  // 布局盒与旋转：与 buildFxCardAt **同一几何出处**（cloneBoxFrom）——±90° 交换宽高、
+  // 绕中心旋转 ⇒ wrap 的视觉足迹恰等于原卡 rect。180° 不交换（|cos|/|sin| 与 0° 相同）。
+  const box = cloneBoxFrom(rect, orient);
+  const left = box.swapped ? rect.left + (rect.width - box.w) / 2 : rect.left;
+  const top = box.swapped ? rect.top + (rect.height - box.h) / 2 : rect.top;
+  wrap.style.cssText =
+    `position:fixed;left:${left}px;top:${top}px;width:${box.w}px;height:${box.h}px;` +
+    `z-index:300;pointer-events:none;perspective:600px;` +
+    (box.transform === '' ? '' : `transform:${box.transform};`);
+  // ── 卡面：本地旋转 = 卡牌朝向 − 特效朝向（远程页两处都是 +90°；热座恒 0）──
+  // 面上翻（rotateX/Y）作用在 `inner`（= wrap 的**未旋转局部系**）上，所以本地旋转**不能**
+  // 加到 `inner` 上（会让面翻沿错误轴翻）；要在 `inner` 与两张面之间插一层只负责本地旋转的盒子。
+  // `localDeg === 0` 时**不插**这一层 ⇒ 热座/手牌/牌库路径的 DOM 与改动前逐字一致。
+  const localDeg = faceLocalRot(orient, faceOrient);
   const inner = document.createElement('div');
   inner.style.cssText = 'position:relative;width:100%;height:100%;transform-style:preserve-3d;transition:transform 0.35s ease;';
+  /** 卡的显示朝向层：front/back 挂在它里面，它只负责本地旋转（尺寸 = 布局盒） */
+  const oriented: HTMLElement = localDeg === 0 ? inner : (() => {
+    const box90 = document.createElement('div');
+    box90.style.cssText = 'position:relative;width:100%;height:100%;' +
+      `transform-style:preserve-3d;transform:rotate(${localDeg}deg);`;
+    inner.appendChild(box90);
+    return box90;
+  })();
   const front = document.createElement('div');
   front.style.cssText = 'position:absolute;inset:0;backface-visibility:hidden;border-radius:6px;overflow:hidden;';
   front.appendChild(buildFaceImg(oldSrc));
@@ -646,8 +710,8 @@ function buildFlipOverlay(
   back.style.cssText = 'position:absolute;inset:0;backface-visibility:hidden;border-radius:6px;overflow:hidden;';
   back.style.transform = horizontal ? 'rotateX(180deg)' : 'rotateY(180deg)';
   back.appendChild(buildFaceImg(newSrc));
-  inner.appendChild(front);
-  inner.appendChild(back);
+  oriented.appendChild(front);
+  oriented.appendChild(back);
   wrap.appendChild(inner);
   document.body.appendChild(wrap);
   return { wrap, inner };
@@ -657,10 +721,10 @@ function buildFlipOverlay(
 function playFlip(node: HTMLElement, payload: FxCardPayload, durationMs = 350): void {
   const rect = node.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return;
-  const orient = orientOf(node);
+  const orient = fxOrientOf(node);
   const { cw, ccw } = orientToCwCcw(orient);
   const oldSrc = node.querySelector('img')?.src ?? cardFaceSrc(payload.defId, payload.faceUp);
-  const overlay = buildFlipOverlay(rect, orient, oldSrc, cardFaceSrc(payload.defId, payload.faceUp));
+  const overlay = buildFlipOverlay(rect, orient, oldSrc, cardFaceSrc(payload.defId, payload.faceUp), orientOf(node));
   if (!overlay) return;
   // 3代 怠惰按协议语法放慢翻面（协议"慢"；默认 350 保持 1/2 代观感不变）
   overlay.inner.style.transition = `transform ${durationMs}ms ease`;
@@ -780,10 +844,10 @@ function playLifeFlip(node: HTMLElement, payload: FxCardPayload): void {
   // （展开动画 0.9s → 1.9s，翻面在 ~1.65s 才开始，"先展开、后翻转"）。
   // 覆盖层必须此刻同步构建：重渲染随后会重建原卡节点（rect 归零），而展开期间
   // 覆盖层保持旧面静止（与新状态卡同位同尺寸 → 视觉无缝），~1.65s 后再播 3D 翻转。
-  const orient = orientOf(node);
+  const orient = fxOrientOf(node);
   const { cw, ccw } = orientToCwCcw(orient);
   const oldSrc = node.querySelector('img')?.src ?? cardFaceSrc(payload.defId, payload.faceUp);
-  const flipOverlay = buildFlipOverlay(rect, orient, oldSrc, cardFaceSrc(payload.defId, payload.faceUp));
+  const flipOverlay = buildFlipOverlay(rect, orient, oldSrc, cardFaceSrc(payload.defId, payload.faceUp), orientOf(node));
   if (flipOverlay) {
     window.setTimeout(() => {
       flipOverlay.inner.style.transform = cw || ccw ? 'rotateX(180deg)' : 'rotateY(180deg)';
@@ -1383,7 +1447,7 @@ function playGravityShiftExtra(node: HTMLElement, payload: FxCardPayload): void 
     playShift(node, payload);
     return;
   }
-  const orient = orientOf(node);
+  const orient = fxOrientOf(node);
   const start = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
   // ① 事件时立即创建浮层卡（旧位置 rect）盖住真实卡 + 品红卡框光（前置段全程可见）
   const ghost = buildGravityGhost(rect, orient, payload);
@@ -1476,7 +1540,7 @@ function playSpeedShiftExtra(node: HTMLElement, payload: FxCardPayload): void {
   const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${owner}"][data-line="${line}"]`);
   const end = stackEndPos(slot, owner);
   if (!end) return;
-  const orient = orientOf(node);
+  const orient = fxOrientOf(node);
   // ① 事件时立即创建浮层卡（旧位置 rect，z=BASE_Z 盖住真实卡）：卡面即时可见，
   //    内嵌灰白光 + 飓风覆盖层（.fx-speed-card-glow，初始 opacity:0 → 0.3s 渐现）
   const ghost = buildFxCardAt(rect, orient, payload, BASE_Z);
@@ -1879,16 +1943,16 @@ const GEN3_CARD_FX_API: Gen3CardFxApi = {
     return node;
   },
   buildFxCard: (node, payload, zIndex) => buildFxCard(node, payload as unknown as FxCardPayload, zIndex),
-  buildFxCardAt: (rect, orient, payload, zIndex) => buildFxCardAt(rect, orient, payload as unknown as FxCardPayload, zIndex),
+  buildFxCardAt: (rect, orient, payload, zIndex, faceOrient) => buildFxCardAt(rect, orient, payload as unknown as FxCardPayload, zIndex, faceOrient),
   playCutAt: (rect, orient, payload) => playCutAt(rect, orient, payload as unknown as FxCardPayload),
   playCut: (node, payload) => playCut(node, payload as unknown as FxCardPayload),
   playShatterAt: (rect, orient, payload) => playShatterAt(rect, orient, payload as unknown as FxCardPayload),
   playFlip: (node, payload, durationMs) => playFlip(node, payload as unknown as FxCardPayload, durationMs),
   playShift: (node, payload) => playShift(node, payload as unknown as FxCardPayload),
   playReturn: (node, payload) => playReturn(node, payload as unknown as FxCardPayload),
-  playFlipAt: (rect, orient, payload, durationMs) => {
+  playFlipAt: (rect, orient, payload, durationMs, faceOrient) => {
     const { cw, ccw } = orientToCwCcw(orient);
-    const overlay = buildFlipOverlay(rect, orient, cardFaceSrc(payload.defId, !payload.faceUp), cardFaceSrc(payload.defId, payload.faceUp));
+    const overlay = buildFlipOverlay(rect, orient, cardFaceSrc(payload.defId, !payload.faceUp), cardFaceSrc(payload.defId, payload.faceUp), faceOrient ?? orient);
     if (!overlay) return;
     const dur = durationMs ?? 350;
     overlay.inner.style.transition = `transform ${dur}ms ease`;
@@ -1947,9 +2011,9 @@ export function initEffects(): () => void {
         } else if (node && fxPayload.triggerProtocol === 'assimilation') {
           // 普通同化弃牌（同化1 中/同化5）：青碧光环套住收缩化光点（前置）→ 延后基础切割
           const rect = node.getBoundingClientRect();
-          const orient = orientOf(node);
+          const orient = fxOrientOf(node);
           playAssimDiscardExtra(node);
-          window.setTimeout(() => playCutAt(rect, orient, payload), ASSIM_DISCARD_PRE_MS);
+          window.setTimeout(() => playCutAt(rect, orient, payload, orientOf(node)), ASSIM_DISCARD_PRE_MS);
         } else if (node && gen3DiscardFx(node, payload as unknown as Gen3CardPayload, GEN3_CARD_FX_API)) {
           // 3代点名卡牌弃牌附加层（贪婪 R1 / 怠惰 S3 / 愤怒 W2 / 支点 F1 / 动量 M1 / 新星 N2）：
           // 函数内部按 PRE 调度基础切割（或即时 playCut 后自清理浮层），此处不再重复基础动画
@@ -1960,23 +2024,23 @@ export function initEffects(): () => void {
             // 2代 peace 弃牌附加特效（fx-gen2）：和平鸽前置段（飞入→停→抓卡飞远）→
             // PEACE_PRE_MS 后基础切割（事件时捕获 rect 重建浮层，同 psychic/plague 模式）
             const rect = node.getBoundingClientRect();
-            const orient = orientOf(node);
+            const orient = fxOrientOf(node);
             playPeaceDiscardExtra(node, payload);
-            window.setTimeout(() => playCutAt(rect, orient, payload), PEACE_PRE_MS);
+            window.setTimeout(() => playCutAt(rect, orient, payload, orientOf(node)), PEACE_PRE_MS);
           } else if (payload.triggerProtocol === 'chaos') {
             // 2代 chaos 弃牌附加特效（fx-gen2）：紫蓝漩涡前置段（渐现→卡吸入中心）→
             // CHAOS_DISCARD_PRE_MS 后基础切割（事件时捕获 rect 重建浮层）
             const rect = node.getBoundingClientRect();
-            const orient = orientOf(node);
+            const orient = fxOrientOf(node);
             playChaosDiscardExtra(node, payload);
-            window.setTimeout(() => playCutAt(rect, orient, payload), CHAOS_DISCARD_PRE_MS);
+            window.setTimeout(() => playCutAt(rect, orient, payload, orientOf(node)), CHAOS_DISCARD_PRE_MS);
           } else if (payload.triggerProtocol === 'corruption') {
             // 2代 corruption 弃牌腐蚀（fx-gen2）：墨绿腐蚀液膜 + 斑纹 + 绿光点前置段 →
             // CORRUPT_DISCARD_PRE_MS 后基础切割
             const rect = node.getBoundingClientRect();
-            const orient = orientOf(node);
+            const orient = fxOrientOf(node);
             playCorruptionDiscardExtra(node, payload);
-            window.setTimeout(() => playCutAt(rect, orient, payload), CORRUPT_DISCARD_PRE_MS);
+            window.setTimeout(() => playCutAt(rect, orient, payload, orientOf(node)), CORRUPT_DISCARD_PRE_MS);
           } else if (payload.triggerProtocol === 'war') {
             // 2代 war 弃牌（战争弃牌效果）：赤红刀光斩中（卡被斩成两半化火星消散）——刀光
             // 覆盖层 + 基础切割照常（刀光先斩、切割随火星消散，时序接近即时）
@@ -1993,9 +2057,9 @@ export function initEffects(): () => void {
           } else if (payload.triggerProtocol === 'diversity') {
             // 2代 diversity 弃牌（多元弃牌效果）：彩色光环套住收缩 → 化作彩色光尘消散（前置）
             const rect = node.getBoundingClientRect();
-            const orient = orientOf(node);
+            const orient = fxOrientOf(node);
             playDiversityDiscardExtra(node);
-            window.setTimeout(() => playCutAt(rect, orient, payload), DIVERSITY_DISCARD_PRE_MS);
+            window.setTimeout(() => playCutAt(rect, orient, payload, orientOf(node)), DIVERSITY_DISCARD_PRE_MS);
           } else playCut(node, payload);
         }
         break;

@@ -21,7 +21,7 @@
 import type { GameState } from '../core/models/types';
 import { clipInsetRightPct } from './gen3-util';
 import { protocolColorOf } from './protocol-colors';
-import { orientOf, type CardOrient } from './fx-orient';
+import { fxOrientOf, orientOf, type CardOrient } from './fx-orient';
 
 /** 事件载荷（= effects/index.ts 的 FxCardPayload + emitCardEvent 附带的 triggerUid） */
 export interface Gen3CardPayload {
@@ -42,16 +42,18 @@ export interface Gen3CardPayload {
 export interface Gen3CardFxApi {
   el(tag: string, cls: string, text?: string): HTMLElement;
   buildFxCard(node: HTMLElement, payload: Gen3CardPayload, zIndex: number): HTMLElement | null;
-  /** 用**事件时定格的 rect** 建浮层卡（DOM 节点可能已被重渲染替换 → 延迟播放必须用它） */
-  buildFxCardAt(rect: DOMRect, orient: CardOrient, payload: Gen3CardPayload, zIndex: number): HTMLElement | null;
+  /** 用**事件时定格的 rect** 建浮层卡（DOM 节点可能已被重渲染替换 → 延迟播放必须用它）。
+   *  `orient` = **特效**朝向（远程页 ∓90°）；`faceOrient` = **卡牌**朝向（卡面本地旋转的基准），
+   *  缺省 = `orient`（本地旋转 0°）。两者在远程页相差 90°，故延迟播放必须把**一对**一起定格。 */
+  buildFxCardAt(rect: DOMRect, orient: CardOrient, payload: Gen3CardPayload, zIndex: number, faceOrient?: CardOrient): HTMLElement | null;
   playCutAt(rect: DOMRect, orient: CardOrient, payload: Gen3CardPayload): void;
   playCut(node: HTMLElement, payload: Gen3CardPayload): void;
   playShatterAt(rect: DOMRect, orient: CardOrient, payload: Gen3CardPayload): void;
   playFlip(node: HTMLElement, payload: Gen3CardPayload, durationMs?: number): void;
   playShift(node: HTMLElement, payload: Gen3CardPayload): void;
   playReturn(node: HTMLElement, payload: Gen3CardPayload): void;
-  /** 用定格 rect 播翻面（node 已失效时用） */
-  playFlipAt(rect: DOMRect, orient: CardOrient, payload: Gen3CardPayload, durationMs?: number): void;
+  /** 用定格 rect 播翻面（node 已失效时用）；`faceOrient` 同 buildFxCardAt */
+  playFlipAt(rect: DOMRect, orient: CardOrient, payload: Gen3CardPayload, durationMs?: number, faceOrient?: CardOrient): void;
   /** 牌库区矩心（牌堆顶打出/抽牌的起点参照，effects/index.ts 已导出同名函数） */
   deckPos(player: 0 | 1): DOMRect | null;
   /** 基础反面打出飞行（牌库顶 / 手牌）；durationMs 可放慢（3代 惰性=慢） */
@@ -86,11 +88,18 @@ export const GEN3_SKIP_BESPOKE = ['greed', 'pride', 'gluttony'];
 /* ============================== 共享工具 ============================== */
 
 /** 事件时定格「rect + 朝向」——延迟播放必须用定格值（DOM 节点可能已被重渲染替换）。
- *  朝向经 fx-orient 的单一出处读出，本模块不裸判朝向类名。 */
-function geom(node: HTMLElement): { rect: DOMRect; orient: CardOrient } | null {
+ *  朝向经 fx-orient 的单一出处读出，本模块不裸判朝向类名。
+ *
+ *  G2 修正 R2：**一次读出两套朝向**（规格 §2 的朝向表 —— 远程页自己卡面 0° 而特效 −90°、
+ *  对手卡面 180° 而特效 +90°）：
+ *   - `orient` = **特效**朝向（`fxOrientOf`：读 `data-fx-rot`，热座无标记 ⇒ 回退卡面朝向）
+ *     —— 建浮层卡/破碎/切割/翻面的**根**用它；
+ *   - `face` = **卡牌**朝向（`orientOf`）—— 卡面本地旋转的基准（`卡面 − 特效`，远程页恒 +90°）。
+ *  两者必须一起定格：延迟回调里节点已失效，只留一个就会让卡面与装饰层的关系错 90°。 */
+function geom(node: HTMLElement): { rect: DOMRect; orient: CardOrient; face: CardOrient } | null {
   const rect = node.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return null;
-  return { rect, orient: orientOf(node) };
+  return { rect, orient: fxOrientOf(node), face: orientOf(node) };
 }
 
 /** 协议色（与 styles-gen3-cards.css 的类一一对应；仅用于 body 级 SVG 连线/弧轨的描边） */
@@ -548,9 +557,11 @@ export function gen3DeleteFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3Car
       const centerX = lineCenterX(node, p);
       // 2026-09-13 修复（用户实测"新星删除特效未触发"）：延迟播放时 DOM 可能已重渲染 → 原节点失效
       // → 必须在**事件时刻**定格 rect/orient，延迟回调里用 buildFxCardAt 建浮层。
-      const shot = { rect, orient };
+      // G2 修正 R2：定格的是 **rect + 特效朝向 + 卡牌朝向** 三件（卡面本地旋转 = 卡面 − 特效，
+      // 远程页恒 +90°；只定格其中一个会让浮层卡的卡面与装饰层差 90°）。
+      const shot = { rect, orient, face: orientOf(node) };
       queueStaggered(`gen3-nova-delete-${p.owner}-${p.line}`, centerX, () => {
-        const c = api.buildFxCardAt(shot.rect, shot.orient, p, api.extraZ);
+        const c = api.buildFxCardAt(shot.rect, shot.orient, p, api.extraZ, shot.face);
         if (!c) return;
         for (let i = 0; i < 4; i++) {
           const ray = api.el('i', 'g3-nova-burst-ray');
@@ -642,14 +653,14 @@ export function gen3FlipFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3CardF
     case 'wrath': {
       const centerX = lineCenterX(node, p);
       // 同新星删除：延迟播放必须用事件时定格的 rect（DOM 可能已重渲染）
-      const shot = { rect: g.rect, orient: g.orient };
+      const shot = { rect: g.rect, orient: g.orient, face: g.face };
       queueStaggered(`gen3-wrath-flip-${p.owner}-${p.line}`, centerX, () => {
-        const c = api.buildFxCardAt(shot.rect, shot.orient, p, api.extraZ);
+        const c = api.buildFxCardAt(shot.rect, shot.orient, p, api.extraZ, shot.face);
         if (!c) return;
         c.classList.add('g3-wrath-flip');
         c.appendChild(api.el('i', 'g3-wrath-bolt'));
         c.appendChild(api.el('i', 'g3-wrath-scorch'));
-        api.playFlipAt(shot.rect, shot.orient, p);
+        api.playFlipAt(shot.rect, shot.orient, p, undefined, shot.face);
         window.setTimeout(() => c.remove(), 900);
       }, { windowMs: 40, gapMs: 80 });
       return true;

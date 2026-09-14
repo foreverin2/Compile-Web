@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { RENDERERS } from '../../src/ui/fx-dom-contract';
-import { orientOf, orientToCwCcw, orientToFxRot, stripOrientClasses, cloneTransformOf, cloneBoxSwaps, type CardOrient } from '../../src/ui/fx-orient';
+import { fxOrientOf, orientOf, orientToCwCcw, orientToFxRot, stripOrientClasses, cloneTransformOf, cloneBoxSwaps, type CardOrient } from '../../src/ui/fx-orient';
 import { cloneBoxFrom } from '../../src/ui/fx/clone-orient';
 // G2 Task 3F · I-2：产出方守卫必须读**去注释后**的源码（否则会被描述性注释满足）。
 // 与 tests/ui/fx-dom-contract.test.ts 共用**同一份实现**，不再各存一份拷贝。
@@ -10,6 +10,18 @@ import { stripComments } from './source-text';
 
 /** 最小桩：只需 classList.contains —— 避免引入 jsdom */
 const node = (...cls: string[]) => ({ classList: { contains: (c: string) => cls.includes(c) } }) as unknown as Element;
+
+/**
+ * G2 修正 R2 的桩：**同时**有 `classList.contains` 与 `getAttribute`。
+ *  - `attrs` 给的是 `data-fx-rot` 的值（`undefined` = 属性不存在 ⇒ `getAttribute` 返回 `null`）。
+ *  - `noGetAttribute: true` 模拟"节点上根本没有 getAttribute 方法"（非 Element / 极简桩）——
+ *    `fxOrientOf` 必须**安全回退**而不是抛异常（FX 层到处是 `as unknown as Element` 的窄桩）。
+ */
+const attrNode = (cls: string[], attrs: Record<string, string> = {}, o: { noGetAttribute?: boolean } = {}) => ({
+  classList: { contains: (c: string) => cls.includes(c) },
+  ...(o.noGetAttribute ? {} : { getAttribute: (n: string) => (n in attrs ? attrs[n] : null) }),
+}) as unknown as Element;
+
 
 describe('FX 朝向单一出处（G2）', () => {
   it('从类名读出四种朝向', () => {
@@ -134,6 +146,221 @@ describe('浮层卡朝向几何（G2）', () => {
     // 反证：若把 180° 当 ±90° 处理，几何会被错误地互换
     expect({ w: box180.w, h: box180.h }).not.toEqual({ w: box90.w, h: box90.h });
     expect(cloneBoxFrom(src, 180)).not.toEqual(cloneBoxFrom(src, 90));
+  });
+});
+
+/**
+ * G2 修正 R2：**特效朝向 ≠ 卡面朝向**（规格 §2 的朝向表 / §3.1 的机制）。
+ *
+ * 这一组的关键不只是"能读标记"，而是**热座零变化是构造性的**：
+ * 热座页 DOM 上**不存在** `data-fx-rot`（`render.ts` 的写入被 `opts?.fxRot !== undefined` 守卫），
+ * 所以 `fxOrientOf` 每次都走**回退** `orientOf` ⇒ 拿到与改动前逐字相同的值 ⇒ 浮层卡几何走原分支。
+ */
+describe('特效朝向 fxOrientOf（G2 修正 R2）', () => {
+  it('读标记：ccw → −90°、cw → +90°（规格 §8.2 钉死的映射）', () => {
+    expect(fxOrientOf(attrNode([], { 'data-fx-rot': 'ccw' }))).toBe(-90);
+    expect(fxOrientOf(attrNode([], { 'data-fx-rot': 'cw' }))).toBe(90);
+    // 与卡面类**无关**：远程页自己卡面 0°（无朝向类）而特效 −90°
+    expect(fxOrientOf(attrNode([], { 'data-fx-rot': 'ccw' }))).not.toBe(orientOf(attrNode([])));
+  });
+
+  it('标记优先于卡面朝向（两者相差 90° 时以标记为准）', () => {
+    // 自己：卡面 0°（无类）+ 特效 ccw
+    expect(orientOf(attrNode([]))).toBe(0);
+    expect(fxOrientOf(attrNode([], { 'data-fx-rot': 'ccw' }))).toBe(-90);
+    // 对手：卡面 180°（rot-180）+ 特效 cw
+    expect(orientOf(attrNode(['rot-180']))).toBe(180);
+    expect(fxOrientOf(attrNode(['rot-180'], { 'data-fx-rot': 'cw' }))).toBe(90);
+  });
+
+  it('**回退**：没有标记/标记为空串/值不认识/连 getAttribute 都没有 ⇒ 逐字等于 orientOf', () => {
+    const cases: Element[] = [
+      attrNode([], {}),                                        // 热座页：属性根本不存在（getAttribute → null）
+      attrNode(['rot-cw'], {}),                                // 热座页场上卡（P0 顺时针）
+      attrNode(['rot-ccw'], {}),                               // 热座页场上卡（P1 逆时针）
+      attrNode(['rot-180'], {}),                               // 热座页协议图 / 远程页对手卡
+      attrNode([], { 'data-fx-rot': '' }),                     // 空串（不是两种取值之一）
+      attrNode([], { 'data-fx-rot': 'CCW' }),                  // 大小写不符
+      attrNode([], { 'data-fx-rot': 'rot-cw' }),               // 塞了类名（不是取值）
+      attrNode([], { 'data-fx-rot': 'yes' }),                  // 将来第三种取值 / 拼错
+      attrNode(['rot-cw'], { 'data-fx-rot': 'nope' }),         // 值不认识时**也要**回落卡面朝向，而不是 0
+      attrNode([], {}, { noGetAttribute: true }),               // 桩没有 getAttribute
+      { classList: { contains: () => false } } as unknown as Element,
+    ];
+    for (const n of cases) {
+      expect(fxOrientOf(n), `回退值必须与 orientOf 逐字相同（节点：${JSON.stringify(n)}）`).toBe(orientOf(n));
+    }
+    // 反空集合：至少要有一种"卡面朝向非 0"的用例，否则上面那句"等于 orientOf"会被 0 恒等满足
+    expect(cases.some((n) => orientOf(n) !== 0), '回退用例里没有一条卡面朝向非 0（断言退化）').toBe(true);
+    // 空节点/缺 classList 也必须安全（与 orientOf 同口径）
+    expect(fxOrientOf(null)).toBe(0);
+    expect(fxOrientOf(undefined)).toBe(0);
+    expect(fxOrientOf({} as unknown as Element)).toBe(0);
+  });
+
+  it('映射表本身：ccw 是 −90、cw 是 +90（把映射反过来必须报红）', () => {
+    // 与上面"读标记"那两条不同：这里把两个值**成对**断言，避免"两条各自被改坏一条"时看不出来
+    const table: Array<[string, CardOrient]> = [['ccw', -90], ['cw', 90]];
+    for (const [v, want] of table) {
+      expect(fxOrientOf(attrNode([], { 'data-fx-rot': v })), `${v} → ${want}°`).toBe(want);
+    }
+    expect(fxOrientOf(attrNode([], { 'data-fx-rot': 'ccw' }))).not.toBe(90);
+    expect(fxOrientOf(attrNode([], { 'data-fx-rot': 'cw' }))).not.toBe(-90);
+  });
+});
+
+/**
+ * G2 修正 R2 的**读侧调用点**守卫（源码文本代理）。
+ *
+ * ## 为什么需要它
+ * "浮层卡按特效朝向构建"这条规则分布在 `effects/index.ts` 的 14 处读朝向的地方。任何一处漏改
+ * （继续用 `orientOf`）都会让那一类特效在远程页差 90°，而**其余全部守卫仍然绿**
+ * （契约、CSS、布局都不看这个）。唯一的机检办法是钉住"允许出现 `orientOf` 的位置**恰好**是这些"。
+ *
+ * ## 判据
+ * 允许 `orientOf` 出现的位置**只有三类**，每类都必须指名道姓：
+ *  ① `fx-orient.ts` 的**回退分支**（`fxOrientOf` 内部）—— 这是"热座零构造性不变"的机制本身；
+ *  ② `buildFxCard(node, …)` 的**卡面**朝向实参（`faceOrient`：本地旋转的基准）；
+ *  ③ `buildFlipOverlay(…, orientOf(node))` 的**卡面**朝向实参（同上）。
+ * 其余任何 `orientOf(node)` 都是漏改的读侧调用点 → 报红并点名行号。
+ *
+ * 诚实边界：这条是**源码文本**判据，证明不了运行期朝向真的对（那要人眼看浮层卡）。它证明的是
+ * "那一处没有退回卡面朝向"这一件事 —— 而这正是 R2 要防的唯一退化形态。
+ */
+describe('G2 修正 R2 · 读侧调用点（源码守卫）', () => {
+  const uiRoot = new URL('../../src/ui/', import.meta.url);
+  const readUi = (rel: string): string =>
+    stripComments(readFileSync(fileURLToPath(new URL(rel, uiRoot))).subarray(0, 8 * 1024 * 1024).toString('utf8'));
+
+  /** ① 回退分支：fx-orient.ts 里 `orientOf` 的**唯一**允许出现处（`fxOrientOf` 的最后一行） */
+  it('fx-orient.ts：orientOf 只作为 fxOrientOf 的**回退**出现，且 fxOrientOf 优先读标记', () => {
+    const src = readUi('fx-orient.ts');
+    // 回退表达式必须真的存在（去掉它 = 热座浮层卡全部朝向错，见变异表）
+    expect(src, 'fxOrientOf 的回退分支不见了（热座无标记时会拿到 0 而不是卡面朝向）')
+      .toMatch(/return\s+mapped\s*\?\?\s*orientOf\(node\)/);
+    // 标记读取必须在回退**之前**（顺序反了就等于永远回退）
+    const iRead = src.indexOf('FX_ROT_ATTR)');
+    const iFallback = src.indexOf('?? orientOf(node)');
+    expect(iRead, '找不到标记读取点（getAttribute(FX_ROT_ATTR)）').toBeGreaterThanOrEqual(0);
+    expect(iFallback, '找不到回退点').toBeGreaterThanOrEqual(0);
+    expect(iRead, '标记读取排在回退之后 —— fxOrientOf 会永远走回退（标记形同不存在）')
+      .toBeLessThan(iFallback);
+    // 映射表：两个取值各自对应 ∓90°（把映射反过来必须报红）
+    expect(src, 'ccw 未映射到 −90°').toMatch(/ccw:\s*-90/);
+    expect(src, 'cw 未映射到 +90°').toMatch(/\bcw:\s*90/);
+    // 属性名必须是规格 §8.2 钉死的那个
+    expect(src, '标记属性名不是 data-fx-rot（规格 §8.2）').toContain("'data-fx-rot'");
+  });
+
+  it('effects/index.ts：允许的 orientOf 调用点**恰好**是"卡面朝向实参"那几处（漏改一处即报红）', () => {
+    const src = readUi('effects/index.ts');
+    const ALLOWED = [
+      // ① buildFxCard：`fxOrientOf(node)` 是**特效**朝向（根元素），`orientOf(node)` 是**卡面**朝向
+      /buildFxCardAt\(rect, fxOrientOf\(node\), payload, zIndex, orientOf\(node\)\)/,
+      // ② buildFlipOverlay 的第 5 实参（翻面覆盖层也是"浮层卡"：根 = 特效朝向、卡面 = 卡牌朝向）。
+      //    同一行同时出现 `buildFlipOverlay(` 与 `orientOf(node)` 即视为"卡面实参那两处"
+      //    （不绑定行内注释/空白的写法）。
+      /buildFlipOverlay\(.*orientOf\(node\)/,
+      // ③ **延迟**基础切割/破碎的调用点（死亡/恨/念能/瘟疫/同化/和平/混沌/腐化/多元）。
+      //    它们的实参是"事件时刻定格的 rect/orient + **卡面**朝向"：根元素用 `orient`（特效朝向），
+      //    卡面用这里的 `orientOf(node)`。⚠️ 这些调用点必须**原地**读 `orientOf(node)`
+      //    （不能挪进 `setTimeout` 回调 —— 那时节点已被重渲染替换，读到的既不是原卡、也可能是 null）。
+      /\bplay(?:ShatterAt|CutAt)\(rect, orient, payload, orientOf\(node\)\)/,
+    ];
+    const bad = src.split('\n')
+      .map((line, i) => ({ no: i + 1, line: line.trim() }))
+      .filter(({ line }) => /\borientOf\s*\(/.test(line))
+      .filter(({ line }) => !ALLOWED.some((re) => re.test(line)));
+    expect(bad, '以下位置仍用**卡面**朝向建浮层/读特效朝向 —— 远程页自己卡面 0° 而特效 −90°，'
+      + '这些点会差 90°（应按 R2 改成 fxOrientOf 或补上 faceOrient 实参）：\n'
+      + bad.map((b) => `effects/index.ts:${b.no}: ${b.line}`).join('\n')).toEqual([]);
+    // 反空集合：FX 朝向读取点必须真的存在（全部删光 = 这条断言空转）
+    expect((src.match(/fxOrientOf\s*\(/g) ?? []).length,
+      'effects/index.ts 里一个 fxOrientOf 都没有（读侧被删光/改回 orientOf？）').toBeGreaterThanOrEqual(13);
+    // 定向：buildFxCard 必须把**卡面**朝向也交给 buildFxCardAt（否则远程页卡面等于特效朝向）
+    expect(src, 'buildFxCard 未把卡面朝向传给 buildFxCardAt（本地旋转会恒为 0）')
+      .toMatch(/buildFxCardAt\(rect, fxOrientOf\(node\), payload, zIndex, orientOf\(node\)\)/);
+    // 反空集合（二）：ALLOWED 自身不能为空（否则上面那条断言变成"禁止一切 orientOf"的假红源）
+    expect(ALLOWED.length, 'ALLOWED 为空（判据失效）').toBeGreaterThan(0);
+  });
+
+  it('fx-gen3.ts：geom() 同时定格两套朝向，且延迟播放把**一对**都传下去', () => {
+    const src = readUi('fx-gen3.ts');
+    // geom 必须一次读出两套（只读一套 = 延迟回调里节点的另一套朝向就丢了）
+    expect(src, 'geom() 未定格特效朝向（fxOrientOf）').toMatch(/orient:\s*fxOrientOf\(node\)/);
+    expect(src, 'geom() 未定格卡面朝向（orientOf）—— 卡面本地旋转的基准会丢').toMatch(/face:\s*orientOf\(node\)/);
+    expect(src, 'geom() 未从 fx-orient 引入 fxOrientOf').toMatch(/import\s*\{[^}]*fxOrientOf[^}]*\}\s*from\s*'\.\/fx-orient'/);
+    // 延迟播放（新星删除 / 愤怒翻转）必须把 face 一起传下去
+    expect(src, '新星删除的定格未带上卡面朝向').toMatch(/const shot = \{ rect, orient, face: orientOf\(node\) \}/);
+    expect(src, '愤怒翻转的定格未带上卡面朝向').toMatch(/const shot = \{ rect: g\.rect, orient: g\.orient, face: g\.face \}/);
+    expect(src, 'buildFxCardAt 的延迟调用未传 shot.face').toMatch(/api\.buildFxCardAt\(shot\.rect, shot\.orient, p, api\.extraZ, shot\.face\)/);
+    expect(src, 'playFlipAt 的延迟调用未传 shot.face').toMatch(/api\.playFlipAt\(shot\.rect, shot\.orient, p, undefined, shot\.face\)/);
+  });
+
+  /**
+   * `buildFxCardAt` 的几何与本地旋转：四件必须同时成立，缺一件就是"朝向对但尺寸错"的假正确。
+   * 这些是**源码文本**判据；真正的观感只有人眼看（无 jsdom）。
+   */
+  it('effects/index.ts：浮层卡 = 根元素特效朝向（复用 cloneBoxFrom）+ 卡面本地 +90° + 装饰层不额外旋转', () => {
+    const src = readUi('effects/index.ts');
+    // ① 几何单一出处：不再手写"宽 = rect 高"的交换算式
+    expect(src, 'buildFxCardAt 未使用 cloneBoxFrom（又手写了一份宽高交换算式？）')
+      .toMatch(/const box = cloneBoxFrom\(rect, orient\)/);
+    expect(src, 'buildFxCardAt 未按 cloneBoxFrom 的结果写布局盒').toMatch(/card\.style\.width = `\$\{box\.w\}px`/);
+    expect(src, 'buildFxCardAt 未用 cloneBoxFrom 的 transform').toMatch(/card\.style\.transform = 'rotate\(var\(--fx-rot, 0deg\)\)'/);
+    // ② 卡面本地旋转按**差值**算（不是硬编码 90）—— 远程页两处都是 +90°，热座恒 0°
+    expect(src, '卡面本地旋转没走 faceLocalRot（硬编码 90 会在热座/第三种取值下错）')
+      .toMatch(/const localDeg = faceLocalRot\(orient, faceOrient\)/);
+    // ②b 差值的**算式本身**必须还在（`(face - fx)` 规范化到 [0,360)）—— 变异实测：把函数体改成
+    //     `return 0;`（等价于"去掉浮层卡卡面的本地 +90°"）时，上面那条"调用了 faceLocalRot"仍然成立，
+    //     于是整条测试**全绿而远程页卡面差 90°**。这一行就是补那个缺口的：
+    const rot = /function faceLocalRot\(fx: CardOrient, face: CardOrient\): number \{\s*return \(\(face - fx\) % 360 \+ 360\) % 360;\s*\}/.exec(src);
+    expect(rot, 'faceLocalRot 的算式被改了（远程页的本地旋转 = 卡面 − 特效，两处都是 +90°；'
+      + '改成恒 0 / 反号 / 硬编码，浮层卡卡面就会与卡牌朝向不一致）').not.toBeNull();
+    expect(src, '本地旋转被硬编码成常量（不再按差值算）').not.toMatch(/const localDeg = -?\d+;/);
+    expect(src, '--fx-rot 写入点被删/改了形态（旋转不再记录，平移特效会覆盖掉它）')
+      .toMatch(/card\.style\.setProperty\('--fx-rot', orientToFxRot\(orient\)\)/);
+    // ③ 装饰层**不得**被额外旋转：appendChild 到浮层卡根元素的那些层不再有任何 rotate 包装。
+    //    只能证明"没有对 clone 本身再套一层 rotate"（真正的判据是"装饰层一行都没改" = 本文件
+    //    对这些 appendChild 一个字都没动，见报告里的 diff 清单）。
+    expect(src, '浮层卡根元素被额外套了旋转（装饰层会继承成双重旋转）')
+      .not.toMatch(/clone\.style\.transform = 'rotate\(/);
+    // ④ 面无包装的等价路径：localDeg === 0 时必须直接返回 <img>（热座 DOM 一个 div 都不多）
+    expect(src, 'buildFaceLayer 在 localDeg === 0 时没有直接返回 <img>（热座会多一层 div）')
+      .toMatch(/if \(localDeg === 0\) return img;/);
+  });
+
+  /**
+   * **热座零变化**（红线）的源码侧证据：`render.ts` 里 `data-fx-rot` 属性的写入必须被
+   * `opts?.fxRot !== undefined` 守卫 —— 少了它，热座页的**每一张**场上卡都会被打上同一个标记
+   * （`fxOrientOf` 再也回退不回 `orientOf`，浮层卡朝向全错）。
+   *
+   * ⚠️ 诚实边界（变异验证表里如实记录）：这条只抓"标记的**写入**被无条件化"。若有人把标记写成
+   * **类名**（`classList.add('fx-rot')`）或别的非 `dataset.fxRot` 形态，本守卫抓不到 ——
+   * 那种情况下 `fxOrientOf` 也读不到（它只读 `data-fx-rot` 属性），**行为上仍然等价于零变化**，
+   * 只是 DOM 上多了一个无用类。真正会出事的是"用 `dataset.fxRot` 无条件写"这一种。
+   */
+  it('热座零变化：render.ts 的 data-fx-rot 写入必须被 opts?.fxRot 守卫（无条件写 = 热座浮层卡全错）', () => {
+    const src = readUi('render.ts');
+    expect(src, 'readUi 读到的是 render.ts（不是别的渲染器源码）').toContain('export function renderStackSlot(');
+    // ⚠️ **先查守卫、再查写入形态**：变异实测（M5a/M5b）—— 反过来查时，"把写入改成无条件"
+    //    与"改成 setAttribute 字面量"都只会撞到"找不到那个写入形态"，失败信息读起来像
+    //    "写入点被删了"，而真正的缺陷是**热座页也会被打上标记**。顺序换过来，两种变异都得到
+    //    "守卫不见了"这条指名道姓的信息。
+    expect(src, 'data-fx-rot 的写入没有 opts?.fxRot !== undefined 守卫 → 热座页也会被打上标记'
+      + '（fxOrientOf 再也回退不回 orientOf，"热座零变化"被打破）')
+      .toMatch(/if\s*\(\s*opts\?\.fxRot\s*!==\s*undefined\s*\)/);
+    expect(src, '找不到 data-fx-rot 的写入点（node.dataset.fxRot = opts.fxRot）')
+      .toMatch(/node\.dataset\.fxRot\s*=\s*opts\.fxRot/);
+    // 写入必须在那个 if 的**语句头之后**（守卫与写入之间没有别的语句把条件吃掉 —— 用文本顺序代理）
+    const iGuard = src.indexOf('if (opts?.fxRot !== undefined)');
+    const iWrite = src.indexOf('node.dataset.fxRot = opts.fxRot');
+    expect(iGuard, '找不到 `if (opts?.fxRot !== undefined)` 守卫语句（标记被无条件写在热座页上）')
+      .toBeGreaterThanOrEqual(0);
+    expect(iWrite, '找不到 `node.dataset.fxRot = opts.fxRot` 写入语句').toBeGreaterThanOrEqual(0);
+    expect(iWrite, '写了标记却没走守卫（顺序可疑）').toBeGreaterThan(iGuard);
+    // 反向：热座渲染器里不得出现**读**侧（`fxOrientOf` 只在 FX 层；render.ts 是产出方）
+    expect(src, 'render.ts 出现了 fxOrientOf（产出方不得依赖读侧函数）').not.toMatch(/\bfxOrientOf\b/);
   });
 });
 
@@ -553,12 +780,26 @@ describe('G2 · 朝向判定单一出处（源码守卫）', () => {
     const expectedRotWrites = (src.match(/setProperty\(\s*'--fx-rot'/g) ?? []).length;
     expect(calls.length, `rotWritesOf 漏掉了写入点：源码里 setProperty( 后紧跟 '--fx-rot' 有 ${expectedRotWrites} 处，只提取到 ${calls.length} 处`)
       .toBe(expectedRotWrites);
-    // 反空集合守卫（三）：两个旋转分支（±90° 与 180°）**各有一处** `--fx-rot` 写入。
-    // 数量少于 2 → 说明有人删掉了其中一个分支的写入（只删一处时上面的 `> 0` 抓不到）。
-    // 这是**有意**的数量约束：新增第三个朝向分支时必须同步更新这里的数字，失败消息会说明。
-    expect(writes.length, `--fx-rot 的写入点数应为 2（±90° 与 180° 分支各一处），实际 ${writes.length} 处：\n`
+    // 反空集合守卫（三）：`--fx-rot` 的写入点**恰好一处**（G2 修正 R2 的 buildFxCardAt 收敛）。
+    //
+    // 「原能抓什么 / 现在还能抓什么」：
+    //  - **原判据是 2**（±90° 与 180° 两个分支各写一次），它抓的是"只删掉其中一个分支的写入"
+    //    （那时 `> 0` 抓不到，而 180° 分支的写入一旦没了，远程页对手卡的浮层卡就丢了 `--fx-rot`
+    //    ⇒ 平移类特效的 `rotate(var(--fx-rot, 0deg))` 拿到 0°、卡面朝向被覆盖）。
+    //  - R2 把两个分支**收敛成一个**：`if (box.transform !== '') { setProperty(…); transform = … }`
+    //    ——`box.transform` 由 `cloneBoxFrom(rect, orient)` 给出，**任何**非 0/180 之外的朝向
+    //    （±90°）都非空，所以那一处写入同时覆盖了原来的两个分支，"只删一个分支"这个形态
+    //    在结构上已不存在（没有第二个分支可删）。因此期望值必须改成 1，否则本断言恒红。
+    //  - **现在还能抓什么**：写入点被整个删掉（`setProperty('--fx-rot', …)` 消失 ⇒ 旋转不再记录
+    //    ⇒ 所有平移类特效覆盖掉浮层卡旋转）、写入值换成完整函数串（上面 (i)/(ii) 两条）、
+    //    以及"写入了但 transform 没跟着用 `var(--fx-rot)`"（下面单独钉）。数字 1 仍是有意的
+    //    数量约束：将来若再拆出分支，这里的失败消息会要求同步。
+    expect(writes.length, `--fx-rot 的写入点数应为 1（R2 起由 buildFxCardAt 的单一分支覆盖全部非零朝向），实际 ${writes.length} 处：\n`
       + writes.map((w, i) => `  [${i + 1}] ${w}`).join('\n')
-      + '\n（若本次有意新增/删除旋转分支，请同步更新本断言的期望值）').toBe(2);
+      + '\n（若本次有意新增/删除旋转分支，请同步更新本断言的期望值）').toBe(1);
+    // 写入与使用必须成对：`--fx-rot` 记下来就是给 transform（以及飞行平移特效）组合用的。
+    expect(src, 'buildFxCardAt 写了 --fx-rot 却没用它组合 transform（浮层卡不会旋转）')
+      .toMatch(/card\.style\.transform = 'rotate\(var\(--fx-rot, 0deg\)\)'/);
 
     // 5c) 【G2 Task 2F3 · 封杀变量洗白通道】整类封杀 `cloneTransformOf` **在 effects/index.ts 里的调用**。
     //
