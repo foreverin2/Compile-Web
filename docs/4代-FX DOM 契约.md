@@ -116,11 +116,13 @@ G1 首轮正是把「渲染器产出」当成了充分条件，于是把 `.hand-
 
 改错这一条不是"某个特效偏一点"，而是**整个 3 代特效族 + 常驻层一起失去落点**。G2 请把这条当第一优先级的验收项。
 
-**注意**：它的机检就是 `probe: ['stack-slot ', 'data-player', 'data-line']` —— 只产 `stack-slot` 而丢掉两个
+**注意**：它的机检就是 `probe: ['stack-slot p', 'data-player', 'data-line']` —— 只产 `stack-slot` 而丢掉两个
 `dataset` 属性会**直接报红**（这正是终审加 `probe` 的原因：旧的自动推导只看类名，
 `el('div','stack-slot')` 不带任何属性也能过守卫）。G2 Task 3F2 把第一段从裸 `stack-slot` 收紧成
-`stack-slot `（尾空格）：裸词会被 `syncSmokeOverlays` 的**查询**（`.stack-slot[data-player=…]`）满足，
-于是把产出点的类名改掉时守卫仍然全绿（变异 A06 实测）。
+`stack-slot p`（**相邻两个类 token**，与 `.trash-pile.p1/.p2` 的 `'trash-pile p'` 同源）：裸词会被
+`syncSmokeOverlays` 的**查询**（`.stack-slot[data-player=…]`）满足，于是把产出点的类名改掉时守卫
+仍然全绿（变异 A06 实测）。⚠️ 3F2 的**第一版**曾用"类名 + 尾空格"（`'stack-slot '`），实测对
+`deck` / `battery` 无效（同名局部变量满足它），已统一弃用 —— 见下方"踩过的坑（勿重蹈）"。
 
 其余高风险项：`img`（卡面图唯一来源，6 个读取点跨 4 个模块）、`[data-uid]`（手牌与链路卡都必须带，缺了则 `nodeOf` 全线失效）、`.protocol-holder`（取不到就整体不播）、`.protocol`（取不到则编译翻面静默不播）。
 

@@ -62,8 +62,19 @@ export function stripComments(src: string): string {
   return out.join('');
 }
 
-/** 代码位（不在注释、也不在字符串/模板串里的字符）在 `src` 中的下标。 */
-function codePositions(src: string): boolean[] {
+/**
+ * 代码位（不在注释、也不在字符串/模板串里的字符）在 `src` 中的下标。
+ *
+ * **导出原因**（G2 Task 3F3）：守卫 1b 需要判断"某条语句是不是**真的代码**"——
+ * 纯 `indexOf` 文本搜索会被**诱饵字符串**满足（`const CLEAR_DOC = "root.textContent = ''";`），
+ * 那与 G1 / 3F 已经栽过两次的"注释满足守卫"是**同一族失效**（读上去像已验收）。
+ * 与其在测试里再写一份词法扫描（第三份实现必然漂移），不如共用这一份。
+ *
+ * ⚠️ 已知局限与 `stripComments` 完全相同：模板串**整段**按字符串处理（`${}` 插值里的字符会被
+ * 当成"非代码"）→ 方向是**假红**（判据更严），对本用途安全；正则字面量里含未转义的 `//` 会截断
+ * 该行 → 方向也是假红。本仓被扫文件里两者都零命中。
+ */
+export function codePositions(src: string): boolean[] {
   const isCode: boolean[] = new Array(src.length).fill(false);
   let i = 0;
   while (i < src.length) {

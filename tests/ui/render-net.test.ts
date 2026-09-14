@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { transform } from 'lightningcss';
 import { hooksOfCategory, RENDERERS } from '../../src/ui/fx-dom-contract';
 import { NET_PAGE_HOOKS, verifyPageHooks } from '../../src/ui/render-net';
-import { stripComments, stripArrayDecl } from './source-text';
+import { stripComments, stripArrayDecl, codePositions } from './source-text';
 
 /**
  * G2 Task 3/3F 守卫：远程对战页渲染器 `src/ui/render-net.ts`（源码文本守卫，**无 jsdom**）。
@@ -132,6 +132,108 @@ function mountedFormOf(call: string): RegExp {
   return new RegExp(`(?:appendChild\\(\\s*|=\\s*)${call.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`);
 }
 
+/**
+ * 守卫 1b 用的判据助手（G2 Task 3F3）。
+ *
+ * 背景：原来的 1b 是**纯 `indexOf` 文本搜索**（`netCode()` 只去注释、剔除钩子表体，
+ * **字符串内容保留**），于是任何"**文本上存在、执行上不存在**"的写法都能满足它。
+ * 终轮复评实测两种诱饵：
+ *   * **X1** `const noopClear = () => { root.textContent = ''; }; void noopClear;`（定义但从不调用）
+ *   * **X2** `const CLEAR_DOC = "root.textContent = ''";`（只是文档字符串）
+ * 两者页面照旧逐帧叠加、守卫 22/22 全绿 —— 与 G1（注释满足守卫）、3F-I2（注释满足守卫）
+ * 是**同一族**失效，只是换成了"字符串 / 不可达代码满足守卫"。
+ * 两条最小检查即可封死（不引入新机制）：
+ *   ① **代码位**：命中的起点必须落在代码位（不在字符串/模板串里）→ 杀 X2；
+ *   ② **花括号净深度为 0**：该处不得嵌在任何块里（前缀里代码位的 `{`/`}` 必须平衡）→ 杀 X1
+ *      （`() => { ` 把深度抬到 1）。花括号配对同样跳过字符串/模板串（走 `codePositions`）。
+ */
+
+/** 认可的**清空**形态（"把 root 清空"的等价写法；M-1：不绑定某一种写法，否则会假红） */
+const CLEAR_FORMS: readonly string[] = [
+  "root.textContent = ''",
+  "root.innerHTML = ''",
+  'root.replaceChildren()',
+];
+
+/** 认可的**挂载**形态（"把棋盘挂进 root"；M-1 的 X5：`append` 是 `appendChild` 的等价写法） */
+const MOUNT_FORMS: readonly string[] = ['root.appendChild(', 'root.append('];
+
+/**
+ * 一次调用**既清空又挂载**（M-1 的 X4：`root.replaceChildren(wrap)` 语义完全正确）。
+ * 空实参的 `root.replaceChildren()` 属**清空**形态（见 `CLEAR_FORMS`），不算挂载。
+ */
+const REPLACE_MOUNT = 'root.replaceChildren(';
+
+/** `needle` 在 `text` 里所有**起点落在代码位**的下标（字符串/模板串里的同名文本不算） */
+function codeMatches(text: string, needle: string, isCode: boolean[]): number[] {
+  const out: number[] = [];
+  const re = new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+  for (let m = re.exec(text); m !== null; m = re.exec(text)) {
+    // 只要求**起点**是代码位：判据本身含字符串字面量（`…= ''`），其引号按定义是"非代码"。
+    if (isCode[m.index]) out.push(m.index);
+  }
+  return out;
+}
+
+/** `at` 之前（不含）的**代码位花括号净深度**：`{` 记 +1、`}` 记 −1 */
+function braceDepthBefore(text: string, isCode: boolean[], at: number): number {
+  let depth = 0;
+  for (let i = 0; i < at; i += 1) {
+    if (!isCode[i]) continue;
+    if (text[i] === '{') depth += 1;
+    else if (text[i] === '}') depth -= 1;
+  }
+  return depth;
+}
+
+/**
+ * 取**花括号配平的那一段**（`from` 是一个代码位 `{` 的下标；返回**不含**这对外层花括号的内容，
+ * 于是"体内容里的净深度从 0 起算"）。
+ *
+ * 为什么必须配平而不是"切到文件尾"：`renderNetBoard` 是文件里最后一个顶层声明，直接 `slice` 到
+ * 文件尾会把**它之后**定义的任何东西也算进"函数体"。复评的 X3a 正是"清空写进定义在渲染器
+ * **之后**的 helper"——那时若切到文件尾，helper 里的清空文本就落在"体内"了（块体会被深度规则
+ * 挡住，但**表达式体箭头**（`const f = (r) => r.x = ''`）没有花括号、深度为 0，会漏）。
+ */
+function balancedBlock(text: string, from: number, isCode: boolean[]): string {
+  let depth = 0;
+  for (let i = from; i < text.length; i += 1) {
+    if (!isCode[i]) continue;
+    if (text[i] === '{') depth += 1;
+    else if (text[i] === '}') {
+      depth -= 1;
+      if (depth === 0) return text.slice(from + 1, i);
+    }
+  }
+  return text.slice(from + 1);
+}
+
+/**
+ * 从 `at` 往前到最近的**语句边界**（代码位的 `;` / `{` / `}`）之间的文本 = 这条语句的"语句头"。
+ *
+ * 用来判断两件事：
+ *  1. 清空是不是嵌在**别的函数**里 —— `const noopClear = () => root.x = '';` 这种**表达式体箭头**
+ *     没有花括号、深度检查抓不到，但它的语句头里含 `=>`（或 `function`）；而"清空自己就是一条
+ *     语句"时语句头只有空白（或 `void (` 之类）→ 不误伤。
+ *  2. 清空是不是**裸条件/循环**（`if (x) root.x = '';` 没有花括号，深度同样是 0）—— 语句头里含
+ *     `if|for|while|switch` 即拒。
+ */
+function statementHeadBefore(text: string, isCode: boolean[], at: number): string {
+  let i = at - 1;
+  for (; i >= 0; i -= 1) {
+    if (!isCode[i]) continue;
+    if (text[i] === ';' || text[i] === '{' || text[i] === '}') break;
+  }
+  return text.slice(i + 1, at);
+}
+
+/** 取 `[from, to)` 之间**代码位**的文本（跳过字符串/模板串与注释） */
+function codeTextBetween(text: string, isCode: boolean[], from: number, to: number): string {
+  let out = '';
+  for (let i = Math.max(0, from); i < Math.min(to, text.length); i += 1) if (isCode[i]) out += text[i];
+  return out;
+}
+
 describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () => {
   it('1. 文件存在且导出 renderNetBoard / resetNetUiState', () => {
     const src = netSource();
@@ -149,35 +251,90 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
    * 之后每次 `cb.rerender?.()` 再叠一份（线性增长），而 FX 全走 `querySelector`（取首个）
    * → 特效全部打在旧副本上。运行时断言 1 会把它报成"4 条 .hand"（用户可见），但那时页面已经叠坏。
    *
-   * ⚠️ 判据不是"文件里有 `textContent = ''`"（那种写法会被**别的函数**或注释满足 ——
-   * `renderPreviewToolbar` 的 `.net-verify-note` 写入就含 `textContent`）。这里做三件事：
-   *   ① 定位到 `renderNetBoard` 的**函数体**；
-   *   ② 断言它出现在**任何** `root.appendChild(` 之前（顺序）；
-   *   ③ 断言清空语句之前的前缀里**没有** `if/for/while/switch`（不得被包进条件或循环，
-   *      也不得藏在 `if (x) return;` 之后）。
+   * 判据（G2 Task 3F3 加固后）——不是"文件里有 `textContent = ''`"，而是**真的会执行**的那一处：
+   *   ① 定位到 `renderNetBoard` 的**函数体**（**花括号配平**，不是切到文件尾）；
+   *   ② 清空语句必须落在**代码位**（`codePositions`）→ 杀诱饵字符串 X2；
+   *   ③ 该处的**花括号净深度必须为 0**（不在任何块里）→ 杀块体箭头 X1
+   *      （`() => { root.textContent = ''; }` 把深度抬到 1）；
+   *   ④ 语句头里不得有 `=>`/`function` → 杀**表达式体**箭头（花括号深度为 0 的那种漏法）；
+   *   ⑤ **语句头**里没有 `if/for/while/switch`（不得条件化；也不得排在 early-return 之后 ——
+   *      判据是"清空与挂载之间没有 `return`/`throw`"，比"前缀里没有 if"精确，且不会因为
+   *      函数体中部本来就有 `for`/`if` 而误判靠后的语句）；
+   *   ⑥ 必须早于**任何**代码位的挂载调用（`appendChild(` / `append(`）；或者挂载本身就是
+   *      `root.replaceChildren(<实参>)`（一次调用既清空又挂载，语义正确）。
+   * 认可三种等价清空写法 + 两种等价挂载写法（M-1：**拒绝正确代码的守卫会被绕过**，不能假红）。
    */
-  it('1b. F-1：renderNetBoard 必须**第一件事**清空 root（早于任何 root.appendChild，且无条件）', () => {
+  it('1b. F-1：renderNetBoard 必须**第一件事**清空 root（代码位、无嵌套、无条件、早于任何挂载）', () => {
     const code = netCode();
     const entryAt = code.indexOf('export function renderNetBoard');
     expect(entryAt, '找不到 export function renderNetBoard').toBeGreaterThanOrEqual(0);
     const entry = code.slice(entryAt);
+    const entryCode = codePositions(entry);
     const bodyStart = entry.indexOf('{');
     expect(bodyStart, '找不到 renderNetBoard 的函数体起始 `{`').toBeGreaterThan(0);
-    const body = entry.slice(bodyStart + 1);
+    // 函数体 = **花括号配平**的那一段（不是"切到文件尾"—— 否则渲染器**之后**定义的 helper
+    // 会被算进体内，见 balancedBlock 的注释）
+    const body = balancedBlock(entry, bodyStart, entryCode);
+    const isCode = codePositions(body);
 
-    const iClear = body.indexOf("root.textContent = ''");
-    const iAppend = body.indexOf('root.appendChild(');
-    expect(iClear, 'renderNetBoard 里没有 `root.textContent = \'\'`（入口不清空 root → 每次渲染叠一份棋盘）')
-      .toBeGreaterThanOrEqual(0);
-    expect(iAppend, 'renderNetBoard 里找不到 root.appendChild(（结构被改？）').toBeGreaterThan(0);
-    expect(iClear, 'F-1：清空 root 必须发生在**任何** root.appendChild 之前')
-      .toBeLessThan(iAppend);
-    // ③ 不得条件化 / 循环化 / 被 early-return 绕过
-    const prefix = body.slice(0, iClear);
-    expect(prefix, 'F-1：清空 root 不得被包进条件或循环（也不得排在 early return 之后）')
-      .not.toMatch(/\b(if|for|while|switch)\s*\(/);
+    // 候选：三种清空形态里，**落在代码位**的每一处（连同它的花括号净深度与语句头）
+    const clearSites: Array<{ form: string; at: number; depth: number; head: string }> = [];
+    for (const form of CLEAR_FORMS) {
+      for (const at of codeMatches(body, form, isCode)) {
+        clearSites.push({
+          form, at,
+          depth: braceDepthBefore(body, isCode, at),
+          head: statementHeadBefore(body, isCode, at),
+        });
+      }
+    }
+    // 挂载点：`appendChild(` / `append(` 的第一处（代码位、且在函数体顶层）
+    const mountSites = MOUNT_FORMS.flatMap((f) => codeMatches(body, f, isCode))
+      .filter((at) => braceDepthBefore(body, isCode, at) === 0);
+    const firstMount = mountSites.length > 0 ? Math.min(...mountSites) : -1;
+    // 既清空又挂载的 `root.replaceChildren(<非空实参>)`（空实参的 `replaceChildren()` 属**清空**形态，
+    // 已在上面的候选里；这里必须**排除**它，否则会把"只清空、没挂载"误当成一次合法挂载）
+    const replaceMounts = codeMatches(body, REPLACE_MOUNT, isCode)
+      .filter((at) => !body.slice(at + REPLACE_MOUNT.length).trimStart().startsWith(')'));
+
+    /**
+     * 一条语句"真的会执行、且不在别的函数/裸条件里"的判据。
+     *
+     * ⚠️ 这里**不能**用"整个前缀里没有 if/for/while"（我第一版就是这么写的，被 E4 变异抓住）：
+     * 函数体中部本来就有 `for (const line of …)` 与 `if (…)`，于是**任何靠后的语句**都会被误判成
+     * 条件化 → `root.replaceChildren(wrap)`（一次调用既清空又挂载）这种合法写法假红。
+     * 正确的本地判据是：**花括号净深度为 0**（不在任何块里）+ **语句头**里没有条件/循环关键字
+     * （挡住不加大括号的 `if (x) stmt;`）+ 语句头里没有 `=>`/`function`（挡住表达式体箭头）。
+     */
+    const topLevelPlainStatement = (at: number): boolean => {
+      if (braceDepthBefore(body, isCode, at) !== 0) return false;
+      return !/\b(if|for|while|switch)\s*\(|=>|\bfunction\b/.test(statementHeadBefore(body, isCode, at));
+    };
+    // 清空与挂载之间**不得有 return/throw**：否则存在"挂载了却没清空"的路径（原来的
+    // "前缀里没有 if/for/while" 想挡的就是这个，这里换成更精确的本地判据）
+    const noEarlyExitBetween = (from: number, to: number): boolean =>
+      to < 0 || !/\b(return|throw)\b/.test(codeTextBetween(body, isCode, from, to));
+    const usable = clearSites.filter((s) => topLevelPlainStatement(s.at)
+      && firstMount >= 0 && s.at < firstMount
+      && noEarlyExitBetween(s.at, firstMount));
+    const usableReplaceMount = replaceMounts.filter((at) => topLevelPlainStatement(at));
+
+    // 失败信息要**指名道姓**：说清找到了什么、哪一条判据把它挡下了
+    const why = clearSites.length === 0
+      ? `函数体里**代码位**上没有找到任何清空语句（三种等价形态都试过：${CLEAR_FORMS.join(' / ')}）`
+        + '—— 注：写在字符串/模板串里的同名文本不算（诱饵形态 X2）'
+      : `找到 ${clearSites.length} 处清空文本，但没有一处满足"无嵌套 + 非条件 + 早于挂载"：`
+        + clearSites.map((s) => `「${s.form}」深度=${s.depth} 语句头=${JSON.stringify(s.head.trim())}`
+          + ` 位置=${s.at}（首个挂载=${firstMount}）`).join('；');
+    expect(usable.length > 0 || usableReplaceMount.length > 0,
+      `F-1：renderNetBoard 没有**真的会执行**的"清空 root"（入口不清空 → 每次渲染叠一份棋盘）。${why}`)
+      .toBe(true);
+    expect(firstMount >= 0 || usableReplaceMount.length > 0,
+      'F-1：找不到任何"把棋盘挂进 root"的调用（appendChild( / append( / replaceChildren(<实参>)）—— 结构被改？')
+      .toBe(true);
+
     // 与兄弟入口同形（这条把"这是全仓约定"写进守卫，防止有人"顺手"只在这里去掉）。
-    // 判据写成两种等价清空形式都接受（`textContent = ''` / `replaceChildren()`）—— 不绑定写法。
+    // 判据写成两种等价清空形式都接受（`textContent = ''` / `replaceChildren(`）—— 不绑定写法。
     const renderSrc = stripComments(read('render.ts'));
     expect(renderSrc, 'render.ts 的 renderBoard/renderDraft 也不再清空 root（全仓约定被改？）')
       .toMatch(/root\.(?:textContent = ''|replaceChildren\()/);
@@ -526,19 +683,26 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
   /**
    * M-3：热座 `renderBoard` 的两个几何型点名特效（透彻牌库眼睛 / 幸运宣告骰子）曾经在远程页
    * 完全缺失（三个 choice-* 分支是重写的）。它们都用**契约钩子**定位（`.deck[data-player]` /
-   * 源卡 `[data-uid]`），远程页的节点都在，所以直接复用；但必须在 `root.appendChild(wrap)`
+   * 源卡 `[data-uid]`），远程页的节点都在，所以直接复用；但必须在棋盘**挂进 root**
    * **之后**执行 —— 此前 `getBoundingClientRect()` 全 0，特效会静默不显示。
    */
-  it('16. M-3：几何型 FX 走 deferredFx，且在 root.appendChild(wrap) 之后执行', () => {
+  it('16. M-3：几何型 FX 走 deferredFx，且在棋盘挂进 root 之后执行', () => {
     const code = netCode();
     expect(code, '未复用 startClarityDeckEye（透彻：从牌库中选择 的古埃及眼睛在远程页不播）')
       .toContain('startClarityDeckEye(');
     expect(code, '未复用 startLuckDiceFx（luck-0/3 宣告的骰子在远程页不播）').toContain('startLuckDiceFx(');
     expect(code).toMatch(/deferredFx\.push\(/);
     const entry = code.slice(code.indexOf('export function renderNetBoard'));
-    const iMount = entry.indexOf('root.appendChild(wrap);');
+    const isCode = codePositions(entry);
+    // ⚠️ G2 Task 3F3：挂载点不再绑定 `root.appendChild(wrap);` 这一种写法 —— 变异 E3 实测
+    //    `root.append(wrap)`（语义等价）会让本条**假红**。这里与守卫 1b 用同一组挂载形态。
+    const mountHits = MOUNT_FORMS.flatMap((f) => codeMatches(entry, f, isCode))
+      .concat(codeMatches(entry, REPLACE_MOUNT, isCode)
+        .filter((at) => !entry.slice(at + REPLACE_MOUNT.length).trimStart().startsWith(')')));
+    const iMount = mountHits.length > 0 ? Math.min(...mountHits) : -1;
     const iRun = entry.indexOf('for (const fn of deferredFx) fn();');
-    expect(iMount, '找不到 root.appendChild(wrap)').toBeGreaterThanOrEqual(0);
+    expect(iMount, '找不到"把棋盘挂进 root"的调用（appendChild( / append( / replaceChildren(<实参>)）')
+      .toBeGreaterThanOrEqual(0);
     expect(iRun, '找不到 deferredFx 的执行点').toBeGreaterThanOrEqual(0);
     expect(iRun, '几何型 FX 在棋盘入 DOM 之前执行 → getBoundingClientRect() 全 0、特效静默不显示')
       .toBeGreaterThan(iMount);
