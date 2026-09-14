@@ -174,4 +174,15 @@ describe('G1 · FX DOM 契约', () => {
     }
     expect(problems, `以下 D 类钩子判定有误：\n${problems.join('\n')}`).toEqual([]);
   });
+
+  it('契约文档必须逐一登记全部 A 类钩子（文档与代码不得漂移）', () => {
+    // 路径基准是 tests/ui/：../../docs/ = 仓库根/docs/（与同目录既有测试的 '../../src/' 同惯例）
+    const doc = readFileSync(
+      fileURLToPath(new URL('../../docs/4代-FX DOM 契约.md', import.meta.url)),
+    ).subarray(0, 4 * 1024 * 1024).toString('utf8');
+    const missing = hooksOfCategory('A')
+      .map((h) => h.hook)
+      .filter((hook) => !doc.includes(hook));
+    expect(missing, `文档未登记以下 A 类钩子：\n${missing.join('\n')}`).toEqual([]);
+  });
 });
