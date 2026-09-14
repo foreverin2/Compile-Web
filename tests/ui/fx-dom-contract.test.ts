@@ -12,6 +12,59 @@ const root = new URL('../../src/ui/', import.meta.url);
 const read = (rel: string): string =>
   readFileSync(fileURLToPath(new URL(rel, root))).subarray(0, 8 * 1024 * 1024).toString('utf8');
 
+/**
+ * 去掉行注释（双斜杠起）与块注释（斜杠星号起），**引号与模板串里的内容一律保留**。
+ *
+ * 为什么不用正则：`'//'`、`"/*"`、模板串里的注释样式字符会被正则误吃，把真实代码当成注释删掉
+ * （那会制造**假红**）；而在别处又会把注释留下（假绿）。
+ *
+ * 为什么必须去注释（这是本助手存在的全部理由）：
+ *   - `effects/index.ts` 里 `rot-cw` **只出现在两行中文注释**（:115、:620）。只要把 `.rot-cw` 的
+ *     `requiredBy` 加回 `['effects/index.ts']`，原来的 `src.includes(probe)` 会**全绿** —— 出处机检
+ *     被注释骗过。评审已实测：注释在则 13/13 绿，只把那两行注释的 `（rot-cw/rot-ccw）` 改成
+ *     `（横置）`（零代码改动）才立刻变红。
+ *   - 同理 `render.ts:196` 的注释、`effects/index.ts:164` 的 `--fx-rot`/`cloneTransformOf` 注释
+ *     （Minor-3）也都只能靠去注释才拦得住。
+ *
+ * 行号保持：注释内容替换为**等长空白**（注释起始的两个字符本身留在原位，只是不再是注释），
+ * 于是 `split('\n').length` 与原文一致，报错里的行号可直接对照源码。
+ */
+function stripComments(src: string): string {
+  const out: string[] = new Array(src.length);
+  let i = 0;
+  while (i < src.length) {
+    const c = src[i];
+    const n = src[i + 1];
+    if (c === '/' && n === '/') {                       // 行注释：替换到行尾（不含换行）
+      while (i < src.length && src[i] !== '\n') { out[i] = ' '; i += 1; }
+      continue;
+    }
+    if (c === '/' && n === '*') {                       // 块注释：替换到闭合处（含），保留换行
+      out[i] = '/'; out[i + 1] = '*'; i += 2;
+      while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) {
+        out[i] = src[i] === '\n' ? '\n' : ' ';
+        i += 1;
+      }
+      if (i < src.length) { out[i] = '*'; out[i + 1] = '/'; i += 2; }
+      continue;
+    }
+    if (c === "'" || c === '"' || c === '`') {          // 字符串 / 模板串：整段原样保留
+      const quote = c;
+      out[i] = c; i += 1;
+      while (i < src.length) {
+        const ch = src[i];
+        out[i] = ch;
+        i += 1;
+        if (ch === '\\') { if (i < src.length) { out[i] = src[i]; i += 1; } continue; }
+        if (ch === quote) break;
+      }
+      continue;
+    }
+    out[i] = c; i += 1;
+  }
+  return out.join('');
+}
+
 /** FX 层模块（契约的消费方） */
 const FX_MODULES = [
   'effects/index.ts',
@@ -33,8 +86,15 @@ const FX_MODULES = [
 /** 结构钩子的提供方（当前唯一渲染器；G2 会新增远程页渲染器） */
 const RENDERERS = ['render.ts'] as const;
 
-// 显式 Map<string, string>：requiredBy 里的模块名是普通 string，需要能按名查回源码
-const fxSources = new Map<string, string>(FX_MODULES.map((m): [string, string] => [m, read(m)]));
+// 显式 Map<string, string>：requiredBy 里的模块名是普通 string，需要能按名查回源码。
+//
+// G2 Task 2F：这里用 **去注释后** 的源码。原来的裸源码会被注释满足 —— `effects/index.ts` 里
+// `rot-cw` 只在 :115/:620 两行中文注释里，于是「requiredBy 写 effects/index.ts」照样全绿。
+// 去注释后，判据变成「这个模块的代码（非注释）真的出现该判别子串」。
+const fxSources = new Map<string, string>(FX_MODULES.map((m): [string, string] => [m, stripComments(read(m))]));
+
+/** 当前渲染器源码（去注释口径，理由见 stripComments 与下方两条渲染器断言） */
+const rendererSources = new Map<string, string>(RENDERERS.map((r): [string, string] => [r, stripComments(read(r))]));
 
 /**
  * 取钩子的「判别子串」。必须能唯一定位到这个钩子，否则守卫形同虚设：
@@ -97,7 +157,10 @@ function datasetAlternativesOf(h: FxDomHook): string[] {
  * `kind === 'attr'` 上，于是复合钩子 `.stack-slot[data-player][data-line]` 只写 dataset 时被假红，
  * 而任何一处查询又能让「根本不写属性」的渲染器蒙混过关）。
  *
- * 注意：它证明的仍只是"书写形式出现在源码文本里"，**不**证明属性真的写在节点上、
+ * G2 Task 2F：入参应为 **stripComments 后**的源码。原先的裸源码会被注释满足 —— 例如 render.ts:196
+ * 的中文注释里写着 `.rot-cw`，`:1438/:2927` 的注释里写着 `rot-180`，都在描述而非产出。
+ *
+ * 注意：它证明的仍只是"书写形式出现在（非注释的）源码文本里"，**不**证明属性真的写在节点上、
  * 值是否与状态一致、节点在特效读取那一刻是否存在。
  */
 function rendererProvides(src: string, h: FxDomHook): boolean {
@@ -179,7 +242,7 @@ describe('G1 · FX DOM 契约', () => {
   it('A 类钩子必须被当前渲染器提供（这是 G2 的验收基准）', () => {
     const missing: string[] = [];
     for (const r of RENDERERS) {
-      const src = read(r);
+      const src = rendererSources.get(r) ?? stripComments(read(r));
       for (const h of hooksOfCategory('A')) {
         if (rendererProvides(src, h)) continue;
         const alts = datasetAlternativesOf(h);
@@ -192,7 +255,8 @@ describe('G1 · FX DOM 契约', () => {
 
   it('A/B/C 类 requiredBy 的每个模块都必须自己含该钩子的判别子串（出处可机检，不是只查名单）', () => {
     // 只断言「模块名 ∈ FX_MODULES」等于没查：随便填一个 FX 模块都能过。
-    // 这里逐步收紧为「这个模块的源码里真的有这个钩子」，凭空发明 / 出处写错都会被抓到。
+    // 这里逐步收紧为「这个模块的**代码**里真的有这个钩子」，凭空发明 / 出处写错都会被抓到。
+    // G2 Task 2F：判据走去注释后的源码（fxSources），否则中文注释里的同名子串就能满足它。
     const problems: string[] = [];
     for (const h of FX_DOM_CONTRACT) {
       if (h.category === 'D') continue; // D 类＝FX 零引用，requiredBy 必空（另有专门断言）
@@ -201,7 +265,7 @@ describe('G1 · FX DOM 契约', () => {
         const src = fxSources.get(m);
         if (src === undefined) { problems.push(`${h.hook}（${h.category} 类）：requiredBy 的 ${m} 不是 FX 模块`); continue; }
         if (!src.includes(probe)) {
-          problems.push(`${h.hook}（${h.category} 类）：requiredBy 的 ${m} 里找不到判别子串 ${probe}`);
+          problems.push(`${h.hook}（${h.category} 类）：requiredBy 的 ${m} 里（去注释后）找不到判别子串 ${probe}`);
         }
       }
     }
@@ -251,6 +315,9 @@ describe('G1 · FX DOM 契约', () => {
   });
 
   it('D 类钩子必须由渲染器产出、且 FX 模块完全读不到（两个条件缺一不可，防止分类搞反）', () => {
+    // G2 Task 2F：这里**故意**沿用裸源码（不去注释）—— 该断言要的正是「渲染器确实产出这些
+    // 钩子」，而 D 类的三条判别子串在 render.ts 的注释里也出现（描述性提及）。去注释会让它
+    // 更严，但那属于 Task 4 的契约结构改动范围，本任务只按简报修 I-1 指定的两处。
     const rendererSrc = RENDERERS.map((r) => read(r)).join('\n');
     const problems: string[] = [];
     for (const h of hooksOfCategory('D')) {
@@ -265,6 +332,7 @@ describe('G1 · FX DOM 契约', () => {
 
   it('契约文档必须逐一登记全部 A 类钩子（文档与代码不得漂移）', () => {
     // 路径基准是 tests/ui/：../../docs/ = 仓库根/docs/（与同目录既有测试的 '../../src/' 同惯例）
+    // ⚠️ 这里**绝不能**去注释：文档本身就是散文，去掉注释会把正文吃掉、全部 A 类钩子被判缺失。
     const doc = readFileSync(
       fileURLToPath(new URL('../../docs/4代-FX DOM 契约.md', import.meta.url)),
     ).subarray(0, 4 * 1024 * 1024).toString('utf8');
@@ -272,5 +340,46 @@ describe('G1 · FX DOM 契约', () => {
       .map((h) => h.hook)
       .filter((hook) => !doc.includes(hook));
     expect(missing, `文档未登记以下 A 类钩子：\n${missing.join('\n')}`).toEqual([]);
+  });
+});
+
+/**
+ * `stripComments` 自身的守卫。
+ *
+ * 没有这一条，这个助手就成了本文件里**新的**静默风险：它若把真实代码误删（假红）或漏删注释
+ * （假绿），上面所有去注释后的断言都会跟着一起错，而且看起来完全正常。
+ */
+describe('G2 Task 2F · stripComments（去注释助手自身）', () => {
+  it('行注释与块注释被移除', () => {
+    expect(stripComments('const a = 1; // rot-cw')).not.toContain('rot-cw');
+    expect(stripComments('const a = 1; /* rot-cw */ const b = 2;')).not.toContain('rot-cw');
+    // 留白而非删除：代码本身必须原样保留
+    expect(stripComments('const a = 1; // x')).toContain('const a = 1;');
+  });
+
+  it("字符串/模板串里的注释样式字符**保留**（正则做不到这一点）", () => {
+    expect(stripComments("const a = 'http://x';")).toContain("'http://x'");
+    expect(stripComments('const b = "/*not*/";')).toContain('"/*not*/"');
+    expect(stripComments('const c = `a//b`;')).toContain('`a//b`');
+  });
+
+  it('多行块注释被移除且行号不变', () => {
+    const src = ['const a = 1;', '/* line1', '   line2 */', 'const b = 2;'].join('\n');
+    const out = stripComments(src);
+    expect(out.split('\n').length).toBe(src.split('\n').length);
+    expect(out).not.toContain('line1');
+    expect(out).not.toContain('line2');
+    expect(out.split('\n')[0]).toContain('const a = 1;');
+    expect(out.split('\n')[3]).toContain('const b = 2;');
+  });
+
+  it('对真实源码：effects/index.ts 的 rot-cw 仅来自注释，去注释后归零（I-1 的决定性证据）', () => {
+    const raw = read('effects/index.ts');
+    const stripped = stripComments(raw);
+    // 原文件里 "rot-cw"（不带引号）确实存在 —— 评审实测只有 :115/:620 两行中文注释
+    expect(raw, 'effects/index.ts 里本应有 rot-cw（注释）').toContain('rot-cw');
+    expect(stripped, 'effects/index.ts 去注释后仍有 rot-cw 字样（出处数据其实不诚实？）').not.toContain('rot-cw');
+    // 行号必须保持（否则去注释后的报错行号会误导人）
+    expect(stripped.split('\n').length).toBe(raw.split('\n').length);
   });
 });

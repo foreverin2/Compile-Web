@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { orientOf, orientToCwCcw, orientToFxRot, stripOrientClasses, cloneTransformOf, cloneBoxSwaps, type CardOrient } from '../../src/ui/fx-orient';
 import { cloneBoxFrom } from '../../src/ui/fx/clone-orient';
@@ -178,16 +178,95 @@ describe('orientToFxRot / stripOrientClasses（G2 Task 2 新增出口）', () =>
  * 证明不了运行时朝向真的对 —— 那靠 G2 的用户实机抽查（计划「用户验收」第 3 项）。
  */
 describe('G2 · 朝向判定单一出处（源码守卫）', () => {
-  const FX_FILES = ['effects/index.ts', 'fx-gen2.ts', 'fx-gen3.ts', 'fx-gen3-swap.ts', 'gen3-control.ts', 'compiled-gen3.ts'];
-  const readFx = (f: string): string =>
-    readFileSync(fileURLToPath(new URL(`../../src/ui/${f}`, import.meta.url))).subarray(0, 8 * 1024 * 1024).toString('utf8');
+  /**
+   * G2 Task 2F：模块清单改为**磁盘发现**，不再硬编码。
+   *
+   * 起因（评审 Important-3）：原来的 `FX_FILES` 是 6 个模块的硬编码子集，而 Task 3 要新建
+   * `src/ui/render-net.ts` —— 它不在清单里，于是主反向守卫**结构上**拦不住它的裸判定
+   * （新渲染器可以裸写 `classList.contains('rot-180')` 而所有守卫保持绿色）。
+   * 同一份教训在 `tests/ui/fx-dom-contract.test.ts:169-177` 的 RENDERERS 发现守卫里已经写过一次：
+   * 「漏登记比没有守卫更糟，因为它读起来像已验收」。
+   *
+   * 三类（互斥）：
+   *   - **单一出处** `fx-orient.ts`：唯一允许命名这三个类名的地方（`ORIENT_CLASSES` + `orientOf` 的读取）；
+   *     它的存在理由就是"朝向判定只能在这里发生"，所以必须命名这些类名。
+   *   - **产出方** 磁盘上所有 `render*.ts`：渲染器要挂朝向类名（render.ts:116/:227），允许。
+   *   - **FX 消费者** 其余全部 `src/ui/` 与 `src/ui/fx/` 下的 `.ts`：**零命中**带引号的
+   *     `'rot-cw'`/`'rot-ccw'`/`'rot-180'` 字面量
+   *     （沿用原有正则 `/['"]rot-(cw|ccw|180)['"]/`，抓带引号的字面量，避开中文注释里的 `.rot-cw` 散文）。
+   *
+   * 豁免集合**恰好**是 `fx-orient.ts` ∪ 磁盘 `render*.ts` ∪ 契约数据文件的精确文件名
+   * （不是"名字里含 render 就算"这类宽匹配）：
+   *   - `src/ui/fx-dom-contract.ts`：契约**数据**，把 `'.rot-cw'` 这类钩子字符串当数据登记，
+   *     是"声明"不是"判定"；它出现在豁免里是**精确文件名**，不是模式匹配。
+   */
+  const uiRoot = new URL('../../src/ui/', import.meta.url);
+  const readUiFile = (rel: string): string =>
+    readFileSync(fileURLToPath(new URL(rel, uiRoot))).subarray(0, 8 * 1024 * 1024).toString('utf8');
 
-  // 1) 反向：FX 模块不得再裸写朝向类名（注释里写 `.rot-cw` 不算 —— 只抓带引号的字面量）
+  /**
+   * 磁盘发现的全部 `src/ui/**` 模块（相对路径；每个已知目录各自非递归）。
+   * 同时返回每个目录各自发现到的文件数 —— 那个「> 0」的断言放在 `it` 里跑（而不是模块作用域里），
+   * 否则目录写错会让整个测试文件在收集阶段就崩掉，读者只看到 "0 test" 而不是一条清楚的守卫失败。
+   */
+  const { discovered, perDirCounts } = (() => {
+    const out: string[] = [];
+    const counts: Array<[string, number]> = [];
+    // 三个目录：`src/ui/`（前缀空）、`src/ui/fx/`、`src/ui/effects/`。
+    // ⚠️ 简报写的是「`src/ui/*.ts` 与 `src/ui/fx/*.ts` 两个目录」，但实际磁盘上还有
+    // `src/ui/effects/index.ts` —— 而它正是最大的 FX 消费者（2285 行）。只扫两个目录会
+    // 把它从消费者的发现结果里漏掉（原 FX_FILES 清单里有它），那等于**缩小**守卫面。
+    // 故按实际目录结构扫三个；若将来新增目录，`LEGACY_CONSUMERS` 覆盖断言会立刻报红。
+    for (const prefix of ['', 'fx/', 'effects/'] as const) {
+      // 目录路径写错/改名 → 发现结果为空 → 下面「三类都非空」的断言立刻报红（而不是静默全绿）。
+      // 这里吞掉 readdirSync 的异常（目录不存在会 throw）：让守卫以**断言失败**的形式报红，
+      // 比一个 ENOENT 崩掉整个测试文件更清楚地指出问题所在。
+      let files: string[] = [];
+      try {
+        files = readdirSync(fileURLToPath(new URL(prefix, uiRoot))).filter((f) => f.endsWith('.ts'));
+      } catch { files = []; }
+      counts.push([`src/ui/${prefix}`, files.length]);
+      for (const f of files) out.push(`${prefix}${f}`);
+    }
+    return { discovered: out, perDirCounts: counts };
+  })();
+
+  /** 单一出处：唯一豁免的模块（见上方注释）。 */
+  const SOLE_SOURCE = 'fx-orient.ts';
+  /** 产出方：磁盘上所有 `render*.ts`（含 Task 3 将新建的 `render-net.ts`，无需改这个清单）。 */
+  const producers = discovered.filter((f) => /^render.*\.ts$/.test(f));
+  /** 契约数据文件：登记钩子字符串为数据，不做朝向判定（精确文件名豁免）。 */
+  const CONTRACT_DATA = 'fx-dom-contract.ts';
+  /** FX 消费者：其余全部 —— 必须零命中带引号的朝向类名字面量。 */
+  const consumers = discovered.filter((f) => f !== SOLE_SOURCE && !producers.includes(f) && f !== CONTRACT_DATA);
+
+  /** 原有 6 个消费者必须仍在发现结果里（保留原语义：这些模块不能被漏扫） */
+  const LEGACY_CONSUMERS = ['effects/index.ts', 'fx-gen2.ts', 'fx-gen3.ts', 'fx-gen3-swap.ts', 'gen3-control.ts', 'compiled-gen3.ts'];
+
+  it('磁盘发现的三类都非空，且豁免集合恰好等于 单一出处 ∪ 磁盘 render*.ts ∪ 契约数据（防目录写错静默全绿 / 防宽匹配扩大豁免）', () => {
+    // 每个被扫的目录都必须发现到 .ts（路径写错 → 空 → 报红；发现结果为空则下面全部静默绿）
+    const emptyDirs = perDirCounts.filter(([, n]) => n === 0).map(([d]) => d);
+    expect(emptyDirs, `以下目录发现 0 个 .ts（路径写错/改名？发现结果为空则守卫静默全绿）：\n${emptyDirs.join('\n')}`).toEqual([]);
+    const groups: Array<[string, string[]]> = [['单一出处', [SOLE_SOURCE]], ['产出方 render*.ts', producers], ['FX 消费者', consumers]];
+    const empty = groups.filter(([, files]) => files.length === 0).map(([name]) => name);
+    expect(empty, `以下类别在磁盘上发现 0 个文件（目录路径写错？发现结果为空则守卫静默全绿）：\n${empty.join('\n')}`).toEqual([]);
+    // 豁免集合必须**恰好**是这三类里的非消费者部分 —— 任何额外豁免都会体现在这里
+    const exempt = [...discovered].filter((f) => !consumers.includes(f)).sort();
+    expect(exempt, '豁免集合不等于 单一出处 ∪ 磁盘 render*.ts ∪ 契约数据（不得扩大豁免）')
+      .toEqual([SOLE_SOURCE, CONTRACT_DATA, ...producers].sort());
+    for (const f of LEGACY_CONSUMERS) {
+      expect(consumers, `原有的 FX 消费者 ${f} 未被磁盘发现结果覆盖`).toContain(f);
+    }
+    expect(producers, '当前生产渲染器 render.ts 未被磁盘发现').toContain('render.ts');
+    expect(discovered.length, '磁盘发现结果过少（目录路径可能写错）').toBeGreaterThan(LEGACY_CONSUMERS.length);
+  });
+
+  // 1) 反向：FX 消费者不得裸写朝向类名（注释里写 `.rot-cw` 不算 —— 只抓带引号的字面量）
   it('FX 模块不得再裸写朝向类名（必须经 orientOf/ORIENT_CLASSES 消费）', () => {
     const bad: string[] = [];
-    for (const f of FX_FILES) {
+    for (const f of consumers) {
       let src: string;
-      try { src = readFx(f); } catch { continue; } // 文件不存在则跳过（模块清单允许演进）
+      try { src = readUiFile(f); } catch { continue; } // 文件不存在则跳过（模块清单允许演进）
       src.split('\n').forEach((line, i) => {
         if (/['"]rot-(cw|ccw|180)['"]/.test(line)) bad.push(`${f}:${i + 1}: ${line.trim()}`);
       });
@@ -195,18 +274,63 @@ describe('G2 · 朝向判定单一出处（源码守卫）', () => {
     expect(bad, `以下位置仍在裸写朝向类名，请改走 fx-orient.ts 的 orientOf()：\n${bad.join('\n')}`).toEqual([]);
   });
 
+  /**
+   * I-3 新增：把 G2 Task 3 的硬约束 2 变成机检（这是本次修里最有价值的一项）。
+   *
+   * 计划 Task 3 正文：「**`.rot-cw`/`.rot-ccw` 在远程页不产出**；改为产出朝向标记
+   * （自己不加类 = 0°，对手加 `.rot-180`）」——理由：远程页自己正立、对手 180°，
+   * ±90° 会**交换布局盒宽高**故不适用。
+   *
+   * 于是：磁盘上除 `render.ts`（热座页）之外的任何 `render*.ts`，不得含 `'rot-cw'`/`'rot-ccw'` 字面量。
+   * 这条守卫会在 Task 3 阶段自动抓错（`render-net.ts` 一写 ±90° 就红），无需再往清单里加名字。
+   */
+  it('除 render.ts 外的 render*.ts（远程页渲染器）不得产出热座专属的 ±90° 朝向类', () => {
+    const bad: string[] = [];
+    for (const f of producers) {
+      if (f === 'render.ts') continue; // 热座页的产出方，允许 ±90°
+      const src = readUiFile(f);
+      src.split('\n').forEach((line, i) => {
+        if (/['"]rot-(cw|ccw)['"]/.test(line)) bad.push(`${f}:${i + 1}: ${line.trim()}`);
+      });
+    }
+    expect(bad, `以下非热座渲染器产出了 ±90° 朝向类（远程页用「自己 0° / 对手 180°」，±90° 会交换布局盒宽高）：\n${bad.join('\n')}`).toEqual([]);
+  });
+
   // 2) 正向：effects/index.ts 与 fx-gen3.ts 确实 import/使用了 orientOf（防止靠删代码过关）
   it('effects/index.ts 与 fx-gen3.ts 确实从 fx-orient 消费单一出处', () => {
     for (const f of ['effects/index.ts', 'fx-gen3.ts']) {
-      const src = readFx(f);
+      const src = readUiFile(f);
       expect(src, `${f} 未引用 orientOf`).toMatch(/\borientOf\b/);
       expect(src, `${f} 未从 fx-orient 引入`).toMatch(/from '[^']*fx-orient'/);
     }
   });
 
-  // 3) 产出方仍在产出：render.ts 必须同时含 'rot-cw' / 'rot-ccw' / 'rot-180'（防止靠删产出过关）
+  // 3) 产出方仍在产出：render.ts 必须仍在**产出点**上挂三种朝向类（防止靠删/改产出过关）
   it('render.ts 仍在产出三种朝向类（防止靠删产出过关）', () => {
     const src = readFileSync(fileURLToPath(new URL('../../src/ui/render.ts', import.meta.url))).subarray(0, 8 * 1024 * 1024).toString('utf8');
+    // ⚠️ 必须钉**产出表达式**，不能对整文件做子串查找。两个假绿来源（评审实测）：
+    //    - `rot-cw` 会被**中文注释** render.ts:196（`.rot-cw`）满足；
+    //    - `rot-180` 会被**类名镜像行** render.ts:1443（把邻居的类名 toggle 到编译卡面克隆上）满足。
+    //    两条都与"产出"无关，所以 `expect(src).toContain('rot-cw')` 这类写法对产出点完全失效
+    //    （把 :227 改成 'rot-clockwise' —— 热座页所有场上卡立刻直立 —— 仍然全绿）。
+    //
+    // 两个产出点（BASE 实际写法，行号仅作参考）：
+    //    - render.ts:227 `renderStackSlot` 内，场上卡按 owner 挂 ±90°：
+    //      `node.classList.add(card.owner === 0 ? 'rot-cw' : 'rot-ccw');`
+    //    - render.ts:116 `renderProtocol` 内，P2 协议图 180°（`.protocol-img`）：
+    //      `img.className = 'protocol-img' + (player === 1 ? ' rot-180' : '');`
+    // 条件分支与类名一起钉住：只钉类名的话，把 `card.owner === 0` 反过来（P1/P2 朝向互换）
+    // 仍然全绿 —— 那同样会让热座页所有场上卡朝向错。
+    const missing: string[] = [];
+    if (!/classList\.add\(card\.owner === 0 \? 'rot-cw' : 'rot-ccw'\)/.test(src)) {
+      missing.push("场上卡产出表达式（renderStackSlot 的 `classList.add(card.owner === 0 ? 'rot-cw' : 'rot-ccw')`）");
+    }
+    if (!/'protocol-img' \+ \(player === 1 \? ' rot-180' : ''\)/.test(src)) {
+      missing.push("协议图 180° 产出表达式（renderProtocol 的 `'protocol-img' + (player === 1 ? ' rot-180' : '')`）");
+    }
+    expect(missing, `render.ts 丢失/改变了朝向产出表达式（产出点是热座观感的唯一来源，不得顺手删）：\n${missing.join('\n')}`).toEqual([]);
+    // 两个产出表达式已覆盖全部三个类名（rot-cw/rot-ccw 在第一条，rot-180 在第二条）；
+    // 这里再逐个给出可读的失败信息，防止有人只改其中一支
     for (const c of ['rot-cw', 'rot-ccw', 'rot-180']) {
       expect(src, `render.ts 丢失产出类 ${c}（产出点是热座观感的唯一来源，不得顺手删）`).toContain(c);
     }
@@ -214,15 +338,29 @@ describe('G2 · 朝向判定单一出处（源码守卫）', () => {
 
   // 4) stripOrientClasses 确实被 playRiseFade 使用（effects/index.ts 含 'stripOrientClasses('）
   it('playRiseFade 的克隆用 stripOrientClasses 清理朝向', () => {
-    expect(readFx('effects/index.ts'), '克隆去类未走 stripOrientClasses（会漏摘 rot-180）').toContain('stripOrientClasses(');
+    expect(readUiFile('effects/index.ts'), '克隆去类未走 stripOrientClasses（会漏摘 rot-180）').toContain('stripOrientClasses(');
   });
 
-  // 5) orientToFxRot 只产出**裸角度**：不得出现 --fx-rot 与 cloneTransformOf 同现的行
+  // 5) orientToFxRot 只产出**裸角度**：不得出现 --fx-rot 与 cloneTransformOf 同现的行，
+  //    且**每个**写入 --fx-rot 的表达式都必须是裸角度（不得塞 rotate(…) 完整函数串）
   it('--fx-rot 不得与完整 transform 函数串（cloneTransformOf）混用', () => {
-    const bad = readFx('effects/index.ts').split('\n')
+    const src = readUiFile('effects/index.ts');
+    // 5a) 逐行：`--fx-rot` 与 `cloneTransformOf` 不得同现
+    const bad = src.split('\n')
       .map((line, i) => ({ no: i + 1, line }))
       .filter(({ line }) => line.includes('--fx-rot') && line.includes('cloneTransformOf'))
       .map(({ no, line }) => `${no}: ${line.trim()}`);
     expect(bad, `--fx-rot 只吃裸角度，混用完整函数串会让整条内联 transform 静默失效：\n${bad.join('\n')}`).toEqual([]);
+    // 5b) 钉**写入表达式本身**。原实现只做 5a，而 effects/index.ts:164 的注释里同时含
+    //     `--fx-rot` 与 `cloneTransformOf` —— 也就是说 5a 完全可以被注释解释，且它证明不了
+    //     「真正写值的那一行没被换成完整函数串」。这里改成对每个写入点逐一断言形态。
+    //     当前两个写入点（BASE 行号 165/173，±90° 与 180° 分支各一次）：
+    //       card.style.setProperty('--fx-rot', orientToFxRot(orient));
+    //     用 `[^;]*` 而不是 `[^)]*`：实参里含括号（`orientToFxRot(orient)`），`[^)]*` 会截断成
+    //     `orientToFxRot(orient` 从而假红。
+    const writes = [...src.matchAll(/setProperty\(\s*'--fx-rot'\s*,\s*([^;]*?)\)\s*;/g)].map((m) => m[1].trim());
+    expect(writes.length, 'effects/index.ts 里找不到 --fx-rot 的写入点（产出路径被删？）').toBeGreaterThan(0);
+    const badForms = writes.filter((w) => !/^orientToFxRot\(orient\)$/.test(w));
+    expect(badForms, `--fx-rot 的写入值必须是 orientToFxRot(orient) 的裸角度（不得是 cloneTransformOf 的函数串）：\n${badForms.join('\n')}`).toEqual([]);
   });
 });
