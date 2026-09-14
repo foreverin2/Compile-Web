@@ -79,13 +79,16 @@ function between(code: string, from: string, to: string): string {
   return code.slice(i, j);
 }
 
-/** 去注释后的 CSS 规则（本文件没有嵌套规则/@media，`选择器 { 体 }` 的简版解析够用） */
+/** 去注释后的 CSS 规则（本文件没有嵌套规则/@media，`选择器 { 体 }` 的简版解析够用）。
+ *  ⚠️ 选择器**内部**的换行/多空格原样保留（正则只切"选择器 → `{`"这一段）：
+ *  形如 `.a,\n.b { … }` 的多行选择器会被切成 `'.a,\n.b'`，调用方要么用子串比、
+ *  要么先压空白（见 R1-1 的 `norm`）。 */
 function cssRules(css: string): Array<{ selector: string; body: string }> {
   const out: Array<{ selector: string; body: string }> = [];
   const src = stripComments(css);
   const re = /([^{}]+)\{([^{}]*)\}/g;
   for (let m = re.exec(src); m !== null; m = re.exec(src)) {
-    out.push({ selector: m[1].trim(), body: m[2] });
+    out.push({ selector: m[1].trim().replace(/\s+/g, ' '), body: m[2] });
   }
   return out;
 }
@@ -435,7 +438,7 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
     expect(code, '链路槽的对手朝向未按座位传 orient（硬约束 2 变成"完全不倒置"）')
       .toMatch(/orient:\s*isSelfSeat\s*\?\s*0\s*:\s*180/);
     expect(code, '协议格的对手朝向未按座位传 orient')
-      .toMatch(/renderProtocolCell\(\s*s,\s*player,\s*line,\s*isSelfSeat\s*\?\s*0\s*:\s*180\s*\)/);
+      .toMatch(/renderProtocolCell\(\s*s,\s*player,\s*line,\s*isSelfSeat\s*\?\s*0\s*:\s*180,/);
   });
 
   it('4. 不得用 s.turnPlayer 冒充"自己"；"自己"必须来自 viewSeat', () => {
@@ -702,6 +705,196 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
       .toMatch(/\.card\.rot-180:hover\s*\{[^}]*rotate\(180deg\)/);
   });
 
+  /* ==========================================================================
+   * G2 修正 R1 · 三列纵向布局的守卫
+   *
+   * ⚠️ **所有这些都只是源码文本代理**（本项目反复栽在这里）：它们能证明"函数 / 规则按这个
+   * 顺序写、类名与实参这么给"，**证明不了**运行期的观感 —— 布局最终只能靠用户人眼看
+   * （规格 §1 是用户逐条确认的）。这一点在下面每条里都复述一遍，别把绿读成"已验证"。
+   * ======================================================================== */
+
+  /**
+   * R1-1（**本次重做的核心**）：一条线必须是**一个纵向的列**，列内自上而下恰好是规格 §1 的六层：
+   *   对手能量槽 → 对手链路 → 对手协议 → 自己协议 → 自己链路 → 自己能量槽
+   *
+   * 判据（三条腿，缺一条就会被"结构被改回去"瞒过去）：
+   *  ① `renderLaneColumn` 里**对手侧 / 中线 / 自己侧**三个 append 的顺序；
+   *  ② `renderSide` 里**链路槽 → 协议格**的 append 顺序（能量槽在槽内，由 ③ 钉）；
+   *  ③ 样式表里 `.net-side` 是**纵向** flex、`.stack-slot` 的 `order` 让能量槽落在链路**外侧**
+   *     （对手 p1 = order 1 在上、自己 p2 = order 3 在下），且 `.stack-slot` 自身是纵向 flex。
+   *
+   * 「旧布局 → 新布局」的守卫对照：旧版这条位置上是**第 17 条**（`band.appendChild(renderSideRow(…))`
+   * 两次 + `for (const line of [0, 1, 2])`）。它抓的是"整条对手侧行没了"（F-2 的计数盲区），
+   * **抓不到**"三条横带 vs 三个竖列"—— 因为横带与竖列在源码上是**同一个**函数名与同一个循环。
+   * 新增的 ③ 才是真正钉住"列"的那条腿；①②把"列内的层顺序"钉死。
+   */
+  it('R1-1. 三列纵向布局：列内层顺序（对手侧 / 中线 / 自己侧）+ 链路槽在协议格之前 + 能量槽在外侧端', () => {
+    const code = netCode();
+    // ① 列内顺序：对手侧 → 中线 → 自己侧（`foe` 先于 `mid`，`mid` 先于 `viewSeat`）
+    const col = between(code, 'function renderLaneColumn', 'function choiceSkipBtn');
+    const iFoe = col.indexOf('col.appendChild(renderSide(s, foe,');
+    const iMid = col.indexOf('col.appendChild(renderLaneMid(');
+    const iSelf = col.indexOf('col.appendChild(renderSide(s, viewSeat,');
+    expect(iFoe, '列内找不到对手侧的挂载（`col.appendChild(renderSide(s, foe, …))`）').toBeGreaterThanOrEqual(0);
+    expect(iMid, '列内找不到中线的挂载').toBeGreaterThanOrEqual(0);
+    expect(iSelf, '列内找不到自己侧的挂载').toBeGreaterThanOrEqual(0);
+    expect(iFoe, '列内顺序错：对手侧必须在中线**之前**（规格 §1 第 1-3 层）。'
+      + '横带时代这里是 `band.appendChild(renderSideRow(s, foe, …))`，改回横带即红').toBeLessThan(iMid);
+    expect(iMid, '列内顺序错：中线必须在自己侧**之前**（规格 §1 第 4 层的分界）').toBeLessThan(iSelf);
+    expect((col.match(/col\.appendChild\(renderSide\(/g) ?? []).length,
+      'renderSide 必须恰好挂载两次（对手 / 自己各一次 —— 少一次就是半个棋盘，F-2 的计数盲区）').toBe(2);
+    // ② 一侧之内：链路槽 → 协议格（能量槽由 CSS order 摆到外侧，不走 DOM 顺序）
+    const side = between(code, 'function renderSide(', 'function renderLaneMid');
+    const iSlot = side.indexOf('side.appendChild(renderStackSlot(');
+    const iProto = side.indexOf('side.appendChild(renderProtocolCell(');
+    expect(iSlot, '一侧之内找不到链路槽的挂载').toBeGreaterThanOrEqual(0);
+    expect(iProto, '一侧之内找不到协议格的挂载').toBeGreaterThanOrEqual(0);
+    expect(iSlot, '一侧之内顺序错：链路槽必须在协议格之前（层 2 在层 3 之前 / 层 5 在层 4 之后靠列顺序实现）')
+      .toBeLessThan(iProto);
+    // ③ 样式表：列/侧都是纵向，能量槽用 order 落在链路外侧端
+    const css = read('styles-net.css');
+    // ⚠️ `cssRules` 对这份样式表**不是**先去掉注释再解析（它按 `{}` 切块，块注释里的 `*`/`/`
+    //    会留成 `/* */` 前缀），所以选择器要用 `endsWith` 比 —— 用 `===` 会假红。
+    //    另外复合选择器里的换行/多空格也要压掉（`.a .b` 与 `.a  .b` 语义相同）。
+    const norm = (s: string): string => s.replace(/\s+/g, ' ').trim();
+    const ruleBody = (sel: string): string => {
+      const want = norm(sel);
+      const r = cssRules(css).find((x) => norm(x.selector).endsWith(want));
+      expect(r, `styles-net.css 里找不到规则 ${sel}（布局腿被删？）`).toBeTruthy();
+      return r?.body ?? '';
+    };
+    expect(ruleBody('.net-lane-band'), '`.net-lane-band` 不是纵向 flex —— 三个列就变回三条横带')
+      .toMatch(/flex-direction:\s*column/);
+    expect(ruleBody('.net-side'), '`.net-side` 不是纵向 flex（列内的两层会并排）')
+      .toMatch(/flex-direction:\s*column/);
+    expect(ruleBody('.net-lane-band .stack-slot'), '`.stack-slot` 不是纵向 flex（能量槽没法用 order 挪到上/下）')
+      .toMatch(/flex-direction:\s*column/);
+    // 能量槽的外侧端：对手（p1）order 1（链路 order 2 之下 ⇒ 在**上**）；自己（p2）order 3（在**下**）
+    expect(ruleBody('.net-lane-band .stack-slot.p1 .battery'), '对手能量槽未定 order（应在上外侧端）')
+      .toMatch(/order:\s*1/);
+    expect(ruleBody('.net-lane-band .stack-slot.p2 .battery'), '自己能量槽未定 order（应在下外侧端）')
+      .toMatch(/order:\s*3/);
+    expect(ruleBody('.net-lane-band .stack-slot .battery'),
+      '能量槽仍是绝对定位（styles.css:161 的 left/right:-120px 会把竖排的能量槽甩到列外）')
+      .toMatch(/position:\s*static/);
+    // 三条线仍然由同一个循环产出（写成 `[0, 1, 2]`；改长度必须同步第 17 条的期望数量表）
+    expect(code, '三条线必须由 `for (const line of [0, 1, 2] as Line[])` 产出')
+      .toMatch(/for \(const line of \[0, 1, 2\] as Line\[\]\)/);
+  });
+
+  /**
+   * R1-2：**卡面**朝向 —— 场上卡 0°（自己）/ 180°（对手），且**必须按座位**传（不能写死）。
+   *
+   * 断言 2（运行时自查）已经会查"对手侧每张卡各自带 .rot-180"，本条的增量是**协议图**的
+   * ∓90°（断言 2 查不到它，因为协议不再用 `.rot-180`）。
+   * 守卫对照：旧版这里只有"不产出 ±90°"（第 3 条）与"orient 按座位传"（第 3 条后半），
+   * 现在多两条：协议图 ∓90° 类的产出，以及"类名不写死在 render.ts 里"。
+   */
+  it('R1-2. 朝向分离：卡面 0°/180° 按座位传 + 协议图 ∓90° 用本页自有类（且 render.ts 里没有 .net-*）', () => {
+    const code = netCode();
+    // 卡面：`orient` 仍是按座位的三元实参（C-3 变异 A-2 的杀手，保留）
+    expect(code, '链路槽的对手朝向未按座位传 orient')
+      .toMatch(/orient:\s*isSelfSeat\s*\?\s*0\s*:\s*180/);
+    // 协议图：∓90° 走 renderProtocolCell 的**第 5 个实参**（extraClass）
+    expect(code, '自己协议的 ∓90° 类没交给 renderProtocolCell（协议会与卡面同向，全是正立/倒置）')
+      .toMatch(/renderProtocolCell\(\s*s,\s*player,\s*line,\s*isSelfSeat\s*\?\s*0\s*:\s*180,\s*isSelfSeat\s*\?\s*'net-rot-ccw'\s*:\s*'net-rot-cw'/);
+    const css = read('styles-net.css');
+    expect(css, 'styles-net.css 未定义 .net-rot-ccw（自己协议 −90°）的规则')
+      .toMatch(/\.net-rot-ccw\s*\{[^}]*rotate\(-90deg\)/);
+    expect(css, 'styles-net.css 未定义 .net-rot-cw（对手协议 +90°）的规则')
+      .toMatch(/\.net-rot-cw\s*\{[^}]*rotate\(90deg\)/);
+    // ⚠️ 类名归属：远程页的类不得写进共享助手 render.ts（写进去 = 热座页源码依赖远程页的类名，
+    //    "热座零变化"就不再是构造性的）。通用参数 `extraClass` 才是对的做法。
+    const renderSrc = stripComments(read('render.ts'));
+    expect(renderSrc, 'render.ts 里出现了 net-rot-* —— 远程页的字面量被硬写进共享助手（热座红线）')
+      .not.toMatch(/net-rot-/);
+    // extraClass 的真产出点必须在协议图 className 上（不是只声明了个参数）
+    expect(renderSrc, 'render.ts 的 protocol-img 未把 extraClass 拼进类名（协议 ∓90° 不会生效）')
+      .toMatch(/img\.className\s*=\s*'protocol-img'[^\n]*extraClass/);
+    // 旋转的布局后果：静态盒必须补回来，否则横躺的协议溢出列宽压到相邻列
+    expect(css, '协议图未给静态宽高（transform 不改布局盒 → 横躺的协议会压到相邻列）')
+      .toMatch(/\.net-lane-band \.protocol-holder\s*\{[^}]*width:\s*100px[^}]*height:\s*140px/);
+  });
+
+  /**
+   * R1-3：**竖向生长类** `.stack.grow-down`（自己）/ `.grow-up`（对手）+ **竖向重叠**。
+   *
+   * 守卫对照：旧版零覆盖（`.grow-left/.grow-right` 由 `renderStackSlot` 内部按绝对玩家给，
+   * 热座页也在用，所以"本页是否改成了竖排"根本无从判断 —— 这正是重做前那条横排布局
+   * 能一路全绿的原因之一）。现在钉：① `vGrow: true` 的真实参；② 两个类名的 CSS 规则；
+   * ③ 竖向重叠用 `margin-top`（若沿用横排的 `margin-left`，竖排的卡会横向错位、且不再重叠）。
+   */
+  it('R1-3. 竖向生长：vGrow 真实参 + .grow-down/.grow-up 规则 + 竖向重叠（margin-top）', () => {
+    const code = netCode();
+    expect(code, 'renderStackSlot 未传 vGrow: true（本页会退回热座页的横向生长）').toMatch(/vGrow:\s*true/);
+    // 竖向生长必须**两种座位都**生效（写死成一侧 = 另一半棋盘还是横排）
+    const stackOpts = code.slice(code.indexOf('side.appendChild(renderStackSlot('));
+    expect(stackOpts.slice(0, 600), 'vGrow 不在 renderStackSlot 的 opts 里（传给了别的调用？）')
+      .toMatch(/vGrow:\s*true/);
+    const css = read('styles-net.css');
+    expect(css, 'styles-net.css 未定义 .stack.grow-down（自己：向下长）')
+      .toMatch(/\.stack\.grow-down\s*\{[^}]*flex-direction:\s*column/);
+    expect(css, 'styles-net.css 未定义 .stack.grow-up（对手：向上长）')
+      .toMatch(/\.stack\.grow-up\s*\{[^}]*flex-direction:\s*column/);
+    expect(css, 'styles-net.css 未定义竖向重叠（`.card + .card` 的 margin-top）—— 卡会 100% 全展、一列撑爆')
+      .toMatch(/\.stack \.card \+ \.card\s*\{[^}]*margin-top:\s*calc\(/);
+    // ⚠️ 这仍然是**源码代理**：`.grow-*` 只是类名，真正的方向由运行期 flex 布局算出来。
+    // 哪种座位用哪个类（绝对玩家号配对）由 render.ts 的 `vGrow` 分支决定，这里只看"两边都传了"。
+  });
+
+  /**
+   * R1-4：**特效朝向标记** `data-fx-rot`（约束 8；R1 只负责**产出**，读侧是 R2 的 `fxOrientOf`）。
+   * 自己 = `"ccw"`（−90°）、对手 = `"cw"`（+90°）—— 规格 §8.2 钉死的名字。
+   *
+   * ⚠️ 它与**卡面**朝向是两套（自己卡面 0° 而特效 −90°），所以判据必须是"按座位给的两个值"，
+   * 不能是"从 orient 推导"（那样热座页也会被写出标记）。
+   * 守卫对照：旧版零覆盖（这个钩子本轮才出现）。
+   */
+  it('R1-4. 特效朝向标记：data-fx-rot 的两种取值（自己 ccw / 对手 cw）+ 热座不产出', () => {
+    const code = netCode();
+    expect(code, '未按座位传 fxRot（特效朝向标记没产出）')
+      .toMatch(/fxRot:\s*isSelfSeat\s*\?\s*'ccw'\s*:\s*'cw'/);
+    const renderSrc = stripComments(read('render.ts'));
+    // 生产点必须在**卡节点**上（不是随便某个 dataset）
+    expect(renderSrc, 'render.ts 未把 fxRot 写到卡节点上（`node.dataset.fxRot = opts.fxRot`）——标记不会出现在 DOM 里')
+      .toMatch(/node\.dataset\.fxRot\s*=\s*opts\.fxRot/);
+    expect(renderSrc, 'fxRot 的写入没有 opts?.fxRot !== undefined 守卫 → 热座页也会被打上标记'
+      + '（R2 的 fxOrientOf 就再也回退不回 orientOf，"热座零变化"被打破）')
+      .toMatch(/if\s*\(\s*opts\?\.fxRot\s*!==\s*undefined\s*\)/);
+    // 热座渲染器里不得出现任何远程页字面量（标记的**读**侧在 R2，R1 不许碰 FX 层）
+    expect(renderSrc, "render.ts 里出现了 'data-fx-rot' 字面量（那是 R2 的读侧钩子，R1 只产出）")
+      .not.toContain('data-fx-rot');
+  });
+
+  /**
+   * R1-5：**手牌中置**（规格 §1）与"协议图的 180° 只属热座页"。
+   *
+   * 手牌中置的判据必须是"样式表里真的把这一块居中"：
+   *  - `.net-hands` 的 `justify-items: center`（块级子项水平中置）；
+   *  - `.net-hand-side` 的 `align-items: center`（块内信息条/标签/手牌统一中置，否则窄容器里贴左会显得歪）。
+   * 两条腿分开查、且指名到选择器：只查 `align-items: center` 会被**任何**一条 flex 规则满足
+   * （`.hand` 自己就是 `align-items: flex-start`）。
+   *
+   * 第二条：远程页的协议**不**走 180°（那是卡面朝向），而热座页确实仍在产出
+   * `.protocol-img.rot-180` —— 必须两边都钉，否则"协议 ∓90° 改对了"与"热座被顺手改坏"
+   * 这两种情况在删掉任一条断言后都会静默。
+   */
+  it('R1-5. 手牌区水平中置（选择器级判据）+ 协议 180° 仍在热座页产出（∓90° 只属远程页）', () => {
+    const css = read('styles-net.css');
+    expect(css, 'styles-net.css 未把 .net-hands 的子项水平中置（手牌区没有中置）')
+      .toMatch(/\.net-hands\s*\{[^}]*justify-items:\s*center/);
+    expect(css, 'styles-net.css 未把 .net-hand-side 的内容水平中置（信息条/小标签会贴左）')
+      .toMatch(/\.net-hand-side\s*\{[^}]*align-items:\s*center/);
+    // 热座页的协议 180° 产出点**一行未改**（`orient === 180 ? ' rot-180' : ''`）——
+    // 它是 A 类钩子 `.rot-180` 在热座页的唯一产出点，也是"远程页 ∓90° 不能借用 .rot-cw/.rot-ccw"
+    // 这条裁决的对照面（两种朝向并存，谁也不许吃掉谁）。
+    const renderSrc = stripComments(read('render.ts'));
+    expect(renderSrc, 'render.ts 的协议 180° 产出点被改动了（热座红线：协议图的 .rot-180）')
+      .toMatch(/'protocol-img'\s*\+\s*\(orient === 180 \? ' rot-180' : ''\)/);
+    // 反向：本页**不**产出任何热座专属朝向类（第 3 条已有前半，这里补"协议也不产出"）
+    expect(netCode()).not.toMatch(/['"]rot-cw['"]|['"]rot-ccw['"]/);
+  });
+
   /**
    * M-3：热座 `renderBoard` 的两个几何型点名特效（透彻牌库眼睛 / 幸运宣告骰子）曾经在远程页
    * 完全缺失（三个 choice-* 分支是重写的）。它们都用**契约钩子**定位（`.deck[data-player]` /
@@ -751,12 +944,15 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
    */
   it('17. F-2：verifyPageHooks 的**期望数量表**必须与源码结构一致（无 jsdom 下的结构腿）', () => {
     const code = netCode();
-    // ① 两侧 `renderSideRow` 的真实挂载（评审变异 R4 正是删掉了其中一条）
-    expect(code, '对手侧的整行挂载不见了（对手 6 个 .stack-slot / 6 个 .protocol-cell 全没）')
-      .toMatch(/band\.appendChild\(renderSideRow\(s,\s*foe,/);
-    expect(code, '自己侧的整行挂载不见了').toMatch(/band\.appendChild\(renderSideRow\(s,\s*viewSeat,/);
-    const sideMounts = (code.match(/band\.appendChild\(renderSideRow\(/g) ?? []).length;
-    expect(sideMounts, 'renderSideRow 必须恰好挂载两次（对手 / 自己各一次）').toBe(2);
+    // ① 两侧 `renderSide` 的真实挂载（评审变异 R4 正是删掉了其中一条）
+    //    ⚠️ G2 修正 R1：函数名由 `renderSideRow` 改为 `renderSide`，且新增了 `kind` 实参
+    //    （`'foe'` / `'self'`）—— 判据同步成 `renderSide(s, foe …` / `renderSide(s, viewSeat …`
+    //    （**挂载对象仍是同一个 `col`**，故"整条对手侧行消失"这个变异形态照样被抓）。
+    expect(code, '对手侧的整侧挂载不见了（对手 6 个 .stack-slot / 6 个 .protocol-cell 全没）')
+      .toMatch(/col\.appendChild\(renderSide\(s,\s*foe,/);
+    expect(code, '自己侧的整侧挂载不见了').toMatch(/col\.appendChild\(renderSide\(s,\s*viewSeat,/);
+    const sideMounts = (code.match(/col\.appendChild\(renderSide\(/g) ?? []).length;
+    expect(sideMounts, 'renderSide 必须恰好挂载两次（对手 / 自己各一次）').toBe(2);
     // 三条线来自同一个循环（写死 `[0, 1, 2]`；改成别的长度必须同步改期望表）
     expect(code, '三条线必须由 `for (const line of [0, 1, 2] as Line[])` 产出').toMatch(/for \(const line of \[0, 1, 2\] as Line\[\]\)/);
     const LANES = 3;

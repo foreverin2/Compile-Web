@@ -90,7 +90,12 @@ export function renderCardFace(card: { defId: string; faceUp: boolean; uid: stri
 export function renderProtocol(
   p: { defId: string; compiled: boolean },
   player: PlayerId,
-  orient: CardOrient = player === 1 ? 180 : 0
+  orient: CardOrient = player === 1 ? 180 : 0,
+  /** 追加到**卡面图**上的额外类（G2 修正 R1：远程页用 `.net-rot-ccw` / `.net-rot-cw` 做协议 ∓90°）。
+   *  默认 `''` = 热座页现状（一个字符不变）。**为什么是通用参数而不是直接写死 `.net-*`**：
+   *  本文件是**两个渲染器共享**的叶子助手，把远程页的字面量写进来会让热座页的源码依赖远程页的类名，
+   *  也会让「热座页零变化」只能靠"这个分支恰好走不到"来保证。由调用方给类名 ⇒ 热座路径构造性不变。 */
+  extraClass = ''
 ): HTMLElement {
   const box = el('div', 'protocol' + (p.compiled ? ' compiled' : ''));
   // holder 包裹卡面图：持久 FX 层每帧渲染按 holder 矩形重定位（syncCompiledFxLayers），
@@ -127,7 +132,9 @@ export function renderProtocol(
   // 三代协议图同规格竖版存储（3代 源横向成品已转竖版入库，2026-09-06 v2）。
   // G2 Task 3：朝向成为入参（默认值 = 原来的 player===1 → 180°，逐字等价）。
   // 远程页传「自己 0° / 对手 180°」——0°/180° 之外**不产出任何朝向类**。
-  img.className = 'protocol-img' + (orient === 180 ? ' rot-180' : '');
+  // G2 修正 R1：`extraClass` 追加在**末尾**；默认 `''` 时表达式与改动前逐字等价
+  // （热座页不传 → `'protocol-img'`）。
+  img.className = 'protocol-img' + (orient === 180 ? ' rot-180' : '') + (extraClass === '' ? '' : ' ' + extraClass);
   img.src = protocolImgSrc(p.defId, p.compiled);
   img.alt = p.compiled ? 'compiled protocol' : 'protocol loading';
   // R12：卡面图异步加载会改变 holder 矩形 —— 编译翻面瞬间 protocol-compiled.png 尚未
@@ -223,6 +230,31 @@ export function renderStackSlot(
     /** 卡牌朝向。默认 ±90°（按 owner：P0 顺时针 / P1 逆时针）—— 热座页两位玩家同屏各看得正。
      *  远程页传 0（自己）/ 180（对手）。**热座路径仍产出 rot-cw / rot-ccw**；0°/180° 之外不产出任何朝向类。 */
     orient?: CardOrient;
+    /** **竖向生长**（G2 修正 R1，远程页三列纵向布局）。默认 `false` = 热座页的横向生长，逐字等价：
+     *  - `false`：`.stack` 保持 `.grow-left`（P0）/`.grow-right`（P1），DOM 顺序按绝对玩家（旧行为）；
+     *  - `true`：`.stack` 改挂 `.grow-up`（P1/对手）/`.grow-down`（P0/自己），并把**渲染顺序反转**
+     *    成「最新 → 最旧」。
+     *
+     *  ⚠️ 为什么渲染顺序必须一起反转（这是本参数存在的一半理由，另一半是类名）：
+     *  `pos 0`（最旧）永远贴协议一侧、越新的越向外长，与横排的语义完全一致。横排时 `.card + .card`
+     *  的**负 margin-left** 让"后一张 DOM 兄弟"从左侧压住前一张，于是"最新在 DOM 最后"刚好等于
+     *  "最新在最外侧、且 z-index 最大盖住旧牌"。竖排时负 margin 走 **margin-top**（覆盖在
+     *  `styles-net.css` 里），同一个 DOM 顺序会让**最新的牌跑到最内层（贴协议）**、与"越新越往外"
+     *  相反。所以竖排必须把顺序反过来 —— 且两种竖排（grow-up / grow-down）都用同一顺序，
+     *  因为 `justify-content: flex-end` 会负责把整组推到底部（对手侧）。
+     *
+     *  ⚠️ 契约红线：`.stack` **不是** A 类钩子（`fx-dom-contract.ts` §D 的说明），
+     *  `.grow-*` 纯 CSS 语义，故 FX 读侧不受影响。 */
+    vGrow?: boolean;
+    /** **特效朝向标记**（G2 修正 R1 只负责**产出**，读侧是 R2 的 `fxOrientOf`）。
+     *  给了就逐张卡写 `data-fx-rot="…"`。默认不写 ⇒ 热座页 DOM 上**一个字节都不多**，
+     *  于是「热座零变化」是构造性的（R2 的回退分支走 `orientOf`），
+     *  而契约里 `[data-fx-rot]` 也因此只由远程页产出（`RENDERERS` 给 render.ts 豁免）。
+     *
+     *  ⚠️ 它与 `orient` 是**两套**朝向，不是同一个值：远程页自己卡面 0° 而特效 −90°、对手卡面
+     *  180° 而特效 +90°（设计说明 §2 的朝向表）。把它写成"从 orient 推导"就会在热座页面上
+     *  凭空产出标记（破坏"热座可证明零变化"）。 */
+    fxRot?: 'cw' | 'ccw';
   }
 ): HTMLElement {
   // self 高亮仅限自己侧槽；对方槽作为腐化0 落点（修改提示词 15）也可交互但不带 self 常驻高亮
@@ -232,12 +264,22 @@ export function renderStackSlot(
   slot.dataset.line = String(line);
   slot.dataset.player = String(player);
   const cards = s.players[player].stacks[line];
-  const pile = el('div', 'stack' + (player === 0 ? ' grow-left' : ' grow-right'));
+  // G2 修正 R1：竖向生长（远程页）改挂 `.grow-up`（对手，向上长）/ `.grow-down`（自己，向下长）。
+  // 类名是**纯 CSS 语义**（规则在 styles-net.css），契约不涉及（`.stack` 不是 A 类钩子）。
+  // 默认分支与改动前逐字等价：`player === 0 ? ' grow-left' : ' grow-right'`。
+  const growCls = opts?.vGrow
+    ? (player === 0 ? ' grow-down' : ' grow-up')
+    : (player === 0 ? ' grow-left' : ' grow-right');
+  const pile = el('div', 'stack' + growCls);
   // 放置顺序：pos 0（最旧）贴协议一侧，越新的牌越靠外侧。
   // P1 渲染从最新到最旧（row + justify-content:flex-end → 整组右对齐，pos 0 贴右端协议）；
   // P2 渲染从最旧到最新（row + 默认左对齐 → pos 0 贴左端协议）。
+  // G2 修正 R1：竖排（vGrow）两种座位都用"最新 → 最旧"（理由见 opts.vGrow 的说明：负 margin 走
+  // margin-top，DOM 后一张会盖住前一张，所以"最新在最后"= "最新在最内层"，与语义相反）。
   const order: number[] =
-    player === 0 ? cards.map((_, i) => cards.length - 1 - i) : cards.map((_, i) => i);
+    opts?.vGrow
+      ? cards.map((_, i) => cards.length - 1 - i)
+      : player === 0 ? cards.map((_, i) => cards.length - 1 - i) : cards.map((_, i) => i);
   for (const i of order) {
     const card = cards[i];
     const isTop = i === cards.length - 1;
@@ -252,6 +294,9 @@ export function renderStackSlot(
     if (orient === 90) node.classList.add('rot-cw');
     else if (orient === -90) node.classList.add('rot-ccw');
     else if (orient === 180) node.classList.add('rot-180');
+    // G2 修正 R1：**特效**朝向标记（与上面的**卡面**朝向是两套，见 opts.fxRot）。
+    // 热座页不传 ⇒ 一条属性都不写（`data-fx-rot` 在热座 DOM 上不存在）。
+    if (opts?.fxRot !== undefined) node.dataset.fxRot = opts.fxRot;
     node.dataset.uid = card.uid;
     node.style.zIndex = String(i);
     // FX-5 冷漠2：apathy-2 顶「无效化此列所有牌的中部命令」→ 该列【双方】链路上所有场上卡
@@ -1898,7 +1943,12 @@ export function renderControlModule(s: GameState): HTMLElement {
   return ctrl;
 }
 
-export function renderProtocolCell(s: GameState, player: PlayerId, line: Line, orient?: CardOrient): HTMLElement {
+export function renderProtocolCell(
+  s: GameState, player: PlayerId, line: Line, orient?: CardOrient,
+  /** 透传给 `renderProtocol` 的**协议图额外类**（G2 修正 R1：远程页 `.net-rot-ccw` / `.net-rot-cw`）。
+   *  缺省不传 → 与改动前逐字等价（热座页构造性不变）。 */
+  extraClass?: string
+): HTMLElement {
   const cell = el('div', 'protocol-cell');
   // data 属性：供编译/翻面等特效按 (player, line) 定位协议元素（协议换位时随渲染重建定位）
   cell.dataset.player = String(player);
@@ -1907,7 +1957,7 @@ export function renderProtocolCell(s: GameState, player: PlayerId, line: Line, o
   // （`player === 1 ? 180 : 0`），与改动前逐字等价。远程页传 `(player === viewSeat) ? 0 : 180`。
   cell.appendChild(orient === undefined
     ? renderProtocol(s.players[player].protocols[line], player)
-    : renderProtocol(s.players[player].protocols[line], player, orient));
+    : renderProtocol(s.players[player].protocols[line], player, orient, extraClass));
   return cell;
 }
 

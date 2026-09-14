@@ -237,7 +237,10 @@ export const FX_DOM_CONTRACT: readonly FxDomHook[] = [
     note: '场上卡 180° 倒置态（远程页对手一侧；render-net.ts 按座位挂）。'
       + '与 ±90° 的区别：180° **不交换布局盒宽高**、只绕中心转 180°（cloneBoxSwaps(180)===false）——'
       + '所以它不能复用 ±90° 的浮层卡路径。热座页唯一产出点 render.ts:116 是 .protocol-img（非 FX 节点），'
-      + '故本钩子在热座页对 FX 不可达。',
+      + '故本钩子在热座页对 FX 不可达。'
+      + '⚠️ 2026-09-14（G2 修正 R1）：远程页重做成"三个纵向的列"后，**协议图**改用 .net-rot-ccw/.net-rot-cw'
+      + '（∓90°，规格 §8.2），所以热座页那个 .protocol-img 产出点现在**只归热座页**；'
+      + '远程页的 .rot-180 只出现在**场上卡**上（render.ts:254 的 orient === 180 分支）。',
   },
   {
     hook: 'img', kind: 'element', category: 'A',

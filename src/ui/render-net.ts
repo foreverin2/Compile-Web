@@ -1,19 +1,31 @@
 /**
- * 远程对战页渲染器（G2 Task 3）—— 「甲读法 + 座位相对 + 单视角预览」。
- * 设计依据：docs/2026-09-13-联机与多端-设计稿.md §6；施工依据：.superpowers/sdd/task-G2T3-brief.md。
+ * 远程对战页渲染器（**G2 修正 R1：三列纵向布局**）。
+ * 设计依据：docs/2026-09-14-G2修正-竖向布局与朝向分离-设计说明.md §1/§2/§8（**权威**）；
+ * 原版（三条横带）见 docs/2026-09-13-联机与多端-设计稿.md §6；施工依据 `.superpowers/sdd/R1-brief.md`。
  *
- * ## 布局（甲读法，用户已拍板）
- * 3 条横带；**每条带内 上 = 对手 / 下 = 自己**；**自己的卡正立 0°、对手的卡 180° 倒置**（像隔桌对坐）。
- * 顶部对手信息条（昵称/座位 · 手牌 ×n · 牌库 · 弃牌 · 连接状态）→ 3 条线 → 控制轨 → 自己信息条 + 手牌。
+ * ## 布局（G2 修正 R1 —— 用户验收时指出"三条横带"是理解错误后重做）
+ * **三条线 = 三个纵向的列，并排。** 每列自上而下严格是：
+ *   ① 对手能量槽 → ② 对手链路（卡 180°，越新越**上**）→ ③ 对手协议（顺时针 90°）
+ *   → ④ 自己协议（逆时针 90°）→ ⑤ 自己链路（卡 0°，越新越**下**）→ ⑥ 自己能量槽
+ * （能量槽由 `renderBattery` 产出在**槽内**，靠 CSS 的 `order` 摆到链路外侧端 —— 见
+ * `styles-net.css` 第 4 节；这样"一格一卡"的 A 类钩子产出方拼写完全不用动。）
  *
- * ## 为什么**不**复用 render.ts 的盘本体（设计稿 §6.1）
- * 热座页的盘是「左右分栏」（P1 槽 | P1 协议 | P2 协议 | P2 槽，见 styles.css:57），两位玩家坐在
- * **同一块屏幕前**、各自看自己那半边的 ±90° 旋转；远程页是「上下分带」，双方隔桌对坐。
+ * 推导依据（规格 §1 的复核）：这套规格**等价于把热座页的"每条线一行"整体旋转 −90°** ——
+ * 热座自己卡 +90° → 0°；对手卡 −90° → 180°；自己协议 0° → −90°；对手协议 180° → +90°；
+ * 能量槽在链路外侧端（左/右）→ 旋转后变成下/上；4 列的行 → 4 层的列，故**整体更窄更高**。
+ * `viewSeat = 1`（我是 P2）= **垂直镜像**：我的链路在下半部、对手在上半部，与 P1 视角完全对称
+ * —— 本文件用 `foe = 1 - viewSeat` 换算，`data-player` 永远写**绝对值**。
+ *
+ * 手牌区在页面**底部水平中置**（`styles-net.css` 第 6 节：`.net-hands { justify-items: center }`）。
+ *
+ * ## 为什么**不**复用 render.ts 的盘本体（设计稿 §6.1，R1 后仍然成立）
+ * 热座页的盘是「左右分栏」（P1 槽 | P1 协议 | P2 协议 | P2 槽），两位玩家坐在**同一块屏幕前**、
+ * 各自看自己那半边的 ±90° 旋转；远程页是「三条竖列、列内上下分层」，双方隔桌对坐。
  * 两者的 DOM 骨架与朝向语义都不同，硬套会把热座页的布局假设带进来。**本体另写**，
  * 但**全部叶子助手原样复用**（卡片 / 协议 / 电池 / 牌库 / 弃牌 / 信息条 / 控制轨 / 选择条 /
  * 选择浮层 / 拖拽 / 手牌区 / 选择态）。
  *
- * ## 七条硬约束（违反 → 静默退化；逐条对应本文件的实现）
+ * ## 八条硬约束（违反 → 静默退化；逐条对应本文件的实现）
  * 1. **20 条 A 类钩子全部产出，且产出方拼写与热座页一致** —— 靠复用 render.ts 的叶子助手保证
  *    （`.stack-slot p${player + 1}` / `trash-pile p${player + 1}` 都在助手内，`data-player` /
  *    `data-line` 走 `dataset`）。`.pN` 拼写是**承重的**，不要改成复合类名（计划附录 A.4-2）。
@@ -24,18 +36,27 @@
  *    （G2 Task 3 的教训：物化进本文件的 hook 字符串会让"必须提供"断言自我满足）。
  * 2. **`.rot-cw` / `.rot-ccw` 一律不产出** —— 本文件里连带引号的字面量都不出现
  *    （`tests/ui/fx-orient.test.ts` 会对每个**已登记的非热座渲染器**逐个扫）。
- *    朝向只有 0°（自己）与 180°（对手）：本页把 `orient: isSelfSeat ? 0 : 180` **作为实参**交给
- *    `renderStackSlot` / `renderProtocolCell`，类名映射只有一处 —— `render.ts` 的分支链
+ *    **卡面**朝向只有 0°（自己）与 180°（对手）：本页把 `orient: isSelfSeat ? 0 : 180` **作为实参**
+ *    交给 `renderStackSlot` / `renderProtocolCell`，类名映射只有一处 —— `render.ts` 的分支链
  *    （`:252-254` 的 ±90°/180° 与 `:130` 的协议图），**不在本文件重复映射**。
- * 3. **「P0 向左长 / P1 向右长」按绝对玩家** —— 由 `renderStackSlot` 内部按 `player` 决定的
- *    `.stack.grow-left` / `.grow-right` 与渲染顺序保证；控制轨 slider 也仍按绝对玩家映射（4%/96%）。
- *    **不得**改成「上 = 向左」：effects/index.ts:191-193、fx-gen2.ts:779/878/957、gen3-control.ts:654
- *    都按绝对玩家算方向，改了会静默错位。
- * 4. **within-slot 覆盖方向不变** —— `gen3-util.ts:51/66` 假设覆盖者在右；本文件不碰覆盖方向
- *    （仍由 `renderStackSlot` + `.stack .card + .card` 的负 margin 决定）。
- *    ⚠️ 推论：对手那一行**不得**整块 `rotate(180deg)` —— 行级 180° 会把该行**水平镜像**
- *    （屏幕左右翻转，"覆盖者在右"随之失真），且与卡自身的 `.rot-180` 叠加成 0°（卡其实正立）。
- *    所以对手侧只由**卡/协议自身**的 `.rot-180` 倒置（styles-net.css 第 3 节的说明）。
+ *    **协议**的 ∓90° 用**自己的**类 `.net-rot-ccw`（自己）/ `.net-rot-cw`（对手）走 `extraClass`
+ *    参数（理由：`.rot-cw/.rot-ccw` 是热座专属的"**卡牌横置**"语义，且 `orientOf` 把它们当作
+ *    **卡面**朝向读；协议用同名类会让 FX 把它误读成卡面朝向 —— 规格 §8.2 第 3 行）。
+ *    这两个类名从本文件交给 `render.ts` 的**通用** `extraClass` 参数，**不是**写死在 `render.ts` 里
+ *    （写死会让热座页的源码依赖远程页的类名，热座零变化就不再是构造性的）。
+ * 3. **「能量槽在链路外侧端」的旧假设改了，但"按绝对玩家"的方向假设没改**：竖排后能量槽在
+ *    **上/下**（对手在上、自己在下），由 CSS `order` 决定；而**链路生长方向**改由 `vGrow` 决定
+ *    （自己 `.grow-down` / 对手 `.grow-up`，纯 CSS 语义）。**方向性 FX 的绝对玩家假设一行没动**
+ *    —— effects/index.ts:191-193、fx-gen2.ts:779/878/957、gen3-control.ts:654 都仍按绝对玩家算，
+ *    座位 → 上下由 R2/R3 的 `setFxViewSeat` 承接（**不在 R1 范围内**）。
+ *    控制轨 slider 也仍按绝对玩家映射（4%/96%）。
+ * 4. **within-slot 覆盖方向在**竖排后**从"左右"变成"上下"**（`.stack .card + .card` 的负 margin
+ *    在本页由 `styles-net.css` 覆盖为 `margin-top`）—— 这是 R1 的**有意变更**，
+ *    `gen3-util.ts:51/66` 的「覆盖者在右」由 R3 改成上下语义。**本页仍不碰覆盖几何**，
+ *    它仍全部由 `renderStackSlot` + CSS 决定；R1 只负责让竖排的"最新在外侧"成立（`vGrow`）。
+ *    ⚠️ 仍然成立的一条：**对手那一列不得整块 `rotate(180deg)`** —— 列级 180° 会把该列**水平镜像**
+ *    （屏幕左右翻转）且与卡自身的 `.rot-180` 叠加成 0°（卡其实正立）。
+ *    所以对手侧只由**卡/协议自身**的 `.rot-180` / `.net-rot-cw` 承担（styles-net.css 第 3 节）。
  * 5. **对手手牌只渲染数量，但 `.hand[data-player]` 占位节点必须产出**（带 `data-hand-count`）——
  *    否则 `querySelectorAll('.hand')[player]` 会取到 `undefined`。FX 里**按下标**读手牌的是
  *    **8 处**（fx-gen2.ts:693/1316/1786 静默跳过；effects/index.ts:849/942/1541/1590/1650 飞到错误
@@ -44,9 +65,16 @@
  * 6. **座位来源是 `opts.viewSeat`**，不是 `s.turnPlayer`（后者是**回合**概念，当"我是谁"会让视角
  *    每回合翻面）。本文件**不出现** `s.turnPlayer ===`。
  * 7. **两条 `.hand` 以「绝对玩家顺序」出现在 DOM 中**（P0 在前、P1 在后，见 `buildHands`），
- *    「谁显示在上带」由父容器的 `.net-view-N` 用 **CSS `order`** 决定（styles-net.css 第 6 节）。
+ *    「谁显示在上」由父容器的 `.net-view-N` 用 **CSS `order`** 决定（styles-net.css 第 6 节）。
  *    比约束 5 更危险：FX 读手牌是**按下标**的，`viewSeat = 0` 时若按视觉顺序挂载会得到 `[P1, P0]`，
  *    下标 0 拿到**对手**的手牌 → 卡飞到对手手牌区，不报错、不跳过。
+ * 8. **特效朝向标记 `data-fx-rot`（R1 只负责产出，读侧是 R2）** —— 远程页场上卡带
+ *    `data-fx-rot="ccw"`（自己）/ `"cw"`（对手），由 `renderStackSlot` 的 `fxRot` 参数逐卡写。
+ *    **它与卡面朝向是两套**（规格 §2 的朝向表）：自己卡面 0° 而特效 −90°、对手卡面 180° 而特效 +90°。
+ *    热座页不传 `fxRot` ⇒ DOM 上不存在这条属性 ⇒ R2 的 `fxOrientOf` 回退到 `orientOf`
+ *    ⇒ 热座零变化是**构造性**的。契约里 `[data-fx-rot]` 是**新 A 类钩子**、只由本页产出
+ *    （`RENDERERS` 给 render.ts 一条 `exempt`）—— 那一步在 R2 落地（本页只产出标记）。
+ *
  *
  * ## 构建顺序（C-1：远程页曾经在这里死锁）
  * `renderChoiceUi(...)` **必须在 `wrap.appendChild(grid)` 之后**调用（与热座 `renderBoard`
@@ -442,37 +470,58 @@ function renderPiles(s: GameState, player: PlayerId): HTMLElement {
   return piles;
 }
 
-/** 一条线内的「链路槽 + 协议格」（对手侧 / 自己侧各一份）。 */
-function renderSideRow(
+/** 一侧的「链路槽（含能量槽）」+「协议格」两份。
+ *
+ *  ⚠️ **产出顺序 = 视觉顺序**（`styles-net.css` 第 4 节）：链路槽在前、协议格在后，
+ *  能量槽由 `renderBattery` 生在**槽内**、再由 CSS `order` 挪到槽的**上边**（对手）或**下边**（自己）。
+ *  这样"一格一卡"的 A 类钩子产出方拼写一个字符都不用改（约束 1）。
+ *
+ *  `kind`：`'foe' | 'self'`（**只用来选类名与朝向**，`data-player` 仍写绝对玩家号）。 */
+function renderSide(
   s: GameState,
   player: PlayerId,
   line: Line,
   viewSeat: PlayerId,
+  kind: 'foe' | 'self',
   cb: UiCallbacks,
 ): HTMLElement {
   const isSelfSeat = player === viewSeat;
-  const row = el('div', 'net-side' + (isSelfSeat ? ' net-side-self' : ' net-side-foe'));
-  row.dataset.player = String(player);
+  const side = el('div', 'net-side net-side-' + kind);
+  side.dataset.player = String(player);
   const { uid } = getHandSelection();
   // 只有当前回合玩家的链路槽可交互（与热座页一致：interactable 由引擎回合归属决定）
   const myTurn = isTurn(s, player);
-  row.appendChild(renderStackSlot(
+  side.appendChild(renderStackSlot(
     s, player, line, myTurn ? uid : null,
     (l) => playToLine(s, cb, l, player),
     myTurn,
-    // 自己 0°、对手 180°（约束 2）。`isSelfSlot` 必须显式给座位真值：
-    // 缺省值用的是 `s.turnPlayer`（那是回合），在远程页会让高亮每回合翻面。
-    { isSelfSlot: isSelfSeat, orient: isSelfSeat ? 0 : 180 },
+    {
+      // 自己 0°、对手 180°（约束 2）。`isSelfSlot` 必须显式给座位真值：
+      // 缺省值用的是 `s.turnPlayer`（那是回合），在远程页会让高亮每回合翻面。
+      isSelfSlot: isSelfSeat,
+      orient: isSelfSeat ? 0 : 180,
+      // 竖向生长（R1）：自己向下（`.grow-down`）/ 对手向上（`.grow-up`）。
+      // ⚠️ 这里用 `player`（绝对玩家号）而不是 `isSelfSeat`：`grow-*` 的 CSS 语义是"P0 向下 / P1 向上"，
+      // 与座位无关 —— 座位只决定"哪一侧在上面那一层"。
+      vGrow: true,
+      // 特效朝向标记（约束 8；R1 只产出、R2 才读）：自己 ccw、对手 cw。
+      fxRot: isSelfSeat ? 'ccw' : 'cw',
+    },
   ));
-  // 协议格朝向同样按座位：自己 0°、对手 180°（`renderProtocol` 只在 180° 时追加朝向类）
-  row.appendChild(renderProtocolCell(s, player, line, isSelfSeat ? 0 : 180));
-  return row;
+  // 协议格朝向同样按座位：自己逆时针 90°（`.net-rot-ccw`）、对手顺时针 90°（`.net-rot-cw`）。
+  // ⚠️ `orient`（0 / 180）是**卡面**朝向，`extraClass` 是**协议图**的 ∓90° —— 两套朝向并存，
+  // 理由见文件头约束 2（`.rot-cw/.rot-ccw` 会被 `orientOf` 当卡面朝向读，故协议用自己的类）。
+  side.appendChild(renderProtocolCell(
+    s, player, line, isSelfSeat ? 0 : 180, isSelfSeat ? 'net-rot-ccw' : 'net-rot-cw',
+  ));
+  return side;
 }
 
 /**
- * 中线：双方线值 + 线号。**按绝对玩家**标注（P1 在左、P2 在右），
+ * 列内中线：双方线值 + 线号。**按绝对玩家**标注（P1 在左、P2 在右），
  * 与方向性 FX 的绝对玩家假设一致（约束 3）；数值与电池同源（同一个 `getLineValue`），
- * 避免出现「电池 7 格 / 中线写 6」这种两处不一致。
+ * 避免出现「电池 7 格 / 中线写 6」这种两处不一致。规格 §1 没给它的朝向（只有协议要 ∓90°），
+ * 故**不旋转**（多转一个文字块只会让线号/数字变成躺着的，且没有任何依据）。
  */
 function renderLaneMid(s: GameState, line: Line): HTMLElement {
   const mid = el('div', 'net-lane-mid');
@@ -488,21 +537,27 @@ function renderLaneMid(s: GameState, line: Line): HTMLElement {
 }
 
 /**
- * 一条线 = 一整条横带：**上 = 对手 / 中线 / 下 = 自己**。
- * 视觉上的"上/下"按 `viewSeat` 换算成绝对玩家号，但 `data-player` 永远写**绝对值**（设计稿 §6.2）。
- * 「对手侧 180°」由**卡/协议自身**的 `.rot-180` 承担（本页传 `orient: isSelfSeat ? 0 : 180`，
- * 类名映射在 `render.ts:252-254` 的 180° 分支与 `:130` 的协议图）——**不是**父级 transform：
- * 行级 `rotate(180deg)` 会与卡自身的 `.rot-180` 叠加成 0°（对手的卡其实正立）并把该行水平镜像
- * （G2 Task 3 的 C-4；`styles-net.css` 第 3 节有完整说明）。这里只负责"谁在上带"。
+ * 一条线 = **一个纵向的列**（G2 修正 R1）。列内自上而下严格是规格 §1 的六层：
+ *   对手能量槽 → 对手链路 → 对手协议 → 自己协议 → 自己链路 → 自己能量槽
+ *
+ * 本函数只负责**其中四层的挂载顺序**（对手侧 / 中线 / 自己侧）—— 能量槽在链路**槽内**，
+ * 由 CSS `order` 摆到外侧端（见 `renderSide` 的说明）。三个列由 `renderNetBoard` 的
+ * `for (const line of [0, 1, 2])` 并排产出 ⇒ **整块棋盘从"三条横带"变成"三个竖列"**。
+ *
+ * 视觉上的"上/下"按 `viewSeat` 换算成绝对玩家号（`foe = 1 - viewSeat`，故 `viewSeat = 1` 时
+ * 整列垂直镜像），但 `data-player` 永远写**绝对值**（设计稿 §6.2）。
+ * 「对手侧 180°」由**卡/协议自身**的 `.rot-180` / `.net-rot-cw` 承担 —— **不是**父级 transform：
+ * 列级 `rotate(180deg)` 会与卡自身的 `.rot-180` 叠加成 0°（对手的卡其实正立）并把该列水平镜像
+ * （G2 Task 3 的 C-4；`styles-net.css` 第 3 节有完整说明）。
  */
-function renderLaneBand(s: GameState, line: Line, viewSeat: PlayerId, cb: UiCallbacks): HTMLElement {
+function renderLaneColumn(s: GameState, line: Line, viewSeat: PlayerId, cb: UiCallbacks): HTMLElement {
   const foe = (1 - viewSeat) as PlayerId;
-  const band = el('div', 'net-lane-band');
-  band.dataset.line = String(line);
-  band.appendChild(renderSideRow(s, foe, line, viewSeat, cb));
-  band.appendChild(renderLaneMid(s, line));
-  band.appendChild(renderSideRow(s, viewSeat, line, viewSeat, cb));
-  return band;
+  const col = el('div', 'net-lane-band');
+  col.dataset.line = String(line);
+  col.appendChild(renderSide(s, foe, line, viewSeat, 'foe', cb));
+  col.appendChild(renderLaneMid(s, line));
+  col.appendChild(renderSide(s, viewSeat, line, viewSeat, 'self', cb));
+  return col;
 }
 
 /* ============================================================================
@@ -940,9 +995,9 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
   foeStrip.appendChild(foeInfo);
   grid.appendChild(foeStrip);
 
-  // ── 3 条横带（每条：上对手 / 中线 / 下自己） ──
+  // ── 3 个纵向的列（每个列 = 对手侧 / 中线 / 自己侧，见 renderLaneColumn 的六层顺序） ──
   for (const line of [0, 1, 2] as Line[]) {
-    grid.appendChild(renderLaneBand(s, line, viewSeat, cb));
+    grid.appendChild(renderLaneColumn(s, line, viewSeat, cb));
   }
 
   // ── 控制轨（横向；按**绝对玩家**映射 —— 约束 3，`renderControlModule` 内部 4%/96%） ──
