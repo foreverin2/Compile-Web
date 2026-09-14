@@ -52,9 +52,10 @@ export const FX_DOM_CONTRACT: readonly FxDomHook[] = [
     note: '协议格：协议交换/重排、同化编译光柱、色欲封条按 (player,line) 定位',
   },
   {
-    hook: '.protocol-img', kind: 'element', category: 'A',
+    hook: '.protocol-img', kind: 'class', category: 'A',
     requiredBy: ['fx-gen3-swap.ts', 'effects/index.ts'],
-    note: '协议卡面图：协议交换幽灵卡取它的 rect 与卡面图',
+    note: '协议卡面图：协议交换幽灵卡取它的 rect 与卡面图（render.ts:116 是 img.className = "protocol-img"，'
+      + '故按书写形式是 class 选择器；清单里真正的 element 只有纯标签名 `img`）',
   },
   {
     hook: '.protocol-holder', kind: 'class', category: 'A',

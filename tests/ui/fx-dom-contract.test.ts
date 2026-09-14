@@ -30,7 +30,23 @@ const FX_MODULES = [
 /** 结构钩子的提供方（当前唯一渲染器；G2 会新增远程页渲染器） */
 const RENDERERS = ['render.ts'] as const;
 
-const fxSources = new Map(FX_MODULES.map((m) => [m, read(m)]));
+// 显式 Map<string, string>：requiredBy 里的模块名是普通 string，需要能按名查回源码
+const fxSources = new Map<string, string>(FX_MODULES.map((m): [string, string] => [m, read(m)]));
+
+/**
+ * 取钩子的「判别子串」。必须能唯一定位到这个钩子，否则守卫形同虚设：
+ *  - `[attr]` / `[attr][attr2]` → 属性名（`data-player`）
+ *  - `.cls` / `img.cls` → 标签名 + 类名里**最能定位**的部分，即类名
+ *  - `.cls[attr]…` → **类名**（属性名在多处通用，用它证明不了出处 —— 这正是原实现被评审判为不成立的漏洞）
+ *  - 纯标签名（`img`）→ 该标签名
+ */
+function probeOf(hook: string): string {
+  if (hook.startsWith('[')) return /^\[([a-z-]+)/.exec(hook)?.[1] ?? hook;
+  const head = hook.split('[')[0];          // 去掉属性选择器部分
+  const parts = head.split('.').filter(Boolean);
+  if (parts.length >= 2) return parts[1];    // img.protocol-img → protocol-img
+  return parts[0] ?? hook;                   // .deck → deck；img → img
+}
 
 describe('G1 · FX DOM 契约', () => {
   it('清单非空，且四类都出现过（防止只盘点了一类）', () => {
@@ -67,8 +83,7 @@ describe('G1 · FX DOM 契约', () => {
   it('A 类钩子必须真的被某个 FX 模块引用（防止凭空发明）', () => {
     const missing: string[] = [];
     for (const h of hooksOfCategory('A')) {
-      // 取钩子的「判别子串」：属性名或类名，去掉值与 CSS 语法
-      const probe = h.hook.includes('[') ? /\[([a-z-]+)/.exec(h.hook)?.[1] ?? h.hook : h.hook.replace(/^\./, '');
+      const probe = probeOf(h.hook);
       const hit = [...fxSources.values()].some((src) => src.includes(probe));
       if (!hit) missing.push(`${h.hook}（判别子串 ${probe} 未在任何 FX 模块中出现）`);
     }
@@ -80,11 +95,55 @@ describe('G1 · FX DOM 契约', () => {
     for (const r of RENDERERS) {
       const src = read(r);
       for (const h of hooksOfCategory('A')) {
-        const probe = h.hook.includes('[') ? /\[([a-z-]+)/.exec(h.hook)?.[1] ?? h.hook : h.hook.replace(/^\./, '');
-        if (!src.includes(probe)) missing.push(`${r} 未提供 ${h.hook}`);
+        const probe = probeOf(h.hook);
+        if (!src.includes(probe)) missing.push(`${r} 未提供 ${h.hook}（判别子串 ${probe}）`);
       }
     }
     expect(missing, `以下 A 类钩子当前渲染器缺失：\n${missing.join('\n')}`).toEqual([]);
+  });
+
+  it('A/B/C 类 requiredBy 的每个模块都必须自己含该钩子的判别子串（出处可机检，不是只查名单）', () => {
+    // 只断言「模块名 ∈ FX_MODULES」等于没查：随便填一个 FX 模块都能过。
+    // 这里逐步收紧为「这个模块的源码里真的有这个钩子」，凭空发明 / 出处写错都会被抓到。
+    const problems: string[] = [];
+    for (const h of FX_DOM_CONTRACT) {
+      if (h.category === 'D') continue; // D 类＝FX 零引用，requiredBy 必空（另有专门断言）
+      const probe = probeOf(h.hook);
+      for (const m of h.requiredBy) {
+        const src = fxSources.get(m);
+        if (src === undefined) { problems.push(`${h.hook}（${h.category} 类）：requiredBy 的 ${m} 不是 FX 模块`); continue; }
+        if (!src.includes(probe)) {
+          problems.push(`${h.hook}（${h.category} 类）：requiredBy 的 ${m} 里找不到判别子串 ${probe}`);
+        }
+      }
+    }
+    expect(problems, `以下 requiredBy 出处不成立（改模块名或改钩子写法）：\n${problems.join('\n')}`).toEqual([]);
+  });
+
+  it('B 类钩子必须由 requiredBy 的模块真的自建/取回（B 类的对称守卫，防止渲染器自有节点被误标为 B）', () => {
+    // 原始事故形态：render.ts 产出、FX 零引用的 .hand-strip / .play-btns 被标成 B 却无人机检。
+    // B 类＝特效自建，其存在性只能由「FX 模块里真的有这个类名」来证明；证明不了就必须重分类（多半是 D）。
+    const problems: string[] = [];
+    for (const h of hooksOfCategory('B')) {
+      const probe = probeOf(h.hook);
+      // 逐条 requiredBy 核对，报告时按「钩子」聚合一次（避免同一条钩子刷屏）。
+      const unverified = h.requiredBy.filter((m) => !(fxSources.get(m) ?? '').includes(probe));
+      if (h.requiredBy.length === 0 || unverified.length > 0) {
+        problems.push(`${h.hook}：${unverified.length > 0 ? `requiredBy 的 ${unverified.join('、')}` : 'requiredBy'} `
+          + `里找不到判别子串 ${probe} —— 「特效自建」出处不成立，应改 requiredBy，或重分类为 D`);
+      }
+    }
+    expect(problems, `以下 B 类钩子的自建出处无法机检：\n${problems.join('\n')}`).toEqual([]);
+  });
+
+  it('kind 与钩子书写形式一致（class ⇔ 以 . 开头，attr ⇔ 以 [ 开头，element ⇔ 纯标签名）', () => {
+    const bad: string[] = [];
+    for (const h of FX_DOM_CONTRACT) {
+      const lead = h.hook[0];
+      const want = lead === '.' ? 'class' : lead === '[' ? 'attr' : 'element';
+      if (h.kind !== want) bad.push(`${h.hook}: kind=${h.kind}，按书写形式应为 ${want}`);
+    }
+    expect(bad, `kind 与钩子形式不一致：\n${bad.join('\n')}`).toEqual([]);
   });
 
   it('六个已确认的 A 类核心钩子必须在清单里（防止盘点漏掉主干）', () => {
@@ -107,7 +166,7 @@ describe('G1 · FX DOM 契约', () => {
     const rendererSrc = RENDERERS.map((r) => read(r)).join('\n');
     const problems: string[] = [];
     for (const h of hooksOfCategory('D')) {
-      const probe = h.hook.includes('[') ? /\[([a-z-]+)/.exec(h.hook)?.[1] ?? h.hook : h.hook.replace(/^\./, '');
+      const probe = probeOf(h.hook);
       if (!rendererSrc.includes(probe)) problems.push(`${h.hook} 未被当前渲染器产出（应归 B 特效自建）`);
       if ([...fxSources.values()].some((src) => src.includes(probe))) {
         problems.push(`${h.hook} 其实被 FX 模块读到（判别子串 ${probe}，应归 A 契约项）`);
