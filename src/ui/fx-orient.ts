@@ -10,6 +10,17 @@
 
 export type CardOrient = 0 | 90 | -90 | 180;
 
+/** 全部朝向类名。清理方（如 playRiseFade 的克隆）必须三个一起摘 —— 只摘 ±90° 会漏掉 180°。 */
+export const ORIENT_CLASSES = ['rot-cw', 'rot-ccw', 'rot-180'] as const;
+
+/** 摘掉节点的全部朝向类（安全：classList/remove 缺失即静默返回）。
+ *  这是 FX 模块**唯一**允许触碰朝向类名的地方 —— 源码守卫禁止 FX 模块再写字面量。 */
+export function stripOrientClasses(node: Element | null | undefined): void {
+  const cl = (node as { classList?: { remove(...c: string[]): void } } | null | undefined)?.classList;
+  if (!cl || typeof cl.remove !== 'function') return;
+  cl.remove(...ORIENT_CLASSES);
+}
+
 /** 从节点类名读朝向。180 优先于 ±90（同时带时按 180 算）。 */
 export function orientOf(node: Element | null | undefined): CardOrient {
   const cl = (node as { classList?: { contains(c: string): boolean } } | null | undefined)?.classList;
@@ -20,9 +31,20 @@ export function orientOf(node: Element | null | undefined): CardOrient {
   return 0;
 }
 
-/** 与既有 buildFxCardAt(rect, cw, ccw, …) 的参数形状对齐 */
+/** 与既有 buildFxCardAt(rect, orient, …) 的参数形状对齐 */
 export function orientToCwCcw(o: CardOrient): { cw: boolean; ccw: boolean; flip180: boolean } {
   return { cw: o === 90, ccw: o === -90, flip180: o === 180 };
+}
+
+/** `--fx-rot` 用的**裸角度**（`'0deg'|'90deg'|'-90deg'|'180deg'`）。
+ *  ⚠️ 与 `cloneTransformOf()`（完整 transform 函数串）**不可混用**，见本文件头部约定注释。 */
+export function orientToFxRot(o: CardOrient): string {
+  switch (o) {
+    case 90: return '90deg';
+    case -90: return '-90deg';
+    case 180: return '180deg';
+    default: return '0deg';
+  }
 }
 
 /** 该朝向是否交换布局盒宽高 */

@@ -21,6 +21,7 @@
 import type { GameState } from '../core/models/types';
 import { clipInsetRightPct } from './gen3-util';
 import { protocolColorOf } from './protocol-colors';
+import { orientOf, type CardOrient } from './fx-orient';
 
 /** 事件载荷（= effects/index.ts 的 FxCardPayload + emitCardEvent 附带的 triggerUid） */
 export interface Gen3CardPayload {
@@ -42,15 +43,15 @@ export interface Gen3CardFxApi {
   el(tag: string, cls: string, text?: string): HTMLElement;
   buildFxCard(node: HTMLElement, payload: Gen3CardPayload, zIndex: number): HTMLElement | null;
   /** 用**事件时定格的 rect** 建浮层卡（DOM 节点可能已被重渲染替换 → 延迟播放必须用它） */
-  buildFxCardAt(rect: DOMRect, cw: boolean, ccw: boolean, payload: Gen3CardPayload, zIndex: number): HTMLElement | null;
-  playCutAt(rect: DOMRect, cw: boolean, ccw: boolean, payload: Gen3CardPayload): void;
+  buildFxCardAt(rect: DOMRect, orient: CardOrient, payload: Gen3CardPayload, zIndex: number): HTMLElement | null;
+  playCutAt(rect: DOMRect, orient: CardOrient, payload: Gen3CardPayload): void;
   playCut(node: HTMLElement, payload: Gen3CardPayload): void;
-  playShatterAt(rect: DOMRect, cw: boolean, ccw: boolean, payload: Gen3CardPayload): void;
+  playShatterAt(rect: DOMRect, orient: CardOrient, payload: Gen3CardPayload): void;
   playFlip(node: HTMLElement, payload: Gen3CardPayload, durationMs?: number): void;
   playShift(node: HTMLElement, payload: Gen3CardPayload): void;
   playReturn(node: HTMLElement, payload: Gen3CardPayload): void;
   /** 用定格 rect 播翻面（node 已失效时用） */
-  playFlipAt(rect: DOMRect, cw: boolean, ccw: boolean, payload: Gen3CardPayload, durationMs?: number): void;
+  playFlipAt(rect: DOMRect, orient: CardOrient, payload: Gen3CardPayload, durationMs?: number): void;
   /** 牌库区矩心（牌堆顶打出/抽牌的起点参照，effects/index.ts 已导出同名函数） */
   deckPos(player: 0 | 1): DOMRect | null;
   /** 基础反面打出飞行（牌库顶 / 手牌）；durationMs 可放慢（3代 惰性=慢） */
@@ -84,10 +85,12 @@ export const GEN3_SKIP_BESPOKE = ['greed', 'pride', 'gluttony'];
 
 /* ============================== 共享工具 ============================== */
 
-function geom(node: HTMLElement): { rect: DOMRect; cw: boolean; ccw: boolean } | null {
+/** 事件时定格「rect + 朝向」——延迟播放必须用定格值（DOM 节点可能已被重渲染替换）。
+ *  朝向经 fx-orient 的单一出处读出，本模块不裸判朝向类名。 */
+function geom(node: HTMLElement): { rect: DOMRect; orient: CardOrient } | null {
   const rect = node.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return null;
-  return { rect, cw: node.classList.contains('rot-cw'), ccw: node.classList.contains('rot-ccw') };
+  return { rect, orient: orientOf(node) };
 }
 
 /** 协议色（与 styles-gen3-cards.css 的类一一对应；仅用于 body 级 SVG 连线/弧轨的描边） */
@@ -312,12 +315,12 @@ export function gen3DiscardFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3Ca
   if (!g) return false;
   const protocol = p.triggerProtocol ?? '';
   if (!GEN3_CARD_FX_COVER.discard.includes(protocol)) return false; // 只接管点名协议，其余交回基础链
-  const { rect, cw, ccw } = g;
+  const { rect, orient } = g;
   const clone = api.buildFxCard(node, p, api.extraZ);
   if (!clone) return false;
   const finish = (preMs: number, cls: string): boolean => {
     clone.classList.add(cls);
-    window.setTimeout(() => api.playCutAt(rect, cw, ccw, p), preMs);
+    window.setTimeout(() => api.playCutAt(rect, orient, p), preMs);
     window.setTimeout(() => clone.remove(), preMs + 420);
     return true;
   };
@@ -453,7 +456,7 @@ export function gen3DiscardFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3Ca
       layer.appendChild(impact);
       clone.classList.add('g3-nova-discard');
       // 基础切割延后到撞击瞬间（用事件时定格的 rect，避免重渲染后节点失效）
-      window.setTimeout(() => api.playCutAt(rect, cw, ccw, p), 320);
+      window.setTimeout(() => api.playCutAt(rect, orient, p), 320);
       window.setTimeout(() => clone.remove(), 760);
       window.setTimeout(() => layer.remove(), 1200);
       return true;
@@ -472,7 +475,7 @@ export function gen3DeleteFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3Car
   if (!g) return false;
   const protocol = p.triggerProtocol ?? '';
   if (!GEN3_CARD_FX_COVER.delete.includes(protocol)) return false;
-  const { rect, cw, ccw } = g;
+  const { rect, orient } = g;
   const clone = api.buildFxCard(node, p, api.extraZ);
   if (!clone) return false;
 
@@ -497,7 +500,7 @@ export function gen3DeleteFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3Car
         clone.appendChild(frag);
       }
       clone.classList.add('g3-gluttony-delete');
-      window.setTimeout(() => api.playShatterAt(rect, cw, ccw, p), 600);
+      window.setTimeout(() => api.playShatterAt(rect, orient, p), 600);
       window.setTimeout(() => clone.remove(), 1000);
       return true;
     }
@@ -519,7 +522,7 @@ export function gen3DeleteFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3Car
         clone.appendChild(drop);
       }
       clone.classList.add('g3-wrath-delete');
-      api.playShatterAt(rect, cw, ccw, p);
+      api.playShatterAt(rect, orient, p);
       window.setTimeout(() => clone.remove(), 720);
       return true;
     }
@@ -536,7 +539,7 @@ export function gen3DeleteFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3Car
         clone.appendChild(frag);
       }
       clone.classList.add('g3-overwhelm-delete');
-      window.setTimeout(() => api.playShatterAt(rect, cw, ccw, p), 560);
+      window.setTimeout(() => api.playShatterAt(rect, orient, p), 560);
       window.setTimeout(() => clone.remove(), 980);
       return true;
     }
@@ -544,10 +547,10 @@ export function gen3DeleteFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3Car
     case 'nova': {
       const centerX = lineCenterX(node, p);
       // 2026-09-13 修复（用户实测"新星删除特效未触发"）：延迟播放时 DOM 可能已重渲染 → 原节点失效
-      // → 必须在**事件时刻**定格 rect/cw/ccw，延迟回调里用 buildFxCardAt 建浮层。
-      const shot = { rect, cw, ccw };
+      // → 必须在**事件时刻**定格 rect/orient，延迟回调里用 buildFxCardAt 建浮层。
+      const shot = { rect, orient };
       queueStaggered(`gen3-nova-delete-${p.owner}-${p.line}`, centerX, () => {
-        const c = api.buildFxCardAt(shot.rect, shot.cw, shot.ccw, p, api.extraZ);
+        const c = api.buildFxCardAt(shot.rect, shot.orient, p, api.extraZ);
         if (!c) return;
         for (let i = 0; i < 4; i++) {
           const ray = api.el('i', 'g3-nova-burst-ray');
@@ -556,7 +559,7 @@ export function gen3DeleteFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3Car
         }
         c.appendChild(api.el('i', 'g3-nova-burst-flash'));
         c.classList.add('g3-nova-delete');
-        api.playShatterAt(shot.rect, shot.cw, shot.ccw, p);
+        api.playShatterAt(shot.rect, shot.orient, p);
         window.setTimeout(() => c.remove(), 560);
       }, {
         windowMs: 40, gapMs: 70,
@@ -639,14 +642,14 @@ export function gen3FlipFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3CardF
     case 'wrath': {
       const centerX = lineCenterX(node, p);
       // 同新星删除：延迟播放必须用事件时定格的 rect（DOM 可能已重渲染）
-      const shot = { rect: g.rect, cw: g.cw, ccw: g.ccw };
+      const shot = { rect: g.rect, orient: g.orient };
       queueStaggered(`gen3-wrath-flip-${p.owner}-${p.line}`, centerX, () => {
-        const c = api.buildFxCardAt(shot.rect, shot.cw, shot.ccw, p, api.extraZ);
+        const c = api.buildFxCardAt(shot.rect, shot.orient, p, api.extraZ);
         if (!c) return;
         c.classList.add('g3-wrath-flip');
         c.appendChild(api.el('i', 'g3-wrath-bolt'));
         c.appendChild(api.el('i', 'g3-wrath-scorch'));
-        api.playFlipAt(shot.rect, shot.cw, shot.ccw, p);
+        api.playFlipAt(shot.rect, shot.orient, p);
         window.setTimeout(() => c.remove(), 900);
       }, { windowMs: 40, gapMs: 80 });
       return true;

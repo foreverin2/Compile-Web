@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { orientOf, orientToCwCcw, cloneTransformOf, cloneBoxSwaps, type CardOrient } from '../../src/ui/fx-orient';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { orientOf, orientToCwCcw, orientToFxRot, stripOrientClasses, cloneTransformOf, cloneBoxSwaps, type CardOrient } from '../../src/ui/fx-orient';
 import { cloneBoxFrom } from '../../src/ui/fx/clone-orient';
 
 /** 最小桩：只需 classList.contains —— 避免引入 jsdom */
@@ -128,5 +130,99 @@ describe('浮层卡朝向几何（G2）', () => {
     // 反证：若把 180° 当 ±90° 处理，几何会被错误地互换
     expect({ w: box180.w, h: box180.h }).not.toEqual({ w: box90.w, h: box90.h });
     expect(cloneBoxFrom(src, 180)).not.toEqual(cloneBoxFrom(src, 90));
+  });
+});
+
+/**
+ * `orientToFxRot` / `stripOrientClasses` 的契约（G2 Task 2 新增出口）。
+ *
+ * 背景（陷阱 #3）：`--fx-rot` 只接受**裸角度**（`'90deg'`），而 `cloneTransformOf()` 返回的是
+ * **完整 transform 函数串**（`'rotate(90deg)'`）。把后者赋给 `--fx-rot` 会得到
+ * `rotate(rotate(90deg))` → 计算值非法 → 整条内联 transform（连带组合的 translate/scale）
+ * 被静默丢弃。所以这两个出口必须**分开**，且 `orientToFxRot` 的输出永远不含 `rotate(`。
+ */
+describe('orientToFxRot / stripOrientClasses（G2 Task 2 新增出口）', () => {
+  it('orientToFxRot 只产出裸角度（不得是完整 transform 函数串）', () => {
+    expect(orientToFxRot(0)).toBe('0deg');
+    expect(orientToFxRot(90)).toBe('90deg');
+    expect(orientToFxRot(-90)).toBe('-90deg');
+    expect(orientToFxRot(180)).toBe('180deg');
+    for (const o of [0, 90, -90, 180] as CardOrient[]) {
+      expect(orientToFxRot(o), `${o}° 不是裸角度形态`).toMatch(/^-?\d+deg$/);
+      expect(orientToFxRot(o), `${o}° 混入了 rotate( 函数串`).not.toContain('rotate(');
+      // 与完整函数串明确区分（0° 除外：两者语义恰好都是"无旋转"，此处只断言非混用形态）
+      if (o !== 0) expect(orientToFxRot(o), `${o}° 与 cloneTransformOf 混淆`).not.toBe(cloneTransformOf(o));
+    }
+  });
+
+  it('stripOrientClasses 三个朝向类一起摘（只摘 ±90° 会漏掉 180°）', () => {
+    const calls: string[][] = [];
+    const stub = { classList: { remove: (...c: string[]) => { calls.push(c); } } } as unknown as Element;
+    stripOrientClasses(stub);
+    expect(calls).toEqual([['rot-cw', 'rot-ccw', 'rot-180']]);
+    expect(calls[0], 'rot-180 未被摘除').toContain('rot-180');
+  });
+
+  it('stripOrientClasses 对空节点 / 缺 classList / 缺 remove 安全静默', () => {
+    expect(() => stripOrientClasses(null)).not.toThrow();
+    expect(() => stripOrientClasses(undefined)).not.toThrow();
+    expect(() => stripOrientClasses({} as unknown as Element)).not.toThrow();
+    expect(() => stripOrientClasses({ classList: {} } as unknown as Element)).not.toThrow();
+  });
+});
+
+/**
+ * G2 源码守卫：朝向判定必须走单一出处。
+ * 起因：加 180° 时若只改其中几处，会出现"有的浮层卡正、有的倒"这种极难排查的不一致。
+ * 局限（必须如实写在注释里）：源码文本守卫只能证明"类名不再被裸写"与"单一出处被引用"，
+ * 证明不了运行时朝向真的对 —— 那靠 G2 的用户实机抽查（计划「用户验收」第 3 项）。
+ */
+describe('G2 · 朝向判定单一出处（源码守卫）', () => {
+  const FX_FILES = ['effects/index.ts', 'fx-gen2.ts', 'fx-gen3.ts', 'fx-gen3-swap.ts', 'gen3-control.ts', 'compiled-gen3.ts'];
+  const readFx = (f: string): string =>
+    readFileSync(fileURLToPath(new URL(`../../src/ui/${f}`, import.meta.url))).subarray(0, 8 * 1024 * 1024).toString('utf8');
+
+  // 1) 反向：FX 模块不得再裸写朝向类名（注释里写 `.rot-cw` 不算 —— 只抓带引号的字面量）
+  it('FX 模块不得再裸写朝向类名（必须经 orientOf/ORIENT_CLASSES 消费）', () => {
+    const bad: string[] = [];
+    for (const f of FX_FILES) {
+      let src: string;
+      try { src = readFx(f); } catch { continue; } // 文件不存在则跳过（模块清单允许演进）
+      src.split('\n').forEach((line, i) => {
+        if (/['"]rot-(cw|ccw|180)['"]/.test(line)) bad.push(`${f}:${i + 1}: ${line.trim()}`);
+      });
+    }
+    expect(bad, `以下位置仍在裸写朝向类名，请改走 fx-orient.ts 的 orientOf()：\n${bad.join('\n')}`).toEqual([]);
+  });
+
+  // 2) 正向：effects/index.ts 与 fx-gen3.ts 确实 import/使用了 orientOf（防止靠删代码过关）
+  it('effects/index.ts 与 fx-gen3.ts 确实从 fx-orient 消费单一出处', () => {
+    for (const f of ['effects/index.ts', 'fx-gen3.ts']) {
+      const src = readFx(f);
+      expect(src, `${f} 未引用 orientOf`).toMatch(/\borientOf\b/);
+      expect(src, `${f} 未从 fx-orient 引入`).toMatch(/from '[^']*fx-orient'/);
+    }
+  });
+
+  // 3) 产出方仍在产出：render.ts 必须同时含 'rot-cw' / 'rot-ccw' / 'rot-180'（防止靠删产出过关）
+  it('render.ts 仍在产出三种朝向类（防止靠删产出过关）', () => {
+    const src = readFileSync(fileURLToPath(new URL('../../src/ui/render.ts', import.meta.url))).subarray(0, 8 * 1024 * 1024).toString('utf8');
+    for (const c of ['rot-cw', 'rot-ccw', 'rot-180']) {
+      expect(src, `render.ts 丢失产出类 ${c}（产出点是热座观感的唯一来源，不得顺手删）`).toContain(c);
+    }
+  });
+
+  // 4) stripOrientClasses 确实被 playRiseFade 使用（effects/index.ts 含 'stripOrientClasses('）
+  it('playRiseFade 的克隆用 stripOrientClasses 清理朝向', () => {
+    expect(readFx('effects/index.ts'), '克隆去类未走 stripOrientClasses（会漏摘 rot-180）').toContain('stripOrientClasses(');
+  });
+
+  // 5) orientToFxRot 只产出**裸角度**：不得出现 --fx-rot 与 cloneTransformOf 同现的行
+  it('--fx-rot 不得与完整 transform 函数串（cloneTransformOf）混用', () => {
+    const bad = readFx('effects/index.ts').split('\n')
+      .map((line, i) => ({ no: i + 1, line }))
+      .filter(({ line }) => line.includes('--fx-rot') && line.includes('cloneTransformOf'))
+      .map(({ no, line }) => `${no}: ${line.trim()}`);
+    expect(bad, `--fx-rot 只吃裸角度，混用完整函数串会让整条内联 transform 静默失效：\n${bad.join('\n')}`).toEqual([]);
   });
 });

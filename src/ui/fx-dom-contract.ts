@@ -154,13 +154,17 @@ export const FX_DOM_CONTRACT: readonly FxDomHook[] = [
   },
   {
     hook: '.rot-cw', kind: 'class', category: 'A',
-    requiredBy: ['effects/index.ts', 'fx-gen3.ts'],
-    note: '场上卡横置态（P1 顺时针，render.ts:227 按 owner 挂）：浮层卡按它重建朝向，漏挂则特效卡立着',
+    requiredBy: ['fx-orient.ts'],
+    note: '场上卡横置态（P1 顺时针，render.ts:227 按 owner 挂）：浮层卡按它重建朝向，漏挂则特效卡立着。'
+      + '**G2 Task 2 起**：这三个朝向类名只由 src/ui/fx-orient.ts（朝向单一出处）读取，'
+      + 'effects/index.ts 与 fx-gen3.ts 改经 orientOf() 间接消费（不再出现类名字面量）——'
+      + '故 requiredBy 跟着代码走，指向 fx-orient.ts',
   },
   {
     hook: '.rot-ccw', kind: 'class', category: 'A',
-    requiredBy: ['effects/index.ts', 'fx-gen3.ts'],
-    note: '场上卡横置态（P2 逆时针，render.ts:227 按 owner 挂）：与 .rot-cw 成对读取',
+    requiredBy: ['fx-orient.ts'],
+    note: '场上卡横置态（P2 逆时针，render.ts:227 按 owner 挂）：与 .rot-cw 成对读取。'
+      + '**G2 Task 2 起** 同样只由 src/ui/fx-orient.ts 读取（见 .rot-cw 条）',
   },
   {
     hook: 'img', kind: 'element', category: 'A',

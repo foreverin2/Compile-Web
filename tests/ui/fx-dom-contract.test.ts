@@ -25,6 +25,9 @@ const FX_MODULES = [
   'fx/delete-shatter.ts',
   'fx/discard-cut.ts',
   'fx-tornado.ts',
+  // G2 Task 2：朝向单一出处（.rot-cw/.rot-ccw 的 requiredBy 已改指它 —— 其余 FX 模块
+  // 改经 orientOf() 间接消费，不再出现类名字面量）
+  'fx-orient.ts',
 ] as const;
 
 /** 结构钩子的提供方（当前唯一渲染器；G2 会新增远程页渲染器） */

@@ -6,6 +6,7 @@ import { flashRigidity7Guard, noteGreed1Compile } from '../gen3-control';
 import { gen3FulcrumSwapFx, gen3ProtocolSwapFx } from '../fx-gen3-swap';
 import { gen3DiscardFx, gen3DeleteFx, gen3FlipFx, gen3ShiftFx, gen3DrawFx, gen3FaceDownFx, gen3CompiledFx, gen3DeckDiscardFx, gen3ReturnFx, gen3PlayFx, gen3SkipFx, gen3TriggerFx, gen3LandFx, type Gen3CardFxApi, type Gen3CardPayload, type Gen3DrawPayload, type Gen3CompiledPayload, type Gen3DeckDiscardPayload } from '../fx-gen3';
 import { buildTornadoFx } from '../fx-tornado';
+import { orientOf, orientToCwCcw, orientToFxRot, stripOrientClasses, type CardOrient } from '../fx-orient';
 import { cardImgSrc, protocolImgSrc } from '../../data/demo';
 import { playPeaceDiscardExtra, PEACE_PRE_MS, playChaosDiscardExtra, CHAOS_DISCARD_PRE_MS, playIceShiftBridge, playSmokePlayFx, playFearShiftExtra, playCorruptionDiscardExtra, playCorruptionDeleteExtra, playCorruptionFlipExtra, CORRUPT_DISCARD_PRE_MS, playWarDiscardExtra, playWarFlipExtra, playCourageDiscardExtra, playCourageDeleteExtra, playCourageShiftExtra, playTimeDiscardExtra, playAssimDiscardExtra, playAssimDeckRipple, ASSIM_DISCARD_PRE_MS, playDiversityDiscardExtra, DIVERSITY_DISCARD_PRE_MS } from '../fx-gen2';
 
@@ -116,27 +117,33 @@ function buildFaceImg(src: string): HTMLElement {
  * 卡面朝向与真实场上卡一致（getBoundingClientRect 返回的是旋转后的足迹盒；若直接按
  * rect 尺寸旋转会得到竖版视觉盒且中心偏移，方向对但占位错）。旋转以 --fx-rot 记录，
  * 平移类特效（回手/偏转/打出）组合 rotate(var(--fx-rot, 0deg)) 避免覆盖本旋转。
+ * 场上 180° 卡（rot-180，远程页对手侧）：布局盒**不**交换，按 rect 原样建盒后绕中心转 180°
+ * —— 180° 的 |cos|/|sin| 与 0° 相同，几何与 0° 一致、仅朝向不同（见 fx-orient.ts 头部约定）。
  * 手牌/牌库节点无 rot 类 → 保持原行为（不旋转）。尺寸 = 原卡 rect（视觉足迹）。
+ * 朝向一律经 orientOf() 读出（单一出处，G2 Task 2）：本模块不再裸判朝向类名。
  */
 function buildFxCard(node: HTMLElement, payload: FxCardPayload, zIndex: number): HTMLElement | null {
   const rect = node.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return null;
-  return buildFxCardAt(rect, node.classList.contains('rot-cw'), node.classList.contains('rot-ccw'), payload, zIndex);
+  return buildFxCardAt(rect, orientOf(node), payload, zIndex);
 }
 
 /**
- * buildFxCard 的 rect 版：由【已捕获的原卡 rect + 旋转标志】构建浮层卡。
+ * buildFxCard 的 rect 版：由【已捕获的原卡 rect + 朝向】构建浮层卡。
  * 死亡/恨删除附加特效的延后基础破碎在事件后 0.8s/1.5s 触发——此刻原卡节点已被重渲染移除
  * （rect 归零），故在事件时捕获 rect、延后用本函数重建（视觉位置不变）。规则与 buildFxCard 相同。
+ *
+ * 入参用 `CardOrient` 单一朝向而非 `(cw, ccw)` 布尔对：布尔对无法表达 180°，
+ * 会出现「cw=false, ccw=false 却其实是 180°」的非法组合 → 朝向被静默丢弃。
  */
 function buildFxCardAt(
   rect: DOMRect,
-  cw: boolean,
-  ccw: boolean,
+  orient: CardOrient,
   payload: FxCardPayload,
   zIndex: number,
 ): HTMLElement | null {
-  const rotated = cw || ccw;
+  const { cw, ccw, flip180 } = orientToCwCcw(orient);
+  const horizontal = cw || ccw;
   const card = document.createElement('div');
   card.className = 'card';
   card.appendChild(buildFaceImg(cardFaceSrc(payload.defId, payload.faceUp)));
@@ -147,14 +154,23 @@ function buildFxCardAt(
   card.style.background = 'transparent';
   card.style.pointerEvents = 'none';
   card.style.zIndex = String(zIndex);
-  if (rotated) {
+  if (horizontal) {
     const cx = rect.left + rect.width / 2;
     const cy = rect.top + rect.height / 2;
     card.style.left = `${cx - rect.height / 2}px`;
     card.style.top = `${cy - rect.width / 2}px`;
     card.style.width = `${rect.height}px`;
     card.style.height = `${rect.width}px`;
-    card.style.setProperty('--fx-rot', cw ? '90deg' : '-90deg');
+    // 裸角度：orientToFxRot 只产出 '90deg'/'-90deg'/'180deg'，切勿换成 cloneTransformOf 的函数串
+    card.style.setProperty('--fx-rot', orientToFxRot(orient));
+    card.style.transform = 'rotate(var(--fx-rot, 0deg))';
+  } else if (flip180) {
+    // 180°：布局盒不交换（与 0° 同尺寸），绕中心转 180° 使卡面倒置（远程页对手侧）
+    card.style.left = `${rect.left}px`;
+    card.style.top = `${rect.top}px`;
+    card.style.width = `${rect.width}px`;
+    card.style.height = `${rect.height}px`;
+    card.style.setProperty('--fx-rot', orientToFxRot(orient));
     card.style.transform = 'rotate(var(--fx-rot, 0deg))';
   } else {
     card.style.left = `${rect.left}px`;
@@ -231,8 +247,7 @@ function playDeathDeleteExtra(node: HTMLElement, payload: FxCardPayload): void {
   const clone = buildFxCard(node, payload, EXTRA_Z);
   if (!clone) return;
   const rect = node.getBoundingClientRect();
-  const cw = node.classList.contains('rot-cw');
-  const ccw = node.classList.contains('rot-ccw');
+  const orient = orientOf(node);
   clone.classList.add('fx-death', 'fx-death-glow');
   // ① 镰刀：木棍长柄 + 顶端一长条刀片（回旋镖/长柄镰刀造型，见 styles.css），
   // 初始悬于卡上方（渐现），随后斜划过卡面
@@ -253,7 +268,7 @@ function playDeathDeleteExtra(node: HTMLElement, payload: FxCardPayload): void {
   window.setTimeout(() => item.classList.add('fx-death-scythe-visible'), 20);
   window.setTimeout(() => item.classList.add('fx-death-scythe-sweep'), DEATH_SCYTHE_IN_MS);
   window.setTimeout(() => {
-    playShatterAt(rect, cw, ccw, payload);   // ④ 基础破碎（延后）
+    playShatterAt(rect, orient, payload);   // ④ 基础破碎（延后）
     clone.classList.add('fx-death-shattered'); // 卡面淡出，露出破碎层
     item.classList.add('fx-death-scythe-out'); // 镰刀渐隐
     skull.classList.add('fx-death-skull-in');  // 骷髅渐现
@@ -274,8 +289,7 @@ function playHateDeleteExtra(node: HTMLElement, payload: FxCardPayload): void {
   const clone = buildFxCard(node, payload, EXTRA_Z);
   if (!clone) return;
   const rect = node.getBoundingClientRect();
-  const cw = node.classList.contains('rot-cw');
-  const ccw = node.classList.contains('rot-ccw');
+  const orient = orientOf(node);
   clone.classList.add('fx-hate', 'fx-hate-glow');
   // ① 血红手掌 + 5 指（环形围卡，指尖朝向卡中心；CSS 血色渐变 + 圆角指节）
   const hand = document.createElement('div');
@@ -329,7 +343,7 @@ function playHateDeleteExtra(node: HTMLElement, payload: FxCardPayload): void {
     }
   }, HATE_HAND_IN_MS);
   window.setTimeout(() => {
-    playShatterAt(rect, cw, ccw, payload);    // ④ 基础破碎（延后）
+    playShatterAt(rect, orient, payload);    // ④ 基础破碎（延后）
     clone.classList.add('fx-hate-shattered'); // 卡面淡出，露出破碎层
     hand.classList.add('fx-hate-hand-out');   // 手掌渐隐
     blood.classList.add('fx-hate-blood-in');  // 血泊渐现
@@ -385,8 +399,8 @@ function playShatter(node: HTMLElement, payload: FxCardPayload): void {
 
 /** 延后基础破碎：死亡/恨删除附加特效在前置段（镰刀/手指）播完后调用。
  *  原卡节点此刻已被重渲染移除 → 用事件时捕获的 rect 重建浮层（见 buildFxCardAt）。 */
-function playShatterAt(rect: DOMRect, cw: boolean, ccw: boolean, payload: FxCardPayload): void {
-  const clone = buildFxCardAt(rect, cw, ccw, payload, BASE_Z);
+function playShatterAt(rect: DOMRect, orient: CardOrient, payload: FxCardPayload): void {
+  const clone = buildFxCardAt(rect, orient, payload, BASE_Z);
   if (!clone) return;
   mountShatter(clone);
   window.setTimeout(() => clone.remove(), FX_REMOVE_MS);
@@ -402,8 +416,8 @@ function playCut(node: HTMLElement, payload: FxCardPayload): void {
 
 /** 延后基础弃牌切割：念能/瘟疫弃牌附加特效在前置段（粒子环绕 / 浓雾覆盖）播完后调用。
  *  原卡节点此刻已被重渲染移除（rect 归零）→ 用事件时捕获的 rect 重建浮层（见 buildFxCardAt）。 */
-function playCutAt(rect: DOMRect, cw: boolean, ccw: boolean, payload: FxCardPayload): void {
-  const clone = buildFxCardAt(rect, cw, ccw, payload, BASE_Z);
+function playCutAt(rect: DOMRect, orient: CardOrient, payload: FxCardPayload): void {
+  const clone = buildFxCardAt(rect, orient, payload, BASE_Z);
   if (!clone) return;
   mountCut(clone);
   window.setTimeout(() => clone.remove(), FX_REMOVE_MS);
@@ -432,7 +446,8 @@ function flyToTrashAndCut(
 ): void {
   const dest = trashPos(destPlayer);
   if (!dest || rect.width === 0 || rect.height === 0) return;
-  const clone = buildFxCardAt(rect, false, false, payload, BASE_Z);
+  // 来源是牌库区/手牌节点，无朝向类 → 恒 0°（与旧 false, false 等价）
+  const clone = buildFxCardAt(rect, 0, payload, BASE_Z);
   if (!clone) return;
   const cx = rect.left + rect.width / 2;
   const cy = rect.top + rect.height / 2;
@@ -453,7 +468,8 @@ function flyToTrashAndCut(
       x: dest.x - rect.width / 2, y: dest.y - rect.height / 2,
       toJSON: () => ({}),
     } as DOMRect;
-    const landed = buildFxCardAt(at, false, false, payload, BASE_Z);
+    // 落点仍是牌库/手牌来源的合成 rect → 恒 0°
+    const landed = buildFxCardAt(at, 0, payload, BASE_Z);
     if (landed) {
       mountCut(landed);
       window.setTimeout(() => landed.remove(), FX_REMOVE_MS);
@@ -512,8 +528,7 @@ function playPsychicDiscardExtra(node: HTMLElement, payload: FxCardPayload): voi
   const clone = buildFxCard(node, payload, EXTRA_Z);
   if (!clone) return;
   const rect = node.getBoundingClientRect();
-  const cw = node.classList.contains('rot-cw');
-  const ccw = node.classList.contains('rot-ccw');
+  const orient = orientOf(node);
   clone.classList.add('fx-psychic', 'fx-psychic-glow');
   // ① 粒子环：24 颗环形散布（角度均匀 + 半径抖动 + 随机大小 6–14px），轨道 span 相位错开
   const ring = document.createElement('div');
@@ -540,7 +555,7 @@ function playPsychicDiscardExtra(node: HTMLElement, payload: FxCardPayload): voi
   window.setTimeout(() => ring.classList.add('fx-psychic-converge'), PSYCHIC_ORBIT_MS);
   // ③ 汇聚完成 → 延后基础弃牌 + ④ 整层（粒子+卡面）淡出露出切割
   window.setTimeout(() => {
-    playCutAt(rect, cw, ccw, payload);
+    playCutAt(rect, orient, payload);
     clone.classList.add('fx-psychic-out');
   }, PSYCHIC_PRE_MS);
   window.setTimeout(() => clone.remove(), PSYCHIC_TOTAL_MS);
@@ -565,8 +580,7 @@ function playPlagueDiscardExtra(node: HTMLElement, payload: FxCardPayload): void
   const clone = buildFxCard(node, payload, EXTRA_Z);
   if (!clone) return;
   const rect = node.getBoundingClientRect();
-  const cw = node.classList.contains('rot-cw');
-  const ccw = node.classList.contains('rot-ccw');
+  const orient = orientOf(node);
   clone.classList.add('fx-plague', 'fx-plague-glow');
   // ① 浓雾覆盖层：7 团深绿 blob 围绕卡渐现渐扩散（各 blob 渐现延迟错开）
   const mist = document.createElement('div');
@@ -581,7 +595,7 @@ function playPlagueDiscardExtra(node: HTMLElement, payload: FxCardPayload): void
   window.setTimeout(() => mist.classList.add('fx-plague-mist-in'), 20);
   // ② 浓雾铺满 → 延后基础弃牌 + ③ 整层渐散露出切割
   window.setTimeout(() => {
-    playCutAt(rect, cw, ccw, payload);
+    playCutAt(rect, orient, payload);
     clone.classList.add('fx-plague-out');
   }, PLAGUE_PRE_MS);
   window.setTimeout(() => clone.remove(), PLAGUE_TOTAL_MS);
@@ -594,12 +608,12 @@ function playPlagueDiscardExtra(node: HTMLElement, payload: FxCardPayload): void
  *    展开完成后（~1.65s）再触发翻转、+420ms 移除。返回 null 表示 rect 无效（调用方跳过）。 */
 function buildFlipOverlay(
   rect: DOMRect,
-  cw: boolean,
-  ccw: boolean,
+  orient: CardOrient,
   oldSrc: string,
   newSrc: string,
 ): { wrap: HTMLElement; inner: HTMLElement } | null {
   if (rect.width === 0 || rect.height === 0) return null;
+  const { cw, ccw, flip180 } = orientToCwCcw(orient);
   const horizontal = cw || ccw;
   const wrap = document.createElement('div');
   wrap.className = 'flip-overlay-fx'; // resetUiState 清扫兜底（覆盖层最长 ~2.07s，重置时立即移除）
@@ -613,6 +627,13 @@ function buildFlipOverlay(
       `position:fixed;left:${cx - rect.height / 2}px;top:${cy - rect.width / 2}px;` +
       `width:${rect.height}px;height:${rect.width}px;z-index:300;pointer-events:none;` +
       `perspective:600px;transform:rotate(${cw ? 90 : -90}deg);`;
+  } else if (flip180) {
+    // 180°：布局盒按 rect 原样（与 0° 同尺寸），wrap 绕中心转 180° 使卡面倒置；
+    // 内层 rotateY 面翻在 wrap 局部系内组合（局部 Y 轴与屏幕 Y 轴同向）→ 仍是"相对卡面横向翻"。
+    wrap.style.cssText =
+      `position:fixed;left:${rect.left}px;top:${rect.top}px;` +
+      `width:${rect.width}px;height:${rect.height}px;z-index:300;pointer-events:none;` +
+      `perspective:600px;transform:rotate(180deg);`;
   } else {
     wrap.style.cssText = `position:fixed;left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px;z-index:300;pointer-events:none;perspective:600px;`;
   }
@@ -636,10 +657,10 @@ function buildFlipOverlay(
 function playFlip(node: HTMLElement, payload: FxCardPayload, durationMs = 350): void {
   const rect = node.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return;
-  const cw = node.classList.contains('rot-cw');
-  const ccw = node.classList.contains('rot-ccw');
+  const orient = orientOf(node);
+  const { cw, ccw } = orientToCwCcw(orient);
   const oldSrc = node.querySelector('img')?.src ?? cardFaceSrc(payload.defId, payload.faceUp);
-  const overlay = buildFlipOverlay(rect, cw, ccw, oldSrc, cardFaceSrc(payload.defId, payload.faceUp));
+  const overlay = buildFlipOverlay(rect, orient, oldSrc, cardFaceSrc(payload.defId, payload.faceUp));
   if (!overlay) return;
   // 3代 怠惰按协议语法放慢翻面（协议"慢"；默认 350 保持 1/2 代观感不变）
   overlay.inner.style.transition = `transform ${durationMs}ms ease`;
@@ -759,10 +780,10 @@ function playLifeFlip(node: HTMLElement, payload: FxCardPayload): void {
   // （展开动画 0.9s → 1.9s，翻面在 ~1.65s 才开始，"先展开、后翻转"）。
   // 覆盖层必须此刻同步构建：重渲染随后会重建原卡节点（rect 归零），而展开期间
   // 覆盖层保持旧面静止（与新状态卡同位同尺寸 → 视觉无缝），~1.65s 后再播 3D 翻转。
-  const cw = node.classList.contains('rot-cw');
-  const ccw = node.classList.contains('rot-ccw');
+  const orient = orientOf(node);
+  const { cw, ccw } = orientToCwCcw(orient);
   const oldSrc = node.querySelector('img')?.src ?? cardFaceSrc(payload.defId, payload.faceUp);
-  const flipOverlay = buildFlipOverlay(rect, cw, ccw, oldSrc, cardFaceSrc(payload.defId, payload.faceUp));
+  const flipOverlay = buildFlipOverlay(rect, orient, oldSrc, cardFaceSrc(payload.defId, payload.faceUp));
   if (flipOverlay) {
     window.setTimeout(() => {
       flipOverlay.inner.style.transform = cw || ccw ? 'rotateX(180deg)' : 'rotateY(180deg)';
@@ -1276,8 +1297,8 @@ function flyGravityGhost(
  *  注入：延迟 = GRAVITY_PRE_MS（前置段全程发光，backwards 填充保持 0% 帧），时长 =
  *  GRAVITY_GLOW_MS（飞行 + 到终点后 1s 熄灭）。返回浮层卡（调用方转交 flyGravityGhost）；
  *  构建失败（rect 归零等，实际不可达）返回 null。 */
-function buildGravityGhost(rect: DOMRect, cw: boolean, ccw: boolean, payload: FxCardPayload): HTMLElement | null {
-  const ghost = buildFxCardAt(rect, cw, ccw, payload, BASE_Z);
+function buildGravityGhost(rect: DOMRect, orient: CardOrient, payload: FxCardPayload): HTMLElement | null {
+  const ghost = buildFxCardAt(rect, orient, payload, BASE_Z);
   if (!ghost) return null;
   ghost.classList.add('fx-gravity-cardglow');
   ghost.style.setProperty('--fx-gravity-glow-ms', `${GRAVITY_GLOW_MS}ms`);
@@ -1309,7 +1330,8 @@ function playGravityDeckPlayExtra(payload: FxCardPayload): void {
   }
   const start = { x: from.left + from.width / 2, y: from.top + from.height / 2 };
   // ② 立即创建浮层卡（旧位置 = 牌库区 rect）盖住真实卡 + 品红卡框光（前置段全程可见）
-  const ghost = buildGravityGhost(from, false, false, payload);
+  //    起点是牌库区（非场上卡节点）→ 朝向恒 0°
+  const ghost = buildGravityGhost(from, 0, payload);
   if (!ghost) {
     playDeckPlay(payload); // 浮层构建失败（实际不可达）→ 退回基础牌堆顶打出
     return;
@@ -1361,11 +1383,10 @@ function playGravityShiftExtra(node: HTMLElement, payload: FxCardPayload): void 
     playShift(node, payload);
     return;
   }
-  const cw = node.classList.contains('rot-cw');
-  const ccw = node.classList.contains('rot-ccw');
+  const orient = orientOf(node);
   const start = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
   // ① 事件时立即创建浮层卡（旧位置 rect）盖住真实卡 + 品红卡框光（前置段全程可见）
-  const ghost = buildGravityGhost(rect, cw, ccw, payload);
+  const ghost = buildGravityGhost(rect, orient, payload);
   if (!ghost) {
     playShift(node, payload); // 浮层构建失败（实际不可达）→ 退回基础平移
     return;
@@ -1455,11 +1476,10 @@ function playSpeedShiftExtra(node: HTMLElement, payload: FxCardPayload): void {
   const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${owner}"][data-line="${line}"]`);
   const end = stackEndPos(slot, owner);
   if (!end) return;
-  const cw = node.classList.contains('rot-cw');
-  const ccw = node.classList.contains('rot-ccw');
+  const orient = orientOf(node);
   // ① 事件时立即创建浮层卡（旧位置 rect，z=BASE_Z 盖住真实卡）：卡面即时可见，
   //    内嵌灰白光 + 飓风覆盖层（.fx-speed-card-glow，初始 opacity:0 → 0.3s 渐现）
-  const ghost = buildFxCardAt(rect, cw, ccw, payload, BASE_Z);
+  const ghost = buildFxCardAt(rect, orient, payload, BASE_Z);
   if (!ghost) return;
   ghost.classList.add('fx-speed-card'); // 重置清扫标记（render.ts resetUiState）
   ghost.style.willChange = 'transform, opacity';
@@ -1729,7 +1749,9 @@ function playRiseFade(node: HTMLElement, delay: number): void {
   const rect = node.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return;
   const clone = node.cloneNode(true) as HTMLElement;
-  clone.classList.remove('rot-cw', 'rot-ccw');
+  // 三个朝向类（含 rot-180）一起摘：只摘 ±90° 会让带 180° 的克隆继承一个不该有的朝向。
+  // （紧随的 transform:'none' 与 pointer-events:none 让当前摘不摘视觉无差异 —— 这是卫生性修正。）
+  stripOrientClasses(clone);
   clone.style.transform = 'none';
   clone.style.position = 'fixed';
   clone.style.left = `${rect.left}px`;
@@ -1857,15 +1879,16 @@ const GEN3_CARD_FX_API: Gen3CardFxApi = {
     return node;
   },
   buildFxCard: (node, payload, zIndex) => buildFxCard(node, payload as unknown as FxCardPayload, zIndex),
-  buildFxCardAt: (rect, cw, ccw, payload, zIndex) => buildFxCardAt(rect, cw, ccw, payload as unknown as FxCardPayload, zIndex),
-  playCutAt: (rect, cw, ccw, payload) => playCutAt(rect, cw, ccw, payload as unknown as FxCardPayload),
+  buildFxCardAt: (rect, orient, payload, zIndex) => buildFxCardAt(rect, orient, payload as unknown as FxCardPayload, zIndex),
+  playCutAt: (rect, orient, payload) => playCutAt(rect, orient, payload as unknown as FxCardPayload),
   playCut: (node, payload) => playCut(node, payload as unknown as FxCardPayload),
-  playShatterAt: (rect, cw, ccw, payload) => playShatterAt(rect, cw, ccw, payload as unknown as FxCardPayload),
+  playShatterAt: (rect, orient, payload) => playShatterAt(rect, orient, payload as unknown as FxCardPayload),
   playFlip: (node, payload, durationMs) => playFlip(node, payload as unknown as FxCardPayload, durationMs),
   playShift: (node, payload) => playShift(node, payload as unknown as FxCardPayload),
   playReturn: (node, payload) => playReturn(node, payload as unknown as FxCardPayload),
-  playFlipAt: (rect, cw, ccw, payload, durationMs) => {
-    const overlay = buildFlipOverlay(rect, cw, ccw, cardFaceSrc(payload.defId, !payload.faceUp), cardFaceSrc(payload.defId, payload.faceUp));
+  playFlipAt: (rect, orient, payload, durationMs) => {
+    const { cw, ccw } = orientToCwCcw(orient);
+    const overlay = buildFlipOverlay(rect, orient, cardFaceSrc(payload.defId, !payload.faceUp), cardFaceSrc(payload.defId, payload.faceUp));
     if (!overlay) return;
     const dur = durationMs ?? 350;
     overlay.inner.style.transition = `transform ${dur}ms ease`;
@@ -1924,10 +1947,9 @@ export function initEffects(): () => void {
         } else if (node && fxPayload.triggerProtocol === 'assimilation') {
           // 普通同化弃牌（同化1 中/同化5）：青碧光环套住收缩化光点（前置）→ 延后基础切割
           const rect = node.getBoundingClientRect();
-          const cw = node.classList.contains('rot-cw');
-          const ccw = node.classList.contains('rot-ccw');
+          const orient = orientOf(node);
           playAssimDiscardExtra(node);
-          window.setTimeout(() => playCutAt(rect, cw, ccw, payload), ASSIM_DISCARD_PRE_MS);
+          window.setTimeout(() => playCutAt(rect, orient, payload), ASSIM_DISCARD_PRE_MS);
         } else if (node && gen3DiscardFx(node, payload as unknown as Gen3CardPayload, GEN3_CARD_FX_API)) {
           // 3代点名卡牌弃牌附加层（贪婪 R1 / 怠惰 S3 / 愤怒 W2 / 支点 F1 / 动量 M1 / 新星 N2）：
           // 函数内部按 PRE 调度基础切割（或即时 playCut 后自清理浮层），此处不再重复基础动画
@@ -1938,26 +1960,23 @@ export function initEffects(): () => void {
             // 2代 peace 弃牌附加特效（fx-gen2）：和平鸽前置段（飞入→停→抓卡飞远）→
             // PEACE_PRE_MS 后基础切割（事件时捕获 rect 重建浮层，同 psychic/plague 模式）
             const rect = node.getBoundingClientRect();
-            const cw = node.classList.contains('rot-cw');
-            const ccw = node.classList.contains('rot-ccw');
+            const orient = orientOf(node);
             playPeaceDiscardExtra(node, payload);
-            window.setTimeout(() => playCutAt(rect, cw, ccw, payload), PEACE_PRE_MS);
+            window.setTimeout(() => playCutAt(rect, orient, payload), PEACE_PRE_MS);
           } else if (payload.triggerProtocol === 'chaos') {
             // 2代 chaos 弃牌附加特效（fx-gen2）：紫蓝漩涡前置段（渐现→卡吸入中心）→
             // CHAOS_DISCARD_PRE_MS 后基础切割（事件时捕获 rect 重建浮层）
             const rect = node.getBoundingClientRect();
-            const cw = node.classList.contains('rot-cw');
-            const ccw = node.classList.contains('rot-ccw');
+            const orient = orientOf(node);
             playChaosDiscardExtra(node, payload);
-            window.setTimeout(() => playCutAt(rect, cw, ccw, payload), CHAOS_DISCARD_PRE_MS);
+            window.setTimeout(() => playCutAt(rect, orient, payload), CHAOS_DISCARD_PRE_MS);
           } else if (payload.triggerProtocol === 'corruption') {
             // 2代 corruption 弃牌腐蚀（fx-gen2）：墨绿腐蚀液膜 + 斑纹 + 绿光点前置段 →
             // CORRUPT_DISCARD_PRE_MS 后基础切割
             const rect = node.getBoundingClientRect();
-            const cw = node.classList.contains('rot-cw');
-            const ccw = node.classList.contains('rot-ccw');
+            const orient = orientOf(node);
             playCorruptionDiscardExtra(node, payload);
-            window.setTimeout(() => playCutAt(rect, cw, ccw, payload), CORRUPT_DISCARD_PRE_MS);
+            window.setTimeout(() => playCutAt(rect, orient, payload), CORRUPT_DISCARD_PRE_MS);
           } else if (payload.triggerProtocol === 'war') {
             // 2代 war 弃牌（战争弃牌效果）：赤红刀光斩中（卡被斩成两半化火星消散）——刀光
             // 覆盖层 + 基础切割照常（刀光先斩、切割随火星消散，时序接近即时）
@@ -1974,10 +1993,9 @@ export function initEffects(): () => void {
           } else if (payload.triggerProtocol === 'diversity') {
             // 2代 diversity 弃牌（多元弃牌效果）：彩色光环套住收缩 → 化作彩色光尘消散（前置）
             const rect = node.getBoundingClientRect();
-            const cw = node.classList.contains('rot-cw');
-            const ccw = node.classList.contains('rot-ccw');
+            const orient = orientOf(node);
             playDiversityDiscardExtra(node);
-            window.setTimeout(() => playCutAt(rect, cw, ccw, payload), DIVERSITY_DISCARD_PRE_MS);
+            window.setTimeout(() => playCutAt(rect, orient, payload), DIVERSITY_DISCARD_PRE_MS);
           } else playCut(node, payload);
         }
         break;

@@ -101,8 +101,8 @@ G1 首轮正是把「渲染器产出」当成了充分条件，于是把 `.hand-
 | 15 | `.protocol` | `effects/index.ts` | **协议盒：编译翻面动画的锚点** —— `effects/index.ts:1780` 的复合选择器 `` `.protocol-cell[data-player=…][data-line=…] .protocol` `` 的第二段，`:1783` 交给 `playProtocolFlip`。它**不是** D 类：产出是 `render.ts:83`，读取是 `effects/index.ts:1780`，A 的两个条件都成立（同一条类名也被 `render.ts:1761/1762` 自查，与判定无关）。读到的结果被 `if (proto)` 套住，所以**丢掉它不会报错，只会让编译侧的协议翻面静默不播**。机检的 `probe` 取**带引号的产出形式** `'protocol'`：裸词 `protocol` 在 `render.ts` 里命中 68 行（含 `protocol-cell` / `protocol-img` / `protocol-holder` / `protocolImgSrc`），完全非判别性 —— 远程页把协议盒改名 `protocol-box` 却仍产 `protocol-cell` / `protocol-img` 时会照样报绿；带引号的形式在渲染器里**恰好只出现一次**（`render.ts:83` 的 `el('div', 'protocol' + …)`），即产出点本身 |
 | 16 | `.protocol-holder` | `fx-gen2.ts` | 协议持卡盒：同化1 编译光柱的汇聚中心（**取不到就整体不播**，见 `fx-gen2.ts:2179` 审计注释） |
 | 17 | `.hand[data-player]` | `fx-gen3.ts` | 手牌区（带归属）：3 代按玩家取手牌容器（`fx-gen3.ts:875`）。`probe` 与 `.hand` 相同（`hand` + `data-player`），**故这条不提供额外机检力，只是文档登记** |
-| 18 | `.rot-cw` | `effects/index.ts`、`fx-gen3.ts` | 场上卡横置态（P1 顺时针，`render.ts:227` 按 owner 挂）：浮层卡按它重建朝向，**漏挂则特效卡立着** |
-| 19 | `.rot-ccw` | `effects/index.ts`、`fx-gen3.ts` | 场上卡横置态（P2 逆时针，`render.ts:227` 按 owner 挂）：与 `.rot-cw` 成对读取 |
+| 18 | `.rot-cw` | `fx-orient.ts` | 场上卡横置态（P1 顺时针，`render.ts:227` 按 owner 挂）：浮层卡按它重建朝向，**漏挂则特效卡立着**。**G2 Task 2 起**：朝向类名只由 `src/ui/fx-orient.ts`（朝向单一出处）读取 —— `effects/index.ts` / `fx-gen3.ts` 改经 `orientOf()` 间接消费，源码里不再出现类名字面量；`requiredBy` 跟着代码走，否则出处机检（`tests/ui/fx-dom-contract.test.ts:190`）会红 |
+| 19 | `.rot-ccw` | `fx-orient.ts` | 场上卡横置态（P2 逆时针，`render.ts:227` 按 owner 挂）：与 `.rot-cw` 成对读取。**G2 Task 2 起**同样只由 `src/ui/fx-orient.ts` 读取（见上一条） |
 
 ### 3.1 最高风险的一条
 

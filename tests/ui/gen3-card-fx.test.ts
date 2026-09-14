@@ -103,8 +103,8 @@ describe('3代卡牌效果附加层守卫（批次 B）', () => {
     expect(ts).toContain('finish(420,'); // 贪婪
     expect(ts).toContain('finish(460,'); // 怠惰
     expect(ts).toContain('finish(380,'); // 愤怒
-    expect(ts, '暴食粉碎吞噬未延后到 600ms').toMatch(/playShatterAt\(rect, cw, ccw, p\), 600\)/);
-    expect(ts, '压制配重板未延后到 560ms').toMatch(/playShatterAt\(rect, cw, ccw, p\), 560\)/);
+    expect(ts, '暴食粉碎吞噬未延后到 600ms').toMatch(/playShatterAt\(rect, orient, p\), 600\)/);
+    expect(ts, '压制配重板未延后到 560ms').toMatch(/playShatterAt\(rect, orient, p\), 560\)/);
   });
 
   it('不使用 mask / @property（与既有特效骨架一致）', () => {
