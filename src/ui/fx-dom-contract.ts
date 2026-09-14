@@ -6,15 +6,19 @@
  * （本项目历史上已发生过多次，见 docs/3代特效-进度与上下文.md §0）。
  *
  * 分类（判定规则见 docs/4代-FX DOM 契约.md）：
- *  A 结构钩子：渲染器产出、特效只读用于定位 → 远程页必须提供
+ *  A 结构钩子：**渲染器产出 且 FX 真的读它**（两个条件缺一不可）→ 远程页必须提供（契约项）
  *  B 特效自建节点：特效自己 createElement 后取回 → 渲染器无需提供
  *  C 内部注册键：特效挂在元素上的记账 dataset 键 → 渲染器无需提供
+ *  D 渲染器自有、FX 不读：渲染器产出但**零个 FX 模块引用** → **不是**契约项，远程页无需为 FX 提供
  *
- * 判定口径：**逐读取点问「这个元素是谁创建的」，不按属性名一刀切**。
+ * 判定口径：**逐读取点问「这个元素是谁创建的」，不按属性名一刀切**，且 A 类的最后一步
+ * 永远是 `git grep` 到**至少一个 FX 模块真的读它**：只看「渲染器产出」会把 FX 根本不读的
+ * 节点也塞进契约（G1 首轮就因此把 .hand-strip / .play-btns / .lane-row 误判成契约项——
+ * 那份普查把 render.ts 自己的查询也算成了 FX 依赖）。三条都归 D。
  *  - 同理两个 dataset 键分属两类：`[data-uid]` 是 render.ts 写在卡节点上的（A，特效只读）；
  *    而 `[data-band]` 是常驻层写在**自建**网格/条纹/封条上的记账句柄（C，gen3-control.ts:277/407/441/555）。
  *  - 同一条钩子在不同模块可能被读多次，但钩子字符串只登记一次（守卫测试禁止重名）。
- *  - `hand-strip` / `play-btns` 是两条已确认钩子，但它们的读取点全在 render.ts：见文件末尾说明。
+ *  - `requiredBy` 只登记 **FX 消费方**；D 类没有 FX 消费方，故为空数组（守卫测试强制这一点）。
  */
 
 export type FxDomHookKind = 'attr' | 'class' | 'element';
@@ -23,8 +27,11 @@ export interface FxDomHook {
   /** 稳定选择器（属性选择器不带具体值，如 `.deck[data-player]`） */
   hook: string;
   kind: FxDomHookKind;
-  category: 'A' | 'B' | 'C';
-  /** 出处模块名（见 tests/ui/fx-dom-contract.test.ts 的 FX_MODULES） */
+  /** A 渲染器产出且 FX 真的读它（契约项）；B 特效自建；C 特效内部注册键；
+   *  D 渲染器产出但 FX 不读（**不是**契约项） */
+  category: 'A' | 'B' | 'C' | 'D';
+  /** FX 消费方模块名（见 tests/ui/fx-dom-contract.test.ts 的 FX_MODULES）；
+   *  D 类无 FX 消费方 → 必须是空数组 */
   requiredBy: readonly string[];
   /** 一句话：这个钩子供什么特效定位用 */
   note?: string;
@@ -104,7 +111,9 @@ export const FX_DOM_CONTRACT: readonly FxDomHook[] = [
   {
     hook: 'img', kind: 'element', category: 'A',
     requiredBy: ['fx-gen2.ts', 'fx-gen3-swap.ts', 'fx/delete-shatter.ts', 'fx/discard-cut.ts'],
-    note: '卡面图：偏转/破碎/切割取卡面图的唯一来源（render.ts 造 .card-face-img / .protocol-img）',
+    note: '卡面图：偏转/破碎/切割/翻面/交换取卡面图的唯一来源（render.ts 造 .card-face-img / .protocol-img）；'
+      + '6 个读取点全在渲染器产出的卡节点（或它的克隆）上：effects/index.ts:641/764（playFlip 源卡，缺失则回退 cardFaceSrc）、'
+      + 'fx-gen2.ts:967、fx-gen3-swap.ts:120、fx/delete-shatter.ts:36、fx/discard-cut.ts:19',
   },
 
   // —— 控制组件（gen3-control 定位锚点） ——
@@ -129,7 +138,8 @@ export const FX_DOM_CONTRACT: readonly FxDomHook[] = [
   {
     hook: '.fx-love-heart', kind: 'class', category: 'B',
     requiredBy: ['effects/index.ts'],
-    note: '爱意抽牌的粉色爱心：特效自建（effects/index.ts:1560）后取回移除',
+    note: '爱意抽牌的粉色爱心：特效自建（buildLoveHeart，effects/index.ts:1560）后挂到源卡/克隆/落点盒上，'
+      + ':1659 取回移除；render.ts:1654 在揭示幽灵上另挂一个是渲染器自己的装饰（FX 不读），故仍属 B',
   },
   {
     hook: '.reveal-wings', kind: 'class', category: 'B',
@@ -142,19 +152,9 @@ export const FX_DOM_CONTRACT: readonly FxDomHook[] = [
     note: '生命翻面藤蔓：特效自建的 fxWrap 内子元素',
   },
 
-  // —— 读取点在 render.ts 的两条「已确认钩子」（见文件末尾盘点说明 1）——
-  // 它们由 render.ts 产出，但 11 个 FX 模块里没有任何读取点命中，故不记 A 类：
-  // 记 A 会与「A 类必须被 FX 模块引用」这条机检直接冲突，而该机检才是 G2 的验收基准。
-  {
-    hook: '.hand-strip', kind: 'class', category: 'B',
-    requiredBy: ['effects/index.ts'],
-    note: '手牌条带容器：**唯一读取点是 render.ts:4893/4909**（加 .choice-mode），FX 层无引用；见文件末尾说明 1',
-  },
-  {
-    hook: '.play-btns', kind: 'class', category: 'B',
-    requiredBy: ['effects/index.ts'],
-    note: '卡面翻面按钮组：**唯一读取点是 render.ts:5469/5522**（拖拽幽灵剔除它），FX 层无引用；见文件末尾说明 1',
-  },
+  // —— 读取点在 render.ts 的两条「已确认钩子」已按纠正后的规则移出 B 类 ——
+  // `.hand-strip` / `.play-btns` 既不是 FX 自建（旧 B 类判定不成立），也不是契约项：
+  // 渲染器产出但 0 个 FX 模块引用 → 见下方 D 类。
 
   // —— 3 代常驻层（gen3-control.ts）自建子元素，每帧取回重定位 ——
   { hook: '.g3sync-envy0-thread', kind: 'class', category: 'B', requiredBy: ['gen3-control.ts'], note: '嫉妒0 汲取丝：每帧重定位' },
@@ -197,29 +197,48 @@ export const FX_DOM_CONTRACT: readonly FxDomHook[] = [
     requiredBy: ['gen3-control.ts'],
     note: '记账键：常驻层把「这张卡/这条线」的 id 写在自建网格/条纹/封条上（gen3-control.ts:277/407/441/555），再按值查回重定位',
   },
+
+  // ============================ D 渲染器自有、FX 不读（**不是**契约项） ============================
+  // 判定依据：render.ts 产出，但 11 个 FX 模块里 `git grep` 不到任何读取点（故 requiredBy 为空）。
+  // 它们的消费方是渲染器自己（选择模式条、拖拽幽灵清理、线选择高亮）：G2 的远程页仍应产出它们
+  // 以保证渲染器自身功能，但它们**不占**「FX 依赖」的验收位，远程页无需为 FX 提供。
+  {
+    hook: '.hand-strip', kind: 'class', category: 'D', requiredBy: [],
+    note: '手牌条带容器：render.ts:4651 产出；读取点全在 render.ts:4893/4909（加 .choice-mode）；'
+      + 'FX 模块 0 引用 → 不是 FX 契约项（缺了坏的是选择模式，不是某条点名特效）',
+  },
+  {
+    hook: '.play-btns', kind: 'class', category: 'D', requiredBy: [],
+    note: '卡面翻面按钮组：render.ts:1625 产出；读取点全在 render.ts:5469/5522（拖拽幽灵剔除它）；'
+      + 'FX 模块 0 引用 → 不是 FX 契约项（缺了坏的是拖拽，不是某条点名特效）',
+  },
+  {
+    hook: '.lane-row', kind: 'class', category: 'D', requiredBy: [],
+    note: '链路行容器：render.ts:4623 产出；读取点全在 render.ts:1761/4851（协议元素定位、线选择高亮）；'
+      + 'FX 模块 0 引用 → 不是 FX 契约项',
+  },
 ];
 
 /** 取某分类的全部钩子 */
-export function hooksOfCategory(c: 'A' | 'B' | 'C'): FxDomHook[] {
+export function hooksOfCategory(c: 'A' | 'B' | 'C' | 'D'): FxDomHook[] {
   return FX_DOM_CONTRACT.filter((h) => h.category === c);
 }
 
 /**
- * 盘点说明（G1 的结论，供 G2 与人工文档使用）：
+ * 盘点说明（G1 的结论 + 评审前纠正，供 G2 与人工文档使用）：
  *
- * 1. `.hand-strip` / `.play-btns` 的读取点**全在 render.ts**（4893/4909/5469/5522），
- *    契约模块的 11 个 FX 模块里没有任何 querySelector 命中它们（`git grep -n "hand-strip" -- src`
- *    与 `git grep -n "play-btns" -- src` 只返回 render.ts 与 styles.css）。它们仍按 G1 要求
- *    登记在清单里（核心钩子存在性机检），但**不记 A 类** ——「A 类必须被 FX 模块引用」
- *    这条机检就是 G2 的验收基准，把它们记 A 会让基准失真。它们的性质是：
- *      - 由渲染器产出（render.ts:4651 / render.ts:1625）；
- *      - 消费方是渲染器自身（选择模式条、拖拽幽灵清理），不是 FX 层；
- *      - 远程页若不提供，坏掉的是**拖拽与选择模式**，而不是某条点名特效。
- *    因此 G2 的远程渲染器仍应产出这两条，但它们不该占用「FX 依赖」的验收位。
- *    **这是本任务的发现，不是渲染器缺失。**
+ * 1. **纠正**：旧版把 `.hand-strip` / `.play-btns` 记作 B 类（「特效自建」）——那是错的，
+ *    它们的读取点**全在 render.ts**（4893/4909、5469/5522），渲染器产出、FX 模块 0 引用，
+ *    所以正确归属是 **D 类：渲染器自有、FX 不读，不是契约项**。`.lane-row` 同理（render.ts
+ *    产出，读取点 render.ts:1761/4851），也归 D。核对用：
+ *    `git grep -n "hand-strip" -- src` / `"play-btns"` / `"lane-row"` 只返回 render.ts 与 styles.css。
+ *    历史成因：控制器最初的选择器普查把 render.ts 自己的查询也算成了 FX 依赖，于是给了 7 条
+ *    「已确认锚点」，其中这三条与「A 类必须被 FX 模块引用」这条机检互相冲突；纠正后 A 类锚点是 6 条。
+ *    远程页若不提供它们，坏掉的是**拖拽 / 选择模式 / 线选择高亮**，而不是某条点名特效。
  *
- * 2. 只有 render.ts / diag.ts / home.ts / control-rearrange.ts 引用的选择器不进清单
- *    （如 .lane-row、.protocol、.stack、.draft-pool）：本清单只收录 FX 层的读取点。
+ * 2. 只有 render.ts / diag.ts / home.ts / control-rearrange.ts 引用的选择器不进 A 类
+ *    （如 .protocol、.stack、.draft-pool）：本清单的 A 类只收录 FX 层真的读的钩子；
+ *    其中已被点名的 renderer 自有节点登记为 D 类。
  * 3. render.ts 里的 23 个 `dataset.*Key`（smokeKey / ice4Key / …）是渲染器给自己的常驻层
  *    记的账，只有 render.ts:1364 读回 chainPlayer 一处，FX 模块从不读 → 不在契约内。
  */

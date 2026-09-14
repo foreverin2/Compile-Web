@@ -33,9 +33,9 @@ const RENDERERS = ['render.ts'] as const;
 const fxSources = new Map(FX_MODULES.map((m) => [m, read(m)]));
 
 describe('G1 · FX DOM 契约', () => {
-  it('清单非空，且三类都出现过（防止只盘点了一类）', () => {
+  it('清单非空，且四类都出现过（防止只盘点了一类）', () => {
     expect(FX_DOM_CONTRACT.length).toBeGreaterThan(0);
-    for (const c of ['A', 'B', 'C'] as const) expect(hooksOfCategory(c).length).toBeGreaterThan(0);
+    for (const c of ['A', 'B', 'C', 'D'] as const) expect(hooksOfCategory(c).length).toBeGreaterThan(0);
   });
 
   it('每条钩子都有 kind / category / requiredBy，且 requiredBy 指向真实存在的 FX 模块', () => {
@@ -43,7 +43,13 @@ describe('G1 · FX DOM 契约', () => {
     for (const h of FX_DOM_CONTRACT) {
       expect(h.hook.length, `空钩子：${JSON.stringify(h)}`).toBeGreaterThan(0);
       expect(['attr', 'class', 'element']).toContain(h.kind);
-      expect(['A', 'B', 'C']).toContain(h.category);
+      expect(['A', 'B', 'C', 'D']).toContain(h.category);
+      if (h.category === 'D') {
+        // D 类＝渲染器产出但 FX 不读：没有 FX 消费方，requiredBy 必须是空数组。
+        // （首轮为迁就两条互斥规则曾填 'effects/index.ts'，那是不实声明。）
+        expect(h.requiredBy, `${h.hook} 是 D 类（FX 零引用），requiredBy 必须为空`).toEqual([]);
+        continue;
+      }
       expect(h.requiredBy.length, `${h.hook} 的 requiredBy 为空`).toBeGreaterThan(0);
       for (const m of h.requiredBy) expect(names.has(m), `${h.hook} 的出处 ${m} 不在 FX_MODULES 内`).toBe(true);
     }
@@ -81,19 +87,32 @@ describe('G1 · FX DOM 契约', () => {
     expect(missing, `以下 A 类钩子当前渲染器缺失：\n${missing.join('\n')}`).toEqual([]);
   });
 
-  it('七个已确认的核心钩子必须在清单里（防止盘点漏掉主干）', () => {
-    const all = FX_DOM_CONTRACT.map((h) => h.hook).join('\n');
-    // 注意：这里的判别串必须与 hook 的书写形式一致（机读清单里属性选择器**不带具体值**）
+  it('六个已确认的 A 类核心钩子必须在清单里（防止盘点漏掉主干）', () => {
+    const aHooks = hooksOfCategory('A').map((h) => h.hook).join('\n');
+    // 判别串必须与 hook 的书写形式一致（机读清单里属性选择器**不带具体值**）。
+    // 这六条都已 git grep 到 FX 模块确有引用；`.hand-strip`/`.play-btns`/`.lane-row` 因 FX 零引用归 D，不在此列。
     for (const core of [
       '.stack-slot[data-player]',
       '[data-uid]',
       '.deck[data-player]',
       'protocol-img',
-      'hand-strip',
-      'play-btns',
       'control-track',
+      'protocol-holder',
     ]) {
-      expect(all, `核心钩子 ${core} 未登记`).toContain(core);
+      expect(aHooks, `核心 A 类钩子 ${core} 未登记为 A`).toContain(core);
     }
+  });
+
+  it('D 类钩子必须由渲染器产出、且 FX 模块完全读不到（两个条件缺一不可，防止分类搞反）', () => {
+    const rendererSrc = RENDERERS.map((r) => read(r)).join('\n');
+    const problems: string[] = [];
+    for (const h of hooksOfCategory('D')) {
+      const probe = h.hook.includes('[') ? /\[([a-z-]+)/.exec(h.hook)?.[1] ?? h.hook : h.hook.replace(/^\./, '');
+      if (!rendererSrc.includes(probe)) problems.push(`${h.hook} 未被当前渲染器产出（应归 B 特效自建）`);
+      if ([...fxSources.values()].some((src) => src.includes(probe))) {
+        problems.push(`${h.hook} 其实被 FX 模块读到（判别子串 ${probe}，应归 A 契约项）`);
+      }
+    }
+    expect(problems, `以下 D 类钩子判定有误：\n${problems.join('\n')}`).toEqual([]);
   });
 });
