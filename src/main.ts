@@ -76,10 +76,19 @@ let resetEpoch = 0;
 let renderMode: 'hotseat' | 'net' = 'hotseat';
 /** 预览视角座位（**绝对玩家号**；仅 `renderMode === 'net'` 时有意义）。页内工具条可切换。 */
 let netViewSeat: PlayerId = 0;
-/** 预览时对手手牌可见性（仅 `renderMode === 'net'` 时有意义）。默认 `'viewSeat'` = 对手只手牌数量
- *  （远程页 §6.4 的信息遮蔽形态，也是 G2 用户验收第 1 项要看的形态）；工具条可切 `'all'` 以便
- *  轮到对手时仍能操作（否则预览会卡死、无法做 ≥20 个点名特效抽查）。 */
-let netHandVisibility: 'all' | 'viewSeat' = 'viewSeat';
+/** 预览时对手手牌的可见性（仅 `renderMode === 'net'` 时有意义）。
+ *
+ *  **G2 Task 4F（终审 I-2）：恒为 `'viewSeat'`，不是用户可切的开关 —— 因此是 `const`。**
+ *  预览工具条上原本还有一个"对手手牌：全部可见 ⇄ 只显示数量"按钮，实测那一档**只等于**
+ *  "去掉数量占位、改画最多 15 张**卡背**、仍不可点"（`render.ts` 的 `faceUp` 与点击绑定都以
+ *  `isSelf` 为条件；`styles-net.css` 对非 self 手牌 `pointer-events:none`）——
+ *  既不"可见"也不"可操作"，比没有更误导，故删掉。
+ *  **推进对手回合的正确做法是切「视角」**（切过去后对手变 self ⇒ 手牌正面 + 可点）。
+ *  这一项**故意不做成可复位量**：它的值在 G2 里永远不变，写成 `const` 让"预览入口恒为信息遮蔽"
+ *  这件事**在类型层就成立**（守卫另钉一条：不得有人把它改回 `let` 或写出第二个赋值点）。
+ *  `NetViewOpts.handVisibility` 字段保留是为了**将来的真实联机**（对端本地视角可能就是 `'all'`）；
+ *  要真正支持"可见且可点"得给 `renderHand` 解耦 `isSelf`（共享助手，超出 G2 范围）→ 记入遗留。 */
+const netHandVisibility: 'all' | 'viewSeat' = 'viewSeat';
 
 /**
  * **整帧重渲染的唯一入口**：按 `renderMode` 路由到当前页面。
@@ -97,6 +106,7 @@ let netHandVisibility: 'all' | 'viewSeat' = 'viewSeat';
 function rerender(): void {
   if (renderMode === 'net' && state.phase !== 'draft') {
     // 预览工具条只在传了 onPreviewChange 时渲染（真实联机不传 → 完全不存在）；
+    // 工具条上只有**视角**一个开关（G2 Task 4F · I-2 删掉了误导性的"对手手牌全部可见"档）。
     // verifyHooks 打开**运行时自查**：渲染后立刻去 DOM 里查 A 类钩子 + 两条源码守卫证不了的断言，
     // 结果写进工具条的 `.net-verify-note`（用户一进预览页就能看见，不必开控制台）。
     renderNetBoard(root, state, cb, {
@@ -104,7 +114,6 @@ function rerender(): void {
       handVisibility: netHandVisibility,
       onPreviewChange: (next) => {
         if (next.viewSeat !== undefined) netViewSeat = next.viewSeat;
-        if (next.handVisibility !== undefined) netHandVisibility = next.handVisibility;
         rerender();
       },
       verifyHooks: true,
@@ -572,7 +581,7 @@ function showModeSelect(): void {
       gameOptions = { ban, randomPool };
       renderMode = 'net';
       netViewSeat = viewSeat;
-      netHandVisibility = 'viewSeat'; // 验收第 1 项要看的形态：对手手牌只显示数量
+      // 手牌可见性不在这里设：`netHandVisibility` 是 const（I-2 之后预览恒为信息遮蔽形态）。
       showCoin();
     },
   });
@@ -636,7 +645,7 @@ function resetToMainInterface(): void {
   resetNetUiState(); // 远程页自有模块态（与上一行并排：两页的状态分属两个模块）
   renderMode = 'hotseat'; // 防"预览模式泄漏到热座"（见本节注释）
   netViewSeat = 0;
-  netHandVisibility = 'viewSeat';
+  // 手牌可见性无需复位：`netHandVisibility` 是 const，全程恒为 'viewSeat'（I-2）。
   showHome();
 }
 
@@ -700,7 +709,10 @@ gameBus.subscribe(() => {
 initDiag(() => state);
 // 隐藏开发者模式：Ctrl+Shift+P 密码进入；get <牌名> 把卡加入当前玩家手牌
 // （返回的卸载函数当前不使用，保持监听常驻）
-initDevMode({ getState: () => state, render: () => renderApp(root, state, cb) });
+// G2 Task 4F（终审 D-2）：原先注入的是裸 `renderApp(root, state, cb)` —— 在远程页预览里用
+// devmode 加牌会把页面**画回热座棋盘**（状态无损，但界面不一致）。改走唯一入口 `rerender()`：
+// 热座下 `rerender()` 逐字执行 `renderApp`（语义等价），远程页下则正确地重画当前页。
+initDevMode({ getState: () => state, render: () => rerender() });
 // 效果触发的抽牌：累计 card:drawn 事件（love 协议触发 → love 标志 → 抽牌动画挂爱心），
 // 行动结算后统一播新抽牌特效
 gameBus.subscribe((e) => {

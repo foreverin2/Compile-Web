@@ -103,6 +103,79 @@ export function codePositions(src: string): boolean[] {
 }
 
 /**
+ * 取 `function <name>(` 的**花括号配平**函数体（含函数头，返回 `function name(...) { … }` 整段）。
+ *
+ * 为什么必须配平而不是"切到文件尾"：同一文件里函数之间还有别的顶层声明，切到文件尾会把
+ * 后续函数的文本也算进"体内" —— 于是「这条断言只查这个函数」会变成「查整个文件」，
+ * **静默失去判别力**（G2 Task 4F · Minor M-1 的真实形态：`main.ts` 第 3 条守卫用整份文件
+ * 做 `toMatch`，被 devmode 那处的 `renderApp(` 满足 → 删掉 `rerender()` 的回退分支仍然全绿）。
+ *
+ * 字符串/模板串按整段跳过（里面可能出现花括号或 `function `）；注释应先经 `stripComments`
+ * 处理再传入。找不到函数时**抛错**（响亮），而不是返回空串让上层断言变成假绿。
+ *
+ * **G2 Task 4F 起共用**：`tests/ui/net-preview-wiring.test.ts`（第 3 条的回退分支判据、
+ * `resetToMainInterface` / `showModeSelect` / `rerender` 的函数体断言）与
+ * `tests/ui/render-net.test.ts`（`verifyPageHooks` 的"只查这个函数"）都用这一份。
+ * ⚠️ 它**不替换** `render-net.test.ts` 里那个 `between(code, from, to)`：后者的语义是
+ * "从 `from` 切到 `to` **之前**"（返回的是**片段**、不含尾部 `}`），两者用途不同 ——
+ * `functionBody` 用于"整个函数体"，`between` 用于"函数体里的某一段"。
+ */
+export function functionBody(src: string, name: string): string {
+  const at = src.indexOf(`function ${name}(`);
+  if (at < 0) throw new Error(`源码里找不到 function ${name}(（结构被改动？）`);
+  // ⚠️ **不能取"函数名之后的第一个 `{`"**（G2 Task 4F 实测的缺陷）：参数表里可以有**对象类型**
+  //    （`onChange: (next: { viewSeat?: 0 | 1 }) => void`）—— 那个 `}` 会被当成函数体结束，
+  //    于是 `renderPreviewToolbar` 的"函数体"只有 91 字符，紧接着的断言在**空片段**上恒真/恒假。
+  //    正确做法：**先跳过成对括号的参数表**（`(`…`)`，内部跳过字符串/模板串），
+  //    再从返回类型标注之后的第一个顶层 `{` 起算函数体。
+  let i = src.indexOf('(', at);
+  if (i < 0) throw new Error(`找不到 function ${name} 的参数表起始 (`);
+  let paren = 0;
+  for (; i < src.length; i += 1) {
+    const ch = src[i];
+    if (ch === "'" || ch === '"' || ch === '`' || ch === '/') break; // 字符串由下面统一跳过
+    if (ch === '(') paren += 1;
+    else if (ch === ')') { paren -= 1; if (paren === 0) { i += 1; break; } }
+  }
+  let open = -1;
+  for (; i < src.length; i += 1) {
+    const ch = src[i];
+    if (ch === "'" || ch === '"' || ch === '`') {
+      const quote = ch;
+      i += 1;
+      while (i < src.length) {
+        if (src[i] === '\\') { i += 2; continue; }
+        if (src[i] === quote) break;
+        i += 1;
+      }
+      continue;
+    }
+    if (ch === '{') { open = i; break; }   // 返回类型标注里不含 `{`（本仓写法如此）
+  }
+  if (open < 0) throw new Error(`找不到 function ${name} 的函数体起始 {`);
+  let depth = 0;
+  for (; i < src.length; i += 1) {
+    const ch = src[i];
+    if (ch === "'" || ch === '"' || ch === '`') {
+      const quote = ch;
+      i += 1;
+      while (i < src.length) {
+        if (src[i] === '\\') { i += 2; continue; }
+        if (src[i] === quote) break;
+        i += 1;
+      }
+      continue;
+    }
+    if (ch === '{') depth += 1;
+    else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) return src.slice(at, i + 1);
+    }
+  }
+  throw new Error(`function ${name} 的花括号不配平`);
+}
+
+/**
  * 整段剔除一个 `[export] const NAME [: 类型] = [ … ];` 形式的**数组字面量声明体**
  * （含 `NAME` 之前的声明头与结尾的 `];`），替换为等长空白（保留换行 → 行号不变）。
  *

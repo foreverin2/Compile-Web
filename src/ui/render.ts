@@ -4439,8 +4439,14 @@ function hoverDraftPreview(player: PlayerId, defId: string): void {
   renderToPreview(player, defId);
 }
 
-/** 移除草稿展示框（body 级 fixed 大面板）并复位固定状态：进入游玩/重置/离开草稿页时调用 */
-function removeDraftPreviews(): void {
+/** 移除草稿展示框（body 级 fixed 大面板）并复位固定状态：进入游玩/重置/离开草稿页时调用。
+ *
+ *  **G2 Task 4F**：加 `export`（实现不动）—— 远程页渲染器 `render-net.ts` 必须复用同一份清理，
+ *  否则两块 `.draft-preview`（`position:fixed; z-index:400`，**无 `pointer-events:none`**）
+ *  会跨过 `rerender()` 的 net 分支残留到整局，压住底部两角并**拦截点击**（终审 I-1）。
+ *  `renderApp` 在 `s.phase !== 'draft'` 时调用它，远程页的用户可达局面恒非 draft（net 分支的守卫），
+ *  故远程页无条件调用，语义一致。 */
+export function removeDraftPreviews(): void {
   for (const host of draftPreviewHosts) {
     if (host && host.isConnected) host.remove();
   }
@@ -4613,8 +4619,12 @@ let winOverlayShown = false;
 /** 胜利结算横幅（2026-09-03 用户反馈）：**不再全屏遮罩挡板**——对局画面保持可见供双方
  *  复盘；顶部紧凑横幅「玩家 N 获胜！+ 返回主界面」body 级 fixed（z-index 10000），
  *  常驻直到用户点「返回主界面」（移除横幅 + cb.onWinReset → main 回主页面）。
- *  横幅自身可点，其余区域不拦截（复盘时仍可放大查看卡牌等）。 */
-function showWinOverlay(winner: PlayerId, cb: UiCallbacks): void {
+ *  横幅自身可点，其余区域不拦截（复盘时仍可放大查看卡牌等）。
+ *
+ *  **G2 Task 4F**：加 `export`（实现不动）—— `renderNetBoard` 必须复用同一份胜利横幅，
+ *  否则远程页打完一局**无法退出**（只能刷新浏览器；终审 C-1）。两个渲染器都只在
+ *  `s.phase === 'gameover' && s.winner !== null` 时调用它，`winOverlayShown` 保证幂等。 */
+export function showWinOverlay(winner: PlayerId, cb: UiCallbacks): void {
   if (winOverlayShown) return;
   winOverlayShown = true;
   const banner = el('div', 'win-banner');
@@ -5579,6 +5589,21 @@ export function bindClickOrDouble(node: HTMLElement, single: () => void, double:
  * - Esc / 窗口失焦 / 渲染重建 → 清理幽灵卡、高亮与监听器。
  * - 翻面按钮（卡牌子节点）上的 mousedown 不启动拖拽。 */
 let activeDragCancel: (() => void) | null = null;
+
+/**
+ * 拖拽安全网（**G2 Task 4F 新增的唯一一个非 `export` 改动**）：清理进行中的拖拽幽灵卡、
+ * 落点高亮与监听器。`renderApp` 在每次整帧重渲染的**第一步**调用它。
+ *
+ * 为什么需要这个包装（而不是把 `activeDragCancel` 直接 `export`）：简报只批准"加 `export` 关键字"，
+ * 而 `activeDragCancel` 是**可变模块变量**（`bindCardDrag` 里赋值、清理时置 null）。
+ * 导出裸变量会让任何 import 方都能**覆写**它（把 render.ts 的拖拽安全网换成任意函数）——
+ * 那不是"加 export"，那是把内部状态交出去。所以这里新增一个**只读**包装：语义与
+ * `if (activeDragCancel) activeDragCancel();` 逐字等价（空值即无操作），调用方拿不到写权限。
+ * `renderApp` 体内的那一行**一行未改**（`renderBoard` 亦然）。
+ */
+export function cancelActiveDrag(): void {
+  if (activeDragCancel) activeDragCancel();
+}
 
 export function bindCardDrag(node: HTMLElement, s: GameState, cb: UiCallbacks, uid: string): void {
   node.addEventListener('mousedown', (e) => {

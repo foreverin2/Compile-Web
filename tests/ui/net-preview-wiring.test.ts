@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { stripComments } from './source-text';
+import { stripComments, functionBody } from './source-text';
 
 /**
  * G2 Task 4 守卫：**接线**（`src/main.ts` 的页面路由 + 预览入口 + 重置）与**契约配套**。
@@ -28,38 +28,15 @@ const read = (rel: string): string =>
 /** `main.ts` 的去注释源码：判据不该被注释里的同名文本满足（本项目已栽过三次）。 */
 const mainSrc = (): string => stripComments(read('src/main.ts'));
 
-/** 取 `function <name>` 的**花括号配平**函数体（含函数头）。
+/**
+ * `functionBody`（**花括号配平**的函数体提取）已移到 `./source-text` 共用。
  *
- *  为什么必须配平而不是"切到文件尾"：`main.ts` 的顶层函数之间还有别的顶层声明，
- *  切到文件尾会把后续函数的文本也算进"体内"（顺序断言会因此假绿）。
- *  配平时字符串/模板串按整段跳过（`template`/`${}` 里可能出现花括号）。
+ * ⚠️ **G2 Task 4F · M-1 的教训**：原先它是本文件的局部实现，只被**部分**断言使用；
+ * 第 3 条的反向判据（"`rerender` 里有 `renderApp` 回退分支"）当时写成对**整份 `main.ts`**
+ * 的 `toMatch` —— 于是删掉 `rerender()` 里的回退分支后，断言仍被 **devmode 那处** `renderApp(`
+ * 满足，8/8 全绿（终审变异 M4 实测）。**凡是"某个函数必须做 X"的断言，判据面必须是那个函数的
+ * 函数体，不是整份文件。** 本文件从 4F 起统一用共用的 `functionBody`。
  */
-function functionBody(src: string, name: string): string {
-  const at = src.indexOf(`function ${name}(`);
-  expect(at, `找不到 function ${name}（结构被改动？）`).toBeGreaterThanOrEqual(0);
-  const open = src.indexOf('{', at);
-  expect(open, `找不到 function ${name} 的函数体起始 {`).toBeGreaterThan(at);
-  let depth = 0;
-  for (let i = open; i < src.length; i += 1) {
-    const ch = src[i];
-    if (ch === "'" || ch === '"' || ch === '`') {
-      const quote = ch;
-      i += 1;
-      while (i < src.length) {
-        if (src[i] === '\\') { i += 2; continue; }
-        if (src[i] === quote) break;
-        i += 1;
-      }
-      continue;
-    }
-    if (ch === '{') depth += 1;
-    else if (ch === '}') {
-      depth -= 1;
-      if (depth === 0) return src.slice(at, i + 1);
-    }
-  }
-  throw new Error(`function ${name} 的花括号不配平`);
-}
 
 /** 某个 token 在源码里的全部出现（1-based 行号 + 该行 trim 后的内容），供失败信息指名道姓 */
 function occurrences(src: string, token: string): string[] {
@@ -97,25 +74,30 @@ describe('G2 Task 4 · 接线：远程页进入产物 + 重渲染路由唯一入
     expect(code, 'main.ts 未定义 rerender（页面路由的唯一入口）').toMatch(/\bfunction rerender\(\)/);
     const sites = occurrences(code, 'renderApp(');
     /**
-     * 上限 = 2，两处都是**有意保留**的，逐条说明（不是为了数字好看硬改）：
-     *   (a) `rerender()` 自身定义体内的**唯一**一处 `renderApp(root, state, cb)` ——
-     *       它就是"回退到热座页"的那一条分支，删掉它就没有回退路径了；
-     *   (b) `initDevMode({ …, render: () => renderApp(root, state, cb) })` ——
-     *       开发者模式的 Ctrl+Shift+P 调试命令（`get <牌名>`）注入的重绘回调。
-     *       保留理由：它是**调试专用**的旁路（生产玩家不可达），且 devmode 的调用契约
-     *       就是一个同步重绘函数；改成 `rerender()` 属于"顺手扩大改动面"，
-     *       而 Task 4 的红线是**热座路径零变化**（见简报 §8）。它的已知代价如实记在报告里：
-     *       开发者带 `renderMode === 'net'` 时用 devmode 加牌会把页面画回热座棋盘
-     *       —— 恢复方式是再触发一次状态变更（或返回主界面），不会破坏状态。
-     * ⚠️ 注意判据是**去注释后**的源码（`mainSrc()`）：`rerender()` 的 JSDoc 里为了可读性
-     * 写着 `renderApp(root, state, cb)`，若按裸源码计数会得到 3 处而误报。
+     * 上限 = **1**，且就是 `rerender()` 自己体内那一处。为什么只能是 1（G2 Task 4F 收紧）：
+     *   - 它是"回退到热座页"的**唯一**分支，删掉它热座模式就渲染不出任何东西；
+     *   - Task 4 曾**例外保留** `initDevMode({ …, render: () => renderApp(root, state, cb) })`，
+     *     4F 按终审 D-2 改成 `render()` 走 `rerender()`：热座下逐字等价，而远程页下不再把页面
+     *     画回热座棋盘。于是 `main.ts` 里 `renderApp(` 只剩这一处 —— "唯一入口"这句话现在
+     *     在**代码位**上也是真的（不再有第二个调用点）。
+     *
+     * ⚠️ **M-1（终审变异 M4）：这条断言必须按函数体判定，不能按整份文件。**
+     * 4F 之前的写法是「整份 `main.ts` 的 `toMatch(/renderApp\(root,\s*state,\s*cb\)/)`」——
+     * 它被 **devmode 那处**满足，所以删掉 `rerender()` 里的回退分支后**仍然全绿**（8/8）。
+     * 现在：判据面 = `functionBody(code, 'rerender')`，且出现次数上界 = 1。
+     * 变异实测（删掉回退分支）→ 本文件第 3 条立刻红（见报告 §1 的 M-1 记录）。
+     *
+     * ⚠️ 计数用的是**去注释后**的源码（`mainSrc()`）：`rerender()` 的 JSDoc 与 devmode 那处
+     * 注释里为可读性写着 `renderApp(root, state, cb)`，按裸源码计数会得到 3 处而误报。
      */
-    expect(sites.length, `main.ts 里 renderApp( 出现 ${sites.length} 处（上限 2：rerender 回退分支 + devmode 注入）：\n`
-      + sites.join('\n')).toBeLessThanOrEqual(2);
-    // 反向：这两处必须在场（否则说明有人把回退分支也删了 → rerender 在热座模式下不画任何东西）
-    expect(sites.length, '主渲染路径整体消失（rerender 无回退分支？）').toBeGreaterThanOrEqual(1);
-    expect(code, 'rerender 里没有 renderApp 回退分支（热座模式将渲染不出任何东西）')
+    expect(sites.length, `main.ts 里 renderApp( 出现 ${sites.length} 处（上限 1：只允许 rerender 的回退分支）：\n`
+      + sites.join('\n')).toBeLessThanOrEqual(1);
+    // 反向：那 1 处必须在 `rerender` 的函数体内（否则说明有人把回退分支删了 →
+    // rerender 在热座模式下不画任何东西，而整页会因为这条断言**按整份文件**判定而静默绿）
+    const rerenderBody = functionBody(code, 'rerender');
+    expect(rerenderBody, 'rerender 里没有 renderApp 回退分支（热座模式将渲染不出任何东西）')
       .toMatch(/renderApp\(root,\s*state,\s*cb\)/);
+    expect(sites.length, '主渲染路径整体消失（rerender 无回退分支？）').toBe(1);
   });
 
   it('4. resetToMainInterface 并排清两个模块态，且清空**早于** showHome()', () => {
@@ -177,8 +159,6 @@ describe('G2 Task 4 · 接线：远程页进入产物 + 重渲染路由唯一入
     expect(net, 'main.ts 未实现 startNetPreview').toBeTruthy();
     expect(net, "startNetPreview 未设 renderMode = 'net'（预览会画成热座棋盘）")
       .toMatch(/renderMode\s*=\s*'net'/);
-    expect(net, "startNetPreview 未设 netHandVisibility = 'viewSeat'（验收第 1 项要看的形态丢失）")
-      .toMatch(/netHandVisibility\s*=\s*'viewSeat'/);
     expect(net, 'startNetPreview 未接收/落地 viewSeat').toMatch(/netViewSeat\s*=\s*viewSeat/);
     expect(net, 'startNetPreview 未沿用现有掷硬币流程（showCoin）').toMatch(/\bshowCoin\(\)/);
     // 预览入口必须传 verifyHooks: true（自查结果显示在工具条上 = 用户可见的运行时证据）
@@ -187,12 +167,32 @@ describe('G2 Task 4 · 接线：远程页进入产物 + 重渲染路由唯一入
       .toMatch(/verifyHooks:\s*true/);
     expect(rerender, 'rerender 未传 onPreviewChange（预览工具条完全不渲染 → 无法切视角 / 看自查行）')
       .toMatch(/onPreviewChange/);
-    expect(rerender, 'rerender 未按状态传 handVisibility（工具条的切换不生效）')
+    expect(rerender, 'rerender 未把 netHandVisibility 传给 renderNetBoard（信息遮蔽形态丢失）')
       .toMatch(/handVisibility:\s*netHandVisibility/);
     expect(rerender, 'rerender 未按状态传 viewSeat').toMatch(/viewSeat:\s*netViewSeat/);
     // 草稿阶段的守卫必须在：预览沿用热座草稿页（否则草稿期会画远程页）
     expect(rerender, "rerender 缺少 state.phase !== 'draft' 守卫（草稿阶段会被画成远程页）")
       .toMatch(/state\.phase\s*!==\s*'draft'/);
+    // ── G2 Task 4F · I-2 + D-2 ──
+    // 信息遮蔽是**唯一**形态：`netHandVisibility` 是 `const`（值恒 'viewSeat'），
+    // 因此**类型层**就不存在"被切走"的可能。原先它可以被工具条的第二个开关切到 'all' ——
+    // 而那一档实测既不"可见"也不"可操作"（I-2）。
+    expect(main, "netHandVisibility 不是恒 'viewSeat' 的 const（I-2 之后不应存在可切取值）")
+      .toMatch(/const\s+netHandVisibility\s*:\s*'all'\s*\|\s*'viewSeat'\s*=\s*'viewSeat'\s*;/);
+    const handWrites = main.split('\n')
+      .map((line, i) => ({ no: i + 1, line }))
+      // ⚠️ 判据用 `netHandVisibility = '` 而不是 `netHandVisibility\s*=[^=]`：后者会把**声明行自身**
+      // 的类型标注 `'all' | 'viewSeat' = 'viewSeat';` 也算成一次赋值（实测假红）。
+      .filter(({ line }) => /netHandVisibility\s*=\s*'/.test(line) && !/const\s+netHandVisibility/.test(line));
+    expect(handWrites.map((w) => `src/main.ts:${w.no}: ${w.line.trim()}`),
+      'netHandVisibility 出现了声明点之外的赋值（I-2 之后它只应是 const）').toEqual([]);
+    // D-2：devmode 注入必须走唯一入口 `rerender()`（否则远程页里用 devmode 加牌会把页面画回热座）
+    const devmodeLines = main.split('\n')
+      .map((line, i) => ({ no: i + 1, line: line.trim() }))
+      .filter(({ line }) => line.includes('initDevMode('));
+    expect(devmodeLines.length, 'main.ts 里 initDevMode( 的调用点数不是 1').toBe(1);
+    expect(devmodeLines[0].line, 'devmode 注入未走 rerender()（D-2：远程页里加牌会被画回热座棋盘）')
+      .toMatch(/render:\s*\(\)\s*=>\s*rerender\(\)/);
   });
 
   it('7. cb.rerender 已接上（否则远程页里选牌 / 翻面 / 浮层 / 工具条全都没反应）', () => {
@@ -226,5 +226,240 @@ describe('G2 Task 4 · 接线：远程页进入产物 + 重渲染路由唯一入
     // 复用面仍然存在（反向断言不能靠"把 import 全删了"变绿）
     expect(netSrc, '远程页不再复用 render.ts 的叶子助手（复用面被清空？）')
       .toMatch(/from\s+'\.\/render'/);
+  });
+
+  /**
+   * G2 Task 4F（终审 I-1）：**入口职责对齐**守卫 —— 本次最有价值的一条。
+   *
+   * 背景：`render-net.ts` 原来自称"入口四件副作用与 `renderApp` 对齐"，而 `renderApp` 实际有
+   * **六件**（+清 root）→ 漏掉 `removeDraftPreviews()` 与 `activeDragCancel()`，两块 body 级
+   * `.draft-preview`（`fixed; z-index:400`，无 `pointer-events:none`）整局残留在预览页并拦截点击。
+   * 根因不是"忘了某一件"，而是**清单是手写的**：手写清单必然漏项。
+   *
+   * ## 判据怎么做的：**从 `renderApp` 推导**，不是在测试里硬抄一份清单
+   *
+   * 1. **要求面由数据表 `ENTRY_DUTIES` 描述**（标识 / `call` 实参串 / `classOps` 类名），
+   *    这与"在测试里硬抄一列 `expect(netBody).toContain(…)`"的区别在于：表里的每一项都必须
+   *    **同时**在 `renderApp` 与 `renderNetBoard` 的函数体里成立（`expectDuty` 对两侧各判一次），
+   *    所以**表不可能单方面漂移**，也不会出现"表里写着、`renderApp` 里其实没有"的假条目。
+   * 2. **`renderApp` 里出现的 `root.classList.*` 操作由源码自动抽取**（`rootClassOps`），
+   *    要求每一个都能被表里某个 duty 的 `classOps` 解释 —— 于是往 `renderApp` 里加一个
+   *    `.no-anim` 之外的**新**类操作，守卫立刻红，不会因为"表里没有"而静默放过。
+   * 3. `renderNetBoard` 的函数体里，**每一条** duty 的 `call`/`classOps` 都必须出现。
+   *
+   * ## 已知边界（如实写在守卫里）
+   * `ENTRY_DUTIES` 是新职责的**登记表**：若有人往 `renderApp` 加一件"既不碰 `root.classList`、
+   * 也不属于表内任何条目"的新职责（例如又一句 `someCleanup()`），本守卫**不会**自动要求
+   * `renderNetBoard` 也加 —— 那时必须把它登记进表。这是"推导"能做到的极限（无法从任意语句
+   * 语义上判断"这是入口职责"），所以另加一条**出现次数下界**：一旦 `renderApp` 的一级语句数
+   * 明显增长而表没有增长，报错信息会指向这里（见下面的 `renderApp 的一级语句数` 断言）。
+   */
+  const ENTRY_DUTIES: ReadonlyArray<{
+    id: string;
+    call?: string;
+    /** 本页（`renderNetBoard`）侧的判据串；省略 = 与 `call` 相同 */
+    netCall?: string;
+    classOps?: readonly string[];
+    appDelegates?: readonly string[];
+  }> = [
+    // 拖拽安全网：`renderApp` 直接读模块变量（`if (activeDragCancel) activeDragCancel();`），
+    // 本页走 `render.ts` 新增的**只读包装** `cancelActiveDrag()`（语义逐字等价：空值即无操作）。
+    // 为什么不让本页也 `import { activeDragCancel }`：那会把一个**可变模块变量**导出成
+    // 任何 import 方都能覆写的写入口 —— 见 `render.ts` 里 `cancelActiveDrag` 的说明。
+    { id: '拖拽安全网', call: 'activeDragCancel(', netCall: 'cancelActiveDrag(' },
+    { id: '清 body 级草稿展示框', call: 'removeDraftPreviews(' },
+    // ⚠️ "③ 清空并重建 root" 在两个渲染器里的**落点不同**，这不是偏差而是委托：
+    //    `renderApp` 自己**不**碰 root 内容 —— 它 `if (phase==='draft') renderDraft(…) else renderBoard(…)`，
+    //    清 root 由那两个子渲染器负责（`renderDraft`/`renderBoard` 首行都是 `root.textContent = ''`）。
+    //    而 `renderNetBoard` **自己就是**那个"子渲染器"（本页不复用本体）→ 它必须自己清。
+    //    所以这里逐文件判定：本页用 `call`（必须自己清），`renderApp` 用 `appDelegates`（委托给子渲染器）。
+    //    **不把它写成 `call` 的原因**：那会让本守卫在 `renderApp` 上**恒红**（假红），
+    //    而"拒绝正确代码的守卫会被绕过" —— 本项目已有两次这样的教训。
+    {
+      id: '清空并重建 root', call: "root.textContent = ''",
+      appDelegates: ['renderDraft(', 'renderBoard('],
+    },
+    { id: '重渲染动画抑制', classOps: ['no-anim'] },
+    // 双 rAF 后移除 `no-anim`（与上一件是一对；两个渲染器都必须有这个收尾，否则 `no-anim`
+    // 会永久留在 root 上 → 整页过渡动画全被抑制）
+    { id: '双 rAF 后移除 no-anim', call: 'requestAnimationFrame(' },
+    { id: 'check-cache 锁链', call: 'syncCheckCacheChains(' },
+    { id: '锁链层重定位', call: 'syncChainLayerPosition(' },
+    { id: '宿主每帧钩子', call: 'cb.onRendered?.()' },
+  ];
+
+  /** 从源码里抽出"语句级"的 `root.classList.add/remove/toggle(…)`（顺序按出现） */
+  function rootClassOps(src: string): string[] {
+    return [...src.matchAll(/root\.classList\.(add|remove|toggle)\(\s*['"]([^'"]+)['"]/g)]
+      .map((m) => `${m[1]}('${m[2]}')`);
+  }
+
+  /**
+   * 一级语句的**代表性**调用（每条语句里出现的第一处具名调用）。
+   * 只用来找"未分类的入口职责"：`const x = f(y)` / `f(y);` / `if (c) f(y);` 都取到 `f(y)`。
+   *
+   * ⚠️ 必须排掉**语言关键字**：`if (` 会被当成"名为 `if` 的调用"（实测假红）。
+   */
+  const NON_CALL_KEYWORDS = new Set([
+    'if', 'for', 'while', 'switch', 'catch', 'function', 'return', 'typeof', 'void', 'new', 'await', 'do', 'else',
+  ]);
+  function topLevelCalls(body: string): string[] {
+    const out: string[] = [];
+    for (const raw of body.split('\n')) {
+      const line = raw.trim();
+      if (line === '' || line.startsWith('//') || line.startsWith('*') || line.startsWith('/*')) continue;
+      const m = /(?:^|[=(?:,&|]|\bvoid\s+)\s*([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)\s*\(/.exec(line);
+      if (m && !NON_CALL_KEYWORDS.has(m[1])) out.push(`${m[1]}(`);
+    }
+    return out;
+  }
+
+  it('9. I-1：renderNetBoard 的入口职责必须与 renderApp **对齐**（要求面从 renderApp 推导，不是硬抄）', () => {
+    const renderAppBody = functionBody(stripComments(read('src/ui/render.ts')), 'renderApp');
+    const netBody = functionBody(stripComments(read('src/ui/render-net.ts')), 'renderNetBoard');
+
+    // 反空集合：表为空则下面两条 for 循环恒真（读起来像"已验收"）
+    expect(ENTRY_DUTIES.length, 'ENTRY_DUTIES 为空（入口职责判据失效）').toBeGreaterThan(0);
+    for (const d of ENTRY_DUTIES) {
+      expect((d.call ?? '') + (d.classOps ?? []).join(','), `duty ${d.id} 的判据为空`).not.toBe('');
+    }
+
+    // 每条 duty 的判据形式：`call` 串，或 `root.classList.<op>('类')`。
+    // `classOps` 只声明**类名**，含它的职责要把该类的**全部** classList 操作都算作已解释：
+    // `no-anim` 就是"加 + 双 rAF 后移除"这一对（`renderApp` 里 add 与 remove 都有，
+    // 断言只钉 add 的存在性，remove 由 ② 的"无未分类操作"覆盖）。
+    const formsOf = (d: typeof ENTRY_DUTIES[number]): string[] => [
+      ...(d.call ? [d.call] : []),
+      ...(d.classOps ?? []).map((c) => `root.classList.add('${c}')`),
+    ];
+    /** `renderApp` 侧的判据：可以是本页式直做（`formsOf`），也可以是**委托**给某个子渲染器 */
+    const appFormsOf = (d: typeof ENTRY_DUTIES[number]): string[] =>
+      d.appDelegates && d.appDelegates.length > 0 ? [...d.appDelegates] : formsOf(d);
+
+    // ① 每条 duty 都必须在 `renderApp` 里成立（直做或委托；否则表里是假条目 —— 表不得单方面漂移）
+    const appMissing = ENTRY_DUTIES
+      .filter((d) => !appFormsOf(d).every((f) => renderAppBody.includes(f)))
+      .map((d) => `${d.id}（判据 ${appFormsOf(d).join(' / ')} 在 renderApp 里找不到）`);
+    expect(appMissing, `ENTRY_DUTIES 里这些条目在 renderApp 里不成立（表已漂移成假条目）：\n${appMissing.join('\n')}`)
+      .toEqual([]);
+
+    // ② 反向：`renderApp` 里出现的每个 `root.classList.*` 操作都必须被某个 duty 解释
+    //    （往 renderApp 加新的类操作而不登记 → 这里红）
+    const known = new Set<string>();
+    for (const d of ENTRY_DUTIES) for (const c of d.classOps ?? []) known.add(c);
+    const unclassified = rootClassOps(renderAppBody)
+      .filter((op) => ![...known].some((c) => op.includes(`'${c}'`)));
+    expect(unclassified, `renderApp 里的这些 root.classList 操作没有被任何入口职责条目解释 —— `
+      + `请登记进本测试的 ENTRY_DUTIES 并确认 renderNetBoard 也照做：\n${unclassified.join('\n')}`).toEqual([]);
+
+    // ③ 未分类的**一级语句调用**（推导的边界：新职责必须登记，否则这里点名）
+    const classifiedCalls = ENTRY_DUTIES.map((d) => d.call).filter((c): c is string => c !== undefined)
+      .concat(ENTRY_DUTIES.flatMap((d) => d.appDelegates ?? []))
+      .concat(['root.classList.']);
+    const strayCalls = topLevelCalls(renderAppBody)
+      .filter((c) => !classifiedCalls.some((k) => k.startsWith(c) || c.startsWith(k.replace(/\($/, '('))));
+    expect(strayCalls, `renderApp 里有未登记进 ENTRY_DUTIES 的一级调用 —— 若它是"入口职责"，`
+      + `必须登记并确认 renderNetBoard 也照做：\n${strayCalls.join('\n')}`).toEqual([]);
+    // 表规模与 renderApp 的职责面大致相称（防"表被清空/截断"而其余断言静默变松）
+    expect(ENTRY_DUTIES.length, 'ENTRY_DUTIES 条目数异常（renderApp 的入口职责面被截断？）')
+      .toBeGreaterThanOrEqual(7);
+
+    // ④ 正向：`renderNetBoard` 必须满足**全部** duty（I-1 的真正判据）。
+    //    `netCall` 存在时以它为准（本页允许等价但不同形的写法，例如 `cancelActiveDrag()`）——
+    //    这正是 `EntryDuty` 里那个字段存在的唯一理由，且 `call` 那一侧仍由 ① 对 `renderApp` 断言。
+    const netMissing: string[] = [];
+    for (const d of ENTRY_DUTIES) {
+      const forms = d.netCall !== undefined ? [d.netCall, ...(d.classOps ?? []).map((c) => `root.classList.add('${c}')`)] : formsOf(d);
+      for (const f of forms) {
+        if (!netBody.includes(f)) netMissing.push(`${d.id}：renderNetBoard 里找不到 ${JSON.stringify(f)}`);
+      }
+    }
+    expect(netMissing, `renderNetBoard 缺少以下入口职责（漏一件就是一个残留/时序 bug，`
+      + `I-1 的两块草稿面板与拖拽幽灵卡就是这么漏掉的）：\n${netMissing.join('\n')}`).toEqual([]);
+
+    // ⑤ 反面：删掉 duty 的判据串本身就是"缺职责"，由 ④ 抓；这里再钉一条**顺序**——
+    //    清空 root 必须早于任何 `root.appendChild`（F-1 的判据在 render-net.test.ts 第 1b 条，
+    //    此处只确认职责序列里"清 root"排在"挂载"之前，防止有人把清理挪到渲染之后）
+    expect(netBody.indexOf("root.textContent = ''"), 'renderNetBoard 清空 root 晚于第一次挂载（F-1 回归）')
+      .toBeLessThan(netBody.indexOf('root.appendChild('));
+    // ⑥ 草稿面板的清理必须在"清 root"之前或紧随（它清的是 body 上的节点，与 root 无关；
+    //    但顺序上必须在挂载之前，否则第一帧就会带着残留面板绘制）
+    expect(netBody.indexOf('removeDraftPreviews();'), 'removeDraftPreviews 晚于挂载（首帧就带残留面板）')
+      .toBeLessThan(netBody.indexOf('root.appendChild('));
+    // ⑦ 胜利横幅只在 gameover 局面产出（不许无条件挂）
+    expect(netBody, 'renderNetBoard 未按 gameover 条件产出胜利横幅')
+      .toMatch(/if\s*\(\s*s\.phase === 'gameover'\s*&&\s*s\.winner !== null\s*\)\s*showWinOverlay\(/);
+  });
+
+  /**
+   * G2 Task 4F（终审 C-1）：**预览页必须能退出**。
+   *
+   * 原缺陷：`renderNetBoard` 从不产出胜利横幅，`cb.onWinReset` 只被 `showWinOverlay` 的按钮调用，
+   * 而 `showWinOverlay` 的唯一调用点在 `renderBoard` 内且**未 export** ⇒ 预览里打完一局
+   * **只能刷新浏览器**；用户验收 D2/F14 按字面无法执行；Task 4 的三道"防模式泄漏"堵点里，
+   * 堵点①（`resetToMainInterface`）**不可达**。
+   *
+   * 判据（不能只断言函数名出现 —— 注释/import 都会满足它，这轮已栽过多次）：
+   * ① `renderNetBoard` 的函数体里必须有**真实调用** `showWinOverlay(<winner>, cb);`（带实参形态）；
+   * ② 该调用必须被 `s.phase === 'gameover' && s.winner !== null` 守卫（与 `renderBoard` 同条件）；
+   * ③ `render.ts` 必须真的把它 `export`（否则 import 编译不过 —— 但源码守卫仍值得钉一条，
+   *    因为"export 被撤掉"在只看 render-net.ts 的断言下是完全不可见的）；
+   * ④ `renderBoard` **一行不改**（热座红线）：它的调用形态与 `export` 前完全一致。
+   */
+  it('10. C-1：预览页能退出 —— renderNetBoard 在 gameover 局面产出胜利横幅（与 renderBoard 同条件）', () => {
+    const renderSrc = stripComments(read('src/ui/render.ts'));
+    const netBody = functionBody(stripComments(read('src/ui/render-net.ts')), 'renderNetBoard');
+
+    // ① 真实调用（带两个实参），且分号结尾 —— 排除"函数名出现在 import 行/注释里"这种假绿
+    expect(netBody, 'renderNetBoard 未调用 showWinOverlay(<winner>, cb)（预览页打完一局无法退出）')
+      .toMatch(/showWinOverlay\(\s*s\.winner\s*,\s*cb\s*\)\s*;/);
+    // ② 条件与 `renderBoard` 逐字同形（不许无条件挂横幅）
+    expect(netBody, '奖励横幅的守卫条件与 renderBoard 不一致（必须是 gameover 且 winner 非空）')
+      .toMatch(/if\s*\(\s*s\.phase === 'gameover'\s*&&\s*s\.winner !== null\s*\)\s*showWinOverlay\(/);
+    // ③ render.ts 真的导出（`export function showWinOverlay(`）
+    expect(renderSrc, 'render.ts 未 export showWinOverlay（render-net.ts 无法复用 → C-1 回归）')
+      .toMatch(/export function showWinOverlay\(/);
+    // ④ 热座红线：renderBoard 体的横幅调用形态与原先逐字一致
+    const boardBody = functionBody(renderSrc, 'renderBoard');
+    expect(boardBody, 'renderBoard 的胜利横幅调用被改动了（热座红线）')
+      .toMatch(/if\s*\(\s*s\.phase === 'gameover'\s*&&\s*s\.winner !== null\s*\)\s*\{\s*showWinOverlay\(s\.winner, cb\);/);
+    // ⑤ onWinReset 的消费点仍在（点按钮 → 宿主回主页面）：`cb.onWinReset?.()`
+    expect(functionBody(renderSrc, 'showWinOverlay'), 'showWinOverlay 不再回调 cb.onWinReset（横幅按钮无效）')
+      .toMatch(/cb\.onWinReset\?\.\(\)/);
+  });
+
+  /**
+   * G2 Task 4F（终审 I-2）：**工具条只留"视角"一个开关**。
+   *
+   * 原缺陷：第二个开关「对手手牌：全部可见 ⇄ 只显示数量」实测**既不"可见"也不"可操作"** ——
+   * `render.ts` 的 `faceUp` 与单击/拖拽绑定都以 `isSelf` 为条件、`styles-net.css` 又对非 self
+   * 手牌 `pointer-events:none`，于是它只等于"去掉数量占位、改画卡背、仍不可点"。
+   * 而宿主注释与验收清单都称它能"推进对手回合"（误导）。
+   * 裁决：删开关，靠**切视角**推进（切过去对手变 self ⇒ 正面 + 可点）。
+   *
+   * 判据：工具条函数体里**恰好只有一个** `.net-preview-btn` 按钮（视角），且
+   * `onPreviewChange` 的类型只回传 `viewSeat`；`handVisibility` 仍作为**入参**存在（留给真实联机）。
+   */
+  it('11. I-2：预览工具条只有"视角"一个开关；onPreviewChange 只回传 viewSeat', () => {
+    const netSrc = stripComments(read('src/ui/render-net.ts'));
+    const bar = functionBody(netSrc, 'renderPreviewToolbar');
+    const btns = [...bar.matchAll(/net-preview-btn/g)].length;
+    expect(btns, `工具条里有 ${btns} 个 net-preview-btn（I-2 之后应恰好 1 个：视角开关）`).toBe(1);
+    expect(bar, '工具条不再有视角开关（无法推进对手回合 / 无法检查我是 P2 时的布局）')
+      .toMatch(/viewSeat === 0 \? '视角：我 = P1/);
+    // 旧的第二个开关必须**彻底消失**（按钮、提示文案、事件绑定）
+    expect(bar, '工具条里仍有"对手手牌：…全部可见"的开关或文案（I-2 未修净）')
+      .not.toContain('全部可见');
+    expect(netSrc, 'render-net.ts 里仍有"全部可见"的文案/注释残留（与实现不符）')
+      .not.toContain('全部可见');
+    expect(netSrc, 'render-net.ts 仍有按 handVisibility 切换的回传（I-2 未修净）')
+      .not.toMatch(/onChange\(\s*\{\s*handVisibility/);
+    // onPreviewChange 的**类型**只回传 viewSeat；handVisibility 仍作为入参保留（留给将来真实联机）
+    expect(netSrc, 'NetViewOpts.onPreviewChange 的类型仍带 handVisibility（I-2 未修净）')
+      .not.toMatch(/onPreviewChange\?\(next:\s*\{[^}]*handVisibility/);
+    expect(netSrc, 'NetViewOpts 不再有 handVisibility 入参（将来真实联机的接口面被删掉了）')
+      .toMatch(/handVisibility:\s*'all'\s*\|\s*'viewSeat'\s*;/);
+    // 视角开关必须真的回传 viewSeat（两态都覆盖）
+    expect(bar, '视角开关未回传 viewSeat').toMatch(/onChange\(\s*\{\s*viewSeat:\s*opts\.viewSeat === 0 \? 1 : 0\s*\}\s*\)/);
   });
 });

@@ -56,9 +56,36 @@
  * **非 optional 的 select-line 永久无法应答、对局卡死**。几何型 FX（透彻牌库眼睛 / 幸运宣告骰子）
  * 同理必须在 `root.appendChild(wrap)` 之后执行（此前 `getBoundingClientRect()` 全 0）。
  *
- * ## 入口四件副作用（与 `renderApp` 对齐，漏一个就会有时序 bug）
- * `no-anim` 类 → `syncCheckCacheChains(s)` → `syncChainLayerPosition()` → `cb.onRendered?.()`
- * → 双 rAF 后移除 `no-anim`。
+ * ## 入口职责（与 `renderApp` 对齐，**逐件**；漏一件就是一个时序/残留 bug）
+ *
+ * ⚠️ **G2 Task 4F 的教训（终审 I-1）**：本节原来自称"入口**四件**副作用与 `renderApp` 对齐"，
+ * 而 `renderApp` 实际有**六件**（外加"清空 root"共七件事）—— 于是漏掉了 `removeDraftPreviews()`
+ * 与 `activeDragCancel()`，两块 body 级草稿面板整局残留在预览页上并拦截点击。
+ * 根因不是"忘了某一件"，而是**清单本身就是手写的**：手写清单必然漏项。
+ * 因此本节的清单由 `tests/ui/net-preview-wiring.test.ts` 的**入口职责对齐守卫**机检 ——
+ * 它从 `renderApp` 的函数体**生成**要求（`ENTRY_DUTIES` 表 + `root.classList.*` 的实际出现），
+ * 再逐条断言本页也满足；往 `renderApp` 里加一件新职责时，守卫会**立刻要求本页也加**
+ * （未登记的新职责会被"未分类的 `root.classList` 操作"或"表内新增项"两条路之一抓到）。
+ *
+ * 逐件（顺序与 `renderApp` 一致）：
+ *  1. `cancelActiveDrag()` —— 拖拽安全网（重渲染若发生在拖拽中，先清理幽灵卡与高亮；
+ *     `renderApp` 里写的是等价的 `if (activeDragCancel) activeDragCancel();`）；
+ *  2. `removeDraftPreviews()` —— 清 body 级草稿展示框（**不是**本页 root 的子节点）；
+ *  3. `root.textContent = ''` —— 渲染器自己清空并重建 root（F-1）；
+ *  4. `root.classList.add('no-anim')` —— 重渲染动画抑制（双 rAF 后移除）；
+ *  5. `syncCheckCacheChains(s)` —— FX-5 check-cache 锁链；
+ *  6. `syncChainLayerPosition()` —— FX-R2 锁链层重定位；
+ *  7. `cb.onRendered?.()` —— 宿主每帧钩子（自动推进 / 效果内重排窗口同步）。
+ *
+ * ## 已知边界 / 延后（G2 记 Minor，**不在本轮实现**）
+ * 1. **信息遮蔽的一条边界**：选择浮层把 prompt 候选按**真卡面**渲染，而 `corruption-2` 顶
+ *    （`core/rules/corruption.ts:69-71`）与 `courage-0` 底（`core/rules/courage.ts:36-37`）的候选
+ *    **就是对手手牌**（`chooser: foe`）⇒ 遮蔽模式下对手手牌内容会进 DOM。本机预览无第三方受害，
+ *    故 G2 只记 Minor；**G5 必须在会话/传输层按 seat 过滤 prompt 与候选**（渲染层挡不住）。
+ * 2. **预览页翻面无动画**：热座的翻面动画长在 `renderBoard` 的内联回调里，本页复用叶子助手不带它
+ *    → 观感差异，非缺陷。
+ * 3. **`playRearrangeProtocolsFx` 按绝对玩家取 180°**（`effects/index.ts:2233`）：`viewSeat = 1` 时
+ *    协议重排的幽灵卡朝向与本页的座位相对朝向不一致（**仅观感**；它符合硬约束 3 的"按绝对玩家"精神）。
  *
  * ## 明确不做
  * 不调用挡板（设计稿 §6.1 已删：对手手牌不在本机屏幕上）；不写会话层 / 信令；不改任何 `sync*`。
@@ -96,6 +123,16 @@ import {
   pruneSelection,
   syncCheckCacheChains,
   syncChainLayerPosition,
+  // G2 Task 4F：入口职责的两条（`render.ts` 只加了 `export` 关键字，实现未动；
+  // `cancelActiveDrag` 见该文件里的"只读包装"说明）。
+  //  · `removeDraftPreviews`：草稿页把两块 `.draft-preview` append 到 **document.body**（不是本
+  //    渲染器的 root）→ 本页清 root 清不掉它们；漏调则 `fixed; z-index:400` 的面板压住底部两角
+  //    且**拦截点击**整局（终审 I-1）。
+  //  · `showWinOverlay`：本页必须自己产出胜利横幅，否则打完一局**无法退出**（只能刷新浏览器，终审 C-1）。
+  //  · `cancelActiveDrag`：拖拽安全网（本页若在拖拽中被重渲染，会残留一块跟手的幽灵卡）。
+  removeDraftPreviews,
+  showWinOverlay,
+  cancelActiveDrag,
   type UiCallbacks,
 } from './render';
 
@@ -106,19 +143,30 @@ import {
 export interface NetViewOpts {
   /** 我的座位（**绝对玩家号**）。绝不可用 `s.turnPlayer` 冒充 —— 那是回合概念，视角会每回合翻面。 */
   viewSeat: 0 | 1;
-  /** `'all'` = 双方手牌都正面（本地联调）；`'viewSeat'` = 只有自己正面、对手只手牌数量（§6.4 信息遮蔽）。 */
+  /** 信息遮蔽：`'viewSeat'` = 只有自己正面、对手只手牌数量（设计稿 §6.4）。
+   *
+   *  ⚠️ **G2 Task 4F（终审 I-2）：本页当前只支持 `'viewSeat'`，预览入口恒传它。**
+   *  `'all'` 这一档实测**等价于**"对手手牌改画最多 15 张**卡背**、且仍不可点" —— 因为
+   *  `render.ts:1633` 的 `faceUp` 与 `:1651-1677` 的单击/拖拽绑定都以 **`isSelf`** 为条件，
+   *  `styles-net.css:210` 又对非 self 手牌 `pointer-events:none`。既然"全部可见"既不"可见"
+   *  也不"可操作"，G2 就**不把它暴露成用户开关**（半成品比没有更误导）。
+   *  **推进对手回合的正确做法：切 `viewSeat`**（切过去后对手变 self ⇒ 正面 + 可点）。
+   *  字段保留是为了**将来的真实联机**（对端本地视角可能就是 `'all'`）；要真正支持可见+可操作，
+   *  得给 `renderHand` 解耦 `isSelf`（那是共享助手，超出 G2 范围）→ 记入遗留。 */
   handVisibility: 'all' | 'viewSeat';
-  /** 预览工具条的两个开关回调。**真实联机时不传** → 工具条不渲染（零联机预览专用）。 */
-  onPreviewChange?(next: { viewSeat?: 0 | 1; handVisibility?: 'all' | 'viewSeat' }): void;
+  /** 预览工具条的**视角**开关回调。**真实联机时不传** → 工具条不渲染（零联机预览专用）。
+   *  G2 Task 4F：原先还带 `handVisibility`（已按 I-2 删除该开关），现在只回传 `viewSeat`。 */
+  onPreviewChange?(next: { viewSeat?: 0 | 1 }): void;
   /** 诊断：渲染后**真的去 DOM 里查**一遍 `NET_PAGE_HOOKS`（真实产出力的运行时证据）。
    *  默认关（真实联机零开销）；预览入口可在开发时打开。不通过时只 warning，不改变渲染结果。 */
   verifyHooks?: boolean;
 }
 
-/** `handVisibility` → `renderHand` 的可见性入参（两处命名不同只是为了让 §6.4 的语义在入口可读）。 */
-function handVisOf(handVisibility: NetViewOpts['handVisibility']): 'all' | 'count' {
-  return handVisibility === 'viewSeat' ? 'count' : 'all';
-}
+/** 远程页的手牌可见性**恒为** `'count'`（设计稿 §6.4 信息遮蔽；I-2 之后不再有用户开关）。
+ *  出参形状仍是 `renderHand` 的 `'all' | 'count'` —— 两处命名不同只是为了让 §6.4 的语义在入口可读。
+ *  ⚠️ 自己一侧也走 `'count'`：`renderHand` 内部对 self 恒画正面，所以 `'count'` 只影响非 self
+ *  （这正是本页要的"对手只手牌数量"），**不是**把自己也遮蔽掉。 */
+const NET_HAND_VIS: 'all' | 'count' = 'count';
 
 /* ============================================================================
  * 20 条 A 类钩子的**逐条登记**（docs/4代-FX DOM 契约.md §3 的验收基准）
@@ -341,6 +389,18 @@ let netChoicePromptId: string | null = null;
 
 /** 预览工具条的最近一次操作反馈文本（仅 `onPreviewChange` 存在时使用；本地预览的可见反馈）。 */
 let netPreviewNote = '';
+
+/**
+ * **信息遮蔽的边界（G2 Task 4F · §5-1，已知 / 延后 —— 不在本轮实现）**：
+ * 本页的席位遮蔽只作用于**手牌区**（`renderHand` 的 `'count'` 分支）。而**选择浮层**
+ * （`buildChoicePickOverlay`）：把 prompt 候选按**真卡面**渲染 —— 其中 `corruption-2` 顶
+ * （`core/rules/corruption.ts:69-71`）与 `courage-0` 底（`core/rules/courage.ts:36-37`）的候选
+ * **就是对手手牌**（`chooser: foe`）⇒ 遮蔽模式下这些卡的内容会进 DOM。
+ * 本机单视角预览**没有第三方受害**（同屏只有你一个人），故 G2 只记 Minor；
+ * **但 G5 必须在会话/传输层按 seat 过滤 prompt 与候选** —— 渲染层挡不住（信息一旦进 DOM 就能被读）。
+ * 另一处同族但更轻的遗留（§5-2）：**预览页翻面无动画** —— 热座的翻面动画长在 `renderBoard` 的
+ * 内联回调里，本页复用叶子助手不带它，属观感差异而非缺陷。
+ */
 
 /**
  * 清空**远程页自有**的模块态。热座页的模块态（选择态 / 挡板宽度 / 电池动画 / 选择模式 /
@@ -655,11 +715,9 @@ function renderNetActionBar(s: GameState, cb: UiCallbacks): HTMLElement {
  * 手牌区（约束 5 / 7 的落点）
  * ========================================================================== */
 
-/** `renderHand` 的入参（两个玩家只有 `isSelf` / `handVisibility` 不同，其余共用）。 */
+/** `renderHand` 的入参（两个玩家只有 `isSelf` 不同，其余共用；可见性恒为 `NET_HAND_VIS`）。 */
 interface NetHandOpts {
   isSelf: boolean;
-  /** 对手手牌在 `'viewSeat'` 模式下只剩数量占位（§6.4）；自己恒为 `'all'`。 */
-  handVisibility: 'all' | 'count';
   /** 该玩家是否正在等待操作（效果挂起）→ 信息条的 operator 高亮 */
   operator: boolean;
   cb: UiCallbacks;
@@ -706,7 +764,7 @@ function decorateHand(s: GameState, player: PlayerId, hand: HTMLElement, o: NetH
  * P0 的手牌区。**必须**保持这个形状（`renderHand(s, 0, {…})` 的字面量调用）：
  * 约束 7 的源码代理断言钉的就是「`renderHand(s, 0 …` 出现在 `renderHand(s, 1 …` 之前」。
  */
-function buildP0Hand(s: GameState, viewSeat: PlayerId, handVis: 'all' | 'count', cb: UiCallbacks, operator: boolean): HTMLElement {
+function buildP0Hand(s: GameState, viewSeat: PlayerId, cb: UiCallbacks, operator: boolean): HTMLElement {
   const { uid } = getHandSelection();
   const isSelf = viewSeat === 0;
   const hand = renderHand(s, 0, {
@@ -718,18 +776,19 @@ function buildP0Hand(s: GameState, viewSeat: PlayerId, handVis: 'all' | 'count',
     cb,
     // 甲读法下**双方手牌都左起**：上下带由 CSS 决定，"左右"与座位无关
     reversed: false,
-    // 对手手牌在 'viewSeat' 模式下只剩数量占位（§6.4）；但仍产出 .hand[data-player] 节点
-    handVisibility: isSelf ? 'all' : handVis,
+    // 对手手牌只剩数量占位（§6.4）；但仍产出 .hand[data-player] 节点。
+    // self 侧传 'count' 也仍画正面（renderHand 内部按 isSelf 决定 faceUp）。
+    handVisibility: NET_HAND_VIS,
     // 设计稿 §6.1 已删挡板
     shield: false,
   });
-  return decorateHand(s, 0, hand, { isSelf, handVisibility: isSelf ? 'all' : handVis, operator, cb });
+  return decorateHand(s, 0, hand, { isSelf, operator, cb });
 }
 
 /**
  * P1 的手牌区。**必须**在 `buildP0Hand` **之后**调用（DOM 顺序 = 绝对玩家顺序，约束 7）。
  */
-function buildP1Hand(s: GameState, viewSeat: PlayerId, handVis: 'all' | 'count', cb: UiCallbacks, operator: boolean): HTMLElement {
+function buildP1Hand(s: GameState, viewSeat: PlayerId, cb: UiCallbacks, operator: boolean): HTMLElement {
   const { uid } = getHandSelection();
   const isSelf = viewSeat === 1;
   const hand = renderHand(s, 1, {
@@ -739,10 +798,10 @@ function buildP1Hand(s: GameState, viewSeat: PlayerId, handVis: 'all' | 'count',
     onToggleFaceUp: () => { setHandSelection(getHandSelection().uid, !getHandSelection().faceUp); cb.rerender?.(); },
     cb,
     reversed: false,
-    handVisibility: isSelf ? 'all' : handVis,
+    handVisibility: NET_HAND_VIS,
     shield: false,
   });
-  return decorateHand(s, 1, hand, { isSelf, handVisibility: isSelf ? 'all' : handVis, operator, cb });
+  return decorateHand(s, 1, hand, { isSelf, operator, cb });
 }
 
 /**
@@ -762,13 +821,13 @@ function buildP1Hand(s: GameState, viewSeat: PlayerId, handVis: 'all' | 'count',
  * 也让源码守卫只能退化成"检查某个循环存在"。
  */
 function buildHands(
-  s: GameState, viewSeat: PlayerId, handVis: 'all' | 'count', cb: UiCallbacks, operator: PlayerId | null,
+  s: GameState, viewSeat: PlayerId, cb: UiCallbacks, operator: PlayerId | null,
 ): HTMLElement {
   const hands = el('div', 'hand-strip net-hands net-view-' + viewSeat);
   hands.dataset.viewSeat = String(viewSeat);
   // P0 的手牌**先**建；P1 的手牌**后**建 → querySelectorAll('.hand') 恒为 [P0, P1]
-  hands.appendChild(buildP0Hand(s, viewSeat, handVis, cb, operator === 0));
-  hands.appendChild(buildP1Hand(s, viewSeat, handVis, cb, operator === 1));
+  hands.appendChild(buildP0Hand(s, viewSeat, cb, operator === 0));
+  hands.appendChild(buildP1Hand(s, viewSeat, cb, operator === 1));
   return hands;
 }
 
@@ -777,28 +836,30 @@ function buildHands(
  *
  * 为什么必须有（别当成装饰）：用户验收第 3 项要做「≥20 个点名特效抽查」，而那必须能真的把牌
  * 打出去 —— 但 `handVisibility: 'viewSeat'` 时对手手牌只剩数量占位，轮到对手就无人可操作、
- * 预览会卡死；`viewSeat` 固定为 0 又无法检查「我是 P2 时」的上下带与 180° 是否也对。
+ * 预览会卡死。**推进对手回合的正确做法是切「视角」开关**：切过去后对手就是 self（手牌正面 +
+ * 可点 + 可打牌），本页两态都会正确渲染布局与朝向。`viewSeat` 固定为 0 又无法检查
+ * 「我是 P2 时」的上下带与 180° 是否也对。
+ *
+ * ⚠️ **G2 Task 4F（终审 I-2）：这里曾经有第二个开关「对手手牌：全部可见 ⇄ 只显示数量」，
+ * 已删除。** 实测它只等于"去掉数量占位、改画最多 15 张**卡背**、仍不可点"
+ * （`render.ts:1633` 的 `faceUp` 与 `:1651-1677` 的点击绑定都以 `isSelf` 为条件，
+ * `styles-net.css:210` 又对非 self 手牌 `pointer-events:none`）—— 一个既不"可见"也不"可操作"
+ * 的开关比没有更误导。不要为它给 `renderHand` 加 `asSelf` 参数（共享助手，超出 G2 范围）。
  * **真实联机时不传 `onPreviewChange` → 这条工具条完全不渲染。**
  * ========================================================================== */
 
 function renderPreviewToolbar(
   opts: NetViewOpts,
-  onChange: (next: { viewSeat?: 0 | 1; handVisibility?: 'all' | 'viewSeat' }) => void,
+  onChange: (next: { viewSeat?: 0 | 1 }) => void,
 ): HTMLElement {
   const bar = el('div', 'net-preview-bar');
   bar.appendChild(el('span', 'net-preview-title', '预览工具条'));
   const seatBtn = el('button', 'btn net-preview-btn',
     opts.viewSeat === 0 ? '视角：我 = P1 ⇄ P2' : '视角：我 = P2 ⇄ P1');
+  seatBtn.title = '切换到对方视角：切过去后"自己"就是对手（手牌正面且可点），'
+    + '这是推进对手回合、把一局打完的正确做法（对手手牌只手牌数量那一档是不可点的）。';
   seatBtn.addEventListener('click', () => onChange({ viewSeat: opts.viewSeat === 0 ? 1 : 0 }));
   bar.appendChild(seatBtn);
-  const handBtn = el('button', 'btn net-preview-btn',
-    opts.handVisibility === 'viewSeat'
-      ? '对手手牌：只显示数量 ⇄ 全部可见'
-      : '对手手牌：全部可见 ⇄ 只显示数量');
-  handBtn.addEventListener('click', () => {
-    onChange({ handVisibility: opts.handVisibility === 'viewSeat' ? 'all' : 'viewSeat' });
-  });
-  bar.appendChild(handBtn);
   bar.appendChild(el('span', 'net-preview-note', netPreviewNote));
   // 运行时自查的**结果行**（`opts.verifyHooks` 时由 verifyPageHooks 写入）。
   // 为什么放在工具条上而不是只 console：这两条断言（.hand 的 DOM 顺序、对手卡的 .rot-180）
@@ -825,18 +886,32 @@ function renderPreviewToolbar(
  * 复评实测：Task 4 的单行 `rerender()` dispatch 不做清理，所以这里必须自己清。
  */
 export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks, opts: NetViewOpts): void {
+  // ── 入口职责 1/7：拖拽安全网（与 renderApp 第一行同义）——
+  //    重渲染若发生在拖拽中，先清理幽灵卡与高亮，否则本页会残留一块跟手的幽灵卡。
+  cancelActiveDrag();
+  // ── 入口职责 2/7：清 body 级草稿展示框（与 renderApp 同）——
+  //    草稿页把两块 `.draft-preview` 挂在 **document.body** 上（render.ts:4585-4586），
+  //    本页清 root **清不掉**它们；漏调则 `fixed; z-index:400` 的两块面板残留整局、
+  //    压住底部两角并**拦截点击**（终审 I-1）。net 分支只在 `phase !== 'draft'` 时可达，
+  //    与 `renderApp` 的 `if (s.phase !== 'draft')` 条件等价，故这里无条件调用。
+  removeDraftPreviews();
+  // ── 入口职责 3/7：本渲染器自己清空并重建 root（F-1：少了它会逐帧线性叠加） ──
   root.textContent = '';
   const viewSeat = opts.viewSeat;
   const foe = (1 - viewSeat) as PlayerId;
-  const handVis = handVisOf(opts.handVisibility);
   // 几何型 FX 延迟器（M-3）：与热座 renderBoard:4641 同形的队列。
   // renderChoiceUi 在构建期收集（透彻牌库眼睛 / 幸运宣告骰子），在 `root.appendChild(wrap)`
   // **之后**统一执行 —— 此前棋盘节点尚未入 DOM，`getBoundingClientRect()` 全 0，
   // 依赖矩形定位的特效会**静默失败**（热座页历史上正是这样完全不显示）。
   const deferredFx: Array<() => void> = [];
 
-  // —— 入口第 1 件副作用：重渲染动画抑制（与 renderApp:5583 同） ——
+  // ── 入口职责 4/7：重渲染动画抑制（与 renderApp 同） ──
   root.classList.add('no-anim');
+
+  // 胜利结算横幅（G2 Task 4F · 终审 C-1）：**与 renderBoard:4649-4652 同形同条件**。
+  // 漏了这一段，预览页打完一局就**无法退出**（只能刷新浏览器），用户验收 A9/D2/F14 按字面无法执行，
+  // 且"返回主界面"那条重置路径（含 Task 4 的三道防泄漏堵点）永远不可达。
+  if (s.phase === 'gameover' && s.winner !== null) showWinOverlay(s.winner, cb);
 
   // 清除失效选择（**单一实现**，与盘本体同一调用；两页共用一份选择态）
   pruneSelection(s);
@@ -870,7 +945,7 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
   grid.appendChild(renderControlModule(s));
 
   // ── 底部：两条手牌区（DOM 顺序恒定为绝对玩家顺序 [P0, P1]） ──
-  const hands = buildHands(s, viewSeat, handVis, cb, operator);
+  const hands = buildHands(s, viewSeat, cb, operator);
   grid.appendChild(hands);
 
   // ⚠️ C-1：grid **必须先挂进 wrap**，选择模式才能找到候选节点 —— `renderChoiceUi` 内部
@@ -895,12 +970,11 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
   wrap.appendChild(diagBtn);
 
   // ── 预览工具条：**只在有 onPreviewChange 时**渲染（真实联机不传 → 完全不存在） ──
+  // I-2 之后只有一个开关（视角）；因此这里的反馈文本也只有一种。
   if (opts.onPreviewChange) {
     const onChange = opts.onPreviewChange;
     wrap.appendChild(renderPreviewToolbar(opts, (next) => {
-      netPreviewNote = next.viewSeat !== undefined
-        ? `已切视角：我 = P${next.viewSeat + 1}`
-        : `对手手牌：${next.handVisibility === 'all' ? '全部可见' : '只显示数量'}`;
+      netPreviewNote = `已切视角：我 = P${(next.viewSeat ?? opts.viewSeat) + 1}`;
       onChange(next);
     }));
   }
