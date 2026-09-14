@@ -458,13 +458,25 @@ describe('G2 · 朝向判定单一出处（源码守卫）', () => {
     }
   });
 
-  // 4) stripOrientClasses 确实被 playRiseFade 使用（effects/index.ts 含 'stripOrientClasses('）
+  // 4) stripOrientClasses 确实被 playRiseFade 使用（BASE 实际调用形态：`stripOrientClasses(clone);`）
   it('playRiseFade 的克隆用 stripOrientClasses 清理朝向', () => {
-    expect(readUiFile('effects/index.ts'), '克隆去类未走 stripOrientClasses（会漏摘 rot-180）').toContain('stripOrientClasses(');
+    const src = readUiFile('effects/index.ts');
+    // ⚠️ G2 Task 2F3：原来这里是 `toContain('stripOrientClasses(')` —— 它对**整个文件**做子串查找，
+    // 于是下面三种情况都能满足它，而真正的调用删掉也照样绿：
+    //   - `:9` 的 import 行（`import { … stripOrientClasses … }`）里出现该标识符；
+    //   - 任何**注释**里出现 `stripOrientClasses(`（与 I-2 的注释盲区同一种病）；
+    //   - 别处对它的调用（哪怕不是给 playRiseFade 的克隆去类）。
+    // 这里钉**真实调用形态**：`stripOrientClasses(<标识符>);` 作为一条语句（行尾分号、行首非 `//`/`*`），
+    // 与 BASE 的实际写法一致（effects/index.ts:1754 `stripOrientClasses(clone);`）。
+    // 只钉"是一次真实调用"、**不钉变量名叫什么** —— 参数改名是合法重构，不该假红
+    // （与 2F2 把「写入值必须恰好是 orientToFxRot(orient)」放宽成「调用/标识符」是同一条原则）。
+    expect(src, '克隆去类未走 stripOrientClasses（会漏摘 rot-180）')
+      .toMatch(/^[ \t]*stripOrientClasses\([A-Za-z_$][\w$]*\)\s*;/m);
   });
 
-  // 5) orientToFxRot 只产出**裸角度**：不得出现 --fx-rot 与 cloneTransformOf 同现的行，
-  //    且**每个**写入 --fx-rot 的值都不得是完整 transform 函数串（`rotate(…)`）
+  // 5) orientToFxRot 只产出**裸角度**：
+  //    (a) `--fx-rot` 的写入值不得是完整 transform 函数串；
+  //    (b) **整类封杀** `cloneTransformOf` 在 effects/index.ts 里的出现 —— 见下面 5c 的理由。
   it('--fx-rot 不得与完整 transform 函数串（cloneTransformOf）混用', () => {
     const src = readUiFile('effects/index.ts');
     // 每个 `setProperty('--fx-rot', …)` 调用：arg = 第二实参，text = 整个调用（已折叠空白）
@@ -487,8 +499,7 @@ describe('G2 · 朝向判定单一出处（源码守卫）', () => {
     //     所以断言改成两条**不变量**：
     //       (i)  写入值必须是「对 `orientToFxRot` 的调用」或「一个标识符」（= 上游已算好的裸角度），
     //            变量名不限（`orient` / `fxRot` / `currentOrient` 都合法）；
-    //       (ii) 写入值**不得含 `rotate(`**（完整 transform 函数串的判别特征）—— 这条才是真正要防的，
-    //            它同时覆盖「将来合法的第三种写入形态」（例如 `FX_ROT[orient]` 只要不含 rotate( 就通过）。
+    //       (ii) 写入值**不得含 `rotate(`**（完整 transform 函数串的判别特征）。
     // 提取：见 rotWritesOf（括号配对 + 顶层逗号切分）—— 容忍实参里的括号、跨行写入与尾随逗号。
     const writes = calls.map(({ arg }) => arg);
     // 「找不到写入点」的失败消息必须**带上实际找到的写入点清单** —— 否则删掉两个写入点中的一个
@@ -520,5 +531,38 @@ describe('G2 · 朝向判定单一出处（源码守卫）', () => {
     expect(writes.length, `--fx-rot 的写入点数应为 2（±90° 与 180° 分支各一处），实际 ${writes.length} 处：\n`
       + writes.map((w, i) => `  [${i + 1}] ${w}`).join('\n')
       + '\n（若本次有意新增/删除旋转分支，请同步更新本断言的期望值）').toBe(2);
+
+    // 5c) 【G2 Task 2F3 · 封杀变量洗白通道】整类封杀 `cloneTransformOf` **在 effects/index.ts 里的调用**。
+    //
+    // 为什么必须有这一条（上一轮 2F2 放宽 (i) 时留下的确定假绿）：
+    //   ```ts
+    //   const fxRot = cloneTransformOf(orient);      // 完整 transform 函数串
+    //   card.style.setProperty('--fx-rot', fxRot);   // 写入值是**裸标识符**
+    //   ```
+    //   (i) 裸标识符 → 通过；(ii) 取到的实参是 `fxRot`、不含 `rotate(` → 通过；
+    //   5a `--fx-rot` 与 `cloneTransformOf` 不同行 → 通过。→ **守卫全绿，而整条内联 transform
+    //   （含组合的 translate/scale）被静默丢弃**（`rotate(rotate(90deg))` 计算值非法）。
+    //   这正是本任务从第一轮起就要消灭的失效模式，所以不能只靠"看实参长什么样"。
+    //
+    // 为什么用全类封杀（而不是"解析标识符声明再校验初始化式"）：
+    //   1. `effects/index.ts` 需要的是**裸角度**；完整 transform 函数串的消费者是 `cloneBoxFrom`
+    //      那一族（`src/ui/fx/clone-orient.ts`，见 tests/ui/fx-orient.test.ts 顶部的几何契约）。
+    //      `effects/index.ts` **本来就没有、也不该有**这个用途（Task 2 已确认：连 import 都没引入它）。
+    //   2. 封杀标识符把「经变量洗白」（`const` / `let` / 多次赋值 / 跨函数返回 / 任何将来形态）
+    //      **整类路径一次性**关掉，不需要维护一个永远追不上新写法的数据流解析器。
+    //   3. 失败是响亮的、可在**行**上定位的（报出命中行号与内容），不是"某个实参形态不对"这种间接信号。
+    //   代价（如实说明）：它拒绝"把函数取到本地再解释性引用"这类写法；但如上所述该文件没有这种合法用途。
+    //
+    // 只匹配**调用形态** `cloneTransformOf(`（不是裸标识符）—— 这样 effects/index.ts:164 那条
+    // "切勿换成 cloneTransformOf 的函数串" 的**警告注释可以保留**（它不含调用形态）；
+    // 否则守卫会与那条注释互相打架，逼作者删掉一句有价值的警告。
+    const cloneTransformHits = src.split('\n')
+      .map((line, i) => ({ no: i + 1, line: line.trim() }))
+      .filter(({ line }) => /\bcloneTransformOf\s*\(/.test(line))
+      .map(({ no, line }) => `effects/index.ts:${no}: ${line}`);
+    expect(cloneTransformHits, 'effects/index.ts 调用了 cloneTransformOf —— 这个文件只吃**裸角度**'
+      + '（`orientToFxRot` 的 `90deg`/`-90deg`/`180deg`），完整 transform 函数串只属于 cloneBoxFrom 一族。'
+      + '注意：经中间变量洗白（`const fxRot = cloneTransformOf(orient); setProperty(\'--fx-rot\', fxRot)`）'
+      + '会让整条内联 transform 静默失效，本断言就是封这条路的：\n' + cloneTransformHits.join('\n')).toEqual([]);
   });
 });
