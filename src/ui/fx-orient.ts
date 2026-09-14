@@ -30,7 +30,15 @@ export function cloneBoxSwaps(o: CardOrient): boolean {
   return o === 90 || o === -90;
 }
 
-/** 浮层卡应施加的 rotate() 值（空字符串 = 不施加） */
+/** 浮层卡应施加的 rotate() 值（空字符串 = 不施加）
+ *
+ * 表示约定：本输出是**完整 transform 函数串**，只用于直接赋 `style.transform`
+ * （同 buildProtocolGhost，src/ui/effects/index.ts:2179）。
+ * `--fx-rot` 路径要的是**裸角度**（`'90deg'`/`'180deg'`，见 src/ui/effects/index.ts:157-158）；
+ * **切勿**把本输出赋给 `--fx-rot` —— 会得到 `rotate(rotate(90deg))`，计算值无效，
+ * 整条内联 transform 声明被丢弃（连带组合的 `translate(...)`/`scale(...)`）。
+ * `''` 两条路径都安全（移除属性/声明），故 0° 无需特判。
+ */
 export function cloneTransformOf(o: CardOrient): string {
   switch (o) {
     case 90: return 'rotate(90deg)';

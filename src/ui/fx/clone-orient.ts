@@ -11,6 +11,12 @@ export interface CloneBox {
   /** 布局盒宽高（未施加旋转） */
   w: number;
   h: number;
+  /** 完整 transform 函数串（`rotate(90deg)` 等；0° 为 `''`），只用于直接赋 `style.transform`
+   *  （同 buildProtocolGhost，src/ui/effects/index.ts:2179）。
+   *  `--fx-rot` 路径要的是**裸角度**（`'90deg'`/`'180deg'`，见 src/ui/effects/index.ts:157-158）；
+   *  **切勿**把它赋给 `--fx-rot` —— 会得到 `rotate(rotate(...))`，计算值无效，整条内联
+   *  transform 声明被丢弃（连带组合的 `translate(...)`/`scale(...)`）。
+   *  `''` 两条路径都安全（移除属性/声明），故 0° 无需特判。 */
   transform: string;
   /** 盒子的宽高是否相对源卡 rect 互换（±90° 为 true） */
   swapped: boolean;
