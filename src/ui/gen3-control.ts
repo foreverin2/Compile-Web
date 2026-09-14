@@ -15,6 +15,8 @@ import type { Card, GameState, Line, PlayerId } from '../core/models/types';
 import { cardPointValue, getLineValue } from '../core/state/create';
 import { cardCommandDisabled, isUncovered } from '../core/effects/context';
 import { visibleRectOf } from './gen3-util';
+// G2 修正 R3：控制轨**端归属**按座位判（自己端在下 / 对手端在上）；热座 `null` ⇒ 走改动前的左右逻辑。
+import { fxTrackEndPos, fxViewSeat } from './fx-seat';
 import { protocolColorOf } from './protocol-colors';
 
 /* ============================== 小工具 ============================== */
@@ -645,14 +647,44 @@ function controlImgRect(): DOMRect | null {
  * 2026-09-13 用户清单 #1（"特效粘在屏幕固定位置"的一种形态）：控制组件卡本身在 `.control-track` 上
  * **滑动**（render.ts 按 CONTROL_EDGE_PCT=4% 把它推向持有者一侧），所以"组件被拉走后的落点"必须
  * **按轨道实测矩形**算，而不是拿视口 22%/78% 猜——否则窗口尺寸/布局一变，落点就和组件真实位置错位。
+ *
+ * ⚠️ **G2 修正 R3：热座 = 横向（左右），远程页 = 竖向（上下）**。判据是 `fxViewSeat()`：
+ *  - **热座**（`null`）⇒ `controlTrackPoint` 走**改动前那两行**（P1 贴左端 4% / P2 贴右端 96%），
+ *    一行未改 —— 热座零变化是构造性的；
+ *  - **远程页**（座位非 null）⇒ 按**座位**判"哪一端"：自己端在**下**（96%）、对手端在**上**（4%），
+ *    并且改用 `.control-track` 的**实测 y 坐标**（竖向轨道的"端"在 y 轴上）。
+ *
+ * 为什么按座位而不是按绝对玩家号：远程页的控制轨是**竖向**的，"上/下"取决于我是谁
+ * （用户裁决："自己端在下、对手端在上"）。`viewSeat = 1` 时 P1 是**对手** ⇒ 应落**上端**。
+ *
+ * 返回 `{ x, y }` 两个坐标（热座时 y 是轨道中心、远程页时 x 是轨道中心）—— 调用方按
+ * `controlTrackAxis()` 选该用哪一个，这样"横向的旧代码路径"一行都不用改写。
  */
-function controlTrackSideX(to: PlayerId): number | null {
+function controlTrackPoint(to: PlayerId): { x: number; y: number } | null {
   const track = document.querySelector<HTMLElement>('.control-track');
   const r = track ? rectOf(track) : null;
   if (!r) return null;
-  // 与 render.ts 一致：P1 贴左端 4%、P2 贴右端 96%
-  const pct = to === 0 ? 0.04 : 0.96;
-  return r.left + r.width * pct;
+  // 端归属与坐标换算都在 fx-seat 的纯函数里（`fxTrackEndPos`）—— 那一条可以在无 jsdom 的
+  // 单测里逐格断言（含"上下对调"的变异）；这里只负责"取轨道实测矩形"这一件 DOM 的事。
+  const p = fxTrackEndPos(r, fxViewSeat(), to);
+  return { x: p.x, y: p.y };
+}
+
+/** 热座在 x 轴、远程页在 y 轴（与 `controlTrackPoint` 同源，供调用方选 `--tx` / `--ty`）。 */
+function controlTrackAxis(): 'x' | 'y' {
+  return fxViewSeat() === null ? 'x' : 'y';
+}
+
+/**
+ * 轨道取不到时的兜底坐标（视口百分比）。G2 修正 R3：轴向不同，兜底轴也不同 ——
+ * 热座用改动前的 22%/78%（x），远程页用 82%/18%（y：自己端在下）。**改动前的两个数字原样保留**。
+ */
+function viewportFallback(to: PlayerId): { x: number; y: number } {
+  const self = fxViewSeat() === null ? to === 0 : to === fxViewSeat();
+  return {
+    x: to === 0 ? Math.max(80, window.innerWidth * 0.22) : Math.min(window.innerWidth - 80, window.innerWidth * 0.78),
+    y: self ? window.innerHeight * 0.82 : window.innerHeight * 0.18,
+  };
 }
 
 /**
@@ -667,19 +699,24 @@ function lustDrivenControl(p: { reason?: string; sourceDefId?: string }): boolea
 
 /** C1/C2 轻量版：不牵链条，只在组件卡新位置播脉冲 + 文字标（判定阶段/其他协议的易主）。
  *  2026-09-13：颜色取**效果源卡协议**的主题色（如嫉妒1 底易主 = 玉青/橙），判定阶段（无源卡）用中性灰——
- *  这样既满足用户 #8「只有色欲才牵链条」，又保留了设计稿 E2② 那种"有来源的易主要能看出是谁做的"。 */
-function controlMiniFx(p: { from: number; to: number; reason?: string; sourceDefId?: string }, cx: number, cy: number, x: number): void {
+ *  这样既满足用户 #8「只有色欲才牵链条」，又保留了设计稿 E2② 那种"有来源的易主要能看出是谁做的"。
+ *  G2 修正 R3：落点从"一个 x"扩成"(x, y, 轴)"—— 竖向轨道下"持有者一端"在 y 轴上；
+ *  文字标沿轴的**反方向**偏 54px（横排偏上、竖排偏左）以免压住滑块。 */
+function controlMiniFx(
+  p: { from: number; to: number; reason?: string; sourceDefId?: string },
+  cx: number, cy: number, x: number, y: number, axis: 'x' | 'y',
+): void {
   const l = layer('g3ctrl-layer', Z_CTRL);
   const color = p.sourceDefId ? protocolColorOf(p.sourceDefId) : '#b4bac4';
   const pulse = el('i', 'g3ctrl-mini-pulse');
   pulse.style.left = `${x}px`;
-  pulse.style.top = `${cy}px`;
+  pulse.style.top = `${y}px`;
   pulse.style.setProperty('--mc', color);
   l.appendChild(pulse);
   const gained = p.to === 0 || p.to === 1;
   const chip = el('i', 'g3ctrl-mini-chip', gained ? `控制组件 → P${p.to + 1}` : '控制组件归还中立');
-  chip.style.left = `${x}px`;
-  chip.style.top = `${cy - 54}px`;
+  chip.style.left = axis === 'y' ? `${x - 54}px` : `${x}px`;
+  chip.style.top = axis === 'y' ? `${y}px` : `${cy - 54}px`;
   chip.style.setProperty('--mc', color);
   chip.style.animationDelay = '120ms';
   l.appendChild(chip);
@@ -698,11 +735,13 @@ export function gen3ControlChangedFx(
   const cy = r.top + r.height / 2;
 
   if (p.to === 0 || p.to === 1) {
-    // 落点 = 轨道上"持有者一侧"的实测位置（#1：不再用视口百分比猜）
-    const targetX = controlTrackSideX(p.to) ?? (p.to === 0 ? Math.max(80, window.innerWidth * 0.22) : Math.min(window.innerWidth - 80, window.innerWidth * 0.78));
+    // 落点 = 轨道上"持有者一侧"的实测位置（#1：不再用视口百分比猜）。
+    // G2 修正 R3：热座在 x 轴（左右）、远程页在 y 轴（上下：自己端在下 / 对手端在上）。
+    const axis = controlTrackAxis();
+    const target = controlTrackPoint(p.to) ?? viewportFallback(p.to);
     // #8：非色欲驱动的易主 → 只播轻量提示（不牵链条、不飞幽灵卡）
     if (!lustDrivenControl(p)) {
-      controlMiniFx(p, cx, cy, targetX);
+      controlMiniFx(p, cx, cy, target.x, target.y, axis);
       return;
     }
     const l = layer('g3ctrl-layer', Z_CTRL);
@@ -716,15 +755,19 @@ export function gen3ControlChangedFx(
       const link = el('i', 'g3ctrl-link');
       link.style.left = `${cx}px`;
       link.style.top = `${cy}px`;
-      link.style.setProperty('--tx', `${(targetX - cx).toFixed(1)}px`);
+      // 牵引链的牵引方向随轴：横排给 --tx、竖排给 --ty（CSS 两条 keyframes 分别消费）
+      link.style.setProperty(axis === 'y' ? '--ty' : '--tx',
+        `${(axis === 'y' ? target.y - cy : target.x - cx).toFixed(1)}px`);
       link.style.animationDelay = `${(i * 70).toFixed(0)}ms`;
       l.appendChild(link);
     }
     void ghost.offsetWidth;
-    ghost.style.transform = `translate(${targetX - cx}px, 0) scale(1.06)`;
+    ghost.style.transform = axis === 'y'
+      ? `translate(0, ${(target.y - cy).toFixed(1)}px) scale(1.06)`
+      : `translate(${(target.x - cx).toFixed(1)}px, 0) scale(1.06)`;
     const pulse = el('i', 'g3ctrl-pulse');
-    pulse.style.left = `${targetX}px`;
-    pulse.style.top = `${cy}px`;
+    pulse.style.left = `${target.x}px`;
+    pulse.style.top = `${target.y}px`;
     pulse.style.animationDelay = '560ms';
     l.appendChild(pulse);
     // C5：对手获得控制权后 → 场上 lust-4 底 / pride-6 顶 卡面红徽记 + 组件向该卡扩散波纹
@@ -758,24 +801,37 @@ export function gen3ControlChangedFx(
   }
 
   // 失去/归还中立：3 节链条依次崩断 + 暗紫余温（留在原持有者一侧）
-  const side = (p.from === 0 || p.from === 1 ? controlTrackSideX(p.from) : null)
-    ?? (p.from === 0 ? Math.max(60, window.innerWidth * 0.18) : Math.min(window.innerWidth - 60, window.innerWidth * 0.82));
+  const axis = controlTrackAxis();
+  const from = p.from === 0 || p.from === 1 ? (controlTrackPoint(p.from) ?? viewportFallback(p.from)) : null;
+  const side = from ? (axis === 'y' ? from.y : from.x) : (axis === 'y' ? cy : cx);
   if (!lustDrivenControl(p)) {
-    controlMiniFx(p, cx, cy, p.from === 0 || p.from === 1 ? side : cx);
+    controlMiniFx(p, cx, cy, side, from ? (axis === 'y' ? from.x : from.y) : cy, axis);
     return;
   }
   const l = layer('g3ctrl-layer', Z_CTRL);
   for (let i = 0; i < 3; i++) {
     const link = el('i', 'g3ctrl-link break');
-    link.style.left = `${(side + cx) / 2}px`;
-    link.style.top = `${cy + (i - 1) * 9}px`;
-    link.style.setProperty('--tx', `${((i - 1) * 16).toFixed(1)}px`);
+    if (axis === 'y') {
+      // 竖排：断链沿 y 方向散开（节点仍锚在"原持有者那一端"）
+      link.style.left = `${cx}px`;
+      link.style.top = `${(side + cy) / 2}px`;
+      link.style.setProperty('--ty', `${((i - 1) * 16).toFixed(1)}px`);
+    } else {
+      link.style.left = `${(side + cx) / 2}px`;
+      link.style.top = `${cy + (i - 1) * 9}px`;
+      link.style.setProperty('--tx', `${((i - 1) * 16).toFixed(1)}px`);
+    }
     link.style.animationDelay = `${(i * 90).toFixed(0)}ms`;
     l.appendChild(link);
   }
   const after = el('i', 'g3ctrl-afterglow');
-  after.style.left = `${side - 40}px`;
-  after.style.top = `${cy - 60}px`;
+  if (axis === 'y') {
+    after.style.left = `${cx - 60}px`;
+    after.style.top = `${side - 40}px`;
+  } else {
+    after.style.left = `${side - 40}px`;
+    after.style.top = `${cy - 60}px`;
+  }
   l.appendChild(after);
   const fallback = el('i', 'g3ctrl-ghost drift');
   fallback.style.left = `${cx - 24}px`;

@@ -1914,32 +1914,66 @@ function bindShieldDrag(shield: HTMLElement, player: PlayerId, hand: HTMLElement
 const CONTROL_EDGE_PCT = 4; // 持有方贴端距离（左端 4% / 右端 96%，控制卡仍不出轨）
 let controlSliderPos = 50;
 
-export function renderControlModule(s: GameState): HTMLElement {
-  const neutral = s.control === -1;
-  // 三态目标位置：中立居中；P1（左标签）贴左端；P2（右标签）贴右端
+/**
+ * 控制权滑动指示条（2026-09 规则化；R6 引入、R7 行程加长、R8 控制卡放大）。
+ *
+ * ⚠️ **G2 修正 R3 起多一个可选的轴向参数**（远程页的竖向布局，用户裁决"控制轨改成竖向"）：
+ *  - `'x'`（**缺省**，热座）= 横向轨道：滑块贴**左端 4% / 右端 96%**、标签 `玩家 1` 在左 / `玩家 2` 在右。
+ *    缺省值与改动前**逐字等价**（`img.style.left`、两个标签的类名与文本一字未变）——
+ *    热座观感零变化是**构造性**的（远程页调用点显式传 `'y'`）。
+ *  - `'y'`（远程页）= 竖向轨道：`player = 0` 贴**上端 4%**、`player = 1` 贴**下端 96%**。
+ *    ⚠️ **轴向与"谁在上/下"是两件事**：本函数只按**绝对玩家号**给位置；"自己端在下、
+ *    对手端在上"的**座位换算**由调用方 `render-net.ts` 的 `netControlHolder` 完成
+ *    （它把 `s.control` 先映射成"绝对玩家号"再交进来）。理由：座位是**页面的视角**，
+ *    不是组件的属性 —— 让共享助手去读 `fxViewSeat()` 会把远程页的视角概念写进热座页的源码。
+ *
+ * 滑块位置只反映【控制组件归属】（`s.control`），三态离散大幅移动：
+ *   中立 → 居中（50%）；玩家 1 持有 → 贴一端；玩家 2 持有 → 贴另一端。
+ * 归属易主经 0.5s 过渡大幅滑到对应端。控制条归属类（held-0/1/neutral）与位置天然一致。
+ * 由于渲染模型每次重建 DOM，直接写位置不会触发 transition；因此先写上一帧位置、
+ * 下一帧再写目标位置，让过渡真正产生滑动动画。
+ */
+export interface ControlTrackOpts {
+  /** 轨道轴向：`'x'` = 横向（**热座缺省，语义与改动前逐字一致**）；`'y'` = 竖向（远程页）。 */
+  axis?: 'x' | 'y';
+  /** 控制组件归属的**读取覆盖**（`-1` = 中立）。缺省 = `s.control`（**热座行为逐字不变**）。
+   *  远程页用它把"座位端"换算成绝对玩家号后再交给本助手（见 render-net.ts 的
+   *  `netControlHolder`）—— 换算不放这里，是因为那是**页面的视角**，不是组件的属性。 */
+  holder?: -1 | PlayerId;
+}
+
+export function renderControlModule(s: GameState, opts?: ControlTrackOpts): HTMLElement {
+  const holder: -1 | PlayerId = opts?.holder ?? s.control;
+  const neutral = holder === -1;
+  const vertical = opts?.axis === 'y';
+  // 三态目标位置：中立居中；player 0 贴小端（横=左 / 竖=上）；player 1 贴大端（横=右 / 竖=下）
   let target = 50;
-  if (s.control === 0) target = CONTROL_EDGE_PCT;
-  else if (s.control === 1) target = 100 - CONTROL_EDGE_PCT;
-  const ctrl = el('div', 'control-module' + (neutral ? ' neutral' : ` held-${s.control}`));
+  if (holder === 0) target = CONTROL_EDGE_PCT;
+  else if (holder === 1) target = 100 - CONTROL_EDGE_PCT;
+  const ctrl = el('div', 'control-module' + (neutral ? ' neutral' : ` held-${holder}`));
   const track = el('div', 'control-track');
-  track.appendChild(el('span', 'control-track-label left', '玩家 1'));
-  track.appendChild(el('span', 'control-track-label right', '玩家 2'));
+  // 标签类名按轴向给：横向 `left/right`（styles.css 的既有规则），竖向 `top/bottom`（styles-net.css）
+  track.appendChild(el('span', `control-track-label ${vertical ? 'top' : 'left'}`, '玩家 1'));
+  track.appendChild(el('span', `control-track-label ${vertical ? 'bottom' : 'right'}`, '玩家 2'));
   track.appendChild(el('span', 'control-center-tick'));
   const img = document.createElement('img');
   img.className = 'control-slider-img';
   img.src = '/assets/control-front.png';
   img.alt = 'control module';
-  // 先落位到上一帧位置（无动画），再在下一帧过渡到目标位置
-  img.style.left = `${controlSliderPos}%`;
+  // 先落位到上一帧位置（无动画），再在下一帧过渡到目标位置。
+  // 轴向决定写哪个属性：横向写 left（与改动前逐字一致），竖向写 top（styles-net.css 负责把
+  // 横向的 left/top:50% 中和掉 —— 见该文件第 9 节）。
+  const axisProp: 'left' | 'top' = vertical ? 'top' : 'left';
+  img.style[axisProp] = `${controlSliderPos}%`;
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
-      img.style.left = `${target}%`;
+      img.style[axisProp] = `${target}%`;
     });
   });
   controlSliderPos = target;
   track.appendChild(img);
   ctrl.appendChild(track);
-  ctrl.appendChild(el('div', 'control-label', `控制权: ${neutral ? '中立' : `玩家 ${s.control + 1}`}`));
+  ctrl.appendChild(el('div', 'control-label', `控制权: ${neutral ? '中立' : `玩家 ${holder + 1}`}`));
   return ctrl;
 }
 

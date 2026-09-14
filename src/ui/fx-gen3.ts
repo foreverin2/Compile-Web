@@ -19,7 +19,8 @@
  */
 
 import type { GameState } from '../core/models/types';
-import { clipInsetRightPct } from './gen3-util';
+import { clipInsetCss, clipInsetRightPct } from './gen3-util';
+import { handOuterFor } from './fx-seat';
 import { protocolColorOf } from './protocol-colors';
 import { fxOrientOf, orientOf, type CardOrient } from './fx-orient';
 
@@ -671,10 +672,12 @@ export function gen3FlipFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3CardF
     case 'ambush': {
       const revealing = p.faceUp; // 事件在翻转后发出：faceUp = 新状态
       const c = overlay(revealing ? 'g3-amb-reveal' : 'g3-amb-hide');
-      // 伏击3 的目标是【被覆盖】的正面卡 → 只在其露出可见区域内播放（批次 E 收尾）
+      // 伏击3 的目标是【被覆盖】的正面卡 → 只在其露出可见区域内播放（批次 E 收尾）。
+      // G2 修正 R3：裁剪方向按座位 —— 热座裁**右缘**、远程页裁**上/下缘**（`clipInsetCss` 是
+      // 唯一出处，免得两处 `inset(...)` 字面量漂移成"方向反了却没人报错"）。
       if (c && state) {
         const hidden = clipInsetRightPct(state, p.uid);
-        if (hidden > 0) c.style.clipPath = `inset(0 ${(hidden * 100).toFixed(1)}% 0 0)`;
+        if (hidden > 0) c.style.clipPath = clipInsetCss(state, p.uid, hidden);
       }
       if (c) {
         const grid = api.el('div', 'g3-amb-flip-grid');
@@ -709,8 +712,9 @@ export function gen3FlipFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3CardF
     case 'inertia': {
       const c = overlay('g3-ine-flip');
       if (c && state) {
+        // G2 修正 R3：同伏击 —— 裁剪方向按座位（热座右缘 / 远程上·下缘），单一出处见 gen3-util。
         const hidden = clipInsetRightPct(state, p.uid);
-        if (hidden > 0) c.style.clipPath = `inset(0 ${(hidden * 100).toFixed(1)}% 0 0)`;
+        if (hidden > 0) c.style.clipPath = clipInsetCss(state, p.uid, hidden);
       }
       if (c) {
         const gear = api.el('i', 'g3-ine-flip-gear');
@@ -889,7 +893,10 @@ function handEl(player: 0 | 1): HTMLElement | null {
   return document.querySelector<HTMLElement>(`.hand[data-player="${player}"]`);
 }
 
-/** 手牌区末端落点（取不到卡节点就退化到手牌区右缘） */
+/** 手牌区末端落点（取不到卡节点就退化到手牌区内侧 24px 处）。
+ *  G2 修正 R3：末卡在 DOM 里恒为最后一张（两个渲染器都按"新卡追加在末尾"渲染），所以取它的
+ *  **中心**与"哪一侧"无关；只有空手牌的退化落点与容器排列方向有关 —— 用 `.hand.reversed`
+ *  判定（热座 P1 仍是"右缘内侧"= 与改动前逐字相同；远程页两个座位都正排，走左缘内侧）。 */
 function handEndPos(player: 0 | 1): { x: number; y: number } | null {
   const hand = handEl(player);
   if (!hand) return null;
@@ -897,7 +904,9 @@ function handEndPos(player: 0 | 1): { x: number; y: number } | null {
   const last = cards[cards.length - 1];
   const r = (last ?? hand).getBoundingClientRect();
   if (r.width === 0 && r.height === 0) return null;
-  return { x: last ? r.right - r.width / 2 : r.right - 24, y: r.top + r.height / 2 };
+  if (last) return { x: r.right - r.width / 2, y: r.top + r.height / 2 };
+  const x = handOuterFor(hand) === 'start' ? r.left + 24 : r.right - 24;
+  return { x, y: r.top + r.height / 2 };
 }
 
 /**

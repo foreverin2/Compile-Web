@@ -4,7 +4,25 @@
 > 机读版在同名模块 `src/ui/fx-dom-contract.ts`；两者由 `tests/ui/fx-dom-contract.test.ts` 强制一致。
 > 依据：`docs/2026-09-13-联机与多端-设计稿.md` §6.3。
 
-当前结论（HEAD，G2 修正 R2 分离特效朝向后）：**A=21 / B=34 / C=1 / D=3**，共 59 条钩子。其中只有 A 类是契约项。
+当前结论（HEAD，G2 修正 R3 方向按座位后）：**A=21 / B=34 / C=1 / D=3**，共 59 条钩子。其中只有 A 类是契约项。
+
+> **G2 修正 R3（本次变更 · 方向从"按绝对玩家左右"改成"按座位上下"）**：
+> 规格依据 `docs/2026-09-14-G2修正-竖向布局与朝向分离-设计说明.md` §3.2 / §8.1 / §8.2（含用户补充裁决：
+> **控制轨改成竖向，自己端在下、对手端在上**）。
+>
+> 1. **A 类钩子清单与条数不变（21 条）**：R3 只改**方向判断**与**布局**，不改任何钩子的拼写或产出方。
+>    控制轨的竖向版本仍由 `render.ts` 的 `renderControlModule` 产出（多传 `{ axis: 'y', holder }`），
+>    竖向规则写在 `styles-net.css` 第 9 节，`styles.css` **一行未改**。
+> 2. **方向模型的单一出处是新的小模块 `src/ui/fx-seat.ts`**（不占 A 类钩子）：
+>    `setFxViewSeat(seat | null)`（`null` = 热座 ⇒ 走原左右逻辑；唯一调用点是 `render-net.ts` 渲染时设一次）、
+>    `fxOuterFor` / `fxStackEndPoint` / `fxHandEndPoint`（落点）、`vVisibleStripRect` / `vClipInsetPct` /
+>    `vClipInsetCss`（**覆盖条带**的竖向变体）、`fxTrackEndFor` / `fxTrackEndPos`（**控制轨端归属**）。
+> 3. **命名（规格 §8.2 要求 R3 定名并记录）**：
+>    - `FxOuter`：`'start'` = 屏幕**小坐标端**（上 / 左）、`'end'` = 大坐标端（下 / 右）。**它是屏幕方向，不是座位号** —— `fxOuterFor` 在远程页把"自己（向下长）"映射成 `'end'`、"对手（向上长）"映射成 `'start'`（**与座位号恰好相反**，这是"上下对调"类 bug 的唯一入口，故单列说明）。
+>    - 覆盖条带（`gen3-util.ts`）：**热座仍走"覆盖者在**右**"**（`visibleRectOf` / `clipInsetRightPct` 里 `coveredOuterOf(...) === null` 的分支，代码逐字未改）；**远程页走"覆盖者在**下**（自己侧 / `'end'`）或**上**（对手侧 / `'start'`）"**，由 `coveredOuterOf` 读**覆盖卡自己的** `data-fx-rot` 判定（`ccw` ⇒ `'end'`、`cw` ⇒ `'start'`）。
+>    - 覆盖条带永远是**整卡宽**的**横带**（热座是整卡高的**竖条**）。
+> 4. **运行时证据**：`verifyPageHooks` 新增**断言 4**（约束 9，方向座位与逐卡朝向）与**断言 5**（控制轨端归属），
+>    两者都只做**标记/类名/契约链**层面的检查（无 jsdom ⇒ 量不到几何，见 §6.1 的能力边界）。
 
 > **G2 修正 R2 补入（本次变更）**：A 类新增 **`[data-fx-rot]`**（**特效朝向标记**）。
 > 规格依据 `docs/2026-09-14-G2修正-竖向布局与朝向分离-设计说明.md` §2 / §3.1 / §8.2。
@@ -112,7 +130,7 @@ G1 首轮正是把「渲染器产出」当成了充分条件，于是把 `.hand-
 | 7 | `.trash-pile.p1/.p2` | `fx-gen3.ts` | 弃牌堆的 **`.pN` 归属类**：`fx-gen3.ts:1375` 读 `` `.trash-pile.p${p.player + 1}` ``（灰砂流自牌库流向本家弃牌堆，取不到就退化成向右下漂）。与上一条的 `[data-player]` 是**两个独立 conjunct**，各自登记，免得其中一个被丢还全绿。`probe` 取**生产者书写形式** `trash-pile p`（`render.ts:1498` 是 `` `trash-pile p${player + 1} …` ``，类名以空格分隔，**不是**复合 `.trash-pile.pN`）；**故意不用裸 `p1` 当 probe**：裸 `p1` 在 `render.ts` 里同时命中 `:1732` 的 hand-shield 归属类构造（`'hand-shield' + (player === 1 ? ' p2' : ' p1')`）与 `:4394` 的 draft-preview 构造（`'draft-preview' + (player === 0 ? ' p1' : ' p2')`），等于没查 |
 | 8 | `.hand` | `fx-gen2.ts`、`effects/index.ts`、`fx-gen3.ts` | 手牌区：抽牌幽灵终点、扇形末卡位置、手牌区 rect（多处用 `querySelectorAll(".hand")[player]`）。`probe` 取**带引号的产出形式** `'hand'`（G2 Task 3F2 收紧：裸 `hand` 被 `.hand-strip` 与本文件里一堆 `hand-*` 类名满足） |
 | 9 | `.card` | `fx-gen2.ts`、`effects/index.ts`、`fx-gen3.ts` | 卡节点：卡面克隆、扇形末卡位置、链路末卡位置（多处写作 `.card:not(.reveal-ghost)`）。`probe` 取**带引号的产出形式** `'card'`（G2 Task 3F2 收紧：裸 `card` 被 `card-face-img` / `cardback-img` / `card-text-*` 与查询 `'.card[data-uid]'` 满足） |
-| 10 | `.control-track` | `gen3-control.ts` | 控制轨道：易主落点按轨道**实测矩形**算（`controlTrackSideX`），不能拿视口百分比猜。`probe` 取**带引号的产出形式** `'control-track'`（G2 Task 3F2：裸 `control-track` 被同函数内的 `control-track-label left/right` 满足 —— 复评变异 R2 实测改名后守卫仍绿） |
+| 10 | `.control-track` | `gen3-control.ts` | 控制轨道：易主落点按轨道**实测矩形**算（`controlTrackPoint` → `fx-seat.ts` 的 `fxTrackEndPos`），不能拿视口百分比猜。`probe` 取**带引号的产出形式** `'control-track'`（G2 Task 3F2：裸 `control-track` 被同函数内的 `control-track-label left/right` 满足 —— 复评变异 R2 实测改名后守卫仍绿）。**⚠️ G2 修正 R3：远程页的轨道改成竖向**（用户裁决"自己端在下、对手端在上"）—— **产出方拼写未改**（仍由 `render.ts` 的 `renderControlModule` 产出，只是多传 `{ axis: 'y', holder }`），竖向规则在 `styles-net.css` 第 9 节，`styles.css` 一行未改 |
 | 11 | `.control-module` | `gen3-control.ts` | 控制组件：色欲持有牵引环、控制权判定标题的锚点（取不到则回退视口中心） |
 | 12 | `.control-slider-img` | `gen3-control.ts` | 控制组件滑块图：优先于 `.control-module` 作为量测目标（`controlImgRect`） |
 | 13 | `.battery` | `gen3-control.ts` | 能量槽：愤怒0 中缝虚线要跨「两条能量槽之间」而非整行；惰性0 也要能量槽 rect（`batteryNode`）。`probe` 取 `battery battery-`（**相邻两个类 token**，G2 Task 3F2 收紧：裸 `battery` 被 `battery-shell` / `battery-cells` / `battery-cell` / `battery-overflow` 满足） |
@@ -328,6 +346,26 @@ A 类清单是两个渲染器的**并集**要求。
 "远程页忘了产出标记"**不会有任何报错** —— 它只会静默把卡面朝向当成特效朝向（自己差 90°、
 对手差 90°，且对手的 180° 卡面会被当成 180° 特效朝向）。契约里 `[data-fx-rot]` 是 `stateDependent`
 的存在性检查，查不出这件事；只有"逐卡计数 + 逐卡读值"能。
+
+**断言 4（G2 修正 R3 · 约束 9，本次新增）**：**方向性**在两个座位下都成立。做三件事：
+
+1. `fxViewSeat()` 必须**等于**渲染期写进去的那个值（`renderNetBoard` 把 `applyFxViewSeat(opts.viewSeat)`
+   的返回值交给 `verifyPageHooks(wrap, seatApplied)`）。删掉那次调用 / 改成 `setFxViewSeat(null)` /
+   参数传错 ⇒ 远程页会退回热座的左右语义（落点、覆盖条带全按左右算）而**不报任何错**。
+2. 两侧每张场上卡各自带 `[data-fx-rot]` 且取值按侧（自己 `ccw` / 对手 `cw`）——
+   这正是**覆盖方向**（`gen3-util.ts` 的 `coveredOuterOf`）与**落点轴**（`fx-seat.ts` 的 `fxOuterFor`）
+   的共同输入：标记在、值对，方向判据的输入就是对的。
+3. `.net-board.net-view-N` 与 `.net-hands` 的 `data-view-seat` 必须与 FX 座位**同值** ——
+   防"布局按 A 座位、方向按 B 座位"这种静默错配（页面看着正常、特效全反）。
+
+⚠️ **能力边界（别把 ✓ 读成"几何已验证"）**：无 jsdom ⇒ 量不到 `getBoundingClientRect()`。
+这条断言只做**标记/类名层面的存在性 + 逐卡朝向 + 契约链**，**证明不了**
+"卡真的向下/向上排开""覆盖条带真的在上/下" —— 那只能人眼看（R3 报告 §8）。
+
+**断言 5（G2 修正 R3 · 控制轨）**：控制轨的**端归属**判据在 `fx-seat.ts` 的纯函数 `fxTrackEndFor`
+（`null` ⇒ 横向 4%/96%；座位 ⇒ 竖向：自己端 96% = **下**、对手端 4% = **上**），
+由 `tests/ui/fx-seat.test.ts` 逐格断言（含"上下对调"的变异）；`styles-net.css` 第 9 节提供竖向布局。
+A 类钩子的**产出方拼写未改**（仍是 `render.ts` 的 `renderControlModule`）。
 
 ⚠️ **真实联机时不传 `onPreviewChange` → 工具条完全不渲染**，自查行随之消失（联机零开销）。
 

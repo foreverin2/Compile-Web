@@ -15,6 +15,9 @@ import type { GameState } from '../core/models/types';
 import { cardImgSrc } from '../data/demo';
 import { protocolColorOf, hexToRgba } from './protocol-colors';
 import { registerFollow } from './fx-follow';
+// G2 修正 R3：**方向模型**单一出处。`fxViewSeat()` 在热座页恒为 `null` ⇒ 落点助手走与改动前
+// 逐字段相同的左右分支（"热座零变化"是构造性的）；远程页由 render-net 每次渲染设一次座位。
+import { fxHandEndPoint, fxStackEndPoint, fxViewSeat, handOuterFor } from './fx-seat';
 
 type PlayerId = 0 | 1;
 
@@ -693,43 +696,26 @@ function spawnClarityCardEye(player: PlayerId): void {
   const hand = document.querySelectorAll<HTMLElement>('.hand')[player];
   if (!hand) return;
   const rect = hand.getBoundingClientRect();
-  // 落点 = 手牌末尾（与 handEndPos 同款：取末卡外缘或空手牌起点）
-  const cards = hand.querySelectorAll<HTMLElement>('.card:not(.reveal-ghost)');
-  const last = cards[cards.length - 1];
-  let x: number;
-  const y = rect.top + rect.height / 2;
-  if (last) {
-    const lr = last.getBoundingClientRect();
-    x = player === 0 ? lr.right + 37 : lr.left - 37;
-  } else {
-    x = player === 0 ? rect.left + 28 + 65 : rect.right - 28 - 65;
-  }
+  // 落点 = 手牌末尾（与 handEndPos 同款：取末卡外缘或空手牌起点）。
+  // ⚠️ G2 修正 R3：这一处**不跟座位走** —— 手牌容器在远程页仍是横向的（双方 `reversed: false`），
+  // 所以"末尾在哪一侧"由**容器自己的排列方向**决定；判据从"绝对玩家号"换成 `.hand.reversed`
+  // 之后，热座 P0/P1 与远程自己/对手四个组合都对（改动前远程对手会落到手牌左端）。
+  const endX = fxHandEndPoint(hand).x;
   const eye = buildClarityEye();
   eye.classList.add('fx-clarity-card-eye');
-  eye.style.left = `${(x - CLARITY_EYE_W / 2).toFixed(1)}px`;
-  eye.style.top = `${(y - CLARITY_EYE_H / 2).toFixed(1)}px`;
+  eye.style.left = `${(endX - CLARITY_EYE_W / 2).toFixed(1)}px`;
+  eye.style.top = `${(rect.top + rect.height / 2 - CLARITY_EYE_H / 2).toFixed(1)}px`;
   eye.style.zIndex = String(GEN2_Z);
   document.body.appendChild(eye);
   // 2026-09-13 用户裁决：3s 的落点眼超出"瞬态可不跟随"的窗口 → 注册跟随（滚动/缩放时重新锚到手牌末尾）
   const anchoredPlayer = player;
   registerFollow(eye, (el) => {
-    const hand = document.querySelector<HTMLElement>(`.hand[data-player="${anchoredPlayer}"]`);
-    if (!hand) return;
-    const cards = hand.querySelectorAll<HTMLElement>('.card:not(.reveal-ghost)');
-    const lastCard = cards[cards.length - 1];
-    let nx: number;
-    let ny: number;
-    if (lastCard) {
-      const lr = lastCard.getBoundingClientRect();
-      nx = anchoredPlayer === 0 ? lr.right + 37 : lr.left - 37;
-      ny = lr.top + lr.height / 2;
-    } else {
-      const hr = hand.getBoundingClientRect();
-      nx = anchoredPlayer === 0 ? hr.left + 28 + 65 : hr.right - 28 - 65;
-      ny = hr.top + hr.height / 2;
-    }
+    const hand2 = document.querySelector<HTMLElement>(`.hand[data-player="${anchoredPlayer}"]`);
+    if (!hand2) return;
+    const hr = hand2.getBoundingClientRect();
+    const nx = fxHandEndPoint(hand2).x;
     el.style.left = `${(nx - CLARITY_EYE_W / 2).toFixed(1)}px`;
-    el.style.top = `${(ny - CLARITY_EYE_H / 2).toFixed(1)}px`;
+    el.style.top = `${(hr.top + hr.height / 2 - CLARITY_EYE_H / 2).toFixed(1)}px`;
   });
   window.setTimeout(() => eye.classList.add('out'), CLARITY_CARD_EYE_MS);
   window.setTimeout(() => eye.remove(), CLARITY_CARD_EYE_MS + 600);
@@ -764,19 +750,13 @@ const ICE_BRIDGE_OUT_MS = 500;
 const ICE_BRIDGE_Z = 290; // 桥在飞行卡（BASE_Z 300）之下
 const ICE_SNOW_MS = 2600;
 
-/** 桥目标（同 effects stackEndPos 简化：目标槽末卡外缘 / 槽内首卡位） */
+/** 桥目标（G2 修正 R3 起**统一走 fx-seat 的落点助手**：热座 = 末卡左/右缘外侧、远程页 = 下/上缘外侧）
+ *  ⚠️ `owner` 必须一起传：热座下"末卡外侧"在左还是右由**绝对玩家号**定（座位为 null）。 */
 function iceStackEnd(owner: PlayerId, line: number): { x: number; y: number } | null {
   const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${owner}"][data-line="${line}"]`);
   if (!slot) return null;
-  const slotRect = slot.getBoundingClientRect();
-  const y = slotRect.top + slotRect.height / 2;
-  const cards = slot.querySelectorAll<HTMLElement>('.card');
-  const last = cards.length > 0 ? cards[cards.length - 1] : null;
-  if (last) {
-    const r = last.getBoundingClientRect();
-    return { x: owner === 0 ? r.left - 65 : r.right + 65, y };
-  }
-  return { x: owner === 0 ? slotRect.right - 90 : slotRect.left + 90, y };
+  // 偏移沿用改动前那组（末卡 65 / 空槽 90）—— 观感微调量，本任务不重新标定。
+  return fxStackEndPoint(slot, fxViewSeat(), owner);
 }
 
 /** 某点飘落的几片小雪花（纯 CSS 六角花），duration 后自清理 */
@@ -863,19 +843,11 @@ const SMOKE_MIST_HOLD_MS = 1100; // 保持（覆盖基础飞行 ~450ms 到达）
 const SMOKE_MIST_OUT_MS = 600;   // 雾散
 const SMOKE_GLOW_MS = 2000;      // 卡边框灰光持续
 
-/** 目标槽 stackEnd（同 iceStackEnd：末卡外缘 / 空槽起点） */
+/** 目标槽 stackEnd（G2 修正 R3 起与 `iceStackEnd` 共用同一套落点语义，见其注释） */
 function smokeStackEnd(owner: PlayerId, line: number): { x: number; y: number } | null {
   const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${owner}"][data-line="${line}"]`);
   if (!slot) return null;
-  const slotRect = slot.getBoundingClientRect();
-  const y = slotRect.top + slotRect.height / 2;
-  const cards = slot.querySelectorAll<HTMLElement>('.card');
-  const last = cards.length > 0 ? cards[cards.length - 1] : null;
-  if (last) {
-    const r = last.getBoundingClientRect();
-    return { x: owner === 0 ? r.left - 65 : r.right + 65, y };
-  }
-  return { x: owner === 0 ? slotRect.right - 90 : slotRect.left + 90, y };
+  return fxStackEndPoint(slot, fxViewSeat(), owner);
 }
 
 /** smoke 反打灰雾出场（effects deck-played/hand-played 分流调用；基础飞行由 effects 照常） */
@@ -945,16 +917,9 @@ export function playFearShiftExtra(
   if (rect.width === 0 || rect.height === 0) return;
   const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${payload.owner}"][data-line="${payload.line}"]`);
   if (!slot) return;
-  const slotRect = slot.getBoundingClientRect();
-  const y = slotRect.top + slotRect.height / 2;
-  const cards = slot.querySelectorAll<HTMLElement>('.card');
-  const last = cards.length > 0 ? cards[cards.length - 1] : null;
-  const end = last
-    ? (() => {
-        const r = last.getBoundingClientRect();
-        return { x: payload.owner === 0 ? r.left - 65 : r.right + 65, y };
-      })()
-    : { x: payload.owner === 0 ? slotRect.right - 90 : slotRect.left + 90, y };
+  // G2 修正 R3：落点走统一的方向模型（热座末卡左/右缘外侧；远程页按座位走下/上缘外侧）
+  const end = fxStackEndPoint(slot, fxViewSeat(), payload.owner);
+  if (!end) return;
   // 浮层卡（橙红覆盖）
   const ghost = document.createElement('div');
   ghost.className = 'fx-fear-ghost';
@@ -1311,19 +1276,15 @@ export function spawnCourageSparks(x: number, y: number, count = 16): void {
   }
 }
 
-/** 落点框（手牌末尾 / 指定位置） */
+/** 落点框（手牌末尾 / 指定位置）。
+ *  ⚠️ G2 修正 R3：**不跟座位走** —— 手牌容器在远程页仍横向（双方 `reversed: false`），
+ *  "末尾在哪一侧"由容器自身的排列方向（`.hand.reversed`）决定。判据换成容器类名后，
+ *  热座 P0/P1 与远程自己/对手四个组合都对；也顺带统一了空手牌的兜底算式
+ *  （改动前此处写的 `rect.left + 93 / rect.right - 93` 只对 `reversed` 的一半成立）。 */
 function courageLandPos(player: PlayerId): { x: number; y: number } | null {
   const hand = document.querySelectorAll<HTMLElement>('.hand')[player];
   if (!hand) return null;
-  const rect = hand.getBoundingClientRect();
-  const y = rect.top + rect.height / 2;
-  const cards = hand.querySelectorAll<HTMLElement>('.card:not(.reveal-ghost)');
-  const last = cards[cards.length - 1];
-  if (last) {
-    const r = last.getBoundingClientRect();
-    return { x: player === 0 ? r.right + 37 : r.left - 37, y };
-  }
-  return { x: player === 0 ? rect.left + 93 : rect.right - 93, y };
+  return fxHandEndPoint(hand);
 }
 
 /** courage 抽牌：手牌落点湖中剑斜插 + 卡框鎏金 2s */
@@ -1415,25 +1376,17 @@ export function playCourageShiftExtra(node: HTMLElement, payload: { owner?: Play
   if (payload.owner === undefined || payload.line == null) return;
   const rect = node.getBoundingClientRect();
   if (rect.width === 0) return;
-  // 落点（目标槽 stackEnd：末卡外缘 / 槽内首卡位）——剑影与火环共用
+  // 落点（目标槽 stackEnd：末卡外缘 / 槽内首卡位）——剑影与火环共用。
+  // G2 修正 R3：走统一方向模型 ⇒ 热座是左右、远程页是下/上（剑影与火环都跟着换轴）。
   const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${payload.owner}"][data-line="${payload.line}"]`);
   const startX = rect.left + rect.width / 2;
   const startY = rect.top + rect.height / 2;
   let landX = startX;
   let landY = startY;
-  if (slot) {
-    const sr = slot.getBoundingClientRect();
-    landY = sr.top + sr.height / 2;
-    const cards = slot.querySelectorAll<HTMLElement>('.card');
-    const last = cards.length > 0 ? cards[cards.length - 1] : null;
-    landX = last
-      ? (() => {
-          const r = last.getBoundingClientRect();
-          return payload.owner === 0 ? r.left - 65 : r.right + 65;
-        })()
-      : payload.owner === 0
-        ? sr.right - 90
-        : sr.left + 90;
+  const land = slot ? fxStackEndPoint(slot, fxViewSeat(), payload.owner) : null;
+  if (land) {
+    landX = land.x;
+    landY = land.y;
   }
   // 起点金圣光
   const halo = document.createElement('div');
@@ -1781,21 +1734,18 @@ export function playDiversityDiscardExtra(node: HTMLElement): void {
 /** 多元主题色常量（光球/光晕/彩虹环共用的 5 色） */
 const DIVERSITY_COLORS = ['#ff5a6e', '#ffd24d', '#4ee0c0', '#5aa0ff', '#c07bff'];
 
-/** 手牌落点坐标（第 indexFromEnd 张即将落入手牌的卡；与 effects/index handEndPos 同款算法） */
+/** 手牌落点坐标（第 indexFromEnd 张即将落入手牌的卡；与 effects/index handEndPos 同款算法）。
+ *  ⚠️ G2 修正 R3：**不跟座位走** —— 手牌容器在远程页仍横向，基底与步进方向都由**容器自身**的
+ *  排列方向（`.hand.reversed`）决定（改动前按绝对玩家号判，远程对手会朝反向递进）。 */
 function handLandingPos(player: PlayerId, indexFromEnd: number): { x: number; y: number } | null {
   const hand = document.querySelectorAll<HTMLElement>('.hand')[player];
   if (!hand) return null;
-  const rect = hand.getBoundingClientRect();
-  if (rect.width === 0) return null;
-  const y = rect.top + rect.height / 2;
-  const cards = hand.querySelectorAll<HTMLElement>('.card:not(.reveal-ghost)');
-  const last = cards.length > 0 ? cards[cards.length - 1] : null;
-  const baseX = last
-    ? (player === 0 ? last.getBoundingClientRect().right + 37 : last.getBoundingClientRect().left - 37)
-    : (player === 0 ? rect.left + 128 : rect.right - 128);
-  // P1 手牌向右排布、P2 向左（row-reverse）→ 后续卡沿排列方向递进 102px（hand 卡距）
-  const step = player === 0 ? 102 : -102;
-  return { x: baseX + step * indexFromEnd, y };
+  if (hand.getBoundingClientRect().width === 0) return null;
+  // 基底：末卡外缘外侧 37px；空手牌退化为容器边缘内侧 128px（沿用改动前那个偏移量）。
+  const base = fxHandEndPoint(hand, 37, 128);
+  // 后续卡沿**排列方向**递进 102px（hand 卡距）：正排（左→右）递增、`row-reverse` 递减。
+  const step = handOuterFor(hand) === 'start' ? -102 : 102;
+  return { x: base.x + step * indexFromEnd, y: base.y };
 }
 
 /** 彩光尘（多元通用）：在矩形内随机点炸开 count 颗彩色光点 */

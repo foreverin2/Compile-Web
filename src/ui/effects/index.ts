@@ -7,6 +7,9 @@ import { gen3FulcrumSwapFx, gen3ProtocolSwapFx } from '../fx-gen3-swap';
 import { gen3DiscardFx, gen3DeleteFx, gen3FlipFx, gen3ShiftFx, gen3DrawFx, gen3FaceDownFx, gen3CompiledFx, gen3DeckDiscardFx, gen3ReturnFx, gen3PlayFx, gen3SkipFx, gen3TriggerFx, gen3LandFx, type Gen3CardFxApi, type Gen3CardPayload, type Gen3DrawPayload, type Gen3CompiledPayload, type Gen3DeckDiscardPayload } from '../fx-gen3';
 import { buildTornadoFx } from '../fx-tornado';
 import { fxOrientOf, orientOf, orientToCwCcw, orientToFxRot, stripOrientClasses, type CardOrient } from '../fx-orient';
+// G2 修正 R3：**方向模型**（热座 = 按绝对玩家左右；远程页 = 按座位上下）。`fxViewSeat()` 在热座页恒为
+// `null` ⇒ 下面两个落点助手走**逐字搬运**的原左右分支（"热座零变化"是构造性的，见 fx-seat.ts 头注）。
+import { fxHandEndPoint, fxStackEndPoint, fxViewSeat } from '../fx-seat';
 // 浮层卡的「未旋转布局盒 + 中心旋转」几何单一出处（G2 Task 1；R2 起 buildFxCardAt 也用它 —— 避免
 // 本文件再手写一份"宽 = rect 高"的交换算式，两份一旦漂移就是"朝向对但尺寸错"的假正确）。
 import { cloneBoxFrom } from '../fx/clone-orient';
@@ -230,31 +233,25 @@ function buildFxCardAt(
   return card;
 }
 
-/** 目标手牌末尾位置（新卡落点；与抽牌幽灵同一套扇形步进算法） */
-function handEndPos(hand: HTMLElement | undefined, owner: PlayerId): { x: number; y: number } {
-  const rect = hand ? hand.getBoundingClientRect() : { top: 0, height: 0, left: 0, right: 0 };
-  const y = rect.top + rect.height / 2;
-  const cards = hand?.querySelectorAll<HTMLElement>('.card:not(.reveal-ghost)');
-  const last = cards && cards.length > 0 ? cards[cards.length - 1] : null;
-  if (last) {
-    const r = last.getBoundingClientRect();
-    return { x: owner === 0 ? r.right + 37 : r.left - 37, y };
-  }
-  return { x: owner === 0 ? rect.left + 28 + 65 : rect.right - 28 - 65, y };
+/**
+ * 目标手牌末尾位置（新卡落点；与抽牌幽灵同一套扇形步进算法）。
+ *
+ * ⚠️ **G2 修正 R3：这一处*不*跟座位走** —— 规格 §1 只要求"手牌区在页面底部水平中置"，
+ * 手牌容器**仍是横向**的（远程页给两个座位都传 `reversed: false`：双方都左起、向右排）。
+ * 所以"末尾在哪一侧"由**容器自己的排列方向**（`.hand.reversed`）决定，与"我是 P0 还是 P1"无关。
+ * 改动前它按绝对玩家号判（`owner === 0 ? 右 : 左`），那在远程页会让**对手**的落点跑到手牌左端
+ * （对手手牌也是 `reversed: false`）。判据换成容器类名后，热座四个组合（P0/P1 × 自己/对手）也对。
+ */
+function handEndPos(hand: HTMLElement | undefined): { x: number; y: number } {
+  return fxHandEndPoint(hand);
 }
 
-/** 目标链路链路末尾位置（偏转落地；P1 向左生长 → 末卡左缘外侧，P2 反向） */
+/** 目标链路链路末尾位置（偏转落地）。G2 修正 R3：热座按绝对玩家左右、远程页按座位上下
+ *  —— 两种模型都在 `fx-seat.ts` 的 `fxStackEndPoint` 里，本函数只是"取当前座位"的薄包装。
+ *  ⚠️ `owner` **必须继续传**：热座下 `fxViewSeat()` 恒 `null`，方向就靠这个绝对玩家号定
+ *  （改动前 `owner === 0` ⇒ 左、否则 ⇒ 右，两个 owner 在热座页都被用到）。 */
 function stackEndPos(slot: HTMLElement | null, owner: PlayerId): { x: number; y: number } | null {
-  if (!slot) return null;
-  const slotRect = slot.getBoundingClientRect();
-  const y = slotRect.top + slotRect.height / 2;
-  const cards = slot.querySelectorAll<HTMLElement>('.card');
-  const last = cards.length > 0 ? cards[cards.length - 1] : null;
-  if (last) {
-    const r = last.getBoundingClientRect();
-    return { x: owner === 0 ? r.left - 65 : r.right + 65, y };
-  }
-  return { x: owner === 0 ? slotRect.right - 90 : slotRect.left + 90, y };
+  return fxStackEndPoint(slot, fxViewSeat(), owner);
 }
 
 /** 牌库区位置：取该玩家 .deck[data-player="N"] 的 rect（供牌堆顶打出特效用——Task 4）；
@@ -911,7 +908,7 @@ function playReturn(node: HTMLElement, payload: FxCardPayload): void {
   const clone = buildFxCard(node, payload, BASE_Z);
   if (!clone) return;
   const hand = document.querySelectorAll<HTMLElement>('.hand')[payload.owner];
-  const target = handEndPos(hand, payload.owner);
+  const target = handEndPos(hand);
   const dx = target.x - (rect.left + rect.width / 2);
   const dy = target.y - (rect.top + rect.height / 2);
   clone.style.transition = `transform ${RETURN_MOVE_MS}ms cubic-bezier(0.2, 0.7, 0.3, 1), opacity ${RETURN_MOVE_MS}ms ease`;
@@ -1004,7 +1001,7 @@ function playWaterReturn(node: HTMLElement, payload: FxCardPayload): void {
   const cx = rect.left + rect.width / 2;
   const cy = rect.top + rect.height / 2;
   const hand = document.querySelectorAll<HTMLElement>('.hand')[payload.owner];
-  const target = handEndPos(hand, payload.owner);
+  const target = handEndPos(hand);
   const dx = target.x - cx;
   const dy = target.y - cy;
   // ① 回手前：大号扩散水环（放大 1.67×）+ 蓝色光晕框（卡框周围，与飞行同时开始）
@@ -1068,8 +1065,11 @@ function playShift(node: HTMLElement, payload: FxCardPayload): void {
   if (rect.width === 0 || rect.height === 0 || payload.owner === undefined || payload.line == null) return;
   const clone = buildFxCard(node, payload, BASE_Z);
   if (!clone) return;
-  const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${payload.owner}"][data-line="${payload.line}"]`);
-  const end = stackEndPos(slot, payload.owner);
+  // G2 修正 R3：查询仍按绝对玩家 + 线号（A 类钩子 `data-player`/`data-line`）；
+  // **`owner` 还是必须传** —— 热座下"末卡外侧"是左还是右由绝对玩家号定（见 stackEndPos 注释）。
+  const owner: PlayerId = payload.owner;
+  const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${owner}"][data-line="${payload.line}"]`);
+  const end = stackEndPos(slot, owner);
   if (!end) {
     window.setTimeout(() => clone.remove(), 50);
     return;
@@ -1202,8 +1202,9 @@ function playDeckPlay(payload: FxCardPayload, durationMs = MOVE_MS): void {
   const deck = document.querySelector<HTMLElement>(`.deck[data-player="${srcOwner}"]`);
   const from = deckPos(srcOwner);
   // 落点仍是接收方的目标线（owner = 接收方、line = 目标线）
-  const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${payload.owner}"][data-line="${payload.line}"]`);
-  const target = stackEndPos(slot, payload.owner);
+  const dstOwner: PlayerId = payload.owner;
+  const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${dstOwner}"][data-line="${payload.line}"]`);
+  const target = stackEndPos(slot, dstOwner);
   if (!deck || !from || !target) return;
   const clone = buildFxCard(deck, payload, BASE_Z);
   if (!clone) return;
@@ -1233,8 +1234,9 @@ function playHandPlay(payload: FxCardPayload, durationMs = MOVE_MS): void {
   if (!cardNode) return;
   const from = cardNode.getBoundingClientRect();
   if (from.width === 0 || from.height === 0) return;
-  const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${payload.owner}"][data-line="${payload.line}"]`);
-  const target = stackEndPos(slot, payload.owner);
+  const dstOwner: PlayerId = payload.owner;
+  const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${dstOwner}"][data-line="${payload.line}"]`);
+  const target = stackEndPos(slot, dstOwner);
   if (!target) return;
   const clone = buildFxCard(cardNode, payload, BASE_Z);
   if (!clone) return;
@@ -1381,12 +1383,11 @@ function playGravityDeckPlayExtra(payload: FxCardPayload): void {
     playDeckPlay(payload);
     return;
   }
-  // 捕获局部变量：闭包（定时器）内不做属性收窄，避免 TS 丢失 owner/line 的窄化
+  // G2 修正 R3：查询仍按绝对玩家 + 线号；`owner` 也必须传（热座的方向判据是绝对玩家号）。
   const owner: PlayerId = payload.owner;
-  const line: number = payload.line;
   const deck = document.querySelector<HTMLElement>(`.deck[data-player="${owner}"]`);
   const from = deckPos(owner);
-  const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${owner}"][data-line="${line}"]`);
+  const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${owner}"][data-line="${payload.line}"]`);
   const end = stackEndPos(slot, owner);
   if (!deck || !from || !end) {
     playDeckPlay(payload); // 牌库/目标缺失 → 退回基础牌堆顶打出（无附加特效）
@@ -1439,9 +1440,9 @@ function playGravityShiftExtra(node: HTMLElement, payload: FxCardPayload): void 
     playShift(node, payload);
     return;
   }
+  // G2 修正 R3：`stackEndPos` 的方向 —— 远程页由 `fxViewSeat()` 定座位方向，**热座由 `owner` 定左右**。
   const owner: PlayerId = payload.owner;
-  const line: number = payload.line;
-  const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${owner}"][data-line="${line}"]`);
+  const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${owner}"][data-line="${payload.line}"]`);
   const end = stackEndPos(slot, owner);
   if (!end) {
     playShift(node, payload);
@@ -1535,9 +1536,10 @@ function playSpeedExtra(
 function playSpeedShiftExtra(node: HTMLElement, payload: FxCardPayload): void {
   const rect = node.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0 || payload.owner === undefined || payload.line == null) return;
+  // G2 修正 R3：查询仍按绝对玩家 + 线号（A 类钩子 `data-player` / `data-line`）；
+  // **`owner` 必须传** —— 热座下"末卡外侧"在左还是右由绝对玩家号定。
   const owner: PlayerId = payload.owner;
-  const line: number = payload.line;
-  const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${owner}"][data-line="${line}"]`);
+  const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${owner}"][data-line="${payload.line}"]`);
   const end = stackEndPos(slot, owner);
   if (!end) return;
   const orient = fxOrientOf(node);
@@ -1607,7 +1609,7 @@ export function playSpeedDrawExtra(payload: DrawPayload): void {
   playSpeedExtra(
     { left: deck.left, top: deck.top, width: deck.width, height: deck.height },
     { x: deck.left + deck.width / 2, y: deck.top + deck.height / 2 },
-    handEndPos(hand, payload.player),
+    handEndPos(hand),
   );
 }
 
@@ -1677,7 +1679,7 @@ function playLoveDrawExtra(payload: DrawPayload): void {
   window.setTimeout(() => glow.remove(), LOVE_GLOW_MS + LOVE_FADE_MS + 60);
   // ③ 手牌末尾落点爱心：抽牌卡落地时刻（main.ts 首张 30ms 起飞 + 逐张 120ms 错开 + 250ms
   // 飞行）出现，闪烁 2s 后渐隐消失
-  const target = handEndPos(hand, payload.player);
+  const target = handEndPos(hand);
   window.setTimeout(() => {
     const settle = document.createElement('div');
     settle.className = 'fx-love-settle';
@@ -1712,7 +1714,7 @@ function playLoveGiveExtra(node: HTMLElement, payload: FxCardPayload): void {
     clone.classList.add('fx-love-fly');
     clone.appendChild(buildLoveHeart());
     const hand = document.querySelectorAll<HTMLElement>('.hand')[payload.to];
-    const target = handEndPos(hand, payload.to);
+    const target = handEndPos(hand);
     const dx = target.x - (rect.left + rect.width / 2);
     const dy = target.y - (rect.top + rect.height / 2);
     clone.style.transition = `transform ${MOVE_MS}ms cubic-bezier(0.2, 0.7, 0.3, 1), opacity ${MOVE_MS}ms ease`;
@@ -1771,8 +1773,8 @@ export function playRevealFly(
     done();
     return;
   }
-  const from = handEndPos(src, opts.source); // 起点：被揭示方手牌末尾（都以手牌末尾为起点）
-  const to = handEndPos(dst, opts.shownTo);
+  const from = handEndPos(src); // 起点：被揭示方手牌末尾（都以手牌末尾为起点）
+  const to = handEndPos(dst);
   const i = opts.index ?? 0;
   // 目标手牌生长方向：P1 向右、P2 向左（row-reverse），逐张延伸
   const endX = to.x + (opts.shownTo === 0 ? REVEAL_SPACING * i : -REVEAL_SPACING * i);

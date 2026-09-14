@@ -44,16 +44,27 @@
  *    **卡面**朝向读；协议用同名类会让 FX 把它误读成卡面朝向 —— 规格 §8.2 第 3 行）。
  *    这两个类名从本文件交给 `render.ts` 的**通用** `extraClass` 参数，**不是**写死在 `render.ts` 里
  *    （写死会让热座页的源码依赖远程页的类名，热座零变化就不再是构造性的）。
- * 3. **「能量槽在链路外侧端」的旧假设改了，但"按绝对玩家"的方向假设没改**：竖排后能量槽在
- *    **上/下**（对手在上、自己在下），由 CSS `order` 决定；而**链路生长方向**改由 `vGrow` 决定
- *    （自己 `.grow-down` / 对手 `.grow-up`，纯 CSS 语义）。**方向性 FX 的绝对玩家假设一行没动**
- *    —— effects/index.ts:191-193、fx-gen2.ts:779/878/957、gen3-control.ts:654 都仍按绝对玩家算，
- *    座位 → 上下由 R2/R3 的 `setFxViewSeat` 承接（**不在 R1 范围内**）。
- *    控制轨 slider 也仍按绝对玩家映射（4%/96%）。
+ * 3. **「能量槽在链路外侧端」的旧假设改了，方向模型也一并改成了"按座位"（G2 修正 R3）**：
+ *    竖排后能量槽在**上/下**（对手在上、自己在下，由 CSS `order` 决定）；链路生长方向由 `vGrow`
+ *    决定（自己 `.grow-down` / 对手 `.grow-up`，纯 CSS 语义）。
+ *    **FX 侧的方向判断**从"按绝对玩家左右"改成"按座位上下"：本页每次渲染调用一次
+ *    `setFxViewSeat(viewSeat)`（**幂等**；规格 §8.1：切换视角是开发/测试功能，不为它造任何机制），
+ *    于是 `effects/index.ts` 的 `stackEndPos`、`fx-gen2.ts` 的 `iceStackEnd`/`smokeStackEnd`/
+ *    `playFearShiftExtra`/`playCourageShiftExtra`、`gen3-util.ts` 的覆盖条带、`fx-seat.ts` 的
+ *    一切方向判断都走**竖向**分支（自己向下 / 对手向上）。
+ *    热座页**从不**调用 `setFxViewSeat` ⇒ 模块态恒为 `null` ⇒ 那些地方走**逐字未改**的左右分支。
+ *    **控制轨也改成了竖向**（G2 修正 R3 第二批 · 用户裁决："自己端在下、对手端在上"）：
+ *    轴向由 `renderControlModule(s, { axis: 'y' })` 给（缺省 `'x'` 逐字保留热座语义）、
+ *    持有者的**绝对玩家号**由本页换算（`netControlHolder`）—— A 类钩子的产出方拼写一字未改，
+ *    竖向布局在 `styles-net.css` 第 9 节；`gen3-control.ts` 的落点也按座位选轴（`fxTrackEndPos`）。
+ * 3b. **手牌方向不跟座位走**：规格 §1 只要求"手牌区在页面底部水平中置"，手牌容器仍是**横向**的
+ *    （本页给两个座位都传 `reversed: false`），所以"手牌末尾在哪一侧"由 `.hand` 自身的排列方向
+ *    决定，与"我是 P0 还是 P1"无关（见 `fx-seat.ts` 的 `fxHandEndPoint`）。
  * 4. **within-slot 覆盖方向在**竖排后**从"左右"变成"上下"**（`.stack .card + .card` 的负 margin
- *    在本页由 `styles-net.css` 覆盖为 `margin-top`）—— 这是 R1 的**有意变更**，
- *    `gen3-util.ts:51/66` 的「覆盖者在右」由 R3 改成上下语义。**本页仍不碰覆盖几何**，
- *    它仍全部由 `renderStackSlot` + CSS 决定；R1 只负责让竖排的"最新在外侧"成立（`vGrow`）。
+ *    在本页由 `styles-net.css` 覆盖为 `margin-top`）。G2 修正 R3 已把 `gen3-util.ts` 的覆盖几何
+ *    改成**按座位**：热座仍走"覆盖者在**右**"（原逻辑一行未改），远程页按**覆盖卡自己的
+ *    `data-fx-rot`** 判"覆盖者在**上**（对手）/ **下**（自己）"（`coveredOuterOf` /
+ *    `vVisibleStripRect` / `vClipInsetPct` / `vClipInsetCss`）。
  *    ⚠️ 仍然成立的一条：**对手那一列不得整块 `rotate(180deg)`** —— 列级 180° 会把该列**水平镜像**
  *    （屏幕左右翻转）且与卡自身的 `.rot-180` 叠加成 0°（卡其实正立）。
  *    所以对手侧只由**卡/协议自身**的 `.rot-180` / `.net-rot-cw` 承担（styles-net.css 第 3 节）。
@@ -129,6 +140,9 @@ import { downloadLog } from './diag';
 // `startClarityDeckEye` 查 `.deck[data-player="N"]`、`startLuckDiceFx` 查源卡的 `[data-uid]` ——
 // 远程页两处节点都在（牌库在信息条内、源卡在链路槽或手牌里），所以可以直接复用，不需要改 export。
 import { startClarityDeckEye, startLuckDiceFx } from './fx-gen2';
+// G2 修正 R3：**方向模型**的视角座位。本页是它**唯一**的调用点（幂等，每次渲染设一次）——
+// 规格 §8.1：切换视角是开发者/测试功能，不为"运行时反复切换"造任何机制（无过渡、无迁移、无双向同步）。
+import { applyFxViewSeat, fxSeatEndToPlayer, fxViewSeat } from './fx-seat';
 import {
   el,
   renderStackSlot,
@@ -342,7 +356,7 @@ export const NET_PAGE_HOOKS: readonly NetPageHook[] = [
  * 必须报 ✗ 并说出 `数量 … / 期望 …`）。它**不是**公开 API 的一部分 —— 真实入口只有
  * `renderNetBoard` 的 `opts.verifyHooks`。
  */
-export function verifyPageHooks(scope: HTMLElement): string {
+export function verifyPageHooks(scope: HTMLElement, appliedSeat: 0 | 1 | null = null): string {
   const fatal: string[] = [];
   const soft: string[] = [];
   for (const h of NET_PAGE_HOOKS) {
@@ -450,10 +464,55 @@ export function verifyPageHooks(scope: HTMLElement): string {
     fatal.push(`约束 8 的特效朝向标记自查抛异常（${String(err)}）`);
   }
 
+  // ── 断言 4（G2 修正 R3 · 约束 9）：**方向性**在两个座位下都成立（源码守卫证不了的那一半）──
+  // 为什么必须在运行时查：R3 把方向模型从"按绝对玩家左右"改成"按座位上下"，而**唯一**的座位来源
+  // 是 `renderNetBoard` 里那一次 `applyFxViewSeat(opts.viewSeat)`。源码文本守卫能钉住"调用写了"，
+  // 钉不住"运行期真的写成了那个值"——删掉调用 / 改成 `setFxViewSeat(null)` / 传错参数，
+  // 页面会退回热座语义（远程页的落点与覆盖条带全按左右算）而不报任何错。
+  //
+  // ⚠️ **能力边界（不许读成"几何已验证"）**：本函数没有浏览器布局引擎，量不到
+  // `getBoundingClientRect()`，所以这里**只**做"标记 / 类名层面的存在性 + 逐卡朝向"：
+  //   ① 座位**真的进了模块态**（`fxViewSeat()` 必须等于渲染期写进去的 `appliedSeat`）；
+  //   ② 两侧每一张场上卡各自带 `[data-fx-rot]`，且取值按侧（自己 `ccw` / 对手 `cw`）
+  //      —— 这正是覆盖方向（`gen3-util.ts` 的 `coveredOuterOf`）与落点轴（`fx-seat.ts` 的
+  //      `fxOuterFor`）的**共同输入**：标记在、值对，方向判据的输入就是对的；
+  //   ③ 对手侧每张卡/协议各自带 `.rot-180`、自己侧一个朝向类都不带（硬约束 2 的复述）。
+  // 它**证明不了**"卡真的向下/向上排开""覆盖条带真的在上/下"—— 那只能人眼看（见报告 §8）。
+  try {
+    if (fxViewSeat() !== appliedSeat) {
+      fatal.push(`约束 9：FX 视角座位没写进模块态 —— renderNetBoard 渲染了 seat=${String(appliedSeat)}，`
+        + `但 fxViewSeat() 读到 ${String(fxViewSeat())}（方向判断会退回热座的左右语义）`);
+    }
+    for (const [side, want] of [['self', 'ccw'], ['foe', 'cw']] as const) {
+      const cards = scope.querySelectorAll<HTMLElement>(`.net-side-${side} .card`).length;
+      const marked = [...scope.querySelectorAll<HTMLElement>(`.net-side-${side} .card[data-fx-rot]`)];
+      const bad = marked.filter((c) => c.getAttribute('data-fx-rot') !== want).length;
+      if (marked.length !== cards || bad > 0) {
+        fatal.push(`约束 9：.net-side-${side} 的每张场上卡都必须带 data-fx-rot="${want}"`
+          + `（方向判据的输入），实际 ${marked.length}/${cards} 张带标记、其中 ${bad} 张取值不对`);
+      }
+    }
+    if (fxViewSeat() !== null) {
+      // 远程页（座位已设）：座位类必须落在 wrap 上，且**与 FX 座位同值** —— `.net-view-N` 是
+      // CSS 侧"哪一半在上面"的锚点，`data-view-seat` 是同一件事的机读形式。两者与 FX 座位不一致
+      // ⇒ "布局按 A 座位、方向按 B 座位"这种静默错配（最危险的形态：页面看着正常、特效全反）。
+      const viewBoards = [...scope.querySelectorAll<HTMLElement>('.net-board[class*="net-view-"]')];
+      const handsSeat = [...scope.querySelectorAll<HTMLElement>('.net-hands')].map((h) => h.dataset.viewSeat);
+      const want = String(fxViewSeat());
+      if (viewBoards.length !== 1 || !viewBoards[0].classList.contains(`net-view-${want}`)
+        || handsSeat.length !== 2 || handsSeat.some((v) => v !== want)) {
+        fatal.push(`约束 9：座位类/CSS 锚点与 FX 座位不一致（.net-board.net-view-* 命中 ${viewBoards.length} 个，`
+          + `.net-hands 的 data-view-seat=${handsSeat.join(',') || '无'}，FX 座位=${want}）`);
+      }
+    }
+  } catch (err) {
+    fatal.push(`约束 9 的方向性自查抛异常（${String(err)}）`);
+  }
+
   if (soft.length > 0) console.info('[render-net] 状态相关钩子当前为空（合法局面）：\n' + soft.join('\n'));
   if (fatal.length === 0) {
     return soft.length === 0
-      ? '自查 ✓ A 类钩子齐 / 手牌顺序 [P0,P1] / 对手卡与协议 180° / 特效朝向标记齐'
+      ? '自查 ✓ A 类钩子齐 / 手牌顺序 [P0,P1] / 对手卡与协议 180° / 特效朝向标记齐 / 方向座位一致'
       : `自查 ✓（${soft.length} 条状态相关钩子当前为空）`;
   }
   console.warn('[render-net] 运行时自查发现失败项（源码守卫之外的运行时证据）：\n' + fatal.join('\n'));
@@ -511,6 +570,26 @@ function isTurn(s: GameState, player: PlayerId): boolean {
 /** 连接状态占位（真实联机由 G5 提供；本阶段恒为「本地预览」）。 */
 function renderConnectionBadge(): HTMLElement {
   return el('span', 'net-conn net-conn-local', '● 本地预览（未联机）');
+}
+
+/**
+ * 控制轨（G2 修正 R3 · 用户裁决：**改成竖向，自己端在下、对手端在上**）。
+ *
+ * 三件事分开做，因为它们**不是同一回事**：
+ *  1. **轴向** = 组件自己的属性 ⇒ 交给共享助手 `renderControlModule(s, { axis: 'y' })`
+ *     （缺省 `'x'` **逐字保留**热座语义）；竖向的视觉规则写在 `styles-net.css`（`styles.css` 一行不改）。
+ *  2. **端归属** = **页面的座位**（自己端在下 / 对手端在上）⇒ 在**本页**换算成绝对玩家号再交给助手
+ *     （`holder` 参数）。`viewSeat = 1`（我是 P2）时 P1 成了对手、落到**上端** —— 与"我的链路
+ *     在下半部"的整套竖向语义一致。为什么换算放在本页而不是共享助手或 `fx-seat.ts`：
+ *     "谁在上/下"是**渲染器的视角**，把 `fxViewSeat()` 引进 `render.ts`（热座页源码）会破坏
+ *     "热座零变化是构造性的"；`fx-seat.ts` 也不该反向依赖 `GameState`（那里全是几何纯函数）。
+ *  3. **两端各贴哪一头**：`player: 0` 贴**上端** 4%、`player: 1` 贴**下端** 96%（竖向轴向的小端 = 上）。
+ *
+ * ⚠️ A 类钩子 `.control-module` / `.control-track` / `.control-slider-img` 的**产出方拼写一字未改**
+ * （仍由 `renderControlModule` 产出 —— 调用点在 `renderNetBoard` 里的 `grid.appendChild(…)`）。
+ */
+function netControlHolder(s: GameState, viewSeat: PlayerId): -1 | PlayerId {
+  return s.control === -1 ? -1 : fxSeatEndToPlayer(s.control, viewSeat);
 }
 
 /** 对手的牌库 / 弃牌堆**重新安放**到信息条内（远程页只有一个手牌区，不能再用 .hand-side 外侧列）。 */
@@ -1009,6 +1088,15 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
   root.textContent = '';
   const viewSeat = opts.viewSeat;
   const foe = (1 - viewSeat) as PlayerId;
+  // ── G2 修正 R3：把**当前视角座位**交给 FX 层（**唯一调用点**，幂等）──
+  // 必须在任何几何计算 / 任何 FX 播放之前设好：它决定 `stackEndPos` 的落点轴、`gen3-util` 的
+  // 覆盖条带方向、以及 `fx-seat.ts` 里全部"自己在下 / 对手在上"的判断。
+  // ⚠️ **热座页（`render.ts` 的 `renderApp`/`renderBoard`）从不调用它** ⇒ 那份模块态恒为 `null`
+  // ⇒ 所有方向判断走与改动前**逐字相同**的左右分支 ⇒ "热座零变化"是**构造性**的，不依赖
+  // "我记得把每一处都改对"。规格 §8.1：不为运行时反复切换造任何机制 —— 这里只"设一次"。
+  // `applyFxViewSeat` 把**写进去的值**交回来：`verifyPageHooks` 的断言 4 读它（见该函数注释 ——
+  // 它是一条**契约链**检查，不是几何检查）。
+  const seatApplied = applyFxViewSeat(opts.viewSeat);
   // 几何型 FX 延迟器（M-3）：与热座 renderBoard:4641 同形的队列。
   // renderChoiceUi 在构建期收集（透彻牌库眼睛 / 幸运宣告骰子），在 `root.appendChild(wrap)`
   // **之后**统一执行 —— 此前棋盘节点尚未入 DOM，`getBoundingClientRect()` 全 0，
@@ -1051,8 +1139,13 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
     grid.appendChild(renderLaneColumn(s, line, viewSeat, cb));
   }
 
-  // ── 控制轨（横向；按**绝对玩家**映射 —— 约束 3，`renderControlModule` 内部 4%/96%） ──
-  grid.appendChild(renderControlModule(s));
+  // ── 控制轨（**竖向**：自己端在下 / 对手端在上 —— G2 修正 R3 的用户裁决） ──
+  // 三个实参的含义见 `renderNetControl` 的注释（轴向 + 座位→绝对号的持有者换算）；
+  // 视觉规则在 styles-net.css 第 9 节（styles.css 一行未改）。
+  // ⚠️ 这里**直接**在挂载点调用共享助手（不套一层 `renderNetControlModule(...)` 包装）：
+  //    本文件的守卫判据是 `appendChild(<助手调用>` / `= <助手调用>` 的**文本形态**，套包装会让
+  //    "结果真的进了 DOM"这条证据从源码里消失（我第一版就是套了包装 → 守卫报"结果被丢掉"）。
+  grid.appendChild(renderControlModule(s, { axis: 'y', holder: netControlHolder(s, viewSeat) }));
 
   // ── 底部：两条手牌区（DOM 顺序恒定为绝对玩家顺序 [P0, P1]） ──
   const hands = buildHands(s, viewSeat, cb, operator);
@@ -1113,7 +1206,7 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
   if (opts.verifyHooks) {
     let note: string;
     try {
-      note = verifyPageHooks(wrap);
+      note = verifyPageHooks(wrap, seatApplied);
     } catch (err) {
       note = `自查 ✗ 自查本身抛异常：${String(err)}`;
       console.warn('[render-net] 运行时自查抛异常（已吞掉，不影响渲染）：', err);

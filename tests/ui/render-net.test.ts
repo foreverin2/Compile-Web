@@ -932,6 +932,30 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
   });
 
   /**
+   * R3-2（G2 修正 R3）：**方向座位**只在渲染时设一次，且**必须来自 `opts.viewSeat`**。
+   *
+   * 为什么单列一条（而 `tests/ui/fx-seat.test.ts` 已有一条）：那条守卫的是"设了一次、且早于挂载"，
+   * 这条钉的是**调用形态与参数来源**：`applyFxViewSeat(opts.viewSeat)`（写常量 = 切换视角失效）、
+   * 且 `render-net.ts` 里**不出现** `setFxViewSeat(` 直调（直调就拿不到"写进去的值"，
+   * 运行时断言 4 的契约链会失去判据）。
+   */
+  it('R3-2. 方向座位：applyFxViewSeat(opts.viewSeat) 恰好一次；不得直调 setFxViewSeat', () => {
+    const code = netCode();
+    expect((code.match(/applyFxViewSeat\(/g) ?? []).length,
+      'render-net.ts 必须**恰好**设一次方向座位（多了就是"每处都设"的散弹式写法）').toBe(1);
+    expect(code, '方向座位不是从 opts.viewSeat 取的（切换视角会失效）')
+      .toMatch(/applyFxViewSeat\(\s*opts\.viewSeat\s*\)/);
+    expect(code, 'render-net.ts 直调了 setFxViewSeat —— 拿不到写进去的值，运行时断言 4 失去判据')
+      .not.toMatch(/\bsetFxViewSeat\s*\(/);
+    // 它必须交回自查（断言 4 的契约链：渲染期写进去的值 == 模块态）
+    expect(code, 'verifyPageHooks 未收到渲染期写进去的座位')
+      .toMatch(/verifyPageHooks\(\s*wrap\s*,\s*seatApplied\s*\)/);
+    // 控制轨：仍由共享助手产出（A 类钩子拼写不变），且**本页**显式传竖向 + 座位换算后的持有者
+    expect(code, '控制轨未按竖向渲染（用户裁决"控制轨改成竖向，自己端在下、对手端在上"）')
+      .toMatch(/grid\.appendChild\(renderControlModule\(s,\s*\{\s*axis:\s*'y',\s*holder:\s*netControlHolder\(s,\s*viewSeat\)\s*\}\)\)/);
+  });
+
+  /**
    * F-2（复评 Important）：**计数盲区** —— 只查"存在"不查"个数"。
    *
    * 评审变异 R4：删掉 `band.appendChild(renderSideRow(s, foe, …))`（对手的 6 个 `.stack-slot`、

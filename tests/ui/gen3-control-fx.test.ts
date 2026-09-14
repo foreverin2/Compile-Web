@@ -145,7 +145,17 @@ describe('批次 D 守卫：控制权族 + 常驻层', () => {
   it('C1/C2 落点锚定轨道实测位置 + 仅色欲驱动时才牵链条（2026-09-13 用户清单 #1/#8）', () => {
     // #1：控制组件卡在 .control-track 上滑动 → 落点必须按轨道矩形算（不再用视口 22%/78% 猜）
     expect(controlTs, '缺少按 .control-track 实测位置计算落点').toContain("document.querySelector<HTMLElement>('.control-track')");
-    expect(controlTs).toContain('controlTrackSideX(');
+    // G2 修正 R3（用户裁决"控制轨改成竖向，自己端在下、对手端在上"）：端归属与坐标换算搬到了
+    // `fx-seat.ts` 的**纯函数** `fxTrackEndPos`（无 jsdom 可逐格断言，含"上下对调"的变异），
+    // 本文件只负责"取轨道实测矩形"。旧判据 `controlTrackSideX(` 已随改名消失。
+    expect(controlTs, '控制轨落点未走 fx-seat 的端归属纯函数').toContain('fxTrackEndPos(');
+    expect(controlTs, '轨道端点必须按座位选轴（热座 x / 远程页 y）').toContain('controlTrackAxis(');
+    const seatTs = read('ui/fx-seat.ts');
+    expect(seatTs, 'fx-seat 缺控制轨端归属的判据').toContain('export function fxTrackEndFor');
+    expect(seatTs, '控制轨端归属缺"热座 ⇒ 改动前的 4%/96%"这一支')
+      .toMatch(/seat === null\) return \{ pct: to === 0 \? 0\.04 : 0\.96, axis: 'x' \}/);
+    expect(seatTs, '控制轨端归属缺"自己在下（96%）、对手在上（4%）"的竖向支')
+      .toMatch(/return \{ pct: to === seat \? 0\.96 : 0\.04, axis: 'y' \}/);
     // #8：牵引链只在"色欲卡效果"造成的易主时播；否则走轻量提示（不牵链条）
     expect(controlTs).toContain('lustDrivenControl(');
     expect(controlTs).toMatch(/p\.reason === 'effect' && \(p\.sourceDefId \?\? ''\)\.startsWith\('lust-'\)/);

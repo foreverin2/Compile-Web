@@ -351,3 +351,80 @@
    唯一真凭据 —— 用户一进预览页就直接看到它过没过，不必开控制台。 */
 .net-verify-note { flex: 1 0 100%; color: #7fd4ff; font-variant-numeric: tabular-nums; word-break: break-all; }
 .net-verify-note:empty { display: none; }
+
+/* ============================================================================
+ * 9. 控制轨：**竖向**（G2 修正 R3 · 用户裁决"改成竖向，自己端在下、对手端在上"）
+ *
+ * 两件事分开（见 render-net.ts 的 `renderNetControlModule`）：
+ *  - **轴向**：本节的 CSS 把 `styles.css` 的横向轨道（`height: 84px` + 标签 `left/right` +
+ *    滑块左右滑）改成纵向；`styles.css` **一行不改**（它仍是热座页的横向轨道）。
+ *  - **端归属**：`player 0` 给自己写在**上端** 4%、`player 1` 给对手写在**下端** 96%
+ *    （由 `renderControlModule` 的 `axis: 'y'` 分支产出 `top: X%`；"自己端在下"的换算在
+ *    `renderNetControlModule` 里完成）。
+ *
+ * ⚠️ `styles.css` 给 `.control-slider-img` 写了 `top: 50%`，而竖向的滑块位置是**内联 `top`**
+ *    （4%/50%/96%）—— CSS 规则里的 `top: 50%` 不会覆盖内联样式，所以无需 `!important`；
+ *    但横向遗留的 `transform: translate(-50%, -50%)` 必须**改写成 `translate(-50%, -100%)`**：
+ *    否则滑块会以"自身中心"对齐到 4%/96% 的坐标上，一端会**伸出轨道**（4% 处上半个滑块在轨道外）。
+ *    改写成"底边对齐该坐标"后，4% 与 96% 两端都落在轨道内（滑块高 70px、轨道高 ≈158px）。
+ * ========================================================================== */
+
+.net-board .control-module { width: 160px; margin: 0 auto; }
+.net-board .control-track {
+  width: 100%;
+  height: 158px;                    /* 竖向行程（热座是 width:100% + height:84px，方向对调） */
+  position: relative;
+}
+/* 标签：横排的 left/right 在竖排下会贴在轨道**左侧**的上下角，必须换成 上/下 居中 */
+.net-board .control-track-label.left,
+.net-board .control-track-label.right {
+  left: 50%;
+  right: auto;
+  top: auto;
+  transform: translateX(-50%);
+}
+.net-board .control-track-label.top { top: 10px; }
+.net-board .control-track-label.bottom { bottom: 10px; }
+/* 中心刻度：横排是"竖着的一条线"（left:50% + width:2px），竖排要转成"横着的一条线" */
+.net-board .control-center-tick {
+  left: 0;
+  right: 0;
+  top: 50%;
+  bottom: auto;
+  width: auto;
+  height: 2px;
+  transform: translateY(-50%);
+}
+/* 滑块：位置由内联 `top` 给（renderControlModule 的竖向分支），过渡属性也要从 left 换成 top */
+.net-board .control-slider-img {
+  left: 50%;
+  top: 50%;                         /* 内联 top 覆盖它（4%/50%/96%） */
+  transform: translate(-50%, -100%);
+  transition: top 0.5s ease;
+}
+
+/* ── 控制权易主 FX 的竖向变体（styles-gen3-sync.css 那几条是横向的，这里只做**方向**覆盖）──
+   为什么是覆盖而不是改原规则：原规则服务热座页（横向），改它就会破坏热座观感。
+   ⚠️ 只覆盖方向相关的部分（translate 的轴），颜色/尺寸/时长一律继承原规则。 */
+.net-board .g3ctrl-link { animation-name: g3-ctrl-link-fly-y; }
+.net-board .g3ctrl-link.break { animation-name: g3-ctrl-link-break-y; }
+@keyframes g3-ctrl-link-fly-y {
+  0% { transform: translate(0, 0) scale(0.4) rotate(0deg); opacity: 0; }
+  18% { opacity: 1; }
+  100% { transform: translate(0, var(--ty, 0px)) scale(1) rotate(220deg); opacity: 0; }
+}
+@keyframes g3-ctrl-link-break-y {
+  0% { transform: scale(1); opacity: 1; }
+  40% { transform: scale(1.3) rotate(-14deg); opacity: 1; }
+  100% { transform: translate(16px, var(--ty, 0px)) scale(0.7) rotate(38deg); opacity: 0; }
+}
+/* 轻量版文字标：横排是"落在落点上方"（translate(-50%,-100%)），竖排下改到落点**左侧** */
+.net-board .g3ctrl-mini-chip {
+  transform: translate(-115%, -50%);
+  animation-name: g3-ctrl-mini-chip-y;
+}
+@keyframes g3-ctrl-mini-chip-y {
+  0% { opacity: 0; transform: translate(-108%, -50%); }
+  22% { opacity: 1; }
+  100% { opacity: 0; transform: translate(-128%, -50%); }
+}
