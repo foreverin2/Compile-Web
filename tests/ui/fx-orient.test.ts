@@ -437,18 +437,36 @@ describe('G2 · 朝向判定单一出处（源码守卫）', () => {
     //    （把 :227 改成 'rot-clockwise' —— 热座页所有场上卡立刻直立 —— 仍然全绿）。
     //
     // 两个产出点（BASE 实际写法，行号仅作参考）：
-    //    - render.ts:227 `renderStackSlot` 内，场上卡按 owner 挂 ±90°：
+    //    - renderStackSlot 内，场上卡按 owner 挂 ±90°：
     //      `node.classList.add(card.owner === 0 ? 'rot-cw' : 'rot-ccw');`
-    //    - render.ts:116 `renderProtocol` 内，P2 协议图 180°（`.protocol-img`）：
+    //    - renderProtocol 内，P2 协议图 180°（`.protocol-img`）：
     //      `img.className = 'protocol-img' + (player === 1 ? ' rot-180' : '');`
     // 条件分支与类名一起钉住：只钉类名的话，把 `card.owner === 0` 反过来（P1/P2 朝向互换）
     // 仍然全绿 —— 那同样会让热座页所有场上卡朝向错。
+    //
+    // ⚠️ G2 Task 3 起，这两处的形状都变了（朝向成为**带默认值**的入参，远程页传 0°/180°）。
+    //    所以这里钉的是「**缺省分支**仍然复现热座语义」，而不是某一种书写形态：
+    //      - renderStackSlot：缺省值 = owner 映射（`card.owner === 0 ? 90 : -90`），
+    //        且三个朝向类**都仍在产出**（90/-90 两个缺省分支 + 180 分支）；
+    //      - renderProtocol：缺省值 = `player === 1 ? 180 : 0`，且 `rot-180` 只在 180 时追加。
+    //    仍然钉住"条件与类名的配对"，只是把"三元表达式"放宽成"缺省值表达式 + 分支"——
+    //    放宽的理由与 2F2 放开 `--fx-rot` 写入值形态同一条原则：**拒绝正确重构的守卫会被绕过**。
+    //    保护由下半段（三个类名逐个点名）补回：删掉任一分支都会指名道姓地失败。
     const missing: string[] = [];
-    if (!/classList\.add\(card\.owner === 0 \? 'rot-cw' : 'rot-ccw'\)/.test(src)) {
-      missing.push("场上卡产出表达式（renderStackSlot 的 `classList.add(card.owner === 0 ? 'rot-cw' : 'rot-ccw')`）");
+    if (!/opts\?\.orient\s*\?\?\s*\(card\.owner === 0 \? 90 : -90\)/.test(src)) {
+      missing.push('场上卡朝向的缺省值表达式（renderStackSlot 的 `opts?.orient ?? (card.owner === 0 ? 90 : -90)`）');
     }
-    if (!/'protocol-img' \+ \(player === 1 \? ' rot-180' : ''\)/.test(src)) {
-      missing.push("协议图 180° 产出表达式（renderProtocol 的 `'protocol-img' + (player === 1 ? ' rot-180' : '')`）");
+    // 分支与**条件**一起钉：只钉 `classList.add('rot-cw')` 的话，把分支条件写成
+    // `if (orient === -90) …('rot-cw')`（P1/P2 朝向互换）仍然全绿 —— 那同样会让热座页所有场上卡朝向错。
+    if (!/orient === 90\)\s*node\.classList\.add\('rot-cw'\)/.test(src)
+      || !/orient === -90\)\s*node\.classList\.add\('rot-ccw'\)/.test(src)) {
+      missing.push("场上卡 ±90° 的分支条件与类名配对（`orient === 90` → 'rot-cw'、`orient === -90` → 'rot-ccw'）");
+    }
+    if (!/player === 1 \? 180 : 0/.test(src)) {
+      missing.push('协议图朝向的缺省值表达式（renderProtocol 的 `player === 1 ? 180 : 0`）');
+    }
+    if (!/orient === 180 \? ' rot-180' : ''/.test(src)) {
+      missing.push("协议图 180° 产出表达式（`orient === 180 ? ' rot-180' : ''`）");
     }
     expect(missing, `render.ts 丢失/改变了朝向产出表达式（产出点是热座观感的唯一来源，不得顺手删）：\n${missing.join('\n')}`).toEqual([]);
     // 两个产出表达式已覆盖全部三个类名（rot-cw/rot-ccw 在第一条，rot-180 在第二条）；

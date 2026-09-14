@@ -1,0 +1,237 @@
+/* ============================================================================
+ * 远程对战页布局（G2 Task 3）—— **本文件只服务 src/ui/render-net.ts**
+ *
+ * 设计：docs/2026-09-13-联机与多端-设计稿.md §6（甲读法：3 条横带、带内上=对手/下=自己、
+ * 自己卡 0°/对手卡 180°）。**`styles.css` 一行都不改**：本文件通过覆盖/限定选择器
+ * （`.net-*` 前缀 + `.stack .card` 后代）改变布局，热座页的规则原样保留、继续生效。
+ *
+ * 引入点：`src/main.ts` 顶部（紧随 styles.css / styles-gen3*.css 之后）。
+ *
+ * 与热座页的三处关键差异，都在这里落地：
+ *  1. 链路槽的卡是**竖摆**（热座页用 ±90° 横置）→ `.stack` 的 `--card-h` 要重算，
+ *     且 `.stack .card + .card` 的重叠量公式要按「未旋转」重推；
+ *  2. 手牌区是**一个条带里上下两行**（热座页是左右两列、各自外侧挂牌库/弃牌）；
+ *  3. **两条 `.hand` 的 DOM 顺序恒定 [P0, P1]**，「谁在上带」由 CSS `order` 决定
+ *     —— 这不是装饰：FX 用 `querySelectorAll('.hand')[player]` 按下标读手牌（见 render-net.ts 头注）。
+ * ========================================================================== */
+
+/* ============================================================================
+ * 1. 页容器
+ * ========================================================================== */
+
+.net-board { position: relative; }
+.net-grid { gap: 14px; }
+
+/* ============================================================================
+ * 2. 信息条（顶/底）：昵称 · 手牌 ×n · 牌库 · 弃牌 · 连接状态
+ *
+ * 牌库（.deck）与弃牌堆（.trash-pile）在 styles.css 里是绝对定位、挂在 .hand-side 外侧
+ * 的屏幕边缘列（styles.css:761-763 / 824-835）。远程页只有一个手牌区，没有"外侧列"，
+ * 所以它们被重新安放到信息条内的 .net-piles 里 —— 用**限定作用域**的规则覆盖绝对定位。
+ * ⚠️ 覆盖必须限定在 `.net-piles` 内：`.piles` 也被热座页复用，裸写 `.deck` 会改到热座页。
+ * ========================================================================== */
+
+.net-strip { display: block; }
+.net-piles { display: flex; align-items: center; gap: 14px; margin: 4px 0; }
+.net-piles .deck {
+  position: relative;
+  top: auto;
+  left: auto;
+  right: auto;
+  transform: none;
+  width: 60px;
+  height: 86px;
+  margin: 0;              /* styles.css:761 的 .deck 无 margin，这里显式钉住，避免 UA 默认值 */
+  flex: 0 0 auto;
+}
+.net-piles .trash-pile {
+  position: relative;
+  left: auto;
+  right: auto;
+  top: auto;
+  transform: none;
+  width: 60px;
+  height: 86px;
+  flex: 0 0 auto;
+}
+/* 缩小后顶部「弃牌堆」小标签会压住计数徽标：改为贴底的小字 */
+.net-piles .trash-label { font-size: 9px; }
+
+.net-conn { font-size: 12px; color: #7fd4ff; align-self: flex-start; }
+.net-strip-foe .net-conn { margin-top: 2px; }
+
+/* ============================================================================
+ * 3. 一条线 = 一整条横带（上 = 对手 / 中线 / 下 = 自己）
+ * ========================================================================== */
+
+.net-lane-band {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid #333a4d;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.18);
+}
+/* 对手侧（上带）：整块翻转 180°，使对手看到的卡正立（隔桌对坐） */
+.net-lane-band .net-side-foe { transform: rotate(180deg); }
+
+.net-side {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: stretch;
+}
+.net-side-self > .stack-slot { order: 1; }
+.net-side-self > .protocol-cell { order: 2; }
+.net-side-foe > .stack-slot { order: 1; }
+.net-side-foe > .protocol-cell { order: 2; }
+
+/* 选中线路/线槽高亮（选择模式 select-line）：整条带可点 */
+.net-lane-band.choice-line { cursor: pointer; border-color: #4ff0ff; box-shadow: 0 0 12px rgba(79, 240, 255, 0.5); }
+
+/* ============================================================================
+ * 4. 链路槽：**竖摆**卡（0°/180°），不是热座页的 ±90° 横置
+ *
+ * styles.css 的 `.stack { --card-h: 175px; --card-w: calc((var(--card-h) - 2px) * 0.71429 + 2px) }`
+ * 与 `.stack .card + .card { margin-left: calc(0.462 * var(--card-h) - var(--card-w)) }` 是**为旋转
+ * 90° 的视觉宽度**推导的（卡高 175px 就是横置后的视觉宽）。远程页的卡不旋转，所以：
+ *  - `--card-h` 改为正常卡高（130 内容 + 8 = 138），`--card-w` 随之 = 130 + 2 = 132；
+ *  - 重叠量重推为「露出 46.2% × 视觉宽(130)  − 布局宽(132)」≈ −71.9px（见下）。
+ * 这样 0° 与 180° 的**布局盒与视觉盒一致**，露出条带就是真正的 46.2%，与热座页的可见语义对齐。
+ * ========================================================================== */
+
+.net-lane-band .stack { --card-h: 182px; --card-w: calc((var(--card-h) - 2px) * 0.71429 + 2px); }
+.net-lane-band .stack .card { padding: 3px; box-sizing: border-box; }
+.net-lane-band .stack .card .card-face-img,
+.net-lane-band .stack .card .cardback-img { height: auto; width: 100%; }
+.net-lane-band .stack .card .card-back { height: auto; aspect-ratio: 5 / 7; }
+/* 重叠：未旋转时"视觉宽" = 布局宽 130px，故 露出 = 0.462 × 130 ≈ 60.1px → margin = 60.1 − 130 ≈ −69.9px
+   （热座页的对应值见 styles.css:438-441，那里算的是 ±90° 旋转后的视觉宽 --card-h）
+
+   ⚠️ 180° 的卡**照用**这条负 margin，不要为它单独清零：
+   `.stack .card + .card` 的负 margin-left 让后一张卡**从左侧**盖住前一张。对手侧整块做过
+   180°（见第 3 节），"链路的生长方向"随之镜像 —— 清零负 margin 会让对手的链路**不再重叠**
+   （露出 100% 宽，一长串卡把带撑爆），而不是"更正确"。 */
+.net-lane-band .stack .card + .card { margin-left: calc(0.462 * 130px - var(--card-w)); }
+
+/* 悬停：styles.css 只为 .rot-cw/.rot-ccw 写了悬停组合（把旋转写进 transform）。
+   远程页不产出 ±90°，故这里补 0°/180° 两种：0° 直接上浮，180° 必须**带着旋转**一起上浮，
+   否则 transform 覆盖会把卡的 180° 抹掉（看上去"对手的卡被鼠标一碰就立正了"）。 */
+.net-lane-band .stack .card:hover { transform: translateY(-18px) scale(1.1); z-index: 60 !important; }
+.net-lane-band .stack .card.rot-180:hover { transform: translateY(-18px) rotate(180deg) scale(1.1); }
+
+/* 链路槽的内边距补偿（styles.css:73-74 的 25px 是给 ±90° 旋转后左右各宽出 ~24.7px 留的）。
+   竖摆后这个补偿不再成立，改回对称内边距，避免协议被"看不见的宽度"推开。 */
+.net-lane-band .stack-slot.p1 { padding-right: 6px; }
+.net-lane-band .stack-slot.p2 { padding-left: 6px; }
+
+/* 中线：P1（左）/ 线号（中）/ P2（右）。P1/P2 的位置**按绝对玩家**，与方向性 FX 一致。 */
+.net-lane-mid { display: flex; align-items: center; justify-content: center; gap: 18px; font-size: 12px; color: #9fb0c8; }
+.net-lane-value { display: inline-flex; align-items: baseline; gap: 4px; }
+.net-lane-value-p2 { order: 3; }
+.net-lane-name { order: 2; color: #6f7f96; letter-spacing: 0.1em; }
+.net-lane-who { font-style: normal; color: #7f8ea3; }
+.net-lane-points { color: #00ffcc; font-size: 15px; }
+
+/* ============================================================================
+ * 5. 控制轨（横向；绝对玩家映射不变，styles.css 的 .control-* 规则继续生效）
+ * ========================================================================== */
+
+.net-grid > .control-module { width: 100%; }
+
+/* ============================================================================
+ * 6. 手牌区：一个条带里**上下两行**；DOM 顺序恒定 [P0, P1]，视觉归属由 order 决定
+ *
+ * ⚠️ 约束 7（本页最危险的一条）：FX 用 `querySelectorAll('.hand')[player]` **按下标**读手牌，
+ * 所以两条 .hand 的 DOM 顺序必须恒定是 [P0, P1]（render-net.ts 的 buildHands 保证）。
+ * 「谁显示在上带」用 `order` 实现：
+ *   viewSeat = 0 → 自己是 P0 → 对手 P1 在上（P1 的 order 小）
+ *   viewSeat = 1 → 自己是 P1 → 对手 P0 在上（P0 的 order 小）
+ * **不得**用 display:none 换位 —— 隐藏节点 getBoundingClientRect() 全 0，FX 落点会塌。
+ * ========================================================================== */
+
+.net-hands {
+  /* 覆盖 .hand-strip（styles.css:724 是 1fr auto 1fr 的**左右三列**）→ 单列上下两行 */
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+  min-height: 0;
+}
+.net-hands.net-view-0 > .net-hand-side[data-player="1"] { order: 1; }
+.net-hands.net-view-0 > .net-hand-side[data-player="0"] { order: 2; }
+.net-hands.net-view-1 > .net-hand-side[data-player="0"] { order: 1; }
+.net-hands.net-view-1 > .net-hand-side[data-player="1"] { order: 2; }
+
+.net-hand-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px;
+  border: 1px dashed #3a4257;
+  border-radius: 8px;
+}
+/* 自己那一行：与对方的视觉区分（回合中额外高亮由 .player-info.active 提供） */
+.net-hand-side-self { border-color: rgba(79, 240, 255, 0.45); background: rgba(79, 240, 255, 0.04); }
+/* 操作区在每条手牌行内（不是 body 级 fixed） */
+.net-action-bar { position: static; transform: none; left: auto; bottom: auto; }
+
+/* 两条手牌都左起（甲读法下"左右"与座位无关，默认 flex 行方向即可）；
+   对手手牌不可交互（内容本来就不可见，但这层保证 future 也不会被误点） */
+.net-hands .hand { align-items: flex-start; }
+.net-hands .hand:not(.self) { pointer-events: none; }
+
+/* 选择模式：styles.css:1780 的 `.hand-strip.choice-mode .card:not(.choice-target){pointer-events:none}`
+   其实对远程页也生效（本页的手牌条容器同时带 hand-strip 类）。这条镜像规则是**防御性**的：
+   它只依赖本页自己的 `.net-hands` 类，将来即使手牌条不再复用 `hand-strip`（或那条热座规则被改动），
+   远程页的"非候选卡不可点"也不会静默失效。 */
+.net-hands.choice-mode .card:not(.choice-target) { pointer-events: none; }
+
+/* ============================================================================
+ * 7. 信息遮蔽（设计稿 §6.4）：对手手牌只显示数量
+ *
+ * ⚠️ 这里**只隐藏卡面内容**，`.hand` 节点本身仍然可量测（必须！否则按索引取手牌会取到
+ * 错误矩形 / 取得 undefined）。占位块给出手牌区的"足印"，让手牌落点特效落在一个合理位置。
+ * ========================================================================== */
+
+.hand-count-only { justify-content: center; align-items: center; min-width: 130px; width: auto; }
+.hand-count-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 178.8px;   /* = 一张手牌整高，保证 (.hand) 矩形与"有牌时"同量级 */
+  padding: 0 18px;
+  border: 1px dashed #555;
+  border-radius: 6px;
+  color: #8b93a7;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+}
+
+/* ============================================================================
+ * 8. 预览工具条（**只在 NetViewOpts.onPreviewChange 存在时**才出现在 DOM 里）
+ *
+ * 固定在页面左下角，与 fixed 的底部操作台错开；真实联机不传 onPreviewChange → 这条不渲染。
+ * ========================================================================== */
+
+.net-preview-bar {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 900;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  max-width: 360px;
+  padding: 8px 10px;
+  border: 1px solid rgba(0, 255, 204, 0.45);
+  border-radius: 10px;
+  background: rgba(10, 14, 26, 0.92);
+  box-shadow: 0 0 18px rgba(0, 255, 204, 0.25);
+  font-size: 12px;
+}
+.net-preview-title { color: #00ffcc; font-weight: 700; letter-spacing: 0.08em; }
+.net-preview-btn { font-size: 12px; padding: 4px 8px; cursor: pointer; }
+.net-preview-note { flex: 1 0 100%; color: #9fb0c8; }

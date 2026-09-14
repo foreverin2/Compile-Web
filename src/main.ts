@@ -2,6 +2,9 @@ import './ui/styles.css';
 import './ui/styles-gen3.css'; // 3代（MN03/AX03）协议特效样式（批次 A：15 套已编译常驻特效）
 import './ui/styles-gen3-cards.css'; // 3代卡牌效果附加层样式（批次 B/C：四类动作 + 抽牌/反打/编译后）
 import './ui/styles-gen3-sync.css'; // 3代常驻层与控制权族样式（批次 D）
+// G2 Task 3：远程对战页布局（甲读法：3 横带 / 上对手下自己 / 自己 0°·对手 180°）。
+// 只服务 src/ui/render-net.ts；styles.css 一行未改，热座页规则原样生效。
+import './ui/styles-net.css';
 import { createGame, performDraftPick, performDraftUnpick, performDraftBan, randomPoolFromSeed, setSeedNonce } from './core/state/create';
 import { executeAction } from './core/game';
 import { getCompilableLines } from './core/rules/compile';

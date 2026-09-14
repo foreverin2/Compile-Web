@@ -22,6 +22,9 @@ import { clearGen3Persistent, syncGen3Persistent } from './gen3-control';
 import { syncFollowers } from './fx-follow';
 import { buildDove, buildLakeSword, spawnCourageSparks, startLuckDiceFx, startClarityDeckEye } from './fx-gen2';
 import { fitRotatedProtocol } from './zoom-layout';
+// G2 Task 3：朝向类型（单一出处 src/ui/fx-orient.ts）。这里只**用类型**驱动朝向参数，
+// 运行时判定仍全部走 orientOf（FX 侧）；本文件是**产出方**，允许命名朝向类名。
+import type { CardOrient } from './fx-orient';
 
 export interface UiCallbacks {
   onAction(a: LegalAction): void;
@@ -34,9 +37,14 @@ export interface UiCallbacks {
   onRendered?(): void;
   /** 胜利结算遮罩「返回主界面」按钮：应用内重置回主页面（main.ts 实现） */
   onWinReset?(): void;
+  /** 整帧重渲染的入口。宿主（main.ts）用它把重渲染路由到**当前页面**（热座棋盘 / 远程页）。
+   *  未提供时回退 `renderApp` —— 保证既有调用方语义完全不变。
+   *  为什么必须有：被远程页复用的助手内部有硬编码的 `renderApp`（本文件原先那一处），
+   *  远程页点它就整页跳回热座棋盘。见 G2 Task 3 简报 §4.4。 */
+  rerender?(): void;
 }
 
-function el(tag: string, cls: string, text?: string): HTMLElement {
+export function el(tag: string, cls: string, text?: string): HTMLElement {
   const node = document.createElement(tag);
   node.className = cls;
   if (text !== undefined) node.textContent = text;
@@ -44,7 +52,7 @@ function el(tag: string, cls: string, text?: string): HTMLElement {
 }
 
 /** 卡牌 defId 形如 'fire-3'：协议段 + 分值段即官方图片资源路径的两段 */
-function splitDefId(defId: string): [string, string] {
+export function splitDefId(defId: string): [string, string] {
   const sep = defId.indexOf('-');
   return [defId.slice(0, sep), defId.slice(sep + 1)];
 }
@@ -54,7 +62,7 @@ function splitDefId(defId: string): [string, string] {
  * - 正面：官方卡面图 /assets/protocols/<协议>/card-<分值>.<png|jpg>（扩展名随世代，见 data/demo）
  * - 背面：官方 Cardback 图 + 印刷值 2 徽章（规则：背面牌值=2）
  */
-function renderCardFace(card: { defId: string; faceUp: boolean; uid: string }): HTMLElement {
+export function renderCardFace(card: { defId: string; faceUp: boolean; uid: string }): HTMLElement {
   const box = el('div', 'card');
   // 卡牌实例标识：选择模式 / 拖拽等按 uid 定位（对所有卡牌渲染路径统一写入）
   box.dataset.uid = card.uid;
@@ -79,7 +87,11 @@ function renderCardFace(card: { defId: string; faceUp: boolean; uid: string }): 
   return box;
 }
 
-function renderProtocol(p: { defId: string; compiled: boolean }, player: PlayerId): HTMLElement {
+export function renderProtocol(
+  p: { defId: string; compiled: boolean },
+  player: PlayerId,
+  orient: CardOrient = player === 1 ? 180 : 0
+): HTMLElement {
   const box = el('div', 'protocol' + (p.compiled ? ' compiled' : ''));
   // holder 包裹卡面图：持久 FX 层每帧渲染按 holder 矩形重定位（syncCompiledFxLayers），
   // 不受 .protocol 盒 flex:1 拉伸影响（横版协议/行高不一致时环仍紧贴卡面）
@@ -113,7 +125,9 @@ function renderProtocol(p: { defId: string; compiled: boolean }, player: PlayerI
   const img = document.createElement('img');
   // R1 协议卡朝向：P1（左）按原图方向展示；P2（右）旋转 180° 使双方协议相对放置。
   // 三代协议图同规格竖版存储（3代 源横向成品已转竖版入库，2026-09-06 v2）。
-  img.className = 'protocol-img' + (player === 1 ? ' rot-180' : '');
+  // G2 Task 3：朝向成为入参（默认值 = 原来的 player===1 → 180°，逐字等价）。
+  // 远程页传「自己 0° / 对手 180°」——0°/180° 之外**不产出任何朝向类**。
+  img.className = 'protocol-img' + (orient === 180 ? ' rot-180' : '');
   img.src = protocolImgSrc(p.defId, p.compiled);
   img.alt = p.compiled ? 'compiled protocol' : 'protocol loading';
   // R12：卡面图异步加载会改变 holder 矩形 —— 编译翻面瞬间 protocol-compiled.png 尚未
@@ -153,7 +167,7 @@ function batteryState(points: number): 'stable' | 'bulge' | 'full' | 'burst' {
   return 'stable';
 }
 
-function renderBattery(s: GameState, player: PlayerId, line: Line): HTMLElement {
+export function renderBattery(s: GameState, player: PlayerId, line: Line): HTMLElement {
   const points = getLineValue(s, player, line);
   const state = batteryState(points);
   const battery = el('div', `battery battery-${state}`);
@@ -195,16 +209,24 @@ function renderBattery(s: GameState, player: PlayerId, line: Line): HTMLElement 
  * 露出靠协议一侧的 46.2% 宽条带（横向）。场上卡牌按归属旋转：P1（owner 0）顺时针
  * 90°（.rot-cw），P2（owner 1）逆时针 90°（.rot-ccw），正反面一致；手牌不旋转。
  */
-function renderStackSlot(
+export function renderStackSlot(
   s: GameState,
   player: PlayerId,
   line: Line,
   selected: string | null,
   onPlay: (line: Line) => void,
-  interactable: boolean
+  interactable: boolean,
+  opts?: {
+    /** 「自己侧」常驻高亮。默认 `player === s.turnPlayer`（G2 Task 3 前的现状，热座页不传 → 逐字等价）。
+     *  远程页必须传座位真值：`turnPlayer` 是**回合**概念，用它当"我是谁"会让高亮每回合翻面。 */
+    isSelfSlot?: boolean;
+    /** 卡牌朝向。默认 ±90°（按 owner：P0 顺时针 / P1 逆时针）—— 热座页两位玩家同屏各看得正。
+     *  远程页传 0（自己）/ 180（对手）。**热座路径仍产出 rot-cw / rot-ccw**；0°/180° 之外不产出任何朝向类。 */
+    orient?: CardOrient;
+  }
 ): HTMLElement {
   // self 高亮仅限自己侧槽；对方槽作为腐化0 落点（修改提示词 15）也可交互但不带 self 常驻高亮
-  const isSelfSlot = player === s.turnPlayer;
+  const isSelfSlot = opts?.isSelfSlot ?? player === s.turnPlayer;
   const slot = el('div', `stack-slot p${player + 1}${interactable ? ' interactable' : ''}${interactable && isSelfSlot ? ' self' : ''}`);
   // 拖拽打牌：data 属性供拖拽期按 (player, line) 查询/高亮/命中合法落点
   slot.dataset.line = String(line);
@@ -224,7 +246,12 @@ function renderStackSlot(
     if (!isTop) node.classList.add('covered');
     if (isTop) node.classList.add('top-card');
     // R2 场上卡牌旋转：仅场上链路（正反面一致）；手牌 / 草案不受影响
-    node.classList.add(card.owner === 0 ? 'rot-cw' : 'rot-ccw');
+    // G2 Task 3：朝向可入参（默认值 = 原来的 owner 90/-90 映射，逐字等价）。
+    // 两个默认分支与热座页契约同值同形；远程页的 0°/180° 走同一组分支（0° 不加类）。
+    const orient = opts?.orient ?? (card.owner === 0 ? 90 : -90);
+    if (orient === 90) node.classList.add('rot-cw');
+    else if (orient === -90) node.classList.add('rot-ccw');
+    else if (orient === 180) node.classList.add('rot-180');
     node.dataset.uid = card.uid;
     node.style.zIndex = String(i);
     // FX-5 冷漠2：apathy-2 顶「无效化此列所有牌的中部命令」→ 该列【双方】链路上所有场上卡
@@ -1444,13 +1471,22 @@ function positionCompiledFxLayer(defId: string, holder: HTMLElement): void {
   }
 }
 
-/** 玩家信息条：标题（回合高亮）+ 牌库/弃牌堆/手牌计数（手牌本体在底部条带） */
-function renderPlayerInfo(s: GameState, player: PlayerId, opts: { isSelf: boolean; operator?: boolean }): HTMLElement {
+/** 玩家信息条：标题（回合高亮）+ 牌库/弃牌堆/手牌计数（手牌本体在底部条带）
+ *  G2 Task 3 加两个**可选**参数（默认值 = 现状，热座页不传 → 逐字等价）：
+ *   - label：标题前缀（远程页用「对手」/「自己（你）」）；默认 `玩家 ${player + 1}`
+ *   - align：`.p${player+1}` 决定右对齐（styles.css:30-31）；显式指定可覆盖 */
+export function renderPlayerInfo(
+  s: GameState,
+  player: PlayerId,
+  opts: { isSelf: boolean; operator?: boolean; label?: string; align?: 'left' | 'right' }
+): HTMLElement {
   const p = s.players[player];
   const active = player === s.turnPlayer;
+  // align 缺省时沿用原写法：`.p${player+1}` 类本身带右对齐语义（styles.css:30-31），一字不改
+  const alignCls = opts.align ? ` ${opts.align === 'right' ? 'p2' : 'p1'}` : ` p${player + 1}`;
   // 修改提示词 17：效果挂起等待该玩家操作 → 额外 operator 高亮（醒目提示操作者）
-  const info = el('div', `player-info p${player + 1}${active ? ' active' : ''}${opts.isSelf ? ' self' : ''}${opts.operator ? ' operator' : ''}`);
-  info.appendChild(el('div', 'area-title', `玩家 ${player + 1}${opts.operator ? '（请操作！）' : active ? '（回合中）' : ''}`));
+  const info = el('div', `player-info${alignCls}${active ? ' active' : ''}${opts.isSelf ? ' self' : ''}${opts.operator ? ' operator' : ''}`);
+  info.appendChild(el('div', 'area-title', `${opts.label ?? `玩家 ${player + 1}`}${opts.operator ? '（请操作！）' : active ? '（回合中）' : ''}`));
 
   const meta = el('div', 'meta-row');
   meta.appendChild(el('span', 'deck-count', `牌库 ${p.deck.length}`));
@@ -1467,7 +1503,7 @@ function renderPlayerInfo(s: GameState, player: PlayerId, opts: { isSelf: boolea
 }
 
 /** 牌库区：多张背面卡层叠（厚度随剩余数），顶层中央显示剩余张数 */
-function renderDeck(s: GameState, player: PlayerId): HTMLElement {
+export function renderDeck(s: GameState, player: PlayerId): HTMLElement {
   const count = s.players[player].deck.length;
   const layers = count === 0 ? 0 : Math.min(4, Math.ceil(count / 4));
   const deck = el('div', `deck deck-${count === 0 ? 'empty' : layers}`);
@@ -1492,7 +1528,7 @@ function renderDeck(s: GameState, player: PlayerId): HTMLElement {
 /** 弃牌堆区（renderDeck 的镜像，ITEM 3）：层叠背面卡 + 中央计数，绝对定位链路于牌库
  *  正下方（P1/P2 各自镜像），与牌库同列（−92px 外侧列）→ 移出流式布局，不挤占手牌/
  *  刷新按钮/挡板位置。data-player + 点击打开弃牌堆查看遮罩（公开信息）。 */
-function renderTrash(s: GameState, player: PlayerId): HTMLElement {
+export function renderTrash(s: GameState, player: PlayerId): HTMLElement {
   const count = s.players[player].trash.length;
   const layers = count === 0 ? 0 : Math.min(4, Math.ceil(count / 4));
   const trash = el('div', `trash-pile p${player + 1} trash-${count === 0 ? 'empty' : layers}`);
@@ -1514,7 +1550,7 @@ function renderTrash(s: GameState, player: PlayerId): HTMLElement {
 
 /** 刷新手牌按钮：位于手牌扇形下方（.hand-refresh-wrap 内、居中于手牌之下），
  *  仅在刷新是合法动作（refreshAction 非空）时渲染，点击派发 refresh */
-function renderRefreshButton(action: LegalAction, cb: UiCallbacks): HTMLElement {
+export function renderRefreshButton(action: LegalAction, cb: UiCallbacks): HTMLElement {
   const btn = el('button', 'shield-refresh-btn', '刷新手牌');
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -1535,7 +1571,7 @@ function renderRefreshButton(action: LegalAction, cb: UiCallbacks): HTMLElement 
  * 卡牌子节点，指针悬停按钮时仍在卡牌子树内，hover-pop 不消失；按钮绝对定位于
  * 卡上缘之上（top:-34px）不遮卡面。监听器在每次 renderApp 重建 DOM 后重新挂接。
  */
-function renderHand(
+export function renderHand(
   s: GameState,
   player: PlayerId,
   opts: {
@@ -1546,14 +1582,35 @@ function renderHand(
     onToggleFaceUp?: () => void;
     /** 拖拽打牌：命中合法落点时派发 onAction 的回调 */
     cb: UiCallbacks;
+    /** 是否反转排列。默认 `player === 1`（P2 右起，R7 现状）——热座页不传 → 逐字等价。
+     *  远程页传 false：甲读法下**双方手牌都左起**（视觉归属由 CSS 的上下带决定，与左右无关）。 */
+    reversed?: boolean;
+    /** 手牌可见性。默认 `'all'` = 现状（自己正面、对手背面）。
+     *  `'count'` = 信息遮蔽（设计稿 §6.4）：**只产出空 .hand + data-hand-count + 数量文本，不渲染任何 .card**。
+     *  ⚠️ 但**仍然产出 .hand[data-player] 占位节点** —— 否则 `querySelectorAll('.hand')[player]`
+     *  的 6 处按索引读取（effects/index.ts:849/942/1541/1590/1650、fx-gen2.ts:693/1316/1786）
+     *  会取到 `undefined` → 效果静默跳过或飞到错误坐标。 */
+    handVisibility?: 'all' | 'count';
+    /** 是否产出挡板（.hand-shield）。默认 true = 现状；远程页传 false（设计稿 §6.1 已删挡板）。 */
+    shield?: boolean;
   }
 ): HTMLElement {
-  const reversed = player === 1; // P2 右起、向左延伸；P1 左起、向右延伸（默认左对齐）
+  const reversed = opts.reversed ?? player === 1; // P2 右起、向左延伸；P1 左起、向右延伸（默认左对齐）
   const hand = el('div', 'hand' + (opts.isSelf ? ' self' : '') + (reversed ? ' reversed' : ''));
   // FX-5：手牌区定位标识（spirit-0 手牌区框光芒 / check-cache 锁链按 .hand[data-player]
   // 查询 rect——syncSpirit0Glows / syncCheckCacheChains 使用）
   hand.dataset.player = String(player);
   const cards = s.players[player].hand;
+  // 信息遮蔽（设计稿 §6.4「渲染层跳过对手手牌内容，不是从状态里删除」）：
+  // 数量公开、内容私密。占位节点必须保留（见 opts.handVisibility 注释）。
+  if (opts.handVisibility === 'count') {
+    hand.classList.add('hand-count-only');
+    // 契约名写作 `data-hand-count`（docs/4代-FX DOM 契约.md / G2 硬约束 5），这里就**逐字**写属性名：
+    // `dataset.handCount` 与它等价，但源码守卫与本文件的行为约定用的是前者，写真实名字免得两处漂移。
+    hand.setAttribute('data-hand-count', String(cards.length));
+    hand.appendChild(el('div', 'hand-count-placeholder', `手牌 ×${cards.length}`));
+    return hand;
+  }
   // 点 4：手牌从左到右按数值升序显示（P1/P2 一致）。
   // 数值取 defId 后缀（'fire-3' → 3）。排序仅影响显示顺序，引擎 hand 数组不变。
   // P1 渲染升序（index 0 最左=最小）；P2 为 row-reverse（index 0 在最右），
@@ -1668,8 +1725,8 @@ function renderHand(
   // R8 手牌挡板：当前回合玩家可拉出/推回遮住自己的手牌。被盖住的卡不触发
   // hover-pop / 单击 / 拖拽（挡板 z-index 高于卡牌并拦截指针）。宽度按玩家持久化
   // 在 shieldWidth（模块态），重渲染后保留；仅 self（当前回合）手牌的挡板可拖，
-  // 对手挡板锁定但状态保留。
-  hand.appendChild(renderShield(s, player, opts.isSelf, hand));
+  // 对手挡板锁定但状态保留。G2 Task 3：`opts.shield === false` 时不产出（远程页 §6.1 已删挡板）。
+  if (opts.shield !== false) hand.appendChild(renderShield(s, player, opts.isSelf, hand));
   const total = nodes.length;
   for (let i = 0; i < total; i++) {
     const node = nodes[i];
@@ -1810,7 +1867,7 @@ function bindShieldDrag(shield: HTMLElement, player: PlayerId, hand: HTMLElement
 const CONTROL_EDGE_PCT = 4; // 持有方贴端距离（左端 4% / 右端 96%，控制卡仍不出轨）
 let controlSliderPos = 50;
 
-function renderControlModule(s: GameState): HTMLElement {
+export function renderControlModule(s: GameState): HTMLElement {
   const neutral = s.control === -1;
   // 三态目标位置：中立居中；P1（左标签）贴左端；P2（右标签）贴右端
   let target = 50;
@@ -1839,12 +1896,16 @@ function renderControlModule(s: GameState): HTMLElement {
   return ctrl;
 }
 
-function renderProtocolCell(s: GameState, player: PlayerId, line: Line): HTMLElement {
+export function renderProtocolCell(s: GameState, player: PlayerId, line: Line, orient?: CardOrient): HTMLElement {
   const cell = el('div', 'protocol-cell');
   // data 属性：供编译/翻面等特效按 (player, line) 定位协议元素（协议换位时随渲染重建定位）
   cell.dataset.player = String(player);
   cell.dataset.line = String(line);
-  cell.appendChild(renderProtocol(s.players[player].protocols[line], player));
+  // G2 Task 3：朝向透传给 renderProtocol。缺省不传 → 走 renderProtocol 自己的默认值
+  // （`player === 1 ? 180 : 0`），与改动前逐字等价。远程页传 `(player === viewSeat) ? 0 : 180`。
+  cell.appendChild(orient === undefined
+    ? renderProtocol(s.players[player].protocols[line], player)
+    : renderProtocol(s.players[player].protocols[line], player, orient));
   return cell;
 }
 
@@ -4524,8 +4585,9 @@ export function renderDraft(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   root.appendChild(wrap);
 }
 
-/** 打牌交互：选手牌 → 点链路槽（打自己场；腐化0 也可点对方槽打对方场）；越步/协议不匹配等非法点击一律忽略 */
-function playToLine(s: GameState, cb: UiCallbacks, line: Line, targetPlayer: PlayerId): void {
+/** 打牌交互：选手牌 → 点链路槽（打自己场；腐化0 也可点对方槽打对方场）；越步/协议不匹配等非法点击一律忽略
+ *  （导出供远程页复用：合法性校验与选择复位语义必须只有这一份实现） */
+export function playToLine(s: GameState, cb: UiCallbacks, line: Line, targetPlayer: PlayerId): void {
   if (!selectedUid) return;
   const uid = selectedUid;
   const faceUp = selectedFaceUp;
@@ -4577,12 +4639,10 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   // （幸运宣告骰子 startLuckDiceFx / 透彻牌库眼睛 startClarityDeckEye 曾因此完全不显示）。
   // 收集后在 root.appendChild(wrap) 之后统一执行。
   const deferredFx: Array<() => void> = [];
-  // 清除失效选择：所选卡不在当前回合玩家手牌中（已被打出/刷新生效/回合切换）时复位
-  const sel = selectedUid;
-  if (sel !== null && !s.players[s.turnPlayer].hand.some((c) => c.uid === sel)) {
-    selectedUid = null;
-    selectedFaceUp = true;
-  }
+  // 清除失效选择：所选卡不在当前回合玩家手牌中（已被打出/刷新生效/回合切换）时复位。
+  // G2 Task 3：内联守卫抽成 `pruneSelection(s)`（单一实现）—— 远程页复用同一份选择态与同一实现，
+  // 语义逐字等价（原内联体只读局部 `sel`、只写 selectedUid/selectedFaceUp，无其它消费者）。
+  pruneSelection(s);
   const wrap = el('div', 'board');
   if (s.phase === 'gameover' && s.winner !== null) {
     // 胜利结算 → 模态遮罩（body 级，一次性创建）：玩家 N 获胜！+「返回主界面」按钮
@@ -4980,6 +5040,46 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
 
 let selectedUid: string | null = null;
 let selectedFaceUp = true;
+
+/**
+ * 手牌选择态的**读写口**（G2 Task 3 新增）。
+ *
+ * 为什么必须导出而不是让远程页自己持一份：`playToLine`（本文件）与 `bindCardDrag`
+ * **直接读写**模块私有的 `selectedUid` / `selectedFaceUp`，并且 `playToLine` 里带着
+ * 「合法性校验 + 无论合法与否都先复位选择」的语义。远程页若自己持一份状态、自己写一套
+ * 「选中 → 校验 → 派发」，两套很快就会发散（最典型：非法落点后选择忘复位 → 卡残留高亮）。
+ * 也不允许 `export let`：ES 模块的 live binding 对导入方**只读**，导入方改不了。
+ *
+ * 两页互斥显示、不并存（main.ts 的 renderMode 决定谁在渲染），故共用同一份状态是安全的；
+ * 各自的 `resetUiState()` / `resetNetUiState()` 都不清这**一份**（避免互相踩），
+ * 由 `pruneSelection()` 在每帧渲染时按状态自适应。
+ */
+export function getHandSelection(): { uid: string | null; faceUp: boolean } {
+  return { uid: selectedUid, faceUp: selectedFaceUp };
+}
+
+/** 写入手牌选择态。`faceUp` 省略时保留当前值（`choicePromptId` 由 renderBoard 的每帧逻辑自理）。 */
+export function setHandSelection(uid: string | null, faceUp?: boolean): void {
+  selectedUid = uid;
+  if (faceUp !== undefined) selectedFaceUp = faceUp;
+}
+
+/**
+ * 清除失效选择：所选卡不在当前回合玩家手牌中（已被打出/刷新生效/回合切换）时复位。
+ * 原为 `renderBoard` 内联（`:4581-4585`）；抽出后 `renderBoard` 与远程页共用**同一实现**。
+ *
+ * ⚠️ 判据用的是 `s.turnPlayer` 而**不是**座位 —— 这是**刻意**的：热座页的既有语义就是
+ * 「所选卡必须还在**当前回合玩家**手里」，而远程页的 `viewSeat` 是**视角**、不是回合归属。
+ * 远程页在 `viewSeat !== s.turnPlayer` 时不可能选出任何卡（对手手牌是数量占位 / 不可交互），
+ * 所以它在远程页只会在 `turnPlayer` 的手牌里命中，与热座完全一致。
+ */
+export function pruneSelection(s: GameState): void {
+  if (selectedUid !== null && !s.players[s.turnPlayer].hand.some((c) => c.uid === selectedUid)) {
+    selectedUid = null;
+    selectedFaceUp = true;
+  }
+}
+
 /** 手牌翻面动画进行中：防止动画期间重复点击/重渲染打断（HAND_FLIP_MS 后由定时器重渲染） */
 let handFlipAnimBusy = false;
 /** 手牌翻面动画时长（ms，与 styles.css .hand-flipping 的 transition 时长一致） */
@@ -4992,6 +5092,22 @@ const SHIELD_MAX_WIDTH = 15 * 102 + 130;
 /** 选择模式状态：当前应答的 promptId 与已选 uid（重渲染保留，选择完成后清空） */
 let choicePromptId: string | null = null;
 let choiceSelected: string[] = [];
+
+/**
+ * 选择模式（select prompt）选择态的读写口（G2 Task 3 新增，与手上的 `get/setHandSelection` 同理由）。
+ * 远程页要复用 `choiceBar` / `buildChoicePickOverlay` 并重写三个 `choice-*` 分支，就必须能读写
+ * **同一份** `choiceSelected` —— 否则浮层里勾选（本文件内部直接改）与确认条的计数/确认按钮
+ * （远程页自己那份）会不一致。
+ */
+export function getChoiceSelection(): string[] {
+  return choiceSelected;
+}
+
+/** 写入选择模式已选 uid 列表。传 `promptId` 时同步「当前应答的 prompt」——换 prompt 必须重开选择。 */
+export function setChoiceSelection(uids: string[], promptId?: string | null): void {
+  choiceSelected = [...uids];
+  if (promptId !== undefined) choicePromptId = promptId;
+}
 
 /** 应用内重置（胜利遮罩「返回主界面」→ main.ts 调用）：清空全部 UI 模块态并移除
  *  body 级常驻层/遮罩——否则旧局残留（编译环 / 暗2 黑烟 / 放大遮罩 / 弃牌堆查看器 /
@@ -5094,7 +5210,7 @@ export function resetUiState(): void {
 }
 
 /** 选择确认条（select-line 用）：归属者标签 + 提示文案；线槽点击即答，无需确认钮 */
-function choiceBar(pe: PendingEffect, prompt: ChoiceRequest, cb: UiCallbacks, hint: string): HTMLElement {
+export function choiceBar(pe: PendingEffect, prompt: ChoiceRequest, cb: UiCallbacks, hint: string): HTMLElement {
   const bar = el('div', 'choice-bar');
   // 修改提示词 17：操作者提示横幅
   const opName = (prompt.chooser ?? pe.player) === 0 ? '玩家 1' : '玩家 2';
@@ -5109,7 +5225,7 @@ function choiceBar(pe: PendingEffect, prompt: ChoiceRequest, cb: UiCallbacks, hi
  *  找不到可点节点 → 玩家无法勾选、确认按钮恒为禁用 → 对局卡死在此处。
  *  本浮层把候选按卡面正面列出（单击勾选/取消，双击放大），确认与跳过沿用底部 .choice-bar。
  *  出层时机：已选状态变化后 renderApp 整帧重渲染，浮层随棋盘重建（无残留）。 */
-function buildChoicePickOverlay(
+export function buildChoicePickOverlay(
   prompt: ChoiceRequest,
   cards: ChoiceCard[],
   sel: Set<string>,
@@ -5150,7 +5266,9 @@ function buildChoicePickOverlay(
         } else if (choiceSelected.length < prompt.max) {
           choiceSelected.push(c.uid);
         }
-        renderApp(root, s, cb);
+        // G2 Task 3：宿主提供 rerender 时路由到**当前页面**（远程页复用本浮层时，
+        // 硬编码 renderApp 会把整页换回热座棋盘）。未提供 → 回退 renderApp，既有语义不变。
+        if (cb.rerender) cb.rerender(); else renderApp(root, s, cb);
       },
       () => openZoom(c.defId, c.faceUp, false, false),
       true,
@@ -5460,7 +5578,7 @@ export function bindClickOrDouble(node: HTMLElement, single: () => void, double:
  * - 翻面按钮（卡牌子节点）上的 mousedown 不启动拖拽。 */
 let activeDragCancel: (() => void) | null = null;
 
-function bindCardDrag(node: HTMLElement, s: GameState, cb: UiCallbacks, uid: string): void {
+export function bindCardDrag(node: HTMLElement, s: GameState, cb: UiCallbacks, uid: string): void {
   node.addEventListener('mousedown', (e) => {
     if (choicePromptId !== null) return; // 选择模式下禁止拖拽打牌
     if (e.button !== 0) return;

@@ -58,7 +58,21 @@ export interface FxDomHook {
  *  G2 Task 4 只需在此登记 `render-net.ts` 与其 exempt（远程页有意不产出 ±90° 朝向类）。 */
 export interface FxRenderer { file: string; exempt?: readonly string[] }
 
-export const RENDERERS: readonly FxRenderer[] = [{ file: 'render.ts' }];
+export const RENDERERS: readonly FxRenderer[] = [
+  { file: 'render.ts' },
+  // G2 Task 3：远程对战页渲染器（甲读法）—— 自己一侧 0°、对手一侧 .rot-180。
+  // 豁免 .rot-cw / .rot-ccw 的理由（不是"省略"，是**不能**产出）：
+  //   1. 语义：±90° 是「两位玩家坐在同一块屏幕前、各自看自己那半边」的**热座专属**方案；
+  //      远程页的两人隔桌对坐，正确朝向是「自己正立 / 对手倒置」，即 0°/180°。
+  //   2. 几何：±90° 会**交换布局盒宽高**，0°/180° 不会（见 src/ui/fx-orient.ts 头注与
+  //      src/ui/fx/clone-orient.ts 的 cloneBoxSwaps）。二者**不可互相替代** —— 拿 ±90° 冒充
+  //      180° 会得到"朝向对但尺寸错"的假正确；反之亦然。这就是派 Task 1 补 180° 的原因。
+  //   3. 豁免面是**逐文件名**的（不是"名字像渲染器"），且 `exempt` 的键必须真的是 A 类钩子
+  //      （Task 4 会补那条断言）——拼错的键会静默豁免掉一条本该验收的钩子。
+  // 顺序约束：tests/ui/fx-dom-contract.test.ts 的 rendererSources 在**模块作用域**读这些文件
+  //   → 必须**先**建出 render-net.ts **再**登记（本任务即如此），否则整个测试文件在收集阶段 ENOENT。
+  { file: 'render-net.ts', exempt: ['.rot-cw', '.rot-ccw'] },
+];
 
 export const FX_DOM_CONTRACT: readonly FxDomHook[] = [
   // ============================ A 结构钩子（远程页必须提供） ============================
