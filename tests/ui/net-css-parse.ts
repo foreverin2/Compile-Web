@@ -220,3 +220,112 @@ export function assertNoUnmodelableCascade(rules: readonly CssRule[], props: rea
     + `\n（本腿是**全表扫描**，属性清单 = ${props.join(' / ')}；`
     + `带 \`#\` / \`[style]\` 的选择器与属性无关，一律报红。）`);
 }
+
+/* ============================================================================
+ * **CSS 长度字面量的解算器**（G2 修正 **R9-1** 从 `net-lane-tree.test.ts` 上提到这里）
+ *
+ * 为什么要提上来（而不是在新测试里再写一份）：与 `cssRules` / `subjectPropOf` **同一条理由**
+ * （见本文件头注）—— 复制一份就会漂移，而漂移的表现是"一个文件里的解算结果绿、另一个红"。
+ * R9-1 的 G-10 要在**另一个文件**（`net-r9.test.ts`）里解 `.stack` 的 `min-height` 与
+ * `.protocol-holder` 的宽高，用到的正是 R8-3 的 G-3 在 `net-lane-tree.test.ts` 里已经写过的
+ * 那套算式（`calc` 的 `+/-` 与 `*`、`var()` 取值、`px` / 无单位数）—— 两处必须是**同一份**。
+ *
+ * ## 能力与边界（诚实声明 —— 这是"够用就好"的极简解算，不是 CSS 引擎）
+ *  - 支持：`<n>px`、无单位数、`var(--x)`（沿祖先链找**最后一个**声明它的节点，即自定义属性的
+ *    继承语义）、`calc(...)`（**只**支持 `+` / `-` 连接的项、每项是 `*` 连接、括号可嵌套）；
+ *  - **不支持**：`%`、`em`、`min()/max()/clamp()`、`fr`、`/`、负号开头的项、`calc` 里的乘除混排
+ *    （`a * b / c`）。解不出来**返回 `null`**（调用方必须把它当"解不出"处理，不许当成 0）。
+ *  - 它只回答"这个声明在**这个祖先链**下算出多少像素"，不模拟布局、不回答观感。
+ * ========================================================================== */
+
+/** 该节点（或它任一祖先）声明的**自定义属性**值（`var()` 解算用）。
+ *  从链尾往链首找**第一个**有声明的节点（自定义属性是继承的 ⇒ 最近的那个祖先胜出）。 */
+export function cssVarOf(chain: StubNode[], rules: CssRule[], name: string): string | null {
+  for (let i = chain.length - 1; i >= 0; i -= 1) {
+    const raw = cssPropOf(chain[i], chain.slice(0, i + 1), rules, name);
+    if (raw !== null) return raw.trim();
+  }
+  return null;
+}
+
+/** `var(--x)` / 普通值 → 解算后的字面量；解不出来就**原样返回**（让断言报出真实值，别报 `undefined`）。 */
+export function resolveCssValue(chain: StubNode[], rules: CssRule[], raw: string): string {
+  const m = /^var\(\s*(--[A-Za-z0-9_-]+)\s*\)$/.exec(raw.trim());
+  if (m === null) return raw.trim();
+  return cssVarOf(chain, rules, m[1]) ?? raw.trim();
+}
+
+/** 解算一个 CSS 长度字面量 → 像素数（只支持上面那几种写法；解不出来返回 null）。
+ *  ⚠️ **R9-1 补上"首项带负号"**（`calc(0.462 * var(--card-w) - var(--card-h))` 解出来是**负**的，
+ *  而 R8-3 的 `min-height` 恒为正 —— 旧写法把 `-` 当分隔符，首项的负号会**丢掉**，
+ *  于是竖排重叠会被解成 **+93.5**（符号反了，而任何"≈ 数值"的断言都会静默通过一半）。
+ *  现在首字符是 `-` 时按负项处理。 */
+export function cssLenOf(chain: StubNode[], rules: CssRule[], raw: string, depth = 0): number | null {
+  if (depth > 8) return null;
+  const v = raw.trim();
+  const px = /^(\d+(?:\.\d+)?)px$/.exec(v);
+  if (px) return Number.parseFloat(px[1]);
+  const negPx = /^-(\d+(?:\.\d+)?)px$/.exec(v);
+  if (negPx) return -Number.parseFloat(negPx[1]);
+  // ⚠️ **裸 `0` 是长度**（`padding-left: 0` / `margin: 0`）—— R9-1 起必须解成 **0**，
+  //    否则"把归中量写成 0"这类变异会以"解不出"的形式报错，读起来像解析器崩了而不是像判据红了。
+  if (v === '0') return 0;
+  const vari = /^var\(\s*(--[A-Za-z0-9_-]+)\s*\)$/.exec(v);
+  if (vari) {
+    const rawVar = cssVarOf(chain, rules, vari[1]);
+    return rawVar === null ? null : cssLenOf(chain, rules, rawVar, depth + 1);
+  }
+  const calc = /^calc\(([\s\S]*)\)$/.exec(v);
+  if (calc) return calcOf(chain, rules, calc[1], depth + 1);
+  return null;
+}
+
+/** `calc` 体：只支持 `+` / `-` 连接的项（本页的 `--card-w` / 7 张跨度 / 竖排重叠都是这种形状）。 */
+function calcOf(chain: StubNode[], rules: CssRule[], body: string, depth: number): number | null {
+  const parts: Array<{ sign: number; text: string }> = [];
+  let cur = '';
+  let sign = 1;
+  let depthP = 0;
+  for (let i = 0; i < body.length; i += 1) {
+    const ch = body[i];
+    if (ch === '(') depthP += 1;
+    if (ch === ')') depthP -= 1;
+    // 首项的负号属于**项本身**（`calc(-3px + 2px)`）：cur 还空着时把它收进项里，不当分隔符
+    if (depthP === 0 && (ch === '+' || (ch === '-' && cur.trim() !== ''))) {
+      parts.push({ sign, text: cur.trim() });
+      sign = ch === '-' ? -1 : 1;
+      cur = '';
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur.trim() !== '') parts.push({ sign, text: cur.trim() });
+  if (parts.length === 0) return null;
+  let total = 0;
+  for (const p of parts) {
+    const n = productOf(chain, rules, p.text, depth);
+    if (n === null) return null;
+    total += p.sign * n;
+  }
+  return total;
+}
+
+/** `*` 连接的项（每项可以是 px / var / 无单位的数 / 嵌套括号；**支持首字符负号**）。 */
+function productOf(chain: StubNode[], rules: CssRule[], text: string, depth: number): number | null {
+  let s = text.trim();
+  let sign = 1;
+  if (s.startsWith('-')) { sign = -1; s = s.slice(1).trim(); }
+  else if (s.startsWith('+')) { s = s.slice(1).trim(); }
+  const factors = s.split('*').map((f) => f.trim()).filter((f) => f !== '');
+  if (factors.length === 0) return null;
+  let acc = 1;
+  for (const f of factors) {
+    const unitless = /^\d+(?:\.\d+)?$/.exec(f);
+    if (unitless) { acc *= Number.parseFloat(unitless[0]); continue; }
+    const inner = /^\(([\s\S]*)\)$/.exec(f);
+    const n = inner ? calcOf(chain, rules, inner[1], depth + 1) : cssLenOf(chain, rules, f, depth + 1);
+    if (n === null) return null;
+    acc *= n;
+  }
+  return sign * acc;
+}

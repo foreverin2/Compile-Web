@@ -201,6 +201,41 @@ export function vCenterOf(rect: DOMRect, axis: 'x' | 'y' = 'y'): number {
 /** 链路/手牌的落点坐标（与 effects/index.ts 的 `stackEndPos` 同形）。 */
 export interface FxEndPoint { x: number; y: number }
 
+/* ============================================================================
+ * 落点偏移量（`lead` / `lift`）的**单一出处**（G2 修正 **R9-1** 上提；值**一字未改**）
+ *
+ * 这四个数原来散在 `vStackEndPoint` / `fxStackEndPoint` / `fxHandEndPoint` 的**缺省参数**里
+ * （65 / 90 / 37 / 93），只有注释说"沿用改动前那两个偏移"—— 没有任何机检、也没有名字。
+ * R9-1 把它们提成**具名常量**，理由有两条：
+ *
+ *  1. **它们不是"与卡尺寸成比例的量"，所以本波**不该**跟着 `--card-h` 缩放** ——
+ *     R9-1 把场上卡从 `130.57 × 182` 缩到 `100.57 × 140`（×0.77），但这四个数混着三种语义：
+ *       · `STACK_END_LEAD`（65）：末卡**外缘之外**再让开多少才放得下幽灵卡 —— 与**幻影卡的
+ *         宽度**（手牌卡恒 130px，本波**未缩**）同量级，不是"一张场上卡的%"；
+ *       · `STACK_END_LIFT`（90）/ `HAND_END_LIFT`（93）：**空槽/空手牌**时的兜底让开量，
+ *         锚在槽的外缘上，与卡宽的关系更弱（是"别贴在框线上"的观感量）；
+ *       · `HAND_END_LEAD`（37）：手牌（恒 130px 宽）末卡之外让开多少。
+ *     ⇒ **没有可推导的比值**，硬要按 0.77 缩就是"为了让数字好看而随手改系数"（§13.3 明令禁止）。
+ *     本波**保留数值**，并把"它们是否需要在新卡尺寸下重新校准"写进残余项（人眼在 5173 上看
+ *     幽灵卡/落点是否还落在卡片外缘之外）。
+ *  2. **可被点名**：它们出现在 `fx-gen2.ts` / `effects/index.ts` 的 9 处横向盒定位里
+ *     （`left = 落点.x − 65` 那种"手工居中"写法），而那些**不读**这里 —— 提成常量之后，
+ *     报告与后续评审可以逐条对照，不会再把"某个 65"当成另一件事。
+ *
+ * ⚠️ 与 `FX_TRACK_EDGE_PCT` 同一条纪律：**改一处，消费方一定跟着走**（这里只是把缺省参数
+ * 换成具名常量，函数签名与逐字段行为**一字未改**；`tests/ui/fx-seat.test.ts` 的 37 条用例
+ * 仍然逐个核对过这些偏移对应的落点坐标）。
+ * ========================================================================== */
+
+/** 末卡**外侧**的让开量（链路落点）。语义见上面的说明：**不随 `--card-h` 缩**。 */
+export const STACK_END_LEAD = 65;
+/** **空槽**退化时的让开量（链路落点）。 */
+export const STACK_END_LIFT = 90;
+/** 手牌**末卡外侧**的让开量。 */
+export const HAND_END_LEAD = 37;
+/** **空手牌**退化时的让开量。 */
+export const HAND_END_LIFT = 93;
+
 /**
  * **竖向**链路末端落点（远程页）：`x` = 槽的水平中心（竖排列里卡自己居中），
  * `y` = **最外端那张卡的下/上缘外侧**（`outer` 那一端，见下面的 `last` 取法 —— G2 修正 R-F2 · I-3 的
@@ -213,10 +248,12 @@ export interface FxEndPoint { x: number; y: number }
  * 于是"传进来的座位"与"算外端用的座位"永远是同一个值。
  *
  * `lead` 与 `lift` 沿用改动前 `stackEndPos` 的两个不同偏移（末卡 65 / 空槽 90）——
- * 它们是**观感微调量**，本任务不重新标定（规格没给数）。
+ * 它们是**观感微调量**，本任务不重新标定（规格没给数）。**R9-1 起它们是具名常量**
+ * （见上面那一段说明：不随 `--card-h` 缩放，理由写在那里）。
  */
 export function vStackEndPoint(
-  slot: HTMLElement, owner: PlayerId, lead = 65, lift = 90, seat: FxViewSeat = fxViewSeat(),
+  slot: HTMLElement, owner: PlayerId, lead = STACK_END_LEAD, lift = STACK_END_LIFT,
+  seat: FxViewSeat = fxViewSeat(),
 ): FxEndPoint {
   const slotRect = slot.getBoundingClientRect();
   const outer = fxOuterForSeat(owner, seat);
@@ -266,8 +303,8 @@ export function fxStackEndPoint(
   slot: HTMLElement | null,
   seat: FxViewSeat,
   owner?: PlayerId,
-  lead = 65,
-  lift = 90,
+  lead = STACK_END_LEAD,
+  lift = STACK_END_LIFT,
 ): FxEndPoint | null {
   if (!slot) return null;
   // ── 远程页：竖向（y 轴）—— 外端 = fxOuterForSeat(**该卡属主**, 座位)（C-1 的修法）──
@@ -318,7 +355,9 @@ export function handOuterFor(hand: HTMLElement | null | undefined): FxOuter {
  *
  * 反空集合：`hand` 缺席时返回全 0，与改动前 `{ top: 0, height: 0, left: 0, right: 0 }` 兜底同义。
  */
-export function fxHandEndPoint(hand: HTMLElement | undefined, lead = 37, lift = 93): FxEndPoint {
+export function fxHandEndPoint(
+  hand: HTMLElement | undefined, lead = HAND_END_LEAD, lift = HAND_END_LIFT,
+): FxEndPoint {
   if (!hand) return { x: 0, y: 0 };
   const rect = hand.getBoundingClientRect();
   const y = rect.top + rect.height / 2;

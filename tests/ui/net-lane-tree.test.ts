@@ -10,8 +10,8 @@ import { stripComments } from './source-text';
 // —— 本文件与 `tests/ui/net-board-grid.test.ts`（G-7 视觉行序）用的是同一套语义，理由与
 // `./net-dom-stub` 头注完全相同：复制成两份必然漂移，而漂移的表现是"一边绿、另一边红"。
 import {
-  assertNoUnmodelableCascade, cssOrderOf, cssPropOf, cssRules, compoundMatches, MODELED_PROPS,
-  selectorMatches, specificityOf, type CssRule,
+  assertNoUnmodelableCascade, cssLenOf, cssOrderOf, cssPropOf, cssRules, cssVarOf,
+  compoundMatches, MODELED_PROPS, resolveCssValue, selectorMatches, specificityOf, type CssRule,
 } from './net-css-parse';
 import {
   classListOf, descendants, drainRaf, installStubDom, isClass as isClassShared,
@@ -122,21 +122,10 @@ function gridTracks(raw: string): string[] {
   return out;
 }
 
-/** 该节点（或它任一祖先）声明的**自定义属性**值（`var()` 解算用；本页只有 `--net-rail-w`）。 */
-function cssVarOf(chain: StubNode[], rules: CssRule[], name: string): string | null {
-  for (let i = chain.length - 1; i >= 0; i -= 1) {
-    const raw = cssPropOf(chain[i], chain.slice(0, i + 1), rules, name);
-    if (raw !== null) return raw.trim();
-  }
-  return null;
-}
-
-/** `var(--x)` / 普通值 → 解算后的字面量；解不出来就原样返回（让断言报出真实值，别报 `undefined`）。 */
-function resolveCssValue(chain: StubNode[], rules: CssRule[], raw: string): string {
-  const m = /^var\(\s*(--[A-Za-z0-9_-]+)\s*\)$/.exec(raw.trim());
-  if (m === null) return raw.trim();
-  return cssVarOf(chain, rules, m[1]) ?? raw.trim();
-}
+/* ⚠️ **R9-1：`cssVarOf` / `resolveCssValue` 已上提到 `./net-css-parse`**（连同 CSS 长度解算器
+ *  `cssLenOf`）—— 新增的 R9 守卫在 `tests/ui/net-r9.test.ts` 里要用**同一套**算式解
+ *  `.stack` 的 `min-height` 与协议 holder 的宽高。两份拷贝一旦漂移，表现就是"一个文件绿、
+ *  另一个红"（与 `cssRules` / `dom-stub` 同一条教训）。本文件的 G-3 继续用同一个实现。 */
 
 /** 造一个只带类名的桩节点（纯 CSS 解算用；不装 DOM、不渲染）。 */
 function cssNode(...classes: string[]): StubNode {
@@ -470,74 +459,18 @@ describe('R-F · C-2 / R8-2：真跑 renderNetBoard 的元素树层序（viewSea
    * 这两条是**源码腿**（桩没有布局引擎 ⇒ 量不到 min-height / flex 方向的真实效果），
    * 但它们钉的是"承重声明本身"：min-height 的**推导式**、两条 justify-content 的**配对**、
    * 以及 6 处 FX 定位点**不得**再按位置（.stack-slot）找能量槽。
-   * ⚠️ 诚实边界：min-height ≈ 543.9px 到底够不够、横条好不好看，只能人眼在 5173 上验。
+   * ⚠️ 诚实边界：min-height 到底够不够、横条好不好看，只能人眼在 5173 上验。
+   * ⚠️ **R9-1**：CSS 长度解算器（`cssLenOf` / `cssVarOf` / `resolveCssValue`）已上提到
+   * `./net-css-parse`（新增的 R9 守卫在 `net-r9.test.ts` 里要用**同一份**算式；
+   * 复制一份就会漂移成"一个文件绿、另一个红"）。本用例的判据**一个字未改**。
    * ======================================================================== */
 
-  /** 解算一个 CSS 长度字面量 → 像素数（只支持本页用到的那几种写法；解不出来返回 null）。 */
-  function cssLenOf(chain: StubNode[], rules: CssRule[], raw: string, depth = 0): number | null {
-    if (depth > 8) return null;
-    const v = raw.trim();
-    const px = /^(\d+(?:\.\d+)?)px$/.exec(v);
-    if (px) return Number.parseFloat(px[1]);
-    const vari = /^var\(\s*(--[A-Za-z0-9_-]+)\s*\)$/.exec(v);
-    if (vari) {
-      const rawVar = cssVarOf(chain, rules, vari[1]);
-      return rawVar === null ? null : cssLenOf(chain, rules, rawVar, depth + 1);
-    }
-    const calc = /^calc\(([\s\S]*)\)$/.exec(v);
-    if (calc) return calcOf(chain, rules, calc[1], depth + 1);
-    return null;
-  }
-
-  /** \`calc\` 体：只支持 \`+\` / \`-\` 连接的项（本页的 \`--card-w\` 与 7 张跨度都是这种形状）。 */
-  function calcOf(chain: StubNode[], rules: CssRule[], body: string, depth: number): number | null {
-    const parts: Array<{ sign: number; text: string }> = [];
-    let cur = '';
-    let sign = 1;
-    let depthP = 0;
-    for (let i = 0; i < body.length; i += 1) {
-      const ch = body[i];
-      if (ch === '(') depthP += 1;
-      if (ch === ')') depthP -= 1;
-      if (depthP === 0 && (ch === '+' || ch === '-') && cur.trim() !== '') {
-        parts.push({ sign, text: cur.trim() });
-        sign = ch === '-' ? -1 : 1;
-        cur = '';
-        continue;
-      }
-      cur += ch;
-    }
-    if (cur.trim() !== '') parts.push({ sign, text: cur.trim() });
-    if (parts.length === 0) return null;
-    let total = 0;
-    for (const p of parts) {
-      const n = productOf(chain, rules, p.text, depth);
-      if (n === null) return null;
-      total += p.sign * n;
-    }
-    return total;
-  }
-
-  /** \`*\` 连接的项（每项可以是 px / var / 无单位的数 / 嵌套括号）。 */
-  function productOf(chain: StubNode[], rules: CssRule[], text: string, depth: number): number | null {
-    const factors = text.split('*').map((f) => f.trim()).filter((f) => f !== '');
-    if (factors.length === 0) return null;
-    let acc = 1;
-    for (const f of factors) {
-      const unitless = /^\d+(?:\.\d+)?$/.exec(f);
-      if (unitless) { acc *= Number.parseFloat(unitless[0]); continue; }
-      const inner = /^\(([\s\S]*)\)$/.exec(f);
-      const n = inner ? calcOf(chain, rules, inner[1], depth + 1) : cssLenOf(chain, rules, f, depth + 1);
-      if (n === null) return null;
-      acc *= n;
-    }
-    return acc;
-  }
 
   it('G-3. R8-3 样式腿：.stack 的 min-height 由变量推出且 ≥ 7 张跨度；grow-down/up 的 justify-content 是两个不同值', () => {
+    const board = cssNode('net-board');   // R9-4 起 --card-h / --card-w 定义在 .net-board 上（手牌同基准）
     const band = cssNode('net-lane-band');
     const stack = cssNode('stack');
-    const chain = [band, stack];
+    const chain = [board, band, stack];
     const raw = cssPropOf(stack, chain, RULES, 'min-height');
     expect(raw, 'styles-net.css 里 .net-lane-band .stack 没有 min-height ——'
       + '放第 1 张牌时链路框就会变形（用户 R8-3：把牌放上去会导致框的大小发生变化）').toBeTruthy();
@@ -546,11 +479,12 @@ describe('R-F · C-2 / R8-2：真跑 renderNetBoard 的元素树层序（viewSea
       + `（必须由 --card-h / --card-w 推出，不许写死 px）`).not.toBeNull();
 
     // 逐项复算派生量（**从样式表真实解算**，不是手抄数字）
-    const cardH = cssLenOf([band], RULES, cssVarOf([band], RULES, '--card-h') ?? '');
-    const cardW = cssLenOf([band], RULES, cssVarOf([band], RULES, '--card-w') ?? '');
-    expect(cardH, `--card-h 未定义在 .net-lane-band 上（R8-3 要求上提，好让 .stack 能算 7 张跨度）`)
-      .not.toBeNull();
-    expect(cardW, `--card-w 未定义在 .net-lane-band 上`).not.toBeNull();
+    const varChain = [board, band];
+    const cardH = cssLenOf(varChain, RULES, cssVarOf(varChain, RULES, '--card-h') ?? '');
+    const cardW = cssLenOf(varChain, RULES, cssVarOf(varChain, RULES, '--card-w') ?? '');
+    expect(cardH, `--card-h 在 .net-board / .net-lane-band 上都解不出来（R9-4 起定义在 .net-board 上：`
+      + '手牌区也要吃同一基准，故解析必须走祖先链）').not.toBeNull();
+    expect(cardW, `--card-w 在 .net-board / .net-lane-band 上都解不出来`).not.toBeNull();
     const seven = cardH! + 6 * 0.462 * cardW!;
     console.log(`\n===== G-3 · min-height 解算（由 styles-net.css 真实解出）=====\n`
       + `  --card-h = ${cardH}px / --card-w = ${cardW!.toFixed(2)}px\n`
@@ -696,23 +630,41 @@ describe('R-F · C-2 / R8-2：真跑 renderNetBoard 的元素树层序（viewSea
             + `${playerOfSide(side, seat)}（实际 ${String(block.dataset.player)}）`)
             .toBe(String(playerOfSide(side, seat)));
         }
-        // ④ **左右列已退役**（R8-5 的判据迁移，**不是删除**）：R6~R7 期间这一条解算的是
-        //    `grid-column: 1 / 3`（"谁在左、谁在右"）。R8-5 之后信息块与手牌区**各自一整行**，
-        //    左右语义整体消失 ⇒ 现在钉两件事：
-        //      a) 三块解出的 `grid-column` 必须是**整行** `1 / -1`（不是某一列）；
-        //      b) 样式表里**不许**再有把它们按列摆放的规则（旧的 `grid-column: 1` / `3` 回潮即红）。
-        //    ⚠️ 为什么不能保留旧判据：旧解算器（`visualOrderOfBottom`）对 `1 / -1` 一律返回
-        //    `Infinity` ⇒ 排序退化成 **DOM 顺序**，而 DOM 顺序恰好就是它期望的值 —— 那条断言会
-        //    **永远为真且不查任何东西**（假绿）。它已被删除；五行行序的新模型在
+        // ④ **列语义的两次迁移（R8-5 → R9-3；判据跟着搬，不是删除）**：
+        //    · R6~R7：解的是 `grid-column: 1 / 3`（"谁在左、谁在右"的三列底部行）；
+        //    · R8-5：信息块与手牌区**各自一整行**，左右语义整体消失 ⇒ 判据换成"三块都是整行 `1 / -1`"；
+        //    · **R9-3**：手牌并进信息块那一行 ⇒ 信息块改为占**左侧窄列**（`grid-column: 1`）、
+        //      手牌区仍是**整行**（`1 / -1`）—— 这正是"手牌整页中置"的机制（手牌不参与左列宽度）。
+        //    现在钉三件事（**覆盖 R8-5 判据的全部对象，没有放松**）：
+        //      a) 两块信息块必须落在**同一列（第 1 列）**—— 它们不再跨列、也不许被挤到别的列；
+        //      b) 两块手牌区必须仍是**整行** `1 / -1`（手牌中置的机制本身）；
+        //      c) 样式表里**不许**再有把它们按**其它列**摆放的规则（`grid-column: 2` / `3` 回潮即红）。
+        //    ⚠️ 为什么不能保留旧判据（"信息块也必须是 `1 / -1`"）：R9-3 的裁决就是"信息块占左列、
+        //    手牌横跨其余列" —— 保留旧句会**把本波的裁决判成失败**。判据的对象换了、强度没降：
+        //    旧句查"三块都是同一个值（整行）"，新句查"信息块=1 且 手牌=1/-1 且没有别的列指派"
+        //    （**多查了一件事**：R8-5 之后两块的列值本来必须相同，所以"信息块与手牌**不同**列"
+        //    这件事在旧句下根本表达不出来）。
+        //    ⚠️ 为什么不能保留旧解算器（`visualOrderOfBottom`）：它对 `1 / -1` 一律返回 `Infinity`
+        //    ⇒ 排序退化成 **DOM 顺序**，而 DOM 顺序恰好就是它期望的值 —— 那条断言会
+        //    **永远为真且不查任何东西**（假绿）。五行行序的新模型在
         //    `tests/ui/net-board-grid.test.ts` 的 **G-7**（展平盒树 + 解 `grid-row`）。
         const colOf = (n: StubNode): string | null => cssPropOf(n, [...chain, bottom!, n], RULES, 'grid-column');
         const dispOf = (n: StubNode): string | null => cssPropOf(n, [...chain, bottom!, n], RULES, 'display');
-        console.log(`  ----- viewSeat=${seat} · 底部三块解出的 grid-column / display（信息块应全是整行「1 / -1」）-----\n`
+        console.log(`  ----- viewSeat=${seat} · 底部三块解出的 grid-column / display（R9-3：信息块=左列 1、手牌区=整行 1 / -1）-----\n`
           + `  ${bottom!.children.map((n) => `${isClass(n, 'net-info-block') ? String(n.dataset.netSeat) : 'hands'}:`
             + ` grid-column=${String(colOf(n))} display=${String(dispOf(n))}`).join(' · ')}`);
         for (const n of infoBlocks) {
-          expect(colOf(n), `viewSeat=${seat}：两块信息块的 grid-column 必须是**整行**（\`1 / -1\`），`
-            + `实际 ${String(colOf(n))} —— 左右列已随 R8-5 退役（信息块各占一整行、上下镜像）`)
+          expect(colOf(n), `viewSeat=${seat}：两块信息块的 grid-column 必须是**第 1 列**（\`1\`），`
+            + `实际 ${String(colOf(n))} —— R9-3 把它们放进**左侧窄列**、与手牌区同行`
+            + `（且要保证它们**不跨列**：跨列就会把手牌挤到一边）`).toMatch(/^1(\s*\/\s*2)?$/);
+        }
+        // b) 两块手牌区仍是**整行**（`1 / -1`）—— 手牌"整页中置"的机制本身
+        const handAreas = handsBlocks[0].children.filter((n) => isClass(n, 'net-hand-area'));
+        expect(handAreas.length, `viewSeat=${seat}：.net-hands 里应有两块 .net-hand-area`).toBe(2);
+        for (const a of handAreas) {
+          expect(cssPropOf(a, [...chain, bottom!, handsBlocks[0], a], RULES, 'grid-column'),
+            `viewSeat=${seat}：手牌区的 grid-column 必须是**整行**（\`1 / -1\`）——`
+            + '它被限制到某一列之后，手牌就不再"整页中置"（R9-3 的裁决要求手牌仍整页中置）')
             .toMatch(/^1\s*\/\s*-1$/);
         }
         // `.net-hands` **不是** `.net-board` 的 grid item（它是 `display: contents` 的容器），
@@ -724,12 +676,18 @@ describe('R-F · C-2 / R8-2：真跑 renderNetBoard 的元素树层序（viewSea
           .toBe('contents');
         expect(dispOf(bottom!), `viewSeat=${seat}：.net-bottom 必须是 display: contents（同上）`)
           .toBe('contents');
+        // c) 样式表里**不许有第三种列指派**：R9-3 之后只允许两个合法值 ——
+        //    手牌区的整行 `1 / -1` 与信息块的左列 `1`（`1 / 2` 写成"跨一列"也算同义）。
+        //    任何别的值（`2` / `3` / `1 / 3` / `auto`）都会把某一块挤到它不该在的列上。
+        //    ⚠️ 口径与 R8-5 时**同形**（当时只允许 `1 / -1` 一个值），只是白名单多了
+        //    R9-3 明确裁决的"左列"这一个值。
         const staleColumnRules = RULES.filter((r) =>
           /(?:^|;|\s)grid-column\s*:/.test(r.body) && /\.net-info-block|\.net-bottom\s*>/.test(r.selector)
-          && !/1\s*\/\s*-1/.test(r.body));
+          && !/1\s*\/\s*-1/.test(r.body) && !/:\s*1(\s*\/\s*2)?\s*(?:;|$)/.test(r.body));
         expect(staleColumnRules.map((r) => `${r.selector} { ${r.body.trim()} }`),
-          `viewSeat=${seat}：styles-net.css 里仍有把底部信息块/手牌区按**列**摆放的规则`
-          + '（R8-5 之后它们是整行；残留的列指派会把它们挤回某一列）').toEqual([]);
+          `viewSeat=${seat}：styles-net.css 里仍有把底部信息块/手牌区按**别的列**摆放的规则`
+          + '（R9-3 之后只允许"手牌区整行 `1 / -1`"与"信息块左列 `1`"两种写法；'
+          + '残留的列指派会把它们挤到某一列上）').toEqual([]);
         // ⑤ 手牌区在 DOM 里也**恒在中间**（DOM 位置不是红线的对象，但两处不一致就是
         //    "DOM 对、看着反"的温床 —— 例如有人把信息块 append 到手牌区**之后**）
         const domOrder = bottom!.children.map((n) => (isClass(n, 'net-info-block') ? 'info' : isClass(n, 'net-hands') ? 'hands' : '?'));
@@ -1008,10 +966,23 @@ describe('R-F · C-2 / R8-2：真跑 renderNetBoard 的元素树层序（viewSea
     // ① 轨道数 = 3 条线 + 控制轨（**显式**轨道；隐式列不在这里出现 —— 那正是缺陷）
     expect(tracks.length, `列模板必须恰好 4 条显式轨道（3 条线 + 控制轨），实际 ${tracks.length} 条：`
       + `${tracks.join(' | ')}（少于 .net-grid 的子节点数时，多出来的子节点会成为**隐式列**）`).toBe(4);
-    // ②③ 前 3 条 = 三条线，**等宽**且是 1fr 族（`minmax(0, 1fr)` 与 `1fr` 都接受 —— 判据不绑定写法）
+    // ②③ 前 3 条 = 三条线，**等宽**，且必须是**内容宽**（R9-1 的判据迁移，**不是放松**）
+    //    R7 时这三条是 `minmax(0, 1fr)`（撑满 1010px），判据写的是"含 `1fr`"；
+    //    R9-1（用户第三次反馈"链路的宽度……也能够缩小了"）把它们改成 `max-content`：
+    //    三条轨道贴合卡片与协议，`width: fit-content` 让整个链路框贴着卡走。
+    //    ⚠️ 判据对象从"是不是 1fr"换成"**不是** 1fr 族，且必须是内容宽族"——
+    //    它仍然抓得住 R7 原本要防的东西（**三条线不等宽** ⇒ 有一条被拉伸/塌掉），
+    //    并**多抓一件事**：把轨道改回 `1fr`（链路框重新撑满宿主、比卡片宽得多）会立刻红。
+    //    为什么不能直接删掉这条断言：删了之后"轨道数"之外的唯一约束就只剩 ④ 的固定宽，
+    //    三条线各写一个不同值（`max-content minmax(0,1fr) auto`）也能全绿 —— 那正是"看着
+    //    像三条等宽的列、实际不是"的形态。
     const laneTracks = tracks.slice(0, 3);
-    expect(laneTracks.every((t) => /1fr/.test(t)),
-      `前 3 条轨道必须是三条线的等宽列，实际 ${laneTracks.join(' | ')}`).toBe(true);
+    expect(laneTracks.filter((t) => /\d?fr\b/.test(t)).map((t) => t),
+      `前 3 条轨道不得是 \`1fr\` 族（那是 R7 的"撑满 max-width"写法；R9-1 要求链路框**贴合卡片**，`
+      + `实际 ${laneTracks.join(' | ')}）`).toEqual([]);
+    expect(laneTracks.every((t) => /content/.test(t)),
+      `前 3 条轨道必须是**内容宽**族（\`max-content\` / \`min-content\` / \`fit-content\`），`
+      + `实际 ${laneTracks.join(' | ')} —— 否则链路框会比卡片宽得多（用户第三次反馈的第一句）`).toBe(true);
     expect(new Set(laneTracks).size, `三条线的列必须**同宽**（同一份轨迹值），实际 ${laneTracks.join(' | ')}`).toBe(1);
     // ④ 第 4 条 = 控制轨的固定宽（px；不能是 1fr/auto —— 那会让控制轨被拉伸或塌掉）
     const railW = resolveCssValue([board, grid], RULES, tracks[3]);

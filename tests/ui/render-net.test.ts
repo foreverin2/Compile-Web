@@ -1006,8 +1006,16 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
     expect(renderSrc, 'render.ts 的 protocol-img 未把 extraClass 拼进类名（协议 ∓90° 不会生效）')
       .toMatch(/img\.className\s*=\s*'protocol-img'[^\n]*extraClass/);
     // 旋转的布局后果：静态盒必须补回来，否则横躺的协议溢出列宽压到相邻列
-    expect(css, '协议图未给静态宽高（transform 不改布局盒 → 横躺的协议会压到相邻列）')
-      .toMatch(/\.net-lane-band \.protocol-holder\s*\{[^}]*width:\s*100px[^}]*height:\s*140px/);
+    // ⚠️ **R9-1 判据迁移（不是放宽）**：R8-1 起这两个值曾是**字面量** `100px / 140px`，
+    //    R9-1 把它们改成 `--card-h` 的**倍数**（`0.5495 = 100/182`、`0.7692 = 140/182`）——
+    //    这样"整条链路等比缩"就只由 `--card-h` 一个数驱动（§13.3 的硬要求）。
+    //    判据因此从"钉住两个字面量"换成"钉住两个**不同的**倍数表达式"：
+    //    它**仍然**抓得住 R1-2 原本要防的东西 —— "静态盒丢了"（无 width/height）、
+    //    "宽高写成同一个值"（那样旋转后就不再是 5:7 的竖版盒，环/浮层会错位）。
+    //    数值解算（≈76.9 × 107.7）由 `net-lane-tree.test.ts` 的 **G-10** 承重。
+    expect(stripComments(css), '协议图未给静态宽高（transform 不改布局盒 → 横躺的协议会压到相邻列），'
+      + '或宽高不再由 --card-h 推导（R9-1：必须是 0.5495 / 0.7692 这两个比值）')
+      .toMatch(/\.net-lane-band \.protocol-holder\s*\{[^}]*width:\s*calc\(\s*var\(--card-h\)\s*\*\s*0\.5495\s*\)[^}]*height:\s*calc\(\s*var\(--card-h\)\s*\*\s*0\.7692\s*\)/);
   });
 
   /**

@@ -18,6 +18,10 @@ import { registerFollow } from './fx-follow';
 // G2 修正 R3：**方向模型**单一出处。`fxViewSeat()` 在热座页恒为 `null` ⇒ 落点助手走与改动前
 // 逐字段相同的左右分支（"热座零变化"是构造性的）；远程页由 render-net 每次渲染设一次座位。
 import { fxHandEndPoint, fxStackEndPoint, fxViewSeat, handOuterFor } from './fx-seat';
+// **R9-1**：整卡浮层盒的尺寸与"手工居中"的半宽/半高（**值一字未改**，只是收成**具名常量** ——
+// 它们是**手牌卡** 130×178.8 的半个，与场上卡的 `--card-h`（R9-1 后 140）**无关**，
+// 本波**不缩**；理由与推导见 `./fx-card-size` 的头注）。
+import { HAND_CARD_H, HAND_CARD_HALF_H, HAND_CARD_HALF_W, HAND_CARD_W } from './fx-card-size';
 
 type PlayerId = 0 | 1;
 
@@ -877,10 +881,10 @@ export function playSmokePlayFx(payload: { owner?: PlayerId; line?: number | nul
     mist.classList.add('out');
     const glow = document.createElement('div');
     glow.className = 'fx-smoke-cardglow';
-    glow.style.left = `${(end.x - 65).toFixed(1)}px`;
-    glow.style.top = `${(end.y - 89.4).toFixed(1)}px`;
-    glow.style.width = '130px';
-    glow.style.height = '178.8px';
+    glow.style.left = `${(end.x - HAND_CARD_HALF_W).toFixed(1)}px`;
+    glow.style.top = `${(end.y - HAND_CARD_HALF_H).toFixed(1)}px`;
+    glow.style.width = `${HAND_CARD_W}px`;
+    glow.style.height = `${HAND_CARD_H}px`;
     glow.style.zIndex = String(GEN2_Z - 1);
     document.body.appendChild(glow);
     // 2026-09-13 用户裁决：2s 的卡框灰光加跟随（落点由 owner/line 每帧重算，滚动时不再脱离卡面）
@@ -889,8 +893,8 @@ export function playSmokePlayFx(payload: { owner?: PlayerId; line?: number | nul
     registerFollow(glow, (el) => {
       const e = smokeStackEnd(glowOwner, glowLine);
       if (!e) return;
-      el.style.left = `${(e.x - 65).toFixed(1)}px`;
-      el.style.top = `${(e.y - 89.4).toFixed(1)}px`;
+      el.style.left = `${(e.x - HAND_CARD_HALF_W).toFixed(1)}px`;
+      el.style.top = `${(e.y - HAND_CARD_HALF_H).toFixed(1)}px`;
     });
     window.setTimeout(() => glow.classList.add('out'), SMOKE_GLOW_MS);
     window.setTimeout(() => glow.remove(), SMOKE_GLOW_MS + 500);
@@ -1308,10 +1312,10 @@ export function playCourageDrawExtra(player: PlayerId): void {
   window.setTimeout(() => sword.classList.add('gone'), 900);
   const glow = document.createElement('div');
   glow.className = 'fx-courage-cardglow';
-  glow.style.left = `${(land.x - 65).toFixed(1)}px`;
-  glow.style.top = `${(land.y - 89.4).toFixed(1)}px`;
-  glow.style.width = '130px';
-  glow.style.height = '178.8px';
+  glow.style.left = `${(land.x - HAND_CARD_HALF_W).toFixed(1)}px`;
+  glow.style.top = `${(land.y - HAND_CARD_HALF_H).toFixed(1)}px`;
+  glow.style.width = `${HAND_CARD_W}px`;
+  glow.style.height = `${HAND_CARD_H}px`;
   glow.style.zIndex = String(GEN2_Z - 1);
   document.body.appendChild(glow);
   window.setTimeout(() => glow.classList.add('on'), 950);
@@ -1809,8 +1813,8 @@ function onDiversityDrawn(p: { player?: PlayerId; count?: number }, s?: GameStat
       const halo = mk('div', 'fx-diversity-halo');
       halo.style.setProperty('--dc', color);
       halo.style.setProperty('--dcg', hexToRgba(color, 0.8));
-      halo.style.left = `${(pos.x - 65).toFixed(1)}px`;
-      halo.style.top = `${(pos.y - 89.4).toFixed(1)}px`;
+      halo.style.left = `${(pos.x - HAND_CARD_HALF_W).toFixed(1)}px`;
+      halo.style.top = `${(pos.y - HAND_CARD_HALF_H).toFixed(1)}px`;
       halo.style.zIndex = String(GEN2_Z - 2);
       document.body.appendChild(halo);
       window.setTimeout(() => halo.classList.add('in'), 20);
@@ -1995,8 +1999,8 @@ export function playAssimTakeExtra(payload: { uid?: string; owner?: PlayerId }):
   // ③ 落入手牌：闪过一圈青碧光
   window.setTimeout(() => {
     const flash = mk('div', 'fx-assim-land');
-    flash.style.left = `${(to.x - 65).toFixed(1)}px`;
-    flash.style.top = `${(to.y - 89.4).toFixed(1)}px`;
+    flash.style.left = `${(to.x - HAND_CARD_HALF_W).toFixed(1)}px`;
+    flash.style.top = `${(to.y - HAND_CARD_HALF_H).toFixed(1)}px`;
     flash.style.zIndex = String(GEN2_Z - 1);
     document.body.appendChild(flash);
     window.setTimeout(() => flash.classList.add('in'), 20);
@@ -2109,8 +2113,8 @@ export function playUnityDrawHalos(p: { player?: PlayerId; count?: number; uid?:
       const pos = handLandingPos(p.player!, k);
       if (!pos) return;
       const halo = mk('div', 'fx-unity-halo');
-      halo.style.left = `${(pos.x - 65).toFixed(1)}px`;
-      halo.style.top = `${(pos.y - 89.4).toFixed(1)}px`;
+      halo.style.left = `${(pos.x - HAND_CARD_HALF_W).toFixed(1)}px`;
+      halo.style.top = `${(pos.y - HAND_CARD_HALF_H).toFixed(1)}px`;
       halo.style.zIndex = String(GEN2_Z - 2);
       document.body.appendChild(halo);
       window.setTimeout(() => halo.classList.add('in'), 20);

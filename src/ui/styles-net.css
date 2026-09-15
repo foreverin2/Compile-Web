@@ -7,21 +7,23 @@
  *   → 自己协议（逆时针 90°）→ 自己链路（卡 0°、越新越下）→ 自己能量槽
  * 它等价于把热座页的"每条线一行"整体旋转 −90°（推导见设计说明 §1），故**整体更窄更高**。
  *
- * **五行网格**（G2 修正 **R8-5 / R8-7**；用户第二次验收反馈，A 方案）——`.net-board` 是**单列 grid**，
- * 自上而下五行（上下镜像 ⇒ 对称）：
- *   row1 对手信息块（信息 · 牌库 · 弃牌堆）· row2 对手手牌 · row3 三条链路 + 控制轨
- *   · row4 自己手牌 · row5 自己信息块 · row6 日志 / 诊断 / 工具条
+ * **四行网格**（G2 修正 **R8-5 / R8-7** 起是五行；**R9-3** 把手牌并进信息块那一行 ⇒ 四行）
+ * ——`.net-board` 是**双列 grid**（左列 = 信息块的 `max-content`、右列 = 剩余），自上而下（上下镜像 ⇒ 对称）：
+ *   row1 对手[信息块 | 手牌区] · row2 三条链路 + 控制轨 · row3 日志 / 诊断 / 工具条
+ *   · row4 自己[信息块 | 手牌区]
  * ⚠️ **DOM 一个字都没改**：`.net-bottom` 与 `.net-hands` 都设 `display: contents`（第 6 节），
- * 它们的盒子消失、子节点**直接成为 `.net-board` 的 grid item**，再由 `grid-row` 按**侧**指派行号。
+ * 它们的盒子消失、子节点**直接成为 `.net-board` 的 grid item**，再由 `grid-row` / `grid-column` 按**侧**指派。
  * 为什么只能这样（**承重**）：`.hand` 的 DOM 顺序恒为 `[P0, P1]`（FX 用
  * `querySelectorAll('.hand')[player]` **按下标**读手牌）——把对手的手牌搬进 DOM 更靠前的容器会让
  * 下标 0 变成对手的手牌，**全部手牌 FX 静默错位**。⇒ 视觉顺序**只能**由 CSS 表达。
  * 旧形态（R6/R7）：`.net-board` 是 flex column，底部行是 `信息块·手牌区·信息块` 的**左右三列**，
- * 顶部信息条已取消；`tests/ui/net-board-grid.test.ts` 的 G-7 是五行行序的机检腿。
+ * 顶部信息条已取消；`tests/ui/net-board-grid.test.ts` 的 G-7 是行序的机检腿
+ * （R9-3 起同时钉"信息块与手牌区**同一行**"，即 **G-12**）。
  *
  * **容器层级**（G2 修正 **R7**；用户实机截图确认过它崩塌）：
  *   `.net-board`（**grid**，第 1 节）= `[.net-grid, .net-bottom, .log, .diag-btn, .net-preview-bar]`
- *   （DOM 顺序不变；`.net-bottom` / `.net-hands` 是 `display: contents` ⇒ 盒树里那六行是上面那个顺序）；
+ *   （DOM 顺序不变；`.net-bottom` / `.net-hands` 是 `display: contents` ⇒ 盒树里那**四行**是上面那个顺序
+ *   —— R8-5 时曾是五行/六行，**R9-3 把手牌并进信息块那一行之后是四行**，见本节开头的行表）；
  *   `.net-grid` = 四个**并排**的显式轨道（3 条线 + 控制轨），**不含**底部行。
  *   ⚠️ 轨道数必须等于子节点数：R6 时 `.net-grid` 挂了 5 个子节点而模板只有 3 条 ⇒ 第 4/5 个
  *   成为**隐式列**，整页塌成"一行五格、下方大片空白"。行为腿在
@@ -57,7 +59,8 @@
    R7 之前这个容器**一条布局规则都没有**（纵向堆叠全靠 `.board` 的 flex column，所以 R7 的事故
    ——用户实机截图：整页挤成上方一条横带、下方大片空白——**在样式表里完全没有痕迹**）。
    R7 显式钉住了 flex column；**R8-5 把它换成 grid**（用户第二次反馈的 A 方案：五行、上下镜像）。
-   ⚠️ 换 grid 的**唯一目的**是能用 `grid-row` 把六行**按侧**指派（第 6 节），
+   ⚠️ 换 grid 的**唯一目的**是能用 `grid-row` 把四行**按侧**指派（第 6 节；R8-5 时是五行，
+   R9-3 把手牌并进信息块那一行之后是四行），
    而这要求 `.net-bottom` / `.net-hands` 是 `display: contents`（否则它们的子节点不是本容器的
    grid item，`grid-row` 声明还在却**静默不生效**）。
    ⚠️ 顺序：本规则必须**留在 `.net-grid` 之前** —— `tests/ui` 的 CSS 解算器把 `>` 与后代一视同仁，
@@ -65,16 +68,86 @@
    时**源序靠后者胜** ⇒ 若它排到 `.net-grid` 之后，R7-2（列模板必须 4 条轨道）会假红。 */
 .net-board {
   position: relative;
-  /* 单列多行：行高由内容决定（`auto`），`align-content: start` 让六行整体贴顶（不许在容器里垂直居中）。 */
+  /* 多行：行高由内容决定（`auto`），`align-content: start` 让四行整体贴顶（不许在容器里垂直居中）。 */
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   align-content: start;
   /* 水平中置的**默认值**：手牌区（`.net-hand-area`，宽度按内容）因此在整行里居中。
-     ⚠️ 信息块是**整行**的（第 6 节各自显式 `justify-self`），不靠这条。 */
+     ⚠️ 信息块**不靠这条**：它在**左列**（第 6 节显式 `grid-column: 1`，宽 = 它自己的内容宽）。
+     ⚠️ **R9-3 起行距收窄**（12 → `--net-board-gap` = 4px）：手牌并进信息块所在的那一行之后，
+     每一行都装了两个组件，行距仍按"空行"给 12px 会让整页显得松散（用户要的是"页面别再变长"）。
+     它是一个**有名字的**变量 —— 改这一处就同时改四行的间距。 */
+  --net-board-gap: 4px;
+  /* ⚠️⚠️ **R9-4：卡几何的唯一旋钮上提到 `.net-board`。**
+     手牌卡（`.net-hands .card`）与场上卡（`.net-lane-band .stack .card`）必须**同基准** ——
+     用户原话："缩小**双方卡牌**的大小，使其大小比例与协议卡牌保持一致"（我在 R9-4 前明确问过
+     "手牌卡算不算双方卡牌"，**用户答：一起缩**）。两者唯一的共同祖先就是本容器
+     （`.net-lane-band` 在 `.net-grid` 内、`.net-hands` 在 `.net-bottom` 内），
+     而 R9-1 时它定义在 `.net-lane-band` 上 ⇒ **手牌区根本读不到**。
+     派生：`--card-w`（卡面 5:7）、手牌整卡高 `--hand-card-h`、步距 `0.462 × --card-w`、
+     协议 holder（`× 0.5495 / 0.7692`）、手牌扇形重叠 `0.2154 × --card-w`（= 热座的 −28/130）。
+     ⚠️ 改这一个数就同时改**场上卡 + 手牌卡 + 协议 + 7 张跨度 + 能量槽 + 扇形重叠**。 */
+  --card-h: 140px;
+  --card-w: calc((var(--card-h) - 2px) * 0.71429 + 2px);
+  /* 手牌整卡高（正反面一致）：内容宽 = --card-w − 2×3px padding − 2×1px border，×1.4 纵横比，+8px 盒补。
+     与热座 `.card-back` 的 `height: calc((130px - 8px) * 1.4)`（styles.css:412）同构。
+     ⚠️ 注释里**不要**写带花括号的 CSS 片段：本仓的简版样式表解析器按花括号切规则，
+     注释里出现右花括号会让它把后面半条规则读串（R9-4 实测：G-3 / R1-5 因此假红）。 */
+  --hand-card-h: calc((var(--card-w) - 8px) * 1.4 + 8px);
   justify-items: center;
-  gap: 12px;
+  gap: var(--net-board-gap);
   min-width: 0;
 }
+/* ── G2 修正 **R9-3**：手牌并入信息盒（**同一行、同一个盒子**）──
+   用户第三次反馈原话："希望能将手区也纳入图中的这个组件当中，而不是让这个组件突出在外面，
+   导致本来就很长的页面变得更长了"（附图 = 自己那一侧的信息盒：牌库/弃牌堆/查看弃牌堆 + 提示 + 下一步）。
+   已确认裁决 A：手牌与牌库/信息**同一行、同一个盒子**。
+
+   ## 机制（与 R8-5 同一套：`display: contents` + `grid-row` / `grid-column`，**DOM 一个字不动**）
+   原来五行里信息块与手牌区**各占一整行**（R8-7 的 A 方案），所以那一侧要花两行的高度。
+   现在按**侧**把两者指派到**同一个 `grid-row`**：
+     · 信息块占**左列**（`grid-column: 1`，宽 = `max-content`，第 1 节的模板第一条轨道）；
+     · 手牌区占**第 2 列到右边界**（`grid-column: 2 / -1`，按侧给），
+       在 `.net-board` 的 `justify-items: center` 下**按内容宽度水平中置**。
+   行高 = `max(信息块, 手牌)`（`grid-template-rows` 缺省 `auto`）⇒ **省掉整条手牌行的垂直空间**。
+
+   ## ⚠️ 为什么是 `2 / -1` 而不是 `1 / -1`（**R9-3 收口**；评审 I-2 的更优形态）
+   设第 1 列宽 `c1`、板宽 `B`。`1 / -1` 会让手牌跨**整行**：区间 `[0, B]`、中心 `B/2` ——
+   它虽然也等于页面中心，但它的水平区间与信息块的 `[0, c1]` **重叠**（宽手牌可能压住信息块右侧）。
+   **⚠️ `2 / -1` 不成立** —— R9 修复轮里评审与实现者**都算错过一次**，代价是三条测试红 + 一个子 agent 崩：
+   `2 / -1` 的区间是 `[c1, B]`，中心 `(c1 + B)/2`；而**板中心是 `B/2`**（不是 `(c1 + B)/2` ——
+   `B = c1 + (B − c1)` 是恒等式，它说明的是"板宽 = 两列宽之和"，**不是**"两个中心相等"）。
+   两者相等 **当且仅当 `c1 = 0`**。⇒ 把信息块放在第 1 列、再让手牌从第 2 列起，手牌中心会
+   **右移 `c1/2`**（信息块宽的一半），**不再整页中置**。
+   ⇒ **"信息块占左列 + 手牌从第 2 列起"与"手牌整页中置"不可兼得**。本页选**整页中置**（用户选项 A 的原话），
+   代价是 `1 / -1` 的区间**跨过信息块那一列** ⇒ 手牌很宽时会与信息块**水平重叠**（§14.4 的残余项）。
+   `tests/ui/net-r9.test.ts` 的 **G-12a⑤** 把这条权衡钉成**可执行的反例**（`2 / -1` 的中心 ≠ 板中心）
+   + "手牌区间 ⊇ 信息块区间"的**代价断言**，两条都按**列区间**算，不再认写法。
+
+   ⚠️ 两个组件**共用同一行**但要"看起来是一个盒子"：外框由**信息块**提供
+   （它有边框/圆角/背景），手牌区在并盒形态下**去掉自己的边框与背景**（见第 6 节）——
+   否则是"盒子里套一个小盒子"。
+   ⚠️ `.hand` 仍在 `.net-hands` 里（后者 `display: contents`）、DOM 顺序仍恒 `[P0, P1]`：
+   R9-3 **只动 CSS**，不动任何节点、类名或顺序（FX 用 `querySelectorAll('.hand')[player]`
+   **按下标**读手牌 —— 动了就是全体手牌 FX 静默错位）。 */
+.net-board { grid-template-columns: max-content minmax(0, 1fr); }
+.net-board .net-info-block[data-net-seat='foe'] { grid-row: 1; grid-column: 1; }
+.net-board .net-hand-area-foe { grid-row: 1; grid-column: 1 / -1; }
+.net-board .net-info-block[data-net-seat='self'] { grid-row: 4; grid-column: 1; }
+.net-board .net-hand-area-self { grid-row: 4; grid-column: 1 / -1; }
+/* ⚠️ **日志 / 导出日志必须显式落在第 3 行**（R9-3 的收尾；不写这两条会出两个问题）：
+   ① 它们在本容器里没有别的 `grid-row` 声明 ⇒ 行号由**自动放置**决定。自动放置只往**空行**上放
+      （同一行已有 grid item 就继续往后找），于是：
+        · 预览工具条不存在时（真实联机）⇒ 落在第 3 行 ✓（恰好是本节的四行表里的那一行）；
+        · 预览工具条**存在**时（本地预览）⇒ 工具条也是 auto 放置、会先占掉第 3 行，
+          日志随之被推到**第 5 行** —— 同一份样式表因为"有没有工具条"而产生两种行表。
+   ② `.net-preview-bar` 自己 `position: fixed`（第 8 节）⇒ 它虽然占一个网格格位，
+      视觉上却飘在视口右下角 ⇒ 行号表将**无法从像素上验证**。
+   显式写死第 3 行之后，两种情形下日志/按钮都在"链路之下、自己那一组之上"，
+   与本节的四行表**逐行一致**（也能被人眼一次性核对）。 */
+.net-board > .log,
+.net-board > .diag-btn { grid-row: 3; grid-column: 1 / -1; }
+
 .net-grid {
   /* 热座页 .board-grid 是 flex column（每条线一行的堆叠方向）；本页（三列 + 控制轨）并排 → grid。
      ⚠️ `display: grid` 与 `grid-auto-flow: column` 是**承重**的（R6 复查补上）：`.board-grid`
@@ -89,18 +162,46 @@
      第 4 条轨道 = 控制轨的固定宽（`--net-rail-w`，**一处定义**，`.net-board .control-module`
      也用它 ⇒ 列宽与轨道宽不可能脱钩）。⚠️ 控制轨放在**第 4 列（三列右侧）**是**我的判断**，
      用户只裁决了"竖向 + 自己端在下/对手端在上"、**没有指定摆放位置** ⇒ 详见报告 §5：
-     要挪到左侧只改两处 —— 这里的模板写成 `var(--net-rail-w) repeat(3, minmax(0, 1fr))`，
-     并在 render-net.ts 里把那一行 `grid.appendChild(renderControlModule(…))` 挪到三列循环**之前**。 */
+     要挪到左侧只改两处 —— 这里的模板写成 `var(--net-rail-w) repeat(3, max-content)`，
+     并在 render-net.ts 里把那一行 `grid.appendChild(renderControlModule(…))` 挪到三列循环**之前**。
+
+     ── G2 修正 **R9-1 + R9-2**：轨道改**内容宽** + 三列在页面上**精确居中** ──
+     用户第三次反馈两条原话：
+       · "缩小双方卡牌的大小……同时**链路的宽度**以及7张牌大小的长度也能够缩小了"
+         —— R9-1 把 `--card-h` 缩到 140 只是让**卡**变小；三条轨道若仍是 `1fr`（撑满
+         原来的 `max-width: 1010px`），**链路框仍会比卡片宽得多** ⇒ 必须改成**内容宽**。
+       · "**控制器组件挤压了左边的游玩区组件的位置了**，导致其位置并不是完全位于页面中心的"
+         —— 控制轨占右侧 `--net-rail-w`（160px）⇒ 三列整体**左偏 80px**（R9-2）。
+
+     **R9-1 的做法**：第 1~3 条轨道 = `max-content`（由列内容推出：卡 `--card-w ≈ 100.57`、
+     协议 holder 视觉宽 `--card-h × 0.7692 ≈ 107.7` ⇒ 每条轨道 ≈ `107.7 + 12` 内边距 ≈ 120px），
+     `width: fit-content` + `margin: 0 auto` 让这个**贴合卡片**的盒子在页面里居中；
+     `max-width` 随之**删除**（内容宽恒小于它，留着就是"第二套真相"）。
+     ⚠️ **这是与 R7 判据不同的一件事，不是削弱**：R7-2 钉的是"轨道数 == `.net-grid` 的子节点数"
+     （4 条 —— 防"一行五格"的隐式列），R9-1 只把**前三条的宽度语义**从 `1fr` 换成 `max-content`；
+     轨道数不变、第 4 条仍是控制轨的固定宽 ⇒ R7-2/R7-3 的轨道数判据**一个字未改**（见测试注释）。
+
+     **R9-2 的做法（三列归中的推导 —— 这是本节的承重几何）**：
+     `.net-grid` 的盒宽 = `padding-left + max-content(三条轨道) + 2 × gap + --net-rail-w`。
+     三列占的区间是 `[padding-left, padding-left + max-content]` ⇒ 它的中点
+     `= padding-left + max-content/2`；要让这个中点 == 盒中心（`盒宽/2`），
+     必须 `padding-left = gap + --net-rail-w`（推导：`2P + M = P + M + 2G + R ⇒ P = 2G + R`）。
+     ⇒ 左侧补上与"右侧那条控制轨 + 它两侧的间隙"等宽的内边距，三列就在**页面上精确居中**，
+     控制轨仍留在右侧第 4 条轨道、**DOM 一个字不动**（R8-6 的竖直居中也与它无关）。
+     ⚠️ 写法用 `--net-gap` 而不是两处 12px：`gap` 与 `padding-left` 必须是**同一个数**，
+     否则上面那条等式立刻不成立（而观感只会"差一点点"，看不出是谁的错）。 */
   --net-rail-w: 160px;
+  --net-gap: 12px;
   display: grid;
   grid-auto-flow: column;
-  grid-template-columns: repeat(3, minmax(0, 1fr)) var(--net-rail-w);
-  gap: 12px;
-  /* `width: 100%` + `max-width` + `margin: 0 auto`：宽度由容器决定（被 1010px 截断），
-     两侧自动外边距再把它居中 —— 只写 `max-width` + `margin: 0 auto` 时宽度会退化成
-     **fit-content**（flex/grid 项有横向 auto 外边距时不再 stretch），三列 `1fr` 就无处分配。 */
-  width: 100%;
-  max-width: 1010px;
+  /* `max-content`：三条轨道各自贴合自己的内容（卡/协议），不再被 `1fr` 拉伸到撑满容器。 */
+  grid-template-columns: repeat(3, max-content) var(--net-rail-w);
+  gap: var(--net-gap);
+  /* `fit-content`：宽度 = 内容宽（`margin: 0 auto` 才能居中；`width: 100%` 会把它拉满宿主）。
+     ⚠️ 删掉了 R7 的 `max-width: 1010px` —— 内容宽（≈512px）恒小于它，留着就是死声明。 */
+  width: fit-content;
+  /* `2 × gap + rail` = R9-2 的归中量（推导见上面的注释；184px = 12×2 + 160）。 */
+  padding-left: calc(2 * var(--net-gap) + var(--net-rail-w));
   margin: 0 auto;
   min-width: 0;
 }
@@ -213,21 +314,33 @@
  * styles.css 的 `.stack { --card-h: 175px; --card-w: … }` 与
  * `.stack .card + .card { margin-left: … }` 是**为旋转 90° 的视觉宽度**推导的
  * （卡高 175px 就是横置后的视觉宽）。远程页的卡不旋转，所以这里重推：
- *  - `--card-h` 改为 182，`--card-w = (182 − 2) × 0.71429 + 2 ≈ 130.57`；
- *  - **竖向**重叠量 = 露出 46.2% × 卡宽(130.57) − 卡高(182) ≈ **−122px**
- *    （横排那条公式算出的是 −60.1px —— 它算的是"露出 46.2% 的**宽度**"，
- *     而竖排要露出的条带是**高度**方向的，故必须用卡高参与计算，见下一条规则）。
+ *  - `--card-h` 是**唯一旋钮**（G2 修正 **R9-1**：**当前 140px**；182 是改之前的值，整条链路等比 ×0.77），
+ *    `--card-w = (--card-h − 2) × 0.71429 + 2`（当前 ≈ **100.57px**；182 时代 ≈ 130.57px）；
+ *  - **竖向**重叠量 = 露出 46.2% × 卡宽 − 卡高，即 `0.462 × var(--card-w) − var(--card-h)`
+ *    （**当前 ≈ −93.5px**；182 时代 ≈ −122px）
+ *    （横排那条公式算出的是"露出 46.2% 的**宽度**"，而竖排要露出的条带是**高度**方向的，
+ *     故必须用卡高参与计算，见下一条规则）。
  * 这样 0° 与 180° 的**布局盒与视觉盒一致**，露出条带就是真正的 46.2%，与热座页的可见语义对齐。
  *
  * ⚠️ `--card-h` / `--card-w` 自 **G2 修正 R8-3** 起定义在 `.net-lane-band` 上（原来在
  * `.net-lane-band .stack` 上）：`.stack` 自己要算 "7 张牌的跨度"（`min-height`），
  * 而自定义属性是**继承**的 —— 上提后 `.stack` 仍拿得到同值（下面那条前缀只是历史注释）。
  * `--card-h` 在本页**只用来推导 `--card-w`、竖排重叠量与 7 张跨度**：`.stack .card` 没有显式 height
- * （`height:auto` + `padding:3px` + `box-sizing:border-box`），所以 182 不是"实测卡高"，
- * 而是一个**比例基准**（卡面 5:7 → 182 × 0.71429 ≈ 130）。改卡面比例时才需要动它。
- * ========================================================================== */
-
-.net-lane-band { --card-h: 182px; --card-w: calc((var(--card-h) - 2px) * 0.71429 + 2px); }
+ * （`height:auto` + `padding:3px` + `box-sizing:border-box`），所以 140 不是"实测卡高"，
+ * 而是一个**比例基准**（卡面 5:7 → 140 × 0.71429 ≈ 100）。改卡面比例时才需要动它。
+ *
+ * ⚠️⚠️ **R9-1（本波的承重改动）：`--card-h` 是"整条链路等比缩放"的**唯一出处**。**
+ * 用户原话："缩小双方卡牌的大小，使其大小比例与协议卡牌保持一致……协议的大小已经被你缩小了嘛，
+ * 那么卡牌的大小也理应缩小同样的倍数，同时链路的宽度以及7张牌大小的长度也能够缩小了，
+ * 还有对应的那些特效也是"。已确认裁决 **182 → 140**（≈ ×0.77，与 R8-1 把协议从 200×280 缩到
+ * 100×140 的倍数一致）。**从这一行派生的每一个量（本节的 `--card-w` / 重叠量 / 7 张跨度、
+ * 第 4 节能量槽的格高与圆角、协议 holder 的宽高）都写成 `--card-h` 的表达式** ——
+ * 这就是"以后只改一个数"的结构化落实（§13.3 的硬要求；不许再出现第二组独立字面量）。
+ * ⇒ `--card-h: 140px`：卡 `100.57 × 140`、步距 `46.5px`、7 张跨度 `418.8px`、
+ * 协议 holder `77 × 107.7`（视觉 107.7 × 77）、能量槽格高 `11.5px`。 */
+/* ⚠️ **R9-4 起 `--card-h` / `--card-w` 定义在 `.net-board` 上**（手牌区也要吃同一基准，
+   见第 1 节 `.net-board` 规则里的说明）。本选择器**不再定义**任何东西 —— `.net-lane-band`
+   只是**继承**它，`.stack` 的 7 张跨度与竖排重叠量照样算得出（自定义属性是继承的）。 */
 .net-lane-band .stack .card { padding: 3px; box-sizing: border-box; }
 .net-lane-band .stack .card .card-face-img,
 .net-lane-band .stack .card .cardback-img { height: auto; width: 100%; }
@@ -238,9 +351,12 @@
    "宽度"= **竖直方向的长度**（竖向链路的生长轴是高度）—— 已当面确认。
    尺寸**由变量推出**（不许写死 px）：
      · 相邻两张卡的步距 = 卡高 + 负 margin-top = `var(--card-h) + (0.462 × var(--card-w) − var(--card-h))`
-       = `0.462 × var(--card-w)` ≈ 60.3px；
-     · **7 张的跨度 = `var(--card-h) + 6 × 0.462 × var(--card-w)` ≈ 543.9px**。
-   ⇒ 放 1~7 张框都不变形，第 8 张才继续长。（整块棋盘因此显著"变窄变长"，是用户明确要的结果。） */
+       = `0.462 × var(--card-w)` ≈ 46.5px（R9-1 后；改之前 ≈ 60.3px）；
+     · **7 张的跨度 = `var(--card-h) + 6 × 0.462 × var(--card-w)` ≈ 418.8px**
+       （R9-1 后；改之前 ≈ 543.9px —— 用户要的就是"7 张牌大小的长度也能够缩小"）。
+   ⇒ 放 1~7 张框都不变形，第 8 张才继续长。（整块棋盘因此显著"变窄变长"，是用户明确要的结果。）
+   ⚠️ 这个 `min-height` 是 R9-1 里**唯一一处"长度"面的派生量** —— 它跟着 `--card-h` 一起缩，
+   因为整条式子就是 `--card-h` / `--card-w` 的表达式（没有第二组字面量）。 */
 .net-lane-band .stack { min-height: calc(var(--card-h) + 6 * 0.462 * var(--card-w)); }
 
 /* ── 竖向生长（R1 新语义，替代热座的 .grow-left/.grow-right）──
@@ -354,19 +470,21 @@
    而 `flex-direction: row-reverse` 把 **DOM 第 0 格放到最右**（row-reverse 的主轴起点在右）
    ⇒ 点亮区从**最右**开始向左扩展 ✓ ——**双方一致**，与座位无关。
    若把这条改回 `row`，双方都会变成"从左往右亮"（与用户裁决相反），且没有任何报错。
-   间距收到 2px、每格 `flex: 1 1 0`：10 格横向铺满列宽（~130px ⇒ 每格 ~10px）。 */
+   间距收到 2px、每格 `flex: 1 1 0`：10 格横向铺满列宽（~130px ⇒ 每格 ~10px）。
+   ⚠️ **R9-1**：间距与格高都是"与卡尺寸成比例的几何量"，一律由 `--card-h` 推导 ——
+   `2px/182px ≈ 0.0110`、`15px/182px ≈ 0.0824`（比值取自改之前的实际值，写进表达式即可"只改一个数"）。 */
 .net-lane-band .battery-cells {
   flex-direction: row-reverse;
   justify-content: space-evenly;
   width: 100%;
   height: auto;
-  gap: 2px;
+  gap: calc(var(--card-h) * 0.0110);   /* ≈ 1.5px（改之前 2px @182） */
 }
 .net-lane-band .battery-cell {
   flex: 1 1 0;
   width: auto;
   min-width: 0;
-  height: 15px;
+  height: calc(var(--card-h) * 0.0824);   /* ≈ 11.5px（改之前 15px @182） */
 }
 /* 点数变化时的渐入：styles.css 的 `battery-cell-in` 是 `translateY(6px)` 的**竖版**语义
    （"自下而上错峰淡入"），横置后读作"从下方飘进来"，与"向右/向左"的横轴无关。
@@ -393,14 +511,21 @@
    **永不命中**（数字的父节点是 `.battery`，而 `.battery` 在本页不是 `.stack-slot` 的后代），
    且与 `.net-lane-band .stack-slot .battery` 同类 —— 属于"防弹衣"写法，理由见上面 `.battery` 的说明。
    `order: -1` 是"落在左端"的唯一出处（DOM 顺序是 [外壳, 数字]）；`flex: 0 0 auto` 让它不参与压缩，
-   压缩由 `.battery-shell` 让位承担 —— 那一条里**真正承重的是 `min-width: 0`**（见上面的说明）。 */
+   压缩由 `.battery-shell` 让位承担 —— 那一条里**真正承重的是 `min-width: 0`**（见上面的说明）。
+
+   ⚠️ **R9-1（字号优先保可读、只在"塞不进"时缩）**：这条的 `font-size` 原本是 13px，而 R9-1 把
+   格高缩到 `--card-h × 0.0824 ≈ 11.5px` —— 两位数的字形（含基线以下的空隙）在 13px 下会**越过
+   格子上下沿**。本页对"字号"的裁决是"优先保可读、不主动缩"，**只有与盒子明显冲突时才缩到放得下**：
+   11px 在本页其它小字（`.net-piles .trash-label` 9px / `.net-hand-label` 12px）之间仍可读，
+   且 11px 的行盒 ≈ 13.2px 装得进 ~11.5px 的条带（`line-height` 缺省）——
+   这条**必须人眼复核**（§13.8 的人眼项之一）。 */
 .net-lane-band .battery-overflow {
   position: static;
   transform: none;
   flex: 0 0 auto;
   order: -1;
   margin: 0 4px 0 0;
-  font-size: 13px;
+  font-size: 11px;
 }
 /* 横置后外壳"宽而扁"，竖扫（`battery-scan-sweep` 走 `top`）不成立 ⇒ `syncScanOverlays`
    按外壳实测矩形在 **宽 > 高** 时给层盒加 `.scan-horiz`（热座页外壳恒"高而窄" ⇒ 不加类 ⇒ 逐字不变），
@@ -431,22 +556,26 @@
    横置（外壳从 ~92×200 变成 ~130×21）后 `top: 22%` 落在一条 21px 高的带子上，
    左右两处裂纹会挤在一起。这里只做**最小**修正：把裂纹的纵向分布改成横向分布
    （`left` 承担原来的 `top`），其它（颜色/圆角/辉光/脉冲）一律继承，不动 styles.css。
-   半径也按横条收一档（`border-radius: 16/20/24px` 在 21px 高的条上会读作"胶囊鼓包"）。 */
-.net-lane-band .battery-bulge .battery-shell { border-radius: 8px; }
-.net-lane-band .battery-full .battery-shell { border-radius: 10px; }
+   半径也按横条收一档（`border-radius: 16/20/24px` 在 21px 高的条上会读作"胶囊鼓包"）。
+   ⚠️ **R9-1**：这些"半径/裂纹宽"都是**与卡尺寸成比例的几何量** ⇒ 一律写成 `--card-h` 的倍数
+   （比值取自改之前的实际值：8/10/12px ÷ 182、10/14px ÷ 182），横条本身也随 R9-1 变矮
+   （21px → 140 × 0.0824 × 1.5 ≈ 17px，见第 4 节的格高）——
+   若仍写死 8/10/12px，在更小的外壳上会读作"整条都是圆的"。 */
+.net-lane-band .battery-bulge .battery-shell { border-radius: calc(var(--card-h) * 0.0440); }
+.net-lane-band .battery-full .battery-shell { border-radius: calc(var(--card-h) * 0.0549); }
 .net-lane-band .battery-full .battery-shell::before,
 .net-lane-band .battery-full .battery-shell::after {
   top: 30%;
   left: 22%;
-  width: 10px;
+  width: calc(var(--card-h) * 0.0549);
 }
 .net-lane-band .battery-full .battery-shell::after { top: 56%; left: 58%; }
-.net-lane-band .battery-burst .battery-shell { border-radius: 12px; }
+.net-lane-band .battery-burst .battery-shell { border-radius: calc(var(--card-h) * 0.0659); }
 .net-lane-band .battery-burst .battery-shell::before,
 .net-lane-band .battery-burst .battery-shell::after {
   top: 28%;
   left: 20%;
-  width: 14px;
+  width: calc(var(--card-h) * 0.0769);
 }
 .net-lane-band .battery-burst .battery-shell::after { top: 58%; left: 56%; }
 
@@ -468,17 +597,37 @@
    那两个的语义是"**卡牌**横置"且 `fx-orient.ts` 的 `orientOf` 会把它们当作**卡面**朝向读
    （设计说明 §8.2 第 3 行）—— 协议图借用同名类会让 FX 把协议误判成横置的卡。
    旋转的**布局后果**必须在静态盒上补回来：`transform` 不改变布局盒，若不给静态宽高，
-   横躺的协议（视觉 ~200px 宽）会溢出列宽、压到相邻列。按竖版卡面 5:7 反过来给
-   宽 100 / 高 140 ⇒ 旋转后视觉盒 140 × 100（≈ 一张场上卡的宽 130.57，列宽放得下）。 */
+   横躺的协议（R9-1 后由 `--card-h` 推导，宽 ≈ 76.9）会溢出列宽、压到相邻列。按竖版卡面 5:7 反过来给
+   宽 100 / 高 140 ⇒ 旋转后视觉盒 140 × 100（≈ 一张场上卡的宽 130.57，列宽放得下）。
+
+   ⚠️⚠️ **R9-1：协议 holder 的宽高必须由 `--card-h` 推导（这是"一个数驱动全部"的硬要求）**——
+   用户原话："缩小双方卡牌的大小，使其大小比例与协议卡牌保持一致……协议的大小已经被你缩小了嘛，
+   那么卡牌的大小也理应缩小同样的倍数"。⇒ 卡与协议**同时缩、比例不变**，故 holder 的尺寸
+   写成 `--card-h` 的**倍数**，倍数取自 R8-1 定下来的那一组实际值（100/182 与 140/182）：
+     · `100px / 182px ≈ 0.5495` ⇒ `calc(var(--card-h) * 0.5495) ≈ 76.9px`（宽）
+     · `140px / 182px ≈ 0.7692` ⇒ `calc(var(--card-h) * 0.7692) ≈ 107.7px`（高）
+   ⇒ 旋转后视觉盒 `107.7 × 76.9`（≈ 一张场上卡的宽 100.57，列宽仍放得下），
+   而 `--card-h: 140px` 一改，卡、协议、7 张跨度、能量槽一起动 —— **没有第二组独立字面量**。
+   ⚠️ holder 的**高（107.7）> 卡的宽（100.57）**：`.net-grid` 的内容宽（第 1 节）必须按
+   holder 的视觉宽（= holder 的高）留够，否则横躺的协议会被列宽裁掉（R9-1 的轨道改内容宽
+   正是为这件事；`.net-lane-band` 的 `padding: 8px 6px` 提供余量）。 */
 .net-lane-band .protocol-cell { align-items: center; width: 100%; min-width: 0; }
 .net-lane-band .protocol { flex: 0 0 auto; padding: 0; border: none; background: none; }
-.net-lane-band .protocol-holder { width: 100px; height: 140px; }
-.net-lane-band .protocol-img { width: 100px; height: 140px; max-width: none; }
+.net-lane-band .protocol-holder {
+  width: calc(var(--card-h) * 0.5495);    /* = 原 100px / 182px */
+  height: calc(var(--card-h) * 0.7692);   /* = 原 140px / 182px */
+}
+.net-lane-band .protocol-img {
+  width: calc(var(--card-h) * 0.5495);
+  height: calc(var(--card-h) * 0.7692);
+  max-width: none;
+}
 .net-lane-band .protocol-img.net-rot-ccw { transform: rotate(-90deg); }
 .net-lane-band .protocol-img.net-rot-cw { transform: rotate(90deg); }
 /* 已编译环的持久 FX 层按 holder 的 `getBoundingClientRect()` 定位（render.ts 的
-   syncCompiledFxLayers），holder 是未旋转的 100×140 ⇒ 环自动绕在**旋转后**的协议四角上，
-   本条规则就是为它存在的（没有它 holder 会被图片撑成横躺尺寸、环跟着错位）。 */
+   syncCompiledFxLayers），holder 是**未旋转**的 `76.9×107.7`（R9-1 前 100×140）
+   ⇒ 环自动绕在**旋转后**的协议四角上，本条规则就是为它存在的
+   （没有它 holder 会被图片撑成横躺尺寸、环跟着错位）。 */
 
 /* 中线：P1（左）/ 线号（中）/ P2（右）。P1/P2 的位置**按绝对玩家**，与方向性 FX 一致。
    规格 §1 只要求协议 ∓90°，中线不在朝向表里 → 保持正立（线号与数字要能读）。 */
@@ -521,23 +670,26 @@
 }
 
 /* ============================================================================
- * 6. 五行：**信息块 / 手牌区 / 链路 / 手牌区 / 信息块**（G2 修正 **R8-5 + R8-7**）
+ * 6. 底部行：**信息块 + 手牌区（同一行）** → 链路 → **信息块 + 手牌区（同一行）**
+ *    （G2 修正 **R8-5 + R8-7**；**R9-3 把"各占一整行"改成"并盒同排"**）
  *
  * 用户原话（第二次验收）："对手手牌的显示位置也不对，应该是要放在对方链路的上方位置才对……
  * 还有双方手牌区以及弃牌区的信息位置，应该要更加对称且不能挤占手牌区组件的位置了"。
- * 与用户确认过的 A 方案（`docs/2026-09-15-…-R8-….md` §8.2）自上而下：
+ * 与用户确认过的 A 方案（`docs/2026-09-15-…-R8-….md` §8.2）当时是**五行**、信息块各占一整行。
+ *
+ * ⚠️ **R9-3 改写了这张表**（用户第三次验收："希望能将手区也纳入图中的这个组件当中，而不是让
+ * 这个组件突出在外面，导致本来就很长的页面变得更长了"）—— 现在自上而下是 **4 行**：
  *
  *   | 行 | 内容 |
  *   |---|---|
- *   | 1 | 对手信息块（信息 · 牌库 · 弃牌堆） |
- *   | 2 | 对手手牌区（整行水平中置） |
- *   | 3 | 三条链路 + 控制轨（`.net-grid`） |
- *   | 4 | 自己手牌区（整行水平中置） |
- *   | 5 | 自己信息块（信息 · 牌库 · 弃牌堆） |
- *   | 6 | 日志 / 导出日志 / 预览工具条（按 DOM 顺序自动放置） |
+ *   | 1 | **对手信息块（左列）· 对手手牌区（整行水平中置）** |
+ *   | 2 | 三条链路 + 控制轨（`.net-grid`） |
+ *   | 3 | 日志 / 导出日志 / 预览工具条（按 DOM 顺序自动放置） |
+ *   | 4 | **自己信息块（左列）· 自己手牌区（整行水平中置）** |
  *
- * ⇒ **上下镜像对称**；信息块各占一整行、不再与手牌同行 ⇒ 不再参与手牌的水平居中计算
- * ⇒ 不挤占手牌区。
+ * ⇒ **上下镜像对称**；信息块在**左侧窄列**、与手牌区同排但**不参与手牌的水平居中计算**
+ * （手牌区仍是 `grid-column: 1 / -1`）⇒ 手牌仍整页中置、而页面**省掉整条手牌行的高度**。
+ * 真正的指派写在第 1 节的 R9-3 块里（必须排在 `.net-grid` 规则**之前** —— 见那里的顺序说明）。
  *
  * ## 承重机制：`display: contents` + `grid-row`（缺一条就**静默**退回旧样）
  *
@@ -552,7 +704,8 @@
  * 旧样，而 `grid-row` 声明还在（看着像生效了）—— 例如只给 `.net-bottom` 写了 contents 而漏了
  * `.net-hands`，两条手牌会一起缩进同一个 grid item 里、行号随之错位。
  * `tests/ui/net-board-grid.test.ts` 的 **G-7** 用与 `net-lane-tree.test.ts` **同一套** CSS 解析器
- * 把"盒树展平后的视觉行序"解出来钉住这件事（变异实测：删掉 `.net-hands` 的那条 ⇒ 必红）。
+ * 把"盒树展平后的视觉行序"解出来钉住这件事（变异实测：删掉 `.net-hands` 的那条 ⇒ 必红）；
+ * R9-3 之后它同时断言"**同一行里既有该侧信息块、又有该侧手牌区**"（**G-12**）。
  *
  * ⚠️ **为什么不用 `order`**：R8-5 之前"谁在上/下"由 `.net-hands.net-view-N > .net-hand-area[…]`
  * 的四条 `order` 决定。行号一旦由 `grid-row` 承担，再留着 `order` 就是**两套真相**
@@ -575,37 +728,29 @@
 .net-bottom { display: contents; }
 .net-hands { display: contents; }
 
-/* ── 五行指派（**按侧**）──
+/* ── 行号指派（**按侧**；R9-3 起信息块与手牌区**共用同一行**，见第 1 节）──
    选择器**不能**写成 `.net-board > .net-info-block[…]`：`display: contents` 只改变**盒树**，
    选择器的父子关系仍按 **DOM** 判定 —— 信息块的 DOM 父节点是 `.net-bottom`，
    而手牌区的 DOM 父节点是 `.net-hands` ⇒ 子代组合器 `>` **一条都不会命中**（静默失效）。
-   故一律用后代组合器。 */
-.net-board .net-info-block[data-net-seat='foe'] {
-  grid-row: 1;
-  grid-column: 1 / -1;
-  /* 整行：宽度与 `.net-grid`（max-width: 1010px、水平居中）对齐 ⇒ 五行左右边界一致。
-     `width: 100%` + `max-width` + `justify-self: center` 在**更宽的宿主**里也居中（不依赖 auto margin）。 */
-  justify-self: center;
-  width: 100%;
-  max-width: 1010px;
-}
-.net-board .net-hand-area-foe { grid-row: 2; grid-column: 1 / -1; }
-.net-board > .net-grid { grid-row: 3; grid-column: 1 / -1; }
-.net-board .net-hand-area-self { grid-row: 4; grid-column: 1 / -1; }
-.net-board .net-info-block[data-net-seat='self'] {
-  grid-row: 5;
-  grid-column: 1 / -1;
-  justify-self: center;
-  width: 100%;
-  max-width: 1010px;
-}
+   故一律用后代组合器。
+   ⚠️ **R9-3 把下面四条从"信息块一行 / 手牌区另一行"改成"同一行、两个列"**（真正的指派在
+   第 1 节的 R9-3 块里，这里只留 `.net-grid` 那条 + 手牌区的中置）；本段保留是为了让读者
+   一眼看到"谁在第几行"的**最终**形态：row1 = 对手[信息块 | 手牌区]、row2 = 链路+控制轨、
+   row3 = 日志/工具条、row4 = 自己[信息块 | 手牌区]（`.net-board` 是 `align-content: start`，
+   row3 由 DOM 顺序自动落在链路之后）。 */
+.net-board > .net-grid { grid-row: 2; grid-column: 1 / -1; }
 /* 手牌区在整行里**水平中置**（宽度按内容，`.net-board` 的 `justify-items: center` 是它的默认来源；
-   这里显式写出来，免得"整行"被误读成"拉伸到整行宽"）。 */
+   这里显式写出来，免得"整行"被误读成"拉伸到整行宽"）。
+   ⚠️ R9-3 之后它与**同行的信息块**共用 row1/row4，但中置仍按**整行**算（`grid-column: 1 / -1`）
+   ⇒ 信息块不会被算进手牌的居中 —— 这正是"手牌仍整页中置"的机制。 */
 .net-board .net-hand-area { justify-self: center; }
 
 /* 一块手牌区：只有手牌（对手那块多一行"张数"小标签）。
    ⚠️ 信息条与牌库/弃牌堆**不在这里**（R6 搬到 `.net-info-block`）—— 同一玩家出现两份
-   `.deck[data-player]` / `.trash-pile.pN[data-player]` 会让取首个的 FX 静默错位（I-1 的教训）。 */
+   `.deck[data-player]` / `.trash-pile.pN[data-player]` 会让取首个的 FX 静默错位（I-1 的教训）。
+   几何值本段刻意**保留在基类上**（位置不定，但尺寸/间距/中置与并盒形态共用）——
+   "去边框/去背景"只写在**并盒形态**的规则里（下面那条 R9-3），这样将来若有第五种形态，
+   基类仍是完整的"一块手牌区的默认长相"。 */
 .net-hand-area {
   display: flex;
   flex-direction: column;
@@ -620,6 +765,18 @@
 .net-hand-area-self { border-color: rgba(79, 240, 255, 0.45); background: rgba(79, 240, 255, 0.04); }
 /* 对手那一块（C-4 之后这里**没有**任何 transform —— 对手的卡由 .rot-180 各自倒置）。 */
 .net-hand-area-foe { border-style: solid; background: rgba(255, 255, 255, 0.02); }
+/* ── G2 修正 **R9-3**：并盒形态下**去掉手牌区自己的边框/背景/内边距** ──
+   信息块与手牌区现在**共用同一行**（第 1 节的 R9-3 块），外框由**信息块**提供
+   （它有 1px 实线边框 + 8px 圆角 + 半透明底）。若手牌区仍带着自己的虚线框与底色，
+   观感就是"盒子里套了一个小盒子"（用户要的是"手牌也纳入这个组件当中"= **一个**盒子）。
+   ⚠️ 选择器用 `.net-board .net-hand-area`（(0,2,0)）：它压过上面两条按侧类名的 (0,1,0)，
+   无论哪一侧、无论将来加不加第五种形态，并盒形态下的"去框"都成立（不依赖 import 顺序）。 */
+.net-board .net-hand-area {
+  border: none;
+  background: none;
+  padding: 0;
+  max-width: none;   /* 宽由手牌内容决定（`.net-hand-area` 的 940px 上限在并盒形态下会把手牌盒撑得比内容宽） */
+}
 .net-hand-label { font-size: 12px; color: #9fb0c8; letter-spacing: 0.06em; }
 /* ── 操作区：**挂在操作方那一侧的信息块里**（R6 起在这里；R8-8 把它挂到正确的**一侧**）──
    ⚠️ 这两条的作用是"**把 body 级 fixed 的操作台改成流内**"（`styles.css` 一行不改）：
@@ -659,12 +816,32 @@
 
 /* 作用域限定在 .net-hands 内（本文件自称"只服务 render-net.ts"）：这两个类只在远程页
    `handVisibility: 'count'` 分支产出，裸类名会泄漏到将来别处的同名用法上。 */
-.net-hands .hand-count-only { justify-content: center; align-items: center; min-width: 130px; width: auto; }
+/* ── **R9-4：远程页手牌卡与场上卡同基准**（用户："缩小双方卡牌…"，手牌算在内）──
+   热座页的 `.card { width: 130px }`（`styles.css:387`，**本波不许动**）只被下面这些
+   **`.net-hands` 作用域**的规则覆盖 ⇒ 热座页**选不中**它们、构造性零变化
+   （热座手牌仍是 130×178.8，扇形重叠仍是 28px）。
+   全部值都由 `.net-board` 的 `--card-h` / `--card-w` 推出 ⇒ "一个旋钮"仍然成立。 */
+.net-hands .card { width: var(--card-w); }
+/* 背面高度必须跟着卡宽走，否则同一张手牌正反面高度不一致（热座对应规则见 styles.css:412） */
+.net-hands .card-back { height: calc((var(--card-w) - 8px) * 1.4); }
+/* 手牌行：整高与左右内缩（内缩量 = 重叠量，热座是 28px = 0.2154 × 130px）*/
+.net-hands .hand {
+  min-height: var(--hand-card-h);
+  padding-left: calc(var(--card-w) * 0.2154);
+  padding-right: calc(var(--card-w) * 0.2154);
+}
+.net-hands .hand .card + .card { margin-left: calc(var(--card-w) * -0.2154); }
+.net-hands .hand.reversed .card + .card {
+  margin-left: 0;
+  margin-right: calc(var(--card-w) * -0.2154);
+}
+.net-hands .hand-count-only { justify-content: center; align-items: center; min-width: var(--card-w); width: auto; }
 .net-hands .hand-count-placeholder {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 178.8px;   /* = 一张手牌整高，保证 (.hand) 矩形与"有牌时"同量级 */
+  min-height: var(--hand-card-h);   /* = 一张手牌整高（R9-4 起由 --card-w 推导；改前是写死的 178.8px），
+                                       保证 (.hand) 矩形与"有牌时"同量级 */
   padding: 0 18px;
   border: 1px dashed #555;
   border-radius: 6px;

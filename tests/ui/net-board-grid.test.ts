@@ -262,19 +262,42 @@ function labelOf(it: GridItem): string {
 
 const DESIGNATED = ['信息块:foe', '手牌区:foe', '链路+控制轨', '手牌区:self', '信息块:self'];
 
+/**
+ * **并盒后的视觉顺序**（R9-3；与 `DESIGNATED` 分开，因为两者的用途不同）：
+ * `DESIGNATED` 是"这五块必须都是顶层 grid item"的**集合**（顺序无关），
+ * 这张表是**读序**：并盒的那两行里，手牌区的**列盒**从第 1 列起（整行）、信息块在第 1 列，
+ * 盒树展平后 DOM 顺序是 `.net-hands` 在 `.net-bottom` 的**信息块之后** ⇒ 解出的
+ * `gridItemsOf` 序列是 `[grid, infoFoe, handFoe, …]`。
+ * ⚠️ 这一点**不影响**用户要的观感（手牌整页中置、信息块在左列），只是"同一行内的先后"在
+ * 展平序里由 DOM 决定 —— 把它写成一条**显式**的期望（而不是靠排序稳不稳定），失败时能直接看出。
+ */
+const VISUAL = ['手牌区:foe', '信息块:foe', '链路+控制轨', '信息块:self', '手牌区:self'];
+
+/**
+ * **R9-3 的行表**：信息块与手牌区**并盒同排** ⇒ 五块只占**四个** `grid-row`
+ * （row1 = 对手[信息块 | 手牌区]、row2 = 链路、row3 = 日志/工具条、row4 = 自己[信息块 | 手牌区]）。
+ * ⚠️ 这张表是"同排"这件事的**期望**侧；行为侧由下面 ③′ 的"同一行里既要找到该侧信息块、
+ * 又要找到该侧手牌区"钉住（**G-12**）。
+ */
+const ROW_GROUPS: ReadonlyArray<{ rows: number; labels: string[] }> = [
+  { rows: 1, labels: ['信息块:foe', '手牌区:foe'] },
+  { rows: 1, labels: ['链路+控制轨'] },
+  { rows: 1, labels: ['手牌区:self', '信息块:self'] },
+];
+
 afterEach(() => { setFxViewSeat(null); });
 
-describe('R8-5 / R8-6：五行网格 · 控制轨归中（真跑 renderNetBoard + 解样式表）', () => {
-  it('G-7. 五行行序 = [对手信息块, 对手手牌, 链路+控制轨, 自己手牌, 自己信息块]（两个席位都是）', async () => {
+describe('R8-5 / R8-6 / R9-1 / R9-3：网格行序与列指派 · 控制轨归中（真跑 renderNetBoard + 解样式表）', () => {
+  it('G-7 + G-12. 并盒行序 = [对手信息块 · 对手手牌 | 链路+控制轨 | 自己手牌 · 自己信息块]（两个席位都是）', async () => {
     const restore = installStubDom();
     try {
       for (const seat of [0, 1] as const) {
         const root = renderFrame({ viewSeat: seat, turnPlayer: 0 });
         const board = boardOf(root);
 
-        // ── ① 容器必须是**单列 grid**（`grid-row` 在 flex column / block 下完全无效）──
+        // ── ① 容器必须是**grid**（`grid-row` 在 flex column / block 下完全无效）──
         expect(subjectPropOf(board, [board], RULES, 'display'),
-          '.net-board 不是 grid —— R8-5 的五行靠 grid-row 指派，在 flex column 下它会**静默失效**'
+          '.net-board 不是 grid —— 行/列指派在 flex column 下会**静默失效**'
           + '（视觉顺序退回 DOM 顺序）').toBe('grid');
 
         const items = gridItemsOf(board, RULES);
@@ -292,41 +315,73 @@ describe('R8-5 / R8-6：五行网格 · 控制轨归中（真跑 renderNetBoard 
           + `于是该容器的子节点缩在里面、跟着 DOM 顺序走（\`grid-row\` 声明还在却静默不生效）。`
           + `\n实测顶层 item：${labels.join(' | ')}`).toEqual([]);
 
-        // ── ③ 行号必须**真的**来自样式表（不是 auto），且五块各行一行、互不重叠 ──
+        // ── ③ 行号必须**真的**来自样式表（不是 auto）──
         const designated = items.filter((it) => DESIGNATED.includes(labelOf(it)));
         for (const it of designated) {
           expect(Number.isFinite(it.row), `viewSeat=${seat}：${labelOf(it)} 没有解出 grid-row`
             + '（行号必须由样式表按侧给；靠 DOM 顺序就是 R8-5 之前的旧样）').toBe(true);
         }
-        expect(new Set(designated.map((it) => it.row)).size,
-          `viewSeat=${seat}：五块的行号必须互不相同，实际 `
-          + designated.map((it) => `${labelOf(it)}=${it.row}`).join(' / ')).toBe(5);
+        // ── ③′ **R9-3 的行表**：五块占**四行**，且"信息块与手牌区同行"逐侧成立 ──
+        //    ⚠️ 判据迁移（**不是放松**）：R8-5/R8-7 要求"五块五行、互不相同"（信息块各占一整行）；
+        //    R9-3 的裁决恰恰是"手牌并进信息盒"⇒ 那一句会把本波的裁决判成失败。
+        //    新判据**多查了一件事**：R8-5 时"信息块与手牌区同一行"是不可能出现的形态
+        //    （同一行只有一个组件），所以旧句根本表达不出这条约束。
+        //    行数仍是**精确值**（4），跳行/串行（`grid-row: 3` 与 `4` 对调、某块 `auto`）照样红。
+        const rowOf = (l: string): number => designated.find((it) => labelOf(it) === l)!.row;
+        const rowsUsed = [...new Set(designated.map((it) => it.row))].sort((a, b) => a - b);
+        expect(rowsUsed, `viewSeat=${seat}：并盒后五块应恰好占 4 行（每侧"信息块 + 手牌区"同行），`
+          + `实际占 ${rowsUsed.length} 行：`
+          + designated.map((it) => `${labelOf(it)}=${it.row}`).join(' / ')).toEqual([1, 2, 4]);
+        for (const g of ROW_GROUPS) {
+          const got = g.labels.map(rowOf);
+          // 每个分组**内部**必须同排（`rows` 是该分组占的行数；并盒的分组 = 1 行装两块）
+          expect(new Set(got).size, `viewSeat=${seat}：${g.labels.join(' 与 ')} 必须共用**同一个** grid-row`
+            + `（R9-3：手牌并入信息盒），实际 ${g.labels.map((l, i) => `${l}=${got[i]}`).join(' / ')}`)
+            .toBe(g.rows);
+        }
+        // 逐侧点名（失败信息比"集合不等"可读，也防有人把 ROW_GROUPS 一起改错）
+        expect(rowOf('信息块:foe'), `viewSeat=${seat}：对手信息块与对手手牌区必须**同一行**（R9-3）`)
+          .toBe(rowOf('手牌区:foe'));
+        expect(rowOf('信息块:self'), `viewSeat=${seat}：自己信息块与自己手牌区必须**同一行**（R9-3）`)
+          .toBe(rowOf('手牌区:self'));
+        expect(rowOf('信息块:foe'), `viewSeat=${seat}：并盒的两侧不得落在同一行（上下镜像）`)
+          .not.toBe(rowOf('信息块:self'));
 
         // ── ④ **视觉行序**（本守卫的核心）：按 grid-row 排序后的标签序列 ──
+        //    并盒那一行里两块**同号**，先后由展平后的 DOM 顺序决定（见 `VISUAL` 的说明）；
+        //    这里同时钉"行号真的来自样式表"（③）与"同一行内的次序稳定可读"。
         const visual = designated.slice().sort((a, b) => a.row - b.row).map(labelOf);
         console.log(`  ----- viewSeat=${seat} · 视觉上→下（grid-row 解算）: ${visual.join(' → ')}`);
-        expect(visual, `viewSeat=${seat}：五行的视觉顺序必须是\n  ${DESIGNATED.join(' → ')}\n`
-          + `实际\n  ${visual.join(' → ')}`).toEqual(DESIGNATED);
+        expect(visual, `viewSeat=${seat}：视觉顺序必须是\n  ${VISUAL.join(' → ')}\n`
+          + `实际\n  ${visual.join(' → ')}`).toEqual(VISUAL);
 
-        // ── ⑤ 五块都要**整行**（`grid-column: 1 / -1`）：这是"信息块不再与手牌同行、
-        //     不再挤占手牌区"的机制本身 ──
+        // ── ⑤ **R9-3 的列指派**：信息块占**左列**（不跨列）、手牌区横跨**整行**（到右边界）──
+        //    这两条合起来就是"同一个盒子、且手牌仍整页中置"的机制（信息块只在左侧，
+        //    不参与手牌的水平居中计算）。
         for (const it of designated) {
-          expect(subjectPropOf(it.node, it.chain, RULES, 'grid-column'),
-            `viewSeat=${seat}：${labelOf(it)} 的 grid-column 必须是整行（1 / -1）——`
-            + '它不是整行的话就会与别的东西并排（手牌区重新被挤）').toMatch(/^1\s*\/\s*-1$/);
+          const col = subjectPropOf(it.node, it.chain, RULES, 'grid-column');
+          if (labelOf(it).startsWith('信息块')) {
+            expect(col, `viewSeat=${seat}：${labelOf(it)} 的 grid-column 必须是**左列**（\`1\` 或 \`1 / 2\`），`
+              + `实际 ${String(col)} —— 跨列会把它压在手牌区上面`).toMatch(/^1(\s*\/\s*2)?$/);
+          } else if (labelOf(it).startsWith('手牌区')) {
+            expect(col, `viewSeat=${seat}：${labelOf(it)} 的 grid-column 必须是**整行**（\`1 / -1\` = 到右边界），`
+              + `实际 ${String(col)} —— 被限制到某一列之后手牌就不再整页中置`).toMatch(/^1\s*\/\s*-1$/);
+          } else {
+            expect(col, `viewSeat=${seat}：${labelOf(it)} 的 grid-column 必须是整行（\`1 / -1\`）`)
+              .toMatch(/^1\s*\/\s*-1$/);
+          }
         }
 
         // ── ⑥ **镜像**：两块手牌区/两块信息块分处链路两侧（对手在上、自己在下）——
         //     这正是用户要的"上下镜像对称"；④ 已蕴含，这里显式落一条可读的断言 ──
-        const rowOfLabel = (l: string): number => designated.find((it) => labelOf(it) === l)!.row;
-        expect(rowOfLabel('信息块:foe'), `viewSeat=${seat}：对手信息块必须在**最上**（行号小于链路）`)
-          .toBeLessThan(rowOfLabel('链路+控制轨'));
-        expect(rowOfLabel('手牌区:foe'), `viewSeat=${seat}：对手手牌必须在**对手链路之上**`
-          + '（用户原话："对手手牌要放在对方链路的上方"）').toBeLessThan(rowOfLabel('链路+控制轨'));
-        expect(rowOfLabel('信息块:self'), `viewSeat=${seat}：自己信息块必须在**最下**`)
-          .toBeGreaterThan(rowOfLabel('链路+控制轨'));
-        expect(rowOfLabel('手牌区:self'), `viewSeat=${seat}：自己手牌必须在链路之下`)
-          .toBeGreaterThan(rowOfLabel('链路+控制轨'));
+        expect(rowOf('信息块:foe'), `viewSeat=${seat}：对手信息块必须在**最上**（行号小于链路）`)
+          .toBeLessThan(rowOf('链路+控制轨'));
+        expect(rowOf('手牌区:foe'), `viewSeat=${seat}：对手手牌必须在**对手链路之上**`
+          + '（用户原话："对手手牌要放在对方链路的上方"）').toBeLessThan(rowOf('链路+控制轨'));
+        expect(rowOf('信息块:self'), `viewSeat=${seat}：自己信息块必须在**最下**`)
+          .toBeGreaterThan(rowOf('链路+控制轨'));
+        expect(rowOf('手牌区:self'), `viewSeat=${seat}：自己手牌必须在链路之下`)
+          .toBeGreaterThan(rowOf('链路+控制轨'));
       }
     } finally {
       await drainRaf();

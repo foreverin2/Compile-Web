@@ -10,6 +10,10 @@ import { fxOrientOf, fxRotDegOf, orientOf, orientToCwCcw, orientToFxRot, stripOr
 // G2 修正 R3：**方向模型**（热座 = 按绝对玩家左右；远程页 = 按座位上下）。`fxViewSeat()` 在热座页恒为
 // `null` ⇒ 下面两个落点助手走**逐字搬运**的原左右分支（"热座零变化"是构造性的，见 fx-seat.ts 头注）。
 import { fxHandEndPoint, fxStackEndPoint, fxViewSeat } from '../fx-seat';
+// **R9-1**：手牌/浮层整卡的尺寸与半宽半高（**值一字未改**）。它们是**手牌卡** 130×178.8 的几何，
+// 与场上卡的 `--card-h`（R9-1 后 140）**无关**、本波**不缩**；收成具名常量是为了让"落点盒居中"
+// 这件事在 9 处调用点上不再各写一遍魔数（推导与理由见 `../fx-card-size` 的头注）。
+import { HAND_CARD_H, HAND_CARD_HALF_H, HAND_CARD_HALF_W, HAND_CARD_W } from '../fx-card-size';
 // 浮层卡的「未旋转布局盒 + 中心旋转」几何单一出处（G2 Task 1；R2 起 buildFxCardAt 也用它 —— 避免
 // 本文件再手写一份"宽 = rect 高"的交换算式，两份一旦漂移就是"朝向对但尺寸错"的假正确）。
 import { cloneBoxFrom } from '../fx/clone-orient';
@@ -1033,10 +1037,10 @@ function playWaterReturn(node: HTMLElement, payload: FxCardPayload): void {
   window.setTimeout(() => {
     const settle = document.createElement('div');
     settle.className = 'water-return-settle';
-    settle.style.left = `${target.x - 65}px`;
-    settle.style.top = `${target.y - 89.4}px`;
-    settle.style.width = '130px';
-    settle.style.height = '178.8px';
+    settle.style.left = `${target.x - HAND_CARD_HALF_W}px`;
+    settle.style.top = `${target.y - HAND_CARD_HALF_H}px`;
+    settle.style.width = `${HAND_CARD_W}px`;
+    settle.style.height = `${HAND_CARD_H}px`;
     settle.style.zIndex = String(EXTRA_Z);
     document.body.appendChild(settle);
     window.setTimeout(() => settle.remove(), WATER_AFTER_MS + 300);
@@ -1631,8 +1635,8 @@ export function playSpeedDrawExtra(payload: DrawPayload): void {
 
 const LOVE_GLOW_MS = 2000;      // 抽牌：牌库区粉红光芒 / 落点爱心持续时间（2s）
 const LOVE_AFTER_MS = 2000;     // 给牌：到达后落点边框+爱心持续时间（2s）
-const LOVE_CARD_W = 130;        // 落点盒尺寸（与手牌卡一致 130×178.8）
-const LOVE_CARD_H = 178.8;
+const LOVE_CARD_W = HAND_CARD_W;   // 落点盒尺寸（与手牌卡一致；**单一出处**：./fx-card-size）
+const LOVE_CARD_H = HAND_CARD_H;
 const LOVE_STAGGER_MS = 120;    // 与 main.ts draw-ghost 起飞错开间隔一致
 const LOVE_FIRST_TAKEOFF_MS = 30; // 与 main.ts 首张起飞延迟一致
 const LOVE_FLIGHT_MS = 250;     // 与 .draw-ghost transition 0.25s 飞行时长一致
@@ -1758,8 +1762,8 @@ function playLoveGiveExtra(node: HTMLElement, payload: FxCardPayload): void {
 const REVEAL_FLY_MS = 400; // 单张飞行时长（下一张在此刻起飞）
 const REVEAL_WING_FADE_MS = 400; // 翅膀落地渐隐
 const REVEAL_LAND_FADE_MS = 220; // 幽灵落地渐隐
-const REVEAL_W = 130;
-const REVEAL_H = 178.8;
+const REVEAL_W = HAND_CARD_W;
+const REVEAL_H = HAND_CARD_H;
 const REVEAL_SPACING = 102; // 与 .hand 负 margin 扇形步进一致（130 − 28）
 
 export function playRevealFly(
@@ -1908,10 +1912,14 @@ function showCompileBanner(payload: {
   const rect = node.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return;
   // ── G2 修正 R8-4：浮层盒跟着协议**横躺**（几何跟随的第三处） ──
-  // 远程页的协议图被 `.net-rot-ccw/.net-rot-cw` 自己转了 ∓90°（视觉盒 140×100），而
-  // `rect` 取自 `.protocol`（= holder 的**未旋转** 100×140 布局盒）⇒ 浮层是一个竖版盒盖在
-  // 横躺的协议上，**连 `rotateY` 的翻转轴都落在错误的轴上**。给 `wrap`（浮层盒）绕自身中心
+  // 远程页的协议图被 `.net-rot-ccw/.net-rot-cw` 自己转了 ∓90°（视觉盒 = 旋转后的尺寸，
+  // G2 修正 R9-1 之后 ≈ 107.7×76.9；之前是 140×100），而 `rect` 取自 `.protocol`
+  // （= holder 的**未旋转**布局盒）⇒ 浮层是一个竖版盒盖在横躺的协议上，
+  // **连 `rotateY` 的翻转轴都落在错误的轴上**。给 `wrap`（浮层盒）绕自身中心
   // 加同一个 `rotate(deg)` 即可：浮层盒与协议视觉盒重合、翻转轴回到协议自己的轴上。
+  // ⚠️ 这里的几何**全部来自 `getBoundingClientRect()`**（`rect`），所以 R9-1 把协议缩小之后
+  //    它自动跟随 —— 本函数**没有**任何写死的协议尺寸（这是"多数 FX 读 DOM 矩形 ⇒ 自动跟随"
+  //    的一个实例，见报告里那张写死系数的清单）。
   // ⚠️ 角度经 `fxRotDegOf`（**只读标记、不回退**）取 holder 的 —— 与 `positionCompiledFxLayer`
   //    读**同一个助手、同一个来源**（不是各自手搓角度）。热座页没有标记 ⇒ `deg === 0`
   //    ⇒ 下面 `rotate` 是空串 ⇒ `cssText` 与改动前**逐字相同**（热座零变化）。
@@ -2266,7 +2274,8 @@ interface RearrangeProtocolsPayload {
  *  协议资源 src；P2 幽灵初始转 180°（与场上 .protocol-img.rot-180 朝向一致）。
  *
  *  **G2 修正 R8-4 · `deg`（协议特效朝向标记的裸角度）**：远程页协议图**自己**被转了 ∓90°
- *  （视觉 140×100），而 `rect` 取自 `img.getBoundingClientRect()` ⇒ 它**已经是**旋转后的视觉足迹。
+ *  （视觉盒 = 旋转后的尺寸：R9-1 后 ≈ 107.7×76.9，R8-1~R9-1 是 140×100），
+ *  而 `rect` 取自 `img.getBoundingClientRect()` ⇒ 它**已经是**旋转后的视觉足迹。
  *  此时若还用"竖版"给图（`width:100%;height:100%;object-fit:cover`）就会被裁掉一截、且方向是竖的
  *  ⇒ **会失真**，故按同一标记归一：图按**未旋转**的布局尺寸建盒（宽 = 足迹高、高 = 足迹宽，
  *  绕自身中心转 `deg`）⇒ 转完正好铺满幽灵盒，与原协议逐像素重合。
@@ -2327,7 +2336,8 @@ function playRearrangeProtocolsFx(payload: RearrangeProtocolsPayload): void {
   if (rectA.width === 0 || rectA.height === 0 || rectB.width === 0 || rectB.height === 0) return;
   // ── G2 修正 R8-4：朝向判定**优先按 holder 的特效朝向标记归一** ──
   // rect 取自 `.protocol-img` 的 `getBoundingClientRect()` —— 在远程页那**已经是旋转后的视觉足迹**
-  // （140×100）✓，所以幽灵盒（= 足迹）与飞行轨迹（足迹中心 → 足迹中心）都不用改；
+  // （R9-1 后 ≈ 107.7×76.9；R8-1~R9-1 是 140×100）✓，所以幽灵盒（= 足迹）与飞行轨迹
+  // （足迹中心 → 足迹中心）都不用改（协议缩了它们自动跟随）；
   // 要归一的只有**幽灵内部的图**与**180° 判定**：
   //  · 有标记（远程页）⇒ 幽灵内的图按 ∓90° 出图（否则竖版图会被 cover 裁掉、方向也是竖的）；
   //    且**不得**再叠 180°（协议图在远程页虽然也带 `.rot-180`，但 `.net-rot-*` 权重更高 ⇒
