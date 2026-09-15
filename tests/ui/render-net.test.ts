@@ -84,7 +84,11 @@ function between(code: string, from: string, to: string): string {
   return code.slice(i, j);
 }
 
-/** 去注释后的 CSS 规则（本文件没有嵌套规则/@media，`选择器 { 体 }` 的简版解析够用）。
+/** 去注释后的 CSS 规则（`选择器 { 体 }` 的简版解析）。
+ *  ⚠️⚠️ **styles-net.css 不许有条件块**（`@media` / `@supports` / `@container`）—— 由
+ *  `net-lane-tree.test.ts` 的 **R6-4** 正面守卫钉住。理由：本解析器**不递归**条件块，
+ *  一旦出现，块**内部**的规则会被当成**无条件规则混进规则表**（`@media` 的前导被跳过、内容不跳）。
+ *  旧注释写的"本文件没有嵌套规则/@media，简版解析够用"**是错的**（R8-5 实测更正）。
  *  ⚠️ 选择器**内部**的换行/多空格原样保留（正则只切"选择器 → `{`"这一段）：
  *  形如 `.a,\n.b { … }` 的多行选择器会被切成 `'.a,\n.b'`，调用方要么用子串比、
  *  要么先压空白（见 R1-1 的 `norm`）。 */
@@ -93,7 +97,12 @@ function cssRules(css: string): Array<{ selector: string; body: string }> {
   const src = stripComments(css);
   const re = /([^{}]+)\{([^{}]*)\}/g;
   for (let m = re.exec(src); m !== null; m = re.exec(src)) {
-    out.push({ selector: m[1].trim().replace(/\s+/g, ' '), body: m[2] });
+    // ⚠️ `stripComments` **保留注释起止的两个字符**（`/*`…`*/` 只把中间内容换成空白），于是紧跟在
+    //    一条**行尾注释/块注释**之后的规则，其 `m[1]` 会带上一段 `/* … */` 前缀 ——
+    //    用 `endsWith` 比够用，但**选择器组**（`.a:where(*), .b { }` 里第一条在中间）就会被前缀挡住。
+    //    这里把**开头的**注释块清掉（只清开头：选择器里不会真有 `/*`），于是 `includes` 判据也能用。
+    const raw = m[1].replace(/^\s*(?:\/\*[\s\S]*?\*\/\s*)*/, '');
+    out.push({ selector: raw.trim().replace(/\s+/g, ' '), body: m[2] });
   }
   return out;
 }
@@ -833,7 +842,7 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
    * **抓不到**"三条横带 vs 三个竖列"—— 因为横带与竖列在源码上是**同一个**函数名与同一个循环。
    * 新增的 ③ 才是真正钉住"列"的那条腿；①②把"列内的层顺序"钉死。
    */
-  it('R1-1. 三列纵向布局：列内层顺序（对手侧 / 中线 / 自己侧）+ 链路槽在协议格之前 + 能量槽在外侧端', () => {
+  it('R1-1 / R8-2. 三列纵向布局：列内层顺序 + 链路槽/协议格的镜像挂载 + 能量槽在链路框**外**的端上（横置）', () => {
     const code = netCode();
     // ① 列内顺序：对手侧 → 中线 → 自己侧（`foe` 先于 `mid`，`mid` 先于 `viewSeat`）
     const col = between(code, 'function renderLaneColumn', 'function choiceSkipBtn');
@@ -848,65 +857,120 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
     expect(iMid, '列内顺序错：中线必须在自己侧**之前**（规格 §1 第 4 层的分界）').toBeLessThan(iSelf);
     expect((col.match(/col\.appendChild\(renderSide\(/g) ?? []).length,
       'renderSide 必须恰好挂载两次（对手 / 自己各一次 —— 少一次就是半个棋盘，F-2 的计数盲区）').toBe(2);
-    // ② 一侧之内：**两侧的挂载顺序必须镜像**（规格 §1：中线两侧**都是协议**）
+    // ② 一侧之内：**三层的挂载顺序必须镜像**（中线两侧**都是协议**；能量槽在**最外端**）
     //
     // ⚠️ **R-F · C-2 的守卫修正（这条旧断言把错误钉成了正确）**：
     //   旧判据是"链路槽必须在协议格之前"——对**两侧**同一句话，失败信息还写着
     //   "层 5 在层 4 之后靠列顺序实现"。那是一句**空推理**：列顺序只是把三"段"排成
-    //   对手侧/中线/自己侧，**无法**重排某一侧内部的两层。于是它把
+    //   对手侧/中线/自己侧，**无法**重排某一侧内部的层。于是它把
     //   "自己协议落到整列最外端（应在层 4、紧贴中线）"这个 C-2 缺陷**固化成了期望值**
-    //   （改对反而报红）。现在钉规格本身：
-    //     · 自己侧（下半）= 协议格（层 4）在前、链路槽（层 5）在后；
-    //     · 对手侧（上半）= 链路槽（层 2）在前、协议格（层 3）在后。
+    //   （改对反而报红）。现在钉规格本身（**R8-2 之后每侧三层**）：
+    //     · 自己侧（下半）= 协议格（层 4）→ 链路槽（层 5）→ 能量槽（层 6，最下）；
+    //     · 对手侧（上半）= 能量槽（层 1，最上）→ 链路槽（层 2）→ 协议格（层 3）。
     //   **原能抓什么**：两侧共用一个无条件顺序时的"整段挂载被删"（已由第 17 条的计数表承担）。
-    //   **现在还能抓什么**：把两侧写成同一个顺序（= C-2 回归）、或把两侧顺序对调（自己协议跑到最外端）。
-    //   **为什么新的更贴规格**：它约束的是"中线两侧都是协议"这条**版面事实**的镜像，
-    //   而不是"某个 appendChild 在第几行"。
-    //   ⚠️ 层序的**行为**判据（真跑 `renderNetBoard` 后按元素树 + CSS `order` 数六层）在
-    //   `tests/ui/net-lane-tree.test.ts` —— 源码文本只能证明"分支这么写"，证明不了产出顺序。
+    //   **现在还能抓什么**：把两侧写成同一个顺序（= C-2 回归）、或把三层顺序对调
+    //   （自己协议跑到最外端 / 能量槽跑回链路框内侧）。
+    //   ⚠️ 层序的**行为**判据（真跑 `renderNetBoard` 后按元素树数六层）在
+    //   `tests/ui/net-lane-tree.test.ts` 的 G-1 —— 源码文本只能证明"分支这么写"，证明不了产出顺序。
     const side = between(code, 'function renderSide(', 'function renderLaneMid');
-    expect(side, '自己侧必须**协议格在前**（层 4 贴中线、链路槽层 5 在其外）—— 两侧共用一个顺序 = C-2 回归')
-      .toMatch(/kind === 'self'\)\s*\{[\s\S]{0,300}side\.appendChild\(protoNode\)[\s\S]{0,150}side\.appendChild\(slotNode\)/);
-    expect(side, '对手侧必须**链路槽在前**（层 2 在外、协议格层 3 贴中线）—— 两侧共用一个顺序 = C-2 回归')
-      .toMatch(/\}\s*else\s*\{[\s\S]{0,300}side\.appendChild\(slotNode\)[\s\S]{0,150}side\.appendChild\(protoNode\)/);
-    // 两个节点确实来自那两个助手（挂载顺序钉的是"哪一份先挂"，这里把"哪一份是谁"补上）
+    expect(side, '自己侧必须**协议格在前 → 链路槽 → 能量槽**（层 4/5/6，能量槽在最外端 = 最下）——'
+      + '两侧共用一个顺序 = C-2/R8-2 回归')
+      .toMatch(/kind === 'self'\)\s*\{[\s\S]{0,400}side\.appendChild\(protoNode\)[\s\S]{0,200}side\.appendChild\(slotNode\)[\s\S]{0,200}side\.appendChild\(batteryNode\)/);
+    expect(side, '对手侧必须**能量槽在前 → 链路槽 → 协议格**（层 1/2/3，能量槽在最外端 = 最上）——'
+      + '两侧共用一个顺序 = C-2/R8-2 回归')
+      .toMatch(/\}\s*else\s*\{[\s\S]{0,400}side\.appendChild\(batteryNode\)[\s\S]{0,200}side\.appendChild\(slotNode\)[\s\S]{0,200}side\.appendChild\(protoNode\)/);
+    // 三个节点确实来自那三个助手（挂载顺序钉的是"哪一份先挂"，这里把"哪一份是谁"补上）
     expect(side, '链路槽不是 renderStackSlot 的产物（顺序判据失去意义）').toMatch(/=\s*renderStackSlot\(/);
     expect(side, '协议格不是 renderProtocolCell 的产物（顺序判据失去意义）').toMatch(/=\s*renderProtocolCell\(/);
-    // ③ 样式表：列/侧都是纵向，能量槽用 order 落在链路外侧端
+    // ⚠️ **R8-2 的产出腿**：能量槽必须由 `renderBattery` 在本页产出并挂进 `side`
+    //    （`renderStackSlot` 已传 `withBattery: false`）—— 少了这一条，"能量槽挂在自己的侧里"
+    //    这句话在源码里就没有产出方，而下面的 `appendChild(batteryNode)` 会被**局部变量名**满足。
+    expect(side, '能量槽不是 renderBattery 的产物（顺序判据失去意义；能量槽会被挂成 undefined）')
+      .toMatch(/=\s*renderBattery\(/);
+    expect(side, '`renderStackSlot` 未传 `withBattery: false` —— 链路槽里仍会多挂一个能量槽'
+      + '（两处落点 = 两套真相）').toMatch(/withBattery:\s*false/);
+    expect(stripComments(read('render.ts')), '`renderStackSlot` 的 withBattery 缺省值变了？'
+      + '（缺省必须 = 挂能量槽，热座页才逐字等价）').toMatch(/opts\?\.withBattery\s*!==\s*false/);
+    // ③ 样式表：列/侧都是纵向；能量槽在远程页**横置**（row-reverse = 从右往左点亮）
     const css = read('styles-net.css');
     // ⚠️ `cssRules` 对这份样式表**不是**先去掉注释再解析（它按 `{}` 切块，块注释里的 `*`/`/`
     //    会留成 `/* */` 前缀），所以选择器要用 `endsWith` 比 —— 用 `===` 会假红。
     //    另外复合选择器里的换行/多空格也要压掉（`.a .b` 与 `.a  .b` 语义相同）。
+    //    ⚠️ **选择器组（`includes` 片段）**：`endsWith` 对**选择器组**（`.a, .b { }`）匹配不上
+    //    非末条的选择器。R8-2 修正删掉了那处选择器组（`.net-lane-band .battery,
+    //    .net-lane-band .stack-slot .battery` 的第二条是死规则/防弹衣，见下面 ⑤），
+    //    但 `includes` 兜底仍保留：它让"选择器组里的非末条"能被找到 —— 若那条正好是**防弹衣**，
+    //    就会被找到并由 ⑤ 报红（删掉兜底反而会让它退回"找不到规则 → 报红"，方向一样但信息更差）。
     const norm = (s: string): string => s.replace(/\s+/g, ' ').trim();
     const ruleBody = (sel: string): string => {
       const want = norm(sel);
-      const r = cssRules(css).find((x) => norm(x.selector).endsWith(want));
+      const r = cssRules(css).find((x) => norm(x.selector).endsWith(want))
+        ?? cssRules(css).find((x) => norm(x.selector).includes(want + ','));
       expect(r, `styles-net.css 里找不到规则 ${sel}（布局腿被删？）`).toBeTruthy();
       return r?.body ?? '';
     };
     expect(ruleBody('.net-lane-band'), '`.net-lane-band` 不是纵向 flex —— 三个列就变回三条横带')
       .toMatch(/flex-direction:\s*column/);
-    expect(ruleBody('.net-side'), '`.net-side` 不是纵向 flex（列内的两层会并排）')
+    expect(ruleBody('.net-side'), '`.net-side` 不是纵向 flex（一侧的三层会并排）')
       .toMatch(/flex-direction:\s*column/);
-    expect(ruleBody('.net-lane-band .stack-slot'), '`.stack-slot` 不是纵向 flex（能量槽没法用 order 挪到上/下）')
+    expect(ruleBody('.net-lane-band .stack-slot'), '`.stack-slot` 不是纵向 flex（链路槽里的 .stack 会跑歪）')
       .toMatch(/flex-direction:\s*column/);
-    // 能量槽的**外侧端归属**：对手 order 1（在链路 order 2 之上 ⇒ 列的**最上端**）、
-    // 自己 order 3（在**最下端**）。**规格没变，选择器必须按侧给**（R-F · C-2）：
-    // ⚠️ 旧判据钉的是 `.stack-slot.p1/.p2`（**绝对玩家号**）—— 而"哪一侧是自己"由**座位**决定，
-    //    默认预览席位（`viewSeat = 0`，自己 = P0）下那两条会把**两个能量槽都摆到内侧**，
-    //    与 §1 相反（评审真跑元素树实测）。按侧的钩子 `.net-side-foe` / `.net-side-self` 本来就在产出。
-    expect(ruleBody('.net-lane-band .net-side-foe .stack-slot .battery'),
-      '对手能量槽未**按侧**定 order（应在链路上方的外侧端 = 层 1）')
-      .toMatch(/order:\s*1/);
-    expect(ruleBody('.net-lane-band .net-side-self .stack-slot .battery'),
-      '自己能量槽未**按侧**定 order（应在链路下方的外侧端 = 层 6）')
-      .toMatch(/order:\s*3/);
-    // 反空集合 + 反回归：**不得**再有按绝对玩家号给能量槽定 order 的规则（C-2 的第二个成因）
-    expect(css, 'styles-net.css 仍按绝对玩家号（.p1/.p2）给能量槽定 order —— 默认席位下两个能量槽都会跑到内侧')
-      .not.toMatch(/\.stack-slot\.p[12]\s*(?:,|\{)[^}]*order/);
-    expect(ruleBody('.net-lane-band .stack-slot .battery'),
-      '能量槽仍是绝对定位（styles.css:161 的 left/right:-120px 会把竖排的能量槽甩到列外）')
+    // 能量槽的绝对定位必须被中和（styles.css:161-179 的 left/right:-120px 会把它甩到列外）。
+    // ⚠️ **R8-2 修正确认**：真正生效的是**裸** `.net-lane-band .battery`（(0,2,0) 靠权重差压过
+    //    styles.css 的 `.battery` (0,1,0)，**不依赖 import 顺序**）。旧断言钉的是
+    //    `.net-lane-band .stack-slot .battery`（(0,3,0) 的"对位覆盖"）—— 那条选择器在本页
+    //    **永不命中**（能量槽已不是 `.stack-slot` 的后代），且它构成**防弹衣**：把能量槽挂回槽内
+    //    的错误形态会被它中和（styles.css 的 `left/right:-120px` 失效）⇒ 结构错了也照样好看、不报错。
+    //    已删除；"防弹衣已拆"另由下面 ③ 与 `tests/ui/net-lane-tree.test.ts` 的行为腿守卫。
+    expect(ruleBody('.net-lane-band .battery'),
+      '能量槽仍是绝对定位（styles.css:161 的 left/right:-120px 会把能量槽甩到列外）')
       .toMatch(/position:\s*static/);
+    // 横置：外壳铺满列宽 + 10 格**左右排开**（row-reverse 是"从右往左点亮"的唯一出处）
+    expect(ruleBody('.net-lane-band .battery'), '远程页的能量槽不是横向一条（横置没生效）')
+      .toMatch(/flex-direction:\s*row\b/);
+    expect(ruleBody('.net-lane-band .battery'), '远程页的能量槽没铺满列宽（横条应当是整列宽）')
+      .toMatch(/width:\s*100%/);
+    expect(ruleBody('.net-lane-band .battery-shell'), '能量槽外壳没改成横向（10 格会继续竖排）')
+      .toMatch(/flex-direction:\s*row\b/);
+    expect(ruleBody('.net-lane-band .battery-cells'), '能量格不是 row-reverse —— 双方都会变成"从左往右"点亮')
+      .toMatch(/flex-direction:\s*row-reverse/);
+    // ⚠️ **`order` 退役**：整份样式表里不得再有任何给**能量槽本身**定 order 的规则
+    //    （R1~R7 期间"能量槽的落端"由 order 决定 —— C-2 的两次 Critical 都出在这条缝里；
+    //     R8-2 之后落端只剩 DOM 顺序一个出处）。**比旧断言（只禁按绝对玩家号）更强**。
+    //    ⚠️ **R8-2 修正的判据收窄（不是放松）**：旧判据的 `/\.battery/` 是**裸子串**，
+    //    连 `.battery-overflow` / `.battery-shell` / `.battery-cells` 都算"给能量槽定 order"；
+    //    而现在 `.battery-overflow { order: -1 }` 是**盒内**顺序（数字在外壳左端，C-1 的修法），
+    //    与"能量槽在哪一层"无关。收窄成"**选择器主体**是 `.battery` 元素"后，旧威胁全部仍被覆盖
+    //    （`.net-lane-band .battery` / `.stack-slot.p1 .battery` 的主体都是它），
+    //    并且下面第 ④ 条把"唯一例外"钉死 —— 新增任何 `.battery*` 的 order 规则仍会报红。
+    const batteryOrderRules = cssRules(css)
+      .filter((r) => /(?:^|;|\s)order\s*:/.test(r.body))
+      .filter((r) => norm(r.selector).split(',')
+        .some((s) => /\.battery(?![\w-])\s*$/.test(s.trim())));
+    expect(batteryOrderRules.map((r) => r.selector), 'styles-net.css 里仍有给能量槽定 order 的规则'
+      + '（`order` 必须彻底退役：能量槽的落端只剩 DOM 兄弟顺序一个出处）').toEqual([]);
+    // ④ **唯一例外**（把收窄交代清楚，别让它变成新的白名单后门）：
+    //    带 `order` 的 `.battery*` 规则**只允许** `.battery-overflow` 那一条（盒内左端）。
+    const orderRulesTouchingBattery = cssRules(css)
+      .filter((r) => /(?:^|;|\s)order\s*:/.test(r.body) && /\.battery/.test(r.selector))
+      .map((r) => norm(r.selector));
+    expect(orderRulesTouchingBattery, 'styles-net.css 里带 order 的 `.battery*` 规则'
+      + '只允许 `.net-lane-band .battery-overflow`（它管的是能量槽**盒内**的"数字在外壳左端"，'
+      + '与"能量槽本身在哪一层"无关）—— 别的 `.battery*` order 规则一律不许有')
+      .toEqual(['.net-lane-band .battery-overflow']);
+    // ⑤ **防弹衣已拆**（R8-2 修正确认新增，本条与旧断言无重叠）：
+    //    styles-net.css 里不得再有任何 "`.stack-slot` … `.battery`" 选择器 —— 那种形态要么是
+    //    **死规则**（能量槽在本页不是 `.stack-slot` 的后代），要么是**防弹衣**（与 styles.css 的
+    //    `.stack-slot.pN .battery` (0,3,0) 同权重、后源序 ⇒ 把"挂回槽内"的错误形态中和成好看的样子，
+    //    于是结构错了也不报错）。判据按**选择器逐段**（逗号切分）判，所以"拆掉选择器组、另起一条"
+    //    这种绕法同样报红。剔除它之后，回退形态会立刻吃到 styles.css 的 `left/right:-120px`。
+    const slotScopedBattery = cssRules(css)
+      .flatMap((r) => norm(r.selector).split(',').map((s) => s.trim()))
+      .filter((s) => /\.stack-slot(?![\w-])/.test(s) && /\.battery(?![\w-])/.test(s));
+    expect(slotScopedBattery, 'styles-net.css 里仍有 ".stack-slot … .battery" 选择器 ——'
+      + '本页能量槽**不在** `.stack-slot` 里（R8-2 已移出链路框）⇒ 它是死规则；'
+      + '而它与 styles.css 的 `.stack-slot.pN .battery` 同权重又后源序 ⇒ 又是"防弹衣"'
+      + '（把"挂回槽内"的错误形态中和掉、结构错了也不报错）。别加回来').toEqual([]);
     // 三条线仍然由同一个循环产出（写成 `[0, 1, 2]`；改长度必须同步第 17 条的期望数量表）
     expect(code, '三条线必须由 `for (const line of [0, 1, 2] as Line[])` 产出')
       .toMatch(/for \(const line of \[0, 1, 2\] as Line\[\]\)/);
@@ -1038,18 +1102,29 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
    */
   it('R1-5. 手牌区水平中置（选择器级判据）+ 协议 180° 仍在热座页产出（∓90° 只属远程页）', () => {
     const css = read('styles-net.css');
-    expect(css, 'styles-net.css 未把 .net-hands 的子项水平中置（手牌区没有中置）')
-      .toMatch(/\.net-hands\s*\{[^}]*justify-items:\s*center/);
+    // ⚠️⚠️ **R8-5：中置的**对象**换了（判据跟着搬，不是放宽）**。
+    // 改之前：`.net-hands { justify-items: center }` + `.net-bottom { justify-content: center }`
+    // + `.net-hands { justify-self: center }` —— 三条都在给"底部行三列"布局里的手牌区定位。
+    // R8-5 之后 `.net-bottom` / `.net-hands` 都是 `display: contents`（**盒子消失**）⇒
+    // 写在它们身上的 `justify-content` / `justify-items` / `justify-self` **一律失效**
+    // （留在那里就是"看着像在居中、其实什么都没做"的死声明 —— 本项目专门猎杀这一类）。
+    // 现在"手牌区水平中置"由**两层**承担，且两层都必须查：
+    //   ① `.net-board`（**五行 grid 容器**）是 `display: grid` + `justify-items: center`
+    //      —— 手牌区因此在**整行**里居中（这正是"不挤占手牌区"的那条）；
+    //   ② `.net-hand-area` 自己 `align-items: center`（块内小标签/手牌统一中置）+
+    //      `justify-self: center`（块按**内容宽度**居中，不被拉成整行宽）。
+    // 为什么仍然必须分开查（而不是只查一条）：只查 `align-items` 会被**任何**一条 flex 规则满足
+    // （`.hand` 自己就是 `align-items: flex-start`）—— 旧版正因如此才把三条腿按选择器分开。
+    expect(css, 'styles-net.css 未把五行容器 .net-board 设成单列 grid（R8-5 的五行靠 grid-row 指派）')
+      .toMatch(/\.net-board\s*\{[^}]*display:\s*grid/);
+    expect(css, 'styles-net.css 未把 .net-board 的子项水平中置（手牌区没有中置）')
+      .toMatch(/\.net-board\s*\{[^}]*justify-items:\s*center/);
     // ⚠️ R6：手牌区的外层容器改名 `.net-hand-side` → `.net-hand-area`（它现在只包手牌，
-    //    信息条搬去了底部行的信息块）。"块内内容中置"这条判据仍然必须存在 —— 只是换了对象。
+    //    信息条搬去了 `.net-info-block`）。"块内内容中置"这条判据仍然必须存在 —— 只是换了对象。
     expect(css, 'styles-net.css 未把 .net-hand-area 的内容水平中置（小标签会贴左）')
       .toMatch(/\.net-hand-area\s*\{[^}]*align-items:\s*center/);
-    // R6 新增：中置现在是**两层**（底部行 fit-content 居中 + 手牌区 justify-self）——
-    // 只查 `justify-items` 会被"手牌区被两侧信息块挤到一边"瞒过去（那正是 R6 的新风险）。
-    expect(css, '底部行未整体居中（手牌区左右留白不对称）')
-      .toMatch(/\.net-bottom\s*\{[^}]*justify-content:\s*center/);
-    expect(css, '手牌区未在底部行的中列里居中')
-      .toMatch(/\.net-hands\s*\{[^}]*justify-self:\s*center/);
+    expect(css, '手牌区未按内容宽度在整行里居中（会被 justify-items: stretch 拉成整行宽）')
+      .toMatch(/\.net-hand-area\s*\{[^}]*justify-self:\s*center/);
     // 热座页的协议 180° 产出点**一行未改**（`orient === 180 ? ' rot-180' : ''`）——
     // 它是 A 类钩子 `.rot-180` 在热座页的唯一产出点，也是"远程页 ∓90° 不能借用 .rot-cw/.rot-ccw"
     // 这条裁决的对照面（两种朝向并存，谁也不许吃掉谁）。
@@ -1215,6 +1290,14 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
   let foeFxRot: string | null = 'cw';
 
   /**
+   * **R8-4**：协议 holder（`.protocol-cell .protocol-holder`）的标记取值。
+   * 与 `selfFxRot` / `foeFxRot` 同形、同源理由（选择器是**无值形式** `.protocol-holder`，
+   * 桩拿不到值 ⇒ 必须由合成页告诉它"这一侧应该是什么值"）；`null` = 标记整个缺失。
+   */
+  let selfProtoFxRot: string | null = 'ccw';
+  let foeProtoFxRot: string | null = 'cw';
+
+  /**
    * R2-1（G2 修正 R2）：**特效朝向标记**在 `NET_PAGE_HOOKS` 里的登记形态。
    *
    * 为什么单列一条：镜像相等（第 2b 条）只保证"表里有这一条"，证明不了**它怎么被判**。
@@ -1229,12 +1312,17 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
   it('R2-1. [data-fx-rot] 在表里登记为 stateDependent（不计数）且产出链条锚在 renderStackSlot(', () => {
     const entry = NET_PAGE_HOOKS.find((h) => h.hook === '[data-fx-rot]');
     expect(entry, '[data-fx-rot] 未登记进 NET_PAGE_HOOKS（契约漂移）').toBeTruthy();
-    expect(entry?.expected, '[data-fx-rot] 定了数量 —— 它是**逐卡**标记，空局面合法为 0，定死会稳定误报')
+    expect(entry?.expected, '[data-fx-rot] 定了数量 —— 它是**逐节点**标记，空局面合法为 0，定死会稳定误报')
       .toBeUndefined();
     expect(entry?.stateDependent, '[data-fx-rot] 既没定数量也没标状态相关（自查会对它既不报错也不计数）')
       .toBeTruthy();
-    expect(entry?.call, '[data-fx-rot] 的产出链条不对（值经 renderStackSlot 的 fxRot 参数逐卡写入）')
-      .toEqual(['renderStackSlot(']);
+    // ⚠️ G2 修正 **R8-4**：产出链从**一条腿**变**两条**（场上卡 + 协议 holder）。
+    //    原来这里钉的是 `toEqual(['renderStackSlot('])` —— R8-4 之后协议 holder 也是产出点，
+    //    只留一条会让"协议那一腿没产出"在登记表上**看不出来**。判据因此**加宽到两条腿**
+    //    （不是放宽：断言仍是精确的 `toEqual`，删掉任意一条都会红）。
+    expect(entry?.call, '[data-fx-rot] 的产出链条不对（值经 renderStackSlot 的 fxRot 与 '
+      + 'renderProtocolCell 的第 6 实参逐节点写入）')
+      .toEqual(['renderStackSlot(', 'renderProtocolCell(']);
     expect(entry?.probeSelector, '[data-fx-rot] 缺运行时探测选择器')?.toBe('[data-fx-rot]');
     // 反空集合：热座那条豁免必须与本页的"必须提供"成对（两边都缺就等于这条契约无人验收）
     const hotseat = RENDERERS.find((r) => r.file === 'render.ts');
@@ -1251,6 +1339,9 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
     foeInverted?: boolean;
     /** `null` = 标记整个缺失（回退路径）；字符串 = 两套卡的标记取值（默认按座位正确） */
     fxRot?: { self: string; foe: string } | null;
+    /** G2 修正 **R8-4**：**协议 holder** 的标记取值（与 `fxRot` 分开给 ⇒ 可以只让协议那一腿坏）。
+     *  `null` = 协议 holder 没有标记（约束 10 的反面形态）。 */
+    protoFxRot?: { self: string; foe: string } | null;
   } = {}): Record<string, number> {
     const sides = o.sides ?? 2;
     const perLine = 3 * sides;      // 每类"每线每侧各一个"
@@ -1262,6 +1353,9 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
     // 取值由调用方给（默认按座位正确），供"取值反了"的断言使用。
     const selfVal = o.fxRot === null ? null : (o.fxRot?.self ?? 'ccw');
     const foeVal = o.fxRot === null ? null : (o.fxRot?.foe ?? 'cw');
+    // G2 修正 R8-4 · 约束 10：协议 holder 的标记（**独立**于场上卡那一组 ⇒ 两条腿可以分别坏）
+    const selfProtoVal = o.protoFxRot === null ? null : (o.protoFxRot?.self ?? 'ccw');
+    const foeProtoVal = o.protoFxRot === null ? null : (o.protoFxRot?.foe ?? 'cw');
     // 带值的键：**只在有值时**追加。⚠️ 无值时**不写**这个键 —— 否则 `Object.fromEntries` 会用
     // 0 覆盖上面 `.net-side-foe .card` 的计数（我第一版就是这么错的：标记缺失时卡片数也变成 0，
     // 于是硬约束 2 抢在约束 8 前面报红）。
@@ -1271,6 +1365,8 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
     // 放在模块作用域的兄弟变量里，`fakeScope` 读它（`fxRot: null` 时置 null = 标记缺失）。
     selfFxRot = selfVal;
     foeFxRot = foeVal;
+    selfProtoFxRot = selfProtoVal;
+    foeProtoFxRot = foeProtoVal;
     return {
       '.stack-slot[data-player][data-line]': perLine,
       '.protocol-cell[data-player][data-line]': perLine,
@@ -1303,6 +1399,15 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
       '.net-side-foe .protocol-img': foeProto,
       '.net-side-foe .protocol-img.rot-180': inv ?? foeProto,
       '.net-side-self .card.rot-180, .net-side-self .card.rot-cw, .net-side-self .card.rot-ccw': 0,
+      // ── G2 修正 R8-4 · 约束 10 的三条探测 ──
+      // ① 协议 holder 按侧（每线每侧一个 ⇒ 与 `.protocol-holder` 同数）；
+      // ② 无值形式的 `[data-fx-rot]` 取值断言（桩从模块作用域的"该侧约定值"补，见 `fakeScope`）；
+      // ③ `.protocol.compiled` —— **默认 0**（本合成页不含已编译协议 ⇒ 约束 10 的条件断言合法跳过；
+      //    它自己的正/反面用例单独构造，见第 21 条）。
+      '.net-side-self .protocol-cell .protocol-holder': sides === 2 ? 3 : 0,
+      '.net-side-foe .protocol-cell .protocol-holder': sides === 2 ? 3 : 0,
+      '.net-side-self .protocol.compiled': 0,
+      '.net-side-foe .protocol.compiled': 0,
       // ── R6 断言 5 的探测：底部行 + 两块信息块（座位互补）──
       // 数量含义：`.net-bottom` 一帧恰好一个；`.net-info-block` 两块（自己 / 对手各一）。
       '.net-bottom': 1,
@@ -1384,9 +1489,15 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
       //    否则 `getAttribute('data-fx-rot')` 恒为 null、取值断言永远报红（我第一版就踩了这里：
       //    以为选择器字符串里会带 `="ccw"`，实际运行时那条查询是无值形式）。
       //    `null` = 该侧没有标记（约束 8 的反面用例）；显示为 `dataset` 时剔除 null 项。
+      //    ⚠️ G2 修正 R8-4：`[data-fx-rot]` 现在有**两类**节点（场上卡 / 协议 holder），
+      //    它们各自有独立的"该侧约定值"（`selfFxRot` vs `selfProtoFxRot`）—— 共用一份会让
+      //    "协议那一腿坏了"与"场上卡那一腿坏了"在合成页上无法区分（两条断言同时红）。
+      const isProtoHolder = baseline.endsWith('.protocol-holder');
       const attrs: Record<string, string | null> = {
         ...(baseline === '.net-side-self .card' ? { fxRot: selfFxRot } : {}),
         ...(baseline === '.net-side-foe .card' ? { fxRot: foeFxRot } : {}),
+        ...(isProtoHolder && baseline.startsWith('.net-side-self') ? { fxRot: selfProtoFxRot } : {}),
+        ...(isProtoHolder && baseline.startsWith('.net-side-foe') ? { fxRot: foeProtoFxRot } : {}),
         ...attrOf(sel),
       };
       const dataset: Record<string, string> = {};
@@ -1530,6 +1641,93 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
       warn.mockRestore();
       info.mockRestore();
       setFxViewSeat(null);
+    }
+  });
+
+  /**
+   * **R8-4 断言 6（约束 10）**：协议 holder 的**特效朝向标记**按侧，且**已编译**协议的 body 级
+   * 持久 FX 层的内联 `transform` 真的跟着协议转了 ∓90°。
+   *
+   * 为什么单列一条（而不是并进第 19 条）：约束 10 是 R8-4 才出现的判据，它守的是**用户第 4 条反馈**
+   * 本身（"所有协议的特效都没有跟着协议转过来"）——那条链横跨三个文件，只要一环断了画面上就是
+   * "特效没转"而**没有任何报错**。这里的四条反面用例分别对应四种断法：
+   *  ① 协议 holder 整个没标记（`render-net` 忘了传 / `renderProtocol` 忘了写）；
+   *  ② 标记在但**取值反了**（两个座位写反 ⇒ 特效朝反方向转，与协议差 180°）；
+   *  ③ 已编译层被按**卡面**朝向（180°）旋转（= 误用会回退的 `fxOrientOf`，热座红线的形态）；
+   *  ④ 已编译层**没被同步**（空串）/ 带着**另一侧**的角度（R8-4b 起严格相等，两者都是真缺陷）。
+   * 阳性对照必须整份 `✓`（"判据恒 ✓"不能让它变绿 —— 那要考反面用例）。
+   *
+   * ⚠️ 诚实边界：这里用的是**合成 scope**（不是真跑渲染器的元素树）—— 它证明的是"**判据逻辑本身
+   * 有牙齿**"，与"真实 DOM 里这些节点真长这样"是两件事；后者由
+   * `tests/ui/protocol-fx-rot.test.ts` 的**真跑 `renderNetBoard`** 那条腿承担。
+   */
+  it('21. R8-4：协议 holder 标记按侧 + 已编译层的 ∓90° 跟随 —— 正常 ✓ + 四条反面必报约束 10', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    try {
+      // ① 阳性对照：合成的一帧远程页（协议 holder 标记按侧、无已编译协议）⇒ 整份 ✓
+      expect(verifyPageHooks(fakeScope(syntheticPage())), '协议 holder 标记按侧时自查不是 ✓（假红）')
+        .toMatch(/^自查 ✓/);
+      // ② 协议 holder **整个没标记** ⇒ 约束 10
+      expect(verifyPageHooks(fakeScope(syntheticPage({ protoFxRot: null }))),
+        '协议 holder 没有 data-fx-rot 却没报 —— 协议 FX 会静默退回 0°（竖版错位 90°）')
+        .toContain('约束 10');
+      // ③ 标记在但**取值反了**（自己拿到 cw、对手拿到 ccw）⇒ 约束 10
+      expect(verifyPageHooks(fakeScope(syntheticPage({ protoFxRot: { self: 'cw', foe: 'ccw' } }))),
+        '协议 holder 的标记取值反了却没报（协议特效会朝反方向转）').toContain('约束 10');
+
+      // ④ 已编译协议：body 级层的内联 transform 必须等于该侧标记对应的 rotate(∓90deg)。
+      //    合成一份 `.protocol.compiled` + 一个全局 `document`（桩环境里 `document` 是 undefined，
+      //    约束 10 对层的条件断言因此会**跳过** —— 这两条正/反面用例就是为了把它跑起来）。
+      const withCompiled = (transform: string, side: 'self' | 'foe'): HTMLElement => {
+        const scope = fakeScope(syntheticPage());
+        const orig = scope.querySelectorAll.bind(scope);
+        const box = {
+          className: 'protocol compiled compiled-fx-fire',
+          style: {}, dataset: {}, getAttribute: () => null,
+        };
+        (scope as unknown as { querySelectorAll: (s: string) => unknown }).querySelectorAll = (s: string) => (
+          s === `.net-side-${side} .protocol.compiled` ? [box] : orig(s)
+        );
+        return scope;
+      };
+      const fakeDoc = (transform: string): unknown => ({
+        querySelectorAll: (s: string) => (s === '.compiled-fx'
+          ? [{ className: 'compiled-fx compiled-fx-fire', style: { transform } }]
+          : []),
+      });
+      const g = globalThis as { document?: unknown };
+      const prevDoc = g.document;
+      try {
+        // ④a 错值：层被按卡面朝向转了 180°（= 那句"缺标记就回退 orientOf"的后果）—— 这一条是杀手
+        g.document = fakeDoc('rotate(180deg)');
+        expect(verifyPageHooks(withCompiled('rotate(180deg)', 'self')),
+          '已编译层被转成 180°（误用会回退的 fxOrientOf）却没报').toContain('约束 10');
+        // ④b 错值：0°（层被当成"没转过"——协议横躺而层竖着，正是 R8-4 的缺陷形态本身）
+        g.document = fakeDoc('rotate(0deg)');
+        expect(verifyPageHooks(withCompiled('rotate(0deg)', 'self')),
+          '已编译层被留在 0°（协议横躺、层竖着）却没报').toContain('约束 10');
+        // ④c **严格性**（G2 修正 R8-4b 起，不再容忍）：空串 / 另一侧角度**都是**真缺陷 ——
+        //     空串 = 层没被按当前协议矩形同步（环/角光会**飘在旧坐标上**，正是 R8-4b 修的那条）；
+        //     另一侧角度 = 切视角后层没被重写（本页现在**每帧**都同步 ⇒ 这个中间态不存在了）。
+        g.document = fakeDoc('');
+        expect(verifyPageHooks(withCompiled('', 'self')),
+          '层"没被同步过"（空串）被容忍了 —— R8-4b 起这是真缺陷（层会飘在旧坐标上）').toContain('约束 10');
+        g.document = fakeDoc('rotate(90deg)');
+        expect(verifyPageHooks(withCompiled('rotate(90deg)', 'self')),
+          '自己侧的层带着另一侧的角度（+90°）被容忍了 —— 本页每帧同步后不该出现这个中间态')
+          .toContain('约束 10');
+        // ④d 阳性对照：层已按该侧标记定位 ⇒ 不得报约束 10
+        g.document = fakeDoc('rotate(-90deg)');
+        expect(verifyPageHooks(withCompiled('rotate(-90deg)', 'self')),
+          '层已按 ∓90° 定位却报了约束 10（假红）').toMatch(/^自查 ✓/);
+      } finally {
+        g.document = prevDoc;
+      }
+      expect(warn, '失败必须留下 console.warn 证据（不能只在返回值里）').toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+      info.mockRestore();
     }
   });
 });

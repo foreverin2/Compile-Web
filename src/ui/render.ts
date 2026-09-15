@@ -25,6 +25,12 @@ import { fitRotatedProtocol } from './zoom-layout';
 // G2 Task 3：朝向类型（单一出处 src/ui/fx-orient.ts）。这里只**用类型**驱动朝向参数，
 // 运行时判定仍全部走 orientOf（FX 侧）；本文件是**产出方**，允许命名朝向类名。
 import type { CardOrient } from './fx-orient';
+// G2 修正 R8-4：协议持久 FX 层要读 holder 的**特效**朝向标记来跟着协议横躺。用 `fxRotDegOf`
+// （**只读标记、不回退**）而**不是** `fxOrientOf`：后者缺标记时会回退 `orientOf`（卡面朝向），
+// 于是"标记没产出"会被**静默**换成一个猜出来的角度，而热座页的 0° 也不再是构造性的。
+// ⚠️ 实测边界：当前读目标 `.protocol-holder` 自己没有朝向类（`rot-180` 在子节点 `.protocol-img` 上）
+// ⇒ 今天回退**恰好**也得 0；这条要求是**结构性**的（概念钉开 + 缺标记时如实得 0），见 fxRotDegOf 注释。
+import { fxRotDegOf } from './fx-orient';
 // G2 修正 R-F · Minor M-4：控制轨"贴端距离"的**单一出处**（`fx-seat.ts` 的常量）。
 // ⚠️ 只 import 这个**纯数据常量** —— 本文件（热座页）**不得**读 `fxViewSeat()` / 调用
 // `setFxViewSeat`（那会破坏"热座零变化是构造性的"这条红线，守卫会报红）。
@@ -99,12 +105,29 @@ export function renderProtocol(
    *  默认 `''` = 热座页现状（一个字符不变）。**为什么是通用参数而不是直接写死 `.net-*`**：
    *  本文件是**两个渲染器共享**的叶子助手，把远程页的字面量写进来会让热座页的源码依赖远程页的类名，
    *  也会让「热座页零变化」只能靠"这个分支恰好走不到"来保证。由调用方给类名 ⇒ 热座路径构造性不变。 */
-  extraClass = ''
+  extraClass = '',
+  /** **协议特效朝向标记**（G2 修正 R8-4）：给了才在 `.protocol-holder` 上写
+   *  `data-fx-rot="…"`（自己 `ccw` = −90° / 对手 `cw` = +90°）。默认 `undefined` ⇒
+   *  热座页 DOM **一个字节都不多**（与 `renderStackSlot` 的 `opts.fxRot` 同款守卫）。
+   *
+   *  ⚠️ 它与 `orient` 是**两套**朝向，不是同一个值：远程页协议**图**是自己转了 ∓90°
+   *  （由 `extraClass` 的 `.net-rot-ccw/.net-rot-cw` 实现），而 holder 的**布局盒**始终是未旋转的
+   *  100×140。body 级持久 FX 层按 holder 矩形建盒 ⇒ 必须读这个标记才知道"协议视觉上是横躺的"，
+   *  才能把层绕自身中心转同一个角度、让层盒与协议视觉盒重合（见 `positionCompiledFxLayer`）。
+   *
+   *  **为什么标记落在 holder 而不是 `.protocol-img`**：`positionCompiledFxLayer(defId, holder)`
+   *  的入参**就是** holder（读侧零祖先查找 —— DOM 桩不保证实现 `closest`）；
+   *  且 `.protocol-img.parentElement` 也是 holder ⇒ 三处协议 FX（持久层/翻面浮层/重排幽灵）
+   *  都直接够得到。 */
+  fxRot?: 'cw' | 'ccw'
 ): HTMLElement {
   const box = el('div', 'protocol' + (p.compiled ? ' compiled' : ''));
   // holder 包裹卡面图：持久 FX 层每帧渲染按 holder 矩形重定位（syncCompiledFxLayers），
   // 不受 .protocol 盒 flex:1 拉伸影响（横版协议/行高不一致时环仍紧贴卡面）
   const holder = el('div', 'protocol-holder');
+  // G2 修正 R8-4：**协议特效**朝向标记（与上面的 `orient`/`extraClass` 是两套，见参数说明）。
+  // 热座页不传 ⇒ 一条属性都不写（`data-fx-rot` 在热座 DOM 上不存在 ⇒ `fxRotDegOf` 得 0 ⇒ 层不旋转）。
+  if (fxRot !== undefined) holder.dataset.fxRot = fxRot;
   // 已编译协议专属特效类（类随 defId 挂载 → 协议换位/重排时特效跟随对应协议）
   if (p.compiled) {
     box.classList.add(`compiled-fx-${p.defId}`);
@@ -183,6 +206,14 @@ export function renderBattery(s: GameState, player: PlayerId, line: Line): HTMLE
   const state = batteryState(points);
   const battery = el('div', `battery battery-${state}`);
   battery.dataset.points = String(points);
+  // G2 修正 R8-2：**节点自描述**归属（两个页面都写；行为中性 —— `.battery` 的 A 类钩子判据是
+  // 类名 token `'battery battery-'`，不受影响）。
+  // 为什么必须有：远程页把能量槽**移出** `.stack-slot`（放在 `.net-side` 的流内端）之后，
+  // 所有"按 `.stack-slot[data-player][data-line]` 找能量槽"的 FX 查询都会**静默**返回 null
+  // （6 处，全是 `if (!node) return` 的降级 → 特效凭空消失、不报错）。写成节点自己的属性后，
+  // 查询变成与位置无关的 `.battery[data-player="X"][data-line="Y"]`，两种布局都命中。
+  battery.dataset.player = String(player);
+  battery.dataset.line = String(line);
   // 点数/形态变化检测：变化时加 .points-changed 触发格渐入动画（点 4）
   const key = `${player}-${line}`;
   const prev = batteryPrev.get(key);
@@ -244,8 +275,14 @@ export function renderStackSlot(
      *  `pos 0`（最旧）永远贴协议一侧、越新的越向外长，与横排的语义完全一致。横排时 `.card + .card`
      *  的**负 margin-left** 让"后一张 DOM 兄弟"从左侧压住前一张，于是"最新在 DOM 最后"刚好等于
      *  "最新在最外侧、且 z-index 最大盖住旧牌"。竖排时负 margin 走 **margin-top**（覆盖在
-     *  `styles-net.css` 里）—— 同一条负 margin 让**后一个 DOM 兄弟更低**，所以方向**完全由 DOM 顺序
-     *  决定**（`.stack` 高度由内容决定、没有自由空间 ⇒ `justify-content` 是**死 CSS**，改类名救不了方向）。
+     *  `styles-net.css` 里）—— 同一条负 margin 让**后一个 DOM 兄弟更低**，所以"最新的一张落哪一端"
+     *  **完全由 DOM 顺序决定**。
+     *
+     *  ⚠️ G2 修正 **R8-3** 之后这句话要补一句：`.net-lane-band .stack` 有了 `min-height`
+     *  （预留 7 张牌的跨度 ⇒ 内容不足时有**自由空间**），于是 `.grow-down`/`.grow-up` 的
+     *  `justify-content`（`flex-start`/`flex-end`）**不再是死 CSS** —— 它决定"整组第一张贴哪一端"。
+     *  两者**必须成对**：方向 = DOM 顺序（本参数）× justify-content（按 `grow-*` 类，两者不同值）。
+     *  写成同值会让对手侧的方向反掉（R-F2 · I-3 踩过的坑，`styles-net.css` 第 4 节有完整说明）。
      *
      *  ⚠️ **R-F2 · I-3**：R1 曾对两侧都用同一个「最新 → 最旧」顺序（当时的注释以为 `justify-content`
      *  能把对手侧整组推到底部），于是**自己侧的最新牌落到内端（贴协议）** —— 与规格 §1 第 5 行
@@ -268,6 +305,16 @@ export function renderStackSlot(
      *  180° 而特效 +90°（设计说明 §2 的朝向表）。把它写成"从 orient 推导"就会在热座页面上
      *  凭空产出标记（破坏"热座可证明零变化"）。 */
     fxRot?: 'cw' | 'ccw';
+    /** **是否在槽内挂能量槽**（G2 修正 R8-2）。缺省 `true` ⇒ 热座页逐字等价
+     *  （`undefined`/`true` 都走原来那条 `slot.appendChild(renderBattery(…))`）。
+     *
+     *  ⚠️ 远程页传 `false`：那一页的能量槽**不在链路框里**（用户 R8 裁决："能量槽目前都被
+     *  放在了链路框中，这样是不对的，应该要放置在对应链路的底部横置"），由 `render-net.ts`
+     *  的 `renderSide` 自己调 `renderBattery` 并挂到 `.net-side` 的正确端。
+     *
+     *  **为什么不"先挂进去再搬出来"**（规格 §2.2）：那会留下 12 个 `.battery`（6 个死 DOM），
+     *  `NET_PAGE_HOOKS` 的 `.battery` 计数与"产出链条"会同时失真 —— 正是"守卫表达不了行为"的老坑。 */
+    withBattery?: boolean;
   }
 ): HTMLElement {
   // self 高亮仅限自己侧槽；对方槽作为腐化0 落点（修改提示词 15）也可交互但不带 self 常驻高亮
@@ -342,7 +389,9 @@ export function renderStackSlot(
   }
   slot.appendChild(pile);
   // 电池竖摆于放置区外部（贴尾部），实时显示数值；不再显示 线N/空/值N 文本
-  slot.appendChild(renderBattery(s, player, line));
+  // G2 修正 R8-2：`withBattery === false` 时**不挂**（远程页把能量槽挂到 `.net-side` 的端上，
+  // 见 `render-net.ts` 的 `renderSide`）。缺省 `undefined` ⇒ 与改动前逐字等价（热座页零变化）。
+  if (opts?.withBattery !== false) slot.appendChild(renderBattery(s, player, line));
   if (interactable) {
     slot.addEventListener('click', () => onPlay(line));
   }
@@ -413,7 +462,12 @@ export function syncSmokeOverlays(s: GameState): void {
  * .scan-line）按 key `${player}-${line}` 创建一次、跨重渲染存活，每帧渲染只把层盒
  * 重定位到 .battery-shell 矩形（层节点从不 detach → CSS 动画不重启）。
  * full/burst 态沿旧行为关闭扫描（外壳应力裂纹高光接管），overlay 移除；电池元素
- * 缺失时同样移除并注销。 */
+ * 缺失时同样移除并注销。
+ *
+ * ⚠️ G2 修正 R8-2：定位选择器从 `.stack-slot[...] .battery-shell` 改成
+ * `.battery[data-player][data-line] .battery-shell`（能量槽在远程页已移出链路槽，
+ * 见 `renderBattery` 的 `dataset.player/line`）；并按外壳实测矩形在**宽 > 高**时给层盒加
+ * `.scan-horiz`（横置电池 → 扫描线从右往左扫，与点亮方向一致）。 */
 const scanOverlays = new Map<string, HTMLElement>();
 
 function renderScanOverlay(): HTMLElement {
@@ -437,8 +491,13 @@ export function syncScanOverlays(s: GameState): void {
         }
         continue;
       }
+      // G2 修正 R8-2：能量槽在远程页**已移出 `.stack-slot`**（用户裁决：链路框外、横置），
+      // 所以这里必须按**节点自描述**定位（`renderBattery` 写在根上的 `data-player`/`data-line`），
+      // 不得再写 `.stack-slot[...] .battery-shell` —— 那个查询在远程页会**静默**返回 null
+      // （下面就是 `if (!shell) continue` 的降级：扫描流光凭空消失、控制台一个字都不报）。
+      // 两种布局都命中是这条选择器的**目的**（热座页的 `.battery` 现在也带这两个属性）。
       const shell = document.querySelector<HTMLElement>(
-        `.stack-slot[data-player="${player}"][data-line="${line}"] .battery-shell`
+        `.battery[data-player="${player}"][data-line="${line}"] .battery-shell`
       );
       if (!shell) continue; // 电池不在 DOM（不应发生）→ 交给下方清理分支移除旧 overlay
       activeKeys.add(key);
@@ -454,6 +513,11 @@ export function syncScanOverlays(s: GameState): void {
       overlay.style.top = `${r.top}px`;
       overlay.style.width = `${r.width}px`;
       overlay.style.height = `${r.height}px`;
+      // ── G2 修正 R8-2：横置电池的扫描方向 —— 远程页的外壳是**宽而扁**的一条（横置能量槽），
+      //    竖扫（`battery-scan-sweep` 走 `top`）在这上面读作"左右两半各闪一下"，不成立。
+      //    按**实测矩形**（不是按类名/页面）判方向 ⇒ 热座页外壳恒"高而窄" ⇒ **不加类 ⇒ 逐字不变**。
+      //    层盒跨重渲染复用，故类会被两个页面先后写、每次都按当前矩形**双向**同步（加/删都写）。
+      overlay.classList.toggle('scan-horiz', r.width > r.height);
     }
   }
   for (const [key, overlay] of scanOverlays) {
@@ -816,7 +880,7 @@ export function syncMetal0Glows(s: GameState): void {
       const key = `${target}-${line}`;
       activeKeys.add(key);
       const shell = document.querySelector<HTMLElement>(
-        `.stack-slot[data-player="${target}"][data-line="${line}"] .battery-shell`
+        `.battery[data-player="${target}"][data-line="${line}"] .battery-shell`
       );
       if (!shell) continue; // 电池不在 DOM（不应发生）→ 交给下方清理分支移除旧层
       let glow = metal0Glows.get(key);
@@ -983,7 +1047,7 @@ export function syncMirror0BatteryGlows(s: GameState): void {
       const key = `${player}-${line}`;
       activeKeys.add(key);
       const shell = document.querySelector<HTMLElement>(
-        `.stack-slot[data-player="${player}"][data-line="${line}"] .battery-shell`
+        `.battery[data-player="${player}"][data-line="${line}"] .battery-shell`
       );
       if (!shell) continue; // 电池不在 DOM（不应发生）→ 交给下方清理分支移除旧层
       let glow = mirror0BatteryGlows.get(key);
@@ -1027,7 +1091,7 @@ export function syncClarity0BatteryGlows(s: GameState): void {
       const key = `${player}-${line}`;
       activeKeys.add(key);
       const shell = document.querySelector<HTMLElement>(
-        `.stack-slot[data-player="${player}"][data-line="${line}"] .battery-shell`
+        `.battery[data-player="${player}"][data-line="${line}"] .battery-shell`
       );
       if (!shell) continue;
       let glow = clarity0BatteryGlows.get(key);
@@ -1514,6 +1578,25 @@ export function syncCompiledFxLayers(): void {
   }
 }
 
+/** 复位**本帧**的持久 FX 收集器（G2 修正 **R8-4b**：把热座那句 `compiledFxCells.length = 0` 提升成
+ *  两个渲染器共用的复位口）。
+ *
+ *  **为什么必须有这个出口**：`compiledFxCells` 是 `renderProtocol` 逐格登记、`syncCompiledFxLayers`
+ *  遍历的**每帧**收集器。热座页在 `renderBoard` 开头复位；远程页（`render-net.ts` 的 `renderNetBoard`）
+ *  **此前没有复位** ⇒ 每帧向数组**追加**一批新 holder ⇒ 数组随重渲染**线性增长**（`syncCompiledFxLayers`
+ *  每次都要遍历全部历史记录）。
+ *  ⚠️ **危害的准确说法（实测纠正，别夸大）**：陈旧 holder 在真实 DOM 里是 **detached** ⇒
+ *  `positionCompiledFxLayer` 的 `isConnected` 守卫会**早退、不写几何** ⇒ 层**不会**被写回旧坐标。
+ *  所以这是"**泄漏 + 每帧多遍历 N 条**"，**不是**画面错位；但它会把"表里到底有几条、"每帧同步的是谁"
+ *  变成随使用时长增长的模糊量，且 R8-4b 之前 net 页**根本没有**同步 ⇒ 两个缺陷叠在一起时极难分离。
+ *
+ *  ⚠️ 与 `renderBoard` 里原来那一句**逐字等价**（实现就是它；`renderBoard` 现在改调本函数，
+ *  单一出处、不留两份写法）。`resetUiState` 里那一句**未动** —— 那是"整局重置"语义
+ *  （同时清 `compiledFx` 映射与挂起 timer），与本函数"只复位本帧收集器"不是同一件事。 */
+export function resetCompiledFxCells(): void {
+  compiledFxCells.length = 0;
+}
+
 /** 把 body 级持久 FX 层（compiledFx 注册表，key=defId）重定位到 holder 矩形。层节点
  *  从不移动，只覆写坐标/尺寸（fixed）→ CSS 动画不重启。0×0（图片未加载/节点 detached）
  *  时跳过：等下一帧渲染或 img load 回调再对齐。 */
@@ -1526,12 +1609,36 @@ function positionCompiledFxLayer(defId: string, holder: HTMLElement): void {
   fx.style.top = `${r.top}px`;
   fx.style.width = `${r.width}px`;
   fx.style.height = `${r.height}px`;
+  // ── G2 修正 R8-4：层跟着协议**横躺**（几何跟随的第一处） ──
+  // 远程页的协议图由 `.net-rot-ccw/.net-rot-cw` 自己转了 ∓90°（自己 −90°、对手 +90°），
+  // 但 **holder 的布局盒始终是未旋转的 100×140** —— 于是层盒（= holder 盒）与协议的**视觉**盒
+  // （140×100）差 90°，环/角光/藤蔓/裂纹全部贴着"一个竖版框"画。这里把层绕**自身中心**转同一个
+  // 角度即可完全重合：**数学依据** —— 层盒 = holder 的 layout 盒，协议图在 holder 内**绕自身
+  // 中心**旋转 ∓90°（图片与 holder 同心，两者都是 100×140 且居中）⇒ 层绕**同一个中心**转
+  // 同一个角度后，视觉盒 = 140×100 **且与协议视觉盒逐像素重合**（`transform-origin` 保持
+  // 默认 `50% 50%` 就是"绕自身中心"，故**不需要**写它；`.compiled-fx` 自身在 styles.css 里
+  // 没有 `transform`/`transform-origin` 声明，不会与这条内联旋转打架）。
+  // ⚠️ 读 `fxRotDegOf`（**只读标记、不回退**）而不是 `fxOrientOf`：后者缺标记时会回退卡面朝向
+  //    ⇒ 把"标记没产出"这个缺陷静默换成一个猜出来的角度；不回退 ⇒ 得 0（不旋转），
+  //    由 `verifyPageHooks` 的约束 10 报红。热座页没有标记 ⇒ 恒 0 ⇒ 热座零变化是构造性的。
+  // 幂等：`img.load` 回调与每帧 `syncCompiledFxLayers` 写同一个值；热座页 `deg === 0`
+  //    ⇒ 内联 transform 是**空串**（与改动前逐字等价）。
+  const deg = fxRotDegOf(holder);
+  fx.style.transform = deg === 0 ? '' : `rotate(${deg}deg)`;
   // 冷漠已编译卡面克隆（故障特效载体）与真实协议图同朝向：P2 侧协议图 rot-180，
   // 克隆图若不跟随会在故障滤镜下露出方向不一致的重影（幂等：每次重定位同步一次）
   const face = fx.querySelector<HTMLElement>('.compiled-apathy-face');
   if (face) {
     const holderImg = holder.querySelector('img.protocol-img');
-    if (holderImg) face.classList.toggle('rot-180', holderImg.classList.contains('rot-180'));
+    if (holderImg) {
+      // ── G2 修正 R8-4：**互斥**（几何跟随的第二处） ──
+      // 远程页的协议图**同时**带 `.rot-180`（对手侧，卡面语义）与 `.net-rot-cw`（特效/视觉语义），
+      // 而 `.net-*` 的规则在 styles-net.css 里后源且权重更高 ⇒ **视觉上只有 +90°**。
+      // 层已经替协议转了 ±90° ⇒ 克隆面**不得**再叠 180°（会变成 270°，故障重影反向）。
+      // 只有 `deg === 0`（热座页，或"没有标记"的协议）时才同步 `rot-180` —— 那条路径与改动前
+      // 逐字等价（热座页 deg 恒 0 ⇒ 判据恒为原来的 `holderImg.classList.contains('rot-180')`）。
+      face.classList.toggle('rot-180', deg === 0 && holderImg.classList.contains('rot-180'));
+    }
   }
 }
 
@@ -2004,7 +2111,13 @@ export function renderProtocolCell(
   s: GameState, player: PlayerId, line: Line, orient?: CardOrient,
   /** 透传给 `renderProtocol` 的**协议图额外类**（G2 修正 R1：远程页 `.net-rot-ccw` / `.net-rot-cw`）。
    *  缺省不传 → 与改动前逐字等价（热座页构造性不变）。 */
-  extraClass?: string
+  extraClass?: string,
+  /** 透传给 `renderProtocol` 的**协议特效朝向标记**（G2 修正 R8-4：远程页 holder 上的
+   *  `data-fx-rot`）。缺省不传 ⇒ `undefined` ⇒ 热座页 DOM 一个字节都不多（构造性不变）。
+   *  ⚠️ 它与 `extraClass` 必须**同源**（都由调用方的座位推导）：`extraClass` 决定协议图
+   *  **视觉**上的 ∓90°，`fxRot` 决定 FX 层**跟着转**的同一个角度 —— 两处脱钩会让特效
+   *  与协议差 90°，而画面上只表现为"特效没转过来"（用户 R8 的第 4 条反馈）。 */
+  fxRot?: 'cw' | 'ccw'
 ): HTMLElement {
   const cell = el('div', 'protocol-cell');
   // data 属性：供编译/翻面等特效按 (player, line) 定位协议元素（协议换位时随渲染重建定位）
@@ -2012,9 +2125,11 @@ export function renderProtocolCell(
   cell.dataset.line = String(line);
   // G2 Task 3：朝向透传给 renderProtocol。缺省不传 → 走 renderProtocol 自己的默认值
   // （`player === 1 ? 180 : 0`），与改动前逐字等价。远程页传 `(player === viewSeat) ? 0 : 180`。
+  // G2 修正 R8-4：第 6 实参 `fxRot` 直接透传（`undefined` 走 renderProtocol 的"不写属性"分支
+  // ⇒ 热座页与改动前逐字等价）。
   cell.appendChild(orient === undefined
     ? renderProtocol(s.players[player].protocols[line], player)
-    : renderProtocol(s.players[player].protocols[line], player, orient, extraClass));
+    : renderProtocol(s.players[player].protocols[line], player, orient, extraClass, fxRot));
   return cell;
 }
 
@@ -4058,7 +4173,7 @@ export function syncDiversity3Fx(s: GameState): void {
       const key = `${owner}-${line}`;
       activeLines.add(key);
       const shell = document.querySelector<HTMLElement>(
-        `.stack-slot[data-player="${owner}"][data-line="${line}"] .battery-shell`
+        `.battery[data-player="${owner}"][data-line="${line}"] .battery-shell`
       );
       if (!shell) continue;
       let flow = div3LineFlows.get(key);
@@ -4752,7 +4867,10 @@ export function showWinOverlay(winner: PlayerId, cb: UiCallbacks): void {
 
 export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): void {
   root.textContent = '';
-  compiledFxCells.length = 0; // 本帧持久 FX 收集器复位（renderProtocol 逐格登记）
+  // 本帧持久 FX 收集器复位（renderProtocol 逐格登记）。G2 修正 R8-4b：改成调**导出的复位口**
+  // ——远程页（renderNetBoard）此前漏了这一步，共用同一个实现可防两份写法漂移（行为逐字等价：
+  // 该函数体就是原来那一句）。
+  resetCompiledFxCells();
   // 几何型 FX 延迟器：renderBoard 开头已清空 root，构建期棋盘节点尚未入 DOM，
   // 此时 getBoundingClientRect() 全 0 → 依赖矩形定位的特效会静默失败
   // （幸运宣告骰子 startLuckDiceFx / 透彻牌库眼睛 startClarityDeckEye 曾因此完全不显示）。
@@ -5358,7 +5476,7 @@ export function buildChoicePickOverlay(
   const who = (prompt.chooser ?? pe.player) === 0 ? 'P1' : 'P2';
   panel.appendChild(el('div', 'choice-pick-title', `${who} 操作 — ${prompt.title}`));
   panel.appendChild(
-    el('div', 'choice-pick-hint', '单击选择 / 再点取消，双击放大查看；选好后点底部「确认」'),
+    el('div', 'choice-pick-hint', '单击选择 / 再点取消，双击放大查看；选好后点「确认」'),
   );
   const grid = el('div', 'choice-pick-grid');
   for (const c of cards) {

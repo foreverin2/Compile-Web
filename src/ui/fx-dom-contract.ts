@@ -62,8 +62,9 @@ export const RENDERERS: readonly FxRenderer[] = [
   // G2 修正 R2：热座页**不产出** `[data-fx-rot]`（那是远程页专属的**特效**朝向标记）——
   //   热座自己在场卡上的 ±90° 类**就是**它的特效朝向，`fxOrientOf` 读不到标记即回退 `orientOf`
   //   ⇒ 「热座零变化」是构造性的（见 src/ui/fx-orient.ts 的 fxOrientOf）。
-  //   注意 `render.ts` **仍然**是 `[data-fx-rot]` 的**物理产出点**（`node.dataset.fxRot = opts.fxRot`），
-  //   但那条写入被 `if (opts?.fxRot !== undefined)` 守卫住，热座调用点不传 `fxRot` ⇒ DOM 上无此属性。
+  //   注意 `render.ts` **仍然**是 `[data-fx-rot]` 的**物理产出点**（R8-4 起有**两处**：
+  //   场上卡 `node.dataset.fxRot = opts.fxRot`、协议 holder `holder.dataset.fxRot = fxRot`），
+  //   但两条写入都被 `…fxRot !== undefined` 守卫住，热座调用点不传 `fxRot` ⇒ DOM 上无此属性。
   //   豁免表达的是"这个渲染器**有意**不提供这条钩子"，与"产出点写在哪个文件"无关。
   { file: 'render.ts', exempt: ['[data-fx-rot]'] },
   // G2 Task 3：远程对战页渲染器（甲读法）—— 自己一侧 0°、对手一侧 .rot-180。
@@ -244,16 +245,25 @@ export const FX_DOM_CONTRACT: readonly FxDomHook[] = [
     //（`export const FX_ROT_ATTR = 'data-fx-rot'`，即唯一读取出处），故有判别力。
     // 注意出处判据（requiredBy）走的是 probeOf(hook) = `data-fx-rot`，与这里同串。
     probe: ['data-fx-rot'],
-    note: '**特效朝向标记**（G2 修正 R2；规格 §8.2 钉死的名字）：远程页场上卡带 '
-      + '`data-fx-rot="ccw"`（自己 −90°）/ `"cw"`（对手 +90°），`fx-orient.ts` 的 `fxOrientOf` 读它 —— '
-      + '**它决定了浮层卡根元素的朝向与装饰层继承的 ∓90°**。'
+    note: '**特效朝向标记**（G2 修正 R2；规格 §8.2 钉死的名字）：远程页带 `data-fx-rot="ccw"`'
+      + '（自己 −90°）/ `"cw"`（对手 +90°），`fx-orient.ts` 的 `fxOrientOf` 与 `fxRotDegOf` 读它。'
+      + '**R8-4 起有两类产出点**（同一个属性、同一个映射，故仍是一条钩子）：'
+      + '① **场上卡**（R1 起）—— `render.ts` 的 `node.dataset.fxRot = opts.fxRot`，决定浮层卡的根朝向；'
+      + '② **协议 holder**（R8-4）—— `renderProtocol` 的末位参数 ⇒ `holder.dataset.fxRot = fxRot`'
+      + '（由 `render-net.ts` 的 `renderProtocolCell(` 第 6 实参按座位给），它是协议 FX 的**几何跟随**'
+      + '（持久层绕自身中心转 ∓90°、翻面浮层的翻转轴、重排幽灵的出图方向）的**唯一输入**：'
+      + '读不到就退回 0° ⇒ 环/角光/藤蔓继续按竖版盒错位 90°（用户 R8 第 4 条反馈的缺陷形态）。'
       + '⚠️ 它与**卡面**朝向是两套（自己卡面 0° 而特效 −90°、对手卡面 180° 而特效 +90°）：'
       + '远程页的卡面仍由 `.rot-180` 决定，本钩子只管特效。'
       + '**热座页有意不产出它**（`RENDERERS` 给 render.ts 一条 `exempt`）：热座没有这个标记 ⇒ '
-      + '`fxOrientOf` 回退 `orientOf` ⇒ 热座浮层卡几何走原分支（"热座零变化"是构造性的）。'
-      + '产出写入在 `render.ts`（`node.dataset.fxRot = opts.fxRot`，被 `if (opts?.fxRot !== undefined)` '
-      + '守卫），而**值**由 `render-net.ts` 按座位给（`fxRot: isSelfSeat ? \'ccw\' : \'cw\'`）——'
-      + '这也正是"豁免 render.ts"的含义：它的产出点存在，但热座调用点**不传值**。',
+      + '`fxOrientOf` 回退 `orientOf` ⇒ 热座浮层卡几何走原分支（"热座零变化"是构造性的）；'
+      + '而协议侧读它的是**不回退**的 `fxRotDegOf`（热座 P2 协议图自己带 `.rot-180`，回退会把热座层的'
+      + 'FX 转 180°）。产出写入在 `render.ts`（`node.dataset.fxRot = opts.fxRot` 与 '
+      + '`holder.dataset.fxRot = fxRot`，各自被 `…fxRot !== undefined` 守卫），而**值**由 '
+      + '`render-net.ts` 按座位给（`fxRot: isSelfSeat ? \'ccw\' : \'cw\'` / 同源的第 6 实参）——'
+      + '这也正是"豁免 render.ts"的含义：它的两个产出点都存在，但热座调用点**不传值**。'
+      + '逐节点计数与取值由 `verifyPageHooks` 的约束 8（场上卡）与约束 10（协议 holder + 已编译层'
+      + '的内联 transform）在运行时核对。',
   },
   {
     hook: '.rot-180', kind: 'class', category: 'A',

@@ -7,10 +7,11 @@
  * **三条线 = 三个纵向的列，并排。** 每列自上而下严格是：
  *   ① 对手能量槽 → ② 对手链路（卡 180°，越新越**上**）→ ③ 对手协议（顺时针 90°）
  *   → ④ 自己协议（逆时针 90°）→ ⑤ 自己链路（卡 0°，越新越**下**）→ ⑥ 自己能量槽
- * （能量槽由 `renderBattery` 产出在**槽内**，靠 CSS 的 `order` 摆到链路外侧端 —— 见
- * `styles-net.css` 第 4 节；那两条 `order` 规则**按侧**给（`.net-side-foe` / `.net-side-self`），
- * 不按绝对玩家号（R-F · C-2）；这样"一格一卡"的 A 类钩子产出方拼写完全不用动。
- * 中线两侧**都是协议**，故 `renderSide` 的挂载顺序**按侧镜像**（对手 = 链路→协议、自己 = 协议→链路）。
+ * （能量槽由 `renderBattery` 产出，**不在**链路槽里（G2 修正 **R8-2**）—— 由 `renderSide`
+ * 自己挂到 `.net-side` 的外端（对手在上/自己在下，横置、双方都从右往左点亮），
+ * 见 `styles-net.css` 第 4 节；`order` 已彻底退役，"哪一层在哪"只剩 DOM 兄弟顺序一个出处。
+ * 中线两侧**都是协议**，故 `renderSide` 的挂载顺序**按侧镜像**（对手 = 能量槽→链路→协议、
+ * 自己 = 协议→链路→能量槽）。
  *
  * 推导依据（规格 §1 的复核）：这套规格**等价于把热座页的"每条线一行"整体旋转 −90°** ——
  * 热座自己卡 +90° → 0°；对手卡 −90° → 180°；自己协议 0° → −90°；对手协议 180° → +90°；
@@ -18,16 +19,21 @@
  * `viewSeat = 1`（我是 P2）= **垂直镜像**：我的链路在下半部、对手在上半部，与 P1 视角完全对称
  * —— 本文件用 `foe = 1 - viewSeat` 换算，`data-player` 永远写**绝对值**。
  *
- * ## 底部行（G2 修正 **R6**：信息条与手牌区同一行、一左一右）
- * **顶部信息条已取消**（用户裁决）。底部那一行由三块组成：
- *   **信息块（左）· 手牌区（中）· 信息块（右）**
+ * ## 底部两块 + 五行排布（G2 修正 **R6** → **R8-5/R8-7**）
+ * **顶部信息条已取消**（用户裁决）。R6~R7 期间信息块与手牌区是**同一行**的左右三列；
+ * **R8-5 换成五行、上下镜像**（用户第二次验收的 A 方案）：
+ *   ① 对手信息块 · ② 对手手牌 · ③ 三条链路 + 控制轨 · ④ 自己手牌 · ⑤ 自己信息块 · ⑥ 日志/工具条
  * 每侧的信息块 = `renderPlayerInfo`（昵称 / 座位 · 牌库 n · 弃牌堆 n · 手牌 n）+ `renderPiles`
- * （该玩家自己的 `.deck[data-player]` / `.trash-pile.pN`）—— 对手那份也因此从顶部移到底部。
+ * （该玩家自己的 `.deck[data-player]` / `.trash-pile.pN`）。
  *
- * **左右归属 = `NET_BOTTOM_SIDES`（**唯一一处**，见它上面的说明）**：本说明取 **左 = 自己、右 = 对手**
- * （自左向右的自然读法；用户未指定左右，规格 §8.4 第 2 条已声明"要反过来改一处常量即可"）。
- * ⚠️ 该常量只决定"信息块以什么顺序**插进 DOM**"；视觉左右由 `styles-net.css` 的
- * **grid 列**决定（第 6 节）。两条腿都要在（顺序 + 列），缺一条就会出现"DOM 对、看着反"。
+ * ⚠️ **DOM 一个字都没改**（这是硬约束）：`.net-bottom` 与 `.net-hands` 在 `styles-net.css` 里是
+ * `display: contents`，子节点**直接成为 `.net-board` 的 grid item**，行号由 CSS `grid-row`
+ * **按侧**指派。为什么不能靠"把节点挂到 DOM 更靠前的位置"来换视觉顺序：`.hand` 的 DOM 顺序恒为
+ * `[P0, P1]`（FX 用 `querySelectorAll('.hand')[player]` **按下标**读手牌）。
+ *
+ * **`NET_BOTTOM_SIDES`（**唯一一处**）** 仍然只决定"两块信息块以什么顺序**插进 DOM**"——
+ * 视觉行号由 CSS 按 `data-net-seat` 决定（**不再**有"左右列"这回事），两条腿都在
+ * `tests/ui/net-board-grid.test.ts` 的 G-7 里被钉住。
  *
  * ## 为什么**不**复用 render.ts 的盘本体（设计稿 §6.1，R1 后仍然成立）
  * 热座页的盘是「左右分栏」（P1 槽 | P1 协议 | P2 协议 | P2 槽），两位玩家坐在**同一块屏幕前**、
@@ -56,8 +62,9 @@
  *    这两个类名从本文件交给 `render.ts` 的**通用** `extraClass` 参数，**不是**写死在 `render.ts` 里
  *    （写死会让热座页的源码依赖远程页的类名，热座零变化就不再是构造性的）。
  * 3. **「能量槽在链路外侧端」的旧假设改了，方向模型也一并改成了"按座位"（G2 修正 R3）**：
- *    竖排后能量槽在**上/下**（对手在上、自己在下，由 CSS `order` 决定）；链路生长方向由 `vGrow`
- *    决定（自己 `.grow-down` / 对手 `.grow-up`，纯 CSS 语义）。
+ *    竖排后能量槽在**上/下**（对手在上、自己在下）—— **R8-2 之后由 DOM 兄弟顺序决定**
+ *    （`order` 已退役；见 `renderSide`），生长方向由 `vGrow` 决定（自己 `.grow-down` /
+ *    对手 `.grow-up`，纯 CSS 语义；R8-3 的 `min-height` 让 `justify-content` 也变成承重杠杆）。
  *    **FX 侧的方向判断**从"按绝对玩家左右"改成"按座位上下"：本页每次渲染调用一次
  *    `setFxViewSeat(viewSeat)`（**幂等**；规格 §8.1：切换视角是开发/测试功能，不为它造任何机制），
  *    于是 `effects/index.ts` 的 `stackEndPos`、`fx-gen2.ts` 的 `iceStackEnd`/`smokeStackEnd`/
@@ -161,6 +168,9 @@ import { applyFxViewSeat, fxSeatEndToPlayer, fxViewSeat } from './fx-seat';
 import {
   el,
   renderStackSlot,
+  // G2 修正 R8-2：能量槽**不在**链路槽里（用户裁决：移到链路框外、底部横置），本页自己调它
+  // 并挂到 `.net-side` 的对应端；`renderStackSlot` 传 `withBattery: false`（见 `renderSide`）。
+  renderBattery,
   renderProtocolCell,
   renderDeck,
   renderTrash,
@@ -180,6 +190,11 @@ import {
   pruneSelection,
   syncCheckCacheChains,
   syncChainLayerPosition,
+  // G2 修正 **R8-4b**：已编译协议持久 FX 层（body 级 `.compiled-fx`）的**每帧**同步。
+  // 热座页的这两句在 `renderBoard` 里（开头复位 + 末尾同步）；本页此前**两句都没有** ⇒
+  // 层只在 `img.load` 那一次落位，之后任何移动协议位置的重渲染都会让它停在旧坐标上飘走。
+  resetCompiledFxCells,
+  syncCompiledFxLayers,
   // G2 Task 4F：入口职责的两条（`render.ts` 只加了 `export` 关键字，实现未动；
   // `cancelActiveDrag` 见该文件里的"只读包装"说明）。
   //  · `removeDraftPreviews`：草稿页把两块 `.draft-preview` append 到 **document.body**（不是本
@@ -288,7 +303,17 @@ export const NET_PAGE_HOOKS: readonly NetPageHook[] = [
   { hook: '.trash-pile[data-player]', call: ['renderTrash('], probeSelector: '.trash-pile[data-player]', expected: 2 },
   { hook: '.trash-pile.p1/.p2', call: ['renderTrash('], probeSelector: '.trash-pile.p1, .trash-pile.p2', expected: 2 },
   { hook: '.deck[data-player]', call: ['renderDeck('], probeSelector: '.deck[data-player]', expected: 2 },
-  { hook: '.battery', call: ['renderStackSlot('], probeSelector: '.battery', expected: 6 },
+  {
+    hook: '.battery',
+    // G2 修正 **R8-2**：产出方从 `renderStackSlot(` 改成 `renderBattery(`。
+    // 判据的**真实语义**是"本页把产出该钩子的助手挂进了渲染链路"，而 R8-2 之后
+    // `renderSide` 传 `withBattery: false`（能量槽**不在**链路槽里）⇒ 本页唯一的产出点
+    // 就是那一处 `const batteryNode = renderBattery(s, player, line)` + 按侧 appendChild。
+    // ⚠️ 仍写 `renderStackSlot(` 会变成**假绿**：那个调用还在（链路槽当然还在），
+    // 而能量槽一旦被摘掉它也照样绿 —— 正是"表充当证据"那一族的失效形态。
+    // `expected: 6` 不变（3 线 × 2 侧 = 6，能量槽只是换了落点、没换个数）。
+    call: ['renderBattery('], probeSelector: '.battery', expected: 6,
+  },
   { hook: '.hand', call: ['renderHand(s, 0', 'renderHand(s, 1'], probeSelector: '.hand', expected: 2 },
   { hook: '.hand[data-player]', call: ['renderHand(s, 0', 'renderHand(s, 1'], probeSelector: '.hand[data-player]', expected: 2 },
   {
@@ -299,15 +324,21 @@ export const NET_PAGE_HOOKS: readonly NetPageHook[] = [
   },
   {
     hook: '[data-fx-rot]',
-    // 产出链：`renderStackSlot` 的 `fxRot` 参数 ⇒ `render.ts` 的 `node.dataset.fxRot = opts.fxRot`。
-    // 本页只负责把**按座位的两个值**交给那个参数（`renderSide` 里 `fxRot: isSelfSeat ? 'ccw' : 'cw'`）。
-    call: ['renderStackSlot('],
+    // 产出链（**R8-4 起有两腿**）：
+    //  ① **场上卡**：`renderStackSlot` 的 `fxRot` 参数 ⇒ `render.ts` 的 `node.dataset.fxRot = opts.fxRot`；
+    //  ② **协议 holder**（G2 修正 R8-4）：`renderProtocolCell(` 的第 6 实参 ⇒ `renderProtocol` 的
+    //     `holder.dataset.fxRot = fxRot` —— 协议 FX（持久层/翻面浮层/重排幽灵）靠它知道"协议是横躺的"。
+    // 本页只负责把**按座位的两个值**交给那两个参数
+    // （`renderSide` 里 `fxRot: isSelfSeat ? 'ccw' : 'cw'` 与同处 renderProtocolCell 的第 6 实参）。
+    // ⚠️ 少登记那一腿 = 协议特效跟随那条链**没有任何机检面**（R8-4 的原始缺陷形态）。
+    call: ['renderStackSlot(', 'renderProtocolCell('],
     probeSelector: '[data-fx-rot]',
-    // 数量：它**逐卡**挂在场上卡节点上（不是每槽一个）⇒ 数量随场面变化，这里只做存在性/状态相关；
-    // **逐卡计数与取值**由 `verifyPageHooks` 的断言 3（约束 8）承担（`.net-side-foe/.net-side-self`
-    // 的每张卡都必须带标记，且自己 'ccw' / 对手 'cw'）——与 `.rot-180` 走 "stateDependent + 逐卡断言" 同形。
-    stateDependent: '场上无卡时合法为 0（开局即有；"场上空"是合法局面）——'
-      + '逐卡覆盖与两种取值由断言 3（约束 8）另行核对',
+    // 数量：**逐节点**挂载（场上卡逐卡 + 每个协议 holder 一个）⇒ 数量随场面变化，
+    // 这里只做存在性/状态相关；**逐节点计数与取值**由 `verifyPageHooks` 的断言 3（约束 8，场上卡）
+    // 与断言 6（约束 10，协议 holder + 已编译层的内联 transform）承担 ——
+    // 与 `.rot-180` 走 "stateDependent + 逐节点断言" 同形。
+    stateDependent: '场上无卡时（开局即有；"场上空"是合法局面）至少协议 holder 仍会带标记；'
+      + '逐节点覆盖与两种取值由断言 3（约束 8）与断言 6（约束 10）另行核对',
   },
   {
     hook: '.rot-cw',
@@ -567,10 +598,62 @@ export function verifyPageHooks(scope: HTMLElement, appliedSeat: 0 | 1 | null = 
     fatal.push(`R6 的底部行自查抛异常（${String(err)}）`);
   }
 
+  // ── 断言 6（G2 修正 R8-4 · 约束 10）：**协议 holder 的特效朝向标记按侧** + **已编译协议 FX 层
+  //    的内联 transform 真的跟着协议转了 ∓90°**（用户第 4 条反馈"所有协议的特效都没有跟着协议
+  //    转过来"的机检腿）──
+  // 为什么必须在运行时查：协议 FX 的几何跟随**完全**依赖 holder 上的 `data-fx-rot`
+  // （`fxRotDegOf` 读不到 ⇒ 0° ⇒ 层不旋转 ⇒ 环/角光/藤蔓/裂纹继续按竖版盒错位 90°），
+  // 而这条链由**三个文件**接力（`render-net.ts` 传参 → `render.ts` 写 holder 属性 →
+  // `positionCompiledFxLayer` / `playProtocolFlip` 读角度）。源码文本守卫最多钉住"某处调了某助手"，
+  // 钉不住"运行期标记真的挂在 holder 上、值真的按侧"—— 与断言 3（场上卡）同形，对象换成
+  // `.protocol-cell .protocol-holder`（⚠️ 它**不是** `.card`，与约束 8/9 的选择器不冲突）。
+  try {
+    for (const [side, want, deg] of [['self', 'ccw', '-90'], ['foe', 'cw', '90']] as const) {
+      const holders = [...scope.querySelectorAll<HTMLElement>(`.net-side-${side} .protocol-cell .protocol-holder`)];
+      const marked = holders.filter((h) => h.getAttribute('data-fx-rot') === want);
+      if (holders.length === 0 || marked.length !== holders.length) {
+        fatal.push(`约束 10：.net-side-${side} 的每个协议 holder 都必须带 data-fx-rot="${want}"`
+          + '（协议特效的 ∓90° 跟随靠 fxRotDegOf 读它；缺标记 ⇒ 层不旋转 ⇒ 协议特效竖版错位 90°），'
+          + `实际 ${marked.length}/${holders.length} 个`);
+        continue;
+      }
+      // 条件断言：**只有已编译协议**才有 body 级持久 FX 层 ⇒ 有对象时才查（无编译协议时合法跳过）。
+      // 查的是**层自己的内联 transform**（层盒 = holder 盒、绕自身中心转 ⇒ 与协议视觉盒重合）。
+      //
+      // ⚠️ **严格相等**（G2 修正 **R8-4b** 起）：必须**恰好**是该侧标记对应的 `rotate(∓90deg)`。
+      // 为什么现在能严格（此前只能写成容忍集合 —— 实现者 §2 已披露过）：
+      //  · 本页在 `root.appendChild(wrap)` **之后**补上了 `syncCompiledFxLayers()`（见入口注释），
+      //    且 `compiledFxCells` 改成**每帧复位** ⇒ 自查这一刻层**一定**已被按当前 holder 矩形写过
+      //    （本页协议 holder 有固定 CSS 100×140 ⇒ 矩形非 0，不会被 0×0 早退挡掉）；
+      //  · "切视角后层带着另一侧陈旧角度"这个中间态也随之消失（同一帧内必然重写）。
+      // ⇒ 空串 / 另一侧角度 / 180° / 任何第三个值都是**真缺陷**：层没跟着协议横躺，
+      //    或者根本没被重新定位 —— 后者更严重：环/角光会**飘在旧坐标上**。
+      for (const box of [...scope.querySelectorAll<HTMLElement>(`.net-side-${side} .protocol.compiled`)]) {
+        const defId = /(?:^|\s)compiled-fx-([\w-]+)/.exec(String(box.className))?.[1];
+        if (defId === undefined) continue;   // 没有 defId 类 ⇒ 不是本页产出的已编译协议盒
+        const layers = typeof document === 'undefined'
+          ? []
+          : [...document.querySelectorAll<HTMLElement>('.compiled-fx')]
+            .filter((n) => String(n.className).split(/\s+/).includes(`compiled-fx-${defId}`));
+        const bad = layers
+          .map((n) => String(n.style?.transform ?? ''))
+          .filter((t) => t !== `rotate(${deg}deg)`);
+        if (bad.length > 0) {
+          fatal.push(`约束 10：已编译协议 ${defId}（${side} 侧）的持久 FX 层内联 transform 必须恰好是 `
+            + `rotate(${deg}deg)，实际 ${bad.map((t) => JSON.stringify(t)).join('、')}`
+            + '（空串/其它值 ⇒ 层没被按当前协议矩形同步 —— 环/角光会飘在旧坐标上、或没跟着协议横躺；'
+            + '180° 是"误用会回退卡面朝向的 fxOrientOf"的形态）');
+        }
+      }
+    }
+  } catch (err) {
+    fatal.push(`约束 10 的协议特效朝向自查抛异常（${String(err)}）`);
+  }
+
   if (soft.length > 0) console.info('[render-net] 状态相关钩子当前为空（合法局面）：\n' + soft.join('\n'));
   if (fatal.length === 0) {
     return soft.length === 0
-      ? '自查 ✓ A 类钩子齐 / 手牌顺序 [P0,P1] / 对手卡与协议 180° / 特效朝向标记齐 / 方向座位一致'
+      ? '自查 ✓ A 类钩子齐 / 手牌顺序 [P0,P1] / 对手卡与协议 180° / 特效朝向标记齐（卡 + 协议）/ 方向座位一致'
       : `自查 ✓（${soft.length} 条状态相关钩子当前为空）`;
   }
   console.warn('[render-net] 运行时自查发现失败项（源码守卫之外的运行时证据）：\n' + fatal.join('\n'));
@@ -657,19 +740,22 @@ function netControlHolder(s: GameState, viewSeat: PlayerId): -1 | PlayerId {
 // （`renderPiles` 原来在这里；G2 修正 R6 把它随"信息块"一起挪到下方的底部行一节 ——
 //   它的两个挂载点现在**对称**了（每侧各一次），注释与不重复产出的论证都写在那里。）
 
-/** 一侧的「链路槽（含能量槽）」+「协议格」两份。
+/** 一侧的「能量槽」+「链路槽」+「协议格」三层。
  *
- *  ⚠️ **DOM 顺序 = 视觉顺序（列内自上而下），而两侧是镜像的**（G2 修正 R-F · **C-2**）：
- *  - **对手侧**（上半）：链路槽（§1 层 2）在**前**、协议格（层 3）在后 ⇒ 协议**贴中线**；
- *  - **自己侧**（下半）：协议格（层 4）在**前**、链路槽（层 5）在后 ⇒ 协议**贴中线**。
+ *  ⚠️ **DOM 顺序 = 视觉顺序（列内自上而下），而两侧是镜像的**（G2 修正 R-F · **C-2**；
+ *  **R8-2 把能量槽也纳入这条规则**）：
+ *  - **对手侧**（上半）：能量槽（层 1，最外）→ 链路槽（层 2）→ 协议格（层 3，贴中线）；
+ *  - **自己侧**（下半）：协议格（层 4，贴中线）→ 链路槽（层 5）→ 能量槽（层 6，最外）。
  *
  *  R1 曾对两侧都挂 `[链路槽, 协议格]`（那只对上半成立），于是**自己协议落到整列最外端**
  *  —— 这正是 C-2，评审用最小 DOM 桩真跑 `renderNetBoard` 查元素树才发现。
  *  现在 `tests/ui/net-lane-tree.test.ts` 把"一列自上而下 = §1 的六层"钉成**行为机检**。
  *
- *  能量槽在**链路槽内部**，由 CSS `order` 摆到自己链路的**外端**（对手在上 / 自己在下）；
- *  那两条规则**按侧**（`.net-side-foe` / `.net-side-self`）给，**不是**按绝对玩家号
- *  （`.p1`/`.p2`）—— "哪一侧是自己"由**座位**决定，绝对号会随席位翻转（C-2 的第二个成因）。
+ *  ⚠️ **R8-2：CSS `order` 彻底退役**。R1~R7 期间能量槽是 `.stack-slot` 的子节点、靠
+ *  `.net-side-foe/.net-side-self` 的 `order` 摆到外端 —— 而 `order` 一旦被写成**按绝对玩家号**
+ *  （`.p1`/`.p2`），默认席位下两个能量槽会一起跑到内侧，且当时的守卫还是绿的（C-2 的第二个成因）。
+ *  用户裁决「能量槽要放在链路框**外**」之后，`.net-side` 是 flex column ⇒ **DOM 兄弟顺序 = 视觉
+ *  上下顺序**，两侧镜像只由本函数的挂载顺序表达 —— **"哪一层在哪"只剩这一个出处**。
  *
  *  `kind`：`'foe' | 'self'` —— 选类名、朝向、挂载顺序与生长类；`data-player` 仍写**绝对玩家号**。 */
 function renderSide(
@@ -686,7 +772,7 @@ function renderSide(
   const { uid } = getHandSelection();
   // 只有当前回合玩家的链路槽可交互（与热座页一致：interactable 由引擎回合归属决定）
   const myTurn = isTurn(s, player);
-  // ⚠️ 两个节点**先建后按侧挂载**：本页守卫第 2 条的判据是 `appendChild(<call>` 或 `= <call>`
+  // ⚠️ 节点**先建后按侧挂载**：本页守卫第 2 条的判据是 `appendChild(<call>` 或 `= <call>`
   //    （"结果真的流进 DOM"）—— 绑定成局部变量再挂载仍然满足，而顺序由下面的 `kind` 分支决定。
   const slotNode = renderStackSlot(
     s, player, line, myTurn ? uid : null,
@@ -706,21 +792,38 @@ function renderSide(
       vGrow: kind === 'self' ? 'down' : 'up',
       // 特效朝向标记（约束 8；R1 只产出、R2 才读）：自己 ccw、对手 cw。
       fxRot: isSelfSeat ? 'ccw' : 'cw',
+      // ── R8-2：**不在链路槽里**挂能量槽 ──
+      // 用户裁决："能量槽目前都被放在了链路框中，这样是不对的，应该要放置在对应链路的底部横置，
+      // 如果是对方的就放在顶部"。所以本页传 `false`，由下面那一处自己调 `renderBattery` 并挂到
+      // `.net-side` 的**外端**。⚠️ `false` 不是"少挂一个、以后再补"：那是**唯一**一处落点
+      // （规格 §4 红线 7：不许留两套真相 / 不许留 display:none 的死 DOM —— 那会让
+      // `NET_PAGE_HOOKS` 的 `.battery` 计数与产出链条同时失真）。
+      withBattery: false,
     },
   );
   // 协议格朝向同样按座位：自己逆时针 90°（`.net-rot-ccw`）、对手顺时针 90°（`.net-rot-cw`）。
   // ⚠️ `orient`（0 / 180）是**卡面**朝向，`extraClass` 是**协议图**的 ∓90° —— 两套朝向并存，
   // 理由见文件头约束 2（`.rot-cw/.rot-ccw` 会被 `orientOf` 当卡面朝向读，故协议用自己的类）。
+  // ── G2 修正 R8-4：第 6 实参 = 同一个 `isSelfSeat` 派生的**特效朝向标记** ──
+  // 两处（协议图的类 / holder 的 `data-fx-rot`）都由这一个座位真值派生 ⇒ **不可能脱钩**。
+  // 它让协议 FX 能跟着协议横躺（层绕自身中心转同一个 ∓90°：`positionCompiledFxLayer`）。
   const protoNode = renderProtocolCell(
     s, player, line, isSelfSeat ? 0 : 180, isSelfSeat ? 'net-rot-ccw' : 'net-rot-cw',
+    isSelfSeat ? 'ccw' : 'cw',
   );
-  // ── 层序（§1）：中线两侧**都是协议**，所以两侧的挂载顺序必须镜像 ──
+  // 能量槽（横置；点数 >10 的溢出数字也由它自己产出）。`data-player`/`data-line` 由
+  // `renderBattery` 写在根节点上 ⇒ 6 处 FX 用**与位置无关**的 `.battery[data-player][data-line]`
+  // 定位（见 `renderBattery` 的注释与 `gen3-control.ts` 的 `batteryNode`）。
+  const batteryNode = renderBattery(s, player, line);
+  // ── 层序（§1 的六层）：中线两侧**都是协议**，所以两侧的挂载顺序必须镜像 ──
   if (kind === 'self') {
-    side.appendChild(protoNode);   // 层 4：自己协议（贴中线）
-    side.appendChild(slotNode);    // 层 5：自己链路（协议外侧）
+    side.appendChild(protoNode);     // 层 4：自己协议（贴中线）
+    side.appendChild(slotNode);      // 层 5：自己链路（协议外侧）
+    side.appendChild(batteryNode);   // 层 6：自己能量槽（最外端 = 链路**下方**，横置）
   } else {
-    side.appendChild(slotNode);    // 层 2：对手链路（协议外侧）
-    side.appendChild(protoNode);   // 层 3：对手协议（贴中线）
+    side.appendChild(batteryNode);   // 层 1：对手能量槽（最外端 = 链路**上方**，横置）
+    side.appendChild(slotNode);      // 层 2：对手链路（协议外侧）
+    side.appendChild(protoNode);     // 层 3：对手协议（贴中线）
   }
   return side;
 }
@@ -748,8 +851,9 @@ function renderLaneMid(s: GameState, line: Line): HTMLElement {
  * 一条线 = **一个纵向的列**（G2 修正 R1）。列内自上而下严格是规格 §1 的六层：
  *   对手能量槽 → 对手链路 → 对手协议 → 自己协议 → 自己链路 → 自己能量槽
  *
- * 本函数只负责**三段的挂载顺序**（对手侧 → 中线 → 自己侧）—— 每一侧内部的层序（链路/协议）
- * 由 `renderSide` 按 `kind` 镜像，能量槽在链路**槽内**由 CSS `order` 摆到外侧端（见两者说明）。
+ * 本函数只负责**三段的挂载顺序**（对手侧 → 中线 → 自己侧）—— 每一侧内部的**三层顺序**
+ * （对手：能量槽→链路→协议 / 自己：协议→链路→能量槽）由 `renderSide` 按 `kind` 镜像表达，
+ * 而"哪一层在哪"**只**由 DOM 兄弟顺序决定（R8-2 之后 CSS `order` 已彻底退役，见 `renderSide`）。
  * 三个列由 `renderNetBoard` 的 `for (const line of [0, 1, 2])` 并排产出
  * ⇒ **整块棋盘从"三条横带"变成"三个竖列"**。
  *
@@ -793,6 +897,33 @@ function choiceSkipBtn(promptId: string, cb: UiCallbacks): HTMLElement {
   return skip;
 }
 
+/**
+ * 把选择条挂到**操作方那一侧的信息块**里（G2 修正 **R8-8**）。
+ *
+ * 用户原话："没轮到自己的回合或是卡牌触发效果不需要自己进行操作，就不用在己方显示下一步之类的
+ * 跳过按钮，只有需要操作的那一方才会显示"。
+ *
+ * 改之前：三个分支都是 `wrap.appendChild(bar)`，而 `.choice-bar` 在 `styles.css` 里是
+ * `position: fixed; left: 50%; bottom: 18px`（**视口底部中央**）—— 与"谁在操作"无关，
+ * 看上去永远像"挂在我这边"。现在：挂进 `who` 的信息块，并由 `styles-net.css` 的
+ * `.net-board .choice-bar { position: static; … }` 把它改成**流内**元素。
+ *
+ * ⚠️ **找不到那一块时的处理（不许静默丢弃）**：退回挂在 `wrap`（棋盘根）上并 `console.warn`。
+ * 为什么不是"找不到就不挂"：`choiceBar` 对 `select-line` **不产出确认按钮**，而 select-line 常常是
+ * **非 optional** 的 —— 按钮一丢，这个 prompt 就**永久无法应答、整局卡死**（C-1 踩过的同一形态）。
+ * 挂在 `wrap` 上按钮仍然可点（只是位置不好看），是"降级但可玩"；`console.warn` 让这次降级**可见**
+ * （页面结构错——例如 `NET_BOTTOM_SIDES` 被改坏、`data-player` 没写——不会变成静默的特效错位族）。
+ */
+function mountChoiceBar(wrap: HTMLElement, who: PlayerId, bar: HTMLElement): void {
+  const host = wrap.querySelector<HTMLElement>(`.net-info-block[data-player="${who}"]`);
+  if (host) { host.appendChild(bar); return; }
+  console.warn(`[render-net] R8-8：找不到操作方 P${who + 1} 的信息块`
+    + `（.net-info-block[data-player="${who}"]）—— 选择条退回挂在棋盘根上：`
+    + '按钮不会丢（丢了的话非 optional 的 prompt 会永久卡死），但页面结构已经不对，'
+    + '请检查 renderInfoBlock / NET_BOTTOM_SIDES / data-player 的产出。');
+  wrap.appendChild(bar);
+}
+
 /** 选择条共用的操作者标签（改动提示词 17 的横幅 + 标题）。 */
 function appendOperatorHeader(bar: HTMLElement, who: PlayerId, title: string): void {
   bar.appendChild(el('div', 'operator-banner', `请 玩家 ${who + 1} 操作`));
@@ -826,6 +957,8 @@ function renderChoiceUi(
   } else {
     setChoiceSelection(getChoiceSelection(), top.id);
   }
+  // **操作方**（R8-8）：选择条要挂到这一方的信息块里 —— `chooser` 覆盖 `top.player`
+  // （规则"被作用卡持有者决定执行"，与 main.ts 的 effect-choice 分发、render.ts 的选择条标签同源）。
   const who = prompt.chooser ?? top.player;
   hands.classList.add('choice-mode');
 
@@ -880,7 +1013,9 @@ function renderChoiceUi(
     });
     bar.appendChild(confirm);
     if (prompt.optional) bar.appendChild(choiceSkipBtn(top.id, cb));
-    wrap.appendChild(bar);
+    // R8-8：选择条挂到**操作方**（`who`）那一侧的信息块（不是 wrap / 视口底部）——
+    // 非操作方那一侧因此**一个操作按钮都没有**（用户的字面判据）。
+    mountChoiceBar(wrap, who, bar);
     return;
   }
 
@@ -897,7 +1032,9 @@ function renderChoiceUi(
     }
     const bar = choiceBar(top, prompt, cb, '点击高亮的线路选择目标线');
     if (prompt.optional) bar.appendChild(choiceSkipBtn(top.id, cb));
-    wrap.appendChild(bar);
+    // R8-8：同上（select-line 的"确认"由整条带的点击承担，但**跳过**按钮在这里，
+    // 而它必须落在操作方那一侧 —— 非 optional 的 select-line 只能靠这条带上的点击应答）。
+    mountChoiceBar(wrap, who, bar);
     return;
   }
 
@@ -932,7 +1069,8 @@ function renderChoiceUi(
     }
     if (prompt.optional) bar.appendChild(choiceSkipBtn(top.id, cb));
   }
-  wrap.appendChild(bar);
+  // R8-8：挂到操作方那一侧的信息块（见 `mountChoiceBar` 的说明）。
+  mountChoiceBar(wrap, who, bar);
 }
 
 /* ============================================================================
@@ -942,8 +1080,13 @@ function renderChoiceUi(
 /**
  * 底部操作区：刷新按钮 + 引擎给的其它行动按钮（编译线/结算触发/清缓存）+「下一步」。
  *
- * 挂在**自己那一行**手牌区里（`bottomBar`），不是重写两份 —— 回合归属由引擎决定，
- * 而 `getLegalActions(s, s.turnPlayer)` 本来就只有当前回合玩家有动作。
+ * 由 `renderInfoBlock` 挂在**当前回合玩家那一侧**的信息块里（R8-8；改之前恒挂自己那侧）——
+ * 回合归属由引擎决定，而 `getLegalActions(s, s.turnPlayer)` 本来就只有当前回合玩家有动作，
+ * 所以"行动区在哪一侧"必须与它同侧，否则出现"我这边显示对手的下一步"。
+ *
+ * ⚠️ `s.pendingEffects` 非空时 `getLegalActions` 返回空数组（引擎语义：挂起选择期间没有标准行动）
+ * ⇒ 这一帧行动区是**空盒**（`.action-bar:empty { display: none }`），此时"需要操作的那一方"由
+ * 选择条（`.choice-bar`，同样挂到操作方那一侧）承担 —— 两条腿合起来才是 R8-8 的完整判据。
  */
 function renderNetActionBar(s: GameState, cb: UiCallbacks): HTMLElement {
   const bar = el('div', 'action-bar net-action-bar');
@@ -993,21 +1136,17 @@ const bottomPlayerOf = (side: NetBottomSide, viewSeat: PlayerId): PlayerId =>
   (side === 'self' ? viewSeat : (1 - viewSeat) as PlayerId);
 
 /**
- * ⚠️⚠️ **左右归属 = 这个数组的顺序**（R6 规格留的"一处常量"）。
+ * ⚠️⚠️ **DOM 插入顺序 = 这个数组的顺序**（R6 规格留的"一处常量"）。
  *
- * 本说明取 **左 = 自己、右 = 对手**（自左向右的自然读法）。**用户未指定左右** —— 规格 §8.4
- * 第 2 条原话："若你要反过来，改一处常量即可"。要反过来就把下面两行**对调**（`['foe', 'self']`）。
- *
- * 这个常量决定两件事，且**必须同时**由它决定（否则会出现"DOM 对、看着反"这种最难查的形态）：
- *  1. **信息块进 DOM 的顺序**（本文件 `buildBottomRow` 里那两条
- *     `for (const side of NET_BOTTOM_SIDES.slice(…))` 循环）；
- *  2. **它们的网格列** —— `styles-net.css` 第 6 节用
- *     `grid-column: 1` / `grid-column: 3` 把 `.net-info-block[data-net-seat="self"]` 钉在**左/右列**，
- *     而 `data-net-seat` 就是这里的侧别 ⇒ 改这个常量会**同时**改 DOM 顺序与左右列，
- *     两条腿不可能脱钩。`tests/ui/net-lane-tree.test.ts` 的 R6 条把两条腿**都**从本常量推导。
+ * 本说明取 **`['self', 'foe']`**（信息块按"自己在前、对手在后"插进 DOM）。
+ * **R8-5 之后它不再决定"左右"**（左右列已不存在）：视觉位置由 `styles-net.css` 第 6 节的
+ * `grid-row` **按侧**决定（对手信息块恒在第 1 行、自己恒在第 5 行），而 `data-net-seat`
+ * 就是这个侧别 ⇒ 两条腿永远不会脱钩（改常量只改 DOM 顺序，改 CSS 只改行号；两者不一致时
+ * `tests/ui/net-board-grid.test.ts` 的 G-7 会报红）。
  *
  * ⚠️ 它**不**决定、也**不许**影响两条 `.hand` 的 DOM 顺序：手牌区在底部行的 DOM 位置**恒定在中间**
- * （`buildHands` 先 append P0、再 append P1，约束 7）。左右摆放是 CSS 的事。
+ * （`buildHands` 先 append P0、再 append P1，约束 7）。行号由 `.net-hand-area-{foe,self}` 的
+ * `grid-row` 决定。
  */
 export const NET_BOTTOM_SIDES: readonly NetBottomSide[] = ['self', 'foe'];
 
@@ -1037,8 +1176,13 @@ function renderPiles(s: GameState, player: PlayerId): HTMLElement {
  * 那一块的标题/计数/按钮**分散到两头**，在窄列里很难看）。传 `align` 时 `renderPlayerInfo`
  * 用的是**显式**分支，与热座页（不传）逐字无关。
  *
- * 操作区（`renderNetActionBar`）挂在**自己**那一块里：`getLegalActions` 是回合制的，
- * 挂两份会出现重复按钮（这是 R6 之前 `decorateHand` 的既定语义，一行未改地搬过来）。
+ * 操作区（`renderNetActionBar`）挂在**当前回合玩家**那一块里（G2 修正 **R8-8**）：
+ * `getLegalActions(s, s.turnPlayer)` 本来就是"**谁的回合**谁有动作"，所以行动区必须与它同侧 ——
+ * 改之前判据是 `isSelf`，于是**对手回合时我的信息块里显示的是对手的「下一步/编译线N/结算触发/
+ * 清理缓存」**（点下去等于替对手走棋），而真正该操作的那一侧一个按钮都没有。
+ * 用户原话："没轮到自己的回合……就不用在己方显示下一步之类的跳过按钮，只有需要操作的那一方才会显示"。
+ * ⚠️ 判据用 `player === s.turnPlayer`（**绝对玩家号对绝对玩家号**），不是 `isSelf`
+ * —— 两人的信息块由同一个函数产出，只有各自的 `player` 不同。
  */
 function renderInfoBlock(
   s: GameState, player: PlayerId, side: NetBottomSide, operator: PlayerId | null,
@@ -1059,7 +1203,10 @@ function renderInfoBlock(
   // 唯一的页面内反馈；真实联机由 G5 换成会话状态。
   if (!isSelf) info.appendChild(renderConnectionBadge());
   block.appendChild(info);
-  if (isSelf) block.appendChild(renderNetActionBar(s, cb));
+  // ── R8-8：行动区只挂**当前回合玩家**那一侧 ──
+  // 两处调用（每侧一块）里恰好一处命中 ⇒ 非操作方那一侧**没有任何操作按钮**。
+  // ⚠️ 不许改回 `isSelf`：那会让对手回合时"我"这边出现对手的行动按钮（用户点名的缺陷形态）。
+  if (player === s.turnPlayer) block.appendChild(renderNetActionBar(s, cb));
   return block;
 }
 
@@ -1067,7 +1214,8 @@ function renderInfoBlock(
  * 一块**手牌区**（`.net-hands` 的一个子项）：手牌 + 对手那一行的"张数"小标签。
  *
  * 创建顺序恒为 **P0 先、P1 后**（`buildP0Hand` / `buildP1Hand` 的字面量调用顺序，约束 7 的代理证据）；
- * 视觉上谁在上/下由 `.net-hands` 的 CSS `order` 决定（styles-net.css 第 6 节）。
+ * 视觉上谁在上/下由 `.net-hand-area-{foe,self}` 的 **CSS `grid-row`** 决定
+ * （R8-5 之前是 `.net-hands` 的 `order`；styles-net.css 第 6 节）。
  *
  * ⚠️ **R6 之后这里不再有信息条与牌库/弃牌堆**（它们搬到 `.net-info-block` 里了）。
  * 两块手牌区**对称**（都只包一层 `.net-hand-area`）—— R6 之前自己那块不对称地多带信息条与操作区，
@@ -1147,8 +1295,9 @@ function buildP1Hand(s: GameState, viewSeat: PlayerId, cb: UiCallbacks, operator
  * fx-gen2.ts:693/1316/1786）。甲读法把对手放在**上带** —— 若按视觉顺序挂载，
  * `viewSeat = 0`（对手 = P1）就会得到 `[P1, P0]`，下标 0 取到**对手**的手牌，
  * 特效把卡飞到对手手牌区，**不报错也不跳过**（比 `undefined` 更难发现 —— 后者至少会被守卫吞掉）。
- * 所以：DOM 顺序**恒定** [P0, P1]，视觉上谁在上带由父容器的 `.net-view-N` 用 CSS `order` 决定
- * （见 styles-net.css 第 6 节）。**不得**用 `display:none` 换位：
+ * 所以：DOM 顺序**恒定** [P0, P1]，视觉上谁在上带由 `.net-hand-area-{foe,self}` 的
+ * **CSS `grid-row`** 决定（R8-5；改之前是父容器的 `.net-view-N` + `order`，见 styles-net.css
+ * 第 6 节）。**不得**用 `display:none` 换位：
  * 隐藏节点 `getBoundingClientRect()` 全 0，FX 落点会塌。
  *
  * 两个 appendChild **写成两行字面量**（不用 `for (const p of [0,1])`）是**有意**的：
@@ -1167,22 +1316,21 @@ function buildHands(
 }
 
 /**
- * **底部行**（R6）：`[左信息块, 手牌区, 右信息块]` —— 三块的**顺序**就是"谁在左/中/右"，
- * 而"左/右是哪个座位"由 `NET_BOTTOM_SIDES` 的单元素切片决定（见下面两条 `for`）。
+ * **底部容器**（R6 的"底部行"）：`[信息块, 手牌区, 信息块]` —— 三块的**DOM 顺序**由
+ * `NET_BOTTOM_SIDES` 的单元素切片决定（见下面两条 `for`）。
+ *
+ * ⚠️ **R8-5 起它不再是"一行三列"**：`styles-net.css` 第 6 节把 `.net-bottom` 设成
+ * `display: contents`（盒子消失，子节点成为 `.net-board` 的 grid item），五行行号由 `grid-row`
+ * **按侧**指派。所以这里**没有任何左右语义** —— 这个函数只负责"谁进 DOM、以什么顺序进"。
  *
  * 为什么中间那块必须由**本函数** append、而不是让两侧的信息块各自把手牌"夹"进去：
  * 手牌区只有一个节点（`.net-hands`），它必须**恰好 append 一次**（多一次 = 页面两份 `.hand` ×2
  * ⇒ FX 按下标取手牌全部拿到旧副本）。所以顺序写死为「左块 → 手牌区 → 右块」。
  *
- * ⚠️ **DOM 顺序与视觉左右同构**：`styles-net.css` 第 6 节用
- * `[data-net-seat="self"] → grid-column: 1`、`[data-net-seat="foe"] → grid-column: 3` 把两块
- * 钉在左右列，而 `data-net-seat` 就是 `NET_BOTTOM_SIDES` 给的侧别 ⇒ 改常量会**同时**改
- * DOM 顺序与 CSS 列，两条腿不可能脱钩。`tests/ui/net-lane-tree.test.ts` 的 R6 条把
- * 两条腿（DOM 顺序 + `grid-column` 解算出的视觉左右）**都**从那个常量推导，改任一条都报红。
- *
  * ⚠️ 两条 `for (... of NET_BOTTOM_SIDES.slice(0, 1))` / `.slice(1)` 是**有意分两段**的：
  * 只有把"手牌区恰好挂在两块之间"写成**单次** `row.appendChild(hands)`，才能同时满足
  * "DOM 顺序 = [信息块, 手牌, 信息块]" 与 "手牌区恰好挂载一次"。
+ * （手牌区仍然必须**恰好一次** `appendChild` —— `display: contents` 只改盒树，不改 DOM。）
  */
 function buildBottomRow(
   s: GameState, viewSeat: PlayerId, cb: UiCallbacks, operator: PlayerId | null,
@@ -1264,6 +1412,14 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
   removeDraftPreviews();
   // ── 入口职责 3/7：本渲染器自己清空并重建 root（F-1：少了它会逐帧线性叠加） ──
   root.textContent = '';
+  // ── 入口职责 3b/7（G2 修正 **R8-4b**）：**本帧**持久 FX 收集器复位 ──
+  // `compiledFxCells` 是 `renderProtocol` 逐格登记、`syncCompiledFxLayers` 遍历的每帧收集器。
+  // 热座页在 `renderBoard` 开头复位（`resetCompiledFxCells()`）；本页此前**没有** ⇒ 每帧向数组
+  // **追加**一批新 holder ⇒ 表随重渲染线性增长、`syncCompiledFxLayers` 每帧多遍历 N 条历史记录。
+  // ⚠️ 准确说：陈旧 holder 是 detached ⇒ `isConnected` 早退、**不会**写几何（所以不是"画面写回旧坐标"），
+  //    但它是**泄漏**，而且让"每帧同步的到底是谁"变成随使用时长增长的模糊量 —— 与 R8-4b 修的
+  //    "net 页根本没有每帧同步"叠在一起时，缺陷极难分离。
+  resetCompiledFxCells();
   const viewSeat = opts.viewSeat;
   // （`foe` 的换算原来在这里，供顶部对手条用；R6 取消顶部条后它已无用 —— 对手侧现在由
   //   `renderLaneColumn` 与 `bottomPlayerOf` 各自按座位换算。删掉局部变量以免"看起来还在用"。）
@@ -1315,13 +1471,14 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
   //    "结果真的进了 DOM"这条证据从源码里消失（我第一版就是套了包装 → 守卫报"结果被丢掉"）。
   grid.appendChild(renderControlModule(s, { axis: 'y', holder: netControlHolder(s, viewSeat) }));
 
-  // ── 底部行（R6）：信息块（左=自己 / 右=对手，见 NET_BOTTOM_SIDES）· 手牌区（中）· 信息块 ──
+  // ── 底部容器（R6；**R8-5：内容被 CSS 拉成五行**）：信息块 · 手牌区 · 信息块 ──
   // 手牌区仍由 `buildHands` 产出，且**两条 `.hand` 的 DOM 顺序恒为绝对玩家顺序 [P0, P1]**（约束 7）；
   //    `hands` 变量要交给 `renderChoiceUi`（给手牌条加 .choice-mode），故这里保留局部绑定。
   const bottom = buildBottomRow(s, viewSeat, cb, operator);
-  // `.net-hands` 恒是底部行的**最后一个子节点**（`buildBottomRow` 的挂载顺序：两块信息块 → 手牌区），
+  // `.net-hands` 恒是底部容器的**最后一个子节点**（`buildBottomRow` 的挂载顺序：两块信息块 → 手牌区），
   // 所以这里用 `lastElementChild` 而不是 `querySelector('.net-hands')`：少一次 DOM 查询，
   // 也避免"若查不到就静默退化成 `bottom`"这种把 `.choice-mode` 加到错误节点上的写法。
+  // （R8-5 的 `display: contents` 只改**盒树**，DOM 父子关系不变 ⇒ 这一句仍然成立。）
   const hands = bottom.lastElementChild as HTMLElement;
 
   // ⚠️ C-1：grid **必须先挂进 wrap**，选择模式才能找到候选节点 —— `renderChoiceUi` 内部
@@ -1334,16 +1491,18 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
   // 与热座页同序（renderBoard:4800 挂 grid → :4835 跑 choice 分支）。
   wrap.appendChild(grid);
 
-  // ── R7 修正：底部行是 `.net-grid` 的**兄弟**（挂 `wrap` = `.net-board`），**不是**它的子节点 ──
+  // ── R7 修正：底部容器是 `.net-grid` 的**兄弟**（挂 `wrap` = `.net-board`），**不是**它的子节点 ──
   // 为什么这是承重的（用户实机截图确认的容器层级崩塌）：`bottom` 曾经 `grid.appendChild(bottom)`，
   // 于是 `.net-grid` 有了**5 个**子节点，而样式表只给了 **3 条显式轨道** ⇒ 第 4、5 个子节点成为
   // **隐式列**，整页塌成"一行五格、下方大片空白、右侧多出滚动条"。
   // 现在的层级（styles-net.css 第 1 节是它的样式腿，`tests/ui/net-lane-tree.test.ts` 的 R7 条是行为腿）：
-  //   .net-board（flex column）
-  //     ├─ .net-grid（4 条显式轨道：3 条线 + 控制轨）
-  //     ├─ .net-bottom（信息块 · 手牌区 · 信息块）
-  //     └─ .log / .diag-btn / .net-preview-bar
-  // ⚠️ 挂载顺序：[grid, bottom, …] —— 底部行必须在 grid **之后**（它在视觉上在下）。
+  //   .net-board（**grid**，R8-5）
+  //     ├─ .net-grid（4 条显式轨道：3 条线 + 控制轨）      → 五行里的第 3 行
+  //     ├─ .net-bottom（display: contents；信息块 · 手牌区 · 信息块）
+  //     │    ⇒ 子节点直接成为本容器的 grid item：第 1/2/4/5 行由 CSS `grid-row` 按侧指派
+  //     └─ .log / .diag-btn / .net-preview-bar（第 6 行起，自动放置）
+  // ⚠️ 挂载顺序：[grid, bottom, …] —— 底部容器必须在 grid **之后**（R7 的层级约束；视觉行号由
+  //    CSS `grid-row` 决定，与 DOM 顺序无关，但层级崩塌那条红线仍然按 DOM 判）。
   // ⚠️ 必须在 `renderChoiceUi` **之前**：选择模式要按 `wrap.querySelectorAll` 找**已入 DOM** 的
   //    候选卡，而自己的手牌卡就在 `bottom` 里（理由与上面 C-1 的 grid 完全相同）。
   wrap.appendChild(bottom);
@@ -1374,6 +1533,20 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
 
   // 棋盘已入 DOM → 执行本帧收集的几何型 FX（矩形定位有效；透彻牌库眼睛 / 幸运宣告骰子）
   for (const fn of deferredFx) fn();
+
+  // ── G2 修正 **R8-4b**：本页**必须自己**同步已编译协议的持久 FX 层（挂在 body 的 `.compiled-fx`）──
+  // **为什么 net 页必须自己同步**：热座页有 `renderBoard` **末尾**那次 `syncCompiledFxLayers()`
+  // （每帧都按 holder 矩形重新对齐），而本页此前**只有 `renderProtocol` 里 `img.load` 的那一次回调**
+  // ⇒ 编译之后**任何会移动协议位置的重渲染**（选择条/浮层出现把底部行撑高、链路放牌变长、
+  // R8-5 的五行网格…）都会让环/角光**停在旧坐标上飘走** —— 这正是用户第 4 条反馈
+  // "所有协议的特效都没有跟随"在本页的第二个成因（第一个是 R8-4 的角度）。
+  // **位置（两条都是承重的）**：
+  //  ① 在 `root.appendChild(wrap)` **之后** —— 树构建期节点 detached，`getBoundingClientRect()`
+  //     全 0，`positionCompiledFxLayer` 会（正确地）早退，量了等于没量；
+  //  ② 在 `renderChoiceUi(...)` **之后**（它在 `root.appendChild(wrap)` 之前就构建完选择条/浮层，
+  //     挂载后才会改变布局）—— 与本行的 `deferredFx` 同一个"最后量"的时刻。
+  // 幂等且廉价（≤6 层 + 只读矩形）；`compiledFxCells` 已在本帧入口复位 ⇒ 遍历次数恒 = 本帧协议数。
+  syncCompiledFxLayers();
 
   // —— 入口第 2、3 件副作用（与 renderApp:5591/5593 同） ——
   syncCheckCacheChains(s);

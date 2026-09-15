@@ -1403,20 +1403,26 @@ body {
 
 /* ===== 草稿点击固定展示框（body 级 fixed 大面板：P1 屏幕左下 / P2 屏幕右下） =====
    结构：上 = 协议图（逆时针旋转 90° 后横置），下 = 协议信息（竖排）。
-   固定于屏幕（不随页面滚动）；高度受限（≤46vh）避免矮窗口顶到顶部 sticky 选择框。 */
+   固定于屏幕（不随页面滚动）；高度受限（≤30vh）避免矮窗口顶到顶部 sticky 选择框。
+
+   ⚠️ **G2 修正 R8-1（用户裁决「缩小协议选择页面双方的协议预览框的大小」）**：
+   面板 560×420 → **400×300**、协议图 300 → **210**、内边距/字号同比收。
+   只收紧尺寸：`position: fixed` / `bottom` / `left `·`right` / `z-index: 400` **一个都没动**
+   （这两块面板是 body 级浮层，动定位就会重演 G2 Task 4 · I-1「残留面板整局挡点击」）。
+   尺寸的**反向守卫**见 `tests/ui/draft-preview-size.test.ts`。 */
 .draft-preview {
   position: fixed;
   bottom: 14px;
-  width: min(560px, 46vw);
-  height: min(42vh, 420px);
+  width: min(400px, 33vw);
+  height: min(30vh, 300px);
   border: 1px solid rgba(255, 255, 255, 0.28);
   border-radius: 14px;
   background: rgba(14, 19, 36, 0.96);
   box-shadow: 0 14px 44px rgba(0, 0, 0, 0.65), 0 0 24px rgba(79, 240, 255, 0.1);
-  padding: 12px 14px;
+  padding: 9px 11px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
   text-align: left;
   overflow-y: auto;
@@ -1427,7 +1433,7 @@ body {
 /* 上图：协议图横置（旋转 -90）展示盒——宽度随面板自适应、高度随 1.4:1 比例，顶部对齐 */
 .draft-preview-fig {
   flex: 0 0 auto;
-  width: min(300px, 88%);
+  width: min(210px, 72%);
   aspect-ratio: 1.4 / 1;
   display: flex;
   align-items: center;
@@ -1462,13 +1468,13 @@ body {
   min-height: 0;
   width: 100%;
   overflow-y: auto;
-  font-size: 13.5px;
+  font-size: 12.5px;
   color: #e6ebf5;
   line-height: 1.7;
 }
 .draft-preview-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-.draft-preview-name { font-size: 20px; font-weight: 800; color: #ffd98a; }
-.draft-preview-motto { font-size: 14px; color: #9fd8ff; }
+.draft-preview-name { font-size: 16px; font-weight: 800; color: #ffd98a; }
+.draft-preview-motto { font-size: 12.5px; color: #9fd8ff; }
 .draft-preview-position { margin-top: 6px; color: #ffcf8a; }
 .draft-preview-commands { margin-top: 2px; color: #b9c4d8; }
 .draft-preview-scores { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0 6px; }

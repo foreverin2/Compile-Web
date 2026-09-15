@@ -55,9 +55,13 @@ function slotNode(player: PlayerId, line: Line): HTMLElement | null {
 }
 
 function batteryNode(player: PlayerId, line: Line): HTMLElement | null {
-  // 能量槽（显示该线总值）是 .stack-slot[data-player][data-line] 的子元素（render.ts renderBattery）
-  const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${player}"][data-line="${line}"]`);
-  return slot ? slot.querySelector<HTMLElement>('.battery') : null;
+  // G2 修正 R8-2：能量槽**不再是** `.stack-slot` 的子元素 —— 远程页把它移到链路框外
+  // （`.net-side` 的端上、横置，见 render-net.ts 的 renderSide）。所以这里改成按
+  // **节点自描述**定位（`renderBattery` 在根上写 data-player/data-line）。
+  // ⚠️ 旧写法 `.stack-slot[data-player=…][data-line=…] .battery` 在远程页会**静默**返回 null
+  // （本函数调用点全是 `if (!bat) …` 的降级）⇒ 愤怒0 中缝虚线 / 惰性0 / 对比条 / 领先金圈
+  // 一起凭空消失，且控制台一个字都不报。
+  return document.querySelector<HTMLElement>(`.battery[data-player="${player}"][data-line="${line}"]`);
 }
 
 /** 取某玩家某链路的全部卡（含被盖） */

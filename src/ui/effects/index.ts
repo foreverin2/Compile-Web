@@ -6,7 +6,7 @@ import { flashRigidity7Guard, noteGreed1Compile } from '../gen3-control';
 import { gen3FulcrumSwapFx, gen3ProtocolSwapFx } from '../fx-gen3-swap';
 import { gen3DiscardFx, gen3DeleteFx, gen3FlipFx, gen3ShiftFx, gen3DrawFx, gen3FaceDownFx, gen3CompiledFx, gen3DeckDiscardFx, gen3ReturnFx, gen3PlayFx, gen3SkipFx, gen3TriggerFx, gen3LandFx, type Gen3CardFxApi, type Gen3CardPayload, type Gen3DrawPayload, type Gen3CompiledPayload, type Gen3DeckDiscardPayload } from '../fx-gen3';
 import { buildTornadoFx } from '../fx-tornado';
-import { fxOrientOf, orientOf, orientToCwCcw, orientToFxRot, stripOrientClasses, type CardOrient } from '../fx-orient';
+import { fxOrientOf, fxRotDegOf, orientOf, orientToCwCcw, orientToFxRot, stripOrientClasses, type CardOrient } from '../fx-orient';
 // G2 修正 R3：**方向模型**（热座 = 按绝对玩家左右；远程页 = 按座位上下）。`fxViewSeat()` 在热座页恒为
 // `null` ⇒ 下面两个落点助手走**逐字搬运**的原左右分支（"热座零变化"是构造性的，见 fx-seat.ts 头注）。
 import { fxHandEndPoint, fxStackEndPoint, fxViewSeat } from '../fx-seat';
@@ -1907,8 +1907,18 @@ function showCompileBanner(payload: {
 /** 协议翻面（loading → compiled）：3D 翻转覆盖在已重渲染的协议上 */function playProtocolFlip(node: HTMLElement, defId: string): void {
   const rect = node.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) return;
+  // ── G2 修正 R8-4：浮层盒跟着协议**横躺**（几何跟随的第三处） ──
+  // 远程页的协议图被 `.net-rot-ccw/.net-rot-cw` 自己转了 ∓90°（视觉盒 140×100），而
+  // `rect` 取自 `.protocol`（= holder 的**未旋转** 100×140 布局盒）⇒ 浮层是一个竖版盒盖在
+  // 横躺的协议上，**连 `rotateY` 的翻转轴都落在错误的轴上**。给 `wrap`（浮层盒）绕自身中心
+  // 加同一个 `rotate(deg)` 即可：浮层盒与协议视觉盒重合、翻转轴回到协议自己的轴上。
+  // ⚠️ 角度经 `fxRotDegOf`（**只读标记、不回退**）取 holder 的 —— 与 `positionCompiledFxLayer`
+  //    读**同一个助手、同一个来源**（不是各自手搓角度）。热座页没有标记 ⇒ `deg === 0`
+  //    ⇒ 下面 `rotate` 是空串 ⇒ `cssText` 与改动前**逐字相同**（热座零变化）。
+  const deg = fxRotDegOf(node.querySelector<HTMLElement>('.protocol-holder'));
+  const rotateDecl = deg === 0 ? '' : `transform:rotate(${deg}deg);`;
   const wrap = document.createElement('div');
-  wrap.style.cssText = `position:fixed;left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px;z-index:300;pointer-events:none;perspective:700px;`;
+  wrap.style.cssText = `position:fixed;left:${rect.left}px;top:${rect.top}px;width:${rect.width}px;height:${rect.height}px;z-index:300;pointer-events:none;perspective:700px;` + rotateDecl;
   const inner = document.createElement('div');
   inner.style.cssText = 'position:relative;width:100%;height:100%;transform-style:preserve-3d;transition:transform 0.45s ease;';
   const front = document.createElement('div');
@@ -2253,8 +2263,17 @@ interface RearrangeProtocolsPayload {
 }
 
 /** body 级协议幽灵卡：fixed 定位于协议卡 rect，尺寸 = 真实协议卡（~200×280），卡面复用
- *  协议资源 src；P2 幽灵初始转 180°（与场上 .protocol-img.rot-180 朝向一致）。 */
-function buildProtocolGhost(src: string, rect: DOMRect, rot180: boolean): HTMLElement {
+ *  协议资源 src；P2 幽灵初始转 180°（与场上 .protocol-img.rot-180 朝向一致）。
+ *
+ *  **G2 修正 R8-4 · `deg`（协议特效朝向标记的裸角度）**：远程页协议图**自己**被转了 ∓90°
+ *  （视觉 140×100），而 `rect` 取自 `img.getBoundingClientRect()` ⇒ 它**已经是**旋转后的视觉足迹。
+ *  此时若还用"竖版"给图（`width:100%;height:100%;object-fit:cover`）就会被裁掉一截、且方向是竖的
+ *  ⇒ **会失真**，故按同一标记归一：图按**未旋转**的布局尺寸建盒（宽 = 足迹高、高 = 足迹宽，
+ *  绕自身中心转 `deg`）⇒ 转完正好铺满幽灵盒，与原协议逐像素重合。
+ *  `deg === 0`（热座页 / 没有标记）= **改动前的原路径**（一个字节都不多）。
+ *  ⚠️ 幽灵盒自身**不**再转 ∓90°（它已经是视觉足迹，转了就超出），`rot180` 也在远程页为 false
+ *  （180 与 ∓90 互斥，见 `playRearrangeProtocolsFx`）。 */
+function buildProtocolGhost(src: string, rect: DOMRect, rot180: boolean, deg: 0 | 90 | -90 = 0): HTMLElement {
   const ghost = document.createElement('div');
   ghost.style.cssText =
     `position:fixed;left:${rect.left}px;top:${rect.top}px;` +
@@ -2263,15 +2282,25 @@ function buildProtocolGhost(src: string, rect: DOMRect, rot180: boolean): HTMLEl
   if (rot180) ghost.style.transform = 'rotate(180deg)'; // 初始朝向先落位（此后仅位移在动）
   const img = document.createElement('img');
   img.src = src;
-  img.style.cssText =
-    'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;border-radius:4px;';
+  if (deg === 0) {
+    img.style.cssText =
+      'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;border-radius:4px;';
+  } else {
+    img.style.cssText =
+      `position:absolute;left:50%;top:50%;width:${rect.height}px;height:${rect.width}px;` +
+      `object-fit:cover;display:block;border-radius:4px;` +
+      `transform:translate(-50%,-50%) rotate(${deg}deg);`;
+  }
   ghost.appendChild(img);
   document.body.appendChild(ghost);
   return ghost;
 }
 
 /** 幽灵协议卡平移飞行：从自身 rect 中心平移到目标 rect 中心（MOVE_MS + 80 清理）。
- *  P2 幽灵初始已转 180°，终点 transform 组合 rotate(180deg) → 过渡期间旋转不变、只动位移。 */
+ *  P2 幽灵初始已转 180°，终点 transform 组合 rotate(180deg) → 过渡期间旋转不变、只动位移。
+ *  ⚠️ G2 修正 R8-4：**动画轨迹一个字未改**。远程页的 ∓90° 由幽灵**内部的图**表达
+ *  （`buildProtocolGhost` 的 `deg` 参数），幽灵盒本身始终是协议在屏幕上的**视觉足迹** ⇒
+ *  "从足迹中心平移到足迹中心"这条轨迹与朝向无关，不需要跟着改。 */
 function flyProtocolGhost(ghost: HTMLElement, from: DOMRect, to: DOMRect, rot180: boolean): void {
   const dx = to.left + to.width / 2 - (from.left + from.width / 2);
   const dy = to.top + to.height / 2 - (from.top + from.height / 2);
@@ -2296,9 +2325,19 @@ function playRearrangeProtocolsFx(payload: RearrangeProtocolsPayload): void {
   const rectA = imgA.getBoundingClientRect();
   const rectB = imgB.getBoundingClientRect();
   if (rectA.width === 0 || rectA.height === 0 || rectB.width === 0 || rectB.height === 0) return;
-  const rot180 = payload.player === 1; // P2 协议卡转 180°（与场上协议渲染一致）；P1 0°
-  const ghostA = buildProtocolGhost(imgA.src, rectA, rot180);
-  const ghostB = buildProtocolGhost(imgB.src, rectB, rot180);
+  // ── G2 修正 R8-4：朝向判定**优先按 holder 的特效朝向标记归一** ──
+  // rect 取自 `.protocol-img` 的 `getBoundingClientRect()` —— 在远程页那**已经是旋转后的视觉足迹**
+  // （140×100）✓，所以幽灵盒（= 足迹）与飞行轨迹（足迹中心 → 足迹中心）都不用改；
+  // 要归一的只有**幽灵内部的图**与**180° 判定**：
+  //  · 有标记（远程页）⇒ 幽灵内的图按 ∓90° 出图（否则竖版图会被 cover 裁掉、方向也是竖的）；
+  //    且**不得**再叠 180°（协议图在远程页虽然也带 `.rot-180`，但 `.net-rot-*` 权重更高 ⇒
+  //    视觉只有 ∓90°；叠上 180° 会变成 ∓90±180 的错向）。
+  //  · 无标记（热座页）⇒ 保持原判据 `payload.player === 1 → 180°`（逐字等价，热座零变化）。
+  const degA = fxRotDegOf(cellA.querySelector<HTMLElement>('.protocol-holder'));
+  const degB = fxRotDegOf(cellB.querySelector<HTMLElement>('.protocol-holder'));
+  const rot180 = degA === 0 && degB === 0 && payload.player === 1; // P2 协议卡转 180°（与场上协议渲染一致）；P1 0°
+  const ghostA = buildProtocolGhost(imgA.src, rectA, rot180, degA);
+  const ghostB = buildProtocolGhost(imgB.src, rectB, rot180, degB);
   // 同时飞行：A 从 a 中心 → b 中心、B 反向（互换）
   flyProtocolGhost(ghostA, rectA, rectB, rot180);
   flyProtocolGhost(ghostB, rectB, rectA, rot180);

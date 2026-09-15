@@ -6,7 +6,9 @@
  *
  * ⚠️ **G2 修正 R2 起这里有两套朝向，别混用**（设计说明 §2 的朝向表 / §3.1 的机制）：
  *  - `orientOf` = **卡面**朝向（热座 ±90°；远程页 0°/180°）；
- *  - `fxOrientOf` = **特效**朝向（远程页自己 −90°、对手 +90°，读 `data-fx-rot`；热座无标记 ⇒ 回退 `orientOf`）。
+ *  - `fxOrientOf` = **特效**朝向（远程页自己 −90°、对手 +90°，读 `data-fx-rot`；热座无标记 ⇒ 回退 `orientOf`）；
+ *  - `fxRotDegOf` = **只读标记**的裸角度（G2 修正 R8-4：**不回退**，读不到即 0°）——
+ *    专给"把 body 级 FX 层搬到协议**视觉**盒上"的场合（协议 holder / 翻面浮层）。
  *  远程页自己卡面 0° 而特效 −90°、对手卡面 180° 而特效 +90° —— 拿卡面朝向去建浮层卡，
  *  整类特效（刀光/光束/粒子/边框光/飓风/闪电…）都会差 90°。
  *
@@ -50,8 +52,13 @@ export function orientOf(node: Element | null | undefined): CardOrient {
  */
 export const FX_ROT_ATTR = 'data-fx-rot';
 
-/** `data-fx-rot` 的两种取值 → 特效朝向。规格 §8.2：自己 `ccw`（−90°）、对手 `cw`（+90°）。 */
-const FX_ROT_VALUES: Readonly<Record<string, CardOrient>> = { ccw: -90, cw: 90 };
+/** `data-fx-rot` 的两种取值 → 特效朝向的**裸角度**。规格 §8.2：自己 `ccw`（−90°）、对手 `cw`（+90°）。
+ *  ⚠️ 映射的**唯一出处**：`FX_ROT_VALUES`（CardOrient 版）与 `fxRotDegOf` 的返回值都从这里派生，
+ *  免得"两处各自写一份 −90/90"将来对不上（R8-4 起有两个消费方读角度）。 */
+const FX_ROT_DEGS: Readonly<Record<'cw' | 'ccw', 90 | -90>> = { ccw: -90, cw: 90 };
+
+/** `data-fx-rot` 的两种取值 → 特效朝向（CardOrient 版，供 `fxOrientOf` 用；值同 `FX_ROT_DEGS`）。 */
+const FX_ROT_VALUES: Readonly<Record<string, CardOrient>> = FX_ROT_DEGS;
 
 /**
  * 读**特效朝向标记**的原始取值：只有 `'cw' | 'ccw'` 两种合法值；**读不到 / 取值不认识 ⇒ `null`**。
@@ -85,6 +92,29 @@ export function fxRotMarkerOf(node: Element | null | undefined): 'cw' | 'ccw' | 
 export function fxOrientOf(node: Element | null | undefined): CardOrient {
   const marker = fxRotMarkerOf(node);
   return marker === null ? orientOf(node) : FX_ROT_VALUES[marker];
+}
+
+/**
+ * **只读特效朝向标记的原始角度**（G2 修正 **R8-4**）：`ccw` → −90、`cw` → +90；
+ * **读不到或不认识 ⇒ `0`（不旋转）**。
+ *
+ * ⚠️ 与 `fxOrientOf` 的唯一区别、也是它存在的理由：**不回退** `orientOf`。
+ *
+ * **为什么必须"不回退"**（规格 §3.2 给的承重理由是"热座页 P2 协议图自己带 `.rot-180`，
+ * 回退会把热座页的 FX 层转 180°"）—— ⚠️ **实现者实测更正**：本函数的读目标是
+ * `.protocol-holder`，而 `rot-180` 挂在它的**子节点** `.protocol-img` 上，holder 自己没有朝向类
+ * ⇒ **今天**回退 `orientOf(holder)` 也恰好得 0（两条实现当前**行为等价**）。
+ * 所以这条要求是**结构性**的，不是当前观感差异，仍然必须遵守：
+ *  1. 它把"协议特效朝向"与"卡面朝向"两个概念**钉开** —— 一旦读目标换成协议**图**本身
+ *     （`.protocol-img` 上就带 `.rot-180`），或将来有人把朝向类挂到 holder 上，
+ *     回退实现会**立刻**把协议 FX 层按 180° 建盒/旋转，而画面上只是"特效方向不对"；
+ *  2. `data-fx-rot` **缺失**是 R8-4 的真实缺陷形态（`render-net` 忘传）—— 不回退 ⇒ 得 0（不旋转，
+ *     由 `verifyPageHooks` 的约束 10 报红）；回退 ⇒ 静默按卡面朝向猜一个角度。
+ *  3. 它是"热座零变化"的**构造性**保证：热座没有标记 ⇒ 恒 0°，与"协议子树上有没有朝向类"无关。
+ */
+export function fxRotDegOf(node: { getAttribute(name: string): string | null } | null): 0 | 90 | -90 {
+  const marker = fxRotMarkerOf(node as unknown as Element | null);
+  return marker === null ? 0 : FX_ROT_DEGS[marker];
 }
 
 /** 与既有 buildFxCardAt(rect, orient, …) 的参数形状对齐 */

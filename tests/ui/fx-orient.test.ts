@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { RENDERERS } from '../../src/ui/fx-dom-contract';
-import { fxOrientOf, orientOf, orientToCwCcw, orientToFxRot, stripOrientClasses, cloneTransformOf, cloneBoxSwaps, type CardOrient } from '../../src/ui/fx-orient';
+import { fxOrientOf, fxRotDegOf, orientOf, orientToCwCcw, orientToFxRot, stripOrientClasses, cloneTransformOf, cloneBoxSwaps, type CardOrient } from '../../src/ui/fx-orient';
 import { cloneBoxFrom } from '../../src/ui/fx/clone-orient';
 // G2 Task 3F · I-2：产出方守卫必须读**去注释后**的源码（否则会被描述性注释满足）。
 // 与 tests/ui/fx-dom-contract.test.ts 共用**同一份实现**，不再各存一份拷贝。
@@ -210,6 +210,62 @@ describe('特效朝向 fxOrientOf（G2 修正 R2）', () => {
 });
 
 /**
+ * G2 修正 **R8-4**：`fxRotDegOf` —— **只读标记、不回退**的裸角度出口。
+ *
+ * 它与 `fxOrientOf` 的差别只有一处（缺标记时回退 vs 返回 0），但那一处是**热座红线**：
+ * 热座页 P2 协议图自己带 `.rot-180`（`renderProtocol` 的 `img.className`），
+ * 而"把 body 级 FX 层搬到协议视觉盒上"这条路径（协议 holder）在热座页**没有标记** ——
+ * 若在这里回退 `orientOf`，热座页的持久 FX 层会被转 180°（环/角光/藤蔓全部倒过来）。
+ * 所以下面那条"**带 `.rot-180` 类但无标记 ⇒ 仍 0**"是本组最承重的判据。
+ */
+describe('G2 修正 R8-4 · fxRotDegOf（只读标记、不回退）', () => {
+  it('读标记：ccw → −90°、cw → +90°（与 fxOrientOf 的映射同源）', () => {
+    expect(fxRotDegOf(attrNode([], { 'data-fx-rot': 'ccw' }))).toBe(-90);
+    expect(fxRotDegOf(attrNode([], { 'data-fx-rot': 'cw' }))).toBe(90);
+    // 两个值成对断言（避免"只改坏一条"时看不出来），并排除互为反号
+    expect(fxRotDegOf(attrNode([], { 'data-fx-rot': 'ccw' }))).not.toBe(90);
+    expect(fxRotDegOf(attrNode([], { 'data-fx-rot': 'cw' }))).not.toBe(-90);
+    // 与 fxOrientOf 在"有标记"时**必须**同值（两个读侧出口不得漂移）
+    for (const v of ['ccw', 'cw']) {
+      expect(fxRotDegOf(attrNode([], { 'data-fx-rot': v })), `${v} 两个出口不一致`)
+        .toBe(fxOrientOf(attrNode([], { 'data-fx-rot': v })));
+    }
+  });
+
+  it('读不到标记 / 桩没有 getAttribute / 空节点 ⇒ 0（**不旋转**，不是 180）', () => {
+    expect(fxRotDegOf(attrNode([], {}))).toBe(0);
+    expect(fxRotDegOf(attrNode([], {}, { noGetAttribute: true }))).toBe(0);
+    expect(fxRotDegOf(null)).toBe(0);
+    // 极简桩（没有 getAttribute 方法）也不得抛异常
+    expect(() => fxRotDegOf({} as unknown as Element)).not.toThrow();
+    expect(fxRotDegOf({} as unknown as Element)).toBe(0);
+  });
+
+  it('取值不认识（空串 / 大小写 / 类名 / 任意串）⇒ 0', () => {
+    for (const raw of ['', 'CCW', 'CW', 'rot-cw', 'net-rot-cw', 'yes', '-90', 'ccw ']) {
+      expect(fxRotDegOf(attrNode([], { 'data-fx-rot': raw })), `取值 ${JSON.stringify(raw)} 不得被当成朝向`)
+        .toBe(0);
+    }
+  });
+
+  it('**区别判据**：带 `.rot-180` 类但**没有标记** ⇒ 仍 0（回退 `orientOf` 会读成 180°）', () => {
+    // 热座页 P2 协议**图**就是"带 .rot-180 且无标记"的节点（`renderProtocol` 的 img.className）。
+    const hotseatP2ProtoImg = attrNode(['rot-180'], {});
+    expect(orientOf(hotseatP2ProtoImg), '前提：这个节点的**卡面**朝向是 180°').toBe(180);
+    expect(fxOrientOf(hotseatP2ProtoImg), '前提：fxOrientOf 会回退成 180°（这正是两个出口的分歧点）').toBe(180);
+    // 被测：只读标记 ⇒ 无标记的节点必须得 0，**不得**读卡面朝向类
+    expect(fxRotDegOf(hotseatP2ProtoImg),
+      'fxRotDegOf 回退了 orientOf（读了卡面朝向类）—— 它必须**只**认 data-fx-rot：'
+      + '一旦读目标上带 .rot-180（协议图 / 将来挂到 holder 上的朝向类），协议 FX 层就会被按 180° 定位。'
+      + '⚠️ 今天 holder 上恰好没有朝向类 ⇒ 回退**恰好**也得 0（实现者实测），所以这条是**结构性**判据'
+      + '（把"特效朝向"与"卡面朝向"两个概念钉开），不是当前 UI 的行为差异。').toBe(0);
+    // 反面：真给了标记时，类名不得干扰（标记优先，且与类名无关）
+    expect(fxRotDegOf(attrNode(['rot-180'], { 'data-fx-rot': 'cw' }))).toBe(90);
+    expect(fxRotDegOf(attrNode(['rot-cw', 'rot-ccw'], { 'data-fx-rot': 'ccw' }))).toBe(-90);
+  });
+});
+
+/**
  * G2 修正 R2 的**读侧调用点**守卫（源码文本代理）。
  *
  * ## 为什么需要它
@@ -351,8 +407,16 @@ describe('G2 修正 R2 · 读侧调用点（源码守卫）', () => {
    * **类名**（`classList.add('fx-rot')`）或别的非 `dataset.fxRot` 形态，本守卫抓不到 ——
    * 那种情况下 `fxOrientOf` 也读不到（它只读 `data-fx-rot` 属性），**行为上仍然等价于零变化**，
    * 只是 DOM 上多了一个无用类。真正会出事的是"用 `dataset.fxRot` 无条件写"这一种。
-   */
-  it('热座零变化：render.ts 的 data-fx-rot 写入必须被 opts?.fxRot 守卫（无条件写 = 热座浮层卡全错）', () => {
+   *
+   * ⚠️ **G2 修正 R8-4 的判据升级（净增强，不是放宽）**：R8-4 在 `renderProtocol` 里加了**第二处**
+   * `dataset.fxRot` 写入（协议 holder）。原来只钉**一处字面量**（`node.dataset.fxRot = opts.fxRot`）
+   * + 一条 `toMatch(/if\s*\(\s*opts\?\.fxRot\s*!==\s*undefined\s*\)/)` —— 那对新增的第二处**完全瞎**
+   * （第二处没有守卫时，第一条 toMatch 照样命中第一处、`indexOf` 顺序照样成立）。
+   * 现在改成：**枚举 `render.ts` 里全部 `X.dataset.fxRot = Y` 写入点，逐点要求被
+   * `…fxRot !== undefined` 守卫包住**（并保留原有的两条字面量断言与顺序断言）。
+   * 它抓的是"**任何一处**写入被无条件化"（今天两处：场上卡 + 协议 holder）——
+   * 正是 R8-4 的"热座页 DOM 一个字节都不多"那条构造性保证。 */
+  it('热座零变化：render.ts 的**每一处** data-fx-rot 写入都必须被 fxRot 的 undefined 守卫包住', () => {
     const src = readUi('render.ts');
     expect(src, 'readUi 读到的是 render.ts（不是别的渲染器源码）').toContain('export function renderStackSlot(');
     // ⚠️ **先查守卫、再查写入形态**：变异实测（M5a/M5b）—— 反过来查时，"把写入改成无条件"
@@ -362,8 +426,14 @@ describe('G2 修正 R2 · 读侧调用点（源码守卫）', () => {
     expect(src, 'data-fx-rot 的写入没有 opts?.fxRot !== undefined 守卫 → 热座页也会被打上标记'
       + '（fxOrientOf 再也回退不回 orientOf，"热座零变化"被打破）')
       .toMatch(/if\s*\(\s*opts\?\.fxRot\s*!==\s*undefined\s*\)/);
-    expect(src, '找不到 data-fx-rot 的写入点（node.dataset.fxRot = opts.fxRot）')
+    expect(src, 'render.ts 里没有协议侧的 fxRot 守卫（`if (fxRot !== undefined)`）—— '
+      + '无条件写 holder 标记会让热座页协议 holder 也带上 data-fx-rot（fxRotDegOf 读到非 0）')
+      .toMatch(/if\s*\(\s*fxRot\s*!==\s*undefined\s*\)/);
+    expect(src, '找不到场上卡的 data-fx-rot 写入点（node.dataset.fxRot = opts.fxRot）')
       .toMatch(/node\.dataset\.fxRot\s*=\s*opts\.fxRot/);
+    expect(src, '找不到协议 holder 的 data-fx-rot 写入点（holder.dataset.fxRot = fxRot）—— '
+      + 'R8-4 的标记没有落点 ⇒ 协议 FX 读不到角度（层不旋转）')
+      .toMatch(/holder\.dataset\.fxRot\s*=\s*fxRot/);
     // 写入必须在那个 if 的**语句头之后**（守卫与写入之间没有别的语句把条件吃掉 —— 用文本顺序代理）
     const iGuard = src.indexOf('if (opts?.fxRot !== undefined)');
     const iWrite = src.indexOf('node.dataset.fxRot = opts.fxRot');
@@ -371,6 +441,39 @@ describe('G2 修正 R2 · 读侧调用点（源码守卫）', () => {
       .toBeGreaterThanOrEqual(0);
     expect(iWrite, '找不到 `node.dataset.fxRot = opts.fxRot` 写入语句').toBeGreaterThanOrEqual(0);
     expect(iWrite, '写了标记却没走守卫（顺序可疑）').toBeGreaterThan(iGuard);
+    // ── R8-4 升级：**逐写入点**验证（这是本用例真正的判据面）──
+    // 每个写入点：取它**之前最近的一个 `if (`**，配平括号读出条件，要求条件里同时出现
+    // `fxRot` 与 `undefined`（= "给了标记才写"），且守卫与写入之间只有空白/左花括号
+    // （把写入搬出守卫块会在这里报红）。
+    // ⚠️ 右值允许**成员表达式**（`opts.fxRot` / `fxRot`）—— 第一版只允许裸标识符，
+    //    于是 `node.dataset.fxRot = opts.fxRot;` 整个匹配不上，写入点只剩 1 处（假红）。
+    const writeRe = /([A-Za-z_$][\w$]*)\.dataset\.fxRot\s*=\s*([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*;/g;
+    const writes: Array<{ at: number; text: string }> = [];
+    for (const m of src.matchAll(writeRe)) writes.push({ at: m.index, text: m[0] });
+    expect(writes.length, 'render.ts 里的 data-fx-rot 写入点少于 2 处（场上卡 + 协议 holder）—— '
+      + 'R8-4 的协议那一腿被删了？').toBeGreaterThanOrEqual(2);
+    const unguarded: string[] = [];
+    for (const w of writes) {
+      const iIf = src.lastIndexOf('if (', w.at);
+      if (iIf < 0) { unguarded.push(`${w.text}（前面找不到任何 if 守卫）`); continue; }
+      let depth = 0;
+      let close = -1;
+      const open = src.indexOf('(', iIf);
+      for (let i = open; i < src.length; i += 1) {
+        if (src[i] === '(') depth += 1;
+        else if (src[i] === ')') { depth -= 1; if (depth === 0) { close = i; break; } }
+      }
+      if (close < 0) { unguarded.push(`${w.text}（守卫条件括号不配平）`); continue; }
+      const cond = src.slice(open + 1, close).replace(/\s+/g, ' ').trim();
+      const inBlock = /^[\s{]*$/.test(src.slice(close + 1, w.at));
+      if (!(/fxRot/.test(cond) && /undefined/.test(cond)) || !inBlock) {
+        unguarded.push(`${w.text}（守卫条件：\`${cond}\`，守卫与写入之间的文本：`
+          + `${JSON.stringify(src.slice(close + 1, w.at))}）`);
+      }
+    }
+    expect(unguarded, '以下 data-fx-rot 写入点**没有**被"给了标记才写"的守卫包住 —— '
+      + '热座页会凭空产出标记（`fxOrientOf` 再也回退不回 `orientOf`；协议 holder 上的标记还会让 '
+      + '`fxRotDegOf` 读出非 0 ⇒ 热座层的 FX 被转）：\n' + unguarded.join('\n')).toEqual([]);
     // 反向：热座渲染器里不得出现**读**侧（`fxOrientOf` 只在 FX 层；render.ts 是产出方）
     expect(src, 'render.ts 出现了 fxOrientOf（产出方不得依赖读侧函数）').not.toMatch(/\bfxOrientOf\b/);
   });

@@ -2,138 +2,80 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createGame } from '../../src/core/state/create';
+import { syncScanOverlays } from '../../src/ui/render';
 import { NET_BOTTOM_SIDES, renderNetBoard, verifyPageHooks } from '../../src/ui/render-net';
 import { setFxViewSeat } from '../../src/ui/fx-seat';
 import { stripComments } from './source-text';
+// R8-5：样式表解析器（`cssRules` / `cssPropOf` / `specificityOf` / 选择器匹配）**一份实现、两处共用**
+// —— 本文件与 `tests/ui/net-board-grid.test.ts`（G-7 视觉行序）用的是同一套语义，理由与
+// `./net-dom-stub` 头注完全相同：复制成两份必然漂移，而漂移的表现是"一边绿、另一边红"。
+import {
+  assertNoUnmodelableCascade, cssOrderOf, cssPropOf, cssRules, compoundMatches, MODELED_PROPS,
+  selectorMatches, specificityOf, type CssRule,
+} from './net-css-parse';
 import {
   classListOf, descendants, drainRaf, installStubDom, isClass as isClassShared,
-  makeStubEl, walk, type StubNode,
+  makeStubEl, setStubRect, walk, type StubNode,
 } from './net-dom-stub';
 
 /**
  * G2 修正 R-F · **C-2 的行为守卫**：用最小 DOM 桩**真跑一遍 `renderNetBoard`**，
- * 再按元素树 + 样式表里的 `order` 算出「一列自上而下的六层」。
+ * 再按元素树（+ 样式表里真正生效的 `order` / `grid-column` / `grid-row`）算出层序与视觉归属。
  *
  * ## 为什么必须有这个文件（而不是再加几条源码断言）
  *
  * C-2 的两个成因**都不是源码能表达的**：
  *  1. `renderSide` 对两侧挂载顺序相同 ⇒ 自己协议落到整列最外端（**DOM 兄弟顺序**的后果）；
- *  2. 能量槽的落端由 **CSS `order`** 决定（`.stack-slot` 是 flex column），
+ *  2. 能量槽的落端当时由 **CSS `order`** 决定（`.stack-slot` 是 flex column），
  *     `.p1`/`.p2` 那两个选择器看着"按玩家分得好好的"，实际在默认席位下**两个能量槽都跑到内侧**。
  * 评审正是靠"真跑 + 看元素树"才发现它的；本文件把这件事变成**可重复的机检**。
+ *
+ * ⚠️ **两代机制迁移（本文件的历史，读判据前先看这两条）**：
+ *  · **R8-2**：能量槽移出 `.stack-slot` ⇒ 列内层序**不再有 `order`**（只由 DOM 兄弟顺序表达，
+ *    见 G-1/G-1b），本文件那部分解算器因此删掉了；
+ *  · **R8-5**：底部三块的**左右列**退役（信息块与手牌区各自一整行、上下镜像）⇒ 手牌**行号**
+ *    由 `.net-hand-area-{foe,self}` 的 `grid-row` 承担（本文件 R6-3③④ 解它），
+ *    `order` 在样式表里只剩 `.battery-overflow` 的**盒内**顺序。**五行行序**的完整模型在
+ *    `tests/ui/net-board-grid.test.ts` 的 G-7（它要展平 `display: contents` 的盒树）。
  *
  * ## 这个桩**能**证明什么 / **不能**证明什么（诚实边界）
  *
  * 能（都是确定性的流式布局语义，不需要浏览器）：
  *  - **元素树的顺序与归属**：一列里 `net-side-foe / net-lane-mid / net-side-self` 的兄弟顺序、
  *    每一侧内部挂了哪些节点、每个节点的 `class` / `data-player` / `data-line`；
- *  - **`order` 求解出的视觉顺序**：按 `styles-net.css` 里真实的 `order:` 声明（含选择器权重与
- *    源序）对 flex column 的子项做**稳定排序**（CSS 规范：`order` 相同则按文档顺序）。
+ *  - **CSS 解算出的视觉归属**：按 `styles-net.css` 里真实的 `grid-row` / `grid-column` / `order`
+ *    声明（含选择器权重与源序）排序（本文件的解析器见 `./net-css-parse`）。
  *
  * **不能**：
  *  - 真实浏览器里的 `getBoundingClientRect()`（本桩一律返回全 0 —— 本文件**不**做任何几何断言）；
- *  - flex 的真实求解（高度/间隙/换行）、缩放、字体导致的换行 —— "到底好不好看"只能人眼；
+ *  - flex/grid 的真实求解（高度/间隙/换行）、缩放、字体导致的换行 —— "到底好不好看"只能人眼；
  *  - `transform` 的效果（协议 ∓90° 是 CSS 的，不在本文件的判据里）。
  *  这三条都在报告的人眼清单里。
  */
 
 /* ============================================================================
- * 样式表：`order:` 声明的解析 + 最小选择器匹配（只为"视觉顺序"服务）
+ * 样式表：`grid-row` / `grid-column` / `order` 声明的解析 + 最小选择器匹配
+ * （解析器本体在 `./net-css-parse`，**两个文件共用一份**）
  * ========================================================================== */
 
-interface CssRule { selector: string; body: string; no: number }
+// ⚠️ **R8-5：解析器本体已抽到 `./net-css-parse`**（`tests/ui/net-board-grid.test.ts` 的 G-7
+// "视觉行序"求解器必须与本文件用**同一套**解析语义 —— 复制一份就是第二条真相）。
+// 下面这段注释是 `cssRules` 的原文，保留作历史依据（它讲的坑都还在）。
 
 /**
- * 去注释后的 `选择器 { 体 }` 列表（本页样式表没有嵌套规则/@media，简版解析够用）。
+ * 去注释后的 `选择器 { 体 }` 列表。
+ *
+ * ⚠️⚠️ **本页样式表不许有条件块**（`@media` / `@supports` / `@container`）—— 由 **R6-4** 正面守卫钉住。
+ * 理由：本解析器**不递归**条件块，一旦出现，块**内部**的规则会被当成**无条件规则混进规则表**
+ * （`@media` 的前导被跳过、内容不跳）。旧注释写的"简版解析够用 / 整块被跳过"**是错的**
+ * （R8-5 实测更正，见 R6-4 的注释与 `./net-css-parse` 的头注）。
  *
  * ⚠️ `stripComments` **保留注释起止的两个字符**（`/*`…`*​/` 只把中间内容换成空白，见
  * `./source-text` 的说明）—— 于是紧跟在一条规则**行尾注释**之后的规则，选择器会带上
  * `/* *​/` 前缀。这里必须把它当空白清掉，否则 `.net-lane-band .stack-slot.p2 .battery`
  * 会匹配不上（本文件第一版就是这样漏掉一条规则的）。
  */
-function cssRules(css: string): CssRule[] {
-  const out: CssRule[] = [];
-  const src = stripComments(css);
-  const re = /([^{}]+)\{([^{}]*)\}/g;
-  let no = 0;
-  for (let m = re.exec(src); m !== null; m = re.exec(src)) {
-    const selector = m[1].replace(/\/\*|\*\//g, ' ').trim().replace(/\s+/g, ' ');
-    out.push({ selector, body: m[2], no: no++ });
-  }
-  return out;
-}
 
-const classesOf = (n: StubNode): string[] => n.cls.split(/\s+/).filter(Boolean);
-
-/** 一个**复合选择器**（不含空格）是否命中该节点：只支持类与属性选择器（本页 `order` 规则只用这两类）。 */
-function compoundMatches(part: string, node: StubNode): boolean {
-  const simple = part.replace(/::?[a-zA-Z-]+(\([^)]*\))?/g, '');   // 去掉伪类（本页 order 规则没有伪类，稳妥起见）
-  const need = [...simple.matchAll(/\.([A-Za-z0-9_-]+)/g)].map((m) => m[1]);
-  const have = classesOf(node);
-  if (!need.every((c) => have.includes(c))) return false;
-  for (const m of simple.matchAll(/\[([a-z-]+)(?:=["']?([^"'\]]*)["']?)?\]/g)) {
-    const key = m[1].startsWith('data-')
-      ? m[1].slice(5).replace(/-([a-z])/g, (_a, c: string) => c.toUpperCase())
-      : m[1];
-    if (node.dataset[key] === undefined) return false;
-    if (m[2] !== undefined && node.dataset[key] !== m[2]) return false;
-  }
-  return true;
-}
-
-/** `chain` = 祖先链（含自身），后代组合器语义（`>` 一视同仁 —— 本页 order 规则的类集合下等价）。 */
-function selectorMatches(selector: string, chain: StubNode[]): boolean {
-  const parts = selector.split(/\s+/).filter((p) => p.length > 0 && p !== '>');
-  let at = chain.length - 1;
-  for (let i = parts.length - 1; i >= 0; i -= 1) {
-    let found = -1;
-    for (let k = at; k >= 0; k -= 1) {
-      if (compoundMatches(parts[i], chain[k])) { found = k; break; }
-    }
-    if (found < 0) return false;
-    at = found - 1;
-  }
-  return true;
-}
-
-/** 简易权重：类数 + 属性数（本页 order 规则的选择器只有这两类，够用且与 CSS 的排序一致）。 */
-function specificityOf(selector: string): number {
-  const parts = selector.split(/\s+/).filter((p) => p.length > 0 && p !== '>');
-  let n = 0;
-  for (const p of parts) {
-    n += (p.match(/\.[A-Za-z0-9_-]+/g) ?? []).length;
-    n += (p.match(/\[[a-z-]+/g) ?? []).length;
-  }
-  return n;
-}
-
-/** 该节点（在 `chain` 这一条祖先链下）生效的**任意属性**值：权重优先、同权重取**源序靠后**者。
- *
- *  `order` 那一份（`cssOrderOf`）是它的前身；R6 需要 `grid-column` —— 与 `order` **完全同一个**
- *  解算规则（权重 + 源序），所以这里抽成通用版，`order` 也走它（一处实现，不会漂移）。
- *  返回 `null` = 没有规则命中（用**声明的缺省值**，不要猜）。 */
-function cssPropOf(
-  node: StubNode, chain: StubNode[], rules: CssRule[], prop: string,
-): string | null {
-  let best: { spec: number; no: number; raw: string } | null = null;
-  const re = new RegExp(`(?:^|;|\\s)${prop}\\s*:\\s*([^;]+)`);
-  for (const r of rules) {
-    const m = re.exec(r.body);
-    if (!m) continue;
-    if (!selectorMatches(r.selector, chain)) continue;
-    const spec = specificityOf(r.selector);
-    if (!best || spec > best.spec || (spec === best.spec && r.no > best.no)) {
-      best = { spec, no: r.no, raw: m[1].trim() };
-    }
-  }
-  return best ? best.raw : null;
-}
-
-/** 该节点（在 `chain` 这一条祖先链下）生效的 `order` 值（无声明 = 0，CSS 缺省）。 */
-function cssOrderOf(node: StubNode, chain: StubNode[], rules: CssRule[]): number {
-  const raw = cssPropOf(node, chain, rules, 'order');
-  return raw === null ? 0 : Number.parseInt(raw, 10);
-}
 
 /* ============================================================================
  * CSS：`grid-template-columns` 的**轨道展开**（G2 修正 R7）
@@ -203,16 +145,12 @@ function cssNode(...classes: string[]): StubNode {
   return n;
 }
 
-/** flex column 的**视觉顺序**：按 `order` 稳定排序（相同 order 保持文档顺序 —— CSS 规范语义）。
- *  ⚠️ `chain` 是**父节点的祖先链**；每个子项自己要追加进链尾再比对选择器
- *  （本文件第一版漏了这一步 ⇒ 所有 `order` 都匹配不上、求解退化成 DOM 顺序 ——
- *  那样"CSS 那一半"就完全没被判到）。 */
-function visualChildren(node: StubNode, chain: StubNode[], rules: CssRule[]): StubNode[] {
-  return node.children
-    .map((c, i) => ({ c, i, o: cssOrderOf(c, [...chain, node, c], rules) }))
-    .sort((a, b) => (a.o - b.o) || (a.i - b.i))
-    .map((x) => x.c);
-}
+/* ⚠️ **R8-5 删除的两个解算器**（`visualChildren` = 按 `order` 稳定排序；`visualOrderOfBottom`
+ *  = 按 `grid-column` 排底部三块）：它们服务的机制**都已退役**（列内层序自 R8-2 起由 DOM 兄弟
+ *  顺序表达；底部三块的左右列自 R8-5 起由"各占一整行 + `grid-row` 上下镜像"取代）。
+ *  留着它们不只是死代码：`visualOrderOfBottom` 对 `1 / -1` 一律返回 `Infinity`、排序**退化回
+ *  DOM 顺序**，而 DOM 顺序恰好等于旧断言期望的值 —— 那会让"左右归属"这条判据变成
+ *  **永远为真且什么都不查**（假绿）。新的行序模型在 `tests/ui/net-board-grid.test.ts` 的 G-7。 */
 
 /* ============================================================================
  * 最小 DOM 桩（**与 render-net.test.ts 共用同一份** —— 见 ./net-dom-stub 头注：
@@ -228,8 +166,12 @@ const isClass = isClassShared;
  *  `cardsPerStack`（**R-F2 新增**）：> 0 时给**双方每条线**都铺 n 张卡
  *  （uid 后缀 = 引擎下标：`c0` 最旧 … `c{n-1}` 最新，与 `stacks` 的追加语义一致）。
  *  旧版这一帧**场上无卡**（`createGame` 后 stacks 全空）—— 正因如此，"链路卡序"这件事
- *  在 R1→R2→R3→R-F **四轮**里从未被任何机检覆盖（I-3 的根因）。 */
-function renderFrame(viewSeat: 0 | 1, cardsPerStack = 0): StubNode {
+ *  在 R1→R2→R3→R-F **四轮**里从未被任何机检覆盖（I-3 的根因）。
+ *
+ *  `defId`（**R8-2 修正新增**，缺省 `'fire-0'` ⇒ 既有调用逐字等价）：铺牌用的牌面。
+ *  它唯一的用途是造出**点数 > 10** 的链路（`fire-0` 的分值是 0，永远造不出来）——
+ *  C-1 的溢流数字（`.battery-overflow`）只有那条分支才产出。 */
+function renderFrame(viewSeat: 0 | 1, cardsPerStack = 0, defId = 'fire-0'): StubNode {
   const s = createGame({ seed: 'rf-tree-seed', draftStarter: 0, firstToPlay: 1 });
   for (const p of [0, 1] as const) {
     s.players[p].protocols = [
@@ -239,7 +181,7 @@ function renderFrame(viewSeat: 0 | 1, cardsPerStack = 0): StubNode {
     ] as never;
     if (cardsPerStack > 0) {
       s.players[p].stacks = [0, 1, 2].map((line) => Array.from({ length: cardsPerStack }, (_, i) => ({
-        uid: `p${p}l${line}c${i}`, defId: 'fire-0', faceUp: true, owner: p, zone: 'field', line, pos: i,
+        uid: `p${p}l${line}c${i}`, defId, faceUp: true, owner: p, zone: 'field', line, pos: i,
       }))) as never;
     }
   }
@@ -254,7 +196,14 @@ function renderFrame(viewSeat: 0 | 1, cardsPerStack = 0): StubNode {
 }
 
 /* ============================================================================
- * 层序求解：一列 = 六层
+ * 层序求解：一列 = 六层（**G2 修正 R8-2：DOM 兄弟顺序即视觉顺序**）
+ *
+ * ⚠️ **本段在 R8-2 之后变简单了，也变硬了**：R1~R7 期间能量槽在 `.stack-slot` 内、落端由
+ * CSS `order` 决定，于是求解器要**解析样式表的 order 声明 + 选择器权重 + 源序**再做稳定排序
+ * —— 而"哪一层在哪"因此有了**两个**出处（DOM 顺序 × CSS order），C-2 两次 Critical 都出在这条缝里。
+ * R8-2 把能量槽移出链路框、`order` 彻底退役 ⇒ `.net-side` 是 flex column，
+ * **DOM 兄弟顺序就是视觉顺序**，"哪一层在哪"只剩一个出处。
+ * 本段现在**只读元素树**（`order` 解算器只留给底部行/手牌区那两处仍在用 order 的地方）。
  * ========================================================================== */
 
 type Side = 'foe' | 'self';
@@ -263,28 +212,45 @@ interface Layer { side: Side; kind: LayerKind }
 
 const label = (l: Layer): string => `${l.side === 'foe' ? '对手' : '自己'}${l.kind === 'battery' ? '能量槽' : l.kind === 'stack' ? '链路' : '协议'}`;
 
+/** 一列的**直接子节点**，按 **DOM 顺序**（= 视觉上下顺序；R8-2 之后不再有 order 介入）。 */
+const cellsOf = (col: StubNode): StubNode[] => col.children;
+
+/** 一列的**直接子节点**的种类（打印用）。 */
+function colKindOf(n: StubNode): string {
+  if (isClass(n, 'net-side-foe')) return '侧·对手(net-side-foe)';
+  if (isClass(n, 'net-side-self')) return '侧·自己(net-side-self)';
+  if (isClass(n, 'net-lane-mid')) return '中线(net-lane-mid)';
+  return n.cls;
+}
+
+/** 一侧（`.net-side`）的**直接子节点**的种类（打印用）。 */
+function sideKindOf(n: StubNode): string {
+  if (isClass(n, 'battery')) return '能量槽(.battery)';
+  if (isClass(n, 'stack-slot')) return '链路槽(.stack-slot)';
+  if (isClass(n, 'protocol-cell')) return '协议格(.protocol-cell)';
+  return n.cls;
+}
+
 /**
- * 一列（`.net-lane-band`）里**自上而下的六层**（DOM 顺序 + CSS `order`）。
+ * 一列（`.net-lane-band`）里**自上而下的六层** —— **纯 DOM 兄弟顺序**（规格 §2.1 的目标层级）。
  *
- * ⚠️ **R-F2 · 守卫洞 1**：`chain` = 该列的**完整祖先链**（`root → .net-board → .net-grid`，
- * 见 `firstColumnWithChain`）。旧版把它写死成"从列开始"（`[]`），于是**列以上祖先才匹配的规则
- * 对解算器完全不可见** —— 实测往 `styles-net.css` 插一条
- * `.net-board .net-lane-band .stack-slot .battery { order: 1; }`（与按侧那两条**同权重**、
- * 源序靠后 ⇒ 浏览器里它会赢 ⇒ 自己能量槽跑到链路上方）守卫仍然**绿**。
- * 本文件已有 11 条 `.net-board` 前缀规则，这个写法很现实，所以必须把链带全。
+ * ⚠️ **这条是 R8-2 的判据本身**：能量槽是 `.net-side` 的**直接子节点**（不再在 `.stack-slot`
+ * 里），所以"六层"不再需要下钻一层槽、也不再需要解算 `order`。
  */
-function layersOfColumn(col: StubNode, chain: StubNode[], rules: CssRule[]): Layer[] {
+function layersOfColumn(col: StubNode): Layer[] {
   const out: Layer[] = [];
-  for (const sideNode of visualChildren(col, chain, rules)) {
+  for (const sideNode of cellsOf(col)) {
     const side: Side | null = isClass(sideNode, 'net-side-foe') ? 'foe'
       : isClass(sideNode, 'net-side-self') ? 'self' : null;
     if (!side) continue;   // 中线等
-    for (const cell of visualChildren(sideNode, [...chain, col], rules)) {
+    for (const cell of sideNode.children) {
+      if (isClass(cell, 'battery')) { out.push({ side, kind: 'battery' }); continue; }
       if (isClass(cell, 'protocol-cell')) { out.push({ side, kind: 'protocol' }); continue; }
-      if (!isClass(cell, 'stack-slot')) continue;
-      for (const inner of visualChildren(cell, [...chain, col, sideNode], rules)) {
-        if (isClass(inner, 'battery')) out.push({ side, kind: 'battery' });
-        else if (isClass(inner, 'stack')) out.push({ side, kind: 'stack' });
+      if (isClass(cell, 'stack-slot')) {
+        // 链路槽里应当**只有** `.stack`（R8-2：能量槽已移出）
+        for (const inner of cell.children) {
+          if (isClass(inner, 'stack')) out.push({ side, kind: 'stack' });
+        }
       }
     }
   }
@@ -303,9 +269,12 @@ const SPEC_ORDER: readonly Layer[] = [
 /** 取第一列 + 它**从 root 起的完整祖先链**（三条线同构，第一列足够；
  *  三条列的一致性由 renderNetBoard 的循环与既有计数守卫保证）。
  *
- *  ⚠️ 返回祖先链是**守卫洞 1 的修法**：`visualChildren(node, chain, rules)` 给子项拼的链是
- *  `[...chain, node, 子项]`，所以 `chain` 必须是"从根到父节点"的真实祖先序列，
- *  `.net-board` 这类**列以上**的选择器片段才可能匹配上（旧版漏掉 → 覆盖规则隐形）。 */
+ *  ⚠️ 返回祖先链是**守卫洞 1 的修法**：解算器给子项拼的链是 `[...chain, node, 子项]`，
+ *  所以 `chain` 必须是"从根到父节点"的真实祖先序列，`.net-board` 这类**列以上**的选择器片段
+ *  才可能匹配上（旧版漏掉 → 覆盖规则隐形）。
+ *  R8-2 之后列内层序不再解算 CSS，但**祖先链仍是必需的** —— `grid-row` / `grid-column` 的
+ *  解算（R6-1 ④、R6-3 ③）要继续用它，且下面那条"带全祖先"的反空集合断言是**防退化**的
+ *  （别让它悄悄退回 `[]`）。 */
 function firstColumnWithChain(root: StubNode): { col: StubNode; chain: StubNode[] } {
   const found: Array<{ col: StubNode; chain: StubNode[] }> = [];
   const visit = (n: StubNode, chain: StubNode[]): void => {
@@ -320,19 +289,17 @@ function firstColumnWithChain(root: StubNode): { col: StubNode; chain: StubNode[
   return found[0];
 }
 
-/** 在列内按视觉顺序找某个「侧 + 层」的节点（能量槽/链路/协议都能取到）。`chain` 同 `layersOfColumn`。 */
-function findLayer(col: StubNode, chain: StubNode[], rules: CssRule[], want: Layer): StubNode | null {
-  for (const sideNode of visualChildren(col, chain, rules)) {
+/** 在列内按**DOM 顺序**找某个「侧 + 层」的节点（能量槽/链路/协议都能取到）。 */
+function findLayer(col: StubNode, want: Layer): StubNode | null {
+  for (const sideNode of cellsOf(col)) {
     const side: Side | null = isClass(sideNode, 'net-side-foe') ? 'foe'
       : isClass(sideNode, 'net-side-self') ? 'self' : null;
     if (side !== want.side) continue;
-    for (const cell of visualChildren(sideNode, [...chain, col], rules)) {
+    for (const cell of sideNode.children) {
       if (want.kind === 'protocol' && isClass(cell, 'protocol-cell')) return cell;
-      if (want.kind !== 'protocol' && isClass(cell, 'stack-slot')) {
-        for (const inner of visualChildren(cell, [...chain, col, sideNode], rules)) {
-          if (want.kind === 'battery' && isClass(inner, 'battery')) return inner;
-          if (want.kind === 'stack' && isClass(inner, 'stack')) return inner;
-        }
+      if (want.kind === 'battery' && isClass(cell, 'battery')) return cell;
+      if (want.kind === 'stack' && isClass(cell, 'stack-slot')) {
+        for (const inner of cell.children) if (isClass(inner, 'stack')) return inner;
       }
     }
   }
@@ -345,26 +312,65 @@ const RULES = cssRules(netCss);
 
 afterEach(() => { setFxViewSeat(null); });
 
-describe('R-F · C-2：真跑 renderNetBoard 的元素树层序（viewSeat 0/1）', () => {
-  it('两个席位下，一列自上而下都必须是规格 §1 的六层（对手能量槽→…→自己能量槽）', async () => {
+describe('R-F · C-2 / R8-2：真跑 renderNetBoard 的元素树层序（viewSeat 0/1）', () => {
+  it('G-1. 一列自上而下必须是规格 §2.1 的六层；每侧的子节点顺序恰好按侧；能量槽**不在**链路槽里', async () => {
     const restore = installDom();
     try {
       for (const seat of [0, 1] as const) {
         const root = renderFrame(seat);
-        const { col, chain } = firstColumnWithChain(root);
+        const { col } = firstColumnWithChain(root);
         const tree: string[] = [];
         walk(col, 0, tree, 4);
         // 报告里要贴的元素树（真实产出，非手写）
         console.log(`\n===== viewSeat=${seat} · 第一列元素树（DOM 顺序）=====\n${tree.join('\n')}`);
-        const layers = layersOfColumn(col, chain, RULES);
-        console.log(`----- viewSeat=${seat} · 自上而下（DOM 顺序 + CSS order）-----\n`
-          + layers.map((l, i) => `  ${i + 1}. ${label(l)}`).join('\n'));
 
-        // ① **完整六层**：与规格 §1 逐条相等（这是 C-2 的核心判据）
-        expect(layers, `viewSeat=${seat} 的列内层序与规格 §1 不符`
+        // ── ① 一列的**直接子节点**顺序 = [foeSide, mid, selfSide]（DOM 顺序即视觉顺序，order 已退役）──
+        const cellKinds = cellsOf(col).map(colKindOf);
+        console.log(`  ----- viewSeat=${seat} · 一列的直接子节点（DOM 顺序）-----\n  ${cellKinds.join(' → ')}`);
+        expect(cellKinds, `viewSeat=${seat}：一列的直接子节点必须是 [对手侧, 中线, 自己侧]`
+          + `（R8-2 之后 DOM 兄弟顺序 = 视觉上下顺序，不再有 CSS order 兜底）`).toEqual([
+          '侧·对手(net-side-foe)', '中线(net-lane-mid)', '侧·自己(net-side-self)',
+        ]);
+
+        // ── ② 每侧的**子节点顺序**恰好按规格 §2.1（这是 R8-2 的核心判据）──
+        const innerKinds: Record<Side, string[]> = { foe: [], self: [] };
+        for (const sideNode of cellsOf(col)) {
+          const s: Side | null = isClass(sideNode, 'net-side-foe') ? 'foe'
+            : isClass(sideNode, 'net-side-self') ? 'self' : null;
+          if (s) innerKinds[s] = sideNode.children.map(sideKindOf);
+        }
+        console.log(`  ----- viewSeat=${seat} · 每侧的子节点（DOM 顺序）-----\n`
+          + `  对手侧: ${innerKinds.foe.join(' → ')}\n  自己侧: ${innerKinds.self.join(' → ')}`);
+        expect(innerKinds.foe, `viewSeat=${seat}：对手侧的子节点必须恰好是`
+          + ` [能量槽, 链路槽, 协议格]（能量槽在**链路框外**的最上端 = 层 1）`).toEqual(
+          ['能量槽(.battery)', '链路槽(.stack-slot)', '协议格(.protocol-cell)']);
+        expect(innerKinds.self, `viewSeat=${seat}：自己侧的子节点必须恰好是`
+          + ` [协议格, 链路槽, 能量槽]（能量槽在**链路框外**的最下端 = 层 6）`).toEqual(
+          ['协议格(.protocol-cell)', '链路槽(.stack-slot)', '能量槽(.battery)']);
+
+        // ── ③ **`.battery` 不是 `.stack-slot` 的后代**（R8-2 的判据本身）──
+        const foeside = cellsOf(col).find((n) => isClass(n, 'net-side-foe'))!;
+        const selfside = cellsOf(col).find((n) => isClass(n, 'net-side-self'))!;
+        for (const [sideName, sideNode] of [['对手', foeside], ['自己', selfside]] as const) {
+          const slots = sideNode.children.filter((n) => isClass(n, 'stack-slot'));
+          expect(slots.length, `viewSeat=${seat} · ${sideName}侧：必须恰好一个 .stack-slot`).toBe(1);
+          const batteryInsideSlot = descendants(slots[0]).some((n) => isClass(n, 'battery'));
+          expect(batteryInsideSlot, `viewSeat=${seat} · ${sideName}侧：.battery 出现在 .stack-slot 的`
+            + `**子树**里 —— 用户裁决是"能量槽要放置在链路框**外**"（这也会让 6 处 FX 的`
+            + ` ".battery[data-player][data-line]" 定位在远程页静默失配——旧写法正是按 .stack-slot 找它）`).toBe(false);
+          // 链路槽里除了 .stack 不应有别的（尤其别再挂回能量槽）
+          expect(slots[0].children.map((n) => n.cls.split(/\s+/)[0]), `viewSeat=${seat} · ${sideName}侧：`
+            + `链路槽的直接子节点应只有 .stack（能量槽已移出）`).toEqual(['stack']);
+        }
+
+        // ── ④ 完整六层（DOM 顺序）：与规格 §2.1 逐条相等 ──
+        const layers = layersOfColumn(col);
+        console.log(`----- viewSeat=${seat} · 自上而下（纯 DOM 兄弟顺序）-----\n`
+          + layers.map((l, i) => `  ${i + 1}. ${label(l)}`).join('\n'));
+        expect(layers, `viewSeat=${seat} 的列内层序与规格 §2.1 不符`
           + `（实际：${layers.map(label).join(' → ')}）`).toEqual(SPEC_ORDER);
 
-        // ② 三条腿各自点名（失败信息比"数组不等"可读；也防止将来有人把 SPEC_ORDER 一起改错）
+        // ⑤ 三条腿各自点名（失败信息比"数组不等"可读；也防止将来有人把 SPEC_ORDER 一起改错）
         expect(layers[0], `viewSeat=${seat}：对手能量槽必须在一列的最上端（第 1 层）`)
           .toEqual({ side: 'foe', kind: 'battery' });
         expect(layers[2], `viewSeat=${seat}：对手协议必须紧贴中线（第 3 层，内端）`)
@@ -373,26 +379,40 @@ describe('R-F · C-2：真跑 renderNetBoard 的元素树层序（viewSeat 0/1�
           .toEqual({ side: 'self', kind: 'protocol' });
         expect(layers[5], `viewSeat=${seat}：自己能量槽必须在一列的最下端（第 6 层）`)
           .toEqual({ side: 'self', kind: 'battery' });
-        // 自己链路在下半、对手链路在上半（中线把它们分开）
         const iFoeStack = layers.findIndex((l) => l.side === 'foe' && l.kind === 'stack');
         const iSelfStack = layers.findIndex((l) => l.side === 'self' && l.kind === 'stack');
         expect(iFoeStack, `viewSeat=${seat}：对手链路必须在中线之上（第 2 层）`).toBe(1);
         expect(iSelfStack, `viewSeat=${seat}：自己链路必须在中线之下（第 5 层）`).toBe(4);
 
-        // ③ 归属：能量槽/链路槽各自挂在自己的侧里，**不是**按绝对玩家猜的
-        const foeSide = visualChildren(col, chain, RULES).find((n) => isClass(n, 'net-side-foe'))!;
-        const selfSide = visualChildren(col, chain, RULES).find((n) => isClass(n, 'net-side-self'))!;
-        expect(foeSide.dataset.player, `viewSeat=${seat}：对手侧的 data-player 应是绝对的 ${1 - seat}`)
+        // ⑥ 归属：能量槽/链路槽各自挂在自己的侧里，**不是**按绝对玩家猜的
+        expect(foeside.dataset.player, `viewSeat=${seat}：对手侧的 data-player 应是绝对的 ${1 - seat}`)
           .toBe(String(1 - seat));
-        expect(selfSide.dataset.player, `viewSeat=${seat}：自己侧的 data-player 应是绝对的 ${seat}`)
+        expect(selfside.dataset.player, `viewSeat=${seat}：自己侧的 data-player 应是绝对的 ${seat}`)
           .toBe(String(seat));
 
-        // ④ 竖向生长类**按侧**（不是按绝对玩家）：自己恒 .grow-down、对手恒 .grow-up
-        const selfStack = findLayer(col, chain, RULES, { side: 'self', kind: 'stack' })!;
-        const foeStack = findLayer(col, chain, RULES, { side: 'foe', kind: 'stack' })!;
-        expect(classesOf(selfStack), `viewSeat=${seat}：自己链路必须向上端协议生长（.grow-down）`)
+        // ── ⑦ **`.battery` 的 data-player / data-line 与所在列一致**（R8-2 的节点自描述）──
+        // 为什么这一条是承重的：6 处 FX（扫描流光 / metal-0 / mirror-0 / clarity-0 / diversity / 愤怒0）
+        // 全靠 `.battery[data-player="X"][data-line="Y"]` 定位能量槽 —— 属性写错/写漏 ⇒ 特效**静默消失**
+        // （那些查询全是 `if (!node) return` 的降级，不报错）。
+        // 这里从**元素树**反推（不是查源码文本）：两个能量槽必须各自带"自己那个玩家 + 本列的线号"。
+        for (const [sideName, sideNode, wantPlayer] of [
+          ['对手', foeside, 1 - seat], ['自己', selfside, seat],
+        ] as const) {
+          const bat = sideNode.children.find((n) => isClass(n, 'battery'));
+          expect(bat, `viewSeat=${seat} · ${sideName}侧：找不到 .battery（能量槽没产出？）`).toBeTruthy();
+          expect(bat!.dataset.player, `viewSeat=${seat} · ${sideName}侧：.battery 的 data-player 必须是`
+            + ` 绝对玩家号 ${wantPlayer}（否则 6 处 FX 用 .battery[data-player=…] 定位能量槽会静默失配）`)
+            .toBe(String(wantPlayer));
+          expect(bat!.dataset.line, `viewSeat=${seat} · ${sideName}侧：.battery 的 data-line 必须等于`
+            + ` 本列的线号 ${String(col.dataset.line)}`).toBe(String(col.dataset.line));
+        }
+
+        // ⑧ 竖向生长类**按侧**（不是按绝对玩家）：自己恒 .grow-down、对手恒 .grow-up
+        const selfStack = findLayer(col, { side: 'self', kind: 'stack' })!;
+        const foeStack = findLayer(col, { side: 'foe', kind: 'stack' })!;
+        expect(classListOf(selfStack), `viewSeat=${seat}：自己链路必须是 .grow-down（最新牌往下长）`)
           .toContain('grow-down');
-        expect(classesOf(foeStack), `viewSeat=${seat}：对手链路必须向下端协议生长（.grow-up）`)
+        expect(classListOf(foeStack), `viewSeat=${seat}：对手链路必须是 .grow-up（最新牌往上长）`)
           .toContain('grow-up');
       }
     } finally {
@@ -401,64 +421,42 @@ describe('R-F · C-2：真跑 renderNetBoard 的元素树层序（viewSeat 0/1�
     }
   });
 
-  /**
-   * **R-F2 · I-3 的行为守卫**：链路里的**卡序**（本文件此前只覆盖**空链路**的六层，
-   * 这就是 I-3 躲过 R1→R2→R3→R-F 四轮的**唯一**原因 —— `renderFrame` 用的 `createGame()` 场上无卡）。
-   *
-   * ## 为什么"卡序"就是"生长方向"（可复算，不依赖浏览器）
-   *
-   * 1. 引擎里 `stacks[line]` 的顺序恒为「最旧 → 最新」（`pos` = 追加序号）；
-   * 2. 竖排的重叠规则是 `.net-lane-band .stack .card + .card { margin-top: calc(0.462*var(--card-w) - var(--card-h)) }`
-   *    = 60.3 − 182 = **−121.7px**。flex column 里，`margin-top` 为负 ⇒ **后面那个 DOM 兄弟更靠下**
-   *    （第 k 个兄弟顶边 = 第 k−1 个顶边 + 60.3）⇒ **DOM 顺序直接决定谁在上、谁在下**；
-   * 3. `z-index = pos`（`render.ts`）⇒ 最新的那张永远盖住更旧的 ⇒ 视觉上"链路从 pos 0 向最新那张延伸"。
-   *
-   * ⇒ 「pos 0（最旧）贴协议、越新的越往外」这条语义在竖排下**只能**由 DOM 顺序实现：
-   *  - **自己侧**（协议在上端、向下长）⇒ DOM 必须是 **[最旧 … 最新]**（最新在**末位** = 最下）；
-   *  - **对手侧**（协议在下端、向上长）⇒ DOM 必须是 **[最新 … 最旧]**（最新在**首位** = 最上）。
-   *
-   * ⚠️ `justify-content: flex-start/flex-end` 那两条声明**救不了方向**：`.stack` 的高度由内容决定、
-   * 没有自由空间可分配 ⇒ 它们是**死 CSS**，唯一的杠杆就是上面这条 DOM 顺序（I-3 的成因）。
-   *
-   * **只查顺序、不查几何**：桩的 `getBoundingClientRect()` 恒 0，本文件不做任何几何断言。
-   * 这两条断言加上"负 margin-top + z-index=pos"这两条**可复算**的 CSS/源码事实，就足以确定
-   * 最新牌落在链路的哪一端（人眼项仍然保留：见 R-F2 报告清单第 1~3 条）。
-   */
-  it('两个席位下，链路卡序必须是「pos 0 贴协议、越新越往外」：自己侧最新在**末位**、对手侧最新在**首位**', async () => {
+  it('G-1b. 行为腿：`.battery` 与 `.stack-slot` 是**兄弟**（同一父 `.net-side`），且三条线各一份', async () => {
     const restore = installDom();
     try {
       for (const seat of [0, 1] as const) {
-        const root = renderFrame(seat, 3);
-        const { col, chain } = firstColumnWithChain(root);
-        const printed: string[] = [];
-        for (const side of ['self', 'foe'] as const) {
-          const stack = findLayer(col, chain, RULES, { side, kind: 'stack' })!;
-          const cards = stack.children.filter((c) => isClass(c, 'card'));
-          expect(cards.length, `viewSeat=${seat} · ${side}：合成局里每条链路应恰好 3 张卡（桩/构造被改？）`)
-            .toBe(3);
-          const uids = cards.map((c) => String(c.dataset.uid));
-          const zs = cards.map((c) => Number(c.style.zIndex));
-          const player = side === 'self' ? seat : (1 - seat);
-          // 引擎序 = 最旧 → 最新（uid 后缀就是引擎下标）
-          const oldestFirst = [0, 1, 2].map((i) => `p${player}l0c${i}`);
-          const expected = side === 'self' ? oldestFirst : [...oldestFirst].reverse();
-          printed.push(`  ${side === 'self' ? '自己侧' : '对手侧'}（P${player + 1}）`
-            + ` class="${stack.cls.split(/\s+/).filter((c) => c === 'stack' || c.startsWith('grow-')).join(' ')}"`
-            + ` 卡序: ${cards.map((c, i) => `#${i} ${String(c.dataset.uid)} z=${String(c.style.zIndex)}`).join(' | ')}`);
-          // ① 完整 DOM 卡序（含"自己侧最新在末位 / 对手侧最新在首位"）
-          expect(uids, `viewSeat=${seat} · ${side === 'self' ? '自己' : '对手'}侧：DOM 卡序与规格 §1 不符`
-            + `（自己侧必须 [最旧→最新]、对手侧必须 [最新→最旧]，否则最新的一张会落在链路的**错端** —— I-3）`)
-            .toEqual(expected);
-          // ② 最新那张的 z-index 最大（保证"最新盖住更旧的"这条视觉语义，横竖排都是它）
-          const newest = `p${player}l0c2`;
-          const iNewest = uids.indexOf(newest);
-          expect(zs[iNewest], `viewSeat=${seat} · ${side === 'self' ? '自己' : '对手'}侧：`
-            + `最新那张（${newest}）的 z-index 必须是最大（实际 z=${zs[iNewest]}，全部 z=${zs.join(',')}）`)
-            .toBe(Math.max(...zs));
+        const root = renderFrame(seat);
+        const cols = descendants(root).filter((n) => isClass(n, 'net-lane-band'));
+        expect(cols.length, `viewSeat=${seat}：必须恰好三条 .net-lane-band`).toBe(3);
+        const linesSeen: string[] = [];
+        for (const col of cols) {
+          const line = String(col.dataset.line);
+          linesSeen.push(line);
+          for (const sideNode of cellsOf(col)) {
+            if (!isClass(sideNode, 'net-side')) continue;
+            const bat = sideNode.children.find((n) => isClass(n, 'battery'));
+            const slot = sideNode.children.find((n) => isClass(n, 'stack-slot'));
+            expect(bat, `viewSeat=${seat} · 线 ${line}：这一侧没有能量槽`).toBeTruthy();
+            expect(slot, `viewSeat=${seat} · 线 ${line}：这一侧没有链路槽`).toBeTruthy();
+            // **兄弟关系**（不是父子）—— 这是 R8-2 的"移出链路框"在行为层的唯一判据
+            expect(bat!.parentElement, `viewSeat=${seat} · 线 ${line}：能量槽的父节点必须是 .net-side`
+              + `（挂回 .stack-slot 内部 = 用户否决的"能量槽被放在链路框中"）`).toBe(sideNode);
+            expect(slot!.parentElement, `viewSeat=${seat} · 线 ${line}：链路槽的父节点必须是 .net-side`)
+              .toBe(sideNode);
+            // 同一侧里：对手 = 能量槽在链路槽**之前**（上）、自己 = 在**之后**（下）
+            const iBat = sideNode.children.indexOf(bat!);
+            const iSlot = sideNode.children.indexOf(slot!);
+            const isFoe = isClass(sideNode, 'net-side-foe');
+            if (isFoe) {
+              expect(iBat, `viewSeat=${seat} · 线 ${line}：对手能量槽必须在链路槽**之前**（视觉在上）`)
+                .toBeLessThan(iSlot);
+            } else {
+              expect(iBat, `viewSeat=${seat} · 线 ${line}：自己能量槽必须在链路槽**之后**（视觉在下）`)
+                .toBeGreaterThan(iSlot);
+            }
+          }
         }
-        console.log(`\n===== viewSeat=${seat} · 第 1 条线的链路卡序（DOM 顺序 + z-index）=====\n`
-          + printed.join('\n')
-          + '\n  （引擎 stacks 数组顺序 = 最旧 → 最新：c0, c1, c2）');
+        expect(linesSeen, `viewSeat=${seat}：三条线的 data-line 必须是 0/1/2`).toEqual(['0', '1', '2']);
       }
     } finally {
       await drainRaf();
@@ -466,68 +464,209 @@ describe('R-F · C-2：真跑 renderNetBoard 的元素树层序（viewSeat 0/1�
     }
   });
 
-  it('CSS 侧腿：能量槽的落端必须**按侧**给 order（不得再按绝对玩家 .p1/.p2）', () => {
-    // 元素树求解已经证明"当前样式表算出来的层序是对的"；这一条防的是"靠权重压住了错的旧规则"：
-    // 只要还有人按绝对玩家给 order，换一个席位就会翻回来。
-    const batteryOrderRules = RULES.filter((r) => /(?:^|;|\s)order\s*:/.test(r.body) && /\.battery/.test(r.selector));
-    const byPlayer = batteryOrderRules.filter((r) => /\.p[12]\b/.test(r.selector)).map((r) => r.selector);
-    expect(byPlayer, 'styles-net.css 里仍有"按绝对玩家号"给能量槽定 order 的规则'
-      + '（默认席位下会让两个能量槽都跑到内侧 —— C-2）').toEqual([]);
-    // ⚠️ **R-F2 · 守卫洞 2**：这里原来写 `toBe(2)`（"恰好两条按侧的 order 规则"），是**过度指定** ——
-    //    一条语义等价的重构（自己侧改用 `flex-direction: column-reverse`、或"一条基础规则 + 一条对手侧覆盖"
-    //    = 只有 1 条 `.net-side-*` 电池规则）会**假红**。真正要防的回归是"**按绝对玩家号给 order**"，
-    //    那条已由上面的 `byPlayer === []` 单独钉住；这里只保留**反空集合**（>= 1）：
-    //    抓"按侧给 order 这件事整个消失了"，不抓"用几条规则表达它"。
-    const bySide = batteryOrderRules.filter((r) => /\.net-side-(foe|self)\b/.test(r.selector));
-    expect(bySide.length, 'styles-net.css 未按侧（.net-side-foe/.net-side-self）给能量槽定 order')
-      .toBeGreaterThanOrEqual(1);
+  /* ==========================================================================
+   * G-3（**样式腿**）与 G-4（**FX 定位点迁移**）—— G2 修正 R8-2 / R8-3
+   *
+   * 这两条是**源码腿**（桩没有布局引擎 ⇒ 量不到 min-height / flex 方向的真实效果），
+   * 但它们钉的是"承重声明本身"：min-height 的**推导式**、两条 justify-content 的**配对**、
+   * 以及 6 处 FX 定位点**不得**再按位置（.stack-slot）找能量槽。
+   * ⚠️ 诚实边界：min-height ≈ 543.9px 到底够不够、横条好不好看，只能人眼在 5173 上验。
+   * ======================================================================== */
+
+  /** 解算一个 CSS 长度字面量 → 像素数（只支持本页用到的那几种写法；解不出来返回 null）。 */
+  function cssLenOf(chain: StubNode[], rules: CssRule[], raw: string, depth = 0): number | null {
+    if (depth > 8) return null;
+    const v = raw.trim();
+    const px = /^(\d+(?:\.\d+)?)px$/.exec(v);
+    if (px) return Number.parseFloat(px[1]);
+    const vari = /^var\(\s*(--[A-Za-z0-9_-]+)\s*\)$/.exec(v);
+    if (vari) {
+      const rawVar = cssVarOf(chain, rules, vari[1]);
+      return rawVar === null ? null : cssLenOf(chain, rules, rawVar, depth + 1);
+    }
+    const calc = /^calc\(([\s\S]*)\)$/.exec(v);
+    if (calc) return calcOf(chain, rules, calc[1], depth + 1);
+    return null;
+  }
+
+  /** \`calc\` 体：只支持 \`+\` / \`-\` 连接的项（本页的 \`--card-w\` 与 7 张跨度都是这种形状）。 */
+  function calcOf(chain: StubNode[], rules: CssRule[], body: string, depth: number): number | null {
+    const parts: Array<{ sign: number; text: string }> = [];
+    let cur = '';
+    let sign = 1;
+    let depthP = 0;
+    for (let i = 0; i < body.length; i += 1) {
+      const ch = body[i];
+      if (ch === '(') depthP += 1;
+      if (ch === ')') depthP -= 1;
+      if (depthP === 0 && (ch === '+' || ch === '-') && cur.trim() !== '') {
+        parts.push({ sign, text: cur.trim() });
+        sign = ch === '-' ? -1 : 1;
+        cur = '';
+        continue;
+      }
+      cur += ch;
+    }
+    if (cur.trim() !== '') parts.push({ sign, text: cur.trim() });
+    if (parts.length === 0) return null;
+    let total = 0;
+    for (const p of parts) {
+      const n = productOf(chain, rules, p.text, depth);
+      if (n === null) return null;
+      total += p.sign * n;
+    }
+    return total;
+  }
+
+  /** \`*\` 连接的项（每项可以是 px / var / 无单位的数 / 嵌套括号）。 */
+  function productOf(chain: StubNode[], rules: CssRule[], text: string, depth: number): number | null {
+    const factors = text.split('*').map((f) => f.trim()).filter((f) => f !== '');
+    if (factors.length === 0) return null;
+    let acc = 1;
+    for (const f of factors) {
+      const unitless = /^\d+(?:\.\d+)?$/.exec(f);
+      if (unitless) { acc *= Number.parseFloat(unitless[0]); continue; }
+      const inner = /^\(([\s\S]*)\)$/.exec(f);
+      const n = inner ? calcOf(chain, rules, inner[1], depth + 1) : cssLenOf(chain, rules, f, depth + 1);
+      if (n === null) return null;
+      acc *= n;
+    }
+    return acc;
+  }
+
+  it('G-3. R8-3 样式腿：.stack 的 min-height 由变量推出且 ≥ 7 张跨度；grow-down/up 的 justify-content 是两个不同值', () => {
+    const band = cssNode('net-lane-band');
+    const stack = cssNode('stack');
+    const chain = [band, stack];
+    const raw = cssPropOf(stack, chain, RULES, 'min-height');
+    expect(raw, 'styles-net.css 里 .net-lane-band .stack 没有 min-height ——'
+      + '放第 1 张牌时链路框就会变形（用户 R8-3：把牌放上去会导致框的大小发生变化）').toBeTruthy();
+    const got = cssLenOf(chain, RULES, raw!);
+    expect(got, `min-height 解不出像素值：${raw}`
+      + `（必须由 --card-h / --card-w 推出，不许写死 px）`).not.toBeNull();
+
+    // 逐项复算派生量（**从样式表真实解算**，不是手抄数字）
+    const cardH = cssLenOf([band], RULES, cssVarOf([band], RULES, '--card-h') ?? '');
+    const cardW = cssLenOf([band], RULES, cssVarOf([band], RULES, '--card-w') ?? '');
+    expect(cardH, `--card-h 未定义在 .net-lane-band 上（R8-3 要求上提，好让 .stack 能算 7 张跨度）`)
+      .not.toBeNull();
+    expect(cardW, `--card-w 未定义在 .net-lane-band 上`).not.toBeNull();
+    const seven = cardH! + 6 * 0.462 * cardW!;
+    console.log(`\n===== G-3 · min-height 解算（由 styles-net.css 真实解出）=====\n`
+      + `  --card-h = ${cardH}px / --card-w = ${cardW!.toFixed(2)}px\n`
+      + `  7 张跨度 = ${cardH} + 6 × 0.462 × ${cardW!.toFixed(2)} = ${seven.toFixed(1)}px\n`
+      + `  声明的 min-height = ${raw} → 解算 ${got!.toFixed(1)}px`);
+    // ① 必须 ≥ 7 张跨度（留出余量可以，**少了不行** —— 那正是用户抱怨的"框会变形"）
+    expect(got!, `min-height（${got!.toFixed(1)}px）小于 7 张牌的跨度（${seven.toFixed(1)}px）`
+      + ` —— 放第 7 张时框仍会变形`).toBeGreaterThanOrEqual(seven - 0.5);
+    // ② 不得**过度**预留（否则纯属浪费纵向空间；上限 = 再多一张牌的高度）
+    expect(got!, `min-height 远远超出 7 张跨度（${got!.toFixed(1)}px vs ${seven.toFixed(1)}px）`)
+      .toBeLessThanOrEqual(seven + cardH!);
+
+    // ③ .grow-down / .grow-up 的 justify-content 必须是**两个不同的值**且方向正确
+    const down = cssPropOf(cssNode('stack', 'grow-down'), [band, cssNode('stack', 'grow-down')], RULES, 'justify-content');
+    const up = cssPropOf(cssNode('stack', 'grow-up'), [band, cssNode('stack', 'grow-up')], RULES, 'justify-content');
+    console.log(`  .grow-down justify-content = ${down} / .grow-up justify-content = ${up}`);
+    expect(down, `.grow-down 没有 justify-content`).toBeTruthy();
+    expect(up, `.grow-up 没有 justify-content`).toBeTruthy();
+    expect(down, `.grow-down（自己，协议在上端）必须是 flex-start（pos 0 贴顶 = 贴协议）`)
+      .toMatch(/flex-start/);
+    expect(up, `.grow-up（对手，协议在下端）必须是 flex-end（pos 0 贴底 = 贴协议）`)
+      .toMatch(/flex-end/);
+    expect(down, `.grow-down / .grow-up 的 justify-content 写成了**同一个值** ——`
+      + ` min-height 之后它们是"整组第一张贴哪一端"的承重杠杆，同值会让一侧长反（R-F2 · I-3）`)
+      .not.toBe(up);
+
+    // ④ net 作用域下 .battery-cells 是 row-reverse（"从右往左点亮"的唯一出处）
+    const cells = cssPropOf(cssNode('battery-cells'), [band, cssNode('battery'), cssNode('battery-cells')],
+      RULES, 'flex-direction');
+    expect(cells, `.net-lane-band .battery-cells 不是 row-reverse ——`
+      + ` 双方都会变成"从左往右"点亮（与用户裁决"统一为向左"相反），且没有任何报错`)
+      .toMatch(/row-reverse/);
   });
 
+  it('G-4. FX 定位点迁移：render.ts / gen3-control.ts 不得再按 .stack-slot 找能量槽', () => {
+    const uiFile = (rel: string): string =>
+      String(readFileSync(fileURLToPath(new URL('../../src/ui/' + rel, import.meta.url))));
+    const renderSrc = stripComments(uiFile('render.ts'));
+    const ctrlSrc = stripComments(uiFile('gen3-control.ts'));
+    // ① 旧写法（按位置找能量槽）必须彻底消失。R8-2 之前有 **6 处**：
+    //    render.ts 的扫描流光 / metal-0 / mirror-0 / clarity-0 / diversity + gen3-control.ts 的 batteryNode。
+    //    能量槽移出 .stack-slot 后这些查询会**静默**返回 null（全是 `if (!node) return` 的降级）⇒ 特效消失不报错。
+    const oldForm = /\.stack-slot\[[^\]]*\]\s*\.battery-shell/g;
+    expect(renderSrc.match(oldForm) ?? [], `render.ts 里仍有 ".stack-slot[...] .battery-shell" 形式的`
+      + `能量槽定位（能量槽已移出链路槽 ⇒ 这些查询在远程页恒 null、特效静默消失）`).toEqual([]);
+    expect(ctrlSrc, `gen3-control.ts 的 batteryNode 仍按 .stack-slot 找能量槽`)
+      .not.toMatch(/\.stack-slot\[[^\]]*\]\s*\.battery\b/);
+    // ② 新写法必须真的在（反空集合：不许"删掉旧查询"就算完 —— 那同样是特效全灭）
+    // ⚠️ 判据用**模板字面量的完整形态**（`".${player}"]["${line}"`），不是裸 `.battery[data-player=`：
+    //    裸子串会被**半截写法**满足（只写 `[data-player`、写在表格/字符串里、"删掉一处真查询"
+    //    但把同一段选择器文本留在别处都能过）—— 本项目已有两次"文本满足守卫"的假绿事故
+    //    （见 source-text.ts 头注）。完整形态下 render.ts 里恰好 **5 处**：
+    //    扫描流光（line 477，变量 `player`）/ metal-0（`target`）/ mirror-0（`player`）/
+    //    clarity-0（`player`）/ diversity（`owner`）—— **一处缺失就报红**
+    //    （变异实测：把任意一处改回旧选择器 → 5 → 4）。
+    //    ⚠️ R8-2 修正更正：这里原写"恰好 4 处（diversity 用别的变量名）"是**数错了**
+    //    （diversity 的变量名 `owner` 也落在 `[a-z]+` 里，所以是 5 处）—— 断言本来就是 `toBe(5)`，
+    //    只有注释错；本行按实际命中数改正（**判据一个字没动**）。
+    const newApprox = renderSrc.match(
+      /\.battery\[data-player="\$\{[a-z]+\}"\]\[data-line="\$\{[a-z]+\}"\] \.battery-shell/g) ?? [];
+    console.log(`\n===== G-4 · render.ts 里按节点自描述定位能量槽的查询 = ${newApprox.length} 处 =====`);
+    expect(newApprox.length, `render.ts 里按节点自描述定位能量槽的查询不足（应恰好 5 处：`
+      + ` 扫描流光 / metal-0 / mirror-0 / clarity-0 / diversity —— 少一处 = 那条特效在远程页会静默取不到能量槽）`)
+      .toBe(5);
+    // ⑤ 第二条腿（**不再是裸子串**，R8-2 修正强化）：这 5 处必须是**真的查询调用**
+    //    （`document.querySelector<HTMLElement>(` + 完整模板字面量），而不只是 5 段字符串。
+    //    为什么换掉旧判据（`/\.battery\[data-player=/g` 的 `>= 4`）：那是**裸子串**，任何半截写法
+    //    都能满足它 —— 它唯一能发现的是"总量掉到 3 以下"，而那件事上面 `toBe(5)` 已经覆盖；
+    //    换成"调用点"形态后多发现了**一件新事**：把 5 处里的某一处**降级成常量/表格/死字符串**
+    //    （查询不再发生）会立刻红，而旧判据对此完全无感。
+    //    ⚠️ 它能发现什么 / 不能发现什么：能发现"某个选择器不再是查询调用"；**不能**发现
+    //    "查询写在死代码里"（`if (false)`）、也不能发现"查询到的节点没被用"（那是 G-1b 的活）。
+    const querySites = renderSrc.match(
+      /document\.querySelector<HTMLElement>\(\s*`\.battery\[data-player="\$\{[a-z]+\}"\]\[data-line="\$\{[a-z]+\}"\] \.battery-shell`/g) ?? [];
+    console.log(`  其中作为 document.querySelector<HTMLElement>(…) **调用**的 = ${querySites.length} 处`);
+    expect(querySites.length, `render.ts 里"按节点自描述定位能量槽"的**查询调用**不是 5 处`
+      + `（应恰好 5 处，且每处都得是真的 document.querySelector<HTMLElement>(…) 调用 ——`
+      + ` 半截字符串 / 数据表 / 常量都算不合格）`).toBe(5);
+    expect(ctrlSrc, `gen3-control.ts 的 batteryNode 未命中 .battery[data-player][data-line]`)
+      .toMatch(/document\.querySelector<HTMLElement>\(\s*(?:\/\*[\s\S]*?\*\/\s*)*`\.battery\[data-player="\$\{player\}"\]\[data-line="\$\{line\}"\]`/);
+    // ③ 自描述的**写入方**在 renderBattery 里（两个页面都写）
+    expect(renderSrc, `renderBattery 未写 data-player / data-line（"与位置解耦"的前提就不成立）`)
+      .toMatch(/battery\.dataset\.player\s*=\s*String\(player\)/);
+    expect(renderSrc, `renderBattery 未写 data-line`)
+      .toMatch(/battery\.dataset\.line\s*=\s*String\(line\)/);
+  });
+
+
   /* ==========================================================================
-   * G2 修正 R6：**底部行重排**（信息块 · 手牌区（中） · 信息块）
+   * G2 修正 R6（**R8-5 迁移**）：底部容器 = 信息块 · 手牌区 · 信息块
    *
-   * 用户裁决（规格 §8.4 第 2 条 / §8.6 的 R6）：双方信息条与手牌区**同一行、一左一右**，
-   * **顶部信息条取消**。这一组是它的**行为机检** —— 用同一份最小 DOM 桩真跑，再按元素树 +
-   * 样式表里的 `grid-column` / `order` 解出"谁在左、谁在右、`.hand` 的 DOM 顺序是什么"。
+   * R6 的裁决（规格 §8.4 第 2 条）：双方信息条与手牌区**同一行**、**顶部信息条取消**。
+   * **R8-5 把"同一行 + 左右列"改成"各自一整行 + 上下镜像"**（用户第二次反馈的 A 方案），
+   * 所以本组的判据随之迁移：
+   *  · 三块的**DOM 顺序**仍是 [信息块, 手牌区, 信息块]（由 `NET_BOTTOM_SIDES` 决定）；
+   *  · 三块的 `grid-column` 解出来必须都是**整行** `1 / -1`（左右列退役，见 R6-1 ④）；
+   *  · **五行行序**（谁在第几行）由新文件 `tests/ui/net-board-grid.test.ts` 的 **G-7** 承担
+   *    （那需要"展平 `display: contents` 后的盒树"的模型，与本文件的解算器不是同一件事）。
    *
    * ⚠️ 两条**最容易静默搞坏**的地方（本组各有一条专门断言）：
    *  1. **`.hand` 的 DOM 顺序必须仍是 [P0, P1]**（FX 用 `querySelectorAll('.hand')[player]`
-   *     **按下标**读手牌）—— 左右摆放只能由 CSS 决定，**绝不能让 DOM 顺序跟着视觉左右走**。
+   *     **按下标**读手牌）—— 视觉位置只能由 CSS 决定，**绝不能让 DOM 顺序跟着视觉走**。
    *     这是"看起来只是 CSS、实际会静默搞坏特效"的唯一一处。
-   *  2. **左右归属**：`NET_BOTTOM_SIDES`（render-net.ts 的**唯一**一处常量）与样式表的
-   *     `grid-column` 必须**同向**。只改一处会出现"DOM 顺序对、看着反"（或反过来）。
-   *     下面把两条腿**都从那个常量推导** ⇒ 改常量、改 CSS、改 DOM 挂载顺序，任一处都会红。
+   *  2. **信息块进 DOM 的顺序** = `NET_BOTTOM_SIDES`（render-net.ts 的**唯一**一处常量）；
+   *     视觉行号由 CSS 按 `data-net-seat` 给 ⇒ 改常量只改 DOM、改 CSS 只改行号，
+   *     两条腿由 G-7 一起钉（这里钉 DOM 那一半）。
    * ======================================================================== */
 
-  /** 底部行（`.net-bottom`）里**类名命中 `cls` 的**直接子节点，按 DOM 顺序。 */
+  /** 底部容器（`.net-bottom`）里**类名命中 `cls` 的**直接子节点，按 DOM 顺序。 */
   const blocksIn = (bottom: StubNode, cls: string): StubNode[] =>
     bottom.children.filter((c) => isClass(c, cls));
-
-  /**
-   * 底部行里各块的**视觉左右顺序**：按样式表实际生效的 `grid-column` 排序
-   * （相同列值 = 同一列，退化为 DOM 顺序；本页三块各占一列，不存在并列）。
-   *
-   * ⚠️ 为什么必须**解算 CSS**而不是"看 DOM 顺序就算视觉顺序"：R6 的左右归属正是**由 CSS 决定**的
-   * （红线：DOM 顺序不得跟着视觉左右走）。只查 DOM 就等于把这条红线当成了实现细节。
-   */
-  function visualOrderOfBottom(bottom: StubNode, chain: StubNode[], rules: CssRule[]): StubNode[] {
-    return bottom.children
-      .map((c, i) => ({
-        c, i,
-        col: (() => {
-          const raw = cssPropOf(c, [...chain, bottom, c], rules, 'grid-column');
-          // `grid-column: 1` / `3`（本页只写单值）；没声明 = `auto`（本页的 `@media` 单列模式）
-          return raw === null || !/^\d+$/.test(raw) ? Number.POSITIVE_INFINITY : Number(raw);
-        })(),
-      }))
-      .sort((a, b) => (a.col - b.col) || (a.i - b.i))
-      .map((x) => x.c);
-  }
 
   /** `NET_BOTTOM_SIDES` 的**座位 → 绝对玩家**（与 render-net.ts 的 `bottomPlayerOf` 同式）。 */
   const playerOfSide = (side: string, seat: 0 | 1): number => (side === 'self' ? seat : 1 - seat);
 
-  it('R6-1. 底部行三块：信息块（左）· 手牌区（中）· 信息块（右），左右 = NET_BOTTOM_SIDES', async () => {
+  it('R6-1. 底部三块：信息块 · 手牌区 · 信息块（DOM 顺序 = NET_BOTTOM_SIDES；**左右列已随 R8-5 退役**）', async () => {
     const restore = installDom();
     try {
       for (const seat of [0, 1] as const) {
@@ -557,19 +696,44 @@ describe('R-F · C-2：真跑 renderNetBoard 的元素树层序（viewSeat 0/1�
             + `${playerOfSide(side, seat)}（实际 ${String(block.dataset.player)}）`)
             .toBe(String(playerOfSide(side, seat)));
         }
-        // ④ **左右归属**（R6 的核心）：视觉左→右 必须等于 `NET_BOTTOM_SIDES`
-        const visual = visualOrderOfBottom(bottom!, chain, RULES);
-        const visualSides = visual.map((n) => (isClass(n, 'net-info-block') ? String(n.dataset.netSeat) : 'hands'));
-        const expectedVisual = [...NET_BOTTOM_SIDES.slice(0, 1), 'hands', ...NET_BOTTOM_SIDES.slice(1)];
-        console.log(`  ----- viewSeat=${seat} · 底部行视觉左→右（grid-column 解算）-----\n`
-          + `  ${visualSides.join(' · ')}`);
-        expect(visualSides, `viewSeat=${seat}：底部行的视觉左右必须与 NET_BOTTOM_SIDES `
-          + `（现为 [${NET_BOTTOM_SIDES.join(', ')}]）一致，且手牌区在**中间**`
-          + `（实际：${visualSides.join(' · ')}）`).toEqual(expectedVisual);
-        // ⑤ 手牌区在 DOM 里也**恒在中间**（与视觉一致；DOM 位置不是红线的对象，但两处不一致就是
-        //    "DOM 对、看着反"的温床 —— 例如有人把信息块 append 到手牌区**之后**又靠 order 挪回来）
+        // ④ **左右列已退役**（R8-5 的判据迁移，**不是删除**）：R6~R7 期间这一条解算的是
+        //    `grid-column: 1 / 3`（"谁在左、谁在右"）。R8-5 之后信息块与手牌区**各自一整行**，
+        //    左右语义整体消失 ⇒ 现在钉两件事：
+        //      a) 三块解出的 `grid-column` 必须是**整行** `1 / -1`（不是某一列）；
+        //      b) 样式表里**不许**再有把它们按列摆放的规则（旧的 `grid-column: 1` / `3` 回潮即红）。
+        //    ⚠️ 为什么不能保留旧判据：旧解算器（`visualOrderOfBottom`）对 `1 / -1` 一律返回
+        //    `Infinity` ⇒ 排序退化成 **DOM 顺序**，而 DOM 顺序恰好就是它期望的值 —— 那条断言会
+        //    **永远为真且不查任何东西**（假绿）。它已被删除；五行行序的新模型在
+        //    `tests/ui/net-board-grid.test.ts` 的 **G-7**（展平盒树 + 解 `grid-row`）。
+        const colOf = (n: StubNode): string | null => cssPropOf(n, [...chain, bottom!, n], RULES, 'grid-column');
+        const dispOf = (n: StubNode): string | null => cssPropOf(n, [...chain, bottom!, n], RULES, 'display');
+        console.log(`  ----- viewSeat=${seat} · 底部三块解出的 grid-column / display（信息块应全是整行「1 / -1」）-----\n`
+          + `  ${bottom!.children.map((n) => `${isClass(n, 'net-info-block') ? String(n.dataset.netSeat) : 'hands'}:`
+            + ` grid-column=${String(colOf(n))} display=${String(dispOf(n))}`).join(' · ')}`);
+        for (const n of infoBlocks) {
+          expect(colOf(n), `viewSeat=${seat}：两块信息块的 grid-column 必须是**整行**（\`1 / -1\`），`
+            + `实际 ${String(colOf(n))} —— 左右列已随 R8-5 退役（信息块各占一整行、上下镜像）`)
+            .toMatch(/^1\s*\/\s*-1$/);
+        }
+        // `.net-hands` **不是** `.net-board` 的 grid item（它是 `display: contents` 的容器），
+        // 所以它没有、也不该有 `grid-column`/`grid-row` —— 它的**子节点**（两块手牌区）才是 grid item。
+        // 这里按**级联解算**钉住那个 contents（不是文本匹配：写着 `display: contents` 但被后来的
+        // 规则覆盖掉，也会在这条上现形）。
+        expect(dispOf(handsBlocks[0]), `viewSeat=${seat}：.net-hands 必须是 display: contents `
+          + '（否则两块手牌区不是 .net-board 的 grid item，第 6 节的 grid-row 声明还在却**静默不生效**）')
+          .toBe('contents');
+        expect(dispOf(bottom!), `viewSeat=${seat}：.net-bottom 必须是 display: contents（同上）`)
+          .toBe('contents');
+        const staleColumnRules = RULES.filter((r) =>
+          /(?:^|;|\s)grid-column\s*:/.test(r.body) && /\.net-info-block|\.net-bottom\s*>/.test(r.selector)
+          && !/1\s*\/\s*-1/.test(r.body));
+        expect(staleColumnRules.map((r) => `${r.selector} { ${r.body.trim()} }`),
+          `viewSeat=${seat}：styles-net.css 里仍有把底部信息块/手牌区按**列**摆放的规则`
+          + '（R8-5 之后它们是整行；残留的列指派会把它们挤回某一列）').toEqual([]);
+        // ⑤ 手牌区在 DOM 里也**恒在中间**（DOM 位置不是红线的对象，但两处不一致就是
+        //    "DOM 对、看着反"的温床 —— 例如有人把信息块 append 到手牌区**之后**）
         const domOrder = bottom!.children.map((n) => (isClass(n, 'net-info-block') ? 'info' : isClass(n, 'net-hands') ? 'hands' : '?'));
-        expect(domOrder, `viewSeat=${seat}：底部行的 DOM 顺序必须是 [信息块, 手牌区, 信息块]`).toEqual(['info', 'hands', 'info']);
+        expect(domOrder, `viewSeat=${seat}：底部容器的 DOM 顺序必须是 [信息块, 手牌区, 信息块]`).toEqual(['info', 'hands', 'info']);
         // ⑥ DOM 顺序里的侧别必须等于 `NET_BOTTOM_SIDES`（**改常量必须同时改这两条腿**）
         expect(infoBlocks.map((n) => String(n.dataset.netSeat)), `viewSeat=${seat}：信息块进 DOM 的顺序`
           + `必须等于 NET_BOTTOM_SIDES（现为 [${NET_BOTTOM_SIDES.join(', ')}]）`)
@@ -633,25 +797,42 @@ describe('R-F · C-2：真跑 renderNetBoard 的元素树层序（viewSeat 0/1�
         const handsRoot = descendants(root).find((n) => isClass(n, 'net-hands'))!;
         const inside = descendants(handsRoot).filter((n) => isClass(n, 'hand'));
         expect(inside.length, `viewSeat=${seat}：两条 .hand 必须都在同一个 .net-hands 里`).toBe(2);
-        // ③ **视觉手序由 CSS `order` 决定**（不是 DOM 顺序）：`.net-hand-area` 上必须有按座位的
-        //    order 规则，且解算出的视觉顺序与"对手在上"一致（`viewSeat=0` → P1 在上、P0 在下）
+        // ③ **视觉手序由 CSS 决定**（不是 DOM 顺序）：R8-5 起是 `.net-hand-area-{foe,self}` 的
+        //    **`grid-row`**（对手 2 / 自己 4；`.net-hands` 是 `display: contents` ⇒ 两块手牌区
+        //    直接是 `.net-board` 的 grid item）。解算出的上下顺序必须与"**对手在上**"一致
+        //    （`viewSeat=0` → P1 在上、P0 在下；`viewSeat=1` 镜像）。
+        //
+        //    ⚠️ **R8-5 的判据迁移（不是削弱）**：旧版解的是 `.net-hands.net-view-N > .net-hand-area[…]`
+        //    的四条 `order`。行号改由 `grid-row` 承担后，再留着 `order` 就是**两套真相**
+        //    （规格 §4 红线 7）⇒ 那四条已删除，这条断言换到新的承重声明上，判据强度不变：
+        //    仍然要求"视觉顺序 ≠ DOM 顺序（DOM 恒 [P0, P1]）**且**这个顺序真的来自样式表"。
         const handsChain = descendants(root).filter((n) => isClass(n, 'net-board'));
         const areas = handsRoot.children.filter((n) => isClass(n, 'net-hand-area'));
         expect(areas.length, `viewSeat=${seat}：.net-hands 里应有两块 .net-hand-area`).toBe(2);
+        const rowOfArea = (a: StubNode): number => {
+          const raw = cssPropOf(a, [...handsChain, handsRoot, a], RULES, 'grid-row');
+          return raw === null ? Number.POSITIVE_INFINITY : Number.parseInt(raw, 10);
+        };
         const visualAreas = areas
-          .map((a, i) => ({ p: String(a.dataset.player), i, o: cssOrderOf(a, [...handsChain, handsRoot, a], RULES) }))
-          .sort((x, y) => (x.o - y.o) || (x.i - y.i));
+          .map((a, i) => ({ p: String(a.dataset.player), i, row: rowOfArea(a) }))
+          .sort((x, y) => (x.row - y.row) || (x.i - y.i));
         // 对手的牌在上面（viewSeat=0 时对手 = P1、viewSeat=1 时对手 = P0）
         const foePlayer = String(1 - seat);
-        console.log(`  viewSeat=${seat} · 手牌区视觉上→下（CSS order 解算）: P${visualAreas.map((x) => Number(x.p) + 1).join(' 然后 P')}`);
+        console.log(`  viewSeat=${seat} · 手牌区视觉上→下（CSS grid-row 解算）: `
+          + visualAreas.map((x) => `P${Number(x.p) + 1}(grid-row ${x.row === Number.POSITIVE_INFINITY ? '无' : x.row})`).join(' 然后 '));
         expect(visualAreas[0].p, `viewSeat=${seat}：视觉**上**带必须是**对手**的手牌（P${Number(foePlayer) + 1}）`
-          + `—— 这一条只能由 CSS order 表达，DOM 顺序必须恒 [P0, P1]`)
+          + `—— 这一条只能由 CSS（grid-row，按侧）表达，DOM 顺序必须恒 [P0, P1]`)
           .toBe(foePlayer);
-        // ④ 反空集合：order 必须**真的**来自样式表（若两条规则都没了，解算会退化成 DOM 顺序，
-        //    而 DOM 顺序恰好也是 [P0, P1]，上面那条会**碰巧**绿 —— 所以钉住"按侧/按座位的 order 规则存在"）
-        const orderRules = RULES.filter((r) => /(?:^|;|\s)order\s*:/.test(r.body) && /\.net-hand-area/.test(r.selector));
-        expect(orderRules.length, 'styles-net.css 里没有针对 .net-hand-area 的 order 规则'
-          + '（"谁在上/下"只剩 DOM 顺序这一条腿，而这正是红线不许动的）').toBeGreaterThanOrEqual(2);
+        // ④ 反空集合：两个行号必须**真的**来自样式表、且**互不相同**（若规则没了，两块都是 `Infinity`
+        //    ⇒ 排序退化成 DOM 顺序 = [P0, P1]，而"对手在上"会**碰巧**在某个座位下绿）
+        const areaRows = areas.map(rowOfArea);
+        expect(areaRows.every((r) => Number.isFinite(r)), 'styles-net.css 里没有给 .net-hand-area 的 grid-row'
+          + '（"谁在上/下"只剩 DOM 顺序这一条腿，而这正是红线不许动的）').toBe(true);
+        expect(new Set(areaRows).size, `两块手牌区的 grid-row 必须不同（同值 ⇒ 排在同一行/退化）`
+          + `，实际 ${areaRows.join(' / ')}`).toBe(2);
+        const rowRules = RULES.filter((r) => /(?:^|;|\s)grid-row\s*:/.test(r.body) && /\.net-hand-area/.test(r.selector));
+        expect(rowRules.length, 'styles-net.css 里没有针对 .net-hand-area 的 grid-row 规则'
+          + '（行号必须来自样式表，不许靠 DOM 顺序）').toBeGreaterThanOrEqual(2);
       }
     } finally {
       await drainRaf();
@@ -660,49 +841,65 @@ describe('R-F · C-2：真跑 renderNetBoard 的元素树层序（viewSeat 0/1�
   });
 
   /**
-   * R6 的**CSS 解析边界**（诚实披露）：本文件的解析器是简版（`选择器 { 体 }`，不递归 `@media`），
-   * 于是 `@media` 里的规则**整块被跳过** —— 这里替它把话说清楚，免得有人把"解算结果"读成
-   * "所有断点都验过了"。
+   * R6 的**CSS 解析边界**（**R8-5 更正**：旧的说明是错的，这里改成**正面守卫**）。
    *
-   * 为什么这是**对的**（不是偷懒）：桩没有布局引擎，判不了"窗口够不够宽"；而媒体查询里的规则若
-   * 被当成无条件规则参与解算，会把竖排层序/上下手序判错。所以 R6 的窄屏规则**故意**只写
-   * "退回单列 + 清掉 grid-column"，不写任何 `order`（见 styles-net.css 第 6 节末尾）。
-   * 窄屏观感只能人眼验 —— 这是本任务明确保留的人眼项。
+   * 本文件的解析器是简版（`选择器 { 体 }`，**不递归条件块**）。旧注释写的是"`@media` 里的规则
+   * **整块被跳过**" —— ⚠️ **实测更正**：`@media` 的**前导**（`@media (max-width: …) `）确实被跳过，
+   * 但它**内部**的规则会被当成**无条件规则**混进规则表。R6 时之所以没出问题纯属**巧合**：
+   * 那条媒体查询里唯一会给信息块解出 `grid-column: auto` 的选择器组以 `.net-hands` 结尾，
+   * 而 `selectorMatches` 是**从右往左**匹配的 ⇒ 对信息块的祖先链天然不命中（不是设计，是运气）。
+   *
+   * R8-5 把窄屏那套取舍整个删掉了（信息块与手牌区现在**各自一整行**，堆叠就是默认形态；
+   * 媒体查询里那三条规则全部无效），所以这条从"承认解析器会漏掉媒体查询"改成**正面守卫**：
+   * 本文件**不许再有任何条件块** —— 于是那条真实缺陷对本文件**结构上不可能**触发。
    */
-  it('R6-4. CSS 解析器跳过 @media（窄屏规则不参与解算）—— 边界声明，防"以为验过了"', () => {
-    expect(netCss, 'styles-net.css 已不再包含 @media 断点（R6 的窄屏取舍被删？）').toContain('@media');
-    const mediaSelectorRules = RULES.filter((r) => /@media/.test(r.selector) || /@media/.test(r.body));
-    expect(mediaSelectorRules.map((r) => r.selector), '@media 的规则漏进了解算器的规则表'
-      + '（简版解析器应整块跳过它；否则其内部的 order/grid-column 会被当成无条件规则）').toEqual([]);
+  it('R6-4. styles-net.css 不得再有任何条件块（@media/@supports/@container）—— 解析器不递归它', () => {
+    // 判据必须走**去注释**后的源码：注释里当然可以出现 "@media" 这个词（本文件的说明就写了），
+    // 拿裸 `netCss` 做 toContain 会被注释满足 —— 那正是本项目反复栽过的"注释补位假绿"。
+    expect(stripComments(netCss), 'styles-net.css 里出现了条件块（@media / @supports / @container）'
+      + '：简版解析器会把块**内部**的规则当成**无条件规则**混进规则表（R6 的窄屏取舍已随 R8-5 删除，'
+      + '现在没有需要条件块的地方）').not.toMatch(/@(?:media|supports|container)\b/);
+    const conditionalRules = RULES.filter((r) =>
+      /@(?:media|supports|container)/.test(r.selector) || /@(?:media|supports|container)/.test(r.body));
+    expect(conditionalRules.map((r) => r.selector), '条件块的规则漏进了解算器的规则表').toEqual([]);
   });
 
   /**
    * R6-5：**布局引擎之外的两条承重声明**（桩查不到、但一旦丢了页面就整体走样）。
    *
-   * 为什么必须单列一条（诚实边界：桩只解算 `order` / `grid-column`，**不模拟 flex/grid 的盒模型**）：
+   * 为什么必须单列一条（诚实边界：本文件的解算器只解"哪条声明生效"，**不模拟 flex/grid 的盒模型**）：
    *  - **`.net-grid` 的 `display: grid`**：R1 的"三个纵向的列"是 grid 语义，但样式表里**没有**
    *    写 `display`（`styles.css:23` 的 `.board-grid` 是 `display: flex; flex-direction: column`）
    *    ⇒ 三条线会被**纵向堆成三行**（"三个纵向的列"退化成"三条横带"，正是 R1 要修的观感）。
-   *    本文件的层序解算器**看不见**这个（它只查列内的 `order`），所以必须有一条源码级判据。
-   *  - **`.net-bottom` 的列模板**：`max-content minmax(max-content, auto) max-content`
-   *    —— 中列必须是 `max-content` 下界（否则手牌区会被两侧信息块挤窄，R6 的"手牌区居中、
-   *    左右留白对称"就不成立）。
-   *  这两条都是**文本代理**（证明"声明写了"，证明不了浏览器算出来的观感）—— 观感属于人眼项。
+   *    本文件的层序解算器**看不见**这个（它只查列内的层序），所以必须有一条源码级判据。
+   *  - **R8-5 换掉的那一条**：旧版这里钉的是 `.net-bottom` 的三列模板
+   *    （`max-content minmax(max-content, auto) max-content`）。**左右三列已不存在**（信息块与
+   *    手牌区现在各自一整行），所以判据换成新机制的两条承重声明：
+   *      · `.net-board` 必须是 **grid**（`grid-row` 在 flex column 下**完全无效**）；
+   *      · `.net-bottom` 与 `.net-hands` 必须是 **`display: contents`**（它们的子节点才可能成为
+   *        `.net-board` 的 grid item）——少了这一条，`grid-row` 声明还在却**静默不生效**。
+   *    行为腿（真跑 + 展平盒树解出五行）在 `tests/ui/net-board-grid.test.ts` 的 **G-7**；
+   *    这条只是"声明真的写了"的**文本代理**（观感仍属人眼项）。
    */
-  it('R6-5. 承重布局声明：.net-grid 必须是三列 grid、.net-bottom 的列模板必须让中列按内容定宽', () => {
+  it('R6-5. 承重布局声明：.net-grid 三列 grid、.net-board 单列 grid、两块底部容器 display: contents', () => {
     const gridRule = RULES.find((r) => r.selector.trim() === '.net-grid');
     expect(gridRule, 'styles-net.css 里找不到 .net-grid 的规则').toBeTruthy();
     expect(gridRule!.body, '.net-grid 没写 display: grid —— 会继承 .board-grid 的 flex column，'
       + '三条线被纵向堆成三行（"三个纵向的列"失效）').toMatch(/display:\s*grid/);
     expect(gridRule!.body, '.net-grid 没有三列模板（三条线并排靠 grid-auto-flow: column，'
       + '写死模板更稳）').toMatch(/grid-template-columns:\s*repeat\(3,/);
-    const bottomRule = RULES.find((r) => r.selector.trim() === '.net-bottom');
-    expect(bottomRule, 'styles-net.css 里找不到 .net-bottom 的规则（底部行没有布局）').toBeTruthy();
-    expect(bottomRule!.body, '.net-bottom 的列模板必须让中列（手牌区）按**内容**定宽：'
-      + '`max-content minmax(max-content, auto) max-content`（用 1fr 会把手牌区挤窄）')
-      .toMatch(/grid-template-columns:\s*max-content\s+minmax\(max-content,\s*auto\)\s+max-content/);
-    // 手牌区不得被两侧信息块挤歪：中列的两侧留白对称 ⇒ 左右列必须**同宽**（同一份 max-content）
-    //   —— 这条由列模板的字面量承载（两个 max-content 必须完全一样），上面那条正则已钉死。
+    // ── R8-5：两行容器 ──
+    const boardRule = RULES.find((r) => r.selector.trim() === '.net-board');
+    expect(boardRule, 'styles-net.css 里找不到 .net-board 的规则（五行网格没有容器）').toBeTruthy();
+    expect(boardRule!.body, '.net-board 不是 grid —— R8-5 的五行靠 `grid-row` 指派，'
+      + '而它在 flex column / block 下完全无效（视觉顺序会静默退回 DOM 顺序）').toMatch(/display:\s*grid/);
+    for (const sel of ['.net-bottom', '.net-hands']) {
+      const rule = RULES.find((r) => r.selector.trim() === sel);
+      expect(rule, `styles-net.css 里找不到 ${sel} 的规则（R8-5 的 display: contents 写在哪？）`).toBeTruthy();
+      expect(rule!.body, `${sel} 必须是 display: contents —— 否则它的子节点不是 .net-board 的 grid item，`
+        + '第 6 节的 `grid-row` 声明还在却**静默不生效**（视觉顺序悄悄退回 DOM 顺序）')
+        .toMatch(/display:\s*contents/);
+    }
   });
 
   /* ==========================================================================
@@ -892,6 +1089,496 @@ describe('R-F · C-2：真跑 renderNetBoard 的元素树层序（viewSeat 0/1�
       await drainRaf();
       restore();
       warn.mockRestore();
+    }
+  });
+});
+
+/* ============================================================================
+ * G2 修正 R8-2 收尾（独立评审的 C-1 / I-1 / I-4）：**三条"看起来已经实现、
+ * 其实没有任何机检"的承重声明**
+ *
+ *  · **C-1**：点数 >10 的溢流数字被甩到**整块棋盘**上。成因是两条：①它是 `position: absolute`
+ *    而 `.battery` 在本页被中和成 `static`（`.net-side`/`.net-lane-band`/`.net-grid` 都没有
+ *    position）⇒ 包含块一路退化到 `.net-board`；②`.battery` 与 `.battery-overflow` **共用一条
+ *    规则体**、体里 `transform: none` ⇒ 它自己的 `translateY(-50%)` 被覆盖。修法是把它变成
+ *    `.battery` 的**流内 flex 项**（`position: static`），从根上取消"依赖 positioned 祖先"这件事。
+ *  · **I-1**：整条 `.scan-horiz` 横扫链**零守卫**（评审的 5 条变异全绿）。
+ *  · **I-4**：`.net-lane-band .stack-slot .battery` 是死选择器兼"防弹衣"（把"能量槽挂回槽内"
+ *    的错误形态中和成好看的样子）—— 删掉后，本组的行为腿与 `render-net.test.ts` 的 CSS 腿
+ *    会一起报红。
+ *
+ * ⚠️ **诚实边界（本组统一）**：桩没有布局引擎 —— "数字到底压在哪个像素上""横条好不好看"
+ * 只能人眼在 5173 上验。本组能证明的是**声明层（由样式表真实解算）+ 元素树**：
+ * 哪些声明在目标链上生效、节点挂在哪、类被加还是被删。
+ * ========================================================================== */
+
+describe('R8-2 收尾 · C-1 溢流数字 / I-1 横扫链 / I-4 防弹衣', () => {
+  /** 祖先链（**类名造桩**，不装 DOM）：`.net-board > .net-grid > .net-lane-band > .net-side > …`。 */
+  const chainOf = (...classes: string[]): StubNode[] =>
+    ['net-board', 'net-grid', 'net-lane-band', 'net-side', ...classes].map((c) => cssNode(c));
+
+  /**
+   * **剔掉关键帧/@ 产物**的规则表（本组所有"按选择器语义解算属性"的检查都用它）。
+   *
+   * ⚠️ 为什么必须：本文件的 `cssRules` 是**简版**解析器，`@keyframes` 的每一步会被切成一条
+   * "选择器 = `from` / `to` / `0%` / `100%`"的怪规则 —— 而这类**空类**选择器在
+   * `compoundMatches` 下**命中一切**（`need.every(...)` 对空集恒真）。后果是**假绿**：
+   * 删掉真正的 `.net-lane-band .battery-overflow { transform: none }` 之后，
+   * `@keyframes net-battery-cell-in` 里的 `transform: translateX(8px)` 会顶上来满足断言
+   * （我第一版就撞上了这个 —— 必须在这里把它挡掉，否则本组的 C-1 腿是假的）。
+   * ⚠️ 这不是"放松判据"：被剔掉的只有**关键帧步骤**与 `@` 规则，真选择器一条不少。
+   * ⚠️ **M-1′ 修正**：`%` 那条必须**锚定成"整条选择器就是一个百分比"**（`/^\d+(?:\.\d+)?%$/`）。
+   *    旧写法 `sel.includes('%')` 会顺手剔掉**真规则** —— 例如
+   *    `.net-lane-band .battery-overflow[data-foo*="%"] { position: absolute }`
+   *    （选择器里出现 `%` 的合法形态）会被静默丢弃 ⇒ 一条真的会生效的覆盖在守卫里**隐形**。
+   *    `from`/`to` 保持**精确匹配**（`/^(?:from|to)$/`），同理。
+   */
+  const REAL_RULES: CssRule[] = RULES.filter((r) => {
+    const sel = r.selector.trim();
+    if (sel === '' || sel.startsWith('@')) return false;
+    if (/^(?:from|to|\d+(?:\.\d+)?%)$/.test(sel)) return false;
+    return true;
+  });
+
+  /**
+   * 一条规则是否把 `node` 当作**选择器主体**（最后一段复合选择器）命中。
+   *
+   * ⚠️ 为什么不能用裸 `selectorMatches`：它允许主体绑到链上的**任意祖先**（对"链尾就是被查的
+   * 节点"的 `order` 用法够用），于是 `.net-lane-band .battery` 会被算成"也命中 `.battery-overflow`"
+   * （链上有个 `.battery` 祖先）—— C-1 的"共享规则体"判据会被这条**假命中**搞成假红。
+   * 选择器组（`.a, .b { }`）**逐段**判：C-1 的原始形态正是"一条体写给两个元素"。
+   */
+  function ruleHitsAsSubject(rule: CssRule, node: StubNode, chain: StubNode[]): boolean {
+    return rule.selector.split(',').some((segRaw) => {
+      const seg = segRaw.trim();
+      if (seg === '') return false;
+      const parts = seg.split(/\s+/).filter(Boolean);
+      return compoundMatches(parts[parts.length - 1], node) && selectorMatches(seg, chain);
+    });
+  }
+
+  /**
+   * **本解析器不建模、但浏览器里能压过一切类规则的层叠形态**：命中即**抛错**（响亮）。
+   *
+   * 评审实测（三条都曾**全绿**，而浏览器里三条都真的生效、C-1 原样复现）：
+   *  · `#x .battery-overflow { position: absolute }` —— ID 在旧权重模型里被算成 0，规则被当成"没命中"；
+   *  · `.net-lane-band .battery-overflow { position: absolute !important }` —— `!important` 被丢弃；
+   *  · `.battery-overflow { transform: translateY(-50%) !important }` —— 低权重的 `!important`
+   *    在源序/权重上都该输给 `.net-lane-band .battery-overflow`，浏览器里却赢。
+   *
+   * **为什么"报错"而不是"支持"**：`!important` 的胜出顺序（important 之间按权重、再按源序，
+   * 且与普通声明分层）与 ID 的匹配（桩节点**没有 id**，`#x` 在本模型里根本无法命中）都不是
+   * 三行正则能模型化的东西 —— 半吊子"支持"只会把假绿换成更难发现的假绿。**禁掉**才是安全解：
+   * 一旦这类形态出现在"管能量槽"的规则里，守卫就拒绝回答（而不是猜一个答案）。
+   *
+   * ⚠️ 判定"这条规则是否在讲这个元素"时，先把 ID 从选择器里**剥掉**再比主体/祖先链：
+   *    `#x .battery-overflow` 剥成 `.battery-overflow` ⇒ 主体确实是溢流数字 ⇒ 报错。
+   *    不剥的话 `#x` 会让 `compoundMatches` 直接判"不命中"，于是这条规则被**放过**（旧行为）。
+   */
+  function assertModelableCascade(
+    node: StubNode, chain: StubNode[], rules: CssRule[], prop: string,
+  ): void {
+    const re = new RegExp(`(?:^|;|\\s)${prop}\\s*:\\s*([^;]+)`);
+    for (const r of rules) {
+      const m = re.exec(r.body);
+      if (!m) continue;
+      const important = /!important/i.test(m[1]);
+      for (const segRaw of r.selector.split(',')) {
+        const seg = segRaw.trim();
+        if (seg === '') continue;
+        const hasId = /#/.test(seg);
+        const readsInline = /\[style\b|\bstyle\s*=/.test(seg);
+        if (!important && !hasId && !readsInline) continue;
+        const stripped = seg.replace(/#[\w-]+/g, ' ').replace(/\s+/g, ' ').trim();
+        const parts = stripped.split(/\s+/).filter(Boolean);
+        if (parts.length === 0) continue;
+        if (!compoundMatches(parts[parts.length - 1], node)) continue;
+        if (!selectorMatches(stripped, chain)) continue;
+        const why = important ? `声明带 \`!important\`（${prop}: ${m[1].trim()}）`
+          : hasId ? '选择器含 **ID**（`#…`）'
+            : '选择器在读**内联样式**（`[style…]`）';
+        throw new Error(`[R8-2 C-1 守卫] ${why}，而本解析器只建模"类/属性选择器 + 权重 + 源序"：`
+          + `这类形态在浏览器里会压过它、在守卫里却是**隐形**的（C-1 那族"守卫全绿、页面照错"）。`
+          + `禁止用 \`${seg}\` 覆盖能量槽的 \`${prop}\` —— 请改用明确的类选择器，`
+          + `或把这条规则从 styles-net.css 里删掉。`);
+      }
+    }
+  }
+
+  /**
+   * 与 `cssPropOf` **同一套解算规则**（权重优先、同权重取源序靠后），但只认把 `node` 当
+   * **选择器主体**的规则。
+   *
+   * ⚠️ 为什么本组一律用它而不是 `cssPropOf`：后者用的 `selectorMatches` 允许主体绑到链上的
+   * **任意祖先** ⇒ `.net-lane-band .battery { position: static }` 会被算成"也管 `.battery-overflow`"
+   * （链上有个 `.battery` 祖先）。实测后果：C-1 的变异（把 `position: static` 从溢流数字上挪走、
+   * 只留"共享体 + transform:none"）会被这条**假命中**掩盖 —— 只有主体判据能抓到它。
+   *
+   * ## 等价条件（与 `specificityOf` 的头注同一条，这里再钉一次，因为它才是"用的人会踩的坑"）
+   * 本助手**只**在本文件当前的规则形态下等价于浏览器级联：**纯类/属性选择器** + **无 `!important`**
+   * + **无 ID** + **无内联样式** + 解算**非继承**属性。前四条由 `assertModelableCascade` **强制**
+   * （命中即抛错，不猜）；第五条由本组的属性清单保证（`position`/`transform`/`order`/`flex`/
+   * `min-width`/`display`/`flex-direction`/`animation-name` 全非继承）。
+   * ⚠️ `cssPropOf`（不带 Subject）**没有**这层保护 —— 它是给 `order`/`grid-column` 等
+   * "链尾即被查节点"的老用法用的，别拿它做新的承重判据。
+   */
+  function cssPropOfSubject(
+    node: StubNode, chain: StubNode[], rules: CssRule[], prop: string,
+  ): string | null {
+    assertModelableCascade(node, chain, rules, prop);
+    let best: { spec: number; no: number; raw: string } | null = null;
+    const re = new RegExp(`(?:^|;|\\s)${prop}\\s*:\\s*([^;]+)`);
+    for (const r of rules) {
+      const m = re.exec(r.body);
+      if (!m) continue;
+      if (!ruleHitsAsSubject(r, node, chain)) continue;
+      const spec = specificityOf(r.selector);
+      if (!best || spec > best.spec || (spec === best.spec && r.no > best.no)) {
+        best = { spec, no: r.no, raw: m[1].trim() };
+      }
+    }
+    return best ? best.raw : null;
+  }
+
+  /** `@keyframes <name> { … }` 的整块体（花括号配平）。
+   *  ⚠️ **不能用本文件的 `cssRules`**：它按 `选择器 { 体 }` 切，而 keyframe 体里**还有**一对
+   *  花括号 —— `100%` 那一步会被切成一条"选择器 = `@keyframes x { 12%`"的怪规则（静默失去判别力）。
+   *  这正是不写这个解析器就"看起来验过了"的地方。 */
+  function keyframesBody(name: string): string | null {
+    const src = stripComments(netCss);
+    const at = src.indexOf(`@keyframes ${name}`);
+    if (at < 0) return null;
+    const open = src.indexOf('{', at);
+    if (open < 0) return null;
+    let depth = 0;
+    for (let i = open; i < src.length; i += 1) {
+      if (src[i] === '{') depth += 1;
+      else if (src[i] === '}') { depth -= 1; if (depth === 0) return src.slice(open + 1, i); }
+    }
+    return null;
+  }
+
+  /** keyframe 块内 `0% { … }` / `100% { … }` / `from { … }` / `to { … }` 的**体**。 */
+  function keyframeStep(body: string, step: string): string | null {
+    const m = new RegExp(`(?:^|\\})\\s*${step}\\s*\\{([^}]*)\\}`).exec(body);
+    return m === null ? null : m[1];
+  }
+
+  it('G-5. C-1 样式腿：溢流数字是**流内 flex 项**（static / transform 未被覆盖 / 盒内左端），且不与 `.battery` 共享规则体', () => {
+    const batteryChain = chainOf('battery');
+    const battery = batteryChain[batteryChain.length - 1];
+    const overflowChain = chainOf('battery', 'battery-overflow');
+    const overflow = overflowChain[overflowChain.length - 1];
+
+    const batPos = cssPropOfSubject(battery, batteryChain, REAL_RULES, 'position');
+    const ofPos = cssPropOfSubject(overflow, overflowChain, REAL_RULES, 'position');
+    const ofTransform = cssPropOfSubject(overflow, overflowChain, REAL_RULES, 'transform');
+    console.log(`\n===== C-1 · styles-net.css 里溢流数字的生效声明（由样式表真实解算）=====\n`
+      + `  .net-lane-band .battery           position = ${batPos}\n`
+      + `  .net-lane-band .battery-overflow  position = ${ofPos} / transform = ${ofTransform}`
+      + ` / order = ${cssPropOfSubject(overflow, overflowChain, REAL_RULES, 'order')}`
+      + ` / flex = ${cssPropOfSubject(overflow, overflowChain, REAL_RULES, 'flex')}`);
+
+    // ① **不是绝对定位**（C-1 的直接成因）：绝对定位时它的包含块会退化到 `.net-board`
+    //    （它与视口之间**唯一**的 positioned 祖先）⇒ 数字落在整块棋盘的竖直中点、水平最左 +4px。
+    expect(ofPos, '远程页 `.battery-overflow` 仍是 `position: absolute`（或没有 net 规则中和它）——'
+      + '它的包含块会退化到 `.net-board`，数字被甩到**整块棋盘**的竖直中点、水平最左（C-1）')
+      .toBe('static');
+    // ② `transform` 必须被**它自己的**规则中和：styles.css 的 `translateY(-50%)` 是竖版居中；
+    //    "与 `.battery` 共享规则体 + 体里 transform:none"那种写法会让它既丢居中、又保持绝对定位。
+    expect(ofTransform, '远程页 `.battery-overflow` 的 `transform` 没有被中和 ——'
+      + 'styles.css 的 `translateY(-50%)` 是**竖版**居中；横置后垂直居中应由父级 `align-items: center` 承担')
+      .toBe('none');
+    // ③ **不存在"共享规则体"形态**：没有任何一条规则**同时**被 `.battery` 链与 `.battery-overflow`
+    //    链**当作主体**命中、且体里写了 position/transform。那正是 C-1 的写法（一条体写给两个元素）。
+    const shared = REAL_RULES.filter((r) => /(?:^|;|\s)(?:position|transform)\s*:/.test(r.body)
+      && ruleHitsAsSubject(r, battery, batteryChain) && ruleHitsAsSubject(r, overflow, overflowChain));
+    expect(shared.map((r) => r.selector), 'styles-net.css 里存在一条**同时**命中 `.battery` 与'
+      + ' `.battery-overflow` 的规则体（并写了 position/transform）—— 这正是 C-1 的形态：'
+      + '数字继承了 `.battery` 的 `transform: none`，自己却仍是绝对定位').toEqual([]);
+    // ④ 静态判定"positioned 祖先链里没有 `.net-board`"（两种可静态判定的形态必居其一）：
+    //    数字是 `static`（①已钉）**或** `.battery` 是 `relative`（能当包含块）。
+    expect(ofPos === 'static' || batPos === 'relative', '`.battery-overflow` 既不是 static、'
+      + '`.battery` 也不是 relative ⇒ 它的包含块是 `.net-board`（C-1 的包含块退化路径）').toBe(true);
+    // ⑤ 反空集合：`.battery` 自身也不得是绝对定位（否则 styles.css 的绝对定位接管，包含块变成
+    //    `.net-board`、`top/bottom: 6px` 把它拉成整板高 —— 与 render-net.test.ts 的 R1-1 同一件事，
+    //    这里从**链上**再钉一次。⚠️ 回退形态里那条 `left/right:-120px` 对 **static** 元素不适用
+    //    （CSS 2.1 §9.4.3）⇒ 它不产生位移，第二轮 M-2′ 的更正见 styles-net.css 的注释）
+    expect(batPos, '`.net-lane-band .battery` 不是 static/relative（styles.css 的绝对定位会生效）')
+      .toMatch(/^(?:static|relative)$/);
+    // ⑥ **流内项的完整形状**：`order: -1`（落左端）+ `flex: 0 0 auto`（不参与压缩），
+    //    外壳让位交给 `min-width: 0`（见下一条 —— R8-2 第二轮 I-2′ 说明）。
+    expect(cssPropOfSubject(overflow, overflowChain, REAL_RULES, 'order'),
+      '`.battery-overflow` 没有 `order: -1` —— 它在 DOM 里是**外壳之后**的兄弟，'
+      + '不加 order 就会落在能量槽**右端**（与"从右往左点亮"的头部不同侧）').toBe('-1');
+    expect(cssPropOfSubject(overflow, overflowChain, REAL_RULES, 'flex'),
+      '`.battery-overflow` 的 flex 不是 `0 0 auto`（它会被压缩/拉伸，数字变形）').toMatch(/0\s+0\s+auto/);
+    const shellChain = chainOf('battery', 'battery-shell');
+    const shell = shellChain[shellChain.length - 1];
+    // ⚠️ **R8-2 第二轮 · I-2′：这里原本还有一条 `.battery-shell` 的 `flex: 1 1 auto` 断言，已删除。**
+    //    为什么删（评审实测 + 复算一致）：`.battery-shell` 有 `width: 100%`，在 row flex 里
+    //    `flex-basis: auto` 取的就是那个 `width` —— **单子项**时 `flex-grow` 恒不可见，
+    //    有溢流数字时起作用的是 `flex-shrink`（默认值就是 1）⇒ `flex: 1 1 auto` 与 `flex: 0 1 auto`
+    //    在这两种形态下**渲染等价**。实测：删掉 `flex: 1 1 auto` ⇒ 本文件 18 passed 全绿（**正确的绿**），
+    //    而等价写法 `flex: 0 1 auto` 反而报红 ⇒ 那条断言认的是**写法**、不是行为（假红方向）。
+    //    真正**有牙齿**的是下面 `min-width: 0`（改成 `auto` 会红：10 格 `flex: 1 1 0` 的自动最小
+    //    尺寸下界会把外壳顶回原宽）。删这一条**不是放松整条 G-5**：本用例其余断言
+    //    （`position: static`／不与 `.battery` 共享规则体／`order: -1`／`flex: 0 0 auto`／
+    //    `display: flex`／`flex-direction: row`／`min-width: 0`）一条未动，且新增了 G-5c。
+    expect(cssPropOfSubject(shell, shellChain, REAL_RULES, 'min-width'), '`.battery-shell` 没有 `min-width: 0`'
+      + '（10 格 `flex: 1 1 0` 的内容下界会把外壳顶回原宽，数字仍溢出）').toBe('0');
+    // ⑦ 父级必须是**横排 flex**（`order`/`flex` 只在 flex 容器里有意义）
+    expect(cssPropOfSubject(battery, batteryChain, REAL_RULES, 'display'), '`.net-lane-band .battery` 不是 flex 容器')
+      .toBe('flex');
+    expect(cssPropOfSubject(battery, batteryChain, REAL_RULES, 'flex-direction'))
+      .toMatch(/^row$/);
+  });
+
+  /**
+   * **G-5c：C-1 守卫自身的盲区**（R8-2 第二轮 · I-1′ + M-1′ —— "守守卫的那条腿"）。
+   *
+   * G-5 有多可信，完全取决于两件事：①`REAL_RULES` 没有把**真规则**悄悄剔掉；
+   * ②解算器**不建模**的层叠形态（`!important` / ID / 内联样式）没有藏在样式表里。
+   * 评审两轮实测证明这两件都能**静默**发生（第一轮：keyframe 产物顶替真声明；第二轮：
+   * `%` 过滤过宽会剔掉真规则、`#x` 在旧权重模型里被算成 0）。所以这里把**守卫的输入**也钉住 ——
+   * 这是本组唯一一条"不查某个属性值、只查规则集合与解析器前提"的腿。
+   */
+  it('G-5c. C-1 守卫的前提：REAL_RULES 只剔关键帧步骤 / 以 `.battery-overflow` 为主体的规则必须真命中 / 无 !important·ID·内联', () => {
+    const overflowChain = chainOf('battery', 'battery-overflow');
+    const overflow = overflowChain[overflowChain.length - 1];
+
+    // ① **REAL_RULES 无损性**：被剔掉的只允许是"关键帧步骤 / `@` 规则"（M-1′ 的根因形态）。
+    //    旧写法 `sel.includes('%')` 会把带 `%` 的真选择器一起吃掉 ⇒ 真覆盖在守卫里隐形。
+    const dropped = RULES.filter((r) => !REAL_RULES.includes(r)).map((r) => r.selector.trim());
+    const badDrops = dropped.filter((s) => !(s.startsWith('@') || /^(?:from|to|\d+(?:\.\d+)?%)$/.test(s)));
+    expect(badDrops, '`REAL_RULES` 剔掉了**真规则**（不是关键帧步骤 / `@` 规则）—— 那条规则会在守卫里'
+      + '**隐形**：它能覆盖溢流数字的定位，而 C-1 的判据看不见它').toEqual([]);
+
+    // ② **死规则守卫**：凡是**主体**是 `.battery-overflow` 且写定位/朝向的规则，都必须在
+    //    `renderNetBoard` 真会产出的链（席位 × 侧别，形态由 G-1 钉住）之一上命中 —— 否则它是
+    //    **死规则**：看起来在管 C-1 的元素，实际一条都不命中
+    //    （评审的形态：`.battery-to .battery-overflow { position: absolute }` —— 它在浏览器里
+    //     也什么都不做，但"看起来已经处理了溢流数字的定位"正是本组要拒绝的读法）。
+    //    ⚠️ 诚实边界：这里枚举的是**已知真实形态**；将来若出现别的条件形态（新的座位类 / 媒体查询分支），
+    //    这条会**假红** —— 那时把该形态加进 `realOverflowChains` 即可（比"死规则静默存在"可接受）。
+    const realOverflowChains: StubNode[][] = [];
+    for (const seat of [0, 1]) {
+      for (const kind of ['foe', 'self']) {
+        realOverflowChains.push([
+          cssNode('net-board', `net-view-${seat}`), cssNode('board-grid', 'net-grid'),
+          cssNode('net-lane-band'), cssNode('net-side', `net-side-${kind}`),
+          cssNode('battery'), cssNode('battery-overflow'),
+        ]);
+      }
+    }
+    const allOverflowChains = [overflowChain, ...realOverflowChains];
+    const subjectIsOverflow = (sel: string): boolean => sel.split(',').some((segRaw) => {
+      const parts = segRaw.trim().split(/\s+/).filter(Boolean);
+      return parts.length > 0 && compoundMatches(parts[parts.length - 1], overflow);
+    });
+    const overflowControlRules = REAL_RULES.filter((r) =>
+      /(?:^|;|\s)(?:position|transform|left|right|top|bottom)\s*:/.test(r.body) && subjectIsOverflow(r.selector));
+    console.log(`\n===== G-5c · 以 .battery-overflow 为主体、写定位/朝向的规则（${overflowControlRules.length} 条）=====\n`
+      + overflowControlRules.map((r) => `  ${r.selector}`).join('\n'));
+    expect(overflowControlRules.length, '样式表里没有任何"给溢流数字写定位"的规则'
+      + '（连 `.net-lane-band .battery-overflow` 都没了 ⇒ 下面那条判据会退化成空断言）')
+      .toBeGreaterThan(0);
+    const deadOnes = overflowControlRules.filter((r) => !r.selector.split(',')
+      .some((segRaw) => allOverflowChains.some((ch) => selectorMatches(segRaw.trim(), ch))));
+    expect(deadOnes.map((r) => r.selector), '以 `.battery-overflow` 为**主体**的规则在真实形态上'
+      + '一条都不命中（死规则：写错了祖先/类名）—— 它看起来在管 C-1 的元素，实际什么都不做。'
+      + '要么改成能命中的选择器，要么删掉').toEqual([]);
+
+    // ③ **解析器前提的正向钉住**（G2 修正 **R8-5 · I-1：提到共享模块，两个文件同一份实现**）：
+    //    本组解算的那些属性上不得出现 `!important` / ID / 内联样式选择器 —— 它们是
+    //    `cssPropOfSubject` 等价于浏览器级联的前提（违反时 `assertModelableCascade` 会抛错，
+    //    但那条只在"**本次真的解算到那条规则**"时才生效 ⇒ 判据面太窄）。
+    //    共享腿 `assertNoUnmodelableCascade` 是**全表扫描**，见 `./net-css-parse` 的说明。
+    expect(() => assertNoUnmodelableCascade(REAL_RULES, MODELED_PROPS)).not.toThrow();
+  });
+
+  it('G-5b. C-1 行为腿：点数 >10 时真产出溢流数字，且它在 `.battery` 盒内（6 处，文本 = 线值）', async () => {
+    const restore = installDom();
+    try {
+      // 每条线 3 张 `fire-5`（印刷值 5）⇒ 线值 15 > 10 ⇒ 每个能量槽都该产出数字
+      const root = renderFrame(0, 3, 'fire-5');
+      const overflows = descendants(root).filter((n) => isClass(n, 'battery-overflow'));
+      console.log(`\n===== C-1 行为腿 · 线值 15 的一帧里产出的溢流数字 = ${overflows.length} 处 =====`);
+      expect(overflows.length, '线值 15 时每个能量槽（3 线 × 2 侧 = 6 个）都应产出 `.battery-overflow`'
+        + '（少了 = 那条分支没跑；多了 = 落点重复）').toBe(6);
+      for (const num of overflows) {
+        const bat = num.parentElement as StubNode;
+        // ① **在盒内**：数字必须是 `.battery` 的**直接子项**（"流内 flex 项"的树前提。
+        //    ⚠️ 绝对定位时它同样是子项 ⇒ 这一条**单独不足以**证 C-1，承重的是 G-5 的 CSS 腿）
+        expect(isClass(bat, 'battery'), '`.battery-overflow` 的父节点不是 `.battery`（落点错了）').toBe(true);
+        // ② 祖先链里不得出现链路槽（与 I-4 的防弹衣腿同源）
+        const ancestors: StubNode[] = [];
+        for (let p = bat.parentElement as StubNode | null; p; p = p.parentElement as StubNode | null) ancestors.push(p);
+        expect(ancestors.some((a) => isClass(a, 'stack-slot')),
+          '溢流数字的祖先链里有 `.stack-slot`（能量槽被挂回链路框里了？）').toBe(false);
+        // ③ 文本 = 引擎写在该能量槽上的点数（防止"数字写死 / 不随线值更新"）
+        expect(bat.dataset.points, '能量槽上的 data-points 不是线值 15（3 × fire-5）').toBe('15');
+        expect(num.text, '溢流数字的文本必须等于该能量槽的点数').toBe(bat.dataset.points);
+      }
+    } finally {
+      await drainRaf();
+      restore();
+    }
+  });
+
+  it('G-6. I-1 行为腿：真跑 `syncScanOverlays` —— 「宽 > 高」加 `.scan-horiz`、「高 > 宽」去掉（双向同步）', async () => {
+    const restore = installDom();
+    try {
+      const g = globalThis as unknown as { document: { body: StubNode } };
+      const body = g.document.body;
+      // 造 6 个能量槽（2 玩家 × 3 线），外壳挂进 body —— 只有"实测矩形"决定方向，与形状无关
+      for (const player of [0, 1]) {
+        for (const line of [0, 1, 2]) {
+          const bat = makeStubEl('div');
+          bat.classList.add('battery');
+          bat.dataset.player = String(player);
+          bat.dataset.line = String(line);
+          const shell = makeStubEl('div');
+          shell.classList.add('battery-shell');
+          bat.appendChild(shell);
+          body.appendChild(bat);
+        }
+      }
+      const s = createGame({ seed: 'scan-horiz-seed', draftStarter: 0, firstToPlay: 1 });
+      (s as { phase: string }).phase = 'turn';
+      const overlays = (): StubNode[] => body.children.filter((n) => isClass(n, 'scan-overlay'));
+
+      // ── ① 远程页形状（横置：宽 300 > 高 21）⇒ 6 个层盒都必须**有** `.scan-horiz` ──
+      setStubRect({ left: 40, top: 80, width: 300, height: 21 });
+      syncScanOverlays(s);
+      expect(overlays().length, '6 个 stable 态能量槽 ⇒ 每线每玩家一个扫描层（共 6）').toBe(6);
+      for (const ov of overlays()) {
+        expect(isClass(ov, 'scan-horiz'), '外壳「宽 300 > 高 21」时扫描层必须有 `.scan-horiz` ——'
+          + '没有它就会继续用 `battery-scan-sweep`（走 `top`）在横条上"左右两半各闪一下"。'
+          + '⚠️ 这条分支此前**零机检**：桩的 getBoundingClientRect 恒 0 ⇒ `0 > 0` 恒假').toBe(true);
+        // 层盒是 **`document.body` 的直接子节点** —— 这正是 `.scan-overlay.scan-horiz .scan-line`
+        // 那条选择器**不能**带 `.net-lane-band` 前缀的原因（带了就永不命中、静默退回竖扫）
+        expect(ov.parentElement, '扫描层必须是 document.body 的直接子节点'
+          + '（挂进列里 ⇒ 带 `.net-lane-band` 前缀的选择器会永不命中）').toBe(body);
+        expect(ov.style.left, '层盒没有按实测矩形重定位（left）').toBe('40px');
+        expect(ov.style.width, '层盒没有按实测矩形重定位（width）').toBe('300px');
+        expect(ov.style.height, '层盒没有按实测矩形重定位（height）').toBe('21px');
+      }
+
+      // ── ② 热座形状（竖条：宽 92 < 高 202）⇒ 类必须被**删掉**（双向同步，不留陈旧类）──
+      setStubRect({ left: 0, top: 0, width: 92, height: 202 });
+      syncScanOverlays(s);
+      const again = overlays();
+      expect(again.length, '第二次同步后层盒数不应变化（注册表复用，不重建 —— 动画不重启靠它）').toBe(6);
+      for (const ov of again) {
+        expect(isClass(ov, 'scan-horiz'), '外壳「宽 92 < 高 202」（热座页形状）时**不得**有 `.scan-horiz`'
+          + ' —— 类没被删掉就是"陈旧类"：层盒跨重渲染复用，只加不删的实现会把它留给下一个页面')
+          .toBe(false);
+      }
+    } finally {
+      await drainRaf();
+      restore();
+    }
+  });
+
+  it('G-7. I-1 CSS 腿：横扫选择器不带"永不命中"前缀 / keyframe 从右往左 / 格渐入在 X 轴', () => {
+    // ① 选择器从**解析器**走（不是文本子串）：拿真实祖先链（body ⇒ 层盒 ⇒ 线）解 `animation-name`。
+    //    带 `.net-lane-band` 前缀的写法会解出 null —— 那正是"永不命中"的表现（横置电池静默竖扫）。
+    const layer = cssNode('scan-overlay', 'scan-horiz');
+    const line = cssNode('scan-line');
+    const anim = cssPropOfSubject(line, [cssNode('body'), layer, line], REAL_RULES, 'animation-name');
+    console.log(`\n===== I-1 · 「.scan-overlay.scan-horiz .scan-line」解出的 animation-name = ${anim}`);
+    expect(anim, '`.scan-horiz` 的扫描线拿不到 `net-battery-scan-sweep` —— `styles-net.css` 那条规则的'
+      + '选择器带了 `.net-lane-band` 前缀（层是 `document.body` 的直接子节点 ⇒ 规则**永不命中**，'
+      + '横置电池会静默退回竖扫）').toBe('net-battery-scan-sweep');
+
+    // ② 方向：`0%` 与 `100%` 都必须用 `right` 定位，且 `0%` 更靠**右**（right 更小）⇒ 从右往左扫
+    const kb = keyframesBody('net-battery-scan-sweep');
+    expect(kb, 'styles-net.css 里没有 `@keyframes net-battery-scan-sweep`（横扫动画没了）').toBeTruthy();
+    const step0 = keyframeStep(kb!, '0%');
+    const step100 = keyframeStep(kb!, '100%');
+    expect(step0, '`@keyframes net-battery-scan-sweep` 缺 `0%` 一步').toBeTruthy();
+    expect(step100, '`@keyframes net-battery-scan-sweep` 缺 `100%` 一步').toBeTruthy();
+    const pctOf = (body: string): { prop: string; val: number } | null => {
+      const m = /(?:^|;|\s)(left|right)\s*:\s*(-?\d+(?:\.\d+)?)%/.exec(body);
+      return m === null ? null : { prop: m[1], val: Number(m[2]) };
+    };
+    const a = pctOf(step0!);
+    const b = pctOf(step100!);
+    expect(a, '`0%` 那一步没有 left/right 的百分比定位（写成 `top` = 又变回竖扫）').not.toBeNull();
+    expect(b, '`100%` 那一步没有 left/right 的百分比定位').not.toBeNull();
+    console.log(`  0% → ${a!.prop}: ${a!.val}%　/　100% → ${b!.prop}: ${b!.val}%`);
+    expect([a!.prop, b!.prop], 'keyframe 必须用 `right` 定位（改成 `left` = 扫描线与"从右往左点亮"相反）')
+      .toEqual(['right', 'right']);
+    expect(a!.val, '`0%` 必须比 `100%` 更靠**右**（`right` 更小）—— 否则扫描方向是从左往右，'
+      + '与"从右往左点亮"的裁决相反').toBeLessThan(b!.val);
+
+    // ③ 格渐入：覆盖必须存在，且它引用的 keyframe 位移在 **X 轴**
+    //    （styles.css 的 `battery-cell-in` 是 `translateY(6px)` 的**竖版**语义；删掉覆盖就回落它）
+    const cell = cssNode('battery-cell', 'filled');
+    const cellChain = [cssNode('net-lane-band'), cssNode('battery', 'points-changed'),
+      cssNode('battery-cells'), cell];
+    expect(cssPropOfSubject(cell, cellChain, REAL_RULES, 'animation-name'), '横置能量槽的格渐入覆盖没了 ——'
+      + '会回落到 styles.css 的竖版 `battery-cell-in`（`translateY(6px)` 在横条上读作"从下方飘进来"）')
+      .toBe('net-battery-cell-in');
+    const cellKb = keyframesBody('net-battery-cell-in');
+    expect(cellKb, 'styles-net.css 里没有 `@keyframes net-battery-cell-in`').toBeTruthy();
+    const from = keyframeStep(cellKb!, 'from');
+    expect(from, '`@keyframes net-battery-cell-in` 缺 `from` 一步').toBeTruthy();
+    expect(from!, '`net-battery-cell-in` 的位移必须在 **X 轴**（`translateX`）')
+      .toMatch(/translateX\(/);
+    expect(from!, '`net-battery-cell-in` 里出现了 `translateY(` —— 那是竖版语义'
+      + '（把 X 改回 Y = I-1 的变异 5）').not.toMatch(/translateY\(/);
+  });
+
+  it('G-8. I-4 行为腿：防弹衣已拆 —— 每处 `.battery` 的祖先链里都没有 `.stack-slot`，且按链解出 static', async () => {
+    const restore = installDom();
+    try {
+      for (const seat of [0, 1] as const) {
+        const root = renderFrame(seat);
+        const batteries = descendants(root).filter((n) => isClass(n, 'battery'));
+        // ⚠️ "恰好 6 个"放在**最后**：能量槽挂回链路槽时数量会翻倍（两处落点），但那条变异
+        //    **首先**该报出的是下面那条**结构**判据（"祖先链里有 `.stack-slot`"）—— 那才是
+        //    "防弹衣已拆"要说的话。这里先只保证集合非空（防"0 个电池"让下面的循环变成空判据）。
+        expect(batteries.length, `viewSeat=${seat}：页面上一个 .battery 都没有（能量槽没产出？）`)
+          .toBeGreaterThan(0);
+        const chainUp = (n: StubNode): StubNode[] => {
+          const out: StubNode[] = [];
+          for (let p = n.parentElement as StubNode | null; p; p = p.parentElement as StubNode | null) out.push(p);
+          return out.reverse();
+        };
+        for (const bat of batteries) {
+          const chain = chainUp(bat);
+          // ① **防弹衣拆掉的判据**：能量槽不得出现在 `.stack-slot` 的子树里。
+          //    旧 CSS 里那条 `.net-lane-band .stack-slot .battery`（同权重、后源序）会把
+          //    "挂回槽内"的错误形态中和成好看的样子 ⇒ 结构错了也不报错；删掉它之后，
+          //    这条与 G-1/G-1b 会一起报红（变异实测见报告）。
+          expect(chain.some((a) => isClass(a, 'stack-slot')), `viewSeat=${seat}：有一个 .battery 挂在`
+            + ` .stack-slot 的**子树**里 —— 用户裁决是"能量槽放在链路框外"。挂回去会重新命中`
+            + ` styles.css 的 \`.stack-slot.pN .battery { left/right: -120px }\`（⚠️ 那两条对 static`
+            + ` 元素**不产生位移** —— CSS 2.1 §9.4.3；可见的错法只是"以一根横条出现在链路框内侧"）`)
+            .toBe(false);
+          // ② 按**真实祖先链**解出 position（不是拿选择器文本子串比）
+          expect(cssPropOfSubject(bat, [...chain, bat], REAL_RULES, 'position'), `viewSeat=${seat}：按真实祖先链`
+            + ` 解出的 .battery position 不是 static —— styles.css 的绝对定位会接管`
+            + `（包含块变成 .net-board，能量槽被拉成整板高）`)
+            .toBe('static');
+        }
+        // ③ 反空集合：链上必须真的有 `.net-lane-band` / `.net-side`，否则上面的解算会退化成
+        //    "没有任何规则命中"（那时 `cssPropOf` 返回 null，断言会以另一种形式假绿/假红）
+        const chain0 = chainUp(batteries[0]);
+        expect(chain0.some((a) => isClass(a, 'net-lane-band')), `viewSeat=${seat}：祖先链里没有`
+          + ' `.net-lane-band`（带全祖先的解算失效）').toBe(true);
+        expect(chain0.some((a) => isClass(a, 'net-side')), `viewSeat=${seat}：祖先链里没有 .net-side`)
+          .toBe(true);
+        // ④ 计数：恰好 6 个（3 线 × 2 侧）。放在最后 —— 挂回链路槽会让这个数翻倍（两处落点），
+        //    但那条变异"首先"该报的是上面那条**结构**判据。
+        expect(batteries.length, `viewSeat=${seat}：页面上必须恰好 6 个 .battery（3 线 × 2 侧；`
+          + ' 能量槽挂回链路槽会让它翻倍 = 两处落点）').toBe(6);
+      }
+    } finally {
+      await drainRaf();
+      restore();
     }
   });
 });
