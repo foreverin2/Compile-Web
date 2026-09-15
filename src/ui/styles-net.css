@@ -367,6 +367,11 @@
    既拿回旋钮，又**不引入第二组字面量**（`--card-w` 仍由 styles.css 那条公式从 `--card-h` 推出 ⇒ 100.57）。 */
 .net-lane-band .stack {
   --card-h: inherit;
+  /* ⚠️ **R11-1：宽度也要预留** —— 用户实机："链路的宽度也和长度一样，会随着卡牌的放入而变化"。
+     空的 `.stack` 宽度为 0 ⇒ `.stack-slot`（内容宽 + padding）在放第一张牌时被撑开 ⇒ 网格轨道跟着变，
+     整列横向抖一下。长度那边由下面的 `min-height` 预留，**宽度这边此前没有任何预留**。
+     `min-width: var(--card-w)` ⇒ 空链路也占住"一张卡的宽度"（协议视觉更宽时由协议主导，不影响）。 */
+  min-width: var(--card-w);
   min-height: calc(var(--card-h) + 6 * 0.462 * var(--card-w));
 }
 
