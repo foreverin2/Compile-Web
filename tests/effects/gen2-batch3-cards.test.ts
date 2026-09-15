@@ -137,7 +137,7 @@ describe('diversity', () => {
     void src;
   });
 
-  it('diversity-6 end: deletes itself when fewer than 3 protocols on field (txt 修改记录【8】4→3)', () => {
+  it('diversity-6 end: deletes itself when fewer than 4 protocols on field (R14-3：阈值 3 → 4，文本与规则同步)', () => {
     const s = setup();
     s.turnPlayer = 0;
     s.step = 'end';
@@ -147,18 +147,19 @@ describe('diversity', () => {
     expect(t).toBeTruthy();
     resolveTrigger(s, t!);
     runStack(s);
-    expect(s.players[0].stacks[0]).toHaveLength(0); // <3 种 → 自删
+    expect(s.players[0].stacks[0]).toHaveLength(0); // <4 种 → 自删
   });
 
-  it('diversity-6 end: survives when ≥3 protocols on field (cond false → NOT collected)', () => {
+  it('diversity-6 end: survives when ≥4 protocols on field (cond false → NOT collected)', () => {
     const s = setup();
     s.turnPlayer = 0;
     s.step = 'end';
     const src = placeSrc(s, 'diversity-6', 0, 0);
     placeSrc(s, 'fire-5', 0, 1); // fire
-    placeSrc(s, 'death-0', 1, 1); // death → 场上 3 种（diversity/fire/death）
+    placeSrc(s, 'death-0', 1, 1); // death
+    placeSrc(s, 'life-0', 1, 2); // life → 场上 4 种（diversity/fire/death/life）
     const trigs = collectTriggers(s, 'end');
-    // 场上 ≥3 种协议 → 删除条件不满足 → 收集前自动跳过（不弹结算按钮），卡自然存活
+    // 场上 ≥4 种协议 → 删除条件不满足 → 收集前自动跳过（不弹结算按钮），卡自然存活
     expect(trigs.find((x) => x.cardUid === src.uid)).toBeUndefined();
     expect(trigs).toHaveLength(0);
     expect(s.players[0].stacks[0].some((c) => c.uid === src.uid)).toBe(true);

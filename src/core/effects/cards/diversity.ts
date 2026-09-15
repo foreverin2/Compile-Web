@@ -118,12 +118,14 @@ function* diversity5Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResu
   yield { op: 'discard', uid: ans.selected[0] };
 }
 
-/** diversity-6 顶（end，top:true）：回合结束：若场上没有至少3种不同协议的卡牌，删除此牌
+/** diversity-6 顶（end，top:true）：回合结束：若场上的不同协议种类小于4，删除此牌
+ *  G2 修正 R14-3（2026-09-16 用户裁决）：阈值 3 → 4（用户："多元6文本改为小于4，而不是至少3个"
+ *  + "那算是规则也要改动"）—— 权威文本 compile2文本.txt 与数据、规则三处同步改。
  *  （txt 修改记录 2026-09-05【8】：至少4种→至少3种；英文 End: If there are not at least 3
  *  different protocols on cards in the field, delete this card.
  *  2026-09-12 用户澄清：计数只算【正面朝上】的卡（含被覆盖的正面卡），反面朝下的场卡不计入） */
 function* diversity6End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
-  if (fieldProtocolCountFaceUp(ctx.s) < 3) yield { op: 'delete', uid: ctx.card.uid };
+  if (fieldProtocolCountFaceUp(ctx.s) < 4) yield { op: 'delete', uid: ctx.card.uid };
 }
 
 

@@ -96,6 +96,9 @@ const PROTOCOL_BY_ID: ReadonlyMap<string, ProtocolDef> = new Map(
 const PROTOCOL_OLD_NAMES: ReadonlyMap<string, string> = new Map([
   ['water', '水'], ['fire', '火'], ['light', '光'], ['darkness', '暗'], ['life', '生'], ['death', '死'],
   ['spirit', '灵魂'], ['psychic', '念能'], ['clarity', '明晰'], ['smoke', '烟雾'], ['unity', '统一'],
+  // G2 修正 R14-3（2026-09-16 用户改名）：下面是**改名前**的旧名，保留为输入别名 ——
+  // 愤怒→暴怒 / 刚性→僵化 / 柔性→灵活（用户：「请同步至游戏内的卡牌和协议的文本与名字，以及图鉴内容中」）
+  ['wrath', '愤怒'], ['rigidity', '刚性'], ['flexibility', '柔性'],
 ]);
 
 /** 检索索引条目：一张牌的两类归一化键（defId / 协议中文名+分值；旧名别名另存） */

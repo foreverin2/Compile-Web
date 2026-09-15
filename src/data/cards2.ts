@@ -196,7 +196,7 @@ export const ALL_CARD_DEFS_2: CardDef[] = [
   { defId: 'diversity-3', protocol: 'diversity', value: 3, top: '若此堆叠中有任何非多元的正面朝上的卡牌，你的总阈值加2。' },
   { defId: 'diversity-4', protocol: 'diversity', value: 4, middle: '翻转1张阈值小于场上不同协议卡牌数目的牌。' },
   { defId: 'diversity-5', protocol: 'diversity', value: 5, middle: '你弃置1张牌。' },
-  { defId: 'diversity-6', protocol: 'diversity', value: 6, top: '回合结束：若场上没有至少3种不同协议的卡牌，删除此牌。' },
+  { defId: 'diversity-6', protocol: 'diversity', value: 6, top: '回合结束：若场上的不同协议种类小于4，删除此牌。' },
 
   // 同化——完全改变与理解
   // 同化0：用户 2026-09-03 修订 txt（为被覆盖→未被覆盖；空?→空=无底部指令）
