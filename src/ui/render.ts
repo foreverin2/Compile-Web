@@ -5316,8 +5316,8 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   syncDiversityColors(s);
   // 2代 diversity-3 多元顶常驻：链路内非多元正面卡协议色微光 + 该线能量槽彩色流光
   syncDiversity3Fx(s);
-  // 3代（批次 D）常驻层：嫉妒0 汲取丝 / 愤怒0 剔除带 / 怠惰0 加成 / 惰性0·1 断电栅格 /
-  // 刚性7 护壁 / 色欲持有·禁编译封条 / 贪婪1 硬币堆等级（各 sync 返回自己的 active 键，统一 prune）
+  // 3代（批次 D）常驻层：嫉妒0 汲取丝 / 暴怒0 剔除带 / 怠惰0 加成 / 惰性0·1 断电栅格 /
+  // 僵化7 护壁 / 色欲持有·禁编译封条 / 贪婪1 硬币堆等级（各 sync 返回自己的 active 键，统一 prune）
   syncGen3Persistent(s);
   // 2026-09-13（用户裁决）：2~3.6s 的长寿命 FX（迷雾卡框灰光 / 透彻落点眼 / 爱意牌库光芒）也跟随卡面
   syncFollowers();

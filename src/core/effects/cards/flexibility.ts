@@ -3,7 +3,7 @@ import { registerCardEffects } from '../registry';
 import { findCard } from '../context';
 
 /**
- * 3代 柔性 flexibility（关键词：回手/偏转/翻转/抽牌/交换；座右铭：随机应变）。
+ * 3代 灵活 flexibility（关键词：回手/偏转/翻转/抽牌/交换；座右铭：随机应变）。
  * 权威卡文：src/data/cards3.ts（compile3文本.txt）；裁决：docs/3代-批3-规格与裁决清单.md
  * （RQ7-A 回手任意场牌回其主；「回手或偏转」= select-action 二选一）。
  */

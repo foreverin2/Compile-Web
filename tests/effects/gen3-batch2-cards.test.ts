@@ -7,7 +7,7 @@ import { executeAction } from '../../src/core/game';
 import { makeCard, pickFirst, resolveAllChoices } from '../helpers';
 
 /**
- * 3代 批2（怠惰/愤怒/伏击/支点/压制）效果测试——代表性用例。
+ * 3代 批2（怠惰/暴怒/伏击/支点/压制）效果测试——代表性用例。
  * 卡文：src/data/cards3.ts（compile3文本.txt）；裁决：docs/3代-批2-规格与裁决清单.md。
  */
 
@@ -127,9 +127,9 @@ describe('sloth（怠惰）', () => {
   });
 });
 
-// ============ 愤怒 wrath ============
+// ============ 暴怒 wrath ============
 
-describe('wrath（愤怒）', () => {
+describe('wrath（暴怒）', () => {
   it('wrath-0 top: highest-value cards in the line count for nothing (both sides)', () => {
     const s = setup();
     placeSrc(s, 'wrath-0', 0, 0); // 值 0

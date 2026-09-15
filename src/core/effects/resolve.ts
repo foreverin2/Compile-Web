@@ -47,13 +47,13 @@ import './cards/gluttony';
 import './cards/greed';
 import './cards/lust';
 import './cards/pride';
-// —— 3代 批2（2026-09，怠惰/愤怒/伏击/支点/压制）——
+// —— 3代 批2（2026-09，怠惰/暴怒/伏击/支点/压制）——
 import './cards/sloth';
 import './cards/wrath';
 import './cards/ambush';
 import './cards/fulcrum';
 import './cards/overwhelm';
-// —— 3代 批3（2026-09，动量/新星/惰性/刚性/柔性）——
+// —— 3代 批3（2026-09，动量/新星/惰性/僵化/灵活）——
 import './cards/momentum';
 import './cards/nova';
 import './cards/inertia';
@@ -440,7 +440,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
         (card.defId === 'ice-4' && card.faceUp && !cardCommandDisabled(s, card, 'bottom'))
       ) {
         pushLog(s, `${card.defId} 不可被翻转，跳过`);
-        // 3代 特效（批次 D）：免疫反馈事件——UI 据此让"刚性7 挡下翻转"可见
+        // 3代 特效（批次 D）：免疫反馈事件——UI 据此让"僵化7 挡下翻转"可见
         if (rigidity7Immune(s, card)) {
           gameBus.emit({ type: 'card:immune', state: s, payload: { uid: card.uid, defId: card.defId, kind: 'flip' } });
         }
@@ -630,7 +630,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       // player 缺省 = 效果属主（water-2/spirit-4）；psychic-2 指定 player=对手。
       // 执行/log/动画事件统一走共享入口 rearrangeProtocolSlots（控制组件重排动作同路径）。
       const target = op.player ?? pe.player;
-      // sourceDefId：3代支点3/柔性3 的交换附加层靠它区分"效果交换"与"玩家行动重排"（后者不带）
+      // sourceDefId：3代支点3/灵活3 的交换附加层靠它区分"效果交换"与"玩家行动重排"（后者不带）
       rearrangeProtocolSlots(s, target, op.a, op.b, pe.sourceDefId);
       // 3代「重排协议」事件（C4 一切重排都算）：重排动作发起者 = pe.player（效果属主）→
       // 触发自身侧 after-self-rearrange（nova-2 底）与双方 after-any-rearrange（momentum-1 底）

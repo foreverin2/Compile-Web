@@ -5,7 +5,7 @@ import { cardPointValue } from '../../state/create';
 import { setControl } from '../../rules/control';
 
 /**
- * 3代 愤怒 wrath（关键词：翻转/删除/控制权/抽牌；座右铭：睚眦必报）。
+ * 3代 暴怒 wrath（关键词：翻转/删除/控制权/抽牌；座右铭：睚眦必报）。
  * 权威卡文：src/data/cards3.ts（compile3文本.txt）；裁决：docs/3代-批2-规格与裁决清单.md
  * （B2 含被盖的「所有正面朝上的牌」；B3 失去控制权必做——持有必失、后句随失去执行、未持有整句 fizzle；
  *  B10 卡数并列拥有者选）。

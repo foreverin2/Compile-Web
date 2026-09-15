@@ -3,9 +3,9 @@ import { registerCardEffects } from '../registry';
 import { deckTopAvailable } from '../context';
 
 /**
- * 3代 刚性 rigidity（关键词：翻转/反面打出/抽牌/不可移动；座右铭：坚不可摧）。
+ * 3代 僵化 rigidity（关键词：翻转/反面打出/抽牌/不可移动；座右铭：坚不可摧）。
  * 权威卡文：src/data/cards3.ts（compile3文本.txt）；裁决：docs/3代-批3-规格与裁决清单.md
- * （C8 手牌逐链选卡；C10 刚性7 顶对手必选抽1或打出1；C11 刚性7 底不可翻移=仅 faceUp 顶卡免疫，
+ * （C8 手牌逐链选卡；C10 僵化7 顶对手必选抽1或打出1；C11 僵化7 底不可翻移=仅 faceUp 顶卡免疫，
  *  引擎 executeOp flip/shift 守卫（rigidity7Immune），本文件不注册底）。
  */
 

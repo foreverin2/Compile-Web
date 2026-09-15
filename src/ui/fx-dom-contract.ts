@@ -187,11 +187,11 @@ export const FX_DOM_CONTRACT: readonly FxDomHook[] = [
     // G2 Task 3F2 · R2 同类风险审计：`battery` → `battery battery-`（**相邻两个类 token**）。
     // 变异 A03 实测：裸 `battery` 被 `battery-shell` / `battery-cells` / `battery-cell` / `battery-overflow`
     // 满足（都在 renderBattery 内部），于是把产出点 :173 改成 `batterybox` 时守卫仍绿，而 batteryNode
-    // 取不到 → 愤怒0 中缝虚线与惰性0 的能量槽 rect 全丢。产出点永远是 `` `battery battery-${state}` ``
+    // 取不到 → 暴怒0 中缝虚线与惰性0 的能量槽 rect 全丢。产出点永远是 `` `battery battery-${state}` ``
     // （`.battery-bulge/full/burst` 是 styles.css:302-354 的承重类，必然紧跟其后）。
     // （同样不能用"尾空格"：`const battery = …` 会被满足 —— 见 `.deck` 那条的注释。）
     probe: ['battery battery-'],
-    note: '能量槽：愤怒0 中缝虚线要跨「两条能量槽之间」而非整行，惰性0 也要能量槽 rect（batteryNode）',
+    note: '能量槽：暴怒0 中缝虚线要跨「两条能量槽之间」而非整行，惰性0 也要能量槽 rect（batteryNode）',
   },
 
   // —— 手牌区 / 卡节点 ——
@@ -338,17 +338,17 @@ export const FX_DOM_CONTRACT: readonly FxDomHook[] = [
   { hook: '.g3sync-envy0-borrow', kind: 'class', category: 'B', requiredBy: ['gen3-control.ts'], note: '嫉妒0「借 N」数值标' },
   { hook: '.g3sync-envy0-glow', kind: 'class', category: 'B', requiredBy: ['gen3-control.ts'], note: '嫉妒0 涡心辉光' },
   { hook: '.g3sync-envy0-ticks', kind: 'class', category: 'B', requiredBy: ['gen3-control.ts'], note: '嫉妒0 刻度环' },
-  { hook: '.g3sync-wrath0-seam', kind: 'class', category: 'B', requiredBy: ['gen3-control.ts'], note: '愤怒0 中缝虚线（只跨两条能量槽之间）' },
-  { hook: '.g3sync-wrath0-chip', kind: 'class', category: 'B', requiredBy: ['gen3-control.ts'], note: '愤怒0「最高档剔除」文字标' },
+  { hook: '.g3sync-wrath0-seam', kind: 'class', category: 'B', requiredBy: ['gen3-control.ts'], note: '暴怒0 中缝虚线（只跨两条能量槽之间）' },
+  { hook: '.g3sync-wrath0-chip', kind: 'class', category: 'B', requiredBy: ['gen3-control.ts'], note: '暴怒0「最高档剔除」文字标' },
   { hook: '.g3sync-sloth0-glow', kind: 'class', category: 'B', requiredBy: ['gen3-control.ts'], note: '怠惰0 暖灰边框光' },
   { hook: '.g3sync-sloth0-ripple', kind: 'class', category: 'B', requiredBy: ['gen3-control.ts'], note: '怠惰0 灰红涟漪' },
   { hook: '.g3sync-sloth0-link', kind: 'class', category: 'B', requiredBy: ['gen3-control.ts'], note: '怠惰0 覆盖者连线（无条件创建，位置每帧算）' },
   { hook: '.g3sync-badge', kind: 'class', category: 'B', requiredBy: ['gen3-control.ts'], note: '常驻层数值徽标（.envy/.sloth/.lust/.greed 由同一批 appendChild 造）' },
   { hook: '.g3sync-inertia0-field', kind: 'class', category: 'B', requiredBy: ['gen3-control.ts'], note: '惰性0 链路灰白边框光' },
   { hook: '.g3sync-inertia1-edge', kind: 'class', category: 'B', requiredBy: ['gen3-control.ts'], note: '惰性1 自身下缘粗灰边' },
-  { hook: '.g3sync-rig7-maze', kind: 'class', category: 'B', requiredBy: ['gen3-control.ts'], note: '刚性7 荧光黄迷宫纹' },
-  { hook: '.g3sync-rig7-shield', kind: 'class', category: 'B', requiredBy: ['gen3-control.ts'], note: '刚性7 护盾纹' },
-  { hook: '.g3sync-rig7-anchor', kind: 'class', category: 'B', requiredBy: ['gen3-control.ts'], note: '刚性7 四角锚钉（querySelectorAll 后逐个摆角）' },
+  { hook: '.g3sync-rig7-maze', kind: 'class', category: 'B', requiredBy: ['gen3-control.ts'], note: '僵化7 荧光黄迷宫纹' },
+  { hook: '.g3sync-rig7-shield', kind: 'class', category: 'B', requiredBy: ['gen3-control.ts'], note: '僵化7 护盾纹' },
+  { hook: '.g3sync-rig7-anchor', kind: 'class', category: 'B', requiredBy: ['gen3-control.ts'], note: '僵化7 四角锚钉（querySelectorAll 后逐个摆角）' },
   { hook: '.g3sync-lusthold-ring', kind: 'class', category: 'B', requiredBy: ['gen3-control.ts'], note: '色欲持有红色牵引环' },
   { hook: '.g3sync-lusthold-chain', kind: 'class', category: 'B', requiredBy: ['gen3-control.ts'], note: '色欲持有牵引链' },
   { hook: '.g3sync-greed1-stack', kind: 'class', category: 'B', requiredBy: ['gen3-control.ts'], note: '贪婪1 硬币堆（等级 0 不画）' },
@@ -361,7 +361,7 @@ export const FX_DOM_CONTRACT: readonly FxDomHook[] = [
   { hook: '.gen3-pride-shock', kind: 'class', category: 'B', requiredBy: ['compiled-gen3.ts'], note: '傲慢编译冲击环' },
   { hook: '.gen3-pride-spark-wrap', kind: 'class', category: 'B', requiredBy: ['compiled-gen3.ts'], note: '傲慢编译粒子包裹层' },
   { hook: '.gen3-sloth-wave', kind: 'class', category: 'B', requiredBy: ['compiled-gen3.ts'], note: '怠惰编译波' },
-  { hook: '.gen3-wrath-spark-wrap', kind: 'class', category: 'B', requiredBy: ['compiled-gen3.ts'], note: '愤怒编译粒子包裹层' },
+  { hook: '.gen3-wrath-spark-wrap', kind: 'class', category: 'B', requiredBy: ['compiled-gen3.ts'], note: '暴怒编译粒子包裹层' },
   { hook: '.gen3-ovw-shock', kind: 'class', category: 'B', requiredBy: ['compiled-gen3.ts'], note: '压倒编译冲击环' },
   { hook: '.gen3-ovw-dust-wrap', kind: 'class', category: 'B', requiredBy: ['compiled-gen3.ts'], note: '压倒编译尘屑包裹层' },
   { hook: '.gen3-mom-shock', kind: 'class', category: 'B', requiredBy: ['compiled-gen3.ts'], note: '动量编译冲击环' },

@@ -380,7 +380,7 @@ describe('R-F · C-2 / R8-2：真跑 renderNetBoard 的元素树层序（viewSea
           .toBe(String(seat));
 
         // ── ⑦ **`.battery` 的 data-player / data-line 与所在列一致**（R8-2 的节点自描述）──
-        // 为什么这一条是承重的：6 处 FX（扫描流光 / metal-0 / mirror-0 / clarity-0 / diversity / 愤怒0）
+        // 为什么这一条是承重的：6 处 FX（扫描流光 / metal-0 / mirror-0 / clarity-0 / diversity / 暴怒0）
         // 全靠 `.battery[data-player="X"][data-line="Y"]` 定位能量槽 —— 属性写错/写漏 ⇒ 特效**静默消失**
         // （那些查询全是 `if (!node) return` 的降级，不报错）。
         // 这里从**元素树**反推（不是查源码文本）：两个能量槽必须各自带"自己那个玩家 + 本列的线号"。

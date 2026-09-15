@@ -1,9 +1,9 @@
 /**
- * 3 代（MN03/AX03）· 批次 E：**交换附加层**（支点1·3 / 柔性3）。
+ * 3 代（MN03/AX03）· 批次 E：**交换附加层**（支点1·3 / 灵活3）。
  *
  * 触发：
  *  - `stacks:swapped { player, a, b, sourceDefId }`（支点1 中「交换你的左堆叠与右堆叠」= fulcrum-1）
- *  - `protocols:rearranged { player, a|order, sourceDefId }`（支点3 中 / 柔性3 中 的"交换协议"分支）
+ *  - `protocols:rearranged { player, a|order, sourceDefId }`（支点3 中 / 灵活3 中 的"交换协议"分支）
  *
  * 与既有基础动画**叠加不替换**：
  *  - 协议交换的"两张协议卡同时平移互换"由 effects/index.ts 的 initRearrangeFx 照常播放；
@@ -12,7 +12,7 @@
  *
  * 视觉：
  *  - 支点：青蓝杠杆弧（连接两个位置）+ 两端棋盘砝码随行 + 刻度环亮一圈；
- *  - 柔性：紫罗兰飘带连接两个协议位，两端各打一个结（交换中两结互相移动到对面再解开）。
+ *  - 灵活：紫罗兰飘带连接两个协议位，两端各打一个结（交换中两结互相移动到对面再解开）。
  */
 
 const MOVE_MS = 560; // 与"再渲染后无缝衔接"的时长（重排协议基础动画用 MOVE_MS=450；这里略从容）
@@ -134,8 +134,8 @@ export function gen3FulcrumSwapFx(p: { player: number; a: number; b: number }, s
 }
 
 /**
- * 协议交换附加层（支点3 / 柔性3）：既有幽灵交换照常 → 本层加"杠杆弧 + 砝码"或"飘带两端打结"。
- * sourceDefId：'fulcrum-3' → 支点；'flexibility-3' → 柔性；其它（玩家行动重排 / 别的协议）不接管。
+ * 协议交换附加层（支点3 / 灵活3）：既有幽灵交换照常 → 本层加"杠杆弧 + 砝码"或"飘带两端打结"。
+ * sourceDefId：'fulcrum-3' → 支点；'flexibility-3' → 灵活；其它（玩家行动重排 / 别的协议）不接管。
  */
 export function gen3ProtocolSwapFx(p: { player: number; a?: number; b?: number; order?: number[]; sourceDefId?: string }): boolean {
   const src = p.sourceDefId ?? '';
@@ -180,7 +180,7 @@ export function gen3ProtocolSwapFx(p: { player: number; a?: number; b?: number; 
       l.appendChild(w);
     }
   } else {
-    // 柔性：飘带连接两个协议位，两端各打一个结（结互相移动到对面再解开）
+    // 灵活：飘带连接两个协议位，两端各打一个结（结互相移动到对面再解开）
     const { d, x1, y1, x2, y2 } = curveD(ra, rb, 0.3);
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg.setAttribute('class', 'g3swap-ribbon');

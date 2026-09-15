@@ -99,10 +99,10 @@ describe('3代卡牌效果附加层守卫（批次 B）', () => {
     expect(ts, '怠惰未按协议语法放慢翻面').toContain('api.playFlip(node, p, 750)');
   });
 
-  it('PRE 时序与设计稿一致（贪婪 420 / 怠惰 460 / 愤怒 380；暴食 600 / 压制 560）', () => {
+  it('PRE 时序与设计稿一致（贪婪 420 / 怠惰 460 / 暴怒 380；暴食 600 / 压制 560）', () => {
     expect(ts).toContain('finish(420,'); // 贪婪
     expect(ts).toContain('finish(460,'); // 怠惰
-    expect(ts).toContain('finish(380,'); // 愤怒
+    expect(ts).toContain('finish(380,'); // 暴怒
     expect(ts, '暴食粉碎吞噬未延后到 600ms').toMatch(/playShatterAt\(rect, orient, p\), 600\)/);
     expect(ts, '压制配重板未延后到 560ms').toMatch(/playShatterAt\(rect, orient, p\), 560\)/);
   });
@@ -190,7 +190,7 @@ describe('3代卡牌效果附加层守卫（批次 B）', () => {
     const resolveSrc = readFileSync(fileURLToPath(new URL('../../src/core/effects/resolve.ts', import.meta.url))).subarray(0, 4 * 1024 * 1024).toString('utf8');
     const compileBody = readFileSync(fileURLToPath(new URL('../../src/core/rules/compile-body.ts', import.meta.url))).subarray(0, 1024 * 1024).toString('utf8');
     const greedSrc = readFileSync(fileURLToPath(new URL('../../src/core/effects/cards/greed.ts', import.meta.url))).subarray(0, 1024 * 1024).toString('utf8');
-    // ① 支点3/柔性3：rearrangeProtocolSlots 必须能带 sourceDefId，且 resolve 的效果路径要传
+    // ① 支点3/灵活3：rearrangeProtocolSlots 必须能带 sourceDefId，且 resolve 的效果路径要传
     expect(swap).toContain("startsWith('fulcrum-')");
     const rearrange = readFileSync(fileURLToPath(new URL('../../src/core/actions/rearrange.ts', import.meta.url))).subarray(0, 1024 * 1024).toString('utf8');
     expect(rearrange, 'rearrangeProtocolSlots 未接收 sourceDefId 参数').toMatch(/rearrangeProtocolSlots\([\s\S]{0,160}sourceDefId\?: string/);

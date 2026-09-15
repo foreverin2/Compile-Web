@@ -2041,7 +2041,7 @@ export function initEffects(): () => void {
           playAssimDiscardExtra(node);
           window.setTimeout(() => playCutAt(rect, orient, payload, orientOf(node)), ASSIM_DISCARD_PRE_MS);
         } else if (node && gen3DiscardFx(node, payload as unknown as Gen3CardPayload, GEN3_CARD_FX_API)) {
-          // 3代点名卡牌弃牌附加层（贪婪 R1 / 怠惰 S3 / 愤怒 W2 / 支点 F1 / 动量 M1 / 新星 N2）：
+          // 3代点名卡牌弃牌附加层（贪婪 R1 / 怠惰 S3 / 暴怒 W2 / 支点 F1 / 动量 M1 / 新星 N2）：
           // 函数内部按 PRE 调度基础切割（或即时 playCut 后自清理浮层），此处不再重复基础动画
         } else if (node) {
           if (payload.triggerProtocol === 'psychic') playPsychicDiscardExtra(node, payload);
@@ -2091,7 +2091,7 @@ export function initEffects(): () => void {
         break;
       }
       case 'card:deleted':
-        // 3代点名卡牌删除附加层（暴食 G2 / 愤怒 W1 / 压制 O2 / 新星 N1）：内部即时或延后基础破碎
+        // 3代点名卡牌删除附加层（暴食 G2 / 暴怒 W1 / 压制 O2 / 新星 N1）：内部即时或延后基础破碎
         if (node && gen3DeleteFx(node, payload as unknown as Gen3CardPayload, GEN3_CARD_FX_API)) break;
         if (node && payload.triggerProtocol !== 'death' && payload.triggerProtocol !== 'hate') {
           playShatter(node, payload);
@@ -2103,7 +2103,7 @@ export function initEffects(): () => void {
         // 灰雾期间一直在）；
         // 其余翻转源（water-0 带 'water'、系统效果带 'system'）走基础翻面
         if (node) {
-          // 3代点名卡牌翻转附加层（傲慢 P2/P3/P4、怠惰 S2、愤怒 W3、伏击 A1、柔性 X1、嫉妒 E4）：
+          // 3代点名卡牌翻转附加层（傲慢 P2/P3/P4、怠惰 S2、暴怒 W3、伏击 A1、灵活 X1、嫉妒 E4）：
           // 内部调用基础 playFlip（怠惰按协议语法放慢到 750ms）
           if (gen3FlipFx(node, payload as unknown as Gen3CardPayload, GEN3_CARD_FX_API, e.state)) break;
           if (payload.triggerProtocol === 'life') playLifeFlip(node, payload);
@@ -2135,7 +2135,7 @@ export function initEffects(): () => void {
         // 2代 ice（寒冰1/2/3 偏转）→ 深蓝冰面滑道（起点雪花；卡照常基础飞行）；
         // 其余偏转源（light-2/light-3 带 'light'、系统效果带 'system'）走普通幽灵飞行
         if (node) {
-          // 3代点名卡牌偏转附加层（傲慢 P5 / 新星 N3 / 柔性 X2·X3）：内部含基础幽灵飞行
+          // 3代点名卡牌偏转附加层（傲慢 P5 / 新星 N3 / 灵活 X2·X3）：内部含基础幽灵飞行
           if (gen3ShiftFx(node, payload as unknown as Gen3CardPayload, GEN3_CARD_FX_API)) break;
           if (payload.triggerProtocol === 'darkness') playDarknessShiftBridge(node, payload);
           else if (payload.triggerProtocol === 'gravity') playGravityShiftExtra(node, payload);
@@ -2154,7 +2154,7 @@ export function initEffects(): () => void {
         }
         break;
       case 'card:deck-played':
-        // 3代点名卡牌反面打出附加层（暴食0 顶 G1 / 压制 O1 / 刚性 Y1 / 惰性 I2，含基础飞行）
+        // 3代点名卡牌反面打出附加层（暴食0 顶 G1 / 压制 O1 / 僵化 Y1 / 惰性 I2，含基础飞行）
         if (gen3FaceDownFx('deck', payload as unknown as Gen3CardPayload, GEN3_CARD_FX_API)) break;
         // 反面打出牌堆顶：仅 gravity 触发源（gravity-0/6）播品红牌库框光 + 终点黑洞 + 品红射线
         // （前置段后延后基础打出）；2代 smoke-0 迷雾反打（牌库顶 → 落点灰雾罩 + 卡从雾中现）；
@@ -2170,7 +2170,7 @@ export function initEffects(): () => void {
         } else playDeckPlay(payload);
         break;
       case 'card:hand-played':
-        // 3代点名卡牌反面打出附加层（同上；刚性3 中「在此牌正下方反面打出」走此路径）
+        // 3代点名卡牌反面打出附加层（同上；僵化3 中「在此牌正下方反面打出」走此路径）
         if (gen3FaceDownFx('hand', payload as unknown as Gen3CardPayload, GEN3_CARD_FX_API)) break;
         // playFromHand：从手牌中该卡的 rect 起飞飞入目标线链路末尾（区别于牌堆顶打出）
         // 2代 smoke-3 迷雾手牌反打 → 落点灰雾罩 + 卡从雾中现（基础飞行照常）
@@ -2180,7 +2180,7 @@ export function initEffects(): () => void {
         } else playHandPlay(payload);
         break;
       case 'card:immune':
-        // 3代（批次 D）刚性7 底「此牌不能被翻转或偏转」挡下时：护壁闪亮 + 锚钉震动
+        // 3代（批次 D）僵化7 底「此牌不能被翻转或偏转」挡下时：护壁闪亮 + 锚钉震动
         flashRigidity7Guard((e.payload as { uid?: string } | undefined)?.uid ?? '');
         break;
       case 'deck:discarded':
@@ -2387,7 +2387,7 @@ export function initRearrangeFx(): () => void {
   return gameBus.subscribe((e: GameEvent) => {
     if (e.type !== 'protocols:rearranged') return;
     playRearrangeProtocolsFx(e.payload as RearrangeProtocolsPayload);
-    // 3代（批次 E）交换附加层：支点3 = 青蓝杠杆弧 + 两端砝码；柔性3 = 紫飘带两端打结互换
+    // 3代（批次 E）交换附加层：支点3 = 青蓝杠杆弧 + 两端砝码；灵活3 = 紫飘带两端打结互换
     // （sourceDefId 非 fulcrum/flexibility 时返回 false：玩家行动重排与其它协议不受影响）
     gen3ProtocolSwapFx(e.payload as { player: number; a?: number; b?: number; order?: number[]; sourceDefId?: string });
   });

@@ -362,9 +362,9 @@ describe('G2 修正 R2 · 读侧调用点（源码守卫）', () => {
     expect(src, 'geom() 未定格特效朝向（fxOrientOf）').toMatch(/orient:\s*fxOrientOf\(node\)/);
     expect(src, 'geom() 未定格卡面朝向（orientOf）—— 卡面本地旋转的基准会丢').toMatch(/face:\s*orientOf\(node\)/);
     expect(src, 'geom() 未从 fx-orient 引入 fxOrientOf').toMatch(/import\s*\{[^}]*fxOrientOf[^}]*\}\s*from\s*'\.\/fx-orient'/);
-    // 延迟播放（新星删除 / 愤怒翻转）必须把 face 一起传下去
+    // 延迟播放（新星删除 / 暴怒翻转）必须把 face 一起传下去
     expect(src, '新星删除的定格未带上卡面朝向').toMatch(/const shot = \{ rect, orient, face: orientOf\(node\) \}/);
-    expect(src, '愤怒翻转的定格未带上卡面朝向').toMatch(/const shot = \{ rect: g\.rect, orient: g\.orient, face: g\.face \}/);
+    expect(src, '暴怒翻转的定格未带上卡面朝向').toMatch(/const shot = \{ rect: g\.rect, orient: g\.orient, face: g\.face \}/);
     expect(src, 'buildFxCardAt 的延迟调用未传 shot.face').toMatch(/api\.buildFxCardAt\(shot\.rect, shot\.orient, p, api\.extraZ, shot\.face\)/);
     expect(src, 'playFlipAt 的延迟调用未传 shot.face').toMatch(/api\.playFlipAt\(shot\.rect, shot\.orient, p, undefined, shot\.face\)/);
   });

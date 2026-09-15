@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 /**
  * 批次 E 守卫（交换附加层 + 收尾，2026-09-13）。
  * 锁四件事：
- *  ① 交换事件带 `sourceDefId`（否则分不清"支点/柔性的效果交换"与"玩家行动重排"）；
+ *  ① 交换事件带 `sourceDefId`（否则分不清"支点/灵活的效果交换"与"玩家行动重排"）；
  *  ② 两个订阅点（协议交换 / 堆叠交换）都已接入；
  *  ③ "被覆盖卡只在可见区域播放"的工具真的被用了（同步层 + 浮层卡两条路径）；
  *  ④ 性能观测（不降级只观测）与实现手册存在。
@@ -45,7 +45,7 @@ describe('批次 E 守卫：交换附加层 + 收尾', () => {
   it('被覆盖卡可见区域：工具存在 + 两条路径都在用', () => {
     expect(utilTs).toContain('export function visibleRectOf');
     expect(utilTs).toContain('export function clipInsetRightPct');
-    // 同步层（愤怒0 划除带 / 嫉妒0 源卡标记）
+    // 同步层（暴怒0 划除带 / 嫉妒0 源卡标记）
     expect(controlTs).toContain('visibleRectOf(s, c.uid)');
     expect(controlTs, '嫉妒0 源卡标记未走可见区域裁剪').toMatch(/visibleRectOf\(s, sourceUid\)/);
     // 浮层卡（伏击3 被挖出的被盖卡 / 惰性0 翻转被盖牌）

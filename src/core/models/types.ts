@@ -101,7 +101,7 @@ export type TriggerKind =
   //   色欲4 底/傲慢6 顶）/ after-self-compile（你编译后，傲慢0 顶）/ after-any-compile（任意玩家编译后，
   //   动量1/6 顶）/ after-any-clear-cache（任意玩家清缓存后，暴食1 底）/ after-own-delete（你删除牌后，
   //   贪婪0 底，执行者侧）/ after-self-rearrange（你重排协议后，新星2 底）/ after-any-rearrange（任意玩家
-  //   重排协议后，动量1 底）/ after-action-face-down-play（你用行动反面打出后，刚性2 底）
+  //   重排协议后，动量1 底）/ after-action-face-down-play（你用行动反面打出后，僵化2 底）
   | 'after-opponent-gain-control'
   | 'after-self-compile'
   | 'after-any-compile'

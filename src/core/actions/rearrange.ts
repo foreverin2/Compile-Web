@@ -25,10 +25,10 @@ export function rearrangeProtocolSlots(
   pushLog(s, `P${target + 1} 重排协议：交换位置 ${a + 1} 与 ${b + 1}`);
   // FX：重排基础动画（两张协议卡同时平移互换位置；重渲染后无缝衔接，见 effects/index.ts
   // 「重排协议基础特效」——与"交换链路"（stacks:swapped）不同的独立动画）
-  // 玩家行动重排 = 无源卡（不带 sourceDefId）；3代效果交换（支点3/柔性3）由 resolve.ts 带 sourceDefId。
+  // 玩家行动重排 = 无源卡（不带 sourceDefId）；3代效果交换（支点3/灵活3）由 resolve.ts 带 sourceDefId。
   // 2026-09-13（审计修复）：此前**没有** sourceDefId 参数 → 效果交换也发不出该字段，
   // `fx-gen3-swap.ts` 的 `g3ProtocolSwapFx` 门控（src.startsWith('fulcrum-'|'flexibility-')）
-  // 永远为假 → 支点3/柔性3 的交换附加层 100% 静默不播（"特效从不出现"类）。
+  // 永远为假 → 支点3/灵活3 的交换附加层 100% 静默不播（"特效从不出现"类）。
   gameBus.emit({ type: 'protocols:rearranged', state: s, payload: { player: target, a, b, sourceDefId } });
 }
 

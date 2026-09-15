@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
  *
  * 这一批的关键风险不是"CSS 没定义"（已有守卫），而是：
  *  ① **引擎事件没接上或语义发错**（控制权三种时刻分不清 / 判定失败无事件 / 免疫无反馈）；
- *  ② **常驻层的生效条件与引擎判定不一致**（例：愤怒0 只划除估值方一侧、惰性1 未要求未覆盖顶卡）；
+ *  ② **常驻层的生效条件与引擎判定不一致**（例：暴怒0 只划除估值方一侧、惰性1 未要求未覆盖顶卡）；
  *  ③ 常驻 sync 未接进每帧管线（写了但不跑 = 永远看不到）。
  * 以下断言把这三类锁死。
  */
@@ -61,21 +61,21 @@ describe('批次 D 守卫：控制权族 + 常驻层', () => {
     expect(mainTs).toContain('gen3ControlChangedFx(');
     expect(mainTs).toContain('gen3ControlCheckFx(');
     expect(mainTs).toContain('gen3ClearCacheFx(');
-    // 免疫事件 → 刚性7 护壁闪亮
+    // 免疫事件 → 僵化7 护壁闪亮
     expect(effectsTs).toContain("case 'card:immune'");
     expect(effectsTs).toContain('flashRigidity7Guard(');
   });
 
   it('常驻层的生效条件与引擎判定一致（关键语义）', () => {
-    // 愤怒0：**双方都算**（该线每张点数值 == M 的卡都不计入其拥有者总阈值）
+    // 暴怒0：**双方都算**（该线每张点数值 == M 的卡都不计入其拥有者总阈值）
     const wrath = controlTs.slice(controlTs.indexOf('export function syncWrath0Cull'), controlTs.indexOf('export function syncSloth0Bonus'));
-    expect(wrath, '愤怒0 划除必须遍历双方链路').toMatch(/for \(const pid of \[0, 1\] as const\)[\s\S]{0,160}cardPointValue\(s, c\) === m/);
+    expect(wrath, '暴怒0 划除必须遍历双方链路').toMatch(/for \(const pid of \[0, 1\] as const\)[\s\S]{0,160}cardPointValue\(s, c\) === m/);
     // 怠惰0：相邻上方那张是怠惰牌（= 引擎 coveredBySloth）
     expect(controlTs).toMatch(/startsWith\('sloth-'\)/);
     // 惰性1：必须是未覆盖顶卡（= 引擎 lineBottomCommandsDisabled）
     const inertia = controlTs.slice(controlTs.indexOf('export function syncInertiaNullify'), controlTs.indexOf('export function syncRigidity7Guard'));
     expect(inertia).toMatch(/inertia-1' && c\.faceUp && isUncovered\(s, c\)/);
-    // 刚性7：正面 + 未被覆盖 + 底框可用（= 引擎 rigidity7Immune）
+    // 僵化7：正面 + 未被覆盖 + 底框可用（= 引擎 rigidity7Immune）
     expect(controlTs).toMatch(/faceUp && isUncovered\(s, c\) && !cardCommandDisabled\(s, c, 'bottom'\)/);
     // 嫉妒0：对手该线全部卡（含被盖/反面）取最大
     expect(controlTs).toMatch(/for \(const c of foeCards\)/);
@@ -115,13 +115,13 @@ describe('批次 D 守卫：控制权族 + 常驻层', () => {
   });
 
   it('常驻视觉不再出现"跨链路长线/卡面网格"（2026-09-13 审计后的两条改进）', () => {
-    // ① 愤怒0 中缝：只跨两条能量槽（旧版跨双方槽位并集 = 整行宽，像怪线），并挂"最高档剔除"文字标
+    // ① 暴怒0 中缝：只跨两条能量槽（旧版跨双方槽位并集 = 整行宽，像怪线），并挂"最高档剔除"文字标
     const wrath = controlTs.slice(controlTs.indexOf('export function syncWrath0Cull'), controlTs.indexOf('export function syncSloth0Bonus'));
     expect(wrath, '中缝未按能量槽定位').toMatch(/const b0 = batteryNode\(0, line\)/);
     expect(wrath, '中缝未按能量槽定位').toMatch(/const b1 = batteryNode\(1, line\)/);
     expect(wrath, '中缝缺少文字标').toContain("'g3sync-wrath0-chip'");
     expect(syncCss, 'CSS 缺少 .g3sync-wrath0-chip').toContain('.g3sync-wrath0-chip');
-    // ② 刚性7 迷宫纹：必须是"卡外一圈边框"（border-image 重复渐变），不能再是铺满卡面的网格
+    // ② 僵化7 迷宫纹：必须是"卡外一圈边框"（border-image 重复渐变），不能再是铺满卡面的网格
     const mazeBlock = syncCss.slice(syncCss.indexOf('.g3sync-rig7-maze {'), syncCss.indexOf('@keyframes g3-rig7-maze'));
     expect(mazeBlock, '迷宫纹未改为卡外边框（border-image）').toContain('border-image: repeating-linear-gradient');
     expect(mazeBlock, '迷宫纹仍在铺满卡面（background 重复渐变）').not.toMatch(/background:\s*\n?\s*repeating-linear-gradient/);

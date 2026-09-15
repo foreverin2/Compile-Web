@@ -6,13 +6,13 @@
  *  - 弃牌/删除走既有「**前置段 → 延后基础动画**」模板（同 psychic/plague/death/hate 的时序），
  *    PRE 时长由本模块返回/内部调度，事件时先捕获 rect（重渲染后节点会失效）；
  *  - 翻转/偏转：附加层即时叠加 + 调用基础 playFlip/playShift（怠惰翻转按协议语法放慢）；
- *  - 多张同时触发（新星0 整线删除 / 愤怒2 整线翻转）用**位置排序 + 错开**做连锁编排。
+ *  - 多张同时触发（新星0 整线删除 / 暴怒2 整线翻转）用**位置排序 + 错开**做连锁编排。
  *
  * 只覆盖**点名的触发点**（范围红线，进度文件 §6.0）：其他 3 代卡牌只播基础动画。
- *  弃牌：贪婪 R1、怠惰 S3、愤怒 W2、支点 F1、动量 M1、新星 N2
- *  删除：暴食 G2、愤怒 W1、压制 O2、新星 N1
- *  翻转：傲慢 P2/P3/P4、怠惰 S2、愤怒 W3、伏击 A1、柔性 X1、嫉妒 E4 的翻转分支
- *  偏转：傲慢 P5、新星 N3、柔性 X2/X3
+ *  弃牌：贪婪 R1、怠惰 S3、暴怒 W2、支点 F1、动量 M1、新星 N2
+ *  删除：暴食 G2、暴怒 W1、压制 O2、新星 N1
+ *  翻转：傲慢 P2/P3/P4、怠惰 S2、暴怒 W3、伏击 A1、灵活 X1、嫉妒 E4 的翻转分支
+ *  偏转：傲慢 P5、新星 N3、灵活 X2/X3
  *
  * 品质（设计稿 §8.1）：每层 ≥3 件（主体/衬光/粒子）、渐变+内阴影+高光、
  * 分阶段缓动与二次运动、三阶配色、起止衔接（0.2~0.4s 收束）、不遮卡文。
@@ -33,7 +33,7 @@ export interface Gen3CardPayload {
   line?: number | null;
   triggerProtocol?: string;
   triggerDefId?: string;
-  /** 触发这次动作的源卡 uid（新星引力线/柔性2 亮卡等需要跨卡定位） */
+  /** 触发这次动作的源卡 uid（新星引力线/灵活2 亮卡等需要跨卡定位） */
   triggerUid?: string;
   /** 易主类事件的**原持有者**（2026-09-13 用户裁决新增；牌库顶易主的起点牌库用它） */
   fromOwner?: 0 | 1;
@@ -122,13 +122,13 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 /**
  * 两点之间的弧轨（偏转用）：SVG 路径 + 沿路径飞行的运载件（offset-path: path）。
  *
- * 2026-09-13 差异化重做（用户清单 #3「傲慢金色缆线和嫉妒0 长一样」、#16「柔性/傲慢/嫉妒的偏转
+ * 2026-09-13 差异化重做（用户清单 #3「傲慢金色缆线和嫉妒0 长一样」、#16「灵活/傲慢/嫉妒的偏转
  * 看起来都是同一条虚线」）：旧版所有弧轨共用 `.g3-arc path` 的 8/7 虚线 + 圆点，只有颜色不同，
  * 与嫉妒0 的「汲取丝」（橙金移动虚线 + 箭头，styles-gen3-sync.css）撞脸。现在每条轨道各有一套材质：
  *   傲慢 = **金缆**：外鞘(9px 半透明) + 亮金实心芯(2.4px) + 白芯(1px)，**不用虚线**；3 枚箭形滑块
  *          沿轨滑行（offset-rotate: auto 自动转向）；
  *   新星 = **星轨**：暗橙拖尾(11px 模糊) + 亮橙虚线芯(2.4px) + N 枚四角星；
- *   柔性 = **绶带**：两条正弦波动的宽柔光带(13px 模糊 / 3px 芯) + 落点缎带结（不是箭头）。
+ *   灵活 = **绶带**：两条正弦波动的宽柔光带(13px 模糊 / 3px 芯) + 落点缎带结（不是箭头）。
  * 返回清理函数；调用方按 ms 自行移除。
  */
 function arcTrack(
@@ -236,7 +236,7 @@ function arcTrack(
 
 /**
  * 多张同时触发的连锁编排：同一批（windowMs 内）的调用按 sortKey 排序后逐张错开 gapMs。
- * 用于新星0「整线删除」与愤怒2「整线翻转」——从中间向两侧连锁（位置依据为该卡到线中心的距离）。
+ * 用于新星0「整线删除」与暴怒2「整线翻转」——从中间向两侧连锁（位置依据为该卡到线中心的距离）。
  */
 const batches = new Map<string, { items: { key: number; run: () => void }[]; timer: number }>();
 function queueStaggered(
@@ -318,7 +318,7 @@ function triggerOwnerInState(state: GameState, triggerUid?: string, fallback?: 0
 /**
  * 3 代弃牌附加层。返回值 true = 已接管（内部按需延后基础切割）；false = 不属 3 代点名范围，
  * 交由 effects/index.ts 既有链继续处理（会正常播放基础切割）。
- * 时序常量与设计稿 §4 对齐：贪婪 420 / 怠惰 460 / 愤怒 380 / 支点 420 / 动量即时 / 新星即时。
+ * 时序常量与设计稿 §4 对齐：贪婪 420 / 怠惰 460 / 暴怒 380 / 支点 420 / 动量即时 / 新星即时。
  */
 export function gen3DiscardFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3CardFxApi): boolean {
   const g = geom(node);
@@ -362,7 +362,7 @@ export function gen3DiscardFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3Ca
       clone.appendChild(api.el('i', 'g3-mud-veil'));
       return finish(460, 'g3-sloth-discard');
     }
-    // 愤怒 W2：三道猩红爪痕 + 溅射点 → 切割
+    // 暴怒 W2：三道猩红爪痕 + 溅射点 → 切割
     case 'wrath': {
       for (let i = 0; i < 3; i++) {
         const claw = api.el('i', `g3-claw s${i}`);
@@ -514,7 +514,7 @@ export function gen3DeleteFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3Car
       window.setTimeout(() => clone.remove(), 1000);
       return true;
     }
-    // 愤怒 W1：猩红光点聚起 → 尖刺外爆 + 白闪 + 溅射（破碎即时并播）
+    // 暴怒 W1：猩红光点聚起 → 尖刺外爆 + 白闪 + 溅射（破碎即时并播）
     case 'wrath': {
       clone.appendChild(api.el('i', 'g3-wrath-core'));
       for (let i = 0; i < 7; i++) {
@@ -650,7 +650,7 @@ export function gen3FlipFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3CardF
       window.setTimeout(() => c?.remove(), 1900);
       return true;
     }
-    // 愤怒 W3：锯齿闪电劈中 + 白闪 + 焦痕（整线翻转时逐张连劈，错开 80ms）
+    // 暴怒 W3：锯齿闪电劈中 + 白闪 + 焦痕（整线翻转时逐张连劈，错开 80ms）
     case 'wrath': {
       const centerX = lineCenterX(node, p);
       // 同新星删除：延迟播放必须用事件时定格的 rect（DOM 可能已重渲染）
@@ -733,7 +733,7 @@ export function gen3FlipFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3CardF
       window.setTimeout(() => c?.remove(), 2100);
       return true;
     }
-    // 柔性 X1：飘带缠绕 → 翻面 → 缎带飞散
+    // 灵活 X1：飘带缠绕 → 翻面 → 缎带飞散
     case 'flexibility': {
       const c = overlay('g3-flx-flip');
       if (c) {
@@ -799,7 +799,7 @@ export function gen3ShiftFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3Card
       api.playShift(node, p);
       return true;
     }
-    // 柔性 X2/X3：紫罗兰飘带（宽柔光 + 亮细线）+ 落点缎带小结；柔性2 特化=起点取覆盖者 + 下方柔2 亮一下
+    // 灵活 X2/X3：紫罗兰飘带（宽柔光 + 亮细线）+ 落点缎带小结；灵活2 特化=起点取覆盖者 + 下方柔2 亮一下
     case 'flexibility': {
       if (toRect) arcTrack(g.rect, toRect, 'g3-flx-arc', 'flexibility', 3, 540, api.extraZ, api);
       if (p.triggerDefId === 'flexibility-2' && p.triggerUid) {
@@ -1000,7 +1000,7 @@ export function gen3DrawFx(p: Gen3DrawPayload, api: Gen3CardFxApi): boolean {
 /* ====================== 反面打出（A-FACEDOWN，批次 C） ====================== */
 
 /**
- * 3 代反面打出附加层（点名：暴食0 顶 G1 / 压制 O1 / 刚性 Y1 / 惰性 I2）。
+ * 3 代反面打出附加层（点名：暴食0 顶 G1 / 压制 O1 / 僵化 Y1 / 惰性 I2）。
  * kind：'deck' = 牌库顶反打（card:deck-played）、'hand' = 手牌反打（card:hand-played）。
  * 基础飞行照常调用（惰性按协议语法放慢到 700ms）。
  */
@@ -1081,7 +1081,7 @@ export function gen3FaceDownFx(kind: 'deck' | 'hand', p: Gen3CardPayload, api: G
       base();
       return true;
     }
-    // 刚性 Y1：紫底荧光黄护板自目标线下方升起（板面迷宫走线）→ 落位后收边 + 荧光黄扫线
+    // 僵化 Y1：紫底荧光黄护板自目标线下方升起（板面迷宫走线）→ 落位后收边 + 荧光黄扫线
     case 'rigidity': {
       if (slotRect) {
         const layer = bodyLayer('g3-rig-plate-layer', api.extraZ);
