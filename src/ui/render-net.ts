@@ -169,6 +169,10 @@ import { downloadLog } from './diag';
 // `startClarityDeckEye` 查 `.deck[data-player="N"]`、`startLuckDiceFx` 查源卡的 `[data-uid]` ——
 // 远程页两处节点都在（牌库在信息条内、源卡在链路槽或手牌里），所以可以直接复用，不需要改 export。
 import { startClarityDeckEye, startLuckDiceFx } from './fx-gen2';
+// G2 修正 **R13-4**：这两条不在 `render.ts` 里（各自模块导出），热座页也是从各自模块 import 的
+// —— 常驻层同步清单必须**逐字对齐**热座页（见入口那段注释）。
+import { syncGen3Persistent } from './gen3-control';
+import { syncFollowers } from './fx-follow';
 // G2 修正 R3：**方向模型**的视角座位。本页是它**唯一**的调用点（幂等，每次渲染设一次）——
 // 规格 §8.1：切换视角是开发者/测试功能，不为"运行时反复切换"造任何机制（无过渡、无迁移、无双向同步）。
 import { applyFxViewSeat, fxSeatEndToPlayer, fxViewSeat } from './fx-seat';
@@ -202,6 +206,29 @@ import {
   // 层只在 `img.load` 那一次落位，之后任何移动协议位置的重渲染都会让它停在旧坐标上飘走。
   resetCompiledFxCells,
   syncCompiledFxLayers,
+  // ── G2 修正 **R13-4**（独立审计 A4）：热座页在 `renderBoard` 末尾调用的**全部常驻层同步函数**。
+  // 本页此前只调了 3 条 ⇒ 19 类常驻特效在远程页**整类不出现**（详见入口那段注释）。
+  // 它们都是幂等的"按选择器定位 + 写矩形"，随 R1/R3 的选择器迁移一起适配好了，本页只需原样调用。
+  syncSmokeOverlays,
+  syncScanOverlays,
+  syncPsychicParticles,
+  syncPlagueMists,
+  syncApathyMists,
+  syncApathyMosaics,
+  syncSpirit0Glows,
+  syncSpirit1Cards,
+  syncMetal0Glows,
+  syncMetalPlates,
+  syncMetal6Mans,
+  syncMetal1LineGlows,
+  syncMirror0BatteryGlows,
+  syncClarity0BatteryGlows,
+  syncIceFx,
+  syncSmoke2LineGlows,
+  syncFear0TriGlows,
+  syncWarBlades,
+  syncDiversityColors,
+  syncDiversity3Fx,
   // G2 Task 4F：入口职责的两条（`render.ts` 只加了 `export` 关键字，实现未动；
   // `cancelActiveDrag` 见该文件里的"只读包装"说明）。
   //  · `removeDraftPreviews`：草稿页把两块 `.draft-preview` append 到 **document.body**（不是本
@@ -660,14 +687,18 @@ export function verifyPageHooks(
           ? []
           : [...document.querySelectorAll<HTMLElement>('.compiled-fx')]
             .filter((n) => String(n.className).split(/\s+/).includes(`compiled-fx-${defId}`));
+        // R13-1：层的内联 transform 现在是 **rotate(∓90deg) scale(k)** 两段（k = 实测 holder 宽 / 200，
+        // 见 positionCompiledFxLayer）—— 判据因此从"严格等于一个字符串"改成"**严格匹配两段形态**"：
+        // 角度必须恰好是该侧的 ∓90°，缩放必须是一段 > 0 的数（空串 / 180° / 另一侧角度 / 缺 scale 全报红）。
+        const want = new RegExp(`^rotate\\(${deg}deg\\) scale\\(\\d+(?:\\.\\d+)?\\)$`);
         const bad = layers
           .map((n) => String(n.style?.transform ?? ''))
-          .filter((t) => t !== `rotate(${deg}deg)`);
+          .filter((t) => !want.test(t));
         if (bad.length > 0) {
           fatal.push(`约束 10：已编译协议 ${defId}（${side} 侧）的持久 FX 层内联 transform 必须恰好是 `
-            + `rotate(${deg}deg)，实际 ${bad.map((t) => JSON.stringify(t)).join('、')}`
+            + `rotate(${deg}deg) scale(k)（k = 实测 holder 宽 / 200），实际 ${bad.map((t) => JSON.stringify(t)).join('、')}`
             + '（空串/其它值 ⇒ 层没被按当前协议矩形同步 —— 环/角光会飘在旧坐标上、或没跟着协议横躺；'
-            + '180° 是"误用会回退卡面朝向的 fxOrientOf"的形态）');
+            + '180° 是"误用会回退卡面朝向的 fxOrientOf"的形态；缺 scale 是 R13-1 的缺陷形态 —— 协议缩了而层内 px 装饰没缩）');
         }
       }
     }
@@ -1305,9 +1336,12 @@ function renderNetActionBar(s: GameState, cb: UiCallbacks): HTMLElement {
   if (next) {
     const block = el('div', 'next-block');
     const { uid } = getHandSelection();
+    // R12-8：提示语**缩短**（用户第五次验收第 2 条："下方的三大组件过大"）—— 原来那句
+    // "点击手牌选择，再点链路槽打出（双击放大查看）"是**不换行的长句**，单靠它就把信息块
+    // 撑到 ~270px 宽（比牌堆、按钮都宽）。缩短 + 允许换行（styles-net.css 的 `.hint` 覆盖）。
     block.appendChild(el('span', 'hint', uid
-      ? '已选择卡牌 — 点高亮的链路槽打出（或拖拽到该槽）'
-      : '点击手牌选择，再点链路槽打出（双击放大查看）'));
+      ? '已选牌 → 点高亮链路槽打出'
+      : '点选手牌 → 点链路槽打出（双击放大）'));
     const btn = el('button', 'btn next-btn', '下一步');
     btn.addEventListener('click', () => cb.onAction(next));
     block.appendChild(btn);
@@ -1792,6 +1826,40 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
   // —— 入口第 2、3 件副作用（与 renderApp:5591/5593 同） ——
   syncCheckCacheChains(s);
   syncChainLayerPosition();
+  // ── G2 修正 **R13-4**（独立审计 A4）：**常驻层同步函数必须与热座页对齐** ──
+  // 背景：这些 `sync*` 是"**每一帧**按 A 类钩子（槽位 / 电池 / 手牌 / 卡）的实测矩形把 body 级
+  // 持久层重新对齐，并在条件消失时移除"的函数 —— 热座页 `renderBoard` **末尾**有整整一批
+  // （`render.ts` 的 5233-5279），而本页此前**只有** `syncCompiledFxLayers` / `syncCheckCacheChains`
+  // / `syncChainLayerPosition` 三条 ⇒ **19 类常驻特效在远程页里 100% 不出现**：
+  // 暗2 黑烟 / 能量扫描线 / 念能粒子 / 瘟疫浓雾 / 冷漠灰雾与马赛克 / 灵魂0 手牌区光 /
+  // 灵魂1 护角 / 金属0·1·2·6 / 镜像0 电池光 / 透彻0 电池光 / 冰霜 / 迷雾2 三链光 /
+  // 恐惧0 三链光 / 战争刀刃 / 多元颜色与多元3 / 嫉妒0·愤怒0·怠惰0·惰性0·1·刚性7·色欲·贪婪1。
+  // 它们**全部**是"按选择器找节点 + 幂等写矩形"的实现（选择器已随 R1/R3 迁移到自描述的
+  // `.battery[data-player][data-line]` 等），所以本页只需要**原样调用**，不需要任何适配。
+  // ⚠️ 顺序与热座页**逐字同序**（`tests/ui/net-preview-wiring.test.ts` 有一条清单对齐守卫：
+  //    它从 `renderBoard` 的尾部**生成**要求，漏一个函数就红 —— 手写清单必然漏项，这是 G2 的旧教训）。
+  syncSmokeOverlays(s);
+  syncScanOverlays(s);
+  syncPsychicParticles(s);
+  syncPlagueMists(s);
+  syncApathyMists(s);
+  syncApathyMosaics(s);
+  syncSpirit0Glows(s);
+  syncSpirit1Cards(s);
+  syncMetal0Glows(s);
+  syncMetalPlates(s);
+  syncMetal6Mans(s);
+  syncMetal1LineGlows(s);
+  syncMirror0BatteryGlows(s);
+  syncClarity0BatteryGlows(s);
+  syncIceFx(s);
+  syncSmoke2LineGlows(s);
+  syncFear0TriGlows(s);
+  syncWarBlades(s);
+  syncDiversityColors(s);
+  syncDiversity3Fx(s);
+  syncGen3Persistent(s);
+  syncFollowers();
   // —— 入口第 4 件副作用 ——
   cb.onRendered?.();
   // —— 双 rAF 后移除 no-anim（与 renderApp:5595-5599 同） ——

@@ -1752,11 +1752,11 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
       try {
         // ④a 错值：层被按卡面朝向转了 180°（= 那句"缺标记就回退 orientOf"的后果）—— 这一条是杀手
         g.document = fakeDoc('rotate(180deg)');
-        expect(verifyPageHooks(withCompiled('rotate(180deg)', 'self')),
+        expect(verifyPageHooks(withCompiled('rotate(180deg) scale(0.5)', 'self')),
           '已编译层被转成 180°（误用会回退的 fxOrientOf）却没报').toContain('约束 10');
         // ④b 错值：0°（层被当成"没转过"——协议横躺而层竖着，正是 R8-4 的缺陷形态本身）
         g.document = fakeDoc('rotate(0deg)');
-        expect(verifyPageHooks(withCompiled('rotate(0deg)', 'self')),
+        expect(verifyPageHooks(withCompiled('rotate(0deg) scale(0.5)', 'self')),
           '已编译层被留在 0°（协议横躺、层竖着）却没报').toContain('约束 10');
         // ④c **严格性**（G2 修正 R8-4b 起，不再容忍）：空串 / 另一侧角度**都是**真缺陷 ——
         //     空串 = 层没被按当前协议矩形同步（环/角光会**飘在旧坐标上**，正是 R8-4b 修的那条）；
@@ -1765,12 +1765,12 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
         expect(verifyPageHooks(withCompiled('', 'self')),
           '层"没被同步过"（空串）被容忍了 —— R8-4b 起这是真缺陷（层会飘在旧坐标上）').toContain('约束 10');
         g.document = fakeDoc('rotate(90deg)');
-        expect(verifyPageHooks(withCompiled('rotate(90deg)', 'self')),
+        expect(verifyPageHooks(withCompiled('rotate(90deg) scale(0.5)', 'self')),
           '自己侧的层带着另一侧的角度（+90°）被容忍了 —— 本页每帧同步后不该出现这个中间态')
           .toContain('约束 10');
         // ④d 阳性对照：层已按该侧标记定位 ⇒ 不得报约束 10
-        g.document = fakeDoc('rotate(-90deg)');
-        expect(verifyPageHooks(withCompiled('rotate(-90deg)', 'self')),
+        g.document = fakeDoc('rotate(-90deg) scale(0.5)');
+        expect(verifyPageHooks(withCompiled('rotate(-90deg) scale(0.5)', 'self')),
           '层已按 ∓90° 定位却报了约束 10（假红）').toMatch(/^自查 ✓/);
       } finally {
         g.document = prevDoc;

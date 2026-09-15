@@ -666,12 +666,13 @@ describe('R-F · C-2 / R8-2：真跑 renderNetBoard 的元素树层序（viewSea
           const isFoeArea = isClass(a, 'net-hand-area-foe');
           const col = cssPropOf(a, [...chain, bottom!, handsBlocks[0], a], RULES, 'grid-column');
           if (isFoeArea) {
-            expect(col, `viewSeat=${seat}：对手手牌张数块的 grid-column 必须是**第 4 列**（对手信息块右侧、`
-              + `用户："压缩进对手信息块内"），实际 ${String(col)}`).toMatch(oneColumn(4));
+            // R12-7：对手手牌张数与对手信息块**同格**（块内右下角）—— 用户："压缩进对手信息块内"
+            expect(col, `viewSeat=${seat}：对手手牌张数块的 grid-column 必须与对手信息块**同格**（第 3 列），`
+              + `实际 ${String(col)}`).toMatch(oneColumn(3));
           } else {
-            expect(col, `viewSeat=${seat}：自己手牌区的 grid-column 必须是**整行**（\`1 / -1\`）——`
-              + '它被限制到某一列之后，手牌就不再"整页中置"（R9-3 的裁决要求手牌仍整页中置）')
-              .toMatch(/^1\s*\/\s*-1$/);
+            // R12-7：自己手牌在**第 2 列**（夹在左右两块之间 —— 用户："三块紧挨着"）
+            expect(col, `viewSeat=${seat}：自己手牌区的 grid-column 必须是**第 2 列**（自己信息块与`
+              + `对手信息块之间），实际 ${String(col)}`).toMatch(oneColumn(2));
           }
         }
         // `.net-hands` **不是** `.net-board` 的 grid item（它是 `display: contents` 的容器），
@@ -792,10 +793,11 @@ describe('R-F · C-2 / R8-2：真跑 renderNetBoard 的元素树层序（viewSea
           + `（R11-2：对手那一块搬进自己这一行），实际 ${describeArea(selfArea)} / ${describeArea(foeArea)}`)
           .toBe(rowOfArea(selfArea));
         // ③-2 **列不同**：自己那块整行（`1 / -1`）、对手那块第 4 列（最右）
-        expect(colOfArea(selfArea), `viewSeat=${seat}：自己手牌区的 grid-column 必须是整行（\`1 / -1\`）`
-          + '（"整页中置"的机制），实际 ' + String(colOfArea(selfArea))).toMatch(/^1\s*\/\s*-1$/);
-        expect(colOfArea(foeArea), `viewSeat=${seat}：对手手牌张数块的 grid-column 必须是**第 4 列**`
-          + '（对手信息块右侧），实际 ' + String(colOfArea(foeArea))).toMatch(/^4(\s*\/\s*5)?$/);
+        // R12-7：自己手牌在第 2 列（夹在左右两块之间）；对手手牌张数与对手信息块同格（第 3 列）
+        expect(colOfArea(selfArea), `viewSeat=${seat}：自己手牌区的 grid-column 必须是**第 2 列**`
+          + '（R12-7："三块紧挨着"），实际 ' + String(colOfArea(selfArea))).toMatch(/^2(\s*\/\s*3)?$/);
+        expect(colOfArea(foeArea), `viewSeat=${seat}：对手手牌张数块必须与对手信息块**同格**`
+          + '（第 3 列，块内右下角），实际 ' + String(colOfArea(foeArea))).toMatch(/^3(\s*\/\s*4)?$/);
         // ④ 反空集合：两个行号必须**真的**来自样式表（若规则没了，两块都是 `Infinity`
         //    ⇒ "同一行"会以"都没行号"的形式**碰巧**成立）
         expect([rowOfArea(selfArea), rowOfArea(foeArea)].every((r) => Number.isFinite(r)),

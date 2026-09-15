@@ -1367,8 +1367,12 @@ function flyGravityGhost(
  *  注入：延迟 = GRAVITY_PRE_MS（前置段全程发光，backwards 填充保持 0% 帧），时长 =
  *  GRAVITY_GLOW_MS（飞行 + 到终点后 1s 熄灭）。返回浮层卡（调用方转交 flyGravityGhost）；
  *  构建失败（rect 归零等，实际不可达）返回 null。 */
-function buildGravityGhost(rect: DOMRect, orient: CardOrient, payload: FxCardPayload): HTMLElement | null {
-  const ghost = buildFxCardAt(rect, orient, payload, BASE_Z);
+function buildGravityGhost(rect: DOMRect, orient: CardOrient, payload: FxCardPayload,
+  faceOrient: CardOrient = orient): HTMLElement | null {
+  // ⚠️ **G2 修正 R13-5**（独立审计 B5）：卡面朝向必须显式传 —— 远程页的 orient 是**特效**朝向
+  // （∓90°），而卡面朝向是 0°/180°；缺省 orient 会让 gravity 浮层的**卡面**横躺 90°。
+  // 另外三处（buildFlipOverlay / playCutAt / playShatterAt）都显式传了 orientOf(node)。
+  const ghost = buildFxCardAt(rect, orient, payload, BASE_Z, faceOrient);
   if (!ghost) return null;
   ghost.classList.add('fx-gravity-cardglow');
   ghost.style.setProperty('--fx-gravity-glow-ms', `${GRAVITY_GLOW_MS}ms`);
@@ -1455,7 +1459,9 @@ function playGravityShiftExtra(node: HTMLElement, payload: FxCardPayload): void 
   const orient = fxOrientOf(node);
   const start = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
   // ① 事件时立即创建浮层卡（旧位置 rect）盖住真实卡 + 品红卡框光（前置段全程可见）
-  const ghost = buildGravityGhost(rect, orient, payload);
+  // R13-5：卡面朝向单独给（`orientOf(node)`）—— 远程页的 `orient` 是特效朝向（∓90°），
+  // 直接拿它当卡面会让浮层卡横躺（见 `buildGravityGhost` 的说明）。
+  const ghost = buildGravityGhost(rect, orient, payload, orientOf(node));
   if (!ghost) {
     playShift(node, payload); // 浮层构建失败（实际不可达）→ 退回基础平移
     return;

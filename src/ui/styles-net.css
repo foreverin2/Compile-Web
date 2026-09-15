@@ -159,7 +159,17 @@
    **按下标**读手牌 —— 动了就是全体手牌 FX 静默错位）。 */
 .net-board {
   grid-template-rows: minmax(0, 1fr) auto auto;
-  grid-template-columns: max-content minmax(0, 1fr) max-content max-content;
+  /* ── G2 修正 **R12-7**（用户第五次验收第 2/3 条）：停靠栏三块**紧挨着**、整组居中 ──
+     改之前：`max-content | minmax(0,1fr) | max-content | max-content` —— 中间那条 `1fr` 把左右两块
+     **推到页面两端**，而手牌在整行里居中 ⇒ 三块之间隔着几百像素（用户原话："现在隔着的距离太远了"）。
+     现在：**三条内容宽轨道 + `justify-content: center`** ⇒ 三块作为一个整体居中、彼此相邻；
+     没有留白轨道 ⇒ 谁也推不开谁。
+     ⚠️ **代价（诚实写进规格 §18.7）**：手牌不再是"严格整页居中"，而是"夹在左右两块之间、整组居中"；
+     两侧宽度的差值会让它偏半个差值。用户这次要的是"紧挨着"，这条优先。
+     ⚠️ 对手手牌张数（`.net-hand-area-foe`）**不再占第 4 条轨道**：它压在**对手信息块同一个格子**的
+     右下角（块的下内边距已为它让出一条），于是左右两侧宽度接近对称 ⇒ 手牌几乎仍在正中。 */
+  grid-template-columns: max-content max-content max-content;
+  justify-content: center;
 }
 /* 第 1 行 = 链路区（**视口内的滚动区**；推导见上） */
 .net-board > .net-grid {
@@ -193,18 +203,28 @@
      拉伸会把列内六个层块撑开，而协议与中线的相对位置是承重的。 */
   align-content: start;
 }
-/* 第 2 行 = **开发者模式的预览工具条**（第 8 节；普通对局里不存在 ⇒ 该行高度 0）
+/* 第 2 行 = **空的**（保留轨道只为"行表恒定"；没有子节点 ⇒ 高度 0）
    ⚠️ **R12-1：事件日志那一块（`.log`）不再渲染**（用户第五次验收："取消日志的显示"）——
    它的 72px 全部还给放牌区（R12-4）。导出日志按钮 `styles.css` 里是 `position: fixed`
    （落在 `#app` 的 110px 底部内边距里、不占行），旧代码给它写的 `grid-row: 2` 是**死声明**
    （fixed 元素不参与 grid 布局），已删除以免误导。
-   ⚠️ 工具条**必须显式给行号**：自动放置只往**空行**上放，会让"有没有工具条"产生两套行表。 */
-.net-board > .net-preview-bar { grid-row: 2; grid-column: 1 / -1; justify-self: end; }
-/* 第 3 行 = **停靠栏** */
+   ⚠️ **R12-7：预览工具条也改回 `position: fixed`**（右下角，见第 8 节）——
+   它在第 2 行时**吃掉 98px 放牌区高度**（用户第五次验收第 2 条："链路所占面积太小"；
+   他当时正开着开发者模式，那 98px 是这条反馈的一部分）。改回 fixed 后：
+   普通对局与开发者模式**行表一致**（三行里第 2 行恒为 0），放牌区在两种模式下一样高。 */
+/* 第 3 行 = **停靠栏**（R12-7：三块紧挨着、整组居中；对手手牌张数压在对手信息块那一格里） */
 .net-board .net-info-block[data-net-seat='self'] { grid-row: 3; grid-column: 1; }
-.net-board .net-hand-area-self { grid-row: 3; grid-column: 1 / -1; align-self: end; }
+.net-board .net-hand-area-self { grid-row: 3; grid-column: 2; align-self: end; }
 .net-board .net-info-block[data-net-seat='foe'] { grid-row: 3; grid-column: 3; }
-.net-board .net-hand-area-foe { grid-row: 3; grid-column: 4; align-self: end; }
+/* ⚠️ 对手手牌张数与对手信息块**同格**（右下角）：块的下内边距（见第 2 节）为它让出一条，
+   两者不重叠；`.hand` 的矩形仍在块内 ⇒ 手牌落点特效照旧落在这里。 */
+.net-board .net-hand-area-foe {
+  grid-row: 3;
+  grid-column: 3;
+  justify-self: end;
+  align-self: end;
+  margin: 0 6px 4px 0;
+}
 
 .net-grid {
   /* 热座页 .board-grid 是 flex column（每条线一行的堆叠方向）；本页（三列 + 控制轨）并排 → grid。
@@ -279,7 +299,7 @@
  * ⚠️ 覆盖必须限定在 `.net-piles` 内：`.piles` 也被热座页复用，裸写 `.deck` 会改到热座页。
  * ========================================================================== */
 
-.net-piles { display: flex; align-items: center; gap: 8px; margin: 0; }
+.net-piles { display: flex; align-items: center; gap: 6px; margin: 0; }
 .net-piles .deck[data-player] {
   position: relative;
   top: auto;
@@ -288,8 +308,8 @@
   transform: none;
   /* ── G2 修正 **R12-3**：停靠栏紧凑化（用户："缩小图二中的这三个组件，并使其变得紧凑一些"）──
      60×86 → 46×66（热座是 92×132，本页本来就已缩小）；牌库/弃牌堆的大多数空间是空白边距。 */
-  width: 46px;
-  height: 66px;
+  width: 40px;
+  height: 58px;
   margin: 0;              /* styles.css:761 的 .deck 无 margin，这里显式钉住，避免 UA 默认值 */
   flex: 0 0 auto;
 }
@@ -302,15 +322,15 @@
   right: auto;
   top: auto;
   transform: none;
-  width: 46px;            /* R12-3：与牌库同步缩小（见上） */
-  height: 66px;
+  width: 40px;            /* R12-3/R12-8：与牌库同步缩小（见上） */
+  height: 58px;
   flex: 0 0 auto;
 }
 /* 缩小后「弃牌堆」小标签会压住计数徽标：改为贴底的小字 */
 .net-piles .trash-label { font-size: 8px; }
 /* R12-3：计数徽标同步缩小（styles.css 的 34×34 在 46px 宽的盒子里已经占满） */
 .net-piles .deck .deck-count,
-.net-piles .trash-pile .trash-pile-count { width: 26px; height: 26px; font-size: 11px; }
+.net-piles .trash-pile .trash-pile-count { width: 22px; height: 22px; font-size: 10px; }
 
 .net-info-block {
   display: flex;
@@ -322,8 +342,8 @@
   align-items: center;
   text-align: center;
   /* R12-3：停靠栏紧凑化（6/6 → 4/3）—— 这块是常驻元素，省下来的高度全给放牌区。 */
-  gap: 3px;
-  padding: 4px 6px;
+  gap: 2px;
+  padding: 3px 5px;
   border: 1px solid #333a4d;
   border-radius: 8px;
   background: rgba(0, 0, 0, 0.18);
@@ -333,10 +353,20 @@
 /* 信息条自身在**窄列**里必须能换行：styles.css 的 .meta-row 是横排，三组计数在 ~170px 里会挤成
    一条（`牌库 12弃牌堆 3手牌 5` 糊在一起）。这里只在本页允许换行，热座页那份一行未改。 */
 .net-info-block .player-info { display: block; }
-.net-info-block .meta-row { flex-wrap: wrap; gap: 4px 10px; }
-.net-info-block .area-title { font-size: 12px; }   /* R12-3：13 → 12（紧凑化） */
+/* R12-8：13 → 11px、gap 14 → 7px（纯计数行，紧凑化的第一刀） */
+.net-info-block .meta-row { flex-wrap: wrap; font-size: 11px; gap: 2px 7px; }
+.net-info-block .area-title { font-size: 11px; }   /* R12-3/R12-8：13 → 12 → 11 */
 /* 连接状态占位（只挂在对手那一块里）：块内竖直排列，故不再需要 align-self */
-.net-conn { font-size: 11px; color: #7fd4ff; }     /* R12-3：12 → 11 */
+.net-conn { font-size: 10px; color: #7fd4ff; }     /* R12-3/R12-8：12 → 11 → 10 */
+/* ── G2 修正 **R12-8**（用户第五次验收第 2 条："下方的三大组件过大占用位置"）：把停靠栏里
+   **装饰/说明性质**的东西压到最小 —— 它们每省 10px，放牌区就多 10px。 ──
+   ① 块内小按钮（「查看弃牌堆」「下一步」）：styles.css 的 `.btn` 是 `6px 12px` / 14px 字 */
+.net-board .net-info-block .btn { font-size: 11px; padding: 2px 7px; }
+/* ② 提示语（"点选手牌…"）：允许换行 + 限宽 —— 它原来是**不换行的长句**，
+      单靠它就把信息块撑到 ~270px 宽（R12-3 只缩了牌堆，宽度其实是这条句子撑起来的）。 */
+.net-board .net-action-bar .hint { font-size: 10px; white-space: normal; max-width: 150px; line-height: 1.25; }
+/* ③ 对手那一块：底部让出**手牌张数小字**那一条（R12-7 之后它与块同格、压在右下角） */
+.net-info-block[data-net-seat='foe'] { padding-bottom: 20px; }
 
 /* ============================================================================
  * 3. 一条线 = **一个纵向的列**（列内自上而下：对手侧 / 中线 / 自己侧）
@@ -952,20 +982,22 @@
 }
 
 /* ============================================================================
- * 8. 预览工具条（**只在 NetViewOpts.onPreviewChange 存在时**才出现在 DOM 里）
+ * 8. 预览工具条（**只在开发者模式解锁后才渲染**，见 `main.ts` 的 `isDevUnlocked()` 闸门）
  *
- * ⚠️ **R11-2：从"视口右下角的 fixed 浮层"改成第 2 行的流内元素**。
- * 它原来 `position: fixed; right: 16px; bottom: 16px`，而停靠栏（第 3 行）现在**就**在
- * 视口底部、对手信息块**就**在最右列 ⇒ 浮层会**压住对手信息块**（牌库/弃牌堆/手牌数/连接状态）
- * 与停靠栏本体。放进第 2 行（右两列）之后它与其他元素**互不遮挡**，且不占放牌区
- * （第 2 行本来就是日志那一行）。
- * ⚠️ `position: fixed` 的那三条（right/bottom/z-index）**必须删掉**：留着 `bottom: 16px`
- * 之类的死声明，会让"它已经回到流内"这件事在样式表里看不出来。
+ * ⚠️ **R12-7：改回 `position: fixed`，钉在右上角**。
+ * 它有两版历史：R11-2 之前是"右下角 fixed"（会压住停靠栏最右侧的对手信息块 ⇒ 改）；
+ * R11-2 把它放进第 2 行（流内、右两列）—— 那解决了遮挡，但**吃掉了 98px 放牌区高度**
+ * （用户第五次验收第 2 条"链路所占面积太小"，他当时正开着开发者模式 ⇒ 那 98px 就是这条反馈的一部分）。
+ * 现在钉在**右上角**：不占任何行 ⇒ 普通对局与开发者模式**放牌区一样高**；
+ * 代价是开发者模式下它盖住放牌区右上角（控制轨上方）—— 那是**开发工具**，可接受。
  * 真实联机不传 onPreviewChange → 这条不渲染。
  * ========================================================================== */
 
 .net-preview-bar {
-  /* 流内（第 2 行右两列；行/列号见第 1 节的 R11-2/3 块）*/
+  position: fixed;
+  top: 8px;
+  right: 8px;
+  z-index: 900;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -978,13 +1010,8 @@
   box-shadow: 0 0 18px rgba(0, 255, 204, 0.25);
   font-size: 12px;
 }
-/* 预览工具条在第 2 行的右两列、靠右、与日志同高对齐 */
-.net-board > .net-preview-bar {
-  grid-row: 2;
-  grid-column: 3 / -1;
-  justify-self: end;
-  align-self: center;
-}
+/* ⚠️ R12-7：工具条**没有** grid 指派（它是 fixed 浮层）—— 故意不写 grid-row：ixed 元素不参与
+   grid 布局，写了就是**死声明**（本项目专门猎杀这一类）。 */
 .net-preview-title { color: #00ffcc; font-weight: 700; letter-spacing: 0.08em; }
 .net-preview-btn { font-size: 12px; padding: 4px 8px; cursor: pointer; }
 .net-preview-note { flex: 1 0 100%; color: #9fb0c8; }

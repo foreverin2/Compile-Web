@@ -900,7 +900,11 @@ function handEl(player: 0 | 1): HTMLElement | null {
 function handEndPos(player: 0 | 1): { x: number; y: number } | null {
   const hand = handEl(player);
   if (!hand) return null;
-  const cards = hand.querySelectorAll<HTMLElement>('.card');
+  // ⚠️ **G2 修正 R13-5**（独立审计 B4）：必须排除揭示幽灵（`.reveal-ghost`）——
+  // 它是一张**临时**飞行的卡，就叠在手牌末尾上；不排除时"新卡落点"会取到幽灵的矩形
+  // （位置通常仍接近，但口径与另外两处不一致：`fx-seat.ts` 的 `fxHandEndPoint` 与
+  // `effects/index.ts` 的 `handEndPos` 都写了 `:not(.reveal-ghost)`）。三处必须同口径。
+  const cards = hand.querySelectorAll<HTMLElement>('.card:not(.reveal-ghost)');
   const last = cards[cards.length - 1];
   const r = (last ?? hand).getBoundingClientRect();
   if (r.width === 0 && r.height === 0) return null;

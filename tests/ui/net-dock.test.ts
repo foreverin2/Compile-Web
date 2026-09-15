@@ -216,7 +216,8 @@ describe('R11-2 · G-13：停靠栏（一个视口高 · 链路区内部滚动 �
         }
         // 列模板的**详细判据**在 net-r9 的 G-11c（4 条轨道 + 各自的内容/弹性族），这里只钉条数
         const rawCols = subjectPropOf(board, [board], RULES, 'grid-template-columns');
-        expect(gridTracks(rawCols ?? '').length, `列模板必须 4 条轨道（实际 ${String(rawCols)}）`).toBe(4);
+        expect(gridTracks(rawCols ?? '').length, `列模板必须 3 条轨道（自己 · 手牌 · 对手；R12-7 取消了留白轨道）`
+      + `（实际 ${String(rawCols)}）`).toBe(3);
 
         // ── ④ 链路区 = **视口内的滚动区**，且在**第 1 行**、横跨整行 ──
         const gChain = ancestorsOf(root, grid);
@@ -357,6 +358,38 @@ describe('R11-2 · G-13：停靠栏（一个视口高 · 链路区内部滚动 �
 
   it('G-13d（前提腿）：styles-net.css 不得含 `!important` / ID / 内联覆盖（与既有三条腿同一份实现）', () => {
     expect(() => assertNoUnmodelableCascade(RULES, MODELED_PROPS)).not.toThrow();
+  });
+
+  /**
+   * **G-18（R13-4 · 独立审计 A4）：常驻层同步清单必须与热座页对齐 —— 而且是**从源码生成**的要求。**
+   *
+   * 背景：热座页 `renderBoard` 末尾有一整批 `sync*`（每帧按 A 类钩子的实测矩形重定位 body 级
+   * 持久层、条件消失时移除），而本页此前**只调了 3 条** ⇒ 19 类常驻特效在远程页**整类不出现**
+   * （暗2 黑烟 / 能量扫描线 / 念能粒子 / 瘟疫浓雾 / 冷漠 / 金属 / 冰霜 / 多元 …）。
+   *
+   * ⚠️ **为什么是"生成"而不是手写清单**：手写清单必然漏项（G2 Task 4F 的 I-1 就是它 ——
+   * 人工清单漏掉两件入口职责，body 级草稿面板残留整局）。所以这里**从 `render.ts` 的
+   * `renderBoard` 尾部切出那一段**（锚点 = `syncCompiledFxLayers();` 到 `syncFollowers();`），
+   * 提取其中出现的每一个 `sync*(` 名字，再逐条要求在 `render-net.ts` 里也出现。
+   * 往热座页加一条新 sync 时，这条守卫会**立刻**要求远程页跟上。
+   */
+  it('G-18. R13-4：热座页 `renderBoard` 尾部的**每一条**常驻层同步，远程页也必须调用（源码生成）', () => {
+    const board = hotSrc();
+    const a = board.indexOf('syncCompiledFxLayers();');
+    const b = board.indexOf('syncFollowers();');
+    expect(a, '热座页找不到 syncCompiledFxLayers(); 锚点').toBeGreaterThanOrEqual(0);
+    expect(b, '热座页找不到 syncFollowers(); 锚点').toBeGreaterThan(a);
+    const tail = board.slice(a, b + 'syncFollowers();'.length);
+    const names = [...new Set([...tail.matchAll(/\b(sync[A-Z][A-Za-z0-9]*)\(/g)].map((m) => m[1]))];
+    console.log(`\n===== G-18 · 从 renderBoard 尾部提取到的常驻层同步（${names.length} 条）=====\n  ${names.join(', ')}`);
+    // 反空集合：锚点之间必须真的有若干条（否则"生成的要求"是空的）
+    expect(names.length, `锚点之间只提取到 ${names.length} 条 sync —— 锚点选错了（判据会空转）`)
+      .toBeGreaterThanOrEqual(20);
+    const net = netSrc();
+    const missing = names.filter((n) => !new RegExp(`\\b${n}\\(`).test(net));
+    expect(missing, `远程页没有调用这些常驻层同步函数 ⇒ 对应的一整类特效在远程页**完全不出现**：`
+      + `${missing.join(', ')}\n（它们都是幂等的"按选择器定位 + 写矩形"，本页只需在入口职责段原样调用）`)
+      .toEqual([]);
   });
 });
 
@@ -618,29 +651,29 @@ describe('R12 · G-17：日志 / 滚动条 / 停靠栏紧凑 / 放牌区预算 /
       const w = cssLenOf(chain, RULES, subjectPropOf(pile, chain, RULES, 'width') ?? '');
       const h = cssLenOf(chain, RULES, subjectPropOf(pile, chain, RULES, 'height') ?? '');
       console.log(`\n===== G-17c · ${tag} =====\n  ${String(w)} × ${String(h)}px`);
-      expect(w, `${tag}的宽不是 46px（R12-3 的紧凑化没生效）`).toBe(46);
-      expect(h, `${tag}的高不是 66px（R12-3 的紧凑化没生效）`).toBe(66);
+      expect(w, `${tag}的宽不是 40px（R12-3/R12-8 的紧凑化没生效）`).toBe(40);
+      expect(h, `${tag}的高不是 58px（R12-3/R12-8 的紧凑化没生效）`).toBe(58);
     }
     // 计数徽标（styles.css 是 34×34，在 46px 宽的盒子里已占满）
     const badge = cssNode('deck-count');
     const badgeChain = [board, cssNode('net-piles'), cssNode('deck'), badge];
     expect(cssLenOf(badgeChain, RULES, subjectPropOf(badge, badgeChain, RULES, 'width') ?? ''),
-      '牌库计数徽标没跟着缩小（46px 的盒子里放 34px 的徽标几乎顶满）').toBe(26);
+      '牌库计数徽标没跟着缩小（40px 的盒子里放 34px 的徽标会顶满）').toBe(22);
     // 信息块的内边距/间距
     const block = cssNode('net-info-block');
     block.dataset.netSeat = 'self';
     expect(cssLenOf([board, block], RULES, subjectPropOf(block, [board, block], RULES, 'gap') ?? ''),
-      '信息块的行间距没收到 3px').toBe(3);
+      '信息块的行间距没收到 2px').toBe(2);
     // 板间距（同时管行距与列距）
     expect(cssLenOf([board], RULES, subjectPropOf(board, [board], RULES, 'gap') ?? ''),
       '板间距没收到 2px').toBe(2);
     // 字号：标题 12 / 连接状态 11 / 弃牌堆小标签 8
-    expect(subjectPropOf(block, [board, block], RULES, 'padding')).toBe('4px 6px');
+    expect(subjectPropOf(block, [board, block], RULES, 'padding')).toBe('3px 5px');
     expect(p(cssNode('net-hand-area'), 'justify-self'), '手牌区的水平中置没变（R12-3 只动尺寸/间距）')
       .toBe('center');
     for (const [sel, want, what] of [
-      ['net-info-block .area-title', '12px', '信息块标题'],
-      ['net-conn', '11px', '连接状态'],
+      ['net-info-block .area-title', '11px', '信息块标题'],
+      ['net-conn', '10px', '连接状态'],
       ['net-piles .trash-label', '8px', '弃牌堆小标签'],
     ] as const) {
       const rule = RULES.find((r) => r.selector.trim() === `.${sel}`);

@@ -431,29 +431,31 @@ describe('R9-2 · G-11：三列精确居中', () => {
    *  ⚠️ **不要**在这里断言"手牌从第 2 列起"：那会把整行手牌**右移 `c1/2`**（见 G-12a⑤ 的反例），
    *  与"手牌整页中置"直接冲突 —— R9 修复轮已经在这条上栽过一次。
    */
-  it('G-11c. `.net-board` 的四列模板：4 条轨道、第 1/3/4 条内容宽族、第 2 条弹性族', () => {
+  it('G-11c. `.net-board` 的三列模板：三条内容宽轨道 + `justify-content: center`（R12-7）', () => {
     const b = board();
     const raw = subjectPropOf(b, [b], RULES, 'grid-template-columns');
     expect(raw, '`.net-board` 没有 grid-template-columns（R11-2 的列几何失去定义）').toBeTruthy();
     const tracks = gridTracks(raw!);
     console.log(`\n===== G-11c · .net-board 的列模板 = ${raw}\n  轨道 = ${tracks.join(' | ')}`);
-    expect(tracks.length, `\`.net-board\` 必须恰好 **4 条**轨道（自己信息块 · 弹性留白 · 对手信息块 · 对手手牌张数），`
-      + `实际 ${tracks.length} 条：${tracks.join(' | ')}（少一条 ⇒ 有组件落到**隐式列**上，`
-      + '而只查行的判据照旧通过）').toBe(4);
-    for (const i of [0, 2, 3]) {
+    expect(tracks.length, `\`.net-board\` 必须恰好 **3 条**轨道（自己信息块 · 手牌 · 对手信息块），`
+      + `实际 ${tracks.length} 条：${tracks.join(' | ')}`).toBe(3);
+    // R12-7：**三条都必须是内容宽族**（没有留白轨道 —— 它就是"三块被推到两端、隔得太远"的成因）
+    for (const i of [0, 1, 2]) {
       expect(/content/.test(tracks[i]), `第 ${i + 1} 条轨道必须是**内容宽族**（\`max-content\` 等），`
-        + `实际 \`${tracks[i]}\` —— 否则那一块会被拉成整行宽（用户要的是"紧凑盒子贴一端"）`).toBe(true);
+        + `实际 \`${tracks[i]}\``).toBe(true);
     }
-    expect(/fr\b/.test(tracks[1]), `第 2 条轨道（留白那一列）必须是**弹性族**（\`minmax(0, 1fr)\` 等）`
-      + `—— 左右两组贴两端靠它吸收留白，实际 \`${tracks[1]}\``).toBe(true);
+    expect(tracks.filter((t) => /\d?fr\b/.test(t)), 'R12-7 之后**不许**再有弹性/留白轨道 —— '
+      + '它会把左右两块推到页面两端（用户："现在隔着的距离太远了"）').toEqual([]);
+    expect(subjectPropOf(b, [b], RULES, 'justify-content'), '停靠栏三块必须**整组居中**').toBe('center');
     // 反空集合：这四条轨道必须**真的**被停靠栏四块用上（否则模板对了也没人吃）
     const parts: ReadonlyArray<[StubNode, RegExp, string]> = [
       [(() => { const n = cssNode('net-info-block'); n.dataset.netSeat = 'self'; return n; })(),
         /^1(\s*\/\s*2)?$/, '自己信息块'],
       [(() => { const n = cssNode('net-info-block'); n.dataset.netSeat = 'foe'; return n; })(),
         /^3(\s*\/\s*4)?$/, '对手信息块'],
-      [cssNode('net-hand-area', 'net-hand-area-foe'), /^4(\s*\/\s*5)?$/, '对手手牌张数'],
-      [cssNode('net-hand-area', 'net-hand-area-self'), /^1\s*\/\s*-1$/, '自己手牌区'],
+      // R12-7：对手手牌张数**与对手信息块同格**（压在块内的右下角），不再有自己的轨道
+      [cssNode('net-hand-area', 'net-hand-area-foe'), /^3(\s*\/\s*4)?$/, '对手手牌张数'],
+      [cssNode('net-hand-area', 'net-hand-area-self'), /^2(\s*\/\s*3)?$/, '自己手牌区'],
     ];
     for (const [node, want, what] of parts) {
       expect(subjectPropOf(node, [b, node], RULES, 'grid-column'),
@@ -532,21 +534,21 @@ describe('R9-3 · G-12：手牌与信息块并盒（同一行）', () => {
           expect(handRow, `viewSeat=${seat} · ${side} 侧：手牌区与信息块**不在同一行**`
             + `（信息块=${String(infoRow)}，手牌区=${String(handRow)}）—— R9-3 的裁决是"同一行、同一个盒子"；`
             + '各自一行 = 用户点名的"组件突出在外面、页面变得更长"').toBe(infoRow);
-          // ② **列指派**（R11-2/3 改写）：自己信息块占**第 1 列**（左）、对手信息块占**第 3 列**（右），
-          //    对手手牌张数占第 4 列（紧贴对手信息块右侧）、自己手牌区**整行**（`1 / -1`）。
+          // ② **列指派**（R11-2/3 建立、**R12-7 改写**）：自己信息块第 1 列、自己手牌第 2 列、
+          //    对手信息块第 3 列；对手手牌张数与对手信息块**同格**（块内右下角）。
+          //    **三块紧挨着**（用户第五次验收："现在隔着的距离太远了"）⇒ 没有留白轨道。
           if (side === 'self') {
             expect(colOf(info), `viewSeat=${seat}：自己信息块必须在**第 1 列**（左列），`
               + `实际 ${String(colOf(info))}`).toMatch(/^1(\s*\/\s*2)?$/);
-            // 自己手牌**整行**（`1 / -1`）⇒ 整页中置（K）
-            // ⚠️ **不要**改成 `2 / -1`：那会把整行手牌右移 `c1/2`（见下面 ⑤-3 的可执行反例）。
-            // 代价（诚实残余）：整行区间跨过左右两块 ⇒ 手牌很宽时水平重叠（⑤-4 钉住）。
-            expect(colOf(hand), `viewSeat=${seat}：自己手牌的 grid-column 必须是**整行**（\`1 / -1\`）——`
-              + '用户要的"手牌仍整页中置"只有整行区间才成立（`2 / -1` 会右移 c1/2）').toBe('1 / -1');
+            // R12-7：手牌在**第 2 列**、**夹在**左右两块之间
+            expect(colOf(hand), `viewSeat=${seat}：自己手牌必须在**第 2 列**（自己信息块与对手信息块`
+              + `之间 —— R12-7："三块紧挨着"），实际 ${String(colOf(hand))}`).toMatch(/^2(\s*\/\s*3)?$/);
           } else {
             expect(colOf(info), `viewSeat=${seat}：对手信息块必须在**第 3 列**（该行右侧 ——`
               + `用户第四次验收："摆在该行右侧"），实际 ${String(colOf(info))}`).toMatch(/^3(\s*\/\s*4)?$/);
-            expect(colOf(hand), `viewSeat=${seat}：对手手牌张数必须在**第 4 列**（对手信息块右侧 ——`
-              + `用户："压缩进对手信息块内"），实际 ${String(colOf(hand))}`).toMatch(/^4(\s*\/\s*5)?$/);
+            // R12-7：手牌张数与对手信息块**同格**（块内右下角），不再是独立的一列
+            expect(colOf(hand), `viewSeat=${seat}：对手手牌张数必须与对手信息块**同格**（R12-7），`
+              + `实际 ${String(colOf(hand))}`).toMatch(/^3(\s*\/\s*4)?$/);
           }
         }
         // ④ 两个座位都跑 + **两侧同一行**（停靠栏；R11-2 的裁决是"对手那一块搬进自己这一行"），
@@ -557,69 +559,43 @@ describe('R9-3 · G-12：手牌与信息块并盒（同一行）', () => {
         expect(colStart(infoOf('self')), `viewSeat=${seat}：自己信息块必须在对手信息块的**左侧**`)
           .toBeLessThan(colStart(infoOf('foe')));
 
-        /* ── ⑤ **几何腿**（R9-3 收口 · 评审 I-2；**R11-2 扩到四列**）：手牌的**列区间** == 整行，
-              且「手牌中心 == 板中心」。
-              这条把写法判据升级成"算得出为什么"：**`1 / -1` 才是整页中置的形态**
-              （区间 `[0, B]` ⇒ 中心 `B/2` == 板中心）；而 `2 / -1` 的区间是 `[c1, B]`、中心 `(c1 + B)/2`，
-              **只在 `c1 == 0` 时**才等于板中心 ⇒ 它会把整行手牌**右移 `c1/2`**。
-              （R9 修复轮里评审与实现者**都算错过这一点**：把恒等式 `B = c1 + (B − c1)` 当成了"两个中心相等"。
-              这条腿因此额外把"`2 / -1` 的中心 ≠ 板中心"钉成**可执行的反例**。）
-              `1 / -1` 的代价是区间跨过左右两块 ⇒ **水平重叠**（已知残余，不是缺陷）。
-              ⚠️ 诚实边界：柱宽用**代入值**（板宽 1000；自己信息块 400 · 对手信息块 200 · 对手手牌 80，
-              中间的弹性列 = 余下的 320）—— 真实宽度由布局引擎决定，本仓没有布局引擎（同 G-11 的说明）；
-              判据对**任意** c1 / c3 / c4 成立（推导里它们只在"区间端点"出现）。 */
+        /* ── ⑤ **几何腿**（R9-3 收口 · 评审 I-2；**R12-7 按用户第五次验收重写**）──
+              旧判据：手牌 `1 / -1` ⇒ 区间 `[0, B]` ⇒ 中心 == 板中心（"整页中置"），
+              代价是区间跨过信息块（可能水平重叠）。**R9 修复轮还在这里钉过一个反例**：
+              `2 / -1` 的中心是 `(c1 + B)/2`，只在 `c1 == 0` 时才等于板中心
+              （把恒等式 `B = c1 + (B − c1)` 当成"两个中心相等"是那轮的血泪）。
+              **R12-7 的裁决改了这件事**：用户要"三块紧挨着"（"现在隔着的距离太远了"）⇒
+              手牌不再横跨整行，而是**第 2 列**、夹在左右两块之间；**整组**用
+              `justify-content: center` 居中。于是"整页中置"变成**近似**：
+              手牌中心 = 板中心 + (自己块宽 − 对手块宽)/2 —— 两侧宽度接近时几乎仍在正中。
+              ⚠️ 判据因此从"手牌区间 == 整行"换成"**没有留白轨道 + 整组居中 + 手牌夹在中间**"，
+              并**保留**那条推导的结论：`2 / -1`（把左块并进手牌区间）会右移 `c1/2`。 */
         {
           const rawT = subjectPropOf(board, [board], RULES, 'grid-template-columns');
           const t = gridTracks(rawT ?? '');
-          expect(t.length, `viewSeat=${seat}：.net-board 的列模板不是 4 条轨道（实际 ${String(rawT)}）`)
-            .toBe(4);
-          const B = 1000;                      // 代入：板宽
-          const c1 = 400;                      // 代入：第 1 列 = 自己信息块的 max-content
-          const c3 = 200;                      // 代入：第 3 列 = 对手信息块的 max-content
-          const c4 = 80;                       // 代入：第 4 列 = 对手手牌张数
-          const w = [c1, B - c1 - c3 - c4, c3, c4];   // 第 2 列 = 弹性列（吸收留白）
-          const starts = [0, w[0], w[0] + w[1], w[0] + w[1] + w[2]];
-          const ends = [w[0], w[0] + w[1], w[0] + w[1] + w[2], B];
-          const intervalOf = (raw: string | null): [number, number] => {
-            const toks = String(raw).split('/').map((s) => s.trim()).filter((s) => s !== '');
-            const line = (tok: string, fallback: number): number => {
-              const n = Number.parseInt(tok, 10);
-              return Number.isNaN(n) ? fallback : n;   // 不是数字（本页不会出现）⇒ 用兜底值
-            };
-            if (toks.length === 1) {
-              // 单条线（`grid-column: 1` = 只占第 1 列）：区间 = [该列起点, 该列终点]
-              const i0 = Math.max(0, line(toks[0], 1) - 1);
-              return [starts[i0] ?? 0, ends[i0] ?? B];
-            }
-            const a = line(toks[0], 1);
-            const b = line(toks[1], -1);
-            return [starts[a - 1] ?? 0, b < 0 ? B : (ends[b - 1] ?? B)];
-          };
-          const [hLo, hHi] = intervalOf(colOf(handOf('self')));
-          const [iLo, iHi] = intervalOf(colOf(infoOf('self')));
-          console.log(`  viewSeat=${seat} · 列区间（c1=${c1}, c3=${c3}, c4=${c4}, B=${B}）：`
-            + `自己信息块=[${iLo}, ${iHi}] 手牌=[${hLo}, ${hHi}] ⇒ 手牌中心=${(hLo + hHi) / 2}`
-            + ` 第2列中心=${(starts[1] + ends[1]) / 2} 板中心=${B / 2}`);
-          // ⑤-1 手牌区间 == **整行** `[0, B]`（`grid-column: 1 / -1`）
-          expect([hLo, hHi], `viewSeat=${seat}：手牌的列区间 [${hLo}, ${hHi}] 必须是整行 [0, ${B}]`
-            + '（手牌整行 ⇒ 它在整行内居中 = 整页中置）').toEqual([0, B]);
-          // ⑤-2 **手牌中心 == 板中心** —— 这才是"整页中置"的几何判据（与写法无关）
-          expect((hLo + hHi) / 2, `viewSeat=${seat}：手牌中心（${(hLo + hHi) / 2}）必须等于板中心（${B / 2}）`
-            + '—— 用户要求手牌仍整页中置').toBe(B / 2);
-          // ⑤-3 **反例：为什么不能用 `2 / -1`**（R9 修复轮的血泪，详见 styles-net.css 的 R11-2/3 段）：
-          //      `2 / -1` 的区间是 `[c1, B]`、中心 `(c1 + B)/2`，**只在 `c1 == 0` 时**才等于板中心
-          //      ⇒ "信息块占左列 + 手牌从第 2 列起"会把整行手牌**右移 `c1/2`**，与"整页中置"不可兼得。
-          //      这条把那个权衡钉成可执行的反例，防止下一轮有人照着"看起来更整齐"改回去。
-          const alt = intervalOf('2 / -1');
-          expect((alt[0] + alt[1]) / 2, `viewSeat=${seat}：\`2 / -1\` 的中心（${(alt[0] + alt[1]) / 2}）`
-            + `必须等于 (c1 + B)/2 = ${(c1 + B) / 2}`).toBe((c1 + B) / 2);
-          expect((alt[0] + alt[1]) / 2, `viewSeat=${seat}：\`2 / -1\` 的中心不等于板中心（${B / 2}）`
-            + ' ⇒ 它做不到"手牌整页中置"（整行右移 c1/2），故本页必须用 `1 / -1`').not.toBe(B / 2);
-          // ⑤-4 **代价（诚实残余）**：`1 / -1` 的区间跨过左右两块 ⇒ 两者**水平区间重叠**
-          //      （只有手牌足够宽时才会视觉上压住信息块）。把"残余"写进机检，免得下一轮有人
-          //      把它当 bug"顺手修好"——修法就是 `2 / -1`，而它会把中心右移。
-          expect(hLo, `viewSeat=${seat}：手牌区间从 ${hLo} 起、自己信息块区间到 ${iHi} ⇒ 两者水平重叠`
-            + '（这是"整页中置"的代价；不是缺陷）').toBeLessThanOrEqual(iLo);
+          expect(t.length, `viewSeat=${seat}：.net-board 的列模板不是 3 条轨道（实际 ${String(rawT)}）`)
+            .toBe(3);
+          // ⑤-1 **没有留白轨道**（R12-7 的成因）：三条都是内容宽族
+          for (const [i, track] of t.entries()) {
+            expect(/content/.test(track), `第 ${i + 1} 条轨道是 \`${track}\` —— `
+              + 'R12-7 之后不许有弹性/留白轨道（它会把左右两块推到页面两端）').toBe(true);
+          }
+          // ⑤-2 **整组居中**（三块紧挨着、作为一个整体居中）
+          expect(subjectPropOf(board, [board], RULES, 'justify-content'),
+            '停靠栏三块没有整组居中（`justify-content: center`）').toBe('center');
+          // ⑤-3 三块的**列号**必须是 1/2/3（紧挨着；中间那一列就是手牌）
+          expect(colOf(infoOf('self')), '自己信息块不在第 1 列').toMatch(/^1(\s*\/\s*2)?$/);
+          expect(colOf(handOf('self')), '自己手牌不在第 2 列（它必须夹在左右两块之间）')
+            .toMatch(/^2(\s*\/\s*3)?$/);
+          expect(colOf(infoOf('foe')), '对手信息块不在第 3 列').toMatch(/^3(\s*\/\s*4)?$/);
+          // ⑤-4 **保留下来的那条推导**：`2 / -1` 会把手牌区间扩到 `[c1, B]`、中心右移 `c1/2`
+          //      （与"整块居中"冲突）—— 数值反例仍成立，防止有人用"看起来更整齐"的写法把它改回去。
+          const B = 1000;
+          const c1 = 400;
+          expect((c1 + B) / 2, '`2 / -1` 的中心 != 板中心（这条推导仍是 R12-7 不许用它的理由）')
+            .not.toBe(B / 2);
+          console.log(`  viewSeat=${seat} · R12-7：三条内容宽轨道 [${t.join(' | ')}] + justify-content: center`
+            + `（手牌在第 2 列；\`2 / -1\` 的中心 ${(c1 + B) / 2} ≠ 板中心 ${B / 2}）`);
         }
       }
     } finally {

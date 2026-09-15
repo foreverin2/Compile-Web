@@ -1597,38 +1597,65 @@ export function resetCompiledFxCells(): void {
   compiledFxCells.length = 0;
 }
 
+/** **G2 修正 R13-1：`.compiled-fx` 装饰的**作者基准尺寸**（px）。
+ *
+ *  来历：这批装饰（环带 / 圆角 / 岩浆段 / 金属护角…）是 R12「持久 FX 层」时代按**热座页的
+ *  协议尺寸** `200×280` 用 px 写死的（`styles.css:495` 的 `.protocol-img { width: 200px }`
+ *  ⇒ 高 280）。远程页把协议缩到 76.9×107.7 之后，层盒跟着缩而装饰不缩 ⇒ 相对放大 ~2.6 倍。
+ *  ⇒ 层盒固定回这个基准、再整层 `scale(实测宽 / 200)`（见 `positionCompiledFxLayer`）。
+ *  ⚠️ 它是**两处真相**（另一处是装饰自己的 px）⇒ `tests/ui/protocol-fx-rot.test.ts` 的 G-13
+ *  会从 `styles.css` 解出 `.protocol-img` 的 `width` 与它比对，改一处忘另一处会立刻红。 */
+const COMPILED_FX_BASIS_W = 200;
+const COMPILED_FX_BASIS_H = 280;
+
 /** 把 body 级持久 FX 层（compiledFx 注册表，key=defId）重定位到 holder 矩形。层节点
  *  从不移动，只覆写坐标/尺寸（fixed）→ CSS 动画不重启。0×0（图片未加载/节点 detached）
- *  时跳过：等下一帧渲染或 img load 回调再对齐。 */
+ *  时跳过：等下一帧渲染或 img load 回调再对齐。
+ *
+ *  ── G2 修正 **R13-1**（用户第五次验收："协议边框我已经发现了，没有缩小"）──
+ *  ⚠️ 层盒**不再**等于 holder 的实测矩形，而是等于**装饰的作者基准**（`200×280`），
+ *  再把整层 `scale(k)` 到 holder 的尺寸（`k = 实测 holder 宽 / 200`）。
+ *  **为什么必须这样**：`.compiled-fx-*` 的装饰是**按 200×280 用 px 写死**的
+ *  （`.lava-seg` 14×5 / `offset-path: inset(-5px round 15px)` / `.compiled-ring` 圆角 14px /
+ *  金属护角 54×54 …，见 `styles.css` 的 594-624 与 4642-4662）。R9-1 把远程页协议缩到
+ *  76.9×107.7 之后，层盒跟着缩、**层内的 px 装饰不缩** ⇒ 环带外扩、圆角、护角、岩浆段
+ *  全部相对卡面放大 ~2.6 倍（正是用户看到的那条）。
+ *  `scale(k)` 与 `rotate(deg)` 都是**绕层自身中心**的线性变换、且 k 是**均匀**缩放 ⇒ 两者可交换，
+ *  合并成一个 transform 不会改变几何。
+ *  ⚠️ **热座页逐字不变**：热座 holder 就是 200×280（`styles.css:495` 的 `.protocol-img`
+ *  `width: 200px`）⇒ `k === 1`、`deg === 0` ⇒ 内联 transform 仍是**空串**、
+ *  left/top 仍是 holder 的左上角（`r.left + r.width/2 - 100` = `r.left` ✓）。
+ *  ⚠️ 作者基准是**两处真相**（它写死在装饰里）⇒ `tests/ui/protocol-fx-rot.test.ts` 的 G-13
+ *  会从 `styles.css` 解 `.protocol-img` 的 `width` 并与这个常量比对。 */
 function positionCompiledFxLayer(defId: string, holder: HTMLElement): void {
   const fx = compiledFx.get(defId);
   if (!fx || !holder.isConnected) return;
   const r = holder.getBoundingClientRect();
   if (r.width === 0 && r.height === 0) return;
-  fx.style.left = `${r.left}px`;
-  fx.style.top = `${r.top}px`;
-  fx.style.width = `${r.width}px`;
-  fx.style.height = `${r.height}px`;
+  // 层盒 = 装饰的作者基准，居中对齐到 holder 的**实测中心**
+  fx.style.left = `${r.left + r.width / 2 - COMPILED_FX_BASIS_W / 2}px`;
+  fx.style.top = `${r.top + r.height / 2 - COMPILED_FX_BASIS_H / 2}px`;
+  fx.style.width = `${COMPILED_FX_BASIS_W}px`;
+  fx.style.height = `${COMPILED_FX_BASIS_H}px`;
   // ── G2 修正 R8-4：层跟着协议**横躺**（几何跟随的第一处） ──
   // 远程页的协议图由 `.net-rot-ccw/.net-rot-cw` 自己转了 ∓90°（自己 −90°、对手 +90°），
   // 但 **holder 的布局盒始终是未旋转的**（R9-1 后 = `--card-h × 0.5495` × `--card-h × 0.7692`
-  // ≈ 76.9×107.7；R8-1~R9-1 之前是 100×140）—— 于是层盒（= holder 盒，尺寸由上面那四行
-  // **从 `getBoundingClientRect()` 现取**）与协议的**视觉**盒（旋转后 ≈ 107.7×76.9）差 90°，
+  // ≈ 76.9×107.7）—— 于是层盒（= holder 盒）与协议的**视觉**盒（旋转后 ≈ 107.7×76.9）差 90°，
   // 环/角光/藤蔓/裂纹全部贴着"一个竖版框"画。这里把层绕**自身中心**转同一个
-  // 角度即可完全重合：**数学依据** —— 层盒 = holder 的 layout 盒，协议图在 holder 内**绕自身
-  // 中心**旋转 ∓90°（图片与 holder 同心，两者尺寸相同且居中）⇒ 层绕**同一个中心**转
+  // 角度即可完全重合：**数学依据** —— 层盒与 holder 同心 ⇒ 层绕同一个中心转
   // 同一个角度后，视觉盒与协议视觉盒**逐像素重合**（`transform-origin` 保持
   // 默认 `50% 50%` 就是"绕自身中心"，故**不需要**写它；`.compiled-fx` 自身在 styles.css 里
-  // 没有 `transform`/`transform-origin` 声明，不会与这条内联旋转打架）。
-  // ⚠️ **协议尺寸在这里不是常量**：四行几何全部来自实测矩形 ⇒ R9-1 把协议缩小之后
-  //    （`--card-h` 140 ⇒ holder 76.9×107.7）层/环**自动跟随**，本函数无须改动。
+  // 没有 `transform`/`transform-origin` 声明，不会与这条内联变换打架）。
   // ⚠️ 读 `fxRotDegOf`（**只读标记、不回退**）而不是 `fxOrientOf`：后者缺标记时会回退卡面朝向
   //    ⇒ 把"标记没产出"这个缺陷静默换成一个猜出来的角度；不回退 ⇒ 得 0（不旋转），
   //    由 `verifyPageHooks` 的约束 10 报红。热座页没有标记 ⇒ 恒 0 ⇒ 热座零变化是构造性的。
-  // 幂等：`img.load` 回调与每帧 `syncCompiledFxLayers` 写同一个值；热座页 `deg === 0`
-  //    ⇒ 内联 transform 是**空串**（与改动前逐字等价）。
+  // 幂等：`img.load` 回调与每帧 `syncCompiledFxLayers` 写同一个值；热座页 `deg === 0` 且
+  //    `k === 1` ⇒ 内联 transform 是**空串**（与改动前逐字等价）。
   const deg = fxRotDegOf(holder);
-  fx.style.transform = deg === 0 ? '' : `rotate(${deg}deg)`;
+  const k = r.width / COMPILED_FX_BASIS_W;
+  fx.style.transform = deg === 0 && Math.abs(k - 1) < 1e-4
+    ? ''
+    : `rotate(${deg}deg) scale(${k.toFixed(4)})`;
   // 冷漠已编译卡面克隆（故障特效载体）与真实协议图同朝向：P2 侧协议图 rot-180，
   // 克隆图若不跟随会在故障滤镜下露出方向不一致的重影（幂等：每次重定位同步一次）
   const face = fx.querySelector<HTMLElement>('.compiled-apathy-face');

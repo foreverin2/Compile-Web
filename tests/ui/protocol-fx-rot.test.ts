@@ -190,14 +190,29 @@ describe('G2 修正 R8-4 · 行为腿：已编译持久 FX 层的内联 transfor
   it('标记 ccw ⇒ rotate(-90deg)；标记 cw ⇒ rotate(90deg)；无标记（热座）⇒ 空串', async () => {
     const restore = installStubDom();
     try {
-      const cases: Array<{ defId: string; orient: CardOrient; marker?: 'cw' | 'ccw'; want: string }> = [
-        { defId: 'r84-none', orient: 0, want: '' },                                  // 热座形态
-        { defId: 'r84-self', orient: 0, marker: 'ccw', want: 'rotate(-90deg)' },     // 远程页自己
-        { defId: 'r84-foe', orient: 180, marker: 'cw', want: 'rotate(90deg)' },      // 远程页对手
+      // R13-1：层的内联 transform = `rotate(∓90deg) scale(k)`，k = 实测 holder 宽 / 200（作者基准）。
+      // 矩形的宽度决定 k ⇒ 期望值**由矩形算出来**（不写死魔数）：
+      //  · 热座形态用基准 200×280 ⇒ k=1 且 deg=0 ⇒ transform **空串**（逐字等价，红线）；
+      //  · 远程页形态用真值 76.93×107.69 ⇒ k≈0.3847。
+      const REMOTE_W = 76.93;
+      const REMOTE_H = 107.69;
+      const cases: Array<{
+        defId: string; orient: CardOrient; marker?: 'cw' | 'ccw'; want: string;
+        rect: { left: number; top: number; width: number; height: number };
+      }> = [
+        { defId: 'r84-none', orient: 0, want: '', rect: { left: 10, top: 20, width: 200, height: 280 } },
+        {
+          defId: 'r84-self', orient: 0, marker: 'ccw', rect: { left: 10, top: 20, width: REMOTE_W, height: REMOTE_H },
+          want: `rotate(-90deg) scale(${(REMOTE_W / 200).toFixed(4)})`,
+        },
+        {
+          defId: 'r84-foe', orient: 180, marker: 'cw', rect: { left: 10, top: 20, width: REMOTE_W, height: REMOTE_H },
+          want: `rotate(90deg) scale(${(REMOTE_W / 200).toFixed(4)})`,
+        },
       ];
       for (const c of cases) {
         renderCompiledProto(c.defId, c.orient, c.marker);
-        setStubRect({ left: 10, top: 20, width: 100, height: 140 });
+        setStubRect(c.rect);
         syncCompiledFxLayers();
         const layer = compiledLayerOf(c.defId);
         expect(layer, `${c.defId}：body 级 .compiled-fx-<defId> 层不存在`).toBeTruthy();
@@ -235,7 +250,8 @@ describe('G2 修正 R8-4 · 行为腿：已编译持久 FX 层的内联 transfor
       expect(isClass(faceOf('apathy') as StubNode, 'rot-180'),
         '层已转 +90° 时克隆面还带着 180°（合成 270°，故障重影方向错）—— 互斥判据失效').toBe(false);
       expect(String((compiledLayerOf('apathy') as StubNode).style.transform),
-        '远程页形态下层的内联 transform 不是 rotate(90deg)').toBe('rotate(90deg)');
+        '远程页形态下层的内联 transform 不是 rotate(90deg) scale(k)（R13-1 起两段）')
+        .toBe("rotate(90deg) scale(0.5000)");  // k = 100/200（本用例矩形 100×140）
     } finally {
       setStubRect(null);
       await drainRaf();
@@ -275,7 +291,13 @@ describe('G2 修正 R8-4 · 源码腿（三处几何跟随的读侧与写法）'
     expect(src, 'positionCompiledFxLayer 未读 holder 的标记（层不会跟着协议转）')
       .toContain('const deg = fxRotDegOf(holder);');
     expect(src, '层的 transform 不是由那个角度写出来的（角度算了却没用 / 写成别的形态）')
-      .toContain("fx.style.transform = deg === 0 ? '' : `rotate(${deg}deg)`;");
+      .toMatch(/fx\.style\.transform = deg === 0 && Math\.abs\(k - 1\) < 1e-4\s*\n?\s*\? ''\s*\n?\s*: `rotate\(\$\{deg\}deg\) scale\(\$\{k\.toFixed\(4\)\}\)`;/);
+    // R13-1：层盒必须回到**作者基准**（装饰的 px 基准），而不是 holder 的实测尺寸 ——
+    // 否则"缩了盒子没缩内容"（用户："协议边框我已经发现了，没有缩小"）。
+    expect(src, 'positionCompiledFxLayer 未把层盒写成作者基准（COMPILED_FX_BASIS_W/H）')
+      .toContain('r.left + r.width / 2 - COMPILED_FX_BASIS_W / 2');
+    expect(src, '缺 scale 因子（k = 实测宽 / 基准宽）')
+      .toMatch(/const k = r\.width \/ COMPILED_FX_BASIS_W;/);
     // 角度只能来自那一个助手：render.ts 里 `fxRotDegOf(` 恰好一处（不得再手搓一份角度）
     expect((src.match(/fxRotDegOf\(/g) ?? []).length,
       'render.ts 里 fxRotDegOf 的调用点不是恰好一处（角度被手搓了第二份？）').toBe(1);
@@ -307,6 +329,25 @@ describe('G2 修正 R8-4 · 源码腿（三处几何跟随的读侧与写法）'
       'effects/index.ts 里 fxRotDegOf 的调用点少于两处（翻面浮层 / 重排幽灵）').toBeGreaterThanOrEqual(2);
     expect(src, 'effects/index.ts 里出现了裸角度字面量 rotate(90deg)/rotate(-90deg) 手搓（应走 fxRotDegOf）')
       .not.toMatch(/rotate\((?:-?90)deg\)/);
+  });
+
+  it('G-13（R13-1 前提腿）：层盒的**作者基准** == `styles.css` 的 `.protocol-img` 宽度（两处真相必须同源）', () => {
+    // R13-1 把"层盒 = holder 实测矩形"改成"层盒 = 装饰的作者基准 200×280 + scale(k)"。
+    // ⚠️ 200 是**两处真相**：它写死在 `render.ts` 的常量里，而它的来历是 `styles.css` 的
+    //    `.protocol-img { width: 200px }`（热座协议的尺寸 = 那批 px 装饰的基准）。
+    //    这条腿**从 styles.css 解出那个数**再与常量比对 —— 改了热座协议宽度而忘改常量会立刻红。
+    const css = readUi('styles.css');
+    const m = /\.protocol-img\s*\{[^}]*?width:\s*(\d+)px/.exec(css);
+    expect(m, '在 `styles.css` 里找不到 `.protocol-img { … width: Npx }`（作者基准的来历没了）').toBeTruthy();
+    const basis = Number(m![1]);
+    console.log(`\n===== G-13 · 作者基准的同源比对 =====\n  styles.css .protocol-img width = ${basis}px`);
+    const src = readUi('render.ts');
+    expect(src, `层盒的作者基准与 \`styles.css\` 的 \`.protocol-img\` 宽度（${basis}）不一致 —— `
+      + '装饰是按后者写的，改一处忘另一处会让协议特效重新"缩了盒子没缩内容"（R13-1 的缺陷形态）')
+      .toContain(`const COMPILED_FX_BASIS_W = ${basis};`);
+    // 高 = 宽 × 7/5（协议卡面 5:7；`.protocol-img` 的 height 是 auto）
+    expect(src, `层盒高度必须是宽 × 7/5 = ${(basis * 7) / 5}（协议卡面 5:7）`)
+      .toContain(`const COMPILED_FX_BASIS_H = ${(basis * 7) / 5};`);
   });
 
   it('render-net.ts：协议 holder 的标记与协议图的 .net-rot-* 由同一个 isSelfSeat 派生（调用点形态）', () => {
@@ -420,12 +461,15 @@ describe('G2 修正 R8-4b · 行为腿：net 页每帧同步已编译持久 FX �
             for (const defId of IDS[p]) {
               const st = layerStyleOf(defId);
               // ① **被真的定位过**：四个内联几何值都写上了（值来自 `setStubRect` 的常量矩形）
+              // R13-1：层盒 = **作者基准 200×280**，**居中**对齐到 holder 的实测矩形
+              // （矩形 10,20,100×140 ⇒ left = 10+50−100 = −40 / top = 20+70−140 = −50）。
               expect([st.left, st.top, st.width, st.height],
-                `${defId}：层没有被定位（left/top/width/height 内联值）—— 环/角光会飘在旧坐标上`)
-                .toEqual(['10px', '20px', '100px', '140px']);
-              // ② **角度严格按侧**（R8-4 的 ∓90°，与 holder 标记同源）
+                `${defId}：层没有被定位（left/top/width/height 内联值）—— 环/角光会飘在旧坐标上，`
+                + '或层盒没有回到作者基准（R13-1）')
+                .toEqual(['-40px', '-50px', '200px', '280px']);
+              // ② **角度严格按侧**（R8-4 的 ∓90°，与 holder 标记同源）+ **scale 跟着 holder 缩**（R13-1）
               expect(String(st.transform), `${defId}：transform 不是 ${want}（协议特效没跟着协议转）`)
-                .toBe(want);
+                .toBe(`${want} scale(${(100 / 200).toFixed(4)})`);
             }
           }
         }

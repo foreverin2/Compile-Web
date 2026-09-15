@@ -334,6 +334,10 @@ describe('G2 修正 R2 · 读侧调用点（源码守卫）', () => {
       //    卡面用这里的 `orientOf(node)`。⚠️ 这些调用点必须**原地**读 `orientOf(node)`
       //    （不能挪进 `setTimeout` 回调 —— 那时节点已被重渲染替换，读到的既不是原卡、也可能是 null）。
       /\bplay(?:ShatterAt|CutAt)\(rect, orient, payload, orientOf\(node\)\)/,
+      // ④ **G2 修正 R13-5**（独立审计 B5）：gravity 浮层卡的**卡面**朝向实参。
+      //    这一处此前**漏了**（`buildGravityGhost` 只收 `orient`，于是远程页的 gravity 浮层卡
+      //    卡面横躺 90°）；修法是给它加第 4 参并在这里传 `orientOf(node)`。
+      /buildGravityGhost\(rect, orient, payload, orientOf\(node\)\)/,
     ];
     const bad = src.split('\n')
       .map((line, i) => ({ no: i + 1, line: line.trim() }))
