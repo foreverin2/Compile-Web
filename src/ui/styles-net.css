@@ -1070,8 +1070,15 @@
 /* 滑块：位置由内联 `top` 给（renderControlModule 的竖向分支），过渡属性也要从 left 换成 top */
 .net-board .control-slider-img {
   left: 50%;
-  top: 50%;                         /* 内联 top 覆盖它（4%/50%/96%） */
-  transform: translate(-50%, -100%);
+  top: 50%;                         /* 内联 top 覆盖它（竖向：22% / 50% / 78%） */
+  /* ── G2 修正 R14-1（用户："控制权的那张卡片一直偏上"）──
+     原来是 translate(-50%, -100%)（**底边**对齐坐标）—— R3 为"4%/96% 两端不出轨"选的，
+     代价是**任何位置都整体上移一个卡高**（70px）⇒ 中位（50%）时也看着偏上。
+     改成**中心**对齐坐标（= styles.css:698 热座页的同一语义），两端由 renderControlModule
+     的竖向分支内缩到 CONTROL_EDGE_PCT_Y（22% / 78%）。
+     ⚠️ 诚实残余：控制权转移 FX 的端点仍用 CONTROL_EDGE_PCT(4/96) 兜底 ⇒ 竖向两端与卡片
+     实际停位差 ~28px（那段 FX 很短，卡片位置才是用户盯的那件事）。 */
+  transform: translate(-50%, -50%);
   transition: top 0.5s ease;
 }
 

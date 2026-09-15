@@ -982,10 +982,14 @@ function renderSide(
   const myTurn = isTurn(s, player);
   // ⚠️ 节点**先建后按侧挂载**：本页守卫第 2 条的判据是 `appendChild(<call>` 或 `= <call>`
   //    （"结果真的流进 DOM"）—— 绑定成局部变量再挂载仍然满足，而顺序由下面的 `kind` 分支决定。
+  // ── G2 修正 R14-2：交互权 = 「**我这一侧** + **轮到我**」──
+  // 旧的第 4/6 实参是 myTurn（= 那个**玩家**是不是回合玩家）⇒ 对手回合时**对手的槽**也变成
+  // interactable（hover / 落点高亮 / 点击/拖拽打牌），而我这台机器上根本没有"往对手槽打牌"这回事。
+  const canAct = isSelfSeat && myTurn;
   const slotNode = renderStackSlot(
-    s, player, line, myTurn ? uid : null,
+    s, player, line, canAct ? uid : null,
     (l) => playToLine(s, cb, l, player),
-    myTurn,
+    canAct,
     {
       // 自己 0°、对手 180°（约束 2）。`isSelfSlot` 必须显式给座位真值：
       // 缺省值用的是 `s.turnPlayer`（那是回合），在远程页会让高亮每回合翻面。

@@ -382,7 +382,16 @@ export function renderStackSlot(
     bindClickOrDouble(
       node,
       () => { if (interactable) onPlay(line); },
-      () => openZoom(card.defId, card.faceUp, false, false, !card.faceUp && (s.phase === 'gameover' || (card.owner === s.turnPlayer && !card.secret))),
+      // ── G2 修正 R14-2（用户第七次验收）：「能否翻面查看」的判据从**谁的回合**改成**这张牌的信息是否公开** ──
+      // 旧判据 `!card.faceUp && (gameover || card.owner === s.turnPlayer && !card.secret)` 在远程页会
+      // **跟着回合走**：对手回合时 `card.owner === s.turnPlayer` 对**对手的卡**成立 ⇒ 我能在对手回合
+      // 翻开对手场上的反面卡（用户报的："在对方的回合中，己方能够查看对方场上反面卡牌信息的 bug"）。
+      // 新判据（用户裁决）：① **正面朝上（已公开）的卡，背面永远可翻面查看**；
+      // ② 反面卡只在 gameover 复核、或「**这一槽就是我自己的**（isSelfSlot）且非 secret」时允许。
+      // ⚠️ 用 isSelfSlot 而**不是** `card.owner === s.turnPlayer`：热座页的 isSelfSlot 缺省值
+      // **就是**后者（逐字等价 ⇒ 热座零变化），而远程页显式传按座位的真值。
+      () => openZoom(card.defId, card.faceUp, false, false,
+        card.faceUp || s.phase === 'gameover' || (isSelfSlot && !card.secret)),
       true
     );
     pile.appendChild(node);
@@ -2073,6 +2082,9 @@ function bindShieldDrag(shield: HTMLElement, player: PlayerId, hand: HTMLElement
 //    （`fxTrackEndFor`）必须与滑块的贴端位置**逐字一致**，否则"滑块贴 4%、特效算在别处"。
 //    R3 之前两处各写死一个 4，靠注释说"同源"，没有任何机检连起来（评审 Minor M-4）。
 const CONTROL_EDGE_PCT = FX_TRACK_EDGE_PCT; // 持有方贴端距离（左端 4% / 右端 96%，控制卡仍不出轨）
+/** 竖向（远程页控制轨）的贴端百分比：卡片高 70px、轨道高 158px，且**中心对齐坐标** ⇒
+ *  两端必须内缩（4% 处中心只有 6.3px ⇒ 上半张卡在轨道外）。22% ≈ 卡高的一半再加一点余量。 */
+const CONTROL_EDGE_PCT_Y = 22;
 let controlSliderPos = 50;
 
 /**
@@ -2108,9 +2120,14 @@ export function renderControlModule(s: GameState, opts?: ControlTrackOpts): HTML
   const neutral = holder === -1;
   const vertical = opts?.axis === 'y';
   // 三态目标位置：中立居中；player 0 贴小端（横=左 / 竖=上）；player 1 贴大端（横=右 / 竖=下）
+  // G2 修正 R14-1：竖向（远程页控制轨）两端**内缩**到 CONTROL_EDGE_PCT_Y —— 卡片是 70px 高的图
+  // （styles.css:698）而轨道只有 158px，而远程页把它的 transform 改成**中心对齐坐标**
+  // （styles-net.css 第 9 节）⇒ 4%/96% 会让卡片上半/下半出轨道。
+  // ⚠️ 只动竖向：横向（热座）继续用 CONTROL_EDGE_PCT，逐字不变。
+  const edge = vertical ? CONTROL_EDGE_PCT_Y : CONTROL_EDGE_PCT;
   let target = 50;
-  if (holder === 0) target = CONTROL_EDGE_PCT;
-  else if (holder === 1) target = 100 - CONTROL_EDGE_PCT;
+  if (holder === 0) target = edge;
+  else if (holder === 1) target = 100 - edge;
   const ctrl = el('div', 'control-module' + (neutral ? ' neutral' : ` held-${holder}`));
   const track = el('div', 'control-track');
   // 标签类名按轴向给：横向 `left/right`（styles.css 的既有规则），竖向 `top/bottom`（styles-net.css）

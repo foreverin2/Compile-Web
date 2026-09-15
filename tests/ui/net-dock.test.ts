@@ -356,6 +356,30 @@ describe('R11-2 · G-13：停靠栏（一个视口高 · 链路区内部滚动 �
     }
   });
 
+  it('G-19. R14-1/2：控制卡中心对齐 + 竖向两端内缩；"能否翻面查看"改按公开性（源码腿）', () => {
+    const css = read('styles-net.css');
+    // ① R14-1：控制卡（70px 高的图）在 158px 轨道里必须**中心**对齐坐标，两端内缩
+    expect(css, '控制卡仍是 translate(-50%, -100%)（底边对齐 ⇒ 任何位置都整体偏上一个卡高 —— '
+      + '用户第七次验收："控制权的那张卡片位置有点不太对，一直偏上"）')
+      .toMatch(/\.net-board \.control-slider-img \{[^}]*translate\(-50%, -50%\)/);
+    const rs = hotSrc();
+    expect(rs, '竖向控制轨的两端没有内缩（4%/96% + 中心对齐 ⇒ 卡片上半/下半出轨道）')
+      .toMatch(/const edge = vertical \? CONTROL_EDGE_PCT_Y : CONTROL_EDGE_PCT;/);
+    expect(rs, 'CONTROL_EDGE_PCT_Y 未定义').toMatch(/const CONTROL_EDGE_PCT_Y = \d+;/);
+    // ② R14-2：翻面查看的判据必须**按信息是否公开**（正面卡永远可看背面），
+    //    反面卡用 `isSelfSlot`（按座位）而**不是** `card.owner === s.turnPlayer`（按回合 ⇒ 远程页会在
+    //    对手回合放开对手的反面卡）。
+    const gate = /openZoom\(card\.defId, card\.faceUp, false, false,\s*\n?\s*card\.faceUp \|\| s\.phase === 'gameover' \|\| \(isSelfSlot && !card\.secret\)\)/.exec(rs);
+    expect(gate, '翻面查看的判据没有改成"公开性 + isSelfSlot"（远程页仍会在对手回合放开对手的反面卡）')
+      .toBeTruthy();
+    expect(rs, '翻面查看的判据里仍有 `card.owner === s.turnPlayer`（按回合 ⇒ 用户报的 bug 形态）')
+      .not.toMatch(/openZoom\(card\.defId, card\.faceUp, false, false,[^;]*card\.owner === s\.turnPlayer/);
+    // ③ 远程页的槽交互权 = 我这一侧 + 轮到我
+    expect(netSrc(), '远程页的槽交互仍是按"那个玩家是不是回合玩家"判的 —— '
+      + '对手回合时对手的槽会变成可交互（hover/落点/点击打牌）')
+      .toMatch(/const canAct = isSelfSeat && myTurn;/);
+  });
+
   it('G-13d（前提腿）：styles-net.css 不得含 `!important` / ID / 内联覆盖（与既有三条腿同一份实现）', () => {
     expect(() => assertNoUnmodelableCascade(RULES, MODELED_PROPS)).not.toThrow();
   });
