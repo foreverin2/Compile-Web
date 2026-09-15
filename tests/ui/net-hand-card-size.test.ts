@@ -47,11 +47,16 @@ describe('R9-4 手牌卡与场上卡同基准', () => {
     expect(board, '`--card-w` 没有由 `--card-h` 推出').toContain('--card-w: calc((var(--card-h) - 2px) * 0.71429 + 2px)');
     expect(board, '手牌整卡高 `--hand-card-h` 没有由 `--card-w` 推出')
       .toContain('--hand-card-h: calc((var(--card-w) - 8px) * 1.4 + 8px)');
-    // 反空集合（**单一出处**）：整份 styles-net.css 里 `--card-h:` 只许出现 **1 次**
-    //（引用处写的是 `var(--card-h)`，不匹配 `--card-h:`），否则又是"两处真相、改一处另一处不动"
-    const decls = NET.match(/--card-h\s*:/g) ?? [];
+    // 反空集合（**单一出处**）：整份 styles-net.css 里 `--card-h` 只许有 **1 处"真值"定义**
+    //（引用处写 `var(--card-h)` 不匹配；`.net-lane-band .stack { --card-h: inherit }` 是 R10-2 的
+    // "拿回旋钮"再声明、**不是**第二个值 ⇒ 不计入）
+    const decls = NET.match(/--card-h\s*:(?!\s*inherit)/g) ?? [];
     expect(decls.length, `styles-net.css 里 --card-h 被定义了 ${decls.length} 次（必须恰好 1 次 = 单一旋钮）`)
       .toBe(1);
+    // 但那个 `inherit` 再声明**必须**在（否则 styles.css 的 175 会赢 ⇒ 场上卡根本没缩，R10-2 的实机缺陷）
+    expect(NET, '`.net-lane-band .stack` 没有用 `inherit` 重新声明 --card-h —— '
+      + 'styles.css 的 `.stack { --card-h: 175px }` 会赢，场上卡根本不会缩（R10-2 用户实机发现）')
+      .toContain('--card-h: inherit');
   });
 
   it('手牌卡 / 背面 / 手牌行的尺寸全部由 `--card-w`、`--hand-card-h` 推出（无字面量回潮）', () => {

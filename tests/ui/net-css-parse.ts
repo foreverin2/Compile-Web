@@ -243,7 +243,18 @@ export function assertNoUnmodelableCascade(rules: readonly CssRule[], props: rea
 export function cssVarOf(chain: StubNode[], rules: CssRule[], name: string): string | null {
   for (let i = chain.length - 1; i >= 0; i -= 1) {
     const raw = cssPropOf(chain[i], chain.slice(0, i + 1), rules, name);
-    if (raw !== null) return raw.trim();
+    if (raw === null) continue;
+    const v = raw.trim();
+    // ⚠️ **R10-2：CSS 全局关键字要按浏览器语义处理，不能当成普通值返回。**
+    //    背景：`styles-net.css` 在 `.net-lane-band .stack` 上写 `--card-h: inherit` —— 那是为了用
+    //    (0,2,0) 压过 `styles.css` 声明在 `.stack` **元素自己身上**的 `--card-h: 175px`
+    //    （自定义属性只在该元素没有声明时才继承 ⇒ 放在祖先上的值赢不了它）。
+    //    ⇒ 解算器遇 `inherit` / `unset`（自定义属性默认继承）必须**继续往祖先找**；
+    //      `initial` / `revert` ⇒ 保证无效值，链上再也找不到（返回 null）。
+    //    不这么写，G-3 / G-10a 会以"min-height 解不出像素值"假红（R10-2 实测踩到）。
+    if (v === 'inherit' || v === 'unset') continue;
+    if (v === 'initial' || v === 'revert') return null;
+    return v;
   }
   return null;
 }
