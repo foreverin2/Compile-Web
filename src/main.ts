@@ -27,7 +27,7 @@ import { gen3FulcrumSwapFx, gen3ProtocolSwapFx } from './ui/fx-gen3-swap';
 import { syncFollowers } from './ui/fx-follow';
 import { initGen2Fx, clearGen2Fx } from './ui/fx-gen2';
 import { initDiag } from './ui/diag';
-import { initDevMode } from './ui/devmode';
+import { initDevMode, isDevUnlocked } from './ui/devmode';
 import { gameBus } from './core/events/bus';
 import { pushLog } from './core/log';
 import { trace, stateDigest, initEventTracing } from './core/trace';
@@ -104,17 +104,23 @@ let netViewSeat: PlayerId = 0;
  */
 function rerender(): void {
   if (renderMode === 'net' && state.phase !== 'draft') {
-    // 预览工具条只在传了 onPreviewChange 时渲染（真实联机不传 → 完全不存在）；
-    // 工具条上只有**视角**一个开关（G2 Task 4F · I-2 删掉了误导性的"对手手牌全部可见"档）。
-    // verifyHooks 打开**运行时自查**：渲染后立刻去 DOM 里查 A 类钩子 + 两条源码守卫证不了的断言，
-    // 结果写进工具条的 `.net-verify-note`（用户一进预览页就能看见，不必开控制台）。
+    // ── G2 修正 **R12-6**：预览工具条与运行时自查**只在开发者模式解锁后**才启用 ──
+    // 用户第五次验收："还有预览工具条，我希望隐藏它，并将它的功能内化给开发者模式"。
+    // 工具条的两个功能各自有了去处：
+    //  · **视角切换** → 开发者指令 `视角` / `seat 1|2`（`initDevMode` 里的 `netSeat` 回调）；
+    //  · **运行时自查行**（`verifyHooks`）→ 解锁后随工具条一起出现（普通对局里结果仍写 console）。
+    // ⚠️ 因此**普通玩家/普通对局看到的页面上没有这条工具条**；解锁（Ctrl+Shift+P → 密码）
+    //    会触发一次 `rerender()`（见 `devmode.ts` 的解锁分支），工具条当场出现。
+    const dev = isDevUnlocked();
     renderNetBoard(root, state, cb, {
       viewSeat: netViewSeat,
-      onPreviewChange: (next) => {
-        if (next.viewSeat !== undefined) netViewSeat = next.viewSeat;
-        rerender();
-      },
-      verifyHooks: true,
+      ...(dev ? {
+        onPreviewChange: (next: { viewSeat?: 0 | 1 }) => {
+          if (next.viewSeat !== undefined) netViewSeat = next.viewSeat;
+          rerender();
+        },
+      } : {}),
+      verifyHooks: dev,
     });
     return;
   }
@@ -724,7 +730,12 @@ initDiag(() => state);
 // G2 Task 4F（终审 D-2）：原先注入的是裸 `renderApp(root, state, cb)` —— 在远程页预览里用
 // devmode 加牌会把页面**画回热座棋盘**（状态无损，但界面不一致）。改走唯一入口 `rerender()`：
 // 热座下 `rerender()` 逐字执行 `renderApp`（语义等价），远程页下则正确地重画当前页。
-initDevMode({ getState: () => state, render: () => rerender() });
+initDevMode({
+  getState: () => state,
+  render: () => rerender(),
+  // G2 修正 **R12-6**：远程页的视角切换从"页面上的预览工具条"内化进开发者模式（`视角` 指令）
+  netSeat: { get: () => netViewSeat, set: (seat) => { netViewSeat = seat; } },
+});
 // 效果触发的抽牌：累计 card:drawn 事件（love 协议触发 → love 标志 → 抽牌动画挂爱心），
 // 行动结算后统一播新抽牌特效
 gameBus.subscribe((e) => {

@@ -207,11 +207,17 @@ describe('G2 Task 4 · 接线：远程页进入产物 + 重渲染路由唯一入
       .toMatch(/renderMode\s*=\s*'net'/);
     expect(net, 'startNetPreview 未接收/落地 viewSeat').toMatch(/netViewSeat\s*=\s*viewSeat/);
     expect(net, 'startNetPreview 未沿用现有掷硬币流程（showCoin）').toMatch(/\bshowCoin\(\)/);
-    // 预览入口必须传 verifyHooks: true（自查结果显示在工具条上 = 用户可见的运行时证据）
+    // ── R12-6：工具条与自查**只在开发者模式解锁后**启用（用户："隐藏它，功能内化给开发者模式"）──
+    // 判据从"传 verifyHooks: true"改成"**由 `isDevUnlocked()` 闸门**决定" —— 两者都必须查：
+    //  · 闸门在（`const dev = isDevUnlocked()` + `verifyHooks: dev`）⇒ 普通对局里页面上没有工具条；
+    //  · 功能仍在（`onPreviewChange` / `verifyHooks` 两个键都还在，只是条件展开）。
+    // ⚠️ 反面（同一条腿）：**不许**再无条件写 `verifyHooks: true` —— 那正是用户要隐藏的形态。
     const rerender = functionBody(main, 'rerender');
-    expect(rerender, 'rerender 未传 verifyHooks: true（预览页看不到运行时自查行）')
-      .toMatch(/verifyHooks:\s*true/);
-    expect(rerender, 'rerender 未传 onPreviewChange（预览工具条完全不渲染 → 无法切视角 / 看自查行）')
+    expect(rerender, 'rerender 没有开发者模式闸门（`isDevUnlocked()`）—— 预览工具条会常驻在页面上')
+      .toMatch(/isDevUnlocked\(\)/);
+    expect(rerender, 'rerender 未按闸门传 verifyHooks（预览页看不到运行时自查行）')
+      .toMatch(/verifyHooks:\s*dev/);
+    expect(rerender, 'rerender 未按闸门传 onPreviewChange（解锁后仍无法切视角 / 看自查行）')
       .toMatch(/onPreviewChange/);
     expect(rerender, 'rerender 不再传 onPreviewChange / viewSeat / verifyHooks 之一')
       .toMatch(/viewSeat:\s*netViewSeat/);
@@ -239,12 +245,13 @@ describe('G2 Task 4 · 接线：远程页进入产物 + 重渲染路由唯一入
       'render-net.ts 的 NetViewOpts 仍有 page 级 handVisibility 档位字段（死参数，N4）')
       .not.toMatch(/^\s*handVisibility:\s*'all'\s*\|\s*'viewSeat'\s*;/m);
     // D-2：devmode 注入必须走唯一入口 `rerender()`（否则远程页里用 devmode 加牌会把页面画回热座）
-    const devmodeLines = main.split('\n')
-      .map((line, i) => ({ no: i + 1, line: line.trim() }))
-      .filter(({ line }) => line.includes('initDevMode('));
-    expect(devmodeLines.length, 'main.ts 里 initDevMode( 的调用点数不是 1').toBe(1);
-    expect(devmodeLines[0].line, 'devmode 注入未走 rerender()（D-2：远程页里加牌会被画回热座棋盘）')
+    // ⚠️ R12-6：调用现在是**多行**（多了 netSeat 回调）⇒ 判据改成"从调用点起的一段"。
+    const devmodeCall = main.slice(main.indexOf('initDevMode('), main.indexOf('initDevMode(') + 400);
+    expect((main.match(/initDevMode\(/g) ?? []).length, 'main.ts 里 initDevMode( 的调用点数不是 1').toBe(1);
+    expect(devmodeCall, 'devmode 注入未走 rerender()（D-2：远程页里加牌会被画回热座棋盘）')
       .toMatch(/render:\s*\(\)\s*=>\s*rerender\(\)/);
+    expect(devmodeCall, 'devmode 宿主没接上 netSeat（R12-6 把视角切换内化进开发者模式 —— '
+      + '预览工具条已隐藏 ⇒ 没有这条回调就无法切到对方视角）').toMatch(/netSeat:\s*\{/);
   });
 
   it('7. cb.rerender 已接上（否则远程页里选牌 / 翻面 / 浮层 / 工具条全都没反应）', () => {

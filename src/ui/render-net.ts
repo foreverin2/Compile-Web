@@ -748,6 +748,60 @@ let netScrollSyncBound = false;
 let netScrollSyncRaf = 0;
 
 /**
+ * 链路滚动区的**最近一次滚动位置**（G2 修正 **R12-5**）。
+ * `null` = 还没有记录 ⇒ 本帧用"双方协议的交锋点（中线）"做**默认位置**；
+ * 之后一律按这个值恢复（**只在没有记录时才用默认值** —— 每帧都跳回中线比不滚更烦人）。
+ * 由 `restoreLaneScroll` 写、由 `bindNetScrollSync` 的滚动回调更新。
+ */
+let netLaneScroll: number | null = null;
+
+/**
+ * **R12-5 的归中算术**（纯函数，单独导出只为让它可被单测 —— 这是本波唯一一处"坐标算术"）：
+ * 把中线放到滚动区**正中**所需的 `scrollTop`，并**夹在** `[0, max]` 内
+ * （链路顶端/底端附近必须夹住，否则会滚出内容、露出空白）。
+ *
+ * 反空集合（`tests/ui/net-dock.test.ts` 的 G-17e 逐条验算）：未夹住时
+ * `scrollTop + clientH / 2 == midTopInContent + midH / 2`（中线中心 == 可视区中心）。
+ */
+export function laneScrollDefault(
+  midTopInContent: number, midH: number, clientH: number, max: number,
+): number {
+  return Math.max(0, Math.min(max, midTopInContent - (clientH - midH) / 2));
+}
+
+/**
+ * **R12-5：链路滚动区的默认位置 = 双方协议的交锋点（中线）。**
+ *
+ * 用户第五次验收原话："将默认的位置定为双方协议的交锋点，而不是对方链路的顶部"。
+ * 竖排布局里"最上面"是对手的能量槽与链路顶端（信息量最低的地方），而**中线**才是双方协议相对的
+ * 交锋点 —— 一进页面就该看到它。
+ *
+ * ⚠️ **必须由 JS 做，CSS 做不到**：`scrollTop` 没有样式属性；而 DOM 顺序（谁在文档里靠前）
+ * 是红线（`.hand`/层的顺序、FX 按下标取值），不能靠"把中线排到最前"来实现。
+ * ⚠️ **量不到布局时安静退出**：测试的 DOM 桩没有 `scrollHeight`/`clientHeight`（`NaN`）
+ * ⇒ 直接返回，不写记录、不做除法（否则会写出 `NaN` 并把它记进模块态）。
+ * ⚠️ 调用时机：`root.appendChild(wrap)` **之后**、`deferredFx` **之前**（那些几何型 FX
+ * 按矩形定位，必须先滚再量）。
+ */
+function restoreLaneScroll(grid: HTMLElement): void {
+  const max = Number(grid.scrollHeight) - Number(grid.clientHeight);
+  if (!Number.isFinite(max) || max <= 0) return;      // 一屏放得下 / 桩环境量不到 ⇒ 不需要滚
+  if (netLaneScroll !== null) {
+    grid.scrollTop = Math.max(0, Math.min(max, netLaneScroll));
+    return;
+  }
+  const mid = grid.querySelector<HTMLElement>('.net-lane-mid');
+  if (mid === null) return;
+  const g = grid.getBoundingClientRect();
+  const m = mid.getBoundingClientRect();
+  if (!Number.isFinite(g.top) || !Number.isFinite(m.top) || m.height === 0) return;
+  // 中线在**滚动内容**里的位置（当前 scrollTop 参与换算，虽然新建节点的它恒为 0）
+  const midTop = m.top - g.top + grid.scrollTop;
+  netLaneScroll = laneScrollDefault(midTop, m.height, grid.clientHeight, max);
+  grid.scrollTop = netLaneScroll;
+}
+
+/**
  * **R11-2：链路区内部滚动 ⇒ 持久 FX 层必须跟着重新定位。**
  *
  * 为什么必须有：R11-2 把"链路那一行自己滚"作为"停靠栏永远可见且不遮放牌区"的机制
@@ -786,6 +840,9 @@ function bindNetScrollSync(): void {
       if (typeof document.querySelector !== 'function' || document.querySelector('.net-board') === null) return;
       syncCompiledFxLayers();
       syncChainLayerPosition();
+      // R12-5：顺手把链路滚动区的位置**记下来**（跨重渲染保持；见 `restoreLaneScroll`）
+      const lane = document.querySelector<HTMLElement>('.net-grid');
+      if (lane !== null && Number.isFinite(Number(lane.scrollHeight))) netLaneScroll = lane.scrollTop;
     });
   }, true);
 }
@@ -1682,10 +1739,13 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
   // `viewSeat` 是 R11-3 的闸门输入（选择条只在"操作方就是自己"时才挂出来）。
   renderChoiceUi(wrap, hands, root, s, cb, deferredFx, viewSeat);
 
-  // ── 简要日志 + 导出日志（与热座页同款；不占 FX 契约位） ──
-  const log = el('div', 'log');
-  for (const entry of s.log.slice(-60)) log.appendChild(el('div', 'log-entry', entry));
-  wrap.appendChild(log);
+  // ── 导出日志按钮（与热座页同款；不占 FX 契约位） ──
+  // ⚠️ **R12-1：事件日志那一块（`.log`）不再渲染**（用户第五次验收："取消日志的显示"）——
+  //    它的 72px 全部还给放牌区（R12-4），而"看日志"的需求由这个按钮承担（`downloadLog(s)`
+  //    导出的诊断文本里本来就含**完整**事件日志，比屏幕上那 60 行更全）。
+  // ⚠️ 这个按钮在 `styles.css` 里是 `position: fixed; right: 16px; bottom: 18px`（**照旧**）——
+  //    它因此落在 `#app` 的 110px 底部内边距里、**不占**本页任何行；旧代码给它写的
+  //    `grid-row: 2` 是**死声明**（fixed 元素不参与 grid 布局），R12-1 已删除以免误导。
   const diagBtn = el('button', 'btn diag-btn', '导出日志');
   diagBtn.title = '导出诊断日志（错误 + 控制台记录 + 事件日志 + 状态快照）';
   diagBtn.addEventListener('click', () => downloadLog(s));
@@ -1702,6 +1762,15 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
   }
 
   root.appendChild(wrap);
+
+  // ── G2 修正 **R12-5**：把链路滚动区的**默认位置**定在"双方协议的交锋点"（中线）──
+  // 用户第五次验收原话："将默认的位置定为双方协议的交锋点，而不是对方链路的顶部"。
+  // ⚠️ **必须在 `deferredFx` 之前**：那批几何型 FX（透彻牌库眼睛 / 幸运宣告骰子）按
+  //    `getBoundingClientRect()` 定位，先滚再量才落得准。
+  // ⚠️ **跨重渲染保持**：`.net-grid` 每帧重建 ⇒ 它的 `scrollTop` 天然归 0。
+  //    若每帧都"回到中线"，玩家一放牌就被拽回中间（比不滚更烦人）；所以只在**没有记录**时
+  //    才用中线做默认值，之后按记录恢复（记录由 `bindNetScrollSync` 的滚动回调更新）。
+  restoreLaneScroll(grid);
 
   // 棋盘已入 DOM → 执行本帧收集的几何型 FX（矩形定位有效；透彻牌库眼睛 / 幸运宣告骰子）
   for (const fn of deferredFx) fn();

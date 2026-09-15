@@ -30,13 +30,31 @@ import { nextUid } from '../core/state/create';
 export interface DevModeHost {
   getState: () => GameState;
   render: () => void;
+  /**
+   * **远程对战页（net 预览）的视角座位**（G2 修正 **R12-6**）：可选。
+   * 用户第五次验收："还有预览工具条，我希望隐藏它，并将它的功能内化给开发者模式" ⇒
+   * 工具条第 2 行的「视角切换」搬到这里（`视角` / `seat 1|2` 指令）。
+   * 传了它才有这条指令（热座页/真实联机不传 ⇒ 指令报"此页没有视角开关"）。
+   */
+  netSeat?: { get(): 0 | 1; set(seat: 0 | 1): void };
 }
 
 /** 隐藏密码（任一匹配即解锁；用户指定备选密码 ssxxzyzybaba） */
 const PASSWORDS = new Set(['上上下下左右左右BABA', 'ssxxzyzybaba']);
 
+/**
+ * **开发者模式是否已解锁**（会话内）。G2 修正 **R12-6** 用它当"预览工具条"的开关：
+ * 密码正确一次之后，远程页才会渲染那条工具条（含视角切换与运行时自查行），
+ * 普通对局里页面上**没有**它。
+ * ⚠️ 与 `overlayOpen` **不是一回事**：那个是"浮层此刻开着吗"，这里是"本会话解锁过吗"。
+ */
+export function isDevUnlocked(): boolean {
+  return passwordUnlocked;
+}
+
 /** 指令页提示行 */
-const HINT = '指令：get 牌名 / Compile 协议（输入即模糊预览，点列表行执行）· clean（清空当前玩家手牌）· 如 get light-2、Compile life（中文名 死/生/光 也可）';
+const HINT = '指令：get 牌名 / Compile 协议（输入即模糊预览，点列表行执行）· clean（清空当前玩家手牌）'
+  + '· 视角 / seat 1|2（远程页切视角；不写数字 = 切换）· 如 get light-2、Compile life（中文名 死/生/光 也可）';
 
 /** 是否有开发者浮层打开（打开任一浮层时置 true，关闭时置 false） */
 let overlayOpen = false;
@@ -395,6 +413,22 @@ export function runCommand(host: DevModeHost, line: string): void {
     forceCompileProtocol(host, cm[1].trim());
     return;
   }
+  // ── G2 修正 **R12-6**：`视角` / `seat 1|2` —— 远程页切视角（从预览工具条内化过来）──
+  // 为什么搬进开发者模式：工具条常驻在棋盘右侧（用户要求隐藏它），而"切到对方视角把一局打完"
+  // 是本地预览**必须保留**的能力（对手手牌只手牌数量那一档不可点，切过去才是"自己"）。
+  if (/^(?:视角|seat|viewseat)$/i.test(trimmed) || /^(?:视角|seat)\s+\d$/i.test(trimmed)) {
+    const box = host.netSeat;
+    if (!box) {
+      log(host, '此页没有视角开关（`视角` 只在远程对战页预览里可用）');
+      return;
+    }
+    const m2 = /(\d)\s*$/.exec(trimmed);
+    const next = m2 ? (Number(m2[1]) === 2 ? 1 : 0) : (box.get() === 0 ? 1 : 0);
+    box.set(next);
+    log(host, `视角已切到 P${next + 1}（现在"自己"是 P${next + 1}）`);
+    host.render();
+    return;
+  }
   const m = /^get\s+(.+)$/i.exec(trimmed);
   if (!m) {
     log(host, `未知指令: ${trimmed}`);
@@ -452,6 +486,11 @@ function openPasswordPrompt(host: DevModeHost): void {
       passwordUnlocked = true; // 会话内解锁：本局游戏内后续免密进入
       log(host, '密码正确，打开指令页');
       close('密码输入框已关闭（密码正确）');
+      // ── G2 修正 **R12-6**：解锁后**立刻重渲染**一次 ──
+      //    远程页的预览工具条（含视角切换与运行时自查行）只在解锁后才渲染（见 `isDevUnlocked`
+      //    与 `main.ts` 的 `verifyHooks`/`onPreviewChange` 闸门）—— 不重渲染的话，
+      //    用户要等到下一次操作才看得见它（"我明明进了开发者模式，工具条却没出来"）。
+      host.render();
       openCommandPage(host);
     } else {
       log(host, '密码错误');

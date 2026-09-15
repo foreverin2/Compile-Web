@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createGame } from '../../src/core/state/create';
-import { renderNetBoard, verifyPageHooks } from '../../src/ui/render-net';
+import { renderNetBoard, laneScrollDefault, verifyPageHooks } from '../../src/ui/render-net';
 import { setFxViewSeat } from '../../src/ui/fx-seat';
 import {
   assertNoUnmodelableCascade, cssLenOf, cssRules, cssVarOf, MODELED_PROPS, subjectPropOf, type CssRule,
@@ -538,5 +538,185 @@ describe('R11-2 · G-16：滚动跟随（持久 FX 层不随滚动移动，必�
     expect(src, '`render.ts`（热座页）里出现了 `bindNetScrollSync` —— 热座页没有内部滚动区，'
       + '这条绑定必须只属于远程页').not.toContain('bindNetScrollSync');
     expect(src, '`render.ts` 里出现了本页的滚动记账变量（`netScrollSync`）').not.toContain('netScrollSync');
+  });
+});
+
+/* ============================================================================
+ * G-17：用户第五次验收的五条布局诉求（R12-1 ~ R12-5）
+ *
+ * 原始诉求（逐字见规格 §18.0）：
+ *  ① "取消日志的显示"           → R12-1（配 net-lane-tree R7-1 / net-r9 G-12c 的行为腿）
+ *  ② "不要使用这种丑陋的滑块"    → R12-2（隐藏滚动条，**但保留滚动能力**）
+ *  ③ "缩小图二中的这三个组件"    → R12-3（停靠栏三块的盒/字/间距）
+ *  ④ "加大双方场上区域的大小"    → R12-4（把 ①②③ 省下来的高度全给第 1 行）
+ *  ⑤ "默认位置定为双方协议的交锋点" → R12-5（`restoreLaneScroll` + `laneScrollDefault`）
+ * ========================================================================== */
+
+describe('R12 · G-17：日志 / 滚动条 / 停靠栏紧凑 / 放牌区预算 / 默认停在交锋点', () => {
+  it('G-17a. R12-2：链路区**不显示滚动条**，但**仍然能滚**（`overflow-y: auto` 未动）', () => {
+    const grid = cssNode('net-grid');
+    const chain = [cssNode('board', 'net-board'), grid];
+    const raw = subjectPropOf(grid, chain, RULES, 'scrollbar-width');
+    const over = subjectPropOf(grid, chain, RULES, 'overflow-y');
+    const gutter = subjectPropOf(grid, chain, RULES, 'scrollbar-gutter');
+    console.log(`\n===== G-17a · 链路滚动区的滚动条声明 =====\n`
+      + `  scrollbar-width = ${String(raw)} / overflow-y = ${String(over)}`
+      + ` / scrollbar-gutter = ${String(gutter)}`);
+    // ① 隐藏（用户："不要使用这种丑陋的滑块"；实机截图里的滚动条带上下箭头 = Firefox 经典样式）
+    expect(raw, '链路区没有隐藏滚动条（`scrollbar-width: none`）—— 用户点名的那个"丑陋的滑块"')
+      .toBe('none');
+    // ② **但滚动能力必须在**（隐藏滚动条 ≠ 不滚；R11-2 的裁决 A 全靠它）
+    expect(over, '链路区不再自己滚了 —— 隐藏滚动条时**不许**顺手把 overflow-y 一起改掉'
+      + '（那会让链路溢出到停靠栏下面 = 放牌区被盖）').toBe('auto');
+    // ③ 旧版 WebKit 忽略 `scrollbar-width` 时的兜底：两侧对称的滚动条槽（三列仍居中）
+    expect(gutter, '`scrollbar-gutter: stable both-edges` 被删了 —— 旧版 WebKit 上滚动条会只占右侧'
+      + '（内容盒窄 15px ⇒ 三列左移 7.5px，G-11 的归中几何在现实里不再成立）')
+      .toBe('stable both-edges');
+  });
+
+  it('G-17b. R12-1：事件日志**不再渲染**（元素树腿）+ 样式表里也没有它的行号规则', async () => {
+    const restore = installStubDom();
+    try {
+      for (const seat of [0, 1] as const) {
+        const root = renderFrame({ viewSeat: seat });
+        const board = boardOf(root);
+        console.log(`\n===== G-17b · viewSeat=${seat} · .net-board 直接子节点 =====\n`
+          + `  ${board.children.map((n) => n.cls).join(' | ')}`);
+        expect(descendants(root).filter((n) => isClass(n, 'log')).length,
+          `viewSeat=${seat}：事件日志块（.log）又被渲染出来了 —— R12-1 取消了它的显示`
+          + '（那 72px 归放牌区；"看日志"由导出按钮承担，诊断文本里含完整事件日志）').toBe(0);
+        // 反空集合：导出按钮**必须还在**（它是"看日志"的唯一去处）
+        expect(descendants(root).filter((n) => isClass(n, 'diag-btn')).length,
+          `viewSeat=${seat}：导出日志按钮没了 —— 日志块取消之后它是唯一能拿到日志的入口`).toBe(1);
+      }
+      // 样式表里也不许留下它的行号规则（否则"日志还在"这件事在 CSS 里留着证据）
+      const logRules = RULES.filter((r) => /(?:^|\s|>)\.log\b/.test(r.selector));
+      expect(logRules.map((r) => r.selector), 'styles-net.css 里仍有 `.log` 的规则（R12-1 已取消日志）')
+        .toEqual([]);
+      // ⚠️ 导出按钮**没有** grid-row 规则是**正确**的（它在 styles.css 里是 position: fixed，
+      //    不参与 grid 布局、落在 #app 的底部内边距里）；旧代码给它写的 `grid-row: 2` 是死声明。
+      const diagRules = RULES.filter((r) => /\.diag-btn/.test(r.selector));
+      expect(diagRules.filter((r) => /grid-row\s*:/.test(r.body)).map((r) => r.selector),
+        'styles-net.css 又给 `.diag-btn` 写了 grid-row —— 它是 fixed 元素，那是**死声明**'
+        + '（看着像在排版，其实不参与 grid 布局）').toEqual([]);
+    } finally {
+      await drainRaf();
+      restore();
+    }
+  });
+
+  it('G-17c. R12-3：停靠栏三块**紧凑化**（牌库/弃牌堆 46×66 · 徽标 26 · 信息块 4/3 · 板间距 2）', () => {
+    const board = cssNode('board', 'net-board');
+    const p = (node: StubNode, prop: string): string | null =>
+      subjectPropOf(node, [board, node], RULES, prop);
+    // 牌库 / 弃牌堆：60×86 → 46×66（解算成像素，不认写法）
+    for (const [cls, tag] of [['deck', '牌库'], ['trash-pile', '弃牌堆']] as const) {
+      const node = cssNode('net-piles', 'net-piles');
+      const pile = cssNode(cls, `${cls} p1`);
+      pile.dataset.player = '1';      // 规则的判据是 `.net-piles .<cls>[data-player]`（属性选择器）
+      const chain = [board, node, pile];
+      const w = cssLenOf(chain, RULES, subjectPropOf(pile, chain, RULES, 'width') ?? '');
+      const h = cssLenOf(chain, RULES, subjectPropOf(pile, chain, RULES, 'height') ?? '');
+      console.log(`\n===== G-17c · ${tag} =====\n  ${String(w)} × ${String(h)}px`);
+      expect(w, `${tag}的宽不是 46px（R12-3 的紧凑化没生效）`).toBe(46);
+      expect(h, `${tag}的高不是 66px（R12-3 的紧凑化没生效）`).toBe(66);
+    }
+    // 计数徽标（styles.css 是 34×34，在 46px 宽的盒子里已占满）
+    const badge = cssNode('deck-count');
+    const badgeChain = [board, cssNode('net-piles'), cssNode('deck'), badge];
+    expect(cssLenOf(badgeChain, RULES, subjectPropOf(badge, badgeChain, RULES, 'width') ?? ''),
+      '牌库计数徽标没跟着缩小（46px 的盒子里放 34px 的徽标几乎顶满）').toBe(26);
+    // 信息块的内边距/间距
+    const block = cssNode('net-info-block');
+    block.dataset.netSeat = 'self';
+    expect(cssLenOf([board, block], RULES, subjectPropOf(block, [board, block], RULES, 'gap') ?? ''),
+      '信息块的行间距没收到 3px').toBe(3);
+    // 板间距（同时管行距与列距）
+    expect(cssLenOf([board], RULES, subjectPropOf(board, [board], RULES, 'gap') ?? ''),
+      '板间距没收到 2px').toBe(2);
+    // 字号：标题 12 / 连接状态 11 / 弃牌堆小标签 8
+    expect(subjectPropOf(block, [board, block], RULES, 'padding')).toBe('4px 6px');
+    expect(p(cssNode('net-hand-area'), 'justify-self'), '手牌区的水平中置没变（R12-3 只动尺寸/间距）')
+      .toBe('center');
+    for (const [sel, want, what] of [
+      ['net-info-block .area-title', '12px', '信息块标题'],
+      ['net-conn', '11px', '连接状态'],
+      ['net-piles .trash-label', '8px', '弃牌堆小标签'],
+    ] as const) {
+      const rule = RULES.find((r) => r.selector.trim() === `.${sel}`);
+      expect(rule, `找不到 \`.${sel}\` 的规则`).toBeTruthy();
+      expect(rule!.body, `${what}的字号不是 ${want}（R12-3 的紧凑化没生效）`)
+        .toMatch(new RegExp(`font-size:\\s*${want}`));
+    }
+  });
+
+  it('G-17d. R12-4：放牌区的"预算"——三处吃高度的东西都已缩/去（真正的观感是人眼项）', () => {
+    // ① 日志块整条去掉（它的 72px 直接回到第 1 行）—— 行号规则也不许留
+    expect(RULES.filter((r) => /(?:^|\s|>)\.log\b/.test(r.selector)).length,
+      'styles-net.css 里还有 `.log` 的规则（R12-1 取消了日志显示）').toBe(0);
+    // ② 停靠栏里最高的那块（牌库/弃牌堆）从 86 降到 66（-20px）—— 由 G-17c 逐项钉住
+    // ③ 板间距 4 → 2（四行 × 2px 的间距都收了一半）
+    const board = cssNode('board', 'net-board');
+    expect(cssLenOf([board], RULES, subjectPropOf(board, [board], RULES, 'gap') ?? ''))
+      .toBe(2);
+    // ④ 第 1 行仍是**弹性**的（省下来的高度必须真的落在它身上，而不是被别的行吃掉）
+    const rows = gridTracks(subjectPropOf(board, [board], RULES, 'grid-template-rows') ?? '');
+    expect(/fr\b/.test(rows[0]), '第 1 行不是弹性的 —— 省下来的高度不会给放牌区').toBe(true);
+    console.log('\n===== G-17d · 放牌区的预算（R12-4）=====\n'
+      + '  日志行：整条去掉（-72px，R12-1）\n'
+      + '  停靠栏：牌库/弃牌堆 86 → 66（-20px，R12-3）· 信息块 gap/padding 收紧\n'
+      + '  板间距：4 → 2（R12-3）\n'
+      + '  ⇒ 全部落在第 1 行（`minmax(0, 1fr)`）。⚠️ 真实高度只能人眼（规格 §18.5）');
+  });
+
+  it('G-17e. R12-5：默认停在**交锋点**（中线）—— 归中算术逐条验算 + 桩上不写 NaN', async () => {
+    // ── ① 纯算术（`laneScrollDefault`）：未夹住时"中线中心 == 可视区中心" ──
+    const cases: ReadonlyArray<[number, number, number, number]> = [
+      // [中线在内容里的 top, 中线高, 可视区高, 内容可滚的最大量]
+      [580, 20, 400, 700],
+      [300, 40, 500, 900],
+      [1000, 16, 300, 1200],
+    ];
+    for (const [midTop, midH, clientH, max] of cases) {
+      const got = laneScrollDefault(midTop, midH, clientH, max);
+      console.log(`\n===== G-17e · 中线 top=${midTop} 高=${midH} 可视=${clientH} max=${max} ⇒ scrollTop=${got}`);
+      expect(got, `[${midTop}/${midH}/${clientH}] 解出的 scrollTop 夹出了 [0, ${max}]`)
+        .toBeGreaterThanOrEqual(0);
+      expect(got).toBeLessThanOrEqual(max);
+      // 中线中心 vs 可视区中心（未夹住时必须相等；夹住时必然偏，故只对未夹住的情形断言）
+      const want = midTop - (clientH - midH) / 2;
+      if (want > 0 && want < max) {
+        expect(got, '未夹住时没有把中线放到正中').toBeCloseTo(want, 6);
+        expect(got + clientH / 2, '中线中心 != 可视区中心')
+          .toBeCloseTo(midTop + midH / 2, 6);
+      }
+    }
+    // ② 夹住：靠近内容两端时不许滚出内容（否则会露出空白）
+    expect(laneScrollDefault(10, 20, 400, 700), '内容顶端附近没有夹到 0').toBe(0);
+    expect(laneScrollDefault(1200, 20, 400, 700), '内容底端附近没有夹到 max').toBe(700);
+    // ③ 桩环境（量不到布局）不写 NaN、也不动 scrollTop
+    const restore = installStubDom();
+    try {
+      const root = renderFrame({ viewSeat: 0 });
+      const grid = descendants(root).find((n) => isClass(n, 'net-grid'))!;
+      const st = grid as unknown as { scrollTop?: number };
+      console.log(`  桩上 .net-grid.scrollTop = ${String(st.scrollTop)}（应为 undefined：量不到布局就直接退出）`);
+      expect(st.scrollTop, '桩环境（没有 scrollHeight/clientHeight）下写了 scrollTop —— '
+        + '那会把 NaN 记进模块态，下一页真人打开时会跳到一个非法位置')
+        .toBeUndefined();
+      // 源码腿：调用必须落在"棋盘入 DOM 之后、deferredFx 之前"
+      const src = netSrc();
+      const iMount = src.indexOf('root.appendChild(wrap);');
+      const iScroll = src.indexOf('restoreLaneScroll(grid);');
+      const iFx = src.indexOf('for (const fn of deferredFx) fn();');
+      expect(iMount, '找不到 root.appendChild(wrap)').toBeGreaterThanOrEqual(0);
+      expect(iScroll, '`restoreLaneScroll(grid)` 没有被调用（默认位置永远是对方链路顶部）')
+        .toBeGreaterThan(iMount);
+      expect(iScroll, '滚动发生在 deferredFx **之后** —— 那批几何型 FX 会按"没滚过"的坐标落点')
+        .toBeLessThan(iFx);
+    } finally {
+      await drainRaf();
+      restore();
+    }
   });
 });

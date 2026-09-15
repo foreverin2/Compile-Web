@@ -76,8 +76,9 @@
      ⚠️ 信息块**不靠这条**：它在**左列**（第 6 节显式 `grid-column: 1`，宽 = 它自己的内容宽）。
      ⚠️ **R9-3 起行距收窄**（12 → `--net-board-gap` = 4px）：手牌并进信息块所在的那一行之后，
      每一行都装了两个组件，行距仍按"空行"给 12px 会让整页显得松散（用户要的是"页面别再变长"）。
-     它是一个**有名字的**变量 —— 改这一处就同时改四行的间距。 */
-  --net-board-gap: 4px;
+     它是一个**有名字的**变量 —— 改这一处就同时改四行的间距。
+     R12-3：4 → 2（停靠栏紧凑化：这条 gap 同时管行距与列距）。 */
+  --net-board-gap: 2px;
   /* ⚠️⚠️ **R9-4：卡几何的唯一旋钮上提到 `.net-board`。**
      手牌卡（`.net-hands .card`）与场上卡（`.net-lane-band .stack .card`）必须**同基准** ——
      用户原话："缩小**双方卡牌**的大小，使其大小比例与协议卡牌保持一致"（我在 R9-4 前明确问过
@@ -178,19 +179,27 @@
      （G-11 那套算术因此仍然为真，而不是"只在模型里真"）。
      不支持 `scrollbar-gutter` 的浏览器用 overlay 滚动条（macOS/Safari 默认）⇒ 本来就不占宽。 */
   scrollbar-gutter: stable both-edges;
+  /* ⚠️⚠️ **R12-2：不显示滚动条**（用户第五次验收："不要使用这种丑陋的滑块"）──
+     竖排链路比一屏高 ⇒ **必须**能滚（这是 R11-2 裁决 A 的全部机制），但**不必**把操作系统的
+     经典滚动条画在棋盘中间：Firefox/新版 Chromium 用它隐藏（`scrollbar-width: none`，
+     FF 64+ / Chrome 121+；用户实机截图里的滚动条带上下箭头 = Firefox 的经典样式）。
+     代价（诚实、写进报告）：看不到"上面/下面还有内容"的指示 ⇒ 由 R12-5 的**默认停在交锋点**
+     与"链路本来就一眼看出是纵列"来补；滚轮/触控板/拖拽仍然照常滚。
+     ⚠️ 不用 `::-webkit-scrollbar{display:none}`：本仓的简式解析器会把伪元素剥掉、
+     当成 `.net-grid` 自己的 `display` —— 那是"模型与浏览器不一致"的又一个坑，不值得。
+     `scrollbar-gutter` 保留：旧版 WebKit 忽略 `scrollbar-width` 时它仍保证两侧对称（三列居中）。 */
+  scrollbar-width: none;
   /* 高屏（内容比可视区矮）时整块贴顶：**不要**让唯一的隐式行被拉伸 ——
      拉伸会把列内六个层块撑开，而协议与中线的相对位置是承重的。 */
   align-content: start;
 }
-/* 第 2 行 = 日志 / 导出日志（左两列）· 预览工具条（右两列，见第 8 节）
-   ⚠️ **日志 / 导出日志 / 工具条必须显式给行号**（R9-3 的收尾经验不写这两条会有两种行表）：
-   自动放置只往**空行**上放，于是"有没有预览工具条"会让同一份样式表产生两套行表；
-   显式写死之后，两种情形下都是"链路之下、停靠栏之上"，行表能被人眼一次性核对。
-   `max-height: 72px`：日志仍是可滚动的诊断条，但不能吃掉放牌区的高度（12px 字号 ≈ 4 行）。
-   `padding-right` = 导出按钮的宽度 + 间隙：按钮与日志**同格**（`justify-self: end`），
-   不留这段内边距时日志文字会从按钮底下穿过去（R9-3 之前就有，只是日志更高、不容易看出来）。 */
-.net-board > .log { grid-row: 2; grid-column: 1 / 3; max-height: 72px; padding-right: 104px; }
-.net-board > .diag-btn { grid-row: 2; grid-column: 1 / 3; justify-self: end; align-self: center; }
+/* 第 2 行 = **开发者模式的预览工具条**（第 8 节；普通对局里不存在 ⇒ 该行高度 0）
+   ⚠️ **R12-1：事件日志那一块（`.log`）不再渲染**（用户第五次验收："取消日志的显示"）——
+   它的 72px 全部还给放牌区（R12-4）。导出日志按钮 `styles.css` 里是 `position: fixed`
+   （落在 `#app` 的 110px 底部内边距里、不占行），旧代码给它写的 `grid-row: 2` 是**死声明**
+   （fixed 元素不参与 grid 布局），已删除以免误导。
+   ⚠️ 工具条**必须显式给行号**：自动放置只往**空行**上放，会让"有没有工具条"产生两套行表。 */
+.net-board > .net-preview-bar { grid-row: 2; grid-column: 1 / -1; justify-self: end; }
 /* 第 3 行 = **停靠栏** */
 .net-board .net-info-block[data-net-seat='self'] { grid-row: 3; grid-column: 1; }
 .net-board .net-hand-area-self { grid-row: 3; grid-column: 1 / -1; align-self: end; }
@@ -270,15 +279,17 @@
  * ⚠️ 覆盖必须限定在 `.net-piles` 内：`.piles` 也被热座页复用，裸写 `.deck` 会改到热座页。
  * ========================================================================== */
 
-.net-piles { display: flex; align-items: center; gap: 14px; margin: 4px 0; }
+.net-piles { display: flex; align-items: center; gap: 8px; margin: 0; }
 .net-piles .deck[data-player] {
   position: relative;
   top: auto;
   left: auto;
   right: auto;
   transform: none;
-  width: 60px;
-  height: 86px;
+  /* ── G2 修正 **R12-3**：停靠栏紧凑化（用户："缩小图二中的这三个组件，并使其变得紧凑一些"）──
+     60×86 → 46×66（热座是 92×132，本页本来就已缩小）；牌库/弃牌堆的大多数空间是空白边距。 */
+  width: 46px;
+  height: 66px;
   margin: 0;              /* styles.css:761 的 .deck 无 margin，这里显式钉住，避免 UA 默认值 */
   flex: 0 0 auto;
 }
@@ -291,12 +302,15 @@
   right: auto;
   top: auto;
   transform: none;
-  width: 60px;
-  height: 86px;
+  width: 46px;            /* R12-3：与牌库同步缩小（见上） */
+  height: 66px;
   flex: 0 0 auto;
 }
 /* 缩小后「弃牌堆」小标签会压住计数徽标：改为贴底的小字 */
-.net-piles .trash-label { font-size: 9px; }
+.net-piles .trash-label { font-size: 8px; }
+/* R12-3：计数徽标同步缩小（styles.css 的 34×34 在 46px 宽的盒子里已经占满） */
+.net-piles .deck .deck-count,
+.net-piles .trash-pile .trash-pile-count { width: 26px; height: 26px; font-size: 11px; }
 
 .net-info-block {
   display: flex;
@@ -307,8 +321,9 @@
      操作条各自按内容宽度居中）。 */
   align-items: center;
   text-align: center;
-  gap: 6px;
-  padding: 6px;
+  /* R12-3：停靠栏紧凑化（6/6 → 4/3）—— 这块是常驻元素，省下来的高度全给放牌区。 */
+  gap: 3px;
+  padding: 4px 6px;
   border: 1px solid #333a4d;
   border-radius: 8px;
   background: rgba(0, 0, 0, 0.18);
@@ -319,9 +334,9 @@
    一条（`牌库 12弃牌堆 3手牌 5` 糊在一起）。这里只在本页允许换行，热座页那份一行未改。 */
 .net-info-block .player-info { display: block; }
 .net-info-block .meta-row { flex-wrap: wrap; gap: 4px 10px; }
-.net-info-block .area-title { font-size: 13px; }
+.net-info-block .area-title { font-size: 12px; }   /* R12-3：13 → 12（紧凑化） */
 /* 连接状态占位（只挂在对手那一块里）：块内竖直排列，故不再需要 align-self */
-.net-conn { font-size: 12px; color: #7fd4ff; }
+.net-conn { font-size: 11px; color: #7fd4ff; }     /* R12-3：12 → 11 */
 
 /* ============================================================================
  * 3. 一条线 = **一个纵向的列**（列内自上而下：对手侧 / 中线 / 自己侧）

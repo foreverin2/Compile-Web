@@ -628,7 +628,7 @@ describe('R9-3 · G-12：手牌与信息块并盒（同一行）', () => {
     }
   });
 
-  it('G-12c. 三行表完整：链路=1 · 日志/导出日志/工具条=2 · **停靠栏=3**，且全部**显式**指派（不靠自动放置）', async () => {
+  it('G-12c. 三行表完整：链路=1 · 工具条（仅开发者模式）=2 · **停靠栏=3**；日志不渲染（R12-1）', async () => {
     const restore = installStubDom();
     try {
       for (const seat of [0, 1] as const) {
@@ -640,31 +640,34 @@ describe('R9-3 · G-12：手牌与信息块并盒（同一行）', () => {
           const kind = isClass(n, 'net-grid') ? 'grid'
             : isClass(n, 'net-bottom') ? 'bottom(contents)'
               : isClass(n, 'log') ? 'log'
-                : isClass(n, 'diag-btn') ? 'diag-btn'
-                  : isClass(n, 'net-preview-bar') ? 'preview-bar(流内)' : `?${n.cls}`;
+                : isClass(n, 'diag-btn') ? 'diag-btn(styles.css 的 fixed)'
+                  : isClass(n, 'net-preview-bar') ? 'preview-bar(仅开发者模式)' : `?${n.cls}`;
           rows.push(`${kind}=${String(row)}`);
-          // ① **每一个非 contents 的直接子节点都必须有自己的 `grid-row`**（显式指派）
-          //    ⚠️ R11-2 起**工具条也在流内**（第 2 行），所以它同样必须有行号 ——
-          //    自动放置会产生"有/无工具条两种行表"（同一份样式表两种布局），
-          //    而 `.net-bottom` 是 `display: contents`（不是 grid item，没有行号是**正确**的）。
-          if (kind !== 'bottom(contents)') {
+          // ① **每一个参与 grid 布局的直接子节点都必须有自己的 `grid-row`**（显式指派）
+          //    ⚠️ R12-6 之后工具条**只在开发者模式解锁时**才渲染；它同样必须有行号 ——
+          //    自动放置会产生"有/无工具条两种行表"（同一份样式表两种布局）。
+          //    ⚠️ **导出按钮是例外**：它在 `styles.css` 里就是 `position: fixed`（不参与 grid 布局，
+          //    落在 `#app` 的底部内边距里），所以它**没有**行号是正确的 —— 旧代码给它写的
+          //    `grid-row: 2` 是死声明，R12-1 已删除。
+          //    `display: contents` 的 `.net-bottom` 也不是 grid item（行号由它的子节点各带）。
+          if (kind.startsWith('grid') || kind.startsWith('log')
+            || kind.startsWith('preview-bar')) {
             expect(row, `viewSeat=${seat}：.${kind} 没有解出 grid-row —— 自动放置会让它随`
               + '"有没有其他自动放置项"漂到别的行上（同一份样式表两种行表）').toBeTruthy();
           }
         }
         console.log(`  viewSeat=${seat} · .net-board 直接子节点的 grid-row: ${rows.join(' | ')}`);
-        // ② 行表**逐项**核对（链路 1 / 日志与按钮 2 / 停靠栏由四块子节点占 3）
+        // ② 行表**逐项**核对（链路 1 / 工具条 2 / 停靠栏由四块子节点占 3）
         const rowOfKind = (k: string): string => rows.find((r) => r.startsWith(`${k}=`))!.split('=')[1];
         expect(rowOfKind('grid'), `viewSeat=${seat}：链路区（.net-grid）必须在**第 1 行**`).toBe('1');
-        expect(rowOfKind('log'), `viewSeat=${seat}：日志必须在**第 2 行**（链路之下、停靠栏之上）`).toBe('2');
-        expect(rowOfKind('diag-btn'), `viewSeat=${seat}：导出日志按钮必须在**第 2 行**（与日志同排）`).toBe('2');
-        // ③ 反空集合：这一帧里**真的**有日志与导出按钮（否则上面的判据退化成空断言）
-        expect(board.children.filter((n) => isClass(n, 'log')).length,
-          `viewSeat=${seat}：这一帧里没有 .log（上面的判据会退化成空断言）`).toBe(1);
+        // ── R12-1：事件日志块**不再渲染**（用户："取消日志的显示"）⇒ 它那 72px 归放牌区 ──
+        expect(rows.filter((r) => r.startsWith('log=')).length,
+          'viewSeat=' + seat + '：事件日志块又被渲染出来了 —— R12-1 取消了它的显示').toBe(0);
+        // ③ 反空集合：这一帧里**真的**有导出按钮（它是"看日志"的唯一去处）
         expect(board.children.filter((n) => isClass(n, 'diag-btn')).length,
           `viewSeat=${seat}：这一帧里没有 .diag-btn`).toBe(1);
         // ④ **停靠栏在最后一行**：两块信息块 + 两块手牌区都解出第 3 行（`.net-bottom` 是
-            //    contents ⇒ 它们才是 `.net-board` 的 grid item）。这一条与 G-13（net-dock）同源，
+        //    contents ⇒ 它们才是 `.net-board` 的 grid item）。这一条与 G-13（net-dock）同源，
         //    这里只钉"行号真的是 3"，"四块同排 + 列指派"由 G-13 逐块查。
         for (const sel of ['net-info-block', 'net-hand-area'] as const) {
           const nodes = descendants(root).filter((n) => isClass(n, sel));

@@ -931,7 +931,7 @@ describe('R-F · C-2 / R8-2：真跑 renderNetBoard 的元素树层序（viewSea
         expect(bottom!.parentElement, `viewSeat=${seat}：.net-bottom 的父节点居然是 .net-grid`)
           .not.toBe(grid);
 
-        // ── ③ `.net-board` 的子节点顺序：[.net-grid, .net-bottom, …]（其余是 log / 导出按钮 / 工具条）──
+        // ── ③ `.net-board` 的子节点顺序：[.net-grid, .net-bottom, …]（其余是导出按钮 / 工具条）──
         const kinds = wrap.children.map((n) => (isClass(n, 'net-grid') ? 'grid'
           : isClass(n, 'net-bottom') ? 'bottom'
             : isClass(n, 'log') ? 'log'
@@ -941,11 +941,14 @@ describe('R-F · C-2 / R8-2：真跑 renderNetBoard 的元素树层序（viewSea
         expect(kinds[0], `viewSeat=${seat}：.net-board 的第一个子节点必须是 .net-grid`).toBe('grid');
         expect(kinds[1], `viewSeat=${seat}：.net-board 的第二个子节点必须是 .net-bottom（纵向堆在网格之下）`)
           .toBe('bottom');
-        expect(kinds.slice(2).every((k) => k === 'log' || k === 'diag-btn' || k === 'preview-bar'),
+        expect(kinds.slice(2).every((k) => k === 'diag-btn' || k === 'preview-bar'),
           `viewSeat=${seat}：.net-board 下出现了未登记的容器：${kinds.slice(2).join(', ')}`).toBe(true);
-        // 反空集合：日志块与导出按钮必须仍在渲染根下（"搬到 grid 外面"不许顺手把它们弄丢）
-        expect(kinds.filter((k) => k === 'log').length, '日志块必须仍挂在 .net-board 下').toBe(1);
+        // 反空集合：导出按钮必须仍在渲染根下（"搬到 grid 外面"不许顺手把它弄丢）
         expect(kinds.filter((k) => k === 'diag-btn').length, '导出日志按钮必须仍挂在 .net-board 下').toBe(1);
+        // ── R12-1：事件日志块**不再渲染**（用户："取消日志的显示"）──
+        //    它曾经占 72px（现在全部还给放牌区）；"看日志"由导出按钮承担（诊断文本里含完整日志）。
+        expect(kinds.filter((k) => k === 'log').length,
+          '事件日志块（.log）又被渲染出来了 —— R12-1 的裁决是取消它的显示（放牌区需要那 72px）').toBe(0);
         expect([kinds.filter((k) => k === 'grid').length, kinds.filter((k) => k === 'bottom').length],
           `viewSeat=${seat}：.net-grid / .net-bottom 在渲染根下必须各恰好一个`).toEqual([1, 1]);
 
