@@ -19,21 +19,28 @@
  * `viewSeat = 1`（我是 P2）= **垂直镜像**：我的链路在下半部、对手在上半部，与 P1 视角完全对称
  * —— 本文件用 `foe = 1 - viewSeat` 换算，`data-player` 永远写**绝对值**。
  *
- * ## 底部两块 + 五行排布（G2 修正 **R6** → **R8-5/R8-7**）
+ * ## 停靠栏 + 三行排布（G2 修正 **R6** → **R8-5/R8-7** → **R9-3 并盒** → **R11-2/3 停靠栏**）
  * **顶部信息条已取消**（用户裁决）。R6~R7 期间信息块与手牌区是**同一行**的左右三列；
- * **R8-5 换成五行、上下镜像**（用户第二次验收的 A 方案）：
- *   ① 对手信息块 · ② 对手手牌 · ③ 三条链路 + 控制轨 · ④ 自己手牌 · ⑤ 自己信息块 · ⑥ 日志/工具条
+ * R8-5 换成五行、上下镜像；R9-3 把手牌并进信息块那一行；
+ * **R11-2/3 再把对手那一块从最上面搬进自己这一行、整行钉在屏幕底部**（用户第四次验收）：
+ *   ① 三条链路 + 控制轨（**视口内的滚动区**）· ② 日志 / 工具条 · ③ **停靠栏**：
+ *   自己信息块（左列）· 自己手牌（整行中置）· 对手信息块 · 对手手牌张数（单行小字，压进对手那一块）。
  * 每侧的信息块 = `renderPlayerInfo`（昵称 / 座位 · 牌库 n · 弃牌堆 n · 手牌 n）+ `renderPiles`
  * （该玩家自己的 `.deck[data-player]` / `.trash-pile.pN`）。
+ * **按钮只在轮到自己的那一侧**（R11-3）：行动区挂 `isSelf && player === s.turnPlayer` 那一块、
+ * 选择条只挂 `chooser === viewSeat` 时 —— 对手那一侧**只显示信息**。
  *
  * ⚠️ **DOM 一个字都没改**（这是硬约束）：`.net-bottom` 与 `.net-hands` 在 `styles-net.css` 里是
- * `display: contents`，子节点**直接成为 `.net-board` 的 grid item**，行号由 CSS `grid-row`
- * **按侧**指派。为什么不能靠"把节点挂到 DOM 更靠前的位置"来换视觉顺序：`.hand` 的 DOM 顺序恒为
+ * `display: contents`，子节点**直接成为 `.net-board` 的 grid item**，行/列号由 CSS 按侧指派。
+ * 为什么不能靠"把节点挂到 DOM 更靠前的位置"来换视觉顺序：`.hand` 的 DOM 顺序恒为
  * `[P0, P1]`（FX 用 `querySelectorAll('.hand')[player]` **按下标**读手牌）。
  *
  * **`NET_BOTTOM_SIDES`（**唯一一处**）** 仍然只决定"两块信息块以什么顺序**插进 DOM**"——
- * 视觉行号由 CSS 按 `data-net-seat` 决定（**不再**有"左右列"这回事），两条腿都在
- * `tests/ui/net-board-grid.test.ts` 的 G-7 里被钉住。
+ * 视觉行/列号由 CSS 按 `data-net-seat` 决定，两条腿都在 `tests/ui/net-board-grid.test.ts` 的 G-7
+ * 与 `tests/ui/net-dock.test.ts` 的 G-13 里被钉住。
+ * ⚠️ **R11-4**：这个常量**同时**决定了"手牌区在 DOM 里的位置"——`['self','foe']` ⇒
+ * `[自己信息块, 手牌区, 对手信息块]`。旧代码用 `bottom.lastElementChild` 取手牌区，
+ * 于是拿到的是**对手信息块**（`.choice-mode` 一直加错节点）；现在由 `buildBottomRow` 直接返回。
  *
  * ## 为什么**不**复用 render.ts 的盘本体（设计稿 §6.1，R1 后仍然成立）
  * 热座页的盘是「左右分栏」（P1 槽 | P1 协议 | P2 协议 | P2 槽），两位玩家坐在**同一块屏幕前**、
@@ -377,9 +384,25 @@ export const NET_PAGE_HOOKS: readonly NetPageHook[] = [
 ];
 
 /**
+ * 这一帧的**行动方 / 操作方**（G2 修正 **R11-3** 的运行时自查输入；两个都是**绝对玩家号**）。
+ * 由 `renderNetBoard` 从它本来就有的两个值里取（不额外查询）：`s.turnPlayer` 与
+ * `topEffect.prompt.chooser ?? topEffect.player`（后者没有挂起选择时为 `null`）。
+ */
+export interface NetActingSide {
+  /** 当前回合玩家（绝对号）—— 行动按钮（刷新/下一步/编译线N…）的归属依据 */
+  turnPlayer: PlayerId;
+  /** 挂起选择的**应答方**（绝对号）；没有挂起选择时为 `null` */
+  operator: PlayerId | null;
+}
+
+/**
  * **运行时**核对：`NET_PAGE_HOOKS` 里每条非豁免钩子是否真的能在页面上查到节点（**数量确定的结构钩子
- * 连数量一起查**），外加两条**源码守卫永远证明不了**的断言（硬约束 7 的 DOM 顺序、
- * 硬约束 2 / C-4 的对手卡朝向）。
+ * 连数量一起查**），外加四条**源码守卫永远证明不了**的断言（硬约束 7 的 DOM 顺序、
+ * 硬约束 2 / C-4 的对手卡朝向、R11-3 的"按钮只在轮到自己的那一侧"）。
+ *
+ * `acting`（G2 修正 **R11-3**）：这一帧的**行动方 / 操作方**（绝对玩家号）。给了它才会多跑
+ * 约束 11 的**正向**那半边（"自己那一侧有按钮 ⇒ 自己就是行动方"）。省略 = 只查"对手那一侧
+ * 一个操作按钮都没有"（那半边不需要 `acting`）。
  *
  * 为什么值得写在生产代码里：源码守卫（含契约测试）对"产出方"的判据是**源码文本**，
  * 而本页的产出方在 `render.ts` 里 —— 文本判据在这种情况下证明力最弱（计划附录 A.4-3 已披露）。
@@ -402,7 +425,9 @@ export const NET_PAGE_HOOKS: readonly NetPageHook[] = [
  * 必须报 ✗ 并说出 `数量 … / 期望 …`）。它**不是**公开 API 的一部分 —— 真实入口只有
  * `renderNetBoard` 的 `opts.verifyHooks`。
  */
-export function verifyPageHooks(scope: HTMLElement, appliedSeat: 0 | 1 | null = null): string {
+export function verifyPageHooks(
+  scope: HTMLElement, appliedSeat: 0 | 1 | null = null, acting: NetActingSide | null = null,
+): string {
   const fatal: string[] = [];
   const soft: string[] = [];
   for (const h of NET_PAGE_HOOKS) {
@@ -650,6 +675,53 @@ export function verifyPageHooks(scope: HTMLElement, appliedSeat: 0 | 1 | null = 
     fatal.push(`约束 10 的协议特效朝向自查抛异常（${String(err)}）`);
   }
 
+  // ── 断言 7（G2 修正 R11-3 · 约束 11）：**操作按钮只在轮到自己的那一侧** ──
+  // 用户第四次验收原话："操作按钮（刷新/下一步/选择条）**只在轮到自己时出现在自己这一侧** ——
+  // 对手那一侧**只显示信息**，不再有按钮"。
+  // 为什么必须在**运行时**查：按钮的归属由 `renderInfoBlock` 的 `isSelf && player === s.turnPlayer`
+  // 与 `renderChoiceUi` 的 `mountIfMine` **两处**共同决定，而"两处是否都改对了"这件事在源码文本上
+  // 只能靠"某函数里有某个条件"这种代理证据 —— R8-8 期间正是**这一族**判据（源码腿）全绿，
+  // 而页面上的按钮在那半边的形态只在真跑一帧时才看得见。
+  // 判据两条：
+  //   ① **对手那一侧永远零操作控件**（用户点名的字面要求；也是真联机的防"替对手走棋"）；
+  //   ② 给了 `acting` 时：**自己那一侧有控件 ⇒ 自己就是行动方或操作方**（这条是"只在轮到自己时"
+  //      的正向那半边；不给 `acting` 时自动跳过 —— 合成 scope 的判定里没有游戏状态）。
+  try {
+    const blocks = [...scope.querySelectorAll<HTMLElement>('.net-info-block')];
+    // 每一类**单独**查（不写逗号选择器组）：契约的探针在同一份选择器能力面上跑过，
+    // 逗号组在简易实现里会被判成"非法/不命中"⇒ 那样这条自查会**恒绿**。
+    const CONTROL_SELECTORS = [
+      '.next-btn', '.choice-bar', '.choice-skip', '.choice-confirm', '.choice-action-btn',
+    ] as const;
+    const controlsIn = (block: HTMLElement): number => CONTROL_SELECTORS
+      .reduce((n, sel) => n + block.querySelectorAll(sel).length, 0);
+    const selfBlock = blocks.find((b) => b.dataset.netSeat === 'self');
+    const foeBlock = blocks.find((b) => b.dataset.netSeat === 'foe');
+    if (blocks.length !== 2 || selfBlock === undefined || foeBlock === undefined) {
+      fatal.push(`约束 11：找不到两块信息块（self/foe 各一块）—— 实际 ${blocks.length} 块`
+        + `（[${blocks.map((b) => String(b.dataset.netSeat)).join(', ')}]），按钮归属无从核对`);
+    } else {
+      const foe = controlsIn(foeBlock);
+      if (foe > 0) {
+        fatal.push(`约束 11：对手那一侧不得出现任何操作控件（刷新/下一步/选择条），实际 ${foe} 个`
+          + ' —— 用户原话："对手那一侧只显示信息，不再有按钮"');
+      }
+      const self = controlsIn(selfBlock);
+      if (acting !== null && self > 0) {
+        const mine = appliedSeat !== null
+          && (acting.turnPlayer === appliedSeat || acting.operator === appliedSeat);
+        if (!mine) {
+          fatal.push(`约束 11：自己那一侧出现了 ${self} 个操作控件，但这一帧的行动方是 P`
+            + `${acting.turnPlayer + 1}、操作方是 `
+            + `${acting.operator === null ? '（无挂起选择）' : `P${acting.operator + 1}`}`
+            + `，而我是 P${(appliedSeat ?? 0) + 1} —— 用户原话："只在轮到自己时出现在自己这一侧"`);
+        }
+      }
+    }
+  } catch (err) {
+    fatal.push(`约束 11 的操作按钮归属自查抛异常（${String(err)}）`);
+  }
+
   if (soft.length > 0) console.info('[render-net] 状态相关钩子当前为空（合法局面）：\n' + soft.join('\n'));
   if (fatal.length === 0) {
     return soft.length === 0
@@ -669,6 +741,54 @@ let netChoicePromptId: string | null = null;
 
 /** 预览工具条的最近一次操作反馈文本（仅 `onPreviewChange` 存在时使用；本地预览的可见反馈）。 */
 let netPreviewNote = '';
+
+/** R11-2 的滚动跟随绑定是否已装（**一次性**，见 `bindNetScrollSync`）。 */
+let netScrollSyncBound = false;
+/** 同一帧内的多次滚动事件合并成一个回调（见 `bindNetScrollSync` 的说明）。 */
+let netScrollSyncRaf = 0;
+
+/**
+ * **R11-2：链路区内部滚动 ⇒ 持久 FX 层必须跟着重新定位。**
+ *
+ * 为什么必须有：R11-2 把"链路那一行自己滚"作为"停靠栏永远可见且不遮放牌区"的机制
+ * （见 `styles-net.css` 第 1 节的推导），而**持久 FX 层不住在链路区里**：
+ *   · `.compiled-fx`（已编译协议的环 / 角光 / 藤蔓）由 `buildCompiledFx` 挂到 **document.body**、
+ *     `position: fixed`（`styles.css:587-602`）⇒ 它们**不随任何滚动移动**；
+ *   · FX-R2 的锁链层（`chainLayer`）同样是 body 级固定层。
+ * 两者的"跟随"本来就只发生在**渲染时**（`syncCompiledFxLayers` / `syncChainLayerPosition`），
+ * 而"滚动"过去只在**整页**滚动时发生（用户很少滚、且每次操作都会重渲染）。
+ * 内部滚动区把这件事变了：**玩家会经常滚链路区**，而不触发任何重渲染 ⇒ 协议特效会**停在旧屏幕坐标**上
+ * （正是用户 R8 第 4 条反馈"所有协议的特效都没有跟着协议转过来"的同一族观感缺陷）。
+ *
+ * ## 为什么绑在 `document` 上、且用**捕获**阶段
+ * `scroll` 事件**不冒泡**，但**捕获**阶段会从 window 一路经过 document ⇒ 在 document 上以
+ * `capture: true` 监听可以收到**任何**滚动容器（含每帧重建的 `.net-grid`）的事件，
+ * 不必每帧往新节点上重绑、也不会漏掉整页滚动。
+ * ## 为什么用 rAF 合并
+ * 滚动事件频率远高于帧率，而这两个同步函数会**写内联样式再读矩形**（`positionCompiledFxLayer`
+ * 里是"读 holder 矩形 + 写层盒"）—— 逐事件执行会在一帧内反复触发布局。
+ * ## 为什么是"构造性"的零影响（热座页）
+ * 本函数**只在 `renderNetBoard` 里**调用（`render.ts` 一行未改）⇒ 热座页**从不**装这个监听；
+ * 而且回调自己还会再确认一次"页面上有 `.net-board`"（同一份 bundle 里两页互斥，属双保险）。
+ * ⚠️ 诚实边界：本仓的 DOM 桩里 `addEventListener` 是 noop ⇒ 这条**没有行为腿**，
+ * 只有源码腿（`tests/ui/net-dock.test.ts` 的 G-16）+ 人眼（滚链路区时协议环是否跟上）。
+ */
+function bindNetScrollSync(): void {
+  if (netScrollSyncBound) return;
+  netScrollSyncBound = true;
+  if (typeof document === 'undefined' || typeof document.addEventListener !== 'function') return;
+  document.addEventListener('scroll', () => {
+    // 同一帧只跑一次（见上面的 rAF 说明）
+    if (netScrollSyncRaf !== 0) return;
+    netScrollSyncRaf = requestAnimationFrame(() => {
+      netScrollSyncRaf = 0;
+      // 双保险：只有本页在屏上时才动手（热座页/主页没有 .net-board）
+      if (typeof document.querySelector !== 'function' || document.querySelector('.net-board') === null) return;
+      syncCompiledFxLayers();
+      syncChainLayerPosition();
+    });
+  }, true);
+}
 
 /**
  * **信息遮蔽的边界（G2 Task 4F · §5-1，已知 / 延后 —— 不在本轮实现）**：
@@ -898,15 +1018,20 @@ function choiceSkipBtn(promptId: string, cb: UiCallbacks): HTMLElement {
 }
 
 /**
- * 把选择条挂到**操作方那一侧的信息块**里（G2 修正 **R8-8**）。
+ * 把选择条挂到**自己那一侧的信息块**里（G2 修正 **R8-8** → **R11-3**）。
  *
- * 用户原话："没轮到自己的回合或是卡牌触发效果不需要自己进行操作，就不用在己方显示下一步之类的
- * 跳过按钮，只有需要操作的那一方才会显示"。
+ * 用户原话（第三次验收）："没轮到自己的回合或是卡牌触发效果不需要自己进行操作，就不用在己方显示
+ * 下一步之类的跳过按钮，只有需要操作的那一方才会显示"；
+ * 第四次验收又收紧成："操作按钮（刷新/下一步/选择条）**只在轮到自己时出现在自己这一侧** ——
+ * 对手那一侧**只显示信息**，不再有按钮"。
  *
  * 改之前：三个分支都是 `wrap.appendChild(bar)`，而 `.choice-bar` 在 `styles.css` 里是
  * `position: fixed; left: 50%; bottom: 18px`（**视口底部中央**）—— 与"谁在操作"无关，
- * 看上去永远像"挂在我这边"。现在：挂进 `who` 的信息块，并由 `styles-net.css` 的
- * `.net-board .choice-bar { position: static; … }` 把它改成**流内**元素。
+ * 看上去永远像"挂在我这边"。R8-8 把它挂进 `who` 的信息块、由 `styles-net.css` 的
+ * `.net-board .choice-bar { position: static; … }` 改成**流内**元素；
+ * **R11-3 再补一刀：只有 `who === viewSeat`（操作方就是自己）时才会调用本函数**
+ * （调用点的闸门在 `renderChoiceUi` 里的 `mountIfMine`）——
+ * 所以"对手那一侧一个按钮都没有"是**构造性**的，而不是靠"记得别挂"。
  *
  * ⚠️ **找不到那一块时的处理（不许静默丢弃）**：退回挂在 `wrap`（棋盘根）上并 `console.warn`。
  * 为什么不是"找不到就不挂"：`choiceBar` 对 `select-line` **不产出确认按钮**，而 select-line 常常是
@@ -937,6 +1062,7 @@ function renderChoiceUi(
   s: GameState,
   cb: UiCallbacks,
   deferredFx: Array<() => void>,
+  viewSeat: PlayerId,
 ): void {
   const top: PendingEffect | undefined = s.pendingEffects[s.pendingEffects.length - 1];
   // `PendingEffect.prompt` 的类型是 `ChoiceRequest | null`（types.ts:240）—— 这里统一成 undefined
@@ -961,6 +1087,20 @@ function renderChoiceUi(
   // （规则"被作用卡持有者决定执行"，与 main.ts 的 effect-choice 分发、render.ts 的选择条标签同源）。
   const who = prompt.chooser ?? top.player;
   hands.classList.add('choice-mode');
+
+  /**
+   * **R11-3 的闸门**：选择条**只在"操作方就是自己（`who === viewSeat`）"时才挂**。
+   * 对手那一侧**只显示信息**（用户第四次验收的字面要求）—— 真联机下对手的选择条画在我的屏幕上
+   * 等于把对手的操作面板摊开给我看。
+   * ⚠️ 候选高亮 / 点击绑定**不**在这里面：它们只作用于**我这台机器上的节点**，不影响"按钮在哪一侧"，
+   * 而且 `deferredFx`（透彻眼睛 / 幸运骰子）的落点也取决于它们所在的这一帧。
+   * ⚠️ 本地预览的代价（诚实、已报告用户）：轮到对手应答时预览页上没有确认/跳过按钮 ⇒
+   * **切「视角」**（切过去后对手就是 self）即可操作；预览工具条第 2 行会写明这一句。
+   */
+  const mountIfMine = (bar: HTMLElement): void => {
+    if (who !== viewSeat) return;
+    mountChoiceBar(wrap, who, bar);
+  };
 
   if (prompt.kind === 'select') {
     const sel = new Set(getChoiceSelection());
@@ -1013,9 +1153,9 @@ function renderChoiceUi(
     });
     bar.appendChild(confirm);
     if (prompt.optional) bar.appendChild(choiceSkipBtn(top.id, cb));
-    // R8-8：选择条挂到**操作方**（`who`）那一侧的信息块（不是 wrap / 视口底部）——
-    // 非操作方那一侧因此**一个操作按钮都没有**（用户的字面判据）。
-    mountChoiceBar(wrap, who, bar);
+    // R11-3：选择条挂到**操作方**（`who`）那一侧的信息块 —— 且**只有操作方是自己时**才挂
+    // （非自己那一侧因此一个操作按钮都没有；用户的字面判据）。闸门见 `mountIfMine`。
+    mountIfMine(bar);
     return;
   }
 
@@ -1032,9 +1172,9 @@ function renderChoiceUi(
     }
     const bar = choiceBar(top, prompt, cb, '点击高亮的线路选择目标线');
     if (prompt.optional) bar.appendChild(choiceSkipBtn(top.id, cb));
-    // R8-8：同上（select-line 的"确认"由整条带的点击承担，但**跳过**按钮在这里，
+    // R11-3：同上（select-line 的"确认"由整条带的点击承担，但**跳过**按钮在这里，
     // 而它必须落在操作方那一侧 —— 非 optional 的 select-line 只能靠这条带上的点击应答）。
-    mountChoiceBar(wrap, who, bar);
+    mountIfMine(bar);
     return;
   }
 
@@ -1069,8 +1209,8 @@ function renderChoiceUi(
     }
     if (prompt.optional) bar.appendChild(choiceSkipBtn(top.id, cb));
   }
-  // R8-8：挂到操作方那一侧的信息块（见 `mountChoiceBar` 的说明）。
-  mountChoiceBar(wrap, who, bar);
+  // R11-3：挂到操作方那一侧的信息块，且只有操作方是自己时才挂（见 `mountIfMine` 的说明）。
+  mountIfMine(bar);
 }
 
 /* ============================================================================
@@ -1176,13 +1316,18 @@ function renderPiles(s: GameState, player: PlayerId): HTMLElement {
  * 那一块的标题/计数/按钮**分散到两头**，在窄列里很难看）。传 `align` 时 `renderPlayerInfo`
  * 用的是**显式**分支，与热座页（不传）逐字无关。
  *
- * 操作区（`renderNetActionBar`）挂在**当前回合玩家**那一块里（G2 修正 **R8-8**）：
- * `getLegalActions(s, s.turnPlayer)` 本来就是"**谁的回合**谁有动作"，所以行动区必须与它同侧 ——
- * 改之前判据是 `isSelf`，于是**对手回合时我的信息块里显示的是对手的「下一步/编译线N/结算触发/
- * 清理缓存」**（点下去等于替对手走棋），而真正该操作的那一侧一个按钮都没有。
- * 用户原话："没轮到自己的回合……就不用在己方显示下一步之类的跳过按钮，只有需要操作的那一方才会显示"。
- * ⚠️ 判据用 `player === s.turnPlayer`（**绝对玩家号对绝对玩家号**），不是 `isSelf`
- * —— 两人的信息块由同一个函数产出，只有各自的 `player` 不同。
+ * 操作区（`renderNetActionBar`）挂在**自己那一侧**的信息块里，且**只在轮到自己是行动方时**渲染
+ * （G2 修正 **R11-3**；R8-8 曾把它挂到"当前回合玩家"那一侧 —— 见下面的判据迁移说明）：
+ *
+ * 用户第四次验收原话："操作按钮（刷新/下一步/选择条）**只在轮到自己时出现在自己这一侧** ——
+ * 对手那一侧**只显示信息**，不再有按钮"。⇒ 判据是 `side === 'self' && player === s.turnPlayer`
+ * （`side === 'self'` ⟺ `player === viewSeat`）：
+ *   · 自己是行动方 ⇒ 按钮在自己那一侧（用户要的"轮到自己时出现在自己这一侧"）；
+ *   · 对手是行动方 ⇒ **两侧都没有按钮**（R8-8 的形态是把对手的「下一步/编译线N/结算触发/清理缓存」
+ *     画在对手那一块里，在真联机下等于把对手的操作面板摊在自己的屏幕上；用户点名要去掉它）。
+ * ⚠️ **真联机**下这条才是对的：每个玩家只在轮到自己时看到自己的按钮。
+ * ⚠️ **本地预览**的代价（诚实、已向用户报告）：轮到对手时预览页上没有任何按钮 ⇒ 推进对手回合
+ * 必须切预览工具条的「视角」（切过去后对手就是 self，按钮随之出现）。工具条第 2 行会写明这一句。
  */
 function renderInfoBlock(
   s: GameState, player: PlayerId, side: NetBottomSide, operator: PlayerId | null,
@@ -1203,10 +1348,11 @@ function renderInfoBlock(
   // 唯一的页面内反馈；真实联机由 G5 换成会话状态。
   if (!isSelf) info.appendChild(renderConnectionBadge());
   block.appendChild(info);
-  // ── R8-8：行动区只挂**当前回合玩家**那一侧 ──
-  // 两处调用（每侧一块）里恰好一处命中 ⇒ 非操作方那一侧**没有任何操作按钮**。
-  // ⚠️ 不许改回 `isSelf`：那会让对手回合时"我"这边出现对手的行动按钮（用户点名的缺陷形态）。
-  if (player === s.turnPlayer) block.appendChild(renderNetActionBar(s, cb));
+  // ── R11-3：行动区**只**挂在自己那一侧，且**只**在自己是行动方时 ──
+  // 两处调用（每侧一块）里最多一处命中 ⇒ "对手那一侧一个按钮都没有"是**构造性**的。
+  // ⚠️ 判据用 `player === s.turnPlayer`（**绝对玩家号对绝对玩家号**），不是 `isTurn(s, viewSeat)`
+  //    —— 两份信息块由同一个函数产出，只有各自的 `player` 不同。
+  if (isSelf && player === s.turnPlayer) block.appendChild(renderNetActionBar(s, cb));
   return block;
 }
 
@@ -1316,34 +1462,37 @@ function buildHands(
 }
 
 /**
- * **底部容器**（R6 的"底部行"）：`[信息块, 手牌区, 信息块]` —— 三块的**DOM 顺序**由
- * `NET_BOTTOM_SIDES` 的单元素切片决定（见下面两条 `for`）。
+ * **停靠栏容器**（R6 的"底部行"；**R11-2 起它是钉在视口底部的那一行**）：
+ * `[信息块, 手牌区, 信息块]` —— 三块的**DOM 顺序**由 `NET_BOTTOM_SIDES` 的单元素切片决定。
  *
- * ⚠️ **R8-5 起它不再是"一行三列"**：`styles-net.css` 第 6 节把 `.net-bottom` 设成
- * `display: contents`（盒子消失，子节点成为 `.net-board` 的 grid item），五行行号由 `grid-row`
- * **按侧**指派。所以这里**没有任何左右语义** —— 这个函数只负责"谁进 DOM、以什么顺序进"。
+ * ⚠️ **R8-5 起它不再是"一行三列"的盒子**：`styles-net.css` 第 6 节把 `.net-bottom` 设成
+ * `display: contents`（盒子消失，子节点成为 `.net-board` 的 grid item），行/列号由第 1 节的
+ * R11-2/3 块**按侧**指派。所以这里**没有任何左右语义** —— 这个函数只负责"谁进 DOM、以什么顺序进"。
  *
- * 为什么中间那块必须由**本函数** append、而不是让两侧的信息块各自把手牌"夹"进去：
- * 手牌区只有一个节点（`.net-hands`），它必须**恰好 append 一次**（多一次 = 页面两份 `.hand` ×2
- * ⇒ FX 按下标取手牌全部拿到旧副本）。所以顺序写死为「左块 → 手牌区 → 右块」。
- *
- * ⚠️ 两条 `for (... of NET_BOTTOM_SIDES.slice(0, 1))` / `.slice(1)` 是**有意分两段**的：
- * 只有把"手牌区恰好挂在两块之间"写成**单次** `row.appendChild(hands)`，才能同时满足
- * "DOM 顺序 = [信息块, 手牌, 信息块]" 与 "手牌区恰好挂载一次"。
- * （手牌区仍然必须**恰好一次** `appendChild` —— `display: contents` 只改盒树，不改 DOM。）
+ * ⚠️ **返回值从 `HTMLElement` 改成 `{ row, hands }`（G2 修正 R11-4）**：`renderChoiceUi` 需要
+ * `.net-hands` 这个节点（它给**手牌条**加 `.choice-mode`，那是"选择模式下非候选手牌不可点"的
+ * 唯一出处）。旧写法是 `bottom.lastElementChild`，而它的注释写着"手牌区恒是最后一个子节点
+ * （两块信息块 → 手牌区）"—— **那个顺序是反的**：`NET_BOTTOM_SIDES` 是 `['self', 'foe']`，
+ * 所以 DOM 顺序是 `[自己信息块, 手牌区, 对手信息块]` ⇒ `lastElementChild` 拿到的是**对手信息块**
+ * ⇒ `.choice-mode` 一直加在错误节点上（`.net-hands.choice-mode …` 与
+ * `styles.css:1786` 的 `.hand-strip.choice-mode …` 两条规则**都失效**）。行为层的后果是
+ * "候选外的**手牌**在选择模式下仍可点选"（拖拽打牌另有 promptId 闸门挡着，所以没有规则级后果，
+ * 这正是它长期没被发现的原因）。现在把节点**从构建点直接交出去**，不再靠位置猜。
+ * `tests/ui/net-dock.test.ts` 的 G-15 是它的行为腿。
  */
 function buildBottomRow(
   s: GameState, viewSeat: PlayerId, cb: UiCallbacks, operator: PlayerId | null,
-): HTMLElement {
+): { row: HTMLElement; hands: HTMLElement } {
   const row = el('div', 'net-bottom');
   row.dataset.viewSeat = String(viewSeat);
   const blockOf = (side: NetBottomSide): HTMLElement =>
     renderInfoBlock(s, bottomPlayerOf(side, viewSeat), side, operator, cb);
   for (const side of NET_BOTTOM_SIDES.slice(0, 1)) row.appendChild(blockOf(side));
   // 手牌区恒在中间（DOM 位置固定；视觉左右是信息块的事，见本函数的头注）
-  row.appendChild(buildHands(s, viewSeat, cb, operator));
+  const hands = buildHands(s, viewSeat, cb, operator);
+  row.appendChild(hands);
   for (const side of NET_BOTTOM_SIDES.slice(1)) row.appendChild(blockOf(side));
-  return row;
+  return { row, hands };
 }
 
 /* ============================================================================
@@ -1363,9 +1512,29 @@ function buildBottomRow(
  * **真实联机时不传 `onPreviewChange` → 这条工具条完全不渲染。**
  * ========================================================================== */
 
+/**
+ * 本地预览时的**操作提示**（G2 修正 **R11-3** 的可见代价说明）。
+ *
+ * R11-3 之后"按钮只在轮到自己时出现在自己这一侧"，于是**轮到对手**的那一帧页面上**一个按钮都没有**
+ * （这是用户要的形态，也是真联机下唯一正确的形态）。但本地预览是**单人**在看这一屏 ——
+ * 没有这句话，用户会以为"页面卡住了、按钮丢了"。
+ * ⇒ 明说"切「视角」后即可操作"（切过去后对手就是 self，按钮随之出现）。
+ * 真实联机不传 `onPreviewChange` ⇒ 这条工具条**整个不渲染** ⇒ 这条提示也不存在（不会污染真机）。
+ */
+function previewActingHint(s: GameState, operator: PlayerId | null, viewSeat: PlayerId): string {
+  if (operator !== null && operator !== viewSeat) {
+    return `轮到对手（P${operator + 1}）应答 —— 本页只显示信息、不显示按钮；切「视角」后可操作`;
+  }
+  if (s.turnPlayer !== viewSeat) {
+    return `轮到对手（P${s.turnPlayer + 1}）行动 —— 本页只显示信息、不显示按钮；切「视角」后可操作`;
+  }
+  return '';
+}
+
 function renderPreviewToolbar(
   opts: NetViewOpts,
   onChange: (next: { viewSeat?: 0 | 1 }) => void,
+  hint: string,
 ): HTMLElement {
   const bar = el('div', 'net-preview-bar');
   bar.appendChild(el('span', 'net-preview-title', '预览工具条'));
@@ -1375,6 +1544,8 @@ function renderPreviewToolbar(
     + '这是推进对手回合、把一局打完的正确做法（对手手牌只手牌数量那一档是不可点的）。';
   seatBtn.addEventListener('click', () => onChange({ viewSeat: opts.viewSeat === 0 ? 1 : 0 }));
   bar.appendChild(seatBtn);
+  // R11-3 的操作提示（轮到对手时为空串 ⇒ 由 CSS 的 `:empty` 收掉）
+  bar.appendChild(el('span', 'net-preview-act-hint', hint));
   bar.appendChild(el('span', 'net-preview-note', netPreviewNote));
   // 运行时自查的**结果行**（`opts.verifyHooks` 时由 verifyPageHooks 写入）。
   // 为什么放在工具条上而不是只 console：这两条断言（.hand 的 DOM 顺序、对手卡的 .rot-180）
@@ -1420,6 +1591,10 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
   //    但它是**泄漏**，而且让"每帧同步的到底是谁"变成随使用时长增长的模糊量 —— 与 R8-4b 修的
   //    "net 页根本没有每帧同步"叠在一起时，缺陷极难分离。
   resetCompiledFxCells();
+  // ── R11-2 的配套（**一次性**绑定，见 `bindNetScrollSync`）──
+  // 链路区现在是**视口内的滚动区**，而 `.compiled-fx` / 锁链层是 body 级固定层 ⇒
+  // 滚动不重渲染 ⇒ 必须自己跟着重定位（否则协议特效会停在旧屏幕坐标上）。
+  bindNetScrollSync();
   const viewSeat = opts.viewSeat;
   // （`foe` 的换算原来在这里，供顶部对手条用；R6 取消顶部条后它已无用 —— 对手侧现在由
   //   `renderLaneColumn` 与 `bottomPlayerOf` 各自按座位换算。删掉局部变量以免"看起来还在用"。）
@@ -1471,15 +1646,11 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
   //    "结果真的进了 DOM"这条证据从源码里消失（我第一版就是套了包装 → 守卫报"结果被丢掉"）。
   grid.appendChild(renderControlModule(s, { axis: 'y', holder: netControlHolder(s, viewSeat) }));
 
-  // ── 底部容器（R6；**R8-5：内容被 CSS 拉成五行**）：信息块 · 手牌区 · 信息块 ──
+  // ── 停靠栏（R6；**R11-2：它就是钉在视口底部的那一行**）：信息块 · 手牌区 · 信息块 ──
   // 手牌区仍由 `buildHands` 产出，且**两条 `.hand` 的 DOM 顺序恒为绝对玩家顺序 [P0, P1]**（约束 7）；
-  //    `hands` 变量要交给 `renderChoiceUi`（给手牌条加 .choice-mode），故这里保留局部绑定。
-  const bottom = buildBottomRow(s, viewSeat, cb, operator);
-  // `.net-hands` 恒是底部容器的**最后一个子节点**（`buildBottomRow` 的挂载顺序：两块信息块 → 手牌区），
-  // 所以这里用 `lastElementChild` 而不是 `querySelector('.net-hands')`：少一次 DOM 查询，
-  // 也避免"若查不到就静默退化成 `bottom`"这种把 `.choice-mode` 加到错误节点上的写法。
-  // （R8-5 的 `display: contents` 只改**盒树**，DOM 父子关系不变 ⇒ 这一句仍然成立。）
-  const hands = bottom.lastElementChild as HTMLElement;
+  //    `hands` 变量要交给 `renderChoiceUi`（给手牌条加 `.choice-mode`），故由 `buildBottomRow`
+  //    **直接交出来**（R11-4：旧写法 `bottom.lastElementChild` 拿到的是**对手信息块** —— 见该函数头注）。
+  const { row: bottom, hands } = buildBottomRow(s, viewSeat, cb, operator);
 
   // ⚠️ C-1：grid **必须先挂进 wrap**，选择模式才能找到候选节点 —— `renderChoiceUi` 内部
   // 三处 `wrap.querySelectorAll(...)` 都只对"已经挂在 wrap 下的节点"生效：
@@ -1508,7 +1679,8 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
   wrap.appendChild(bottom);
 
   // ── 选择模式（三个 choice-* 分支，重写为回到当前页） ──
-  renderChoiceUi(wrap, hands, root, s, cb, deferredFx);
+  // `viewSeat` 是 R11-3 的闸门输入（选择条只在"操作方就是自己"时才挂出来）。
+  renderChoiceUi(wrap, hands, root, s, cb, deferredFx, viewSeat);
 
   // ── 简要日志 + 导出日志（与热座页同款；不占 FX 契约位） ──
   const log = el('div', 'log');
@@ -1526,7 +1698,7 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
     wrap.appendChild(renderPreviewToolbar(opts, (next) => {
       netPreviewNote = `已切视角：我 = P${(next.viewSeat ?? opts.viewSeat) + 1}`;
       onChange(next);
-    }));
+    }, previewActingHint(s, operator, viewSeat)));
   }
 
   root.appendChild(wrap);
@@ -1567,7 +1739,9 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
   if (opts.verifyHooks) {
     let note: string;
     try {
-      note = verifyPageHooks(wrap, seatApplied);
+      // R11-3：把这一帧的**行动方 / 操作方**交给自查 —— 约束 11 的正向那半边（"自己那侧有按钮
+      // ⇒ 自己就是行动方"）需要它；只查"对手那侧零控件"那半边时它是可选的。
+      note = verifyPageHooks(wrap, seatApplied, { turnPlayer: s.turnPlayer, operator });
     } catch (err) {
       note = `自查 ✗ 自查本身抛异常：${String(err)}`;
       console.warn('[render-net] 运行时自查抛异常（已吞掉，不影响渲染）：', err);

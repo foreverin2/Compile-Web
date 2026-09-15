@@ -139,6 +139,71 @@ export function cssOrderOf(node: StubNode, chain: StubNode[], rules: CssRule[]):
 }
 
 /* ============================================================================
+ * **主体绑定**解算（G2 修正 **R11-2** 从两个消费方上提到这里，**一份实现**）
+ *
+ * 为什么必须上提：`cssPropOf` 的 `selectorMatches` 允许主体绑到链上的**任意祖先** ——
+ * 它回答"这条规则对这个节点生效吗"，而**不**回答"这条规则说的是**这个节点**吗"。
+ * 对"谁在第几行/第几列"这类判据，后者才是要问的：例如 `.net-bottom { display: contents }`
+ * 会被解成 `.net-info-block`（孙子）的 `display`，于是展平器把信息块的子节点当成 grid item。
+ * ⇒ 这类判据必须用 `subjectPropOf`（只认"把 `node` 当**选择器主体**"的规则）。
+ *
+ * ⚠️ 上提之前它是**两份拷贝**（`net-board-grid.test.ts` 与 `net-r9.test.ts` 各自的局部函数），
+ * 与本文件头注的教训完全同形：拷贝会漂移，而漂移的表现是"一个文件绿、另一个红"。
+ *
+ * ⚠️ **`net-lane-tree.test.ts` 的 `cssPropOfSubject` 故意不并入这里**：它是**更强**的变体 ——
+ * 解算前先对整条祖先链跑一遍 `assertModelableCascade`（连"没声明该属性的规则"也查）。
+ * 这里保留的是`subjectPropOf` 的原始形态（只在**命中且声明了该属性**的那条规则上拒绝
+ * `!important` / ID / 内联），供两个消费方使用；**全表扫描**那一条由各文件自己的
+ * `assertNoUnmodelableCascade` 调用承担（见本文件下半部分）。
+ * ========================================================================== */
+
+/**
+ * 一条规则是否把 `node` 当作**选择器主体**（最后一段复合选择器）命中 —— 选择器组逐段判。
+ *
+ * ⚠️ 与 `cssPropOf` 的差别只有这一点：主体必须落在 `node` 上，而不是链上的任意祖先。
+ */
+export function ruleHitsAsSubject(rule: CssRule, node: StubNode, chain: StubNode[]): boolean {
+  return rule.selector.split(',').some((segRaw) => {
+    const seg = segRaw.trim();
+    if (seg === '') return false;
+    const parts = seg.split(/\s+/).filter(Boolean);
+    return compoundMatches(parts[parts.length - 1], node) && selectorMatches(seg, chain);
+  });
+}
+
+/**
+ * **主体绑定解算**：权重优先、同权重取源序靠后，但只认"把 `node` 当**选择器主体**"的规则。
+ *
+ * ## 等价条件（不满足就会算错，必须显式禁掉而不是猜）
+ * 只建模"**纯类/属性选择器 + 权重 + 源序**"。命中规则里出现 `!important` / ID(`#`) /
+ * `[style…]` 时**直接抛错**（浏览器里它们会压过普通声明、或与桩没有的 id 相关，本模型无法表达）。
+ * 本组解算的属性（`display` / `grid-row` / `grid-column` / `align-self` / `position` /
+ * `transform` / `grid-template-columns` / `grid-template-rows` / `overflow-y` / `height` …）
+ * **全部非继承**，故不需要回溯父级计算值。
+ */
+export function subjectPropOf(
+  node: StubNode, chain: StubNode[], rules: CssRule[], prop: string,
+): string | null {
+  let best: { spec: number; no: number; raw: string } | null = null;
+  const re = new RegExp(`(?:^|;|\\s)${prop}\\s*:\\s*([^;]+)`);
+  for (const r of rules) {
+    const m = re.exec(r.body);
+    if (!m) continue;
+    if (!ruleHitsAsSubject(r, node, chain)) continue;
+    if (/!important/i.test(m[1]) || /#[\w-]/.test(r.selector) || /\[style\b/.test(r.selector)) {
+      throw new Error(`[主体绑定解算] 规则 \`${r.selector}\` 用 \`!important\` / ID / 内联属性覆盖 \`${prop}\`，`
+        + '而本解析器只建模"类/属性选择器 + 权重 + 源序" —— 这类形态在浏览器里会压过它、'
+        + '在守卫里却是隐形的（C-1 那族"守卫全绿、页面照错"）。请改用明确的类选择器。');
+    }
+    const spec = specificityOf(r.selector);
+    if (!best || spec > best.spec || (spec === best.spec && r.no > best.no)) {
+      best = { spec, no: r.no, raw: m[1].trim() };
+    }
+  }
+  return best ? best.raw : null;
+}
+
+/* ============================================================================
  * 解析器**前提**的全局守卫（G2 修正 **R8-5 · I-1** 从 `net-lane-tree.test.ts` 的 G-5c④ 提到这里）
  *
  * 本解析器只建模"**纯类/属性选择器 + 权重 + 源序**"。`!important` / ID 选择器 / 内联样式属性选择器

@@ -153,10 +153,26 @@ function rotatedContainers(css: string): string[] {
  *    信息条搬去了底部行的 `.net-info-block`）。两个名字都留在判据里：`.net-hand-side` 是本页
  *    **曾经**用过的名字，若将来有人把它加回来（复制粘贴旧规则）并配上 `display:none`，
  *    这条断言照样要红 —— 判据针对的是"**承载手牌的节点**"，不是某个具体的类名。
+ *
+ *    ⚠️ **R11-2 收口（判据从"选择器里出现过"改成"**主体**就是承载手牌的节点"）**：
+ *    旧判据是整条选择器的**裸子串**匹配，于是 R11-2 新加的
+ *    `.net-board .net-hand-area-foe .net-hand-label { display: none }`（隐藏的是那行**标签**，
+ *    `.hand` 一个都没动）会被判成"隐藏手牌"而**假红**。改成只看**选择器主体**（最后一段复合选择器）
+ *    之后：真正隐藏 `.net-hands` / `.net-hand-area[‑self|‑foe]` / `.hand` / `.hand-count-only`
+ *    仍然必红（下面 562 行的三条阳性对照就是它），而"藏手牌区**里面**的某个子节点"不再误报。
+ *    —— 与本仓 R8-2 那次"把 `order` 的裸子串判据收窄成**主体**"是同一族修正。
  */
 function hiddenHandRules(css: string): string[] {
+  /** 承载手牌（或就是手牌）的类名：`.hand` 本体、两层容器、以及 `.hand-*` 变体（如 `.hand-count-only`）。 */
+  const handBearing = /^(?:net-hands|net-hand-area|net-hand-area-self|net-hand-area-foe|net-hand-side|net-hand-side-self|net-hand-side-foe|hand|hand-[\w-]+)$/;
   return cssRules(css)
-    .filter((r) => /(net-hands|net-hand-area|net-hand-side|\.hand\b)/.test(r.selector) && /display:\s*none/.test(r.body))
+    .filter((r) => /display:\s*none/.test(r.body))
+    .filter((r) => r.selector.split(',').some((segRaw) => {
+      const parts = segRaw.trim().split(/\s+/).filter(Boolean);
+      const subject = parts[parts.length - 1] ?? '';
+      return subject.split(/(?=[.#[])/)
+        .some((part) => part.startsWith('.') && handBearing.test(part.slice(1)));
+    }))
     .map((r) => r.selector);
 }
 
@@ -555,10 +571,19 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
     // 光有"建的顺序"还不够：两条手牌必须挂进**同一个父容器**，且挂载本身也按同一顺序。
     expect(code, '找不到「同一父容器里先 append P0、再 append P1」的语句对（顺序保证的挂载点）')
       .toMatch(/appendChild\(buildP0Hand\([^)]*\)\);\s*hands\.appendChild\(buildP1Hand\([^)]*\)\);/);
-    // 视觉归属必须是 CSS 的事：父容器带座位类，且样式表真的用 order 实现
+    // 视觉归属必须是 CSS 的事：父容器带座位类；**手牌区的上/下带自 R8-5 起由 `grid-row` 按侧指派**
+    // （`order` 已退役 ⇒ 这里改成"手牌区不得再由 `order` 定位"的正面判据）。
+    // ⚠️ 旧判据写的是 `toMatch(/order\s*:/)`，注释还说"用 order 决定上下带归属" ——
+    //    那自 R8-5 起就是**错的**，而它一直绿只是因为 `.battery-overflow` 与中线标签里也有 `order`：
+    //    正是本项目反复栽的"守卫被**不是那件事**的东西满足"。这条更正**加强**了判据
+    //    （原来任何 `order` 都能满足它，现在它专门禁止手牌区用 `order`）。
     expect(code, '父容器未按座位加类（视觉归属应交给 CSS）').toContain('net-view-');
     const css = read('styles-net.css');
-    expect(css, 'styles-net.css 未用 order 决定上下带归属').toMatch(/order\s*:/);
+    const orderOnHands = cssRules(css)
+      .filter((r) => /(?:^|;|\s)order\s*:/.test(r.body))
+      .filter((r) => /net-hand-area|net-hands|\.hand\b/.test(r.selector));
+    expect(orderOnHands.map((r) => r.selector), '手牌区的上/下带自 R8-5 起由 `grid-row` 按侧指派'
+      + '（`order` 已退役）—— 再用 `order` 定位手牌就是两套真相（规格 §4 红线 7）').toEqual([]);
     // display:none 的检查**扩到所有承载/就是手牌的节点**（评审变异 D-1：只查 `.net-hands` 时
     // `.net-hand-side-foe { display:none }` 仍然全绿，而它正是"rect 全 0"的真实危险形态）。
     // 这里用"对合成 CSS 的阳性/阴性对照"证明仪器本身有判别力，再对真实样式表跑一遍。
@@ -1191,8 +1216,11 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
     expect(code, 'render-net.ts 直调了 setFxViewSeat —— 拿不到写进去的值，运行时断言 4 失去判据')
       .not.toMatch(/\bsetFxViewSeat\s*\(/);
     // 它必须交回自查（断言 4 的契约链：渲染期写进去的值 == 模块态）
+    // ⚠️ R11-3：调用形态多了第 3 个实参（这一帧的**行动方 / 操作方**，约束 11 的正向判据要用）
+    // ⇒ 判据从"`)` 紧跟 seatApplied"放宽成"seatApplied 作为第 2 个实参"（**不是**放宽强度：
+    //    它仍然要求渲染期那个值被交进去；旧写法会把"多传一个参数"误判成契约断了）。
     expect(code, 'verifyPageHooks 未收到渲染期写进去的座位')
-      .toMatch(/verifyPageHooks\(\s*wrap\s*,\s*seatApplied\s*\)/);
+      .toMatch(/verifyPageHooks\(\s*wrap\s*,\s*seatApplied\b/);
     // 控制轨：仍由共享助手产出（A 类钩子拼写不变），且**本页**显式传竖向 + 座位换算后的持有者
     expect(code, '控制轨未按竖向渲染（用户裁决"控制轨改成竖向，自己端在下、对手端在上"）')
       .toMatch(/grid\.appendChild\(renderControlModule\(s,\s*\{\s*axis:\s*'y',\s*holder:\s*netControlHolder\(s,\s*viewSeat\)\s*\}\)\)/);
@@ -1448,11 +1476,17 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
     counts: Record<string, number>,
     handOrder: number[] = [0, 1],
     /** R7：**渲染根自己的类名**（真实页面里 `scope` 就是 `wrap` = `board net-board net-view-N`）
-     *  与 `.net-hands` 的 `data-view-seat`。默认 `[]` / `'0'` —— 见下面断言 6 的两条反面用例。 */
-    page: { boardClasses?: string[]; handsViewSeat?: string } = {},
+     *  与 `.net-hands` 的 `data-view-seat`。默认 `[]` / `'0'` —— 见下面断言 6 的两条反面用例。
+     *  R11-3：`blockControls` 给两块信息块各配 N 个"操作控件"（约束 11 的判据对象 ——
+     *  正常页面两块都是 0，反面用例用它把按钮"放"到某一侧去）。 */
+    page: {
+      boardClasses?: string[]; handsViewSeat?: string;
+      blockControls?: { self?: number; foe?: number };
+    } = {},
   ): HTMLElement {
     const boardClasses = page.boardClasses ?? [];
     const handsViewSeat = page.handsViewSeat ?? '0';
+    const blockControls = page.blockControls ?? {};
     /** 选择器里可能带 `[attr="value"]` / `[attr=value]`（约束 8 的合成树用它验取值） */
     const attrOf = (sel: string): Record<string, string> => {
       const out: Record<string, string> = {};
@@ -1468,6 +1502,8 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
       dataset: Record<string, string>;
       getAttribute: (n: string) => string | null;
       parentElement?: unknown;
+      /** R11-3：约束 11 会对每一块信息块逐类查"操作控件"（见 `blockControls`）。 */
+      querySelectorAll?: (s: string) => unknown[];
     }> => {
       // 带值的属性选择器（`.card[data-fx-rot="ccw"]`）在计数表里没有自己的键 → 取"基础选择器"
       // 的数量，再把属性值喂给桩（真实 DOM 里这两条查询返回的是**同一批节点**，桩必须同构）。
@@ -1479,6 +1515,13 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
       if (sel === '.net-info-block') {
         return ['self', 'foe'].slice(0, n).map((seat) => ({
           dataset: { netSeat: seat }, getAttribute: () => null, parentElement: bottomRow,
+          // R11-3：约束 11 会**逐类**查按钮（`.next-btn` / `.choice-bar` / …，不写逗号选择器组）
+          // —— 桩按 `blockControls` 给每一次查询返回同样多条。⚠️ 判据只看**总数**，
+          // 所以"每一类都返回 N 条"与"只有某一类返回 N 条"在判据上等价（不是偷懒的近似）。
+          querySelectorAll: () => Array.from(
+            { length: blockControls[seat as 'self' | 'foe'] ?? 0 },
+            () => ({ dataset: {}, getAttribute: () => null }),
+          ),
         }));
       }
       if (sel === '.net-bottom') {
@@ -1732,6 +1775,61 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
       } finally {
         g.document = prevDoc;
       }
+      expect(warn, '失败必须留下 console.warn 证据（不能只在返回值里）').toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+      info.mockRestore();
+    }
+  });
+
+  /**
+   * **22. R11-3：约束 11 的判据有牙齿**（"操作按钮只在轮到自己的那一侧"）。
+   *
+   * 用户第四次验收原话："操作按钮（刷新/下一步/选择条）**只在轮到自己时出现在自己这一侧** ——
+   * 对手那一侧**只显示信息**，不再有按钮"。
+   *
+   * 为什么单列一条：这条运行时判据有**两个半边**，而只在正常页面上跑一遍的话，
+   * "对手侧零控件"那半边会**恒真**（正常页面本来就没有按钮）—— 那正是本项目反复栽的空断言族。
+   * 下面五条用例把它钉成可判别的仪器：
+   *   ① 正常页（两侧零控件）⇒ ✓；
+   *   ② **对手那一侧被塞了一个按钮** ⇒ 必报约束 11（用户点名的字面形态）；
+   *   ③ 自己那一侧有按钮、但这一帧的**行动方是 P2**（我是 P1）⇒ 必报约束 11（"只在轮到自己时"）；
+   *   ④ 自己那一侧有按钮、且**自己就是**行动方 ⇒ 不得报（③ 的反空集合：证明 ③ 不是恒真）；
+   *   ⑤ 不给 `acting` 时只查"对手侧零控件"那半边 —— 同样是 R11-3 的合法状态（合成 scope 没有游戏状态）。
+   */
+  it('22. R11-3：约束 11 —— 对手侧零控件 + 自己侧有控件 ⇒ 自己必须是行动方（五条用例）', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const boardClasses = ['board', 'net-board', 'net-view-0'];
+    const page = (controls: { self?: number; foe?: number }): HTMLElement =>
+      fakeScope(syntheticPage(), [0, 1], { boardClasses, handsViewSeat: '0', blockControls: controls });
+    try {
+      setFxViewSeat(0);
+      // ① 阳性对照：正常页（两块都没有按钮）
+      expect(verifyPageHooks(page({}), 0, { turnPlayer: 0, operator: null }),
+        '正常页面（对手侧零控件、自己侧也零控件）不是 ✓ —— 约束 11 误报').toMatch(/^自查 ✓/);
+      // ② 对手那一侧有按钮 ⇒ 必报（用户的字面要求：对手那一侧只显示信息）
+      expect(verifyPageHooks(page({ foe: 1 }), 0, { turnPlayer: 0, operator: null }),
+        '对手那一侧出现操作控件却没报 —— 真联机下等于把对手的操作面板摊在我的屏幕上')
+        .toContain('约束 11');
+      // ③ 自己那一侧有按钮、但行动方是 P2（我是 P1）⇒ 必报
+      expect(verifyPageHooks(page({ self: 1 }), 0, { turnPlayer: 1, operator: null }),
+        '自己那一侧有按钮、而这一帧的行动方是对手，却没报 —— "只在轮到自己时"这半边失效')
+        .toContain('约束 11');
+      // ④ 反空集合：同样的"自己侧有按钮"，但**自己就是**行动方 ⇒ 不得报（否则 ③ 是恒真）
+      expect(verifyPageHooks(page({ self: 1 }), 0, { turnPlayer: 0, operator: null }),
+        '自己就是行动方、按钮也在自己那一侧，却被判成违规（假红）').not.toContain('约束 11');
+      // ⑤ 挂起选择那一侧同理（`operator` 是选择条的归属依据）：
+      //    ⑤a 行动方与操作方**都是**对手（P2）⇒ 我的信息块里有按钮 = 违规
+      expect(verifyPageHooks(page({ self: 1 }), 0, { turnPlayer: 1, operator: 1 }),
+        '行动方与操作方都是对手、而我的信息块里有按钮，却没报').toContain('约束 11');
+      //    ⑤b **合法态**：对手的回合、但这一帧该**我**应答选择（`operator = 我`）⇒ 选择条挂我这边
+      //        是正当的（防有人把判据简化成"只看 turnPlayer"而误报这条真实局面）。
+      expect(verifyPageHooks(page({ self: 1 }), 0, { turnPlayer: 1, operator: 0 }),
+        '对手回合、但由我应答选择时，我的信息块里出现选择条被判成违规（假红）').not.toContain('约束 11');
+      // ⑥ 不给 acting ⇒ 只查"对手侧零控件"（自己侧有控件不再被质疑 —— 合成 scope 无游戏状态）
+      expect(verifyPageHooks(page({ self: 1 }), 0),
+        '不给 acting 时仍对"自己侧有控件"报错 —— 那半边需要行动方信息才能判').not.toContain('约束 11');
       expect(warn, '失败必须留下 console.warn 证据（不能只在返回值里）').toHaveBeenCalled();
     } finally {
       warn.mockRestore();

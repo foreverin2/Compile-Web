@@ -630,42 +630,49 @@ describe('R-F · C-2 / R8-2：真跑 renderNetBoard 的元素树层序（viewSea
             + `${playerOfSide(side, seat)}（实际 ${String(block.dataset.player)}）`)
             .toBe(String(playerOfSide(side, seat)));
         }
-        // ④ **列语义的两次迁移（R8-5 → R9-3；判据跟着搬，不是删除）**：
+        // ④ **列语义的三次迁移（R8-5 → R9-3 → R11-2；判据跟着搬，不是删除）**：
         //    · R6~R7：解的是 `grid-column: 1 / 3`（"谁在左、谁在右"的三列底部行）；
-        //    · R8-5：信息块与手牌区**各自一整行**，左右语义整体消失 ⇒ 判据换成"三块都是整行 `1 / -1`"；
-        //    · **R9-3**：手牌并进信息块那一行 ⇒ 信息块改为占**左侧窄列**（`grid-column: 1`）、
-        //      手牌区仍是**整行**（`1 / -1`）—— 这正是"手牌整页中置"的机制（手牌不参与左列宽度）。
-        //    现在钉三件事（**覆盖 R8-5 判据的全部对象，没有放松**）：
-        //      a) 两块信息块必须落在**同一列（第 1 列）**—— 它们不再跨列、也不许被挤到别的列；
-        //      b) 两块手牌区必须仍是**整行** `1 / -1`（手牌中置的机制本身）；
-        //      c) 样式表里**不许**再有把它们按**其它列**摆放的规则（`grid-column: 2` / `3` 回潮即红）。
-        //    ⚠️ 为什么不能保留旧判据（"信息块也必须是 `1 / -1`"）：R9-3 的裁决就是"信息块占左列、
-        //    手牌横跨其余列" —— 保留旧句会**把本波的裁决判成失败**。判据的对象换了、强度没降：
-        //    旧句查"三块都是同一个值（整行）"，新句查"信息块=1 且 手牌=1/-1 且没有别的列指派"
-        //    （**多查了一件事**：R8-5 之后两块的列值本来必须相同，所以"信息块与手牌**不同**列"
-        //    这件事在旧句下根本表达不出来）。
-        //    ⚠️ 为什么不能保留旧解算器（`visualOrderOfBottom`）：它对 `1 / -1` 一律返回 `Infinity`
-        //    ⇒ 排序退化成 **DOM 顺序**，而 DOM 顺序恰好就是它期望的值 —— 那条断言会
-        //    **永远为真且不查任何东西**（假绿）。五行行序的新模型在
-        //    `tests/ui/net-board-grid.test.ts` 的 **G-7**（展平盒树 + 解 `grid-row`）。
+        //    · R8-5：信息块与手牌区**各自一整行** ⇒ 判据换成"三块都是整行 `1 / -1`"；
+        //    · R9-3：手牌并进信息块那一行 ⇒ 信息块占**左侧窄列**、手牌区整行；
+        //    · **R11-2/3**：对手那一块也搬进同一行（**停靠栏**）⇒ 四块各有自己的列：
+        //      自己信息块 `1` · 自己手牌区 `1 / -1`（整行中置）· 对手信息块 `3` · 对手手牌张数 `4`。
+        //    现在钉三件事（**覆盖前两版判据的全部对象，没有放松**）：
+        //      a) 自己那一块在**第 1 列**、对手那一块在**第 3 列**（对手在右 = 用户第四次验收的字面要求；
+        //         两块的列**必须不同**，否则"谁在右"这件事在判据里表达不出来）；
+        //      b) 自己手牌区仍是**整行** `1 / -1`（手牌整页中置的机制本身），
+        //         对手手牌张数是**第 4 列**的窄块（它被"压进对手那一块"）。
+        //      c) 样式表里**不许**再有别的列指派（白名单见下）—— 残留的列指派会把某一块挤到别处。
+        //    ⚠️ 为什么不能保留旧判据（"两块信息块都必须是 `1`"）：R11-2 的裁决就是"对手那一块
+        //    摆在该行**右侧**" —— 保留旧句会**把本波的裁决判成失败**。强度没降：旧句查"两块同值"，
+        //    新句查"两块各等于自己的期望值"（**多查了一件事**：旧句下"两块都在第 3 列"也能过）。
         const colOf = (n: StubNode): string | null => cssPropOf(n, [...chain, bottom!, n], RULES, 'grid-column');
         const dispOf = (n: StubNode): string | null => cssPropOf(n, [...chain, bottom!, n], RULES, 'display');
-        console.log(`  ----- viewSeat=${seat} · 底部三块解出的 grid-column / display（R9-3：信息块=左列 1、手牌区=整行 1 / -1）-----\n`
+        console.log(`  ----- viewSeat=${seat} · 停靠栏四块解出的 grid-column / display（R11-2：自己=1、自己手牌=1/-1、对手=3、对手手牌=4）-----\n`
           + `  ${bottom!.children.map((n) => `${isClass(n, 'net-info-block') ? String(n.dataset.netSeat) : 'hands'}:`
             + ` grid-column=${String(colOf(n))} display=${String(dispOf(n))}`).join(' · ')}`);
-        for (const n of infoBlocks) {
-          expect(colOf(n), `viewSeat=${seat}：两块信息块的 grid-column 必须是**第 1 列**（\`1\`），`
-            + `实际 ${String(colOf(n))} —— R9-3 把它们放进**左侧窄列**、与手牌区同行`
-            + `（且要保证它们**不跨列**：跨列就会把手牌挤到一边）`).toMatch(/^1(\s*\/\s*2)?$/);
+        /** 只占**一列**的写法（`3` 与 `3 / 4` 同义；`1` 与 `1 / 2` 同义）。 */
+        const oneColumn = (want: number): RegExp => new RegExp(`^${want}(\\s*/\\s*${want + 1})?$`);
+        for (const block of infoBlocks) {
+          const side = String(block.dataset.netSeat);
+          const want = side === 'self' ? 1 : 3;
+          expect(colOf(block), `viewSeat=${seat}：${side} 侧信息块的 grid-column 必须是**第 ${want} 列**`
+            + `（R11-2：自己那块在**左**、对手那块在**右**），实际 ${String(colOf(block))}`
+            + ' —— 列值必须**不跨列**（跨列就会把手牌挤到一边）').toMatch(oneColumn(want));
         }
-        // b) 两块手牌区仍是**整行**（`1 / -1`）—— 手牌"整页中置"的机制本身
+        // b) 自己手牌区整行（`1 / -1`）—— "整页中置"的机制本身；对手手牌张数在第 4 列
         const handAreas = handsBlocks[0].children.filter((n) => isClass(n, 'net-hand-area'));
         expect(handAreas.length, `viewSeat=${seat}：.net-hands 里应有两块 .net-hand-area`).toBe(2);
         for (const a of handAreas) {
-          expect(cssPropOf(a, [...chain, bottom!, handsBlocks[0], a], RULES, 'grid-column'),
-            `viewSeat=${seat}：手牌区的 grid-column 必须是**整行**（\`1 / -1\`）——`
-            + '它被限制到某一列之后，手牌就不再"整页中置"（R9-3 的裁决要求手牌仍整页中置）')
-            .toMatch(/^1\s*\/\s*-1$/);
+          const isFoeArea = isClass(a, 'net-hand-area-foe');
+          const col = cssPropOf(a, [...chain, bottom!, handsBlocks[0], a], RULES, 'grid-column');
+          if (isFoeArea) {
+            expect(col, `viewSeat=${seat}：对手手牌张数块的 grid-column 必须是**第 4 列**（对手信息块右侧、`
+              + `用户："压缩进对手信息块内"），实际 ${String(col)}`).toMatch(oneColumn(4));
+          } else {
+            expect(col, `viewSeat=${seat}：自己手牌区的 grid-column 必须是**整行**（\`1 / -1\`）——`
+              + '它被限制到某一列之后，手牌就不再"整页中置"（R9-3 的裁决要求手牌仍整页中置）')
+              .toMatch(/^1\s*\/\s*-1$/);
+          }
         }
         // `.net-hands` **不是** `.net-board` 的 grid item（它是 `display: contents` 的容器），
         // 所以它没有、也不该有 `grid-column`/`grid-row` —— 它的**子节点**（两块手牌区）才是 grid item。
@@ -676,18 +683,19 @@ describe('R-F · C-2 / R8-2：真跑 renderNetBoard 的元素树层序（viewSea
           .toBe('contents');
         expect(dispOf(bottom!), `viewSeat=${seat}：.net-bottom 必须是 display: contents（同上）`)
           .toBe('contents');
-        // c) 样式表里**不许有第三种列指派**：R9-3 之后只允许两个合法值 ——
-        //    手牌区的整行 `1 / -1` 与信息块的左列 `1`（`1 / 2` 写成"跨一列"也算同义）。
-        //    任何别的值（`2` / `3` / `1 / 3` / `auto`）都会把某一块挤到它不该在的列上。
-        //    ⚠️ 口径与 R8-5 时**同形**（当时只允许 `1 / -1` 一个值），只是白名单多了
-        //    R9-3 明确裁决的"左列"这一个值。
+        // c) 样式表里**不许有第四个合法值以外的列指派**：R11-2 之后只有四个合法值 ——
+        //    自己信息块 `1`（`1 / 2` 同义）、对手信息块 `3`、对手手牌张数 `4`、手牌区整行 `1 / -1`。
+        //    任何别的值（`2` / `2 / -1` / `5` / `auto`）都会把某一块挤到它不该在的列上。
+        //    ⚠️ 口径与前两版**同形**（R8-5 时只允许 `1 / -1` 一个值，R9-3 时是两个），
+        //    只是白名单跟着裁决扩大了 —— 而"每一块**解析出来的**值 == 它的期望值"这条
+        //    （上面 ④ 的逐块断言）比白名单强，两者合起来才是完整判据。
         const staleColumnRules = RULES.filter((r) =>
-          /(?:^|;|\s)grid-column\s*:/.test(r.body) && /\.net-info-block|\.net-bottom\s*>/.test(r.selector)
-          && !/1\s*\/\s*-1/.test(r.body) && !/:\s*1(\s*\/\s*2)?\s*(?:;|$)/.test(r.body));
+          /(?:^|;|\s)grid-column\s*:/.test(r.body) && /\.net-info-block|\.net-hand-area|\.net-bottom\s*>/.test(r.selector)
+          && !/:\s*(?:1\s*\/\s*-1|1(?:\s*\/\s*2)?|3(?:\s*\/\s*4)?|4(?:\s*\/\s*5)?)\s*(?:;|$)/.test(r.body));
         expect(staleColumnRules.map((r) => `${r.selector} { ${r.body.trim()} }`),
-          `viewSeat=${seat}：styles-net.css 里仍有把底部信息块/手牌区按**别的列**摆放的规则`
-          + '（R9-3 之后只允许"手牌区整行 `1 / -1`"与"信息块左列 `1`"两种写法；'
-          + '残留的列指派会把它们挤到某一列上）').toEqual([]);
+          `viewSeat=${seat}：styles-net.css 里仍有把停靠栏四块按**别的列**摆放的规则`
+          + '（R11-2 之后只允许"自己=1 / 自己手牌=1 / -1 / 对手=3 / 对手手牌=4"这四种写法）')
+          .toEqual([]);
         // ⑤ 手牌区在 DOM 里也**恒在中间**（DOM 位置不是红线的对象，但两处不一致就是
         //    "DOM 对、看着反"的温床 —— 例如有人把信息块 append 到手牌区**之后**）
         const domOrder = bottom!.children.map((n) => (isClass(n, 'net-info-block') ? 'info' : isClass(n, 'net-hands') ? 'hands' : '?'));
@@ -755,15 +763,13 @@ describe('R-F · C-2 / R8-2：真跑 renderNetBoard 的元素树层序（viewSea
         const handsRoot = descendants(root).find((n) => isClass(n, 'net-hands'))!;
         const inside = descendants(handsRoot).filter((n) => isClass(n, 'hand'));
         expect(inside.length, `viewSeat=${seat}：两条 .hand 必须都在同一个 .net-hands 里`).toBe(2);
-        // ③ **视觉手序由 CSS 决定**（不是 DOM 顺序）：R8-5 起是 `.net-hand-area-{foe,self}` 的
-        //    **`grid-row`**（对手 2 / 自己 4；`.net-hands` 是 `display: contents` ⇒ 两块手牌区
-        //    直接是 `.net-board` 的 grid item）。解算出的上下顺序必须与"**对手在上**"一致
-        //    （`viewSeat=0` → P1 在上、P0 在下；`viewSeat=1` 镜像）。
-        //
-        //    ⚠️ **R8-5 的判据迁移（不是削弱）**：旧版解的是 `.net-hands.net-view-N > .net-hand-area[…]`
-        //    的四条 `order`。行号改由 `grid-row` 承担后，再留着 `order` 就是**两套真相**
-        //    （规格 §4 红线 7）⇒ 那四条已删除，这条断言换到新的承重声明上，判据强度不变：
-        //    仍然要求"视觉顺序 ≠ DOM 顺序（DOM 恒 [P0, P1]）**且**这个顺序真的来自样式表"。
+        // ③ **视觉归属由 CSS 决定**（不是 DOM 顺序）：R11-2 起两块手牌区**同在停靠栏那一行**
+        //    （`grid-row: 3`），"谁在哪"改由**列**表达 —— 自己那块横跨整行（`1 / -1` ⇒ 整页中置）、
+        //    对手那一块在第 4 列（右侧，紧贴对手信息块）。
+        //    ⚠️ **R11-2 的判据迁移（不是削弱）**：R8-5~R9-3 期间两侧是**上下镜像**（对手的行号 <
+        //    自己），而 R11-2 的裁决恰恰是"对手那一块搬进自己这一行" ⇒ 旧的"行号必须不同"会把
+        //    本波的裁决判成失败。新判据换了**轴**（上下 → 左右）并**多查一件事**：
+        //    两块手牌区必须**同一行**、且**列不同**（自己整行、对手第 4 列）。
         const handsChain = descendants(root).filter((n) => isClass(n, 'net-board'));
         const areas = handsRoot.children.filter((n) => isClass(n, 'net-hand-area'));
         expect(areas.length, `viewSeat=${seat}：.net-hands 里应有两块 .net-hand-area`).toBe(2);
@@ -771,23 +777,30 @@ describe('R-F · C-2 / R8-2：真跑 renderNetBoard 的元素树层序（viewSea
           const raw = cssPropOf(a, [...handsChain, handsRoot, a], RULES, 'grid-row');
           return raw === null ? Number.POSITIVE_INFINITY : Number.parseInt(raw, 10);
         };
-        const visualAreas = areas
-          .map((a, i) => ({ p: String(a.dataset.player), i, row: rowOfArea(a) }))
-          .sort((x, y) => (x.row - y.row) || (x.i - y.i));
-        // 对手的牌在上面（viewSeat=0 时对手 = P1、viewSeat=1 时对手 = P0）
-        const foePlayer = String(1 - seat);
-        console.log(`  viewSeat=${seat} · 手牌区视觉上→下（CSS grid-row 解算）: `
-          + visualAreas.map((x) => `P${Number(x.p) + 1}(grid-row ${x.row === Number.POSITIVE_INFINITY ? '无' : x.row})`).join(' 然后 '));
-        expect(visualAreas[0].p, `viewSeat=${seat}：视觉**上**带必须是**对手**的手牌（P${Number(foePlayer) + 1}）`
-          + `—— 这一条只能由 CSS（grid-row，按侧）表达，DOM 顺序必须恒 [P0, P1]`)
-          .toBe(foePlayer);
-        // ④ 反空集合：两个行号必须**真的**来自样式表、且**互不相同**（若规则没了，两块都是 `Infinity`
-        //    ⇒ 排序退化成 DOM 顺序 = [P0, P1]，而"对手在上"会**碰巧**在某个座位下绿）
-        const areaRows = areas.map(rowOfArea);
-        expect(areaRows.every((r) => Number.isFinite(r)), 'styles-net.css 里没有给 .net-hand-area 的 grid-row'
-          + '（"谁在上/下"只剩 DOM 顺序这一条腿，而这正是红线不许动的）').toBe(true);
-        expect(new Set(areaRows).size, `两块手牌区的 grid-row 必须不同（同值 ⇒ 排在同一行/退化）`
-          + `，实际 ${areaRows.join(' / ')}`).toBe(2);
+        const colOfArea = (a: StubNode): string | null =>
+          cssPropOf(a, [...handsChain, handsRoot, a], RULES, 'grid-column');
+        const describeArea = (a: StubNode): string => `P${Number(a.dataset.player) + 1}`
+          + `(grid-row ${rowOfArea(a) === Number.POSITIVE_INFINITY ? '无' : rowOfArea(a)},`
+          + ` grid-column ${String(colOfArea(a))})`;
+        console.log(`  viewSeat=${seat} · 手牌区（CSS 解算）: ${areas.map(describeArea).join(' 然后 ')}`);
+        const selfArea = areas.find((a) => isClass(a, 'net-hand-area-self'))!;
+        const foeArea = areas.find((a) => isClass(a, 'net-hand-area-foe'))!;
+        expect(selfArea, `viewSeat=${seat}：找不到自己那块手牌区（.net-hand-area-self）`).toBeTruthy();
+        expect(foeArea, `viewSeat=${seat}：找不到对手那块手牌区（.net-hand-area-foe）`).toBeTruthy();
+        // ③-1 **同一行**（停靠栏）：两块手牌区都落在停靠栏那一行
+        expect(rowOfArea(foeArea), `viewSeat=${seat}：对手手牌张数块与自己的手牌区必须在**同一行**`
+          + `（R11-2：对手那一块搬进自己这一行），实际 ${describeArea(selfArea)} / ${describeArea(foeArea)}`)
+          .toBe(rowOfArea(selfArea));
+        // ③-2 **列不同**：自己那块整行（`1 / -1`）、对手那块第 4 列（最右）
+        expect(colOfArea(selfArea), `viewSeat=${seat}：自己手牌区的 grid-column 必须是整行（\`1 / -1\`）`
+          + '（"整页中置"的机制），实际 ' + String(colOfArea(selfArea))).toMatch(/^1\s*\/\s*-1$/);
+        expect(colOfArea(foeArea), `viewSeat=${seat}：对手手牌张数块的 grid-column 必须是**第 4 列**`
+          + '（对手信息块右侧），实际 ' + String(colOfArea(foeArea))).toMatch(/^4(\s*\/\s*5)?$/);
+        // ④ 反空集合：两个行号必须**真的**来自样式表（若规则没了，两块都是 `Infinity`
+        //    ⇒ "同一行"会以"都没行号"的形式**碰巧**成立）
+        expect([rowOfArea(selfArea), rowOfArea(foeArea)].every((r) => Number.isFinite(r)),
+          'styles-net.css 里没有给 .net-hand-area 的 grid-row（"停靠栏那一行"只剩 DOM 顺序这一条腿，'
+          + '而这正是红线不许动的）').toBe(true);
         const rowRules = RULES.filter((r) => /(?:^|;|\s)grid-row\s*:/.test(r.body) && /\.net-hand-area/.test(r.selector));
         expect(rowRules.length, 'styles-net.css 里没有针对 .net-hand-area 的 grid-row 规则'
           + '（行号必须来自样式表，不许靠 DOM 顺序）').toBeGreaterThanOrEqual(2);

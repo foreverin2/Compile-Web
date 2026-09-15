@@ -5,8 +5,7 @@ import { createGame } from '../../src/core/state/create';
 import { renderNetBoard } from '../../src/ui/render-net';
 import { setFxViewSeat } from '../../src/ui/fx-seat';
 import {
-  assertNoUnmodelableCascade, compoundMatches, cssRules, MODELED_PROPS, selectorMatches,
-  specificityOf, type CssRule,
+  assertNoUnmodelableCascade, cssRules, MODELED_PROPS, subjectPropOf, type CssRule,
 } from './net-css-parse';
 import { descendants, drainRaf, installStubDom, isClass, makeStubEl, walk, type StubNode } from './net-dom-stub';
 
@@ -16,9 +15,9 @@ import { descendants, drainRaf, installStubDom, isClass, makeStubEl, walk, type 
  *
  * | 守卫 | 守什么 | 机制 |
  * | --- | --- | --- |
- * | **G-7** | 五行的**视觉行序**（对手信息块 → 对手手牌 → 链路+控制轨 → 自己手牌 → 自己信息块） | 真跑 `renderNetBoard` + 把 `display: contents` 的盒树**展平** + 从样式表解出每条 grid item 的 `grid-row` |
+ * | **G-7** | 链路行 + **停靠栏**那一行的**行/列序**（链路 → 自己信息块 · 自己手牌 · 对手信息块 · 对手手牌张数） | 真跑 `renderNetBoard` + 把 `display: contents` 的盒树**展平** + 从样式表解出每条 grid item 的 `grid-row` / `grid-column` |
  * | **G-8** | 控制轨竖直**归中**（`align-self: center`，不是 `start`） | 级联解算 |
- * | **G-9** | 操作按钮只在**操作方**那一侧的信息块里 | 真跑两个局面（回合归属 / chooser 归属）× 两个席位 |
+ * | **G-9** | 操作按钮只在**轮到自己的那一侧**（R11-3；R8-8 的"挂到行动方那一侧"已被用户否掉） | 真跑两个局面（回合归属 / chooser 归属）× 两个席位 |
  *
  * ## 为什么 G-7 必须"展平盒树"而不是直接看 `children`
  *
@@ -40,62 +39,16 @@ import { descendants, drainRaf, installStubDom, isClass, makeStubEl, walk, type 
 /* ============================================================================
  * 样式表（**与 `net-lane-tree.test.ts` 同一套解析器** —— 见 ./net-css-parse 的头注：
  * 复制一份就会漂移出第二条真相，而漂移的表现是"一个文件绿、另一个红"）
+ *
+ * ⚠️ **R11-2**：`subjectPropOf` 与 `ruleHitsAsSubject` 原先在本文件里各有一份**局部拷贝**
+ * （`net-r9.test.ts` 也有一份），已上提到 `./net-css-parse`（**一份实现**）。语义**一字未改**：
+ * 只认"把被查节点当**选择器主体**"的规则（`cssPropOf` 允许主体绑到任意祖先，对"谁在第几行"
+ * 这类判据是致命的 —— 见该函数的头注）。
  * ========================================================================== */
 
 const cssPath = new URL('../../src/ui/styles-net.css', import.meta.url);
 const netCss = readFileSync(fileURLToPath(cssPath)).subarray(0, 4 * 1024 * 1024).toString('utf8');
 const RULES = cssRules(netCss);
-
-/**
- * 一条规则是否把 `node` 当作**选择器主体**（最后一段复合选择器）命中 —— 与
- * `net-lane-tree.test.ts` 的 `ruleHitsAsSubject` **同一语义**（选择器组逐段判）。
- */
-function ruleHitsAsSubject(rule: CssRule, node: StubNode, chain: StubNode[]): boolean {
-  return rule.selector.split(',').some((segRaw) => {
-    const seg = segRaw.trim();
-    if (seg === '') return false;
-    const parts = seg.split(/\s+/).filter(Boolean);
-    return compoundMatches(parts[parts.length - 1], node) && selectorMatches(seg, chain);
-  });
-}
-
-/**
- * **主体绑定解算**：与 `net-lane-tree.test.ts` 的 `cssPropOfSubject` 同语义（权重优先、
- * 同权重取源序靠后），但只认"把 `node` 当**选择器主体**"的规则。
- *
- * ⚠️⚠️ 为什么本文件**必须**用它（而不是共享的 `cssPropOf`）：后者的 `selectorMatches` 允许主体
- * 绑到链上的**任意祖先**。对这个任务的判据这是**致命**的 —— `.net-bottom { display: contents }`
- * 会被解成 `.net-info-block`（**孙子**）的 `display`，于是展平器把信息块的子节点当成 grid item，
- * G-7 会以"信息块不是顶层 item"的形式**误报**（本文件第一版实测就是这样红的）。
- * `net-lane-tree.test.ts` 里那条同名注释（"`cssPropOf` 没有这层保护"）说的正是这个坑。
- *
- * ## 等价条件（不满足就会算错，必须显式禁掉而不是猜）
- * 只建模"**纯类/属性选择器 + 权重 + 源序**"。命中规则里出现 `!important` / ID(`#`) /
- * `[style…]` 时**直接抛错**（浏览器里它们会压过普通声明、或与桩没有的 id 相关，
- * 本模型无法表达）。本组解算的属性（`display` / `grid-row` / `grid-column` / `align-self` /
- * `position` / `transform` / `grid-template-columns`）**全部非继承**，故不需要回溯父级计算值。
- */
-function subjectPropOf(
-  node: StubNode, chain: StubNode[], rules: CssRule[], prop: string,
-): string | null {
-  let best: { spec: number; no: number; raw: string } | null = null;
-  const re = new RegExp(`(?:^|;|\\s)${prop}\\s*:\\s*([^;]+)`);
-  for (const r of rules) {
-    const m = re.exec(r.body);
-    if (!m) continue;
-    if (!ruleHitsAsSubject(r, node, chain)) continue;
-    if (/!important/i.test(m[1]) || /#[\w-]/.test(r.selector) || /\[style\b/.test(r.selector)) {
-      throw new Error(`[R8-5 守卫] 规则 \`${r.selector}\` 用 \`!important\` / ID / 内联属性覆盖 \`${prop}\`，`
-        + '而本解析器只建模"类/属性选择器 + 权重 + 源序" —— 这类形态在浏览器里会压过它、'
-        + '在守卫里却是隐形的（C-1 那族"守卫全绿、页面照错"）。请改用明确的类选择器。');
-    }
-    const spec = specificityOf(r.selector);
-    if (!best || spec > best.spec || (spec === best.spec && r.no > best.no)) {
-      best = { spec, no: r.no, raw: m[1].trim() };
-    }
-  }
-  return best ? best.raw : null;
-}
 
 /* ============================================================================
  * 真跑一帧（与 net-lane-tree.test.ts 的 renderFrame 同源；本文件多两个旋钮）
@@ -263,32 +216,30 @@ function labelOf(it: GridItem): string {
 const DESIGNATED = ['信息块:foe', '手牌区:foe', '链路+控制轨', '手牌区:self', '信息块:self'];
 
 /**
- * **并盒后的视觉顺序**（R9-3；与 `DESIGNATED` 分开，因为两者的用途不同）：
- * `DESIGNATED` 是"这五块必须都是顶层 grid item"的**集合**（顺序无关），
- * 这张表是**读序**：并盒的那两行里，手牌区的**列盒**从第 1 列起（整行）、信息块在第 1 列，
- * 盒树展平后 DOM 顺序是 `.net-hands` 在 `.net-bottom` 的**信息块之后** ⇒ 解出的
- * `gridItemsOf` 序列是 `[grid, infoFoe, handFoe, …]`。
- * ⚠️ 这一点**不影响**用户要的观感（手牌整页中置、信息块在左列），只是"同一行内的先后"在
- * 展平序里由 DOM 决定 —— 把它写成一条**显式**的期望（而不是靠排序稳不稳定），失败时能直接看出。
+ * **停靠栏那一行的四块**（R11-2/3）：它们**共用同一个 `grid-row`**，左右次序由**列**决定。
+ * 这张表取代 R9-3 的 `ROW_GROUPS`（那张表按"每侧信息块 + 该侧手牌同一行"分组，共两组；
+ * R11-2 之后对手那一块也搬进来 ⇒ 只剩**一组**四块）。
  */
-const VISUAL = ['手牌区:foe', '信息块:foe', '链路+控制轨', '信息块:self', '手牌区:self'];
+const DOCK = ['信息块:self', '手牌区:self', '信息块:foe', '手牌区:foe'] as const;
 
 /**
- * **R9-3 的行表**：信息块与手牌区**并盒同排** ⇒ 五块只占**四个** `grid-row`
- * （row1 = 对手[信息块 | 手牌区]、row2 = 链路、row3 = 日志/工具条、row4 = 自己[信息块 | 手牌区]）。
- * ⚠️ 这张表是"同排"这件事的**期望**侧；行为侧由下面 ③′ 的"同一行里既要找到该侧信息块、
- * 又要找到该侧手牌区"钉住（**G-12**）。
+ * **视觉（行, 列）序**（R11-2；与 `DESIGNATED` 分开，因为两者用途不同）：
+ * `DESIGNATED` 是"这五块必须都是顶层 grid item"的**集合**（顺序无关），
+ * 这张表是**读序**：先按 `grid-row`，同一行内再按 `grid-column` 的**起始列**。
+ *
+ * ⚠️ **判据从"DOM 顺序"升级成"（行, 列）序"**：R9-3 时并盒的两块共用一行、列区间重叠
+ * （手牌整行），同行的先后**只能**由 DOM 决定（当时那条注释就说清了这一点）。
+ * R11-2 之后四块各有自己的列（自己信息块 1 / 自己手牌 1·-1 / 对手信息块 3 / 对手手牌 4）
+ * ⇒ 同行的先后**由列决定**，与 DOM 顺序无关 —— 于是这张表在两个席位下**同值**，
+ * 而且它顺带把"谁在左、谁在右"（用户第四次验收的字面要求）钉了进来。
+ * 它比旧表**多查一件事**：旧表在同行内不查任何东西（DOM 顺序恰好就是期望值）。
  */
-const ROW_GROUPS: ReadonlyArray<{ rows: number; labels: string[] }> = [
-  { rows: 1, labels: ['信息块:foe', '手牌区:foe'] },
-  { rows: 1, labels: ['链路+控制轨'] },
-  { rows: 1, labels: ['手牌区:self', '信息块:self'] },
-];
+const VISUAL = ['链路+控制轨', '信息块:self', '手牌区:self', '信息块:foe', '手牌区:foe'];
 
 afterEach(() => { setFxViewSeat(null); });
 
 describe('R8-5 / R8-6 / R9-1 / R9-3：网格行序与列指派 · 控制轨归中（真跑 renderNetBoard + 解样式表）', () => {
-  it('G-7 + G-12. 并盒行序 = [对手信息块 · 对手手牌 | 链路+控制轨 | 自己手牌 · 自己信息块]（两个席位都是）', async () => {
+  it('G-7 + G-12. 停靠栏行/列序 = [链路+控制轨 | 自己信息块 · 自己手牌 · 对手信息块 · 对手手牌张数]（两个席位都是）', async () => {
     const restore = installStubDom();
     try {
       for (const seat of [0, 1] as const) {
@@ -321,67 +272,79 @@ describe('R8-5 / R8-6 / R9-1 / R9-3：网格行序与列指派 · 控制轨归�
           expect(Number.isFinite(it.row), `viewSeat=${seat}：${labelOf(it)} 没有解出 grid-row`
             + '（行号必须由样式表按侧给；靠 DOM 顺序就是 R8-5 之前的旧样）').toBe(true);
         }
-        // ── ③′ **R9-3 的行表**：五块占**四行**，且"信息块与手牌区同行"逐侧成立 ──
-        //    ⚠️ 判据迁移（**不是放松**）：R8-5/R8-7 要求"五块五行、互不相同"（信息块各占一整行）；
-        //    R9-3 的裁决恰恰是"手牌并进信息盒"⇒ 那一句会把本波的裁决判成失败。
-        //    新判据**多查了一件事**：R8-5 时"信息块与手牌区同一行"是不可能出现的形态
-        //    （同一行只有一个组件），所以旧句根本表达不出这条约束。
-        //    行数仍是**精确值**（4），跳行/串行（`grid-row: 3` 与 `4` 对调、某块 `auto`）照样红。
+        // ── ③′ **R11-2/3 的行表**：五块占**两行** —— 链路那一行（1）与**停靠栏**那一行（3），
+        //    停靠栏的四块**共用同一行**（"对手那一块搬进自己这一行"就是这个意思）。
+        //    ⚠️ 判据迁移（**不是放松**）：R8-5/R8-7 要求"五块五行、信息块各占一整行"，
+        //    R9-3 要求"每侧信息块与手牌同行"（两组），R11-2 把它们**合成一组**。
+        //    新判据**多查了两件事**：① 停靠栏的四块必须在**同一行**（R9-3 时对手那一块在另一行）；
+        //    ② 同行内的**左右次序**必须由列决定（旧模型在同行内不查任何东西）。
+        //    行数仍是**精确值**（两行），跳行/串行（`grid-row: 2` 与 `3` 对调、某块 `auto`）照样红。
         const rowOf = (l: string): number => designated.find((it) => labelOf(it) === l)!.row;
+        const colStartOf = (l: string): number => {
+          const it = designated.find((x) => labelOf(x) === l)!;
+          const raw = subjectPropOf(it.node, it.chain, RULES, 'grid-column') ?? '1';
+          return Number.parseInt(raw.split('/')[0].trim(), 10);
+        };
         const rowsUsed = [...new Set(designated.map((it) => it.row))].sort((a, b) => a - b);
-        expect(rowsUsed, `viewSeat=${seat}：并盒后五块应恰好占 4 行（每侧"信息块 + 手牌区"同行），`
+        expect(rowsUsed, `viewSeat=${seat}：R11-2 之后五块应占**两行**（链路行 + 停靠栏行），`
           + `实际占 ${rowsUsed.length} 行：`
-          + designated.map((it) => `${labelOf(it)}=${it.row}`).join(' / ')).toEqual([1, 2, 4]);
-        for (const g of ROW_GROUPS) {
-          const got = g.labels.map(rowOf);
-          // 每个分组**内部**必须同排（`rows` 是该分组占的行数；并盒的分组 = 1 行装两块）
-          expect(new Set(got).size, `viewSeat=${seat}：${g.labels.join(' 与 ')} 必须共用**同一个** grid-row`
-            + `（R9-3：手牌并入信息盒），实际 ${g.labels.map((l, i) => `${l}=${got[i]}`).join(' / ')}`)
-            .toBe(g.rows);
+          + designated.map((it) => `${labelOf(it)}=${it.row}`).join(' / ')).toEqual([1, 3]);
+        for (const l of DOCK) {
+          expect(rowOf(l), `viewSeat=${seat}：${l} 与停靠栏其他三块不在同一行`
+            + `（R11-2 的裁决是"对手那一块搬进自己这一行"）—— 实测 `
+            + DOCK.map((x) => `${x}=${rowOf(x)}`).join(' / ')).toBe(rowOf(DOCK[0]));
         }
-        // 逐侧点名（失败信息比"集合不等"可读，也防有人把 ROW_GROUPS 一起改错）
-        expect(rowOf('信息块:foe'), `viewSeat=${seat}：对手信息块与对手手牌区必须**同一行**（R9-3）`)
-          .toBe(rowOf('手牌区:foe'));
-        expect(rowOf('信息块:self'), `viewSeat=${seat}：自己信息块与自己手牌区必须**同一行**（R9-3）`)
+        expect(rowOf('链路+控制轨'), `viewSeat=${seat}：链路那一行必须在停靠栏**之上**`)
+          .toBeLessThan(rowOf('信息块:self'));
+        // 逐侧点名（失败信息比"集合不等"可读，也防有人把 DOCK 一起改错）
+        expect(rowOf('信息块:self'), `viewSeat=${seat}：自己信息块与自己手牌区必须**同一行**`)
           .toBe(rowOf('手牌区:self'));
-        expect(rowOf('信息块:foe'), `viewSeat=${seat}：并盒的两侧不得落在同一行（上下镜像）`)
-          .not.toBe(rowOf('信息块:self'));
+        expect(rowOf('信息块:foe'), `viewSeat=${seat}：对手信息块与对手手牌张数必须**同一行**`)
+          .toBe(rowOf('手牌区:foe'));
+        // ── ③″ **左右次序**（用户第四次验收的字面要求："对手信息块……摆在该行右侧"）──
+        //    自己那一块在左、对手那一块在右；对手的手牌张数紧贴对手信息块的**右侧**。
+        //    这两条是行为腿（从样式表解出的列号），不是"看着差不多"。
+        expect(colStartOf('信息块:self'), `viewSeat=${seat}：自己信息块必须在对手信息块的**左侧**`
+          + `（实际列 ${colStartOf('信息块:self')} vs ${colStartOf('信息块:foe')}）`)
+          .toBeLessThan(colStartOf('信息块:foe'));
+        expect(colStartOf('手牌区:foe'), `viewSeat=${seat}：对手手牌张数必须紧贴对手信息块的**右侧**`
+          + `（实际列 ${colStartOf('手牌区:foe')} vs ${colStartOf('信息块:foe')}）`)
+          .toBeGreaterThan(colStartOf('信息块:foe'));
 
-        // ── ④ **视觉行序**（本守卫的核心）：按 grid-row 排序后的标签序列 ──
-        //    并盒那一行里两块**同号**，先后由展平后的 DOM 顺序决定（见 `VISUAL` 的说明）；
-        //    这里同时钉"行号真的来自样式表"（③）与"同一行内的次序稳定可读"。
-        const visual = designated.slice().sort((a, b) => a.row - b.row).map(labelOf);
-        console.log(`  ----- viewSeat=${seat} · 视觉上→下（grid-row 解算）: ${visual.join(' → ')}`);
+        // ── ④ **视觉（行, 列）序**（本守卫的核心）──
+        const colOf = (l: string): string => {
+          const it = designated.find((x) => labelOf(x) === l)!;
+          return subjectPropOf(it.node, it.chain, RULES, 'grid-column') ?? '';
+        };
+        const visual = designated.slice().sort((a, b) => (a.row - b.row)
+          || (colStartOf(labelOf(a)) - colStartOf(labelOf(b)))
+          || (items.indexOf(a) - items.indexOf(b))).map(labelOf);
+        console.log(`  ----- viewSeat=${seat} · 视觉上→下/左→右（grid-row 优先、同行再按列）: ${visual.join(' → ')}`);
         expect(visual, `viewSeat=${seat}：视觉顺序必须是\n  ${VISUAL.join(' → ')}\n`
           + `实际\n  ${visual.join(' → ')}`).toEqual(VISUAL);
 
-        // ── ⑤ **R9-3 的列指派**：信息块占**左列**（不跨列）、手牌区横跨**整行**（到右边界）──
-        //    这两条合起来就是"同一个盒子、且手牌仍整页中置"的机制（信息块只在左侧，
-        //    不参与手牌的水平居中计算）。
+        // ── ⑤ **R11-2/3 的列指派**：四个部件各就各位（自己信息块=左列、自己手牌=整行、
+        //    对手信息块=第 3 列、对手手牌张数=第 4 列）──
+        const EXPECTED_COL: Record<string, RegExp> = {
+          '信息块:self': /^1(\s*\/\s*2)?$/,
+          '手牌区:self': /^1\s*\/\s*-1$/,
+          '信息块:foe': /^3(\s*\/\s*4)?$/,
+          '手牌区:foe': /^4(\s*\/\s*5)?$/,
+          '链路+控制轨': /^1\s*\/\s*-1$/,
+        };
         for (const it of designated) {
-          const col = subjectPropOf(it.node, it.chain, RULES, 'grid-column');
-          if (labelOf(it).startsWith('信息块')) {
-            expect(col, `viewSeat=${seat}：${labelOf(it)} 的 grid-column 必须是**左列**（\`1\` 或 \`1 / 2\`），`
-              + `实际 ${String(col)} —— 跨列会把它压在手牌区上面`).toMatch(/^1(\s*\/\s*2)?$/);
-          } else if (labelOf(it).startsWith('手牌区')) {
-            expect(col, `viewSeat=${seat}：${labelOf(it)} 的 grid-column 必须是**整行**（\`1 / -1\` = 到右边界），`
-              + `实际 ${String(col)} —— 被限制到某一列之后手牌就不再整页中置`).toMatch(/^1\s*\/\s*-1$/);
-          } else {
-            expect(col, `viewSeat=${seat}：${labelOf(it)} 的 grid-column 必须是整行（\`1 / -1\`）`)
-              .toMatch(/^1\s*\/\s*-1$/);
-          }
+          const want = EXPECTED_COL[labelOf(it)];
+          expect(want, `本守卫缺 ${labelOf(it)} 的期望列（白名单表漏项）`).toBeTruthy();
+          expect(colOf(labelOf(it)), `viewSeat=${seat}：${labelOf(it)} 的 grid-column 不符`
+            + `（实际 ${colOf(labelOf(it))}）`).toMatch(want);
         }
 
-        // ── ⑥ **镜像**：两块手牌区/两块信息块分处链路两侧（对手在上、自己在下）——
-        //     这正是用户要的"上下镜像对称"；④ 已蕴含，这里显式落一条可读的断言 ──
-        expect(rowOf('信息块:foe'), `viewSeat=${seat}：对手信息块必须在**最上**（行号小于链路）`)
-          .toBeLessThan(rowOf('链路+控制轨'));
-        expect(rowOf('手牌区:foe'), `viewSeat=${seat}：对手手牌必须在**对手链路之上**`
-          + '（用户原话："对手手牌要放在对方链路的上方"）').toBeLessThan(rowOf('链路+控制轨'));
-        expect(rowOf('信息块:self'), `viewSeat=${seat}：自己信息块必须在**最下**`)
-          .toBeGreaterThan(rowOf('链路+控制轨'));
-        expect(rowOf('手牌区:self'), `viewSeat=${seat}：自己手牌必须在链路之下`)
-          .toBeGreaterThan(rowOf('链路+控制轨'));
+        // ── ⑥ **停靠栏在链路之下**（"不遮链路放牌区"的结构面）：停靠栏四块的行号都大于链路行 ──
+        const laneRow = rowOf('链路+控制轨');
+        for (const l of DOCK) {
+          expect(rowOf(l), `viewSeat=${seat}：${l} 与链路同一行（停放栏会压住放牌区）`)
+            .toBeGreaterThan(laneRow);
+        }
       }
     } finally {
       await drainRaf();
@@ -518,7 +481,7 @@ const VARIANT_SPECS: readonly VariantSpec[] = [
 ];
 
 describe('R8-8：操作按钮只在操作方那一侧的信息块里', () => {
-  it('G-9a. 行动区（下一步/编译线N/…）挂在**当前回合玩家**那一侧（两个席位 × 两个回合方）', async () => {
+  it('G-9a. 行动区（下一步/编译线N/…）**只在轮到自己是行动方**时挂在自己那一侧（两个席位 × 两个回合方）', async () => {
     const restore = installStubDom();
     try {
       for (const seat of [0, 1] as const) {
@@ -526,23 +489,31 @@ describe('R8-8：操作按钮只在操作方那一侧的信息块里', () => {
           const root = renderFrame({ viewSeat: seat, turnPlayer: turn });
           const selfBlock = infoBlockOf(root, 'self');
           const foeBlock = infoBlockOf(root, 'foe');
-          const turnIsSelf = turn === seat;
-          const mine = turnIsSelf ? selfBlock : foeBlock;
-          const theirs = turnIsSelf ? foeBlock : selfBlock;
-          const tag = `viewSeat=${seat} / turnPlayer=${turn}（轮到${turnIsSelf ? '自' : '对'}己）`;
+          const mine = turn === seat;
+          const tag = `viewSeat=${seat} / turnPlayer=${turn}（轮到${mine ? '自' : '对'}己）`;
 
           console.log(`\n===== G-9a · ${tag} =====\n`
-            + `  操作方信息块里的 .next-btn = ${withClass(mine, 'next-btn').length}`
-            + ` / 非操作方 = ${withClass(theirs, 'next-btn').length}`);
+            + `  自己块里的 .next-btn = ${withClass(selfBlock, 'next-btn').length}`
+            + ` / 对手块 = ${withClass(foeBlock, 'next-btn').length}`);
 
-          // ① 操作方那一侧**有**「下一步」（正面断言 —— 防"两边都没有"也算过）
-          expect(withClass(mine, 'next-btn').length, `${tag}：操作方那一侧必须有「下一步」`
-            + '（`getLegalActions(s, s.turnPlayer)` 在 step=start 且无必选触发时产出 advance）').toBe(1);
-          expect(withClass(mine, 'net-action-bar').length, `${tag}：操作方那一侧必须有行动区 .net-action-bar`).toBe(1);
-          // ② 非操作方那一侧**一个操作按钮都没有**（用户的字面判据）
-          expect(operatorButtonsIn(theirs), `${tag}：非操作方那一侧不得出现任何操作按钮`
-            + '（用户原话："没轮到自己的回合……就不用在己方显示下一步之类的跳过按钮"）').toEqual([]);
-          expect(withClass(theirs, 'net-action-bar').length, `${tag}：非操作方那一侧不得挂行动区`).toBe(0);
+          // ── ① **对手那一侧永远零操作控件**（R11-3 的第一条；真联机下也防"替对手走棋"）──
+          expect(operatorButtonsIn(foeBlock), `${tag}：对手那一侧不得出现任何操作按钮`
+            + '（用户第四次验收原话："对手那一侧只显示信息，不再有按钮"）').toEqual([]);
+          expect(withClass(foeBlock, 'net-action-bar').length, `${tag}：对手那一侧不得挂行动区`).toBe(0);
+          if (mine) {
+            // ── ② 轮到自己 ⇒ 按钮就在**自己这一侧**（正面断言 —— 防"两边都没有"也算过）──
+            expect(withClass(selfBlock, 'next-btn').length, `${tag}：轮到自己时，自己那一侧必须有「下一步」`
+              + '（`getLegalActions(s, s.turnPlayer)` 在 step=start 且无必选触发时产出 advance）').toBe(1);
+            expect(withClass(selfBlock, 'net-action-bar').length, `${tag}：自己那一侧必须有行动区 .net-action-bar`).toBe(1);
+          } else {
+            // ── ③ 轮到**对手** ⇒ 两侧都没有按钮（R8-8 曾把对手的按钮画在对手那一块里，
+            //     等于把对手的操作面板摊在我的屏幕上 —— 用户第四次验收明确否掉了它）──
+            //     ⚠️ 这条不能省：只查 ① 的话，"把按钮挪到自己那一侧"（旧判据的反面）也能过，
+            //        而那正是用户点名的形态（"没轮到自己的回合就不用在己方显示按钮"）。
+            expect(operatorButtonsIn(selfBlock), `${tag}：轮到对手时，自己那一侧不得出现任何操作按钮`
+              + '（那是对手的行动，不该由我这台机器提供）').toEqual([]);
+            expect(withClass(selfBlock, 'net-action-bar').length, `${tag}：轮到对手时自己那一侧不得挂行动区`).toBe(0);
+          }
         }
       }
     } finally {
@@ -552,16 +523,20 @@ describe('R8-8：操作按钮只在操作方那一侧的信息块里', () => {
   });
 
   /**
-   * G-9b：**`renderChoiceUi` 的四个分支各自**把选择条挂到操作方那一侧（评审 I-2 的覆盖收口）。
+   * G-9b：**`renderChoiceUi` 的四个分支各自**把选择条挂到**自己那一侧**（R11-3；评审 I-2 的覆盖收口）。
    *
-   * ⚠️ 为什么必须**逐个**分支跑：三处 `mountChoiceBar` 调用点（`/render-net.ts:1018/1037/1073`）
-   * 分属 `select` / `select-line` / `select-action` 三个分支（第四个变体 `rearrange` 走的是
-   * `select-action` 里 `rearrangeSide !== undefined` 的那条腿）。只测其中一个分支时，
-   * **另外两处调用点的变异是不红的** —— 覆盖缺口正是这样产生的（评审实测指出）。
-   * 这条表驱动腿对**每个变体**都断言：操作方那侧有唯一的 `.choice-bar`、非操作方那侧一个控件都没有、
-   * 该分支**独有的标记类**确实出现（反空集合：证明真跑到了那个分支）。
+   * ⚠️ 为什么必须**逐个**分支跑：三处 `mountIfMine` 调用点（`render-net.ts` 的三个分支）分属
+   * `select` / `select-line` / `select-action`（第四个变体 `rearrange` 走 `select-action` 里
+   * `rearrangeSide !== undefined` 的那条腿）。只测其中一个分支时，**另外两处调用点的变异是不红的**。
+   *
+   * ⚠️ **R11-3 之后这条腿覆盖两种局面**（旧版只有一种）：
+   *   · **操作方就是自己** ⇒ 选择条挂在自己那一侧、带着该分支应有的控件；
+   *   · **操作方是对手** ⇒ 选择条**根本不该出现**（用户："对手那一侧只显示信息，不再有按钮"）。
+   *     这一半的"分支真的跑到了"由 `.net-hands.choice-mode`（R11-4 修好的挂点）证明 ——
+   *     `renderChoiceUi` 在**分流之前**就给手牌条加这个类；而"该分支独有的标记类"那一半
+   *     只适用于前者（对手应答时按钮与条都不产出，标记类自然也不存在）。
    */
-  it('G-9b. 选择条挂**操作方**那一侧 —— 四个分支（select / select-line / select-action / rearrange）逐个跑', async () => {
+  it('G-9b. 选择条只在**操作方就是自己**时挂在自己那一侧 —— 四个分支 × (自己应答 / 对手应答) 逐个跑', async () => {
     const restore = installStubDom();
     try {
       for (const seat of [0, 1] as const) {
@@ -573,40 +548,49 @@ describe('R8-8：操作按钮只在操作方那一侧的信息块里', () => {
             const selfBlock = infoBlockOf(root, 'self');
             const foeBlock = infoBlockOf(root, 'foe');
             const chooserIsSelf = chooser === seat;
-            const mine = chooserIsSelf ? selfBlock : foeBlock;
-            const theirs = chooserIsSelf ? foeBlock : selfBlock;
             const tag = `[${spec.variant}] viewSeat=${seat} / chooser=${chooser}`
               + `（${chooserIsSelf ? '自' : '对'}己应答，${spec.note}）`;
 
             console.log(`\n===== G-9b · ${tag} =====\n`
-              + `  操作方信息块里 = [${operatorButtonsIn(mine).join(', ')}]`
-              + ` / 非操作方 = [${operatorButtonsIn(theirs).join(', ')}]`);
+              + `  自己块里 = [${operatorButtonsIn(selfBlock).join(', ')}]`
+              + ` / 对手块 = [${operatorButtonsIn(foeBlock).join(', ')}]`);
 
-            // ① 反空集合（先证明"真跑到了这个分支"）：该分支独有的标记类必须出现
-            const markerHost = spec.markerWhere === 'operator' ? mine : root;
-            expect(withClass(markerHost, spec.marker).length, `${tag}：没找到该分支独有的 \`${spec.marker}\``
-              + '—— 说明这个变体没有真的走到那条产出路径（这条断言就是"覆盖"本身）').toBeGreaterThan(0);
-            // ② 操作方那一侧有选择条 + 该分支应有的控件（`rearrange` 分支**零按钮**，只有一行提示）
-            expect(operatorButtonsIn(mine), `${tag}：操作方那一侧的操作控件清单不符`)
-              .toEqual(spec.expectButtons);
-            expect(withClass(mine, 'choice-bar').length, `${tag}：操作方那一侧必须**恰好一条** .choice-bar`).toBe(1);
-            // ③ 非操作方那一侧**什么操作控件都没有**（含 `.choice-bar` —— 旧版它 fixed 在视口底部，
-            //    看上去永远"挂在我这边"，这正是用户点名要改的观感）
-            expect(operatorButtonsIn(theirs), `${tag}：非操作方那一侧不得出现 .choice-bar / .choice-skip / .next-btn`).toEqual([]);
-            expect(withClass(theirs, 'choice-bar').length, `${tag}：非操作方那一侧不得有 .choice-bar`).toBe(0);
-            // ④ 选择条的位置**是流内的**（`styles-net.css` 覆盖了 `styles.css` 的 fixed）：级联解算钉住
-            //    —— 挂对了侧但还是 `fixed` 的话，观感与改之前没有区别。
-            const barItem = descendants(mine).find((n) => isClass(n, 'choice-bar'))!;
-            const chain = ancestorsOf(root, barItem);
-            expect(subjectPropOf(barItem, chain, RULES, 'position'),
-              `${tag}：.choice-bar 在远程页必须是 position: static（styles.css 的 fixed + 视口底部居中`
-              + '会让它看上去永远挂在自己这边）').toBe('static');
-            expect(subjectPropOf(barItem, chain, RULES, 'transform'),
-              `${tag}：.choice-bar 的 transform 必须被中和（styles.css 用 translateX(-50%) 做视口居中）`)
-              .toMatch(/^none$/);
-            expect(subjectPropOf(barItem, chain, RULES, 'bottom'),
-              `${tag}：.choice-bar 的 \`bottom: 18px\` 必须被中和（流内元素上的 bottom 虽然无效，`
-              + '但留着它就会让"它已经回到流内"这件事在样式表里看不出来）').toMatch(/^auto$/);
+            // ① 反空集合（先证明"真跑到了选择分支"）：`.net-hands` 必须带 `.choice-mode`
+            //    （R11-4：它此前一直被加到**对手信息块**上 —— 挂点错了，两个消费方都失效）
+            const handsRoot = descendants(root).find((n) => isClass(n, 'net-hands'));
+            expect(handsRoot, `${tag}：元素树里找不到 .net-hands`).toBeTruthy();
+            expect(isClass(handsRoot!, 'choice-mode'), `${tag}：.net-hands 没有 .choice-mode —— `
+              + '要么这一帧没进选择分支（覆盖不成立），要么 R11-4 那个挂点又退回了 lastElementChild').toBe(true);
+            // ② 选择条**恰好一条、且在自己那一侧**（对手应答时一条都没有 —— 见 ③）
+            expect(withClass(foeBlock, 'choice-bar').length, `${tag}：对手那一侧不得有 .choice-bar`).toBe(0);
+            expect(operatorButtonsIn(foeBlock), `${tag}：对手那一侧不得出现任何操作控件`).toEqual([]);
+            if (chooserIsSelf) {
+              // 该分支独有的标记类必须出现（证明走的是**这个变体**而不是别的分支）
+              const markerHost = spec.markerWhere === 'operator' ? selfBlock : root;
+              expect(withClass(markerHost, spec.marker).length, `${tag}：没找到该分支独有的 \`${spec.marker}\``
+                + '—— 说明这个变体没有真的走到那条产出路径（这条断言就是"覆盖"本身）').toBeGreaterThan(0);
+              expect(operatorButtonsIn(selfBlock), `${tag}：自己那一侧的操作控件清单不符`)
+                .toEqual(spec.expectButtons);
+              expect(withClass(selfBlock, 'choice-bar').length, `${tag}：自己那一侧必须**恰好一条** .choice-bar`).toBe(1);
+              // ③ 选择条的位置**是流内的**（`styles-net.css` 覆盖了 `styles.css` 的 fixed）：级联解算钉住
+              //    —— 挂对了侧但还是 `fixed` 的话，观感与改之前没有区别。
+              const barItem = descendants(selfBlock).find((n) => isClass(n, 'choice-bar'))!;
+              const chain = ancestorsOf(root, barItem);
+              expect(subjectPropOf(barItem, chain, RULES, 'position'),
+                `${tag}：.choice-bar 在远程页必须是 position: static（styles.css 的 fixed + 视口底部居中`
+                + '会让它看上去永远挂在自己这边）').toBe('static');
+              expect(subjectPropOf(barItem, chain, RULES, 'transform'),
+                `${tag}：.choice-bar 的 transform 必须被中和（styles.css 用 translateX(-50%) 做视口居中）`)
+                .toMatch(/^none$/);
+              expect(subjectPropOf(barItem, chain, RULES, 'bottom'),
+                `${tag}：.choice-bar 的 \`bottom: 18px\` 必须被中和（流内元素上的 bottom 虽然无效，`
+                + '但留着它就会让"它已经回到流内"这件事在样式表里看不出来）').toMatch(/^auto$/);
+            } else {
+              // ④ **对手应答** ⇒ 两侧一条选择条、一个操作控件都没有（R11-3 的核心）
+              expect(operatorButtonsIn(selfBlock), `${tag}：对手应答时，自己那一侧不得出现任何操作控件`
+                + '（真联机下对手的选择条不该画在我的屏幕上）').toEqual([]);
+              expect(withClass(selfBlock, 'choice-bar').length, `${tag}：自己那一侧不得有 .choice-bar`).toBe(0);
+            }
           }
         }
       }
@@ -619,25 +603,35 @@ describe('R8-8：操作按钮只在操作方那一侧的信息块里', () => {
   /**
    * G-9c（**反空集合**）：桩里**真的**构造出了"轮到对手"与"对手是 chooser"的局面。
    *
-   * 为什么必须单列一条：上面两条断言都是"某侧有 / 某侧没有"，而如果桩**根本没造出**那个局面
-   * （例如 `getLegalActions` 因 `pendingEffects` 非空而返回空、或 `turnPlayer` 忘了改），
-   * "非操作方没有按钮"会**恒真**（假绿）。这条把桩的前提钉住：回合方确实是写进去的那个值、
-   * 选择确实挂在 `pendingEffects` 上、且 `chooser` 确实是我们要的那一侧。
+   * ⚠️ **R11-3 之后这条变得更必要**：新判据是"轮到对手 ⇒ **两侧都没有**按钮"，
+   * 而如果桩**根本没造出**那个局面（例如 `getLegalActions` 因 `pendingEffects` 非空而返回空、
+   * 或 `turnPlayer` 忘了改），"两侧都没有"会**恒真**（假绿）。
+   * ⇒ 判据改成**镜像对照**：同一个局面，把 `viewSeat` 切到行动方那一侧之后**必须**出现按钮。
+   * 这比"某一侧存在按钮"更强：它同时证明了"这个局面里真的有一个行动方"与"按钮的归属跟着回合走"。
    */
-  it('G-9c. 桩的前提（反空集合）：真的构造出了"对手回合"与"对手是 chooser"', async () => {
+  it('G-9c. 桩的前提（反空集合）：真的构造出了"对手回合"与"对手是 chooser"（镜像对照）', async () => {
     const restore = installStubDom();
     try {
-      const root = renderFrame({ viewSeat: 0, turnPlayer: 1 });
-      const selfBlock = infoBlockOf(root, 'self');
-      const foeBlock = infoBlockOf(root, 'foe');
-      // 回合方那一侧**确实**有按钮（否则上面 G-9a 的"非操作方没有"是空断言）
-      expect(withClass(foeBlock, 'next-btn').length, '桩没造出"对手回合"（对手那侧没有 .next-btn）').toBe(1);
-      expect(withClass(selfBlock, 'next-btn').length, '桩没造出"对手回合"（自己那侧反而有 .next-btn）').toBe(0);
-      // chooser 那一侧**确实**有选择条
-      const root2 = renderFrame({ viewSeat: 0, turnPlayer: 1, chooser: 1 });
-      expect(withClass(infoBlockOf(root2, 'foe'), 'choice-bar').length, '桩没造出"对手是 chooser"').toBe(1);
-      expect(withClass(infoBlockOf(root2, 'self'), 'choice-bar').length,
-        '桩没造出"对手是 chooser"（自己那侧反而有选择条）').toBe(0);
+      // ① 局面 = turnPlayer 1。viewSeat=0（我是 P1）⇒ 两侧都没有按钮；
+      //    同一个局面切到 viewSeat=1（我是 P2、就是行动方）⇒ 自己那一侧必须有「下一步」。
+      //    两条合起来证明"这一帧的行动方确实是 P2"，而不是"桩没造出回合方"。
+      const foeTurnAs0 = renderFrame({ viewSeat: 0, turnPlayer: 1 });
+      expect(withClass(infoBlockOf(foeTurnAs0, 'self'), 'next-btn').length,
+        '轮到对手时自己那一侧出现了 .next-btn（R11-3 的缺陷形态）').toBe(0);
+      expect(withClass(infoBlockOf(foeTurnAs0, 'foe'), 'next-btn').length,
+        '轮到对手时对手那一侧出现了 .next-btn（R11-3 的缺陷形态）').toBe(0);
+      const foeTurnAs1 = renderFrame({ viewSeat: 1, turnPlayer: 1 });
+      expect(withClass(infoBlockOf(foeTurnAs1, 'self'), 'next-btn').length,
+        '同一个局面切到自己就是行动方的席位后仍没有 .next-btn —— 桩没造出"对手回合"（上一条是空断言）').toBe(1);
+      // ② 局面 = chooser 1。viewSeat=0 ⇒ 两侧都没有选择条；切到 viewSeat=1 ⇒ 自己那一侧有一条。
+      const choiceAs0 = renderFrame({ viewSeat: 0, turnPlayer: 0, chooser: 1 });
+      expect(withClass(infoBlockOf(choiceAs0, 'self'), 'choice-bar').length,
+        '对手应答时自己那一侧出现了 .choice-bar（R11-3 的缺陷形态）').toBe(0);
+      expect(withClass(infoBlockOf(choiceAs0, 'foe'), 'choice-bar').length,
+        '对手应答时对手那一侧出现了 .choice-bar（"对手那一侧只显示信息"）').toBe(0);
+      const choiceAs1 = renderFrame({ viewSeat: 1, turnPlayer: 0, chooser: 1 });
+      expect(withClass(infoBlockOf(choiceAs1, 'self'), 'choice-bar').length,
+        '同一个局面切到自己就是应答方的席位后仍没有 .choice-bar —— 桩没造出"对手是 chooser"（上一条是空断言）').toBe(1);
     } finally {
       await drainRaf();
       restore();

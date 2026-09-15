@@ -717,8 +717,10 @@ describe('R3 · 源码守卫（方向模型的接线）', () => {
     expect(iFirstMount, '找不到 renderStackSlot( 的挂载点（结构被改？）').toBeGreaterThanOrEqual(0);
     expect(iSeat, '座位设在挂载之后 ⇒ 本帧前段的方向判断会用上一帧的座位').toBeLessThan(iFirstMount);
     // 自查必须把"写进去的那个值"带上（约束 9 的契约链检查靠它）
+    // ⚠️ R11-3：调用形态多了第 3 个实参（行动方 / 操作方）⇒ 判据从"`)` 紧跟 seatApplied"
+    //    放宽成"seatApplied 作为第 2 个实参"（仍要求那个值被交进去，只是不再禁止多传参数）。
     expect(src, 'verifyPageHooks 未收到渲染期写进去的座位（约束 9 会失去判据）')
-      .toMatch(/verifyPageHooks\(\s*wrap\s*,\s*seatApplied\s*\)/);
+      .toMatch(/verifyPageHooks\(\s*wrap\s*,\s*seatApplied\b/);
   });
 
   it('**热座页不许碰座位**：render.ts 里不出现 applyFxViewSeat / setFxViewSeat（热座恒 null 的构造性证明）', () => {
