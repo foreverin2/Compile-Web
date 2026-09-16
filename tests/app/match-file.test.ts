@@ -666,8 +666,10 @@ describe('MatchFile v1：常量与导出面', () => {
   it('MatchFileErrorCode 里不留零调用的码（hash-mismatch-unknown 已删，G5 需要时随腿加回）', () => {
     // 文本腿：本仓纪律是"零调用的声明要删"。指纹不匹配是**警告**（§3.3 第 3 条），
     // 没有任何输入会走到"未知指纹"这个失败态，故 union 里不该留着它当空壳入口。
-    // ⚠️ `tests/node-types.d.ts:3-10` 的极简声明：`readFileSync` 只收 `string`（故须 `fileURLToPath`）、
-    // 返回 `{ subarray(...).toString(encoding?) }`、且**没有** `writeFileSync` —— 不许为这里扩 node 类型声明。
+    // ⚠️ node 类型声明的**现行规则**（G3 Task 8 修复轮改的口径）：只加**有真实消费者**的最小声明
+    // （`tests/node-types.d.ts` 现有的那批声明逐条必需 —— 阶段二复审逐条删掉都让 `tsc` 变红），
+    // 并在该文件头部写明**唯一消费方**。早先"不许为这里扩 node 类型声明"的一刀切禁令**已收回**：
+    // 它的依据不成立（`.d.ts` 影响不了 `scripts/*.mjs` 的运行时，而 `scripts/` 根本不进 `tsc`）。
     const src = readFileSync(fileURLToPath(new URL('../../src/app/match-file.ts', import.meta.url)))
       .subarray(0, 256 * 1024)
       .toString('utf8');
