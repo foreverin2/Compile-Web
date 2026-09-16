@@ -7,8 +7,13 @@
  *     （机检：tests/ui/local-consent.test.ts 的"源码腿"扫整个模块的代码位，
  *      `localStorage` / `indexedDB` / `sessionStorage` 零命中。）
  *  2. 拒绝 = 游客模式：全部功能可用，刷新即丢（文案必须说清后果）；
- *  3. 文案与 `src/app/privacy.ts` **同源**（不得另写一份措辞）—— `CONSENT_COPY` 里那句
- *     隐私声明**逐字**取自 `PRIVACY_COPY.noServerStorage[0]`，Task 9 有"两处不得分叉"的守卫。
+ *  3. 文案与 `src/app/privacy.ts` **同源**（不得另写一份措辞）—— **本文件里没有任何
+ *     玩家可见的隐私承诺句**：`body[1]` 逐字取自 `PRIVACY_COPY.noServerStorage[0]`，
+ *     `body[0]` / `body[2]` / `denyHint` 取自 `CONSENT_ALLOW_NOTE` / `CONSENT_DENY_NOTE` /
+ *     `CONSENT_DENY_HINT`（都是 `privacy.ts` 的导出常量），Task 9 有"两处不得分叉"的守卫。
+ *     ⚠️ 修复轮 3 起这条纪律**有机检**：`tests/ui/local-consent.test.ts` 的结构性腿扫本文件的
+ *     **代码位字面量**，任何新写的玩家可见串（中文或含空白）都会报红 ——
+ *     判据形态是**闭集**（"字面量清单恰好是那 4 个界面标签"），不是黑名单。
  *     屏上「隐私说明」按钮**就地展开**的那份完整说明同样**生成式**取自 `privacyLines()`
  *     （一条都不手写、不截断），见 `renderPrivacyDetail`。
  *  4. 「隐私说明」按钮**不许是死胡同**（阶段一评审：可点但毫无反应）—— 它必须当场展开
@@ -19,7 +24,13 @@
  * **不是** `position:fixed` 覆盖层 —— 本仓有过 `document.body` 级浮层残留的惨痛历史。
  */
 import type { ConsentState } from '../app/local-store';
-import { PRIVACY_COPY, privacyLines } from '../app/privacy';
+import {
+  CONSENT_ALLOW_NOTE,
+  CONSENT_DENY_HINT,
+  CONSENT_DENY_NOTE,
+  PRIVACY_COPY,
+  privacyLines,
+} from '../app/privacy';
 
 export interface ConsentNav {
   /** 用户点「允许」：此后才允许落盘（`main.ts` 的 `consentStep('grant')`） */
@@ -50,20 +61,23 @@ export interface ConsentCopy {
 /**
  * 文案。基调按用户裁决 #6 =**中性陈述 + 明确后果**。
  *
- * ⚠️ `body[1]` 是**引用** `PRIVACY_COPY`，**不是**手写串：两处文案只允许有一个出处
- * （`src/app/privacy.ts`，它同时对齐设计稿 §0.4 红线 1 与 §5.9）。手写第二份措辞
- * 会让"不实陈述"在两处之间悄悄分叉，而门禁全绿。
+ * ⚠️ **四条承诺/说明全部是引用**，本文件里只剩 4 个**界面标签**（`title` / `grant` / `deny` /
+ * `privacyLink`）是字面量 —— 它们不承诺任何事，只是按钮与标题上的字。玩家可见的**隐私措辞**
+ * 只允许有一个出处（`src/app/privacy.ts`，它同时对齐设计稿 §0.4 红线 1 与 §5.9）：
+ * `body[1]` ← `PRIVACY_COPY.noServerStorage[0]`；`body[0]` / `body[2]` / `denyHint` ←
+ * `CONSENT_ALLOW_NOTE` / `CONSENT_DENY_NOTE` / `CONSENT_DENY_HINT`。
+ * 手写第二份措辞会让"不实陈述"在两处之间悄悄分叉，而门禁全绿（修复轮 3 的阻断项就是这么发生的）。
  */
 export const CONSENT_COPY: ConsentCopy = {
   title: '要不要在这台设备上记住你的设置？',
   body: [
-    '允许后，昵称、游戏设置与卡组会保存在你自己的浏览器里（可以随时清除）。',
+    CONSENT_ALLOW_NOTE,
     PRIVACY_COPY.noServerStorage[0],
-    '不允许也能正常游玩全部内容：本次游戏的所有数据只存在内存里，刷新或关闭页面就全部丢掉。',
+    CONSENT_DENY_NOTE,
   ],
   grant: '允许，保存在这台设备',
   deny: '不用，本次不保存',
-  denyHint: '你随时可以在主界面的「本地数据与隐私」里改变这个选择。',
+  denyHint: CONSENT_DENY_HINT,
   privacyLink: '隐私说明',
 };
 

@@ -11,8 +11,12 @@ import {
 } from './net-dom-stub';
 import { CONSENT_COPY, nextConsentStep, renderLocalConsent, type ConsentCopy } from '../../src/ui/local-consent';
 import { PRIVACY_COPY, privacyLines } from '../../src/app/privacy';
+// 修复轮 3：privacy.ts 的**运行期导出面**（生成式扫描面；本文件只引用、不重写）
+import * as privacyExports from '../../src/app/privacy';
 import { createLocalStore, type ConsentState } from '../../src/app/local-store';
 import { stripComments, functionBody } from './source-text';
+// 界面标签的整句哈希（修复轮 3 补强）：复用仓内既有的 FNV-1a 64 位哈希，零新依赖
+import { hash64 } from '../../src/core/fingerprint';
 
 /**
  * G3 Task 4 守卫：首次进入的**授权弹窗**（红线 3 的机检形态）。
@@ -518,7 +522,7 @@ describe('落点腿：main.ts 的 consentStep（reducer 结果 → LocalStore �
  * 比对一次，判别力完全一样而链路更长。字符串集合用**生成式遍历**（不手写字段清单）。
  *
  * 这条腿补的是**阶段一评审的"同类空洞"**：`requiredPrivacyLines` 只含
- * `PRIVACY_COPY.noServerStorage[0]` **一句**，而 `CONSENT_COPY.body[0]` / `body[2]` 是**自写串**
+ * `PRIVACY_COPY.noServerStorage[0]` **一句**，而 `CONSENT_COPY.body[0]` / `body[2]` 当时是**本文件里的自写串**（修复轮 3 起已改为引用 `privacy.ts` 的 `CONSENT_ALLOW_NOTE` / `CONSENT_DENY_NOTE`，见第 9 组）
  * —— 把它们改成「在你允许之前，磁盘上不会有任何写入」这类不实绝对句时，全仓无腿能拦，
  * 而那正是玩家在授权弹窗上最先读到的两句话。
  *
@@ -533,26 +537,46 @@ describe('落点腿：main.ts 的 consentStep（reducer 结果 → LocalStore �
  *  否则按钮上的「不用，本次不保存」（说的是本次选择，不是磁盘承诺）会被误判。
  */
 describe('文案腿：CONSENT_COPY 里不许有"无条件全称"的写入承诺', () => {
-  /** 无条件否定词（**不含**裸"不"：裸"不"要靠 ① 的"紧邻写动作"形态才成立） */
+  /**
+   * 无条件否定词（**不含**裸"不"：裸"不"要靠规则 ① 的"紧邻写动作"形态才成立）。
+   */
   const NEG = '不会|不再|绝不|没有任何|没有|不会有|零';
-  /** 写入/留痕动作（"写到介质上"这一类；不含"保存"——见头注） */
-  const WRITE = '写入|写进|写到|写盘|落盘|留下?痕迹';
-  /** 范围限定词：出现了它，这句话就只是在承诺"你的数据" */
+  /**
+   * 写入 / 留痕 / 留存动作。
+   *
+   * ⚠️ **修复轮 3 扩表**（复验者的 6 条穿透形态里有 4 条是**词表太窄**造成的）：
+   * 补上 `痕迹|留痕|留下|存|存储|数据|东西|缓存` —— 对应
+   * `B2 硬盘上不会有任何痕迹`（旧表只认连写的「留(下)?痕迹」）、
+   * `B3 不会在本机留下任何东西`、`B7 本机不存任何东西`、`B8 这台设备上不会有任何数据`。
+   * ⚠️ **仍然不含 `保存`**（有意排除）：按钮上的「不用，本次不保存」说的是"本次选择"，
+   * 不是磁盘承诺 —— 加进来会误伤它（复验者已用诚实基线标定：误判 0）。
+   */
+  const WRITE = '写入|写进|写到|写盘|落盘|留下?痕迹|留痕|痕迹|留下|存储|存到|存|缓存|数据|东西';
+  /** 范围限定词：出现了它，这个**分句**就只是在承诺"你的数据" */
   const SCOPE = '你的数据|用户数据|你的昵称|你的卡组|你的设置|你的档案|程序文件|页面|脚本|样式|图标|本次';
-  /** 介质/载体（只在"同句有否定 + 有写动作 + 无范围限定"时才算绝对句） */
+  /** 介质/载体（只在"同分句有否定 + 有写动作 + 无范围限定"时才算绝对句） */
   const MEDIUM = '磁盘|硬盘|本机|本地磁盘|这台设备|这台机器';
+  /** 规则 ② 的动作表（写动作 + "留下/留存/记录"式的宾语；`保存` 仍是那处刻意取舍） */
+  const ACTION = `${WRITE}|保存|留存|记录`;
 
   /**
    * 判据：返回命中的片段（空数组 = 这条串没有绝对句）。
-   * **按句切分**（。！？；换行）：范围限定不跨句生效 —— 否则"下一句里提到你的数据"
-   * 会把上一句的绝对承诺洗白。
+   *
+   * **按分句切分**：`。！？；` 与换行，**以及 `，` `、`** —— 范围限定**不跨分句**生效。
+   *
+   * ⚠️ 修复轮 3 补 `，` `、` 的理由（复验者的 B6 形态，**结构性**穿透）：
+   * `在你允许之前不会写入任何你的数据，磁盘上也不会有任何写入。`
+   * 旧实现按 `。！？；\n` 切句 ⇒ 那是**一整句**；第一个分句里出现「否定 + 任何 + 范围词」
+   * 就把 `scoped` 置真、`continue` 掉**整句** ⇒ **后半句那句绝对承诺再也没有被看过**。
+   * 逐分句判定后它必红。诚实句不受影响：范围词与它限定的否定写动作本来就在同一个分句里
+   * （`不会写入任何你的数据`），拆开只会让"哪一半在被判"更清楚。
    */
   function absoluteWordingHits(text: string): string[] {
     const hits: string[] = [];
-    for (const sentence of text.split(/[。！？；\n]/)) {
-      const s = sentence.trim();
+    for (const clause of text.split(/[。！？；\n，、]/)) {
+      const s = clause.trim();
       if (s === '') continue;
-      // 已范围化 ⇒ 不是绝对句（范围词必须**紧跟**在否定+写动作之后，不允许"隔着半句话"）
+      // 已范围化 ⇒ 这个分句不是绝对句（范围词必须**紧跟**在否定+写动作之后）
       const scoped = new RegExp(
         `(?:${NEG})\\s*(?:再)?\\s*(?:${WRITE}|保存|上传|存)?\\s*(?:任何|一点|丝毫)?\\s*(?:的)?\\s*(?:${SCOPE})`,
       ).test(s);
@@ -560,7 +584,7 @@ describe('文案腿：CONSENT_COPY 里不许有"无条件全称"的写入承诺'
       const negWrite = new RegExp(`(?:${NEG}|不)\\s*(?:任何|一点|丝毫)?\\s*(?:${WRITE})`).exec(s);
       if (negWrite) { hits.push(negWrite[0]); continue; }
       if (new RegExp(`(?:${MEDIUM})`).test(s)
-        && new RegExp(`(?:${NEG})[^。]{0,12}(?:${WRITE}|保存|存到|留存|记录)`).test(s)) {
+        && new RegExp(`(?:${NEG})[^。]{0,12}(?:${ACTION})`).test(s)) {
         hits.push(s);
       }
     }
@@ -587,7 +611,7 @@ describe('文案腿：CONSENT_COPY 里不许有"无条件全称"的写入承诺'
     }
   });
 
-  it('每一条字符串都不是无条件全称的写入承诺（含 body[0] / body[2] 两条**自写**串）', () => {
+  it('每一条字符串都不是无条件全称的写入承诺（含 body[0] / body[2] 两条**非 privacyLines()** 的串）', () => {
     const offenders = COPY_STRINGS.filter((s) => absoluteWordingHits(s).length > 0);
     expect(offenders, 'CONSENT_COPY 里出现了绝对措辞（玩家最先读到的两句话尤其危险）').toEqual([]);
     // 反向自证：本腿存在的**理由**是"正文里有同源腿覆盖不到的自写串" —— 若没有，本腿只是重复了同源腿
@@ -626,9 +650,50 @@ describe('文案腿：CONSENT_COPY 里不许有"无条件全称"的写入承诺'
       expect(absoluteWordingHits(s), `范围化的诚实句子被误判为绝对措辞：${s}`).toEqual([]);
     }
   });
-});
 
-/* ---------------- 8. 行为腿：「隐私说明」按钮就地展开**完整**隐私说明（不是死胡同） ---------------- */
+  it('修复轮 3：复验者点名的穿透形态必须**全部**命中（词表 + 逐分句判定）', () => {
+    // 每条都注明它**当时为什么**能穿透（复验者 B2/B3/B6/B7/B8；B9 的"位置"由下一条腿负责）。
+    const REPLAY: ReadonlyArray<readonly [string, string]> = [
+      ['硬盘上不会有任何痕迹。', '旧词表只认连写的「留(下)?痕迹」⇒ 漏「痕迹」'],
+      ['不会在本机留下任何东西。', '旧动作表漏「留下」「东西」'],
+      ['在你允许之前，本机不存任何东西。', '旧词表漏「不存」'],
+      ['在你允许之前，这台设备上不会有任何数据。', '旧词表漏「数据」'],
+      [
+        '在你允许之前不会写入任何你的数据，磁盘上也不会有任何写入。',
+        '旧实现按**整句**短路：第一个分句范围化 ⇒ 后半句的绝对承诺被一起洗白（B6，结构性）',
+      ],
+    ];
+    for (const [sample, why] of REPLAY) {
+      expect(sample.trim(), '样本是空串 ⇒ 本腿恒真').not.toBe('');
+      expect(absoluteWordingHits(sample).length, `这条绝对承诺仍然穿透（${why}）：${sample}`).toBeGreaterThan(0);
+    }
+  });
+
+  it('修复轮 3：扫描面对 `CONSENT_COPY` 的**每一个**字符串字段都生效（生成式投毒，含 title）', () => {
+    const fields = Object.keys(CONSENT_COPY) as (keyof ConsentCopy)[];
+    expect(fields.length, '字段清单为空 ⇒ 本腿恒真').toBeGreaterThan(3);
+    // 生成式：把**每一个**字段都投成同一句绝对承诺（数组字段投成单元素数组）⇒ 逐字段都必须命中。
+    // 这条腿就是 B9（"绝对句写进 title"）的**位置无关**版本：判据不认字段名，只认值。
+    const POISON = '硬盘上不会有任何痕迹。';
+    const poisoned: Record<string, string | string[]> = Object.fromEntries(
+      fields.map((k) => [k, Array.isArray(CONSENT_COPY[k]) ? [POISON] : POISON]),
+    );
+    const strings = allStrings(poisoned);
+    expect(strings.length, '投毒样本一条字符串都没有 ⇒ 本腿恒真').toBe(fields.length);
+    for (const s of strings) {
+      expect(absoluteWordingHits(s), `某个字段里的绝对句没被扫到（扫描面漏了字段？）：${s}`).not.toEqual([]);
+    }
+    // 反向：真文案的**每一个**字段都必须真的进了扫描面（否则上面那条可能只覆盖了一部分字段）
+    for (const k of fields) {
+      const v: unknown = CONSENT_COPY[k];
+      for (const s of Array.isArray(v) ? v : [v]) {
+        expect(COPY_STRINGS, `CONSENT_COPY.${String(k)} 的值没进扫描面`).toContain(s as string);
+      }
+    }
+  });
+
+
+});/* ---------------- 8. 行为腿：「隐私说明」按钮就地展开**完整**隐私说明（不是死胡同） ---------------- */
 
 /**
  * 阶段一评审的第三条：`src/main.ts:635` 的 `openPrivacy` 是空函数 ⇒ 弹窗上的「隐私说明」
@@ -697,5 +762,227 @@ describe('行为腿：「隐私说明」按钮展开完整隐私说明（唯一�
     expect(calls, '收起时也该通知宿主（同一个按钮，行为一致）').toEqual(['privacy', 'privacy']);
     expect(ariaExpanded()).toBe('false');
     for (const l of outsideBody) expect(textOf(root), `收起后隐私行仍在屏上：${l}`).not.toContain(l);
+  });
+});
+
+/* ---------------- 9. 源码腿 + 行为腿：本文件的玩家可见隐私措辞**只能来自 privacy.ts** ---------------- */
+
+/**
+ * ## 为什么必须再有一条（修复轮 3 · 阻断项）
+ *
+ * 修复轮 2 的"承诺句哈希钉死"只遍历 `PRIVACY_COPY` × `PRIVACY_GROUPS`，而授权弹窗上的
+ * `CONSENT_COPY.body[0]` / `body[2]` / `denyHint` 当时是本文件里的**手写串** ⇒ **不在枚举面里**。
+ * 复验者实测：把 `denyHint` 改写成「…拒绝时全程零磁盘写入，硬盘上不会留下任何痕迹。」
+ * （玩家可见的一句**全新绝对承诺**）后 20 条腿全绿 —— 因为"别处新写了一句假承诺"这件事
+ * **没有任何腿在查**（"唯一出处"腿查的是反方向：`PRIVACY_COPY` 的句子有没有被抄第二份）。
+ *
+ * ## 判据形态：**闭集**，不是黑名单
+ *
+ * "不许出现的措辞"永远追不上自然语言的措辞空间（这正是修复轮 2 的教训：
+ * 精选清单本身就是黑名单）。所以这里反过来：本文件**代码位**里允许出现的"给玩家读的字面量"
+ * 是一个**闭集** —— 只有 4 个**界面标签**（`title` / `grant` / `deny` / `privacyLink`；
+ * 它们不承诺任何事，只是标题与按钮上的字）。**任何**新增的玩家可见字面量（中文，或含空白 ——
+ * 后者把 `'div'` / `'consent-screen'` / `'aria-expanded'` 这类管线串排除在外）都会让清单
+ * 不再相等 ⇒ 红。于是"授权弹窗上再出现一句手写承诺"在**写成的那一刻**就被拦住。
+ *
+ * 两条**生成式**（都不写名字清单）：
+ *  - 字段分类必须覆盖 `ConsentCopy` 的**每一个**键（新增字段 ⇒ 必须被明确归类 ⇒ 红）；
+ *  - `body` 的**每一行**与 `denyHint` 都必须逐字等于 `privacy.ts` **运行期导出面**上的某一句
+ *    （遍历 `body` 本身，不手写下标）。
+ *
+ * ⚠️ 这里另写一份字面量扫描器（而不是放进共用助手 `tests/ui/source-text.ts`）的原因：
+ * 本轮的**文件边界**只允许动 4 个文件。它的有效性由本组第一条"锚点腿"自证
+ * （必须真的扫到已知的界面标签，也真的扫到了类名管线串）。
+ */
+describe('源码腿：授权弹窗的玩家可见措辞必须来自 privacy.ts（不许手写第二份）', () => {
+  const COPY_SRC = readFileSync(fileURLToPath(new URL('../../src/ui/local-consent.ts', import.meta.url)))
+    .subarray(0, 512 * 1024)
+    .toString('utf8');
+  const CODE = stripComments(COPY_SRC);
+
+  /**
+   * 源码里**字符串 / 模板串字面量**的内容（注释必须先 `stripComments` 剥掉）。
+   * 本文件里没有正则字面量，所以"引号即字面量"是安全的 —— 锚点腿会验证它真的扫到了已知标签。
+   */
+  function stringLiteralsOf(code: string): string[] {
+    const out: string[] = [];
+    let i = 0;
+    while (i < code.length) {
+      const c = code[i];
+      if (c === "'" || c === '"' || c === '`') {
+        const quote = c;
+        let buf = '';
+        i += 1;
+        while (i < code.length) {
+          const ch = code[i];
+          if (ch === '\\') { buf += code[i + 1] ?? ''; i += 2; continue; }
+          if (ch === quote) { i += 1; break; }
+          buf += ch;
+          i += 1;
+        }
+        out.push(buf);
+        continue;
+      }
+      i += 1;
+    }
+    return out;
+  }
+
+  /**
+   * **管线字面量**（DOM 标签 / 类名列表 / 属性名 / 相对路径）：空格分隔的小写 kebab 词，或 `../` 起头。
+   * 它们不是"给玩家读的话"，必须排除 —— 否则 `'btn consent-grant'` 这种**带空格的类名列表**
+   * 会被当成"手写的玩家可见文案"（本腿第一版就栽在这里：3 条假红）。
+   */
+  const isPlumbing = (s: string): boolean => /^[a-z][a-z0-9-]*(?: [a-z][a-z0-9-]*)*$/.test(s) || /^\.\.?\//.test(s);
+  /** 「给玩家读的一句话」的形态：**非**管线串，且（含汉字 或 含空白） */
+  const isPlayerText = (s: string): boolean => !isPlumbing(s) && (/[\u3400-\u9fff]/.test(s) || /\s/.test(s));
+
+  /** 允许在本文件里作为**字面量**出现的字段（界面标签；它们不承诺任何事） */
+  const CHROME_FIELDS = ['title', 'grant', 'deny', 'privacyLink'] as const satisfies readonly (keyof ConsentCopy)[];
+  /** 必须**引用** `privacy.ts`、不许在本文件里写成字面量的字段 */
+  const REFERENCED_FIELDS = ['body', 'denyHint'] as const satisfies readonly (keyof ConsentCopy)[];
+  /**
+   * **界面标签的整句哈希**（就地钉死）。
+   *
+   * 为什么这 4 个字段可以住在消费方，而 `body` / `denyHint` 不行：它们**不承诺任何事**
+   * （标题与三个按钮上的字）；但"不承诺"不等于"可以随手改" —— 它们同样是玩家可见文案。
+   * ⚠️ 这一层是 B9（把绝对句写进 `title`）的**第二道防线**：上一组"字面量清单"的允许集
+   * **来自 `CONSENT_COPY` 自己的取值** ⇒ 把某个界面标签的**值**换掉时清单跟着变、判据会自我
+   * 合法化（我在变异实测里撞到过）；哈希层认的是"值有没有变"，不会被绕开。
+   */
+  const CHROME_PINS: Record<(typeof CHROME_FIELDS)[number], string> = {
+    title: '4a98f1ecd88e19ea',
+    grant: '954f6c4d82aa08ed',
+    deny: '35092fdf04a9e84b',
+    privacyLink: '6e5570bc0e216825',
+  };
+
+  /** `privacy.ts` **运行期导出面**上的全部面向玩家文案（生成式：不写名字清单） */
+  const PRIVACY_TEXT = ((): Set<string> => {
+    const out = new Set<string>();
+    const walk = (v: unknown): void => {
+      if (typeof v === 'string') { if (/[\u3400-\u9fff]/.test(v)) out.add(v); return; }
+      if (Array.isArray(v)) { v.forEach(walk); return; }
+      if (typeof v === 'object' && v !== null) Object.values(v).forEach(walk);
+    };
+    Object.values(privacyExports as unknown as Record<string, unknown>).forEach(walk);
+    return out;
+  })();
+
+  /** 取一个必须是字符串的文案字段（不是字符串就**响亮**抛错，而不是让判据在 `undefined` 上假绿） */
+  function strField(k: keyof ConsentCopy, copy: ConsentCopy = CONSENT_COPY): string {
+    const v: unknown = copy[k];
+    if (typeof v !== 'string') throw new Error(`CONSENT_COPY.${String(k)} 不是字符串（本判据的前提被破坏了）`);
+    return v;
+  }
+
+  /** **本文件字面量清单**的违规（空数组 = 全绿）。传 `code` 是为了让正控喂**合成源码**。 */
+  function localLiteralViolations(code: string, copy: ConsentCopy = CONSENT_COPY): string[] {
+    const bad: string[] = [];
+    const found = stringLiteralsOf(code).filter(isPlayerText);
+    const allowed = new Set(CHROME_FIELDS.map((f) => strField(f, copy)));
+    for (const lit of found) {
+      if (!allowed.has(lit)) {
+        bad.push(`本文件里出现了**手写**的玩家可见文案（隐私措辞只允许从 privacy.ts 引用）：${lit}`);
+      }
+    }
+    for (const f of CHROME_FIELDS) {
+      const v = strField(f, copy);
+      if (v === '' || !found.includes(v)) {
+        bad.push(`界面标签字段 ${f} 不再是本文件里的字面量 ⇒ "字面量面"被整体搬走，上面的判据会退化成恒真`);
+      }
+    }
+    return bad;
+  }
+
+  it('锚点：字面量扫描器真的扫到了（否则后面每条判据都在空数组上恒真）', () => {
+    const found = stringLiteralsOf(CODE).filter(isPlayerText);
+    expect(found.length, '一条"给玩家读的"字面量都没扫到 ⇒ 扫描器或剥注释失效').toBeGreaterThan(0);
+    for (const f of CHROME_FIELDS) expect(found, `扫描器没扫到界面标签 ${f} 的值`).toContain(strField(f));
+    // 反向：管线串必须**被扫到但被过滤掉**（否则清单里会混进 'div'，判据变成"什么都不能改"）
+    const all = stringLiteralsOf(CODE);
+    expect(all, '扫描器连 DOM/类名字面量都没扫到 ⇒ 扫描面不完整').toContain('consent-screen');
+    expect(all.filter(isPlayerText), '管线串被当成玩家可见文案了').not.toContain('consent-screen');
+    // ⚠️ 回归：**带空格的类名列表**（`'btn consent-grant'`）曾被我第一版的"含空白"判据误判成文案
+    expect(all, '扫描器没扫到类名列表字面量').toContain('btn consent-grant');
+    expect(all.filter(isPlayerText), '类名列表被当成玩家可见文案了（"含空白"这条判据不能单独用）').not.toContain('btn consent-grant');
+    expect(PRIVACY_TEXT.size, 'privacy.ts 的导出面上没有面向玩家文案 ⇒ 下面的"引用"判据恒真').toBeGreaterThan(10);
+  });
+
+  it('字段分类覆盖 `ConsentCopy` 的**每一个**键（新增字段必须明确归类，否则红）', () => {
+    const all = Object.keys(CONSENT_COPY).slice().sort();
+    const classified = [...CHROME_FIELDS, ...REFERENCED_FIELDS].slice().sort();
+    expect(classified, 'ConsentCopy 的字段与「界面标签 ∪ 必须引用」不相等 ⇒ 新增字段没有被归类').toEqual(all);
+    const overlap = CHROME_FIELDS.filter((f) => (REFERENCED_FIELDS as readonly string[]).includes(f));
+    expect(overlap, '同一个字段被同时归到两类（判据会自相矛盾）').toEqual([]);
+  });
+
+  it('本文件的玩家可见字面量**恰好**是那 4 个界面标签（任何新增手写文案 ⇒ 红）', () => {
+    expect(localLiteralViolations(CODE), '授权弹窗里又出现了手写的玩家可见文案').toEqual([]);
+  });
+
+  it('界面标签的整句哈希就地钉死（改一个字就红 ⇒ 逼一次人工复核）', () => {
+    // 生成式：钉住表的键必须**恰好**是 `CHROME_FIELDS`（漏一个 ⇒ 那个字段无钉；多一个 ⇒ 幽灵钉）
+    expect(Object.keys(CHROME_PINS).slice().sort(), 'CHROME_PINS 与 CHROME_FIELDS 不一致').toEqual([...CHROME_FIELDS].slice().sort());
+    for (const f of CHROME_FIELDS) {
+      expect(CHROME_PINS[f], `${f} 的哈希格式不对（应为 hash64 的 16 位小写十六进制）`).toMatch(/^[0-9a-f]{16}$/);
+      expect(
+        hash64(strField(f)),
+        `界面标签 ${f} 的文案变了（界面标签也是玩家可见文案；确认过就请把新哈希抄回 CHROME_PINS）：${strField(f)}`,
+      ).toBe(CHROME_PINS[f]);
+    }
+    // 灵敏度自证：哈希对**一个字符**的改动敏感，且同输入恒同输出
+    expect(hash64(strField('title')), 'hash64 对单字符追加不敏感（钉死会假绿）').not.toBe(hash64(`${strField('title')}。`));
+    expect(hash64(strField('deny'))).toBe(hash64(strField('deny')));
+  });
+
+  it('行为腿：`body` 的**每一行**与 `denyHint` 都是 privacy.ts 导出面上的串（生成式，不写下标）', () => {
+    const values: Array<[string, string]> = [
+      ['denyHint', strField('denyHint')],
+      ...CONSENT_COPY.body.map((l, i) => [`body[${i}]`, l] as [string, string]),
+    ];
+    expect(values.length, '`body` 为空 ⇒ 本腿恒真').toBeGreaterThan(1);
+    for (const [label, text] of values) {
+      expect(text, `CONSENT_COPY.${label} 是空串`).not.toBe('');
+      expect(PRIVACY_TEXT.has(text), `CONSENT_COPY.${label} 不是 privacy.ts 导出面上的文案（手写的第二份？）：${text}`).toBe(true);
+    }
+    // 反向自证：把 denyHint 改一个字，它就**不再**被接受（否则"来自隐私出处"是假守卫）
+    const tampered = strField('denyHint').replace('改变这个选择', '随时反悔');
+    expect(tampered, '正控构造失败：没改到 denyHint').not.toBe(strField('denyHint'));
+    expect(PRIVACY_TEXT.has(tampered), '改一个字的措辞居然被当成"来自 privacy.ts"').toBe(false);
+  });
+
+  it('判据自证（正控 + 反控）：合成源码能分辨"改回字面量"与"手写新承诺"', () => {
+    const chromeOnly = CHROME_FIELDS.map((f) => `  ${f}: '${strField(f)}',`).join('\n');
+    expect(localLiteralViolations(chromeOnly), '反控：只含界面标签的合成源码竟然被判违规（判据恒假）').toEqual([]);
+
+    // ① 复验者的**原注入形态**（它注入的是 body[0]）：改回绝对承诺字面量
+    const bodyAnchor = '    CONSENT_ALLOW_NOTE,';
+    expect(CODE.split(bodyAnchor).length - 1, '锚点假设失效：body[0] 不是引用（结构被改了？）').toBe(1);
+    const mutated1 = CODE.replace(bodyAnchor, "    '在你允许之前，磁盘上不会有任何写入。',");
+    expect(mutated1, '正控构造失败：源码没有变化').not.toBe(CODE);
+    expect(localLiteralViolations(mutated1).join('\n'), '把 body[0] 改回手写字面量竟然没被抓到').toContain('磁盘上不会有任何写入');
+
+    // ② 复验者建议的**追加形态**：把 denyHint 写回字面量并追加一句全新绝对承诺
+    const hintAnchor = 'denyHint: CONSENT_DENY_HINT,';
+    expect(CODE.split(hintAnchor).length - 1, '锚点假设失效：denyHint 不是引用').toBe(1);
+    const injected = '你随时可以在主界面的「本地数据与隐私」里改变这个选择。拒绝时全程零磁盘写入，硬盘上不会留下任何痕迹。';
+    const mutated2 = CODE.replace(hintAnchor, `denyHint: '${injected}',`);
+    expect(mutated2, '正控构造失败：源码没有变化').not.toBe(CODE);
+    expect(localLiteralViolations(mutated2).join('\n'), '把 denyHint 写回字面量（含全新绝对承诺）竟然没被抓到').toContain('全程零磁盘写入');
+    // ③ 界面标签被**换掉**（不是新增字面量）：⚠️ 字面量清单**抓不到**它 —— 允许集来自
+    //    `CONSENT_COPY` 自己的取值 ⇒ **自我合法化**（这正是我实测 B9 时撞到的缺口）。
+    //    这条正控把这个事实**钉住**，并证明**哈希层**才是它的判别力来源。
+    const titleAnchor = `  title: '${strField('title')}',`;
+    expect(CODE.split(titleAnchor).length - 1, '锚点假设失效：title 不是预期形态').toBe(1);
+    const REPLACED_TITLE = '在你允许之前，这台设备上不会有任何数据。';
+    const mutated3 = CODE.replace(titleAnchor, `  title: '${REPLACED_TITLE}',`);
+    expect(mutated3, '正控构造失败：title 没变').not.toBe(CODE);
+    // 如实复现 B9 的情形：**真文件里的界面标签被换掉**时，"清单"的允许集也跟着变（它来自 copy 自己）
+    // ⇒ 清单层**必然绿**（这就是 B9 只被措辞腿抓到的原因）；换成"合成源码 + 真文案"那个错配场景
+    // 会出现"清单层抓到了"的**假**结论 —— 第一版正控就是这么写错的（我自己实测发现）。
+    const mutatedCopy: ConsentCopy = { ...CONSENT_COPY, title: REPLACED_TITLE };
+    expect(localLiteralViolations(mutated3, mutatedCopy), '清单层居然抓到了"真文件里换掉界面标签"').toEqual([]);
+    expect(hash64(REPLACED_TITLE), '哈希层认不出被换掉的界面标签').not.toBe(CHROME_PINS.title);
   });
 });

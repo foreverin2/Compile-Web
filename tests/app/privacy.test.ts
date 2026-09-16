@@ -44,8 +44,10 @@ import {
   isGatedCopyLine,
   privacyLines,
 } from '../../src/app/privacy';
+// 修复轮 3 的**生成式枚举面**：拿整个**运行期导出命名空间**（而不是再手写一份常量名清单）
+import * as privacyExports from '../../src/app/privacy';
 import type { PrivacyCopy, PrivacyBoundaryDeclaration, PrivacyGroupKey } from '../../src/app/privacy';
-import { stripComments } from '../ui/source-text';
+import { stripComments, functionBody } from '../ui/source-text';
 // 整句哈希（阻断 A 的判据）：复用仓内**既有**的 FNV-1a 64 位哈希（`src/core/fingerprint.ts`，
 // 底座是 `src/core/rng.ts` 的 `hash32`）。**零新依赖**、纯整数运算 ⇒ 跨进程/跨机器稳定。
 // 为什么不用 `node:crypto`：那要引平台模块，而这里只需要"稳定地指出两句是否相同"（同 `fingerprint.ts` 的定位）。
@@ -424,6 +426,179 @@ function withLine(group: PrivacyGroupKey, line: number, text: string): PrivacyCo
 /** 钉住表的键序列（与真实文案的键序列比较时必须**逐位相等**） */
 function pinKeys(): string[] {
   return COPY_PINS.map((p) => copyKey(p.group, p.line));
+}
+
+/* ────────── 5. 承诺句哈希钉死的**生成式枚举面**（修复轮 3 · 阻断项） ────────── */
+
+/**
+ * ## 为什么在 `COPY_PINS` 之外还要这一层（修复轮 3 的阻断项）
+ *
+ * `COPY_PINS` 的键是 `组[行号]`，由 `copyEntries()` 从 `PRIVACY_GROUPS × PRIVACY_COPY` 推导
+ * —— 它**只认识 `PRIVACY_COPY` 这一个对象**。于是出现"门禁全绿但没有覆盖"的形态：
+ *
+ *  - `src/ui/local-consent.ts` 的 `CONSENT_COPY.body[0]` / `body[2]` / `denyHint` 当时是**手写串**
+ *    ⇒ **根本不在枚举面里**；
+ *  - 复验者实测：把 `denyHint` 改写成「…拒绝时全程零磁盘写入，硬盘上不会留下任何痕迹。」
+ *    （授权弹窗上玩家可见的一句**全新绝对承诺**）⇒ 20 条腿**全绿**。
+ *
+ * ⚠️ 这与哈希强度**无关**（换成密码学哈希同样穿透）：缺的是"承诺句有几个家、分别住在哪"
+ * 这个**枚举面**。修复轮 3 的处置是让承诺句只有一个家（`src/app/privacy.ts`，消费方只引用），
+ * 并把枚举面从"`PRIVACY_COPY` × `PRIVACY_GROUPS`"扩到**运行期导出面**。
+ *
+ * ## 判据形态（生成式，不写任何名字清单）
+ *
+ * 枚举面 = `src/app/privacy.ts` 的**运行期导出命名空间**里出现的全部**面向玩家**的串
+ * （判据：含中日韩汉字 —— 本仓的内部标识符 / 键名 / 边界 id 全是 ASCII）。
+ * 键 = **导出路径**（`CONSENT_DENY_HINT` / `PRIVACY_COPY.localOnly[0]` / `ONLINE_GATE_MARK`），
+ * 由遍历对象与数组**当场推导**。于是三种"新增句子"都必红：
+ *
+ *  - 新增一条**导出常量**（无论叫什么名字）⇒ 多一个键 ⇒ 报"没有钉"；
+ *  - 在 `PRIVACY_COPY` 里**新增一个组**（哪怕忘了同步 `PRIVACY_GROUPS`）⇒ 报"没有钉"；
+ *  - 在已有数组里**追加一项** ⇒ 报"没有钉"。
+ *
+ * ⚠️ 键清单比较用**排序后**的结果（模块命名空间对象的键序是实现细节：原生 ESM 按码点排序，
+ * 而 bundler 转译后可能是声明顺序）—— 排序让判据只依赖"有哪些键"，不依赖键序。
+ */
+const PLAYER_FACING_TEXT = /[\u3400-\u9fff]/;
+
+/** 导出面上的一句面向玩家文案：`key` = 导出路径，`text` = 运行期真实取值 */
+interface PromiseEntry { key: string; text: string }
+
+/**
+ * **生成式枚举**：遍历一个模块命名空间的全部导出（含嵌套对象/数组），收集面向玩家的串。
+ *
+ * 传参而不是直接闭包 `privacyExports`：正控要喂**合成命名空间**，证明判据能分辨
+ * "多了一句 / 改了一句 / 少了一句"，而不是恒真。
+ */
+function promiseEntriesOf(ns: Record<string, unknown>): PromiseEntry[] {
+  const out: PromiseEntry[] = [];
+  const walk = (value: unknown, path: string): void => {
+    if (typeof value === 'string') {
+      if (PLAYER_FACING_TEXT.test(value)) out.push({ key: path, text: value });
+      return;
+    }
+    if (Array.isArray(value)) { value.forEach((v, i) => walk(v, `${path}[${i}]`)); return; }
+    if (typeof value === 'object' && value !== null) {
+      for (const [k, v] of Object.entries(value)) walk(v, `${path}.${k}`);
+    }
+  };
+  for (const [name, value] of Object.entries(ns)) walk(value, name);
+  return out;
+}
+
+const MODULE_PROMISES = promiseEntriesOf(privacyExports as unknown as Record<string, unknown>);
+
+/**
+ * **导出面**上每一句面向玩家文案的哈希（键 = 导出路径）。
+ *
+ * ⚠️ `PRIVACY_COPY.*` 那 12 条的哈希与 `COPY_PINS` **逐字相同**（有交叉自证腿钉住）：
+ * 两套表覆盖的**面**不同（一套按"组 × 行号"，一套按"导出路径"），但同一句话的哈希必须一致
+ * —— 否则就是有人抄错了常量，而两套表都会"看起来全绿"。
+ */
+const MODULE_PINS: ReadonlyArray<{ key: string; hash: string }> = [
+  // ── 授权弹窗（Task 4）的三句：**修复轮 3 的阻断项**就是它们（原先手写在 local-consent.ts 里）──
+  { key: 'CONSENT_ALLOW_NOTE', hash: 'b53290caf9e5f827' },
+  { key: 'CONSENT_DENY_HINT', hash: '33f85215411dad0e' },
+  { key: 'CONSENT_DENY_NOTE', hash: 'a22d29c3ad413b32' },
+  // ── 门槛标注：它会被拼进文案，玩家读得到 ──
+  { key: 'ONLINE_GATE_MARK', hash: '7673f7749c083bca' },
+  // ── `PRIVACY_COPY` 的 12 条（哈希与 `COPY_PINS` 相同）──
+  { key: 'PRIVACY_COPY.noServerStorage[0]', hash: '6f992822596a369f' },
+  { key: 'PRIVACY_COPY.noServerStorage[1]', hash: '5fcf31c75c5b7b75' },
+  { key: 'PRIVACY_COPY.localOnly[0]', hash: 'c22ab6f10d151d6f' },
+  { key: 'PRIVACY_COPY.localOnly[1]', hash: '22f8b0898e7fe940' },
+  { key: 'PRIVACY_COPY.localOnly[2]', hash: '082e4a7ef6ae37c1' },
+  { key: 'PRIVACY_COPY.localOnly[3]', hash: 'a61a40d9960e2a30' },
+  { key: 'PRIVACY_COPY.peerVisible[0]', hash: 'cc25e4bea9cb4d98' },
+  { key: 'PRIVACY_COPY.peerVisible[1]', hash: 'ecf41ba6a1ad65c2' },
+  { key: 'PRIVACY_COPY.offlineCacheNote[0]', hash: '25cc9a98f0cff4dc' },
+  { key: 'PRIVACY_COPY.offlineCacheNote[1]', hash: '9bcdf3506e9b4361' },
+  { key: 'PRIVACY_COPY.signalAndRelay[0]', hash: '930ebfa765c90da0' },
+  { key: 'PRIVACY_COPY.signalAndRelay[1]', hash: '4dd1a1a32afa8dfe' },
+];
+
+/** 钉住表的导出路径（**排序**后比较 —— 模块命名空间的键序是实现细节，不是判据） */
+function modulePinKeys(): string[] {
+  return MODULE_PINS.map((p) => p.key).slice().sort();
+}
+
+/** 真实导出面的导出路径（排序） */
+function modulePromiseKeys(entries: readonly PromiseEntry[] = MODULE_PROMISES): string[] {
+  return entries.map((e) => e.key).slice().sort();
+}
+
+/**
+ * 导出面上的**漂移清单**（空数组 = 全绿）。
+ * 报错里必须打印**实际那句话 + 实际哈希**（照 `pinDrift` 的理由：否则维护者不知道改了什么）。
+ */
+function modulePinDrift(entries: readonly PromiseEntry[], pins: ReadonlyArray<{ key: string; hash: string }> = MODULE_PINS): string[] {
+  const pinByKey = new Map(pins.map((p) => [p.key, p.hash]));
+  return entries.flatMap((e) => {
+    const pin = pinByKey.get(e.key);
+    const actual = hash64(e.text);
+    if (pin === undefined) {
+      return [`  ${e.key}：**没有钉**（导出面上多了一句 ⇒ 必须人工复核并补上哈希）\n    实际文案：${e.text}\n    实际哈希：${actual}`];
+    }
+    if (pin === actual) return [];
+    return [`  ${e.key}：整句哈希对不上\n    实际文案：${e.text}\n    实际哈希：${actual}\n    钉住哈希：${pin}`];
+  });
+}
+
+/**
+ * 把源码里的**函数体**整段挖空（等长空白、保留换行）。
+ *
+ * 为什么要挖：`privacy.ts` 的函数体里有**中文诊断报错文案**（`assertBoundaryTable` 的
+ * "…越界（…）"），它们不是面向玩家的承诺句。名字从源码里**当场扫**（不写清单）；
+ * `functionBody` 找不到就抛错 —— 结构被改成箭头函数时宁可**响亮报红**，
+ * 也不要静默漏掩（那会让下面的兜底腿变成假红）。
+ */
+function maskFunctionBodies(code: string): string {
+  const names = [...code.matchAll(/\bfunction\s+([A-Za-z_$][\w$]*)\s*\(/g)].map((m) => m[1]);
+  let out = code;
+  for (const name of names) {
+    const body = functionBody(out, name);
+    out = out.replace(body, () => body.replace(/[^\n]/g, ' '));
+  }
+  return out;
+}
+/**
+ * 源码里每个**函数体**的文本（名字从源码当场扫，不写清单；注释须先 `stripComments`）。
+ * 与 `maskFunctionBodies` 共用同一套定位，避免"两份实现漂移"。
+ */
+function functionBodiesOf(code: string): string[] {
+  return [...code.matchAll(/\bfunction\s+([A-Za-z_$][\w$]*)\s*\(/g)].map((m) => functionBody(code, m[1]));
+}
+
+/**
+ * 函数体里**整句**中文承诺（以句号结尾）。
+ *
+ * ⚠️ 为什么需要这条（本腿的兜底还有一层洞）：导出面枚举只读**字符串值** ——
+ * `export function hint() { return '…。'; }` 的**返回值**不在枚举面里（函数不是字符串），
+ * 于是"新增一条承诺句"的第四种形态（藏进函数返回）能绕过钉住表。
+ * 判据：函数体里不许出现以 `。` 结尾的中文串 —— 本仓的诊断报错文案**不用句号**
+ * （实测 `privacy.ts` 4 个函数体里句号命中 0），而面向玩家的承诺句**都以句号结尾**。
+ */
+function functionBodySentences(code: string): string[] {
+  return functionBodiesOf(code).flatMap((b) => b.match(/[\u3400-\u9fff][^'"`\n]{0,200}。/g) ?? []);
+}
+
+/**
+ * `privacy.ts` 代码位里**绕开导出面**的面向玩家中文（空数组 = 全绿）。
+ *
+ * 做法：① 挖空函数体；② 把导出面上的每一句**逐字抠掉**；③ 看还剩不剩汉字。
+ * 剩下的 = 消费方**拿不到**的承诺句（非导出的局部常量、或写在顶层语句里的中文），
+ * 而"拿不到"恰恰意味着哈希钉死的枚举面也覆盖不到它。
+ */
+function orphanPlayerText(code: string, promises: readonly PromiseEntry[]): string[] {
+  let residue = maskFunctionBodies(code);
+  for (const p of [...promises].sort((a, b) => b.text.length - a.text.length)) {
+    residue = residue.split(p.text).join(' '.repeat(p.text.length));
+  }
+  return residue
+    .split('\n')
+    .map((line, i) => ({ line, no: i + 1 }))
+    .filter((x) => PLAYER_FACING_TEXT.test(x.line))
+    .map((x) => `:${x.no} ${x.line.trim()}`);
 }
 
 /* ───────────────────────────────── 判据 ───────────────────────────────── */
@@ -990,5 +1165,110 @@ describe('隐私说明文案（§5.9 / §8.1）', () => {
     for (const line of privacyLines()) {
       expect(self.includes(normalize(line)), `测试文件里抄了一份文案（应改为引用 PRIVACY_COPY）：${line}`).toBe(false);
     }
+  });
+});
+
+/* ───── 6. 导出面钉死的判据（修复轮 3 · 阻断项；生成式枚举面，不写名字清单） ───── */
+
+describe('承诺句哈希钉死（生成式枚举面 = privacy.ts 的**整个运行期导出面**）', () => {
+  it('锚点：枚举面真的跑到了，且**超出** `COPY_PINS`（否则这一层只是它的副本）', () => {
+    expect(Object.keys(privacyExports).length, '模块命名空间是空的 ⇒ 后面每条判据都在空转').toBeGreaterThan(8);
+    for (const key of ['CONSENT_ALLOW_NOTE', 'CONSENT_DENY_NOTE', 'CONSENT_DENY_HINT']) {
+      expect(modulePromiseKeys(), `导出面上找不到 ${key}（授权弹窗的文案又搬回消费方了？）`).toContain(key);
+    }
+    expect(
+      MODULE_PROMISES.length,
+      '枚举面没有超出 `COPY_PINS`（= 这一层没有补上"消费方文件里的承诺句"那个洞）',
+    ).toBeGreaterThan(COPY_PINS.length);
+    // 反向：ASCII 的内部标识符**不该**进枚举面（否则"含汉字"这条形态判据失效，枚举面会糊成一片）
+    expect(modulePromiseKeys(), 'ASCII 的内部清单（组键 / 边界 id）混进了枚举面').not.toContain('PRIVACY_GROUPS[0]');
+    expect(modulePromiseKeys(), '边界 id 混进了枚举面').not.toContain('BOUNDARY_IDS[0]');
+    expect(new Set(modulePromiseKeys()).size, '枚举面里有重复的导出路径（会让一句静默失去覆盖）').toBe(MODULE_PROMISES.length);
+  });
+
+  it('钉住表的导出路径集合与真实导出面**逐位一致**（新增导出 / 新增组 / 追加一行 都必红）', () => {
+    for (const p of MODULE_PINS) {
+      expect(p.hash, `${p.key} 的哈希格式不对（应为 hash64 的 16 位小写十六进制）`).toMatch(/^[0-9a-f]{16}$/);
+    }
+    expect(new Set(modulePinKeys()).size, '钉住表里有重复的导出路径').toBe(MODULE_PINS.length);
+    expect(
+      modulePinKeys(),
+      '钉住表与运行期导出面的键集合不一致 ⇒ 有句子没有被钉住（或钉住表里留了已经删掉的键）。'
+        + `\n导出面现有键：\n${modulePromiseKeys().join('\n')}`,
+    ).toEqual(modulePromiseKeys());
+  });
+
+  it('导出面上每一句的整句哈希都对得上（含授权弹窗那三句与门槛标注）', () => {
+    const drift = modulePinDrift(MODULE_PROMISES);
+    expect(
+      drift,
+      '以下承诺句与钉住的哈希对不上（导出面被改动了？）。'
+        + `\n⚠️ 若**确实**是人工复核过的合法改动，请把下面打印的「实际哈希」抄回 MODULE_PINS：\n${drift.join('\n')}`,
+    ).toEqual([]);
+  });
+
+  it('交叉自证：`PRIVACY_COPY` 的 12 条在两套钉住表里哈希**逐字相同**（防"抄错常量"型假绿）', () => {
+    const copyPins = new Map(COPY_PINS.map((p) => [copyKey(p.group, p.line), p.hash]));
+    const modulePins = new Map(MODULE_PINS.map((p) => [p.key, p.hash]));
+    let compared = 0;
+    for (const [k, h] of copyPins) {
+      const mk = `PRIVACY_COPY.${k}`;
+      expect(modulePins.has(mk), `导出面钉住表缺少 ${mk}`).toBe(true);
+      expect(modulePins.get(mk), `${mk} 与 COPY_PINS 的 ${k} 哈希不一致（有一套抄错了常量）`).toBe(h);
+      compared += 1;
+    }
+    expect(compared, '一条都没比到 ⇒ 本腿恒真').toBe(COPY_PINS.length);
+    // 反向：两套表覆盖的**面**必须不同（模块表严格更大），否则这一层没有存在理由
+    expect(MODULE_PINS.length, '两套表一样大 ⇒ 新层没补任何覆盖面').toBeGreaterThan(COPY_PINS.length);
+  });
+
+  it('判据自证（正控 + 反控）：同一判据在**合成**导出面上能分辨"多了一句 / 改了一句"', () => {
+    const base: Record<string, unknown> = { NOTE: '允许后，昵称与卡组只保存在你自己的浏览器里。', GROUP: { a: ['不允许时只存在内存里。'] } };
+    const baseEntries = promiseEntriesOf(base);
+    const basePins = baseEntries.map((e) => ({ key: e.key, hash: hash64(e.text) }));
+    expect(baseEntries.length, '合成导出面一条都没枚举到 ⇒ 下面的正控全是空转').toBe(2);
+    expect(modulePinDrift(baseEntries, basePins), '正控：合成导出面本身竟然被判为漂移').toEqual([]);
+    // ① 多一句（= 新增导出常量 / 新增组 / 追加一项的共同后果）
+    const extra = { ...base, EXTRA_NOTE: '硬盘上不会留下任何痕迹。' };
+    expect(promiseEntriesOf(extra).length, '合成变异没生效：句数没变').toBe(basePins.length + 1);
+    expect(modulePinDrift(promiseEntriesOf(extra), basePins).join('\n'), '多一句竟然没被抓到').toContain('EXTRA_NOTE');
+    // ② 改一句（保留原句 + 追加新绝对句 —— 修复轮 2 的穿透形态）
+    const changed = { ...base, NOTE: `${base.NOTE as string}本机零写入。` };
+    const d = modulePinDrift(promiseEntriesOf(changed), basePins);
+    expect(d.length, '改一句竟然没被抓到').toBe(1);
+    expect(d.join('\n'), '报错必须打印**实际那句话**').toContain('本机零写入');
+    // ③ 少一句：`modulePinDrift` 只报"多/改"（内容维度），"少"由键集合腿负责 —— 这里钉住这个分工
+    const fewer = promiseEntriesOf({ NOTE: base.NOTE });
+    expect(fewer.map((e) => e.key).sort(), '删掉一个导出后键集合竟然没变').not.toEqual(baseEntries.map((e) => e.key).sort());
+  });
+
+  it('反向兜底：`privacy.ts` 代码位里**任何**面向玩家的中文都必须落在导出面上', () => {
+    const code = stripComments(readFileSync(join(REPO_ROOT, COPY_FILE)).subarray(0, 4 * 1024 * 1024).toString('utf8'));
+    expect(code.length, 'privacy.ts 读成空串 ⇒ 本腿假绿').toBeGreaterThan(1000);
+    // 挖空自证：诊断报错文案**本来**在文件里，挖空之后必须消失（否则兜底腿会把它误判成孤儿）
+    expect(code, '锚点：privacy.ts 里本来就有函数体内的中文诊断文案').toContain('越界');
+    expect(maskFunctionBodies(code), '函数体没被挖空（诊断报错文案会被误判成"绕开导出面的承诺句"）').not.toContain('越界');
+    // 真文件：一条孤儿都不许有
+    expect(
+      orphanPlayerText(code, MODULE_PROMISES),
+      '这些面向玩家的中文**不在导出面上**：消费方拿不到它们，哈希钉死的枚举面也就覆盖不到它们。'
+        + '请把它们放进导出面（并补上 MODULE_PINS），或删掉。',
+    ).toEqual([]);
+    // 正控：合成源码里藏一句**非导出**的承诺句 ⇒ 必须被点出来（含行号）
+    const hidden = `export const A = '${MODULE_PROMISES[0].text}';\nconst HIDDEN_NOTE = '本机零写入，硬盘上不会留下任何痕迹。';\n`;
+    const nsA = { A: MODULE_PROMISES[0].text };
+    expect(orphanPlayerText(hidden, promiseEntriesOf(nsA)).join('\n'), '正控失效：藏在非导出常量里的承诺句没被点出来').toContain('HIDDEN_NOTE');
+    // 负控：同一句只要进了导出面，就不再是孤儿
+    expect(
+      orphanPlayerText(hidden, promiseEntriesOf({ ...nsA, HIDDEN_NOTE: '本机零写入，硬盘上不会留下任何痕迹。' })),
+      '负控失效：已经进了导出面的句子仍被判为孤儿',
+    ).toEqual([]);
+    // 补一层兜底：**函数体里不许藏整句中文**（第四种"新增承诺句"形态 = 藏进函数返回）。
+    // 导出面枚举只读字符串值 ⇒ `export function hint() { return '…。'; }` 不在枚举面里。
+    // 本仓的诊断报错文案不用句号（实测 4 个函数体里句号命中 0），所以这条判据在本文件上成立。
+    expect(functionBodySentences(code), '函数体里藏了整句中文承诺（它会绕过导出面枚举与钉住表）').toEqual([]);
+    const fnSample = `export function hint() { return '你随时可以在主界面的「本地数据与隐私」里改变这个选择。'; }`;
+    expect(functionBodySentences(fnSample).length, '正控失效：函数体里返回的整句承诺没被点出来').toBeGreaterThan(0);
+    expect(functionBodySentences('export function diag(x: string) { return x + \'只有这条数据\' ; }').length, '反控：无句号的中文片段不该被误判').toBe(0);
   });
 });
