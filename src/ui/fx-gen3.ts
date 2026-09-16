@@ -909,7 +909,12 @@ function handEl(player: 0 | 1): HTMLElement | null {
 /** 手牌区末端落点（取不到卡节点就退化到手牌区内侧 24px 处）。
  *  G2 修正 R3：末卡在 DOM 里恒为最后一张（两个渲染器都按"新卡追加在末尾"渲染），所以取它的
  *  **中心**与"哪一侧"无关；只有空手牌的退化落点与容器排列方向有关 —— 用 `.hand.reversed`
- *  判定（热座 P1 仍是"右缘内侧"= 与改动前逐字相同；远程页两个座位都正排，走左缘内侧）。 */
+ *  判定（热座 P1 仍是"右缘内侧"= 与改动前逐字相同；远程页两个座位都正排 ⇒ 走**右**缘内侧）。
+ *  ⚠️ **G2 修正 R17（过期注释修正，行为一字未动）**：上一句原来写的是"远程页…走**左**缘内侧"，
+ *  与代码相反。代码是 `handOuterFor(hand) === 'start' ? r.left + 24 : r.right - 24`，而
+ *  `handOuterFor` 对**正排**（无 `.reversed`）返回 `'end'`（`fx-seat.ts`：`'end'` = 正排、
+ *  新卡在右端）⇒ 远程页两个座位都取 **`r.right - 24`（右缘内侧）**，这才是对的（新卡落在右端）；
+ *  "左缘内侧"只属于 `row-reverse` 的热座 P1。 */
 function handEndPos(player: 0 | 1): { x: number; y: number } | null {
   const hand = handEl(player);
   if (!hand) return null;
@@ -925,6 +930,34 @@ function handEndPos(player: 0 | 1): { x: number; y: number } | null {
   const x = handOuterFor(hand) === 'start' ? r.left + 24 : r.right - 24;
   return { x, y: r.top + r.height / 2 };
 }
+
+/* ── 支点 F2 标尺的三个几何常量（**全仓只有这一处**；标尺长度与远程页退化判据都由它们派生）──
+ *  值逐字取自本函数改动前的算式（`left = x1 - 8` / `width = Math.max(120, x2 - x1 + 16)`）。
+ *  ⚠️ 它们**必须导出**：`tests/ui/gen3-fulcrum-ruler.test.ts` 的源码腿要在"锚实参/表达式"上核对
+ *  （不是查附近出现过某个词），并有一条**标定腿**用真实页面的实测跨度校正阈值（见下）。 */
+/** 标尺两端各留的余量（改动前算式里的 `16`）。 */
+export const RULER_PAD_PX = 16;
+/** 标尺的**最小长度**（改动前 `Math.max(120, …)` 的那个下限）—— 远程页退化的判据由它派生。 */
+export const RULER_MIN_LEN_PX = 120;
+/**
+ * **远程页退化阈值**（px）：牌库中心与手牌落点在 **x 上的跨度 < 它** ⇒ 标尺长度只能由
+ * `RULER_MIN_LEN_PX` 兜底决定（`Math.max` 取到的恒是 120），**与真实跨度无关** ⇒ 标尺退化成
+ * 一条固定长度的短棒（语义塌掉）。所以它 = 标尺的最小长度 − 两端余量（**不是新拍的魔数**）。
+ *
+ * ⚠️ **为什么不是 40**（用户最初批准的数值）：40 出自"两个锚点在 x 上几乎重合"的**未实测怀疑**。
+ * 本轮用**真浏览器探针**（Vite dev + headless Chrome，1704×727，真 `renderNetBoard` + 真
+ * `gen3DrawFx`，见报告）实测远程页对手侧：牌库中心 x = 1143.67、手牌落点 x = 1207.03
+ * ⇒ **跨度 63.36px**（不是 ≈0）——`40` 会**永不触发**（等于没修），而 `63.36 + 16 = 79.36 < 120`
+ * ⇒ 兜底的 120 确实在主导（同一份实测里，标尺矩形 108×32 **100% 落在对手信息块内**，横穿
+ * "● 本地预览（未联机）"那一行）。⇒ 阈值取"标尺自己的最小长度"，两条腿（行为 + 标定）都在
+ * `tests/ui/gen3-fulcrum-ruler.test.ts` 里钉住；若将来要改回 40，改这一个常量即可（并会立刻红）。
+ *
+ * ⚠️ **R17 之后**：`styles-net.css` 的 `justify-self` 层叠缺陷已修（张数块现在真的贴右下角）
+ * ⇒ 手牌容器右缘从 1231.03 变成 1254.83，**按 CSS 推导**同一场景的跨度变成
+ * `(1254.83 − 24) − 1143.67 = 87.16px`（**推导值，本轮没有再测量**）——仍 < 104 ⇒ 闸门照旧命中，
+ * 阈值的选择与结论都不受影响（这也是阈值不取 40 的又一重保险）。
+ */
+export const RULER_DEGENERATE_SPAN_PX = RULER_MIN_LEN_PX - RULER_PAD_PX;
 
 /**
  * 3 代抽牌附加层（点名：暴食 G3 / 支点 F2）。基础抽牌动画由 main.ts 播放，本层只加：
@@ -989,19 +1022,39 @@ export function gen3DrawFx(p: Gen3DrawPayload, api: Gen3CardFxApi): boolean {
   const to = end ?? { x: dcx + 160, y: dcy };
   const x1 = Math.min(dcx, to.x);
   const x2 = Math.max(dcx, to.x);
-  const ruler = api.el('div', 'g3-ruler');
-  ruler.style.left = `${x1 - 8}px`;
-  ruler.style.top = `${(dcy + to.y) / 2 - 16}px`;
-  ruler.style.width = `${Math.max(120, x2 - x1 + 16)}px`;
-  for (let i = 0; i < 9; i++) {
-    const tick = api.el('i', 'g3-ruler-tick');
-    tick.style.left = `${(i / 8) * 100}%`;
-    if (i % 4 === 0) tick.classList.add('major');
-    ruler.appendChild(tick);
+  /* ── **远程页退化闸门**（G2 修正 R17 · 独立审计的未证实怀疑经真浏览器实测后落地）──
+   *  被修的缺陷：**远程页**（三条纵向链路 + 停靠栏三块）里，**对手的牌库**与**对手手牌的张数占位块**
+   *  同处第 3 列那一个 grid 格子（`styles-net.css` 第 1 节的 `.net-hand-area-foe { grid-column: 3 }`
+   *  与 `.net-info-block[data-net-seat='foe']` 同格）⇒ 两个锚点在 x 上只差 ~63px，而标尺的最小长度
+   *  是 120px ⇒ `Math.max(RULER_MIN_LEN_PX, …)` 主导：画出来的是一条**与真实跨度无关**的固定短棒，
+   *  且整条落在对手信息块里（横穿"● 本地预览（未联机）"那一行）——"从牌库指向手牌"的语义塌掉。
+   *
+   *  闸门的两半，各管一件事（缺一就不是这条判据了）：
+   *   ① **页面判据** = `fxViewSeat() !== null`（与 `lineCenterX` 同一个"我在哪一页"的单一出处；
+   *      热座恒 `null`）⇒ 热座页**无条件**照旧画标尺，逐字不变；
+   *   ② **退化判据** = `x2 - x1 < RULER_DEGENERATE_SPAN_PX`（= 标尺的最小长度 − 两端余量）。
+   *  ⇒ 只有"**远程页** ∧ **两个锚点在 x 上近到只能靠下限兜底**"才不建标尺。只查距离会误伤热座
+   *  （热座一行里牌库与手牌也可以挨得很近），只查页面会在远程页自己抽牌（跨度几百 px）时白丢标尺。
+   *
+   *  ⚠️ 退化时**只**省掉 ruler / ticks / marker —— **落点环照建**（见下面的散装注释）。 */
+  const degenerate = fxViewSeat() !== null && x2 - x1 < RULER_DEGENERATE_SPAN_PX;
+  if (!degenerate) {
+    const ruler = api.el('div', 'g3-ruler');
+    ruler.style.left = `${x1 - 8}px`;
+    ruler.style.top = `${(dcy + to.y) / 2 - 16}px`;
+    ruler.style.width = `${Math.max(RULER_MIN_LEN_PX, x2 - x1 + RULER_PAD_PX)}px`;
+    for (let i = 0; i < 9; i++) {
+      const tick = api.el('i', 'g3-ruler-tick');
+      tick.style.left = `${(i / 8) * 100}%`;
+      if (i % 4 === 0) tick.classList.add('major');
+      ruler.appendChild(tick);
+    }
+    ruler.appendChild(api.el('i', 'g3-ruler-marker'));
+    if (p.triggerDefId === 'fulcrum-4') ruler.classList.add('at-four');
+    layer.appendChild(ruler);
   }
-  ruler.appendChild(api.el('i', 'g3-ruler-marker'));
-  if (p.triggerDefId === 'fulcrum-4') ruler.classList.add('at-four');
-  layer.appendChild(ruler);
+  // 落点环**不在闸门里**：它回答的是"牌会落到哪"（支点4 的"停在 4"读的就是这个环 + 游标），
+  // 与"标尺能不能表达牌库→手牌的方向"是两件事 ⇒ 标尺退化时它必须留下，否则退化会变成"整条特效消失"。
   const land = api.el('i', 'g3-draw-land fulcrum');
   land.style.left = `${to.x}px`;
   land.style.top = `${to.y}px`;

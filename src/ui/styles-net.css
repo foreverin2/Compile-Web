@@ -217,8 +217,20 @@
 .net-board .net-hand-area-self { grid-row: 3; grid-column: 2; align-self: end; }
 .net-board .net-info-block[data-net-seat='foe'] { grid-row: 3; grid-column: 3; }
 /* ⚠️ 对手手牌张数与对手信息块**同格**（右下角）：块的下内边距（见第 2 节）为它让出一条，
-   两者不重叠；`.hand` 的矩形仍在块内 ⇒ 手牌落点特效照旧落在这里。 */
-.net-board .net-hand-area-foe {
+   两者不重叠；`.hand` 的矩形仍在块内 ⇒ 手牌落点特效照旧落在这里。
+   ⚠️⚠️ **G2 修正 R17（层叠缺陷修复）：选择器必须是 (0,3,0)，不能省掉 `.net-hand-area`。**
+   这里原来写的是 `.net-board .net-hand-area-foe`（(0,2,0)），与第 6 节那条
+   `.net-board .net-hand-area { justify-self: center }`（同样 (0,2,0)）**同权重** ⇒ 胜负只能由
+   **源序**决定，而第 6 节在本文件里更靠后 ⇒ `justify-self: end` **被 `center` 吃掉**：
+   R12-7 要的"张数块贴对手信息块右下角"自落地起**从未生效**（真浏览器实测：它的 margin box 中心
+   = 轨道中心，即被水平居中；见本轮报告的历史证据）。
+   加上 `.net-hand-area` 这一段后权重是 **(0,3,0) > (0,2,0)** ⇒ 无论本文件怎么挪位置、无论
+   `styles.css` 与 `styles-net.css` 谁先 import，这条都赢。**本仓不接受依赖源序/import 顺序的隐性依赖**
+   （R15-2 的同款论证：给选择器补足权重，而不是靠"本文件是最后一个 import"）。
+   ⚠️ 只提权重、**只声明这五个属性**：`grid-row` / `grid-column` / `justify-self` / `align-self` / `margin`
+   ——`border` / `background` / `padding` / `max-width` 仍必须由第 6 节的基类规则赢（那是**有意**的"去框"，
+   见那里的说明），所以这条**不许**声明它们。 */
+.net-board .net-hand-area.net-hand-area-foe {
   grid-row: 3;
   grid-column: 3;
   justify-self: end;
@@ -991,8 +1003,21 @@
    信息块与手牌区现在**共用同一行**（第 1 节的 R9-3 块），外框由**信息块**提供
    （它有 1px 实线边框 + 8px 圆角 + 半透明底）。若手牌区仍带着自己的虚线框与底色，
    观感就是"盒子里套了一个小盒子"（用户要的是"手牌也纳入这个组件当中"= **一个**盒子）。
-   ⚠️ 选择器用 `.net-board .net-hand-area`（(0,2,0)）：它压过上面两条按侧类名的 (0,1,0)，
-   无论哪一侧、无论将来加不加第五种形态，并盒形态下的"去框"都成立（不依赖 import 顺序）。 */
+   ⚠️⚠️ **G2 修正 R17：这一段的权重算术与"它靠什么赢"必须写准**（旧注释写错了，而且写错的那条
+   正是第 1 节 `justify-self: end` 被吃掉的成因）。事实是：
+     · 基类选择器 `.net-board .net-hand-area` = **(0,2,0)**；
+     · 第 1 节两条按侧的规则**同样是 (0,2,0)**（`.net-board .net-hand-area-self` /
+       R17 起的 `.net-board .net-hand-area.net-hand-area-foe` 是 (0,3,0)）——
+       旧注释写的"压过上面两条 (0,1,0)"**自 R12-7 给它们加 `.net-board` 前缀起就过期了**；
+     · 于是对**同权重**的声明，本段能否生效**只看源序**（本段更靠后 ⇒ 赢）。
+   ⇒ 本段**有意**让这些属性赢（`border` / `background` / `padding` / `max-width`：并盒形态的"去框"，
+   两侧都要）——它们**没有**任何按侧规则竞争，所以权重与源序都不承重；
+   ⚠️ 但 `justify-self: center` **是被意外带赢的**：它压掉了第 1 节的 `justify-self: end`
+   （对手张数块的右下角定位），R17 已用 (0,3,0) 把那条提权修好。
+   ⇒ **不许**为了"两处一致"把 `justify-self: center` 从这里删掉或提权：自己那一侧
+   （`.net-hand-area-self`，`grid-column: 2`）**正是靠它**在轨道里居中的（删了会把自己那侧弄坏），
+   而对手那一侧的 `end` 现在由 (0,3,0) 那条自己赢。两侧都钉在
+   `tests/ui/net-dock-foe-hand-cascade.test.ts` 的解算腿上。 */
 .net-board .net-hand-area {
   border: none;
   background: none;
