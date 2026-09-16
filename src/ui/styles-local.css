@@ -174,3 +174,68 @@
   justify-content: center;
   margin-top: 6px;
 }
+
+/* ── Task 7 追加（只有下面这几个 `.local-data-*` 类；与 5 张既有 CSS 零同名） ──
+ * 追加的**唯一**理由：那三块内容需要一点排版，而计划明写「不许新建 CSS 文件、不许改既有 CSS」，
+ * 允许的落点就是本文件。类名一律带 `local-data-` 前缀，且
+ * `tests/ui/local-data-screen.test.ts` 的「样式腿」会**生成式**扫 5 张既有 CSS，断言零同名。 */
+
+.local-data-title {
+  margin: 0 0 2px;
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: 1.5px;
+  text-align: center;
+  color: #fff;
+  text-shadow: 0 0 20px rgba(0, 255, 204, 0.35), 0 4px 14px rgba(0, 0, 0, 0.8);
+}
+
+/* 状态区（本屏唯一的提示通道）。用 `[data-kind]` 属性选择器而不是新类名区分语义。 */
+.local-data-status {
+  width: min(560px, 92vw);
+  min-height: 22px;
+  box-sizing: border-box;
+  padding: 4px 6px;
+  font-size: 13px;
+  line-height: 1.6;
+  text-align: center;
+  color: #9ab;
+}
+.local-data-status[data-kind='info'] { color: #9fd8ff; }
+.local-data-status[data-kind='warn'] { color: #ffd479; }
+.local-data-status[data-kind='error'] { color: #ff9a9a; }
+
+.local-data-nick-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.local-data-nick-input {
+  min-width: 200px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 14px;
+  border: 1px solid #4a4a68;
+  border-radius: 8px;
+  background: rgba(12, 12, 26, 0.9);
+  color: #eef;
+}
+.local-data-nick-input:focus { border-color: #00ffcc; outline: none; }
+
+/* 小字（标签 / 摘要 / 说明）：与 `.consent-privacy-full p` 同款可读性 */
+.local-data-note {
+  font-size: 13px;
+  line-height: 1.6;
+  color: #dfe6ff;
+}
+
+/* 隐私说明全文与档案说明的每一条（逐条渲染，见 local-data.ts） */
+.local-data-privacy-line {
+  width: 100%;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #9ab;
+}
