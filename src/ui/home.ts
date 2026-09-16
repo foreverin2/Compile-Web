@@ -18,6 +18,8 @@ export interface HomeNav {
   startGame(): void;
   openLibrary(): void;
   openRules(): void;
+  /** G3：本地数据与隐私（授权状态、清除本机数据、档案导入导出入口） */
+  openLocalData(): void;
 }
 
 export interface CoinNav {
@@ -197,6 +199,8 @@ export function renderHome(root: HTMLElement, nav: HomeNav): void {
   btns.appendChild(button('btn home-btn', '查看协议及其所属卡牌', nav.openLibrary));
   btns.appendChild(button('btn home-btn', '新手教程', () => showToast('新手教程：待开发')));
   btns.appendChild(button('btn home-btn', '查看一/二/三代规则图纸', nav.openRules));
+  // G3（Task 4）：本地数据与隐私入口 —— 授权状态、清除本机数据、档案导入导出（Task 7 落地屏）
+  btns.appendChild(button('btn home-btn', '本地数据与隐私', nav.openLocalData));
   menu.appendChild(btns);
   screen.appendChild(menu);
 

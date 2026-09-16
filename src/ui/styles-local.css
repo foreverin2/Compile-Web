@@ -1,0 +1,176 @@
+/*
+ * 本文件只服务 G3 新屏，**绝不**定义与 styles.css 同名的选择器
+ * （同名前缀冲突会让热座页/远程页的视觉连带变化；实测证据见 tests/ui/local-consent.test.ts
+ *  的"类名不冲突"判据与 Task 4 报告里的生成式自检）。
+ *
+ * 覆盖两屏：
+ *  1. 授权弹窗（src/ui/local-consent.ts，Task 4）：.consent-* / .local-data-*
+ *  2. 「本地数据与隐私」屏（src/ui/local-data.ts，Task 7）：.local-data-screen / -row / -actions
+ *     —— 这三个类**本任务就先定义**（Task 7 直接用），否则 Task 7 落地前这段样式会缺席。
+ *
+ * 视觉语言对齐既有的 .home-btn（rgba(30,30,58,.78) + #556 边框）与 .mode-card
+ * （rgba(24,24,48,.85) + #4a4a68 边框 + 12px 圆角），主色沿用 #00ffcc。
+ */
+
+/* ── 授权弹窗：整屏屏（不是 position:fixed 覆盖层，见设计要点第 5 条） ── */
+
+.consent-screen {
+  position: relative;
+  width: 100%;
+  min-height: 100vh;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 48px 20px 72px;
+  background: radial-gradient(120% 90% at 50% 0%, #141430 0%, #0b0b16 62%, #07070f 100%);
+  color: #eef;
+}
+
+.consent-title {
+  margin: 0;
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: 2px;
+  text-align: center;
+  color: #fff;
+  text-shadow: 0 0 22px rgba(0, 255, 204, 0.4), 0 4px 16px rgba(0, 0, 0, 0.85);
+}
+
+/* 正文三行：与 .mode-card 同款卡片语言，宽度按视口收缩（窄屏不横向溢出） */
+.consent-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(560px, 92vw);
+  padding: 16px 18px;
+  border: 1px solid #4a4a68;
+  border-radius: 12px;
+  background: rgba(24, 24, 48, 0.85);
+}
+
+.consent-body p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.65;
+  color: #dfe6ff;
+}
+
+/* 拒绝的后果：中性陈述，不用警告色（用户裁决 #6） */
+.consent-hint {
+  width: min(560px, 92vw);
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  text-align: center;
+  color: #9ab;
+}
+
+.consent-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: center;
+  margin-top: 4px;
+}
+
+.consent-grant {
+  min-width: 220px;
+  padding: 12px 20px;
+  font: inherit;
+  font-size: 16px;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  background: linear-gradient(135deg, #00ffcc, #4dd0ff);
+  color: #071;
+}
+.consent-grant:hover { background: linear-gradient(135deg, #33ffd6, #6fdcff); }
+
+.consent-deny {
+  min-width: 220px;
+  padding: 12px 20px;
+  font: inherit;
+  font-size: 16px;
+  border: 1px solid #556;
+  border-radius: 10px;
+  cursor: pointer;
+  background: rgba(30, 30, 58, 0.78);
+  color: #eef;
+}
+.consent-deny:hover { background: rgba(40, 40, 78, 0.9); border-color: #9ab; }
+
+.consent-privacy {
+  margin-top: 2px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 13px;
+  border: none;
+  background: none;
+  color: #9fd8ff;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.consent-privacy:hover { color: #00ffcc; }
+
+/*
+ * 「隐私说明」按钮**就地展开**的完整隐私说明（阶段一评审：那个按钮原先点了没反应 = 死胡同）。
+ * 默认是空容器（内容由 local-consent.ts 的 renderPrivacyDetail 在点击时才逐条填进来，
+ * 唯一出处 = privacy.ts 的 privacyLines()），所以这里只需要"读得舒服"的排版。
+ */
+.consent-privacy-full {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(560px, 92vw);
+  margin-top: 2px;
+  padding: 0 2px;
+}
+
+.consent-privacy-full p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #9ab;
+}
+
+/* ── 「本地数据与隐私」屏（Task 7 用；本任务只落样式，入口是占位） ── */
+
+.local-data-screen {
+  position: relative;
+  width: 100%;
+  min-height: 100vh;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 40px 20px 72px;
+  background: #0b0b16;
+  color: #eef;
+}
+
+.local-data-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: min(560px, 92vw);
+  padding: 14px 18px;
+  border: 1px solid #4a4a68;
+  border-radius: 12px;
+  background: rgba(24, 24, 48, 0.85);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.local-data-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: center;
+  margin-top: 6px;
+}

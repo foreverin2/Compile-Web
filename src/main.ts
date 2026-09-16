@@ -5,6 +5,8 @@ import './ui/styles-gen3-sync.css'; // 3代常驻层与控制权族样式（批�
 // G2 Task 3：远程对战页布局（甲读法：3 横带 / 上对手下自己 / 自己 0°·对手 180°）。
 // 只服务 src/ui/render-net.ts；styles.css 一行未改，热座页规则原样生效。
 import './ui/styles-net.css';
+// G3 Task 4：授权弹窗与「本地数据与隐私」屏的样式（新文件，只服务 G3 新屏）
+import './ui/styles-local.css';
 import { createGame, performDraftPick, performDraftUnpick, performDraftBan, randomPoolFromSeed, setSeedNonce } from './core/state/create';
 import { executeAction } from './core/game';
 import { getCompilableLines } from './core/rules/compile';
@@ -23,6 +25,13 @@ import { handCardBox, handFanLead, handFanStep } from './ui/fx-card-size';
 import { handOuterFor } from './ui/fx-seat';
 import { openControlRearrangeModal, closeControlRearrangeModal, refreshControlRearrangeModal, isControlRearrangeOpen, orderChanged, orderToAction } from './ui/control-rearrange';
 import { renderHome, renderCoin, renderLibrary, renderRules, renderModeSelect } from './ui/home';
+// G3 Task 4：L1 授权状态机（纯层）+ 其浏览器后端 + 授权弹窗屏
+import { createLocalStore } from './app/local-store';
+import { openL1Store } from './ui/local-store-browser';
+import { renderLocalConsent, nextConsentStep } from './ui/local-consent';
+// G3 Task 7：「本地数据与隐私」屏 + 档案的选择/落盘口（浏览器实现只在 `showLocalData` 里注入）
+import { renderLocalData } from './ui/local-data';
+import { openArchivePicker, openArchiveSink } from './ui/archive-fs-browser';
 import { newMatchSeed } from './ui/match-seed';
 import { resetControlIfHeld } from './core/rules/control';
 import { initEffects, initCompileFx, initRearrangeFx, initGen3StackSwapFx, initShuffleFx, playRevealFly, buildLoveHeart, playSpeedDrawExtra, SPEED_TOTAL_MS } from './ui/effects';
@@ -587,11 +596,62 @@ function playDraftToGameTransition(): void {
 /** 本局游戏选项（模式选择页勾选，掷硬币后随 createGame 生效） */
 let gameOptions = { ban: false, randomPool: false };
 
+/**
+ * G3 Task 4：L1 授权状态（**唯一实例**，模块级）。
+ * 为什么是模块级而不是传参：授权是「整机」性质，跨屏存在；而它**从不落盘**（红线 3），
+ * 所以刷新后必然回到 'unknown' → 会重新问（设计稿 §3.6 / 用户裁决 #5：拒绝标记只在内存）。
+ * ⚠️ 本行**在授权弹窗之前**执行 ⇒ 它在磁盘上**零写入**（对 `openL1Store()` 而言：
+ *    `set`/`remove` 调用数必须为 0）。玩家看到的是"在你允许之前不会写入任何**你的数据**"；
+ *    页面与离线所需的**程序文件**缓存不由这里负责（见 service worker 的披露）。
+ *    于是这里不许出现任何 set/remove；真正的"能不能写"由 `writeJson` 的惰性降级兜住
+ *    （写失败 ⇒ 本次会话退化为内存 + 如实提示）。
+ *    ⚠️ 这条腿是**回归守卫**（不是对现状的认证）：`openL1Store()` 的只读探测已由 Task 3 修复轮
+ *    落地并先于本提交；本行的纪律由 `tests/ui/local-consent.test.ts` 的接线腿钉住，
+ *    防止将来有人把写探针搬回模块级（那会让"每个玩家每次打开页面先写一次磁盘"复活）。
+ */
+const localStore = createLocalStore({ persistent: openL1Store() });
+
+/**
+ * 授权状态机的**唯一落点**：reducer（`nextConsentStep`，纯函数）算下一个状态，这里只把它写回 store。
+ * 为什么不让调用方直接 `localStore.grant()`：规则（含「show 不把 allowed 打回 ask」）只有一处，
+ * 且这一处能被单测真跑（tests/ui/local-consent.test.ts 的 reducer 组）。
+ */
+function consentStep(action: 'show' | 'grant' | 'deny' | 'reset'): void {
+  const next = nextConsentStep(localStore.consent(), action);
+  if (next === 'ask') localStore.ask();
+  else if (next === 'allowed') localStore.grant();
+  else if (next === 'denied') localStore.deny();
+  else localStore.reset();
+}
+
+/**
+ * 启动门（**全应用最外层的分支**）：没表过态就先问；表过态（allowed/denied）直接进主页。
+ * 红线 3：本函数在 `showHome()` 之前**不调用任何** writeNickName / writeDecks —— 同意前零写入。
+ */
+function showStartScreen(): void {
+  if (localStore.consent() === 'unknown') {
+    consentStep('show');
+    renderLocalConsent(root, {
+      onGrant: () => { consentStep('grant'); showHome(); },
+      onDeny: () => { consentStep('deny'); showHome(); },
+      // ⚠️ 占位：隐私说明**整屏**由 **Task 7**（本地数据与隐私屏）接管，本任务不调 showLocalData()。
+      //   阶段一评审后这里**不再是死胡同**：弹窗上的「隐私说明」按钮已就地展开完整隐私说明
+      //   （`src/ui/local-consent.ts` 的 renderPrivacyDetail，唯一出处 = privacy.ts 的 privacyLines()），
+      //   本回调只是给 Task 7 留的换页接缝，空实现无害。
+      openPrivacy: () => { /* G3 Task 7 填充：本地数据与隐私屏 */ },
+    });
+    return;
+  }
+  showHome();
+}
+
 function showHome(): void {
   renderHome(root, {
     startGame: () => showModeSelect(),
     openLibrary: () => renderLibrary(root, showHome),
     openRules: () => renderRules(root, showHome),
+    // G3 Task 7：本地数据与隐私屏（授权状态可见 + 清除本机数据 + 档案导入导出入口）
+    openLocalData: () => showLocalData(),
   });
 }
 
@@ -625,6 +685,36 @@ function showModeSelect(): void {
       netViewSeat = viewSeat;
       // 手牌可见性不在这里设：本页无该选项（I-2/N4 已把档位字段删掉，恒为信息遮蔽形态）。
       showCoin();
+    },
+  });
+}
+
+/**
+ * G3 Task 7：「本地数据与隐私」屏（附录 A 的 Task 7 行区：`showModeSelect` 之后）。
+ *
+ * 只做**接线**：三块内容与全部判据都在 `renderLocalData`（`src/ui/local-data.ts`，可在
+ * 无 jsdom 的 DOM 桩上真跑）。这里注入三个宿主能力：
+ *  - `back: showStartScreen` —— 回主界面；授权若被「改变选择」/「清除本机数据」重置成
+ *    `unknown`，`showStartScreen()` 会**重新问**一次（授权状态不落盘，这是唯一的重问路径）；
+ *  - `pickFile` / `saveFile` —— 档案的选择与落盘（浏览器实现只在**这一个地方**被构造）；
+ *  - `onImported` —— G3 **只报告，不重放**（`ReplayDriver` 属 G4）。用户可见的报告由
+ *    `renderLocalData` 写在屏内状态区（含"本阶段还不能直接重放"与逐条警告），所以这里
+ *    只留接缝：G4 接上 driver 时把"直接重放这一份"挂在这里，不需要再改本屏。
+ *
+ * ⚠️ **不给 `pickTimeoutMs`**（缺省 0 = 不设窗口）：协调者 2026-09-16 裁决 —— 给窗口会把
+ * "用户慢慢挑文件"误判成 `cancelled`（假取消比等待更糟）。代价（可能一直等）由屏上那条
+ * "等待你选择档案文件…"的**不阻塞**提示兜住（本屏不禁用任何按钮）。
+ */
+function showLocalData(): void {
+  renderLocalData(root, {
+    back: showStartScreen,
+    store: localStore,
+    pickFile: openArchivePicker(),
+    saveFile: openArchiveSink(),
+    onImported: (file, warnings) => {
+      // G3 只报告，不重放（ReplayDriver 属 G4）：`file` / `warnings` 是给 G4 的接缝。
+      void file;
+      void warnings;
     },
   });
 }
@@ -811,7 +901,8 @@ gameBus.subscribe((e) => {
   }
 });
 // 2026-09-03：应用入口 = 主页面（开始游戏 → 掷硬币 → 草稿 → 对局）
-showHome();
+// G3 Task 4：入口改为**启动门** —— 首次进入先过授权弹窗（同意前零写入），表过态则直进主页。
+showStartScreen();
 // 常驻特效层随滚动/缩放重新对齐：已编译环（compiledFx）、暗2 黑烟（smokeOverlays）、
 // 能量扫描线（scanOverlays）与 FX-3 念能粒子/瘟疫浓雾（psychicParticles/plagueMists）、
 // FX-5 冷漠灰雾/冷漠2 马赛克/灵魂-0 手牌区光芒/灵魂-1 手牌卡护角
