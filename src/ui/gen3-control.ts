@@ -16,7 +16,7 @@ import { cardPointValue, getLineValue } from '../core/state/create';
 import { cardCommandDisabled, isUncovered } from '../core/effects/context';
 import { visibleRectOf } from './gen3-util';
 // G2 修正 R3：控制轨**端归属**按座位判（自己端在下 / 对手端在上）；热座 `null` ⇒ 走改动前的左右逻辑。
-import { fxTrackEndPos, fxTrackFallbackPct, fxViewSeat } from './fx-seat';
+import { fxOuterForSeat, fxTrackEndPos, fxTrackFallbackPct, fxViewSeat } from './fx-seat';
 import { protocolColorOf } from './protocol-colors';
 
 /* ============================== 小工具 ============================== */
@@ -895,14 +895,122 @@ export function gen3ControlChangedFx(
   window.setTimeout(() => l.remove(), 1500);
 }
 
+/** 上述"相等即相切"的亚像素余量（px）。**只**用来把"相切"变成"明确不相交"。 */
+const CTRL_CMP_CLEARANCE = 0.01;
+/** 对比条与"能量槽协议侧外缘"之间留的空隙（px）。
+ *
+ * ⚠️ **必须 = 条高（`CTRL_CMP_BAR_H`）**：能量槽与协议卡面之间只有 `gap: 6px`
+ * （`.net-side` / `.lane-row` 的 flex gap，实测 6.00）。条从"协议侧那条边"再让开 6px
+ * 之后正好**整根**落进这条缝里（实测远程页：协议 holder 底 689.66 / 条 683.64..689.64 /
+ * 能量槽顶 695.66 ⇒ 与协议卡面**不相交**、离能量槽 6.00px、离链路槽 28.72px）。
+ * 让开量小于条高就会越出到协议卡面上。
+ * 再加 `CTRL_CMP_CLEARANCE` 的 0.01px：缝宽是**另一个** flex gap（6px）与条高相等，
+ * 亚像素布局（dpr=1.25/1.5 的机器）下可能算出 5.9999 ⇒ 条与协议卡面判"相交"。 */
+const CTRL_CMP_OUTER_GAP = 6 + CTRL_CMP_CLEARANCE;
+/** 对比条的高度（px）—— **条高与条位的唯一出处**。
+ *
+ * ⚠️ 它由 `cmp.style.height` **内联**写出（与 left/top/width 同一族：几何全在 JS 里），
+ * **不是**从 CSS 读回来的：`styles-gen3-sync.css` 的 `.g3ctrl-cmp { height: 9px }` 是
+ * 那三个红线文件之一，本轮**不许改**（那里只加了一段说明注释）。内联值优先于样式表，
+ * 于是"条高"只有这一个真相（没有两处会漂移），而它又必须精确等于**能量槽与协议卡面之间
+ * 那条 flex 缝的宽度（6px）**，条才整根落进缝里、不压任何卡。 */
+const CTRL_CMP_BAR_H = 6;
+/** 数值盒（`.g3ctrl-cmp-num`）的**让开量**（px）。
+ *
+ * 它是个 `position: fixed` 的收缩盒（无 width），实测宽 13.72px（11px 等宽字体 + 3px×2 内边距）。
+ *  - `NUM_W`：只用来算"紧贴条端外侧"的横排落点（`left = barLo − NUM_W − NUM_GAP`）；
+ *  - `NUM_GAP`：数字与条之间的空隙（两种排布共用）。
+ * ⚠️ 这两个数**不参与**"条与卡是否相交"的判据（那条只由 `CTRL_CMP_OUTER_GAP` 决定），
+ *    所以字体换一个等宽字族只会让数字离条远一点/近一点，不会让条压到卡上。 */
+const CTRL_CMP_NUM_W = 14;
+const CTRL_CMP_NUM_GAP = 4;
+/** 两侧数值盒的高度（px）。与 `styles-gen3-sync.css` 的 `.g3ctrl-cmp-num` 同一约定：
+ *  数字盒比条高，所以按**条与数字同轴心**定位（否则数字会单方面越出到协议卡面上）。 */
+const CTRL_CMP_NUM_H = 18;
+
+/** 只用到矩形的两条边（结构类型 ⇒ 桩矩形与真 DOMRect 都能直接喂进来）。 */
+export interface AxisRect { left: number; top: number; right: number; bottom: number }
+
+/**
+ * 沿**链路轴**的"协议侧外缘"与"再往协议一侧"的方向（R23 修法的唯一出处）。
+ *
+ * ## 为什么必须是一个纯函数
+ *
+ * `gen3ControlCheckFx` 同时服务两种完全不同的布局（远程页竖排 / 热座横排），而
+ * "哪里是协议那一侧"在两种布局里**来源不同**：
+ *  - **远程页**（`seat !== null`）：全局轴就是 y，协议侧边 = 能量槽的 `top`/`bottom`
+ *    （链路在 `outer` 那一端 ⇒ 协议必然在**反侧**）；
+ *  - **热座**（`seat === null`）：全局轴是 x，能量槽是"竖条 + 绝对定位在槽的外侧"
+ *    （`render.ts` 的 `.lane-row` 顺序 = `槽 / 协议 / 协议 / 槽`，两侧镜像）⇒
+ *    协议侧边 = 能量槽的 `left`/`right`。
+ *
+ * ⚠️ **热座那一支不能用"`outer` 大端/小端"代替**：热座两半的 `outer` 是 `start`/`end`
+ * （P0 链路在左、P1 在右），而**协议在两半都朝列中间** —— 全局轴上的"小端/大端"在左半列里
+ * 恰好相反（P0 的协议在它自己那一侧的**右**边）。所以热座那一支用**协议格矩形**定方向：
+ * 协议格的中心在能量槽的哪一侧，那一侧就是"协议侧"（`renderProtocolCell` 的产物，
+ * 与"视觉上谁挨着谁"同一个事实，不依赖任何比例/中值假设）。
+ *
+ * 返回 `{ at, dir }`：`at` = 协议侧那条边的坐标；`dir` = 从能量槽往协议一侧的**单位方向**
+ * （+1 = 坐标增大方向）。调用方据此把条放在"能量槽盒外、贴那条边"的位置。
+ *
+ * @param battery 该线**己方能量槽**的矩形
+ * @param protos  该线**同侧协议格**的矩形（热座分支用它定方向；远程分支不用 —— 那一支的
+ *                方向由 `outer` 唯一决定，协议必然在链路外端的**反侧**）
+ * @param outer   该侧链路的"外端"（热座 = 绝对玩家左右；远程 = 自己下 / 对手上）
+ * @param seat    `null` = 热座（横排）／非 null = 远程页（竖排）
+ */
+export function checkBarProtocolEdge(
+  battery: AxisRect,
+  protos: AxisRect | null,
+  outer: 'start' | 'end',
+  seat: PlayerId | null,
+): { at: number; dir: 1 | -1 } {
+  if (seat !== null) {
+    // 远程页：竖排。协议侧 = 链路（`outer` 那一端）的**反侧** ⇒ 外端是小端时协议在大端。
+    return outer === 'end' ? { at: battery.top, dir: -1 } : { at: battery.bottom, dir: 1 };
+  }
+  // 热座：横排。协议格在能量槽的左边 ⇒ 协议侧边 = 能量槽左边、方向 -1；反之 +1。
+  // ⚠️ 取不到协议格矩形时退回"按 `outer` 反推"（热座页协议格一定存在 —— `renderLaneRow`
+  //    恒产 `槽/协议/协议/槽`；这条兜底只在桩或半截 DOM 上可达，且方向与远程页同构）。
+  if (!protos) return outer === 'start' ? { at: battery.right, dir: 1 } : { at: battery.left, dir: -1 };
+  const protoCenter = (protos.left + protos.right) / 2;
+  const batteryCenter = (battery.left + battery.right) / 2;
+  return protoCenter < batteryCenter ? { at: battery.left, dir: -1 } : { at: battery.right, dir: 1 };
+}
+
 /**
  * C4：控制权判定阶段。
  * 2026-09-13 重做（用户实测反馈"每回合链路蹦出奇怪粗线条"）：旧版把 14px 高的对比条**横铺整条
  * `.stack-slot`** 且没有任何文字 → 看起来就是一条横在卡上的怪线。现在改为：
- *  - 对比条**贴在双方能量槽（数值显示）正下方**，宽度≈能量槽宽（短条，不再横跨链路）；
+ *  - 对比条**贴在双方能量槽（数值显示）靠协议那一侧**，宽度≈能量槽宽（短条，不再横跨链路）；
  *  - 条上带 `你/对手` 双色填充 + 分隔线 + 扫描线，旁边有"控制权判定"标题；
  *  - 判定结果用文字明确给出：`获得控制组件` / `未满足 2 条线领先`（Q5 判定失败也要有反馈）；
  *  - 领先的两条线能量槽加金色光圈，让"哪两条线领先"一眼可见。
+ *
+ * ## R23：对比条为什么从"贴能量槽的链路侧"改成"贴能量槽的**协议侧**"
+ *
+ * 旧算式是"能量槽 `anchor` 的**下边**再让开 5px"（`src` 里那句 `cmp.style.top` 的右半边）。
+ * ⚠️ 这里**故意不逐字复述**那个算式：`tests/ui/gen3-control-fx.test.ts` 有一条源码判据
+ * 禁止它再出现（判据的语义就是"不许再用这个算式定位"），注释里照抄会让判据假红。
+ * 那句里的"下方"是 **R22 之前**的几何事实：那时能量槽挂在每侧的**最外端**，它的"下方"
+ * 落在链路框**之外**的空处（热座页至今如此 —— 能量槽是槽外侧的竖条）。
+ * R22 把能量槽移到**链路头部**（夹在本侧协议与本侧链路之间）之后，同一句算式算出来的位置
+ * 正好压在本侧链路槽上（1500×2400、viewSeat=0 实测：条顶 717.36 落在 `.stack-slot` 顶边
+ * 718.36 之**内** 1px，数字盒顶 718.36 压进去 18.5px）—— 这就是"对比条落到链路框身上"。
+ *
+ * 为什么换成**协议侧**而不是随便换一条：能量槽只有两条长边，一条朝链路、一条朝协议。
+ * R22 之后朝链路那条边与链路槽之间只有 `gap: 6px`（实测 6.00），而条 6px + 数字盒必然更高
+ * ⇒ 放在那一侧**无论怎么调**都会压住链路。朝协议那条边外面同样是 6.00px 的 flex gap
+ * ⇒ 条整根落进那条缝（实测：协议卡面下沿 689.66 / 条 683.64..689.64 / 能量槽上沿 695.66
+ * ⇒ 与协议卡面**相切不相交**、离能量槽 6.00px、离链路槽 718.36 有 **28.72px** 余量）。
+ * ⇒ 这是新布局下**唯一不压任何卡**的落点。
+ *
+ * ⚠️ 数字盒（`g3ctrl-cmp-num`）**必须与条同帧一起挪**（条换了边而数字留在旧边 = 一组悬空的数）
+ * ⇒ 两者都由下面同一个 `edge`（协议侧那条边）派生，不各写一句偏移。
+ *
+ * ⚠️ 热座页（`fxViewSeat() === null`）走的是**同一条算式**：热座的能量槽是槽外侧的竖条、
+ * 协议在列中间（`styles.css:178` 的 `.stack-slot.pN .battery`），"协议侧那条边"由
+ * `checkBarProtocolEdge` 用**协议格矩形**判（两页共用的唯一出处）。
  */
 export function gen3ControlCheckFx(
   p: { player: PlayerId; wins: number; leading: Line[]; gained: boolean },
@@ -931,17 +1039,45 @@ export function gen3ControlCheckFx(
     const opp = getLineValue(s, foe, line);
     const total = Math.max(1, own + opp);
     const lead = leading.has(line);
-    // 对比条贴在该线【己方能量槽】下方（宽度≈能量槽 → 短条、有归属感）
+    // 对比条贴在该线【己方能量槽】**靠协议那一侧**（宽度≈能量槽 → 短条、有归属感）。
+    // ⚠️ R23：方向由 `checkBarProtocolEdge` 唯一给出（它同时覆盖远程竖排与热座横排），
+    //    本函数不再自己判"上/下/左/右"。
     const mine = batteryNode(p.player, line);
     const mineR = mine ? rectOf(mine) : null;
-    const anchor = mineR
-      ?? (() => { const sl = slotNode(p.player, line); return sl ? rectOf(sl) : null; })();
+    const slotR = (() => { const sl = slotNode(p.player, line); return sl ? rectOf(sl) : null; })();
+    const cellR = (() => {
+      const c = document.querySelector<HTMLElement>(`.protocol-cell[data-player="${p.player}"][data-line="${line}"]`);
+      return c ? rectOf(c) : null;
+    })();
+    const anchor = mineR ?? slotR;
     if (!anchor) continue;
+    const axisIsY = fxViewSeat() !== null;   // 与 `controlTrackAxis()` 同一判据（远程竖 / 热座横）
+    const edge = checkBarProtocolEdge(anchor, cellR, fxOuterForSeat(p.player, fxViewSeat()), fxViewSeat());
+    const barH = CTRL_CMP_BAR_H;
+    // 条沿轴的起点：从"能量槽协议侧那条边"（`edge.at`）朝协议一侧让开 `CTRL_CMP_OUTER_GAP`，
+    // 再从那里**朝能量槽方向**长出 `barH` ⇒ 条整根落在能量槽协议侧那条边之外的那条缝里。
+    const barLo = edge.dir > 0 ? edge.at + CTRL_CMP_OUTER_GAP : edge.at - CTRL_CMP_OUTER_GAP - barH;
+    const barHi = barLo + barH;
     const barW = Math.max(64, Math.min(150, anchor.width));
     const cmp = el('div', `g3ctrl-cmp${lead ? ' lead' : ''}${p.gained ? '' : ' failed'}`);
-    cmp.style.left = `${anchor.left + anchor.width / 2 - barW / 2}px`;
-    cmp.style.top = `${anchor.bottom + 5}px`;
-    cmp.style.width = `${barW}px`;
+    // ⚠️ **条高内联写出**：样式表里的 `.g3ctrl-cmp { height: 9px }` 所在文件是红线文件
+    //    （本轮一个字节都不改），而新落点要求条高 == "协议卡面 → 能量槽"那条 flex 缝的宽
+    //    （6px），否则条会越出到协议卡面或能量槽上。内联值优先 ⇒ 高度只有这一个出处。
+    cmp.style.height = `${barH}px`;
+    // 条落在"能量槽盒外、贴协议侧那条边"的位置：沿协议轴的起点用 `barLo`，另一条轴取能量槽中心。
+    // ⚠️ 两条轴**各取各的中心**（轴心混用会让竖排的条横向跑到别的列上 —— R23 第一版就是
+    //    把 (top+bottom)/2 当成了 left，实测条横移到相邻列，本轮的 DOM 腿把它抓住了）。
+    if (axisIsY) {
+      const axisCenterX = (anchor.left + anchor.right) / 2;
+      cmp.style.left = `${axisCenterX - barW / 2}px`;
+      cmp.style.top = `${barLo}px`;
+      cmp.style.width = `${barW}px`;
+    } else {
+      const axisCenterY = (anchor.top + anchor.bottom) / 2;
+      cmp.style.left = `${barLo}px`;
+      cmp.style.top = `${axisCenterY - barH / 2}px`;
+      cmp.style.width = `${barW}px`;
+    }
     const ownFill = el('i', 'g3ctrl-cmp-own');
     ownFill.style.width = `${((own / total) * 100).toFixed(1)}%`;
     const oppFill = el('i', 'g3ctrl-cmp-opp');
@@ -950,14 +1086,21 @@ export function gen3ControlCheckFx(
     cmp.appendChild(oppFill);
     cmp.appendChild(el('i', 'g3ctrl-cmp-scan'));
     l.appendChild(cmp);
-    // 数值（贴在条两端，明确"这是数值对比"）
+    // 数值（贴在条两端，明确"这是数值对比"）：与条**同一个轴心**（数字盒比条高，居中让视觉重心对齐）。
+    const numCenter = (barLo + barHi) / 2;
     const ownNum = el('i', 'g3ctrl-cmp-num own', String(own));
-    ownNum.style.left = `${anchor.left + anchor.width / 2 - barW / 2 - 16}px`;
-    ownNum.style.top = `${anchor.bottom + 6}px`;
-    l.appendChild(ownNum);
     const oppNum = el('i', 'g3ctrl-cmp-num opp', String(opp));
-    oppNum.style.left = `${anchor.left + anchor.width / 2 + barW / 2 + 4}px`;
-    oppNum.style.top = `${anchor.bottom + 6}px`;
+    if (axisIsY) {
+      const axisCenterX = (anchor.left + anchor.right) / 2;
+      ownNum.style.left = `${axisCenterX - barW / 2 - CTRL_CMP_NUM_W - CTRL_CMP_NUM_GAP}px`;
+      oppNum.style.left = `${axisCenterX + barW / 2 + CTRL_CMP_NUM_GAP}px`;
+    } else {
+      ownNum.style.left = `${barLo - CTRL_CMP_NUM_W - CTRL_CMP_NUM_GAP}px`;
+      oppNum.style.left = `${barHi + CTRL_CMP_NUM_GAP}px`;
+    }
+    ownNum.style.top = `${numCenter - CTRL_CMP_NUM_H / 2}px`;
+    oppNum.style.top = `${numCenter - CTRL_CMP_NUM_H / 2}px`;
+    l.appendChild(ownNum);
     l.appendChild(oppNum);
     // 领先线：双方能量槽加金圈
     if (lead) {

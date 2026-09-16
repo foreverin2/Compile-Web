@@ -319,7 +319,19 @@
   100% { opacity: 0; transform: translate(-50%, -60%) scale(1); }
 }
 
-/* 短对比条：贴在该线能量槽正下方（宽度≈能量槽，不再横跨整条链路） */
+/* 短对比条：贴在该线能量槽**靠协议那一侧**（宽度≈能量槽，不再横跨链路）。
+ *
+ * ── R23：几何全部由 `gen3-control.ts` 内联给出 ──
+ * 旧算式是 `cmp.style.top = 电池.bottom + 5`，那句在 **R22 之前**成立（那时能量槽在每侧
+ * **最外端**，它的"下方"落在链路框之外的空处）。R22 把能量槽移到**链路头部**（夹在本侧
+ * 协议与本侧链路之间）之后，同一个落点正好压在本侧链路槽上（实测条顶 717.36 落在
+ * `.stack-slot` 顶边 718.36 **之内** 1px）。R23 把落点改到能量槽的**协议侧**那条边。
+ *
+ * ⚠️ **`height` 在这里的 9px 已被 JS 内联覆盖**：条要**整根**落进"协议卡面 → 能量槽"
+ * 那条 6px 的 flex 缝里才不碰卡，而 R23 把条高定为 6px（`CTRL_CMP_BAR_H`，`gen3-control.ts`）
+ * —— 该常量是**唯一出处**，由 `cmp.style.height` 内联写出（与 `.g3ctrl-cmp` 的 left/top/width
+ * 同一族：几何全在 JS 里，两处漂移不可能发生）。本行保留原值只是**不改这三个红线文件**的要求，
+ * ⚠️ 不要把它当成"真实高度"读。 */
 .g3ctrl-cmp {
   position: fixed; height: 9px; border-radius: 5px; overflow: hidden; pointer-events: none;
   background: rgba(12, 14, 20, 0.7);

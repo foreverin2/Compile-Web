@@ -137,7 +137,15 @@ describe('批次 D 守卫：控制权族 + 常驻层', () => {
     expect(controlTs, 'C4 仍在整条 stack-slot 上铺条').not.toMatch(/bar\.style\.width = `\$\{r\.width \+ 12\}px`/);
     expect(controlTs).toContain("el('div', 'g3ctrl-caption'");
     expect(controlTs).toContain('g3ctrl-result');
-    expect(controlTs).toMatch(/anchor\.bottom \+ 5/);
+    // ⚠️ **R23 判据修正**：旧句钉的是 `anchor.bottom + 5`（= 贴能量槽的**链路侧**那条边）。
+    //    那句在 R22 之后正是缺陷本身 —— 能量槽移到链路头部后，它的"下方"就是本侧链路槽
+    //    （实测 1500×2400：条顶 717.36 落在 `.stack-slot` 顶边 718.36 之内 1px）。
+    //    **新句多查了什么**：条的位置必须由 `checkBarProtocolEdge`（协议侧那条边）派生，
+    //    且落点常量是具名的 `CTRL_CMP_OUTER_GAP`（不再是散落字面量 `+5`）。
+    //    "旧句为什么必须改"与行为证据见 `tests/ui/net-check-anchor.test.ts`（真跑腿）。
+    expect(controlTs, '对比条仍未走"协议侧那条边"的单一出处（R23）').toContain('checkBarProtocolEdge(');
+    expect(controlTs, '对比条落点又变回散落字面量（应是具名常量）').toMatch(/CTRL_CMP_OUTER_GAP/);
+    expect(controlTs, '对比条锚点又贴回了能量槽的链路侧（anchor.bottom + 5）').not.toMatch(/anchor\.bottom \+ 5/);
     expect(controlTs).toMatch(/Math\.min\(150,/);
     expect(controlTs).toContain("el('i', 'g3ctrl-lead-ring')");
     expect(controlTs).toContain('.stack-slot[data-player="${player}"][data-line="${line}"]');
@@ -146,6 +154,12 @@ describe('批次 D 守卫：控制权族 + 常驻层', () => {
     for (const cls of ['g3ctrl-caption', 'g3ctrl-result', 'g3ctrl-cmp', 'g3ctrl-cmp-own', 'g3ctrl-cmp-opp', 'g3ctrl-cmp-scan', 'g3ctrl-cmp-num', 'g3ctrl-lead-ring']) {
       expect(syncCss, `CSS 缺少 .${cls}`).toContain(`.${cls}`);
     }
+    // 条高：**唯一出处是 JS 常量**（`CTRL_CMP_BAR_H`），由 `cmp.style.height` 内联写出 ——
+    // ⚠️ 不能断言 CSS 里的 `height`：`styles-gen3-sync.css` 是红线文件（本轮不改），
+    //    那里保留着旧的 9px，真实高度由内联值赢。所以判据钉"内联写出用的常量是 6"。
+    expect(controlTs, 'JS 侧的条高常量不是 6（条会越出到协议卡面或能量槽上）').toMatch(/const CTRL_CMP_BAR_H = 6;/);
+    expect(controlTs, '条高没有内联写出（会被样式表的旧值 9px 接管 ⇒ 压到卡上）')
+      .toMatch(/cmp\.style\.height = `\$\{barH\}px`/);
   });
 
   it('C1/C2 落点锚定轨道实测位置 + 仅色欲驱动时才牵链条（2026-09-13 用户清单 #1/#8）', () => {
