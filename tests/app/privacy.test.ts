@@ -122,15 +122,21 @@ const BOUNDARY_DECLARATIONS: readonly PrivacyBoundaryDeclaration[] = [
   /* ── §8.1：离线缓存（"必须对玩家说明"） ── */
   {
     id: 'offline-cache-program-files',
-    text: '§8.1：离线缓存预缓存的是 app shell（程序文件：页面/脚本/样式/卡图）',
+    text: '§8.1：预缓存的是**程序外壳**（页面/脚本/样式/安装图标），不是整个游戏资源',
     group: 'offlineCacheNote',
-    requiredText: [/程序文件/, /页面[^。]*脚本[^。]*样式[^。]*卡图/],
+    requiredText: [/预缓存/, /程序文件/, /页面[^。]*脚本[^。]*样式[^。]*图标/],
+  },
+  {
+    id: 'offline-cache-runtime-assets',
+    text: '§8.1 + sw.js 实际行为：卡图等大体积资源只在**用过后**进运行期缓存，没看过的首次断网打不开',
+    group: 'offlineCacheNote',
+    requiredText: [/运行期缓存/, /卡图/, /用过之后/, /没看过的内容[^。]*打不开/],
   },
   {
     id: 'offline-cache-not-user-data',
-    text: '§8.1：缓存的不是用户数据（这是红线 1 的边界，须写清）',
+    text: '§8.1：两类缓存里都不是用户数据（这是红线 1 的边界，须写清）',
     group: 'offlineCacheNote',
-    requiredText: [/[^。]*不是用户数据/, /昵称[^。]*卡组[^。]*档案[^。]*对局记录[^。]*不在这个离线缓存里/],
+    requiredText: [/[^。]*不是用户数据/, /昵称[^。]*卡组[^。]*档案[^。]*对局记录[^。]*不在缓存里/],
   },
 ];
 
@@ -241,8 +247,8 @@ describe('隐私说明文案（§5.9 / §8.1）', () => {
         .map((m) => `- ${m.id} @ ${m.group} 缺 ${JSON.stringify(m.missing)}\n  该组文案：${m.groupText}`)
         .join('\n')}`,
     ).toEqual([]);
-    // 表本身的自检：13 条边界 + 5 个组都参与（重新数一遍，防止"表被删空"仍全绿）
-    expect(BOUNDARY_DECLARATIONS.length).toBe(13);
+    // 表本身的自检：14 条边界 + 5 个组都参与（重新数一遍，防止"表被删空"仍全绿）
+    expect(BOUNDARY_DECLARATIONS.length).toBe(14);
     expect(new Set(BOUNDARY_DECLARATIONS.map((d) => d.group)).size).toBe(PRIVACY_GROUPS.length);
     expect(new Set(BOUNDARY_DECLARATIONS.map((d) => d.id)).size).toBe(BOUNDARY_DECLARATIONS.length);
   });
@@ -268,6 +274,17 @@ describe('隐私说明文案（§5.9 / §8.1）', () => {
     const note = PRIVACY_COPY.offlineCacheNote.join('\n');
     expect(note).toMatch(/程序文件/);
     expect(note).toMatch(/不是用户数据/);
+    // ⚠️ 与 PWA 实现的一致性（2026-09-16 评审后收紧）：`public/sw.js` 只预缓存 app shell，
+    // 卡图**不**预缓存 ⇒ 文案不得再说"把卡图也缓存在本机"，必须区分
+    // 「预缓存 = 程序外壳（页面/脚本/样式/安装图标）」与「用过后才进运行期缓存 = 看过的卡图等资源」。
+    // 下面这条断言就是钉住那个区分的：把"卡图"写回预缓存那一句 ⇒ 必红。
+    const [precacheLine, runtimeLine] = PRIVACY_COPY.offlineCacheNote;
+    expect(note).toMatch(/运行期缓存/);
+    expect(note).toMatch(/用过之后/);
+    expect(note, '必须交代"没看过的内容首次断网打不开"这个代价').toMatch(/没看过的内容[^。]*打不开/);
+    expect(precacheLine, '预缓存那句不得再声称缓存了卡图').not.toMatch(/卡图/);
+    expect(precacheLine, '预缓存那句须写明预缓存的是程序外壳（含安装图标）').toMatch(/预缓存程序文件本身/);
+    expect(runtimeLine, '卡图只能出现在"用过后进运行期缓存"那句里').toMatch(/卡图/);
   });
 
   it('未实现的联机能力必须标注"上线后才适用"，其余组一条都不许带（不实陈述 = bug）', () => {

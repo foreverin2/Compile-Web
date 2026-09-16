@@ -51,7 +51,10 @@ export interface PrivacyCopy {
   localOnly: string[];
   /** 对端玩家能看到/看不到什么（P2P 直连的必然结果，§5.9 第 3 行） */
   peerVisible: string[];
-  /** §8.1：离线缓存缓存的是程序文件，不是用户数据 */
+  /**
+   * §8.1：离线缓存的**语义边界** —— 预缓存的是程序外壳（页面/脚本/样式/安装图标），
+   * 卡图等大体积资源只在**被用过之后**进运行期缓存，且两者都不是用户数据。
+   */
   offlineCacheNote: string[];
   /** §5.9 第 1、2 行：信令服务与 TURN 中继（**联机上线后才适用**） */
   signalAndRelay: string[];
@@ -72,8 +75,8 @@ export const PRIVACY_COPY: PrivacyCopy = {
     '真正的昵称只在双方直连的加密通道里交换，不经过任何中间服务器。',
   ],
   offlineCacheNote: [
-    '把网页安装为应用后，浏览器会把程序文件（页面、脚本、样式、卡图）缓存在本机，以便断网时也能打开。',
-    '缓存的不是用户数据：你的昵称、卡组、档案与对局记录都不在这个离线缓存里。',
+    '把网页安装为应用后，浏览器会预缓存程序文件本身（页面、脚本、样式与安装图标），断网时仍能打开游戏。',
+    '用过之后进入运行期缓存的只有看过的卡图等资源，没看过的内容第一次断网时打不开；缓存的这些都不是用户数据：你的昵称、卡组、档案与对局记录都不在缓存里。',
   ],
   signalAndRelay: [
     '（联机功能上线后才适用）信令服务只能看到房间码、IP 地址与连接时刻，看不到你的昵称、卡组、操作内容或对局数据。',
@@ -119,6 +122,7 @@ export type BoundaryId =
   | 'peer-cannot-see-deck'
   | 'peer-nickname-via-channel'
   | 'offline-cache-program-files'
+  | 'offline-cache-runtime-assets'
   | 'offline-cache-not-user-data'
   /* 下面两条不是设计稿里的边界，而是**表自身的**一致性判据 */
   | 'table-covers-gated-group'
