@@ -35,6 +35,11 @@
  */
 
 import type { PlayerId } from '../core/models/types';
+// R24（R16-3）：空手牌吸附到"张数占位块"足迹时，卡的半宽用**按页实测**的那个出处
+// （与 A1/A3/A5/A6/A9 的落点盒同一个）。⚠️ 依赖方向是单向的：`fx-card-size` **不** import 本文件
+// （它只读 DOM）⇒ 不会形成 fx-seat ⇄ fx-card-size 的循环 —— 与本文件顶部那条
+// "常量住在本文件、渲染层来取"的理由同源（那条正是为了避开循环依赖）。
+import { handCardBox } from './fx-card-size';
 // G3 修正：`localInsetCss` 要把屏幕帧方向按元素自身的旋转旋回本地帧 —— 角度类型走 fx-orient 的
 // 单一出处（`CardOrient`），本模块不自己另立一套 0/±90/180 的表示。
 // ⚠️ `fx-orient.ts` **不** import 本模块（它只放朝向的读/映射），故这里不构成循环依赖。
@@ -366,10 +371,51 @@ export function handOuterFor(hand: HTMLElement | null | undefined): FxOuter {
 }
 
 /**
+ * **R24（R16-3）：空手牌时的"张数占位块"足印** —— 远程页对手手牌吸附到它的中心。
+ *
+ * ## 为什么需要它
+ *
+ * 远程页对手手牌是 `handVisibility: 'count'` ⇒ `.hand[data-player="1"]` 里**没有 `.card`**，
+ * 只有一个 `.hand-count-placeholder`（"手牌 ×n"）。于是 `fxHandEndPoint` 走**空手牌兜底**
+ * 分支（`容器外缘 ± HAND_END_LIFT = 93`），而那个 93 是**热座量级**的让开量。
+ *
+ * **无头浏览器实测（2026-09-16）**：对手 `.hand` 的 rect = `397,177 93.42 × 18`，
+ * `.hand-count-placeholder` 的 rect = `414.13,177 59.17 × 18` ⇒
+ *  - 现状落点 x = `490.42 + 93` = **583.42**
+ *  - 吸附到占位块 = `473.3 + 93.42/2` = **519.8**（**比现状左 63.62px**）
+ *
+ * 现状那两个数都说不通：`.hand` 外缘（490.42）是**信息块的右边缘**、比占位块自己还靠右 17px；
+ * 而 93 又是"整卡高的一半"量级的让开量，落在这个 18px 高的小块旁边。
+ *
+ * ## 为什么只在"**有**占位块"时生效（热座零变化是构造性的）
+ *
+ * 热座页**根本不产出** `.hand-count-placeholder`（它由 `render.ts` 的
+ * `opts.handVisibility === 'count'` 分支产出，而那个档位**只有远程页用**；
+ * 产出点唯一，见 `render.ts` 的 `renderHand`）。
+ * ⇒ 热座页这个探针**恒为 null** ⇒ 走原来的 `vOuterEdgeOf(rect, …) + step * lift`，逐字不变。
+ * 这与本文件 `handReversed` / `handOuterFor` 的"按容器类名判、不按绝对玩家号判"是同一套纪律。
+ *
+ * ## 诚实边界
+ *
+ * 占位块是"信息块的**后代**"（R21 起塞进对手信息组件内），它的位置与"手牌该落在哪"之间
+ * 严格说没有 CSS 契约 —— 本函数**确认过**的只有"它是这一页 `.hand` 里唯一能代表手牌槽的盒子"。
+ * 若将来把张数块搬到别处，判据会跟着搬（它按 `.hand` 子树找），不会静默失效成 0。
+ */
+export function handCountPlaceholderOf(hand: HTMLElement | null | undefined): HTMLElement | null {
+  const q = (hand as { querySelector?: (s: string) => unknown } | null | undefined)?.querySelector;
+  if (typeof q !== 'function') return null;
+  return (q.call(hand, '.hand-count-placeholder') as HTMLElement | null) ?? null;
+}
+
+/**
  * **手牌末尾**落点（新卡会落在哪）：与 `effects/index.ts` 的 `handEndPos` 逐字段等价，
  * 只是"哪一侧"从绝对玩家号改为容器自身排列方向。
  *
  * 反空集合：`hand` 缺席时返回全 0，与改动前 `{ top: 0, height: 0, left: 0, right: 0 }` 兜底同义。
+ *
+ * ⚠️ **R24（R16-3）**：空手牌分支多了一条"张数占位块"退路 —— 见 `handCountPlaceholderOf`。
+ * 有占位块时，落点 = **占位块外缘 ± `handCardBox().w / 2`**（吸附到那一格的**足迹中心**），
+ * 而不是 `容器外缘 ± 93`。**热座页没有占位块 ⇒ 恒走原分支，逐字不变**。
  */
 export function fxHandEndPoint(
   hand: HTMLElement | undefined, lead = HAND_END_LEAD, lift = HAND_END_LIFT,
@@ -384,6 +430,13 @@ export function fxHandEndPoint(
   if (last) {
     const r = last.getBoundingClientRect();
     return { x: vOuterEdgeOf(r, outer, 'x') + step * lead, y };
+  }
+  // R24：有"张数占位块"时吸附到它的足迹（远程页对手手牌）。宽用 `handCardBox()` ——
+  // 与 A1/A3/A5/A6/A9 那些落点盒**同一个**"按页实测尺寸"出处（热座/读不到时它是 130）。
+  const ph = handCountPlaceholderOf(hand);
+  if (ph) {
+    const pr = ph.getBoundingClientRect();
+    if (pr.width > 0) return { x: vOuterEdgeOf(pr, outer, 'x') + step * (handCardBox().w / 2), y };
   }
   return { x: vOuterEdgeOf(rect, outer, 'x') + step * lift, y };
 }

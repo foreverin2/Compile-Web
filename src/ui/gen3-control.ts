@@ -928,6 +928,95 @@ const CTRL_CMP_NUM_GAP = 4;
  *  数字盒比条高，所以按**条与数字同轴心**定位（否则数字会单方面越出到协议卡面上）。 */
 const CTRL_CMP_NUM_H = 18;
 
+/**
+ * 判定标题/结果与**控制组件下沿**之间的让开量（px）——只在"上方放不下、改挂下方"那一支用。
+ *
+ * 取值 2 的来历（**探针实测的四候选对比**，见报告 §2）：
+ *  - `mr.bottom + CTRL_CAP_GAP`（+26）⇒ 标题盒 154..180，**完全压在链路框顶部**（与 `.stack-slot`
+ *    重叠 2852px² = 整块标签的面积）；
+ *  - `mr.bottom + 2` ⇒ 标题盒 143..169，与链路框只交 **1488px²**（约一半），且**完全不覆盖控制卡**
+ *    （控制卡底 = 141）—— 这是四个候选里代价最小的一个。
+ * 热座页的控制组件与放置区之间只有 `141 → 152` 这 9px 的页面留白（探针占用图实测），
+ * 任何"整条 26px 高的标签"都会越界 ⇒ 这是**残余观感项**，已列入人眼验收清单。
+ */
+const CTRL_CAP_BELOW_LIFT = 2;
+
+/** "挂到组件下方"那一支里，**结果**与标题之间的额外空隙（px）。
+ *  标题与结果各占一段（`labelH + 这个值` 的中心距）⇒ 结果一出现不会盖住标题
+ *  （旧实现两者同点，实测标题被盖 96%~100%，见 `controlCheckLabelPoint` 的头注）。 */
+const CTRL_CAP_STACK_GAP = 4;
+
+/**
+ * 判定标题/结果与控制组件之间的让开量（px）。原值 `26`（"挂在控制组件上方"），R24 提为具名常量。
+ */
+const CTRL_CAP_GAP = 26;
+
+/**
+ * 判定标题盒（`.g3ctrl-caption`）的**标称高度**（px）。
+ *
+ * 它只用来回答"上方够不够放整条标题"（见 `controlCheckLabelPoint`），**不**写进 DOM
+ * （高度由字体与内容决定，实测 25.19）。取 26 的理由：实测值 25.19 向上取整 ⇒
+ * "上方刚好放得下"时不会因为小于 1px 的字体渲染差而改走下方分支（那会让热座/远程
+ * 两种页面的分界在临界窗口尺寸下抖动）。⚠️ 它与 `CTRL_CAP_GAP` 数值相同纯属巧合
+ * （一个是"让开量"，一个是"标题自身高度"），**不要合并**这两个常量。
+ */
+const CONTROL_CHECK_LABEL_H = 26;
+
+/**
+ * 判定标题/结果的**落点**（R24 修法的唯一出处）。返回**两个** y：
+ * 标题（"控制权判定 · P1"）与结果（"获得控制组件 / 未满足…"）。
+ *
+ * ## 为什么需要一个函数（无头实测的两条缺陷）
+ *
+ * 原实现只有一句：`capY = mr.top − 26`，并把它**同时**交给标题与结果（`mr` = `.control-module`）。
+ *
+ *  **缺陷 ①（整条标题跑出视口）**：远程页控制轨在页面中部（实测 module top = 471.67）⇒
+ *  标题落在 y=433，完整可见；但**热座页**控制组件就在页面最顶端（实测 module top = **14**）
+ *  ⇒ `capY = −12`，标题盒（高 25.19）实测 rect = **−24.59 .. 0.59** —— **96% 在视口之上**
+ *  （`elementFromPoint` 七个采样点全部落在视口外）⇒ 那四个字在热座页根本看不见。
+ *
+ *  **缺陷 ②（结果把标题整条盖住）**：两者共用**同一个中心点**且 `position: fixed`，
+ *  而结果在 DOM 里更靠后 ⇒ 结果一出现就压住标题。实测两页都被盖：
+ *   - 远程页：标题 634.47,335.08..758.47,360.27 / 结果 640.47,333.27..752.47,362.07 ⇒ 盖住 **96.0%**；
+ *   - 热座页：标题 422.50,143.41..546.50,168.59 / 结果 428.50,141.60..540.50,170.40 ⇒ 盖住 **100.0%**。
+ *  ⇒ 标题只在结果出场之前（~0.62s）闪一下，此后"控制权判定"四个字**永远读不到**。
+ *
+ * ## 判据与两支
+ *
+ *  - **上方放得下**（标题盒顶 ≥ 0 且盒底 ≤ 视口高）：标题走 `module.top − CTRL_CAP_GAP`
+ *    （与改动前**逐字同值** ⇒ 远程页测量值不变），结果**与标题同点** —— 这一支维持
+ *    "先标题、后结果"的同点替换语义（原设计的表达方式，不改）。
+ *  - **放不下**：标题挂到 `module.bottom + CTRL_CAP_BELOW_LIFT` 之下（盒顶 2px 在组件外、
+ *    不覆盖控制卡），结果再往下让开 **一条标签高**（`labelH + CTRL_CAP_STACK_GAP`）
+ *    ⇒ 两条各占一段，**不再互相覆盖**。
+ *
+ * ## 热座页的代价（如实记录）
+ *
+ * 热座页控制组件与放置区之间只有 `141 → 152` 的页面留白（探针占用图实测），
+ * 两行 26px 高的标签**必然**越进链路框顶部（标题 143..169、结果 171..201；链路框从 162 开始
+ * ⇒ 相交面积约 1488 / 2600px²）。这是"两条文字都可见"的唯一解 ⇒ **残余观感项**，
+ * 已列入人眼验收清单（四个候选的实测重叠量见报告 §2）。
+ *
+ * @param module 控制组件（`.control-module`）的 rect —— 只要 `left`/`width`/`top`/`bottom`
+ * @param labelH 标题盒高（实测 `.g3ctrl-caption` 的 `offsetHeight`，随字体渲染约 25.19）
+ * @param viewportH 视口高（`window.innerHeight`）
+ * @returns `{ x, captionY, resultY }` —— 三者都是**中心锚点**（CSS 是 `fixed` + `translate(-50%,-50%)`）
+ */
+export function controlCheckLabelPoint(
+  module: { left: number; width: number; top: number; bottom: number },
+  labelH: number,
+  viewportH: number,
+): { x: number; captionY: number; resultY: number } {
+  const x = module.left + module.width / 2;
+  const above = module.top - CTRL_CAP_GAP;
+  // "放得下"= 标题盒整条都在视口内（盒顶 ≥ 0 且盒底 ≤ 视口高）。
+  const fitsAbove = above - labelH / 2 >= 0 && above + labelH / 2 <= viewportH;
+  if (fitsAbove) return { x, captionY: above, resultY: above };
+  const captionY = module.bottom + CTRL_CAP_BELOW_LIFT + labelH / 2;
+  const resultY = captionY + labelH + CTRL_CAP_STACK_GAP;
+  return { x, captionY, resultY };
+}
+
 /** 只用到矩形的两条边（结构类型 ⇒ 桩矩形与真 DOMRect 都能直接喂进来）。 */
 export interface AxisRect { left: number; top: number; right: number; bottom: number }
 
@@ -1019,18 +1108,21 @@ export function gen3ControlCheckFx(
   const l = layer('g3ctrl-check-layer', Z_CTRL);
   const foe: PlayerId = p.player === 0 ? 1 : 0;
   const leading = new Set(p.leading);
-  // 标题 + 结果（挂在控制组件上方，避免"凭空出现"）
+  // 标题 + 结果：挂在控制组件旁边（优先上方；上方放不下时挂到下方并把两者错开）。
+  // ⚠️ R24：落点算式收进 `controlCheckLabelPoint`（唯一出处，可喂矩形单测）——判据与实测见它的头注。
   const mod = document.querySelector<HTMLElement>('.control-module');
   const mr = mod ? rectOf(mod) : null;
-  const capX = mr ? mr.left + mr.width / 2 : window.innerWidth / 2;
-  const capY = mr ? mr.top - 26 : 40;
+  const cap = mr
+    ? controlCheckLabelPoint(mr, CONTROL_CHECK_LABEL_H, window.innerHeight)
+    : { x: window.innerWidth / 2, captionY: 40, resultY: 40 };
+  const capX = cap.x;
   const caption = el('div', 'g3ctrl-caption', `控制权判定 · P${p.player + 1}`);
   caption.style.left = `${capX}px`;
-  caption.style.top = `${capY}px`;
+  caption.style.top = `${cap.captionY}px`;
   l.appendChild(caption);
   const result = el('div', `g3ctrl-result ${p.gained ? 'ok' : 'no'}`, p.gained ? '获得控制组件' : `未满足（领先 ${p.wins} 条，需 2 条）`);
   result.style.left = `${capX}px`;
-  result.style.top = `${capY}px`;
+  result.style.top = `${cap.resultY}px`;
   result.style.animationDelay = '620ms';
   l.appendChild(result);
 

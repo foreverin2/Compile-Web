@@ -17,7 +17,8 @@ import { actionCn } from '../core/log';
 import { cardCommandDisabled } from '../core/effects/context';
 import { downloadLog } from './diag';
 import { buildTornadoFx } from './fx-tornado';
-// G2 修正 R15-A：拖拽打牌幽灵盒的**按页取值**尺寸（热座 130×178.8；远程页 100.572×137.601）。
+// G2 修正 R15-A：拖拽打牌幽灵盒的**按页取值**尺寸（热座 130×178.8；远程页**实测** 93×128，
+// 由 `--card-h: 130` 派生 —— R15-A 手记的 100.572×137.601 是 `--card-h: 140` 时代的数）。
 // 被拖的是**手牌卡**（`bindCardDrag` 的 `node`），而幽灵挂在 `document.body` 上
 // ⇒ `.net-hands .card` 那条覆盖规则**命不中它**（见 `bindCardDrag` 里 beginDrag 的注释）。
 import { handCardBox } from './fx-card-size';
@@ -28,7 +29,11 @@ import { buildDove, buildLakeSword, spawnCourageSparks, startLuckDiceFx, startCl
 import { fitRotatedProtocol } from './zoom-layout';
 // G2 Task 3：朝向类型（单一出处 src/ui/fx-orient.ts）。这里只**用类型**驱动朝向参数，
 // 运行时判定仍全部走 orientOf（FX 侧）；本文件是**产出方**，允许命名朝向类名。
-import type { CardOrient } from './fx-orient';
+// ⚠️ **R24（Z1）起本文件也读 `orientOf`**：拖拽幽灵要按**落点槽里那张卡**的卡面朝向预览，
+// 而判据**只能取自 DOM** —— `render.ts` **不许**读 `fxViewSeat()`（红线：热座页源码里
+// 不出现"座位"这个概念，见 main.ts 的 FX 座位注释与 fx-seat.ts 头注）。
+// `orientOf` 读的是**卡面**朝向类（`rot-180` 优先于 ±90°），正是"落位的卡长什么样"。
+import { ghostOrientClassFor, stripOrientClasses, type CardOrient } from './fx-orient';
 // G2 修正 R8-4：协议持久 FX 层要读 holder 的**特效**朝向标记来跟着协议横躺。用 `fxRotDegOf`
 // （**只读标记、不回退**）而**不是** `fxOrientOf`：后者缺标记时会回退 `orientOf`（卡面朝向），
 // 于是"标记没产出"会被**静默**换成一个猜出来的角度，而热座页的 0° 也不再是构造性的。
@@ -6082,13 +6087,60 @@ export function bindCardDrag(node: HTMLElement, s: GameState, cb: UiCallbacks, u
     const positionGhost = (ev: MouseEvent) => {
       if (!ghost) return;
       // G2 修正 R15-A：光标大致位于幽灵卡中心。偏移量必须由**实测盒**推：
-      //  - 横向原来是写死的 `-65`（= 热座 130/2）；远程页卡宽 100.572 ⇒ 写死值会让幽灵
-      //    相对光标偏 14.7px（幽灵中心不在光标上，"抓"的位置不对）。
+      //  - 横向原来是写死的 `-65`（= 热座 130/2）；远程页卡宽 93.42 ⇒ 写死值会让幽灵
+      //    相对光标偏 11.7px（幽灵中心不在光标上，"抓"的位置不对）。
       //  - 纵向原来是写死的 `-50`（= 热座卡高的一半再上移 39.4，让卡不遮住光标）。
-      //    拆成"盒半高 − 39.4"后，**热座逐位不变**（89.4 − 39.4 = 50），远程页按 137.601/2 缩放。
+      //    拆成"盒半高 − 39.4"后，**热座逐位不变**（89.4 − 39.4 = 50），远程页按 127.58/2 缩放。
       const w = ghostBox?.w ?? 130;
       const h = ghostBox?.h ?? 178.8;
       ghost.style.transform = `translate(${ev.clientX - w / 2}px, ${ev.clientY - (h / 2 - 39.4)}px) scale(0.9)`;
+    };
+
+    /**
+     * **R24（Z1）：拖拽幽灵按"落点目标"的卡面朝向预览。**
+     *
+     * ## 缺陷形态（浏览器实测）
+     *
+     * 手牌卡**不带任何朝向类**（0°），于是 `cloneNode` 出来的幽灵恒 0°；而落位后那张卡
+     * 在**对手列**是 **180°**（`render-net.ts` 的 `renderSlot` 对对手侧传 `orient: 180`
+     * ⇒ `renderStackSlot` 给卡挂 `.rot-180`）。⇒ 远程页把卡拖到对手列时，预览与真正落位的
+     * 朝向差 180°（拖到自己列本来就对，两页都对）。实测证据：远程自己侧手牌卡朝向类 `[]`、
+     * 对手侧协议图 `rot-180 net-rot-cw`、`.net-lane-band .stack .card` 在对手侧带 `.rot-180`。
+     *
+     * ## 判据为什么**只能取自 DOM**（硬约束）
+     *
+     * `render.ts` 不许读 `fxViewSeat()`（那是"热座页源码不出现座位概念"的红线）。
+     * 这里用 `document.elementFromPoint` 找光标下的 `.stack-slot`，再读**它里面那张卡**的
+     * 卡面朝向 —— 与"落位后长什么样"是同一个事实源（同一个类名，不由第二处推导）。
+     * 幽灵自己 `pointer-events: none`（`styles.css:1783` 的 `.drag-ghost`）⇒ 不挡命中。
+     *
+     * ## 热座为什么**构造性**不变
+     *
+     * 本函数**只**应用 `180` 这一档；其余（`0` / `±90`）一律按"0° 预览"处理（= 改动前行为）。
+     * 而**热座场上卡恒 ±90**（`orientOf` 得 90 或 −90，永不为 180；`.rot-180` 只由
+     * `renderStackSlot` 的 `orient === 180` 分支产出，热座那条路径传的是 `card.owner === 0 ? 90 : -90`）
+     * ⇒ 热座页**一个类都不加、也不删**，幽灵的 DOM 与 `transform` 与改动前逐字相同。
+     */
+    const syncGhostOrient = (slot: HTMLElement | null) => {
+      if (!ghost) return;
+      // 判据在 `fx-orient.ts` 的 `ghostOrientClassFor`（纯函数）：只认 **180**，
+      // 其余（0 / ±90 / 空槽 / 读不到）一律 null ⇒ 热座（恒 ±90）**一个类都不加**。
+      const want = ghostOrientClassFor(slot);
+      // 先清再按需加：避免连续划过多列时上一列的类残留。
+      // ⚠️ 用 `stripOrientClasses`（**三个朝向类的唯一出处**）而不是自己写类名。
+      stripOrientClasses(ghost);
+      if (want) ghost.classList.add(want);
+    };
+
+    /** 光标下是不是**合法落点**槽（与 `onUp` 的命中判据同源：都用 `elementFromPoint` + `closest`）。
+     *  只对合法落点预览朝向：划在无关区域不该让幽灵转起来。 */
+    const slotUnder = (ev: MouseEvent): HTMLElement | null => {
+      const hit = document.elementFromPoint(ev.clientX, ev.clientY);
+      const slot = hit ? (hit as HTMLElement).closest<HTMLElement>('.stack-slot') : null;
+      if (!slot) return null;
+      const p = Number(slot.dataset.player);
+      const line = Number(slot.dataset.line);
+      return legalLines.has(`${p}:${line}`) ? slot : null;
     };
 
     const beginDrag = () => {
@@ -6136,6 +6188,9 @@ export function bindCardDrag(node: HTMLElement, s: GameState, cb: UiCallbacks, u
       }
       ev.preventDefault(); // 拖拽中阻止文本选择等默认行为
       positionGhost(ev);
+      // R24（Z1）：按光标下那个**合法落点**槽的卡面朝向刷新幽灵朝向
+      // （热座场上卡恒 ±90 ⇒ 一个类都不加，构造性不变；见 syncGhostOrient 的说明）
+      syncGhostOrient(slotUnder(ev));
     };
 
     const onUp = (ev: MouseEvent) => {

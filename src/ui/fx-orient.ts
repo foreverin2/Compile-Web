@@ -122,6 +122,34 @@ export function orientToCwCcw(o: CardOrient): { cw: boolean; ccw: boolean; flip1
   return { cw: o === 90, ccw: o === -90, flip180: o === 180 };
 }
 
+/**
+ * **R24（Z1）：拖拽幽灵按"落点目标"预览时应加的朝向类**（纯函数，便于机检）。
+ *
+ * ## 语义（这是整条修复的判据所在）
+ *
+ * 目标槽**里面那张卡**的卡面朝向 → 幽灵该加的类：
+ *  - `180`（远程页**对手**列）⇒ `'rot-180'`；
+ *  - **其余一律 `null`**（0 / ±90 / 空槽 / 读不到卡）。
+ *
+ * ## 为什么"只认 180"是**必须**的，而不是偷懒
+ *
+ * 它是"**热座零变化**"的构造性来源：热座场上卡恒 **±90**
+ * （`renderStackSlot` 在热座路径传 `card.owner === 0 ? 90 : -90`），
+ * 而 `.rot-180` **只**由那条 `orient === 180` 分支产出（远程页对手侧）。
+ * ⇒ 热座下本函数**恒返回 `null`** ⇒ 调用方一个类都不加、也不删，DOM 与 `transform`
+ * 与改动前逐字相同。若这里把 ±90 也算进去，热座拖拽幽灵就会凭空横过来（视觉回归）。
+ *
+ * ⚠️ 空槽（还没卡）⇒ `null`：**无从得知**落位朝向。这不是"兜底成 180"的理由 ——
+ * 静默按某一侧猜，正是本仓反复栽过的那类假正确（同 `fxRotDegOf` 的"不回退"纪律）。
+ */
+export function ghostOrientClassFor(slot: Element | null | undefined): 'rot-180' | null {
+  const top = (slot as { querySelector?: (s: string) => unknown } | null | undefined)?.querySelector;
+  if (typeof top !== 'function') return null;
+  const card = top.call(slot, '.card') as Element | null;
+  if (!card) return null;
+  return orientOf(card) === 180 ? 'rot-180' : null;
+}
+
 /** `--fx-rot` 用的**裸角度**（`'0deg'|'90deg'|'-90deg'|'180deg'`）。
  *  ⚠️ 与 `cloneTransformOf()`（完整 transform 函数串）**不可混用**，见本文件头部约定注释。 */
 export function orientToFxRot(o: CardOrient): string {

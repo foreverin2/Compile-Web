@@ -12,10 +12,11 @@ import { functionBody, stripComments } from './source-text';
  * ## 这一族缺陷的形态
  *
  * `src/ui/fx-card-size.ts` 里那四个常量（`HAND_CARD_W/H` / `HALF_W/H`）是**热座**手牌卡的
- * 几何（130 × 178.8），但同一份源码在**远程页**跑时手牌卡是 **100.572 × 137.601**
- * （由 `.net-board` 的 `--card-h: 140` 派生，`styles-net.css:91-97`）。于是十几处
- * "落点盒 / 幽灵卡"比真卡**大 29%**（宽 +29.3% / 高 +30.0%），扇形步距每张多偏 23.09px
- * （102 vs 78.909）。缺陷之所以能存活 1114 条测试，是因为**没有任何一条判据把
+ * 几何（130 × 178.8），但同一份源码在**远程页**跑时手牌卡是 **93.42 × 127.58**
+ * （由 `.net-board` 的 `--card-h: 130` 派生，`styles-net.css:121`；**R20 起那一档是 130**，
+ * R15-A 手记的 100.572 × 137.601 属于 `--card-h: 140` 时代）。于是十几处
+ * "落点盒 / 幽灵卡"比真卡大 29%（130 / 93.42 = 1.39），扇形步距也按同一比例偏
+ * （热座 102 vs 远程实测 73.31）。缺陷之所以能存活上千条测试，是因为**没有任何一条判据把
  * "这一页的卡多大"与"落点盒写多大"连起来** —— 本文件就是那条判据。
  *
  * ## 两类判据（各自能证明什么）
@@ -25,6 +26,10 @@ import { functionBody, stripComments } from './source-text';
  *    能证明：探针作用域（只在 `.net-board` 内）、读数属性（`offsetWidth/Height`）、
  *    回退链（手牌卡 → 场上卡 → 热座常量）、以及**热座分支逐位等于旧字面量**。
  *    不能证明：真实浏览器布局（本仓无 jsdom，尺寸是测试喂的常量）。
+ *
+ *    ⚠️ **R24 起**这些夹具喂的是**当前实测值**（远程页 93 × 128 / `--card-h: 130`）——
+ *    数值会随页面那一档迁移，但**判据的性质**（量哪个节点、用哪个属性、算式关系）不变。
+ *    真实布局的那一半由无头浏览器实测覆盖（`.superpowers/` 下的探针，见收口报告）。
  *
  * ② **调用点腿**（源码判据，全部先过 `stripComments`）：每一处落点盒的尺寸/居中都必须来自
  *    出口函数，且**不许**再出现热座字面量。函数级判据一律用共享的 `functionBody()`
@@ -119,11 +124,15 @@ afterEach(() => { for (const c of cleanups) c(); cleanups = []; });
 
 describe('R15-A 出口 1：handCardBox() —— 手牌/浮层整卡尺寸', () => {
   it('远程页：量到 `.net-board .net-hands .card` 的 **offsetWidth/Height**（不是 rect）', () => {
-    const { restore } = mountNetBoard({ handCard: { w: 100.572, h: 137.601 } });
+    // ⚠️ **数值迁移（R24）**：夹具用**当前实测值** 93 × 128（`--card-h: 130` 那一档，
+    //    见 `tests/ui/net-hand-card-size.test.ts:93-94` 的"140 → 130 ⇒ 卡宽 100.57 → 93.43"）。
+    //    旧夹具写的是 100.572 × 137.601（`--card-h: 140` 时代）—— 判据的**性质**不变
+    //    （"读的是这个节点的 offset 尺寸"），只是喂进来的数跟着页面那一档走。
+    const { restore } = mountNetBoard({ handCard: { w: 93, h: 128 } });
     cleanups.push(restore);
     const box = handCardBox();
-    expect(box.w, '手牌盒宽必须等于真卡布局宽 100.572（R9-4 的 --card-w）').toBeCloseTo(100.572, 3);
-    expect(box.h, '手牌盒高必须等于 --hand-card-h 137.601').toBeCloseTo(137.601, 3);
+    expect(box.w, '手牌盒宽必须等于真卡布局宽（远程页实测 93）').toBe(93);
+    expect(box.h, '手牌盒高必须等于真卡布局高（远程页实测 128）').toBe(128);
     // 变异"改用 getBoundingClientRect()" ⇒ 桩的 rect 恒 0 ⇒ 退到热座常量 ⇒ 这两条会红
     expect(box.w, '退化成了热座常量 130（是不是用了 getBoundingClientRect？rect 受 rotate 影响）')
       .not.toBeCloseTo(130, 1);
@@ -131,10 +140,10 @@ describe('R15-A 出口 1：handCardBox() —— 手牌/浮层整卡尺寸', () =
 
   it('远程页：`.net-hands` 只有"张数占位块"（无真卡）⇒ 退到**场上卡**尺寸，而不是 130×178.8', () => {
     // 对手手牌只剩 `.hand-count-only` 时手牌探针为空；此时仍应认出"这是远程页"
-    const { restore } = mountNetBoard({ laneCard: { w: 100.572, h: 140 } });
+    const { restore } = mountNetBoard({ laneCard: { w: 93, h: 128 } });
     cleanups.push(restore);
-    expect(handCardBox().w, '手牌探针落空时应退到**场上卡**尺寸（远程页 100.572），而不是热座 130')
-      .toBeCloseTo(100.572, 3);
+    expect(handCardBox().w, '手牌探针落空时应退到**场上卡**尺寸（远程页 93），而不是热座 130')
+      .toBe(93);
   });
 
   it('反空集合：热座页（无 `.net-board`）⇒ **构造性**等于旧常量 130×178.8', () => {
@@ -164,15 +173,22 @@ describe('R15-A 出口 1：handCardBox() —— 手牌/浮层整卡尺寸', () =
 });
 
 describe('R15-A 出口 2：stackCardBox() —— 场上卡尺寸', () => {
-  it('远程页：读 `.net-board .net-lane-band .stack .card` 的 offsetHeight，并按**样式表同一条算式**推宽', () => {
-    const { restore } = mountNetBoard({ laneCard: { w: 100.572, h: 140 } });
+  it('远程页：**直接读** `.net-board .net-lane-band .stack .card` 的 offsetWidth/offsetHeight', () => {
+    // ⚠️ **旧句为什么必须改（R24 无头浏览器实测）**：旧断言是
+    //    `expect(box.w).toBeCloseTo((h − 2) * 0.71429 + 2)` —— 它把"由卡高反推卡宽"钉成了**正确**行为。
+    //    实测证明那条算式在**远程页**是错的：远程页 `.card` 的宽来自
+    //    `.net-board .card { width: var(--card-w) }`，而 `--card-w` 里的 `--card-h`（130）
+    //    **不等于**卡自己的 `offsetHeight`（实测 127.578）⇒ 反推给 91.70，真值 **93.42**。
+    //    **新句多查了什么**：① 宽**等于实测的 offsetWidth**（不再由高反推）；
+    //    ② 宽**不等于**反推值（把"退回旧算式"这条变异钉住 —— 见变异实测 M23）。
+    const { restore } = mountNetBoard({ laneCard: { w: 93, h: 128 } });
     cleanups.push(restore);
     const box = stackCardBox();
-    expect(box.h, '场上卡高 = --card-h = 140').toBeCloseTo(140, 6);
-    // 宽必须由高按 `(h − 2) × 0.71429 + 2` 推出（与 styles.css:422 / styles-net.css:461-462 同源）
-    expect(box.w, '场上卡宽必须 = (140 − 2) × 0.71429 + 2')
-      .toBeCloseTo((140 - 2) * 0.71429 + 2, 6);
-    expect(box.w, '换了个高度也必须跟着变（判据不是"写死 100.572"）').not.toBeCloseTo(130.57, 1);
+    expect(box.w, '场上卡宽必须**直接取实测布局宽**（远程页 --card-h:130 ⇒ 93）').toBe(93);
+    expect(box.h, '场上卡高必须取实测布局高').toBe(128);
+    expect(box.w, '不许再按 `(h − 2) × 0.71429 + 2` 反推（远程页会得 91.70）')
+      .not.toBeCloseTo((128 - 2) * 0.71429 + 2, 6);
+    expect(box.w, '更不许是 R15-A 第一版那种口径的 100.57（偏 +7.65%）').not.toBeCloseTo(100.57, 1);
   });
 
   it('热座页 / 读不到 ⇒ 130.5717 × 175（`styles.css:422` 的 .stack 默认值）', () => {
@@ -184,31 +200,31 @@ describe('R15-A 出口 2：stackCardBox() —— 场上卡尺寸', () => {
   });
 
   it('**作用域**：远程页有手牌卡时，场上卡探针不得漏到 `.net-hands`（两者尺寸不同）', () => {
-    // 手牌 100.572×137.601、场上 100.572×140 —— 高不同 ⇒ "量到哪一个"可观测。
+    // 手牌 93×128、场上 93×127 —— 高不同 ⇒ "量到哪一个"可观测。
     // 若 stackCardBox 的探针丢掉 `.net-board` 或写成了 `.net-hands .card`，
-    // 它会量到 137.601（手牌）而不是 140（场上）。
+    // 它会量到 128（手牌）而不是 127（场上）。
     const { restore } = mountNetBoard({
-      handCard: { w: 100.572, h: 137.601 },
-      laneCard: { w: 100.572, h: 140 },
+      handCard: { w: 93, h: 128 },
+      laneCard: { w: 93, h: 127 },
     });
     cleanups.push(restore);
-    expect(stackCardBox().h, '场上卡探针量到的必须是**场上**卡（140），不是手牌卡（137.601）')
-      .toBeCloseTo(140, 6);
+    expect(stackCardBox().h, '场上卡探针量到的必须是**场上**卡（127），不是手牌卡（128）').toBe(127);
   });
 });
 
 describe('R15-A 出口 3/4：handFanStep() / handFanLead() —— 扇形步距与行内缩', () => {
-  it('远程页：步距 = 卡宽 × (1 − 0.2154) = 78.909；内缩 = 卡宽 − 步距 = 21.663', () => {
-    const { restore } = mountNetBoard({ handCard: { w: 100.572, h: 137.601 } });
+  it('远程页：步距 = 卡宽 × (1 − 0.2154)；内缩 = 卡宽 − 步距', () => {
+    // 夹具用当前实测的 93 × 128（`--card-h: 130` 档）；算式关系才是判据对象。
+    const { restore } = mountNetBoard({ handCard: { w: 93, h: 128 } });
     cleanups.push(restore);
     const step = handFanStep();
-    expect(step, '远程页步距必须是 78.909（宽 100.572 的 0.7846 倍），不再是热座的 102')
-      .toBeCloseTo(100.572 * 0.7846, 3);
-    expect(step, '步距不能还是 102（每张多偏 23.09px）').not.toBeCloseTo(102, 1);
+    expect(step, '远程页步距必须是 卡宽 × 0.7846（实测相邻手牌卡左缘之差 73.31），不再是热座的 102')
+      .toBeCloseTo(93 * 0.7846, 3);
+    expect(step, '步距不能还是 102（那一档是 --card-h: 140 时代的数）').not.toBeCloseTo(102, 1);
     const lead = handFanLead();
-    expect(lead, '内缩 = 卡宽 − 步距（= 扇形重叠量 0.2154 × 卡宽）').toBeCloseTo(100.572 * 0.2154, 3);
+    expect(lead, '内缩 = 卡宽 − 步距（= 扇形重叠量 0.2154 × 卡宽）').toBeCloseTo(93 * 0.2154, 3);
     // 步距是**唯一出处**：内缩必须与步距自洽（不是第二份 0.2154）
-    expect(lead + step, '内缩 + 步距必须逐位回到卡宽').toBeCloseTo(100.572, 6);
+    expect(lead + step, '内缩 + 步距必须逐位回到卡宽').toBeCloseTo(93, 6);
   });
 
   it('热座页 ⇒ **逐位**等于旧字面量（步距 102、内缩 28），红线"热座零变化"', () => {
