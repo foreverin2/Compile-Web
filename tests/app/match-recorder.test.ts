@@ -60,6 +60,21 @@ describe('MatchFileRecorder', () => {
     expect(back.file.actions).toEqual(f.actions);
   });
 
+  it('记录器产出的 seq 链恒为 0..n-1：解析方向的 §3.1 连续性判据不会误伤真实档案', () => {
+    // 这条腿把「记录器」与「解析校验」两端钉在一起：`checkAction` 要求 `seq === 下标`
+    // （§3.1「从 0 起单调递增」），若哪天记录器改成别的编号方式，**这里先红**，
+    // 而不是等到用户导入一份"自己刚导出的档案"时才发现被拒。
+    const r = createMatchFileRecorder();
+    for (let i = 0; i < 8; i += 1) r.record({ player: (i % 2) as PlayerId, kind: 'advance', via: 'user' });
+    const f = r.toMatchFile(meta);
+    expect(f.actions.map((a) => a.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    const back = parseMatchFile(stringifyMatchFile(f), { currentHash: CARD_DATA_HASH });
+    expect(back.ok, '自己导出的档案必须能被自己读入').toBe(true);
+    if (!back.ok) return;
+    expect(back.warnings).toEqual([]);
+    expect(back.file.actions.map((a) => a.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+  });
+
   it('clear() 之后 seq 从 0 重新开始（新的一局 = 新的档案）', () => {
     const r = createMatchFileRecorder();
     r.record({ player: 0, kind: 'advance' });

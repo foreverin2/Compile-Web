@@ -14,6 +14,9 @@ import {
 import { CARD_DATA_HASH } from '../../src/app/card-data-hash';
 import { createGame } from '../../src/core/state/create';
 import { stateFingerprint } from '../../src/core/fingerprint';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { stripComments } from '../ui/source-text';
 
 function sample(): MatchFile {
   return {
@@ -85,6 +88,35 @@ describe('MatchFile v1：序列化与往返', () => {
   it('stringify 是稳定序列化：同一局的两次导出字节相同', () => {
     const f = sample();
     expect(stringifyMatchFile(f)).toBe(stringifyMatchFile(canonicalMatchFile(f)));
+  });
+
+  it('stringify 对**键序不同但内容等价**的 args 产出相同字节（联机传输要比字节）', () => {
+    // 评审实测的瑕疵：`JSON.stringify` 保留 args 的键序 ⇒ 等价对象得到不同字节却同指纹。
+    // 档案的"联机传输内容/断线重连凭据"两个用途（§3.2）会直接比字节，故必须稳定序列化。
+    const a: MatchFile = {
+      ...sample(),
+      actions: [{ seq: 0, player: 0, kind: 'play', args: { cardUid: 'c1', faceUp: true, line: 2 }, via: 'user' }],
+    };
+    const b: MatchFile = {
+      ...sample(),
+      actions: [{ seq: 0, player: 0, kind: 'play', args: { line: 2, faceUp: true, cardUid: 'c1' }, via: 'user' }],
+    };
+    expect(stringifyMatchFile(a)).toBe(stringifyMatchFile(b));
+    expect(matchFileFingerprint(a)).toBe(matchFileFingerprint(b));
+    // 稳定序列化仍必须是**合法 JSON**（否则 G4/G5 的 JSON.parse 通路会当场炸）
+    const parsed = JSON.parse(stringifyMatchFile(a)) as Record<string, unknown>;
+    expect(parsed.format).toBe('compile-match');
+    expect((parsed.actions as { args: Record<string, unknown> }[])[0].args).toEqual({
+      cardUid: 'c1',
+      faceUp: true,
+      line: 2,
+    });
+    // 反向：内容真的不同时字节必须不同（否则"相同字节"只是"什么都没序列化"）
+    const c: MatchFile = {
+      ...sample(),
+      actions: [{ seq: 0, player: 0, kind: 'play', args: { cardUid: 'c2', faceUp: true, line: 2 }, via: 'user' }],
+    };
+    expect(stringifyMatchFile(a)).not.toBe(stringifyMatchFile(c));
   });
 });
 
@@ -193,12 +225,21 @@ describe('MatchFile v1：版本与形状校验', () => {
       { draftMode: 'chaos' },
       { draftStarter: 2 },
       { firstToPlay: -1 },
+      // **类型错**（不是数值越界）：数字座位字段收到字符串。宽松的 `==` 或 `Number(v)` 式校验
+      // 会把它们放行，而 `'1' !== 1` 在引擎里会让 `s.players['1']` 变成 undefined。
+      { draftStarter: '1' },
+      { firstToPlay: '0' },
       { draftPool: 'water' },
       { draftPool: [1, 2] },
       { draftPicks: {} },
       { bannedProtocols: [null] },
+      // clock：每项都要是**有限数**（字符串、布尔、null 都不是）
       { clock: { decisionSec: '60', draftSec: 30, maxSkips: 2 } },
+      { clock: { decisionSec: 60, draftSec: '30', maxSkips: 2 } },
+      { clock: { decisionSec: 60, draftSec: 30, maxSkips: null } },
+      { clock: { decisionSec: 60, draftSec: 30 } },
       { clock: 7 },
+      { clock: '60' },
     ];
     for (const patch of bad) {
       const f = sample() as unknown as Record<string, unknown>;
@@ -215,6 +256,71 @@ describe('MatchFile v1：版本与形状校验', () => {
       expect(r.ok, `players=${JSON.stringify(players)} 应被拒`).toBe(false);
       if (r.ok) continue;
       expect(r.error.code).toBe('bad-shape');
+    }
+  });
+
+  it('座位字段的类型错 → bad-shape，且消息点名是哪个字段（生成式：setup 两个 + players）', () => {
+    // 变异 L：`isPlayerId` 若放宽成还接受字符串 '0'/'1'/'2'，这条腿与上面那条必须变红。
+    const cases: [string, (f: Record<string, unknown>) => void][] = [
+      ['setup.draftStarter', (f) => { (f.setup as Record<string, unknown>).draftStarter = '1'; }],
+      ['setup.draftStarter', (f) => { (f.setup as Record<string, unknown>).draftStarter = '2'; }],
+      ['setup.firstToPlay', (f) => { (f.setup as Record<string, unknown>).firstToPlay = '0'; }],
+      ['setup.firstToPlay', (f) => { (f.setup as Record<string, unknown>).firstToPlay = true; }],
+      ['setup.draftStarter', (f) => { (f.setup as Record<string, unknown>).draftStarter = null; }],
+    ];
+    for (const [field, patch] of cases) {
+      const f = sample() as unknown as Record<string, unknown>;
+      patch(f);
+      const r = parseMatchFile(JSON.stringify(f), { currentHash: CARD_DATA_HASH });
+      expect(r.ok, `${field} 类型错应被拒`).toBe(false);
+      if (r.ok) continue;
+      expect(r.error.code, field).toBe('bad-shape');
+      expect(r.error.message, `${field} 的消息应点名字段`).toContain(field);
+    }
+    // 对局记录里的 player 同样不许是字符串/布尔（`'1'` 是数字 1 的"近敌"，最容易被漏）
+    for (const player of ['0', '1', '2', true, false, null] as unknown[]) {
+      const f: MatchFile = { ...sample(), actions: [{ seq: 0, player: player as never, kind: 'advance' }] };
+      const r = parseMatchFile(JSON.stringify(f), { currentHash: CARD_DATA_HASH });
+      expect(r.ok, `player=${JSON.stringify(player)} 应被拒`).toBe(false);
+      if (r.ok) continue;
+      expect(r.error.code, `player=${JSON.stringify(player)}`).toBe('bad-action');
+    }
+    // 反向：0 / 1 必须过（否则上面全是"什么都被拒"）
+    for (const player of [0, 1] as const) {
+      const f: MatchFile = { ...sample(), actions: [{ seq: 0, player, kind: 'advance' }] };
+      const r = parseMatchFile(JSON.stringify(f), { currentHash: CARD_DATA_HASH });
+      expect(r.ok, `player=${player} 应通过`).toBe(true);
+    }
+  });
+
+  it('result 是可选字段，但给了就必须形状正确（winner 0/1/null，reason 字符串）', () => {
+    const badResults: unknown[] = [
+      { winner: 7, reason: 'x' },
+      { winner: '1', reason: 'x' },
+      { winner: true, reason: 'x' },
+      { winner: undefined, reason: 'x' },
+      { winner: 0, reason: 42 },
+      { winner: 0 },
+      { winner: 0, reason: null },
+      '甲赢了',
+      42,
+    ];
+    for (const result of badResults) {
+      const f = sample() as unknown as Record<string, unknown>;
+      f.result = result;
+      const r = parseMatchFile(JSON.stringify(f), { currentHash: CARD_DATA_HASH });
+      expect(r.ok, `result=${JSON.stringify(result)} 应被拒`).toBe(false);
+      if (r.ok) continue;
+      expect(r.error.code, JSON.stringify(result)).toBe('bad-shape');
+    }
+    // 反向：三种合法形态必须过 —— winner:null（流局）与 winner:0 都不是"缺字段"
+    for (const result of [{ winner: null, reason: '流局' }, { winner: 0, reason: 'win' }, { winner: 1, reason: '' }]) {
+      const f = sample() as unknown as Record<string, unknown>;
+      f.result = result;
+      const r = parseMatchFile(JSON.stringify(f), { currentHash: CARD_DATA_HASH });
+      expect(r.ok, `result=${JSON.stringify(result)} 应通过`).toBe(true);
+      if (!r.ok) continue;
+      expect(r.file.result).toEqual(result);
     }
   });
 
@@ -244,6 +350,38 @@ describe('MatchFile v1：版本与形状校验', () => {
       if (r.ok) continue;
       expect(r.error.code, JSON.stringify(a)).toBe('bad-action');
     }
+  });
+
+  it('seq 必须从 0 起连续单调（§3.1）：重复 seq / 回退 seq / 跳号都必须被拒', () => {
+    const seqCases: [string, unknown[]][] = [
+      ['两条都是 seq=5（重复且不从 0 起）', [{ seq: 5, player: 0, kind: 'advance' }, { seq: 5, player: 0, kind: 'advance' }]],
+      ['回退 [0,1,0]', [
+        { seq: 0, player: 0, kind: 'advance' },
+        { seq: 1, player: 1, kind: 'advance' },
+        { seq: 0, player: 0, kind: 'advance' },
+      ]],
+      ['连续重复 [0,0]', [{ seq: 0, player: 0, kind: 'advance' }, { seq: 0, player: 1, kind: 'advance' }]],
+      ['跳号 [0,2]', [{ seq: 0, player: 0, kind: 'advance' }, { seq: 2, player: 1, kind: 'advance' }]],
+      ['不从 0 起 [1,2]', [{ seq: 1, player: 0, kind: 'advance' }, { seq: 2, player: 1, kind: 'advance' }]],
+      ['首条就是 3', [{ seq: 3, player: 0, kind: 'advance' }]],
+    ];
+    for (const [label, actions] of seqCases) {
+      const f = sample() as unknown as Record<string, unknown>;
+      f.actions = actions;
+      const r = parseMatchFile(JSON.stringify(f), { currentHash: CARD_DATA_HASH });
+      expect(r.ok, `${label} 应被拒`).toBe(false);
+      if (r.ok) continue;
+      expect(r.error.code, label).toBe('bad-action');
+      expect(r.error.message, label).toContain('seq');
+    }
+    // 反向：0..n-1 连续（记录器唯一会产出的形态）必须过
+    const good = [0, 1, 2, 3].map((seq) => ({ seq, player: (seq % 2) as number, kind: 'advance' }));
+    const f = sample() as unknown as Record<string, unknown>;
+    f.actions = good;
+    const r = parseMatchFile(JSON.stringify(f), { currentHash: CARD_DATA_HASH });
+    expect(r.ok, '连续 seq 必须通过').toBe(true);
+    if (!r.ok) return;
+    expect(r.file.actions.map((a) => a.seq)).toEqual([0, 1, 2, 3]);
   });
 
   it('缺 args 的带参 kind → bad-action（生成式：遍历五种带参 kind）', () => {
@@ -313,6 +451,26 @@ describe('MatchFile v1：via 与引擎状态分离', () => {
   it('未知 via 值被丢弃（不写进档案）', () => {
     const a = normalizeAction({ seq: 0, player: 0, kind: 'refresh', via: 'hacker' as never });
     expect(a.via).toBeUndefined();
+  });
+
+  it('档案文本里的未知 via → parseMatchFile 必须 bad-action（校验路径不静默接受）', () => {
+    // 这条腿与上面那条**不是**一回事：上面只证明 normalizeAction 在生产路径丢弃未知值，
+    // 而档案是**外来输入**（对手发来的重连凭据 / 用户导入的文件）—— 它必须被拒，
+    // 否则"读不懂的元数据"会被原样带进 G4 的重放链。
+    for (const via of ['hacker', '', 'USER', 0, null] as unknown[]) {
+      const f: MatchFile = { ...sample(), actions: [{ seq: 0, player: 0, kind: 'refresh', via: via as never }] };
+      const r = parseMatchFile(JSON.stringify(f), { currentHash: CARD_DATA_HASH });
+      expect(r.ok, `via=${JSON.stringify(via)} 应被拒`).toBe(false);
+      if (r.ok) continue;
+      expect(r.error.code, `via=${JSON.stringify(via)}`).toBe('bad-action');
+      expect(r.error.message).toContain('via');
+    }
+    // 反向：三个合法值都必须过（否则上面那条只是"什么 via 都被拒"）
+    for (const via of ['user', 'timeout', 'ai'] as const) {
+      const f: MatchFile = { ...sample(), actions: [{ seq: 0, player: 0, kind: 'refresh', via }] };
+      const r = parseMatchFile(JSON.stringify(f), { currentHash: CARD_DATA_HASH });
+      expect(r.ok, `via=${via} 应通过`).toBe(true);
+    }
   });
 
   it('normalizeAction 把 args 原样透传（重放靠它，不许改写）', () => {
@@ -435,5 +593,57 @@ describe('MatchFile v1：常量与导出面', () => {
     expect(f.setup.draftPicks).toHaveLength(6);
     expect(f.setup.bannedProtocols).toEqual([]);
     expect(f.players[0].nick).toBe('甲');
+  });
+
+  it('MatchFileErrorCode 里不留零调用的码（hash-mismatch-unknown 已删，G5 需要时随腿加回）', () => {
+    // 文本腿：本仓纪律是"零调用的声明要删"。指纹不匹配是**警告**（§3.3 第 3 条），
+    // 没有任何输入会走到"未知指纹"这个失败态，故 union 里不该留着它当空壳入口。
+    // ⚠️ `tests/node-types.d.ts:3-10` 的极简声明：`readFileSync` 只收 `string`（故须 `fileURLToPath`）、
+    // 返回 `{ subarray(...).toString(encoding?) }`、且**没有** `writeFileSync` —— 不许为这里扩 node 类型声明。
+    const src = readFileSync(fileURLToPath(new URL('../../src/app/match-file.ts', import.meta.url)))
+      .subarray(0, 256 * 1024)
+      .toString('utf8');
+    // 文本腿按**值**查、且先 `stripComments`：实现里有一段专门解释"为什么删掉它"的注释，
+    // 裸 `not.toContain` 会被那段注释假红（本轮实测踩到）。复用 `tests/ui/source-text.ts:29 stripComments`
+    // —— 与仓内既有文本腿同一套判据（注释被替换成等长空白，字符串内容原样保留）。
+    const code = stripComments(src);
+    const codesOf = (text: string): string[] => {
+      const decl = text.slice(text.indexOf('MatchFileErrorCode'));
+      const body = decl.slice(decl.indexOf('=') + 1, decl.indexOf(';'));
+      return [...body.matchAll(/'([^']+)'/g)].map((m) => m[1]);
+    };
+    const codes = codesOf(code);
+    // 反空转：解析出的码必须就是那 6 个已知码（否则下面的 `not.toContain` 只是"没解析到"）
+    expect(codes.sort()).toEqual([
+      'bad-action',
+      'bad-shape',
+      'bad-version-type',
+      'not-a-match-file',
+      'not-json',
+      'too-new',
+    ]);
+    // 行为腿：这 6 个码必须**都真的可达**（防止"删了一个、又留了一个死码"）
+    const seen: string[] = [];
+    const push = (r: ReturnType<typeof parseMatchFile>): void => {
+      if (!r.ok) seen.push(r.error.code);
+    };
+    push(parseMatchFile('{oops', { currentHash: CARD_DATA_HASH }));
+    push(parseMatchFile('42', { currentHash: CARD_DATA_HASH }));
+    push(parseMatchFile(JSON.stringify({ ...sample(), version: 999 }), { currentHash: CARD_DATA_HASH }));
+    push(parseMatchFile(JSON.stringify({ ...sample(), version: 'x' }), { currentHash: CARD_DATA_HASH }));
+    const noSeed = sample() as unknown as Record<string, unknown>;
+    delete noSeed.seed;
+    push(parseMatchFile(JSON.stringify(noSeed), { currentHash: CARD_DATA_HASH }));
+    const badAct = sample() as unknown as Record<string, unknown>;
+    badAct.actions = [{ seq: 0, player: 0, kind: 'compile', args: {} }];
+    push(parseMatchFile(JSON.stringify(badAct), { currentHash: CARD_DATA_HASH }));
+    expect([...new Set(seen)].sort()).toEqual([
+      'bad-action',
+      'bad-shape',
+      'bad-version-type',
+      'not-a-match-file',
+      'not-json',
+      'too-new',
+    ]);
   });
 });

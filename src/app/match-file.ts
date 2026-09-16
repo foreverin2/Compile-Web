@@ -74,14 +74,22 @@ const CREATED_AT_OMITTED = '';
  * 校验错误
  * ------------------------------------------------------------------ */
 
+/**
+ * 档案失败形态。
+ *
+ * ⚠️ **零调用的码不许留在这里**：`hash-mismatch-unknown` 曾按 §3.4 的"指纹不匹配"预留在 union 里，
+ * 但 §3.3 第 3 条已裁决"指纹不匹配 = 警告并允许仍要打开"（见 `parseMatchFile` 的 `warnings`），
+ * **没有任何输入会走到"未知指纹"这个失败态** ⇒ 本轮删除，而不是留一个空壳入口让下一个人
+ * 以为它是可触发分支。G5 的握手若真需要它（例如"两端指纹都读不出来"），那时**连同它的腿
+ * 一起**加回来。
+ */
 export type MatchFileErrorCode =
   | 'not-json'
   | 'not-a-match-file'
   | 'bad-version-type'
   | 'too-new'
   | 'bad-shape'
-  | 'bad-action'
-  | 'hash-mismatch-unknown';
+  | 'bad-action';
 
 export interface MatchFileParseError {
   code: MatchFileErrorCode;
@@ -137,9 +145,20 @@ export function canonicalMatchFile(f: MatchFile): MatchFile {
   return out;
 }
 
-/** 落盘/传输用：规范形态 → JSON（键序固定，同一份数据字节相同） */
+/**
+ * 落盘/传输用：规范形态 → **稳定序列化**（对象键排序、数组保序）。
+ *
+ * 为什么不是 `JSON.stringify`：档案是「一份数据，五处复用」（§3.2），其中"联机传输内容"与
+ * "断线重连凭据"会比字节（G5 的握手要做一致性判断），而 `JSON.stringify` **保留 `args` 的键序**
+ * ⇒ 等价对象 `{cardUid,faceUp,line}` 与 `{line,faceUp,cardUid}` 会得到**不同字节、相同指纹**
+ * （评审实测）。复用 `core/fingerprint.ts:28` 的 `stableStringify` 让"同一份数据 ⇒ 相同字节"
+ * 真的成立，且输出仍是合法 JSON（`stableStringify` 只在对象分支重排键，值仍走 `JSON.stringify`；
+ * 故 `JSON.parse(stringifyMatchFile(f))` 与 `JSON.stringify(canonicalMatchFile(f))` 等价）。
+ *
+ * 副作用（可接受）：不保留"人类手写的键序"，因为档案是机器产物、不是手写配置。
+ */
 export function stringifyMatchFile(f: MatchFile): string {
-  return JSON.stringify(canonicalMatchFile(f));
+  return stableStringify(canonicalMatchFile(f));
 }
 
 /** 档案指纹：不含 createdAt（同一局导出两次必须同指纹） */
@@ -187,10 +206,35 @@ function isStrArray(v: unknown): v is string[] {
   return Array.isArray(v) && v.every((x) => typeof x === 'string');
 }
 
+/**
+ * 单条操作校验。`i` 同时是**数组下标**与 §3.1 要求的 `seq` 值（见下面的 seq 判据）。
+ *
+ * ⚠️ **空操作豁免**（评审者的"穷举篡改"手段）：在**无参 kind** 上把 `args` 显式置为
+ * `undefined`（或把有参 kind 的某个必填键置 `undefined`）**不算篡改** —— `undefined` 在
+ * JSON 里不存在，`JSON.parse` 出来的对象根本没有这个键，故 `args !== undefined` / `args[k] !== undefined`
+ * 的判据都放行它。这是**有意**的：与 `normalizeAction`（`args === undefined` 时删键）以及
+ * `stableStringify`（跳过 `undefined` 值键，`fingerprint.ts:32-35`）保持同一语义。
+ * 不要在后续轮次把这条"能通过"当缺陷修掉。
+ */
 function checkAction(a: unknown, i: number): MatchFileParseError | null {
   if (!isObj(a)) return { code: 'bad-action', message: `第 ${i} 条操作不是对象` };
   if (typeof a.seq !== 'number' || !Number.isInteger(a.seq) || a.seq < 0) {
     return { code: 'bad-action', message: `第 ${i} 条操作的 seq 不是非负整数` };
+  }
+  // §3.1「seq 单调递增、从 0 开始」的**严格**读法：seq 必须等于数组下标（0,1,2,…）。
+  //
+  // 取舍（"跳号算不算违规"）：**算**。理由是可证伪的 —— 本仓唯一的 seq 生产者是
+  // `createMatchFileRecorder`，它恒有 `seq = list.length`，即 `actions[i].seq === i` 是
+  // **恒真不变式**；而"跳号"在档案里只有两种来源：手工/程序篡改，或"记录器丢过一条操作"。
+  // 后者恰恰是 §3.2「一份数据五处复用」最怕的静默错位（重放会从错位那步开始与真实对局
+  // 分叉，却看不出哪里错了），所以必须拒而不是容忍。
+  // 代价：若将来 G4 的 driver 出于某种原因要写稀疏 seq，必须**先改这条判据并说明理由**；
+  // 不允许为了塞进一份带跳号的档案而放宽。
+  if (a.seq !== i) {
+    return {
+      code: 'bad-action',
+      message: `第 ${i} 条操作的 seq=${a.seq} 与位置不符（§3.1 要求从 0 起单调递增且连续）`,
+    };
   }
   if (!isPlayerId(a.player)) return { code: 'bad-action', message: `第 ${i} 条操作的 player 不是 0/1` };
   if (typeof a.kind !== 'string' || !KINDS.includes(a.kind as ActionKind)) {
@@ -212,6 +256,11 @@ function checkAction(a: unknown, i: number): MatchFileParseError | null {
   return null;
 }
 
+/** `clock` 的时长必须是**有限**数（`typeof x === 'number'` 会放过 NaN/Infinity，那会让计时逻辑永远不触发） */
+function isFiniteNumber(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v);
+}
+
 function checkSetup(v: unknown): MatchFileParseError | null {
   if (!isObj(v)) return { code: 'bad-shape', message: 'setup 不是对象' };
   if (v.draftMode !== 'normal' && v.draftMode !== 'ban') return { code: 'bad-shape', message: 'setup.draftMode 非法' };
@@ -223,8 +272,27 @@ function checkSetup(v: unknown): MatchFileParseError | null {
   if (v.clock !== undefined) {
     if (!isObj(v.clock)) return { code: 'bad-shape', message: 'setup.clock 非法' };
     for (const k of ['decisionSec', 'draftSec', 'maxSkips'] as const) {
-      if (typeof v.clock[k] !== 'number') return { code: 'bad-shape', message: `setup.clock.${k} 非法` };
+      if (!isFiniteNumber(v.clock[k])) return { code: 'bad-shape', message: `setup.clock.${k} 非法（必须是有限数）` };
     }
+  }
+  return null;
+}
+
+/**
+ * `result` 校验（§3.1：`{ winner: PlayerId | null; reason: string }`）。
+ *
+ * 为什么必须有解析方向的腿：导出方向（`canonicalMatchFile`）已经透传这两个字段，若解析方向不管，
+ * 一份 `{ result: { winner: 7, reason: 42 } }` 会被**当成合法档案读入**并原样带到 UI/G4 —— 这
+ * 正是"静默吞掉"。`winner: null` 是合法值（流局/平局），不是缺字段。
+ */
+function checkResult(v: unknown): MatchFileParseError | null {
+  if (v === undefined) return null;
+  if (!isObj(v)) return { code: 'bad-shape', message: 'result 不是对象' };
+  if (v.winner !== null && !isPlayerId(v.winner)) {
+    return { code: 'bad-shape', message: `result.winner 非法：${JSON.stringify(v.winner)}（必须是 0 / 1 / null）` };
+  }
+  if (typeof v.reason !== 'string') {
+    return { code: 'bad-shape', message: `result.reason 非法：${JSON.stringify(v.reason)}` };
   }
   return null;
 }
@@ -329,6 +397,8 @@ export function parseMatchFile(text: string, opts: { currentHash: string }): Mat
   if (setupErr) return { ok: false, error: setupErr };
   const playersErr = checkPlayers(m.players);
   if (playersErr) return { ok: false, error: playersErr };
+  const resultErr = checkResult(m.result);
+  if (resultErr) return { ok: false, error: resultErr };
   if (!Array.isArray(m.actions)) return { ok: false, error: { code: 'bad-shape', message: 'actions 不是数组' } };
   for (let i = 0; i < m.actions.length; i += 1) {
     const err = checkAction(m.actions[i], i);
