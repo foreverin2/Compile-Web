@@ -81,7 +81,9 @@ const CREATED_AT_OMITTED = '';
  * 但 §3.3 第 3 条已裁决"指纹不匹配 = 警告并允许仍要打开"（见 `parseMatchFile` 的 `warnings`），
  * **没有任何输入会走到"未知指纹"这个失败态** ⇒ 本轮删除，而不是留一个空壳入口让下一个人
  * 以为它是可触发分支。G5 的握手若真需要它（例如"两端指纹都读不出来"），那时**连同它的腿
- * 一起**加回来。
+ * 一起**加回来 —— 并注意：**加回它是一次 API 变更**（`MatchFileErrorCode` 是导出 union，
+ * 变宽会改变所有 `switch (e.code)` 的穷尽性检查与消费方的类型收窄），不是纯增量，
+ * 必须同步所有消费方（G4/G5 的错误分支与 UI 文案表）。
  */
 export type MatchFileErrorCode =
   | 'not-json'
@@ -153,7 +155,9 @@ export function canonicalMatchFile(f: MatchFile): MatchFile {
  * ⇒ 等价对象 `{cardUid,faceUp,line}` 与 `{line,faceUp,cardUid}` 会得到**不同字节、相同指纹**
  * （评审实测）。复用 `core/fingerprint.ts:28` 的 `stableStringify` 让"同一份数据 ⇒ 相同字节"
  * 真的成立，且输出仍是合法 JSON（`stableStringify` 只在对象分支重排键，值仍走 `JSON.stringify`；
- * 故 `JSON.parse(stringifyMatchFile(f))` 与 `JSON.stringify(canonicalMatchFile(f))` 等价）。
+ * 故 `JSON.parse(stringifyMatchFile(f))` 与 `JSON.stringify(canonicalMatchFile(f))` 的**解析结果**
+ * 等价 —— 注意**字节并不等价**，后者保持原插入序、前者是键排序后的文本；"等价"只在
+ * **`JSON.parse` 之后的对象**这一层成立，别把它读成"两串字节相同"）。
  *
  * 副作用（可接受）：不保留"人类手写的键序"，因为档案是机器产物、不是手写配置。
  */
@@ -256,8 +260,25 @@ function checkAction(a: unknown, i: number): MatchFileParseError | null {
   return null;
 }
 
-/** `clock` 的时长必须是**有限**数（`typeof x === 'number'` 会放过 NaN/Infinity，那会让计时逻辑永远不触发） */
-function isFiniteNumber(v: unknown): v is number {
+/**
+ * `clock` 的时长必须是**有限**数。
+ *
+ * ⚠️ **阶段二复审认为这条是死判据（"JSON 造不出 NaN/Infinity"），实测该前提不成立**：
+ * `JSON.parse('1e999')` 返回 **`Infinity`**、`JSON.parse('-1e999')` 返回 **`-Infinity`**
+ * （`typeof` 都是 `'number'`，`Number.isFinite` 都是 `false`）。也就是说**一份被手工改过的
+ * 档案文本只要写 `1e999`，这个非有限值就能真的走到这里** —— 而 `typeof v === 'number'`
+ * 会放行它，计时逻辑（G6）随后会拿到一个永远不触发的阈值。故**保留有限性检查**：
+ *
+ * - `NaN` 确实不可达（JSON 里没有 `NaN` 字面量，`{"a":NaN}` 直接 parse 失败）；
+ * - 但 `±Infinity` **可达**（`1e999` / `-1e999`），腿见 `tests/app/match-file.test.ts`
+ *   「clock 的 1e999 / -1e999（真实 JSON 字面量）必须被拒」；
+ * - 真正**最常见**的坏值仍是 JSON 的 `null`（`JSON.stringify(Infinity)` 会写出 `null`），
+ *   它由同一判据挡下。
+ *
+ * 取舍代价：若将来有人只读"JSON 造不出 Infinity"的半句结论而把 `Number.isFinite` 删掉，
+ * 上一条腿会当场变红 —— 那是有意的，别把红当成判据有问题。
+ */
+function isClockSeconds(v: unknown): v is number {
   return typeof v === 'number' && Number.isFinite(v);
 }
 
@@ -272,7 +293,9 @@ function checkSetup(v: unknown): MatchFileParseError | null {
   if (v.clock !== undefined) {
     if (!isObj(v.clock)) return { code: 'bad-shape', message: 'setup.clock 非法' };
     for (const k of ['decisionSec', 'draftSec', 'maxSkips'] as const) {
-      if (!isFiniteNumber(v.clock[k])) return { code: 'bad-shape', message: `setup.clock.${k} 非法（必须是有限数）` };
+      if (!isClockSeconds(v.clock[k])) {
+        return { code: 'bad-shape', message: `setup.clock.${k} 非法（必须是有限数字）` };
+      }
     }
   }
   return null;

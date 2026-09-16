@@ -233,13 +233,21 @@ describe('MatchFile v1：版本与形状校验', () => {
       { draftPool: [1, 2] },
       { draftPicks: {} },
       { bannedProtocols: [null] },
-      // clock：每项都要是**有限数**（字符串、布尔、null 都不是）
+      // clock：每项必须是**数字**。⚠️ 这里只喂 JSON 通路**造得出来**的坏值
+      // （`null` / 字符串 / 布尔 / 数组 / 缺字段）—— JSON 里不存在 NaN/Infinity，
+      // 硬造一条 NaN 腿会变成新的假守卫（见 `match-file.ts` 的 `isClockSeconds` 注释）。
       { clock: { decisionSec: '60', draftSec: 30, maxSkips: 2 } },
       { clock: { decisionSec: 60, draftSec: '30', maxSkips: 2 } },
       { clock: { decisionSec: 60, draftSec: 30, maxSkips: null } },
+      { clock: { decisionSec: null, draftSec: 30, maxSkips: 2 } },
+      { clock: { decisionSec: 60, draftSec: true, maxSkips: 2 } },
+      { clock: { decisionSec: 60, draftSec: 30, maxSkips: [] } },
       { clock: { decisionSec: 60, draftSec: 30 } },
       { clock: 7 },
       { clock: '60' },
+      { clock: null },
+      { clock: true },
+      { clock: [] },
     ];
     for (const patch of bad) {
       const f = sample() as unknown as Record<string, unknown>;
@@ -256,6 +264,66 @@ describe('MatchFile v1：版本与形状校验', () => {
       expect(r.ok, `players=${JSON.stringify(players)} 应被拒`).toBe(false);
       if (r.ok) continue;
       expect(r.error.code).toBe('bad-shape');
+    }
+  });
+
+  it('clock 的三项时长各自必须是非 null 数字，且消息点名是哪个字段（判据仍有牙齿）', () => {
+    // 阶段二复审：`Number.isFinite` 在 JSON 通路上是**死判据**（JSON 造不出 NaN/Infinity），
+    // 已降级为 `typeof === 'number'`。这条腿的作用是证明"降级后判据仍有牙齿"：
+    // 它只喂**可达值**，并对每个字段逐个构造 —— 去掉类型检查任何一处都会当场红。
+    for (const k of ['decisionSec', 'draftSec', 'maxSkips'] as const) {
+      for (const bad of [null, '60', true, [], {}] as unknown[]) {
+        const f = sample() as unknown as Record<string, unknown>;
+        f.setup = { ...sample().setup, clock: { decisionSec: 60, draftSec: 30, maxSkips: 2, [k]: bad } };
+        const r = parseMatchFile(JSON.stringify(f), { currentHash: CARD_DATA_HASH });
+        expect(r.ok, `clock.${k}=${JSON.stringify(bad)} 应被拒`).toBe(false);
+        if (r.ok) continue;
+        expect(r.error.code, `clock.${k}`).toBe('bad-shape');
+        expect(r.error.message, `clock.${k} 的消息应点名字段`).toContain(`clock.${k}`);
+      }
+    }
+    // 反向：三个字段都是数字时必须过，且**原样读回**（不是被规范化掉）
+    const f = sample() as unknown as Record<string, unknown>;
+    f.setup = { ...sample().setup, clock: { decisionSec: 60, draftSec: 30, maxSkips: 2 } };
+    const r = parseMatchFile(JSON.stringify(f), { currentHash: CARD_DATA_HASH });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.file.setup.clock).toEqual({ decisionSec: 60, draftSec: 30, maxSkips: 2 });
+    // JSON 通路的边界事实（写下来免得后人再造 NaN 腿）：`JSON.stringify(Infinity)` 产出 `null`，
+    // 而 `JSON.parse('1e999')` 产出 `Infinity` —— **两个方向不对称**，后者由上面那条腿覆盖。
+    expect(JSON.stringify({ x: Number.POSITIVE_INFINITY })).toBe('{"x":null}');
+    expect(JSON.parse('1e999')).toBe(Infinity);
+  });
+
+  it('clock 的 1e999 / -1e999（真实 JSON 字面量）必须被拒：有限性判据不是死判据', () => {
+    // 阶段二复审认为 `Number.isFinite` 是死判据（"JSON 造不出 NaN/Infinity"）——**该前提不成立**：
+    // `JSON.parse('1e999')` 返回 `Infinity`（`typeof 'number'`、`Number.isFinite` false），
+    // `-1e999` 返回 `-Infinity`。故一份**被手工改过的档案文本**能把非有限值送进校验函数，
+    // `typeof v === 'number'` 会放行它。这条腿走的就是那条真实路径：把 `1e999` 作为
+    // JSON **数字字面量**嵌进档案文本（不能用 `JSON.stringify` 拼，它会把 `Infinity` 写成 `null`）。
+    const { clock } = { clock: { decisionSec: 60, draftSec: 30, maxSkips: 2 } };
+    const good = JSON.stringify({ ...sample(), setup: { ...sample().setup, clock } });
+    expect(JSON.parse('1e999')).toBe(Infinity);
+    expect(JSON.parse('-1e999')).toBe(-Infinity);
+    for (const [label, literal, expected] of [
+      ['1e999', '1e999', Infinity],
+      ['-1e999', '-1e999', -Infinity],
+    ] as const) {
+      for (const k of ['decisionSec', 'draftSec', 'maxSkips'] as const) {
+        // 从**同一个对象**的序列化里取"原值文本"，避免手写数字对不上（`draftSec` 是 30 不是 60）
+        const doc = good.replace(`"${k}":${clock[k]}`, `"${k}":${literal}`);
+        // 反空转：拼接必须真的把那一段替换掉了，否则测的是原档案
+        expect(doc, `${k} 的补丁没生效`).not.toBe(good);
+        // 反空转：到达校验函数的值必须真的是非有限数（证明这条腿打的是有限性，不是别的）
+        const reached = (JSON.parse(doc) as { setup: { clock: Record<string, number> } }).setup.clock[k];
+        expect(Number.isFinite(reached), `${k} 到达值应是 ±Infinity（不是有限数）`).toBe(false);
+        expect(reached).toEqual(expected);
+        const r = parseMatchFile(doc, { currentHash: CARD_DATA_HASH });
+        expect(r.ok, `clock.${k}=${label} 应被拒`).toBe(false);
+        if (r.ok) continue;
+        expect(r.error.code, `clock.${k}=${label}`).toBe('bad-shape');
+        expect(r.error.message, `clock.${k}=${label}`).toContain(`clock.${k}`);
+      }
     }
   });
 
