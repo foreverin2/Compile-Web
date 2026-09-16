@@ -36,6 +36,8 @@ import { gameBus } from './core/events/bus';
 import { pushLog } from './core/log';
 import { trace, stateDigest, initEventTracing } from './core/trace';
 import type { PlayerId, Line } from './core/models/types';
+// G3 Task 8：PWA（manifest + service worker + 自动提示更新 + 一键更新）。零依赖、手写。
+import { initPwaUpdate } from './ui/pwa-update';
 
 const root = document.getElementById('app')!;
 // 启动时注入运行期 nonce（G0）：使任何未显式传 seed 的 createGame() 也不会跨重启重复同一牌序
@@ -756,6 +758,10 @@ gameBus.subscribe(() => {
 });
 // 诊断日志：全量记录 console + 捕获未捕获异常（出错自动提示导出）
 initDiag(() => state);
+// G3 Task 8：注册 Service Worker 并挂"有新版本可用 → 立即更新"提示条（附录 A 的 Task 8 行区）。
+// dev 下 initPwaUpdate 自动不注册（`import.meta.env.DEV`），所以不影响 vite dev 的热更新。
+// 位置在 setSeedNonce/createGame 之后、showHome() 之前：不动 G0 的启动语义。
+initPwaUpdate();
 // 隐藏开发者模式：Ctrl+Shift+P 密码进入；get <牌名> 把卡加入当前玩家手牌
 // （返回的卸载函数当前不使用，保持监听常驻）
 // G2 Task 4F（终审 D-2）：原先注入的是裸 `renderApp(root, state, cb)` —— 在远程页预览里用

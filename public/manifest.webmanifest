@@ -1,0 +1,16 @@
+{
+  "name": "Compile 译世界",
+  "short_name": "Compile",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0d0d10",
+  "theme_color": "#0d0d10",
+  "lang": "zh-CN",
+  "description": "Compile 译世界 · 双人卡牌对战（网页 / 可安装 PWA）",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
