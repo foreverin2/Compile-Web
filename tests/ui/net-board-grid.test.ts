@@ -172,7 +172,7 @@ function ancestorsOf(root: StubNode, target: StubNode): StubNode[] {
 }
 
 /* ============================================================================
- * G-7：五行的**视觉行序**（盒树展平 + 真解 `grid-row`）
+ * G-7：`.net-board` 顶层 grid item 的**行/列序**（盒树展平 + 真解 `grid-row` / `grid-column`）
  * ========================================================================== */
 
 /** 一条 grid item：节点、它的**祖先链**（含自身）、解出的 `grid-row`（无声明 = `Infinity`）。 */
@@ -183,6 +183,8 @@ interface GridItem { node: StubNode; chain: StubNode[]; row: number }
  *
  * ⚠️ 只有 `display: contents` 的元素才会被展平 —— 模型**真的读样式表**解出 `display`
  * （按类名硬编码的话，"删掉那条 contents"的变异不会红：模型自己把容器当成透明的了）。
+ * ⚠️ **R19**：`.net-left-rail` / `.net-dock` 都是**有盒子**的（flex 容器）⇒ 展平在它们面前
+ * 停止 —— 三块组件因此**不是** `.net-board` 的顶层 item（本用例的判据之一）。
  */
 function gridItemsOf(board: StubNode, rules: CssRule[]): GridItem[] {
   const out: GridItem[] = [];
@@ -201,7 +203,7 @@ function gridItemsOf(board: StubNode, rules: CssRule[]): GridItem[] {
   return out;
 }
 
-/** 一条 grid item 的**语义标签**（按**侧**，不按绝对玩家号 —— 与规格 §8.3 的口径一致）。 */
+/** 一条 grid item 的**语义标签**（R19：顶层件只剩"放置区"与"左栏"两种语义名字）。 */
 function labelOf(it: GridItem): string {
   const n = it.node;
   if (isClass(n, 'net-info-block')) return `信息块:${String(n.dataset.netSeat)}`;
@@ -210,146 +212,101 @@ function labelOf(it: GridItem): string {
     return `手牌区:${side}`;
   }
   if (isClass(n, 'net-grid')) return '链路+控制轨';
+  if (isClass(n, 'net-left-rail')) return '左栏';
   return `其他(${n.cls})`;
 }
 
-const DESIGNATED = ['信息块:foe', '手牌区:foe', '链路+控制轨', '手牌区:self', '信息块:self'];
-
-/**
- * **停靠栏那一行的四块**（R11-2/3）：它们**共用同一个 `grid-row`**，左右次序由**列**决定。
- * 这张表取代 R9-3 的 `ROW_GROUPS`（那张表按"每侧信息块 + 该侧手牌同一行"分组，共两组；
- * R11-2 之后对手那一块也搬进来 ⇒ 只剩**一组**四块）。
- */
-const DOCK = ['信息块:self', '手牌区:self', '信息块:foe', '手牌区:foe'] as const;
-
-/**
- * **视觉（行, 列）序**（R11-2；与 `DESIGNATED` 分开，因为两者用途不同）：
- * `DESIGNATED` 是"这五块必须都是顶层 grid item"的**集合**（顺序无关），
- * 这张表是**读序**：先按 `grid-row`，同一行内再按 `grid-column` 的**起始列**。
- *
- * ⚠️ **判据从"DOM 顺序"升级成"（行, 列）序"**：R9-3 时并盒的两块共用一行、列区间重叠
- * （手牌整行），同行的先后**只能**由 DOM 决定（当时那条注释就说清了这一点）。
- * R11-2 之后四块各有自己的列；**R12-7** 改成三列（自己 1 / 手牌 2 / 对手 3）且对手手牌张数
- * 与对手信息块**同格** ⇒ 同一格内按 DOM 序（展平后手牌张数在对手信息块之前）——
- * 于是这张表在两个席位下**同值**，
- * 而且它顺带把"谁在左、谁在右"（用户第四次验收的字面要求）钉了进来。
- * 它比旧表**多查一件事**：旧表在同行内不查任何东西（DOM 顺序恰好就是期望值）。
- */
-// R12-7：三块紧挨着（列 1/2/3），对手手牌张数与对手信息块**同列** ⇒ 同列内按 DOM 序
-// （展平后 net-hands 的子在信息块之前）⇒ 手牌张数排在对手信息块前面。
-const VISUAL = ['链路+控制轨', '信息块:self', '手牌区:self', '手牌区:foe', '信息块:foe'];
+/* ⚠️ **R19 删除的两张表**（`DESIGNATED` / `DOCK` / `VISUAL`）—— 它们钉的是"五块/四块都是
+ * `.net-board` 的顶层 grid item，且按 `grid-row` / `grid-column` 指派"。用户这一轮把三块组件
+ * 搬进左栏（`.net-left-rail > .net-dock` 的 **flex 行**）⇒ 那套指派已退役，三张表**没有对象**。
+ * 留着它们不只是死代码：`VISUAL` 的排序键会退化成 `Infinity`（"都没行号"）⇒ 排序回到 DOM 顺序，
+ * 而 DOM 顺序恰好等于旧期望值 —— 那会让判据**永远为真且什么都不查**（本项目反复栽过的假绿形态）。
+ * 新判据在下面的 G-7 + G-12（顶层 item 集合 + 列指派）与 `net-left-rail.test.ts`（三块在左栏里）。 */
 
 afterEach(() => { setFxViewSeat(null); });
 
-describe('R8-5 / R8-6 / R9-1 / R9-3：网格行序与列指派 · 控制轨归中（真跑 renderNetBoard + 解样式表）', () => {
-  it('G-7 + G-12. 停靠栏行/列序 = [链路+控制轨 | 自己信息块 · 自己手牌 · 对手信息块 · 对手手牌张数]（两个席位都是）', async () => {
+describe('R8-5 / R8-6 / R9-1 / R9-3 / **R19**：网格行序与列指派 · 控制轨归中（真跑 renderNetBoard + 解样式表）', () => {
+  it('G-7 + G-12（R19 改写）. `.net-board` 的 grid item = [左栏（含三块） | 放置区]；左栏在第 1 列、放置区在第 2 列', async () => {
     const restore = installStubDom();
     try {
       for (const seat of [0, 1] as const) {
         const root = renderFrame({ viewSeat: seat, turnPlayer: 0 });
         const board = boardOf(root);
 
-        // ── ① 容器必须是**grid**（`grid-row` 在 flex column / block 下完全无效）──
+        // ── ① 容器必须是**grid**（`grid-column` 在 flex column / block 下完全无效）──
         expect(subjectPropOf(board, [board], RULES, 'display'),
-          '.net-board 不是 grid —— 行/列指派在 flex column 下会**静默失效**'
-          + '（视觉顺序退回 DOM 顺序）').toBe('grid');
+          '.net-board 不是 grid —— 列指派在 flex column 下会**静默失效**'
+          + '（左栏与放置区退回 DOM 顺序）').toBe('grid');
 
         const items = gridItemsOf(board, RULES);
         const tree: string[] = [];
         walk(board, 0, tree, 4);
         console.log(`\n===== viewSeat=${seat} · .net-board 的盒树（展平 display:contents 后的 grid item）=====\n`
-          + items.map((it) => `  row=${it.row === Number.POSITIVE_INFINITY ? 'auto' : it.row}`
-            + `  ${labelOf(it)}`).join('\n'));
+          + items.map((it) => `  row=${it.row === Number.POSITIVE_INFINITY ? 'auto' : it.row} ${labelOf(it)}`).join('\n'));
 
-        // ── ② 五块"点名"的部分必须都是**顶层** grid item（不是缩在某个 contents 容器里）──
+        /* ⚠️⚠️ **G-7 第三次改写（R19）—— 旧句为什么必须改，新句多查了什么**
+         *  · **旧句**（R8-5~R12-7）：钉"`[信息块:foe, 手牌区:foe, 链路+控制轨, 手牌区:self,
+         *    信息块:self]` 五块**都是** `.net-board` 的顶层 grid item（展平 `display: contents` 之后），
+         *    并按 `grid-row` / `grid-column` 解出视觉行序"。它的机制是"停靠栏占第 3 行、四块按列指派"。
+         *  · **为什么必须改**：用户这一轮的裁决是把三块组件**平移挪到左边区域**
+         *    （"直至这三个组件的最右边紧挨着中间的放置区域"）⇒ 三块进了 `.net-left-rail > .net-dock`
+         *    （**flex 行**），那条按侧的 `grid-row` / `grid-column` 指派**已退役**
+         *    （半留状态 = 同一件事两套真相，见 styles-net.css 第 1 节的退役记录）。
+         *    继续钉旧形态会把**正确**的实现判红（实测：它报"这四块不是 `.net-board` 的 grid item"）。
+         *  · **新句多查了什么**：
+         *    ① **`.net-board` 的顶层 grid item 集合**变成了"左栏 + 放置区（+ 两个 fixed 项）" ——
+         *       旧句要的五块现在**必须不再**是顶层 item（它们缩在左栏里）**且**必须真的在左栏里；
+         *    ② **放置区在中列**（`grid-column: 2`）—— 旧句查的是 `1 / -1`（横跨整行），
+         *       在新形态下那会跨过左右留白、把 `fit-content` 的盒宽拉散；
+         *    ③ **左栏在第 1 列且 `justify-self: end`**（右缘贴放置区左缘）与**三块在它里面**；
+         *    ④ 反空集合：左右两条留白**同值**（同一条 `1fr`）—— 这是"放置区恒居中"的机制本身
+         *       （`net-r9.test.ts` 的 G-11a 是它的数值腿）。
+         *  ⚠️ 行/列号的**详细判据**在 `net-left-rail.test.ts`（新文件）与 `net-r9` 的 G-11/G-12c；
+         *  本用例只钉"谁在哪个格子里"。
+         */
         const labels = items.map(labelOf);
-        const missing = DESIGNATED.filter((d) => !labels.includes(d));
-        expect(missing, `viewSeat=${seat}：这些部分**不是** .net-board 的 grid item：${missing.join('、')}`
-          + `\n—— 最可能的原因：少写了一条 \`display: contents\`（.net-bottom / .net-hands），`
-          + `于是该容器的子节点缩在里面、跟着 DOM 顺序走（\`grid-row\` 声明还在却静默不生效）。`
-          + `\n实测顶层 item：${labels.join(' | ')}`).toEqual([]);
-
-        // ── ③ 行号必须**真的**来自样式表（不是 auto）──
-        const designated = items.filter((it) => DESIGNATED.includes(labelOf(it)));
-        for (const it of designated) {
-          expect(Number.isFinite(it.row), `viewSeat=${seat}：${labelOf(it)} 没有解出 grid-row`
-            + '（行号必须由样式表按侧给；靠 DOM 顺序就是 R8-5 之前的旧样）').toBe(true);
+        const rail = items.filter((it) => isClass(it.node, 'net-left-rail'));
+        const gridItem = items.filter((it) => isClass(it.node, 'net-grid'));
+        expect(rail.length, `viewSeat=${seat}：展平后 .net-board 下的 .net-left-rail 不是恰好一块`
+          + `（实际 ${rail.length} 块 / 全部 item：${labels.join(' | ')}）`).toBe(1);
+        expect(gridItem.length, `viewSeat=${seat}：展平后 .net-board 下的 .net-grid 不是恰好一块`).toBe(1);
+        // ① 列指派：左栏 1、放置区 2
+        const colOf = (it: GridItem): string => subjectPropOf(it.node, it.chain, RULES, 'grid-column') ?? '';
+        expect(colOf(rail[0]), `viewSeat=${seat}：左栏必须在**第 1 列**`).toBe('1');
+        expect(colOf(gridItem[0]), `viewSeat=${seat}：放置区必须在**第 2 列**（中列 ⇒ 恒水平居中）—— `
+          + `实际 ${colOf(gridItem[0])}（写成 1 / -1 会跨过左右留白）`).toBe('2');
+        // ② 行指派：两者都在第 1 行（唯一一行）
+        expect(rail[0].row, `viewSeat=${seat}：左栏必须在第 1 行`).toBe(1);
+        expect(gridItem[0].row, `viewSeat=${seat}：放置区必须在第 1 行`).toBe(1);
+        // ③ 左栏右缘贴放置区左缘的机制：`justify-self: end` + 左右留白同值
+        expect(subjectPropOf(rail[0].node, rail[0].chain, RULES, 'justify-self'),
+          `viewSeat=${seat}：左栏必须 \`justify-self: end\`（右缘贴住放置区左缘 —— `
+          + '用户："最右边紧挨着中间的放置区域"）').toBe('end');
+        // ⚠️ 本文件**没有** `gridTracks`（那是 net-dock / net-r9 的局部助手）——
+        //    这里按顶层空白切分即可：`minmax(0, 1fr) auto minmax(0, 1fr)` 三段。
+        const rawTracks = subjectPropOf(board, [board], RULES, 'grid-template-columns') ?? '';
+        const tracks = rawTracks.split(/\s+(?![^(]*\))/).map((t) => t.trim());
+        expect(tracks.length, `viewSeat=${seat}：.net-board 的列模板不是 3 条轨道（实际 ${rawTracks}）`).toBe(3);
+        expect(tracks[0], `viewSeat=${seat}：左右两条留白必须**同值**（放置区居中的机制）—— `
+          + `实际 左=${tracks[0]} 右=${tracks[2]}`).toBe(tracks[2]);
+        expect(/\d?fr\b/.test(tracks[0]), `viewSeat=${seat}：留白轨道必须是弹性族（实际 ${tracks[0]}）`).toBe(true);
+        expect(tracks[1], `viewSeat=${seat}：中列（放置区）必须是 auto（实际 ${tracks[1]}）`).toBe('auto');
+        // ④ **三块必须缩在左栏里**（不再是 `.net-board` 的顶层 item）
+        const leftRail = descendants(root).find((n) => isClass(n, 'net-left-rail'))!;
+        for (const sel of ['net-info-block', 'net-hand-area'] as const) {
+          const nodes = descendants(root).filter((n) => isClass(n, sel));
+          expect(nodes.length, `viewSeat=${seat}：${sel} 的个数不是 2`).toBe(2);
+          for (const n of nodes) {
+            const chain = ancestorsOf(root, n);
+            expect(chain.includes(leftRail), `viewSeat=${seat}：${sel} 不在左栏里`
+              + '（用户："三个组件平移挪到左边区域"）').toBe(true);
+            expect(labels.some((l) => l === labelOf({ node: n, chain, row: 0 })),
+              `viewSeat=${seat}：${sel} 仍是 .net-board 的顶层 grid item —— 它必须缩在左栏里`).toBe(false);
+          }
         }
-        // ── ③′ **R11-2/3 的行表**：五块占**两行** —— 链路那一行（1）与**停靠栏**那一行（3），
-        //    停靠栏的四块**共用同一行**（"对手那一块搬进自己这一行"就是这个意思）。
-        //    ⚠️ 判据迁移（**不是放松**）：R8-5/R8-7 要求"五块五行、信息块各占一整行"，
-        //    R9-3 要求"每侧信息块与手牌同行"（两组），R11-2 把它们**合成一组**。
-        //    新判据**多查了两件事**：① 停靠栏的四块必须在**同一行**（R9-3 时对手那一块在另一行）；
-        //    ② 同行内的**左右次序**必须由列决定（旧模型在同行内不查任何东西）。
-        //    行数仍是**精确值**（两行），跳行/串行（`grid-row: 2` 与 `3` 对调、某块 `auto`）照样红。
-        const rowOf = (l: string): number => designated.find((it) => labelOf(it) === l)!.row;
-        const colStartOf = (l: string): number => {
-          const it = designated.find((x) => labelOf(x) === l)!;
-          const raw = subjectPropOf(it.node, it.chain, RULES, 'grid-column') ?? '1';
-          return Number.parseInt(raw.split('/')[0].trim(), 10);
-        };
-        const rowsUsed = [...new Set(designated.map((it) => it.row))].sort((a, b) => a - b);
-        expect(rowsUsed, `viewSeat=${seat}：R11-2 之后五块应占**两行**（链路行 + 停靠栏行），`
-          + `实际占 ${rowsUsed.length} 行：`
-          + designated.map((it) => `${labelOf(it)}=${it.row}`).join(' / ')).toEqual([1, 3]);
-        for (const l of DOCK) {
-          expect(rowOf(l), `viewSeat=${seat}：${l} 与停靠栏其他三块不在同一行`
-            + `（R11-2 的裁决是"对手那一块搬进自己这一行"）—— 实测 `
-            + DOCK.map((x) => `${x}=${rowOf(x)}`).join(' / ')).toBe(rowOf(DOCK[0]));
-        }
-        expect(rowOf('链路+控制轨'), `viewSeat=${seat}：链路那一行必须在停靠栏**之上**`)
-          .toBeLessThan(rowOf('信息块:self'));
-        // 逐侧点名（失败信息比"集合不等"可读，也防有人把 DOCK 一起改错）
-        expect(rowOf('信息块:self'), `viewSeat=${seat}：自己信息块与自己手牌区必须**同一行**`)
-          .toBe(rowOf('手牌区:self'));
-        expect(rowOf('信息块:foe'), `viewSeat=${seat}：对手信息块与对手手牌张数必须**同一行**`)
-          .toBe(rowOf('手牌区:foe'));
-        // ── ③″ **左右次序**（用户第四次验收的字面要求："对手信息块……摆在该行右侧"）──
-        //    自己那一块在左、对手那一块在右；对手的手牌张数紧贴对手信息块的**右侧**。
-        //    这两条是行为腿（从样式表解出的列号），不是"看着差不多"。
-        expect(colStartOf('信息块:self'), `viewSeat=${seat}：自己信息块必须在对手信息块的**左侧**`
-          + `（实际列 ${colStartOf('信息块:self')} vs ${colStartOf('信息块:foe')}）`)
-          .toBeLessThan(colStartOf('信息块:foe'));
-        // R12-7：对手手牌张数**与对手信息块同格**（压在块内的右下角）—— 不再是自己的一列，
-        // 也不再"贴右侧"。判据从"列号更大"改成"**同列**"（块的下内边距为它让出一条）。
-        expect(colStartOf('手牌区:foe'), `viewSeat=${seat}：对手手牌张数必须与对手信息块**同格**`
-          + `（R12-7），实际列 ${colStartOf('手牌区:foe')} vs ${colStartOf('信息块:foe')}`)
-          .toBe(colStartOf('信息块:foe'));
-
-        // ── ④ **视觉（行, 列）序**（本守卫的核心）──
-        const colOf = (l: string): string => {
-          const it = designated.find((x) => labelOf(x) === l)!;
-          return subjectPropOf(it.node, it.chain, RULES, 'grid-column') ?? '';
-        };
-        const visual = designated.slice().sort((a, b) => (a.row - b.row)
-          || (colStartOf(labelOf(a)) - colStartOf(labelOf(b)))
-          || (items.indexOf(a) - items.indexOf(b))).map(labelOf);
-        console.log(`  ----- viewSeat=${seat} · 视觉上→下/左→右（grid-row 优先、同行再按列）: ${visual.join(' → ')}`);
-        expect(visual, `viewSeat=${seat}：视觉顺序必须是\n  ${VISUAL.join(' → ')}\n`
-          + `实际\n  ${visual.join(' → ')}`).toEqual(VISUAL);
-
-        // ── ⑤ **R11-2/3 的列指派**：四个部件各就各位（自己信息块=左列、自己手牌=整行、
-        //    对手信息块=第 3 列、对手手牌张数=第 4 列）──
-        const EXPECTED_COL: Record<string, RegExp> = {
-          '信息块:self': /^1(\s*\/\s*2)?$/,
-          '手牌区:self': /^2(\s*\/\s*3)?$/,      // R12-7：夹在左右两块之间
-          '信息块:foe': /^3(\s*\/\s*4)?$/,
-          '手牌区:foe': /^3(\s*\/\s*4)?$/,       // R12-7：与对手信息块同格（块内右下角）
-          '链路+控制轨': /^1\s*\/\s*-1$/,
-        };
-        for (const it of designated) {
-          const want = EXPECTED_COL[labelOf(it)];
-          expect(want, `本守卫缺 ${labelOf(it)} 的期望列（白名单表漏项）`).toBeTruthy();
-          expect(colOf(labelOf(it)), `viewSeat=${seat}：${labelOf(it)} 的 grid-column 不符`
-            + `（实际 ${colOf(labelOf(it))}）`).toMatch(want);
-        }
-
-        // ── ⑥ **停靠栏在链路之下**（"不遮链路放牌区"的结构面）：停靠栏四块的行号都大于链路行 ──
-        const laneRow = rowOf('链路+控制轨');
-        for (const l of DOCK) {
-          expect(rowOf(l), `viewSeat=${seat}：${l} 与链路同一行（停放栏会压住放牌区）`)
-            .toBeGreaterThan(laneRow);
-        }
+        // ⑤ 反空集合：三块真的都在 `.net-dock` 里（否则上面几条是空判据）
+        expect(descendants(root).filter((n) => isClass(n, 'net-dock')).length,
+          `viewSeat=${seat}：.net-dock 不是恰好一块`).toBe(1);
       }
     } finally {
       await drainRaf();
@@ -366,22 +323,41 @@ describe('R8-5 / R8-6 / R9-1 / R9-3：网格行序与列指派 · 控制轨归�
    * `self = P0`），只有切到 `viewSeat=1` 才错。这条源码腿的价值是**报错信息直接点名**
    * "写成按玩家号了"，而不是让人去猜为什么席位 1 挂了。
    */
-  it('G-7b. 行号指派必须按**侧**（源码腿）：grid-row 规则里不得出现绝对玩家号', () => {
-    const rowRules = RULES.filter((r) => /(?:^|;|\s)grid-row\s*:/.test(r.body) && /net-/.test(r.selector));
-    console.log(`\n===== G-7b · styles-net.css 里给 net 节点派行号的规则（${rowRules.length} 条）=====\n`
+  it('G-7b（R19 改写）. 剩下的行/列指派必须落在**左栏与放置区**这两个新顶层件上，且不得出现绝对玩家号', () => {
+    // ⚠️ **判据迁移（R19）——旧句为什么必须改，新句多查了什么**
+    //  · **旧句**：要求 `styles-net.css` 里给 net 节点派 `grid-row` 的规则 **≥ 5 条**，
+    //    且其中必须出现 `[data-net-seat='foe']` / `[data-net-seat='self']` /
+    //    `.net-hand-area-foe` / `.net-hand-area-self` 四种**按侧**写法。
+    //  · **为什么必须改**：R19 之后给 net 节点派行/列号的只剩**两条**（`.net-grid` 与
+    //    `.net-left-rail`），而三块组件的行/列指派**已退役**（它们住在 `.net-dock` 的 flex 行里）
+    //    ⇒ "--→ 5 条"与那四种按侧写法都不再成立；旧句会把**正确**的实现判红
+    //    （实测：报"没有任何给 net 节点派 grid-row 的规则：2 < 5"）。
+    //  · **新句多查了什么**：① 指派必须**真的**落在 `.net-grid` / `.net-left-rail` 这两个
+    //    顶层组件上（而不是散在别处）；② **反面判据一个字未改** —— 行/列号里**不许**出现
+    //    绝对玩家号（`data-player` / `.p1` / `.p2`），那正是 R-F · C-2 的原始缺陷形态；
+    //    ③ 新增一条：**三块组件不许再被派 grid 行/列**（退役要退干净，见 R19 的说明）。
+    const rowRules = RULES.filter((r) => /(?:^|;|\s)grid-(?:row|column)\s*:/.test(r.body) && /net-/.test(r.selector));
+    console.log(`\n===== G-7b · styles-net.css 里给 net 节点派行/列号的规则（${rowRules.length} 条）=====\n`
       + rowRules.map((r) => `  ${r.selector} { ${r.body.trim()} }`).join('\n'));
-    // 反空集合：一条都没有 ⇒ 五行行号根本不来自样式表（G-7 会红，但这里要能读出原因）
-    expect(rowRules.length, 'styles-net.css 里没有任何给 net 节点派 grid-row 的规则').toBeGreaterThanOrEqual(5);
-    // ① 两块信息块按 `data-net-seat`、两块手牌区按侧类名
+    // 反空集合：一条都没有 ⇒ 行/列号根本不来自样式表（G-7 会红，但这里要能读出原因）
+    expect(rowRules.length, 'styles-net.css 里没有任何给 net 节点派 grid-row / grid-column 的规则')
+      .toBeGreaterThanOrEqual(2);
     const sel = rowRules.map((r) => r.selector).join(' | ');
-    for (const want of ["[data-net-seat='foe']", "[data-net-seat='self']", '.net-hand-area-foe', '.net-hand-area-self']) {
-      expect(sel, `styles-net.css 的行号规则里找不到按侧的写法 ${want}`).toContain(want);
+    for (const want of ['.net-grid', '.net-left-rail']) {
+      expect(sel, `styles-net.css 的行/列指派里找不到新顶层件 ${want}（R19 的布局没有机制）`)
+        .toContain(want);
     }
-    // ② 反面：不得按绝对玩家号（`data-player` / `.p1` / `.p2`）——那是 C-2 的原始缺陷形态
+    // ② 反面：不得按绝对玩家号（`data-player` / `.p1` / `.p2`）—— C-2 的原始缺陷形态
     const byPlayer = rowRules.filter((r) => /data-player|\.p[12](?![\w-])/.test(r.selector));
     expect(byPlayer.map((r) => r.selector),
-      '行号按**绝对玩家号**指派了（`data-player` / `.p1` / `.p2`）—— 席位一切换就会两边对调'
+      '行/列号按**绝对玩家号**指派了（`data-player` / `.p1` / `.p2`）—— 席位一切换就会两边对调'
       + '（R-F · C-2 的两次 Critical 都是这个形态：默认席位下看着还对）').toEqual([]);
+    // ③ **退役腿（R19 新增）**：三块组件**不许**再被派 grid 行/列（它们住在 `.net-dock` 的 flex 行里）
+    const staleRules = rowRules.filter((r) => /\.net-info-block|\.net-hand-area|\.net-bottom/.test(r.selector));
+    expect(staleRules.map((r) => `${r.selector} { ${r.body.trim()} }`),
+      'styles-net.css 里仍有给停靠栏三块派 `grid-row` / `grid-column` 的规则 —— 它们现在住在 '
+      + '`.net-dock`（flex）里，那些声明**不生效**（flex item 没有 grid placement），'
+      + '留着就是"看着在排版、其实什么都不做"的假代码').toEqual([]);
   });
 
   /**

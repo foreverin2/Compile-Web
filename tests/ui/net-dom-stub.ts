@@ -51,6 +51,12 @@ export interface StubNode {
   parentElement: StubNode | null;
   style: Record<string, unknown>;
   /**
+   * **R19 修正补上显式类型**：与 `appendChild` **同一族问题** —— `dispatchEvent` 此前只存在于
+   * 索引签名里（`unknown`），于是测试侧调用它要写 `as unknown as (…)`。声明出来**运行时零变化**。
+   * 语义见 `makeStubEl` 里的实现（冒泡路径 + `target` 字段）。
+   */
+  dispatchEvent(ev: { type: string; target?: unknown }): boolean;
+  /**
    * **R15 修正补上显式类型**：与上面 `appendChild`/`insertBefore` **同一族问题** ——
    * 它此前只存在于索引签名里，于是任何"读桩矩形"的测试代码拿到的是 `unknown`
    * （`TS2571: Object is of type 'unknown'` / `TS18046: … is of type 'unknown'`），
@@ -135,9 +141,23 @@ export function setStubRectFor(node: object | null, r: {
 /** 该节点的矩形（按节点覆盖 → 全局 → 全 0）。 */
 const rectOf = (node: object): StubRect => nodeRects.get(node) ?? stubRect ?? ZERO_RECT;
 
+/**
+ * **R19 新增：事件监听表**（`node → 事件类型 → 监听器数组`）。
+ *
+ * Why：`render-net.ts` 的卡牌放大框把交互做成**事件委托**（挂在板根上），而"真跑行为腿"
+ * 需要能把事件派发到某张卡上、让它冒泡到板根。用 `WeakMap` 保证节点被回收时监听表跟着走
+ * （不跨用例泄漏 —— 与 `nodeRects` 同一套理由与写法）。
+ *
+ * ⚠️ 类型放宽成 `(ev: unknown) => void`：本仓的产出代码里监听器形参各式各样
+ * （`Event` / `KeyboardEvent` / 自定义），桩不需要它们的成员（只用 `type` / `target`）。
+ */
+const listeners = new WeakMap<object, Map<string, Array<(ev: unknown) => void>>>();
+
 /** 造一个桩节点（`appendChild` / `textContent` / `className` 的手写最小语义）。 */
 export function makeStubEl(tag: string): StubNode {
   const set = new Set<string>();
+  /** **R19**：`setAttribute` 记下的非 `data-` 属性（`getAttribute` 的读侧，见那里的说明）。 */
+  const attrs = new Map<string, string>();
   const node: StubNode = {
     tag,
     cls: '',
@@ -171,11 +191,53 @@ export function makeStubEl(tag: string): StubNode {
      *  `StubNode` 接口的**显式成员**（此前它在 `extra` 里 ⇒ 测试侧读到的是 `unknown`）。
      *  闭包引用 `node` 是安全的：它只在这个箭头被**调用**时才求值。 */
     getBoundingClientRect: () => rectOf(node),
+    /**
+     * **R19 新增：极简事件派发**（`addEventListener` 的配对物）。
+     *
+     * 为什么必须加：`render-net.ts` 的卡牌放大框（R19）把交互做成**事件委托**挂在板根上
+     * （每帧重建 DOM ⇒ 不能把监听挂在卡上）。没有派发能力时，"悬浮即时显示 / 单击固定"
+     * 这两条裁决就**只**能做源码腿或半纯腿，而用户这一轮明确要求"放大框行为腿**真跑**"。
+     *
+     * ## 语义（够用就好，诚实声明边界）
+     *  - 冒泡路径 = 从**派发节点**沿 `parentElement` 到根（`node` 自己**不算**在路径里：
+     *    它没有挂在任何地方，也不需要收到自己的事件）；
+     *  - 每个节点上按**注册顺序**调用监听器，`ev.target` 恒为**派发节点**
+     *    （与真实 DOM 的 `event.target` 同义 —— 委托方靠它 resolve 出"命中了哪张卡"）；
+     *  - 不实现 `stopPropagation` / `preventDefault` / 捕获阶段 / 事件对象的方法
+     *    （本仓的产出代码不用它们 —— 用了会在桩上抛 TypeError，属**响亮**退化）。
+     *
+     * ⚠️ **它对既有用例零影响**：改之前 `addEventListener` 是 noop、没有任何用例派发过事件 ⇒
+     *    新实现只在"测试主动调 `dispatchEvent`"时才有行为。`installStubDom()` 每帧新建节点，
+     *    监听表随节点回收（不跨用例）。
+     */
+    dispatchEvent: (ev: { type: string; target?: unknown }) => {
+      const path: StubNode[] = [];
+      for (let p = node.parentElement; p !== null; p = p.parentElement) path.push(p);
+      for (const n of path) {
+        for (const fn of [...(listeners.get(n)?.get(ev.type) ?? [])]) {
+          fn({ type: ev.type, target: ev.target ?? node });
+        }
+      }
+      return true;
+    },
   };
   const extra: Record<string, unknown> = {
     removeChild: () => { /* noop */ },
     remove: () => { /* noop */ },
-    setAttribute: () => { /* noop */ },
+    /**
+     * **R19 修正：`setAttribute` 真的记属性了**（改之前是 noop）。
+     *
+     * 为什么要改：`render-net.ts` 的卡牌放大框从 **`img.getAttribute('src')`** 反推 defId
+     * （与 `render.ts` 的 `fxRotDegOf` 读 `data-fx-rot` 同一族读法）。桩此前 `setAttribute` 是
+     * noop、而 `getAttribute` 只把 `data-*` 映射到 `dataset` ⇒ **非 `data-` 属性写进去读不回来**
+     * ⇒ 那条分支在桩上**第一步就空转**，测试只能靠手写 `dataset.src` 绕过去（那会让"桩的读法"
+     * 与"产出代码的读法"分叉，正是本文件头注警告的"两份真相"）。
+     *
+     * ⚠️ 只补"写进去能读回来"，**不放宽**任何既有语义：`data-*` 仍然走 `dataset`
+     * （真实 DOM 里两者是同一个属性），其余属性名进这个属性表。
+     */
+    setAttribute: (n?: string, v?: unknown) => { attrs.set(String(n ?? ''), String(v ?? '')); },
+    removeAttribute: (n?: string) => { attrs.delete(String(n ?? '')); },
     // **G2 修正 R8-4**：`data-*` 属性在真实 DOM 里**就是** `dataset`（`el.dataset.fxRot = 'ccw'`
     // 写的就是 `data-fx-rot`）—— 桩此前 `getAttribute` **恒返 null**，于是任何"读 data-* 属性"的
     // 产出代码在桩上都**永远读不到**（`fxRotDegOf(holder)` 恒得 0 ⇒ 协议 FX 的行为腿不可能存在，
@@ -185,16 +247,57 @@ export function makeStubEl(tag: string): StubNode {
     //    当输入的分支（`fx-gen3-swap.ts:120` 的 `getAttribute('src')` 行为一字未变）。
     getAttribute: (n?: string) => {
       const name = String(n ?? '');
-      if (!name.startsWith('data-')) return null;
-      const key = name.slice(5).replace(/-([a-z])/g, (_a, c: string) => c.toUpperCase());
-      const v = node.dataset[key];
-      return v === undefined ? null : v;
+      if (name.startsWith('data-')) {
+        const key = name.slice(5).replace(/-([a-z])/g, (_a, c: string) => c.toUpperCase());
+        const v = node.dataset[key];
+        return v === undefined ? null : v;
+      }
+      // R19：非 `data-` 属性先看 `setAttribute` 记下的那张表（见那里的说明）。
+      const v = attrs.get(name);
+      if (v !== undefined) return v;
+      // ⚠️ **R19 的第二个补丁：反射属性**。真实 DOM 里 `img.src = x` 与
+      //    `img.setAttribute('src', x)` 是**同一个属性**（`src` / `id` / `title` / `alt` … 都是
+      //    reflected IDL attributes）。产出代码 `render.ts` 写的正是 **属性赋值**
+      //    （`img.src = cardImgSrc(…)`），而放大框读的是 `getAttribute('src')`
+      //    （与 `fxRotDegOf` 读 `data-fx-rot` 同一族；作者把两者当等价）。桩此前只认
+      //    `setAttribute` ⇒ `renderProtocol` 产出的协议图在桩上**读不回 src**，协议那一档
+      //    因此永远解不出条目（实测）。这里把节点自己的可见属性值接上，与浏览器同义。
+      const own = (node as unknown as Record<string, unknown>)[name];
+      return typeof own === 'string' && own !== '' ? own : null;
     },
-    addEventListener: () => { /* noop */ },
+    addEventListener: (type?: string, fn?: (ev: unknown) => void) => {
+      if (typeof type !== 'string' || typeof fn !== 'function') return;
+      let byType = listeners.get(node);
+      if (!byType) { byType = new Map(); listeners.set(node, byType); }
+      const arr = byType.get(type) ?? [];
+      arr.push(fn);
+      byType.set(type, arr);
+    },
     removeEventListener: () => { /* noop */ },
     querySelector: (sel?: string) => queryAllIn(node, String(sel ?? ''))[0] ?? null,
-    querySelectorAll: (sel?: string) => queryAllIn(node, String(sel ?? '')),
-    closest: () => null,
+    querySelectorAll: (sel?: string) => queryAllIn(node, String(sel ?? '')) as StubNode[],
+    /**
+     * **R19 新增：`closest` 的极简实现**（改之前恒返 `null`）。
+     *
+     * 为什么要加：`render-net.ts` 的卡牌放大框靠 `target.closest('.card' / '.protocol' / …)`
+     * 从**悬浮到的那个叶子节点**回溯到"命中哪一张卡"（事件委托的标准写法，`event.target`
+     * 通常是卡里的 `<img>`）。桩此前恒返 `null` ⇒ **放大框对任何目标都解不出条目**
+     * （实测：四档行为腿全部报 "没有解出条目"），于是"悬浮显示 / 单击固定"这两条裁决
+     * 在桩上根本跑不起来。
+     *
+     * **语义**：从 `node` 自己开始沿 `parentElement` 往上，返回第一个**自己命中**
+     * `selector` 的节点（与浏览器一致：`closest` 含自身）。只支持**单个复合选择器**
+     * （类 / `tag` / `[attr="值"]`）—— 遇到 `>` / `,` / `+` / `~` / 伪类一律返回 `null`
+     * （宁可"找不到"，也不猜：与 `queryAllIn` 同一套边界）。
+     */
+    closest: (sel?: string) => {
+      const s = String(sel ?? '').trim();
+      if (s === '' || /[>,+~]/.test(s) || s.includes(':')) return null;
+      for (let p: StubNode | null = node; p !== null; p = p.parentElement) {
+        if (matchesCompound(s, p)) return p;
+      }
+      return null;
+    },
     // ⚠️ `getBoundingClientRect` 已上移到上面的字面量里（R15：让它成为接口的显式成员，
     //    否则测试侧读到 `unknown`）。这里**不再**重复定义 —— 重复会被 `Object.assign` 覆盖，
     //    两份实现一旦漂移就是本项目反复栽过的"两份真相"。
@@ -299,10 +402,21 @@ export const classListOf = (n: StubNode): string[] => n.cls.split(/\s+/).filter(
 /** 节点是否带某个类。 */
 export const isClass = (n: StubNode, c: string): boolean => classListOf(n).includes(c);
 
-/** 元素树里的**全部后代**（前序 = DOM 顺序），含自身。 */
+/**
+ * 元素树里的**全部后代**（前序 = DOM 顺序），含自身。
+ *
+ * ⚠️ **R19 修正：跳过文本节点**。`document.createTextNode(t)` 在桩里返回 `{ text: t }`
+ * ——那**不是** `StubNode`（没有 `children`）。`buildCardTextEl`（卡牌中文效果面板，
+ * 放大框复用它）正会把这种节点 `appendChild` 进元素里 ⇒ 任何"递归整棵树"的助手
+ * （本函数 / `queryAllIn` / 测试里的 `textOf`）撞上它就会抛
+ * `TypeError: n.children is not iterable`。真实 DOM 里 `children` **只含元素**（文本节点在
+ * `childNodes` 里），所以这里跳过它们才是与浏览器同义的行为（不是放宽）。
+ */
 export function descendants(n: StubNode): StubNode[] {
   const out: StubNode[] = [n];
-  for (const c of n.children) out.push(...descendants(c));
+  for (const c of n.children ?? []) {
+    if (Array.isArray((c as StubNode).children)) out.push(...descendants(c as StubNode));
+  }
   return out;
 }
 

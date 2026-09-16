@@ -174,7 +174,7 @@ afterEach(() => { setFxViewSeat(null); });
  * ========================================================================== */
 
 describe('R11-2 · G-13：停靠栏（一个视口高 · 链路区内部滚动 · 停靠栏在放牌区之下）', () => {
-  it('G-13a. 容器恒为一个视口高：3 行（`1fr` + 两个 `auto`）、4 列；链路那一行是**内部滚动区**', async () => {
+  it('G-13a. 容器恒为一个视口高：**单行**（放置区独占整页高）、三列（左栏 | 放置区 | 右空）；链路区是**内部滚动区**', async () => {
     const restore = installStubDom();
     try {
       for (const seat of [0, 1] as const) {
@@ -183,64 +183,93 @@ describe('R11-2 · G-13：停靠栏（一个视口高 · 链路区内部滚动 �
         const grid = descendants(root).find((n) => isClass(n, 'net-grid'))!;
         expect(grid, `viewSeat=${seat}：找不到 .net-grid`).toBeTruthy();
 
-        // ── ① 容器是 grid（行/列指派在 flex/block 下静默失效）──
+        // ── ① 容器是 grid（列指派在 flex/block 下静默失效）──
         expect(subjectPropOf(board, [board], RULES, 'display'), '.net-board 不是 grid').toBe('grid');
 
         // ── ② **高度 = 100vh − `--net-app-pad-y`**（R11-2 的"钉在屏幕上"就靠它）──
         //    为什么不能是裸 `100vh`：`#app` 有 12+110 的内边距 ⇒ 文档会比视口高 122px
-        //    ⇒ 停靠栏下沿被推出屏幕（正好压掉用户要的"固定在屏幕上"）。
+        //    ⇒ 棋盘下沿被推出屏幕。
         const h = subjectPropOf(board, [board], RULES, 'height');
         const padY = cssVarOf([board], RULES, '--net-app-pad-y');
         console.log(`\n===== G-13a · viewSeat=${seat} =====\n  height = ${String(h)}`
           + `\n  --net-app-pad-y = ${String(padY)}（解算 ${String(cssLenOf([board], RULES, padY ?? ''))}px）`);
-        expect(h, '.net-board 没有 height —— 它就不是"恒为一个视口高"的容器，\n'
-          + '停靠栏只能靠 fixed/sticky 才可能钉住，而两者都不满足"不遮链路放牌区"').toBeTruthy();
+        expect(h, '.net-board 没有 height —— 它就不是"恒为一个视口高"的容器').toBeTruthy();
         expect(h!.replace(/\s+/g, ''), `height 必须写成 calc(100vh - var(--net-app-pad-y))`
-          + `（实际 \`${String(h)}\`）—— 裸 100vh 会让停靠栏下沿落到屏幕外`).toBe('calc(100vh-var(--net-app-pad-y))');
+          + `（实际 \`${String(h)}\`）—— 裸 100vh 会让下沿落到屏幕外`).toBe('calc(100vh-var(--net-app-pad-y))');
         expect(padY, '`.net-board` 没有定义 --net-app-pad-y（高度基准的第二个乘数丢了）')
           .toBe('122px');
         expect(cssLenOf([board], RULES, padY!), '--net-app-pad-y 解不出像素值').toBe(122);
 
-        // ── ③ 行模板：第 1 行 `1fr`（链路区吃掉剩余高度）、第 2/3 行 `auto`（日志行 + 停靠栏）──
+        // ── ③ 行模板：**只剩一条** `minmax(0, 1fr)` ──
+        //    ⚠️ **判据迁移（R19，不是放松）**：
+        //    · **旧句为什么必须改**：旧句钉的是"3 条轨道（链路区 `1fr` + 两个 `auto`）" ——
+        //      那是 R11-2~R12-7 的**三行**行表（链路区 / 日志行 / 停靠栏）。R19 把三块组件搬进
+        //      **左栏**（与放置区**同一行**的左右两栏）⇒ 后两条轨道**没有任何子节点**
+        //      （`.net-dock` 是左栏的子节点，不是在 `.net-board` 里另起一行）⇒ 留着就是两条
+        //      永远 0 高的死轨道。旧句会把**正确**的实现判红。
+        //    · **新句多查了什么**：① 行数必须**恰好 1**（多一条 = 又出现了"没有子节点的死轨道"，
+        //      而"停靠栏在放牌区之下"这句话在新形态里**不成立**，它的替代判据是
+        //      "三块在左栏里、左栏与放置区同在第 1 行"，见 `net-left-rail.test.ts` 的 RAIL-1）；
+        //      ② 那一条必须是**弹性族**（放置区吃掉整页高 ⇒ 7 个卡位不再依赖滚动）。
         const rawRows = subjectPropOf(board, [board], RULES, 'grid-template-rows');
-        expect(rawRows, '.net-board 没有 grid-template-rows（三行的高度关系失去定义）').toBeTruthy();
+        expect(rawRows, '.net-board 没有 grid-template-rows（行高关系失去定义）').toBeTruthy();
         const rows = gridTracks(rawRows!);
         console.log(`  grid-template-rows = ${rawRows} → ${rows.join(' | ')}`);
-        expect(rows.length, `行模板必须恰好 3 条轨道（链路区 / 日志行 / 停靠栏），实际 ${rows.length} 条`)
-          .toBe(3);
-        expect(/fr\b/.test(rows[0]), `第 1 条轨道必须是**弹性**的（链路区吃掉剩余高度），实际 \`${rows[0]}\``)
+        expect(rows.length, `行模板必须恰好 1 条轨道（放置区独占整页高），实际 ${rows.length} 条：`
+          + `${rows.join(' | ')}（多出来的轨道没有任何子节点 = 永远 0 高的死轨道）`).toBe(1);
+        expect(/fr\b/.test(rows[0]), `唯一那条轨道必须是**弹性**的（放置区吃掉整页高），实际 \`${rows[0]}\``)
           .toBe(true);
-        for (const i of [1, 2]) {
-          expect(rows[i].trim(), `第 ${i + 1} 条轨道必须是 \`auto\`（按内容高；写死高度会让停靠栏被裁）`)
-            .toBe('auto');
-        }
-        // 列模板的**详细判据**在 net-r9 的 G-11c（4 条轨道 + 各自的内容/弹性族），这里只钉条数
+        // 列模板：**左栏 | 放置区 | 右空**（左右两条等宽 ⇒ 放置区恒居中；详细判据在 net-left-rail 的 RAIL-2）
         const rawCols = subjectPropOf(board, [board], RULES, 'grid-template-columns');
-        expect(gridTracks(rawCols ?? '').length, `列模板必须 3 条轨道（自己 · 手牌 · 对手；R12-7 取消了留白轨道）`
-      + `（实际 ${String(rawCols)}）`).toBe(3);
+        expect(gridTracks(rawCols ?? '').length, `列模板必须 3 条轨道（左栏 · 放置区 · 右空）`
+          + `（实际 ${String(rawCols)}）`).toBe(3);
 
-        // ── ④ 链路区 = **视口内的滚动区**，且在**第 1 行**、横跨整行 ──
+        // ── ④ 放置区 = **视口内的滚动区**，在**第 1 行 / 第 2 列**（中列 ⇒ 恒水平居中）──
         const gChain = ancestorsOf(root, grid);
         const gridRow = subjectPropOf(grid, gChain, RULES, 'grid-row');
         const overflowY = subjectPropOf(grid, gChain, RULES, 'overflow-y');
         const minH = subjectPropOf(grid, gChain, RULES, 'min-height');
         const alignC = subjectPropOf(grid, gChain, RULES, 'align-content');
-        console.log(`  .net-grid：grid-row=${String(gridRow)} overflow-y=${String(overflowY)}`
-          + ` min-height=${String(minH)} align-content=${String(alignC)}`);
-        expect(gridRow, '链路区必须在**第 1 行**（停靠栏在它下面）').toBe('1');
-        expect(subjectPropOf(grid, gChain, RULES, 'grid-column'), '链路区必须横跨整行').toBe('1 / -1');
-        expect(overflowY, '链路区必须自己滚（`overflow-y: auto`）—— 这是"停靠栏永不遮挡放牌区"的机制；'
-          + '写成 visible 时链路会**溢出到停靠栏下面**（放牌区被盖住）').toBe('auto');
-        expect(minH, '链路区必须有 `min-height: 0` —— grid item 的 `min-height: auto` 会撑破'
-          + '第 1 行的 `minmax(0, 1fr)`，把停靠栏顶出屏幕').toBe('0');
-        expect(alignC, '链路区必须有 `align-content: start` —— 高屏时隐式行被拉伸会把列内六个层块撑开')
+        console.log(`  .net-grid：grid-row=${String(gridRow)} grid-column=${String(subjectPropOf(grid, gChain, RULES, 'grid-column'))}`
+          + ` overflow-y=${String(overflowY)} min-height=${String(minH)} align-content=${String(alignC)}`);
+        expect(gridRow, '放置区必须在第 1 行（唯一的行）').toBe('1');
+        // ⚠️ **判据迁移（R19）**：旧句是 `toBe('1 / -1')`（横跨整行）—— 那时 `.net-board` 只有
+        //    一列、"整行"就等于"整页宽"。现在横跨整行会**跨过左右两条留白** ⇒ 必须只占**中列**；
+        //    新句多查了"它在中列"这一件事（`1 / -1` 与 `2` 在旧形态下同义，在新形态下不同义）。
+        expect(subjectPropOf(grid, gChain, RULES, 'grid-column'),
+          '放置区必须**只占中列**（`grid-column: 2`）—— 左右两条等宽留白才是"它恒在页面水平中心"的机制；'
+          + '写成 `1 / -1` 会跨过留白、`fit-content` 的盒宽把四条轨道拉散').toBe('2');
+        expect(overflowY, '放置区必须自己滚（`overflow-y: auto`）—— 矮屏时的兜底；'
+          + '写成 visible 时链路会**溢出到棋盘外**（被裁掉且没有任何滚动条）').toBe('auto');
+        expect(minH, '放置区必须有 `min-height: 0` —— grid item 的 `min-height: auto` 会撑破'
+          + '唯一那条 `minmax(0, 1fr)` 轨道').toBe('0');
+        expect(alignC, '放置区必须有 `align-content: start` —— 高屏时隐式行被拉伸会把列内六个层块撑开')
           .toBe('start');
 
-        // ── ⑤ **停靠栏在链路区之下**（结构面：不是浮在它上面）──
-        const dockRow = subjectPropOf(infoBlockOf(root, 'self'), ancestorsOf(root, infoBlockOf(root, 'self')),
-          RULES, 'grid-row');
-        expect(Number.parseInt(String(dockRow), 10),
-          `停靠栏那一行（${String(dockRow)}）必须在链路区（第 1 行）**之下**`).toBeGreaterThan(1);
+        // ── ⑤ **三块组件在左栏里**（R19 取代"停靠栏在链路区之下"）──
+        //    ⚠️ **旧句为什么必须改**：旧句解"自己信息块的 `grid-row` 必须 > 1"（上下分开）。
+        //    R19 的裁决是**左右分开**（用户："平移挪到左边区域，直至……最右边紧挨着中间的放置区域"）
+        //    ⇒ 三块与放置区**同一行**，旧句会把本轮的裁决判成失败。
+        //    **新句多查了什么**：① 三块的祖先链上必须有 `.net-dock` **且** `.net-left-rail`
+        //    （结构面：它们是左栏里的横排整体，不是散在棋盘上的自动放置项）；
+        //    ② 左栏的 `grid-column` 是 `1`（左）且 `justify-self: end`（右缘贴放置区左缘）。
+        const leftRail = descendants(root).find((n) => isClass(n, 'net-left-rail'));
+        expect(leftRail, `viewSeat=${seat}：元素树里找不到 .net-left-rail（左栏没产出？）`).toBeTruthy();
+        const railChain = ancestorsOf(root, leftRail!);
+        expect(subjectPropOf(leftRail!, railChain, RULES, 'grid-column'),
+          '左栏必须在**第 1 列**（放置区在它右边）').toBe('1');
+        expect(subjectPropOf(leftRail!, railChain, RULES, 'justify-self'),
+          '左栏必须 `justify-self: end` —— 它的右缘要**贴住放置区左缘**（用户："最右边紧挨着中间的放置区域"）')
+          .toBe('end');
+        for (const side of ['self', 'foe'] as const) {
+          const chain = ancestorsOf(root, infoBlockOf(root, side));
+          expect(chain.some((n) => isClass(n, 'net-left-rail')),
+            `viewSeat=${seat}：${side} 侧的信息块不在左栏里（用户要的"三大组件平移挪到左边区域"没落地）`).toBe(true);
+          expect(chain.some((n) => isClass(n, 'net-dock')),
+            `viewSeat=${seat}：${side} 侧的信息块不在 .net-dock 里（三块必须作为一个整体横排）`).toBe(true);
+        }
+        expect(descendants(root).filter((n) => isClass(n, 'net-dock')).length,
+          `viewSeat=${seat}：.net-dock 不是恰好一块`).toBe(1);
         // 反空集合：这一帧里**真的**有停靠栏四块（否则上面几条是空判据）
         const tree: string[] = [];
         walk(board, 0, tree, 2);
@@ -576,15 +605,25 @@ describe('R11-4 · G-15：`.choice-mode` 挂在 `.net-hands` 上（选择模式�
     }
   });
 
-  it('G-15b（源码腿）：不许再用 `lastElementChild` 取手牌区；`buildBottomRow` 直接交回 `hands`', () => {
+  it('G-15b（源码腿）：不许再用 `lastElementChild` 取手牌区；`buildLeftRail` 直接交回 `hands`', () => {
     const src = netSrc();
     expect(src, 'render-net.ts 里又出现了 `lastElementChild` —— 那个取法拿到的**不是** `.net-hands`'
       + '（`NET_BOTTOM_SIDES` 是 [\'self\', \'foe\'] ⇒ DOM 顺序 `[自己信息块, 手牌区, 对手信息块]`）')
       .not.toContain('lastElementChild');
-    expect(src, '`buildBottomRow` 没有把 `.net-hands` 节点交回来（R11-4 的修法）')
+    // ⚠️ **判据迁移（R19）**：旧句钉的是 `buildBottomRow(...): { row: HTMLElement; hands: HTMLElement }`
+    //    与 `const { row: bottom, hands } = buildBottomRow(`。
+    //    **旧句为什么必须改**：R19 把"谁把 `.net-hands` 交给 `renderChoiceUi`"这件事上移了一层 ——
+    //    现在由 `buildLeftRail`（左栏：放大框 + `.net-dock`）交出，`buildBottomRow` 仍是它的下游。
+    //    旧句会把**正确**的实现判红。
+    //    **新句多查了什么**：① 交出 `hands` 的**那一层**是 `buildLeftRail`（R19 的挂载点）；
+    //    ② `buildBottomRow` 的返回值形状**一个字没变**（R11-4 的修法仍在那 — 交接口类型仍在）；
+    //    ③ 调用点确实从 `buildLeftRail` 解构出 `hands`（而不是又去按位置猜）。
+    expect(src, '`buildBottomRow` 的返回值不再是 `{ row, hands }`（R11-4 的"从构建点直接交出去"被改坏了）')
       .toMatch(/\):\s*\{\s*row:\s*HTMLElement;\s*hands:\s*HTMLElement\s*\}/);
-    expect(src, '`renderNetBoard` 没有从 `buildBottomRow` 解构出 `hands`')
-      .toMatch(/const\s*\{\s*row:\s*bottom,\s*hands\s*\}\s*=\s*buildBottomRow\(/);
+    expect(src, '`buildLeftRail` 没有把 `.net-hands` 节点交回来（R19 的挂载点上移后，R11-4 的修法丢了）')
+      .toMatch(/\):\s*\{\s*rail:\s*HTMLElement;\s*hands:\s*HTMLElement\s*\}/);
+    expect(src, '`renderNetBoard` 没有从 `buildLeftRail` 解构出 `hands`')
+      .toMatch(/const\s*\{\s*rail:\s*leftRail,\s*hands\s*\}\s*=\s*buildLeftRail\(/);
   });
 });
 
@@ -686,11 +725,15 @@ describe('R12 · G-17：日志 / 滚动条 / 停靠栏紧凑 / 放牌区预算 /
     }
   });
 
-  it('G-17c. R12-3：停靠栏三块**紧凑化**（牌库/弃牌堆 46×66 · 徽标 26 · 信息块 4/3 · 板间距 2）', () => {
+  it('G-17c. 停靠栏三块**紧凑化**（牌库/弃牌堆 34×50 · 徽标 18 · 信息块 1/2·3 · 板间距 2）', () => {
     const board = cssNode('board', 'net-board');
     const p = (node: StubNode, prop: string): string | null =>
       subjectPropOf(node, [board, node], RULES, prop);
-    // 牌库 / 弃牌堆：60×86 → 46×66（解算成像素，不认写法）
+    // 牌库 / 弃牌堆（解算成像素，不认写法）
+    // ⚠️ **数值迁移（R19）**：旧值是 40×58（R12-3/R12-8），本轮再收一档到 34×50 ——
+    //    三块组件要住进左栏（"整体贴住放置区左缘"），牌堆是它们里最宽的一项。
+    //    旧句会把**正确**的实现判红；新句**多查了**一件事：`max-width` 也在（信息块的上限，
+    //    没有它时两块信息块会被不换行的计数行撑宽、把中列挤窄）。
     for (const [cls, tag] of [['deck', '牌库'], ['trash-pile', '弃牌堆']] as const) {
       const node = cssNode('net-piles', 'net-piles');
       const pile = cssNode(cls, `${cls} p1`);
@@ -699,24 +742,26 @@ describe('R12 · G-17：日志 / 滚动条 / 停靠栏紧凑 / 放牌区预算 /
       const w = cssLenOf(chain, RULES, subjectPropOf(pile, chain, RULES, 'width') ?? '');
       const h = cssLenOf(chain, RULES, subjectPropOf(pile, chain, RULES, 'height') ?? '');
       console.log(`\n===== G-17c · ${tag} =====\n  ${String(w)} × ${String(h)}px`);
-      expect(w, `${tag}的宽不是 40px（R12-3/R12-8 的紧凑化没生效）`).toBe(40);
-      expect(h, `${tag}的高不是 58px（R12-3/R12-8 的紧凑化没生效）`).toBe(58);
+      expect(w, `${tag}的宽不是 34px（R19 的左栏压缩没生效）`).toBe(34);
+      expect(h, `${tag}的高不是 50px（R19 的左栏压缩没生效）`).toBe(50);
     }
-    // 计数徽标（styles.css 是 34×34，在 46px 宽的盒子里已占满）
+    // 计数徽标（styles.css 是 34×34，在 34px 宽的盒子里会顶满）
     const badge = cssNode('deck-count');
     const badgeChain = [board, cssNode('net-piles'), cssNode('deck'), badge];
     expect(cssLenOf(badgeChain, RULES, subjectPropOf(badge, badgeChain, RULES, 'width') ?? ''),
-      '牌库计数徽标没跟着缩小（40px 的盒子里放 34px 的徽标会顶满）').toBe(22);
+      '牌库计数徽标没跟着缩小（34px 的盒子里放 34px 的徽标会顶满）').toBe(18);
     // 信息块的内边距/间距
     const block = cssNode('net-info-block');
     block.dataset.netSeat = 'self';
     expect(cssLenOf([board, block], RULES, subjectPropOf(block, [board, block], RULES, 'gap') ?? ''),
-      '信息块的行间距没收到 2px').toBe(2);
+      '信息块的行间距没收到 1px').toBe(1);
     // 板间距（同时管行距与列距）
     expect(cssLenOf([board], RULES, subjectPropOf(board, [board], RULES, 'gap') ?? ''),
       '板间距没收到 2px').toBe(2);
-    // 字号：标题 12 / 连接状态 11 / 弃牌堆小标签 8
-    expect(subjectPropOf(block, [board, block], RULES, 'padding')).toBe('3px 5px');
+    expect(subjectPropOf(block, [board, block], RULES, 'padding')).toBe('2px 3px');
+    // 信息块的**宽度上限**（R19 新件：两块并排 + 手牌必须放得进左栏）
+    expect(cssLenOf([board, block], RULES, subjectPropOf(block, [board, block], RULES, 'max-width') ?? ''),
+      '信息块没有宽度上限 —— 它会按内容宽（≈170px+）撑开，两块就把中列挤窄').toBe(150);
     expect(p(cssNode('net-hand-area'), 'justify-self'), '手牌区的水平中置没变（R12-3 只动尺寸/间距）')
       .toBe('center');
     for (const [sel, want, what] of [

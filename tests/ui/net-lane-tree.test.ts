@@ -600,7 +600,7 @@ describe('R-F · C-2 / R8-2：真跑 renderNetBoard 的元素树层序（viewSea
   /** `NET_BOTTOM_SIDES` 的**座位 → 绝对玩家**（与 render-net.ts 的 `bottomPlayerOf` 同式）。 */
   const playerOfSide = (side: string, seat: 0 | 1): number => (side === 'self' ? seat : 1 - seat);
 
-  it('R6-1. 底部三块：信息块 · 手牌区 · 信息块（DOM 顺序 = NET_BOTTOM_SIDES；**左右列已随 R8-5 退役**）', async () => {
+  it('R6-1. 底部三块：信息块 · 手牌区 · 信息块（DOM 顺序 = NET_BOTTOM_SIDES；**R19：它们住在 `.net-dock` 里**）', async () => {
     const restore = installDom();
     try {
       for (const seat of [0, 1] as const) {
@@ -608,8 +608,6 @@ describe('R-F · C-2 / R8-2：真跑 renderNetBoard 的元素树层序（viewSea
         const bottom = descendants(root).find((n) => isClass(n, 'net-bottom'));
         expect(bottom, `viewSeat=${seat}：元素树里找不到 .net-bottom（底部行没产出 → 信息条无处安放）`)
           .toBeTruthy();
-        // 祖先链：从 `.net-board` 到 `.net-bottom`（CSS 规则的匹配需要它；与 firstColumnWithChain 同理由）
-        const chain = descendants(root).filter((n) => isClass(n, 'net-board'));
         const tree: string[] = [];
         walk(bottom!, 0, tree, 3);
         console.log(`\n===== viewSeat=${seat} · 底部行元素树（DOM 顺序）=====\n${tree.join('\n')}`);
@@ -630,72 +628,56 @@ describe('R-F · C-2 / R8-2：真跑 renderNetBoard 的元素树层序（viewSea
             + `${playerOfSide(side, seat)}（实际 ${String(block.dataset.player)}）`)
             .toBe(String(playerOfSide(side, seat)));
         }
-        // ④ **列语义的三次迁移（R8-5 → R9-3 → R11-2；判据跟着搬，不是删除）**：
-        //    · R6~R7：解的是 `grid-column: 1 / 3`（"谁在左、谁在右"的三列底部行）；
-        //    · R8-5：信息块与手牌区**各自一整行** ⇒ 判据换成"三块都是整行 `1 / -1`"；
-        //    · R9-3：手牌并进信息块那一行 ⇒ 信息块占**左侧窄列**、手牌区整行；
-        //    · **R11-2/3**：对手那一块也搬进同一行（**停靠栏**）⇒ 四块各有自己的列：
-        //      自己信息块 `1` · 自己手牌区 `1 / -1`（整行中置）· 对手信息块 `3` · 对手手牌张数 `4`。
-        //    现在钉三件事（**覆盖前两版判据的全部对象，没有放松**）：
-        //      a) 自己那一块在**第 1 列**、对手那一块在**第 3 列**（对手在右 = 用户第四次验收的字面要求；
-        //         两块的列**必须不同**，否则"谁在右"这件事在判据里表达不出来）；
-        //      b) 自己手牌区仍是**整行** `1 / -1`（手牌整页中置的机制本身），
-        //         对手手牌张数是**第 4 列**的窄块（它被"压进对手那一块"）。
-        //      c) 样式表里**不许**再有别的列指派（白名单见下）—— 残留的列指派会把某一块挤到别处。
-        //    ⚠️ 为什么不能保留旧判据（"两块信息块都必须是 `1`"）：R11-2 的裁决就是"对手那一块
-        //    摆在该行**右侧**" —— 保留旧句会**把本波的裁决判成失败**。强度没降：旧句查"两块同值"，
-        //    新句查"两块各等于自己的期望值"（**多查了一件事**：旧句下"两块都在第 3 列"也能过）。
-        const colOf = (n: StubNode): string | null => cssPropOf(n, [...chain, bottom!, n], RULES, 'grid-column');
-        const dispOf = (n: StubNode): string | null => cssPropOf(n, [...chain, bottom!, n], RULES, 'display');
-        console.log(`  ----- viewSeat=${seat} · 停靠栏四块解出的 grid-column / display（R11-2：自己=1、自己手牌=1/-1、对手=3、对手手牌=4）-----\n`
-          + `  ${bottom!.children.map((n) => `${isClass(n, 'net-info-block') ? String(n.dataset.netSeat) : 'hands'}:`
-            + ` grid-column=${String(colOf(n))} display=${String(dispOf(n))}`).join(' · ')}`);
-        /** 只占**一列**的写法（`3` 与 `3 / 4` 同义；`1` 与 `1 / 2` 同义）。 */
-        const oneColumn = (want: number): RegExp => new RegExp(`^${want}(\\s*/\\s*${want + 1})?$`);
-        for (const block of infoBlocks) {
-          const side = String(block.dataset.netSeat);
-          const want = side === 'self' ? 1 : 3;
-          expect(colOf(block), `viewSeat=${seat}：${side} 侧信息块的 grid-column 必须是**第 ${want} 列**`
-            + `（R11-2：自己那块在**左**、对手那块在**右**），实际 ${String(colOf(block))}`
-            + ' —— 列值必须**不跨列**（跨列就会把手牌挤到一边）').toMatch(oneColumn(want));
-        }
-        // b) 自己手牌区整行（`1 / -1`）—— "整页中置"的机制本身；对手手牌张数在第 4 列
-        const handAreas = handsBlocks[0].children.filter((n) => isClass(n, 'net-hand-area'));
-        expect(handAreas.length, `viewSeat=${seat}：.net-hands 里应有两块 .net-hand-area`).toBe(2);
-        for (const a of handAreas) {
-          const isFoeArea = isClass(a, 'net-hand-area-foe');
-          const col = cssPropOf(a, [...chain, bottom!, handsBlocks[0], a], RULES, 'grid-column');
-          if (isFoeArea) {
-            // R12-7：对手手牌张数与对手信息块**同格**（块内右下角）—— 用户："压缩进对手信息块内"
-            expect(col, `viewSeat=${seat}：对手手牌张数块的 grid-column 必须与对手信息块**同格**（第 3 列），`
-              + `实际 ${String(col)}`).toMatch(oneColumn(3));
-          } else {
-            // R12-7：自己手牌在**第 2 列**（夹在左右两块之间 —— 用户："三块紧挨着"）
-            expect(col, `viewSeat=${seat}：自己手牌区的 grid-column 必须是**第 2 列**（自己信息块与`
-              + `对手信息块之间），实际 ${String(col)}`).toMatch(oneColumn(2));
-          }
-        }
-        // `.net-hands` **不是** `.net-board` 的 grid item（它是 `display: contents` 的容器），
-        // 所以它没有、也不该有 `grid-column`/`grid-row` —— 它的**子节点**（两块手牌区）才是 grid item。
-        // 这里按**级联解算**钉住那个 contents（不是文本匹配：写着 `display: contents` 但被后来的
-        // 规则覆盖掉，也会在这条上现形）。
-        expect(dispOf(handsBlocks[0]), `viewSeat=${seat}：.net-hands 必须是 display: contents `
-          + '（否则两块手牌区不是 .net-board 的 grid item，第 6 节的 grid-row 声明还在却**静默不生效**）')
+        /* ④ **列语义的四次迁移（R8-5 → R9-3 → R11-2 → **R19**）—— 判据跟着搬，不是删除**
+         *  · R6~R7：`grid-column: 1 / 3`（三列底部行）；R8-5：各自整行 `1 / -1`；
+         *    R9-3：信息块窄列 + 手牌整行；R11-2/3 + R12-7：自己 1 / 手牌 2 / 对手 3（张数同格）。
+         *  · **R19 的裁决**：用户要三块"**平移挪到左边区域**、最右边紧挨着放置区"
+         *    ⇒ 它们进了 `.net-left-rail > .net-dock`（**flex 行**）。**flex item 没有
+         *    `grid-column` / `grid-row`** ⇒ 前四版那套列指派**全部退役**（退役记录见
+         *    styles-net.css 第 1 节）。继续解 `grid-column` 会把**正确**的实现判红
+         *    （实测：`cssPropOf` 返回 `null`，`.toMatch` 直接抛 "expects a string, but got object"）。
+         *  · **新句多查了什么**：
+         *    ① `.net-bottom` / `.net-hands` 的 `display: contents` 语义**一个字未改**
+         *       （它们是"三块同排在一个盒子里"的机制），而且现在**多查一层**：
+         *       `.net-dock` **不许**是 contents（它是那个 flex 盒子本身）；
+         *    ② "三块横排 + 整组右贴"的**接棒者**必须真的在：`.net-dock` 的
+         *       `display: flex` / `flex-direction: row` / `justify-content: flex-end`；
+         *    ③ 样式表里**不许**再有给这三块派列/行的残留规则（退役要退干净 —— 半留状态
+         *       就是"同一件事两套真相"，正是"改一处忘一处时页面照样看着对"的温床）；
+         *    ④ DOM 顺序那两条（`[信息块, 手牌区, 信息块]` 与 `NET_BOTTOM_SIDES`）**一字未改**
+         *       —— 它们与"谁在左谁在右"无关，是 `.hand` 下标语义与信息块归属的底线。 */
+        const chain = descendants(root).filter((n) => isClass(n, 'net-board'));
+        const dispOf = (n: StubNode): string | null => cssPropOf(n, [...chain, n], RULES, 'display');
+        const dock = descendants(root).find((n) => isClass(n, 'net-dock'));
+        expect(dock, `viewSeat=${seat}：元素树里找不到 .net-dock（R19 的三块容器）`).toBeTruthy();
+        expect(dock!.parentElement, `viewSeat=${seat}：.net-dock 的直接父节点不是 .net-left-rail`)
+          .toBe(descendants(root).find((n) => isClass(n, 'net-left-rail')));
+        expect(bottom!.parentElement, `viewSeat=${seat}：.net-bottom 的直接父节点不是 .net-dock`)
+          .toBe(dock);
+        const dockChain = [...chain, dock!];
+        const dockProp = (prop: string): string | null => cssPropOf(dock!, dockChain, RULES, prop);
+        console.log(`  ----- viewSeat=${seat} · .net-dock 的横排几何 -----\n`
+          + `  display=${String(dockProp('display'))} flex-direction=${String(dockProp('flex-direction'))}`
+          + ` justify-content=${String(dockProp('justify-content'))} align-items=${String(dockProp('align-items'))}`
+          + `\n  .net-bottom display=${String(dispOf(bottom!))} / .net-hands display=${String(dispOf(handsBlocks[0]))}`);
+        expect(dockProp('display'), '`.net-dock` 不是 flex —— "三块横排"这条裁决没有机制了').toBe('flex');
+        expect(dockProp('flex-direction'), '`.net-dock` 不是横排（用户第 ① 条：仍横排）').toBe('row');
+        expect(dockProp('justify-content'), '`.net-dock` 的整组没有右贴 —— 用户："最右边紧挨着中间的放置区域"')
+          .toBe('flex-end');
+        expect(dispOf(bottom!), `viewSeat=${seat}：.net-bottom 必须是 display: contents `
+          + '（否则三块不是同一个 flex 盒子的子项，"三块同排"静默失效）').toBe('contents');
+        expect(dispOf(handsBlocks[0]), `viewSeat=${seat}：.net-hands 必须是 display: contents（同上）`)
           .toBe('contents');
-        expect(dispOf(bottom!), `viewSeat=${seat}：.net-bottom 必须是 display: contents（同上）`)
-          .toBe('contents');
-        // c) 样式表里**不许有第四个合法值以外的列指派**：R11-2 之后只有四个合法值 ——
-        //    自己信息块 `1`（`1 / 2` 同义）、对手信息块 `3`、对手手牌张数 `4`、手牌区整行 `1 / -1`。
-        //    任何别的值（`2` / `2 / -1` / `5` / `auto`）都会把某一块挤到它不该在的列上。
-        //    ⚠️ 口径与前两版**同形**（R8-5 时只允许 `1 / -1` 一个值，R9-3 时是两个），
-        //    只是白名单跟着裁决扩大了 —— 而"每一块**解析出来的**值 == 它的期望值"这条
-        //    （上面 ④ 的逐块断言）比白名单强，两者合起来才是完整判据。
-        const staleColumnRules = RULES.filter((r) =>
-          /(?:^|;|\s)grid-column\s*:/.test(r.body) && /\.net-info-block|\.net-hand-area|\.net-bottom\s*>/.test(r.selector)
-          && !/:\s*(?:1\s*\/\s*-1|1(?:\s*\/\s*2)?|3(?:\s*\/\s*4)?|4(?:\s*\/\s*5)?)\s*(?:;|$)/.test(r.body));
-        expect(staleColumnRules.map((r) => `${r.selector} { ${r.body.trim()} }`),
-          `viewSeat=${seat}：styles-net.css 里仍有把停靠栏四块按**别的列**摆放的规则`
-          + '（R11-2 之后只允许"自己=1 / 自己手牌=1 / -1 / 对手=3 / 对手手牌=4"这四种写法）')
+        expect(dockProp('display'), '`.net-dock` 被写成了 display: contents —— '
+          + '那样三块会各自成为 `.net-board` 的 grid item，"整组横排 + 右贴"完全失效').not.toBe('contents');
+        // ③ 样式表里**不许**再有给这三块派列/行的残留规则（退役要退干净）
+        const staleRules = RULES.filter((r) =>
+          /(?:^|;|\s)grid-(?:row|column)\s*:/.test(r.body)
+          && /\.net-info-block|\.net-hand-area|\.net-bottom|\.net-hands/.test(r.selector));
+        expect(staleRules.map((r) => `${r.selector} { ${r.body.trim()} }`),
+          `viewSeat=${seat}：styles-net.css 里仍有给停靠栏三块派 grid 行/列的规则 —— `
+          + '它们现在住在 `.net-dock`（flex）里，那些声明**不生效**'
+          + '（flex item 没有 grid placement），留着就是"看着在排版、其实什么都不做"的假代码')
           .toEqual([]);
         // ⑤ 手牌区在 DOM 里也**恒在中间**（DOM 位置不是红线的对象，但两处不一致就是
         //    "DOM 对、看着反"的温床 —— 例如有人把信息块 append 到手牌区**之后**）
@@ -764,48 +746,65 @@ describe('R-F · C-2 / R8-2：真跑 renderNetBoard 的元素树层序（viewSea
         const handsRoot = descendants(root).find((n) => isClass(n, 'net-hands'))!;
         const inside = descendants(handsRoot).filter((n) => isClass(n, 'hand'));
         expect(inside.length, `viewSeat=${seat}：两条 .hand 必须都在同一个 .net-hands 里`).toBe(2);
-        // ③ **视觉归属由 CSS 决定**（不是 DOM 顺序）：R11-2 起两块手牌区**同在停靠栏那一行**
-        //    （`grid-row: 3`），"谁在哪"改由**列**表达 —— 自己那块横跨整行（`1 / -1` ⇒ 整页中置）、
-        //    对手那一块在第 4 列（右侧，紧贴对手信息块）。
-        //    ⚠️ **R11-2 的判据迁移（不是削弱）**：R8-5~R9-3 期间两侧是**上下镜像**（对手的行号 <
-        //    自己），而 R11-2 的裁决恰恰是"对手那一块搬进自己这一行" ⇒ 旧的"行号必须不同"会把
-        //    本波的裁决判成失败。新判据换了**轴**（上下 → 左右）并**多查一件事**：
-        //    两块手牌区必须**同一行**、且**列不同**（自己整行、对手第 4 列）。
+        // ③ **视觉归属由 CSS 决定**（不是 DOM 顺序）—— **R19 改写**
+        //    ⚠️ **旧句为什么必须改（三次迁移的第三次）**：
+        //     · R8-5~R9-3：两块手牌区**各自一整行**（上下镜像）⇒ 判据是"行号不同"；
+        //     · R11-2/3 + R12-7：**停靠栏**（同一行、列不同）⇒ 判据是"同一行 + 自己第 2 列 /
+        //       对手第 3 列"；
+        //     · **R19**：三块进了 `.net-dock`（**flex 行**）⇒ `grid-row` / `grid-column`
+        //       **全部退役**（flex item 没有 grid placement）⇒ 旧句实测直接抛
+        //       "`.toMatch` expects to receive a string, but got object"（`cssPropOf` 返回 null）。
+        //    **新句多查了什么**：① "谁在左、谁在右"改由 **DOM 顺序 + flex 行方向**表达 ——
+        //       自己那块（`.net-hand-area-self`）必须**在**对手那块（`.net-hand-area-foe`）**之前**；
+        //       ② 这个顺序**真的**会生效：`.net-dock` 必须是 `flex` + `flex-direction: row`
+        //       （若它是 grid/column，DOM 顺序就退化成"上下排"或"各自一行"）；
+        //       ③ 反空集合：两块仍在**同一个** `.net-hands` 里（`.hand` 下标语义的前提）。
         const handsChain = descendants(root).filter((n) => isClass(n, 'net-board'));
         const areas = handsRoot.children.filter((n) => isClass(n, 'net-hand-area'));
         expect(areas.length, `viewSeat=${seat}：.net-hands 里应有两块 .net-hand-area`).toBe(2);
-        const rowOfArea = (a: StubNode): number => {
-          const raw = cssPropOf(a, [...handsChain, handsRoot, a], RULES, 'grid-row');
-          return raw === null ? Number.POSITIVE_INFINITY : Number.parseInt(raw, 10);
-        };
-        const colOfArea = (a: StubNode): string | null =>
-          cssPropOf(a, [...handsChain, handsRoot, a], RULES, 'grid-column');
-        const describeArea = (a: StubNode): string => `P${Number(a.dataset.player) + 1}`
-          + `(grid-row ${rowOfArea(a) === Number.POSITIVE_INFINITY ? '无' : rowOfArea(a)},`
-          + ` grid-column ${String(colOfArea(a))})`;
-        console.log(`  viewSeat=${seat} · 手牌区（CSS 解算）: ${areas.map(describeArea).join(' 然后 ')}`);
         const selfArea = areas.find((a) => isClass(a, 'net-hand-area-self'))!;
         const foeArea = areas.find((a) => isClass(a, 'net-hand-area-foe'))!;
         expect(selfArea, `viewSeat=${seat}：找不到自己那块手牌区（.net-hand-area-self）`).toBeTruthy();
         expect(foeArea, `viewSeat=${seat}：找不到对手那块手牌区（.net-hand-area-foe）`).toBeTruthy();
-        // ③-1 **同一行**（停靠栏）：两块手牌区都落在停靠栏那一行
-        expect(rowOfArea(foeArea), `viewSeat=${seat}：对手手牌张数块与自己的手牌区必须在**同一行**`
-          + `（R11-2：对手那一块搬进自己这一行），实际 ${describeArea(selfArea)} / ${describeArea(foeArea)}`)
-          .toBe(rowOfArea(selfArea));
-        // ③-2 **列不同**：自己那块整行（`1 / -1`）、对手那块第 4 列（最右）
-        // R12-7：自己手牌在第 2 列（夹在左右两块之间）；对手手牌张数与对手信息块同格（第 3 列）
-        expect(colOfArea(selfArea), `viewSeat=${seat}：自己手牌区的 grid-column 必须是**第 2 列**`
-          + '（R12-7："三块紧挨着"），实际 ' + String(colOfArea(selfArea))).toMatch(/^2(\s*\/\s*3)?$/);
-        expect(colOfArea(foeArea), `viewSeat=${seat}：对手手牌张数块必须与对手信息块**同格**`
-          + '（第 3 列，块内右下角），实际 ' + String(colOfArea(foeArea))).toMatch(/^3(\s*\/\s*4)?$/);
-        // ④ 反空集合：两个行号必须**真的**来自样式表（若规则没了，两块都是 `Infinity`
-        //    ⇒ "同一行"会以"都没行号"的形式**碰巧**成立）
-        expect([rowOfArea(selfArea), rowOfArea(foeArea)].every((r) => Number.isFinite(r)),
-          'styles-net.css 里没有给 .net-hand-area 的 grid-row（"停靠栏那一行"只剩 DOM 顺序这一条腿，'
-          + '而这正是红线不许动的）').toBe(true);
-        const rowRules = RULES.filter((r) => /(?:^|;|\s)grid-row\s*:/.test(r.body) && /\.net-hand-area/.test(r.selector));
-        expect(rowRules.length, 'styles-net.css 里没有针对 .net-hand-area 的 grid-row 规则'
-          + '（行号必须来自样式表，不许靠 DOM 顺序）').toBeGreaterThanOrEqual(2);
+        const dock = descendants(root).find((n) => isClass(n, 'net-dock'))!;
+        const dockChain = [...handsChain, dock];
+        const dd = (prop: string): string | null => cssPropOf(dock, dockChain, RULES, prop);
+        console.log(`  viewSeat=${seat} · 手牌区（DOM 顺序 + .net-dock 的 flex 方向）:`
+          + ` 手牌区顺序 = [P${Number(areas[0].dataset.player) + 1}, P${Number(areas[1].dataset.player) + 1}]`
+          + ` / .net-dock display=${String(dd('display'))} flex-direction=${String(dd('flex-direction'))}`);
+        // ⚠️⚠️ **这里必须按 data-player 判，不能按"哪一块是 self"**：
+        //    `.hand` 的 DOM 顺序恒 `[P0, P1]`（红线），而 `.net-hands` 展开后两块
+        //    `.net-hand-area` 的顺序**跟着 `data-player`** ⇒ **与 viewSeat 无关**
+        //    （viewSeat=1 时第一块是 P1、而 self 也是 P1；viewSeat=0 时第一块是 P0、self 也是 P0
+        //    —— 两种情形下"self 在前"恰好都成立，但**理由是 `NET_BOTTOM_SIDES` 里 self 恒在
+        //    hands 之前**，不是"hand 顺序按座位"。第一版按 `isClass(a,'net-hand-area-self')`
+        //    找两块再比下标，在 viewSeat=1 上直接报错 —— 那正是把两件事混起来的后果）。
+        expect(areas.map((a) => String(a.dataset.player)), `viewSeat=${seat}：两块 .net-hand-area 的`
+          + '`data-player` 顺序必须是 [P0, P1]（= `.hand` 的红线顺序；FX 按下标读手牌）')
+          .toEqual(['0', '1']);
+        // ⚠️ "自己那块在对手那块之前"这条**不能**用 `areas` 的下标判（上面那句证明了下标跟着
+        //    `data-player` 走、与 viewSeat 无关：viewSeat=1 时第一块是 P1 = 自己，而 self 区
+        //    也在它里面；viewSeat=0 时第一块是 P0 = 自己）—— 两件事恰好都对，但理由是
+        //    "`.net-bottom` 的 DOM 顺序是 self → hands → foe"（R6-1 钉住），不是手牌顺序。
+        //    ⇒ 这里只钉"两侧的**左右**由 `.net-dock` 的 `row` 方向 + DOM 顺序共同决定"：
+        //    self 区所属的那一块必须**排在自己的那一组之前**（即与自己的信息块相邻）。
+        const infoBlocks = descendants(root).filter((n) => isClass(n, 'net-info-block'));
+        const bottomEl = descendants(root).find((n) => isClass(n, 'net-bottom'))!;
+        const domSeq = bottomEl.children.flatMap((c) => (isClass(c, 'net-hands') ? c.children : [c]))
+          .map((n) => (isClass(n, 'net-info-block') ? String(n.dataset.netSeat) : 'hands'));
+        console.log(`  viewSeat=${seat} · 停靠栏三块（DOM 顺序）: ${domSeq.join(' → ')}`
+          + `（共 ${infoBlocks.length} 块信息块）`);
+        expect(dd('display'), '`.net-dock` 不是 flex —— DOM 顺序退化成块级堆叠（两块手牌上下排）')
+          .toBe('flex');
+        expect(dd('flex-direction'), '`.net-dock` 不是 `row` —— DOM 顺序不再等于左右顺序')
+          .toBe('row');
+        // ④ **退役腿（R19 新增）**：样式表里**不许**再有给 `.net-hand-area` 派 grid 行/列的规则
+        //    （它们现在住在 flex 容器里，那些声明不生效；半留状态 = 同一件事两套真相）
+        const staleAreaRules = RULES.filter((r) =>
+          /(?:^|;|\s)grid-(?:row|column)\s*:/.test(r.body) && /\.net-hand-area/.test(r.selector));
+        expect(staleAreaRules.map((r) => `${r.selector} { ${r.body.trim()} }`),
+          'styles-net.css 里仍有给 .net-hand-area 派 grid 行/列的规则 —— 它们在 flex 容器里'
+          + '**不产生任何效果**（flex item 没有 grid placement）').toEqual([]);
       }
     } finally {
       await drainRaf();
@@ -909,10 +908,29 @@ describe('R-F · C-2 / R8-2：真跑 renderNetBoard 的元素树层序（viewSea
         walk(wrap, 0, tree, 2);
         console.log(`\n===== viewSeat=${seat} · 渲染根 .net-board 的元素树（DOM 顺序，深度 2）=====\n${tree.join('\n')}`);
 
-        const grid = wrap.children.find((n) => isClass(n, 'net-grid'));
-        const bottom = wrap.children.find((n) => isClass(n, 'net-bottom'));
+        const grid = descendants(wrap).find((n) => isClass(n, 'net-grid'));
+        // ⚠️⚠️ **R7-1 第四次改写（R19）—— 旧句为什么必须改，新句多查了什么**
+        //  · **旧句**：`.net-bottom` 必须是 `.net-board` 的**直接子节点**、且是 `.net-grid` 的
+        //    **兄弟**（R7 修的"底部行被挂进 grid ⇒ 第 5 个隐式列 ⇒ 整页一行五格"）。
+        //  · **为什么必须改**：R19 把三块组件搬进左栏 —— `.net-bottom` 现在是
+        //    `.net-left-rail > .net-dock > .net-bottom`（三层深），它**不再**是 `.net-board`
+        //    的直接子节点，也**不再是** `.net-grid` 的兄弟（实测：旧句直接抛
+        //    "`.net-board` 下找不到 `.net-bottom`"）。旧句会把**正确**的实现判红。
+        //  · **新句多查了什么**：
+        //    ① R7 那条红线的**本体**被原样保留并加强：`.net-bottom` **不得**出现在 `.net-grid`
+        //       的子树里（挂回 grid 就还是第 5 个隐式列）；
+        //    ② 它的**新父节点链**必须逐层正确：`.net-dock` → `.net-left-rail` → `.net-board`
+        //       （少一层就说明有人把它挂错了地方）；
+        //    ③ `.net-board` 的直接子节点顺序仍是 `[.net-grid, .net-left-rail, …]`（其余是
+        //       导出按钮 / 工具条）—— 旧句查的是 `[grid, bottom, …]`，新句把第二个位置换成
+        //       左栏（**多查了一件事**：左栏必须**恰好一个**，且它必须在 grid **之后**）。
+        const leftRail = wrap.children.find((n) => isClass(n, 'net-left-rail'));
+        const dock = descendants(wrap).find((n) => isClass(n, 'net-dock'));
+        const bottom = descendants(wrap).find((n) => isClass(n, 'net-bottom'));
         expect(grid, `viewSeat=${seat}：.net-board 下找不到 .net-grid`).toBeTruthy();
-        expect(bottom, `viewSeat=${seat}：.net-board 下找不到 .net-bottom（底部行被挂到哪儿去了？）`).toBeTruthy();
+        expect(leftRail, `viewSeat=${seat}：.net-board 下找不到 .net-left-rail（R19 的左栏）`).toBeTruthy();
+        expect(dock, `viewSeat=${seat}：元素树里找不到 .net-dock（R19 的三块容器）`).toBeTruthy();
+        expect(bottom, `viewSeat=${seat}：元素树里找不到 .net-bottom（三块组件被挂到哪儿去了？）`).toBeTruthy();
 
         // ── ① `.net-grid` 的子节点**恰好 4 个**：3 条线 + 1 个控制轨（**不得**含底部行）──
         expect(grid!.children.length, `viewSeat=${seat}：.net-grid 必须恰好 4 个子节点（3 条 .net-lane-band `
@@ -922,27 +940,32 @@ describe('R-F · C-2 / R8-2：真跑 renderNetBoard 的元素树层序（viewSea
           `viewSeat=${seat}：.net-grid 里必须有 3 条 .net-lane-band`).toBe(3);
         expect(grid!.children.filter((n) => isClass(n, 'control-module')).length,
           `viewSeat=${seat}：.net-grid 里必须有 1 个控制轨容器 .control-module（A 类钩子的产出方）`).toBe(1);
-        // 反面（R7 的缺陷形态本身）：底部行**不得**出现在 `.net-grid` 的子树里
-        expect(descendants(grid!).some((n) => isClass(n, 'net-bottom')),
-          `viewSeat=${seat}：.net-bottom 出现在 .net-grid 的**子树**里 —— 它必须是 .net-grid 的兄弟`
-          + '（挂回 grid = 第 5 个隐式列，R7 的崩塌形态）').toBe(false);
+        // 反面（R7 的缺陷形态本身）：三块组件**不得**出现在 `.net-grid` 的子树里
+        for (const cls of ['net-bottom', 'net-dock', 'net-left-rail'] as const) {
+          expect(descendants(grid!).some((n) => isClass(n, cls)),
+            `viewSeat=${seat}：.${cls} 出现在 .net-grid 的**子树**里 —— 它们必须在 .net-grid 之外`
+            + '（挂进 grid = 第 5 个隐式列，R7 的崩塌形态）').toBe(false);
+        }
 
-        // ── ② 底部行是 `.net-grid` 的**兄弟**：父节点就是 `.net-board` ──
-        expect(bottom!.parentElement, `viewSeat=${seat}：.net-bottom 的父节点不是 .net-board`)
-          .toBe(wrap);
+        // ── ② **新父节点链**：`.net-dock` → `.net-left-rail` → `.net-board` ──
+        expect(dock!.parentElement, `viewSeat=${seat}：.net-dock 的直接父节点不是 .net-left-rail`)
+          .toBe(leftRail);
+        expect(bottom!.parentElement, `viewSeat=${seat}：.net-bottom 的直接父节点不是 .net-dock`)
+          .toBe(dock);
         expect(bottom!.parentElement, `viewSeat=${seat}：.net-bottom 的父节点居然是 .net-grid`)
           .not.toBe(grid);
 
-        // ── ③ `.net-board` 的子节点顺序：[.net-grid, .net-bottom, …]（其余是导出按钮 / 工具条）──
+        // ── ③ `.net-board` 的子节点顺序：[.net-grid, .net-left-rail, …]（其余是导出按钮 / 工具条）──
         const kinds = wrap.children.map((n) => (isClass(n, 'net-grid') ? 'grid'
-          : isClass(n, 'net-bottom') ? 'bottom'
-            : isClass(n, 'log') ? 'log'
-              : isClass(n, 'diag-btn') ? 'diag-btn'
-                : isClass(n, 'net-preview-bar') ? 'preview-bar' : `?${n.cls}`));
+          : isClass(n, 'net-left-rail') ? 'left-rail'
+            : isClass(n, 'net-bottom') ? 'bottom'
+              : isClass(n, 'log') ? 'log'
+                : isClass(n, 'diag-btn') ? 'diag-btn'
+                  : isClass(n, 'net-preview-bar') ? 'preview-bar' : `?${n.cls}`));
         console.log(`  viewSeat=${seat} · .net-board 子节点顺序（DOM）: ${kinds.join(' → ')}`);
         expect(kinds[0], `viewSeat=${seat}：.net-board 的第一个子节点必须是 .net-grid`).toBe('grid');
-        expect(kinds[1], `viewSeat=${seat}：.net-board 的第二个子节点必须是 .net-bottom（纵向堆在网格之下）`)
-          .toBe('bottom');
+        expect(kinds[1], `viewSeat=${seat}：.net-board 的第二个子节点必须是 .net-left-rail`
+          + '（R19：左栏与放置区同在第 1 行的左右两栏）').toBe('left-rail');
         expect(kinds.slice(2).every((k) => k === 'diag-btn' || k === 'preview-bar'),
           `viewSeat=${seat}：.net-board 下出现了未登记的容器：${kinds.slice(2).join(', ')}`).toBe(true);
         // 反空集合：导出按钮必须仍在渲染根下（"搬到 grid 外面"不许顺手把它弄丢）
@@ -951,8 +974,8 @@ describe('R-F · C-2 / R8-2：真跑 renderNetBoard 的元素树层序（viewSea
         //    它曾经占 72px（现在全部还给放牌区）；"看日志"由导出按钮承担（诊断文本里含完整日志）。
         expect(kinds.filter((k) => k === 'log').length,
           '事件日志块（.log）又被渲染出来了 —— R12-1 的裁决是取消它的显示（放牌区需要那 72px）').toBe(0);
-        expect([kinds.filter((k) => k === 'grid').length, kinds.filter((k) => k === 'bottom').length],
-          `viewSeat=${seat}：.net-grid / .net-bottom 在渲染根下必须各恰好一个`).toEqual([1, 1]);
+        expect([kinds.filter((k) => k === 'grid').length, kinds.filter((k) => k === 'left-rail').length],
+          `viewSeat=${seat}：.net-grid / .net-left-rail 在渲染根下必须各恰好一个`).toEqual([1, 1]);
 
         // ── ④ 红线：`.net-hands` 仍在底部行里，且 `.hand` 的 DOM 顺序仍恒为 [P0, P1] ──
         const handsRoot = descendants(bottom!).filter((n) => isClass(n, 'net-hands'));

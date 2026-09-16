@@ -481,8 +481,12 @@ describe('D · 远程页烟雾 puff：几何由卡宽驱动（不再必然重叠
 
   it('前置腿（为什么 body 级规则读不到卡宽）：旋钮在 `.net-board` 规则体里，而层挂在 body', () => {
     // ① 旋钮的唯一定义处（也解释了为什么不能"搬走它"：三条既有守卫钉着这个位置/次数）
-    expect(ruleBodyOf(NET_SRC, '.net-board'), '`.net-board` 的规则体里没有 `--card-h: 140px`')
-      .toContain('--card-h: 140px');
+    //    ⚠️ **数值迁移（R19）**：140px → 130px（左栏压缩那一档）。
+    //    **旧句为什么必须改**：`--card-h` 是唯一旋钮，R19 收了一档 ⇒ 旧数值不再成立；
+    //    旧句会把**正确**的实现判红。**新句多查了什么**：它仍钉"旋钮在 `.net-board` 的规则体里"
+    //    这件事本身（本用例的**前提**），并把下面的"注入值 ⇒ 几何跟着变"的对象换成同一条式子。
+    expect(ruleBodyOf(NET_SRC, '.net-board'), '`.net-board` 的规则体里没有 `--card-h: 130px`')
+      .toContain('--card-h: 130px');
     // ② 层是 body 的子节点 ⇒ `--card-w` 不可达（自定义属性只向下继承）
     const fn = functionBody(stripComments(RENDER_SRC), 'syncSmokeOverlays');
     expect(fn, '`syncSmokeOverlays` 不再把烟雾层挂到 `document.body` ⇒ 本组前提需重审')
@@ -518,9 +522,14 @@ describe('D · 远程页烟雾 puff：几何由卡宽驱动（不再必然重叠
     // eslint-disable-next-line no-console
     console.log(`\n===== R18 · D 远程页烟雾几何（几何推导 + CSS 解算）=====\n`
       + `  槽盒宽 = 内容宽(--card-w) + padding(${a.padL}+${a.padR}) + border(2×${a.border})\n`
-      + `  --card-h=140 ⇒ --card-w=${a.cardW.toFixed(3)} ⇒ 槽盒宽=${a.boxW.toFixed(3)} ⇒ puff 直径=${puffA.toFixed(3)}px\n`
+      + `  --card-h=130 ⇒ --card-w=${a.cardW.toFixed(3)} ⇒ 槽盒宽=${a.boxW.toFixed(3)} ⇒ puff 直径=${puffA.toFixed(3)}px\n`
       + `  --card-h=182 ⇒ --card-w=${b.cardW.toFixed(3)} ⇒ 槽盒宽=${b.boxW.toFixed(3)} ⇒ puff 直径=${puffB.toFixed(3)}px\n`);
-    expect(a.cardW, '`--card-h: 140px` ⇒ `--card-w` 不是 100.572').toBeCloseTo(100.572, 3);
+    // ⚠️ **数值迁移（R19）**：100.572 → 93.429（= (130 − 2) × 0.71429 + 2）。
+    //    **旧句为什么必须改**：它是 `--card-h: 140px` 那一档的推导值；R19 改档后必然跟着变。
+    //    **新句多查了什么**：它仍由**同一条卡面 5:7 的算式**复算（不是抄一个数），
+    //    所以照样抓得住"有人往 `--card-w` 里塞第二组字面量"。
+    expect(a.cardW, '`--card-h: 130px` ⇒ `--card-w`（= (130−2) × 0.71429 + 2）不对')
+      .toBeCloseTo((130 - 2) * 0.71429 + 2, 3);
     expect(b.cardW, '`--card-h: 182px` ⇒ `--card-w` 不是 130.572').toBeCloseTo(130.572, 3);
     expect(puffB, '改 `--card-h`（唯一旋钮）后 puff 的 px 没变 ⇒ 几何与卡宽脱钩了')
       .toBeGreaterThan(puffA);

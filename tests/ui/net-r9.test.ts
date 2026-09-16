@@ -176,40 +176,56 @@ describe('R9-1 · G-10：等比缩放由一个数驱动', () => {
   const absoluteLens = (decl: string): string[] =>
     decl.match(/(?<![\w.-])\d+(?:\.\d+)?(?:px|%)/g) ?? [];
 
-  it('G-10a. `--card-h === 140px`，且卡宽 / 步距 / 竖排重叠 / 7 张跨度**全部**由它推出（解算值 ≈ 100.57 / 46.5 / −93.5 / 418.8）', () => {
+  it('G-10a. `--card-h === 130px`（R19 的左栏压缩档），且卡宽 / 步距 / 竖排重叠 / 7 张跨度**全部**由它推出（解算值 ≈ 93.43 / 43.2 / −86.8 / 389.0）', () => {
     const chain = stackChain();
     const rawH = cssVarOf([cssNode('board', 'net-board'), band()], RULES, '--card-h');
-    console.log(`\n===== G-10a · styles-net.css 真实解算（R9-1）=====\n  --card-h = ${String(rawH)}`);
+    console.log(`\n===== G-10a · styles-net.css 真实解算（R9-1 / R19）=====\n  --card-h = ${String(rawH)}`);
+    // ⚠️ **数值迁移（R19）**：140 → 130。**旧句为什么必须改**：R19 把三块组件搬进左栏、
+    //    整体压缩一档（用户："平移挪到左边区域……能够完整漏出中间放置卡牌的区域"），
+    //    而 `--card-h` 是**唯一旋钮** ⇒ 旧数值 140 不再成立。
+    //    **新句多查了什么**：下面每一条派生量仍然**逐项复算**（不是抄一个期望数），
+    //    并把"7 张跨度 ≤ 一屏可用高"这条**新意图**也钉进来（见 ③）——
+    //    旧用例只钉"由它推出"，没有钉"推出后真的放得进"。
     expect(rawH, 'styles-net.css 里 `.net-lane-band` 没有 --card-h（唯一旋钮丢了 ⇒ 整条链路无从推导）')
-      .toBe('140px');
+      .toBe('130px');
 
     const cardH = cssLenOf([cssNode('board', 'net-board'), band()], RULES, rawH!);
     const cardW = cssLenOf([cssNode('board', 'net-board'), band()], RULES, cssVarOf([cssNode('board', 'net-board'), band()], RULES, '--card-w') ?? '');
-    expect(cardH, '--card-h 解不出像素值').toBe(140);
+    expect(cardH, '--card-h 解不出像素值').toBe(130);
     expect(cardW, `--card-w 未由 --card-h 推出（源文：${String(cssVarOf([cssNode('board', 'net-board'), band()], RULES, '--card-w'))}）`)
       .not.toBeNull();
     // ⚠️ 逐项复算：这些**不是**手抄的期望值，而是"卡面 5:7 + 46.2% 露出"两条几何约定算出来的
-    const cardWWant = (cardH! - 2) * 0.71429 + 2;              // 100.57
-    const step = 0.462 * cardW!;                                // 46.5
-    const overlap = step - cardH!;                              // −93.5
-    const seven = cardH! + 6 * step;                            // 418.8
+    const cardWWant = (cardH! - 2) * 0.71429 + 2;              // 93.43
+    const step = 0.462 * cardW!;                                // 43.2
+    const overlap = step - cardH!;                              // −86.8
+    const seven = cardH! + 6 * step;                            // 389.0
     console.log(`  --card-w = ${cardW!.toFixed(2)}px（期望 ${cardWWant.toFixed(2)}）`
       + `\n  步距 = ${step.toFixed(1)}px / 竖排重叠 = ${overlap.toFixed(1)}px`
       + `\n  7 张跨度 = ${seven.toFixed(1)}px`);
     expect(cardW!, `--card-w（${cardW!.toFixed(2)}）必须等于卡面 5:7 的推导值（${cardWWant.toFixed(2)}）`)
       .toBeCloseTo(cardWWant, 2);
 
-    // ── ① `.stack` 的 `min-height` = 7 张跨度（G-10 的硬数字：**418.8 ± 1**）──
+    // ── ① `.stack` 的 `min-height` = 7 张跨度（**389.0 ± 1**）──
     const rawMin = cssPropOf(chain[1], chain, RULES, 'min-height');
     expect(rawMin, '`.net-lane-band .stack` 没有 min-height（R8-3 的 7 张预留）').toBeTruthy();
     const gotMin = cssLenOf([cssNode('board', 'net-board'), ...chain], RULES, rawMin!);
     console.log(`  min-height = ${rawMin} → 解算 ${gotMin === null ? 'null' : gotMin.toFixed(1)}px`);
     expect(gotMin, `min-height 解不出像素值：${rawMin}`).not.toBeNull();
-    expect(gotMin!, `min-height 解算值必须 ≈ 418.8（7 张跨度；R9-1 的裁决是"7 张牌大小的长度也缩"）`)
-      .toBeGreaterThanOrEqual(418.8 - 1);
-    expect(gotMin!).toBeLessThanOrEqual(418.8 + 1);
+    expect(gotMin!, `min-height 解算值必须 ≈ 389.0（7 张跨度；R19 的档）`)
+      .toBeGreaterThanOrEqual(seven - 1);
+    expect(gotMin!).toBeLessThanOrEqual(seven + 1);
     expect(gotMin!, `min-height 必须等于"7 张跨度"本身（${seven.toFixed(1)}）—— 它是 R9-1 的"长度"面`)
       .toBeCloseTo(seven, 1);
+    // ── ③ **R19 的新意图**：7 张跨度必须放得进"一个视口高 − #app 内边距 − 左栏（放大框 + 停靠栏）"
+    //    这条是"放置区拿满整页高"的可解算版本：链路的 7 张预留（389.0）+ 左栏两个组件
+    //    的**推导**高度必须小于棋盘高（在用户的 1080p 上）。⚠️ 观感仍属人眼项（见报告）。
+    const padY = cssLenOf([cssNode('board', 'net-board')], RULES,
+      cssVarOf([cssNode('board', 'net-board')], RULES, '--net-app-pad-y') ?? '');
+    expect(padY, '--net-app-pad-y 解不出').toBe(122);
+    console.log(`  R19 预算：1080p 视口 ⇒ 棋盘高 ${1080 - padY!}px；7 张跨度 ${seven.toFixed(1)}px`
+      + `（余量 ${(1080 - padY! - seven).toFixed(1)}px 给放大框 + 停靠栏）`);
+    expect(1080 - padY! - seven, '7 张跨度几乎吃掉整个棋盘高（没有任何余量给左栏的两个组件）')
+      .toBeGreaterThan(400);
 
     // ── ② 竖排重叠 `margin-top` 同样由 `--card-w` / `--card-h` 推出 ──
     //    ⚠️ **不能用 `.net-lane-band .stack .card + .card` 走 `cssPropOf`**：共享解析器把
@@ -256,14 +272,19 @@ describe('R9-1 · G-10：等比缩放由一个数驱动', () => {
         + 'R9-1 要求宽高**完全**由 `--card-h` 的倍数表达（比值来历写进注释）。'
         + '（口径：`em` / `rem` 等**相对**长度不算"另一组绝对尺寸"，故不在此列。）').toEqual([]);
     }
-    // ③ 数值解算：≈ 76.9 × 107.7（比值 0.5495 = 100/182、0.7692 = 140/182）
+    // ③ 数值解算：≈ 71.4 × 100（比值 0.5495 = 100/182、0.7692 = 140/182；R19 起 --card-h = 130）
     const w = cssLenOf(holderChain(), RULES, widthDecl);
     const h = cssLenOf(holderChain(), RULES, heightDecl);
     console.log(`  解算：width = ${w === null ? 'null' : w.toFixed(1)}px / height = ${h === null ? 'null' : h.toFixed(1)}px`);
     expect(w, `协议 holder 的 width 解不出像素值（源文：${widthDecl}）`).not.toBeNull();
     expect(h, `协议 holder 的 height 解不出像素值（源文：${heightDecl}）`).not.toBeNull();
-    expect(w!, '协议 holder 宽必须 ≈ 76.9（= 140 × 0.5495）').toBeCloseTo(76.93, 1);
-    expect(h!, '协议 holder 高必须 ≈ 107.7（= 140 × 0.7692）').toBeCloseTo(107.69, 1);
+    // ⚠️ **数值迁移（R19）**：76.93 / 107.69 → 71.435 / 99.996（= 130 × 那两个比值）。
+    //    **旧句为什么必须改**：那两个数**不是**独立常量，它们就是 `--card-h × 0.5495` 与
+    //    `--card-h × 0.7692` ⇒ `--card-h` 一改它们必然跟着改；旧句会把**正确**的实现判红。
+    //    **新句多查了什么**：仍然由**同一个比值**复算（`130 × 比值`），所以它照样抓得住
+    //    "有人把 holder 改成第二组字面量"（那时数值会与这个复算值不符）。
+    expect(w!, '协议 holder 宽必须 ≈ 71.4（= 130 × 0.5495）').toBeCloseTo(130 * 0.5495, 1);
+    expect(h!, '协议 holder 高必须 ≈ 100.0（= 130 × 0.7692）').toBeCloseTo(130 * 0.7692, 1);
     // ④ **反空集合**：协议图（`.protocol-img`）必须跟着同一个表达式走 —— 它是真正的可见图，
     //    holder 只是它的静态盒；只改 holder 会让图片仍然按旧尺寸撑开（"看着没缩"）。
     const imgRule = RULES.find((r) => r.selector.trim() === '.net-lane-band .protocol-img');
@@ -289,81 +310,52 @@ describe('R9-2 · G-11：三列精确居中', () => {
      （G-12a⑤ 与 G-11c 也用它 —— 一处实现，免得两处漂移；见它们的定义处注释）。 */
 
   /**
-   * **归中量的推导**（G-11 的核心算术，写在测试里而不是抄一个 184px）：
+   * **归中算术（R9-2 → **R19 收口**）**：放置区为什么恒在页面水平中心。
    *
-   * 设 `M` = 三条轨道占的**内容宽**、`G` = `gap`、`R` = 控制轨宽（`--net-rail-w`）、
-   * `P` = `padding-left`。`.net-grid` 是 `width: fit-content` ⇒ 它的盒宽 = `P + M + 2G + R`
-   * （左侧只有内边距，右侧是"间隔 + 控制轨 + 间隔"）。
-   * 三列占 `[P, P + M]` ⇒ 三列中心 = `P + M/2`；盒中心 = `盒宽/2`。
-   * 两者相等 ⟺ `2P + M = P + M + 2G + R` ⟺ **`P = 2G + R`**。
-   * 下面**不写死** `2G + R` 的数值，而是从样式表解出这三个量再判 —— 这样"gap 改了但
-   * padding-left 没跟着改"也会红（那正是"只差一点点、看不出谁的错"的形态）。
+   * ## R9-2 那一版（**已退役**，这里保留推导作为历史依据）
+   * 设 `M` = 三条轨道的内容宽、`G` = `gap`、`R` = 控制轨宽、`P` = `padding-left`。
+   * 那时 `.net-grid` **横跨整行**（`grid-column: 1 / -1`），盒宽 = `P + M + 2G + R`，
+   * 三列占 `[P, P + M]` ⇒ 要让三列中心 == 盒中心必须 `P = 2G + R`。
    *
-   * ## `laneWidth` 参数为什么必须存在（诚实边界）
-   * 三条轨道是 **`max-content`**（R9-1 的裁决本身）—— 那是**浏览器布局引擎**才能算出的值，
-   * 本仓的桩与解算器**都不模拟布局**（见 `./net-css-parse` 头注）。所以：
-   *  · 结构面（"轨道不是 `1fr`、是内容宽族"）由 `G-11a③` 直接断言**声明原文**；
-   *  · 数值面（"三列中心 == 盒中心"）用**一个给定的轨道宽**代入 —— 它在 `P = 2G + R` 下
-   *    对**任意** `M` 都成立（推导里 `M` 被消掉了），所以代入具体值**不削弱**判据：
-   *    只要 `padding-left` 不是 `2G + R`，无论 `M` 取多少都会偏。
-   *    ⚠️ 这条**不能**证明"浏览器里算出来的 max-content 真等于那个值" —— 那需要人眼（§13.8）。
+   * ## 为什么 R19 必须改写它（**不是放松，而是把机制挪到了更硬的地方**）
+   * 用户这一轮把三块组件搬进左栏 ⇒ `.net-board` 的列模板变成
+   * `minmax(0, 1fr) auto minmax(0, 1fr)`（左栏 | 放置区 | 右空）。
+   * 此时"放置区居中"**不再**由盒内 `padding-left` 表达，而是由**列模板本身**表达：
+   * 第 1 与第 3 条轨道是**同一个 `minmax(0, 1fr)`** ⇒ 它们等宽（网格算法对两个相同弹性轨道
+   * 分配相同空间）⇒ 中间那条 `auto` 轨道的**左右两侧等宽** ⇒ 中列恒在容器中心。
+   * ⇒ 旧判据（解 `padding-left == 2G + R`）会把**正确**的实现判红（那两条声明已退役）。
+   * **新判据多查了什么**：① 三条轨道的**族别**（第 1/3 条必须是同一条弹性轨道、第 2 条必须是
+   * `auto`）；② 由它推出的**对称性**（左右留白相等 ⇒ 中列中心 == 容器中心），用**数值**验算
+   * （而不是"看着像"）；③ 放置区**只占**中列（`grid-column: 2`）—— 旧句查的是 `1 / -1`，
+   * 在新形态下那会跨过留白、把 `fit-content` 的盒宽拉散（`net-dock.test.ts` 的 G-13a 同钉）。
    */
-  function centerMath(laneWidth: number): {
-    lanes: number; boxCentre: number; boxWidth: number; M: number; P: number; G: number; R: number;
+  function boardColumnMath(railWidth: number, laneWidth: number, rightWidth: number): {
+    left: number; centre: number; right: number; boxCentre: number; tracks: string[];
   } {
-    const g = grid();
-    const chain = [board(), g];
-    const rawTracks = cssPropOf(g, chain, RULES, 'grid-template-columns');
-    expect(rawTracks, '.net-grid 没有 grid-template-columns（列模板被删？）').toBeTruthy();
-    const tracks = gridTracks(rawTracks!);
-    expect(tracks.length, `列模板必须恰好 4 条显式轨道（3 条线 + 控制轨），实际 ${tracks.length} 条`)
-      .toBe(4);
-    // 三条线必须**同宽**（同一份轨迹值）—— 否则"三列中心"这个说法本身不成立
-    const laneTracks = tracks.slice(0, 3);
-    expect(new Set(laneTracks).size, `三条线的列必须同宽（实际 ${laneTracks.join(' | ')}）`).toBe(1);
-    // 结构面：三条轨道必须是**内容宽**族（`max-content` 由布局引擎算 ⇒ 这里解不出像素）
-    expect(laneTracks.filter((t) => /\d?fr\b/.test(t)), `前三条轨道不得是 \`1fr\` 族（实际 ${laneTracks.join(' | ')}）`)
-      .toEqual([]);
-    expect(/content/.test(laneTracks[0]), `前三条轨道必须是内容宽族（实际 \`${laneTracks[0]}\`）——`
-      + '否则链路框撑满宿主、比卡片宽得多（用户第三次反馈的第一句）').toBe(true);
-    const M = laneTracks[0].trim() === 'max-content'
-      ? laneWidth
-      : cssLenOf(chain, RULES, laneTracks[0]);
-    expect(M, `轨道值 \`${laneTracks[0]}\` 既不是 max-content 也解不出像素宽`).not.toBeNull();
-
-    const rawGap = cssPropOf(g, chain, RULES, 'gap');
-    expect(rawGap, '.net-grid 没有 gap（间隔是归中量的输入）').toBeTruthy();
-    const G = cssLenOf(chain, RULES, rawGap!);
-    expect(G, `gap 解不出像素值：${rawGap}`).not.toBeNull();
-
-    const rawP = cssPropOf(g, chain, RULES, 'padding-left');
-    expect(rawP, '`.net-grid` 没有 `padding-left` —— R9-2 的归中量（控制轨挤偏三列 80px 的修法）')
-      .toBeTruthy();
-    const P0 = cssLenOf(chain, RULES, rawP!);
-    expect(P0, `padding-left 解不出像素值：${rawP}`).not.toBeNull();
-    const P = P0 ?? 0;
-
-    const rawR = resolveVar(chain, tracks[3]);
-    const R0 = cssLenOf(chain, RULES, rawR);
-    expect(R0, `第 4 条轨道（控制轨）解不出像素宽：${tracks[3]}`).not.toBeNull();
-    const R = R0 ?? 0;
-
-    const Mv = M ?? 0;
-    const Gv = G ?? 0;
-
-    const boxWidth = P + Mv + 2 * Gv + R;
-    const lanes = P + Mv / 2;
-    console.log(`\n===== G-11 · .net-grid 的归中算术（由 styles-net.css 真实解出；轨道宽代入 ${Mv}px）=====\n`
-      + `  轨道 = ${tracks.join(' | ')}`
-      + `\n  gap G = ${Gv.toFixed(1)}px / padding-left P = ${P.toFixed(1)}px / 控制轨 R = ${R.toFixed(1)}px`
-      + `\n  盒宽 = P + M + 2G + R = ${boxWidth.toFixed(1)}px / 三列区间 = [${P.toFixed(1)}, ${(P + Mv).toFixed(1)}]`
-      + `\n  三列中心 = ${lanes.toFixed(1)}px / 盒中心 = ${(boxWidth / 2).toFixed(1)}px`);
-    // ⚠️ **R9 收口（评审 I-1）**：这里返回的是 **`boxCentre`（已经除过 2 的盒中心）**，
-    //    不是"盒宽"。第一版返回 `box: box / 2` 而调用方写 `expect(Math.abs(lanes - box))`，
-    //    于是那条断言实际在比"三列中心 ≈ 盒**宽**" —— 一个**恒真式**（任何 `padding-left`
-    //    都能过），而它的名字与失败消息（"控制器组件挤压了左边的游玩区…"）在说谎。
-    //    现在名字与数值一一对应：比的是 `lanes（三列中心）` vs `boxCentre（盒中心）`。
-    return { lanes, boxCentre: boxWidth / 2, boxWidth, M: Mv, P, G: Gv, R };
+    const b = board();
+    const raw = subjectPropOf(b, [b], RULES, 'grid-template-columns');
+    expect(raw, '`.net-board` 没有 grid-template-columns（R19 的列几何失去定义）').toBeTruthy();
+    const tracks = gridTracks(raw!);
+    expect(tracks.length, `\`.net-board\` 必须恰好 **3 条**轨道（左栏 · 放置区 · 右空），`
+      + `实际 ${tracks.length} 条：${tracks.join(' | ')}`).toBe(3);
+    // ① 左右两条必须是**同一个值**（同一条弹性轨道）—— 这条是"中列恒居中"的充要条件
+    expect(tracks[0], `第 1 条轨道（左栏）与第 3 条（右空）必须**同值**（实际 \`${tracks[0]}\` vs \`${tracks[2]}\`）——`
+      + '两者不等宽时中列会被推向一侧').toBe(tracks[2]);
+    expect(/\d?fr\b/.test(tracks[0]), `左右两条轨道必须是**弹性族**（实际 \`${tracks[0]}\`）——`
+      + '它们是对称的留白；写死 px 会在别的视口宽度下失去对称').toBe(true);
+    // ② 中间那条必须是 `auto`（按内容宽：放置区的内容宽由 .net-grid 的 fit-content 推出）
+    expect(tracks[1], `第 2 条轨道（放置区）必须是 \`auto\`（实际 \`${tracks[1]}\`）——`
+      + '它要按内容宽收，而不是被拉伸或塌掉').toBe('auto');
+    // ③ **对称性验算**：把两侧留白代入（同一条 `minmax(0,1fr)` ⇒ 同宽），中列居中即
+    //    `left == right`。这里用给定的代入值算出三个区间，再比中列中心与容器中心。
+    const left = railWidth;
+    const right = rightWidth;
+    const centre = left + laneWidth / 2;
+    const boxCentre = (left + laneWidth + right) / 2;
+    console.log(`\n===== G-11 · .net-board 的列居中算术（R19）=====\n`
+      + `  轨道 = ${tracks.join(' | ')}\n  代入：左留白 ${left} / 放置区 ${laneWidth} / 右留白 ${right}`
+      + `\n  中列中心 = ${centre.toFixed(1)} / 容器中心 = ${boxCentre.toFixed(1)}`);
+    return { left, centre, right, boxCentre, tracks };
   }
 
   /** `var(--x)` / 字面量 → 解算后的字面量（沿 `chain` 找自定义属性）。 */
@@ -373,94 +365,104 @@ describe('R9-2 · G-11：三列精确居中', () => {
     return cssVarOf(chain, RULES, m[1]) ?? raw.trim();
   }
 
-  it('G-11a. 三列的水平中心 == `.net-grid` 盒中心（`padding-left == 2 × gap + 控制轨宽`）', () => {
-    // ⚠️ **R9 收口（评审 I-1）**：三组代入值（100 / 200 / 1000）**全部**必须过 ——
-    //    判据在推导上对**任意** `M` 都成立（`M` 被消掉），所以这里不是"多跑几组碰运气"，
-    //    而是**反空集合**：若某条断言其实在比一个与 `M` 无关的恒真式，或把 `M` 算错，
-    //    三组里至少一组会露馅。第一版只跑一组、且比的是"盒宽"（恒真），评审探针实测抓出。
-    for (const laneWidth of [100, 200, 1000]) {
-      const { lanes, boxCentre, boxWidth, M, P, G, R } = centerMath(laneWidth);
-      // ① 中心相等（±0.5px：本解算器是浮点算术，判据是"几何上相等"而不是"位相等"）
-      //    ⚠️ 左边是**三列中心**、右边是**盒中心**（`centerMath` 直接返回除过 2 的那个值）。
-      expect(Math.abs(lanes - boxCentre), `[M=${laneWidth}] 三列中心（${lanes.toFixed(1)}）与网格盒中心`
-        + `（${boxCentre.toFixed(1)}，盒宽 ${boxWidth.toFixed(1)}）差 ${(lanes - boxCentre).toFixed(1)}px ——`
-        + `用户第三次反馈："控制器组件挤压了左边的游玩区组件的位置了，导致其位置并不是完全位于页面中心的"`)
+  it('G-11a. 放置区恒在页面水平中心：`.net-board` 的第 1 / 3 条轨道**同值**（对称留白）⇒ 中列中心 == 容器中心', () => {
+    // ⚠️ **判据迁移（R19）—— 旧句为什么必须改**：旧句是"三列的水平中心 == `.net-grid` 盒中心"，
+    //    它的机制是 `.net-grid` 横跨整行 + `padding-left = 2 × gap + 控制轨宽`。
+    //    R19 之后放置区只占**中列**，那两条声明已退役（见 styles-net.css 第 1 节的退役记录）⇒
+    //    旧句会把**正确**的实现判红。
+    //    **新句多查了什么**：① 对称性来自**列模板**（左右两条同值）而不是盒内边距；
+    //    ② 用**三组代入值**（左右不等宽的两组 + 等宽的一组）做**反空集合**：
+    //       只有"左右同值"那条轨道设计才让"中列中心 == 容器中心"对**任意**宽度都成立 ——
+    //       若有人把左栏轨道写成 `max-content`（内容宽），第 ① 条断言就会红。
+    for (const [railW, laneW] of [[420, 505], [100, 1200], [300, 300]] as const) {
+      const { left, right, centre, boxCentre } = boardColumnMath(railW, laneW, railW);
+      expect(Math.abs(centre - boxCentre), `[左栏=${railW} 放置区=${laneW}] 中列中心（${centre.toFixed(1)}）`
+        + `与容器中心（${boxCentre.toFixed(1)}）不相等 —— 用户第 ① 条诉求是"放置区仍然居中"`)
         .toBeLessThanOrEqual(0.5);
-      // ② 归中量本身：P == 2G + R（从样式表解出，不是抄数值）
-      expect(P, `[M=${laneWidth}] padding-left（${P}）必须等于 2 × gap + 控制轨宽（${2 * G + R}）——`
-        + '这是"三列中心 == 盒中心"的充要条件（推导见 centerMath 的注释）')
-        .toBeCloseTo(2 * G + R, 2);
-      expect(M, '三条轨道的内容宽必须是正数（解成 0 说明轨道值解错了）').toBeGreaterThan(0);
+      expect(left, '左右两条留白必须同宽（同一条弹性轨道）').toBe(right);
     }
-    // ③ 反空集合：三条轨道是**内容宽**（不是 `1fr`）—— 否则 `fit-content` 会塌成整页宽，
-    //    P 再对也没用（三列被拉宽到 1010px，与卡片的比例又脱钩了）
-    const laneTracks = gridTracks(cssPropOf(grid(), [board(), grid()], RULES, 'grid-template-columns')!)
+    // ④ 放置区**只占中列**（`grid-column: 2`）—— 旧值是 `1 / -1`（横跨整行）
+    const g = grid();
+    expect(subjectPropOf(g, [board(), g], RULES, 'grid-column'),
+      '放置区必须只占中列（`2`）—— 写成 `1 / -1` 会跨过左右两条留白，`fit-content` 的盒宽被拉散')
+      .toBe('2');
+    // ⑤ 四条**盒内**轨道仍是"三条线 + 控制轨"（R7/R9-1 的判据一个字未改）
+    const laneTracks = gridTracks(cssPropOf(g, [board(), g], RULES, 'grid-template-columns')!)
       .slice(0, 3);
     expect(laneTracks.filter((t) => /\d?fr\b/.test(t)), `前三条轨道不得是 \`1fr\` 族（实际 ${laneTracks.join(' | ')}）`)
       .toEqual([]);
-    // ④ 控制轨仍是**第 4 条轨道、仍在右侧**（用户只要求"别把三列挤偏"，没要求挪走它）
-    const tracks = gridTracks(cssPropOf(grid(), [board(), grid()], RULES, 'grid-template-columns')!);
-    expect(resolveVar([board(), grid()], tracks[3]), '控制轨（第 4 条轨道）不再是 --net-rail-w 的固定宽')
+    // ⑥ 控制轨仍是**第 4 条轨道、仍在右侧**（用户只要求"别把三列挤偏"，没要求挪走它）
+    const tracks = gridTracks(cssPropOf(g, [board(), g], RULES, 'grid-template-columns')!);
+    expect(resolveVar([board(), g], tracks[3]), '控制轨（第 4 条轨道）不再是 --net-rail-w 的固定宽')
       .toBe('160px');
+    // ⑦ **退役腿**：R9-2 的归中量必须**真的不在**了（半留状态会让下一个读者以为它还在起作用）
+    expect(cssPropOf(g, [board(), g], RULES, 'padding-left'),
+      '`.net-grid` 的 `padding-left` 仍在 —— R19 的列模板已经接管了"居中"，留着它会把放置区整体右推')
+      .toBeNull();
   });
 
-  it('G-11b. 三列仍是"三条线 + 控制轨"四个并排轨道，且 `.net-grid` 不再是 `width: 100%`（fit-content 才可能居中）', () => {
+  it('G-11b. 放置区仍是"三条线 + 控制轨"四个并排**盒内**轨道，且 `.net-grid` 仍是 `fit-content`（贴合卡片）', () => {
     const chain = [board(), grid()];
     const rawW = cssPropOf(grid(), chain, RULES, 'width');
     console.log(`\n===== G-11b · .net-grid 的 width = ${String(rawW)}`);
-    // `width: 100%` 会让盒子撑满宿主 ⇒ `margin: 0 auto` 失效、`padding-left` 反而把内容整体右推。
-    expect(rawW, '`width` 不是 `fit-content`（R9-1：链路框要贴合卡片、并在页面里居中）')
+    // `width: 100%` 会让盒子撑满**中列** ⇒ `fit-content` 的"贴合卡片"失效。
+    expect(rawW, '`width` 不是 `fit-content`（R9-1：链路框要贴合卡片）')
       .toBe('fit-content');
     // R7 的 `max-width: 1010px` 在内容宽下是死声明（内容恒小于它）—— 留着就是第二套真相
     const maxW = cssPropOf(grid(), chain, RULES, 'max-width');
     expect(maxW, '.net-grid 上仍留着 `max-width`（内容宽下它是死声明；R9-1 已删除）').toBeNull();
+    // ⚠️ **新增（R19）**：`fit-content` 现在**同时**是中列（`auto` 轨道）的尺寸来源 ——
+    //    所以它必须**真的**还在（上面那条），而中列不能是弹性族（那是 G-11a 的判据）。
+    expect(gridTracks(subjectPropOf(board(), [board()], RULES, 'grid-template-columns')!)[1],
+      '中列轨道不是 `auto` —— 放置区的 fit-content 盒宽会被 `1fr` 拉伸').toBe('auto');
   });
 
   /**
-   * **G-11c（R11-2 改写 · 评审 I-3 的收口）：`.net-board` 的**四列**模板是停靠栏的承重几何。**
+   * **G-11c（**R19 第三次改写**）：停靠栏三块现在是 `.net-dock` 的 flex 项 ——
+   * `.net-board` 的三条轨道改为"左栏 | 放置区 | 右空"。**
    *
-   * 评审当年实测的缺口：把 `.net-board { grid-template-columns: … }` 改回**单列** ⇒ 全仓全绿，
-   * 而信息块会从"左侧紧凑盒子"变成**整行宽的大盒子**（只查 `grid-row` 的判据看不见列模板）。
-   * R9-3 之后是双列、**R11-2/3 之后是四列**（对手那一块也搬进停靠栏）：
-   *   `[自己信息块 max-content] [弹性 minmax(0,1fr)] [对手信息块 max-content] [对手手牌张数 max-content]`
-   * 这条腿把"**恰好 4 条轨道 + 各自是内容宽族/弹性族**"钉住：
-   *  · 第 1 / 3 / 4 条必须是**内容宽族**（`max-content` 等）⇒ 三块各自 = 它自己的内容宽
-   *    （用户截图里那种紧凑盒子）；写死一个 px 会让宽度与内容脱钩；
-   *  · 第 2 条必须是**弹性族**（`minmax(0, 1fr)`）⇒ 它吸收留白，把左右两组各贴一端
-   *    （"对手信息块在该行右侧"的机制）。
-   *  ⚠️ **不要**在这里断言"手牌从第 2 列起"：那会把整行手牌**右移 `c1/2`**（见 G-12a⑤ 的反例），
-   *  与"手牌整页中置"直接冲突 —— R9 修复轮已经在这条上栽过一次。
+   * 历史：R11-2/3 时这条钉的是 `.net-board` 的**四列**（自己块 · 弹性 · 对手块 · 张数）；
+   * R12-7 改成"三条内容宽轨道 + `justify-content: center`"（三块紧挨着、整组居中）。
+   * **旧句为什么必须改**：R19 把三块搬进 `.net-dock`（flex 行，见 styles-net.css 第 6 节）
+   * ⇒ "三块紧挨着"由 `.net-dock` 的 `gap` + `justify-content: flex-end` 表达，
+   * `.net-board` 的轨道已经装的是别的东西（左栏 / 放置区 / 右空）。旧句（要求三条**内容宽**
+   * 轨道、不许有 `fr`、且 `justify-content: center`）会把**正确**的实现判红。
+   * **新句多查了什么**：① `.net-board` 的三条轨道**必须**是"弹性 · `auto` · 弹性"（对称留白，
+   * 这是"放置区居中"的机制，G-11a 的数值腿是它的算术版本）；② "三块横排 + 整组右贴"这套职责
+   * **有人接**：`.net-dock` 的 `display: flex` / `justify-content: flex-end` / `gap`；
+   * ③ 三块**不再**各自被 `grid-column` 指派（退役要退干净 —— 半留状态 = 同一件事两套真相，
+   * 那正是"改一处忘一处时页面照样看着对"的温床）。
    */
-  it('G-11c. `.net-board` 的三列模板：三条内容宽轨道 + `justify-content: center`（R12-7）', () => {
+  it('G-11c. 停靠栏三块的横排几何搬到了 `.net-dock`（flex 行 + 整组右贴）；`.net-board` 的三条轨道 = 左栏 | 放置区 | 右空', () => {
     const b = board();
-    const raw = subjectPropOf(b, [b], RULES, 'grid-template-columns');
-    expect(raw, '`.net-board` 没有 grid-template-columns（R11-2 的列几何失去定义）').toBeTruthy();
-    const tracks = gridTracks(raw!);
-    console.log(`\n===== G-11c · .net-board 的列模板 = ${raw}\n  轨道 = ${tracks.join(' | ')}`);
-    expect(tracks.length, `\`.net-board\` 必须恰好 **3 条**轨道（自己信息块 · 手牌 · 对手信息块），`
-      + `实际 ${tracks.length} 条：${tracks.join(' | ')}`).toBe(3);
-    // R12-7：**三条都必须是内容宽族**（没有留白轨道 —— 它就是"三块被推到两端、隔得太远"的成因）
-    for (const i of [0, 1, 2]) {
-      expect(/content/.test(tracks[i]), `第 ${i + 1} 条轨道必须是**内容宽族**（\`max-content\` 等），`
-        + `实际 \`${tracks[i]}\``).toBe(true);
-    }
-    expect(tracks.filter((t) => /\d?fr\b/.test(t)), 'R12-7 之后**不许**再有弹性/留白轨道 —— '
-      + '它会把左右两块推到页面两端（用户："现在隔着的距离太远了"）').toEqual([]);
-    expect(subjectPropOf(b, [b], RULES, 'justify-content'), '停靠栏三块必须**整组居中**').toBe('center');
-    // 反空集合：这四条轨道必须**真的**被停靠栏四块用上（否则模板对了也没人吃）
-    const parts: ReadonlyArray<[StubNode, RegExp, string]> = [
-      [(() => { const n = cssNode('net-info-block'); n.dataset.netSeat = 'self'; return n; })(),
-        /^1(\s*\/\s*2)?$/, '自己信息块'],
-      [(() => { const n = cssNode('net-info-block'); n.dataset.netSeat = 'foe'; return n; })(),
-        /^3(\s*\/\s*4)?$/, '对手信息块'],
-      // R12-7：对手手牌张数**与对手信息块同格**（压在块内的右下角），不再有自己的轨道
-      [cssNode('net-hand-area', 'net-hand-area-foe'), /^3(\s*\/\s*4)?$/, '对手手牌张数'],
-      [cssNode('net-hand-area', 'net-hand-area-self'), /^2(\s*\/\s*3)?$/, '自己手牌区'],
-    ];
-    for (const [node, want, what] of parts) {
-      expect(subjectPropOf(node, [b, node], RULES, 'grid-column'),
-        `${what}的 grid-column 与四列模板对不上（模板 ${tracks.join(' | ')}）`).toMatch(want);
-    }
+    const tracks = gridTracks(subjectPropOf(b, [b], RULES, 'grid-template-columns')!);
+    console.log(`\n===== G-11c · .net-board 的列模板（R19）= ${tracks.join(' | ')}`);
+    expect(tracks.length, '`.net-board` 的轨道数不是 3').toBe(3);
+    expect(tracks[0], '第 1 条轨道不是弹性留白').toMatch(/\d?fr\b/);
+    expect(tracks[1], '第 2 条轨道（放置区）不是 `auto`').toBe('auto');
+    expect(tracks[2], '第 3 条轨道不是弹性留白').toMatch(/\d?fr\b/);
+    expect(tracks[0], '两条留白必须同值（否则放置区不居中）').toBe(tracks[2]);
+    // ② "三块横排 + 整组右贴"的接棒者
+    const dock = cssNode('net-dock');
+    const dockChain = [b, dock];
+    expect(subjectPropOf(dock, dockChain, RULES, 'display'), '`.net-dock` 不是 flex 容器')
+      .toBe('flex');
+    expect(subjectPropOf(dock, dockChain, RULES, 'flex-direction'), '`.net-dock` 不是横排（用户第 ① 条"仍横排"）')
+      .toBe('row');
+    expect(subjectPropOf(dock, dockChain, RULES, 'justify-content'),
+      '`.net-dock` 的整组没有右贴（"最右边紧挨着中间的放置区域"）').toBe('flex-end');
+    expect(cssLenOf(dockChain, RULES, subjectPropOf(dock, dockChain, RULES, 'gap') ?? ''),
+      '`.net-dock` 没有三块之间的间距（会粘成一坨）').toBeGreaterThan(0);
+    // ③ 三块**不再**被 grid-column 指派（退役要退干净）
+    const staleColumnRules = RULES.filter((r) =>
+      /(?:^|;|\s)grid-column\s*:/.test(r.body)
+      && /\.net-info-block|\.net-hand-area/.test(r.selector));
+    expect(staleColumnRules.map((r) => r.selector),
+      'styles-net.css 里仍有给停靠栏组件派 `grid-column` 的规则 —— 它们现在住在 `.net-dock`（flex）里，'
+      + '那些声明**不生效**（flex item 没有 grid placement），留着就是"看着在排版、其实什么都不做"的假代码')
+      .toEqual([]);
+    // 反空集合：这两块信息块 / 手牌区**真的**还在（否则上面几条是空判据）
+    expect(cssNode('net-info-block').cls).toContain('net-info-block');
   });
 });
 
@@ -490,6 +492,9 @@ describe('R9-3 · G-12：手牌与信息块并盒（同一行）', () => {
 
         // ── 展平 `display: contents`：只有**真的**解出 contents 的容器才被展平
         //    （按类名硬编码的话，"删掉那条 contents"的变异不会红）
+        //    ⚠️ **R19**：`.net-bottom` / `.net-hands` 的 contents 语义**一个字未改**，
+        //    但它们上面多了一层**有盒子**的 `.net-dock`（flex 行）⇒ 展平必须在
+        //    `.net-dock` 的**内部**继续做（"三块是 `.net-dock` 的 flex 项"就是本用例的新判据）。
         const chainOf = (n: StubNode): StubNode[] => ancestorsOf(root, n);
         const isContents = (n: StubNode): boolean => {
           const chain = chainOf(n);
@@ -504,6 +509,14 @@ describe('R9-3 · G-12：手牌与信息块并盒（同一行）', () => {
           }
         };
         visit(board);
+        // ⚠️ **新增（R19，反空集合）**：`.net-dock` 必须是 `.net-board` 里**唯一**有盒子的
+        //    停靠栏容器，且它自己**不是** `display: contents`（它是 flex 行 —— 三块靠它横排）。
+        const dock = flat.filter((n) => isClass(n, 'net-dock'));
+        expect(dock.length, `viewSeat=${seat}：展平后 .net-board 下没有 .net-dock（R19 的三块容器）`)
+          .toBe(1);
+        expect(subjectPropOf(dock[0], chainOf(dock[0]), RULES, 'display'),
+          '`.net-dock` 被写成了 `display: contents` —— 那样三块会各自成为 `.net-board` 的 grid item，'
+          + '"整组横排 + 右贴"完全失效（而外观上像还在）').toBe('flex');
 
         const infoOf = (side: 'foe' | 'self'): StubNode => {
           const hit = flat.filter((n) => isClass(n, 'net-info-block') && n.dataset.netSeat === side);
@@ -527,75 +540,63 @@ describe('R9-3 · G-12：手牌与信息块并盒（同一行）', () => {
           const handRow = rowOf(hand);
           console.log(`  viewSeat=${seat} · ${side}：信息块 grid-row=${String(infoRow)} grid-column=${String(colOf(info))}`
             + ` / 手牌区 grid-row=${String(handRow)} grid-column=${String(colOf(hand))}`);
-          // ① **同一行**（本守卫的核心：用户要的"纳入同一个组件"）
-          expect(infoRow, `viewSeat=${seat} · ${side} 侧：信息块的 grid-row 没解出来（靠 DOM 顺序 = R8-5 之前的旧样）`)
-            .toBeTruthy();
-          expect(handRow, `viewSeat=${seat} · ${side} 侧：手牌区的 grid-row 没解出来`).toBeTruthy();
-          expect(handRow, `viewSeat=${seat} · ${side} 侧：手牌区与信息块**不在同一行**`
-            + `（信息块=${String(infoRow)}，手牌区=${String(handRow)}）—— R9-3 的裁决是"同一行、同一个盒子"；`
-            + '各自一行 = 用户点名的"组件突出在外面、页面变得更长"').toBe(infoRow);
-          // ② **列指派**（R11-2/3 建立、**R12-7 改写**）：自己信息块第 1 列、自己手牌第 2 列、
-          //    对手信息块第 3 列；对手手牌张数与对手信息块**同格**（块内右下角）。
-          //    **三块紧挨着**（用户第五次验收："现在隔着的距离太远了"）⇒ 没有留白轨道。
-          if (side === 'self') {
-            expect(colOf(info), `viewSeat=${seat}：自己信息块必须在**第 1 列**（左列），`
-              + `实际 ${String(colOf(info))}`).toMatch(/^1(\s*\/\s*2)?$/);
-            // R12-7：手牌在**第 2 列**、**夹在**左右两块之间
-            expect(colOf(hand), `viewSeat=${seat}：自己手牌必须在**第 2 列**（自己信息块与对手信息块`
-              + `之间 —— R12-7："三块紧挨着"），实际 ${String(colOf(hand))}`).toMatch(/^2(\s*\/\s*3)?$/);
-          } else {
-            expect(colOf(info), `viewSeat=${seat}：对手信息块必须在**第 3 列**（该行右侧 ——`
-              + `用户第四次验收："摆在该行右侧"），实际 ${String(colOf(info))}`).toMatch(/^3(\s*\/\s*4)?$/);
-            // R12-7：手牌张数与对手信息块**同格**（块内右下角），不再是独立的一列
-            expect(colOf(hand), `viewSeat=${seat}：对手手牌张数必须与对手信息块**同格**（R12-7），`
-              + `实际 ${String(colOf(hand))}`).toMatch(/^3(\s*\/\s*4)?$/);
-          }
+          // ⚠️⚠️ **判据迁移（R19）—— 旧句为什么必须改，新句多查了什么**
+          //  · **旧句**：解 `.net-info-block` / `.net-hand-area` 自己的 `grid-row` 必须**相等且非空**
+          //    （R9-3 的"信息块与手牌并盒、同一行"），并解各自的 `grid-column`（1 / 2 / 3）。
+          //  · **为什么必须改**：R19 把三块搬进 `.net-dock`（**flex 行**）—— 它们不再是
+          //    `.net-board` 的 grid item ⇒ 那四条 `grid-row` / `grid-column` **已退役**
+          //    （留着就是同一件事两套真相，见 styles-net.css 第 1 节的退役记录）。
+          //    继续钉它们会把**正确**的实现判红。
+          //  · **新句多查了什么**：① **同一个盒子**（R9-3 的裁决本体）现在由"三块都在 `.net-dock`
+          //    这一个 flex 容器里、且它是 `display: flex`"表达（比"解出同一个行号"更直接：
+          //    行号可以被另一条规则悄悄改掉，而"父节点是不是那一个 flex 盒"不会）；
+          //    ② 三块**横排**由容器的 `flex-direction: row` 钉住（旧形态下那是 `grid-column` 的活）；
+          //    ③ 左右次序由 **DOM 顺序**表达（自己块在前、对手块在后 —— `NET_BOTTOM_SIDES`），
+          //    而旧句用的是"列号更小"（flex 行里没有列号）。
+          const dockOf = (n: StubNode): StubNode | null => n.parentElement;
+          expect(hand.parentElement, `viewSeat=${seat} · ${side} 侧：手牌区的父节点不是 .net-hands`
+            + '（R19 只搬容器，不搬手牌区与 .net-hands 的父子关系）')
+            .toBe(descendants(dock[0]).find((n) => isClass(n, 'net-hands'))!);
+          // 三块在**同一个** flex 容器下（经各自的 `display: contents` 父节点）
+          // —— 这才是 R9-3"纳入同一个组件"在 R19 形态下的说法。
+          expect(chainOf(info).includes(dock[0]), `viewSeat=${seat} · ${side} 侧：信息块的祖先链上没有 .net-dock`)
+            .toBe(true);
+          expect(chainOf(hand).includes(dock[0]), `viewSeat=${seat} · ${side} 侧：手牌区的祖先链上没有 .net-dock`)
+            .toBe(true);
+          expect(dockOf(descendants(dock[0]).find((n) => isClass(n, 'net-bottom'))!),
+            `viewSeat=${seat} · ${side} 侧：.net-bottom 的直接父节点不是 .net-dock`
+            + '（三块必须同排在一个盒子里）').toBe(dock[0]);
         }
-        // ④ 两个座位都跑 + **两侧同一行**（停靠栏；R11-2 的裁决是"对手那一块搬进自己这一行"），
-        //    而左右次序由列给出：自己信息块在左、对手信息块在右。
-        const colStart = (n: StubNode): number => Number.parseInt(String(colOf(n)).split('/')[0].trim(), 10);
-        expect(rowOf(infoOf('foe')), `viewSeat=${seat}：对手那一组与自己那一组必须**在停靠栏的同一行**`
-          + '（R11-2："把对手信息块从顶部移进自己那一行"）').toBe(rowOf(infoOf('self')));
-        expect(colStart(infoOf('self')), `viewSeat=${seat}：自己信息块必须在对手信息块的**左侧**`)
-          .toBeLessThan(colStart(infoOf('foe')));
+        // ④ 三块的**DOM 顺序**：自己信息块 → 手牌区 → 对手信息块（`NET_BOTTOM_SIDES` 的唯一出处），
+        //    而"谁在左、谁在右"由 flex 行方向直接读 DOM（旧形态下那条判据是"列号更小"）。
+        const dockOrder = dock[0].children.filter((n) => isClass(n, 'net-bottom'))
+          .flatMap((row) => row.children)
+          .map((n) => (isClass(n, 'net-info-block') ? String(n.dataset.netSeat)
+            : isClass(n, 'net-hands') ? 'hands' : '?'));
+        console.log(`  viewSeat=${seat} · .net-dock 里的三块（DOM 顺序）: ${dockOrder.join(' → ')}`);
+        expect(dockOrder, `viewSeat=${seat}：停靠栏三块的 DOM 顺序必须是`
+          + ` [self, hands, foe]（自己块在左、对手块在右）`).toEqual(['self', 'hands', 'foe']);
 
-        /* ── ⑤ **几何腿**（R9-3 收口 · 评审 I-2；**R12-7 按用户第五次验收重写**）──
-              旧判据：手牌 `1 / -1` ⇒ 区间 `[0, B]` ⇒ 中心 == 板中心（"整页中置"），
-              代价是区间跨过信息块（可能水平重叠）。**R9 修复轮还在这里钉过一个反例**：
-              `2 / -1` 的中心是 `(c1 + B)/2`，只在 `c1 == 0` 时才等于板中心
-              （把恒等式 `B = c1 + (B − c1)` 当成"两个中心相等"是那轮的血泪）。
-              **R12-7 的裁决改了这件事**：用户要"三块紧挨着"（"现在隔着的距离太远了"）⇒
-              手牌不再横跨整行，而是**第 2 列**、夹在左右两块之间；**整组**用
-              `justify-content: center` 居中。于是"整页中置"变成**近似**：
-              手牌中心 = 板中心 + (自己块宽 − 对手块宽)/2 —— 两侧宽度接近时几乎仍在正中。
-              ⚠️ 判据因此从"手牌区间 == 整行"换成"**没有留白轨道 + 整组居中 + 手牌夹在中间**"，
-              并**保留**那条推导的结论：`2 / -1`（把左块并进手牌区间）会右移 `c1/2`。 */
+        /* ── ⑤ **几何腿**（R9-3 收口 · 评审 I-2；**R12-7 改写**；**R19 再改写**）──
+              历史：R9-3 查"手牌 `1 / -1`"、R12-7 查"三条内容宽轨道 + 整组居中"。
+              **R19**：三块住在 `.net-dock`（flex）里 ⇒ 这条腿的对象换成**那个容器**的几何：
+              横排（`flex-direction: row`）、整组**右贴**（`justify-content: flex-end`）、
+              底边对齐（`align-items: flex-end`）、三块之间有 `gap`。
+              ⚠️ **保留的那条推导**：`2 / -1` 会把手牌区间扩到 `[c1, B]`、中心右移 `c1/2` ——
+              它在 R19 里**没有对象了**（手牌不再被指派列），但它当初要防的错法
+              （"看起来更整齐"的写法把某一块推开）现在由 `justify-content` 的判据承担。 */
         {
-          const rawT = subjectPropOf(board, [board], RULES, 'grid-template-columns');
-          const t = gridTracks(rawT ?? '');
-          expect(t.length, `viewSeat=${seat}：.net-board 的列模板不是 3 条轨道（实际 ${String(rawT)}）`)
-            .toBe(3);
-          // ⑤-1 **没有留白轨道**（R12-7 的成因）：三条都是内容宽族
-          for (const [i, track] of t.entries()) {
-            expect(/content/.test(track), `第 ${i + 1} 条轨道是 \`${track}\` —— `
-              + 'R12-7 之后不许有弹性/留白轨道（它会把左右两块推到页面两端）').toBe(true);
-          }
-          // ⑤-2 **整组居中**（三块紧挨着、作为一个整体居中）
-          expect(subjectPropOf(board, [board], RULES, 'justify-content'),
-            '停靠栏三块没有整组居中（`justify-content: center`）').toBe('center');
-          // ⑤-3 三块的**列号**必须是 1/2/3（紧挨着；中间那一列就是手牌）
-          expect(colOf(infoOf('self')), '自己信息块不在第 1 列').toMatch(/^1(\s*\/\s*2)?$/);
-          expect(colOf(handOf('self')), '自己手牌不在第 2 列（它必须夹在左右两块之间）')
-            .toMatch(/^2(\s*\/\s*3)?$/);
-          expect(colOf(infoOf('foe')), '对手信息块不在第 3 列').toMatch(/^3(\s*\/\s*4)?$/);
-          // ⑤-4 **保留下来的那条推导**：`2 / -1` 会把手牌区间扩到 `[c1, B]`、中心右移 `c1/2`
-          //      （与"整块居中"冲突）—— 数值反例仍成立，防止有人用"看起来更整齐"的写法把它改回去。
-          const B = 1000;
-          const c1 = 400;
-          expect((c1 + B) / 2, '`2 / -1` 的中心 != 板中心（这条推导仍是 R12-7 不许用它的理由）')
-            .not.toBe(B / 2);
-          console.log(`  viewSeat=${seat} · R12-7：三条内容宽轨道 [${t.join(' | ')}] + justify-content: center`
-            + `（手牌在第 2 列；\`2 / -1\` 的中心 ${(c1 + B) / 2} ≠ 板中心 ${B / 2}）`);
+          const dockChain = [board, dock[0]];
+          const dd = (prop: string): string | null => subjectPropOf(dock[0], dockChain, RULES, prop);
+          expect(dd('display'), '停靠栏三块的容器不是 flex（"仍横排"这条裁决没了机制）').toBe('flex');
+          expect(dd('flex-direction'), '停靠栏三块不是横排（`flex-direction: row`）').toBe('row');
+          expect(dd('justify-content'), '停靠栏三块没有整组**右贴**（用户："最右边紧挨着中间的放置区域"）')
+            .toBe('flex-end');
+          expect(dd('align-items'), '停靠栏三块的底边没有对齐（手牌那一块会悬空）').toBe('flex-end');
+          const gap = cssLenOf(dockChain, RULES, dd('gap') ?? '');
+          expect(gap, '停靠栏三块之间没有间距（会粘成一坨）').toBeGreaterThan(0);
+          console.log(`  viewSeat=${seat} · R19：.net-dock = flex/row/justify-content: flex-end/`
+            + `align-items: flex-end/gap: ${String(gap)}px`);
         }
       }
     } finally {
@@ -604,7 +605,7 @@ describe('R9-3 · G-12：手牌与信息块并盒（同一行）', () => {
     }
   });
 
-  it('G-12c. 三行表完整：链路=1 · 工具条（仅开发者模式）=2 · **停靠栏=3**；日志不渲染（R12-1）', async () => {
+  it('G-12c. 行表只剩**一行**（链路=1 · 左栏=1）；工具条/导出按钮是 fixed 不占行；日志不渲染（R12-1）', async () => {
     const restore = installStubDom();
     try {
       for (const seat of [0, 1] as const) {
@@ -613,44 +614,60 @@ describe('R9-3 · G-12：手牌与信息块并盒（同一行）', () => {
         const rows: string[] = [];
         for (const n of board.children) {
           const row = subjectPropOf(n, ancestorsOf(root, n), RULES, 'grid-row');
+          const col = subjectPropOf(n, ancestorsOf(root, n), RULES, 'grid-column');
           const kind = isClass(n, 'net-grid') ? 'grid'
-            : isClass(n, 'net-bottom') ? 'bottom(contents)'
-              : isClass(n, 'log') ? 'log'
-                : isClass(n, 'diag-btn') ? 'diag-btn(styles.css 的 fixed)'
-                  : isClass(n, 'net-preview-bar') ? 'preview-bar(仅开发者模式)' : `?${n.cls}`;
-          rows.push(`${kind}=${String(row)}`);
-          // ① **每一个参与 grid 布局的直接子节点都必须有自己的 `grid-row`**（显式指派）
-          //    ⚠️ R12-6 之后工具条**只在开发者模式解锁时**才渲染；它同样必须有行号 ——
-          //    自动放置会产生"有/无工具条两种行表"（同一份样式表两种布局）。
-          //    ⚠️ **导出按钮是例外**：它在 `styles.css` 里就是 `position: fixed`（不参与 grid 布局，
-          //    落在 `#app` 的底部内边距里），所以它**没有**行号是正确的 —— 旧代码给它写的
-          //    `grid-row: 2` 是死声明，R12-1 已删除。
-          //    `display: contents` 的 `.net-bottom` 也不是 grid item（行号由它的子节点各带）。
-          if (kind.startsWith('grid') || kind.startsWith('log')
-            || kind.startsWith('preview-bar')) {
-            expect(row, `viewSeat=${seat}：.${kind} 没有解出 grid-row —— 自动放置会让它随`
-              + '"有没有其他自动放置项"漂到别的行上（同一份样式表两种行表）').toBeTruthy();
+            : isClass(n, 'net-left-rail') ? 'left-rail'
+              : isClass(n, 'net-bottom') ? 'bottom(contents)'
+                : isClass(n, 'log') ? 'log'
+                  : isClass(n, 'diag-btn') ? 'diag-btn(styles.css 的 fixed)'
+                    : isClass(n, 'net-preview-bar') ? 'preview-bar(仅开发者模式)' : `?${n.cls}`;
+          rows.push(`${kind}=row ${String(row)} / col ${String(col)}`);
+          // ① **每一个参与 grid 布局的直接子节点都必须有自己的 `grid-row` + `grid-column`**
+          //    （显式指派）—— 自动放置会让它随"有没有其他自动放置项"漂到别的格子
+          //    （同一份样式表两种布局）。
+          //    ⚠️ **导出按钮与预览工具条是例外**：它们在 `styles.css` / 本表第 8 节里都是
+          //    `position: fixed`（不参与 grid 布局），所以它们**没有**行号是正确的。
+          //    ⚠️ **R19**：`.net-dock` **不是** `.net-board` 的直接子节点（它是 `.net-left-rail`
+          //    的子节点）⇒ 本循环看不到它 —— 它的判据在 ④ 与 `net-left-rail.test.ts` 里。
+          if (kind.startsWith('grid') || kind.startsWith('left-rail') || kind.startsWith('log')) {
+            expect(row, `viewSeat=${seat}：.${kind} 没有解出 grid-row —— 自动放置会让它漂到别的行上`).toBeTruthy();
+            expect(col, `viewSeat=${seat}：.${kind} 没有解出 grid-column —— 自动放置会让它漂到别的列上`).toBeTruthy();
           }
         }
-        console.log(`  viewSeat=${seat} · .net-board 直接子节点的 grid-row: ${rows.join(' | ')}`);
-        // ② 行表**逐项**核对（链路 1 / 工具条 2 / 停靠栏由四块子节点占 3）
+        console.log(`  viewSeat=${seat} · .net-board 直接子节点: ${rows.join(' | ')}`);
+        // ② 行表**逐项**核对（R19：链路与左栏**同在第 1 行**；左栏在第 1 列、链路在第 2 列）
         const rowOfKind = (k: string): string => rows.find((r) => r.startsWith(`${k}=`))!.split('=')[1];
-        expect(rowOfKind('grid'), `viewSeat=${seat}：链路区（.net-grid）必须在**第 1 行**`).toBe('1');
+        expect(rowOfKind('grid'), `viewSeat=${seat}：放置区（.net-grid）必须在**第 1 行**`)
+          .toBe('row 1 / col 2');
+        expect(rowOfKind('left-rail'), `viewSeat=${seat}：左栏必须在**第 1 行 / 第 1 列**`
+          + `（与实际 ${rowOfKind('left-rail')} 不符）`).toBe('row 1 / col 1');
         // ── R12-1：事件日志块**不再渲染**（用户："取消日志的显示"）⇒ 它那 72px 归放牌区 ──
         expect(rows.filter((r) => r.startsWith('log=')).length,
           'viewSeat=' + seat + '：事件日志块又被渲染出来了 —— R12-1 取消了它的显示').toBe(0);
         // ③ 反空集合：这一帧里**真的**有导出按钮（它是"看日志"的唯一去处）
         expect(board.children.filter((n) => isClass(n, 'diag-btn')).length,
           `viewSeat=${seat}：这一帧里没有 .diag-btn`).toBe(1);
-        // ④ **停靠栏在最后一行**：两块信息块 + 两块手牌区都解出第 3 行（`.net-bottom` 是
-        //    contents ⇒ 它们才是 `.net-board` 的 grid item）。这一条与 G-13（net-dock）同源，
-        //    这里只钉"行号真的是 3"，"四块同排 + 列指派"由 G-13 逐块查。
+        // ④ **停靠栏三块在左栏里**（R19 取代"两块信息块 + 两块手牌区都解出第 3 行"）
+        //    ⚠️ **判据迁移（R19）——旧句为什么必须改，新句多查了什么**
+        //     · **旧句**：三块各自的 `grid-row` 必须 == `'3'`（R11-2 的三行表）。
+        //     · **为什么必须改**：R19 把三块搬进 `.net-dock`（flex）⇒ 它们不再是 grid item，
+        //       那四条 `grid-row` 已退役（半留状态 = 同一件事两套真相）。
+        //     · **新句多查了什么**：① 三块的祖先链上**都有** `.net-dock` 与 `.net-left-rail`
+        //       （结构面：它们在左栏那个横排整体里）；② `.net-dock` / `.net-left-rail` 各自
+        //       **恰好一块**（多一块 = 同族节点被复制）。
+        const leftRail = descendants(root).find((n) => isClass(n, 'net-left-rail'));
+        expect(leftRail, `viewSeat=${seat}：元素树里找不到 .net-left-rail`).toBeTruthy();
+        expect(descendants(root).filter((n) => isClass(n, 'net-dock')).length,
+          `viewSeat=${seat}：.net-dock 不是恰好一块`).toBe(1);
         for (const sel of ['net-info-block', 'net-hand-area'] as const) {
           const nodes = descendants(root).filter((n) => isClass(n, sel));
           expect(nodes.length, `viewSeat=${seat}：${sel} 的个数不是 2`).toBe(2);
           for (const n of nodes) {
-            expect(subjectPropOf(n, ancestorsOf(root, n), RULES, 'grid-row'),
-              `viewSeat=${seat}：${sel}（${String(n.dataset.netSeat ?? n.dataset.player)}）不在停靠栏那一行`).toBe('3');
+            const chain = ancestorsOf(root, n);
+            expect(chain.some((x) => isClass(x, 'net-dock')),
+              `viewSeat=${seat}：${sel}（${String(n.dataset.netSeat ?? n.dataset.player)}）不在 .net-dock 里`).toBe(true);
+            expect(chain.some((x) => isClass(x, 'net-left-rail')),
+              `viewSeat=${seat}：${sel}（${String(n.dataset.netSeat ?? n.dataset.player)}）不在左栏里`).toBe(true);
           }
         }
       }

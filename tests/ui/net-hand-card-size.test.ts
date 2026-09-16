@@ -42,8 +42,14 @@ function ruleBody(css: string, selector: string): string {
 describe('R9-4 手牌卡与场上卡同基准', () => {
   it('旋钮定义在**共同祖先** `.net-board` 上（手牌区在 .net-bottom 里 ⇒ R9-1 时读不到）', () => {
     const board = ruleBody(NET, '.net-board');
-    expect(board, '`.net-board` 上找不到 --card-h —— 手牌区与场上卡就没有共同来源了')
-      .toContain('--card-h: 140px');
+    // ⚠️ **数值迁移（R19）**：`140px` → `130px`（左栏压缩那一档）。
+    //    **旧句为什么必须改**：R19 把三块组件搬进左栏，卡 + 协议 + 7 张跨度必须整体收一档
+    //    才放得下；`--card-h` 是**唯一旋钮**（本用例下面那条"只许定义 1 次"就是为这件事），
+    //    改它就同时改手牌卡 / 场上卡 / 协议 / 扇形重叠 —— 旧句会把**正确**的实现判红。
+    //    **新句多查了什么**：除了新的数值，还钉住了"这个数是**左栏压缩**那一档"
+    //    （130 而不是随手写的别的值），并用下面那条"公式算出来的卡宽"把它与几何绑在一起。
+    expect(board, '`.net-board` 上找不到 --card-h: 130px（R19 的左栏压缩档）')
+      .toContain('--card-h: 130px');
     expect(board, '`--card-w` 没有由 `--card-h` 推出').toContain('--card-w: calc((var(--card-h) - 2px) * 0.71429 + 2px)');
     expect(board, '手牌整卡高 `--hand-card-h` 没有由 `--card-w` 推出')
       .toContain('--hand-card-h: calc((var(--card-w) - 8px) * 1.4 + 8px)');
@@ -75,12 +81,17 @@ describe('R9-4 手牌卡与场上卡同基准', () => {
       .toContain('min-width: var(--card-w)');
   });
 
-  it('数值：公式算出来就是 100.57 / 137.6（与场上卡 100.57 × 140 同基准）', () => {
-    const cardH = 140;
+  it('数值：公式算出来就是 93.43 / 127.6（与场上卡 93.43 × 130 同基准）', () => {
+    // ⚠️ **数值迁移（R19）**：140 → 130 ⇒ 卡宽 100.57 → 93.43、手牌整卡高 137.6 → 127.6。
+    //    **旧句为什么必须改**：它们把 R9-1 那一档（140）写成了**唯一**答案；R19 收了 45px
+    //    （卡宽 −7.14、整卡高 −10）之后旧数值不再成立。**新句多查了什么**：它仍然要求
+    //    "手牌整卡高 == 场上卡的同一算式"（同基准那条判据本体**一个字没动**），
+    //    只是把 `cardH` 换成当下的旋钮值 —— 判据形式与强度不变。
+    const cardH = 130;
     const cardW = (cardH - 2) * 0.71429 + 2;
     const handH = (cardW - 8) * 1.4 + 8;
-    expect(cardW, '卡宽应 ≈ 100.57（= R9-1 的 --card-w）').toBeCloseTo(100.57, 1);
-    expect(handH, '手牌整卡高应 ≈ 137.6（比 --card-h 略小：3px padding + 1px border）').toBeCloseTo(137.6, 1);
+    expect(cardW, '卡宽应 ≈ 93.43（= R19 的 --card-w）').toBeCloseTo(93.43, 1);
+    expect(handH, '手牌整卡高应 ≈ 127.6（比 --card-h 略小：3px padding + 1px border）').toBeCloseTo(127.6, 1);
     // 手牌整卡高必须与场上卡**同构**（都是 −8px 后按 5:7、再 +8px 补盒）：两支算式等价
     const laneRealH = (cardW - 8) * 1.4 + 8;
     expect(handH, '手牌整卡高必须等于场上卡的同一算式（同基准的判据）').toBeCloseTo(laneRealH, 6);

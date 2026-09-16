@@ -7,24 +7,30 @@
  *   → 自己协议（逆时针 90°）→ 自己链路（卡 0°、越新越下）→ 自己能量槽
  * 它等价于把热座页的"每条线一行"整体旋转 −90°（推导见设计说明 §1），故**整体更窄更高**。
  *
- * **四行网格**（G2 修正 **R8-5 / R8-7** 起是五行；**R9-3** 把手牌并进信息块那一行 ⇒ 四行）
- * ——`.net-board` 是**双列 grid**（左列 = 信息块的 `max-content`、右列 = 剩余），自上而下（上下镜像 ⇒ 对称）：
- *   row1 对手[信息块 | 手牌区] · row2 三条链路 + 控制轨 · row3 日志 / 诊断 / 工具条
- *   · row4 自己[信息块 | 手牌区]
- * ⚠️ **DOM 一个字都没改**：`.net-bottom` 与 `.net-hands` 都设 `display: contents`（第 6 节），
- * 它们的盒子消失、子节点**直接成为 `.net-board` 的 grid item**，再由 `grid-row` / `grid-column` 按**侧**指派。
- * 为什么只能这样（**承重**）：`.hand` 的 DOM 顺序恒为 `[P0, P1]`（FX 用
+ * **左右两栏 + 一行**（**R19** 起；R8-5 / R8-7 曾是五行，R9-3 并盒后是四行，R11-2 起是三行）
+ * ——`.net-board` 是**三列 grid**（`minmax(0, 1fr) auto minmax(0, 1fr)`：左空 | 放牌区 | 右空，**一行**）：
+ *   左栏 `.net-left-rail`（**卡牌放大框**在上 · `.net-dock` 的三块停靠组件在下）
+ *   · 中列 `.net-grid`（三条链路 + 控制轨，**恒在页面水平中心**、占满整页高）
+ *   · 右列空（与左栏等宽 ⇒ 中列居中的机制）。
+ * 用户原话（本轮）："把己方牌堆以及弃牌堆、手牌区、对方牌堆以及弃牌堆这三个组件平移挪到左边区域，
+ * 直至这三个组件的最右边紧挨着中间的放置区域……然后为页面左上角也就是三大组件移动后的上方
+ * 新加一个卡牌放大框，同时还能显示当前卡牌的中文文本信息……具体可参考图鉴中的那个展示框。"
+ * ⚠️ **DOM 只多包了一层**（`.net-dock`）；`.net-bottom` 与 `.net-hands` **仍是** `display: contents`
+ * （第 6 节），所以那三块停靠组件是**同一个 flex 盒子**（`.net-dock`）的子项 —— 横排、整组右贴。
+ * 为什么必须保留 contents（**承重**）：`.hand` 的 DOM 顺序恒为 `[P0, P1]`（FX 用
  * `querySelectorAll('.hand')[player]` **按下标**读手牌）——把对手的手牌搬进 DOM 更靠前的容器会让
  * 下标 0 变成对手的手牌，**全部手牌 FX 静默错位**。⇒ 视觉顺序**只能**由 CSS 表达。
  * 旧形态（R6/R7）：`.net-board` 是 flex column，底部行是 `信息块·手牌区·信息块` 的**左右三列**，
- * 顶部信息条已取消；`tests/ui/net-board-grid.test.ts` 的 G-7 是行序的机检腿
- * （R9-3 起同时钉"信息块与手牌区**同一行**"，即 **G-12**）。
+ * 顶部信息条已取消；`tests/ui/net-board-grid.test.ts` 的 G-7 是行/列序的机检腿
+ * （R19 起它钉"左栏在第 1 列、放置区在第 2 列"，三块在左栏里那一条挪到
+ * `tests/ui/net-left-rail.test.ts`）。
  *
- * **容器层级**（G2 修正 **R7**；用户实机截图确认过它崩塌）：
- *   `.net-board`（**grid**，第 1 节）= `[.net-grid, .net-bottom, .log, .diag-btn, .net-preview-bar]`
- *   （DOM 顺序不变；`.net-bottom` / `.net-hands` 是 `display: contents` ⇒ 盒树里那**四行**是上面那个顺序
- *   —— R8-5 时曾是五行/六行，**R9-3 把手牌并进信息块那一行之后是四行**，见本节开头的行表）；
- *   `.net-grid` = 四个**并排**的显式轨道（3 条线 + 控制轨），**不含**底部行。
+ * **容器层级**（G2 修正 **R7**；用户实机截图确认过它崩塌；**R19 重排**）：
+ *   `.net-board`（**grid**，第 1 节）= `[.net-grid, .net-left-rail, .diag-btn, .net-preview-bar]`
+ *   （DOM 顺序不变；`.diag-btn` / `.net-preview-bar` 都是 `position: fixed`，**不占行**）
+ *     └─ `.net-left-rail`（flex column）= `[.net-zoom-box, .net-dock]`
+ *          └─ `.net-dock`（flex row）= `.net-bottom`（contents）→ 信息块 · `.net-hands`（contents）· 信息块
+ *   `.net-grid` = 四个**并排**的显式轨道（3 条线 + 控制轨），**不含**任何停靠组件。
  *   ⚠️ 轨道数必须等于子节点数：R6 时 `.net-grid` 挂了 5 个子节点而模板只有 3 条 ⇒ 第 4/5 个
  *   成为**隐式列**，整页塌成"一行五格、下方大片空白"。行为腿在
  *   `tests/ui/net-lane-tree.test.ts` 的 R7 条（真跑渲染器 + 从本文件解算列模板）。
@@ -59,22 +65,36 @@
    R7 之前这个容器**一条布局规则都没有**（纵向堆叠全靠 `.board` 的 flex column，所以 R7 的事故
    ——用户实机截图：整页挤成上方一条横带、下方大片空白——**在样式表里完全没有痕迹**）。
    R7 显式钉住了 flex column；**R8-5 把它换成 grid**（用户第二次反馈的 A 方案：五行、上下镜像）。
-   ⚠️ 换 grid 的**唯一目的**是能用 `grid-row` 把四行**按侧**指派（第 6 节；R8-5 时是五行，
-   R9-3 把手牌并进信息块那一行之后是四行），
-   而这要求 `.net-bottom` / `.net-hands` 是 `display: contents`（否则它们的子节点不是本容器的
-   grid item，`grid-row` 声明还在却**静默不生效**）。
+   ⚠️ **R19**：这条规则现在把 `.net-board` 定成**三列 × 一行的 grid**（左栏 | 放牌区 | 右空）。
+   旧说明里"用 `grid-row` 把四行按侧指派"那一套已退役（三块搬进左栏的 `.net-dock`）；
+   但 `display: contents` 的**结论仍然成立并且更重要**：三块现在要成为**同一个 flex 盒子**
+   （`.net-dock`）的子项 ⇒ `.net-bottom` / `.net-hands` 少了那条 `contents`，它们就会各自
+   变成一个 flex 项（"三块横排"静默退化成"两块"）。
    ⚠️ 顺序：本规则必须**留在 `.net-grid` 之前** —— `tests/ui` 的 CSS 解算器把 `>` 与后代一视同仁，
    `.net-board` 的 `grid-template-columns` 会"命中" `.net-grid` 的祖先链；两者同权重（各 1 个类）
-   时**源序靠后者胜** ⇒ 若它排到 `.net-grid` 之后，R7-2（列模板必须 4 条轨道）会假红。 */
+   时**源序靠后者胜** ⇒ 若它排到 `.net-grid` 之后，R7-2（列模板必须 4 条轨道）会假红；**R19** 同理：
+   排到后面会让 `.net-board` 的三条轨道被 `.net-grid` 的四条轨道顶替（左栏/中列全乱）。 */
 .net-board {
   position: relative;
-  /* 多行：行高由内容决定（`auto`），`align-content: start` 让四行整体贴顶（不许在容器里垂直居中）。 */
+  /* ── **R19（本轮）：左栏 / 放置区 / 右空 三列 × 单行** ──
+     用户原话："把己方牌堆以及弃牌堆、手牌区、对方牌堆以及弃牌堆这三个组件平移挪到左边区域，
+     直至这三个组件的最右边紧挨着中间的放置区域……然后为页面左上角（三大组件移动后的上方）
+     新加一个卡牌放大框"。
+     ⇒ 列模板 **`minmax(0, 1fr) auto minmax(0, 1fr)`**：左右两条弹性留白**等宽**
+       ⇒ 中间那条（放牌区 `.net-grid`）**恒在页面水平中心**，左栏右缘 = 放牌区左缘（对称）。
+     ⚠️ 与 R11-2/R12-7 的**旧三列**（`max-content …` + `justify-content: center`）不是同一件事：
+     那三条轨道装的是**停靠栏的三块**（自己块 · 手牌 · 对手块）；现在那三块进了左栏里的
+     `.net-dock`（横排 flex，见第 6 节），`.net-board` 的三条轨道装的是**左栏 / 放牌区 / 右空**。
+     ⇒ 放牌区**不再横跨整行**（旧 `grid-column: 1 / -1` 已删）：它必须在**中列**才居中。
+     ⚠️ 行模板只留**一条**（`minmax(0, 1fr)`）：放置区独占整页高 —— 三块组件搬去左栏之后，
+     放牌区拿回原来被停靠栏占掉的那一整条高度（用户第 2 条诉求"完整漏出中间放置卡牌的区域"
+     的一半就是这个：7 个卡位不再靠滚动）。
+     旧的 `align-content: start` 随之删除：只有一行时它无对象（留着会让人以为还有多行表）。 */
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  align-content: start;
-  /* 水平中置的**默认值**：手牌区（`.net-hand-area`，宽度按内容）因此在整行里居中。
-     ⚠️ 信息块**不靠这条**：它在**左列**（第 6 节显式 `grid-column: 1`，宽 = 它自己的内容宽）。
-     ⚠️ **R9-3 起行距收窄**（12 → `--net-board-gap` = 4px）：手牌并进信息块所在的那一行之后，
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  /* 水平中置的**默认值**：手牌区（`.net-hand-area`，宽度按内容）因此在它的盒子里居中。 */
+  justify-items: center;
+  /* ⚠️ **R9-3 起行距收窄**（12 → `--net-board-gap` = 4px）：手牌并进信息块所在的那一行之后，
      每一行都装了两个组件，行距仍按"空行"给 12px 会让整页显得松散（用户要的是"页面别再变长"）。
      它是一个**有名字的**变量 —— 改这一处就同时改四行的间距。
      R12-3：4 → 2（停靠栏紧凑化：这条 gap 同时管行距与列距）。 */
@@ -87,8 +107,14 @@
      而 R9-1 时它定义在 `.net-lane-band` 上 ⇒ **手牌区根本读不到**。
      派生：`--card-w`（卡面 5:7）、手牌整卡高 `--hand-card-h`、步距 `0.462 × --card-w`、
      协议 holder（`× 0.5495 / 0.7692`）、手牌扇形重叠 `0.2154 × --card-w`（= 热座的 −28/130）。
-     ⚠️ 改这一个数就同时改**场上卡 + 手牌卡 + 协议 + 7 张跨度 + 能量槽 + 扇形重叠**。 */
-  --card-h: 140px;
+     ⚠️ 改这一个数就同时改**场上卡 + 手牌卡 + 协议 + 7 张跨度 + 能量槽 + 扇形重叠**。
+     ── **R19：140 → 130**（左栏压缩的那一档；用户："将……三个组件平移挪到左边区域"）──
+     理由：三块组件现在住在**左栏**里，左栏的宽度与高度都要与放置区分食同一屏。`--card-h`
+     是唯一旋钮（R9-1/R9-4 的硬要求）⇒ 收一档就同时收**手牌卡宽 / 场上卡 / 协议 / 扇形重叠 /
+     7 张跨度 / 能量槽格高**，不需要第二组字面量（`fx-card-size.ts` 的两条探针是**现场量 DOM**
+     （`offsetWidth`/`offsetHeight`）⇒ 它们自动跟随，**不要去改那些函数**）。
+     ⇒ 卡 `93.43 × 130`、步距 `43.16px`、7 张跨度 `389.0px`、协议 holder `71.4 × 100`、能量槽格高 `10.7px`。 */
+  --card-h: 130px;
   --card-w: calc((var(--card-h) - 2px) * 0.71429 + 2px);
   /* 手牌整卡高（正反面一致）：内容宽 = --card-w − 2×3px padding − 2×1px border，×1.4 纵横比，+8px 盒补。
      与热座 `.card-back` 的 `height: calc((130px - 8px) * 1.4)`（styles.css:412）同构。
@@ -121,60 +147,58 @@
         链路那一行自己滚 ⇒ 停靠栏**永不**遮挡放牌区、整页不再滚动；
      ② 对手手牌张数压成**单行小字**、紧贴对手信息块（`.hand` 占位节点保留足印）。
 
-   ## 行表（**三行**）
-   | 行 | 内容 |
+   ## 行表（**一行**；R19 起三块组件住在**左栏**里，不再占行）
+   | 列 | 内容 |
    |---|---|
-   | 1 | 三条链路 + 控制轨（`.net-grid`）—— **视口内的滚动区** |
-   | 2 | 日志 / 导出日志（左）· 预览工具条（右）—— 不是放牌区 |
-   | 3 | **停靠栏**：自己信息块（左列）· 自己手牌（整行中置）· 对手信息块 · 对手手牌张数 |
+   | 1（`minmax(0, 1fr)` 留白） | **左栏 `.net-left-rail`**：卡牌放大框（上）· 停靠栏 `.net-dock`（下，贴左栏右下） |
+   | 2（`auto`） | 三条链路 + 控制轨（`.net-grid`）—— **视口内的滚动区**，**恒在页面水平中心** |
+   | 3（`minmax(0, 1fr)` 留白） | 空（与左栏等宽 ⇒ 中列居中） |
 
-   ## 为什么"固定"只能靠"链路区自己滚"（机制上**没有第二种做法**）
-   `.net-board` 是 grid ⇒ 停靠栏的四个部件都是 grid item，而 **grid item 的 sticky 包含块
-   就是它自己的 grid area**（行高 = 自身高）⇒ `position: sticky` 一格都挪不动；
-   `position: fixed` 则会把停靠栏**浮在放牌区上面**（用户明确要求"不遮链路放牌区"）。
-   ⇒ 同时满足"永远可见 + 永不遮挡"的形态只有一个：容器恒为一个视口高，**链路那一行自己滚**
-   （第 1 行 `minmax(0, 1fr)`，`.net-grid` 上 `overflow-y: auto`）。
+   ## 为什么"停靠栏不遮放牌区"仍然成立（机制**换了但结论不变**）
+   旧机制：`.net-board` 是一个视口高的 grid，停靠栏占最后一行、放牌区占第 1 行 ⇒ 两者**上下**分开。
+   新机制（R19）：两栏在**同一行**里**左右**分开 —— 左栏右缘 = 放牌区左缘（列模板的对称性保证），
+   谁也压不到谁。放牌区因此拿回**整页高**（旧的第 2/3 行都不存在了），
+   用户第 2 条诉求"完整漏出中间放置卡牌的区域"由此落地（7 个卡位不再依赖滚动）。
+   ⚠️ **代价（诚实写进报告）**：左栏是**只有一个视口高**的纵向 flex ⇒ 放大框 + 三块组件
+   在**矮屏**（例如 768px 高的笔记本）上会挤，此时放牌区仍靠 `overflow-y: auto` 自己滚。
+   压缩量（`--card-h` 140 → 130、牌堆 40×58 → 34×50、信息块 padding/gap 收一档）见各条规则的注释。
 
-   ## 列模板（4 条显式轨道）
-   自己信息块 `max-content` · 弹性 `minmax(0, 1fr)` · 对手信息块 `max-content` · 对手手牌张数 `max-content`。
-   第 2 条是**弹性**轨道：左右两组各贴一端，中间的留白全给手牌。
-   手牌区仍横跨**整行**（`1 / -1`）⇒ 它的水平中心 = 板中心 = 整页中心（R9 的裁决不变）。
+   ## 列模板（4 条显式轨道；**这是 `.net-grid` 盒内的轨道，与上面的左右三列不是一回事**）
+   三条线 `max-content` × 3 · 控制轨 `var(--net-rail-w)`。
+   ⚠️ 旧注释里那段"手牌 `1 / -1` 为什么不是 `2 / -1`"的推导**只属于 R9~R12 的停靠栏三列**——
+   那三块现在在 `.net-dock` 里（flex，见第 6 节），本条已无对象；推导本身留在
+   `tests/ui/net-r9.test.ts` 的 G-12a⑤（那条**反例**仍然成立且仍然有用）。
 
-   ## ⚠️ 为什么手牌是 `1 / -1` 而不是 `2 / -1`（**R9 收口的同一条推导，四条列照样成立**）
-   设第 1 列宽 `c1`、板宽 `B`。`1 / -1` 的区间是 `[0, B]`、中心 `B/2` —— 它就是**板中心**。
-   `2 / -1` 的区间是 `[c1, B]`、中心 `(c1 + B)/2`；而**板中心是 `B/2`**，两者相等**当且仅当** `c1 = 0`。
-   （`B = c1 + (B − c1)` 是恒等式，说明的是"板宽 = 两列宽之和"，**不是**"两个中心相等" ——
-   R9 修复轮里评审与实现者都把它当成了后者，代价是三条测试红 + 一个子 agent 崩。）
-   `tests/ui/net-r9.test.ts` 的 **G-12a⑤** 把它钉成**可执行的反例**。
-   `1 / -1` 的代价是区间跨过左右两块 ⇒ 手牌**很宽**时会与它们水平重叠（已知残余，不是缺陷）。
-   ⚠️ 手牌区在 `.net-board` 的 `justify-items: center` 下按**内容宽**居中（不是被拉成整行宽）。
-
-   ⚠️ **停靠栏与放牌区的关系**：`.net-grid` 是**第 1 行**（一个视口高的容器里剩下的全部高度），
-   停靠栏在**第 3 行**、永远在它**下面**（不是浮在它上面）—— 这正是"不遮链路放牌区"的机制。
-   代价（诚实）：链路比可视区高时**必须**在链路区内滚动（滚动条在 `.net-grid` 自己的右侧）。
+   ⚠️ **停靠栏与放牌区的关系**：两者**同在第 1 行**的左右两栏里（R19），左栏右缘贴放牌区左缘。
    ⚠️ 选择器一律用**后代**组合器：`display: contents` 只改**盒树**，选择器仍按 **DOM** 判 ——
    信息块的 DOM 父节点是 `.net-bottom`、手牌区的是 `.net-hands`，子代组合器一条都命中不了。
    ⚠️ `.hand` 仍在 `.net-hands` 里（后者 `display: contents`）、DOM 顺序仍恒 `[P0, P1]`：
-   R11 **只动 CSS + 行号指派**，不动任何节点、类名或顺序（FX 用 `querySelectorAll('.hand')[player]`
+   R19 **只动 CSS + DOM 容器层级**，不动任何节点的**顺序**（FX 用 `querySelectorAll('.hand')[player]`
    **按下标**读手牌 —— 动了就是全体手牌 FX 静默错位）。 */
 .net-board {
-  grid-template-rows: minmax(0, 1fr) auto auto;
-  /* ── G2 修正 **R12-7**（用户第五次验收第 2/3 条）：停靠栏三块**紧挨着**、整组居中 ──
-     改之前：`max-content | minmax(0,1fr) | max-content | max-content` —— 中间那条 `1fr` 把左右两块
-     **推到页面两端**，而手牌在整行里居中 ⇒ 三块之间隔着几百像素（用户原话："现在隔着的距离太远了"）。
-     现在：**三条内容宽轨道 + `justify-content: center`** ⇒ 三块作为一个整体居中、彼此相邻；
-     没有留白轨道 ⇒ 谁也推不开谁。
-     ⚠️ **代价（诚实写进规格 §18.7）**：手牌不再是"严格整页居中"，而是"夹在左右两块之间、整组居中"；
-     两侧宽度的差值会让它偏半个差值。用户这次要的是"紧挨着"，这条优先。
-     ⚠️ 对手手牌张数（`.net-hand-area-foe`）**不再占第 4 条轨道**：它压在**对手信息块同一个格子**的
-     右下角（块的下内边距已为它让出一条），于是左右两侧宽度接近对称 ⇒ 手牌几乎仍在正中。 */
-  grid-template-columns: max-content max-content max-content;
-  justify-content: center;
+  /* ── **R19：只剩一行**（放置区独占整页高）──
+     旧值 `minmax(0, 1fr) auto auto` 的三行是"链路区 / （空）日志行 / 停靠栏"。
+     三块组件搬进左栏之后，第 2/3 行**没有任何子节点**（`.net-dock` 是**左栏**的子节点、
+     不是在 `.net-board` 里另起一行）⇒ 留着那两条 `auto` 轨道就是**永远 0 高的死轨道**
+     （本项目专门猎杀这一类"看着像在排版、其实什么都不做"的声明）。
+     ⚠️ **判据随之迁移**："停靠栏在链路区**之下**"（R11-2 的 G-13a⑤）换成
+     "三块在左栏里、左栏与放置区**同在第 1 行**"（`tests/ui/net-left-rail.test.ts`）。 */
+  grid-template-rows: minmax(0, 1fr);
+  /* 列模板在本节第一条 `.net-board` 规则里（`minmax(0,1fr) auto minmax(0,1fr)`）——
+     ⚠️ **这里刻意不再声明 `grid-template-columns` / `justify-content`**：旧值
+     `max-content max-content max-content` + `center` 是给**停靠栏三块**用的；
+     现在那三块是 `.net-dock` 里的 flex 项（第 6 节），留着旧模板会让左栏被算成"三块的内容宽"。
+     两条 `.net-board` 规则按**源序**后者胜 ⇒ 少写一句就是"删掉旧几何"的唯一正确做法。 */
 }
-/* 第 1 行 = 链路区（**视口内的滚动区**；推导见上） */
+/* 第 1 行 = **链路区**（放置区；**视口内的滚动区**；推导见上） */
 .net-board > .net-grid {
   grid-row: 1;
-  grid-column: 1 / -1;
+  /* ── **R19：放置区在中列**（`minmax(0,1fr) auto minmax(0,1fr)` 的中列）──
+     旧值是 `1 / -1`（横跨整行）。那时 `.net-board` 只有一列，"整行"就等于"整页宽"；
+     现在横跨整行会让它**跨过左右两条留白** ⇒ 盒中心仍在页中心（看着还对），但
+     `justify-self: center` 下的 `fit-content` 盒宽会变成"整页 − 0"，四条轨道被拉散。
+     ⇒ 必须**只占中列**；左右两条等宽的 `1fr` 保证它恒在水平中心（用户要的"仍然是中间"）。 */
+  grid-column: 2;
   /* 链条比可视区高 ⇒ 由这里滚。`min-height: 0` 是 grid item 得以**小于内容**的前提
      （`min-height: auto` 会让它撑破第 1 行的 `minmax(0, 1fr)`、把停靠栏顶出屏幕）。 */
   overflow-y: auto;
@@ -182,61 +206,26 @@
      `auto` ⇒ 一旦横向溢出就会多出一根横向滚动条。这里是"宁可裁掉 0px 也不给横条"。 */
   overflow-x: clip;
   min-height: 0;
-  /* ⚠️⚠️ **两侧对称预留滚动条槽**（承重）：`.net-grid` 是 `width: fit-content`
-     （R9-1 的"贴合卡片"与 R9-2 的三列归中都建立在这个宽度上）。经典滚动条**只**占右侧时，
-     内容盒会窄 15px ⇒ 四条轨道横向溢出（多出一根横条）**且**三列整体左移 7.5px。
-     `both-edges` 两侧各留一份 ⇒ 内容盒中心 = 盒中心 ⇒ 归中几何**在有滚动条时也成立**
-     （G-11 那套算术因此仍然为真，而不是"只在模型里真"）。
-     不支持 `scrollbar-gutter` 的浏览器用 overlay 滚动条（macOS/Safari 默认）⇒ 本来就不占宽。 */
-  scrollbar-gutter: stable both-edges;
-  /* ⚠️⚠️ **R12-2：不显示滚动条**（用户第五次验收："不要使用这种丑陋的滑块"）──
-     竖排链路比一屏高 ⇒ **必须**能滚（这是 R11-2 裁决 A 的全部机制），但**不必**把操作系统的
-     经典滚动条画在棋盘中间：Firefox/新版 Chromium 用它隐藏（`scrollbar-width: none`，
-     FF 64+ / Chrome 121+；用户实机截图里的滚动条带上下箭头 = Firefox 的经典样式）。
-     代价（诚实、写进报告）：看不到"上面/下面还有内容"的指示 ⇒ 由 R12-5 的**默认停在交锋点**
-     与"链路本来就一眼看出是纵列"来补；滚轮/触控板/拖拽仍然照常滚。
-     ⚠️ 不用 `::-webkit-scrollbar{display:none}`：本仓的简式解析器会把伪元素剥掉、
-     当成 `.net-grid` 自己的 `display` —— 那是"模型与浏览器不一致"的又一个坑，不值得。
-     `scrollbar-gutter` 保留：旧版 WebKit 忽略 `scrollbar-width` 时它仍保证两侧对称（三列居中）。 */
-  scrollbar-width: none;
   /* 高屏（内容比可视区矮）时整块贴顶：**不要**让唯一的隐式行被拉伸 ——
      拉伸会把列内六个层块撑开，而协议与中线的相对位置是承重的。 */
   align-content: start;
 }
-/* 第 2 行 = **空的**（保留轨道只为"行表恒定"；没有子节点 ⇒ 高度 0）
-   ⚠️ **R12-1：事件日志那一块（`.log`）不再渲染**（用户第五次验收："取消日志的显示"）——
-   它的 72px 全部还给放牌区（R12-4）。导出日志按钮 `styles.css` 里是 `position: fixed`
-   （落在 `#app` 的 110px 底部内边距里、不占行），旧代码给它写的 `grid-row: 2` 是**死声明**
-   （fixed 元素不参与 grid 布局），已删除以免误导。
-   ⚠️ **R12-7：预览工具条也改回 `position: fixed`**（右下角，见第 8 节）——
-   它在第 2 行时**吃掉 98px 放牌区高度**（用户第五次验收第 2 条："链路所占面积太小"；
-   他当时正开着开发者模式，那 98px 是这条反馈的一部分）。改回 fixed 后：
-   普通对局与开发者模式**行表一致**（三行里第 2 行恒为 0），放牌区在两种模式下一样高。 */
-/* 第 3 行 = **停靠栏**（R12-7：三块紧挨着、整组居中；对手手牌张数压在对手信息块那一格里） */
-.net-board .net-info-block[data-net-seat='self'] { grid-row: 3; grid-column: 1; }
-.net-board .net-hand-area-self { grid-row: 3; grid-column: 2; align-self: end; }
-.net-board .net-info-block[data-net-seat='foe'] { grid-row: 3; grid-column: 3; }
-/* ⚠️ 对手手牌张数与对手信息块**同格**（右下角）：块的下内边距（见第 2 节）为它让出一条，
-   两者不重叠；`.hand` 的矩形仍在块内 ⇒ 手牌落点特效照旧落在这里。
-   ⚠️⚠️ **G2 修正 R17（层叠缺陷修复）：选择器必须是 (0,3,0)，不能省掉 `.net-hand-area`。**
-   这里原来写的是 `.net-board .net-hand-area-foe`（(0,2,0)），与第 6 节那条
-   `.net-board .net-hand-area { justify-self: center }`（同样 (0,2,0)）**同权重** ⇒ 胜负只能由
-   **源序**决定，而第 6 节在本文件里更靠后 ⇒ `justify-self: end` **被 `center` 吃掉**：
-   R12-7 要的"张数块贴对手信息块右下角"自落地起**从未生效**（真浏览器实测：它的 margin box 中心
-   = 轨道中心，即被水平居中；见本轮报告的历史证据）。
-   加上 `.net-hand-area` 这一段后权重是 **(0,3,0) > (0,2,0)** ⇒ 无论本文件怎么挪位置、无论
-   `styles.css` 与 `styles-net.css` 谁先 import，这条都赢。**本仓不接受依赖源序/import 顺序的隐性依赖**
-   （R15-2 的同款论证：给选择器补足权重，而不是靠"本文件是最后一个 import"）。
-   ⚠️ 只提权重、**只声明这五个属性**：`grid-row` / `grid-column` / `justify-self` / `align-self` / `margin`
-   ——`border` / `background` / `padding` / `max-width` 仍必须由第 6 节的基类规则赢（那是**有意**的"去框"，
-   见那里的说明），所以这条**不许**声明它们。 */
-.net-board .net-hand-area.net-hand-area-foe {
-  grid-row: 3;
-  grid-column: 3;
-  justify-self: end;
-  align-self: end;
-  margin: 0 6px 4px 0;
-}
+/* ── **R19 删除的一整段**（原文保留在 git 历史里，这里只记"为什么可以删"）──
+   ① `.net-board > .net-grid` 的 `scrollbar-gutter: stable both-edges` / `scrollbar-width: none`
+      两条**搬到 `.net-grid` 自己的规则体**里了（它们与"在哪一列"无关，留着重复声明就是两处真相）；
+   ② `grid-template-columns: max-content max-content max-content` + `justify-content: center`
+      （R12-7 的"停靠栏三块紧挨着"）**退役**：三块现在是 `.net-dock` 的 flex 项；
+   ③ 第 3 行的四条按侧指派（自己块 / 自己手牌 / 对手块 / 对手张数）**退役**：
+      它们与 `.net-dock` 的 flex 布局是**两套真相**，留着只会让"三块横排"这件事看起来仍由
+      `.net-board` 的网格决定（改一处忘一处时页面照样"看着对"，而守卫查的是解算值）。
+      对手张数块的 `justify-self: end` / `align-self: end` / `margin`（R17 修的那条）**保留**，
+      见第 6 节的 `.net-dock` 块。
+   ④ `.net-grid` 上的 `padding-left: calc(2 * var(--net-gap) + var(--net-rail-w))`（R9-2 的
+      "控制轨把三列挤偏 80px"的补偿）**退役**：`padding-left` 之所以必须存在，是因为那时
+      `.net-grid` 横跨整行、而控制轨只在右侧 ⇒ 内容整体偏右。现在 `.net-grid` 是**中列里
+      恒居中的一条内容宽轨道**（左右两条等宽 `1fr` 由列模板保证）⇒ 补偿量不再成立；
+      留着它反而会把放置区整体右推 184px。⚠️ 它是**承重声明**：删掉时必须同时改
+      `tests/ui/net-r9.test.ts` 的 G-11（"旧句为什么必须改"写在那个用例里）。 */
 
 .net-grid {
   /* 热座页 .board-grid 是 flex column（每条线一行的堆叠方向）；本页（三列 + 控制轨）并排 → grid。
@@ -271,15 +260,15 @@
      （4 条 —— 防"一行五格"的隐式列），R9-1 只把**前三条的宽度语义**从 `1fr` 换成 `max-content`；
      轨道数不变、第 4 条仍是控制轨的固定宽 ⇒ R7-2/R7-3 的轨道数判据**一个字未改**（见测试注释）。
 
-     **R9-2 的做法（三列归中的推导 —— 这是本节的承重几何）**：
+     **R9-2 的做法（三列归中的推导 —— 这是 R9 那一轮的承重几何，R19 已由列模板接管）**：
      `.net-grid` 的盒宽 = `padding-left + max-content(三条轨道) + 2 × gap + --net-rail-w`。
      三列占的区间是 `[padding-left, padding-left + max-content]` ⇒ 它的中点
      `= padding-left + max-content/2`；要让这个中点 == 盒中心（`盒宽/2`），
      必须 `padding-left = gap + --net-rail-w`（推导：`2P + M = P + M + 2G + R ⇒ P = 2G + R`）。
-     ⇒ 左侧补上与"右侧那条控制轨 + 它两侧的间隙"等宽的内边距，三列就在**页面上精确居中**，
-     控制轨仍留在右侧第 4 条轨道、**DOM 一个字不动**（R8-6 的竖直居中也与它无关）。
-     ⚠️ 写法用 `--net-gap` 而不是两处 12px：`gap` 与 `padding-left` 必须是**同一个数**，
-     否则上面那条等式立刻不成立（而观感只会"差一点点"，看不出是谁的错）。 */
+     ⚠️⚠️ **R19：那条 `padding-left` 已删除**（见本节上一条 `.net-board` 规则末尾的说明）——
+     现在"放置区居中"由**列模板**表达（左右两条等宽 `1fr`），不再由盒内边距把内容推回中心。
+     留在这里的只有 `--net-rail-w` / `--net-gap`：它们仍是**四条轨道**的宽度来源
+     （G-11 的那套算术已随之退役，测试见 `tests/ui/net-r9.test.ts` 的 G-11）。 */
   --net-rail-w: 160px;
   --net-gap: 12px;
   display: grid;
@@ -287,13 +276,65 @@
   /* `max-content`：三条轨道各自贴合自己的内容（卡/协议），不再被 `1fr` 拉伸到撑满容器。 */
   grid-template-columns: repeat(3, max-content) var(--net-rail-w);
   gap: var(--net-gap);
-  /* `fit-content`：宽度 = 内容宽（`margin: 0 auto` 才能居中；`width: 100%` 会把它拉满宿主）。
-     ⚠️ 删掉了 R7 的 `max-width: 1010px` —— 内容宽（≈512px）恒小于它，留着就是死声明。 */
+  /* `fit-content`：宽度 = 内容宽。
+     ⚠️ **R19**：它现在**同时**是中列（`auto` 轨道）的尺寸来源 —— `auto` 轨道按 max-content
+     解析，而 `.net-grid` 的 max-content 贡献 = `M + 2G + R`（padding 已删）⇒ 列宽 = 盒宽，
+     四条轨道既不会被拉伸、也不会被压扁。
+     ⚠️ 删掉了 R7 的 `max-width: 1010px` —— 内容宽（≈490px）恒小于它，留着就是死声明。 */
   width: fit-content;
-  /* `2 × gap + rail` = R9-2 的归中量（推导见上面的注释；184px = 12×2 + 160）。 */
-  padding-left: calc(2 * var(--net-gap) + var(--net-rail-w));
+  /* ⚠️ **R19：`padding-left` 已删**（R9-2 的归中量，理由见上面的注释）。
+     ⇒ 盒内只剩四条轨道，居中由 `.net-board` 的列模板（中列）负责。 */
   margin: 0 auto;
   min-width: 0;
+  /* ⚠️⚠️ **两侧对称预留滚动条槽**（承重；R19 从 `.net-board > .net-grid` 搬到这里 ——
+     两条声明与"在哪一列"无关，上一轮的写法是同一件事的**两处真相**）。
+     经典滚动条**只**占右侧时，内容盒会窄 15px ⇒ 四条轨道横向溢出（多出一根横条）**且**
+     内容整体左移 7.5px。`both-edges` 两侧各留一份 ⇒ 内容盒中心 = 盒中心。
+     不支持 `scrollbar-gutter` 的浏览器用 overlay 滚动条（macOS/Safari 默认）⇒ 本来就不占宽。 */
+  scrollbar-gutter: stable both-edges;
+  /* ⚠️⚠️ **R12-2：不显示滚动条**（用户第五次验收："不要使用这种丑陋的滑块"）──
+     竖排链路比一屏高 ⇒ **必须**能滚（这是 R11-2 裁决 A 的全部机制），但**不必**把操作系统的
+     经典滚动条画在棋盘中间：Firefox/新版 Chromium 用它隐藏（`scrollbar-width: none`，
+     FF 64+ / Chrome 121+；用户实机截图里的滚动条带上下箭头 = Firefox 的经典样式）。
+     代价（诚实、写进报告）：看不到"上面/下面还有内容"的指示 ⇒ 由 R12-5 的**默认停在交锋点**
+     与"链路本来就一眼看出是纵列"来补；滚轮/触控板/拖拽仍然照常滚。
+     ⚠️ 不用 `::-webkit-scrollbar{display:none}`：本仓的简式解析器会把伪元素剥掉、
+     当成 `.net-grid` 自己的 `display` —— 那是"模型与浏览器不一致"的又一个坑，不值得。
+     `scrollbar-gutter` 保留：旧版 WebKit 忽略 `scrollbar-width` 时它仍保证两侧对称。 */
+  scrollbar-width: none;
+}
+
+/* ── **R19：左栏**（卡牌放大框 + 停靠栏三块）──
+   用户原话："把己方牌堆以及弃牌堆、手牌区、对方牌堆以及弃牌堆这三个组件平移挪到左边区域，
+   直至这三个组件的最右边紧挨着中间的放置区域，也就是能够完整漏出中间放置卡牌的区域为止，
+   然后为页面左上角也就是三大组件移动后的上方新加一个卡牌放大框"。
+
+   三条承重声明（每一条都有对应的机检腿，见 `tests/ui/net-left-rail.test.ts`）：
+    ① `grid-column: 1` —— 它在**第 1 列**（左），中列才是放置区；
+    ② `justify-self: end` —— 它的**右缘贴住第 1 列的右缘**；而第 1 列的右缘与第 3 列的左缘
+       由列模板 `minmax(0,1fr) auto minmax(0,1fr)` 保证**关于页中心对称**
+       ⇒ 左栏右缘 = 放置区左缘（用户要的"最右边紧挨着放置区"）；
+       ⚠️ **R19：删掉这一句也不会真的居中** —— 左栏在 `.net-board` 的 `justify-items: center` 下
+     会在**第 1 列**里居中，而第 1 列的宽由它自己的内容宽决定（`auto` 轨道）⇒ 它在列里本来就
+     贴着；但一旦列变宽（例如放置区那边把 `1fr` 抢走更多空间），"居中"就会让右缘**离开**
+     放置区左缘 ⇒ 与用户的"紧挨着"直接冲突。`justify-self: end` 是"右缘贴住列右缘"的**唯一**
+     出处，也是列宽变化时的**兜底**。
+    ③ `display: flex; flex-direction: column; gap` —— 纵向：放大框在上、`.net-dock` 在下。
+   ⚠️ 它**不能**是 `display: contents`：那样放大框与 `.net-dock` 会各自成为 `.net-board` 的
+   grid item（放大框被算进列宽、`.net-dock` 被扔进第 2 行自动放置）—— 结构腿会红。
+   ⚠️ `min-width: 0`：左栏里最长的那一项（手牌行）不许把中列挤扁。 */
+.net-board .net-left-rail {
+  grid-row: 1;
+  grid-column: 1;
+  justify-self: end;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  /* 放大框贴顶（用户："页面左上角"）、停靠栏贴底（"三大组件移动后的上方"= 放大框在它们上面） */
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+  min-height: 0;
 }
 
 /* ============================================================================
@@ -301,9 +342,11 @@
  *
  * ⚠️ **顶部信息条已取消**（用户裁决）；`.net-strip` / `.net-strip-foe` 的规则随之删除 ——
  * 留着它们只会让"顶部还有一条"这件事在样式表里留存证据（源码守卫会读样式表）。
- * 现在双方的信息条各自是**一整行**的 `.net-info-block`：
- * **对手的在最上（第 1 行）、自己的在最下（第 5 行）**，各自紧贴自己手牌区的外侧 ⇒ 上下镜像对称
- * （R8-5/R8-7 的 A 方案，见第 6 节）。
+ * 现在双方的信息条各自是**一整块**的 `.net-info-block`（昵称 / 座位 · 牌库 n · 弃牌堆 n · 手牌 n
+ * + 该玩家的牌库 / 弃牌堆）。**R19 起它们是左栏 `.net-dock` 里的第一块与最后一块**：
+ *   `.net-dock` = [自己信息块, 手牌区（`.net-hands` 展开）, 对手信息块]（横排、整组右贴）。
+ * ⚠️ 本节旧说明写的"对手的在最上（第 1 行）、自己的在最下（第 5 行）"是 R8-5~R12-7 的**五行/三行**
+ * 形态，已随 R19 退役（见第 1 节的行表）。
  *
  * 牌库（.deck）与弃牌堆（.trash-pile）在 styles.css 里是绝对定位、挂在 .hand-side 外侧
  * 的屏幕边缘列（styles.css:761-763 / 824-835）。远程页没有"外侧列"，所以它们被重新安放到
@@ -319,9 +362,13 @@
   right: auto;
   transform: none;
   /* ── G2 修正 **R12-3**：停靠栏紧凑化（用户："缩小图二中的这三个组件，并使其变得紧凑一些"）──
-     60×86 → 46×66（热座是 92×132，本页本来就已缩小）；牌库/弃牌堆的大多数空间是空白边距。 */
-  width: 40px;
-  height: 58px;
+     60×86 → 46×66（热座是 92×132，本页本来就已缩小）；牌库/弃牌堆的大多数空间是空白边距。
+     ── **R19：46×66 → 34×50**（左栏压缩）──
+     三块组件现在住在左栏里，宽度上要"整体贴住放置区左缘"而不把中列挤窄
+     （推导见报告：三块 max-content 之和 ≈ 自己块 150 + 手牌 40 + 对手块 150）。
+     34×50 仍留得住计数徽标（22×22）与「牌库 / 弃牌堆」两行小字，比例与卡（93×130）一致。 */
+  width: 34px;
+  height: 50px;
   margin: 0;              /* styles.css:761 的 .deck 无 margin，这里显式钉住，避免 UA 默认值 */
   flex: 0 0 auto;
 }
@@ -334,15 +381,15 @@
   right: auto;
   top: auto;
   transform: none;
-  width: 40px;            /* R12-3/R12-8：与牌库同步缩小（见上） */
-  height: 58px;
+  width: 34px;            /* R12-3/R12-8/R19：与牌库同步缩小（见上） */
+  height: 50px;
   flex: 0 0 auto;
 }
 /* 缩小后「弃牌堆」小标签会压住计数徽标：改为贴底的小字 */
 .net-piles .trash-label { font-size: 8px; }
-/* R12-3：计数徽标同步缩小（styles.css 的 34×34 在 46px 宽的盒子里已经占满） */
+/* R12-3/R19：计数徽标同步缩小（styles.css 的 34×34 在 34px 宽的盒子里已经占满） */
 .net-piles .deck .deck-count,
-.net-piles .trash-pile .trash-pile-count { width: 22px; height: 22px; font-size: 10px; }
+.net-piles .trash-pile .trash-pile-count { width: 18px; height: 18px; font-size: 9px; }
 
 .net-info-block {
   display: flex;
@@ -350,15 +397,25 @@
   /* ── R8-7：信息块现在**各占一整行**（第 6 节）⇒ 内容整体水平中置 ──
      不写这两条时，整行宽的盒子里三组计数会**贴左**，而手牌区是居中的 ⇒ 五行看着不齐。
      只居中"内容"，不拉伸任何块（`align-items: center` 让 `.player-info` / `.net-piles` /
-     操作条各自按内容宽度居中）。 */
+     操作条各自按内容宽度居中）。
+     ⚠️ **R19**：它现在同时是 `.net-dock` 里的**第一个/最后一个 flex 项** ⇒
+     这两条（`align-items: center` / `text-align: center`）仍然是对的（块内居中），
+     "块在行里怎么摆"由第 6 节的 `.net-dock` 决定。 */
   align-items: center;
   text-align: center;
-  /* R12-3：停靠栏紧凑化（6/6 → 4/3）—— 这块是常驻元素，省下来的高度全给放牌区。 */
-  gap: 2px;
-  padding: 3px 5px;
+  /* R12-3：停靠栏紧凑化（6/6 → 4/3）—— 这块是常驻元素，省下来的高度全给放牌区。
+     R19：2/3px → 1/3px（左栏纵向空间要分给放大框）。 */
+  gap: 1px;
+  padding: 2px 3px;
   border: 1px solid #333a4d;
   border-radius: 8px;
   background: rgba(0, 0, 0, 0.18);
+  /* ── **R19**：块的**宽度上限** —— 两块信息块并排 + 手牌，全宽必须 ≤ 左栏宽。
+     没有它时 `.player-info` 里那条不换行的计数行会把块撑到内容宽（≈170px+），
+     两块就是 340px+，左栏一宽、中列就被挤（放置区右移，与"居中"冲突）。
+     ⚠️ 150px 是**推导值**：34+34（牌堆+弃牌堆）+ 间距 ≈ 80px，计数行 ~140px。
+     值写成 150px（不是 `min-content`）—— 后者会让"牌库 12弃牌堆 3手牌 5"糊成一条。 */
+  max-width: 150px;
 }
 /* 自己那一块与对手的视觉区分（颜色与 .net-hand-area-self 同源，保持"自己=青"的一致语汇） */
 .net-info-self { border-color: rgba(79, 240, 255, 0.45); background: rgba(79, 240, 255, 0.04); }
@@ -975,9 +1032,38 @@ body.net-page .scan-overlay.scan-horiz .scan-line {
 
 /* ── 两块"消失的盒子"（`display: contents`）──
    ⚠️ 它们**必须继续存在于 DOM**（`.net-bottom` 恰好一块、`.net-hands` 恰好一块是既有结构守卫，
-   也是 `verifyPageHooks` 断言 5 / 约束 9 的对象）——这里只是让它们不生成盒子。 */
+   也是 `verifyPageHooks` 断言 5 / 约束 9 的对象）——这里只是让它们不生成盒子。
+   ⚠️ **R19**：三条停靠组件的**新父节点链**是
+   `.net-left-rail > .net-dock > .net-bottom > (自己信息块 · .net-hands > 两块手牌区 · 对手信息块)`。
+   `.net-bottom` / `.net-hands` 的 `display: contents` 语义**一个字未改** ——
+   展平之后 `.net-hands` 的两块 `.net-hand-area` 与两块信息块一起成为 `.net-dock` 的
+   flex 项（三条横排），这正是"三块横排、压缩后整体贴左栏右下"的机制。
+   ⚠️ **少写一条 `contents`**：那一块会退回"跟着 DOM 顺序走"的一个 flex 项 ——
+   例如漏了 `.net-hands`，两条手牌会挤在**一个** flex 项里（`.net-dock` 变成两块而不是三块）。
+   `tests/ui/net-left-rail.test.ts` 的结构腿 + `.net-hands` 恰好一块的既有守卫一起钉这件事。 */
 .net-bottom { display: contents; }
 .net-hands { display: contents; }
+
+/* ── **R19：停靠栏容器**（三块横排并压缩成一个整体）──
+   用户原话（本轮）："将下方的己方牌堆以及弃牌堆、手牌区、对方牌堆以及弃牌堆等三个组件，
+   平移挪到左边区域，直至这三个组件的最右边紧挨着中间的放置区域"。
+   ⚠️ 它**不是** `display: contents`：三块要作为**一个整体**在左栏里横排（flex 行），
+   并且整组**右贴**（`justify-content: flex-end` ⇒ 最右边那一块（对手信息块）的右缘
+   = `.net-dock` 的右缘 = 左栏右缘 = 放置区左缘）。
+   两条承重声明：
+     · `display: flex; flex-direction: row` —— 三块横排（用户第 ① 条：仍横排）；
+     · `justify-content: flex-end` —— 整组贴**右下**（用户："最右边紧挨着中间的放置区域"）。
+   ⚠️ `align-items: flex-end` 让三块**底边对齐**（手牌那一块比信息块矮，贴底才不悬空）。
+   ⚠️ 它是 flex 容器而不是 grid ⇒ 第 1 节那四条按侧的 `grid-row` / `grid-column` **全部退役**
+   （退役记录见第 1 节末尾的说明）—— 留着就是"同一件事两套真相"。 */
+.net-dock {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: 4px;
+  min-width: 0;
+}
 
 /* ── 手牌区的水平中置（**行/列指派在第 1 节的 R11-2/3 块里**，这里只留"怎么在行内居中"）──
    选择器**不能**写成 `.net-board > .net-info-block[…]`：`display: contents` 只改变**盒树**，
@@ -999,8 +1085,9 @@ body.net-page .scan-overlay.scan-horiz .scan-line {
   flex-direction: column;
   align-items: center;     /* 小标签 / 手牌统一中置 */
   max-width: 940px;
-  gap: 6px;
-  padding: 8px;
+  /* R19：6/8px → 3/4px（左栏纵向空间要分给放大框；手牌那一块本来就只有一行卡高）。 */
+  gap: 3px;
+  padding: 4px;
   border: 1px dashed #3a4257;
   border-radius: 8px;
 }
@@ -1024,16 +1111,23 @@ body.net-page .scan-overlay.scan-horiz .scan-line {
    ⚠️ 但 `justify-self: center` **是被意外带赢的**：它压掉了第 1 节的 `justify-self: end`
    （对手张数块的右下角定位），R17 已用 (0,3,0) 把那条提权修好。
    ⇒ **不许**为了"两处一致"把 `justify-self: center` 从这里删掉或提权：自己那一侧
-   （`.net-hand-area-self`，`grid-column: 2`）**正是靠它**在轨道里居中的（删了会把自己那侧弄坏），
+   （`.net-hand-area-self`）**正是靠它**在**它所在的盒子**里居中的（删了会把自己那侧弄坏），
    而对手那一侧的 `end` 现在由 (0,3,0) 那条自己赢。两侧都钉在
-   `tests/ui/net-dock-foe-hand-cascade.test.ts` 的解算腿上。 */
+   `tests/ui/net-dock-foe-hand-cascade.test.ts` 的解算腿上。
+   ⚠️⚠️ **R19：这套权重算术的对象变了，`justify-self` 本身要改判。**
+   三块现在住在 `.net-dock`（**flex**）里 ⇒ **`justify-self` / `align-self: end` 对 flex 项无效**
+   （CSS Flexbox §4.2：flex item 上没有 `justify-self`，主轴对齐由容器的 `justify-content` 管）。
+   ⇒ 第 1 节的 `justify-self: end` / `align-self: end` 两条**已退役**；
+   R17 要的"张数块贴对手信息块右下角"改由 `.net-dock` 的 `justify-content: flex-end` +
+   `align-items: flex-end` 承担（结构上它仍是**对手信息块之后**的那一个 flex 项 ⇒ 落在最右下）。
+   ⚠️ `net-dock-foe-hand-cascade.test.ts` 的 G-17 判据随之迁移（旧句为什么必须改写在那里）。 */
 .net-board .net-hand-area {
   border: none;
   background: none;
   padding: 0;
   max-width: none;   /* 宽由手牌内容决定（`.net-hand-area` 的 940px 上限在并盒形态下会把手牌盒撑得比内容宽） */
 }
-.net-hand-label { font-size: 12px; color: #9fb0c8; letter-spacing: 0.06em; }
+.net-hand-label { font-size: 11px; color: #9fb0c8; letter-spacing: 0.06em; }   /* R19：12 → 11 */
 /* ── 操作区：**挂在操作方那一侧的信息块里**（R6 起在这里；R8-8 把它挂到正确的**一侧**）──
    ⚠️ 这两条的作用是"**把 body 级 fixed 的操作台改成流内**"（`styles.css` 一行不改）：
    `styles.css:1065` 的 `.action-bar` 与 `:1764` 的 `.choice-bar` 都是
@@ -1134,11 +1228,11 @@ body.net-page .scan-overlay.scan-horiz .scan-line {
 .net-board .net-hand-area-foe .hand { min-height: 0; padding-left: 0; padding-right: 0; }
 .net-board .net-hand-area-foe .hand-count-placeholder {
   min-height: 0;
-  padding: 2px 10px;
+  padding: 2px 8px;
   border: none;
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.05);
-  font-size: 12px;
+  font-size: 11px;   /* R19：12 → 11（与窄下去的信息块对齐） */
 }
 
 /* ============================================================================
@@ -1421,3 +1515,138 @@ body.net-page .smoke-puff:nth-child(9) { left: 75%; top: 0.5%; }
 body.net-page .smoke-puff:nth-child(10) { left: 25%; bottom: 0.5%; }
 body.net-page .smoke-puff:nth-child(11) { left: 50%; bottom: 0.5%; margin-left: calc(var(--smoke-puff) / -2); }
 body.net-page .smoke-puff:nth-child(12) { left: 75%; bottom: 0.5%; }
+
+/* ============================================================================
+ * 11. **卡牌放大框**（R19 新件 · 用户："为页面左上角也就是三大组件移动后的上方新加一个卡牌放大框，
+ *     同时还能显示当前卡牌的中文文本信息……具体可参考图鉴中的那个展示框"）
+ *
+ * ## 它与图鉴的那个框的**关系**（不是为了好看才复用的）
+ * 图鉴（`home.ts` 的 `library-preview`）的做法是：**一个**展示框 +
+ * `mouseenter` 即时填充 + 单击固定（同 key 再点取消）+ 双击走既有 `openZoom`。
+ * 本节 + `render-net.ts` 的 `renderNetZoomBox` 把**同一套交互**搬到远程页，
+ * 而且**复用同一批渲染出口**（`buildCardTextEl` / `buildProtocolRatingPanel` —— 卡牌中文效果面板
+ * 与协议详情面板的唯一实现）。⇒ 页面上不会出现"第二份中文文本渲染逻辑"。
+ *
+ * ## 与图鉴的两处**必须不同**（都是安全/布局的硬要求）
+ *  1. **布局不同**：图鉴的框在**右列**、随滚动 sticky；本框在**左栏顶部**（用户指定"左上角"），
+ *     宽 = 左栏宽（`--card-w` 的两倍多一点），高度**上限**由左栏剩余空间决定（见下面的 `max-height`）。
+ *  2. **信息遮蔽**：图鉴里每一条都是公开的图鉴条目；本框要能指向**场上的背面卡**与
+ *     **对手手牌的张数占位块** ⇒ 必须**不泄露**（判据在 `renderNetZoomBox` 的 `publicOf`，
+ *     与 `render.ts` 里"能否翻面查看"的公开性规则**同源**）。
+ *
+ * ## 三类档位（由 `renderNetItemOf` 判定，`data-state` 是它的机读镜像）
+ *  | `data-state` | 何时 | 内容 |
+ *  | --- | --- | --- |
+ *  | `card` | 正面卡（自己手牌 / 双方场上正面卡） | 卡图 + `buildCardTextEl` 的中文面板 |
+ *  | `back` | **任何背面卡**（含对手手牌里那些"真卡"） | **卡背** + 一行「未公开」（**不许**出现卡名与效果文本） |
+ *  | `protocol` | 协议（恒公开 —— 它本来就在桌面上朝上摆着） | 协议图 + `buildProtocolRatingPanel` |
+ *  | `unknown` | 对手手牌的**张数占位块**（远程页里它没有卡面数据） | 一行「对手手牌 ×n（内容未公开）」 |
+ *  ⚠️ 四种 `data-state` 都是 `renderNetZoomBox` 里**唯一一处**赋值的（测试按它断言"哪一档"）。
+ *
+ * ## 尺寸（为什么是这几个数）
+ *  图：`--card-h`（卡高 130）× `--card-w` 的纵横比（卡面 5:7）⇒ 参数写 `var(--card-w)` /
+ *  `var(--card-h)`，**不引入第二组字面量**（R9-1/R9-4 的"一个数驱动"纪律）。
+ *  ⚠️ 它**不受** `.net-lane-band .protocol-img` 那两条 ∓90° 旋转影响：本框里的协议图是
+ *  **新 img 节点**（`protocolImgSrc` 现场建），不是克隆场上节点 ⇒ 热座的旋转类不会跟过来
+ *  （与 `openZoom` 用 defId 新建 img 同理）。这里按"图鉴口径"横置：`rotate(-90deg)` +
+ *  框高 = 卡宽、框宽 = 卡高（`--zoom-fig-h` 那两条变量就是这件事的唯一出处）。
+ *  ⚠️ 本节的规则里**不许**出现 `transform`（`render-net.test.ts` 的容器守卫只查以容器类
+ *  **结尾**的选择器，本框不在名单里；但也没有旋转的理由）。
+ * ========================================================================== */
+
+/* 框体：左栏的**第一个** flex 项（贴顶），宽度由左栏给，高度上限 = 左栏剩余空间。 */
+.net-board .net-zoom-box {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  /* ⚠️ `flex: 0 1 auto`（不是 `0 0 auto`）：矮屏上放大框要能**让位**给下面的三块组件 ——
+     固定高度会让 `.net-dock` 被挤出左栏（`.net-left-rail` 只有一个视口高）。 */
+  flex: 0 1 auto;
+  min-height: 0;
+  /* 纵向 overflow：内容（协议评分面板很长）超出时**自己滚**，不把左栏撑破。 */
+  overflow: hidden auto;
+  padding: 4px 5px;
+  border: 1px solid rgba(0, 255, 204, 0.45);
+  border-radius: 10px;
+  background: rgba(10, 14, 26, 0.92);
+  box-shadow: 0 0 18px rgba(0, 255, 204, 0.18);
+  font-size: 11px;
+}
+/* 标题行（钉住/悬浮状态 + 卡名）：一行小字，`--` 前缀表示"这是整块的标题"而不是卡名本体 */
+.net-board .net-zoom-box-head {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-height: 14px;
+  color: #00ffcc;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+/* 钉住态高亮（"单击固定"的可见反馈） */
+.net-board .net-zoom-box.pinned .net-zoom-box-head { color: #ffd27f; }
+.net-board .net-zoom-box-body { display: flex; flex-direction: row; align-items: flex-start; gap: 5px; min-width: 0; }
+/* 图槽：卡牌竖置（宽 = --card-w）、协议横置（宽 = --card-h）—— 由 `data-kind` 切换 */
+.net-board .net-zoom-box-fig {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--card-w);
+  min-height: var(--card-h);
+  /* R19：高度上限 —— 卡图是 5:7 的，`max-width: 100%` 会把它的**高度**撑成宽度的 1.4 倍；
+     矮屏上那一下就把左栏吃掉一半（放大框自己会因此把三块组件挤出去）。 */
+  max-height: calc(var(--card-h) + 40px);
+  overflow: hidden;
+}
+.net-board .net-zoom-box-fig[data-kind='protocol'] { width: var(--card-h); min-height: var(--card-w); }
+.net-board .net-zoom-box-img { width: var(--card-w); max-width: 100%; height: auto; border-radius: 4px; }
+.net-board .net-zoom-box-fig[data-kind='protocol'] .net-zoom-box-img {
+  width: var(--card-h);
+  /* 图鉴口径：竖版协议图 rotate(-90) 横置 ⇒ 视觉宽 = 卡高。旋转在**图**上，不在框上。 */
+  transform: rotate(-90deg);
+}
+/* 背面卡：卡背用热座同款类（`.card-back` / `.cardback-img`）⇒ 观感与场上背面卡一致 */
+.net-board .net-zoom-box-fig[data-kind='back'] .card-back { height: auto; aspect-ratio: 5 / 7; width: var(--card-w); }
+.net-board .net-zoom-box-fig[data-kind='back'] .cardback-img { width: 100%; height: auto; }
+/* 未知档（对手手牌张数占位）：没有图 ⇒ 一个与卡同高的空槽 + 一行字 */
+.net-board .net-zoom-box-fig[data-kind='unknown'] {
+  border: 1px dashed #555;
+  border-radius: 6px;
+  color: #8b93a7;
+  font-size: 11px;
+  padding: 4px;
+  box-sizing: border-box;
+}
+/* 文本列：复用 `buildCardTextEl`（`.card-text-*`）与 `buildProtocolRatingPanel`（`.draft-preview-*`）
+   的既有内部结构 —— 这里**只**做尺寸/溢出的适配，不改它们的类名与内容（那是共享实现）。
+   ⚠️ `min-width: 0` 是**承重**的：图鉴那两个容器（`.library-preview-text` / `.zoom-text`）都写着
+   `min-width: 240px`（给"协议详情可读宽度下限"用的），而左栏的宽度上限只有 ~150px ——
+   任何"把 min-width 一起带过来"的写法都会**直接顶破左栏**（把中列的放置区挤窄）。
+   这里显式钉住 `0`，让"文本列的宽度"只有**一处**真相（左栏列宽）。 */
+.net-board .net-zoom-box-text { flex: 1 1 auto; min-width: 0; max-width: 220px; }
+.net-board .net-zoom-box-text .card-text-title { font-size: 11px; margin-bottom: 2px; }
+.net-board .net-zoom-box-text .card-text-seg { font-size: 10px; line-height: 1.25; }
+.net-board .net-zoom-box-text .card-text-seg-label { font-size: 10px; }
+/* 协议评分面板（`buildProtocolRatingPanel`）在窄框里的压缩版：标题/座右铭/关键词/评分芯片
+   ⚠️ `overflow-y: visible` 必须显式写：`styles.css:1470` 的 `overflow-y: auto` 配 `flex: 1`
+   会把这一块变成"框内的第二根滚动条"，而放大框自己已经是滚动容器。 */
+.net-board .net-zoom-box-text .draft-preview-body {
+  display: flex; flex-direction: column; gap: 2px;
+  flex: 1 1 auto; min-height: 0; width: auto;
+  overflow-y: visible;
+  line-height: 1.3;
+  max-width: none; padding: 0; border: none; background: none;
+}
+.net-board .net-zoom-box-text .draft-preview-name { font-size: 11px; }
+.net-board .net-zoom-box-text .draft-preview-motto,
+.net-board .net-zoom-box-text .draft-preview-commands,
+.net-board .net-zoom-box-text .draft-preview-position,
+.net-board .net-zoom-box-text .draft-preview-review,
+.net-board .net-zoom-box-text .draft-preview-item { font-size: 10px; line-height: 1.25; }
+.net-board .net-zoom-box-text .draft-preview-scores { flex-wrap: wrap; gap: 2px; }
+.net-board .net-zoom-box-text .draft-score-chip { font-size: 9px; padding: 0 3px; }
+.net-board .net-zoom-box-text .draft-preview-seg-label { font-size: 10px; }
+/* 空态提示（还没悬浮过任何东西）：与图鉴的 `.library-preview-hint` 同语义 */
+.net-board .net-zoom-box-hint { color: #9fb0c8; font-size: 10px; line-height: 1.3; }
+/* 三档里"未公开/未知"那一行（`data-state` 的可见说明；**不含任何真实卡名与效果文本**） */
+.net-board .net-zoom-box-none { color: #8b93a7; font-size: 10px; line-height: 1.3; }

@@ -95,8 +95,14 @@ function cssNode(...classes: string[]): StubNode {
 const allWith = (node: StubNode, cls: string): StubNode[] =>
   descendants(node).filter((n) => isClass(n, cls));
 
-/** `.net-board` 上的 `--card-h`（R9-4 起卡几何的唯一旋钮；本文件按 140 解算）。 */
-const CARD_H = 140;
+/** `.net-board` 上的 `--card-h`（R9-4 起卡几何的唯一旋钮；本文件按 **130** 解算）。
+ *  ⚠️ **数值迁移（R19）**：140 → 130（左栏压缩那一档）。**旧句为什么必须改**：本文件的所有
+ *  几何（holder `W/H`、旋转错位 `SKEW`、徽标 `BADGE = 18k` 与贴角量 `11k / 9k`）都是
+ *  `--card-h` 的**倍数** ⇒ 旋钮一改它们必然全部跟着变；旧值会把**正确**的实现判红。
+ *  **新句多查了什么**：判据的**形式**（"全部是 `--card-h` 的倍数 + 由独立构造的目标点复算"）
+ *  一个字未改 —— 换掉的只是当下的旋钮值，所以它照样抓得住"某一处偷偷写死 px"。
+ *  ⚠️ 这个常量必须**与 styles-net.css 里的 `--card-h` 同步**（下面有一条前提腿从样式表里解它）。 */
+const CARD_H = 130;
 /** ∓90° 旋转造成的"竖版盒 → 横躺足迹"错位量：(107.69 − 76.93) / 2。 */
 const SKEW = CARD_H * 0.7692 - CARD_H * 0.5495;   // ≈ 30.758 / 2 = 15.379
 
@@ -453,6 +459,19 @@ describe('R15-3 · 已编译对勾 `.protocol-check`：贴住横躺卡的右上�
     const c = chain();
     return subjectPropOf(c[c.length - 1], c, NET_RULES, prop);
   };
+
+  it('前提腿（R19 新增）：本文件的常数 `CARD_H` 必须等于样式表当下的 `--card-h`（防"两处真相"漂移）', () => {
+    // ⚠️ **为什么必须有这一条**：本组的所有几何（`W` / `H` / `SKEW` / `BADGE` / `INSET`）
+    //    都由本文件的 `CARD_H` **派生**，而那个常数是**手写**的（CSS 解算器解不出"当前档位
+    //    应当是哪个数"）。R19 把 140 改成 130 时，如果只改了样式表而忘了这里，本组会以
+    //    "几何对不上"的形式报红 —— 那条失败信息读起来像**实现错了**，而不像"测试常数过期了"。
+    //    ⇒ 这里直接把两个数摆在一起比：改档时必须**同时**改这两处，且报错直指"测试常数"。
+    const board = cssNode('net-board');
+    expect(cssVarOf([board], NET_RULES, '--card-h'),
+      `本文件的 CARD_H=${CARD_H} 与 styles-net.css 的 --card-h 不一致 —— `
+      + '改卡几何档位时必须同时改这里（本组全部几何都由 CARD_H 派生）')
+      .toBe(`${CARD_H}px`);
+  });
 
   it('前提腿（事实 ②）：远程页 `.protocol` 的 padding / border 都被压成 0 ⇒ 包含块 = holder 盒', () => {
     const c = chain();

@@ -165,6 +165,11 @@ import { getLegalActions, type LegalAction } from '../core/game';
 import { getLineValue } from '../core/state/create';
 import { actionCn } from '../core/log';
 import { downloadLog } from './diag';
+// ── **R19：卡牌放大框的取图 / 取值出口** ──
+// 卡图 src 与"卡牌中文效果分段"的**唯一**实现都在 `data/demo.ts`（`render.ts` 也是从那里取的）。
+// 本页**不复制**这两段算式：`cardImgSrc(protocol, value)` 与 `cardTextParts(getCardDef(defId))`
+// 正好就是"把 defId 变成一张图 + 一段中文"的全部输入。
+import { cardImgSrc, cardTextParts, getCardDef, getProtocolDef, protocolImgSrc } from '../data/demo';
 // 几何型（依赖 getBoundingClientRect）点名特效：与热座 renderBoard 的 deferredFx 同源同调用形态
 // （render.ts:4849 透彻牌库眼睛 / :4945 幸运宣告骰子）。二者都用**契约钩子**定位：
 // `startClarityDeckEye` 查 `.deck[data-player="N"]`、`startLuckDiceFx` 查源卡的 `[data-uid]` ——
@@ -240,6 +245,12 @@ import {
   removeDraftPreviews,
   showWinOverlay,
   cancelActiveDrag,
+  // ── **R19：卡牌放大框复用的两个文本出口**（`render.ts` 的既有实现，**不复制**）──
+  //  · `buildCardTextEl`：卡牌中文效果面板（**放大查看遮罩与图鉴展示框共用**，rootCls 控制外壳类）
+  //  · `buildProtocolRatingPanel`：协议详情面板（图鉴的协议封面 hover → 展示框用的就是它）
+  buildCardTextEl,
+  buildProtocolRatingPanel,
+  splitDefId,
   type UiCallbacks,
 } from './render';
 
@@ -922,6 +933,11 @@ function bindNetScrollSync(): void {
 export function resetNetUiState(): void {
   netChoicePromptId = null;
   netPreviewNote = '';
+  // ── **R19**：卡牌放大框的跨帧状态（"当前固定的是哪一张"）也必须随离页清掉 ──
+  // 它是本文件的模块态（与上面两项同类）；不清的后果是：回到主界面再进远程页时，
+  // 框里仍显示上一局的固定项（而 `fillNetZoomBox` 是每帧按 `currentPinnedKey` 决定"钉住"高亮的
+  // ⇒ 高亮与内容都会带着上一局的状态）。
+  resetNetZoomBox();
   // ── G2 修正 **R15-2**：页面级标记 `body.net-page` 必须**随离页清掉** ──
   // 它与上面两项**不同类**：那两项是本文件的模块态，这一项是**挂在 body 上的页面标记**
   // （`renderNetBoard` 加，见那里的注释）。放在这里是因为本函数正是"离开远程页"的复位点
@@ -1639,12 +1655,17 @@ function buildHands(
 }
 
 /**
- * **停靠栏容器**（R6 的"底部行"；**R11-2 起它是钉在视口底部的那一行**）：
- * `[信息块, 手牌区, 信息块]` —— 三块的**DOM 顺序**由 `NET_BOTTOM_SIDES` 的单元素切片决定。
+ * **停靠栏容器**（R6 的"底部行"；**R11-2 起它是钉在视口底部的那一行**；
+ * **R19 起它是左栏右下角的那个横排整体**）：`[信息块, 手牌区, 信息块]` ——
+ * 三块的**DOM 顺序**由 `NET_BOTTOM_SIDES` 的单元素切片决定。
  *
  * ⚠️ **R8-5 起它不再是"一行三列"的盒子**：`styles-net.css` 第 6 节把 `.net-bottom` 设成
- * `display: contents`（盒子消失，子节点成为 `.net-board` 的 grid item），行/列号由第 1 节的
- * R11-2/3 块**按侧**指派。所以这里**没有任何左右语义** —— 这个函数只负责"谁进 DOM、以什么顺序进"。
+ * `display: contents`（盒子消失，子节点成为**上层盒子**的子项）。
+ * ⚠️ **R19（本轮）那次"上层盒子"变了**：R8-5~R12-7 期间是 `.net-board`（grid item + `grid-row`
+ * 按侧指派）；现在用户要三块"平移挪到左边区域、最右边紧挨着放置区" ⇒ 上层是
+ * `.net-left-rail > .net-dock`（**flex 行**，见 `buildLeftRail` 与 styles-net.css 第 6 节）。
+ * ⇒ **本函数一个字都不用改它的产出**（谁进 DOM、以什么顺序进），只是**挂载点**换了；
+ * 行/列号那套 `grid-*` 指派随之退役（`styles-net.css` 第 1 节有完整的退役记录）。
  *
  * ⚠️ **返回值从 `HTMLElement` 改成 `{ row, hands }`（G2 修正 R11-4）**：`renderChoiceUi` 需要
  * `.net-hands` 这个节点（它给**手牌条**加 `.choice-mode`，那是"选择模式下非候选手牌不可点"的
@@ -1670,6 +1691,463 @@ function buildBottomRow(
   row.appendChild(hands);
   for (const side of NET_BOTTOM_SIDES.slice(1)) row.appendChild(blockOf(side));
   return { row, hands };
+}
+
+/**
+ * **停靠栏**（R19 新件）：`buildBottomRow` 的产出外面**只**多一层 `.net-dock`
+ * （`display: flex` 的横排容器，见 styles-net.css 第 6 节）。
+ *
+ * ## 为什么需要这一层（不能直接把三块挂进左栏）
+ * 用户这一轮的裁决是"三块**仍横排**、整体压缩后**右贴**放置区左缘"。
+ * 三块里有两块信息块的 DOM 父节点是 `.net-bottom`（`display: contents`）、手牌区的父节点是
+ * `.net-hands`（也是 `contents`）—— 展平之后它们是**同一个盒子**的子项。
+ * 那个盒子（R8-5~R12-7 期间是 `.net-board`）现在必须能表达"这三块作为一个整体横排并右贴"，
+ * 而 `.net-board` 是 grid（它的列是"左栏 / 放置区 / 右空"）⇒ 三块必须有一个**自己的容器**。
+ * ⇒ `.net-dock` 就是那个容器：**横排 + `justify-content: flex-end`**。
+ *
+ * ⚠️ **它就是 R19 版的"底部行"语义**：`.net-bottom` 仍是 `display: contents`（结构守卫
+ * "恰好一块 `.net-bottom`"照旧），三块的 DOM 顺序仍由 `NET_BOTTOM_SIDES` 决定。
+ * ⚠️ 返回值仍是 `{ row, hands }`：`renderChoiceUi` 要的是 `.net-hands`（G-15 的对象），
+ * 而 `.net-dock` 不需要交给任何下游（它只是一个盒子）。
+ */
+function buildDock(
+  s: GameState, viewSeat: PlayerId, cb: UiCallbacks, operator: PlayerId | null,
+): { dock: HTMLElement; hands: HTMLElement } {
+  const dock = el('div', 'net-dock');
+  const { row, hands } = buildBottomRow(s, viewSeat, cb, operator);
+  dock.appendChild(row);
+  return { dock, hands };
+}
+
+/**
+ * **左栏**（R19 新件）：用户原话 —— "把己方牌堆以及弃牌堆、手牌区、对方牌堆以及弃牌堆
+ * 这三个组件平移挪到左边区域，直至这三个组件的最右边紧挨着中间的放置区域……
+ * 然后为页面左上角也就是三大组件移动后的上方新加一个卡牌放大框"。
+ *
+ * 于是左栏自上而下是：
+ * ```
+ * .net-left-rail（flex column，grid-column: 1 / justify-self: end）
+ *   ├─ .net-zoom-box   ← 卡牌放大框（**贴顶** = 用户说的"页面左上角"）
+ *   └─ .net-dock       ← 三块停靠组件（横排、整组右贴 = "三大组件移动后的上方"的反面）
+ * ```
+ *
+ * ⚠️ `zoom` 由 `renderNetBoard` 现场建好再传进来（而不是在这里建）：放大框需要在
+ * **一帧里被建一次**、并把它的填充逻辑绑在**板的根**上（事件委托），见 `renderNetZoomBox`。
+ */
+function buildLeftRail(
+  zoom: HTMLElement, s: GameState, viewSeat: PlayerId, cb: UiCallbacks, operator: PlayerId | null,
+): { rail: HTMLElement; hands: HTMLElement } {
+  const rail = el('div', 'net-left-rail');
+  rail.appendChild(zoom);
+  const { dock, hands } = buildDock(s, viewSeat, cb, operator);
+  rail.appendChild(dock);
+  return { rail, hands };
+}
+
+/* ============================================================================
+ * 卡牌放大框（R19 新件）
+ *
+ * 用户原话（本轮）："为页面左上角也就是三大组件移动后的上方新加一个卡牌放大框，
+ * 同时还能显示当前卡牌的中文文本信息，这个卡牌放大框的具体功能可以放大目前鼠标悬浮
+ * 所在的那张牌或者协议并显示对应的中文文本等功能，具体可参考图鉴中的那个展示框。"
+ * 已确认选项 ②：**悬浮即时显示 + 单击固定**（与草稿页 / 图鉴同款）。
+ *
+ * ## 复用（不是"照着写一份"）
+ * 内容出口**只有两处**，都是既有实现：
+ *  · 卡牌中文效果面板 —— `render.ts` 的 `buildCardTextEl(cardTextParts(getCardDef(defId)), cls)`
+ *    （放大查看遮罩与图鉴展示框的**同一个**出口）；
+ *  · 协议详情面板 —— `render.ts` 的 `buildProtocolRatingPanel(defId)`（图鉴协议封面的那一个）。
+ * ⇒ 本页不再有第二份"中文文本怎么排版"的实现。
+ *
+ * ## 交互（`bindNetZoomBox`）
+ *  · 悬浮即时显示：`pointerover` 事件委托（每帧重建 DOM ⇒ **不能**把监听挂在卡上）；
+ *  · 单击固定：`click` 委托 —— 固定在**同一个 key** 上再点一次取消（回到悬浮自由预览）；
+ *  · 双击：**不拦**。`bindClickOrDouble` 已经绑在卡/协议上（320ms 单击延迟 > 300ms 双击窗口），
+ *    双击时它自己取消那次单击并走 `openZoom` —— 本框只是收不到那一次 click，不需要知道双击。
+ *  · 事件委托挂在**稳定容器**（`wrap` = `.net-board`，它不参与"每帧重建的那部分"），
+ *    而放大框节点自身也在 `wrap` 里、**每帧重建一次**（与整棵树同帧，见 `renderNetBoard`）。
+ *
+ * ## ⚠️ 防泄露（硬要求，判据与 `render.ts` 的"能否翻面查看"同源）
+ * 远程页的对手手牌**只有张数占位块**（`handVisibility: 'count'`，没有 `.card` 节点）；
+ * 场上的**背面卡**在 DOM 上也没有真实卡面数据（`renderCardFace` 只产出 `.card-back`）。
+ * ⇒ 本框对这两类只显示**卡背 / 「未公开」/ 「内容未公开」**，**不得**出现真实卡名与效果文本。
+ * 判据分两层（**两层都要过**）：
+ *  ① **DOM 事实层**（`netCardFaceOf` / `zoomKindOf`）：`faceUp` 只由"这张卡的子树里有没有
+ *     `img.card-face-img`"决定 —— 不看任何可注入的东西；
+ *  ② **公开性规则层**（`publicOf`，**可注入**）：`faceUp || (phase === 'gameover' && …)
+ *     || (自己那一侧 && !secret)`，与 `render.ts:1962/1973` 的 `openZoom(..., peek)` 判据**同源**。
+ * ⇒ 把 ② 注入成恒 `true` 也不能泄露（① 仍会拦住背面卡）—— 这正是"反空集合"那一条腿
+ *   （`tests/ui/net-left-rail.test.ts` 的 ZOOM-6）要证明的事。
+ * ========================================================================== */
+
+/** 放大框里"这是什么"的四档（`data-state` 与内容一一对应）。 */
+export type NetZoomKind = 'card' | 'back' | 'protocol' | 'unknown';
+
+/** 一次悬浮/固定命中的**目标描述**（由 `netZoomContentFor` 产出；`render` 是纯内容构造）。 */
+export interface NetZoomItem {
+  /** 固定的 key（`card:<defId>` / `proto:<defId>:<compiled>` / `back` / `unknown`）——
+   *  与图鉴的 `libPinnedKey` 同语义：同 key 再点一次 = 取消固定。 */
+  key: string;
+  kind: NetZoomKind;
+  /** 标题栏文字（卡名 / 协议名 / 「未公开」/ 「对手手牌」） */
+  title: string;
+  /** 填充 `.net-zoom-box` 的内容构造（**只**在真的显示时才被调用）。 */
+  render(box: HTMLElement): void;
+}
+
+/** 卡面上的真实卡面数据（只有**正面**卡才有）。 */
+interface NetFace {
+  defId: string;
+  /** 卡的 uid（手牌 / 场上卡都有 `data-uid`；协议没有）—— 只用它做"同 key 不重建"的判据。 */
+  uid: string | null;
+  /** 该卡所在的**绝对玩家号**（从最近的 `[data-player]` 祖先上读；读不到 = `null`）。 */
+  player: PlayerId | null;
+}
+
+/**
+ * 从 `img.card-face-img` 的 `src` 反推 `defId`（形如 `/assets/protocols/<proto>/card-<value>.<ext>`）。
+ *
+ * ⚠️ 为什么**不看** `data-uid` / `data-fx-rot` 之类的属性：那些是 FX 的自描述标记，与"这张卡的
+ * 牌面是什么"无关；而"有没有卡面图"本身就已经是"正面 / 背面"的**唯一** DOM 事实
+ * （`renderCardFace` 的背面分支只建 `.card-back`，见 `render.ts:90-99`）。
+ * 读不到 img ⇒ 返回 `null`（调用方把它当"背面"处理 —— 宁可少显示，也不猜一个 defId）。
+ */
+function cardDefIdOfEl(cardEl: HTMLElement): string | null {
+  const img = cardEl.querySelector<HTMLImageElement>('img.card-face-img');
+  const src = img?.getAttribute('src') ?? '';
+  const m = /\/assets\/protocols\/([\w-]+)\/card-([\w.-]+?)\.[a-z]+$/.exec(src);
+  if (m === null) return null;
+  const value = m[2];
+  return /^\d+$/.test(value) ? `${m[1]}-${value}` : null;
+}
+
+/** 距离该节点**最近**的 `[data-player]` 祖先（含自身）上的绝对玩家号；读不到 = `null`。 */
+function playerOfEl(node: HTMLElement): PlayerId | null {
+  for (let el: HTMLElement | null = node; el !== null; el = el.parentElement) {
+    const p = el.dataset?.player;
+    if (p === '0' || p === '1') return Number(p) as PlayerId;
+  }
+  return null;
+}
+
+/**
+ * 这张卡的**卡面数据**（DOM 事实层）。返回 `null` = 这张卡**不是正面**
+ * （或读不到卡面图）—— 调用方必须走 `back` 档。见 `cardDefIdOfEl` 的说明。
+ */
+function netFaceOfEl(cardEl: HTMLElement): NetFace | null {
+  const defId = cardDefIdOfEl(cardEl);
+  if (defId === null) return null;
+  return { defId, uid: cardEl.dataset?.uid ?? null, player: playerOfEl(cardEl) };
+}
+
+/**
+ * **能不能看到这张卡的正面**（公开性判据；与 `render.ts` 里 `openZoom(..., peek)` 的两处判据同源）。
+ *
+ * `render.ts:1962`（手牌）：`openZoom(card.defId, faceUp, …)` —— `faceUp` 由 `opts.isSelf` 决定；
+ * `render.ts:1973`（场上）：`peek = s.phase === 'gameover'`；
+ * `render.ts` 的槽位分支（`G-19` 钉住的那条）：`card.faceUp || s.phase === 'gameover'
+ * || (isSelfSlot && !card.secret)`。
+ * ⇒ 本页只需要**一条**判据：`faceUp || gameover || (自己那一侧 && !secret)`。
+ * ⚠️ `faceUp` 在**这里的形态**是"DOM 上有卡面图"（`netFaceOfEl` 成功）—— 它是**独立于本判据**的
+ * 第二道闸门（见文件头注的"两层都要过"）。
+ *
+ * ⚠️ 参数 `deps` 是**可注入**的：测试可以把 `isSelfSide` 换成恒 `true` 而不动任何别的代码
+ * （反空集合腿用它证明"判据真的在起作用"，而不是"内容恰好没被渲染"）。
+ */
+export interface NetZoomDeps {
+  /** 这一侧是不是"自己"（按座位判；`renderNetBoard` 传它的 `fxIsSelfSide` 同源实现）。 */
+  isSelfSide(side: 'self' | 'foe' | null): boolean;
+}
+
+/** 该卡是不是**秘密**卡（引擎字段；DOM 上读不到 ⇒ 缺省 `false`，与 `render.ts` 的 `!card.secret` 同义）。
+ *  ⚠️ 只对**自己那一侧**起作用（对手那一侧的卡一律按不公开处理，见 `publicOf` 的调用点）。 */
+function secretOfEl(_cardEl: HTMLElement): boolean {
+  return false;
+}
+
+/**
+ * 单张卡（或协议）的公开性。返回 `false` ⇒ 调用方必须走"卡背 / 未公开"那一档。
+ * 见 `NetZoomDeps` 的说明（这是两层的**第二层**）。
+ */
+export function netPublicOf(o: {
+  faceUp: boolean;
+  side: 'self' | 'foe' | null;
+  phase: string;
+  secret: boolean;
+  deps: NetZoomDeps;
+}): boolean {
+  if (o.faceUp) return true;
+  if (o.phase === 'gameover') return true;
+  return o.side !== null && o.deps.isSelfSide(o.side) && !o.secret;
+}
+
+/** 该节点是"自己那一侧"还是"对手那一侧"（按**侧别类名**判，与 `renderSide` 的侧别同源；
+ *  两条都没有 = `null`（协议 / 手牌区之外的节点））。 */
+function sideOfEl(node: HTMLElement): 'self' | 'foe' | null {
+  for (let el: HTMLElement | null = node; el !== null; el = el.parentElement) {
+    if (el.classList?.contains('net-side-self') === true) return 'self';
+    if (el.classList?.contains('net-side-foe') === true) return 'foe';
+    if (el.classList?.contains('net-hand-area-self') === true) return 'self';
+    if (el.classList?.contains('net-hand-area-foe') === true) return 'foe';
+  }
+  return null;
+}
+
+/**
+ * **悬浮/点击命中的那个元素 → 放大框的条目**（**半纯出口**：DOM 只读，唯一的可注入点是 `deps`）。
+ *
+ * 返回 `null` = 这个元素与放大框无关（不是卡 / 不是协议 / 不是对手手牌占位块）。
+ *
+ * ## 判定的优先级（**顺序是承重的**）
+ *  1. `.net-hands.hand-count-only` 的**子树** → `unknown`（对手手牌张数占位块）。
+ *     ⚠️ 必须在 `.card` 之前判：占位块**不是** `.card`，但它将来若被改成"背面卡列表"，
+ *     这一条也仍然该先命中（那时它仍是"内容未公开"的地方）。
+ *  2. `.protocol` 子树 → `protocol`（协议**恒公开** —— 它本来就在桌面上朝上摆着，双方都能看见）。
+ *  3. `.card` 子树 → `card`（正面，有卡面图）或 `back`（背面 / 读不到卡面）。
+ *  4. 其它 → `null`。
+ *
+ * ## 三类不泄露的形态各由哪一条保证
+ *  · 对手手牌：远程页里每张对手手牌都**没有卡面图**（`handVisibility: 'count'` 只产出占位块）
+ *    ① 它命中第 1 条 ⇒ `unknown`，**根本不进**卡分支；
+ *  · 场上背面卡：读不到 `img.card-face-img` ⇒ `netFaceOfEl` 返回 null ⇒ `back` 档
+ *    （**只**放卡背 + 「未公开」）；
+ *  · `secret` 卡（自己那一侧）：`publicOf` 返回 false ⇒ 也落 `back` 档。
+ *  ⚠️ 即使把 `deps.isSelfSide` 注入成恒 `true`，第 2 条的 `back` 仍成立 —— 见文件头注。
+ */
+export function netZoomContentFor(
+  target: HTMLElement | null,
+  o: { phase: string; deps: NetZoomDeps; secretOf?: (cardEl: HTMLElement) => boolean },
+): NetZoomItem | null {
+  if (target === null) return null;
+  const secretOf = o.secretOf ?? secretOfEl;
+  const inSubtree = (cls: string): boolean =>
+    target.closest !== undefined
+      ? target.closest<HTMLElement>('.' + cls) !== null
+      : target.classList?.contains(cls) === true;
+  // ① 对手手牌的**张数占位块**（它没有卡面数据 ⇒ 只报"张数"）
+  if (inSubtree('hand-count-only')) {
+    const hand = target.closest?.<HTMLElement>('.hand');
+    const n = hand?.getAttribute('data-hand-count') ?? hand?.dataset?.handCount ?? null;
+    const label = n === null ? '对手手牌（内容未公开）' : `对手手牌 ×${n}（内容未公开）`;
+    return {
+      key: 'unknown',
+      kind: 'unknown',
+      title: '对手手牌',
+      render: (box) => {
+        box.dataset.state = 'unknown';
+        box.dataset.kind = 'unknown';
+        const fig = el('div', 'net-zoom-box-fig');
+        fig.dataset.kind = 'unknown';
+        fig.textContent = '未公开';
+        const text = el('div', 'net-zoom-box-text');
+        text.appendChild(el('div', 'net-zoom-box-none', label));
+        const body = el('div', 'net-zoom-box-body');
+        body.appendChild(fig);
+        body.appendChild(text);
+        box.appendChild(body);
+      },
+    };
+  }
+  // ② 协议（恒公开）
+  const proto = inSubtree('protocol') ? target.closest<HTMLElement>('.protocol') : null;
+  if (proto !== null) {
+    const img = proto.querySelector<HTMLImageElement>('img.protocol-img');
+    const idm = /\/assets\/protocols\/([\w-]+)\/protocol-(loading|compiled)\.[a-z]+$/.exec(
+      img?.getAttribute('src') ?? '',
+    );
+    if (idm !== null) {
+      const defId = idm[1];
+      const compiled = idm[2] === 'compiled';
+      return {
+        key: `proto:${defId}:${compiled ? 1 : 0}`,
+        kind: 'protocol',
+        title: `${getProtocolDef(defId).name}${compiled ? '（已编译）' : ''}`,
+        render: (box) => {
+          box.dataset.state = 'protocol';
+          box.dataset.kind = 'protocol';
+          const body = el('div', 'net-zoom-box-body');
+          const fig = el('div', 'net-zoom-box-fig');
+          fig.dataset.kind = 'protocol';
+          const pimg = document.createElement('img');
+          pimg.className = 'net-zoom-box-img';
+          pimg.src = protocolImgSrc(defId, compiled);
+          pimg.alt = getProtocolDef(defId).name;
+          fig.appendChild(pimg);
+          body.appendChild(fig);
+          // 协议详情面板（`buildProtocolRatingPanel` 的根**就是**「文本列」——
+          // 与图鉴的用法逐字同款：`showPreview(..., buildProtocolRatingPanel(defId))`）
+          let panel: HTMLElement | null = null;
+          try { panel = buildProtocolRatingPanel(defId); } catch { panel = null; }
+          if (panel !== null) {
+            panel.classList.add('net-zoom-box-text');
+            body.appendChild(panel);
+          }
+          box.appendChild(body);
+        },
+      };
+    }
+  }
+  // ③ 卡（正面 / 背面）
+  const cardEl = inSubtree('card') ? target.closest<HTMLElement>('.card') : null;
+  if (cardEl !== null) {
+    const face = netFaceOfEl(cardEl);
+    const side = sideOfEl(cardEl);
+    // ⚠️ **两层都要过**：① `face !== null`（DOM 上有卡面图 = 正面）；② `netPublicOf(...)`（公开性）。
+    //    `face.faceUp` 恒为 true（能走到这里就说明有卡面图）⇒ 判据实际落在 `gameover / 自己侧` 上，
+    //    而"背面卡"在 ① 就被拦住 —— 这正是"注入恒 true 也不能泄露"的机制（反空集合腿）。
+    const visible = face !== null && netPublicOf({
+      faceUp: true, side, phase: o.phase, secret: secretOf(cardEl), deps: o.deps,
+    });
+    if (face !== null && visible) {
+      const defId = face.defId;
+      return {
+        key: `card:${defId}:${face.uid ?? ''}`,
+        kind: 'card',
+        title: cardTextParts(getCardDef(defId)).title,
+        render: (box) => {
+          box.dataset.state = 'card';
+          box.dataset.kind = 'card';
+          const body = el('div', 'net-zoom-box-body');
+          const fig = el('div', 'net-zoom-box-fig');
+          fig.dataset.kind = 'card';
+          const [protocol, value] = splitDefId(defId);
+          const cimg = document.createElement('img');
+          cimg.className = 'net-zoom-box-img';
+          cimg.src = cardImgSrc(protocol, value);
+          cimg.alt = cardTextParts(getCardDef(defId)).title;
+          fig.appendChild(cimg);
+          body.appendChild(fig);
+          // 卡牌中文效果面板（`buildCardTextEl` 的根**就是**「文本列」；`rootCls` 参数就是给它用的）
+          let panel: HTMLElement | null = null;
+          try { panel = buildCardTextEl(cardTextParts(getCardDef(defId)), 'net-zoom-box-text'); } catch { panel = null; }
+          if (panel !== null) body.appendChild(panel);
+          box.appendChild(body);
+        },
+      };
+    }
+    // 背面 / 不可公开：**只**放卡背与一行「未公开」（不出现卡名与效果文本）
+    return {
+      key: 'back',
+      kind: 'back',
+      title: '未公开',
+      render: (box) => {
+        box.dataset.state = 'back';
+        box.dataset.kind = 'back';
+        const body = el('div', 'net-zoom-box-body');
+        const fig = el('div', 'net-zoom-box-fig');
+        fig.dataset.kind = 'back';
+        const back = el('div', 'card-back');
+        const bimg = document.createElement('img');
+        bimg.className = 'cardback-img';
+        bimg.src = '/assets/Cardback.jpg';
+        bimg.alt = 'card back';
+        back.appendChild(bimg);
+        fig.appendChild(back);
+        body.appendChild(fig);
+        const text = el('div', 'net-zoom-box-text');
+        text.appendChild(el('div', 'net-zoom-box-none', '未公开：这张牌背面朝上（内容在对手翻开前不可见）'));
+        body.appendChild(text);
+        box.appendChild(body);
+      },
+    };
+  }
+  return null;
+}
+
+/**
+ * 建卡牌放大框（**每帧只建一次**，由 `renderNetBoard` 调）。
+ *
+ * 空态（还没悬浮过任何东西）显示一行提示 —— 与图鉴的 `.library-preview-hint` 同语义
+ * （用户："具体可参考图鉴中的那个展示框"）。
+ */
+export function renderNetZoomBox(): HTMLElement {
+  const box = el('div', 'net-zoom-box');
+  fillNetZoomBox(box, null);
+  return box;
+}
+
+/** 往框里填一个条目（**唯一的填充出口** —— 空态 / 三类内容都经它，机检只需看它）。 */
+export function fillNetZoomBox(box: HTMLElement, item: NetZoomItem | null): void {
+  box.textContent = '';
+  box.appendChild(el('div', 'net-zoom-box-head', item === null ? '卡牌放大框' : item.title));
+  if (item === null) {
+    box.dataset.state = 'empty';
+    box.dataset.kind = '';
+    box.dataset.pinned = currentPinnedKey === null ? '0' : '1';
+    box.classList.remove('pinned');
+    box.appendChild(el('div', 'net-zoom-box-hint',
+      '把鼠标移到卡牌 / 协议上：此处实时放大并显示中文文本；单击固定'));
+    return;
+  }
+  item.render(box);
+  const pinned = currentPinnedKey === item.key;
+  box.classList.toggle('pinned', pinned);
+  box.dataset.pinned = pinned ? '1' : '0';
+}
+
+/**
+ * 当前**被单击固定**的 key（`null` = 没有固定 ⇒ 悬浮自由预览）。
+ *
+ * ⚠️ **必须是模块级**（不能放在 `renderNetBoard` 的局部作用域里）：整页每帧重建
+ * （`root.textContent = ''`），而"固定"的语义是"跨帧记住"—— 与图鉴的 `libPinnedKey` 同款。
+ * ⚠️ 它**不是**全局可见状态：`resetNetUiState()` 会清它（离开远程页时），
+ * 于是下一页/下一局不会带着上一局的固定项。
+ */
+let currentPinnedKey: string | null = null;
+/** 当前框里显示的是哪一项（用于"取消固定后回到悬浮项"；**不是** key 与状态的第二处真相）。 */
+let currentZoomItem: NetZoomItem | null = null;
+
+/** 清空放大框的跨帧状态（**离开远程页时必须调**，见 `resetNetUiState`）。 */
+export function resetNetZoomBox(): void {
+  currentPinnedKey = null;
+  currentZoomItem = null;
+}
+
+/**
+ * 把放大框的**交互**绑在稳定的板根上（事件委托）。
+ *
+ * ⚠️ **为什么必须委托**：`.net-grid` / 手牌 / 信息块**每帧重建**（`renderNetBoard` 清空 root
+ * 再重建）⇒ 挂在卡上的监听每帧都会丢。挂在 `wrap`（`.net-board`，每帧也是新节点，但
+ * **同帧**与内容一起建）上则只需要绑一次/帧。
+ *
+ * ## 三条路（与图鉴同款；`bindClickOrDouble` 的双击不在本函数里）
+ *  · `pointerover`：算条目 → **没固定**时才显示（固定内容不被打扰）；同 key 不重复重建
+ *    （`pointerover` 在卡的子树内每次移动都会冒泡到 wrap ⇒ 不加这道闸就会每移动一次重建一遍）；
+ *  · `click`：同 key 再点 = 取消固定（回悬浮）⇒ 其它 key = 切换固定目标；
+ *  · **移开不清空**（用户选项 ②："单击固定，移开不清空已固定的那张"）。未固定时也保留最后
+ *    一张（与图鉴的"hover 内容保留，可移到展示框细读"逐字同义）—— 所以**不监听 pointerleave**。
+ */
+export function bindNetZoomBox(
+  wrap: HTMLElement,
+  getBox: () => HTMLElement | null,
+  o: { phase: string; deps: NetZoomDeps; secretOf?: (cardEl: HTMLElement) => boolean },
+): void {
+  const resolve = (target: EventTarget | null): NetZoomItem | null =>
+    netZoomContentFor(target as HTMLElement | null, o);
+  const show = (item: NetZoomItem | null): void => {
+    const box = getBox();
+    if (box === null) return;
+    currentZoomItem = item;
+    fillNetZoomBox(box, item);
+  };
+  wrap.addEventListener('pointerover', (ev) => {
+    const item = resolve(ev.target);
+    if (item === null) return;
+    if (currentPinnedKey !== null) return;                       // 固定时悬浮不覆盖
+    if (currentZoomItem !== null && currentZoomItem.key === item.key) return;  // 同 key 不重建
+    show(item);
+  });
+  wrap.addEventListener('click', (ev) => {
+    const item = resolve(ev.target);
+    if (item === null) return;
+    if (currentPinnedKey !== null && currentPinnedKey === item.key) {
+      currentPinnedKey = null;                                   // 同 key 再点 = 取消固定
+      show(currentZoomItem !== null && currentZoomItem.key === item.key ? currentZoomItem : null);
+      return;
+    }
+    currentPinnedKey = item.key;
+    show(item);
+  });
 }
 
 /* ============================================================================
@@ -1836,37 +2314,53 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
     end: netControlEnd(s, viewSeat),
   }));
 
-  // ── 停靠栏（R6；**R11-2：它就是钉在视口底部的那一行**）：信息块 · 手牌区 · 信息块 ──
-  // 手牌区仍由 `buildHands` 产出，且**两条 `.hand` 的 DOM 顺序恒为绝对玩家顺序 [P0, P1]**（约束 7）；
-  //    `hands` 变量要交给 `renderChoiceUi`（给手牌条加 `.choice-mode`），故由 `buildBottomRow`
-  //    **直接交出来**（R11-4：旧写法 `bottom.lastElementChild` 拿到的是**对手信息块** —— 见该函数头注）。
-  const { row: bottom, hands } = buildBottomRow(s, viewSeat, cb, operator);
+  // ── **R19：左栏**（卡牌放大框 + 三块停靠组件）──
+  // 用户原话见 `buildLeftRail` 的头注。三块仍由 `buildBottomRow` 产出，且**两条 `.hand` 的
+  // DOM 顺序恒为绝对玩家顺序 [P0, P1]**（约束 7）；`hands` 变量要交给 `renderChoiceUi`
+  // （给手牌条加 `.choice-mode`），故由 `buildLeftRail` **直接交出来**
+  // （R11-4：旧写法 `bottom.lastElementChild` 拿到的是**对手信息块** —— 见 `buildBottomRow` 头注）。
+  const zoomBox = renderNetZoomBox();
+  const { rail: leftRail, hands } = buildLeftRail(zoomBox, s, viewSeat, cb, operator);
 
   // ⚠️ C-1：grid **必须先挂进 wrap**，选择模式才能找到候选节点 —— `renderChoiceUi` 内部
   // 三处 `wrap.querySelectorAll(...)` 都只对"已经挂在 wrap 下的节点"生效：
-  //   · select 分支：`.card[data-uid]`（场上卡在 grid 里、手牌卡在 bottom 里 —— R7 之后
-  //     bottom 是 grid 的**兄弟**，两者都在 wrap 下，故查 wrap 仍能同时命中）
+  //   · select 分支：`.card[data-uid]`（场上卡在 grid 里、手牌卡在左栏的停靠栏里 ——
+  //     两者都在 wrap 下，故查 wrap 仍能同时命中）
   //   · select-line 分支：`.net-lane-band`（`data-line` 写在带节点上）
   // 曾经这一行在 `renderChoiceUi` **之后**：select-line 拿到 0 条带 → 没有可点目标，
   // 而 `choiceBar` 对 select-line 没有确认按钮 → 非 optional 的 select-line 永久卡死。
   // 与热座页同序（renderBoard:4800 挂 grid → :4835 跑 choice 分支）。
   wrap.appendChild(grid);
 
-  // ── R7 修正：底部容器是 `.net-grid` 的**兄弟**（挂 `wrap` = `.net-board`），**不是**它的子节点 ──
-  // 为什么这是承重的（用户实机截图确认的容器层级崩塌）：`bottom` 曾经 `grid.appendChild(bottom)`，
-  // 于是 `.net-grid` 有了**5 个**子节点，而样式表只给了 **3 条显式轨道** ⇒ 第 4、5 个子节点成为
-  // **隐式列**，整页塌成"一行五格、下方大片空白、右侧多出滚动条"。
-  // 现在的层级（styles-net.css 第 1 节是它的样式腿，`tests/ui/net-lane-tree.test.ts` 的 R7 条是行为腿）：
-  //   .net-board（**grid**，R8-5）
-  //     ├─ .net-grid（4 条显式轨道：3 条线 + 控制轨）      → 五行里的第 3 行
-  //     ├─ .net-bottom（display: contents；信息块 · 手牌区 · 信息块）
-  //     │    ⇒ 子节点直接成为本容器的 grid item：第 1/2/4/5 行由 CSS `grid-row` 按侧指派
-  //     └─ .log / .diag-btn / .net-preview-bar（第 6 行起，自动放置）
-  // ⚠️ 挂载顺序：[grid, bottom, …] —— 底部容器必须在 grid **之后**（R7 的层级约束；视觉行号由
-  //    CSS `grid-row` 决定，与 DOM 顺序无关，但层级崩塌那条红线仍然按 DOM 判）。
+  // ── 左栏挂 `wrap` = `.net-board`（它是 **grid item**：`grid-column: 1` / `justify-self: end`）──
+  // ⚠️ 它**不许**挂进 `.net-grid`：那是放置区自己的容器（4 条显式轨道 = 3 条线 + 控制轨），
+  // 多一个子节点就是**隐式列** ⇒ R7 的"一行五格"崩塌形态（`net-lane-tree.test.ts` 的 R7-1/R7-3
+  // 钉的就是"`.net-grid` 恰好 4 个子节点"）。
   // ⚠️ 必须在 `renderChoiceUi` **之前**：选择模式要按 `wrap.querySelectorAll` 找**已入 DOM** 的
-  //    候选卡，而自己的手牌卡就在 `bottom` 里（理由与上面 C-1 的 grid 完全相同）。
-  wrap.appendChild(bottom);
+  //    候选卡，而自己的手牌卡就在左栏的停靠栏里（理由与上面 C-1 的 grid 完全相同）。
+  // ⚠️ 层级（styles-net.css 第 1 / 6 节是它的样式腿，`tests/ui/net-left-rail.test.ts` 是行为腿）：
+  //   .net-board（**grid**：`minmax(0,1fr) auto minmax(0,1fr)` × 一行）
+  //     ├─ .net-grid（**第 2 列** = 放置区，恒水平居中、占满整行高）
+  //     ├─ .net-left-rail（**第 1 列 / justify-self: end**、flex column）
+  //     │    ├─ .net-zoom-box（卡牌放大框，贴顶）
+  //     │    └─ .net-dock（flex row / justify-content: flex-end）
+  //     │         └─ .net-bottom（display: contents；自己信息块 · .net-hands（contents）· 对手信息块）
+  //     └─ .diag-btn（styles.css 的 fixed，不参与 grid）/ .net-preview-bar（同为 fixed）
+  wrap.appendChild(leftRail);
+
+  // ── 卡牌放大框的**交互**（R19）：事件委托挂在 wrap 上，**必须**在 `leftRail` 入 wrap 之后 ──
+  // `getBox` 用 `wrap.querySelector('.net-zoom-box')` 现取（**不闭包捕获** `zoomBox`）：
+  // 这样"某次重渲染换了节点"时它跟着走，而不是把内容填进一个 detached 的旧框里。
+  // ⚠️ `deps.isSelfSide` 与 FX 的 `fxIsSelfSide` **同源**（"这一侧是不是自己"只有一个出处）；
+  //    `s.phase` 是"能否翻面查看"那条判据的第二个输入（与 render.ts 的 `peek` 同源）。
+  //    侧别 → 绝对玩家号的换算与 `bottomPlayerOf` 逐字同式（`side === 'self' ? viewSeat : 1 - viewSeat`）。
+  bindNetZoomBox(wrap, () => wrap.querySelector<HTMLElement>('.net-zoom-box'), {
+    phase: s.phase,
+    deps: {
+      isSelfSide: (side) => side !== null
+        && fxIsSelfSide(viewSeat, side === 'self' ? viewSeat : (1 - viewSeat) as PlayerId),
+    },
+  });
 
   // ── 选择模式（三个 choice-* 分支，重写为回到当前页） ──
   // `viewSeat` 是 R11-3 的闸门输入（选择条只在"操作方就是自己"时才挂出来）。
