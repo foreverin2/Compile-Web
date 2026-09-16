@@ -37,15 +37,75 @@ export interface CssRule { selector: string; body: string; no: number }
  * `./source-text` 的说明）—— 于是紧跟在一条规则**行尾注释**之后的规则，选择器会带上
  * `/* *​/` 前缀。这里必须把它当空白清掉，否则 `.net-lane-band .stack-slot.p2 .battery`
  * 会匹配不上（`net-lane-tree.test.ts` 第一版就是这样漏掉一条规则的）。
- */
+ *
+ * ## ⚠️⚠️ R25 修正：条件块（`@media`）的**体**必须**整块跳过**
+ *
+ * **旧行为为什么必须改**：旧实现是"选择器 = 第一个 `{` 之前的全部文本"，于是 `@media (max-width: …)`
+ * 的**前导**被当成无效文本跳掉、而它**内部**的规则被当成**无条件规则**混进这张平铺表
+ * （本文件头注原来就写着这件事，并靠"样式表里不许有条件块"来回避）。
+ * `styles.css` 里**本来就有**两个 `@media (max-width: 1100px)`（图鉴页的 `.library-*`，
+ * 与棋盘无关，所以一直没出事）；**R25 在 `styles.css` 里新增了三个窄屏媒体查询**
+ * （`.stack { --card-h }` / `.lane-row { grid-template-columns }`）—— 它们内部声明的
+ * `--card-h: 150px` 一旦被当成无条件规则，`cssPropOf(.stack, '--card-h')` 就会解出 **150**，
+ * 于是**所有**在无条件表上解 `.stack` 旋钮的断言都会静默变成"窄屏档"的值（假绿/假红都来了）。
+ *
+ * **新行为**：按**花括号配对**扫描；遇到 `@media` / `@supports` / `@container` / `@layer`
+ * 这类条件块时，**跳过整块**（连同它的体），只把**顶层**的 `选择器 { 体 }` 收进表里。
+ * ⚠️ 这是**收窄输入面**的改动，不是放宽判据：对"本来就没有条件块"的样式表逐字节等价
+ * （`styles-net.css` 由 R6-4 正面守卫保证没有条件块；实测它的规则数与新旧实现一致），
+ * 对新增的条件块则从"污染规则表"变成"**看不见**"—— 需要读媒体块内部声明的守卫必须
+ * **自己把块体抠出来单独解**（见 `conditionalBlocks`，`tests/ui/hotseat-narrow-fallback.test.ts` 用它）。
+ *
+ * ⚠️ 能力边界（没变）：**不递归**条件块的**嵌套**内容（对 `@media` 里的 `@media`/`@keyframes`
+ * 只会把整块跳掉）；也不模拟布局。 */
 export function cssRules(css: string): CssRule[] {
   const out: CssRule[] = [];
   const src = stripComments(css);
-  const re = /([^{}]+)\{([^{}]*)\}/g;
+  let i = 0;
   let no = 0;
+  while (i < src.length) {
+    const open = src.indexOf('{', i);
+    if (open < 0) break;
+    const selectorRaw = src.slice(i, open);
+    // 花括号配对求本块体的结束位置（体内可能还有 `{}`，例如 @keyframes 的步骤）
+    let depth = 1;
+    let j = open + 1;
+    while (j < src.length && depth > 0) {
+      if (src[j] === '{') depth += 1;
+      else if (src[j] === '}') depth -= 1;
+      j += 1;
+    }
+    const body = src.slice(open + 1, depth === 0 ? j - 1 : src.length);
+    const selector = selectorRaw.replace(/\/\*|\*\//g, ' ').trim().replace(/\s+/g, ' ');
+    // 条件块：**整块跳过**（含体）—— 块内的规则不得混进这张无条件表
+    const isConditional = /^@(media|supports|container|layer)\b/.test(selector)
+      || (selector === '' && /^\s*@/.test(selectorRaw));   // 前导被吞掉时的兜底
+    if (!isConditional) out.push({ selector, body, no: no++ });
+    i = j;
+  }
+  return out;
+}
+
+/** 一个条件块的**体**（R25 新增）：`{ atRule: '@media (max-width: 1969px)', body: '…' }`。
+ *  `cssRules` 会把条件块整块跳过 ⇒ **想解媒体查询里的声明就必须用它**（一份实现，别处不要另写正则）。 */
+export interface CssConditionalBlock { atRule: string; body: string }
+
+/** 抠出**顶层**条件块（`@media` / `@supports` / `@container` / `@layer`）及其体，按源序返回。 */
+export function conditionalBlocks(css: string): CssConditionalBlock[] {
+  const src = stripComments(css);
+  const out: CssConditionalBlock[] = [];
+  const re = /@(media|supports|container|layer)\b([^{]*)\{/g;
   for (let m = re.exec(src); m !== null; m = re.exec(src)) {
-    const selector = m[1].replace(/\/\*|\*\//g, ' ').trim().replace(/\s+/g, ' ');
-    out.push({ selector, body: m[2], no: no++ });
+    const open = m.index + m[0].length - 1;
+    let depth = 1;
+    let j = open + 1;
+    while (j < src.length && depth > 0) {
+      if (src[j] === '{') depth += 1;
+      else if (src[j] === '}') depth -= 1;
+      j += 1;
+    }
+    out.push({ atRule: `@${m[1]}${m[2]}`.replace(/\s+/g, ' ').trim(), body: src.slice(open + 1, j - 1) });
+    re.lastIndex = j;
   }
   return out;
 }

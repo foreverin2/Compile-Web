@@ -98,6 +98,10 @@ const ONLY = argVal('--only', null);
 const JSON_OUT = argVal('--json', null);
 const SHOTS = argv.includes('--shots') && !argv.includes('--no-shots');
 const KEEP = argv.includes('--keep');
+/** `--baseline`：在浏览器里**撤掉本轮 R25 的布局改动**再量（"对照基线"），
+ *  见探针的 `stripThisRoundsLayout`。用途：让"改前/改后"在**同一个会话、同一把尺子**下可比，
+ *  不必 `git stash`（工作区里还有别的会话的改动，动 git 有风险）。 */
+const BASELINE = argv.includes('--baseline');
 
 const say = (m) => process.stdout.write(`${m}\n`);
 const die = (m) => { say(`\n✗ 环境错误：${m}`); process.exit(2); };
@@ -220,21 +224,36 @@ const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
  * 这里只做"分组显示"，让**新出现**的差异在输出里一眼可辨。绝不把真差异洗成"期望值"。
  *
  * ⚠️ 往这张表里加条目之前先问自己：这是"已诊断、已上报、等产品裁决"的真差异吗？
- * 如果是"容差不够"，那就去论证容差（写进 `tok` / 项自带的 `tol`），**不要**塞进这里。
+ * 如果是"容差不够"，那就去论证容差（写进 `--tol` / 项自带的 `tol`），**不要**塞进这里。
+ *
+ * ## 变更史（这张表只增不减是坏味道，所以留一行"为什么移除"）
+ * · 2026-09-16 **R25**：**移除** `layout.overflow._lane_row` / `layout.overflow._board` ——
+ *   **不是**"修好了所以删"，而是**判据本身写错了**：工具会打印"越界最多的 5 个后代"，
+ *   实测证明那两个 119/166px 完全来自 `.battery { left/right: -120px }` 的**绝对定位外挂**
+ *   （设计如此：能量槽挂在链路框外侧）与点数 >10 时的 `.battery-overflow` 数字 ——
+ *   与"放牌区装不装得下"无关。已改成**只报数不判定**（项的 `noteOnly`），
+ *   并把判据拆成两条各管一件事：`layout.gridFit.*`（静态轨道装得下）+ `page.hScroll`（用户可见的横向滚动条）。
  */
 const KNOWN_ISSUES = new Map([
-  ['layout.overflow._lane_row', '热座 `.lane-row`（grid 4 列）需要 ≈1919px 内容宽，而 `#app{max-width:2000px;padding:0 100px}` '
-    + '把内容宽**封在 1800px** ⇒ 任何视口下都溢出 ≈119px（协议两列被压）。首轮实测（本工具的第一跑），已上报，未修。'],
-  ['layout.overflow._board', '同上，热座板根 `.board` 溢出 ≈166px（含 `.lane-row` 的 119px 与手牌条带）。首轮实测，已上报，未修。'],
+  ['page.hScroll', '整页横向滚动条 **66px**（每一档宽度都一样，**与本轮 R25 修复无关**）：'
+    + '`.battery { left/right: -120px }` 的外挂（叠加点数 >10 时的 `.battery-overflow`，本帧共 166px）'
+    + '超过了 `#app { padding: 0 100px }` 的 100px ⇒ 画到视口外。**已上报、未修**：'
+    + '要修就得动电池的外挂量、或给 `#app` 加 `overflow-x: clip` —— 两者都会改到用户已验收的观感。'],
 ]);
 
-/** 一项是否通过。数值项按容差；字符串/布尔项必须严格相等。 */
+/** 一项是否通过。数值项按容差；`tol === null` = **严格相等**（布尔/字符串/计数项用）；
+ *  ⚠️ R25 修正：旧写法把 `tol === null` 落到缺省容差（1px），于是"违反次数 0 vs 1"这类
+ *  **计数项**会容忍一次违反（实测：变异 a-ii 下 `proto.img.nonZero` 0→1 竟判为 ✓）。
+ *  ⇒ `tol === null` 必须走严格分支，不能借用缺省容差。 */
 function judge(it, tolOverride) {
-  const tol = num(it.tol) ?? (num(tolOverride) ? tolOverride : TOL);
   if (it.expected === null || it.expected === undefined || it.measured === null || it.measured === undefined) {
     return { pass: false, why: '期望值或实测值缺失（探针缺项 / 单源取值失败）' };
   }
   const e = num(it.expected), m = num(it.measured);
+  if (it.tol === null) {
+    return { pass: String(it.expected) === String(it.measured), why: '严格相等项不相等（容差为空）' };
+  }
+  const tol = num(it.tol) ?? (num(tolOverride) ? tolOverride : TOL);
   if (e !== null && m !== null) {
     const d = Math.abs(e - m);
     return { pass: d <= tol, why: `|Δ|=${d.toFixed(3)} > 容差 ${tol}`, delta: d };
@@ -268,7 +287,8 @@ if (SHOTS) mkdirSync(shotsDir, { recursive: true });
 const viteLog = join(profile, 'vite.log');
 const viteFd = openSync(viteLog, 'w');
 
-say(`运行期浏览器真值自查 · 端口 ${PORT} · 窗口 ${WIN.w}×${WIN.h} · 缺省容差 ${TOL}px`);
+say(`运行期浏览器真值自查 · 端口 ${PORT} · 窗口 ${WIN.w}×${WIN.h} · 缺省容差 ${TOL}px`
+  + (BASELINE ? ' · **对照基线模式（撤掉本轮布局改动）**' : ''));
 say(`  chrome  = ${chrome}`);
 say(`  探针页  = tools/browser-truth-probe.html`);
 say(`  临时 profile = ${profile}`);
@@ -296,7 +316,8 @@ try {
 
   // ── 逐场景跑 Chrome ──
   for (const sc of SCENARIOS) {
-    const url = `http://127.0.0.1:${PORT}/tools/browser-truth-probe.html?${sc.query}`;
+    const url = `http://127.0.0.1:${PORT}/tools/browser-truth-probe.html?${sc.query}`
+      + (BASELINE ? '&baseline=1' : '');
     const domFile = join(profile, `${sc.key}.dom.html`);
     const fd = openSync(domFile, 'w');
     const t0 = Date.now();
@@ -335,7 +356,7 @@ try {
   }
 
   // ── 比较与打印 ──
-  let pass = 0, fail = 0, known = 0, judged = 0;
+  let pass = 0, fail = 0, known = 0, judged = 0, notes = 0;
   const knownHits = [];
   for (const { label, probe } of allResults) {
     const items = (probe.items ?? []).filter((it) => (ONLY ? String(it.id).startsWith(ONLY) : true));
@@ -345,6 +366,14 @@ try {
     if (items.length === 0) { say('   （本次筛选下没有条目）'); continue; }
     say(`   ${'id'.padEnd(26)} ${'期望'.padStart(14)} ${'实测'.padStart(14)}  ${'Δ'.padStart(9)}  判定`);
     for (const it of items) {
+      // `noteOnly`：只报数不判定（探针里对"判据本身写错了、数字仍有参考价值"的项用这个标记，
+      // 理由写在项的 `src` 里）。它们**不计入**通过/失败，也不影响退出码。
+      if (it.noteOnly === true) {
+        notes += 1;
+        say(`   ${String(it.id).padEnd(26)} ${fmt(it.expected).padStart(14)} ${fmt(it.measured).padStart(14)}`
+          + `  ${''.padStart(9)}  ○ 只报数（不判定）`);
+        continue;
+      }
       const j = judge(it, TOL);
       judged += 1;
       const isKnown = !j.pass && KNOWN_ISSUES.has(String(it.id));
@@ -374,7 +403,8 @@ try {
   }
   say('');
   say('════ 汇总 ════');
-  say(`  条目：判定 ${judged} 项 —— 通过 ${pass} / 失败 ${fail} / 在案失败 ${known}`);
+  say(`  条目：判定 ${judged} 项 —— 通过 ${pass} / 失败 ${fail} / 在案失败 ${known}`
+    + (notes > 0 ? `；另有 ${notes} 项**只报数不判定**（判据本身不适用的诊断项，见其"期望来源"）` : ''));
   if (knownHits.length > 0) {
     say('  ── 在案差异（**基线里就有**，非本轮引入；仍然让退出码非零）──');
     for (const { it, note } of knownHits) say(`    · ${it.id}（实测 ${fmt(it.measured)} vs 期望 ${fmt(it.expected)}）：${note}`);
