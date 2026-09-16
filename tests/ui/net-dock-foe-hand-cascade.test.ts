@@ -95,83 +95,107 @@ const ruleBody = (selector: string): string => {
 const FOE_SELECTOR = '.net-board .net-hand-area.net-hand-area-foe';
 const BASE_SELECTOR = '.net-board .net-hand-area';
 
-describe('R17 · 对手张数块的右下角定位（CSS 解算腿）', () => {
-  it('对手张数块在**停靠栏右下角**：容器 `.net-dock` 的 justify-content / align-items 都是 flex-end', () => {
-    // ⚠️⚠️ **判据迁移（R19）—— 旧句为什么必须改，新句多查了什么**
-    //  · **旧句**：解 `.net-hand-area-foe` 自己的 `justify-self` 必须 == `end`、`align-self` == `end`、
-    //    `grid-row` == `'3'`、`grid-column` == `'3'`。那是 R11-2/R12-7 的**grid 停靠栏**形态。
-    //  · **为什么必须改**：R19 把三块搬进 `.net-dock`（**flex 行**）。CSS Flexbox §4.2 明确：
-    //    **flex item 上没有 `justify-self`**（主轴对齐由容器的 `justify-content` 管），
-    //    `align-self` 仍有效但它的参照系是容器的 `align-items`。于是
-    //    "张数块贴右下角"这件事在新形态里**只能**由容器表达 —— 继续钉 item 的 `justify-self`
-    //    会把**正确**的实现判红（那两条声明已按 R19 退役，见 styles-net.css 第 1 节的退役记录）。
-    //  · **新句多查了什么**：① 容器的主轴对齐 = `flex-end`（整组右贴 ⇒ 最右那一块贴住放置区左缘）；
-    //    ② 交叉轴对齐 = `flex-end`（三块**底边**对齐 ⇒ 张数块落在右下角）；
-    //    ③ **反空集合**：这个容器必须真的是 `display: flex`（写在 grid 容器上的
-    //    `justify-content` 语义完全不同）；
-    //    ④ 三块在 DOM 里**仍按 `NET_BOTTOM_SIDES` 的顺序**（张数块在最后 ⇒ "右下角"的最右那一格）。
-    //    ⚠️ 与 `net-left-rail.test.ts` 的 RAIL-3 是**两条不同的腿**：那条真跑渲染器查结构，
-    //    这条只解 CSS 的层叠（谁能赢）。
-    expect(dockProp('display'), '`.net-dock` 不是 flex 容器 —— 写在它上面的 justify-content 不成立')
-      .toBe('flex');
-    expect(dockProp('justify-content'), '`.net-dock` 的整组没有**右贴**（`justify-content: flex-end`）—— '
-      + '用户："这三个组件的最右边紧挨着中间的放置区域"').toBe('flex-end');
-    expect(dockProp('align-items'), '`.net-dock` 的三块没有底边对齐（`align-items: flex-end`）—— '
-      + '手牌那一块比信息块矮，不贴底会悬空（R17 的"右下角"在新形态里的表达）').toBe('flex-end');
-    // 反空集合：三块真的都在这个容器里（否则上面两条是空判据）
-    const { dock } = chain('foe');
-    expect(dock.children.length, '构造的桩里 `.net-dock` 没有子节点（判据的前提被破坏）').toBe(0);
+describe('R17 · 对手张数块的落点（CSS 解算腿）', () => {
+  it('R21：对手张数块是**对手信息块内部的一行**（居中 + 宽度不顶破信息块）', () => {
+    /* ⚠️⚠️ **判据迁移（R19 → R21）—— 旧句为什么必须改，新句多查了什么**
+     *  · **旧句（R11-2/R12-7）**：解 `.net-hand-area-foe` 自己的 `justify-self == end`、
+     *    `align-self == end`、`grid-row == '3'`、`grid-column == '3'`（grid 停靠栏的右下角）。
+     *  · **R19 改过一次**：三块进 `.net-dock`（flex 行）⇒ 改查容器的 `justify-content` /
+     *    `align-items == flex-end`（flex item 没有 `justify-self`，CSS Flexbox §4.2）。
+     *  · **R21 必须再改**：用户把这个张数块**嵌进了对手信息组件内部**
+     *    （"将图中手牌区右边的那个手牌乘五的对方信息放进对手信息组件中，而不是独立出来显示"）
+     *    ⇒ `.net-dock` 退役、"右下角"这个诉求**不存在了** —— 它现在是信息块里的**一行小字**。
+     *    旧句查 `.net-dock` 的 flex-end 会红（那个类已经没有了）。
+     *  · **新句多查了什么**：
+     *    ① 它在**对手信息块里**由信息块的 `align-items: center` 居中（信息块是 flex column
+     *       + `align-items: center`）—— 即"按内容宽居中"而不是"贴右下角"；
+     *    ② **新增一条承重声明**：`.net-board .net-hand-area.net-hand-area-foe { max-width: 100% }`
+     *       —— 它住在 `max-width: 150px` 的信息块里，那个小字块不许顶破块的内容区；
+     *    ③ **反空集合**：`.net-dock` 那条规则必须**真的不在**了（退役要退干净）。
+     *  ⚠️ 与 `net-left-rail.test.ts` 的 RAIL-5a 是**两条不同的腿**：那条真跑渲染器查**树**
+     *  （"它是对手信息块的后代"），这条只解 CSS 的层叠（"它在块里怎么排、宽度受不受约束"）。 */
+    const foe = resolved('foe', 'max-width');
+    expect(foe, '`.net-board .net-hand-area.net-hand-area-foe` 没有 `max-width: 100%` —— '
+      + '它住在 `max-width: 150px` 的信息块里，不给自己上界就会顶破块的内容区（把块撑宽）').toBe('100%');
+    // ② 信息块自己那一侧：`align-items: center` 是"嵌进去的那一行按内容宽居中"的机制
+    const block = cssNode('net-info-block');
+    block.dataset.netSeat = 'foe';
+    const blockChain = [cssNode('body', NET_PAGE_CLASS), cssNode('net-board', 'net-view-0'),
+      cssNode('net-left-rail'), cssNode('net-info-pair'), cssNode('net-bottom'), block];
+    expect(subjectPropOf(block, blockChain, NET_RULES, 'align-items'),
+      '`.net-info-block` 不是 `align-items: center` —— 嵌进去的张数块会贴左而不是居中').toBe('center');
+    expect(subjectPropOf(block, blockChain, NET_RULES, 'flex-direction'),
+      '`.net-info-block` 不是纵向 flex（嵌进去的东西会与计数行横排）').toBe('column');
+    // ③ **退役腿**：`.net-dock` 那条规则必须真的不在（半留状态 = "三块还在同排"的假证据）
+    expect(NET_RULES.filter((r) => /(?:^|[\s,>])\.net-dock\b/.test(r.selector)).map((r) => r.selector),
+      'styles-net.css 里仍有 `.net-dock` 的规则 —— R21 之后三块不再同排'
+      + '（两块进 `.net-info-pair`、自己手牌区留左栏、对手手牌区嵌进对手信息块）').toEqual([]);
   });
 
   it('**自己侧**手牌区的水平中置规则仍在（反空集合：不许靠删基类那句来"修"）', () => {
-    // ⚠️ **R19**：这条基类声明（`.net-board .net-hand-area { justify-self: center }`）在
+    // ⚠️ **R19/R21**：这条基类声明（`.net-board .net-hand-area { justify-self: center }`）在
     // flex 容器里**不适用**（不报错、也不生效）—— 但它**不许**被删：
-    //  ① 它是"手牌区在它的盒子里按内容宽居中"的唯一出处（将来 `.net-dock` 若换成 grid 就立刻承重）；
+    //  ① 它是"手牌区在它的盒子里按内容宽居中"的唯一出处（将来若换成 grid 就立刻承重）；
     //  ② 删了它会让 R17 那套"提权重"的层叠记录失去对象（那正是 R17 修的缺陷族）。
     expect(resolved('self', 'justify-self'),
-      '自己那一侧的基类 `justify-self: center` 被删了（R19 只允许"退役 item 上的按侧覆盖"，'
+      '自己那一侧的基类 `justify-self: center` 被删了（R19/R21 只允许"退役 item 上的按侧覆盖"，'
       + '基类要留着 —— 见 styles-net.css 第 6 节的说明）').toBe('center');
     expect(resolved('foe', 'justify-self'),
       '对手那一侧解到了 `end` —— 那条按侧覆盖已随 R19 退役（flex item 没有 justify-self，'
       + '留着就是一条"看着在管落点、实际什么都不做"的假代码）').toBe('center');
   });
 
-  it('并盒"去框"四条在**两侧**仍由基类规则赢（border none / background none / padding 0 / max-width none）', () => {
+  it('并盒"去框"四条在**两侧**仍由基类规则赢（border none / background none / padding 0）', () => {
+    // ⚠️ **R21**：`max-width` 从这一组里**移出去**了 —— 对手那一侧现在有一条**按侧**的
+    // `max-width: 100%`（见上一条用例），所以它不再是"两侧都由基类赢"。
+    // 其余三条（border / background / padding）的判据**一个字未改**。
     for (const side of ['self', 'foe'] as const) {
       expect(resolved(side, 'border'), `${side} 侧的 border 被按侧规则拿走了（并盒形态的"去框"坏了）`).toBe('none');
       expect(resolved(side, 'background'), `${side} 侧的 background 被按侧规则拿走了`).toBe('none');
       expect(resolved(side, 'padding'), `${side} 侧的 padding 不再是 0（手牌区会缩进去、与信息块对不齐）`).toBe('0');
-      expect(resolved(side, 'max-width'), `${side} 侧的 max-width 不再是 none`).toBe('none');
     }
+    // 自己那一侧的 max-width 仍必须是 `none`（基类赢）；对手那一侧必须是 `100%`（按侧规则赢）
+    expect(resolved('self', 'max-width'), '自己那一侧的 max-width 不再是 none').toBe('none');
+    expect(resolved('foe', 'max-width'), '对手那一侧的 max-width 不是 100%（那条按侧规则丢了）').toBe('100%');
   });
 
-  it('R19：按侧的 `justify-self` 覆盖**已退役**（右下角定位改由 `.net-dock` 承担），且"去框"四条仍在基类里', () => {
-    // ⚠️ **旧句为什么必须改**：旧句是"对手侧规则的**权重必须提**到 (0,3,0)，压过基类 (0,2,0)" ——
-    //    它守的是 R17 修的那个层叠缺陷（`justify-self: end` 被同权重的 center 按源序吃掉）。
-    //    R19 把三块搬进 flex 容器 ⇒ **flex item 上没有 `justify-self`** ⇒ 那条按侧覆盖已退役
-    //    （继续留着它就是一条"看着在管落点、实际什么都不做"的假代码，正是本项目专门猎杀的一类）。
-    //    **新句多查了什么**：① 那条**按侧**规则必须**不存在**（退役要退干净 —— 半留状态会让下一个
-    //    读者以为它还在起作用）；② 它的职责**有人接**：`.net-dock` 的 `justify-content: flex-end`
-    //    + `align-items: flex-end`（上一条用例钉住）；③ "去框"四条仍由**基类**赢（一个字未动）。
-    expect(NET_RULES.find((r) => r.selector.trim() === FOE_SELECTOR),
-      '`.net-board .net-hand-area.net-hand-area-foe` 那条 (0,3,0) 的按侧规则仍在 —— '
-      + 'R19 之后它在 flex 容器里**不产生任何效果**（flex item 没有 justify-self），'
-      + '留着就是"看着在管右下角、其实什么都不做"的假代码').toBeUndefined();
-    expect(dockProp('justify-content') === 'flex-end' && dockProp('align-items') === 'flex-end',
-      '`.net-dock` 没有接住"整组右下角"的职责（justify-content / align-items 必须都是 flex-end）')
-      .toBe(true);
+  it('R21：按侧规则的**唯一职责**是"宽度不顶破信息块"，且"去框"三条仍在基类里', () => {
+    /* ⚠️ **旧句为什么必须改（R19 → R21 两轮）**
+     *  · **旧句**：那条按侧的 (0,3,0) 规则必须**不存在**（R19：`justify-self: end` 在 flex 容器里
+     *    无效 ⇒ 退役），职责由 `.net-dock` 的 flex-end 接住。
+     *  · **为什么必须再改**：R21 之后对手手牌块**嵌进了信息块**（用户："放进对手信息组件中"）
+     *    ⇒ "右下角"这个诉求不存在了；而**那条按侧选择器又回来了** —— 但它的职责**变了**：
+     *    现在只声明 `max-width: 100%`（在 `max-width: 150px` 的信息块里给自己上界）。
+     *    R19 的"必须不存在"会把 R21 的**正确**实现判红。
+     *  **新句多查了什么**：① 那条按侧规则**在**（它是"宽度不顶破信息块"的唯一出处）；
+     *  ② 它**只**声明 `max-width`（不许把"去框"三条抢过去 —— 那三条仍由基类赢）；
+     *  ③ 它**不再**声明任何定位（`justify-self` / `align-self` / `grid-*`）：那些在 R21 形态下
+     *    要么无效、要么已被 `.net-info-block` 的 `align-items: center` 取代。 */
+    const foeRule = NET_RULES.find((r) => r.selector.trim() === FOE_SELECTOR);
+    expect(foeRule, '找不到 `.net-board .net-hand-area.net-hand-area-foe` 那条按侧规则 —— '
+      + '它现在是"嵌进信息块的那一行不许顶破块"的唯一出处').toBeTruthy();
+    const foeBody = foeRule!.body;
+    expect(foeBody, '按侧规则里没有 `max-width`（那条职责丢了）').toMatch(/(?:^|;|\s)max-width\s*:/);
+    for (const prop of ['border', 'background', 'padding']) {
+      expect(foeBody, `按侧规则里声明了 \`${prop}\` —— 那是"去框"三件的职责，必须继续由基类赢`)
+        .not.toMatch(new RegExp(`(?:^|;|\\s)${prop}\\s*:`));
+    }
+    for (const prop of ['justify-self', 'align-self', 'grid-row', 'grid-column', 'position']) {
+      expect(foeBody, `按侧规则里还声明着 \`${prop}\` —— R21 之后它在信息块内部（flex column）里`
+        + '要么无效、要么已被容器的对齐接管，留着就是"看着在管落点、其实什么都不做"的假代码')
+        .not.toMatch(new RegExp(`(?:^|;|\\s)${prop}\\s*:`));
+    }
     for (const side of ['self', 'foe'] as const) {
       expect(resolved(side, 'border'), `${side} 侧的 border 被拿走了（并盒形态的"去框"坏了）`).toBe('none');
       expect(resolved(side, 'background'), `${side} 侧的 background 被拿走了`).toBe('none');
       expect(resolved(side, 'padding'), `${side} 侧的 padding 不再是 0（手牌区会缩进去、与信息块对不齐）`).toBe('0');
-      expect(resolved(side, 'max-width'), `${side} 侧的 max-width 不再是 none`).toBe('none');
     }
-    // 并盒"去框"的四条必须仍写在**某个**以基类选择器为主体的规则体里（反空集合：不许删掉它们）。
-    // ⚠️ 注意：同一条选择器在本文件里有**两条**规则（一条只写 `justify-self`，一条写"去框"四条）
+    // 并盒"去框"的三条必须仍写在**某个**以基类选择器为主体的规则体里（反空集合：不许删掉它们）。
+    // ⚠️ 同一条选择器在本文件里有**两条**规则（一条只写 `justify-self`，一条写"去框"）
     //    —— 这是 R9-3/R17 的历史分层，`ruleBody` 只取第一条 ⇒ 这里必须扫**全部**同选择器规则。
     const baseBodies = NET_RULES.filter((r) => r.selector.trim() === BASE_SELECTOR).map((r) => r.body);
     expect(baseBodies.length, '找不到基类规则 `.net-board .net-hand-area`').toBeGreaterThan(0);
-    for (const prop of ['border', 'background', 'padding', 'max-width']) {
+    for (const prop of ['border', 'background', 'padding']) {
       expect(baseBodies.some((b) => new RegExp(`(?:^|;|\\s)${prop}\\s*:`).test(b)),
         `基类规则里没有 \`${prop}\`（并盒形态的"去框"失去了唯一出处）`).toBe(true);
     }

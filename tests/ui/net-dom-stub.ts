@@ -235,9 +235,30 @@ export function makeStubEl(tag: string): StubNode {
      *
      * ⚠️ 只补"写进去能读回来"，**不放宽**任何既有语义：`data-*` 仍然走 `dataset`
      * （真实 DOM 里两者是同一个属性），其余属性名进这个属性表。
+     *
+     * ── **R21 再修一次：`data-*` 的往返**（第一版这里把**所有**属性都写进 `attrs` 表，
+     *    而 `getAttribute('data-*')` 只读 `dataset` ⇒ `setAttribute('data-x', v)` **读不回来**）。
+     *    那个缺口在 R19 之前看不见（`data-*` 全走 `dataset` 写）；R21 把对手手牌区搬进信息块之后，
+     *    `renderHand` 的 `setAttribute('data-hand-count', …)` 正落在"读不回来"的那条路上
+     *    （实测：RAIL-5b 报 `data-hand-count = null`）⇒ 桩上**无法证明**"信息遮蔽的契约名还在"。
+     *    ⇒ 现在按 DOM 语义分流：`data-*` 写进 `dataset`（驼峰化，与读侧同一套换算），其余进 `attrs`。
      */
-    setAttribute: (n?: string, v?: unknown) => { attrs.set(String(n ?? ''), String(v ?? '')); },
-    removeAttribute: (n?: string) => { attrs.delete(String(n ?? '')); },
+    setAttribute: (n?: string, v?: unknown) => {
+      const name = String(n ?? '');
+      if (name.startsWith('data-')) {
+        node.dataset[name.slice(5).replace(/-([a-z])/g, (_a, c: string) => c.toUpperCase())] = String(v ?? '');
+        return;
+      }
+      attrs.set(name, String(v ?? ''));
+    },
+    removeAttribute: (n?: string) => {
+      const name = String(n ?? '');
+      if (name.startsWith('data-')) {
+        delete node.dataset[name.slice(5).replace(/-([a-z])/g, (_a, c: string) => c.toUpperCase())];
+        return;
+      }
+      attrs.delete(name);
+    },
     // **G2 修正 R8-4**：`data-*` 属性在真实 DOM 里**就是** `dataset`（`el.dataset.fxRot = 'ccw'`
     // 写的就是 `data-fx-rot`）—— 桩此前 `getAttribute` **恒返 null**，于是任何"读 data-* 属性"的
     // 产出代码在桩上都**永远读不到**（`fxRotDegOf(holder)` 恒得 0 ⇒ 协议 FX 的行为腿不可能存在，

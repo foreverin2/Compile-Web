@@ -568,22 +568,62 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
     expect(i0, '找不到 renderHand(s, 0 …) 的调用（顺序断言失去意义）').toBeGreaterThanOrEqual(0);
     expect(i1, '找不到 renderHand(s, 1 …) 的调用（顺序断言失去意义）').toBeGreaterThanOrEqual(0);
     expect(i0, 'P0 的手牌必须在 P1 之前建出（DOM 顺序恒定为绝对玩家顺序）').toBeLessThan(i1);
-    // 光有"建的顺序"还不够：两条手牌必须挂进**同一个父容器**，且挂载本身也按同一顺序。
-    expect(code, '找不到「同一父容器里先 append P0、再 append P1」的语句对（顺序保证的挂载点）')
-      .toMatch(/appendChild\(buildP0Hand\([^)]*\)\);\s*hands\.appendChild\(buildP1Hand\([^)]*\)\);/);
-    // 视觉归属必须是 CSS 的事：父容器带座位类；**手牌区的上/下带自 R8-5 起由 `grid-row` 按侧指派**
-    // （`order` 已退役 ⇒ 这里改成"手牌区不得再由 `order` 定位"的正面判据）。
-    // ⚠️ 旧判据写的是 `toMatch(/order\s*:/)`，注释还说"用 order 决定上下带归属" ——
-    //    那自 R8-5 起就是**错的**，而它一直绿只是因为 `.battery-overflow` 与中线标签里也有 `order`：
-    //    正是本项目反复栽的"守卫被**不是那件事**的东西满足"。这条更正**加强**了判据
-    //    （原来任何 `order` 都能满足它，现在它专门禁止手牌区用 `order`）。
+    /* ⚠️⚠️ **判据迁移（R21）—— 旧句为什么必须改，新句多查了什么**
+     *  · **旧句**：`appendChild(buildP0Hand(…)); hands.appendChild(buildP1Hand(…));` —— 要求两条
+     *    手牌**挂进同一个父容器**、且是**相邻的两条语句**。
+     *  · **为什么必须改**：R21 把**对手**那一块嵌进了对手信息块（用户："放进对手信息组件中，
+     *    而不是独立出来显示"）⇒ 两条手牌现在挂在**两个不同宿主**里，旧句必然找不到那个语句对
+     *    （实测直接报"找不到「同一父容器里先 append P0、再 append P1」的语句对"）。
+     *  · **新句多查了什么**：
+     *    ① 两条 `renderHand` 的调用顺序**仍在**（上面两条断言，一个字未改）；
+     *    ② 挂载点从"同一父容器相邻 append"改成"**槽位按侧别装 + 宿主顺序随座位**" ——
+     *       并新增钉住"`.hand` 前序顺序由宿主顺序保证"的两个承重点：
+     *       `(viewSeat === 0 ? selfSlot : foeSlot).appendChild(h0)`、以及 `buildLeftRail` 里
+     *       那个 `if (viewSeat === 0) { rail.appendChild(hands); rail.appendChild(pair); }`
+     *       （**顺序随座位换**是 R21 唯一可行的形态：先出现的那一个容器里必须装着 P0 ——
+     *       理由与三轮实测记录写在 `render-net.ts` 的 `buildHands` / `buildLeftRail` 头注里）。
+     *       少了任何一条，某个座位的 `querySelectorAll('.hand')` 就会变成 `[P1, P0]`。 */
+    expect(code, '槽位没有按侧别装（`selfSlot` 装自己那块、`foeSlot` 装对手那块）——'
+      + 'R21 之后两条手牌挂在两个宿主里，唯一的挂载入口就是这两个槽位')
+      .toMatch(/\(viewSeat === 0 \? selfSlot : foeSlot\)\.appendChild\(h0\);/);
+    expect(code, '槽位没有按侧别装（P1 那一侧）')
+      .toMatch(/\(viewSeat === 0 \? foeSlot : selfSlot\)\.appendChild\(h1\);/);
+    expect(code, '`buildLeftRail` 里的宿主顺序没有随座位换 —— 先出现的容器里必须装着 P0，'
+      + '否则某个座位的 querySelectorAll(".hand") 会得到 [P1, P0]')
+      .toMatch(/if \(viewSeat === 0\) \{[\s\S]{0,120}rail\.appendChild\(hands\);[\s\S]{0,60}rail\.appendChild\(pair\);/);
+    // 视觉归属必须是 CSS 的事：父容器带座位类；**手牌区的视觉位置由 `order` 表达**（R21）
     expect(code, '父容器未按座位加类（视觉归属应交给 CSS）').toContain('net-view-');
     const css = read('styles-net.css');
-    const orderOnHands = cssRules(css)
+    /* ⚠️⚠️ **判据迁移（R21）—— 旧句为什么必须改，新句多查了什么**
+     *  · **旧句**：`.net-hands` / `.net-hand-area` / `.hand` 的规则里**不许出现任何 `order`**
+     *    （R8-5 的"用 grid-row 按侧指派，`order` 已退役"）。
+     *  · **为什么必须改**：R21 的 DOM 顺序**被 `.hand` 红线锁死**（对手那块在信息块子树里 ⇒
+     *    先出现的容器随座位变），而用户要的视觉顺序是**固定**的（"信息组件在手牌区的上方"）
+     *    ⇒ 视觉顺序**只能**由 `order` 表达（`.net-left-rail > .net-info-pair { order: -1 }` /
+     *    `.net-left-rail > .net-hands { order: 1 }`）。旧句会把**正确**的实现判红。
+     *  · **新句多查了什么**：① 旧意图的**本体**保留并加强 —— **手牌区自己**（`.net-hand-area`）
+     *    仍然**不许**用 `order`（那才是"用 order 定位手牌区"这个被禁的形态）；
+     *    ② 新增：`order` 只允许出现在**两个容器的选择器**上，且**两条都必须在**
+     *    （只写一条会在某个座位翻车）；③ 观感上的"谁在上"现在有**两条腿**：DOM 顺序（随座位）
+     *    + `order`（固定）—— 两者一致时才正确，而这由 `net-left-rail.test.ts` 的 RAIL-1a
+     *    逐个座位钉住。 */
+    const orderOnHandArea = cssRules(css)
       .filter((r) => /(?:^|;|\s)order\s*:/.test(r.body))
-      .filter((r) => /net-hand-area|net-hands|\.hand\b/.test(r.selector));
-    expect(orderOnHands.map((r) => r.selector), '手牌区的上/下带自 R8-5 起由 `grid-row` 按侧指派'
-      + '（`order` 已退役）—— 再用 `order` 定位手牌就是两套真相（规格 §4 红线 7）').toEqual([]);
+      .filter((r) => /net-hand-area|\.hand\b/.test(r.selector));
+    expect(orderOnHandArea.map((r) => r.selector),
+      '手牌区/手牌**自己**被 `order` 定位了 —— R21 只允许在**左栏的两个容器**上用 `order` 表达'
+      + '"信息组件在上 / 手牌在下"，手牌区自己仍必须由容器决定位置（规格 §4 红线 7：不许两套真相）')
+      .toEqual([]);
+    const orderOnRailKids = cssRules(css)
+      .filter((r) => /(?:^|;|\s)order\s*:/.test(r.body))
+      .filter((r) => /net-left-rail\s*>\s*\.net-(?:info-pair|hands)/.test(r.selector));
+    console.log(`\n===== 6 · 左栏里用 order 表达视觉顺序的规则（${orderOnRailKids.length} 条）=====\n`
+      + orderOnRailKids.map((r) => `  ${r.selector} { ${r.body.trim()} }`).join('\n'));
+    expect(orderOnRailKids.length, '左栏里没有任何用 `order` 表达"信息组件在上 / 手牌在下"的规则 —— '
+      + 'DOM 顺序随座位变，没有它视觉顺序就是随机的').toBe(2);
+    expect(orderOnRailKids.map((r) => r.selector).join(' | '),
+      '两条 `order` 必须**成对**（`.net-info-pair` 提上去、`.net-hands` 压下去）')
+      .toContain('.net-left-rail > .net-info-pair');
     // display:none 的检查**扩到所有承载/就是手牌的节点**（评审变异 D-1：只查 `.net-hands` 时
     // `.net-hand-side-foe { display:none }` 仍然全绿，而它正是"rect 全 0"的真实危险形态）。
     // 这里用"对合成 CSS 的阳性/阴性对照"证明仪器本身有判别力，再对真实样式表跑一遍。

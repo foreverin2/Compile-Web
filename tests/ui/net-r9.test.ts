@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createGame } from '../../src/core/state/create';
-import { renderNetBoard } from '../../src/ui/render-net';
+import { renderNetBoard, NET_BOTTOM_SIDES } from '../../src/ui/render-net';
 import { setFxViewSeat } from '../../src/ui/fx-seat';
 import {
   assertNoUnmodelableCascade, cssLenOf, cssPropOf, cssRules, cssVarOf,
@@ -422,45 +422,63 @@ describe('R9-2 · G-11：三列精确居中', () => {
    * `.net-board` 的三条轨道改为"左栏 | 放置区 | 右空"。**
    *
    * 历史：R11-2/3 时这条钉的是 `.net-board` 的**四列**（自己块 · 弹性 · 对手块 · 张数）；
-   * R12-7 改成"三条内容宽轨道 + `justify-content: center`"（三块紧挨着、整组居中）。
-   * **旧句为什么必须改**：R19 把三块搬进 `.net-dock`（flex 行，见 styles-net.css 第 6 节）
-   * ⇒ "三块紧挨着"由 `.net-dock` 的 `gap` + `justify-content: flex-end` 表达，
-   * `.net-board` 的轨道已经装的是别的东西（左栏 / 放置区 / 右空）。旧句（要求三条**内容宽**
-   * 轨道、不许有 `fr`、且 `justify-content: center`）会把**正确**的实现判红。
-   * **新句多查了什么**：① `.net-board` 的三条轨道**必须**是"弹性 · `auto` · 弹性"（对称留白，
-   * 这是"放置区居中"的机制，G-11a 的数值腿是它的算术版本）；② "三块横排 + 整组右贴"这套职责
-   * **有人接**：`.net-dock` 的 `display: flex` / `justify-content: flex-end` / `gap`；
-   * ③ 三块**不再**各自被 `grid-column` 指派（退役要退干净 —— 半留状态 = 同一件事两套真相，
-   * 那正是"改一处忘一处时页面照样看着对"的温床）。
+   * R12-7 改成"三条内容宽轨道 + `justify-content: center`"；R19 改成"三块进 `.net-dock`"。
+   * **旧句为什么必须改（R21）**：用户把两块信息组件挪到左栏顶部（`.net-info-pair`）、
+   * 自己手牌区留在左栏、对手手牌区嵌进对手信息块 ⇒ `.net-dock` **退役**。
+   * "两块**紧挨在一起**"现在由 `.net-info-pair` 的 `gap` + `flex-wrap: wrap` +
+   * 子项 `flex: 0 0 auto`（**不许压扁** —— 用户在截图里点名的缺陷）表达。
+   * **新句多查了什么**：① `.net-board` 的三条轨道仍是"弹性 · `auto` · 弹性"（对称留白，
+   * 放置区居中的机制，G-11a 是它的数值腿）；② "两块横排 + 紧挨 + 不压扁"这套职责**有人接**：
+   * `.net-info-pair` 的 `display: flex` / `flex-wrap: wrap` / `gap` / 子项 `flex: 0 0 auto`；
+   * ③ 两块**不再**各自被 `grid-column` 指派（退役要退干净）；④ `.net-dock` **不许再出现**。
    */
-  it('G-11c. 停靠栏三块的横排几何搬到了 `.net-dock`（flex 行 + 整组右贴）；`.net-board` 的三条轨道 = 左栏 | 放置区 | 右空', () => {
+  it('G-11c. 两块信息组件的横排几何搬到了 `.net-info-pair`（flex row + wrap + 不压扁）；`.net-board` 的三条轨道 = 左栏 | 放置区 | 右栏', () => {
     const b = board();
     const tracks = gridTracks(subjectPropOf(b, [b], RULES, 'grid-template-columns')!);
-    console.log(`\n===== G-11c · .net-board 的列模板（R19）= ${tracks.join(' | ')}`);
+    console.log(`\n===== G-11c · .net-board 的列模板（R19/R21）= ${tracks.join(' | ')}`);
     expect(tracks.length, '`.net-board` 的轨道数不是 3').toBe(3);
     expect(tracks[0], '第 1 条轨道不是弹性留白').toMatch(/\d?fr\b/);
     expect(tracks[1], '第 2 条轨道（放置区）不是 `auto`').toBe('auto');
     expect(tracks[2], '第 3 条轨道不是弹性留白').toMatch(/\d?fr\b/);
     expect(tracks[0], '两条留白必须同值（否则放置区不居中）').toBe(tracks[2]);
-    // ② "三块横排 + 整组右贴"的接棒者
-    const dock = cssNode('net-dock');
-    const dockChain = [b, dock];
-    expect(subjectPropOf(dock, dockChain, RULES, 'display'), '`.net-dock` 不是 flex 容器')
+    // ② "两块横排 + 紧挨 + 不压扁"的接棒者
+    const pair = cssNode('net-info-pair');
+    const block = cssNode('net-info-block');
+    block.dataset.netSeat = 'self';
+    const railNode = cssNode('net-left-rail');
+    const pairChain = [b, railNode, pair];
+    expect(subjectPropOf(pair, pairChain, RULES, 'display'), '`.net-info-pair` 不是 flex 容器')
       .toBe('flex');
-    expect(subjectPropOf(dock, dockChain, RULES, 'flex-direction'), '`.net-dock` 不是横排（用户第 ① 条"仍横排"）')
+    expect(subjectPropOf(pair, pairChain, RULES, 'flex-direction'), '`.net-info-pair` 不是横排')
       .toBe('row');
-    expect(subjectPropOf(dock, dockChain, RULES, 'justify-content'),
-      '`.net-dock` 的整组没有右贴（"最右边紧挨着中间的放置区域"）').toBe('flex-end');
-    expect(cssLenOf(dockChain, RULES, subjectPropOf(dock, dockChain, RULES, 'gap') ?? ''),
-      '`.net-dock` 没有三块之间的间距（会粘成一坨）').toBeGreaterThan(0);
-    // ③ 三块**不再**被 grid-column 指派（退役要退干净）
+    expect(subjectPropOf(pair, pairChain, RULES, 'flex-wrap'),
+      '`.net-info-pair` 没有 `flex-wrap: wrap` —— 窄栏里两块会被压扁（用户截图里的缺陷）').toBe('wrap');
+    expect(cssLenOf(pairChain, RULES, subjectPropOf(pair, pairChain, RULES, 'gap') ?? ''),
+      '`.net-info-pair` 没有两块之间的间距（会粘成一堵墙）').toBeGreaterThan(0);
+    // ⚠️ **"不许压扁"的机制本体**：`flex: 0 0 auto`（简写）—— 本仓的解析器**不展开简写**，
+    //    所以判据是"从规则体里把 `flex` / `flex-shrink` 解出来"，而不是断言某个属性名恰好有值
+    //    （用户明确要求"解算 `flex: 0 0 auto` **或等价声明**"）。
+    const blockRule = RULES.find((r) => r.selector.trim() === '.net-info-pair > .net-info-block');
+    expect(blockRule, 'styles-net.css 里找不到 `.net-info-pair > .net-info-block` 的规则'
+      + '（"不许压扁"这条裁决没有声明）').toBeTruthy();
+    const flexDecl = /(?:^|;|\s)flex\s*:\s*([^;]+)/.exec(blockRule!.body)?.[1].trim() ?? '';
+    const shrinkDecl = /(?:^|;|\s)flex-shrink\s*:\s*([^;]+)/.exec(blockRule!.body)?.[1].trim() ?? '';
+    const notShrinkable = /^0\s+0\s+auto$/.test(flexDecl) || flexDecl === 'none' || shrinkDecl === '0';
+    expect(notShrinkable, '`.net-info-pair > .net-info-block` 不是"不可压缩"的 —— 两块会被压扁'
+      + `（实际 flex=\`${flexDecl}\` / flex-shrink=\`${shrinkDecl}\`；必须是 \`flex: 0 0 auto\` 或等价的 `
+      + '`flex-shrink: 0`）。用户截图里"自己那块被压成一条缝"就是这个形态').toBe(true);
+    // ③ 两块**不再**被 grid-column 指派（退役要退干净）
     const staleColumnRules = RULES.filter((r) =>
       /(?:^|;|\s)grid-column\s*:/.test(r.body)
       && /\.net-info-block|\.net-hand-area/.test(r.selector));
     expect(staleColumnRules.map((r) => r.selector),
-      'styles-net.css 里仍有给停靠栏组件派 `grid-column` 的规则 —— 它们现在住在 `.net-dock`（flex）里，'
+      'styles-net.css 里仍有给停靠栏组件派 `grid-column` 的规则 —— 它们现在住在 flex 容器里，'
       + '那些声明**不生效**（flex item 没有 grid placement），留着就是"看着在排版、其实什么都不做"的假代码')
       .toEqual([]);
+    // ④ **退役腿**：`.net-dock` 那条规则必须**真的不在**（半留状态 = "三块还在同排"的假证据）
+    expect(RULES.filter((r) => /(?:^|[\s,>])\.net-dock\b/.test(r.selector)).map((r) => r.selector),
+      'styles-net.css 里仍有 `.net-dock` 的规则 —— R21 之后三块不再同排（两块进 `.net-info-pair`、'
+      + '自己手牌区留左栏、对手手牌区嵌进对手信息块），留着它就是"三块还在同排"的假证据').toEqual([]);
     // 反空集合：这两块信息块 / 手牌区**真的**还在（否则上面几条是空判据）
     expect(cssNode('net-info-block').cls).toContain('net-info-block');
   });
@@ -509,14 +527,20 @@ describe('R9-3 · G-12：手牌与信息块并盒（同一行）', () => {
           }
         };
         visit(board);
-        // ⚠️ **新增（R19，反空集合）**：`.net-dock` 必须是 `.net-board` 里**唯一**有盒子的
-        //    停靠栏容器，且它自己**不是** `display: contents`（它是 flex 行 —— 三块靠它横排）。
-        const dock = flat.filter((n) => isClass(n, 'net-dock'));
-        expect(dock.length, `viewSeat=${seat}：展平后 .net-board 下没有 .net-dock（R19 的三块容器）`)
+        // ⚠️ **反空集合（R19 → **R21 改对象**）**：`.net-board` 里必须有**唯一**的 `.net-info-pair`
+        //    （两块信息组件的整体），且它**不是** `display: contents`（它是 flex 行 —— 两块靠它横排）。
+        //    ⚠️ **旧句为什么必须改**：旧句查 `.net-dock`（R19 的"三块横排"容器）—— 那个类**已退役**
+        //    （R21 把三块拆开：两块进 `.net-info-pair`、自己手牌区留左栏、对手手牌区嵌进对手信息块）。
+        //    **新句多查了什么**：① 对象换成 `.net-info-pair`；② **新增**"`.net-dock` 不许再出现"
+        //    （退役要退干净 —— 半留状态就是"三块还在同排"的假证据）。
+        const pair = flat.filter((n) => isClass(n, 'net-info-pair'));
+        expect(pair.length, `viewSeat=${seat}：展平后 .net-board 下没有 .net-info-pair（R21 的两块信息组件容器）`)
           .toBe(1);
-        expect(subjectPropOf(dock[0], chainOf(dock[0]), RULES, 'display'),
-          '`.net-dock` 被写成了 `display: contents` —— 那样三块会各自成为 `.net-board` 的 grid item，'
-          + '"整组横排 + 右贴"完全失效（而外观上像还在）').toBe('flex');
+        expect(subjectPropOf(pair[0], chainOf(pair[0]), RULES, 'display'),
+          '`.net-info-pair` 被写成了 `display: contents` —— 那样两块信息组件会各自成为 flex/grid item，'
+          + '"两块紧挨在一起"完全失效（而外观上像还在）').toBe('flex');
+        expect(descendants(root).filter((n) => isClass(n, 'net-dock')).length,
+          `viewSeat=${seat}：.net-dock 又出现了（R21 已退役：三块不再同排）`).toBe(0);
 
         const infoOf = (side: 'foe' | 'self'): StubNode => {
           const hit = flat.filter((n) => isClass(n, 'net-info-block') && n.dataset.netSeat === side);
@@ -532,6 +556,7 @@ describe('R9-3 · G-12：手牌与信息块并盒（同一行）', () => {
         };
         const rowOf = (n: StubNode): string | null => subjectPropOf(n, chainOf(n), RULES, 'grid-row');
         const colOf = (n: StubNode): string | null => subjectPropOf(n, chainOf(n), RULES, 'grid-column');
+        const leftRailEl = descendants(root).find((n) => isClass(n, 'net-left-rail'))!;
 
         for (const side of ['foe', 'self'] as const) {
           const info = infoOf(side);
@@ -540,63 +565,82 @@ describe('R9-3 · G-12：手牌与信息块并盒（同一行）', () => {
           const handRow = rowOf(hand);
           console.log(`  viewSeat=${seat} · ${side}：信息块 grid-row=${String(infoRow)} grid-column=${String(colOf(info))}`
             + ` / 手牌区 grid-row=${String(handRow)} grid-column=${String(colOf(hand))}`);
-          // ⚠️⚠️ **判据迁移（R19）—— 旧句为什么必须改，新句多查了什么**
-          //  · **旧句**：解 `.net-info-block` / `.net-hand-area` 自己的 `grid-row` 必须**相等且非空**
-          //    （R9-3 的"信息块与手牌并盒、同一行"），并解各自的 `grid-column`（1 / 2 / 3）。
-          //  · **为什么必须改**：R19 把三块搬进 `.net-dock`（**flex 行**）—— 它们不再是
-          //    `.net-board` 的 grid item ⇒ 那四条 `grid-row` / `grid-column` **已退役**
-          //    （留着就是同一件事两套真相，见 styles-net.css 第 1 节的退役记录）。
-          //    继续钉它们会把**正确**的实现判红。
-          //  · **新句多查了什么**：① **同一个盒子**（R9-3 的裁决本体）现在由"三块都在 `.net-dock`
-          //    这一个 flex 容器里、且它是 `display: flex`"表达（比"解出同一个行号"更直接：
-          //    行号可以被另一条规则悄悄改掉，而"父节点是不是那一个 flex 盒"不会）；
-          //    ② 三块**横排**由容器的 `flex-direction: row` 钉住（旧形态下那是 `grid-column` 的活）；
-          //    ③ 左右次序由 **DOM 顺序**表达（自己块在前、对手块在后 —— `NET_BOTTOM_SIDES`），
-          //    而旧句用的是"列号更小"（flex 行里没有列号）。
-          const dockOf = (n: StubNode): StubNode | null => n.parentElement;
-          expect(hand.parentElement, `viewSeat=${seat} · ${side} 侧：手牌区的父节点不是 .net-hands`
-            + '（R19 只搬容器，不搬手牌区与 .net-hands 的父子关系）')
-            .toBe(descendants(dock[0]).find((n) => isClass(n, 'net-hands'))!);
-          // 三块在**同一个** flex 容器下（经各自的 `display: contents` 父节点）
-          // —— 这才是 R9-3"纳入同一个组件"在 R19 形态下的说法。
-          expect(chainOf(info).includes(dock[0]), `viewSeat=${seat} · ${side} 侧：信息块的祖先链上没有 .net-dock`)
+          /* ⚠️⚠️ **判据迁移（R19 → R21）—— 旧句为什么必须改，新句多查了什么**
+           *  · **旧句（R9-3）**：解 `.net-info-block` / `.net-hand-area` 自己的 `grid-row` 必须
+           *    **相等且非空**（"信息块与手牌并盒、同一行"）+ `grid-column`（1 / 2 / 3）。
+           *  · **R19 改过一次**：三块进 `.net-dock`（flex 行）⇒ 解"三块都在同一个 flex 容器里"。
+           *  · **R21 必须再改**：三块**不再同排** —— 两块信息组件进 `.net-info-pair`、
+           *    自己手牌区留左栏、**对手手牌区嵌进对手信息块**（用户："放进对手信息组件中，
+           *    而不是独立出来显示"）⇒ `.net-dock` 退役，R19 那套判据的对象**没有了**。
+           *  · **新句多查了什么**：① R9-3 的裁决本体（"信息块与手牌区在**同一个盒子**里"）
+           *    保留并**加强** —— 对手那一侧现在是**真后代**（`chainOf(hand).includes(对手信息块)`），
+           *    比 R19 的"同一个 flex 容器"更强（那是兄弟关系，这是父子关系）；
+           *    ② 自己那一侧的对应关系换成"手牌区在 `.net-hands` 里、`.net-hands` 在左栏里"；
+           *    ③ **两侧都在 `.net-left-rail` 里**（用户："一齐放在手牌区的上方"）。 */
+          const pairEl = pair[0];
+          expect(chainOf(info).includes(pair[0]), `viewSeat=${seat} · ${side} 侧：信息块的祖先链上没有 .net-info-pair`)
             .toBe(true);
-          expect(chainOf(hand).includes(dock[0]), `viewSeat=${seat} · ${side} 侧：手牌区的祖先链上没有 .net-dock`)
-            .toBe(true);
-          expect(dockOf(descendants(dock[0]).find((n) => isClass(n, 'net-bottom'))!),
-            `viewSeat=${seat} · ${side} 侧：.net-bottom 的直接父节点不是 .net-dock`
-            + '（三块必须同排在一个盒子里）').toBe(dock[0]);
+          if (side === 'foe') {
+            // ② **R21 的核心裁决**：对手手牌区是**对手信息块的后代**（父子树关系，不只是同一个容器）
+            expect(chainOf(hand).includes(info),
+              `viewSeat=${seat}：对手手牌区不是对手信息块的**后代** —— 用户 R21 的裁决是把它`
+              + '"放进对手信息组件中，而不是独立出来显示"（同级并排不算）').toBe(true);
+          } else {
+            // 自己那一侧：手牌区在 `.net-hands` 里，而 `.net-hands` 在左栏里
+            const handsRoot = descendants(root).find((n) => isClass(n, 'net-hands'))!;
+            expect(chainOf(hand).includes(handsRoot),
+              `viewSeat=${seat}：自己手牌区不在 .net-hands 里`).toBe(true);
+            expect(chainOf(handsRoot).includes(leftRailEl),
+              `viewSeat=${seat}：.net-hands 不在左栏里（"自己手牌区留在左栏"没有落地）`).toBe(true);
+          }
         }
-        // ④ 三块的**DOM 顺序**：自己信息块 → 手牌区 → 对手信息块（`NET_BOTTOM_SIDES` 的唯一出处），
-        //    而"谁在左、谁在右"由 flex 行方向直接读 DOM（旧形态下那条判据是"列号更小"）。
-        const dockOrder = dock[0].children.filter((n) => isClass(n, 'net-bottom'))
+        // ④ 两块信息组件的 **DOM 顺序** = `NET_BOTTOM_SIDES`（`['self','foe']`），
+        //    而"谁在左、谁在右"由 `.net-info-pair` 的 flex 行方向直接读 DOM。
+        const pairOrder = pair[0].children.filter((n) => isClass(n, 'net-bottom'))
           .flatMap((row) => row.children)
-          .map((n) => (isClass(n, 'net-info-block') ? String(n.dataset.netSeat)
-            : isClass(n, 'net-hands') ? 'hands' : '?'));
-        console.log(`  viewSeat=${seat} · .net-dock 里的三块（DOM 顺序）: ${dockOrder.join(' → ')}`);
-        expect(dockOrder, `viewSeat=${seat}：停靠栏三块的 DOM 顺序必须是`
-          + ` [self, hands, foe]（自己块在左、对手块在右）`).toEqual(['self', 'hands', 'foe']);
+          .map((n) => (isClass(n, 'net-info-block') ? String(n.dataset.netSeat) : '?'));
+        console.log(`  viewSeat=${seat} · .net-info-pair 里的两块（DOM 顺序）: ${pairOrder.join(' → ')}`);
+        expect(pairOrder, `viewSeat=${seat}：两块信息组件的 DOM 顺序必须等于 NET_BOTTOM_SIDES`
+          + `（[${NET_BOTTOM_SIDES.join(', ')}]）`).toEqual([...NET_BOTTOM_SIDES]);
 
-        /* ── ⑤ **几何腿**（R9-3 收口 · 评审 I-2；**R12-7 改写**；**R19 再改写**）──
-              历史：R9-3 查"手牌 `1 / -1`"、R12-7 查"三条内容宽轨道 + 整组居中"。
-              **R19**：三块住在 `.net-dock`（flex）里 ⇒ 这条腿的对象换成**那个容器**的几何：
-              横排（`flex-direction: row`）、整组**右贴**（`justify-content: flex-end`）、
-              底边对齐（`align-items: flex-end`）、三块之间有 `gap`。
-              ⚠️ **保留的那条推导**：`2 / -1` 会把手牌区间扩到 `[c1, B]`、中心右移 `c1/2` ——
-              它在 R19 里**没有对象了**（手牌不再被指派列），但它当初要防的错法
-              （"看起来更整齐"的写法把某一块推开）现在由 `justify-content` 的判据承担。 */
+        /* ── ⑤ **几何腿**（R9-3 → R12-7 → R19 → **R21 第四次改写**）──
+              历史：R9-3 查"手牌 `1 / -1`"、R12-7 查"三条内容宽轨道 + 整组居中"、
+              R19 查"`.net-dock` 的 flex 行 + 整组右贴"。
+              **R21**：对象换成 `.net-info-pair` —— 横排（`flex-direction: row`）、
+              **不许压扁**（`flex-wrap: wrap` + 子项 `flex: 0 0 auto`：用户给的优先级是
+              "宁可换行，也不许把信息块挤扁"）、两块之间有 `gap`（"紧挨在一起"）。
+              ⚠️ **保留下来的那条推导**：`2 / -1` 会把手牌区间扩到 `[c1, B]`、中心右移 `c1/2` ——
+              它在 R19/R21 里**没有对象了**（手牌不再被指派列），但它当初要防的错法
+              （"看起来更整齐"的写法把某一块推开）现在由 `flex-wrap` 的判据承担。 */
         {
-          const dockChain = [board, dock[0]];
-          const dd = (prop: string): string | null => subjectPropOf(dock[0], dockChain, RULES, prop);
-          expect(dd('display'), '停靠栏三块的容器不是 flex（"仍横排"这条裁决没了机制）').toBe('flex');
-          expect(dd('flex-direction'), '停靠栏三块不是横排（`flex-direction: row`）').toBe('row');
-          expect(dd('justify-content'), '停靠栏三块没有整组**右贴**（用户："最右边紧挨着中间的放置区域"）')
-            .toBe('flex-end');
-          expect(dd('align-items'), '停靠栏三块的底边没有对齐（手牌那一块会悬空）').toBe('flex-end');
-          const gap = cssLenOf(dockChain, RULES, dd('gap') ?? '');
-          expect(gap, '停靠栏三块之间没有间距（会粘成一坨）').toBeGreaterThan(0);
-          console.log(`  viewSeat=${seat} · R19：.net-dock = flex/row/justify-content: flex-end/`
-            + `align-items: flex-end/gap: ${String(gap)}px`);
+          const pairChain = [board, leftRailEl, pair[0]];
+          const pp = (prop: string): string | null => subjectPropOf(pair[0], pairChain, RULES, prop);
+          expect(pp('display'), '两块信息组件的容器不是 flex（"一齐放……紧挨在一起"没了机制）').toBe('flex');
+          expect(pp('flex-direction'), '两块信息组件不是横排（`flex-direction: row`）').toBe('row');
+          expect(pp('flex-wrap'), '`.net-info-pair` 没有 `flex-wrap: wrap` —— 窄栏里两块会被**压扁**'
+            + '（用户给的优先级："宁可换行，不许挤扁"）').toBe('wrap');
+          const gap = cssLenOf(pairChain, RULES, pp('gap') ?? '');
+          expect(gap, '两块信息组件之间没有间距（会粘成一堵墙）').toBeGreaterThan(0);
+          // ⚠️ **"不许压扁"的机制本体**：两块各自 `flex: 0 0 auto`（`flex-shrink` 解出 0）。
+          //    ⚠️ 本仓的解析器**不展开 `flex` 简写** ⇒ 先去规则体里把简写解出来再判，
+          //    而不是断言"某条属性恰好等于某个字符串"（那会认写法不认行为 —— 用户明确要求
+          //    "解算 `flex: 0 0 auto` **或等价声明**"）。
+          const selfBlk = infoOf('self');
+          const blockRule = RULES.find((r) => r.selector.trim() === '.net-info-pair > .net-info-block');
+          expect(blockRule, 'styles-net.css 里找不到 `.net-info-pair > .net-info-block` 的规则'
+            + '（"不许压扁"这条裁决没有声明）').toBeTruthy();
+          const flexDecl = /(?:^|;|\s)flex\s*:\s*([^;]+)/.exec(blockRule!.body)?.[1].trim() ?? '';
+          const shrinkDecl = /(?:^|;|\s)flex-shrink\s*:\s*([^;]+)/.exec(blockRule!.body)?.[1].trim() ?? '';
+          console.log(`  viewSeat=${seat} · .net-info-pair > .net-info-block: flex=${flexDecl}`
+            + ` flex-shrink=${shrinkDecl}`);
+          // `flex: 0 0 auto` / `flex: none`（= 0 0 auto）都算"不压扁"；单独 `flex-shrink: 0` 也算
+          const notShrinkable = /^0\s+0\s+auto$/.test(flexDecl) || flexDecl === 'none' || shrinkDecl === '0';
+          expect(notShrinkable, '`.net-info-pair > .net-info-block` 不是"不可压缩"的 —— 两块会被压扁'
+            + `（实际 flex=\`${flexDecl}\` / flex-shrink=\`${shrinkDecl}\`；`
+            + '必须是 `flex: 0 0 auto` 或等价的 `flex-shrink: 0`）。用户截图里"自己那块被压成一条缝"就是它')
+            .toBe(true);
+          console.log(`  viewSeat=${seat} · R21：.net-info-pair = flex/row/wrap/gap: ${String(gap)}px`
+            + ` + 两块 flex-shrink: 0`);
         }
       }
     } finally {
@@ -647,27 +691,34 @@ describe('R9-3 · G-12：手牌与信息块并盒（同一行）', () => {
         // ③ 反空集合：这一帧里**真的**有导出按钮（它是"看日志"的唯一去处）
         expect(board.children.filter((n) => isClass(n, 'diag-btn')).length,
           `viewSeat=${seat}：这一帧里没有 .diag-btn`).toBe(1);
-        // ④ **停靠栏三块在左栏里**（R19 取代"两块信息块 + 两块手牌区都解出第 3 行"）
-        //    ⚠️ **判据迁移（R19）——旧句为什么必须改，新句多查了什么**
-        //     · **旧句**：三块各自的 `grid-row` 必须 == `'3'`（R11-2 的三行表）。
-        //     · **为什么必须改**：R19 把三块搬进 `.net-dock`（flex）⇒ 它们不再是 grid item，
-        //       那四条 `grid-row` 已退役（半留状态 = 同一件事两套真相）。
-        //     · **新句多查了什么**：① 三块的祖先链上**都有** `.net-dock` 与 `.net-left-rail`
-        //       （结构面：它们在左栏那个横排整体里）；② `.net-dock` / `.net-left-rail` 各自
-        //       **恰好一块**（多一块 = 同族节点被复制）。
+        // ④ **两块信息组件 + 两块手牌区都在左栏里**（R19 建立左栏 → **R21 换装 `.net-info-pair`**）
+        //    ⚠️ **判据迁移（R19 → R21）——旧句为什么必须改，新句多查了什么**
+        //     · **旧句（R11-2）**：三块各自的 `grid-row` 必须 == `'3'`（三行表）。
+        //     · **R19 改过一次**：三块进 `.net-dock`（flex）⇒ 解"祖先链上有 `.net-dock`"。
+        //     · **R21 必须再改**：`.net-dock` 退役（三块不再同排）⇒ 判据的对象换成
+        //       `.net-info-pair`（两块信息组件）+ `.net-left-rail`（它们的共同祖先）；
+        //       手牌区则**不再与信息组件同容器**（对手那块嵌进信息块、自己那块在 `.net-hands`）。
+        //     · **新句多查了什么**：① 两块**信息组件**的祖先链上有 `.net-info-pair` 与 `.net-left-rail`；
+        //       ② 两块**手牌区**的祖先链上都有 `.net-left-rail`（"一齐放在手牌区的上方……不影响其他组件"
+        //       说的是它们同处左栏）；③ `.net-info-pair` 恰好一块、`.net-dock` **一个都没有**。
         const leftRail = descendants(root).find((n) => isClass(n, 'net-left-rail'));
         expect(leftRail, `viewSeat=${seat}：元素树里找不到 .net-left-rail`).toBeTruthy();
+        expect(descendants(root).filter((n) => isClass(n, 'net-info-pair')).length,
+          `viewSeat=${seat}：.net-info-pair 不是恰好一块`).toBe(1);
         expect(descendants(root).filter((n) => isClass(n, 'net-dock')).length,
-          `viewSeat=${seat}：.net-dock 不是恰好一块`).toBe(1);
+          `viewSeat=${seat}：.net-dock 又出现了（R21 已退役）`).toBe(0);
         for (const sel of ['net-info-block', 'net-hand-area'] as const) {
           const nodes = descendants(root).filter((n) => isClass(n, sel));
           expect(nodes.length, `viewSeat=${seat}：${sel} 的个数不是 2`).toBe(2);
           for (const n of nodes) {
             const chain = ancestorsOf(root, n);
-            expect(chain.some((x) => isClass(x, 'net-dock')),
-              `viewSeat=${seat}：${sel}（${String(n.dataset.netSeat ?? n.dataset.player)}）不在 .net-dock 里`).toBe(true);
+            const tag = `${sel}（${String(n.dataset.netSeat ?? n.dataset.player)}）`;
             expect(chain.some((x) => isClass(x, 'net-left-rail')),
-              `viewSeat=${seat}：${sel}（${String(n.dataset.netSeat ?? n.dataset.player)}）不在左栏里`).toBe(true);
+              `viewSeat=${seat}：${tag}不在左栏里`).toBe(true);
+            if (sel === 'net-info-block') {
+              expect(chain.some((x) => isClass(x, 'net-info-pair')),
+                `viewSeat=${seat}：${tag}不在 .net-info-pair 里（两块信息组件必须紧挨在一起）`).toBe(true);
+            }
           }
         }
       }
@@ -719,3 +770,4 @@ describe('R9-3 · G-12：手牌与信息块并盒（同一行）', () => {
     }
   });
 });
+

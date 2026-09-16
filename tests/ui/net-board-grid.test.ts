@@ -304,9 +304,16 @@ describe('R8-5 / R8-6 / R9-1 / R9-3 / **R19**：网格行序与列指派 · 控�
               `viewSeat=${seat}：${sel} 仍是 .net-board 的顶层 grid item —— 它必须缩在左栏里`).toBe(false);
           }
         }
-        // ⑤ 反空集合：三块真的都在 `.net-dock` 里（否则上面几条是空判据）
+        // ⑤ 反空集合：两块信息组件真的都在 `.net-info-pair` 里（否则上面几条是空判据）
+        //    ⚠️ **R21**：这里原来查的是 `.net-dock`（R19 的"三块横排"容器）—— 那个类**已退役**
+        //    （两块信息块进 `.net-info-pair`、自己手牌区留左栏、对手手牌区嵌进对手信息块）。
+        //    判据因此换成 `.net-info-pair`，并**新增**一条"`.net-dock` 不许再出现"（退役要退干净）。
+        const pairs = descendants(root).filter((n) => isClass(n, 'net-info-pair'));
+        expect(pairs.length, `viewSeat=${seat}：.net-info-pair 不是恰好一块（实际 ${pairs.length}）`).toBe(1);
+        expect(descendants(pairs[0]).filter((n) => isClass(n, 'net-info-block')).length,
+          `viewSeat=${seat}：.net-info-pair 里不是恰好两块信息组件`).toBe(2);
         expect(descendants(root).filter((n) => isClass(n, 'net-dock')).length,
-          `viewSeat=${seat}：.net-dock 不是恰好一块`).toBe(1);
+          `viewSeat=${seat}：.net-dock 又出现了（R21 已退役：三块不再同排）`).toBe(0);
       }
     } finally {
       await drainRaf();

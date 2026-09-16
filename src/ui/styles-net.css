@@ -7,29 +7,33 @@
  *   → 自己协议（逆时针 90°）→ 自己链路（卡 0°、越新越下）→ 自己能量槽
  * 它等价于把热座页的"每条线一行"整体旋转 −90°（推导见设计说明 §1），故**整体更窄更高**。
  *
- * **左右两栏 + 一行**（**R19** 起；R8-5 / R8-7 曾是五行，R9-3 并盒后是四行，R11-2 起是三行）
+ * **左右两栏 + 一行**（**R19** 起；**R21 把放大框换到右栏、两块信息组件换到左上**）
  * ——`.net-board` 是**三列 grid**（`minmax(0, 1fr) auto minmax(0, 1fr)`：左空 | 放牌区 | 右空，**一行**）：
- *   左栏 `.net-left-rail`（**卡牌放大框**在上 · `.net-dock` 的三块停靠组件在下）
+ *   左栏 `.net-left-rail`（**两块信息组件** `.net-info-pair` 在上 · **自己手牌区**在下）
  *   · 中列 `.net-grid`（三条链路 + 控制轨，**恒在页面水平中心**、占满整页高）
- *   · 右列空（与左栏等宽 ⇒ 中列居中的机制）。
- * 用户原话（本轮）："把己方牌堆以及弃牌堆、手牌区、对方牌堆以及弃牌堆这三个组件平移挪到左边区域，
- * 直至这三个组件的最右边紧挨着中间的放置区域……然后为页面左上角也就是三大组件移动后的上方
- * 新加一个卡牌放大框，同时还能显示当前卡牌的中文文本信息……具体可参考图鉴中的那个展示框。"
- * ⚠️ **DOM 只多包了一层**（`.net-dock`）；`.net-bottom` 与 `.net-hands` **仍是** `display: contents`
- * （第 6 节），所以那三块停靠组件是**同一个 flex 盒子**（`.net-dock`）的子项 —— 横排、整组右贴。
+ *   · 右栏 `.net-right-rail`（**卡牌放大框**，贴顶）。
+ * 用户原话（**R21，本轮**）："右边的空间很大，所以我希望将……卡牌/协议放大框的位置挪到右边好了。……
+ * 我希望将己方的信息组件和对手的信息组件一齐放在手牌区的上方，也就是展示框之前的位置，让这两个
+ * 组件能够紧挨在一起的同时不影响其他组件。另外将图中手牌区右边的那个手牌乘五的对方信息放进
+ * 对手信息组件（……在手牌区组件右边的组件）中，而不是独立出来显示。"
+ * （R19 的原话见 git 历史：三块组件挪到左边 + 左上新增放大框 —— R21 是"放大框与信息组件对调"。）
+ * ⚠️ **DOM 的层级变化（R21）**：`display: contents` 的盒子从两个变成三个
+ * （`.net-bottom` / `.net-hands` / `.net-hand-slot`），而 `.net-dock` **退役**（三块不再同排）。
  * 为什么必须保留 contents（**承重**）：`.hand` 的 DOM 顺序恒为 `[P0, P1]`（FX 用
  * `querySelectorAll('.hand')[player]` **按下标**读手牌）——把对手的手牌搬进 DOM 更靠前的容器会让
  * 下标 0 变成对手的手牌，**全部手牌 FX 静默错位**。⇒ 视觉顺序**只能**由 CSS 表达。
  * 旧形态（R6/R7）：`.net-board` 是 flex column，底部行是 `信息块·手牌区·信息块` 的**左右三列**，
  * 顶部信息条已取消；`tests/ui/net-board-grid.test.ts` 的 G-7 是行/列序的机检腿
- * （R19 起它钉"左栏在第 1 列、放置区在第 2 列"，三块在左栏里那一条挪到
- * `tests/ui/net-left-rail.test.ts`）。
+ * （R19 起它钉"左栏在第 1 列、右栏在第 3 列、放置区在第 2 列"）。
  *
- * **容器层级**（G2 修正 **R7**；用户实机截图确认过它崩塌；**R19 重排**）：
- *   `.net-board`（**grid**，第 1 节）= `[.net-grid, .net-left-rail, .diag-btn, .net-preview-bar]`
- *   （DOM 顺序不变；`.diag-btn` / `.net-preview-bar` 都是 `position: fixed`，**不占行**）
- *     └─ `.net-left-rail`（flex column）= `[.net-zoom-box, .net-dock]`
- *          └─ `.net-dock`（flex row）= `.net-bottom`（contents）→ 信息块 · `.net-hands`（contents）· 信息块
+ * **容器层级**（G2 修正 **R7**；用户实机截图确认过它崩塌；**R19 建立两栏、R21 对调内容**）：
+ *   `.net-board`（**grid**，第 1 节）= `[.net-grid, .net-left-rail, .net-right-rail, .diag-btn, .net-preview-bar]`
+ *   （`.diag-btn` / `.net-preview-bar` 都是 `position: fixed`，**不占行**）
+ *     ├─ `.net-left-rail`（flex column / space-between）
+ *     │    ├─ `.net-info-pair`（flex row + wrap）→ `.net-bottom`（contents）
+ *     │    │      → 自己信息块 · 对手信息块（内部再嵌 `.net-hand-area-foe`）
+ *     │    └─ `.net-hands`（contents）→ `.net-hand-slot-self`（contents）→ 自己手牌区
+ *     └─ `.net-right-rail`（flex column）→ `.net-zoom-box`（卡牌放大框）
  *   `.net-grid` = 四个**并排**的显式轨道（3 条线 + 控制轨），**不含**任何停靠组件。
  *   ⚠️ 轨道数必须等于子节点数：R6 时 `.net-grid` 挂了 5 个子节点而模板只有 3 条 ⇒ 第 4/5 个
  *   成为**隐式列**，整页塌成"一行五格、下方大片空白"。行为腿在
@@ -304,25 +308,24 @@
   scrollbar-width: none;
 }
 
-/* ── **R19：左栏**（卡牌放大框 + 停靠栏三块）──
-   用户原话："把己方牌堆以及弃牌堆、手牌区、对方牌堆以及弃牌堆这三个组件平移挪到左边区域，
-   直至这三个组件的最右边紧挨着中间的放置区域，也就是能够完整漏出中间放置卡牌的区域为止，
-   然后为页面左上角也就是三大组件移动后的上方新加一个卡牌放大框"。
+/* ── **R19 左栏 / R21 重排**（两块信息组件在上 + 自己手牌区在下）──
+   R19 的用户原话："把己方牌堆以及弃牌堆、手牌区、对方牌堆以及弃牌堆这三个组件平移挪到左边区域，
+   直至这三个组件的最右边紧挨着中间的放置区域……"
+   R21 的追加裁决（本轮）："我希望将己方的信息组件和对手的信息组件一齐放在手牌区的上方，
+   也就是展示框之前的位置，让这两个组件能够紧挨在一起的同时不影响其他组件。"
+   （"展示框之前的位置" = **放大框搬走之后空出来的那个左上位置**。）
 
    三条承重声明（每一条都有对应的机检腿，见 `tests/ui/net-left-rail.test.ts`）：
     ① `grid-column: 1` —— 它在**第 1 列**（左），中列才是放置区；
     ② `justify-self: end` —— 它的**右缘贴住第 1 列的右缘**；而第 1 列的右缘与第 3 列的左缘
        由列模板 `minmax(0,1fr) auto minmax(0,1fr)` 保证**关于页中心对称**
        ⇒ 左栏右缘 = 放置区左缘（用户要的"最右边紧挨着放置区"）；
-       ⚠️ **R19：删掉这一句也不会真的居中** —— 左栏在 `.net-board` 的 `justify-items: center` 下
-     会在**第 1 列**里居中，而第 1 列的宽由它自己的内容宽决定（`auto` 轨道）⇒ 它在列里本来就
-     贴着；但一旦列变宽（例如放置区那边把 `1fr` 抢走更多空间），"居中"就会让右缘**离开**
-     放置区左缘 ⇒ 与用户的"紧挨着"直接冲突。`justify-self: end` 是"右缘贴住列右缘"的**唯一**
-     出处，也是列宽变化时的**兜底**。
-    ③ `display: flex; flex-direction: column; gap` —— 纵向：放大框在上、`.net-dock` 在下。
-   ⚠️ 它**不能**是 `display: contents`：那样放大框与 `.net-dock` 会各自成为 `.net-board` 的
-   grid item（放大框被算进列宽、`.net-dock` 被扔进第 2 行自动放置）—— 结构腿会红。
-   ⚠️ `min-width: 0`：左栏里最长的那一项（手牌行）不许把中列挤扁。 */
+       ⚠️ 删掉这一句 ⇒ 左栏在 `justify-items: center` 下会在列里居中，右缘**离开**放置区左缘。
+    ③ `display: flex; flex-direction: column; justify-content: space-between`
+       —— 纵向：`.net-info-pair`（两块信息组件）在**上**、自己手牌区在**下**（用户："不影响其他组件"）。
+   ⚠️ 它**不能**是 `display: contents`：那样 `.net-info-pair` 与 `.net-hands` 会各自成为
+   `.net-board` 的 grid item（被算进列宽、被自动放置）—— 结构腿会红。
+   ⚠️ `min-width: 0`：左栏里最长的那一项（信息组件对 / 手牌行）不许把中列挤扁。 */
 .net-board .net-left-rail {
   grid-row: 1;
   grid-column: 1;
@@ -330,12 +333,104 @@
   align-self: stretch;
   display: flex;
   flex-direction: column;
-  /* 放大框贴顶（用户："页面左上角"）、停靠栏贴底（"三大组件移动后的上方"= 放大框在它们上面） */
+  /* 信息组件对贴顶、自己手牌区贴底（中间留白由 space-between 吃掉） */
   justify-content: space-between;
   gap: 6px;
   min-width: 0;
   min-height: 0;
 }
+
+/* ── **R21：右栏**（卡牌放大框）──
+   用户原话（R21）："右边的空间很大，所以我希望将……卡牌/协议放大框的位置挪到右边好了。"
+
+   与左栏**镜像**的两条承重声明：
+    ① `grid-column: 3` —— 它在**第 3 列**（右），中列是放置区；
+    ② `justify-self: start` —— 它的**左缘贴住第 3 列的左缘**（= 被放大框的左缘贴住放置区右缘）。
+   ⚠️ 为什么不是 `justify-self: end`：那会把它推到**视口最右**，与放置区之间空出整栏 ⇒
+   用户的"右边空间很大"会被填成"隔了一条河"。`start` 才是"贴着放置区"。
+   ⚠️ `align-self: stretch` + `flex column` + 无 `justify-content` ⇒ 框贴顶（`flex-start` 缺省）。
+   ⚠️ 放大框的**行为/内容/防泄露判据一个字未改**（它们由 `renderNetZoomBox` /
+   `fillNetZoomBox` / `netZoomContentFor` / `bindNetZoomBox` 负责，与它挂在哪一栏无关；
+   委托方用 `wrap.querySelector('.net-zoom-box')` 取值 ⇒ 换栏不需要改那一行）。 */
+.net-board .net-right-rail {
+  grid-row: 1;
+  grid-column: 3;
+  justify-self: start;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* ── **R21：两块信息组件的整体**（`.net-info-pair`）──
+   用户原话："将己方的信息组件和对手的信息组件一齐放在手牌区的上方……让这两个组件能够
+   **紧挨在一起**的同时**不影响其他组件**。"
+
+   ## 三条声明各挡什么
+    ① `display: flex; flex-direction: row` —— 两块**横排**（"一齐放在…上方"= 并排在同一处）；
+    ② `gap: 4px` —— "紧挨在一起"（不是零间距：零间距会让两块的 1px 边框贴成一堵墙）；
+    ③ **`flex-wrap: wrap`** —— 这一条是**优先级**的表达，见下。
+
+   ## ⚠️ 为什么必须 `flex-wrap: wrap`（**不许把任何一块压扁**）
+   用户给的优先级是明确的：**宁可让它们换行，也不许把信息块挤扁**（截图里自己那块被压成一条缝
+   就是 R20 的缺陷）。两块信息块的宽度由**内容**决定（它们没有 `flex-grow`），而 R20 那版把
+   `.net-info-pair` 当"一行三块"里的普通 flex 项 ⇒ 左栏变窄时 flex 的默认
+   `flex-shrink: 1` 会把两块**按比例压扁**（宽度掉到内容宽以下 ⇒ 计数行折成一列竖排）。
+   ⇒ 两条一起给：容器 `flex-wrap: wrap` + 子项 `flex: 0 0 auto`（见下一条规则）。
+   此时若两块的最小宽之和 > 左栏可用宽，**第二块换到下一行**（宽度仍是它自己的内容宽）。
+   ⚠️ 诚实边界：换行之后"两块不再并排"—— 那是**用户给的优先级**下的正确取舍
+   （"不影响其他组件"优先于"必须并排"）。左栏可用宽 ≥ 两块内容宽之和时不会触发（见报告里的算术）。
+   ⚠️ `justify-content: flex-end`：换行时整组仍**右贴**（与左栏右缘 = 放置区左缘一致）。 */
+.net-info-pair {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 4px;
+  min-width: 0;
+}
+/* ⚠️ **`flex: 0 0 auto` 是"不许压扁"的机制本体**（R21）—— 见 `.net-info-pair` 头注。
+   `flex-basis: auto` + `flex-shrink: 0` ⇒ 两块各自保持**内容宽**（上界由 `.net-info-block` 的
+   `max-width` 给），容器变窄时不会缩到内容宽以下。 */
+.net-info-pair > .net-info-block { flex: 0 0 auto; }
+
+/* ════════════════════════════════════════════════════════════════════════════
+ * **R21：左栏里的视觉顺序**（`order` 的唯一使用处 —— 它承担一个**结构性矛盾**）
+ *
+ * ## 矛盾是什么（两条约束同时成立、方向相反）
+ *  ① **DOM 顺序由 `.hand` 的红线锁死**：前序必须恒为 `[P0, P1]`（FX 按下标读手牌）。
+ *     而对手那一块**嵌在对手信息块内部**（用户 R21 的裁决）⇒ 信息块所在的 `.net-info-pair`
+ *     与 `.net-hands` 的先后**决定了前序里 P0/P1 的先后**（`viewSeat` 一变，"谁是 P0"就变）。
+ *     现在的解法（见 `render-net.ts` 的 `buildHands` / `buildLeftRail`）：
+ *     **槽位按侧别装** + **`.net-info-pair` 排在 `.net-hands` 之前** ⇒ 两个座位下前序都是 `[P0, P1]`。
+ *  ② **视觉顺序由用户裁决**：两块信息组件在**上方**、自己手牌区在**下方**
+ *     （"一齐放在手牌区的上方"）。
+ *  ⇒ 这两条**今天恰好一致**（信息对在前 = 视觉在上），但那是**巧合级**的一致：
+ *    DOM 顺序是**红线**的函数（随座位与宿主变化），而视觉要求是**固定的**。
+ *  ⇒ 所以把视觉顺序**显式声明**出来（下面两条 `order`），不再依赖"DOM 恰好排对了"。
+ *    `order` 只改**视觉**顺序、不改 DOM ⇒ 红线不受影响。
+ *
+ * ## 为什么是这两条（**不是 seat 分支，一套规则两个座位都对**）
+ *  ① `.net-left-rail > .net-info-pair { order: -1 }` —— 把信息组件对提到**最上**。
+ *     它指向"两块信息组件"那个盒子（与座位无关）。
+ *  ② `.net-left-rail > .net-hands { order: 1 }` —— 把它压到**最下**。
+ *     ⚠️ 这条的目标随座位变（`.net-hands` 里装的**永远是自己那一块**），但**规则不变**：
+ *     "把自己手牌压到最下"在两个座位下都是同一句话 —— 这正是**不需要** seat 分支的原因。
+ *  ⇒ 生效的视觉顺序恒为 `[.net-info-pair, <自己手牌区>]`。
+ *
+ * ⚠️ **为什么不用 `justify-content: space-between` 代替**：`space-between` 把两个 flex 项顶到
+ * 上下两端（"贴顶/贴底"用它），但**它不改变顺序** —— 顺序仍由 `order` 决定。两者分工：
+ * `order` 管**谁在上**，`space-between` 管**贴两端**。
+ * ⚠️ `order` 是本页**唯一**用于布局的 `order`（第 4 节的 `.battery-overflow { order: -1 }`
+ * 是**盒内**顺序，与"谁在哪一层"无关；R8-2 退役的是"用 order 表达跨层序"）。
+ * 判据：`tests/ui/net-left-rail.test.ts` 的 RAIL-1a（DOM 顺序 + 两条 order）与 RAIL-1b（红线）。
+ * ════════════════════════════════════════════════════════════════════════════ */
+.net-board .net-left-rail > .net-info-pair { order: -1; }
+.net-board .net-left-rail > .net-hands { order: 1; }
 
 /* ============================================================================
  * 2. 信息块（G2 修正 R6 / **R8-7：各占一整行**）
@@ -1030,48 +1125,51 @@ body.net-page .scan-overlay.scan-horiz .scan-line {
  * 条件块**，`R6-4` 已改成"不许再有 `@media`"的正面守卫。）
  * ========================================================================== */
 
-/* ── 两块"消失的盒子"（`display: contents`）──
+/* ── 两/三个"消失的盒子"（`display: contents`）──
    ⚠️ 它们**必须继续存在于 DOM**（`.net-bottom` 恰好一块、`.net-hands` 恰好一块是既有结构守卫，
    也是 `verifyPageHooks` 断言 5 / 约束 9 的对象）——这里只是让它们不生成盒子。
-   ⚠️ **R19**：三条停靠组件的**新父节点链**是
-   `.net-left-rail > .net-dock > .net-bottom > (自己信息块 · .net-hands > 两块手牌区 · 对手信息块)`。
-   `.net-bottom` / `.net-hands` 的 `display: contents` 语义**一个字未改** ——
-   展平之后 `.net-hands` 的两块 `.net-hand-area` 与两块信息块一起成为 `.net-dock` 的
-   flex 项（三条横排），这正是"三块横排、压缩后整体贴左栏右下"的机制。
-   ⚠️ **少写一条 `contents`**：那一块会退回"跟着 DOM 顺序走"的一个 flex 项 ——
-   例如漏了 `.net-hands`，两条手牌会挤在**一个** flex 项里（`.net-dock` 变成两块而不是三块）。
-   `tests/ui/net-left-rail.test.ts` 的结构腿 + `.net-hands` 恰好一块的既有守卫一起钉这件事。 */
+
+   ## R21 的父节点链（**换了，逐层看**）
+   ```
+   .net-left-rail
+     ├─ .net-info-pair                      ← flex row + wrap（两块信息组件紧挨）
+     │    └─ .net-bottom（contents）
+     │         ├─ .net-info-block[self]
+     │         └─ .net-info-block[foe]
+     │              └─ .net-hand-slot-foe（contents）   ← **对手手牌区嵌在信息块内部**
+     │                   └─ .net-hand-area-foe → .hand[data-player="1"]
+     └─ .net-hands（contents）→ .net-hand-slot-self（contents）→ .net-hand-area-self
+   ```
+   ⚠️ **`.net-hand-slot` 是 `display: contents` 的"空盒子"**：它不生成盒子，只把"这块手牌区
+   属于哪个宿主"这件事变成一个**构建期交出去的句柄**（`buildHands` 返回的 `selfSlot` / `foeSlot`）。
+   少了这条 `contents`，`.net-hand-area-foe` 会被包进一个真实盒子挂在信息块里 ⇒ 成为一个普通
+   block 子项（宽度撑满信息块、但**不是**信息块内部那一行小字的样子），而
+   `tests/ui/net-left-rail.test.ts` 的 RAIL-1 结构腿会红。
+   ⚠️ **`.net-hands` 现在只装自己那一块**（对手那块在信息块里）—— 这是**有意**的取舍，
+   完整理由（为什么不删 `.net-hands`、为什么不让它同时装两块）写在 `render-net.ts` 的
+   `buildHands` 头注里。它的 `display: contents` 语义**一个字未改**。 */
 .net-bottom { display: contents; }
 .net-hands { display: contents; }
+.net-hand-slot { display: contents; }
 
-/* ── **R19：停靠栏容器**（三块横排并压缩成一个整体）──
-   用户原话（本轮）："将下方的己方牌堆以及弃牌堆、手牌区、对方牌堆以及弃牌堆等三个组件，
-   平移挪到左边区域，直至这三个组件的最右边紧挨着中间的放置区域"。
-   ⚠️ 它**不是** `display: contents`：三块要作为**一个整体**在左栏里横排（flex 行），
-   并且整组**右贴**（`justify-content: flex-end` ⇒ 最右边那一块（对手信息块）的右缘
-   = `.net-dock` 的右缘 = 左栏右缘 = 放置区左缘）。
-   两条承重声明：
-     · `display: flex; flex-direction: row` —— 三块横排（用户第 ① 条：仍横排）；
-     · `justify-content: flex-end` —— 整组贴**右下**（用户："最右边紧挨着中间的放置区域"）。
-   ⚠️ `align-items: flex-end` 让三块**底边对齐**（手牌那一块比信息块矮，贴底才不悬空）。
-   ⚠️ 它是 flex 容器而不是 grid ⇒ 第 1 节那四条按侧的 `grid-row` / `grid-column` **全部退役**
-   （退役记录见第 1 节末尾的说明）—— 留着就是"同一件事两套真相"。 */
-.net-dock {
-  display: flex;
-  flex-direction: row;
-  align-items: flex-end;
-  justify-content: flex-end;
-  gap: 4px;
-  min-width: 0;
-}
+/* ── **R21 删除：`.net-dock`**（R19 的"三块横排、整组右贴"容器）──
+   它退役的原因是**三块不再同排**：两块信息块进了 `.net-info-pair`（左栏顶部）、
+   手牌区留在左栏底部（自己那块）/ 嵌进对手信息块（对手那块）。
+   留着那条规则不只是死代码：它的 `justify-content: flex-end` / `align-items: flex-end`
+   会被下一个读者当成"三块的横排还在"，而 `net-dock-foe-hand-cascade.test.ts` 那条
+   "对手张数块贴右下角"的判据正是挂在它上面的 —— 那条判据随 R21 **改写**（见该文件的注释）。 */
 
-/* ── 手牌区的水平中置（**行/列指派在第 1 节的 R11-2/3 块里**，这里只留"怎么在行内居中"）──
+/* ── 手牌区的水平中置 ──
+   ⚠️ **R21：它的宿主不再是"一整行"**。自己那块在左栏（flex column）里、对手那块在信息块
+   （flex column）里 ⇒ 两侧都由各自的**父容器**决定怎么摆：
+     · 自己那块：左栏的 `align-items` 缺省（stretch）⇒ 它按内容宽居中由本条的
+       `justify-self` 负责吗？**不**：`justify-self` 对 flex 项**无效**（CSS Flexbox §4.2），
+       所以这一条现在只对"将来若有人把宿主换成 grid"有意义 —— 保留它是**反空集合**
+       （`.net-dock-foe-hand-cascade.test.ts` 钉住自己那侧必须解出 `center`，见那里的说明）。
+     · 对手那块：`.net-info-block` 是 flex column + `align-items: center` ⇒ 自动按内容宽居中。
    选择器**不能**写成 `.net-board > .net-info-block[…]`：`display: contents` 只改变**盒树**，
-   选择器的父子关系仍按 **DOM** 判定 —— 信息块的 DOM 父节点是 `.net-bottom`，
-   而手牌区的 DOM 父节点是 `.net-hands` ⇒ 子代组合器 `>` **一条都不会命中**（静默失效）。
-   故一律用后代组合器。
-   ⚠️ 手牌区横跨**整行**（`grid-column: 1 / -1`，第 1 节），中置按**整行**算 ⇒ 左右两块
-   不会被算进手牌的水平居中 —— 这正是"手牌仍整页中置"的机制。 */
+   选择器的父子关系仍按 **DOM** 判定 ⇒ 子代组合器 `>` **一条都不会命中**（静默失效）。
+   故一律用后代组合器。 */
 .net-board .net-hand-area { justify-self: center; }
 
 /* 一块手牌区：只有手牌（对手那块多一行"张数"小标签）。
@@ -1115,18 +1213,28 @@ body.net-page .scan-overlay.scan-horiz .scan-line {
    而对手那一侧的 `end` 现在由 (0,3,0) 那条自己赢。两侧都钉在
    `tests/ui/net-dock-foe-hand-cascade.test.ts` 的解算腿上。
    ⚠️⚠️ **R19：这套权重算术的对象变了，`justify-self` 本身要改判。**
-   三块现在住在 `.net-dock`（**flex**）里 ⇒ **`justify-self` / `align-self: end` 对 flex 项无效**
+   三块当时住在 `.net-dock`（**flex**）里 ⇒ **`justify-self` / `align-self: end` 对 flex 项无效**
    （CSS Flexbox §4.2：flex item 上没有 `justify-self`，主轴对齐由容器的 `justify-content` 管）。
-   ⇒ 第 1 节的 `justify-self: end` / `align-self: end` 两条**已退役**；
-   R17 要的"张数块贴对手信息块右下角"改由 `.net-dock` 的 `justify-content: flex-end` +
-   `align-items: flex-end` 承担（结构上它仍是**对手信息块之后**的那一个 flex 项 ⇒ 落在最右下）。
-   ⚠️ `net-dock-foe-hand-cascade.test.ts` 的 G-17 判据随之迁移（旧句为什么必须改写在那里）。 */
+   ⇒ 第 1 节的 `justify-self: end` / `align-self: end` 两条**已退役**。
+   ⚠️⚠️ **R21：`.net-dock` 也没了**（三块不再同排）—— 对手张数块的"右下角"这个诉求
+   **随 `.net-hand-area-foe` 一起变成了"嵌在对手信息块内部的一行小字"**（用户：
+   "放进对手信息组件中，而不是独立出来显示"）⇒ 那条判据的对象是
+   "它是信息块的**后代** + 在信息块里按内容宽居中"，脚在 `net-dock-foe-hand-cascade.test.ts`
+   （已按新意图改写，见那里的"旧句为什么必须改"）。 */
 .net-board .net-hand-area {
   border: none;
   background: none;
   padding: 0;
   max-width: none;   /* 宽由手牌内容决定（`.net-hand-area` 的 940px 上限在并盒形态下会把手牌盒撑得比内容宽） */
 }
+/* ⚠️ **R21：把"对手那一块"的最大宽再收一档** —— 它现在住在**对手信息块内部**，而信息块
+   自己有 `max-width: 150px`（含 2×3px padding ⇒ 内容区 ≤144px）。手牌区若按
+   `--card-w`（93.43）算 min-width 是够的，但"手牌 ×5"那行小字 + 占位块的
+   `padding: 2px 8px` 加起来在窄块里会顶破。⇒ 显式钉住"不超过信息块内容区"。
+   ⚠️ 与上面那条 (0,2,0) 基类的 `max-width: none` 同权重 ⇒ **源序靠后者胜**（本段更靠后），
+   而"谁是靠后者"这件事**不许**承重（R15-2/R17 的纪律：给选择器补足权重）。
+   ⇒ 写成 (0,3,0)（多带一个 `.net-hand-area-foe`）⇒ 与源序无关。 */
+.net-board .net-hand-area.net-hand-area-foe { max-width: 100%; }
 .net-hand-label { font-size: 11px; color: #9fb0c8; letter-spacing: 0.06em; }   /* R19：12 → 11 */
 /* ── 操作区：**挂在操作方那一侧的信息块里**（R6 起在这里；R8-8 把它挂到正确的**一侧**）──
    ⚠️ 这两条的作用是"**把 body 级 fixed 的操作台改成流内**"（`styles.css` 一行不改）：
@@ -1150,10 +1258,30 @@ body.net-page .scan-overlay.scan-horiz .scan-line {
 .net-hands .hand:not(.self) { pointer-events: none; }
 
 /* 选择模式：styles.css:1780 的 `.hand-strip.choice-mode .card:not(.choice-target){pointer-events:none}`
-   其实对远程页也生效（本页的手牌条容器同时带 hand-strip 类）。这条镜像规则是**防御性**的：
-   它只依赖本页自己的 `.net-hands` 类，将来即使手牌条不再复用 `hand-strip`（或那条热座规则被改动），
-   远程页的"非候选卡不可点"也不会静默失效。 */
+   其实对远程页也生效（本页的手牌条容器同时带 hand-strip 类）。
+   ⚠️⚠️ **R21：镜像规则的作用域从 `.net-hands` 提到 `.net-board`。**
+   **旧句为什么必须改**：旧句是 `.net-hands.choice-mode .card:not(.choice-target)` ——
+   它假设"两条手牌都在 `.net-hands` 子树里"。R21 之后**对手那一块搬进了对手信息块**，
+   于是 `.net-hands` 的子树里只剩**自己**的卡 ⇒ 这条镜像规则对对手那一侧的卡**恒不命中**
+   （对手手牌现在没有 `.card`，所以今天**看不出差别**，但它是"将来对手手牌一旦有卡就静默失效"
+   的定时炸弹 —— 而那正是这条规则存在的理由）。
+   **新句多查了什么**：① 作用域改成 `.net-board`（两条手牌的**共同祖先**，与它们被挂到哪个
+   宿主无关）；② 挂点仍由 `renderChoiceUi` 加在 `.net-hands` 上（**R21 未改**）⇒ 为了让新作用域
+   命中，`renderChoiceUi` 同时给**板根**加 `choice-mode`（见那里的注释）；
+   ③ 判据是"选择模式下**任何**非候选卡都不可点"，与"它在哪一块手牌里"解耦。 */
+.net-board.choice-mode .card:not(.choice-target) { pointer-events: none; }
+/* ⚠️ 两条**都留**（新旧并存）是**有意**的：`.net-hands.choice-mode …` 覆盖"手牌条自己带类"
+   这条路径（`renderChoiceUi` 在 `.net-hands` 上加的那个类），`.net-board.choice-mode …`
+   覆盖"挂点在板根"那条路径。两条的**判据同源**（非候选卡不可点），留双份不会产生两套真相
+   ——它们是同一个断言的两种命中路径（任一条生效即可），而删掉旧的那条会让
+   `net-lane-tree`/`net-dock` 里"`.choice-mode` 必须挂在 `.net-hands` 上"的既有守卫与
+   本页的语义脱钩（那条守卫仍钉"挂点不能退化成 lastElementChild"）。 */
 .net-hands.choice-mode .card:not(.choice-target) { pointer-events: none; }
+/* 手牌的**不可交互**侧（对手那一块）：`.self` 类由 `renderHand` 按 `isSelf` 加。
+   ⚠️ **R21**：作用域同样从 `.net-hands` 提到 `.net-board` —— 对手那一块已经不在 `.net-hands`
+   子树里了，旧选择器对它**恒不命中**（对手手牌现在没有卡，所以看不出差别；但这条规则的语义
+   是"对手手牌永远不可交互"，不该与"它挂在哪个宿主"绑定）。 */
+.net-board .hand:not(.self) { pointer-events: none; }
 
 /* ── 窄屏：**已经没有媒体查询了**（R8-5 删除，理由见第 6 节头注）──
    R6 的 `@media (max-width: 1180px)` 解决的是"三列（信息块 + 手牌 + 信息块）挤窄中列"，
@@ -1169,34 +1297,42 @@ body.net-page .scan-overlay.scan-horiz .scan-line {
  * 错误矩形 / 取得 undefined）。占位块给出手牌区的"足印"，让手牌落点特效落在一个合理位置。
  * ========================================================================== */
 
-/* 作用域限定在 .net-hands 内（本文件自称"只服务 render-net.ts"）：这两个类只在远程页
-   `handVisibility: 'count'` 分支产出，裸类名会泄漏到将来别处的同名用法上。 */
-/* ── **R9-4：远程页手牌卡与场上卡同基准**（用户："缩小双方卡牌…"，手牌算在内）──
-   热座页的 `.card { width: 130px }`（`styles.css:387`，**本波不许动**）只被下面这些
-   **`.net-hands` 作用域**的规则覆盖 ⇒ 热座页**选不中**它们、构造性零变化
-   （热座手牌仍是 130×178.8，扇形重叠仍是 28px）。
-   全部值都由 `.net-board` 的 `--card-h` / `--card-w` 推出 ⇒ "一个旋钮"仍然成立。 */
-.net-hands .card { width: var(--card-w); }
+/* 作用域限定在**本页**（`.net-board` 前缀，本文件自称"只服务 render-net.ts"）：这两个类只在
+   远程页 `handVisibility: 'count'` 分支产出，裸类名会泄漏到将来别处的同名用法上。
+   ⚠️⚠️ **R21：作用域从 `.net-hands` 提到 `.net-board`（一处关键的解耦）。**
+   **旧句为什么必须改**：旧句是 `.net-hands .card` / `.net-hands .hand` … —— 它们假设
+   "两条手牌都在 `.net-hands` 子树里"。R21 之后**对手那一块搬进了对手信息块**
+   （`render-net.ts` 的 `buildHands` 头注），于是这些规则对**对手那一条 `.hand`** 恒不命中：
+     · `.net-hands .hand`（整高 + 扇形内缩）→ 对手那条会退回 `styles.css` 的默认值；
+     · `.net-hands .card`（宽 = `--card-w`）→ 对手那条若有卡会退回热座的 130px；
+     · `.net-hands .hand-count-only` / `.hand-count-placeholder` → **对手手牌正是走这两条**的
+       ⇒ 这是**当场就会坏**的一条（不是"将来"）。
+   **新句多查了什么**：① 作用域换成 `.net-board`（两条手牌的**共同祖先**，与宿主无关）；
+   ② 热座页**仍然选不中**（`.net-board` / `.net-hands` / `.net-hand-slot` 三个类都只在本页产出）
+   ⇒ "热座零变化"仍是**构造性**的，不依赖"我记得把每一处都改对"；
+   ③ 判据的**对象不变**（手牌卡宽 / 卡背高 / 手牌行整高与扇步 / 占位块足印），只是不再与
+   "它挂在哪个容器里"绑定 —— 这正是 R21 要的解耦。 */
+.net-board .card { width: var(--card-w); }
 /* 背面高度必须跟着卡宽走，否则同一张手牌正反面高度不一致（热座对应规则见 styles.css:412） */
-.net-hands .card-back { height: calc((var(--card-w) - 8px) * 1.4); }
+.net-board .card-back { height: calc((var(--card-w) - 8px) * 1.4); }
 /* 手牌行：整高与左右内缩（内缩量 = 重叠量，热座是 28px = 0.2154 × 130px）*/
-.net-hands .hand {
+.net-board .hand {
   min-height: var(--hand-card-h);
   padding-left: calc(var(--card-w) * 0.2154);
   padding-right: calc(var(--card-w) * 0.2154);
 }
-.net-hands .hand .card + .card { margin-left: calc(var(--card-w) * -0.2154); }
-/* ⚠️ 这里原来有一条 `.net-hands .hand.reversed .card + .card { … }`（**本波删除**）——
+.net-board .hand .card + .card { margin-left: calc(var(--card-w) * -0.2154); }
+/* ⚠️ 这里原来有一条 `.net-hands .hand.reversed .card + .card { … }`（**R19 删除**）——
    它是**死规则**（"状态永不产出"），理由是源码可判的：`.reversed` 只由 `render.ts:1900` 在
    `reversed === true` 时写进 `.hand` 的类名，而远程页的两处 `renderHand(...)` 调用
-   **硬传 `reversed: false`**（`render-net.ts:1582`（P0）与 `:1605`（P1），两处都是字面量，
+   **硬传 `reversed: false`**（`render-net.ts` 的 P0/P1 两处都是字面量，
    且 `render-net.ts` 全文没有任何 `classList.add('reversed')`）
    ⇒ 远程页 DOM 里**永远没有** `.hand.reversed` ⇒ 那条规则在本页恒不命中。
    它在热座页的对应物仍在原处由 `styles.css:875 / :882` 负责（红线：那份表一行不许动），
    "手牌从右往左排"的语义在远程页由 `.hand` 自身的排列方向承担（见 `render-net.ts:87` 的说明）。
    ⇒ 删掉它而不是"留着以后用"：留着就是一条会在将来误导人"远程页有 reversed 分支"的假代码。 */
-.net-hands .hand-count-only { justify-content: center; align-items: center; min-width: var(--card-w); width: auto; }
-.net-hands .hand-count-placeholder {
+.net-board .hand-count-only { justify-content: center; align-items: center; min-width: var(--card-w); width: auto; }
+.net-board .hand-count-placeholder {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1210,10 +1346,11 @@ body.net-page .scan-overlay.scan-horiz .scan-line {
   letter-spacing: 0.06em;
 }
 
-/* ── G2 修正 **R11-2**：对手手牌那一条**压成单行小字**（用户："对手的手牌张数压缩进对手信息块内"；
-   已确认裁决 ②：压成单行小字、紧贴对手信息块，`.hand` 占位节点保留足印）──
-   对手的手牌区现在挂在**停靠栏的最右列**（第 1 节的 R11-2/3 块），紧挨着对手信息块的右侧 ——
-   于是"这是对手的手牌"由位置本身说明，不需要再多一行标签：
+/* ── G2 修正 **R11-2**（**R21 重述**）：对手手牌那一条**压成单行小字** ──
+   用户 R11-2 的裁决："对手的手牌张数压缩进对手信息块内"；**R21 追加**："将图中手牌区右边的
+   那个手牌乘五的对方信息**放进对手信息组件中**，而不是独立出来显示"。
+   ⇒ R11-2 时它只是"贴在对手信息块**右边**"，R21 起它是**信息块的真正后代**（结构关系，
+   不是位置关系）。于是"这是对手的手牌"由**嵌套**说明，不需要再多一行标签：
      · `.net-hand-label`（渲染器产出的"对手手牌 ×n"）**整条隐藏** ⇒ 只剩下面那一行；
        ⚠️ 隐藏的是**标签节点**，`.hand[data-player]` 与它的 `data-hand-count` **一个都不动**
        （FX 用 `querySelectorAll('.hand')[player]` **按下标**读它；隐藏 `.hand` 会让
@@ -1234,6 +1371,9 @@ body.net-page .scan-overlay.scan-horiz .scan-line {
   background: rgba(255, 255, 255, 0.05);
   font-size: 11px;   /* R19：12 → 11（与窄下去的信息块对齐） */
 }
+/* ⚠️ **R21 新增**：让"手牌 ×n"与它上面那一行（连接状态 `.net-conn` / 计数行）之间留一口气 ——
+   它现在是信息块**内部**的最后一行，紧贴块的 1px 下边框会显得挤。 */
+.net-board .net-hand-area-foe { margin-bottom: 1px; }
 
 /* ============================================================================
  * 8. 预览工具条（**只在开发者模式解锁后才渲染**，见 `main.ts` 的 `isDevUnlocked()` 闸门）

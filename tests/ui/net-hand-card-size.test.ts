@@ -66,18 +66,26 @@ describe('R9-4 手牌卡与场上卡同基准', () => {
   });
 
   it('手牌卡 / 背面 / 手牌行的尺寸全部由 `--card-w`、`--hand-card-h` 推出（无字面量回潮）', () => {
-    expect(ruleBody(NET, '.net-hands .card'), '手牌卡宽度不是由 --card-w 推出的')
+    // ⚠️ **作用域迁移（R21）**：`.net-hands` → `.net-board`。
+    //    **旧句为什么必须改**：R21 把**对手手牌区**搬进了对手信息块 ⇒ 用 `.net-hands` 作用域的规则
+    //    对**对手那条 `.hand`** 恒不命中 —— 而 `.hand-count-only` / `.hand-count-placeholder`
+    //    正是**对手手牌走的唯一两条规则**（当场就坏，不是"将来"）。
+    //    **新句多查了什么**：① 作用域换成 `.net-board`（两条手牌的**共同祖先**，与宿主无关）；
+    //    ② **热座零变化仍是构造性的**（`.net-board` / `.net-hands` / `.net-hand-slot` /
+    //    `.net-info-pair` 四个类都只在本页产出 —— 下面"热座零变化"那条腿会真查一遍）；
+    //    ③ 判据的对象（卡宽 / 卡背高 / 手牌行整高 / 扇步 / 占位块足印）**一个字未改**。
+    expect(ruleBody(NET, '.net-board .card'), '手牌卡宽度不是由 --card-w 推出的')
       .toContain('width: var(--card-w)');
-    expect(ruleBody(NET, '.net-hands .card-back'), '背面高度没跟着卡宽走（正反面会不等高）')
+    expect(ruleBody(NET, '.net-board .card-back'), '背面高度没跟着卡宽走（正反面会不等高）')
       .toContain('var(--card-w)');
-    // ⚠️ `.net-hands .hand` 有**两条**规则（R6 的 align/justify + R9-4 的尺寸）⇒ 这里按
+    // ⚠️ `.net-board .hand` 有**两条**规则（R6 的 align/justify + R9-4 的尺寸）⇒ 这里按
     //    **整份样式表**断言这两条声明存在，而不是用 `ruleBody` 取第一条（它取到的是 R6 那条）
     expect(NET, '手牌行没有用 --hand-card-h（0 张时会塌缩）').toContain('min-height: var(--hand-card-h)');
     expect(NET, '手牌行的左右内缩（= 扇形重叠量）没跟着卡宽缩')
       .toContain('padding-left: calc(var(--card-w) * 0.2154)');
-    expect(ruleBody(NET, '.net-hands .hand-count-placeholder'), '占位块的高度没跟着手牌缩（会比真手牌高一截）')
+    expect(ruleBody(NET, '.net-board .hand-count-placeholder'), '占位块的高度没跟着手牌缩（会比真手牌高一截）')
       .toContain('min-height: var(--hand-card-h)');
-    expect(ruleBody(NET, '.net-hands .hand-count-only'), '占位块的宽度没跟着卡宽缩')
+    expect(ruleBody(NET, '.net-board .hand-count-only'), '占位块的宽度没跟着卡宽缩')
       .toContain('min-width: var(--card-w)');
   });
 
@@ -101,12 +109,22 @@ describe('R9-4 手牌卡与场上卡同基准', () => {
     expect(ruleBody(HOT, '.card'), '热座手牌卡被改了（红线：styles.css 一行不许动）')
       .toContain('width: 130px');
     expect(ruleBody(HOT, '.card-back'), '热座卡背高度被改了').toContain('(130px - 8px) * 1.4');
-    // 覆盖规则**必须**带 `.net-` 作用域（热座页选不中 ⇒ 构造性不变）。
-    // 判据 = styles-net.css 里**不存在以 `.card` 为主体**的裸规则（主体 = 选择器最后一段，
-    // 即紧跟在规则边界之后、`.card` 之后就是 `,` 或 `{` 的那种）。
+    /* 覆盖规则**必须**带 `.net-` 作用域（热座页选不中 ⇒ 构造性不变）。
+     * 判据 = styles-net.css 里**不存在以 `.card` 为主体**的裸规则（主体 = 选择器最后一段，
+     * 即紧跟在规则边界之后、`.card` 之后就是 `,` 或 `{` 的那种）。
+     * ⚠️ **R21**：作用域从 `.net-hands .card` 变成 `.net-board .card` —— 两者都带 `.net-` 前缀，
+     * 所以**这条判据一个字未改**（裸 `.card` 主体仍然禁止）。它同时是"热座零变化仍是
+     * 构造性的"这条论证的机检腿：`.net-board` 这个类只在 `render-net.ts` 里产出。 */
     const bareCard = NET.match(/(^|[\n},])\s*\.card\s*[,{]/g) ?? [];
     expect(bareCard.map((s) => s.trim()), 'styles-net.css 里出现了裸 `.card` 主体规则 ——'
       + '它会**同时命中热座页的手牌卡**（红线：热座必须零变化）').toEqual([]);
+    // ⚠️ **R21 新增**：新的作用域类必须**只在本页产出**（否则"热座零变化"就不再是构造性的）
+    //    —— 判据是"`styles.css` 的**非注释正文**里不出现这些类"。
+    const hotNoComments = HOT.replace(/\/\*[\s\S]*?\*\//g, ' ');
+    for (const cls of ['net-board', 'net-hands', 'net-hand-slot', 'net-info-pair', 'net-right-rail']) {
+      expect(hotNoComments, `styles.css（热座）里出现了 .${cls} —— R21 的新作用域会让热座页也被命中，`
+        + '"热座零变化"不再是构造性的').not.toContain(cls);
+    }
     // 反空集合：远程页**不许**再出现写死的手牌尺寸
     expect(NET, 'styles-net.css 里仍有写死的 `min-width: 130px`').not.toContain('min-width: 130px');
   });

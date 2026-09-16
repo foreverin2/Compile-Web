@@ -244,53 +244,84 @@ const depsOf = (viewSeat: 0 | 1) => ({
  * RAIL-1：结构腿（真跑 renderNetBoard）
  * ========================================================================== */
 
-describe('R19 · RAIL-1：左栏结构（真跑 renderNetBoard）', () => {
-  it('RAIL-1a. `.net-left-rail` 里有且仅有「放大框（上）+ `.net-dock`（下）」；三块停靠组件都在 `.net-dock` 里', async () => {
+describe('R21 · RAIL-1：两栏结构（真跑 renderNetBoard）', () => {
+  it('RAIL-1a. 左栏 = [`.net-info-pair`（两块信息组件紧挨）, 自己手牌]；放大框在**右栏**、不在左栏', async () => {
     const restore = installStubDom();
     try {
       for (const seat of [0, 1] as const) {
         const root = renderFrame(seat);
         const board = boardOf(root);
+        /* ⚠️⚠️ **RAIL-1a 改写（R21）—— 旧句为什么必须改，新句多查了什么**
+         *  · **旧句**：左栏 = `[.net-zoom-box, .net-dock]`，且三块停靠组件都在 `.net-dock` 里。
+         *  · **为什么必须改**：R21 是**对调** —— 放大框搬到**右栏**、两块信息组件搬到左栏顶部
+         *    （`.net-info-pair`），`.net-dock` **退役**（三块不再同排：手牌区留在左栏底部、
+         *    对手那一块嵌进对手信息块）。旧句把**正确**的实现判红（实测它报
+         *    `['?hand-strip net-hands …']`）。
+         *  · **新句多查了什么**：① 左栏的直接子节点**恰好两个**且顺序是
+         *    `[.net-info-pair, .net-hands]`（信息组件在**上**、手牌区在**下** —— 用户：
+         *    "放在手牌区的上方……不影响其他组件"）；② `.net-info-pair` 里**恰好两块**信息组件；
+         *    ③ 放大框在 `.net-right-rail` 里、**不在左栏**（R21 新裁决的门禁）；④ 板根前三个
+         *    子节点是 `[.net-grid, .net-left-rail, .net-right-rail]`。 */
         const rail = descendants(root).filter((n) => isClass(n, 'net-left-rail'));
         expect(rail.length, `viewSeat=${seat}：.net-left-rail 不是恰好一块（实际 ${rail.length}）`).toBe(1);
         const tree: string[] = [];
         const walk = (n: StubNode, d: number): void => {
+          if (d > 3) return;
           tree.push(`${'  '.repeat(d)}<${n.tag} class="${n.cls}">${n.text ? ` "${n.text}"` : ''}`);
           for (const c of n.children) walk(c, d + 1);
         };
         walk(rail[0], 0);
         console.log(`\n===== RAIL-1a · viewSeat=${seat} · 左栏元素树 =====\n${tree.join('\n')}`);
 
-        // ① 左栏的**直接子节点**恰好两个：[放大框, .net-dock]
-        const railKidKinds = rail[0].children.map((n) => (isClass(n, 'net-zoom-box') ? 'zoom-box'
-          : isClass(n, 'net-dock') ? 'dock' : `?${n.cls}`));
-        expect(railKidKinds, `viewSeat=${seat}：左栏的直接子节点必须是 [卡牌放大框, .net-dock]`
-          + `（实际 ${railKidKinds.join(' | ')}）`).toEqual(['zoom-box', 'dock']);
-        // ② 放大框在**上**（flex column 的第一个子节点 = 视觉最上）
-        expect(isClass(rail[0].children[0], 'net-zoom-box'),
-          `viewSeat=${seat}：左栏的第一个子节点必须是卡牌放大框（用户："页面左上角"/"三大组件移动后的上方"）`)
-          .toBe(true);
-        // ③ 三块停靠组件都在 `.net-dock` 里（经 `.net-bottom` / `.net-hands` 两层 contents）
-        const dock = rail[0].children[1];
-        expect(isClass(dock, 'net-dock'), `viewSeat=${seat}：左栏的第二个子节点不是 .net-dock`).toBe(true);
-        expect(descendants(dock).filter((n) => isClass(n, 'net-bottom')).length,
-          `viewSeat=${seat}：.net-dock 里必须恰好一块 .net-bottom`).toBe(1);
-        expect(descendants(dock).filter((n) => isClass(n, 'net-hands')).length,
-          `viewSeat=${seat}：.net-dock 里必须恰好一块 .net-hands`).toBe(1);
-        for (const sel of ['net-info-block', 'net-hand-area'] as const) {
-          const nodes = descendants(dock).filter((n) => isClass(n, sel));
-          expect(nodes.length, `viewSeat=${seat}：.net-dock 里 ${sel} 不是恰好两块（实际 ${nodes.length}）`).toBe(2);
-        }
-        // ④ **反空集合**：三块真的都在**同一个** `.net-dock` 下（不是散在别处）
-        const dockEls = descendants(root).filter((n) => isClass(n, 'net-dock'));
-        expect(dockEls.length, `viewSeat=${seat}：.net-dock 不是恰好一块`).toBe(1);
-        expect(dockEls[0], `viewSeat=${seat}：.net-dock 不在左栏里`).toBe(dock);
-        // ⑤ 板根的直接子节点 = [.net-grid, .net-left-rail, …]（左栏与放置区同在第 1 行）
-        const boardKids = board.children.map((n) => [n.cls.split(/\s+/)[0],
-          isClass(n, 'net-grid') ? 'net-grid' : isClass(n, 'net-left-rail') ? 'net-left-rail' : '?']);
-        expect(boardKids.slice(0, 2).map((x) => x[1]), `viewSeat=${seat}：.net-board 的前两个子节点必须是`
-          + ` [.net-grid, .net-left-rail]（实际 ${boardKids.slice(0, 2).map((x) => x[0]).join(' | ')}）`)
-          .toEqual(['net-grid', 'net-left-rail']);
+        // ① 左栏的直接子节点恰好两个，**顺序随座位变**（先出现的容器里必须装着 P0）：
+        //    `viewSeat = 0`：self = P0 ⇒ `[.net-hands, .net-info-pair]`；
+        //    `viewSeat = 1`：foe = P0（在信息块子树里）⇒ `[.net-info-pair, .net-hands]`。
+        //    ⚠️ **这才是"`.hand` 前序恒 `[P0, P1]`"（红线）在这些宿主下唯一的实现方式** ——
+        //    固定成任何一种顺序都会让某个座位变成 `[P1, P0]`（实测两轮，见 render-net.ts 的头注）。
+        const railKidKinds = rail[0].children.map((n) => (isClass(n, 'net-info-pair') ? 'info-pair'
+          : isClass(n, 'net-hands') ? 'hands'
+            : isClass(n, 'net-zoom-box') ? 'zoom-box(不该在左栏)' : `?${n.cls}`));
+        const wantKidOrder = seat === 0 ? ['hands', 'info-pair'] : ['info-pair', 'hands'];
+        expect(railKidKinds, `viewSeat=${seat}：左栏的直接子节点顺序必须是 `
+          + `${wantKidOrder.join(' | ')}（先出现的容器里装 P0 —— 见 buildLeftRail 头注的表），`
+          + `实际 ${railKidKinds.join(' | ')}`)
+          .toEqual(wantKidOrder);
+        // ② **视觉顺序由 CSS `order` 保证**（DOM 顺序随座位翻，所以它不能承担视觉语义）
+        const railChain = ancestorsOf(root, rail[0]);
+        const pairNode = rail[0].children.find((n) => isClass(n, 'net-info-pair'))!;
+        const handsNode = rail[0].children.find((n) => isClass(n, 'net-hands'))!;
+        const ordOf = (n: StubNode): string | null =>
+          subjectPropOf(n, [...railChain, rail[0], n], RULES, 'order');
+        console.log(`  viewSeat=${seat} · DOM: ${railKidKinds.join(' → ')}`
+          + ` / order: info-pair=${String(ordOf(pairNode))} hands=${String(ordOf(handsNode))}`);
+        expect(ordOf(pairNode), `viewSeat=${seat}：.net-info-pair 没有 order: -1（= ${String(ordOf(pairNode))}）——`
+          + '视觉上信息组件会落到自己手牌区**下面**，与用户"放在手牌区的上方"相反').toBe('-1');
+        expect(ordOf(handsNode), `viewSeat=${seat}：.net-hands 没有 order: 1（= ${String(ordOf(handsNode))}）——`
+          + '它压不住 DOM 顺序带来的视觉位置').toBe('1');
+        // ③ `.net-info-pair` 里恰好两块信息组件（顺序 = NET_BOTTOM_SIDES）
+        const pair = pairNode;
+        expect(isClass(pair, 'net-info-pair'), `viewSeat=${seat}：找不到 .net-info-pair`).toBe(true);
+        const blocks = descendants(pair).filter((n) => isClass(n, 'net-info-block'));
+        expect(blocks.length, `viewSeat=${seat}：.net-info-pair 里不是恰好两块信息组件（实际 ${blocks.length}）`)
+          .toBe(2);
+        expect(blocks.map((n) => String(n.dataset.netSeat)).sort(),
+          `viewSeat=${seat}：两块信息组件的座位必须互补（self/foe）`).toEqual(['foe', 'self']);
+        // ③ **放大框在右栏**（R21 的新裁决）
+        const rightRails = descendants(root).filter((n) => isClass(n, 'net-right-rail'));
+        expect(rightRails.length, `viewSeat=${seat}：.net-right-rail 不是恰好一块（实际 ${rightRails.length}）`).toBe(1);
+        const boxes = descendants(root).filter((n) => isClass(n, 'net-zoom-box'));
+        expect(boxes.length, `viewSeat=${seat}：一帧里 .net-zoom-box 必须恰好一个（实际 ${boxes.length}）`).toBe(1);
+        expect(rightRails[0].children.some((n) => isClass(n, 'net-zoom-box')),
+          `viewSeat=${seat}：卡牌放大框不在 .net-right-rail 里（用户 R21："挪到右边好了"）`).toBe(true);
+        expect(descendants(rail[0]).some((n) => isClass(n, 'net-zoom-box')),
+          `viewSeat=${seat}：卡牌放大框**仍在左栏里** —— R21 的裁决是把它挪到右栏`).toBe(false);
+        // ④ 板根的直接子节点 = [.net-grid, .net-left-rail, .net-right-rail, …]
+        const boardKids = board.children.map((n) => (isClass(n, 'net-grid') ? 'net-grid'
+          : isClass(n, 'net-left-rail') ? 'net-left-rail'
+            : isClass(n, 'net-right-rail') ? 'net-right-rail' : '?'));
+        expect(boardKids.slice(0, 3), `viewSeat=${seat}：.net-board 的前三个子节点必须是`
+          + ` [.net-grid, .net-left-rail, .net-right-rail]（实际 ${boardKids.slice(0, 3).join(' | ')}）`)
+          .toEqual(['net-grid', 'net-left-rail', 'net-right-rail']);
       }
     } finally {
       await drainRaf();
@@ -298,18 +329,47 @@ describe('R19 · RAIL-1：左栏结构（真跑 renderNetBoard）', () => {
     }
   });
 
-  it('RAIL-1b. 红线：`.net-hands` 仍恰好一块、两条 `.hand` 的 DOM 顺序仍 `[P0, P1]`', async () => {
+  it('RAIL-1b. 红线：`.net-hands` 仍恰好一块、两条 `.hand` 的 DOM 顺序仍 `[P0, P1]`（**跨两个宿主**）', async () => {
     const restore = installStubDom();
     try {
       for (const seat of [0, 1] as const) {
         const root = renderFrame(seat);
+        /* ⚠️⚠️ **RAIL-1b 改写（R21）—— 旧句为什么必须改，新句多查了什么**
+         *  · **旧句**：在 `.net-hands` 的**子树**里数 `.hand`，要求恰好两条、顺序 `[P0, P1]`。
+         *  · **为什么必须改**：R21 之后**对手那一块搬进了对手信息块** ⇒ `.net-hands` 的子树里
+         *    只剩**一条** `.hand`（实测：`expected [ '0' ] to deeply equal [ '0', '1' ]`）。
+         *    旧句把"两条手牌都在同一个容器里"当成了红线的**判据**，而红线真正要保的是
+         *    **全局的 `.hand` 顺序**（FX 用 `querySelectorAll('.hand')[player]` 按下标读）。
+         *  · **新句多查了什么**：① 判据的对象从"`.net-hands` 的子树"换成**整块棋盘**的前序遍历
+         *    —— 那正是 `querySelectorAll('.hand')` 的顺序；② **仍然**要求 `.net-hands` 恰好一块
+         *    （`verifyPageHooks` 的约束 9 对象）；③ **新增**：两条 `.hand` **分属两个宿主**
+         *    （自己那条在 `.net-hands` 子树里、对手那条在对手信息块子树里）—— 这不是放松，
+         *    而是把 R21 的新形态钉住（有人把对手那条挪回 `.net-hands` 时第 ③ 条会红，
+         *    同时用户"放进对手信息组件中"的裁决被违反）。 */
         const handsRoots = descendants(root).filter((n) => isClass(n, 'net-hands'));
         expect(handsRoots.length, `viewSeat=${seat}：.net-hands 必须恰好一块（多一块 = 两份手牌 ⇒ `
           + 'FX 按下标取到旧副本）').toBe(1);
-        const hands = descendants(handsRoots[0]).filter((n) => isClass(n, 'hand'));
+        // ① **全局** `.hand` 顺序（前序遍历 = 文档顺序 = querySelectorAll 的顺序）
+        const hands = descendants(root).filter((n) => isClass(n, 'hand'));
         expect(hands.map((n) => String(n.dataset.player)), `viewSeat=${seat}：.hand 的 DOM 顺序必须恒为`
           + ` [P0, P1]（FX 用 querySelectorAll('.hand')[player] **按下标**读手牌 —— 顺序反了会把`
           + `特效飞到对手手牌区，不报错也不跳过）`).toEqual(['0', '1']);
+        // ② 两条 `.hand` **分属两个宿主**，且**按侧别**分（R21 的新形态）
+        //    ⚠️ 判据必须按**侧别**（自己/对手），不能按玩家号 —— `.net-hands` 里装的**永远是
+        //    "自己那一块"**（`viewSeat = 0` 时是 P0、`= 1` 时是 P1），对手那一块永远在对手信息块里。
+        //    （第一版写成"P0 必须在 .net-hands 里" ⇒ `viewSeat = 1` 直接报红，那正是把
+        //    "手牌顺序"与"手牌归属"混为一谈。）
+        const selfPlayer = String(seat);
+        const foePlayer = String(1 - seat);
+        const selfHand = hands.find((n) => n.dataset.player === selfPlayer)!;
+        const foeHand = hands.find((n) => n.dataset.player === foePlayer)!;
+        const inHandsRoot = (n: StubNode): boolean =>
+          handsRoots[0] === n || descendants(handsRoots[0]).includes(n);
+        expect(inHandsRoot(selfHand), `viewSeat=${seat}：自己那条 .hand[data-player="${selfPlayer}"]`
+          + ' 不在 .net-hands 里（R19/R21 的"自己手牌区留在左栏"没有落地）').toBe(true);
+        expect(inHandsRoot(foeHand), `viewSeat=${seat}：对手那条 .hand[data-player="${foePlayer}"]`
+          + ' **仍在** .net-hands 里 —— R21 的裁决是把它放进对手信息组件（"而不是独立出来显示"）')
+          .toBe(false);
         // 反空集合：这一帧里真的有两块手牌区与两块信息块（否则上面几条是空判据）
         expect(descendants(root).filter((n) => isClass(n, 'net-hand-area')).length,
           `viewSeat=${seat}：两块手牌区`).toBe(2);
@@ -353,10 +413,100 @@ describe('R19 · RAIL-1：左栏结构（真跑 renderNetBoard）', () => {
 });
 
 /* ============================================================================
- * RAIL-2：CSS 解算腿
+ * RAIL-5：R21 新增的四条腿（结构 + 不压扁 + 对手手牌嵌位 + 锚点可寻址）
  * ========================================================================== */
 
-describe('R19 · RAIL-2：`.net-board` 的列/行模板与左栏的贴边（CSS 解算腿）', () => {
+describe('R21 · RAIL-5：`.net-info-pair` 不被压扁 / 对手手牌嵌进对手信息块 / `.hand` 锚点仍在', () => {
+  it('RAIL-5a（结构腿）. `.net-hand-area-foe` 是 `.net-info-block[data-net-seat=\'foe\']` 的**后代**（真跑 DOM）', async () => {
+    const restore = installStubDom();
+    try {
+      for (const seat of [0, 1] as const) {
+        const root = renderFrame(seat);
+        /* ⚠️ **这是 R21 的核心裁决的门禁**（用户："将图中手牌区右边的那个手牌乘五的对方信息
+         * 放进对手信息组件中，而不是独立出来显示"）。
+         * ⚠️ **为什么用真跑的 DOM 结构腿而不是 CSS 腿**：这条裁决是**树的形状**
+         * （"谁是谁的后代"），CSS 改不了树 —— 只有真跑渲染器查父子链才能钉住它。
+         * CSS 腿（`.net-info-pair` 的 flex 声明）证不了"嵌进去了"，结构腿证不了"看起来是一行小字"，
+         * 两条腿互不替代。 */
+        const foeBlocks = descendants(root)
+          .filter((n) => isClass(n, 'net-info-block') && n.dataset.netSeat === 'foe');
+        expect(foeBlocks.length, `viewSeat=${seat}：对手信息块不是恰好一块（实际 ${foeBlocks.length}）`).toBe(1);
+        const foeBlock = foeBlocks[0];
+        const foeAreas = descendants(root).filter((n) => isClass(n, 'net-hand-area-foe'));
+        expect(foeAreas.length, `viewSeat=${seat}：.net-hand-area-foe 不是恰好一块（实际 ${foeAreas.length}）`).toBe(1);
+        // ① 对手手牌区在**对手信息块的子树**里
+        expect(descendants(foeBlock).includes(foeAreas[0]),
+          `viewSeat=${seat}：.net-hand-area-foe 不是对手信息块的后代 —— 用户 R21 的裁决是`
+          + '把它"放进对手信息组件中，而不是独立出来显示"').toBe(true);
+        // ② 反向：它**不在**自己信息块里（也不能落进别人的子树）
+        const selfBlock = descendants(root)
+          .filter((n) => isClass(n, 'net-info-block') && n.dataset.netSeat === 'self')[0];
+        expect(descendants(selfBlock).includes(foeAreas[0]),
+          `viewSeat=${seat}：.net-hand-area-foe 出现在**自己**信息块的子树里（挂错了宿主）`).toBe(false);
+        // ③ 张数占位块（"手牌 ×n"）就在它里面、且文本随张数
+        const ph = descendants(foeAreas[0]).find((n) => isClass(n, 'hand-count-placeholder'))!;
+        expect(ph, `viewSeat=${seat}：对手手牌区里没有 .hand-count-placeholder（"手牌 ×n"那一行）`).toBeTruthy();
+        expect(textOf(ph), `viewSeat=${seat}："手牌 ×n"的文本不随张数`).toMatch(/^手牌 ×\d+$/);
+        // ④ 它经 `.net-hand-slot-foe`（contents）挂进去 —— 槽位是"谁进哪个宿主"的句柄
+        expect(foeAreas[0].parentElement?.cls ?? '', `viewSeat=${seat}：对手手牌区的父节点不是 .net-hand-slot-foe`
+          + '（R21 的槽位分配被绕开了 —— 说明有人按选择器把它搬了过去）')
+          .toContain('net-hand-slot-foe');
+      }
+    } finally {
+      await drainRaf();
+      restore();
+    }
+  });
+
+  it('RAIL-5b（行为腿 · **锚点仍在**）. 真跑之后 `.hand[data-player="1"]` 仍存在、且按属性查得到', async () => {
+    const restore = installStubDom();
+    try {
+      for (const seat of [0, 1] as const) {
+        const root = renderFrame(seat);
+        /* ⚠️ **这条腿证明的是"手牌落点特效的锚点没被搬掉"**：
+         * 远程页的手牌落点特效走 `fxHandEndPoint` / `handEndPos`，它们读的是
+         * **`.hand` 节点的 `getBoundingClientRect()`**（见 `render-net.ts` 的约束 7 头注与
+         * `fx-dom-contract.ts` 的 A 类钩子 `.hand` / `.hand[data-player]`）。
+         * R21 把对手那一块嵌进了信息块 ⇒ 这里必须证明"节点还在、还能按属性寻址"。
+         * ⚠️ 若有人用"纯张数文本"代替 `.hand` 节点（那看起来一样），这条会红。 */
+        const byClass = descendants(root).filter((n) => isClass(n, 'hand'));
+        expect(byClass.length, `viewSeat=${seat}：页面上必须恰好两条 .hand（实际 ${byClass.length}）`).toBe(2);
+        // ① **两条都**必须能按 `[data-player]` 属性寻址（FX 只按下标读，但契约里
+        //    `.hand[data-player]` 是**另一条** A 类钩子 —— `fx-gen3.ts`、`fx-gen2.ts` 各有一处按它定位）
+        for (const p of ['0', '1'] as const) {
+          const q = (root as unknown as { querySelector(s: string): StubNode | null })
+            .querySelector(`.hand[data-player="${p}"]`);
+          expect(q, `viewSeat=${seat}：.hand[data-player="${p}"] 查不到 —— 手牌落点特效`
+            + '（`fxHandEndPoint` / `handEndPos`）与那两处按属性定位的 FX 会取到 null / undefined'
+            + '（不报错、直接静默跳过）').toBeTruthy();
+          expect(isClass(q!, 'hand'), `viewSeat=${seat}：按属性查到的 data-player="${p}" 不是 .hand`).toBe(true);
+          expect(String(q!.dataset.player), `viewSeat=${seat}：按属性查到的节点的 data-player 不是 ${p}`)
+            .toBe(p);
+        }
+        // ② `data-hand-count` 仍在**对手**那一条上（信息遮蔽的契约名，见 render.ts 的说明）
+        const foeQ = (root as unknown as { querySelector(s: string): StubNode | null })
+          .querySelector(`.hand[data-player="${1 - seat}"]`)!;
+        const rawCount = foeQ.dataset.handCount
+          ?? (foeQ as unknown as { getAttribute(n: string): string | null }).getAttribute('data-hand-count');
+        const count = String(rawCount);
+        console.log(`  viewSeat=${seat} · 对手那条 .hand 的 data-hand-count = ${count}`
+          + `（dataset=${String(foeQ.dataset.handCount)}）`);
+        expect(rawCount, `viewSeat=${seat}：对手那条 .hand 上没有 data-hand-count（信息遮蔽的契约名丢了）`)
+          .not.toBeNull();
+        expect(count, `viewSeat=${seat}：data-hand-count 不是数字串（实际 "${count}"）`).toMatch(/^\d+$/);
+        // ③ 反向：不许"另建一份副本"来同时满足"嵌进信息块"和"留在 .net-hands"（那会产出 4 条 .hand）
+        expect(byClass.map((n) => String(n.dataset.player)).sort(),
+          `viewSeat=${seat}：.hand 不是恰好 P0/P1 各一条（多出来的就是副本 —— `
+          + 'querySelectorAll(".hand")[player] 的**下标**语义会被副本破坏）').toEqual(['0', '1']);
+      }
+    } finally {
+      await drainRaf();
+      restore();
+    }
+  });
+});
+
+describe('R19 · RAIL-2：`.net-board` 的列/行模板与两栏的贴边（CSS 解算腿）', () => {
   const board = (): StubNode => cssNode('board', 'net-board');
   const grid = (): StubNode => cssNode('board-grid', 'net-grid');
   const rail = (): StubNode => cssNode('net-left-rail');
@@ -382,7 +532,6 @@ describe('R19 · RAIL-2：`.net-board` 的列/行模板与左栏的贴边（CSS 
       '`.net-board` 上仍有 `justify-content: center`（R12-7 的"三块整组居中"）—— '
       + 'R19 的居中改由左右两条等宽留白表达，留着它就是同一件事两套真相').toBeNull();
   });
-
   it('RAIL-2b. `.net-board` 的**行模板只有一行**（放置区独占整页高）', () => {
     const b = board();
     const raw = subjectPropOf(b, [b], RULES, 'grid-template-rows');
@@ -428,16 +577,175 @@ describe('R19 · RAIL-2：`.net-board` 的列/行模板与左栏的贴边（CSS 
     expect(got.justify, '左栏必须 `justify-self: end` —— 它的右缘要贴住第 1 列的右缘'
       + '（用户："这三个组件的最右边紧挨着中间的放置区域"）').toBe('end');
     expect(got.align, '左栏必须 `align-self: stretch` —— `justify-self: end` 只给"右缘贴住"，'
-      + '高度要撑满整行才装得下"放大框 + 三块组件"').toBe('stretch');
-    expect(got.display, '左栏必须是 flex 容器（放大框在上、停靠栏在下）').toBe('flex');
-    expect(got.flexDir, '左栏必须是**纵向** flex（自上而下：放大框 → 停靠栏）').toBe('column');
-    // 反面：`.net-left-rail` **不许**是 `display: contents`（那样放大框与 dock 会各成一个 grid item）
-    expect(got.display, '`.net-left-rail` 被写成了 display: contents —— 放大框与 .net-dock 会各自成为'
-      + '`.net-board` 的 grid item，左栏的"上下两块 + 右缘贴边"完全失效').not.toBe('contents');
+      + '高度要撑满整行才装得下"信息组件对 + 手牌区"').toBe('stretch');
+    expect(got.display, '左栏必须是 flex 容器（信息组件对在上、自己手牌区在下）').toBe('flex');
+    expect(got.flexDir, '左栏必须是**纵向** flex（自上而下：`.net-info-pair` → 手牌区）').toBe('column');
+    // 反面：`.net-left-rail` **不许**是 `display: contents`（那样两块会各成一个 grid item）
+    expect(got.display, '`.net-left-rail` 被写成了 display: contents —— `.net-info-pair` 与 `.net-hands`'
+      + '会各自成为 `.net-board` 的 grid item，左栏的"上下两块 + 右缘贴边"完全失效').not.toBe('contents');
+  });
+
+  it('RAIL-2c2（R21 新增）. `.net-right-rail` 在**第 3 列** + `justify-self: start` ⇒ 左缘贴放置区右缘', () => {
+    const b = board();
+    const rr = cssNode('net-right-rail');
+    const chain = [b, rr];
+    const got = {
+      col: subjectPropOf(rr, chain, RULES, 'grid-column'),
+      row: subjectPropOf(rr, chain, RULES, 'grid-row'),
+      justify: subjectPropOf(rr, chain, RULES, 'justify-self'),
+      align: subjectPropOf(rr, chain, RULES, 'align-self'),
+      display: subjectPropOf(rr, chain, RULES, 'display'),
+      flexDir: subjectPropOf(rr, chain, RULES, 'flex-direction'),
+    };
+    console.log(`\n===== RAIL-2c2 · 放置区 ←→ 右栏 =====\n`
+      + `  .net-right-rail grid-column=${String(got.col)} grid-row=${String(got.row)}`
+      + ` justify-self=${String(got.justify)} align-self=${String(got.align)}`
+      + ` display=${String(got.display)} flex-direction=${String(got.flexDir)}`);
+    /* ⚠️⚠️ **为什么 `justify-self` 必须是 `start`（这条最容易写错）**：
+     * 右栏在第 3 列。`start` ⇒ 左缘贴第 3 列左缘 = **放置区右缘**（左右两条 `1fr` 同值保证对称）。
+     * `end` ⇒ 右栏被推到**视口最右**，与放置区之间空出整栏 —— 用户抱怨的"右边空间很大"
+     * 会变成"框贴着屏幕边、离卡很远"（那正是本条要挡的观感）。 */
+    expect(got.col, '右栏必须在**第 3 列**（放置区右边）').toBe('3');
+    expect(got.row, '右栏必须与放置区**同一行**').toBe('1');
+    expect(got.justify, '右栏必须 `justify-self: start` —— 它的**左缘**要贴住第 3 列左缘'
+      + '（= 放置区右缘）；写成 `end` 会把它推到视口最右、离卡一栏远').toBe('start');
+    expect(got.align, '右栏必须 `align-self: stretch`（高度撑满整行，放大框才能"贴顶"）').toBe('stretch');
+    expect(got.display, '右栏必须是 flex 容器（纵向排它的内容）').toBe('flex');
+    expect(got.flexDir, '右栏必须是纵向 flex（放大框贴顶）').toBe('column');
+    // 反面：**不许**是 contents（那样放大框会自己成为一个 grid item，`justify-self` 就作用在它身上了）
+    expect(got.display, '`.net-right-rail` 被写成了 display: contents —— 放大框会自己成为 grid item，'
+      + '"右栏"这个语义消失（`justify-self: start` 会落到框自己身上）').not.toBe('contents');
+  });
+
+  it('RAIL-2c3（R21 新增）. `.net-info-pair`：flex row + **wrap** + **两块 `flex: 0 0 auto`**（不许压扁）', () => {
+    const b = board();
+    const pair = cssNode('net-info-pair');
+    const block = cssNode('net-info-block');
+    block.dataset.netSeat = 'self';
+    const railNode = cssNode('net-left-rail');
+    const chain = [b, railNode, pair];
+    const blockChain = [b, railNode, pair, block];
+    const got = {
+      display: subjectPropOf(pair, chain, RULES, 'display'),
+      dir: subjectPropOf(pair, chain, RULES, 'flex-direction'),
+      wrap: subjectPropOf(pair, chain, RULES, 'flex-wrap'),
+      justify: subjectPropOf(pair, chain, RULES, 'justify-content'),
+      gap: subjectPropOf(pair, chain, RULES, 'gap'),
+      blockFlex: subjectPropOf(block, blockChain, RULES, 'flex'),
+      blockFlexShrink: subjectPropOf(block, blockChain, RULES, 'flex-shrink'),
+    };
+    console.log(`\n===== RAIL-2c3 · .net-info-pair 与两块在其中的声明 =====\n`
+      + `  .net-info-pair display=${String(got.display)} flex-direction=${String(got.dir)}`
+      + ` flex-wrap=${String(got.wrap)} justify-content=${String(got.justify)} gap=${String(got.gap)}\n`
+      + `  .net-info-pair > .net-info-block flex=${String(got.blockFlex)}`
+      + ` flex-shrink=${String(got.blockFlexShrink)}`);
+    expect(got.display, '`.net-info-pair` 不是 flex 容器 —— "两块紧挨在一起"没有机制了').toBe('flex');
+    expect(got.dir, '`.net-info-pair` 不是横排（用户："一齐放在……让这两个组件能够紧挨在一起"）').toBe('row');
+    /* ⚠️⚠️ **`flex-wrap: wrap` 是"优先级"的表达（用户给的取舍）**：
+     * "若两块的最小宽之和仍超过左栏可用宽，**优先**让 `.net-info-pair` 换行，而不是压扁任何一块"。
+     * 没有 `wrap` 时，flex 的缺省 `flex-shrink: 1` 会把两块**按比例压扁**（R20 截图里自己那块
+     * 被压成一条缝就是这个机制）。⇒ wrap 与子项 `flex: 0 0 auto` 必须**成对**出现，
+     * 缺任何一条都会退化（下面那条分开钉 `flex-shrink: 0`）。 */
+    expect(got.wrap, '`.net-info-pair` 没有 `flex-wrap: wrap` —— 两块会被压扁而不是换行'
+      + '（用户给的优先级："宁可换行，不许挤扁"）').toBe('wrap');
+    expect(got.justify, '`.net-info-pair` 的整组必须右贴（与左栏右缘 = 放置区左缘一致）').toBe('flex-end');
+    expect(cssLenOf(chain, RULES, got.gap ?? ''), '`.net-info-pair` 没有间距（两块会贴成一堵墙）')
+      .toBeGreaterThan(0);
+    // ⚠️ **`order: -1`**：DOM 顺序被"`.hand` 顺序恒 `[P0, P1]`"这条红线锁死（自己手牌必须在前），
+    //    所以"信息组件在**上方**"只能由 CSS `order` 表达 —— 见 styles-net.css 的说明。
+    expect(subjectPropOf(pair, chain, RULES, 'order'),
+      '`.net-left-rail > .net-info-pair` 没有 `order: -1` —— 视觉顺序会变成"自己手牌在上、信息组件在下"，'
+      + '与用户 R21 的"放在手牌区的上方"相反').toBe('-1');
+    // ⚠️ 反向：`.net-hands` 也必须 `order: 1`（两条成对；只写一条在两个座位下都会错一半）
+    const handsNode = cssNode('net-hands');
+    expect(subjectPropOf(handsNode, [b, railNode, handsNode], RULES, 'order'),
+      '`.net-left-rail > .net-hands` 没有 `order: 1` —— 它压不住 DOM 顺序带来的视觉位置').toBe('1');
+    // ⚠️ 子项的"不许压扁"：`flex: 0 0 auto` **等价写法**也接受（只要 `flex-shrink` 解出 0）
+    const shrink = got.blockFlexShrink ?? /(?:^|\s)(\d+)(?:\s|$)/.exec(got.blockFlex ?? '')?.[1] ?? null;
+    const shrinkOk = shrink === '0' || /^\s*0\s+0\s+auto\s*$/.test(got.blockFlex ?? '');
+    expect(shrinkOk, '`.net-info-pair > .net-info-block` 的 `flex-shrink` 不是 0'
+      + `（实际 flex=${String(got.blockFlex)} / flex-shrink=${String(got.blockFlexShrink)}）—— `
+      + '两块会被压扁（用户截图里的缺陷形态）。必须是 `flex: 0 0 auto` 或等价的 `flex-shrink: 0`').toBe(true);
+  });
+
+  it('RAIL-2c4（R21 新增）. 手牌样式与"挂在哪个容器"**解耦**：作用域是 `.net-board`，不再是 `.net-hands`', () => {    /* ⚠️ **旧句为什么必须改**：R19 之前这些规则的作用域是 `.net-hands`（那时两条手牌都在它子树里）。
+     * R21 把对手那一块搬进信息块 ⇒ 用 `.net-hands` 作用域的规则对**对手那条 `.hand`** 恒不命中：
+     *   · `.net-hands .hand-count-only` / `.hand-count-placeholder` —— **对手手牌正是走这两条**的
+     *     ⇒ 这是当场就坏（不是"将来"）；
+     *   · `.net-hands .hand`（整高 + 扇步）/ `.net-hands .card`（卡宽）。
+     * **新句多查了什么**：① 作用域必须是 `.net-board`（两条手牌的**共同祖先**，与宿主无关）；
+     * ② 热座页仍然选不中（构造性零变化 —— `.net-board` 这个类只在本页产出）；
+     * ③ 判据对象不变（占位块足印 / 手牌卡宽 / 扇步），只是不再与容器绑定。 */
+    const b = board();
+    const handArea = cssNode('net-hand-area', 'net-hand-area-foe');
+    const hand = cssNode('hand', 'hand-count-only');
+    const ph = cssNode('hand-count-placeholder');
+    const card = cssNode('card');
+    // 链上**故意没有** `.net-hands`：对手那一块的真实祖先链就是这样
+    const chainPh = [b, handArea, hand, ph];
+    const chainCard = [b, handArea, hand, card];
+    const onlyMinW = subjectPropOf(hand, [b, handArea, hand], RULES, 'min-width');
+    const phMinH = subjectPropOf(ph, chainPh, RULES, 'min-height');
+    const cardW = subjectPropOf(card, chainCard, RULES, 'width');
+    console.log(`\n===== RAIL-2c4 · 无 .net-hands 祖先时的手牌解算 =====\n`
+      + `  .hand-count-only min-width=${String(onlyMinW)}\n`
+      + `  .hand-count-placeholder min-height=${String(phMinH)}\n`
+      + `  .card width=${String(cardW)}`);
+    expect(onlyMinW, '`.hand-count-only` 的 `min-width: var(--card-w)` 在"没有 `.net-hands` 祖先"的链上'
+      + '解不出来 —— 手牌区的**足印**丢了（`fxHandEndPoint` 的落点会塌到 0 宽）')
+      .toBe('var(--card-w)');
+    expect(phMinH, '`.hand-count-placeholder` 在对手那一块里必须是 `min-height: 0`（R11-2 的"压成单行小字"），'
+      + '无 `.net-hands` 祖先时也不例外').toBe('0');
+    expect(cardW, '`.card` 的 `width: var(--card-w)` 在无 `.net-hands` 祖先的链上解不出来 —— '
+      + '对手手牌若有卡会退回热座的 130px').toBe('var(--card-w)');
+    // 反空集合：占位块的**基类**（无 `.net-hands` 祖先、但**不是**对手那一块）仍必须留着整卡高的默认长相
+    const plain = cssNode('net-hand-area');
+    expect(subjectPropOf(ph, [b, plain, hand, ph], RULES, 'min-height'),
+      '`.hand-count-placeholder` 的基类不再有 `min-height: var(--hand-card-h)` —— '
+      + '将来若有第五种形态，占位块会比真手牌矮一截').toBe('var(--hand-card-h)');
+    const hot = readFileSync(fileURLToPath(new URL('../../src/ui/styles.css', import.meta.url)))
+      .subarray(0, 4 * 1024 * 1024).toString('utf8');
+    // ⚠️ **必须先剥注释**：`styles.css` 的**注释里**提到过 `.net-board`（一句"旋钮写在
+    //    `.net-board` 规则体里"的历史说明）—— 拿裸文本查会**假红**（本项目反复栽过的
+    //    "注释补位"族）。剥掉注释之后剩下的才是真选择器。
+    const hotNoComments = hot.replace(/\/\*[\s\S]*?\*\//g, ' ');
+    for (const cls of ['net-board', 'net-hands', 'net-hand-slot', 'net-info-pair', 'net-right-rail']) {
+      expect(hotNoComments, `styles.css（热座）里出现了 .${cls} —— 新的作用域会让热座页也被命中，`
+        + '"热座零变化"不再是构造性的').not.toContain(cls);
+    }
   });
 
   it('RAIL-2d（前提腿）：样式表里不得含 `!important` / ID / 内联覆盖（与既有四条腿同一份实现）', () => {
     expect(() => assertNoUnmodelableCascade(RULES, MODELED_PROPS)).not.toThrow();
+  });
+
+  it('RAIL-2f（R21 新增 · 运行时自查腿）. `verifyPageHooks` 的**约束 7**（`.hand` 前序顺序）在真实一帧上过', async () => {
+    /* ⚠️ **为什么新增这一条**：R21 把两条 `.hand` 拆到**两个宿主**里 ⇒ "顺序恒 `[P0, P1]`"不再是
+     * 源码文本能保证的性质（它取决于**宿主在 DOM 里的先后**，而那是随座位变的）
+     * ⇒ 本波给 `verifyPageHooks` 加了**断言 7**（运行时用 `querySelectorAll('.hand')` 真读一次）。
+     * 这条腿证明两件事：
+     *  ① 那一帧里 `.hand` 的顺序**真的**是 `[P0, P1]`（两个座位都跑）；
+     *  ② 新增的断言 7 **不误报**（它在正常页面上不该进失败清单 —— 假红会让预览页常年挂一条红字）。 */
+    const restore = installStubDom();
+    try {
+      const { verifyPageHooks } = await import('../../src/ui/render-net');
+      for (const seat of [0, 1] as const) {
+        const root = renderFrame(seat);
+        const wrap = boardOf(root);
+        const note = verifyPageHooks(wrap as unknown as HTMLElement, seat);
+        console.log(`\n===== RAIL-2f · viewSeat=${seat} · 自查返回值 =====\n  ${note}`);
+        // ① 真实一帧的 `.hand` 顺序（与 FX 完全相同的那条查询）
+        const order = (wrap as unknown as { querySelectorAll(s: string): StubNode[] })
+          .querySelectorAll('.hand').map((h) => h.dataset.player);
+        expect(order, `viewSeat=${seat}：真实一帧的 .hand 前序顺序不是 [P0, P1]`).toEqual(['0', '1']);
+        // ② 断言 7 不误报（返回值只带 fatal[0]，所以这里查"它不该是约束 7 那一条"）
+        expect(note, `viewSeat=${seat}：自查在正常页面上报了约束 7（假红）—— 返回值=${note}`)
+          .not.toContain('约束 7');
+      }
+    } finally {
+      await drainRaf();
+      restore();
+    }
   });
 
   it('RAIL-2e. 压缩档位：`--card-h` 收到 130、牌堆 34×50、`.net-hands .card` 的宽/扇步仍由旋钮推出', () => {

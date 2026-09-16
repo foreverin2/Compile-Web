@@ -246,13 +246,14 @@ describe('R11-2 · G-13：停靠栏（一个视口高 · 链路区内部滚动 �
         expect(alignC, '放置区必须有 `align-content: start` —— 高屏时隐式行被拉伸会把列内六个层块撑开')
           .toBe('start');
 
-        // ── ⑤ **三块组件在左栏里**（R19 取代"停靠栏在链路区之下"）──
-        //    ⚠️ **旧句为什么必须改**：旧句解"自己信息块的 `grid-row` 必须 > 1"（上下分开）。
-        //    R19 的裁决是**左右分开**（用户："平移挪到左边区域，直至……最右边紧挨着中间的放置区域"）
-        //    ⇒ 三块与放置区**同一行**，旧句会把本轮的裁决判成失败。
-        //    **新句多查了什么**：① 三块的祖先链上必须有 `.net-dock` **且** `.net-left-rail`
-        //    （结构面：它们是左栏里的横排整体，不是散在棋盘上的自动放置项）；
-        //    ② 左栏的 `grid-column` 是 `1`（左）且 `justify-self: end`（右缘贴放置区左缘）。
+        // ── ⑤ **两块信息组件在左栏的 `.net-info-pair` 里**（R19 建左栏 → **R21 换装 `.net-dock`**）──
+        //    ⚠️ **旧句为什么必须改（两次）**：旧句（R11-2）解"自己信息块的 `grid-row` 必须 > 1"；
+        //    R19 改成"三块都在 `.net-dock` 里"（一个横排整体）；**R21 把三块拆开了** ——
+        //    两块信息块进 `.net-info-pair`（左栏顶部、紧挨在一起）、自己手牌区留在左栏，
+        //    对手手牌区嵌进对手信息块。`.net-dock` **已退役**（留一条规则 = "三块还在同排"的假证据）。
+        //    **新句多查了什么**：① 两块信息组件的祖先链上必须有 `.net-info-pair` **且** `.net-left-rail`；
+        //    ② `.net-info-pair` 恰好一块；③ 左栏的 `grid-column`/`justify-self` 不变（右缘贴放置区左缘）；
+        //    ④ **新增**：`.net-dock` 这个类**不许再出现**（退役要退干净）。
         const leftRail = descendants(root).find((n) => isClass(n, 'net-left-rail'));
         expect(leftRail, `viewSeat=${seat}：元素树里找不到 .net-left-rail（左栏没产出？）`).toBeTruthy();
         const railChain = ancestorsOf(root, leftRail!);
@@ -264,19 +265,24 @@ describe('R11-2 · G-13：停靠栏（一个视口高 · 链路区内部滚动 �
         for (const side of ['self', 'foe'] as const) {
           const chain = ancestorsOf(root, infoBlockOf(root, side));
           expect(chain.some((n) => isClass(n, 'net-left-rail')),
-            `viewSeat=${seat}：${side} 侧的信息块不在左栏里（用户要的"三大组件平移挪到左边区域"没落地）`).toBe(true);
-          expect(chain.some((n) => isClass(n, 'net-dock')),
-            `viewSeat=${seat}：${side} 侧的信息块不在 .net-dock 里（三块必须作为一个整体横排）`).toBe(true);
+            `viewSeat=${seat}：${side} 侧的信息块不在左栏里（用户要的"平移挪到左边区域"没落地）`).toBe(true);
+          expect(chain.some((n) => isClass(n, 'net-info-pair')),
+            `viewSeat=${seat}：${side} 侧的信息块不在 .net-info-pair 里（用户 R21：两块要"紧挨在一起"）`)
+            .toBe(true);
         }
+        expect(descendants(root).filter((n) => isClass(n, 'net-info-pair')).length,
+          `viewSeat=${seat}：.net-info-pair 不是恰好一块`).toBe(1);
         expect(descendants(root).filter((n) => isClass(n, 'net-dock')).length,
-          `viewSeat=${seat}：.net-dock 不是恰好一块`).toBe(1);
-        // 反空集合：这一帧里**真的**有停靠栏四块（否则上面几条是空判据）
+          `viewSeat=${seat}：.net-dock 又出现了 —— R21 之后三块不再同排（两块进 .net-info-pair、`
+          + '自己手牌区留在左栏、对手手牌区嵌进对手信息块），留着它就是"三块还在同排"的假证据')
+          .toBe(0);
+        // 反空集合：这一帧里**真的**有两块信息组件与两块手牌区（否则上面几条是空判据）
         const tree: string[] = [];
         walk(board, 0, tree, 2);
         expect(descendants(root).filter((n) => isClass(n, 'net-info-block')).length,
-          '停靠栏里的信息块不是两块').toBe(2);
+          '信息块不是两块').toBe(2);
         expect(descendants(root).filter((n) => isClass(n, 'net-hand-area')).length,
-          '停靠栏里的手牌区不是两块').toBe(2);
+          '手牌区不是两块').toBe(2);
       }
     } finally {
       await drainRaf();
@@ -368,15 +374,18 @@ describe('R11-2 · G-13：停靠栏（一个视口高 · 链路区内部滚动 �
       expect(declOf(ph, 'border'), `占位块的虚线卡框没被撤掉（实际 ${String(declOf(ph, 'border'))}）`)
         .toBe('none');
       // ── 反空集合（两侧都要）：基类必须仍是"一块手牌区的完整长相" ──
-      const baseRule = RULES.find((r) => r.selector.trim() === '.net-hands .hand-count-placeholder');
-      expect(baseRule, 'styles-net.css 里找不到 `.net-hands .hand-count-placeholder` 的**基类**规则')
+      // ⚠️ **R21**：作用域从 `.net-hands .hand-count-placeholder` 换成
+      // `.net-board .hand-count-placeholder`（解耦 —— 对手那一块已经不在 `.net-hands` 里了，
+      // 旧作用域对**对手手牌**恒不命中，而那正是走这条规则的唯一一处）。见 styles-net.css 第 7 节。
+      const baseRule = RULES.find((r) => r.selector.trim() === '.net-board .hand-count-placeholder');
+      expect(baseRule, 'styles-net.css 里找不到 `.net-board .hand-count-placeholder` 的**基类**规则')
         .toBeTruthy();
       expect(baseRule!.body, '占位块的基类被改掉了（R11-2 只允许**覆盖**，不许把基类改成一行小字 —— '
         + '将来若有第五种形态，它仍要有一块占位区默认长相）').toMatch(/min-height:\s*var\(--hand-card-h\)/);
       expect(baseRule!.body, '占位块的基类不再有虚线框').toMatch(/border:\s*1px\s+dashed/);
       // 足印：`.hand-count-only` 仍保留一张卡宽（`fxHandEndPoint` 的 x 落在同一条带上）
-      const onlyRule = RULES.find((r) => r.selector.trim() === '.net-hands .hand-count-only');
-      expect(onlyRule, '找不到 `.net-hands .hand-count-only` 的规则').toBeTruthy();
+      const onlyRule = RULES.find((r) => r.selector.trim() === '.net-board .hand-count-only');
+      expect(onlyRule, '找不到 `.net-board .hand-count-only` 的规则').toBeTruthy();
       expect(onlyRule!.body, '`.hand-count-only` 的 `min-width: var(--card-w)` 丢了 —— '
         + '对手手牌的**足印**没了，手牌落点特效会落到一个 0 宽的点上').toMatch(/min-width:\s*var\(--card-w\)/);
     } finally {
@@ -607,20 +616,25 @@ describe('R11-4 · G-15：`.choice-mode` 挂在 `.net-hands` 上（选择模式�
 
   it('G-15b（源码腿）：不许再用 `lastElementChild` 取手牌区；`buildLeftRail` 直接交回 `hands`', () => {
     const src = netSrc();
-    expect(src, 'render-net.ts 里又出现了 `lastElementChild` —— 那个取法拿到的**不是** `.net-hands`'
-      + '（`NET_BOTTOM_SIDES` 是 [\'self\', \'foe\'] ⇒ DOM 顺序 `[自己信息块, 手牌区, 对手信息块]`）')
+    // ⚠️ **R21：这两条名字换了**（`bottom` / `.net-dock` 都退役）—— 判据因此**只看节点是不是从
+    //    构建点直接交出去的**，不再绑定"上一层叫什么名字"（那是 R19 的写法，随 R21 一起过期）。
+    expect(src, 'render-net.ts 里又出现了 `lastElementChild` —— 那个取法拿到的是**错的节点**'
+      + '（R11-4 的原始缺陷：`NET_BOTTOM_SIDES` 是 [\'self\', \'foe\'] ⇒ 旧 DOM 顺序下'
+      + '`lastElementChild` 拿到的是**对手信息块**）')
       .not.toContain('lastElementChild');
-    // ⚠️ **判据迁移（R19）**：旧句钉的是 `buildBottomRow(...): { row: HTMLElement; hands: HTMLElement }`
-    //    与 `const { row: bottom, hands } = buildBottomRow(`。
-    //    **旧句为什么必须改**：R19 把"谁把 `.net-hands` 交给 `renderChoiceUi`"这件事上移了一层 ——
-    //    现在由 `buildLeftRail`（左栏：放大框 + `.net-dock`）交出，`buildBottomRow` 仍是它的下游。
-    //    旧句会把**正确**的实现判红。
-    //    **新句多查了什么**：① 交出 `hands` 的**那一层**是 `buildLeftRail`（R19 的挂载点）；
-    //    ② `buildBottomRow` 的返回值形状**一个字没变**（R11-4 的修法仍在那 — 交接口类型仍在）；
-    //    ③ 调用点确实从 `buildLeftRail` 解构出 `hands`（而不是又去按位置猜）。
-    expect(src, '`buildBottomRow` 的返回值不再是 `{ row, hands }`（R11-4 的"从构建点直接交出去"被改坏了）')
-      .toMatch(/\):\s*\{\s*row:\s*HTMLElement;\s*hands:\s*HTMLElement\s*\}/);
-    expect(src, '`buildLeftRail` 没有把 `.net-hands` 节点交回来（R19 的挂载点上移后，R11-4 的修法丢了）')
+    // ⚠️ **判据迁移（R19 → R21 再改）**：
+    //   · R19 钉的是 `buildBottomRow(...): { row, hands }`（由 `buildLeftRail` 解构出 `hands`）；
+    //   · **R21 必须再改**：`buildBottomRow` 的返回值多了 `selfSlot` / `foeSlot`（槽位句柄），
+    //     且 `buildLeftRail` 现在**只收 `s/viewSeat/cb/operator`**（不再收 `zoom`）——
+    //     放大框搬到右栏了。旧句会把**正确**的实现判红。
+    //   **新句多查了什么**：① `buildBottomRow` 的返回值**仍含** `hands: HTMLElement`（R11-4 的
+    //   "从构建点直接交出去"没被改坏），且**新增**了两个槽位字段；② `buildLeftRail` 仍把
+    //   `hands` 交回来；③ 调用点确实从 `buildLeftRail` 解构出 `hands`（而不是按位置猜）；
+    //   ④ **新增**：`.net-hands` 仍**恰好一个**（结构守卫）—— 由 RAIL-1b / R6-1 真跑钉住。
+    expect(src, '`buildBottomRow` 的返回值里没有 `hands: HTMLElement`'
+      + '（R11-4 的"从构建点直接交出去"被改坏了）')
+      .toMatch(/\):\s*\{\s*row:\s*HTMLElement;\s*hands:\s*HTMLElement;\s*selfSlot:\s*HTMLElement;\s*foeSlot:\s*HTMLElement\s*\}/);
+    expect(src, '`buildLeftRail` 没有把 `.net-hands` 节点交回来（R11-4 的修法丢了）')
       .toMatch(/\):\s*\{\s*rail:\s*HTMLElement;\s*hands:\s*HTMLElement\s*\}/);
     expect(src, '`renderNetBoard` 没有从 `buildLeftRail` 解构出 `hands`')
       .toMatch(/const\s*\{\s*rail:\s*leftRail,\s*hands\s*\}\s*=\s*buildLeftRail\(/);
