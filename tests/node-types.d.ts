@@ -1,65 +1,41 @@
-// 极简 node 环境声明：仅覆盖 tests 用到的 node 内置能力（项目未装 @types/node，
-// 禁止 npm install；vitest 运行于 node，运行时真实可用，此处只为通过 tsc --noEmit）。
+// 极简 node 环境声明：仅覆盖 tests 用到的 node 内置能力。
+// 本仓**未装 `@types/node`**（零依赖硬约束，禁止 npm install），而 vitest 跑在 node 上、
+// 这些内置在**运行时真实可用** —— 这份声明只为让 `tsc --noEmit` 通过，不描述运行时行为。
 //
-// ⚠️ `default` 导出是**必须**的：`scripts/*.mjs` 这类真实 ESM 模块被测试直接 import 时，
-// vitest/vite 的外部化路径会以 `import fs from 'node:fs'` 形态加载它（G3 Task 8 实测：
-// 只声明具名导出时，`readFileSync` 在生成脚本里是 undefined）。
+// ⚠️ **不提供 `default` 导出**（G3 Task 8 修复轮收回）：`.d.ts` 只是类型声明，**不可能**影响
+// `scripts/*.mjs` 的运行时；且 `scripts/` 不在 `tsconfig.json` 的 `include` 里（只有
+// `src`/`tests`/`vite.config.ts`），`.mjs` 根本不进 `tsc`。此前这里加的 `default` 导出
+// （以及"必须要有 default，否则 readFileSync 在生成脚本里是 undefined"那条注释）原理上不成立，
+// 实测也复现不出（把生成脚本改成具名导入 + 删掉四处 default ⇒ tsc 0 错 / 全量测试全绿 /
+// `npm run build` OK）。本仓的记录里明确写着"不许为某处扩 node 类型声明"
+// （见 `tests/app/match-file.test.ts:669-670` 附近的禁令），所以此处只保留**具名**声明。
+//
+// 唯一消费方（`Get-ChildItem tests -Recurse -Include *.ts` 的 import 扫描）：
+//   `tests/ui/pwa-update.test.ts` 的临时目录夹具（`mkdtempSync`/`mkdirSync`/`writeFileSync`/
+//   `rmSync`/`tmpdir`）与全文读取（`readFileSync`/`statSync`/`existsSync`）；其余测试文件用
+//   `readFileSync`/`readdirSync`/`statSync`/`join`/`fileURLToPath`。
 declare module 'node:fs' {
   export function existsSync(path: string): boolean;
   export function readFileSync(path: string): {
     subarray(start: number, end?: number): { toString(encoding?: string): string };
   };
   export function readdirSync(path: string): string[];
-  export function statSync(path: string): { isDirectory(): boolean };
-  // G3 Task 8（生成脚本 / 其行为腿需要）：写入与临时目录
+  export function statSync(path: string): { isDirectory(): boolean; size: number };
+  // G3 Task 8（其临时目录夹具需要）：写入与临时目录
   export function writeFileSync(path: string, data: string, encoding?: string): void;
   export function mkdirSync(path: string, options?: { recursive?: boolean }): string | undefined;
   export function mkdtempSync(prefix: string): string;
   export function rmSync(path: string, options?: { recursive?: boolean; force?: boolean }): void;
-  const _default: {
-    existsSync: typeof existsSync;
-    readFileSync: typeof readFileSync;
-    readdirSync: typeof readdirSync;
-    statSync: typeof statSync;
-    writeFileSync: typeof writeFileSync;
-    mkdirSync: typeof mkdirSync;
-    mkdtempSync: typeof mkdtempSync;
-    rmSync: typeof rmSync;
-  };
-  export default _default;
 }
 declare module 'node:url' {
   export function fileURLToPath(url: string | URL): string;
 }
 declare module 'node:path' {
   export function join(...parts: string[]): string;
-  // G3 Task 8：生成脚本要相对化 + 规范化路径
-  export function resolve(...parts: string[]): string;
-  export function relative(from: string, to: string): string;
-  export function dirname(p: string): string;
-  export const sep: string;
-  const _default: {
-    join: typeof join;
-    resolve: typeof resolve;
-    relative: typeof relative;
-    dirname: typeof dirname;
-    sep: string;
-  };
-  export default _default;
 }
 declare module 'node:os' {
+  /** 唯一消费方：`tests/ui/pwa-update.test.ts` 的临时目录夹具 */
   export function tmpdir(): string;
-  const _default: { tmpdir: typeof tmpdir };
-  export default _default;
-}
-declare module 'node:crypto' {
-  export interface Hash {
-    update(data: string | Uint8Array): Hash;
-    digest(encoding?: string): string;
-  }
-  export function createHash(algorithm: string): Hash;
-  const _default: { createHash: typeof createHash };
-  export default _default;
 }
 declare module 'node:child_process' {
   export function execFileSync(

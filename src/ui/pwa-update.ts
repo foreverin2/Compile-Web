@@ -37,7 +37,9 @@ export interface SwRegistrationLike {
 export interface SwContainerLike {
   register(url: string, opts?: { scope?: string }): Promise<SwRegistrationLike>;
   getRegistration(): Promise<SwRegistrationLike | undefined>;
-  addEventListener(t: string, cb: () => void): void;
+  // ⚠️ 事件回调带可选的事件参数：`message` 通路要读 `event.data`（预缓存失败通告）。
+  //    真实 `ServiceWorkerContainer.addEventListener` 的回调可忽略参数，故这里放宽不逆变。
+  addEventListener(t: string, cb: (ev?: unknown) => void): void;
   readonly controller: unknown;
 }
 
@@ -70,6 +72,12 @@ export interface PwaEnv {
   isProd: boolean;
   /** 有更新可用时调用一次（**只提示，不刷新**） */
   onUpdateAvailable(): void;
+  /**
+   * 预缓存失败时调用一次（**可选**，默认空实现）。`initPwaUpdate` 的默认环境用 `console.warn`
+   * 兜住它 —— 这是"install 失败不静默"的出口（评审重要 2）。**不刷新**：新 SW 没装好时
+   * 旧 SW 仍在控制页面，刷新既没用又打断对局。
+   */
+  onCacheIncomplete?(reason: string): void;
   /** 状态转移回调（测试/诊断用；默认空实现） */
   onState?(state: PwaUpdateState): void;
   /** 更新条宿主（默认 `document.getElementById('app')` + `document.createElement`） */
@@ -86,7 +94,7 @@ export type PwaUpdateState =
   | { kind: 'update-ready'; prompted: true }
   | { kind: 'updating'; prompted: true }
   | { kind: 'updated'; prompted: true; phase: 'skip-waiting' }
-  | { kind: 'failed'; prompted: boolean; phase: 'register' | 'apply'; reason: string };
+  | { kind: 'failed'; prompted: boolean; phase: 'register' | 'apply' | 'install'; reason: string };
 
 export type PwaUpdateEvent =
   | { type: 'updatefound'; installing?: unknown }
@@ -94,7 +102,13 @@ export type PwaUpdateEvent =
   | { type: 'waiting-present' }
   | { type: 'apply-update' }
   | { type: 'skip-waiting-sent' }
-  | { type: 'failed'; reason: string; phase: 'register' | 'apply' };
+  | { type: 'failed'; reason: string; phase: 'register' | 'apply' | 'install' }
+  /**
+   * `public/sw.js` 的 `install` 预缓存失败（弱网 / 配额 / 某个资产 404）。
+   * 它不是"有新版本"，但必须**不静默** —— 否则用户以为装好了、断网却打不开（评审重要 2）。
+   * 新 SW 装不上时旧 SW 仍在控制页面，所以这条消息**不会**触发刷新。
+   */
+  | { type: 'cache-incomplete'; reason: string };
 
 export const INITIAL_UPDATE_STATE: PwaUpdateState = { kind: 'idle', prompted: false };
 
@@ -113,6 +127,10 @@ export function nextUpdateState(state: PwaUpdateState, ev: PwaUpdateEvent): PwaU
       return { kind: 'updated', prompted: true, phase: 'skip-waiting' };
     case 'failed':
       return { kind: 'failed', prompted: state.kind === 'idle' ? false : true, phase: ev.phase, reason: ev.reason };
+    case 'cache-incomplete':
+      // 预缓存没装完**不是**"有新版本"，但必须**可观察**（重要 2）。所以这里总是落到
+      // `failed`（phase='install'），而不是悄悄保持原状态；状态机也绝不因此刷新。
+      return { kind: 'failed', prompted: state.kind !== 'idle', phase: 'install', reason: ev.reason };
     default:
       return state;
   }
@@ -131,7 +149,13 @@ export function applyUpdate(reg: SwRegistrationLike): void {
 
 /* ── 默认（真实）环境 ─────────────────────────────────────────────────────── */
 
-/** `globalThis` 上可能挂着 Service Worker 容器的那一小块（不引 DOM 全局名字，见 realEnv 的说明）。 */
+/**
+ * `navigator` 上可能挂着 Service Worker 容器的那一小块。
+ * ⚠️ 容器挂在**浏览器的 `navigator`** 上（`serviceWorker` 是它的成员）；`globalThis` 上那个
+ * 同名属性在浏览器里**不存在**（曾经写成那样，导致真实浏览器里 `sw === null` ⇒ `/sw.js`
+ * 一次都不注册；评审 B-1）。`tests/ui/pwa-update.test.ts` 现在有一组**运行时**腿在场证明
+ * 这件事，不靠文本形状。
+ */
 interface SwHolder {
   serviceWorker?: SwContainerLike;
 }
@@ -149,17 +173,23 @@ function realUi(): PwaUiLike {
 /**
  * 从真实的 Service Worker 容器取默认环境。**本模块唯一**允许直接碰浏览器全局的地方。
  *
- * 写成 `(globalThis as unknown as SwHolder | undefined)?.serviceWorker` 而不是经 `globalThis` 上的
- * 浏览器全局名字（后者的属性访问形态会让源码里出现第二处"裸访问"，而测试的"注入缝守卫"数的
- * 就是这种形态）—— 把唯一出口做成**可数的一个**，守卫才有意义。
+ * 容器挂在**浏览器全局 `navigator` 上**；`globalThis` 上那个同名属性在浏览器里不存在，
+ * 取它等于永远拿不到 SW（B-1 的成因）。这里经 `globalThis.navigator` 取，既拿到浏览器
+ * 真实的容器，又保持"浏览器全局只在本函数出现一次"这条注入缝纪律。
  */
 function realEnv(): PwaEnv {
-  const holder = globalThis as unknown as SwHolder | undefined;
+  const holder = (globalThis as unknown as { navigator?: SwHolder }).navigator;
   return {
     sw: holder?.serviceWorker ?? null,
     reload: () => (globalThis as { location?: { reload(): void } }).location?.reload(),
     isProd: !import.meta.env.DEV,
     onUpdateAvailable: () => {},
+    // 真实环境下"预缓存未完成"的最低限度出口：控制台可见（测试/诊断还能用 onCacheIncomplete 注入）。
+    onCacheIncomplete: (reason) => {
+      (globalThis as { console?: { warn?: (m: string) => void } }).console?.warn?.(
+        `[PWA] 离线预缓存未完成：${reason}`,
+      );
+    },
     ui: realUi(),
   };
 }
@@ -171,6 +201,13 @@ export const UPDATE_BAR_BUTTON = '立即更新';
 
 /** 点了"立即更新"之后等新 controller 接管的时间上限（到点仍没接管也要刷新，不能卡住用户） */
 export const RELOAD_FALLBACK_MS = 1500;
+
+/**
+ * `public/sw.js` 预缓存失败时广播给页面的消息类型（**唯一出处的字符串常量**）。
+ * `sw.js` 是 classic script、不能 import 本模块，所以两边各写一份字面量 —— 有一条文本腿
+ * 断言两份**逐字一致**（改名只改一边会变红）。
+ */
+export const SW_CACHE_INCOMPLETE = 'COMPILE_CACHE_INCOMPLETE';
 
 /**
  * 懒插更新条：宿主屏（授权弹窗 / 本地数据屏）会 `root.textContent = ''` 把内容清掉，
@@ -236,6 +273,23 @@ export function initPwaUpdate(overrides: Partial<PwaEnv> = {}): () => void {
     if (disposed || state.kind !== 'updating') return;
     emit(nextUpdateState(state, { type: 'skip-waiting-sent' }));
     reloadOnce();
+  });
+
+  /**
+   * 预缓存失败**不静默**（评审重要 2）：`sw.js` 的 install 失败时广播一条消息，
+   * 这里把它变成可观察状态（`nextUpdateState` 的 `cache-incomplete`）—— 用户/诊断能看到
+   * "离线缓存未完成"，而不是以为离线可开。
+   *
+   * 语义边界（刻意）：这条通路**只改状态，不做任何刷新**。新 SW 装不上时旧 SW 仍在控制页面，
+   * 刷新既没用又会打断对局（与"必须由用户点击才刷新"这条判据一致）。
+   */
+  container.addEventListener('message', (event: unknown) => {
+    if (disposed) return;
+    const data = (event as { data?: { type?: unknown; reason?: unknown } } | undefined)?.data;
+    if (!data || data.type !== SW_CACHE_INCOMPLETE) return;
+    const reason = String(data.reason ?? '');
+    emit(nextUpdateState(state, { type: 'cache-incomplete', reason }));
+    try { env.onCacheIncomplete?.(reason); } catch { /* 与 onState 同理：诊断出口不该影响游戏 */ }
   });
 
   const prompt = (reg: SwRegistrationLike): void => {

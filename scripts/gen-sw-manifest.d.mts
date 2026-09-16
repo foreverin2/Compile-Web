@@ -24,6 +24,7 @@ export interface SwManifestReport {
 }
 
 export function walk(dir: string, out?: string[]): string[];
+export function isShellAsset(rel: string): boolean;
 export function collectFiles(dist: string): SwManifestFile[];
 export function computeVersion(files: SwManifestFile[]): string;
 export function run(dist?: string): SwManifestReport;

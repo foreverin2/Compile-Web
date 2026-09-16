@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { readFileSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { readFileSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -9,12 +9,13 @@ import {
   nextUpdateState,
   INITIAL_UPDATE_STATE,
   RELOAD_FALLBACK_MS,
+  SW_CACHE_INCOMPLETE,
   type PwaElementLike,
   type PwaEnv,
   type SwContainerLike,
   type SwRegistrationLike,
 } from '../../src/ui/pwa-update';
-import { collectFiles, computeVersion, run as genManifest } from '../../scripts/gen-sw-manifest.mjs';
+import { collectFiles, computeVersion, isShellAsset, run as genManifest } from '../../scripts/gen-sw-manifest.mjs';
 /** ⚠️ 生成脚本的入口名叫 `run`，测试里读作 `genManifest`（腿的语义名，见 gen-sw-manifest.d.mts） */
 import { stripComments } from './source-text';
 
@@ -77,6 +78,31 @@ function fakeSw(reg: SwRegistrationLike, controller: unknown = {}): SwContainerL
     getRegistration: async () => reg,
     addEventListener: () => {},
     controller,
+  };
+}
+
+/** 带事件派发的容器桩（`controllerchange` 真的刷新通路 / `message` 真的预缓存失败通告）。 */
+function fakeSwDispatch(
+  reg: SwRegistrationLike,
+  controller: unknown = {},
+): SwContainerLike & { urls: unknown[][]; listeners: Map<string, Listener[]>; fire(type: string, ev?: unknown): void } {
+  const listeners = new Map<string, Listener[]>();
+  const urls: unknown[][] = [];
+  return {
+    urls,
+    listeners,
+    register: async (url: string, opts?: { scope?: string }) => {
+      urls.push([url, opts]);
+      return reg;
+    },
+    getRegistration: async () => reg,
+    addEventListener(type: string, cb: Listener) {
+      listeners.set(type, [...(listeners.get(type) ?? []), cb]);
+    },
+    controller,
+    fire(type: string, ev?: unknown) {
+      for (const cb of listeners.get(type) ?? []) cb(ev);
+    },
   };
 }
 
@@ -159,6 +185,117 @@ describe('PWA 更新状态机（纯函数，五态齐全，§8.4）', () => {
     const updated = nextUpdateState(INITIAL_UPDATE_STATE, { type: 'skip-waiting-sent' });
     expect(updated.kind).toBe('updated');
     expect(nextUpdateState(updated, { type: 'waiting-present' }).kind).toBe('update-ready');
+  });
+
+  it('态 5 的另一条：预缓存失败（cache-incomplete）**不谎报有更新**，但必须可观察', () => {
+    // 评审重要 2：install 的 addAll 失败必须"不静默"。
+    // 判定：① 它绝不把状态变成 update-ready（那是"有新版本"的语义，会骗用户）；
+    //      ② 它总是落到 failed（phase=install），于是 `onState` 出口一定被调到。
+    const idle = nextUpdateState(INITIAL_UPDATE_STATE, { type: 'cache-incomplete', reason: 'quota' });
+    expect(idle.kind, '预缓存失败被读成"有新版本可用"就是骗用户').toBe('failed');
+    expect(idle.kind === 'failed' && idle.phase).toBe('install');
+    expect(idle.kind === 'failed' && idle.reason).toBe('quota');
+    expect(idle.kind === 'failed' && idle.prompted, '还没提示过任何更新').toBe(false);
+    const ready = nextUpdateState(INITIAL_UPDATE_STATE, { type: 'waiting-present' });
+    const after = nextUpdateState(ready, { type: 'cache-incomplete', reason: 'quota' });
+    expect(after.kind).toBe('failed');
+    expect(after.kind === 'failed' && after.prompted, '已经提示过更新了，别把 prompted 抹掉').toBe(true);
+  });
+});
+
+/* ── 1b. B-1：真实浏览器全局（navigator.serviceWorker）真的被读到（**运行时**腿） ──
+ *
+ * 为什么必须有这一组：修复前本文件只有"文本形状"腿（`realEnv` 源码里有 `globalThis` /
+ * `serviceWorker` / `?? null` 三个词）。它证明不了 `realEnv()` **真的**从浏览器全局取到容器 ——
+ * 实现曾写成 `globalThis.serviceWorker`（浏览器上**不存在**的属性），所有文本腿仍全绿，
+ * 而真实浏览器里 `sw === null` ⇒ `/sw.js` 一次都不注册（评审 B-1）。
+ * 这组腿不传 `sw` override，只往 `globalThis.navigator` 装假件，然后要求**真的**注册了 `/sw.js`。
+ * ------------------------------------------------------------------------- */
+
+describe('B-1：默认环境真的从 navigator.serviceWorker 取容器（运行时，不靠文本）', () => {
+  /** node 下没有 `navigator`，用 defineProperty 装/拆（可配置，能删干净）。 */
+  const withNavigator = async (value: unknown, body: () => Promise<void>): Promise<void> => {
+    const desc = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+    Object.defineProperty(globalThis, 'navigator', { value, configurable: true, writable: true });
+    try {
+      await body();
+    } finally {
+      if (desc) Object.defineProperty(globalThis, 'navigator', desc);
+      else Reflect.deleteProperty(globalThis, 'navigator');
+    }
+  };
+
+  /** 只用来满足 `ui` 的接口：这一组腿不关心更新条，只关心 `register` 是否被调用。 */
+  const bareElement = (): PwaElementLike => ({
+    className: '',
+    textContent: '',
+    appendChild: (c: unknown) => c,
+    prepend: (c: unknown) => c,
+    addEventListener: () => {},
+    remove: () => undefined,
+    querySelector: () => null,
+  });
+
+  it('容器挂在 navigator.serviceWorker 上 ⇒ 真的调用 register(/sw.js, scope:/)', async () => {
+    const urls: unknown[][] = [];
+    const reg = fakeReg();
+    const container = {
+      register: async (url: string, opts?: { scope?: string }) => { urls.push([url, opts]); return reg; },
+      getRegistration: async () => reg,
+      addEventListener: () => {},
+      controller: {},
+    };
+    await withNavigator({ serviceWorker: container }, async () => {
+      // 浏览器真实的全局布局：容器在 `navigator` 上，`globalThis.serviceWorker` **不存在**。
+      // 这两条断言把 B-1 的成因**当场**钉住（而不是靠"读源码找字符串"）。
+      expect((globalThis as { serviceWorker?: unknown }).serviceWorker, '浏览器上 globalThis.serviceWorker 不存在').toBeUndefined();
+      expect((globalThis as { navigator?: { serviceWorker?: unknown } }).navigator?.serviceWorker).toBe(container);
+
+      const { env, log } = probe({
+        // ⚠️ 刻意**不传** `sw`：这一腿走的就是 `realEnv()` 的取值路径
+        ui: { host: () => null, make: () => bareElement() },
+      });
+      const dispose = initPwaUpdate(env);
+      await flush();
+      expect(urls, '浏览器把 SW 容器挂在 navigator.serviceWorker 上；读 globalThis.serviceWorker 会一个都不注册').toEqual([
+        ['/sw.js', { scope: '/' }],
+      ]);
+      expect(log.reloads, '注册阶段不该刷新').toBe(0);
+      dispose();
+    });
+  });
+
+  it('容器挂在 globalThis.serviceWorker（浏览器上不存在的位置）⇒ 不注册', async () => {
+    const urls: unknown[][] = [];
+    const desc = Object.getOwnPropertyDescriptor(globalThis, 'serviceWorker');
+    Object.defineProperty(globalThis, 'serviceWorker', {
+      value: { register: async (url: string, opts?: { scope?: string }) => { urls.push([url, opts]); return fakeReg(); } },
+      configurable: true,
+      writable: true,
+    });
+    try {
+      await withNavigator(undefined, async () => {
+        const dispose = initPwaUpdate({ isProd: true, reload: () => {}, onUpdateAvailable: () => {} });
+        await flush();
+        expect(urls, 'globalThis.serviceWorker 不是浏览器的容器位置；靠它取容器就是 B-1').toEqual([]);
+        dispose();
+      });
+    } finally {
+      if (desc) Object.defineProperty(globalThis, 'serviceWorker', desc);
+      else Reflect.deleteProperty(globalThis, 'serviceWorker');
+    }
+  });
+
+  it('navigator 整个缺失 ⇒ 静默 no-op：不抛错、不注册、不刷新', async () => {
+    const reload = vi.fn();
+    await withNavigator(undefined, async () => {
+      let dispose: (() => void) | null = null;
+      expect(() => { dispose = initPwaUpdate({ isProd: true, reload }); }).not.toThrow();
+      await flush();
+      expect(typeof dispose).toBe('function');
+      expect(() => (dispose as unknown as () => void)()).not.toThrow();
+      expect(reload).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -283,6 +420,27 @@ describe('initPwaUpdate（可注入环境）', () => {
     expect(typeof dispose).toBe('function');
     expect(() => dispose()).not.toThrow();
   });
+
+  it('sw 广播预缓存失败 ⇒ 状态不静默（failed/phase=install）且**不刷新**', async () => {
+    // 重要 2：install 的 cache.addAll 失败此前完全没有出口（用户与开发者都收不到提示）。
+    const sw = fakeSwDispatch(fakeReg());
+    const seen: string[] = [];
+    const { env, log } = probe({ sw, onCacheIncomplete: (r) => { seen.push(r); } });
+    const dispose = initPwaUpdate(env);
+    await flush();
+    sw.fire('message', { data: { type: SW_CACHE_INCOMPLETE, reason: 'HTTP 404' } });
+    expect(log.states, '预缓存失败必须能被观察到，不能静默').toContain('failed');
+    expect(seen, '预缓存失败的专用出口没被调到').toEqual(['HTTP 404']);
+    expect(log.reloads, 'install 失败时刷新既没用又打断对局').toBe(0);
+    expect(log.prompts, 'install 失败不是"有新版本"').toBe(0);
+    // 反向：无关消息不该改变状态
+    log.states.length = 0;
+    sw.fire('message', { data: { type: 'SOMETHING_ELSE' } });
+    sw.fire('message', undefined);
+    expect(log.states).toEqual([]);
+    expect(seen).toEqual(['HTTP 404']);
+    dispose();
+  });
 });
 
 /* ── 3. 「一键更新」的 UI 行为腿（用最小手写桩，不用 jsdom） ──────────────────── */
@@ -361,6 +519,58 @@ describe('一键更新：手动触发才不会刷新（行为腿，DOM 桩）', 
     dispose();
   });
 
+  it('controllerchange 是正常刷新通路，且只刷新一次（刷新闸）', async () => {
+    // 评审 S-3：真实浏览器里"点完更新 → 新 controller 接管"是**唯一**的正常刷新路径，
+    // 此前没有任何腿 fire 过 controllerchange；刷新闸（reloading）也没有腿。
+    vi.useFakeTimers();
+    try {
+      const sw = fakeSwDispatch(fakeReg({ waiting: { postMessage: () => {} } }));
+      let reloads = 0;
+      const host = makeHost();
+      const dispose = initPwaUpdate({
+        isProd: true,
+        sw,
+        reload: () => { reloads += 1; },
+        ui: { host: () => host, make: (tag: string) => makeElement(tag) },
+      } as unknown as Partial<PwaEnv>);
+      await flush();
+      const bar = host.querySelector('.pwa-update-bar');
+      expect(bar, '没有更新条 ⇒ 后面的点击与刷新判据都跑不到').not.toBeNull();
+      (bar as StubElement).children[1].handlers.click[0]();
+      expect(reloads, 'onclick 里刷新 = 用户点了就白发一次').toBe(0);
+
+      sw.fire('controllerchange');
+      expect(reloads, '新 controller 接管后才刷新（真实浏览器的正常通路）').toBe(1);
+      // 幂等：controllerchange 再来一次、兜底计时器到点，都不许再刷
+      sw.fire('controllerchange');
+      vi.advanceTimersByTime(RELOAD_FALLBACK_MS * 3);
+      expect(reloads, '刷新闸失效：一次更新刷了多次').toBe(1);
+      dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('宿主上已有更新条时不重复插（去重分支，评审 S-2 的零覆盖）', async () => {
+    const sw = fakeSwDispatch(fakeReg({ waiting: {} }));
+    const host = makeHost();
+    // 预置一条（模拟"宿主屏重建后条还在"的形态）：initPwaUpdate 不该再插第二条
+    const preexisting = makeElement('div');
+    preexisting.className = 'pwa-update-bar';
+    host.children.push(preexisting);
+    const dispose = initPwaUpdate({
+      isProd: true,
+      sw,
+      reload: () => {},
+      ui: { host: () => host, make: (tag: string) => makeElement(tag) },
+    } as unknown as Partial<PwaEnv>);
+    await flush();
+    const bars = host.children.filter((c) => c.className === 'pwa-update-bar');
+    expect(bars.length, `宿主上出现了 ${bars.length} 条更新条（去重分支失效）`).toBe(1);
+    expect(bars[0]).toBe(preexisting);
+    dispose();
+  });
+
   it('卸载函数把更新条从宿主上摘掉', async () => {
     const sw = fakeSw(fakeReg({ waiting: {} }));
     const host = makeHost();
@@ -401,17 +611,25 @@ describe('src/ui/pwa-update.ts 的可注入性（否则 node 下一条腿都跑�
   const src = read('../../src/ui/pwa-update.ts');
 
   it('浏览器全局只在 realEnv() 一处取（其余一律走注入缝）', () => {
-    // 数的是**属性访问形态**（`navigator.xxx` / `navigator?.xxx`）—— 注释里的举例文字不算。
+    // 数的是**代码里的属性访问形态**（`navigator.xxx` / `navigator?.xxx`）——
+    // ⚠️ 先 `stripComments`：不这么做的话，**注释里举例**的 `navigator.serviceWorker`
+    // 会同时造成假红（判据被说明文字撞红）与假绿（说明文字满足"这里有全局访问"）。
+    // 这条腿只管"模块里还有没有第二处裸访问"；"默认环境真的取得浏览器容器的容器"这件事
+    // 由上面第 1b 组的**运行时**腿证明（B-1 就是靠 `globalThis.serviceWorker` 从这里溜过去的）。
+    const code = stripComments(src);
     const accesses = (src2: string): string[] => src2.split('\n')
       .filter((l) => /navigator\s*[?.]\s*[A-Za-z_$]/.test(l));
-    expect(accesses(src), '模块里不该再有裸的浏览器全局属性访问').toEqual([]);
+    expect(accesses(code), '模块里不该再有裸的浏览器全局属性访问').toEqual([]);
 
-    const realEnv = src.slice(src.indexOf('function realEnv('), src.indexOf('export const UPDATE_BAR_CLASS'));
+    const realEnv = code.slice(code.indexOf('function realEnv('), code.indexOf('export const UPDATE_BAR_CLASS'));
     expect(realEnv, 'realEnv 没了').not.toBe('');
-    // 默认环境必须真的从浏览器全局取 SW 容器（且取不到时为 null ⇒ 静默降级）
+    // 默认环境必须经 `globalThis.navigator` 取 SW 容器（且取不到时为 null ⇒ 静默降级）
     expect(realEnv).toMatch(/globalThis/);
+    expect(realEnv).toMatch(/navigator/);
     expect(realEnv).toMatch(/serviceWorker/);
     expect(realEnv).toMatch(/\?\?\s*null/);
+    // 反向：不许再从 `globalThis` 上直接取同名属性（那正是 B-1）
+    expect(realEnv, 'globalThis.serviceWorker 不是浏览器的容器位置').not.toMatch(/globalThis\s*\)?\s*(?:as[^;]*)?[?.]\s*serviceWorker/);
   });
 
   it('initPwaUpdate 每一个浏览器对象都从 env 取（document/location 零裸用）', () => {
@@ -428,9 +646,49 @@ describe('public/sw.js 文本腿（离线缓存只缓存程序文件）', () => 
   const sw = read('../../public/sw.js');
 
   it('绝不触碰任何用户数据存储（红线 1 / §8.1）', () => {
-    expect(sw).not.toMatch(/localStorage/);
-    expect(sw).not.toMatch(/indexedDB/);
-    expect(sw).not.toMatch(/sessionStorage/);
+    // 先 `stripComments`：这条腿判的是**代码**里有没有存储 API。文件头注里点名写清"不许出现
+    // localStorage/indexedDB/sessionStorage"是纪律要求，不该把注释本身变成假红。
+    const code = stripComments(sw);
+    expect(code).not.toMatch(/localStorage/);
+    expect(code).not.toMatch(/indexedDB/);
+    expect(code).not.toMatch(/sessionStorage/);
+    // 反向：真的出现过这些名字时要能抓到（把注释剥干净的前提是代码里确实有判据）
+    expect(code).toContain('caches.');
+  });
+
+  /**
+   * 评审假守卫 M12：往 `fetch` 里注入"未命中就 `cache.put` 每个同源响应"曾经**全绿**。
+   * 这条腿钉两件事：
+   *  ① 全文件**只有一处 `cache.put`**（版本标记），且它只在 install 段被调用；
+   *  ② `fetch` 段里既没有 `cache.put/add/addAll`，也没有 `caches.open`。
+   * 与 `src/app/privacy.ts` 的 `offlineCacheNote`（"缓存的不是用户数据"）对齐：
+   * sw **只**允许写预缓存清单里的静态资产。
+   */
+  it('缓存写入只允许出现在 install 段（fetch 未命中绝不 cache.put）', () => {
+    const code = stripComments(sw);
+    const at = (needle: string): number => {
+      const i = code.indexOf(needle);
+      expect(i, `sw.js 里找不到 ${needle}`).toBeGreaterThan(-1);
+      return i;
+    };
+    const install = code.slice(at("addEventListener('install'"), at("addEventListener('activate'"));
+    const activate = code.slice(at("addEventListener('activate'"), at("addEventListener('message'"));
+    const fetchSeg = code.slice(at("addEventListener('fetch'"));
+
+    expect(fetchSeg, 'fetch 里写缓存 = 把任意同源响应（可能是用户数据）写进 Cache Storage').not.toMatch(
+      /cache\.(put|add|addAll)\s*\(/,
+    );
+    expect(fetchSeg, 'fetch 里不该自己开缓存').not.toMatch(/caches\.open\s*\(/);
+
+    // 全文件唯一的缓存 put = 版本标记（静态的版本字符串，不是用户数据）
+    const puts = [...code.matchAll(/cache\.put\s*\(/g)].map((m) => code.slice(m.index).split('\n')[0]);
+    expect(puts.length, `cache.put 应只有版本标记一处，实际 ${puts.length} 处：${puts.join(' | ')}`).toBe(1);
+    expect(puts[0]).toMatch(/VERSION_MARKER_URL/);
+    // 预缓存写入（addAll）在 install 段，且只吃清单里的文件
+    expect(install).toMatch(/cache\.addAll\(\s*manifest\.files\s*\)/);
+    // ⚠️ fetch 段被 settle：它必须存在（否则下面 slice 的是空串、判据恒真）
+    expect(fetchSeg.length).toBeGreaterThan(20);
+    expect(activate).toContain('caches.delete');
   });
 
   it('支持跳等待（一键更新的另一半）', () => {
@@ -450,6 +708,35 @@ describe('public/sw.js 文本腿（离线缓存只缓存程序文件）', () => 
 
   it('读构建期生成的清单（版本键由内容哈希决定）', () => {
     expect(sw).toContain('sw-manifest.json');
+  });
+
+  it('预缓存失败的消息类型两边**逐字一致**（sw.js 是 classic script，不能 import 模块常量）', () => {
+    // `SW_CACHE_INCOMPLETE` 是 `pwa-update.ts` 的常量，`sw.js` 里必然要再写一份字面量。
+    // 改名只改一边 ⇒ 这条腿红（否则页面永远收不到"预缓存未完成"）。
+    expect(sw).toContain(SW_CACHE_INCOMPLETE);
+    expect(sw).toMatch(new RegExp(`const CACHE_INCOMPLETE = '${SW_CACHE_INCOMPLETE}'`));
+    expect(read('../../src/ui/pwa-update.ts')).toContain(`export const SW_CACHE_INCOMPLETE = '${SW_CACHE_INCOMPLETE}'`);
+  });
+
+  it('install 失败**不静默**：广播给页面窗口，且失败时让 install 失败（不换上空的缓存）', () => {
+    const code = stripComments(sw);
+    const install = code.slice(code.indexOf("addEventListener('install'"), code.indexOf("addEventListener('activate'"));
+    expect(install).toContain('notifyCacheIncomplete');
+    expect(install, 'install 失败必须 throw（旧 SW 与旧缓存继续生效）').toMatch(/catch[\s\S]*throw e/);
+    expect(sw).toContain('clients.matchAll');
+    // 版本标记：预缓存全部成功后才写（"有标记"= 这份缓存完整，activate 才敢删旧的）
+    expect(code).toContain('VERSION_MARKER');
+  });
+
+  it('activate 在版本号缺失时**不删任何缓存**（评审 S-4：绝不再出现 compile-null 删光）', () => {
+    const code = stripComments(sw);
+    const activate = code.slice(code.indexOf("addEventListener('activate'"));
+    // 反向钉住旧写法：不许再拿模块级变量拼缓存名去比
+    expect(activate, 'CURRENT_VERSION 为 null 时会算出 compile-null 并把好缓存删光').not.toMatch(
+      /CACHE_PREFIX\s*\+\s*CURRENT_VERSION/,
+    );
+    expect(activate).toMatch(/versions\.size\s*>\s*0/);
+    expect(activate).toContain('caches.delete');
   });
 
   it('fetch 只处理同源 GET，且导航失败回退 /index.html', () => {
@@ -569,6 +856,79 @@ describe('scripts/gen-sw-manifest.mjs：清单由真实产物派生', () => {
     cleanup();
   });
 
+  it('版本键**覆盖清单里的每一个文件**：任何一项被漏算 ⇒ version 必须变', () => {
+    // 评审假守卫 M10：`computeVersion(files.slice(0, -1))` 曾**全绿**（变更了实现，但没有任何腿
+    // 判"版本键是否真的覆盖全部文件"）。这条腿把"覆盖性"变成可判定的：从清单里逐个（以及一次
+    // 全部）剔除文件，若版本**不变**，就说明那个文件没进版本键。
+    const dir = tmp({
+      'index.html': 'HTML-A',
+      'assets/index-aaa.js': 'JS-A',
+      'assets/index-bbb.css': 'CSS-B',
+      'manifest.webmanifest': 'MF-A',
+      'icons/icon-192.png': 'PNG-A',
+    });
+    const all = collectFiles(dir);
+    expect(all.length, '夹具本身没构出清单，腿恒真').toBe(5);
+    const full = computeVersion(all);
+    for (const drop of all) {
+      const rest = all.filter((f) => f.rel !== drop.rel);
+      expect(
+        computeVersion(rest),
+        `漏掉 ${drop.rel} 版本键却没变 ⇒ 版本键没覆盖这个文件（清单与 cacheName 会不匹配）`,
+      ).not.toBe(full);
+    }
+    expect(computeVersion(all.slice(0, -1))).not.toBe(full); // M10 的形态，逐字钉住
+    // ⚠️ 上面只钉住了 `computeVersion` 本身。**调用点**也必须钉住：`run()` 里
+    //    `computeVersion(files.slice(0, -1))` 这种"少喂一个文件"的变异只在 run() 里，
+    //    `computeVersion` 的腿看不见它。所以这里再对**真实生成的清单**做一次独立复算：
+    //    清单里写的 version 必须等于"对 collectFiles 的全部文件独立算出来的 version"。
+    const report = genManifest(dir);
+    const manifest = JSON.parse(
+      readFileSync(join(dir, 'sw-manifest.json')).subarray(0, 1024 * 1024).toString('utf8'),
+    ) as { version: string; files: string[] };
+    expect(manifest.files).toEqual(all.map((f) => f.rel));
+    expect(
+      report.version,
+      'run() 写出的版本键 ≠ 对清单全部文件独立复算的版本键（少喂/多喂文件了）',
+    ).toBe(full);
+    expect(manifest.version).toBe(full);
+    cleanup();
+  });
+
+  it('预缓存 = app shell：卡图/PDF/音效**不进**清单，图标进（设计稿 §8.1 / 评审重要 2）', () => {
+    const dir = tmp({
+      // app shell：进
+      'index.html': 'A',
+      'assets/index-abc123.js': 'B',
+      'assets/index-abc123.css': 'C',
+      'manifest.webmanifest': 'D',
+      'icons/icon-192.png': 'E',
+      // 大体积资产：不进（预缓存只收 app shell；它们仍走运行时 fetch）
+      'assets/protocols/ambush/01.png': 'F',
+      'assets/protocols/ambush/02.jpg': 'G',
+      'assets/rules/rule-faq.pdf': 'H',
+      'assets/rules/covers/cover.png': 'I',
+      'assets/audio/bgm.mp3': 'J',
+      'assets/battery/volt.png': 'K',
+      'assets/bg-thumbs/t.png': 'L',
+    });
+    expect(collectFiles(dir).map((f) => f.rel)).toEqual([
+      '/assets/index-abc123.css',
+      '/assets/index-abc123.js',
+      '/icons/icon-192.png',
+      '/index.html',
+      '/manifest.webmanifest',
+    ]);
+    // 逐条把判据本身也钉住（防止某天有人把 SHELL_EXT 放宽成"什么都收"）
+    expect(isShellAsset('/assets/index-abc123.js')).toBe(true);
+    expect(isShellAsset('/assets/index-abc123.css')).toBe(true);
+    expect(isShellAsset('/icons/icon-512.png')).toBe(true);
+    expect(isShellAsset('/assets/protocols/ambush/01.png')).toBe(false);
+    expect(isShellAsset('/assets/rules/rule-faq.pdf')).toBe(false);
+    expect(isShellAsset('/assets/audio/bgm.mp3')).toBe(false);
+    cleanup();
+  });
+
   it('对真实 dist/ 跑一次：产出与 dist 目录内容一致（构建产物被正确复制）', () => {
     const dist = join(ROOT, 'dist');
     if (!existsSync(dist)) {
@@ -590,6 +950,15 @@ describe('scripts/gen-sw-manifest.mjs：清单由真实产物派生', () => {
     // 自己不进清单（否则清单要为自己算哈希 = 自指）
     expect(manifest.files).not.toContain('/sw.js');
     expect(manifest.files).not.toContain('/sw-manifest.json');
+    // 清单体积（重要 2 的验收数）：app shell 应该是**几 MiB 以内**，不是几百 MiB
+    const bytes = collectFiles(dist).reduce((n, f) => n + statSync(f.abs).size, 0);
+    expect(bytes, `预缓存清单 ${(bytes / 1024 / 1024).toFixed(1)} MiB —— 预缓存又涨回几百 MiB？`).toBeLessThan(
+      32 * 1024 * 1024,
+    );
+    // 逐条：图片 / PDF / 音效一个都不许进预缓存（哪怕后缀在 EXT_OK 里）
+    const heavy = manifest.files.filter((f) => /\.(png|jpe?g|webp|gif|pdf|mp3)$/i.test(f) && !f.startsWith('/icons/'));
+    expect(heavy, `预缓存里混进了大体积资产：${heavy.slice(0, 5).join(', ')}`).toEqual([]);
+    expect(manifest.files.filter((f) => f.startsWith('/icons/')).length).toBeGreaterThan(0);
   });
 
   it('dist/ 不存在时给出清晰的报错（而不是 ENOENT 堆栈）', () => {
@@ -656,14 +1025,25 @@ describe('Task 8 的接线（严格限定在附录 A 允许的行区）', () => 
     expect(main).toMatch(/import \{ initPwaUpdate \} from '\.\/ui\/pwa-update'/);
     const calls = [...main.matchAll(/^\s*initPwaUpdate\(\);/gm)];
     expect(calls.length).toBe(1);
-    // 调用点必须在 showHome() 之前的初始化区（不能插进 setSeedNonce / createGame 之间）
+    // 调用点必须在 setSeedNonce 之后、**初始化区的** showHome() 之前（不能插进 setSeedNonce /
+    // createGame 之间，也不能跑到初始化区之后）。
+    //
+    // 评审 S-1：原来写成 `main.indexOf('showHome();')` ⇒ 命中 `:700`（`resetToMainInterface`
+    // 里的那一处，**不是**初始化区），而它算出来的 `show` 又从未与 `at` 比较（断言写漏）。
+    // ⚠️ 注意：只把 `indexOf` 换成 `lastIndexOf` **不够**（评审的建议在这一条上不完整）：
+    //   初始化区之后还有一处 `showHome();`（我实测 `:700` 与 `:814` 两处，`lastIndexOf` = 814
+    //   才对），但 `lastIndexOf` 取到的是**最后**一处，若未来在初始化区之后又加一处就会**假绿**。
+    //   所以这里用"初始化区锚点 + 最后落点"双重判据：既要求最终落在最后一个 showHome 之前，
+    //   也要求它与 `initPwaUpdate();` 之间没有任何**新的** showHome（即它属于初始化区那一段）。
     const at = calls[0].index ?? -1;
     const seed = main.indexOf('setSeedNonce(newMatchSeed());');
-    const show = main.indexOf('showHome();');
-    expect(seed).toBeGreaterThan(-1);
-    expect(show).toBeGreaterThan(-1);
-    expect(at, 'initPwaUpdate() 落在了 setSeedNonce/createGame 之间（会打乱 G0 的启动语义）').toBeGreaterThan(seed);
-    expect(show).toBeGreaterThan(seed);
+    const show = main.lastIndexOf('showHome();');
+    expect(seed, '找不到 setSeedNonce 锚点').toBeGreaterThan(-1);
+    expect(show, '找不到初始化区的 showHome() 锚点').toBeGreaterThan(-1);
+    expect(at, 'initPwaUpdate() 落在了 setSeedNonce 之前（会打乱 G0 的启动语义）').toBeGreaterThan(seed);
+    expect(at, 'initPwaUpdate() 落在了初始化区的 showHome() 之后（计划 :102 要求排在它之前）').toBeLessThan(show);
+    // 调用点之后的第一处 showHome() 必须就是初始化区那一处（若中间还有一处 ⇒ 锚点假设失效，红）
+    expect(main.indexOf('showHome();', at), 'initPwaUpdate() 与初始化区之间还有别的 showHome()').toBe(show);
   });
 
   it('main.ts 里 cb / rerender 两个函数体一字未动（G4 的收口范围）', () => {
