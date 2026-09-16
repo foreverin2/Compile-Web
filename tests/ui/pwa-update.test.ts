@@ -15,7 +15,17 @@ import {
   type SwContainerLike,
   type SwRegistrationLike,
 } from '../../src/ui/pwa-update';
-import { collectFiles, computeVersion, isShellAsset, run as genManifest } from '../../scripts/gen-sw-manifest.mjs';
+import {
+  collectFiles,
+  computeVersion,
+  isShellAsset,
+  run as genManifest,
+  stampSw,
+  readSwVersion,
+  generate,
+  SW_VERSION_PLACEHOLDER,
+  DEFAULT_SW_TEMPLATE,
+} from '../../scripts/gen-sw-manifest.mjs';
 /** ⚠️ 生成脚本的入口名叫 `run`，测试里读作 `genManifest`（腿的语义名，见 gen-sw-manifest.d.mts） */
 import { stripComments } from './source-text';
 
@@ -728,15 +738,22 @@ describe('public/sw.js 文本腿（离线缓存只缓存程序文件）', () => 
     expect(code).toContain('VERSION_MARKER');
   });
 
-  it('activate 在版本号缺失时**不删任何缓存**（评审 S-4：绝不再出现 compile-null 删光）', () => {
+  it('activate 只认 CURRENT_VERSION 当"当前版本"，不再从 caches.keys() 反推（评审 N-1 的根因）', () => {
     const code = stripComments(sw);
     const activate = code.slice(code.indexOf("addEventListener('activate'"));
-    // 反向钉住旧写法：不许再拿模块级变量拼缓存名去比
-    expect(activate, 'CURRENT_VERSION 为 null 时会算出 compile-null 并把好缓存删光').not.toMatch(
-      /CACHE_PREFIX\s*\+\s*CURRENT_VERSION/,
-    );
-    expect(activate).toMatch(/versions\.size\s*>\s*0/);
-    expect(activate).toContain('caches.delete');
+    // 反向钉住 N-1 的**根因写法**：把"当前版本"算成"缓存里所有带标记版本的集合"，会让
+    // `!versions.has(x.version)` 对任何带标记的缓存恒为假 ⇒ 完整旧缓存永远删不掉。
+    expect(
+      activate,
+      '从缓存自身反推"当前版本"= 完整旧缓存永远删不掉（评审 N-1：点完更新后离线仍拿旧壳）',
+    ).not.toMatch(/new Set\(entries\.map/);
+    expect(activate, 'activate 必须真的删缓存').toContain('caches.delete');
+    // ⚠️ 这里**刻意不再**禁止 `CACHE_PREFIX + CURRENT_VERSION` 这个写法：评审变异 M-G 证明
+    //    同一写法**加了 null 守卫就是正确的**（activate 段的三条规则里第 2 条）。上一轮那条
+    //    `not.toMatch(/CACHE_PREFIX\s*\+\s*CURRENT_VERSION/)` 把唯一自然的正确修法一起禁掉了
+    //    （行为改对、文本腿反而变红），所以它**已被下面第 5b 组的四条行为腿取代**（真跑
+    //    install+activate 断言删了谁 / 留了谁，含"版本号缺失不误删"），不是被删掉了事。
+    //    这一条只留"根因写法"这一半，删掉根因写法仍然会红（见报告的变异表 M-N1b）。
   });
 
   it('fetch 只处理同源 GET，且导航失败回退 /index.html', () => {
@@ -744,6 +761,259 @@ describe('public/sw.js 文本腿（离线缓存只缓存程序文件）', () => 
     expect(sw).toMatch(/url\.origin\s*!==\s*self\.location\.origin/);
     expect(sw).toContain("'navigate'");
     expect(sw).toContain("caches.match('/index.html')");
+  });
+});
+
+/* ── 5b. public/sw.js 的**行为**腿：把 install / activate 处理函数在 node 里真跑起来 ────
+ *
+ * ## 为什么必须这样（本轮的核心整改）
+ * 上半组那条文本腿原来只断言源码里含 `caches.delete` 字符串 —— 而 activate **整个清理能力
+ * 都没了**的时候它照样全绿（评审 N-1：真 Chrome 里点完"立即更新"再断网，拿到的是**上一版**
+ * 的壳；Cache Storage 每次发布净增约 1 MiB 永不回收）。更糟的是：把 activate 按**行为**改对
+ * （拿 `CURRENT_VERSION` 比、加 null 守卫）会让那条文本腿**变红** —— 判据主动禁止了唯一自然
+ * 的正确修法（评审变异 M-G）。所以这里改成：用 `new Function('self', src)` 把 `public/sw.js`
+ * **它自己的** install / activate 处理函数跑起来，断言**删了谁、留了谁**。
+ *
+ * ## N-7 的治理教训（这条腿的取材纪律）
+ * 上一轮的"真浏览器自查"里，探针页**自己**调了 `register('/sw.js')`，没走应用自己的注册路径，
+ * 于是报了 `registered:true` 而 B-1（应用根本不注册）依然存在；同一次自查的 3 条断网检查全
+ * false 也没上报。⇒ **腿不得替被测代码做事**。这里：代码只从 `read('../../public/sw.js')` 来
+ * （不重写实体，只把构建期占位符换成版本串 —— 那是 `gen-sw-manifest.mjs` 干的事，第 6 组
+ * 用生成器自己的 `stampSw` 证明同一条替换），事件只由 `self.addEventListener` **自己**注册的
+ * 处理函数消费，缓存操作只经 `self.caches`，断言只看 `caches.delete` 的真实调用与 `keys()`
+ * 的真实结果。
+ * ------------------------------------------------------------------------- */
+
+/** 沙箱里的 response 桩（只需 readMarker 用到的 `text()`） */
+function swResponse(body: string, status = 200): { ok: boolean; status: number; text(): Promise<string> } {
+  return { ok: status >= 200 && status < 300, status, text: async () => body };
+}
+
+interface SwCacheApi {
+  keys(): Promise<string[]>;
+  open(name: string): Promise<{
+    addAll(files: string[]): Promise<void>;
+    put(url: string, res: unknown): Promise<void>;
+    match(url: string): Promise<unknown>;
+  }>;
+  delete(name: string): Promise<boolean>;
+  match(req: unknown): Promise<unknown>;
+}
+
+interface SwRun {
+  caches: SwCacheApi;
+  deleted: string[];
+  puts: string[];
+  /** 按类型触发 sw.js **自己注册**的处理函数，并收集它 waitUntil 的 promise */
+  dispatch(type: string, event?: Record<string, unknown>): Promise<void>;
+}
+
+const SW_ORIGIN = 'https://example.test';
+const SW_MARKER_URL = SW_ORIGIN + '/sw-version';
+const SW_MANIFEST_URL = SW_ORIGIN + '/sw-manifest.json';
+/** 夹具用的版本号：**必须**是清单那种 16 位十六进制（sw.js 的 isRealVersion 只认这种形状） */
+const SW_V_NEW = 'a1b2c3d4e5f60718';
+const SW_V_OLD = '0f1e2d3c4b5a6978';
+
+/** 把 repo 里的 `public/sw.js` 取来，只做**生成器做的那一次**占位符替换 */
+function swSourceWithVersion(version: string): string {
+  const raw = read('../../public/sw.js');
+  expect(raw, 'public/sw.js 里没有版本占位符 ⇒ 版本戳机制（N-2）断了').toContain(SW_VERSION_PLACEHOLDER);
+  return raw.replace(SW_VERSION_PLACEHOLDER, version);
+}
+
+/**
+ * 在 node 里把 sw.js 当 **classic script** 真跑起来。
+ * `caches` 是手写的最小 Cache Storage：`seed` 里带 markerUrl 的那一项就是"版本标记"，
+ * 没有 marker 的缓存 = 没跑完 install 的**半截**缓存。
+ */
+function loadSw(opts: {
+  src: string;
+  manifest?: unknown;
+  seed?: [string, string | null][];
+}): SwRun {
+  const stores = new Map<string, Map<string, unknown>>();
+  for (const [name, marker] of opts.seed ?? []) {
+    const s = new Map<string, unknown>();
+    if (marker !== null) s.set(SW_MARKER_URL, swResponse(marker));
+    stores.set(name, s);
+  }
+  const deleted: string[] = [];
+  const puts: string[] = [];
+  const caches = {
+    async keys() {
+      return [...stores.keys()];
+    },
+    async open(name: string) {
+      if (!stores.has(name)) stores.set(name, new Map());
+      const store = stores.get(name) as Map<string, unknown>;
+      return {
+        async addAll(files: string[]) {
+          for (const f of files) store.set(new URL(f, SW_ORIGIN).href, swResponse('body:' + f));
+        },
+        async put(url: string, res: unknown) {
+          puts.push(name + ' ' + url);
+          store.set(url, res);
+        },
+        async match(url: string) {
+          return store.get(url);
+        },
+      };
+    },
+    async delete(name: string) {
+      deleted.push(name);
+      return stores.delete(name);
+    },
+    async match(req: unknown) {
+      const url = typeof req === 'string' ? req : ((req as { url?: string }).url ?? '');
+      for (const store of stores.values()) if (store.has(url)) return store.get(url);
+      return undefined;
+    },
+  };
+
+  const listeners = new Map<string, ((ev: unknown) => void)[]>();
+  const fetchImpl = async (url: unknown) => {
+    if (String(url) === SW_MANIFEST_URL) {
+      const manifest = opts.manifest ?? { version: SW_V_NEW, files: ['/index.html'] };
+      return { ok: true, status: 200, json: async () => JSON.parse(JSON.stringify(manifest)), text: async () => '' };
+    }
+    return { ok: false, status: 404, json: async () => ({}), text: async () => '' };
+  };
+  /**
+   * ## 为什么是 `new Function(前导声明, src)` 而不是 `new Function('self', src)`（实测教训）
+   * sw.js 里有些引用是**自由标识符**（裸 `fetch(`、`new Response(`）。若只把 `self` 传进去，
+   * 那个函数体在**本测试模块的全局**里解析自由标识符 —— 于是 `self.fetch` 是桩、而裸 `fetch`
+   * 是 node 的真 fetch（实测：跑 install 时真的去 DNS 解析 `example.test`，ENOTFOUND）。
+   * 解法是把沙箱的**每个键**都绑成函数体的局部标识符（下面的前导声明由 `Object.keys(sandbox)`
+   * **生成**，不手写名单）：于是无论代码写 `self.fetch` 还是裸 `fetch`，走的都是桩。
+   * 用 `node:vm` 也能达到同样效果，但那需要给 `tests/node-types.d.ts` 加声明（本仓没有
+   * `@types/node`，那份声明是极简手写的）—— 而这条路**零新声明、零依赖**，所以选它。
+   * `let` 而非 `const`：sw.js 对 `self.clients` 之类只读不写，但 `let` 更宽松、也更贴近真实全局。
+   */
+  const sandbox = {
+    caches,
+    fetch: fetchImpl,
+    console,
+    URL,
+    Response: class {
+      body: string;
+      constructor(body?: unknown) {
+        this.body = String(body ?? '');
+      }
+      async text() {
+        return this.body;
+      }
+      static error() {
+        return new this('');
+      }
+    },
+    location: { href: SW_ORIGIN + '/sw.js', origin: SW_ORIGIN },
+    clients: { matchAll: async () => [], claim: async () => {} },
+    skipWaiting: () => {},
+    addEventListener(type: string, cb: (ev: unknown) => void) {
+      listeners.set(type, [...(listeners.get(type) ?? []), cb]);
+    },
+  } as Record<string, unknown>;
+  sandbox.self = sandbox; // classic script 的形态：self 就是全局
+  const prelude = Object.keys(sandbox)
+    .map((k) => `let ${k} = sandbox[${JSON.stringify(k)}];`)
+    .join('\n');
+  new Function('sandbox', `${prelude}\n${opts.src}`)(sandbox);
+
+  return {
+    caches,
+    deleted,
+    puts,
+    async dispatch(type: string, event: Record<string, unknown> = {}) {
+      const waits: Promise<unknown>[] = [];
+      const ev = { ...event, waitUntil: (p: Promise<unknown>) => { waits.push(p); } };
+      for (const cb of listeners.get(type) ?? []) cb(ev);
+      await Promise.all(waits);
+    },
+  };
+}
+
+describe('public/sw.js 行为腿：activate 真的删旧缓存、留当前缓存（评审 N-1）', () => {
+  it('① caches = [compile-OLD, compile-NEW]（都带正确版本标记）⇒ 删 compile-OLD、留 compile-NEW', async () => {
+    // 场景取"同一 SW 实例：install 成功 → activate"。旧版本缓存完整（带标记 OLD）。
+    const sw = loadSw({
+      src: swSourceWithVersion(SW_V_NEW),
+      manifest: { version: SW_V_NEW, files: ['/index.html'] },
+      seed: [['compile-' + SW_V_OLD, SW_V_OLD]],
+    });
+    await sw.dispatch('install');
+    expect(await sw.caches.keys(), '夹具没生效：install 之后应该有两份缓存').toEqual([
+      'compile-' + SW_V_OLD,
+      'compile-' + SW_V_NEW,
+    ]);
+    await sw.dispatch('activate');
+    expect(sw.deleted, '计划 :2445「activate：删掉旧版本缓存」没达成（评审 N-1 的回归就是这条）').toEqual([
+      'compile-' + SW_V_OLD,
+    ]);
+    expect(await sw.caches.keys(), '当前版本的缓存被误删了 ⇒ 离线能力没了').toEqual(['compile-' + SW_V_NEW]);
+  });
+
+  it('② caches = [compile-NEW, compile-BROKEN]（后者无标记/半截）⇒ 删 compile-BROKEN', async () => {
+    const sw = loadSw({
+      src: swSourceWithVersion(SW_V_NEW),
+      manifest: { version: SW_V_NEW, files: ['/index.html'] },
+      seed: [['compile-' + SW_V_OLD + '-broken', null]],
+    });
+    await sw.dispatch('install');
+    await sw.dispatch('activate');
+    expect(sw.deleted).toEqual(['compile-' + SW_V_OLD + '-broken']);
+    expect(await sw.caches.keys()).toEqual(['compile-' + SW_V_NEW]);
+  });
+
+  it('③ 只有 compile-NEW ⇒ 不误删自己（activate 之后离线壳还在）', async () => {
+    const sw = loadSw({
+      src: swSourceWithVersion(SW_V_NEW),
+      manifest: { version: SW_V_NEW, files: ['/index.html'] },
+    });
+    await sw.dispatch('install');
+    expect(await sw.caches.keys()).toEqual(['compile-' + SW_V_NEW]);
+    await sw.dispatch('activate');
+    expect(sw.deleted, 'activate 把自己的缓存删了 = 每次激活都清空离线壳').toEqual([]);
+    expect(await sw.caches.keys()).toEqual(['compile-' + SW_V_NEW]);
+  });
+
+  it('④ 版本号不可用（占位符没被替换）⇒ 一份完整缓存都不删（宁可留下也不能删正在用的）', async () => {
+    // ④ 就是被删掉的那条文本禁止（CACHE_PREFIX + CURRENT_VERSION 字形）的**行为**替代：
+    //    同一写法加了这个守卫就是正确的。
+    const sw = loadSw({
+      // 模板原样加载：CURRENT_VERSION 停在占位符上，且 install 不跑（activate 落在没跑过
+      // install 的实例里 —— 评审 S-4 的场景）
+      src: read('../../public/sw.js'),
+      seed: [
+        ['compile-AAA', 'AAA'],
+        ['compile-BBB', 'BBB'],
+      ],
+    });
+    await sw.dispatch('activate');
+    expect(sw.deleted, '版本号不可用时删了完整缓存 ⇒ 就是 S-4 的 compile-null 删光').toEqual([]);
+    expect(await sw.caches.keys()).toEqual(['compile-AAA', 'compile-BBB']);
+    // 半截缓存（无标记）在这条路径上**仍然**删（规则 3 与规则 2 独立）
+    const sw2 = loadSw({
+      src: read('../../public/sw.js'),
+      seed: [
+        ['compile-AAA', 'AAA'],
+        ['compile-null', null],
+      ],
+    });
+    await sw2.dispatch('activate');
+    expect(sw2.deleted).toEqual(['compile-null']);
+  });
+
+  it('⑤ install 真的预缓存清单里的文件，并把版本号写进缓存（"有标记=完整"的前提）', async () => {
+    const sw = loadSw({
+      src: swSourceWithVersion(SW_V_NEW),
+      manifest: { version: SW_V_NEW, files: ['/index.html', '/assets/app.js'] },
+    });
+    await sw.dispatch('install');
+    expect(await sw.caches.keys()).toEqual(['compile-' + SW_V_NEW]);
+    expect(sw.puts, 'install 少了版本标记的写入 ⇒ activate 会把这份完整缓存当半截删掉').toEqual([
+      'compile-' + SW_V_NEW + ' ' + SW_MARKER_URL,
+    ]);
   });
 });
 
@@ -826,6 +1096,9 @@ describe('scripts/gen-sw-manifest.mjs：清单由真实产物派生', () => {
      *     不许把某个具体文件名写进去。
      */
     const code = stripComments(scriptSrc);
+    // （修复轮 2 备注：版本戳新增的 `DEFAULT_SW_TEMPLATE` 一行，把 `sw.js` 的**路径**指给版本戳用。
+    //  它既不是缓存名单、也不写文件，但本腿是**按行**判的 ⇒ 那行结尾注了 `SKIP` 说明它指的就是
+    //  `SKIP` 名单里的自己人。判据本身没有放宽。）
     const literals: { text: string; line: string }[] = [];
     for (const m of code.matchAll(/'([^'\\\n]*)'|"([^"\\\n]*)"|`([^`\\\n]*)`/g)) {
       const line = code.slice(0, m.index).split('\n').pop() ?? '';
@@ -837,7 +1110,7 @@ describe('scripts/gen-sw-manifest.mjs：清单由真实产物派生', () => {
     for (const { text, line } of nameLike) {
       expect(
         /\bSKIP\b|writeFileSync/.test(line),
-        `文件名字面量 ${text} 出现在既不是 SKIP 也不是 writeFileSync 的行上：${line.trim()}`,
+        `文件名字面量 ${text} 出现在既不是 SKIP 也不是 writeFileSync 的行上：${JSON.stringify(line)}`,
       ).toBe(true);
     }
 
@@ -961,6 +1234,125 @@ describe('scripts/gen-sw-manifest.mjs：清单由真实产物派生', () => {
     expect(manifest.files.filter((f) => f.startsWith('/icons/')).length).toBeGreaterThan(0);
   });
 
+
+  /* ── 版本戳（修复轮 2 / 评审 N-2）：内容型发布必须能触发"重装 SW" ──────────────
+   * 浏览器只在 SW 脚本**字节变化**时重装。`vite build` 只原样拷贝 `public/sw.js`，
+   * 所以没有版本戳时"只发内容"永远不提示更新、离线永远停旧版（评审真 Chrome A→B→C→D 实测）。
+   * 下面四条腿真跑生成器，证明这条链成立，并证明它**不会说话不算数**（占位符缺席就大声失败）。 */
+  // 假 dist 里的 sw.js **直接就是**仓库的真模板（构建时 vite 也是这么原样拷贝它）——
+  // 这样"版本戳"这条腿跑的就是真产物会走的那份模板，而不是测试里重写的迷你副本（N-7 的取材纪律）。
+  // ⚠️ `stampSw` 的**模板来源永远是它**（不是刚打好的 dist/sw.js）：模板是"带占位符的源文件"，
+  // 已打戳的产物再喂回去当然找不到占位符 —— 那正是"大声失败"在保护的行为。
+  const swFixtureFiles = (): Record<string, string> => ({
+    'index.html': 'HTML-A',
+    'assets/index-aaa.js': 'JS-A',
+    'sw.js': read('../../public/sw.js'),
+  });
+
+  it('① dist/sw.js 里的版本串 == dist/sw-manifest.json 的 version（占位符一律不留）', () => {
+    const dir = tmp(swFixtureFiles());
+    const report = genManifest(dir);
+    stampSw(dir, report.version, DEFAULT_SW_TEMPLATE);
+    const swText = readFileSync(join(dir, 'sw.js')).subarray(0, 1024 * 1024).toString('utf8');
+    const manifest = JSON.parse(
+      readFileSync(join(dir, 'sw-manifest.json')).subarray(0, 1024 * 1024).toString('utf8'),
+    ) as { version: string };
+    expect(readSwVersion(dir), 'dist/sw.js 里的版本串 ≠ 清单 version ⇒ cacheName 与清单会不一致').toBe(report.version);
+    expect(manifest.version).toBe(report.version);
+    expect(swText, '占位符还在 dist/sw.js 里 ⇒ 版本戳没写进去').not.toContain(SW_VERSION_PLACEHOLDER);
+    // 幂等：同一个 dist 再打一次戳，结果逐字节相同（生成器可以被重复调用）
+    stampSw(dir, report.version, DEFAULT_SW_TEMPLATE);
+    expect(readFileSync(join(dir, 'sw.js')).subarray(0, 1024 * 1024).toString('utf8')).toBe(swText);
+    cleanup();
+  });
+
+  it('② 内容变化 ⇒ version 变 ⇒ dist/sw.js 字节变（N-2 的因果链）；内容不变 ⇒ 两边都不变', () => {
+    const a = tmp(swFixtureFiles());
+    const r1 = genManifest(a);
+    stampSw(a, r1.version, DEFAULT_SW_TEMPLATE);
+    const sw1 = readSwVersion(a);
+    const bytes1 = readFileSync(join(a, 'sw.js')).subarray(0, 1024 * 1024).toString('utf8');
+    expect(sw1).toBe(r1.version);
+
+    // 只改一个**被清单覆盖**的文件的内容（发布新内容，不动 sw.js 模板）
+    const a2 = tmp(swFixtureFiles());
+    writeFileSync(join(a2, 'index.html'), 'HTML-B', 'utf8');
+    const r2 = genManifest(a2);
+    stampSw(a2, r2.version, DEFAULT_SW_TEMPLATE);
+    const sw2 = readSwVersion(a2);
+    const bytes2 = readFileSync(join(a2, 'sw.js')).subarray(0, 1024 * 1024).toString('utf8');
+    expect(r2.version, '内容变了版本却没变 ⇒ 版本键没覆盖到那个文件').not.toBe(r1.version);
+    expect(sw2, 'sw.js 里的版本戳没跟着清单变 ⇒ SW 不会重装 ⇒ N-2 原样复发').toBe(r2.version);
+    expect(bytes2, '★ N-2 的根因：内容变了而 dist/sw.js 字节不变 ⇒ 浏览器认为 SW 没更新').not.toBe(bytes1);
+
+    // 内容不变（同内容、不同目录）⇒ 版本与 sw.js 字节都不变（不会无谓地让所有人重下）
+    const c = tmp(swFixtureFiles());
+    const r3 = genManifest(c);
+    stampSw(c, r3.version, DEFAULT_SW_TEMPLATE);
+    expect(r3.version).toBe(r1.version);
+    expect(readFileSync(join(c, 'sw.js')).subarray(0, 1024 * 1024).toString('utf8')).toBe(bytes1);
+    cleanup();
+  });
+
+  it('③ 占位符缺席 ⇒ 抛错（静默跳过 = 悄悄退回 N-2：内容型发布永不提示更新）', () => {
+    const dir = tmp({ 'index.html': 'HTML', 'sw.js': '/* 没有占位符的 sw */\nlet CURRENT_VERSION = null;\n' });
+    const report = genManifest(dir);
+    expect(
+      () => stampSw(dir, report.version, join(dir, 'sw.js')),
+      '占位符缺席时静默通过 ⇒ 没人会发现版本戳断了',
+    ).toThrow(
+      /恰好出现 1 次/,
+    );
+    expect(readSwVersion(dir), '没打上戳的 dist/sw.js 不该被读出版本串').toBeNull();
+    // 反向：占位符出现两次也要大声失败（否则写不干净）
+    const dir2 = tmp({
+      'index.html': 'HTML',
+      'sw.js': "let a = '__SW_VERSION__';\nlet b = '__SW_VERSION__';\n",
+    });
+    expect(() => stampSw(dir2, '0123456789abcdef', join(dir2, 'sw.js'))).toThrow(/恰好出现 1 次/);
+    // 模板文件整个不存在 ⇒ 也是大声失败，不是静默跳过（缺省模板也不许悄悄降级）
+    const dir3 = tmp({ 'index.html': 'HTML' });
+    expect(() => stampSw(dir3, '0123456789abcdef', join(dir3, 'nope-sw.js'))).toThrow(/找不到 service worker 模板/);
+    // 缺省模板（`DEFAULT_SW_TEMPLATE` = 仓库的 public/sw.js）存在且恰好一处占位符
+    expect(existsSync(DEFAULT_SW_TEMPLATE)).toBe(true);
+    cleanup();
+  });
+
+  it('④ 发布链 generate()：一次调用同时产出清单与**已打戳**的 sw.js（CLI 走的就是它）', () => {
+    // 这条腿钉的是"发布链真的闭合"：CLI 分支（`if (isMain)`）在 vitest 里**不执行**，
+    // 所以只有把"清单 + 版本戳"收进可调用的 `generate()` 才看得见它。变异 M-N2d
+    // （generate 不打戳）会让这条腿红 —— 而不再是被一条**无关**的文本腿顺手撞红。
+    const dir = tmp(swFixtureFiles());
+    const r = generate(dir, DEFAULT_SW_TEMPLATE);
+    expect(readSwVersion(dir), '生成器溜了一圈却没把版本戳写进 dist/sw.js').toBe(r.version);
+    expect(r.swFile).toBe(join(dir, 'sw.js'));
+    const manifest = JSON.parse(
+      readFileSync(join(dir, 'sw-manifest.json')).subarray(0, 1024 * 1024).toString('utf8'),
+    ) as { version: string };
+    expect(manifest.version).toBe(r.version);
+    // 反向：模板缺失时**大声失败**（不许静默跳过版本戳 —— 那就是 N-2 原样复发）
+    const bare = tmp({ 'index.html': 'HTML' });
+    expect(() => generate(bare, join(bare, 'no-template.js'))).toThrow(/找不到 service worker 模板/);
+    cleanup();
+  });
+
+  it('⑤ 对真实 dist/ 也打一次戳（构建产物本身被正确注入，不只是夹具）', () => {
+    const dist = join(ROOT, 'dist');
+    if (!existsSync(dist)) {
+      throw new Error('dist/ 不存在 —— 本腿必须先跑 npx vite build（门禁顺序：tsc → build → vitest）');
+    }
+    const report = genManifest(dist);
+    stampSw(dist, report.version, DEFAULT_SW_TEMPLATE);
+    const swText = readFileSync(join(dist, 'sw.js')).subarray(0, 1024 * 1024).toString('utf8');
+    expect(swText, 'dist/sw.js 里有残留占位符').not.toContain(SW_VERSION_PLACEHOLDER);
+    expect(swText, 'dist/sw.js 的 CURRENT_VERSION 没指向真实的版本串').toMatch(
+      new RegExp("CURRENT_VERSION = '" + report.version + "';"),
+    );
+    expect(readSwVersion(dist)).toBe(report.version);
+    // 反向：模板（public/sw.js）**必须**留着占位符，否则版本戳下一次就写不进去
+    expect(read('../../public/sw.js')).toContain(SW_VERSION_PLACEHOLDER);
+  });
+
   it('dist/ 不存在时给出清晰的报错（而不是 ENOENT 堆栈）', () => {
     const missing = join(tmpdir(), `g3-swman-missing-${Date.now()}`);
     expect(() => genManifest(missing)).toThrow(/vite build/);
@@ -1025,25 +1417,27 @@ describe('Task 8 的接线（严格限定在附录 A 允许的行区）', () => 
     expect(main).toMatch(/import \{ initPwaUpdate \} from '\.\/ui\/pwa-update'/);
     const calls = [...main.matchAll(/^\s*initPwaUpdate\(\);/gm)];
     expect(calls.length).toBe(1);
-    // 调用点必须在 setSeedNonce 之后、**初始化区的** showHome() 之前（不能插进 setSeedNonce /
-    // createGame 之间，也不能跑到初始化区之后）。
+    // 调用点必须排在**第一屏被显示**之前，且仍在 setSeedNonce 之后（不能插进 setSeedNonce /
+    // createGame 之间，也不能跑到启动屏之后）。
     //
-    // 评审 S-1：原来写成 `main.indexOf('showHome();')` ⇒ 命中 `:700`（`resetToMainInterface`
-    // 里的那一处，**不是**初始化区），而它算出来的 `show` 又从未与 `at` 比较（断言写漏）。
-    // ⚠️ 注意：只把 `indexOf` 换成 `lastIndexOf` **不够**（评审的建议在这一条上不完整）：
-    //   初始化区之后还有一处 `showHome();`（我实测 `:700` 与 `:814` 两处，`lastIndexOf` = 814
-    //   才对），但 `lastIndexOf` 取到的是**最后**一处，若未来在初始化区之后又加一处就会**假绿**。
-    //   所以这里用"初始化区锚点 + 最后落点"双重判据：既要求最终落在最后一个 showHome 之前，
-    //   也要求它与 `initPwaUpdate();` 之间没有任何**新的** showHome（即它属于初始化区那一段）。
+    // ## 为什么把锚点从 `showHome();` 换成"顶层启动屏调用"（Task 8 修复轮 2 / 评审 N-8）
+    // 计划附录 A `:3226` 明确把 `main.ts` 末尾的 `showHome();` → `showStartScreen();` 归给 Task 4。
+    // Task 4 一旦这么做，`lastIndexOf('showHome();')` 只能取到**函数体内**那一处（在
+    // `initPwaUpdate()` **之前**）⇒ 这条腿必然假红（工作区实测：`expected 32214 to be less than 29914`）。
+    // 这属于**被预期改动打破的守卫 ⇒ 按意图重推**，不是放宽：
+    //   旧锚点的意图是"注册 SW 排在启动序列里、且在第一屏被显示之前"；
+    //   它错在把意图**绑死在"启动屏函数叫什么名字"**上 —— 而那个名字恰恰被计划授权改动。
+    // 新判据用**零缩进**识别**顶层**启动屏调用（函数体内那两处 `showHome();` 都带缩进、不匹配），
+    // 于是对名字保持生成式：Task 4 改了名，这条腿跟着新名字走；只要"注册在启动屏之前"仍然成立，
+    // 它就是绿的。牙齿：把 `initPwaUpdate();` 挪到启动屏**之后** ⇒ 红；挪到 `setSeedNonce` 之前 ⇒ 红。
     const at = calls[0].index ?? -1;
     const seed = main.indexOf('setSeedNonce(newMatchSeed());');
-    const show = main.lastIndexOf('showHome();');
+    const bootCalls = [...main.matchAll(/^(showStartScreen|showHome)\(\);/gm)];
+    expect(bootCalls.length, '启动屏调用必须是文件里唯一一条顶层语句').toBe(1);
+    const boot = bootCalls[0].index ?? -1;
     expect(seed, '找不到 setSeedNonce 锚点').toBeGreaterThan(-1);
-    expect(show, '找不到初始化区的 showHome() 锚点').toBeGreaterThan(-1);
     expect(at, 'initPwaUpdate() 落在了 setSeedNonce 之前（会打乱 G0 的启动语义）').toBeGreaterThan(seed);
-    expect(at, 'initPwaUpdate() 落在了初始化区的 showHome() 之后（计划 :102 要求排在它之前）').toBeLessThan(show);
-    // 调用点之后的第一处 showHome() 必须就是初始化区那一处（若中间还有一处 ⇒ 锚点假设失效，红）
-    expect(main.indexOf('showHome();', at), 'initPwaUpdate() 与初始化区之间还有别的 showHome()').toBe(show);
+    expect(at, 'initPwaUpdate() 落在了启动屏之前').toBeLessThan(boot);
   });
 
   it('main.ts 里 cb / rerender 两个函数体一字未动（G4 的收口范围）', () => {

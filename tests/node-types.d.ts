@@ -10,10 +10,13 @@
 // `npm run build` OK）。本仓的记录里明确写着"不许为某处扩 node 类型声明"
 // （见 `tests/app/match-file.test.ts:669-670` 附近的禁令），所以此处只保留**具名**声明。
 //
-// 唯一消费方（`Get-ChildItem tests -Recurse -Include *.ts` 的 import 扫描）：
+// 唯一消费方（`Get-ChildItem tests -Recurse -Include *.ts` 的 import 扫描；G3 Task 8 修复轮 2 补正 N-4）：
 //   `tests/ui/pwa-update.test.ts` 的临时目录夹具（`mkdtempSync`/`mkdirSync`/`writeFileSync`/
-//   `rmSync`/`tmpdir`）与全文读取（`readFileSync`/`statSync`/`existsSync`）；其余测试文件用
-//   `readFileSync`/`readdirSync`/`statSync`/`join`/`fileURLToPath`。
+//   `rmSync`/`tmpdir`）与全文读取（`readFileSync`/`statSync`/`existsSync`）；
+//   ⚠️ `existsSync` **不是**单一消费方（上一版注释漏列了）：`tests/data/cards2.test.ts:2` 也用它
+//   （实测：删掉这条声明 ⇒ `tsc` 报 2 条错 —— `tests/data/cards2.test.ts(2,24)` **与**
+//   `tests/ui/pwa-update.test.ts(2,24)`）。其余测试文件用 `readFileSync`/`readdirSync`/`statSync`/
+//   `join`/`fileURLToPath`。
 declare module 'node:fs' {
   export function existsSync(path: string): boolean;
   export function readFileSync(path: string): {

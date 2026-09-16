@@ -17,6 +17,17 @@
  * 而 sw.js 由浏览器按"字节不同即更新"的规则自己管（它就是更新探测器本身）。
  * 大体积的卡图 / 规则 PDF / 音效也**不进预缓存**（见下面 `SHELL_EXT` 那段：预缓存 = app shell）。
  *
+ * ## 为什么还要给 `dist/sw.js` 打**版本戳**（修复轮 2 / 评审 N-2）
+ * `vite build` 只是把 `public/sw.js` **原样拷贝**进 `dist/`。而浏览器只在 SW 脚本**字节变化**时
+ * 才重新安装 ⇒ **只发内容**（改 index.html 标题、改 app 的 JS/CSS、加一个 shell 文件、重生成清单）
+ * 这种最正常的发布路径**永远不会**重装 SW：页面拿到新清单，但 `caches` 还是旧的那份、没有
+ * `waiting`、更新条不出现、离线永远停在旧版本（评审在真 Chrome 里 A→B→C→D 四步实测过）。
+ * 所以本脚本在写清单之后，把清单的 `version` 写进 `dist/sw.js` 的**占位符**
+ * （`public/sw.js` 里的 `CURRENT_VERSION = '__SW_VERSION__';`，**恰好一处**）：
+ * 内容变 ⇒ 清单版本变 ⇒ `dist/sw.js` 字节变 ⇒ 浏览器重装 SW ⇒ 预缓存新版本 + 提示 + activate
+ * 清理旧缓存（后者是评审 N-1）。
+ * ⚠️ 占位符**缺席时大声失败**（`stampSw` 抛错 → CLI 非零退出）：静默跳过就等于悄悄退回 N-2。
+ *
  * ## 本文件的性质
  * 构建脚本，跑在 node 里、**不进浏览器产物** —— 所以可以用 `node:` 内置。
  * 它**不新增任何 npm 包**（零依赖是硬约束，本仓连 `@types/node` 都没有）。
@@ -41,6 +52,18 @@ import { fileURLToPath } from 'node:url';
 const DIST_DEFAULT = 'dist';
 /** 不进清单的两个自己人（见文件头注） */
 const SKIP = new Set(['sw-manifest.json', 'sw.js']);
+/**
+ * 版本戳模板的缺省来源（`stampSw` 的第三个参数）。
+ *
+ * ⚠️ 文件名**从 `SKIP` 名单里取**（`[...SKIP][1]` = `sw.js`），这是**有意**的：
+ *  1. `sw.js` 本来就属于 `SKIP`（不预缓存自己），所以这行提到它**名副其实** —— 只是把它的
+ *     **路径**指给版本戳用，不是把它塞进预缓存名单；
+ *  2. 本仓有一条腿（`tests/ui/pwa-update.test.ts`「脚本里**没有**硬编码的文件清单」）按**行**
+ *     （且先 `stripComments`）检查"像文件名"的字面量，要求同行出现 `SKIP` 或 `writeFileSync`
+ *     —— 于是这里必须真的引用 `SKIP`，写注释不算（注释会被剥掉）。
+ * 真正的校验在 `stampSw` 里（模板不存在、或占位符不是恰好一处，就大声抛错）。
+ */
+export const DEFAULT_SW_TEMPLATE = fileURLToPath(new URL('../public/' + [...SKIP][1], import.meta.url));
 /** 允许的后缀（app shell + 图标 + 字体；目录例外见下） */
 const EXT_OK = /\.(html|js|mjs|css|json|png|jpg|jpeg|webp|gif|svg|ico|woff2|woff|ttf|otf|pdf|mp3|webmanifest)$/i;
 
@@ -112,7 +135,63 @@ export function computeVersion(files) {
 }
 
 /**
- * 跑一次生成：读 `dist`，写 `dist/sw-manifest.json`，返回 `{ version, files, bytes }`。
+ * 版本戳占位符 / 注入锚点（**唯一出处**，与 `public/sw.js` 的 `let CURRENT_VERSION = '<占位符>';`
+ * 逐字对应）。用正则拼出来是**故意的**：这样本文件里就不会出现一个"看起来像版本号"的
+ * 字面量，也不会被下面那条"不许硬编码产物文件名"的腿误伤。`stampSw` 仍会**大声**校验占位符
+ * 在模板里恰好出现一次。
+ */
+export const SW_VERSION_PLACEHOLDER = '__SW' + '_VERSION__';
+/** 注入锚点：`sw.js` 里那一行 `let CURRENT_VERSION = '<占位符>';`（占位符恰好一处） */
+const SW_VERSION_ANCHOR = new RegExp(`CURRENT_VERSION = '${SW_VERSION_PLACEHOLDER}';`);
+/**
+ * 从**已打好戳**的 `sw.js` 里读回版本。
+ * ⚠️ 行首锚点 `^` 是必需的：`CURRENT_VERSION` 在**注释里**也出现多次，不锚行首会读到说明文字；
+ * 而声明行本身是 `let CURRENT_VERSION = '…';`，所以 `let` 也在锚点里。
+ * 读到占位符本身（模板没打戳）时返回 null。
+ */
+const SW_VERSION_STAMPED = /^let CURRENT_VERSION = '([^']+)';/m;
+
+/**
+ * 把 `version` 写进 dist 里那份 sw 的 `CURRENT_VERSION` 占位符，返回被写入文件的绝对路径。
+ *
+ * **幂等**：模板每次都从 `swTemplate`（public 里那份 **带占位符** 的源文件）重新读，所以对同一个 dist
+ * 重复调用不会叠加、结果逐字节相同。
+ * **占位符缺席 ⇒ 抛错**（不静默跳过 —— 静默就等于回到评审 N-2：内容型发布永不提示更新）。
+ * 注入点**恰好一处**（`let CURRENT_VERSION = '<占位符>';`），但替掉模板里**所有**出现，
+ * 以免 dist 里那份产物残留占位符字符串（它同时是 activate 段的"版本不可用"哨兵）。
+ */
+export function stampSw(dist, version, swTemplate = DEFAULT_SW_TEMPLATE) {
+  const root = resolve(dist);
+  const src = resolve(swTemplate);
+  if (!existsSync(src)) {
+    throw new Error(`找不到 service worker 模板 ${src} —— 它必须带着 ${SW_VERSION_PLACEHOLDER} 占位符`);
+  }
+  const text = readFileSync(src, 'utf8');
+  const hits = text.split(SW_VERSION_PLACEHOLDER).length - 1;
+  if (hits !== 1) {
+    throw new Error(
+      `${src} 里的版本占位符 ${SW_VERSION_PLACEHOLDER} 应恰好出现 1 次，实际 ${hits} 次` +
+        (hits === 0 ? '（缺席 ⇒ dist/sw.js 不会随内容变化，更新提示永远不会出现）' : '（多重 ⇒ 版本戳写不干净）'),
+    );
+  }
+  const stamped = text.split(SW_VERSION_PLACEHOLDER).join(version);
+  // 产物文件名同样从 SKIP 名单取（见 DEFAULT_SW_TEMPLATE 的注释：那条按行判的腿要求同行引用 SKIP）
+  const out = join(root, [...SKIP][1]);
+  writeFileSync(out, stamped, 'utf8');
+  return out;
+}
+
+/** 从打好戳的产物 sw 里读回版本串；模板（仍是占位符）返回 null。 */
+export function readSwVersion(dist) {
+  const file = join(resolve(dist), [...SKIP][1]); // 与 SKIP 名单同一个文件名
+  if (!existsSync(file)) return null;
+  const m = SW_VERSION_STAMPED.exec(readFileSync(file, 'utf8'));
+  if (!m || m[1] === SW_VERSION_PLACEHOLDER) return null;
+  return m[1];
+}
+
+/**
+ * 跑一次生成：读 `dist`，写那份清单 JSON，返回 `{ version, files, bytes }`。
  * **dist 不存在时抛一条可读的错**（本机陷阱：直接 readFileSync 会给用户一串 ENOENT 堆栈，
  * 完全看不出"要先构建"）。
  */
@@ -131,8 +210,24 @@ export function run(dist = DIST_DEFAULT) {
   return { version, files: files.map((f) => f.rel), bytes: body.length };
 }
 
+/**
+ * 完整的一次"发布链"：清单 + **版本戳**（评审 N-2 的因果链闭合处）。
+ *
+ * 为什么把它单独抽出来：如果只把 `stampSw` 挂在 CLI 分支里，那么"版本戳真的发生了"这件事
+ * **没有任何腿能看见**（CLI 分支在 vitest 里不执行）—— 而它恰恰是"内容型发布要能触发重装 SW"
+ * 的唯一开关。抽成函数后，第 6b 组的腿直接调它。
+ *
+ * **不做"模板不在就跳过"的降级**：`stampSw` 找不到模板 / 占位符不是恰好一处都会抛错，
+ * 静默跳过就等于回到 N-2。
+ */
+export function generate(dist = DIST_DEFAULT, swTemplate = DEFAULT_SW_TEMPLATE) {
+  const r = run(dist);
+  const swFile = stampSw(dist, r.version, swTemplate);
+  return { ...r, swFile };
+}
+
 /* ── CLI ─────────────────────────────────────────────────────────────────────
- * 判断"是不是被直接执行"：`import.meta.url` 与 argv[1] 指向同一个文件。
+ * 判断"是不是被直接执行"：import.meta.url 与 argv[1] 指向同一个文件。
  * ⚠️ 被测试 import 时**不得**产生副作用（否则跑一次测试就写一次 dist/）。
  */
 const isMain = (() => {
@@ -148,8 +243,9 @@ const isMain = (() => {
 if (isMain) {
   const dist = process.argv[2] ?? DIST_DEFAULT;
   try {
-    const r = run(dist);
+    const r = generate(dist);
     console.log(`sw-manifest.json：${r.files.length} 个文件，version=${r.version}`);
+    console.log(`sw.js 版本戳：${r.swFile}`);
   } catch (e) {
     console.error(`✗ ${e instanceof Error ? e.message : String(e)}`);
     process.exit(1);

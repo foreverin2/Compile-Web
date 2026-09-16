@@ -26,8 +26,27 @@
 
 const MANIFEST_URL = new URL('sw-manifest.json', self.location.href).href;
 const CACHE_PREFIX = 'compile-';
-/** 当前版本号（由清单带进来）。activate 清理旧缓存时要和它比较。 */
-let CURRENT_VERSION = null;
+/**
+ * 当前版本号的**构建期占位符**（G3 Task 8 修复轮 2 / 评审 N-2）。
+ *
+ * 为什么要有它：`vite build` 只是把 `public/sw.js` **原样拷**进 `dist/`，所以只要没人改
+ * `sw.js` 的字节，浏览器就**不会重新安装** SW —— 于是"只发内容"（改 HTML/JS/CSS、加文件、
+ * 重生成清单）这种**正常发布**永远不触发更新提示，离线也永远停在旧版本（评审 N-2 真 Chrome
+ * 三步实测）。`scripts/gen-sw-manifest.mjs` 在写清单之后把清单的 `version` **写进
+ * `dist/sw.js` 的本行**（占位符恰好一处；缺席就大声失败）。这样：内容变 ⇒ 清单版本变 ⇒
+ * `dist/sw.js` 字节变 ⇒ 浏览器重装 SW ⇒ 预缓存新版本 + 提示条 + activate 清理旧缓存。
+ *
+ * 这个字面量（连同下面 `CURRENT_VERSION` 的读取点）是 **install / activate 之间的唯一版本来源**：
+ * install 用清单版本建缓存并赋值；activate 与它比较，删掉**可证明过时**的完整旧缓存（见 activate 段）。
+ * ⚠️ 它在本文件里**恰好出现一次**（就在下面那行）：生成器按"恰好一处"校验，多处会让"版本戳
+ * 写不干净"变成静默的半成品。
+ */
+let CURRENT_VERSION = '__SW_VERSION__';
+
+/** 版本号必须是清单那种 16 位十六进制内容哈希 —— 占位符、null、空串一律不算"可用版本"。 */
+function isRealVersion(v) {
+  return typeof v === 'string' && /^[0-9a-f]{16}$/.test(v);
+}
 
 /**
  * 清单里内嵌的版本标记项。**为什么要有它**（评审 S-4）：
@@ -35,7 +54,8 @@ let CURRENT_VERSION = null;
  * （浏览器评估并重启 SW、或任何 install/activate 不在同一实例的路径），`CURRENT_VERSION`
  * 是 null，于是 `'compile-' + null` = `compile-null`，把**所有** `compile-*` 缓存（含本该保留
  * 的那份）都当旧缓存删掉。现在版本号随预缓存一起**落在缓存里**（一个静态标记项，不是用户数据），
- * `activate` 只认能读到版本号的缓存；读不到就**什么都不删**（保守），不会误删。
+ * `activate` 只在**有版本标记**的缓存之间比新旧；`CURRENT_VERSION` 不可用时**一份完整缓存都不删**
+ * （保守），而**没有标记**的缓存永远删（它不可能是可用的离线壳）。
  */
 const VERSION_MARKER = './sw-version';
 const VERSION_MARKER_URL = new URL(VERSION_MARKER, self.location.href).href;
@@ -99,6 +119,8 @@ self.addEventListener('install', (event) => {
       const res = await fetch(MANIFEST_URL, { cache: 'no-store' });
       if (!res.ok) throw new Error(`sw-manifest.json 取不到（HTTP ${res.status}）`);
       const manifest = await res.json();
+      // 版本号的**权威来源仍是清单**（构建期占位符只是为了让本文件的字节随内容变化；
+      // 两者逐字相同 —— `scripts/gen-sw-manifest.mjs` 用同一个 version 同时写清单与这里）。
       CURRENT_VERSION = manifest.version;
       const cache = await caches.open(CACHE_PREFIX + manifest.version);
       await cache.addAll(manifest.files);
@@ -112,11 +134,28 @@ self.addEventListener('install', (event) => {
 });
 
 /**
- * activate：只删除**能证明已过时**的旧缓存，然后 claim。
+ * activate：删掉**可证明过时**的完整旧缓存，然后 claim。
  *
- * 保守规则（评审 S-4）：当前版本 = `caches` 里带版本标记的那些；一个都没有（例如 install
- * 失败、或 activate 落在没跑过 install 的实例里）⇒ **什么都不删**。绝不再出现
- * `compile-null` 把好缓存删光的情况。
+ * ## 判据（修复轮 2 / 评审 N-1 的整改）
+ * 「当前是哪个版本」**只认** `CURRENT_VERSION`（构建期占位符注入 + install 时由清单赋值），
+ * **绝不**再从 `caches.keys()` 反推。上一版把 "当前版本" 算成 `caches` 里**所有**带标记版本的
+ * 集合，于是 `!versions.has(x.version)` 对任何带标记的缓存**恒为假** ⇒ 完整旧缓存**永远删不掉**
+ * （真 Chrome 后果：点完"立即更新"再断网，拿到的还是上一版的壳；Cache Storage 每次发布净增
+ * 约 1 MiB 永不回收）。这条能力 `0e3fdbe` 是有的，是修复轮弄丢的回归。
+ *
+ * 三条规则，按优先级：
+ *  1. 版本号**可用**（`isRealVersion`：清单那种 16 位十六进制内容哈希）⇒ 保留
+ *     `CACHE_PREFIX + CURRENT_VERSION` **恰好那一份**，删掉其余**完整**（有版本标记）缓存。
+ *     这满足计划 `:2445`「activate：删掉旧版本缓存」。
+ *  2. 版本号不可用（`null`/空/占位符 —— 没被注入、或 activate 落在没跑过 install 的实例里）⇒
+ *     **什么完整缓存都不删**（保守：宁可留下旧缓存，也不能把正在用的那份删掉）。这是 S-4 的直接目标。
+ *  3. **无版本标记**的缓存（没跑完 install 的"半截"缓存，含 `compile-null` 形态）**总是删** ——
+ *     它不可能被 `cache.match` 用作离线内容（没有标记就没有完整的 app shell）。
+ *
+ * ⚠️ `CACHE_PREFIX + CURRENT_VERSION` 这个**写法**本身是正确的（有第 2 条守卫时它恒不等于
+ * `compile-null`）—— 仓内曾有一条 `not.toMatch(/CACHE_PREFIX\s*\+\s*CURRENT_VERSION/)` 的文本
+ * 禁止，把这条唯一自然的正确写法也一起禁掉了（评审变异 M-G：行为改对了、文本腿反而变红）。
+ * 现在那条禁止已换成下面第 5 组的**行为腿**（真跑 install+activate），不再看写法。
  */
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
@@ -124,12 +163,14 @@ self.addEventListener('activate', (event) => {
     const mine = names.filter((n) => n.startsWith(CACHE_PREFIX));
     const entries = [];
     for (const n of mine) entries.push({ name: n, version: await readMarker(await caches.open(n)) });
-    const versions = new Set(entries.map((x) => x.version).filter((v) => v !== null));
-    // 没有任何"完整的"缓存 ⇒ 不删（保守：宁可留旧缓存，也不能把离线能力删没）
-    if (versions.size > 0) {
-      const stale = entries.filter((x) => x.version === null || !versions.has(x.version)).map((x) => x.name);
-      await Promise.all(stale.map((n) => caches.delete(n)));
-    }
+    // 注意第 2 条：`CURRENT_VERSION` 不可用（null / 空串 / **没被替换的模板占位符**）时，
+    // 一份**完整**缓存都不删 —— 否则就是 S-4 的 compile-null 类事故（把正在用的那份也删了）。
+    // 未打戳的模板走的就是这条路：占位符不是 16 位十六进制 ⇒ isRealVersion 为假 ⇒ current = null。
+    const current = isRealVersion(CURRENT_VERSION) ? CURRENT_VERSION : null;
+    const stale = entries
+      .filter((x) => x.version === null || (current !== null && x.name !== CACHE_PREFIX + current))
+      .map((x) => x.name);
+    await Promise.all(stale.map((n) => caches.delete(n)));
     await self.clients.claim();
   })());
 });
