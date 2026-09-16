@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createGame } from '../../src/core/state/create';
 import { syncScanOverlays } from '../../src/ui/render';
-import { NET_BOTTOM_SIDES, renderNetBoard, verifyPageHooks } from '../../src/ui/render-net';
+import { NET_BOTTOM_SIDES, NET_PAGE_CLASS, renderNetBoard, verifyPageHooks } from '../../src/ui/render-net';
 import { setFxViewSeat } from '../../src/ui/fx-seat';
 import { stripComments } from './source-text';
 // R8-5：样式表解析器（`cssRules` / `cssPropOf` / `specificityOf` / 选择器匹配）**一份实现、两处共用**
@@ -1471,15 +1471,56 @@ describe('R8-2 收尾 · C-1 溢流数字 / I-1 横扫链 / I-4 防弹衣', () =
   });
 
   it('G-7. I-1 CSS 腿：横扫选择器不带"永不命中"前缀 / keyframe 从右往左 / 格渐入在 X 轴', () => {
-    // ① 选择器从**解析器**走（不是文本子串）：拿真实祖先链（body ⇒ 层盒 ⇒ 线）解 `animation-name`。
-    //    带 `.net-lane-band` 前缀的写法会解出 null —— 那正是"永不命中"的表现（横置电池静默竖扫）。
+    // ① 选择器从**解析器**走（不是文本子串）：拿真实祖先链（`body.net-page` ⇒ 层盒 ⇒ 线）解
+    //    `animation-name`。带 `.net-lane-band` 前缀的写法会解出 null —— 那正是"永不命中"的表现
+    //    （横置电池静默竖扫）。
+    //    ⚠️ **G2 修正 R18：链的根从裸 `body` 改成 `body.net-page`**。本页的层是 `document.body`
+    //    的**直接子节点**，而 `render-net.ts` 会给 body 加页标记（`NET_PAGE_CLASS`，
+    //    :265 定义 / :1793 加 / :935 摘）；R18 给这条规则补上了 `body.net-page` 前缀 ——
+    //    **页身份从运行期测量挪回类上**（修前"只在远程页横置电池上生效"**只**由
+    //    `r.width > r.height` 这个测量保证：热座页一旦出现任一"宽 > 高"的外壳，这条远程页
+    //    专属的横扫就会静默套上去，而没有任何源码守卫会红）。
+    //    判据的**强度不变**：`assertModelableCascade` + `ruleHitsAsSubject` 照旧，任何
+    //    "永不命中"的前缀（`.net-lane-band …`）仍然解出 null ⇒ 报红。
     const layer = cssNode('scan-overlay', 'scan-horiz');
     const line = cssNode('scan-line');
-    const anim = cssPropOfSubject(line, [cssNode('body'), layer, line], REAL_RULES, 'animation-name');
-    console.log(`\n===== I-1 · 「.scan-overlay.scan-horiz .scan-line」解出的 animation-name = ${anim}`);
+    const pageChain = [cssNode('body', NET_PAGE_CLASS), layer, line];
+    const anim = cssPropOfSubject(line, pageChain, REAL_RULES, 'animation-name');
+    console.log(`\n===== I-1 · 「body.net-page .scan-overlay.scan-horiz .scan-line」解出的 animation-name = ${anim}`);
     expect(anim, '`.scan-horiz` 的扫描线拿不到 `net-battery-scan-sweep` —— `styles-net.css` 那条规则的'
-      + '选择器带了 `.net-lane-band` 前缀（层是 `document.body` 的直接子节点 ⇒ 规则**永不命中**，'
+      + '选择器带了永不命中的前缀（层是 `document.body` 的直接子节点 ⇒ 规则**永不命中**，'
       + '横置电池会静默退回竖扫）').toBe('net-battery-scan-sweep');
+    // ①b **反空集合（R18 新增，判据只增不减）**：热座页的链（`body` **没有**页标记）必须解出
+    //     null —— 这条远程页专属的横扫**不许**在热座页生效，哪怕那一格的电池被测量判成"宽 > 高"。
+    expect(cssPropOfSubject(line, [cssNode('body'), layer, line], REAL_RULES, 'animation-name'),
+      '热座链（`body` 无 `net-page`）也解出了远程页的横扫 keyframe ⇒ 页身份又回到了运行期测量')
+      .toBe(null);
+    // ①c **意图腿（R18 把①从"字面形状"改写成"意图"）** ——
+    //    **旧句为什么必须改**：①原来把整条判据寄托在"**裸 `body`** 这条链上解得出 keyframe 名"。
+    //      R18 给这条规则补了页标记（见上面那段注释）之后，裸 `body` 链上它**本来就不该**命中
+    //      （那正是"热座页不许套上远程页横扫"的判据），于是旧句会把**正确**的实现判红。
+    //    **新句多查了什么**：它直接问"I-1 的**意图**有没有被违反"，而不再绑定某种字面形状 ——
+    //      I-1 的意图是"`.scan-overlay` 的层挂 `document.body` ⇒ 它的规则**不许被任何 `.net-*`
+    //      **容器**作用域住**（那样恒不命中）"。**容器**与**页标记**是两件事：
+    //      `.net-board` / `.net-lane-band` / `.net-grid` / `.net-hands` / `.net-piles` … 是**容器**
+    //      （层不是它们的后代）；`body.net-page` 是**页身份**（由 `render-net.ts` 写在 `body` 上）——
+    //      于是新句**允许且要求**页标记、同时**禁止**任何容器 token。
+    //    ⇒ 强度只增不减：加容器前缀仍然报红（且 ① 的解析器腿会在同一处再报一次）。
+    const sweepRules = REAL_RULES.filter((r) =>
+      /(?:^|;|\s)animation-name\s*:\s*net-battery-scan-sweep/.test(r.body)
+      && ruleHitsAsSubject(r, line, pageChain));
+    expect(sweepRules.length, '真实链上没有任何规则给出 `net-battery-scan-sweep`（横扫动画没了）')
+      .toBeGreaterThan(0);
+    for (const r of sweepRules) {
+      expect(r.selector, `\`${r.selector}\` 没有页标记 —— 远程页专属的横扫会串到热座页`)
+        .toContain(`.${NET_PAGE_CLASS}`);
+      // 把**页标记那个 token**剥掉之后，选择器里不许再剩任何 `.net-` —— 剩下的每一个都是
+      // **容器作用域**（层挂在 body 上，被它作用域住就恒不命中）。
+      const withoutPageMarker = r.selector.replace(new RegExp(`\\.${NET_PAGE_CLASS}\\b`, 'g'), '');
+      expect(withoutPageMarker, `\`${r.selector}\` 里除了页标记还有 \`.net-*\` **容器**作用域 —— `
+        + '层是 `document.body` 的直接子节点，被容器作用域住就**恒不命中**（横置电池静默退回竖扫）')
+        .not.toMatch(/\.net-/);
+    }
 
     // ② 方向：`0%` 与 `100%` 都必须用 `right` 定位，且 `0%` 更靠**右**（right 更小）⇒ 从右往左扫
     const kb = keyframesBody('net-battery-scan-sweep');

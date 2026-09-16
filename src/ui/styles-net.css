@@ -652,12 +652,21 @@
 /* 横置后外壳"宽而扁"，竖扫（`battery-scan-sweep` 走 `top`）不成立 ⇒ `syncScanOverlays`
    按外壳实测矩形在 **宽 > 高** 时给层盒加 `.scan-horiz`（热座页外壳恒"高而窄" ⇒ 不加类 ⇒ 逐字不变），
    这里配一条**从右往左**扫的横向 keyframe（与点亮方向一致）。
-   ⚠️ 选择器写成 `.scan-overlay.scan-horiz`（**不带 `.net-lane-band` 前缀**）：这个层是
-   `syncScanOverlays` createElement 后**直接挂到 `document.body`** 的（不是列的后代）——
-   带前缀会**永不命中**（而"永不命中"在这里表现为"横置电池上还在竖扫"，静默、不报错）。
-   复合两个类把权重提到 (0,3,0) > `styles.css:241` 的 `.scan-overlay .scan-line` (0,2,0)
-   ⇒ 覆盖不再依赖本文件的 import 顺序（隐性依赖正是本项目反复栽的那类）。 */
-.scan-overlay.scan-horiz .scan-line {
+   ⚠️ 选择器**不带 `.net-board` / `.net-lane-band` 前缀**：这个层是 `syncScanOverlays`
+   （`render.ts:501-503` 建、`:536` 挂）createElement 后**直接挂到 `document.body`** 的
+   （不是列的后代）—— 带前缀会**永不命中**（表现为"横置电池上还在竖扫"，静默、不报错）。
+   ⚠️⚠️ **本波（G2 修正 R18）给选择器补上 `body.net-page` 页标记**：本文件此前只靠
+   **运行期实测**（`render.ts:547` 的 `r.width > r.height`）来保证"这条远程页专属的横扫
+   keyframe 只落在远程页的横置电池上"—— 那是**测量**，不是**页身份**。
+   测量是脆的：热座页一旦出现任一"宽 > 高"的 `.battery-shell`（外壳尺寸由 `syncScanOverlays`
+   按实测矩形写进层盒，判据面与页面无关），这条远程页专属的横扫就会**静默**套到热座页上，
+   而**没有任何源码守卫会红**。页标记把它挪回**类**上：`body.net-page` 只由
+   `render-net.ts`（`NET_PAGE_CLASS`，:265 / :1793 / :935）写 ⇒ 热座页恒不命中（构造性）。
+   `scan-horiz` 的 JS toggle（`render.ts:547`）**原样保留**：它管的是"这一格电池现在是横置的"
+   （几何事实），页标记管的是"这是远程页"（页身份）—— 两者是**与**关系，缺一不可。
+   权重：基础 `.scan-overlay .scan-line`（`styles.css:241`）=(0,2,0)；本规则 =（body.net-page 1 +
+   scan-overlay 1 + scan-horiz 1 + scan-line 1）= (0,4,0) ⇒ 覆盖不依赖 import 顺序。 */
+body.net-page .scan-overlay.scan-horiz .scan-line {
   left: auto;
   right: 6%;
   top: 50%;
@@ -1083,10 +1092,15 @@
   padding-right: calc(var(--card-w) * 0.2154);
 }
 .net-hands .hand .card + .card { margin-left: calc(var(--card-w) * -0.2154); }
-.net-hands .hand.reversed .card + .card {
-  margin-left: 0;
-  margin-right: calc(var(--card-w) * -0.2154);
-}
+/* ⚠️ 这里原来有一条 `.net-hands .hand.reversed .card + .card { … }`（**本波删除**）——
+   它是**死规则**（"状态永不产出"），理由是源码可判的：`.reversed` 只由 `render.ts:1900` 在
+   `reversed === true` 时写进 `.hand` 的类名，而远程页的两处 `renderHand(...)` 调用
+   **硬传 `reversed: false`**（`render-net.ts:1582`（P0）与 `:1605`（P1），两处都是字面量，
+   且 `render-net.ts` 全文没有任何 `classList.add('reversed')`）
+   ⇒ 远程页 DOM 里**永远没有** `.hand.reversed` ⇒ 那条规则在本页恒不命中。
+   它在热座页的对应物仍在原处由 `styles.css:875 / :882` 负责（红线：那份表一行不许动），
+   "手牌从右往左排"的语义在远程页由 `.hand` 自身的排列方向承担（见 `render-net.ts:87` 的说明）。
+   ⇒ 删掉它而不是"留着以后用"：留着就是一条会在将来误导人"远程页有 reversed 分支"的假代码。 */
 .net-hands .hand-count-only { justify-content: center; align-items: center; min-width: var(--card-w); width: auto; }
 .net-hands .hand-count-placeholder {
   display: flex;
@@ -1232,9 +1246,25 @@
 
 /* ── 控制权易主 FX 的竖向变体（styles-gen3-sync.css 那几条是横向的，这里只做**方向**覆盖）──
    为什么是覆盖而不是改原规则：原规则服务热座页（横向），改它就会破坏热座观感。
-   ⚠️ 只覆盖方向相关的部分（translate 的轴），颜色/尺寸/时长一律继承原规则。 */
-.net-board .g3ctrl-link { animation-name: g3-ctrl-link-fly-y; }
-.net-board .g3ctrl-link.break { animation-name: g3-ctrl-link-break-y; }
+   ⚠️ 只覆盖方向相关的部分（translate 的轴），颜色/尺寸/时长一律继承原规则。
+
+   ⚠️⚠️ **作用域必须是 `body.net-page …`，不能是 `.net-board …`（本波修掉的那族缺陷）**：
+   这三条规则管的层由 `gen3-control.ts` 的 `layer()`（:37-42）用 `document.body.appendChild`
+   挂成 **body 级浮层**（`position: fixed`）—— `.net-board` **不是**它的祖先。
+   CSS 无法"按后代选祖先"，所以 `.net-board .g3ctrl-link` 这类写法**恒不命中**，而且**静默**：
+   命中不到本规则时会回落到基础规则 `styles-gen3-sync.css:252` 的 `g3-ctrl-link-fly`，
+   那一条消费的是 **`var(--tx, 0px)`**；而远程页（竖排）`gen3-control.ts:811-812`（link）与
+   `:870`（break）写的是 **`--ty`**（`controlTrackAxis()` 在 `:720-721` 于 `fxViewSeat() !== null`
+   —— 即远程页 —— 返回 `'y'`）⇒ `--tx` **从未被写** ⇒ 牵引链只在原地缩放/旋转/淡出、
+   **完全没有沿轴位移**（这正是这三条规则要修的事）。
+   本文件下面的 `-y` 三条 keyframes（:1241 / :1246 / :1254-1256）消费的正是 `--ty`
+   ⇒ **修法就是换作用域，声明一个字都不用动**。
+   页标记 `body.net-page` 由 `render-net.ts` 的 `NET_PAGE_CLASS` 加/清（:265 定义、:1793 加、:935 摘），
+   热座页没有它 ⇒ 这些规则在热座页恒不命中（热座零变化是构造性的）。
+   ⚠️ 权重：基础 `.g3ctrl-link`=(0,1,0)、`.g3ctrl-link.break`=(0,2,0)、`.g3ctrl-mini-chip`=(0,1,0)；
+   改后 =(0,2,1)/(0,3,1)/(0,2,1)，全部**严格压过**、不依赖本文件的 import 顺序。 */
+body.net-page .g3ctrl-link { animation-name: g3-ctrl-link-fly-y; }
+body.net-page .g3ctrl-link.break { animation-name: g3-ctrl-link-break-y; }
 @keyframes g3-ctrl-link-fly-y {
   0% { transform: translate(0, 0) scale(0.4) rotate(0deg); opacity: 0; }
   18% { opacity: 1; }
@@ -1245,8 +1275,13 @@
   40% { transform: scale(1.3) rotate(-14deg); opacity: 1; }
   100% { transform: translate(16px, var(--ty, 0px)) scale(0.7) rotate(38deg); opacity: 0; }
 }
-/* 轻量版文字标：横排是"落在落点上方"（translate(-50%,-100%)），竖排下改到落点**左侧** */
-.net-board .g3ctrl-mini-chip {
+/* 轻量版文字标：横排是"落在落点上方"（translate(-50%,-100%)），竖排下改到落点**左侧**。
+   ⚠️ 同上的作用域理由（`gen3-control.ts:769` 的 `.g3ctrl-mini-chip` 也在 `layer()` 的 body 级
+   浮层里，:761）：基础规则 `styles-gen3-sync.css:475/482-486` 是沿 **y** 向上漂
+   （`translate(-50%, -78%) → (-50%, -128%)`），而竖排要的是"落在锚点**左侧**、沿 **x** 漂"
+   （锚点已在 `gen3-control.ts:770` 按 `axis === 'y'` 偏过 −54px）—— 写成 `.net-board …`
+   就永远换不过来，表现同样是"文字标压在滑块上"。 */
+body.net-page .g3ctrl-mini-chip {
   transform: translate(-115%, -50%);
   animation-name: g3-ctrl-mini-chip-y;
 }
@@ -1301,3 +1336,88 @@ body.net-page .g3sync-wrath0-seam.vert::after {
   border-right: 5px solid transparent;
   border-top: 7px solid rgba(192, 57, 43, 0.9);
 }
+
+/* ============================================================================
+ * 10. 远程页的烟雾 puff：几何**随槽盒（= 卡宽）等比缩**（G2 修正 R18 · D）
+ *
+ * ## 缺陷（**算术结论**，不是观感口味）
+ * 基础几何在 `styles.css:117-148`：12 个 `.smoke-puff` 的宽高**写死 64px**，
+ * `nth-child(1) { left: 8px }` / `nth-child(2) { right: 8px }`（其余 10 个是四角 / 上下的锚点）。
+ * 热座页的槽够宽，左右两个 puff 只是"擦边"；远程页的槽盒窄得多（槽盒宽推导见下）⇒
+ *   · 左 puff 圆心 x = 8 + 64/2 = **40px**；
+ *   · 右 puff 圆心 x = 槽盒宽 − 8 − 64/2 = **槽盒宽 − 40px**；
+ *   · ⇒ **圆心距 = 槽盒宽 − 80px ≈ 34.6px**，而两半径之和 = **64px**
+ *  ⇒ 相距不到半径和的一半 ⇒ 左右两个 64px 的圆**几何上必然大幅重叠**（看上去就是左右两坨糊成
+ *  一条），而这**不是**"好不好看"的问题 —— 它是算术。
+ *
+ * ## 为什么**不能**像本文件其它处那样写 `calc(var(--card-w) * …)`
+ * ⚠️⚠️ 本波最重要的一条**结构性**结论（已由委托人确认）：
+ *   `--card-h` / `--card-w` **只**声明在 `.net-board` 的规则体里（本文件 :91-92），
+ *   而 `.smoke-overlay` 是 `render.ts` 用 `document.body.appendChild` 挂在 **body** 上的
+ *   （`render.ts:436` 建、`:468` 挂）—— **自定义属性只向下继承**，body 级浮层**读不到**
+ *   `.net-board` 上的值；而 `var(--card-w)` 在**无回退值**时是"计算值时间失效"：
+ *   `width` 会退化成 `auto`（比现状更坏，而且**一个字都不报**）。
+ *   ⇒ **给 body 级浮层写规则时，`.net-board` 上的自定义属性一律不可用。**
+ *   也**不许**在 body 级重复一条 `--card-w: calc((140px - 2px) * 0.71429 + 2px)` ——
+ *   那会造出第二组 `140px`，正是 R9-1/R9-4 用守卫钉死的"第二旋钮"
+ *   （`tests/ui/net-hand-card-size.test.ts:46 / :53-55`、`tests/ui/net-r15.test.ts:668-671`）。
+ *
+ * ## 正解：以**层盒自身**为基准的百分比（零新增字面量）
+ * `.smoke-overlay` 的盒子**就是** `.stack-slot` 的实测矩形（`render.ts:470-474` 每帧把
+ * `getBoundingClientRect()` 的 left/top/width/height 复制到本层的内联样式），而槽的内容宽由
+ * `.net-lane-band .stack { min-width: var(--card-w) }`（本文件 :480）驱动
+ * ⇒ **槽盒宽本身是 `--card-w` 的函数** ⇒ puff 的 `%` 隔一跳仍由**卡宽**驱动。
+ *   · `width: var(--smoke-puff)` + `height: auto` + `aspect-ratio: 1` ⇒ **正圆**。
+ *     ⚠️ **不许**把高度写成 `32%` 那种：百分比的 `height` 相对的是层盒的**高度**
+ *     （远程页 ≈ 432.8px）⇒ 会得到 0.32 × 432.8 ≈ 138px 的**竖椭圆**。
+ *   · 居中偏移用 `margin-left/margin-top: calc(var(--smoke-puff) / -2)`：**百分比 margin 相对
+ *     包含块的**宽度**解析**（不是相对自身宽度），与 puff 的宽/高同源（正圆）⇒ 恰好是**半个直径**
+ *     （基础规则里的 `margin-top: -32px` 就是这半个直径，`styles.css:137-138 / :144 / :147`）。
+ *     ⚠️ **不能**用 `transform: translateX(-50%)` 居中：`transform` 已被 `smokePuff`
+ *     那条动画整条占用（`styles.css:129-133`；基础规则 :135-136 的注释也写明了这件事）。
+ *   · 12 个 `nth-child` 的**顺序与语义一字不变**（左/右缘中部、四角、上/下缘 25%/50%/75%），
+ *     只把长度单位从 px 换成 `%`：`left/right` 相对层盒**宽**、`top/bottom` 相对层盒**高**
+ *     ⇒ "贴边"的语义与热座页一致。
+ *
+ * ## 槽盒宽（算术腿用的推导值 · **几何推导**，不是实测）
+ * 槽盒的 border-box 宽 = 内容宽 + 左右 padding + 左右 border：
+ *   · 内容宽 = `.net-lane-band .stack { min-width: var(--card-w) }`（本文件 :480 / :92）
+ *     = 100.572px；
+ *   · padding：`styles.css:63` 的 `.stack-slot { padding: 6px }`（四边），本文件 :706-707
+ *     把 p1/p2 的**单侧**覆盖为**同样的 6px**（那条规则本来是撤掉热座的 25px）
+ *     ⇒ 左右合计 **12px**；
+ *   · border：`styles.css:61` 的 `1px dashed #555` ⇒ 左右合计 **2px**。
+ *  ⇒ **槽盒宽 ≈ 100.572 + 12 + 2 = 114.572px**（"只算 padding"的下限口径 = 112.572px）。
+ *  **修前**圆心距 = 114.572 − 80 = **34.57px**（下限口径 32.57px）—— 两种口径都 **< 64px**
+ *  ⇒ "必然重叠"与口径无关（只要槽盒宽 < 144px 就成立；远程页实测/推导都在 112~115px）。
+ *
+ * ## 修后（同一条算术，用本表的值）
+ * `--smoke-puff: 32%` ⇒ puff 直径 = 0.32 × 114.572 ≈ **36.66px**；
+ * 左 puff 圆心 x = (4% + 32%/2) × 114.572 = 0.20 × 114.572 ≈ **22.91px**；
+ * 右 puff 圆心 x = (100% − 4% − 32%/2) × 114.572 = 0.80 × 114.572 ≈ **91.66px**；
+ * ⇒ **圆心距 ≈ 68.75px ≥ 半径和 ≈ 36.66px**（不重叠，余量 ≈ 32px）。
+ * ⚠️ 以上全是**几何推导**（本仓无布局引擎、无 jsdom 布局）；"缩完好不好看"只能由用户在
+ * 他自己的 `localhost:5173` 上人眼验收 —— 本节的判据只保证"**不再必然重叠**"与
+ * "**尺寸由卡宽驱动**"这两条可机检的事。
+ * ========================================================================== */
+body.net-page .smoke-overlay { --smoke-puff: 32%; }
+body.net-page .smoke-puff {
+  width: var(--smoke-puff);
+  height: auto;                 /* 高度由 aspect-ratio 从宽度推出（正圆，见上面的 ⚠️） */
+  aspect-ratio: 1;
+}
+/* 1-2 左 / 右缘中部（4% 与热座的 8px / 155px ≈ 5.2% 同量级，且保证整圆落在盒内） */
+body.net-page .smoke-puff:nth-child(1) { left: 4%; top: 50%; margin-top: calc(var(--smoke-puff) / -2); }
+body.net-page .smoke-puff:nth-child(2) { right: 4%; top: 50%; margin-top: calc(var(--smoke-puff) / -2); }
+/* 3-6 四角 */
+body.net-page .smoke-puff:nth-child(3) { left: 12%; top: 0.5%; }
+body.net-page .smoke-puff:nth-child(4) { right: 12%; top: 0.5%; }
+body.net-page .smoke-puff:nth-child(5) { left: 16%; bottom: 0.5%; }
+body.net-page .smoke-puff:nth-child(6) { right: 16%; bottom: 0.5%; }
+/* 7-12 上 / 下缘 25% / 50% / 75%（50% 那两个用半个直径的负 margin 水平居中） */
+body.net-page .smoke-puff:nth-child(7) { left: 25%; top: 0.5%; }
+body.net-page .smoke-puff:nth-child(8) { left: 50%; top: 0.5%; margin-left: calc(var(--smoke-puff) / -2); }
+body.net-page .smoke-puff:nth-child(9) { left: 75%; top: 0.5%; }
+body.net-page .smoke-puff:nth-child(10) { left: 25%; bottom: 0.5%; }
+body.net-page .smoke-puff:nth-child(11) { left: 50%; bottom: 0.5%; margin-left: calc(var(--smoke-puff) / -2); }
+body.net-page .smoke-puff:nth-child(12) { left: 75%; bottom: 0.5%; }

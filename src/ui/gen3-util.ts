@@ -32,9 +32,10 @@
  */
 
 import type { Card, GameState, Line, PlayerId } from '../core/models/types';
-import { fxRotMarkerOf } from './fx-orient';
+import { fxOrientOf, fxRotMarkerOf } from './fx-orient';
 import {
-  domRectOf, fxOuterFor, fxViewSeat, vClipInsetCss, vClipInsetPct, vVisibleStripRect, type FxOuter,
+  domRectOf, fxOuterFor, fxViewSeat, localInsetCss, vClipInsetPct, vVisibleStripRect,
+  type FxOuter, type InsetSide,
 } from './fx-seat';
 
 /**
@@ -156,8 +157,9 @@ export function visibleRectOf(s: GameState, uid: string): DOMRect | null {
 /**
  * 浮层卡裁剪：被覆盖的比例（0~0.94）——用于 `buildFxCard` 出来的整卡浮层。
  *
- * 热座裁**右缘**（与原 `clipInsetRightPct` 逐字等价）；远程页按覆盖方向裁**上/下缘**。
- * `vClipInsetCss` 给出对应的 `inset(...)` 字符串，调用方（fx-gen3.ts 的伏击/惰性翻转）用它。
+ * ⚠️ 这是**屏幕帧**的比例（被遮住的像素 / 本卡的屏幕足迹长度）。
+ * 热座裁**右缘**（与原算式逐字等价）；远程页按覆盖方向裁**上/下缘**（`vClipInsetPct`）。
+ * 它与 `clipInsetCss` 必须成对使用：后者把它换算成根元素**本地帧**的四值。
  */
 export function clipInsetRightPct(s: GameState, uid: string): number {
   const self = nodeOf(uid);
@@ -178,15 +180,39 @@ export function clipInsetRightPct(s: GameState, uid: string): number {
 }
 
 /**
- * 竖向裁剪的 CSS 形态（`inset(...)` 四值）——热座用 `inset(0 X% 0 0)`（裁右）、
- * 远程页用 `inset(X% 0 0 0)`（对手侧裁上）/ `inset(0 0 X% 0)`（自己侧裁下）。
+ * 裁剪的 CSS 形态（`inset(...)` 四值）—— 出口是**浮层卡根元素的本地帧**（G3 修正）。
  *
- * 为什么单独一个出口：`fx-gen3.ts` 的两处翻转覆盖层要把同一组数字写进 `clipPath`，
- * 若各写一份 `inset(...)` 字面量，两处一旦漂移就是"裁剪方向反了但没人报错"。
+ * ## 两个帧（这是本函数存在的全部理由）
+ *
+ * 判据（`coveredOuterOf` / `clipInsetRightPct`）与露出带（`visibleRectOf`）都在**屏幕帧**里算，
+ * 但消费方（`fx-gen3.ts` 的伏击 A1 / 惰性 I1·I2 翻转浮层）把 `clipPath` 写在 `api.buildFxCard`
+ * 建出的**根元素**上 —— 而那个元素在 ±90° 特效朝向下**自己带 `rotate(±90deg)`**
+ * （`effects/index.ts:239-243`：`--fx-rot` + `transform: rotate(var(--fx-rot, 0deg))`）。
+ * CSS Masking 语义下 `clip-path` 先在本地坐标系生效、再随 transform 映射到屏幕
+ * ⇒ 直接把屏幕帧四值写上去会**被旋转 90°**（本地"上/下"落到屏幕"左/右"）。
+ * 所以这里必须再经 `fx-seat.ts` 的 `localInsetCss` 把方向旋回本地帧。
+ *
+ * - **屏幕帧的裁剪侧**：热座 ⇒ 覆盖者在**右** ⇒ 裁右缘（与改动前那句 `inset(0 X% 0 0)` 同义）；
+ *   远程页 ⇒ `'start'`（对手侧，覆盖者在上）裁上 / `'end'`（自己侧，覆盖者在下）裁下。
+ * - **本地帧的角度**：`fxOrientOf(nodeOf(uid))` —— 与 `buildFxCardAt` 建盒/旋转**同一个函数读同一个
+ *   节点**（`effects/index.ts:192` 的 `fxOrientOf(node)`，node 就是 `[data-uid]` 那张卡；
+ *   特效派发器 `effects/index.ts:2141` 也是用同一个选择器取节点）。故"浮层卡转了多少度"在这里
+ *   **不可能与建盒时读到的不一致**：它不是"我们记得传对"，而是同一个出处的同一次取值。
+ *
+ * ⚠️ 为什么不是 `fxRotDegOf` / `orientOf`（两者都会漏一种页面）：
+ *  - `fxRotDegOf` **不回退** ⇒ 热座（DOM 上没有 `data-fx-rot`）恒 0° ⇒ 热座会继续错 90°；
+ *  - `orientOf` 读**卡面**朝向 ⇒ 远程页对手卡是 `rot-180`（而特效朝向是 +90°）⇒ 远程页错。
+ *
+ * ⚠️ 单一出处：`if (旋转 === 90)` 这类分支**只在 `fx-seat.ts` 的 `LOCAL_SIDE_OF_SCREEN_SIDE`
+ * 出现一次**；本函数只做"屏幕帧侧别 + 角度"两个输入到那一个出口的搬运。
+ * `tests/ui/gen3-clip-frame.test.ts` 把本函数的输出按元素旋转合成回屏幕帧、与 `visibleRectOf`
+ * 的露出带逐格比对（1px 内）。
  */
 export function clipInsetCss(s: GameState, uid: string, pct: number): string {
   const outer = coveredOuterOf(s, uid);
-  return outer === null ? `inset(0 ${(pct * 100).toFixed(1)}% 0 0)` : vClipInsetCss(pct, outer);
+  // 屏幕帧的裁剪侧：热座 = 右缘（改动前的语义，逐字保留）；远程页 = start(对手侧) 上 / end(自己侧) 下。
+  const side: InsetSide = outer === null ? 'right' : outer === 'start' ? 'top' : 'bottom';
+  return localInsetCss(pct, side, fxOrientOf(nodeOf(uid)));
 }
 
 /** 该卡是否被覆盖（= 上方还有牌） */

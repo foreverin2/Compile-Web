@@ -35,6 +35,10 @@
  */
 
 import type { PlayerId } from '../core/models/types';
+// G3 修正：`localInsetCss` 要把屏幕帧方向按元素自身的旋转旋回本地帧 —— 角度类型走 fx-orient 的
+// 单一出处（`CardOrient`），本模块不自己另立一套 0/±90/180 的表示。
+// ⚠️ `fx-orient.ts` **不** import 本模块（它只放朝向的读/映射），故这里不构成循环依赖。
+import type { CardOrient } from './fx-orient';
 
 /**
  * 当前的**视角座位**：`0` = 我是 P1（自己在下半部）、`1` = 我是 P2、
@@ -437,16 +441,78 @@ export function vClipInsetPct(card: DOMRect, cover: DOMRect, outer: FxOuter, max
   return Math.min(maxPct, hidden);
 }
 
+/* ============================================================================
+ * 屏幕帧 inset → **元素本地帧** inset（G3 修正：`clip-path` 与 `transform` 同元素）
+ * ========================================================================== */
+
+/** `inset(...)` 的四边名。**同一组名字同时表示屏幕帧与本地帧** —— 到底哪一帧由
+ *  `localInsetCss` 的 `o` 参数决定；名字本身不带帧信息，这正是两帧会混淆的地方。 */
+export type InsetSide = 'top' | 'right' | 'bottom' | 'left';
+
 /**
- * 竖向裁剪的 CSS 形态（`inset(...)` 的四个百分比）。
+ * **屏幕帧的裁剪侧 → 元素本地帧的裁剪侧**（按元素自身的 rotate 角度 `o`）。
+ *
+ * 为什么需要它（G3 修正）：浮层卡的 `clipPath` 与 `--fx-rot` 的 `transform` 写在**同一个元素**
+ * 上（`effects/index.ts` 的 `buildFxCardAt`：`:239-243` 写 transform，`fx-gen3.ts` 的伏击/惰性
+ * 分支写 clipPath），而 CSS Masking 的语义是「`clip-path` 先在元素的**本地坐标系**里生效，
+ * 再随 `transform` **一起**映射到屏幕」⇒ 直接写屏幕帧的四值会被旋转 90°。
+ *
+ * 这张表不是记忆，是按 CSS 旋转矩阵复算的（y 轴向下、正角 = 顺时针）：
+ * 本地点 `(u,v) → 屏幕 = 盒心 + R(o)·(u − w/2, v − h/2)`，于是"屏幕方向 d"对应"本地方向
+ * `R(−o)·d`"，而 `R(−o) = [[cos o, sin o], [−sin o, cos o]]`：
+ *
+ * | 屏幕正方向 | o=0 | o=90 | o=−90 | o=180 |
+ * |---|---|---|---|---|
+ * | **+x（右）** | 右 | **上** | **下** | 左 |
+ * | **+y（下）** | 下 | 右 | 左 | **上** |
+ *
+ * （屏幕左/上 = 上表两个方向取反。）`tests/ui/gen3-clip-frame.test.ts` 用这张表**逐格**把本地
+ * inset 经 `R(o)` 合成回屏幕帧、与露出带比对 —— 任何一行写反都会在那里红。
+ */
+const LOCAL_SIDE_OF_SCREEN_SIDE: Record<CardOrient, Record<InsetSide, InsetSide>> = {
+  0: { top: 'top', right: 'right', bottom: 'bottom', left: 'left' },
+  90: { top: 'left', right: 'top', bottom: 'right', left: 'bottom' },
+  [-90]: { top: 'right', right: 'bottom', bottom: 'left', left: 'top' },
+  180: { top: 'bottom', right: 'left', bottom: 'top', left: 'right' },
+};
+
+/**
+ * 把**屏幕帧**的裁剪（`side` 侧裁掉 `pct`）写成元素**本地帧**的 `inset(...)` 四值。
+ *
+ * 两件事在同一个出口（单一出处，避免"两处各写一遍 `if (o === 90)`"将来漂移）：
+ *  1. **方向换算**：屏幕的 `side` 落在本地的哪条边（`LOCAL_SIDE_OF_SCREEN_SIDE`）；
+ *  2. **百分比格式**：`(pct * 100).toFixed(1)` —— 全仓只有这一处产出 inset 字面量。
+ *
+ * ⚠️ 百分比**不需要**按宽高互换另算：`inset` 的百分比按**参考盒**（元素的 border-box，即未旋转
+ * 布局盒）解算，而 `cloneBoxFrom` 让 ±90° 的布局盒宽高恰好互换（`w = rect.height` / `h = rect.width`）
+ * ⇒ "屏幕轴上的占比" 与 "对应本地轴上的占比" 是**同一个数**。这也是"±90° 只需换方向、不换比例"
+ * 的依据。
+ *
+ * ⚠️ `pct` 与 `side` 必须来自**同一个屏幕帧**的判据（`gen3-util.ts` 的 `clipInsetRightPct` +
+ * `coveredOuterOf`）；本函数只负责换帧，不判方向。
+ */
+export function localInsetCss(pct: number, side: InsetSide, o: CardOrient): string {
+  const local = LOCAL_SIDE_OF_SCREEN_SIDE[o][side];
+  const p = `${(pct * 100).toFixed(1)}%`;
+  const at = (s: InsetSide): string => (s === local ? p : '0');
+  return `inset(${at('top')} ${at('right')} ${at('bottom')} ${at('left')})`;
+}
+
+/**
+ * 竖向裁剪的 CSS 形态（`inset(...)` 的四个百分比）—— **屏幕帧**口径。
  *
  * 与 `vVisibleStripRect` **同一套方向推导**（两处必须同源，否则可见带与裁剪会错开）：
  *  - `'end'`（覆盖者在卡**下**方）⇒ 露出上段 ⇒ 裁**下**：`inset(0 0 X% 0)`；
  *  - `'start'`（覆盖者在卡**上**方）⇒ 露出下段 ⇒ 裁**上**：`inset(X% 0 0 0)`。
+ *
+ * ⚠️ G3 修正：本函数给的是**屏幕帧**四值（= `localInsetCss` 在 `o = 0` 下的退化形态）。
+ * 浮层卡根元素在远程页带 `rotate(∓90deg)`、`clip-path` 与它同元素（见 `LOCAL_SIDE_OF_SCREEN_SIDE`
+ * 的说明）⇒ 消费方（`gen3-util.ts` 的 `clipInsetCss`）必须再经 `localInsetCss(pct, side, 朝向)`
+ * 旋回本地帧。保留本函数（而不是让消费方自己拼字符串）是因为"屏幕帧四值"本身有一条被测试钉住的
+ * 语义（`tests/ui/fx-seat.test.ts`），且它与本地帧出口**共用同一个格式化实现**（不会漂移）。
  */
 export function vClipInsetCss(pct: number, outer: FxOuter): string {
-  const p = `${(pct * 100).toFixed(1)}%`;
-  return outer === 'start' ? `inset(${p} 0 0 0)` : `inset(0 0 ${p} 0)`;
+  return localInsetCss(pct, outer === 'start' ? 'top' : 'bottom', 0);
 }
 
 /* ============================================================================
