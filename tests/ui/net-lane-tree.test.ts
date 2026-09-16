@@ -38,6 +38,13 @@ import {
  *    `order` 在样式表里只剩 `.battery-overflow` 的**盒内**顺序。**五行行序**的完整模型在
  *    `tests/ui/net-board-grid.test.ts` 的 G-7（它要展平 `display: contents` 的盒树）。
  *
+ * ⚠️ **R22（本波）**：用户裁决"将链路的能量显示槽放到链路头部（= 每侧牌堆的头部，贴协议/中线那一端）"
+ * ⇒ 层序从"每侧最外端"改成"每侧链路头部"（`SPEC_ORDER` 与 G-1②⑤⑥、G-1b 的期望值**按新意图重写**，
+ * 并新增 G-1c（CSS 解算腿：层序只有 DOM 一个出处）/ G-1d（按属性寻址的行为腿））。
+ * **旧的 G-1/G-1b 为什么必须改**：它们的期望值就是 R8-2 的"最外端"，改对反而报红；新句多查了什么
+ * 写在 `SPEC_ORDER` 与 G-1b 的注释里（一句话：**把协议格拉进判据**，从"谁在链路前后"换成
+ * "能量槽夹在链路与协议**之间**" —— 这一条对两侧镜像用同一个不等式表达）。
+ *
  * ## 这个桩**能**证明什么 / **不能**证明什么（诚实边界）
  *
  * 能（都是确定性的流式布局语义，不需要浏览器）：
@@ -225,6 +232,11 @@ function sideKindOf(n: StubNode): string {
  *
  * ⚠️ **这条是 R8-2 的判据本身**：能量槽是 `.net-side` 的**直接子节点**（不再在 `.stack-slot`
  * 里），所以"六层"不再需要下钻一层槽、也不再需要解算 `order`。
+ *
+ * ⚠️ **R22 更新**：层序的目标值变了（能量槽从"每侧最外端"移到"每侧牌堆的头部"），
+ * 但这个求解器**一个字都不用改** —— 它读的本来就是"`.net-side` 的直接子节点的先后"，
+ * 而 R22 改的正是那三行的先后。**这本身就是 R8-2 那次重构的红利**：层序只有一个出处，
+ * 换意图只需换期望值（`SPEC_ORDER`），不需要动求解器，也不会出现"两个出处打架"。
  */
 function layersOfColumn(col: StubNode): Layer[] {
   const out: Layer[] = [];
@@ -246,13 +258,45 @@ function layersOfColumn(col: StubNode): Layer[] {
   return out;
 }
 
+/**
+ * **R22 的目标层序**（用户裁决："能量槽放到链路头部 = 每侧牌堆的头部，贴协议/中线那一端"）：
+ *   对手链路 → 对手能量槽 → 对手协议 ‖ 自己协议 → 自己能量槽 → 自己链路
+ *
+ * ## 旧值是什么、为什么必须改
+ *
+ * 旧值是 R8-2 的"每侧最外端"：`对手能量槽 → 对手链路 → 对手协议 → 自己协议 → 自己链路 →
+ * 自己能量槽`。它把能量槽推到了**离中线最远**的一端，而能量槽（`getLineValue`）与同列协议
+ * 本是"这条线的点数/归属"两个读数 —— 浏览器实测两端相距 **517px**（自己侧能量槽顶 1106.64 /
+ * 该侧协议底 689.66，改之前），读数与它所描述的链路被整摞牌隔开。用户 R22 明确要求搬到头部。
+ *
+ * ## 新值多查了什么（不是"把期望值改一改"）
+ *
+ * ① 与旧值**逐项不同**（下面有反空集合断言：新层序不能与旧层序相等 —— 否则这条守卫会退化成
+ *    "改没改都绿"）；② `SPEC_ORDER` 之外**另加**"能量槽夹在本侧链路与本侧协议之间"的**结构腿**
+ *    与**CSS 解算腿**（`G-1c`/`G-1d`）：层序数组相等只能证明"六层的次序对"，
+ *    证明不了"每侧的三个子节点里，能量槽的邻居恰好是链路与协议"（例如把两侧的层序整体写反
+ *    但六层数组恰好也满足某个排列时）；③ 与 R8-2 的旧判据一样，`battery` 仍**不在**
+ *    `.stack-slot` 子树里（"能量槽挂回链路框内"必须继续报红）。
+ */
 const SPEC_ORDER: readonly Layer[] = [
-  { side: 'foe', kind: 'battery' },   // 1
-  { side: 'foe', kind: 'stack' },     // 2
+  { side: 'foe', kind: 'stack' },     // 1
+  { side: 'foe', kind: 'battery' },   // 2
   { side: 'foe', kind: 'protocol' },  // 3
   { side: 'self', kind: 'protocol' }, // 4
-  { side: 'self', kind: 'stack' },    // 5
-  { side: 'self', kind: 'battery' },  // 6
+  { side: 'self', kind: 'battery' },  // 5
+  { side: 'self', kind: 'stack' },    // 6
+];
+
+/** **R22 之前的层序**（R8-2 ~ R21 的"每侧最外端"）—— 只用于**反空集合**断言：
+ *  "新期望值必须与旧值不同"，否则本轮的守卫改动静默退化成"改没改都绿"。
+ *  ⚠️ 它**不是**备选期望值，**不许**拿它当"两种都接受"的白名单。 */
+const PRE_R22_ORDER: readonly Layer[] = [
+  { side: 'foe', kind: 'battery' },
+  { side: 'foe', kind: 'stack' },
+  { side: 'foe', kind: 'protocol' },
+  { side: 'self', kind: 'protocol' },
+  { side: 'self', kind: 'stack' },
+  { side: 'self', kind: 'battery' },
 ];
 
 /** 取第一列 + 它**从 root 起的完整祖先链**（三条线同构，第一列足够；
@@ -301,8 +345,8 @@ const RULES = cssRules(netCss);
 
 afterEach(() => { setFxViewSeat(null); });
 
-describe('R-F · C-2 / R8-2：真跑 renderNetBoard 的元素树层序（viewSeat 0/1）', () => {
-  it('G-1. 一列自上而下必须是规格 §2.1 的六层；每侧的子节点顺序恰好按侧；能量槽**不在**链路槽里', async () => {
+describe('R-F · C-2 / R8-2 / R22：真跑 renderNetBoard 的元素树层序（viewSeat 0/1）', () => {
+  it('G-1. 一列自上而下必须是规格 §2.1 的六层（R22：能量槽在**每侧牌堆的头部**）；每侧的子节点顺序恰好按侧；能量槽**不在**链路槽里', async () => {
     const restore = installDom();
     try {
       for (const seat of [0, 1] as const) {
@@ -321,7 +365,7 @@ describe('R-F · C-2 / R8-2：真跑 renderNetBoard 的元素树层序（viewSea
           '侧·对手(net-side-foe)', '中线(net-lane-mid)', '侧·自己(net-side-self)',
         ]);
 
-        // ── ② 每侧的**子节点顺序**恰好按规格 §2.1（这是 R8-2 的核心判据）──
+        // ── ② 每侧的**子节点顺序**恰好按规格 §2.1（这是 R8-2 的核心判据；R22 换的是"哪一层在中间"）──
         const innerKinds: Record<Side, string[]> = { foe: [], self: [] };
         for (const sideNode of cellsOf(col)) {
           const s: Side | null = isClass(sideNode, 'net-side-foe') ? 'foe'
@@ -331,13 +375,13 @@ describe('R-F · C-2 / R8-2：真跑 renderNetBoard 的元素树层序（viewSea
         console.log(`  ----- viewSeat=${seat} · 每侧的子节点（DOM 顺序）-----\n`
           + `  对手侧: ${innerKinds.foe.join(' → ')}\n  自己侧: ${innerKinds.self.join(' → ')}`);
         expect(innerKinds.foe, `viewSeat=${seat}：对手侧的子节点必须恰好是`
-          + ` [能量槽, 链路槽, 协议格]（能量槽在**链路框外**的最上端 = 层 1）`).toEqual(
-          ['能量槽(.battery)', '链路槽(.stack-slot)', '协议格(.protocol-cell)']);
+          + ` [链路槽, 能量槽, 协议格]（能量槽在**链路头部** = 协议外侧、链路内侧 = 层 2）`).toEqual(
+          ['链路槽(.stack-slot)', '能量槽(.battery)', '协议格(.protocol-cell)']);
         expect(innerKinds.self, `viewSeat=${seat}：自己侧的子节点必须恰好是`
-          + ` [协议格, 链路槽, 能量槽]（能量槽在**链路框外**的最下端 = 层 6）`).toEqual(
-          ['协议格(.protocol-cell)', '链路槽(.stack-slot)', '能量槽(.battery)']);
+          + ` [协议格, 能量槽, 链路槽]（能量槽在**链路头部** = 协议外侧、链路内侧 = 层 5）`).toEqual(
+          ['协议格(.protocol-cell)', '能量槽(.battery)', '链路槽(.stack-slot)']);
 
-        // ── ③ **`.battery` 不是 `.stack-slot` 的后代**（R8-2 的判据本身）──
+        // ── ③ **`.battery` 不是 `.stack-slot` 的后代**（R8-2 的判据本身，R22 之后继续承重）──
         const foeside = cellsOf(col).find((n) => isClass(n, 'net-side-foe'))!;
         const selfside = cellsOf(col).find((n) => isClass(n, 'net-side-self'))!;
         for (const [sideName, sideNode] of [['对手', foeside], ['自己', selfside]] as const) {
@@ -356,30 +400,51 @@ describe('R-F · C-2 / R8-2：真跑 renderNetBoard 的元素树层序（viewSea
         const layers = layersOfColumn(col);
         console.log(`----- viewSeat=${seat} · 自上而下（纯 DOM 兄弟顺序）-----\n`
           + layers.map((l, i) => `  ${i + 1}. ${label(l)}`).join('\n'));
-        expect(layers, `viewSeat=${seat} 的列内层序与规格 §2.1 不符`
+        expect(layers, `viewSeat=${seat} 的列内层序与规格 §2.1（R22）不符`
           + `（实际：${layers.map(label).join(' → ')}）`).toEqual(SPEC_ORDER);
+        // 反空集合（R22 新增）：新期望值必须与 **R22 之前**的层序不同 ——
+        // 否则"层序变了"这件事在本文件里没有任何判别力（改没改都绿 = 假绿）。
+        expect(SPEC_ORDER, 'R22 的新层序与旧层序（每侧最外端）相等 —— 那样这条守卫对'
+          + '"能量槽移回外端"零判别力，必须先把期望值改对').not.toEqual(PRE_R22_ORDER);
 
         // ⑤ 三条腿各自点名（失败信息比"数组不等"可读；也防止将来有人把 SPEC_ORDER 一起改错）
-        expect(layers[0], `viewSeat=${seat}：对手能量槽必须在一列的最上端（第 1 层）`)
+        expect(layers[0], `viewSeat=${seat}：对手链路必须在一列的最上端（第 1 层）`)
+          .toEqual({ side: 'foe', kind: 'stack' });
+        expect(layers[1], `viewSeat=${seat}：对手能量槽必须紧跟对手链路、夹在链路与协议之间（第 2 层）`)
           .toEqual({ side: 'foe', kind: 'battery' });
         expect(layers[2], `viewSeat=${seat}：对手协议必须紧贴中线（第 3 层，内端）`)
           .toEqual({ side: 'foe', kind: 'protocol' });
         expect(layers[3], `viewSeat=${seat}：自己协议必须紧贴中线（第 4 层，内端）`)
           .toEqual({ side: 'self', kind: 'protocol' });
-        expect(layers[5], `viewSeat=${seat}：自己能量槽必须在一列的最下端（第 6 层）`)
+        expect(layers[4], `viewSeat=${seat}：自己能量槽必须紧跟自己协议、夹在协议与链路之间（第 5 层）`)
           .toEqual({ side: 'self', kind: 'battery' });
-        const iFoeStack = layers.findIndex((l) => l.side === 'foe' && l.kind === 'stack');
-        const iSelfStack = layers.findIndex((l) => l.side === 'self' && l.kind === 'stack');
-        expect(iFoeStack, `viewSeat=${seat}：对手链路必须在中线之上（第 2 层）`).toBe(1);
-        expect(iSelfStack, `viewSeat=${seat}：自己链路必须在中线之下（第 5 层）`).toBe(4);
+        expect(layers[5], `viewSeat=${seat}：自己链路必须在一列的最下端（第 6 层）`)
+          .toEqual({ side: 'self', kind: 'stack' });
 
-        // ⑥ 归属：能量槽/链路槽各自挂在自己的侧里，**不是**按绝对玩家猜的
+        // ── ⑥ **结构腿（R22 新增）：能量槽在该侧的兄弟下标上夹在"链路"与"协议"之间** ──
+        // 为什么在 ④ 之外还要这一条：④ 比的是**整列六层数组**，它对"每侧内部邻居是谁"只是间接覆盖
+        // （两个错误可能互相抵消成同一个数组）。这里直接问"这一侧的直接子节点里，`.battery` 的下标
+        // 是否严格落在 `.stack-slot` 与 `.protocol-cell` 之间" —— 这正是用户 R22 的裁决原话的
+        // 可执行形式（"链路头部 = 每侧牌堆的头部 = 贴协议那一端"）。
+        for (const [sideName, sideNode] of [['对手', foeside], ['自己', selfside]] as const) {
+          const iSlot = sideNode.children.findIndex((n) => isClass(n, 'stack-slot'));
+          const iBat = sideNode.children.findIndex((n) => isClass(n, 'battery'));
+          const iProto = sideNode.children.findIndex((n) => isClass(n, 'protocol-cell'));
+          expect([iSlot, iBat, iProto].every((i) => i >= 0), `viewSeat=${seat} · ${sideName}侧：`
+            + `三层（链路槽/能量槽/协议格）没齐 → 邻居判据无从谈起`).toBe(true);
+          expect(Math.min(iSlot, iProto) < iBat && iBat < Math.max(iSlot, iProto),
+            `viewSeat=${seat} · ${sideName}侧：能量槽的下标 ${iBat} **不在**链路槽(${iSlot})与协议格`
+            + `(${iProto}) **之间**（要求 min < 能量槽 < max）—— 用户 R22 裁决是"能量槽放到链路头部`
+            + `（贴协议/中线那一端）"，落在最外端 = 改回去了；夹在中间才是"链路头部"`).toBe(true);
+        }
+
+        // ⑦ 归属：能量槽/链路槽各自挂在自己的侧里，**不是**按绝对玩家猜的
         expect(foeside.dataset.player, `viewSeat=${seat}：对手侧的 data-player 应是绝对的 ${1 - seat}`)
           .toBe(String(1 - seat));
         expect(selfside.dataset.player, `viewSeat=${seat}：自己侧的 data-player 应是绝对的 ${seat}`)
           .toBe(String(seat));
 
-        // ── ⑦ **`.battery` 的 data-player / data-line 与所在列一致**（R8-2 的节点自描述）──
+        // ── ⑧ **`.battery` 的 data-player / data-line 与所在列一致**（R8-2 的节点自描述）──
         // 为什么这一条是承重的：6 处 FX（扫描流光 / metal-0 / mirror-0 / clarity-0 / diversity / 暴怒0）
         // 全靠 `.battery[data-player="X"][data-line="Y"]` 定位能量槽 —— 属性写错/写漏 ⇒ 特效**静默消失**
         // （那些查询全是 `if (!node) return` 的降级，不报错）。
@@ -396,7 +461,7 @@ describe('R-F · C-2 / R8-2：真跑 renderNetBoard 的元素树层序（viewSea
             + ` 本列的线号 ${String(col.dataset.line)}`).toBe(String(col.dataset.line));
         }
 
-        // ⑧ 竖向生长类**按侧**（不是按绝对玩家）：自己恒 .grow-down、对手恒 .grow-up
+        // ⑨ 竖向生长类**按侧**（不是按绝对玩家）：自己恒 .grow-down、对手恒 .grow-up
         const selfStack = findLayer(col, { side: 'self', kind: 'stack' })!;
         const foeStack = findLayer(col, { side: 'foe', kind: 'stack' })!;
         expect(classListOf(selfStack), `viewSeat=${seat}：自己链路必须是 .grow-down（最新牌往下长）`)
@@ -410,7 +475,7 @@ describe('R-F · C-2 / R8-2：真跑 renderNetBoard 的元素树层序（viewSea
     }
   });
 
-  it('G-1b. 行为腿：`.battery` 与 `.stack-slot` 是**兄弟**（同一父 `.net-side`），且三条线各一份', async () => {
+  it('G-1b. 行为腿：`.battery` 与 `.stack-slot` 是**兄弟**（同一父 `.net-side`），且三条线各一份；能量槽恒夹在链路与协议之间', async () => {
     const restore = installDom();
     try {
       for (const seat of [0, 1] as const) {
@@ -425,27 +490,127 @@ describe('R-F · C-2 / R8-2：真跑 renderNetBoard 的元素树层序（viewSea
             if (!isClass(sideNode, 'net-side')) continue;
             const bat = sideNode.children.find((n) => isClass(n, 'battery'));
             const slot = sideNode.children.find((n) => isClass(n, 'stack-slot'));
+            const proto = sideNode.children.find((n) => isClass(n, 'protocol-cell'));
             expect(bat, `viewSeat=${seat} · 线 ${line}：这一侧没有能量槽`).toBeTruthy();
             expect(slot, `viewSeat=${seat} · 线 ${line}：这一侧没有链路槽`).toBeTruthy();
+            expect(proto, `viewSeat=${seat} · 线 ${line}：这一侧没有协议格`).toBeTruthy();
             // **兄弟关系**（不是父子）—— 这是 R8-2 的"移出链路框"在行为层的唯一判据
             expect(bat!.parentElement, `viewSeat=${seat} · 线 ${line}：能量槽的父节点必须是 .net-side`
               + `（挂回 .stack-slot 内部 = 用户否决的"能量槽被放在链路框中"）`).toBe(sideNode);
             expect(slot!.parentElement, `viewSeat=${seat} · 线 ${line}：链路槽的父节点必须是 .net-side`)
               .toBe(sideNode);
-            // 同一侧里：对手 = 能量槽在链路槽**之前**（上）、自己 = 在**之后**（下）
+            // 同一侧里（**R22 换的正是这两条**）：能量槽的下标必须**介于**链路槽与协议格之间
+            // —— 对手侧 = 链路在上、能量槽居中、协议在下；自己侧 = 协议在上、能量槽居中、链路在下。
+            // ⚠️ **旧句为什么必须改**：R8-2~R21 的旧句钉的是"对手 = 能量槽在链路**之前**（最上）、
+            //    自己 = 在**之后**（最下）"，即"每侧最外端"。用户 R22 裁决"放到链路头部（贴协议那一端）"
+            //    ⇒ 旧句把**已被否决的落端**写成了期望值（改对反而报红），必须换成"夹在中间"。
+            // ⚠️ **新句多查了什么**：① 把协议格也拉进判据（旧句只比能量槽与链路槽的相对位置 ——
+            //    它无法区分"能量槽贴在协议内侧"与"能量槽贴在协议外侧"这两种都满足旧句的形态，
+            //    因为旧句里根本没有协议这一项）；② 用**下标区间**（min<能量槽<max）而不是
+            //    "谁在前谁在后"，因为它对**两侧镜像**用同一句话表达（对手/自己的上下相反，
+            //    但"能量槽夹在中间"这条语义相同）。
             const iBat = sideNode.children.indexOf(bat!);
             const iSlot = sideNode.children.indexOf(slot!);
+            const iProto = sideNode.children.indexOf(proto!);
             const isFoe = isClass(sideNode, 'net-side-foe');
+            expect(Math.min(iSlot, iProto) < iBat && iBat < Math.max(iSlot, iProto),
+              `viewSeat=${seat} · 线 ${line}：能量槽（下标 ${iBat}）没有夹在链路槽（${iSlot}）与`
+              + `协议格（${iProto}）之间 —— 用户 R22："将链路的能量显示槽放到链路头部"`
+              + `（= 每侧牌堆的头部、贴协议那一端）`).toBe(true);
             if (isFoe) {
-              expect(iBat, `viewSeat=${seat} · 线 ${line}：对手能量槽必须在链路槽**之前**（视觉在上）`)
-                .toBeLessThan(iSlot);
+              expect(iSlot, `viewSeat=${seat} · 线 ${line}：对手侧的链路槽必须在最上端（第 1 层）`)
+                .toBe(0);
+              expect(iBat, `viewSeat=${seat} · 线 ${line}：对手侧的能量槽必须是第 2 个子节点`)
+                .toBe(1);
+              expect(iProto, `viewSeat=${seat} · 线 ${line}：对手侧的协议格必须在最下端（贴中线）`)
+                .toBe(2);
             } else {
-              expect(iBat, `viewSeat=${seat} · 线 ${line}：自己能量槽必须在链路槽**之后**（视觉在下）`)
-                .toBeGreaterThan(iSlot);
+              expect(iProto, `viewSeat=${seat} · 线 ${line}：自己侧的协议格必须在最上端（贴中线）`)
+                .toBe(0);
+              expect(iBat, `viewSeat=${seat} · 线 ${line}：自己侧的能量槽必须是第 2 个子节点`)
+                .toBe(1);
+              expect(iSlot, `viewSeat=${seat} · 线 ${line}：自己侧的链路槽必须在最下端（第 6 层）`)
+                .toBe(2);
             }
           }
         }
         expect(linesSeen, `viewSeat=${seat}：三条线的 data-line 必须是 0/1/2`).toEqual(['0', '1', '2']);
+      }
+    } finally {
+      await drainRaf();
+      restore();
+    }
+  });
+
+  /* ==========================================================================
+   * G-1c / G-1d（**R22 新增**）—— "能量槽在链路头部"的**另外两条腿**
+   *
+   * G-1/G-1b 读的是**元素树**（DOM 兄弟顺序）。而"元素树顺序 == 视觉上下顺序"这件事本身
+   * 有一个前提：`.net-side` 是纵向 flex 且三层都没有 `order`（R8-2 之后 `order` 已退役）。
+   * 只要有人给 `.stack-slot` / `.battery` / `.protocol-cell` 加上一条 `order`（哪怕按侧写对），
+   * **元素树照样是"对的"，画面却会变** —— 这正是 R8-2 之前 C-2 两次 Critical 的形态
+   * （"哪一层在哪"有两个出处）。所以 G-1c 把那个前提钉成 **CSS 解算腿**。
+   *
+   * ⚠️ **诚实边界**：本仓测试是 node 环境（无 jsdom、无布局引擎），**不能**证明真实浏览器里
+   * "能量槽的 rect 真的落在协议与链路之间"。那条腿本轮由**无头 Chrome 实测**承担
+   * （报告 §1：6 个 `.battery` 与同侧协议/链路的 rect 区间包含关系，前后坐标并列）。
+   * 这里能证明的是：**DOM 顺序对 + CSS 不引入任何重排自由度** ⇒ 浏览器只会把 DOM 顺序画出来。
+   * ======================================================================== */
+
+  it('G-1c. R22 样式腿：每侧的层序只有"DOM 兄弟顺序"一个出处（`.net-side` 纵向 flex + 三层 order 全 0）', () => {
+    const band = cssNode('net-lane-band');
+    const sideFoe = cssNode('net-side', 'net-side-foe');
+    const sideSelf = cssNode('net-side', 'net-side-self');
+    const layers = [cssNode('stack-slot'), cssNode('battery', 'battery-stable'), cssNode('protocol-cell')];
+    // 反空集合：真规则表非空（否则下面每条解算都会拿到 null 而"看起来通过"）
+    expect(RULES.length, 'styles-net.css 解析出 0 条规则 —— 本用例的所有解算都失去意义').toBeGreaterThan(50);
+
+    for (const [sideName, side] of [['对手', sideFoe], ['自己', sideSelf]] as const) {
+      const chain = [band, side];
+      expect(cssPropOf(side, [band], RULES, 'flex-direction'),
+        `${sideName}侧的 .net-side 不是纵向 flex —— 三层会并排，"DOM 顺序 = 视觉顺序"这个前提直接不成立`
+        + '（浏览器里能量槽会跑到链路左边）').toBe('column');
+      // 三层各自的 `order` 必须是 CSS 缺省值 0（没有任何规则命中）—— 且**必须逐个解**，
+      // 不能只查 `.battery`（render-net.test.ts 那条只覆盖能量槽；link/protocol 被加 order 同样会重排）。
+      for (const [i, node] of layers.entries()) {
+        const labelOf = ['链路槽', '能量槽', '协议格'][i];
+        expect(cssPropOf(node, [...chain, node], RULES, 'order'),
+          `${sideName}侧的 ${labelOf} 被写了 \`order\` —— 层序就又多了一个出处，`
+          + `元素树与实际画面可以不一致（R8-2 之前 C-2 的成因）。能量槽的位置只能由`
+          + ` renderSide 的 DOM 挂载顺序决定`).toBeNull();
+        expect(cssOrderOf(node, [...chain, node], RULES),
+          `${sideName}侧的 ${labelOf} 解出的 order 不是 0`).toBe(0);
+      }
+    }
+  });
+
+  it('G-1d. R22 行为腿：能量槽仍可按 `.battery[data-player][data-line]` **按属性寻址**（6 处 FX 的定位方式）', async () => {
+    // 为什么必须单独一条：本轮的改动**只**挪了 DOM 挂载顺序 —— 而"按属性寻址"正是当年
+    // 能量槽被移出 `.stack-slot` 时**静默失效**的那条链（6 处查询全是 `if (!node) return` 的降级，
+    // 取不到不报错、只是特效消失）。所以每轮动能量槽都要真跑一次"按属性能不能取到"。
+    const restore = installDom();
+    try {
+      for (const seat of [0, 1] as const) {
+        const root = renderFrame(seat);
+        for (const line of ['0', '1', '2']) {
+          for (const player of ['0', '1']) {
+            const hits = root.querySelectorAll(
+              `.battery[data-player="${player}"][data-line="${line}"]`);
+            expect(hits.length, `viewSeat=${seat}：\`.battery[data-player="${player}"][data-line="${line}"]\``
+              + ` 命中 ${hits.length} 个（应恰好 1 个）—— 属性寻址失效 ⇒ 扫描流光 / metal-0 / mirror-0 /`
+              + ` clarity-0 / diversity / 暴怒0 六处 FX 会**静默**取不到能量槽`).toBe(1);
+            // 取到的那一个必须**就是**元素树里"夹在链路与协议之间"的那一个（不是另一个同名节点）
+            const col = descendants(root).find((c) => isClass(c, 'net-lane-band') && c.dataset.line === line)!;
+            const sideNode = col.children.find((n) => isClass(n, 'net-side') && n.dataset.player === player)!;
+            const bat = sideNode.children.find((n) => isClass(n, 'battery'))!;
+            expect(hits[0], `viewSeat=${seat}：按属性取到的 .battery 不是本列本侧那一个`
+              + `（属性会指向别的节点 ⇒ 特效打错位置）`).toBe(bat);
+            // 外壳（6 处 FX 里 4 处实际查询的是 `… .battery-shell`）也必须能从同一个根走到
+            expect(root.querySelectorAll(
+              `.battery[data-player="${player}"][data-line="${line}"] .battery-shell`).length,
+            `viewSeat=${seat}：\`… .battery-shell\` 取不到（扫描流光的定位查询形态）`).toBe(1);
+          }
+        }
       }
     } finally {
       await drainRaf();
@@ -1116,7 +1281,14 @@ describe('R-F · C-2 / R8-2：真跑 renderNetBoard 的元素树层序（viewSea
         expect(warned, `viewSeat=${seat}：渲染根就是 .net-board.net-view-${seat}，完整失败清单里却仍报`
           + '"座位锚点"不一致 —— 这正是 R7 修掉的那处假红（`querySelectorAll` 只搜后代、不搜自身）')
           .not.toContain('视图座位锚点');
-      }
+        // ── **R22 新增（真跑腿）**：约束 12（"能量槽夹在本侧链路与本侧协议之间"）必须在这台
+        //    真渲染器上通过。为什么必须读**完整失败清单**而不是返回值：返回值只带 `fatal[0]`，
+        //    而桩上 `fatal[0]` 永远是 A 类钩子的"数量 0，期望 6" ⇒ 对返回值做 `not.toContain('约束 12')`
+        //    是**恒真**的（与上面"座位锚点"那条一模一样的坑，R7 已记录过一次）。
+        //    这条腿在变异 a（把能量槽放回外端）下必红 —— 它是约束 12 的**真跑**判据。
+        expect(warned, `viewSeat=${seat}：真跑一帧后的完整失败清单里出现"约束 12" ——`
+          + ' 能量槽没有夹在本侧链路与本侧协议之间（用户 R22："将链路的能量显示槽放到链路头部"）')
+          .not.toContain('约束 12');      }
     } finally {
       await drainRaf();
       restore();

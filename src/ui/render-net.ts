@@ -4,14 +4,15 @@
  * 原版（三条横带）见 docs/2026-09-13-联机与多端-设计稿.md §6；施工依据 `.superpowers/sdd/R1-brief.md`。
  *
  * ## 布局（G2 修正 R1 —— 用户验收时指出"三条横带"是理解错误后重做）
- * **三条线 = 三个纵向的列，并排。** 每列自上而下严格是：
- *   ① 对手能量槽 → ② 对手链路（卡 180°，越新越**上**）→ ③ 对手协议（顺时针 90°）
- *   → ④ 自己协议（逆时针 90°）→ ⑤ 自己链路（卡 0°，越新越**下**）→ ⑥ 自己能量槽
+ * **三条线 = 三个纵向的列，并排。** 每列自上而下严格是（**R22 起**：能量槽在**每侧链路头部**）：
+ *   ① 对手链路（卡 180°，越新越**上**）→ ② 对手能量槽 → ③ 对手协议（顺时针 90°）
+ *   → ④ 自己协议（逆时针 90°）→ ⑤ 自己能量槽 → ⑥ 自己链路（卡 0°，越新越**下**）
  * （能量槽由 `renderBattery` 产出，**不在**链路槽里（G2 修正 **R8-2**）—— 由 `renderSide`
- * 自己挂到 `.net-side` 的外端（对手在上/自己在下，横置、双方都从右往左点亮），
+ * 自己挂到 `.net-side` 的流内位置：**R22 起夹在该侧链路与该侧协议之间**（"链路头部"，
+ * 用户裁决"方便查看点数"；R8-2~R21 期间它在每侧最外端），横置、双方都从右往左点亮，
  * 见 `styles-net.css` 第 4 节；`order` 已彻底退役，"哪一层在哪"只剩 DOM 兄弟顺序一个出处。
- * 中线两侧**都是协议**，故 `renderSide` 的挂载顺序**按侧镜像**（对手 = 能量槽→链路→协议、
- * 自己 = 协议→链路→能量槽）。
+ * 中线两侧**都是协议**，故 `renderSide` 的挂载顺序**按侧镜像**（对手 = 链路→能量槽→协议、
+ * 自己 = 协议→能量槽→链路）。
  *
  * 推导依据（规格 §1 的复核）：这套规格**等价于把热座页的"每条线一行"整体旋转 −90°** ——
  * 热座自己卡 +90° → 0°；对手卡 −90° → 180°；自己协议 0° → −90°；对手协议 180° → +90°；
@@ -807,6 +808,50 @@ export function verifyPageHooks(
     fatal.push(`约束 11 的操作按钮归属自查抛异常（${String(err)}）`);
   }
 
+  // ── 断言 8（**R22 新增** · 约束 12）：**能量槽夹在本侧链路与本侧协议之间**（"链路头部"）──
+  // 为什么必须在**运行时**查：这条裁决（用户原话："我希望将链路的能量显示槽放到链路头部"，
+  // 已当面裁定 = "每侧牌堆的头部、贴协议/中线那一端"）的**唯一**表达是 `renderSide` 里三行
+  // `appendChild` 的**先后**。源码文本守卫能钉住"某分支某顺序"（`tests/ui/render-net.test.ts`
+  // 的 R1-1），元素树守卫能钉住"真跑出来的兄弟顺序"（`tests/ui/net-lane-tree.test.ts` 的
+  // G-1/G-1b），而这一条是本页**出厂自带**的自查：预览工具条上直接可读，运维/联机现场不需要
+  // 跑测试就能看见"能量槽跑到最外端了"。
+  // 判据与 G-1b 同形（**下标区间**，对两侧镜像用同一句话）：每侧三个直接子节点里，
+  // `.battery` 的下标必须严格落在 `.stack-slot` 与 `.protocol-cell` 之间。
+  // ⚠️ 与既有 A 类钩子计数（`.battery` expected 6）互补：那条只查"数量对不对"，
+  //    数量在本改动里**一个字都没变**（3 线 × 2 侧）—— 所以它对"能量槽挪回外端"零判别力。
+  try {
+    for (const side of ['foe', 'self'] as const) {
+      for (const col of [...scope.querySelectorAll<HTMLElement>('.net-lane-band')]) {
+        // 逐类**单独**查询（不写逗号选择器组：逗号组在契约的简易实现里会被判成"非法/不命中"）。
+        // ⚠️ 不做 `instanceof HTMLElement`：本函数的桩环境（`tests/ui/net-dom-stub.ts`）没有这个全局，
+        //    引用它会抛 ReferenceError ⇒ 这条自查在测试里恒报"抛异常"（假红）。
+        const sideNode = col.querySelector<HTMLElement>(`.net-side-${side}`);
+        if (sideNode === null) {
+          fatal.push(`约束 12：列（线 ${col.dataset.line ?? '?'}）里找不到 .net-side-${side}`);
+          continue;
+        }
+        const kids = [...sideNode.children];
+        const indexOfClass = (cls: string): number =>
+          kids.findIndex((n) => String(n.className).split(/\s+/).includes(cls));
+        const iSlot = indexOfClass('stack-slot');
+        const iBat = indexOfClass('battery');
+        const iProto = indexOfClass('protocol-cell');
+        if (iSlot < 0 || iBat < 0 || iProto < 0) {
+          fatal.push(`约束 12：线 ${col.dataset.line ?? '?'} 的 ${side} 侧三层没齐`
+            + `（链路槽=${iSlot} / 能量槽=${iBat} / 协议格=${iProto}，应为 0/1/2 的某个排列）`);
+          continue;
+        }
+        if (!(Math.min(iSlot, iProto) < iBat && iBat < Math.max(iSlot, iProto))) {
+          fatal.push(`约束 12：线 ${col.dataset.line ?? '?'} 的 ${side} 侧能量槽**没有**夹在链路槽与`
+            + `协议格之间（下标 链路槽=${iSlot} / 能量槽=${iBat} / 协议格=${iProto}）——`
+            + ' 用户裁决："将链路的能量显示槽放到链路头部"（= 每侧牌堆的头部、贴协议/中线那一端）');
+        }
+      }
+    }
+  } catch (err) {
+    fatal.push(`约束 12 的能量槽落点自查抛异常（${String(err)}）`);
+  }
+
   if (soft.length > 0) console.info('[render-net] 状态相关钩子当前为空（合法局面）：\n' + soft.join('\n'));
   if (fatal.length === 0) {
     return soft.length === 0
@@ -1034,15 +1079,35 @@ function netControlEnd(s: GameState, viewSeat: PlayerId): -1 | PlayerId {
   return s.control === -1 ? -1 : (fxIsSelfSide(viewSeat, s.control) ? 1 : 0);
 }
 
+/**
+ * 控制轨**两端各自属于谁**（绝对玩家号，`[小端(上), 大端(下)]`）—— G2 修正 **R22**。
+ *
+ * 与 `netControlEnd` 同一份座位语义（自己端恒为大端/下、对手端恒为小端/上），只是这里问的是
+ * **静态归属**（与谁当前持控无关）：
+ *   - 小端（上）= **对手** = `1 - viewSeat`；
+ *   - 大端（下）= **自己** = `viewSeat`。
+ *
+ * **为什么需要它**（旧行为为什么错）：端标签（`.control-track-label`）在共享助手里是写死的
+ * `玩家 1` / `玩家 2`，只有热座页（横排、P0 = 左 = 小端）恰好成立；远程页是竖排且**端是座位语义**
+ * ⇒ 默认视角（`viewSeat = 0`）下两端文案正好写反（滑块停在下端 = P0 持控，而标签写着 `玩家 2`）。
+ * 这与 R16 修掉的 `控制权: 玩家 N` 是同一族缺陷（"绝对玩家号"与"屏幕端"在竖排下不是同一个数）。
+ *
+ * ⚠️ 返回的永远是**绝对玩家号**（与 `holder`、`控制权: 玩家 N` 同一套编号）：把"自己/对手"
+ * 这类座位词留给 `fxIsSelfSide` 这一处判据，文案侧只做 `+1` 的编号换算。
+ */
+function netControlEndPlayers(viewSeat: PlayerId): readonly [PlayerId, PlayerId] {
+  return [((1 - viewSeat) as PlayerId), viewSeat] as const;
+}
+
 // （`renderPiles` 原来在这里；G2 修正 R6 把它随"信息块"一起挪到下方的底部行一节 ——
 //   它的两个挂载点现在**对称**了（每侧各一次），注释与不重复产出的论证都写在那里。）
 
-/** 一侧的「能量槽」+「链路槽」+「协议格」三层。
+/** 一侧的「链路槽」+「能量槽」+「协议格」三层。
  *
  *  ⚠️ **DOM 顺序 = 视觉顺序（列内自上而下），而两侧是镜像的**（G2 修正 R-F · **C-2**；
- *  **R8-2 把能量槽也纳入这条规则**）：
- *  - **对手侧**（上半）：能量槽（层 1，最外）→ 链路槽（层 2）→ 协议格（层 3，贴中线）；
- *  - **自己侧**（下半）：协议格（层 4，贴中线）→ 链路槽（层 5）→ 能量槽（层 6，最外）。
+ *  **R8-2 把能量槽也纳入这条规则**；**R22 把能量槽从"最外端"挪到"每侧牌堆的头部"**）：
+ *  - **对手侧**（上半）：链路槽（层 1，最外）→ 能量槽（层 2）→ 协议格（层 3，贴中线）；
+ *  - **自己侧**（下半）：协议格（层 4，贴中线）→ 能量槽（层 5）→ 链路槽（层 6，最外）。
  *
  *  R1 曾对两侧都挂 `[链路槽, 协议格]`（那只对上半成立），于是**自己协议落到整列最外端**
  *  —— 这正是 C-2，评审用最小 DOM 桩真跑 `renderNetBoard` 查元素树才发现。
@@ -1053,6 +1118,23 @@ function netControlEnd(s: GameState, viewSeat: PlayerId): -1 | PlayerId {
  *  （`.p1`/`.p2`），默认席位下两个能量槽会一起跑到内侧，且当时的守卫还是绿的（C-2 的第二个成因）。
  *  用户裁决「能量槽要放在链路框**外**」之后，`.net-side` 是 flex column ⇒ **DOM 兄弟顺序 = 视觉
  *  上下顺序**，两侧镜像只由本函数的挂载顺序表达 —— **"哪一层在哪"只剩这一个出处**。
+ *
+ *  ⚠️⚠️ **R22（本波）：能量槽从"每侧最外端"改成"每侧牌堆的头部"（= 紧邻协议那一端）**。
+ *  用户原话："我希望将链路的能量显示槽放到链路头部，这样方便查看点数"，并当面裁定
+ *  **"链路头部 = 每侧牌堆的头部（贴协议 / 中线那一端）"**（不是页面顶端、也不是保持外端）。
+ *
+ *  **旧句（能量槽在最外端）为什么必须改**：R8-2 选的"最外端"把能量槽推到了**离中线最远**的
+ *  一侧 —— 而能量槽的语义是"这条线的点数"（`getLineValue`），与同列的**协议**（也是这条线的
+ *  归属标记）本就是同一件事的两个读数。两端相隔整条链路（本帧实测：自己侧 1106.64 → 该侧协议
+ *  589.67，相距 **517px**），读数与它所描述的链路在视觉上被整摞牌隔开；用户要的正是把这个
+ *  读数搬到链路头部（贴中线那一端）。
+ *
+ *  **新句多查了什么**：① 六层的**次序**（`SPEC_ORDER`，逐项相等且两条镜像）；② **能量槽夹在
+ *  "本侧链路"与"本侧协议"之间** —— 结构腿（元素树兄弟下标）+ CSS 解算腿（`.net-side` 是
+ *  flex column ⇒ 兄弟顺序即视觉顺序，`order` 已退役）+ **浏览器实测腿**（报告 §1 的 6 个
+ *  `.battery` rect 与同侧协议/链路 rect 的区间包含关系）；③ `.battery[data-player][data-line]`
+ *  仍可按属性寻址（真跑行为腿，见 G-1/G-1b）—— 这一条**不是**新加的要求，而是"别再犯 R8-2 之前
+ *  那次移出 `.stack-slot` 导致 6 处查询静默返回 null"的既有要求，本轮把它与本改动**一起**钉住。
  *
  *  `kind`：`'foe' | 'self'` —— 选类名、朝向、挂载顺序与生长类；`data-player` 仍写**绝对玩家号**。 */
 function renderSide(
@@ -1130,7 +1212,8 @@ function renderSide(
       // ── R8-2：**不在链路槽里**挂能量槽 ──
       // 用户裁决："能量槽目前都被放在了链路框中，这样是不对的，应该要放置在对应链路的底部横置，
       // 如果是对方的就放在顶部"。所以本页传 `false`，由下面那一处自己调 `renderBattery` 并挂到
-      // `.net-side` 的**外端**。⚠️ `false` 不是"少挂一个、以后再补"：那是**唯一**一处落点
+      // `.net-side` 的流内位置（**R22 起 = 该侧链路头部**，见 `renderSide` 的层序注释）。
+      // ⚠️ `false` 不是"少挂一个、以后再补"：那是**唯一**一处落点
       // （规格 §4 红线 7：不许留两套真相 / 不许留 display:none 的死 DOM —— 那会让
       // `NET_PAGE_HOOKS` 的 `.battery` 计数与产出链条同时失真）。
       withBattery: false,
@@ -1151,13 +1234,16 @@ function renderSide(
   // 定位（见 `renderBattery` 的注释与 `gen3-control.ts` 的 `batteryNode`）。
   const batteryNode = renderBattery(s, player, line);
   // ── 层序（§1 的六层）：中线两侧**都是协议**，所以两侧的挂载顺序必须镜像 ──
+  // ⚠️ **R22**：能量槽不再是"最外端"，而是**每侧牌堆的头部**（紧邻协议那一端）——
+  //    所以现在两侧的"链路槽"都在最外端，能量槽都夹在链路槽与协议格之间。
+  //    这三行的**顺序**就是"哪一层在哪"的**唯一出处**（`.net-side` 是 flex column + 无 order）。
   if (kind === 'self') {
     side.appendChild(protoNode);     // 层 4：自己协议（贴中线）
-    side.appendChild(slotNode);      // 层 5：自己链路（协议外侧）
-    side.appendChild(batteryNode);   // 层 6：自己能量槽（最外端 = 链路**下方**，横置）
+    side.appendChild(batteryNode);   // 层 5：自己能量槽（**链路头部** = 协议外侧、链路内侧）
+    side.appendChild(slotNode);      // 层 6：自己链路（最外端 = 向下生长的一端）
   } else {
-    side.appendChild(batteryNode);   // 层 1：对手能量槽（最外端 = 链路**上方**，横置）
-    side.appendChild(slotNode);      // 层 2：对手链路（协议外侧）
+    side.appendChild(slotNode);      // 层 1：对手链路（最外端 = 向上生长的一端）
+    side.appendChild(batteryNode);   // 层 2：对手能量槽（**链路头部** = 协议外侧、链路内侧）
     side.appendChild(protoNode);     // 层 3：对手协议（贴中线）
   }
   return side;
@@ -1183,11 +1269,13 @@ function renderLaneMid(s: GameState, line: Line): HTMLElement {
 }
 
 /**
- * 一条线 = **一个纵向的列**（G2 修正 R1）。列内自上而下严格是规格 §1 的六层：
- *   对手能量槽 → 对手链路 → 对手协议 → 自己协议 → 自己链路 → 自己能量槽
+ * 一条线 = **一个纵向的列**（G2 修正 R1）。列内自上而下严格是规格 §1 的六层
+ * （**R22 之后**：能量槽在**每侧牌堆的头部**，即夹在该侧链路与该侧协议之间）：
+ *   对手链路 → 对手能量槽 → 对手协议 ‖ 自己协议 → 自己能量槽 → 自己链路
+ *   （"‖" = 中线，见 `styles-net.css` 的 `.net-lane-mid`）
  *
  * 本函数只负责**三段的挂载顺序**（对手侧 → 中线 → 自己侧）—— 每一侧内部的**三层顺序**
- * （对手：能量槽→链路→协议 / 自己：协议→链路→能量槽）由 `renderSide` 按 `kind` 镜像表达，
+ * （对手：链路→能量槽→协议 / 自己：协议→能量槽→链路）由 `renderSide` 按 `kind` 镜像表达，
  * 而"哪一层在哪"**只**由 DOM 兄弟顺序决定（R8-2 之后 CSS `order` 已彻底退役，见 `renderSide`）。
  * 三个列由 `renderNetBoard` 的 `for (const line of [0, 1, 2])` 并排产出
  * ⇒ **整块棋盘从"三条横带"变成"三个竖列"**。
@@ -2425,10 +2513,13 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
   }
 
   // ── 控制轨（**竖向**：自己端在下 / 对手端在上 —— G2 修正 R3 的用户裁决） ──
-  // 三个参数的含义见 `netControlEnd` 与 `renderControlModule` 的注释（轴向 / 归属=绝对号 / 位置端）；
-  // 视觉规则在 styles-net.css 第 9 节（styles.css 一行未改）。
+  // 四个参数的含义见 `netControlEnd` / `netControlEndPlayers` 与 `renderControlModule` 的注释
+  // （轴向 / 归属=绝对号 / 位置端 / **两端归属**）；视觉规则在 styles-net.css 第 9 节（styles.css 一行未改）。
   // ⚠️ R16：`holder` 与 `end` **必须分开传**（旧写法把"端"当"绝对号"用 ⇒ 滑块与 FX 落点差 56%）。
   // 热座页只传 `holder`（不传 `end`）⇒ `end` 缺省 = `holder` ⇒ 热座逐位不变。
+  // ⚠️ **R22**：`endPlayers` 同理**必须按座位传** —— 端标签的**文本**也是端语义（"下端 = 自己"），
+  //    写死 `玩家 1`/`玩家 2` 会在默认视角下把两端写反（详见 `ControlTrackOpts.endPlayers`）。
+  //    热座页不传 ⇒ 缺省 `[0, 1]` ⇒ 逐字不变。
   // ⚠️ 这里**直接**在挂载点调用共享助手（不套一层 `renderNetControlModule(...)` 包装）：
   //    本文件的守卫判据是 `appendChild(<助手调用>` / `= <助手调用>` 的**文本形态**，套包装会让
   //    "结果真的进了 DOM"这条证据从源码里消失（我第一版就是套了包装 → 守卫报"结果被丢掉"）。
@@ -2436,6 +2527,7 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
     axis: 'y',
     holder: s.control,
     end: netControlEnd(s, viewSeat),
+    endPlayers: netControlEndPlayers(viewSeat),
   }));
 
   // ── **R21：两栏** ──

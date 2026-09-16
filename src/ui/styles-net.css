@@ -557,17 +557,20 @@
   background: rgba(0, 0, 0, 0.18);
 }
 
-/* 一侧 = 纵向三层：**对手 = 能量槽 → 链路槽 → 协议格**、**自己 = 协议格 → 链路槽 → 能量槽**
+/* 一侧 = 纵向三层（**R22 起**）：**对手 = 链路槽 → 能量槽 → 协议格**、
+   **自己 = 协议格 → 能量槽 → 链路槽**（能量槽恒夹在**本侧链路与本侧协议之间** = 链路头部）。
    （DOM 顺序即视觉顺序；两侧镜像的理由：中线两边**都是协议** —— 见 `renderSide`）。
    ⚠️ G2 修正 **R8-2**：能量槽不再在槽内 —— 它现在是这一侧自己的子节点，落端由挂载顺序决定，
-   这里**没有任何 `order`**（不再有"靠 order 摆外侧端"这回事）。 */
+   这里**没有任何 `order`**（不再有"靠 order 摆外侧端"这回事）。
+   ⚠️ **R22**：用户裁决"能量槽放到链路头部，方便查看点数"⇒ 从"每侧最外端"改为"紧邻协议那一端"；
+   这里同样一个字都不用改（仍然是 DOM 兄弟顺序的一个出处，`renderSide` 换的是三行的先后）。 */
 .net-side { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 
 /* 选中线路/线槽高亮（选择模式 select-line）：整列可点 */
 .net-lane-band.choice-line { cursor: pointer; border-color: #4ff0ff; box-shadow: 0 0 12px rgba(79, 240, 255, 0.5); }
 
 /* ============================================================================
- * 4. 链路槽：**竖摆**卡（0°/180°）+ **竖向重叠** + 能量槽在上/下外侧
+ * 4. 链路槽：**竖摆**卡（0°/180°）+ **竖向重叠** + 能量槽在**链路头部**（贴协议那一端）
  *
  * styles.css 的 `.stack { --card-h: 175px; --card-w: … }` 与
  * `.stack .card + .card { margin-left: … }` 是**为旋转 90° 的视觉宽度**推导的
@@ -676,7 +679,9 @@
 
    ⚠️ **落点由 DOM 兄弟顺序决定，CSS `order` 彻底退役**（规格 §2.1/§2.2）：
    能量槽**不再是** `.stack-slot` 的子节点，而是 `.net-side` 的流内子项 ——
-   **对手侧的第一个子节点**（链路**上方** = 层 1）、**自己侧的最后一个子节点**（链路**下方** = 层 6），
+   **R22 起：对手侧是第二个子节点（链路**下方**、协议**上方**）、自己侧是第二个子节点
+   （协议**下方**、链路**上方**）** ⇒ 两侧都是"**链路头部**"（贴协议那一端）。
+   （R8-2~R21 期间是"最外端"：对手侧第一个、自己侧最后一个；用户 R22 裁决改成贴协议。）
    挂载顺序由 `render-net.ts` 的 `renderSide` 按侧给。
    这里**刻意不给能量槽本身写任何 `order`**：R1~R7 期间"能量槽的落端由 `.stack-slot` 内的 `order` 决定"，
    而 `order` 的选择器一旦从**按侧**（`.net-side-foe/.net-side-self`）写成按**绝对玩家号**
@@ -1441,12 +1446,27 @@ body.net-page .scan-overlay.scan-horiz .scan-line {
   height: 158px;                    /* 竖向行程（热座是 width:100% + height:84px，方向对调） */
   position: relative;
 }
-/* 标签：横排的 left/right 在竖排下会贴在轨道**左侧**的上下角，必须换成 上/下 居中 */
-.net-board .control-track-label.left,
-.net-board .control-track-label.right {
+/* 标签：横排的 left/right 在竖排下会贴在轨道**左侧**的上下角，必须换成 上/下 居中。
+   ⚠️⚠️ **R22 修正确认（这条曾经整条打空，是两个缺陷的成因）**：原判据只写了
+   `.control-track-label.left` / `.right` 两个类 —— 而**远程页产出的是 `.top` / `.bottom`**
+   （`renderControlModule` 的 `vertical` 分支），`.left`/`.right` 在本页**永不出现**。
+   于是竖排下：① 换轴那一组声明（`left: 50%` / `top: auto` / `transform: translateX(-50%)`）
+   **一条都没生效** —— 两个标签都停在**轨道左边缘**（`left/right: auto` 的静态位置），
+   而 `styles.css` 基类的 `transform: translateY(-50%)` 仍在；
+   ② `.bottom` 又同时拿到基类的 `top: 50%` ⇒ 绝对定位**过约束**（top/bottom 都不是 auto、
+   height 是 auto）⇒ 浏览器按 CSS 2.1 §10.6.4 用"求解高度"分支把它的高度撑成
+   `156 − 78 − 10 = 68px`，而 `translateY(-50%)` 用 **68px** 的一半（−34px）上移
+   ⇒ 文本被画在**这 68px 盒子的顶边**上，落点 = 轨道纵向 **28.5%**、紧贴在「玩家 1」下方
+   （浏览器实测：track top 482.67 / height 158 ⇒ 玩家1 文本顶 485.67、玩家2 文本顶 527.67）。
+   ⇒ 用户看到的正是"两行文字挤在轨道左上角"。
+   修法：把换轴声明挂到**基类**（`.net-board .control-track-label`，(0,2,0) 压过 styles.css 的
+   (0,1,0)），并把四个方向一起复位（`bottom: auto` 必须显式写，否则 `.bottom` 那条
+   `bottom: 10px` 会与残留的 `top` 再构成一次过约束）。`.top` / `.bottom` 只负责"贴哪一端"。 */
+.net-board .control-track-label {
   left: 50%;
   right: auto;
   top: auto;
+  bottom: auto;
   transform: translateX(-50%);
 }
 .net-board .control-track-label.top { top: 10px; }

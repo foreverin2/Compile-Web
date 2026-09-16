@@ -892,22 +892,28 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
    * ======================================================================== */
 
   /**
-   * R1-1（**本次重做的核心**）：一条线必须是**一个纵向的列**，列内自上而下恰好是规格 §1 的六层：
-   *   对手能量槽 → 对手链路 → 对手协议 → 自己协议 → 自己链路 → 自己能量槽
+   * R1-1（**本次重做的核心**）：一条线必须是**一个纵向的列**，列内自上而下恰好是六层。
+   * **R22 起**（用户裁决："将链路的能量显示槽放到链路头部" ⇒ 每侧牌堆的头部、贴协议那一端）：
+   *   对手链路 → 对手能量槽 → 对手协议 ‖ 自己协议 → 自己能量槽 → 自己链路
    *
    * 判据（三条腿，缺一条就会被"结构被改回去"瞒过去）：
    *  ① `renderLaneColumn` 里**对手侧 / 中线 / 自己侧**三个 append 的顺序；
-   *  ② `renderSide` 里**两侧镜像**的挂载顺序（中线两侧都是协议：自己 = 协议→链路槽）；
-   *  ③ 样式表里 `.net-side` 是**纵向** flex、`.stack-slot` 的 `order` 让能量槽落在链路**外侧**
-   *     （按**侧**给：对手 `.net-side-foe` order 1 在上、自己 `.net-side-self` order 3 在下），
-   *     且 `.stack-slot` 自身是纵向 flex。
+   *  ② `renderSide` 里**两侧镜像**的挂载顺序（中线两侧都是协议：自己 = 协议→能量槽→链路槽）；
+   *  ③ 样式表里 `.net-side` 是**纵向** flex、且三层都没有 `order`（能量槽的落端只剩 DOM 顺序一个出处）。
    *
    * 「旧布局 → 新布局」的守卫对照：旧版这条位置上是**第 17 条**（`band.appendChild(renderSideRow(…))`
    * 两次 + `for (const line of [0, 1, 2])`）。它抓的是"整条对手侧行没了"（F-2 的计数盲区），
    * **抓不到**"三条横带 vs 三个竖列"—— 因为横带与竖列在源码上是**同一个**函数名与同一个循环。
    * 新增的 ③ 才是真正钉住"列"的那条腿；①②把"列内的层顺序"钉死。
+   *
+   * ⚠️ **R22 重写（旧句为什么必须改 / 新句多查了什么）**：旧句（R8-2~R21）的期望值是
+   * "自己 = 协议→**链路槽→能量槽**（能量槽在最外端 = 最下）/ 对手 = **能量槽→链路槽**→协议格"——
+   * 那正是**已被用户否决**的落端，不改就会"改对反而报红"。新句把三条 append 的先后按
+   * **链路头部**重排，并且与旧句相比**多查了一件事**：`batteryNode` 必须夹在 `slotNode` 与
+   * `protoNode` **之间**（旧句只比自己挂的两个端点，无法区分"能量槽在协议内侧"与"在协议外侧"——
+   * 旧句里根本没有"协议"这一项参与比较）。
    */
-  it('R1-1 / R8-2. 三列纵向布局：列内层顺序 + 链路槽/协议格的镜像挂载 + 能量槽在链路框**外**的端上（横置）', () => {
+  it('R1-1 / R8-2 / R22. 三列纵向布局：列内层顺序 + 链路槽/协议格的镜像挂载 + 能量槽在**每侧链路头部**（横置）', () => {
     const code = netCode();
     // ① 列内顺序：对手侧 → 中线 → 自己侧（`foe` 先于 `mid`，`mid` 先于 `viewSeat`）
     const col = between(code, 'function renderLaneColumn', 'function choiceSkipBtn');
@@ -922,28 +928,30 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
     expect(iMid, '列内顺序错：中线必须在自己侧**之前**（规格 §1 第 4 层的分界）').toBeLessThan(iSelf);
     expect((col.match(/col\.appendChild\(renderSide\(/g) ?? []).length,
       'renderSide 必须恰好挂载两次（对手 / 自己各一次 —— 少一次就是半个棋盘，F-2 的计数盲区）').toBe(2);
-    // ② 一侧之内：**三层的挂载顺序必须镜像**（中线两侧**都是协议**；能量槽在**最外端**）
+    // ② 一侧之内：**三层的挂载顺序必须镜像**（中线两侧**都是协议**；能量槽在**链路头部**）
     //
     // ⚠️ **R-F · C-2 的守卫修正（这条旧断言把错误钉成了正确）**：
     //   旧判据是"链路槽必须在协议格之前"——对**两侧**同一句话，失败信息还写着
     //   "层 5 在层 4 之后靠列顺序实现"。那是一句**空推理**：列顺序只是把三"段"排成
     //   对手侧/中线/自己侧，**无法**重排某一侧内部的层。于是它把
     //   "自己协议落到整列最外端（应在层 4、紧贴中线）"这个 C-2 缺陷**固化成了期望值**
-    //   （改对反而报红）。现在钉规格本身（**R8-2 之后每侧三层**）：
-    //     · 自己侧（下半）= 协议格（层 4）→ 链路槽（层 5）→ 能量槽（层 6，最下）；
-    //     · 对手侧（上半）= 能量槽（层 1，最上）→ 链路槽（层 2）→ 协议格（层 3）。
+    //   （改对反而报红）。R8-2 钉规格本身（每侧三层），R22 再把能量槽的落端按用户裁决
+    //   改到**链路头部**（夹在链路与协议之间）：
+    //     · 自己侧（下半）= 协议格（层 4）→ 能量槽（层 5）→ 链路槽（层 6，最下）；
+    //     · 对手侧（上半）= 链路槽（层 1，最上）→ 能量槽（层 2）→ 协议格（层 3）。
     //   **原能抓什么**：两侧共用一个无条件顺序时的"整段挂载被删"（已由第 17 条的计数表承担）。
-    //   **现在还能抓什么**：把两侧写成同一个顺序（= C-2 回归）、或把三层顺序对调
-    //   （自己协议跑到最外端 / 能量槽跑回链路框内侧）。
-    //   ⚠️ 层序的**行为**判据（真跑 `renderNetBoard` 后按元素树数六层）在
-    //   `tests/ui/net-lane-tree.test.ts` 的 G-1 —— 源码文本只能证明"分支这么写"，证明不了产出顺序。
+    //   **现在还能抓什么**：把两侧写成同一个顺序（= C-2 回归）、把能量槽放回**最外端**
+    //   （R22 的变异 a）、或把能量槽塞回链路槽内部。
+    //   ⚠️ 层序的**行为**判据（真跑 `renderNetBoard` 后按元素树数六层 + 邻居不等式）在
+    //   `tests/ui/net-lane-tree.test.ts` 的 G-1/G-1b/G-1c/G-1d —— 源码文本只能证明"分支这么写"，
+    //   证明不了产出顺序；浏览器里的真实 rect 关系由本轮报告 §1 的实测承担。
     const side = between(code, 'function renderSide(', 'function renderLaneMid');
-    expect(side, '自己侧必须**协议格在前 → 链路槽 → 能量槽**（层 4/5/6，能量槽在最外端 = 最下）——'
-      + '两侧共用一个顺序 = C-2/R8-2 回归')
-      .toMatch(/kind === 'self'\)\s*\{[\s\S]{0,400}side\.appendChild\(protoNode\)[\s\S]{0,200}side\.appendChild\(slotNode\)[\s\S]{0,200}side\.appendChild\(batteryNode\)/);
-    expect(side, '对手侧必须**能量槽在前 → 链路槽 → 协议格**（层 1/2/3，能量槽在最外端 = 最上）——'
-      + '两侧共用一个顺序 = C-2/R8-2 回归')
-      .toMatch(/\}\s*else\s*\{[\s\S]{0,400}side\.appendChild\(batteryNode\)[\s\S]{0,200}side\.appendChild\(slotNode\)[\s\S]{0,200}side\.appendChild\(protoNode\)/);
+    expect(side, '自己侧必须**协议格在前 → 能量槽 → 链路槽**（层 4/5/6，能量槽在链路头部 = 夹在协议与链路之间）——'
+      + '两侧共用一个顺序 = C-2/R8-2 回归；把能量槽放回最外端 = R22 变异 a')
+      .toMatch(/kind === 'self'\)\s*\{[\s\S]{0,400}side\.appendChild\(protoNode\)[\s\S]{0,200}side\.appendChild\(batteryNode\)[\s\S]{0,200}side\.appendChild\(slotNode\)/);
+    expect(side, '对手侧必须**链路槽在前 → 能量槽 → 协议格**（层 1/2/3，能量槽在链路头部 = 夹在链路与协议之间）——'
+      + '两侧共用一个顺序 = C-2/R8-2 回归；把能量槽放回最外端 = R22 变异 a')
+      .toMatch(/\}\s*else\s*\{[\s\S]{0,400}side\.appendChild\(slotNode\)[\s\S]{0,200}side\.appendChild\(batteryNode\)[\s\S]{0,200}side\.appendChild\(protoNode\)/);
     // 三个节点确实来自那三个助手（挂载顺序钉的是"哪一份先挂"，这里把"哪一份是谁"补上）
     expect(side, '链路槽不是 renderStackSlot 的产物（顺序判据失去意义）').toMatch(/=\s*renderStackSlot\(/);
     expect(side, '协议格不是 renderProtocolCell 的产物（顺序判据失去意义）').toMatch(/=\s*renderProtocolCell\(/);
@@ -1513,6 +1521,8 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
       //    R7 之前那条断言写的是"恰好 2 个"，与真实产出不符 ⇒ 实机上它**也**恒红
       //    （与 `.net-board` 命中 0 个挤在同一条 fatal 里，所以人眼只看到前半句）。
       '.net-hands': 1,
+      // ── **R22** 断言 8（约束 12）的探测：三条线各一个（`listOf` 会给出能下钻一层的假节点）──
+      '.net-lane-band': 3,
     };
   }
 
@@ -1541,11 +1551,19 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
     page: {
       boardClasses?: string[]; handsViewSeat?: string;
       blockControls?: { self?: number; foe?: number };
+      /** **R22**：约束 12 的合成树 —— 每一侧三个直接子节点的**类名顺序**。
+       *  缺省 = 真实页面的形态（`renderSide` 产出）：对手 [slot, battery, proto]、
+       *  自己 [proto, battery, slot]。传别的顺序即可构造"能量槽挪回最外端"的反面用例。 */
+      laneLayers?: { foe: string[]; self: string[] };
     } = {},
   ): HTMLElement {
     const boardClasses = page.boardClasses ?? [];
     const handsViewSeat = page.handsViewSeat ?? '0';
     const blockControls = page.blockControls ?? {};
+    const laneLayers = page.laneLayers ?? {
+      foe: ['stack-slot', 'battery', 'protocol-cell'],
+      self: ['protocol-cell', 'battery', 'stack-slot'],
+    };
     /** 选择器里可能带 `[attr="value"]` / `[attr=value]`（约束 8 的合成树用它验取值） */
     const attrOf = (sel: string): Record<string, string> => {
       const out: Record<string, string> = {};
@@ -1563,6 +1581,10 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
       parentElement?: unknown;
       /** R11-3：约束 11 会对每一块信息块逐类查"操作控件"（见 `blockControls`）。 */
       querySelectorAll?: (s: string) => unknown[];
+      /** **R22**：约束 12 会对每一条 `.net-lane-band` 下钻一层（见 `page.laneLayers`）。 */
+      querySelector?: (s: string) => unknown;
+      children?: unknown[];
+      className?: string;
     }> => {
       // 带值的属性选择器（`.card[data-fx-rot="ccw"]`）在计数表里没有自己的键 → 取"基础选择器"
       // 的数量，再把属性值喂给桩（真实 DOM 里这两条查询返回的是**同一批节点**，桩必须同构）。
@@ -1587,6 +1609,31 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
         // 断言 5 还要 `blocks.every(b => b.parentElement === rows[0])` ⇒ 这里返回的必须与
         // 上面 `.net-info-block` 的 `parentElement` 是**同一个对象**（真实 DOM 里也如此）。
         return Array.from({ length: n }, () => bottomRow);
+      }
+      // ── **R22**：约束 12 的探测对象 —— 每一条线（`.net-lane-band`）返回一个**能下钻一层**的
+      //    假节点：`querySelector('.net-side-{foe,self}')` 给出一侧的三个直接子节点（按
+      //    `laneLayers` 的类名顺序），`className` 供产出代码按类定位。
+      //    ⚠️ 它证明的是"约束 12 的**判据本身**有牙齿"（把顺序换成旧的最外端必须报红），
+      //    **不是**"真实页面是那个顺序"—— 后者由 `tests/ui/net-lane-tree.test.ts` 的
+      //    G-1/G-1b（真跑渲染器 + 元素树）与报告 §1 的浏览器实测承担。
+      if (sel === '.net-lane-band') {
+        const laneNode = (line: number): {
+          className: string; dataset: Record<string, string>;
+          getAttribute: () => string | null;
+          querySelector: (s: string) => unknown; children: unknown[];
+        } => {
+          const mk = (cls: string): unknown => ({ className: cls, dataset: {}, getAttribute: () => null });
+          const sides: Record<string, unknown> = {
+            '.net-side-foe': { className: 'net-side net-side-foe', dataset: {}, children: laneLayers.foe.map(mk) },
+            '.net-side-self': { className: 'net-side net-side-self', dataset: {}, children: laneLayers.self.map(mk) },
+          };
+          return {
+            className: 'net-lane-band', dataset: { line: String(line) }, getAttribute: () => null,
+            querySelector: (s: string) => sides[s] ?? null,
+            children: [],
+          };
+        };
+        return Array.from({ length: n }, (_v, i) => laneNode(i));
       }
       // R7：`.net-hands` 的 `data-view-seat`（约束 9 的座位锚点之一）。真实页面里一帧只有**一个**
       // `.net-hands`（两条 `.hand` 都在它里面）⇒ 每个返回项都带上同一个座位值。
@@ -1889,6 +1936,58 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
       // ⑥ 不给 acting ⇒ 只查"对手侧零控件"（自己侧有控件不再被质疑 —— 合成 scope 无游戏状态）
       expect(verifyPageHooks(page({ self: 1 }), 0),
         '不给 acting 时仍对"自己侧有控件"报错 —— 那半边需要行动方信息才能判').not.toContain('约束 11');
+      expect(warn, '失败必须留下 console.warn 证据（不能只在返回值里）').toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+      info.mockRestore();
+    }
+  });
+
+  /**
+   * **23. R22：约束 12 的判据有牙齿**（"能量槽夹在本侧链路与本侧协议之间" = 链路头部）。
+   *
+   * 用户 R22 原话："我希望将链路的能量显示槽放到链路头部，这样方便查看点数"，
+   * 并当面裁定"链路头部 = 每侧牌堆的头部（贴协议 / 中线那一端）"。
+   *
+   * 为什么单列一条：这条运行时判据在**正常页面**上必然为真（产出代码本来就写对了）——
+   * 只跑一遍正常页等于**空断言**。下面把它钉成可判别的仪器：
+   *   ① 真实形态（`renderSide` 的当前顺序）⇒ 不得报；
+   *   ② **对手侧能量槽挪回最外端**（R8-2~R21 的旧形态）⇒ 必报；
+   *   ③ **自己侧能量槽挪回最外端** ⇒ 必报（反向那一半，防"只查了对手侧"）；
+   *   ④ **能量槽挂进链路槽内部**（用户明确否决过的形态："能量槽目前都被放在了链路框中"）
+   *      ⇒ 三个直接子节点少一个 ⇒ 走"三层没齐"那条分支，同样必报。
+   */
+  it('23. R22：约束 12 —— 能量槽必须夹在本侧链路与协议之间（四条用例，含旧形态的两侧）', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const boardClasses = ['board', 'net-board', 'net-view-0'];
+    const page = (laneLayers?: { foe: string[]; self: string[] }): HTMLElement =>
+      fakeScope(syntheticPage(), [0, 1], { boardClasses, handsViewSeat: '0', laneLayers });
+    try {
+      setFxViewSeat(0);
+      // ⚠️ 第二个实参 `appliedSeat` **必须给**（`0`）：不给时 `fxViewSeat()` 读到 0 而
+      //    `appliedSeat` 是 null ⇒ 约束 9 抢在约束 12 前面成为 `fatal[0]`，
+      //    而返回值只带 `fatal[0]` ⇒ 四条用例全部读不到 "约束 12"（假红，我第一版就是这样）。
+      // ① 阳性对照：当前形态（能量槽在每侧链路头部）⇒ 不得报约束 12
+      expect(verifyPageHooks(page(), 0), '当前形态（能量槽夹在链路与协议之间）被判成违规（假红）')
+        .not.toContain('约束 12');
+      // ② 对手侧挪回**最外端**（R8-2~R21 的旧形态：[battery, slot, proto]）⇒ 必报
+      expect(verifyPageHooks(page({
+        foe: ['battery', 'stack-slot', 'protocol-cell'],
+        self: ['protocol-cell', 'battery', 'stack-slot'],
+      }), 0), '对手侧能量槽在最外端却没报 —— 用户 R22 的裁决（"放到链路头部"）在这条自查里没有牙齿')
+        .toContain('约束 12');
+      // ③ 自己侧挪回**最外端**（旧形态：[proto, slot, battery]）⇒ 必报（反向那一半）
+      expect(verifyPageHooks(page({
+        foe: ['stack-slot', 'battery', 'protocol-cell'],
+        self: ['protocol-cell', 'stack-slot', 'battery'],
+      }), 0), '自己侧能量槽在最外端却没报 —— 判据只覆盖了对手侧半边').toContain('约束 12');
+      // ④ 能量槽被挂进链路槽内部（三个直接子节点只剩两个）⇒ 必报"三层没齐"那条分支
+      expect(verifyPageHooks(page({
+        foe: ['stack-slot', 'protocol-cell'],
+        self: ['protocol-cell', 'battery', 'stack-slot'],
+      }), 0), '能量槽被挂进链路槽内部（用户明确否决的形态）却没报 —— 约束 12 对"少一层"零判别力')
+        .toContain('约束 12');
       expect(warn, '失败必须留下 console.warn 证据（不能只在返回值里）').toHaveBeenCalled();
     } finally {
       warn.mockRestore();

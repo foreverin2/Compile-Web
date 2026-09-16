@@ -2236,6 +2236,29 @@ export interface ControlTrackOpts {
    * `fxViewSeat()` 的写入/座位换算）—— 换算留在调用方（`render-net.ts` 的 `netControlEnd`）。
    */
   end?: -1 | PlayerId;
+  /**
+   * 轨道**两端各自的归属玩家**（绝对号）：`[小端, 大端]`（横=左/右，竖=上/下）。
+   * **缺省 = `[0, 1]`** ⇒ 只传 `holder`（热座页那一处调用）时两个端标签仍是
+   * `玩家 1`（小端/左）/ `玩家 2`（大端/右），**逐字不变**。
+   *
+   * ## 为什么必须多这一个参数（G2 修正 **R22**）
+   *
+   * 端标签（`.control-track-label`）此前是**写死的两个字面量**：
+   * `track.appendChild(el('span', 'control-track-label ' + (vertical ? 'top' : 'left'), '玩家 1'))`。
+   * 这在**热座页**恰好成立（横排、P0 = 小端 = 左 ⇒ "小端 = 玩家 1"）；
+   * 而**远程页**（竖排）的端是**座位**语义：自己端 = 大端（下）、对手端 = 小端（上）
+   * （见 `end` 的推导表与 `render-net.ts` 的 `netControlEnd`）⇒ 默认视角（`viewSeat = 0`，
+   * 自己 = P0 = 玩家 1）下**两端文案正好写反**：滑块停在下端（78%）表示"玩家 1 持控"，
+   * 而下端标签却写着 `玩家 2`。这与 R16 修掉的 `控制权: 玩家 N` 是**同一族**缺陷
+   * （"绝对玩家号"与"屏幕端"在竖排下不是同一个数），只是当时只改了 `.control-label`。
+   *
+   * ⚠️ 与 `holder` / `end` 的**关系**：`endPlayers` 描述的是**轨道的两端分别属于谁**
+   * （页面级的静态事实，随座位固定），与"谁**当前**持控"（`holder`，随引擎变化）无关；
+   * 中立（`s.control === -1`）时滑块居中，但两端标签仍然各自标注自己那一端属于谁。
+   * ⚠️ 取值只允许**绝对玩家号**（与 `holder` 同一套编号，和 `控制权: 玩家 N` 同源），
+   * 不允许传"自己/对手"这类座位词 —— 座位换算留在调用方（`render-net.ts`）。
+   */
+  endPlayers?: readonly [PlayerId, PlayerId];
 }
 
 export function renderControlModule(s: GameState, opts?: ControlTrackOpts): HTMLElement {
@@ -2263,9 +2286,13 @@ export function renderControlModule(s: GameState, opts?: ControlTrackOpts): HTML
   else if (end === 1) target = 100 - edge;
   const ctrl = el('div', 'control-module' + (neutral ? ' neutral' : ` held-${holder}`));
   const track = el('div', 'control-track');
-  // 标签类名按轴向给：横向 `left/right`（styles.css 的既有规则），竖向 `top/bottom`（styles-net.css）
-  track.appendChild(el('span', `control-track-label ${vertical ? 'top' : 'left'}`, '玩家 1'));
-  track.appendChild(el('span', `control-track-label ${vertical ? 'bottom' : 'right'}`, '玩家 2'));
+  // 标签类名按轴向给：横向 `left/right`（styles.css 的既有规则），竖向 `top/bottom`（styles-net.css）。
+  // ⚠️ **R22**：文本不再是写死的 `玩家 1` / `玩家 2` —— 小端/大端各自的**归属玩家**由调用方给
+  //    （`endPlayers`，缺省 `[0, 1]` ⇒ 热座逐字不变）。理由见 `ControlTrackOpts.endPlayers`：
+  //    竖排的端是**座位**语义，"自己端在下"，默认视角下写死会把两端文案写反。
+  const ends = opts?.endPlayers ?? ([0, 1] as const);
+  track.appendChild(el('span', `control-track-label ${vertical ? 'top' : 'left'}`, `玩家 ${ends[0] + 1}`));
+  track.appendChild(el('span', `control-track-label ${vertical ? 'bottom' : 'right'}`, `玩家 ${ends[1] + 1}`));
   track.appendChild(el('span', 'control-center-tick'));
   const img = document.createElement('img');
   img.className = 'control-slider-img';

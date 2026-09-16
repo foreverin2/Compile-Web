@@ -47,6 +47,18 @@ export interface StubNode {
    *  声明出来**不改变任何运行时行为**（实现仍在 `makeStubEl` 的 `extra` 里）。 */
   appendChild(c: StubNode): StubNode;
   insertBefore(c: StubNode): StubNode;
+  /**
+   * **R22 修正补上显式类型**：与 `appendChild` / `getBoundingClientRect` **同一族问题** ——
+   * 它们此前只存在于索引签名里（`unknown`），于是"在桩上真跑一次按属性寻址"的测试会报
+   * `TS18046: 'root.querySelectorAll' is of type 'unknown'`，只能靠强转消音。
+   * 声明出来**运行时零变化**（实现仍是 `queryAllIn`，能力边界见它上面的说明：
+   * 只支持 `tag` / `.类` / `[attr="值"]` 的组合 + 后代组合器）。
+   * ⚠️ 专为 `tests/ui/net-lane-tree.test.ts` 的 G-1d（`.battery[data-player][data-line]`）
+   * 与 `render-net.ts` 的约束 12 自查而加 —— 两条判据都要求"**真的按选择器查一遍**"，
+   * 而不是用 `descendants(...).filter(...)` 手工重建一套匹配语义（那就不是被测对象了）。
+   */
+  querySelector(sel: string): StubNode | null;
+  querySelectorAll(sel: string): StubNode[];
   /** 父子指针（由 `appendChild`/`insertBefore`/`textContent=''` 维护；R7 起）。 */
   parentElement: StubNode | null;
   style: Record<string, unknown>;
@@ -192,6 +204,19 @@ export function makeStubEl(tag: string): StubNode {
      *  闭包引用 `node` 是安全的：它只在这个箭头被**调用**时才求值。 */
     getBoundingClientRect: () => rectOf(node),
     /**
+     * **R22 修正：`querySelector` / `querySelectorAll` 从 `extra` 搬进字面量。**
+     *
+     * 与 `appendChild`（R8-2）/ `getBoundingClientRect`（R15）/ `dispatchEvent`（R19）**同一族修法**：
+     * 留在 `extra` 里 ⇒ 只存在于索引签名 ⇒ 测试侧拿到 `unknown`。
+     * R22 的 G-1d（`.battery[data-player][data-line]` 按属性寻址）与 `render-net.ts` 的约束 12
+     * 自查都要在桩上**真的按选择器查一遍**，因此这两条必须是有类型的（否则只能强转，
+     * 而强转会让"桩缺这个能力"与"选择器写错"在类型层面无法区分）。
+     * 实现与能力边界**一字未改**（仍是 `queryAllIn`：`tag`/`.类`/`[attr="值"]` + 后代组合器）；
+     * 兼容既有调用形态：`sel` 仍可省（缺省 = 空选择器 → 命中 0 个）。
+     */
+    querySelector: (sel?: string) => queryAllIn(node, String(sel ?? ''))[0] ?? null,
+    querySelectorAll: (sel?: string) => queryAllIn(node, String(sel ?? '')) as StubNode[],
+    /**
      * **R19 新增：极简事件派发**（`addEventListener` 的配对物）。
      *
      * 为什么必须加：`render-net.ts` 的卡牌放大框（R19）把交互做成**事件委托**挂在板根上
@@ -295,8 +320,6 @@ export function makeStubEl(tag: string): StubNode {
       byType.set(type, arr);
     },
     removeEventListener: () => { /* noop */ },
-    querySelector: (sel?: string) => queryAllIn(node, String(sel ?? ''))[0] ?? null,
-    querySelectorAll: (sel?: string) => queryAllIn(node, String(sel ?? '')) as StubNode[],
     /**
      * **R19 新增：`closest` 的极简实现**（改之前恒返 `null`）。
      *

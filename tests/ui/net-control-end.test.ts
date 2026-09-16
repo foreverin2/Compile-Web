@@ -5,7 +5,8 @@ import { createGame } from '../../src/core/state/create';
 import { renderControlModule } from '../../src/ui/render';
 import { renderNetBoard } from '../../src/ui/render-net';
 import { fxIsSelfSide, fxTrackEndFor, FX_TRACK_EDGE_PCT, FX_TRACK_EDGE_PCT_Y } from '../../src/ui/fx-seat';
-import { descendants, installStubDom, isClass, makeStubEl, type StubNode } from './net-dom-stub';
+import { descendants, classListOf, installStubDom, isClass, makeStubEl, type StubNode } from './net-dom-stub';
+import { cssRules, subjectPropOf } from './net-css-parse';
 import { stripComments } from './source-text';
 
 /**
@@ -348,5 +349,184 @@ describe('R16 · 接线腿（谁给位置、谁给归属）', () => {
       + '端会与 `fxTrackEndFor` 的落点脱钩').toContain('fxIsSelfSide(');
     expect(body, '`netControlEnd` 丢了中立分支（中立滑块会贴到某一端）')
       .toContain('s.control === -1 ? -1');
+  });
+});
+
+/* ============================================================================
+ * ③ R22：控制轨**两端标签**的文本必须与"端"的语义一致（行为腿 + 解算腿 + 接线腿）
+ *
+ * ## 缺陷形态（用户 R22 第 2 条："将图中位置错误的文本信息调整回来"）
+ *
+ * 浏览器实测（headless Chrome，1500×2400，报告 §2 有前后坐标）：控制轨（竖排、158px）
+ * 里的两个标签**挤在轨道左上角**：
+ *   · 「玩家 1」文本顶 485.67（轨道 482.67..640.67）—— 只比轨道顶低 3px，且**贴左边缘**；
+ *   · 「玩家 2」文本顶 527.67 —— 落在轨道纵向 **28.5%** 处，紧贴在「玩家 1」下方。
+ * 两个成因**都不在 JS 里**，而是 CSS 换轴规则打空 + 绝对定位过约束：
+ *  ① `styles-net.css` 的换轴那一组写的是 `.control-track-label.left/.right`，而**远程页产出的是
+ *    `.top`/`.bottom`**（`renderControlModule` 的 `vertical` 分支）⇒ 那一组**永不命中**：
+ *    `left: 50%` / `top: auto` / `transform: translateX(-50%)` 一条都没生效，两个标签停在
+ *    `left/right: auto` 的静态位置（= 轨道左边缘），而 `styles.css` 基类的 `translateY(-50%)` 还在；
+ *  ② `.bottom` 又拿到基类的 `top: 50%` ⇒ 绝对定位**过约束**（top/bottom 都非 auto、height auto）
+ *    ⇒ CSS 2.1 §10.6.4 的"求解高度"分支把它的高度撑成 `156 − 78 − 10 = 68px`，
+ *    而 `translateY(-50%)` 按 **68px** 的一半（−34px）上移 ⇒ 文本被画在该盒顶边（= 28.5% 处）。
+ * 另有**语义**一层（本波一并修）：端标签此前是写死的 `玩家 1` / `玩家 2`，
+ * 而竖排的"端"是**座位**语义（自己端恒在下）—— 默认视角（`viewSeat = 0`）下**两端文案正好写反**
+ * （滑块停在下端 78% 表示 P0 持控，而下端标签写着 `玩家 2`）。这与 R16 修掉的
+ * `控制权: 玩家 N` 是同一族（"绝对玩家号"与"屏幕端"在竖排下不是同一个数），本轮补上。
+ *
+ * ## 这三条腿各自能证明什么（诚实边界）
+ *  · 解算腿：CSS 里**解析得到**的 `left/top/bottom/transform` 与"贴端"声明 —— 证明
+ *    "换轴规则真的命中了 `.top`/`.bottom`"且"`.bottom` 不再是过约束形态"；
+ *  · 行为腿：真跑 `renderNetBoard` 后**读回的文本**按座位正确 —— 证明接线真的传了座位；
+ *  · **不能**证明像素：桩没有布局引擎。真实 rect（文本顶 493.67 / 613.67 与左边缘 927.73）
+ *    只能由浏览器实测给出（报告 §2 前后并列）。
+ * ======================================================================== */
+
+describe('R22 · 控制轨两端标签：文本按座位、位置不贴左边缘、`.bottom` 不再过约束', () => {
+  /** 从一棵元素树里读两个端标签（各**恰好**一个 —— 缺失/多余当场报红）。
+   *  ⚠️ `isClass` 只认**单个**类 token（`classListOf(n).includes(c)`）⇒ 这里必须先按
+   *  `control-track-label` 选出两个，再按端别类挑 —— 不能写成 `isClass(n, 'control-track-label top')`
+   *  （那会一个都选不到，从而把"标签没产出"误报成"端别类丢了"）。
+   *  `axis`：竖排（远程页）端别类是 `.top`/`.bottom`，横排（热座）是 `.left`/`.right`。 */
+  function readEndLabels(
+    root: StubNode, axis: 'vertical' | 'horizontal',
+  ): { first: StubNode; second: StubNode } {
+    const all = descendants(root).filter((n) => isClass(n, 'control-track-label'));
+    expect(all.length, `控制轨里的 .control-track-label 不是恰好两个（实际 ${all.length} 个 ——`
+      + ` 端标签只能有两个：上/下端（竖排）或左/右端（横排））`).toBe(2);
+    const pick = (cls: string): StubNode => {
+      const hit = all.filter((n) => isClass(n, cls));
+      expect(hit.length, `控制轨里带 \`${cls}\` 的端标签不是恰好一个（实际 ${hit.length} 个）`).toBe(1);
+      return hit[0];
+    };
+    // 反空集合：端别类必须**成套**出现（竖排 .top/.bottom、横排 .left/.right）——
+    // 若哪天竖排产出 `.left`，`pick('top')` 会响亮报"0 个"，而不是静默读到空文本。
+    return axis === 'vertical'
+      ? { first: pick('top'), second: pick('bottom') }
+      : { first: pick('left'), second: pick('right') };
+  }
+
+  it('行为腿：真跑 `renderNetBoard` —— 上端标签 = 对手（1−seat）、下端标签 = 自己（seat），两种座位都对', () => {
+    const seen: string[][] = [];
+    for (const viewSeat of [0, 1] as const) {
+      bootStub();
+      const root = makeStubEl('div');
+      const noop = (): void => { /* noop */ };
+      renderNetBoard(root as unknown as HTMLElement, makeState(-1), {
+        onAction: noop, onRendered: noop, rerender: noop, onDraftPick: noop,
+        onDraftUnpick: noop, onDraftBan: noop, onWinReset: noop,
+      } as never, { viewSeat, verifyHooks: false });
+      settleRaf();
+      const { first: top, second: bottom } = readEndLabels(root, 'vertical');
+      teardownStub();
+      seen.push([top.text, bottom.text]);
+      // 端的语义（与 `netControlEnd` / `fxTrackEndFor` 同一份座位判据）：上端 = 对手端、下端 = 自己端。
+      const foe = 1 - viewSeat;
+      expect(top.text, `viewSeat=${viewSeat}：**上端**标签写着「${top.text}」—— 上端是**对手端**`
+        + `（小端 22%，见 fx-seat 的 FX_TRACK_EDGE_PCT_Y），对手是 玩家 ${foe + 1}。`
+        + `写死「玩家 1」只对 viewSeat=1 成立，默认视角下两端正好写反`)
+        .toBe(`玩家 ${foe + 1}`);
+      expect(bottom.text, `viewSeat=${viewSeat}：**下端**标签写着「${bottom.text}」—— 下端是**自己端**`
+        + `（大端 78%），自己是 玩家 ${viewSeat + 1}（滑块停在下端 78% 时它必须与下端标签同号）`)
+        .toBe(`玩家 ${viewSeat + 1}`);
+    }
+    // 反空集合：两种座位读到的**文本对**必须不同 —— 否则这条判据对"写死两个字面量"零判别力
+    // （写死的旧实现在两种座位下都会给出 ['玩家 1','玩家 2']）。
+    expect(seen, '两种座位读到的端标签完全相同 —— 说明标签根本没跟着座位走'
+      + '（写死的字面量正是本轮要修的形态）').toEqual([['玩家 2', '玩家 1'], ['玩家 1', '玩家 2']]);
+  });
+
+  it('解算腿：`.top`/`.bottom` 都命中"换轴"声明；两端各自贴端，且**不存在** top+bottom 双非 auto 的过约束', () => {
+    const css = readFileSync(fileURLToPath(new URL('../../src/ui/styles-net.css', import.meta.url)))
+      .subarray(0, 4 * 1024 * 1024).toString('utf8');
+    const rules = cssRules(css);
+    const board = makeStubEl('div'); board.classList.add('board', 'net-board');
+    const mod = makeStubEl('div'); mod.classList.add('control-module', 'neutral');
+    const track = makeStubEl('div'); track.classList.add('control-track');
+    const mk = (cls: string): StubNode => {
+      const n = makeStubEl('span'); n.classList.add('control-track-label', cls); return n;
+    };
+    const topLabel = mk('top');
+    const bottomLabel = mk('bottom');
+    const chainOf = (n: StubNode): StubNode[] => [board, mod, track, n];
+    const prop = (n: StubNode, p: string): string | null => subjectPropOf(n, chainOf(n), rules, p);
+
+    // ① **换轴**声明必须真的命中 `.top`/`.bottom`（R22 修的正是"写在 `.left`/`.right` 上、
+    //    而远程页产出的是 `.top`/`.bottom` ⇒ 整组打空"）。
+    for (const [name, node] of [['.top', topLabel], ['.bottom', bottomLabel]] as const) {
+      expect(prop(node, 'left'),
+        `${name} 标签没有命中 \`left: 50%\` —— 它会回到 \`left: auto\` 的静态位置（轨道**左边缘**），`
+        + `这正是浏览器实测里"两个标签一起挤在左上角"的成因之一`).toBe('50%');
+      expect(prop(node, 'right'),
+        `${name} 标签没有把 \`right\` 复位成 auto（与 left:50% 同时生效会拉伸/错位）`).toBe('auto');
+      expect(prop(node, 'transform'),
+        `${name} 标签没有把 transform 换成 \`translateX(-50%)\` —— 基类的 \`translateY(-50%)\``
+        + `在过约束形态下按**被撑高**的盒高（68px，不是 16px）上移，文本位置因此不可预测`)
+        .toBe('translateX(-50%)');
+      // ② **过约束**判据（R22 的第二个成因）：绝对定位元素**不许** `top` 与 `bottom` 同时非 auto。
+      const t = prop(node, 'top');
+      const b = prop(node, 'bottom');
+      expect(t !== 'auto' && b !== 'auto',
+        `${name} 标签同时有 \`top: ${String(t)}\` 与 \`bottom: ${String(b)}\`（两个都非 auto）——`
+        + ` CSS 2.1 §10.6.4 对"top/bottom 都非 auto + height:auto"走**求解高度**分支，`
+        + `盒子会被撑成 68px 高，而 translateY(-50%) 按 68px 的一半（−34px）上移 ⇒ `
+        + `文本落到轨道纵向 28.5% 处（浏览器实测的错位形态）`).toBe(false);
+    }
+    // ③ **贴端**声明：上下两端各自贴自己那一端（少一条 ⇒ 那一端的标签会回到 top/bottom 都 auto
+    //    的静态位置 = 轨道内容盒顶边，两端重叠）。
+    expect(prop(topLabel, 'top'), '上端标签没有 \`top: 10px\`（它必须贴轨道上端）').toBe('10px');
+    expect(prop(topLabel, 'bottom'), '上端标签的 bottom 不是 auto（会与 top:10px 过约束）').toBe('auto');
+    expect(prop(bottomLabel, 'bottom'), '下端标签没有 \`bottom: 10px\`（它必须贴轨道下端）').toBe('10px');
+    expect(prop(bottomLabel, 'top'),
+      '下端标签的 `top` 解出来不是 auto —— 基类 `top: 50%` 仍在命中，这正是"玩家 2 跑到轨道 1/3 处"'
+      + '的直接成因（过约束 + translateY(-50%) 按被撑高的盒高上移）').toBe('auto');
+    // ⚠️ 变异实测 b（"换轴"组的主体类名改回 `.left`/`.right`）会让 ① 的四条与 ③ 的四条一起报红。
+  });
+
+  it('接线腿：`render-net.ts` 把两端归属交给助手；`endPlayers` 与"自己端在下"同源', () => {
+    const src = stripComments(readFileSync(
+      fileURLToPath(new URL('../../src/ui/render-net.ts', import.meta.url))).subarray(0, 8 * 1024 * 1024).toString('utf8'));
+    const renderSrc = stripComments(readFileSync(
+      fileURLToPath(new URL('../../src/ui/render.ts', import.meta.url))).subarray(0, 8 * 1024 * 1024).toString('utf8'));
+    expect(src, '远程页没有把两端归属交给助手（`endPlayers` 缺省 [0,1] ⇒ 默认视角下两端写反）')
+      .toMatch(/endPlayers: netControlEndPlayers\(viewSeat\),/);
+    const at = src.indexOf('function netControlEndPlayers(');
+    expect(at, '`netControlEndPlayers` 没有出处（谁在上端没有唯一判据）').toBeGreaterThanOrEqual(0);
+    const body = src.slice(at, at + 700);
+    expect(body, '`netControlEndPlayers` 的上端（小端）不是 `1 - viewSeat` —— 上端是**对手端**')
+      .toMatch(/1 - viewSeat/);
+    expect(body, '`netControlEndPlayers` 的下端（大端）不是 `viewSeat` —— 下端是**自己端**')
+      .toMatch(/return \[[^\]]*viewSeat[^\]]*\]/);
+    // 与 `netControlEnd`（滑块贴哪一端）**同一份座位语义**：后者的判据是 `fxIsSelfSide`
+    // （"哪一端是自己"的唯一出处），前者就是它的"静态归属"版 —— 两处都提到座位换算，
+    // 否则"滑块停在下端"与"下端标签写谁"会脱钩（R16 修过的同一族缺陷）。
+    const endAt = src.indexOf('function netControlEnd(');
+    expect(endAt, '`render-net.ts` 里没有 netControlEnd').toBeGreaterThanOrEqual(0);
+    expect(src.slice(endAt, endAt + 400), '`netControlEnd` 丢了 `fxIsSelfSide` 判据')
+      .toContain('fxIsSelfSide(');
+    // 端标签**不许**再是写死的字面量（`玩家 1` / `玩家 2` 紧跟在端别类后面）。
+    expect(renderSrc, '`render.ts` 的端标签又变回写死的字面量（`玩家 1` / `玩家 2`）——'
+      + '竖排的端是座位语义，写死只对 viewSeat=1 成立')
+      .not.toMatch(/control-track-label[^\n]*'玩家 [12]'/);
+    expect(renderSrc, '`render.ts` 端标签不再从 `endPlayers` 取文本'
+      + '（缺省必须仍是 [0,1] ⇒ 热座逐字不变）')
+      .toMatch(/const ends = opts\?\.endPlayers \?\? \(\[0, 1\] as const\);/);
+    expect(renderSrc, '缺省端归属不再是 [0, 1]（热座左端会不再写「玩家 1」）')
+      .toMatch(/ends\[0\] \+ 1/);
+  });
+
+  it('热座零变化腿：不传 `endPlayers` 时两端标签仍是「玩家 1」（左）/「玩家 2」（右）', () => {
+    bootStub();
+    const s = { control: 0 } as unknown as Parameters<typeof renderControlModule>[0];
+    const mod = renderControlModule(s) as unknown as StubNode;
+    settleRaf();
+    const { first: left, second: right } = readEndLabels(mod, 'horizontal');
+    teardownStub();
+    expect(left.text, '热座（横排）左端标签变了（改动前是 玩家 1）').toBe('玩家 1');
+    expect(right.text, '热座（横排）右端标签变了（改动前是 玩家 2）').toBe('玩家 2');
+    // 反空集合：横排的端别类仍是 `.left`/`.right`（竖排才换 `.top`/`.bottom`）——
+    // 若哪天横排也产出 `.top`，上面两条会"仍然绿"而实际视觉已经换轴。
+    expect(classListOf(left), '热座左端标签的端别类不是 `.left`').toContain('left');
+    expect(classListOf(right), '热座右端标签的端别类不是 `.right`').toContain('right');
   });
 });
