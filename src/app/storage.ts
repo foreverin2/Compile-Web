@@ -6,8 +6,31 @@
  *  - `src/ui/local-store-browser.ts`：浏览器实现（localStorage 主 + indexedDB 从 + 能力探测）。
  *  - `src/app/local-store.ts`：授权状态机与数据模型（也是纯逻辑）。
  *
- * 红线 3（§0.4）：游客模式下**零写入磁盘**。它的机检形态在 `src/app/local-store.ts`：
- * `createLocalStore({ persistent })` + `deny()` ⇒ `persistent.set/remove` 调用次数恒 0。
+ * 红线 3（§0.4）：**用户未点「允许」之前，磁盘上零写入**。它有两个机检形态，缺一不可：
+ *  1. 授权之后（`src/app/local-store.ts`）：`createLocalStore({ persistent })` + `deny()`
+ *     ⇒ `persistent.set/remove` 调用次数恒 0；
+ *  2. 授权之前（**本文件 + `src/ui/local-store-browser.ts`**）：后端**探测本身**只读
+ *     （`selectReadableStore` 只 `get` 探针键，**从不 `set`/`remove`**）⇒ 启动到
+ *     "渲染授权弹窗"为止的整条路径上 `set`/`remove` 调用数恒 0 —— 选择发生在授权弹窗
+ *     **之前**（`main.ts` 的模块级 `openL1Store()`），所以它一旦写盘，就是"每个玩家每次
+ *     打开页面都先写一次磁盘，包括随后点「不允许」的人"，会让 `src/app/privacy.ts` 里
+ *     「在此之前，磁盘上不会有任何写入」**逐字变成假承诺**。
+ *
+ * ## 写探针搬到了「用户点允许」那一刻（不是删掉，是搬家）
+ *
+ * 纯只读探测有一个真实代价：**Safari 隐私模式下 `localStorage` 对象存在、`getItem` 能跑，
+ * 但 `setItem` 抛 `QuotaExceededError`** ⇒ 只看读会把不可写的后端当成可用后端。
+ * 修法不是"退回同意前写一次"（那就违反红线 3），而是把**同一个写探针**（`probeWritable`）
+ * 搬到**授权之后、任何用户数据落盘之前**：
+ *  `src/app/local-store.ts` 的 `grant()` 对**注入进来的 `KeyValueStore`** 跑一次
+ *  `set(probeKey,'1') → get → remove`，失败 ⇒ 降级为内存 KV、`isPersistent()` 回 `false`。
+ * 于是三方同时成立：① 同意前磁盘零写入；② Safari 隐私模式在"用户点了允许、但还没有任何
+ * 用户数据写下去"时就发现（比惰性降级更早、更准确）；③ `isPersistent()` 的语义从
+ * "后端对象存在"**变强**成"后端真的写得进去"。
+ *
+ * ⚠️ 纯层（`src/app/**`）**不碰浏览器 API**：`probeWritable` 收的是一个注入的
+ * `KeyValueStore`，读 `globalThis.localStorage` 的事仍然只在
+ * `src/ui/local-store-browser.ts` 里发生。
  *
  * ## 能力边界（每个方法"值不存在 / JSON 坏掉 / 后端抛错"三态下的行为，见本文件的注释与
  * ## tests/app/local-store.test.ts 的「KV 接口的能力边界」一节）
@@ -19,6 +42,7 @@
  * | `remove`| 无副作用（不抛） | **原样向外抛**（`clearAllLocalData` 不吞） |
  * | `keys`  | 返回 `[]` | **原样向外抛** |
  * | JSON 坏掉 | — | `readJson` 返回 `fallback`（唯一一处**故意的**吞：坏数据不该让游戏打不开） |
+ * | 值恰好是 `null`（`JSON.parse('null')` 合法） | `readJson` 归一成 `fallback`（见它上面的说明） | — |
  */
 
 export interface KeyValueStore {
@@ -34,12 +58,6 @@ export interface AsyncKeyValueStore {
   set(key: string, value: string): Promise<void>;
   remove(key: string): Promise<void>;
   keys(): Promise<string[]>;
-}
-
-/** 带名字的存储后端（"indexeddb 优先，localStorage 兜底"的探测单位） */
-export interface NamedStore {
-  name: string;
-  kv: KeyValueStore;
 }
 
 /**
@@ -63,6 +81,42 @@ export const L1_KEY_PREFIX = 'compile-';
 export const L1_SETTINGS = `${L1_KEY_PREFIX}settings`;
 export const L1_DECKS = `${L1_KEY_PREFIX}decks`;
 
+/**
+ * 探测用的键：`set` 探针写进去、**立刻删掉**（`probeWritable`），探测之前不存在、
+ * 探测之后不残留。
+ *
+ * 带着前缀（而不是 `__probe__` 这种裸名）是因为它真的会短暂出现在用户磁盘上：
+ * 前缀让它在开发者工具里一眼能看出是谁写的。
+ *
+ * ⚠️ **本键只有 `probeWritable` 会写，而 `probeWritable` 只在用户点「允许」之后被调用**
+ * （`createLocalStore.grant()`，见本文件头注的「写探针搬到了…」一节）。
+ * 授权之前的选择路径（`selectReadableStore`）**只读**，见那里的说明。
+ *
+ * ## 旧实现的探针键 `__l1_probe__`：**不迁移、不清理**（结论不变，理由已改正）
+ *
+ * 修复前的 `pickNamedStore` 在**授权之前**写的是裸键 `__l1_probe__`，它可能残留在装过旧
+ * 构建的用户磁盘上。本轮的决定是**不为它写清理/迁移代码**。真实理由（按重要性排序）：
+ *  1. 旧实现那一路是 `set → get → remove` **自净**的，只有"最后一步抛错"这种病理后端才可能
+ *     留下残留（与本文件 `probeWritable` 记录的那种后端同源）；
+ *  2. ⚠️ **修复轮自述给的理由不成立、已作废**：那里写的是"为它加清理会在**授权前**引入一次
+ *     删除调用，正好违反红线 3"。清理完全可以放在 `grant()`（同意之后），所以这条理由与红线 3
+ *     无关 —— 反证：真的在 `grant()` 里加一次旧键删除，**全部"授权前零写入"账本腿仍然全绿**，
+ *     只有两条"写探针计数"腿变红（`expected 3 to be 2`；本次修复轮 M11 变异实测）；
+ *  3. 于是真实代价是**扰动写探针的计数口径**：授权之后"恰好一次探针（set + 删除 = 2 次变更
+ *     调用）"是 `grant()` 契约的一部分，被两条腿逐字钉住。为一个"只有病理后端才可能残留、
+ *     且新代码零引用"的旧键再加一次删除，会把这套计数口径与旧键迁移耦在一起 —— 收益低于
+ *     成本，所以不做。
+ *
+ * 另：`__l1_probe__` 在 `src/` 的**代码位**零命中（除本段注释外没有任何出现；新实现既不读也
+ * 不写它），因此"不清理"不会让新代码读回任何旧值。
+ *
+ * **这条决定没有配新腿**：它记录的是"**不做**某件事"的负决定，能钉住它的形态只有"断言清理
+ * 不发生"—— 那要么是源码文本腿（本仓已裁定文本腿不充当覆盖），要么是把一个**有意的缺失**
+ * 冻成判据。唯一有实际后果的那一面（授权后计数口径被扰动）已由上述两条计数腿覆盖，
+ * M11 变异实测证明它们承重，故这里只改注释、不加腿。
+ */
+export const L1_PROBE_KEY = `${L1_KEY_PREFIX}l1-probe`;
+
 /** L1 值的 schema 版本（键名不含版本；升版本走上面注释的迁移策略 1） */
 export const L1_SCHEMA_VERSION = 1;
 
@@ -81,22 +135,58 @@ export function createMemoryStore(): KeyValueStore {
 }
 
 /**
- * 按优先级探测可用后端：`get`/`set`/`remove` 各真跑一次探针（不能只看 `'indexedDB' in globalThis`
- * —— Safari 隐私模式下对象存在但一用就抛）。全部不可用 → **抛错**（调用方负责降级成 null）。
+ * **只读**选择一个可用的后端：真跑一次 `get` + `keys(…)`，**从不 `set`/`remove`**。
+ *
+ * 为什么探测只读（而不是"真写一次最可靠"）：这个函数跑在**用户点「允许」之前**的启动路径上
+ * （`src/ui/local-store-browser.ts` 的 `openL1Store()` ← `main.ts` 的模块级调用）。
+ * 红线 3 的原文是「用户未点"允许"之前，磁盘上零写入」，`src/app/privacy.ts` 也把这句
+ * **逐字**承诺给了玩家 ⇒ 同意之前**一次写都不能有**，包括探针。
+ *
+ * 代价（**明说，不掩盖**）：只读探测发现不了"Safari 隐私模式下 `setItem` 抛
+ * `QuotaExceededError`"这一类**不可写但可读**的后端 —— 那些后端会被选中。
+ * 兜住它的是两道**授权之后**的防线，见本文件头注：
+ *  `probeWritable`（用户点允许那一刻，降级为内存）与 `writeJson` 的 `write-failed`
+ *  （万一还是漏过去，也只是"本机保存失败，本次会话仍可正常游玩"，不抛、不崩）。
+ *
+ * ⚠️ **另一处口径变化（如实记下）**：本函数把 `keys()` 也当成探测项，于是
+ * "`get` 能跑、`keys()` 抛"的后端会被拒成 `null`；而修复前的**写**探针不碰 `keys`，
+ * 这种后端会被选中。方向上**更严**（宁可降级到内存，也不要一个"列不出键"的后端 ——
+ * 那会让"清除本机数据"变成瞎清），且本仓没有任何存储实现是"读得了、列不出来"。
  */
-export function pickNamedStore(stores: readonly NamedStore[]): NamedStore {
-  const probeKey = '__l1_probe__';
-  for (const s of stores) {
-    try {
-      s.kv.set(probeKey, '1');
-      s.kv.get(probeKey);
-      s.kv.remove(probeKey);
-      return s;
-    } catch {
-      // 试下一个（这里的吞是**有意的**：探测的语义就是"试一下，不行换下一个"）
-    }
+export function selectReadableStore(kv: KeyValueStore): KeyValueStore | null {
+  try {
+    kv.get(L1_PROBE_KEY);   // 读探针：验证"拿得到值"，且 SecurityError 会在这一步暴露
+    kv.keys();              // 枚举探针：`clearAllLocalData` 之外的能力边界，一并在授权前试掉
+    return kv;
+  } catch {
+    return null;            // 探测的语义就是"试一下，不行就降级"，这里的吞是**有意的**
   }
-  throw new Error('没有可用的本地存储后端');
+}
+
+/**
+ * **写探针**：`set` → `get` → `remove` 真跑一遍，返回"这个后端到底写不写得进去"。
+ *
+ * ⚠️ **调用时机是硬约束**：只允许在用户点「允许」之后调用
+ * （当前唯一调用点是 `createLocalStore.grant()`）。写在同意之前 = 违反红线 3。
+ *
+ * 探针键用完即删 ⇒ 不残留、也不污染 `clearAllLocalData` 的计数（它只数 L1 的两个真键）。
+ * 任何一步抛错都返回 `false`（不向外抛：存储不可写不是致命错误，只是"本次会话不能保存"）。
+ *
+ * ⚠️ **"set 成功但 remove 抛"时探针键会残留**（A3 变异实测）：这种后端等于
+ * "写得进、删不掉"，残留一个探针键是它自己的病症，调用方拿到 `false`
+ * 之后会整个降级为内存 KV、不再碰它。本轮**没有**为它加"二次清理" —— 理由是
+ * `remove` 抛时再调一次 `remove` 还是抛（死代码），加进去只会变成一条无腿的假守卫。
+ * 这条行为由 `tests/app/local-store.test.ts` 的一条腿**如实钉住**。
+ */
+export function probeWritable(kv: KeyValueStore): boolean {
+  try {
+    kv.set(L1_PROBE_KEY, '1');
+    kv.get(L1_PROBE_KEY);
+    kv.remove(L1_PROBE_KEY);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function utf8Bytes(v: string): number {
@@ -106,18 +196,39 @@ function utf8Bytes(v: string): number {
 }
 
 /**
- * 读 JSON。唯一**故意吞错**的地方是 JSON 解析失败（坏数据→fallback）；
- * `kv.get` 自身的异常**不吞**（存储不可用是另一类问题，调用方要能看见）。
+ * 读 JSON。两类**故意的**吞错，都只有"坏数据不该让游戏打不开"这一个理由：
+ *  1. JSON 解析失败（含空串） → `fallback`；
+ *  2. **值恰好是 `null`**（`JSON.parse('null')` 是**合法解析**） → `fallback`。
+ *
+ * 第 2 条为什么要归一到 `fallback`（而不是留给调用方守）：
+ *  - 本仓**没有任何一处**把 `null` 当作有意义的存储值 —— 写侧只有 `writeJson(…, {…})`
+ *    这类对象/数组（`src/app/local-store.ts` 的三个调用点全是对象或数组），
+ *    `null` 只可能是**外部手改**、**别的程序写的同键**或**代码回归**的产物；
+ *  - `T` 这个返回类型在 `T extends object` 时是**假的**：JS 里 `JSON.parse` 能返回
+ *    `null`/数字/字符串，于是签名承诺"给你 T"、运行时给 `null` —— 调用方一旦写
+ *    `s.nick`（`readNickName` 的旧写法）就是 `TypeError`，而这条**只在别人手改过
+ *    存储之后**才发作，属于最难复现的一类线上崩溃；
+ *  - 归一的**代价**是"合法的 `null` 存储再也读不出来"，而上面已论证本仓不存 `null`；
+ *    真要有哪一天需要"区分 null 与不存在"，正确做法是**加一个新函数**（`readJsonRaw`），
+ *    而不是把这层守卫拆散到每个调用点（那就倒退成"每个消费者各自记得守"）。
+ *
+ * 边界（**不**吞的）：`kv.get` 自身的异常仍然原样外抛（存储不可用是另一类问题，
+ * 调用方要能看见）；解析出来的**数字 / 字符串 / 布尔**（如 `42`、`"x"`）**不**归一，
+ * 那是调用方按形状守的事（`readNickName` 回空串 / `readDecks` 回空数组）。
  */
 export function readJson<T>(kv: KeyValueStore, key: string, fallback: T): T {
   const raw = kv.get(key);
   if (raw === null) return fallback;
+  let parsed: unknown;
   try {
-    return JSON.parse(raw) as T;
+    parsed = JSON.parse(raw);
   } catch {
     return fallback; // 坏数据不该让游戏打不开
   }
+  if (parsed === null) return fallback; // `JSON.parse('null')` 合法，但 `T` 不可能是 null
+  return parsed as T;
 }
+
 
 export type WriteResult = { ok: true } | { ok: false; reason: 'too-large' | 'write-failed'; detail: string };
 
