@@ -24,6 +24,21 @@
  * ⚠️ **诚实边界**：这些常量描述的是"盒的尺寸与居中偏移"，不是"落点该在哪"。
  * `65 / 89.4` 是**手工居中**的写法（等价于 `落点 − 盒尺寸/2`），与 `HAND_END_LEAD` 那类
  * "让开多少"的观感量是两件不同的事（后者在 `./fx-seat` 里，且本波也不缩）。
+ *
+ * ## ⚠️⚠️ G2 修正 **R15-A**：上面"远程页手牌仍是 130px 扇形"这句话**已经过期**
+ *
+ * 本文件头注原先写着"远程页手牌仍然是热座页那一套 130px 扇形，所以这些数不跟着
+ * `--card-h` 缩"。**那句话在后来的 R9-4 就被用户裁决推翻了** —— 用户明确答"手牌卡
+ * **一起缩**"，于是远程页手牌卡由 `.net-board` 上的 `--card-h: 140px` 派生为
+ * **100.572 × 137.601**（`styles-net.css:91-97`），场上卡 **100.572 × 140**。
+ *
+ * 后果：本文件上面那四个常量在远程页**全部偏大 ~29%**（宽 +29.3% / 高 +30.0%），
+ * 而它们被当成"落点盒/幽灵卡"的尺寸用在十几处 —— 于是远程页的幽灵与落点框比真卡大
+ * 一圈、扇形步距每张多偏 23.09px（102 vs 78.909）。
+ *
+ * **上面四个常量一个字都没改**（它们现在是**热座**的值，且 `HAND_CARD_HALF_W/H`
+ * 仍有热座调用方）；远程页一侧改走下面三个**函数出口**（每次调用现场量 DOM）。
+ * 这是本文件从"常量单一出处"扩成"**按页取值的单一出处**"的那一步。
  */
 
 /** 手牌卡（= 浮层卡）的整卡宽（`styles.css` 的 `.card { width: 130px }`；本波未缩）。 */
@@ -37,3 +52,135 @@ export const HAND_CARD_HALF_W = HAND_CARD_W / 2;      // 65
 
 /** 整卡盒的**半高**：把浮层盒垂直居中到落点用的手工偏移。 */
 export const HAND_CARD_HALF_H = HAND_CARD_H / 2;      // 89.4
+
+/* ============================================================================
+ * G2 修正 **R15-A**：上面那四个常量是**热座**的值；远程页的卡小 29%，落点盒/幽灵
+ * 不能再读它们 —— 否则远程页的落点框比真卡大一圈（宽 +29.3% / 高 +30.0%）。
+ *
+ * ## 为什么必须在这里读 DOM，而不是在文件顶部算好
+ *
+ * 远程页的卡宽是**运行期**由 CSS 变量派生的（`styles-net.css:91-97`）：
+ *   --card-h: 140px  ⇒  --card-w = (140 − 2) × 0.71429 + 2   = 100.572
+ *                       --hand-card-h = (--card-w − 8) × 1.4 + 8 = 137.601
+ * （`tests/ui/net-hand-card-size.test.ts:78-87` 钉住的就是这两个数）。
+ * 而**热座页的同一个 DOM 位置**是 130 × 178.8（`styles.css:387` / `:412`）。
+ * 页面只差一次 `renderNetBoard()` 调用（同源 `main.ts` 里切换，不重新加载文档），
+ * 所以**任何模块级常量都会在 import 期被永久冻结成当时那一页的值** ——
+ * 这正是本族缺陷的成因（`REVEAL_W` / `LOVE_CARD_W` / `GHOST_W` 全是模块级）。
+ * ⇒ 三个出口都必须是**函数**（每次调用现场量）。
+ *
+ * ## 探针为什么**只**在 `.net-board` 内找
+ *
+ * `.net-board` 是远程页的**根容器**（热座页没有这个类）。探针的选择器带它做前缀 ⇒
+ * **热座页永远选不中**，于是热座页一律走下面的常量兜底分支 ⇒ 热座逐字不变
+ * （这是本波"热座零变化是红线"的**构造性**保证，不是"我记得改了它"）。
+ * 这与 `tests/ui/net-hand-card-size.test.ts:96-98` 那条"styles-net.css 里不许出现裸
+ * `.card` 主体规则"同源：**判据必须自带作用域**。
+ *
+ * ## 为什么用 `offsetWidth` / `offsetHeight`
+ *
+ * 卡/幽灵上有 `rotate`（远程页对手侧 ∓90° / `--fx-rot`）。`getBoundingClientRect()`
+ * 返回的是**变换之后**的外接框 —— 横置卡的 width/height 会互换，量出来的"卡宽"是卡高。
+ * `offsetWidth` / `offsetHeight` 是**布局盒**尺寸，不受 transform 影响。
+ * ========================================================================== */
+
+/** 手牌/浮层整卡盒（远程页实测；热座与"读不到"都退回事前常量）。 */
+export interface CardBox { w: number; h: number }
+
+/** 在 `.net-board` 内探一个选择器并量它的布局盒（**`document` 缺席时返回 null，不抛**）。
+ *
+ * 读数用 `offsetWidth/offsetHeight`（**不是** `getBoundingClientRect()`）：见文件上方
+ * "为什么用 offsetWidth/offsetHeight" 那一节。
+ *
+ * ⚠️ **这个 `typeof document` 守卫是必需的**，不是防御性摆设：本仓测试环境是
+ * `environment: 'node'`（无 jsdom），`tests/core-purity.test.ts` 一类的静态扫描套件里
+ * **根本没有全局 `document`** —— 第一版把 `document.querySelector(...)` 直接写在
+ * `handCardBox()` 里，于是那条腿实测抛 `TypeError: Cannot read properties of undefined
+ * (reading 'querySelector')`。守卫把"没有 DOM"归到与"探针没命中"同一个兜底分支。
+ *
+ * ⚠️ 选择器**保持极简**（只有标签 + 类 + 后代组合器）：本仓无 jsdom，唯一的 DOM 桩
+ * （`tests/ui/net-dom-stub.ts`）**不支持伪类**（`:not()` 会返回空）。写成 `:not(...)`
+ * 会让"探针真的命中了真卡"这条腿在桩上永远走不到 = 假绿。挑 `.card` 就够：
+ * `.net-hands` / `.net-lane-band` 里的 `.card` 都是**真实卡**（揭示幽灵是另一种类，
+ * 且它挂在手牌末尾、量出来同尺寸，不影响结论）。 */
+function netProbe(sel: string): { w: number; h: number } | null {
+  if (typeof document === 'undefined') return null;
+  const el = document.querySelector<HTMLElement>(sel);
+  const w = el ? (el.offsetWidth ?? 0) : 0;
+  const h = el ? (el.offsetHeight ?? 0) : 0;
+  return w > 0 && h > 0 ? { w, h } : null;
+}
+
+/** 手牌/浮层整卡：优先量真实手牌卡；退回场上卡；都读不到 → 130 × 178.8（热座值）。
+ *
+ * 为什么第二条退路是**场上卡**而不是直接兜底：远程页的 `.net-hands` 可能是
+ * "只剩张数占位块"（`styles-net.css` 的 `.hand-count-only`，对手手牌不渲染真卡），
+ * 此时手牌探针为空 —— 但"远程页的卡小一号"这件事仍然成立，而场上卡与手牌卡在
+ * 远程页是**同一基准**（`--card-h` 一个旋钮；`net-hand-card-size.test.ts:78-87` 就是
+ * 按"手牌整卡高 == 场上卡同一算式"断言的）。退回它比退到 130×178.8 更接近真相。 */
+export function handCardBox(): CardBox {
+  return netProbe('.net-board .net-hands .card')
+    ?? netProbe('.net-board .net-lane-band .stack .card')
+    ?? { w: HAND_CARD_W, h: HAND_CARD_H };
+}
+
+/** 场上卡（重力终点罩 / 烟光 / 飓风 / 烟桥）：读 `offsetHeight` 并按**样式表的同一条
+ *  算式**反推布局宽；读不到 → 130.57 × 175（`styles.css:422` 的 `.stack` 默认值）。
+ *
+ * ## 为什么宽要**反推**而不是直接读 `offsetWidth`
+ *
+ * 场上卡的布局宽在样式表里就是由高推出的（`styles.css:422` 与 `styles-net.css:461-462`
+ * 是**同一条** `--card-w: calc((var(--card-h) - 2px) * 0.71429 + 2px)`）。
+ * 这里读"真高"、用**同一个算式**反推宽 ⇒ 几何与样式表**同源**：
+ * 任何一处改了 `--card-h`，宽自动跟上，不需要在 JS 侧再维护一个 0.71429。
+ *
+ * ⚠️ 不直接读 `offsetWidth` 的第二个原因：场上卡的布局盒宽在横置（远程页 ∓90°）时
+ * 仍是"布局宽"，读出来是对的；但**热座**下 `.stack .card` 的 `--card-w = 130.57`
+ * 与这里反推的 `(175 − 2) × 0.71429 + 2 = 130.5717` 在小数位上可能差一点点
+ * （浏览器按亚像素布局）。反推保证"宽高永远自洽于同一条公式"，不会出现 130.55 × 175
+ * 这种差半个像素的组合。 */
+export function stackCardBox(): CardBox {
+  const h = typeof document === 'undefined'
+    ? 0
+    : (document.querySelector<HTMLElement>('.net-board .net-lane-band .stack .card')?.offsetHeight ?? 0);
+  if (h > 0) return { w: (h - 2) * 0.71429 + 2, h };
+  return { w: (175 - 2) * 0.71429 + 2, h: 175 };   // 130.5717 × 175
+}
+
+/** 扇形步距（相邻两张手牌卡的**中心距**）。
+ *
+ * ## 算式与出处
+ *
+ * 手牌相邻卡的负 margin 是 `−0.2154 × 卡宽`（`styles-net.css:936/939` 的
+ * `calc(var(--card-w) * ±0.2154)`；热座是 `−28/130 = 0.2154…`，两处同源）⇒
+ *   **步距 = 卡宽 − 0.2154 × 卡宽 = 卡宽 × 0.7846**
+ *
+ * 逐位核对（两组数都已算）：
+ *  - **热座**：130 × 0.7846 = 101.998 ≈ **102** —— 与 `styles.css:879` 的步距一致；
+ *  - **远程页**：100.572 × 0.7846 = 78.909 —— 与 `styles-net.css:88` 注释里的
+ *    "每个步距 0.462 × --card-w" 是**不同的量**（那条是**竖向链路**的卡距，
+ *    手牌是横向的），本条只描述**手牌扇形**。
+ *
+ * ⚠️ 热座走的是**常量分支**（102），不是 `130 × 0.7846 = 101.998`：
+ * 两者差 0.002px（屏幕上不可见），但"热座逐字不变"是本波的红线 ——
+ * 常量分支让热座页**构造性**等于改动前那一行 `HAND_CARD_SPACING = 102`。 */
+export function handFanStep(): number {
+  const box = netProbe('.net-board .net-hands .card');
+  if (box) return box.w * (1 - 0.2154);
+  return 102;   // 热座（`styles.css:879` 的扇形步距；也覆盖"读不到"）
+}
+
+/** 空手牌时的**行内缩量**（= 扇形重叠量 = `卡宽 − 步距`）—— 抽牌幽灵落在空手牌槽里时的偏移。
+ *
+ * ## 为什么是 `卡宽 − 步距` 而不是单独一个数
+ *
+ * 手牌行的 `padding-left/right` 与相邻卡的负 margin 是**同一个量**
+ * （`styles-net.css:936/939` 两处都写 `calc(var(--card-w) * 0.2154)`；热座是 28px）。
+ * 步距 = 卡宽 − 重叠 ⇒ 重叠 = 卡宽 − 步距。把它写成减法而不是"再乘一次 0.2154"，
+ * 是为了让**步距成为唯一出处**：任何一边改了 0.2154，这里跟着走（不会出现
+ * "步距按新值、内缩按旧值"的错位）。
+ *
+ * ⚠️ 热座返回 `130 − 102 = 28`，与被替换掉的那个字面量 `28` **逐位相等** ⇒ 热座零变化。 */
+export function handFanLead(): number {
+  return handCardBox().w - handFanStep();
+}

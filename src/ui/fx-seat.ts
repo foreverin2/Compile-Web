@@ -86,22 +86,16 @@ export function applyFxViewSeat(seat: PlayerId): PlayerId {
  * 这几个**纯函数**（不读模块态）。真正的判据（哪一端是自己、外端在哪）都在下面，
  * 且都有单测；留着的死代码只会让"到底该调哪个"再多一种错误答案。 */
 
-/** "端"的语义：`0` = **自己端**（视觉小端：下半 / 向下 / 轨道下端），`1` = **对手端**（大端）。 */
-export type FxEndSide = PlayerId;
-
-/**
- * 把**按视角座位**表述的"哪一端"翻成**绝对玩家号**（供共享助手消费）。
- *
- * 例（控制轨，G2 修正 R3 的用户裁决"自己端在下、对手端在上"）：
- *  - `viewSeat = 0`（我是 P1）⇒ 自己端 = P0、对手端 = P1；
- *  - `viewSeat = 1`（我是 P2）⇒ 自己端 = **P1**、对手端 = **P0**（座位一换，绝对号就对调）。
- *
- * ⚠️ **只在渲染层调用**（`render-net.ts`）：热座页不许出现任何座位换算（那是"热座零变化构造性"的一部分）。
- * 反过来，共享助手 `render.ts` 也不该读座位 —— 把视角概念写进热座页源码会破坏那条构造性证明。
- */
-export function fxSeatEndToPlayer(side: FxEndSide, seat: PlayerId): PlayerId {
-  return (side === 0 ? seat : 1 - seat) as PlayerId;
-}
+/* ⚠️ **G2 修正 R16：这里原有一个导出 `fxSeatEndToPlayer(side, seat)` 与它的类型别名
+ * `FxEndSide`，现已删除** —— 零调用（与上面 Minor M-1 同一条纪律）。它的历史值得写下来，
+ * 因为**它本身就是 R16 修的缺陷**：它的语义是"**端 ⇒ 绝对玩家号**"，而唯一的调用点
+ * （`render-net.ts` 旧的 `netControlHolder`）拿它当"**绝对玩家号 ⇒ 端**"用，方向反了 ⇒
+ * 远程页两种座位下"自己持控停在上端 22%、对手持控停在下端 78%"，与 `fxTrackEndFor` 的
+ * 落点正好差 56%（158px 轨道 88.5px）。**"端 ⇒ 玩家"这条换算今天全仓不需要**：
+ *  - 位置端由 `render-net.ts` 的 `netControlEnd` 用 `fxIsSelfSide`（唯一判据）现算，
+ *    交 `renderControlModule` 的 `end` 参数；
+ *  - FX 落点由 `fxTrackEndFor(seat, to)` 从"玩家 + 座位"直接给百分比（不经"端"这个中间量）。
+ * 留着它只会给"把方向再搞反一次"提供一个现成的名字。 */
 
 /**
  * **哪一端是"自己"**的单一判据（G2 修正 R-F · Minor M-5）。
@@ -272,7 +266,25 @@ export function vStackEndPoint(
   if (last) {
     return { x, y: vOuterEdgeOf(last.getBoundingClientRect(), outer, 'y') + step * lead };
   }
-  return { x, y: vOuterEdgeOf(slotRect, outer, 'y') + step * lift };
+  // ⚠️ **空槽锚在槽的「内端」**（G2 修正 R15-3）—— 与上面"末卡"那一支**不对称**，但与热座分支同构。
+  //
+  // 为什么必须锚内端：**空链路**时"第一张卡将要出现的位置"在贴协议的那一侧（内端）—— 那是
+  // "链路从协议往外长"的定义，与 `render.ts` 的 `.grow-down` / `.grow-up` 的 `justify-content`
+  // 一起决定"整组第一张贴哪一端"（见 `renderStackSlot` 的 `vGrow` 说明：`.net-lane-band .stack`
+  // 有 `min-height`，内容不足时 `flex-start`/`flex-end` 真正起作用）：
+  //  · 自己侧（`outer === 'end'`，向下长、`flex-start`）⇒ 第一张贴**顶端** ⇒ 锚 `slotRect.top`；
+  //  · 对手侧（`outer === 'start'`，向上长、`flex-end`）⇒ 第一张贴**底端** ⇒ 锚 `slotRect.bottom`。
+  //
+  // ⚠️ 改动前锚的是**外端**（自己 = 下缘下方、对手 = 上缘上方）—— 与"第一张卡的真实落位"差了
+  // **整整一个链路跨度**（7 张卡的 `min-height`，实测 ≈419px）。受影响的不是边角情形，而是
+  // **空链路**这一整类 `stackEndPos` 特效：最普通的一条可达路径就是 `effects/index.ts` 的
+  // `playHandPlay`（空链路时打出的牌），另有偏转（`shift`）与 `fx-gen2.ts` 的冰桥。
+  // 症状是幽灵卡/特效打在链路框**外面**，而卡最终出现在框的**内端**。
+  //
+  // 写法与**热座**空槽分支（本文件下面那一支）逐字同构：把 `outer` 翻转一转再取边
+  // （热座那一支的注释写着"空槽时卡会落在靠协议那一侧"）—— 于是"空槽锚内端"这条约定只剩
+  // 一个出处，两条轴不可能再各说各话。`step` 仍按 `outer` 取（"再往外"的方向不变：自己 +、对手 −）。
+  return { x, y: vOuterEdgeOf(slotRect, outer === 'start' ? 'end' : 'start', 'y') + step * lift };
 }
 
 /**
@@ -441,8 +453,10 @@ export function vClipInsetCss(pct: number, outer: FxOuter): string {
  * 控制轨的**端归属**（G2 修正 R3 第二批：用户裁决"控制轨改成竖向，自己端在下、对手端在上"）
  *
  * 与"哪一端属于谁"分开的理由：这里只说"某个**端**在轨道轴的哪个百分比"，
- * "哪一端是我"由渲染层按座位换算（`render-net.ts` 的 `netControlHolder`）——
- * 两者混在一起就再也说不清"换了视角到底该动哪一步"。
+ * "哪一端是我"由渲染层按座位换算（`render-net.ts` 的 `netControlEnd`，R16 起交
+ * `renderControlModule` 的 `end` 参数）—— 两者混在一起就再也说不清"换了视角到底该动哪一步"。
+ * ⚠️ R16 之前这里写的是 `netControlHolder`，而那个函数把"端 ⇒ 绝对号"的换算**反着**用了
+ * （详见上面 `fxSeatEndToPlayer` 的删除说明）—— 名字里带 holder 的那一步正是缺陷所在。
  * ========================================================================== */
 
 /** 控制轨端点：`pct` = 沿轴的百分比、`axis` = 该百分比作用在哪条轴。 */
@@ -453,32 +467,67 @@ export interface FxTrackEnd { pct: number; axis: 'x' | 'y' }
  *
  * 它同时被两处消费，而这两处**必须逐字一致**（不一致的后果是"滑块贴 4%、而特效落点算在 5%"
  * —— 落点与组件错开，观感上像"特效没打在滑块上"）：
- *  - `render.ts` 的 `CONTROL_EDGE_PCT`（滑块位置：横 左 4% / 右 96%；竖 上 4% / 下 96%）；
- *  - 本文件的 `fxTrackEndFor`（FX 落点的端百分比）。
+ *  - `render.ts` 的 `CONTROL_EDGE_PCT`（**横向/热座**滑块位置：左 4% / 右 96%）；
+ *  - 本文件的 `fxTrackEndFor` 的**横向**分支（FX 落点的端百分比）。
  *  R3 之前在两边各写死一个字面量 `4`，靠注释说"同源"，没有任何机检把它们连起来；
  *  现在 `render.ts` **从这个常量取值**（`const CONTROL_EDGE_PCT = FX_TRACK_EDGE_PCT;`），
  *  改一处另一处一定跟着走。
+ *
+ * ⚠️ **竖向（远程页）另有其值** `FX_TRACK_EDGE_PCT_Y`（22 / 78，见下）——
+ * R14-1 给竖向两端做了内缩，而这条注释当时没跟着改，于是"单一出处"只覆盖了横向那一半。
  */
 export const FX_TRACK_EDGE_PCT = 4;
+
+/**
+ * **竖向**（远程页）控制轨的贴端百分比：**22% / 78%** —— 与横向的 4% / 96% **不是同一个数**。
+ *
+ * ## 为什么竖向必须另有其值（G2 修正 R14-1 → R14-5 收口）
+ *
+ * R14-1 把远程页的控制卡改成**中心对齐坐标**（`styles-net.css` 的
+ * `.net-board .control-slider-img { transform: translate(-50%, -50%) }`，修用户"卡片一直偏上"），
+ * 并把滑块两端内缩到 22% / 78%（`render.ts` 的 `CONTROL_EDGE_PCT_Y`）——
+ * 因为轨道只有 158px 高、卡片 70px，4% 处中心仅 6.3px ⇒ 上半张卡在轨道外。
+ *
+ * ⚠️ **当时漏了 FX 侧**：`fxTrackEndFor` 的竖向分支仍用 4 / 96，于是
+ *  - 卡片实际停位（中心对齐 + 22% / 78%）= 34.76 / 123.24 px（158px 轨道）；
+ *  - FX 落点（4% / 96%）= 6.32 / 151.68 px；
+ *  ⇒ **差 28.4px**，正是本文件上面那句"特效没打在滑块上"的观感缺陷，而 1114 条测试全绿。
+ *
+ * ## 为什么这个常量必须定义在**本文件**（而不是写进 `render.ts` 再被 import 回来）
+ *
+ * `render.ts` 已经 `import { FX_TRACK_EDGE_PCT } from './fx-seat'`（热座那一半的单一出处）。
+ * 若把竖向常量定义在 `render.ts`、再让本文件反向 import，就形成 **fx-seat ⇄ render 的循环依赖**
+ * （两个模块在加载期互相取值 —— 取值时机取决于谁先被加载，这是本项目反复禁止的"靠加载顺序活着"）。
+ * 所以单一出处的**方向**保持既有约定不变：**常量住在本文件，渲染层来取**。
+ * 于是 `render.ts` 的 `const CONTROL_EDGE_PCT_Y = FX_TRACK_EDGE_PCT_Y;` 与横向那一句同构，
+ * 两条轴各有**唯一**一个数字，谁都改不出"卡片在 22%、特效算在 4%"。
+ */
+export const FX_TRACK_EDGE_PCT_Y = 22;
 
 /** 贴端距离（比例）。`4 / 100` 与字面量 `0.04`、`1 - 4 / 100` 与 `0.96` 在 IEEE 双精度下**逐位相等**
  *  （已实测），所以下式的取值与 R3 之前的字面量完全一致。 */
 const FX_TRACK_EDGE = FX_TRACK_EDGE_PCT / 100;
 
+/** 竖向贴端距离（比例）。`22 / 100` 与 `0.22`、`1 - 22 / 100` 与 `0.78` 在 IEEE 双精度下逐位相等
+ *  （与上一条同理）—— 所以竖向取值就是渲染层写的那个百分比本身，不存在第二套舍入。 */
+const FX_TRACK_EDGE_Y = FX_TRACK_EDGE_PCT_Y / 100;
+
 /**
  * 端归属判据（**方向走的都是 `fxIsSelfSide` 这一处**）：
  *  - `null`（热座）：**横向**（`axis: 'x'`），**自己 = 绝对 P0** 贴小端 4%、对手贴大端 96%
  *    （与改动前的左右算式逐字等价；贴端距离见 `FX_TRACK_EDGE_PCT`）；
- *  - 座位（远程页）：**竖向**（`axis: 'y'`），**自己 = 视角座位那一号** ⇒ 大端（下）96%、
- *    对手 ⇒ 小端（上）4%（§8.4 的用户裁决）。
+ *  - 座位（远程页）：**竖向**（`axis: 'y'`），**自己 = 视角座位那一号** ⇒ 大端（下）78%、
+ *    对手 ⇒ 小端（上）22%（§8.4 的用户裁决 + R14-1 的中心对齐端缩，见 `FX_TRACK_EDGE_PCT_Y`）。
  *
  * ⚠️ 两类页面里"自己在哪一端"的**映射是相反的**（横排的自己在小端、竖排的自己在大端），
  * 所以这里保留两条分支；但两条分支的**判据**都只经 `fxIsSelfSide` —— 换视角时不可能只改半边。
+ * ⚠️ 两条分支的**贴端距离也各自只有一个出处**，且都由**渲染层**取同一个常量
+ * （`render.ts` 的 `CONTROL_EDGE_PCT` / `CONTROL_EDGE_PCT_Y`）—— "两处必须逐字一致"从此可机检。
  */
 export function fxTrackEndFor(seat: FxViewSeat, to: PlayerId): FxTrackEnd {
   return seat === null
     ? { pct: fxIsSelfSide(seat, to) ? FX_TRACK_EDGE : 1 - FX_TRACK_EDGE, axis: 'x' }
-    : { pct: fxIsSelfSide(seat, to) ? 1 - FX_TRACK_EDGE : FX_TRACK_EDGE, axis: 'y' };
+    : { pct: fxIsSelfSide(seat, to) ? 1 - FX_TRACK_EDGE_Y : FX_TRACK_EDGE_Y, axis: 'y' };
 }
 
 /**

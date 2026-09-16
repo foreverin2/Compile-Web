@@ -300,15 +300,40 @@ export function syncWrath0Cull(s: GameState): string[] {
     const seam = rec.node.querySelector<HTMLElement>('.g3sync-wrath0-seam');
     const chip = rec.node.querySelector<HTMLElement>('.g3sync-wrath0-chip');
     if (seam) {
+      // ── G2 修正 **R14-6**（本轮）：中缝必须按**页面轴向**画（热座横 / 远程竖） ──
+      // 判据：`fxViewSeat()`（`null` = 热座；非 null = 远程页）。它的**唯一写入点**是
+      // `render-net.ts` 的 `applyFxViewSeat`，热座渲染路径从不调用 ⇒ 热座恒走下面那条**逐字未改**
+      // 的横版分支（与本文件其它地方"用 `fxViewSeat()` 选竖向"的写法同源，例如 `controlTrackAxis`）。
+      //
+      // 为什么必须分轴：热座里两条能量槽是**同一行**的左右两端 ⇒ 横缝 = "跨在两槽之间"，
+      // 语义正确；远程页（`styles-net.css` 的竖排）里两条能量槽变成**同一列**的上/下两端 ⇒
+      // 沿 x 轴算出来的 left/width 会变成一条**压在协议/链路中部的水平虚线**，而
+      // `.g3sync-wrath0-seam::before/::after` 的三角箭头指向左右 —— 方向无意义（用户看到的
+      // 是一条横在列里的怪线 + 两个朝左右的箭头）。竖版 = 沿 y 轴跨两槽、箭头朝上下。
+      // ⚠️ 没有选"竖排下只保留 chip、隐藏缝"：见本轮报告的理由（缝是"最高档整条被划掉"
+      //    这条规则提示的**几何本体**，chip 只是它的注解；隐藏缝会让提示退化成一块孤立文字）。
+      const vertical = fxViewSeat() !== null;
+      // 类的增删在**两条分支都成立**且结果确定：热座下 `toggle('vert', false)` 对从未加过该类的
+      // 节点是**无操作**（DOM 逐字节不变）；它同时负责把"上一次是远程页"留下的类清掉。
+      seam.classList.toggle('vert', vertical);
       let left: number;
       let right: number;
       let midY: number;
+      // R14-6：竖版另需**两根槽各自的中心点**（`a` = 绝对玩家 0 的那根，`b` = 玩家 1 的那根）。
+      // 与 left/right/midY **同一份输入**（能量槽优先、取不到退链路槽），只是换个轴消费；
+      // 热座分支的取值与写法因此一个字都没动（这四行只是多算了一组数，不写任何 DOM）。
+      let ax: number;
+      let ay: number;
+      let bx: number;
+      let by: number;
       if (r0 && r1) {
         const cx0 = r0.left + r0.width / 2;
         const cx1 = r1.left + r1.width / 2;
         left = Math.min(cx0, cx1) - 34;
         right = Math.max(cx0, cx1) + 34;
         midY = (r0.top + r0.height / 2 + r1.top + r1.height / 2) / 2;
+        ax = cx0; ay = r0.top + r0.height / 2;
+        bx = cx1; by = r1.top + r1.height / 2;
       } else {
         const slotA = slotNode(0, line);
         const slotB = slotNode(1, line);
@@ -318,13 +343,30 @@ export function syncWrath0Cull(s: GameState): string[] {
         left = Math.min(ra.left, rb.left);
         right = Math.max(ra.right, rb.right);
         midY = (ra.top + ra.bottom + rb.top + rb.bottom) / 4;
+        ax = ra.left + ra.width / 2; ay = ra.top + ra.height / 2;
+        bx = rb.left + rb.width / 2; by = rb.top + rb.height / 2;
       }
-      seam.style.left = `${left}px`;
-      seam.style.top = `${midY}px`;
-      seam.style.width = `${Math.max(40, right - left)}px`;
-      if (chip) {
-        chip.style.left = `${(left + right) / 2}px`;
-        chip.style.top = `${midY}px`;
+      if (vertical) {
+        // 竖缝（R14-6）：`top = min(两槽中心 y) − 34`、`height = |两槽中心 y 之差| + 68`、
+        // `left = 两槽中心 x 的均值`（每端各外伸 34px = 与横版同一个"端外留量"），
+        // chip 挂在缝的**中点**（x = 缝的 x、y = midY）。
+        // `width` 由 `styles-net.css` 的竖版变体给 0（横版残留的内联 width 在这里清掉）。
+        seam.style.left = `${(ax + bx) / 2}px`;
+        seam.style.top = `${Math.min(ay, by) - 34}px`;
+        seam.style.height = `${Math.abs(ay - by) + 68}px`;
+        seam.style.width = '';
+        if (chip) {
+          chip.style.left = `${(ax + bx) / 2}px`;
+          chip.style.top = `${midY}px`;
+        }
+      } else {
+        seam.style.left = `${left}px`;
+        seam.style.top = `${midY}px`;
+        seam.style.width = `${Math.max(40, right - left)}px`;
+        if (chip) {
+          chip.style.left = `${(left + right) / 2}px`;
+          chip.style.top = `${midY}px`;
+        }
       }
     }
   }

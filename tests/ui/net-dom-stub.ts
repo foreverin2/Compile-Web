@@ -50,6 +50,14 @@ export interface StubNode {
   /** 父子指针（由 `appendChild`/`insertBefore`/`textContent=''` 维护；R7 起）。 */
   parentElement: StubNode | null;
   style: Record<string, unknown>;
+  /**
+   * **R15 修正补上显式类型**：与上面 `appendChild`/`insertBefore` **同一族问题** ——
+   * 它此前只存在于索引签名里，于是任何"读桩矩形"的测试代码拿到的是 `unknown`
+   * （`TS2571: Object is of type 'unknown'` / `TS18046: … is of type 'unknown'`），
+   * 只能靠 `as StubRect` 之类的强转消音。声明出来**运行时零变化**
+   * （实现仍是 `makeStubEl` 里那个"按节点覆盖 → 全局 → 全 0"的 `rectOf`）。
+   */
+  getBoundingClientRect(): StubRect;
   [k: string]: unknown;
 }
 
@@ -85,6 +93,48 @@ export function setStubRect(r: { left?: number; top?: number; width?: number; he
 
 const ZERO_RECT: StubRect = { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0 };
 
+/**
+ * **R15 修正新增**：**按节点**配矩形（`node` 自己的矩形，优先于全局 `setStubRect`）。
+ *
+ * 为什么必须加（且为什么不能用 `setStubRect` 凑）：R15 的三处缺陷里有一条判据是
+ * **"量的是哪一个节点"** —— 远程页的 `.protocol-holder`（未旋转的布局盒 `76.9×107.7`）与
+ * `img.protocol-img`（**旋转后**的视觉足迹 `107.7×76.9`）在真浏览器里**尺寸不同**，
+ * 而全局矩形让**所有**节点返回同一个 rect ⇒ "取 holder 的 rect"与"取 img 的 rect"在桩上
+ * **不可区分**（缺陷与修复都会绿）。按节点配矩形之后就能钉住"取到的是哪个盒子"。
+ *
+ * ⚠️ 语义与 `setStubRect` 完全同款：`{left, top, width, height}` 由四边推出，缺省补 0；
+ * 传 `null` 摘掉该节点的覆盖（回到全局）。⚠️ **`installStubDom()` 的 `restore()` 会清空整张表**，
+ * 不会漏到别的用例。⚠️ 这是**测试喂的常量**，桩不校验它与树的任何关系（仍不是布局引擎）。
+ *
+ * ⚠️ **形参类型是 `object | null`（不是 `{ getBoundingClientRect?: unknown }`）**：
+ * 后者是一个**全可选属性的 weak type**，TS 要求实参至少有一个**同名共有**属性，
+ * 而 `StubNode`（下方 `interface StubNode`）**没有**声明 `getBoundingClientRect`
+ * （它只存在于索引签名 `[k: string]: unknown` 里，索引签名不算"共有属性"）
+ * ⇒ 每个调用点都会 `TS2559: has no properties in common`，于是测试里被迫写
+ * `as unknown as object` 这种**为了绕过形参类型**的强转 —— 那本身就是形参类型错的信号。
+ * `StubNode` / `HTMLElement` / 任何桩节点都是 `object` ⇒ 放宽到 `object` 后**所有调用点零强转**，
+ * 而 `WeakMap<object, StubRect>` 的键类型不变 ⇒ 运行时**零变化**。
+ * （`StubNode` 的 `getBoundingClientRect` 也已在该接口上声明，见那里的说明。）
+ */
+const nodeRects = new WeakMap<object, StubRect>();
+
+export function setStubRectFor(node: object | null, r: {
+  left?: number; top?: number; width?: number; height?: number;
+} | null): void {
+  if (node === null || r === null) {
+    if (node !== null) nodeRects.delete(node);
+    return;
+  }
+  const left = r.left ?? 0;
+  const top = r.top ?? 0;
+  const width = r.width ?? 0;
+  const height = r.height ?? 0;
+  nodeRects.set(node, { left, top, width, height, right: left + width, bottom: top + height, x: left, y: top });
+}
+
+/** 该节点的矩形（按节点覆盖 → 全局 → 全 0）。 */
+const rectOf = (node: object): StubRect => nodeRects.get(node) ?? stubRect ?? ZERO_RECT;
+
 /** 造一个桩节点（`appendChild` / `textContent` / `className` 的手写最小语义）。 */
 export function makeStubEl(tag: string): StubNode {
   const set = new Set<string>();
@@ -117,6 +167,10 @@ export function makeStubEl(tag: string): StubNode {
     insertBefore: (c: StubNode) => { c.parentElement = node; node.children.unshift(c); return c; },
     /** R7：父子指针（由 `appendChild`/`insertBefore`/`textContent=''` 维护） */
     parentElement: null,
+    /** R15：矩形（按节点覆盖 → 全局常量 → 全 0）。**放在字面量里**是为了让它成为
+     *  `StubNode` 接口的**显式成员**（此前它在 `extra` 里 ⇒ 测试侧读到的是 `unknown`）。
+     *  闭包引用 `node` 是安全的：它只在这个箭头被**调用**时才求值。 */
+    getBoundingClientRect: () => rectOf(node),
   };
   const extra: Record<string, unknown> = {
     removeChild: () => { /* noop */ },
@@ -141,7 +195,9 @@ export function makeStubEl(tag: string): StubNode {
     querySelector: (sel?: string) => queryAllIn(node, String(sel ?? ''))[0] ?? null,
     querySelectorAll: (sel?: string) => queryAllIn(node, String(sel ?? '')),
     closest: () => null,
-    getBoundingClientRect: () => (stubRect ?? ZERO_RECT),
+    // ⚠️ `getBoundingClientRect` 已上移到上面的字面量里（R15：让它成为接口的显式成员，
+    //    否则测试侧读到 `unknown`）。这里**不再**重复定义 —— 重复会被 `Object.assign` 覆盖，
+    //    两份实现一旦漂移就是本项目反复栽过的"两份真相"。
     getContext: () => null,
     focus: () => { /* noop */ },
     click: () => { /* noop */ },
@@ -228,6 +284,9 @@ export function installStubDom(): () => void {
     g.window = prevWin;
     g.requestAnimationFrame = prevRaf ?? (() => 0);
     setStubRect(null);   // 矩形常量是**本用例**的输入，不许漏到别的用例
+    // ⚠️ 按节点矩形**不需要**显式清：它是 `WeakMap`，键是**本用例新建的那些桩节点**，
+    //    用例结束后键不可达 ⇒ 条目随之回收；`installStubDom()` 每次都用**新的** `body`，
+    //    所以"新用例里同名节点的旧矩形"不可能被读到。
   };
 }
 

@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createGame } from '../../src/core/state/create';
 import { renderNetBoard, laneScrollDefault, verifyPageHooks } from '../../src/ui/render-net';
-import { setFxViewSeat } from '../../src/ui/fx-seat';
+import { setFxViewSeat, FX_TRACK_EDGE_PCT_Y } from '../../src/ui/fx-seat';
 import {
   assertNoUnmodelableCascade, cssLenOf, cssRules, cssVarOf, MODELED_PROPS, subjectPropOf, type CssRule,
 } from './net-css-parse';
@@ -365,7 +365,19 @@ describe('R11-2 · G-13：停靠栏（一个视口高 · 链路区内部滚动 �
     const rs = hotSrc();
     expect(rs, '竖向控制轨的两端没有内缩（4%/96% + 中心对齐 ⇒ 卡片上半/下半出轨道）')
       .toMatch(/const edge = vertical \? CONTROL_EDGE_PCT_Y : CONTROL_EDGE_PCT;/);
-    expect(rs, 'CONTROL_EDGE_PCT_Y 未定义').toMatch(/const CONTROL_EDGE_PCT_Y = \d+;/);
+    // ⚠️ **判据修正（R14-5）**：旧句是 `toMatch(/const CONTROL_EDGE_PCT_Y = \d+;/)`。
+    //    **旧句为什么必须改**：R14-1 之后 `CONTROL_EDGE_PCT_Y` 不再允许是**本文件的字面量** ——
+    //    它必须从 `fx-seat.ts` 的 `FX_TRACK_EDGE_PCT_Y` 取，否则 FX 侧的竖向落点
+    //    （`fxTrackEndFor`）就会与卡片实际停位错开 28.4px（R14-1 的回归本身）。
+    //    旧句恰好只要求"写了个数字"，所以那条回归在它眼皮底下发生。**新句多查了什么**：
+    //    ① 取值形态必须是"从 fx-seat 的常量取"；② 数值确实**等于** fx-seat 导出的那个数
+    //    （两条腿：一条挡"写回字面量"、一条挡"取了别的常量"）。
+    expect(rs, 'CONTROL_EDGE_PCT_Y 不再从 fx-seat 的竖向贴端常量取（卡片与特效会再差 ~28px）')
+      .toMatch(/const CONTROL_EDGE_PCT_Y = FX_TRACK_EDGE_PCT_Y;/);
+    expect(rs, 'render.ts 又把竖向贴端距离写回字面量了（单一出处被绕开）')
+      .not.toMatch(/const CONTROL_EDGE_PCT_Y = \d+;/);
+    expect(FX_TRACK_EDGE_PCT_Y, 'fx-seat 的竖向贴端常量必须是 22（卡片高 70px / 轨道 158px 的内缩值）')
+      .toBe(22);
     // ② R14-2：翻面查看的判据必须**按信息是否公开**（正面卡永远可看背面），
     //    反面卡用 `isSelfSlot`（按座位）而**不是** `card.owner === s.turnPlayer`（按回合 ⇒ 远程页会在
     //    对手回合放开对手的反面卡）。
@@ -374,10 +386,22 @@ describe('R11-2 · G-13：停靠栏（一个视口高 · 链路区内部滚动 �
       .toBeTruthy();
     expect(rs, '翻面查看的判据里仍有 `card.owner === s.turnPlayer`（按回合 ⇒ 用户报的 bug 形态）')
       .not.toMatch(/openZoom\(card\.defId, card\.faceUp, false, false,[^;]*card\.owner === s\.turnPlayer/);
-    // ③ 远程页的槽交互权 = 我这一侧 + 轮到我
-    expect(netSrc(), '远程页的槽交互仍是按"那个玩家是不是回合玩家"判的 —— '
-      + '对手回合时对手的槽会变成可交互（hover/落点/点击打牌）')
-      .toMatch(/const canAct = isSelfSeat && myTurn;/);
+    // ③ 远程页的槽交互权 = 「我这一侧 + 轮到我」为**必要条件**，并**额外**放行"这个槽是合法落点"
+    //    ⚠️ **判据修正（R15-3）**：旧句是 `toMatch(/const canAct = isSelfSeat && myTurn;/)` ——
+    //    **旧句为什么必须改**：R15 给 `canAct` 加了第二个放行项（腐化0 打对方场时对手槽也要可交互，
+    //    否则点击落点与拖拽高亮两条路径都不可达），判据对象**确实变了**。
+    //    **新句多查了什么**：① 必要条件 `(isSelfSeat && myTurn)` **仍在**（R14-2 的语义：
+    //    对手回合时对手的槽不得可交互）；② 合法落点项 `selectedCanPlayHere` 必须与它**同一个 OR**；
+    //    ③ 反空集合：不许退化成 `myTurn`（丢掉 isSelfSeat ⇒ 对手回合时对手槽又亮了）或恒 `true`。
+    //    ⚠️ 这里钉的是**形态**；"合法落点确实把对手槽点亮 / 不合法时不点亮"由**行为腿**钉
+    //    （`tests/ui/net-opp-slot-interactable.test.ts` 真跑 `renderNetBoard` 读 DOM 类名）——
+    //    两条腿分工见该文件的头注，互不重复也不留空档。
+    expect(netSrc(), '远程页的槽交互不再以"我这一侧 + 轮到我"为**必要条件**了（对手回合时对手槽会可交互）')
+      .toMatch(/const canAct = \(isSelfSeat && myTurn\) \|\| selectedCanPlayHere;/);
+    expect(netSrc(), 'canAct 退化成只看回合了（丢掉 isSelfSeat ⇒ 对手回合时对手的槽又变成可交互）')
+      .not.toMatch(/const canAct = myTurn;/);
+    expect(netSrc(), 'canAct 出现了"恒 true"的形态（所有槽无条件可交互）')
+      .not.toMatch(/const canAct = true;/);
   });
 
   it('G-13d（前提腿）：styles-net.css 不得含 `!important` / ID / 内联覆盖（与既有三条腿同一份实现）', () => {

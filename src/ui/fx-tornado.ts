@@ -13,9 +13,25 @@
  * 参数集中在本文件顶部常量，微调即可。
  */
 
-/** 龙卷风视觉盒尺寸（px；styles.css .fx-speed-tornado 同步） */
+/** 龙卷风视觉盒尺寸（px；styles.css .fx-speed-tornado 同步）
+ *
+ * ⚠️ **G2 修正 R15-A**：这两个数是**热座卡**（130 × 178.8）的 90.8% / 95.1% ——
+ * 也就是说这个特效的尺寸本来就是**相对卡**定义的（118 / 130 = 0.908、
+ * 170 / 178.8 = 0.951），不是一个独立的绝对尺寸。远程页的卡小到 100.572 × 137.601
+ * （场上卡 100.572 × 140）⇒ 再用 118 × 170 就变成卡宽的 117% / 卡高的 121%
+ * （**溢出卡外、压到相邻列**）。所以 `buildTornadoFx` 收一个 `scale`：
+ * 按"真卡的 `--card-h` ÷ 热座卡的 175"整体缩放，盒尺寸 / SVG viewBox / 半径一起缩
+ * ⇒ 与卡的**比例**在两种页面里一致。`scale = 1` 时逐字等于改动前（热座构造性不变）。 */
 export const TORNADO_W = 118;
 export const TORNADO_H = 170;
+
+/** 热座场上卡的 `--card-h`（`styles.css:422`）—— `scale` 的基准分母。
+ *  用**场上卡**而不是热座手牌卡的 178.8：本特效的两个消费点里，
+ *  偏转场景落在**场上链路**（`playSpeedShiftExtra` 的终点 = `stackEndPos`），
+ *  抽牌场景是"牌库 → 手牌"的**飞行物**（起点/终点都是一张**卡大小的东西**）。
+ *  以场上卡的 175 为基准时，热座两个场景都是 `175/175 = 1` ⇒ 逐字不变；
+ *  远程页两个场景都按 140/175 = 0.8 缩。 */
+export const TORNADO_BASE_CARD_H = 175;
 
 /** 粒子数：锥面包络采样密度（观感与性能平衡点） */
 const TORNADO_PARTICLES = 30;
@@ -37,9 +53,9 @@ const SPRING_TURNS = 4;
  *  顶部「划的圆」最大、向下逐圈收小 → 弹簧式线圈越往下越小；3 条相位 120° 均布像
  *  缠绕在漏斗上的弹簧。线身细 stroke，发光弱化（读作线条而非平面），静态跟随粒子
  *  容器整体缩放/平移；呼吸明暗由 CSS .fx-spring-line 提供（负 delay 错相）。 */
-function buildSpringLine(phaseRad: number): SVGSVGElement {
-  const W = TORNADO_W;
-  const H = TORNADO_H;
+function buildSpringLine(phaseRad: number, scale: number): SVGSVGElement {
+  const W = TORNADO_W * scale;
+  const H = TORNADO_H * scale;
   const cx = W / 2;
   const rTop = W / 2 - 8; // 顶部（云帽）半径，与粒子 rMax 一致
   const steps = 64;
@@ -62,17 +78,30 @@ function buildSpringLine(phaseRad: number): SVGSVGElement {
   return svg;
 }
 
-/** 构造一个粒子龙卷风容器（含弹簧线条 + 全部粒子轨道），绝对定位于调用方坐标系中心 */
-export function buildTornadoFx(): HTMLElement {
+/** 构造一个粒子龙卷风容器（含弹簧线条 + 全部粒子轨道），绝对定位于调用方坐标系中心。
+ *
+ * `scale`（G2 修正 R15-A）：整体缩放系数，缺省 `1` = **热座**（逐字等于改动前）。
+ * 调用方按"真卡的 `--card-h` ÷ `TORNADO_BASE_CARD_H`"传（远程页 = 140 / 175 = 0.8）。
+ * 缩的不只是盒尺寸：SVG 的 `viewBox` / `width` / `height`、云帽半径 `rMax` 一起缩 ⇒
+ * 粒子包络与弹簧线**同比例**，不会出现"盒缩了而粒子还按 118 的半径铺"的错位。 */
+export function buildTornadoFx(scale = 1): HTMLElement {
+  const W = TORNADO_W * scale;
+  const H = TORNADO_H * scale;
   const tornado = document.createElement('div');
   tornado.className = 'fx-speed-tornado';
+  // G2 修正 R15-A：内联宽高**必须**写 —— `styles.css:3029-3030` 的 `.fx-speed-tornado`
+  // 写死 `118px / 170px`（热座值），而本元素在**两个**消费点里都在 body 级浮层内
+  // （不在 `.net-board` 里）⇒ styles-net.css 命不中它，只能内联覆盖。
+  // `scale === 1` 时这两个内联值与 CSS 逐字相同 ⇒ 热座视觉零变化。
+  tornado.style.width = `${W}px`;
+  tornado.style.height = `${H}px`;
   // 弹簧线条先挂（粒子在上层）；3 条相位均布 + 负 delay 呼吸错相
   for (let i = 0; i < SPRING_LINES; i++) {
-    const line = buildSpringLine((Math.PI * 2 * i) / SPRING_LINES);
+    const line = buildSpringLine((Math.PI * 2 * i) / SPRING_LINES, scale);
     line.style.animationDelay = `${-(i * 1.25).toFixed(2)}s`;
     tornado.appendChild(line);
   }
-  const rMax = TORNADO_W / 2 - 8; // 顶部（云帽）最大半径
+  const rMax = W / 2 - 8 * scale; // 顶部（云帽）最大半径（8px 的边距也跟着缩）
   for (let i = 0; i < TORNADO_PARTICLES; i++) {
     const y01 = Math.min(0.97, Math.max(0.03, (i + 0.5) / TORNADO_PARTICLES + (Math.random() - 0.5) * 0.02));
     // 倒锥漏斗母线：顶部 (y≈0) 半径 ≈ rMax，向下 (y→1) 收窄到 ≈0.14·rMax（触地细尖）

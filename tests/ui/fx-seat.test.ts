@@ -2,10 +2,13 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
-  applyFxViewSeat, domRectOf, fxHandEndPoint, fxIsSelfSide, fxOuterFor, fxOuterForSeat, fxStackEndPoint,
-  fxTrackEndFor, fxTrackEndPos, fxTrackFallbackPct, fxViewSeat, FX_TRACK_EDGE_PCT, handOuterFor,
-  handReversed, setFxViewSeat, vClipInsetCss, vClipInsetPct, vOuterEdgeOf, vStackEndPoint, vVisibleStripRect,
+  applyFxViewSeat, domRectOf, fxHandEndPoint, fxIsSelfSide, fxOuterFor, fxOuterForSeat,
+  fxStackEndPoint, fxTrackEndFor, fxTrackEndPos, fxTrackFallbackPct, fxViewSeat, FX_TRACK_EDGE_PCT,
+  FX_TRACK_EDGE_PCT_Y, handOuterFor, handReversed, setFxViewSeat, vClipInsetCss, vClipInsetPct,
+  vOuterEdgeOf, vStackEndPoint, vVisibleStripRect,
 } from '../../src/ui/fx-seat';
+import { renderControlModule } from '../../src/ui/render';
+import { installStubDom, type StubNode } from './net-dom-stub';
 import { fxOrientOf, fxRotMarkerOf } from '../../src/ui/fx-orient';
 import { clipInsetCss, clipInsetRightPct, coverUidOf, coveredOuterOf, visibleRectOf } from '../../src/ui/gen3-util';
 import { stripComments } from './source-text';
@@ -167,12 +170,47 @@ describe('R3 · 链路落点（自己向下 / 对手向上）', () => {
     expect(vStackEndPoint(slotStub(slot, [foeCards[0]]), 1).y).toBe(vStackEndPoint(slotStub(slot, [foeCards[0], foeCards[1]]), 1).y);
   });
 
-  it('vStackEndPoint：空槽退化到槽的外缘外侧（自己 bottom(900) + 90 / 对手 top(400) − 90）', () => {
+  it('vStackEndPoint：空槽退化到槽的**内端**（自己 top(400) + 90 / 对手 bottom(900) − 90）', () => {
+    // ⚠️ **判据修正（R15-3）**：本用例原来是 `990 / 310`（= 锚在槽的**外端**：自己 bottom(900) + 90、
+    //    对手 top(400) − 90）。**旧期望是错的**：空链路时第一张卡真实落在**内端**（贴协议那一侧，
+    //    由 `.grow-down` 的 `flex-start` / `.grow-up` 的 `flex-end` 与 `.stack` 的 `min-height`
+    //    共同决定），所以落点必须锚内端 —— 新期望 `490 / 810`。旧句把"锚在外端"这个错误
+    //    **固化成了绝对断言**，于是一整类特效（空链路打出 `playHandPlay` / 偏转 / 冰桥）把幽灵卡
+    //    打在链路框外面（差一整跨 ≈419px）时，全套 1114 项仍然全绿。
+    //    判据对象**确实变了**（`vStackEndPoint` 的空槽分支从 `vOuterEdgeOf(slotRect, outer, 'y')`
+    //    改成翻转一转），所以这条断言必须改 —— 推导见 `src/ui/fx-seat.ts` 里那一段。
     const slot = rect(200, 400, 140, 500);
     const stub = slotStub(slot, []);
     setFxViewSeat(0);
-    expect(vStackEndPoint(stub, 0).y).toBe(990);
-    expect(vStackEndPoint(stub, 1).y).toBe(310);
+    expect(vStackEndPoint(stub, 0).y, '自己侧（向下长、flex-start）⇒ 第一张贴**顶端**').toBe(490);
+    expect(vStackEndPoint(stub, 1).y, '对手侧（向上长、flex-end）⇒ 第一张贴**底端**').toBe(810);
+    // ⚠️ **这里不能沿用"自己更靠下"那条相对断言**（R15-3）：空槽的两支锚在**各自的槽**上，而
+    //    远程页两侧的槽是**关于中线镜像**的两块矩形（对手列在上半、自己列在下半）——
+    //    自己槽的内端是它的**顶**（490）、对手槽的内端是它的**底**（810）。"自己更靠下"只对
+    //    "同一块矩形里的两个锚点"成立（即末卡那一支），跨两块镜像矩形时它本来就是错的命题。
+    //    真正的不变式是：**空槽锚内端、末卡锚外端**（下面用绝对值和"两者不同"两条来钉）。
+    // 绝对值判据：必须落在槽**内**（不是框外那一整跨），且距内端恰为 lift = 90
+    const self = vStackEndPoint(stub, 0);
+    const foe = vStackEndPoint(stub, 1);
+    expect(self.y, '自己侧落点跑到槽框外了（旧缺陷：锚在外端 ⇒ 990，比槽下缘 900 还低 90）')
+      .toBeLessThanOrEqual(slot.bottom);
+    expect(self.y).toBeGreaterThanOrEqual(slot.top);
+    expect(foe.y, '对手侧落点跑到槽框外了（旧缺陷：锚在外端 ⇒ 310，比槽上缘 400 还高 90）')
+      .toBeGreaterThanOrEqual(slot.top);
+    expect(foe.y).toBeLessThanOrEqual(slot.bottom);
+    expect(slot.top + 90).toBe(self.y);
+    expect(slot.bottom - 90).toBe(foe.y);
+    // 内端的**方向**也跟着侧别镜像：自己是槽的顶、对手是槽的底
+    expect(self.y, '自己侧的内端 = 槽顶（贴协议那一侧在上半）').toBeLessThan(slot.top + slot.height / 2);
+    expect(foe.y, '对手侧的内端 = 槽底（贴协议那一侧在下半）').toBeGreaterThan(slot.top + slot.height / 2);
+    // 反空集合：**末卡**那一支不许被这次改动带偏（它本来就锚外端、是对的）
+    const last = rect(205, 800, 130, 180);
+    const withCard = slotStub(slot, [last]);
+    expect(vStackEndPoint(withCard, 0).y, '自己侧有卡时仍锚**末卡下缘外侧**（+65）').toBe(980 + 65);
+    expect(vStackEndPoint(withCard, 1).y, '对手侧有卡时仍锚**末卡上缘外侧**（−65）').toBe(800 - 65);
+    // 空槽 ⇄ 有卡 必须落在**不同**的锚点（同值会让"空槽分支根本没被走到"看不出来）
+    expect(self.y).not.toBe(vStackEndPoint(withCard, 0).y);
+    expect(foe.y).not.toBe(vStackEndPoint(withCard, 1).y);
   });
 
   it('**热座零变化（构造性）**：seat === null 时逐字段等于改动前的左右算式', () => {
@@ -250,8 +288,12 @@ describe('R3 · 链路落点（自己向下 / 对手向上）', () => {
     for (const [seat, owner, msg, want] of CASES) {
       setFxViewSeat(seat);
       expect(fxStackEndPoint(withCard, fxViewSeat(), owner), msg).toEqual({ x: 270, y: want });
-      // 空槽同源：自己 = 槽下缘 + 90、对手 = 槽上缘 − 90（两种席位都查）
-      const wantEmpty = owner === seat ? slot.bottom + 90 : slot.top - 90;
+      // 空槽同源：**锚在槽的内端**（自己 = 槽顶 + 90、对手 = 槽底 − 90；两种席位都查）。
+      // ⚠️ **判据修正（R15-3）**：旧句是 `owner === seat ? slot.bottom + 90 : slot.top - 90`
+      //    （= 锚在槽的**外端**）。**旧期望是错的** —— 空链路时第一张卡落在贴协议的**内端**
+      //    （见 `src/ui/fx-seat.ts` 的空槽分支推导），落点必须随之锚内端。旧句把这个错误
+      //    写成了绝对断言，正是它让"空链路特效落在框外一整跨（≈419px）"一直没被发现。
+      const wantEmpty = owner === seat ? slot.top + 90 : slot.bottom - 90;
       expect(fxStackEndPoint(empty, fxViewSeat(), owner), `${msg}（空槽）`)
         .toEqual({ x: 270, y: wantEmpty });
       // 同一张卡：自己与对手必须落在**不同**的一端
@@ -605,26 +647,141 @@ describe('R3 · 控制轨端归属（用户裁决：竖向，自己端在下 / �
     expect(p0.x).toBeLessThan(p1.x);
   });
 
-  it('**远程页**：竖向 —— 自己端在**下**（96%）、对手端在**上**（4%）；两种视角都对', () => {
+  it('**远程页**：竖向 —— 自己端在**下**（78%）、对手端在**上**（22%）；两种视角都对', () => {
+    // ⚠️ **判据修正（R14-5）**：竖向取值从 96% / 4% 改成 **78% / 22%**。
+    //    **旧句为什么必须改**：R14-1 把远程页控制卡改成"中心对齐坐标"并把滑块两端内缩到
+    //    `CONTROL_EDGE_PCT_Y = 22`（卡高 70px、轨道 158px，4% 处中心仅 6.3px ⇒ 上半张卡出轨道），
+    //    但 FX 落点这条竖向分支仍按旧的 4/96 算 ⇒ 卡片心在 34.76/123.24px、特效落在
+    //    6.32/151.68px，**差 28.4px**（`fx-seat.ts` 自己写着"两处必须逐字一致"的不变式）。
+    //    旧的 0.96/0.04 就是那个回归本身，所以必须改。
+    //    **新句多查了什么**：① 竖向取值由 `FX_TRACK_EDGE_PCT_Y` 派生（不是字面量）；
+    //    ② 与 `render.ts` 从**同一个常量**取到的值相等（下面第三条用例是那条可执行同源断言）；
+    //    ③ 158px 轨道下的绝对像素落点与"卡片中心对齐 + 22%/78%"逐位相等（挡住"改回 4%"与
+    //    "把 22 只改在渲染侧"两种变异）。
     // viewSeat = 0（我是 P1）：自己 = P0 ⇒ 下；对手 = P1 ⇒ 上
-    expect(fxTrackEndFor(0, 0)).toEqual({ pct: 0.96, axis: 'y' });
-    expect(fxTrackEndFor(0, 1)).toEqual({ pct: 0.04, axis: 'y' });
+    expect(fxTrackEndFor(0, 0)).toEqual({ pct: 0.78, axis: 'y' });
+    expect(fxTrackEndFor(0, 1)).toEqual({ pct: 0.22, axis: 'y' });
     // viewSeat = 1（我是 P2）：**绝对号反了**，但"自己在下"不变 ⇒ P1 在下、P0 在上
-    expect(fxTrackEndFor(1, 1)).toEqual({ pct: 0.96, axis: 'y' });
-    expect(fxTrackEndFor(1, 0)).toEqual({ pct: 0.04, axis: 'y' });
+    expect(fxTrackEndFor(1, 1)).toEqual({ pct: 0.78, axis: 'y' });
+    expect(fxTrackEndFor(1, 0)).toEqual({ pct: 0.22, axis: 'y' });
     const self = fxTrackEndPos(track, 0, 0);
     const foe = fxTrackEndPos(track, 0, 1);
     expect(self.at.axis).toBe('y');
     expect(self.x, '竖向的 x 恒为轨道中心').toBe(430);
     expect(foe.x).toBe(430);
-    expect(self.y, '自己端 = 下端').toBeCloseTo(400 + 120 * 0.96, 6);
-    expect(foe.y, '对手端 = 上端').toBeCloseTo(400 + 120 * 0.04, 6);
+    expect(self.y, '自己端 = 下端').toBeCloseTo(400 + 120 * 0.78, 6);
+    expect(foe.y, '对手端 = 上端').toBeCloseTo(400 + 120 * 0.22, 6);
     // 变异"上下对调"的直接判据（**绝对**断言，不靠两者互相比较）
     expect(self.y).toBeGreaterThan(track.top + track.height / 2);
     expect(foe.y).toBeLessThan(track.top + track.height / 2);
     // 反向：换视角后"自己"仍在下（绝对号变了、端没变）
     expect(fxTrackEndPos(track, 1, 1).y).toBeCloseTo(self.y, 6);
     expect(fxTrackEndPos(track, 1, 0).y).toBeCloseTo(foe.y, 6);
+  });
+
+  /**
+   * **R14-5 守卫（本轮新增 · 修复 1 的核心）**：竖向贴端距离与**渲染层的滑块停位**同源。
+   *
+   * 为什么必须有一条**可执行**的同源断言：`fx-seat.ts` 的 `FX_TRACK_EDGE_PCT` 注释里写着
+   * "两处必须逐字一致，否则观感上像特效没打在滑块上" —— 而 R14-1 恰恰在**渲染侧**把竖向
+   * 内缩到 22 / 78，FX 侧留在 4 / 96，1114 条测试**没有一条**发现（旧断言把 4/96 钉成了正确值）。
+   *
+   * 这条用例把两处**各自的取值**拿出来比对（而不是在源码里对字面量）：
+   *  - 真跑 `renderControlModule({ axis: 'y' })` 两次（`holder` 0 / 1 = 竖向轨的小端 / 大端），
+   *    **读回 DOM 上真正写进去的 `top` 百分比**（双 rAF 之后是终值）—— 那是"卡片实际停位"的
+   *    唯一出处，也是 `styles-net.css` 第 9 节那套"中心对齐 + 22/78"真正落到像素上的一步；
+   *  - 把 `fxTrackEndFor` 在**两个座位 × 两个玩家**上的竖向取值收成一个集合 —— 它必须与
+   *    渲染层的两个停位**逐位相同**（`4/96` 会差 18% = 158px 轨道上 28.4px）。
+   *
+   * ⚠️ **判据的层级（重要，别把这条读成"逐玩家比对"）**：本用例钉的是**两个端点本身同源**
+   *   （"贴在 22% 的那个端"与"FX 算作 22% 的那个端"是同一个数）。**逐玩家**的配对
+   *   （"某玩家持有控制权时卡片与特效是否落在同一端"）是**另一个**判据，且它今天**不成立** ——
+   *   见下面 ⑤ 的已知缺陷记录（用真实渲染器探针实测）。
+   */
+  it('R14-5：竖向 FX 的两个端点 == 渲染层写进 DOM 的两个停位（单一出处；158px 轨道下同像素）', () => {
+    const restore = installStubDom();
+    /** 双 rAF 的**确定性**收尾：`renderControlModule` 用 `rAF(rAF(write))` 做"先落上一帧位置、
+     *  下一帧再过渡到目标位置"的动画。桩的 rAF 是 `setTimeout(0)`，靠 `await sleep` 猜时机
+     *  在**模块级 `controlSliderPos`**（上一帧位置，跨用例存活）面前不可靠 ——
+     *  所以这里把 rAF 回调**同步收集**起来，一个用例跑完它的两层 rAF 再读值。
+     *  ⚠️ 必须**逐用例**跑完（不是"四个都渲染完再一起跑"）：四个模块共用同一个 `frameQueue` 时，
+     *  外层回调会在执行时把内层回调追加到队尾，FIFO 跑完的顺序是
+     *  `外层1,外层2,外层3,外层4,内层1,内层2,…`，而内层调用的 rAF 是在**渲染期**注册的
+     *  （比后面的外层更早入队）⇒ 后面的外层会晚于前面的内层执行、**覆盖**前面已经写好的终值
+     *  （实测：`78/22/78/22`，看起来像"模块自己算错了"，其实是测试的队列用法错了）。 */
+    const frameQueue: Array<() => void> = [];
+    (globalThis as { requestAnimationFrame: (fn: () => void) => number }).requestAnimationFrame =
+      (fn: () => void) => { frameQueue.push(fn); return frameQueue.length; };
+    /** 跑完当前队列里的两层 rAF（FIFO；内层回调会追加到队尾，跑到空为止）。 */
+    const settle = (): void => {
+      for (let guard = 0; frameQueue.length > 0 && guard < 100; guard++) frameQueue.shift()!();
+    };
+    try {
+      // ── ① 渲染层：竖向轨的**两个停位**（holder 0 = 小端/上、holder 1 = 大端/下） ──
+      const domStops: number[] = [];
+      for (const holder of [0, 1] as const) {
+        const s = { control: holder } as unknown as Parameters<typeof renderControlModule>[0];
+        const mod = renderControlModule(s, { axis: 'y' });
+        const img = (mod as unknown as { querySelector(sel: string): StubNode | null })
+          .querySelector('.control-slider-img');
+        expect(img, `holder=${holder}：竖向控制模块里找不到 .control-slider-img`).toBeTruthy();
+        settle();   // 双 rAF：终值（不是"上一帧位置"）
+        const written = img!.style.top;
+        expect(typeof written, `holder=${holder}：滑块没有写内联 top（竖向位置无出处）`).toBe('string');
+        domStops.push(Number(String(written).replace('%', '')));
+      }
+      // ── ② FX 侧：两个座位 × 两个玩家的竖向端点收成集合（必须恰好是两个数） ──
+      const fxStops = new Set<number>();
+      for (const seat of [0, 1] as const) {
+        for (const to of [0, 1] as const) {
+          const at = fxTrackEndFor(seat, to);
+          expect(at.axis, `seat=${seat} to=${to}：远程页的竖向端点不再落 y 轴`).toBe('y');
+          fxStops.add(Number((at.pct * 100).toFixed(6)));
+        }
+      }
+      // ③ 同源判据：两个端点**逐位相同**（R14-1 的回归形态是渲染 22/78 vs FX 4/96）
+      expect([...fxStops].sort((a, b) => a - b), 'FX 的竖向端点与渲染层写进 DOM 的停位不同源 ——'
+        + '卡片与特效会错开（R14-1 的形态：FX 留在 4/96、卡片内缩到 22/78，差 18% = 28.4px）')
+        .toEqual([...domStops].sort((a, b) => a - b));
+      // 反空集合：必须就是 fx-seat 导出的那个常量派生的两个数（挡住"两边一起退回 4/96"）
+      expect(domStops, '竖向停位不再是 FX_TRACK_EDGE_PCT_Y 派生的 22/78')
+        .toEqual([FX_TRACK_EDGE_PCT_Y, 100 - FX_TRACK_EDGE_PCT_Y]);
+      // ── ③b 像素：158px 轨道（styles-net.css 实测）上，两边落在**同样的两个像素** ──
+      const track158 = rect(100, 200, 40, 158);
+      const px = (pct: number): number => track158.top + track158.height * (pct / 100);
+      const cardPx = [...domStops].sort((a, b) => a - b).map(px);
+      const fxPx = [...fxStops].sort((a, b) => a - b).map(px);
+      for (const [i, v] of fxPx.entries()) {
+        expect(Math.abs(v - cardPx[i]), `端点 ${i}：卡片停位 ${cardPx[i].toFixed(2)}px 与 FX 落点 `
+          + `${v.toFixed(2)}px 相差 ${Math.abs(v - cardPx[i]).toFixed(2)}px（R14-1 的回归是 28.44px）`)
+          .toBeLessThan(0.001);
+      }
+      // 轨道 top = 200 ⇒ 小端 200 + 158×0.22 = 234.76、大端 200 + 158×0.78 = 323.24
+      expect(cardPx[0], '小端像素（200 + 22% of 158 = 234.76）').toBeCloseTo(234.76, 6);
+      expect(cardPx[1], '大端像素（200 + 78% of 158 = 323.24）').toBeCloseTo(323.24, 6);
+      // ── ⑤ **已知缺陷记录（R14-5 探针发现；R16 已修，本条只留 FX 侧的事实）** ──
+      //    用**真实渲染器**（`renderNetBoard(root, s, cb, { viewSeat })` + 桩 DOM，探针输出见本轮报告）
+      //    核对时发现：`render-net.ts` 的 `netControlHolder` 把 `s.control`（**绝对玩家号**）
+      //    当作 `fxSeatEndToPlayer` 的 `side`（**端**）参数用 ⇒ 持有控制权的是**自己**时它回 0，
+      //    而渲染层的 `holder === 0` 贴**上**端 ⇒ **自己的控制卡停在对手端**（与"自己端在下、
+   //    对手端在上"的用户裁决相反）；`fxTrackEndFor` 按座位算 ⇒ 特效在正确的下端。
+      //    两者**端归属相反**，差 56% = 158px 轨道上 88.5px（远大于本条修掉的 28.4px）。
+      //    ⚠️ **R16 已修**（本注释原来是"本轮不改"）：`renderControlModule` 的**位置端**与
+      //    **归属玩家**拆成两个参数（`ControlTrackOpts.end` 缺省 = `holder` ⇒ 热座逐位不变），
+      //    `render-net.ts` 用 `fxIsSelfSide` 按座位算端（`netControlEnd`）；换算函数
+      //    `fxSeatEndToPlayer` 与它这次"方向反了"的误用一起删除（零调用）。
+      //    下面两条断言**仍只钉 FX 侧**（FX 的 78% 在 R14-5 就是对的、R16 没动它）——
+      //    "滑块位置 == FX 落点"的**逐 (座位, 持控者) 配对**判据在
+      //    `tests/ui/net-control-end.test.ts`：本条承担不了它（它把 FX 侧两个数收成一个
+      //    集合，对"配对是否对调"零判别力）。
+      expect(fxTrackEndFor(0, 0).pct * 100, '自己（seat=0 的 P0）在 FX 侧贴大端（下）——'
+        + '它是对的（用户裁决"自己端在下"）；渲染侧的滑块停位自 R16 起与它逐配对相等')
+        .toBe(100 - FX_TRACK_EDGE_PCT_Y);
+      expect(fxTrackEndFor(0, 0).pct, '竖向又变回 96% 了 —— R14-1 的 28.4px 回归')
+        .not.toBeCloseTo(1 - FX_TRACK_EDGE_PCT / 100, 6);
+    } finally {
+      restore();
+    }
   });
 
   it('**热座零变化**：轴向与百分比都不受座位污染（热座那一支必须仍是 4%/96% 的横向）', () => {
@@ -654,10 +811,16 @@ describe('R3 · 控制轨端归属（用户裁决：竖向，自己端在下 / �
       for (const p of [0, 1] as const) {
         const isSelf = fxIsSelfSide(seat, p);
         const at = fxTrackEndFor(seat, p);
-        // 热座（x）：自己贴**小**端 4%；远程页（y）：自己贴**大**端 96%
+        // 热座（x）：自己贴**小**端 4%（`FX_TRACK_EDGE_PCT`）；
+        // 远程页（y）：自己贴**大**端 78%（`FX_TRACK_EDGE_PCT_Y` —— R14-5 起竖向另有其值）。
+        // ⚠️ **判据修正（R14-5）**：旧句在竖向那一格写死 `0.96`（= `1 - 4/100`），
+        //    于是"竖向的内缩该不该跟着渲染侧变"这条问题被旧断言**钉成了"不该"**。
+        //    新句按轴取**各自的单一出处常量**，两条轴的数字都仍被绝对钉住（不是互相比较）。
         const selfAtSmallEnd = isSelf === (seat === null);
         expect(at.pct, `seat=${String(seat)} p=${p}：端归属与 fxIsSelfSide 不同向`)
-          .toBe(selfAtSmallEnd ? 0.04 : 0.96);
+          .toBe(seat === null
+            ? (selfAtSmallEnd ? FX_TRACK_EDGE_PCT / 100 : 1 - FX_TRACK_EDGE_PCT / 100)
+            : (selfAtSmallEnd ? FX_TRACK_EDGE_PCT_Y / 100 : 1 - FX_TRACK_EDGE_PCT_Y / 100));
       }
     }
   });
@@ -684,8 +847,17 @@ describe('R3 · 控制轨端归属（用户裁决：竖向，自己端在下 / �
     expect(FX_TRACK_EDGE_PCT, '贴端距离常量必须是 4（改动前的数值）').toBe(4);
     expect(fxTrackEndFor(null, 0).pct).toBe(FX_TRACK_EDGE_PCT / 100);
     expect(fxTrackEndFor(null, 1).pct).toBe(1 - FX_TRACK_EDGE_PCT / 100);
-    expect(fxTrackEndFor(0, 0).pct).toBe(1 - FX_TRACK_EDGE_PCT / 100);
-    expect(fxTrackEndFor(0, 1).pct).toBe(FX_TRACK_EDGE_PCT / 100);
+    // ⚠️ **R14-5 修正**：旧句在这里把**竖向**分支也钉成 `FX_TRACK_EDGE_PCT` 派生
+    //    （`fxTrackEndFor(0, 0).pct === 1 - FX_TRACK_EDGE_PCT / 100`）—— 而 R14-1 之后竖向
+    //    的贴端距离**不再等于横向**（渲染侧内缩到 22/78）。那条旧句正是"把回归钉成正确值"的
+    //    原因之一，必须改。
+    //    **新句多查了什么**：竖向改用**自己的**单一出处 `FX_TRACK_EDGE_PCT_Y` 派生，
+    //    且两个常量必须**互不相等**（同值会让"两条轴各有一个数字"这条要求形同虚设）。
+    expect(FX_TRACK_EDGE_PCT_Y, '竖向贴端距离常量必须是 22（R14-1 为"卡片中心对齐"选的数值）').toBe(22);
+    expect(fxTrackEndFor(0, 0).pct).toBe(1 - FX_TRACK_EDGE_PCT_Y / 100);
+    expect(fxTrackEndFor(0, 1).pct).toBe(FX_TRACK_EDGE_PCT_Y / 100);
+    expect(FX_TRACK_EDGE_PCT_Y, '横竖两条轴的贴端距离不能是同一个数（否则总是有一个是错的）')
+      .not.toBe(FX_TRACK_EDGE_PCT);
   });
 });
 
@@ -783,6 +955,54 @@ describe('R3 · 源码守卫（方向模型的接线）', () => {
     expect(src, '热座分支的"裁右缘"算式被删了').toMatch(/\(r\.right - cr\.left\) \/ r\.width/);
   });
 
+  /**
+   * **R15-4（源码腿）：`coveredOuterOf` 的文档与实现必须同向**
+   *
+   * ## 被守的缺陷（纯文档，但**会把人带沟里**）
+   *
+   * `gen3-util.ts` 的 `@returns` 曾写"`'start'` = 覆盖者在小端（远程自己侧，露出**上段**）；
+   * `'end'` = 覆盖者在大端（远程对手侧，露出**下段**）" —— 与**同一文件** `:114-115` 的实现
+   * （`ccw`（自己）→ `'end'`、`cw`（对手）→ `'start'`）、文件头 `:12-13` 的"ccw = 覆盖者在下 /
+   * cw = 覆盖者在上"，以及消费方 `fx-seat.ts` 的 `vVisibleStripRect`（"`'end'`（自己侧）⇒
+   * 覆盖者在下 ⇒ 露出上段"）**全部相反**。这是本仓反复栽的那一类"文档与实现各说一套，
+   * 而单测只会跟着实现写"的形态 —— 实现是对的，注释是错的。
+   *
+   * ## 这条守卫能抓什么、不能抓什么
+   *
+   * 能：`coveredOuterOf` 的 `@returns` 里两边都说成"自己侧 ⇒ `'end'`"（= 与实现同向）——
+   * 把注释改回写反的那一版**必红**（变异实测见报告）。
+   * **不能**：注释措辞的其它变化（换词、英文、加句）。它不是"注释正确性"的通用判据，
+   * 只钉这一处**曾经真写反过**的方向词。
+   */
+  it('R15-4：coveredOuterOf 的 @returns 与实现同向（自己侧 = end），且不再留写反的那句', () => {
+    // ⚠️ 本用例查的是**注释**，所以不能用上面的 `read`（它对源码跑 `stripComments`，
+    //    注释已被替换成空白 —— 我第一版就是这样，锚点找不到、报错信息还指向"片切范围失效"）。
+    const raw = readFileSync(fileURLToPath(new URL('gen3-util.ts', root)))
+      .subarray(0, 8 * 1024 * 1024).toString('utf8');
+    // 取 `coveredOuterOf` 的**文档注释**：从它的 `@returns` 起、到 `export function coveredOuterOf(`
+    // 之前为止（实现体里没有 `@returns`，所以这段就是注释）。
+    const ret = raw.indexOf('@returns `null` = 热座');
+    const fnAt = raw.indexOf('export function coveredOuterOf(');
+    expect(ret, 'coveredOuterOf 的 @returns 那句找不到（片切锚点失效 —— 先复核再改判据）')
+      .toBeGreaterThan(-1);
+    expect(fnAt, '找不到 export function coveredOuterOf(').toBeGreaterThan(ret);
+    const doc = raw.slice(ret, fnAt);
+    expect(doc, '找不到 coveredOuterOf 的文档注释（片切范围失效 —— 先复核再改判据）')
+      .toContain('@returns');
+    expect(doc, 'coveredOuterOf 的 @returns 把"自己侧"说成了 start（与实现相反：ccw（自己）⇒ end）')
+      .toMatch(/'end'` = 远程\*\*自己侧\*\*/);
+    expect(doc, 'coveredOuterOf 的 @returns 把"对手侧"说成了 end（与实现相反：cw（对手）⇒ start）')
+      .toMatch(/'start'` = 远程\*\*对手侧\*\*/);
+    // 反空集合：写反的那句**文案本身**不许再出现（否则"改回来"会以另一种措辞复活）
+    expect(doc, 'written-backwards 的旧文案又出现了（start = 自己侧 / end = 对手侧）')
+      .not.toMatch(/'start'` = 覆盖者在小端/);
+    expect(doc, 'written-backwards 的旧文案又出现了（end = 对手侧）')
+      .not.toMatch(/'end'` = 覆盖者在大端/);
+    // 同向的第二处：文件头 `vOuter` 命名表的括号里也必须是自己侧 = end
+    expect(raw, '文件头 vOuter 命名表又把自己侧写成 start 了（与 @returns 是同一处错的孪生）')
+      .toMatch(/'end'` = 大端 = \*\*自己侧\*\*/);
+  });
+
   it('fx-seat.ts 提供热座与竖向两套分支（把 null 分支删掉 = 热座观感变化）', () => {
     const src = read('fx-seat.ts');
     // 热座那一支必须**仍是横向**（走 x 轴），且必须由 owner 决定左右
@@ -790,7 +1010,10 @@ describe('R3 · 源码守卫（方向模型的接线）', () => {
       .toMatch(/vOuterEdgeOf\(r, outer, 'x'\) \+ step \* lead/);
     // 竖向变体自己的算式（与统一入口共用同一套"外侧边 + 沿轴外移"）
     expect(src, 'vStackEndPoint 缺 lead 的外移算式').toMatch(/vOuterEdgeOf\(last\.getBoundingClientRect\(\), outer, 'y'\) \+ step \* lead/);
-    expect(src, 'vStackEndPoint 缺空槽的 lift 算式').toMatch(/vOuterEdgeOf\(slotRect, outer, 'y'\) \+ step \* lift/);
+    // ⚠️ **判据修正（R15-3）**：旧句逐字钉住了**错的那一半** —— `vOuterEdgeOf(slotRect, outer, 'y') + step * lift`
+    //    （锚在槽的**外端**）。改成锚内端之后，判据改为"同一条 `vOuterEdgeOf(slotRect, …, 'y') + step * lift`
+    //    算式仍在，只是把 outer 翻转一转" —— 既守住"空槽用 lift 外移"这条不变式，又不再把错误固化成正确值。
+    expect(src, 'vStackEndPoint 缺空槽的 lift 算式').toMatch(/vOuterEdgeOf\(slotRect, outer === 'start' \? 'end' : 'start', 'y'\) \+ step \* lift/);
     // ⚠️ **C-1 的判据修正（钉规格，不再钉那句错表达式）**：
     //    原判据逐字钉住 `seat !== null ? fxOuterFor(seat) : (owner ?? 1) === 0 ? 'start' : 'end'`
     //    —— 那正是**吞掉 owner** 的写法：`fxOuterFor(seat)` 里的比较用的是**模块态座位**，
@@ -816,8 +1039,12 @@ describe('R3 · 源码守卫（方向模型的接线）', () => {
     expect(src, 'vClipInsetPct 缺 0.94 上限').toMatch(/Math\.min\(maxPct,/);
     expect(src, '热座默认值是 null（热座零变化的开关）').toMatch(/FX_VIEW_SEAT_HOTSEAT: FxViewSeat = null/);
     // Minor M-1：两个零调用的导出已删（留着会让人以为它们是方向模型的入口）
-    expect(src, 'seatIndexFor / isSelfViewOf 又出现了（零调用死代码，会误导下一个人）')
-      .not.toMatch(/export function (seatIndexFor|isSelfViewOf)\(/);
+    // ⚠️ **R16 追加**：`fxSeatEndToPlayer` 也在这条纪律下删除了（它的唯一调用点把它当
+    //    "绝对号 ⇒ 端"用 —— 方向反了，正是 R16 修的缺陷）。判据一并加进来，防止它被
+    //    "看起来有用"地搬回来（"端 ⇒ 绝对号"这条换算今天全仓不需要：位置端由
+    //    `render-net.ts` 的 `netControlEnd` 现算，FX 落点由 `fxTrackEndFor` 直接给）。
+    expect(src, 'seatIndexFor / isSelfViewOf / fxSeatEndToPlayer 又出现了（零调用死代码，会误导下一个人）')
+      .not.toMatch(/export function (seatIndexFor|isSelfViewOf|fxSeatEndToPlayer)\(/);
   });
 
   it('控制轨端归属走**单一出处**（fx-seat 的 fxTrackEndFor），且 gen3-control 不再自己按绝对玩家选边', () => {
@@ -840,18 +1067,64 @@ describe('R3 · 源码守卫（方向模型的接线）', () => {
     //    贴端距离必须来自 `FX_TRACK_EDGE_PCT`，且 `render.ts` 必须引用同一个常量。
     expect(seat, 'fxTrackEndFor 的热座分支被删（热座控制轨会换端）')
       .toMatch(/seat === null\s*\n?\s*\? \{ pct: fxIsSelfSide\(seat, to\) \? FX_TRACK_EDGE : 1 - FX_TRACK_EDGE, axis: 'x' \}/);
+    // ⚠️ **判据修正（R14-5）**：竖式分支的贴端距离从 `FX_TRACK_EDGE`（4/96）改成
+    //    `FX_TRACK_EDGE_Y`（22/78）。**旧句为什么必须改**：它就是被 R14-1 打破的那一半不变式
+    //    （渲染侧内缩了、FX 侧没内缩 ⇒ 差 28.4px），旧句把 4/96 钉成了正确值，所以 1114 条
+    //    测试全绿却没人发现。**新句多查了什么**：① 竖向必须用 `FX_TRACK_EDGE_Y`；
+    //    ② 那个常量必须是 22；③ `render.ts` 的 `CONTROL_EDGE_PCT_Y` 必须**从同一个常量取**
+    //    （下面两条断言）—— 于是"改一处忘另一处"在源码腿上也会报红。
     expect(seat, 'fxTrackEndFor 缺"自己在下、对手在上"的竖向分支')
-      .toMatch(/: \{ pct: fxIsSelfSide\(seat, to\) \? 1 - FX_TRACK_EDGE : FX_TRACK_EDGE, axis: 'y' \}/);
+      .toMatch(/pct: fxIsSelfSide\(seat, to\) \? 1 - FX_TRACK_EDGE_Y : FX_TRACK_EDGE_Y, axis: 'y' \}/);
     expect(seat, '贴端距离不是单一出处常量（Minor M-4）').toMatch(/export const FX_TRACK_EDGE_PCT = 4;/);
+    expect(seat, '竖向贴端距离不是单一出处常量（R14-5）').toMatch(/export const FX_TRACK_EDGE_PCT_Y = 22;/);
     // Minor M-4 的另一半：render.ts 必须**从这个常量取值**（两边各写死一个 4 就是原缺陷）
     const renderSrc = read('render.ts');
     expect(renderSrc, 'render.ts 的控制轨贴端距离又写死成字面量了（两处会各自漂移）')
       .toMatch(/const CONTROL_EDGE_PCT = FX_TRACK_EDGE_PCT;/);
-    expect(renderSrc, 'render.ts 未 import fx-seat 的贴端常量')
-      .toMatch(/import \{ FX_TRACK_EDGE_PCT \} from '\.\/fx-seat';/);
-    // 渲染页必须把"座位→绝对玩家号"的换算交给助手（而不是让共享助手读座位）
-    expect(read('render-net.ts'), '远程页未按座位换算控制组件的持有者')
-      .toMatch(/renderControlModule\(s, \{ axis: 'y', holder: netControlHolder\(s, viewSeat\) \}\)/);
+    // ⚠️ **判据修正（R14-7）**：旧句把整条 import 逐字钉成
+    //    `import { FX_TRACK_EDGE_PCT, FX_TRACK_EDGE_PCT_Y } from './fx-seat';`。
+    //    **旧句为什么必须改**：R14-7 让 `render.ts` 从**同一个模块**多取了 `fxViewSeat`
+    //    （锁环尺寸的页面判据），导入列表因此变长 —— 旧句要求 `_Y` 后面**紧跟 `}`**，
+    //    于是同一行**合法且正确**的 import 被判成"没 import"（假红）。
+    //    **新句多查了什么**：先把 `render.ts` 里所有来自 `./fx-seat` 的 import 行解析出**具名
+    //    列表**（`{ … }` 里的逗号分隔项，去掉 `type` 前缀），再断言那个集合**同时**含两个贴端
+    //    常量 —— 判据从"逐字文本"升级成"这个模块真的从这里导入了这两个名字"，既不受导入顺序
+    //    与同一列表里其它符号（`fxViewSeat`）影响，也**没有**退化成"全文出现过某个名字"。
+    const seatImports = new Set<string>();
+    for (const m of renderSrc.matchAll(/import\s*(?:type\s*)?\{([^}]*)\}\s*from\s*'\.\/fx-seat';/g)) {
+      for (const raw of m[1].split(',')) {
+        const name = raw.trim().replace(/^type\s+/, '').split(/\s+as\s+/)[0].trim();
+        if (name) seatImports.add(name);
+      }
+    }
+    expect([...seatImports], 'render.ts 没有从 ./fx-seat 具名导入任何东西').not.toEqual([]);
+    expect(seatImports.has('FX_TRACK_EDGE_PCT'), `render.ts 未从 fx-seat 导入横向贴端常量`
+      + `（实际导入：${[...seatImports].join(', ')}）`).toBe(true);
+    expect(seatImports.has('FX_TRACK_EDGE_PCT_Y'), 'render.ts 未从 fx-seat 导入**竖向**贴端常量 ——'
+      + 'R14-5 的"两处同源"就只剩注释（这正是它当初要消灭的缺陷形态）').toBe(true);
+    // ⚠️ **R14-5 新增**：竖向的**渲染侧**取值也必须来自同一个常量（去掉注释后逐字钉）。
+    //    判据是"渲染侧那个数**等于** fx-seat 导出的那个数"，而不是"渲染侧写了 22" ——
+    //    后者在"fx-seat 改成 30、渲染侧留 22"时照样绿（正是 R14-1 的形态）。
+    const renderEdgeY = /const CONTROL_EDGE_PCT_Y = FX_TRACK_EDGE_PCT_Y;/.exec(renderSrc);
+    expect(renderEdgeY, 'render.ts 的 CONTROL_EDGE_PCT_Y 不再从 fx-seat 的常量取（卡片与特效会再次错开 ~28px）')
+      .toBeTruthy();
+    // 反向：`render.ts` 里不许再出现"直接把 22 写死"的形态（旧 R14-1 写法）
+    expect(renderSrc, 'render.ts 又把竖向贴端距离写回字面量了（单一出处被绕开）')
+      .not.toMatch(/const CONTROL_EDGE_PCT_Y = \d+;/);
+    // 渲染页必须把"位置端"按座位换算后交给助手（而不是让共享助手读座位）；
+    // `holder`（归属/文案）则必须原样传**绝对玩家号** `s.control`。
+    // ⚠️ **判据修正（R16）**：旧句逐字钉的是
+    //    `renderControlModule(s, { axis: 'y', holder: netControlHolder(s, viewSeat) })`。
+    //    **旧句为什么必须改**：R16 修掉了 `netControlHolder` 那次**方向反了**的换算
+    //    （把 `fxSeatEndToPlayer` 的"端 ⇒ 绝对号"当"绝对号 ⇒ 端"用），并把"位置端"与
+    //    "归属玩家"拆成两个参数 ⇒ 调用形态**必须**变；旧句钉住的正是"两者共用一个
+    //    经过座位换算的 holder"这个缺陷形态（它让自己持控时滑块停在对手端，差 56%）。
+    //    **新句多查了什么**：① `holder` 是**绝对玩家号**（不再经座位换算）；
+    //    ② 位置端 `end` 来自本页按座位算的 `netControlEnd(s, viewSeat)`。
+    //    逐配对的**行为**判据（DOM 上真正写进去的 top == `fxTrackEndFor` 的落点）在
+    //    `tests/ui/net-control-end.test.ts`。
+    expect(read('render-net.ts'), '远程页未按座位换算控制组件的**位置端**')
+      .toMatch(/renderControlModule\(s,\s*\{\s*axis: 'y',\s*holder: s\.control,\s*end: netControlEnd\(s, viewSeat\)/);
     expect(read('render.ts'), 'renderControlModule 的缺省分支不再是热座语义')
       .toMatch(/const holder: -1 \| PlayerId = opts\?\.holder \?\? s\.control;/);
   });

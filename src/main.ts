@@ -17,6 +17,10 @@ import { renderNetBoard, resetNetUiState } from './ui/render-net';
 // G2 修正 R-F · I-1：离开远程页时要复位 **FX 视角座位**（`fx-seat.ts` 的模块态）。
 // 它是本模块唯一需要知道的 FX 层状态 —— 与 `renderMode`/`netViewSeat` 一样属于"页面级开关"。
 import { setFxViewSeat } from './ui/fx-seat';
+// G2 修正 R15-A：抽牌幽灵的盒尺寸/扇形步距按**页**取值（热座 130×178.8 / 102；
+// 远程页 100.572×137.601 / 78.909），方向按**容器排列方向**取值。出处见 `./ui/fx-card-size`。
+import { handCardBox, handFanLead, handFanStep } from './ui/fx-card-size';
+import { handOuterFor } from './ui/fx-seat';
 import { openControlRearrangeModal, closeControlRearrangeModal, refreshControlRearrangeModal, isControlRearrangeOpen, orderChanged, orderToAction } from './ui/control-rearrange';
 import { renderHome, renderCoin, renderLibrary, renderRules, renderModeSelect } from './ui/home';
 import { newMatchSeed } from './ui/match-seed';
@@ -43,10 +47,14 @@ const AUTO_ADVANCE_DELAY = 400;
 let autoTimer: number | null = null;
 /** 抽牌飞入动画进行中标志：防止动画期间再次触发刷新导致并发动画/双重渲染 */
 let drawAnimBusy = false;
-/** 抽牌幽灵卡尺寸与扇形步进（与 styles.css 的 .hand 负 margin 与 .draw-ghost 一致） */
-const GHOST_W = 130;
-const GHOST_H = 178.8;
-const HAND_CARD_SPACING = 102; // 卡宽 130 − 重叠 28
+/** 抽牌幽灵卡尺寸与扇形步进。**G2 修正 R15-A：改成"按页取值"的函数出口** ——
+ *  远程页手牌卡是 100.572 × 137.601（由 `.net-board` 的 `--card-h: 140` 派生，
+ *  `styles-net.css:91-97`），比热座小 29%；抽牌幽灵与扇形步进必须跟着它，
+ *  否则幽灵比真卡大一圈、抽 2 张以上每张多偏 23.09px（102 vs 78.909）。
+ *  ⚠️ 值本身仍是热座的 130 / 178.8 / 102（`fx-card-size.ts` 的出口在热座页**构造性**
+ *  返回这三个数：探针选择器都带 `.net-board` 前缀，热座页没有该类 ⇒ 永不命中）。 */
+const ghostCardBox = (): { w: number; h: number } => handCardBox();
+const handFanSpacing = (): number => handFanStep();
 /** 效果触发的抽牌累计（card:drawn 事件 → 本次行动结算完成后统一播抽牌特效）。
  *  love 标志：该次抽牌是否由 love 协议触发（love-1/2/6 及 love 刷新——含对手抽），
  *  播放抽牌飞入动画时给 draw-ghost 卡背挂粉红爱心 + 边框粉红光（FX-4）。
@@ -448,31 +456,54 @@ function playDrawAnimation(player: PlayerId, count: number, love: boolean, fromO
     ? document.querySelector<HTMLElement>(`.deck[data-player="${player === 0 ? 1 : 0}"]`)
     : deck;
   const deckRect = (fromDeck ?? deck) ? (fromDeck ?? deck)!.getBoundingClientRect() : null;
-  const fromLeft = player === 0;
+  // G2 修正 R15-A：幽灵盒尺寸与扇形步距改成**按页取值**（远程页 100.572×137.601 / 78.909）。
+  // ⚠️ 每帧只取一次（下面所有张共用），避免同一批幽灵量到不同基准（页面正在切页时）。
+  const ghostBox = ghostCardBox();
+  const fanStep = handFanSpacing();
+  // 生长方向：**容器自己的排列方向**，不是绝对玩家号（`handOuterFor` 的判据）。
+  // ⚠️ 热座逐字同值：热座 P0 手牌 `reversed:false` ⇒ 'end'（左起右排，与原 `player === 0` 同）；
+  //    热座 P1 `reversed:true` ⇒ 'start'（原 `player === 0 ? … : …` 的 else 支同）。
+  //    远程页两条手牌**都**是 `reversed:false`（`render-net.ts:1500/1523`）⇒ 两座位都给 'end'，
+  //    这正是修 "P1 的幽灵飞到末卡左边而真卡出现在右端" 的那一处（R3 已把落点判据换过，
+  //    本函数当时漏改，是同一族里最后一条绝对玩家号判据）。
+  const fromLeft = handOuterFor(hand) === 'end';
   const startX = deckRect ? (fromLeft ? deckRect.left - 90 : deckRect.right + 90)
     : (fromLeft ? rect.left - 90 : rect.right + 90);
-  // 现有末卡（P1 手牌最右 / P2 row-reverse 最左；排除揭示幽灵牌）；空手牌时回退到手牌区起点
+  // 现有末卡（正排 = 最右 / row-reverse = 最左；排除揭示幽灵牌）；空手牌时回退到手牌区起点
   const cards = hand.querySelectorAll<HTMLElement>('.card:not(.reveal-ghost)');
   const last = cards[cards.length - 1];
   const lastRect = last ? last.getBoundingClientRect() : null;
   const ghosts: HTMLElement[] = [];
   for (let i = 0; i < count; i++) {
     let targetX: number;
+    // 扇形重叠量（= 步距与卡宽之差；热座 28）—— **单一出处**：`handFanLead()` 由
+    // "卡宽 − 步距"推出，这里与下面的空手牌内缩共用它，不再各写一遍减法。
+    const overlap = handFanLead();
     if (lastRect) {
-      // 扇形步进：新卡中心距 = 卡宽 130 − 重叠 28 = 102px
-      // P1：新卡 1 左缘 = 末卡右缘 − 28（中心 = 右缘 + 37）；P2 反向镜像
-      targetX = fromLeft ? lastRect.right + 37 + HAND_CARD_SPACING * i : lastRect.left - 37 - HAND_CARD_SPACING * i;
+      // 扇形步进：新卡中心距 = 卡宽 − 重叠量（热座 130 − 28 = 102；远程页 100.572 × 0.7846 = 78.909）
+      // 正排：新卡 1 左缘 = 末卡右缘 − 重叠（中心 = 右缘 + 卡宽/2 − 重叠）；row-reverse 反向镜像
+      // ⚠️ 原句写死 `+ 37`（= 130/2 − 28）—— 37 是**热座卡宽**的一半减重叠，必须跟着卡宽走，
+      //    否则远程页中心点偏 5.7px（100.572/2 − 21.66 = 28.63 ≠ 37）。
+      // 热座：`handFanLead()` = 130 − 102 = 28 ⇒ 130/2 − 28 = 37 —— 与原句**逐位相等**。
+      const lead = ghostBox.w / 2 - overlap;
+      targetX = fromLeft ? lastRect.right + lead + fanStep * i : lastRect.left - lead - fanStep * i;
     } else {
-      // 空手牌：P1 落在左 padding 内、P2 落在右 padding 内，逐张按扇形步进向后延伸
+      // 空手牌：正排落在左 padding 内、row-reverse 落在右 padding 内，逐张按扇形步进向后延伸
+      // （热座 `overlap = 28`，与被替换掉的那个字面量 `28` 逐位相等）
       targetX = fromLeft
-        ? rect.left + 28 + GHOST_W / 2 + HAND_CARD_SPACING * i
-        : rect.right - 28 - GHOST_W / 2 - HAND_CARD_SPACING * i;
+        ? rect.left + overlap + ghostBox.w / 2 + fanStep * i
+        : rect.right - overlap - ghostBox.w / 2 - fanStep * i;
     }
     const ghost = document.createElement('div');
     ghost.className = 'draw-ghost';
     ghost.style.left = `${startX}px`;
-    // 幽灵卡 top 用常量（GHOST_H 与 .draw-ghost 高度一致）：元素未 appendChild 前 offsetHeight 恒为 0
-    ghost.style.top = `${cy - GHOST_H / 2}px`;
+    // 幽灵卡 top 用函数出口的 h（与 .draw-ghost 高度同源）：元素未 appendChild 前 offsetHeight 恒为 0
+    ghost.style.top = `${cy - ghostBox.h / 2}px`;
+    // G2 修正 R15-A：内联宽高**必须**写 —— `styles.css:1740-1741` 的 `.draw-ghost` 写死
+    // `130px / 178.8px`（热座值），而本元素挂在 `document.body` 上（**不在 `.net-board` 里**）
+    // ⇒ styles-net.css 的 `.net-hands .card` 那条规则**命不中它**，只能在这里内联覆盖。
+    ghost.style.width = `${ghostBox.w}px`;
+    ghost.style.height = `${ghostBox.h}px`;
     // FX-4 love 抽牌：卡背粉红爱心（跳动）+ 边框粉红光芒（.fx-love-heart 子元素居中于卡背，
     // 与 .draw-ghost 自身的 transform 平移过渡不冲突——动画在子元素上）
     if (love) {
@@ -482,7 +513,7 @@ function playDrawAnimation(player: PlayerId, count: number, love: boolean, fromO
     document.body.appendChild(ghost);
     ghosts.push(ghost);
     // 以幽灵卡中心对准落点
-    const dx = targetX - (startX + GHOST_W / 2);
+    const dx = targetX - (startX + ghostBox.w / 2);
     // 依次起飞：首张 30ms（保证初始位置已被绘制一帧）后每 120ms 起飞下一张
     window.setTimeout(() => {
       ghost.style.transform = `translateX(${dx}px)`;

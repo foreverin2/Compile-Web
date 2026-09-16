@@ -5,15 +5,23 @@ import { mountCut } from '../fx/discard-cut';
 import { flashRigidity7Guard, noteGreed1Compile } from '../gen3-control';
 import { gen3FulcrumSwapFx, gen3ProtocolSwapFx } from '../fx-gen3-swap';
 import { gen3DiscardFx, gen3DeleteFx, gen3FlipFx, gen3ShiftFx, gen3DrawFx, gen3FaceDownFx, gen3CompiledFx, gen3DeckDiscardFx, gen3ReturnFx, gen3PlayFx, gen3SkipFx, gen3TriggerFx, gen3LandFx, type Gen3CardFxApi, type Gen3CardPayload, type Gen3DrawPayload, type Gen3CompiledPayload, type Gen3DeckDiscardPayload } from '../fx-gen3';
-import { buildTornadoFx } from '../fx-tornado';
+import { buildTornadoFx, TORNADO_BASE_CARD_H } from '../fx-tornado';
 import { fxOrientOf, fxRotDegOf, orientOf, orientToCwCcw, orientToFxRot, stripOrientClasses, type CardOrient } from '../fx-orient';
 // G2 修正 R3：**方向模型**（热座 = 按绝对玩家左右；远程页 = 按座位上下）。`fxViewSeat()` 在热座页恒为
 // `null` ⇒ 下面两个落点助手走**逐字搬运**的原左右分支（"热座零变化"是构造性的，见 fx-seat.ts 头注）。
-import { fxHandEndPoint, fxStackEndPoint, fxViewSeat } from '../fx-seat';
+import { fxHandEndPoint, fxStackEndPoint, fxViewSeat, handOuterFor } from '../fx-seat';
 // **R9-1**：手牌/浮层整卡的尺寸与半宽半高（**值一字未改**）。它们是**手牌卡** 130×178.8 的几何，
 // 与场上卡的 `--card-h`（R9-1 后 140）**无关**、本波**不缩**；收成具名常量是为了让"落点盒居中"
 // 这件事在 9 处调用点上不再各写一遍魔数（推导与理由见 `../fx-card-size` 的头注）。
-import { HAND_CARD_H, HAND_CARD_HALF_H, HAND_CARD_HALF_W, HAND_CARD_W } from '../fx-card-size';
+// ⚠️ **R15-A 起**：上面那句"本波不缩"只对**热座**成立 —— 远程页手牌卡被 R9-4 缩到
+// 100.572×137.601。所以落点盒/幽灵一律改走 `handCardBox()` / `stackCardBox()` /
+// `handFanStep()` 三个**按页取值**的出口；那四个常量只在**热座**（或读不到 DOM）时被出口返回。
+import {
+  handCardBox, handFanStep, stackCardBox,
+  // **R15-B**：翅膀缩放的**分母**（= 130 = `styles.css` 的 `.card{width:130px}`，即
+  // "这对 192×104 的翅膀当初照多大的卡设计"）。热座 `box.w === 130` ⇒ `scale(1)` 逐字不变。
+  HAND_CARD_W,
+} from '../fx-card-size';
 // 浮层卡的「未旋转布局盒 + 中心旋转」几何单一出处（G2 Task 1；R2 起 buildFxCardAt 也用它 —— 避免
 // 本文件再手写一份"宽 = rect 高"的交换算式，两份一旦漂移就是"朝向对但尺寸错"的假正确）。
 import { cloneBoxFrom } from '../fx/clone-orient';
@@ -1035,12 +1043,16 @@ function playWaterReturn(node: HTMLElement, payload: FxCardPayload): void {
   spawnWaterTrail({ x: cx, y: cy }, { x: target.x, y: target.y }, RETURN_MOVE_MS);
   // ③ 回手后（飞行落地）：落点框特效持续 3 秒后淡出（落点 = 手牌末尾新卡中心）
   window.setTimeout(() => {
+    // G2 修正 R15-A：落点是**手牌**末尾 ⇒ 盒尺寸按页取手牌整卡（远程页 100.572×137.601）。
+    // ⚠️ 必须在定时器**内部**取（不在外面预先算好）：这个回调在 520ms 后才跑，
+    //    期间页面可能已切页；在外面取会量到上一页的基准。
+    const box = handCardBox();
     const settle = document.createElement('div');
     settle.className = 'water-return-settle';
-    settle.style.left = `${target.x - HAND_CARD_HALF_W}px`;
-    settle.style.top = `${target.y - HAND_CARD_HALF_H}px`;
-    settle.style.width = `${HAND_CARD_W}px`;
-    settle.style.height = `${HAND_CARD_H}px`;
+    settle.style.left = `${target.x - box.w / 2}px`;
+    settle.style.top = `${target.y - box.h / 2}px`;
+    settle.style.width = `${box.w}px`;
+    settle.style.height = `${box.h}px`;
     settle.style.zIndex = String(EXTRA_Z);
     document.body.appendChild(settle);
     window.setTimeout(() => settle.remove(), WATER_AFTER_MS + 300);
@@ -1127,6 +1139,14 @@ function playDarknessShiftBridge(node: HTMLElement, payload: FxCardPayload): voi
   bridge.style.left = `${start.x}px`;
   bridge.style.top = `${start.y}px`;
   bridge.style.width = `${dist}px`;
+  // G2 修正 R15-A：桥体厚度 = **一张场上卡的长边**（`styles.css:2592-2593` 的注释自己就是这么写的：
+  // "= 一张卡的长边（与 GHOST_H/卡高常量一致）"）。但 CSS 里那两个字面量 `178.8 / -89.4` 是**热座**手牌卡的
+  // 长边 ⇒ 远程页（场上卡长边 = `--card-h` = 140）桥比卡**厚 28%**（178.8 vs 140），
+  // 而且 `margin-top` 也必须同步成 `−H/2`（否则桥不再垂直居中于起点）。
+  // 桥挂在 `document.body`（不在 `.net-board` 里）⇒ styles-net.css 命不中它 ⇒ **只能内联覆盖**。
+  const bridgeH = stackCardBox().h;
+  bridge.style.height = `${bridgeH}px`;
+  bridge.style.marginTop = `${-bridgeH / 2}px`;
   bridge.style.transform = `rotate(${angle}deg)`;
   bridge.style.zIndex = String(BRIDGE_Z);
   bridge.style.setProperty('--bridge-in-ms', `${BRIDGE_IN_MS}ms`);
@@ -1424,7 +1444,11 @@ function playGravityDeckPlayExtra(payload: FxCardPayload): void {
   //    终点后在黑洞旁露出，用户反馈「终点瞬间多出一张卡牌」；补卡尺寸深紫黑罩盖住终点）；
   //    ④ 品红射线（0.3~1.8s，黑洞 → 牌库区中心）
   const hole = spawnGravityHole(end);
-  const shroud = spawnGravityEndShroud(end, REVEAL_W, REVEAL_H); // 打牌堆顶落点卡 = 标准卡尺寸
+  // G2 修正 R15-A：落点是**场上链路末尾** ⇒ 罩子必须按**场上卡**尺寸（远程页 100.572×140），
+  // 不能再用手牌卡的 130×178.8（罩四周多出 ~15/19px、压到相邻列——三列只 ~120px 宽）。
+  // 同文件 `:1573-1576` 的 speed 终点罩早就是"按实测卡"的正确写法，这里对齐它。
+  const stackBox = stackCardBox();
+  const shroud = spawnGravityEndShroud(end, stackBox.w, stackBox.h); // 打牌堆顶落点卡 = 场上卡尺寸
   const beam = spawnGravityBeam(start, end);
   // ⑤ 前置段完成（1.8s）起：浮层卡飞向链路末尾（同批多卡按 90ms 错开起飞，同 playDeckPlay）
   const stagger = nextDeckPlayIndex() * DECK_PLAY_STAGGER_MS;
@@ -1496,9 +1520,25 @@ function playGravityShiftExtra(node: HTMLElement, payload: FxCardPayload): void 
  * 粒子绕竖直中轴旋转汇聚、向上涌动），整体 translate 平移，JS setTimeout 自清理。 */
 
 /** 螺旋锥形柱飓风（2026-09-03 粒子化重做：粒子向中心旋转汇聚、向上涌动，模拟漩涡——
- *  由共享构建器 fx-tornado.ts 生成；旧 4 层旋转椭圆带 + 中心气柱观感已废弃） */
-function buildSpeedTornado(): HTMLElement {
-  return buildTornadoFx();
+ *  由共享构建器 fx-tornado.ts 生成；旧 4 层旋转椭圆带 + 中心气柱观感已废弃）。
+ *
+ * `scale`（G2 修正 R15-A）：整体缩放系数。**本函数不再自己猜基准** —— 由调用方按
+ * "那个场景里"真卡"的高度 ÷ `TORNADO_BASE_CARD_H`"传：
+ *  - 抽牌（`playSpeedDrawExtra`）：飞行物是**手牌大小**的卡 ⇒ `handCardBox().h / 175`；
+ *  - 偏转（`playSpeedShiftExtra`）：落点是**场上链路**的卡 ⇒ `stackCardBox().h / 175`。
+ * 热座两个场景都拿到 1（手牌 178.8/175 与场上 175/175 …）——
+ * ⚠️ 见下面调用点的说明：热座**必须逐字 1**，所以调用点只在**远程页**换算。 */
+function buildSpeedTornado(scale: number): HTMLElement {
+  return buildTornadoFx(scale);
+}
+
+/** 远程页的**卡高 → 龙卷风缩放系数**；热座恒 `1`（红线：热座零变化 ⇒ 逐字不改）。
+ *
+ * 判据用 `.net-board` 是否存在（与 `fx-card-size.ts` 三个探针同一判据）：热座页没有这个类
+ * ⇒ 恒 `1`，连"量一下"都不做。这样热座页的龙卷风**构造性**等于改动前那一句
+ * `buildTornadoFx()`（缺省 `scale = 1`）。 */
+function tornadoScaleFor(cardH: number): number {
+  return document.querySelector('.net-board') ? cardH / TORNADO_BASE_CARD_H : 1;
 }
 
 /** speed 附加特效浮层主体（抽牌场景）：起点 rect（卡框光位置）与终点 end（位移终点）均由
@@ -1517,7 +1557,8 @@ function playSpeedExtra(
   fx.style.width = `${rect.width}px`;
   fx.style.height = `${rect.height}px`;
   fx.style.zIndex = String(EXTRA_Z);
-  fx.appendChild(buildSpeedTornado());
+  // 抽牌场景：飓风裹着的是**手牌大小**的飞行物（起点牌库 → 终点手牌末尾）
+  fx.appendChild(buildSpeedTornado(tornadoScaleFor(handCardBox().h)));
   document.body.appendChild(fx);
   // ① 卡框灰白光 + 飓风渐现（0.3s；延迟 20ms 保证初始 opacity:0 已被绘制）
   window.setTimeout(() => {
@@ -1561,7 +1602,8 @@ function playSpeedShiftExtra(node: HTMLElement, payload: FxCardPayload): void {
   ghost.style.willChange = 'transform, opacity';
   const glow = document.createElement('div');
   glow.className = 'fx-speed-card-glow';
-  glow.appendChild(buildSpeedTornado());
+  // 偏转场景：飓风裹着的是**场上链路**的卡（`end = stackEndPos(...)`）
+  glow.appendChild(buildSpeedTornado(tornadoScaleFor(stackCardBox().h)));
   ghost.appendChild(glow);
   const start = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
   const dx = end.x - start.x;
@@ -1641,8 +1683,11 @@ export function playSpeedDrawExtra(payload: DrawPayload): void {
 
 const LOVE_GLOW_MS = 2000;      // 抽牌：牌库区粉红光芒 / 落点爱心持续时间（2s）
 const LOVE_AFTER_MS = 2000;     // 给牌：到达后落点边框+爱心持续时间（2s）
-const LOVE_CARD_W = HAND_CARD_W;   // 落点盒尺寸（与手牌卡一致；**单一出处**：./fx-card-size）
-const LOVE_CARD_H = HAND_CARD_H;
+/* ⚠️⚠️ **G2 修正 R15-A：`LOVE_CARD_W/H` 这两个模块级常量已删除。**
+ *   它们原来是 `= HAND_CARD_W` / `= HAND_CARD_H`（130 × 178.8 = **热座**手牌卡），
+ *   但 love 的落点是**手牌末尾**（抽牌落点 / 给牌落点）—— 远程页那个位置的真卡是
+ *   100.572 × 137.601 ⇒ 落点盒偏大 29%（宽 +29.3% / 高 +30.0%）。
+ *   现在两处消费点各自在定时器内调用 `handCardBox()`（现场量，且抗切页）。 */
 const LOVE_STAGGER_MS = 120;    // 与 main.ts draw-ghost 起飞错开间隔一致
 const LOVE_FIRST_TAKEOFF_MS = 30; // 与 main.ts 首张起飞延迟一致
 const LOVE_FLIGHT_MS = 250;     // 与 .draw-ghost transition 0.25s 飞行时长一致
@@ -1691,12 +1736,14 @@ function playLoveDrawExtra(payload: DrawPayload): void {
   // 飞行）出现，闪烁 2s 后渐隐消失
   const target = handEndPos(hand);
   window.setTimeout(() => {
+    // G2 修正 R15-A：落点盒 = 手牌整卡（按页取值；远程页 100.572×137.601）
+    const box = handCardBox();
     const settle = document.createElement('div');
     settle.className = 'fx-love-settle';
-    settle.style.left = `${target.x - LOVE_CARD_W / 2}px`;
-    settle.style.top = `${target.y - LOVE_CARD_H / 2}px`;
-    settle.style.width = `${LOVE_CARD_W}px`;
-    settle.style.height = `${LOVE_CARD_H}px`;
+    settle.style.left = `${target.x - box.w / 2}px`;
+    settle.style.top = `${target.y - box.h / 2}px`;
+    settle.style.width = `${box.w}px`;
+    settle.style.height = `${box.h}px`;
     settle.style.zIndex = String(EXTRA_Z);
     settle.appendChild(buildLoveHeart());
     document.body.appendChild(settle);
@@ -1735,12 +1782,14 @@ function playLoveGiveExtra(node: HTMLElement, payload: FxCardPayload): void {
     });
     // ③ 到达后：落点边框 + 爱心（2s 后渐隐消失）
     window.setTimeout(() => {
+      // G2 修正 R15-A：同上 —— 落点盒按页取手牌整卡
+      const box = handCardBox();
       const settle = document.createElement('div');
       settle.className = 'fx-love-settle';
-      settle.style.left = `${target.x - LOVE_CARD_W / 2}px`;
-      settle.style.top = `${target.y - LOVE_CARD_H / 2}px`;
-      settle.style.width = `${LOVE_CARD_W}px`;
-      settle.style.height = `${LOVE_CARD_H}px`;
+      settle.style.left = `${target.x - box.w / 2}px`;
+      settle.style.top = `${target.y - box.h / 2}px`;
+      settle.style.width = `${box.w}px`;
+      settle.style.height = `${box.h}px`;
       settle.style.zIndex = String(EXTRA_Z);
       settle.appendChild(buildLoveHeart());
       document.body.appendChild(settle);
@@ -1768,9 +1817,12 @@ function playLoveGiveExtra(node: HTMLElement, payload: FxCardPayload): void {
 const REVEAL_FLY_MS = 400; // 单张飞行时长（下一张在此刻起飞）
 const REVEAL_WING_FADE_MS = 400; // 翅膀落地渐隐
 const REVEAL_LAND_FADE_MS = 220; // 幽灵落地渐隐
-const REVEAL_W = HAND_CARD_W;
-const REVEAL_H = HAND_CARD_H;
-const REVEAL_SPACING = 102; // 与 .hand 负 margin 扇形步进一致（130 − 28）
+/* ⚠️⚠️ **G2 修正 R15-A：这里原来是模块级常量**
+ *   `REVEAL_W = HAND_CARD_W` / `REVEAL_H = HAND_CARD_H` / `REVEAL_SPACING = 102`。
+ *   它们是**热座**的值，却在 import 期被冻结 —— 于是远程页（手牌 100.572 × 137.601，
+ *   步距 78.909）的揭示幽灵比真卡大 29%（宽 +29.3% / 高 +30.0%）、抽第 2 张起每张多偏
+ *   23.09px。改成**函数内调用**（下面 `playRevealFly` 里现场取），与 A1 同一修法。
+ *   ⚠️ 值本身没变：三个出口在热座页返回原来的 130 / 178.8 / 102（构造性不变）。 */
 
 export function playRevealFly(
   opts: { source: PlayerId; shownTo: PlayerId; defId: string; triggerProtocol: string; index?: number },
@@ -1786,16 +1838,85 @@ export function playRevealFly(
   const from = handEndPos(src); // 起点：被揭示方手牌末尾（都以手牌末尾为起点）
   const to = handEndPos(dst);
   const i = opts.index ?? 0;
-  // 目标手牌生长方向：P1 向右、P2 向左（row-reverse），逐张延伸
-  const endX = to.x + (opts.shownTo === 0 ? REVEAL_SPACING * i : -REVEAL_SPACING * i);
+  // G2 修正 R15-A：盒尺寸与步距按**页**取值（远程页 100.572×137.601 / 78.909）。
+  const box = handCardBox();
+  const step = handFanStep();
+  // 目标手牌生长方向：由**接收方手牌容器自己的排列方向**定（`handOuterFor`）。
+  // ⚠️ 改动前这一句按**绝对玩家号**判（`opts.shownTo === 0 ? +step : −step`）——
+  //    远程页两条手牌都是 `reversed:false`（`render-net.ts:1500/1523`），而 `shownTo` 是
+  //    绝对号 ⇒ `shownTo===1` 时幽灵朝**左**飞、落在手牌**左外侧**，落地瞬间真卡出现在**右边**
+  //    （扇形的"新卡在右端"被整条镜像）。判据换成容器类名后，热座两档**同值**
+  //    （P0 ⇒ 'end' ⇒ +1；P1 `reversed:true` ⇒ 'start' ⇒ −1，与原 else 支同）。
+  const dir = handOuterFor(dst) === 'start' ? -1 : 1;
+  const endX = to.x + dir * step * i;
   const light = opts.triggerProtocol === 'light';
   const ghost = document.createElement('div');
   ghost.className = 'reveal-fly-ghost';
-  ghost.style.left = `${from.x - REVEAL_W / 2}px`;
-  ghost.style.top = `${from.y - REVEAL_H / 2}px`;
+  ghost.style.left = `${from.x - box.w / 2}px`;
+  ghost.style.top = `${from.y - box.h / 2}px`;
+  // ⚠️ 内联宽高**必须**写：`styles.css:1944-1945` 的 `.reveal-fly-ghost` 写着
+  //    `width: 130px; height: 178.8px`（热座值）。该元素挂在 `document.body` 上（不在
+  //    `.net-board` 里）⇒ **styles-net.css 命不中它**，只能在这里内联覆盖。
+  //    里面的 `img`（`buildFaceImg`）是 `inset: 0 / 100%` ⇒ 会跟着这个盒一起缩，无需另设。
+  ghost.style.width = `${box.w}px`;
+  ghost.style.height = `${box.h}px`;
   // 翅膀在卡面之后（buildFaceImg 之后 append 会盖住翅膀 → 先加翅膀再加卡面）
+  let wings: HTMLElement | null = null;
   if (light) {
-    ghost.appendChild(Object.assign(document.createElement('div'), { className: 'reveal-wings' }));
+    wings = Object.assign(document.createElement('div'), { className: 'reveal-wings' });
+    /* ── G2 修正 **R15-B**：翅膀按**这一页的手牌卡宽**等比缩 ─────────────────────────
+     *
+     * ## 缺陷形态
+     *
+     * `.reveal-wings::before/::after` 是 `styles.css:1973-1980` 里**绝对 px** 的
+     * 192×104（`top:-52px`）。它挂在**跟着卡缩**的幽灵（`.reveal-fly-ghost`）里：
+     * 热座卡宽 130 时翅膀是卡宽的 1.48×，远程页卡宽 100.572 时同一对翅膀变成 1.91×
+     * （相对"长大"了 29.3%，与 `--card-h` 那一族的缺陷同一个形态）。
+     * 幽灵自己是 `document.body` 级的浮层 ⇒ `styles-net.css` 命不中它，翅膀这个子元素
+     * 更命不中 ⇒ 只能在这里给**父元素**（`.reveal-wings`，0×0 的定位原点）加内联
+     * `transform`，让两条伪元素跟着一起缩。
+     *
+     * ## 为什么分母是 `HAND_CARD_W`（而不是又一个常数）
+     *
+     * `box = handCardBox()`（本函数上方已取，就是"这一页手牌卡多大"）。
+     * `HAND_CARD_W = 130` 是 `styles.css` 的 `.card{width:130px}` —— 也就是**这对翅膀
+     * 当初是照着多大的卡设计的**。于是：
+     *  · **热座**：`130 / 130 = 1` ⇒ 内联写出的逐字就是 `scale(1)`；
+     *  · **远程页**：`100.572 / 130 = 0.7736…` ⇒ 翅膀 148.5×80.5，与卡宽的比例回到 1.48×。
+     * ⚠️ `scale(1)` 是**恒等变换**：`.reveal-wings` 自身没有任何 transform 规则
+     *    （只有 `transition: opacity`），且它已是 `position:absolute; z-index:0`
+     *    （本来就自成层叠上下文、本来也就是两个 absolute 伪元素的包含块）⇒
+     *    热座多这一条内联 transform 是**零视觉变化**。
+     *    （DOM 上确实多了一个属性，如实写在这里，不假装"一个字节都没动"。）
+     *
+     * ## 铰链为什么不会被缩放带跑（**这条必须核对，不能想当然**）
+     *
+     * `styles.css:1962-2000` 的完整几何：
+     *  · `.reveal-wings` 是 **0×0** 的绝对定位盒（`left:50%; top:42%`），自身不画东西，
+     *    它是"两条翅膀共用的原点"；
+     *  · 伪元素 `top:-52px; height:104px` ⇒ 垂直中心 `= -52 + 104/2 = 0`，**正好落在原点
+     *    那条水平线上** —— 这就是 `top:-52px` 的用意（把铰链对到原点，而不是"随手偏移"）；
+     *  · `::before`：`right:6px` + `transform-origin: right center` ⇒ 铰链在 (x=-6, y=0)；
+     *    `::after`：`left:6px` + `transform-origin: left center` ⇒ 铰链在 (x=+6, y=0)；
+     *  · 扑扇动画 `reveal-wing-flap` 只改**伪元素自己**的
+     *    `rotate(var(--wing-rot) ± 22deg)` ⇒ 与父元素的 transform 不冲突（两层变换分别作用
+     *    在各自的元素上，不是同一个 transform 的两个来源）。
+     *
+     * 给父元素加 `scale(k)` 时，`transform-origin` **缺省**是 `50% 50%`，而父盒的
+     * 宽高**都是 0** ⇒ 缺省原点解算出来就是父盒自己的左上角 = 那个**原点**
+     * （0 的 50% 仍是 0），也就是 y=0 那条**铰链线**。于是：
+     *  · **垂直**：铰链线 y=0 是缩放的不动点 ⇒ 翅膀的上下位置**逐像素不变**
+     *    （`top:-52px` 一个字都不用改）；
+     *  · **水平**：两个铰链 (±6, 0) 缩放后到 (±6k, 0) —— 数值上确实被拉近，但**卡宽同时也
+     *    乘了 k**（幽灵盒在上方已内联成 `box.w`）⇒ 相对卡的位置 `6/65` 与 `6k/65k` 是
+     *    **同一个比例**，翅膀根部与卡的重叠比例逐位一致（这正是"按卡等比"的定义）；
+     *  · **倾角**：`k` 是**均匀**缩放（x/y 同一个 k），且旋转在伪元素自己的 transform 上
+     *    ⇒ 翅膀形状不被斜切。
+     * ⇒ **不需要**显式 `transform-origin`：缺省值已经钉在铰链线上 —— 这就是"铰链不动"的
+     *   构造性理由。反过来说，若把缩放下到伪元素上（它们的 `transform` 已被扑扇动画占用），
+     *   铰链反而会被 `transform-origin: right/left center` 改掉 —— **那才会真跑位**。 */
+    wings.style.transform = `scale(${box.w / HAND_CARD_W})`;
+    ghost.appendChild(wings);
   }
   ghost.appendChild(buildFaceImg(cardFaceSrc(opts.defId, true)));
   document.body.appendChild(ghost);
@@ -1809,10 +1930,7 @@ export function playRevealFly(
   });
   // 落地：翅膀渐隐 + 幽灵渐隐；done() 此刻触发（下一张立即起飞——"上一张落地即起飞下一张"）
   window.setTimeout(() => {
-    if (light) {
-      const wings = ghost.querySelector('.reveal-wings');
-      if (wings) wings.classList.add('fade');
-    }
+    if (wings) wings.classList.add('fade');   // R15-B：用创建时那个引用（`light` ⇔ `wings !== null`）
     ghost.style.transition = `opacity ${REVEAL_LAND_FADE_MS}ms ease`;
     ghost.style.opacity = '0';
     window.setTimeout(() => ghost.remove(), Math.max(REVEAL_LAND_FADE_MS, REVEAL_WING_FADE_MS) + 40);

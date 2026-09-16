@@ -20,7 +20,7 @@
 
 import type { GameState } from '../core/models/types';
 import { clipInsetCss, clipInsetRightPct } from './gen3-util';
-import { handOuterFor } from './fx-seat';
+import { fxViewSeat, handOuterFor } from './fx-seat';
 import { protocolColorOf } from './protocol-colors';
 import { fxOrientOf, orientOf, type CardOrient } from './fx-orient';
 
@@ -259,14 +259,26 @@ function queueStaggered(
   batch.items.push({ key: sortKey, run });
 }
 
-/** 该卡所在链路中心的 x（用于"从中间向两侧"排序）；找不到线槽时退化用卡自身 x */
+/**
+ * 该卡到**线槽中心**的距离（"从中间向两侧"错峰的排序键）；找不到线槽时退化用卡自身中心。
+ *
+ * ⚠️ **必须按页面取向选轴**（G2 修正 R15-1）：热座页链路是**横排**（一条线一行、卡从左往右堆）
+ * ⇒ 距离取 **x**；远程页链路是**竖排**（三条线 = 三根纵向列，见 `render-net.ts` 的 `renderNetBoard`）
+ * ⇒ 同一列里所有卡与线槽的 **x 中心完全相同**、`|Δx| ≡ 0` ⇒ 排序键全等 ⇒
+ * `queueStaggered` 的"从中间向两侧"退化成**入队顺序**（暴怒3 整线连劈 / 新星0 整线删除
+ * 会按 DOM 顺序逐张播，而不是从链路中间向两端扩散）。竖向的距离在 **y** 上。
+ *
+ * 轴由 `fxViewSeat()` 这一个判据给出（`null` = 热座 ⇒ 恒走 x，热座逐字不变）。
+ */
 function lineCenterX(node: HTMLElement, p: Gen3CardPayload): number {
   const rect = node.getBoundingClientRect();
-  if (p.owner === undefined || p.line == null) return rect.left + rect.width / 2;
+  const vertical = fxViewSeat() !== null;
+  const cardC = vertical ? rect.top + rect.height / 2 : rect.left + rect.width / 2;
+  if (p.owner === undefined || p.line == null) return cardC;
   const slot = document.querySelector<HTMLElement>(`.stack-slot[data-player="${p.owner}"][data-line="${p.line}"]`);
-  if (!slot) return rect.left + rect.width / 2;
+  if (!slot) return cardC;
   const sr = slot.getBoundingClientRect();
-  return Math.abs(rect.left + rect.width / 2 - (sr.left + sr.width / 2));
+  return Math.abs(cardC - (vertical ? sr.top + sr.height / 2 : sr.left + sr.width / 2));
 }
 
 /**
@@ -555,13 +567,14 @@ export function gen3DeleteFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3Car
     }
     // 新星 N1：星芒尖刺爆开 + 白闪；新星0（整线删除）按位置从中间向两侧连锁 + 收尾临界环
     case 'nova': {
-      const centerX = lineCenterX(node, p);
+      // 排序键 = 该卡到线槽中心的距离（轴由 `lineCenterX` 按页面取向选：横排 x / 竖排 y）
+      const sortKey = lineCenterX(node, p);
       // 2026-09-13 修复（用户实测"新星删除特效未触发"）：延迟播放时 DOM 可能已重渲染 → 原节点失效
       // → 必须在**事件时刻**定格 rect/orient，延迟回调里用 buildFxCardAt 建浮层。
       // G2 修正 R2：定格的是 **rect + 特效朝向 + 卡牌朝向** 三件（卡面本地旋转 = 卡面 − 特效，
       // 远程页恒 +90°；只定格其中一个会让浮层卡的卡面与装饰层差 90°）。
       const shot = { rect, orient, face: orientOf(node) };
-      queueStaggered(`gen3-nova-delete-${p.owner}-${p.line}`, centerX, () => {
+      queueStaggered(`gen3-nova-delete-${p.owner}-${p.line}`, sortKey, () => {
         const c = api.buildFxCardAt(shot.rect, shot.orient, p, api.extraZ, shot.face);
         if (!c) return;
         for (let i = 0; i < 4; i++) {
@@ -652,10 +665,10 @@ export function gen3FlipFx(node: HTMLElement, p: Gen3CardPayload, api: Gen3CardF
     }
     // 暴怒 W3：锯齿闪电劈中 + 白闪 + 焦痕（整线翻转时逐张连劈，错开 80ms）
     case 'wrath': {
-      const centerX = lineCenterX(node, p);
+      const sortKey = lineCenterX(node, p);
       // 同新星删除：延迟播放必须用事件时定格的 rect（DOM 可能已重渲染）
       const shot = { rect: g.rect, orient: g.orient, face: g.face };
-      queueStaggered(`gen3-wrath-flip-${p.owner}-${p.line}`, centerX, () => {
+      queueStaggered(`gen3-wrath-flip-${p.owner}-${p.line}`, sortKey, () => {
         const c = api.buildFxCardAt(shot.rect, shot.orient, p, api.extraZ, shot.face);
         if (!c) return;
         c.classList.add('g3-wrath-flip');

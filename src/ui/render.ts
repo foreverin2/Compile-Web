@@ -17,6 +17,10 @@ import { actionCn } from '../core/log';
 import { cardCommandDisabled } from '../core/effects/context';
 import { downloadLog } from './diag';
 import { buildTornadoFx } from './fx-tornado';
+// G2 修正 R15-A：拖拽打牌幽灵盒的**按页取值**尺寸（热座 130×178.8；远程页 100.572×137.601）。
+// 被拖的是**手牌卡**（`bindCardDrag` 的 `node`），而幽灵挂在 `document.body` 上
+// ⇒ `.net-hands .card` 那条覆盖规则**命不中它**（见 `bindCardDrag` 里 beginDrag 的注释）。
+import { handCardBox } from './fx-card-size';
 import { appendGen3CompiledFx, type Gen3FxApi } from './compiled-gen3';
 import { clearGen3Persistent, syncGen3Persistent } from './gen3-control';
 import { syncFollowers } from './fx-follow';
@@ -32,9 +36,14 @@ import type { CardOrient } from './fx-orient';
 // ⇒ 今天回退**恰好**也得 0；这条要求是**结构性**的（概念钉开 + 缺标记时如实得 0），见 fxRotDegOf 注释。
 import { fxRotDegOf } from './fx-orient';
 // G2 修正 R-F · Minor M-4：控制轨"贴端距离"的**单一出处**（`fx-seat.ts` 的常量）。
-// ⚠️ 只 import 这个**纯数据常量** —— 本文件（热座页）**不得**读 `fxViewSeat()` / 调用
-// `setFxViewSeat`（那会破坏"热座零变化是构造性的"这条红线，守卫会报红）。
-import { FX_TRACK_EDGE_PCT } from './fx-seat';
+// ⚠️ 本文件（共享助手所在的"热座侧"文件）**不得**调用 `setFxViewSeat` / `applyFxViewSeat`
+// （写座位 = 破坏"热座零变化是构造性的"这条红线；有守卫钉住）。
+// ⚠️ 读座位在这里有**且只有一个**例外（G2 修正 R14-7）：`buildChainLayer` 的锁环尺寸判据
+// `chainLinkGeom(W, fxViewSeat())` —— 它只可能**加宽远程页分支**（热座 ⇒ 模块态恒 `null`
+// ⇒ 逐字取改动前的四个常量），因此不改变热座行为；读取点集中在那**一处**并有单测
+// （`tests/ui/spirit-chain-geom.test.ts`）。除此之外本文件不许出现 `fxViewSeat()`。
+import { FX_TRACK_EDGE_PCT, FX_TRACK_EDGE_PCT_Y, fxViewSeat } from './fx-seat';
+import type { FxViewSeat } from './fx-seat';
 
 export interface UiCallbacks {
   onAction(a: LegalAction): void;
@@ -173,6 +182,15 @@ export function renderProtocol(
   }
   holder.appendChild(img);
   box.appendChild(holder);
+  // ── G2 修正 **R15-3**：对勾徽标挂在 **`.protocol`**（`box`）上，**不是** `holder` 上 ──
+  // 承重：`transform: rotate(∓90deg)` 只加在 `img.protocol-img` 上（远程页的横躺协议），
+  // 而 **`transform` 不继承** ⇒ 徽标**不会**跟着转，它的屏幕位置就是它的布局位置
+  // （`position:absolute` 的包含块 = `.protocol` 的 padding box）。
+  // 这正是 R15-3 的几何依据：远程页只需要把"盒顶边 / 盒右缘"换算到**卡视觉盒**的
+  // 右上角（±90° 的视觉足迹是**同一个轴对齐矩形** ⇒ 与朝向无关，一条规则就够，
+  // 见 `styles-net.css` 第 3b 节）；**不需要**任何朝向标记 —— R15-3 的中间版本曾在
+  // 本行写过一个 `data-net-rot`，那条属性**没有任何消费方**（`tests/ui/net-r15.test.ts`
+  // 有一条反向腿：全仓不许再出现它）。
   if (p.compiled) box.appendChild(el('span', 'protocol-check', '✓'));
   // 双击协议卡放大查看（协议无单击动作，直接 dblclick 即可；协议图横向展示）
   box.addEventListener('dblclick', () => openZoom(p.defId, true, true, p.compiled));
@@ -1430,19 +1448,80 @@ const CHAIN_LINK_H = 11;     // 椭圆环短轴（垂直方向）
 const CHAIN_LINK_GAP = 9;    // 相邻环中心间距 ≈ 环长的一半 → 视觉相扣
 const CHAIN_LINK_OFFSET = 4; // 相邻环垂直交错量（模拟「扣在一起」）
 const CHAIN_RETRACT_MS = 1000; // 离开 check-cache 后锁链缩回消散时长
+/** 热座的锁环几何 = 改动前那四个常量（`chainLinkGeom` 的热座分支与"编译链"那条固定尺寸的
+ *  调用点都取它 —— 后者的 viewBox 是自成一体的 `len × 26`，与手牌区宽度无关，本轮不动）。 */
+const CHAIN_LINK_GEOM_HOT: ChainLinkGeom = {
+  w: CHAIN_LINK_W, h: CHAIN_LINK_H, gap: CHAIN_LINK_GAP, offset: CHAIN_LINK_OFFSET,
+};
 let prevStep: Step | null = null;
 let chainLayer: HTMLElement | null = null;
 
+/** 链环几何（px）：长轴 / 短轴 / 相邻环中心距 / 相邻环交错量。 */
+export interface ChainLinkGeom { w: number; h: number; gap: number; offset: number }
+
+/**
+ * **链环尺寸的唯一出处**（G2 修正 R14-7）。
+ *
+ * ## 为什么必须按宽度定（审计证据）
+ *
+ * `CHAIN_LINK_W = 18` / `CHAIN_LINK_GAP = 9` 是**固定 px**，而 `buildChainLayer` 把手牌区矩形
+ * 横向切成 `CHAIN_COUNT / 2 = 10` 段（`segW = (W − 20) / 10`）：
+ *  - **热座**：手牌区较宽 ⇒ 环长 18px 与段宽同一量级，环环相扣、读作 ⛓️（正常）；
+ *  - **远程页**：手牌区宽 `≈ 100.57`（`--card-h:140` ⇒ `--card-w = (140−2)×0.71429+2`）⇒
+ *    `segW ≈ 8.06`，而环长恒 18 ⇒ **2.2 倍横向重叠**（20 条链糊成"一束麻绳"），
+ *    且最小倾斜 `minTilt = min(12, segW×0.3) ≈ 2.4px` ⇒ 每条链几乎垂直、更像一团绳子。
+ *    `syncChainLayerPosition` 只拉伸整层 SVG（`preserveAspectRatio=none`），**环的 px 半径不变**
+ *    ⇒ 那条路径救不了它。
+ *
+ * ## 判据（为什么用 `seat === null` 分支，而不是"clamp 恰好取到 18"）
+ *
+ * 任务书给了两条路，我选**分支**：`seat === null`（热座）走**逐字未改**的四个常量，
+ * 只有非 null（远程页）才按宽度缩。理由是"热座零变化"必须是**构造性**的 —— 若改成
+ * "clamp 在某个宽度上恰好取到 18"，热座环尺寸就变成**手牌区宽度**的函数：宽度一变
+ * （换一张卡、加一张牌、将来改 K 值）热座锁链的观感就跟着变，而"哪个宽度才算热座"没有判据。
+ * 分支版的保证是"热座这一支**不可能**被宽度碰到"。
+ * （数值上也必须如此：`W = 128.6` 时 `clamp(8, W/12, 18) = 10.72` —— 单靠 clamp 取不到 18。）
+ *
+ * ## 缩放口径
+ *
+ * `w = clamp(8, W/12, 18)`（远程页 `W ≈ 100.57` ⇒ `w ≈ 8.38`，正好落在 `segW ≈ 8.06`
+ * 的量级 ⇒ 不再重叠）；短轴 / 中心距 / 交错量**按同一比例 k = w / 18** 缩，于是
+ *  - 热座（k = 1）**逐位**等于改动前的 18 / 11 / 9 / 4；
+ *  - 远程页的环仍是"长轴沿链、短轴垂直、中心距 = 长轴一半、相邻环交错"的**同一形状**
+ *    （只缩尺寸、不改形状）—— 否则环会变成"竖着比横着还高"的怪椭圆，扣接关系也读不出来。
+ *
+ * ⚠️ 本函数**吃显式的 `seat` 实参**（不读模块态）：判据因此可以在无 jsdom 的单测里逐格断言
+ * （`tests/ui/spirit-chain-geom.test.ts`），调用方 `buildChainLayer` 只负责把当前座位递进来。
+ *
+ * ⚠️ **诚实边界**：`syncChainLayerPosition` 只改层盒、**不重建**已生成的环 ⇒ 层生成之后
+ * 手牌区宽度大幅变化（缩放窗口 / 手牌张数变化触发重定位）时，环仍是**生成时**的尺寸
+ * （SVG 被拉伸、环的 px 半径不变 —— 与改动前同一性质）。这一条**没有**在本次修掉：
+ * 重建会重启动画，而这一层是"一次性层、绝不重建"（本文件头注与 FX-R2 的既有约束）。
+ */
+export function chainLinkGeom(width: number, seat: FxViewSeat): ChainLinkGeom {
+  if (seat === null) {
+    // 热座：逐字是改动前的四个常量（"热座零变化"就落在这三行上）
+    return CHAIN_LINK_GEOM_HOT;
+  }
+  const w = Math.min(CHAIN_LINK_W, Math.max(8, width / 12));
+  const k = w / CHAIN_LINK_W;
+  return { w, h: CHAIN_LINK_H * k, gap: CHAIN_LINK_GAP * k, offset: CHAIN_LINK_OFFSET * k };
+}
+
 /** 沿线段 (x1,y1)→(x2,y2) 排布环环相扣的小椭圆环（⛓️ 样式）：
- *  - 环心沿线等距均布（间距 CHAIN_LINK_GAP），每环旋转到线段角度；
- *  - 相邻环沿线段垂直方向交替错位 CHAIN_LINK_OFFSET → 读作「扣在一起」；
- *  - 环为细椭圆 stroke 描边（CSS .fx-spirit-chains-svg ellipse），紫调。 */
+ *  - 环心沿线等距均布（间距 `geom.gap`），每环旋转到线段角度；
+ *  - 相邻环沿线段垂直方向交替错位 `geom.offset` → 读作「扣在一起」；
+ *  - 环为细椭圆 stroke 描边（CSS .fx-spirit-chains-svg ellipse），紫调。
+ *  ⚠️ G2 修正 R14-7：四个尺寸**全部**从 `geom` 取（不再读模块常量）—— 这样
+ *  "热座 18/11/9/4 / 远程页按手牌区宽度缩"这条判据只有一个出处（`chainLinkGeom`），
+ *  守卫可以用测试矩形**真跑**本函数、读回 `rx/ry` 断言。 */
 function appendChainLinks(
   svg: SVGSVGElement,
   x1: number,
   y1: number,
   x2: number,
   y2: number,
+  geom: ChainLinkGeom,
 ): void {
   const dx = x2 - x1;
   const dy = y2 - y1;
@@ -1451,15 +1530,15 @@ function appendChainLinks(
   const ang = (Math.atan2(dy, dx) * 180) / Math.PI; // 线段角度（度）
   const nx = -dy / len; // 线段垂直单位向量（错位方向）
   const ny = dx / len;
-  const rx = CHAIN_LINK_W / 2;
-  const ry = CHAIN_LINK_H / 2;
-  const count = Math.max(1, Math.floor(len / CHAIN_LINK_GAP));
+  const rx = geom.w / 2;
+  const ry = geom.h / 2;
+  const count = Math.max(1, Math.floor(len / geom.gap));
   const tStep = len / count;
   for (let i = 0; i < count; i++) {
     const t = i * tStep + tStep / 2; // 环心沿线均布（首尾留半格）
     const cx = x1 + (dx / len) * t;
     const cy = y1 + (dy / len) * t;
-    const off = (i % 2 === 0 ? 1 : -1) * CHAIN_LINK_OFFSET; // 相邻环上下交错
+    const off = (i % 2 === 0 ? 1 : -1) * geom.offset; // 相邻环上下交错
     const ox = (cx + nx * off).toFixed(1);
     const oy = (cy + ny * off).toFixed(1);
     const link = document.createElementNS('http://www.w3.org/2000/svg', 'ellipse');
@@ -1477,8 +1556,11 @@ function appendChainLinks(
  *  用户规格「锁链起点与终点互不重叠、基本倾斜」：
  *  - 上/下边各 10 条；起点边 10 个等分段、每段内随机取起点 → 起点集合互不重叠；
  *  - 终点在相对边对应段内随机 + 段内偏移保证 |Δx| ≥ 最小倾斜 → 终点集合互不重叠；
- *  - 20 条链都穿越手牌区中央，线段交叉是几何必然（视觉为散布锁链网），不禁止交叉。 */
-function buildChainLayer(rect: DOMRect, player: PlayerId): HTMLElement {
+ *  - 20 条链都穿越手牌区中央，线段交叉是几何必然（视觉为散布锁链网），不禁止交叉。
+ *  ⚠️ `export`：**仅为守卫**（本仓无 jsdom，桩 DOM 下真跑生成器是本判据唯一的行为腿 ——
+ *  读回生成的 `<ellipse rx/ry>`；见 `tests/ui/spirit-chain-geom.test.ts`）。
+ *  它与 `syncCheckCacheChains` 一样只在渲染路径被调用，导出不改变任何调用方语义。 */
+export function buildChainLayer(rect: DOMRect, player: PlayerId): HTMLElement {
   const layer = el('div', 'fx-spirit-chains');
   layer.dataset.chainPlayer = String(player); // 滚动/缩放跟随：按此重新查询手牌区 rect
   layer.style.left = `${rect.left}px`;
@@ -1497,6 +1579,12 @@ function buildChainLayer(rect: DOMRect, player: PlayerId): HTMLElement {
   const half = CHAIN_COUNT / 2; // 上/下边各 10 条
   const segW = Math.max(1, (W - pad * 2) / half);
   const minTilt = Math.min(12, segW * 0.3); // 基本倾斜（窄手牌区退化为段内最小偏移）
+  // G2 修正 R14-7：环尺寸按**本层生成时的手牌区宽度**定（判据见 `chainLinkGeom`）。
+  // ⚠️ 这是 `render.ts` 里**唯一**读 `fxViewSeat()` 的地方：它只可能**加宽**远程页分支
+  // （热座 ⇒ 模块态恒 null ⇒ `chainLinkGeom` 走"逐字常量"那一支），因此不改变热座行为；
+  // 为什么不走"宽度阈值"这条路：热座的手牌区宽度随张数变化，用宽度当页面判据会让热座
+  // 锁链的观感随张数漂移（`chainLinkGeom` 的注释里有完整论证）。
+  const geom = chainLinkGeom(W, fxViewSeat());
   for (let i = 0; i < half; i++) {
     for (const fromTop of [true, false]) {
       const segStart = pad + i * segW;
@@ -1510,7 +1598,7 @@ function buildChainLayer(rect: DOMRect, player: PlayerId): HTMLElement {
       }
       const y1 = fromTop ? 3 : H - 3;
       const y2 = fromTop ? H - 3 : 3;
-      appendChainLinks(svg, x1, y1, x2, y2);
+      appendChainLinks(svg, x1, y1, x2, y2, geom);
     }
   }
   layer.appendChild(svg);
@@ -2083,8 +2171,16 @@ function bindShieldDrag(shield: HTMLElement, player: PlayerId, hand: HTMLElement
 //    R3 之前两处各写死一个 4，靠注释说"同源"，没有任何机检连起来（评审 Minor M-4）。
 const CONTROL_EDGE_PCT = FX_TRACK_EDGE_PCT; // 持有方贴端距离（左端 4% / 右端 96%，控制卡仍不出轨）
 /** 竖向（远程页控制轨）的贴端百分比：卡片高 70px、轨道高 158px，且**中心对齐坐标** ⇒
- *  两端必须内缩（4% 处中心只有 6.3px ⇒ 上半张卡在轨道外）。22% ≈ 卡高的一半再加一点余量。 */
-const CONTROL_EDGE_PCT_Y = 22;
+ *  两端必须内缩（4% 处中心只有 6.3px ⇒ 上半张卡在轨道外）。22% ≈ 卡高的一半再加一点余量。
+ *
+ *  ⚠️ **G2 修正 R14-5（本轮）**：这个数**不再是本文件的字面量** —— 它从 `fx-seat.ts` 的
+ *  `FX_TRACK_EDGE_PCT_Y` 取（与横向的 `CONTROL_EDGE_PCT` 完全同构）。
+ *  依据：R14-1 只改了渲染侧，`fx-seat.ts` 的 `fxTrackEndFor` 竖向分支仍按 4 / 96 算 FX 落点
+ *  ⇒ 轨道高 158px 时卡片心在 34.76 / 123.24px、而特效落在 6.32 / 151.68px，**差 28.4px**
+ *  （`fx-seat.ts` 自己写着"两处必须逐字一致"的不变式，1114 条测试全绿却没人发现）。
+ *  数值本身没有变（仍是 22 / 78）—— 变的只是它的**住址**：现在两条轴各只有一个数字，
+ *  且都由渲染层从 fx-seat 取，`tests/ui/fx-seat.test.ts` 有一条**可执行**的同源断言兜底。 */
+const CONTROL_EDGE_PCT_Y = FX_TRACK_EDGE_PCT_Y;
 let controlSliderPos = 50;
 
 /**
@@ -2094,29 +2190,61 @@ let controlSliderPos = 50;
  *  - `'x'`（**缺省**，热座）= 横向轨道：滑块贴**左端 4% / 右端 96%**、标签 `玩家 1` 在左 / `玩家 2` 在右。
  *    缺省值与改动前**逐字等价**（`img.style.left`、两个标签的类名与文本一字未变）——
  *    热座观感零变化是**构造性**的（远程页调用点显式传 `'y'`）。
- *  - `'y'`（远程页）= 竖向轨道：`player = 0` 贴**上端 4%**、`player = 1` 贴**下端 96%**。
- *    ⚠️ **轴向与"谁在上/下"是两件事**：本函数只按**绝对玩家号**给位置；"自己端在下、
- *    对手端在上"的**座位换算**由调用方 `render-net.ts` 的 `netControlHolder` 完成
- *    （它把 `s.control` 先映射成"绝对玩家号"再交进来）。理由：座位是**页面的视角**，
+ *  - `'y'`（远程页）= 竖向轨道：贴**上端 22% / 下端 78%**（端点由 `end` 给，见下）。
+ *    ⚠️ **轴向与"谁在上/下"是两件事**：本函数按调用方给的**端**（`end`）算位置；"自己端在下、
+ *    对手端在上"的**座位换算**由调用方 `render-net.ts` 的 `netControlEnd` 完成（它用
+ *    `fxIsSelfSide` 把"绝对持控者"映射成"端"再交进来）。理由：座位是**页面的视角**，
  *    不是组件的属性 —— 让共享助手去读 `fxViewSeat()` 会把远程页的视角概念写进热座页的源码。
  *
- * 滑块位置只反映【控制组件归属】（`s.control`），三态离散大幅移动：
- *   中立 → 居中（50%）；玩家 1 持有 → 贴一端；玩家 2 持有 → 贴另一端。
- * 归属易主经 0.5s 过渡大幅滑到对应端。控制条归属类（held-0/1/neutral）与位置天然一致。
+ * ⚠️ **G2 修正 R16：位置端（`end`）与归属玩家（`holder`）是两个参数** —— R3~R15 期间它们是同一个
+ * `holder`，在热座页恰好同值、在远程页**从不同值**（详见 `ControlTrackOpts.end` 的推导）。
+ * 位置只反映【组件贴哪一端】，归属类/文案只反映【谁持控】：
+ *   中立 → 居中（50%）+ `neutral`；某玩家持有 → 贴对应端 + `held-N`。
+ * 归属易主经 0.5s 过渡大幅滑到对应端。**在热座页**这两件事仍然天然一致（绝对号 = 端）。
  * 由于渲染模型每次重建 DOM，直接写位置不会触发 transition；因此先写上一帧位置、
  * 下一帧再写目标位置，让过渡真正产生滑动动画。
  */
 export interface ControlTrackOpts {
   /** 轨道轴向：`'x'` = 横向（**热座缺省，语义与改动前逐字一致**）；`'y'` = 竖向（远程页）。 */
   axis?: 'x' | 'y';
-  /** 控制组件归属的**读取覆盖**（`-1` = 中立）。缺省 = `s.control`（**热座行为逐字不变**）。
-   *  远程页用它把"座位端"换算成绝对玩家号后再交给本助手（见 render-net.ts 的
-   *  `netControlHolder`）—— 换算不放这里，是因为那是**页面的视角**，不是组件的属性。 */
+  /** 控制组件**归属玩家**的读取覆盖（`-1` = 中立）。缺省 = `s.control`（**热座行为逐字不变**）。
+   *  ⚠️ 它只决定**类名与文案**（`held-N` / `控制权: 玩家 N`），**不**决定滑块贴哪一端 ——
+   *  那是下面 `end` 的职责（见 `end` 的注释：这两个问题在远程页是两个不同的数）。 */
   holder?: -1 | PlayerId;
+  /**
+   * 滑块贴**哪一端**：`0` = 小端（横=左 / 竖=上）、`1` = 大端（横=右 / 竖=下）、`-1` = 居中（中立）。
+   * **缺省 = `holder`** ⇒ 只传 `holder`（热座页那一处调用）时位置与改动前**逐位相同**。
+   *
+   * ## 为什么必须把"位置端"与"归属玩家"拆成两个参数（G2 修正 R16）
+   *
+   * 改动前**一个** `holder` 同时承担三件事：① 位置（`holder === 0` 贴小端…）、
+   * ② 类名 `held-${holder}`、③ 文案 `玩家 ${holder + 1}`。这三件事只在一处**恰好**同值：
+   *  - **热座页**（`renderControlModule(s)`，缺省 `axis: 'x'`）：横排、P0 在小端（左）⇒
+   *    "绝对玩家号"与"屏幕端"**重合**（0 = 左 = 小端），于是三件事用一个数不会出错 ——
+   *    这是缺省值必须仍等于 `holder` 的原因（**逐字零变化的构造性保证**）；
+   *  - **远程页**（`render-net.ts`，`axis: 'y'`）：竖向、**自己端 = 下端（大端）**，而"谁是自己"
+   *    由**视角座位**决定 ⇒ 绝对玩家号与端的对应随座位翻转：
+   *    | viewSeat | 持控者 | 绝对号（归属/文案） | 端（位置） |
+   *    |---|---|---|---|
+   *    | 0 | 自己 P0 | 0 | **1**（大端/下） |
+   *    | 1 | 自己 P1 | **1** | **1**（大端/下，不是小端） |
+   *    旧实现把绝对玩家号同时当端用 ⇒ **两种座位下滑块位置全错**（自己持控停在对手端 22%、
+   *    对手持控停在自己端 78%），而 `held-N` / 文案在 `viewSeat = 1` 时也错（P2 持控被写成"玩家 1"）。
+   *
+   * 拆开之后：**位置**只认 `end`（由页面的座位语义决定），**归属**只认 `holder`（绝对玩家号，
+   * 与引擎的 `s.control` 同义）。共享助手仍然**不读**任何座位状态（`render.ts` 里不许出现
+   * `fxViewSeat()` 的写入/座位换算）—— 换算留在调用方（`render-net.ts` 的 `netControlEnd`）。
+   */
+  end?: -1 | PlayerId;
 }
 
 export function renderControlModule(s: GameState, opts?: ControlTrackOpts): HTMLElement {
   const holder: -1 | PlayerId = opts?.holder ?? s.control;
+  // G2 修正 R16：**位置端**与**归属玩家**解耦（见 `ControlTrackOpts.end` 的注释）。
+  // 缺省 = holder ⇒ 热座那一处调用（`renderControlModule(s)`）**逐位不变**；
+  // 远程页显式传 `end`（按座位换算的"端"），于是"谁持控"（类名/文案）与"滑块贴哪一头"
+  // 各自只有一个输入，且两边的数字不再被迫相等。
+  const end: -1 | PlayerId = opts?.end ?? holder;
   const neutral = holder === -1;
   const vertical = opts?.axis === 'y';
   // 三态目标位置：中立居中；player 0 贴小端（横=左 / 竖=上）；player 1 贴大端（横=右 / 竖=下）
@@ -2124,10 +2252,15 @@ export function renderControlModule(s: GameState, opts?: ControlTrackOpts): HTML
   // （styles.css:698）而轨道只有 158px，而远程页把它的 transform 改成**中心对齐坐标**
   // （styles-net.css 第 9 节）⇒ 4%/96% 会让卡片上半/下半出轨道。
   // ⚠️ 只动竖向：横向（热座）继续用 CONTROL_EDGE_PCT，逐字不变。
+  // G2 修正 R14-5：两个 edge 现在**都**来自 fx-seat 的常量（竖向 = FX_TRACK_EDGE_PCT_Y），
+  // 于是 FX 落点（`fxTrackEndFor`）与这里的滑块停位不可能再各拿一个数（旧差 28.4px）。
   const edge = vertical ? CONTROL_EDGE_PCT_Y : CONTROL_EDGE_PCT;
   let target = 50;
-  if (holder === 0) target = edge;
-  else if (holder === 1) target = 100 - edge;
+  // ⚠️ R16：位置只认 `end`（"端"），**不**认 `holder`（绝对玩家号）—— 远程页这两者不是同一个数。
+  // 旧句 `if (holder === 0) …` 在 `viewSeat = 1` 时会把 P2（自己）停到上端 22%、P1（对手）停到下端 78%，
+  // 与 `fxTrackEndFor` 的落点（自己 78% / 对手 22%）**正好差 56%**（竖向轨道 158px ⇒ 88.5px）。
+  if (end === 0) target = edge;
+  else if (end === 1) target = 100 - edge;
   const ctrl = el('div', 'control-module' + (neutral ? ' neutral' : ` held-${holder}`));
   const track = el('div', 'control-track');
   // 标签类名按轴向给：横向 `left/right`（styles.css 的既有规则），竖向 `top/bottom`（styles-net.css）
@@ -2756,7 +2889,9 @@ function appendSpiritCompiled(layer: HTMLElement, defId: string): void {
       const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
       svg.setAttribute('viewBox', `0 0 ${Math.ceil(len)} 26`);
       svg.setAttribute('preserveAspectRatio', 'none');
-      appendChainLinks(svg, 5, 13, Math.max(7, len - 5), 13);
+      // 编译链（`compiled-spirit-chain`）：viewBox 是自成一体的 `len × 26`，环尺寸与手牌区宽度
+      // 无关 ⇒ 传**热座几何**（= 改动前那四个常量）；本轮的"按宽度缩"不适用于它。
+      appendChainLinks(svg, 5, 13, Math.max(7, len - 5), 13, CHAIN_LINK_GEOM_HOT);
       wrap.appendChild(svg);
       host.appendChild(wrap);
       chains.push(wrap);
@@ -5894,8 +6029,11 @@ export function bindCardDrag(node: HTMLElement, s: GameState, cb: UiCallbacks, u
     let active = false;
     let ghost: HTMLElement | null = null;
     let legalLines = new Set<string>(); // `${player}:${line}` 合法落点（自己/对方槽，修改提示词 15）
-    // 拖拽期间的朝向：被拖卡即已选中卡时沿用翻面状态，否则按正面（未选中卡无翻面操作）
+    /** 拖拽期间的朝向：被拖卡即已选中卡时沿用翻面状态，否则按正面（未选中卡无翻面操作） */
     let dragFaceUp = true;
+    /** G2 修正 R15-A：幽灵盒尺寸（`beginDrag` 里现场取）。**必须**存成变量 ——
+     *  `positionGhost` 每次 mousemove 都要用它算"光标在幽灵中心"的偏移。 */
+    let ghostBox: { w: number; h: number } | null = null;
 
     const clearHighlights = () => {
       for (const slot of document.querySelectorAll<HTMLElement>('.stack-slot.drag-target')) {
@@ -5916,8 +6054,14 @@ export function bindCardDrag(node: HTMLElement, s: GameState, cb: UiCallbacks, u
 
     const positionGhost = (ev: MouseEvent) => {
       if (!ghost) return;
-      // 光标大致位于幽灵卡中心：卡宽 130px 减半后略偏上，卡片不遮住光标
-      ghost.style.transform = `translate(${ev.clientX - 65}px, ${ev.clientY - 50}px) scale(0.9)`;
+      // G2 修正 R15-A：光标大致位于幽灵卡中心。偏移量必须由**实测盒**推：
+      //  - 横向原来是写死的 `-65`（= 热座 130/2）；远程页卡宽 100.572 ⇒ 写死值会让幽灵
+      //    相对光标偏 14.7px（幽灵中心不在光标上，"抓"的位置不对）。
+      //  - 纵向原来是写死的 `-50`（= 热座卡高的一半再上移 39.4，让卡不遮住光标）。
+      //    拆成"盒半高 − 39.4"后，**热座逐位不变**（89.4 − 39.4 = 50），远程页按 137.601/2 缩放。
+      const w = ghostBox?.w ?? 130;
+      const h = ghostBox?.h ?? 178.8;
+      ghost.style.transform = `translate(${ev.clientX - w / 2}px, ${ev.clientY - (h / 2 - 39.4)}px) scale(0.9)`;
     };
 
     const beginDrag = () => {
@@ -5942,6 +6086,17 @@ export function bindCardDrag(node: HTMLElement, s: GameState, cb: UiCallbacks, u
       ghost.classList.remove('popped');
       ghost.style.transform = '';
       ghost.querySelector('.play-btns')?.remove();
+      // ⚠️⚠️ **G2 修正 R15-A：这两行是必需的，不能省。**
+      //   被拖的 `node` 是 `.net-hands .card`，它的宽高来自 `styles-net.css:930/932` 的
+      //   `.net-hands .card { width: var(--card-w) }`；而 clone 挂到 `document.body` 之后
+      //   **不再在 `.net-hands` 里** ⇒ 那条规则**命不中它** ⇒ 宽度退回 `styles.css:387`
+      //   的 `.card { width: 130px }`（热座值）。也就是说：远程页拖起来的是**大 29%** 的卡。
+      //   同文件 `bindDraftDrag`（`:4489-4495`）早就是正确写法（`gw = r.width` + 内联宽高），
+      //   这里对齐它。⚠️ 用 `handCardBox()` 而不是再量一次 `node`：语义是"这一页的手牌卡
+      //   多大"（单一出处），且 `node` 上可能带 hover 的 `transform` 影响 rect。
+      ghostBox = handCardBox();
+      ghost.style.width = `${ghostBox.w}px`;
+      ghost.style.height = `${ghostBox.h}px`;
       document.body.appendChild(ghost);
       positionGhost(e);
     };

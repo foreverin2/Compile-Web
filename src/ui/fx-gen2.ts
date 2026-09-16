@@ -21,7 +21,18 @@ import { fxHandEndPoint, fxStackEndPoint, fxViewSeat, handOuterFor } from './fx-
 // **R9-1**：整卡浮层盒的尺寸与"手工居中"的半宽/半高（**值一字未改**，只是收成**具名常量** ——
 // 它们是**手牌卡** 130×178.8 的半个，与场上卡的 `--card-h`（R9-1 后 140）**无关**，
 // 本波**不缩**；理由与推导见 `./fx-card-size` 的头注）。
-import { HAND_CARD_H, HAND_CARD_HALF_H, HAND_CARD_HALF_W, HAND_CARD_W } from './fx-card-size';
+// ⚠️ **R15-A**：上面那句"本波不缩"只对**热座**成立 —— 远程页手牌卡被 R9-4 缩到
+// 100.572×137.601（场上卡 100.572×140）。所以下面凡是"贴着手牌/场上真卡"的落点盒
+// （halo / assim-land / 抽牌光晕 / 烟雾灰光 / courage 鎏金框）一律改走
+// `handCardBox()` / `stackCardBox()` / `handFanStep()` 三个**按页取值**的出口。
+// ⚠️ 这四个常量**保留**：`HAND_CARD_HALF_W/H` 仍被"装饰大于卡"的调用点（骰子/翅膀等）使用，
+// 那些是 B 类产品选择、本波不动（见报告"没做的条目"）。`HAND_CARD_W/H` 本文件已无引用。
+import { handCardBox, handFanStep, stackCardBox } from './fx-card-size';
+// **R15-B**：骰子底光（`.fx-luck-dice-glow`，body 级绝对 px）要跟着**这一页的场上卡**缩，
+// 分母复用龙卷风那一轮落地的 `TORNADO_BASE_CARD_H`（= 175 = `styles.css:422` 的 `.stack`
+// `--card-h`）—— **不另造基准常数**：同一页里两个"装饰跟着卡缩"的族必须共用同一条基准，
+// 否则龙卷风顺 0.8、底光顺别的数，两个特效的比例关系会随轮次漂移。
+import { TORNADO_BASE_CARD_H } from './fx-tornado';
 
 type PlayerId = 0 | 1;
 
@@ -84,10 +95,16 @@ function spawnLayer(x: number, y: number, cls: string, w: number, h: number): HT
  *    爆出「囧」字样。
  * 层以源卡 uid 为键；roll 消费后整体自清理（reset 由 clearGen2Fx 兜底）。 */
 
-/** 骰子尺寸 */
+/** 骰子尺寸
+ *
+ *  ⚠️ **G2 修正 R15-B：这两个数本波一个字都不改** —— 骰子的白点尺寸（`.fx-luck-pip{width:13px;
+ *  height:13px}`）与圆角（`border-radius:14px`）都是 `styles.css` 里**绝对 px** 的固定值。
+ *  若把骰子盒按卡等比缩，**点会相对变大、圆角会相对变圆**（缩盒不缩点 = 另一件事，
+ *  需要连 `13px` / `14px` 一起参数化），本轮**不做**。
+ *  所以下面缩的只有"底光"这一个**纯装饰**方块。 */
 const DICE_W = 76;
 const DICE_H = 76;
-/** 底光直径 */
+/** 底光直径（**热座**值；远程页由 `startLuckDiceFx` 里的 `k` 等比缩 —— 见那里的长注释） */
 const GLOW_W = 150;
 /** 成功：橙圆保持时长（提示词「1秒后在原地消失」） */
 const SUCCESS_HOLD_MS = 1000;
@@ -187,6 +204,45 @@ export function startLuckDiceFx(uid: string): void {
   if (!uid) return;
   const center = cardCenterByUid(uid);
   if (!center) return;
+  /* ── G2 修正 **R15-B**：底光按**这一页的场上卡**等比缩 ──────────────────────────────
+   *
+   * ## 缺陷形态
+   *
+   * `GLOW_W = 150` 是**热座**值（热座场上卡 `--card-h: 175`）—— 它是 175 的 85.7%，
+   * 也就是"比卡略小的一个圆底光"。远程页的卡被缩到 `--card-h: 140`
+   * （`styles-net.css:91-97`），而底光仍是 150 ⇒ 变成卡高的 **107%**（比卡还宽）。
+   * 底光是 `document.body` 级的 `position:fixed` 方块（`.fx-luck-dice-glow`），
+   * **不在 `.net-board` 里** ⇒ `styles-net.css` 命不中它，只能在这里内联缩。
+   *
+   * ## 为什么用 `stackCardBox()` / 与飓风**共用同一个基准常数**
+   *
+   * 骰子层锚在**源卡**中心（`cardCenterByUid`），源卡在宣告场景里是一张**场上链路**的卡
+   * （luck-0/luck-3 在链路里宣告）⇒ "这一页的卡多大"就该用场上卡量。
+   * 分母复用上一轮刚落地的 `TORNADO_BASE_CARD_H`（= 175 = `styles.css:422` 的 `.stack`
+   * `--card-h`）—— **不另造基准**：两个"装饰跟着卡缩"的族（龙卷风 / 底光）必须
+   * 用同一条基准，否则同一页里两个特效的缩放系数会各说各话。
+   *
+   * ## 为什么热座构造性等于改动前
+   *
+   * `stackCardBox()` 在没有 `.net-board` 时返回 175（以及读不到 DOM 时的兜底）
+   * ⇒ `k = 175 / 175 = 1` ⇒ `GLOW_W * k` 逐位等于 `GLOW_W`，
+   * `center.x - GLOW_W * k / 2` 逐位等于 `center.x - GLOW_W / 2`
+   * ⇒ 热座写进 DOM 的内联值与改动前**一字不差**（不是"看起来差不多"）。
+   * 远程页 140/175 = 0.8 ⇒ 底光 120px（= 150 × 0.8）。
+   *
+   * ## 为什么 `k` 只算一次、且**两个分支共用** `gw`
+   *
+   * 本函数是**幂等**的：`choice-bar` 每次重渲染都会再调一次，第二次起走的是下面
+   * "已有层"那一条**只重定位**的分支。若只在创建分支里乘 `k`，那么
+   * "先建层、再切页 / 再缩放窗口"时，尺寸会**停在创建那一刻**的值（重定位只挪位置、
+   * 不修尺寸）—— 同一层里"位置跟着新页、尺寸还是旧页"。
+   * 所以尺寸与位置都由**同一个局部量** `gw = GLOW_W * k` 推出（两处各写一遍
+   * `GLOW_W * k` 就是"两份真相"，正是本族缺陷的成因）。
+   *
+   * ⚠️ 缩的**只有底光**：`DICE_W/H` 不动 —— `.fx-luck-pip{13px}` 与
+   * `border-radius:14px` 是固定 px，缩盒会让点相对变大（见上面常量处的说明）。 */
+  const k = stackCardBox().h / TORNADO_BASE_CARD_H;
+  const gw = GLOW_W * k;
   const existing = luckDiceLayers.get(uid);
   if (existing) {
     // 已有层：重新定位（源卡位置可能随渲染变化，骰子应跟随）
@@ -194,18 +250,21 @@ export function startLuckDiceFx(uid: string): void {
     existing.style.top = `${(center.y - DICE_H / 2).toFixed(1)}px`;
     const glow = (existing as HTMLElement & { _glow?: HTMLElement })._glow;
     if (glow) {
-      glow.style.left = `${(center.x - GLOW_W / 2).toFixed(1)}px`;
-      glow.style.top = `${(center.y - GLOW_W / 2).toFixed(1)}px`;
+      // 尺寸也必须在这里写（同一个 `gw`）：本分支是**重入/切页**时唯一会跑到的路径
+      glow.style.width = `${gw}px`;
+      glow.style.height = `${gw}px`;
+      glow.style.left = `${(center.x - gw / 2).toFixed(1)}px`;
+      glow.style.top = `${(center.y - gw / 2).toFixed(1)}px`;
     }
     return;
   }
   const layer = spawnLayer(center.x, center.y, 'fx-luck-dice', DICE_W, DICE_H);
   const glow = document.createElement('div');
   glow.className = 'fx-luck-dice-glow';
-  glow.style.width = `${GLOW_W}px`;
-  glow.style.height = `${GLOW_W}px`;
-  glow.style.left = `${(center.x - GLOW_W / 2).toFixed(1)}px`;
-  glow.style.top = `${(center.y - GLOW_W / 2).toFixed(1)}px`;
+  glow.style.width = `${gw}px`;
+  glow.style.height = `${gw}px`;
+  glow.style.left = `${(center.x - gw / 2).toFixed(1)}px`;
+  glow.style.top = `${(center.y - gw / 2).toFixed(1)}px`;
   glow.style.zIndex = String(GEN2_Z - 1);
   layer.appendChild(buildDiceCore());
   document.body.appendChild(glow);
@@ -879,12 +938,16 @@ export function playSmokePlayFx(payload: { owner?: PlayerId; line?: number | nul
   // 雾散 + 卡框灰光（落点覆框）
   window.setTimeout(() => {
     mist.classList.add('out');
+    // G2 修正 R15-A：落点是**场上链路末尾**（`smokeStackEnd`）⇒ 灰光必须按**场上卡**尺寸
+    // （远程页 100.572 × 140），不能用手牌卡的 130 × 178.8 —— 后者比场上卡大 29%、
+    // 且**高 38.8px**（178.8 vs 140），四周压到相邻列。跟随回调复用同一个 box（同一次落点）。
+    const box = stackCardBox();
     const glow = document.createElement('div');
     glow.className = 'fx-smoke-cardglow';
-    glow.style.left = `${(end.x - HAND_CARD_HALF_W).toFixed(1)}px`;
-    glow.style.top = `${(end.y - HAND_CARD_HALF_H).toFixed(1)}px`;
-    glow.style.width = `${HAND_CARD_W}px`;
-    glow.style.height = `${HAND_CARD_H}px`;
+    glow.style.left = `${(end.x - box.w / 2).toFixed(1)}px`;
+    glow.style.top = `${(end.y - box.h / 2).toFixed(1)}px`;
+    glow.style.width = `${box.w}px`;
+    glow.style.height = `${box.h}px`;
     glow.style.zIndex = String(GEN2_Z - 1);
     document.body.appendChild(glow);
     // 2026-09-13 用户裁决：2s 的卡框灰光加跟随（落点由 owner/line 每帧重算，滚动时不再脱离卡面）
@@ -893,8 +956,8 @@ export function playSmokePlayFx(payload: { owner?: PlayerId; line?: number | nul
     registerFollow(glow, (el) => {
       const e = smokeStackEnd(glowOwner, glowLine);
       if (!e) return;
-      el.style.left = `${(e.x - HAND_CARD_HALF_W).toFixed(1)}px`;
-      el.style.top = `${(e.y - HAND_CARD_HALF_H).toFixed(1)}px`;
+      el.style.left = `${(e.x - box.w / 2).toFixed(1)}px`;
+      el.style.top = `${(e.y - box.h / 2).toFixed(1)}px`;
     });
     window.setTimeout(() => glow.classList.add('out'), SMOKE_GLOW_MS);
     window.setTimeout(() => glow.remove(), SMOKE_GLOW_MS + 500);
@@ -1310,12 +1373,15 @@ export function playCourageDrawExtra(player: PlayerId): void {
   window.setTimeout(() => spawnCourageSparks(land.x, land.y + 10), 430);
   // 剑化金点消散 → 卡框鎏金 2s
   window.setTimeout(() => sword.classList.add('gone'), 900);
+  // G2 修正 R15-A：`land = courageLandPos(player)` = **手牌末尾**（`fxHandEndPoint`）⇒
+  // 鎏金框按**手牌整卡**尺寸（远程页 100.572×137.601），不再用热座的 130×178.8（大 29%）。
+  const handBox = handCardBox();
   const glow = document.createElement('div');
   glow.className = 'fx-courage-cardglow';
-  glow.style.left = `${(land.x - HAND_CARD_HALF_W).toFixed(1)}px`;
-  glow.style.top = `${(land.y - HAND_CARD_HALF_H).toFixed(1)}px`;
-  glow.style.width = `${HAND_CARD_W}px`;
-  glow.style.height = `${HAND_CARD_H}px`;
+  glow.style.left = `${(land.x - handBox.w / 2).toFixed(1)}px`;
+  glow.style.top = `${(land.y - handBox.h / 2).toFixed(1)}px`;
+  glow.style.width = `${handBox.w}px`;
+  glow.style.height = `${handBox.h}px`;
   glow.style.zIndex = String(GEN2_Z - 1);
   document.body.appendChild(glow);
   window.setTimeout(() => glow.classList.add('on'), 950);
@@ -1746,9 +1812,15 @@ function handLandingPos(player: PlayerId, indexFromEnd: number): { x: number; y:
   if (!hand) return null;
   if (hand.getBoundingClientRect().width === 0) return null;
   // 基底：末卡外缘外侧 37px；空手牌退化为容器边缘内侧 128px（沿用改动前那个偏移量）。
+  // ⚠️ `37` / `128` 的**支点标尺**是 B 类产品选择（"让开多少"的观感量），本波不动
+  // （与 `fx-seat.ts` 的 `HAND_END_LEAD/LIFT` 同一类东西，等上层拍板）。
   const base = fxHandEndPoint(hand, 37, 128);
-  // 后续卡沿**排列方向**递进 102px（hand 卡距）：正排（左→右）递增、`row-reverse` 递减。
-  const step = handOuterFor(hand) === 'start' ? -102 : 102;
+  // 后续卡沿**排列方向**递进：正排（左→右）递增、`row-reverse` 递减。
+  // G2 修正 R15-A：**方向是对的，只有幅值错** —— 幅值原来是热座的 102（卡距），
+  // 远程页真卡距是 100.572 × 0.7846 = 78.909 ⇒ 抽第 2、3 张的光晕逐张多偏 23.09px。
+  // ⚠️ 只换幅值，**不要顺手改符号**：符号由 `handOuterFor` 定，R3 已核过、是对的。
+  const mag = handFanStep();
+  const step = handOuterFor(hand) === 'start' ? -mag : mag;
   return { x: base.x + step * indexFromEnd, y: base.y };
 }
 
@@ -1810,11 +1882,20 @@ function onDiversityDrawn(p: { player?: PlayerId; count?: number }, s?: GameStat
     const pos = handLandingPos(p.player, k);
     if (!pos) continue;
     window.setTimeout(() => {
+      // G2 修正 R15-A：`pos` 是**手牌落点** ⇒ 光晕盒按**手牌整卡**尺寸。
+      // ⚠️ `styles.css:8707-8708` 的 `.fx-diversity-halo` 写死 `130px / 178.8px`
+      //    （热座值），而本元素挂在 `document.body` 上（不在 `.net-board` 里）
+      //    ⇒ styles-net.css 命不中它 —— 所以这里**必须内联宽高**覆盖（CSS 一字不动：
+      //    红线要求 styles.css 的既有数值不许改）。左/上原来只按 65/89.4 居中，
+      //    连盒尺寸一起错 ⇒ 内联宽高后左右上下四边才同时贴合。
+      const box = handCardBox();
       const halo = mk('div', 'fx-diversity-halo');
       halo.style.setProperty('--dc', color);
       halo.style.setProperty('--dcg', hexToRgba(color, 0.8));
-      halo.style.left = `${(pos.x - HAND_CARD_HALF_W).toFixed(1)}px`;
-      halo.style.top = `${(pos.y - HAND_CARD_HALF_H).toFixed(1)}px`;
+      halo.style.left = `${(pos.x - box.w / 2).toFixed(1)}px`;
+      halo.style.top = `${(pos.y - box.h / 2).toFixed(1)}px`;
+      halo.style.width = `${box.w}px`;
+      halo.style.height = `${box.h}px`;
       halo.style.zIndex = String(GEN2_Z - 2);
       document.body.appendChild(halo);
       window.setTimeout(() => halo.classList.add('in'), 20);
@@ -1998,9 +2079,14 @@ export function playAssimTakeExtra(payload: { uid?: string; owner?: PlayerId }):
   window.setTimeout(() => dot.remove(), 1600);
   // ③ 落入手牌：闪过一圈青碧光
   window.setTimeout(() => {
+    // G2 修正 R15-A：`to` 是**手牌落点** ⇒ 框按手牌整卡尺寸，且内联宽高
+    //（`styles.css:8809-8810` 的 `.fx-assim-land` 写死 130×178.8，元素在 body 上 ⇒ CSS 命中不到）
+    const box = handCardBox();
     const flash = mk('div', 'fx-assim-land');
-    flash.style.left = `${(to.x - HAND_CARD_HALF_W).toFixed(1)}px`;
-    flash.style.top = `${(to.y - HAND_CARD_HALF_H).toFixed(1)}px`;
+    flash.style.left = `${(to.x - box.w / 2).toFixed(1)}px`;
+    flash.style.top = `${(to.y - box.h / 2).toFixed(1)}px`;
+    flash.style.width = `${box.w}px`;
+    flash.style.height = `${box.h}px`;
     flash.style.zIndex = String(GEN2_Z - 1);
     document.body.appendChild(flash);
     window.setTimeout(() => flash.classList.add('in'), 20);
@@ -2022,14 +2108,41 @@ function spawnAssimRing(rect: DOMRect, color: string): void {
   window.setTimeout(() => ring.remove(), 1000);
 }
 
-/** 同化1 中：刷新时自己的协议短暂泛起青碧色光泽 */
+/** 同化1 中：刷新时自己的协议短暂泛起青碧色光泽
+ *
+ * ── G2 修正 **R15-1**：取矩形的目标从 `.protocol-holder` 改成 `img.protocol-img` ──
+ *
+ * **为什么必须换（远程页缺陷）**：`.protocol-holder` 是**未旋转的布局盒**
+ * （`styles-net.css:726-729` = `--card-h × 0.5495` × `--card-h × 0.7692` ≈ `76.9×107.7`），
+ * 而协议图**自己**被 `.net-rot-ccw` / `.net-rot-cw` 转了 ∓90°（`styles-net.css:735-736`）
+ * ⇒ 卡的**视觉足迹**是 `107.69×76.93`（横躺）。旧写法按 holder 的 rect 用竖版算式画框
+ * ⇒ 自有 3 张协议上罩出 `84.9×115.7` 的**竖版**光泽框，而卡是 `107.7×76.9` 横躺：
+ * 框的左右两边切进卡内、上下两边悬在卡外 —— 光圈不贴卡。
+ * `img.protocol-img` 的 `getBoundingClientRect()` **已经是旋转后的足迹**（旋转是它自己身上的
+ * `transform`），这正是同仓既有的正确口径（`effects/index.ts` 的 `buildProtocolGhost`、
+ * `fx-gen3-swap.ts:35-41` 都取 `img.protocol-img` 的 rect）。
+ *
+ * ⚠️ **热座页逐字不变（构造性）**：热座协议图不带任何旋转类（`render.ts:164` 的 `extraClass`
+ * 缺省 `''`）。`.protocol-holder` 在 `styles.css:583-586` 是 `position:relative; display:inline-flex`
+ * 且**没有 padding / border** ⇒ 它被唯一子节点 img 恰好撑满 ⇒ holder 与 img **同尺寸同位置**，
+ * `getBoundingClientRect()` 逐字段相等 ⇒ `-4 / +8` 算式与旧写法得到**完全相同的内联样式**。
+ * 换句话说：这条修改在热座路径上是**恒等变换**，不是"另一条分支"。
+ * 「查不到就跳过」的既有降级路径保留（`r.width === 0` ⇒ `continue`：图片未加载 / 节点 detached）。
+ *
+ * ⚠️ **选择器为什么是 `.protocol-cell[data-player="…"] img.protocol-img`**（不再穿过 `.protocol-holder`）：
+ * 它是本仓其它"取协议图矩形"的调用点同款的两段式后代选择器（`buildProtocolGhost` 查 `img.protocol-img`），
+ * 且**不依赖 `>` 子组合器**——`tests/ui/net-dom-stub.ts` 的极简选择器引擎不支持 `>`，
+ * 写成 `.protocol-holder > img` 会让这条判据在**行为腿**上恒查不到（静默退化成"没有框"，
+ * 而缺陷与修复都看不出来）。`img.protocol-img` 在 `.protocol-cell` 里唯一（`renderProtocol:174`）。 */
 export function playAssimRefreshGloss(player: PlayerId): void {
   const boxes = document.querySelectorAll<HTMLElement>(
-    `.protocol-cell[data-player="${player}"] .protocol-holder`
+    `.protocol-cell[data-player="${player}"] img.protocol-img`
   );
   const nodes: HTMLElement[] = Array.from(boxes);
-  for (const holder of nodes) {
-    const r = holder.getBoundingClientRect();
+  // ⚠️ 变量名 `foot`（视觉足迹）而不是 `holder`：**这里量的**是**已旋转**的协议图矩形，
+  // 与未旋转的 `.protocol-holder` 布局盒**不是**同一个东西（R15-1 的全部要点，见上）。
+  for (const foot of nodes) {
+    const r = foot.getBoundingClientRect();
     if (r.width === 0) continue;
     const gloss = mk('div', 'fx-assim-gloss');
     gloss.style.left = `${r.left - 4}px`;
@@ -2112,9 +2225,14 @@ export function playUnityDrawHalos(p: { player?: PlayerId; count?: number; uid?:
     window.setTimeout(() => {
       const pos = handLandingPos(p.player!, k);
       if (!pos) return;
+      // G2 修正 R15-A：手牌落点 ⇒ 光晕按手牌整卡尺寸，内联宽高覆盖
+      //（`styles.css:8861-8862` 的 `.fx-unity-halo` 写死 130×178.8；元素在 body 上 ⇒ CSS 命不中）
+      const box = handCardBox();
       const halo = mk('div', 'fx-unity-halo');
-      halo.style.left = `${(pos.x - HAND_CARD_HALF_W).toFixed(1)}px`;
-      halo.style.top = `${(pos.y - HAND_CARD_HALF_H).toFixed(1)}px`;
+      halo.style.left = `${(pos.x - box.w / 2).toFixed(1)}px`;
+      halo.style.top = `${(pos.y - box.h / 2).toFixed(1)}px`;
+      halo.style.width = `${box.w}px`;
+      halo.style.height = `${box.h}px`;
       halo.style.zIndex = String(GEN2_Z - 2);
       document.body.appendChild(halo);
       window.setTimeout(() => halo.classList.add('in'), 20);

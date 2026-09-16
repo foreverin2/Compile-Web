@@ -80,7 +80,8 @@
  *    热座页**从不**调用 `setFxViewSeat` ⇒ 模块态恒为 `null` ⇒ 那些地方走**逐字未改**的左右分支。
  *    **控制轨也改成了竖向**（G2 修正 R3 第二批 · 用户裁决："自己端在下、对手端在上"）：
  *    轴向由 `renderControlModule(s, { axis: 'y' })` 给（缺省 `'x'` 逐字保留热座语义）、
- *    持有者的**绝对玩家号**由本页换算（`netControlHolder`）—— A 类钩子的产出方拼写一字未改，
+ *    归属传**绝对玩家号** `s.control`、贴**哪一端**由本页按座位算（`netControlEnd`，R16 起
+ *    位置与归属是两个参数）—— A 类钩子的产出方拼写一字未改，
  *    竖向布局在 `styles-net.css` 第 9 节；`gen3-control.ts` 的落点也按座位选轴（`fxTrackEndPos`）。
  * 3b. **手牌方向不跟座位走**：规格 §1 只要求"手牌区在页面底部水平中置"，手牌容器仍是**横向**的
  *    （本页给两个座位都传 `reversed: false`），所以"手牌末尾在哪一侧"由 `.hand` 自身的排列方向
@@ -175,7 +176,7 @@ import { syncGen3Persistent } from './gen3-control';
 import { syncFollowers } from './fx-follow';
 // G2 修正 R3：**方向模型**的视角座位。本页是它**唯一**的调用点（幂等，每次渲染设一次）——
 // 规格 §8.1：切换视角是开发者/测试功能，不为"运行时反复切换"造任何机制（无过渡、无迁移、无双向同步）。
-import { applyFxViewSeat, fxSeatEndToPlayer, fxViewSeat } from './fx-seat';
+import { applyFxViewSeat, fxIsSelfSide, fxViewSeat } from './fx-seat';
 import {
   el,
   renderStackSlot,
@@ -245,6 +246,23 @@ import {
 /* ============================================================================
  * 接口
  * ========================================================================== */
+
+/**
+ * **页面级标记**（G2 修正 **R15-2**）：`renderNetBoard` 渲染时挂在 `document.body` 上的类，
+ * `resetNetUiState()`（离开远程页）时摘掉。
+ *
+ * **为什么必须有它**：远程页有几条**观感**修正只能落在"这一页独有的盒子"上，而那些盒子
+ * **不在** `renderNetBoard` 的 root 子树里 —— 已编译协议的持久 FX 层 `.compiled-fx` 由
+ * `render.ts` 的 `buildCompiledFx` 挂在 **`document.body`**（`position: fixed`）。
+ * CSS 无法"按后代选祖先"（`body:has(.net-board)` 这一类不在本仓的解析器与目标浏览器面上），
+ * 所以页面身份必须由**一个祖先上的类**表达：`body.net-page …`。
+ * 目前唯一的消费方是 `styles-net.css` 第 6b 节（已编译协议的发光改挂在**已旋转**的持久层上）。
+ *
+ * ⚠️ **热座页零变化是构造性的**：本类**只**由本文件写（`renderNetBoard` 加 / `resetNetUiState` 摘），
+ * 热座渲染路径（`renderApp` / `renderBoard`）从不写它 ⇒ 所有 `body.net-page …` 规则在热座页
+ * **恒不命中**，不依赖"我记得把每一处都改对"。
+ */
+export const NET_PAGE_CLASS = 'net-page';
 
 export interface NetViewOpts {
   /** 我的座位（**绝对玩家号**）。绝不可用 `s.turnPlayer` 冒充 —— 那是回合概念，视角会每回合翻面。 */
@@ -904,6 +922,17 @@ function bindNetScrollSync(): void {
 export function resetNetUiState(): void {
   netChoicePromptId = null;
   netPreviewNote = '';
+  // ── G2 修正 **R15-2**：页面级标记 `body.net-page` 必须**随离页清掉** ──
+  // 它与上面两项**不同类**：那两项是本文件的模块态，这一项是**挂在 body 上的页面标记**
+  // （`renderNetBoard` 加，见那里的注释）。放在这里是因为本函数正是"离开远程页"的复位点
+  // （`main.ts` 的 `resetToMainInterface` 与 `resetUiState` 并在调用它）——
+  // 标记若残留，热座页会给**已编译协议**错套一层远程页专用的发光（`styles-net.css`
+  // 第 6b 节的 `body.net-page .compiled-fx`）——不报错、只是一圈不该有的光。
+  // ⚠️ 与同文件其它 DOM 访问同款防御（无 document / 无 body / 桩没有 classList 时静默跳过）：
+  // 本函数也会在**纯 node 测试**里被调用。
+  const b = (globalThis as { document?: { body?: { classList?: { remove(c: string): void } } } })
+    .document?.body;
+  b?.classList?.remove(NET_PAGE_CLASS);
 }
 
 /* ============================================================================
@@ -931,18 +960,37 @@ function renderConnectionBadge(): HTMLElement {
  * 三件事分开做，因为它们**不是同一回事**：
  *  1. **轴向** = 组件自己的属性 ⇒ 交给共享助手 `renderControlModule(s, { axis: 'y' })`
  *     （缺省 `'x'` **逐字保留**热座语义）；竖向的视觉规则写在 `styles-net.css`（`styles.css` 一行不改）。
- *  2. **端归属** = **页面的座位**（自己端在下 / 对手端在上）⇒ 在**本页**换算成绝对玩家号再交给助手
- *     （`holder` 参数）。`viewSeat = 1`（我是 P2）时 P1 成了对手、落到**上端** —— 与"我的链路
- *     在下半部"的整套竖向语义一致。为什么换算放在本页而不是共享助手或 `fx-seat.ts`：
- *     "谁在上/下"是**渲染器的视角**，把 `fxViewSeat()` 引进 `render.ts`（热座页源码）会破坏
- *     "热座零变化是构造性的"；`fx-seat.ts` 也不该反向依赖 `GameState`（那里全是几何纯函数）。
- *  3. **两端各贴哪一头**：`player: 0` 贴**上端** 4%、`player: 1` 贴**下端** 96%（竖向轴向的小端 = 上）。
+ *  2. **归属**（`held-N` / `控制权: 玩家 N`）= **绝对玩家号** `s.control` ⇒ `holder` 参数，
+ *     原样交进去（它就是引擎里那个数，不需要任何座位换算）。
+ *  3. **位置端** = **页面的座位**（自己端在下 = 大端 / 对手端在上 = 小端）⇒ 在**本页**用
+ *     `fxIsSelfSide` 算成 `0 / 1` 再交给助手的 `end` 参数（见 `netControlEnd`）。
+ *
+ * ⚠️ **G2 修正 R16（旧行为为什么错）**：R3~R15 期间 2 与 3 是**同一个** `holder`，而本页当时写的是
+ * `fxSeatEndToPlayer(s.control, viewSeat)` —— 那是"**端 ⇒ 绝对玩家号**"的换算，被当成
+ * "**绝对玩家号 ⇒ 端**"用了（方向反了）。后果（最小 DOM 桩实测）：
+ *   - **位置**在两种座位下**全错**：自己持控停在对手端 22%、对手持控停在自己端 78%，
+ *     而 FX 侧 `fxTrackEndFor` 按座位算 ⇒ 特效打在自己端 78% —— 差 56%（158px 轨道上 88.5px，
+ *     观感就是"特效没打在滑块上"）；
+ *   - `viewSeat = 1` 时**归属**也错：P2 自己持控被写成 `held-0` /"玩家 1"。
+ * 拆成 `holder`（绝对号）+ `end`（端）之后两条各自只有一个输入（`render.ts` 的
+ * `ControlTrackOpts.end` 有完整推导）。
  *
  * ⚠️ A 类钩子 `.control-module` / `.control-track` / `.control-slider-img` 的**产出方拼写一字未改**
  * （仍由 `renderControlModule` 产出 —— 调用点在 `renderNetBoard` 里的 `grid.appendChild(…)`）。
+ * ⚠️ **R16 删掉了旧的 `netControlHolder(s, viewSeat)`**：它唯一的职责是那次**方向反了**的换算
+ * （见上），而换算修好后 `holder` 就是 `s.control` 本身。留一个"看着像在换算"的包装函数，
+ * 正是下一个人把端与绝对号再混起来的入口（与 `fx-seat.ts` 删两个零调用导出的理由同款）。
  */
-function netControlHolder(s: GameState, viewSeat: PlayerId): -1 | PlayerId {
-  return s.control === -1 ? -1 : fxSeatEndToPlayer(s.control, viewSeat);
+
+/**
+ * 滑块贴**哪一端**：`0` = 小端（上 = 对手端 22%）、`1` = 大端（下 = 自己端 78%）、`-1` = 中立居中。
+ *
+ * 判据只有 `fxIsSelfSide`（`fx-seat.ts` 的"哪一端是自己"唯一出处）：自己端恒为大端（下），
+ * 与 `fxTrackEndFor(seat, to)` 的竖向分支**同向同源**。"端"的编号约定（0 = 小端 = 上）与
+ * `renderControlModule` 的位置算式一致，所以"自己在下"这条用户裁决在两端都只有一处表达。
+ */
+function netControlEnd(s: GameState, viewSeat: PlayerId): -1 | PlayerId {
+  return s.control === -1 ? -1 : (fxIsSelfSide(viewSeat, s.control) ? 1 : 0);
 }
 
 // （`renderPiles` 原来在这里；G2 修正 R6 把它随"信息块"一起挪到下方的底部行一节 ——
@@ -977,7 +1025,7 @@ function renderSide(
   const isSelfSeat = player === viewSeat;
   const side = el('div', 'net-side net-side-' + kind);
   side.dataset.player = String(player);
-  const { uid } = getHandSelection();
+  const { uid, faceUp } = getHandSelection();
   // 只有当前回合玩家的链路槽可交互（与热座页一致：interactable 由引擎回合归属决定）
   const myTurn = isTurn(s, player);
   // ⚠️ 节点**先建后按侧挂载**：本页守卫第 2 条的判据是 `appendChild(<call>` 或 `= <call>`
@@ -985,7 +1033,41 @@ function renderSide(
   // ── G2 修正 R14-2：交互权 = 「**我这一侧** + **轮到我**」──
   // 旧的第 4/6 实参是 myTurn（= 那个**玩家**是不是回合玩家）⇒ 对手回合时**对手的槽**也变成
   // interactable（hover / 落点高亮 / 点击/拖拽打牌），而我这台机器上根本没有"往对手槽打牌"这回事。
-  const canAct = isSelfSeat && myTurn;
+  // ── G2 修正 R15-2：**合法的他侧落点也要可交互**（用户报："腐化0 打对方场时看不出能放哪"）──
+  // 上一行的判据把**对手侧的槽**一律排除 ⇒ 腐化0（`game.ts:65-72` 产出 `target: 对方` 的合法
+  // play）只能靠**拖拽**落到对手列，而拖拽期的高亮要求目标槽带 `.interactable`
+  // （`render.ts` 的 `beginDrag` 给合法落点加 `.drag-target`，而 `styles.css` 的
+  // `.stack-slot.interactable.drag-target` 才画出落点框）⇒ 对手列**永远不会亮** ⇒ 玩家无从
+  // 得知能放哪；**点击落点**这条路径也整条不可达（`renderStackSlot` 只在 `interactable` 时
+  // 才挂 click 与 hover）。
+  //
+  // 判据与热座**同源**（`render.ts` 的 `renderBoard` 用 `selectedCanPlayToOpp`），且必须与
+  // `playToLine` 的校验**逐字段同构**（否则会出现"高亮了但点了没反应"）：
+  //   `playToLine` = `a.kind==='play' && a.cardUid===uid && a.line===line && a.faceUp===selectedFaceUp
+  //                   && (a.target ?? s.turnPlayer) === targetPlayer`（`render.ts:4886-4892`）
+  // 这里就是它在本槽（`line` / `player`）上的实例化。
+  //
+  // ⚠️ 只影响「**可交互 / 高亮**」：第 6 实参 `canAct` 与第 4 实参（选中 uid）都由它派生；
+  //    往对手槽打牌**没有**因此向"轮到我但目标不合法"的槽放开 —— 不合法时 `canAct` 仍为 false。
+  //    点击落点走的回调 `(l) => playToLine(s, cb, l, player)` **本来就是对的**
+  //    （`player` 就是"打到谁的场"），一行未改。
+  //
+  // ⚠️⚠️ **不能**把 `myTurn`（= `isTurn(s, player)`，那个**槽的属主**是不是回合玩家）放进这条
+  //    判据：合法落点恰恰是**对手**那一侧，而对手的 `myTurn` 恒为 false ⇒ 判据恒 false
+  //    （我第一版就是这样，行为腿实测 `selectedCanPlayHere: false`）。
+  //    "能不能行动"属于**我（视角座位）**，与"这个槽是谁的"无关 —— 它由
+  //    `getLegalActions(s, s.turnPlayer)` 是否给出 play 表达（引擎在 `game.ts:45-48` 保证：
+  //    不是回合玩家 / 非 action 步 / 有挂起时一律返回空数组）。于是"对手回合时我这侧不可交互"
+  //    （R14-2）仍然成立：那时 `selectedCanPlayHere` 对任一侧都是 false。
+  const legalPlays = getLegalActions(s, s.turnPlayer).filter((a: LegalAction) => a.kind === 'play');
+  const selectedCanPlayHere =
+    uid !== null && legalPlays.length > 0 &&
+    legalPlays.some(
+      (a: LegalAction) =>
+        a.cardUid === uid && a.line === line && a.faceUp === faceUp &&
+        (a.target ?? s.turnPlayer) === player,
+    );
+  const canAct = (isSelfSeat && myTurn) || selectedCanPlayHere;
   const slotNode = renderStackSlot(
     s, player, line, canAct ? uid : null,
     (l) => playToLine(s, cb, l, player),
@@ -1702,6 +1784,13 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
   // `applyFxViewSeat` 把**写进去的值**交回来：`verifyPageHooks` 的断言 4 读它（见该函数注释 ——
   // 它是一条**契约链**检查，不是几何检查）。
   const seatApplied = applyFxViewSeat(opts.viewSeat);
+  // ── G2 修正 **R15-2**：页面级标记 `body.net-page`（`NET_PAGE_CLASS` 的注释有完整理由）──
+  // 位置与上面那句同一个"每帧设一次"的页面级开关点：**在构建 wrap 之前**设好，
+  // 于是本帧第一次样式解算时 `body.net-page …` 的规则已经命中（不留"第一帧没光"的闪烁）。
+  // 摘除在 `resetNetUiState()`（离开远程页的复位点）——加与摘成对，不靠"下次进远程页覆盖"。
+  // ⚠️ 与同文件其它 DOM 访问同款防御（无 document / 无 body / 桩没有 classList 时静默跳过）。
+  (globalThis as { document?: { body?: { classList?: { add(c: string): void } } } })
+    .document?.body?.classList?.add(NET_PAGE_CLASS);
   // 几何型 FX 延迟器（M-3）：与热座 renderBoard:4641 同形的队列。
   // renderChoiceUi 在构建期收集（透彻牌库眼睛 / 幸运宣告骰子），在 `root.appendChild(wrap)`
   // **之后**统一执行 —— 此前棋盘节点尚未入 DOM，`getBoundingClientRect()` 全 0，
@@ -1734,12 +1823,18 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
   }
 
   // ── 控制轨（**竖向**：自己端在下 / 对手端在上 —— G2 修正 R3 的用户裁决） ──
-  // 三个实参的含义见 `renderNetControl` 的注释（轴向 + 座位→绝对号的持有者换算）；
+  // 三个参数的含义见 `netControlEnd` 与 `renderControlModule` 的注释（轴向 / 归属=绝对号 / 位置端）；
   // 视觉规则在 styles-net.css 第 9 节（styles.css 一行未改）。
+  // ⚠️ R16：`holder` 与 `end` **必须分开传**（旧写法把"端"当"绝对号"用 ⇒ 滑块与 FX 落点差 56%）。
+  // 热座页只传 `holder`（不传 `end`）⇒ `end` 缺省 = `holder` ⇒ 热座逐位不变。
   // ⚠️ 这里**直接**在挂载点调用共享助手（不套一层 `renderNetControlModule(...)` 包装）：
   //    本文件的守卫判据是 `appendChild(<助手调用>` / `= <助手调用>` 的**文本形态**，套包装会让
   //    "结果真的进了 DOM"这条证据从源码里消失（我第一版就是套了包装 → 守卫报"结果被丢掉"）。
-  grid.appendChild(renderControlModule(s, { axis: 'y', holder: netControlHolder(s, viewSeat) }));
+  grid.appendChild(renderControlModule(s, {
+    axis: 'y',
+    holder: s.control,
+    end: netControlEnd(s, viewSeat),
+  }));
 
   // ── 停靠栏（R6；**R11-2：它就是钉在视口底部的那一行**）：信息块 · 手牌区 · 信息块 ──
   // 手牌区仍由 `buildHands` 产出，且**两条 `.hand` 的 DOM 顺序恒为绝对玩家顺序 [P0, P1]**（约束 7）；

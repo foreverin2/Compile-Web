@@ -739,6 +739,127 @@
    ⇒ 环自动绕在**旋转后**的协议四角上，本条规则就是为它存在的
    （没有它 holder 会被图片撑成横躺尺寸、环跟着错位）。 */
 
+/* ============================================================================
+ * 3b. 已编译协议的**对勾徽标**（G2 修正 **R15-3**）
+ *
+ * 症状：`.protocol-check` 在 `styles.css:647-652` 是 `top: 4px; right: 6px`，而远程页的协议
+ * **横躺**（`.net-rot-ccw` / `.net-rot-cw` 把 `img.protocol-img` 转了 ∓90°）
+ * ⇒ 卡视觉盒的上缘在 holder 盒顶边**下方 15.38px**、左右两条边各**外突 15.38px**。
+ * 于是 18px 的徽标（`top:4px`）整个悬在卡视觉上缘**上方约 11px** 的空档里 —— 不再"贴在卡角"。
+ *
+ * ## ⚠️ 两条**硬事实**（第一版推导把它们搞反了，这里逐条钉住）
+ *
+ * **① 徽标不旋转。** `render.ts:174-176`：`holder.appendChild(img); box.appendChild(holder);
+ * if (p.compiled) box.appendChild(el('span','protocol-check','✓'));`
+ * ⇒ 徽标是 `.protocol` 的**直接子节点**、`holder` 的**兄弟**；`rotate(∓90°)` 只加在
+ * `img.protocol-img` 上，而 **`transform` 不继承** ⇒ 徽标的屏幕位置**就是**它的布局位置。
+ * ⇒ **不存在**"盒坐标 → ∓90° 映射 → 屏幕坐标"这一步（第一版在这里凭空造了一次旋转，
+ * 于是把 `top` 解成 −2.80 / 96.64 这种"看起来很深奥"的数 —— 屏幕上是**两个不同的位置**，
+ * 而正确解是**一个**与朝向无关的位置）。
+ *
+ * **② 远程页的 `.protocol` 没有 padding、没有 border。** `styles-net.css:725`：
+ * `.net-lane-band .protocol { flex: 0 0 auto; padding: 0; border: none; background: none; }`
+ * ⇒ 绝对定位的包含块（= `.protocol` 的 **padding box**）**就是** holder 盒：**同原点、同尺寸**
+ * `w×h = 76.93×107.688`。第一版用的 `p = 1px border + 4px padding = 5px` **只属于热座**
+ * （`styles.css:480-484`）—— 远程页多减了 5px。
+ *
+ * ## 换算（`--card-h = 140`；以 holder 盒左上角为原点 = `.protocol` 的 padding box 原点）
+ *
+ *   · `w = 0.5495·--card-h = 76.930`（宽）、`h = 0.7692·--card-h = 107.688`（高）；
+ *   · 卡**视觉**盒 = 绕**同一中心**旋转 ∓90° 后的轴对齐矩形，宽 `h`、高 `w`
+ *     ⇒ `x ∈ [(w−h)/2, (w+h)/2] = [−15.379, 92.309]`、`y ∈ [(h−w)/2, (h+w)/2] = [15.379, 92.309]`；
+ *   · ⚠️ **±90° 的视觉盒完全重合**（同一个矩形绕同一点转 ±90° 得到同一个轴对齐包围盒）
+ *     ⇒ 屏幕上的"右上角"是**同一个点** ⇒ **一条规则够**、且**与朝向无关**。
+ *
+ * **贴角口径（与热座同构，按徽标自身的缩放系数缩）**：热座页 `.protocol` 有 `padding: 4px`，
+ * 徽标 `top: 4px` ⇒ 徽标**上缘与卡面上缘齐平**；`right: 6px` ⇒ 徽标右缘距卡面右缘 `6−4 = 2px`。
+ * 远程页徽标被缩到 `18/182·--card-h = 13.846px`（系数 `k = 13.846/18 = 0.7692`）⇒
+ *   · 上缘齐平：徽标上缘 = 卡视觉上缘 `(h−w)/2 = 15.379` ⇒ **`top: 0.10985·--card-h`**；
+ *   · 右侧内缩 `2k = 1.538px`：徽标右缘 = `92.309 − 1.538 = 90.771` ⇒
+ *     `left = 90.771 − 13.846 = 76.925 ≈ w` ⇒ **`left: 0.5495·--card-h`**（正好等于 holder 宽）。
+ *   ⚠️ **为什么不是"把 4px/6px 也乘 k"**：那样 `top = 4k = 3.077`，徽标又回到卡视觉上缘
+ *   **上方 12.3px** 的空档里（= 本缺陷本身）。热座的 `top:4px` 之所以"贴住上缘"，靠的是
+ *   **padding 4px 把卡面推到那里**；远程页没有 padding（事实 ②）⇒ 必须显式量到卡视觉盒的边。
+ *
+ * ## 数值（全部是 `--card-h` 的倍数 ⇒ 仍然"一个数驱动全部"）
+ *   · `left : calc(var(--card-h) * 0.5495)`  = holder 宽（徽标整块落在盒右缘**之外**、卡视觉盒**之内**）
+ *   · `top  : calc(var(--card-h) * 0.10985)` = `(0.7692 − 0.5495)/2`（盒顶到卡视觉上缘的空档）
+ *   · 边长 `18/182`、字号 `11/182`（同一比例）
+ *   ⚠️ `left` 落在盒外是**正确的**：卡的视觉盒在横向上比盒**宽** `2×15.379px`，徽标的落点正在
+ *   那段"卡伸出盒外"的区域里（`x ∈ [76.93, 90.77]` 全部在卡视觉盒 `x ≤ 92.309` 之内）。
+ *
+ * ## 判据
+ * `tests/ui/net-r15.test.ts` 的 R15-3 组**独立构造**目标点（"holder 矩形 → 旋转 90°（只交换宽高）
+ * → 取右上角 → 内缩"，**不含任何盒内角映射**）再与解出来的 `left/top` 比对；另有一条腿把
+ * "只有一条规则、且选择器里没有朝向 token"写成断言（朝向无关是几何的**结论**，不是前提）。
+ *
+ * ⚠️ **热座页零改动**：本规则带 `.net-page`（页标记，由 `render-net.ts` 加）⇒ 热座页**恒不命中**
+ * （构造性），`styles.css` 的 `top:4px; right:6px` 原样生效、一字未改。 */
+.net-page .net-lane-band .protocol .protocol-check {
+  width: calc(var(--card-h) * 0.0989);
+  height: calc(var(--card-h) * 0.0989);
+  font-size: calc(var(--card-h) * 0.0604);
+  left: calc(var(--card-h) * 0.5495);
+  top: calc(var(--card-h) * 0.10985);
+  /* ⚠️ `right`/`bottom` 必须显式 `auto`：`styles.css:647-652` 的 `right: 6px` 仍然命中本元素
+     （它没有 `left`/`top`，只有 `right`）⇒ 不中和的话"left+right 同时生效"会让徽标被拉伸
+     或贴到另一侧（那条规则是**热座**的，远程页必须把它让位掉）。 */
+  right: auto;
+  bottom: auto;
+}
+
+/* ============================================================================
+ * 3c. 已编译协议的**发光**：挂在**已旋转**的持久层上（G2 修正 **R15-2**）
+ *
+ * 症状（远程页）：`.protocol.compiled` / `.protocol.compiled-fx-<defId>` 的 `box-shadow`
+ * （`styles.css:496`、`:502-506`、`:3837-3876`，`styles-gen3.css:18-32`；共 30 条按套配色）
+ * 画在 `.protocol` 的**未旋转**布局盒（85.4×115.7）上，而卡是 `107.7×76.9` 横躺：
+ * 卡的上/下缘距盒顶/底各 15.38px、左右各**超出**盒 15.38px ⇒ **左右两条长边完全没有光**，
+ * 远看像"竖着发光的框"盖在横躺的卡上。
+ *
+ * **修法**：把发光搬到**持久 FX 层** `.compiled-fx` 上。那一层本来就（a）带
+ * `compiled-fx-<defId>` 类（`render.ts:2247` 的 `buildCompiledFx`）、（b）被
+ * `positionCompiledFxLayer` 加上 `rotate(∓90deg) scale(k)`（`render.ts:1663-1667`）
+ * ⇒ 它**就是**"已旋转的卡视觉盒"，盒阴影天然贴合卡的四条边（上/下 = 卡的长边）。
+ *
+ * ⚠️ **为什么必须带 `.net-page`**：`.compiled-fx` 挂在 `document.body` 上（不是本页 root 的
+ * 子树）⇒ 普通后代选择器（`.net-board .compiled-fx`）**命不中**它。页面身份只能由 body 上的类
+ * 表达（`render-net.ts` 的 `NET_PAGE_CLASS`）。**这一条同时也是"热座零变化"的实现**：
+ * 热座页没有 `.net-page` ⇒ 这些规则恒不命中。
+ *
+ * 基础尺寸：层的宽高由 `positionCompiledFxLayer` 内联写成**作者基准 200×280**，再整层
+ * `scale(k = 实测宽/200)`（远程页 k ≈ 0.3847）⇒ 下面所有 px 都会乘 k，故直接写"热座口径"的
+ * 数值即可（热座 k = 1 时正好等价——虽然热座页根本不会命中这些规则）。
+ *
+ * ⚠️ **近似与放弃项（如实记录，见本轮报告）**：旧发光是**按 30 套协议各自配色**的
+ * `box-shadow: 0 0 Npx rgba(…)`（颜色只写在 `.protocol.compiled-fx-<defId>` 的**字面量**里，
+ * 层上**没有**任何可继承/可 `currentColor` 取到的载体；重复选择器权重又赢不过那条既有规则）。
+ * 把 30 条配色逐一抄进本文件会造出"两处真相 + 30 条要同步的副本"，故这里**只做一条通用发光**
+ * （白色系、与卡面金属光泽一致）；**放弃的是"每套协议各自的发光颜色"**，
+ * 保留的是"四个边都有光、且光贴合横躺卡的边"。
+ * ⚠️ 副作用（有意接受）：`inset` 内光会**叠在卡面上**（层在卡面之上）；旧发光在
+ * `.protocol` 上、`.protocol` 与卡面同层且更早绘制 ⇒ 内光被卡面盖住，肉眼只见外光。
+ * 这里把内光也留在层上（与旧规则的"外光 + 内光"同形），若人眼验收觉得卡面发白，
+ * 删掉下面那句 `inset …` 即可（外光单独成立）。
+ * ⚠️ **不许给 `.protocol` 加 ∓90° 旋转**：holder 是它的子节点，旋转会污染
+ * `positionCompiledFxLayer` 的实测矩形 ⇒ `k` 变成 107.69/200 且双重旋转（R15 的明确禁令）。 */
+.net-page .compiled-fx {
+  /* 与 `.protocol` 的 `border-radius: 6px` 对齐：盒阴影的形状由本元素的圆角决定
+     （作者基准 200×280 下的 6px，随整层 scale(k) 一起缩到远程页的实际尺寸）。 */
+  border-radius: 6px;
+  box-shadow:
+    0 0 16px rgba(255, 255, 255, 0.55),
+    inset 0 0 12px rgba(255, 255, 255, 0.22);
+}
+/* 把**旧的**（画在未旋转布局盒上的）发光关掉。
+   ⚠️ 选择器带 `.compiled` 是**承重**的：旧规则是 `.protocol.compiled-fx-<defId>`
+   （权重 = 类 2 个，source `styles.css` / `styles-gen3.css`），而朴素写法
+   `.net-lane-band .protocol { box-shadow: none }` 只有 2 个类（权重 0,2,0）⇒ **打平**，
+   胜负要由 `styles-net.css` 的 import 顺序决定 —— 那是**隐性依赖**（本仓反复栽过）。
+   `.net-page .net-lane-band .protocol.compiled` 是 4 个类 ⇒ 严格压过，与 import 顺序无关。
+   只关 `box-shadow`：`border-color` 留给各套协议（1px 细边不参与发光观感）。 */
+.net-page .net-lane-band .protocol.compiled { box-shadow: none; }
+
 /* 中线：P1（左）/ 线号（中）/ P2（右）。P1/P2 的位置**按绝对玩家**，与方向性 FX 一致。
    规格 §1 只要求协议 ∓90°，中线不在朝向表里 → 保持正立（线号与数字要能读）。 */
 .net-lane-mid {
@@ -1076,8 +1197,10 @@
      代价是**任何位置都整体上移一个卡高**（70px）⇒ 中位（50%）时也看着偏上。
      改成**中心**对齐坐标（= styles.css:698 热座页的同一语义），两端由 renderControlModule
      的竖向分支内缩到 CONTROL_EDGE_PCT_Y（22% / 78%）。
-     ⚠️ 诚实残余：控制权转移 FX 的端点仍用 CONTROL_EDGE_PCT(4/96) 兜底 ⇒ 竖向两端与卡片
-     实际停位差 ~28px（那段 FX 很短，卡片位置才是用户盯的那件事）。 */
+     ⚠️ R14-1 当时的"诚实残余"（控制权转移 FX 的端点仍用 4/96 ⇒ 竖向两端与卡片实际停位
+     差 ~28px）**已在 R14-5 修掉**：竖向的贴端距离现在是 `fx-seat.ts` 的
+     `FX_TRACK_EDGE_PCT_Y`（22），渲染侧与本表下面这段注释里的 22/78、以及
+     `fxTrackEndFor` 的竖向分支**同源**（有可执行断言）。 */
   transform: translate(-50%, -50%);
   transition: top 0.5s ease;
 }
@@ -1108,3 +1231,48 @@
   100% { opacity: 0; transform: translate(-128%, -50%); }
 }
 
+/* ============================================================================
+ * 9b. 暴怒0「最高档剔除」中缝：**竖版**（G2 修正 R14-6 · 本轮）
+ *
+ * 基础规则（`styles-gen3-sync.css:83-105`）是**横向**的：盒高 0 + `border-top` 画一条横虚线，
+ * `::before/::after` 用左右三角箭头指向两端 —— 那是"热座里两根能量槽在同一行的左右两端"的形态，
+ * 一行不改（它服务热座页）。
+ *
+ * 远程页两根能量槽是**同一列**的上/下两端（`styles-net.css` 的竖排）⇒ 沿 x 轴算出的横缝会变成
+ * 一条**压在协议/链路中部的水平虚线**，箭头还朝左右（无意义）。竖版只做**方向**覆盖：
+ * 把"画线的那条边"从 `border-top` 换成 `border-left`、把两个箭头从左右换成上/下（都朝外）。
+ * 几何（left / top / height）由 `gen3-control.ts` 的 `syncWrath0Cull` 竖版分支**内联**给出。
+ *
+ * ⚠️ 作用域必须是 `body.net-page`（而不是本表其它处的 `.net-board …`）：暴怒0 的层是
+ * **body 级**浮层（`gen3-control.ts` 的 `layer()` 把 `g3sync-wrath0` 挂在 `document.body` 上），
+ * `.net-board` 不是它的祖先 ⇒ `.net-board .g3sync-wrath0-seam.vert` 永远命中不到。
+ * 页标记 `body.net-page` 由 `render-net.ts` 加/清（`NET_PAGE_CLASS`），热座页没有它 ⇒ 这些规则
+ * 在热座页恒不命中（热座零变化是构造性的）。
+ * ========================================================================== */
+body.net-page .g3sync-wrath0-seam.vert {
+  width: 0;                          /* 竖线只占 1 条边的宽度（横版的 width 由 JS 内联给，竖版清掉） */
+  border-top: 0;                     /* 撤掉横版那条画线的边 */
+  /* 颜色与 `styles-gen3-sync.css` 的 `border-top` 同值（那里只有 top 一条边带色，
+     所以竖版必须**再声明一次**颜色；本表只做方向覆盖，不改那份表里的任何数值） */
+  border-left: 2px dashed rgba(192, 57, 43, 0.85);
+}
+/* 上端箭头：朝**上**（朝外）。基础规则是"左边框 7px 实色 = 朝左的三角"，这里整组换向。 */
+body.net-page .g3sync-wrath0-seam.vert::before {
+  left: -4px;                        /* 三角盒宽 10px（左右各 5px 透明边框）⇒ 中心对准 2px 的线 */
+  right: auto;
+  top: -7px;                         /* 底边 7px ⇒ 尖端落在缝的**上方**（朝外） */
+  border-top: 0;
+  border-right: 5px solid transparent;   /* 覆盖基础规则的「朝左箭头」 */
+  border-left: 5px solid transparent;
+  border-bottom: 7px solid rgba(192, 57, 43, 0.9);
+}
+/* 下端箭头：朝**下**（朝外）—— 贴缝的底端（`top: 100%` 相对内联 height）。 */
+body.net-page .g3sync-wrath0-seam.vert::after {
+  left: -4px;
+  right: auto;
+  top: 100%;
+  border-bottom: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 7px solid rgba(192, 57, 43, 0.9);
+}

@@ -1221,9 +1221,28 @@ describe('G2 · 远程对战页渲染器（render-net.ts 源码守卫）', () =>
     //    它仍然要求渲染期那个值被交进去；旧写法会把"多传一个参数"误判成契约断了）。
     expect(code, 'verifyPageHooks 未收到渲染期写进去的座位')
       .toMatch(/verifyPageHooks\(\s*wrap\s*,\s*seatApplied\b/);
-    // 控制轨：仍由共享助手产出（A 类钩子拼写不变），且**本页**显式传竖向 + 座位换算后的持有者
+    // 控制轨：仍由共享助手产出（A 类钩子拼写不变），且**本页**显式传竖向 + 归属（绝对号）+ 位置端
+    // ⚠️ **判据修正（R16）**：旧句把调用形态逐字钉成
+    //    `renderControlModule(s, { axis: 'y', holder: netControlHolder(s, viewSeat) })`。
+    //    **旧句为什么必须改**：R16 修掉了 `netControlHolder` 里那次**方向反了**的换算 ——
+    //    它把 `fxSeatEndToPlayer`（"端 ⇒ 绝对玩家号"）当"绝对玩家号 ⇒ 端"用 ⇒ 自己持控时
+    //    滑块停在**对手端**，与 FX 落点差 56%（158px 轨道上 88.5px，「特效没打在滑块上」）；
+    //    修法是给共享助手加一个**位置端**参数（`end`），于是调用形态**必须**变 ——
+    //    旧句钉住的正是缺陷本身（它要求"归属"与"位置"继续共用一个经过座位换算的 `holder`）。
+    //    **新句多查了什么**：① 轴向仍是 `'y'`；② `holder` 传**绝对玩家号** `s.control`
+    //    （归属不再经过任何座位换算）；③ 位置端 `end` 来自本页按座位算的 `netControlEnd(s, viewSeat)`；
+    //    ④ 那个函数的判据必须经 `fxIsSelfSide`（"哪一端是自己"的唯一出处）且保留中立分支。
+    //    **行为腿**（四种 (座位, 持控者) 配对下 DOM 上真正写进去的 `top`，与 `fxTrackEndFor`
+    //    逐配对相等）在 `tests/ui/net-control-end.test.ts` —— 那条才是"两边都改对"的判据。
     expect(code, '控制轨未按竖向渲染（用户裁决"控制轨改成竖向，自己端在下、对手端在上"）')
-      .toMatch(/grid\.appendChild\(renderControlModule\(s,\s*\{\s*axis:\s*'y',\s*holder:\s*netControlHolder\(s,\s*viewSeat\)\s*\}\)\)/);
+      .toMatch(/grid\.appendChild\(renderControlModule\(s,\s*\{\s*axis:\s*'y',\s*holder:\s*s\.control,\s*end:\s*netControlEnd\(s,\s*viewSeat\)/);
+    const endAt = code.indexOf('function netControlEnd(');
+    expect(endAt, 'render-net.ts 里没有 netControlEnd（位置端没有出处）').toBeGreaterThanOrEqual(0);
+    const endBody = code.slice(endAt, endAt + 400);
+    expect(endBody, 'netControlEnd 的判据不是 fxIsSelfSide（唯一出处）—— 滑块端会与 FX 落点脱钩')
+      .toContain('fxIsSelfSide(');
+    expect(endBody, 'netControlEnd 丢了"中立"分支（中立也会被贴上某一端）')
+      .toContain('s.control === -1 ? -1');
   });
 
   /**
