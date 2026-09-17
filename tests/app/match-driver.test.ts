@@ -607,7 +607,12 @@ describe('T2 判据 4：引擎吃的是门规范化出来的那份 args（调用
     resolveAllChoices(s, pickFirst);
 
     // ① 承重断言：状态与"直接应用**记录**"逐字节相同
-    expect(stateFingerprint(s), '引擎必须吃记录里的 args（不是调用方对象）').toBe(stateFingerprint(expectedAtP1));
+    //    ⚠️ **消息措辞纪律**（G4 T7 改；原句是"H 轮复验"点名要换掉的弱化版"说法 A"）：
+    //    这条腿**不**区分"应用了哪一条"（在 D12 闸门下不可独立观测，见上面的 说法 A/B）——
+    //    它钉的是"引擎收到的是**门规范化出来的那份**（调用方对象未被读第二次）"。
+    //    复现命令：`npx vitest run tests/app/match-driver.test.ts -t 判据 4`（判据不是 `-t` 判绿，
+    //    只是定位）；措辞本身的常驻腿在 `tests/ui/g4-closure-guard.test.ts`。
+    expect(stateFingerprint(s), '引擎收到的是门规范化出来的那份（调用方对象未被读第二次）').toBe(stateFingerprint(expectedAtP1));
     // ② 调用方对象的每个键**恰好被读一次**（门那次规范化）⇒ 引擎没有再碰它
     expect([...reads.entries()], '调用方的 args 对象只许被门读一次（规范化），不许被带进引擎').toEqual(
       Object.keys(recArgs).map((k) => [k, 1]),
@@ -1393,17 +1398,23 @@ describe('T2 判据 9：src/app/** 直呼定时器零命中', () => {
    *     写成 `前缀?[..."名"...]` 时，`(?<![\w$.])` 会落在**前缀的开头**，于是
    *     `globalThis["setTimeout"](` 整个匹配**从 `[` 开始尝试**、被 `(?<!\$)` 挡掉 ⇒ 0 命中。
    *     ⇒ 用 `(?<![\w$.])(?:前缀)?\[` 让 lookbehind 只管"接收者之前"那个字符。
+   *  3. **（G4 T7 补）泛型实参与可选链间接调用**：`setTimeout<T>(` / `setTimeout?.call(` ——
+   *     它们是**同一次调用的另一种写法**（不是另一种语义）⇒ 必须并进本正则，而不是"记成缺口"。
+   *     `(?:<[^<>()]*>\s*)?` 只管**类型实参**（`[^<>()]` 排除了嵌套泛型与函数类型，
+   *     本仓的定时器名不可能带那种实参）；`(?:\??\.\s*(?:call|apply)\s*)?` 只管这两个方法名。
+   *     ⚠️ **`const f = setTimeout;` 不在这里**：它是一次**别名赋值**、根本没有调用；
+   *     把它塞进本正则只会让锚点看起来"三种全覆盖"（实际只覆盖两种）。
+   *     它单列在 `tests/ui/g4-closure-guard.test.ts`（含它自己的边界清单）。
    */
   const TIMER_CALL = new RegExp(
     // ① 裸名 / 宿主全局上的 `.名` 或 `["名"]`；② 括号包裹的间接调用 `(名)(`
-    // 各分支后面都必须紧跟 `(`，且第一个实参不能是 `word:`（那是类型签名，不是调用）
+    // 各分支后面都必须紧跟 `(`（可带泛型实参与 `?.call/apply`），且第一个实参不能是 `word:`
     `(?<![\\w$.])(?:` +
-      `(?:setTimeout|setInterval|requestAnimationFrame)` +
-      `|(?:window|globalThis|self|global|frames)\\s*\\.\\s*(?:setTimeout|setInterval|requestAnimationFrame)` +
-      `|(?:\\[\\s*['"](?:setTimeout|setInterval|requestAnimationFrame)['"]\\s*\\])` +
+      `(?:(?:window|globalThis|self|global|frames)\\s*\\.\\s*)?(?:setTimeout|setInterval|requestAnimationFrame)` +
       `|(?:window|globalThis|self|global|frames)\\s*\\[\\s*['"](?:setTimeout|setInterval|requestAnimationFrame)['"]\\s*\\]` +
+      `|\\[\\s*['"](?:setTimeout|setInterval|requestAnimationFrame)['"]\\s*\\]` +
       `|\\(\\s*(?:setTimeout|setInterval|requestAnimationFrame)\\s*\\)` +
-      `)\\s*\\((?!\\s*\\w+\\s*:)`,
+      `)\\s*(?:\\??\\.\\s*(?:call|apply)\\s*)?(?:<[^<>()]*>\\s*)?\\(\\s*(?!\\w+\\s*:)`,
     'g',
   );
 
@@ -1419,6 +1430,12 @@ describe('T2 判据 9：src/app/** 直呼定时器零命中', () => {
     expect(hits, `src/app 里出现直呼定时器（必须走注入的 Ticker）：\n${hits.join('\n')}`).toEqual([]);
 
     // 锚点①：这条正则**真的能抓**（否则上面那条在空数组上恒真）—— 含 H 轮补的三种绕行写法
+    //         + T7 补的另外两种（T2 收口复验登记的"仍漏检"清单里、**够得着**的那两种）：
+    //   ① `setTimeout<T>(`  —— 泛型实参（泛型在**调用表达式**里也是调用形态）
+    //   ② `setTimeout?.call(` —— 可选链 + 间接调用
+    //   ⚠️ 第三种 `const f = setTimeout;` **不是调用**、是**别名赋值** ⇒ 它不归本正则，
+    //      单列在 `tests/ui/g4-closure-guard.test.ts`（连同它自己的边界清单）。把三种塞进
+    //      一条正则会让这条锚点看起来"三种都覆盖了"，实际只覆盖了两种。
     for (const sample of [
       'const h = setTimeout(fn, 10);',
       'setInterval(tick, 100);',
@@ -1429,6 +1446,10 @@ describe('T2 判据 9：src/app/** 直呼定时器零命中', () => {
       'globalThis["setTimeout"](fn, 1);',
       "(setTimeout)(fn, 1);",
       'globalThis.requestAnimationFrame(draw);',
+      'setTimeout<number>(fn, 1);',
+      'window.setTimeout<T>(fn, 1);',
+      'setTimeout?.call(null, fn, 1);',
+      'globalThis.setTimeout?.apply(null, [fn, 1]);',
     ]) {
       expect([...sample.matchAll(TIMER_CALL)].length, `锚点失效：${sample} 没被抓到`).toBe(1);
     }
