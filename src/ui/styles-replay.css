@@ -1,0 +1,129 @@
+/*
+ * 本文件只服务重放控制条（`src/ui/replay-bar.ts`，G4 Task 3）：类名一律 `replay-*`，
+ * **绝不**定义与既有样式表同名的选择器（同名前缀冲突会让热座页/远程页的视觉连带变化）。
+ * 这是 G3 立下的规矩（`styles-local.css` 同理）：**新屏 = 新 CSS 文件**，红线样式表一行不改。
+ *
+ * ── 本文件的承重部分：遮罩的层叠（判据 9 逐字读它，改动前先读这段） ──
+ *   `.replay-bar`    z-index: 12600
+ *   `.replay-shield` z-index: 12500
+ *
+ * 为什么是这两个数（**不许把它当成随手挑的魔数**）：
+ *  1. `tests/ui/replay-bar.test.ts` 的判据 9 **从磁盘现算** `src/ui/styles.css` 里声明的
+ *     **最大** z-index（今天 = 12000，`.home-toast`），并断言 `shield > 该最大值`。
+ *     取"整张热座样式表的最大值"而不是挑一个低位锚点（`.action-bar` 的 200 / 草案层的 400），
+ *     是这条判据**不可被挑选低位锚点绕过**的形态：热座页任何一层新抬高都不会静默穿帮。
+ *  2. `shield < bar`：遮罩要真的挡住棋盘（D3："重放中不可操作"不能只是文案），
+ *     但**不能**挡住控制条自己 —— 否则玩家连退出/单步都点不动。
+ *  3. 数值写在本文件里而不是由测试生成：判据只钉**关系**，抬高层叠的人必须回来重新读这段注释
+ *     并同步这里的数（写死在测试里会在 `styles.css` 抬高某层时变成一句空话）。
+ *
+ * ⚠️ 后果（如实记录）：遮罩高于热座页的一切声明（含 `.dev-console` 的 1200 与
+ *    `.home-toast` 的 12000）⇒ 重放页上所有指针交互都被遮罩截获，**这正是 D3 要的效果**。
+ *
+ * ⚠️ **桩证明不了这条**：`tests/ui/net-dom-stub.ts` 只记录结构，不模拟布局、不做命中测试、
+ *    没有 stacking context ⇒ "遮罩真的挡住点击"在 DOM 层不可判，只能是文本腿（判据 9 的注释）。
+ */
+
+/* ── 遮罩：真截获指针（默认 `pointer-events: auto`，本文件**不写** `pointer-events: none`） ── */
+.replay-shield {
+  position: fixed;
+  inset: 0;
+  z-index: 12500;
+  /* 半透明：既不遮住重放画面（重放是要看的），又让"不可操作"看得出来 */
+  background: rgba(6, 6, 14, 0.42);
+  cursor: not-allowed;
+}
+
+/* ── 控制条：视口底部中央（与 `.action-bar` 同款落点语言），层叠在遮罩之上 ── */
+.replay-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 12600;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  box-sizing: border-box;
+  max-width: min(760px, 94vw);
+  padding: 10px 14px;
+  border: 1px solid #4a4a68;
+  border-radius: 12px;
+  background: rgba(24, 24, 48, 0.92);
+  color: #eef;
+  font-size: 14px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+}
+
+/* 进度：`3 / 47` 形态（文本由 `renderReplayBar` 直接给，这里只管排版） */
+.replay-progress {
+  min-width: 72px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.5px;
+  color: #9fd8ff;
+}
+
+/* 错误态：仅当 `error` 非空时该节点才存在（`replay-bar.ts` 的判据 6） */
+.replay-error {
+  flex: 1 1 100%;
+  order: -1;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  text-align: center;
+  color: #ff9a9a;
+}
+
+.replay-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+/* 控件语言对齐既有的 `.consent-deny`（rgba(30,30,58,.78) + #556 边框 + 圆角） */
+.replay-btn {
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 13px;
+  border: 1px solid #556;
+  border-radius: 8px;
+  cursor: pointer;
+  background: rgba(30, 30, 58, 0.78);
+  color: #eef;
+}
+.replay-btn:hover { background: rgba(40, 40, 78, 0.9); border-color: #9ab; }
+
+/* 当前倍速档（`data-active="1"` 由 `renderReplayBar` 按 `state.rate` 打） */
+.replay-rate[data-active='1'] {
+  border-color: #00ffcc;
+  background: rgba(0, 255, 204, 0.16);
+  color: #b6ffee;
+}
+
+/* 结束 / 暂停时的禁用形态：`renderReplayBar` 真的设了 `disabled`（判据 4 断言属性本身） */
+.replay-btn[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* 退出：与其它控件区分开（它是"回主界面"，不是"控制重放"） */
+.replay-exit {
+  border-color: #7a5a5a;
+  background: rgba(58, 30, 30, 0.78);
+}
+.replay-exit:hover { background: rgba(78, 40, 40, 0.9); border-color: #c98; }
+
+/* 恒在的只读说明（D3：不可操作必须可见） */
+.replay-readonly-note {
+  flex: 1 1 100%;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+  color: #9ab;
+}
