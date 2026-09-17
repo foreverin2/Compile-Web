@@ -39,37 +39,45 @@ import { matchFileToCreateOptions, type ActionRecord, type MatchFile, type Match
  * `prompt.chooser`，见 `main.ts:307-314`）。本模块**只负责引擎调用**这部分：
  * `player` 与 `args` 都取**档案里记的那条**（档案是照现场实际调用记的）。
  *
- * ★「控制权归还」还原规则（本任务的核心之一，见 §3.1 实测）：
+ * ★「控制权归还」还原规则 —— **只对 `rearrange-protocols` 生效，且必须落在它之前**：
+ *
  * 现场 UI 在**打开重排模态之前**会先调一次 `resetControlIfHeld`（`main.ts:266` 编译前 /
  * `:291` 补满前），**那次调用不在档案里**（它不是引擎动作，只是 UI 的弹窗前奏），
  * 但它带一条 `pushLog`（`src/core/rules/control.ts:62`），而 `stateFingerprint` **含 `log`**
- * （`src/core/fingerprint.ts:49-51`）。⇒ 带控制组件重排的对局，重放出来的 `log` **顺序**与
- * 原件不同（现场 =【归还】【重排…】【编译】；不还原 =【重排…】【归还】【编译】）、指纹不等。
+ * （`src/core/fingerprint.ts:49-51`）。模态里逐次提交的正是 `rearrange-protocols`
+ * （`main.ts:153-157` 的 `applyRearrangeSwap`）⇒ 现场顺序是【归还】【重排…】【编译】。
  *
- * 修法：对 `rearrange-protocols` / `compile` / `refresh`，**在应用之前**复现现场那次归还。
- * ⚠️ **`rearrange-protocols` 必须在这个集合里**（本任务实测得出的、比计划口径更严的一条）：
- * 现场那次归还发生在**打开重排模态之前**，而模态里逐次提交的正是 `rearrange-protocols`
- * （`main.ts:153-157` 的 `applyRearrangeSwap`）⇒ 若只对 `compile`/`refresh` 还原，
- * 那条"归还"log 在重放里会落到**重排之后**（顺序 = 【重排…】【归还】【编译】），
- * 现场是【归还】【重排…】【编译】⇒ `log` 仍不相等、指纹仍不等。
- * 判据 7 的第一版实现就是"只放在 compile 分支里"，实测当场红 —— 记在这里免得下一个人退回去。
+ * **为什么只有 `rearrange-protocols` 需要助手插手**（评审 M5 实测确认，本条曾把功劳记错）：
+ * - `executeAction` 的 `refresh`（`game.ts:142-146`）与 `compile`（`game.ts:153-157`）分支
+ *   **各自先调 `resetControlIfHeld`、再 pushLog**（归还 log 在 `:145` / `executeCompile` 之前）
+ *   ⇒ "归还 log 落在动作 log 之前"**引擎自己就保证了**。助手替它们做是**第二次 no-op**：
+ *   镜像实测（把 compile/refresh 两半删掉）`match-replay(24) + match-recorder(15)` **全绿**，
+ *   且在 4 个种子上统计到 **32 步**"控制权在该玩家手里时 compile/refresh"仍两侧指纹相等
+ *   ⇒ 那两半**零调用、无承重**。按本仓「零调用的分支不许留」的规矩（见 `match-file.ts:80-86`
+ *   对 `hash-mismatch-unknown` 的同款处置）**删除**，而不是留着让它看起来有作用。
+ * - 真正承重的是 `rearrange-protocols`：`rearrangeProtocolSlots`（`src/core/actions/rearrange.ts:12-33`）
+ *   **不读也不改** `s.control` ⇒ 若不在这里先把归还 log 插进去，重放会是【重排…】【归还】【编译】
+ *   （归还由随后的 `compile` 分支补做）⇒ `log` 顺序不同 ⇒ `stateFingerprint` 不等。
+ *   判据 7 的 M4（删掉整段还原规则）实测**只有它一条红**，这条腿的牙就在这里。
  * - `resetControlIfHeld` 幂等（`control.ts:60` 的 `if (s.control === player)`），
- *   而 `executeAction` 的 `refresh`（`game.ts:143`）/ `compile`（`game.ts:156`）分支首行
- *   **自己也会调**它 ⇒ 第二次是 no-op，不会多出第二条 log；
- * - `rearrangeProtocolSlots`（`src/core/actions/rearrange.ts:12-33`）**不读也不改** `s.control`
- *   ⇒ "控制权在重排期间是否已归还"**只影响 log 顺序**，不影响棋盘 —— 修法才敢这么小。
+ *   故"重排后紧接编译"的场景不会多出第二条 log。
+ *
+ * ⚠️ **已知副作用（G4，如实登记并配腿钉住）**：本规则跑在 `executeAction` 的合法性守卫
+ * （`game.ts:122-128`：非回合期 / 非本方回合 / 有挂起效果 / 落牌中）**之前**。
+ * 一份被篡改的档案重放到某一步会抛错，但**该步的 `control` 与 `log` 可能已被本规则改动**
+ * ⇒ T2 拿到 `engine-error` 之后的状态是**可疑的**。选择"登记 + 配腿"而不是"复制一份引擎守卫"：
+ * 复制守卫就是**第二份真相**（引擎改了它会静默漂移），而重放驱动本来就只需展示错误。
+ * 腿见 `tests/app/match-replay.test.ts`「篡改档案 ⇒ 抛错，但 control/log 可能已被改动」。
  *
  * 未覆盖的 `kind` **抛错**，不静默 no-op：静默会让重放从这一步起与原件分叉而看不出哪里错了
  * （档案的"一份数据五处复用"最怕的静默错位，见 `match-file.ts:230-236` 的同族取舍）。
  */
 export function applyRecordedAction(s: GameState, a: ActionRecord): void {
   // ★「控制权归还」还原规则（见头注）：**在应用之前**复现现场 UI 打开重排模态前的那次归还。
-  // 必须在 `switch` **之前**（而不是塞进某个分支里）：现场顺序是
-  // 【UI 归还】→【重排…】→【编译】，归还的 pushLog 必须落在重排**之前**；
-  // 塞进 compile 分支会让它落到重排之后 ⇒ log 顺序仍然不同 ⇒ 指纹仍不等。
-  const mayOpenRearrangeModal =
-    a.kind === 'rearrange-protocols' || a.kind === 'compile' || a.kind === 'refresh';
-  if (mayOpenRearrangeModal && s.control === a.player) {
+  // 必须在 `switch` **之前**（而不是塞进 rearrange 分支里）：现场顺序是
+  // 【UI 归还】→【重排…】→【编译】，归还的 pushLog 必须落在重排**之前**。
+  // `compile` / `refresh` **不在这个集合里** —— 引擎那两个分支自己就会先归还（见头注）。
+  if (a.kind === 'rearrange-protocols' && s.control === a.player) {
     resetControlIfHeld(s, a.player);
   }
   switch (a.kind) {

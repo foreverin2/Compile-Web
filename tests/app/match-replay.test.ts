@@ -730,3 +730,142 @@ describe('T1 判据 7：带控制组件重排的对局，现场记录 → 重放
     expect(fingerprintIgnoringLog(a)).toBe(fingerprintIgnoringLog(b));
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * G 轮（评审回合）补的三条腿
+ * ------------------------------------------------------------------ */
+
+describe('T1-G2a：现场侧**不走助手**（真值锚点在引擎侧，不在 test-local）', () => {
+  it('现场用 executeAction 直跑（+ 显式模拟 UI 那次归还）；重放侧走 applyRecordedAction ⇒ 指纹相等', () => {
+    // 为什么单列一条：判据 7 的现场侧与重放侧**都过助手** ⇒ 它证明的是"助手与自己一致"，
+    // 没有任何腿把助手与**真实现场编码**（`main.ts:265-303`）对拍。这条腿的现场侧
+    // **完全不碰 `applyRecordedAction`**（连 advance 都用 `executeAction`），
+    // 重放侧只走助手 ⇒ 它证明的是"**助手 != 自己**"，即助手复现了真引擎的那条路径。
+    const seed = 'g4t1-control-rearrange';
+    const s = createGame({ seed });
+    draftNontrivial(s, seed);
+    const player = s.turnPlayer;
+    let guard = 0;
+    while (s.step !== 'check-compile' && s.step !== 'action' && guard++ < 8) {
+      executeAction(s, player, 'advance');
+    }
+    expect(['check-compile', 'action'], `推进后的步：${s.step}`).toContain(s.step);
+    const line = 0 as Line;
+    const mk = (defId: string, uid: string, pos: number): Card => ({
+      uid,
+      defId,
+      owner: player,
+      faceUp: true,
+      zone: 'field',
+      line,
+      pos,
+    });
+    s.players[player].stacks[line] = [mk('unity-5', 'g2a-u5', 0), mk('unity-4', 'g2a-u4', 1), mk('unity-3', 'g2a-u3', 2)];
+    s.control = player;
+    // 现场（`main.ts:266` 同形）：UI 在打开重排模态**之前**先归还
+    expect(resetControlIfHeld(s, player), '这一腿必须真的走到"持控制组件"的分支').toBe(true);
+    executeAction(s, player, 'rearrange-protocols', { target: 0, a: 0, b: 1 });
+    executeAction(s, player, 'compile', { line });
+    const iReturn = s.log.findIndex((l) => l.includes('归还控制组件'));
+    const iSwap = s.log.findIndex((l) => l.includes('重排协议'));
+    expect(iReturn).toBeLessThan(iSwap);
+
+    // 重放：全新状态 + 草稿序列重建 + 把档案里的动作**逐条走助手**
+    const file = createMatchFileRecorder().toMatchFile(metaFor(seed, setupFromState(s)));
+    const rp = stateAfterDraft(file);
+    guard = 0;
+    while (rp.step !== 'check-compile' && rp.step !== 'action' && guard++ < 8) {
+      applyRecordedAction(rp, { seq: 0, player, kind: 'advance' });
+    }
+    rp.players[player].stacks[line] = [
+      mk('unity-5', 'g2a-u5', 0),
+      mk('unity-4', 'g2a-u4', 1),
+      mk('unity-3', 'g2a-u3', 2),
+    ];
+    rp.control = player;
+    applyRecordedAction(rp, { seq: 0, player, kind: 'rearrange-protocols', args: { target: 0, a: 0, b: 1 } });
+    applyRecordedAction(rp, { seq: 1, player, kind: 'compile', args: { line } });
+
+    // 反空转：两侧都必须留下**恰好一条**"归还"log，且都在重排之前
+    expect(s.log.filter((l) => l.includes('归还控制组件')).length).toBe(1);
+    expect(rp.log.filter((l) => l.includes('归还控制组件')).length, `重放 log：${JSON.stringify(rp.log)}`).toBe(1);
+    expect(rp.log.findIndex((l) => l.includes('归还控制组件'))).toBeLessThan(
+      rp.log.findIndex((l) => l.includes('重排协议')),
+    );
+    // 真值锚点：**助手复现了真引擎路径** ⇒ 指纹逐字节相等
+    expect(rp.log).toEqual(s.log);
+    expect(stateFingerprint(rp)).toBe(stateFingerprint(s));
+  });
+});
+
+describe('T1-G4：还原规则跑在引擎守卫之前 ⇒ 抛错前状态可能已被改动（**如实登记并钉住**）', () => {
+  it('篡改档案（在 end 步重排）⇒ 抛错，但 control 与 log 已被还原规则改动', () => {
+    // 事实：`applyRecordedAction` 的还原规则在 `executeAction` 的合法性守卫
+    // （`game.ts:122-128` / `game.ts:171`）**之前**执行 ⇒ 引擎抛错时状态**已经不是调用前的状态**。
+    // 选择"登记 + 配腿"而不是"复制一份引擎守卫"：复制守卫就是**第二份真相**
+    // （引擎改了它会静默漂移）。T2 据此知道 `cursor().error` 之后的状态是**可疑的**。
+    const s = createGame({ seed: 'g4t1-g4-guard' });
+    while (s.phase === 'draft') performDraftPick(s, getDraftPool(s)[0].defId);
+    const player = s.turnPlayer;
+    s.step = 'end'; // 引擎守卫：重排只在编译/补满前可用
+    s.control = player;
+    const logBefore = s.log.length;
+    expect(() =>
+      applyRecordedAction(s, { seq: 0, player, kind: 'rearrange-protocols', args: { target: 0, a: 0, b: 1 } }),
+    ).toThrow(/only usable before compile\/refresh/);
+    // 钉住副作用：控制权已被归还、log 已多出一条 —— 这就是"抛错前状态已被改动"的形态
+    expect(s.control, '抛错前还原规则已经改动了 control（T2 必须知道这一点）').toBe(-1);
+    expect(s.log.length, '抛错前还原规则已经 push 了一条 log').toBe(logBefore + 1);
+    expect(s.log[s.log.length - 1]).toContain('归还控制组件');
+  });
+
+  it('对照：同一个非法动作在**不持控制组件**时不产生任何改动（证明上面那条的因是"持控制组件"）', () => {
+    const s = createGame({ seed: 'g4t1-g4-guard' });
+    while (s.phase === 'draft') performDraftPick(s, getDraftPool(s)[0].defId);
+    const player = s.turnPlayer;
+    s.step = 'end';
+    s.control = -1;
+    const before = stateFingerprint(s);
+    expect(() =>
+      applyRecordedAction(s, { seq: 0, player, kind: 'rearrange-protocols', args: { target: 0, a: 0, b: 1 } }),
+    ).toThrow(/only usable before compile\/refresh/);
+    expect(stateFingerprint(s), '不持控制组件 ⇒ 抛错前状态一字不动').toBe(before);
+  });
+});
+
+describe('T1-G6：`effect-choice` 必须用**档案里的 player**（chooser），不是 `s.turnPlayer`', () => {
+  it('chooser = 对手 的挂起选择：用 turnPlayer 应答被引擎拒，用档案 player 应答成功出栈', () => {
+    // 为什么单列：判据 5 的 `fire-5` 场景里 `chooser === turnPlayer` ⇒ 现有腿**区分不出**
+    // "用档案 player" 与 "用 `s.turnPlayer`"；"真跑一局"的档案里 `effect-choice` 条数 = 0
+    // ⇒ 这条路径此前**完全没有判别力**。`greed-2` 的中指令是"对手弃1张牌"，
+    // 其 prompt 带 `chooser: foe`（`src/core/effects/cards/greed.ts:73`）⇒ 可区分。
+    const build = (): { s: GameState; promptId: string; chooser: PlayerId; choice: string[] } => {
+      const s = createGame({ seed: 'g4t1-g6-chooser' });
+      while (s.phase === 'draft') performDraftPick(s, getDraftPool(s)[0].defId);
+      const turn = s.turnPlayer;
+      s.players[turn].protocols[0] = { defId: 'greed', compiled: false };
+      s.players[turn].hand = [makeCard('greed-2', turn, 'hand', true, null), ...s.players[turn].hand];
+      executeAction(s, turn, 'play', { cardUid: s.players[turn].hand[0].uid, faceUp: true, line: 0 });
+      const top = s.pendingEffects[s.pendingEffects.length - 1];
+      expect(top?.prompt, 'greed-2 必须挂起选择').toBeTruthy();
+      const chooser = (top.prompt!.chooser ?? top.player) as PlayerId;
+      expect(chooser, '这一腿要求 chooser 与 turnPlayer **不同**（否则没有判别力）').not.toBe(turn);
+      expect(top.prompt!.candidates.length).toBeGreaterThan(0);
+      return { s, promptId: top.id, chooser, choice: pickFirst(top.prompt!) };
+    };
+
+    // ① 负控：按 `s.turnPlayer` 应答 ⇒ 引擎必须拒绝（证明"用 turnPlayer"是错的）
+    {
+      const { s, promptId, choice } = build();
+      expect(() =>
+        executeAction(s, s.turnPlayer, 'effect-choice', { promptId, choice }),
+      ).toThrow(/not your choice/);
+    }
+    // ② 正控：按**档案里的 player**（= chooser）走生产助手 ⇒ 成功出栈
+    {
+      const { s, promptId, chooser, choice } = build();
+      applyRecordedAction(s, { seq: 0, player: chooser, kind: 'effect-choice', args: { promptId, choice } });
+      expect(s.pendingEffects.length, '应答后该效果必须出栈').toBe(0);
+    }
+  });
+});

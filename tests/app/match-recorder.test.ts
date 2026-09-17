@@ -11,11 +11,10 @@ import {
   type MatchFileMeta,
 } from '../../src/app/match-file';
 import { createGame, getDraftPool, performDraftPick } from '../../src/core/state/create';
-import { executeAction, getLegalActions } from '../../src/core/game';
+import { getLegalActions } from '../../src/core/game';
 import { applyRecordedAction, stateAfterDraft } from '../../src/app/match-replay';
-import { resetControlIfHeld } from '../../src/core/rules/control';
 import { stateFingerprint } from '../../src/core/fingerprint';
-import type { GameState, Line, PlayerId } from '../../src/core/models/types';
+import type { GameState, PlayerId } from '../../src/core/models/types';
 import { pickFirst, resolveAllChoices } from '../helpers';
 import { CARD_DATA_HASH } from '../../src/app/card-data-hash';
 
@@ -197,6 +196,7 @@ function playAndRecord(seed: string, maxSteps: number): { s: GameState; rec: Ret
       // 旧写法硬编码 `1 - s.turnPlayer`，在被作用卡持有者（chooser）不是"另一个玩家"时
       // 会与重放（按档案记的 player 调 `executeAction`）走**不同的 chooser** ⇒ 两条路从这一步起
       // 静默分叉（本仓实测：分歧在 `log` 长度 24 处现形，但它不是根因）。
+      // 与下面那条一样走**生产助手**，现场与重放共用同一条执行路径。
       const chooser = (top.prompt.chooser ?? top.player) as PlayerId;
       rec.record({
         player: chooser,
@@ -204,7 +204,12 @@ function playAndRecord(seed: string, maxSteps: number): { s: GameState; rec: Ret
         args: { promptId: top.id, choice },
         via: 'user',
       });
-      executeAction(s, chooser, 'effect-choice', { promptId: top.id, choice });
+      applyRecordedAction(s, {
+        seq: rec.nextSeq() - 1,
+        player: chooser,
+        kind: 'effect-choice',
+        args: { promptId: top.id, choice },
+      });
       resolveAllChoices(s, pickFirst);
       continue;
     }
@@ -221,37 +226,14 @@ function playAndRecord(seed: string, maxSteps: number): { s: GameState; rec: Ret
     if (a.choice !== undefined) args.choice = a.choice;
     const hasArgs = Object.keys(args).length > 0;
     rec.record({ player, kind: a.kind, ...(hasArgs ? { args } : {}), via: 'user' });
-    // ⚠️ **现场侧必须复现 UI 那次"开重排模态前的归还"**（`main.ts:265-303`）：
-    // 收口后的生产驱动（`src/app/match-replay.ts` 的 `applyRecordedAction`）在把
-    // `rearrange-protocols` / `compile` / `refresh` 交给引擎之前会先
-    // `if (s.control === player) resetControlIfHeld(s, player)`。
-    // 本腿的"现场"若不做同一件事，比的就不是生产语义：本仓实测 turn 9/10/15 上真的存在
-    // "持控制组件时编译/补满"的步骤（control=0 而行动者是 1），重放会多出一条归还 log ⇒ 指纹不等。
-    // **条件必须与生产逐字一致（`=== player`）**：用"任意持有者都归还"会在
-    // "对手持控制组件时我编译"的步骤上多推一条 log（实测首处分歧就在那一步）。
-    if ((a.kind === 'compile' || a.kind === 'refresh' || a.kind === 'rearrange-protocols') && s.control === player) {
-      resetControlIfHeld(s, player);
-    }
-    switch (a.kind) {
-      case 'play':
-        executeAction(s, player, 'play', args as unknown as { cardUid: string; faceUp: boolean; line: Line });
-        break;
-      case 'compile':
-        executeAction(s, player, 'compile', args as unknown as { line: Line });
-        break;
-      case 'resolve-trigger':
-        executeAction(s, player, 'resolve-trigger', args as unknown as { cardUid: string });
-        break;
-      case 'effect-choice':
-        executeAction(s, player, 'effect-choice', args as unknown as { promptId: string; choice: string[] });
-        break;
-      case 'rearrange-protocols':
-        executeAction(s, player, 'rearrange-protocols', args as unknown as { target: PlayerId; a: Line; b: Line });
-        break;
-      default:
-        executeAction(s, player, a.kind);
-        break;
-    }
+    // ⚠️ **现场侧也走生产助手**（`applyRecordedAction`），不在这里手抄第二份 `switch`。
+    // G4 T1 评审实测：此前这里抄着一份与生产同形的 `switch`，它比生产助手弱三处 ——
+    // ① `args as unknown as {...}` 全量透传（助手逐字段收窄）；② `default:` 对未知 kind
+    // **静默 no-op**（助手抛错）；③ 不带「控制权归还」还原规则（靠一段手工补丁维持）。
+    // ⇒ "全仓只有一份『一条档案操作 → 一次引擎调用』映射"那句话当时**不成立**。
+    // 改成调助手后：现场与重放**共用同一条执行路径**，本腿才是真正的往返对照。
+    // `seq` 用记录器刚分配的那个（助手不读 `seq`，但保持记录与执行同源）。
+    applyRecordedAction(s, { seq: rec.nextSeq() - 1, player, kind: a.kind, ...(hasArgs ? { args } : {}) });
     resolveAllChoices(s, pickFirst);
   }
   return { s, rec };
