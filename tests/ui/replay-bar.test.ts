@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { makeStubEl, descendants, queryAllIn, type StubNode } from './net-dom-stub';
 import { renderReplayBar, type ReplayBarNav, type ReplayBarState } from '../../src/ui/replay-bar';
@@ -15,7 +15,8 @@ import { stripComments } from './source-text';
  *      内容互不干扰；
  *   3. 五个 nav 回调各自被哪个控件触发（`dispatchEvent` 真派发 + 真调用产出代码注册的监听器）；
  *   4. `paused` / `done` / `rate` 的可见形态（文案、`data-role`、`disabled`、`data-active`）；
- *   5. 进度文本、错误节点的**存在性**（非空才存在）、遮罩点不出任何回调、只读说明恒在；
+ *   5. 进度文本、错误节点与**完成态文案**的**存在性**（非空才存在）、遮罩点不出任何回调、
+ *      只读说明恒在；
  *   6. **不依赖全局 `document`**（判据 8）：本文件**从不**调 `installStubDom()`，并且额外把
  *      `globalThis.document` 摘掉再渲染一次 —— 产出代码的元素全部由**调用方给的 parent**
  *      所属文档（`parent.ownerDocument`）创建；
@@ -326,6 +327,24 @@ describe('④ paused / done / rate（判据 4）', () => {
     expect(isDisabled(one(running, 'replay-next')), '未 done 时「单步」被误禁用').toBe(false);
   });
 
+  /**
+   * 阶段一评审 F3（覆盖缺口，不是缺陷）：上面那条腿只覆盖了 `done && paused`。
+   * 实现是**统一**的 `toggle.disabled = state.done`（与 `paused` 无关）⇒ 必须把
+   * `done === true && paused === false` 也钉住：那种形态下屏上是「暂停」按钮，它同样要禁用。
+   */
+  it('done 且**未**暂停时，屏上的「暂停」按钮同样被禁用（F3：覆盖 done && !paused）', () => {
+    const root = mountRoot();
+    render(root, st({ paused: false, done: true }), noopNav);
+    expect(byRole(root, 'replay-play'), 'done 且未暂停时不该出现「继续」按钮').toHaveLength(0);
+    expect(isDisabled(one(root, 'replay-pause')), 'done 时「暂停」没有被禁用').toBe(true);
+    expect(isDisabled(one(root, 'replay-next')), 'done 时「单步」没有被禁用').toBe(true);
+    // 反空转：同一形态下换成未 done ⇒ 两个都不该被禁用（否则上面两条可能只是"恒真"）
+    const running = mountRoot();
+    render(running, st({ paused: false, done: false }), noopNav);
+    expect(isDisabled(one(running, 'replay-pause'))).toBe(false);
+    expect(isDisabled(one(running, 'replay-next'))).toBe(false);
+  });
+
   it('当前 rate 档带 data-active="1"，其余档**没有**这个属性；rate=0 ⇒ 三档都没有', () => {
     for (const r of [1, 2, 4] as const) {
       const root = mountRoot();
@@ -393,6 +412,41 @@ describe('⑥ 错误态（判据 6）', () => {
     const withErr = mountRoot();
     render(withErr, st({ error: 'x' }), noopNav);
     expect(byRole(withErr, 'replay-error'), '真错误也没出现节点 ⇒ 上面的"0 个"是假绿').toHaveLength(1);
+  });
+});
+
+/* ---------------- 6b. 完成态文案（D8 的「已重放完」；阶段一评审 F2） ---------------- */
+
+describe('⑥b 完成态文案（D8 的「已重放完」）', () => {
+  /**
+   * 阶段一评审 F2：计划的 D8 明写"重放结束停在终局状态并**显示「已重放完」**"，而实现此前
+   * 只用 `done` 做禁用（全文件没有一句完成态文案）⇒ 这条腿是这个缺口的归属。
+   * 纪律与判据 6 对 `replay-error` **同款**：非该态时节点**不存在**，不是空串节点。
+   */
+  it('done ⇒ 出现唯一 replay-done-note 且含「已重放完」；只读说明仍并列存在（不替代）', () => {
+    const root = mountRoot();
+    render(root, st({ paused: true, done: true, position: 47, total: 47 }), noopNav);
+    const note = one(root, 'replay-done-note');
+    expect(note.text, '完成态文案不含「已重放完」').toContain('已重放完');
+    // 并列：D3 那句"不可操作"在结束后**仍然**要在屏上（完成态不许把它顶掉）
+    expect(one(root, 'replay-readonly-note').text.trim(), '完成态把只读说明顶掉了').not.toBe('');
+  });
+
+  it('未 done（运行 / 暂停两态）⇒ replay-done-note 不存在；反空转：同形态换成 done 就出现', () => {
+    for (const [name, state] of [
+      ['运行', st({ paused: false, done: false })],
+      ['暂停', st({ paused: true, done: false })],
+    ] as Array<[string, ReplayBarState]>) {
+      const root = mountRoot();
+      render(root, state, noopNav);
+      expect(byRole(root, 'replay-done-note'), `${name} 态仍插入了 replay-done-note 节点`).toHaveLength(0);
+      // 锚点：同一条腿里证明渲染真的跑了（否则上面的"0 个"可能只是因为整棵树是空的）
+      expect(textOf(root), `${name} 态连只读说明都没有 ⇒ 渲染根本没跑`).toContain('重放中不可操作');
+    }
+    const finished = mountRoot();
+    render(finished, st({ paused: false, done: true }), noopNav);
+    expect(byRole(finished, 'replay-done-note'), 'done 也没出现节点 ⇒ 上面的"0 个"是假绿')
+      .toHaveLength(1);
   });
 });
 
@@ -494,7 +548,25 @@ function readUi(rel: string): string {
 }
 
 const REPLAY_CSS = stripCssComments(readUi('../../src/ui/styles-replay.css'));
-const HOT_CSS = stripCssComments(readUi('../../src/ui/styles.css'));
+
+/** 被测文件自己（候选面必须排除它，理由见下面判据 9 的层叠腿）。 */
+const SELF_CSS = 'styles-replay.css';
+const UI_CSS_DIR = fileURLToPath(new URL('../../src/ui', import.meta.url));
+
+/**
+ * **除被测文件之外的**全部 `src/ui/*.css`（**生成式**：`readdirSync` 现扫，不手写清单）。
+ *
+ * 为什么必须生成式（阶段一评审 F1）：棋盘/特效层横跨**一整族**样式表（今天 6 张非 replay 表），
+ * 还有 `index.html` 的外链与 JS 内联。只读一张表时，别的表将来声明 ≥ 遮罩的 z-index 就会
+ * **静默穿帮而判据 9 全绿** —— 今天"全局最大值恰在 styles.css"只是巧合。
+ */
+const OTHER_CSS = readdirSync(UI_CSS_DIR).filter((f) => f.endsWith('.css') && f !== SELF_CSS);
+
+/** 那一族样式表里全部 `z-index` 声明（去注释后现算；跨表取 max 才是"棋盘层上限"）。 */
+const OTHER_ZS = OTHER_CSS.flatMap((f) => {
+  const css = stripCssComments(readUi(`../../src/ui/${f}`));
+  return [...css.matchAll(/z-index\s*:\s*(\d+)/g)].map((m) => Number(m[1]));
+});
 
 /** 某个选择器的规则体（找不到就**抛错**，而不是返回空串让断言在空集上假绿）。 */
 function ruleBody(css: string, selector: string): string {
@@ -520,14 +592,20 @@ describe('⑨ 遮罩的 CSS 事实（判据 9 · 文本腿）', () => {
    *     `position:fixed; inset:0` 的节点在桩上只是一个普通子节点，`z-index` 在桩上**不是事实**。
    *  ② 真实浏览器里的层叠与命中是**渲染引擎**的事，本仓测试环境是 `node`（无 jsdom、更无浏览器）。
    *  ⇒ "遮罩挡不挡得住"既不能在桩上跑出来、也不能在 node 里算出来，**只能读样式表**。
-   *  这条腿的**承重部分**是"从磁盘现算 `styles.css` 的最大 z-index"（不写死 12000）：写死会在
-   *  热座页任何一层抬高之后静默失效。变异实测：把 `.replay-shield` 的 z-index 调到棋盘之下
-   *  （M4）⇒ 本条必红；若某天它不红了，说明它已变成没有判别力的装饰。
+   *  这条腿的**承重部分**是"从磁盘**现算**棋盘/特效层那一族的 z-index 上限"（不写死数字，
+   *  也不只读一张表）：写死会在任何一层抬高之后静默失效，只读一张表会在**别的表**抬高之后
+   *  静默失效（阶段一评审 F1：候选面已改成 `readdirSync` 现扫 `src/ui/*.css` 整族）。
+   *  变异实测：把 `.replay-shield` 的 z-index 调到棋盘之下（M4）⇒ 本条必红；
+   *  往**任意一张非 replay 的 css** 里插一条 `z-index: 13000`（F1）⇒ 本条也必红。
+   *  若某天这两条变异都不红了，说明它已变成没有判别力的装饰。
    */
   it('锚点：styles-replay.css 里真的能解析出两段规则体（空解析 ⇒ 下面全是废话）', () => {
     expect(REPLAY_CSS.length, 'styles-replay.css 读空了').toBeGreaterThan(200);
     expect(ruleBody(REPLAY_CSS, '.replay-shield').length).toBeGreaterThan(10);
     expect(ruleBody(REPLAY_CSS, '.replay-bar').length).toBeGreaterThan(10);
+    // 候选面本身非空（否则下面的层叠腿在空集上恒真）
+    expect(OTHER_CSS.length, '非 replay 的样式表少于 5 张 ⇒ 候选面塌了').toBeGreaterThanOrEqual(5);
+    expect(OTHER_CSS, '候选面里混进了被测文件自己（会让 shield > max 恒假）').not.toContain(SELF_CSS);
     // 去注释真的生效（注释里写了这两个数字，不许被当成声明）
     expect(stripCssComments('/* z-index: 999999 */ .x { z-index: 1 }')).not.toContain('999999');
   });
@@ -540,19 +618,23 @@ describe('⑨ 遮罩的 CSS 事实（判据 9 · 文本腿）', () => {
     expect(body, '.replay-shield 把指针事件关掉了 ⇒ 它挡不住任何点击').not.toMatch(/pointer-events\s*:\s*none/);
   });
 
-  it('层叠：遮罩 z-index 低于 .replay-bar、高于棋盘层（styles.css 的**最大** z-index）', () => {
+  it('层叠：遮罩 z-index 低于 .replay-bar、高于棋盘/特效层那一族的最大值（跨表现算）', () => {
     const shieldZ = zIndexOf(ruleBody(REPLAY_CSS, '.replay-shield'), '.replay-shield');
     const barZ = zIndexOf(ruleBody(REPLAY_CSS, '.replay-bar'), '.replay-bar');
 
-    const boardZs = [...HOT_CSS.matchAll(/z-index\s*:\s*(\d+)/g)].map((m) => Number(m[1]));
-    // 解析器前提：真读到了 styles.css（否则 boardMax 会是 -Infinity，判据的上界恒真）
-    expect(boardZs.length, 'styles.css 里 z-index 声明太少 ⇒ 解析失效').toBeGreaterThan(100);
-    const boardMax = Math.max(...boardZs);
-    expect(boardMax, 'styles.css 的最大 z-index 太小 ⇒ 上面的前提没生效').toBeGreaterThanOrEqual(1000);
+    // 解析器前提：真读到了那一族样式表（否则 othersMax 会是 -Infinity，判据的上界恒真）
+    expect(OTHER_ZS.length, `${OTHER_CSS.length} 张非 replay 表里 z-index 声明太少 ⇒ 解析失效`)
+      .toBeGreaterThan(100);
+    const othersMax = Math.max(...OTHER_ZS);
+    expect(othersMax, '棋盘/特效层那一族的最大 z-index 太小 ⇒ 上面的前提没生效')
+      .toBeGreaterThanOrEqual(1000);
 
     expect(shieldZ, `遮罩(${shieldZ}) 不低于控制条(${barZ}) ⇒ 控制条自己被挡住、点不动`)
       .toBeLessThan(barZ);
-    expect(shieldZ, `遮罩(${shieldZ}) 不高于棋盘层的最大值(${boardMax}) ⇒ 它只是装饰，棋盘照旧可点`)
-      .toBeGreaterThan(boardMax);
+    expect(
+      shieldZ,
+      `遮罩(${shieldZ}) 不高于棋盘/特效层的最大值(${othersMax}，来自 ${OTHER_CSS.join(' + ')} 这一族) `
+      + '⇒ 它只是装饰，棋盘照旧可点',
+    ).toBeGreaterThan(othersMax);
   });
 });

@@ -22,9 +22,10 @@
  *    一起交进来（测试传入桩节点 + 桩 `ownerDocument`）。**本文件里没有裸 `document` 记号**
  *    （机检：判据 8 的去注释源码扫描 + 一条真的把全局 `document` 摘掉再渲染的行为腿）。
  * 3. **不引第二份真相**：`data-role` 是这些节点的机器可读出口（`replay-bar` / `replay-shield` /
- *    `replay-progress` / `replay-error`（**仅 error 非空时存在**）/ `replay-readonly-note`（恒存在））。
- *    `replay-error` 的空值形态必须**不存在**，而不是"存在但文本为空" —— 后者在屏上是"一个
- *    看不见的空行"，在判据上是**假绿**（`tests/ui/replay-bar.test.ts` 判据 6 两种都钉）。
+ *    `replay-progress` / `replay-error`（**仅 error 非空时存在**）/ `replay-done-note`
+ *    （**仅 `done` 时存在**，D8 的「已重放完」）/ `replay-readonly-note`（恒存在））。
+ *    `replay-error` 与 `replay-done-note` 的空值形态必须**不存在**，而不是"存在但文本为空" ——
+ *    后者在屏上是"一个看不见的空行"，在判据上是**假绿**（`tests/ui/replay-bar.test.ts` 两种都钉）。
  *
  * ## 五个 nav 回调 ↔ 控件的关系（判据 3 的"五个控件"）
  * `nav` 恰好五个方法，**每一个都有唯一控件**：`pause`/`play` 由**同一个切换按钮**按 `paused`
@@ -63,6 +64,8 @@ const LABEL_NEXT = '单步';
 const LABEL_EXIT = '退出重放';
 /** 恒在的只读说明（D3：重放页"不可操作"必须**看得见**）。 */
 const READONLY_NOTE = '重放中不可操作（只读）';
+/** 完成态文案（D8 逐字要求"重放结束停在终局状态并**显示「已重放完」**"）。 */
+const DONE_NOTE = '已重放完';
 
 /** 建一个带类名的元素（文档由调用方的 parent 提供，见文件头注第 2 条）。 */
 function el(doc: Document, tag: string, cls: string): HTMLElement {
@@ -148,6 +151,17 @@ export function renderReplayBar(
   }
 
   controls.appendChild(ctrl(doc, 'replay-btn replay-exit', 'replay-exit', LABEL_EXIT, () => nav.exit()));
+
+  // 完成态文案（D8 逐字要求"重放结束停在终局状态并**显示「已重放完」**"）。
+  // ⚠️ 与下面的只读说明**并列**（不是替代它）：结束后仍然不可操作，D3 那句话必须继续在屏上。
+  // ⚠️ 非完成态时**不插节点**（不是空串节点）—— 与 `replay-error` 同款纪律：
+  //    "存在但文本为空"在屏上是一个看不见的空行，在判据上会让"完成态没出现"变成假绿。
+  if (state.done) {
+    const done = el(doc, 'div', 'replay-done-note');
+    done.dataset.role = 'replay-done-note';
+    done.textContent = DONE_NOTE;
+    bar.appendChild(done);
+  }
 
   // 恒在的只读说明（判据 7 的"恒"字由测试在 运行/暂停/结束/错误 四种状态上都断言）。
   const note = el(doc, 'div', 'replay-readonly-note');
