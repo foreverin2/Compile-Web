@@ -71,10 +71,21 @@ const NO_MDNS = argv.includes('--no-mdns');
 const KEEP = argv.includes('--keep');
 const SELF_CHECK = argv.includes('--self-check');
 const JSON_OUT = argVal('--json', null);
+/** 场景：normal = 只跑正常一轮；disconnect = 正常连通后再**拔掉客端进程**，
+ *  量"宿主自己多久才发现对端消失"。这个数字对 T6 的设计有直接含义：
+ *  若 `connectionState` 要几十秒才变，那"对手已断线"就不能只靠它，必须靠心跳通道。 */
+const SCENARIO = String(argVal('--scenario', 'normal'));
 
 const say = (m) => process.stdout.write(`${m}\n`);
 const die = (m) => { say(`\n[X] 环境错误：${m}`); process.exit(2); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/* ⚠️ 参数校验必须排在 `die` 定义**之后**：`const` 有 TDZ，提前调用会抛
+ * `ReferenceError: Cannot access 'die' before initialization` —— 那样非法输入拿到的是
+ * 一个崩溃栈而不是可读的环境错误。（第五道门的头注记过同一个坑，它第一版就是这么崩的。） */
+if (!['normal', 'disconnect'].includes(SCENARIO)) {
+  die(`--scenario 只认 normal / disconnect，收到 ${JSON.stringify(SCENARIO)}`);
+}
 
 /** 端口是否有人监听（连得上 = 有人）。 */
 function portListening(port) {
@@ -183,8 +194,9 @@ async function until(peer, pred, budgetMs) {
   return { state: last, hit: false, errored: false };
 }
 
-/** 起一对进程、连上 CDP、当信令中继跑一轮。relayAnswer=false 是**故意抽掉答案**的反向证明。 */
-async function runScenario({ relayAnswer, chrome, budgetMs, tag }) {
+/** 起一对进程、连上 CDP、当信令中继跑一轮。relayAnswer=false 是**故意抽掉答案**的反向证明。
+ *  `onConnected` 在"两端已连通但进程还没被杀"这个窗口里被调用 —— 拔线场景靠它观察宿主。 */
+async function runScenario({ relayAnswer, chrome, budgetMs, tag, onConnected }) {
   const profHost = mkdtempSync(join(tmpdir(), 'btc-net-host-'));
   const profGuest = mkdtempSync(join(tmpdir(), 'btc-net-guest-'));
   const probeUrl = pathToFileURL(PROBE).href;
@@ -220,6 +232,7 @@ async function runScenario({ relayAnswer, chrome, budgetMs, tag }) {
     result.done = hDone.hit;
     result.host = hDone.state;
     result.guest = await guest.state();
+    if (onConnected && result.done) await onConnected({ host, guest, procHost, procGuest });
   } catch (e) {
     result.note = String(e);
   } finally {
@@ -269,9 +282,37 @@ say(`budget = ${WAIT_S}s / 对端`);
 say('');
 
 const runs = [];
-say('=== 第 1 轮：正常信令中继 ===');
-const normal = await runScenario({ relayAnswer: true, chrome, budgetMs, tag: 'normal' });
+const DISCONNECT = SCENARIO === 'disconnect';
+const obs = { detectedAfterMs: null, lastConn: null, sampled: 0 };
+say(`=== 第 1 轮：正常信令中继${DISCONNECT ? '（连通后拔掉客端进程）' : ''} ===`);
+const normal = await runScenario({
+  relayAnswer: true, chrome, budgetMs, tag: 'normal',
+  onConnected: DISCONNECT
+    ? async ({ host, procGuest }) => {
+      const t0 = Date.now();
+      killTree(procGuest.pid);
+      while (Date.now() - t0 < budgetMs) {
+        const s = await host.state();
+        const conns = (s?.log ?? []).filter((e) => e.k === 'conn');
+        obs.lastConn = conns.length > 0 ? conns[conns.length - 1].v : null;
+        obs.sampled += 1;
+        if (obs.lastConn !== null && obs.lastConn !== 'connected') break;
+        await sleep(400);
+      }
+      obs.detectedAfterMs = Date.now() - t0;
+    }
+    : undefined,
+});
 normal.judged = judgeNormal(normal);
+if (DISCONNECT) {
+  const detected = obs.lastConn !== null && obs.lastConn !== 'connected';
+  say(`  拔掉客端进程后：宿主 connectionState 变成 ${JSON.stringify(obs.lastConn)}，`
+    + `用时 ${obs.detectedAfterMs}ms（采样 ${obs.sampled} 次）`);
+  normal.judged.push({
+    ok: detected,
+    what: `宿主自己发现对端已消失（${obs.lastConn}，${obs.detectedAfterMs}ms）`,
+  });
+}
 for (const j of normal.judged) say(`  [${j.ok ? '通过' : '不通过'}] ${j.what}`);
 if (normal.note) say(`  注：${normal.note}`);
 const nPass = normal.judged.filter((x) => x.ok).length;
