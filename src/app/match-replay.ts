@@ -5,9 +5,10 @@
  *
  * 它只做两件事，且各只做一份：
  *  1. 「一条 `ActionRecord` → 一次引擎调用」的**全仓唯一**映射（`applyRecordedAction`）。
- *     在此之前，同一份 `switch` 被抄在 `tests/app/match-recorder.test.ts:241-273` 的 `replay()` 里 ——
- *     测试与生产各有一份实现，"档案能重放"就有两个可能各自漂移的定义。本任务把它收口到这里，
- *     测试改为调用本模块（T1 判据 6）。
+ *     在此之前，同一份 `switch` 曾抄在 `tests/app/match-recorder.test.ts` 的 `replay()` 里
+ *     （现 `:251-258`）—— 测试与生产各有一份实现，"档案能重放"就有两个可能各自漂移的定义。
+ *     本任务把它收口到这里，测试改为调用本模块（T1 判据 6）；G 轮进一步把该文件**现场侧**
+ *     那份 `playAndRecord` 的 `switch` 也收口掉 ⇒ 全仓 `switch (a.kind)` 只剩本模块一处。
  *  2. 草稿的**真重放**（`replayDraftFromSetup`）：消费档案 `setup` 的两条顺序快照。
  *     G3 的"重放"测试用硬编码策略 `getDraftPool(s)[0]` **重新选**了一遍草稿
  *     （`tests/app/match-recorder.test.ts`），证明的是"同一套策略算出同一结果"，
@@ -51,14 +52,15 @@ import { matchFileToCreateOptions, type ActionRecord, type MatchFile, type Match
  * - `executeAction` 的 `refresh`（`game.ts:142-146`）与 `compile`（`game.ts:153-157`）分支
  *   **各自先调 `resetControlIfHeld`、再 pushLog**（归还 log 在 `:145` / `executeCompile` 之前）
  *   ⇒ "归还 log 落在动作 log 之前"**引擎自己就保证了**。助手替它们做是**第二次 no-op**：
- *   镜像实测（把 compile/refresh 两半删掉）`match-replay(24) + match-recorder(15)` **全绿**，
+ *   镜像实测（把 compile/refresh 两半删掉）当时 `match-replay(24) + match-recorder(15) = 39 条` **全绿**，
  *   且在 4 个种子上统计到 **32 步**"控制权在该玩家手里时 compile/refresh"仍两侧指纹相等
  *   ⇒ 那两半**零调用、无承重**。按本仓「零调用的分支不许留」的规矩（见 `match-file.ts:80-86`
  *   对 `hash-mismatch-unknown` 的同款处置）**删除**，而不是留着让它看起来有作用。
  * - 真正承重的是 `rearrange-protocols`：`rearrangeProtocolSlots`（`src/core/actions/rearrange.ts:12-33`）
  *   **不读也不改** `s.control` ⇒ 若不在这里先把归还 log 插进去，重放会是【重排…】【归还】【编译】
  *   （归还由随后的 `compile` 分支补做）⇒ `log` 顺序不同 ⇒ `stateFingerprint` 不等。
- *   判据 7 的 M4（删掉整段还原规则）实测**只有它一条红**，这条腿的牙就在这里。
+ *   M4（删掉整段还原规则）实测**红 3 条**：判据 7「★ 往返指纹相等」、G2a「现场侧不走助手」、
+ *   G4「篡改档案 ⇒ 抛错但 control/log 已被改动」—— 后两条是**设计上就该**钉住该规则副作用的腿。
  * - `resetControlIfHeld` 幂等（`control.ts:60` 的 `if (s.control === player)`），
  *   故"重排后紧接编译"的场景不会多出第二条 log。
  *

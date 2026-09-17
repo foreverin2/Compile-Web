@@ -838,7 +838,8 @@ describe('T1-G6：`effect-choice` 必须用**档案里的 player**（chooser）�
     // 为什么单列：判据 5 的 `fire-5` 场景里 `chooser === turnPlayer` ⇒ 现有腿**区分不出**
     // "用档案 player" 与 "用 `s.turnPlayer`"；"真跑一局"的档案里 `effect-choice` 条数 = 0
     // ⇒ 这条路径此前**完全没有判别力**。`greed-2` 的中指令是"对手弃1张牌"，
-    // 其 prompt 带 `chooser: foe`（`src/core/effects/cards/greed.ts:73`）⇒ 可区分。
+    // 其 prompt 带 `chooser: foe`（`src/core/effects/cards/greed.ts:64`）⇒ 可区分
+    // （⚠️ 别写成 `:73`：那是 `greed2Start` 的**可选回手** prompt，**没有** `chooser`）。
     const build = (): { s: GameState; promptId: string; chooser: PlayerId; choice: string[] } => {
       const s = createGame({ seed: 'g4t1-g6-chooser' });
       while (s.phase === 'draft') performDraftPick(s, getDraftPool(s)[0].defId);
