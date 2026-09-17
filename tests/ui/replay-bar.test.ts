@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { makeStubEl, descendants, queryAllIn, type StubNode } from './net-dom-stub';
 import { renderReplayBar, type ReplayBarNav, type ReplayBarState } from '../../src/ui/replay-bar';
 import { stripComments } from './source-text';
@@ -549,23 +550,129 @@ function readUi(rel: string): string {
 
 const REPLAY_CSS = stripCssComments(readUi('../../src/ui/styles-replay.css'));
 
-/** 被测文件自己（候选面必须排除它，理由见下面判据 9 的层叠腿）。 */
-const SELF_CSS = 'styles-replay.css';
-const UI_CSS_DIR = fileURLToPath(new URL('../../src/ui', import.meta.url));
+/** 被测文件自己（候选面必须排除它们，理由见下面判据 9 的层叠腿）。 */
+const SELF_CSS_SUFFIX = 'styles-replay.css';
+const SELF_TS_SUFFIX = 'replay-bar.ts';
+
+/** 仓库根（正斜杠化的显示路径用）。 */
+const ROOT = fileURLToPath(new URL('../../', import.meta.url));
+const UI_DIR = fileURLToPath(new URL('../../src/ui', import.meta.url));
+/** `index.html` **外链**的三张样式表住在这里（`public/assets/fire|fx/*.css`）—— 它们同样参与层叠。 */
+const PUBLIC_ASSETS = fileURLToPath(new URL('../../public/assets', import.meta.url));
+const INDEX_HTML = fileURLToPath(new URL('../../index.html', import.meta.url));
+
+/** 绝对路径读文本（递归遍历用；与 `readUi` 同款上限与形状）。 */
+function readAt(abs: string): string {
+  return readFileSync(abs).subarray(0, 8 * 1024 * 1024).toString('utf8');
+}
+
+/** 绝对路径 → 仓库相对路径（正斜杠；只用于失败信息）。 */
+function relOf(abs: string): string {
+  return abs.slice(ROOT.length).replace(/\\/g, '/');
+}
 
 /**
- * **除被测文件之外的**全部 `src/ui/*.css`（**生成式**：`readdirSync` 现扫，不手写清单）。
- *
- * 为什么必须生成式（阶段一评审 F1）：棋盘/特效层横跨**一整族**样式表（今天 6 张非 replay 表），
- * 还有 `index.html` 的外链与 JS 内联。只读一张表时，别的表将来声明 ≥ 遮罩的 z-index 就会
- * **静默穿帮而判据 9 全绿** —— 今天"全局最大值恰在 styles.css"只是巧合。
+ * `root` 子树里后缀为 `ext` 的文件（**递归**；目录不存在 ⇒ 返回空数组，
+ * 由调用方的锚点断言报红）。`readdirSync` / `statSync` 的极小声明见 `tests/node-types.d.ts`。
  */
-const OTHER_CSS = readdirSync(UI_CSS_DIR).filter((f) => f.endsWith('.css') && f !== SELF_CSS);
+function walkFiles(root: string, ext: string): string[] {
+  let names: string[] = [];
+  try { names = readdirSync(root); } catch { return []; }
+  const out: string[] = [];
+  for (const n of names) {
+    const p = join(root, n);
+    let isDir = false;
+    try { isDir = statSync(p).isDirectory(); } catch { continue; }
+    if (isDir) out.push(...walkFiles(p, ext));
+    else if (n.endsWith(ext)) out.push(p);
+  }
+  return out;
+}
 
-/** 那一族样式表里全部 `z-index` 声明（去注释后现算；跨表取 max 才是"棋盘层上限"）。 */
-const OTHER_ZS = OTHER_CSS.flatMap((f) => {
-  const css = stripCssComments(readUi(`../../src/ui/${f}`));
-  return [...css.matchAll(/z-index\s*:\s*(\d+)/g)].map((m) => Number(m[1]));
+/** 一条候选 z-index（值 + 它来自哪个文件的哪一行/哪个符号）。 */
+interface ZHit { z: number; src: string }
+
+const maxOf = (hits: ZHit[]): ZHit => hits.reduce((a, b) => (b.z > a.z ? b : a), { z: -Infinity, src: '(空)' });
+
+function cssZsOf(abs: string): ZHit[] {
+  const rel = relOf(abs);
+  return [...stripCssComments(readAt(abs)).matchAll(/z-index\s*:\s*(\d+)/g)]
+    .map((m) => ({ z: Number(m[1]), src: rel }));
+}
+
+/**
+ * **候选面（生成式四族）**：棋盘/特效层住在这些地方，遮罩必须高于它们的上限。
+ *
+ * 为什么必须生成式、必须多族（阶段一评审 **F1 + F5**）：只读一张表（`styles.css`）时，
+ * 别处将来声明 ≥ 遮罩的 z-index 就会**静默穿帮而判据 9 全绿**；只覆盖 CSS 而漏掉 JS 内联时，
+ * 一条 `Z_CTRL = 20000` 同样不会红。今天"全局最大值恰在 `styles.css`"只是巧合。
+ *
+ * ① `src/ui/**` 的**全部** `.css`（**排除被测文件自己** —— 否则 `.replay-bar` 的 12600
+ *    会被算进"棋盘层上限"，让 `shield > max` **恒假**）；
+ * ② `index.html` **外链**的 `public/assets/**` 的 `.css`（今天 3 张：`fire-burn` / `delete-shatter`
+ *    / `discard-cut`，最大 20）+ `index.html` 自身（今天 `z-index` 零命中，但它是外链的宿主）；
+ * ③ `src/ui/**` 的 `.ts` 里的**内联**汇聚点（排除被测文件自己）：见 `INLINE_ZS` 的两条行级规则；
+ * ④ 一份**显式登记的间接**名单（见 `INDIRECT_ZS`，今天只有一例）。
+ *
+ * ⚠️ 残留缺口（**不是"已全覆盖"**，逐条写在这里也写在 `styles-replay.css` 的承重注释里）：
+ *   · 动态值：`render.ts` 的 `node.style.zIndex = String(i)`（`i` 是堆叠序号，静态文本算不出）；
+ *   · **新的间接形态**：常量在 A 文件、经 B 文件的"写 z-index 的 helper"落到 DOM —— 今天只有
+ *     `Z_CTRL` 一例（已登记），**新增一例不会被自动发现**；
+ *   · 用"把含 z-index 文件里所有 `const` 数字都算进来"去堵间接形态**已实测不可行**：
+ *     它会吃到 `MIRROR_GAP_JITTER_MS = 9000` / `ICE_GAP_JITTER_MS = 8000` 这类**毫秒**常量
+ *     （上限被抬到 9000，判据变成无意义的假红）—— 实测见 F5 报告。
+ */
+const CSS_FILES = walkFiles(UI_DIR, '.css').filter((p) => !p.endsWith(SELF_CSS_SUFFIX))
+  .concat(walkFiles(PUBLIC_ASSETS, '.css'));
+const CSS_ZS: ZHit[] = [...CSS_FILES.flatMap(cssZsOf), ...cssZsOf(INDEX_HTML)];
+
+/**
+ * **内联** z-index 汇聚点：`src/ui/**` 的 `.ts`（排除被测文件自己），去注释后**按行**两条规则：
+ *  (i) 数字字面量：`z-index:<digits>` / `zIndex = '<digits>'` / `zIndex = <digits>`；
+ *  (ii) **同一行**出现的常量（`String(GEN2_Z)` / `${GEN2_Z}` / `z-index:${BASE_Z}`，含 `± k`），
+ *       用**同一文件**的 `const NAME = <digits>;` 解出来。
+ *
+ * 第二轮可行性实测（今天，与实现逐条同形的独立复算）：30 个 `.ts` / **85 条**命中、最大值 **601**
+ * （`fx-gen2.ts` 的 `GEN2_Z + 1`），**没有一条噪声**；而"文件里所有 `const` 数字"那条规则会被
+ * 毫秒常量污染（见上面的警告）。
+ */
+const INLINE_FILES = walkFiles(UI_DIR, '.ts').filter((p) => !p.endsWith(SELF_TS_SUFFIX));
+
+const INLINE_ZS: ZHit[] = INLINE_FILES.flatMap((abs) => {
+  const rel = relOf(abs);
+  const code = stripComments(readAt(abs));
+  const consts = new Map<string, number>();
+  for (const m of code.matchAll(/const\s+([A-Za-z_$][\w$]*)\s*=\s*(\d+)\s*;/g)) consts.set(m[1], Number(m[2]));
+  const hits: ZHit[] = [];
+  for (const line of code.split('\n')) {
+    if (!/z-index|zIndex/.test(line)) continue;
+    const snippet = `${rel}: ${line.trim().slice(0, 70)}`;
+    for (const m of line.matchAll(/z-index\s*:\s*(\d+)|zIndex\s*=\s*['"]?(\d+)/g)) {
+      hits.push({ z: Number(m[1] ?? m[2]), src: `字面量 ${snippet}` });
+    }
+    for (const m of line.matchAll(/\b([A-Z][A-Z0-9_]*)\b(?:\s*([+-])\s*(\d+))?/g)) {
+      const base = consts.get(m[1]);
+      if (base === undefined) continue;
+      const z = m[2] === '-' ? base - Number(m[3]) : base + Number(m[3] ?? 0);
+      hits.push({ z, src: `常量 ${m[1]}=${base}${m[2] === undefined ? '' : ` ${m[2]} ${m[3]}`} ← ${snippet}` });
+    }
+  }
+  return hits;
+});
+
+/**
+ * **显式登记的间接形态**：常量经一个"写 z-index 的 helper"落到 DOM，**行级规则看不见**。
+ * 今天唯一一例 = `gen3-control.ts` 的 `Z_CTRL`：`layer(id, z)` 把 `z` 写进 cssText 的
+ * `z-index:${z}`（该文件 `:39`），而调用点只写 `layer('g3ctrl-layer', Z_CTRL)` ⇒ 常量从不出现在
+ * z-index 那一行上。值**读自磁盘** ⇒ 把它抬到 20000 会让本判据变红（配了变异 F5b）。
+ * ⚠️ 这份名单**不是齐全性声明**，只登记"今天已知的"间接形态（残留缺口见上）。
+ */
+const INDIRECT_ZS: ZHit[] = (
+  [{ abs: join(UI_DIR, 'gen3-control.ts'), name: 'Z_CTRL', re: /const\s+Z_CTRL\s*=\s*(\d+)\s*;/ }]
+).map((e) => {
+  const m = e.re.exec(stripComments(readAt(e.abs)));
+  if (m === null) throw new Error(`找不到 ${relOf(e.abs)} 的 ${e.name}（改名/搬走了？这份名单必须重新派生）`);
+  return { z: Number(m[1]), src: `${e.name}=${m[1]}（间接：经 layer(id, z) 落到 cssText）` };
 });
 
 /** 某个选择器的规则体（找不到就**抛错**，而不是返回空串让断言在空集上假绿）。 */
@@ -592,22 +699,29 @@ describe('⑨ 遮罩的 CSS 事实（判据 9 · 文本腿）', () => {
    *     `position:fixed; inset:0` 的节点在桩上只是一个普通子节点，`z-index` 在桩上**不是事实**。
    *  ② 真实浏览器里的层叠与命中是**渲染引擎**的事，本仓测试环境是 `node`（无 jsdom、更无浏览器）。
    *  ⇒ "遮罩挡不挡得住"既不能在桩上跑出来、也不能在 node 里算出来，**只能读样式表**。
-   *  这条腿的**承重部分**是"从磁盘**现算**棋盘/特效层那一族的 z-index 上限"（不写死数字，
-   *  也不只读一张表）：写死会在任何一层抬高之后静默失效，只读一张表会在**别的表**抬高之后
-   *  静默失效（阶段一评审 F1：候选面已改成 `readdirSync` 现扫 `src/ui/*.css` 整族）。
-   *  变异实测：把 `.replay-shield` 的 z-index 调到棋盘之下（M4）⇒ 本条必红；
-   *  往**任意一张非 replay 的 css** 里插一条 `z-index: 13000`（F1）⇒ 本条也必红。
-   *  若某天这两条变异都不红了，说明它已变成没有判别力的装饰。
+   *  这条腿的**承重部分**是"从磁盘**现算**棋盘/特效层的上限"（不写死数字、也不只读一张表）：
+   *  写死会在任何一层抬高之后静默失效；只读一张表会在**别的表**抬高之后静默失效（F1）；
+   *  只覆盖 CSS 会在**内联层**抬高之后静默失效（F5）。候选面见上面四族的定义与残留缺口。
+   *  变异实测（三条路径都必须红）：把 `.replay-shield` 自己调低（M4）；往别的 CSS 插 13000（F1）；
+   *  抬高内联常量（F5a `GEN2_Z` / F5b 间接的 `Z_CTRL`）或外链 `public/assets` 表（F5c）。
    */
-  it('锚点：styles-replay.css 里真的能解析出两段规则体（空解析 ⇒ 下面全是废话）', () => {
+  it('锚点：规则体可解析 + 候选面四族非空且排除本文件（否则下面恒真/恒假）', () => {
     expect(REPLAY_CSS.length, 'styles-replay.css 读空了').toBeGreaterThan(200);
     expect(ruleBody(REPLAY_CSS, '.replay-shield').length).toBeGreaterThan(10);
     expect(ruleBody(REPLAY_CSS, '.replay-bar').length).toBeGreaterThan(10);
-    // 候选面本身非空（否则下面的层叠腿在空集上恒真）
-    expect(OTHER_CSS.length, '非 replay 的样式表少于 5 张 ⇒ 候选面塌了').toBeGreaterThanOrEqual(5);
-    expect(OTHER_CSS, '候选面里混进了被测文件自己（会让 shield > max 恒假）').not.toContain(SELF_CSS);
-    // 去注释真的生效（注释里写了这两个数字，不许被当成声明）
+    // 候选面 ①：src/ui 的 css 整族（今天 6 张）+ ② public/assets 外链族（今天 3 张）
+    expect(CSS_FILES.length, 'CSS 候选面少于 5 张表 ⇒ 候选面塌了').toBeGreaterThanOrEqual(5);
+    expect(CSS_FILES.some((p) => p.endsWith(SELF_CSS_SUFFIX)), '候选面里混进了被测文件自己（会让 shield > max 恒假）').toBe(false);
+    expect(CSS_FILES.some((p) => relOf(p).includes('public/assets')), 'index.html 外链的 public/assets 族没被扫到').toBe(true);
+    // 候选面 ③④：内联汇聚点与已登记间接项
+    expect(INLINE_FILES.length, '内联候选面少于 10 个 .ts ⇒ 扫描面塌了').toBeGreaterThan(10);
+    expect(INLINE_FILES.some((p) => p.endsWith(SELF_TS_SUFFIX)), '内联候选面里混进了被测文件自己').toBe(false);
+    expect(INLINE_ZS.length, '内联 z-index 汇聚点一条都没扫到 ⇒ 行级规则失效').toBeGreaterThan(0);
+    expect(INDIRECT_ZS.length, '已登记的间接项一条都没解出来').toBeGreaterThan(0);
+    // 去注释真的生效（注释里写了这些数字，不许被当成声明）
     expect(stripCssComments('/* z-index: 999999 */ .x { z-index: 1 }')).not.toContain('999999');
+    expect(stripComments('// zIndex = "999999"\nexport const x = 1;'), '内联扫描读的是裸源码（注释会假红）')
+      .not.toContain('999999');
   });
 
   it('.replay-shield 是 position:fixed + inset:0（铺满视口的那种遮罩）', () => {
@@ -618,23 +732,23 @@ describe('⑨ 遮罩的 CSS 事实（判据 9 · 文本腿）', () => {
     expect(body, '.replay-shield 把指针事件关掉了 ⇒ 它挡不住任何点击').not.toMatch(/pointer-events\s*:\s*none/);
   });
 
-  it('层叠：遮罩 z-index 低于 .replay-bar、高于棋盘/特效层那一族的最大值（跨表现算）', () => {
+  it('层叠：遮罩低于 .replay-bar、高于棋盘/特效层上限（CSS 整族 + 外链 + 内联 + 已登记间接）', () => {
     const shieldZ = zIndexOf(ruleBody(REPLAY_CSS, '.replay-shield'), '.replay-shield');
     const barZ = zIndexOf(ruleBody(REPLAY_CSS, '.replay-bar'), '.replay-bar');
 
-    // 解析器前提：真读到了那一族样式表（否则 othersMax 会是 -Infinity，判据的上界恒真）
-    expect(OTHER_ZS.length, `${OTHER_CSS.length} 张非 replay 表里 z-index 声明太少 ⇒ 解析失效`)
+    // 解析器前提：真有那么多声明可算（否则下面的上限会是 -Infinity，断言恒真）
+    expect(CSS_ZS.length, `${CSS_FILES.length} 张 CSS 候选表里 z-index 声明太少 ⇒ 解析失效`)
       .toBeGreaterThan(100);
-    const othersMax = Math.max(...OTHER_ZS);
-    expect(othersMax, '棋盘/特效层那一族的最大 z-index 太小 ⇒ 上面的前提没生效')
-      .toBeGreaterThanOrEqual(1000);
+    const cssMax = maxOf(CSS_ZS);
+    expect(cssMax.z, 'CSS 候选面的最大 z-index 太小 ⇒ 上面的前提没生效').toBeGreaterThanOrEqual(1000);
+    const inlineMax = maxOf([...INLINE_ZS, ...INDIRECT_ZS]);
+    const layerMax = cssMax.z >= inlineMax.z ? cssMax : inlineMax;
 
     expect(shieldZ, `遮罩(${shieldZ}) 不低于控制条(${barZ}) ⇒ 控制条自己被挡住、点不动`)
       .toBeLessThan(barZ);
     expect(
       shieldZ,
-      `遮罩(${shieldZ}) 不高于棋盘/特效层的最大值(${othersMax}，来自 ${OTHER_CSS.join(' + ')} 这一族) `
-      + '⇒ 它只是装饰，棋盘照旧可点',
-    ).toBeGreaterThan(othersMax);
+      `遮罩(${shieldZ}) 不高于棋盘/特效层的上限(${layerMax.z}，来自 ${layerMax.src}) ⇒ 它只是装饰，棋盘照旧可点`,
+    ).toBeGreaterThan(layerMax.z);
   });
 });
