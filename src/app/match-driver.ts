@@ -486,13 +486,21 @@ export function createReplayDriver(
         cur.paused = true;
         return;
       }
-      // 播放态下改倍速：立刻按新倍速（重）排一次 —— 两种合法时机都在这个条件里：
-      //  · `scheduled !== null`（下一步已排、还没到点）⇒ 取消后用新的 ms 重排；
-      //  · `awaitingSettle`（在等宿主回话）⇒ 直接按新的 ms 排。
-      // 其余情况（暂停中、已 done、已报错、什么都没在跑）⇒ 什么都不做。
-      if (!cur.paused && !cur.done && cur.error === null && (scheduled !== null || awaitingSettle)) {
+      // ★ 改倍速只改**下一 tick 的间隔**，而"下一 tick"该不该现在就排，由本模块的不变式决定：
+      //   **`awaitingSettle` ⟺ 下一步还没排进 ticker**（见 `scheduleNext` 的注释）。
+      //   ⇒ `awaitingSettle === true`（宿主还在播这一步的特效、还没回话）时**只记 rate、不排 tick**：
+      //   FX 播完后宿主会调 `settle()`，那时自然按**新** rate 排（这正是不变式要的行为）。
+      //
+      //   ⚠️ 这里曾经写成"`scheduled !== null || awaitingSettle` 都重排"，后果是**可观测**的
+      //   （T4 一审阻断 B1 的另一半）：重放页上抽牌动画进行中点「4×」⇒ `setRate` 自己在 FX 窗口里
+      //   排了一步 ⇒ t=1275 就 tick（那一步的动画要到 2900 才结束）⇒ 两套抽卡/揭示动画并发飞，
+      //   而 `drawAnimBusy` / `revealFlyBusy` 是**单布尔**、由较早结束的回调清掉 ⇒ 第三条还能叠上
+      //   （这两个标志存在的理由被绕过）。⇒ J 轮修掉：**在 FX 窗口里排 tick 是越权**。
+      if (!cur.paused && !cur.done && cur.error === null && scheduled !== null) {
+        // 下一步**已经排好、还没到点**：重排是合法的（取消旧的、按新 rate 再排一个）
         scheduleNext(true);
       }
+      // 其余情况（暂停中 / 已 done / 已报错 / 正在等宿主 settle）⇒ 什么都不做
     },
 
     onTick(cb: () => void): () => void {

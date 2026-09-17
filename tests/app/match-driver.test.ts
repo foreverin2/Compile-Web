@@ -1111,6 +1111,45 @@ describe('T2 判据 8：settle 握手 / 倍速 / 暂停 / 看门狗（注入时�
     expect(d.cursor().rate).toBe(0);
   });
 
+  /**
+   * ★ J 轮：`setRate` **不许**在 FX 窗口里排 tick。
+   *
+   * 依据是本模块自己的不变式（见 `scheduleNext`）：**`awaitingSettle` ⟺ 下一步还没排进 ticker**。
+   * `awaitingSettle === true` 意味着"宿主还在播这一步的特效、还没回话"——这时 `setRate`
+   * 只该记下新 rate；等宿主 `settle()` 时自然按新 rate 排。
+   *
+   * 为什么这条有真实后果（T4 一审阻断 B1 的另一半）：重放页上抽牌动画进行中点「4×」⇒
+   * 旧实现自己在 FX 窗口里排了一步 ⇒ `t=1275` 就 tick（那一步的动画要到 2900 才结束）⇒
+   * 两套抽牌/揭示动画并发飞，而 `drawAnimBusy` / `revealFlyBusy` 是单布尔、由较早结束的回调
+   * 清掉 ⇒ 第三条还能再叠上（这两个标志存在的理由被绕过）。
+   */
+  it('★ setRate 在 awaitingSettle（FX 窗口）里**不排 tick**：只记 rate，等宿主 settle 时按新 rate 排', () => {
+    const ticker = new FakeTicker();
+    const { d } = fresh({ ticker, stepMs: 1000, settleWatchdogMs: null });
+    d.play();
+    d.settle(); // 排好第 1 步（1× = 1000ms）⇒ 此后 tick 到点，驱动进入"等宿主 settle"的 FX 窗口
+    const beforeTick = ticker.log.length;
+    ticker.advance(1000); // 第 1 步的 tick 到点：tick **只广播**，宿主还没回话
+    const fxWindowStart = ticker.log.length;
+    expect(fxWindowStart, 'tick 本身不排下一步（那要等 settle）').toBe(beforeTick);
+
+    // ★ FX 窗口内改倍速：只记 rate，**不许**产生任何 schedule
+    d.setRate(4);
+    expect(d.cursor().rate, 'rate 必须记下来').toBe(4);
+    expect(ticker.log.length, 'FX 窗口内 setRate 不许产生 schedule').toBe(fxWindowStart);
+    expect(ticker.pending().length, 'FX 窗口内不许有任何在飞时钟').toBe(0);
+
+    // 宿主回话 ⇒ 这时才按**新** rate 排（4× ⇒ 250ms）
+    d.settle();
+    expect(ticker.log.length, 'settle() 之后才排').toBe(fxWindowStart + 1);
+    expect(ticker.log[fxWindowStart].ms, '按 FX 窗口里记下的新 rate 排（4× ⇒ 1000/4）').toBe(250);
+
+    // 反空转：新 rate 真的生效 —— 到点后 tick 广播，且不自己推进游标
+    const posNow = d.cursor().position;
+    ticker.advance(250);
+    expect(d.cursor().position, 'tick 仍只广播（应用点只有 submit）').toBe(posNow);
+  });
+
   it('pause() ⇒ cancel 且不再 tick；再 play 要重新排一次', () => {
     const ticker = new FakeTicker();
     const { d } = fresh({ ticker, stepMs: 500, settleWatchdogMs: null });
