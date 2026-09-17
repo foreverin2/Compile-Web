@@ -166,6 +166,20 @@ function archiveOf(seed: string, maxSteps = 60, draft: (s: GameState) => void = 
 }
 
 /**
+ * 找到一份**满足构造前提**的档案（判据 3 需要"判别点 + 它的下一条带 args"）。
+ *
+ * 为什么要有这个助手而不是放宽断言：前提是**构造面**的事（哪一步带 args 随种子变），
+ * 放宽它就会让"反空转"变成恒真。找不到就抛错 —— 那意味着构造该重写，而不是断言该放松。
+ */
+function archiveWhere(seedBase: string, pred: (f: MatchFile) => boolean): MatchFile {
+  for (let i = 0; i < 12; i += 1) {
+    const f = archiveOf(`${seedBase}-${i}`);
+    if (pred(f)) return f;
+  }
+  throw new Error(`反空转失败：${seedBase} 的 12 个种子都没有满足构造前提的档案（构造需要重写）`);
+}
+
+/**
  * 在一个副本上逐步推进到 `upto`（**不含**），返回每一步**之后**的状态。
  * 副本用 `stateAfterDraft(file)` 建 ⇒ 与驱动内部的状态同源。
  */
@@ -184,13 +198,18 @@ function statesUpTo(file: MatchFile, upto: number): GameState {
  *
  * 为什么不用"随便造一条不同的操作"：那样门可能只是把**非法**操作挡在外面，
  * 而"闸门"要证的恰恰是**合法**操作也被挡住（D12 的全部价值）。
+ *
+ * `extra` 是**调用方追加的构造前提**（判据 3 的深拷贝那半要求"下一条带 args"，
+ * 否则那条断言会在 `position+1` 是无参 kind 时抛"反空转失败"）。
  */
 function findPlayDiscriminator(
   file: MatchFile,
+  extra?: (f: MatchFile, p: number) => boolean,
 ): { position: number; s: GameState; rec: ActionRecord; illegal: Omit<ActionRecord, 'seq'> } | null {
   for (let p = 0; p < file.actions.length; p += 1) {
     const rec = file.actions[p];
     if (rec.kind !== 'play') continue;
+    if (extra && !extra(file, p)) continue;
     const s = statesUpTo(file, p);
     const uid = (rec.args as { cardUid: string }).cardUid;
     const forms = new Set(
@@ -485,17 +504,27 @@ describe('T2 判据 3：ReplayDriver 的闸门（D12）', () => {
     expect(d2.submit(s2, nextRec!).ok, '被拒之后仍必须能提交下一条').toBe(true);
     expect(d2.cursor().position).toBe(position + 1);
 
-    // ④ `next()` 是深拷贝：改它不许动到档案
-    const snapshot = d1.next();
-    expect(snapshot, '每步都有下一条（position < total）').not.toBeNull();
-    if (typeof snapshot!.args === 'object' && snapshot!.args !== null) {
-      (snapshot!.args as Record<string, unknown>).__tampered = 1;
-      expect(
-        (file.actions[position + 2].args as Record<string, unknown> | undefined)?.__tampered,
-        'next() 必须是深拷贝（改快照不许动到档案）',
-      ).toBeUndefined();
+    // ④ `next()` 是深拷贝。**构造前提**：被改动的那一条必须真的带对象形态的 args
+    //    （`play` 的下一条常是 `advance`/`refresh`（无参）⇒ 这里换一条**带非空 args 的 play**
+    //     专门测这件事；不满足就抛错，而不是静默跳过 —— 静默跳过是"什么都没钉住"）
+    const at = file.actions.findIndex(
+      (a) => a.kind === 'play' && typeof a.args === 'object' && a.args !== null && Object.keys(a.args as object).length > 0,
+    );
+    expect(at, '反空转：档案里必须有一条带非空 args 的 play（深拷贝腿的构造前提）').toBeGreaterThanOrEqual(0);
+    const d3 = createReplayDriver(file, { ticker: new FakeTicker(), settleWatchdogMs: null });
+    const s3 = stateAfterDraft(file);
+    for (let i = 0; i < at; i += 1) {
+      expect(d3.submit(s3, file.actions[i]).ok, `深拷贝腿推进失败于第 ${i} 步`).toBe(true);
+      resolveAllChoices(s3, pickFirst);
     }
-    expect(d1.next()).toEqual(file.actions[position + 1]);
+    const snapshot = d3.next();
+    expect(snapshot, '每步都有下一条（position < total）').not.toBeNull();
+    expect(snapshot).toEqual(file.actions[at]);
+    (snapshot!.args as Record<string, unknown>).__tampered = 1;
+    expect(
+      (file.actions[at].args as Record<string, unknown>).__tampered,
+      'next() 必须是深拷贝（改快照不许动到档案里**那一条**）',
+    ).toBeUndefined();
   });
 
   it('负控（对照）：拒绝**非法**操作也走同一条 `not-the-next-action`（门在引擎之前）', () => {
@@ -515,24 +544,22 @@ describe('T2 判据 3：ReplayDriver 的闸门（D12）', () => {
  * 判据 4：应用的是**记录里**那一条，不是调用方给的那条
  * ================================================================== */
 
-describe('T2 判据 4：submit 应用记录里的 args（不是调用方给的那条）', () => {
+describe('T2 判据 4：引擎吃的是门规范化出来的那份 args（调用方对象不被读第二次）', () => {
   /**
-   * ★**这条腿的形态由 D12 的闸门语义唯一决定**（本实现第一版写成"提交一个 args 不同的合法操作"
-   * 就**必然红** —— 因为闸门要求 `args` 逐项相等，args 不同就根本过不了门）：
+   * ★**这条腿钉的到底是什么 —— 精确说法（H 轮评审实测后改写，原注释是过度声明）**：
    *
-   * 在 D12 之下，"应用记录的 args 还是调用方的 args"**不可能**用"两组不同的值"来区分
-   * （值不同 ⇒ 门拒绝；值相同 ⇒ 两组值等价）。它**能**被区分的是这两件事：
-   *  ① 引擎收到的是**调用方那个对象本身**，还是门**规范化出来的副本**。前者等于把调用方的对象
-   *    （可能带着原型/getter/后续会被改写的键）交给引擎 ⇒ 调用方**一次无关的后续修改**
-   *     能让已重放的那一步的结果漂移。后者（本实现）安全。
-   *  ② 调用方的对象**有没有被引擎改动**（引擎若原地改 args，语义等价的对象也会被污染）。
+   * 说法 A（**不成立、不要写**）："这条腿区分了『应用记录里的 args』与『应用调用方给的 args』"。
+   * 在 D12 的闸门下这句话**不可独立观测**：`args` 值不同 ⇒ 门先拒（引擎根本不被调用）；
+   * `args` 值相同 ⇒ 两条路无任何可观测差异。评审实测把它坐实了：只把 `isSameSubmit` 的左边换成
+   * 调用方 args 的 JSON 深拷贝（引擎仍吃 `rec`）⇒ 20 条生产腿**一条都不红**。
    *
-   * ⇒ 这条腿的判别力来自**对象身份与访问计数**，不来自指纹：用 Proxy 数"调用方对象的属性被读了几次"，
-   * 并让"第二次读"返回**错的值**（模拟"调用方提交后又被改了"）——
-   * 若实现把调用方的对象一路带到引擎，就会读到那个错值 ⇒ 状态与"应用记录"不同 ⇒ 腿红。
-   * 现场真值锚点仍然是指纹：最终状态必须与"直接 `applyRecordedAction` 记录里那一条"**逐字节相同**。
+   * 说法 B（**成立、这条腿钉的就是它**）：门把调用方对象**规范化成副本**，引擎吃的是那份副本 ⇒
+   *  ① 调用方对象的属性**恰好被读一次**（门那次 `JSON.stringify`），引擎不再碰它；
+   *  ② 调用方对象**不会被泄漏进引擎**（因此"调用方提交后又改它"、"对象带 getter"这两类事
+   *     都影响不了已重放的这一步）。
+   * 判别力来自**对象身份与访问计数**，不来自指纹。变异 G2（引擎改吃调用方对象的等价深拷贝）⇒ 本腿红。
    */
-  it('提交等价但**身份不同**的 args（Proxy 计数 + 二次读取返回错值）⇒ 引擎只吃门规范化出来的记录；状态与"直接应用记录"逐字节相同', () => {
+  it('提交等价但**身份不同**的 args（Proxy 计数 + 二次读取返回错值）⇒ 每键恰好读 1 次，状态与"直接应用记录"逐字节相同', () => {
     const file = archiveOf('g4t2-crit4', 60, (s) => draftNontrivial(s, 'g4t2-crit4'));
     // 找一条**带 args** 的记录（`play`），并在它的判别点上干活
     const position = file.actions.findIndex((a) => a.kind === 'play' && a.args !== undefined);
@@ -585,10 +612,10 @@ describe('T2 判据 4：submit 应用记录里的 args（不是调用方给的�
     expect([...reads.entries()], '调用方的 args 对象只许被门读一次（规范化），不许被带进引擎').toEqual(
       Object.keys(recArgs).map((k) => [k, 1]),
     );
-    // ③ 记录本身没有被引擎原地改动（门规范化的是副本）
-    expect(file.actions[position].args).toEqual(recArgs);
-    // ④ 反空转：这条腿的判别力是真的 —— 把 args 换成**另一个合法落点**，状态**必须不同**
+    // ③ 反空转：这条腿的判别力是真的 —— 把 args 换成**另一个合法落点**，状态**必须不同**
     //    （用合法的替代落点而不是乱改 `cardUid`：乱改会让引擎抛错，那就变成"在比两个错误"）
+    //    ⚠️ 原来这里还有一条 `expect(file.actions[position].args).toEqual(recArgs)`：那是**自反恒真**
+    //    （`recArgs` 就是从它拷出来的），什么都没断言 ⇒ 已删（"记录未被污染"由 ② 的读计数覆盖）。
     const altState = statesUpTo(file, position);
     const alt = getLegalActions(altState, altState.turnPlayer)
       .filter((x) => x.kind === 'play' && x.cardUid === (rec.args as { cardUid: string }).cardUid)
@@ -600,7 +627,7 @@ describe('T2 判据 4：submit 应用记录里的 args（不是调用方给的�
       stateFingerprint(expectedAtP1),
     );
 
-    // ⑤ 整局走到底：终态仍必须与参考重放一致（没有从这一步起静默走偏）
+    // ④ 整局走到底：终态仍必须与参考重放一致（没有从这一步起静默走偏）
     for (let i = position + 1; i < file.actions.length; i += 1) {
       const step = file.actions[i];
       const res = d.submit(s, step);
@@ -729,6 +756,113 @@ describe('T2 判据 5：把 T1 的真档案喂给驱动、反复 submit(next()) 
 });
 
 /* ================================================================== *
+ * ★ H 轮阻断 1 的牙：把 onTick **真的接到 submit** 上，跑到底、比指纹
+ * ================================================================== */
+
+describe('T2-H1：onTick ⇒ submit 的真实接线（tick 驱动全流程）', () => {
+  /**
+   * **为什么必须单列这一条**（20 条腿的盲区，评审镜像实测）：
+   * 判据 5 那两条腿都用 `while (d.next()) d.submit(...)` **手动**驱动，从不喂 ticker、
+   * 也不订阅 `onTick` ⇒ 它们对"tick 自己也在改状态"这种**双路径**缺陷**零覆盖**。
+   * 修复前 `handleTick` 会自己在私有状态上 apply 一步并推进游标，于是 T4 规格的接线
+   * （`onTick ⇒ cb.onAction(driver.next()!) ⇒ submit`）下**每次 tick 只命中档案的第 1、3、5…条**：
+   * 驱动 position=6/40 而宿主只应用了 3 步、宿主指纹 ≠ 原局，**而且不报错**。
+   *
+   * 这条腿的形态就是 T4 的接线本身：订阅 `onTick` → 回调里取 `next()` → `submit(宿主状态, 那条)`
+   * → 在每个终止点 `settle()`；用假 ticker 一路推进到 `done`。
+   * 判别力来自三件事：① 游标与宿主状态**同步**走到底；② 终态指纹 == 原局；
+   * ③ 与"纯 submit"那条路径的指纹**逐字节相同**。
+   */
+  function driveByTicks(file: MatchFile, stepMs: number): { s: GameState; d: ReplayDriver; ticks: number } {
+    const ticker = new FakeTicker();
+    const d = createReplayDriver(file, { ticker, stepMs, settleWatchdogMs: null });
+    const s = stateAfterDraft(file);
+    let ticks = 0;
+    let lastPos = -1;
+    d.onTick(() => {
+      ticks += 1;
+      // 宿主 = 现场那条编排：取档案下一条 → 交给 driver 执行（它作用在**宿主的状态**上）
+      const a = d.next();
+      if (a) {
+        const r = d.submit(s, a);
+        expect(r.ok, `onTick 里第 ${d.cursor().position} 步被拒：${JSON.stringify(r)}`).toBe(true);
+        resolveAllChoices(s, pickFirst); // main.ts 的编排在每个终止点会做这件事
+      }
+      // ⚠️ 反空转：每一步都必须真的前进（双路径缺陷下"驱动的游标走了、宿主没走"会在这里现形）
+      const pos = d.cursor().position;
+      if (pos <= lastPos && !d.cursor().done) {
+        throw new Error(`onTick 被调用但游标没有前进（pos=${pos}，上次 ${lastPos}）—— 双路径分叉的形态`);
+      }
+      lastPos = pos;
+      d.settle(); // 本步特效播完的握手
+    });
+    d.play();
+    let guard = 0;
+    while (!d.cursor().done) {
+      if (guard++ > file.actions.length * 2 + 20) throw new Error(`tick 驱动没有收敛（pos=${d.cursor().position}）`);
+      ticker.advance(stepMs + 1);
+    }
+    return { s, d, ticks };
+  }
+
+  it('★ tick 接线跑到底：position === total、终态指纹 == 原局，且与"纯 submit"路径逐字节相同', () => {
+    const seed = 'g4t2-h1';
+    const live = createGame({ seed });
+    draftTrivial(live);
+    const rec = createMatchFileRecorder();
+    const liveDriver = createLocalDriver({ recorder: rec });
+    for (let i = 0; i < 40; i += 1) {
+      if (live.phase !== 'turn' || live.winner !== null) break;
+      if (live.pendingEffects.length > 0) {
+        resolveAllChoices(live, pickFirst);
+        continue;
+      }
+      const acts = getLegalActions(live, live.turnPlayer);
+      if (acts.length === 0) break;
+      const act = acts[i % acts.length];
+      const args = argsOf(act);
+      const hasArgs = Object.keys(args).length > 0;
+      liveDriver.submit(live, { player: live.turnPlayer, kind: act.kind, ...(hasArgs ? { args } : {}) });
+      resolveAllChoices(live, pickFirst);
+    }
+    const file = rec.toMatchFile(metaFor(seed, setupFromState(live)));
+    expect(file.actions.length, '反空转：档案必须有若干步').toBeGreaterThan(10);
+
+    // ① tick 接线（T4 的真实形态）
+    const byTick = driveByTicks(file, 100);    expect(byTick.ticks, '反空转：必须真的被 tick 驱动了若干次').toBeGreaterThan(5);
+    expect(byTick.d.cursor().position, '游标必须与宿主一起走到底').toBe(file.actions.length);
+    expect(byTick.d.cursor().done).toBe(true);
+    expect(byTick.d.next()).toBeNull();
+    expect(stateFingerprint(byTick.s), 'tick 接线的终态必须等于原局').toBe(stateFingerprint(live));
+
+    // ② 纯 submit 路径（对照）：两条路必须逐字节相同
+    const plain = createReplayDriver(file, { ticker: new FakeTicker(), settleWatchdogMs: null });
+    const s2 = stateAfterDraft(file);
+    let guard = 0;
+    while (plain.next()) {
+      if (guard++ > file.actions.length + 5) throw new Error('对照路径没有收敛');
+      expect(plain.submit(s2, plain.next()!).ok).toBe(true);
+      resolveAllChoices(s2, pickFirst);
+    }
+    expect(stateFingerprint(s2), '两条路径的终态必须逐字节相同').toBe(stateFingerprint(byTick.s));
+    expect(plain.cursor().position).toBe(byTick.d.cursor().position);
+
+    // ③ 反空转（判别力）：宿主**不**在 onTick 里 submit ⇒ 游标必须一动不动
+    //    （这正是"tick 只广播、应用点只有 submit"的直接证据；修复前 tick 会自己走）
+    const idleTicker = new FakeTicker();
+    const idle = createReplayDriver(file, { ticker: idleTicker, stepMs: 50, settleWatchdogMs: null });
+    let broadcast = 0;
+    idle.onTick(() => {
+      broadcast += 1;
+    });
+    idle.play();
+    idleTicker.advance(50 * 5);
+    expect(broadcast, 'tick 必须被广播').toBeGreaterThan(0);
+    expect(idle.cursor().position, '宿主不 submit ⇒ 游标一步都不许走（tick 不自己 apply）').toBe(0);
+  });
+});
+
+/* ================================================================== *
  * 判据 6：结束不崩（done 之后再 submit ⇒ exhausted，不抛）
  * ================================================================== */
 
@@ -765,6 +899,41 @@ describe('T2 判据 6：档案走完后再提交 ⇒ exhausted（不抛）', () 
     expect(d2.next()).toBeNull();
     const s2 = stateAfterDraft(empty);
     expect(d2.submit(s2, { player: 0, kind: 'advance' })).toMatchObject({ ok: false, refusal: 'exhausted' });
+  });
+
+  /**
+   * ★ H 轮阻断 2 的牙：**看门狗的诊断不许把 `exhausted` 砖化**。
+   *
+   * 修复前两种语义共用一个 `cursor().error`：看门狗一触发，`submit` 对**任何**入参都返回
+   * `engine-error`，于是"档案已经走完"这个**进度事实**再也判不出来。
+   * 现在诊断走 `cursor().diagnostic`、且 `exhausted` 的判定排在 `error` 之前 ⇒ 两者都成立。
+   */
+  it('★ 看门狗触发（有诊断）后：submit 仍必须返回 exhausted（不被诊断砖化），且 diagnostic 非空而 error 仍为 null', () => {
+    const file = archiveOf('g4t2-crit6-diagnostic', 25);
+    expect(file.actions.length).toBeGreaterThan(2);
+    const ticker = new FakeTicker();
+    const d = createReplayDriver(file, { ticker, stepMs: 100, settleWatchdogMs: 2000 });
+    const s = stateAfterDraft(file);
+    // 让宿主**完全不回话**：订阅 onTick 只为触发看门狗兜底那次广播，回调里什么都不做
+    d.onTick(() => {});
+    d.play();
+    ticker.advance(2000 + 100); // 步进 + 看门狗都到点 ⇒ 诊断写入
+    expect(d.cursor().diagnostic, '看门狗必须留下诊断').toBeTruthy();
+    expect(d.cursor().error, '诊断 ≠ 引擎错误：`error` 必须仍为 null').toBeNull();
+    expect(d.cursor().diagnostic!).toMatch(/看门狗/);
+
+    // 现在把这份档案由**另一条**（纯 submit）路径走完，再回到带诊断的驱动上问 exhausted ——
+    // 更直接的形态：把带诊断的驱动喂到 done（它自己就能被 submit 推进）
+    let guard = 0;
+    while (d.next() && guard++ < file.actions.length + 5) {
+      const r = d.submit(s, d.next()!);
+      expect(r.ok, `第 ${d.cursor().position} 步被拒：${JSON.stringify(r)}`).toBe(true);
+      resolveAllChoices(s, pickFirst);
+    }
+    expect(d.cursor().done).toBe(true);
+    const after = d.submit(s, file.actions[file.actions.length - 1]);
+    expect(after, '走完之后（且带着看门狗诊断）仍必须是 exhausted').toMatchObject({ ok: false, refusal: 'exhausted' });
+    expect(d.cursor().diagnostic, '诊断仍在（它不会被 exhausted 抹掉）').toBeTruthy();
   });
 });
 
@@ -820,9 +989,12 @@ describe('T2 判据 7：被篡改的那一步 ⇒ engine-error，驱动不崩', 
   });
 
   it('引擎抛错后驱动**不会**被 tick 推着继续（error 是粘性的）', () => {
-    const file = archiveOf('g4t2-crit7-tick', 20);
-    const k = file.actions.findIndex((a) => a.kind === 'play');
-    expect(k).toBeGreaterThanOrEqual(0);
+    const file = archiveOf('g4t2-crit7-tick', 40);
+    // ⚠️ 篡改点必须**不是最后一步**：`exhausted` 现在排在 `engine-error` 之前（H 轮阻断 2），
+    //    若 k 是最后一条，走完之后再 submit 会得到 `exhausted` 而不是 `engine-error`
+    //    —— 那是**正确**行为（进度事实优先），但这条腿要测的是"粘性错误"。
+    const k = file.actions.findIndex((a, i) => a.kind === 'play' && i < file.actions.length - 1);
+    expect(k, '反空转：必须找到一条"不是最后一步"的 play').toBeGreaterThanOrEqual(0);
     const tampered: MatchFile = {
       ...file,
       actions: file.actions.map((a, i) =>
@@ -836,12 +1008,18 @@ describe('T2 判据 7：被篡改的那一步 ⇒ engine-error，驱动不崩', 
       d.submit(s, tampered.actions[i]);
       resolveAllChoices(s, pickFirst);
     }
+    // 宿主的接线：tick ⇒ submit（引擎在这里抛）
+    d.onTick(() => {
+      const a = d.next();
+      if (a) d.submit(s, a);
+    });
     d.play();
-    d.settle(); // 只安排一步
-    ticker.advance(100); // 这一步就是篡改点 ⇒ 抛
-    expect(d.cursor().error).toBeTruthy();
+    ticker.advance(100); // 这一步就是篡改点 ⇒ 引擎抛
+    expect(d.cursor().error, '引擎抛错必须写进 error（而不是 diagnostic）').toBeTruthy();
+    expect(d.cursor().diagnostic, '引擎抛错不是看门狗诊断').toBeNull();
     const pos = d.cursor().position;
-    d.settle();
+    // 之后每一步 submit 都被粘性 error 拦下（且 tick 也不再推进游标）
+    expect(d.submit(s, tampered.actions[k])).toMatchObject({ ok: false, refusal: 'engine-error' });
     ticker.advance(1000);
     expect(d.cursor().position, 'error 之后不许再被 tick 推进').toBe(pos);
   });
@@ -860,44 +1038,48 @@ describe('T2 判据 8：settle 握手 / 倍速 / 暂停 / 看门狗（注入时�
     return { d, s };
   }
 
-  it('play() 后**不立即** schedule；settle() 后恰好 schedule 一次，ms = stepMs / rate', () => {
+  // ★ H 轮：原来这一条把多个性质**合取在一个断言链**里（`play()` 不排 / `settle()` 恰好一次 /
+  //   幂等 / 一步之后要再 settle），变异时只能知道"这条腿红了"、指不出是哪一半。
+  //   ⇒ 拆成三条，每条只承担一个性质。
+  it('8a：play() 排**第一次** tick（ms = stepMs），且此刻 ticker 里恰好一个在飞时钟', () => {
     const ticker = new FakeTicker();
-    const { d, s } = fresh({ ticker, stepMs: 1000, settleWatchdogMs: null });
-
+    const { d } = fresh({ ticker, stepMs: 1000, settleWatchdogMs: null });
     d.play();
     expect(d.cursor().paused).toBe(false);
-    expect(ticker.log.length, 'play() 自己不许安排下一步（要等 settle 握手）').toBe(0);
-    expect(ticker.pending().length).toBe(0);
-
-    d.settle();
-    expect(ticker.log.length, 'settle() 后**恰好**一次 schedule').toBe(1);
+    expect(ticker.log.length, 'play() 必须排第一次 tick（否则第一个 tick 永远不来）').toBe(1);
     expect(ticker.log[0].ms, '1× ⇒ stepMs').toBe(1000);
-    expect(ticker.pending().length, 'settle 后只允许一个在飞时钟').toBe(1);
+    expect(ticker.pending().length).toBe(1);
+  });
 
-    // 幂等：再 settle 一次不许再排一个
+  it('8b：settle() 在"已排好下一步"时是 no-op（幂等）；一步走完之后才由 settle() 排下一步', () => {
+    const ticker = new FakeTicker();
+    const { d, s } = fresh({ ticker, stepMs: 1000, settleWatchdogMs: null });
+    d.play();
+    expect(ticker.log.length).toBe(1);
+    // 幂等：此刻已经排好一步 ⇒ settle() 不许再排
     d.settle();
     expect(ticker.log.length, '重复 settle 不许再排（no-op 幂等）').toBe(1);
-
-    // 到点 ⇒ 走一步（并进入"等下一次 settle"）
-    ticker.advance(1000);
-    expect(d.cursor().position).toBe(1);
-    expect(s.phase).toBe('turn');
-
-    // 这一步之后**不**自动排下一步：必须再 settle
-    expect(ticker.log.length, '一步之后要等下一次 settle').toBe(1);
     d.settle();
-    expect(ticker.log.length).toBe(2);
+    expect(ticker.log.length).toBe(1);
+
+    // tick 到点 ⇒ **只广播**（步进时钟没了），宿主此时才该动手
+    ticker.advance(1000);
+    expect(d.cursor().position, 'tick 自己不许推进游标（唯一的应用点是 submit）').toBe(0);
+    expect(ticker.log.length, '一步之后要等宿主 settle').toBe(1);
+    // 宿主经 submit 走一步，然后回话
+    expect(d.submit(s, d.next()!).ok).toBe(true);
+    d.settle();
+    expect(ticker.log.length, 'settle() 之后才排下一步').toBe(2);
     expect(ticker.log[1].ms).toBe(1000);
     ticker.advance(1000);
-    expect(d.cursor().position).toBe(2);
+    expect(d.cursor().position, 'tick 仍然不推进游标').toBe(1);
   });
 
   it('setRate(2)/setRate(4) 后下一次 schedule 的 ms 是 1× 的一半 / 四分之一；setRate(0) 等价 pause', () => {
     const ticker = new FakeTicker();
     const { d } = fresh({ ticker, stepMs: 800, settleWatchdogMs: null });
     d.play();
-    d.settle();
-    expect(ticker.log[0].ms).toBe(800);
+    expect(ticker.log[0].ms, 'play() 排的那次就是 1× 的 ms').toBe(800);
 
     // 播放态下改倍速 ⇒ 立刻按新倍速重排（旧的那个被 cancel）
     d.setRate(2);
@@ -929,11 +1111,10 @@ describe('T2 判据 8：settle 握手 / 倍速 / 暂停 / 看门狗（注入时�
     expect(d.cursor().rate).toBe(0);
   });
 
-  it('pause() ⇒ cancel 且不再 tick；再 play 要重新 settle', () => {
+  it('pause() ⇒ cancel 且不再 tick；再 play 要重新排一次', () => {
     const ticker = new FakeTicker();
     const { d } = fresh({ ticker, stepMs: 500, settleWatchdogMs: null });
     d.play();
-    d.settle();
     const handle = ticker.log[0].handle;
     d.pause();
     expect(d.cursor().paused).toBe(true);
@@ -944,55 +1125,58 @@ describe('T2 判据 8：settle 握手 / 倍速 / 暂停 / 看门狗（注入时�
     expect(d.cursor().position).toBe(pos);
 
     d.play();
-    expect(ticker.log.length, '重新 play 也不许立即 schedule').toBe(1);
-    d.settle();
-    expect(ticker.log.length).toBe(2);
+    expect(ticker.log.length, '重新 play 必须重新排一次 tick').toBe(2);
+    expect(ticker.pending().length).toBe(1);
   });
 
-  it('★ 看门狗：只给 settleWatchdogMs 而**从不** settle() ⇒ 到点仍 tick 一次，且 cursor().error 留下诊断', () => {
+  it('★ 看门狗：宿主**从不** settle ⇒ 到点强制 `emitTick()` 一次（+`diagnostic`），由宿主自己走那一步', () => {
     const ticker = new FakeTicker();
-    const { d } = fresh({ ticker, stepMs: 50, settleWatchdogMs: 2000 });
+    const { d, s } = fresh({ ticker, stepMs: 50, settleWatchdogMs: 2000 });
+    const ticks: number[] = [];
+    // 宿主的真实接线：收到 tick ⇒ 取档案的下一条 ⇒ 交给 submit。这里**故意什么都不做**，
+    // 直到看门狗兜底那次广播才动手（模拟"编排漏了一个终止点、从不回话"）。
+    let respond = false;
+    d.onTick(() => {
+      ticks.push(d.cursor().position);
+      if (!respond) return;
+      const a = d.next();
+      if (a) {
+        expect(d.submit(s, a).ok).toBe(true);
+        resolveAllChoices(s, pickFirst);
+      }
+      d.settle();
+    });
+
     d.play();
-    // `play()` 之后就已经欠宿主一次 settle ⇒ 看门狗**从这里**开始守着（它只盯"等宿主回话"这一件事）
-    expect(ticker.log.length, '看门狗在 play() 之后武装').toBe(1);
-    expect(ticker.log[0].ms, '看门狗的 ms = settleWatchdogMs').toBe(2000);
-    d.settle();
-    // `settle()` 会取消 `play()` 那只看门狗，再按当前 rate 重排 **步进 + 看门狗** ⇒ 日志共 3 条、在飞 2 只
-    expect(ticker.log.length, 'settle() 重排：play 那只被取消，新排步进 + 看门狗').toBe(3);
-    expect(ticker.log.some((x) => x.ms === 50), '重排里必须有步进那只（ms = stepMs）').toBe(true);
-    expect(ticker.pending().length, '在飞：步进 + 看门狗').toBe(2);
-    expect(d.cursor().position).toBe(0);
+    expect(ticker.log.length, 'play() 排步进那一刻起就武装看门狗').toBe(2); // 步进 + 看门狗
+    expect(ticker.pending().map((t) => t.ms).sort((a, b) => a - b), '在飞：步进 50 + 看门狗 2000').toEqual([50, 2000]);
+    expect(d.cursor().diagnostic).toBeNull();
     expect(d.cursor().error).toBeNull();
 
-    // 步进到点 ⇒ 走一步，但**从不** settle ⇒ 看门狗到点必须放行一步
+    // 第一个 tick：宿主不回话（`respond = false`）⇒ 位置不动、诊断未写
     ticker.advance(50);
-    expect(d.cursor().position).toBe(1);
-    expect(d.cursor().error, '一步走完还没到看门狗时限时不该报错').toBeNull();
-    expect(ticker.pending().length, '这一步之后：步进没了，只剩看门狗那一只').toBe(1);
-    expect(ticker.pending()[0].ms, '剩下的那只就是看门狗（ms = settleWatchdogMs）').toBe(2000);
+    expect(ticks.length, 'tick 广播了').toBe(1);
+    expect(d.cursor().position, 'tick 只广播，宿主不 submit ⇒ 游标不动').toBe(0);
+    expect(d.cursor().diagnostic).toBeNull();
 
-    // 宿主既不 `settle()` 也不做任何事 ⇒ 看门狗到点。它做的事 = **替宿主把这次握手走完**
-    // （清闩 + 按当前 rate 排下一步），所以这时**恰好**多出一只步进时钟。
+    // 看门狗到点 ⇒ **强制 emitTick 一次** + 写诊断；它**不**替宿主推进状态
+    respond = true;
     ticker.advance(2000);
-    expect(d.cursor().error, '看门狗必须留下诊断文本').toBeTruthy();
-    expect(d.cursor().error!).toMatch(/看门狗/);
-    expect(d.cursor().error!).toMatch(/settle/);
-    const afterWatchdog = ticker.pending();
-    expect(afterWatchdog.length, '看门狗兜底必须排下一步（否则重放仍停在那一步）').toBeGreaterThan(0);
-    expect(
-      afterWatchdog.some((t) => t.ms === 50),
-      `兜底的下一步必须按当前 rate 排（ms = stepMs）：${afterWatchdog.map((t) => t.ms).join(',')}`,
-    ).toBe(true);
+    expect(ticks.length, '看门狗必须再广播一次（否则宿主永远收不到"该走了"）').toBe(2);
+    expect(d.cursor().diagnostic, '看门狗必须留下诊断').toBeTruthy();
+    expect(d.cursor().diagnostic!).toMatch(/看门狗/);
+    expect(d.cursor().diagnostic!).toMatch(/settle/);
+    expect(d.cursor().error, '诊断不是引擎错误 ⇒ error 仍为 null').toBeNull();
+    // 位置 +1 **只可能**来自宿主在那次广播里 submit（看门狗自己不动游标 —— 见 8b 的两条断言）
+    expect(d.cursor().position, '宿主应答了看门狗那次广播 ⇒ 前进一步').toBe(1);
 
-    // 这一步真的走掉了 ⇒ 位置前进（这就是"防永久卡死在一步上"的可机检形态）
-    ticker.advance(50);
-    expect(d.cursor().position, '看门狗兜底的那一步必须真的执行').toBe(2);
-
-    // 诊断是**粘性**的：此后不再自动推进（重放页要把它显示出来）
-    const pos = d.cursor().position;
+    // 而且链条是活的（不是"砖化"）—— 但一旦宿主不再应答，**位置就必须冻住**：
+    // 看门狗只广播、`submit` 是唯一的应用点（这条断言与 8b 一起，就是"单一路径"的牙）。
+    respond = false;
+    const posNow = d.cursor().position;
     ticker.advance(10_000);
-    expect(d.cursor().position, '报错之后不再自动推进').toBe(pos);
-    expect(d.next()).toEqual(file.actions[pos]);
+    expect(d.cursor().position, '没有宿主 submit ⇒ 位置一步都不许再走').toBe(posNow);
+    expect(d.cursor().diagnostic, '诊断是粘性的（重放页要显示它）').toBeTruthy();
   });
 
   it('dispose() ⇒ cancel + onTick 退订 + 再 submit 不抛', () => {
@@ -1031,6 +1215,10 @@ describe('T2 判据 8：settle 握手 / 倍速 / 暂停 / 看门狗（注入时�
     }
     expect(threw, 'dispose 之后 submit 不许抛').toBeNull();
     expect(r!.ok).toBe(false);
+    expect(
+      r!.refusal,
+      '★ dispose 之后的拒绝码就是 read-only（这是该取值**今天可达**的唯一路径 —— 不是"将来 G5 会用到"）',
+    ).toBe('read-only');
     // 幂等：再 dispose 也不抛
     expect(() => d.dispose()).not.toThrow();
   });
@@ -1140,16 +1328,45 @@ describe('T2 判据 9：src/app/** 直呼定时器零命中', () => {
   }
 
   /**
-   * **调用形态**：`setTimeout(` / `setInterval(` / `requestAnimationFrame(`。
+   * **调用形态**：`setTimeout(` / `setInterval(` / `requestAnimationFrame(` 的**四种绕行写法**。
    *
-   * 三条排除（都是**假红方向**，实测踩过）：
-   *  - 前缀不许是 `obj.` / `globalThis` 以外的成员访问（`(?<![\w$.])`）；
+   * H 轮补的三种（评审实测原正则对它们 **0 命中**，都是"换个前缀就绕开同一个洞"的同族形态）：
+   *  - `window.setTimeout(` —— 宿主全局对象上的成员调用（生产代码里最常见的一种！）；
+   *  - `globalThis["setTimeout"](` —— 计算属性写法；
+   *  - `(setTimeout)(` —— 括号包裹的间接调用。
+   *
+   * 两条排除（**假红方向**，探针实测踩过）：
+   *  - 成员调用的**接收者只认宿主全局**（`window` / `globalThis` / `self` / `global` / `frames`）：
+   *    本仓的注入面正是"某个对象上的同名方法"这种形态（`ticker.schedule(…)`、
+   *    `interface Ticker { schedule(…) }`）⇒ 若把 `X.名(` 一律算命中，`obj.setTimeout(` 这种
+   *    注入面自己的写法就会假红（第一版就是这么写的，探针实测抓到 `obj.setTimeout(`）；
    *  - **对象类型里的方法签名** `{ setTimeout(fn: () => void, ms: number): number }` 不是调用
-   *    —— 它的第一个参数后面是 `:`（`(?!\s*\w+\s*:)`）。本仓的注入面正是这种形态
-   *    （`interface Ticker { schedule(...); cancel(...) }` 的兄弟写法），不排除就会让判据对自己假红；
-   *  - `\w` 边界（`My_setTimeout(` 之类不算）。
+   *    —— 第一个参数后面是 `:`（`(?!\s*\w+\s*:)`）。
    */
-  const TIMER_CALL = /(?<![\w$.])(?:globalThis\s*\.\s*)?(setTimeout|setInterval|requestAnimationFrame)\s*\((?!\s*\w+\s*:)/g;
+  /**
+   * ⚠️ 这条正则有两处**必须这样写**的地方（都是探针实测出来的，别"顺手简化"）：
+   *
+   *  1. **三个名字各自显式列一遍**，不能把 `(?:a|b)` 塞进 `['"]…['"]`：
+   *     `['"](?:setTimeout|setInterval)['"]` 里的 `['"]` 与 `(?:` **不是**字符类 ——
+   *     写成 `['"]${NAME}['"]` 时 JS 会把 `['"]` 当**单元素字符类**、`(?:…)` 当普通字符，
+   *     于是计算属性分支**静默失效**（本条腿第一版就是这么写的：`globalThis["setTimeout"](` 0 命中）。
+   *  2. **计算属性分支必须把"宿主全局"前缀包进它自己的 lookbehind 作用域**：
+   *     写成 `前缀?[..."名"...]` 时，`(?<![\w$.])` 会落在**前缀的开头**，于是
+   *     `globalThis["setTimeout"](` 整个匹配**从 `[` 开始尝试**、被 `(?<!\$)` 挡掉 ⇒ 0 命中。
+   *     ⇒ 用 `(?<![\w$.])(?:前缀)?\[` 让 lookbehind 只管"接收者之前"那个字符。
+   */
+  const TIMER_CALL = new RegExp(
+    // ① 裸名 / 宿主全局上的 `.名` 或 `["名"]`；② 括号包裹的间接调用 `(名)(`
+    // 各分支后面都必须紧跟 `(`，且第一个实参不能是 `word:`（那是类型签名，不是调用）
+    `(?<![\\w$.])(?:` +
+      `(?:setTimeout|setInterval|requestAnimationFrame)` +
+      `|(?:window|globalThis|self|global|frames)\\s*\\.\\s*(?:setTimeout|setInterval|requestAnimationFrame)` +
+      `|(?:\\[\\s*['"](?:setTimeout|setInterval|requestAnimationFrame)['"]\\s*\\])` +
+      `|(?:window|globalThis|self|global|frames)\\s*\\[\\s*['"](?:setTimeout|setInterval|requestAnimationFrame)['"]\\s*\\]` +
+      `|\\(\\s*(?:setTimeout|setInterval|requestAnimationFrame)\\s*\\)` +
+      `)\\s*\\((?!\\s*\\w+\\s*:)`,
+    'g',
+  );
 
   it('生成式扫 src/app/**（剥注释）⇒ 三个定时器名零命中；且锚点证明这条判据本身能红', () => {
     const files = walk(APP_DIR).sort();
@@ -1158,16 +1375,21 @@ describe('T2 判据 9：src/app/** 直呼定时器零命中', () => {
     const hits: string[] = [];
     for (const p of files) {
       const code = stripComments(readFileSync(p).subarray(0, 4 * 1024 * 1024).toString('utf8'));
-      for (const m of code.matchAll(TIMER_CALL)) hits.push(`${p.slice(APP_DIR.length)}: ${m[1]}(`);
+      for (const m of code.matchAll(TIMER_CALL)) hits.push(`${p.slice(APP_DIR.length)}: ${m[0].trim()}`);
     }
     expect(hits, `src/app 里出现直呼定时器（必须走注入的 Ticker）：\n${hits.join('\n')}`).toEqual([]);
 
-    // 锚点①：这条正则**真的能抓**（否则上面那条在空数组上恒真）
+    // 锚点①：这条正则**真的能抓**（否则上面那条在空数组上恒真）—— 含 H 轮补的三种绕行写法
     for (const sample of [
       'const h = setTimeout(fn, 10);',
       'setInterval(tick, 100);',
       'requestAnimationFrame(draw);',
       'globalThis.setTimeout(fn, 1);',
+      'window.setTimeout(fn, 1);',
+      'self.setInterval(tick, 100);',
+      'globalThis["setTimeout"](fn, 1);',
+      "(setTimeout)(fn, 1);",
+      'globalThis.requestAnimationFrame(draw);',
     ]) {
       expect([...sample.matchAll(TIMER_CALL)].length, `锚点失效：${sample} 没被抓到`).toBe(1);
     }
@@ -1181,6 +1403,7 @@ describe('T2 判据 9：src/app/** 直呼定时器零命中', () => {
       'obj.setTimeout(fn, 1);',
       'type X = { setTimeout(fn: () => void, ms: number): number };',
       'interface Ticker { schedule(fn: () => void, ms: number): number }',
+      'const s = "setTimeout";',
     ]) {
       expect([...sample.matchAll(TIMER_CALL)].length, `误判（假红方向）：${sample}`).toBe(0);
     }

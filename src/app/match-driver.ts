@@ -29,17 +29,39 @@
  *  2. 玩家恰好点到与档案下一条**完全同形**的操作时会被接受 —— 效果等同按了一次「单步」。
  *     这是 D12 已登记的**已知无害等价**，由 T3 的遮罩层在界面上堵掉（指针级；键盘路径见 T4 第 17 条）。
  *
+ * ## ★★ 状态归属：驱动**不持有** `GameState`，`submit` 是唯一的应用点（D2；H 轮阻断 1）
+ *
+ * 本模块有一条**必须保持**的结构性约束（修复前它被破坏过，代价是一个不报错的分叉）：
+ *
+ *  - 驱动**没有**私有 `GameState`、**没有** `stateAfterDraft` 缓存、**没有**取状态的 getter；
+ *  - `submit(state, a)` 把记录里那一条应用到**宿主传进来的那个 `state`** —— 这是全模块
+ *    **唯一**调用 `applyRecordedAction` 的地方；
+ *  - tick（`Ticker` 回调 / `onTick` 广播）**只通知宿主**"该走下一步了"，不 apply、不动游标。
+ *
+ * 为什么必须这样（可证伪的后果，不是风格）：`main.ts` 收口后的接线是
+ * `onTick ⇒ cb.onAction(driver.next()!) ⇒ driver.submit(state, …)`，即**宿主经编排执行、驱动收单**。
+ * 若 tick 自己也 apply 一步，那就有**两条各自改状态的路**：驱动在自己的副本上推进游标、
+ * 宿主在自己的状态上执行 ⇒ 双方**永久分叉**，而且**不报错**（评审镜像实测：40 步的档案，
+ * 驱动 position=6 而宿主只应用了 3 步，宿主指纹 ≠ 原局）。
+ *
  * ## ★ 闸门的"等价"口径：`kind` + `args` + `player` 逐项相等（**比 `via` / `seq` 宽**）
  *
  * 不比的两种字段及其理由：
  *  - `seq`：`next()` 给的是**档案里**的 `seq`，而现场 UI 提交时**根本不知道**自己的 seq
  *    （`MatchDriver.submit` 的入参类型就是 `Omit<ActionRecord, 'seq'>`）⇒ 比它等于逼调用方猜。
  *  - `via`：档案层元数据，**不进引擎状态**（`match-file.ts:19-30`）⇒ 它对"会发生什么"零影响。
- * 反过来，`args` 必须**深比**（`play` 的 `line`、`effect-choice` 的 `choice` 都是数组/对象）：
- * 浅比会让"同 kind 不同落点"被放行 ⇒ 重放静默走偏（判据 4 就是钉这件事的）。
+ * 反过来，`args` 必须**深比**（`play` 的 `line`、`effect-choice` 的 `choice` 都是数组/对象）。
+ *
+ * ⚠️ **一条精确性声明**（H 轮评审实测后改写的注释）：门把等价判到"值"这一层，因此
+ * "引擎吃**记录里的** args 而不是**调用方给的** args"这句话在此契约下**不可独立观测** ——
+ * 值不同 ⇒ 门先拒（引擎根本不被调用）；值相同 ⇒ 无可观测差异。能观测的是**下一层**：
+ * 门把调用方对象规范化成副本、引擎吃的是那份副本（调用方的对象**不会被读第二次**、也不会被泄漏进引擎）。
+ * 钉这件事的腿见 `tests/app/match-driver.test.ts` 判据 4 的 Proxy 腿（读计数）。
  *
  * 未覆盖的 `kind`（`applyRecordedAction` 里抛）与引擎自身的合法性守卫（`game.ts:122-128`）都归到
  * `refusal: 'engine-error'`：驱动**不写第二份校验层**（引擎改了它不会静默漂移），只如实展示。
+ * `cursor()` 上它**只**占 `error` 一个字段；看门狗的诊断走 `diagnostic`（两者语义不同，
+ * 混用会让诊断把整个驱动"砖化"——见 `ReplayCursor` 的注释）。
  *
  * ## ⚠️ 已知副作用（T1 已登记，本驱动如实继承）
  *
@@ -54,7 +76,7 @@ import type { PlayerId } from '../core/models/types';
 import type { GameState } from '../core/models/types';
 import { createMatchFileRecorder, normalizeAction } from './match-file';
 import type { ActionRecord, MatchFile, MatchFileRecorder } from './match-file';
-import { applyRecordedAction, stateAfterDraft } from './match-replay';
+import { applyRecordedAction } from './match-replay';
 
 /* ------------------------------------------------------------------ *
  * 1. 契约
@@ -63,15 +85,14 @@ import { applyRecordedAction, stateAfterDraft } from './match-replay';
 export type DriverMode = 'local' | 'replay';
 
 /**
- * 拒绝形态。**四个取值今天不全可达**，如实登记（本仓"零调用的码不许留"的规矩见
- * `match-file.ts:80-86` 对 `hash-mismatch-unknown` 的处置 —— 这里选择保留而不是删，
- * 因为它不是"预留的死码"而是**契约的一部分**，且 G5 的 `NetDriver` 会真的用到 `read-only`）：
- *  - `'not-the-next-action'`：`ReplayDriver` 唯一的拒绝形态（判据 3 / D12）。
- *  - `'exhausted'`：档案走完后再提交（判据 6）。
- *  - `'engine-error'`：引擎守卫或未覆盖 kind 抛错（判据 7）。
- *  - `'read-only'`：**今天零可达**。它的语义是"这个 driver 结构上就不接人类的输入"，
- *    而重放的"不接输入"由**闸门**表达得更好（`not-the-next-action` 带得出"你点的那条不是下一条"，
- *    `read-only` 带不出）。留给 G5 的 `NetDriver`（非本方座位的提交）。
+ * 拒绝形态。四个取值**今天都可达**，逐个给出触发的**事实**（不写"将来谁会用到"）：
+ *  - `'not-the-next-action'`：`ReplayDriver` 的主拒绝形态 —— 提交的不是档案的下一条（判据 3 / D12）。
+ *  - `'exhausted'`：档案走完（`position >= total`）之后再提交（判据 6）。
+ *    它**排在** `engine-error` 之前判定 ⇒ "已经走完"永远可判，不会被先前的一次引擎抛错遮住。
+ *  - `'engine-error'`：引擎守卫或未覆盖 kind 抛错（判据 7），`error` 带原始 Error。
+ *  - `'read-only'`：**`dispose()` 之后**的任何 `submit`。它是"H 轮评审曾判它该删、协调者裁决保留"
+ *    的那个取值 —— 保留的理由不是"将来 G5 会用到"（那是预测，不作依据），而是它**确实可达**：
+ *    见 `tests/app/match-driver.test.ts` 里"dispose 之后 submit ⇒ read-only"那条腿。
  */
 export type SubmitRefusal = 'read-only' | 'not-the-next-action' | 'exhausted' | 'engine-error';
 
@@ -83,7 +104,8 @@ export interface SubmitResult {
 
 export interface MatchDriver {
   readonly mode: DriverMode;
-  /** 我是不是这个 driver 的"行动方"（G4 恒 0；G5 的 NetDriver 才有意义）—— 保留字段以固定契约 */
+  /** 我是不是这个 driver 的"行动方"（本阶段 `createLocalDriver` 恒 0 —— 热座两个座位共用同一个 driver，
+   *  这个字段在本阶段**没有判别力**；`createReplayDriver` 也返回 0）。保留字段以固定契约形状。 */
   readonly seat: PlayerId;
   /** 这个 driver 接受玩家（人）提交吗（replay = false） */
   acceptsInput(): boolean;
@@ -116,8 +138,19 @@ export interface ReplayCursor {
   paused: boolean;
   /** 0 = 暂停；1/2/4 = 倍速 */
   rate: 0 | 1 | 2 | 4;
-  /** 引擎抛错 / 看门狗诊断时的人类可读文本（重放页要把它显示出来） */
+  /**
+   * **引擎抛错**的人类可读文本（`refusal: 'engine-error'` 的载荷）。
+   *
+   * ⚠️ **这个字段只有一个语义**（H 轮修复的阻断 2）：它**不**承载看门狗的诊断。
+   * 曾经两者共用一个字段 ⇒ 看门狗一触发就把整个驱动"砖化"：`submit` 对任何入参都返回
+   * `engine-error`，连"档案已经走完"（`exhausted`）都判不出来。⇒ 诊断另设 `diagnostic`。
+   */
   error: string | null;
+  /**
+   * **非引擎错误的诊断**（今天只有一种来源：看门狗超时）。
+   * 它不进指纹、不参与"要不要推进"的判断，**不**阻塞 `submit` —— 重放页把它显示出来即可。
+   */
+  diagnostic: string | null;
 }
 
 export interface ReplayDriver extends MatchDriver {
@@ -189,7 +222,7 @@ export function createLocalDriver(opts?: { recorder?: MatchFileRecorder }): Matc
   const rec = opts?.recorder ?? createMatchFileRecorder();
   return {
     mode: 'local',
-    // 热座里两个座位都由**同一个** driver 服务 ⇒ 这个字段在 G4 无判别力（契约占位，G5 的 NetDriver 才有意义）
+    // 热座里两个座位都由**同一个** driver 服务 ⇒ 这个字段在本阶段无判别力（契约占位）
     seat: 0,
     acceptsInput: () => true,
     submit(s: GameState, a: Omit<ActionRecord, 'seq'>): SubmitResult {
@@ -219,12 +252,19 @@ export function createLocalDriver(opts?: { recorder?: MatchFileRecorder }): Matc
  *    900ms 是"一步特效播完后再等一会儿"的观感值；
  *  - `settleWatchdogMs = 8000`：`settle()` 是"这一步的特效播完了"的握手，由 `main.ts` 在编排的
  *    **每个终止点**调用（T4 第 6 条）。少了任何一处，重放就会**永久卡在那一步且不报错** ——
- *    看门狗就是给这个形态兜底的：8 秒还等不到握手就强行放行一步并在 `cursor().error` 留下诊断。
+ *    看门狗就是给这个形态兜底的：8 秒还等不到握手就**强制 `emitTick()`**（由宿主经 `cb.onAction`
+ *    走完整编排）并在 `cursor().diagnostic` 留下诊断（⚠️ 不是 `error` —— 见 `ReplayCursor` 的注释）。
  *    **必须显著大于最长一步的合理耗时**（否则每一局最后的终局特效都会触发它）。
  */
 const DEFAULT_STEP_MS = 900;
 const DEFAULT_SETTLE_WATCHDOG_MS = 8000;
 
+/**
+ * ⚠️ `env.settleWatchdogMs` 的类型是 `number | null`（相对规格的 `number` 是一次**有意的契约扩宽**，
+ * 不是顺手加的）：`null` = **显式关掉**看门狗。理由是可测的 —— 判据 8 的多条腿要求
+ * "在飞时钟恰好一个"，而看门狗**本身也是一个在飞时钟**；没有这个开关，那些腿只能靠
+ * "把 ms 调得足够大"来绕，那会把断言变成时间假设。生产永远不传 `null`（走缺省值）。
+ */
 export function createReplayDriver(
   f: MatchFile,
   env: { ticker: Ticker; stepMs?: number; settleWatchdogMs?: number | null },
@@ -243,6 +283,7 @@ export function createReplayDriver(
     paused: true,
     rate: 1,
     error: null,
+    diagnostic: null,
   };
   /** 已安排给 ticker 的时钟句柄（`null` = 没有在飞的时钟；**任何**调度都必须先取消它） */
   let scheduled: number | null = null;
@@ -266,8 +307,14 @@ export function createReplayDriver(
     }
   }
 
+  /** `error`：**只有**引擎抛错会写它（`refusal: 'engine-error'` 的载荷） */
   function setError(msg: string): void {
     if (cur.error === null) cur.error = msg;
+  }
+
+  /** `diagnostic`：非引擎错误的诊断（今天只有看门狗）。**不**阻塞 `submit`、**不**进指纹 */
+  function setDiagnostic(msg: string): void {
+    if (cur.diagnostic === null) cur.diagnostic = msg;
   }
 
   /** 武装看门狗：**只对"等 settle"这一个卡死形态**兜底（见 `DEFAULT_SETTLE_WATCHDOG_MS` 注释） */
@@ -283,38 +330,37 @@ export function createReplayDriver(
         return;
       }
       awaitingSettle = false;
-      // ★ 兜底的**动作**是"替宿主把这次握手一次性走完"，不是"只通知订阅者"：
-      //   `emitTick()` 只是把"该走下一步了"广播给宿主（`main.ts` 的编排入口）。宿主若正是因为
-      //   漏了一个终止点而没回话，下一次它**同样**不会回话 ⇒ 广播一下等于什么都没做
-      //   （本实现第一版就是这个形态：看门狗"响了"、诊断也写了，但**重放仍停在那一步**，
-      //    判据 8 的看门狗腿当场打红）。这里复现 `settle()` 的效果（闩已在上行清掉 + 按当前
-      //   rate 排下一步），于是重放能继续 —— 代价是这一步的收尾特效被跳过（重放页会显示诊断）。
-      // ⚠️ **顺序要紧**：必须先排下一步、**再**写诊断。`scheduleNext()` 在 `error !== null` 时早退
-      //   ⇒ 先写诊断会把这次兜底变成 no-op（本实现在这一行上栽过一次，症状与"没写兜底"完全一样）。
-      if (!cur.paused && !cur.done && cur.error === null) scheduleNext(true);
-      setError(
+      // ★ 看门狗**只广播**（H 轮裁决：我第一版让它"替宿主把这次握手走完"，那是错的，三条因果）：
+      //  ① **绕过 D3 的唯一编排**：那一步是驱动自己在状态上推的，`main.ts` 的 `cb.onAction` 那套
+      //     抽牌/揭示编排**不会被跑** ⇒ `pendingDraws` / `pendingReveals` 两个累加器**不排空** ——
+      //     而"灌满且永不排空、泄漏进下一次真实行动"正是 D3 存在的理由（一个不报错的缺陷）。
+      //  ② 我原来的代价陈述（"只是跳过这一步的收尾特效"）**低估了**：跳过的是整条编排。
+      //  ③ 回退后语义变成"看门狗只广播 ⇒ 由宿主经 `cb.onAction` 走完整编排"，
+      //     于是"D3 被绕过 / 累加器不排空"与"诊断把重放砖化"（后者由 `error`/`diagnostic` 分离修）
+      //     一举同时消失。⇒ **兜底交给宿主，驱动不替它做决定。**
+      setDiagnostic(
         `重放看门狗：${watchdogMs}ms 内没有收到「本步特效已播完」的握手（settle 未被调用），` +
-          `已强制放行一步以免重放永久停在这一步。`,
+          `已强制通知宿主再走一步以免重放永久停在这一步。`,
       );
+      emitTick();
     }, watchdogMs);
   }
 
   /**
-   * 安排"下一步走"。**必须由 `settle()` 触发**（握手语义）：
-   *  - `play()` 自己**不**调度（判据 8 的第一条）—— 进入播放态只是"可以走了"，
-   *    真正的一步要等上一步的 `settle()` 或首次 `settle()`；
+   * 安排"下一步走"（只排进 ticker，**不**动状态、**不**动游标）。
+   *  - `play()` 排第一次（宿主此刻没有特效在播）、之后每一步由宿主在编排终止点 `settle()` 重排；
    *  - ms = `stepMs / rate` ⇒ 倍速只缩短**步间隔**（D10：G4 不新增 FX 开关，不吞特效）；
    *  - `rate === 0` 等价于 `paused`（判据 8）⇒ 不调度、只取消。
+   *
+   * `force` = "这是 `setRate()` 的重排"（取消旧的、按新 ms 再排一个）。它不是"兜底步"——
+   * 看门狗不再走这条路（见 `armWatchdog`）。
    */
   function scheduleNext(force: boolean): void {
     if (disposed) return;
-    // 「已经有在飞的步进时钟」⇒ 只有 `setRate()` / 看门狗兜底（`force = true`，语义就是重排）才继续；
+    // 「已经有在飞的步进时钟」⇒ 只有 `setRate()`（`force = true`，语义就是重排）才继续；
     // 重复的 `settle()` 必须在这里被挡掉（判据 8 的幂等腿：`settle()` 后**恰好**一次 schedule）。
     if (!force && scheduled !== null) return;
-    // `force` 路径**绕开** `error` 这一条：看门狗的兜底正是要在"已经写下诊断"之后**仍然**推进一步
-    // （否则"防永久卡死"这句是空的 —— 见 `armWatchdog` 里的实测记录）。
-    if (!force && cur.error !== null) return;
-    if (cur.paused || cur.done) return;
+    if (cur.paused || cur.done || cur.error !== null) return;
     if (cur.rate === 0) {
       cur.paused = true;
       clearAll();
@@ -323,87 +369,23 @@ export function createReplayDriver(
     // 重排 / 首次排：先取消在飞的（步进**与**看门狗），再按当前 rate 排一个
     clearAll();
     scheduled = ticker.schedule(() => {
-      scheduled = null; // 这一步已经交给宿主了：没有在飞的步进时钟
-      handleTick(force);
-      // ★ 一步走完之后**宿主欠我们下一次 `settle()`**（`main.ts` 播完这一步的特效后回话）。
-      // ⚠️ 这一行必须在 `handleTick()` **之后**（不是之前）——它与上面那行合起来才是本模块的不变式：
+      // ⚠️ 这个回调**只广播**：不 apply、不动游标（唯一的应用点是 `submit`，见那里的注释）。
+      // 一步之后**宿主欠我们下一次 `settle()`** —— 与 `scheduled = null` 合起来才是本模块的不变式：
       //   **`awaitingSettle` ⟺ 「下一步还没排进 ticker」**。
-      //   本实现第一版把这一步写反/写漏过两次，症状**完全一样且不报错**：一步走完之后
-      //   `awaitingSettle` 仍是假 ⇒ 下一次 `settle()` 被当成"重复调用"而 no-op ⇒
-      //   **重放走完第一步就永久停住**。判据 8 的"一步之后要等下一次 settle"与看门狗两条腿
-      //   就是这条不变式的牙（两次都当场打红）。
+      // 本实现第一版把这一步写反/写漏过两次，症状**完全一样且不报错**：一步走完之后
+      // `awaitingSettle` 仍是假 ⇒ 下一次 `settle()` 被当成"重复调用"而 no-op。判据 8 的
+      // "一步之后要等下一次 settle"与看门狗两条腿就是这条不变式的牙（两次都当场打红）。
+      scheduled = null;
       awaitingSettle = true;
+      emitTick();
     }, stepMs / cur.rate);
     // 只给"等 settle"兜底（注释见 armWatchdog）；不在这里额外做别的判断
     armWatchdog();
   }
 
-  /**
-   * 一 tick = 恰好一步：推进游标、在引擎里执行**档案里的那一条**，然后再等下一次 `settle()`。
-   *
-   * `forced` = 这一步是**看门狗的兜底步**（宿主从不回话）。它只多一条豁免：
-   * 允许穿过"已有诊断就不许推进"那道闩 —— 否则看门狗写下诊断的同一刻就把自己的兜底步废掉了
-   * （本实现在这一行上栽过一次：诊断写了、步进时钟也排了，但那一步**必然**被 `error` 拦下，
-   *  位置一动不动，判据 8 的看门狗腿当场打红）。
-   */
-  function handleTick(forced = false): void {
-    if (disposed) return;
-    // ⚠️ 只清**步进**时钟，**不**碰看门狗：`awaitingSettle` 在宿主调 `settle()` 之前一直是 true，
-    //    看门狗因此仍然守着"宿主忘了握手"这个形态（`settle()` 才会取消它）。
-    if (scheduled !== null) {
-      ticker.cancel(scheduled);
-      scheduled = null;
-    }
-    if (cur.paused || cur.done) return;
-    const rec = actions[cur.position];
-    if (!rec) {
-      cur.done = true;
-      return;
-    }
-    if (cur.error !== null && !forced) return;
-    // 状态由 `play()` / 首次 `submit` 里 `ensureState()` 建好；这里只做防御（空态 = 草稿重建失败，
-    // 此时 `cur.error` 已经非空，上面的分支已经返回了）。
-    const s = replayState;
-    if (!s) {
-      setError('重放状态未建立（草稿重建失败）');
-      return;
-    }
-    try {
-      applyRecordedAction(s, rec);
-      cur.position += 1;
-    } catch (e) {
-      setError(describeError(e));
-    }
-    if (cur.position >= cur.total) cur.done = true;
-    // ⚠️ 这里**不**继续调度：下一步等宿主的 `settle()`（`main.ts` 走完 FX 编排后调）——
-    // 否则"步间隔"与"特效时长"两套时钟会各走各的（那正是 D8 要避免的形态）。
-    emitTick();
-  }
-
   function emitTick(): void {
     if (disposed) return;
     for (const cb of [...listeners]) cb();
-  }
-
-  /**
-   * 重放状态：`stateAfterDraft(f)`（`createGame` + 草稿序列真重建）。
-   *
-   * 为什么**懒建**而不是在 `createReplayDriver` 里就建：`stateAfterDraft` 会对一份被篡改的档案
-   * **抛错**（`replayDraftFromSetup` 的三种失败态）。构造函数抛错会让调用方拿到半个对象，
-   * 而错误路径需要的是一个**可展示的 driver**。⇒ 第一次 `submit` / `next` 时建，
-   * 抛错则转成 `engine-error`（`cursor().error` 有诊断、驱动不崩）。
-   */
-  let replayState: GameState | null = null;
-  function ensureState(): GameState | null {
-    if (replayState) return replayState;
-    if (cur.error !== null) return null;
-    try {
-      replayState = stateAfterDraft(f);
-      return replayState;
-    } catch (e) {
-      setError(`档案的草稿序列无法重建：${describeError(e)}`);
-      return null;
-    }
   }
 
   const driver: ReplayDriver = {
@@ -412,22 +394,48 @@ export function createReplayDriver(
     acceptsInput: () => false, // 恒 false（判据 3）—— 重放的只读由它 + D12 的闸门共同表达
     file: f,
 
+    /**
+     * ★★ **本模块唯一应用引擎的地方**（H 轮阻断 1 的修复；D2：驱动不持有 `GameState`）。
+     *
+     * `s` 是**宿主传进来的**状态，也是唯一被推进的状态 —— 驱动**没有**私有状态副本、
+     * 没有 `stateAfterDraft` 缓存、没有 getter。这条约束不是风格问题：
+     * 修复前 `handleTick` 会自己在私有状态上 apply 一步（并推进游标），宿主通过 `onTick`
+     * 再走一遍 `submit` ⇒ **两条各自改状态的路**，于是 T4 规格的接线
+     * （`onTick ⇒ cb.onAction(driver.next()!) ⇒ submit`）下**每次 tick 只命中档案的第 1、3、5…条**：
+     * 驱动按自己的副本推进游标、宿主按自己的状态执行，两者**永久分叉**（评审镜像实测：
+     * driver position=6/40 而宿主只应用了 3 步）。⇒ 现在 tick **只广播**，"走一步"这件事
+     * 只能由宿主经 `submit` 请求、且作用在宿主自己的状态上。
+     *
+     * 判定顺序：`exhausted` 排在 `engine-error` **之前**。为什么（以及这句话的**精确范围**）：
+     * "档案已经走完"是**进度事实**，不该被先前的一次引擎抛错遮住 —— 这修正了 H 轮阻断 2 里
+     * "两种语义共用一个字段"的病根（那是**真**缺陷：看门狗诊断曾让 `exhausted` 永远回不出来）。
+     * ⚠️ 但要如实说清：`diagnostic` / `error` 分离之后，`position >= total` 与 `error !== null`
+     * **在本模块的不变式下互斥**（引擎抛错的那一步不推进游标 ⇒ 位置到不了 `total`）
+     * ⇒ 这个顺序今天是**防御性**的，**没有**一条腿能观测到它（H 轮变异 M5 实测：对调顺序后
+     * 全套 31 项仍全绿）。留着它是因为"进度优先"是**契约**而非实现细节：
+     * 将来若有别的路径能在末尾留下错误（例如引擎在最后一步之后仍报错），这条顺序就是对的。
+     */
     submit(s: GameState, a: Omit<ActionRecord, 'seq'>): SubmitResult {
       if (disposed) return { ok: false, refusal: 'read-only' };
-      if (cur.error !== null) return { ok: false, refusal: 'engine-error', error: new Error(cur.error) };
+      // ★ `exhausted` 先判：它描述的是"档案的进度"，与"上一步是否抛过错"无关
       if (cur.position >= cur.total) return { ok: false, refusal: 'exhausted' };
-      if (!ensureState()) return { ok: false, refusal: 'engine-error', error: new Error(cur.error ?? '重放状态未建立') };
+      if (cur.error !== null) return { ok: false, refusal: 'engine-error', error: new Error(cur.error) };
       const rec = actions[cur.position];
       // ★ 闸门（D12）：不是下一条 ⇒ **在调用引擎之前**就返回 ⇒ 状态一字不动（判据 3）
       if (!isSameSubmit(a, rec)) return { ok: false, refusal: 'not-the-next-action' };
-      // ★ 应用**记录里**那一条，不是调用方给的那条（判据 4）：现场 UI 算出来的 args 可能与档案不同
-      //   （例如 `effect-choice` 的 `player` 由 `prompt.chooser` 推出），按调用方给的走会**静默走偏**。
+      // ★ 应用**记录里**那一条（不是调用方给的那条）：门只保证"值等价"，而等价之下仍有
+      //   **对象身份**的差别（调用方的对象可能带 getter / 稍后被改写）⇒ 引擎吃记录里的那份。
       try {
         applyRecordedAction(s, rec);
       } catch (e) {
         setError(describeError(e));
         return { ok: false, refusal: 'engine-error', error: e };
       }
+      // 宿主**正在按它的编排往前走**（它刚刚请求了这一步）⇒ 下一步仍欠它一次 `settle()`。
+      // 为什么在这里竖闩（而不是只靠看门狗那条路）：`submit` 是"一步已经开始"的唯一证据；
+      // 竖在这里，无论这一步是"宿主自己 tick 出来的"还是"看门狗兜底 tick 出来的"，
+      // 后续 `settle()` 都能正常排下一步（否则看门狗兜底之后链条会断，重放再次停住）。
+      awaitingSettle = true;
       cur.position += 1;
       if (cur.position >= cur.total) cur.done = true;
       return { ok: true };
@@ -449,19 +457,17 @@ export function createReplayDriver(
       return normalizeAction(actions[cur.position]);
     },
 
+    /**
+     * 进入播放态，并**直接排第一次 tick**（H 轮裁决 4，纠正了我第一版的语义）。
+     *
+     * 为什么 `play()` 就该排：此刻**没有任何特效在播**（宿主停在第一步之前），不存在"两套时钟
+     * 交叠"的风险；而"等 `settle()` 才排"会让**第一个 tick 永远不来**（宿主在第一步之前没有
+     * 任何终止点可回话）。`play()` 之后每一步才由宿主在编排终止点 `settle()` 重排。
+     */
     play(): void {
       if (disposed || cur.paused === false || cur.done || cur.error !== null) return;
-      if (!ensureState()) return;
       cur.paused = false;
-      // ★ **不**在这里 `schedule`（判据 8）：进入播放态后的第一步也走同一条握手路径
-      //   （宿主渲染完第一帧、走完编排后调 `settle()`）。
-      // 但必须**在进入播放态时就把握手闩竖起来**：否则 `play()` 之后紧接着的第一次 `settle()`
-      // 会被当成"没有在等握手的 settle"而 no-op ⇒ 重放**永远不动**（本实现第一版就是这个形态，
-      // 判据 8 的第一条腿当场把它打红）。
-      awaitingSettle = true;
-      // `play()` 之后也要能被看门狗保住：宿主若**从不** `settle()`（T4 的编排漏了一个终止点），
-      // 重放会永远停在第一步且不报错 —— 看门狗正是给这个形态兜底（判据 8 的最后一条）。
-      armWatchdog();
+      scheduleNext(false);
     },
 
     pause(): void {
@@ -482,7 +488,7 @@ export function createReplayDriver(
       }
       // 播放态下改倍速：立刻按新倍速（重）排一次 —— 两种合法时机都在这个条件里：
       //  · `scheduled !== null`（下一步已排、还没到点）⇒ 取消后用新的 ms 重排；
-      //  · `awaitingSettle`（在等宿主回话 / 刚 `play()`）⇒ 直接按新的 ms 排。
+      //  · `awaitingSettle`（在等宿主回话）⇒ 直接按新的 ms 排。
       // 其余情况（暂停中、已 done、已报错、什么都没在跑）⇒ 什么都不做。
       if (!cur.paused && !cur.done && cur.error === null && (scheduled !== null || awaitingSettle)) {
         scheduleNext(true);
