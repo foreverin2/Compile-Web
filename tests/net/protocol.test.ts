@@ -120,7 +120,7 @@ describe('判据 1：validateHello 的校验顺序照设计稿 1→4，且顺序
     expect(new Set(msgs).size, `四条理由的文案有重复：${JSON.stringify(msgs)}`).toBe(4);
   });
 
-  it('同时违反两条时，回**靠前**那条（四条两两组合全试一遍）', () => {
+  it('★ 同时违反两条时，回**靠前**那条（四条两两组合全试一遍）', () => {
     // 这是判据 1 的核心腿。顺序 = 版本 → 指纹 → 玩家位 → 观战位。
     // 每一条"更靠前"的违反都配一个"更靠后"的违反，断言回的是前者。
     const fails = {
@@ -176,7 +176,7 @@ describe('判据 1：validateHello 的校验顺序照设计稿 1→4，且顺序
     expect(validateHello(hello({ resuming: true }), ctx()).ok).toBe(true);
   });
 
-  it('座位优先级：`ctx.seat` 赢过 `msg.seat`（两个值必须不同，否则优先级不可观测）', () => {
+  it('★ 座位优先级：`ctx.seat` 赢过 `msg.seat`（两个值必须不同，否则优先级不可观测）', () => {
     // 阶段一评审 N-4：原先唯一同时出现两者的用例里 `ctx.seat === msg.seat === 1`，
     // 于是写成 `msg.seat ?? ctx.seat` 也全绿。⇒ 一对负向腿，两个值**不同**。
     const hostAssigns = validateHello(hello({ seat: 0 }), ctx({ seat: 1, occupied: { players: [0], spectators: [] } }));
@@ -249,7 +249,7 @@ describe('判据 2：房间码 = 6 位 Crockford Base32 剔除 I/L/O/U', () => {
     expect(256 % ROOM_CODE_ALPHABET.length).toBe(0);
   });
 
-  it('normalizeRoomCode 对 I/L/O/U **明确拒绝**，不静默映射成 1/1/0/0', () => {
+  it('★ normalizeRoomCode 对 I/L/O/U **明确拒绝**，不静默映射成 1/1/0/0', () => {
     // 静默映射的后果是可证的：`K7M2QI` 与 `K7M2Q1` 会指向同一个频道，而玩家以为在另一局。
     for (const ch of 'ILOU') {
       const r = normalizeRoomCode(`K7M2Q${ch}`);
@@ -293,7 +293,7 @@ describe('判据 2：房间码 = 6 位 Crockford Base32 剔除 I/L/O/U', () => {
     expect(bad.channel, '非法码居然拼出了频道名').toBeUndefined();
   });
 
-  it('频道不碰撞：不同输入不许落进同一个频道（判据 2 的**最终**事实，不只是"拒绝"）', () => {
+  it('★ 频道不碰撞：不同输入不许落进同一个频道（判据 2 的**最终**事实，不只是"拒绝"）', () => {
     // 阶段一评审 N-5：上面那条钉的是"拒绝"这个**中间**事实。真正要防的是
     // "两个不同的码指向同一个频道，而玩家以为在另一局"。这里把最终事实写成断言：
     // 把归一化结果（或频道名）当"落点"，任何两个**不同的输入**都不许有同一个落点。
@@ -371,7 +371,7 @@ describe('判据 3：decodeMsg 的四种失败各有互不相同的理由，且�
     }
   });
 
-  it('未知 t ⇒ unknown-type（含 toString 这类原型键，不许被 __proto__ 链蒙过去）', () => {
+  it('★ 未知 t ⇒ unknown-type（含 toString 这类原型键，不许被 __proto__ 链蒙过去）', () => {
     for (const t of ['nope', 'HELLO', 'hello ', 'toString', 'hasOwnProperty', '__proto__', 'constructor', 'valueOf']) {
       const r = decodeMsg(JSON.stringify({ t }));
       expect(r.ok, `t=${t} 被判成合法消息`).toBe(false);
