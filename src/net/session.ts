@@ -487,8 +487,25 @@ interface NetSessionCommon {
   /** 承诺流程走到哪一相位 */
   phase(): SessionPhase;
   /**
-   * 揭示之后读种子。**相位没到就回 `null`** —— 上层因此不可能"不小心"在承诺成立之前拿到种子
-   * （这是第二道闸：第一道是 `sendRevealSeed()` 的相位判定）。
+   * 读种子。
+   *
+   * **它的语义是"本方此刻持有的种子"，不是"对端已经看到的种子"**（修复轮 N-3；
+   * 阶段一评审用 `C1={"phase":"awaiting-commit-face","seed":"seed-review","peerSeedRevealed":false}`
+   * 实测过这一点）。两侧的时序**故意不同**：
+   *  - **房主**：`sendCommit()` 之后 `seed()` 就有值了（种子的来源就是房主自己，
+   *    它要留着自己揭示、也要用 `salt()` 收尾）—— 此时对端**还看不到**它；
+   *  - **加入方**：只在 `reveal-seed` 被接受之后才有值（之前一直是 `null`，这正是判据 1 要的）。
+   *
+   * 所以它**不是**判据 1 的第二道闸，别那样用它：
+   *  - 要问"对端看到了种子没有"，读 `peerStatus().seedRevealed`（房主侧只有 `sendRevealSeed()`
+   *    成功之后才为 `true`）；
+   *  - 判据 1 真正的闸门只有一个：`sendRevealSeed()` 的相位判定（`mayRevealSeed`），
+   *    它决定种子**能不能出线**。房主自己手里一直有种子这件事不是缺陷，是它的角色。
+   *
+   * （为什么不干脆改成"没公开就回 `null`"：那会让房主**永远读不到自己的种子** ——
+   * `commit` 之后、揭示之前正是它要用种子的时刻（`src/main.ts:1107-1113` 那条
+   * "硬币决定 `draftStarter` 与 `firstToPlay`"的链路），T5/T8 接上去时会当场撞墙。
+   * 两者选一时我选了"改注释说清语义"，理由写在上面。）
    */
   seed(): string | null;
   /** 揭示之后读面（房主收 `reveal-face` 之后、加入方自己提交之后都有值） */
@@ -601,6 +618,52 @@ function fail(reason: SessionRejectReason, message: string): { ok: false; reason
 /** 构造一条出站消息。`t` 与 `msg.t` 在这里被同一个实参约束住，不可能写歪 */
 function outbound<K extends NetMsgType>(msg: Extract<NetMsg, { t: K }>): SessionOutbound {
   return { t: msg.t, msg };
+}
+
+/** `reveal-salt` 形状失败的那一句（**只此一处**：形状检查与加入方的事后处理都要用它） */
+function badSaltFailure(): { ok: false; reason: SessionRejectReason; message: string } {
+  return { ok: false, reason: 'bad-salt', message: '收到的 reveal-salt 没有可用的 salt（空串 / 缺失 / 不是字符串）；拒绝。' };
+}
+
+/**
+ * `reveal-salt` 的**形状检查**（房主与加入方共用一份；文案只有一处，免得两支漂移）。
+ *
+ * 它**不**含相位守卫 —— 守卫单独一个函数，因为加入方那一支需要在守卫之后、**校验之前**
+ * 允许"验不过"这条路走完（`salt-hash-mismatch` 要能发出来），见 `mayIntakeSalt` 与
+ * `acceptRevealSaltFinal`。
+ */
+function intakeRevealSalt(msg: unknown): { ok: true; salt: string } | { ok: false; reason: SessionRejectReason; message: string } {
+  const salt = strField(msg, 'salt');
+  if (!isNonEmptyString(salt)) return badSaltFailure();
+  return { ok: true, salt };
+}
+
+/**
+ * `reveal-salt` 的**相位守卫**：只有"本方已经揭示过种子"之后的相位才该收到它。
+ *
+ * 这是修复轮 N-1 加的（阶段一评审实测 C2）：第一版没有守卫，于是一条**入站**
+ * `{t:'reveal-salt', salt:'peer-salt'}` 就能把房主推到 `complete` —— `handshakeDone` 与
+ * `acceptsInput` 双双变 `true`、`salt()` 被覆盖，而且此后**合法的 hello 被"握手已完成"永久拒掉**。
+ * 握手都没做也照样成立。
+ *
+ * 为什么这不是"小毛病"：`phase` 是顺序约束**唯一的运行期载体** —— 一个能被单条网络消息推到
+ * 终态的相位机，等于把"顺序由相位保证"这句话打了个洞。它今天不泄 seed（`sendRevealSeed()`
+ * 那时被拒），但 T5/T6 会读 `acceptsInput` / `handshakeDone` 去做"能不能收操作""要不要重连"，
+ * 读到一个**由对端凭空写出来的** `complete` 就是实质故障。
+ *
+ * 允许的两个相位：`seed-revealed`（房主发过 `reveal-seed` 之后、加入方收过之后）与
+ * `reveal-salt-sent`（加入方已经发出 `reveal-face`）。其余一律拒，且**不改任何状态**。
+ */
+function mayIntakeSalt(phase: SessionPhase): { ok: true } | { ok: false; reason: SessionRejectReason; message: string } {
+  if (phase === 'seed-revealed' || phase === 'reveal-salt-sent') return { ok: true };
+  return {
+    ok: false,
+    reason: 'unexpected-message',
+    message:
+      `当前相位是 ${phase}，此时收到 reveal-salt：` +
+      '盐是**对局结束后、由房主**揭示的，本方还没有揭示过种子（或握手都还没完成），' +
+      '所以这条消息只可能是对端搞错了方向或提前重放；拒绝，且不改变任何状态。',
+  };
 }
 
 function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSession {
@@ -843,12 +906,18 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     return { ok: true, output: null, phase: s.phase };
   }
 
+  /**
+   * 房主收下 `reveal-salt`（对局结束后）。
+   *
+   * 现在是**共用实现**（`intakeRevealSalt`）：形状检查 + 相位守卫。
+   * 相位守卫是修复轮 N-1 加的 —— 理由与复现都写在那个函数的头注里。
+   */
   function acceptRevealSalt(msg: unknown): SessionDecision {
-    const salt = strField(msg, 'salt');
-    if (!isNonEmptyString(salt)) {
-      return { ...fail('bad-salt', '收到的 reveal-salt 没有可用的 salt（空串 / 缺失 / 不是字符串）；拒绝。'), phase: s.phase };
-    }
-    s.salt = salt;
+    const shape = intakeRevealSalt(msg);
+    if (!shape.ok) return { ...fail(shape.reason, shape.message), phase: s.phase };
+    const guard = mayIntakeSalt(s.phase);
+    if (!guard.ok) return { ...fail(guard.reason, guard.message), phase: s.phase };
+    s.salt = shape.salt;
     s.phase = 'complete';
     return { ok: true, output: null, phase: s.phase };
   }
@@ -937,21 +1006,20 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
   }
 
   function acceptRevealSaltFinal(msg: unknown): SessionDecision {
-    const salt = strField(msg, 'salt');
-    if (!isNonEmptyString(salt)) {
-      return { ...fail('bad-salt', '收到的 reveal-salt 没有可用的 salt（空串 / 缺失 / 不是字符串）；拒绝。'), phase: s.phase };
-    }
-    if (s.phase !== 'reveal-salt-sent' && s.phase !== 'seed-revealed') {
-      return {
-        ...fail('unexpected-message', `当前相位是 ${s.phase}，此时收到 reveal-salt（承诺流程的次序不对）；拒绝。`),
-        phase: s.phase,
-      };
-    }
+    // 形状（共用一份）+ 相位守卫（共用一份），然后是**本方特有**的一步：兑现承诺的校验。
+    // 顺序要紧：守卫必须在"形状"之后（空 salt 是形状问题，不是时机问题），
+    //    而**校验必须在相位推进之前完成** —— 否则 `salt-hash-mismatch` 再也发不出来
+    //    （相位已经被推到 `complete`，理由码就丢了）。实测踩过：把三步合成"形状+守卫+推进"
+    //    之后，`salt-hash-mismatch` 这条真实路径变成不可达，理由码覆盖面当场少一个。
+    const shape = intakeRevealSalt(msg);
+    if (!shape.ok) return { ...fail(shape.reason, shape.message), phase: s.phase };
+    const guard = mayIntakeSalt(s.phase);
+    if (!guard.ok) return { ...fail(guard.reason, guard.message), phase: s.phase };
     if (s.seed === null || s.seedHash === null) {
       throw new Error('session.ts 内部不一致：还没拿到种子/承诺就要验盐。');
     }
-    const actual = requireHash(opts.hash, s.seed, salt);
-    s.salt = salt;
+    const actual = requireHash(opts.hash, s.seed, shape.salt);
+    s.salt = shape.salt;
     s.phase = 'complete';
     commitmentOk = actual === s.seedHash;
     if (commitmentOk !== true) {

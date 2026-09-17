@@ -233,19 +233,33 @@ function runCommitRevealFull(): { h: HostSession; g: GuestSession } {
   if (!rs.ok) throw new Error('unreachable');
   acceptOk(g, { t: 'reveal-seed', msg: overWire(rs.output.msg) });
 
-  // 5. 加入方 reveal-face
+  // 5. 加入方 reveal-face ⇒ 房主这一侧也走完承诺流程（`complete`）
   const rf = g.sendRevealFace();
   expect(rf.ok, '加入方发不出 reveal-face').toBe(true);
   if (!rf.ok) throw new Error('unreachable');
   acceptOk(h, { t: 'reveal-face', msg: overWire(rf.output.msg) });
+  expect(h.phase(), '房主收下合法的 reveal-face 之后应该到 complete').toBe('complete');
 
   // 6. 房主 reveal-salt（对局结束后）：房主发，加入方验 `hash(seed + salt) === commit`
+  //
+  // 这里**不**再把同一条 reveal-salt 喂回房主：修复轮 N-1 给房主的收下口加了相位守卫，
+  //    而"房主已经 `complete`"不属于合法窗口（它自己的盐压根不需要从线上收）。
+  //    房主那一支的合法窗口（`seed-revealed`）由判据 2 的独立腿单独钉住。
   const saltMsg = overWire({ t: 'reveal-salt', salt: SALT });
   acceptOk(g, { t: 'reveal-salt', msg: saltMsg });
-  const rv = h.acceptRevealSalt(saltMsg);
-  expect(rv.ok, `房主收到 reveal-salt 被拒：${rv.ok ? '' : `${rv.reason} / ${rv.message}`}`).toBe(true);
 
   return { h, g };
+}
+
+/** 走完一遍完整承诺流程、但**还没发 reveal-salt** 的加入方（停在 `reveal-salt-sent`） */
+function guestAwaitingSalt(): GuestSession {
+  const g = guestSession();
+  acceptOk(g, { t: 'hello', msg: overWire(hello()) });
+  acceptOk(g, { t: 'commit', msg: overWire({ t: 'commit', hash: sha256Concat(SEED, SALT) }) });
+  expect(g.sendCommitAck().ok).toBe(true);
+  expect(g.commitFace(0, 'n').ok).toBe(true);
+  acceptOk(g, { t: 'reveal-seed', msg: overWire({ t: 'reveal-seed', seed: SEED }) });
+  return g;
 }
 
 /* ------------------------------------------------------------------ *
@@ -475,6 +489,43 @@ describe('判据 2：commit → commit-ack → commit-face → reveal-seed → r
     expect(h.phase(), '校验失败之后相位被推进了').toBe('seed-revealed');
   });
 
+  it('★ N-1：握手之前收到的 `reveal-salt` 不许伪造状态（相位/盐/后续 hello 都要原样）', () => {
+    // 这条腿对着阶段一评审实测的 C2：第一版没有相位守卫，一条**入站**
+    // `{t:'reveal-salt', salt:'peer-salt'}` 就能把房主推到 `complete`，
+    // 连带 `handshakeDone` / `acceptsInput` 双双变 true、`salt()` 被对端覆盖，
+    // 并且此后**合法的 hello 被"握手已完成"永久拒掉**。
+    const h = hostSession();
+    const beforePhase = h.phase();
+    const beforeSalt = h.salt();
+    const beforeStatus = h.peerStatus();
+
+    const forged = acceptRejected(h, { t: 'reveal-salt', msg: overWire({ t: 'reveal-salt', salt: 'peer-salt' }) });
+    expect(forged.reason, '相位不对时收到的 reveal-salt 必须按"时机不对"拒绝').toBe('unexpected-message');
+    expect(h.phase(), '一条入站消息把相位推走了').toBe(beforePhase);
+    expect(h.salt(), '一条入站消息把本方的盐覆盖了').toBe(beforeSalt);
+    expect(h.peerStatus(), '一条入站消息改动了状态读数').toEqual(beforeStatus);
+
+    // 最关键的那半：伪造之后**合法握手仍然能成功**（第一版的症状正是这里永久失败）
+    const helloDecision = h.accept({ t: 'hello', msg: overWire(hello()) });
+    expect(helloDecision.ok, `伪造状态之后合法的 hello 被拒了：${helloDecision.ok ? '' : helloDecision.message}`).toBe(
+      true,
+    );
+  });
+
+  it('★ N-1 的正控：房主在**合法窗口**（已揭示种子、还没收到 reveal-face）里收下 reveal-salt', () => {
+    // 没有这条，"上面那条拒绝"可能只是"房主这一支根本不通"（那样守卫就白加了）。
+    const h = hostSession();
+    handshakeHost(h);
+    expect(h.sendCommit(SEED, SALT).ok).toBe(true);
+    acceptOk(h, { t: 'commit-face', msg: overWire({ t: 'commit-face', hash: sha256Concat('1', 'n') }) });
+    expect(h.sendRevealSeed().ok, '承诺成立后房主应该能揭示种子').toBe(true);
+    expect(h.phase()).toBe('seed-revealed');
+    expect(h.salt()).toBe(SALT);
+    const r = h.acceptRevealSalt(overWire({ t: 'reveal-salt', salt: SALT }));
+    expect(r.ok, `合法窗口里房主收不下 reveal-salt：${r.ok ? '' : `${r.reason} / ${r.message}`}`).toBe(true);
+    expect(h.phase()).toBe('complete');
+  });
+
   it('乱序被拒：commit-ack 早于 commit、reveal-face 早于 reveal-seed、reveal-salt 早于 reveal-seed', () => {
     const g = guestSession();
     acceptOk(g, { t: 'hello', msg: overWire(hello()) });
@@ -502,6 +553,105 @@ describe('判据 2：commit → commit-ack → commit-face → reveal-seed → r
 /* ------------------------------------------------------------------ *
  * 判据 3：protoVersion / cardDataHash 的文案不是同一句
  * ------------------------------------------------------------------ */
+
+/**
+ * 从 `src/net/session.ts` 的 `SessionRejectReason` 声明里**抽出成员集合**（修复轮 N-2）。
+ *
+ * 为什么要抽而不是手写：手写清单与真实集合**结构上脱钩**，于是"新增一条理由码却没给它腿"
+ * 是**必然漏**。T1 阶段一评审的 N-1 与本地评审的 F3 是同一个形态（两次实测都全绿通过）。
+ * 这里从源码抽，于是加/删理由码都会让下面那条"双向闭合"红。
+ *
+ * 抽取失败必须**响亮抛错**，不能回一个空集 —— 空集会让 `closed == declared == []` 恒成立
+ * （本仓记过档的"空扫为绿"）。
+ */
+function declaredRejectReasons(): string[] {
+  const src = String(readFileSync(join(fileURLToPath(new URL('../../src/net/', import.meta.url)), 'session.ts')));
+  const decl = /export type SessionRejectReason\s*=([\s\S]*?);/.exec(src);
+  if (decl === null) throw new Error('源码里找不到 `export type SessionRejectReason = …;`（结构被改动？）');
+  const members = [...decl[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  if (members.length === 0) throw new Error('SessionRejectReason 抽出来是空集 —— 这条判据会在空集上恒真');
+  return [...new Set(members)].sort();
+}
+
+/** 同理抽出握手理由码（`SessionHelloReason`），**不手写** */
+function declaredHelloReasons(): string[] {
+  const src = String(readFileSync(join(fileURLToPath(new URL('../../src/net/', import.meta.url)), 'session.ts')));
+  const decl = /export type SessionHelloReason\s*=([\s\S]*?);/.exec(src);
+  if (decl === null) throw new Error('源码里找不到 `export type SessionHelloReason = …;`（结构被改动？）');
+  const body = decl[1];
+  // 它的一半成员是**引用**别的类型（`HelloRejectReason | 'bad-shape' | …`），所以两处都要收：
+  //  - 字面量成员：`'bad-shape'` 这类直接写着的；
+  //  - 引用成员：`HelloRejectReason` → 去 `protocol.ts` 里抽同名声明（`HelloRejectReason` 是
+  //    **非导出**的？不是 —— 它由 `protocol.ts` 导出，本文件也 import 了它的类型）。
+  const literals = [...body.matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  const refs = [...body.matchAll(/\b([A-Z][A-Za-z0-9_]*)\b/g)].map((m) => m[1]);
+  const out = new Set(literals);
+  if (refs.includes('HelloRejectReason')) {
+    const proto = String(readFileSync(join(fileURLToPath(new URL('../../src/net/', import.meta.url)), 'protocol.ts')));
+    const p = /export type HelloRejectReason\s*=([\s\S]*?);/.exec(proto);
+    if (p === null) throw new Error('protocol.ts 里找不到 `export type HelloRejectReason = …;`');
+    for (const m of p[1].matchAll(/'([^']+)'/g)) out.add(m[1]);
+  } else {
+    throw new Error('SessionHelloReason 的定义里没有引用 HelloRejectReason —— 抽取口径要跟着改');
+  }
+  if (out.size === 0) throw new Error('SessionHelloReason 抽出来是空集');
+  return [...out].sort();
+}
+
+/**
+ * **豁免清单**：允许"不在上面那张表里构造"的理由码。**必须逐条具名 + 写清理由**，
+ * 且与 `REJECT_REASON_WHY` 的键集合相等（空壳豁免会让这条判据退化成下界）。
+ *
+ * 今天为空：下面那张表把 `SessionRejectReason` 的**每一个**成员都真构造了一遍
+ * （这正是要的效果 —— 空清单意味着"没有一条是被豁免掉的"）。
+ */
+const REJECT_REASON_EXEMPT: readonly string[] = [];
+
+/** 豁免理由（键集合必须等于 `REJECT_REASON_EXEMPT`；今天为空表） */
+const REJECT_REASON_WHY: Readonly<Record<string, string>> = {};
+
+/**
+ * **握手面**的豁免清单：允许"不在这张表里构造"的握手理由码（具名 + 写清理由）。
+ *
+ * 两条 `*-slots-full` 是**真豁免**，理由是可核对的：它们的判定属于
+ * `validateHello` 的第 3/4 步（T1 的**唯一出处**，`tests/net/protocol.test.ts` 判据 1
+ * 有专门四条腿逐条钉它们），而**会话层今天构造不出来**：
+ *  - `player-slots-full` 要 `occupied.players >= 2`，而 `occupiedPlayers()` 只塞进主机自己
+ *    （`[selfSeat]`，两人局），所以最多是 1 —— 到不了阈值；
+ *  - `spectator-slots-full` 要 `occupied.spectators >= 2`，而会话层把观战位**写死为空数组**
+ *    （D5：G5 从不放行观战，观战在第 4 步之前就被回绝了）。
+ * 这两条不是"忘了写"，是"会话层没有那条路径"；把它们登记成豁免而不是硬凑一条腿，
+ * 是为了让这张表继续说真话（凑出来的腿会是一条恒不命中的假腿）。
+ */
+const HELLO_REASON_EXEMPT: readonly string[] = ['player-slots-full', 'spectator-slots-full'];
+
+const HELLO_REASON_WHY: Readonly<Record<string, string>> = {
+  'player-slots-full': '判定在 validateHello 第 3 步（T1 判据 1 有腿）；会话层 occupiedPlayers() 恒为 1 个座位，到不了阈值',
+  'spectator-slots-full': '判定在 validateHello 第 4 步（T1 判据 1 有腿）；会话层把观战位写死为空（D5 从不放行观战）',
+};
+
+/**
+ * 握手面的理由码全集：**从源码抽**（`SessionHelloReason` 的字面量成员 ∪ 它引用的
+ * `HelloRejectReason` 的成员）。一个名字都不手写 —— 手写清单与真实集合结构上脱钩
+ * （T1 N-1 与本地 F3 两次实测过这个形态：加标签没人提醒，必然漏）。
+ */
+const declaredHelloReasonList = declaredHelloReasons();
+
+const declaredReasons = declaredRejectReasons();
+
+/**
+ * **类型绑定**：把"从源码抽出来的运行时集合"与**类型本身**绑在一起。
+ *
+ * 为什么值得加：上面那条闭合腿是**运行期**的（它比对的是源码文本与实测集合）。
+ * 若有人往 `SessionRejectReason` 加一个成员、但那个成员恰好也没被任何路径用到，
+ * 闭合腿会红（缺腿）—— 那是好的；但若他同时往豁免清单里登记了它，闭合腿就绿了。
+ * 这里让 `Record<SessionRejectReason, true>` 与抽取结果做**双向静态检查**：
+ * 两者都是穷尽的 ⇒ 类型加了成员而映射没跟上，`tsc` 当场报缺属性（`tests/net/session.ts` 里
+ * `protocol.ts` 的 `MSG_TYPES` 用的就是这一招，理由是"漏登记只会在运行期表现为别的样子"）。
+ */
+const REASON_NEEDS_LEG: Record<SessionRejectReason, true> = Object.fromEntries(
+  declaredReasons.map((r) => [r, true]),
+) as Record<SessionRejectReason, true>;
 
 describe('判据 3：版本不符与卡牌指纹不符各给一句设计稿口径的话，且两句不同（D13）', () => {
   it('两条各自的 reason 与文案，且两句不相等', () => {
@@ -571,17 +721,22 @@ describe('判据 3：版本不符与卡牌指纹不符各给一句设计稿口�
   });
 
   it('★ 全部拒绝理由的文案**两两不同**（加一条新拒绝而不给新文案 ⇒ 当场红）', () => {
-    const messages: { label: string; reason: string; message: string }[] = [];
+    const messages: { label: string; reason: string; message: string; kind: 'hello' | 'wire' }[] = [];
     const collect = (label: string, r: { ok: boolean; reason?: string; message?: string }) => {
       if (r.ok) throw new Error(`${label} 本该被拒却是成功`);
-      messages.push({ label, reason: r.reason as string, message: r.message as string });
+      messages.push({ label, reason: r.reason as string, message: r.message as string, kind: 'wire' });
+    };
+    /** 握手面的拒绝走这个（理由码属于 `SessionHelloReason`，不参与线理由的闭合断言） */
+    const collectHello = (label: string, r: { ok: boolean; reason?: string; message?: string }) => {
+      if (r.ok) throw new Error(`${label} 本该被拒却是成功`);
+      messages.push({ label, reason: r.reason as string, message: r.message as string, kind: 'hello' });
     };
 
     // 握手面
-    collect('proto-version', hostSession().accept({ t: 'hello', msg: hello({ protoVersion: 2 }) }));
-    collect('card-data-hash', hostSession().accept({ t: 'hello', msg: hello({ cardDataHash: 'x' }) }));
-    collect('bad-shape', hostSession().accept({ t: 'hello', msg: { t: 'hello' } }));
-    collect('unsupported-spectator', hostSession().accept({ t: 'hello', msg: hello({ role: 'spectator' }) }));
+    collectHello('proto-version', hostSession().accept({ t: 'hello', msg: hello({ protoVersion: 2 }) }));
+    collectHello('card-data-hash', hostSession().accept({ t: 'hello', msg: hello({ cardDataHash: 'x' }) }));
+    collectHello('bad-shape', hostSession().accept({ t: 'hello', msg: { t: 'hello' } }));
+    collectHello('unsupported-spectator', hostSession().accept({ t: 'hello', msg: hello({ role: 'spectator' }) }));
 
     // 会话面（每条都真的构造出来）
     const hNoHandshake = hostSession();
@@ -593,21 +748,37 @@ describe('判据 3：版本不符与卡牌指纹不符各给一句设计稿口�
     collect('bad-hash', g0.accept({ t: 'commit', msg: { t: 'commit', hash: '' } }));
 
     const { h, g } = runCommitRevealFull();
-    collect('seed-duplicate', g.accept({ t: 'reveal-seed', msg: { t: 'reveal-seed', seed: SEED } }));
     collect('unexpected-message', g.accept({ t: 'reveal-salt', msg: { t: 'reveal-salt', salt: SALT } }));
-    collect('bad-salt', g.accept({ t: 'reveal-salt', msg: { t: 'reveal-salt', salt: '' } }));
     collect('resync-not-wired', h.accept({ t: 'resync-req', msg: { t: 'resync-req', sessionId: SESSION_ID, appliedSteps: 3 } }));
     collect('bad-face', h.accept({ t: 'reveal-face', msg: { t: 'reveal-face', face: 7, faceNonce: 'n' } }));
+    // `seed-not-expected`：**加入方**已经走完承诺流程（相位 `complete`）之后再收到 reveal-seed
+    // ⇒ 那是对端把整个流程重放了一遍。
+    // 这一条**不能**用房主来构造（实测踩过）：`accept()` 的方向分派先判角色，
+    //    房主收到 `reveal-seed` 在**到达 `acceptRevealSeed` 之前**就被判成 `unexpected-message`
+    //    （方向反了）—— 那是另一条腿。`seed-not-expected` 只长在加入方这一侧。
+    const gReplay = guestAwaitingSalt();
+    expect(gReplay.accept({ t: 'reveal-salt', msg: { t: 'reveal-salt', salt: SALT } }).ok).toBe(true);
+    expect(gReplay.phase()).toBe('complete');
+    collect('seed-not-expected', gReplay.accept({ t: 'reveal-seed', msg: { t: 'reveal-seed', seed: SEED } }));
+
+    // `seed-duplicate`：必须在**收过种子、还没发出 reveal-face** 的那个窗口里再收一条
+    // （`runCommitRevealFull` 之后加入方已经是 `complete`，那时来的是 `seed-not-expected` ——
+    //  实测踩过：拿它去凑 `seed-duplicate` 会让闭合腿报"缺一条"）
+    const gDup = guestAwaitingSalt();
+    collect('seed-duplicate', gDup.accept({ t: 'reveal-seed', msg: { t: 'reveal-seed', seed: SEED } }));
+
+    // 相位**合法**（`reveal-salt-sent`）但 salt 是空串：形状先判 ⇒ `bad-salt`
+    // （与上面那条 `unexpected-message` 是两件事：一条是时机错、一条是报文本身不可用）
+    collect('bad-salt', guestAwaitingSalt().accept({ t: 'reveal-salt', msg: { t: 'reveal-salt', salt: '' } }));
+
+    // 相位合法、salt 形状也对，但**兑现不了承诺** ⇒ `salt-hash-mismatch`
+    // （走完流程的加入方走不到这里 —— 它的相位已经是 `complete`；必须是"还没收盐"的那个状态）
+    collect(
+      'salt-hash-mismatch',
+      guestAwaitingSalt().accept({ t: 'reveal-salt', msg: { t: 'reveal-salt', salt: '换了 salt' } }),
+    );
 
     // 承诺校验失败面：另起一局各自构造
-    const g2 = guestSession();
-    acceptOk(g2, { t: 'hello', msg: overWire(hello()) });
-    acceptOk(g2, { t: 'commit', msg: overWire({ t: 'commit', hash: sha256Concat(SEED, SALT) }) });
-    expect(g2.sendCommitAck().ok).toBe(true);
-    expect(g2.commitFace(0, 'n').ok).toBe(true);
-    acceptOk(g2, { t: 'reveal-seed', msg: overWire({ t: 'reveal-seed', seed: SEED }) });
-    collect('salt-hash-mismatch', g2.accept({ t: 'reveal-salt', msg: { t: 'reveal-salt', salt: '不匹配' } }));
-
     const h2 = hostSession();
     handshakeHost(h2);
     expect(h2.sendCommit(SEED, SALT).ok).toBe(true);
@@ -616,13 +787,61 @@ describe('判据 3：版本不符与卡牌指纹不符各给一句设计稿口�
     expect(rs.ok).toBe(true);
     collect('face-hash-mismatch', h2.accept({ t: 'reveal-face', msg: { t: 'reveal-face', face: 1, faceNonce: '不一样' } }));
 
-    // 覆盖面下界：上面逐条列出的拒绝必须**不少于**理由码集合的大小（新增理由码时这条会提醒
-    // 来把新文案加进表里；理由码集合的完整性由本文件末尾那条源码腿钉住）。
-    const reasons = new Set(messages.map((m) => m.reason));
+    // ★ 覆盖面**双向闭合**（修复轮 N-2，形态照 T1 阶段一评审 N-1 的处置）。
+    //
+    // 旧写法是 `reasons.size >= 12` —— 一个**下界**，与理由码集合**结构上脱钩**，
+    // 于是"新增一条理由码、不给它一条腿"**必然漏**（不是概率漏）。阶段一评审用 F3 实测过：
+    // 加一条 `'zz-uncovered'` 并让"房主收到坏 salt"这条真实路径返回它 ⇒ 判据面 31/31 绿、
+    // 探针面 32/32 绿、exit 0。
+    //
+    // 现在改成：从 `session.ts` 的 `SessionRejectReason` 声明里**抽出成员集合**，
+    // 与"实际构造出来的集合 ∪ 显式豁免集（具名 + 写理由）"做**相等**断言。
+    //
+    // 两个集合要**分开算**（实测踩过，第一版混在一起报了两类假差）：
+    //  - "会话线理由"（`SessionRejectReason`）：只有走 `accept()` / `sendRevealSeed()` 那些腿
+    //    才产生它 —— 参与闭合；
+    //  - "握手理由"（`proto-version` / `card-data-hash` / `bad-shape` / `unsupported-spectator`）：
+    //    它们来自 `validateHello` 与会话层的观战回绝，**不属于**上面那个类型，混进来会报"extra"。
+    //    它们由 `HELLO_REASONS` 单独覆盖（同一条腿里也断它们一句文案都不重）。
+    // 类型绑定：抽取出来的集合必须**恰好**是类型本身（多一个 → tsc 报"属性不存在"；
+    // 少一个 → tsc 报 `Record` 缺属性）。上面那些运行期断言在这一点上是**互补**的：
+    // 它们查"有没有腿"，这一条查"抽取口径有没有跟类型脱钩"。
+    expect(Object.keys(REASON_NEEDS_LEG).sort(), '抽取出的理由码与类型本身不符（抽取口径脱钩了？）').toEqual(
+      declaredReasons,
+    );
+
+    const covered = new Set(messages.filter((m) => m.kind === 'wire').map((m) => m.reason));
+    const closed = [...new Set([...covered, ...REJECT_REASON_EXEMPT])].sort();
+    const missing = declaredReasons.filter((r) => !closed.includes(r));
+    const extra = closed.filter((r) => !declaredReasons.includes(r));
     expect(
-      reasons.size,
-      `只构造出 ${reasons.size} 种不同的拒绝理由，少于期望（新增一种理由码却没给它一条腿？）`,
-    ).toBeGreaterThanOrEqual(12);
+      { missing, extra },
+      'SessionRejectReason 的成员集合与"实际构造出的 ∪ 豁免"不一致（新增/删除理由码后忘了同步这条腿或豁免清单？）',
+    ).toEqual({ missing: [], extra: [] });
+    // 握手面同样**双向闭合**（差集口径：`SessionHelloReason` 与 `SessionRejectReason` 有重叠，
+    // 重叠的那些由线理由那一侧负责；实测踩过：不差集的话 `unexpected-message` 会被当成
+    // "已经有了"而掩盖别的缺口）。
+    const helloOnly = declaredHelloReasonList.filter((r) => !declaredReasons.includes(r));
+    const helloCovered = new Set(messages.filter((m) => m.kind === 'hello').map((m) => m.reason));
+    const helloClosed = [...new Set([...helloCovered, ...HELLO_REASON_EXEMPT])].sort();
+    const helloMissing = helloOnly.filter((r) => !helloClosed.includes(r));
+    const helloExtra = helloClosed.filter((r) => !helloOnly.includes(r));
+    expect(
+      { helloMissing, helloExtra },
+      `握手面理由码的闭合断了：缺腿 ${helloMissing.join(', ') || '(无)'}；多出来的 ${helloExtra.join(', ') || '(无)'}`,
+    ).toEqual({ helloMissing: [], helloExtra: [] });
+    // 豁免清单必须具名 + 写清理由，且与理由表严格同步（空壳豁免会让上面那条退化成下界）
+    expect(Object.keys(HELLO_REASON_WHY).sort(), '握手豁免表与豁免集不同步').toEqual([...HELLO_REASON_EXEMPT].sort());
+    for (const [reason, why] of Object.entries(HELLO_REASON_WHY)) {
+      expect(why.length, `握手豁免 ${reason} 没写理由`).toBeGreaterThan(10);
+    }
+    // 豁免集本身必须**具名且写清理由**，不许留空壳
+    expect(Object.keys(REJECT_REASON_WHY).sort(), '豁免清单的理由表与豁免集不同步').toEqual(
+      [...REJECT_REASON_EXEMPT].sort(),
+    );
+    for (const [reason, why] of Object.entries(REJECT_REASON_WHY)) {
+      expect(why.length, `豁免 ${reason} 没写理由`).toBeGreaterThan(10);
+    }
 
     // ★ 两两不同：判据 3 的"两句不是同一句"在这里被扩到**全部**理由码。
     // 变异 M2（把 busy 与 proto-version 的文案串了）会让这一条红。
