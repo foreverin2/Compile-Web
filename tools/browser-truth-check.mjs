@@ -15,7 +15,8 @@
  *  1. 在**备用端口**（缺省 5199）起一个**临时** vite（用本仓 `node_modules/vite/bin/vite.js`，
  *     不经 `npx`、不装任何东西）；端口若已被占用就**拒绝启动**（保护用户自己的 dev server）。
  *  2. 用系统 Chrome 的 **headless** 模式（`--headless=new` + `--dump-dom` + 临时 `--user-data-dir`）
- *     载入 `tools/browser-truth-probe.html`，逐场景跑：热座页 / 远程页（viewSeat 0 与 1）。
+ *     载入 `tools/browser-truth-probe.html`，逐场景跑：热座页 / 远程页（viewSeat 0 与 1）/
+ *     **重放页**（G4 T6 新增的第 4 场景，见 `SCENARIOS`）。
  *  3. 探针在真浏览器里给出每项的「期望值（尽量单源）」与「浏览器实测值」；
  *     **本文件负责容差比较与退出码**（浏览器管真值，Node 管判据）。
  *  4. 收工杀掉 vite 与 Chrome 的**整棵进程树**，并自证"端口未监听 / 没有留下 chrome 进程"。
@@ -44,7 +45,7 @@
  * 没有浏览器），是"第五道：浏览器"。
  *
  * 用法：
- *   node tools/browser-truth-check.mjs                     # 三个场景，全部条目
+ *   node tools/browser-truth-check.mjs                     # 四个场景，全部条目
  *   node tools/browser-truth-check.mjs --port 5299         # 换端口（缺省 5199）
  *   node tools/browser-truth-check.mjs --json out.json     # 原始结果落盘（供报告引用）
  *   node tools/browser-truth-check.mjs --shots             # 每个场景额外截一张图（写 .superpowers/）
@@ -52,6 +53,11 @@
  *   node tools/browser-truth-check.mjs --only battery.     # 只跑 id 以此开头的项
  *   node tools/browser-truth-check.mjs --tol 2             # 覆盖缺省容差（1px）
  *   node tools/browser-truth-check.mjs --win 2200x1400     # 测量窗口（缺省 2200×1400，见下）
+ *   node tools/browser-truth-check.mjs --inject bar-off    # ★ 变异：把 inject 追加到**重放场景**的
+ *                                                          #   query（探针里只内联注入，不改仓库文件）。
+ *                                                          #   值：bar-off（M1，控制条移出视口）
+ *                                                          #     / shield-beneath（M2，遮罩压到棋盘之下）。
+ *                                                          #   **只影响 replay 场景**，其余场景的 query 不变。
  *   node tools/browser-truth-check.mjs --keep              # 不杀进程（调试用；此时不会自证）
  *
  * ## 窗口尺寸是**测量基准的一部分**（为什么缺省是 2200×1400）
@@ -83,6 +89,14 @@ const SCENARIOS = [
   { key: 'hotseat', label: '热座页', query: 'scenario=hotseat' },
   { key: 'net-0', label: '远程页 · viewSeat=0', query: 'scenario=net&seat=0' },
   { key: 'net-1', label: '远程页 · viewSeat=1', query: 'scenario=net&seat=1' },
+  /* G4 T6：第 4 个场景 = 重放页。它**不经过 `src/`**（探针是独立入口），场景只是
+   * `tools/browser-truth-probe.js` 里的一个分支（计划 §3.6）。
+   * 档案由**生产记录器**产出：`seed='g4t6-browser-truth'` + 确定性策略（FNV-1a 派生索引），
+   * 共 **60 步**操作；重放到**第 24 步**（`REPLAY_AT`，写死在探针里）再看盘面。
+   * ⚠️ 这两个数字（seed / 24）是**探针与本文档之间的约定**：改探针里的策略或步数时，
+   *    这里的注释必须同步（否则这条注释就变成第二处真相）。
+   * 变异入口（只在本探针页内联，不改仓库文件）：`&inject=bar-off`（M1）/ `&inject=shield-beneath`（M2）。 */
+  { key: 'replay', label: '重放页', query: 'scenario=replay' },
 ];
 const WIN_DEFAULT = '2200x1400';
 
@@ -102,6 +116,11 @@ const KEEP = argv.includes('--keep');
  *  见探针的 `stripThisRoundsLayout`。用途：让"改前/改后"在**同一个会话、同一把尺子**下可比，
  *  不必 `git stash`（工作区里还有别的会话的改动，动 git 有风险）。 */
 const BASELINE = argv.includes('--baseline');
+/** `--inject <name>`（G4 T6）：把变异名追加到**重放场景**的 query（`&inject=<name>`）。
+ *  探针据此在页内做**内联**注入（`bar-off` = M1 / `shield-beneath` = M2），
+ *  **不改仓库里的任何文件**；缺省 `null` = 生产形态。
+ *  ⚠️ 只加在 `replay` 场景上：另三个场景没有这个开关（也不会静默接受它）。 */
+const INJECT = argVal('--inject', null);
 
 const say = (m) => process.stdout.write(`${m}\n`);
 const die = (m) => { say(`\n✗ 环境错误：${m}`); process.exit(2); };
@@ -288,7 +307,8 @@ const viteLog = join(profile, 'vite.log');
 const viteFd = openSync(viteLog, 'w');
 
 say(`运行期浏览器真值自查 · 端口 ${PORT} · 窗口 ${WIN.w}×${WIN.h} · 缺省容差 ${TOL}px`
-  + (BASELINE ? ' · **对照基线模式（撤掉本轮布局改动）**' : ''));
+  + (BASELINE ? ' · **对照基线模式（撤掉本轮布局改动）**' : '')
+  + (INJECT ? ` · **变异注入 ${INJECT}（只作用于重放场景，页内内联，不改仓库文件）**` : ''));
 say(`  chrome  = ${chrome}`);
 say(`  探针页  = tools/browser-truth-probe.html`);
 say(`  临时 profile = ${profile}`);
@@ -317,7 +337,8 @@ try {
   // ── 逐场景跑 Chrome ──
   for (const sc of SCENARIOS) {
     const url = `http://127.0.0.1:${PORT}/tools/browser-truth-probe.html?${sc.query}`
-      + (BASELINE ? '&baseline=1' : '');
+      + (BASELINE ? '&baseline=1' : '')
+      + (INJECT && sc.key === 'replay' ? `&inject=${encodeURIComponent(INJECT)}` : '');
     const domFile = join(profile, `${sc.key}.dom.html`);
     const fd = openSync(domFile, 'w');
     const t0 = Date.now();

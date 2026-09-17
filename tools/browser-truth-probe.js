@@ -45,17 +45,37 @@ import '/src/ui/styles-gen3.css';
 import '/src/ui/styles-gen3-cards.css';
 import '/src/ui/styles-gen3-sync.css';
 import '/src/ui/styles-net.css';
-import { createGame } from '/src/core/state/create';
+/* G4 T6：第 4 个场景（重放页）的控制条样式。**必须在 `styles.css` 之后**——
+ * 它里面的 `.replay-shield` 要盖住棋盘、`.replay-bar` 要盖住遮罩（层叠说明见那个文件）。 */
+import '/src/ui/styles-replay.css';
+import { createGame, draftNextAction, getDraftPool, performDraftBan, performDraftPick } from '/src/core/state/create';
 import { renderApp } from '/src/ui/render';
 import { renderNetBoard } from '/src/ui/render-net';
 import { syncScanOverlays, syncSmokeOverlays, syncCompiledFxLayers } from '/src/ui/render';
 import { syncWrath0Cull } from '/src/ui/gen3-control';
 import { fxTrackEndFor, FX_TRACK_EDGE_PCT_Y } from '/src/ui/fx-seat';
+/* G4 T6：重放场景**必须复用生产函数**（计划 §3.6 的代价那一句）：
+ *  · `stateAfterDraft` / `applyRecordedAction` —— T1 的"档案 → 引擎"唯一映射与草稿真重放；
+ *  · `createMatchFileRecorder` / `setupFromState` / `CARD_DATA_HASH` —— 档案由**记录器**产出，
+ *    不是手写 JSON（手写就等于"真值"验的不是产物）；
+ *  · `renderReplayBar` —— T3 的控制条 + 遮罩渲染器。
+ * ⚠️ 探针页与 `main.ts` 是**两份装配**（这也是 D6 的代价）；在重放这条路上两份装配
+ *    复用的是同一批生产函数，唯一"探针自己写"的是**确定性策略**（下面 `POLICY_*`）。 */
+import { applyRecordedAction, stateAfterDraft } from '/src/app/match-replay';
+import { createMatchFileRecorder, setupFromState } from '/src/app/match-file';
+import { CARD_DATA_HASH } from '/src/app/card-data-hash';
+import { renderReplayBar } from '/src/ui/replay-bar';
+import { getLegalActions } from '/src/core/game';
+import { answerEffect } from '/src/core/effects/resolve';
 
 const params = new URLSearchParams(location.search);
-const scenario = params.get('scenario') ?? 'net';       // 'hotseat' | 'net'
+const scenario = params.get('scenario') ?? 'net';       // 'hotseat' | 'net' | 'replay'（G4 T6 新增）
 const seat = Number(params.get('seat') ?? '0');          // 仅 net 用
-const out = { scenario, seat, items: [], warnings: [], notes: [] };
+/** 仅重放场景用的**变异注入**开关（`inject=`，见 §3 的 M1/M2 变异实测）。
+ *  它只在本探针页里生效（内联样式，不改仓库文件、不改共享树），默认 `null` = 生产形态。
+ *  用途：证明 T6 的判据**真的会红**（否则那两条判据没有牙）。 */
+const inject = params.get('inject');
+const out = { scenario, seat, inject: inject ?? null, items: [], warnings: [], notes: [] };
 
 /* ── 通用工具 ─────────────────────────────────────────────────────────── */
 const px = (v) => {
@@ -242,6 +262,139 @@ const cb = {
   onDraftUnpick: noop, onDraftBan: noop, onWinReset: noop,
 };
 
+/* ============================================================================
+ * G4 T6 · 重放场景（`?scenario=replay`）的**归档与重放**
+ *
+ * 为什么在这里造档案而不是手写一份 JSON（计划 §3.6 的"代价"那一句）：
+ * 探针页与 `main.ts` 是**两份装配**；若探针手写假档案、假状态，那这第五道门禁
+ * 验的就不是产物。所以这里**只用生产函数**：
+ *   `createGame` → 草稿（`performDraftPick`/`performDraftBan`）→ 逐步现场推进，
+ *   每一步同时 (a) 用**生产助手** `applyRecordedAction` 真正执行、(b) 用
+ *   `createMatchFileRecorder` 照录 —— 与 `tests/app/match-recorder.test.ts` 的
+ *   `playAndRecord` 同一条形态（那边是往返腿，这边是浏览器真值的输入）。
+ *
+ * **唯一"探针自己写"的东西 = 确定性策略**（下面的 `POLICY_*`）：种子派生 + 池大小取模，
+ * 不含时钟/随机数（`Math.random` 在这条路径上零调用）。同一份 seed ⇒ 同一份档案。
+ *
+ * 本文件必须与 `tools/browser-truth-check.mjs` 的注释逐字一致（防两处真相）：
+ * `POLICY_SEED` 与 `N` 两条都抄在那边的 `SCENARIOS`/背景注里。
+ * ========================================================================== */
+const POLICY_SEED = 'g4t6-browser-truth';
+/** 重放到第几步（**固定值**，刻意不是"随便走一半"）：见 `REPLAY_AT` 的注。 */
+const REPLAY_AT = 24;
+/** 确定性索引（FNV-1a 变体 + 取模 —— 与 `tools/browser-truth-check.mjs` 背景注里记的同一份）。 */
+function policyHash(t) {
+  let h = 2166136261;
+  for (let i = 0; i < t.length; i += 1) { h ^= t.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return h >>> 0;
+}
+const policyIndex = (tag, n) => (n <= 0 ? 0 : policyHash(`${POLICY_SEED}:${tag}`) % n);
+
+/** 循环应答所有挂起选择（与 `tests/helpers.ts` 的 `resolveAllChoices` 同一份语义；
+ *  本探针不能 import `tests/**`，故就地重写这 8 行 —— 它不是被测产物，是"怎么走完这局"）。 */
+function resolveAll(s) {
+  for (let g = 0; g < 500; g += 1) {
+    const top = s.pendingEffects[s.pendingEffects.length - 1];
+    if (!top || !top.prompt) return;
+    const p = top.prompt;
+    const choice = p.optional ? []
+      : p.kind === 'select-line' ? [`line:${(p.lines && p.lines[0]) ?? 0}`]
+        : p.kind === 'select-action' ? [p.actions?.[0] ?? ''].filter(Boolean)
+          : p.candidates.slice(0, 1).map((c) => c.uid);
+    answerEffect(s, top.id, choice);
+  }
+  throw new Error('探针的 resolveAll 不收敛（500 次仍有挂起选择）');
+}
+
+/** 造一份**真的对局档案**（ban 模式草稿 + 确定性走子），返回 `{ file, actions, draft }`。 */
+function buildReplayArchive() {
+  const s = createGame({ seed: POLICY_SEED, draftStarter: 0, firstToPlay: 1, draftMode: 'ban' });
+  const rec = createMatchFileRecorder();
+  // ── 草稿：`draftNextAction` 派生 kind，按 kind 从池里取（**确定性策略**，不是总取第一个） ──
+  let guard = 0;
+  while (s.phase === 'draft' && guard++ < 100) {
+    const next = draftNextAction(s);
+    if (!next) break;
+    const avail = getDraftPool(s);
+    const defId = avail[policyIndex(`${next.kind}:${s.draftPicks.length}:${s.bannedProtocols.length}`, avail.length)].defId;
+    if (next.kind === 'pick') performDraftPick(s, defId); else performDraftBan(s, defId);
+  }
+  // ── 走子：现场侧走**生产助手**，记录器照录（与测试的 playAndRecord 同形） ──
+  for (let step = 0; step < 60; step += 1) {
+    if (s.phase !== 'turn' || s.winner !== null) break;
+    if (s.pendingEffects.length > 0) {
+      const top = s.pendingEffects[s.pendingEffects.length - 1];
+      if (!top.prompt) { resolveAll(s); continue; }
+      const p = top.prompt;
+      const choice = p.optional ? [] : p.candidates.slice(0, 1).map((c) => c.uid);
+      // ⚠️ `effect-choice` 的执行者必须是**实际 chooser**（`main.ts:307-314` 的现场判定）
+      const chooser = p.chooser ?? top.player;
+      const args = { promptId: p.id, choice };
+      rec.record({ player: chooser, kind: 'effect-choice', args, via: 'user' });
+      applyRecordedAction(s, { seq: rec.nextSeq() - 1, player: chooser, kind: 'effect-choice', args });
+      resolveAll(s);
+      continue;
+    }
+    const player = s.turnPlayer;
+    const legal = getLegalActions(s, player);
+    if (legal.length === 0) break;
+    const a = legal[policyIndex(`act:${step}:${player}`, legal.length)];
+    const args = {};
+    if (a.cardUid !== undefined) args.cardUid = a.cardUid;
+    if (a.faceUp !== undefined) args.faceUp = a.faceUp;
+    if (a.line !== undefined) args.line = a.line;
+    if (a.target !== undefined) args.target = a.target;
+    if (a.promptId !== undefined) args.promptId = a.promptId;
+    if (a.choice !== undefined) args.choice = a.choice;
+    const hasArgs = Object.keys(args).length > 0;
+    rec.record({ player, kind: a.kind, ...(hasArgs ? { args } : {}), via: 'user' });
+    applyRecordedAction(s, { seq: rec.nextSeq() - 1, player, kind: a.kind, ...(hasArgs ? { args } : {}) });
+    resolveAll(s);
+  }
+  // setup 逐字段显式抄（`setupFromState` 是生产函数；这里不写 `{...s}` 那种宽面透传）
+  const setup = setupFromState({
+    draftMode: s.draftMode,
+    draftStarter: s.draftStarter,
+    firstToPlay: s.firstToPlay,
+    draftPool: s.draftPool.map((p) => ({ defId: p.defId })),
+    draftPicks: s.draftPicks.map((p) => ({ defId: p.defId })),
+    bannedProtocols: s.bannedProtocols.slice(),
+  });
+  const file = rec.toMatchFile({
+    seed: POLICY_SEED,
+    setup,
+    players: [{ nick: '甲' }, { nick: '乙' }],
+    cardDataHash: CARD_DATA_HASH,
+    createdAt: '2026-09-17T00:00:00.000Z',
+  });
+  return { file, actions: rec.actions().length, draft: `${setup.draftPicks.length} 选 / ${setup.bannedProtocols.length} 禁` };
+}
+
+/** 重放到第 N 步的状态（`stateAfterDraft` 重建草稿，再逐条走生产助手）。 */
+function stateAtStep(file, n) {
+  const st = stateAfterDraft(file);
+  const upto = Math.min(n, file.actions.length);
+  for (let i = 0; i < upto; i += 1) {
+    applyRecordedAction(st, file.actions[i]);
+    resolveAll(st);
+  }
+  return st;
+}
+
+const isReplay = scenario === 'replay';
+/** 重放场景的中间态 + 控制条节点句柄（在下面的渲染块里赋值；后面的 I 段读它）。 */
+const replay = { archive: null, state: null, bar: null, shield: null };
+if (isReplay) {
+  const built = buildReplayArchive();
+  replay.archive = built;
+  replay.state = stateAtStep(built.file, REPLAY_AT);
+  out.notes.push(`重放场景：档案由**生产记录器**产出（seed=${POLICY_SEED}，草稿 ${built.draft}），`
+    + `共 ${built.actions} 步操作；已重放到第 ${REPLAY_AT} 步（固定值，写死在探针里）。`
+    + `第 ${REPLAY_AT} 步的形态：phase=${replay.state.phase} / step=${replay.state.step} /`
+    + ` 挂起效果 ${replay.state.pendingEffects.length} 个 / 手牌 ${replay.state.players[0].hand.length}+${replay.state.players[1].hand.length}`
+    + ` —— **刻意避开挂起选择**（那样屏上会长出可点的选择条，"不可操作"的判据就分不清是遮罩还是没按钮）。`);
+}
+
 const s = makeState();
 const root = document.getElementById('app');
 const isNet = scenario === 'net';
@@ -249,6 +402,60 @@ const isNet = scenario === 'net';
 if (params.get('baseline') === '1') stripThisRoundsLayout();
 if (isNet) {
   renderNetBoard(root, s, cb, { viewSeat: seat, verifyHooks: false });
+} else if (isReplay) {
+  // ① 整帧渲染**重放状态**（生产渲染器；与 T4 收口后 `rerender` 末尾那一次是同一个调用形态）
+  renderApp(root, replay.state, cb);
+  // ② 控制条 + 遮罩：生产里由 T4 的 `refreshReplayBar()` 在 `renderApp` **之后**调；
+  //    本任务里没有挂载点之争（计划 T6 第 1 条），探针自己就是那个调用点。
+  const nav = { pause: noop, play: noop, next: noop, setRate: noop, exit: noop };
+  const nodes = renderReplayBar(root, {
+    position: REPLAY_AT,
+    total: replay.archive.actions,
+    rate: 1,
+    paused: true,
+    done: false,
+  }, nav);
+  replay.bar = nodes.bar;
+  replay.shield = nodes.shield;
+  /* ── 变异注入（`inject=`，**只在本探针页内联**，不改仓库任何文件） ──────────────
+   * 两条注入各自证明一条判据有牙（见 §3 的 M1/M2）。默认不带 `inject` ⇒ 生产形态。
+   * ⚠️ **只写内联样式，绝不动 `src/ui/styles-replay.css`**（那是 T3 的文件、已提交）。 */
+  if (inject === 'bar-off') {
+    // M1：把控制条挪出视口。`top` 与 CSS 的 `bottom:18px` 同时生效时 top 赢
+    // （绝对/固定定位元素上 `top` 与 `bottom` 同时非 auto ⇒ 高度被拉伸），
+    // 故同时把高度钉死，避免"顶部在视口外但底边仍探进来"的含混形态。
+    replay.bar.style.top = '-400px';
+    replay.bar.style.bottom = 'auto';
+    replay.bar.style.height = '44px';
+    out.notes.push('⚠️ **变异注入 `bar-off`**（M1）：控制条内联 `top:-400px; bottom:auto; height:44px`'
+      + ' ⇒ 期望 `replay.bar.inViewport` 等项**变红**。注入只在本探针页的这次渲染里（内联样式），'
+      + '仓库文件与共享树一字未改。');
+  } else if (inject === 'shield-beneath') {
+    // M2：把遮罩调到棋盘**之下**。
+    // ⚠️ **第一版只写 `shield.style.zIndex='0'` 实测不红**（这是"我以为会红但没红"的一次实测，
+    //    如实记下来）：`.board` 在热座页是 `position: static`（`styles.css:20` 只写
+    //    `display:flex; flex-direction:column`）⇒ 内联 `z-index` 对**非定位**元素**被浏览器忽略**
+    //    （`getComputedStyle` 仍会把设进去的数读回来，这正是那个假绿最阴的地方：读属性会说"设上了"）。
+    //    而棋盘里的卡堆自带 `position:relative` + **个位数内联 z-index**（`render.ts` 的堆叠序号）
+    //    ⇒ 遮罩压到 0 之后仍在卡**之上**，`elementFromPoint` 照旧命中遮罩。
+    // ⇒ 真正能把"遮罩与棋盘"的先后翻过来的注入 = `shield z-index:0` **且** 让棋盘成为一个
+    //    **定位**元素再抬到 400（`position:relative` 只改定位方式、**不改几何**：它不移位、
+    //    不改变布局流，故不存在"靠搬布局把判据弄红"的污染）。注入后读计算值写进 notes 作独立证据。
+    replay.shield.style.zIndex = '0';
+    const board = document.querySelector('.board');
+    if (board) { board.style.position = 'relative'; board.style.zIndex = '400'; }
+    out.notes.push('⚠️ **变异注入 `shield-beneath`**（M2）：遮罩内联 `z-index:0`'
+      + ` + 棋盘根 \`.board\` 内联 \`position:relative; z-index:400\`（实测计算值：`
+      + `shield z=${getComputedStyle(replay.shield).zIndex}/pos=${getComputedStyle(replay.shield).position}`
+      + `，board z=${board ? getComputedStyle(board).zIndex : '(没有 .board)'}/pos=${board ? getComputedStyle(board).position : '—'}）`
+      + ' ⇒ 期望 `replay.shield.overCenter` / `overCard` / `blocksBoard` 的命中不再是遮罩而**变红**。'
+      + '⚠️ **第一版注入（只把遮罩压到 0）实测不红**：`.board` 是 `position:static` ⇒ 内联 z-index 被'
+      + '浏览器忽略（而 `getComputedStyle` 照样读回那个数），卡堆又自带个位数 z-index ⇒ 遮罩仍在卡之上，'
+      + '那条判据会**假绿**。故注入必须让棋盘成为**定位**元素 —— 只加 `position:relative/z-index`，'
+      + '**几何一字未动**（不移位、不改变布局、不改仓库文件）。');
+  } else if (inject) {
+    out.warnings.push(`未知的 inject=${JSON.stringify(inject)}（本探针只认 bar-off / shield-beneath）—— 本条不注入`);
+  }
 } else {
   renderApp(root, s, cb);
 }
@@ -789,7 +996,238 @@ out.observed = {
   slot00: brief('.stack-slot[data-player="0"][data-line="0"]'),
   stack0: brief('.stack'), fieldCard0: brief(isNet ? '.net-lane-band .stack .card' : '.stack .card'),
   handCard0: brief('.hand .card'),
+  board: brief('.board'),
+  replayBar: brief('[data-role="replay-bar"]'),
+  replayShield: brief('[data-role="replay-shield"]'),
 };
+
+/* ==========================================================================
+ * I. 重放页（G4 T6，第五道门禁第 4 场景）：控制条 + **遮罩真的挡住棋盘**
+ *
+ * 为什么这一段的判据是"真解算出来的几何 + 命中测试"而不是读 CSS：
+ * T3 的判据 9 只能是**文本腿**（DOM 桩不模拟布局、不做命中测试、没有 stacking context，
+ * 见 `styles-replay.css` 末尾那段）。CSS 里写着 `z-index:12500` 不等于**浏览器真的让遮罩在最上面**
+ * —— 只有 `elementFromPoint` 能回答"这一点上谁在最上面"。这一段就是那句话的落地：
+ * 既钉"遮罩的矩形覆盖棋盘矩形"，也钉"在棋盘中心/卡面上问浏览器 → 命中的是遮罩"。
+ *
+ * ⚠️ 本段**不读被测页面的 CSS 声明**（那是 T3 那条腿的事），只读几何、文本与命中结果。
+ * ======================================================================== */
+if (isReplay) {
+  const board = document.querySelector('.board');
+  const boardRect = rectOf(board);
+  const barVp = rectOf(replay.bar);
+  const vp = out.viewport;
+  // 诊断行：**固定输出**（不管判据红绿都打印），用于"这条判据为什么红"的可复查性。
+  // 尤其是板根比视口高这件事（`.board` 会随盘面内容长高）——遮罩 `inset:0` 只覆盖视口，
+  // 屏幕外那一段它**物理上盖不住**；把两个 rect 与视口并排打出来，一眼可辨是"覆盖判据写错了"
+  // 还是"页面真的有内容在视口外"。
+  if (boardRect) {
+    const offscreen = {
+      below: px(Math.max(0, boardRect.bottom - vp.h)),
+      above: px(Math.max(0, 0 - boardRect.top)),
+      right: px(Math.max(0, boardRect.right - vp.w)),
+      left: px(Math.max(0, 0 - boardRect.left)),
+    };
+    out.notes.push(`板根 vs 视口：.board 高 ${boardRect.height}px / 视口高 ${vp.h}px ⇒`
+      + ` 底部越出视口 ${offscreen.below}px、顶部 ${offscreen.above}px、右侧 ${offscreen.right}px、左侧 ${offscreen.left}px`
+      + `（遮罩是 \`position:fixed; inset:0\` ⇒ 它只覆盖**视口**；屏幕外那段任何 fixed 遮罩都盖不住）`);
+  }
+  /* ── 板根是否存在（后面所有几何判据都挂在它上面） ── */
+  if (boardRect) {
+    item('replay.board.exists', '热座板根 `.board` 存在且有尺寸（**重放页的主区选择器 = `.board`**，'
+      + '即 `render.ts:5098` 的 `el(\'div\',\'board\')`：它装着板网格与两侧手牌区；'
+      + '不含底部 `.action-bar` 与 `.replay-bar` 这两个固定层）',
+      0, boardRect.width > 0 && boardRect.height > 0 ? 0 : 1,
+      'dom:.board 的 getBoundingClientRect（选择器出处 render.ts:5098；styles.css 只给 .board-grid/.board-enter .board 写规则）', null);
+  } else {
+    out.warnings.push('I 段：重放场景里找不到 `.board`（renderApp 没有画出板根？）');
+  }
+  item('replay.bar.inViewport', '控制条**真的落在视口内**（四条边都在 [0,视口宽/高] 内，违反边数 = 0）',
+    0, barVp ? [barVp.left, barVp.top, barVp.right, barVp.bottom]
+      .filter((v, i) => (i < 2 ? v < 0 : v > (i === 2 ? vp.w : vp.h))).length : null,
+    'dom:[data-role="replay-bar"] 的 getBoundingClientRect vs window.innerWidth/Height'
+    + '（**M1 的牙**：内联 `top:-400px` 注入后这条必红）', null);
+
+  /* ── 控制条与板根的几何：**只报数**（本仓的固定底条模式必然压在棋盘上） ──
+   * ⚠️ 为什么这里不是硬判据（T6 评审的改判，理由必须写下来，免得下一个人以为在放宽判据）：
+   * 本仓**既有的做法就是"固定底部工具条压在棋盘上"** —— `styles.css:1154` 的
+   * `.action-bar { position: fixed; left: 50%; bottom: 18px; z-index: 200 }` 就是热座页的行动条；
+   * 而 `.board` 的高度由盘面内容决定（本帧实测 1484px > 视口 1305px）。棋盘占满视口时，
+   * **任何**固定底条都必然与板根 rect 相交 ⇒ "不重叠"不是这个屏能承重的不变式。
+   * 真正承重的是下面两条：`replay.bar.inViewport`（控制条本身要在视口里）与
+   * `replay.bar.aboveShield`（控制条要在**遮罩之上** —— 被自己的遮罩盖住才是真缺陷）。
+   * 这一项保留为**只报数 + 基线**：9px 是今天的实测值，将来它突然变成几百 px 时人看得出来。 */
+  if (boardRect && barVp) {
+    const ovX = +Math.max(0, Math.min(barVp.right, boardRect.right) - Math.max(barVp.left, boardRect.left)).toFixed(3);
+    const ovY = +Math.max(0, Math.min(barVp.bottom, boardRect.bottom) - Math.max(barVp.top, boardRect.top)).toFixed(3);
+    item('replay.bar.overlapBoardArea', '控制条与板根 rect 的重叠面积（纵向高度 × 横向宽度）'
+      + ' —— **只报数不判定**：固定底条模式的必然结果（`.action-bar` 同款），9px 是本帧基线',
+      0, +(ovX * ovY).toFixed(3),
+      `dom:两个 rect 求交（板根高 ${boardRect.height}px / 视口 ${vp.h}px；`
+      + '判据见 replay.bar.inViewport 与 replay.bar.aboveShield，本项只做**基线记录**）', 1);
+    out.items[out.items.length - 1].noteOnly = true;
+    out.notes.push(`控制条与板根：纵向重叠 ${ovY}px × 横向 ${ovX}px = ${+(ovX * ovY).toFixed(1)}px²`
+      + `（控制条 [${barVp.left}, ${barVp.top}, ${barVp.right}, ${barVp.bottom}]，`
+      + `板根 [${boardRect.left}, ${boardRect.top}, ${boardRect.right}, ${boardRect.bottom}]）`
+      + ' —— 只报数项，理由见该项的"期望来源"');
+  } else if (!barVp) {
+    out.warnings.push('I 段：找不到 [data-role="replay-bar"]（后面所有控制条判据都会缺项）');
+  }
+
+  /* ── 遮罩盖住**视口**（`position:fixed; inset:0` 的语义） ──
+   * ⚠️ **不是**"盖住整个棋盘 rect"：`.replay-shield` 是 `position:fixed; inset:0` ⇒ 它的 rect
+   * **恒等于视口**，而 `.board` 比视口高（本帧 1484 > 1305）⇒ "遮罩包含整个棋盘 rect"在任何
+   * 实现下都不可能成立（除非把棋盘压进视口，那是改产品）。产品本身没有洞：fixed 层随视口固定，
+   * 棋盘在视口外的那一段**本来就点不到**（看不见就点不到），玩家滚下去让它可见时它就落进被
+   * 遮罩覆盖的视口里。⇒ 这条换成"遮罩 rect == 视口" + 下面那条**可见范围内的逐点命中**。 */
+  const shieldRect = rectOf(replay.shield);
+  if (shieldRect && boardRect) {
+    const eps = 0.5;
+    const uncovered = [
+      px(0 - shieldRect.left), px(0 - shieldRect.top),
+      px(shieldRect.right - vp.w), px(shieldRect.bottom - vp.h),
+    ].filter((d) => d < -eps).length;
+    item('replay.shield.coversViewport', '遮罩 rect **等于视口**（`inset:0` 的语义：左右上边 ≤ 0、'
+      + '右/下边 ≥ 视口宽/高，越界边数 = 0）',
+      0, uncovered,
+      'dom:[data-role="replay-shield"] 的 getBoundingClientRect vs window.innerWidth/Height'
+      + '（**为什么不是"包含整个 .board rect"**：遮罩是 fixed+inset:0，其 rect 恒等于视口，'
+      + '而板根会比视口高 ⇒ 那条判据在任何实现下都不可能成立。见本段头注）', null);
+    out.notes.push(`重放页几何：视口 ${vp.w}×${vp.h}；.board = `
+      + `[${boardRect.left}, ${boardRect.top}, ${boardRect.right}, ${boardRect.bottom}]（高 ${boardRect.height}px）；`
+      + `[data-role="replay-shield"] = [${shieldRect.left}, ${shieldRect.top}, ${shieldRect.right}, ${shieldRect.bottom}]；`
+      + `[data-role="replay-bar"] = ${barVp ? `[${barVp.left}, ${barVp.top}, ${barVp.right}, ${barVp.bottom}]` : '(没有)'}`);
+  } else {
+    out.warnings.push('I 段：找不到遮罩或板根 —— 覆盖判据跳过（这本身就是失败）');
+  }
+
+  /* ── ★★ 命中测试：问浏览器"这一点上谁在最上面" ──
+   * 这是"不可操作"的**真**证据：`elementFromPoint` 返回**实际接收指针事件**的元素
+   * （hit test 走渲染树的层叠顺序），而遮罩没有 `pointer-events:none` ⇒ 它会把棋盘上的
+   * 卡牌/按钮全部截获。读 CSS 的 `z-index` 只能证明"我们写了这个数"，这条证明"浏览器照办了"。
+   *
+   * `shieldOk` 的形态照 T6 评审的要求写成 `node === shield || shield.contains(node)`
+   * （**"命中遮罩"与"命中遮罩的后代"是两回事**：今天遮罩没有子节点，但这行不许写成脆弱形态），
+   * 并额外接受"从命中点向上能找到 data-role=replay-shield 的祖先"这一形态。 */
+  const shieldOk = (hit) => !!hit && (hit === replay.shield
+    || replay.shield.contains(hit)
+    || hit.closest?.('[data-role="replay-shield"]') === replay.shield);
+  const hitAt = (x, y) => {
+    const hx = Math.round(x); const hy = Math.round(y);
+    let hit = null; let err = null;
+    try { hit = document.elementFromPoint(hx, hy); } catch (e) { err = String(e); }
+    return {
+      hx, hy, err, hit, ok: shieldOk(hit),
+      got: hit ? `${hit.tagName.toLowerCase()}${hit.dataset?.role ? `[data-role=${hit.dataset.role}]` : ''}.${String(hit.className).split(/\s+/).slice(0, 2).join('.')}` : '(null)',
+      insideBoard: !!(hit && board && (hit === board || board.contains(hit))),
+    };
+  };
+  /** 命中链是不是 `el` 或它的后代（与 `hitAt` 配套）。 */
+  const hitAtEl = (h, el) => !!(h && h.hit && el && (h.hit === el || el.contains(h.hit)));
+  const centerHit = boardRect ? hitAt(boardRect.cx, boardRect.cy) : null;
+  item('replay.shield.overCenter', '棋盘**中心**的 elementFromPoint 命中的是**遮罩**（不是卡牌/按钮）',
+    true, centerHit ? centerHit.ok : null,
+    `dom:document.elementFromPoint(${centerHit ? `${centerHit.hx}, ${centerHit.hy}` : '—'})`
+    + ` ⇒ 实测命中 ${centerHit ? centerHit.got : '—'}（**M2 的牙**：把遮罩压到棋盘之下后这条必红）`, null);
+  // 第二个点：选**一张真实的卡**（而不是"另一个碰巧也空的位置"）——
+  // 空位置命中的可能是 `.lane-row`，那证明不了"遮罩压得住卡"。
+  const cardInBoard = board ? board.querySelector('.stack .card, .hand .card') : null;
+  const cardRect = rectOf(cardInBoard);
+  const cardHit = cardRect ? hitAt(cardRect.cx, cardRect.cy) : null;
+  item('replay.shield.overCard', '**卡面中心**的 elementFromPoint 命中的是**遮罩**，且命中的不是那张卡（也不是它的任何后代）',
+    true, cardHit ? (cardHit.ok && !(cardInBoard === cardHit.hit || cardInBoard.contains(cardHit.hit))) : null,
+    `dom:板内第一张 \`.stack .card | .hand .card\`（${cardInBoard ? cardInBoard.className : '—'}）的中心点做 elementFromPoint`
+    + ` ⇒ 实测命中 ${cardHit ? cardHit.got : '—'}（第二个命中点；比"再挑一个空位置"强，因为钉的是**卡被压住**）`, null);
+
+  /* ── ★★ `replay.shield.blocksBoard`：在**可见范围内**沿棋盘点阵逐点问浏览器 ──
+   * 形态（T6 评审指定，比"包含整个 rect"更强）：
+   *   · 采样点 = 板根 rect ∩ 视口 rect 上的 **3×3 点阵**（四角 + 四边中点 + 中心，共 9 点）；
+   *   · 只统计**落在视口内**的点（遮罩是 `inset:0`，屏幕外它管不着 —— 那不是产品缺陷）；
+   *   · 每个点：命中的**必须**是遮罩/其后代，**且不能**是板内元素（卡牌/按钮/`.lane-row` 都算板内）；
+   *   · 期望是**采样总数**（恒等比较）⇒ "命中数 == 命中数"那种在采样数变小时会变绿的写法被堵掉。 */
+  const visL = Math.max(1, boardRect ? boardRect.left : 0);
+  const visT = Math.max(1, boardRect ? boardRect.top : 0);
+  const visR = Math.min(vp.w - 1, boardRect ? boardRect.right : 0);
+  const visB = Math.min(vp.h - 1, boardRect ? boardRect.bottom : 0);
+  let sampled = 0; let shieldHits = 0; let boardHits = 0; const hitsLog = [];
+  if (boardRect && visR > visL && visB > visT) {
+    for (let i = 0; i <= 2; i += 1) {
+      for (let j = 0; j <= 2; j += 1) {
+        const x = Math.round(visL + ((visR - visL) * i) / 2);
+        const y = Math.round(visT + ((visB - visT) * j) / 2);
+        const h = hitAt(x, y);
+        sampled += 1;
+        if (h.ok) shieldHits += 1;
+        if (h.insideBoard) boardHits += 1;
+        if (h.err) out.warnings.push(`elementFromPoint(${h.hx},${h.hy}) 抛错：${h.err}`);
+        hitsLog.push(`(${h.hx},${h.hy})→${h.got}`);
+        // 首个采样点：把**命中链**（命中元素 → body）的层叠事实逐层打出来。
+        // 为什么值得固定输出：`elementFromPoint` 的胜负由**层叠上下文**决定，
+        // 而"我写了 z-index:400 就应该在上面"是个常见误判（祖先可能自己开了新的层叠上下文）。
+        // 这一行让"这条判据为什么绿/红"在没有 devtools 的 headless 里也能读。
+        if (hitsLog.length === 1 && h.hit) {
+          const chain = [];
+          for (let n = h.hit; n; n = n.parentElement) {
+            const cs = getComputedStyle(n);
+            chain.push(`${n.tagName.toLowerCase()}${n.dataset?.role ? `[${n.dataset.role}]` : ''}`
+              + `.${String(n.className).split(/\s+/).slice(0, 1).join('')}`
+              + `(z=${cs.zIndex},pos=${cs.position},pe=${cs.pointerEvents},vis=${cs.visibility},op=${cs.opacity})`);
+          }
+          out.notes.push(`首个采样点 (${h.hx},${h.hy}) 的命中链（命中元素 → body）：${chain.join(' → ')}`);
+        }
+      }
+    }
+  }
+  item('replay.shield.blocksBoard', '在**板根 ∩ 视口**的 3×3 点阵（9 点）上逐点 elementFromPoint：'
+    + '命中的是**遮罩**（或其后代）的点数 == 采样点数（**没有任何一点命中板内元素**）',
+    sampled, shieldHits,
+    `dom:9 个点各自 elementFromPoint —— 实测命中 ${hitsLog.join(' / ')}`
+    + `；其中命中的是**板内元素**的有 ${boardHits} 点（**必须是 0**）。`
+    + '这条是"不可操作"的真证据（**M2 的牙**：把遮罩压到棋盘之下后必红）', null);
+  out.notes.push(`遮罩逐点命中：采样 ${sampled} 点（板根∩视口的 3×3 端点点阵），`
+    + `命中遮罩 ${shieldHits} 点、命中板内元素 ${boardHits} 点 ⇒ ${hitsLog.join(' / ')}`);
+
+  /* ── 文本形态：进度 / 只读说明 / 控制条自身可点（否则"遮罩之上"没有意义） ── */
+  const progEl = replay.bar.querySelector('[data-role="replay-progress"]');
+  const progText = progEl ? progEl.textContent : null;
+  const total = replay.archive.actions;
+  item('replay.progress', `data-role="replay-progress" 的文本**形态** == \`N / M\`（N = 已重放步数、M = 档案总步数）`,
+    `${REPLAY_AT} / ${total}`, progText,
+    'dom:[data-role="replay-progress"].textContent vs 探针自己的 position/total（两者都由生产函数给出）', null);
+  const noteEl = replay.bar.querySelector('[data-role="replay-readonly-note"]');
+  const noteText = noteEl ? String(noteEl.textContent).trim() : null;
+  item('replay.readonlyNote', 'data-role="replay-readonly-note" **存在且非空**（D3：不可操作必须看得见）',
+    true, noteEl ? noteText.length > 0 : null,
+    'dom:该节点的存在性 + textContent 非空（T3 的 `READONLY_NOTE` 是唯一出处；这里不重复那句话的字面量）', null);
+  /* ── 控制条**自己**在遮罩之上：这才是"玩家点得到退出/单步"的真证据 ──
+   * 在控制条中心**以及每个控件中心**逐点问浏览器：命中的必须是控制条或其后代。 */
+  const barPoints = [];
+  if (barVp) {
+    barPoints.push({ what: '控制条中心', x: Math.round(barVp.cx), y: Math.round(barVp.cy) });
+    for (const b of Array.from(replay.bar.querySelectorAll('button'))) {
+      if (b.offsetWidth === 0 && b.offsetHeight === 0) continue;
+      const r = rectOf(b);
+      barPoints.push({ what: `按钮「${String(b.textContent).slice(0, 8)}」中心`, x: Math.round(r.cx), y: Math.round(r.cy) });
+    }
+  }
+  let barHitOk = 0;
+  const barLog = [];
+  for (const p of barPoints) {
+    const h = hitAt(p.x, p.y);
+    const ok = hitAtEl(h, replay.bar);
+    if (ok) barHitOk += 1;
+    barLog.push(`${p.what}(${h.hx},${h.hy})→${h.got}${ok ? '' : ' ✗'}`);
+  }
+  item('replay.bar.aboveShield', '控制条中心**与每一个控件中心**的 elementFromPoint 命中的都是'
+    + '**控制条或其后代**（不是遮罩）—— 命中点数 == 探测点数',
+    barPoints.length, barPoints.length === 0 ? null : barHitOk,
+    'dom:控制条中心 + 全部可见 `<button>` 中心逐点 elementFromPoint（控制条必须在自己的遮罩**之上**，'
+    + '否则玩家连"退出重放/单步"都点不动）⇒ ' + barLog.join(' / '), null);
+  // 反空转：遮罩必须**真的**有尺寸，否则"覆盖/命中"两条都是在比两个空盒子
+  item('replay.shield.hasSize', '遮罩有真实尺寸（宽高都 > 0）—— 反空转：0×0 的遮罩会让上面几条假绿',
+    0, rectOf(replay.shield) && rectOf(replay.shield).width > 0 && rectOf(replay.shield).height > 0 ? 0 : 1,
+    'dom:遮罩的 getBoundingClientRect 宽高（`position:fixed; inset:0` 在视口里的真解算值）', null);
+}
 
 /* ── 多宽度矩阵（人看的表）：每档一行，给报告直接引用 ── */
 if (!isNet) {
