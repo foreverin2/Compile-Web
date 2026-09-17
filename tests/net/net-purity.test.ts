@@ -45,8 +45,20 @@ const NET_DIR = fileURLToPath(new URL('../../src/net/', import.meta.url));
  *  ⚠️ 这个数**不许**为了"让测试变绿"往下调 —— 它只在"目录写错/被清空"时变红。 */
 const MIN_FILES = 1;
 
-/** 单文件最少字符数：读成空串会让所有"零命中"断言在空串上恒真（`app-purity` 的同款下界） */
+/**
+ * 单文件最少字符数：读成空串会让所有"零命中"断言在空串上恒真（`app-purity` 的同款下界）
+ */
 const MIN_CHARS = 50;
+
+/**
+ * 临时根：守卫需要的探针件与空目录都建在这下面（已 gitignore），**一个常量、一处**。
+ *
+ * ⚠️ **为什么不能是 `.superpowers/T1/`**（阶段一评审 N-7）：那是**实现者自己的证据目录**。
+ * 本守卫将来会被 T2-T10 复用，写在别人的任务目录里会让"谁的残留"分不清。这里用中立的
+ * `.superpowers/tmp/`，且目录名一律 `mkdtempSync` 唯一化 + `try/finally` 清理（评审人实测零残留）。
+ * 也**绝不能**写进 `tests/`、`src/` 或仓库根（本仓为"污染共享树"出过两次事故）。
+ */
+const TMP_ROOT = fileURLToPath(new URL('../../.superpowers/tmp/', import.meta.url));
 
 /** 生成式遍历（`readdirSync` 的声明不递归，`statSync(...).isDirectory()` 才递归） */
 function walk(dir: string, out: string[] = []): string[] {
@@ -86,6 +98,17 @@ function scan(dir: string): Scanned[] {
     abs: p,
     code: stripComments(readFileSync(p).subarray(0, 4 * 1024 * 1024).toString('utf8')),
   }));
+}
+
+/**
+ * 被守的那批源码（**唯一取值路径**）。
+ *
+ * 存在理由（评审 N-2）：下界自证那条腿要与上界那条腿**共用同一个函数**，
+ * 否则它只是把上层的条件重抄一遍 —— 把扫描目录换掉时它会假绿。
+ * `dir` 有默认值是为了让自证能把它指向一个空目录。
+ */
+function netSources(dir: string = NET_DIR): Scanned[] {
+  return scan(dir);
 }
 
 /** 模块说明符（`from '…'` 与动态 `import('…')`；都已剥注释） */
@@ -189,8 +212,7 @@ const POSITIVE_SAMPLES: ReadonlyArray<readonly [string, string]> = [
   ['window 成员访问', 'const a = window.innerWidth;'],
   ['navigator 成员访问', 'const a = navigator.userAgent;'],
   ['fetch 调用', 'const r = await fetch("/x");'],
-  ['serviceWorker', 'const a = navigator.serviceWorker;'],
-  ['XMLHttpRequest', 'const x = new XMLHttpRequest();'],
+  ['serviceWorker', 'const a = navigator.serviceWorker;'],  ['XMLHttpRequest', 'const x = new XMLHttpRequest();'],
   ['WebSocket', 'const w = new WebSocket("wss://x");'],
   ['RTCPeerConnection', 'const pc = new RTCPeerConnection(cfg);'],
   ['showOpenFilePicker / showSaveFilePicker', 'const f = await showOpenFilePicker(opts);'],
@@ -210,8 +232,28 @@ const POSITIVE_SAMPLES: ReadonlyArray<readonly [string, string]> = [
 
 const ALL_TABLES = [...BANNED_BROWSER, ...BANNED_CLOCK, ...BANNED_TIMER];
 
+/**
+ * **豁免清单**：允许"只在合成样本上钉过、没有真文件样本"的标签，逐条写理由。
+ *
+ * ⚠️ 为什么必须有这张表、且为什么它必须**与判据表逐条对齐**（阶段一评审 N-1 的修法）：
+ * 判据 4 的强度取决于"真文件样本覆盖了哪些禁项"。原先那张 `REAL_FILE_REQUIRED` 是手写的
+ * 5 个名字 ⇒ 与判据表**结构上脱钩**：评审人做 M5（往表里加一条新禁项 + 给合成样本，
+ * 但不给真文件样本）⇒ 判据面 37 条 + 探针面全绿。也就是说"忘了同步"是**必然漏**，不是概率漏。
+ *
+ * 现在改成**双向闭合**：
+ *  ① 真文件样本（由 `POSITIVE_SAMPLES` 逐条生成）打到的标签集合，加上本豁免清单，
+ *     必须**恰好等于**判据表的标签集合；
+ *  ② 于是"删标签"（如 M4 删 `WebSocket`）与"加标签"（如 M5 加 `fakeNewApi`）**都会红** ——
+ *     前者的标签没人覆盖、后者的标签既没样本也没登记豁免。
+ *
+ * 口径说明：合成样本的标签集合本来就**等于**判据表的标签集合（另一条腿钉着），
+ * 所以真文件样本必须覆盖**全部**而不是"点名的几个"。这不是重复劳动 ——
+ * 它让"这套禁项在真文件上真的会响"从抽样变成全量。
+ */
+const REAL_FILE_EXEMPT: readonly string[] = [];
+
 describe('src/net 的纯层契约（ui → net → app → core；net 不碰浏览器/时钟/UI/Node）', () => {
-  const sources = scan(NET_DIR);
+  const sources = netSources();
 
   it('至少扫到了本阶段的 net 模块（生成式：文件数必须 >= 1、且读到的内容非空）', () => {
     // 现状：`protocol.ts` 一个（T2-T7 会加）。这里**不写文件名清单** —— 写死清单会在
@@ -293,11 +335,14 @@ describe('src/net 的纯层契约（ui → net → app → core；net 不碰浏�
     expect(hitsOf(pure, ALL_TABLES), '纯逻辑被判成违规（判据恒假）').toEqual([]);
   });
 
-  it('写入 src/net 的被禁形态真的会被扫出来（判据 4：真文件，不是合成样本）', () => {
-    // ★ 这条是判据 4 的机械证明：把计划 §5 T1 判据 4 点名的形态**真的写进文件**并**真的扫**。
-    //   它与"合成样本"那条是两层：合成样本证明正则本身有效，这条证明 scan()/walk() 这条路有效
-    //   （路径写错、后缀过滤写错、stripComments 用错，都会在这里暴露）。
-    //   写入位置是 `.superpowers/T1/probe-scan-<随机>/`（已 gitignore），**不碰共享工作树**。
+  it('每个禁项在**真文件**上都会被扫出来（判据 4：真文件，不是合成样本）', () => {
+    // ★ 这条是判据 4 的机械证明：把**每一个**禁项的合成样本当成真文件写进临时目录、
+    //   再走一遍 `walk` + `stripComments` + 正则这条路。
+    //   它与上面"合成样本"那条是两层：那条证明正则本身有效，这条证明 `scan()`/`walk()`
+    //   这条路有效（路径写错、后缀过滤写错、stripComments 用错都会在这里暴露），
+    //   并且把覆盖面从"点名的几个名字"扩到**全部标签**（见下面"双向闭合"）。
+    //
+    //   写入位置是 `<中性临时根>/probe-scan-<随机>/`（已 gitignore），**不碰共享工作树**。
     //   ⚠️ 目录名必须**每次运行都唯一**（实测踩过）：同一台机器上两个 vitest 进程同时跑
     //   这棵树时（变异批的"判据一轮"与"探针一轮"挨着跑就会这样），固定目录名会让
     //   A 的 `rmSync` 删掉 B 正在写的文件 —— 实测症状是 `ENOENT ... clock.ts`，
@@ -305,85 +350,107 @@ describe('src/net 的纯层契约（ui → net → app → core；net 不碰浏�
     //   （不用 `process.pid`：本仓 `tsconfig.json` 的 `types` 里没有 `@types/node`，
     //    `process` 在测试文件里不可见，加它得改 tsconfig —— 那是越界。）
     //
-    // ⚠️ **为什么关键的名字必须在真文件样本里出现**（变异 M4 实测出来的洞）：
-    //   本用例原先只有 rtc / timer / random / clock 四个样本，于是变异 M4（把 `WebSocket`
-    //   从禁项表里删掉）在**这条用例**下变红的是"标签唯一性 / 正控覆盖完整性"，而不是
-    //   `浏览器 API 零命中` 那条腿 —— 因为四个样本里**没有**一个含 `WebSocket`，
-    //   `rtc.ts` 抓的是 `RTCPeerConnection`。也就是说那条腿当时对 WebSocket **没有牙**。
-    //   ⇒ 补上 `ws.ts`，并把"哪些名字必须有真文件样本"钉成下面的 `REAL_FILE_REQUIRED`。
-    //
-    //   口径（为什么不要求**全部**标签都有真文件样本）：那些标签已经由上面的
-    //   `POSITIVE_SAMPLES` **逐条**在合成样本上钉过一轮，再给每条都写一个真文件是重复；
-    //   而"整张表扫过真文件"这件事由 `rtc.ts` / `ws.ts` / `timer.ts` / `random.ts` / `clock.ts`
-    //   这五个**代表性**样本 + `scan()`/`walk()` 路径本身证明。这里只额外钉住"计划 §5 T1
-    //   判据 4 点名的名字"与"每条变异要用的名字"，多一个都不加。
-    const root = fileURLToPath(new URL('../../.superpowers/T1/', import.meta.url));
-    mkdirSync(root, { recursive: true });
-    const probeDir = mkdtempSync(join(root, 'probe-scan-'));
-    const cases: ReadonlyArray<readonly [string, string, ReadonlyArray<readonly [string, RegExp]>]> = [
-      ['rtc.ts', 'export const pc = new RTCPeerConnection({});\n', BANNED_BROWSER],
-      ['ws.ts', 'export const sock = new WebSocket("wss://example.invalid");\n', BANNED_BROWSER],
-      ['timer.ts', 'export function later(cb: () => void) { setTimeout(cb, 0); }\n', BANNED_TIMER],
-      ['random.ts', 'export function roll() { return Math.random(); }\n', BANNED_CLOCK],
-      ['clock.ts', 'export function stamp() { return Date.now(); }\n', BANNED_CLOCK],
-    ];
-    /** 必须**在真文件里**被扫出来的名字（判据 4 的原文 + 每条变异要用的靶子） */
-    const REAL_FILE_REQUIRED: readonly string[] = [
-      'RTCPeerConnection',
-      'WebSocket',
-      'setTimeout',
-      'Math.random',
-      'Date.now',
-    ];
+    // ⚠️ **为什么每条禁项都要有真文件样本**（阶段一评审 N-1 / M5 实测）：
+    //   本用例原先是手写的 `rtc.ts` / `ws.ts` / `timer.ts` / `random.ts` / `clock.ts` 五个样本
+    //   + 手写的 `REAL_FILE_REQUIRED` 五个名字。那份清单与判据表**结构上脱钩**：
+    //   评审人往 `BANNED_BROWSER` 加一条 `fakeNewApi`、同时给 `POSITIVE_SAMPLES` 加样本、
+    //   但不给真文件样本 ⇒ **判据面 37 条 + 探针面全绿**。也就是说"忘了同步"是**必然漏**。
+    //   ⇒ 现在样本**由 `POSITIVE_SAMPLES` 逐条生成**（不再手写），覆盖面判据改成双向闭合：
+    //     真文件样本打到的标签 ∪ 豁免清单 == 判据表的标签集合。
+    //     于是"删标签"（M4）与"加标签"（M5）都会红，且没有第二份清单需要人同步。
+    mkdirSync(TMP_ROOT, { recursive: true });
+    const probeDir = mkdtempSync(join(TMP_ROOT, 'probe-scan-'));
+    /** 真文件样本：**由合成样本生成**（`case-<序号>-<标签>.ts` ← `POSITIVE_SAMPLES`），不再手写清单。
+     *  ⚠️ 文件名**必须带序号**：标签按 `\W` slug 之后会撞名（`document 成员访问` 与 `crypto 成员访问`
+     *  都会变成 `__成员访问`），撞名会把两个样本合并成一个文件 —— 那样"每个禁项都有真文件样本"
+     *  这条覆盖面判据就会**数少几个文件**却照样通过（实测：24 个样本只落了 23 个文件）。 */
+    const cases: ReadonlyArray<readonly [string, string, ReadonlyArray<readonly [string, RegExp]>]> =
+      POSITIVE_SAMPLES.map(([label, sample], i) => [
+        `case-${String(i).padStart(2, '0')}-${label.replace(/[^\w]+/g, '_')}.ts`,
+        `${sample}\n`,
+        ALL_TABLES,
+      ]);
 
     try {
       for (const [name, text] of cases) writeFileSync(join(probeDir, name), text, 'utf8');
       const found = scan(probeDir);
-      expect(found.length, `临时目录里的 ${cases.length} 个文件没被扫到（walk/后缀过滤坏了？）`).toBe(cases.length);
+      // 每个样本一个文件 ⇒ 文件数必须**恰好**等于样本数（撞名会被这一条抓住）
+      expect(found.length, `临时目录里的文件数与样本数不符（撞名 / walk 坏了？）`).toBe(cases.length);
+      expect(new Set(cases.map(([n]) => n)).size, '生成的样本文件名有重复').toBe(cases.length);
+
+      /** 每个标签各自的命中（从样本反推，不手写清单） */
+      const grouped = new Map<string, string[]>();
       for (const [name, , table] of cases) {
         const one = found.filter((s) => s.path === name);
         expect(one.length, `${name} 不在扫描结果里`).toBe(1);
-        expect(
-          hitsOf(one[0].code, table),
-          `${name} 的被禁形态没被抓到（这条判据在真文件上失效）`,
-        ).not.toEqual([]);
+        const hit = hitsOf(one[0].code, table);
+        expect(hit, `${name} 的被禁形态没被抓到（这条判据在真文件上失效）`).not.toEqual([]);
+        // 该样本声明的标签必须都在它的命中里 —— 顺序与 `POSITIVE_SAMPLES` 一一对应
+        for (const label of hit) {
+          const prev = grouped.get(label) ?? [];
+          grouped.set(label, [...prev, name]);
+        }
       }
-      // ★ 覆盖面自证：`REAL_FILE_REQUIRED` 里的每个名字都必须被某个真文件样本打中。
-      //   否则那条禁项可以悄悄失效，而"零命中"那条腿照样全绿（样本里根本没有它）。
-      const sampled = new Set(
-        cases.flatMap(([name]) => hitsOf(found.filter((s) => s.path === name)[0].code, ALL_TABLES)),
-      );
-      const unsampled = REAL_FILE_REQUIRED.filter((l) => !sampled.has(l));
+
+      // ★★ 双向闭合（修 N-1/M5）：判据表的标签集合必须**恰好**等于"真文件样本覆盖 ∪ 豁免"。
+      //   - 加标签而没样本（M5）⇒ 左边多一个 ⇒ 红；
+      //   - 删标签（M4）⇒ 该标签在 `grouped` 里彻底消失（或它的样本文件开始报别的标签）⇒ 红；
+      //   - 改正则让它抓不到样本 ⇒ 同样是集合不等 ⇒ 红。
+      const coveredByCases = new Set(grouped.keys());
+      const all = [...new Set(ALL_TABLES.map(([l]) => l))].sort();
+      const covered = [...new Set([...coveredByCases, ...REAL_FILE_EXEMPT])].sort();
       expect(
-        unsampled,
-        `这些名字在真文件样本里一个命中都没有（那条判据对它们没有牙）：${unsampled.join(' / ')}`,
-      ).toEqual([]);
-      // 反向：没有 WebSocket 的文件**不许**被报成浏览器 API 违规
-      //   （否则上面那条可能是"报了一堆"式假绿）
-      expect(collect(found, BANNED_BROWSER).filter((h) => h.includes('timer.ts'))).toEqual([]);
+        covered,
+        '真文件样本覆盖的标签集合与判据表不一致（加/删标签后忘了同步真文件样本或豁免清单？）',
+      ).toEqual(all);
+
+      // 每个样本的命中都必须**是某条已登记标签**（防止正则宽到命中表外的东西）。
+      // 注意方向：**不**断言"每个标签只被一个样本命中" —— 那是错的：
+      // `navigator.serviceWorker` 的样本同时命中「navigator 成员访问」与「serviceWorker」，
+      // 这是语义正确的（它真的两样都犯了）。要防的是"命中表外的垃圾"。
+      const declared = new Set(ALL_TABLES.map(([l]) => l));
+      for (const [label, files] of grouped) {
+        expect(declared.has(label), `样本命中了判据表里没有的标签「${label}」（表与正则脱钩？）`).toBe(true);
+        expect(files.length, `标签「${label}」没有任何样本命中（覆盖判据会红，这里再报一次）`).toBeGreaterThan(0);
+      }
+
+      // 反向：**没有**违规形态的文件不许被报出来。这条要能红，所以先给一个正控：
+      //   把某个真文件样本的命中清掉（换成一个干净文件）后，`collect` 对它的命中必须消失。
+      const cleanName = 'zz-clean.ts';
+      writeFileSync(join(probeDir, cleanName), 'export const ok = 1;\n', 'utf8');
+      const withClean = scan(probeDir);
+      expect(collect(withClean, ALL_TABLES).filter((h) => h.startsWith(cleanName)), '干净文件被报成违规').toEqual([]);
+      // 正控（证明上面那条不是恒真）：同一个 `collect` 对一份真违规文件必须报出来
+      const dirtyName = 'zz-dirty.ts';
+      writeFileSync(join(probeDir, dirtyName), 'export const s = new WebSocket("wss://x.invalid");\n', 'utf8');
+      const withDirty = scan(probeDir);
+      expect(
+        collect(withDirty, ALL_TABLES).filter((h) => h.startsWith(dirtyName)),
+        'collect() 对一份真违规文件零命中（那条"干净文件不许被报"是恒真的）',
+      ).not.toEqual([]);
     } finally {
       rmSync(probeDir, { recursive: true, force: true });
     }
   });
 
   it('下界自证：把扫描目录指向空目录 ⇒ 报错（防"路径写错导致空扫为绿"）', () => {
-    // 计划 §5 T1 判据 5 的机械证明：真建一个**空目录**、真扫它，然后断言"下界会红"。
-    // 这里断言的是**判据本身**（`sources.length >= MIN_FILES`），不是调一次被测函数 ——
-    // 因为下界就写在上面那条 `it` 里，把它的条件在这里复现一遍才能证明"空扫会红"。
-    const parent = fileURLToPath(new URL('../../.superpowers/T1/', import.meta.url));
-    mkdirSync(parent, { recursive: true });
-    const empty = mkdtempSync(join(parent, 'empty-'));
+    // 计划 §5 T1 判据 5 的机械证明：真建一个**空目录**、真扫它。
+    // ⚠️ 走的是与上面那条 `it` **同一个**取值路径（`netSources()` → `scan()`），
+    // 不是把上层条件重抄一遍 —— 重抄形态在"把扫描目录换掉"时会假绿（评审 N-2 的原话）。
+    mkdirSync(TMP_ROOT, { recursive: true });
+    const empty = mkdtempSync(join(TMP_ROOT, 'empty-'));
     try {
-      const found = scan(empty);
-      expect(found.length, '空目录居然扫到了文件（下界自证的前提不成立）').toBe(0);
-      // 这就是上面那条 `it` 的判据本身：空扫 ⇒ 必须断言失败
+      expect(netSources(empty).length, '空目录居然扫到了文件（下界自证的前提不成立）').toBe(0);
+      // 上层那条腿的判据本身：`netSources()` 的返回值必须满足下界。空目录下它必须不满足。
       let red = false;
       try {
-        expect(found.length).toBeGreaterThanOrEqual(MIN_FILES);
+        expect(netSources(empty).length).toBeGreaterThanOrEqual(MIN_FILES);
       } catch {
         red = true;
       }
       expect(red, `空目录下界没有报错（阈值 ${MIN_FILES}），"零命中"全是假的`).toBe(true);
+      // 正控：同一个取值路径在真目录上**必须**满足下界（否则"空目录会红"可能与下界无关）
+      expect(netSources().length).toBeGreaterThanOrEqual(MIN_FILES);
     } finally {
       rmSync(empty, { recursive: true, force: true });
     }
@@ -394,6 +461,6 @@ describe('src/net 的纯层契约（ui → net → app → core；net 不碰浏�
     // 时，`walk` 会在 `readdirSync` 上抛 ENOENT —— 这条腿让报错信息直接指向路径，而不是
     // 让上一条下界断言报"只扫到 0 个文件"（后者会被读成"目录被清空了"）。
     expect(NET_DIR.split('\\').join('/'), `NET_DIR 不在 src 下：${NET_DIR}`).toMatch(/\/src\/net\/$/);
-    expect(scan(NET_DIR).some((s) => s.path === 'protocol.ts'), 'src/net/protocol.ts 没被扫到').toBe(true);
+    expect(netSources().some((s) => s.path === 'protocol.ts'), 'src/net/protocol.ts 没被扫到').toBe(true);
   });
 });

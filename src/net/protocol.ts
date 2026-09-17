@@ -582,7 +582,13 @@ export interface HelloContext {
   localCardDataHash: string;
   /** 主机此刻据有的**座位占用**（`seat` 的取值就是 `PlayerId`） */
   occupied: { players: readonly PlayerId[]; spectators: readonly PlayerId[] };
-  /** 这条 `hello` 想坐哪个位；缺省 `0`。让"位满"在玩家位与观战位上都能被独立测到 */
+  /**
+   * **主机替加入方分配座位时必填**；缺省时退回对端自报的 `hello.seat`
+   * （那只该用于"只测形状"的调用 —— 生产里座位是主机的决定，见 `HelloAckMsg.seat` 与裁决 D7）。
+   *
+   * 优先级（`ctx.seat` 赢过 `msg.seat`）由 `tests/net/protocol.test.ts` 的一对负向腿钉住：
+   * 两者的值在夹具里必须**不同**，否则优先级不可观测（写成 `msg.seat ?? ctx.seat` 也全绿）。
+   */
   seat?: PlayerId;
 }
 
@@ -611,14 +617,14 @@ export type HelloValidationReason = HelloRejectReason | 'bad-shape';
  * （例如"版本既不对、玩家位又满了"）必须回**靠前**那条 —— 否则玩家会去"换个房间"，
  * 而换了房间版本还是不对。判据 1 专门有一条腿构造这种输入。
  *
- * `ctx` 给了默认值，**只**为了让"只想测形状拒绝"的那种调用不必拼一个完整上下文；
- * 默认值里的 `localCardDataHash: ''` 与"空房间"都不是生产可用的组合，生产调用方必须传全
- * （`localCardDataHash` 取 `CARD_DATA_HASH`，见 `HelloContext` 该字段的注释）。
+ * ⚠️ **`ctx` 是必填的，这里刻意不给默认值**（阶段一评审 N-3 实测的"静默全拒"暗道）：
+ * 第一版给了 `{ localProtoVersion: PROTO_VERSION, localCardDataHash: '' }` 这样的默认值，
+ * 于是"忘了传 ctx"不会报错，而是**永远**回 `'card-data-hash'`（对端指纹永远不等于空串），
+ * 而默认的版本号恰好等于 `PROTO_VERSION` ⇒ 第 1 步拦不住它。症状是"怎么都连不上却看不出原因"。
+ * 删掉默认值之后，"必须传全本机事实"从一条口头约定变成**类型事实** —— 调用方漏传就编译不过。
+ * （本函数今天没有生产调用方，T3 的会话层才是第一个；测试侧全部走显式夹具，成本为零。）
  */
-export function validateHello(
-  input: unknown,
-  ctx: HelloContext = { localProtoVersion: PROTO_VERSION, localCardDataHash: '', occupied: { players: [], spectators: [] } },
-): HelloValidation {
+export function validateHello(input: unknown, ctx: HelloContext): HelloValidation {
   // ---- 第 0 步：形状。它必须排在四条之前 ----
   // 理由：四条判定都要读 `input` 的字段；形状不对时读到的全是 undefined，
   // 回"版本不一致"就是一句假话（本机并不是因为版本才拒的），玩家会照着假话去更新版本。

@@ -175,6 +175,23 @@ describe('判据 1：validateHello 的校验顺序照设计稿 1→4，且顺序
     expect(validateHello(hello({ resuming: false }), ctx()).ok).toBe(true);
     expect(validateHello(hello({ resuming: true }), ctx()).ok).toBe(true);
   });
+
+  it('★ 座位优先级：`ctx.seat` 赢过 `msg.seat`（两个值必须不同，否则优先级不可观测）', () => {
+    // 阶段一评审 N-4：原先唯一同时出现两者的用例里 `ctx.seat === msg.seat === 1`，
+    // 于是写成 `msg.seat ?? ctx.seat` 也全绿。⇒ 一对负向腿，两个值**不同**。
+    const hostAssigns = validateHello(hello({ seat: 0 }), ctx({ seat: 1, occupied: { players: [0], spectators: [] } }));
+    expect(hostAssigns.ok, '主机分配座位时应当通过').toBe(true);
+    expect(hostAssigns.ok === true && hostAssigns.seat, 'ctx.seat 没有赢过 msg.seat（优先级写反了？）').toBe(1);
+
+    // 反向 1：主机没有分配（缺省）时退回对端自报的值 —— 这条同时证明上一条不是"恒回 1"
+    const selfReported = validateHello(hello({ seat: 0 }), ctx({ occupied: { players: [1], spectators: [] } }));
+    expect(selfReported.ok).toBe(true);
+    expect(selfReported.ok === true && selfReported.seat, 'ctx.seat 缺省时没有退回 msg.seat').toBe(0);
+
+    // 反向 2：对端自报 1、主机不分配 ⇒ 回 1（排除"恒回 0"）
+    const selfOne = validateHello(hello({ seat: 1 }), ctx({ occupied: { players: [0], spectators: [] } }));
+    expect(selfOne.ok === true && selfOne.seat).toBe(1);
+  });
 });
 
 /* ------------------------------------------------------------------ *
@@ -216,6 +233,9 @@ describe('判据 2：房间码 = 6 位 Crockford Base32 剔除 I/L/O/U', () => {
     for (const v of [-0.001, 1, 1.5, NaN]) {
       expect(() => roomCodeFromRandom(() => v), `越界值 ${v} 被静默接受了`).toThrow(/越界/);
     }
+    // 阶段一评审 N-6：不传随机源时 `randomness()` 抛的是 TypeError，不是那条例外的 Error。
+    // 这里只断言"会抛"（形态），不钉具体文案 —— 未定义行为的具体错误类型不是契约。
+    expect(() => roomCodeFromRandom(undefined as never), '不传随机源时居然没抛').toThrow();
   });
 
   it('roomCodeFromBytes：字节不足给失败结果（不抛），足够时也是 6 位且无取模偏斜', () => {
@@ -271,6 +291,43 @@ describe('判据 2：房间码 = 6 位 Crockford Base32 剔除 I/L/O/U', () => {
     const bad = roomChannel('K7M2QI');
     expect(bad.ok).toBe(false);
     expect(bad.channel, '非法码居然拼出了频道名').toBeUndefined();
+  });
+
+  it('★ 频道不碰撞：不同输入不许落进同一个频道（判据 2 的**最终**事实，不只是"拒绝"）', () => {
+    // 阶段一评审 N-5：上面那条钉的是"拒绝"这个**中间**事实。真正要防的是
+    // "两个不同的码指向同一个频道，而玩家以为在另一局"。这里把最终事实写成断言：
+    // 把归一化结果（或频道名）当"落点"，任何两个**不同的输入**都不许有同一个落点。
+    const landing = (input: string): string | null => {
+      const n = normalizeRoomCode(input);
+      return n.ok ? n.code : null;
+    };
+    // 每一对都是"人眼看不清、但确实不同"的输入：易混字符 vs 数字、大小写变体、表外字符
+    const pairs: ReadonlyArray<readonly [string, string]> = [
+      ['K7M2QI', 'K7M2Q1'],
+      ['K7M2Q1', 'K7M2QI'],
+      ['K7M2QL', 'K7M2Q1'],
+      ['K7M2QO', 'K7M2Q0'],
+      ['K7M2QU', 'K7M2QV'],
+      ['K7M2Q1', 'K7M2Q1 '],
+      ['K7M2Q1', 'K7M2Q1-'],
+      ['k7m2q1', 'K7M2QN'],
+    ];
+    for (const [a, b] of pairs) {
+      const la = landing(a);
+      const lb = landing(b);
+      // 合法的那一侧必须真的能落到某个频道（否则"不碰撞"可能是"两个都非法"落空）
+      if (la !== null) expect(la, `合法输入 ${a} 没有落点`).toMatch(/^[0-9A-HJKMNP-TV-Z]{6}$/);
+      // 核心断言：不同输入 ⇒ 不许同落点。**两个都合法**时才算碰撞；有一个非法则本就不该落。
+      if (la !== null && lb !== null) {
+        expect(la, `${JSON.stringify(a)} 与 ${JSON.stringify(b)} 落进了同一个频道（静默映射）`).not.toBe(lb);
+      }
+    }
+    // 每个易混字符的输入都必须**没有落点**（这正是"不碰撞"的实现方式：拒绝而不是映射）
+    for (const ch of 'ILOUilou') {
+      expect(landing(`K7M2Q${ch}`), `含 ${ch} 的输入居然有了落点`).toBeNull();
+    }
+    // 正控：这条判据不是恒真 —— 把两个**真的相同**的输入放进同一个落点，落点必须相等
+    expect(landing('K7M2Q1')).toBe(landing('k7m2q1'));
   });
 });
 
