@@ -5,7 +5,11 @@
  *  ① **授权状态**：当前是"允许"还是"游客" + 「改变选择」+ 「清除本机数据」；
  *  ② **昵称 / 设置 / 卡组**：昵称可编辑（写失败如实提示，不假装成功）；
  *  ③ **隐私说明全文**（唯一出处 = `src/app/privacy.ts` 的 `privacyLines()`，**生成式**渲染，
- *     本文件不写第二份措辞）+ 档案「导出 / 导入」两个按钮。
+ *     本文件不写第二份措辞）+ 档案「导出 / 导入」两个按钮；
+ *  ④ **「重放这一局」**（G4 Task 5）：**导入成功之前不可见、也不可点**（本屏只渲染一次，
+ *     见 `doImport` 附近的注释），点击后把**刚导入的那一份** `MatchFile` 交给宿主
+ *     （`nav.startReplay` ⇒ `src/main.ts` 的 `startReplayFile`）。**本屏不自动进入重放** ——
+ *     用户要留在本屏看完校验报告（含逐条警告）再自己决定。
  *
  * ## 四条纪律（都是跨任务转达的实测结论，不是风格偏好）
  *
@@ -24,6 +28,11 @@
  *    "用户慢慢挑文件"误判成 `cancelled`（假取消比等待更糟）。代价（点导入后可能一直等）
  *    由本屏的**可见且不阻塞**的等待态兜住：不禁用任何按钮、不挂永不消失的 spinner，
  *    别处的任何操作都会把等待提示替换掉。见 `doImport` 的注释与测试的"永不 settle"腿。
+ * 5. **档案不经过本屏，也不落盘（G4 D13）**：导出用的档案由**宿主**给（`nav.buildArchive()` ——
+ *    记录器只住在 `src/main.ts`），导入的档案也只在本屏**过一手**（`nav.startReplay(file)`）。
+ *    本文件**不写任何浏览器存储**、也不缓存档案；档案只在内存与用户自己选的文件里。
+ *    ⇒ 这与 `src/app/privacy.ts` 里那几句被整句哈希钉死的存储类承诺句一致：它们**一句都不用改**
+ *      （G4 不新增任何存储写入点）。
  *
  * ## 本文件刻意**不**做的事
  *  - 不 import `home.ts` 的私有 `el`/`button`/`showToast`（它们未导出；改可见性会与 Task 4
@@ -51,8 +60,18 @@ import {
   type ConsentState,
   type LocalStore,
 } from '../app/local-store';
-import { MATCH_FILE_FORMAT, MATCH_FILE_VERSION, type MatchFile } from '../app/match-file';
+import type { MatchFile } from '../app/match-file';
 import { privacyLines } from '../app/privacy';
+
+/**
+ * 宿主交给本屏的"本次会话的档案"（G4 D9）。
+ *
+ * 与 `src/main.ts` 的 `SessionArchive` **同形**：有记录 ⇒ 给档案；没有 ⇒ 给**理由**，屏上如实
+ * 显示。刻意写成命名类型而不是就地写 `{ file: … } | { reason: … }`：后者会让
+ * `tests/ui/source-text.ts` 的 `functionBody` 把**返回类型标注里的 `{`** 当成函数体起点
+ * （那是它写明的已知局限）⇒ 抽出来的"函数体"只有一行，针对它的判据会变成**假绿**。
+ */
+export type ArchiveBuild = { file: MatchFile } | { reason: string };
 
 export interface LocalDataNav {
   /** 回主界面（授权若被重置，会重新问） */
@@ -61,10 +80,31 @@ export interface LocalDataNav {
   pickFile: FilePicker;
   saveFile: FileSink;
   /**
-   * 档案导入成功后的接缝（**只报告，不重放** —— `ReplayDriver` 属 G4）。
-   * 用户可见的报告落在本屏的状态区；宿主拿到 `file` / `warnings` 去做 G4 的事。
+   * 档案导入成功后的**通知**接缝 —— 报告已经由本屏写进状态区，宿主拿到 `file` / `warnings`
+   * 做自己的事（留一份、统计…）。
+   *
+   * ⚠️ G4 Task 5 前这里写着"只报告，**不重放**（`ReplayDriver` 属 G4）" —— 那句前提已被
+   * G4 消掉：重放的落点是下面那个**独立的** `startReplay`（用户点「重放这一局」才触发，
+   * 不是导入即重放）。
    */
   onImported(file: MatchFile, warnings: string[]): void;
+  /**
+   * 用户点「重放这一局」⇒ 把**刚导入的那一份**档案原样交给宿主去重放。
+   *
+   * `file` 就是 `onImported` 收到的那一份（同一个对象、同一个内容），本屏不重新拼档案。
+   */
+  startReplay(file: MatchFile): void;
+  /**
+   * 宿主交出"本次会话的档案"（G4 D9）：有记录 ⇒ `{ file }`；没有 ⇒ `{ reason }`，
+   * 本屏**拒绝导出并把理由显示出来**（绝不退化成导一份 `actions: []` 的"本机数据快照"）。
+   *
+   * ⚠️ **为什么档案必须由宿主给，而不是本屏自己从 L1 拼**（G3 的原注释自己写着原因：
+   * "`LocalDataNav` 不携带任何对局来源 ⇒ 本屏拿不到'当前对局'" —— 那句话正是 G4 要消掉的
+   * 前提）：对局记录器（`MatchFileRecorder`）住在 `src/main.ts`，只有它知道本次会话打过什么；
+   * 本屏手里只有昵称与卡组（那是 L1 设置，不是对局）。⇒ 宿主能力注入，本屏不再有第二份
+   * "拼档案"的实现。
+   */
+  buildArchive(): ArchiveBuild;
 }
 
 /* ── 与 `home.ts` 同形的局部助手（见文件头注：刻意不 import 那边的私有函数） ── */
@@ -119,48 +159,22 @@ function failureText(o: { code: string; message: string }): string {
   return o.code === 'read-failed' ? `读取档案失败：${o.message}` : `导入失败：${o.message}`;
 }
 
-/* ── 本机数据快照档案（导出按钮的唯一内容来源） ─────────────────────────────── */
+/* ── 档案的来源：**宿主**（G4 D9 / D13），本屏不再自己拼一份 ───────────────────── */
 
-/** 本机还没有任何卡组时，快照档案用的固定种子（**常量**：两次导出必须逐字节相同） */
-const SNAPSHOT_SEED = 'local-data-snapshot';
-/** 本机没有任何可用的卡组时间戳时的固定 `createdAt`（同上：不许读时钟） */
-const SNAPSHOT_CREATED_AT = '1970-01-01T00:00:00.000Z';
-
-/**
- * 把本机 L1 数据包装成一份**档案**（`MatchFile`）。
+/*
+ * G3 这里曾有一整块 `snapshotMatchFile(store)`：它从 L1 读昵称与第一份卡组，拼出一份
+ * `actions: []` 的"本机数据快照档案"，并用两个常量（`SNAPSHOT_SEED` / `SNAPSHOT_CREATED_AT`）
+ * 保证"两次导出逐字节相同"。那块代码的**唯一存在理由**是"让 G3 的导出按钮有东西可导"，
+ * 而它自己的注释就写着本屏拿不到对局来源 —— G4 之后那句话不再成立：
  *
- * ⚠️ **为什么是"本机数据快照"而不是"导出当前对局"**（如实说明本阶段的边界）：
- *  - G3 的对局记录器（`createMatchFileRecorder`，Task 1）**还没有接进引擎**，重放属 G4；
- *  - `LocalDataNav`（计划 Task 7 定死的接口）**不携带任何对局来源** ⇒ 本屏拿不到"当前对局"；
- *  - 于是本屏能导出的只有它真有的东西：昵称（`players[0].nick`）与第一份卡组绑定的种子/时刻，
- *    `actions` 为空数组（"还没有记录任何操作"）。屏上的文案把这件事**明说**给用户，
- *    且导入成功后仍然会报告"本阶段还不能直接重放"（G3/G4 边界的可见化）。
- *
- * 确定性：`createdAt` **不读时钟**（`src/app` 连 `Date.now` 都是禁的，且"两次导出逐字节相同"
- * 要求它只依赖本机数据）⇒ 有卡组时取它的 `updatedAt`，否则用固定常量。
+ *  - 档案 = **本次会话的真实对局**（含每一步操作），它的唯一载体是 `main.ts` 里的
+ *    `MatchFileRecorder`（内存、零浏览器 API）⇒ 由 `nav.buildArchive()` 交给本屏；
+ *  - 本次会话还没有对局时，宿主回 `{ reason }`，本屏**拒绝导出并说明**（D9）——
+ *    导出一份空快照会让玩家以为"我导出的就是对局"，那正是要消掉的假象；
+ *  - "导出必须可复现"这条性质因此换了归属：它现在是 `exportArchive`/`stringifyMatchFile`
+ *    （稳定序列化）的性质，而不是"本屏不许读时钟"的性质（`createdAt` 由 UI 层读时钟，
+ *    `matchFileFingerprint` 不含它）。
  */
-function snapshotMatchFile(store: LocalStore): MatchFile {
-  const decks = readDecks(store);
-  const first = decks.length > 0 ? decks[0] : null;
-  return {
-    format: MATCH_FILE_FORMAT,
-    version: MATCH_FILE_VERSION,
-    cardDataHash: CARD_DATA_HASH,
-    seed: first !== null && first.seed !== '' ? first.seed : SNAPSHOT_SEED,
-    setup: {
-      draftMode: 'normal',
-      draftStarter: 0,
-      firstToPlay: 1,
-      // 快照档案里没有对局：池与选/禁的**顺序快照**都为空（不是"猜一个"）
-      draftPool: [],
-      draftPicks: [],
-      bannedProtocols: [],
-    },
-    players: [{ nick: readNickName(store) }, { nick: '' }],
-    actions: [],
-    createdAt: first !== null && first.updatedAt !== '' ? first.updatedAt : SNAPSHOT_CREATED_AT,
-  };
-}
 
 /**
  * 档案 →「落盘用的 (文件名, 文本)」。**唯一出处** = `archive-io.exportArchive`
@@ -362,17 +376,50 @@ export function renderLocalData(root: HTMLElement, nav: LocalDataNav): void {
   archiveRow.appendChild(el(
     'div',
     'local-data-privacy-line',
-    '导入的档案会当场校验（格式、版本、卡牌数据指纹与每条操作的形状）。'
-    + '本阶段还没有对局记录器与重放：导出的是一份本机数据快照档案（昵称 + 卡组种子 + 卡牌数据指纹，'
-    + '不含任何对局操作），导入成功后也只能报告校验结果 —— 重放功能在下一阶段。',
+    '导入的档案会当场校验（格式、版本、卡牌数据指纹与每条操作的形状）；'
+    + '导入成功后点「重放这一局」可以逐步重演。'
+    + '导出的档案是本次会话的真实对局（含每一步操作）；本次会话还没有对局时，导出会被拒绝并说明原因。'
+    + '档案只存在内存与你导出的文件里，下次启动无法找回 —— 需要留存时请自己导出。',
   ));
   screen.appendChild(archiveRow);
+
+  /**
+   * 「重放这一局」（G4 Task 5）：**导入成功之前不可见、也不可点**。
+   *
+   * ⚠️ **为什么必须这样实现**（读本函数的结构得出，不是风格偏好）：本屏是**单次构建** ——
+   * `root.appendChild(screen)` 是唯一的出口，进入之后只有状态区那个 `say()`（**本函数内唯一**的
+   * 写屏通道，刻意不写行号：行号会漂，锚点用符号名）会改屏，
+   * 而这一行按钮是**渲染期一次性拼好**的。若为了让它出现而**整屏重渲染**，会当场抹掉状态区
+   * 里那句校验报告**和用户正在输入的昵称**（`nick-input`）。⇒ 两道闸门：
+   *   ① `hidden = true`（初始不可见；导入成功后由 `doImport` 翻成 `false`）；
+   *   ② 点击回调里的 `lastImported === null` 早退（**即使**有人绕过 `hidden` 直接派发点击，
+   *      也零回调 —— 覆盖"不可点"而不只是"看不见"）。
+   *
+   * 交出去的必须是**刚导入的那一份**（`lastImported`，在 `doImport` 拿到 `outcome.file` 的同一处
+   * 赋值），不是"重新拼一份" —— 后者会与校验通过的那份分叉。
+   */
+  let lastImported: MatchFile | null = null;
+  const replayBtn = button('btn', '重放这一局', () => {
+    if (lastImported === null) return;
+    nav.startReplay(lastImported);
+  });
+  replayBtn.dataset.role = 'replay';
+  replayBtn.hidden = true;
 
   const doExport = async (): Promise<void> => {
     let file: MatchFile;
     let pack: { name: string; text: string };
     try {
-      file = snapshotMatchFile(store);
+      // G4 D9：档案来自**宿主的内存记录器**（`nav.buildArchive`）。没有记录时它只给 `reason`
+      // ⇒ **拒绝导出并说明**。绝不再退化去导一份 `actions: []` 的"本机数据快照"：那会让玩家
+      // 以为"我导出的就是对局"，而这正是 D9 要消掉的假象。
+      const build = nav.buildArchive();
+      if (!('file' in build)) {
+        // 码名与其它导出分支并列（`data-code` 是机器可读出口）；`reason` 由宿主给、本屏原样显示
+        say(`档案没有导出：${build.reason}`, 'export-refused', 'error');
+        return;
+      }
+      file = build.file;
       pack = archivePack(file);
     } catch (e) {
       say(`导出档案失败：${describeError(e)}`, 'export-failed', 'error');
@@ -402,7 +449,7 @@ export function renderLocalData(root: HTMLElement, nav: LocalDataNav): void {
     }
     say(
       `档案已导出：${out.name}（${file.actions.length} 步操作）。`
-      + '本阶段导出的档案不含对局记录（对局记录与重放在下一阶段）。',
+      + '把这份档案在另一台设备上导入，就能点「重放这一局」逐步重演这一局。',
       'export-ok',
       'info',
     );
@@ -477,10 +524,14 @@ export function renderLocalData(root: HTMLElement, nav: LocalDataNav): void {
     say(
       `档案已导入并校验通过（${outcome.file.actions.length} 步操作）`
       + (warnings.length === 0 ? '，没有任何警告' : `，有 ${warnings.length} 条警告：${warnings.join('；')}`)
-      + '。本阶段还不能直接重放对局（重放功能在下一阶段，属 G4）。',
+      + '。点「重放这一局」可以逐步重演这场对局；本屏不自动开始重放。',
       'import-ok',
       warnings.length === 0 ? 'info' : 'warn',
     );
+    // ① 留下这一份（「重放这一局」交出去的就是它）；② 解禁按钮 —— 两件事都在**同一处**做，
+    //    免得"报告说能重放、按钮却还藏着"这一类不一致。顺序：先留档、再解禁、后通知宿主。
+    lastImported = outcome.file;
+    replayBtn.hidden = false;
     nav.onImported(outcome.file, warnings);
   };
 
@@ -493,6 +544,9 @@ export function renderLocalData(root: HTMLElement, nav: LocalDataNav): void {
   backBtn.dataset.role = 'back';
   archiveActions.appendChild(exportBtn);
   archiveActions.appendChild(importBtn);
+  // 按钮在**渲染期**就进 DOM（初始 `hidden` ⇒ 不可见、且点击回调自带闸门 ⇒ 不可点）：
+  // 本屏只渲染一次，导入成功时**不能**重渲染来加它（那会抹掉状态区与正在输入的昵称）。
+  archiveActions.appendChild(replayBtn);
   archiveActions.appendChild(backBtn);
   screen.appendChild(archiveActions);
 

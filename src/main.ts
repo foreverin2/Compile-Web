@@ -164,8 +164,21 @@ const replayTicker: Ticker = {
 /**
  * 宿主侧的重放诊断（`cursor().error` 之外的补充）：闸门拒绝了这一步 / 状态与档案错位时，
  * **停在这一步**并如实显示 —— 不静默重试（每 900ms 重试一次会把追踪日志刷满且永不前进）。
+ * 一旦后续某一步真的推进了，它会被 `replayStep` 清掉（T4 一审 N5）。
  */
 let replayHostError: string | null = null;
+/**
+ * 「用户在本步 FX 播放中按了**继续**」的待办（T4 一审 S4）：趁 FX 还在播时直接 `play()` 会
+ * 让下一个 tick 在 FX 中间到点 ⇒ 提前走下一步。⇒ 记在这里，等 FX 播完的那次 `rerender()`
+ * 再真正开播（见 `replayNav.play` 的注释）。
+ */
+let replayResumePending = false;
+/**
+ * 「用户在本步 FX 播放中按了**单步**」的待办（与上一条同族，本轮一并收口）：立刻走一步会让
+ * 两套动画并发飞；若下一条档案操作是 `refresh`，它还会被 `drawAnimBusy` 挡回 ⇒ 游标不动
+ * ⇒ **误报停机诊断**。⇒ 忙时只记待办，等 FX 播完再走（见 `replayNav.next` 的注释）。
+ */
+let replayStepPending = false;
 /**
  * 会话内**最近一局**的档案（D9）：返回主界面后仍保留（否则"打完一局回主页就导不出来"），
  * 新对局开始时被覆盖。**只在内存**（D13：不落盘、不新增任何存储写入点）。
@@ -215,11 +228,36 @@ function rerender(): void {
   //    放在这里 = 每帧随 root 的整帧重画一起重建，天然没有残留。
   // ② `replayDriver.settle()`：**编排的唯一重排点**。`cb.onAction` 的**每一条**终止路径最终都
   //    汇到这次 `rerender()`（见 `cb.onAction` 里的逐条注释）⇒ "每个终止点都要 settle()"这条
-  //    要求由一个 choke point 自动满足，而不是靠 5 处记得写对。`settle()` 幂等（T2 判据 8）⇒
-  //    重放期间任何**额外的** `rerender()`（例如 devmode 解锁那一次）不会多排一步。
+  //    要求由一个 choke point 自动满足，而不是靠 5 处记得写对。
+  //    ⚠️ **只在"本步的 FX 已经播完"时才回话**（T4 一审阻断 **B1**，评审探针 S2-S6 实测）：
+  //    `settle()` 的幂等只挡得住"下一步**已经排进 ticker**"那一种重复；而在 FX 窗口内
+  //    （抽牌 330ms 起 / 揭示每张 ~400ms / speed ≈2.26s）驱动**正欠着这一次握手、ticker 里
+  //    没有在飞时钟** ⇒ 此刻任何额外的 `rerender()`（devmode 解锁那一次、或**控制条自己的点击**：
+  //    第五道门禁实测 `replay.bar.aboveShield = 7`（控制条在遮罩之上、点得到），而 `4×` 的
+  //    225ms 比最短的抽牌动画还短）都会**真的把下一步排出来** ⇒ 两套抽牌/揭示动画并发飞，而
+  //    `drawAnimBusy` / `revealFlyBusy` 是**单布尔**、由较早结束的回调清掉 ⇒ 第三条还能叠上
+  //    （这两个标志存在的理由被绕过）。更坏的一种：被提前排出的那一步若落在 `refresh` 上，
+  //    会被 `drawAnimBusy` 挡回（无提交）⇒ 游标不动 ⇒ 误报停机诊断并停在那一步。
+  //    ⇒ 三个 FX 完成回调都是**先清标志、再** `afterFx → rerender → settle` ⇒ 这条守卫在正常
+  //      流上一次都不会误挡；"回调丢失"仍由驱动的 8s 看门狗兜（它只广播，由宿主再走一步）。
   if (renderMode === 'replay') {
     refreshReplayBar();
-    replayDriver?.settle();
+    if (!drawAnimBusy && !revealFlyBusy) {
+      // 本步 FX 播完了 ⇒ 才处理控制条的待办 / 回话（握手）。三种形态互斥：
+      //  · 待办「单步」→ 走一步（自己保持暂停）；
+      //  · 待办「继续」→ 真正开播；
+      //  · 都没有 → 这一步的 FX 播完了 ⇒ `settle()`，驱动据此排下一步。
+      if (replayStepPending) {
+        replayStepPending = false;
+        replayResumePending = false; // 单步优先，且它自己把驱动保持在暂停
+        replayStep();
+      } else if (replayResumePending) {
+        replayResumePending = false;
+        replayDriver?.play();
+      } else {
+        replayDriver?.settle();
+      }
+    }
   }
 }
 
@@ -251,9 +289,22 @@ function replayStep(): void {
   if (!a) { rerender(); return; }
   const before = drv.cursor().position;
   cb.onAction(a);
-  if (drv.cursor().position === before && replayHostError === null) {
-    replayHostError = '重放已停在这一步：档案里的下一条没有被接受（重放状态与档案不同步）。';
-    drv.pause();
+  if (drv.cursor().position === before) {
+    // 停机：只在**第一次**留诊断（否则每次都重写，日志与屏上都是噪音）。注意重放到这一步
+    // 之前可能已经有 FX 在飞 —— 停机之后 `pause()` 会取消在飞时钟，不会再自动重试。
+    if (replayHostError === null) {
+      replayHostError = '重放已停在这一步：档案里的下一条没有被接受（重放状态与档案不同步）。';
+      drv.pause();
+      rerender();
+    }
+    return;
+  }
+  // 游标前进了 ⇒ 这一步真的走掉了（T4 一审 N5）：**把上一次的停机诊断清掉** —— 否则一次瞬时
+  // 错位（例如用户按了「继续」之后状态已经追平）会让控制条**永久**显示"已停在这一步"，
+  // 而重放其实早就在正常前进。清掉之后补画一帧，好让屏上立刻反映"已恢复"。
+  // （`rerender()` 里的 `settle()` 有 FX 守卫、且此时下一步通常已经排好 ⇒ 这一帧是幂等安全的。）
+  if (replayHostError !== null) {
+    replayHostError = null;
     rerender();
   }
 }
@@ -286,12 +337,35 @@ function refreshReplayBar(): void {
  * ⚠️ 每一个回调都**只改驱动状态然后整帧 `rerender()`**：控制条自身**不许**调
  * `refreshReplayBar()`（那会叠出第二层遮罩，见 `rerender` 的注释）。
  * `next`（单步）按 D8 **无视倍速走一步**：先暂停（停掉在飞时钟）再直接走一步 ⇒ 走完仍停在暂停态。
+ *
+ * ★ `play` 为什么不能在本步 FX 播放中直接调 `driver.play()`（T4 一审 S4 / 本轮的补充实测）：
+ *   `play()` 会**立刻排下一个 tick**（这是它该做的事 —— 否则第一个 tick 永远不来，见驱动的注释），
+ *   而此刻宿主**还欠着这一步的 `settle()`**（FX 没播完）⇒ tick 会在 FX 中间到点 ⇒ 下一步被提前走
+ *   （并发动画；若那一步是 `refresh`，它还会被 `drawAnimBusy` 挡回 ⇒ 游标不动 ⇒ 停机诊断）。
+ *   ⇒ 忙的时候只**记一个待办**（并把驱动保持暂停），等本步 FX 播完的那一次 `rerender()` 里
+ *   再真正 `play()`。**驱动侧的干净修法**（`play()` 也尊重"宿主欠一次 settle"这个闩）属 T2，
+ *   本模块的待办是与之等价的本地缓解，两者不冲突。
  */
 function replayNav(): ReplayBarNav {
   return {
     pause: () => { replayDriver?.pause(); rerender(); },
-    play: () => { replayDriver?.play(); rerender(); },
-    next: () => { replayDriver?.pause(); replayStep(); },
+    play: () => {
+      if (drawAnimBusy || revealFlyBusy) {
+        replayResumePending = true;
+        replayDriver?.pause(); // 保持暂停：绝不在 FX 窗口里排 tick
+      } else {
+        replayDriver?.play();
+      }
+      rerender();
+    },
+    next: () => {
+      replayDriver?.pause();
+      // ⚠️ 本步 FX 还在播时不能立刻走（同 `play` 的理由）：两套动画并发飞，且下一条若是
+      // `refresh` 会被 `drawAnimBusy` 挡回 ⇒ 游标不动 ⇒ 误报停机诊断。⇒ 记待办，FX 播完再走。
+      if (drawAnimBusy || revealFlyBusy) replayStepPending = true;
+      else replayStep();
+      rerender();
+    },
     setRate: (r: 0 | 1 | 2 | 4) => { replayDriver?.setRate(r); rerender(); },
     // 出口与胜利「返回主界面」走**同一条**复位（第四份跨页状态在那里统一收拾）
     exit: () => { resetToMainInterface(); },
@@ -337,6 +411,8 @@ function startReplayFile(file: MatchFile): void {
   replayDriver.onTick(replayStep);
   driver = replayDriver;
   replayHostError = null;
+  replayResumePending = false; // 第四份状态的一部分：进重放时三个宿主侧标志都清干净
+  replayStepPending = false;
   state = stateAfterDraft(file);
   renderMode = 'replay';
   // ③ 进入即开播（1× 档，D8）。顺序要紧：**先 `play()` 再 `rerender()`** ——
@@ -357,6 +433,10 @@ function startReplayFile(file: MatchFile): void {
  * - `cardDataHash`：卡牌数据指纹（另一台设备据此在导入时给警告）；
  * - `createdAt`：**UI 层读时钟**（`src/app` 不许读时钟，`tests/app-purity.test.ts` 有守卫）。
  *   `matchFileFingerprint` 不含它 ⇒ 同一局导出两次指纹仍相同。
+ * - `result`：**终局**（`winner !== null`）时写进档案（T4 一审 **N2**：`MatchFile.result` 字段与
+ *   `parseMatchFile` 的校验一直都在，但此前**全仓没有一个生产者**）。`reason` 只写引擎真正
+ *   给出的东西：引擎只判"谁赢"（`GameState` 上除了 `winner` 没有成败成因字段）⇒ 这里**不编造**
+ *   具体成因，只如实说明胜负由引擎判定。对局未结束时**不带** `result`（不是写 `winner: null`）。
  */
 function matchFileMeta(s: GameState): MatchFileMeta {
   return {
@@ -365,6 +445,7 @@ function matchFileMeta(s: GameState): MatchFileMeta {
     players: [{ nick: readNickName(localStore) }, { nick: '' }],
     cardDataHash: CARD_DATA_HASH,
     createdAt: new Date().toISOString(),
+    ...(s.winner !== null ? { result: { winner: s.winner, reason: '对局结束：胜负由引擎判定' } } : {}),
   };
 }
 
@@ -918,11 +999,12 @@ function showStartScreen(): void {
     renderLocalConsent(root, {
       onGrant: () => { consentStep('grant'); showHome(); },
       onDeny: () => { consentStep('deny'); showHome(); },
-      // ⚠️ 占位：隐私说明**整屏**由 **Task 7**（本地数据与隐私屏）接管，本任务不调 showLocalData()。
-      //   阶段一评审后这里**不再是死胡同**：弹窗上的「隐私说明」按钮已就地展开完整隐私说明
+      // ⚠️ 这里**不是**"待填充的占位"：隐私说明的**整屏**早已由「本地数据与隐私」屏接管
+      //   （主页的 `openLocalData` → `showLocalData()`，G3 Task 7 落地）。本回调保留为**换页接缝**，
+      //   目前空实现无害 —— 弹窗上的「隐私说明」按钮已经就地展开完整说明
       //   （`src/ui/local-consent.ts` 的 renderPrivacyDetail，唯一出处 = privacy.ts 的 privacyLines()），
-      //   本回调只是给 Task 7 留的换页接缝，空实现无害。
-      openPrivacy: () => { /* G3 Task 7 填充：本地数据与隐私屏 */ },
+      //   用户不需要再跳一次屏。若将来要改成直接跳整屏，改这里一处即可。
+      openPrivacy: () => { /* 换页接缝：整屏入口见 showLocalData()（G3 Task 7 已落地） */ },
     });
     return;
   }
@@ -974,16 +1056,23 @@ function showModeSelect(): void {
 }
 
 /**
- * G3 Task 7：「本地数据与隐私」屏（附录 A 的 Task 7 行区：`showModeSelect` 之后）。
+ * G3 Task 7 / G4 Task 5：「本地数据与隐私」屏（附录 A 的行区：`showModeSelect` 之后）。
  *
  * 只做**接线**：三块内容与全部判据都在 `renderLocalData`（`src/ui/local-data.ts`，可在
- * 无 jsdom 的 DOM 桩上真跑）。这里注入三个宿主能力：
+ * 无 jsdom 的 DOM 桩上真跑）。这里注入**五个**宿主能力：
  *  - `back: showStartScreen` —— 回主界面；授权若被「改变选择」/「清除本机数据」重置成
  *    `unknown`，`showStartScreen()` 会**重新问**一次（授权状态不落盘，这是唯一的重问路径）；
  *  - `pickFile` / `saveFile` —— 档案的选择与落盘（浏览器实现只在**这一个地方**被构造）；
- *  - `onImported` —— G3 **只报告，不重放**（`ReplayDriver` 属 G4）。用户可见的报告由
- *    `renderLocalData` 写在屏内状态区（含"本阶段还不能直接重放"与逐条警告），所以这里
- *    只留接缝：G4 接上 driver 时把"直接重放这一份"挂在这里，不需要再改本屏。
+ *  - `onImported` —— 导入成功的**通知**接缝（用户可见的报告由 `renderLocalData` 写在屏内状态区）；
+ *  - `startReplay`（**G4 Task 5 的落点**）—— 屏上的「重放这一局」按钮（导入成功后才解禁）把
+ *    **刚导入的那一份**档案直接交给 `startReplayFile`（进入重放页的唯一入口，D11/D12）。
+ *    **刻意不做"导入即重放"**：用户要留在本屏看完校验报告（含逐条警告）再自己决定什么时候进；
+ *  - `buildArchive`（**G4 Task 5 的落点**）—— 档案由**宿主**给（`buildSessionArchive`，D9）：
+ *    记录器只住在本文件，本屏不再自己从 L1 拼档案。没有记录时宿主回 `{ reason }` ⇒ 屏上拒绝导出。
+ *
+ * ⚠️ 本函数在 G3 Task 7 落地时写的是"**不需要再改本屏**"（当时的接缝只报告不重放）—— 那句话
+ * 在 G4 收口后就**不成立**了：导入成功后要能把同一份档案交回宿主去重放（上一条）。历史留档在
+ * G4 计划 §3.5 的清单里。
  *
  * ⚠️ **不给 `pickTimeoutMs`**（缺省 0 = 不设窗口）：协调者 2026-09-16 裁决 —— 给窗口会把
  * "用户慢慢挑文件"误判成 `cancelled`（假取消比等待更糟）。代价（可能一直等）由屏上那条
@@ -996,10 +1085,14 @@ function showLocalData(): void {
     pickFile: openArchivePicker(),
     saveFile: openArchiveSink(),
     onImported: (file, warnings) => {
-      // G3 只报告，不重放（ReplayDriver 属 G4）：`file` / `warnings` 是给 G4 的接缝。
+      // G4 Task 5：这里**不需要**再做什么 —— 用户可见的报告由本屏的状态区写；重放由用户点
+      // 「重放这一局」触发（落点是下面的 `startReplay`），**不**在这里自动进重放。
+      // 保留这个接缝是为了让"导入成功"这件事对宿主可见（将来要做"最近导入"之类时用它）。
       void file;
       void warnings;
     },
+    startReplay: (file) => startReplayFile(file),
+    buildArchive: () => buildSessionArchive(),
   });
 }
 
@@ -1077,6 +1170,8 @@ function resetToMainInterface(): void {
   replayDriver = null;
   driver = localDriver;
   replayHostError = null;
+  replayResumePending = false;
+  replayStepPending = false;
   // D9：把这一局的档案**快照**进内存（`lastArchive`），并把记录器交还给下一局。
   // 「新对局开始时清空」在正常流程里等价于「上一局离开时清空」——通往主界面的唯一路径是胜利
   // 横幅（`cb.onWinReset` → 本函数），而新对局只能从主界面开始（`showCoin` 不在本任务改动面内：

@@ -28,7 +28,9 @@ import { makeStubEl, queryAllIn, type StubNode } from './net-dom-stub';
 import { renderReplayBar, type ReplayBarNav } from '../../src/ui/replay-bar';
 import {
   createMatchFileRecorder,
+  parseMatchFile,
   setupFromState,
+  stringifyMatchFile,
   type ActionRecord,
   type MatchFile,
   type MatchFileSetup,
@@ -179,7 +181,7 @@ describe('G4 T4 · 重放路由与 settle 的单一重排点', () => {
     expect(iReplay, 'replay 分支排在 renderApp 之前（重放页会早退成空白）').toBeGreaterThan(iRender);
   });
 
-  it('5. settle 的唯一重排点：rerender 的 replay 分支里、renderApp 之后那一次；且控制条刷新也只在那一处', () => {
+  it('5. settle 的唯一重排点：rerender 的 replay 分支里、renderApp 之后那一次，且**只在 FX 播完时**回话', () => {
     const body = functionBody(MAIN, 'rerender');
     // 整个 main.ts 里 settle( 只许出现一次（唯一重排点）
     const settles = occurrences(MAIN, '.settle()');
@@ -188,6 +190,25 @@ describe('G4 T4 · 重放路由与 settle 的单一重排点', () => {
     const iRender = body.indexOf('renderApp(root, state, cb)');
     const iSettle = body.indexOf('replayDriver?.settle()');
     expect(iSettle, 'settle() 排在 renderApp 之前（编排还没画完这一帧就把下一步排出来了）').toBeGreaterThan(iRender);
+    // ★ **B1 的守卫**（T4 一审阻断项）：FX 窗口内不许回话 —— 此刻驱动正欠着这次握手、
+    //   ticker 里没有在飞时钟 ⇒ 回话就会真的把下一步排出来（并发动画 / refresh 被挡回后停机）。
+    //   `settle()` 的幂等只挡得住"下一步已经排进 ticker"那一种重复，挡不住这一种。
+    expect(body, 'settle() 没有"本步 FX 已播完"的守卫（B1：FX 窗口内的额外 rerender 会把下一步提前排出来）')
+      .toMatch(/if \(!drawAnimBusy && !revealFlyBusy\) \{/);
+    expect(fxGuardBlock(), 'FX 守卫块里没有 settle()（B1 的守卫被删）').toMatch(/replayDriver\?\.settle\(\);/);
+    // ★ **S4 的守卫**（本轮补充实测）：FX 窗口内按「继续」也不能直接 `play()` ——
+    //   `play()` 会立刻排下一个 tick（它该这么做，否则第一个 tick 永远不来），而宿主还欠着
+    //   这一步的 settle ⇒ tick 会在 FX 中间到点。⇒ 忙的时候只记待办，FX 播完再真正开播。
+    expect(body, '「继续」没有"本步 FX 播完再开播"的待办分支（S4：FX 中按继续会提前走下一步）')
+      .toMatch(/if \(replayResumePending\) \{[\s\S]{0,120}replayDriver\?\.play\(\);/);
+    // ★ **单步**同理（同族的第三条控制条路径）：FX 中按「单步」若立刻走，两套动画并发飞，
+    //   且下一条若是 `refresh` 会被 `drawAnimBusy` 挡回 ⇒ 游标不动 ⇒ **误报停机诊断**。
+    expect(body, '「单步」没有"本步 FX 播完再走"的待办分支').toMatch(/if \(replayStepPending\) \{[\s\S]{0,200}replayStep\(\);/);
+    const nav = functionBody(MAIN, 'replayNav');
+    expect(nav, 'replayNav.play 没有"忙时只记待办"的守卫（S4）')
+      .toMatch(/if \(drawAnimBusy \|\| revealFlyBusy\) \{[\s\S]{0,160}replayResumePending = true;/);
+    expect(nav, 'replayNav.next 没有"忙时只记待办"的守卫（单步也会踩 FX 窗口）')
+      .toMatch(/if \(drawAnimBusy \|\| revealFlyBusy\) replayStepPending = true;/);
     // 控制条：`renderReplayBar(` 只在装配函数里出现一次，而它的**调用**（refreshReplayBar）只在 rerender 里
     expect(occurrences(MAIN, 'renderReplayBar(').length, 'renderReplayBar( 的出现处数').toBe(1);
     // ⚠️ 计数用**带分号的调用形态**：`function refreshReplayBar(): void {` 里也含
@@ -197,10 +218,9 @@ describe('G4 T4 · 重放路由与 settle 的单一重排点', () => {
     expect(body, 'refreshReplayBar() 不在 rerender 体内（会叠出第二层遮罩）').toContain('refreshReplayBar();');
     expect(body.indexOf('refreshReplayBar();'), '控制条刷新必须排在 renderApp 之后').toBeGreaterThan(iRender);
     // 反过来：控制条的回调里**不许**自己刷新（那是"不以整帧 renderApp 为前置"的路径）
-    const nav = functionBody(MAIN, 'replayNav');
     expect(nav, 'replayNav 里出现了 refreshReplayBar / renderReplayBar（会叠出第二层遮罩）')
       .not.toMatch(/refreshReplayBar|renderReplayBar\(/);
-    for (const m of ['pause', 'play', 'setRate']) {
+    for (const m of ['pause', 'play', 'next', 'setRate']) {
       expect(nav, `replayNav.${m} 没有整帧重渲染（控制条状态会与驱动状态脱节）`).toMatch(/\brerender\(\);/);
     }
   });
@@ -289,6 +309,8 @@ describe('G4 T4 · 重放路由与 settle 的单一重排点', () => {
       .toMatch(/replayDriver\?\.dispose\(\);/);
     expect(body, 'resetToMainInterface 没把动作入口收回到热座驱动').toMatch(/^\s*driver = localDriver;$/m);
     expect(body, 'resetToMainInterface 没把重放驱动置空').toMatch(/^\s*replayDriver = null;$/m);
+    expect(body, 'resetToMainInterface 没清"待办开播"标志（S4 的伴生状态）').toMatch(/^\s*replayResumePending = false;$/m);
+    expect(body, 'resetToMainInterface 没清"待办单步"标志（同族的伴生状态）').toMatch(/^\s*replayStepPending = false;$/m);
     expect(body, "resetToMainInterface 没把 renderMode 复位回 'hotseat'").toMatch(/renderMode\s*=\s*'hotseat'/);
     // 反向：L2 的并排清理与 fx-seat 复位**不许**被这次改动挤掉
     expect(body).toContain('resetUiState()');
@@ -315,6 +337,13 @@ describe('G4 T4 · 重放路由与 settle 的单一重排点', () => {
     expect(step, 'replayStep 里出现了直呼引擎的痕迹').not.toMatch(/executeAction\(/);
     // 游标不前进即停（否则注入时钟会每 900ms 重试同一个拒绝）
     expect(step, 'replayStep 没有"游标不动就停下并留诊断"的兜底').toMatch(/cursor\(\)\.position === before/);
+    // ★ 一审 N5：**成功推进时必须把宿主诊断清掉** —— 否则一次瞬时错位会让控制条永久显示
+    //   "已停在这一步"，而重放其实早已恢复（诊断只在 startReplayFile 与 resetToMainInterface 里清）。
+    expect(step, 'replayStep 没有"成功推进就清诊断"的分支（N5：诊断恢复后永不消失）')
+      .toMatch(/replayHostError = null;/);
+    const iAdvanceCheck = step.indexOf('if (drv.cursor().position === before)');
+    const iClear = step.indexOf('replayHostError = null;');
+    expect(iClear, '清诊断的分支不在"游标前进了"之后（顺序反了会连停机那一次的诊断一起清掉）').toBeGreaterThan(iAdvanceCheck);
   });
 
   it('10. CSS import 顺序：styles-replay.css 排在 styles-local.css 之后', () => {
@@ -609,7 +638,7 @@ describe('G4 第 19 条 · 端到端对拍（真现场路径 vs 档案重放）'
     expect(swap, 'applyRearrangeSwap 把它当成旁路留痕了（note）').not.toMatch(/\.note\(/);
   });
 
-  it('导出 meta 的装配面（T4 第 11 条）：seed/setup/昵称/指纹/createdAt 各来自哪里', () => {
+  it('导出 meta 的装配面（T4 第 11 条 + 一审 N2）：seed/setup/昵称/指纹/createdAt，终局还要写 result', () => {
     const meta = functionBody(MAIN, 'matchFileMeta');
     expect(meta, 'seed 必须来自本局状态（重放全靠它）').toMatch(/seed:\s*s\.rng\.seed/);
     expect(meta, 'setup 必须走 setupFromState（草稿两条序列的唯一抽取点）').toMatch(/setup:\s*setupFromState\(s\)/);
@@ -617,9 +646,26 @@ describe('G4 第 19 条 · 端到端对拍（真现场路径 vs 档案重放）'
     expect(meta, '卡牌指纹必须写进 meta').toMatch(/cardDataHash:\s*CARD_DATA_HASH/);
     // `createdAt` 由 **UI 层**读时钟（`src/app` 不许读时钟 —— tests/app-purity.test.ts 有守卫）
     expect(meta, 'createdAt 必须由 UI 层读时钟').toMatch(/createdAt:\s*new Date\(\)\.toISOString\(\)/);
+    // ★ T4 一审 N2：终局（`winner !== null`）时必须把 `result` 写进档案；**未终局时不写**
+    //   （不是写 `winner: null`）。`reason` 是"引擎只判谁赢"的如实说明，不编造成因。
+    expect(meta, '终局时没有把 result 写进档案（MatchFile.result 之前全仓没有生产者）')
+      .toMatch(/s\.winner !== null \? \{ result: \{ winner: s\.winner, reason: /);
+    expect(meta, 'result 的写法必须是"条件展开"（未终局时不能带 result）').toMatch(/\.\.\.\(s\.winner !== null/);
     const build = functionBody(MAIN, 'buildSessionArchive');
     expect(build, '会话里没有对局记录时必须**如实返回理由**，不许退化成导一份空档案').toMatch(/return \{ reason:/);
     expect(build, 'buildSessionArchive 没接记录器').toMatch(/rec\.toMatchFile\(matchFileMeta\(state\)\)/);
+    // `result` 必须**能过档案校验并往返**（生产 API：`parseMatchFile` 会校验 winner/reason 的形状）
+    const finished: MatchFile = createMatchFileRecorder().toMatchFile({
+      seed: 'g4t4-result-roundtrip',
+      setup: setupFromState(createGame({ seed: 'g4t4-result-roundtrip' })),
+      players: [{ nick: '甲' }, { nick: '乙' }],
+      cardDataHash: CARD_DATA_HASH,
+      createdAt: '2026-09-17T00:00:00.000Z',
+      result: { winner: 1, reason: '对局结束：胜负由引擎判定' },
+    });
+    const back = parseMatchFile(stringifyMatchFile(finished), { currentHash: CARD_DATA_HASH });
+    expect(back.ok, '带 result 的档案必须能解析回来（形状由 parseMatchFile 校验）').toBe(true);
+    if (back.ok) expect(back.file.result, 'result 必须逐字往返').toEqual({ winner: 1, reason: '对局结束：胜负由引擎判定' });
   });
 
   it('本地对局的记录面：effect-choice 记的是**实际 chooser**（不是 turnPlayer）', () => {
@@ -631,3 +677,281 @@ describe('G4 第 19 条 · 端到端对拍（真现场路径 vs 档案重放）'
       .toMatch(/driver\.submit\(state, \{ player: chooser, kind: 'effect-choice'/);
   });
 });
+
+/* ==================================================================== *
+ * 一审阻断 B1 · 重放节奏：FX 窗口内的额外 rerender() 不许把下一步提前排出来
+ * ==================================================================== */
+
+/**
+ * 这一组是**节奏模型腿**：它不 import `main.ts`（不可 import，见文件头注），而是逐条复刻
+ * `main.ts` 的三件事 —— `rerender` 的收尾（`renderApp → refreshReplayBar → [本步 FX 播完才]
+ * settle`，`:210-224`）、`replayStep`（`:246-263`）、`replayNav`（`:294-302`）。
+ *
+ * **模型与真代码的绑定**：上面第 5 条的文本腿要求 `main.ts` 里那句守卫**逐字存在**
+ * （`if (!drawAnimBusy && !revealFlyBusy) replayDriver?.settle();`）⇒ 模型漂移不会被静默放过。
+ *
+ * 两个世界（双向可辨，方法学教训第 1 条）：
+ *   · `guard: true`  = 现在的主代码（FX 内不回话）⇒ **FX 内重入 0 次**、走完档案、无诊断；
+ *   · `guard: false` = 一审 B1 的旧形态（无条件回话）⇒ 重入 > 0 次，且"下一条是 refresh"那种
+ *     形态会把 `refresh` 挡回、游标不动 ⇒ 停在那一步。
+ */
+class RhythmClock implements Ticker {
+  now = 0;
+  private q: Array<{ id: number; t: number; fn: () => void }> = [];
+  private seq = 1;
+  schedule(fn: () => void, ms: number): number {
+    const id = this.seq++;
+    this.q.push({ id, t: this.now + ms, fn });
+    return id;
+  }
+  cancel(h: number): void { this.q = this.q.filter((x) => x.id !== h); }
+  advanceTo(t: number): void {
+    for (;;) {
+      const due = this.q.filter((x) => x.t <= t).sort((a, b) => a.t - b.t || a.id - b.id)[0];
+      if (!due) break;
+      this.q = this.q.filter((x) => x !== due);
+      this.now = due.t;
+      due.fn();
+    }
+    this.now = t;
+  }
+}
+
+/** 真档案（生产 `LocalDriver` + 引擎；草稿走完，动作优先 `refresh`/`play`，最多 24 步） */
+function buildRhythmArchive(): MatchFile {
+  const seed = 'g4t4-rhythm';
+  const s = createGame({ seed });
+  let guard0 = 0;
+  while (s.phase === 'draft') {
+    if (guard0++ > 50) throw new Error('草稿没有收敛');
+    const step = draftNextAction(s);
+    if (!step) break;
+    const avail = getDraftPool(s);
+    if (step.kind === 'pick') performDraftPick(s, avail[0].defId);
+    else performDraftBan(s, avail[0].defId);
+  }
+  const live = createLocalDriver();
+  const drain = (): void => {
+    for (;;) {
+      const top = s.pendingEffects[s.pendingEffects.length - 1];
+      if (!top?.prompt) return;
+      const chooser = top.prompt.chooser ?? top.player ?? s.turnPlayer;
+      live.submit(s, { player: chooser, kind: 'effect-choice', args: { promptId: top.id, choice: pickFirst(top.prompt) } });
+    }
+  };
+  drain();
+  let guard = 0;
+  while (s.phase === 'turn' && guard++ < 24) {
+    const p = s.turnPlayer;
+    const legal = getLegalActions(s, p);
+    const prefer = legal.find((a) => a.kind === 'refresh') ?? legal.find((a) => a.kind === 'play') ?? legal[0];
+    if (!prefer) break;
+    const args: Record<string, unknown> = {};
+    if (prefer.cardUid !== undefined) args.cardUid = prefer.cardUid;
+    if (prefer.faceUp !== undefined) args.faceUp = prefer.faceUp;
+    if (prefer.line !== undefined) args.line = prefer.line;
+    if (prefer.target !== undefined) args.target = prefer.target;
+    const r = live.submit(s, { player: p, kind: prefer.kind, ...(Object.keys(args).length ? { args } : {}) });
+    if (!r.ok) break;
+    drain();
+  }
+  return live.recorder()!.toMatchFile(metaFor(seed, setupFromState(s)));
+}
+
+const RHYTHM_FILE = buildRhythmArchive();
+
+/**
+ * `rerender` 里 **FX 守卫块**的片段（花括号配平，含守卫头与全部待办分支）。
+ * 用配平而不是"前 N 字符窗口"：块里的注释与待办分支会长大（本文件就长过一次），
+ * 窗口法会让"守卫在不在"退化成"注释有多长"。
+ *
+ * ⚠️ **找不到守卫头时返回空串，绝不抛错**：这个助手在**模块作用域**被调用（下面几个
+ * `*_IN_MAIN` 常量）——若它抛错，变异体下整个文件会**收集失败**，于是"变异被抓到"只表现为
+ * `1 failed file` 而**没有任何红腿名**（读起来像环境故障，而不是判据变红）。返回空串则
+ * `GUARD_IN_MAIN = false` ⇒ 行为腿照常变红，且第 5 条的文本腿会指名报错。
+ */
+function fxGuardBlock(): string {
+  const body = functionBody(MAIN, 'rerender');
+  const at = body.indexOf('if (!drawAnimBusy && !revealFlyBusy) {');
+  if (at < 0) return '';
+  return braceBody(body, body.indexOf('{', at));
+}
+
+/**
+ * ★ **三处守卫从 `main.ts` 派生**（不是测试里写死的常量）—— 这样把守卫从主代码里删掉/改坏时，
+ * 下面那些**行为腿**会当场变红（否则它们只证明"模型自己是自洽的"，对着 `main.ts` 的变异无牙）。
+ */
+const GUARD_IN_MAIN = /replayDriver\?\.settle\(\);/.test(fxGuardBlock());
+const RESUME_IN_MAIN =
+  /if \(replayResumePending\) \{[\s\S]{0,200}replayDriver\?\.play\(\);/.test(functionBody(MAIN, 'rerender'))
+  && /if \(drawAnimBusy \|\| revealFlyBusy\) \{[\s\S]{0,160}replayResumePending = true;/.test(functionBody(MAIN, 'replayNav'));
+/** 「单步」的忙时待办（同族第三条）：两处都在才算数 */
+const STEP_DEFER_IN_MAIN =
+  /if \(replayStepPending\) \{[\s\S]{0,200}replayStep\(\);/.test(functionBody(MAIN, 'rerender'))
+  && /if \(drawAnimBusy \|\| revealFlyBusy\) replayStepPending = true;/.test(functionBody(MAIN, 'replayNav'));
+
+/**
+ * 跑一次宿主循环。`extra` 在**某一步的 FX 窗口内部**（FX 开始后 150ms）被调用一次，
+ * 模拟"重放中发生的一次额外 `rerender()`"（devmode 解锁 / 控制条点击都会走到同一个 `rerender()`）。
+ */
+function runRhythm(opts: {
+  fxMs: number;
+  guard: boolean;
+  extra?: (nav: { rerender: () => void; pause: () => void; play: () => void; next: () => void; setRate: (r: 0 | 1 | 2 | 4) => void }, drv: ReturnType<typeof createReplayDriver>) => void;
+  every?: boolean;
+  extraAtStep?: number;
+}) {
+  const clock = new RhythmClock();
+  const drv = createReplayDriver(RHYTHM_FILE, { ticker: clock, stepMs: 900 });
+  const rs = stateAfterDraft(RHYTHM_FILE);
+  /** ★ 承重计数：**本步 FX 还没播完就又被要求走下一步**的次数（= 节奏被踩） */
+  let reentry = 0;
+  let rejectedRefresh = 0;
+  let drawBusy = false;
+  let extraArmed = false;
+  /** 「用户在本步 FX 播放中按了继续 / 单步」的待办（= `main.ts` 的两个 pending 标志） */
+  let resumePending = false;
+  let stepPending = false;
+
+  /** 走一步（tick 与「单步」共用）：忙的时候按下就记一次"被重入" */
+  const takeStep = (): void => {
+    const a = drv.next();
+    if (drawBusy) reentry += 1;
+    if (!a) { hostRerender(); return; }
+    const before = drv.cursor().position;
+    if (a.kind === 'refresh' && drawBusy) {
+      // `main.ts:555-560` 的 `drawAnimBusy` 早退：不提交、只重渲染
+      rejectedRefresh += 1;
+      hostRerender();
+      if (drv.cursor().position === before) drv.pause();   // = replayStep 的停机分支
+      return;
+    }
+    const r = drv.submit(rs, a as Omit<ActionRecord, 'seq'>);
+    expect(r.ok, `节奏腿：第 ${before} 步被拒 ${JSON.stringify(r)}`).toBe(true);
+    // ⚠️ **不要**在这里 `resolveAllChoices(...)`：档案里**已经**有每次应答的 `effect-choice`
+    //    记录（现场是逐条记下来的）⇒ 每一步都由档案驱动。自行应答会造出档案里没有的状态迁移，
+    //    下一步就对不上了（本腿第一版就栽在这：第 10 步 engine-error）。
+    if (opts.fxMs > 0) {
+      drawBusy = true;
+      clock.schedule(() => { drawBusy = false; hostRerender(); }, opts.fxMs);
+      if (opts.extra && (opts.every || (opts.extraAtStep ? drv.cursor().position === opts.extraAtStep : !extraArmed))) {
+        extraArmed = true;
+        clock.schedule(() => { opts.extra!(nav, drv); }, 150);
+      }
+    } else {
+      hostRerender();
+    }
+  };
+
+  // `main.ts:210-232` 的收尾：整帧渲染 → 控制条刷新 → **只在本步 FX 播完时**回话；
+  // 期间按过「继续」/「单步」则此刻才处理（否则 FX 中排 tick 会把下一步提前）。
+  const hostRerender = (): void => {
+    if (!opts.guard || !drawBusy) {
+      if (stepPending) { stepPending = false; resumePending = false; takeStep(); }
+      else if (resumePending) { resumePending = false; drv.play(); }
+      else drv.settle();
+    }
+  };
+  // `main.ts:313-341` 的 `replayNav`（guard=true = 现在的形态；false = 一审 S2-S4 的旧形态）
+  const nav = {
+    rerender: hostRerender,
+    pause: (): void => { drv.pause(); hostRerender(); },
+    play: (): void => {
+      if (opts.guard && drawBusy) { resumePending = true; drv.pause(); }
+      else drv.play();
+      hostRerender();
+    },
+    next: (): void => {
+      drv.pause();
+      if (opts.guard && drawBusy) stepPending = true;
+      else takeStep();
+      hostRerender();
+    },
+    setRate: (r: 0 | 1 | 2 | 4): void => { drv.setRate(r); hostRerender(); },
+  };
+
+  drv.onTick(takeStep);
+  drv.play();
+  // 虚拟时钟的预算必须够走完：每一步 ≈ stepMs(900) + fxMs ⇒ 25 步 × 2900ms ≈ 73s。
+  // （给 300s：跑的是虚拟时间，真实耗时与预算无关；给太少会假红在"没走完"上。）
+  clock.advanceTo(300_000);
+  return { drv, reentry, rejectedRefresh, position: drv.cursor().position, total: RHYTHM_FILE.actions.length };
+}
+
+describe('G4 T4 · 重放节奏（一审 B1 + S4：FX 窗口内不许回话、也不许提前开播）', () => {
+  it('前置：节奏档案够用（含 refresh，且至少 3 步）', () => {
+    const kinds = RHYTHM_FILE.actions.map((a) => a.kind);
+    expect(RHYTHM_FILE.actions.length).toBeGreaterThan(3);
+    expect(kinds, '档案里必须有 refresh，否则"下一条是 refresh"那种形态构造不出来').toContain('refresh');
+  });
+
+  it('B1-a 纯净世界（FX 330ms，宿主不做额外调用）⇒ FX 内重入 0 次、走完档案、无诊断', () => {
+    const r = runRhythm({ fxMs: 330, guard: GUARD_IN_MAIN });
+    expect(r.reentry, '纯净世界里 FX 窗口内不该被重入').toBe(0);
+    expect(r.rejectedRefresh).toBe(0);
+    expect(r.position, '纯净世界必须走完档案').toBe(RHYTHM_FILE.actions.length);
+    expect(r.drv.cursor().done).toBe(true);
+    expect(r.drv.cursor().error).toBeNull();
+    expect(r.drv.cursor().diagnostic, '纯净世界里看门狗不该被触发（触发 = 某一步没 settle）').toBeNull();
+  });
+
+  it('B1-b 额外 rerender() 落在 FX 窗口里（devmode 解锁 / 控制条点击）⇒ 重入 0 次、仍走完档案', () => {
+    const r = runRhythm({ fxMs: 2000, extra: (nav) => nav.rerender(), guard: GUARD_IN_MAIN });
+    expect(r.reentry, 'FX 窗口内被重入（守卫失效）').toBe(0);
+    expect(r.position).toBe(RHYTHM_FILE.actions.length);
+    expect(r.drv.cursor().done).toBe(true);
+  });
+
+  it('B1-c 控制条 setRate(4) 落在 FX 窗口里 ⇒ 0 次（T2 侧只记 rate、不排 tick + 宿主守卫）', () => {
+    const r = runRhythm({ fxMs: 2000, extra: (nav) => nav.setRate(4), guard: GUARD_IN_MAIN });
+    expect(r.reentry, 'setRate 在 FX 窗口里排了 tick（T2 的不变式 + 宿主守卫都该挡住它）').toBe(0);
+    expect(r.position).toBe(RHYTHM_FILE.actions.length);
+  });
+
+  it('B1-d 控制条 pause→play 落在 FX 窗口里 ⇒ 0 次（本轮补充：忙时不直接 play，只记待办）', () => {
+    const r = runRhythm({ fxMs: 2000, extra: (nav) => { nav.pause(); nav.play(); }, guard: GUARD_IN_MAIN && RESUME_IN_MAIN });
+    expect(r.reentry, 'FX 窗口内按「继续」把下一步提前排出来了（S4）').toBe(0);
+    expect(r.rejectedRefresh, '也不该出现"被挡回的 refresh"').toBe(0);
+    expect(r.position, '按过继续之后必须仍然走完档案（不能因为延后 play 而停住）').toBe(RHYTHM_FILE.actions.length);
+    expect(r.drv.cursor().done).toBe(true);
+  });
+
+  it('B1-e 最坏形态：**每一步**的 FX 窗口里都被额外调用一次 ⇒ 仍然 0 次', () => {
+    const r = runRhythm({ fxMs: 2000, extra: (nav) => nav.rerender(), every: true, guard: GUARD_IN_MAIN });
+    expect(r.reentry, '每一步都注入也必须 0 次（守卫是按"本步 FX 是否播完"判的）').toBe(0);
+    expect(r.position).toBe(RHYTHM_FILE.actions.length);
+  });
+
+  it('B1-f 精确形态：只在"下一条是 refresh"那一步的 FX 里额外调用 ⇒ 不再被挡回、不再停在半路', () => {
+    const at = RHYTHM_FILE.actions.findIndex((a) => a.kind === 'refresh');
+    expect(at, '找不到 refresh 那一步').toBeGreaterThanOrEqual(0);
+    const r = runRhythm({ fxMs: 2000, extra: (nav) => nav.rerender(), extraAtStep: at, guard: GUARD_IN_MAIN });
+    expect(r.rejectedRefresh, 'refresh 不该再被 drawAnimBusy 挡回（一审 S6 的形态）').toBe(0);
+    expect(r.position, '必须走完档案（一审 S6 停在 15/24）').toBe(RHYTHM_FILE.actions.length);
+  });
+
+  it('B1-g 控制条「单步」落在 FX 窗口里 ⇒ 0 次重入、0 次误挡（同族第三条路径）', () => {
+    // 单步的语义是 D8 的"无视倍速走一步、且走完仍停在暂停态" ⇒ 这里只断言"不踩 FX 窗口"：
+    // 重入 0、没有 refresh 被误挡（后者正是"FX 中被立刻走一步"会造成的假停机诊断）。
+    const r = runRhythm({ fxMs: 2000, extra: (nav) => nav.next(), guard: GUARD_IN_MAIN && STEP_DEFER_IN_MAIN });
+    expect(r.reentry, 'FX 窗口内按「单步」把下一步提前走了').toBe(0);
+    expect(r.rejectedRefresh, '也不该出现"被挡回的 refresh"（那会误报停机诊断）').toBe(0);
+    expect(r.position, '单步之后仍然真的走了一步').toBeGreaterThan(0);
+    expect(r.drv.cursor().done, '单步之后应停在暂停态（D8），不是一路播完').toBe(false);
+  });
+
+  it('反控（判据不恒真）：去掉两个守卫 = 一审的旧形态 ⇒ 重入 > 0 次、S6/S4 形态都会踩乱', () => {
+    const plain = runRhythm({ fxMs: 2000, guard: false, extra: (nav) => nav.rerender() });
+    expect(plain.reentry, '去掉守卫后必须能量到"FX 窗口内被重入"').toBeGreaterThan(0);
+    const at = RHYTHM_FILE.actions.findIndex((a) => a.kind === 'refresh');
+    const s6 = runRhythm({ fxMs: 2000, guard: false, extra: (nav) => nav.rerender(), extraAtStep: at });
+    expect(s6.rejectedRefresh, '旧形态必须复现"refresh 被挡回"').toBeGreaterThan(0);
+    expect(s6.position, '旧形态必须复现"停在那一步"').toBeLessThan(RHYTHM_FILE.actions.length);
+    const s4 = runRhythm({ fxMs: 2000, guard: false, extra: (nav) => { nav.pause(); nav.play(); } });
+    expect(s4.reentry, '旧形态下 pause→play 也会在 FX 窗口里被重入（S4）').toBeGreaterThan(0);
+    const s7 = runRhythm({ fxMs: 2000, guard: false, extra: (nav) => nav.next() });
+    expect(s7.reentry, '旧形态下「单步」也会在 FX 窗口里被重入').toBeGreaterThan(0);
+  });
+});
+
+

@@ -446,7 +446,8 @@ export function parseMatchFile(text: string, opts: { currentHash: string }): Mat
 /**
  * 把档案的 setup 映射成 `createGame` 的入参。
  *
- * **这是 G4 的 `ReplayDriver` 的唯一开局入口**（本阶段不实现重放）：
+ * **这是 G4 的 `ReplayDriver` 的唯一开局入口**（重放已落地：`stateAfterDraft` 就是从这里起跑；
+ * G3 遗留的"本阶段不实现重放"那句话已随 G4 消掉）：
  * 五个确定性输入（seed / draftStarter / firstToPlay / draftMode / draftPool）一个不少 —— §2.5。
  * 未知 defId **抛错**而不是跳过：静默跳过会让重放从第一步就与档案错位。
  */
@@ -487,7 +488,8 @@ export function setupFromState(s: {
 }
 
 /* ------------------------------------------------------------------ *
- * 记录器（内存；G4 接进 driver 后即成为"联机传输内容/重连凭据"）
+ * 记录器（内存；G4 已接进 `LocalDriver` ⇒ 它现在就是"导出档案"的内容来源，
+ * 将来也是"联机传输内容 / 断线重连凭据"的载体）
  * ------------------------------------------------------------------ */
 
 export interface MatchFileMeta {

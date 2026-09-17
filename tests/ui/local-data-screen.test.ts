@@ -25,6 +25,7 @@ import { ARCHIVE_MIME, MAX_ARCHIVE_BYTES, importArchive } from '../../src/app/ar
 import {
   MATCH_FILE_FORMAT,
   MATCH_FILE_VERSION,
+  matchFileFingerprint,
   stringifyMatchFile,
   type MatchFile,
 } from '../../src/app/match-file';
@@ -33,7 +34,7 @@ import type { FilePicker, FileSink, PickOutcome, SaveOutcome } from '../../src/a
 import { stripComments, functionBody, objectBody } from './source-text';
 
 /**
- * G3 Task 7 守卫：「本地数据与隐私」屏（`src/ui/local-data.ts`）。
+ * G3 Task 7 守卫 + G4 Task 5 的接线守卫：「本地数据与隐私」屏（`src/ui/local-data.ts`）。
  *
  * ## 本文件证明什么 / 不能证明什么（**不要读成"浏览器里已验证"**）
  *  **能**（全部是"真跑一次、拿返回值/调用记录"的行为腿，DOM 用手写桩 `tests/ui/net-dom-stub.ts`）：
@@ -41,16 +42,21 @@ import { stripComments, functionBody, objectBody } from './source-text';
  *   2. "清除本机数据"：屏内确认 → 真清 persistent 里的 L1 键 → `consent()` 回 `unknown`；
  *      取消 ⇒ 一个字节都不清；清除抛错 ⇒ 如实提示（不静默）；**游客模式下 persistent 的
  *      `set`/`remove` 调用数恒 0**（红线 3）；
- *   3. "导出档案"：假 `FileSink` 收到的文本能被 `importArchive` 原样读回，且两次导出逐字节
- *      相同**并且**等于"解析后按稳定序列化重排"的字节（后者才是"没把稳定序列化换成
- *      `JSON.stringify`"的判据 —— 见 `导出稳定性` 一组的说明）；
+ *   3. "导出档案"：档案**由宿主给**（`nav.buildArchive()`，G4 D9）⇒ 假 `FileSink` 收到的文本能被
+ *      `importArchive` 原样读回，且**同一份 `MatchFile` 两次 `stringify` 逐字节相同**并且等于
+ *      "解析后按稳定序列化重排"的字节（后者才是"没把稳定序列化换成 `JSON.stringify`"的判据
+ *      —— 见 `导出稳定性` 一组的说明）；**没有记录时拒绝导出**并把宿主的 `reason` 显示出来；
  *   4. "导入档案"：`cancelled` / `unsupported` / `failed` **三态分别**可辨识，`text()` reject
  *      映射到 `read-failed`，损坏档案出错误文案且**不调** `onImported`，超大文件**不读**内容；
  *   5. 导入"永不 settle"时没有任何永久禁用/永久等待的形态（协调者 2026-09-16 裁决）；
- *   6. `src/main.ts` 的 Task 7 行区（`showLocalData` 接线 + 主页入口）与 `cb`/`rerender`
- *      逐字节未动。
+ *   6. **G4 Task 5**：「重放这一局」在导入成功之前**不可见且不可点**（点它零回调），导入成功后
+ *      解禁并把**刚导入的那一份**档案（按 `matchFileFingerprint` 比对内容）交给 `startReplay`；
+ *      导入成功**仍然不自动离开本屏**（G3 那条腿的目的保留）；
+ *   7. `src/main.ts` 的 `showLocalData` 接线区（G4 Task 5：五个宿主能力）+ 主页入口；
+ *      `cb`/`rerender` 的 byte 级判据已由 G4 Task 4 **retarget**成"改动落点精确"（见第 8 组）。
  *  **不能**：真实浏览器里的观感、真实磁盘到底写没写、真实 `<input type=file>` 的取消语义
- *  （那些属计划 Task 7 Step 6 的无头自查与人眼验收）。
+ *  （那些属计划 Task 7 Step 6 的无头自查与人眼验收）；也不能证明 `startReplay` 之后重放页真的
+ *  能演（那是 `src/main.ts` 的路由 + 第五道门禁 replay 场景的覆盖面）。
  *
  * ⚠️ 桩用**现成的** `tests/ui/net-dom-stub.ts`（不复制第二份）。桩的已知边界：
  * `dispatchEvent` **只向祖先冒泡、不调用派发节点自己的监听器** ⇒ 点按钮必须用
@@ -187,26 +193,40 @@ interface Harness {
   pickCalls: Array<{ accept: string[] }>;
   saveCalls: Array<{ suggestedName: string; text: string }>;
   imported: Array<{ file: MatchFile; warnings: string[] }>;
-  counters: { back: number };
+  /** `startReplay` 收到的档案（G4 Task 5：按**内容**比对，不按引用） */
+  replays: MatchFile[];
+  /** `back` / `buildArchive()` 的调用计数（导出必须先向宿主取档案，不许自己拼） */
+  counters: { back: number; build: number };
   setPick(h: PickHandler): void;
   setSave(h: SaveHandler): void;
+  /** 换掉宿主的档案来源（默认给一份有记录的档案；`{ reason }` 用来测"没有记录"） */
+  setBuild(b: BuildHandler): void;
 }
+
+/** 宿主的档案来源（G4 Task 5 的 `LocalDataNav.buildArchive`）。 */
+type BuildHandler = () => { file: MatchFile } | { reason: string };
 
 function harness(opts: {
   persistent?: KeyValueStore;
   granted?: boolean;
   pick?: PickHandler;
   save?: SaveHandler;
+  build?: BuildHandler;
 } = {}): Harness {
   const persistent = opts.persistent ?? createMemoryStore();
   const store = createLocalStore({ persistent });
   if (opts.granted !== false) store.grant();
   let pickHandler: PickHandler = opts.pick ?? cancelledPick;
   let saveHandler: SaveHandler = opts.save ?? cancelledSave;
+  // 缺省：宿主手里**有**一份档案（= `sampleFile()` 的内容）。每次调用**返回一份新的对象**
+  // （逐字段新造，不共享引用）—— 这样"两次导出逐字节相同"证明的是**序列化确定性**，
+  // 而不是"同一个对象被字符串化两次"。
+  let buildHandler: BuildHandler = opts.build ?? (() => ({ file: sampleFile() }));
   const pickCalls: Array<{ accept: string[] }> = [];
   const saveCalls: Array<{ suggestedName: string; text: string }> = [];
   const imported: Array<{ file: MatchFile; warnings: string[] }> = [];
-  const counters = { back: 0 };
+  const replays: MatchFile[] = [];
+  const counters = { back: 0, build: 0 };
   const pickFile: FilePicker = {
     open: async (o) => { pickCalls.push(o); return await pickHandler(o); },
   };
@@ -217,6 +237,7 @@ function harness(opts: {
     pickCalls,
     saveCalls,
     imported,
+    replays,
     counters,
     persistent,
     store,
@@ -226,9 +247,12 @@ function harness(opts: {
       pickFile,
       saveFile,
       onImported: (file, warnings) => { imported.push({ file, warnings }); },
+      startReplay: (file) => { replays.push(file); },
+      buildArchive: () => { counters.build += 1; return buildHandler(); },
     },
     setPick: (h) => { pickHandler = h; },
     setSave: (h) => { saveHandler = h; },
+    setBuild: (h) => { buildHandler = h; },
   };
 }
 
@@ -268,6 +292,28 @@ const deck = (over: Partial<DeckRecord> = {}): DeckRecord => ({
   ...over,
 });
 
+/**
+ * 一份**可辨识**的导入档案（种子与操作序列都与 `sampleFile()` 不同）。
+ *
+ * 用途：证明「重放这一局」交出去的**就是刚导入的那一份** —— 若实现里"重新拼一份"或
+ * "交错了对象"，指纹当场不等（M4 变异就是这么打红的）。
+ */
+const importedFile = (): MatchFile => sampleFile({
+  seed: 'deadbeefdeadbeef',
+  setup: {
+    draftMode: 'normal',
+    draftStarter: 1,
+    firstToPlay: 0,
+    draftPool: ['water'],
+    draftPicks: ['water'],
+    bannedProtocols: [],
+  },
+  actions: [
+    { seq: 0, player: 0, kind: 'advance', via: 'user' },
+    { seq: 1, player: 1, kind: 'advance', via: 'user' },
+  ],
+});
+
 /** 假的选择结果：一个"选中的文件"（`text()` 由调用方给，便于注入 reject）。 */
 function picked(over: { name?: string; size?: number; text?: () => Promise<string> } = {}): PickOutcome {
   return {
@@ -278,6 +324,11 @@ function picked(over: { name?: string; size?: number; text?: () => Promise<strin
       text: over.text ?? (async () => stringifyMatchFile(sampleFile())),
     },
   };
+}
+
+/** 选中「`importedFile()` 那一份」的假选择结果（G4 Task 5 的重放腿用它）。 */
+function pickedImported(): PickOutcome {
+  return picked({ name: 'imported.compile-match.json', text: async () => stringifyMatchFile(importedFile()) });
 }
 
 /* ==================================================================== *
@@ -296,11 +347,11 @@ describe('渲染（DOM 桩真跑一次）', () => {
     for (const l of lines) expect(textOf(root), `屏上缺少隐私行：${l}`).toContain(l);
   });
 
-  it('三块内容都有落点：授权状态（含两个按钮）/ 可编辑昵称 / 导出导入按钮', () => {
+  it('三块内容都有落点：授权状态（含两个按钮）/ 可编辑昵称 / 导出导入（含「重放这一局」）', () => {
     const root = render(harness());
     const roles = [
       'status', 'consent', 'consent-state', 'change-consent', 'clear',
-      'nick-input', 'nick-save', 'stored', 'privacy', 'archive', 'export', 'import', 'back',
+      'nick-input', 'nick-save', 'stored', 'privacy', 'archive', 'export', 'import', 'replay', 'back',
     ];
     for (const role of roles) {
       expect(byRole(root, role).length, `屏上缺少 [data-role="${role}"]`).toBe(1);
@@ -457,7 +508,23 @@ describe('昵称（可编辑）', () => {
  * ==================================================================== */
 
 describe('导出档案', () => {
-  it('点「导出档案」⇒ 假 saveFile 收到一份能被 importArchive 原样读回的文本（判据 3）', async () => {
+  it('档案区说明文案：说清"导出的是真对局 / 没记录会被拒绝 / 档案要自己留存"（G4 §3.5 的逐条替换）', () => {
+    // 这条腿是为 `local-data.ts` 的**档案区说明段**（§3.5 的 `:366-367`）立的：那一段在 G4 前后
+    // **三处全假**（不再是快照 / `actions` 不空 / 导入后可重放），所以三个"过时措辞"必须消失、
+    // 三件新事实必须出现。旧文案在这条腿上会**三处都红**（见 `.superpowers/g4t5/` 的旧实现对照跑）。
+    const root = render(harness());
+    const text = textOf(one(root, 'archive'));
+    for (const stale of ['还没有对局记录器与重放', '本机数据快照', '重放功能在下一阶段', '不含任何对局操作']) {
+      expect(text, `档案区还留着过时措辞「${stale}」`).not.toContain(stale);
+    }
+    expect(text, '档案区没说"导入后可以重放"').toContain('重放这一局');
+    expect(text, '档案区没说"本次会话还没有对局时导出会被拒绝"').toContain('导出会被拒绝');
+    expect(text, '档案区没说"档案要自己留存"（D13 的诚实前提）').toContain('需要留存时请自己导出');
+  });
+
+  it('点「导出档案」⇒ 先向宿主取档案（buildArchive），假 saveFile 收到的文本能被 importArchive 原样读回', async () => {
+    // ⚠️ G4 Task 5 起档案**由宿主给**：本屏不再从 L1 自己拼一份（G3 那份快照已随 D9 删除）。
+    //    所以这里刻意**只写 L1 昵称/卡组、不给宿主任何别的东西**，证明"屏不再读它们拼档案"。
     const h = harness({
       save: async (o) => ({ ok: true, name: o.suggestedName, mode: 'download' }),
     });
@@ -467,22 +534,31 @@ describe('导出档案', () => {
     clickRole(root, 'export');
     await flush();
 
+    expect(h.counters.build, '导出前没有向宿主取档案（自己在拼第二份？）').toBe(1);
     expect(h.saveCalls, 'saveFile.save 没有被调用').toHaveLength(1);
     const { suggestedName, text } = h.saveCalls[0];
     const parsed = importArchive(text, { currentHash: CARD_DATA_HASH });
     expect(parsed.ok, '导出的文本连自家 importArchive 都读不回来').toBe(true);
     if (!parsed.ok) return;
     expect(parsed.warnings, '导出的档案自带警告 ⇒ 往返不干净').toEqual([]);
-    expect(parsed.file.players[0].nick, '档案里没有本机昵称').toBe('甲');
+    // 昵称来自**宿主给的那份档案**（`sampleFile()` 里是「甲」），不是本屏从 L1 凑的
+    expect(parsed.file.players[0].nick, '档案里没有宿主给的那份内容').toBe('甲');
+    expect(parsed.file.actions.length, '导出的档案没有操作序列（不是真对局）').toBe(sampleFile().actions.length);
     expect(suggestedName.endsWith('.compile-match.json'), `文件名不对：${suggestedName}`).toBe(true);
     expect(suggestedName, '文件名里没有 seed 前 8 位').toContain(parsed.file.seed.slice(0, 8));
     expect(statusCode(root)).toBe('export-ok');
+    // 文案不再自相矛盾（G4 §3.5：旧文案前半句说"已导出 N 步"、后半句说"不含对局记录"）
+    expect(statusText(root), '导出成功的报告还留着"不含对局记录"').not.toContain('不含对局记录');
+    expect(statusText(root), '导出成功的报告没说"这份档案能拿去重演"').toContain('逐步重演');
   });
 
-  it('导出的文本是**稳定序列化**：两次导出逐字节相同，且等于"解析后稳定重排"的字节（变异 #4 的牙）', async () => {
+  it('导出的文本是**稳定序列化**：同一份 MatchFile 两次 stringify 逐字节相同，且等于"解析后稳定重排"的字节', async () => {
+    // ⚠️ **G4 Task 5 的 retarget**（判据目的保留、锚点换新）：旧腿是"**两次导出**逐字节相同"，
+    //    它当时真正钉的是"本屏拼快照时不许读时钟"（那套常量 `SNAPSHOT_*` 已随 D9 删除 ⇒ 前提消失）。
+    //    档案改由宿主给之后，同一件事的正确形态是"**同一份 `MatchFile` 两次 `stringify` 逐字节相同**"
+    //    —— 归档成 `stringifyMatchFile`（稳定序列化）的性质。宿主每次给的是**新对象**（逐字段新造），
+    //    因此这条测的仍是"内容相同 ⇒ 字节相同"，而不是"同一个对象被字符串化两次"。
     const h = harness({ save: async (o) => ({ ok: true, name: o.suggestedName, mode: 'download' }) });
-    writeNickName(h.store, '甲');
-    writeDecks(h.store, [deck()]);
     const root = render(h);
 
     clickRole(root, 'export');
@@ -490,11 +566,13 @@ describe('导出档案', () => {
     clickRole(root, 'export');
     await flush();
     expect(h.saveCalls).toHaveLength(2);
+    expect(h.counters.build, '两次导出各自向宿主取了一次档案').toBe(2);
 
     const [first, second] = h.saveCalls.map((s) => s.text);
-    // ① 两次导出逐字节相同（同一个进程里，稳定序列化的直接后果）
-    expect(first, '两次导出的字节不同 ⇒ 序列化不稳定').toBe(second);
-    // ② ⚠️ ① 单独**抓不住**"把 stringifyMatchFile 换成 JSON.stringify" —— 对同一个**新建字面量**，
+    // ① 同一份 MatchFile 两次 stringify 逐字节相同（宿主两次给的是内容相同的新对象）
+    expect(first, '同一份档案两次导出的字节不同 ⇒ 序列化不稳定').toBe(second);
+    expect(first, '导出的文本不是宿主那份档案的稳定序列化').toBe(stringifyMatchFile(sampleFile()));
+    // ② ⚠️ ① 单独**抓不住**"把 stringifyMatchFile 换成 JSON.stringify" —— 对内容相同的对象，
     //    `JSON.stringify` 同样是确定的（计划里"JSON.stringify 不稳定"的推理对新建对象不成立）。
     //    真正的判据是这一条：字节必须是"键排序后"的形态 ⇒ 先用自己的解析器读回来，再按
     //    稳定序列化重排，两者必须**逐字节**相等。换成 JSON.stringify（保留字面量的键序）时，
@@ -503,6 +581,30 @@ describe('导出档案', () => {
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
     expect(first, '导出文本不是稳定序列化（键未排序）').toBe(stringifyMatchFile(parsed.file));
+  });
+
+  it('宿主没有记录（只给 reason）⇒ **拒绝导出**并把理由显示出来，且没有任何假成功文案（D9）', async () => {
+    // G4 D9 的核心：没有记录时**不许**退化去导一份 `actions: []` 的"本机数据快照"。
+    const REASON = '本次会话还没有对局记录：先打完一局再来导出。';
+    const h = harness({ save: async (o) => ({ ok: true, name: o.suggestedName, mode: 'download' }) });
+    h.setBuild(() => ({ reason: REASON }));
+    const root = render(h);
+
+    clickRole(root, 'export');
+    await flush();
+    expect(h.counters.build, '导出没有先问宿主有没有记录').toBe(1);
+    expect(h.saveCalls, '没有记录却还是写了文件（假成功）').toHaveLength(0);
+    expect(statusCode(root), '没有记录时的结论不是"拒绝导出"').toBe('export-refused');
+    expect(statusText(root), '宿主的 reason 没被显示出来').toContain(REASON);
+    expect(textOf(root), '屏上出现了"档案已导出/已保存"这类假成功文案')
+      .not.toMatch(/档案已导出|已保存到本机/);
+    // 反向：有记录时同样的按钮会真的写文件（证明上一条不是"按钮坏了"）
+    const ok = harness({ save: async (o) => ({ ok: true, name: o.suggestedName, mode: 'download' }) });
+    const rok = render(ok);
+    clickRole(rok, 'export');
+    await flush();
+    expect(ok.saveCalls, '前置被破坏：有记录时导出也不写文件').toHaveLength(1);
+    expect(statusCode(rok)).toBe('export-ok');
   });
 
   it('导出三态：cancelled 不说"失败"；unsupported 说"不支持"；failed 显示真因', async () => {
@@ -546,9 +648,15 @@ describe('导入档案', () => {
     expect(h.imported[0].warnings, '成功路径该是零警告').toEqual([]);
     expect(h.imported[0].file.seed).toBe(sampleFile().seed);
     expect(statusCode(root)).toBe('import-ok');
-    // 只报告、不自动进对局：屏上必须明说 G3/G4 的边界
-    expect(statusText(root)).toContain('本阶段还不能直接重放');
+    // G4 Task 5 的 retarget（判据目的保留、锚点换新）：旧腿断言屏上出现
+    // "本阶段还不能直接重放"（那句过时文案已删，见 §3.5）。这条腿的**目的**是"导入成功后屏上
+    // 必须把'接下来能做什么'说清楚，而且**不自动离开本屏**" ⇒ 新锚点 = 那句"点「重放这一局」"。
+    // ⚠️ 改前那条旧断言**真的红过一次**：纯净 HEAD 镜像里删掉旧句子 ⇒ 本腿红（`.superpowers/g4t5/`）。
+    expect(statusText(root), '导入成功后屏上没有说"接下来能重放"').toContain('重放这一局');
+    expect(statusText(root), '导入成功的报告还留着过时的"不能直接重放"').not.toContain('还不能直接重放');
     expect(h.counters.back, '导入成功后不该自动离开本屏').toBe(0);
+    // 同一条腿顺手钉住"不自动进重放"（用户要留在本屏看完校验报告）
+    expect(h.replays, '导入成功不该自动进入重放').toHaveLength(0);
   });
 
   it('导入损坏文件（text() 返回 "{oops"）⇒ 不调 onImported，屏上出现**真因**（判据 5）', async () => {
@@ -677,6 +785,81 @@ describe('导入档案', () => {
 });
 
 /* ==================================================================== *
+ * 5b. 「重放这一局」（G4 Task 5）
+ * ==================================================================== */
+
+describe('重放这一局（G4 Task 5）', () => {
+  it('导入成功之前：按钮**不可见**，且点它**零回调**（本屏只渲染一次 ⇒ 只能靠 hidden + 闸门变量）', () => {
+    const h = harness({ pick: async () => pickedImported() });
+    const root = render(h);
+    // 按钮**在渲染期就已经拼进 DOM**（不许为了让它出现而整屏重渲染：那会抹掉状态区与
+    // 用户正在输入的昵称 `nick-input`）⇒ 判据落在 `hidden` 上，而不是"节点不存在"。
+    const btn = one(root, 'replay');
+    expect(
+      (btn as unknown as { hidden?: boolean }).hidden,
+      '导入成功之前「重放这一局」就可见了（整屏重渲染之外的另一种错法）',
+    ).toBe(true);
+    clickRole(root, 'replay');
+    expect(h.replays, '导入成功之前点它居然把档案交了出去').toHaveLength(0);
+    expect(h.counters.back, '导入成功之前点它不该离开本屏').toBe(0);
+  });
+
+  it('导入成功后：按钮解禁，点击把**刚导入的那一份**档案（按指纹比对）交给 startReplay；仍不自动离开本屏', async () => {
+    const h = harness({ pick: async () => pickedImported() });
+    const root = render(h);
+    clickRole(root, 'import');
+    await flush();
+    expect(statusCode(root)).toBe('import-ok');
+
+    const btn = one(root, 'replay');
+    expect(
+      (btn as unknown as { hidden?: boolean }).hidden,
+      '导入成功后「重放这一局」仍然不可见',
+    ).toBe(false);
+    expect(h.replays, '导入成功不该**自动**进入重放（用户要看完校验报告）').toHaveLength(0);
+    expect(h.counters.back, '导入成功后不该自动离开本屏').toBe(0);
+
+    clickRole(root, 'replay');
+    expect(h.replays, '点了「重放这一局」却没把档案交给宿主').toHaveLength(1);
+    // 按**内容**比对（不按引用）：交出去的必须就是导入的那一份
+    expect(
+      matchFileFingerprint(h.replays[0]),
+      '交出去的档案与导入的那一份内容不同（自己又拼了一份 / 交错了对象？）',
+    ).toBe(matchFileFingerprint(importedFile()));
+    // 反向锚点：它**不是**那份默认档案（否则上面的"相等"可能对任何一份都成立 = 恒真）
+    expect(
+      matchFileFingerprint(h.replays[0]),
+      '反向锚点失效：交出去的档案与默认档案同指纹 ⇒ 上面的比对分辨不了"交错档案"',
+    ).not.toBe(matchFileFingerprint(sampleFile()));
+    expect(statusCode(root), '点「重放这一局」不该改状态区的结论').toBe('import-ok');
+  });
+
+  it('游客模式（deny）下：导入 → 重放 与 导出 全部照常可用，且 persistent 零写入（D13 红线 3）', async () => {
+    const spy = spyStore();
+    const h = harness({
+      persistent: spy,
+      granted: false,
+      pick: async () => pickedImported(),
+      save: async (o) => ({ ok: true, name: o.suggestedName, mode: 'download' }),
+    });
+    h.store.deny();
+    const root = render(h);
+    expect(textOf(one(root, 'consent-state')), '前置：不是游客模式').toMatch(/游客/);
+
+    clickRole(root, 'import');
+    await flush();
+    clickRole(root, 'replay');
+    expect(h.replays, '游客模式下重放不可用').toHaveLength(1);
+    clickRole(root, 'export');
+    await flush();
+    expect(h.saveCalls, '游客模式下导出不可用').toHaveLength(1);
+    expect(statusCode(root), '游客模式下导出的结论不对').toBe('export-ok');
+    // D13：档案只在内存与用户自己选的文件里 ⇒ 游客模式（乃至任何模式）下都不写浏览器存储
+    expect(spy.mutations(), '游客模式下"导入/重放/导出"碰了 persistent（红线 3）').toBe(0);
+  });
+});
+
+/* ==================================================================== *
  * 6. 源码腿：本文件不得直接引用浏览器 API（转达 #4）
  * ==================================================================== */
 
@@ -737,7 +920,7 @@ describe('样式腿：新类名不与既有 CSS 冲突', () => {
 });
 
 /* ==================================================================== *
- * 8. 接线腿：main.ts 的 Task 7 行区 + cb/rerender 逐字节未动
+ * 8. 接线腿：main.ts 的 showLocalData 接线区 + G4 的"改动落点精确"
  * ==================================================================== */
 
 /** 仓库根（`git show` 的 cwd；去掉 Windows 路径末尾的分隔符）。 */
@@ -766,11 +949,10 @@ const CB_HEAD = 'const cb: UiCallbacks = ';
  * 的符号换成 **G4 Task 4 引入 `main.ts` 的符号**（`createLocalDriver`）。它与提交顺序/提交
  * 信息无关，且父提交里必然**不含** G4 的任何收口符号 —— 下面那条腿有锚点断言钉住这件事。
  *
- * ⚠️ **T4 未提交时的回退（本任务特有）**：T4 的改动先落在**工作树**里（提交由协调者统一做）
- * ⇒ 在提交之前 `git log -S createLocalDriver` 在历史里**找不到**它。此时回退到
- * `HEAD:src/main.ts`：提交前 HEAD **就是** T4 的父提交，而"它确实是改动前的版本"这件事由
- * 调用方的锚点断言（基线里不许有 `createLocalDriver` / `driver.submit(`）当场证明 ——
- * 不是靠假设。提交之后自动走 `-S` 那条路（两条路给出同一份基线）。
+ * ⚠️ **HEAD 回退分支的现状（T4 已提交之后）**：T4（`0b95c4a`）已把 `createLocalDriver` 提交进历史
+ * ⇒ 正常路径走 `-S` 拿父提交。下面的 `HEAD` 回退只在"该符号还没提交"的世界里生效（例如把本文件
+ * 单独拿到一棵更早的树上跑）；两条路给出**同一份**基线，而"它确实是改动前的版本"这件事由调用方的
+ * 锚点断言（基线里不许有 `createLocalDriver` / `driver.submit(`）当场证明 —— 不是靠假设。
  */
 function baselineMainCode(): string | null {
   const hashes = execFileSync(
@@ -803,8 +985,8 @@ const HAVE_GIT = ((): boolean => {
   }
 })();
 
-describe('接线腿：main.ts（Task 7 行区）', () => {
-  it('showLocalData 把 nav 的五个落点都接上了（不是空实现）', () => {
+describe('接线腿：main.ts（showLocalData 接线区）', () => {
+  it('showLocalData 把 nav 的**七个**落点都接上了（G4 Task 5 加了 startReplay / buildArchive）', () => {
     const body = functionBody(MAIN_CODE, 'showLocalData');
     expect(body.length, 'functionBody 抽到空片段 ⇒ 本组判据假绿').toBeGreaterThan(120);
     expect(body).toContain('renderLocalData(root');
@@ -813,6 +995,13 @@ describe('接线腿：main.ts（Task 7 行区）', () => {
     expect(body, 'store 没接 localStore').toMatch(/store:\s*localStore/);
     expect(body, 'back 没接 showStartScreen').toMatch(/back:\s*showStartScreen/);
     expect(body, '没接 onImported 接缝').toMatch(/onImported/);
+    // G4 Task 5：进入重放的唯一入口 = `startReplayFile`（T4 交付的入口函数，此前零调用）
+    expect(body, '「重放这一局」没接到 startReplayFile（进入重放的唯一入口）')
+      .toMatch(/startReplay:\s*\([^)]*\)\s*=>\s*startReplayFile\s*\(/);
+    expect(body, '导出没有接到宿主的 record 来源（buildSessionArchive）')
+      .toMatch(/buildArchive:\s*\(\)\s*=>\s*buildSessionArchive\s*\(\s*\)/);
+    // 反向：本函数**不许**再出现第二套"自己拼档案"的调用（G3 的 snapshotMatchFile 已删）
+    expect(body, 'showLocalData 里出现了第二份"拼档案"的实现').not.toMatch(/snapshotMatchFile/);
   });
 
   it('主页入口的占位已替换成 showLocalData()（Task 4 的注释不再说谎）', () => {
