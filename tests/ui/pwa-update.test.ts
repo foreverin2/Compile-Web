@@ -27,7 +27,7 @@ import {
   DEFAULT_SW_TEMPLATE,
 } from '../../scripts/gen-sw-manifest.mjs';
 /** ⚠️ 生成脚本的入口名叫 `run`，测试里读作 `genManifest`（腿的语义名，见 gen-sw-manifest.d.mts） */
-import { stripComments } from './source-text';
+import { stripComments, functionBody } from './source-text';
 
 /**
  * G3 Task 8 守卫：PWA 的注册 / 自动提示 / 一键更新。
@@ -1440,10 +1440,26 @@ describe('Task 8 的接线（严格限定在附录 A 允许的行区）', () => 
     expect(at, 'initPwaUpdate() 落在了启动屏之前').toBeLessThan(boot);
   });
 
-  it('main.ts 里 cb / rerender 两个函数体一字未动（G4 的收口范围）', () => {
-    // 只钉"这两个函数仍然存在且 rerender 仍以 renderApp 收口"——它们是**禁令**的锚点：
-    // 若 Task 8 的接线把 rerender 改坏，本腿与 net-preview-wiring.test.ts 会同时变红。
-    expect(main).toMatch(/\bfunction rerender\(\)/);
-    expect(main).toMatch(/\bconst cb\b/);
+  /**
+   * **改名 + 改判据（G4 Task 4）**：这条腿原来叫「`main.ts` 里 `cb` / `rerender` 两个函数体
+   * **一字未动**（G4 的收口范围）」，而它体内**只查了两个符号存在**（`function rerender()` /
+   * `const cb`）—— **名与实今天就已经不符**：`cb`/`rerender` 恰恰是 G4 的合法收口范围
+   * （G3 计划 `:3229`），"一字未动"这句话既做不到、也不是它真正想保的东西。
+   * 它真正要保的是**禁令的锚点**：`rerender` 仍然存在、并且**仍然是唯一的整帧路由入口**
+   * （热座页画不出来 = G0/G2 的整条链路静默失效）。⇒ 改成断言"唯一入口"这件事本身：
+   *   ① `rerender` 定义在；
+   *   ② 全文件的 `renderApp(` **恰好 1 处**（`initDevMode` 那处早已改为走 `rerender()`）；
+   *   ③ 那 1 处就在 `rerender` 的函数体里，且回调就是 `cb`（同一份 `UiCallbacks` 实现）。
+   * 旧判据包含于新判据（`const cb: UiCallbacks` 仍然要存在），不是放宽。
+   */
+  it('rerender 仍是唯一的整帧路由入口（G4 收口后这条仍然要成立）', () => {
+    const code = stripComments(main);
+    expect(code).toMatch(/\bfunction rerender\(\)/);
+    expect(code).toMatch(/\bconst cb: UiCallbacks\b/);
+    const sites = code.split('\n').filter((l) => l.includes('renderApp('));
+    expect(sites.length, `renderApp( 出现 ${sites.length} 处（唯一入口必须恰好 1 处）:\n${sites.join('\n')}`).toBe(1);
+    const body = functionBody(code, 'rerender');
+    expect(body, 'renderApp 不在 rerender 体内（热座模式将渲染不出任何东西）')
+      .toMatch(/renderApp\(root,\s*state,\s*cb\)/);
   });
 });

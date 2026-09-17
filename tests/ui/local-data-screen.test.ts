@@ -30,7 +30,7 @@ import {
 } from '../../src/app/match-file';
 import { CARD_DATA_HASH } from '../../src/app/card-data-hash';
 import type { FilePicker, FileSink, PickOutcome, SaveOutcome } from '../../src/app/archive-fs';
-import { stripComments, functionBody } from './source-text';
+import { stripComments, functionBody, objectBody } from './source-text';
 
 /**
  * G3 Task 7 守卫：「本地数据与隐私」屏（`src/ui/local-data.ts`）。
@@ -749,64 +749,46 @@ const MAIN_CODE = stripComments(
 const CB_HEAD = 'const cb: UiCallbacks = ';
 
 /**
- * 取 `const cb: UiCallbacks = { … }` 这类**对象字面量声明**的整段（花括号配平、字符串感知）。
- * `source-text.ts` 的 `functionBody` 只认 `function name(`，故这里补一个同款纪律的局部助手
- * （找不到就**抛错**，而不是返回空串让上层断言假绿）。
+ * 取 `const cb: UiCallbacks = { … }` 这类**对象字面量声明**的整段。
+ *
+ * **G4 Task 4：本地那份实现已提升到 `./source-text` 共用**（`objectBody`，行为一字不改 ——
+ * "找不到声明头就抛错"的纪律连同实现逐字搬过去），因为它同时被 `net-preview-wiring`（L3）、
+ * `rearrange-draft`（L6）与本文件（L4/L5）需要，而四份拷贝的漂移方向正是**假绿**。
  */
-function objectBody(src: string, head: string): string {
-  const at = src.indexOf(head);
-  if (at < 0) throw new Error(`源码里找不到声明头 ${head}（结构被改动？）`);
-  const open = src.indexOf('{', at);
-  if (open < 0) throw new Error(`声明头 ${head} 之后没有 {`);
-  let depth = 0;
-  for (let i = open; i < src.length; i += 1) {
-    const ch = src[i];
-    if (ch === "'" || ch === '"' || ch === '`') {
-      const q = ch;
-      i += 1;
-      while (i < src.length) {
-        if (src[i] === '\\') { i += 2; continue; }
-        if (src[i] === q) break;
-        i += 1;
-      }
-      continue;
-    }
-    if (ch === '{') depth += 1;
-    else if (ch === '}') {
-      depth -= 1;
-      if (depth === 0) return src.slice(at, i + 1);
-    }
-  }
-  throw new Error(`声明头 ${head} 的花括号不配平`);
-}
 
 /**
- * 基线 `main.ts` = **最早引入 Task 7 符号的那次提交的父提交**（`git show <c>^:src/main.ts`）。
+ * 基线 `main.ts` = **G4 收口（Task 4）之前**的那一版（`git show <c>^:src/main.ts`）。
  *
- * ⚠️ **为什么基线不是 HEAD**（实测，不是假想）：本任务开工期间，并行的**路径限定提交**
- * （`git add src/main.ts`）把当时工作树里的 Task 7 hunk 一并带进了别的提交 ⇒
- * `HEAD:src/main.ts` 里**已经**有 `showLocalData()`，拿它当基线会让"逐字节相同"变成**恒真**。
- * 这一点是下面那条 `showHome` **对照组**抓出来的（两边 `showHome` 不再不同 ⇒ 判据报警），
- * 不是我先验就知道的。改用 `git log -S`：与提交顺序/提交信息无关，且父提交里必然
- * **不含** Task 7 的任何符号（有锚点腿钉住这件事）。
- * 返回 `null` = 历史上还没有任何提交引入过 `showLocalData`（本腿跳过并如实报出）。
+ * ⚠️ **为什么基线不是 HEAD**（G3 实测，不是假想）：本仓有过**路径限定提交**
+ * （`git add src/main.ts`）把当时工作树里的改动一并带进别的提交的先例 ⇒ "拿 HEAD 当基线"
+ * 可能落到一个**已经含本次改动**的版本上，于是"逐字节相同"变成**恒真**。
+ * ⇒ 沿用 G3 立下的同一套 git 机器（`git log -S <符号>` → 取该提交的**父提交**），只把 `-S`
+ * 的符号换成 **G4 Task 4 引入 `main.ts` 的符号**（`createLocalDriver`）。它与提交顺序/提交
+ * 信息无关，且父提交里必然**不含** G4 的任何收口符号 —— 下面那条腿有锚点断言钉住这件事。
+ *
+ * ⚠️ **T4 未提交时的回退（本任务特有）**：T4 的改动先落在**工作树**里（提交由协调者统一做）
+ * ⇒ 在提交之前 `git log -S createLocalDriver` 在历史里**找不到**它。此时回退到
+ * `HEAD:src/main.ts`：提交前 HEAD **就是** T4 的父提交，而"它确实是改动前的版本"这件事由
+ * 调用方的锚点断言（基线里不许有 `createLocalDriver` / `driver.submit(`）当场证明 ——
+ * 不是靠假设。提交之后自动走 `-S` 那条路（两条路给出同一份基线）。
  */
 function baselineMainCode(): string | null {
   const hashes = execFileSync(
     'git',
     // ⚠️ 路径用 `:/src/main.ts`（**仓库根**相对），不是裸 `src/main.ts`（**cwd** 相对）：
-    //    变异实测在**隔离镜像**里跑（`.superpowers/task7-mirror/`），那里的 cwd 前缀会让裸
-    //    pathspec 命中不到任何历史 ⇒ 这条腿会在镜像里假红。`:/` 前缀让它在任何 cwd 下同义。
-    ['log', '--format=%H', '-S', 'showLocalData', '--', ':/src/main.ts'],
+    //    变异实测在**隔离镜像**里跑，那里的 cwd 前缀会让裸 pathspec 命中不到任何历史 ⇒
+    //    这条腿会在镜像里假红。`:/` 前缀让它在任何 cwd 下同义。
+    ['log', '--format=%H', '-S', 'createLocalDriver', '--', ':/src/main.ts'],
     { cwd: REPO, encoding: 'utf8' },
   ).trim().split('\n').filter((x) => x !== '');
-  if (hashes.length === 0) return null;
-  const raw = execFileSync(
-    'git',
-    // `<rev>:<path>` 这一形态本就是**树根**相对（要 cwd 相对得写 `./`）⇒ 镜像里同样成立。
-    ['show', `${hashes[hashes.length - 1]}^:src/main.ts`],
-    { cwd: REPO, encoding: 'utf8' },
-  );
+  // `<rev>:<path>` 这一形态本就是**树根**相对（要 cwd 相对得写 `./`）⇒ 镜像里同样成立。
+  const rev = hashes.length === 0 ? 'HEAD' : `${hashes[hashes.length - 1]}^`;
+  let raw: string;
+  try {
+    raw = execFileSync('git', ['show', `${rev}:src/main.ts`], { cwd: REPO, encoding: 'utf8' });
+  } catch {
+    return null; // 历史里既没有该符号、也取不到 HEAD（裸仓库/浅克隆）⇒ 本腿没有基线
+  }
   expect((raw.match(/\r/g) ?? []).length, 'git show 的 stdout 里有 \\r（CRLF 会制造假红）').toBe(0);
   return stripComments(raw);
 }
@@ -854,26 +836,54 @@ describe('接线腿：main.ts（Task 7 行区）', () => {
     expect(bodies[1][1]).toContain('onWinReset');
   });
 
-  it.runIf(HAVE_GIT)('cb / rerender 的函数体与"引入 Task 7 之前"的提交逐字节相同（对照组：showHome 必须不同）', () => {
+  /**
+   * ★ **G4 Task 4 · L5 的 retarget**（判据目的保留，锚点换新）：
+   *
+   * 它原来是"`cb`/`rerender` 与**引入 Task 7 之前**的提交逐字节相同（对照组 `showHome` 必须不同）"
+   * —— 那是**冻结期**（G3）的判据：谁都不许动这两个函数。**冻结期已结束**：G3 计划 `:3229`
+   * 明确把 `cb` 与 `rerender` 的收口留给 G4 ⇒ G4 就是这个范围的**合法修改者**，
+   * 凡是钉"它们没被改过"的判据都必须 retarget，否则会红在一个**已被授权**的改动上。
+   *
+   * 新判据比旧的**更强**：它不再只证明"某两个函数没被动过"，而是证明
+   * **"G4 的改动恰好落在它的收口范围里、没有溢出到别处"** —— 正是 `148fae3` 那次越界事故
+   * （改 `main.ts` 时把范围外的 hunk 一并带进提交）的缺陷类。两个方向都钉：
+   *   ① **必须不同**（对照组，证明比较不恒真）：`rerender` / `cb` —— G4 的收口范围；
+   *   ② **必须逐字节相同**（真正的判据）：G4 **不碰**的四个邻居
+   *      `consentStep` / `showCoin` / `showHome` / `showModeSelect`。
+   *
+   * ⚠️ **两个陷阱（G4 计划 §3.3 的 L5 行逐条记着，第一版写错过）**：
+   *   · **`resetToMainInterface` 不能进"不变"那一组** —— T4 第 10 条**就是要改它**（加重放复位）；
+   *   · **`showHome` 的对照组语义要反过来** —— 旧腿里它"必须不同"是因为 Task 7 往它里面加了
+   *     `openLocalData`；换成 G4 基线后它在两侧相同 ⇒ 照旧写法会红。对照组改用 `rerender`/`cb`。
+   */
+  it.runIf(HAVE_GIT)('G4 的改动落点精确：rerender/cb 必须不同，consentStep/showCoin/showHome/showModeSelect 必须逐字节相同', () => {
     const before = baselineMainCode();
-    expect(before, 'git 里找不到"引入 Task 7 之前"的 main.ts ⇒ 本腿没有基线').not.toBeNull();
+    expect(before, 'git 里找不到 G4 收口之前的 main.ts ⇒ 本腿没有基线').not.toBeNull();
     if (before === null) return;
-    // 锚点：基线里**没有** Task 7 的任何符号，否则"两边相同"可能是"两边都含 Task 7"= 恒真
-    expect(before.includes('showLocalData'), '基线里已经有 showLocalData ⇒ 这不是"之前"的基线').toBe(false);
+    // 锚点：基线里**没有** G4 收口的任何符号，否则"两边相同"可能是"两边都已收口"= 恒真
+    // （`createLocalDriver` 是唯一允许出现在基线里的判据符号 —— 它出现在"现在"这一侧）
+    expect(before.includes('createLocalDriver'), '基线里已经有 createLocalDriver ⇒ 这不是"G4 之前"的基线').toBe(false);
+    expect(before.includes('driver.submit('), '基线里已经有 driver.submit( ⇒ 这不是"G4 之前"的基线').toBe(false);
     expect(before, '基线里没有 rerender ⇒ 后面的比对没意义').toContain('function rerender(): void {');
     expect(before, '基线里没有 cb ⇒ 后面的比对没意义').toContain(CB_HEAD);
+    expect(before, '基线里没有 showCoin ⇒ 后面的比对没意义').toContain('function showCoin(');
 
-    const pairs: Array<[string, string, string]> = [
-      ['rerender', functionBody(MAIN_CODE, 'rerender'), functionBody(before, 'rerender')],
-      ['cb', objectBody(MAIN_CODE, CB_HEAD), objectBody(before, CB_HEAD)],
-    ];
-    for (const [name, now, then] of pairs) {
-      expect(now.length, `${name} 抽到空片段`).toBeGreaterThan(200);
+    // ① 对照组：G4 的收口范围必须**真的变了** —— 没有这一条，下面那些"相同"可能是恒真的
+    expect(functionBody(MAIN_CODE, 'rerender'), 'rerender 是 G4 的收口范围，必须与基线不同')
+      .not.toBe(functionBody(before, 'rerender'));
+    expect(objectBody(MAIN_CODE, CB_HEAD), 'cb 是 G4 的收口范围，必须与基线不同')
+      .not.toBe(objectBody(before, CB_HEAD));
+
+    // ② 真正的判据：G4 **不碰**的四个邻居必须逐字节相同
+    //    （`resetToMainInterface` **不在**这一组：第 10 条本来就要改它）
+    for (const name of ['consentStep', 'showCoin', 'showHome', 'showModeSelect']) {
+      const now = functionBody(MAIN_CODE, name);
+      const then = functionBody(before, name);
+      expect(now.length, `${name} 抽到空片段`).toBeGreaterThan(50);
       expect((now.match(/\r/g) ?? []).length, `${name} 的片段里有 \\r`).toBe(0);
       expect((then.match(/\r/g) ?? []).length, `基线的 ${name} 片段里有 \\r`).toBe(0);
-      expect(now, `${name} 的字节被改动了（G4 收口范围内，谁都不许动）`).toBe(then);
+      expect(now, `${name} 在 G4 的收口里被改动了（改动溢出到 rerender/cb/applyRearrangeSwap/resetToMainInterface 之外）`)
+        .toBe(then);
     }
-    // 对照组：`showHome` 被 Task 4/7 改过（它必须**不同**）—— 否则"相同"这条判据可能是恒真的
-    expect(functionBody(MAIN_CODE, 'showHome')).not.toBe(functionBody(before, 'showHome'));
   });
 });

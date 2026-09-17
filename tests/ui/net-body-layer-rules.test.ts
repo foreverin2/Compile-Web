@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { NET_PAGE_CLASS } from '../../src/ui/render-net';
 import { makeStubEl, isClass, type StubNode } from './net-dom-stub';
@@ -68,17 +68,61 @@ const cleanRules = (css: string): CssRule[] => cssRules(css).filter((r) => {
 });
 
 /**
- * **三个样式表的合并层叠模型**（`main.ts:1-7` 的 import 顺序：styles.css → styles-gen3.css
- * → styles-gen3-sync.css → styles-net.css，本文件最后）。
- * 顺序即源序：同权重时**靠后者**胜 —— 这正是浏览器里发生的事，所以热座/远程两种链可以
- * 用**同一张表**解（远程规则带 `body.net-page`，在热座链上恒不命中 ⇒ 与真实页一致）。
+ * **层叠模型**（`main.ts` 的 import 顺序即源序：同权重时**靠后者**胜 —— 这正是浏览器里发生的事，
+ * 所以热座/远程两种链可以用**同一张表**解：远程规则带 `body.net-page`，在热座链上恒不命中）。
+ *
+ * ## ★ 收录准则（G4 Task 4 写下；原注释自称"等于 `main.ts:1-7` 的 import 顺序"，**那是假的**）
+ *
+ * `CASCADE` 只收 **其选择器可能命中棋盘节点** 的样式表。判据面是 `.board` / `.board-grid` /
+ * `.player-strip` / `.hand` / `.card` / `.net-*` / `.smoke-puff` / `.scan-overlay` 这一族 ——
+ * 只有这些表参与本文件解算的两条链。
+ *
+ * ⚠️ **它是手写副本，从不读 `main.ts`**（本文件只读 `src/ui/*.css`）⇒ 新增一张样式表时
+ * **没有任何腿会提醒你**该不该收进来。G4 之前就是这么静默漂移的：本模型漏了
+ * `styles-gen3-cards.css`（`main.ts:3`）与 `styles-local.css`（`main.ts:9`）两张，
+ * 而注释却声称等于 `main.ts:1-7`。⇒ 本轮把它变成**可核**的：
+ * 下面那条「样式表全集一一对应」腿由 `readdirSync(src/ui)` **现扫**，新增/改名一张表就必须
+ * 在这里显式归类（收进 `CASCADE_SOURCES`，或写进 `EXCLUDED_SOURCES` 并给出理由）。
+ *
+ * ## 刻意排除的表 + 逐条理由（**不要**"顺手补一行"）
+ *
+ * | 表 | 出处 | 为什么不可能命中棋盘节点 |
+ * |---|---|---|
+ * | `styles-gen3-cards.css` | `main.ts:3` | 只服务 3 代卡牌的**附加层**（`.g3card-*` 一族），那些节点不在这两条链上 |
+ * | `styles-local.css` | `main.ts:9` | 只带 `.consent-*` / `.local-data-*` 前缀类（G3 的授权弹窗与数据屏） |
+ * | `styles-replay.css` | `main.ts:10`（G4 新增） | 只带 `.replay-*` 前缀类（重放页控制条与只读遮罩） |
  */
-const CASCADE: CssRule[] = [
-  ...cleanRules(HOT_SRC),
-  ...cleanRules(GEN3_SRC),
-  ...cleanRules(GEN3SYNC_SRC),
-  ...cleanRules(NET_SRC),
-];
+const CASCADE_SOURCES = ['styles.css', 'styles-gen3.css', 'styles-gen3-sync.css', 'styles-net.css'] as const;
+const EXCLUDED_SOURCES = ['styles-gen3-cards.css', 'styles-local.css', 'styles-replay.css'] as const;
+/** 表名 → 表体（只给收进模型的那四张；`CASCADE` 由它按源序拼出来，避免"文档与代码两处各写一份"） */
+const SRC_OF: Record<string, string> = {
+  'styles.css': HOT_SRC,
+  'styles-gen3.css': GEN3_SRC,
+  'styles-gen3-sync.css': GEN3SYNC_SRC,
+  'styles-net.css': NET_SRC,
+};
+const CASCADE: CssRule[] = CASCADE_SOURCES.flatMap((name) => cleanRules(SRC_OF[name]));
+
+/**
+ * **层叠模型的可核性**（G4 Task 4 补的洞）：`src/ui/*.css` 的**全集**必须恰好等于
+ * "收进模型" ∪ "显式排除" —— 于是新增一张样式表时这条腿**当场红**，逼一次显式归类，
+ * 而不是让它静默地按旧顺序建模（G4 之前漏两张表就是这条洞的实例）。
+ */
+describe('G4 Task 4 · 层叠模型的收录准则是可核的', () => {
+  it('src/ui 的样式表全集 == CASCADE_SOURCES ∪ EXCLUDED_SOURCES（新增表必须显式归类）', () => {
+    const all = readdirSync(fileURLToPath(new URL('../../src/ui', import.meta.url)))
+      .filter((f) => f.endsWith('.css'))
+      .sort();
+    expect(all, 'src/ui 下的样式表与本文件的层叠模型不一致：新增/改名一张表就必须在这里显式归类'
+      + '（收进 CASCADE_SOURCES，或写进 EXCLUDED_SOURCES 并说明它为何不可能命中棋盘节点）')
+      .toEqual([...CASCADE_SOURCES, ...EXCLUDED_SOURCES].sort());
+    // 反空转：两组都非空，"收录/排除"这两句话才有内容
+    expect(CASCADE_SOURCES.length).toBeGreaterThan(0);
+    expect(EXCLUDED_SOURCES.length).toBeGreaterThan(0);
+    // 反向：`CASCADE` 真的按源序装了那四张表（不是空数组/少装一张）
+    expect(CASCADE.length).toBeGreaterThan(100);
+  });
+});
 
 /** 只带类名的桩节点（纯 CSS 解算用；不装 DOM、不渲染）。 */
 const cssNode = (...classes: string[]): StubNode => {

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { stripComments, functionBody } from './source-text';
+import { stripComments, functionBody, objectBody } from './source-text';
 
 /**
  * G2 Task 4 守卫：**接线**（`src/main.ts` 的页面路由 + 预览入口 + 重置）与**契约配套**。
@@ -27,6 +27,12 @@ const read = (rel: string): string =>
 
 /** `main.ts` 的去注释源码：判据不该被注释里的同名文本满足（本项目已栽过三次）。 */
 const mainSrc = (): string => stripComments(read('src/main.ts'));
+
+/**
+ * `cb` 对象字面量的声明头（`source-text.objectBody` 用它抽整段）。
+ * 与 `tests/ui/local-data-screen.test.ts` 的 `CB_HEAD` 同字面量 —— 两处都指向**同一个**声明。
+ */
+const CB_HEAD = 'const cb: UiCallbacks = ';
 
 /**
  * `functionBody`（**花括号配平**的函数体提取）已移到 `./source-text` 共用。
@@ -256,9 +262,23 @@ describe('G2 Task 4 · 接线：远程页进入产物 + 重渲染路由唯一入
 
   it('7. cb.rerender 已接上（否则远程页里选牌 / 翻面 / 浮层 / 工具条全都没反应）', () => {
     const main = mainSrc();
-    // cb 对象字面量里必须提供 rerender —— 转调同一入口，路由规则只有一处
-    expect(main, 'cb 里没有提供 rerender（render.ts 的选择浮层会退回 renderApp → 页面被换回热座）')
-      .toMatch(/rerender\(\)\s*\{\s*rerender\(\);\s*\}/);
+    /**
+     * cb 对象字面量里必须提供 rerender —— 转调**同一入口**，路由规则只有一处。
+     *
+     * ⚠️ **G4 Task 4 · L3 的 retarget（只换"面"，不放松）**：原判据是整份源码里的
+     * `/rerender\(\)\s*\{\s*rerender\(\);\s*\}/` —— 它把**方法简写**这一种排版当成了契约，
+     * 而 G4 要收口 `cb`（收口后合法的写法还有箭头函数）。新判据：
+     *   · 判据面从"整份源码"收窄到 **`cb` 的函数体**（不会再有别处的同形文本满足它）；
+     *   · **两种合法写法都接受**（方法简写 / 箭头），但都必须到达同一个唯一入口符号 `rerender(`。
+     * 强度：面更小、且要求"到达的是 `rerender()` 本身"（旧写法里一个巧合的
+     * `rerender() { rerender(); }` 出现在任何地方都算数 ⇒ 那是更弱的形态）。
+     */
+    const cbBody = objectBody(main, CB_HEAD);
+    expect(cbBody.length, 'cb 抽到空片段 ⇒ 本判据假绿').toBeGreaterThan(200);
+    expect(cbBody, 'cb 没提供 rerender（render.ts 的选择浮层会退回 renderApp → 页面被换回热座）')
+      .toMatch(/rerender\s*\(\)\s*\{\s*rerender\(\);\s*\}|rerender\s*:\s*\(\)\s*=>\s*rerender\(\)/);
+    // 反向：`rerender` 这个成员必须真的在 cb 里（不是被上面那条正则命中了别的成员）
+    expect(cbBody, 'cb 里没有 rerender 成员').toMatch(/(?:^|\n)\s*rerender\s*(?:\(\)\s*\{|:\s*\()/);
     // 提供方（render.ts）必须**优先**用它：`if (cb.rerender) cb.rerender(); else renderApp(…)`
     const renderSrc = stripComments(read('src/ui/render.ts'));
     expect(renderSrc, 'render.ts 里找不到 cb.rerender（选择浮层不会回到当前页面）').toContain('cb.rerender');

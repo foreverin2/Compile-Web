@@ -7,8 +7,12 @@ import './ui/styles-gen3-sync.css'; // 3代常驻层与控制权族样式（批�
 import './ui/styles-net.css';
 // G3 Task 4：授权弹窗与「本地数据与隐私」屏的样式（新文件，只服务 G3 新屏）
 import './ui/styles-local.css';
+// G4 Task 4：重放页控制条 + 只读遮罩的样式（新文件，只服务重放页）。
+// ⚠️ `tests/ui/net-body-layer-rules.test.ts` 的层叠模型是**手写副本**（它从不读本文件）⇒
+// 新增样式表时必须按那条腿里写下的「收录准则」处理（本表只带 `.replay-*` 前缀类、永不命中
+// 棋盘节点 ⇒ **不收**进那份模型，但要在它的排除清单里显式登记）。
+import './ui/styles-replay.css';
 import { createGame, performDraftPick, performDraftUnpick, performDraftBan, randomPoolFromSeed, setSeedNonce } from './core/state/create';
-import { executeAction } from './core/game';
 import { getCompilableLines } from './core/rules/compile';
 import { collectTriggers } from './core/effects/triggers';
 import { renderApp, renderDraft, resetUiState, syncCompiledFxLayers, syncSmokeOverlays, syncScanOverlays, syncPsychicParticles, syncPlagueMists, syncApathyMists, syncApathyMosaics, syncSpirit0Glows, syncSpirit1Cards, syncMetal0Glows, syncMetalPlates, syncMetal6Mans, syncMetal1LineGlows, syncMirror0BatteryGlows, syncClarity0BatteryGlows, syncIceFx, syncSmoke2LineGlows, syncFear0TriGlows, syncWarBlades, syncChainLayerPosition, syncDiversity3Fx, type UiCallbacks } from './ui/render';
@@ -26,11 +30,21 @@ import { handOuterFor } from './ui/fx-seat';
 import { openControlRearrangeModal, closeControlRearrangeModal, refreshControlRearrangeModal, isControlRearrangeOpen, orderChanged, orderToAction } from './ui/control-rearrange';
 import { renderHome, renderCoin, renderLibrary, renderRules, renderModeSelect } from './ui/home';
 // G3 Task 4：L1 授权状态机（纯层）+ 其浏览器后端 + 授权弹窗屏
-import { createLocalStore } from './app/local-store';
+import { createLocalStore, readNickName } from './app/local-store';
 import { openL1Store } from './ui/local-store-browser';
 import { renderLocalConsent, nextConsentStep } from './ui/local-consent';
 // G3 Task 7：「本地数据与隐私」屏 + 档案的选择/落盘口（浏览器实现只在 `showLocalData` 里注入）
 import { renderLocalData } from './ui/local-data';
+// G4 Task 4：会话层驱动（热座 = 执行 + 记录；重放 = 只读闸门）与档案重放的接线。
+// ⚠️ 收口后本文件**不再** import `executeAction`：唯一的「操作 → 引擎」映射住
+// `src/app/match-replay.ts`，唯一的触发入口是 `driver.submit(...)`（腿见
+// `tests/ui/main-driver-wiring.test.ts` 第 1/6 条 —— 那是设计稿 §4.5 验收项 1 的源码守卫）。
+import { createLocalDriver, createReplayDriver, type MatchDriver, type ReplayDriver, type Ticker } from './app/match-driver';
+// 重放的起跑状态（`createGame(matchFileToCreateOptions(f))` + 草稿序列真重建）
+import { stateAfterDraft } from './app/match-replay';
+import { setupFromState, type MatchFile, type MatchFileMeta } from './app/match-file';
+import { CARD_DATA_HASH } from './app/card-data-hash';
+import { renderReplayBar, type ReplayBarNav } from './ui/replay-bar';
 import { openArchivePicker, openArchiveSink } from './ui/archive-fs-browser';
 import { newMatchSeed } from './ui/match-seed';
 import { resetControlIfHeld } from './core/rules/control';
@@ -44,7 +58,7 @@ import { initDevMode, isDevUnlocked } from './ui/devmode';
 import { gameBus } from './core/events/bus';
 import { pushLog } from './core/log';
 import { trace, stateDigest, initEventTracing } from './core/trace';
-import type { PlayerId, Line } from './core/models/types';
+import type { GameState, PlayerId, Line } from './core/models/types';
 // G3 Task 8：PWA（manifest + service worker + 自动提示更新 + 一键更新）。零依赖、手写。
 import { initPwaUpdate } from './ui/pwa-update';
 
@@ -95,7 +109,7 @@ let resetEpoch = 0;
  *   - `resetToMainInterface` → `'hotseat'`（**必须**，否则"打完一局预览 → 返回主页面 → 开热座"
  *     会渲染成远程页 —— 那是最难自查的一类串味）。
  */
-let renderMode: 'hotseat' | 'net' = 'hotseat';
+let renderMode: 'hotseat' | 'net' | 'replay' = 'hotseat';
 /** 预览视角座位（**绝对玩家号**；仅 `renderMode === 'net'` 时有意义）。页内工具条可切换。 */
 let netViewSeat: PlayerId = 0;
 /* G2 Task 4F（终审 I-2 + N4）：**这里原先还有一个 `netHandVisibility` 常量，现已删除。**
@@ -107,6 +121,56 @@ let netViewSeat: PlayerId = 0;
  * 相应地 `NetViewOpts.handVisibility` 字段也已删除（留着只会让人以为传 `'all'` 有用 →
  * 终审 N4：那是**静默无效**的死参数）。要真正支持"可见且可点"得给 `renderHand` 解耦 `isSelf`
  * （共享助手，超出 G2 范围）→ 记入遗留。 */
+
+/* ──────────────────────────────────────────────────────────────────────────── *
+ * G4 Task 4：会话层驱动（**收口**）
+ *
+ * `main.ts` 从这一版起**不再直呼 `executeAction`**：所有状态迁移都走 `driver.submit(state, a)`。
+ * 两个实现各管一件事，且都住 `src/app/`（纯层，受 `tests/app-purity.test.ts` 约束）：
+ *   · `LocalDriver`（热座）＝**执行**（走 `applyRecordedAction` —— 全仓唯一的"档案操作 → 引擎调用"
+ *     映射）**并**把同一条操作记进内存记录器 ⇒ "档案 = 真实发生过的操作序列"不靠调用方自觉；
+ *   · `ReplayDriver`（重放页）＝**只读闸门**（D12）：只有档案里的**下一条**能通过，且应用的是
+ *     **记录里那一条**（不是调用方给的那条）；`acceptsInput()` 恒 false（控制条据此画
+ *     "重放中不可操作" + 遮罩）。
+ * 这条分界就是裁决 **D2**：驱动**不持有** `GameState`，状态仍住本模块的 `state`
+ * （它被 `rerender`/`cb`/`runAutoAdvance`/`syncPersistentFx`/`initDevMode`/`initDiag` 六处闭包读，
+ * 因此只换绑定、不改类型与名字）。
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** 热座驱动（模块级单例）：本地对局的唯一动作入口；记录器是**内存**数组（D13：不落盘）。 */
+const localDriver: MatchDriver = createLocalDriver();
+/**
+ * 重放驱动：**进入重放页时创建、退出时 `dispose()` 并置 null**。
+ * 它是**第四份跨页状态**（与 `resetUiState`/`resetNetUiState`/`setFxViewSeat` 并排）——
+ * 漏掉退出侧的 `dispose()` 会让在飞时钟与 `onTick` 订阅活着指向已离开的页（与 G2 的串味同族）。
+ */
+let replayDriver: ReplayDriver | null = null;
+/**
+ * **当前动作入口**：热座 = `localDriver`；重放页 = `replayDriver`（只读闸门）。
+ * 收口后 `cb` / `applyRearrangeSwap` 里的每一处状态迁移都只写 `driver.submit(...)` ⇒
+ * "重放复用同一条编排"（D3）不是靠复制一份代码，而是靠这一个绑定。
+ */
+let driver: MatchDriver = localDriver;
+/**
+ * 注入给重放驱动的**宿主时钟**（Global Constraints：`src/app` 内不许有裸定时器 ⇒ 由宿主注入）。
+ * `main.ts` 是 UI 层，用 `window.setTimeout` 构造它是允许的，也是本仓唯一的重放时钟。
+ *
+ * ⚠️ 驱动的原语**不做任何假设**（不读时钟、不比较句柄）⇒ 这里逐字转调 `window` 的两个函数即可。
+ */
+const replayTicker: Ticker = {
+  schedule: (fn: () => void, ms: number): number => window.setTimeout(fn, ms),
+  cancel: (h: number): void => { window.clearTimeout(h); },
+};
+/**
+ * 宿主侧的重放诊断（`cursor().error` 之外的补充）：闸门拒绝了这一步 / 状态与档案错位时，
+ * **停在这一步**并如实显示 —— 不静默重试（每 900ms 重试一次会把追踪日志刷满且永不前进）。
+ */
+let replayHostError: string | null = null;
+/**
+ * 会话内**最近一局**的档案（D9）：返回主界面后仍保留（否则"打完一局回主页就导不出来"），
+ * 新对局开始时被覆盖。**只在内存**（D13：不落盘、不新增任何存储写入点）。
+ */
+let lastArchive: MatchFile | null = null;
 
 /**
  * **整帧重渲染的唯一入口**：按 `renderMode` 路由到当前页面。
@@ -144,14 +208,201 @@ function rerender(): void {
     return;
   }
   renderApp(root, state, cb);
+  // ── G4 Task 4：重放页的收尾（**渲染之后**，且只在这里）────────────────────────
+  // ① `refreshReplayBar()`：控制条的**唯一**刷新入口。`renderReplayBar` 不清 parent、也不移除
+  //    自己上次插入的节点 ⇒ 任何"不以整帧 `renderApp` 为前置"的刷新路径都会在屏上叠出
+  //    **第二层遮罩 + 第二条控制条**，且旧监听器仍然活着（T3 一审第 5 条的契约风险）。
+  //    放在这里 = 每帧随 root 的整帧重画一起重建，天然没有残留。
+  // ② `replayDriver.settle()`：**编排的唯一重排点**。`cb.onAction` 的**每一条**终止路径最终都
+  //    汇到这次 `rerender()`（见 `cb.onAction` 里的逐条注释）⇒ "每个终止点都要 settle()"这条
+  //    要求由一个 choke point 自动满足，而不是靠 5 处记得写对。`settle()` 幂等（T2 判据 8）⇒
+  //    重放期间任何**额外的** `rerender()`（例如 devmode 解锁那一次）不会多排一步。
+  if (renderMode === 'replay') {
+    refreshReplayBar();
+    replayDriver?.settle();
+  }
+}
+
+/* ──────────────────────────────────────────────────────────────────────────── *
+ * G4 Task 4：重放页（进入 / 一步 / 控制条 / 退出）
+ *
+ * 执行路径与现场**完全同一条**（D3）：重放的一步 = `cb.onAction(档案里的下一条)`。
+ * 为什么不能"直接 executeAction + rerender"：本文件的两个累加器（`pendingDraws` /
+ * `pendingReveals`）**只在 `cb.onAction` 内部排空**，绕过编排直呼引擎会把它们灌满且永不排空，
+ * 泄漏进下一次真实行动 —— 一个**不报错**的缺陷。
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * 重放的一步：把**档案里的下一条**交给同一条编排（D12 的闸门语义）。
+ *
+ * 由注入时钟的 tick 触发（`replayDriver.onTick(replayStep)`），**不是**宿主的第二个时钟 ——
+ * 步进节奏（`stepMs / rate`）与暂停/倍速都归纯层的 `ReplayDriver`，宿主只负责"走一步"。
+ *
+ * ⚠️ 走到这里时驱动**已经把这一步的许可发出来了**（`emitTick()`），本函数必须真的让它落地：
+ * 判等的闸门会把 `cb.onAction` 算出来的提交与档案里的下一条比对，等价才应用并推进游标。
+ * 若一步走完**游标没动**（例如宿主状态与档案错位、或 `cb.onAction` 的早退分支），就在这里
+ * 停下并留下诊断 —— 否则注入时钟会每 `stepMs` 重试一次同一个拒绝，永不前进也永不报错。
+ */
+function replayStep(): void {
+  const drv = replayDriver;
+  if (renderMode !== 'replay' || !drv) return;
+  const a = drv.next();
+  // 档案走完 / 引擎报错 ⇒ 让这一帧把"已重放完"或错误显示出来（`settle()` 在 done/error 下不排步）
+  if (!a) { rerender(); return; }
+  const before = drv.cursor().position;
+  cb.onAction(a);
+  if (drv.cursor().position === before && replayHostError === null) {
+    replayHostError = '重放已停在这一步：档案里的下一条没有被接受（重放状态与档案不同步）。';
+    drv.pause();
+    rerender();
+  }
+}
+
+/**
+ * 重放控制条的状态装配（`ReplayBarState`）。**只读** `cursor()` + 宿主诊断，不参与判定。
+ * 位置用 `cursor().position`（= 已应用的档案步数，不含草稿重建）。
+ */
+function refreshReplayBar(): void {
+  const drv = replayDriver;
+  if (!drv) return;
+  const c = drv.cursor();
+  renderReplayBar(
+    root,
+    {
+      position: c.position,
+      total: c.total,
+      rate: c.rate,
+      paused: c.paused,
+      done: c.done,
+      error: c.error ?? replayHostError,
+    },
+    replayNav(),
+  );
+}
+
+/**
+ * 控制条的五个回调（T3 的 `ReplayBarNav`）。
+ *
+ * ⚠️ 每一个回调都**只改驱动状态然后整帧 `rerender()`**：控制条自身**不许**调
+ * `refreshReplayBar()`（那会叠出第二层遮罩，见 `rerender` 的注释）。
+ * `next`（单步）按 D8 **无视倍速走一步**：先暂停（停掉在飞时钟）再直接走一步 ⇒ 走完仍停在暂停态。
+ */
+function replayNav(): ReplayBarNav {
+  return {
+    pause: () => { replayDriver?.pause(); rerender(); },
+    play: () => { replayDriver?.play(); rerender(); },
+    next: () => { replayDriver?.pause(); replayStep(); },
+    setRate: (r: 0 | 1 | 2 | 4) => { replayDriver?.setRate(r); rerender(); },
+    // 出口与胜利「返回主界面」走**同一条**复位（第四份跨页状态在那里统一收拾）
+    exit: () => { resetToMainInterface(); },
+  };
+}
+
+/**
+ * **进入重放页**（D11）：把整帧渲染指向重放状态，并挂上只读闸门驱动。
+ *
+ * 落点（`file` 的来源）属 **T5** 的行区：`LocalDataNav.startReplay` 由 T5 加在
+ * `showLocalData` 的 nav 注入区（G3 计划 `:3229` / G4 附录 A）。T4 只交付这个入口函数 +
+ * 路由 + 控制条 + 退出侧复位；**刻意不接** `nav.onImported`（T5 规格第 3 条要求"导入成功后
+ * 不自动离开本屏、由「重放这一局」按钮触发"）。
+ *
+ * 进入时做一次**完整复位**（与 `resetToMainInterface` 同款，但不回主页）：`resetUiState()` 清
+ * render.ts 的全部 UI 模块态与 body 级常驻层；`setFxViewSeat(null)` 清 FX 视角座位
+ * （`resetUiState` **不碰** `fx-seat`，G2 修正 R-F 实测）；`resetNetUiState()` 清远程页模块态；
+ * `resetEpoch += 1` 让在飞动画的完成回调全部失效；本模块自己的动画标志/队列/定时器一并清空
+ * （否则上一局的抽牌幽灵会落进重放帧）。
+ */
+function startReplayFile(file: MatchFile): void {
+  // ① 上一屏 / 上一局留下的状态（逐项与 resetToMainInterface 对齐：这里只是**不回主页**）
+  resetEpoch += 1;
+  if (autoTimer !== null) {
+    window.clearTimeout(autoTimer);
+    autoTimer = null;
+  }
+  drawAnimBusy = false;
+  revealFlyBusy = false;
+  transitioning = false;
+  pendingDraws = [];
+  pendingReveals = [];
+  clearGen2Fx();
+  closeControlRearrangeModal();
+  effectRearrangeKey = null;
+  resetUiState();
+  resetNetUiState();
+  setFxViewSeat(null);
+  // ② 换驱动与状态：`state` 只换**绑定**（类型与名字不变 —— 见驱动声明块的理由）
+  replayDriver?.dispose();
+  replayDriver = createReplayDriver(file, { ticker: replayTicker });
+  // 订阅"该走下一步了"（注入时钟驱动）。退订随 `dispose()`（T2 判据 8）⇒ 退出侧不需要单独记句柄。
+  replayDriver.onTick(replayStep);
+  driver = replayDriver;
+  replayHostError = null;
+  state = stateAfterDraft(file);
+  renderMode = 'replay';
+  // ③ 进入即开播（1× 档，D8）。顺序要紧：**先 `play()` 再 `rerender()`** ——
+  //    `play()` 负责把第一次 tick 排进注入时钟，而这一帧末尾的 `settle()` 在"已排程"时是
+  //    幂等的 no-op；反过来（先 rerender 再 play）会让 `settle()` 在还没开播时被调用，
+  //    那时没有任何"上一步"需要重排。
+  replayDriver.play();
+  rerender();
+}
+
+/**
+ * 导出用的档案 meta（T4 第 11 条）。
+ *
+ * - `seed`：从本局状态来（`state.rng.seed`）—— 重放全靠它；
+ * - `setup`：`setupFromState`（草稿两条顺序快照的唯一抽取点）；
+ * - `players[0].nick`：L1 里玩家自己的昵称（未设置时是空串，读失败也回空串，见 `readNickName`）；
+ *   `players[1].nick`：热座没有"第二个昵称"这个概念（G3 的快照档案同样写空串）；
+ * - `cardDataHash`：卡牌数据指纹（另一台设备据此在导入时给警告）；
+ * - `createdAt`：**UI 层读时钟**（`src/app` 不许读时钟，`tests/app-purity.test.ts` 有守卫）。
+ *   `matchFileFingerprint` 不含它 ⇒ 同一局导出两次指纹仍相同。
+ */
+function matchFileMeta(s: GameState): MatchFileMeta {
+  return {
+    seed: s.rng.seed,
+    setup: setupFromState(s),
+    players: [{ nick: readNickName(localStore) }, { nick: '' }],
+    cardDataHash: CARD_DATA_HASH,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * `buildSessionArchive()` 的返回形态（与 T5 的 `LocalDataNav.buildArchive` **同形**：
+ * 有记录 ⇒ 给档案；没有 ⇒ 给**理由**，屏上如实显示）。
+ *
+ * ⚠️ 为什么给它起个名字而不是就地写 `{ file: MatchFile } | { reason: string }`：后者会让
+ * `tests/ui/source-text.ts` 的 `functionBody` 把**返回类型标注里的 `{`** 当成函数体起点
+ * （那是它写明的已知局限：本仓原本的函数返回类型都不含 `{`）⇒ 抽出来的"函数体"只有一行，
+ * 任何针对该函数体的判据都会变成**假绿**。命名类型同时让两处同形这件事显式可见。
+ */
+type SessionArchive = { file: MatchFile } | { reason: string };
+
+/**
+ * 本次会话的档案（T5 的 `LocalDataNav.buildArchive` 的落点）。
+ *
+ * 语义（D9）：**本次会话还没有对局记录时返回 `reason`**，屏上如实显示 —— 不再退化成导一份
+ * `actions: []` 的"本机数据快照"。记录器里还有进行中的一局 ⇒ 用它；否则用最近一局的快照
+ * （`lastArchive`，打完一局回主页后仍然留着）。
+ */
+function buildSessionArchive(): SessionArchive {
+  const rec = localDriver.recorder();
+  if (rec && rec.actions().length > 0) return { file: rec.toMatchFile(matchFileMeta(state)) };
+  if (lastArchive) return { file: lastArchive };
+  return { reason: '本次会话还没有对局记录：先打完一局再来导出。' };
 }
 
 /**
  * 控制组件重排模态内的一次交换（2026-09 基础规则）：引擎动作 + 重渲染棋盘 + 模态刷新。
  *  交换基础动画由 protocols:rearranged 事件驱动（effects「重排协议基础特效」——
- *  两张协议卡同时平移互换位置，与"交换链路"动画不同）。 */
+ *  两张协议卡同时平移互换位置，与"交换链路"动画不同）。
+ *
+ * G4 Task 4 收口：它**不是**旁路 —— `rearrange-protocols` 是**真实规则动作**（协议摆放顺序
+ * 影响后续所有线值）⇒ 走 `driver.submit`（热座：进档案、可重放；重放页：闸门）。若当成
+ * `note()` 只留痕，档案到这一步就与真实对局分叉（T4 第 2 条）。 */
 function applyRearrangeSwap(target: PlayerId, a: Line, b: Line): void {
-  executeAction(state, state.turnPlayer, 'rearrange-protocols', { target, a, b });
+  driver.submit(state, { player: state.turnPlayer, kind: 'rearrange-protocols', args: { target, a, b } });
   rerender();
   refreshControlRearrangeModal();
 }
@@ -208,7 +459,7 @@ function syncRearrangeModalForEffect(): void {
 const cb: UiCallbacks = {
   onRendered() {
     // 效果内重排窗口（动量4）随每帧渲染同步：栈顶是重排请求 → 打开；结算完毕 → 自动关闭
-    syncRearrangeModalForEffect();
+    if (renderMode !== 'replay') syncRearrangeModalForEffect();
     scheduleAutoAdvance();
   },
   onWinReset() {
@@ -245,8 +496,14 @@ const cb: UiCallbacks = {
     const player = state.turnPlayer;
     // 本次行动的世代快照：动画完成回调据此判断重置是否已发生（见 resetEpoch）
     const epoch = resetEpoch;
-    // executeAction 使用窄化重载（play/compile 需 args，refresh/advance 无 args），
-    // 而 LegalAction.kind 是联合类型，需按 kind 收窄后再分发
+    // ── G4 Task 4：**收口后本模块不再直呼引擎** ──
+    // 每一类操作都提交给当前驱动（见驱动声明块的 `driver`）：
+    //   · 热座（`LocalDriver`）＝ `applyRecordedAction`（全仓唯一的"档案操作 → 引擎调用"映射）
+    //     **并**把同一条操作记进内存记录器；
+    //   · 重放页（`ReplayDriver`）＝ 只读闸门（D12）：只有档案里的下一条能过，且应用的是
+    //     **记录里那一条**（不是这里算出来的那条）。
+    // `applyRecordedAction` 内部已按 kind 收窄到 `executeAction` 的窄化重载 ⇒ 这里不再需要
+    // 之前那套"LegalAction.kind 是联合类型、需按 kind 收窄后再分发"的说明。
     let drawAnimCount = 0;
     // 全量追踪（2026-09-12）：玩家动作 + 参数 + 行动前状态摘要
     trace('动作', `P${player + 1} 行动 kind=${a.kind} args=${JSON.stringify(a)} | 前：${stateDigest(state)}`);
@@ -256,13 +513,19 @@ const cb: UiCallbacks = {
     // 现捕获后立刻重渲染：界面回到引擎的真实状态，玩家可继续操作。
     try {
     if (a.kind === 'play') {
-      executeAction(state, player, 'play', { cardUid: a.cardUid!, faceUp: a.faceUp!, line: a.line!, target: a.target });
+      driver.submit(state, { player, kind: 'play', args: { cardUid: a.cardUid!, faceUp: a.faceUp!, line: a.line!, target: a.target } });
     } else if (a.kind === 'compile') {
       // 持有控制组件 → 编译前先归还中立并弹「重排协议」模态（FAQ 79：编译时首先归还
       // 中立，可重排一名玩家的协议——自己或对手——随后完成编译；FAQ 114：即使不重排
       // 也归还）。归还后提交 compile 不再重弹。devmode 强制编译走 executeCompileUnchecked
       // 旁路（devmode.ts 内同样归还，但不弹模态）。
-      if (state.control === player) {
+      //
+      // ⚠️ G4 Task 4：**重放页不走这个模态分支**。理由是可证伪的：档案里那次"UI 归还"
+      //    不在 `actions` 里（它只留一条 log），而引擎的 compile 分支**自己**会先
+      //    `resetControlIfHeld` 再 pushLog（`game.ts:153-157`）⇒ 重放直接 submit 就复现了
+      //    现场那两条 log 的**顺序**（T1 头注的实测口径）。反过来，若重放也进这里，重放会
+      //    **永久停在这一步**：模态在等人点，而重放页只读、没有人能点。
+      if (renderMode !== 'replay' && state.control === player) {
         resetControlIfHeld(state, player);
         const line = a.line!;
         openControlRearrangeModal({
@@ -277,17 +540,20 @@ const cb: UiCallbacks = {
         });
         return;
       }
-      executeAction(state, player, 'compile', { line: a.line! });
+      driver.submit(state, { player, kind: 'compile', args: { line: a.line! } });
     } else if (a.kind === 'refresh') {
       // 抽牌飞入动画：记录刷新前手牌数，执行后按差值（= 本次抽了几张）播放动画，
       // 动画结束后再重渲染展示新手牌；动画进行中忽略再次刷新（防并发）
       if (drawAnimBusy) {
+        // 终止路径 ②：抽牌动画进行中，本次 refresh 不执行 —— 仍然重渲染（⇒ 重放页在这一步
+        // 也会经 `rerender()` 重排；本分支在重放里理论上不可达，见下面 afterFx 的说明）。
         rerender();
         return;
       }
       // 持有控制组件 → 补满手牌前先归还中立并弹「重排协议」模态（规则文本「控制组件
       // 相关规则」：执行补满手牌时归还中立，可调整任意一名玩家的协议摆放顺序）。
-      if (state.control === player) {
+      // ⚠️ 重放页的理由同 compile（引擎 refresh 分支自己会先归还并 pushLog，`game.ts:142-146`）。
+      if (renderMode !== 'replay' && state.control === player) {
         resetControlIfHeld(state, player);
         openControlRearrangeModal({
           getState: () => state,
@@ -302,22 +568,24 @@ const cb: UiCallbacks = {
         return;
       }
       const handBefore = state.players[player].hand.length;
-      executeAction(state, player, a.kind);
+      driver.submit(state, { player, kind: 'refresh' });
       drawAnimCount = state.players[player].hand.length - handBefore;
     } else if (a.kind === 'effect-choice') {
       // 应答挂起选择：chooser 可能是对手（规则"被作用卡持有者决定执行"）。
       // 必须用 prompt.chooser 覆盖（与 render.ts 选择条标签一致、与 executeAction 内部
       // 的 chooser 判定一致）——旧实现只取 top.player（效果属主），light-2 揭示对手反面牌
       // 时把「被揭示卡持有者（P1）」的选择错误派发给效果属主（P2）→ "not your choice"。
+      // ★ 记录进档案的 `player` 也因此是**实际 chooser**（T4 第 4 条）：重放的闸门逐项比对
+      //   `kind`+`args`+`player`，退回 `state.turnPlayer` 会让这些记录在重放时被拒。
       const top = state.pendingEffects[state.pendingEffects.length - 1];
       const chooser = top?.prompt?.chooser ?? top?.player ?? state.turnPlayer;
-      executeAction(state, chooser, 'effect-choice', { promptId: a.promptId!, choice: a.choice! });
+      driver.submit(state, { player: chooser, kind: 'effect-choice', args: { promptId: a.promptId!, choice: a.choice! } });
     } else if (a.kind === 'advance') {
-      executeAction(state, player, a.kind);
+      driver.submit(state, { player, kind: a.kind });
     } else if (a.kind === 'clear-cache') {
-      executeAction(state, player, a.kind);
+      driver.submit(state, { player, kind: a.kind });
     } else if (a.kind === 'resolve-trigger') {
-      executeAction(state, player, 'resolve-trigger', { cardUid: a.cardUid! });
+      driver.submit(state, { player, kind: 'resolve-trigger', args: { cardUid: a.cardUid! } });
     }
     } catch (err) {
       // 打印到控制台（诊断日志会一并导出）+ 写入游戏日志树 + 全量追踪，随后重渲染同步 UI
@@ -325,6 +593,7 @@ const cb: UiCallbacks = {
       pushLog(state, `行动结算异常：${err instanceof Error ? err.message : String(err)}`);
       trace('错误', `行动结算异常 kind=${a.kind}：${err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err)}`);
       trace('状态', `异常后状态：${stateDigest(state)}`);
+      // 终止路径 ④（引擎抛错）：重渲染同步 UI ⇒ 重放页的 `settle()` 由 `rerender()` 统一重排
       rerender();
       return;
     }
@@ -338,6 +607,20 @@ const cb: UiCallbacks = {
     const effectReveals = pendingReveals;
     pendingReveals = [];
     // 揭示飞行在重渲染前完成：幽灵不提前出现在接收方手牌中，飞入后才随重渲染落地显示
+    //
+    // ⚠️ **重放的"唯一重排点"就靠这一段收口**（T4 第 6 条 / 协调者裁决 3）：下面是
+    // `cb.onAction` 的**全部**终止路径，逐条都在 replay 下走到 `rerender()` ——
+    //   ① `afterFx()` 的揭示分支：`playRevealFlySequence` 的完成回调 → `rerender()`；
+    //   ② `afterFx()` 的同步分支：直接 `rerender()`；
+    //   ③ 刷新抽牌动画：完成回调 → `afterFx()` → ①或②（即 CPU 上也是这两条）；
+    //   ④ 效果触发的抽牌序列：完成回调 → `afterFx()` → ①或②；
+    //   ⑤ `drawAnimBusy` 早退：自己 `rerender()` 后 return（上面那条注释）；
+    //   ⑥ 引擎抛错：`catch` 里 `rerender()` 后 return；
+    //   ⑦ `state.phase === 'gameover'` 的**顶部早退**：它之前没有任何状态迁移（引擎不会在
+    //      gameover 后再动），档案也不会在终局之后还有记录（记录器只在真实动作处写），
+    //      因此"停在这一步"在重放里不可达；`replayStep` 另有游标不动即停的诊断兜底。
+    //   两条**不进重放**的 return：compile/refresh 的重排模态分支（都带 `renderMode !== 'replay'`）。
+    // ⇒ `rerender()` 里那一次 `replayDriver?.settle()` 就是"每个终止点都 settle"的 choke point。
     const afterFx = () => {
       if (effectReveals.length > 0 && !revealFlyBusy) {
         revealFlyBusy = true;
@@ -348,6 +631,7 @@ const cb: UiCallbacks = {
           rerender();
         });
       } else {
+        // 终止路径 ②（同步分支）：无揭示或有揭示飞行进行中 ⇒ 直接重渲染
         rerender();
       }
     };
@@ -784,6 +1068,22 @@ function resetToMainInterface(): void {
   //     热座 FX 仍走**竖向**分支：落点翻边、覆盖条带变横带、控制轨特效变竖向，且**不报任何错**。
   //     （R3 报告当时宣称"热座页观感零变化 ✅"—— 那只在"本次会话从未渲染过远程页"时成立。）
   setFxViewSeat(null);
+  // ── G4 Task 4：**重放页**（第四份跨页状态）也要在这里收拾（与上面三份并排：各归各的模块）──
+  // `'replay'` 是 `renderMode` 的第三个值，它的伴生状态有两样：
+  //   · 驱动本身（在飞时钟 + `onTick` 订阅）⇒ `dispose()` 一次清干净（T2 判据 8 实测）；
+  //   · 动作入口 `driver`（否则退出后热座的动作会被重放的只读闸门拒，且**不报任何错**）。
+  // `lastArchive` **刻意保留**（D9）：打完一局回主页之后仍要能导出这一局。
+  replayDriver?.dispose();
+  replayDriver = null;
+  driver = localDriver;
+  replayHostError = null;
+  // D9：把这一局的档案**快照**进内存（`lastArchive`），并把记录器交还给下一局。
+  // 「新对局开始时清空」在正常流程里等价于「上一局离开时清空」——通往主界面的唯一路径是胜利
+  // 横幅（`cb.onWinReset` → 本函数），而新对局只能从主界面开始（`showCoin` 不在本任务改动面内：
+  // L5 要求 `showCoin`/`showHome`/`showModeSelect` 与基线逐字节相同）。**不落盘**（D13）。
+  const archived = buildSessionArchive();
+  if ('file' in archived) lastArchive = archived.file;
+  localDriver.recorder()?.clear();
   renderMode = 'hotseat'; // 防"预览模式泄漏到热座"（见本节注释）
   netViewSeat = 0;
   // 手牌可见性无需复位：本页无该选项（档位字段已删，恒为信息遮蔽，I-2/N4）。
@@ -801,6 +1101,11 @@ function resetToMainInterface(): void {
  * - 其余步骤（start/check-control/check-cache 手牌合规/end）→ 自动 advance
  */
 function runAutoAdvance(): void {
+  // ── G4 Task 4（D8）：**重放期间不自动推进** ──
+  // 自动推进（400ms）与重放的步进时钟（注入的 ticker，900ms/档）是两套独立时钟，同时跑必然
+  // 互相踩：`runAutoAdvance` 会替玩家合成 `advance`，而档案里的 `advance` 是**显式记录**的
+  // （`match-file.ts:178-187` 的 kind 表）⇒ 重放步数与档案错位、且不会报任何错。
+  if (renderMode === 'replay') return;
   if (transitioning) return; // 草案→游玩过渡中：不自动推进
   if (state.pendingEffects.length > 0) return; // 有挂起选择：等对应玩家应答
   if (state.pendingPlay.length > 0 || state.pendingShift.length > 0) return; // 落牌/偏转进行中
@@ -822,6 +1127,8 @@ function runAutoAdvance(): void {
 
 /** 每次渲染完成后调用；已有一个待执行的自动推进时不重复排队 */
 function scheduleAutoAdvance(): void {
+  // G4 Task 4（D8）：重放页**不排**自动推进（它有自己的步进时钟，见 `runAutoAdvance` 的同款守卫）
+  if (renderMode === 'replay') return;
   if (autoTimer !== null) return;
   autoTimer = window.setTimeout(() => {
     autoTimer = null;

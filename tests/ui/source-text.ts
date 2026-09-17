@@ -176,6 +176,48 @@ export function functionBody(src: string, name: string): string {
 }
 
 /**
+ * 取 `const NAME: T = { … }` 这类**对象字面量声明**的整段（花括号配平、字符串/模板串感知）。
+ *
+ * **为什么它必须和 `functionBody` 住同一份**（G4 Task 4 提升）：`cb`（`UiCallbacks` 的唯一实现）
+ * 不是函数声明 ⇒ `functionBody` 抽不到它，而"`cb` 的某个成员必须到达 X"这类判据同时被
+ * `net-preview-wiring`（L3 的 `cb.rerender`）、`rearrange-draft`（L6 的 `cb.onRendered`）、
+ * `local-data-screen`（L4/L5）四处需要。四份拷贝一旦漂移，其中一边就会因为"抽错了整段"
+ * 而**假绿**（与本文件头注里 `stripComments` 的理由同款）。
+ *
+ * 纪律与 `functionBody` 逐字相同：**找不到声明头就抛错**（响亮），而不是返回空串让上层断言
+ * 变成假绿；字符串与模板串整段跳过（对象字面量里就有 `'…{…}…'` 这种文本）。
+ *
+ * ⚠️ 它与 `stripArrayDecl` 的差别：后者**剔除**数组字面量（返回原串、找不到就返回原文），
+ * 本函数**取出**对象字面量（返回片段、找不到抛错）。用途不同，别互相替换。
+ */
+export function objectBody(src: string, head: string): string {
+  const at = src.indexOf(head);
+  if (at < 0) throw new Error(`源码里找不到声明头 ${head}（结构被改动？）`);
+  const open = src.indexOf('{', at);
+  if (open < 0) throw new Error(`声明头 ${head} 之后没有 {`);
+  let depth = 0;
+  for (let i = open; i < src.length; i += 1) {
+    const ch = src[i];
+    if (ch === "'" || ch === '"' || ch === '`') {
+      const q = ch;
+      i += 1;
+      while (i < src.length) {
+        if (src[i] === '\\') { i += 2; continue; }
+        if (src[i] === q) break;
+        i += 1;
+      }
+      continue;
+    }
+    if (ch === '{') depth += 1;
+    else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) return src.slice(at, i + 1);
+    }
+  }
+  throw new Error(`声明头 ${head} 的花括号不配平`);
+}
+
+/**
  * 整段剔除一个 `[export] const NAME [: 类型] = [ … ];` 形式的**数组字面量声明体**
  * （含 `NAME` 之前的声明头与结尾的 `];`），替换为等长空白（保留换行 → 行号不变）。
  *
