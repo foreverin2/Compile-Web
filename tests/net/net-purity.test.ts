@@ -33,15 +33,19 @@ import { stripComments } from '../ui/source-text';
  *
  * ## 临时目录放哪
  *
- * 临时目录建在 **`.superpowers/T1/probe-scan/`**（已 gitignore）里，**不**写进 `tests/`、
- * **不**写进仓库根的共享工作树 —— 本仓为"污染共享树"出过两次事故（AGENTS.md）。
+ * 建在 `TMP_ROOT`（`.superpowers/tmp/`，见下面那个常量）—— 中立的公共临时根，
+ * **不**写进 `tests/`、`src/` 或仓库根（本仓为"污染共享树"出过两次事故）。
  * 每次跑完都 `rmSync(recursive)` 清掉，并用 try/finally 保证红了也清。
+ *
+ * ⚠️ 早先这里写的是 `.superpowers/T1/`（实现者自己的证据目录）。阶段一评审 N-7 指出：
+ * 本守卫将来会被 T2-T10 复用，写在别人的任务目录里会让"谁的残留"分不清。已挪到中立根，
+ * **不要再把它写回任何单个任务的目录**。
  */
 
 /** 被扫目录：本模块的纯层。写在**一处**，别在下面各处再拼一次路径 */
 const NET_DIR = fileURLToPath(new URL('../../src/net/', import.meta.url));
 
-/** 下界自证的阈值。今天 `src/net` 只有 `protocol.ts` 一个文件；T2-T7 会陆续加。
+/** 下界自证的阈值。`src/net` 的文件数会随 T2-T10 增长（T1 时 1 个，T2 之后 3 个）。
  *  ⚠️ 这个数**不许**为了"让测试变绿"往下调 —— 它只在"目录写错/被清空"时变红。 */
 const MIN_FILES = 1;
 
@@ -212,7 +216,8 @@ const POSITIVE_SAMPLES: ReadonlyArray<readonly [string, string]> = [
   ['window 成员访问', 'const a = window.innerWidth;'],
   ['navigator 成员访问', 'const a = navigator.userAgent;'],
   ['fetch 调用', 'const r = await fetch("/x");'],
-  ['serviceWorker', 'const a = navigator.serviceWorker;'],  ['XMLHttpRequest', 'const x = new XMLHttpRequest();'],
+  ['serviceWorker', 'const a = navigator.serviceWorker;'],
+  ['XMLHttpRequest', 'const x = new XMLHttpRequest();'],
   ['WebSocket', 'const w = new WebSocket("wss://x");'],
   ['RTCPeerConnection', 'const pc = new RTCPeerConnection(cfg);'],
   ['showOpenFilePicker / showSaveFilePicker', 'const f = await showOpenFilePicker(opts);'],
