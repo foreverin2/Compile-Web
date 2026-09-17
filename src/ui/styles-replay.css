@@ -11,14 +11,22 @@
  *  1. `tests/ui/replay-bar.test.ts` 的判据 9 **从磁盘现算**棋盘/特效层的上限，并断言 `shield > 该上限`。
  *     候选面是**生成式四族**（括号里是今天实测的数）：
  *      ① `src/ui/**` 的全部 `.css`（**排除本文件**；今天 6 张、最大 12000 = `styles.css` 的 `.home-toast`）；
- *      ② `index.html` **外链**的 `public/assets/**` 的 `.css`（今天 3 张：`fire-burn` / `delete-shatter`
- *         / `discard-cut`，最大 20）+ `index.html` 自身（今天 `z-index` 零命中）；
+ *      ② **`public/assets/**` 整棵子树**的 `.css`（今天 3 张：`fire-burn` / `delete-shatter`
+ *         / `discard-cut`，最大 20）+ `index.html` 自身（今天 `z-index` 零命中）。
+ *         ⚠️ 本仓**不解析 `<link>`**：今天 `index.html:9-11` 那三条外链恰好都落在 `public/assets/**`
+ *         里，但"扫 public 子树"与"扫 index.html 的外链"**不是同一件事**（残留项见下）；
  *      ③ `src/ui/**` 的 `.ts` 里的**内联**汇聚点：`z-index:<digits>` / `zIndex = '<digits>'` 字面量，
  *         以及**同一行**出现的常量（`String(GEN2_Z)` / `${GEN2_Z}`，含 `± k`，用同文件的
  *         `const NAME = <digits>` 解出）—— 今天 30 个 .ts / **85 条**、最大 **601**（`fx-gen2.ts` 的 `GEN2_Z + 1`）；
- *      ④ 一条**显式登记的间接**项：`gen3-control.ts` 的 `Z_CTRL = 620`（它经 `layer(id, z)` →
- *         cssText 的 `z-index:${z}` 落到 DOM，常量从不出现在 z-index 那一行上 ⇒ 行级规则看不见；
- *         值仍**读自磁盘** ⇒ 抬高它判据就红）。
+ *      ④ 一份**显式登记的间接**名单（**今天已知 3 处**）：常量/字面量经"写 z-index 的 helper"
+ *         落到 DOM、而行级规则看不见的那些 ——
+ *          · `gen3-control.ts` 的 `Z_CTRL = 620`（**命名常量**：`layer(cls, z)` 把 `z` 写进 cssText
+ *            的 `z-index:${z}`，调用点只写 `layer('g3ctrl-layer', Z_CTRL)`）；
+ *          · `fx-gen3-swap.ts:75/158` 的 `layer('g3swap-layer', 301/620)`（**字面量调用点**）；
+ *          · `fx-gen3.ts` 的 `bodyLayer(…, api.extraZ)` ← `effects/index.ts:2111 extraZ: EXTRA_Z`
+ *            （16 处调用点里 15 处如此；**值**已被 ③ 覆盖，**路径**未登记）。
+ *         三者今天均 ≤ 620 ⇒ 无假绿，但**类别未闭合**（复验 F6 实测：把 `fx-gen3-swap.ts:158` 的
+ *         620 抬到 20000 时，③ 与整个探针双双失明 ⇒ 靠 ④ 里新登记的两条才红）。
  *     **排除本文件**是必须的：`.replay-bar` 的 12600 若被算进"棋盘层上限"，断言会变成恒假。
  *     候选面取"整族现算"而不是挑低位锚点（`.action-bar` 的 200 / 草案层的 400），
  *     是这条判据**不可被挑选锚点绕过**的形态：任何一层新抬高都不会静默穿帮。
@@ -29,12 +37,13 @@
  *
  * ⚠️ **候选面的残留缺口（如实登记，不是"已全覆盖"）**：
  *   · **动态值**：`render.ts` 的 `node.style.zIndex = String(i)`（`i` 是堆叠序号，静态文本算不出）；
- *   · **新的间接形态**：常量在 A 文件、经 B 文件的"写 z-index 的 helper"落到 DOM —— 今天只有
- *     `Z_CTRL` 一例（已登记），**新增一例不会被自动发现**；
- *   · 未来新增的外链样式表（今天只有 `index.html` 那三条 `<link>`，已由 ② 覆盖）；
- *   · 用"把含 z-index 文件里所有 `const` 数字都算进来"去堵间接形态**已实测不可行**：它会吃到
- *     `MIRROR_GAP_JITTER_MS = 9000` / `ICE_GAP_JITTER_MS = 8000` 这类**毫秒**常量
- *     （上限被抬到 9000，判据变成无意义的假红）。
+ *   · **间接形态的类别没有闭合**：常量/字面量经"写 z-index 的 helper"落到 DOM 的那一族，今天已知
+ *     3 处（全部登记在 ④），**新增一处不会被自动发现**；
+ *   · **未来 `<link>` 指向 `public/assets/**` 之外**的样式表不会被扫到（本仓不解析 `<link>`）；
+ *   · 用"把含 z-index 文件里所有 `const` 数字都算进来"去堵间接形态**已实测不可行**：门槛会被
+ *     虚抬到 9000（`MIRROR_GAP_JITTER_MS = 9000` / `ICE_GAP_JITTER_MS = 8000` 这类**毫秒**常量）
+ *     ⇒ 判据从"是否高于真实层"偷换成"是否高于一堆毫秒常量"；**今天不会红**（12500 > 9000），
+ *     但将来有人把 shield 下调到 [真实上限, 9000) 区间就会**假红**。
  *
  * ⚠️ 后果（如实记录）：遮罩高于以上全部（含 `.dev-console` 的 1200 与 `.home-toast` 的 12000）
  *    ⇒ 重放页上所有指针交互都被遮罩截获，**这正是 D3 要的效果**（T6 的浏览器场景需知）。
