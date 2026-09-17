@@ -35,11 +35,11 @@
  * （注意那测的是"进程死亡、socket 被关掉"，**不是拔网线**；后者只能靠 ICE consent
  * freshness 超时，耗时未验证）。
  *
- * ## ⚠️ 绝不要用 `chrome --version` 探测浏览器
+ * ## 绝不要用 `chrome --version` 探测浏览器
  * 这台机器上它会起一个用用户默认 profile 的真 Chrome（会弹窗、会抢 profile 锁）。
  * 本工具只 `existsSync()` 判断可执行文件在不在，**从不执行探测命令**。
  *
- * ## ⚠️ 子进程输出用文件描述符，不用管道
+ * ## 子进程输出用文件描述符，不用管道
  * 宿主沙箱在某些模式下禁止程序用管道捕获子进程输出（Node `child_process` 的默认
  * `stdio: 'pipe'` 会 EPERM）。本工具一律 `stdio: 'ignore'`。
  *
@@ -90,7 +90,7 @@ const say = (m) => process.stdout.write(`${m}\n`);
 const die = (m) => { say(`\n[X] 环境错误：${m}`); process.exit(2); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/* ⚠️ 参数校验必须排在 `die` 定义**之后**：`const` 有 TDZ，提前调用会抛
+/* 参数校验必须排在 `die` 定义**之后**：`const` 有 TDZ，提前调用会抛
  * `ReferenceError: Cannot access 'die' before initialization` —— 那样非法输入拿到的是
  * 一个崩溃栈而不是可读的环境错误。（第五道门的头注记过同一个坑，它第一版就是这么崩的。） */
 if (!['normal', 'disconnect'].includes(SCENARIO)) {

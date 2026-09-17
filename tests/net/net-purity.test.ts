@@ -37,7 +37,7 @@ import { stripComments } from '../ui/source-text';
  * **不**写进 `tests/`、`src/` 或仓库根（本仓为"污染共享树"出过两次事故）。
  * 每次跑完都 `rmSync(recursive)` 清掉，并用 try/finally 保证红了也清。
  *
- * ⚠️ 早先这里写的是 `.superpowers/T1/`（实现者自己的证据目录）。阶段一评审 N-7 指出：
+ * 早先这里写的是 `.superpowers/T1/`（实现者自己的证据目录）。阶段一评审 N-7 指出：
  * 本守卫将来会被 T2-T10 复用，写在别人的任务目录里会让"谁的残留"分不清。已挪到中立根，
  * **不要再把它写回任何单个任务的目录**。
  */
@@ -46,7 +46,7 @@ import { stripComments } from '../ui/source-text';
 const NET_DIR = fileURLToPath(new URL('../../src/net/', import.meta.url));
 
 /** 下界自证的阈值。`src/net` 的文件数会随 T2-T10 增长（T1 时 1 个，T2 之后 3 个）。
- *  ⚠️ 这个数**不许**为了"让测试变绿"往下调 —— 它只在"目录写错/被清空"时变红。 */
+ *  这个数**不许**为了"让测试变绿"往下调 —— 它只在"目录写错/被清空"时变红。 */
 const MIN_FILES = 1;
 
 /**
@@ -57,7 +57,7 @@ const MIN_CHARS = 50;
 /**
  * 临时根：守卫需要的探针件与空目录都建在这下面（已 gitignore），**一个常量、一处**。
  *
- * ⚠️ **为什么不能是 `.superpowers/T1/`**（阶段一评审 N-7）：那是**实现者自己的证据目录**。
+ * **为什么不能是 `.superpowers/T1/`**（阶段一评审 N-7）：那是**实现者自己的证据目录**。
  * 本守卫将来会被 T2-T10 复用，写在别人的任务目录里会让"谁的残留"分不清。这里用中立的
  * `.superpowers/tmp/`，且目录名一律 `mkdtempSync` 唯一化 + `try/finally` 清理（评审人实测零残留）。
  * 也**绝不能**写进 `tests/`、`src/` 或仓库根（本仓为"污染共享树"出过两次事故）。
@@ -77,7 +77,7 @@ function walk(dir: string, out: string[] = []): string[] {
 /**
  * 相对路径（报错时好读）。
  *
- * ⚠️ **两种传法都要对**（实测踩过）：`NET_DIR`（`new URL('.../net/')`）**带**尾部分隔符，
+ * **两种传法都要对**（实测踩过）：`NET_DIR`（`new URL('.../net/')`）**带**尾部分隔符，
  * 而 `mkdtempSync(...)` 的返回值**不带**。第一版直接 `file.slice(dir.length)`，
  * 于是临时目录那一支会把首字符切掉（`rtc.ts` → `tc.ts`），症状是"文件不在扫描结果里"。
  * ⇒ 先归一尾部分隔符。
@@ -176,7 +176,7 @@ export const BANNED_CLOCK: ReadonlyArray<readonly [string, RegExp]> = [
  * 为什么"赋给变量"要专门一条：`const t = globalThis.setTimeout;` 之后调 `t(fn, 0)`
  * 与 `setTimeout(fn, 0)` 对纯层是同一件事（都是"模块自己排了一个时钟"），
  * 而只写 `/\bsetTimeout\s*\(/` 的守卫对它零命中。
- * ⚠️ 已知**不可判**的第三种绕行：`const { setTimeout: t } = globalThis;` 或
+ * 已知**不可判**的第三种绕行：`const { setTimeout: t } = globalThis;` 或
  * `const n = 'set' + 'Timeout'` 这类**运行期**拼接。前者由 `globalThis.` 裸访问分支抓到，
  * 后者文本层面原理上抓不到（需要求值）。如实登记，不假装覆盖。
  */
@@ -240,7 +240,7 @@ const ALL_TABLES = [...BANNED_BROWSER, ...BANNED_CLOCK, ...BANNED_TIMER];
 /**
  * **豁免清单**：允许"只在合成样本上钉过、没有真文件样本"的标签，逐条写理由。
  *
- * ⚠️ 为什么必须有这张表、且为什么它必须**与判据表逐条对齐**（阶段一评审 N-1 的修法）：
+ * 为什么必须有这张表、且为什么它必须**与判据表逐条对齐**（阶段一评审 N-1 的修法）：
  * 判据 4 的强度取决于"真文件样本覆盖了哪些禁项"。原先那张 `REAL_FILE_REQUIRED` 是手写的
  * 5 个名字 ⇒ 与判据表**结构上脱钩**：评审人做 M5（往表里加一条新禁项 + 给合成样本，
  * 但不给真文件样本）⇒ 判据面 37 条 + 探针面全绿。也就是说"忘了同步"是**必然漏**，不是概率漏。
@@ -341,21 +341,21 @@ describe('src/net 的纯层契约（ui → net → app → core；net 不碰浏�
   });
 
   it('每个禁项在**真文件**上都会被扫出来（判据 4：真文件，不是合成样本）', () => {
-    // ★ 这条是判据 4 的机械证明：把**每一个**禁项的合成样本当成真文件写进临时目录、
+    // 这条是判据 4 的机械证明：把**每一个**禁项的合成样本当成真文件写进临时目录、
     //   再走一遍 `walk` + `stripComments` + 正则这条路。
     //   它与上面"合成样本"那条是两层：那条证明正则本身有效，这条证明 `scan()`/`walk()`
     //   这条路有效（路径写错、后缀过滤写错、stripComments 用错都会在这里暴露），
     //   并且把覆盖面从"点名的几个名字"扩到**全部标签**（见下面"双向闭合"）。
     //
     //   写入位置是 `<中性临时根>/probe-scan-<随机>/`（已 gitignore），**不碰共享工作树**。
-    //   ⚠️ 目录名必须**每次运行都唯一**（实测踩过）：同一台机器上两个 vitest 进程同时跑
+    //   目录名必须**每次运行都唯一**（实测踩过）：同一台机器上两个 vitest 进程同时跑
     //   这棵树时（变异批的"判据一轮"与"探针一轮"挨着跑就会这样），固定目录名会让
     //   A 的 `rmSync` 删掉 B 正在写的文件 —— 实测症状是 `ENOENT ... clock.ts`，
     //   而且**间歇性**（一次红一次绿）。用 `mkdtempSync` 生成唯一目录，一次解决。
     //   （不用 `process.pid`：本仓 `tsconfig.json` 的 `types` 里没有 `@types/node`，
     //    `process` 在测试文件里不可见，加它得改 tsconfig —— 那是越界。）
     //
-    // ⚠️ **为什么每条禁项都要有真文件样本**（阶段一评审 N-1 / M5 实测）：
+    // **为什么每条禁项都要有真文件样本**（阶段一评审 N-1 / M5 实测）：
     //   本用例原先是手写的 `rtc.ts` / `ws.ts` / `timer.ts` / `random.ts` / `clock.ts` 五个样本
     //   + 手写的 `REAL_FILE_REQUIRED` 五个名字。那份清单与判据表**结构上脱钩**：
     //   评审人往 `BANNED_BROWSER` 加一条 `fakeNewApi`、同时给 `POSITIVE_SAMPLES` 加样本、
@@ -366,7 +366,7 @@ describe('src/net 的纯层契约（ui → net → app → core；net 不碰浏�
     mkdirSync(TMP_ROOT, { recursive: true });
     const probeDir = mkdtempSync(join(TMP_ROOT, 'probe-scan-'));
     /** 真文件样本：**由合成样本生成**（`case-<序号>-<标签>.ts` ← `POSITIVE_SAMPLES`），不再手写清单。
-     *  ⚠️ 文件名**必须带序号**：标签按 `\W` slug 之后会撞名（`document 成员访问` 与 `crypto 成员访问`
+     *  文件名**必须带序号**：标签按 `\W` slug 之后会撞名（`document 成员访问` 与 `crypto 成员访问`
      *  都会变成 `__成员访问`），撞名会把两个样本合并成一个文件 —— 那样"每个禁项都有真文件样本"
      *  这条覆盖面判据就会**数少几个文件**却照样通过（实测：24 个样本只落了 23 个文件）。 */
     const cases: ReadonlyArray<readonly [string, string, ReadonlyArray<readonly [string, RegExp]>]> =
@@ -397,7 +397,7 @@ describe('src/net 的纯层契约（ui → net → app → core；net 不碰浏�
         }
       }
 
-      // ★★ 双向闭合（修 N-1/M5）：判据表的标签集合必须**恰好**等于"真文件样本覆盖 ∪ 豁免"。
+      // 双向闭合（修 N-1/M5）：判据表的标签集合必须**恰好**等于"真文件样本覆盖 ∪ 豁免"。
       //   - 加标签而没样本（M5）⇒ 左边多一个 ⇒ 红；
       //   - 删标签（M4）⇒ 该标签在 `grouped` 里彻底消失（或它的样本文件开始报别的标签）⇒ 红；
       //   - 改正则让它抓不到样本 ⇒ 同样是集合不等 ⇒ 红。
@@ -440,7 +440,7 @@ describe('src/net 的纯层契约（ui → net → app → core；net 不碰浏�
 
   it('下界自证：把扫描目录指向空目录 ⇒ 报错（防"路径写错导致空扫为绿"）', () => {
     // 计划 §5 T1 判据 5 的机械证明：真建一个**空目录**、真扫它。
-    // ⚠️ 走的是与上面那条 `it` **同一个**取值路径（`netSources()` → `scan()`），
+    // 走的是与上面那条 `it` **同一个**取值路径（`netSources()` → `scan()`），
     // 不是把上层条件重抄一遍 —— 重抄形态在"把扫描目录换掉"时会假绿（评审 N-2 的原话）。
     mkdirSync(TMP_ROOT, { recursive: true });
     const empty = mkdtempSync(join(TMP_ROOT, 'empty-'));

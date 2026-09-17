@@ -26,7 +26,7 @@
  * `encodeMsg` / `decodeMsg` / `normalizeRoomCode` 的失败形态都是返回值（照 `parseMatchFile`
  * `src/app/match-file.ts:395` 的取舍：调用方要能区分失败形态**并给不同文案**，异常只能带一句话）。
  *
- * ⚠️ **唯一的例外是 `roomCodeFromRandom` 的"呼叫方违约"**（随机源返回越界值）：那不是
+ * **唯一的例外是 `roomCodeFromRandom` 的"呼叫方违约"**（随机源返回越界值）：那不是
  * "网络来的输入"，而是**调用方**违反了本模块写明的契约，属编程错误，用 `throw` 响亮暴露
  * （静默夹紧会悄悄给出一个偏斜的房间码，而"为什么这个码老是撞"将无法调试）。
  * 网络字节永远走 `decodeMsg` / `normalizeRoomCode` 的结果对象。
@@ -237,7 +237,7 @@ export type NetMsgType = NetMsg['t'];
 /**
  * 全部已知消息类型。
  *
- * ⚠️ **必须用 `Record<NetMsgType, true>` 声明**：这样给 `NetMsg` 加一条消息而忘了登记时，
+ * **必须用 `Record<NetMsgType, true>` 声明**：这样给 `NetMsg` 加一条消息而忘了登记时，
  * tsc 当场报"缺属性"（`Record` 的键是穷尽的）。若写成 `['hello', …] as const` 数组，
  * 漏登记只会表现为"新消息解码时被判成未知类型"—— 那是一个**运行期**才暴露、且看起来像
  * "对端发错东西"的假象。
@@ -284,7 +284,7 @@ const AMBIGUOUS_CHARS = 'ILOU';
  * 生产侧传 `() => { const b = new Uint8Array(1); crypto.getRandomValues(b); return b[0] / 256; }`
  * （住在 `src/ui/net-browser.ts`），测试侧传确定序列。
  *
- * ⚠️ `randomness` 返回越界值（`< 0` / `>= 1` / `NaN`）时**抛错**：那是调用方违约，
+ * `randomness` 返回越界值（`< 0` / `>= 1` / `NaN`）时**抛错**：那是调用方违约，
  * 不是网络输入。静默夹紧会给出一个偏斜的码而没有任何迹象（见文件头末段）。
  */
 export function roomCodeFromRandom(randomness: () => number): string {
@@ -305,7 +305,7 @@ export function roomCodeFromRandom(randomness: () => number): string {
 /**
  * 从一段**字节**生成房间码（`roomCodeFromRandom` 的姊妹口，给"手上已经有随机字节"的调用方）。
  *
- * 每字节取模 32。⚠️ 256 是 32 的整数倍 ⇒ **没有取模偏斜**（这是它优于"字节 / 256 再乘 32"的地方：
+ * 每字节取模 32。256 是 32 的整数倍 ⇒ **没有取模偏斜**（这是它优于"字节 / 256 再乘 32"的地方：
  * 后者在浮点上仍均匀，但多一次无谓的除法与一次越界风险）。
  * 字节不足 `ROOM_CODE_LENGTH` 时返回失败结果（**不抛**：字节可能来自网络或剪贴板，
  * 与"网络来的输入不抛"同一条纪律）。
@@ -500,7 +500,7 @@ export function encodeMsg(msg: unknown): EncodeResult {
  *  - `t` 是字符串但本协议不认识（含 `toString` 这类原型键） ⇒ `'unknown-type'`
  *  - `t` 认识、`protoVersion` 字段在但与本机不符 ⇒ `'proto-version'`
  *
- * ⚠️ **只有 `hello` / `hello-ack` 今天带 `protoVersion`**：其余消息没有这个字段 ⇒ 它们
+ * **只有 `hello` / `hello-ack` 今天带 `protoVersion`**：其余消息没有这个字段 ⇒ 它们
  * 跳过第 4 步。这不是漏检 —— 版本一致性在握手时已经定下，此后每条消息再带一次版本号是
  * 冗余（而且 `act` 是最热的路径）。设计稿 `:452` 也只把 `protoVersion` 放在 `HelloMsg` 上。
  *
@@ -575,7 +575,7 @@ export interface HelloContext {
    * `cardDataHashOf` 是它的算法，`:48` 的 `HASH_FORMAT_VERSION` 是它的格式版本）。
    * 调用方直接把这个常量喂进来即可（裁决 D7 也允许 `src/net` import `src/app`）。
    *
-   * ⚠️ **不要在这里造第二份**：`tests/app/card-data-hash.test.ts` 逐字钉住 `CARD_DATA_HASH`
+   * **不要在这里造第二份**：`tests/app/card-data-hash.test.ts` 逐字钉住 `CARD_DATA_HASH`
    * 与现算值相等（`card-data-hash.ts:10`），任何"自己拼一个哈希"的写法都会脱离那条守卫，
    * 变成第二个跨设备契约 —— 而这种漂移只会在两台设备联机失败时才暴露。
    */
@@ -604,7 +604,7 @@ export type HelloValidation =
  * 是一句**假话** —— 本机并不是因为版本才拒的。玩家会照着假话去更新版本，然后还是连不上。
  * 所以形状失败走 `'bad-shape'`，它的判定位置在四条之前，但它**不占用**四条的顺序。
  *
- * ⚠️ 判据 1 的四条腿因此必须用**形状合法**的 `hello`：一份连 `protoVersion` 都没有的输入
+ * 判据 1 的四条腿因此必须用**形状合法**的 `hello`：一份连 `protoVersion` 都没有的输入
  * 命中的是 `'bad-shape'`，把它当成"第一条腿"会让整条顺序判据变得无法分辨（那种输入在
  * `decodeMsg` 那一层就已经被拦下了，本函数是第二道闸）。
  */
@@ -617,7 +617,7 @@ export type HelloValidationReason = HelloRejectReason | 'bad-shape';
  * （例如"版本既不对、玩家位又满了"）必须回**靠前**那条 —— 否则玩家会去"换个房间"，
  * 而换了房间版本还是不对。判据 1 专门有一条腿构造这种输入。
  *
- * ⚠️ **`ctx` 是必填的，这里刻意不给默认值**（阶段一评审 N-3 实测的"静默全拒"暗道）：
+ * **`ctx` 是必填的，这里刻意不给默认值**（阶段一评审 N-3 实测的"静默全拒"暗道）：
  * 第一版给了 `{ localProtoVersion: PROTO_VERSION, localCardDataHash: '' }` 这样的默认值，
  * 于是"忘了传 ctx"不会报错，而是**永远**回 `'card-data-hash'`（对端指纹永远不等于空串），
  * 而默认的版本号恰好等于 `PROTO_VERSION` ⇒ 第 1 步拦不住它。症状是"怎么都连不上却看不出原因"。
@@ -662,13 +662,13 @@ export function validateHello(input: unknown, ctx: HelloContext): HelloValidatio
   /**
    * 四条有顺序的校验，**顺序就是这张数组的顺序**（D13 / 设计稿 `:460-465` 的 1→4）。
    *
-   * ★ **为什么写成"数组 + 顺序遍历"而不是四个并列的 `if`**（这是刻意的，不是风格）：
+   * **为什么写成"数组 + 顺序遍历"而不是四个并列的 `if`**（这是刻意的，不是风格）：
    * 顺序是本模块最容易被"顺手重排"改掉、而且改掉之后**所有行为腿都不会红**的东西 ——
    * 四个 `if` 互不引用，谁把它们调换一下，单看代码完全看不出问题。写成数组之后：
    *  1. 顺序在**一处**、以行的先后表达；
    *  2. 判据 1 的"靠前那条"腿直接钉住这张数组的效果；
    *  3. 变异 M1（对调顺序）在该数组上是一次**单行对调**，锚点可精确核对（见 `.superpowers/T1/`）。
-   * ⚠️ 校验**失败时的文案逐条不同、且要用到各自读到的值**（版本号、指纹串、座位数），
+   * 校验**失败时的文案逐条不同、且要用到各自读到的值**（版本号、指纹串、座位数），
    * 所以每一条是一个返回 `HelloValidation | null` 的闭包，而不是"一个理由码数组 + 一个文案函数"。
    */
   const checks: ReadonlyArray<() => { ok: false; reason: HelloRejectReason; message: string } | null> = [
