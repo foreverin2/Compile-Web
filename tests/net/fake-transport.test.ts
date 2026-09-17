@@ -292,8 +292,7 @@ describe('判据 2：断线、失败结果与重连', () => {
 
   it('★ N-1 的第二面：一端从一开始就不可达时，`init()` 给可读失败而不是假 online', async () => {
     // 这一面用构造参数造"对端不可达"（不去用负数延迟那类**语义非法**的手段）：
-    // 它钉的是"init 不许在连不上的情况下报成功"。跑完把两个标志放回 true 再 `activate()`，
-    // 免得 `setReachable` 的同值早退把"标志 false / 状态 online"这种不一致留在后面。
+    // 它钉的是"init 不许在连不上的情况下报成功"。跑完用 `activate()` 把两端放回 online。
     const { pair } = createDeliverer({ reachable: { sideB: false } });
     const a = await pair.A.transport.init({ selfId: 'A', peerId: 'B' });
     expect(a.ok, '对端不可达时 A 的 init 居然成功了').toBe(false);
@@ -313,6 +312,49 @@ describe('判据 2：断线、失败结果与重连', () => {
       pair.B.activate();
       pair.A.activate();
     }
+  });
+
+  it('★ R-1：`init()` 失败之后 `activate()` 必须把本端带回 online', async () => {
+    // 病（阶段二复验 R-1）：`init()` 的规则二会造出"本侧 `reachable === true`
+    // 而 `status === 'offline'`"这个组合，而 `setReachable` 当时有同值早退 ⇒
+    // `activate()` 里那一步被吞掉，本端永远留在 offline、`send` 一直失败。
+    // 症状逐字是 `expected 'offline' to be 'online'`。
+    const { pair } = createDeliverer();
+    await connect(pair);
+    pair.A.deactivate();
+
+    const failed = await pair.A.transport.init({ selfId: 'A', peerId: 'B' });
+    expect(failed.ok, '对端不可达时 init 居然成功了').toBe(false);
+
+    // ★ 这一条是本腿的核心：**只调 activate()**，不再补一次 init()
+    pair.A.activate();
+    expect(pair.A.transport.status(), 'activate 之后本端仍是 offline').toBe('online');
+    expect(pair.B.transport.status(), 'activate 之后对端也要回到 online').toBe('online');
+    const r = pair.A.transport.send('act', 'after-activate');
+    expect(r.ok, 'activate 之后 send 仍然失败').toBe(true);
+    pair.pump(4);
+    expect(pair.A.transport.status()).toBe('online');
+  });
+
+  it('★ R-3：对端已关闭（终态）之后，本端 `init()` 不许把自己说成 online', async () => {
+    // 病（阶段二复验 R-3）：`close()` 只清**接收侧**的 reachable，于是接收侧以为
+    // "只是暂时断了" ⇒ 它的 `init()` 报成功并转 online，形成"本端 online / 对端 closed"
+    // 这种永远连不上的组合。症状逐字是 `expected true to be false`。
+    const { pair } = createDeliverer();
+    await connect(pair);
+    await pair.A.close();
+    pair.pump(CONTROL_LATENCY_TICKS + 2);
+    expect(pair.B.transport.status(), '前提：B 已经因为 A 关闭而转 offline').toBe('offline');
+
+    const b = await pair.B.transport.init({ selfId: 'B', peerId: 'A' });
+    expect(b.ok, '对端已关闭时 B 的 init 居然成功了').toBe(false);
+    if (b.ok) throw new Error('对端已关闭时 B 的 init 居然成功了');
+    expect(b.reason).toBe('offline');
+    expect(pair.B.transport.status(), 'B 把自己说成了 online（对端明明是 closed 终态）').toBe('offline');
+    const r = pair.B.transport.send('act', 'x');
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error('对端已关闭时 send 居然成功了');
+    expect(r.reason).toBe('offline');
   });
 
   it('★ N-5：`sendIfOpen` 解构调用不抛（它是闭包，不依赖 this）', async () => {

@@ -125,40 +125,29 @@ export type TransportStatus = 'idle' | 'connecting' | 'online' | 'offline' | 'cl
 export type TransportActionResult = { ok: true } | { ok: false; reason: string; message: string };
 
 /* ------------------------------------------------------------------ *
- * 3. 投递步（帧的"线封装"在 fake 里）
+ * 3. 投递步的类型住在 fake 里
  * ------------------------------------------------------------------ */
 
 /*
- * 这里原来声明过两个类型，评审阶段（G5 T2 阶段一评审 N-4）删掉了它们：
+ * 这里原来声明过三个类型，评审两轮里先后删掉了它们：
  *   - `NetEnvelope { channel, seq, from, payload }`
  *   - `StampedText { text }`
+ *   - `DeliveryStep { sender, receiver, channel, atTick, text }`
  *
- * 删的理由是**它们当时全仓零消费者、零用例**，而且各自的文档与类型对不上：
+ * 删的理由是同一条：**它们全仓零消费者、零用例**，而且文档与类型对不上：
  * `StampedText` 的文档说"带 `atTick`"，类型里只有 `text`；`NetEnvelope.from` 的文档说是
  * `selfId`，而 fake 实际用的是自己的 `PendingFrame`（`from` 是 `'A'/'B'` 侧标，不是 `selfId`）。
- * 一个没人实现、文档又和类型打架的接口，比没有接口更危险 —— T7 会照它写，然后发现对不上。
  *
- * 处置不是"补一个消费方来救活它"，而是**先删**：`DeliveryStep`（下面那个）已经覆盖了
- * "帧 + 它第几步到"这件事，且它**有真实消费者**（`FakeTransportPair.steps()` 与判据 4 的逐字比对）。
- * 真需要"线封装"这个中间类型时（T7 把 `RTCDataChannel` 的字符串折进连接器那一步），
- * 按那时的真实需要重新设计，而不是让一个猜出来的形状先占着位置。
- */
-
-/**
- * `pump()` 的一步：谁发的、谁收的、哪条通道、第几步到、载荷原文。
+ * 第三轮（阶段二复验 R-4）我的第一版处置在这里留了一句错话：说 `DeliveryStep` 有真实消费者
+ * `FakeTransportPair.steps()`。**那句话不成立** —— `steps()` 返回的是 `fake-transport.ts` 的
+ * `FakeDelivery { atTick, channel, from, to, seq, text }`，字段名都不同（`sender` vs `from`、
+ * `receiver` vs `to`），是**另一个类型**。两个形状相近的类型并存，正是"T7 照一个写、发现对不上
+ * 另一个"的成因。⇒ 一并删掉，投递步只有一个类型：`FakeDelivery`（它名副其实、且在 fake 里）。
  *
- * ★ **为什么把"到达步"渲染成结构化数据而不是回调的副作用**：判据 4（确定性）要能
- * **逐字比对两遍的投递序列**。若只有 `onMessage` 回调，比对就只能靠测试自己往数组里攒日志 ——
- * 那样"序列"的定义在测试里、而不在实现里，换个测试就能改口径。这里由实现自己产出，
- * 两遍对比的是同一份东西。
+ * 一个没人实现、文档又和类型打架的接口，比没有接口更危险。真需要"线封装"这个中间类型时
+ * （T7 把 `RTCDataChannel` 的字符串折进连接器那一步），按那时的真实需要重新设计，
+ * 而不是让一个猜出来的形状先占着位置。
  */
-export interface DeliveryStep {
-  readonly sender: string;
-  readonly receiver: string;
-  readonly channel: NetChannel;
-  readonly atTick: number;
-  readonly text: string;
-}
 
 /* ------------------------------------------------------------------ *
  * 4. 注入面
@@ -192,7 +181,14 @@ export interface StatusChange {
  * 而判据里的步数断言就再也对不上了。
  */
 export interface TransportConnector {
-  /** 排一帧（返回它被排在第几步到达，便于测试核对） */
+  /**
+   * 排一帧。返回**线序**（`seq`），便于测试按它去问"最早可能第几步到达"。
+   *
+   * 注意这里**不是**"到达步"（阶段二复验 R-5）：fake 那边另有一个查询口
+   * （`FakePort.earliestTick(seq)`）给的是**最早可能**的到达步，而实际落地还取决于
+   * 队列里排在它前面的帧数（每步每侧只交一帧）。这一句原来写的是"返回它被排在第几步到达"，
+   * 与实现不符，已改。
+   */
   schedule(channel: NetChannel, text: string, opts?: { readonly extraTicks?: number }): number;
   /**
    * 一帧到达。`channel` 要与发送侧一致（内核负责把通道带过来）——
@@ -205,13 +201,25 @@ export interface TransportConnector {
 
 export interface NetTransport {
   /**
-   * 建立连接。**幂等**：已经 `online` 时再调一次是 no-op（返回成功）——
+   * 建立**本侧**连接。**幂等**：已经 `online` 时再调一次是 no-op（返回成功）——
    * 重连路上会被反复调用（T6），让调用方每次都要先问状态是没必要的负担。
+   *
+   * ## ★ 它保证什么、不保证什么（阶段二复验的重要观察，T6/T7 必读）
+   *
+   * `init()` 只保证**本侧链路起来了**；**对端在不在，它不作承诺**。
+   * 因此：**不要用 `init().ok` 判"对端在线"** —— 那件事只能由 `onStatus`（`online` / `offline`
+   * 事件）与应用层握手来判断。
+   *
+   * 为什么这条要写在接口上（而不是留给实现自由发挥）：真 WebRTC 在 `init()` 那一刻
+   * **原理上不知道对端在不在**（要等 ICE / DTLS 或应用层握手回来，可能要几秒）。
+   * 而 `fake-transport.ts` 是同步的、当场就知道 —— 于是它在"对端不可达"时会返回
+   * `{ ok: false, reason: 'offline' }`。若 T6 依赖这个返回值，**fake 上绿、真实现无法兑现**：
+   * 那是一处"测试通过但产品不成立"的缝。所以契约只承诺本侧，对端状态统一走事件口。
    */
   init(init: TransportInit): Promise<TransportActionResult>;
   /** 本端此刻支持的通道（真实 WebRTC 上就是两条 DataChannel） */
   channels(): readonly NetChannelSpec[];
-  /** 走到这一步的发送序号（`NetEnvelope.seq` 的当前值）；测试用它核对确定性 */
+  /** 走到这一步的**本端发送序号**（测试用它核对确定性；线序见 `FakeDelivery.seq`） */
   seq(): number;
   /** 发一帧。**同步**（见 `TransportActionResult` 的说明），失败返回结果对象 */
   send(channel: NetChannel, text: string): SendResult;

@@ -116,7 +116,19 @@ export interface ResolvedLinkConfig {
 export interface FakePort {
   readonly side: Side;
   readonly transport: NetTransport;
-  /** 改链路参数（只影响**本侧发出**的帧） */
+  /**
+   * 改链路参数（只影响**本侧发出**的帧）。
+   *
+   * ★ **它只改配置，不改连接状态**（阶段二复验 R-2 要的"说清"）：`configure({ live: false })`
+   * **不发**任何 `offline` 事件、也不动 `status`，因为它的语义是"下一次调度用哪些参数"
+   * （延迟 / 丢包 / 乱序窗口），而"把线拔掉"这件事的正规旋钮是 `deactivate()`
+   * （它会发两端的状态通知、把在飞的帧收进待排队列）。
+   *
+   * 代价如实登记：`configure({ live: false })` 之后，传输仍报 `online`、`send` 仍返回
+   * `{ ok: true }`，而帧只进待排队列一步不走 —— 这就是 R-2 实测到的那个形状。
+   * 之所以不把它改成"顺手也发事件"：那会让一个纯配置调用产生状态副作用，
+   * 而 `deactivate()` 已经把"拔线"这件事表达得很清楚（两个旋钮不该互相偷偷代劳）。
+   */
   configure(config: LinkConfig): void;
   /** 当前链路参数（只读快照） */
   config(): ResolvedLinkConfig;
@@ -252,6 +264,15 @@ interface SideState {
   peerId: string;
   /** 本侧的 `NetTransport`（`makeTransport` 建好后回填，供 `FakePort.close()` 调用） */
   transport: NetTransport | null;
+  /**
+   * 对端是否**已经关闭**（终态）。
+   *
+   * R-3 的整改需要一个"对端状态"的副本：`close()` 只影响关闭方自己的 `status`，
+   * 接收侧光有 `reachable = false` 是不够的 —— 那会让接收侧以为"只是暂时断了"，
+   * 于是它的 `init()` 会报成功、把自己转成 `online`，形成"本端 online / 对端 closed"
+   * 这种永远连不上的组合。
+   */
+  peerClosed: boolean;
   readonly log: { side: Side; from: TransportStatus; to: TransportStatus }[];
   messageListeners: ((text: string, channel: NetChannel) => void)[];
   statusListeners: ((change: StatusChange) => void)[];
@@ -310,6 +331,7 @@ export function createFakeTransportPair(opts: FakePairOptions = {}): FakeTranspo
       selfId: side,
       peerId: otherSide(side),
       transport: null,
+      peerClosed: false,
       log: [],
       messageListeners: [],
       statusListeners: [],
@@ -415,6 +437,9 @@ export function createFakeTransportPair(opts: FakePairOptions = {}): FakeTranspo
       st.live = false;
       st.link.live = false;
       reachable[frame.to] = false;
+      // R-3：还要记下"对端**关闭了**"（终态），否则本端 `init()` 会以为只是暂时断了、
+      // 报成功并把自己转成 online，形成"本端 online / 对端 closed"这种永远连不上的组合。
+      st.peerClosed = true;
       return;
     }
     connectors[frame.to]?.deliver(frame.text, frame.channel);
@@ -437,8 +462,18 @@ export function createFakeTransportPair(opts: FakePairOptions = {}): FakeTranspo
       deliver(text, channel): void {
         for (const cb of [...st.messageListeners]) cb(text, channel);
       },
+      /**
+       * ★ **不许**写 `if (reachable[side] === next) return;` 这种同值早退（阶段二复验 R-1）。
+       *
+       * 这一句曾把 `activate()` 吞掉：`init()` 的规则二会造出"本侧 `reachable === true`
+       * 而 `status === 'offline'`"这个组合（它置标志为真、却把状态设成 offline 并返回失败），
+       * 此后 `activate()` 先调 `setReachable(true, …)` ⇒ 同值早退、状态不转；再强置标志
+       * 也不转状态 ⇒ 本端永远留在 offline、`send` 一直失败（实测 `expected 'offline' to be 'online'`）。
+       *
+       * ⇒ 现在它**只**负责两件事：写标志、按标志派生状态。"同状态不重复报"这件事由
+       * `setStatus` 自己去重（`from === to` 早退），**不需要在这里再挡一道**。
+       */
       setReachable(next, message): void {
-        if (reachable[side] === next) return;
         reachable[side] = next;
         setStatus(side, next ? 'online' : 'offline', message);
       },
@@ -528,7 +563,7 @@ export function createFakeTransportPair(opts: FakePairOptions = {}): FakeTranspo
         }
         st.selfId = init.selfId;
         st.peerId = init.peerId;
-        // ★ 两条自洽规则（评审 N-1）。
+        // ★ 三条自洽规则（N-1 + 阶段二复验 R-3）。
         //
         // 病是：`deactivate()` 之后调 `init()`，状态会从 offline **说成 online**，
         // 而 `reachable[side]` 仍是 false、`setReachable(false)` 也不会再触发 ⇒ 状态永久说谎；
@@ -539,15 +574,28 @@ export function createFakeTransportPair(opts: FakePairOptions = {}): FakeTranspo
         //   帧一直进 requeue —— 那正是"状态说谎"的下一站）。
         // 规则二：**对端**不可达时不许转 `online`，而是回一个可读的失败结果 ——
         //   单向插线是连不上的（对端自己得调 `init()`），这条正是 N-1 的核心。
+        // 规则三（R-3）：对端**已经关闭**（终态）时同样不许转 `online` —— 否则会出现
+        //   "本端 online、对端 closed"这种永远连不上的组合。
+        //   契约提醒（见 `transport.ts` 的 `init` 文档）：这条"当场就知道对端不在"的能力是
+        //   **fake 独有**的（真 WebRTC 在 init 时刻不知道）。调用方不许拿 `init().ok` 当
+        //   "对端在线"的判据，那件事只能由 `onStatus` 与握手给。
         st.live = true;
         st.link.live = true;
         reachable[side] = true;
+        if (st.peerClosed) {
+          setStatus(side, 'offline', '本端链路已就绪，但对端已经关闭。');
+          return {
+            ok: false,
+            reason: 'offline',
+            message: '对端已经关闭了这条连接（closed 是终态），这一端不会转成 online。',
+          };
+        }
         if (!reachable[otherSide(side)]) {
           setStatus(side, 'offline', '本端链路已就绪，但对端仍不可达。');
           return {
             ok: false,
             reason: 'offline',
-            message: '对端仍不可达（对端那条链路还没接回来，或对端已经关闭）。这一端没有转成 online。',
+            message: '对端仍不可达（对端那条链路还没接回来）。这一端没有转成 online。',
           };
         }
         setStatus(side, 'online', '已建立连接。');
