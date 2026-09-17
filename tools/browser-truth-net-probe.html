@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>browser-truth-cdp · 对端探针</title>
+</head>
+<body>
+<pre id="__probe">{}</pre>
+<script>
+/* ============================================================================
+ * 运行期浏览器真值 · 传输层对端探针（G5 T9 的基础设施）
+ *
+ * 这个页面本身**不是**被测应用，它是"一个对端"的最小实现：建立一条真实的
+ * RTCPeerConnection + 数据通道，把状态机暴露成一个 JSON，等外部（Node 经 CDP）
+ * 当信令中继把对端 SDP 注进来。
+ *
+ * 为什么不用第五道门那道 `--dump-dom`：那条路给的真实时间窗口约 5 秒，而 headless
+ * 里单次握手光首次 createOffer 就要约 4.6 秒（实测见
+ * `.superpowers/g5-recon/FINDINGS.md` 第 1 节），所以它只能看见"部分握手"。
+ * 本探针由 `tools/browser-truth-cdp.mjs` 用 CDP 驱动：不设虚拟时间、由驱动器决定
+ * 什么时候取结果。
+ *
+ * 对外契约（驱动器依赖这三样，改这里必须同步改驱动器）：
+ *   1. `#__probe` 的 textContent 是 JSON：{ role, phase, done, localSdp, gotPing,
+ *      gotPong, error, elapsedMs, log }
+ *   2. `window.__inject(sdp, type)` 由驱动器调用，type 是 'offer' | 'answer'
+ *   3. `phase` 的取值：boot / awaiting-offer / offer-ready / applying-remote /
+ *      answer-ready / connecting / done / error
+ *
+ * 非 trickle：等 iceGatheringState === 'complete' 再把 SDP 交出去，这样一次交换就够，
+ * 与"邀请码兜底"那条真实路径同形（设计稿 §5.7）。
+ * ========================================================================== */
+var role = new URLSearchParams(location.search).get('role') || 'host';
+var t0 = performance.now();
+var log = [];
+var st = {
+  role: role, phase: 'boot', done: false,
+  localSdp: null, remoteSdpLen: null,
+  gotPing: false, gotPong: false, error: null, elapsedMs: 0,
+};
+function now() { return Math.round(performance.now() - t0); }
+function render() {
+  st.elapsedMs = now();
+  st.log = log;
+  document.getElementById('__probe').textContent = JSON.stringify(st);
+  document.title = role + ':' + st.phase + (st.done ? ':DONE' : '');
+}
+function mark(k, v) { log.push({ ms: now(), k: k, v: v }); render(); }
+
+/* iceServers 留空 = 只用 host candidate。这样夹具不依赖任何外部服务，
+ * 也顺带把"mDNS 混淆下对端只看到 .local 名"这个事实暴露在日志里（实测过）。 */
+var pc = new RTCPeerConnection({ iceServers: [] });
+var dc = null;
+
+pc.onicecandidate = function (e) { if (e.candidate) mark('cand', e.candidate.candidate); else mark('cand.end', true); };
+pc.oniceconnectionstatechange = function () { mark('iceState', pc.iceConnectionState); };
+pc.onconnectionstatechange = function () { mark('conn', pc.connectionState); };
+
+function gatheringDone() {
+  return new Promise(function (res) {
+    if (pc.iceGatheringState === 'complete') return res();
+    pc.addEventListener('icegatheringstatechange', function h() {
+      if (pc.iceGatheringState === 'complete') { pc.removeEventListener('icegatheringstatechange', h); res(); }
+    });
+  });
+}
+function withTimeout(p, ms, what) {
+  return Promise.race([p, new Promise(function (_, rej) { setTimeout(function () { rej(new Error('超时：' + what)); }, ms); })]);
+}
+
+function hostSide() {
+  dc = pc.createDataChannel('act');
+  dc.onopen = function () { mark('dc.open', true); dc.send('ping'); mark('host.sent', 'ping'); };
+  dc.onmessage = function (m) {
+    mark('host.recv', String(m.data));
+    if (String(m.data) === 'pong') { st.done = true; st.phase = 'done'; mark('HOST.DONE', true); render(); }
+  };
+  st.phase = 'creating-offer'; render();
+  pc.createOffer()
+    .then(function (o) { return pc.setLocalDescription(o); })
+    .then(gatheringDone)
+    .then(function () {
+      st.localSdp = pc.localDescription.sdp;
+      st.phase = 'offer-ready';
+      mark('offer-ready', st.localSdp.length);
+      render();
+    })
+    .catch(function (e) { st.error = String(e); st.phase = 'error'; mark('FAIL', String(e)); });
+}
+
+function guestSide() {
+  pc.ondatachannel = function (e) {
+    dc = e.channel;
+    mark('guest.dc', dc.label);
+    dc.onmessage = function (m) {
+      st.gotPing = true;
+      mark('guest.recv', String(m.data));
+      try { dc.send('pong'); st.gotPong = true; mark('guest.sent', 'pong'); } catch (err) { mark('guest.send.err', String(err)); }
+    };
+  };
+  st.phase = 'awaiting-offer';
+  mark('guest.ready', true);
+}
+
+/* 由驱动器注入对端 SDP。host 收 answer，guest 收 offer。 */
+window.__inject = function (sdp, type) {
+  st.remoteSdpLen = String(sdp).length;
+  st.phase = 'applying-remote';
+  render();
+  mark('inject', { type: type, len: String(sdp).length });
+  withTimeout(pc.setRemoteDescription({ type: type, sdp: sdp }), 30000, 'setRemoteDescription')
+    .then(function () {
+      if (type === 'offer') {
+        return pc.createAnswer()
+          .then(function (a) { return pc.setLocalDescription(a); })
+          .then(gatheringDone)
+          .then(function () {
+            st.localSdp = pc.localDescription.sdp;
+            st.phase = 'answer-ready';
+            mark('answer-ready', st.localSdp.length);
+            render();
+          });
+      }
+      st.phase = 'connecting';
+      mark('connecting', true);
+      render();
+    })
+    .catch(function (e) { st.error = String(e); st.phase = 'error'; mark('FAIL', String(e)); render(); });
+};
+
+if (role === 'host') hostSide(); else guestSide();
+render();
+</script>
+</body>
+</html>
