@@ -12,6 +12,8 @@ import {
 } from '../../src/app/match-file';
 import { createGame, getDraftPool, performDraftPick } from '../../src/core/state/create';
 import { executeAction, getLegalActions } from '../../src/core/game';
+import { applyRecordedAction, stateAfterDraft } from '../../src/app/match-replay';
+import { resetControlIfHeld } from '../../src/core/rules/control';
 import { stateFingerprint } from '../../src/core/fingerprint';
 import type { GameState, Line, PlayerId } from '../../src/core/models/types';
 import { pickFirst, resolveAllChoices } from '../helpers';
@@ -190,13 +192,19 @@ function playAndRecord(seed: string, maxSteps: number): { s: GameState; rec: Ret
         continue;
       }
       const choice = pickFirst(top.prompt);
+      // ⚠️ `effect-choice` 的**执行者**必须取 `prompt.chooser`（缺省 = 效果属主 = `top.player`），
+      // 与 `main.ts:307-314` 的现场判定逐字一致：
+      // 旧写法硬编码 `1 - s.turnPlayer`，在被作用卡持有者（chooser）不是"另一个玩家"时
+      // 会与重放（按档案记的 player 调 `executeAction`）走**不同的 chooser** ⇒ 两条路从这一步起
+      // 静默分叉（本仓实测：分歧在 `log` 长度 24 处现形，但它不是根因）。
+      const chooser = (top.prompt.chooser ?? top.player) as PlayerId;
       rec.record({
-        player: (1 - s.turnPlayer) as PlayerId, // 应答者：效果挂起者由引擎决定，档案只记实际调用者
+        player: chooser,
         kind: 'effect-choice',
         args: { promptId: top.id, choice },
         via: 'user',
       });
-      executeAction(s, (1 - s.turnPlayer) as PlayerId, 'effect-choice', { promptId: top.id, choice });
+      executeAction(s, chooser, 'effect-choice', { promptId: top.id, choice });
       resolveAllChoices(s, pickFirst);
       continue;
     }
@@ -213,6 +221,17 @@ function playAndRecord(seed: string, maxSteps: number): { s: GameState; rec: Ret
     if (a.choice !== undefined) args.choice = a.choice;
     const hasArgs = Object.keys(args).length > 0;
     rec.record({ player, kind: a.kind, ...(hasArgs ? { args } : {}), via: 'user' });
+    // ⚠️ **现场侧必须复现 UI 那次"开重排模态前的归还"**（`main.ts:265-303`）：
+    // 收口后的生产驱动（`src/app/match-replay.ts` 的 `applyRecordedAction`）在把
+    // `rearrange-protocols` / `compile` / `refresh` 交给引擎之前会先
+    // `if (s.control === player) resetControlIfHeld(s, player)`。
+    // 本腿的"现场"若不做同一件事，比的就不是生产语义：本仓实测 turn 9/10/15 上真的存在
+    // "持控制组件时编译/补满"的步骤（control=0 而行动者是 1），重放会多出一条归还 log ⇒ 指纹不等。
+    // **条件必须与生产逐字一致（`=== player`）**：用"任意持有者都归还"会在
+    // "对手持控制组件时我编译"的步骤上多推一条 log（实测首处分歧就在那一步）。
+    if ((a.kind === 'compile' || a.kind === 'refresh' || a.kind === 'rearrange-protocols') && s.control === player) {
+      resetControlIfHeld(s, player);
+    }
     switch (a.kind) {
       case 'play':
         executeAction(s, player, 'play', args as unknown as { cardUid: string; faceUp: boolean; line: Line });
@@ -238,35 +257,19 @@ function playAndRecord(seed: string, maxSteps: number): { s: GameState; rec: Ret
   return { s, rec };
 }
 
+/**
+ * 重放一份档案：**草稿从 `setup` 的两条序列真重建**（`stateAfterDraft`），
+ * 再逐条走**生产助手** `applyRecordedAction`。
+ *
+ * ⚠️ 这里曾经抄了一份与生产同形的 `switch (a.kind)` 副本（G3 的写法），
+ * 而且草稿是**硬编码策略重选**（`getDraftPool(s)[0]`）—— 那证明的是"同一套策略能算出同一结果"，
+ * **不是**"档案能重放"。G4 T1 把它收口到 `src/app/match-replay.ts`：
+ * 全仓只有一份"一条档案操作 → 一次引擎调用"的映射。
+ */
 function replay(file: Parameters<typeof matchFileToCreateOptions>[0]): GameState {
-  const s = createGame(matchFileToCreateOptions(file));
-  let guard = 0;
-  while (s.phase === 'draft' && guard++ < 200) {
-    const avail = getDraftPool(s);
-    if (avail.length === 0) break;
-    performDraftPick(s, avail[0].defId);
-  }
+  const s = stateAfterDraft(file);
   for (const a of file.actions) {
-    switch (a.kind) {
-      case 'play':
-        executeAction(s, a.player, 'play', a.args as { cardUid: string; faceUp: boolean; line: Line });
-        break;
-      case 'compile':
-        executeAction(s, a.player, 'compile', a.args as { line: Line });
-        break;
-      case 'resolve-trigger':
-        executeAction(s, a.player, 'resolve-trigger', a.args as { cardUid: string });
-        break;
-      case 'effect-choice':
-        executeAction(s, a.player, 'effect-choice', a.args as { promptId: string; choice: string[] });
-        break;
-      case 'rearrange-protocols':
-        executeAction(s, a.player, 'rearrange-protocols', a.args as { target: PlayerId; a: Line; b: Line });
-        break;
-      default:
-        executeAction(s, a.player, a.kind);
-        break;
-    }
+    applyRecordedAction(s, a);
     resolveAllChoices(s, pickFirst);
   }
   return s;
