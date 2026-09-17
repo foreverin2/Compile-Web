@@ -39,7 +39,7 @@
  *  - `'act'`：可靠且**保序**。握手、承诺、操作记录、重同步、档案传输全走它。
  *  - `'beat'`：不可靠且**可乱序**。G5 只用它传心跳与在线状态（表情留给 G7）。
  *
- * ⚠️ 为什么不允许"只有一条通道、用参数区分可靠与否"：那样"这条消息该走哪条"就没有类型约束，
+ * 为什么不允许"只有一条通道、用参数区分可靠与否"：那样"这条消息该走哪条"就没有类型约束，
  * 而 D11 的整条理由（心跳丢一两个无所谓、操作记录一步都不能丢）会退化成调用方的自觉。
  */
 export type NetChannel = 'act' | 'beat';
@@ -97,7 +97,7 @@ export function channelSpec(channel: NetChannel): NetChannelSpec {
  *  - `'not-initialized'`：`init()` 还没成功。它单列（而不是并进 `'offline'`）的理由是
  *    它属于**调用顺序错误**：`'offline'` 是网络状态，`'not-initialized'` 是"你没开门就想发货"。
  *  - `'queue-full'`：本端待发队列积压超过上限（真 WebRTC 上是 `bufferedAmount` 过高）。
- *    ⚠️ fake 传输**永不**返回它（模拟里没有拥塞这个概念）；它出现在这个 union 里是因为
+ *    fake 传输**永不**返回它（模拟里没有拥塞这个概念）；它出现在这个 union 里是因为
  *    **接口必须能表达它**，否则 T7 遇到积压只能返回一个乐观的 `ok`。
  */
 export type SendFailureReason = 'offline' | 'closed' | 'not-initialized' | 'queue-full';
@@ -118,43 +118,38 @@ export type TransportStatus = 'idle' | 'connecting' | 'online' | 'offline' | 'cl
 /**
  * `init()` / `close()` 的结果。
  *
- * ⚠️ 这两个方法**是异步的**（真 WebRTC 的 `RTCPeerConnection` 必须异步建立），而
+ * 这两个方法**是异步的**（真 WebRTC 的 `RTCPeerConnection` 必须异步建立），而
  * `send` **是同步的**（`RTCDataChannel.send()` 本来就同步）—— 这不是风格，是照实现的能力走：
  * 把 `send` 也写成 `Promise` 会让每一步锁步操作都多一层微任务，而 T5 的每一步都不想被时序漂移干扰。
  */
 export type TransportActionResult = { ok: true } | { ok: false; reason: string; message: string };
 
 /* ------------------------------------------------------------------ *
- * 3. 线封装（帧）与投递步
+ * 3. 投递步（帧的"线封装"在 fake 里）
  * ------------------------------------------------------------------ */
 
-/**
- * 传输层**唯一**往线上放的东西：一个不透明文本 + 它属于哪条通道。
+/*
+ * 这里原来声明过两个类型，评审阶段（G5 T2 阶段一评审 N-4）删掉了它们：
+ *   - `NetEnvelope { channel, seq, from, payload }`
+ *   - `StampedText { text }`
  *
- * `seq` 是**传输层自己的发送序号**，与 `protocol.ts` 的 `ActMsg.seq`（档案里的步号）
- * 是两件事，别混：前者用于 fake 在"同一到达时刻"上稳定排序（确定性），后者是会议层语义。
- * `from` 是本端 `TransportInit.selfId`，让接收方知道这条是谁发的。
+ * 删的理由是**它们当时全仓零消费者、零用例**，而且各自的文档与类型对不上：
+ * `StampedText` 的文档说"带 `atTick`"，类型里只有 `text`；`NetEnvelope.from` 的文档说是
+ * `selfId`，而 fake 实际用的是自己的 `PendingFrame`（`from` 是 `'A'/'B'` 侧标，不是 `selfId`）。
+ * 一个没人实现、文档又和类型打架的接口，比没有接口更危险 —— T7 会照它写，然后发现对不上。
  *
- * ⚠️ `payload` 由调用方编成**字符串**（`encodeMsg().text` 的样子），传输层不看它一眼。
+ * 处置不是"补一个消费方来救活它"，而是**先删**：`DeliveryStep`（下面那个）已经覆盖了
+ * "帧 + 它第几步到"这件事，且它**有真实消费者**（`FakeTransportPair.steps()` 与判据 4 的逐字比对）。
+ * 真需要"线封装"这个中间类型时（T7 把 `RTCDataChannel` 的字符串折进连接器那一步），
+ * 按那时的真实需要重新设计，而不是让一个猜出来的形状先占着位置。
  */
-export interface NetEnvelope {
-  readonly channel: NetChannel;
-  readonly seq: number;
-  readonly from: string;
-  readonly payload: string;
-}
-
-/** 到达的一帧 + 它在哪一步到的（`atTick` = fake 的逻辑步编号；真实实现里它就是到达次序） */
-export interface StampedText {
-  readonly text: string;
-}
 
 /**
  * `pump()` 的一步：谁发的、谁收的、哪条通道、第几步到、载荷原文。
  *
  * ★ **为什么把"到达步"渲染成结构化数据而不是回调的副作用**：判据 4（确定性）要能
  * **逐字比对两遍的投递序列**。若只有 `onMessage` 回调，比对就只能靠测试自己往数组里攒日志 ——
- * 那样"序列"的定义在测试里、而不在实现里，换个测试就能改口径。这里由传输层自己产出，
+ * 那样"序列"的定义在测试里、而不在实现里，换个测试就能改口径。这里由实现自己产出，
  * 两遍对比的是同一份东西。
  */
 export interface DeliveryStep {
@@ -192,7 +187,7 @@ export interface StatusChange {
  * 必须能在不改 `NetTransport` 形状的前提下换掉。T7 不需要实现它（它的"内核"就是真 WebRTC）；
  * 它今天只有 fake 传输一个实现。
  *
- * ⚠️ `deliver` 的契约是"**内核已经决定这一帧现在到达**"，实现不得在其中再排延迟 ——
+ * `deliver` 的契约是"**内核已经决定这一帧现在到达**"，实现不得在其中再排延迟 ——
  * 延迟只发生在 `schedule`（发的那一侧）。两层都排延迟会让"延迟是几步"变成两处相加，
  * 而判据里的步数断言就再也对不上了。
  */

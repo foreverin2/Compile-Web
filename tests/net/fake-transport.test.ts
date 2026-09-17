@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { CHANNEL_SPECS, channelSpec } from '../../src/net/transport';
 import type { NetChannel, SendFailureReason, TransportStatus } from '../../src/net/transport';
@@ -69,7 +69,7 @@ function waitNextMs(): void {
 /**
  * 建一对"收发都记日志"的传输。
  *
- * ⚠️ 注入的随机源是 `rng(seed)` —— 每次 `createDeliverer` 都**新建**一个独立的发生器，
+ * 注入的随机源是 `rng(seed)` —— 每次 `createDeliverer` 都**新建**一个独立的发生器，
  * 所以两遍跑不会因为共享状态而互相影响（那正是"两遍不同"的一种假成因）。
  */
 function createDeliverer(opts: { seed?: number } & FakePairOptions = {}) {
@@ -164,7 +164,12 @@ describe('判据 1：成对 fake 双向传消息', () => {
     pair.pump(12);
 
     const delivered = got.filter((g) => g.side === 'B');
-    expect(delivered.filter((g) => g.channel === 'act').map((g) => g.text)).toEqual(acts);
+    const actDelivered = delivered.filter((g) => g.channel === 'act').map((g) => g.text);
+    // ★ 这条腿只断**可靠**（一条不少、一条不重），**不**断顺序（评审 N-7）：
+    //   顺序归 `act 保序` 那条腿管。原先这里写 `toEqual(acts)`（含顺序），于是 M1（乱序）
+    //   会让两条腿同时红，定位时串在一起，分不清"丢了"还是"乱了"。
+    expect([...actDelivered].sort(), 'act 丢帧或重复了').toEqual([...acts].sort());
+    expect(actDelivered.length, 'act 条数不对').toBe(acts.length);
     // 丢包确实发生了（否则这条腿证明不了"act 不丢"是有意义的：队列本来就没压力）
     expect(pair.dropped()).toBeGreaterThan(0);
     // 而且丢的**只可能是** beat：act 那 5 条一条不少（上面已断言）
@@ -257,13 +262,101 @@ describe('判据 2：断线、失败结果与重连', () => {
     expect(got.map((g) => g.text)).toEqual(['after-reconnect']);
   });
 
-  it('close-res：本端 close 之后，对端仍能收到这条应答（掉线不等于静默消失）', async () => {
+  it('★ N-1：断线之后 `init()` 不许把状态说成 online（要么失败、要么真连上）', async () => {
+    // 病（评审 N-1 实测 `expected 'online' to be 'offline'`）：`deactivate()` 之后调 `init()`
+    // 会把状态从 offline 说成 online，而 `reachable[side]` 仍是 false、`setReachable(false)`
+    // 也不会再触发 ⇒ 状态**永久说谎**；此后 `send` 回报成功而帧只烂在 requeue。
+    const { pair } = createDeliverer();
+    await connect(pair);
+    pair.A.deactivate();
+    expect(pair.A.transport.status()).toBe('offline');
+
+    // 对端仍不可达 ⇒ 这次 init 必须失败，且状态不许变成 online
+    const again = await pair.A.transport.init({ selfId: 'A', peerId: 'B' });
+    expect(again.ok, '对端不可达时 init 居然成功了').toBe(false);
+    if (again.ok) throw new Error('对端不可达时 init 居然成功了');
+    expect(again.reason).toBe('offline');
+    expect(pair.A.transport.status(), 'init 把状态说成了 online（状态说谎）').toBe('offline');
+    // 而且不许"看着成功、帧却发不出去"：这一条仍然是 offline 失败
+    const r = pair.A.transport.send('act', 'x');
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error('离线时 send 居然成功了');
+    expect(r.reason).toBe('offline');
+
+    // 线接回来之后再 init 才是真的连上
+    pair.A.activate();
+    const third = await pair.A.transport.init({ selfId: 'A', peerId: 'B' });
+    expect(third.ok).toBe(true);
+    expect(pair.A.transport.status()).toBe('online');
+  });
+
+  it('★ N-1 的第二面：一端从一开始就不可达时，`init()` 给可读失败而不是假 online', async () => {
+    // 这一面用构造参数造"对端不可达"（不去用负数延迟那类**语义非法**的手段）：
+    // 它钉的是"init 不许在连不上的情况下报成功"。跑完把两个标志放回 true 再 `activate()`，
+    // 免得 `setReachable` 的同值早退把"标志 false / 状态 online"这种不一致留在后面。
+    const { pair } = createDeliverer({ reachable: { sideB: false } });
+    const a = await pair.A.transport.init({ selfId: 'A', peerId: 'B' });
+    expect(a.ok, '对端不可达时 A 的 init 居然成功了').toBe(false);
+    if (a.ok) throw new Error('对端不可达时 A 的 init 居然成功了');
+    expect(a.reason).toBe('offline');
+    expect(pair.A.transport.status()).toBe('offline');
+
+    try {
+      // 对端这时才真的上线
+      const b = await pair.B.transport.init({ selfId: 'B', peerId: 'A' });
+      expect(b.ok).toBe(true);
+      const a2 = await pair.A.transport.init({ selfId: 'A', peerId: 'B' });
+      expect(a2.ok, '对端上线之后 A 的 init 该成功').toBe(true);
+      expect(pair.A.transport.status()).toBe('online');
+      expect(pair.B.transport.status()).toBe('online');
+    } finally {
+      pair.B.activate();
+      pair.A.activate();
+    }
+  });
+
+  it('★ N-5：`sendIfOpen` 解构调用不抛（它是闭包，不依赖 this）', async () => {
+    // 病（评审 N-5）：原先实现用 `this.send(...)`，解构调用抛
+    // `TypeError: Cannot read properties of undefined (reading 'send')`，
+    // 与 `transport.ts` 头顶"失败一律返回结果对象、不抛"直接相左。
+    const { pair } = createDeliverer();
+    await connect(pair);
+    const { sendIfOpen } = pair.A.transport;
+    const okResult = sendIfOpen('act', 'destructured-ok');
+    expect(okResult.ok).toBe(true);
+    pair.pump(4);
+
+    pair.A.deactivate();
+    const failures: SendFailureReason[] = [];
+    pair.A.transport.onError((f) => failures.push(f.reason));
+    // 解构之后**在失败路径上**也不许抛
+    const failResult = sendIfOpen('act', 'destructured-fail');
+    expect(failResult.ok).toBe(false);
+    if (failResult.ok) throw new Error('离线时 sendIfOpen 居然成功了');
+    expect(failResult.reason).toBe('offline');
+    expect(failures, 'onError 旁路没收到同一次失败').toEqual(['offline']);
+  });
+
+  it('close：本端关闭后对端转 offline，且这条信号**不进消息流**（N-2 的整改腿）', async () => {
     const { pair, got } = createDeliverer();
     await connect(pair);
+    const statusB: TransportStatus[] = [];
+    pair.B.transport.onStatus((c) => statusB.push(c.to));
+
     const seq = await pair.A.close();
-    expect(seq, 'close 应该把 close-res 排上线').not.toBeNull();
+    expect(seq, 'close 应该登记一条内部信号').not.toBeNull();
+    // 这一问必须在 `pump` **之前**：投递之后帧就不在队列里了，`earliestTick` 会回 undefined
+    //    （第一版写反了顺序，症状是"expected undefined to be 1"）。
+    expect(pair.A.earliestTick(seq as number), '内部信号的到达步应为当前步 + CONTROL_LATENCY_TICKS').toBe(
+      CONTROL_LATENCY_TICKS,
+    );
     pair.pump(CONTROL_LATENCY_TICKS + 2);
-    expect(got.filter((g) => g.side === 'B').map((g) => g.text)).toEqual([CLOSE_RES_TEXT]);
+
+    // ★ 评审 N-2 的整改：早先唯一信号是 fake 私有载荷混进 `onMessage`（T3 会判成"未知 t"），
+    //   而对端状态仍是 online。现在反过来：状态面有正规信号，消息面一个字都不进。
+    expect(pair.B.transport.status(), '对端关闭后 B 必须转 offline').toBe('offline');
+    expect(statusB, 'B 收到过状态变化').toEqual(['offline']);
+    expect(got, 'close 的内部信号不许混进 onMessage').toEqual([]);
   });
 });
 
@@ -320,27 +413,70 @@ describe('判据 4：同一脚本跑多遍，投递序列逐字相同', () => {
     expect(a).not.toBe(b);
   });
 
-  it('投递时刻只由调用方给的脚本决定：同一次调度，两遍排在同一到达步', async () => {
-    // 这条腿把"确定性"缩到**一个数**上（到达步），便于变异定位：这一帧在哪一步到，
+  it('投递时刻只由调用方给的脚本决定：同一次调度，两遍给出同一个最早到达步', async () => {
+    // 这条腿把"确定性"缩到**一个数**上（最早到达步），便于变异定位：这一帧最早在哪一步能到，
     // 只能是"当前步 + 延迟 + 乱序"的函数，不许掺墙钟。
-    async function scheduleAndRead(): Promise<{ seq: number; atTick: number | undefined }> {
+    async function scheduleAndRead(): Promise<{ seq: number; earliest: number | undefined }> {
       const { pair } = createDeliverer();
       await connect(pair);
       const seq = pair.A.schedule('act', 'probe');
-      return { seq, atTick: pair.A.scheduleAt(seq) };
+      return { seq, earliest: pair.A.earliestTick(seq) };
     }
     const one = await scheduleAndRead();
     waitNextMs();
     const two = await scheduleAndRead();
-    expect(one.atTick, '刚 schedule 的帧就查不到（scheduleAt 的入参口径错了？）').toBeDefined();
-    expect(two, '同一调度在两遍里排到了不同的到达步（墙钟进了投递时刻）').toEqual(one);
+    expect(one.earliest, '刚 schedule 的帧就查不到（earliestTick 的入参口径错了？）').toBeDefined();
+    expect(two, '同一调度在两遍里排到了不同的最早到达步（墙钟进了投递时刻）').toEqual(one);
     // 顺带钉住"查到的是真的那一帧"：投递之后它必须从队列里消失
     const { pair } = createDeliverer();
     await connect(pair);
     const seq = pair.A.schedule('act', 'probe');
-    expect(pair.A.scheduleAt(seq)).toBeDefined();
+    expect(pair.A.earliestTick(seq)).toBeDefined();
     pair.pump(4);
-    expect(pair.A.scheduleAt(seq), '已投递的帧还留在队列里（scheduleAt 会给出过期的到达步）').toBeUndefined();
+    expect(pair.A.earliestTick(seq), '已投递的帧还留在队列里（earliestTick 会给出过期的到达步）').toBeUndefined();
+  });
+
+  it('★ 绝对到达步逐字钉住（N-3 的改名腿 + 墙钟检测力补强）', async () => {
+    // ★ 为什么需要这条腿（评审 M4 暴露的硬上界）：上面那条"跑 40 遍"是**跨遍比对**，
+    //   它只对"每毫秒都变"的墙钟依赖灵敏。加一个**粗粒度**墙钟依赖
+    //   （例如 `Math.floor(Date.now() / 10000) % 2`，十秒才翻一次）时：
+    //   同一遍之内的所有帧偏移**相同**，跨遍比对也相同（都在同一个十秒窗口里）
+    //   ⇒ 40 遍那条腿全绿，只有 T1 守卫的文本腿能红。
+    //   而这条腿钉的是**绝对**步号，任何常量偏移都会当场红。
+    const pair = createFakeTransportPair();
+    const got: { at: number; text: string }[] = [];
+    pair.A.transport.onMessage((text) => got.push({ at: pair.tick(), text }));
+    pair.B.transport.onMessage((text) => got.push({ at: pair.tick(), text }));
+    await pair.A.transport.init({ selfId: 'A', peerId: 'B' });
+    await pair.B.transport.init({ selfId: 'B', peerId: 'A' });
+
+    pair.A.transport.send('act', 'a1');
+    pair.A.transport.send('act', 'a2');
+    pair.B.transport.send('beat', 'b1');
+    pair.pump(6);
+
+    // 默认 latencyTicks = 1，帧在发送那一步**还没到**（同一个 +1）。
+    // 每步**每侧**各交一帧 ⇒ 第 2 步 A 与 B 各交一帧（a1、b1 都落在 2），第 3 步 A 交 a2。
+    expect(
+      pair.steps().map((s) => `${s.atTick}:${s.from}->${s.to}:${s.channel}:${s.text}`),
+      '绝对到达步变了：投递时刻掺进了脚本之外的量（例如墙钟常量偏移）',
+    ).toEqual(['2:A->B:act:a1', '2:B->A:beat:b1', '3:A->B:act:a2']);
+    expect(got.map((g) => `${g.at}:${g.text}`)).toEqual(['2:a1', '2:b1', '3:a2']);
+  });
+
+  it('★ 一步只交付一帧这件事是**明确承诺**：earliestTick 是下界，不是实际到达步', async () => {
+    // 评审 N-3：原 API 名 `scheduleAt` 承诺"第几步到达"，而实现每步每侧只交一帧。
+    // 现在的口径是：`earliestTick` 返回**最早可能**的到达步；实际落地还取决于队列。
+    // 这条腿把三帧的"下界相同、实际递推"这件事钉住，免得后来人又把两者混起来。
+    const { pair } = createDeliverer();
+    await connect(pair);
+    const seqs = ['d0', 'd1', 'd2'].map((t) => pair.A.schedule('act', t));
+    expect(seqs.map((s) => pair.A.earliestTick(s)), '三帧的最早到达步应当相同（同一步发出、同延迟）').toEqual([2, 2, 2]);
+    pair.pump(6);
+    expect(
+      pair.steps().map((s) => s.atTick),
+      '实际到达步是按队列逐条递推的（每步每侧一帧）',
+    ).toEqual([2, 3, 4]);
   });
 });
 
@@ -368,15 +504,53 @@ describe('判据 5 / 6：注入式，以及"不可靠"这件事必须能被接�
     expect(two.pair.B.transport.seq()).toBe(1);
   });
 
+  it('★ 无参建两对：互不共享状态（判据 5 的"没有隐藏单例"腿）', async () => {
+    // ★ 补这条腿的原因（评审 S1 实测）：原判据面里**每一处**建 pair 都走 `createDeliverer()`，
+    //   而它总是注入 `randomA/randomB` ⇒ 从不走无参那条路。于是"给无参调用加一个模块级单例"
+    //   这种变异对全部判据不可见（S1：判据面 25 条全绿、只有探针红）。这是**结构性漏**，
+    //   不是概率漏 —— 补法就是真的用无参形式建两对，并断言它们的**对象身份**都不同。
+    const one = createFakeTransportPair();
+    const two = createFakeTransportPair();
+    expect(one, '两次无参调用拿到了同一个实例（模块级单例）').not.toBe(two);
+    expect(one.A.transport, '两对的 A 端是同一个对象').not.toBe(two.A.transport);
+    expect(one.steps()).not.toBe(two.steps());
+
+    await one.A.transport.init({ selfId: 'A', peerId: 'B' });
+    await one.B.transport.init({ selfId: 'B', peerId: 'A' });
+    await two.A.transport.init({ selfId: 'A', peerId: 'B' });
+    await two.B.transport.init({ selfId: 'B', peerId: 'A' });
+    one.A.transport.send('act', 'only-in-one');
+    one.pump(4);
+
+    // 状态互不串：`one` 走了一步，`two` 的时钟与日志必须纹丝不动
+    expect(one.steps().map((s) => s.text)).toEqual(['only-in-one']);
+    expect(two.steps(), '两对共享了投递日志').toEqual([]);
+    expect(two.tick(), '两对共享了时钟').toBe(0);
+    expect(one.tick()).toBe(4);
+  });
+
   it('通道特性表：act = 可靠 + 保序，beat = 不可靠 + 可乱序，且两者都在 transport.ts 里声明', () => {
     // 这是判据 6 的机械证明：T7 要能把 `beat` 映射成 ordered:false / maxRetransmits:0，
     // 前提是接口**说出了**这件事。
     expect(channelSpec('act')).toEqual({ channel: 'act', reliable: true, ordered: true });
     expect(channelSpec('beat')).toEqual({ channel: 'beat', reliable: false, ordered: false });
     expect(CHANNEL_SPECS.map((s) => s.channel)).toEqual(['act', 'beat']);
-    // 真实实现也会把这张表报出来（fake 与浏览器实现共用同一个事实来源）
+
+    // 真实实现也会把这张表报出来（fake 与浏览器实现共用同一个事实来源）。
+    // ★ 这条断言本身**区分力有限**（评审 N-6 的同族）：它比的是 `channelSpec` 的输出与
+    //   `CHANNEL_SPECS`，所以下面另加两条"会红"的钉法 —— 真去改一个字段看会不会被看出来。
     const { pair } = createDeliverer();
     expect(pair.A.transport.channels()).toEqual(CHANNEL_SPECS);
+    // (a) `channels()` 必须**不是**模块常量本身：直接返回会让调用方能改到共享的那份
+    expect(pair.A.transport.channels(), 'channels() 返回了模块常量本身').not.toBe(CHANNEL_SPECS);
+    // (b) 非空 + 恰好两条 + 每条都有 `reliable`/`ordered` 两个布尔（漏字段会红）
+    const reported = pair.A.transport.channels();
+    expect(reported.length).toBe(2);
+    for (const spec of reported) {
+      expect(typeof spec.reliable, `${spec.channel}.reliable 不是布尔`).toBe('boolean');
+      expect(typeof spec.ordered, `${spec.channel}.ordered 不是布尔`).toBe('boolean');
+    }
+    expect(reported.filter((s) => !s.reliable).map((s) => s.channel), '只有 beat 可不可靠').toEqual(['beat']);
   });
 
   it('onError 旁路：失败的那一次会带着同一个理由码出现在订阅者那里', async () => {
@@ -394,20 +568,27 @@ describe('判据 5 / 6：注入式，以及"不可靠"这件事必须能被接�
  * 判据 3 的锚点核对（腿本体在 T1 的守卫里，本文件不改它、也不重复它）
  * ------------------------------------------------------------------ */
 
-describe('判据 3 的锚点核对', () => {
+describe('判据 3 的锚点核对（**记录型**，不是判据 3 的牙）', () => {
   it('定时器零命中这条腿住在 T1 的生成式守卫里，且它真的在扫 src/net', () => {
-    // ★ 为什么不在本文件里再写一遍扫描：那会变成"同一件事有两份实现"，两份会漂移。
-    //   这里只钉两件事：(a) 守卫文件在、且它的扫描目录指向 src/net；
-    //   (b) 守卫文件里确实有那条"定时器零命中"的腿（而不是只有一句注释）。
-    //   真正的红/绿由 `npx vitest run tests/net/net-purity.test.ts` 的输出来证明。
+    // ★ 这条用例的口径（评审 N-6 要求写清）：它是**记录型断言**，阅读价值大于判别价值。
+    //   判据 3 的牙在 `tests/net/net-purity.test.ts` 那条生成式腿（M2 实测红在它上面），
+    //   本文件不重复实现扫描（两份实现会漂移）。
+    //
+    //   原先这里还有两条 `expect(path).toMatch(/.../)` —— 那是对**刚构造出来的字符串常量**
+    //   做正则，恒真（文件删了也照样绿）。已删掉，换成下面三条**会红**的钉法。
     const guardPath = fileURLToPath(new URL('./net-purity.test.ts', import.meta.url));
     const guard = readFileSync(guardPath).subarray(0, 4 * 1024 * 1024).toString('utf8');
     expect(guard, '守卫不在扫 src/net').toContain("new URL('../../src/net/'");
     expect(guard, '守卫里没有"定时器零命中"那条腿').toContain('不直呼定时器');
-    // 本文件的两份交付源码也必须真的被那条腿扫到（文件都在 src/net 下）
+
+    // (1) 本任务的两份交付源码必须真的存在于 `src/net/`（文件被挪走/删掉 ⇒ 这里红）
     const lib = fileURLToPath(new URL('../../src/net/fake-transport.ts', import.meta.url));
     const iface = fileURLToPath(new URL('../../src/net/transport.ts', import.meta.url));
-    expect(lib.replace(/\\/g, '/')).toMatch(/\/src\/net\/fake-transport\.ts$/);
-    expect(iface.replace(/\\/g, '/')).toMatch(/\/src\/net\/transport\.ts$/);
+    expect(existsSync(lib), `交付源码不在：${lib}`).toBe(true);
+    expect(existsSync(iface), `交付源码不在：${iface}`).toBe(true);
+    // (2) 它们必须落在守卫的扫描根之下（用**守卫自己那份代码**里的根，不另写一份）
+    const netDir = fileURLToPath(new URL('../../src/net/', import.meta.url));
+    expect(lib.startsWith(netDir), 'fake-transport.ts 不在守卫的扫描根下').toBe(true);
+    expect(iface.startsWith(netDir), 'transport.ts 不在守卫的扫描根下').toBe(true);
   });
 });

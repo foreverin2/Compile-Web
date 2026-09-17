@@ -97,7 +97,7 @@ export interface LinkConfig {
 /**
  * `LinkConfig` 的规范化形态（每个字段都有值，测试读它做锚点）。
  *
- * ⚠️ 字段**故意不是 `readonly`**：这是 fake 的**内部可变状态**，`activate()` / `configure()`
+ * 字段**故意不是 `readonly`**：这是 fake 的**内部可变状态**，`activate()` / `configure()`
  * 都要就地改它。`LinkConfig` 的 `readonly` 约束的是"调用方不许改我收到的对象"，
  * 不是"实现不许改自己的状态"。
  */
@@ -131,9 +131,25 @@ export interface FakePort {
   deactivate(): void;
   /** 把一帧**直接**排上线（不经 `send`，因此不受"本侧已 offline"影响）。返回**线序** */
   schedule(channel: NetChannel, text: string, when?: ScheduleWhen): number;
-  /** 某帧被排在第几步到达（`undefined` = 不在待到达队列里） */
-  scheduleAt(seq: number): number | undefined;
-  /** 本侧自己 `close()`；返回 `close-res` 那一帧的发送序号（`null` = 没关成） */
+  /**
+   * 某帧**最早可能**在哪一步到达（`undefined` = 它不在队列里）。
+   *
+   * ★ 名字是 `earliestTick` 而不是 `scheduleAt`（评审 N-3 的整改）。原名承诺的是
+   * "它被排在第几步到达"，但 `pump` 每步每侧**只交付一帧** ⇒ 同一步排 3 帧时
+   * 三帧的"最早可能到达步"都是 2，而它们实际分别在 2、3、4 落地。
+   * 原承诺会骗到 T5/T6 里按"延迟几步"写的断言。
+   *
+   * 所以调用方**不许**把它的返回值当成实际到达步：实际落地还取决于队列里排在它前面的帧数
+   * （每步一帧）。要核对实际到达时刻就读 `steps()`。
+   */
+  earliestTick(seq: number): number | undefined;
+  /**
+   * 本侧自己 `close()`；返回那次关闭登记的线序（`null` = 没关成）。
+   *
+   * 返回值从 `close-res` 的**到达步**改成了**线序**（N-2 整改的连带改动）：
+   * 关闭现在是一条内核内部信号（不排队、到达时不进 `onMessage`），所以"哪一步到"要用
+   * `earliestTick(seq)` 去问，而不是让 `close()` 猜一个数回来。
+   */
   close(): Promise<number | null>;
   /** 撤销 `closed` 回到 `online`（模拟"重连成功"；**不会**自动恢复链路开关） */
   reopen(): void;
@@ -183,8 +199,12 @@ export interface FakePairOptions {
 export const CONTROL_LATENCY_TICKS = 1;
 
 /**
- * `close()` 排队的那条应答的文本（fake 的内部约定，测试按它核对"几步到"）。
- * 它不是 `protocol.ts` 的消息 —— 传输层不认识协议消息（硬约束 1）。
+ * `close()` 排队的那条应答的文本。
+ *
+ * 它**不再交给 `onMessage`**（评审 N-2）：早先它是混进消息流的一条 fake 私有载荷，
+ * 于是 T3 的解码器会把它判成"未知 t"，而"对手关了"这件事在状态面上反而看不见。
+ * 现在它只是一帧**内部**信号：它照常占一次链路调度（好让"几步到"可被核对），
+ * 但到达时不进订阅者，改为把接收侧转成 `offline`。
  */
 export const CLOSE_RES_TEXT = '{"t":"fake","kind":"close-res"}';
 
@@ -195,8 +215,25 @@ interface PendingFrame {
   readonly text: string;
   readonly from: Side;
   readonly to: Side;
+  /**
+   * 这一帧是**玩家数据**还是**内核内部信号**。
+   *
+   * 为什么要有这个标签（评审 N-2）：`close-res` 必须走"状态转移"而不是"混进消息流"，
+   * 而它又要照常占一次链路调度好让"几步到"可被核对 ⇒ 得让落地处能分辨它。
+   * **用类型标签、不用文本相等**：载荷是不透明字符串，文本比对会把"谁恰好发了同样的字节"
+   * 也当成控制帧。
+   */
+  readonly kind: 'data' | 'control-close';
   /** 到达步；`null` = 还没排（在待排队列里等 `activate`） */
   atTick: number | null;
+  /**
+   * 网络跳数：0 = 本步发出、本步交付（内核内部信号，不排队）；1 = 走了一次链路。
+   *
+   * 加这个字段的原因：`close-res` 要做成"状态转移 + 占一次调度"，就必须把
+   * "本步直接送达"和"排进待到达队列"两条路区分开。用一个计数比再加一个布尔标志干净：
+   * `0` 天然是"还没上路"，`1` 天然是"上过路了"。
+   */
+  hops: number;
 }
 
 /** 一侧的全部内部状态 */
@@ -215,8 +252,6 @@ interface SideState {
   peerId: string;
   /** 本侧的 `NetTransport`（`makeTransport` 建好后回填，供 `FakePort.close()` 调用） */
   transport: NetTransport | null;
-  /** 最近一次交付用的通道（`deliver` 回调把它连同文本一起给订阅者） */
-  lastDeliveredChannel: NetChannel;
   readonly log: { side: Side; from: TransportStatus; to: TransportStatus }[];
   messageListeners: ((text: string, channel: NetChannel) => void)[];
   statusListeners: ((change: StatusChange) => void)[];
@@ -252,7 +287,9 @@ export function createFakeTransportPair(opts: FakePairOptions = {}): FakeTranspo
   const sides: Record<Side, SideState> = {
     A: newSide('A', opts.randomA ?? (() => 0), resolveLink(opts.aToB ?? {})),
     B: newSide('B', opts.randomB ?? (() => 0), resolveLink(opts.bToA ?? {})),
-  };  /** 两端是否可达（`deactivate()` 会把两端一起翻成 false） */
+  };
+
+  /** 两端是否可达（`deactivate()` 会把两端一起翻成 false） */
   const reachable: Record<Side, boolean> = {
     A: opts.reachable?.sideA ?? true,
     B: opts.reachable?.sideB ?? true,
@@ -273,7 +310,6 @@ export function createFakeTransportPair(opts: FakePairOptions = {}): FakeTranspo
       selfId: side,
       peerId: otherSide(side),
       transport: null,
-      lastDeliveredChannel: 'act',
       log: [],
       messageListeners: [],
       statusListeners: [],
@@ -337,7 +373,16 @@ export function createFakeTransportPair(opts: FakePairOptions = {}): FakeTranspo
    * 变异也只需要改一处。
    */
   function enqueue(side: Side, channel: NetChannel, text: string, extraTicks: number): PendingFrame {
-    const frame: PendingFrame = { seq: nextSeq, channel, text, from: side, to: otherSide(side), atTick: null };
+    const frame: PendingFrame = {
+      seq: nextSeq,
+      channel,
+      text,
+      from: side,
+      to: otherSide(side),
+      kind: 'data',
+      atTick: null,
+      hops: 1,
+    };
     nextSeq += 1;
     if (shouldDrop(side, channel)) {
       // 丢了：不进任何队列（`dropped()` 会记一笔，好让测试核对"确实丢了"而不是"没发"）
@@ -348,6 +393,31 @@ export function createFakeTransportPair(opts: FakePairOptions = {}): FakeTranspo
     frame.atTick = scheduledTick(side, reorderExtra(side, channel) + extraTicks);
     sides[side].pending.push(frame);
     return frame;
+  }
+
+  /**
+   * 把一帧交给接收侧（**唯一**的落地处）。三条支路按"这是不是内核内部信号"分：
+   *
+   *  - `hops === 0`（内核内部信号，目前只有 `close-res`）：**不进 `onMessage`**，
+   *    改为把接收侧转成 `offline`（评审 N-2 的整改：让"对手关了"有正规状态信号，
+   *    而不是把一条 fake 私有载荷塞进消息流让 T3 判成"未知 t"）；
+   *  - `'close-res'` 走正常链路到达（`hops === 1`，测试可以显式排它）：同样按状态信号处理；
+   *  - 其余：正常交付给订阅者。
+   *
+   * 判断用**类型标签**而不是文本相等：载荷是不透明字符串，用文本比对会把
+   * "谁恰好发了同样的字节"也算成控制帧。
+   */
+  function transfer(frame: PendingFrame): void {
+    if (frame.kind === 'control-close') {
+      const st = sides[frame.to];
+      // 接收侧必须知道"对端不见了" —— 这是它唯一的状态信号（N-2）
+      setStatus(frame.to, 'offline', '对端已关闭连接。');
+      st.live = false;
+      st.link.live = false;
+      reachable[frame.to] = false;
+      return;
+    }
+    connectors[frame.to]?.deliver(frame.text, frame.channel);
   }
 
   function makeConnector(side: Side): TransportConnector {
@@ -365,8 +435,6 @@ export function createFakeTransportPair(opts: FakePairOptions = {}): FakeTranspo
         return frame.atTick;
       },
       deliver(text, channel): void {
-        const st = sides[side];
-        st.lastDeliveredChannel = channel;
         for (const cb of [...st.messageListeners]) cb(text, channel);
       },
       setReachable(next, message): void {
@@ -387,28 +455,71 @@ export function createFakeTransportPair(opts: FakePairOptions = {}): FakeTranspo
     for (const cb of [...st.statusListeners]) cb({ from, to, message });
   }
 
+  /** 记一步投递（日志 + 落地的唯一入口，三条支路都要经过这里） */
+  function recordStep(frame: PendingFrame): void {
+    allSteps.push({
+      atTick: nowTick,
+      channel: frame.channel,
+      from: frame.from,
+      to: frame.to,
+      seq: frame.seq,
+      text: frame.text,
+    });
+    transfer(frame);
+  }
+
   function pumpOnce(): void {
     nowTick += 1;
     for (const side of ['A', 'B'] as const) {
       const st = sides[side];
+      // ★ 内核内部信号（`hops === 0`）**不排队**：它的延迟是固定的 `CONTROL_LATENCY_TICKS`，
+      //   与链路延迟、与队列里积压多少帧都无关（理由见 `CONTROL_LATENCY_TICKS` 的注释）。
+      const control = pickDeliverable(
+        st.pending.filter((f) => f.hops === 0),
+        nowTick,
+      );
+      if (control !== null) {
+        takeOut(st.pending, control);
+        recordStep(control);
+        continue;
+      }
       const frame = pickDeliverable(st.pending, nowTick);
       if (frame === null) continue;
       takeOut(st.pending, frame);
-      allSteps.push({
-        atTick: nowTick,
-        channel: frame.channel,
-        from: frame.from,
-        to: frame.to,
-        seq: frame.seq,
-        text: frame.text,
-      });
-      connectors[frame.to]?.deliver(frame.text, frame.channel);
+      recordStep(frame);
     }
   }
 
   function makeTransport(side: Side): NetTransport {
     const st = sides[side];
     const connector = connectors[side]!;
+
+    /**
+     * 发送的**唯一**实现（是个闭包，不是对象方法）。
+     *
+     * ★ 为什么抽成闭包（评审 N-5）：原先 `sendIfOpen` 写的是 `this.send(...)`，
+     * 于是 `const { sendIfOpen } = t; sendIfOpen('act', 'x')` 会抛
+     * `TypeError: Cannot read properties of undefined (reading 'send')` —— 与
+     * `transport.ts` 头顶"失败一律返回结果对象、不抛"的纪律直接相左。
+     * 抽成闭包之后，`send` 与 `sendIfOpen` 谁都不依赖 `this`，解构随便调。
+     */
+    function doSend(channel: NetChannel, text: string): SendResult {
+      if (st.status === 'closed') {
+        return { ok: false, reason: 'closed', message: '这一端已经关闭，不再发送。' };
+      }
+      if (st.status === 'idle') {
+        return { ok: false, reason: 'not-initialized', message: '传输还没 init，先建立连接再发送。' };
+      }
+      if (st.status !== 'online') {
+        return { ok: false, reason: 'offline', message: '对端不可达（掉线或还没连上），这一条没有发出去。' };
+      }
+      // 链路不通时帧进"待排"队列：这**不算失败** —— 帧已经收下了，`activate()` 会重排它。
+      // 真正的失败只在上面那三种状态里（offline 是"对端不在"，链路不通是"这一侧的路断了"）。
+      connector.schedule(channel, text);
+      st.sendSeq += 1;
+      return { ok: true };
+    }
+
     return {
       async init(init: TransportInit): Promise<TransportActionResult> {
         if (st.status === 'online') return { ok: true };
@@ -417,29 +528,37 @@ export function createFakeTransportPair(opts: FakePairOptions = {}): FakeTranspo
         }
         st.selfId = init.selfId;
         st.peerId = init.peerId;
+        // ★ 两条自洽规则（评审 N-1）。
+        //
+        // 病是：`deactivate()` 之后调 `init()`，状态会从 offline **说成 online**，
+        // 而 `reachable[side]` 仍是 false、`setReachable(false)` 也不会再触发 ⇒ 状态永久说谎；
+        // 此后 `send` 回报成功而帧只烂在 requeue。
+        //
+        // 规则一：`init()` 是"把这一侧的链路开起来"的动作，所以它要**同时**把本侧链路置通
+        //   （否则 `live === false` 与 `status === 'online'` 会长期并存，`send` 一直成功、
+        //   帧一直进 requeue —— 那正是"状态说谎"的下一站）。
+        // 规则二：**对端**不可达时不许转 `online`，而是回一个可读的失败结果 ——
+        //   单向插线是连不上的（对端自己得调 `init()`），这条正是 N-1 的核心。
+        st.live = true;
+        st.link.live = true;
+        reachable[side] = true;
+        if (!reachable[otherSide(side)]) {
+          setStatus(side, 'offline', '本端链路已就绪，但对端仍不可达。');
+          return {
+            ok: false,
+            reason: 'offline',
+            message: '对端仍不可达（对端那条链路还没接回来，或对端已经关闭）。这一端没有转成 online。',
+          };
+        }
         setStatus(side, 'online', '已建立连接。');
         return { ok: true };
       },
-      channels: (): readonly NetChannelSpec[] => CHANNEL_SPECS,
+      // 每次给一份**新数组**：直接返回模块常量会让调用方能改到共享的那份（评审 N-8）
+      channels: (): readonly NetChannelSpec[] => [...CHANNEL_SPECS],
       seq: () => st.sendSeq,
-      send(channel: NetChannel, text: string): SendResult {
-        if (st.status === 'closed') {
-          return { ok: false, reason: 'closed', message: '这一端已经关闭，不再发送。' };
-        }
-        if (st.status === 'idle') {
-          return { ok: false, reason: 'not-initialized', message: '传输还没 init，先建立连接再发送。' };
-        }
-        if (st.status !== 'online') {
-          return { ok: false, reason: 'offline', message: '对端不可达（掉线或还没连上），这一条没有发出去。' };
-        }
-        // 链路不通时帧进"待排"队列：这**不算失败** —— 帧已经收下了，`activate()` 会重排它。
-        // 真正的失败只在上面那三种状态里（offline 是"对端不在"，链路不通是"这一侧的路断了"）。
-        connector.schedule(channel, text);
-        st.sendSeq += 1;
-        return { ok: true };
-      },
+      send: doSend,
       sendIfOpen(channel: NetChannel, text: string): SendResult {
-        const r = this.send(channel, text);
+        const r = doSend(channel, text);
         if (!r.ok) for (const cb of [...st.errorListeners]) cb(r);
         return r;
       },
@@ -449,10 +568,27 @@ export function createFakeTransportPair(opts: FakePairOptions = {}): FakeTranspo
           return { ok: false, reason: 'not-initialized', message: '还没 init 就 close：没有连接可关。' };
         }
         setStatus(side, 'closed', '本端已主动关闭这条连接。');
-        // ★ `close-res` **不看链路开关、也不会被丢**：对方必须能听到"这一端关闭了"。
-        //   它也不进待排队列 —— 排在"本侧已经 offline"之上会让"关掉之后几次内应当收到应答"
-        //   这条判据变成"关掉之后就永远收不到"。
-        enqueue(side, 'act', CLOSE_RES_TEXT, CONTROL_LATENCY_TICKS - 1);
+        // ★ `close-res` 是**内核内部信号**（评审 N-2）：它不进 `onMessage`（否则 T3 的解码器
+        //   会把它判成"未知 t"），而是到达时把对端转成 `offline`。它照常占一次调度，
+        //   延迟固定为 `CONTROL_LATENCY_TICKS`（不随链路延迟漂移），且**不看链路开关**
+        //   —— 对方必须能听到"这一端关闭了"。
+        const frame: PendingFrame = {
+          seq: nextSeq,
+          channel: 'act',
+          text: CLOSE_RES_TEXT,
+          from: side,
+          to: otherSide(side),
+          kind: 'control-close',
+          // 内部信号的到达步**固定为当前步 + CONTROL_LATENCY_TICKS**（不受 `latencyTicks`
+          // 影响，也不排 `pickDeliverable` 的队）：`CONTROL_LATENCY_TICKS` 的全部意义就是
+          // "控制帧的节奏与玩家数据的延迟无关"（见它的注释）。写成 `scheduledTick(...)`
+          // 会把它偷偷绑回 `latencyTicks` 上 —— 第一版就是这么写的，实测在默认延迟下
+          // 得到 2 而不是 1。
+          atTick: nowTick + CONTROL_LATENCY_TICKS,
+          hops: 0,
+        };
+        nextSeq += 1;
+        st.pending.push(frame);
         return { ok: true };
       },
       onMessage(cb): () => void {
@@ -473,7 +609,7 @@ export function createFakeTransportPair(opts: FakePairOptions = {}): FakeTranspo
 
   function makePort(side: Side): FakePort {
     const st = sides[side];
-    // ⚠️ 顺序不能反：`makeTransport` 一开始就抓走 `connectors[side]`，所以必须先建连接器。
+    // 顺序不能反：`makeTransport` 一开始就抓走 `connectors[side]`，所以必须先建连接器。
     // 第一版写反了，症状是 `send` 在 `connector.schedule` 上抛 "Cannot read properties of undefined"
     // —— 一个看起来像"传输坏了"、实际是初始化次序错的错误。
     connectors[side] = makeConnector(side);
@@ -493,16 +629,36 @@ export function createFakeTransportPair(opts: FakePairOptions = {}): FakeTranspo
       config: () => ({ ...st.link, live: st.live }),
       pendingRequeueCount: () => st.requeue.length,
       activate(): void {
-        if (st.live) return;
+        // ★ **不许**写 `if (st.live) return;` 这样的早退：
+        //   `init()` 也会把 `st.live` 置真，于是"`deactivate()` → `init()`（失败）→ `activate()`"
+        //   这条顺序下 `live` 已经是 true ⇒ 早退 ⇒ 两个 `reachable` 标志停在上一次的 false 上
+        //   ⇒ 之后 `send` 一直失败、`init` 一直报"对端仍不可达"。实测踩过这一条。
+        //   幂等：重复 `activate()` 只是把同样的状态再置一遍（`setReachable` 在同值时不出事件）。
         st.live = true;
         st.link.live = true;
         // 拔线时两端都转过 offline（见 `deactivate`），所以"线接回来"也要把两端转回 online ——
-        // 否则 `activate()` 之后 `send` 仍然一律失败，而"重连之后能继续"这条判据根本立不起来。
+        // 否则 `activate()` 之后 `send` 仍然一律失败。
+        //
+        // ★ 顺序是**先转状态、再强置标志**，两件事都不能省（这一条实测踩了两次）：
+        //   - 先强置标志再调 `setReachable` 会让它的 `reachable[side] === next` 早退 ⇒
+        //     状态永远留在 offline（实测：日志里 `setReachable side=A next=true cur=true`
+        //     之后 `setStatus` 一次都没被调到）；
+        //   - 只调 `setReachable` 不置标志，则当标志**已经是** true、状态却是 offline 时
+        //     （`init()` 只置本侧标志就会造成这种不一致）同样会早退。
         connectors[side]?.setReachable(true, '本端链路已恢复。');
         connectors[otherSide(side)]?.setReachable(true, '对端链路已恢复。');
+        reachable[side] = true;
+        reachable[otherSide(side)] = true;
         const queued = st.requeue.splice(0, st.requeue.length);
         for (const frame of queued) {
-          frame.atTick = scheduledTick(side, reorderExtra(side, frame.channel));
+          // 控制帧不该参与乱序，也不该重新抽随机数：它的到达步永远是
+          // "当前步 + CONTROL_LATENCY_TICKS"（内部信号不排队，见 `pumpOnce`）。
+          // 早先这里对所有帧一律走 `reorderExtra`，于是拔线期间攒下的帧会让随机序列
+          // 与"拔过几次线"相关（评审在自评复核里点出的"随机源消费顺序"问题）。
+          frame.atTick =
+            frame.hops === 0
+              ? nowTick + CONTROL_LATENCY_TICKS
+              : scheduledTick(side, reorderExtra(side, frame.channel));
           st.pending.push(frame);
         }
       },
@@ -517,13 +673,13 @@ export function createFakeTransportPair(opts: FakePairOptions = {}): FakeTranspo
       },
       schedule(channel: NetChannel, text: string, when: ScheduleWhen = NOW): number {
         const extra = when.kind === 'now' ? 0 : when.ticks;
-        // ★ 返回的是**线序**（`scheduleAt` 按它查），不是到达步 —— 两者都是数字，
-        //   第一版把到达步返回出去，症状是"刚排完就查不到"（`scheduleAt(2)` 找的是 seq 2，
+        // ★ 返回的是**线序**（`earliestTick` 按它查），不是到达步 —— 两者都是数字，
+        //   第一版把到达步返回出去，症状是"刚排完就查不到"（`earliestTick(2)` 找的是 seq 2，
         //   而当时 seq 只有 0）。这一族的错法在数字类型上完全不可见，只能靠断言暴露。
         return enqueue(side, channel, text, extra).seq;
       },
-      scheduleAt(seq: number): number | undefined {
-        // ⚠️ 两个队列都要找：链路不通时帧被挪进 `requeue`（它仍然"排在那儿等上线"，
+      earliestTick(seq: number): number | undefined {
+        // 两个队列都要找：链路不通时帧被挪进 `requeue`（它仍然"排在那儿等上线"，
         // 只是还没有到达步）。第一版只找 `pending`，症状是"刚 schedule 完就查不到"。
         for (const frame of st.pending) if (frame.seq === seq) return frame.atTick ?? undefined;
         for (const frame of st.requeue) if (frame.seq === seq) return frame.atTick ?? undefined;
@@ -533,7 +689,7 @@ export function createFakeTransportPair(opts: FakePairOptions = {}): FakeTranspo
         if (st.status === 'idle' || st.status === 'closed') return null;
         if (st.transport === null) return null;
         await st.transport.close();
-        for (const frame of st.pending) if (frame.text === CLOSE_RES_TEXT) return frame.seq;
+        for (const frame of st.pending) if (frame.kind === 'control-close') return frame.seq;
         return null;
       },
       reopen(): void {
