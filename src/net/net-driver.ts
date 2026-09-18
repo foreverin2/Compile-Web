@@ -186,7 +186,13 @@ export type DriverFailureReason =
    *  - `'seq-mismatch'`：不在 `realign` 之后 ⇒ 是**对端跳号 / 丢帧 / 重放**那一族，
    *    指向网络与对端（T5 原本的语义，一个字不改）。
    *
-   * 只报**第一条**：第一次之后回到 `'seq-mismatch'`（"我刚 realign 过"这个事实只对紧接的那一条有意义）。
+   * 为什么只报**第一条**（**这一句按复验人的实测写实，别再写成"之后回到 `seq-mismatch`"**）：
+   * 第一条 `realign-mismatch` 会把那条帧钉进 `stuck`，而 `drain` 每轮开头就是
+   * `if (stuck !== null) return` ⇒ **后续帧根本不再被检查**（复验人实测：再喂第二条不匹配，
+   * `lastFailure()` 连 message 都逐字未变、`pendingCount` 就停在 1）。
+   * ⇒ 想看到**下一条**可区分的失败，调用方必须先**再调一次 `realign()`**（那时 `stuck` 被清掉、
+   * `realignUnreported` 重新置位）；也就是说它是"**每次 `realign` 之后各一条**"，
+   * 不是"整个进程只报一次"。
    */
   | 'realign-mismatch';
 
@@ -432,7 +438,17 @@ export function createNetDriver(opts: NetDriverOptions): NetDriver {
    *
    * 用途只有一个：把"我刚 realign 过、第一条就撞上不匹配"（多半是调用方传错了值）
    * 与"对端跳号/丢帧/重放"分开报（D16 的先例：同一个值不许承载两个含义）。
-   * `realignUnreported` 报过一次就关掉 ⇒ 后续不匹配回到 `'seq-mismatch'`。
+   *
+   * ## 报过之后是什么样（**按复验人的实测写实**）
+   *
+   * `realignUnreported` 报过一次就关掉，但**不会**因此让后续不匹配变成 `'seq-mismatch'` ——
+   * 那条帧已经被钉进 `stuck`，而 `drain` 每轮开头 `if (stuck !== null) return`
+   * ⇒ **后续帧根本不再被检查**（复验人实测：第二条不匹配喂进去，`lastFailure()` 逐字未变、
+   * `pendingCount` 停在 1）。只有**再调一次 `realign()`**（它清 `stuck` 并重新置位
+   * `realignUnreported`）才会有下一条可区分的失败。
+   * ⇒ 语义是"**每次 `realign` 之后各一条**"，不是"整个进程一条"。
+   * 判据腿 `队列那条 › ★ realign 传了"合法但错一位"的值` 的 B 组（另一个**从没 realign 过**的
+   * 驱动）证明 `'seq-mismatch'` 这一支仍然红得对。
    */
   let realignBaseline: number | null = null;
   let realignUnreported = false;
