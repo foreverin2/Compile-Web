@@ -1,36 +1,19 @@
-import type { ChoiceCard, EffectCtx, EffectStep, GameState, Line, PlayerId, StepResult } from '../../models/types';
+import type { EffectCtx, EffectStep, PlayerId, StepResult } from '../../models/types';
 import { registerCardEffects } from '../registry';
+import { findCard, isUncovered } from '../context';
 
 /**
  * 3代 支点 fulcrum（关键词：翻转/交换/删除/抽牌；座右铭：扭转乾坤）。
  * 权威卡文：src/data/cards3.ts（compile3文本.txt）；裁决：docs/3代-批2-规格与裁决清单.md
- * （B1 左/右 = 固定线 0↔线 2（swapStacks/rearrangeProtocols a=0 b=2）；B2 fulcrum-1「翻转所有其他
- *  正面朝上的牌」= 全场（双方所有线）faceUp 卡【含被盖】快照，除源卡）。
+ * （B1 左/右 = 固定线 0↔线 2（swapStacks/rearrangeProtocols a=0 b=2）。
+ *  B2 于 2026-09-18 按用户实测拆分：fulcrum-1 = 只翻【未被覆盖】的正面牌——英文卡面
+ *  "Flip each other face-up card." 用的是 "each"，FAQ 116/155/156 明示 "each/彼此" 不允许与被覆盖的卡
+ *  交互（规则书 L88/L89/L93：默认只有未被覆盖的牌可被效果作用，"全部"才含被盖）；2代瘟疫3 同句式同口径。
+ *  wrath-2 卡面为 "Flip all face-up cards in a line with the most cards."，用 "all" → 含被盖不变。）
  */
 
 function opp(p: PlayerId): PlayerId {
   return p === 0 ? 1 : 0;
-}
-
-/** 全场（双方所有线链路）faceUp 卡（含被盖，B2），可排除源卡 */
-function allFaceUpCards(s: GameState, excludeUid?: string): ChoiceCard[] {
-  const out: ChoiceCard[] = [];
-  for (const owner of [0, 1] as PlayerId[]) {
-    const stacks = s.players[owner].stacks;
-    for (let line = 0; line < 3; line++) {
-      const stack = stacks[line as Line];
-      for (let i = 0; i < stack.length; i++) {
-        const c = stack[i];
-        if (c.faceUp && c.uid !== excludeUid) {
-          out.push({
-            uid: c.uid, defId: c.defId, faceUp: true, owner, zone: 'field' as const,
-            line: line as Line, pos: c.pos, label: String(c.defId),
-          });
-        }
-      }
-    }
-  }
-  return out;
 }
 
 /** fulcrum-0 顶（start，top 命令被盖仍触发）：开始：若你手牌恰好为0张，对手弃2张牌。 */
@@ -54,11 +37,18 @@ function* fulcrum0Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult
   if (ans.selected.length > 0) yield { op: 'discard', uid: ans.selected[0] };
 }
 
-/** fulcrum-1 中：翻转所有其他正面朝上的牌。交换你的左链路与右链路。
- *  全场 faceUp（含被盖）除源卡快照逐张翻面（B2）→ swapStacks 线 0 ↔ 线 2（B1，己方两堆整堆换线）。 */
+/** fulcrum-1 中：翻转其他所有未被覆盖的正面朝上的牌。交换你的左链路与右链路。
+ *  范围 = 双方 3 条链路的【未被覆盖顶卡】中 faceUp 且非源卡者（zone:'field' 候选即双方未覆盖顶卡，
+ *  同 2代 瘟疫3，见 plague.ts：FAQ 51/116/155/156——"each/彼此" 不与被覆盖的卡交互）。
+ *  快照后逐张 flip，每张前复查仍在场/仍正面/仍未被覆盖（连锁中可能被移除或被盖住——被盖即不再
+ *  满足卡面文本，跳过）→ swapStacks 线 0 ↔ 线 2（B1，己方两堆整堆换线，不触发文本）。 */
 function* fulcrum1Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
-  const targets = allFaceUpCards(ctx.s, ctx.card.uid);
-  for (const t of targets) yield { op: 'flip', uid: t.uid, allowCovered: true };
+  const targets = ctx.candidates({ zone: 'field' }).filter((c) => c.faceUp && c.uid !== ctx.card.uid);
+  for (const t of targets) {
+    const card = findCard(ctx.s, t.uid);
+    if (!card || !card.faceUp || !isUncovered(ctx.s, card)) continue;
+    yield { op: 'flip', uid: t.uid };
+  }
   yield { op: 'swapStacks', a: 0, b: 2 };
 }
 

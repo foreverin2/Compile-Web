@@ -247,23 +247,38 @@ describe('ambush（伏击）', () => {
 // ============ 支点 fulcrum ============
 
 describe('fulcrum（支点）', () => {
-  it('fulcrum-1 middle: flips all other face-up cards (incl. covered) and swaps left/right stacks (line0↔line2)', () => {
+  it('fulcrum-1 middle：只翻【未被覆盖】的正面牌（双方全链路，除源卡）并交换左右堆叠（线0↔线2）', () => {
     const s = setup();
     const src = placeSrc(s, 'fulcrum-1', 0, 1);
-    const l0a = placeSrc(s, 'fire-1', 0, 0);
-    const l0b = placeSrc(s, 'light-2', 0, 0);
-    const l2a = placeSrc(s, 'darkness-3', 0, 2);
-    const foeUp = placeSrc(s, 'fire-2', 1, 0);
+    const l0a = placeSrc(s, 'fire-1', 0, 0); // 随后被 l0b 盖住 → 不在目标内
+    const l0b = placeSrc(s, 'light-2', 0, 0); // 线 0 未覆盖顶卡
+    const l2a = placeSrc(s, 'darkness-3', 0, 2); // 线 2 未覆盖顶卡
+    const foeUp = placeSrc(s, 'fire-2', 1, 0); // 对手侧未覆盖顶卡
     resolveMiddle(s, 0, src);
     resolveAllChoices(s, pickFirst);
-    // 全场 faceUp（除源卡）都翻面：l0a/l0b/l2a/foeUp
-    expect(l0a.faceUp).toBe(false);
+    // 未覆盖的 faceUp（除源卡）翻面：l0b/l2a/foeUp
     expect(l0b.faceUp).toBe(false);
     expect(l2a.faceUp).toBe(false);
     expect(foeUp.faceUp).toBe(false);
+    // 被覆盖的**不**翻：规则书 L88/L89/L93（未被覆盖才可被效果作用）+ FAQ 51/116/155/156
+    //（英文卡面 "Flip each other face-up card."——"each" 不允许与被覆盖的卡交互）
+    expect(l0a.faceUp).toBe(true);
     // 线 0 ↔ 线 2 堆叠整换
     expect(s.players[0].stacks[0].map((c) => c.uid)).toEqual([l2a.uid]);
     expect(s.players[0].stacks[2].map((c) => c.uid)).toEqual([l0a.uid, l0b.uid]);
+  });
+
+  it('fulcrum-1 middle：中线与对手侧同样只翻未被覆盖的（被盖正面牌不动）', () => {
+    const s = setup();
+    const src = placeSrc(s, 'fulcrum-1', 0, 2);
+    const foeMidCovered = placeSrc(s, 'fire-3', 1, 1); // 随后被 foeMidTop 盖住
+    const foeMidTop = placeSrc(s, 'light-1', 1, 1); // 对手中线未覆盖顶卡
+    const ownMid = placeSrc(s, 'darkness-2', 0, 1); // 己方中线未覆盖顶卡
+    resolveMiddle(s, 0, src);
+    resolveAllChoices(s, pickFirst);
+    expect(foeMidTop.faceUp).toBe(false);
+    expect(ownMid.faceUp).toBe(false);
+    expect(foeMidCovered.faceUp).toBe(true);
   });
 
   it('fulcrum-3 middle: draws 1 and swaps left/right protocols (line0↔line2)', () => {

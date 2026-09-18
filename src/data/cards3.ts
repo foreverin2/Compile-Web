@@ -21,6 +21,13 @@ import type { CardDef, ProtocolDef } from '../core/models/types';
  * 2026-09-13 文本同步：位移（shift）指令用词**全世代统一为「偏转」**（1代 txt 的「平移」
  * 亦已改写、2/3代原即「偏转」）；部分「链路」改写为「堆叠」。卡牌文本按 txt 照录
  * （引擎内部仍以 shift/线/堆叠为同一概念，仅文本用词不同；用词出处见 core/log.ts shiftTerm）。
+ *
+ * 2026-09-18 权威源修订（用户实测指出，txt 同轮改写、本文件已同步）：支点1 中
+ * 「翻转所有其他正面朝上的牌」→「翻转所有其他**未被覆盖的**正面朝上的牌」。英文卡面为
+ * "Flip each other face-up card."，用的是 "each" 而非 "all"；FAQ 116/155/156 与规则书
+ * L88/L89/L93 均裁定 "each/彼此" 只作用于未被覆盖的牌（"全部" 才含被盖）。旧转写漏掉限定词，
+ * 使 `docs/3代-批2-规格与裁决清单.md` 的 B2 裁决把范围误放大到含被盖，引擎已同轮改为只翻
+ * 未被覆盖（`src/core/effects/cards/fulcrum.ts`）。B2 对暴怒2 仍成立（其英文用 "all"）。
  * 分值集合（依卡图文件名与 txt 核对）：嫉妒0-5/暴食0-5/贪婪0-5/色欲{0,2,3,4,5,6}/
  * 傲慢{0,2,3,4,5,6}/怠惰0-5/暴怒0-5/伏击0-5/支点0-5/压制1-6/动量{0,1,3,4,5,6}/
  * 新星0-5/惰性0-5/僵化{1,2,3,4,5,7}/灵活0-5。
@@ -116,7 +123,7 @@ export const ALL_CARD_DEFS_3: CardDef[] = [
 
   // 支点——扭转乾坤
   { defId: 'fulcrum-0', protocol: 'fulcrum', value: 0, top: '开始：若你手牌恰好为0张，对手弃2张牌。', middle: '若你手牌恰好为0张，对手弃1张牌。' },
-  { defId: 'fulcrum-1', protocol: 'fulcrum', value: 1, middle: '翻转所有其他正面朝上的牌。交换你的左堆叠与右堆叠。' },
+  { defId: 'fulcrum-1', protocol: 'fulcrum', value: 1, middle: '翻转所有其他未被覆盖的正面朝上的牌。交换你的左堆叠与右堆叠。' },
   { defId: 'fulcrum-2', protocol: 'fulcrum', value: 2, middle: '若你手牌恰好为2张，删除对手1张牌。' },
   { defId: 'fulcrum-3', protocol: 'fulcrum', value: 3, middle: '抽1张牌。交换你的左协议与右协议的位置。' },
   { defId: 'fulcrum-4', protocol: 'fulcrum', value: 4, middle: '若你手牌恰好为4张，抽1张牌。' },
