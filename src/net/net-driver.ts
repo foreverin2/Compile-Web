@@ -174,7 +174,21 @@ export type DriverFailureReason =
    * 唯一的出路是走一次追平（`resync`）。调用方应当把它转成会话层的 `needsResync`
    * （`session.ts` 的 `noteResyncNeeded('queue-overflow', …)`），别让它只留在日志里。
    */
-  | 'inbound-overflow';
+  | 'inbound-overflow'
+  /**
+   * **`realign()` 之后的第一条入站 `act` 序号对不上**（T6 收尾轮补；D16 的先例）。
+   *
+   * ## 为什么要与 `'seq-mismatch'` 分开（同一个值不许承载两个含义，D16）
+   *
+   * 两者对调用方是**两件不同的事**：
+   *  - `'realign-mismatch'`：本端刚 `realign(n)` 过，收到的却是第 m 条（m ≠ n）
+   *    ⇒ **多半是调用方传错了 `realign` 的值**（少算/多算一条）。`message` 里带着对齐时的步数；
+   *  - `'seq-mismatch'`：不在 `realign` 之后 ⇒ 是**对端跳号 / 丢帧 / 重放**那一族，
+   *    指向网络与对端（T5 原本的语义，一个字不改）。
+   *
+   * 只报**第一条**：第一次之后回到 `'seq-mismatch'`（"我刚 realign 过"这个事实只对紧接的那一条有意义）。
+   */
+  | 'realign-mismatch';
 
 export interface DriverFailure {
   readonly reason: DriverFailureReason;
@@ -414,6 +428,35 @@ export function createNetDriver(opts: NetDriverOptions): NetDriver {
   let inboundOverflows = 0;
 
   /**
+   * `realign()` 对齐到的那一步；以及"这次对齐之后的**第一条**不匹配还没报过"（收尾轮补）。
+   *
+   * 用途只有一个：把"我刚 realign 过、第一条就撞上不匹配"（多半是调用方传错了值）
+   * 与"对端跳号/丢帧/重放"分开报（D16 的先例：同一个值不许承载两个含义）。
+   * `realignUnreported` 报过一次就关掉 ⇒ 后续不匹配回到 `'seq-mismatch'`。
+   */
+  let realignBaseline: number | null = null;
+  let realignUnreported = false;
+
+  /**
+   * 报一条"入站 `act` 序号对不上"的失败 —— **两处调用（`drain` 与 `receiveAct`）共用这一份**，
+   * 免得"realign 之后的第一条"在一条路径上被区分、另一条上没有被区分。
+   */
+  function reportSeqMismatch(expected: number, got: number, detail: string): void {
+    if (realignUnreported && realignBaseline !== null) {
+      realignUnreported = false;
+      report(
+        'realign-mismatch',
+        `realign 之后第一条入站 act 就对不上：本端刚把进度对齐到第 ${realignBaseline} 步，` +
+          `收到的却是第 ${got} 步（本端正在等第 ${expected} 步）。` +
+          '这多半是**调用方传给 realign() 的步数不对**（多算/少算了一条），不是对端跳号；' +
+          '请核对"重建后的状态应用了多少条操作"再调一次 realign()。',
+      );
+      return;
+    }
+    report('seq-mismatch', detail);
+  }
+
+  /**
    * 收下一帧（**唯一的入队口**：`onMessage` 与 `feedText` 都走它）。
    *
    * ★ **溢出分支只此一处**（变异 M7 的锚点）：上限判定、"这一帧不收下"、报失败、计数四件事
@@ -519,8 +562,9 @@ export function createNetDriver(opts: NetDriverOptions): NetDriver {
       return;
     }
     if (msg.seq !== applied) {
-      report(
-        'seq-mismatch',
+      reportSeqMismatch(
+        applied,
+        msg.seq,
         `act 的序号对不上：收到 ${String(msg.seq)}，本端正在等第 ${applied} 条。` +
           '两端的位置不同（丢帧 / 重放 / 半截发送），这一条没有被应用。',
       );
@@ -563,8 +607,9 @@ export function createNetDriver(opts: NetDriverOptions): NetDriver {
       }
       if (decoded.msg.seq !== applied) {
         stuck = decoded.msg;
-        report(
-          'seq-mismatch',
+        reportSeqMismatch(
+          applied,
+          decoded.msg.seq,
           `入站 act 的序号对不上：它自称第 ${String(decoded.msg.seq)} 条，本端正在等第 ${applied} 条。` +
             '两端的位置不同（丢帧 / 重放 / 半截发送），这一条没有被应用，本端也不会抢在它前面提交。',
         );
@@ -734,9 +779,17 @@ export function createNetDriver(opts: NetDriverOptions): NetDriver {
       }
       if (disposed) return;
       applied = next;
+      // ★ 记下基线 + "第一条不匹配还没报过"：让"realign 传错了值"与"对端跳号"能分开报
+      //（`reportSeqMismatch`；D16 的先例：同一个值不许承载两个含义）。
+      realignBaseline = next;
+      realignUnreported = true;
       // 重建前那个世界留下的两样东西，在这里一起丢掉：
       //  - `stuck`：它记的是"重建前那一段里序号对不上的帧"，序号已经失去意义；
       //  - 入站队列：队里那些帧全都属于重建前的那一段。
+      // ⚠️ **这是有意丢掉了可能仍然有效的那一条**（收尾轮按复验人的实测补写）：溢出时队里那条
+      // 往往**正是期待的下一条**（复验人实测 `pendingBefore=1 applied=0`）。取舍是**丢**而不是留：
+      // 重建之后旧的 `seq` 已经失去意义，留着它只会让 `drain` 立刻报 `seq-mismatch` 并把 `stuck`
+      // 钉在一条错的帧上；而"对端会按 D23 的重发清单把它补回来"是本协议的既有承诺。
       stuck = null;
       pendingTexts.length = 0;
       // `inboundOverflows` **不清**：它是历史事实（见 `inboundOverflowCount` 的注释）。

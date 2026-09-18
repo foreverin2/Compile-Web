@@ -1672,6 +1672,71 @@ describe('队列那条：入站队列的上限与溢出策略（选 (a)：加上
     expect(() => createNetDriver({ transport: pair.B.transport, seat: 1, recorder: null, inboundCapacity: 1 })).not.toThrow();
   });
 
+  it('★ realign 传了"合法但错一位"的值 ⇒ 有**可读区分**的失败，不与"对端跳号"同形', async () => {
+    // 收尾轮按复验人的要求补（D16 的先例：同一个值不许承载两个含义）。
+    // 复验人实测的形态：`realign` 传一个**合法但错一位**的值 ⇒ 静默分叉，而唯一信号
+    // `seq-mismatch` 与"对端真跳号/丢帧/重放"**同形**，调用方分不出来。
+    // ⇒ 现在 `realign` 之后**第一条**不匹配报 `'realign-mismatch'`（message 里带着对齐步数）；
+    //    **没有 realign 过**的不匹配照旧 `'seq-mismatch'`（T5 的原语义，一个字不改）。
+    //
+    // ⚠️ 能力边界（如实写）：第一条 `realign-mismatch` 之后驱动就 `stuck` 了（不再看后面的帧），
+    //    所以"第二条会回到 seq-mismatch"这件事在 drain 路径上**不可观测**——
+    //    那条区分靠下面 B 组（从没 realign 过的驱动）证明，而不是靠"同一条驱动上的第二条"。
+    const pair = await makeLink();
+    const state = opening(ARCHIVE_SEED);
+    /** 一条真的能过形状检查的 `act` 帧（内容取自确定性策略，保证引擎收得下） */
+    const frame = (s: GameState, seq: number): string => {
+      const a = nextAction(s, seq);
+      expect(a, `第 ${seq} 步没有可用操作`).not.toBeNull();
+      if (a === null) throw new Error('unreachable');
+      const enc = encodeMsg({ t: 'act', seq, action: { ...a, seq } });
+      expect(enc.ok, 'act 编不出来').toBe(true);
+      if (!enc.ok) throw new Error('unreachable');
+      return enc.text;
+    };
+
+    // A 组：realign 传错值 ⇒ 第一条不匹配必须可区分
+    const dA = createNetDriver({ transport: pair.B.transport, seat: 1, recorder: null });
+    dA.arm(state);
+    dA.feedText(frame(state, 0));
+    dA.feedText(frame(state, 1));
+    expect(dA.appliedSteps()).toBe(2);
+    expect(dA.lastFailure(), '夹具问题：这两步不该失败').toBeNull();
+    dA.realign(8); // ← 合法但错的值（比真实进度多 6 步）
+    dA.feedText(frame(state, 2));
+    expect(dA.lastFailure()?.reason, 'realign 之后第一条不匹配必须可区分（不是 seq-mismatch）').toBe(
+      'realign-mismatch',
+    );
+    expect(dA.lastFailure()?.message, '那句可读提示必须带上对齐时的步数').toContain('第 8 步');
+    // 后果面：错的对齐值被记成了进度事实（8），而真实进度是 2 ⇒ **唯一的症状就是那条失败**
+    //（这正是复验人说的"接口正确性只靠约定"的那个点，现在它有了一条可读的区分信号）
+    expect(dA.appliedSteps(), 'realign 会把传进来的值当成进度事实（传错就是错在这）').toBe(8);
+    const refused = dA.submit(state, nextAction(state, 2) as Omit<ActionRecord, 'seq'>);
+    expect(refused.ok ? null : refused.refusal, '卡住的时候不该放行提交').toBe('not-the-next-action');
+
+    // B 组（区分性的另一半）：**从没 realign 过**的驱动上，同一种不匹配照旧是 seq-mismatch
+    const pair2 = await makeLink();
+    const state2 = opening(ARCHIVE_SEED);
+    const dB = createNetDriver({ transport: pair2.B.transport, seat: 1, recorder: null });
+    dB.arm(state2);
+    dB.feedText(frame(state2, 0));
+    dB.feedText(frame(state2, 1));
+    dB.feedText(frame(state2, 4)); // ← 跳号（对端那一族）
+    expect(dB.lastFailure()?.reason, '没 realign 过的不匹配必须仍是 seq-mismatch').toBe('seq-mismatch');
+
+    // 正控：realign 传**对的**值时，紧接着那一条必须落地（否则上面那条区分对"这一支整个坏了"也成立）
+    const pair3 = await makeLink();
+    const state3 = opening(ARCHIVE_SEED);
+    const dC = createNetDriver({ transport: pair3.B.transport, seat: 1, recorder: null });
+    dC.arm(state3);
+    dC.feedText(frame(state3, 0));
+    dC.feedText(frame(state3, 1));
+    dC.realign(2);
+    dC.feedText(frame(state3, 2));
+    expect(dC.appliedSteps(), '对齐正确时那一条必须落地').toBe(3);
+    expect(dC.lastFailure(), '对齐正确时不该有任何失败').toBeNull();
+  });
+
   it('★ 溢出之后走一次追平：needsResync 能被清掉，且相位回到原来那一格（承诺进度不回退）', () => {
     const { file } = playArchive(ARCHIVE_STEPS);
     const clock = fakeClock(0);
