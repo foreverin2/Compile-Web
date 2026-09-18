@@ -58,7 +58,7 @@ import { createGuestSession, createHostSession } from '../net/session';
 import type { HashLike, NetSession, PeerStatus, SessionInbound, SessionOutbound } from '../net/session';
 import { decodeMsg, encodeMsg, normalizeRoomCode, roomChannel } from '../net/protocol';
 import type { NetMsg } from '../net/protocol';
-import type { NetChannel, NetTransport, TransportStatus } from '../net/transport';
+import type { NetChannel, NetTransport, SendResult, TransportStatus } from '../net/transport';
 import { PRIVACY_COPY } from '../app/privacy';
 import { readIceServers } from './net-browser';
 import type { IceServersRead } from './net-browser';
@@ -637,9 +637,13 @@ export interface LobbySessionLink {
    * 真的拼并发出这一条 —— 这正是评审 1.1 第 4 点指的那个断点。
    *
    * 它是**幂等**的（发过就返回 `false`），因为重连与新链路都会走到它。
+   *
+   * ★ **J-2：返回值是"这一条此刻真的出去了吗"** —— 传输还没 `online`（加入方那条 `hello`
+   * 交下来的时候通道还没 open）时它返回 `false` 并**把这一条攒住**，状态转 `online` 那一刻
+   * 由状态订阅补发。所以调用方**不许**把 `false` 读成"这条路不可用"。
    */
   sendHello(): boolean;
-  /** 本端是否已经发过 `hello`（`sendHello()` 的记账口） */
+  /** 本端那条 `hello` 是否**真的发到了线上**（`sendHello()` 的记账口；攒着还没发时为 `false`） */
   helloSent(): boolean;
   /**
    * ★★ **按当前相位发"这一格该本端发的那条"**（C 轮；结构缺口 ②）。
@@ -730,14 +734,23 @@ export function createLobbySessionLink(opts: {
   /** 订阅链路状态变化的宿主回调（本路由转发 `NetTransport.onStatus`） */
   const statusListeners = new Set<(to: TransportStatus) => void>();
 
-  /** 发一条会话层产出的消息（通道按消息类型定：只有 `act` 是可靠保序的，D11） */
-  function send(msg: NetMsg): void {
+  /**
+   * 发一条会话层产出的消息（通道按消息类型定：只有 `act` 是可靠保序的，D11）。
+   *
+   * ★ **返回值是传输层那一格的真实读数**（J-2）：`sendIfOpen` 在通道没 open 时**不排队、
+   * 直接丢**（`net-browser.ts:1373`）⇒ 调用方必须能看见"这条没出去"。把结果吞掉就等于
+   * 让"握手停住"看起来像"没事发生"，而那是本仓最恨的形态。
+   */
+  function send(msg: NetMsg): SendResult {
     const enc = encodeMsg(msg);
     // 编不出来就不发：形状由会话层定，这里没有能修的余地（`decodeMsg`/`encodeMsg` 都不抛）
-    if (!enc.ok) return;
+    if (!enc.ok) {
+      return { ok: false, reason: 'not-initialized', message: '这条消息编不出来，没有发出去。' };
+    }
     const channel: NetChannel = msg.t === 'act' ? 'act' : 'beat';
-    opts.transport.sendIfOpen(channel, enc.text);
+    const r = opts.transport.sendIfOpen(channel, enc.text);
     outCount += 1;
+    return r;
   }
 
   /**
@@ -781,23 +794,68 @@ export function createLobbySessionLink(opts: {
    *
    * 幂等：发过一次就返回 `false`（重连与新链路都会走到这里，重复发会让房主看到两条 `hello`）。
    * 房主**不调它** —— 房主是被握手的那一方（`hello` 的方向是加入方 → 房主）。
+   *
+   * ## ★ J-2：通道还没 open 时**先攒着**，等传输状态转 `online` 再真发（不再是"发完就丢"）
+   *
+   * 加入方那条 `hello` 在 `connect('first')` 里被发，而那一刻**数据通道还没 open**
+   * （它要等房主把回示码贴回来、`applyAnswer` 之后才会通）⇒ 传输层 `sendIfOpen` 不排队、
+   * 直接丢（`net-browser.ts:1373`），而本函数过去发完就置 `helloDone` ⇒ **没人补发**
+   * ⇒ 真浏览器里两端都停在 `handshaking`（真机实测：房主接得上 answer，握手不动）。
+   *
+   * 机制：置一个**待发位**，由 `transport.onStatus`（**注入的状态订阅**，没有第二处定时器）
+   * 在状态变成 `'online'` 那一刻把这一条真发出去。两条纪律：
+   *  1. **只发一条**：`pending` 与 `helloDone` 都是一次性位，`online → offline → online`
+   *     不会补发第二条（重复发会让房主看到两条 `hello`）；
+   *  2. **失败不静默**：真发失败时把传输层那句可读原因记进 `opts.onNotice`
+   *     （吞掉它等于让"没发出去"看起来像"没事发生"）。
    */
   function sendHello(): boolean {
     if (session.role !== 'guest') return false;
     if (helloDone) return false;
-    const msg: NetMsg = {
+    pending = true;
+    return flushHello();
+  }
+
+  /**
+   * 待发的第一条 `hello`（`true` = 攒着还没出去）。
+   *
+   * ⚠️ 它**不是**"流程到哪一步了"那种第二个真相源：它只记"这条消息还没上线"这**一件事**，
+   * 而"发过没有"归 `helloDone`（`helloSent()` 的读数）。
+   */
+  let pending = false;
+
+  /**
+   * 把待发的那条 `hello` 真发出去（状态订阅与 `sendHello()` 共用这一份）。
+   *
+   * 返回 `true` = **这一次真的发出了**。三种 `false` 都是"没发"，且各有各的可读理由：
+   * 没有待发位 / 传输还没 `online` / 传输层拒了。
+   */
+  function flushHello(): boolean {
+    if (!pending || helloDone) return false;
+    if (opts.transport.status() !== 'online') return false;
+    const r = send(helloMsg());
+    if (!r.ok) {
+      // 传输报 online 却发不出去：把真因记在链路的可读拒绝位上（别静默 —— 否则屏上只会看到
+      // "握手停住"）。下一次状态再转 `online` 还会重试（待发位不动）。
+      driveRefusal = r.message;
+      return false;
+    }
+    pending = false;
+    helloDone = true;
+    return true;
+  }
+
+  /** `hello` 的消息体（唯一的组装处；自报座位缺省 1，房主认可后以 `hello-ack.seat` 为准，D7） */
+  function helloMsg(): NetMsg {
+    return {
       t: 'hello',
       role: 'player',
       sessionId: opts.sessionId,
       protoVersion: opts.localProtoVersion,
       cardDataHash: opts.localCardDataHash,
-      // 本方**自报**的座位（缺省 1）；房主认可后以 `hello-ack.seat` 为准（D7）
       seat: (opts.seat ?? 1),
       nick: opts.localNick?.() ?? '',
     };
-    send(msg);
-    helloDone = true;
-    return true;
   }
 
   /**
@@ -877,8 +935,14 @@ export function createLobbySessionLink(opts: {
   const detachMessages = opts.transport.onMessage((text) => { receive(text); });
   // 会话层**不自己**订阅传输状态（`session.ts:768-776`：订阅是有生命周期的副作用，纯状态机
   // 不持有它）⇒ 调用方转一手，这正是"读数同源"那一半的落点。
+  //
+  // ★ J-2：这里也是"待发的那条 `hello`"唯一的补发时机（状态订阅 = 注入的机制，不用时钟）：
+  //   加入方那条 `hello` 是在通道 open **之前**被交下来的，转 `online` 那一刻才算真的发得出去。
   const detachStatus = opts.transport.onStatus((change) => {
     session.noteTransportStatus(change.to);
+    // 顺序写死：**先补发、再通知宿主** —— 宿主收到这个变化时会重画一帧，
+    // 屏上那句 `helloSent` 必须已经是补发之后的真值。
+    if (change.to === 'online') flushHello();
     for (const cb of statusListeners) cb(change.to);
   });
   return {
@@ -1096,7 +1160,21 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
     /** B3：房主粘回来的那条回示码的处理结论 */
     answerApplied: { ok: boolean; message: string } | null;
   } = {
-    role: null,
+    /**
+     * ★ **J-1：初值是注入的角色，不是 `null`**。
+     *
+     * 渲染层按 `role` 分屏（`role === null` 只画「建房 / 加入」两个入口），而屏上那个
+     * 「生成邀请码」按钮只在 `role === 'host'` 那一支里、粘贴框只在 `'guest'` 那一支里。
+     * 过去这里写 `null` ⇒ 点「建房 / 加入」只**建了客户端**、没有**选定角色**
+     * （`startHost` 要等玩家先点到「生成邀请码」、`applyInvite` 要等玩家先能看见粘贴框）
+     * ⇒ 两个入口都是**闭环**，环上没有入口能从屏上进入（真浏览器实测：点「建房」之后
+     * `#app` 一个字节不变）。初值取 `opts.role` 就把环剪开了：角色是**入口的选择**，
+     * 在 `startLobby(role)` 那一刻已经定下来，不需要玩家再点第二下。
+     *
+     * ⚠️ 它**不是**"第二份状态"：注入面本来就有 `role`（`createLobbySessionLink` 与
+     * `connect()` 都读它），这里只是让 `state()` 与它同源。
+     */
+    role: opts.role,
     invite: null,
     joined: null,
     roomCodeInput: '',
@@ -1311,11 +1389,17 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
     link.session.noteTransportStatus(link.transportStatus());
     s.link = link;
     currentLink = link;
+    // ★ **把宿主的订阅重接到这条新链路上**（`statusWatchers` 是宿主的，链路每次都换新对象）。
+    //   漏了这一步的后果是**静默**的：`onStatus` 照样收得到订阅、却永远收不到事件
+    //   ⇒ `main.ts` 的"断线就重连"（A5）与"通道 open 之后补发 hello"（J-2）一起失效。
+    reattachStatus();
     s.transport = link.transportStatus();
     s.peer = link.session.peerStatus();
     // `init()` 只报**本侧**链路（D18）⇒ 失败时把它的真因显示出来，但**不**据此说"对端不在"
     if (!started.ok) s.notice = started.message;
-    // 加入方**立刻**发第一条 `hello`；房主不发（`hello` 的方向是加入方 → 房主）
+    // 加入方**交下第一条 `hello`**；房主不发（`hello` 的方向是加入方 → 房主）。
+    // ⚠️ J-2：这一步在真浏览器里发生时通道**还没 open** ⇒ 它多半只是把这一条**攒住**，
+    //    真发由上面那次 `reattachStatus()` 接上的状态订阅在转 `online` 时补（`flushHello`）。
     if (opts.role === 'guest') link.sendHello();
     // 建链路那一刻就把读数读一次（否则第一帧 peerStatus() 是 'idle' 时的旧值）
     syncNow();

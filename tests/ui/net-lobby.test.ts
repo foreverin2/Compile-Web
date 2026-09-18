@@ -38,6 +38,7 @@ import {
   acceptOffer, applyAnswer, createBrowserTransport, createInvite, decodeBase64Url, decodeInviteFromAddressBar, decodeInvitePayload,
   decompressBytes, inviteLengthReport, peerConnectionOf, readIceServers, roomCodeEntry,
   stripInviteFromAddressBar, waitForIceGathering,
+  DEFAULT_ICE_GATHER_TIMEOUT_MS,
   type NetBrowserEnv, type WebSocketLike,
 } from '../../src/ui/net-browser';
 
@@ -1269,6 +1270,141 @@ describe('★ 修复轮 A2/A3/A4/A5 · 建链路 / 发 hello / 入站重画 / �
     void firstPhase;
   });
 
+/* ==================================================================== *
+ * 13. ★★ J-1 / J-2（G5 T9 真浏览器检查打出来的两条**产出路径**缺陷）
+ * ==================================================================== */
+
+describe('★★ J-1/J-2 · 真浏览器那两条断点（入口不设角色 / 第一条 hello 丢在通道 open 之前）', () => {
+  /**
+   * ## J-1：角色是**入口的选择**，不是"点第二下才有"
+   *
+   * 真浏览器实测（`.superpowers/g5-T9/FINDINGS.md` §3）：点「建房」之后屏上**不会**出现
+   * 「生成邀请码」按钮 ⇒ 那条路是**闭环** ——
+   *
+   * ```
+   * 看到「生成邀请码」 <= s.role === 'host' <= client.startHost(draft) <= 点「生成邀请码」
+   * ```
+   *
+   * 环上没有入口。加入方同病（粘贴框要 `role === 'guest'`，而它只由 `applyInvite` 设，
+   * 调用者又是粘贴框自己）。
+   *
+   * ⚠️ 这条腿走的是**真客户端**（不是手写状态）：手写状态的 `mountLobby()` 照样能渲染出
+   * 「生成邀请码」，所以它**测不到**客户端自己那个初值 —— 那正是这个缺陷的第一版就是这么漏过去的。
+   */
+  it('★ J-1：`createLobbyClient({ role })` 的第一帧就带角色 ⇒ 房主屏上真有「生成邀请码」', () => {
+    const host = makeClient({ role: 'host' });
+    expect(host.state().role, '客户端的第一帧没有角色 ⇒ 屏上只画两个入口，那条路进不去').toBe('host');
+    const h = mountLobby();
+    h.state = host.state();
+    h.render();
+    const makeInvite = queryAllIn(h.root, 'button.net-lobby-make-invite');
+    expect(makeInvite.length, '房主第一帧上没有「生成邀请码」按钮（J-1 的闭环）').toBe(1);
+    // 行为面：点它 ⇒ 宿主真收到那个回调（不是画了个不接线的按钮）
+    click(h.root, 'button.net-lobby-make-invite');
+    expect(h.calls, '点了「生成邀请码」但宿主没收到回调').toContain('make-invite');
+
+    // 加入方那一半：粘贴框必须在第一帧上（它的两个调用者过去也成环）
+    const guest = makeClient({ role: 'guest' });
+    expect(guest.state().role, '加入方客户端的第一帧没有角色').toBe('guest');
+    const g = mountLobby();
+    g.state = guest.state();
+    g.render();
+    expect(queryAllIn(g.root, 'input.net-lobby-paste-input').length, '加入方第一帧上没有粘贴框').toBe(1);
+    expect(queryAllIn(g.root, 'button.net-lobby-make-answer').length, '加入方第一帧上没有「出示回示码」').toBe(1);
+  });
+
+  /**
+   * ## J-2：那条 `hello` 必须在**通道真的 open（传输状态转 `online`）之后**发出去
+   *
+   * 真浏览器实测（FINDINGS §4.2）：加入方的第一条 `hello` 只在 `connect('first')` 发一次，
+   * 而那一刻数据通道还没 open ⇒ 传输层 `sendIfOpen` 不排队、直接丢 ⇒ `sendHello()` 已经
+   * 置了 `helloDone` ⇒ **没人补发** ⇒ 两端永远停在 `handshaking`。
+   *
+   * 这条腿用**假传输**把那一刻摆出来：让加入方那条链路在 `init` 之后停在 `offline`
+   * （= 通道还没 open），再让它转 `online`（= 通道 open）。判据两半都要：
+   *  - **open 之前**：一条都不许发（发出去就是丢，而且会把 `helloDone` 烧掉）；
+   *  - **open 之后**：真发、**且只发一条**（`offline → online → online` 不许补第二条）。
+   *
+   * ⚠️ 为什么这段在**链路层**（`createLobbySessionLink`）而不在客户端层：待发位住在那条链上，
+   * 而"传输状态变化"那个机制是 `transport.onStatus`（**注入的状态订阅**，本仓没有裸定时器）。
+   */
+  it('★ J-2：通道 open（转 online）之前**一条都不发**，转 online 之后**真发且只发一条**', async () => {
+    const pair = createFakeTransportPair();
+    // ★ 夹具要点：`init()` 成功之后假传输会把自己置成 `online`，如果照常 `connect()`，那条
+    //   `hello` **当场就发出去了**（拿不到"通道还没 open"那一刻）。真 WebRTC 不是这样：
+    //   `init()` 只保证本侧（D18），要等对端接上才转 `online` ⇒ 这里把 `status()` 包一层，
+    //   在"第一次转 online 之前"一律报 `connecting`（= 通道还没 open）。
+    const raw = pair.B.transport;
+    /**
+     * `gate = false` 的语义是"通道还没 open"：真 WebRTC 里 `init()` 只保证本侧（D18），
+     * 这里把那个窗口显式摆出来 —— `connect('first')` 那条 `hello` 落在窗口里 ⇒ 只该被攒住。
+     *
+     * ⚠️ 事后置 `true` 是**夹具**在摆"对端接上了"那一刻：产出代码自己那条状态订阅照旧
+     * 只在真事件（`offline -> online`）上来的时候才补发。
+     */
+    let gate = false;
+    const notOpen: NetTransport = {
+      ...raw,
+      status: () => (gate ? raw.status() : 'connecting'),
+    };
+    const guest = makePairClient('guest', [notOpen]);
+    await guest.connect('first');
+    // 反空转：`connect('first')` 那一刻"通道还没 open"这件事真的发生过（不是套了个壳子看着像）
+    expect(raw.status(), '夹具失败：真传输此刻竟然还是 idle').not.toBe('idle');
+    expect(pair.B.sendSeq(), '夹具失败：connect 的时候那条 hello 就发出去了（窗口没摆成）').toBe(0);
+
+    // ① 通道还没 open：这一条**只许攒着**（发出去就是丢，而且会把 `helloDone` 烧掉）
+    const sentBefore = pair.B.sendSeq();
+    expect(sentBefore, '夹具失败：还没 open 就已经有帧上线了').toBe(0);
+    expect(guest.state().helloSent, '通道还没 open 就报"发过了" ⇒ 没有人会再补发它').toBe(false);
+    expect(guest.state().routedOut, '通道还没 open，已经记了一笔"发出去了"').toBe(0);
+    expect(guest.sendHello(), '通道没 open 就说发出去了').toBe(false);
+    expect(guest.state().helloSent, '通道没 open 却记成"发过了"').toBe(false);
+    expect(pair.B.sendSeq(), '通道没 open，帧却已经上了线').toBe(sentBefore);
+
+    // ② open：状态真转一次 online（`offline -> online` 才是"变化"；`activate` 自己会去重）
+    //   ⇒ 由**状态订阅**把待发的那一条补发出去
+    gate = true; // 夹具：对端接上了
+    expect(notOpen.status(), '夹具失败：放行之后包装口还是没报 online').toBe('online');
+    pair.B.deactivate();
+    expect(raw.status(), '夹具失败：断链之后传输没转 offline').toBe('offline');
+    pair.B.activate();
+    expect(raw.status(), '夹具失败：activate 之后传输没转 online').toBe('online');
+    expect(notOpen.status(), '夹具失败：activate 之后包装口没跟着转 online').toBe('online');
+    expect(guest.state().helloSent, '通道 open 之后那条 hello 还是没有发出去（J-2 没修上）').toBe(true);
+    expect(guest.state().routedOut, '通道 open 之后一条都没发出去').toBeGreaterThan(0);
+    expect(pair.B.sendSeq(), '通道 open 之后线上还是空的').toBeGreaterThan(sentBefore);
+    // 反空转：线上那条真的是 `hello`（不是别的帧把计数顶上去）
+    pair.pump(4);
+    expect(pair.steps().some((s) => s.text.includes('"t":"hello"')), '线上从来没有出现过 hello').toBe(true);
+
+    // ③ 只发一条：状态来回转一圈也不许补发
+    const sentAfter = pair.B.sendSeq();
+    pair.B.deactivate();
+    pair.B.activate();
+    expect(guest.sendHello(), '重复调 sendHello 竟然又发了一条').toBe(false);
+    expect(pair.B.sendSeq(), '状态来回转一圈就补发了第二条 hello（房主会看到两条）').toBe(sentAfter);
+  });
+
+  it('★ J-2 反证：链路**没有**接上状态订阅 ⇒ 转 online 之后那条 hello 留在原地（红）', async () => {
+    // 等价于"把 flushHello 那一句摘掉"的形态：手工造一条链路，只喂状态、不调 sendHello 的补发口。
+    // 这条腿不需要改产出代码就能证明"上面那条腿的判别力来自状态订阅"：这里刻意**不订阅**。
+    const pair = createFakeTransportPair();
+    await pair.A.transport.init({ selfId: 'A', peerId: 'B' });
+    await pair.B.transport.init({ selfId: 'B', peerId: 'A' });
+    pair.B.deactivate();
+    const statusSeen: string[] = [];
+    const off = pair.B.transport.onStatus((c) => { statusSeen.push(c.to); });
+    expect(pair.B.sendSeq(), '夹具失败：还没发就有帧上线').toBe(0);
+    pair.B.activate();
+    // 观察者收到了 online，但**没有任何人**把 hello 交下来 ⇒ 线上一条帧都没有
+    expect(statusSeen, '夹具失败：状态订阅没收到 online').toContain('online');
+    expect(pair.B.sendSeq(), '没人发 hello，线上却有帧（这条反证不成立）').toBe(0);
+    off();
+  });
+});
+
+  /** ★ 下面这段是**同一个** describe（A2/A3/A4/A5）里那条文本腿，上面插进来的是 J-1/J-2 那一节 */
   it('★ 文本腿（评审 1.3 的 A3/A5 判别力）：`main.ts` 里这三处不再 0 命中', () => {
     const code = stripComments(
       readFileSync(fileURLToPath(new URL('../../src/main.ts', import.meta.url)))
@@ -1543,6 +1679,44 @@ describe('★ 修复轮 B2 · 等 ICE 收集的**上界**（唯一失败形态�
     if (!r.ok) {
       expect(r.reason, '原因不是 unsupported').toBe('unsupported');
       expect(r.message, '没有可读原因').toContain('计时');
+    }
+  });
+
+  /**
+   * ★★ **缺省上界那条腿**（T8-E 补；评审指出"缺省值 5000ms 今天没有腿"）。
+   *
+   * ## 这条腿钉的是什么
+   *
+   * 它钉**两件事**，第一件比第二件重要：
+   *  1. **上界存在**：不注入 `iceGatherTimeoutMs` 时，"等 ICE 收集"这条路**仍然**会排一个计时器
+   *     —— 没有上界的 `await` 就是一次静默挂起（D23 要消灭的形态），那种缺陷在这条腿上当场红；
+   *  2. **上界等于 `DEFAULT_ICE_GATHER_TIMEOUT_MS`**（今天 15 秒）：把常数与"实际排下去的
+   *     那个数"绑在一起。过去这个数没有任何腿 ⇒ 改它、或者把它改回"没有缺省"都不会响。
+   *
+   * ⚠️ 它**不**断言 15 秒这个数是"对的"（那件事只能由真浏览器量，属 T9/人工验收）——
+   * 它只断言"有一个上界，且这个上界就是那个导出常量"。改常数时这条腿仍然绿，
+   * 但报告/注释里的实测依据必须跟着更新（那正是这个数被写进源码注释的原因）。
+   */
+  it('★ 缺省上界：不注入时仍然排**一个**计时器，且那个数就是 `DEFAULT_ICE_GATHER_TIMEOUT_MS`', async () => {
+    const clk = ticker();
+    const { pc } = makeFakePc({ iceGatheringState: 'gathering' }); // 假件永不完成
+    // ★ 只给 ticker（= 真实调用方给的那份环境），**不给** iceGatherTimeoutMs
+    const p = waitForIceGathering(pc as never, { ticker: clk.t });
+    expect(
+      clk.scheduled().length,
+      '没有排任何计时器 ⇒ 这条等待没有上界（一次静默挂起，D23 同族）',
+    ).toBe(1);
+    expect(clk.scheduled()[0], '缺省上界不是那个导出常量（改常数改了行为，读数却没跟着走）')
+      .toBe(DEFAULT_ICE_GATHER_TIMEOUT_MS);
+    // 反空转：那个缺省值真的能触发"可读失败"这一支（不是排了个永不使用的计时器）
+    clk.fire();
+    const r = await p;
+    expect(r.ok, '到点之后竟然成功了').toBe(false);
+    if (!r.ok) {
+      expect(r.reason, '缺省上界到点不是 ice-timeout').toBe('ice-timeout');
+      expect(r.message.length, '超时那句是空的').toBeGreaterThan(10);
+      // 可读失败句**保留**（有上界 + 可读真因这两条都不许丢）：秒数来自那个常量本身
+      expect(r.message, '那句里没有那个秒数').toContain(`${DEFAULT_ICE_GATHER_TIMEOUT_MS / 1000} 秒`);
     }
   });
 

@@ -151,7 +151,26 @@ function wireChannels(
   theirs: WireMap,
   /** 本侧**发出去**的每一帧（记账：看哪几条消息真的上过线） */
   onSend: (text: string) => void,
-): void {
+): {
+  /**
+   * ★ J-2 的夹具动作：把这条假连接的"接上了"报出来（见 `Side.markConnected` 的说明）。
+   *
+   * 假件缺省 `connectionState: 'new'`、而且它**不会**主动报 `connected` ⇒ 真传输的 `status`
+   * 永远停在 `connecting`。J-2 之后那条 `hello` 要等这个状态 ⇒ 这里补上真 WebRTC 会报的那两个
+   * 事件（真传输对 `connectionstatechange` 与 `iceconnectionstatechange` 都挂了监听器）。
+   */
+  readonly markConnected: () => void;
+} {
+  // 假件自己的监听器表（`makeFakePc` 内部的 `listeners`）：真传输通过 `addEventListener` 挂进来，
+  // 这里把两个连接状态事件都补报一次（`fake` 只暴露了 ICE 收集那一个）。
+  const statusListeners = new Map<string, Array<(ev: unknown) => void>>();
+  const origAdd = pc.addEventListener as ((type: string, cb: (ev: unknown) => void) => void);
+  pc.addEventListener = (type: string, cb: (ev: unknown) => void): void => {
+    const arr = statusListeners.get(type) ?? [];
+    arr.push(cb);
+    statusListeners.set(type, arr);
+    origAdd(type, cb);
+  };
   pc.createDataChannel = (label: string): WireChannel => {
     const listeners: Array<(ev: unknown) => void> = [];
     mine.set(label, (text: string) => { for (const cb of listeners) cb({ data: text }); });
@@ -173,9 +192,18 @@ function wireChannels(
   const origSetLocal = pc.setLocalDescription as (d: { type: string; sdp?: string }) => Promise<void>;
   pc.setLocalDescription = async (desc: { type: string; sdp?: string }): Promise<void> => {
     await origSetLocal(desc);
-    // ★ 收集完成排在 **0 ms**（收集一开始就完成）；上界走缺省的 5000 ms ⇒ 事件必然先到，
-    //   腿里没有竞跑。
+    // ★ 收集完成排在 **0 ms**（收集一开始就完成）；上界走缺省的 `DEFAULT_ICE_GATHER_TIMEOUT_MS`
+    //   （T8-E 之后是 15 秒）⇒ 事件必然先到，腿里没有竞跑。
     if (gatheringAtStart === 'gathering') setTimeout(() => { fake.setGatheringComplete(); }, 0);
+  };
+  return {
+    markConnected: (): void => {
+      pc.connectionState = 'connected';
+      pc.iceConnectionState = 'connected';
+      for (const type of ['connectionstatechange', 'iceconnectionstatechange'] as const) {
+        for (const cb of statusListeners.get(type) ?? []) cb({});
+      }
+    },
   };
 }
 
@@ -196,6 +224,17 @@ interface Side {
   n: number;
   /** 本侧的计时器（I-2 的判别力：`waitForIceGathering` 到底有没有去要上界） */
   readonly ticker: LobbyTicker & { scheduleCount(): number };
+  /**
+   * ★ **J-2 之后新增的夹具动作：把这条假连接的"接上了"事件补上**。
+   *
+   * 为什么非要显式补：假件缺省 `connectionState: 'new'`（见 `makeSide`），它**永远不报**
+   * `connected` ⇒ 真传输的 `status` 停在 `connecting`。J-2 之前没人看这个状态（那条 `hello`
+   * 是"发了就算发过"），J-2 之后它决定那条 `hello` 什么时候真的上线 ⇒ 不补这一下，
+   * 这条端到端腿问的就从"邀请码那条路通不通"悄悄变成"假件有没有报 connected"。
+   *
+   * 它模拟的是真 WebRTC 的 `connectionstatechange` —— 两端各自的传输据此转 `online`。
+   */
+  markConnected(): void;
 }
 /**
  * 造一侧。
@@ -211,8 +250,25 @@ function makeSide(role: 'host' | 'guest', env: NetBrowserEnv, mine: WireMap, the
   const p = pc as Record<string, unknown>;
   p.connectionState = 'new';
   p.iceConnectionState = 'new';
-  const side: Side = { client: null as unknown as LobbyClient, pc: null, fake, sent: [], n: 0, ticker: countingTicker() };
-  wireChannels(pc, role === 'host' ? 'gathering' : 'complete', fake, mine, theirs, (text) => { side.sent.push(text); });
+  const side: Side = {
+    client: null as unknown as LobbyClient,
+    pc: null,
+    fake,
+    sent: [],
+    n: 0,
+    ticker: countingTicker(),
+    markConnected: () => {},
+  };
+  const wires = wireChannels(
+    pc,
+    role === 'host' ? 'gathering' : 'complete',
+    fake,
+    mine,
+    theirs,
+    (text) => { side.sent.push(text); },
+  );
+  // ★ J-2 的夹具动作（见 `Side.markConnected` 的说明）：把假件缺省不报的那个"接上了"补上。
+  side.markConnected = (): void => { wires.markConnected(); };
 
   /** 本侧**自报**的会话号（真实调用方各自 `newSessionId()`；加入方建会话时会改用邀请码里那一串） */
   const ownSessionId = role === 'host' ? 'sid-host-real' : 'sid-guest-real';
@@ -467,6 +523,14 @@ describe('★★ D 轮端到端：邀请码那条路', () => {
     await guest.client.joinWithInvite(payload);
     expect(guest.client.state().joined?.ok, '加入方没有收下这条邀请码').toBe(true);
     await guest.client.connect('first');
+    /**
+     * ★ **J-2 之后新增的夹具动作**：真 WebRTC 会在对端接上时把 `connectionstatechange` 报成
+     * `connected`，假件缺省不报（`makeSide` 把它设成 `'new'` 就再也没动过）⇒ 两端传输都停在
+     * `connecting`。J-2 之后"那条 `hello` 什么时候真的上线"由这个状态决定 ⇒ 补报这一下，
+     * 这条腿才还是在问"邀请码那条路通不通"，而不是"假件有没有报 connected"。
+     */
+    host.markConnected();
+    guest.markConnected();
     await tick();
     // 房主那一侧收到 hello 之后 `onInbound` 会把相位驱动一次。
     // 再交替驱动几轮：投递是**同步**的（假通道直接调对端监听者），所以每一轮都能推进一步。
