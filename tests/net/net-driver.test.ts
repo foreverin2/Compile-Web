@@ -135,8 +135,8 @@ const G5_T5_SEED = 'g5-t5-gamma';
  * `{"advance":46,"play":9,"effect-choice":4,"resolve-trigger":1}` —— **`compile` 一次都没有**。
  * 而判据 1 原来的反空转只断言"操作种类 ≥ 4"，所以 `compile` 那条分支在判据 1 里
  * **从未被走过**。我按同一条策略普查了 8 个种子（探查件
- * `.superpowers/g5-T5/probes/seed-kinds.test.ts`，命令与原始输出见报告），
- * 其中 `g5-t5-theta` 的分布是 `{"advance":39,"play":9,"effect-choice":8,"compile":4}` —— 含 `compile`。
+ * `.superpowers/g5-T5/probes/seed-kinds.test.ts`，命令与 8 行原始输出见报告 §0.3），
+ * 其中 `g5-t5-theta` 的分布是 `{"advance":49,"play":9,"effect-choice":1,"compile":1}` —— 含 `compile`。
  * ⇒ 第二个种子不是"多跑一遍"，它**专门补上 `compile` 这一维**；两条腿各自断言自己那一局
  * 必须出现哪些 kind（见 `REQUIRED_KINDS`），所以"哪一局补哪一维"是机械可查的，不靠人记。
  */
@@ -147,10 +147,22 @@ const G5_T5_SEED_WITH_COMPILE = 'g5-t5-theta';
  *
  * 为什么写成"逐局要求"而不是"全局 ≥ N"：全局阈值会让"某一局的某一维一次都没走到"
  * 永远不被发现 —— 这正是 `compile` 今天的状态（评审发现的那一条）。
- * 表里的名字是**样本反推**的实测值，不是手写清单：
+ * 表里的名字是**样本反推**的实测值，不是手写清单（逐种子普查见
+ * `.superpowers/g5-T5/probes/seed-kinds.test.ts`，8 行 `PROBE-KINDS` 输出在报告 §0.3）：
  *  - `g5-t5-gamma`：`advance` 46 / `play` 9 / `effect-choice` 4 / `resolve-trigger` 1；
- *  - `g5-t5-theta`：`advance` 39 / `play` 9 / `effect-choice` 8 / `compile` 4。
- * 数字是这次跑出来的，**换种子必须重测并改这张表**。
+ *  - `g5-t5-theta`：`advance` 49 / `play` 9 / `effect-choice` 1 / `compile` 1。
+ *
+ * ## ⚠️ 这张表是**人工维护**的，改它之前先看普查输出（T5 复验人交办的一句）
+ *
+ * 它是**包含判定**（"这一局必须走出这些 kind"）⇒ 它**不会假绿，但会假红**：
+ *  `compile` 在 `theta` 那局只出现 **1 次**、`resolve-trigger` 在 `gamma` 那局也只 **1 次**
+ *  （余量各只有 1）。引擎的任何小改动都可能让某一步不再走那个分支 ⇒ 这条腿红，
+ *  而**看起来最自然的"修法"是把那个 kind 从表里删掉** —— 那正好会**静默拆掉这一维唯一的覆盖**
+ *  （也就退回评审发现的"`compile` 从未被走过"那个状态）。
+ *  ⇒ 表红了要按这个顺序处理：① 先跑普查确认这一维是不是真的没了（`PROBE-KINDS` 那一行）；
+ *    ② 若只是换了种子/步数 ⇒ 换种子或补第三个种子（并同步改这张表）；
+ *    ③ **只有在确认这一维在整套夹具里再也走不到时**才允许删条目，且在报告里写明"删了哪一维、为什么"。
+ * 数字是这次跑出来的，**换种子/换步数必须重测并改这张表**。
  */
 const REQUIRED_KINDS: Record<string, readonly string[]> = {
   [G5_T5_SEED]: ['advance', 'play', 'effect-choice', 'resolve-trigger'],
@@ -381,20 +393,23 @@ describe('判据 1（★）：两端接 fake 传输，确定性走 60 步，每�
   });
 
   /**
-   * ★ **只 `arm`、不 `submit`**（T5 阶段一评审交办的第 3 条；评审的 V1 实证：
-   * 把 `arm` 里的 `drain(s)` 删掉，原来 22 条腿**全绿**）。
+   * **到达即落地**：帧到达本端那一刻就被应用（不等下一次 `submit`）。
    *
-   * 它为什么必须单独一条：
-   *  - `arrive()` 之后紧跟着下一次 `submit`，而 `submit` 自己也会 `drain` ⇒ 原来没有任何一条腿
-   *    区分"`arm` 真的落地了"与"下一次 `submit` 顺手排空了"；
-   *  - 于是 `arm` 的文档承诺（"宿主必须在帧到达之后把状态递进来，不能只靠 `submit`"）
-   *    是一句**没有腿的断言**；
-   *  - 它同时把"对端真的调用了 `applyRecordedAction`"从判据 1 的**间接**证明
-   *    （反空转的副产物）变成一条**直接的语义断言** —— 这正是评审在 §3.1 拆开的那个间接性。
+   * ## 这条腿证明什么、不证明什么（修复轮复验人实测后收窄，别按旧注释读）
    *
-   * 这条腿不调 `submit`、不调 `arrive`，只调 `pump` + `arm`。
+   * 它证明的是"**帧一到就落地**"这一半：本端 `submit` ⇒ `pump` ⇒ 对端此刻
+   * `appliedSteps() === 1`、指纹已经变了、两端相等。
+   *
+   * ⚠️ 它**不**证明"`arm` 里的 `drain` 承重"。复验人实测：把 `arm` 里的 `drain(s)` 删掉
+   * （变异 S2），**这条腿依然全绿** —— 因为对端的订阅回调在 `pump` 里就把帧应用了，
+   * 而本端 `submit` 自己也会 `drain` ⇒ 队列空是**别人**干的。
+   * ⇒ "`arm` 会排空队列"这件事由 `describe('入站队列的只读读数 pendingCount()')` 里那条腿证明
+   *   （它先喂帧、**后**才 `arm`；S2 下红在 `arm 之后队列必须空`）。两条腿分工不同，别混。
+   *
+   * 它仍然必要：把"对端真的调用了 `applyRecordedAction`"从判据 1 的**间接**证明
+   * （反空转的副产物）变成一条**直接的语义断言** —— 那正是评审 §3.1 拆开的间接性。
    */
-  it('★ 只 arm 不 submit：对端也必须把收到的帧落地（arm 的承诺要有腿）', async () => {
+  it('★ 到达即落地：帧一到本端就被应用（不等下一次 submit）', async () => {
     const seed = G5_T5_SEED;
     const { pair, host, guest } = await makePair(seed);
     host.driver.arm(host.s);
@@ -407,16 +422,22 @@ describe('判据 1（★）：两端接 fake 传输，确定性走 60 步，每�
     expect(ep.driver.submit(ep.s, a).ok, '本端这一步必须成功').toBe(true);
     expect(peer.driver.appliedSteps(), '对端此刻还没收到，步数必须是 0').toBe(0);
 
-    // 只做两件事：让帧到达 + 把状态交给对端。**不**调对端的 submit。
+    // 让帧到达对端。**不**调对端的 `submit`（这条腿要证的正是"不用等下一次 submit"）。
     pair.pump(ACT_LATENCY_TICKS);
-    peer.driver.arm(peer.s);
 
-    // 直接断言语义落地（不是"下一次 submit 顺手排空"的副产物）
-    expect(peer.driver.appliedSteps(), 'arm 必须把收到的帧落地（只 arm、不 submit）').toBe(1);
+    // ★ 承重断言：到达即落地（帧不是"烂在队列里等下一次 submit"）
+    expect(peer.driver.appliedSteps(), '帧到达就必须落地（不走对端的 submit）').toBe(1);
     expect(stateFingerprint(peer.s), '对端的状态必须真的变了').not.toBe(peerBefore);
     expect(stateFingerprint(peer.s), '两端指纹必须相等').toBe(stateFingerprint(ep.s));
-    expect(peer.driver.pendingCount(), '落地之后队列必须空').toBe(0);
-    // 反向自证：对端这时**确实**还能提交下一步（说明它没被别的东西挡住，是 arm 干的活）
+    // 队列此刻必须是空的。这一句在 S2 世界也绿 —— 它是**口径登记**，不是这条腿的判别力所在。
+    expect(peer.driver.pendingCount(), '到达即落地之后队列必须是空的').toBe(0);
+
+    // 生产路径的最后一环：宿主把状态递进来（`arm` 就是那个口，见 net-driver.ts 的注释）。
+    // 上面已经落地了 ⇒ 这一步只更新 `lastKnownState`，两件事实都必须保持不变。
+    peer.driver.arm(peer.s);
+    expect(peer.driver.pendingCount(), 'arm 落地之后队列必须空').toBe(0);
+    expect(peer.driver.appliedSteps(), 'arm 不该让同一条被应用两次').toBe(1);
+    expect(stateFingerprint(peer.s), 'arm 之后状态与指纹都不许再动').toBe(stateFingerprint(ep.s));
     expect(peer.driver.lastFailure(), '落地的路上不该留下诊断').toBeNull();
   });
 
