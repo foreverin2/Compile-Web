@@ -44,6 +44,8 @@
 
 import {
   INVITE_PROTO_VERSION,
+  NO_ENDPOINT_HEADLINE,
+  NO_ENDPOINT_REASON,
   decodeInviteText,
   inviteLinkOf,
   protocolVersionCheck,
@@ -132,9 +134,12 @@ export interface LobbyClientOptions {
   /** 计时能力（8 秒窗口） */
   readonly ticker: LobbyTicker;
   /**
-   * 造一个**已经 `init` 过**的传输（`NetDriverOptions.transport` 的前置条件）。
+   * 造一个传输。**生产实现是 `createBrowserTransport(env)`**；测试传
+   * `createFakeTransportPair().A.transport`。
    *
-   * 生产实现是 `createBrowserTransport(env)`；测试传 `createFakeTransportPair().A.transport`。
+   * ⚠️ **`init()` 由 `connect()` 负责调**（不是这个工厂）：真 WebRTC 的 `init()` 是异步的
+   * （`transport.ts:219` 明写"必须异步建立"），而"建好传输"与"链路起来"是两件事 ——
+   * 把 `init` 塞进工厂会让工厂变成异步的，也会让"哪一步失败"在读数上分不开。
    */
   readonly createTransport: () => NetTransport;
   /** 读设置里的信令端点（**纯配置读**，不发请求；唯一出处是 `signalingEndpointSetting`） */
@@ -143,12 +148,44 @@ export interface LobbyClientOptions {
   readonly readSettings: () => { readonly turnUrl?: string; readonly turnUsername?: string; readonly turnCredential?: string } | null;
   /** 生成邀请链接（真压缩在浏览器层，是异步的） */
   readonly buildInvite: (draft: LobbyDraftInput) => Promise<MakeInviteResult>;
-  /** 解一条裸载荷（`decodeInviteText` 的唯一消费口；真解压由宿主在调用前算好，D15） */
-  readonly decompressBase64: (b64: string) => Uint8Array | null;
+  /**
+   * ★ **把邀请码的压缩段解回"已经算好的字节"**（`decodeInviteText` 要的那个**同步**口径）。
+   *
+   * ## 它是两件事，别只做一半（修复轮 A1 的第一次尝试就栽在这里）
+   *
+   * 压缩段要解**两步**：**base64url 解码 → deflate-raw 解压**。只做第一步会让
+   * `decodeInviteText` 拿到一串**仍是压缩态**的字节，它会把那串当"解压结果"去 `JSON.parse`
+   * ⇒ 必然返回 `bad-json`（"解压后的内容不是 JSON 文本"）。**真解压才是这一步的全部内容**。
+   *
+   * ## 为什么是异步的
+   *
+   * 真解压走 `DecompressionStream`，流式、**必须 `await`**（`net-browser.ts:526` 的
+   * `decompressBytes` 就是它）。而纯层的 `decodeInviteText` 要一个**同步**口 ⇒ 宿主先 `await`
+   * 出字节、再把它当"已经算好的结果"交进来（D15 的同一种缝法，`createInvite` 也这么做）。
+   *
+   * 返回 `null` = "这段解不开"（形状不对 / 压缩流坏了）—— 那是**失败**，不是"没解压"。
+   *
+   * ⚠️ **修复轮 A1 的历史**：这里曾经被 `main.ts` 传成 `() => null`，于是 `decodeInviteText`
+   * 必走 `decompress-failed` 那一支（`invite.ts:581-590`）⇒ **对方发来的每条邀请码都解不开**。
+   * 那是"功能上不可能成立"，不是"缺一条腿"。
+   */
+  readonly decompressBase64: (b64: string) => Promise<Uint8Array | null>;
   /** 读地址栏里的邀请码并**在读到之后**抹掉它（`readInviteFromAddressBar` + `stripInviteFromAddressBar`） */
   readonly readAddressBar: () => InviteRead | null;
+  /** 本机昵称（`hello.nick` 的唯一来源；`session.ts:2438` 说"`hello` 里还有 `nick`"） */
+  readonly localNick?: () => string;
   /** 可读提示的搬运口（错误路径 / 短码提示）。`null` = 清空 */
   readonly onNotice?: (text: string | null) => void;
+  /**
+   * ★ **入站帧被处理过之后**的回调（修复轮 A4）。
+   *
+   * 为什么要它：`createLobbySessionLink` 里那条 `transport.onMessage` 只会更新**它自己的**
+   * 记账数与会话状态；屏上要变就必须有人重画一帧。没有这个回调时，"入站到了"这件事
+   * 在界面上**看不见**（屏上停在上一帧的读数上）—— 正是评审 1.3 的 A4。
+   *
+   * 它是**每个入站帧调一次**（包括解不开的坏帧）—— 因为"收到过一帧"本身就是屏上该反映的事实。
+   */
+  readonly onInbound?: () => void;
 }
 
 /* ==================================================================== *
@@ -229,20 +266,89 @@ export function errorCopy(key: LobbyErrorKey, remoteProto: number = INVITE_PROTO
   return ERROR_COPY[key];
 }
 
+/* ------------------------------------------------------------------ *
+ * 3b. ★ 判据 3 的"连线"另一半：**读数 → 该格文案**（修复轮补）
+ * ------------------------------------------------------------------ */
+
+/**
+ * 握手被回绝时，**对方给的那条可读真因**（`HelloRejection.message` / `BusyMsg.detail`）。
+ *
+ * 它只带**内容**，不带"这属于哪一格" —— 判"属于哪一格"的是 `errorKeyOfRejection`。
+ */
+export interface LobbyRefusal {
+  /** 会话层/协议层给的事实码（`HelloRejectReason` | `'unsupported-spectator'` | …） */
+  readonly reason: string;
+  /** 给人看的那一句（本文件只**转发**它，不改写） */
+  readonly detail: string;
+}
+
+const CARD_HASH_REASONS: readonly string[] = ['card-data-hash'];
+const BUSY_REASONS: readonly string[] = ['player-slots-full', 'busy', 'full'];
+const SPECTATOR_REASONS: readonly string[] = [
+  'spectator-slots-full', 'unsupported-spectator', 'spectator', 'unsupported',
+];
+
+/**
+ * ★ **把一条拒绝**映到**它该显示的那一格**（判据 3 的连线；评审 §6.1 要求补的那一半）。
+ *
+ * ## 为什么必须有它（自评最薄弱的那条判据的第二半）
+ *
+ * 原来只有"五句文案两两不同且非空"这一层 ⇒ 即使将来把 `busy.detail` 接到了
+ * `card-data-hash` 那一格，只要五句仍两两不同，**判据不会红**（它钉的是**词表**，不是**连线**）。
+ * 本函数把"输入读数 → 哪一格"这件事变成**可被机器读的一处**，于是那条连线也能有腿。
+ *
+ * ## 判定顺序（写死了，不靠读者推）
+ *
+ * 卡牌指纹 → 观战 → 位满 → 都不是 ⇒ `null`（调用方据此**不臆造**一个格子，
+ * 而是把对方那句 `detail` 原样显示 —— 见 `refusalNotice`）。
+ *
+ * ⚠️ **观战排在位满之前**：G5 把"观战不支持"借 `'unsupported'` 承载，而位满那条也常表现为
+ * `player-slots-full`；两者若顺序写反，"不支持观战"会被显示成"位满了"—— 而 `session.ts:657-664`
+ * 刻意给了两个**不同**的理由串（`SPECTATOR_UNSUPPORTED_MESSAGE` / `SPECTATOR_UNSUPPORTED_DETAIL`）
+ * 就是为了让这两件事分得开。这里按同一口径排序。
+ */
+export function errorKeyOfRejection(refusal: LobbyRefusal): LobbyErrorKey | null {
+  const r = refusal.reason;
+  if (CARD_HASH_REASONS.includes(r)) return 'card-data-hash';
+  if (SPECTATOR_REASONS.includes(r)) return 'spectator';
+  if (BUSY_REASONS.includes(r)) return 'busy';
+  return null;
+}
+
+/**
+ * 握手被回绝时屏上该显示什么：**该格的文案** + 对方那句真因（有就附上）。
+ *
+ * 两条纪律：
+ *  1. 认得出的拒绝 ⇒ 显示**那一格**的文案（`errorCopy` 的唯一出处），**不是**对方的原话
+ *     ——否则玩家看到的是内部理由码的措辞，而不是本程序对这件事的说法；
+ *  2. 认不出的拒绝 ⇒ **不猜**：把对方那句 `detail` 原样显示（`errorKeyOfRejection` 返回
+ *     `null` 就是"我不知道该归哪一格"）。硬塞进某一格会让玩家读到一句**关于别的事**的说明。
+ */
+export function refusalNotice(refusal: LobbyRefusal): { readonly key: LobbyErrorKey | null; readonly text: string } {
+  const key = errorKeyOfRejection(refusal);
+  if (key === null) return { key: null, text: refusal.detail };
+  const base = errorCopy(key);
+  const detail = refusal.detail.trim();
+  // 对方的 `detail` 与那一格的文案重复时不重复拼（`spectator` 那条尤其容易两处同义）
+  if (detail.length === 0 || base.includes(detail)) return { key, text: base };
+  return { key, text: `${base}（对端给的理由：${detail}）` };
+}
+
 /**
  * 判据 3 的**能力边界**（写进注释，照计划 §2 第 15 条）：
  *
  * 它钉的是"这五条路径的文案**两两不同、非空、来源可追**"，**不是**"这五条路径在真网络下
- * 都走得通"。逐条说清：
+ * 都走得通"。逐条说清（**修复轮更新**）：
  *  - `'room-gone'` 有**行为腿**（注入假时钟，走完 8s 窗口）；
  *  - `'proto-version'` 有**行为腿**（喂一条明文版本不一致的载荷，比对 `protocolVersionCheck`）；
- *  - `'card-data-hash'` / `'busy'` / `'spectator'` 今天**只有渲染转发**（文案来自会话层的拒绝原因，
- *    而 T8 不跑真握手）⇒ 它们在真浏览器里能不能被触发属 T9 的 CDP 线与人工验收。
+ *  - `'card-data-hash'` / `'busy'` / `'spectator'`：修复轮**补上了"读数 → 该格"的连线腿**
+ *    （`errorKeyOfRejection` / `refusalNotice`，喂纯层能构造的拒绝理由 ⇒ 断言渲染出的是
+ *    **对应那一格**的文案，而不是"五句两两不同"）。真网络下能否触发仍属 T9/人工验收。
  *
  * 这个边界不是"没做到"，是这条判据**声明的范围**：写成"五条都验过了"才是谎报。
  */
 export const ERROR_COPY_BOUNDARY =
-  '本表钉的是五条文案互不相同且来源可追；真网络下能否触发属 T9/人工验收。';
+  '本表钉的是五条文案互不相同、来源可追、且拒绝理由能连到对应那一格；真网络下能否触发属 T9/人工验收。';
 
 /* ==================================================================== *
  * 3. "断线 ≠ 刷新"的文案（判据 8）：读数 → 文案，只有这一张表
@@ -408,6 +514,13 @@ export interface LobbyState {
   readonly routedIn: number;
   /** 路由记账：会话层产出并已发出的帧数 */
   readonly routedOut: number;
+  /**
+   * 本端是否已经发过第一条 `hello`（`connect()` 里由加入方发）。
+   *
+   * 它是屏上的**读数**（也是判据 14 的类型面）：`false` 而链路已经起来了，
+   * 就意味着"握手在产出路径上还没开始"—— 那正是评审 1.1 第 4 点的形态。
+   */
+  readonly helloSent: boolean;
 }
 
 /* ==================================================================== *
@@ -453,8 +566,23 @@ export interface LobbySessionLink {
    * 每次变化都 `noteTransportStatus(to)`，并顺手更新 `peerStatus().online`。
    */
   onStatus(cb: (to: TransportStatus) => void): () => void;
-  /** 退订传输 */
+/** 退订传输 */
   detach(): void;
+  /**
+   * ★ **发出第一条 `hello`**（加入方唯一的那一次）。
+   *
+   * ## 为什么必须由本层发（`session.ts:2438-2440` 逐字说了这件事）
+   *
+   * 会话层**不生成也不发送** `hello`："`hello` 里还有 `nick`，而且要经过传输层。它只把
+   * `sessionId` 记进会话，调用方据此自己拼 `hello` 并在收到 `hello-ack` 之后以 `hello-ack.seat`
+   * 为准"（D7：座位是主机的决定）。⇒ **加入方的握手在产出路径上永远不会开始**，除非调用方
+   * 真的拼并发出这一条 —— 这正是评审 1.1 第 4 点指的那个断点。
+   *
+   * 它是**幂等**的（发过就返回 `false`），因为重连与新链路都会走到它。
+   */
+  sendHello(): boolean;
+  /** 本端是否已经发过 `hello`（`sendHello()` 的记账口） */
+  helloSent(): boolean;
 }
 
 /**
@@ -479,6 +607,14 @@ export function createLobbySessionLink(opts: {
   readonly seat?: 0 | 1;
   readonly localProtoVersion: number;
   readonly localCardDataHash: string;
+  /** 本机昵称（`hello.nick` 的唯一来源；`session.ts:2438` 说"`hello` 里还有 `nick`"） */
+  readonly localNick?: () => string;
+  /**
+   * 每个入站帧被处理过之后调一次（**含解不开的坏帧**）。
+   *
+   * 为什么含坏帧："收到过一帧"本身就是屏上该反映的事实（屏上停在上一帧的读数上会更糟）。
+   */
+  readonly onInbound?: () => void;
 }): LobbySessionLink {
   const session: NetSession = opts.role === 'host'
     ? createHostSession({
@@ -498,6 +634,7 @@ export function createLobbySessionLink(opts: {
 
   let inCount = 0;
   let outCount = 0;
+  let helloDone = false;
   /** 订阅链路状态变化的宿主回调（本路由转发 `NetTransport.onStatus`） */
   const statusListeners = new Set<(to: TransportStatus) => void>();
 
@@ -528,17 +665,46 @@ export function createLobbySessionLink(opts: {
    */
   function receive(text: string): boolean {
     const dec = decodeMsg(text, { protoVersion: opts.localProtoVersion });
-    if (!dec.ok) return false; // 坏帧不是异常：丢掉这一帧，不抛
+    if (!dec.ok) {
+      // 坏帧不是异常：丢掉这一帧，不抛。但"收到过一帧"这件事要让宿主知道（见 `onInbound`）
+      opts.onInbound?.();
+      return false;
+    }
     const decision = session.accept({ t: dec.msg.t, msg: dec.msg } as SessionInbound);
     inCount += 1;
-    if (!decision.ok) return true;         // 情形 1：被会话层拒了
-    if (decision.output === null) return true; // 情形 2：收下了但本端不必回话
+    if (!decision.ok) { opts.onInbound?.(); return true; } // 情形 1：被会话层拒了
+    if (decision.output === null) { opts.onInbound?.(); return true; } // 情形 2：收下了但不必回话
     if (dec.msg.t === 'hello') {
       // `hello` 的成功面**直接是** `HelloAckMsg`（不是 `SessionOutbound`）
       send(decision.output as unknown as NetMsg);
     } else {
       send((decision.output as SessionOutbound).msg);
     }
+    opts.onInbound?.();
+    return true;
+  }
+
+  /**
+   * ★ **加入方发出第一条 `hello`**（`session.ts:2438-2440` 说的"调用方自己拼"那一步）。
+   *
+   * 幂等：发过一次就返回 `false`（重连与新链路都会走到这里，重复发会让房主看到两条 `hello`）。
+   * 房主**不调它** —— 房主是被握手的那一方（`hello` 的方向是加入方 → 房主）。
+   */
+  function sendHello(): boolean {
+    if (session.role !== 'guest') return false;
+    if (helloDone) return false;
+    const msg: NetMsg = {
+      t: 'hello',
+      role: 'player',
+      sessionId: opts.sessionId,
+      protoVersion: opts.localProtoVersion,
+      cardDataHash: opts.localCardDataHash,
+      // 本方**自报**的座位（缺省 1）；房主认可后以 `hello-ack.seat` 为准（D7）
+      seat: (opts.seat ?? 1),
+      nick: opts.localNick?.() ?? '',
+    };
+    send(msg);
+    helloDone = true;
     return true;
   }
 
@@ -552,6 +718,8 @@ export function createLobbySessionLink(opts: {
   return {
     session,
     receive,
+    sendHello,
+    helloSent: () => helloDone,
     routedIn: () => inCount,
     routedOut: () => outCount,
     transportStatus: () => opts.transport.status(),
@@ -596,8 +764,30 @@ export interface LobbyClient {
   noteError(key: LobbyErrorKey): void;
   /** 把一条可读提示写到屏上（`null` = 清空） */
   note(text: string | null): void;
-  /** 接上一条路由（本方法**不**新建会话对象 —— 它是"第一次接上"，不是重连） */
+  /**
+   * ★ **建链路并接上**（修复轮 A3/A4/A5）：造传输 → 建会话对象 → `attach` → 加入方发第一条 `hello`。
+   *
+   * `mode` 是**两件不同的事**，别合并：
+   *  - `'first'`：第一次接上（建房 / 加入 / 读地址栏）⇒ 会话对象是**新的**，不调 `markResuming()`；
+   *  - `'resume'`：**重连** ⇒ 同样**新建**会话对象（D23 的充分性前提），并且在喂任何入站消息
+   *    **之前**先 `markResuming()`（`session.ts:925-935` 写死的时机）。
+   *
+   * 两种模式都**新建**对象：这是计划 §5 T8 那条硬约束。区别只在"要不要声明这是一次重连"。
+   *
+   * 传输的 `init()` 是异步的（真 WebRTC 必须异步）⇒ 本方法返回 Promise；调用方 `await` 它
+   * 之后再重画一帧。
+   */
+  connect(mode: LobbyLinkMode): Promise<void>;
+  /** 接上一条路由（本方法**只**接线，**不**新建会话对象、不建传输） */
   attach(link: LobbySessionLink): void;
+  /**
+   * ★ **订阅链路状态变化**（返回退订函数）—— 修复轮 A5：宿主据此决定"要不要重连"。
+   *
+   * 为什么这个口开在客户端而不是让宿主直接订阅传输：`s.link` 是**私有的**，而且它在每次
+   * `connect()` 里被**换成一个新对象**（D23 的充分性前提）⇒ 宿主手里的旧订阅会悬空。
+   * 本方法把订阅接到**当前**那条链路上，并在 `connect()` 之后自动重接。
+   */
+  onStatus(cb: (to: TransportStatus) => void): () => void;
   /**
    * 把链路状态与 T6 的对端读数**重读一遍**（读数同源的那一半）。
    *
@@ -606,15 +796,35 @@ export interface LobbyClient {
    */
   sync(): void;
   /**
+   * ★ **加入方发出第一条 `hello`**（转发到当前链路的 `sendHello()`；没有链路时返回 `false`）。
+   *
+   * ## 为什么这是一个**产出代码**的动作而不是测试夹具的事
+   *
+   * `session.ts:2438-2440` 逐字写着"本函数**不**生成也不发送 `hello`…调用方据此自己拼"。
+   * ⇒ 不在这里发，加入方的握手**在产出路径上永远不会开始**（评审 1.1 的第 4 点）。
+   */
+  sendHello(): boolean;
+  /** 本端是否已经发过 `hello` */
+  helloSent(): boolean;
+  /**
    * 重连：**新建会话对象 + 先声明重连 + 再接上**（顺序见 `createLobbySessionLink` 的注释）。
    *
    * ⚠️ 它**不**复用旧的 `HostSession` / `GuestSession` 实例（D23 的充分性前提，写死了）。
+   * 它就是 `connect('resume')` 的别名 —— 保留这个名字是因为计划 §5 T8 与评审都用它说话。
    */
-  reconnect(): void;
+  reconnect(): Promise<void>;
   /** 起一次"等对端"的窗口（8s 之后置 `waitExpired`） */
   startWait(): void;
   dispose(): void;
 }
+
+/**
+ * 建链路 / 重连 —— **两件不同的事**，所以用两个值而不是一个布尔。
+ *
+ * 写成一个布尔（`isReconnect?: boolean`）会让"第一次接上"与"重连"在调用点读不出区别，
+ * 而两者的区别恰恰是 D23 那条充分性前提要看的东西。
+ */
+export type LobbyLinkMode = 'first' | 'resume';
 
 /** 连接设置里的三个键 */
 export type SettingKey = 'turnUrl' | 'turnUsername' | 'turnCredential';
@@ -676,6 +886,22 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
 
   let waitHandle: number | null = null;
 
+  /**
+   * 宿主的链路状态订阅（修复轮 A5）。
+   *
+   * 为什么要"转接"而不是让宿主直接订阅链路：`s.link` 在每次 `connect()` 里被**换成新对象**
+   * （D23 的充分性前提）⇒ 旧订阅会跟着旧对象一起失效。这里每次接上新链路就重订一次。
+   */
+  const statusWatchers = new Set<(to: TransportStatus) => void>();
+  let detachStatusWatcher: (() => void) | null = null;
+  const reattachStatus = (): void => {
+    detachStatusWatcher?.();
+    detachStatusWatcher = null;
+    const link = s.link;
+    if (link === null) return;
+    detachStatusWatcher = link.onStatus((to) => { for (const cb of statusWatchers) cb(to); });
+  };
+
   const clearWait = (): void => {
     if (waitHandle !== null) {
       opts.ticker.cancel(waitHandle);
@@ -718,7 +944,12 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
       opts.onNotice?.(null);
       return;
     }
-    const r = decodeInviteText(text, opts.decompressBase64);
+    // ★ **先把压缩段真解出来**（异步），再交一个**同步**口给纯层的 `decodeInviteText`。
+    //   那个同步口只对"上面那一段 base64"回答，别的一律 `null` —— 于是纯层拿到的
+    //   是"真的解得动"这个事实，而不是一个恒真的同一性检查（D15 的同一种缝法）。
+    const compressed = text.slice(text.indexOf('.') + 1);
+    const bytes = text.includes('.') ? await opts.decompressBase64(compressed) : null;
+    const r = decodeInviteText(text, (b64) => (b64 === compressed && bytes !== null ? bytes : null));
     s.joined = r;
     if (r.ok) {
       // ★ 版本比对：`proto` 是明文段的结论（T7 已经算好），T8 只负责**渲染**它。
@@ -735,6 +966,80 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
       s.notice = r.message;
     }
     opts.onNotice?.(s.notice);
+  };
+
+  /** 把链路状态与 T6 的对端读数**重读一遍**（`sync()` 与 `onInbound` 共用这一份） */
+  const syncNow = (): void => {
+    const link = s.link;
+    if (link === null) return;
+    s.transport = link.transportStatus();
+    s.peer = link.session.peerStatus();
+    // 会话层不自己订阅传输状态（`session.ts` 的注释）：那是调用方的活 ⇒ 每次重读都转发一次。
+    link.session.noteTransportStatus(s.transport);
+  };
+
+  /**
+   * ★ **建链路并接上**（修复轮 A3/A4/A5）。
+   *
+   * 每一步都有它非在这里不可的理由：
+   *  1. `opts.createTransport()` —— 传输是**注入的能力**（D6：浏览器 API 的唯一出处是
+   *     `src/ui/net-browser.ts`）；
+   *  2. `await transport.init(...)` —— **由本层调**（不是工厂）：真 WebRTC 的 `init()` 必须异步，
+   *     而且它**只保证本侧链路**（D18）⇒ 它的 `ok` 不许被读成"对端在线"；
+   *  3. **每次都新建会话对象**（D23 的充分性前提，见 `createLobbySessionLink` 的注释）；
+   *  4. `'resume'` 模式在**喂任何入站消息之前**先 `markResuming()`（`session.ts:925-935`）；
+   *  5. 加入方**立刻发第一条 `hello`**（`session.ts:2438-2440` 说的"调用方自己拼"那一步）。
+   */
+  const connect = async (mode: LobbyLinkMode): Promise<void> => {
+    const old = s.link;
+    if (old !== null) old.detach();
+    const transport = opts.createTransport();
+    const started = await transport.init({ selfId: opts.sessionId, peerId: `peer-of-${opts.sessionId}` });
+    const link = createLobbySessionLink({
+      // ⚠️ 这里必须是 `opts.role`（**注入的角色**），**不是** `s.role`：`s.role` 要到
+      //    `startHost()` / `applyInvite()` 才被赋值，而 `connect()` 会在它**之前**被调
+      //    （"建房"那条路就是先 `connect('first')` 再 `startHost(...)`）⇒ 用 `s.role` 会把房主
+      //    建成一个**加入方**会话，而加入方那一支还会顺手发出一条 `hello`。
+      //    实测症状：那条链在成对假件上**永远握手不完成**（房主收到一条不该有的 hello，
+      //    而它期待的是自己那份会话的握手）；诊断探针 `.superpowers/g5-T8/probes/diag-handshake.test.ts` 打的就是它。
+      role: opts.role,
+      transport,
+      sessionId: opts.sessionId,
+      hash: opts.hash,
+      ...(opts.seat === undefined ? {} : { seat: opts.seat }),
+      localProtoVersion: opts.localProtoVersion,
+      localCardDataHash: opts.localCardDataHash,
+      ...(opts.localNick === undefined ? {} : { localNick: opts.localNick }),
+      /**
+       * ★ **每一帧入站都先 `sync()` 再通知宿主**（修复轮）。
+       *
+       * 为什么 `sync()` 必须在这里（而不是留给宿主）：`peerStatus()` 是**拉**的读数
+       * （`session.ts:768-776`：会话层不自己订阅），所以"帧到了"与"读数变了"是两件事 ——
+       * 只在 `onInbound` 里重画一帧、不先 `sync()`，屏上画的还是**上一帧的快照**。
+       * 实测症状：两端会话层已经 `handshakeDone === true`，而 `state().peer` 仍是 `false`
+       * （诊断探针 `.superpowers/g5-T8/probes/diag-handshake.test.ts` 打的就是它）。
+       *
+       * ⚠️ 把 `sync()` 与 `onInbound` 分成两步交给宿主，就会出现"宿主忘了先读一次"这类
+       * 不报错的停摆 —— 所以这一步写在库里，不写在调用方。
+       */
+      onInbound: () => {
+        syncNow();
+        opts.onInbound?.();
+      },
+    });
+    // ★ 顺序写死：`markResuming()` **必须在喂任何入站消息之前**。`'first'` 模式**不调**它 ——
+    //   第一次接上不是重连，调了会让 `needsResync` 变成假读数（那正是这个模块一直在防的东西）。
+    if (mode === 'resume' && link.session.role === 'guest') link.session.markResuming();
+    link.session.noteTransportStatus(link.transportStatus());
+    s.link = link;
+    s.transport = link.transportStatus();
+    s.peer = link.session.peerStatus();
+    // `init()` 只报**本侧**链路（D18）⇒ 失败时把它的真因显示出来，但**不**据此说"对端不在"
+    if (!started.ok) s.notice = started.message;
+    // 加入方**立刻**发第一条 `hello`；房主不发（`hello` 的方向是加入方 → 房主）
+    if (opts.role === 'guest') link.sendHello();
+    // 建链路那一刻就把读数读一次（否则第一帧 peerStatus() 是 'idle' 时的旧值）
+    syncNow();
   };
 
   return {
@@ -755,6 +1060,7 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
       notice: s.notice,
       routedIn: linkOf()?.routedIn() ?? 0,
       routedOut: linkOf()?.routedOut() ?? 0,
+      helloSent: linkOf()?.helloSent() ?? false,
     }),
 
     startHost: async (draft: LobbyDraftInput): Promise<void> => {
@@ -821,39 +1127,26 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
 
     note: (text: string | null): void => { s.notice = text; },
 
+    connect,
+    reconnect: (): Promise<void> => connect('resume'),
+
     attach: (link: LobbySessionLink): void => {
       s.link = link;
-    },
-
-    sync: (): void => {
-      const link = s.link;
-      if (link === null) return;
       s.transport = link.transportStatus();
       s.peer = link.session.peerStatus();
-      // 会话层不自己订阅传输状态（`session.ts` 的注释）：那是调用方的活 ⇒ 每次 sync 转发一次。
-      link.session.noteTransportStatus(s.transport);
+      reattachStatus();
     },
 
-    reconnect: (): void => {
-      // ★ **新建会话对象**（不复用旧的实例）：D23 的收方幂等只覆盖 2/5 格，
-      //   复用旧对象会让另外 3 格落在没有被幂等保护的相位上（见 `createLobbySessionLink` 的注释）。
-      const old = s.link;
-      if (old !== null) old.detach();
-      const link = createLobbySessionLink({
-        role: s.role === 'host' ? 'host' : 'guest',
-        transport: opts.createTransport(),
-        sessionId: opts.sessionId,
-        hash: opts.hash,
-        ...(opts.seat === undefined ? {} : { seat: opts.seat }),
-        localProtoVersion: opts.localProtoVersion,
-        localCardDataHash: opts.localCardDataHash,
-      });
-      // ★ 顺序写死（`session.ts:925-935` 的示例）：**必须在喂任何入站消息之前**声明重连 —
-      //   `acceptHelloAck` 会把相位推离 `handshaking`，此后 `markResuming()` 一律被拒。
-      if (link.session.role === 'guest') link.session.markResuming();
-      link.session.noteTransportStatus(link.transportStatus());
-      s.link = link;
+    onStatus: (cb: (to: TransportStatus) => void): (() => void) => {
+      statusWatchers.add(cb);
+      return () => { statusWatchers.delete(cb); };
     },
+
+    sendHello: (): boolean => s.link?.sendHello() ?? false,
+
+    helloSent: (): boolean => s.link?.helloSent() ?? false,
+
+    sync: (): void => { syncNow(); },
 
     startWait: (): void => { beginWait(); },
 
@@ -946,8 +1239,10 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
   /* ── 1. 还没选角色：两个入口 ────────────────────────────────────── */
   if (s.role === null) {
     const pick = el('div', 'net-lobby-pick');
-    pick.appendChild(el('p', 'net-lobby-note',
-      '两台设备直连（P2P），不经任何服务器。默认不向任何服务器发请求：没有配置信令端点时用邀请码。'));
+    // ★ **零手写信令/隐私说明**（修复轮；评审 §4.2 判第一版这里是 §2 第 6 条的违例）：
+    //   屏上这一句是 `src/net/invite.ts` 的 `NO_ENDPOINT_REASON` —— "本程序默认不向任何服务器
+    //   发请求"这句话的**唯一出处**。大厅只**引用**它，不另写一份（判据 1 的引用纪律）。
+    pick.appendChild(el('p', 'net-lobby-note', NO_ENDPOINT_REASON));
     pick.appendChild(button('btn net-lobby-host', '建房（生成邀请码）', nav.startHost));
     pick.appendChild(button('btn net-lobby-join', '加入（粘贴邀请码 / 输 6 位码）', nav.startJoin));
     screen.appendChild(pick);
@@ -1024,9 +1319,14 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
     // ★ **默认不渲染**而不是渲染好再藏（判据 7 的注意项 + `local-consent.ts:111-113` 同款纪律）：
     // 无布局引擎的 DOM 桩分不出 `display:none` 与"已展开"，那样行为腿会退化成恒真。
     const panel = el('div', 'net-lobby-advanced-panel');
+    // ★ **零手写信令说明**（修复轮）：端点那两行是 `src/net/invite.ts` 的两个导出常量。
+    //   第一版这里手写了"没有它时「输 6 位码」这条路走不了，邀请码不受影响" —— 那是**第二份**
+    //   信令说明（评审 §4.2 判 §2 第 6 条违例），现在改成引用。
+    panel.appendChild(el('h3', 'net-lobby-h3', '信令端点'));
     panel.appendChild(el('p', 'net-lobby-endpoint', s.endpoint.length === 0
-      ? '信令端点：没有配置（默认就是这样）。没有它时"输 6 位码"这条路走不了，邀请码不受影响。'
-      : `信令端点：${s.endpoint}`));
+      ? NO_ENDPOINT_HEADLINE
+      : `已配置信令端点：${s.endpoint}`));
+    panel.appendChild(el('p', 'net-lobby-endpoint-reason', NO_ENDPOINT_REASON));
     panel.appendChild(el('h3', 'net-lobby-h3', '中继（TURN）'));
     panel.appendChild(el('p', 'net-lobby-relay-hint',
       '中继是可选的：不填就只走直连与公共 STUN。要填就得三项齐全（URL、用户名、凭据）。'));

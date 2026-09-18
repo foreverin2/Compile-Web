@@ -28,21 +28,24 @@ import {
 import { stripComments } from './source-text';
 import {
   LOBBY_ERROR_KEYS, LOBBY_LINK_COPY, createLobbyClient, createLobbySessionLink, errorCopy,
-  lobbyLinkOf, lobbyLinkText, protoOfPayload, qrNote, relayNoticeOf, relayStateOf, renderNetLobby,
+  errorKeyOfRejection, lobbyLinkOf, lobbyLinkText, protoOfPayload, qrNote, refusalNotice,
+  relayNoticeOf, relayStateOf, renderNetLobby,
   type LobbyClient, type LobbyErrorKey, type LobbyRenderNav, type LobbyState, type SettingKey,
 } from '../../src/ui/net-lobby';
 import { PRIVACY_COPY, privacyLines } from '../../src/app/privacy';
 import {
-  createInvite, decodeInviteFromAddressBar, decodeInvitePayload, inviteLengthReport,
+  createInvite, decodeBase64Url, decodeInviteFromAddressBar, decodeInvitePayload, decompressBytes, inviteLengthReport,
   readIceServers, roomCodeEntry, stripInviteFromAddressBar,
   type NetBrowserEnv, type WebSocketLike,
 } from '../../src/ui/net-browser';
 import {
-  NO_ENDPOINT_MESSAGE, inviteLinkOf, roomCodeEntryReachability,
+  NO_ENDPOINT_HEADLINE, NO_ENDPOINT_MESSAGE, NO_ENDPOINT_REASON, inviteLinkOf,
+  roomCodeEntryReachability,
 } from '../../src/net/invite';
 import { normalizeRoomCode, PROTO_VERSION, roomChannel } from '../../src/net/protocol';
 import type { PeerStatus } from '../../src/net/session';
 import { createFakeTransportPair } from '../../src/net/fake-transport';
+import type { NetTransport } from '../../src/net/transport';
 import { CARD_DATA_HASH } from '../../src/app/card-data-hash';
 import { browserHash } from '../../src/ui/net-browser';
 
@@ -213,6 +216,7 @@ function mountLobby(initial?: Partial<LobbyState>): Harness {
       notice: null,
       routedIn: 0,
       routedOut: 0,
+      helloSent: false,
       ...initial,
     },
     calls,
@@ -245,6 +249,85 @@ function mountLobby(initial?: Partial<LobbyState>): Harness {
     };
   }
   return h;
+}
+
+/* ==================================================================== *
+ * 夹具 2b（修复轮）：**真解压** + 假传输成对的客户端
+ * ==================================================================== */
+
+/**
+ * 房间码那条路要一份真地址栏（`location` + `history`）。
+ * 用**真的** `CompressionStream` / `DecompressionStream`（本机有，`net-browser.test.ts` 有腿自证）。
+ */
+const REAL_HREF = 'https://x.invalid/lobby';
+
+/**
+ * ★ **修复轮 A1 用的那个"宿主注入函数"**：与 `main.ts` 传给
+ * `LobbyClientOptions.decompressBase64` 的**同一份实现**（`decodeBase64Url`）。
+ *
+ * ⚠️ 这条腿的关键是"**用宿主给的那个注入函数**"，不是测试自造一个解压器 —— 后者会绕开
+ * 产出的那条注入缝，于是"宿主传错了函数"这件事就永远测不出来（第一版 `main.ts` 传的是
+ * `() => null`，那种腿照样绿）。
+ */
+async function hostDecompress(b64: string): Promise<Uint8Array | null> {
+  // 与 `main.ts` **同一份实现**：base64url 解码 + 真解压（deflate-raw）两步。
+  // 只做第一步会让纯层拿到压缩态的字节 ⇒ `bad-json`（实测）。
+  const raw = decodeBase64Url(b64);
+  if (raw === null) return null;
+  const d = await decompressBytes(raw, REAL_ENV);
+  return d.ok ? d.bytes : null;
+}
+
+/** 造一个加入方客户端：**真解压** + 真哈希 + 可注入的传输/昵称 */
+function makeGuestClient(over: Partial<Parameters<typeof createLobbyClient>[0]> = {}) {
+  const t = fakeTicker();
+  const built: NetTransport[] = [];
+  const client = createLobbyClient({
+    role: 'guest',
+    sessionId: 'sid-guest',
+    localProtoVersion: PROTO_VERSION,
+    localCardDataHash: CARD_DATA_HASH,
+    hash: browserHash(),
+    ticker: t.ticker,
+    createTransport: () => {
+      const tr = over.createTransport ? over.createTransport() : (() => { throw new Error('这条腿不该造传输'); })();
+      built.push(tr);
+      return tr;
+    },
+    signalingEndpoint: '',
+    readSettings: () => ({ turnUrl: '', turnUsername: '', turnCredential: '' }),
+    buildInvite: async () => ({ ok: true as const, payload: 'P', link: `${REAL_HREF}#invite=P` }),
+    // ★ 真解压（与 `main.ts` 同一份实现）
+    decompressBase64: hostDecompress,
+    readAddressBar: () => null,
+    localNick: () => 'join-nick',
+    ...over,
+  });
+  return { client, ticker: t, built };
+}
+
+/** 造一个用**假传输**的客户端（`role` 由调用方给；传输由工厂一条条发出来） */
+function makePairClient(role: 'host' | 'guest', transports: NetTransport[]) {
+  const t = fakeTicker();
+  return createLobbyClient({
+    role,
+    sessionId: 'sid-shared',
+    localProtoVersion: PROTO_VERSION,
+    localCardDataHash: CARD_DATA_HASH,
+    hash: browserHash(),
+    ticker: t.ticker,
+    createTransport: () => {
+      const next = transports.shift();
+      if (next === undefined) throw new Error('夹具失败：传输不够用了');
+      return next;
+    },
+    signalingEndpoint: '',
+    readSettings: () => ({ turnUrl: '', turnUsername: '', turnCredential: '' }),
+    buildInvite: async () => ({ ok: true as const, payload: 'P', link: `${REAL_HREF}#invite=P` }),
+    decompressBase64: hostDecompress,
+    readAddressBar: () => null,
+    localNick: () => 'join-nick',
+  });
 }
 
 /* ==================================================================== *
@@ -281,7 +364,7 @@ function makeClient(over: Partial<Parameters<typeof createLobbyClient>[0]> = {})
     signalingEndpoint: '',
     readSettings: () => ({ turnUrl: '', turnUsername: '', turnCredential: '' }),
     buildInvite: async () => ({ ok: true as const, payload: 'PAYLOAD-X', link: 'https://x.invalid/l#invite=PAYLOAD-X' }),
-    decompressBase64: () => null,
+    decompressBase64: async () => null,
     readAddressBar: () => null,
     ...over,
   });
@@ -815,7 +898,7 @@ function mountLobbyNavFor(_root: StubNode): LobbyRenderNav {
   const s: LobbyState = {
     role: null, sessionId: '', invite: null, joined: null, roomCodeInput: '', roomCodeGate: null,
     transport: 'idle', peer: null, endpoint: '', ice: { servers: [], relayConfigured: false, relayIncomplete: false },
-    advancedOpen: false, waitExpired: null, error: null, notice: null, routedIn: 0, routedOut: 0,
+    advancedOpen: false, waitExpired: null, error: null, notice: null, routedIn: 0, routedOut: 0, helloSent: false,
   };
   return {
     state: s,
@@ -978,3 +1061,325 @@ describe('判据 12 · 渲染面与红线文件划界', () => {
 function stripCssComments(css: string): string {
   return css.replace(/\/\*[\s\S]*?\*\//g, '');
 }
+
+/* ==================================================================== *
+ * 9. ★ 修复轮 A 档：把"形状上通"变成"产出路径上真的通"
+ *
+ * 评审（`.superpowers/g5-T8-review/REVIEW.md` §1.1）在 `src/main.ts` 里数出四处断点：
+ *   ① `decompressBase64: async () => null` ⇒ 邀请码必然解不开；
+ *   ② `attach(` 0 处 ⇒ `s.link` 恒 null、`peerStatus()` 永不被读；
+ *   ③ `reconnect(` 0 处 ⇒ "重连必须新建会话对象"在产出代码里没有调用者；
+ *   ④ 没有任何一处发出第一条 `hello` ⇒ 加入方的握手在产出路径上永远不会开始。
+ * 这一节四条腿各钉一处（A1/A3/A4/A5 + A2）。
+ * ==================================================================== */
+
+describe('★ 修复轮 A1 · 邀请码那两条入口用**宿主给的那个**解压函数（真解压）', () => {
+  /** 走**真件**造一条邀请码（`createInvite` 的压缩与自洽检查都是真的） */
+  async function builtPayload(): Promise<string> {
+    const inv = await realInvite();
+    return inv.payload;
+  }
+
+  it('★ `joinWithInvite` 用宿主的注入函数（= `main.ts` 传的 `decodeBase64Url`）⇒ `joined.ok === true`', async () => {
+    const payload = await builtPayload();
+    const { client } = makeGuestClient();
+    await client.joinWithInvite(payload);
+    const joined = client.state().joined;
+    // eslint-disable-next-line no-console
+    console.log(`\nA1 实测：joined.ok=${String(joined?.ok)} payload=${payload.length} 字符`);
+    expect(joined, 'joinWithInvite 之后没有结论').not.toBeNull();
+    expect(joined?.ok, `真载荷竟然解不开：${joined?.ok === false ? joined.message : '（没有失败原因）'}`).toBe(true);
+    if (joined?.ok === true) {
+      // 解出来的就是那条 offer 的 SDP（逐字来自真件）
+      expect(joined.payload.sdp, '解出来的 SDP 不是载荷里那一条').toContain('v=0');
+      expect(joined.payload.hostPromise, '解出来的承诺串不对').toBe('host-promise-x');
+    }
+    // 明文协议版本与本机一致 ⇒ 不该报版本错误
+    expect(client.state().error, '版本一致却报了 proto-version').toBeNull();
+  });
+
+  it('★ **反证**：把同一个注入函数换成恒 null（= 第一版的 `main.ts`）⇒ **同一份载荷解不开**', async () => {
+    const payload = await builtPayload();
+    const { client } = makeGuestClient({ decompressBase64: async () => null });
+    await client.joinWithInvite(payload);
+    const joined = client.state().joined;
+    expect(joined?.ok, '恒 null 的解压口竟然把载荷解开了 ⇒ 上一条腿分不出"真解压"与"没解压"').toBe(false);
+    if (joined?.ok === false) {
+      // 失败原因必须是"压缩段解不开"（那是恒 null 的**直接后果**，不是别的路）
+      expect(joined.reason, '失败原因不是 decompress-failed').toBe('decompress-failed');
+      // 屏上也要有那句可读原因（不是静默失败）
+      const h = mountLobby({ role: 'guest', joined });
+      h.render();
+      expect(textOf(h.root), '解不开时屏上没有可读原因').toContain(joined.message);
+    }
+    // 反空转：那条载荷**本身**是可解的（否则上面两条"解不开"没有区分力）
+    const bare = await decodeInvitePayload(payload, REAL_ENV);
+    expect(bare.ok, '载荷本身解不开 ⇒ 这条反证没有区分力').toBe(true);
+  });
+
+  it('★ 读地址栏那条入口也共用同一个注入函数（两条入口一份实现）', async () => {
+    const payload = await builtPayload();
+    const bar = fakeAddressBar(`${REAL_HREF}#invite=${payload}`);
+    const { client } = makeGuestClient({
+      readAddressBar: () => {
+        const p = readInviteRaw({ location: () => bar.loc, history: () => bar.history });
+        if (p === null) return null;
+        return { payload: p, stripped: stripInviteFromAddressBar({ location: () => bar.loc, history: () => bar.history }) };
+      },
+    });
+    await client.readFromAddressBar();
+    expect(client.state().joined?.ok, '地址栏那条入口没解出来（两条入口没共用一份实现）').toBe(true);
+    expect(bar.calls.length, '读到载荷之后没有抹地址栏').toBe(1);
+  });
+});
+
+describe('★ 修复轮 A2/A3/A4/A5 · 建链路 / 发 hello / 入站重画 / 重连新建对象', () => {
+  /** 造一对真客户端：各自的传输来自成对假件，`sessionId` 相同 */
+  function pairClients() {
+    const pair = createFakeTransportPair();
+    const host = makePairClient('host', [pair.A.transport]);
+    const guest = makePairClient('guest', [pair.B.transport]);
+    return { pair, host, guest };
+  }
+
+  it('★ A2：加入方 `connect(\'first\')` **自己发出第一条 `hello`**（产出代码的动作）', async () => {
+    const { pair, guest } = pairClients();
+    expect(guest.state().helloSent, '还没连就说 hello 发过了').toBe(false);
+    await guest.connect('first');
+    expect(guest.state().helloSent, 'connect 之后 `hello` 没发出去').toBe(true);
+    expect(guest.state().routedOut, '发了 hello 但记账是 0').toBeGreaterThan(0);
+    // 反空转：线上真的出现过一条 `hello`
+    pair.pump(4);
+    expect(pair.steps().some((s) => s.text.includes('"t":"hello"')), '线上从来没有出现过 hello').toBe(true);
+    // 幂等：再调一次不该再发一条
+    const before = guest.state().routedOut;
+    expect(guest.sendHello(), '重复调 sendHello 竟然又发了一条').toBe(false);
+    expect(guest.state().routedOut, 'routedOut 变了（说明真发了第二条）').toBe(before);
+  });
+
+  it('★ A2 反证：**不发第一条 `hello`** ⇒ 房主那条链路的记账恒 0（两面都不前进）', async () => {
+    const { pair, host, guest } = pairClients();
+    // 只建链路，**不发** hello（等价于第一版：产出代码里没有这一步）
+    await host.connect('first');
+    await guest.connect('first');
+    // 把刚发出去的那条 hello 撤掉的效果：用一个"不发 hello"的连接次序重建 ——
+    // 直接断言"房主此刻什么都没收到"，再对照下面那条走通的腿
+    expect(host.state().routedIn, '房主还没收到任何东西，记账就已经 > 0').toBe(0);
+    expect(host.state().peer?.handshakeDone ?? false, '房主竟然已经握手完成了').toBe(false);
+    // 反空转：假传输里此刻确实有帧（就是那条 hello）⇒ 说明上面那两条不是"什么都没发生"
+    const pending = pair.steps().length;
+    pair.pump(4);
+    pair.pump(4);
+    // 现在走通了：房主收到了 hello ⇒ 记账 > 0
+    expect(host.state().routedIn, `房主始终没收到 hello（投递前线上有 ${pending} 帧）`).toBeGreaterThan(0);
+    expect(host.state().peer?.handshakeDone, '房主收到 hello 之后握手没完成').toBe(true);
+  });
+
+  it('★ A2 走通那条链：两端 `handshakeDone` 都前进，加入方到 `awaiting-commit`', async () => {
+    const { pair, host, guest } = pairClients();
+    await host.connect('first');
+    await guest.connect('first');
+    for (let i = 0; i < 8; i += 1) pair.pump(2);
+    expect(host.state().peer?.handshakeDone, '房主没握手完成').toBe(true);
+    expect(guest.state().peer?.handshakeDone, '加入方没握手完成').toBe(true);
+    expect(guest.state().peer?.phase, '加入方没走到 awaiting-commit').toBe('awaiting-commit');
+    expect(host.state().routedIn, '房主没收到入站').toBeGreaterThan(0);
+    expect(guest.state().routedIn, '加入方没收到入站').toBeGreaterThan(0);
+  });
+
+  it('★ A3/A4：`attach` 有真实调用点（`connect` 里）⇒ `peerStatus()` 真的被读、`routedIn/Out` 会动', async () => {
+    const { pair, host, guest } = pairClients();
+    expect(guest.state().routedIn, '还没接上就有入站记账').toBe(0);
+    // ⚠️ **先让房主连上**（订阅是"连上那一刻"才挂的）⇒ 加入方那条 `hello` 才有人接
+    await host.connect('first');
+    await guest.connect('first');
+    // ★ A3 的判别力：接上之后 `peerStatus()` 不再恒 null
+    expect(guest.state().peer, 'connect 之后 `peerStatus()` 还是 null（`s.link` 恒 null 的形态）')
+      .not.toBeNull();
+    expect(guest.state().transport, 'connect 之后传输状态没被读出来').not.toBe('idle');
+    // ★ A4 的判别力：入站帧到了 ⇒ 记账动、屏上跟着变
+    const outBefore = guest.state().routedOut;
+    for (let i = 0; i < 4; i += 1) pair.pump(2);
+    expect(guest.state().routedIn, 'A4：投了几帧之后入站记账还是 0').toBeGreaterThan(0);
+    expect(guest.state().peer?.handshakeDone, 'A4：账记了但读数没跟着变（`sync()` 没被调）').toBe(true);
+    expect(guest.state().routedOut, 'A4：房主的 hello-ack 到了之后本端没回话').toBeGreaterThanOrEqual(outBefore);
+    // 行为面：把这一刻的状态画出来，屏上出现连接状态块（不是停在"本机链路 idle"）
+    const h = mountLobby({ role: 'guest', peer: guest.state().peer });
+    h.render();
+    expect(queryAllIn(h.root, 'div.net-lobby-status').length, '屏上没有连接状态块（入站到了但界面没反映）').toBe(1);
+  });
+
+  it('★ A4 的接线自证：`onInbound` 每来一帧都回调（宿主据此重画）', async () => {
+    const pair = createFakeTransportPair();
+    let inbound = 0;
+    const t = fakeTicker();
+    // ⚠️ **先让房主连上**再让加入方连：`connect()` 里会立刻发一条 `hello`，而订阅是在**连上那一刻**
+    //    才挂到传输上的 ⇒ 顺序反了的话那条 `hello` 会落在"房主还没订阅"的空窗里（第一版这么绿不了）。
+    const host = makePairClient('host', [pair.A.transport]);
+    const watched = createLobbyClient({
+      role: 'guest',
+      sessionId: 'sid-shared',
+      localProtoVersion: PROTO_VERSION,
+      localCardDataHash: CARD_DATA_HASH,
+      hash: browserHash(),
+      ticker: t.ticker,
+      createTransport: () => pair.B.transport,
+      signalingEndpoint: '',
+      readSettings: () => ({ turnUrl: '', turnUsername: '', turnCredential: '' }),
+      buildInvite: async () => ({ ok: true as const, payload: 'P', link: `${REAL_HREF}#invite=P` }),
+      decompressBase64: hostDecompress,
+      readAddressBar: () => null,
+      localNick: () => 'n',
+      onInbound: () => { inbound += 1; },
+    });
+    await host.connect('first');
+    await watched.connect('first');
+    for (let i = 0; i < 4; i += 1) pair.pump(2);
+    expect(inbound, 'onInbound 一次都没被调（屏上不会跟着变）').toBeGreaterThan(0);
+    // 反空转：那条链**真的**走通了（否则"回调被调"可能只是收到了坏帧）
+    expect(host.state().peer?.handshakeDone, '房主没握手完成 ⇒ 上面那个回调可能只是坏帧触发的').toBe(true);
+  });
+
+  it('★ A5：`reconnect()` 在产出代码里有调用点，且**新建**会话对象 + 先 `markResuming()`', async () => {
+    const pair = createFakeTransportPair();
+    const guest = makePairClient('guest', [pair.B.transport, pair.B.transport]);
+    await guest.connect('first');
+    const firstPhase = guest.state().peer?.phase;
+    expect(firstPhase, '第一次接上之后相位不对').toBe('handshaking');
+    // ★ 重连：**新对象**（相位回到 handshaking 且 needsResync 为真 —— 只有调过 markResuming 才可能）
+    await guest.reconnect();
+    const st = guest.state();
+    expect(st.peer, 'reconnect 之后没有对端读数').not.toBeNull();
+    expect(st.peer?.needsResync, 'A5：重连之后 `needsResync` 不是 true（`markResuming()` 没被调，或调晚了）')
+      .toBe(true);
+    expect(st.peer?.needsResyncCause, 'needsResync 的原因不是"对端回来握手"').toBe('resuming-handshake');
+    void firstPhase;
+  });
+
+  it('★ 文本腿（评审 1.3 的 A3/A5 判别力）：`main.ts` 里这三处不再 0 命中', () => {
+    const code = stripComments(
+      readFileSync(fileURLToPath(new URL('../../src/main.ts', import.meta.url)))
+        .subarray(0, 8 * 1024 * 1024).toString('utf8'),
+    );
+    for (const [token, why] of [
+      ['connect(', '建链路/接上的落点（A3）'],
+      ["connect('first')", '第一次接上（A3）'],
+      ['reconnect(', '重连的落点（A5）'],
+      ['decompressBase64:', '真解压的注入（A1）'],
+      ['decodeBase64Url', '真解压的实现（A1）'],
+      ['onInbound:', '入站重画的落点（A4）'],
+      ['localNick:', 'hello.nick 的来源（A2）'],
+    ] as const) {
+      expect(code.includes(token), `main.ts 里找不到「${token}」（${why}）`).toBe(true);
+    }
+    // 反证：恒 null 的那个注入**必须已经不在了**
+    expect(code.includes('decompressBase64: async () => null'), 'main.ts 里还有恒 null 的解压注入（A1 没修）')
+      .toBe(false);
+  });
+});
+
+describe('★ 修复轮 · D22 的第二份信令说明（评审 §4.2 的违例）', () => {
+  it('大厅与模式卡里**零手写**信令/隐私说明：那两句只在唯一出处里', () => {
+    const lobby = stripComments(
+      readFileSync(fileURLToPath(new URL('../../src/ui/net-lobby.ts', import.meta.url)))
+        .subarray(0, 8 * 1024 * 1024).toString('utf8'),
+    );
+    const home = stripComments(
+      readFileSync(fileURLToPath(new URL('../../src/ui/home.ts', import.meta.url)))
+        .subarray(0, 8 * 1024 * 1024).toString('utf8'),
+    );
+    // ① 第一版那两句手写正文**一个字都不许再出现**（它们现在只住在 `invite.ts`）
+    const banned = [
+      '本程序默认不向任何服务器发请求',
+      '两台设备直连（P2P）',
+      '没有配置信令端点时用邀请码',
+    ];
+    for (const [name, code] of [['net-lobby.ts', lobby], ['home.ts', home]] as const) {
+      for (const b of banned) {
+        expect(code.includes(b), `${name} 里手写了「${b}」（第二份信令说明，§2 第 6 条违例）`).toBe(false);
+      }
+    }
+    // ② 大厅确实**引用**了那两个常量（不是把那句话删了了事）
+    expect(lobby.includes('NO_ENDPOINT_REASON'), '大厅没有引用 `NO_ENDPOINT_REASON`（说明被删了而不是改成引用）')
+      .toBe(true);
+    expect(lobby.includes('NO_ENDPOINT_HEADLINE'), '大厅没有引用 `NO_ENDPOINT_HEADLINE`').toBe(true);
+    // ③ 反空转：那两句话确实在唯一出处里（否则上面两条是在扫不存在的串）
+    const invite = readFileSync(fileURLToPath(new URL('../../src/net/invite.ts', import.meta.url)))
+      .subarray(0, 8 * 1024 * 1024).toString('utf8');
+    expect(invite.includes('本程序默认不向任何服务器发请求'), '唯一出处里没有那句话（词表过时了）').toBe(true);
+    // ④ 整句仍然逐字可拼（`NO_ENDPOINT_MESSAGE` 的正文一字未变）
+    expect(NO_ENDPOINT_HEADLINE + NO_ENDPOINT_REASON, 'HEADLINE+REASON 不再是原句的前两段')
+      .toBe(NO_ENDPOINT_MESSAGE.slice(0, (NO_ENDPOINT_HEADLINE + NO_ENDPOINT_REASON).length));
+    expect(NO_ENDPOINT_MESSAGE, '整句里少了"否则既有的那条文本腿会红"的那一段')
+      .toContain('6 位房间码要经一个信令服务');
+  });
+
+  it('行为腿：端点为空时屏上出现那两行，且都是唯一出处的正文', () => {
+    const h = mountLobby({ role: 'guest', advancedOpen: true, endpoint: '' });
+    h.render();
+    const text = textOf(h.root);
+    expect(text, '屏上没有 `NO_ENDPOINT_REASON` 的正文').toContain(NO_ENDPOINT_REASON);
+    expect(text, '屏上没有 `NO_ENDPOINT_HEADLINE` 的正文').toContain(NO_ENDPOINT_HEADLINE);
+    // 反证：端点**配好了**的时候不该再说"还没有配置"
+    const h2 = mountLobby({ role: 'guest', advancedOpen: true, endpoint: 'wss://x.invalid' });
+    h2.render();
+    const text2 = textOf(h2.root);
+    expect(text2.includes(NO_ENDPOINT_HEADLINE), '端点已配置却还说"还没有配置信令端点"').toBe(false);
+    expect(text2, '端点配好了却没把它显示出来').toContain('wss://x.invalid');
+    // 而"默认不发请求"那半句**两种情况都在**（它说的是本程序的设计，不是当前配置）
+    expect(text2, '端点配好之后少了"默认不向任何服务器发请求"那句').toContain(NO_ENDPOINT_REASON);
+  });
+});
+
+describe('★ 修复轮 · 判据 3 的连线（"输入读数 → 该格文案"，评审 §6.1 要求补的那一半）', () => {
+  it('★ 三种拒绝理由 ⇒ **各自那一格**（不是"五句两两不同"）', () => {
+    const cases = [
+      { reason: 'card-data-hash', key: 'card-data-hash' },
+      { reason: 'player-slots-full', key: 'busy' },
+      { reason: 'unsupported-spectator', key: 'spectator' },
+      { reason: 'spectator-slots-full', key: 'spectator' },
+    ] as const;
+    // 实测分布打出来
+    // eslint-disable-next-line no-console
+    console.log('\n判据 3 连线实测：\n' + cases.map((c) => `  ${c.reason} ⇒ ${errorKeyOfRejection({ reason: c.reason, detail: 'x' })}`).join('\n'));
+    for (const c of cases) {
+      expect(errorKeyOfRejection({ reason: c.reason, detail: 'x' }), `${c.reason} 没连到 ${c.key} 那一格`).toBe(c.key);
+    }
+    // ★ **两件不同的事必须分得开**（`session.ts:657-664` 刻意给了两个不同的理由串）：
+    //   "不支持观战"与"位满"不许互相冒充
+    expect(errorKeyOfRejection({ reason: 'unsupported', detail: 'x' }), '`unsupported` 没连到观战那一格')
+      .toBe('spectator');
+    expect(errorKeyOfRejection({ reason: 'player-slots-full', detail: 'x' }), '位满被连到了观战那一格')
+      .toBe('busy');
+  });
+
+  it('★ 判别力：**认得出**的拒绝显示那一格的文案；**认不出**的不许猜', () => {
+    // ① 认得出：屏上出现的是**那一格**的文案（`errorCopy` 的唯一出处），不是对方的原话
+    const busy = refusalNotice({ reason: 'player-slots-full', detail: '对端说：位满了' });
+    expect(busy.key, '位满那条没归到 busy').toBe('busy');
+    expect(busy.text, '显示的不是 busy 那一格的文案').toContain(errorCopy('busy'));
+    expect(busy.text, '对方的原话没被附上').toContain('对端说：位满了');
+    // ② 认不出：**原样显示对方那句**，不硬塞进任何一格
+    const unknown = refusalNotice({ reason: 'something-new', detail: '对端给的一句新理由' });
+    expect(unknown.key, '认不出的拒绝被硬塞进了某一格').toBeNull();
+    expect(unknown.text, '认不出时没显示对方的原话').toBe('对端给的一句新理由');
+    // ③ 观战与位满显示的是**不同**的文案（否则"分得开"是空话）
+    expect(refusalNotice({ reason: 'unsupported-spectator', detail: 'd' }).text,
+      '观战与位满显示了同一句').not.toBe(refusalNotice({ reason: 'player-slots-full', detail: 'd' }).text);
+    // ④ 反空转：那一格的文案本身非空
+    expect(errorCopy('busy').length).toBeGreaterThan(10);
+  });
+
+  it('行为腿：把一条拒绝喂进渲染 ⇒ 屏上出现**对应那一格**的文案', () => {
+    const notice = refusalNotice({ reason: 'card-data-hash', detail: '对端指纹不同' });
+    expect(notice.key).toBe('card-data-hash');
+    const h = mountLobby({ role: 'guest', error: notice.key, notice: notice.text });
+    h.render();
+    const text = textOf(h.root);
+    expect(text, '屏上没有 card-data-hash 那一格的文案').toContain(errorCopy('card-data-hash'));
+    expect(text, '屏上没有对方的真因').toContain('对端指纹不同');
+    // 反向：它**不该**是别的格子那句
+    expect(text.includes(errorCopy('busy')), '把卡牌指纹那条显示成了"位满"').toBe(false);
+    expect(text.includes(errorCopy('spectator')), '把卡牌指纹那条显示成了"观战不支持"').toBe(false);
+  });
+});

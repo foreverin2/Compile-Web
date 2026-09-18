@@ -86,6 +86,8 @@ import {
   browserHash,
   createBrowserTransport,
   createInvite,
+  decodeBase64Url,
+  decompressBytes,
   inviteLengthReport,
   readIceServers,
   readInviteFromAddressBar,
@@ -303,6 +305,7 @@ function lobbyEntryState(): LobbyState {
     notice: null,
     routedIn: 0,
     routedOut: 0,
+    helloSent: false,
   };
 }
 
@@ -346,7 +349,44 @@ function renderLobbyFrame(): void {
   });
 }
 
-/** 建房 / 加入的入口：**第一次**进大厅时才造客户端（两样状态都只活在这一屏里） */
+/**
+ * ★ **断线时重连**（修复轮 A5）：订阅链路状态，`'offline'` 就把整条链重建一遍。
+ *
+ * 为什么它必须存在（评审 1.1 第 3 点）：计划 §5 T8 写死了"重连必须新建会话对象"，而第一版
+ * 产出代码里 `reconnect(` **0 处命中** ⇒ 那条硬约束只在 `net-lobby.ts` 的实现与注释里成立，
+ * 没有任何调用者。
+ *
+ * 三条纪律：
+ *  1. **新建对象**由 `client.reconnect()` 保证（它就是 `connect('resume')`）；
+ *  2. **并发挡板**：`connect()` 是异步的（建传输 + `init()`），断线事件可能连着来几次；
+ *  3. **不在这里做重发**：把"卡在半路的握手/收官消息"重新驱动起来是 **T6 的 `redrive()`**，
+ *     不是 UI 的活（D23）。这里只负责"把链路重建起来"。
+ */
+function attachLobbyReconnect(client: LobbyClient): void {
+  let reconnecting = false;
+  client.onStatus((to) => {
+    if (to !== 'offline' || reconnecting) return;
+    reconnecting = true;
+    void client.reconnect().then(() => {
+      reconnecting = false;
+      renderLobbyFrame();
+    }, () => { reconnecting = false; });
+  });
+}
+
+/**
+ * 建房 / 加入的入口：**第一次**进大厅时才造客户端（两样状态都只活在这一屏里）。
+ *
+ * ## 三个注入项为什么是这三样（修复轮；评审 1.1 的断点就在这三处）
+ *
+ *  - `decompressBase64`：**真解压**。第一版传的是 `() => null` ⇒ `decodeInviteText` 必走
+ *    `decompress-failed` 那一支（`invite.ts:581-590`）⇒ **对方发来的每条邀请码都解不开**。
+ *    解压是异步的，所以宿主先 `await` 出字节、再把它当"已经算好的结果"交给纯层
+ *    （`decompressBase64` 就是 `net-browser.ts` 的那个真解压口）。
+ *  - `onInbound`：**入站帧到了就重画一帧**。没有它，`createLobbySessionLink` 里那条
+ *    `transport.onMessage` 只更新它自己的记账数 ⇒ 屏上停在上一帧的读数上（评审 1.3 的 A4）。
+ *  - `localNick`：`hello.nick` 的唯一来源（`session.ts:2438` 说"`hello` 里还有 `nick`"）。
+ */
 function startLobby(role: 'host' | 'guest'): void {
   lobbyMode = role;
   if (lobbyClient === null) {
@@ -364,31 +404,57 @@ function startLobby(role: 'host' | 'guest'): void {
         const r = await createInvite({ ...draft }, lobbyEnv());
         return r.ok ? { ok: true, payload: r.payload, link: r.link } : { ok: false, message: r.message };
       },
-      // 真解压是异步的（`decompressBase64`），而 `decodeInviteText` 要一个同步口 ⇒
-      // `joinLobbyWithInvite` 先把字节 await 出来再喂进去（照 `net-browser.ts:createInvite` 的同一种缝法）。
-      decompressBase64: () => null,
+      // ★ **真解压（两步）**（修复轮 A1）：`decodeBase64Url` 只做 base64url 解码，
+      //   之后**必须**再走一次 `decompressBytes`（deflate-raw 解压）—— 只做第一步会让纯层
+      //   拿到"仍是压缩态"的字节，`decodeInviteText` 会把它当解压结果去 `JSON.parse`，
+      //   于是每条邀请码都返回 `bad-json`（实测）。返回 `null` 只表示"这段解不开"。
+      decompressBase64: async (b64: string) => {
+        const raw = decodeBase64Url(b64);
+        if (raw === null) return null;
+        const d = await decompressBytes(raw, lobbyEnv());
+        return d.ok ? d.bytes : null;
+      },
       readAddressBar: () => {
         const payload = readInviteFromAddressBar(lobbyEnv());
         if (payload === null) return null;
         // ★ 判据 6 的 ⑤：**只在读到载荷之后**抹地址栏（读不到时抹会把别人的 hash 抹掉）
         return { payload, stripped: stripInviteFromAddressBar(lobbyEnv()) };
       },
+      localNick: () => readNickName(localStore),
+      onInbound: () => { renderLobbyFrame(); },
     });
+    // ── ★ 修复轮 A5：**断线时重连**（计划 §5 T8 那条硬约束的产出代码调用点）──────────────
+    // 为什么订阅放在这里而不是 `net-lobby.ts` 内部：会话层与传输层都**不自己**订阅生命周期
+    // （`session.ts:768-776`："订阅是一个有生命周期的副作用，纯状态机不该持有它"）——
+    // 那是**调用方**的活，而调用方就是本文件。
+    //
+    // 为什么"重连"必须是**新建会话对象**：断线之后原对象上那条**已经中断的连接**是死的；
+    // 而复用它等于把 D23 那套"只覆盖 2/5 格"的收方幂等假设，用在它**没有覆盖**的另外 3 格上
+    // （例如"中途断线、已立承诺的加入方带着同一个 sessionId 回来"）⇒ 会 fail-closed 报
+    // `face-hash-mismatch`（T6 的登记缺口 ③）。`client.reconnect()` 每次都新建对象，
+    // 并在喂任何入站消息**之前**先 `markResuming()`。
+    attachLobbyReconnect(lobbyClient);
   }
   renderLobbyFrame();
   if (role === 'guest') void lobbyClient.readFromAddressBar().then(() => { renderLobbyFrame(); });
 }
 
-/** 房主：生成一条邀请码（SDP 是占位串，见本节头注），起一次 8 秒窗口 */
+/**
+ * 房主：生成一条邀请码（SDP 是**占位串**，见本节头注），然后**建链路并接上**。
+ *
+ * 顺序写死了：先 `connect('first')`（造传输 + 建会话 + `attach`），再生成邀请码。
+ * 反过来也能跑，但"链路先起来"让 `state().transport` 从一开始就是真的（不是 `'idle'` 的假读数）。
+ */
 async function makeLobbyInvite(): Promise<void> {
   const client = lobbyClient;
   if (client === null) return;
+  await client.connect('first');
   const originAndPath = window.location.href.split('#')[0].split('?')[0];
   await client.startHost({
     originAndPath,
     p: PROTO_VERSION,
     // `encodeInvite` 会拒绝空 SDP（那是调用方违约），所以它必须非空；
-    // 真的 offer 要等 ICE 收集完成 —— 那是 T9 的真浏览器线。
+    // 真的 offer 要等 ICE 收集完成 —— 那是 T9 的真浏览器线（见报告"B 档"那一节）。
     sdp: 'v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\n',
     ice: [],
     hostPromise: 'host-promise-pending',
@@ -398,11 +464,18 @@ async function makeLobbyInvite(): Promise<void> {
   renderLobbyFrame();
 }
 
-/** 加入方：贴一条邀请码 ⇒ 解载荷 + 明文协议版本比对 */
+/**
+ * 加入方：贴一条邀请码 ⇒ 解载荷 + 明文协议版本比对，然后**建链路并接上**。
+ *
+ * `connect('first')` 里会**立刻发出第一条 `hello`**（`session.ts:2438-2440` 说的"调用方自己拼"
+ * 那一步）—— 这是评审 1.1 第 4 点的那个断点：不发它，加入方的握手在产出路径上永远不会开始。
+ */
 async function joinLobbyWithInvite(text: string): Promise<void> {
   const client = lobbyClient;
   if (client === null) return;
   await client.joinWithInvite(text);
+  // 邀请码解不开时**不建链路**（建了也没用：连不上对端，而"解不开"这件事已经写在屏上了）
+  if (client.state().joined?.ok === true) await client.connect('first');
   renderLobbyFrame();
 }
 
