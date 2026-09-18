@@ -95,9 +95,26 @@ export interface DataChannelLike {
 export interface PeerConnectionLike {
   readonly connectionState?: string;
   readonly iceConnectionState?: string;
+  /**
+   * ICE 收集状态（`'new' | 'gathering' | 'complete'`）。
+   *
+   * ★ **G5/T8 修复轮 B1/B2 加的**：它是"能不能取 `localDescription` 当一份**非 trickle** 的
+   * offer/answer"的**唯一判据**。真件上 `setLocalDescription()` 返回之后 ICE 收集**才刚开始**，
+   * 此刻 `localDescription.sdp` 里**没有候选**——直接发出去会得到一条需要 trickle 的 offer，
+   * 而邀请码那条路是**一次性**的（没有第二条通道补候选，D17/§8.3）。
+   */
+  readonly iceGatheringState?: string;
   readonly localDescription?: { readonly sdp: string; readonly type: string } | null;
   createDataChannel(label: string, init?: { ordered?: boolean; maxRetransmits?: number }): DataChannelLike;
   createOffer(): Promise<{ readonly sdp?: string; readonly type: string }>;
+  /**
+   * 产一条 answer（**收方**用）。
+   *
+   * ★ G5/T8 修复轮 B1：它在此之前**根本不存在**——整份文件里只有 `createOffer`，
+   * 所以"收方那一侧产一条 answer"这件事在产出代码里**没有能力表达**（评审 1.2 实测的那一条）。
+   * 可选（与 `setRemoteDescription?` 同款）：假件可以不实现，两边同形。
+   */
+  createAnswer?(): Promise<{ readonly sdp?: string; readonly type: string }>;
   setLocalDescription(desc: { readonly type: string; readonly sdp?: string }): Promise<void>;
   /** 对端描述（answer / offer）。收方把它喂进来 */
   setRemoteDescription?(desc: { readonly type: string; readonly sdp?: string }): Promise<void>;
@@ -182,6 +199,42 @@ export interface NetBrowserEnv {
   readonly fetch?: (url: string) => Promise<{ readonly ok: boolean; readonly status: number }>;
   /** 挂 `visibilitychange` 的订阅动作，返回退订函数（切回前台 ⇒ `restartIce()`） */
   readonly onVisibilityChange?: (cb: () => void) => () => void;
+  /**
+   * ★ **对端连接造出来时的回执**（G5/T8 修复轮 B 档加）。
+   *
+   * 为什么需要它：房主"把对方回示的 answer 喂回**同一条**连接"（`applyAnswer`）要用到那个对象，
+   * 而它住在 `createBrowserTransport` 里面、外面拿不到。宿主**不能**自己去 `new` 一个
+   * ——那样会拿到**第二条**连接，而 `setRemoteDescription(answer)` 在一条没出过 offer 的连接上
+   * 只会失败。⇒ 用这个回执把**刚造出来的那一条**交出来（`src/main.ts` 只记引用，不碰构造器）。
+   *
+   * 它是**只读通知**：本文件不读它的返回值，宿主拿它做什么与本层无关。
+   */
+  readonly onPeerConnection?: (pc: PeerConnectionLike) => void;
+  /**
+   * ★ **计时能力**（G5/T8 修复轮 B2 加）。
+   *
+   * 为什么需要它：等 ICE 收集完成**必须有一个上界**——"无上界的 `await` 就是一次静默挂起"，
+   * 那正是 D23 要消灭的形态。而本仓的纪律是**计时一律注入**（不裸 `setTimeout`）⇒
+   * 上界走这个能力。
+   *
+   * 形状与 `src/app/match-driver.ts:152` 的 `Ticker` **逐字同形**（结构兼容 ⇒ `window.setTimeout`
+   * 那一族直接就能塞进来），但在这里**另立一个名字**：本文件是 T7 的交付物，不该为了一个
+   * 两方法的形状去 import T2 的文件（分层上 `ui → app` 是允许的，但零收益的耦合不加）。
+   */
+  readonly ticker?: GatherTicker;
+  /**
+   * 等 ICE 收集的上界（毫秒）。缺省 `DEFAULT_ICE_GATHER_TIMEOUT_MS`。
+   *
+   * 可注入的理由与 `net-driver.ts` 的 `inboundCapacity` 同款：**上界必须是"能在测试里非零地
+   * 构造出超时"的东西**，否则"超时之后会怎样"这条判据只能靠读代码相信。
+   */
+  readonly iceGatherTimeoutMs?: number;
+}
+
+/** 等 ICE 用的计时能力（形状与 `match-driver.ts` 的 `Ticker` 同形，见 `NetBrowserEnv.ticker`） */
+export interface GatherTicker {
+  schedule(fn: () => void, ms: number): number;
+  cancel(h: number): void;
 }
 
 /**
@@ -882,6 +935,230 @@ export function createSignalingSession(
 }
 
 /* ================================================================== *
+ * 8b. ★ ICE 收集与 offer/answer 的**序列**（G5/T8 修复轮 B1/B2）
+ *
+ * ## 为什么这一节存在（评审 1.2 的实测）
+ *
+ * 邀请码那条路**不需要信令服务器**（载荷走 fragment），但它**需要真 offer/answer**：
+ * 房主出一条 offer，收方要 `setRemoteDescription` 再产一条 answer 回示。
+ * 而修复轮之前：`setRemoteDescription` 在**整份文件里只有一行接口声明、一次都没被调用**，
+ * 接口上**也没有 `createAnswer`** ⇒ "收方产一条 answer"这件事在产出代码里**没有能力表达**。
+ *
+ * ## 面上能验到什么、验不到什么（**写死在这里，别让读者高估**）
+ *
+ *  - ✅ **能在 node 里验**：这一节全部是**序列**——先 `setRemoteDescription(offer)`、
+ *    再 `createAnswer()`、再 `setLocalDescription(answer)`、再等 ICE 收集到 `complete`、
+ *    最后读 `localDescription`。序列在**假 peer connection**（注入缝 `NetBrowserEnv.peerConnection`）
+ *    上能逐格断言，而且顺序写错会当场红。
+ *  - ❌ **不能在 node 里验**：真 `RTCPeerConnection` 的行为——SDP 的真实格式、ICE 候选能不能
+ *    真的打通、连不上的真实原因、NAT 穿透。**这一段真浏览器未验证，由 T9 的 CDP 场景覆盖。**
+ * ================================================================== */
+
+/**
+ * 等 ICE 收集的上界（毫秒）。缺省值。
+ *
+ * 5s 的出处：它是"本地候选收集"的常见量级（STUN 反射候选要一个往返），
+ * 而**它必须是个有上界的数**——没有上界的 `await` 就是一次静默挂起（D23 要消灭的形态）。
+ * ⚠️ 这个数是**选择**，不是实测：真值只能在真浏览器里量（T9）。
+ */
+export const DEFAULT_ICE_GATHER_TIMEOUT_MS = 5_000;
+
+/** `waitForIceGathering` 的结论（**失败有可读原因**，不是 `null`） */
+export type IceGatherResult =
+  | { readonly ok: true; readonly sdp: string; readonly ice: readonly string[] }
+  | { readonly ok: false; readonly reason: 'ice-timeout' | 'unsupported' | 'no-description'; readonly message: string };
+
+/** 从一条 SDP 里把候选串抠出来（`a=candidate:` 那几行）——**非 trickle** 的载荷要它们 */
+export function candidatesOf(sdp: string): string[] {
+  return sdp
+    .split(/\r?\n/)
+    .filter((l) => l.startsWith('a=candidate:'))
+    .map((l) => l.slice('a='.length));
+}
+
+/**
+ * ★ **等 ICE 收集完成，然后把 `localDescription` 取出来**（B2）。
+ *
+ * ## 为什么必须等（这是"占位 SDP"那件事的正解）
+ *
+ * `setLocalDescription()` 返回之后 ICE 收集**才刚开始**，此刻 `localDescription.sdp` 里
+ * **一条候选都没有**。邀请码那条路是**一次性**的（没有第二条通道补候选），
+ * 所以必须等到 `iceGatheringState === 'complete'` 再取 —— 否则收方拿到的是一条
+ * **需要 trickle 的 offer**，而它没有任何地方可以 trickle。
+ *
+ * ## 上界与**唯一**的失败形态
+ *
+ * 上界走注入的 `env.ticker`（本仓纪律：计时一律注入）+ `env.iceGatherTimeoutMs`。
+ * 超时 ⇒ `{ ok: false, reason: 'ice-timeout', message }` —— **可读、非空**，
+ * 调用方据此在屏上给一句人话。**没有"沉默地一直等"这条路**：没有 `ticker` 时
+ * 直接回 `'unsupported'`（**响亮地拒绝**，而不是挂住）。
+ *
+ * ## 真浏览器未验证
+ *
+ * `iceGatheringState` 的真实时序（尤其"候选一个都没收集到"时它会不会走到 `'complete'`）
+ * **在 node 里验不了**，由 T9 的 CDP 场景覆盖。
+ */
+export function waitForIceGathering(
+  pc: PeerConnectionLike,
+  env?: NetBrowserEnv,
+): Promise<IceGatherResult> {
+  const resolved: NetBrowserEnv = { ...defaultEnv(), ...env };
+  /** 取当前的 `localDescription`（**唯一的读取点**：成功与"已经 complete"两条路共用） */
+  const take = (): IceGatherResult => {
+    const desc = pc.localDescription ?? null;
+    const sdp = typeof desc?.sdp === 'string' ? desc.sdp : '';
+    if (sdp.length === 0) {
+      return {
+        ok: false,
+        reason: 'no-description',
+        message: '本侧还没有连接描述可发（`setLocalDescription` 没成功，或实现没把它暴露出来）。',
+      };
+    }
+    return { ok: true, sdp, ice: candidatesOf(sdp) };
+  };
+  // 已经收集完了：同步返回（**不要**在这种情况下也去排一个计时器）
+  if (pc.iceGatheringState === 'complete') return Promise.resolve(take());
+  const ticker = resolved.ticker;
+  if (ticker === undefined) {
+    // ★ **响亮地拒绝**，而不是挂住：没有计时能力就判不了"等多久算超时"
+    return Promise.resolve({
+      ok: false,
+      reason: 'unsupported',
+      message: '这台设备没有可用的计时能力，所以判不了"ICE 收集等多久算超时"；这一条路不走了（不静默挂起）。',
+    });
+  }
+  const timeoutMs = resolved.iceGatherTimeoutMs ?? DEFAULT_ICE_GATHER_TIMEOUT_MS;
+  return new Promise<IceGatherResult>((resolve) => {
+    let settled = false;
+    const finish = (r: IceGatherResult): void => {
+      if (settled) return;
+      settled = true;
+      ticker.cancel(handle);
+      resolve(r);
+    };
+    const handle = ticker.schedule(() => {
+      finish({
+        ok: false,
+        reason: 'ice-timeout',
+        message:
+          `等了 ${timeoutMs / 1000} 秒，ICE 候选还没有收集完（对端的网络可能把候选挡住了）。` +
+          '这一条路不走了：请重试，或者让两台设备换一个网络（同一局域网通常最快）。',
+      });
+    }, timeoutMs);
+    // 真件会在 `icegatheringstatechange` 上回调；**假件也可以直接改状态再调它**
+    pc.addEventListener('icegatheringstatechange', () => {
+      if (pc.iceGatheringState === 'complete') finish(take());
+    });
+  });
+}
+
+/** `acceptOffer` 的结论（成功面是"一条可以回示的 answer 描述"） */
+export type AcceptOfferResult =
+  | { readonly ok: true; readonly sdp: string; readonly ice: readonly string[] }
+  | { readonly ok: false; readonly reason: 'unsupported' | 'set-remote-failed' | 'answer-failed' | 'ice-timeout' | 'no-description'; readonly message: string };
+
+/**
+ * ★ **收方那一侧：把对方的 offer 吃进来，产一条可以回示的 answer**（B1）。
+ *
+ * 序列**写死**在这一个函数里（顺序错就没有第二条路可走）：
+ *   1. `setRemoteDescription(offer)` —— 这一步在修复轮之前**从未被调用过**；
+ *   2. `createAnswer()`；
+ *   3. `setLocalDescription(answer)`；
+ *   4. `waitForIceGathering()`（带上界，见它）。
+ *
+ * 为什么这一整段住"浏览器层"而不是大厅：它每一步都是**浏览器 API 的序列**，
+ * 而 D6 说浏览器 API 的唯一出处是 `src/ui/net-browser.ts`。
+ *
+ * ## 真浏览器未验证（写死）
+ *
+ * `setRemoteDescription` / `createAnswer` 的**真实**行为（SDP 协商、ICE 角色、
+ * 两端能不能真的协商成功）在 node 里验不了 —— 这里验的是**序列与失败处置**。
+ * 那段真值由 **T9 的 CDP 真浏览器场景**覆盖。
+ */
+export async function acceptOffer(
+  offer: { readonly sdp: string },
+  env?: NetBrowserEnv,
+): Promise<AcceptOfferResult> {
+  const resolved: NetBrowserEnv = { ...defaultEnv(), ...env };
+  const pc = resolved.peerConnection?.({ iceServers: readIceServers(resolved.settings?.() ?? null).servers }) ?? null;
+  if (pc === null) {
+    return { ok: false, reason: 'unsupported', message: '这台设备没有可用的对端连接能力（需要安全上下文），收不下这条邀请码。' };
+  }
+  if (pc.setRemoteDescription === undefined) {
+    return {
+      ok: false,
+      reason: 'unsupported',
+      message: '这台设备的连接实现不接受"对端描述"（`setRemoteDescription` 缺失），所以产不出 answer。',
+    };
+  }
+  if (pc.createAnswer === undefined) {
+    return {
+      ok: false,
+      reason: 'unsupported',
+      message: '这台设备的连接实现不会产 answer（`createAnswer` 缺失），所以这条邀请码答不回去。',
+    };
+  }
+  if (typeof offer.sdp !== 'string' || offer.sdp.length === 0) {
+    return { ok: false, reason: 'set-remote-failed', message: '这条邀请码里没有可用的连接描述（sdp 是空的）。' };
+  }
+  try {
+    // ① 对端描述（修复轮之前从未被调用的那一步）
+    await pc.setRemoteDescription({ type: 'offer', sdp: offer.sdp });
+  } catch (e) {
+    return { ok: false, reason: 'set-remote-failed', message: `收不下对端的连接描述：${String(e)}` };
+  }
+  let answer: { readonly sdp?: string; readonly type: string };
+  try {
+    // ② 产 answer
+    answer = await pc.createAnswer();
+  } catch (e) {
+    return { ok: false, reason: 'answer-failed', message: `本侧没能产出 answer：${String(e)}` };
+  }
+  try {
+    // ③ 把它落在本侧
+    await pc.setLocalDescription({ type: 'answer', sdp: answer.sdp });
+  } catch (e) {
+    return { ok: false, reason: 'answer-failed', message: `本侧的 answer 没能落到连接上：${String(e)}` };
+  }
+  // ④ 等 ICE 收集（非 trickle：候选必须已经在 SDP 里）
+  const gathered = await waitForIceGathering(pc, env);
+  return gathered.ok
+    ? { ok: true, sdp: gathered.sdp, ice: gathered.ice }
+    : { ok: false, reason: gathered.reason === 'no-description' ? 'no-description' : gathered.reason, message: gathered.message };
+}
+
+/**
+ * ★ **房主那一侧：把对方回示的 answer 吃进来**（B3 的第二半）。
+ *
+ * 它的入参是一个 `PeerConnectionLike` —— 因为**必须**是**同一条**连接：房主先出 offer
+ * （`init()` 里 `createOffer` + `setLocalDescription`），收方据此产 answer，房主再把那条
+ * answer 喂回**刚才那一条**连接。拿一条新连接去 `setRemoteDescription` 只会得到
+ * "answer 与 offer 不是同一次协商"这类失败。
+ *
+ * ⇒ 所以"造连接"是调用方（`createBrowserTransport`）的事，本函数只做"喂远端描述"这一步。
+ *
+ * ⚠️ 真浏览器未验证：`setRemoteDescription(answer)` 的真实协商结果（ICE 能不能打通）
+ * 在 node 里验不了，由 **T9 的 CDP 场景**覆盖。
+ */
+export async function applyAnswer(
+  pc: PeerConnectionLike,
+  answer: { readonly sdp: string },
+): Promise<TransportActionResult> {
+  if (pc.setRemoteDescription === undefined) {
+    return { ok: false, reason: 'unsupported', message: '这台设备的连接实现不接受"对端描述"（`setRemoteDescription` 缺失）。' };
+  }
+  if (typeof answer.sdp !== 'string' || answer.sdp.length === 0) {
+    return { ok: false, reason: 'bad-answer', message: '这条回示码里没有可用的连接描述（sdp 是空的）。' };
+  }
+  try {
+    await pc.setRemoteDescription({ type: 'answer', sdp: answer.sdp });
+  } catch (e) {
+    return { ok: false, reason: 'set-remote-failed', message: `收不下对端的 answer：${String(e)}` };
+  }
+  return { ok: true };
+}
+
+/* ================================================================== *
  * 9. `NetTransport` 的浏览器实现（D18：init 只等本侧）
  * ================================================================== */
 
@@ -924,6 +1201,15 @@ export function createBrowserTransport(env?: NetBrowserEnv): NetTransport {
   let initDone = false;
   let peerOnline = false;
   let detachVisibility: (() => void) | null = null;
+  /**
+   * ★ **本侧 ICE 收集的等待**（B2）。
+   *
+   * `init()` 里 `setLocalDescription(offer)` 之后**立刻**排下这个等待，但**不 `await` 它**
+   * ——`init()` 的契约是"只等本侧、不等对端"（D18），而 ICE 收集是**本地**的事却要**时间**。
+   * ⇒ 把"等"这件事留给 `localDescription()` 那个口：要发一条**非 trickle** 的 offer 的调用方
+   * （邀请码那条路）去 `await` 它，普通路径（切前台/局域网直连）不必等。
+   */
+  let gather: Promise<IceGatherResult> | null = null;
 
   const emitStatus = (to: TransportStatus, message: string): void => {
     if (to === status) return; // 契约：回调只报**变化**（transport.ts:232）
@@ -963,6 +1249,8 @@ export function createBrowserTransport(env?: NetBrowserEnv): NetTransport {
         };
       }
       pc = conn;
+      // ★ B 档：把"刚造出来的这一条连接"交给宿主（它转头要用它接 answer，见 `onPeerConnection`）
+      resolved.onPeerConnection?.(conn);
       conn.addEventListener('iceconnectionstatechange', () => onPeerState(String(conn.iceConnectionState ?? '')));
       conn.addEventListener('connectionstatechange', () => onPeerState(String(conn.connectionState ?? '')));
       emitStatus('connecting', `正在建立本侧链路（本端 ${init.selfId}，对端 ${init.peerId}）。`);
@@ -980,6 +1268,10 @@ export function createBrowserTransport(env?: NetBrowserEnv): NetTransport {
       } catch (e) {
         return { ok: false, reason: 'offer-failed', message: `本侧连接描述没有建起来：${String(e)}` };
       }
+      // ★ **B2**：`setLocalDescription` 之后 ICE 收集才刚开始 ⇒ 此刻 `localDescription.sdp` 里
+      //   还没有候选。这里把"等它收完"排下来（带上界），但**不 await**（`init()` 只等本侧，D18）。
+      //   要发一条非 trickle 的 offer 的调用方去 `await transport.localDescription()`。
+      gather = waitForIceGathering(conn, env);
       // 切回前台 / 换网之后重启 ICE。这个订阅是**能力**（`env.onVisibilityChange`）：
       // 纯层不知道"可见性"这个东西，宿主没给就不绑（无头 / 测试环境很常见）
       const onVis = resolved.onVisibilityChange;
@@ -997,6 +1289,23 @@ export function createBrowserTransport(env?: NetBrowserEnv): NetTransport {
 
     channels(): readonly NetChannelSpec[] {
       return CHANNEL_SPECS;
+    },
+
+    /**
+     * ★ **取一份非 trickle 的本侧描述**（B2）：等 ICE 收集完成再读 `localDescription`。
+     *
+     * 三种失败都**可读**，而且都**不会挂住**：没 `init` 过 / 没有等的能力 / 等到了上界。
+     */
+    async localDescription(): Promise<TransportActionResult & { readonly sdp?: string }> {
+      if (!initDone) {
+        return { ok: false, reason: 'not-initialized', message: '本侧链路还没建立（init 还没成功），现在没有连接描述。' };
+      }
+      if (gather === null) {
+        return { ok: false, reason: 'unsupported', message: '本侧没有在等 ICE 收集（这条实现不给连接描述）。' };
+      }
+      const g = await gather;
+      if (!g.ok) return { ok: false, reason: g.reason, message: g.message };
+      return { ok: true, sdp: g.sdp };
     },
 
     seq(): number {

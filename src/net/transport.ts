@@ -234,4 +234,23 @@ export interface NetTransport {
   /** 本端**发送**失败的旁路口（调用方不想在每一处都写 `if (!r.ok)` 时用它） */
   onError(cb: (failure: SendFailure) => void): () => void;
   status(): TransportStatus;
+  /**
+   * ★ **取本侧"可以发给对端的那份连接描述"**（G5/T8 修复轮 B2 加的**可选**成员）。
+   *
+   * ## 为什么它必须存在（而不是让调用方自己去拿）
+   *
+   * 邀请码那条路是**一次性**的：整条邀请码就是那条 offer，没有第二条通道补 ICE 候选。
+   * 而 `setLocalDescription()` 返回时 ICE 收集**才刚开始**，此刻的描述里**一条候选都没有**
+   * ⇒ 直接用会得到一条**需要 trickle** 的 offer，而收方没有任何地方可以 trickle（D17/§8.3）。
+   *
+   * ## 为什么是**可选**的
+   *
+   * 它要求实现**有能力等**（要一个计时上界，而计时在本仓一律注入）。假传输
+   * （`src/net/fake-transport.ts`）没有 ICE 这个概念；一个不给这个成员的实现是**合法**的 ——
+   * 调用方必须处理 `undefined`，于是"没有这个能力"这件事是**响亮的**（而不是拿到一份空描述）。
+   *
+   * ⇒ 加一个**可选**成员是**非破坏性**的：既有实现（fake 与 T7 的浏览器实现）都不必改签名。
+   * 失败的 `message` 是可读的真因（例如"等 ICE 超时了"）。
+   */
+  localDescription?(): Promise<TransportActionResult & { readonly sdp?: string }>;
 }

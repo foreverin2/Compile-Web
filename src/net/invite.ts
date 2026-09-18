@@ -778,7 +778,76 @@ export function qrPlaceholder(): { readonly implemented: false; readonly note: s
 }
 
 /* ------------------------------------------------------------------ *
- * 11. 组装入口（把上面几件事串成一条能被调用的路）
+ * 11b. ★ 回示码（G5/T8 修复轮 B3/B4）：**同形状**，但承诺串是占位
+ * ------------------------------------------------------------------ */
+
+/**
+ * 回示码里两个承诺位的**占位串**。
+ *
+ * ## 为什么回示码要有承诺位（而不是给载荷换个形状）
+ *
+ * 载荷是一个**固定 5 项**的位置数组（`payloadBytesOf`），而 `parseInvitePayload` 对两个承诺位
+ * 的要求只有"非空字符串"（`:492-497`）。⇒ **一条 answer 用同一个形状就能承载**，
+ * 于是收方/发方**共用同一套编解码**（`encodeInvite` / `decodeInviteText`），
+ * 而**不必动 `protocol.ts`**（那是 T1 的冻结件，协调者明写不许动）。
+ *
+ * ## 为什么必须把"这是占位"写进代码而不是只写在注释里
+ *
+ * 回示码里的这两个字段**不承诺任何事**（承诺流程的承诺属于邀请码形态，与传输层无关），
+ * 而它们的样子与真承诺**逐字同形**。用 `ANSWER_PROMISE_PLACEHOLDER` 这个**具名常量**
+ * （而不是在两处各写一个字面量）能让"占位"这件事只有一个家，也让将来读回示码的人
+ * 一眼看出"这两个字段不是承诺"。
+ *
+ * ⚠️ 它的形状必须匹配 `PROMISE_TEXT = /^[^\s.]+$/`（非空、无空白、无 `.`）。
+ */
+export const ANSWER_PROMISE_PLACEHOLDER = 'answer-not-a-promise';
+
+/** 回示码的构造入参（**故意不含**两个承诺位：调用方想给也给不了） */
+export interface AnswerPayloadInput {
+  /** 本机协议版本（明文段那一位） */
+  readonly protoVersion: number;
+  /** 本侧**非 trickle** 的连接描述（等 ICE 收集完成之后取的那一份） */
+  readonly sdp: string;
+  readonly ice: readonly string[];
+}
+
+/**
+ * ★ **造一条回示码的载荷**（B4 的具名构造器）。
+ *
+ * 它把"两个承诺位是占位"这件事**写进类型**：入参里没有 `hostPromise` / `guestPromise`，
+ * 调用方**给不了**一个看起来像承诺的串。于是"回示码与邀请码同形状"这件事在代码上是明确的，
+ * 而不是靠"记得填占位"。
+ *
+ * 与 `encodeInvite` 的关系：本函数只**填**那两个位，编码仍然走 `encodeInvite` 那一条路
+ * （"同一概念不得出现第二个名字"，§5.0）。
+ */
+export function answerPayloadFields(input: AnswerPayloadInput): InviteFields {
+  return {
+    p: input.protoVersion,
+    sdp: input.sdp,
+    ice: [...input.ice],
+    hostPromise: ANSWER_PROMISE_PLACEHOLDER,
+    guestPromise: ANSWER_PROMISE_PLACEHOLDER,
+  };
+}
+
+/**
+ * 一条载荷**是不是**回示码形状（判据：两个承诺位就是那个占位串）。
+ *
+ * ## 它为什么有用（而不是多余的）
+ *
+ * 邀请码与回示码**同形状** ⇒ 光看形状**分不开**它们。本函数给"这一条我手里的是回示码"
+ * 一个**可判的**答案（而不是让调用方靠"我是在哪个界面粘的"来记）。
+ * ⚠️ 能力边界：一条**真邀请码**若恰好也带着这个占位串（正常流程不会），它会被判成回示码 ——
+ * 这是**刻意**的（宁可把"看起来像占位"的当成回示码，也不假装能区分两件同形的事）。
+ */
+export function isAnswerPayload(payload: InvitePayload): boolean {
+  return payload.hostPromise === ANSWER_PROMISE_PLACEHOLDER
+    && payload.guestPromise === ANSWER_PROMISE_PLACEHOLDER;
+}
+
+/* ------------------------------------------------------------------ *
+ * 12. 组装入口（把上面几件事串成一条能被调用的路）
  * ------------------------------------------------------------------ */
 
 /** `buildInviteLink` 的入参：一次邀请要用的全部事实 */

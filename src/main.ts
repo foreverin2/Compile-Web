@@ -78,23 +78,31 @@ import {
   qrNote,
   renderNetLobby,
   type LobbyClient,
+  type AnswerCodeResult,
   type LobbyDraftInput,
   type LobbyErrorKey,
   type LobbyState,
 } from './ui/net-lobby';
 import {
+  acceptOffer,
+  applyAnswer,
   browserHash,
   createBrowserTransport,
   createInvite,
   decodeBase64Url,
   decompressBytes,
+  candidatesOf,
   inviteLengthReport,
   readIceServers,
   readInviteFromAddressBar,
   signalingEndpointSetting,
   stripInviteFromAddressBar,
+  type IceServerLike,
+  type NetBrowserEnv,
+  type PeerConnectionLike,
 } from './ui/net-browser';
 import { PROTO_VERSION } from './net/protocol';
+import { answerPayloadFields } from './net/invite';
 
 const root = document.getElementById('app')!;
 // 启动时注入运行期 nonce（G0）：使任何未显式传 seed 的 createGame() 也不会跨重启重复同一牌序
@@ -235,7 +243,7 @@ let lastArchive: MatchFile | null = null;
  * ⚠️ **本任务不做的事，如实写在代码里**（免得被读成"已经能联机了"）：
  *   - **不构造信令客户端**：`createSignalingSession` / `discoverSignalingEndpoint` 属 T9 的真浏览器线。
  *     所以"输 6 位码"这条路今天只到"端点判定 + 归一化 + 频道名"为止（那正是不发任何请求的那一段）；
- *   - **不拿真 SDP / ICE**：非 trickle 的 offer 要等 ICE 收集完成，那是真 `RTCPeerConnection` 的事。
+ *   - **真 SDP / ICE 的取法**见 `makeLobbyInvite`（等 ICE 收集完成再取本侧描述，B2）。
  *     邀请码的**形状**（`<协议版本>.<压缩段>`、载荷只在 fragment）是真的，里面的 SDP 是占位串；
  *   - **不落盘**连接设置：`netSettings` 只活在内存里（本任务不动存储面）。
  * ──────────────────────────────────────────────────────────────────────────── */
@@ -282,6 +290,41 @@ const lobbyTicker = {
 };
 
 /**
+ * ★ **带 ICE 上界的大厅环境**（B2）。
+ *
+ * ## 为什么只注入这两样（而不是自己 new 一条连接）
+ *
+ *  - `ticker` —— 等 ICE 收集**必须有上界**，而计时在本仓一律注入；
+ *    `net-browser.ts` 的 `waitForIceGathering` 在**没有** `ticker` 时会**响亮地拒绝**
+ *    （`'unsupported'`），所以这一步不给就等于把那条路关掉；
+ *  - `onPeerConnection` —— 房主"把回示的 answer 喂回**同一条**连接"要用到那个对象，
+ *    而它住在 `createBrowserTransport` 里面。**本文件不自己 new 一条**：那会拿到第二条连接，
+ *    而 `setRemoteDescription(answer)` 在一条没出过 offer 的连接上只会失败。
+ *
+ * ⚠️ `peerConnection` 那个缝**故意不填**：缺省实现才去读宿主环境里的构造器
+ * （D6：浏览器 API 的唯一出处是 `src/ui/net-browser.ts`，本文件连那个**名字**都不出现）。
+ */
+function lobbyEnvWithIce(): NetBrowserEnv {
+  return {
+    settings: () => netSettings,
+    ticker: lobbyTicker,
+    onPeerConnection: (pc) => { hostPeerConnection = pc; },
+  };
+}
+
+/**
+ * 房主那一条连接（`lobbyEnvWithIce` 的回执记下来的）。
+ *
+ * ⚠️ 它是**单槽位**：一局只有一条本侧连接（D2：主机关页面即这一局结束）。
+ * 跨局由大厅自己的生命周期收拾（`resetToMainInterface` 里 `lobbyClient?.dispose()`）。
+ */
+let hostPeerConnection: PeerConnectionLike | null = null;
+/** 当前页面的 origin + 路径（邀请码的 `originAndPath`；纯层不知道自己在哪个地址上） */
+function currentOriginAndPath(): string {
+  return window.location.href.split('#')[0].split('?')[0];
+}
+
+/**
  * 入口那一屏的状态（还没建房也没加入）。
  *
  * ⚠️ 它**不是**"第二份状态"：这一格只有两个按钮，没有任何读数需要从会话层取。
@@ -306,6 +349,8 @@ function lobbyEntryState(): LobbyState {
     routedIn: 0,
     routedOut: 0,
     helloSent: false,
+    answerCode: null,
+    answerApplied: null,
   };
 }
 
@@ -420,6 +465,27 @@ function startLobby(role: 'host' | 'guest'): void {
         // ★ 判据 6 的 ⑤：**只在读到载荷之后**抹地址栏（读不到时抹会把别人的 hash 抹掉）
         return { payload, stripped: stripInviteFromAddressBar(lobbyEnv()) };
       },
+      // ★ **B3 的第二半（收方）**：把对方的 offer 吃进来，产一条可以回示的回示码。
+      //   序列在 `acceptOffer`（B1）；承诺位由 `answerPayloadFields` 填**具名占位串**（B4）。
+      //   ⚠️ 真对端连接的协商结果（ICE 能不能打通）**真浏览器未验证，由 T9 覆盖**。
+      buildAnswer: async (offer: { sdp: string; ice: readonly string[] }): Promise<AnswerCodeResult> => {
+        const r = await acceptOffer({ sdp: offer.sdp }, lobbyEnvWithIce());
+        if (!r.ok) return { ok: false, message: r.message };
+        const fields = answerPayloadFields({ protoVersion: PROTO_VERSION, sdp: r.sdp, ice: r.ice });
+        const enc = await createInvite({ ...fields, originAndPath: currentOriginAndPath() }, lobbyEnv());
+        return enc.ok ? { ok: true, code: enc.payload } : { ok: false, message: enc.message };
+      },
+      // ★ **B3 的第一半（房主侧收口）**：把对方回示的 answer 喂进**同一条**连接（`applyAnswer`）。
+      //   为什么必须是同一条：拿一条新连接去 `setRemoteDescription` 会得到
+      //   "answer 与 offer 不是同一次协商"这类失败。
+      applyAnswer: async (answer: { sdp: string }) => {
+        const pc = hostPeerConnection;
+        if (pc === null) {
+          return { ok: false as const, message: '本机还没有建起对端连接（先「建房」生成邀请码，再把回示码粘回来）。' };
+        }
+        const r = await applyAnswer(pc, { sdp: answer.sdp });
+        return r.ok ? { ok: true as const } : { ok: false as const, message: r.message };
+      },
       localNick: () => readNickName(localStore),
       onInbound: () => { renderLobbyFrame(); },
     });
@@ -440,27 +506,74 @@ function startLobby(role: 'host' | 'guest'): void {
 }
 
 /**
- * 房主：生成一条邀请码（SDP 是**占位串**，见本节头注），然后**建链路并接上**。
+ * 房主：生成一条邀请码，然后**建链路并接上**。
  *
- * 顺序写死了：先 `connect('first')`（造传输 + 建会话 + `attach`），再生成邀请码。
- * 反过来也能跑，但"链路先起来"让 `state().transport` 从一开始就是真的（不是 `'idle'` 的假读数）。
+ * ## ★ B2：SDP 不再是占位串（修复轮 B 档）
+ *
+ * 顺序：`connect('first')`（造传输 + 建会话 + `init()` 里 `createOffer`）→
+ * **`transport.localDescription()`（等 ICE 收集完成，带上界）** → 用**真 SDP** 生成邀请码。
+ *
+ * 为什么必须等：`setLocalDescription()` 返回时 ICE 收集才刚开始，此刻的描述里**一条候选都没有**
+ * ⇒ 直接用会得到一条**需要 trickle** 的 offer，而邀请码那条路是**一次性**的、收方没有第二条
+ * 通道可以 trickle（D17/§8.3）。
+ *
+ * 失败处置（三种都可读，见 `waitForIceGathering`）：拿不到真描述时**不编一条假的**，
+ * 而是把真因写到屏上、并**不**生成邀请码（生成一条连不上的邀请码比不生成更坏）。
+ *
+ * ⚠️ 真对端连接的 SDP 内容与 ICE 可达性**真浏览器未验证，由 T9 的 CDP 场景覆盖**。
  */
 async function makeLobbyInvite(): Promise<void> {
   const client = lobbyClient;
   if (client === null) return;
   await client.connect('first');
-  const originAndPath = window.location.href.split('#')[0].split('?')[0];
+  // ★ B2：取一份**非 trickle** 的本侧描述（等 ICE 收集；上界走注入的 ticker）
+  const transport = client.transport();
+  if (transport?.localDescription === undefined) {
+    client.showNotice('这条实现不给连接描述（没有 `localDescription`），所以生成不了邀请码。');
+    renderLobbyFrame();
+    return;
+  }
+  const desc = await transport.localDescription();
+  if (!desc.ok || typeof desc.sdp !== 'string' || desc.sdp.length === 0) {
+    // **不编一条假的**：把真因写到屏上（可读），邀请码这一轮不生成
+    client.showNotice(desc.ok ? '本侧没有可用的连接描述，生成不了邀请码。' : desc.message);
+    renderLobbyFrame();
+    return;
+  }
   await client.startHost({
-    originAndPath,
+    originAndPath: currentOriginAndPath(),
     p: PROTO_VERSION,
-    // `encodeInvite` 会拒绝空 SDP（那是调用方违约），所以它必须非空；
-    // 真的 offer 要等 ICE 收集完成 —— 那是 T9 的真浏览器线（见报告"B 档"那一节）。
-    sdp: 'v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\n',
-    ice: [],
+    sdp: desc.sdp,
+    ice: candidatesOf(desc.sdp),
     hostPromise: 'host-promise-pending',
     guestPromise: 'guest-promise-pending',
   });
   client.startWait();
+  renderLobbyFrame();
+}
+
+/**
+ * 房主：**把对方回示的回示码粘回来**（B3 的第二半）。
+ *
+ * `submitAnswerCode` 里会把 answer 喂进**同一条**连接（`applyAnswer`）——
+ * 拿一条新连接去 `setRemoteDescription` 只会得到"answer 与 offer 不是同一次协商"这类失败。
+ */
+async function applyLobbyAnswerCode(code: string): Promise<void> {
+  const client = lobbyClient;
+  if (client === null) return;
+  await client.submitAnswerCode(code);
+  renderLobbyFrame();
+}
+
+/**
+ * 加入方：**产一条回示码**（B3 的第一半），交给玩家发回给房主。
+ *
+ * 今天没有回程通道（邀请码那条路的既定形态）⇒ 回示码由玩家自己复制回去。
+ */
+async function makeLobbyAnswerCode(): Promise<void> {
+  const client = lobbyClient;
+  if (client === null) return;
+  await client.makeAnswer();
   renderLobbyFrame();
 }
 

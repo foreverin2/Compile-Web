@@ -48,6 +48,7 @@ import {
   NO_ENDPOINT_REASON,
   decodeInviteText,
   inviteLinkOf,
+  isAnswerPayload,
   protocolVersionCheck,
   qrPlaceholder,
   roomCodeEntryReachability,
@@ -111,6 +112,18 @@ export type MakeInviteResult =
   | { readonly ok: false; readonly message: string };
 
 /**
+ * ★ **一条回示码**的产出结论（B3）。
+ *
+ * 为什么 `code` 与 `payload` 都留着：它们是**同一条**载荷的两个名字 ——
+ * `payload` 是它本来的名字（与邀请码同形状），`code` 是"玩家看到的那个东西"的名字。
+ * 两个字段装同一个值会让"同一概念两个名字"那条纪律看起来被破坏，所以这里**只留 `code`**
+ * （它就是载荷），调用方要什么自己取。
+ */
+export type AnswerCodeResult =
+  | { readonly ok: true; readonly code: string }
+  | { readonly ok: false; readonly message: string };
+
+/**
  * 大厅的宿主接缝 —— **能力一律注入**。
  *
  * ## 为什么传输是"造一个"的动作而不是现成对象
@@ -148,6 +161,21 @@ export interface LobbyClientOptions {
   readonly readSettings: () => { readonly turnUrl?: string; readonly turnUsername?: string; readonly turnCredential?: string } | null;
   /** 生成邀请链接（真压缩在浏览器层，是异步的） */
   readonly buildInvite: (draft: LobbyDraftInput) => Promise<MakeInviteResult>;
+  /**
+   * ★ **B3 的第二半（收方）**：把对方的 offer 吃进来，产一条**回示码**。
+   *
+   * 为什么它是一个**注入能力**而不是大厅自己调 `acceptOffer`：产 answer 要**浏览器 API 的序列**
+   * （`setRemoteDescription` → `createAnswer` → `setLocalDescription` → 等 ICE），
+   * 而 D6 说浏览器 API 的唯一出处是 `src/ui/net-browser.ts`。大厅只**搬运**。
+   * 可选：不注入时"产回示码"这条路在屏上**不出现**（而不是给一个点了没反应的按钮）。
+   */
+  readonly buildAnswer?: (offer: { readonly sdp: string; readonly ice: readonly string[] }) => Promise<AnswerCodeResult>;
+  /**
+   * ★ **B3 的第一半（房主侧收口）**：把对方回示的 answer 喂进**同一条**连接。
+   *
+   * 可选，理由同上（它也是浏览器 API 的序列）。
+   */
+  readonly applyAnswer?: (answer: { readonly sdp: string }) => Promise<{ readonly ok: true } | { readonly ok: false; readonly message: string }>;
   /**
    * ★ **把邀请码的压缩段解回"已经算好的字节"**（`decodeInviteText` 要的那个**同步**口径）。
    *
@@ -515,12 +543,21 @@ export interface LobbyState {
   /** 路由记账：会话层产出并已发出的帧数 */
   readonly routedOut: number;
   /**
-   * 本端是否已经发过第一条 `hello`（`connect()` 里由加入方发）。
+   * ★ 本端是否已经发过第一条 `hello`（`connect()` 里由加入方发）。
    *
    * 它是屏上的**读数**（也是判据 14 的类型面）：`false` 而链路已经起来了，
    * 就意味着"握手在产出路径上还没开始"—— 那正是评审 1.1 第 4 点的形态。
    */
   readonly helloSent: boolean;
+  /**
+   * ★ **收方产出的那条回示码**（B3；`null` = 还没产）。
+   *
+   * 它只对**加入方**有意义：加入方把房主的 offer 吃进来之后，产一条 answer 回示，
+   * **由房主粘回来**（今天没有回程通道，这是"邀请码那条路"的既定形态）。
+   */
+  readonly answerCode: string | null;
+  /** 房主**粘回来**的那条回示码的处理结论（`null` = 还没粘） */
+  readonly answerApplied: { readonly ok: boolean; readonly message: string } | null;
 }
 
 /* ==================================================================== *
@@ -551,6 +588,8 @@ export interface LobbyState {
  */
 export interface LobbySessionLink {
   readonly session: NetSession;
+  /** 本端链路（只读；宿主据 localDescription() 取非 trickle 的描述，见 B2） */
+  readonly transport: NetTransport;
   /** 把一条入站文本喂进这条路（生产由 `transport.onMessage` 驱动） */
   receive(text: string): boolean;
   /** 真正经过路由进了 `accept` 的入站条数（反空转的记账口） */
@@ -717,6 +756,7 @@ export function createLobbySessionLink(opts: {
   });
   return {
     session,
+    transport: opts.transport,
     receive,
     sendHello,
     helloSent: () => helloDone,
@@ -763,7 +803,14 @@ export interface LobbyClient {
   /** 提交失败时记一条错误（宿主在会话层拒绝之后调它） */
   noteError(key: LobbyErrorKey): void;
   /** 把一条可读提示写到屏上（`null` = 清空） */
-  note(text: string | null): void;
+  /**
+   * 把一条可读提示写到屏上（`null` = 清空）。
+   *
+   * ⚠️ 名字是 **`showNotice`** 而不是 `note`：`tests/ui/g4-closure-guard.test.ts:167` 钉着
+   * `src/main.ts` 里 `note(` **零命中**（G4 收口文档 §3 缺口 1 的现状腿）。
+   * 大厅的宿主接口若叫 `note`，那句调用就会写进 `main.ts` ⇒ 那条腿当场红（实测踩过）。
+   */
+  showNotice(text: string | null): void;
   /**
    * ★ **建链路并接上**（修复轮 A3/A4/A5）：造传输 → 建会话对象 → `attach` → 加入方发第一条 `hello`。
    *
@@ -806,6 +853,31 @@ export interface LobbyClient {
   sendHello(): boolean;
   /** 本端是否已经发过 `hello` */
   helloSent(): boolean;
+  /**
+   * ★ **收方产出回示码**（B3）：拿当前那条邀请码里的 offer 去产一条 answer 回示码。
+   *
+   * 它需要三样已经就位：① 本端解出过一条邀请码（`state().joined.ok`）；
+   * ② 宿主注入了 `buildAnswer`（没注入时返回 `false` 且**屏上不出现那个按钮**）。
+   *
+   * 返回 `false` = "这条路今天不可用"（没解出邀请码 / 宿主没给能力）—— **不抛**。
+   */
+  makeAnswer(): Promise<boolean>;
+  /**
+   * ★ **房主把回示码粘回来**（B3）：解出 answer 并喂进同一条连接。
+   *
+   * 返回 `false` = 没解出 / 没注入 `applyAnswer`。
+   */
+  submitAnswerCode(code: string): Promise<boolean>;
+  /** 本端是否能产回示码（屏上据此决定那个按钮出不出现） */
+  canMakeAnswer(): boolean;
+  /**
+   * 当前那条链路的传输（`null` = 还没 `connect`）。
+   *
+   * 为什么开这个口：房主要"等 ICE 收集完再取一份非 trickle 的描述"（B2），
+   * 而那个能力在**传输**上（`localDescription()`），不在会话上。宿主不该自己记一份
+   * `s.link` 的引用副本 —— 它在每次 `connect()` 里都会被换成新对象。
+   */
+  transport(): NetTransport | null;
   /**
    * 重连：**新建会话对象 + 先声明重连 + 再接上**（顺序见 `createLobbySessionLink` 的注释）。
    *
@@ -860,6 +932,10 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
     error: LobbyErrorKey | null;
     notice: string | null;
     link: LobbySessionLink | null;
+    /** B3：收方产出的回示码（`null` = 还没产） */
+    answerCode: string | null;
+    /** B3：房主粘回来的那条回示码的处理结论 */
+    answerApplied: { ok: boolean; message: string } | null;
   } = {
     role: null,
     invite: null,
@@ -873,6 +949,8 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
     error: null,
     notice: null,
     link: null,
+    answerCode: null,
+    answerApplied: null,
   };
 
   /**
@@ -1061,6 +1139,8 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
       routedIn: linkOf()?.routedIn() ?? 0,
       routedOut: linkOf()?.routedOut() ?? 0,
       helloSent: linkOf()?.helloSent() ?? false,
+      answerCode: s.answerCode,
+      answerApplied: s.answerApplied,
     }),
 
     startHost: async (draft: LobbyDraftInput): Promise<void> => {
@@ -1125,7 +1205,7 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
       s.notice = null;
     },
 
-    note: (text: string | null): void => { s.notice = text; },
+    showNotice: (text: string | null): void => { s.notice = text; },
 
     connect,
     reconnect: (): Promise<void> => connect('resume'),
@@ -1145,6 +1225,68 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
     sendHello: (): boolean => s.link?.sendHello() ?? false,
 
     helloSent: (): boolean => s.link?.helloSent() ?? false,
+
+    canMakeAnswer: (): boolean => opts.buildAnswer !== undefined && s.joined?.ok === true,
+
+    transport: (): NetTransport | null => s.link?.transport ?? null,
+
+    /**
+     * ★ **收方产回示码**（B3）：拿邀请码里那条 offer 去产 answer。
+     *
+     * 三种"这条路今天不可用"都返回 `false`（**不抛**），且屏上不出现那个按钮：
+     *  ① 还没解出一条邀请码；② 宿主没注入 `buildAnswer`；③ 产 answer 失败（真因写进 `notice`）。
+     */
+    makeAnswer: async (): Promise<boolean> => {
+      const build = opts.buildAnswer;
+      const joined = s.joined;
+      if (build === undefined || joined === null || !joined.ok) return false;
+      const r = await build({ sdp: joined.payload.sdp, ice: joined.payload.ice });
+      if (!r.ok) {
+        s.answerCode = null;
+        s.notice = r.message;
+        opts.onNotice?.(r.message);
+        return false;
+      }
+      s.answerCode = r.code;
+      s.notice = null;
+      opts.onNotice?.(null);
+      return true;
+    },
+
+    /**
+     * ★ **房主把回示码粘回来**（B3）：解出 answer，喂进同一条连接。
+     *
+     * 解不开 / 没注入 `applyAnswer` ⇒ `false`，并把真因写进 `notice`（屏上能看见）。
+     */
+    submitAnswerCode: async (code: string): Promise<boolean> => {
+      const apply = opts.applyAnswer;
+      const text = code.trim();
+      if (apply === undefined) return false;
+      if (text.length === 0) {
+        s.answerApplied = { ok: false, message: '回示码是空的：请把对方发来的整条回示码完整粘贴进来。' };
+        return false;
+      }
+      // 回示码与邀请码**同形状** ⇒ 共用同一套解码（`decodeInviteText` + 真正的两步解压）
+      const compressed = text.slice(text.indexOf('.') + 1);
+      const bytes = text.includes('.') ? await opts.decompressBase64(compressed) : null;
+      const dec = decodeInviteText(text, (b64) => (b64 === compressed && bytes !== null ? bytes : null));
+      if (!dec.ok) {
+        s.answerApplied = { ok: false, message: dec.message };
+        return false;
+      }
+      // ★ 形状自证：它**应当**是一条回示码（两个承诺位是那个具名占位串）。
+      //   不是 ⇒ 说明玩家贴错了东西（把邀请码贴上来了），给一句能读懂的真因。
+      if (!isAnswerPayload(dec.payload)) {
+        s.answerApplied = {
+          ok: false,
+          message: '这条不是对方回示的答案，而更像一条邀请码：请确认你贴的是对方在加入之后给你的那条回示码。',
+        };
+        return false;
+      }
+      const r = await apply({ sdp: dec.payload.sdp });
+      s.answerApplied = r.ok ? { ok: true, message: '已经把对方的答案接上了。' } : { ok: false, message: r.message };
+      return r.ok;
+    },
 
     sync: (): void => { syncNow(); },
 

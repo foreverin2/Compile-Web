@@ -34,19 +34,21 @@ import {
 } from '../../src/ui/net-lobby';
 import { PRIVACY_COPY, privacyLines } from '../../src/app/privacy';
 import {
-  createInvite, decodeBase64Url, decodeInviteFromAddressBar, decodeInvitePayload, decompressBytes, inviteLengthReport,
-  readIceServers, roomCodeEntry, stripInviteFromAddressBar,
+  acceptOffer, applyAnswer, createInvite, decodeBase64Url, decodeInviteFromAddressBar, decodeInvitePayload,
+  decompressBytes, inviteLengthReport, readIceServers, roomCodeEntry, stripInviteFromAddressBar, waitForIceGathering,
   type NetBrowserEnv, type WebSocketLike,
 } from '../../src/ui/net-browser';
-import {
-  NO_ENDPOINT_HEADLINE, NO_ENDPOINT_MESSAGE, NO_ENDPOINT_REASON, inviteLinkOf,
-  roomCodeEntryReachability,
-} from '../../src/net/invite';
+
 import { normalizeRoomCode, PROTO_VERSION, roomChannel } from '../../src/net/protocol';
 import type { PeerStatus } from '../../src/net/session';
 import { createFakeTransportPair } from '../../src/net/fake-transport';
 import type { NetTransport } from '../../src/net/transport';
 import { CARD_DATA_HASH } from '../../src/app/card-data-hash';
+import { makeFakePc } from './fake-peer-connection';
+import {
+  ANSWER_PROMISE_PLACEHOLDER, NO_ENDPOINT_HEADLINE, NO_ENDPOINT_MESSAGE, NO_ENDPOINT_REASON,
+  answerPayloadFields, inviteLinkOf, isAnswerPayload, roomCodeEntryReachability,
+} from '../../src/net/invite';
 import { browserHash } from '../../src/ui/net-browser';
 
 /* ==================================================================== *
@@ -217,6 +219,8 @@ function mountLobby(initial?: Partial<LobbyState>): Harness {
       routedIn: 0,
       routedOut: 0,
       helloSent: false,
+      answerCode: null,
+      answerApplied: null,
       ...initial,
     },
     calls,
@@ -898,7 +902,7 @@ function mountLobbyNavFor(_root: StubNode): LobbyRenderNav {
   const s: LobbyState = {
     role: null, sessionId: '', invite: null, joined: null, roomCodeInput: '', roomCodeGate: null,
     transport: 'idle', peer: null, endpoint: '', ice: { servers: [], relayConfigured: false, relayIncomplete: false },
-    advancedOpen: false, waitExpired: null, error: null, notice: null, routedIn: 0, routedOut: 0, helloSent: false,
+    advancedOpen: false, waitExpired: null, error: null, notice: null, routedIn: 0, routedOut: 0, helloSent: false, answerCode: null, answerApplied: null,
   };
   return {
     state: s,
@@ -1381,5 +1385,214 @@ describe('★ 修复轮 · 判据 3 的连线（"输入读数 → 该格文案"�
     // 反向：它**不该**是别的格子那句
     expect(text.includes(errorCopy('busy')), '把卡牌指纹那条显示成了"位满"').toBe(false);
     expect(text.includes(errorCopy('spectator')), '把卡牌指纹那条显示成了"观战不支持"').toBe(false);
+  });
+});
+
+/* ==================================================================== *
+ * 10. ★ 修复轮 B 档：offer/answer 的**序列**与等 ICE 的**上界**
+ *
+ * 协调者的判定（本轮边界扩宽的根据）：`net-browser.ts` 那条路径住在注入接口
+ * `PeerConnectionLike` 后面 ⇒ **序列可以在 node 里用假 peer connection 验**，
+ * 就像整条消息路由已经在假传输上验过一样。
+ *
+ * ⚠️ **这些腿证明的是"序列与失败处置"，不是"真能连上"**：
+ * 真 `RTCPeerConnection` 的 SDP 协商、ICE 可达性、连不上的真实原因
+ * **真浏览器未验证，由 T9 的 CDP 场景覆盖**。
+ * ==================================================================== */
+
+describe('★ 修复轮 B1 · 收方那条序列（顺序错就要红）', () => {
+  it('★ `acceptOffer`：`setRemoteDescription(offer)` → `createAnswer` → `setLocalDescription(answer)` → 等 ICE', async () => {
+    const { pc, fake } = makeFakePc({ iceGatheringState: 'complete' });
+    const r = await acceptOffer({ sdp: 'OFFER-SDP-X' }, { peerConnection: () => pc as never });
+    expect(r.ok, `acceptOffer 失败：${r.ok ? '' : r.message}`).toBe(true);
+    // ★ **顺序**（这是这条腿的核心）：逐格比对调用序列
+    const seq = fake.calls.map((c) => `${c.op}(${c.detail ?? ''})`);
+    // eslint-disable-next-line no-console
+    console.log('\nB1 实测序列：\n  ' + seq.join('\n  '));
+    expect(seq, 'offer/answer 的序列不对（顺序错就没有第二条路可走）').toEqual([
+      'setRemoteDescription(offer)',
+      'createAnswer()',
+      'setLocalDescription(answer)',
+    ]);
+    // ① 喂进去的**就是**那条 offer（不是别的）
+    expect(fake.remoteSeen.length, '`setRemoteDescription` 没被调到（修复轮之前它一次都没被调用过）').toBe(1);
+    expect(fake.remoteSeen[0].type, '喂进去的不是 offer').toBe('offer');
+    expect(fake.remoteSeen[0].sdp, '喂进去的 SDP 不是邀请码里那一条').toBe('OFFER-SDP-X');
+    // ② 取到的是 `localDescription`（不是占位串），候选也从 SDP 里抠出来了
+    expect(r.ok && r.sdp.includes('candidate:9'), '返回的不是 answer 那份 localDescription').toBe(true);
+    expect(r.ok && r.ice.length, 'ICE 候选没从 SDP 里抠出来').toBeGreaterThan(0);
+  });
+
+  it('★ 反证：把序列倒过来（先 `createAnswer` 再 `setRemoteDescription`）⇒ 这条腿必须红', async () => {
+    // 用一份"顺序被写反"的合成记录做**判别力正控**：证明上面那条腿比的是**顺序**，
+    // 不是"这几个方法被调过就算"。
+    const wrong = ['createAnswer()', 'setRemoteDescription(offer)', 'setLocalDescription(answer)'];
+    const { pc, fake } = makeFakePc({ iceGatheringState: 'complete' });
+    await acceptOffer({ sdp: 'OFFER-SDP-X' }, { peerConnection: () => pc as never });
+    const right = fake.calls.map((c) => `${c.op}(${c.detail ?? ''})`);
+    expect(right, '正控构造失败：真实序列竟然等于那条错序').not.toEqual(wrong);
+    // 逐位重合度：错序在第 1 位就与真实序列不同
+    expect(right[0] === wrong[0], '正控失效：两种序列的第一位竟然相同').toBe(false);
+  });
+
+  it('★ 缺能力时**响亮地拒绝**（不挂、不假装成功）', async () => {
+    // ① 没有 `createAnswer`
+    const a = makeFakePc({ noCreateAnswer: true });
+    const ra = await acceptOffer({ sdp: 'X' }, { peerConnection: () => a.pc as never });
+    expect(ra.ok, '没有 createAnswer 竟然成功了').toBe(false);
+    if (!ra.ok) {
+      expect(ra.reason, '原因不是 unsupported').toBe('unsupported');
+      expect(ra.message, '没有可读原因').toContain('createAnswer');
+    }
+    // ② 没有 `setRemoteDescription`
+    const b = makeFakePc({ noSetRemote: true });
+    const rb = await acceptOffer({ sdp: 'X' }, { peerConnection: () => b.pc as never });
+    expect(rb.ok, '没有 setRemoteDescription 竟然成功了').toBe(false);
+    if (!rb.ok) expect(rb.message, '没有可读原因').toContain('setRemoteDescription');
+    // ③ 空 offer
+    const c = makeFakePc({});
+    const rc = await acceptOffer({ sdp: '' }, { peerConnection: () => c.pc as never });
+    expect(rc.ok, '空 SDP 竟然成功了').toBe(false);
+    // ④ 设备没有对端连接能力
+    const rd = await acceptOffer({ sdp: 'X' }, { peerConnection: () => null });
+    expect(rd.ok, '没有连接能力竟然成功了').toBe(false);
+  });
+
+  it('真实异常被收成可读结果（`setRemoteDescription` 抛错 / `createAnswer` 抛错）', async () => {
+    const a = makeFakePc({ failSetRemote: true });
+    const ra = await acceptOffer({ sdp: 'X' }, { peerConnection: () => a.pc as never });
+    expect(ra.ok).toBe(false);
+    if (!ra.ok) {
+      expect(ra.reason, 'setRemoteDescription 抛错没被归到 set-remote-failed').toBe('set-remote-failed');
+      expect(ra.message, '没有把原因带出来').toContain('假件');
+    }
+    const b = makeFakePc({ failAnswer: true });
+    const rb = await acceptOffer({ sdp: 'X' }, { peerConnection: () => b.pc as never });
+    expect(rb.ok).toBe(false);
+    if (!rb.ok) expect(rb.reason, 'createAnswer 抛错没被归到 answer-failed').toBe('answer-failed');
+  });
+});
+
+describe('★ 修复轮 B2 · 等 ICE 收集的**上界**（唯一失败形态，且不挂）', () => {
+  /** 一个假时钟（照本仓既有做法：计时一律注入） */
+  function ticker() {
+    let next = 1;
+    const jobs = new Map<number, () => void>();
+    const scheduled: number[] = [];
+    const cancelled: number[] = [];
+    return {
+      t: {
+        schedule: (fn: () => void, ms: number) => { const id = next++; jobs.set(id, fn); scheduled.push(ms); return id; },
+        cancel: (id: number) => { cancelled.push(id); jobs.delete(id); },
+      },
+      fire: () => { for (const [id, fn] of [...jobs.entries()]) { jobs.delete(id); fn(); } },
+      scheduled: () => scheduled,
+      cancelled: () => cancelled,
+    };
+  }
+
+  it('★ 上界用注入的时钟；到点 ⇒ `ice-timeout`（**可读、非空、且真的返回了**）', async () => {
+    const clk = ticker();
+    // 假件的 ICE **永不完成**（它不会自己触发 `icegatheringstatechange`）
+    const { pc } = makeFakePc({ iceGatheringState: 'gathering' });
+    const p = waitForIceGathering(pc as never, { ticker: clk.t, iceGatherTimeoutMs: 1_234 });
+    // 反空转：上界那个数**真的是注入值**
+    expect(clk.scheduled(), '排的计时不是注入的上界').toEqual([1_234]);
+    // 还没到点：那条 Promise **不许**已经 settle（用 Promise.race 观测）
+    const early = await Promise.race([p.then(() => 'settled'), Promise.resolve('pending')]);
+    expect(early, '还没到点就 settle 了（那"上界"就没意义）').toBe('pending');
+    // 到点
+    clk.fire();
+    const r = await p;
+    expect(r.ok, '上界到点之后竟然成功了').toBe(false);
+    if (!r.ok) {
+      expect(r.reason, '唯一失败形态不是 ice-timeout').toBe('ice-timeout');
+      expect(r.message.length, '超时的原因是空的（玩家看不到任何东西）').toBeGreaterThan(10);
+      expect(r.message, '超时那句里没有那个秒数').toContain('秒');
+    }
+    // 到点之后计时器被取消（不许留一个悬着的句柄）
+    expect(clk.cancelled().length, '到点之后没有取消计时器').toBe(1);
+  });
+
+  it('★ 已经 `complete` ⇒ **同步**成功，且**不排计时器**（别为一个已完成的等待排时钟）', () => {
+    const clk = ticker();
+    const { pc } = makeFakePc({ iceGatheringState: 'complete', localSdp: 'v=0\r\na=candidate:7 1 udp 1 10.0.0.7 7000 typ host\r\n' });
+    return waitForIceGathering(pc as never, { ticker: clk.t }).then((r) => {
+      expect(r.ok, '已经 complete 却失败了').toBe(true);
+      expect(clk.scheduled(), '已经 complete 还排了计时器').toEqual([]);
+      if (r.ok) {
+        expect(r.sdp, '取到的不是 localDescription').toContain('candidate:7');
+        expect(r.ice, '候选没抠出来').toEqual(['candidate:7 1 udp 1 10.0.0.7 7000 typ host']);
+      }
+    });
+  });
+
+  it('★ 没有计时能力 ⇒ 响亮地拒绝（**绝不静默挂起**）', async () => {
+    const { pc } = makeFakePc({ iceGatheringState: 'gathering' });
+    const r = await waitForIceGathering(pc as never, {});
+    expect(r.ok, '没有计时能力竟然成功了').toBe(false);
+    if (!r.ok) {
+      expect(r.reason, '原因不是 unsupported').toBe('unsupported');
+      expect(r.message, '没有可读原因').toContain('计时');
+    }
+  });
+
+  it('★ `localDescription` 为空 ⇒ `no-description`（不是"成功但空串"）', async () => {
+    const { pc } = makeFakePc({ iceGatheringState: 'complete' });
+    // 把 localDescription 抹掉（模拟"setLocalDescription 没成功、实现没暴露它"）
+    Object.defineProperty(pc, 'localDescription', { get: () => null, configurable: true });
+    const r = await waitForIceGathering(pc as never, { ticker: ticker().t });
+    expect(r.ok, '没有描述竟然成功了').toBe(false);
+    if (!r.ok) expect(r.reason, '原因不是 no-description').toBe('no-description');
+  });
+
+  it('★ B3：房主把回示的 answer 喂进**同一条**连接（`applyAnswer`）', async () => {
+    const { pc, fake } = makeFakePc({});
+    const r = await applyAnswer(pc as never, { sdp: 'ANSWER-SDP-9' });
+    expect(r.ok, `applyAnswer 失败：${r.ok ? '' : r.message}`).toBe(true);
+    expect(fake.remoteSeen.length, 'answer 没被喂进去').toBe(1);
+    expect(fake.remoteSeen[0].type, '喂进去的不是 answer').toBe('answer');
+    expect(fake.remoteSeen[0].sdp, '喂进去的不是那条 answer').toBe('ANSWER-SDP-9');
+    // 反证：空 answer 被响亮拒绝
+    const bad = await applyAnswer(pc as never, { sdp: '' });
+    expect(bad.ok, '空 answer 竟然被接受了').toBe(false);
+  });
+});
+
+describe('★ 修复轮 B3/B4 · 回示码：同形状 + 具名构造器 + 编解码往返', () => {
+  it('★ `answerPayloadFields`：两个承诺位就是那个**具名占位串**（类型上给不了真承诺）', () => {
+    const f = answerPayloadFields({ protoVersion: PROTO_VERSION, sdp: 'SDP-Y', ice: ['c1', 'c2'] });
+    expect(f.hostPromise, '房主承诺位不是占位串').toBe(ANSWER_PROMISE_PLACEHOLDER);
+    expect(f.guestPromise, '加入方承诺位不是占位串').toBe(ANSWER_PROMISE_PLACEHOLDER);
+    expect(f.sdp).toBe('SDP-Y');
+    expect(f.ice).toEqual(['c1', 'c2']);
+    expect(f.p).toBe(PROTO_VERSION);
+    // 占位串必须匹配 `PROMISE_TEXT`（否则 `encodeInvite` 会拒）
+    expect(/^[^\s.]+$/.test(ANSWER_PROMISE_PLACEHOLDER), '占位串形状不合法（encodeInvite 会拒）').toBe(true);
+    // 类型上给不了承诺：构造器的入参里没有那两个字段（这里用"多传一个字段"来固化这一点）
+    const extra = answerPayloadFields({ protoVersion: 1, sdp: 'S', ice: [], hostPromise: 'x' } as never);
+    expect(extra.hostPromise, '多传的 hostPromise 竟然生效了（构造器没把承诺位写死）')
+      .toBe(ANSWER_PROMISE_PLACEHOLDER);
+  });
+
+  it('★ 往返：回示码经**真件**编码 ⇒ 解出来的 SDP/ICE 与原件逐字相同，且 `isAnswerPayload` 为真', async () => {
+    // 用**真件**（`createInvite`：真压缩 + 真自洽检查）编码一条**回示码形状**的载荷：
+    // 两个承诺位来自 `answerPayloadFields`（具名占位串），其余是 answer 的 sdp / ice。
+    const fields = answerPayloadFields({ protoVersion: PROTO_VERSION, sdp: OFFER_SDP, ice: ['cand-a'] });
+    const enc = await createInvite({ ...fields, originAndPath: REAL_HREF }, REAL_ENV);
+    expect(enc.ok, `回示码编码失败：${enc.ok ? '' : enc.message}`).toBe(true);
+    if (!enc.ok) return;
+    const dec = await decodeInvitePayload(enc.payload, REAL_ENV);
+    expect(dec.ok, `回示码解码失败（同一套编解码）：${dec.ok ? '' : dec.message}`).toBe(true);
+    if (!dec.ok) return;
+    expect(dec.payload.sdp, '往返之后 SDP 变了').toBe(OFFER_SDP);
+    expect(dec.payload.ice, '往返之后 ICE 变了').toEqual(['cand-a']);
+    expect(isAnswerPayload(dec.payload), '解出来的载荷没被认成回示码').toBe(true);
+    expect(dec.proto.ok, '回示码的明文版本比对没过').toBe(true);
+    // 反向：一条**真邀请码**不该被判成回示码
+    const inv = await realInvite();
+    const invDec = await decodeInvitePayload(inv.payload, REAL_ENV);
+    expect(invDec.ok).toBe(true);
+    if (invDec.ok) expect(isAnswerPayload(invDec.payload), '真邀请码被误判成了回示码').toBe(false);
   });
 });
