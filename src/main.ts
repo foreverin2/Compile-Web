@@ -91,6 +91,7 @@ import {
   createInvite,
   decodeBase64Url,
   decompressBytes,
+  peerConnectionOf,
   candidatesOf,
   inviteLengthReport,
   readIceServers,
@@ -391,6 +392,10 @@ function renderLobbyFrame(): void {
     settingsValue: (key) => netSettings[key],
     setSetting: (key, value) => { netSettings[key] = value; renderLobbyFrame(); },
     errorText: (key: LobbyErrorKey) => errorCopy(key),
+    // ★ C3：回示码的两个入口（产出代码里已经有 makeLobbyAnswerCode / applyLobbyAnswerCode，
+    //   C 轮之前它们**零调用者** ⇒ 玩家在界面上看不到这条路）
+    makeAnswerCode: () => { void makeLobbyAnswerCode(); },
+    applyAnswerCode: (code: string) => { void applyLobbyAnswerCode(code); },
   });
 }
 
@@ -469,7 +474,15 @@ function startLobby(role: 'host' | 'guest'): void {
       //   序列在 `acceptOffer`（B1）；承诺位由 `answerPayloadFields` 填**具名占位串**（B4）。
       //   ⚠️ 真对端连接的协商结果（ICE 能不能打通）**真浏览器未验证，由 T9 覆盖**。
       buildAnswer: async (offer: { sdp: string; ice: readonly string[] }): Promise<AnswerCodeResult> => {
-        const r = await acceptOffer({ sdp: offer.sdp }, lobbyEnvWithIce());
+        // ★ C1（结构缺口 ①）：answer 必须落在**承载 hello/act 的那条连接**上。
+        //   原来这里把 lobbyEnvWithIce() 交给 acceptOffer ⇒ 它自己造了**第二条**连接
+        //   ⇒ offer/answer 在 B 上完成、消息通道在 A 上 ⇒ 两端从来没为"传消息"连上。
+        const tr = lobbyClient?.transport() ?? null;
+        const pc = tr === null ? null : peerConnectionOf(tr);
+        if (pc === null) {
+          return { ok: false, message: '本机还没有建起用来传消息的那条对端连接（先让链路起来再产回示码）。' };
+        }
+        const r = await acceptOffer(pc, { sdp: offer.sdp }, lobbyEnvWithIce());
         if (!r.ok) return { ok: false, message: r.message };
         const fields = answerPayloadFields({ protoVersion: PROTO_VERSION, sdp: r.sdp, ice: r.ice });
         const enc = await createInvite({ ...fields, originAndPath: currentOriginAndPath() }, lobbyEnv());

@@ -622,6 +622,28 @@ export interface LobbySessionLink {
   sendHello(): boolean;
   /** 本端是否已经发过 `hello`（`sendHello()` 的记账口） */
   helloSent(): boolean;
+  /**
+   * ★★ **按当前相位发"这一格该本端发的那条"**（C 轮；结构缺口 ②）。
+   *
+   * 相位→动作的对照**照抄** session.ts:282-283 那两张表（本函数是那张表的**唯一**消费者）：
+   *
+   * | 相位 | 谁 | 发什么 |
+   * |---|---|---|
+   * | `'awaiting-commit-face'` | 房主 | `sendCommit(seed, salt)`（**相位不变** ⇒ 靠"发过就返回 false"防重） |
+   * | `'awaiting-commit-ack'` | 加入方 | `sendCommitAck()` |
+   * | `'seed-committed'` | 加入方 | `commitFace(face, nonce)` |
+   * | `'face-committed'` | 房主 | `sendRevealSeed()` |
+   * | `'seed-revealed'` | 加入方 | `sendRevealFace()` |
+   * | `'complete'` | 房主 | `sendRevealSalt()`（这一步**不改相位** ⇒ 同样靠"发过就返回 false"防重） |
+   *
+   * ## 为什么它不存任何"到哪一步了"
+   *
+   * 唯一的输入是 `session.phase()`；唯一的输出是"发了 / 没发"。**没有计数器、没有清单**。
+   * 两格"发了相位也不动"（`sendCommit` 与 `sendRevealSalt`）之所以不会无限重发，
+   * 是因为本对象自己有两个**一次性**记账位（`commitSent` / `saltSent`）——
+   * 它们是"**本对象**已经发过这一条"的事实，不是"流程到哪一步"的状态（后者归相位机）。
+   */
+  driveOnce(): boolean;
 }
 
 /**
@@ -673,7 +695,19 @@ export function createLobbySessionLink(opts: {
 
   let inCount = 0;
   let outCount = 0;
+  /** 最近一次"驱动被会话层拒掉"的可读原因（`null` = 没被拒过） */
+  let driveRefusal: string | null = null;
   let helloDone = false;
+  /**
+   * 承诺流程里两条"**发了相位也不动**"的消息各自的记账位（见 `driveOnce` 的说明）。
+   *
+   * ⚠️ 它们**不是**"流程到哪一步了"（那归相位机）—— 它们是"**本对象**已经发过这一条"的事实。
+   * 没有它们，`sendCommit` 与 `sendRevealSalt` 会被`driveOnce`无限重发（那两条不改相位）。
+   */
+  let commitSent = false;
+  let saltSent = false;
+  /** 加入方选的面（`seed-committed` 那一格要用；没有就默认 0） */
+  let chosenFace: 0 | 1 = 0;
   /** 订阅链路状态变化的宿主回调（本路由转发 `NetTransport.onStatus`） */
   const statusListeners = new Set<(to: TransportStatus) => void>();
 
@@ -747,6 +781,80 @@ export function createLobbySessionLink(opts: {
     return true;
   }
 
+  /**
+   * ★★ **按相位发"这一格该本端发的那条"**（C 轮；结构缺口 ② 的落点）。
+   *
+   * 相位→动作的对照**照抄** `session.ts:282-283` 的两张表。这里是那张表的**唯一**消费者。
+   *
+   * ## 三条纪律
+   *
+   *  1. **不存"到哪一步了"**：唯一的输入是 `session.phase()`。没有计数器、没有已发清单。
+   *  2. **两条"发了相位也不动"的消息**（`sendCommit` / `sendRevealSalt`）靠一次性记账位防重 ——
+   *     那两个位是"本对象发过这一条"的事实，不是流程状态。
+   *  3. **失败不抛、不吞**：会话层拒了（例如重复的 `reveal-salt`）就把那句可读原因记下来，
+   *     返回 `false`。**绝不静默**（静默会让"流程停住"看起来像"没事发生"，那是本仓最恨的形态）。
+   *
+   * 返回 `true` = 这一次真的发出了 `output`。
+   */
+  function driveOnce(): boolean {
+    const phase = session.phase();
+    switch (phase) {
+      case 'awaiting-commit-face': {
+        if (session.role !== 'host') return false;
+        if (commitSent) return false; // 这一格发了相位也不动 ⇒ 只发一次
+        const r = session.sendCommit(`seed-${opts.sessionId}`, `salt-${opts.sessionId}`);
+        if (!r.ok) { driveRefusal = r.message; return false; }
+        send(r.output.msg);
+        commitSent = true;
+        return true;
+      }
+      case 'seed-committed': {
+        // 加入方**收到房主的 commit** 之后就落在这一格 ⇒ 该发的是 `commit-ack`
+        // （发完相位才变 `awaiting-commit-ack`）。
+        if (session.role !== 'guest') return false;
+        const r = session.sendCommitAck();
+        if (!r.ok) { driveRefusal = r.message; return false; }
+        send(r.output.msg);
+        return true;
+      }
+      case 'awaiting-commit-ack': {
+        // `commitFace()` 的**唯一**合法相位（`session.ts:292`）⇒ 该发的是本方那条承诺。
+        if (session.role !== 'guest') return false;
+        const r = session.commitFace(chosenFace, `nonce-${opts.sessionId}`);
+        if (!r.ok) { driveRefusal = r.message; return false; }
+        send(r.output.msg);
+        return true;
+      }
+      case 'face-committed': {
+        if (session.role !== 'host') return false;
+        const r = session.sendRevealSeed();
+        if (!r.ok) { driveRefusal = r.message; return false; }
+        send(r.output.msg);
+        return true;
+      }
+      case 'seed-revealed': {
+        if (session.role !== 'guest') return false;
+        const r = session.sendRevealFace();
+        if (!r.ok) { driveRefusal = r.message; return false; }
+        send(r.output.msg);
+        return true;
+      }
+      case 'complete': {
+        if (session.role !== 'host') return false;
+        if (saltSent) return false; // 这一步也不改相位 ⇒ 只发一次
+        const r = session.sendRevealSalt();
+        if (!r.ok) { driveRefusal = r.message; return false; }
+        send(r.output.msg);
+        saltSent = true;
+        return true;
+      }
+      // 其余相位（handshaking / resuming / resync-pending / awaiting-commit / reveal-salt-sent /
+      // rejected / face-committed 之外的）**本端没有要发的东西** —— 等对端。
+      default:
+        return false;
+    }
+  }
+
   const detachMessages = opts.transport.onMessage((text) => { receive(text); });
   // 会话层**不自己**订阅传输状态（`session.ts:768-776`：订阅是有生命周期的副作用，纯状态机
   // 不持有它）⇒ 调用方转一手，这正是"读数同源"那一半的落点。
@@ -760,6 +868,7 @@ export function createLobbySessionLink(opts: {
     receive,
     sendHello,
     helloSent: () => helloDone,
+    driveOnce,
     routedIn: () => inCount,
     routedOut: () => outCount,
     transportStatus: () => opts.transport.status(),
@@ -868,8 +977,39 @@ export interface LobbyClient {
    * 返回 `false` = 没解出 / 没注入 `applyAnswer`。
    */
   submitAnswerCode(code: string): Promise<boolean>;
+  /**
+   * 加入方的**承诺校验结论**（`true` / `false`；`null` = 盐还没到，或本端是房主）。
+   *
+   * 为什么要暴露它：**N-9 的代价** —— 加入方验盐失败时 `phase === 'complete'` 而且
+   * `acceptsInput === true`（`session.ts:434-436` 明写）⇒ 判"这一局好不好"**不许**只看
+   * 相位或 `acceptsInput`，必须读这个结论。房主侧返回 `null`（它没有这个口）。
+   */
+  commitmentVerified(): boolean | null;
   /** 本端是否能产回示码（屏上据此决定那个按钮出不出现） */
   canMakeAnswer(): boolean;
+  /**
+   * ★★ **按相位驱动承诺-揭示流程**（C 轮；结构缺口 ②）。
+   *
+   * ## 它解决的是什么
+   *
+   * `sendCommit` / `sendCommitAck` / `commitFace` / `sendRevealSeed` / `sendRevealSalt` /
+   * `sendRevealFace` 在 `src/**` 里**一个调用者都没有**（T9 任务书作者核对代码时挖出的
+   * 结构缺口 ②）⇒ 真浏览器里握手完成后房主停在 `'awaiting-commit-face'`、
+   * 加入方停在 `'awaiting-commit'`，**承诺-揭示流程根本不会被驱动**。
+   *
+   * ## ★ 硬约束：**相位机仍是唯一的排序载体**
+   *
+   * 本驱动者**不许**自己另存一份"我们到哪一步了"（那是第二个真相源，与 D16 那条教训同族）。
+   * 它只做一件事：**读一眼相位 → 发那一格该发的那条**。所以：
+   *  - 没有计数器、没有"已发清单"、没有本地状态；
+   *  - 重复调用的安全性由**会话层自己**保证（它按相位拒重复：`seed-duplicate` /
+   *    `seed-not-expected` / `'当前相位是 …'`）⇒ 这里多驱动一次不会造成重复投递，
+   *    最多被会话层拒掉（而拒掉这件事是可读的）。
+   *
+   * 返回"这一次驱动真的发出了几条"（0 = 这一格不需要本端发东西）——它是**读数**，
+   * 不是状态：下一次调用照样只读相位。
+   */
+  drive(): number;
   /**
    * 当前那条链路的传输（`null` = 还没 `connect`）。
    *
@@ -1068,6 +1208,29 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
    *  4. `'resume'` 模式在**喂任何入站消息之前**先 `markResuming()`（`session.ts:925-935`）；
    *  5. 加入方**立刻发第一条 `hello`**（`session.ts:2438-2440` 说的"调用方自己拼"那一步）。
    */
+  /**
+   * 当前那条链路（`connect()` 每次都换新对象 ⇒ 用槽位，不在别处留引用副本）。
+   * `onInbound` 要驱动流程，而它在 `connect` 之前就被注入 ⇒ 用这个槽位而不是闭包参数。
+   */
+  let currentLink: LobbySessionLink | null = null;
+
+  /**
+   * ★ **按相位驱动到"本端暂时没东西可发"为止**（C 轮；结构缺口 ②）。
+   *
+   * 上界 16 是**防御**：正常流程两端合计最多 6 条（commit / commit-ack / commit-face /
+   * reveal-seed / reveal-face / reveal-salt），16 足够，同时保证**绝不至于死循环**。
+   */
+  function driveToFixedPoint(): number {
+    const link = currentLink;
+    if (link === null) return 0;
+    let sent = 0;
+    for (let i = 0; i < 16; i += 1) {
+      if (!link.driveOnce()) break;
+      sent += 1;
+    }
+    return sent;
+  }
+
   const connect = async (mode: LobbyLinkMode): Promise<void> => {
     const old = s.link;
     if (old !== null) old.detach();
@@ -1102,6 +1265,10 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
        */
       onInbound: () => {
         syncNow();
+        // ★ C 轮：收到一帧之后**先按相位驱动一次**（对端的消息可能正好解锁了本端的下一步），
+        //   再通知宿主重画。顺序写死：先驱动、后重画，屏上画的才是驱动之后的状态。
+        driveToFixedPoint();
+        syncNow();
         opts.onInbound?.();
       },
     });
@@ -1110,6 +1277,7 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
     if (mode === 'resume' && link.session.role === 'guest') link.session.markResuming();
     link.session.noteTransportStatus(link.transportStatus());
     s.link = link;
+    currentLink = link;
     s.transport = link.transportStatus();
     s.peer = link.session.peerStatus();
     // `init()` 只报**本侧**链路（D18）⇒ 失败时把它的真因显示出来，但**不**据此说"对端不在"
@@ -1212,6 +1380,7 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
 
     attach: (link: LobbySessionLink): void => {
       s.link = link;
+      currentLink = link;
       s.transport = link.transportStatus();
       s.peer = link.session.peerStatus();
       reattachStatus();
@@ -1226,7 +1395,30 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
 
     helloSent: (): boolean => s.link?.helloSent() ?? false,
 
+    commitmentVerified: (): boolean | null => {
+      const link = s.link;
+      if (link === null || link.session.role !== 'guest') return null;
+      return link.session.commitmentVerified();
+    },
+
     canMakeAnswer: (): boolean => opts.buildAnswer !== undefined && s.joined?.ok === true,
+
+    /**
+     * ★★ **按相位把承诺-揭示流程驱动到"本端暂时没东西可发"为止**（C 轮；结构缺口 ②）。
+     *
+     * 为什么是循环而不是发一条：`driveOnce()` 一次只发一条（那是"读数→一条动作"的干净形态），
+     * 而流程里有几格的**下一步是"发另一条"**（例如加入方收到 `commit` 之后要先回 `commit-ack`、
+     * 再发自己的 `commit-face` —— 两步之间不需要等对端）。
+     * 其余各格会**自然停住**（"等对端"的相位 `driveOnce()` 返回 `false`）⇒ 循环必然终止。
+     *
+     * ⚠️ 它**不存任何状态**：循环条件是"这一格还能发出东西吗"，不是"我们走到第几步了"。
+     */
+    drive: (): number => {
+      const sent = driveToFixedPoint();
+      // 驱动完把读数重读一遍（相位可能已经变了，屏上那句要跟上）
+      syncNow();
+      return sent;
+    },
 
     transport: (): NetTransport | null => s.link?.transport ?? null,
 
@@ -1323,6 +1515,10 @@ export interface LobbyRenderNav {
   setSetting(key: SettingKey, value: string): void;
   /** 错误文案的取值口（本文件的 `errorCopy`）；渲染层不自己写文案 */
   errorText(key: LobbyErrorKey): string;
+  /** ★ C3：加入方点「出示回示码」⇒ 产一条回示码（产完屏上会显示它） */
+  makeAnswerCode(): void;
+  /** ★ C3：房主点「用这条回示码接上」⇒ 把粘进来的回示码应用掉 */
+  applyAnswerCode(code: string): void;
 }
 
 function el(tag: string, cls: string, text?: string): HTMLElement {
@@ -1430,7 +1626,31 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
       pasteBox.appendChild(line('net-lobby-error', s.joined.message));
     }
     box.appendChild(pasteBox);
+
+    // ── ★ C3：加入方的「出示回示码」 ────────────────────────────────────────────
+    // 为什么需要这一块：B3 的"回示码"在产出代码里已经能产，但**界面上没有入口**
+    // ⇒ 玩家看不到它，那条路等于不存在（T9 任务书作者挖出的结构缺口 ③）。
+    const ansBox = el('div', 'net-lobby-answer');
+    ansBox.appendChild(el('h2', 'net-lobby-h2', '把回示码发回给房主'));
+    if (s.answerCode === null) {
+      ansBox.appendChild(button('btn net-lobby-make-answer', '出示回示码', nav.makeAnswerCode));
+    } else {
+      // 载荷本体（与邀请码同形状）；房主把它粘回来
+      ansBox.appendChild(line('net-lobby-answer-code', s.answerCode));
+    }
+    box.appendChild(ansBox);
     screen.appendChild(box);
+  }
+
+  // ── ★ C3：房主那一栏的「粘贴对方的回示码」 ────────────────────────────────
+  if (s.role === 'host') {
+    const back = el('div', 'net-lobby-answer-back');
+    back.appendChild(el('h2', 'net-lobby-h2', '对方回示之后：粘贴回示码'));
+    back.appendChild(textInput('net-lobby-answer-input', '', (v) => { nav.applyAnswerCode(v); }));
+    if (s.answerApplied !== null) {
+      back.appendChild(line(s.answerApplied.ok ? 'net-lobby-notice' : 'net-lobby-error', s.answerApplied.message));
+    }
+    screen.appendChild(back);
   }
 
   /* ── 4. 连接状态（读数同源） ───────────────────────────────────── */

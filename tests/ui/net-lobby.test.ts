@@ -20,7 +20,8 @@
  *  9/10：不自己编区间、不自己造字符表 · 12：只碰自己的 root · 14：入站消息喂进 `accept`
  */
 import { afterEach, describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   descendants, installStubDom, makeStubEl, queryAllIn, type StubNode,
@@ -34,8 +35,9 @@ import {
 } from '../../src/ui/net-lobby';
 import { PRIVACY_COPY, privacyLines } from '../../src/app/privacy';
 import {
-  acceptOffer, applyAnswer, createInvite, decodeBase64Url, decodeInviteFromAddressBar, decodeInvitePayload,
-  decompressBytes, inviteLengthReport, readIceServers, roomCodeEntry, stripInviteFromAddressBar, waitForIceGathering,
+  acceptOffer, applyAnswer, createBrowserTransport, createInvite, decodeBase64Url, decodeInviteFromAddressBar, decodeInvitePayload,
+  decompressBytes, inviteLengthReport, peerConnectionOf, readIceServers, roomCodeEntry,
+  stripInviteFromAddressBar, waitForIceGathering,
   type NetBrowserEnv, type WebSocketLike,
 } from '../../src/ui/net-browser';
 
@@ -250,6 +252,8 @@ function mountLobby(initial?: Partial<LobbyState>): Harness {
       settingsValue: (_k: SettingKey) => '',
       setSetting: (_k: SettingKey, _v: string) => { calls.push('set-setting'); },
       errorText: (k: LobbyErrorKey) => errorCopy(k),
+      makeAnswerCode: () => { calls.push('make-answer'); },
+      applyAnswerCode: (code: string) => { calls.push(`apply-answer:${code}`); },
     };
   }
   return h;
@@ -910,6 +914,7 @@ function mountLobbyNavFor(_root: StubNode): LobbyRenderNav {
     inviteLength: () => '', qrNote: () => '', setRoomCode: () => {}, submitRoomCode: () => {},
     joinWithInvite: () => {}, toggleAdvanced: () => {},
     settingsValue: () => '', setSetting: () => {}, errorText: (k) => errorCopy(k),
+    makeAnswerCode: () => {}, applyAnswerCode: () => {},
   };
 }
 
@@ -1186,7 +1191,10 @@ describe('★ 修复轮 A2/A3/A4/A5 · 建链路 / 发 hello / 入站重画 / �
     for (let i = 0; i < 8; i += 1) pair.pump(2);
     expect(host.state().peer?.handshakeDone, '房主没握手完成').toBe(true);
     expect(guest.state().peer?.handshakeDone, '加入方没握手完成').toBe(true);
-    expect(guest.state().peer?.phase, '加入方没走到 awaiting-commit').toBe('awaiting-commit');
+    // ⚠️ C 轮之后这条腿**不再**断言"停在 awaiting-commit"：驱动者（C2）把承诺-揭示流程接上之后，
+    //    加入方会合法地继续往前走（一路到 complete）。"停在 awaiting-commit"是**没有驱动者**时的
+    //    症状，不是目标。这里改成钉"它已经离开了握手那一格"；"一路走完"由 C2 那条专门的腿证明。
+    expect(guest.state().peer?.phase, '加入方没有离开握手阶段（驱动者没接上）').not.toBe('handshaking');
     expect(host.state().routedIn, '房主没收到入站').toBeGreaterThan(0);
     expect(guest.state().routedIn, '加入方没收到入站').toBeGreaterThan(0);
   });
@@ -1403,7 +1411,7 @@ describe('★ 修复轮 · 判据 3 的连线（"输入读数 → 该格文案"�
 describe('★ 修复轮 B1 · 收方那条序列（顺序错就要红）', () => {
   it('★ `acceptOffer`：`setRemoteDescription(offer)` → `createAnswer` → `setLocalDescription(answer)` → 等 ICE', async () => {
     const { pc, fake } = makeFakePc({ iceGatheringState: 'complete' });
-    const r = await acceptOffer({ sdp: 'OFFER-SDP-X' }, { peerConnection: () => pc as never });
+    const r = await acceptOffer(pc as never, { sdp: 'OFFER-SDP-X' });
     expect(r.ok, `acceptOffer 失败：${r.ok ? '' : r.message}`).toBe(true);
     // ★ **顺序**（这是这条腿的核心）：逐格比对调用序列
     const seq = fake.calls.map((c) => `${c.op}(${c.detail ?? ''})`);
@@ -1428,7 +1436,7 @@ describe('★ 修复轮 B1 · 收方那条序列（顺序错就要红）', () =>
     // 不是"这几个方法被调过就算"。
     const wrong = ['createAnswer()', 'setRemoteDescription(offer)', 'setLocalDescription(answer)'];
     const { pc, fake } = makeFakePc({ iceGatheringState: 'complete' });
-    await acceptOffer({ sdp: 'OFFER-SDP-X' }, { peerConnection: () => pc as never });
+    await acceptOffer(pc as never, { sdp: 'OFFER-SDP-X' });
     const right = fake.calls.map((c) => `${c.op}(${c.detail ?? ''})`);
     expect(right, '正控构造失败：真实序列竟然等于那条错序').not.toEqual(wrong);
     // 逐位重合度：错序在第 1 位就与真实序列不同
@@ -1438,7 +1446,7 @@ describe('★ 修复轮 B1 · 收方那条序列（顺序错就要红）', () =>
   it('★ 缺能力时**响亮地拒绝**（不挂、不假装成功）', async () => {
     // ① 没有 `createAnswer`
     const a = makeFakePc({ noCreateAnswer: true });
-    const ra = await acceptOffer({ sdp: 'X' }, { peerConnection: () => a.pc as never });
+    const ra = await acceptOffer(a.pc as never, { sdp: 'X' });
     expect(ra.ok, '没有 createAnswer 竟然成功了').toBe(false);
     if (!ra.ok) {
       expect(ra.reason, '原因不是 unsupported').toBe('unsupported');
@@ -1446,28 +1454,28 @@ describe('★ 修复轮 B1 · 收方那条序列（顺序错就要红）', () =>
     }
     // ② 没有 `setRemoteDescription`
     const b = makeFakePc({ noSetRemote: true });
-    const rb = await acceptOffer({ sdp: 'X' }, { peerConnection: () => b.pc as never });
+    const rb = await acceptOffer(b.pc as never, { sdp: 'X' });
     expect(rb.ok, '没有 setRemoteDescription 竟然成功了').toBe(false);
     if (!rb.ok) expect(rb.message, '没有可读原因').toContain('setRemoteDescription');
     // ③ 空 offer
     const c = makeFakePc({});
-    const rc = await acceptOffer({ sdp: '' }, { peerConnection: () => c.pc as never });
+    const rc = await acceptOffer(c.pc as never, { sdp: '' });
     expect(rc.ok, '空 SDP 竟然成功了').toBe(false);
-    // ④ 设备没有对端连接能力
-    const rd = await acceptOffer({ sdp: 'X' }, { peerConnection: () => null });
-    expect(rd.ok, '没有连接能力竟然成功了').toBe(false);
+    // ④ ★ C 轮：`"设备没有对端连接能力"` 这条路**已经不在 `acceptOffer` 里**了 ——
+    //    `pc` 现在是**必填参数**（结构缺口 ① 的修法：调用方必须交出"正在传消息的那条连接"）。
+    //    ⇒ 那条路改由**调用方**负责，腿也搬过去（见下面 C1 那一组的 `pc === null` 分支）。
   });
 
   it('真实异常被收成可读结果（`setRemoteDescription` 抛错 / `createAnswer` 抛错）', async () => {
     const a = makeFakePc({ failSetRemote: true });
-    const ra = await acceptOffer({ sdp: 'X' }, { peerConnection: () => a.pc as never });
+    const ra = await acceptOffer(a.pc as never, { sdp: 'X' });
     expect(ra.ok).toBe(false);
     if (!ra.ok) {
       expect(ra.reason, 'setRemoteDescription 抛错没被归到 set-remote-failed').toBe('set-remote-failed');
       expect(ra.message, '没有把原因带出来').toContain('假件');
     }
     const b = makeFakePc({ failAnswer: true });
-    const rb = await acceptOffer({ sdp: 'X' }, { peerConnection: () => b.pc as never });
+    const rb = await acceptOffer(b.pc as never, { sdp: 'X' });
     expect(rb.ok).toBe(false);
     if (!rb.ok) expect(rb.reason, 'createAnswer 抛错没被归到 answer-failed').toBe('answer-failed');
   });
@@ -1596,3 +1604,290 @@ describe('★ 修复轮 B3/B4 · 回示码：同形状 + 具名构造器 + 编�
     if (invDec.ok) expect(isAnswerPayload(invDec.payload), '真邀请码被误判成了回示码').toBe(false);
   });
 });
+
+/* ==================================================================== *
+ * 11. ★★ C 轮：结构缺口 ①（同一条连接）与 ②（承诺-揭示流程的驱动者）
+ *
+ * ①② 是 T9 任务书作者核对代码时挖出来的**结构缺口**：它们解释了"为什么两个浏览器今天连不上"。
+ * C1：收方的 answer 落在**第二条**连接上（offer/answer 在 B 上完成、消息通道在 A 上）。
+ * C2：六个 `send*` / `commitFace` 在 `src/**` 里**零调用者** ⇒ 握手完成后流程根本不会被驱动。
+ *
+ * ⚠️ 这一节证明的是"**结构接对了 + 序列走得通**"，**不是**"真浏览器里连得上"
+ * （真 SDP 协商 / 真 ICE 可达性由 **T9 的 CDP 场景**覆盖）。
+ * ==================================================================== */
+
+describe('★★ C1 · answer 必须落在**承载消息的那条连接**上（结构缺口 ①）', () => {
+  /** 造一个**浏览器传输**（用假 peer connection 当它的内核），并给出一条待喂的 offer */
+  async function browserTransportWithPc() {
+    const { pc: fakePc, fake: script } = makeFakePc({ iceGatheringState: 'complete' });
+    // 每一次 `peerConnection(...)` 调用都把假件交出去；`peerConnectionOf` 要能取回**同一个对象**
+    const tr = createBrowserTransport({
+      peerConnection: () => fakePc as never,
+      settings: () => null,
+    });
+    const started = await tr.init({ selfId: 'g', peerId: 'h' });
+    expect(started.ok, '夹具失败：浏览器传输没起来').toBe(true);
+    return { tr, script, fakePc };
+  }
+
+  it('★ `peerConnectionOf(transport)` 交回的**就是**传输内部那条连接', async () => {
+    const { tr, fakePc } = await browserTransportWithPc();
+    const pc = peerConnectionOf(tr);
+    expect(pc, '`peerConnectionOf` 没交出连接（收方就没法把 answer 落在同一条上）').not.toBeNull();
+    // ★ **身份**（不是"形状相同"）：同一个对象
+    expect(pc, '`peerConnectionOf` 交的是**另一条**连接 ⇒ 这正是结构缺口 ①')
+      .toBe(fakePc as never);
+    // 反证（防恒真）：一条**别的**传输交回的不是它
+    const other = await browserTransportWithPc();
+    expect(peerConnectionOf(other.tr), '两条不同传输交回了同一条连接').not.toBe(fakePc as never);
+  });
+
+  it('★ 假传输（非本文件造的）交回 `null`（响亮，不是给一条新的）', () => {
+    const pair = createFakeTransportPair();
+    expect(peerConnectionOf(pair.A.transport), '假传输竟然被交出了一条对端连接').toBeNull();
+  });
+
+  it('★ 行为腿：把 `peerConnectionOf` 的结果喂进 `acceptOffer` ⇒ 序列落在**同一条**连接上', async () => {
+    const { tr, script } = await browserTransportWithPc();
+    const pc = peerConnectionOf(tr);
+    expect(pc).not.toBeNull();
+    const r = await acceptOffer(pc as never, { sdp: 'HOST-OFFER' });
+    expect(r.ok, `acceptOffer 失败：${r.ok ? '' : r.message}`).toBe(true);
+    // ★ 那条 offer/answer 的序列**记在传输内部那条连接的账上**（`script.calls`）
+    const ops = script.calls.map((c) => c.op);
+    expect(ops, 'offer/answer 的序列没有落在承载消息的那条连接上（缺口 ① 仍在）')
+      .toEqual(expect.arrayContaining(['setRemoteDescription', 'createAnswer', 'setLocalDescription']));
+    expect(script.remoteSeen[0]?.sdp, '喂进去的不是那条 offer').toBe('HOST-OFFER');
+    // 反空转：传输自己也确实用过这条连接（`init` 里 createOffer/createDataChannel 的账在同一份 calls 上）
+    expect(ops, '传输内部那条连接上没有任何 init 的痕迹 ⇒ 上面那些不是同一条').toEqual(
+      expect.arrayContaining(['createOffer', 'createDataChannel']),
+    );
+  });
+});
+
+describe('★★ C2 · 承诺-揭示流程的驱动者（结构缺口 ②）', () => {
+  /**
+   * 一条**把待投帧攒起来**的外壳：`connect()` 里那一刻发的帧不能丢
+   * （订阅是"连上那一刻"才挂的，早发的帧会掉进空窗 —— 实测过一次）。
+   */
+  async function wireSide(role: 'host' | 'guest', tr: NetTransport) {
+    const pending: string[] = [];
+    const { detach } = { detach: tr.onMessage((text) => { pending.push(text); }) };
+    const t = fakeTicker();
+    const client = createLobbyClient({
+      role,
+      sessionId: 'sid-c2',
+      localProtoVersion: PROTO_VERSION,
+      localCardDataHash: CARD_DATA_HASH,
+      hash: browserHash(),
+      ticker: t.ticker,
+      createTransport: () => tr,
+      signalingEndpoint: '',
+      readSettings: () => ({ turnUrl: '', turnUsername: '', turnCredential: '' }),
+      buildInvite: async () => ({ ok: true as const, payload: 'P', link: `${REAL_HREF}#invite=P` }),
+      decompressBase64: hostDecompress,
+      readAddressBar: () => null,
+      localNick: () => 'nick',
+      onInbound: () => { client.drive(); },
+    });
+    return {
+      client,
+      detach,
+      /** 消费待投帧（消费掉就从 pending 里移除；返回消费了几条） */
+      async consume(n: number): Promise<number> {
+        const take = pending.splice(0, n);
+        for (const text of take) client.drive();
+        return take.length;
+      },
+    };
+  }
+
+  it('★ 从握手一路走到两端 `complete`，且加入方 `commitmentVerified() === true`', async () => {
+    const pair = createFakeTransportPair();
+    const host = await wireSide('host', pair.A.transport);
+    const guest = await wireSide('guest', pair.B.transport);
+    await host.client.connect('first');
+    await guest.client.connect('first');
+
+    // 交替投递：每一轮把在线上的帧全部送到对端、再让两端按相位驱动到不动
+    const trace: string[] = [];
+    for (let round = 0; round < 20; round += 1) {
+      pair.pump(2);
+      await host.consume(8);
+      await guest.consume(8);
+      host.client.drive();
+      guest.client.drive();
+      trace.push(`r${round}: h=${String(host.client.state().peer?.phase)} g=${String(guest.client.state().peer?.phase)}`);
+      if (host.client.state().peer?.phase === 'complete' && guest.client.state().peer?.phase === 'complete') break;
+    }
+
+    const hp = host.client.state().peer;
+    const gp = guest.client.state().peer;
+    // eslint-disable-next-line no-console
+    console.log(`\nC2 实测：host phase=${String(hp?.phase)} / guest phase=${String(gp?.phase)}`
+      + ` / 线上帧=${pair.steps().length}\n相位轨迹：\n  ` + trace.join('\n  '));
+    // ★ 相位是唯一的排序载体 ⇒ 断言就该打在相位上
+    expect(hp?.phase, '房主没有走到 complete（承诺-揭示流程没被驱动完）').toBe('complete');
+    expect(gp?.phase, '加入方没有走到 complete').toBe('complete');
+    // ★ 加入方的验盐结论（N-9 的代价：不许只看 phase / acceptsInput）
+    expect(guest.client.commitmentVerified(), '加入方的承诺校验结论不是 true').toBe(true);
+    // 反空转：线上真的运过那六条消息里的每一条
+    const kinds = pair.steps().map((s) => /"t":"([a-z-]+)"/.exec(s.text)?.[1] ?? '?');
+    // eslint-disable-next-line no-console
+    console.log('C2 线上消息序列：' + kinds.join(' -> '));
+    for (const k of ['hello', 'hello-ack', 'commit', 'commit-ack', 'commit-face', 'reveal-seed', 'reveal-face', 'reveal-salt']) {
+      expect(kinds, `线上从来没有出现过 ${k}（那条消息的驱动者没接上）`).toContain(k);
+    }
+    host.detach();
+    guest.detach();
+  });
+
+  it('★ 驱动者是**相位驱动**的：它不另存状态（同一个相位驱动两次只发一条）', async () => {
+    const pair = createFakeTransportPair();
+    // ⚠️ **两端都要接上**：`hello` 是加入方发的 ⇒ 只连房主的话它永远停在 handshaking
+    //    （第一版就是那么红的：夹具自己的问题，不是被测对象的问题）。
+    const host = await wireSide('host', pair.A.transport);
+    const guest = await wireSide('guest', pair.B.transport);
+    await host.client.connect('first');
+    await guest.client.connect('first');
+    // 投递到房主真的走到 awaiting-commit-face（假链路一帧要走几步）
+    for (let i = 0; i < 10 && host.client.state().peer?.phase === 'handshaking'; i += 1) {
+      pair.pump(4);
+      await host.consume(8);
+      await guest.consume(8);
+      host.client.drive();
+      guest.client.drive();
+    }
+    host.detach();
+    guest.detach();
+    // 重来一遍、但这次**不再驱动**（要验的是"同一个相位驱动两次只发一条"）
+    const pair2 = createFakeTransportPair();
+    const h2 = await wireSide('host', pair2.A.transport);
+    const g2 = await wireSide('guest', pair2.B.transport);
+    await h2.client.connect('first');
+    await g2.client.connect('first');
+    for (let i = 0; i < 10 && h2.client.state().peer?.phase === 'handshaking'; i += 1) {
+      pair2.pump(4);
+      await h2.consume(8);
+      await g2.consume(8);
+    }
+    const host2 = h2;
+    const mid = host2.client.state().peer?.phase;
+    expect(mid, '夹具失败：房主没走到 awaiting-commit-face').toBe('awaiting-commit-face');
+    const before = host2.client.state().routedOut;
+    // 再驱动两次：`sendCommit` **不改相位** ⇒ 必须靠"发过就算"的一次性位挡住（不许重复发）
+    host2.client.drive();
+    host2.client.drive();
+    expect(host2.client.state().routedOut, '`sendCommit` 被重复发了（相位不变那一格没有一次性位）').toBe(before);
+    // 反证：它也没把流程凭空推进（相位仍停在那一格，等对端）
+    expect(host2.client.state().peer?.phase, '驱动者凭空推进了相位').toBe('awaiting-commit-face');
+    host2.detach();
+    g2.detach();
+  });
+});
+/* ==================================================================== *
+ * 12. ★★ C3：回示码的两个 UI 入口（结构缺口 ③）+ 六个 send* 的产出侧调用者
+ * ==================================================================== */
+
+describe('★★ C3 · 回示码在界面上有入口（结构缺口 ③）', () => {
+  it('★ 加入方：未产码时屏上是「出示回示码」按钮；点它 ⇒ 回调被调', () => {
+    const h = mountLobby({ role: 'guest' });
+    h.render();
+    const btns = queryAllIn(h.root, 'button.net-lobby-make-answer');
+    expect(btns.length, '屏上没有「出示回示码」按钮（玩家看不到这条路）').toBe(1);
+    expect(btns[0].text, '按钮文案不是那个标签').toContain('回示码');
+    click(h.root, 'button.net-lobby-make-answer');
+    expect(h.calls, '点了「出示回示码」但宿主没收到回调').toContain('make-answer');
+  });
+
+  it('★ 加入方：产码之后屏上**显示那条码**（不再是按钮）', () => {
+    const code = '1.ABCDEF-PAYLOAD';
+    const h = mountLobby({ role: 'guest', answerCode: code });
+    h.render();
+    expect(queryAllIn(h.root, 'button.net-lobby-make-answer').length, '已有码时还显示「出示」按钮').toBe(0);
+    expect(textOf(h.root), '屏上没有那条回示码（玩家拿不到它）').toContain(code);
+  });
+
+  it('★ 房主：一个输入框 + 粘进去 ⇒ 回调带上了那条码', () => {
+    const h = mountLobby({ role: 'host' });
+    h.render();
+    const inputs = queryAllIn(h.root, 'input.net-lobby-answer-input');
+    expect(inputs.length, '房主那一栏没有「粘贴回示码」输入框').toBe(1);
+    // 桩上派发 input 事件（照本文件既有的输入腿口径）
+    const inp = inputs[0];
+    (inp as unknown as { value: string }).value = '1.ZZZ';
+    const child = makeStubEl('span');
+    inp.appendChild(child);
+    child.dispatchEvent({ type: 'input', target: child });
+    inp.textContent = '';
+    expect(h.calls, '粘贴回示码没把内容送到宿主').toContain('apply-answer:1.ZZZ');
+  });
+
+  it('★ 房主：应用结论（成功/失败）都在屏上可见', () => {
+    const ok = mountLobby({ role: 'host', answerApplied: { ok: true, message: '已经把对方的答案接上了。' } });
+    ok.render();
+    expect(textOf(ok.root), '成功结论没显示').toContain('已经把对方的答案接上了。');
+    const bad = mountLobby({ role: 'host', answerApplied: { ok: false, message: '这条不是对方回示的答案。' } });
+    bad.render();
+    expect(textOf(bad.root), '失败结论没显示').toContain('这条不是对方回示的答案。');
+  });
+
+  it('★ 两个入口都是「界面标签」，不是隐私/信令说明（D22 的第二份说明没被引进来）', () => {
+    const code = stripComments(
+      readFileSync(fileURLToPath(new URL('../../src/ui/net-lobby.ts', import.meta.url)))
+        .subarray(0, 8 * 1024 * 1024).toString('utf8'),
+    );
+    for (const banned of ['本程序默认不向任何服务器发请求', '两台设备直连（P2P）']) {
+      expect(code.includes(banned), `回示码那两个入口把信令说明手写进来了：${banned}`).toBe(false);
+    }
+  });
+});
+
+describe('★★ C2 的可机械检查面：六个 send* / commitFace 在 src/** 里有产出侧调用者', () => {
+  it('★ 六个方法各有至少一个**产出侧**调用者（零调用者 ⇒ 红）', () => {
+    // 唯一的例外是 session.ts 自己（那是定义处）。其余任何一处都算"产出侧调用者"。
+    const files = srcTsFiles().filter((f) => !f.endsWith(`net${SRC_SEP}session.ts`));
+    const bodies = files.map((f) => ({
+      rel: f.split(SRC_SEP).slice(-2).join('/'),
+      code: stripComments(readFileSync(f).subarray(0, 8 * 1024 * 1024).toString('utf8')),
+    }));
+    const wanted = ['sendCommit', 'sendCommitAck', 'commitFace', 'sendRevealSeed', 'sendRevealSalt', 'sendRevealFace'] as const;
+    const missing: string[] = [];
+    // eslint-disable-next-line no-console
+    const table: string[] = [];
+    for (const name of wanted) {
+      const callers = bodies
+        .filter((b) => new RegExp(`\\b${name}\\s*\\(`).test(b.code))
+        .map((b) => b.rel);
+      table.push(`  ${name} => ${callers.length === 0 ? '（零调用者）' : [...new Set(callers)].join(', ')}`);
+      if (callers.length === 0) missing.push(name);
+    }
+    // eslint-disable-next-line no-console
+    console.log('\nC2 六个方法的产出侧调用者：\n' + table.join('\n'));
+    expect(missing, `这些方法在 src/** 里零调用者 ⇒ 承诺-揭示流程在产出代码里没人驱动：${missing.join(', ')}`)
+      .toEqual([]);
+    // 反空转：扫描面本身非空，且**真的**排掉了 session.ts（否则"有调用者"可能只是定义处自己）
+    expect(bodies.length, 'src 下一个 .ts 都没扫到 ⇒ 扫描面塌了').toBeGreaterThan(50);
+    expect(bodies.some((b) => b.rel.endsWith('session.ts')), 'session.ts 没被排掉 ⇒ 这条腿可能是自证').toBe(false);
+  });
+});
+
+/**
+ * 路径分隔符。`node:path` 的 `sep` 在本仓的窄声明里没有，`process` 也没有
+ * ⇒ 从**一条已知路径**反推：`fileURLToPath` 出来的 Windows 路径里必然带 `\\`。
+ */
+const SRC_SEP: string = fileURLToPath(new URL('../../src/main.ts', import.meta.url)).includes('\\') ? '\\' : '/';
+
+/** `src/**` 下的全部 `.ts`（本文件自己的遍历；`tests/node-types.d.ts` 只声明了 `readdirSync`/`statSync`/`join`） */
+function srcTsFiles(): string[] {
+  const out: string[] = [];
+  const walk = (dir: string): void => {
+    for (const name of readdirSync(dir)) {
+      const full = join(dir, name);
+      if (statSync(full).isDirectory()) walk(full);
+      else if (name.endsWith('.ts')) out.push(full);
+    }
+  };
+  walk(fileURLToPath(new URL('../../src/', import.meta.url)));
+  return out;
+}

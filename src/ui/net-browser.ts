@@ -1066,8 +1066,15 @@ export type AcceptOfferResult =
  *   3. `setLocalDescription(answer)`；
  *   4. `waitForIceGathering()`（带上界，见它）。
  *
- * 为什么这一整段住"浏览器层"而不是大厅：它每一步都是**浏览器 API 的序列**，
- * 而 D6 说浏览器 API 的唯一出处是 `src/ui/net-browser.ts`。
+ * ## ★★ C 轮修复：`pc` 必须**传进来**（"两条连接"那个结构缺口）
+ *
+ * 本函数原来**自己造一条新连接**（`resolved.peerConnection?.(...)`）。那是错的：
+ * 承载 `hello` / `act` 的那条连接住在 `createBrowserTransport` 内部，
+ * 于是 answer 在**第二条**连接上完成、消息通道在**第一条**上 ⇒
+ * **两端从来没有为"传消息"连上**（T9 任务书作者核对代码时挖出的结构缺口 ①）。
+ *
+ * ⇒ 现在 `pc` 是**第一个必填参数**：调用方必须把"**已经建好、并且正在用来传消息**"的那条连接
+ * 交进来。这比"少一个默认值"更重要 —— 它把"两条连接"这个错误在**类型上**变成写不出来的东西。
  *
  * ## 真浏览器未验证（写死）
  *
@@ -1076,14 +1083,10 @@ export type AcceptOfferResult =
  * 那段真值由 **T9 的 CDP 真浏览器场景**覆盖。
  */
 export async function acceptOffer(
+  pc: PeerConnectionLike,
   offer: { readonly sdp: string },
   env?: NetBrowserEnv,
 ): Promise<AcceptOfferResult> {
-  const resolved: NetBrowserEnv = { ...defaultEnv(), ...env };
-  const pc = resolved.peerConnection?.({ iceServers: readIceServers(resolved.settings?.() ?? null).servers }) ?? null;
-  if (pc === null) {
-    return { ok: false, reason: 'unsupported', message: '这台设备没有可用的对端连接能力（需要安全上下文），收不下这条邀请码。' };
-  }
   if (pc.setRemoteDescription === undefined) {
     return {
       ok: false,
@@ -1164,6 +1167,32 @@ export async function applyAnswer(
 
 /** 本端待发队列的字节上限（真 WebRTC 上就是 `bufferedAmount`，超了报 `'queue-full'`） */
 const MAX_BUFFERED_BYTES = 1 << 20;
+
+/**
+ * ★ **每条浏览器传输自己那条对端连接**（C 轮加）。
+ *
+ * 为什么要一个 `WeakMap` 而不是往 `NetTransport` 上挂一个字段：连接身份是**这条实现内部**的事
+ * （接口上不该长出"把连接交出来"的成员 —— 假传输没有连接，而 `transport.ts` 是 T2 的交付物）。
+ * `WeakMap` 的键是传输对象本身 ⇒ 传输被回收时条目跟着走，不跨局泄漏。
+ */
+const TRANSPORT_PC = new WeakMap<NetTransport, PeerConnectionLike>();
+
+/**
+ * ★ **取一条浏览器传输正在用的那条对端连接**（C 轮加；结构缺口 ① 的出口）。
+ *
+ * ## 它解决的是什么
+ *
+ * 承载 `hello` / `act` 的那条连接住在 `createBrowserTransport` 内部。而收方"产 answer"
+ * 必须落在**同一条**连接上 —— 否则 offer/answer 在第二条上完成、消息通道在第一条上，
+ * **两端从来没有为"传消息"连上**（T9 任务书作者核对代码时挖出的结构缺口 ①）。
+ *
+ * ⇒ 调用方用它拿到那条**已经在传消息**的连接，再交给 `acceptOffer(pc, offer)`。
+ * 非本文件造的传输（`src/net/fake-transport.ts`）不在表里 ⇒ 返回 `null`
+ * （**响亮**地表示"拿不到"，而不是给一条新的连接）。
+ */
+export function peerConnectionOf(t: NetTransport): PeerConnectionLike | null {
+  return TRANSPORT_PC.get(t) ?? null;
+}
 
 /** 两条通道的 `RTCDataChannelInit`（特性从 `CHANNEL_SPECS` 的**唯一出处**取，别自己写一份） */
 function dataChannelInit(channel: NetChannel): { ordered: boolean; maxRetransmits?: number } {
@@ -1251,6 +1280,9 @@ export function createBrowserTransport(env?: NetBrowserEnv): NetTransport {
       pc = conn;
       // ★ B 档：把"刚造出来的这一条连接"交给宿主（它转头要用它接 answer，见 `onPeerConnection`）
       resolved.onPeerConnection?.(conn);
+      // ★ C 轮：把这条连接登记进"这条传输的连接"表 —— 收方产 answer 时要拿回**同一条**
+      //   （结构缺口 ①：answer 落在第二条连接上就等于消息通道从来没连上）
+      TRANSPORT_PC.set(transport, conn);
       conn.addEventListener('iceconnectionstatechange', () => onPeerState(String(conn.iceConnectionState ?? '')));
       conn.addEventListener('connectionstatechange', () => onPeerState(String(conn.connectionState ?? '')));
       emitStatus('connecting', `正在建立本侧链路（本端 ${init.selfId}，对端 ${init.peerId}）。`);
