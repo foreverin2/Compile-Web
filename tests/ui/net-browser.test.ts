@@ -528,6 +528,58 @@ describe('判据 7：SDP 压缩区间与邀请码总长', () => {
     const baseline = bytesToBase64Url(payloadBytesOf(fields)).length;
     expect(baseline, `不压缩的基线只有 ${baseline} 字符，越不过上界`).toBeGreaterThan(INVITE_CHARS_MAX);
   });
+
+  /**
+   * ★ 编码侧那条"压出来的必须解得动"的自洽检查必须**有牙**
+   * （补的是评审 §7.1 挑出来的那条恒真缝）。
+   *
+   * 评审实测：原来那个"解压口"写的是 `(c) => (c === c.bytes ? raw : null)` —— 同一性检查，
+   * 一份**真解不开**的 40 字节当"压缩件"照样放行。现在 `createInvite` 先
+   * `await decompressBytes()` 真解一遍；下面两条腿用一个"压出来的是垃圾"的假压缩流
+   * 从**小 `createInvite` 的公开口**打进去，断言它必须响亮失败。
+   */
+  describe('★ 编码侧的自洽检查有牙（坏的压缩结果不许放行）', () => {
+    /** 一个"压出来是垃圾"的压缩流：压缩给 40 字节随机内容，解压只认真 deflate */
+    const garbageCompression = (mode: 'compress' | 'decompress'): CompressionStreamLike | null => {
+      if (mode === 'compress') {
+        return { run: async () => Uint8Array.from({ length: 40 }, (_, i) => (i * 37) % 256) };
+      }
+      return realCompression('decompress');
+    };
+
+    it('压缩流交出的字节真解不开 ⇒ `createInvite` 给**可读失败**，不静默产出一条坏邀请码', async () => {
+      const made = await createInvite(
+        {
+          originAndPath: 'https://example.invalid/compile/index.html',
+          p: PROTO_VERSION,
+          sdp: FULL_OFFER_SDP,
+          ice: [],
+          hostPromise: 'a'.repeat(64),
+          guestPromise: 'b'.repeat(64),
+        },
+        { compressionStream: garbageCompression },
+      );
+      expect(made.ok, '解不开的压缩结果被放行了 —— 那条自洽检查是恒真的').toBe(false);
+      if (made.ok) return;
+      expect(made.reason).toBe('compress-failed');
+      expect(made.message.length, '失败信息不可读').toBeGreaterThan(8);
+    });
+
+    it('反控：同一条路用**真**压缩流必须成功（否则上面那条只是恒失败）', async () => {
+      const made = await createInvite(
+        {
+          originAndPath: 'https://example.invalid/compile/index.html',
+          p: PROTO_VERSION,
+          sdp: FULL_OFFER_SDP,
+          ice: [],
+          hostPromise: 'a'.repeat(64),
+          guestPromise: 'b'.repeat(64),
+        },
+        { compressionStream: realCompression },
+      );
+      expect(made.ok, `真压缩流被拒了：${made.ok ? '' : made.message}`).toBe(true);
+    });
+  });
 });
 
 /* ============================================================================
@@ -574,6 +626,36 @@ describe('判据 8：交出的哈希能力在会话状态机里可用（D15）',
     expect(browserHashOf('seed-1', 'salt-1')).toBe(browserHashOf('seed-1', 'salt-1'));
     expect(host.seedHashOfCommit()).toBe(browserHashOf('seed-1', 'salt-1'));
     expect(host.seedHashOfCommit()).not.toBeNull();
+  });
+
+  /**
+   * ★ 这一条是判据 8 的**牙**（补的是评审 §3.1 挑出来的清单外变异 M9）。
+   *
+   * 评审实测：把 `browserHashOf` 的前缀去掉、摘要截短到 8 位十六进制，**返回值仍然是字符串**
+   * ⇒ 判据 8 原来的两条腿（"是 string 不是 Promise" + "两次一样"）**46/46 全绿、一条不红**。
+   * 也就是说这一族缺陷（"动作发生了、语义没发生"：算了点东西，但不是一枚摘要）当时没人看。
+   *
+   * 下面三条腿钉形状：前缀 + **恰好 64 位**十六进制 + 真摘要（对得上 FIPS 180-4 的公开向量）。
+   */
+  it('★ 哈希串的**形状**：`browser-sha256:` + 恰好 64 位小写十六进制', () => {
+    const out = browserHashOf('seed-1', 'salt-1');
+    expect(out, `哈希串的形状不对：${JSON.stringify(out)}`).toMatch(/^browser-sha256:[0-9a-f]{64}$/);
+    // 逐段也各查一遍（前缀与位数分开报，红了能一眼看出是哪一处）
+    expect(out.startsWith('browser-sha256:'), '前缀丢了').toBe(true);
+    expect(out.slice('browser-sha256:'.length)).toHaveLength(64);
+    // 反控：这条形状腿**能红**（否则它可能是恒真的）
+    expect('abc').not.toMatch(/^browser-sha256:[0-9a-f]{64}$/);
+    expect('browser-sha256:00112233').not.toMatch(/^browser-sha256:[0-9a-f]{64}$/);
+    expect(`browser-sha256:${'g'.repeat(64)}`).not.toMatch(/^browser-sha256:[0-9a-f]{64}$/);
+  });
+
+  it('★ 那 64 位真的是 SHA-256 的摘要（对得上公开向量，不是随手拼的十六进制）', () => {
+    // `hash('abc')` 的摘要部分必须等于 FIPS 180-4 的 SHA-256("abc")
+    const one = browserHashOf('abc');
+    expect(one.slice('browser-sha256:'.length))
+      .toBe('ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+    // 两段拼接用的是 `\u0000` 分隔符：`('ab','c')` 的摘要 != SHA-256("abc")
+    expect(browserHashOf('ab', 'c')).not.toBe(browserHashOf('abc'));
   });
 
   it('分段拼串不会撞：`("ab","c")` 与 `("a","bc")` 得到不同的哈希', () => {

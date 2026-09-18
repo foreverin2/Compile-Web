@@ -13,6 +13,7 @@ import {
   INVITE_CHARS_MIN,
   INVITE_FRAGMENT_KEY,
   INVITE_PAYLOAD_VERSION,
+  INVITE_PROTO_VERSION,
   NO_ENDPOINT_MESSAGE,
   base64UrlToBytes,
   bytesToBase64Url,
@@ -22,6 +23,7 @@ import {
   inviteFragmentOf,
   inviteLinkOf,
   payloadBytesOf,
+  protocolVersionCheck,
   qrPlaceholder,
   roomCodeEntryReachability,
   utf8Decode,
@@ -248,6 +250,88 @@ describe('损坏输入给可读原因，不静默返回空对象（判据 4）',
   it('反证：**合法**输入必须被收下（否则上面那些"失败"可能只是解码器恒失败）', () => {
     const r = decodeInviteText(encodeWith(fields()), (b64) => base64UrlToBytes(b64));
     expect(r.ok, '合法输入被拒了 —— 上面那批判据是恒真的').toBe(true);
+  });
+});
+
+/* ============================================================================
+ * 2.5 明文段协议版本的比对（收尾轮：消掉那个死常量）
+ *
+ * 评审（`.superpowers/g5-T7-review/REVIEW.md` 评审 B）实测：明文段那个数字
+ * 从前**没有任何一处比对** —— `decodeInviteText('999.<合法压缩段>')` 给出
+ * `ok: true` 且 `p === 999`，玩家看不到任何提示。
+ * ========================================================================== */
+
+describe('明文段的协议版本会被比对（收尾轮）', () => {
+  it('本机版本 ⇒ `proto.ok === true`、`message` 为空串', () => {
+    const r = decodeInviteText(encodeWith(fields()), (b64) => base64UrlToBytes(b64));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.proto.ok, '本机版本居然被判成不一致').toBe(true);
+    expect(r.proto.remote).toBe(PROTO_VERSION);
+    expect(r.proto.local).toBe(PROTO_VERSION);
+    expect(r.proto.message).toBe('');
+  });
+
+  it('★ 对端版本更**新** ⇒ `proto.ok === false` + 一句可读提示（但不在这里拒绝）', () => {
+    const payload = `${PROTO_VERSION + 7}.${bytesToBase64Url(payloadBytesOf(fields()))}`;
+    const r = decodeInviteText(payload, (b64) => base64UrlToBytes(b64));
+    // 邀请码本身仍然解得出（"版本不一样"与"邀请码坏了"是两件事）
+    expect(r.ok, '版本不一致时把整条邀请码也拒了').toBe(true);
+    if (!r.ok) return;
+    expect(r.payload.p).toBe(PROTO_VERSION + 7);
+    expect(r.proto.ok).toBe(false);
+    expect(r.proto.remote).toBe(PROTO_VERSION + 7);
+    expect(r.proto.local).toBe(PROTO_VERSION);
+    expect(r.proto.message).toContain('更新的版本');
+    expect(r.proto.message).toContain(String(PROTO_VERSION + 7));
+    expect(r.proto.message).toContain(String(PROTO_VERSION));
+  });
+
+  it('★ 对端版本更**旧** ⇒ 另一句提示（与"更新"分开：玩家要做的事不一样）', () => {
+    const older = PROTO_VERSION - 1 >= 1 ? PROTO_VERSION - 1 : PROTO_VERSION + 1;
+    const payload = `${older}.${bytesToBase64Url(payloadBytesOf(fields()))}`;
+    const r = decodeInviteText(payload, (b64) => base64UrlToBytes(b64));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.proto.ok).toBe(false);
+    expect(r.proto.message).toContain(older > PROTO_VERSION ? '更新的版本' : '更旧的版本');
+    // 反控：两句提示**不是同一句**（否则"分开"只是嘴上说说）
+    const newerMsg = protocolVersionCheck(PROTO_VERSION + 1).message;
+    const olderMsg = protocolVersionCheck(PROTO_VERSION - 1 >= 1 ? PROTO_VERSION - 1 : 1).message;
+    expect(newerMsg).not.toBe(olderMsg);
+  });
+
+  it('这个判定是**一条可断言的纯函数**（`protocolVersionCheck(remote, local?)`）', () => {
+    expect(protocolVersionCheck(3, 3)).toMatchObject({ ok: true, remote: 3, local: 3, message: '' });
+    expect(protocolVersionCheck(4, 3)).toMatchObject({ ok: false, remote: 4, local: 3 });
+    expect(protocolVersionCheck(2, 3)).toMatchObject({ ok: false, remote: 2, local: 3 });
+    // 缺省 local = 本机 `PROTO_VERSION`（唯一出处是 `protocol.ts`，这里不另存一份）
+    expect(protocolVersionCheck(PROTO_VERSION).ok).toBe(true);
+    expect(protocolVersionCheck(PROTO_VERSION + 1).ok).toBe(false);
+    // `INVITE_PROTO_VERSION` 与 `PROTO_VERSION` 是同一个数字（转发名，不是第二个出处）
+    expect(INVITE_PROTO_VERSION).toBe(PROTO_VERSION);
+  });
+
+  it('坏掉的协议版本（不是整数）仍然给失败结果，且与"版本不一致"**分开**', () => {
+    const body = bytesToBase64Url(payloadBytesOf(fields()));
+    for (const bad of ['x', '-1', '1.5', '', '99999999999999999999']) {
+      const r = decodeInviteText(`${bad}.${body}`, (b64) => base64UrlToBytes(b64));
+      expect(r.ok, `"${bad}" 被收下了`).toBe(false);
+      if (!r.ok) expect(r.reason, `"${bad}" 的 reason 不对`).toBe('bad-base64url');
+    }
+  });
+
+  it('`PROTO_VERSION` 与 `INVITE_PAYLOAD_VERSION` 是两个**独立**的常量（今天相等是巧合）', () => {
+    // 理由：前者是**线协议**的版本（握手要比对的那一个），后者是**载荷封装**的版本
+    // （改了载荷字段就该动它、不该动线协议）。两者语义不同 ⇒ **不加**把它们钉在一起的腿，
+    // 否则每次改其中一个都会撞一条与它无关的守卫。这里只钉"它们是两个名字"这件事。
+    expect(typeof PROTO_VERSION).toBe('number');
+    expect(typeof INVITE_PAYLOAD_VERSION).toBe('number');
+    // 载荷版本进了压缩段（位置数组第 1 项），协议版本进了明文段 —— 两条路各自可读
+    const tuple = JSON.parse(utf8Decode(payloadBytesOf(fields())) as string) as readonly unknown[];
+    expect(tuple[0]).toBe(INVITE_PAYLOAD_VERSION);
+    const payload = encodeWith(fields());
+    expect(payload.slice(0, payload.indexOf('.'))).toBe(String(PROTO_VERSION));
   });
 });
 

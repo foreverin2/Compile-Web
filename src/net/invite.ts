@@ -129,9 +129,26 @@ export type InviteRejectReason =
   | 'bad-payload'
   | 'version-mismatch';
 
-/** 解码结果（失败**不抛**，照 `protocol.ts` 的结果对象口径） */
+/**
+ * 解码结果（失败**不抛**，照 `protocol.ts` 的结果对象口径）。
+ *
+ * ★ 成功面多带一个 `proto`：明文段的协议版本与本机的比对结论（`protocolVersionCheck`）。
+ * 它**不是**失败面的一部分 —— 版本不一致时邀请码本身仍然解得出（"邀请码坏了"与
+ * "两端版本不一样"是两件事），提示由调用方（T8 的大厅）渲染。
+ */
 export type InviteDecodeResult =
-  | { ok: true; payload: InvitePayload }
+  | { ok: true; payload: InvitePayload; proto: ProtocolVersionVerdict }
+  | { ok: false; reason: InviteRejectReason; message: string };
+
+/**
+ * 只到"载荷解析"这一步的结果。
+ *
+ * 为什么与 `InviteDecodeResult` 分开：协议版本住在**明文段**（不在压缩段的位置数组里），
+ * 所以 `decodeInvite(bytes)` 这个只吃字节的入口**看不到它** —— 它的成功面因此没有 `proto`。
+ * 要完整结论就用 `decodeInviteText`（它读明文段、填 `proto`）。
+ */
+export type ParsedInviteResult =
+  | { ok: true; payload: InvitePayload & { readonly p: number } }
   | { ok: false; reason: InviteRejectReason; message: string };
 
 /* ------------------------------------------------------------------ *
@@ -355,11 +372,26 @@ export function encodeInvite(
   if (compressed === null || compressed.length === 0) {
     return { ok: false, reason: 'compress-unsupported', message: '这台设备压不出邀请码要用的压缩流（压缩能力缺失）。' };
   }
-  // ★ 自洽检查：压出来的东西**必须**解得动。它挡住的是"压缩与编码各走各的"这一类缝
-  //   （压的是别的内容、或者压完被截断）。本函数同步 ⇒ 这个检查也只能是同步的。
+  // ★ 自洽检查（两道）：压出来的东西**必须**（a）解得动、（b）解出来还是那份载荷。
+  //   它挡住的是"压缩与编码各走各的"这一类缝（压的是别的内容、或者压完被截断）。
+  //   本函数同步 ⇒ 这个检查也只能是同步的。
+  //
+  //   ⚠️ **`decompress` 必须是真解压**：评审（`.superpowers/g5-T7-review/REVIEW.md` 评审 D）
+  //   实测过这一处曾经写成 `(c) => (c === compressed ? raw : null)` —— 那是同一性检查，
+  //   于是整个自洽检查**恒真**（一份真解不开的字节照样放行）。调用方
+  //   （`src/ui/net-browser.ts` 的 `createInvite()`）现在先 `await decompressBytes()` 真解一遍，
+  //   再把结果喂给这个同步口。
   const back = decompress(compressed);
   if (back === null || back.length === 0) {
     return { ok: false, reason: 'compress-failed', message: '压缩结果解不回来（压缩这一步没有产出可用的字节）。' };
+  }
+  const roundTrip = decodeInvite(back);
+  if (!roundTrip.ok) {
+    return {
+      ok: false,
+      reason: 'compress-failed',
+      message: `压缩结果解出来不是一份可用的载荷（${roundTrip.reason}）：${roundTrip.message}`,
+    };
   }
   return { ok: true, payload: `${fields.p}.${bytesToBase64Url(compressed)}` };
 }
@@ -395,7 +427,7 @@ function nonEmptyString(v: unknown): v is string {
  * ★ **三类的失败出口只有一处**（下面那个 `throw`）：三类靠 `reason` 字段区分。
  * 这样 M3 的锚点（"把失败返回改成静默 `{}`"）恰好命中一次。
  */
-export function decodeInvite(bytes: Uint8Array): InviteDecodeResult {
+export function decodeInvite(bytes: Uint8Array): ParsedInviteResult {
   try {
     const text = utf8Decode(bytes);
     if (text === null) {
@@ -425,7 +457,7 @@ export function decodeInvite(bytes: Uint8Array): InviteDecodeResult {
  * `'bad-payload'`（项数不对 ⇒ 缺字段）、`'version-mismatch'`、`'bad-payload'`；
  * `'bad-json'` 一族在调用方（`decodeInvite`）判 —— 那时还没有对象可看。
  */
-export function parseInvitePayload(raw: unknown): InviteDecodeResult {
+export function parseInvitePayload(raw: unknown): ParsedInviteResult {
   /** 第一处失败（链式取反会同时命中多条 ⇒ 只留第一条，报错才指得准） */
   let fail: InviteDecodeError | null = null;
   const miss = (reason: InviteRejectReason, message: string): void => {
@@ -486,18 +518,6 @@ export function parseInvitePayload(raw: unknown): InviteDecodeResult {
 }
 
 /**
- * **整条**解码：判两段的字符集 → 解压压缩段 → 解析数据段。
- *
- * `decompress` 的契约：把**压缩段**（base64url）解回字节；解不动就返回 `null`
- * （**不抛**：坏的输入是常态）。它是同步的 —— 真实实现（`deflate-raw` 的
- * `CompressionStream`）是异步的，所以那个实现在调用本函数**之前**就要把结果算好；
- * 拿一个没算好的结果进来属于调用方违约，由 `src/ui/net-browser.ts` 的
- * `decodeInvitePayload()` 负责给出可读的失败结果。
- *
- * 这个顺序（先判字符集、再解压）让判据 4 的 ① 与 ② 分得开：
- * 非法字符给 `'bad-base64url'`，字符合法但压缩流坏了给 `'decompress-failed'`。
- */
-/**
  * **整条**解码：读明文协议版本 → 判压缩段的字符集 → 解压 → 解析位置数组。
  *
  * `decompress` 的契约：把**压缩段**（base64url）解回字节；解不动就返回 `null`
@@ -508,6 +528,11 @@ export function parseInvitePayload(raw: unknown): InviteDecodeResult {
  *
  * 这个顺序（先判字符集、再解压）让判据 4 的 ① 与 ② 分得开：
  * 非法字符给 `'bad-base64url'`，字符合法但压缩流坏了给 `'decompress-failed'`。
+ *
+ * ★ **明文段的协议版本会被比对**（`protocolVersionCheck`）：不等时**不在这里拒绝**
+ * （拒绝时机归 T8 的大厅），而是把结论与一句可读提示放进成功面的 `proto` 字段 ——
+ * 邀请码本身是"可达性兜底"，两端版本不一致这件事在握手阶段还会被 `validateHello` 拦一次
+ * （`protocol.ts:627`），所以这一层给提示而不是硬拒。
  */
 export function decodeInviteText(
   text: string,
@@ -565,9 +590,72 @@ export function decodeInviteText(
   }
   const r = decodeInvite(decoded);
   if (!r.ok) return r;
-  // 协议版本来自**明文段**（压缩段里没有它，见 `payloadBytesOf` 的注释）
-  return { ok: true, payload: { ...r.payload, p: proto } };
+  // 协议版本来自**明文段**（压缩段里没有它，见 `payloadBytesOf` 的注释）；
+  // ★ 它同时被**比对**：不等时 `proto.ok === false`（结论 + 可读提示），但不在这里拒绝
+  return { ok: true, payload: { ...r.payload, p: proto }, proto: protocolVersionCheck(proto) };
 }
+
+/* ------------------------------------------------------------------ *
+ * 7.5 明文段协议版本的比对（唯一一处）
+ * ------------------------------------------------------------------ */
+
+/**
+ * 明文段协议版本与本机协议版本的比对结论。
+ *
+ * ## 为什么必须有这一条
+ *
+ * 评审（`.superpowers/g5-T7-review/REVIEW.md` 评审 B）实测：
+ * `decodeInviteText('999.<合法压缩段>')` 曾经给出 `ok: true` 且 `p === 999`，
+ * 玩家**看不到任何提示** —— 明文段那个数字从头到尾没有任何一处比对过。
+ * 全仓的协议版本比对只在握手阶段（`validateHello`，`protocol.ts:627`），
+ * 而邀请码是**绕过信令**的那条路，它必须在收下之前就告诉玩家"两端版本不一样"。
+ *
+ * ## 为什么是"提示"而不是"拒绝"
+ *
+ * 拒绝时机归 T8 的大厅（它才是渲染提示的地方）；而且这里拒绝会把
+ * "版本不一致"与"邀请码坏了"混成同一个结果 —— 那是两件不同的事。
+ * 本函数只给结论 + 一句可读的真因。
+ */
+export function protocolVersionCheck(
+  remote: number,
+  local: number = PROTO_VERSION,
+): ProtocolVersionVerdict {
+  if (remote === local) {
+    return { ok: true, remote, local, message: '' };
+  }
+  if (remote > local) {
+    return {
+      ok: false,
+      remote,
+      local,
+      message:
+        `这条邀请码来自更新的版本（对方协议版本 ${remote}，本机 ${local}）：` +
+        '本机可能读不懂对端发来的消息。请把本机更新到同一个版本，或让对方用本机这个版本重新生成邀请码。',
+    };
+  }
+  return {
+    ok: false,
+    remote,
+    local,
+    message:
+      `这条邀请码来自更旧的版本（对方协议版本 ${remote}，本机 ${local}）：` +
+      '对方可能读不懂本机发去的消息。请让对方更新到本机这个版本。',
+  };
+}
+
+/** `protocolVersionCheck` 的结论。`ok` 为假时 `message` 是一句给玩家看的真因 */
+export interface ProtocolVersionVerdict {
+  readonly ok: boolean;
+  /** 发送方（对端）的协议版本 */
+  readonly remote: number;
+  /** 本机协议版本 */
+  readonly local: number;
+  /** 不一致时的可读提示；一致时是空串 */
+  readonly message: string;
+}
+
+/** 本机协议版本（与 `protocol.ts:49` 的 `PROTO_VERSION` **同一处**，这里只是一个转发名） */
+export const INVITE_PROTO_VERSION = PROTO_VERSION;
 
 /* ------------------------------------------------------------------ *
  * 8. 链接形态（§8.3 / D17）：载荷**只在 fragment**
@@ -736,6 +824,3 @@ export interface BuiltInvite {
    */
   readonly withinMeasuredRange: boolean;
 }
-
-/** 本机协议版本（本文件是纯层，直接复用协议层的唯一出处，不另存一份常量） */
-export const INVITE_PROTO_VERSION = PROTO_VERSION;

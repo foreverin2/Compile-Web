@@ -575,6 +575,8 @@ export interface CreatedInvite {
  *
  * 压缩是**异步**的、而 `encodeInvite` 要一个**同步**的压缩函数：这里先 `await` 出字节，
  * 再把它当作"已经算好的结果"交给纯层（D15 那条"状态机不 await"的同一种缝法）。
+ * **解压也一样**：先 `await decompressBytes()` 真解一遍，纯层拿到的才是"真的解得动"这个事实，
+ * 而不是一个恒真的同一性检查。
  * **载荷只进 fragment**（判据 6）。
  */
 export async function createInvite(
@@ -591,12 +593,22 @@ export async function createInvite(
   const raw = payloadBytesOf(fields);
   const c = await compressBytes(raw, env);
   if (!c.ok) return c;
+  /**
+   * ★ 编码侧的自洽检查必须用**真的解压结果**。
+   *
+   * 评审（`.superpowers/g5-T7-review/REVIEW.md` 评审 D）实测：这里原来写的是
+   * `(compressed) => (compressed === c.bytes ? raw : null)` —— 那是"同一性检查"，
+   * 不是解压：一份**真解不开**的 40 字节当"压缩件"喂进去，纯层那条
+   * "压出来的必须解得动"的检查**照样放行**（恒定真）。评审用真解压口喂同一份字节 ⇒ 当场拒。
+   * ⇒ 这里先 `await decompressBytes(c.bytes)` **真解一遍**，只把**真解出来的字节**交给同步口。
+   */
+  const roundTrip = await decompressBytes(c.bytes, env);
   const encoded = encodeInvite(
     fields,
     // 同步压缩口：这里交出的**就是**上面那次 await 的结果（不重压一次，也不换内容）
     () => c.bytes,
-    // 同步解压口：编码侧的自洽检查需要一个同步的解压
-    (compressed) => (compressed === c.bytes ? raw : null),
+    // 同步解压口：反映的是**上面那次真解压**的结果（不是同一性检查）
+    (compressed) => (compressed === c.bytes && roundTrip.ok ? roundTrip.bytes : null),
   );
   if (!encoded.ok) return encoded;
   const payload = encoded.payload;
