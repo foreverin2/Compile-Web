@@ -456,15 +456,14 @@ describe('判据 2：commit → commit-ack → commit-face → reveal-seed → r
     expect(g.salt(), '加入方没收到盐').toBe(SALT);
   });
 
-  it('★ B-1：发盐的合法窗口是"种子已揭示 或 已 complete"（其余相位一律拒）', () => {
+  it('★ B-1：发盐的合法窗口**只有 `complete`**（其余相位一律拒，包括 `seed-revealed`）', () => {
     // 这条腿把**窗口**钉死，免得将来有人把它放宽成"随便哪个相位"。
     //
-    // 顺带说明一个**不是缺陷**的性质（我实测过、写下来免得下一个人当成 B-1 的残留）：
-    //    **发盐必须晚于"收 reveal-face"**，因为发盐会把相位推到 `complete`，而 `complete` 上
-    //    不再收 `reveal-face`。这不是互斥 —— 设计稿 `:475` 写的就是"**结束后**房主发
-    //    `reveal-salt`"，"结束"那一步正是加入方揭示 `reveal-face`。把两条收尾动作按任意顺序
-    //    排列本来就不是协议的一部分；B-1 的真问题只是**后来那条（先收面、后发盐）当时被拒**。
-    //    ⇒ 窗口含 `complete` 正是为了让**设计稿那个顺序**走得通。
+    // 窗口**已收成只有 `complete`**（第四阶段复验收口，裁决 D21）：从 `seed-revealed` 发盐
+    //    在过去是"窗口允许但走不完"的死路 —— 发完盐相位就是 `complete`，而 `acceptRevealFace`
+    //    只认 `seed-revealed` ⇒ **`reveal-face` 永久进不来** ⇒ 房主永远拿不到面
+    //    （复验实测 `AUDIT-B1-residual={"phaseAfterSalt":"complete","faceOk":false,...}`）。
+    //    收窄之后那条死路**结构上不可能**，不是靠"别那么用"的注释纪律。
     const h = hostSession();
     handshakeHost(h);
     expect(h.sendCommit(SEED, SALT).ok).toBe(true);
@@ -478,21 +477,20 @@ describe('判据 2：commit → commit-ack → commit-face → reveal-seed → r
     expect(h.sendRevealSalt().ok, '承诺刚成立（种子未揭示）就发得出盐').toBe(false);
     expect(h.phase()).toBe('face-committed');
 
-    // 窗口内 1：种子已揭示
+    // ★ 窗口外 3：**种子已揭示但还没收到 reveal-face**（这一格是第四阶段收窄掉的那个死路）
     expect(h.sendRevealSeed().ok).toBe(true);
     expect(h.phase()).toBe('seed-revealed');
-    expect(h.sendRevealSalt().ok, '种子揭示之后发不出盐（B-1 的形态）').toBe(true);
+    const deadPath = h.sendRevealSalt();
+    expect(deadPath.ok, '从 seed-revealed 发得出盐 ⇒ 那条顺序会把 reveal-face 永久拒掉').toBe(false);
+    expect(deadPath.ok ? null : deadPath.reason).toBe('unexpected-message');
+    expect(h.phase(), '被拒的发盐把相位推走了').toBe('seed-revealed');
+    // 正控：这一格之后**仍然收得下** reveal-face（死路不存在的直接证据）
+    acceptOk(h, { t: 'reveal-face', msg: overWire({ t: 'reveal-face', face: 1, faceNonce: 'n' }) });
     expect(h.phase()).toBe('complete');
 
-    // 窗口内 2：已 complete（**这条就是 B-1 的修法**：先收 reveal-face 之后仍然发得出）
-    const h2 = hostSession();
-    handshakeHost(h2);
-    expect(h2.sendCommit(SEED, SALT).ok).toBe(true);
-    acceptOk(h2, { t: 'commit-face', msg: overWire({ t: 'commit-face', hash: sha256Concat('1', 'n') }) });
-    expect(h2.sendRevealSeed().ok).toBe(true);
-    acceptOk(h2, { t: 'reveal-face', msg: overWire({ t: 'reveal-face', face: 1, faceNonce: 'n' }) });
-    expect(h2.phase()).toBe('complete');
-    expect(h2.sendRevealSalt().ok, '先收 reveal-face 之后发不出盐 ⇒ 加入方永远验不了承诺').toBe(true);
+    // 窗口内（**唯一一格**）：已 `complete`（= 已经收到 reveal-face、"对局结束"）
+    expect(h.sendRevealSalt().ok, '收下 reveal-face 之后发不出盐 ⇒ 加入方永远验不了承诺').toBe(true);
+    expect(h.phase()).toBe('complete');
   });
 
   it('★ B-1 的边界：盐只发一次（`complete` 是终态，幂等靠 `saltMadePublic` 而不是相位）', () => {
@@ -645,7 +643,9 @@ describe('判据 2：commit → commit-ack → commit-face → reveal-seed → r
     expect(h.salt(), '房主自己的盐被一条入站消息覆盖了').toBe(SALT);
     expect(h.phase()).toBe('seed-revealed');
 
-    // 出站：房主用 `sendRevealSalt()` 把**自己的**盐发出去（这才是它该做的事）
+    // 出站：先收对端的 `reveal-face`（发盐窗口收窄之后这是**必须**的一步），再发自己的盐
+    acceptOk(h, { t: 'reveal-face', msg: overWire({ t: 'reveal-face', face: 1, faceNonce: 'n' }) });
+    expect(h.phase()).toBe('complete');
     const out = h.sendRevealSalt();
     expect(out.ok, `合法窗口里房主发不出 reveal-salt：${out.ok ? '' : `${out.reason} / ${out.message}`}`).toBe(true);
     expect(out.ok ? out.salt : null, '发出去的不是房主自己的盐').toBe(SALT);
@@ -797,6 +797,8 @@ describe('判据 2：commit → commit-ack → commit-face → reveal-seed → r
     expect(g.peerStatus().needsResync, '刚建出来就报 needResync').toBe(false);
     const r = g.markResuming();
     expect(r.ok, '加入方进不了 resuming').toBe(true);
+    // 成功面带 `phase`（第四阶段复验：原先是空成功面 ⇒ 调用方得猜）
+    expect(r.ok ? r.phase : null, 'markResuming 的成功面必须告诉调用方"现在在哪一格"').toBe('resuming');
     expect(g.phase()).toBe('resuming');
     expect(g.peerStatus().needsResync, 'N-11：这一位必须有真实的置位路径').toBe(true);
     expect(g.peerStatus().handshakeDone, 'resuming 不算握手完成').toBe(false);
@@ -1366,6 +1368,565 @@ describe('判据 5：选面者固定为加入方，房主不能成为选面者�
       expect(hKeys, `房主会话缺 ${k}`).toContain(k);
       expect(gKeys, `加入方会话缺 ${k}`).toContain(k);
     }
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * 契约腿：「网络来的输入一律不抛」（收口轮补）
+ * ------------------------------------------------------------------ */
+
+/** 读 `src/net` 下的生产源码（生成式腿用它反推矩阵维度） */
+const NET_SRC_DIR = fileURLToPath(new URL('../../src/net/', import.meta.url));
+
+/** 矩阵里用的不透明哈希（只求过形状；不参与真实验签） */
+const PROBE_HASH = 'probe-hash';
+
+/**
+ * 矩阵里**加入方**那一侧收到的 `commit.hash`：取房主真承诺的那一个。
+ *
+ * 为什么不能用常数：加入方在 `acceptRevealSaltFinal` 里要拿 `hash(seed, salt)` 与它比，
+ * 常数会让"收下盐"这一步报 `salt-hash-mismatch`（**但相位照样推到 `complete`** ——
+ * 那是一条真实的失败路径，`collect` 表里专门有它的腿）。矩阵要的是**正常路径**，
+ * 所以这里用配对房主真算出来的那个哈希，让验签通过。
+ */
+let PROBE_COMMIT_HASH = PROBE_HASH;
+{
+  const probeHost = hostSession();
+  handshakeHost(probeHost);
+  const c = probeHost.sendCommit(SEED, SALT);
+  if (!c.ok) throw new Error('夹具自证失败：配对房主发不出 commit');
+  PROBE_COMMIT_HASH = sha256Concat(SEED, SALT);
+}
+
+/**
+ * 「**网络输入不抛**」的生成式性质腿（实现者登记的第 1 条，收口轮补）。
+ *
+ * ## 为什么这条必须存在
+ *
+ * 会话层在真实对局里 `throw` 一次 = **本机客户端直接崩**，而本项目是"所有逻辑跑在本地"的
+ * 无后端形态 —— 崩了没有服务端兜底。这条契约写在 `session.ts` 的文件头与 `accept` 的注释里，
+ * 但在这一轮之前它**没有任何一条腿**：它只是被几个相位守卫**顺带保护**着。
+ *
+ * 反证是复验人的 F13 实测：把**收**盐守卫短路掉之后，加入方在 `handshaking` 收到 `reveal-salt`
+ * 就会够到 `throw new Error('…还没拿到种子/承诺就要验盐…')` —— 也就是说"不抛"这件事
+ * **依赖守卫先跑**，而守卫哪天被放宽，没有任何一条腿会为此变红。
+ * 这正是本仓记过档的"**守卫没有腿等于没有守卫**"形态。
+ *
+ * ## 矩阵从生产代码**现算**（不手抄清单）
+ *
+ * 手抄清单必漏（T1 阶段一评审 N-1 的教训：手写的覆盖面清单与真实集合结构上脱钩，
+ * 加一项没有机制会提醒）。所以：
+ *  - **相位**：解析 `session.ts` 里 `SessionPhase` 联合类型的字符串字面量成员；
+ *  - **入站消息**：解析 `session.ts` 里 `SessionInbound` 的 `{ t: '…' }` 成员；
+ *  - **每类消息的字段**：解析 `protocol.ts` 里 `SHAPES` 的**形状判定**，按 matcher 反推一个
+ *    能过形状检查的取值 —— "新增一个 `SessionInbound` 成员"会让矩阵**自动多一行**，
+ *    而"新增一个形状字段"会让模板生成**当场抛错**（不许静默跳过）。
+ *
+ * ## 两个维度今天取不全的地方（显式登记，撑大即红）
+ *
+ * 1. **线上有 14 种消息，`SessionInbound` 只声明 9 种**。差额 5 种（`act` / `busy` / `bye` /
+ *    `forfeit` / `resync-res`）**本会话层今天不接收** —— 它们是"本模块往线上**发**的"或
+ *    "归 T5/T6 消费的"。矩阵按 `SessionInbound` 取维度，并把这条差额**断言**出来
+ *    （`WIRE_OUT_OF_SCOPE`）：线上新增一种消息而没人决定它归谁时，这条会红。
+ * 2. **豁免白名单** `THROWS_ALLOWED`：今天**为空** —— 没有任何一格允许抛。它必须与实测的
+ *    抛错格集合**恰好相等**（空表 ⇒ 只要有一格抛就红）。
+ */
+function declaredWireTypes(): string[] {
+  const src = String(readFileSync(join(NET_SRC_DIR, 'protocol.ts')));
+  // 锚在行首；终止用"行首的 `};`"（同一族的抽取踩坑说明见 `declaredInboundTypes`）
+  const decl = /^const MSG_TYPES: Record<NetMsgType, true> = \{([\s\S]*?)\n\};/m.exec(src);
+  if (decl === null) throw new Error('protocol.ts 里找不到 `MSG_TYPES`（结构被改动？）');
+  const keys = [...decl[1].matchAll(/^\s*'?([\w-]+)'?:\s*true/gm)].map((m) => m[1]);
+  if (keys.length === 0) throw new Error('MSG_TYPES 抽出来是空集 —— 这条判据会在空集上恒真');
+  return [...new Set(keys)].sort();
+}
+
+function declaredInboundTypes(): string[] {
+  const src = String(readFileSync(join(NET_SRC_DIR, 'session.ts')));
+  // 三个坑，全都实测踩过：
+  //  1. **注释里不能逐字写出下面那条正则的匹配文本** —— 否则它会先匹配到注释自己（第一版就是这样）。
+  //  2. 捕获体不能写成 `([\s\S]*?);`：联合类型**第一个成员的末尾就有一个 `;`**
+  //     （`{ t: 'hello'; msg: unknown }`），非贪婪写法会在那里停住、只抽到 1 个成员。
+  //  3. 也不能写成"以一个 `;` 结尾"：那个 `;` 不在行首（行首是 `|`），锚不上。
+  //  ⇒ 统一口径：**读到下一个空行为止**（本仓顶层声明之间都空一行）。
+  //
+  // 第四条（第五阶段复验实测）：**引号风格必须不敏感**。第一版只认单引号
+  //    （`'([^']+)'`），于是往 `SessionInbound` 加一个**双引号**成员时抽取会**静默缩水**，
+  //    而 `expectedCells` 用同一份缩水清单算 ⇒ 自查自洽、全绿。
+  //    这是 T1 那条"表里的集合必须与样本实际打中的集合相等"的同族问题。
+  //    下面的说明符接受 `'` 与 `"` 两种引号；并用一条**交叉计数**断言兜住半缩水（见腿里）。
+  const decl = /^export type SessionInbound =([\s\S]*?)\n\n/m.exec(src);
+  if (decl === null) throw new Error('session.ts 里找不到 `SessionInbound`（结构被改动？）');
+  const keys = [...decl[1].matchAll(/\{ t: ['"]([^'"]+)['"]/g)].map((m) => m[1]);
+  if (keys.length < 2) throw new Error(`SessionInbound 只抽到 ${keys.length} 个成员（抽取口径坏了？）`);
+  return [...new Set(keys)].sort();
+}
+
+/**
+ * `SessionInbound` 里 `t:` 出现的**总次数**（不挑引号风格）。
+ *
+ * 用途：与"抽取到的成员数"做**交叉计数** —— 抽取正则若因为引号风格/书写变化漏掉成员，
+ * 那个数会**小于**这个数 ⇒ 当场红。这是"半缩水"能被察觉的关键（只断言"非空"防不住它）。
+ */
+function declaredInboundTCount(): number {
+  const src = String(readFileSync(join(NET_SRC_DIR, 'session.ts')));
+  const decl = /^export type SessionInbound =([\s\S]*?)\n\n/m.exec(src);
+  if (decl === null) throw new Error('session.ts 里找不到 `SessionInbound`（结构被改动？）');
+  return [...decl[1].matchAll(/\bt:/g)].length;
+}
+
+/** `MSG_TYPES` 里条目出现的**总次数**（不挑引号风格）；与抽取结果交叉计数 */
+function declaredWireEntryCount(): number {
+  const src = String(readFileSync(join(NET_SRC_DIR, 'protocol.ts')));
+  const decl = /^const MSG_TYPES: Record<NetMsgType, true> = \{([\s\S]*?)\n\};/m.exec(src);
+  if (decl === null) throw new Error('protocol.ts 里找不到 `MSG_TYPES`（结构被改动？）');
+  return [...decl[1].matchAll(/:\s*true\b/g)].length;
+}
+function declaredPhaseList(): string[] {
+  const src = String(readFileSync(join(NET_SRC_DIR, 'session.ts')));
+  // 同一口径：读到下一个空行为止（见 `declaredInboundTypes` 的三条踩坑说明）
+  const decl = /^export type SessionPhase =([\s\S]*?)\n\n/m.exec(src);
+  if (decl === null) throw new Error('session.ts 里找不到 `SessionPhase`（结构被改动？）');
+  const keys = [...decl[1].matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  if (keys.length === 0) throw new Error('SessionPhase 抽出来是空集');
+  return [...new Set(keys)].sort();
+}
+
+/**
+ * 按字段名给一个**能过形状检查**的取值。
+ *
+ * 只认已知字段；遇到不认识的字段就**抛错**（不许静默给 `undefined` —— 那样新字段会让这一格
+ * 变成"形状失败"而不是"真的喂了那条消息"，判据就悄悄退化了）。
+ */
+const FIELD_VALUES: Readonly<Record<string, unknown>> = {
+  role: 'player',
+  sessionId: SESSION_ID,
+  protoVersion: PROTO_VERSION,
+  cardDataHash: CARD_DATA_HASH,
+  seat: 1,
+  nick: 'guest',
+  peerNick: 'host',
+  reason: 'player',
+  detail: 'x',
+  hash: PROBE_HASH,
+  seed: 'probe-seed',
+  salt: 'probe-salt',
+  faceNonce: 'probe-nonce',
+  face: 1,
+  resuming: false,
+  file: {},
+  seq: 0,
+  kind: 'probe-kind',
+  player: 0,
+  appliedSteps: 0,
+};
+
+/**
+ * 从 `SHAPES` 的源码里切出 `"<消息类型>"` 列（用**花括号配平**，不用"读到空行"那一招 ——
+ * `SHAPES` 内部每个条目之间就有空行，见下面 `fieldsOfShapes` 的说明）。
+ *
+ * 返回每段的起点下标 + 类型名，供 `fieldsOfShapes` 按区间切字段。
+ */
+function shapeChunks(src: string): { name: string; body: string }[] {
+  const at = src.indexOf('const SHAPES');
+  if (at < 0) throw new Error('protocol.ts 里找不到 `SHAPES`（结构被改动？）');
+  // 必须从 `= {` 起算，**不能**取"声明头之后的第一个 `{`"：那一个是**类型标注**里的
+  //    `{ [K in NetMsgType]: … }`（实测配平到那里就结束了，一个条目都切不出来）。
+  const eq = src.indexOf('= {', at);
+  if (eq < 0) throw new Error('`SHAPES` 声明头之后找不到 `= {`');
+  const open = eq + 2;
+  // 花括号配平找对象末尾（`SHAPES` 全是表达式，字符串里不会出现花括号）
+  let depth = 0;
+  let end = -1;
+  for (let i = open; i < src.length; i += 1) {
+    if (src[i] === '{') depth += 1;
+    else if (src[i] === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        end = i;
+        break;
+      }
+    }
+  }
+  if (end < 0) throw new Error('`SHAPES` 的花括号不配平');
+  const body = src.slice(open + 1, end);
+  // 每个条目以「行首两个空格 + 名字 + :」开头。
+  // 参数表**可能是空的**：`'commit-ack': () => true`（没有参数，因为它不读任何字段）。
+  //    只认 `(m)` 会静默漏掉它 —— 实测切出 13 个而 `SHAPES` 有 14 个。
+  const starts: { name: string; at: number }[] = [];
+  for (const m of body.matchAll(/^ {2}'?([\w-]+)'?:\s*\((?:m)?\)/gm)) {
+    starts.push({ name: m[1], at: m.index });
+  }
+  if (starts.length === 0) throw new Error('SHAPES 里一个条目都没切出来');
+  return starts.map((s, i) => ({ name: s.name, body: body.slice(s.at, i + 1 < starts.length ? starts[i + 1].at : body.length) }));
+}
+
+/** 解析出每类消息的字段名（从 `SHAPES` 的 matcher 反推，不手抄） */
+function fieldsOfShapes(): Map<string, string[]> {
+  const src = String(readFileSync(join(NET_SRC_DIR, 'protocol.ts')));
+  const out = new Map<string, string[]>();
+  for (const { name, body } of shapeChunks(src)) {
+    const flat = body.replace(/\s+/g, ' ');
+    const fields = [...flat.matchAll(/(?:\bm\.|\.)([A-Za-z_]\w*)/g)].map((m) => m[1]);
+    out.set(name, [...new Set(fields)]);
+  }
+  if (out.size === 0) throw new Error('SHAPES 抽出来是空集');
+  return out;
+}
+
+/** 造一条该类型的入站消息（字段取自 `SHAPES`，值取自 `FIELD_VALUES`） */
+function inboundTemplate(t: string, shapes: Map<string, string[]>): SessionInbound {
+  const fields = shapes.get(t);
+  if (fields === undefined) throw new Error(`SHAPES 里没有 ${t} —— 新消息类型忘了给形状？`);
+  const msg: Record<string, unknown> = { t };
+  for (const f of fields) {
+    if (!(f in FIELD_VALUES)) {
+      throw new Error(
+        `消息 ${t} 的形状里出现了未登记字段 m.${f} —— 请把它加进 FIELD_VALUES 并想清它的取值（不许静默跳过）`,
+      );
+    }
+    msg[f] = FIELD_VALUES[f];
+  }
+  // `act.action` 是个嵌套对象（`SHAPES` 里写成 `m.action.seq` 这类），单列出来省得解析嵌套
+  if (t === 'act') msg.action = { seq: 0, player: 0, kind: 'probe-kind' };
+  // ★ 模板自证：造出来的报文必须**真的过得了 T1 的形状检查**（`encodeMsg` 是它的唯一出口）。
+  //   不过就是模板错了 —— 那样这一格会变成"形状失败"而不是"真的喂了那条消息"，判据悄悄退化。
+  const enc = encodeMsg(msg);
+  if (!enc.ok) throw new Error(`inboundTemplate 造出的 ${t} 过不了 encodeMsg 的形状检查：${enc.message}`);
+  return { t, msg } as SessionInbound;
+}
+
+/** 快照：相位 + 关键读数（拒绝一格之后这两样都不许变） */
+function snapshotOf(session: HostSession | GuestSession): string {
+  return JSON.stringify({
+    phase: session.phase(),
+    selfSeat: session.selfSeat(),
+    peerSeat: session.peerSeat(),
+    seed: session.seed(),
+    face: session.face(),
+    salt: session.salt(),
+    peerStatus: session.peerStatus(),
+  });
+}
+
+type PhaseRecipe = (role: 'host' | 'guest') => HostSession | GuestSession;
+
+/**
+ * 每个相位**由哪个角色**能到达（矩阵只在这些 (相位, 角色) 组合上跑）。
+ *
+ * 为什么需要它：`'awaiting-commit'` / `'seed-committed'` / `'reveal-salt-sent'` 是**加入方专有**的相位，
+ * 房主根本到不了；硬给房主造一个只会得到"配方没推到目标相位"的断言失败。
+ * ⇒ 这张表是**显式**的，并由下面两句断言兜住：
+ *  - 表里的相位集合必须**恰好等于** `SessionPhase` 的抽取结果（新增相位而没登记 ⇒ 红）；
+ *  - 每个角色都必须出现在至少一个条目里（否则"某一侧整列没跑"不会被发现）。
+ */
+const PHASE_ROLES: Readonly<Record<string, readonly ('host' | 'guest')[]>> = {
+  handshaking: ['host', 'guest'],
+  resuming: ['host', 'guest'],
+  'awaiting-commit-face': ['host'],
+  'awaiting-commit': ['guest'],
+  'seed-committed': ['guest'],
+  'awaiting-commit-ack': ['guest'],
+  'face-committed': ['host', 'guest'],
+  'seed-revealed': ['host', 'guest'],
+  'reveal-salt-sent': ['guest'],
+  complete: ['host', 'guest'],
+  rejected: ['host'],
+};
+
+/**
+ * **相位配方**：从一张白纸把会话推到目标相位。
+ *
+ * 这份表是**手写的**，但腿里有一句"表里的相位集合必须与 `SessionPhase` 抽取结果相等"的断言，
+ * 于是**新增相位而没给配方会当场红** —— 手写在这里是安全的，闭合腿替它兜着。
+ */
+const PHASE_RECIPES: Readonly<Record<string, PhaseRecipe>> = {
+  handshaking: (role) => (role === 'host' ? hostSession() : rawGuestSession()),
+  resuming: (role) => {
+    if (role === 'host') {
+      const h = hostSession();
+      expect(h.accept({ t: 'hello', msg: overWire(hello({ resuming: true })) }).ok).toBe(true);
+      return h;
+    }
+    const g = rawGuestSession();
+    expect(g.markResuming().ok).toBe(true);
+    return g;
+  },
+  'awaiting-commit-face': (role) => {
+    expect(role).toBe('host');
+    const h = hostSession();
+    handshakeHost(h);
+    return h;
+  },
+  'awaiting-commit': (role) => {
+    expect(role).toBe('guest');
+    const g = rawGuestSession();
+    acceptHelloAck(g);
+    return g;
+  },
+  'seed-committed': (role) => {
+    expect(role).toBe('guest');
+    const g = rawGuestSession();
+    acceptHelloAck(g);
+    acceptOk(g, { t: 'commit', msg: { t: 'commit', hash: PROBE_COMMIT_HASH } });
+    return g;
+  },
+  'awaiting-commit-ack': (role) => {
+    expect(role).toBe('guest');
+    const g = PHASE_RECIPES['seed-committed']('guest') as GuestSession;
+    expect(g.sendCommitAck().ok).toBe(true);
+    return g;
+  },
+  'face-committed': (role) => {
+    if (role === 'host') {
+      const h = PHASE_RECIPES['awaiting-commit-face']('host') as HostSession;
+      expect(h.sendCommit(SEED, SALT).ok).toBe(true);
+      acceptOk(h, { t: 'commit-face', msg: { t: 'commit-face', hash: sha256Concat('1', 'nonce-x') } });
+      return h;
+    }
+    const g = PHASE_RECIPES['awaiting-commit-ack']('guest') as GuestSession;
+    expect(g.commitFace(1, 'nonce-x').ok).toBe(true);
+    return g;
+  },
+  'seed-revealed': (role) => {
+    if (role === 'host') {
+      const h = PHASE_RECIPES['face-committed']('host') as HostSession;
+      expect(h.sendRevealSeed().ok).toBe(true);
+      return h;
+    }
+    const g = PHASE_RECIPES['face-committed']('guest') as GuestSession;
+    acceptOk(g, { t: 'reveal-seed', msg: { t: 'reveal-seed', seed: SEED } });
+    return g;
+  },
+  'reveal-salt-sent': (role) => {
+    expect(role).toBe('guest');
+    const g = PHASE_RECIPES['seed-revealed']('guest') as GuestSession;
+    expect(g.sendRevealFace().ok).toBe(true);
+    return g;
+  },
+  complete: (role) => {
+    if (role === 'host') {
+      const h = PHASE_RECIPES['seed-revealed']('host') as HostSession;
+      acceptOk(h, { t: 'reveal-face', msg: { t: 'reveal-face', face: 1, faceNonce: 'nonce-x' } });
+      return h;
+    }
+    const g = PHASE_RECIPES['reveal-salt-sent']('guest') as GuestSession;
+    acceptOk(g, { t: 'reveal-salt', msg: { t: 'reveal-salt', salt: SALT } });
+    return g;
+  },
+  rejected: (role) => {
+    // 只有房主到得了（加入方没有"把这次握手判死"的路 —— 见 PHASE_UNREACHABLE 的登记）。
+    // 这里**不能**写 `expect(role).toBe('host')`：可达性检查会用一个 try/catch 探这一格，
+    //    那样断言失败会被静默吞掉、把"不可达"伪装成"正常"（实测踩过）。
+    expect(role === 'host', 'rejected 的配方只为房主准备').toBe(true);
+    const s = hostSession();
+    // 房主这一支**不走 `overWire`**：`decodeMsg` 会先按版本不符拒掉这条报文（T1 那一层），
+    // 消息根本到不了会话层 —— 而这里要的是"会话层把它判死"。直接把对象喂进 `accept`。
+    const r = s.accept({ t: 'hello', msg: hello({ protoVersion: PROTO_VERSION + 1 }) });
+    expect(r.ok, '夹具问题：造不出 rejected').toBe(false);
+    expect(s.phase()).toBe('rejected');
+    return s;
+  },
+};
+
+/**
+ * **(相位, 角色) 里**取不到**的格子**（显式登记，双向闭合）。
+ *
+ * 六个"对方那一格"的相位是**角色专有**的，加一个由构造决定取不到的：
+ *  - `guest/awaiting-commit-face`：这个相位是**房主**在等加入方的 `commit-face`；加入方对应的是
+ *    `awaiting-commit`（等房主的 commit）与 `awaiting-commit-ack`（等自己发承诺）。
+ *  - `host/awaiting-commit`：**加入方**在等房主的 `commit`（房主没有"等 commit"这一格）。
+ *  - `host/seed-committed`：**加入方**收下 `commit` 之后的那一格。
+ *  - `host/awaiting-commit-ack`：**加入方**该发自己 `commit-face` 的那一格。
+ *  - `host/reveal-salt-sent`：**加入方**发出 `reveal-face` 之后的那一格。
+ *  - `guest/rejected`：**加入方没有"把这次握手判死"的路** —— `hello` 只能由它发出（N-7：它收到
+ *    入站 `hello` 是方向错误、当场忽略），而 `hello-ack` 被拒不构成"这次握手失败"
+ *    （不调 `rejectHello`，相位不动、不发包）。房主那一侧由 `rejectHello` 判死，到得了。
+ *
+ * **双向闭合**：下面有一条腿断言"实测取不到的格子集合 == 这份清单"，于是
+ * **新增**一个取不到的格子会红（逼你登记 + 写清为什么），**删掉**一格也会红。
+ */
+const PHASE_UNREACHABLE: readonly string[] = [
+  'guest/awaiting-commit-face',
+  'guest/rejected',
+  'host/awaiting-commit',
+  'host/awaiting-commit-ack',
+  'host/reveal-salt-sent',
+  'host/seed-committed',
+];
+
+/** 线上有、但本会话层今天不接收的消息（显式登记；线上新增消息而没人决定它归谁 ⇒ 上面那条断言会红） */
+const WIRE_OUT_OF_SCOPE: readonly string[] = ['act', 'busy', 'bye', 'forfeit', 'resync-res'];
+
+/**
+ * **允许抛错**的格子白名单。今天**为空**：144 格里没有任何一格允许抛。
+ * 它必须与实测的抛错格集合**恰好相等**（空表 ⇒ 只要有一格抛就红）。
+ */
+const THROWS_ALLOWED: readonly string[] = [];
+
+describe('契约：网络来的输入一律不抛（生成式：全部相位 × 全部入站消息）', () => {
+  const phases = declaredPhaseList();
+  const inbounds = declaredInboundTypes();
+  const shapes = fieldsOfShapes();
+  const wire = declaredWireTypes();
+
+  it('矩阵的维度确实是从生产代码抽出来的（不是手抄，也不是空集）', () => {
+    expect(phases.length, 'SessionPhase 抽空了').toBeGreaterThanOrEqual(10);
+    expect(inbounds.length, 'SessionInbound 抽空了').toBeGreaterThanOrEqual(9);
+    // ★ **交叉计数**（第五阶段复验要求的"半缩水"防线）：抽取正则若因引号风格或书写变化
+    //   漏掉成员，抽到的成员数会**小于**源码里 `t:` 的总数 ⇒ 当场红。
+    //   只断言"非空 / >= N"防不住半缩水（评审实测：加一个**双引号**成员 ⇒ 全绿）。
+    expect(
+      inbounds.length,
+      `SessionInbound 抽到 ${inbounds.length} 个成员，但源码里有 ${declaredInboundTCount()} 个 t: —— 抽取漏了（引号风格？）`,
+    ).toBe(declaredInboundTCount());
+    expect(
+      wire.length,
+      `MSG_TYPES 抽到 ${wire.length} 个条目，但源码里有 ${declaredWireEntryCount()} 个 —— 抽取漏了`,
+    ).toBe(declaredWireEntryCount());
+    // 线上消息 = 本层接收的 ∪ 显式登记为"不在本层"的（差额必须**恰好**由 `WIRE_OUT_OF_SCOPE` 解释）。
+    //
+    // **这里必须比较两个不同的对象**（第五阶段复验实测的缺陷）：第一版写的是
+    //     `expect({ wire, accounted }).toEqual({ wire, accounted })` —— 两边**同一个对象**，
+    //     恒真。评审人构造"`MSG_TYPES` 加一个 `'zz-wire'`"的世界 ⇒ 49/49 全绿。
+    //     这正是本仓"覆盖面自证"最该防的形态：**自证恒真**。
+    const accounted = [...new Set([...inbounds, ...WIRE_OUT_OF_SCOPE])].sort();
+    expect(
+      accounted,
+      '线上消息集合与"本层接收 ∪ 显式豁免"不一致（线上新增消息后没人决定它归谁？）',
+    ).toEqual([...wire].sort());
+    // 差额本身也要**说清**（不是靠上面那条的副作用）：两个方向的差都要恰好为`WIRE_OUT_OF_SCOPE`/空
+    expect(
+      wire.filter((t) => !inbounds.includes(t)).sort(),
+      '线上有、本层不收、但没登记进 WIRE_OUT_OF_SCOPE 的消息',
+    ).toEqual([...WIRE_OUT_OF_SCOPE].sort());
+    expect(
+      inbounds.filter((t) => !wire.includes(t)),
+      '本层声明接收、线上却没有的消息（`SessionInbound` 与 `MSG_TYPES` 脱钩了）',
+    ).toEqual([]);
+    for (const t of inbounds) expect(shapes.has(t), `SHAPES 里没有 ${t}`).toBe(true);
+    // 配方必须覆盖全部相位（**新增相位而没给配方 ⇒ 这里红**）
+    expect(Object.keys(PHASE_RECIPES).sort(), '有相位没有配方（或配方里有不存在的相位）').toEqual(phases);
+    // (相位 → 角色) 表也必须**恰好**覆盖全部相位
+    expect(Object.keys(PHASE_ROLES).sort(), '(相位 → 角色) 表与 SessionPhase 不一致').toEqual(phases);
+    // (a) 每个**声明可达**的 (相位, 角色) 都必须真的到得了（否则矩阵在别的相位上跑，假绿）
+    const declaredReachable: string[] = [];
+    for (const phase of phases) {
+      for (const role of ['host', 'guest'] as const) {
+        if (!PHASE_ROLES[phase].includes(role)) continue;
+        declaredReachable.push(`${role}/${phase}`);
+        expect(PHASE_RECIPES[phase](role).phase(), `配方没把 ${role} 推到 ${phase}`).toBe(phase);
+      }
+    }
+    // (b) 没声明的组合必须**确实到不了**，且"到不了的那些"必须**恰好**等于显式登记（双向闭合：
+    //     新增一个取不到的格子会红，逼你登记 + 写清为什么；删掉一格也会红）
+    const undeclaredReachable: string[] = [];
+    for (const phase of phases) {
+      for (const role of ['host', 'guest'] as const) {
+        if (PHASE_ROLES[phase].includes(role)) continue;
+        let reached: string | null = null;
+        try {
+          reached = PHASE_RECIPES[phase](role).phase();
+        } catch {
+          reached = null;
+        }
+        if (reached === phase) undeclaredReachable.push(`${role}/${phase}`);
+      }
+    }
+    expect(
+      undeclaredReachable.sort(),
+      '有格子实际到得了却没在 PHASE_ROLES 里声明（那它没跑矩阵）',
+    ).toEqual([]);
+    const allPairs = phases.length * 2;
+    const declaredPairSet = [
+      ...phases.flatMap((p) => PHASE_ROLES[p].map((r) => `${r}/${p}`)),
+    ].sort();
+    const actualUnreachable = [...phases.flatMap((p) => (['host', 'guest'] as const).map((r) => `${r}/${p}`))]
+      .filter((k) => !declaredPairSet.includes(k))
+      .sort();
+    expect(
+      actualUnreachable,
+      '不可达的格子与 PHASE_UNREACHABLE 的登记不一致（新增取不到的格子要登记 + 写清为什么）',
+    ).toEqual([...PHASE_UNREACHABLE].sort());
+    expect(declaredPairSet.length, '声明可达的格数对不上（矩阵跑的面与登记不一致）').toBe(
+      allPairs - PHASE_UNREACHABLE.length,
+    );
+    const roles = new Set(Object.values(PHASE_ROLES).flat());
+    expect([...roles].sort(), '有一侧角色一次都没跑').toEqual(['guest', 'host']);
+  });
+
+  it('★ 全部相位 × 全部入站消息：一格都不许抛；被拒的格子里相位与读数不许变', () => {
+    const thrown: string[] = [];
+    const mutatedOnReject: string[] = [];
+    let cells = 0;
+    let accepted = 0;
+    let rejected = 0;
+
+    for (const phase of phases) {
+      for (const role of PHASE_ROLES[phase]) {
+        for (const t of inbounds) {
+          const label = `${role}/${phase} <- ${t}`;
+          const session = PHASE_RECIPES[phase](role);
+          // 配方必须真的停在该相位（否则这一格测的是别的相位 —— 假绿）
+          expect(session.phase(), `配方没把 ${role} 推到 ${phase}`).toBe(phase);
+          const before = snapshotOf(session);
+          let decision: { ok: boolean; reason?: string } | null = null;
+          try {
+            decision = session.accept(inboundTemplate(t, shapes)) as { ok: boolean; reason?: string };
+          } catch (e) {
+            thrown.push(`${label}: ${String(e)}`);
+            continue;
+          }
+          cells += 1;
+          if (decision.ok) {
+            accepted += 1;
+          } else {
+            rejected += 1;
+            // 两个**刻意收窄**的地方，写在这里免得下一个人以为它是全称命题：
+            //  1. 例外按**理由码**排：`t === 'reveal-salt' && reason === 'salt-hash-mismatch'`。
+            //     ⇒ 将来**别的相位/角色**返回同一个理由码并改了状态，也会被这条豁免放过。
+            //     它**窄但非零**；要收紧就得连相位一起匹配（今天没必要，只有那一格会走到）。
+            //  2. 矩阵里 `reveal-salt` 用的模板盐（`FIELD_VALUES.salt`）与承诺盐（`SALT`）**不同**
+            //     ⇒ 那两格**永远走失败分支**（`salt-hash-mismatch`）。"收下盐并验通"的**成功**分支
+            //     由判据 2 的 `runCommitRevealFull` / B-1 那几条腿覆盖，不靠矩阵。
+            const verifiedThenFailed = t === 'reveal-salt' && decision.reason === 'salt-hash-mismatch';
+            if (!verifiedThenFailed && snapshotOf(session) !== before) {
+              mutatedOnReject.push(label);
+            }
+          }
+        }
+      }
+    }
+
+    // ① 不抛（这是这条腿的主断言）
+    expect(thrown, `以下格子抛了异常（网络输入绝不许抛）：\n${thrown.join('\n')}`).toEqual([...THROWS_ALLOWED]);
+    // ② 被拒的格子状态不变（相位 + 座位 + seed/face/salt + peerStatus 逐字相同）
+    expect(mutatedOnReject, `以下格子被拒之后状态却变了：\n${mutatedOnReject.join('\n')}`).toEqual([]);
+    // ③ 矩阵非平凡（两面都有"接受"与"拒绝"两类结果）——否则上面两条可能是空转
+    const expectedCells = phases.reduce((n, p) => n + PHASE_ROLES[p].length * inbounds.length, 0);
+    expect(cells, '矩阵一格都没跑成').toBe(expectedCells);
+    expect(accepted, '没有一格被接受（配方或模板坏了？）').toBeGreaterThan(0);
+    expect(rejected, '没有一格被拒（那"状态不变"这条恒真）').toBeGreaterThan(0);
+  });
+
+  it('★ 这条腿是收盐那一格的**行为钉子**（"守卫是唯一屏障"由 M5 演示）', () => {
+    // **这条腿的自述不能写成"在干净世界就能核出那条 `throw`"**（第五阶段复验纠正）：
+    //    干净世界里它**够不到**那条 `throw` —— 守卫先拦，走的是结果对象。所以它的真价值是两点：
+    //      ① 那条 `throw` 所在格的**行为钉子**（没有种子/承诺时收 `reveal-salt` ⇒ 结果对象 + 相位不动）；
+    //      ② **在 M5（短路收盐守卫）下会红** —— 那时才会真的抛
+    //         `session.ts 内部不一致：还没拿到种子/承诺就要验盐。`
+    //    也就是说"守卫是唯一屏障"这件事由**变异 M5 演示**，不是由这条腿在干净世界自证。
+    const g = rawGuestSession();
+    expect(g.phase()).toBe('handshaking');
+    const r = g.accept({ t: 'reveal-salt', msg: { t: 'reveal-salt', salt: SALT } });
+    expect(r.ok, '握手前收到的 reveal-salt 必须走结果对象被拒').toBe(false);
+    expect(r.ok ? null : r.reason).toBe('unexpected-message');
+    expect(g.phase(), '被拒的那一格改了相位').toBe('handshaking');
+    // 正控：同一条路径在**守卫放行**的相位上必须走得通（否则上面的"被拒"对"这一支根本不通"也成立）
+    const g2 = guestAwaitingSalt();
+    expect(g2.phase()).toBe('reveal-salt-sent');
+    const ok2 = g2.accept({ t: 'reveal-salt', msg: { t: 'reveal-salt', salt: SALT } });
+    expect(ok2.ok, '守卫放行的相位上也收不下 reveal-salt').toBe(true);
   });
 });
 

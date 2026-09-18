@@ -161,7 +161,7 @@ export type SessionResult<T> = ({ ok: true } & T) | { ok: false; reason: Session
  *
  * | 角色 | 相位推进 |
  * |---|---|
- * | 房主 | `handshaking` →（收 `hello`，回 ack）`awaiting-commit-face` →（`sendCommit`：**相位不变**）→（收 `commit-face`）`face-committed` →（`sendRevealSeed`）`seed-revealed` → 之后**两条收尾动作，顺序任意**：收 `reveal-face` ⇒ `complete`；`sendRevealSalt()` ⇒ `complete`（**两个顺序都合法**，见 `mayRevealSalt` 的 B-1 说明） |
+ * | 房主 | `handshaking` →（收 `hello`，回 ack）`awaiting-commit-face` →（`sendCommit`：**相位不变**）→（收 `commit-face`）`face-committed` →（`sendRevealSeed`）`seed-revealed` →（收 `reveal-face`，**这是"对局结束"那一步**）`complete` →（`sendRevealSalt()`）**仍是 `complete`** |
  * | 加入方 | `handshaking` →（收 `hello-ack`）`awaiting-commit` →（收 `commit`）`seed-committed` →（`sendCommitAck`）`awaiting-commit-ack` →（`commitFace`：发出自己的承诺）`face-committed` →（收 `reveal-seed`）`seed-revealed` →（`sendRevealFace`）`reveal-salt-sent` →（收 `reveal-salt`）`complete` |
  *
  * **三个"等"的相位各自只属于一个角色，不许合并**（实测踩过一次：把加入方 ack 之后的
@@ -175,6 +175,12 @@ export type SessionResult<T> = ({ ok: true } & T) | { ok: false; reason: Session
  * 两个角色的相位里都有 `'face-committed'`，而它的含义在两边**恰好相同**：
  * "加入方的 `commit-face` 已经成立" —— 房主那边是收到了对端的，加入方那边是自己发出了。
  * **`'face-committed'` 就是"允许揭示种子"的唯一相位**（`mayRevealSeed`）。
+ *
+ * **房主的 `complete` 是"两条收尾动作"里先到的那一步**（第四阶段收口后**只有一个顺序**）：
+ * 收 `reveal-face` ⇒ `complete`（同时拿到对端选的面），**然后**才 `sendRevealSalt()`（相位仍是
+ * `complete`）。反过来的顺序**结构上不可能**：`sendRevealSalt()` 只认 `complete`，而它在
+ * `seed-revealed` 时调会被拒 —— 于是"先发盐 ⇒ `reveal-face` 永久进不来 ⇒ 房主拿不到面"
+ * 这条死路不存在（详见 `mayRevealSalt` 的头注）。
  */
 export type SessionPhase =
   | 'handshaking'
@@ -616,11 +622,26 @@ export interface GuestSession extends NetSessionCommon {
    * 所以这件事必须**由调用方显式声明**，不能从网络输入里推断（推断就是猜，而猜错会让
    * `needsResync` 变成假读数 —— 那正是这个模块一直在防的东西）。
    *
-   * 只允许在握手完成前调用（`handshaking`）：已经进了承诺流程的会话不该"变成重连"。
-   * 真正的追平（`resync-req` / `resync-res` / 档案重放）是 **T6** 的事，本模块只把相位与
-   * `needsResync` 置起来。
+   * ## 调用时机（**必须在喂 `hello-ack` 之前**，第四阶段复验要求写实）
+   *
+   * ```ts
+   * const g = createGuestSession({ sessionId, hash, ... });   // 新建
+   * if (isReconnect) g.markResuming();                        // ← 就在这一步，早于任何入站消息
+   * g.accept({ t: 'hello-ack', msg: ack });                   // 收到 ack 就变 awaiting-commit 了
+   * ```
+   *
+   * 它只认 `'handshaking'` —— 也就是说**必须在把 ack 喂进去之前**调用：`acceptHelloAck` 会把相位
+   * 推到 `'awaiting-commit'`（那条路径从 `handshaking` 出发），此后 `markResuming()` 一律被拒。
+   * 已经进了承诺流程的会话也不该"变成重连"。
+   *
+   * ## 什么时候能知道"这是重连"（属 T8，不在本模块）
+   *
+   * 本模块不猜这个 —— 它由调用方（T8 的 UI 接线）根据"本端是不是带着同一个 `sessionId` 回来的"
+   * 决定。真正的追平（`resync-req` / `resync-res` / 档案重放）是 **T6** 的事，本模块只把相位与
+   * `needsResync` 置起来；进了 `'resuming'` 之后 `acceptCommit` 仍会被拒（`'awaiting-commit'`
+   * 才是它的合法相位），**T6 必须自己把相位带出 `resuming`**。
    */
-  markResuming(): SessionResult<Record<never, never>>;
+  markResuming(): SessionResult<{ phase: SessionPhase }>;
 }
 
 /** 一个会话对象（两个角色的并集；用 `role` 窄化） */
@@ -721,28 +742,35 @@ function mayIntakeSalt(phase: SessionPhase): { ok: true } | { ok: false; reason:
 /**
  * **发** `reveal-salt` 的相位守卫（只有**房主**会走到它）—— 与 `mayIntakeSalt` **分开**（N-13）。
  *
- * ## 为什么必须在 `complete` 也放行（第三阶段复验的**阻断项 B-1**）
+ * ## 窗口收成**只有 `complete`**（第四阶段复验收口，裁决 D21 按建议 (i)）
  *
- * 第一版拿收盐那个守卫当发盐的窗口用（允许 `seed-revealed` / `reveal-salt-sent`），于是两条收尾
- * 动作**互斥**、设计稿 §5.3 的完整形态走不通：
- *  - **先收 `reveal-face`**（房主据此才拿得到对端选的面）⇒ 相位到 `complete` ⇒ `sendRevealSalt()`
- *    被拒 ⇒ **加入方永远验不了** `hash(seed+salt) === commit`；
- *  - **先发盐** ⇒ 相位到 `complete` ⇒ 此后的 `reveal-face` 被拒（它只认 `seed-revealed`）
- *    ⇒ **房主拿不到面**。
+ * 历史：第一版拿**收**盐那个守卫当发盐的窗口用（允许 `seed-revealed` / `reveal-salt-sent`），
+ * 于是设计稿 §5.3 那个顺序走不通 —— **先收 `reveal-face`**（房主据此才拿得到对端选的面）⇒
+ * 相位到 `complete` ⇒ `sendRevealSalt()` 被拒 ⇒ **加入方永远验不了** `hash(seed+salt) === commit`。
+ * 那是**阻断项 B-1**，第三轮的修法是"把 `complete` 加进窗口"。
  *
- * 两者本就不该抢同一步：设计稿写的是"**结束后**房主发 `reveal-salt`"（`:475`），而在协议里
- * "结束后"正是加入方揭示 `reveal-face` 之后 —— 所以发盐的合法窗口必须**包含 `complete`**。
- * ⇒ 允许 `seed-revealed`（先发盐、后收面）**与** `complete`（先收面、后发盐）两种顺序；
- *   幂等由调用方的 `saltMadePublic` 位保证（发第二次走 `'seed-duplicate'` 那条出口）。
+ * 但只加 `complete` 会留下一个**窗口严格大于能走完的顺序**的陷阱（第四阶段实测
+ * `AUDIT-B1-residual={"phaseAfterSalt":"complete","faceOk":false,"reason":"unexpected-message","face":null}`）：
+ * 从 `seed-revealed` 发盐是"窗口允许但走不完"的 —— 发完盐相位就是 `complete`，而
+ * `acceptRevealFace` 只认 `seed-revealed` ⇒ **`reveal-face` 永久进不来** ⇒ 房主永远拿不到面。
+ * 那种顺序不是"另一种合法顺序"，是一条**死路**。
+ *
+ * ⇒ 收成**只有 `complete`**：`seed-revealed` 那种发法**结构上不可能**（不是"别这么用"的注释纪律），
+ * 于是"先发盐 ⇒ `reveal-face` 进不来"这件事**不可能发生**。代价是发盐**必须**晚于收到
+ * `reveal-face` —— 与设计稿 `:475`"**结束后**房主发 `reveal-salt`"的读法一致（`:481` 那段把
+ * `reveal-face` 也放在"结束后"，两条收尾动作里"结束"由揭示面那一步标记）。
+ *
+ * 幂等由 `saltMadePublic` 保证（`complete` 是终态，"发过没有"不能靠相位分辨）。
  */
 function mayRevealSalt(phase: SessionPhase): { ok: true } | { ok: false; reason: SessionRejectReason; message: string } {
-  if (phase === 'seed-revealed' || phase === 'complete') return { ok: true };
+  if (phase === 'complete') return { ok: true };
   return {
     ok: false,
     reason: 'unexpected-message',
     message:
-      `当前相位是 ${phase}，还不能揭示盐：盐要在**种子揭示之后**才发（设计稿 §5.3 最后一步），` +
-      '那时对方才能拿它去验 `hash(seed + salt)`。',
+      `当前相位是 ${phase}，还不能揭示盐：盐要在**收到对端的 reveal-face 之后**才发` +
+      '（那时这一局才算"结束"，设计稿 §5.3 最后一步）。先发盐会把相位推到 `complete`，' +
+      '而那时 `reveal-face` 已经进不来了 —— 房主会永远拿不到对端选的面，所以本端不接受那种顺序。',
   };
 }
 
@@ -986,10 +1014,16 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     }
     // ---- `protoVersion`：**补上**（第三阶段复验交回时点名的那一项，我判定它是**漏项**）----
     // 理由：`HelloAckMsg`（`protocol.ts`，T1 冻结）确实带着 `protoVersion`，而它就是房主
-    // 自己的线协议版本 —— 加入方收到它必须与自己的比一次。不校的后果是**不对称**：
-    // `decodeMsg` 只在握手消息带 `protoVersion` 时校验（`protocol.ts:503-505` 明写"其余消息没有
-    // 这个字段 ⇒ 跳过"），而 ack 恰好带着它，于是"房主用的是别的协议版本"这件事会在加入方
-    // **静默通过**，直到后面某条消息解析不出形状才炸 —— 那时离现场很远了。
+    // 自己的线协议版本 —— 加入方收到它必须与自己的比一次。
+    //
+    // **这是一层防御性检查，不是主闸门**（第四阶段复验纠正了我原来写反的说法）：真实路径上
+    // `decodeMsg`（T1）**已经当场拒了**版本不符的 ack —— `protocol.ts:425` 要求 ack 带
+    // `protoVersion`，`:541` 比"消息自带的值 vs 本机值"（复验实测 `layer1.reason='proto-version'`）。
+    // 所以这一层平时不触发；它保护的是**绕过 `decodeMsg` 的调用方**（测试、以及将来任何直接喂
+    // `accept` 的接线）—— 那些调用方拿到的就是"本模块该不该接受这条 ack"的答案。
+    // 我早先在这里写的是"`decodeMsg` 会让版本不符的 ack 静默通过"，**那句是错的**（实测会拒），
+    // 已改掉；同一轮里 `tests/net/session.test.ts` 的腿注写的是对的（"`decodeMsg` 在那一层就先拒了"），
+    // 两处现在口径一致。
     // 文案与 `validateHello` 的第 1 步逐字同源（同一件事不给第二种说法）。
     if (typeof msg.protoVersion !== 'number') {
       return {
@@ -1286,12 +1320,22 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     //    而**校验必须在相位推进之前完成** —— 否则 `salt-hash-mismatch` 再也发不出来
     //    （相位已经被推到 `complete`，理由码就丢了）。实测踩过：把三步合成"形状+守卫+推进"
     //    之后，`salt-hash-mismatch` 这条真实路径变成不可达，理由码覆盖面当场少一个。
+    //
+    // ★★ **收盐守卫是承重的**（第四阶段复验实测，值得单独记）：
+    //    它不只是"排序"，还是下面那条**内部不变式**的前提。若把 `mayIntakeSalt` 短路成永远放行，
+    //    加入方在 `handshaking` 收到一条 `reveal-salt` 就会走到
+    //    `throw new Error('session.ts 内部不一致：还没拿到种子/承诺就要验盐。')` ——
+    //    也就是"**网络来的输入一律走结果对象、不抛**"这条契约**依赖于守卫先跑**。
+    //    守卫今天挡住了那条路，所以不是缺陷；但这意味着改这里的守卫时必须同时想清楚
+    //    下面那条 `throw` 会不会被网络输入够到（`M5` 那条变异就是拿它当靶子的）。
     const shape = intakeRevealSalt(msg);
     if (!shape.ok) return { ...fail(shape.reason, shape.message), phase: s.phase };
     const guard = mayIntakeSalt(s.phase);
     if (!guard.ok) return { ...fail(guard.reason, guard.message), phase: s.phase };
     if (s.seed === null || s.seedHash === null) {
-      throw new Error('session.ts 内部不一致：还没拿到种子/承诺就要验盐。');
+      // 不变式：走到这里必须"已经拿到种子与承诺"。**上面的守卫保证了这一点**（它只放行
+      // `seed-revealed` / `reveal-salt-sent`，而这两个相位都蕴含 seed 与 seedHash 已置）。
+      throw new Error('session.ts 内部不一致：还没拿到种子/承诺就要验盐（收盐守卫被放宽了？）。');
     }
     const actual = requireHash(opts.hash, s.seed, shape.salt);
     s.salt = shape.salt;
@@ -1325,7 +1369,7 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
   /**
    * 加入方显式声明"这是一次重连"（N-11）。理由与允许的相位见接口注释。
    */
-  function markResuming(): SessionResult<Record<never, never>> {
+  function markResuming(): SessionResult<{ phase: SessionPhase }> {
     if (s.phase !== 'handshaking') {
       return fail(
         'unexpected-message',
@@ -1334,10 +1378,13 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
       );
     }
     s.phase = 'resuming';
-    return ok({});
+    // 成功面带 `phase`（第四阶段复验：原先是空成功面，调用方得猜；带上它就与
+    // `SessionDecision` 同一口径 —— 调用方能直接读到"现在在哪个相位"）。
+    return ok({ phase: s.phase });
   }
 
-  function acceptResyncReq(msg: unknown): SessionDecision {    if (!isObj(msg)) {
+  function acceptResyncReq(msg: unknown): SessionDecision {
+    if (!isObj(msg)) {
       return { ...fail('unexpected-message', '收到的 resync-req 不是对象；拒绝。'), phase: s.phase };
     }
     // 不静默吞掉：T6 要接的就是这条。今天明确回一句"还没接上"。
