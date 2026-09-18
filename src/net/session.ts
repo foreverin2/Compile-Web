@@ -989,9 +989,12 @@ export interface GuestSession extends NetSessionCommon {
    * 就能把这件事做完，而状态的消费者是 T5 的驱动与 T8 的 UI。
    *
    * 落到哪一格分两种（`phaseBeforeResyncApply` 记着档案到之前本端在哪）：
-   *  - **重连握手进来的加入方**（`resuming` / `handshaking`）：它的承诺进度是**空的**
-   *    （调用方新建的对象），落到 `'awaiting-commit'`（等房主的 `commit`；若那条 `commit`
-   *    已经先到了，`seedHash` 非空 ⇒ 落到 `'seed-committed'`，进度一个字不丢）；
+   *  - **重连握手进来的加入方**（`resuming` / `handshaking`）：落到 `'awaiting-commit'`（等房主的
+   *    `commit`）；若那条 `commit` 已经先到了（`seedHash` 非空 ⇒ 相位已是 `seed-committed`），
+   *    落到 `'seed-committed'`，那份进度一个字不丢。
+   *    ⚠️ 这里的措辞按阶段一评审的订正写实：**承诺进度不一定为空** —— "房主重发的 `commit`
+   *    早于 `resync-res` 到达"那种顺序（D19 那条主腿走的就是它）会让同一个落点由"已有进度"进入。
+   *    第一版注释写的是"承诺进度是空的（调用方新建的对象）"，那只覆盖了另一种顺序。
    *  - **本端本来就在流程里**（例如队列溢出触发的那次追平）：**回到原来那一格**，
    *    承诺进度一个字不动 —— 把 `complete` 的会话打回 `seed-committed` 会让它再也收不下盐。
    */
@@ -1556,10 +1559,38 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     // ---- 重连（D8）：`resuming: true` 能通过握手，相位标成 `'resuming'` ----
     // 追平（`resync-res` 与档案重放）是 T6 的事：这里只把这件事**记下来**
     // （相位 + `needsResync` 给 T6 与 UI 一个读口），不假装已经追平。
+    //
+    // ## ★ 第二条（重复的）重连握手**不许动相位基线**（阶段一评审的阻断项，2026-09-18 修）
+    //
+    // 第一版是无条件 `phaseBeforeResuming = s.phase; s.phase = 'resuming'`。**第二条**同
+    // `sessionId` + `resuming:true` 的 hello 到达时 `s.phase` 已经是 `'resuming'` ⇒ 基线被写成
+    // `'resuming'`、**原来那一格丢了** ⇒ 应答 `resync-req` 时"恢复"到的还是 `'resuming'`
+    // ⇒ 房主**永久停在 resuming**：`sendRevealSeed()` 报 `seed-before-face`、`sendRevealSalt()`
+    // 被拒、`redrive().output === null` —— 承诺流程静默停住，正是 D23 要消灭的那一族。
+    //
+    // 修法是**把这一格做成幂等**（评审给的另一条路是"第二条走 `refuseLateHello`"，这里没选它：
+    // 那会让一个"ack 丢了、正在重试握手"的加入方**永远收不到 ack**，把静默停住从房主挪到加入方）：
+    //  - 已经处在 `resuming` ⇒ 照旧回**同一条** `hello-ack`（同样的座位/昵称/sessionId，
+    //    所以是逐字相同的那一条），但**相位基线、`phaseBeforeResuming`、`needsResync*` 一个都不动**；
+    //  - 不在 `resuming` ⇒ 这是**新的一次**重连握手，记下"进 resuming 之前在哪一格"（房主在半路被
+    //    打断时承诺进度都在手里，应答完 `resync-req` 必须回去继续；原来那一格若是 `handshaking`
+    //    就落到"握手刚完成"的 `awaiting-commit-face`）。
     if (hello.resuming === true) {
-      // 记下"进 resuming 之前在哪一格"（**房主**这一侧才谈得上"原来那一格"：它在半路被
-      // 重连握手打断时，承诺进度都还在手里，应答完 `resync-req` 之后必须回去继续；
-      // 若原来那一格是 `handshaking`，应答完就落到"握手刚完成"的 `awaiting-commit-face`）。
+      if (s.phase === 'resuming') {
+        // 幂等格：什么都不改，只把 ack 再回一次
+        return {
+          ok: true,
+          output: {
+            t: 'hello-ack',
+            protoVersion: opts.localProtoVersion,
+            seat: s.peerSeat,
+            peerNick: hello.nick,
+            sessionId: opts.sessionId,
+          },
+          phase: s.phase,
+          seat: s.peerSeat,
+        };
+      }
       phaseBeforeResuming = s.phase;
       s.phase = 'resuming';
       resyncNeeded = true;
@@ -1752,6 +1783,11 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     // ★ **D23 ① 的 B1 格（房主侧）**：本端**已经验过并通过**这条揭示，而这条消息与记下的
     // `face` + `faceNonce` **逐字相同** ⇒ 幂等无操作。
     //
+    // 相位条件 `complete` 与 D23 ①的收窄口径（"**正是产生当前相位的那条**消息的逐字重复"）
+    // **天然对齐**：`acceptRevealFace` 接受的那一次投递必然把相位推到 `complete`
+    // （它只在 `seed-revealed` 收，收下就进 `complete`）⇒ `complete` 就是这条消息产生的那一格，
+    // 不需要额外的白名单。首次投递（房主还没收到过）落在这个格之前，走的是正常路径。
+    //
     // 它落在"加入方按相位重发 `reveal-face`"这条路上（那个对象的相位是 `reveal-salt-sent`，
     // 见 `redriveOutput`）：房主此时通常已经在 `complete`（早就收到过那条面），回
     // `unexpected-message` 会让调用方以为出了错，而 D23 ① 要的是"收方按幂等无操作处理"。
@@ -1841,16 +1877,27 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
       return { ...fail('bad-hash', '收到的 commit 没有可用的 hash（空串 / 缺失 / 不是字符串）；拒绝。'), phase: s.phase };
     }
     // ★★ **D23 ① 的 B1 格（★ 变异 M6(ii) 的锚点，只此一处）**：
-    // 本端**已经记下同一份承诺**，而这条消息与记下的那个值**逐字相同** ⇒ 幂等无操作。
+    // 本端**已经记下同一份承诺**、**且当前相位正是这条消息产生的那一格**（`seed-committed`），
+    // 而这条消息与记下的那个值**逐字相同** ⇒ 幂等无操作。
     //
-    // 为什么必须放在相位守卫**之前**：这一格正是"发方按相位重发"的落点 —— 房主重发的
-    // `commit` 会落在"早就收到过它"的加入方身上（对象存活、只是链路断过）。回
-    // `unexpected-message` 会让调用方以为出了错（D23 ① 要的就是不再回它），而**改状态**
-    // 更糟：把一个已经走进承诺流程的会话打回 `seed-committed` 会让它再也收不下后面的消息。
+    // ## 为什么必须带相位条件（阶段一评审 K2 的收窄，2026-09-18）
+    //
+    // 第一版只判"逐字相同"（`s.seedHash !== null && hash === s.seedHash`），**比裁决宽**：
+    // 在 `awaiting-commit-ack` / `face-committed` / `seed-revealed` / `complete` 上，一条
+    // 本该被拒的重复 `commit` 也被报成 `ok`。D23 ① 的适用范围是"**本相位期待的那条**"，
+    // 也就是"**正是产生当前相位的那条消息**"的逐字重复 —— 对 `acceptCommit` 来说，那条消息
+    // 产生的相位就是 `seed-committed`（收到 `commit` ⇒ `seedHash` 记下 + 相位推到这一格）。
+    // 其余相位上的重复**照旧拒绝**（落到下面的相位守卫），与 T3 对"本相位不期待的消息"的
+    // 处置同形（R8 的 B4 那一格）。
+    // 一条"比裁决宽、又没有任何腿看着"的分支正是本仓反复吃亏的形态，所以这里收窄到恰好一格。
+    //
+    // 为什么必须放在相位守卫**之前**：B1 那一格要的是"**不再回 `unexpected-message`**"，
+    // 而 `seed-committed` 本身不是 `acceptCommit` 的合法相位（它只认 `awaiting-commit` 一族）
+    // ⇒ 放到守卫之后这一格就永远走不到。
     //
     // B2（内容不同）**照旧拒绝**：落到下面的相位守卫上。理由写在 R8 那张表里 ——
     // "内容变了就不是重传"，那正是 T3 两轮封过的"伪造入站消息改写健康会话"（N-6/N-7/N-8）。
-    if (s.seedHash !== null && hash === s.seedHash) {
+    if (s.phase === 'seed-committed' && s.seedHash !== null && hash === s.seedHash) {
       return { ok: true, output: null, phase: s.phase };
     }
     // 加入方等 `commit` 的相位是 `'awaiting-commit'`（收到 `hello-ack` 之后进入）。

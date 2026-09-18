@@ -99,11 +99,13 @@
  *     失败（`lastFailure()` / `onFailure` 都能读到）+ 计数（`inboundOverflowCount()`），
  *     由调用方把它转成会话层的 `needsResync`（`session.ts` 的 `noteResyncNeeded`）。
  *     T5 当初"不设上限"的理由（`act` 可靠保序、丢一条即分叉）**仍然成立**，所以这里的处置
- *     不是"丢掉多余的就算了"，而是"**承认本端跟不上了，去走一次追平**" —— 溢出之后
- *     本地状态已经不可信，唯一诚实的出路是拿房主的档案重建（T6 的 `resync`）。
- *     **一处已知缺口如实登记**：追平之后如何让本驱动的 `applied` 计数与重建后的状态对齐，
- *     今天**没有接口**（没有 reset / realign 口）⇒ 溢出之后的"完全恢复锁步"还需要接线层
- *     补这一步；本任务只负责"把溢出这件事标出来并给可读提示"（计划 §5 T6 判据 7）。
+ *     不是"丢掉多余的就算了"，而是"**承认本端跟不上了，去走一次追平**"。
+ *     **恢复路径（修复轮补，2026-09-18）**：溢出之后本地状态已经不可信，唯一诚实的出路是
+ *     拿房主的档案重建（T6 的 `resync`），重建之后调用方**必须**调一次 `realign(n)`
+ *     把本驱动的进度事实（`applied`）对齐到重建后的那一步并清掉卡住的帧 —— 没有这一步，
+ *     溢出会被"标出来"但**永远恢复不了**（之后每条入站 `act` 都 `seq-mismatch`）。
+ *     `realign()` 就是那条口。**仍有一处缺口如实登记**：房主那一侧溢出**没有出路**
+ *     （协议里只有加入方能发 `resync-req`，而档案只在房主手里）⇒ 房主溢出 = 这一局只能由上层结束。
  */
 
 import type { GameState, PlayerId } from '../core/models/types';
@@ -132,17 +134,19 @@ export const NET_DRIVER_MODE = 'net' as const;
 /**
  * 入站队列的**缺省上限**（帧数；T6 落地，2026-09-18）。
  *
- * ## 这个数怎么来的（不是随手取的）
+ * ## 这个数是什么、不是什么（按阶段一评审的意见改写，2026-09-18）
  *
- * 队列里攒的是"**已经到了本端、但宿主还没把状态递进来**"的帧（见 `pendingTexts`），
- * 而它的正常深度是 **0 到个位数**：T8 的接线在收到帧时（或每次重渲染前）就 `arm(state)`，
- * 帧在下一拍就落地了。所以上限的作用不是"流控"，而是一个**内存安全阀**：
- * 真撞上它，说明本端已经停摆很久（宿主既没 `arm` 也没 `submit`），那时本地状态已经不可信。
+ * 它是**一个可注入的缺省值，不是一句承诺**。
  *
- * 取 256 的依据是 T5 的既有夹具：那一局的**整局**是 60 步（`tests/net/net-driver.test.ts`
- * 的 60 步差分腿），256 ≈ 四局的操作量。正常接线永远不会碰到它，而"碰得到"这件事本身
- * 就是"本端跟不上了"的证据。**它可注入**（`inboundCapacity`），所以判据腿能把它设成 1
- * 来构造非零的溢出。
+ *  - 队列里攒的是"**已经到了本端、但宿主还没把状态递进来**"的帧（见 `pendingTexts`），
+ *    正常深度是 **0 到个位数**（T8 在收到帧时/每次重渲染前 `arm(state)`）⇒ 上限的作用
+ *    不是"流控"，而是一个**内存安全阀**；
+ *  - 256 这个数今天的依据只有两条：T5 那套夹具的规模（整局 60 步 ⇒ 256 ≈ 四局）与内存量级
+ *    （256 × 一条 `act` 帧的大小）。**本仓今天没有任何"一局最多多少步"的读数**，所以
+ *    "256 够大"**不能**被读成"正常接线不会溢出" —— 它能被读到的最强含义只是
+ *    "碰不到它说明一切正常，碰到它说明本端已经停摆很久"；
+ *  - 真正需要按负载调的场景，调用方**自己传 `inboundCapacity`**（判据腿就是把它设成 1
+ *    来构造非零溢出的）。
  */
 export const DEFAULT_INBOUND_CAPACITY = 256;
 
@@ -203,6 +207,10 @@ export interface NetDriverOptions {
    * **可注入**的理由是可测性：上限必须是"能在测试里非零地构造出溢出"的东西，
    * 否则"溢出时会发生什么"这条判据只能靠读代码相信。判据腿把它设成 1、喂两条 `act`
    * （`inboundCapacity: 1` ⇒ 第二条落地时那条 `'inbound-overflow'` 必然出现）。
+   *
+   * **下界校验**（修复轮补，2026-09-18）：`< 1` 或非整数**当场抛**（照 `commitFace` 那条
+   * "调用方违约就抛"的既有口径）。阶段一评审实测过 `0` / `-1` 的后果：**每一帧**都被判溢出
+   * ⇒ 队列永远是空的、"溢出"这个信号失去区分力（它不再表示"本端跟不上了"，只表示"配置写错了"）。
    */
   readonly inboundCapacity?: number;
 }
@@ -229,6 +237,34 @@ export interface NetDriver extends MatchDriver {
   onStatus(cb: (change: StatusChange) => void): () => void;
   /** 已应用的操作条数（**也就是下一条的 `seq`**）。主机可以拿它与记录器对账 */
   appliedSteps(): number;
+  /**
+   * **把进度事实对齐到重建后的那一步**（T6 修复轮补，2026-09-18；入站队列溢出的恢复路径）。
+   *
+   * ## 为什么必须有它（阶段一评审的阻断级发现）
+   *
+   * 溢出之后本端能做的唯一诚实的事是"拿房主的档案重建本地状态"（T6 的 `resync` +
+   * `stateAtStep`）。但重建的是**宿主手里那份 `GameState`**，而驱动另有一个进度事实
+   * `applied`（= 下一条 `seq`），外加一个 `stuck` 槽位（溢出时那条序号对不上的帧会被钉在那里，
+   * 而它**只有 `dispose()` 会清**）。两者不对齐的后果是：会话层把 `needsResync` 清成 `false`、
+   * 相位也放回去了，**但驱动这一侧之后每一条入站 `act` 都继续 `seq-mismatch`**
+   * ⇒ "标记清掉了、状态没救回来"。调用方调一次本方法就把这条路走通。
+   *
+   * ## 语义（三件，别多想）
+   *
+   *  - `appliedSteps` = **重建后的状态已经应用了多少条操作**（也就是下一条的 `seq`）；
+   *  - 清掉 `stuck`（那条帧属于重建前的那一段，它的序号已经没有意义了）；
+   *  - 清空入站队列（同上：队里那些帧全是重建前的世界留下来的）。
+   *
+   * `inboundOverflowCount()` **不清** —— 它是"本端曾经跟丢过"的历史事实，清掉就等于抹证据。
+   *
+   * ## 纪律
+   *
+   *  - **它是调用方的动作，不是驱动自己的行为**：驱动不持有状态、也无从知道"重建到哪一步"，
+   *    所以这里是"你告诉我"（与 `arm(state)` 同一族的口，都是宿主把事实递进来）；
+   *  - `appliedSteps` 非整数 / 负数 = **调用方违约 ⇒ 抛**（照 `commitFace` 的口径）；
+   *  - `dispose()` 之后是 no-op（同 `arm`）。
+   */
+  realign(appliedSteps: number): void;
   /**
    * 入站队列**还没落地**的帧数（只读读数）。
    *
@@ -358,8 +394,21 @@ export function createNetDriver(opts: NetDriverOptions): NetDriver {
    */
   const pendingTexts: string[] = [];
 
-  /** 入站队列的帧数上限（可注入；见 `NetDriverOptions.inboundCapacity` 与 `DEFAULT_INBOUND_CAPACITY`） */
-  const inboundCapacity = opts.inboundCapacity ?? DEFAULT_INBOUND_CAPACITY;
+  /**
+   * 入站队列的帧数上限（可注入；见 `NetDriverOptions.inboundCapacity` 与 `DEFAULT_INBOUND_CAPACITY`）。
+   *
+   * **下界校验**（修复轮补）：`0` / 负数 / 非整数是**调用方违约**（不是网络输入），当场抛。
+   * 阶段一评审实测过不抛的后果 —— 每一帧都判溢出 ⇒ 队列恒空、"溢出"这个信号不再表示
+   * "本端跟不上了"而只表示"配置写错了"，判据与文案都会读到假话。
+   */
+  const capacityOpt = opts.inboundCapacity ?? DEFAULT_INBOUND_CAPACITY;
+  if (!Number.isInteger(capacityOpt) || capacityOpt < 1) {
+    throw new Error(
+      `net-driver.ts 的 inboundCapacity 必须是 ≥ 1 的整数（收到 ${String(opts.inboundCapacity)}）；` +
+        '这是调用方违约，不是网络输入 —— 上限为 0 会让每一帧都被判溢出，信号就失去区分力。',
+    );
+  }
+  const inboundCapacity = capacityOpt;
 
   /** 溢出过多少次（"本端曾经跟丢过"是一条不可逆的事实，所以用计数而不是只看最近一次失败） */
   let inboundOverflows = 0;
@@ -370,6 +419,9 @@ export function createNetDriver(opts: NetDriverOptions): NetDriver {
    * ★ **溢出分支只此一处**（变异 M7 的锚点）：上限判定、"这一帧不收下"、报失败、计数四件事
    * 必须在同一个地方做完 —— 分开写就会留下"某一处悄悄放行"的漏洞
    * （与"超窗判定只能写一处"是同一条纪律）。
+   *
+   * 溢出之后的**恢复路径**是"重建状态 + `realign(n)`"，见 `NetDriver.realign` 的头注；
+   * 这条 message 里说的"请走一次追平"指的就是那条路。
    */
   function enqueue(text: string): void {
     if (pendingTexts.length >= inboundCapacity) {
@@ -378,7 +430,8 @@ export function createNetDriver(opts: NetDriverOptions): NetDriver {
         'inbound-overflow',
         `入站队列已满（上限 ${inboundCapacity} 帧），这一帧**没有被收下**：宿主很久没有把当前` +
           '状态递进来（arm / submit），本端已经比对端落后一大段操作，本地状态不再可信。' +
-          '请走一次追平（resync：拿房主的档案重建本地状态），不要在这种情况下继续推进回合。',
+          '请走一次追平（resync：拿房主的档案重建本地状态），重建之后调 realign() 对齐进度；' +
+          '不要在这种情况下继续推进回合。',
       );
       return;
     }
@@ -671,6 +724,23 @@ export function createNetDriver(opts: NetDriverOptions): NetDriver {
     },
 
     appliedSteps: () => applied,
+
+    realign(next: number): void {
+      // 调用方违约 ⇒ 抛（照 `commitFace` 的口径：这不是网络输入，是"你报了一个不可能的数"）
+      if (!Number.isInteger(next) || next < 0) {
+        throw new Error(
+          `net-driver.ts 的 realign 收到越界的 appliedSteps ${String(next)}（契约是 ≥ 0 的整数）；这是调用方违约。`,
+        );
+      }
+      if (disposed) return;
+      applied = next;
+      // 重建前那个世界留下的两样东西，在这里一起丢掉：
+      //  - `stuck`：它记的是"重建前那一段里序号对不上的帧"，序号已经失去意义；
+      //  - 入站队列：队里那些帧全都属于重建前的那一段。
+      stuck = null;
+      pendingTexts.length = 0;
+      // `inboundOverflows` **不清**：它是历史事实（见 `inboundOverflowCount` 的注释）。
+    },
 
     pendingCount: () => pendingTexts.length,
 

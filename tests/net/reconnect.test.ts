@@ -173,6 +173,12 @@ interface SessionOpts {
   readonly clock?: ClockLike;
   readonly windowMs?: number;
   readonly file?: MatchFile | null;
+  /**
+   * **现取**档案的来源（可选）。用它表示"档案在会话建好之后才产出"那种接线：
+   * `file` 是建会话那一刻就固定的一份，而 `source` 每次问一次当前值
+   * （队列恢复那条腿就是这种形状：房主先打 6 步，档案才有）。
+   */
+  readonly source?: () => MatchFile | null;
 }
 
 function hostSession(opts: SessionOpts = {}): HostSession {
@@ -183,7 +189,11 @@ function hostSession(opts: SessionOpts = {}): HostSession {
     hash: sha256Concat,
     ...(opts.clock === undefined ? {} : { clock: opts.clock }),
     ...(opts.windowMs === undefined ? {} : { reconnectWindowMs: opts.windowMs }),
-    ...(opts.file === undefined ? {} : { resyncSource: () => opts.file ?? null }),
+    ...(opts.source !== undefined
+      ? { resyncSource: opts.source }
+      : opts.file === undefined
+        ? {}
+        : { resyncSource: () => opts.file ?? null }),
   });
 }
 
@@ -436,10 +446,15 @@ function runCommitmentFull(host: HostSession, guest: GuestSession, face: 0 | 1 =
 }
 
 /** 把加入方推到某个相位（用真实产出走上去；只支持本文件用到的几格） */
-function guestAt(target: 'awaiting-commit-ack' | 'face-committed' | 'seed-revealed' | 'complete'): GuestSession {
+function guestAt(
+  target: 'seed-committed' | 'awaiting-commit-ack' | 'face-committed' | 'seed-revealed' | 'complete',
+): GuestSession {
   const g = guestSession();
   acceptOk(g, { t: 'hello-ack', msg: overWire(helloAck()) });
   acceptOk(g, { t: 'commit', msg: overWire({ t: 'commit', hash: sha256Concat(SEED, SALT) }) });
+  // 收到 `commit` 之后的那一格：`seedHash` 已记下、相位由**这条消息**推到这里
+  // ——那正是 D23 ① 收窄后允许幂等的那一格。
+  if (target === 'seed-committed') return g;
   expect(g.sendCommitAck().ok).toBe(true); // ⇒ awaiting-commit-ack
   if (target === 'awaiting-commit-ack') return g;
   expect(g.commitFace(1, 'nonce-x').ok).toBe(true);
@@ -1044,17 +1059,17 @@ describe('D23 那条：卡在半路的握手消息被重新驱动 ⇒ 两端走�
     expect(guest.commitmentVerified(), '被拒的那条盐改动了验证结论').toBe(true);
   });
 
-  it('★ 第三条腿（B1 正控）：逐字相同的重复 ⇒ 幂等无操作（ok / output null / 相位与已记录的值都不动）', () => {
-    // (i) 加入方：已经记下同一份 commit 的会话再收到它
-    const g = guestAt('awaiting-commit-ack');
+  it('★ 第三条腿（B1 正控）：**本相位期待的那条**的逐字重复 ⇒ 幂等无操作（ok / output null / 相位与值都不动）', () => {
+    // (i) 加入方：`seed-committed` 正是 `commit` 产生的那一格 ⇒ 逐字重复是幂等无操作
+    const g = guestAt('seed-committed');
     const beforeCommit = g.peerStatus();
     const dupCommit = g.accept({ t: 'commit', msg: overWire({ t: 'commit', hash: sha256Concat(SEED, SALT) }) });
-    expect(dupCommit.ok, '内容逐字相同的重复 commit 被拒了（D23 ① 要的是幂等无操作）').toBe(true);
+    expect(dupCommit.ok, '本相位期待的那条的逐字重复被拒了（D23 ① 要的是幂等无操作）').toBe(true);
     expect(dupCommit.ok ? dupCommit.output : 'x', '幂等无操作不许产出发包').toBeNull();
-    expect(g.phase(), '幂等无操作改了相位').toBe('awaiting-commit-ack');
+    expect(g.phase(), '幂等无操作改了相位').toBe('seed-committed');
     expect(g.peerStatus(), '幂等无操作改了读数').toEqual(beforeCommit);
 
-    // (ii) 房主：已经验过的面再收到一次（逐字相同）
+    // (ii) 房主：已经验过的面再收到一次（逐字相同）；`complete` 正是 `reveal-face` 产生的那一格
     const h = hostSession();
     const hd = h.accept({ t: 'hello', msg: overWire(hello()) });
     expect(hd.ok).toBe(true);
@@ -1072,6 +1087,28 @@ describe('D23 那条：卡在半路的握手消息被重新驱动 ⇒ 两端走�
     expect(h.phase()).toBe('complete');
     expect(h.face(), '幂等无操作改写了已记录的面').toBe(1);
     expect(h.peerStatus()).toEqual(beforeFace);
+  });
+
+  it('★ 第三条腿（B1 的边界，阶段一评审 K2 的收窄）：**不是**产生当前相位的那条 ⇒ 照旧拒绝', () => {
+    // D23 ① 的适用范围是"**本相位期待的那条消息**的逐字重复"，也就是"正是产生当前相位的那条"。
+    // `commit` 产生的是 `seed-committed`；在它之后的四格上，逐字相同的 `commit` **不再**是重传，
+    // 而是"本相位不期待的消息"（R8 的 B4 那一格）⇒ 必须走 T3 的既有出口。
+    //
+    // 为什么单列一条：第一版只判"逐字相同"，于是这四格也被报成 `ok` —— **比裁决宽、而且没有腿看着**
+    // （评审的 K2 实测：判据面 117 条一条不红）。这一条就是那条缺失的腿。
+    for (const phase of ['awaiting-commit-ack', 'face-committed', 'seed-revealed', 'complete'] as const) {
+      const g = guestAt(phase);
+      const before = g.peerStatus();
+      const dup = g.accept({ t: 'commit', msg: overWire({ t: 'commit', hash: sha256Concat(SEED, SALT) }) });
+      expect(dup.ok, `${phase} 上一条逐字相同的重复 commit 被当成了重传（它不是产生这一格的那条）`).toBe(false);
+      expect(dup.ok ? null : dup.reason, `${phase} 上的拒绝理由码`).toBe('unexpected-message');
+      expect(g.phase(), `${phase} 上的拒绝改了相位`).toBe(phase);
+      expect(g.peerStatus(), `${phase} 上的拒绝改了读数`).toEqual(before);
+    }
+    // 反控（证明上面那条不是"这一支整个坏了"）：产生当前相位的那一格**必须**是幂等的
+    const ok = guestAt('seed-committed');
+    const dup = ok.accept({ t: 'commit', msg: overWire({ t: 'commit', hash: sha256Concat(SEED, SALT) }) });
+    expect(dup.ok, 'seed-committed 这一格本该是幂等的那一格').toBe(true);
   });
 
   it('★ 第三条腿（B2 反控）：类型对但**内容不同** ⇒ 照旧拒绝（D23 不许开这个口子）', () => {
@@ -1216,6 +1253,66 @@ describe('D19 那条：resume 回来后承诺流程能继续走完（机制选�
     expect(guest.phase()).toBe('complete');
     expect(host.face(), '房主没落定加入方选的面').toBe(1);
     expect(guest.commitmentVerified()).toBe(true);
+  });
+
+  it('★ 第二条（重复的）resuming hello 不许毁掉"原来那一格"（阶段一评审的阻断项）', () => {
+    // ## 缺陷的形状（修之前）
+    //
+    // `acceptHello` 的 resuming 格原来无条件 `phaseBeforeResuming = s.phase; s.phase = 'resuming'`。
+    // **第二条**同 `sessionId` + `resuming:true` 的 hello 到达时 `s.phase` 已经是 `'resuming'`
+    // ⇒ 基线被写成 `'resuming'`、原来那一格丢了 ⇒ 应答 `resync-req` 时"恢复"回 `resuming`
+    // ⇒ 房主**永久停在 resuming**（`sendRevealSeed` 报 `seed-before-face`、`sendRevealSalt` 被拒、
+    // `redrive().output === null`）—— 承诺流程静默停住，而判据面 117 条一条不红
+    // （评审的 K1/K2 两个变异都实测过这一点）。
+    //
+    // ## 修法（这一格做成幂等）+ 这条腿的牙
+    //
+    //  - 第一条：进 `resuming`、基线记成"原来那一格"（`seed-revealed`）；
+    //  - 第二条（逐字相同）：照旧回**同一条** ack（逐字相同），但相位/读数**一个都不动**
+    //    —— 这里先断言"第一条之后是什么样"，再断言"第二条之后一模一样"，否则这条腿在
+    //    "本来就没有原来那一格"的夹具上会恒真；
+    //  - 应答 `resync-req` ⇒ 相位必须回到 `'seed-revealed'`，且 `sendRevealSeed` 仍不可用
+    //    （那一格本来就不能再揭示）、`redrive()` 必须推得出 `reveal-seed`
+    //    —— 后两条是**后果**，比只读相位更难被"改个赋值"糊过去。
+    const { file } = playArchive(ARCHIVE_STEPS);
+    const host = hostSession({ file });
+    const hd = host.accept({ t: 'hello', msg: overWire(hello()) });
+    expect(hd.ok).toBe(true);
+    expect(host.sendCommit(SEED, SALT).ok).toBe(true);
+    acceptOk(host, { t: 'commit-face', msg: overWire({ t: 'commit-face', hash: sha256Concat('1', 'nonce-x') }) });
+    expect(host.sendRevealSeed().ok).toBe(true);
+    expect(host.phase(), '夹具问题：房主该停在 seed-revealed').toBe('seed-revealed');
+
+    // 第一条 resuming hello
+    const first = host.accept({ t: 'hello', msg: overWire(hello({ resuming: true })) });
+    expect(first.ok).toBe(true);
+    if (!first.ok) throw new Error('unreachable');
+    expect(host.phase(), '第一条 resuming hello 之后该进 resuming').toBe('resuming');
+    expect(host.peerStatus().needsResync).toBe(true);
+    const afterFirst = host.peerStatus();
+
+    // 第二条（逐字相同）
+    const second = host.accept({ t: 'hello', msg: overWire(hello({ resuming: true })) });
+    expect(second.ok, '第二条 resuming hello 被拒了（这一格该是幂等的）').toBe(true);
+    if (!second.ok) throw new Error('unreachable');
+    expect(host.phase(), '第二条 resuming hello 把相位搬走了').toBe('resuming');
+    expect(host.peerStatus(), '第二条 resuming hello 改了读数').toEqual(afterFirst);
+    // ack 必须与第一条逐字相同（"重复的握手 ⇒ 同一条 ack"）
+    expect(JSON.stringify(second.output)).toBe(JSON.stringify(first.output));
+
+    // 应答 resync-req ⇒ 回到"原来那一格"（不是 resuming）
+    const resyncRes = acceptSessionOut(host, {
+      t: 'resync-req',
+      msg: overWire({ t: 'resync-req', sessionId: SESSION_ID, appliedSteps: 0 }),
+    });
+    expect(host.phase(), '两条 resuming hello 之后房主永久卡在 resuming（评审的阻断项）').toBe('seed-revealed');
+    expect(resyncRes.t).toBe('resync-res');
+    // 后果面：房主的"该发而未确认"那条必须是 reveal-seed（而不是 null）
+    const redrive = host.redrive();
+    expect(redrive.ok).toBe(true);
+    if (!redrive.ok) throw new Error('unreachable');
+    expect(redrive.output?.t, '房主推不出该重发的那条消息（流程会静默停住）').toBe('reveal-seed');
+    expect(host.sendRevealSalt().ok, 'seed-revealed 本来就不该能发盐').toBe(false);
   });
 
   it('反控：普通（非 resuming）的迟到 hello 照旧被忽略、状态一动不动（N-6 的腿在这里也成立）', () => {
@@ -1557,6 +1654,22 @@ describe('队列那条：入站队列的上限与溢出策略（选 (a)：加上
     expect(driver.inboundOverflowCount()).toBe(0);
     const src = readFileSync(join(NET_DIR, 'net-driver.ts')).subarray(0, 4 * 1024 * 1024).toString('utf8');
     expect(src.includes('export const DEFAULT_INBOUND_CAPACITY = 256'), '缺省上限的出处').toBe(true);
+    // 缺省值是**可注入的缺省、不是承诺**（阶段一评审：256 的依据只有夹具规模 + 内存量级）
+    expect(src.includes('不是一句承诺'), '缺省值的定位必须写实').toBe(true);
+  });
+
+  it('★ 上限的退化输入（0 / -1 / 非整数）是调用方违约 ⇒ 当场抛，不许"每帧都判溢出"', async () => {
+    // 阶段一评审实测的退化：`capacity=0` ⇒ 每一帧都被判溢出 ⇒ 队列恒空、"溢出"这个信号
+    // 不再表示"本端跟不上了"而只表示"配置写错了"（判据与文案都会读到假话）。
+    const pair = await makeLink();
+    for (const bad of [0, -1, 1.5, Number.NaN]) {
+      expect(
+        () => createNetDriver({ transport: pair.B.transport, seat: 1, recorder: null, inboundCapacity: bad }),
+        `inboundCapacity=${String(bad)} 应该当场抛（调用方违约）`,
+      ).toThrow(/inboundCapacity/);
+    }
+    // 正控：合法值不抛（否则上面那条对"这一支整个坏了"也成立）
+    expect(() => createNetDriver({ transport: pair.B.transport, seat: 1, recorder: null, inboundCapacity: 1 })).not.toThrow();
   });
 
   it('★ 溢出之后走一次追平：needsResync 能被清掉，且相位回到原来那一格（承诺进度不回退）', () => {
@@ -1587,6 +1700,141 @@ describe('队列那条：入站队列的上限与溢出策略（选 (a)：加上
     expect(guest.peerStatus().needsResync).toBe(false);
     expect(guest.commitmentVerified(), '追平不该动承诺进度').toBe(true);
     expect(host.phase(), '房主这一侧不该被重连请求改动').toBe('complete');
+  });
+
+  it('★ 溢出 → 追平 → realign → **之后还能继续推进**（两端指纹再次逐字相等）', async () => {
+    // ## 为什么单列这一条（阶段一评审判"恢复是假恢复"）
+    //
+    // 原来只有"标记面"的腿：溢出被记成溢出、`needsResync` 被清掉、相位回原来那一格。
+    // 但**驱动那一侧**还留着 `applied = 旧值` 与 `stuck = 那条帧`（`stuck` 全文件只有
+    // `dispose()` 会清）⇒ 之后每一条入站 `act` 继续 `seq-mismatch`：**标记清掉了、状态没救回来**。
+    // 这一条把"溢出 → 追平 → 两端再次锁步"整条链跑通，`realign()` 就是补上的那一步。
+    //
+    // 形状：房主真打 6 步（进它的记录器 + 自己的状态）；加入方那个驱动的队列上限设成 1、
+    // **宿主一直不 arm**（它的状态停在开局）⇒ 溢出；然后走真实的 resync（房主的档案 →
+    // `stateAtStep` 重建 → `realign(6)`）⇒ 再打 4 步，两端指纹必须一直相等。
+    //
+    // ⚠️ 能力边界（如实登记）：这条腿里的"溢出"是**构造**出来的（加入方从头就没 arm），
+    // 它证明的是"溢出之后这条路能走通"，不是"生产环境下溢出会发生"。后者由第一条腿
+    // （上限 1 + 两条真帧 + 不 arm）负责。
+    const clock = fakeClock(0);
+    const pair = await makeLink();
+    const hostRecorder = createMatchFileRecorder();
+    // 房主的档案**在 6 步之后才有** ⇒ 用 `source`（现取口）而不是建会话时固定的一份
+    let archiveForResync: MatchFile | null = null;
+    const host = hostSession({ clock, source: () => archiveForResync });
+    const guest = guestSession({ clock });
+    pair.A.transport.onStatus((ch) => host.noteTransportStatus(ch.to));
+    pair.B.transport.onStatus((ch) => guest.noteTransportStatus(ch.to));
+    host.noteTransportStatus(pair.A.transport.status());
+    guest.noteTransportStatus(pair.B.transport.status());
+
+    const hostState = opening(ARCHIVE_SEED);
+    // ★ 加入方那个驱动**从头到尾不 arm**（这正是队列会攒起来的场面：宿主没把状态递进来）
+    const guestDriver = createNetDriver({
+      transport: pair.B.transport,
+      seat: 1,
+      recorder: null,
+      inboundCapacity: 1,
+    });
+    // 接线的活：溢出 ⇒ 会话层标 needsResync（读 T6 给的可读读数）
+    guestDriver.onFailure((f) => {
+      if (f.reason === 'inbound-overflow') guest.noteResyncNeeded('queue-overflow', f.message);
+    });
+    const hostDriver = createNetDriver({ transport: pair.A.transport, seat: 0, recorder: hostRecorder });
+    hostDriver.arm(hostState);
+
+    // 房主真走 6 步：**本端**的操作用 `submit`，**对端**的操作走驱动的入站口
+    // （`feedText` 的文档写明它是测试构造入站帧的口）—— 这样房主的状态与记录器都完整，
+    // 而加入方那一侧一直停在开局、队列照常溢出。
+    for (let i = 0; i < 6; i += 1) {
+      const a = nextAction(hostState, i);
+      expect(a, `第 ${i} 步没有可用操作`).not.toBeNull();
+      if (a === null) throw new Error('unreachable');
+      if (a.player === 0) {
+        expect(hostDriver.submit(hostState, a).ok, `第 ${i} 步房主提交必须成功`).toBe(true);
+        pair.pump(ACT_LATENCY_TICKS);
+        // 那一条帧也真的过线（进了加入方的队列）
+      } else {
+        const enc = encodeMsg({ t: 'act', seq: i, action: { ...a, seq: i } });
+        expect(enc.ok, '第 ${i} 步的 act 编不出来').toBe(true);
+        if (!enc.ok) throw new Error('unreachable');
+        hostDriver.feedText(enc.text);
+        hostDriver.arm(hostState);
+      }
+    }
+    expect(hostDriver.appliedSteps()).toBe(6);
+    expect(hostRecorder.actions().length, '房主记录器里该有 6 条（追平凭据）').toBe(6);
+    expect(hostState.draftPicks.length, '房主这一局真的走起来了').toBeGreaterThan(0);
+    // 非零扰动自证：加入方确实收到了帧、队列确实溢出了、它的状态确实停在后面
+    pair.pump(ACT_LATENCY_TICKS * 3);
+    expect(guestDriver.pendingCount(), '上限 1 ⇒ 队里只该留一条').toBe(1);
+    expect(guestDriver.inboundOverflowCount(), '前提：加入方确实溢出了').toBeGreaterThan(0);
+    expect(guestDriver.appliedSteps(), '前提：加入方一步都没落地').toBe(0);
+    expect(guest.peerStatus().needsResync, '溢出必须把会话标成"需要一次追平"').toBe(true);
+    expect(guest.peerStatus().needsResyncCause).toBe('queue-overflow');
+
+    // 追平：拿房主的档案重建加入方的状态（唯一出处 `stateAtStep`）
+    const archive = hostRecorder.toMatchFile({
+      seed: ARCHIVE_SEED,
+      setup: setupFromState(hostState),
+      players: [{ nick: '甲' }, { nick: '乙' }],
+      cardDataHash: CARD_DATA_HASH,
+      createdAt: '2026-09-18T00:00:00.000Z',
+    });
+    const rebuilt = stateFromArchive(archive);
+    expect(stateFingerprint(rebuilt), '追平出来的状态必须与房主一致').toBe(stateFingerprint(hostState));
+    archiveForResync = archive; // 现取口：档案到这里才存在
+
+    // ★ 恢复的那一步（`realign`）：把驱动的进度事实对齐到重建后的那一步
+    guestDriver.realign(archive.actions.length);
+    expect(guestDriver.appliedSteps(), 'realign 之后进度事实必须对齐').toBe(6);
+    expect(guestDriver.pendingCount(), 'realign 应该丢掉重建前那段队列').toBe(0);
+    // 会话层那一侧：把 needsResync 也清掉（走真实的重连入口）
+    expect(guest.markResuming().ok).toBe(true);
+    const hd = host.accept({ t: 'hello', msg: overWire(hello({ resuming: true })) });
+    expect(hd.ok).toBe(true);
+    if (!hd.ok) throw new Error('unreachable');
+    acceptOk(guest, { t: 'hello-ack', msg: overWire(hd.output) });
+    const resyncRes = acceptSessionOut(host, {
+      t: 'resync-req',
+      msg: overWire({ t: 'resync-req', sessionId: SESSION_ID, appliedSteps: 6 }),
+    });
+    const decoded = overWire(resyncRes.msg) as { file: MatchFile };
+    acceptOk(guest, { t: 'resync-res', msg: decoded });
+    const applied = guest.applyResyncFile(decoded.file, 6);
+    expect(applied.ok, '追平被拒了').toBe(true);
+    expect(guest.peerStatus().needsResync, '追平之后会话层的标记该清掉').toBe(false);
+
+    // ★ 关键：**继续推进**（第 6 步起），两端必须一直锁步 —— 否则"溢出转重连"只兑现了标记那一半
+    const guestStateAfter = rebuilt;
+    guestDriver.arm(guestStateAfter);
+    const framesBefore = pair.steps().length;
+    // 走到"至少有一条房主的 act 真的到过加入方"为止（换手顺序由引擎决定，所以给足步数，
+    // 但**每一步都断言指纹相等**；`nextAction` 在 60 步内一定给得出操作 —— 那个种子已被 T5 实测）
+    for (let i = 6; i < 22; i += 1) {
+      const a = nextAction(hostState, i);
+      expect(a, `第 ${i} 步没有可用操作`).not.toBeNull();
+      if (a === null) throw new Error('unreachable');
+      const actor = a.player === 0 ? hostDriver : guestDriver;
+      const actorState = a.player === 0 ? hostState : guestStateAfter;
+      const r = actor.submit(actorState, a);
+      expect(r.ok, `追平之后第 ${i} 步提交必须成功（seq 必须对上，否则就是"标记清了、状态没救回来"）`).toBe(true);
+      pair.pump(ACT_LATENCY_TICKS);
+      hostDriver.arm(hostState);
+      guestDriver.arm(guestStateAfter);
+      expect(stateFingerprint(guestStateAfter), `追平之后第 ${i} 步两端指纹必须相等`).toBe(
+        stateFingerprint(hostState),
+      );
+    }
+    expect(guestDriver.appliedSteps(), '两端步数必须相等').toBe(hostDriver.appliedSteps());
+    // 反空转：这 4 步里必须真的有过"房主 → 加入方"的帧（否则"加入方收得下"是空转）
+    const aToB = pair.steps().slice(framesBefore).filter((d) => d.from === 'A' && d.to === 'B');
+    expect(aToB.length, '追平之后没有任何一条房主的 act 到达加入方（这条腿在空转）').toBeGreaterThan(0);
+    console.log(
+      `T6-OVERFLOW-RECOVERY steps=${hostDriver.appliedSteps()} overflow=${guestDriver.inboundOverflowCount()} ` +
+        `aToB=${aToB.length} fp=${stateFingerprint(hostState)}`,
+    );
   });
 });
 
