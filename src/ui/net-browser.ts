@@ -638,6 +638,8 @@ export async function createInvite(
 ): Promise<CreatedInvite | CompressFailure | { ok: false; reason: string; message: string }> {
   const fields: InviteFields = {
     p: input.p,
+    // ★ D 轮（I-3 甲）：房主这一局的会话号也进载荷（加入方照它建会话，两端才配得上对）
+    sessionId: input.sessionId,
     sdp: input.sdp,
     ice: input.ice,
     hostPromise: input.hostPromise,
@@ -1303,7 +1305,13 @@ export function createBrowserTransport(env?: NetBrowserEnv): NetTransport {
       // ★ **B2**：`setLocalDescription` 之后 ICE 收集才刚开始 ⇒ 此刻 `localDescription.sdp` 里
       //   还没有候选。这里把"等它收完"排下来（带上界），但**不 await**（`init()` 只等本侧，D18）。
       //   要发一条非 trickle 的 offer 的调用方去 `await transport.localDescription()`。
-      gather = waitForIceGathering(conn, env);
+      //
+      //   ⚠️ **D 轮 I-2**：这里曾经传的是**原始的** `env`（不是上面那份 `resolved`）——
+      //   `waitForIceGathering` 自己会与缺省环境合并，但**缺省环境里没有 `ticker`**
+      //   （那是注入能力，`defaultEnv()` 拿不到 `window`）。于是"宿主给了 ticker、这一句却看不见"
+      //   ⇒ `iceGatheringState !== 'complete'` 时它回 `'unsupported'` ⇒ 房主永远取不到连接描述。
+      //   结算：传 `resolved`（就是本函数这一路上读的那个合并结果），不再有第二处合并。
+      gather = waitForIceGathering(conn, resolved);
       // 切回前台 / 换网之后重启 ICE。这个订阅是**能力**（`env.onVisibilityChange`）：
       // 纯层不知道"可见性"这个东西，宿主没给就不绑（无头 / 测试环境很常见）
       const onVis = resolved.onVisibilityChange;

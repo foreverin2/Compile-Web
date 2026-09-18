@@ -100,6 +100,14 @@ export interface InviteRead {
 export interface LobbyDraftInput {
   readonly p: number;
   readonly originAndPath: string;
+  /**
+   * ★ D 轮（I-3 甲）：**这一局的房主会话号**。
+   *
+   * 它由宿主给（`main.ts` 那边就是 `opts.sessionId` 同一串 —— 建会话对象与写邀请码
+   * 必须是**同一个号**，否则加入方照载荷建出来的会话与房主那侧对不上）。
+   * 本层不生成它：`sessionId` 的唯一来源是调用方（`src/net` 不许取随机）。
+   */
+  readonly sessionId: string;
   readonly sdp: string;
   readonly ice: readonly string[];
   readonly hostPromise: string;
@@ -131,6 +139,17 @@ export type AnswerCodeResult =
  * 判据 14 要求**用可注入的假传输**驱动一次完整握手。如果大厅内部直接
  * `createBrowserTransport()`（真 WebRTC），假件就喂不进来 —— 那**正是那条判据要抓的缺陷**，
  * 不是判据要放宽的理由。
+ *
+ * ## ★ D 轮 I-3（走甲）：`sessionId` 的**两个来源**，别混
+ *
+ *  - `opts.sessionId` 是**本端自己**的会话号（真实调用方 `main.ts` 各自 `newSessionId()`）；
+ *  - 邀请码里带着**房主的**会话号（`InvitePayload.sessionId`）。
+ *
+ * 会话层是**按会话号配对**的：房主用它校验加入方发来的 `hello`。所以加入方建会话对象时
+ * 用的是**邀请码里那一串**（不是自己那串），否则两端永远是两套号、握手当场被拒
+ * （症状：加入方停在 `handshaking`）。房主侧没有这个"别处的号"，就用自己那串。
+ *
+ * 归属：加入方那串仍然上报（`hello.sessionId` 是它自己的身份），**只有"这一局叫什么"照房主**。
  */
 export interface LobbyClientOptions {
   /** 本端角色：房主建房、加入方贴邀请码 */
@@ -1235,7 +1254,20 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
     const old = s.link;
     if (old !== null) old.detach();
     const transport = opts.createTransport();
-    const started = await transport.init({ selfId: opts.sessionId, peerId: `peer-of-${opts.sessionId}` });
+    /**
+     * ★ **建会话对象用的会话号**（D 轮 I-3 甲）。
+     *
+     * 加入方用**邀请码里房主那一串**（`s.joined.payload.sessionId`）；其余一律用自己那串。
+     * 为什么不能各用各的：会话层按会话号配对，房主拿它校验 `hello` ⇒ 两套号 = 握手当场被拒
+     * （实测症状：加入方停在 `handshaking`，房主那侧连相位都不动）。
+     *
+     * ⚠️ 回落到 `opts.sessionId` 是**刻意**的：没解出邀请码就建链路（重连、或宿主自己接的路）
+     * 时仍然要有个号，而不是空串 —— 空串会让房主那侧把每条 `hello` 都判成别人的。
+     */
+    const linkSessionId = opts.role === 'guest' && s.joined?.ok === true
+      ? s.joined.payload.sessionId
+      : opts.sessionId;
+    const started = await transport.init({ selfId: linkSessionId, peerId: `peer-of-${linkSessionId}` });
     const link = createLobbySessionLink({
       // ⚠️ 这里必须是 `opts.role`（**注入的角色**），**不是** `s.role`：`s.role` 要到
       //    `startHost()` / `applyInvite()` 才被赋值，而 `connect()` 会在它**之前**被调
@@ -1245,7 +1277,8 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
       //    而它期待的是自己那份会话的握手）；诊断探针 `.superpowers/g5-T8/probes/diag-handshake.test.ts` 打的就是它。
       role: opts.role,
       transport,
-      sessionId: opts.sessionId,
+      // ★ I-3 甲：加入方照邀请码里房主那一串建会话（见上面 `linkSessionId` 的说明）
+      sessionId: linkSessionId,
       hash: opts.hash,
       ...(opts.seat === undefined ? {} : { seat: opts.seat }),
       localProtoVersion: opts.localProtoVersion,

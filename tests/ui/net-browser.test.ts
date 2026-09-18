@@ -441,6 +441,7 @@ describe('判据 7：SDP 压缩区间与邀请码总长', () => {
         p: PROTO_VERSION,
         sdp: FULL_OFFER_SDP,
         ice: ['candidate:1467250027 1 udp 2122260223 15344d9b-1c48-4496-8365-65d7e1b67fe5.local 63625 typ host'],
+        sessionId: 'sid-00000000000000000000000000000000',
         hostPromise: 'a'.repeat(64),
         guestPromise: 'b'.repeat(64),
       },
@@ -478,6 +479,7 @@ describe('判据 7：SDP 压缩区间与邀请码总长', () => {
       p: PROTO_VERSION,
       sdp: FULL_OFFER_SDP,
       ice: [],
+      sessionId: 'sid-00000000000000000000000000000000',
       hostPromise: 'a'.repeat(64),
       guestPromise: 'b'.repeat(64),
     });
@@ -502,6 +504,7 @@ describe('判据 7：SDP 压缩区间与邀请码总长', () => {
       p: PROTO_VERSION,
       sdp: FULL_OFFER_SDP,
       ice: ['candidate:1467250027 1 udp 2122260223 15344d9b-1c48-4496-8365-65d7e1b67fe5.local 63625 typ host'],
+      sessionId: 'sid-00000000000000000000000000000000',
       hostPromise: 'a'.repeat(64),
       guestPromise: 'b'.repeat(64),
     };
@@ -522,6 +525,7 @@ describe('判据 7：SDP 压缩区间与邀请码总长', () => {
       p: PROTO_VERSION,
       sdp: FULL_OFFER_SDP,
       ice: ['candidate:1467250027 1 udp 2122260223 15344d9b-1c48-4496-8365-65d7e1b67fe5.local 63625 typ host'],
+      sessionId: 'sid-00000000000000000000000000000000',
       hostPromise: 'a'.repeat(64),
       guestPromise: 'b'.repeat(64),
     };
@@ -554,6 +558,7 @@ describe('判据 7：SDP 压缩区间与邀请码总长', () => {
           p: PROTO_VERSION,
           sdp: FULL_OFFER_SDP,
           ice: [],
+          sessionId: 'sid-00000000000000000000000000000000',
           hostPromise: 'a'.repeat(64),
           guestPromise: 'b'.repeat(64),
         },
@@ -572,6 +577,7 @@ describe('判据 7：SDP 压缩区间与邀请码总长', () => {
           p: PROTO_VERSION,
           sdp: FULL_OFFER_SDP,
           ice: [],
+          sessionId: 'sid-00000000000000000000000000000000',
           hostPromise: 'a'.repeat(64),
           guestPromise: 'b'.repeat(64),
         },

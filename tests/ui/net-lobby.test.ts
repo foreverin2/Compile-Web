@@ -172,6 +172,7 @@ async function realInvite(originAndPath = 'https://x.invalid/lobby', p: number =
       originAndPath,
       sdp: OFFER_SDP,
       ice: ['candidate:1 1 udp 1 127.0.0.1 1 typ host'],
+      sessionId: 'sid-00000000000000000000000000000000',
       hostPromise: 'host-promise-x',
       guestPromise: 'guest-promise-x',
     },
@@ -1569,16 +1570,17 @@ describe('★ 修复轮 B2 · 等 ICE 收集的**上界**（唯一失败形态�
 
 describe('★ 修复轮 B3/B4 · 回示码：同形状 + 具名构造器 + 编解码往返', () => {
   it('★ `answerPayloadFields`：两个承诺位就是那个**具名占位串**（类型上给不了真承诺）', () => {
-    const f = answerPayloadFields({ protoVersion: PROTO_VERSION, sdp: 'SDP-Y', ice: ['c1', 'c2'] });
+    const f = answerPayloadFields({ protoVersion: PROTO_VERSION, sessionId: 'sid-b34', sdp: 'SDP-Y', ice: ['c1', 'c2'] });
     expect(f.hostPromise, '房主承诺位不是占位串').toBe(ANSWER_PROMISE_PLACEHOLDER);
     expect(f.guestPromise, '加入方承诺位不是占位串').toBe(ANSWER_PROMISE_PLACEHOLDER);
+    expect(f.sessionId, '回示码没带上这一局的会话号（D 轮 I-3 甲）').toBe('sid-b34');
     expect(f.sdp).toBe('SDP-Y');
     expect(f.ice).toEqual(['c1', 'c2']);
     expect(f.p).toBe(PROTO_VERSION);
     // 占位串必须匹配 `PROMISE_TEXT`（否则 `encodeInvite` 会拒）
     expect(/^[^\s.]+$/.test(ANSWER_PROMISE_PLACEHOLDER), '占位串形状不合法（encodeInvite 会拒）').toBe(true);
     // 类型上给不了承诺：构造器的入参里没有那两个字段（这里用"多传一个字段"来固化这一点）
-    const extra = answerPayloadFields({ protoVersion: 1, sdp: 'S', ice: [], hostPromise: 'x' } as never);
+    const extra = answerPayloadFields({ protoVersion: 1, sessionId: 'sid-b34', sdp: 'S', ice: [], hostPromise: 'x' } as never);
     expect(extra.hostPromise, '多传的 hostPromise 竟然生效了（构造器没把承诺位写死）')
       .toBe(ANSWER_PROMISE_PLACEHOLDER);
   });
@@ -1586,7 +1588,7 @@ describe('★ 修复轮 B3/B4 · 回示码：同形状 + 具名构造器 + 编�
   it('★ 往返：回示码经**真件**编码 ⇒ 解出来的 SDP/ICE 与原件逐字相同，且 `isAnswerPayload` 为真', async () => {
     // 用**真件**（`createInvite`：真压缩 + 真自洽检查）编码一条**回示码形状**的载荷：
     // 两个承诺位来自 `answerPayloadFields`（具名占位串），其余是 answer 的 sdp / ice。
-    const fields = answerPayloadFields({ protoVersion: PROTO_VERSION, sdp: OFFER_SDP, ice: ['cand-a'] });
+    const fields = answerPayloadFields({ protoVersion: PROTO_VERSION, sessionId: 'sid-b34', sdp: OFFER_SDP, ice: ['cand-a'] });
     const enc = await createInvite({ ...fields, originAndPath: REAL_HREF }, REAL_ENV);
     expect(enc.ok, `回示码编码失败：${enc.ok ? '' : enc.message}`).toBe(true);
     if (!enc.ok) return;

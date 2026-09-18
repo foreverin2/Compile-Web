@@ -177,6 +177,70 @@ describe('G5 T8 · 结构腿一个字都没动（剥注释口径）', () => {
   });
 });
 
+describe('G5 T8 · D 轮：大厅那份 env 与"造传输用的那一份"是同一份', () => {
+  /**
+   * ## 这条腿为什么必须是**文本腿**（说清楚它的能力边界，别高估）
+   *
+   * I-1 / I-2 的缺陷形状是"**能力注进了另一份环境**"，而 `main.ts` 是应用入口，
+   * 一 import 就把整个游戏跑起来（见文件头注）⇒ 本仓**没有任何行为腿**能观察
+   * "`createTransport` 用的那份 env 里到底有没有那两样"。端到端腿也不行：
+   * `tests/ui/g5-lobby-e2e.test.ts` 里那份 env 是**夹具自己写的**，与 `main.ts` 无关
+   * （实测：把这里的注入撤掉，那条腿**照绿**；这也是它红了才叫证据的原因）。
+   *
+   * ⇒ 这里用"**能力清单**"这条文本判据把回路堵上：它问的不是"某一行文本在不在"，
+   * 而是"那份 env 的**能力集合**与 `createTransport` 真正吃到的是不是同一份"。
+   * 它能抓的是"少注一样 / 注到另一份上"这一类**静默失效**；抓不到"环境对象造错了"。
+   */
+  const envBody = functionBody(MAIN, 'lobbyEnv');
+
+  it('10. `lobbyEnv()` 同时给出 `settings` / `ticker` / `onPeerConnection` 三样能力', () => {
+    // ★ 三样各自都是"某个调用点唯一的来源"：settings（读设置）、ticker（等 ICE 的上界）、
+    //   onPeerConnection（把造出来的那条连接交回房主那格）。少任何一样都**不报错**，只是静默失效。
+    for (const key of ['settings', 'ticker', 'onPeerConnection']) {
+      expect(envBody, `lobbyEnv() 里没有 ${key}（这一样能力会静默失效：没有调用点会报错）`).toContain(key);
+    }
+    // 反空转：抽出来的确实是那个函数（切错了会得到空片段 ⇒ 上面三条恒假）
+    expect(envBody.length, 'lobbyEnv 的片段太短（切错了？）').toBeGreaterThan(40);
+    expect(envBody, 'lobbyEnv 的片段里没有 return（这不是那个环境工厂）').toContain('return {');
+    // `peerConnection` 那一样**不许**出现在这里：浏览器 API 的唯一出处是 net-browser.ts（D6）
+    expect(envBody, 'main.ts 里出现了 peerConnection 构造（D6：那个名字只能住在 net-browser.ts）')
+      .not.toMatch(/peerConnection\s*:/);
+  });
+
+  it('11. 全文件**只有一份**环境工厂，且 `createTransport` / `buildInvite` 用的就是它', () => {
+    // ① "第二份环境"正是 I-1 / I-2 的根因 ⇒ 这里的计数腿直接钉死它不许回来
+    const factories = occurrences(MAIN, 'function lobbyEnv');
+    expect(
+      factories.length,
+      `lobbyEnv 被声明了 ${factories.length} 处：多出来的第二份环境会让"能力注到哪一份上"再次分叉`
+      + `（I-1 / I-2 就是这个形状）:\n${factories.join('\n')}`,
+    ).toBe(1);
+    // ② 造传输的那一处必须用**这一份**（改成别的名字就等于又把能力分叉出去）
+    const start = functionBody(MAIN, 'startLobby');
+    expect(start, 'startLobby 里没有 createTransport').toContain('createTransport');
+    expect(
+      start,
+      'createTransport 用的不是 lobbyEnv()：造出来的传输拿不到 ticker / onPeerConnection',
+    ).toContain('createTransport: () => createBrowserTransport(lobbyEnv())');
+    // ③ 反面：一个**形状相同但缺能力**的第二份环境不许再出现（`lobbyEnvWithIce` 那个名字就是它）
+    expect(
+      occurrences(MAIN, 'lobbyEnvWithIce').length,
+      'lobbyEnvWithIce 又回来了（D 轮把它并掉了：两份环境正是 I-1 / I-2 的根因）',
+    ).toBe(0);
+    // ④ `init()` 回执那一格确实被写下来（否则 `onPeerConnection` 注了也没人接）
+    expect(MAIN, 'onPeerConnection 的回执没有落到 hostPeerConnection 上')
+      .toMatch(/onPeerConnection:\s*\(pc\)\s*=>\s*\{\s*hostPeerConnection\s*=\s*pc;?\s*\}/);
+  });
+
+  it('12. 正控：往合成源码里塞"第二份环境" ⇒ 上面那条计数腿必须能报出来', () => {
+    const fake = `${MAIN}\nfunction lobbyEnv() { return {}; }\n`;
+    expect(occurrences(fake, 'function lobbyEnv').length, '正控：合成源码里多加的那份环境没被数到').toBe(2);
+    const fakeMissing = "function lobbyEnv(): NetBrowserEnv { return { settings: () => netSettings }; }";
+    expect(functionBody(fakeMissing, 'lobbyEnv').includes('ticker'), '正控：缺 ticker 的合成环境竟然被判成齐了')
+      .toBe(false);
+  });
+});
+
 describe('G5 T8 · 正控（防这几条腿恒真）', () => {
   it('9. 分类器与计数器对**合成源码**照样有牙', () => {
     // ① 顺序判据：造一份"新入口排在预览之后"的合成主干 ⇒ 判据必须能报出它

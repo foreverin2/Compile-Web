@@ -279,9 +279,51 @@ const netSettings: { turnUrl: string; turnUsername: string; turnCredential: stri
   turnCredential: '',
 };
 
-/** 大厅要的注入环境：**只读设置**。`signalingEndpointSetting` 在这一层不发任何请求（§8.1） */
-function lobbyEnv() {
-  return { settings: () => netSettings };
+/**
+ * **这一局的房主会话号**（D 轮 I-3 甲）。
+ *
+ * 两个来源，按角色取：房主用它自己那串（`client.state().sessionId`），
+ * 加入方用**邀请码里带过来的**那一串（`state().joined.payload.sessionId`）——
+ * 会话层按会话号配对，"这一局叫什么"只有房主说了算。
+ *
+ * 没解出邀请码时回 `''`：那时它只被用来填**回示码**，而产回示码的前提就是"已经解出邀请码"
+ * （`canMakeAnswer()` 卡这一条），所以空串走不到编码那一步；真走到了，
+ * `encodeInvite` 会当场抛"空 sessionId"这个调用方违约，而不是发一条对不上的码出去。
+ */
+function sessionIdOfJoinedInvite(): string {
+  const st = lobbyClient?.state() ?? null;
+  if (st === null) return '';
+  const joined = st.joined;
+  return joined !== null && joined.ok ? joined.payload.sessionId : st.sessionId;
+}
+
+/**
+ * 大厅要的注入环境（**承载大厅能力的那一份**）。
+ *
+ * ## ★ D 轮 I-1 / I-2：这三样必须住**这里**，因为 `createTransport` 用的就是它
+ *
+ * 原先这里只有 `settings`，而真正被 `createTransport` / `buildInvite` / `decompressBase64` 用的
+ * 就是这一份 —— 于是两处断点同时存在，而且都**不会报错**：
+ *
+ *  - **I-1**：`onPeerConnection` 只注进了"另一份"环境（既有 ticker 又记连接的那个对象），
+ *    而 `createTransport` 用的**不是**它 ⇒ 那个回执永远不响 ⇒ `hostPeerConnection`
+ *    **永远是 `null`** ⇒ 房主"把回示码喂回同一条连接"（`applyAnswer`）每次都返回
+ *    "本机还没有建起对端连接"；
+ *  - **I-2**：这一份里**没有 `ticker`** ⇒ `createBrowserTransport` 排下的那个
+ *    `waitForIceGathering` 在 `iceGatheringState !== 'complete'` 时回 `'unsupported'`
+ *    ⇒ 房主**永远取不到非 trickle 的连接描述** ⇒ **永远产不出邀请码**。
+ *    （假件缺省 `iceGatheringState: 'complete'` 会让这条缺陷同步早退成"看着是好的"。）
+ *
+ * 两样的语义与"为什么不是本文件自己 new 一条连接"见下面那段注释。
+ */
+function lobbyEnv(): NetBrowserEnv {
+  return {
+    settings: () => netSettings,
+    // ★ I-2：等 ICE 收集必须有上界，而计时在本仓一律注入
+    ticker: lobbyTicker,
+    // ★ I-1：真传输在 `init()` 里把"刚造出来的那条连接"交回来，房主那格才拿得到它
+    onPeerConnection: (pc) => { hostPeerConnection = pc; },
+  };
 }
 
 /** 大厅要的时钟能力（注入形状；`net-lobby.ts` 里零命中裸 `setTimeout`） */
@@ -291,9 +333,9 @@ const lobbyTicker = {
 };
 
 /**
- * ★ **带 ICE 上界的大厅环境**（B2）。
+ * ★ **承载"等 ICE 上界"能力的同一份大厅环境**（B2）—— D 轮起它就是 `lobbyEnv()`。
  *
- * ## 为什么只注入这两样（而不是自己 new 一条连接）
+ * ## 这两样各是为什么
  *
  *  - `ticker` —— 等 ICE 收集**必须有上界**，而计时在本仓一律注入；
  *    `net-browser.ts` 的 `waitForIceGathering` 在**没有** `ticker` 时会**响亮地拒绝**
@@ -302,19 +344,17 @@ const lobbyTicker = {
  *    而它住在 `createBrowserTransport` 里面。**本文件不自己 new 一条**：那会拿到第二条连接，
  *    而 `setRemoteDescription(answer)` 在一条没出过 offer 的连接上只会失败。
  *
- * ⚠️ `peerConnection` 那个缝**故意不填**：缺省实现才去读宿主环境里的构造器
- * （D6：浏览器 API 的唯一出处是 `src/ui/net-browser.ts`，本文件连那个**名字**都不出现）。
+ * ## ★ D 轮：那一份**已经撤掉**（原先它是与 `lobbyEnv()` 并列的第二份环境）
+ *
+ * 撤掉的理由是 I-1 / I-2 的共同根因：两份环境形状一样、**用途不同** ——
+ * `createTransport` 那一份（原来的 `lobbyEnv()`）**缺了这两样**，而注入 `acceptOffer` 的
+ * 那一份有。于是"有能力的那个只用在不需要它的地方"（收方产 answer 只需要 `ticker`），
+ * 而"需要它的两个地方"（`init` 回执 / 等 ICE）都拿不到。合成一份（`lobbyEnv()`）之后，
+ * 这个错位在结构上**不可能再出现**：没有第二份可挑。
  */
-function lobbyEnvWithIce(): NetBrowserEnv {
-  return {
-    settings: () => netSettings,
-    ticker: lobbyTicker,
-    onPeerConnection: (pc) => { hostPeerConnection = pc; },
-  };
-}
 
 /**
- * 房主那一条连接（`lobbyEnvWithIce` 的回执记下来的）。
+ * 房主那一条连接（`lobbyEnv()` 的 `onPeerConnection` 回执记下来的）。
  *
  * ⚠️ 它是**单槽位**：一局只有一条本侧连接（D2：主机关页面即这一局结束）。
  * 跨局由大厅自己的生命周期收拾（`resetToMainInterface` 里 `lobbyClient?.dispose()`）。
@@ -409,8 +449,10 @@ function renderLobbyFrame(): void {
  * 三条纪律：
  *  1. **新建对象**由 `client.reconnect()` 保证（它就是 `connect('resume')`）；
  *  2. **并发挡板**：`connect()` 是异步的（建传输 + `init()`），断线事件可能连着来几次；
- *  3. **不在这里做重发**：把"卡在半路的握手/收官消息"重新驱动起来是 **T6 的 `redrive()`**，
- *     不是 UI 的活（D23）。这里只负责"把链路重建起来"。
+ *  3. **不在这里做重发**：把"卡在半路的握手/收官消息"重新驱动起来归 **T6 的 `redrive()`**（D23），
+ *     不是 UI 的活。这里只负责"把链路重建起来"。
+ *     ⚠️ **已知缺口（T8-D 登记，勿读成"重发已工作"）**：`redrive()` 在 `src/**` 里**零调用者**
+ *     ⇒ 这条重发链**今天没接上**（`applyResyncFile` / `acceptResyncRes` 同样零调用者）。
  */
 function attachLobbyReconnect(client: LobbyClient): void {
   let reconnecting = false;
@@ -475,16 +517,22 @@ function startLobby(role: 'host' | 'guest'): void {
       //   ⚠️ 真对端连接的协商结果（ICE 能不能打通）**真浏览器未验证，由 T9 覆盖**。
       buildAnswer: async (offer: { sdp: string; ice: readonly string[] }): Promise<AnswerCodeResult> => {
         // ★ C1（结构缺口 ①）：answer 必须落在**承载 hello/act 的那条连接**上。
-        //   原来这里把 lobbyEnvWithIce() 交给 acceptOffer ⇒ 它自己造了**第二条**连接
+        //   原来这里把环境交给 acceptOffer 而不交出那条连接 ⇒ 它自己造了**第二条**连接
         //   ⇒ offer/answer 在 B 上完成、消息通道在 A 上 ⇒ 两端从来没为"传消息"连上。
         const tr = lobbyClient?.transport() ?? null;
         const pc = tr === null ? null : peerConnectionOf(tr);
         if (pc === null) {
           return { ok: false, message: '本机还没有建起用来传消息的那条对端连接（先让链路起来再产回示码）。' };
         }
-        const r = await acceptOffer(pc, { sdp: offer.sdp }, lobbyEnvWithIce());
+        const r = await acceptOffer(pc, { sdp: offer.sdp }, lobbyEnv());
         if (!r.ok) return { ok: false, message: r.message };
-        const fields = answerPayloadFields({ protoVersion: PROTO_VERSION, sdp: r.sdp, ice: r.ice });
+        // ★ D 轮（I-3 甲）：回示码与邀请码同形状 ⇒ 也带上这一局的会话号（照抄房主那一串）
+        const fields = answerPayloadFields({
+          protoVersion: PROTO_VERSION,
+          sessionId: sessionIdOfJoinedInvite(),
+          sdp: r.sdp,
+          ice: r.ice,
+        });
         const enc = await createInvite({ ...fields, originAndPath: currentOriginAndPath() }, lobbyEnv());
         return enc.ok ? { ok: true, code: enc.payload } : { ok: false, message: enc.message };
       },
@@ -556,6 +604,8 @@ async function makeLobbyInvite(): Promise<void> {
   await client.startHost({
     originAndPath: currentOriginAndPath(),
     p: PROTO_VERSION,
+    // ★ D 轮（I-3 甲）：邀请码里带上**这一局的房主会话号**（与建会话对象用的是同一串）
+    sessionId: client.state().sessionId,
     sdp: desc.sdp,
     ice: candidatesOf(desc.sdp),
     hostPromise: 'host-promise-pending',

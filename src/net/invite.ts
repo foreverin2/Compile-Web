@@ -95,6 +95,23 @@ export interface InvitePayload {
   readonly v: number;
   /** 对端的协议版本（`PROTO_VERSION`），收方拿它与本机比 */
   readonly p: number;
+  /**
+   * ★ **房主的 `sessionId`**（D 轮 I-3 走"甲"）。
+   *
+   * ## 为什么它必须进载荷
+   *
+   * 会话层是**按 `sessionId` 配对**的：房主的 `HostSession` 用它校验加入方发来的 `hello`，
+   * 不是这一串就当场拒（加入方停在 `handshaking`，房主根本不动）。而真实调用方
+   * （`src/main.ts` 的 `startLobby`）**两端各自** `newSessionId()` ⇒ 不把房主那一串
+   * 搬过去，两端**永远**是两套 `sessionId` ⇒ 邀请码这条路根本开不了局。
+   *
+   * 邀请码是房主**单向**递给加入方的那张纸（D17：没有回程通道），所以这个字段的方向
+   * 也只有一个：房主写、加入方读。加入方**不再自己造一个**去握手。
+   *
+   * ⚠️ 它与"加入方**自己**的 `sessionId`"是两件事：后者是加入方上报的身份，
+   * 前者是**这一局**的名字。加入方照它建会话对象（见 `net-lobby.ts` 的 `connect`）。
+   */
+  readonly sessionId: string;
   /** 非 trickle 的 SDP 原文（等 `iceGatheringState === 'complete'` 之后拿到的那一串） */
   readonly sdp: string;
   /** ICE 候选的字符串形态（SDP 里没有候选时才是空数组；有候选时也在 `sdp` 里） */
@@ -288,8 +305,17 @@ export function utf8Decode(bytes: Uint8Array): string | null {
  * 6. 编码
  * ------------------------------------------------------------------ */
 
-/** 本文件认得的载荷版本。改动 `InvitePayload` 的字段就该动它 */
-export const INVITE_PAYLOAD_VERSION = 1;
+/**
+ * 本文件认得的载荷版本。改动 `InvitePayload` 的字段就该动它
+ *
+ * ★ **D 轮：1 → 2**（I-3 走甲：位置数组里多了一项 `sessionId`）。
+ * 版本必须动，因为**不动的后果是静默错配**：老的 5 项载荷在"只看项数"的解析器里
+ * 会掉进 `bad-payload`（项数不对），而那正是这里想要的结果 —— 但如果不升版本，
+ * 一份**恰好 7 项、顺序不同**的载荷会被当成本版本收下。两个字段同时改，解析器才分得开。
+ *
+ * ⚠️ 它与 `PROTO_VERSION`（线协议版本）是**两个独立**的常量：这里动它**不动**线协议。
+ */
+export const INVITE_PAYLOAD_VERSION = 2;
 
 /**
  * 把一份**完整**载荷编成**定长位置**的 JSON 数组字节（**压缩的对象就是它**）。
@@ -302,7 +328,7 @@ export const INVITE_PAYLOAD_VERSION = 1;
  * 而位置数组 781 字节 → 438 字节 / **0.561**（SDP 在总字节里占比更大，更接近"压 SDP"的实测形态）。
  * 位置数组同时让"字段少一个"变成"项数不对"，让判据 4 的 ③ 有一个**可数**的判据。
  *
- * 顺序是契约（`v` / `p` / `sdp` / `ice` / `hostPromise` / `guestPromise`），
+ * 顺序是契约（`v` / `p` / `sessionId` / `sdp` / `ice` / `hostPromise` / `guestPromise`），
  * 校验在 `parseInvitePayload` 里**逐位**做 —— 字段少一个长度就不够，当场拒。
  * 空候选列表写成 `[""]`（不是 `[]`）：位置数组的下标必须固定，`[]` 会让后面的项前移。
  *
@@ -312,6 +338,7 @@ export const INVITE_PAYLOAD_VERSION = 1;
 export function payloadBytesOf(fields: InviteFields): Uint8Array {
   const tuple: readonly (string | readonly string[] | number)[] = [
     INVITE_PAYLOAD_VERSION,
+    fields.sessionId,
     fields.sdp,
     fields.ice.length === 0 ? [''] : [...fields.ice],
     fields.hostPromise,
@@ -322,12 +349,13 @@ export function payloadBytesOf(fields: InviteFields): Uint8Array {
 
 /** 位置数组的下标（契约写在这里，解析侧只许用这几个常量） */
 const AT_VERSION = 0;
-const AT_SDP = 1;
-const AT_ICE = 2;
-const AT_HOST_PROMISE = 3;
-const AT_GUEST_PROMISE = 4;
+const AT_SESSION_ID = 1;
+const AT_SDP = 2;
+const AT_ICE = 3;
+const AT_HOST_PROMISE = 4;
+const AT_GUEST_PROMISE = 5;
 /** 位置数组的长度（少一项就拒 —— "缺字段"这条判据靠它） */
-const TUPLE_LEN = 5;
+const TUPLE_LEN = 6;
 
 /** 压缩能力的形状：**同步**、把字节压成字节、解不动返回 `null`（不抛） */
 export type ByteCompressor = (raw: Uint8Array) => Uint8Array | null;
@@ -362,6 +390,11 @@ export function encodeInvite(
   if (fields.sdp.length === 0) {
     // 调用方违约（不是玩家输入）：一条没有 SDP 的邀请码收方无论如何都连不上
     throw new Error('encodeInvite 收到了空 SDP：邀请码里必须有一份完整 offer，这是调用方违约。');
+  }
+  if (fields.sessionId.length === 0) {
+    // ★ D 轮（I-3 甲）：没有房主的会话号，这条邀请码收下也握不上手 ⇒ 同样是**调用方违约**，
+    //   而且要在**发出之前**就炸出来（发出去之后玩家只会看到"对端不理我"）
+    throw new Error('encodeInvite 收到了空 sessionId：邀请码必须带上房主这一局的会话号，这是调用方违约。');
   }
   if (!PROMISE_TEXT.test(fields.hostPromise) || !PROMISE_TEXT.test(fields.guestPromise)) {
     // 形状校验：两个承诺串必须是非空且不含分隔符 / 换行的文本（它们会进载荷）
@@ -482,6 +515,9 @@ export function parseInvitePayload(raw: unknown): ParsedInviteResult {
           '两端版本不一致，请让对端用同一个版本重新生成。',
       );
     }
+    if (!nonEmptyString(raw[AT_SESSION_ID])) {
+      miss('bad-payload', '邀请码里缺少这一局的房主会话号（sessionId）：没有它对不上房主，握手会被当场拒掉。');
+    }
     if (!nonEmptyString(raw[AT_SDP])) {
       miss('bad-payload', '邀请码里缺少连接描述（sdp）：这份载荷不完整，收下也没法建立连接。');
     }
@@ -508,6 +544,7 @@ export function parseInvitePayload(raw: unknown): ParsedInviteResult {
       // `p` **不在压缩段里**（见 `payloadBytesOf` 的注释）：解析这一步只填一个占位值，
       // 真正的协议版本由 `decodeInviteText` 从明文段读进来覆盖。
       p: -1,
+      sessionId: t[AT_SESSION_ID] as string,
       sdp: t[AT_SDP] as string,
       // 空候选在载荷里写成 `[""]`，这里换回空数组（位置数组的下标必须固定，见 `payloadBytesOf`）
       ice: (t[AT_ICE] as string[]).filter((x) => x.length > 0),
@@ -806,6 +843,12 @@ export const ANSWER_PROMISE_PLACEHOLDER = 'answer-not-a-promise';
 export interface AnswerPayloadInput {
   /** 本机协议版本（明文段那一位） */
   readonly protoVersion: number;
+  /**
+   * ★ D 轮（I-3 甲）：**这一局的会话号**。回示码与邀请码同形状、走同一条编码路
+   * （`encodeInvite` 要求它非空）⇒ 加入方照抄邀请码里房主那一串即可 —— 它本来就是
+   * "这一局"的名字，不是"谁写的"。
+   */
+  readonly sessionId: string;
   /** 本侧**非 trickle** 的连接描述（等 ICE 收集完成之后取的那一份） */
   readonly sdp: string;
   readonly ice: readonly string[];
@@ -824,6 +867,7 @@ export interface AnswerPayloadInput {
 export function answerPayloadFields(input: AnswerPayloadInput): InviteFields {
   return {
     p: input.protoVersion,
+    sessionId: input.sessionId,
     sdp: input.sdp,
     ice: [...input.ice],
     hostPromise: ANSWER_PROMISE_PLACEHOLDER,
@@ -856,6 +900,8 @@ export interface BuildInviteLinkInput {
   readonly originAndPath: string;
   /** 本机协议版本 */
   readonly protoVersion: number;
+  /** ★ D 轮（I-3 甲）：这一局的房主会话号（见 `InvitePayload.sessionId`） */
+  readonly sessionId: string;
   /** 非 trickle 的 SDP 原文 */
   readonly sdp: string;
   /** ICE 候选串 */
@@ -880,6 +926,7 @@ export function buildInviteLink(
   const encoded = encodeInvite(
     {
       p: input.protoVersion,
+      sessionId: input.sessionId,
       sdp: input.sdp,
       ice: input.ice,
       hostPromise: input.hostPromise,

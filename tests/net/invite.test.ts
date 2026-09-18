@@ -59,10 +59,15 @@ const PROMISE_B = '9c1f2b7e0a3d4f5a9c1f2b7e0a3d4f5a9c1f2b7e0a3d4f5a9c1f2b7e0a3d4
 /** 一段假的 SDP（本文件只测编解码，不需要真实 SDP；真实语料在 `tests/ui/net-browser.test.ts`） */
 const SDP = 'v=0\r\no=- 1 2 IN IP4 127.0.0.1\r\ns=-\r\nm=application 9 UDP/DTLS/SCTP webrtc-datachannel\r\n';
 
+/** 这一局的房主会话号（D 轮 I-3 甲之后载荷里的一项；形状照 `main.ts` 的 `newSessionId()`） */
+const SESSION_ID = 'sid-00000000000000000000000000000000';
+
 /** 一份完整的载荷字段（`v` 由 `encodeInvite` 补） */
 function fields(over: Partial<InviteFields> = {}): InviteFields {
   return {
     p: PROTO_VERSION,
+    // ★ D 轮（I-3 甲）：载荷里多了"这一局的房主会话号"这一项
+    sessionId: SESSION_ID,
     sdp: SDP,
     ice: ['candidate:1 1 udp 2122260223 10.0.0.1 5000 typ host'],
     hostPromise: PROMISE_A,
@@ -105,6 +110,8 @@ describe('邀请码往返：逐字段相等（判据 3）', () => {
     expect(r.ok, `解码失败：${r.ok ? '' : r.reason + ' / ' + r.message}`).toBe(true);
     if (!r.ok) return;
     expect(r.payload.p).toBe(x.p);
+    // ★ D 轮（I-3 甲）：这一局的会话号也逐字往返
+    expect(r.payload.sessionId).toBe(x.sessionId);
     expect(r.payload.sdp).toBe(x.sdp);
     expect(r.payload.ice).toEqual([...x.ice]);
     expect(r.payload.hostPromise).toBe(x.hostPromise);
@@ -175,7 +182,7 @@ describe('损坏输入给可读原因，不静默返回空对象（判据 4）',
       //
       // ⚠️ 这里的"解压器"必须交出**真 JSON 字节**：恒返回 `new Uint8Array([1,2,3])` 会让这一条
       // 掉进 `'bad-json'`（那不是"缺字段"，是"连 JSON 都不是"），实测踩过一次。
-      const json = JSON.stringify([INVITE_PAYLOAD_VERSION, SDP, ['']]);
+      const json = JSON.stringify([INVITE_PAYLOAD_VERSION, SESSION_ID, SDP, ['']]);
       const body = bytesToBase64Url(utf8Encode(json));
       return decodeWith(`${PROTO_VERSION}.${body}`, () => utf8Encode(json));
     }],
@@ -203,16 +210,17 @@ describe('损坏输入给可读原因，不静默返回空对象（判据 4）',
 
   it('结构缺失的几条子情形（缺 sdp / 缺承诺 / 项数不对 / 根本不是数组）都给 `bad-payload`', () => {
     const one = (over: readonly unknown[]): string => JSON.stringify(over);
-    const full = [INVITE_PAYLOAD_VERSION, SDP, [''], PROMISE_A, PROMISE_B];
+    const full = [INVITE_PAYLOAD_VERSION, SESSION_ID, SDP, [''], PROMISE_A, PROMISE_B];
     const cases: readonly string[] = [
-      one([INVITE_PAYLOAD_VERSION, [''], PROMISE_A, PROMISE_B]), // 只 4 项
-      one([INVITE_PAYLOAD_VERSION, SDP, [''], '', PROMISE_B]), // 缺房主承诺
-      one([INVITE_PAYLOAD_VERSION, SDP, [''], PROMISE_A, '']), // 缺加入方承诺
-      one([INVITE_PAYLOAD_VERSION, '', [''], PROMISE_A, PROMISE_B]), // 缺 sdp
-      one([INVITE_PAYLOAD_VERSION, SDP, 'not-an-array', PROMISE_A, PROMISE_B]), // ice 不是数组
-      one([...full, '多出来的一项']), // 6 项
+      one([INVITE_PAYLOAD_VERSION, SESSION_ID, [''], PROMISE_A, PROMISE_B]), // 只 5 项
+      one([INVITE_PAYLOAD_VERSION, SESSION_ID, SDP, [''], '', PROMISE_B]), // 缺房主承诺
+      one([INVITE_PAYLOAD_VERSION, SESSION_ID, SDP, [''], PROMISE_A, '']), // 缺加入方承诺
+      one([INVITE_PAYLOAD_VERSION, SESSION_ID, '', [''], PROMISE_A, PROMISE_B]), // 缺 sdp
+      one([INVITE_PAYLOAD_VERSION, '', SDP, [''], PROMISE_A, PROMISE_B]), // 缺会话号（D 轮新增的一位）
+      one([INVITE_PAYLOAD_VERSION, SESSION_ID, SDP, 'not-an-array', PROMISE_A, PROMISE_B]), // ice 不是数组
+      one([...full, '多出来的一项']), // 7 项
       one([]), // 空数组
-      one([null, null, null, null, null]), // 逐位都不对
+      one([null, null, null, null, null, null]), // 逐位都不对
     ];
     for (const raw of cases) {
       const r = decodeInvite(utf8Encode(raw));
@@ -226,6 +234,7 @@ describe('损坏输入给可读原因，不静默返回空对象（判据 4）',
   it('版本不符给 `version-mismatch`（与 `bad-payload` 分开：那是"格式新"，不是"缺字段"）', () => {
     const r = decodeWith(`${PROTO_VERSION}.${bytesToBase64Url(utf8Encode(JSON.stringify([
       INVITE_PAYLOAD_VERSION + 1,
+      SESSION_ID,
       SDP,
       [''],
       PROMISE_A,
