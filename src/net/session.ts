@@ -59,9 +59,26 @@
  * - `role: 'spectator'` 是**合法值但 G5 从不放行**：`validateHello` 的四步照走（D13），
  *   之后明确回绝，理由串与"观战席已满"（`spectator-slots-full`）**刻意不同** ——
  *   G7 打开观战时，这两者必须分得清。
- * - `hello.resuming === true` 今天**能通过握手**（重连的凭据就是同一个 `sessionId`），相位进
- *   `'resuming'`，`needsResync` 变 `true`；真正的追平与 `resync-res` 是 T6 的事。
- *   `accept()` 到 `resync-req` 时明确回一句"追平还没接上"，而不是静默吞掉。
+ * - `hello.resuming === true` 能通过握手（重连的凭据就是同一个 `sessionId`），相位进
+ *   `'resuming'`，`needsResync` 变 `true`。
+ *
+ * ## 重连（T6）三件事，都住在这个纯层里（D8 / D19 / D23）
+ *
+ * 1. **300s 窗口**（D8 的 2026-09-18 补充裁决）：`src/net` 不许读时钟（§2 第 2 条），
+ *    所以窗口落成"**注入 `ClockLike`（`now(): number`，毫秒）+ 本会话持有 `lastSeenAt`**"，
+ *    调用方每次真的知道对端还在时调一次 `notePeerSeen()`。边界口径是
+ *    `now() - lastSeenAt > reconnectWindowMs` 算超窗（**等于窗口算在窗口内**）——
+ *    出处是 D8 补充裁决，不是这里自己挑的。超窗**不结束对局**：它唯一的效果是
+ *    `peerStatus().online === false`，`resync-req` 在超窗之后**照样**换得到档案。
+ * 2. **`online`**（D19）：由"传输层此刻的状态 + 窗口"两件事决定，**不**由相位猜
+ *    （D19 引的 T3 阶段一评审 C2：一条入站消息就能把相位推到 `complete`）。
+ *    传输状态由调用方从 `onStatus` / `status()` 转发进 `noteTransportStatus()`。
+ * 3. **追平与"按相位重新驱动"**（D8 / D19 的加固裁决 / D23）：房主持有重连凭据（当前档案，
+ *    由调用方经 `resyncSource` 现取 —— 会话层**不缓存**它），加入方拿到档案后用
+ *    `stateAtStep` 追平（那是 T4 的**单一出处**，本模块不自己重放一步）。追平之后两端
+ *    各按**自己当前相位**把"该发而未确认"的那条消息重发一次（`redrive()`），收方对
+ *    "本相位已经记过的那条消息的逐字重复"按**幂等无操作**处理（不再回 `unexpected-message`）。
+ *    重发是**调用方显式驱动的一次动作**，不是定时器或自动重试（纯层没有时钟）。
  */
 
 import { validateHello } from './protocol';
@@ -73,6 +90,8 @@ import type {
   NetMsg,
   NetMsgType,
 } from './protocol';
+import { canonicalMatchFile } from '../app/match-file';
+import type { MatchFile } from '../app/match-file';
 import type { PlayerId } from '../core/models/types';
 
 /* ------------------------------------------------------------------ *
@@ -99,6 +118,96 @@ export interface HashLike {
 }
 
 /* ------------------------------------------------------------------ *
+ * 1b. 重连要的三样注入（T6；D8 补充裁决 / D19）
+ * ------------------------------------------------------------------ */
+
+/**
+ * 时钟能力（D8 的 2026-09-18 补充裁决）。
+ *
+ * `now()` 返回**毫秒**（与设计稿 `:505` 的"300s 窗口"同量纲）。
+ *
+ * ## 为什么要注入而不是自己读
+ *
+ * `src/net` 是纯层：`Date.now` / `performance.now` 在 `tests/net/net-purity.test.ts` 的
+ * 生成式守卫里是**零命中**的硬要求（§2 第 2 条）。而 300s 窗口**必须**有时间来源 ——
+ * 两条合起来的唯一出路就是这条补充裁决写的那句："注入一个最小时钟能力 + 宿主持有
+ * `lastSeenAt`、每次收到对端消息就更新"。⇒ 本模块只**问**时间，不**取**时间。
+ *
+ * ## 缺省（不注入）时的语义，写清免得被读成"窗口永远有效"
+ *
+ * 不注入时钟时，本会话**判不了**窗口：`peerStatus().windowExpired` 报 `null`（三值），
+ * `online` 只由传输状态决定。这是"无法判定"，不是"确认在窗口内" —— T8 的文案要按
+ * `null` 单独分支（"还不知道"与"还在宽限期内"不是同一句话）。
+ */
+export interface ClockLike {
+  now(): number;
+}
+
+/**
+ * 传输状态的**镜像**（会话层的内向投影；`'idle' | 'connecting'` 也照收）。
+ *
+ * ## 为什么不 import `NetTransport` 的 `TransportStatus`
+ *
+ * 任务书第 3 节第 12 条给了两条路，这里走的是它建议的那一条：会话层只需要"对端可不可达"
+ * 这一个投影，把 `src/net/transport.ts` 的全部状态值搬进来会让两个模块的类型缠在一起。
+ * **镜像不会静默漂移**：`tests/net/reconnect.test.ts` 里有两张 `Record` 表把
+ * `TransportStatus` 与这个 union **双向钉死**（任一边加值 ⇒ `tsc` 报缺键），
+ * 所以这里是"投影"而不是"第二份真值"。
+ */
+export type SessionTransportStatus = 'idle' | 'connecting' | 'online' | 'offline' | 'closed';
+
+/**
+ * **重连凭据的来源**（房主侧；D8："重连凭据 = 主机内存里的当前 `MatchFile`"）。
+ *
+ * 为什么是一个**取档案的函数**而不是一份档案：档案住在 T5 的 `MatchFileRecorder` 里
+ * （`src/app/match-file.ts:516` 的 `actions()` + `toMatchFile`），会话层持有它就等于
+ * 多一份对局状态 —— 而 `src/app/match-driver.ts:32-45` 的既有结构约束正是"驱动不持有
+ * `GameState`"（代价是两个各自改状态的路 ⇒ 不报错的分叉）。所以这里只拿一个**现取**的能力：
+ * 每次真要回 `resync-req` 时问一次，**一个字节都不缓存**。
+ *
+ * 返回 `null` = "此刻没有可发的档案"（不是"重连没接上"）：两者都拒，但文案不同。
+ */
+export interface ResyncSourceLike {
+  (): MatchFile | null;
+}
+
+/**
+ * "本端为什么需要一次追平"。两个来源**事实不同**，所以读数也分开（T8 的文案要分得清）：
+ *  - `'resuming-handshake'`：对端带着同一个 `sessionId` 回来握手（D8 的重连）；
+ *  - `'queue-overflow'`：本端入站队列溢出（跟不上了，§5 T6 判据 7 的那条路）。
+ */
+export type ResyncCause = 'resuming-handshake' | 'queue-overflow';
+
+/** 对端可达性的**三值**投影：`null` / `'idle'` / `'connecting'` 都是"还没听说" */
+type PeerReachability = 'online' | 'offline' | 'unknown';
+
+/**
+ * `redrive()` 的成功面。
+ *
+ * 为什么给它一个**具名类型**而不是就地写一个对象字面量：本仓的文本腿用
+ * `tests/ui/source-text.ts` 的 `functionBody()` 切函数体，而那个实现的前提是
+ * "签名里没有裸的对象字面量返回类型"（`functionBody` 的注释自己写着"本仓写法如此"）。
+ * 就地写 `SessionResult<{ phase: … }>` 会让它切到**类型**就结束 —— 那时"这个函数体里
+ * 没有循环/定时器"之类的断言会在一个片段上恒真。给它起个名字，前提就还成立。
+ */
+interface RedriveOk {
+  readonly phase: SessionPhase;
+  readonly output: SessionOutbound | null;
+}
+
+/**
+ * 把传输状态折成三值。★ **只有这一处**（`online` 与 `acceptsInput` 都读它）。
+ *
+ * 为什么不能压成布尔：`null`（调用方还没喂过状态）与 `'offline'` 是**两件不同的事**
+ * —— 前者是"我不知道"，后者是"我知道对端不在"。压成一个 `false` 会让它们同形。
+ */
+function reachability(status: SessionTransportStatus | null): PeerReachability {
+  if (status === 'online') return 'online';
+  if (status === 'offline' || status === 'closed') return 'offline';
+  return 'unknown';
+}
+
+/* ------------------------------------------------------------------ *
  * 2. 结果对象（失败一律返回值）
  * ------------------------------------------------------------------ */
 
@@ -121,7 +230,14 @@ export interface HashLike {
  *
  * 状态机不接受的消息：
  *  - `'unexpected-message'`：当前相位不该收到它（含"这条消息的发送方向反了"）
- *  - `'resync-not-wired'`：`resync-req` 到了，但追平要到 T6 才接上
+ *  - `'resync-not-wired'`：`resync-req` 到了，但**本端没有可发的档案**（调用方没注入
+ *    `resyncSource`，或来源此刻返回 `null`）—— 见 `acceptResyncReq`
+ *
+ * 重连（T6，两个码刻意分开：一个是"这条重连请求本身不可用"，一个是"你自报的步数对不上"）：
+ *  - `'bad-resync'`：`resync-req` / `resync-res` 的形状或 `sessionId` 不符（另一局的请求），
+ *    或"此刻不该收 `resync-res`"；档案本身形状不可用也走它
+ *  - `'resync-step-mismatch'`：调用方自报的 `statesAtStep` 与档案里那一步对不上
+ *    （**少一步也算**，见 `applyResyncFile`：夹紧会静默变成一个"看起来同步"的状态）
  */
 export type SessionRejectReason =
   | 'seed-before-face'
@@ -134,7 +250,9 @@ export type SessionRejectReason =
   | 'bad-salt'
   | 'bad-face'
   | 'unexpected-message'
-  | 'resync-not-wired';
+  | 'resync-not-wired'
+  | 'bad-resync'
+  | 'resync-step-mismatch';
 
 /**
  * 握手回绝的理由码 = `validateHello` 自己那五条 + 会话层加的两条。
@@ -181,10 +299,21 @@ export type SessionResult<T> = ({ ok: true } & T) | { ok: false; reason: Session
  * `complete`）。反过来的顺序**结构上不可能**：`sendRevealSalt()` 只认 `complete`，而它在
  * `seed-revealed` 时调会被拒 —— 于是"先发盐 ⇒ `reveal-face` 永久进不来 ⇒ 房主拿不到面"
  * 这条死路不存在（详见 `mayRevealSalt` 的头注）。
+ *
+ * ## `'resync-pending'`（T6 新增）：档案已经到了本端、**还没被追平应用**
+ *
+ * 它只出现在加入方那一侧，且只由 `acceptResyncRes()` 进入：`resync-res` 是一条入站消息
+ * （要过形状与相位守卫），而"把它变成一份可用的状态"是**调用方**拿 `stateAtStep` 去做的事
+ * （T4 的单一出处）。两件事之间需要一个能被读到的相位，否则"档案在路上"与"档案到了没应用"
+ * 在读数上完全同形 —— 而后者恰恰是"调用方忘了追平"那种不报错的停摆。
+ *
+ * `needsResync` 在它上面**仍然为真**（追平还没完成），`handshakeDone` 为真
+ * （`resuming` 才是"握手还没确认"，两者不是一回事）。
  */
 export type SessionPhase =
   | 'handshaking'
   | 'resuming'
+  | 'resync-pending'
   | 'awaiting-commit'
   | 'seed-committed'
   | 'awaiting-commit-ack'
@@ -206,6 +335,10 @@ export type SessionPhase =
  * `protocol.ts` 的事（它已经有一份带形状校验的 `decodeMsg`），本模块再来一遍就成了第二份判定；
  * 而且本模块只关心**语义顺序**，不关心字节形态。
  * 调用方的真实路径是 `decodeMsg(text)` → 成功则把 `msg` 喂给 `accept`。
+ *
+ * `resync-res` 是 T6 加的第十个成员（计划 §6 附录 A 的 T6 行）：它是**房主发给加入方**的
+ * 那份档案。`resync-req` 是反方向（加入方发给房主）—— 两个方向都由 `accept()` 按角色分派，
+ * 方向错的那些走 `wrongWay`（见 `accept`）。
  */
 export type SessionInbound =
   | { t: 'hello'; msg: unknown }
@@ -216,7 +349,8 @@ export type SessionInbound =
   | { t: 'reveal-seed'; msg: unknown }
   | { t: 'reveal-face'; msg: unknown }
   | { t: 'reveal-salt'; msg: unknown }
-  | { t: 'resync-req'; msg: unknown };
+  | { t: 'resync-req'; msg: unknown }
+  | { t: 'resync-res'; msg: unknown };
 
 /**
  * 会话**要发出去**的一条消息。
@@ -280,14 +414,28 @@ export type HelloDecision =
 /**
  * `peerStatus()` 的形状。
  *
- * **没有 `online` 这个字段**，这是刻意的：`src/net` 是纯层（没有时钟、没有心跳），
- * "对端此刻是否可达"只有**传输层**知道（T2 的 `NetTransport.status()` / `onStatus`）。
- * 在会话层凭 `phase` 猜一个布尔值就是造一个查不出原因的谎。T6 做"对手已断线"提示时，
- * 把传输层状态与本函数的 `phase` 合起来看即可（设计稿 `:496` 要求的是
- * `peerStatus().online = false`，那个字段属于 T6 的"会话+传输"合体，不属于纯状态机）。
+ * ## `online`（T6 落地 D19）：两个输入，一处公式
  *
- * 同理 `acceptsInput` 只是"本会话层面是否已就绪"：真正的 `MatchDriver.acceptsInput`
- * （`src/app/match-driver.ts:105`）由 T5 决定，它上面还有"轮到谁"这一层。
+ * `online = 传输层此刻报 'online' && 没超窗`。两个输入都由调用方喂：
+ * 传输状态走 `noteTransportStatus()`（转发 `NetTransport.status()` / `onStatus` 的 `to`），
+ * 窗口用注入时钟算。**刻意不从 `phase` 猜**（D19 引 T3 阶段一评审的 C2：一条入站消息就能把
+ * `phase` 推到 `complete`），也**不用 `init().ok`**（D18：fake 上绿、真 WebRTC 兑现不了）。
+ *
+ * 三件事要注意（每一条都有腿）：
+ *  - 调用方还没喂过传输状态时 `online === false` —— "还不知道对端在不在"**不**当成在线；
+ *  - 档案还没到的重连中间态（`resuming` / `resync-pending`）由传输状态决定，不由相位决定；
+ *  - 没有注入时钟时 `windowExpired === null`（判不了窗口），`online` 只由传输状态决定。
+ *
+ * ## `acceptsInput` 与 `online` **不是同一个问题**（N-9 的教训继续有效）
+ *
+ * 它答的是"会话层这边收不收操作"，比 `online` 宽：**没有听说对端走了**就照收
+ * （`reachability !== 'offline'`），因为上面还有 T5 的"轮到谁"那一层，早拒会把一次
+ * 正常的提交拒在门外。`online` 则只报**确证可达**。
+ * ⚠️ 两者都**不**表示"这一局是好的"：加入方验盐失败时 `phase === 'complete'`，
+ * `acceptsInput` 照样为 `true`（N-9 实测 `AUDIT-N9`）⇒ 要判"这局好不好"读
+ * `commitmentVerified()` 或失败理由，别读这两个字段里的任何一个。
+ *
+ * 同理真正的 `MatchDriver.acceptsInput`（`src/app/match-driver.ts:105`）由 T5 决定。
  */
 export interface PeerStatus {
   readonly phase: SessionPhase;
@@ -300,12 +448,34 @@ export interface PeerStatus {
   /** 会话层认为可以收操作了（T5 会在它之上加"轮到谁"） */
   readonly acceptsInput: boolean;
   /**
-   * 这是一次重连握手、且**还没追平**（D8/T6）。
+   * 这是一次重连、且**还没追平**（D8/T6）。
    *
-   * T3 只负责置位：`hello.resuming === true` 通过握手时它变 `true`。T6 接上追平之后
-   * 把它清掉（T6 会在本文件里 `accept` 到 `resync-req`，那时相位离开 `'resuming'`）。
+   * 它**不再是"相位是不是 `resuming`"的派生式**：重连握手会置位，`applyResyncFile` 成功会清位，
+   * 而入站队列溢出（§5 T6 判据 7）也要能把它置起来 —— 后者根本没有相位可搬。
+   * 所以它是一个**独立的位**，同时用 `needsResyncCause` / `needsResyncDetail` 说明原因。
    */
   readonly needsResync: boolean;
+  /**
+   * 本端为什么需要一次追平；`needsResync === false` 时是 `null`。
+   *
+   * 两个来源是两件不同的事实（`'resuming-handshake'` = 对端回来握手了；
+   * `'queue-overflow'` = 本端自己跟不上了），T8 的文案要分得清。
+   */
+  readonly needsResyncCause: ResyncCause | null;
+  /** 给人看的那一句（可读提示）。玩家文案由 T8 从这里转写，纯层不产玩家文案 */
+  readonly needsResyncDetail: string | null;
+  /**
+   * 对端此刻**可达吗**（D19；设计稿 `:496` 的 `peerStatus().online`）。
+   *
+   * 只报确证：`传输状态 === 'online' && 没超窗`。见本接口头注里的三条注意。
+   */
+  readonly online: boolean;
+  /**
+   * 300s 重连窗口是否已经过期（边界口径 `now() - lastSeenAt > reconnectWindowMs`，D8 补充裁决）。
+   *
+   * **三值**：`null` = 本会话没有注入时钟能力，窗口判不了（"无法判定"不等于"在窗口内"）。
+   */
+  readonly windowExpired: boolean | null;
 }
 
 /* ------------------------------------------------------------------ *
@@ -345,6 +515,30 @@ export interface NetSessionOptions {
   readonly seat?: PlayerId;
   /** 哈希能力（D15）。**必填**：它是本模块唯一的"算哈希"入口，没有它就完不成承诺流程 */
   readonly hash: HashLike;
+  /**
+   * 时钟能力（D8 补充裁决）。**可选**，缺省 = 本会话判不了窗口
+   * （`peerStatus().windowExpired === null`，`online` 只由传输状态决定）。
+   *
+   * 为什么可选而不是必填：T3 已提交的既有夹具（`tests/net/session.test.ts` 的 `hostSession()` /
+   * `guestSession()`）都不传它，把它做成必填会当场**改既有腿的编译面** —— 而"既有腿一个字都不许改"
+   * 是本阶段的硬约束。缺省语义见 `ClockLike` 的头注：是"判不了"，不是"永远在窗口内"。
+   */
+  readonly clock?: ClockLike;
+  /**
+   * 重连窗口（毫秒）。缺省 `DEFAULT_RECONNECT_WINDOW_MS = 300_000`（D8 / 设计稿 `:505`
+   * "窗口长度可配置、默认 300s"）。
+   *
+   * 它是**第一个**让"窗口不是硬编码在派生式里"这件事能被观测的注入点：判据腿会传
+   * `600_000` / `1_000` 各跑一次（同一份代码、不同的读数）。
+   */
+  readonly reconnectWindowMs?: number;
+  /**
+   * 重连凭据的来源（**房主侧**；D8："重连凭据 = 主机内存里的当前 `MatchFile`"）。
+   *
+   * 不注入它时，房主收到 `resync-req` 会回 `'resync-not-wired'`（**fail-closed**：
+   * 没有档案来源就发不出真档案，绝不编一份空的出去）。加入方不需要它。
+   */
+  readonly resyncSource?: ResyncSourceLike;
 }
 
 /* ------------------------------------------------------------------ *
@@ -469,10 +663,29 @@ export const SPECTATOR_UNSUPPORTED_MESSAGE =
 export const SPECTATOR_UNSUPPORTED_DETAIL =
   'G5 不支持观战（注意：这不是"观战席已满"）：本版本只有两张玩家位，观战要等后续版本。';
 
-/** 追平还没接上（T6 的事）。**不静默吞掉**这条消息，也不假装已经追平 */
+/**
+ * 重连窗口的缺省长度（毫秒）。300_000 = 300s（设计稿 `:505`"窗口长度可配置、默认 300s"；
+ * D8 的结论第一句）。
+ *
+ * 它只影响**重连宽限**，与回合计时无关（设计稿 `:507`："两套独立计时"；后者属 G6）。
+ */
+export const DEFAULT_RECONNECT_WINDOW_MS = 300_000;
+
+/**
+ * 房主收到了 `resync-req`，但**本端发不出档案**（T6）。
+ *
+ * 两种情况共用一句（都成立、也不静默吞掉）：
+ *  - 调用方没注入 `resyncSource`（接线时漏了）；
+ *  - 来源此刻返回 `null`（真的一时没有可用档案）。
+ *
+ * 为什么**不**在没档案时回一份空的 `resync-res`：那是一份**假的**追平凭据 ——
+ * 加入方会拿它把状态重建成"开局"，而它自己以为追平成功了。本仓对这类"动作发生了、
+ * 语义没发生"的形态一律 fail-closed（见 D1 的代价一栏）。
+ */
 export const RESYNC_NOT_WIRED_MESSAGE =
-  '收到了 resync-req，但这一版还没有接上追平流程（档案重传与重放是 T6 的事）。' +
-  '本会话把它记下来并保持重连相位；请不要把它当成"追平已完成"。';
+  '收到了 resync-req，但本端这一侧没有可发的档案（调用方没有接上"当前档案"的来源，' +
+  '或来源此刻是空的），所以发不出 resync-res。这不是"追平已完成"——请检查接线时' +
+  '是否把当前档案的读取口喂给了本会话（房主持有重连凭据，加入方不持有）。';
 
 /* ------------------------------------------------------------------ *
  * 10. 对外 API（按角色分叉）
@@ -491,11 +704,13 @@ interface NetSessionCommon {
   /**
    * 收一条消息。失败一律返回结果对象，**不抛**（网络来的输入走这条路）。
    *
-   * `resync-req` 今天**一定**回 `'resync-not-wired'`（追平是 T6 的事）——
-   * 不是"忘了写"，是为了不静默吞掉一条真消息。
+   * `resync-req` / `resync-res` 都走这里，按**角色**分派方向（T6）：
+   * `resync-req` 只有房主该收、`resync-res` 只有加入方该收，方向反了走 `wrongWay`。
+   * 房主收到 `resync-req` 但本端没有档案来源时回 `'resync-not-wired'`（fail-closed，
+   * 不编一份空档案出去）。
    */
   accept(req: SessionInbound): HelloDecision | SessionDecision;
-  /** 对端状态读数（T6 会在它上面接"已断线"，见 `PeerStatus` 的注释） */
+  /** 对端状态读数（含 D19 的 `online` 与 T6 的 `windowExpired` / `needsResync*`） */
   peerStatus(): PeerStatus;
   /** 承诺流程走到哪一相位 */
   phase(): SessionPhase;
@@ -536,6 +751,70 @@ interface NetSessionCommon {
    * 它是**诊断与测试**用的读数（B-1 的腿要断言"加入方确实收到了盐"），不参与任何顺序判定。
    */
   salt(): string | null;
+  /**
+   * 调用方"**真的知道对端还在**"时调一次（D8 补充裁决："宿主持有 `lastSeenAt`、
+   * **每次收到对端消息就更新**"）。
+   *
+   * 有效调用点（调用方的义务，T7/T8 的接线）：
+   *  - 收到任何一条**入站消息**之后；
+   *  - 传输层报 `online`（`noteTransportStatus('online')` 内部已经顺手记一次，见它）；
+   *  - 收到 `resync-req`（房主应答那条路内部也记一次，见 `acceptResyncReq`）。
+   *
+   * 没有注入时钟时它是 no-op —— 没有时间来源就记不下"什么时候"，这一点写实，
+   * 免得被读成"记了但没生效"。
+   */
+  notePeerSeen(): void;
+  /**
+   * 把传输层此刻的状态转发进来（T6 读 `NetTransport.status()` / `onStatus` 的方式）。
+   *
+   * **会话层不自己订阅 `onStatus`** —— 那是调用方（T7/T8 的接线）的活，理由与"能力一律注入"
+   * 同源：订阅是一个有生命周期的副作用，纯状态机不该持有它。
+   *
+   * 传 `'online'` 时**顺手记一次 `lastSeenAt`**：传输层报可达这件事本身就是"对端还在"的证据
+   * （D8 补充裁决列的三个触发点之一）。其它值只改状态、不动时钟。
+   */
+  noteTransportStatus(status: SessionTransportStatus): void;
+  /**
+   * 本会话使用的重连窗口（毫秒）：`opts.reconnectWindowMs ?? DEFAULT_RECONNECT_WINDOW_MS`。
+   *
+   * 它是"窗口可配置"这条判据的读口：同一份代码传 `1_000` 与 `600_000`，超窗时刻必须跟着变
+   * （那条腿同时证明 300000 不是硬编码在派生式里的）。
+   */
+  reconnectWindowMs(): number;
+  /**
+   * 声明"**本端需要一次追平**"（D23 的调用方驱动动作之一）。
+   *
+   * 两个今天的调用者：
+   *  - 入站队列溢出（T5 的驱动报 `'inbound-overflow'`，调用方把那一句转进来）——
+   *    这是 §5 T6 判据 7 要的"溢出时标 `needsResync` + 给可读提示"；
+   *  - 任何"调用方知道本端落后了"的场合。
+   *
+   * 它**不改相位**（溢出可能发生在任何相位），只置位 + 记下原因与那句可读提示；
+   * `applyResyncFile` 成功时清位。`detail` 是给人看的一句，空串是调用方违约（throw）。
+   */
+  noteResyncNeeded(cause: ResyncCause, detail: string): SessionResult<{ phase: SessionPhase }>;
+  /**
+   * **按当前相位把"该发而未确认"的那条消息重发一次**（D23 ②；`ok`，`output` 可能是 `null`）。
+   *
+   * ## 为什么这是"推导"而不是新状态机
+   *
+   * 要重发哪条消息完全由相位 + 相位机本来就在维护的那些值（`seedHash` / `seed` / `salt` /
+   * `face` / `faceNonce`）+ 两个幂等位（`seedMadePublic` / `saltMadePublic`）决定 —— 见
+   * `redriveOutput()`。**没有新状态**，也没有第二次"发明"。
+   *
+   * ## 为什么必须存在（D23 的形态）
+   *
+   * 加入方已收到 `commit`、房主刚发出 `commit`/`commit-ack` 就断线 ⇒ 那条消息按连接语义
+   * 已经丢了（`act` 的"可靠"只在**每条连接之内**，设计稿 `:489`），重连后**两端谁都不会再发它**
+   * ⇒ 流程静默停住且不报错。这正是本仓反复出现的"动作发生了、语义没发生"那一族。
+   *
+   * ## 它**不是**自动重试
+   *
+   * 纯层没有时钟（§2 第 2 条）：调用方在"追平完成"那一刻显式调一次（房主侧由调用方在
+   * 应答完 `resync-req` 之后调；加入方侧 `applyResyncFile` 成功时内部就调了一次并把结果
+   * 放在返回值里）。没有循环、没有定时器、没有"失败就再发一次"。
+   */
+  redrive(): SessionResult<{ phase: SessionPhase; output: SessionOutbound | null }>;
 }
 
 /**
@@ -572,6 +851,27 @@ export interface HostSession extends NetSessionCommon {
   sendRevealSalt(): SessionResult<{ output: SessionOutbound; salt: string }>;
   /** 本方承诺的 `hash(seed+salt)`（对端用它验 `reveal-salt`）；还没 `sendCommit` 时是 `null` */
   seedHashOfCommit(): string | null;
+  /**
+   * 产出一条 `resync-res`（重连凭据；D8 / 设计稿 `:497`）。**档案由调用方传进来。**
+   *
+   * ## 为什么档案是参数而不是会话层持有的字段
+   *
+   * 档案住在 T5 的 `MatchFileRecorder` 里（`src/app/match-file.ts:516` 的 `actions()` +
+   * `toMatchFile`），会话层持有它就等于**多一份对局状态** —— 而
+   * `src/app/match-driver.ts:32-45` 的既有结构约束正是"驱动不持有 `GameState`"（代价是
+   * 两条各自改状态的路 ⇒ 一个不报错的分叉）。所以这里是"你拿来、我打包"。
+   *
+   * ## 它**不裁剪**档案（R2 第 3 条）
+   *
+   * `appliedSteps`（`resync-req` 里那个自报数）只用于诊断与打印，**绝不参与权威判定**
+   * （`protocol.ts:175-176` 自己写着"权威值仍是档案里那一步"）。按它裁一刀会让加入方
+   * 拿到一份"看起来对得上、其实少了尾巴"的档案 —— M4 那条变异就是这个形态，它由
+   * 判据腿的"两端指纹逐字相等"抓住。
+   *
+   * 归一化（`canonicalMatchFile`）不违反"原样"：它**复制**而不**裁剪**，同时让消息里的档案
+   * 不共享调用方的引用（`encodeMsg` 是在这之后才跑的，中间谁改了那个数组就晚了）。
+   */
+  buildResyncRes(file: MatchFile): SessionResult<{ output: SessionOutbound }>;
 }
 
 /**
@@ -637,11 +937,68 @@ export interface GuestSession extends NetSessionCommon {
    * ## 什么时候能知道"这是重连"（属 T8，不在本模块）
    *
    * 本模块不猜这个 —— 它由调用方（T8 的 UI 接线）根据"本端是不是带着同一个 `sessionId` 回来的"
-   * 决定。真正的追平（`resync-req` / `resync-res` / 档案重放）是 **T6** 的事，本模块只把相位与
-   * `needsResync` 置起来；进了 `'resuming'` 之后 `acceptCommit` 仍会被拒（`'awaiting-commit'`
-   * 才是它的合法相位），**T6 必须自己把相位带出 `resuming`**。
+   * 决定。真正的追平（`resync-req` / `resync-res` / 档案重放）是 **T6** 的事：本模块把相位与
+   * `needsResync` 置起来，T6 的 `acceptResyncRes` / `applyResyncFile` 把它带出 `resuming`。
+   *
+   * ## T6 之后它与承诺流程的关系（D19 的加固裁决，**别按第三轮的口径读**）
+   *
+   * "进了 `resuming` 之后 `acceptCommit` 仍会被拒"这句**已经改掉了**：D19 的 2026-09-18
+   * 加固裁决要求 T6 **显式接通这条路**，判据是"resume 回来后两端能继续走完承诺流程并各自
+   * 落定面/盐"。选的是机制 **(A)**：`acceptCommit` 的相位守卫多认 `'resuming'`
+   * （选它的理由与"它顺带覆盖了'房主的 `commit` 早于 `resync-res` 到达'那种时序"写在
+   * `acceptCommit` 里）。⇒ 这一格现在**能**继续走完，见 `tests/net/reconnect.test.ts`。
    */
   markResuming(): SessionResult<{ phase: SessionPhase }>;
+  /**
+   * 收下房主回的 `resync-res`（T6 的追平入口第一步）。**只在本端确实在等档案时接受。**
+   *
+   * 守卫是 `needsResync === true`（不是相位）：重连握手（`resuming`）与入站队列溢出
+   * （可能发生在任何相位）都会把它置起来，而两者都要能收下这份档案。其余一律
+   * `'unexpected-message'` 且**不改任何状态**（照 `mayIntakeSalt` 的 fail-closed 纪律）。
+   *
+   * 成功时相位进 `'resync-pending'`（"档案到了、还没追平应用"）—— 追平那一步是
+   * `applyResyncFile`，由调用方拿 `stateAtStep` 去做（D9 的单一出处）。
+   *
+   * 它**不**在这里校验档案的内部形状到"能重放"那一层：`protocol.ts` 的
+   * `SHAPES['resync-res']` 只判 `isObj(m.file)`，所以这里做一次**够用的**二次检查
+   * （照 `acceptHello` 复用 `validateHello` 的口径 —— 不重写第二份完整判定），
+   * 真正读 `actions` 的是 `applyResyncFile` 的归一化那一步。
+   */
+  acceptResyncRes(msg: unknown): SessionDecision;
+  /**
+   * 用房主给的档案**追平**（T6 的落地动作第二步）。
+   *
+   * ## `statesAtStep` 必须**恰好等于**档案长度
+   *
+   * 它是调用方**自报**的"我把 `stateAtStep(f, n)` 里的 `n` 取了几个"，而本方法比的就是
+   * `statesAtStep === canonical.actions.length`。理由三条：
+   *  1. T4 的 `stateAtStep` 对越界**抛错、不夹紧**（`src/app/match-replay.ts:264-268`）
+   *     ⇒ "步数对不上"在本仓是硬错误；
+   *  2. D1 的代价一栏写着"不一致就停下来给可读提示（**不静默继续**）"；
+   *  3. 判据 2 的变异 M1 正是"少应用一步"，没有这条比较它就只能靠调用方的自觉。
+   *
+   * 实现上**不在会话层算 `stateAtStep`**（那需要 import `match-replay`，会把"追平的唯一出处"
+   * 变成两处调用点）：这里只比较**调用方自报的数**与档案长度。
+   * ⇒ 这条比较在源码里**必须恰好出现一次**，它是变异 M1 的锚点（注释点名了它）。
+   *
+   * ## 成功之后
+   *
+   * 相位离开 `'resync-pending'`、`needsResync` 转 `false`、把**归一化后的档案**回给调用方
+   * （返回值里带 `file`），由调用方拿它跑 `stateAtStep(f, f.actions.length)` 得到要应用的状态。
+   * 会话层返回档案而不是 `GameState`，是因为 `src/net` 不需要 import `src/core` 的模型类型
+   * 就能把这件事做完，而状态的消费者是 T5 的驱动与 T8 的 UI。
+   *
+   * 落到哪一格分两种（`phaseBeforeResyncApply` 记着档案到之前本端在哪）：
+   *  - **重连握手进来的加入方**（`resuming` / `handshaking`）：它的承诺进度是**空的**
+   *    （调用方新建的对象），落到 `'awaiting-commit'`（等房主的 `commit`；若那条 `commit`
+   *    已经先到了，`seedHash` 非空 ⇒ 落到 `'seed-committed'`，进度一个字不丢）；
+   *  - **本端本来就在流程里**（例如队列溢出触发的那次追平）：**回到原来那一格**，
+   *    承诺进度一个字不动 —— 把 `complete` 的会话打回 `seed-committed` 会让它再也收不下盐。
+   */
+  applyResyncFile(
+    file: MatchFile,
+    statesAtStep: number,
+  ): SessionResult<{ file: MatchFile; phase: SessionPhase; output: SessionOutbound | null }>;
 }
 
 /** 一个会话对象（两个角色的并集；用 `role` 窄化） */
@@ -781,6 +1138,44 @@ function whatOf(msg: unknown): string {
   return typeof t === 'string' ? t : '没有 t 字段的消息';
 }
 
+/** 非负整数（`resync-req.appliedSteps` / `applyResyncFile` 的 `statesAtStep` 的形态） */
+function isNonNegativeInteger(v: unknown): v is number {
+  return typeof v === 'number' && Number.isInteger(v) && v >= 0;
+}
+
+/**
+ * 把（可能来自网络的）档案归一化，形状不可用就回 `null`（T6）。
+ *
+ * ## 为什么这里有 pre-check **和** try/catch 两层
+ *
+ * `src/net` 有一条硬契约：**网络来的输入一律走结果对象，不抛**（文件头，腿在
+ * `tests/net/session.test.ts` 的"全部相位 × 全部入站消息"矩阵里）。而
+ * `canonicalMatchFile`（`src/app/match-file.ts:127`）读的是 `f.setup.draftPool` 这类**深层字段**
+ * —— 一份 `{t:'resync-res', file:{}}` 会让它当场抛 `TypeError`。
+ *
+ * 于是：
+ *  - pre-check 挡掉"一眼就不像档案"的（`protocol.ts` 的 `SHAPES['resync-res']` 只判
+ *    `isObj(m.file)`，所以这一层是**够用的**二次检查，不是重写完整判定）；
+ *  - `try/catch` 兜住剩下的深层形状（`setup.draftPool` 不是数组、`actions[0]` 是 `null` …）。
+ *
+ * **不重写第二份完整判定**的理由与 `acceptHello` 复用 `validateHello` 同源：两处判定迟早漂移。
+ * `canonicalMatchFile` 自己那句"档案来了就归一化"是**唯一**的读法出处。
+ */
+function canonicalResyncFile(file: unknown): MatchFile | null {
+  if (!isObj(file)) return null;
+  if (!isObj(file.setup) || !Array.isArray(file.actions) || !Array.isArray(file.players)) return null;
+  if (typeof file.cardDataHash !== 'string' || typeof file.seed !== 'string' || typeof file.createdAt !== 'string') {
+    return null;
+  }
+  try {
+    return canonicalMatchFile(file as unknown as MatchFile);
+  } catch {
+    // 到这里说明"它长得像档案，但深处不成形"：那是**对端发来的坏数据**，不是本端编程错误
+    // ⇒ 结果是拒绝，不是异常。
+    return null;
+  }
+}
+
 function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSession {
   const selfSeat: PlayerId = opts.seat ?? (role === 'host' ? 0 : 1);
 
@@ -820,6 +1215,161 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
    * 不能靠相位区分（相位在发盐前后都可能是 `complete`）。
    */
   let saltMadePublic = false;
+
+  /* ---------------- 重连（T6）的状态 ---------------- */
+
+  /**
+   * 传输层**此刻**的状态（`null` = 调用方还没喂过；见 `noteTransportStatus`）。
+   *
+   * 它不是"对端在线"的结论，只是一个输入：`online` 的结论在 `peerStatus()` 里由
+   * `reachability()` + 窗口两件事算出来（★ 公式只此一处）。
+   */
+  let transportStatus: SessionTransportStatus | null = null;
+
+  /**
+   * 本端最后一次"真的知道对端还在"的时刻（毫秒；D8 补充裁决的 `lastSeenAt`）。
+   *
+   * 建会话时就取一次 `clock.now()`（"我们刚开始说话"这个假设），此后由
+   * `notePeerSeen()` / `noteTransportStatus('online')` / 应答 `resync-req` 三处推进。
+   * 没有时钟时它是 `null`（判不了窗口）。
+   */
+  let lastSeenAt: number | null = opts.clock === undefined ? null : opts.clock.now();
+
+  /**
+   * **本端需要一次追平**（D8/T6）。
+   *
+   * 它**不是**"相位是不是 `resuming`"的派生式（T3 那一版是），因为：
+   *  - 入站队列溢出要能把它置起来，而溢出可能发生在**任何**相位（§5 T6 判据 7）；
+   *  - `applyResyncFile` 成功之后它必须转 `false`，而那时相位可能还在 `resuming` 附近。
+   * 两个来源与那句可读提示各记一位，见 `needsResyncCause` / `needsResyncDetail`。
+   */
+  let resyncNeeded = false;
+  let resyncCause: ResyncCause | null = null;
+  let resyncDetail: string | null = null;
+
+  /**
+   * 房主进 `resuming` 之前那一格（**只对房主有意义**：加入方的 `resuming` 是从 `handshaking`
+   * 进来的，没有"原来那一格"可回）。
+   *
+   * 为什么需要它：`acceptHello` 会把相位写成 `'resuming'`（T3 的既有行为，被
+   * `tests/net/session.test.ts` 的腿钉着），而房主的承诺进度（`seedHash` / `seed` / `salt` /
+   * `faceHash`）都还在 —— 一个**正打到一半**的房主在应答完 `resync-req` 之后必须回到它原来
+   * 那一格，否则它就永远停在 `resuming`：`sendRevealSeed` / `sendRevealSalt` 全被相位守卫拒掉，
+   * 而且 `redrive()` 也推导不出该重发哪条（那就是 D23 说的"静默停住"）。
+   */
+  let phaseBeforeResuming: SessionPhase | null = null;
+
+  /**
+   * `acceptResyncRes` 成功时记下的"档案到之前本端在哪一格"，`applyResyncFile` 成功时按它决定
+   * 落回哪一格（两种情形的判据见 `applyResyncFile` 的接口注释）。
+   */
+  let phaseBeforeResyncApply: SessionPhase | null = null;
+
+  /* ---------------- 重连（T6）的三个读数与窗口 ---------------- */
+
+  /** 本会话使用的重连窗口（毫秒） */
+  function reconnectWindowMs(): number {
+    return opts.reconnectWindowMs ?? DEFAULT_RECONNECT_WINDOW_MS;
+  }
+
+  /**
+   * 窗口是否已经过期。★ **超窗判定只此一处**（`online` 与 `acceptsInput` 都读它 ——
+   * 各自再判一次就会有第二处，而变异 M3 的锚点必须唯一）。
+   *
+   * 边界口径是 `>`（**等于窗口算在窗口内**），出处是 D8 的 2026-09-18 补充裁决，
+   * 不是这里自己挑的："等于窗口算在窗口内，与'默认继续等待'同向"。
+   */
+  function windowExpired(): boolean | null {
+    const clock = opts.clock;
+    if (clock === undefined || lastSeenAt === null) return null;
+    return clock.now() - lastSeenAt > reconnectWindowMs();
+  }
+
+  /** 调用方"真的知道对端还在"时调一次（见接口注释） */
+  function notePeerSeen(): void {
+    if (opts.clock === undefined) return;
+    lastSeenAt = opts.clock.now();
+  }
+
+  /** 把传输层此刻的状态转发进来（见接口注释） */
+  function noteTransportStatus(status: SessionTransportStatus): void {
+    transportStatus = status;
+    // 传输层报可达 = "对端还在"的一条证据（D8 补充裁决列的三个触发点之一）
+    if (status === 'online') notePeerSeen();
+  }
+
+  /** 声明"本端需要一次追平"（见接口注释） */
+  function noteResyncNeeded(cause: ResyncCause, detail: string): SessionResult<{ phase: SessionPhase }> {
+    const text = requireNonEmpty('detail', detail);
+    resyncNeeded = true;
+    resyncCause = cause;
+    resyncDetail = text;
+    return ok({ phase: s.phase });
+  }
+
+  /**
+   * **按当前相位推导"该发而未确认"的那条消息**（D23 ②；★ 全模块只此一处）。
+   *
+   * ## 推导规则（不是新状态机）
+   *
+   * 每个分支的判据都是"相位 + 相位机本来就在维护的那个值 + 那个幂等位"，逐个说清：
+   *
+   * | 角色 | 相位 | 已发出过的消息 | 依据 |
+   * |---|---|---|---|
+   * | 房主 | `awaiting-commit-face` + `seedHash !== null` | `commit`（`sendCommit` **不动相位**，所以它发过之后仍停在这一格） | `sendCommit` 的设计 |
+   * | 房主 | `seed-revealed` + `seedMadePublic` | `reveal-seed` | `sendRevealSeed` 把相位推到 `seed-revealed` |
+   * | 房主 | `complete` + `saltMadePublic` | `reveal-salt` | `sendRevealSalt` 把相位推到 `complete`（终态，靠幂等位分辨） |
+   * | 加入方 | `awaiting-commit-ack` | `commit-ack` | `sendCommitAck` 把相位推到这一格 |
+   * | 加入方 | `face-committed` | `commit-face` | `commitFace` 把相位推到这一格 |
+   * | 加入方 | `reveal-salt-sent` | `reveal-face` | `sendRevealFace` 把相位推到这一格 |
+   *
+   * ## 为什么不调 `send*()` 而是自己造那一条消息
+   *
+   * `send*()` 的守卫编码的是"**第一次**"（相位窗口 + `saltMadePublic` 那种幂等位），
+   * 而这里要的是"**同样的字节再来一次**"。拿 `sendRevealSalt()` 去重发会在
+   * `saltMadePublic === true` 时被拒（B4 明确要求那条既有出口不改）⇒ 重发只能自己构造。
+   * 两处的消息形状都由 `outbound()` 约束住 `t` 与 `msg.t` 一致，不会各写一个形状。
+   *
+   * ## 方向的最终清单（对着 `session.ts` 的实际发送口核过）
+   *
+   * 房主：`commit` / `reveal-seed` / `reveal-salt`。加入方：`commit-ack` / `commit-face` /
+   * `reveal-face`。**计划 D23 的初稿把 `commit-ack` 列在房主侧，那是把方向写反了**；
+   * D23 的订正段已经改成"加入方的 `commit-ack` 在房主侧是'收到就无操作'那一支"，本实现照订正后
+   * 的版本走（`accept` 里 `commit-ack` 在房主侧无条件 `{ok:true, output:null}`）。
+   *
+   * ## 能力边界（写清免得被当成全称）
+   *
+   * 这个推导**只**覆盖"本端已经发出过、而对端不一定收到"的那一条。它**不管**：
+   *  - 对方也要发的那条（各自推导各自的，两端对称）；
+   *  - 承诺流程还没开始的情况（那时"该发而未确认"就是空的，交回给正常接线）。
+   */
+  function redriveOutput(): SessionOutbound | null {
+    if (role === 'host') {
+      if (s.phase === 'complete' && saltMadePublic && s.salt !== null) {
+        return outbound({ t: 'reveal-salt', salt: s.salt });
+      }
+      if (s.phase === 'seed-revealed' && seedMadePublic && s.seed !== null) {
+        return outbound({ t: 'reveal-seed', seed: s.seed });
+      }
+      if (s.phase === 'awaiting-commit-face' && s.seedHash !== null) {
+        return outbound({ t: 'commit', hash: s.seedHash });
+      }
+      return null;
+    }
+    if (s.phase === 'awaiting-commit-ack') return outbound({ t: 'commit-ack' });
+    if (s.phase === 'face-committed' && s.faceHash !== null) {
+      return outbound({ t: 'commit-face', hash: s.faceHash });
+    }
+    if (s.phase === 'reveal-salt-sent' && s.face !== null && s.faceNonce !== null) {
+      return outbound({ t: 'reveal-face', face: s.face, faceNonce: s.faceNonce });
+    }
+    return null;
+  }
+
+  /** 公开的重发口（房主侧由调用方在应答完 `resync-req` 之后调；见接口注释） */
+  function redrive(): SessionResult<RedriveOk> {
+    return ok({ phase: s.phase, output: redriveOutput() });
+  }
 
   /* ---------------- 握手 ---------------- */
 
@@ -893,7 +1443,7 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
    * 为什么 `emit: false`：`busy` 的语义是"这个房间不收你"，而这里的事实是"握手早就成了，
    * 这条消息来晚了"。发一条 busy 会误导对端去换房间。
    */
-  function refuseLateHello(what: string): HelloRejection {
+  function refuseLateHello(what: string, extra = ''): HelloRejection {
     const why =
       s.phase === 'rejected'
         ? '这次握手已经被本端回绝过了'
@@ -903,11 +1453,22 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
       reason: 'unexpected-message',
       message:
         `${what}：${why}，当前相位是 ${s.phase} —— 本端**忽略**它，会话状态一点都没动。` +
+        extra +
         '已经完成的步骤不会因为你重发握手就退回去；若确实要开新的一局，请换一个新的 sessionId 重新握手。',
       phase: s.phase,
       emit: false,
       busy: { t: 'busy', reason: 'unsupported', detail: '这条 hello 来得太晚，被忽略（会话未改动）。' },
     };
+  }
+
+  /**
+   * 这一条入站 `hello` 是不是"**带着同一个 `sessionId` 回来**的重连握手"（D8 的形态）。
+   *
+   * ⚠️ 它只是一个**看一眼字段**的动作，**不是**校验：真正的四步校验（D13）照旧由
+   * `validateHello` 唯一出处做。把它单独写出来的理由见 `acceptHello` 里那段 T6 的注释。
+   */
+  function looksLikeResumingHello(msg: unknown): boolean {
+    return isObj(msg) && msg.resuming === true && msg.sessionId === opts.sessionId;
   }
 
   function acceptHello(msg: unknown): HelloDecision {
@@ -927,7 +1488,29 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
         busy: { t: 'busy', reason: 'unsupported', detail: 'hello 的方向反了（本端是加入方），已忽略。' },
       };
     }
-    if (s.phase !== 'handshaking') {
+    /**
+     * ★ **T6 补的这一格：房主在半路收到"带着同一个 `sessionId` 回来的重连握手"**（D8）。
+     *
+     * ## 为什么非补不可
+     *
+     * D8/设计稿 `:497` 写的是"从机用 `hello{sessionId, resuming:true}` 回来" ⇒ 主机**要**收它
+     * 并且回一条 `hello-ack`（加入方那一侧靠 ack 定座位：D7 说座位是主机的决定，一个**新建的**
+     * 加入方对象并不知道自己坐哪）。而 T3 的这条守卫会让**任何**非 `handshaking` 相位下的 hello
+     * 走 `refuseLateHello` ⇒ 一个正打到一半的房主**永远回不出 ack**，D8 那条"重新握手 → resync-res
+     * → 重放 → 继续"的路在房主这一侧断掉（加入方只能盲发 `resync-req`，而它连座位都不知道）。
+     *
+     * ## 三条纪律（别把它做成"重连可以绕过握手校验"）
+     *
+     *  1. **只认"同一个 `sessionId` + `resuming === true`**：普通迟到/重复的 hello 照旧走
+     *     `refuseLateHello`，一字不改（N-6 的腿原样绿）；
+     *  2. **校验一样严**：版本 / 卡牌指纹 / 座位 / 观战四步照走 `validateHello`（唯一出处）；
+     *  3. **失败不判死这一局**：`rejectHello` 会把相位推到 `'rejected'`（一整局报销），
+     *     而这里是"一条重连握手的校验没过" —— 本局还在走，N-6 的教训正是"一条入站消息不许
+     *     废掉健康会话"。所以这一格回一个**非致命**的拒绝（相位不动、`emit: false`），
+     *     文案里带上真正的校验原因。
+     */
+    const late = s.phase !== 'handshaking';
+    if (late && !(looksLikeResumingHello(msg) && s.phase !== 'rejected')) {
       return refuseLateHello('重复/迟到的 hello');
     }
     // D13：校验顺序与文案全在 `protocol.ts` 的 `validateHello` 里（那是**唯一出处**，
@@ -940,6 +1523,12 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
       seat: s.peerSeat,
     });
     if (!v.ok) {
+      if (late) {
+        return refuseLateHello(
+          '一条重连握手（hello.resuming === true）没通过握手校验',
+          `校验给出的原因是：${v.message}`,
+        );
+      }
       // `validateHello` 的四条（含 `'bad-shape'`）原样透传：同一件事不在两处各给一句话。
       // 形状失败**不发 busy**（`busyReason` 传 null），理由见 `rejectHello`。
       return rejectHello(v.reason, v.message, v.reason === 'bad-shape' ? null : v.reason, v.message);
@@ -949,6 +1538,9 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
 
     // ---- D5：观战是合法值，但 G5 明确回绝（**在四步校验之后**，理由见 `SessionHelloReason`）----
     if (hello.role === 'spectator') {
+      if (late) {
+        return refuseLateHello('一条重连握手（hello.resuming === true）自称观战', SPECTATOR_UNSUPPORTED_MESSAGE);
+      }
       return rejectHello(
         'unsupported-spectator',
         SPECTATOR_UNSUPPORTED_MESSAGE,
@@ -962,9 +1554,22 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     s.peerSeat = v.seat;
 
     // ---- 重连（D8）：`resuming: true` 能通过握手，相位标成 `'resuming'` ----
-    // 追平（`resync-res` 与档案重放）是 T6 的事：本模块只把这件事**记下来**
-    // （`needsResync` 给 T6 与 UI 一个读口），不假装已经追平。
-    s.phase = hello.resuming === true ? 'resuming' : 'awaiting-commit-face';
+    // 追平（`resync-res` 与档案重放）是 T6 的事：这里只把这件事**记下来**
+    // （相位 + `needsResync` 给 T6 与 UI 一个读口），不假装已经追平。
+    if (hello.resuming === true) {
+      // 记下"进 resuming 之前在哪一格"（**房主**这一侧才谈得上"原来那一格"：它在半路被
+      // 重连握手打断时，承诺进度都还在手里，应答完 `resync-req` 之后必须回去继续；
+      // 若原来那一格是 `handshaking`，应答完就落到"握手刚完成"的 `awaiting-commit-face`）。
+      phaseBeforeResuming = s.phase;
+      s.phase = 'resuming';
+      resyncNeeded = true;
+      resyncCause = 'resuming-handshake';
+      resyncDetail =
+        '对端带着同一个 sessionId 回来握手（hello.resuming === true）：本端保留当前对局，' +
+        '等它请求追平（resync-req）；这一局在追平完成之前不再推进。';
+    } else {
+      s.phase = 'awaiting-commit-face';
+    }
     return {
       ok: true,
       output: {
@@ -1144,6 +1749,17 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     if (!isNonEmptyString(nonce)) {
       return { ...fail('bad-face', '收到的 reveal-face 没有可用的 faceNonce（空串 / 缺失）；拒绝。'), phase: s.phase };
     }
+    // ★ **D23 ① 的 B1 格（房主侧）**：本端**已经验过并通过**这条揭示，而这条消息与记下的
+    // `face` + `faceNonce` **逐字相同** ⇒ 幂等无操作。
+    //
+    // 它落在"加入方按相位重发 `reveal-face`"这条路上（那个对象的相位是 `reveal-salt-sent`，
+    // 见 `redriveOutput`）：房主此时通常已经在 `complete`（早就收到过那条面），回
+    // `unexpected-message` 会让调用方以为出了错，而 D23 ① 要的是"收方按幂等无操作处理"。
+    // B2（`face` 或 `nonce` 不同）**照旧拒绝**（落到下面的相位守卫）：那正是"篡改面"那条腿
+    // （`face-hash-mismatch` / `unexpected-message`），不许因为 D23 开口子。
+    if (s.phase === 'complete' && s.face !== null && msg.face === s.face && nonce === s.faceNonce) {
+      return { ok: true, output: null, phase: s.phase };
+    }
     if (s.phase !== 'seed-revealed') {
       return {
         ...fail('unexpected-message', `当前相位是 ${s.phase}，此时收到 reveal-face（承诺流程的次序不对）；拒绝。`),
@@ -1224,9 +1840,34 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     if (!isHashString(hash)) {
       return { ...fail('bad-hash', '收到的 commit 没有可用的 hash（空串 / 缺失 / 不是字符串）；拒绝。'), phase: s.phase };
     }
+    // ★★ **D23 ① 的 B1 格（★ 变异 M6(ii) 的锚点，只此一处）**：
+    // 本端**已经记下同一份承诺**，而这条消息与记下的那个值**逐字相同** ⇒ 幂等无操作。
+    //
+    // 为什么必须放在相位守卫**之前**：这一格正是"发方按相位重发"的落点 —— 房主重发的
+    // `commit` 会落在"早就收到过它"的加入方身上（对象存活、只是链路断过）。回
+    // `unexpected-message` 会让调用方以为出了错（D23 ① 要的就是不再回它），而**改状态**
+    // 更糟：把一个已经走进承诺流程的会话打回 `seed-committed` 会让它再也收不下后面的消息。
+    //
+    // B2（内容不同）**照旧拒绝**：落到下面的相位守卫上。理由写在 R8 那张表里 ——
+    // "内容变了就不是重传"，那正是 T3 两轮封过的"伪造入站消息改写健康会话"（N-6/N-7/N-8）。
+    if (s.seedHash !== null && hash === s.seedHash) {
+      return { ok: true, output: null, phase: s.phase };
+    }
     // 加入方等 `commit` 的相位是 `'awaiting-commit'`（收到 `hello-ack` 之后进入）。
     // N-7 之前它靠"收一条入站 hello"进相位 —— 那是方向错的用法，现在由 `hello-ack` 驱动。
-    if (s.phase !== 'awaiting-commit') {
+    //
+    // ★ **D19 的加固裁决（2026-09-18）：`'resuming'` 也认**，机制选的是 **(A)** ——
+    // "让 `acceptCommit` 的相位守卫多认一个相位"，而不是 **(B)** "让追平路径把相位送回
+    // `awaiting-commit`"。**为什么选 (A)**（D19 原文给了两条路，也给了"选完写进注释"的要求）：
+    //  1. (B) 需要会话层回答"加入方的承诺流程走完了没" —— 而这个事实在**新建的会话对象**上
+    //     只能来自档案或调用方声明，`MatchFile` 里根本没有承诺进度（D2 连 `sessionId` 都不进档案）。
+    //     选 (B) 就得发明一个"调用方声明承诺进度"的口，那是计划里没有的行为；
+    //  2. (A) 的失效面是一个守卫表达式，而且它**顺带覆盖了消息到达顺序**：房主重发的 `commit`
+    //     可能早于 `resync-res` 到达（那时相位是 `resuming`）。
+    // 注：(A) **不**与 `applyResyncFile` 的落点冲突 —— 追平成功仍然会把相位落到
+    // `awaiting-commit` / `seed-committed`（那才是"追平完成后本端在等什么"的如实读数）。
+    // 另加 `'resync-pending'`（档案已到、还没应用）：同一条顺序理由，见下面那句。
+    if (s.phase !== 'awaiting-commit' && s.phase !== 'resuming' && s.phase !== 'resync-pending') {
       return {
         ...fail(
           'unexpected-message',
@@ -1378,17 +2019,213 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
       );
     }
     s.phase = 'resuming';
+    // T6：这一位现在是**独立的位**（不再是"相位是不是 resuming"的派生式），所以必须显式置起来。
+    resyncNeeded = true;
+    resyncCause = 'resuming-handshake';
+    resyncDetail =
+      '本端显式声明这是一次重连（markResuming）：等房主的 hello-ack，然后发 resync-req 要档案。' +
+      '在 applyResyncFile 成功之前，本端的引擎状态还没有追平。';
     // 成功面带 `phase`（第四阶段复验：原先是空成功面，调用方得猜；带上它就与
     // `SessionDecision` 同一口径 —— 调用方能直接读到"现在在哪个相位"）。
     return ok({ phase: s.phase });
   }
 
+  /**
+   * 房主应答 `resync-req`（T6）：把**当前档案**打包成 `resync-res` 发回去。
+   *
+   * ## 三条纪律
+   *
+   * 1. **形状先判、相位后判**（照 `acceptRevealSaltFinal` 的既有顺序）：`sessionId` 必须
+   *    与本局相同 —— 不符就是"另一局的重连请求"，**绝不能**把本局的档案回给它（理由与
+   *    `acceptHelloAck` 校 `sessionId` 同源）。`appliedSteps` 只做形态校验（非负整数），
+   *    **绝不参与权威判定**（`protocol.ts:175-176`：权威值仍是档案里那一步）。
+   * 2. **没有档案来源就 fail-closed**：回 `'resync-not-wired'` + 那句可读文案，
+   *    **不编一份空档案出去**（那会让加入方以为自己追平成功）。
+   * 3. **不裁剪档案**：打包走 `buildResyncRes`，一个字节都不少（见它的接口注释；M4 的锚点）。
+   *
+   * ## 超窗之后照收（D8：超窗**不自动结束**，默认继续等待）
+   *
+   * 这里**没有**任何"超窗就拒绝"的分支，也不产出 `forfeit`/`bye`、不把相位推 `'rejected'`、
+   * 不把档案标 `result` —— 超窗的唯一后果在 `peerStatus().online` 与 `windowExpired` 里。
+   * 判据腿专门钉这一条（"超窗后 resync-req 仍然换得到档案"）。
+   *
+   * ## 相位：应答完**回到进 `resuming` 之前那一格**
+   *
+   * 一个正打到一半的房主被重连握手打断时（`acceptHello` 把相位写成 `resuming`），它的承诺
+   * 进度（`seedHash`/`seed`/`salt`/`faceHash`）都还在手里；不回去它就永远停在 `resuming`
+   * （`sendRevealSeed` / `sendRevealSalt` / `redrive` 全都推不出来）。这是 T6 新增的行为，
+   * 由 `phaseBeforeResuming` 支撑。
+   */
   function acceptResyncReq(msg: unknown): SessionDecision {
     if (!isObj(msg)) {
-      return { ...fail('unexpected-message', '收到的 resync-req 不是对象；拒绝。'), phase: s.phase };
+      return { ...fail('bad-resync', '收到的 resync-req 不是对象；拒绝，且不改变任何状态。'), phase: s.phase };
     }
-    // 不静默吞掉：T6 要接的就是这条。今天明确回一句"还没接上"。
-    return { ...fail('resync-not-wired', RESYNC_NOT_WIRED_MESSAGE), phase: s.phase };
+    const sessionId = strField(msg, 'sessionId');
+    if (sessionId === null || sessionId !== opts.sessionId) {
+      return {
+        ...fail(
+          'bad-resync',
+          `收到的 resync-req 不属于本局（它报的 sessionId 是 ${JSON.stringify(msg.sessionId)}，` +
+            `本局是 ${JSON.stringify(opts.sessionId)}）；拒绝，且不回任何档案。`,
+        ),
+        phase: s.phase,
+      };
+    }
+    if (!isNonNegativeInteger(msg.appliedSteps)) {
+      return {
+        ...fail(
+          'bad-resync',
+          '收到的 resync-req 里 appliedSteps 不是非负整数（协议形状在解码那一层已经挡过一次，' +
+            '这里是直接喂进 accept 的那条路上的第二道）；拒绝，且不回任何档案。',
+        ),
+        phase: s.phase,
+      };
+    }
+    // `rejected` 是"这次握手已经被判死"的终态：它不接任何重连请求（否则一条 resync-req
+    // 就能把"这一局已经没戏了"变成一个还在传档案的会话）。
+    if (s.phase === 'rejected') {
+      return {
+        ...fail('bad-resync', '本会话的这一局已经被回绝（相位 rejected），不再接受重连请求，也不回档案。'),
+        phase: s.phase,
+      };
+    }
+    const file = opts.resyncSource === undefined ? null : opts.resyncSource();
+    if (file === null) {
+      // fail-closed：没有真档案就明说，不编一份空的
+      return { ...fail('resync-not-wired', RESYNC_NOT_WIRED_MESSAGE), phase: s.phase };
+    }
+    const built = buildResyncRes(file);
+    if (!built.ok) return { ...built, phase: s.phase };
+    // 这条消息本身就是"对端还在"的证据（D8 补充裁决列的三个触发点之一）⇒ 内部记一次，
+    // 免得调用方漏掉那一步。调用方仍应在收到任何入站消息时自己调 `notePeerSeen()`。
+    notePeerSeen();
+    if (s.phase === 'resuming') {
+      const saved = phaseBeforeResuming;
+      phaseBeforeResuming = null;
+      s.phase = saved === null || saved === 'handshaking' ? 'awaiting-commit-face' : saved;
+    }
+    // 房主这一半做完了（它把凭据交出去了）；追平是加入方的事。
+    resyncNeeded = false;
+    resyncCause = null;
+    resyncDetail = null;
+    return { ok: true, output: built.output, phase: s.phase };
+  }
+
+  /**
+   * 房主把一份档案打包成 `resync-res`（公开口；`acceptResyncReq` 也走它）。
+   *
+   * **不裁剪**（见接口注释与 M4）：归一化只做"复制 + 逐条规范化"，`actions` 一条不少。
+   */
+  function buildResyncRes(file: MatchFile): SessionResult<{ output: SessionOutbound }> {
+    const canonical = canonicalResyncFile(file);
+    if (canonical === null) {
+      return fail(
+        'bad-resync',
+        '本端手里的档案形状不可用（缺 setup / actions / players / 指纹那几个字段），发不出 resync-res；' +
+          '请检查档案来源给的是不是一份 MatchFile。',
+      );
+    }
+    return ok({ output: outbound({ t: 'resync-res', file: canonical }) });
+  }
+
+  /**
+   * 加入方收下 `resync-res`（T6）：形状 → 守卫（`needsResync`）→ 相位进 `'resync-pending'`。
+   *
+   * 守卫用 `needsResync`（**不是相位**）：重连握手（`resuming`）与入站队列溢出（可能在任何
+   * 相位）都要能收下这份档案。不满足就 `'unexpected-message'` 且**一处状态都不动**
+   * （照 `mayIntakeSalt` 的 fail-closed 纪律）。
+   *
+   * 档案的内部形状在这里只做**够用的**检查（`isObj(file)` + 三个数组/字符串字段）；
+   * 真正的读法在 `applyResyncFile` 的归一化那一步 —— 不重写第二份完整判定。
+   */
+  function acceptResyncRes(msg: unknown): SessionDecision {
+    if (!isObj(msg) || !isObj(msg.file)) {
+      return {
+        ...fail('bad-resync', '收到的 resync-res 形状不对（缺 file，或 file 不是对象）；拒绝，状态不动。'),
+        phase: s.phase,
+      };
+    }
+    if (!resyncNeeded) {
+      return {
+        ...fail(
+          'unexpected-message',
+          `当前相位是 ${s.phase}，而本端**没有在等追平**（needsResync === false）：` +
+            '一份不在等档案的会话收到 resync-res，只可能是对端搞错了对象或在重放；拒绝，状态不动。',
+        ),
+        phase: s.phase,
+      };
+    }
+    phaseBeforeResyncApply = s.phase;
+    s.phase = 'resync-pending';
+    return { ok: true, output: null, phase: s.phase };
+  }
+
+  /**
+   * 用房主给的档案追平（T6）。语义与两种落点见接口注释；这里是实现上的三处要紧事。
+   *
+   * ## 1) ★ M1 的锚点：自报步数 vs 档案长度，**只此一处**
+   *
+   * 下面那一句 `statesAtStep !== canonical.actions.length` 是全模块**唯一**一处这种比较。
+   * `stateAtStep` 自己的越界检查（`src/app/match-replay.ts:264`）比的是另一件事
+   * （`n > f.actions.length`），把两者混起来写就会出现第二次命中 ⇒ 保持这一句独立。
+   * 变异 M1 就是把它放宽成"少一步也接受"。
+   *
+   * ## 2) 会话层**不算** `stateAtStep`
+   *
+   * 那需要 import `src/app/match-replay`，会让"追平的唯一出处"多出一个调用点（D9）。
+   * 这里只比较调用方自报的数，并把归一化后的档案**回给**调用方。
+   *
+   * ## 3) 落点（`phaseBeforeResyncApply` 记着档案到之前在哪一格）
+   *
+   *  - 重连握手进来的加入方（`resuming` / `handshaking`）：承诺进度是空的，落到
+   *    `'awaiting-commit'`；若房主重发的 `commit` 已经先到（`seedHash !== null`），落到
+   *    `'seed-committed'`，那份进度一个字不丢。
+   *  - 本来就在流程里的会话（队列溢出触发的那次追平）：**回到原来那一格**（把 `complete`
+   *    打回 `seed-committed` 会让它再也收不下盐）。
+   *
+   * 成功之后顺手把 `redriveOutput()` 的那一条放进返回值 —— D23 ② 说的"追平完成后按相位
+   * 重发一次"，加入方这一侧就在这里触发（房主那一侧由调用方调 `redrive()`）。
+   */
+  function applyResyncFile(
+    file: MatchFile,
+    statesAtStep: number,
+  ): SessionResult<{ file: MatchFile; phase: SessionPhase; output: SessionOutbound | null }> {
+    if (s.phase !== 'resync-pending') {
+      return fail(
+        'bad-resync',
+        `当前相位是 ${s.phase}，此时不能应用档案：追平必须先在 acceptResyncRes 里收下 resync-res` +
+          '（那一步问的是"本端在不在等档案"，这一步问的是"档案对不对得上"）。',
+      );
+    }
+    const canonical = canonicalResyncFile(file);
+    if (canonical === null) {
+      return fail(
+        'bad-resync',
+        '要应用的档案形状不可用（缺 setup / actions / players / 指纹那几个字段）；拒绝，且相位与 needsResync 都不动。',
+      );
+    }
+    // ★★ M1 的锚点（全模块只此一处"自报步数 vs 档案长度"的比较）
+    if (!Number.isInteger(statesAtStep) || statesAtStep !== canonical.actions.length) {
+      return fail(
+        'resync-step-mismatch',
+        `调用方自报已追平到第 ${statesAtStep} 步，而这份档案有 ${canonical.actions.length} 条操作：` +
+          '两者必须**恰好**相等。少一步或多一步都拒绝（`stateAtStep` 对越界是抛错不夹紧，' +
+          '夹紧会把"对端比我多走了几步"静默变成一个看起来同步的状态）；本端状态一点没动。',
+      );
+    }
+    const before = phaseBeforeResyncApply;
+    phaseBeforeResyncApply = null;
+    if (before === null || before === 'resuming' || before === 'handshaking') {
+      s.phase = s.seedHash === null ? 'awaiting-commit' : 'seed-committed';
+    } else {
+      s.phase = before;
+    }
+    resyncNeeded = false;
+    resyncCause = null;
+    resyncDetail = null;
+    // ★ D23 ② 的触发点（加入方这一半）：追平完成 ⇒ 按当前相位把"该发而未确认"的重发一次。
+    const output = redriveOutput();
+    return ok({ file: canonical, phase: s.phase, output });
   }
 
   /* ---------------- 公共部分 ---------------- */
@@ -1401,23 +2238,51 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     seed: () => s.seed,
     face: () => s.face,
     salt: () => s.salt,
-    peerStatus: (): PeerStatus => ({
-      phase: s.phase,
-      handshakeDone:
-        s.phase === 'awaiting-commit' ||
-        s.phase === 'seed-committed' ||
-        s.phase === 'awaiting-commit-ack' ||
-        s.phase === 'awaiting-commit-face' ||
-        s.phase === 'face-committed' ||
-        s.phase === 'seed-revealed' ||
-        s.phase === 'reveal-salt-sent' ||
-        s.phase === 'complete',
-      faceCommitted: s.faceHash !== null,
-      seedRevealed: seedMadePublic,
-      // 只有种子揭示之后才谈得上"可以收操作"；真正的判据（轮到谁）在 T5。
-      acceptsInput: s.phase === 'complete',
-      needsResync: s.phase === 'resuming',
-    }),
+    notePeerSeen,
+    noteTransportStatus,
+    reconnectWindowMs,
+    noteResyncNeeded,
+    redrive,
+    peerStatus: (): PeerStatus => {
+      // ★ `online` 的公式**只此一处**（D19/R3）：`传输状态 === 'online' && 未超窗`。
+      // 两个输入都由调用方喂，谁也不从相位猜（D19 引的 C2 就是"一条入站消息把相位推到
+      // complete"那个实测）。没有时钟时窗口那一半是 `null`（判不了）⇒ 只看传输状态。
+      const expired = windowExpired();
+      const reach = reachability(transportStatus);
+      return {
+        phase: s.phase,
+        handshakeDone:
+          s.phase === 'awaiting-commit' ||
+          s.phase === 'seed-committed' ||
+          s.phase === 'awaiting-commit-ack' ||
+          s.phase === 'awaiting-commit-face' ||
+          s.phase === 'face-committed' ||
+          s.phase === 'seed-revealed' ||
+          s.phase === 'reveal-salt-sent' ||
+          s.phase === 'complete' ||
+          // T6 新增：`resync-pending` = 重连握手**已经完成**、档案在路上（或刚到手还没应用）。
+          // `resuming` **不算**握手完成（`tests/net/session.test.ts` 的 N-11 腿钉着这一点）：
+          // 那一格里连 ack 都可能还没回到本端。
+          s.phase === 'resync-pending',
+        faceCommitted: s.faceHash !== null,
+        seedRevealed: seedMadePublic,
+        // ⚠️ 它答的是"会话层收不收操作"，**不是**"这一局是好的"（N-9）：加入方验盐失败时
+        // `phase === 'complete'`，这一位照样是 `true`。判"能不能收输入"要读
+        // `commitmentVerified()` 或失败理由。
+        //
+        // T6 在这里加了两半（之前只有 `phase === 'complete'`）：
+        //  - `reach !== 'offline'`：**已经知道对端走了**就不再收输入（断线宽限期的语义，
+        //    M2 的锚点就是这一半）；"还没听说"（`null` / `'idle'` / `'connecting'`）照收 ——
+        //    上面还有 T5 的"轮到谁"那一层，早拒会把一次正常的提交拒在门外；
+        //  - `expired !== true`：超过 300s 宽限之后不再收（超窗**不结束对局**，只是不再收输入）。
+        acceptsInput: s.phase === 'complete' && reach !== 'offline' && expired !== true,
+        needsResync: resyncNeeded,
+        needsResyncCause: resyncNeeded ? resyncCause : null,
+        needsResyncDetail: resyncNeeded ? resyncDetail : null,
+        online: reach === 'online' && expired !== true,
+        windowExpired: expired,
+      };
+    },
   };
 
   /**
@@ -1450,7 +2315,13 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
         // 房主**不再有**"收下自己那条 reveal-salt"的路（它的盐是本地持有的，见 `sendRevealSalt`）。
         return s.role === 'guest' ? acceptRevealSaltFinal(req.msg) : wrongWay('reveal-salt');
       case 'resync-req':
-        return acceptResyncReq(req.msg);
+        // T6：`resync-req` 的合法发送方是**加入方**（它要档案）、合法接收方是房主
+        // （档案只在它手里，D8："重连凭据 = 主机内存里的当前 MatchFile"）。加入方收到它
+        // 是方向错误 —— 它没有档案可回，走 `wrongWay`（而不是假装"追平没接上"）。
+        return s.role === 'host' ? acceptResyncReq(req.msg) : wrongWay('resync-req');
+      case 'resync-res':
+        // 反向：`resync-res` 只由房主发出、由加入方接收。
+        return s.role === 'guest' ? acceptResyncRes(req.msg) : wrongWay('resync-res');
       default: {
         // 穷尽性兜底：`SessionInbound['t']` 只有上面那些，走不到这里。
         // 写它是为了让函数在所有分支上都有返回值（TS 看不出 switch 是穷尽的）。
@@ -1473,6 +2344,7 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
       sendRevealSeed,
       acceptRevealFace,
       sendRevealSalt,
+      buildResyncRes,
       seedHashOfCommit: () => s.seedHash,
     };
     return host;
@@ -1489,6 +2361,8 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     sendRevealFace,
     acceptRevealSalt: acceptRevealSaltFinal,
     markResuming,
+    acceptResyncRes,
+    applyResyncFile,
     commitmentVerified: () => commitmentOk,
     faceHashOfCommit: () => s.faceHash,
   };

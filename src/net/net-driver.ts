@@ -94,8 +94,16 @@
  *     这是 `match-driver.ts:61-62` 的同一条取舍）。
  *  3. **`dispose()` 之后的入站消息一律丢弃**：`onMessage` 已退订，这是有意的 —— 一局结束之后
  *     再应用对端的操作会把已经交付的状态改脏。
- *  4. **入站队列没有上限**（见 `pendingTexts` 的注释）：`act` 是可靠保序通道，丢任何一条都等于
- *     分叉，设上限只会把分叉推迟。
+ *  4. **入站队列有上限（T6 落地，2026-09-18）**：上限 `inboundCapacity`（缺省
+ *     `DEFAULT_INBOUND_CAPACITY`），溢出时**不静默丢** —— 报一条 `'inbound-overflow'`
+ *     失败（`lastFailure()` / `onFailure` 都能读到）+ 计数（`inboundOverflowCount()`），
+ *     由调用方把它转成会话层的 `needsResync`（`session.ts` 的 `noteResyncNeeded`）。
+ *     T5 当初"不设上限"的理由（`act` 可靠保序、丢一条即分叉）**仍然成立**，所以这里的处置
+ *     不是"丢掉多余的就算了"，而是"**承认本端跟不上了，去走一次追平**" —— 溢出之后
+ *     本地状态已经不可信，唯一诚实的出路是拿房主的档案重建（T6 的 `resync`）。
+ *     **一处已知缺口如实登记**：追平之后如何让本驱动的 `applied` 计数与重建后的状态对齐，
+ *     今天**没有接口**（没有 reset / realign 口）⇒ 溢出之后的"完全恢复锁步"还需要接线层
+ *     补这一步；本任务只负责"把溢出这件事标出来并给可读提示"（计划 §5 T6 判据 7）。
  */
 
 import type { GameState, PlayerId } from '../core/models/types';
@@ -122,6 +130,23 @@ import type { NetChannel, NetTransport, StatusChange } from './transport';
 export const NET_DRIVER_MODE = 'net' as const;
 
 /**
+ * 入站队列的**缺省上限**（帧数；T6 落地，2026-09-18）。
+ *
+ * ## 这个数怎么来的（不是随手取的）
+ *
+ * 队列里攒的是"**已经到了本端、但宿主还没把状态递进来**"的帧（见 `pendingTexts`），
+ * 而它的正常深度是 **0 到个位数**：T8 的接线在收到帧时（或每次重渲染前）就 `arm(state)`，
+ * 帧在下一拍就落地了。所以上限的作用不是"流控"，而是一个**内存安全阀**：
+ * 真撞上它，说明本端已经停摆很久（宿主既没 `arm` 也没 `submit`），那时本地状态已经不可信。
+ *
+ * 取 256 的依据是 T5 的既有夹具：那一局的**整局**是 60 步（`tests/net/net-driver.test.ts`
+ * 的 60 步差分腿），256 ≈ 四局的操作量。正常接线永远不会碰到它，而"碰得到"这件事本身
+ * 就是"本端跟不上了"的证据。**它可注入**（`inboundCapacity`），所以判据腿能把它设成 1
+ * 来构造非零的溢出。
+ */
+export const DEFAULT_INBOUND_CAPACITY = 256;
+
+/**
  * 本模块登记的一次失败。形状照本仓的既有惯例：`reason` 是给分支用的**事实码**，
  * `message` 是给人看的**真因**（面向玩家的文案由 `src/ui` 决定，纯层不产玩家文案）。
  *
@@ -137,7 +162,15 @@ export type DriverFailureReason =
   /** 引擎在应用**对端**那一条时抛错（未覆盖的 kind 或引擎守卫） */
   | 'peer-action-refused'
   /** 本端提交被引擎拒绝，或本端的操作编不成协议消息（原因在 `message` 里） */
-  | 'local-action-refused';
+  | 'local-action-refused'
+  /**
+   * **入站队列满了**，这一帧没有被收下（T6）。
+   *
+   * 它是一条**真失败**，不是"丢弃"：本端已经跟不上对端（差了一整段操作），本地状态不可信，
+   * 唯一的出路是走一次追平（`resync`）。调用方应当把它转成会话层的 `needsResync`
+   * （`session.ts` 的 `noteResyncNeeded('queue-overflow', …)`），别让它只留在日志里。
+   */
+  | 'inbound-overflow';
 
 export interface DriverFailure {
   readonly reason: DriverFailureReason;
@@ -164,6 +197,14 @@ export interface NetDriverOptions {
    * 名字与 `NetTransport.onMessage` 一致：换实现的人不必记两套口径。
    */
   readonly onMessage?: (cb: (text: string, channel: NetChannel) => void) => () => void;
+  /**
+   * 入站队列的帧数上限（T6；缺省 `DEFAULT_INBOUND_CAPACITY`）。
+   *
+   * **可注入**的理由是可测性：上限必须是"能在测试里非零地构造出溢出"的东西，
+   * 否则"溢出时会发生什么"这条判据只能靠读代码相信。判据腿把它设成 1、喂两条 `act`
+   * （`inboundCapacity: 1` ⇒ 第二条落地时那条 `'inbound-overflow'` 必然出现）。
+   */
+  readonly inboundCapacity?: number;
 }
 
 export interface NetDriver extends MatchDriver {
@@ -207,8 +248,27 @@ export interface NetDriver extends MatchDriver {
    *  - 它**不**区分 `act` 与别的消息（`drain` 只在消费时才解码分类）⇒ 它是"待处理帧数"，
    *    不是"待应用操作数"；
    *  - 它**不含**"在传输层排队、还没到达本端"的帧（那要问传输）。
+   *
+   * ## ★ 归属分工（T6 复验人点名要写进代码的一句）
+   *
+   * 本读数 **只答"驱动侧入站队列"**。**传输侧**那一半（还压在 `send` 队列 / `bufferedAmount`
+   * 上的帧）今天**没有**队列深度读数 —— 只有 `send` 的 `'queue-full'` **失败信号**
+   * （`transport.ts:99-101`）。⇒ **不许**把 `pendingCount() === 0` 读成"全网没有积压"：
+   * 它只说"已经到本端、还没落地的帧是 0"。
+   * 本任务**不**为这条语义配腿/扩接口：要读传输侧深度就得改 T2 的 `NetTransport`
+   * 形状（那是 T2 的交付物），而复验人的判定是"不需要为它配腿"。玩家文案由 T8 按
+   * `'queue-full'` 那条失败信号单独分支。
    */
   pendingCount(): number;
+  /**
+   * **入站队列溢出过多少次**（T6 落地上限时加的读数；`0` = 没溢出过）。
+   *
+   * 为什么要一个**计数**而不是只看 `lastFailure()`：`lastFailure` 会被后来的失败覆盖
+   * （它是"最近一次"），而"溢出这件事发生过"是一个**不可逆的事实** —— 本端曾经跟丢过，
+   * 本地状态从此不可信。计数是这条事实唯一的可读证据（判据 7 的腿要断言
+   * "另一条被**记成溢出**"而不是"它不存在"）。
+   */
+  inboundOverflowCount(): number;
   /**
    * 把**当前状态**交给驱动，并顺手消费排队中的入站帧。
    *
@@ -286,11 +346,44 @@ export function createNetDriver(opts: NetDriverOptions): NetDriver {
    * 禁止的形状（`match-driver.ts:32-45`），代价是一个不报错的分叉。所以入站帧先排队，
    * 由宿主带着状态的下一次动作（`submit` / 下一帧落地）来消费它。
    *
-   * 代价如实登记：**队列长度无上限**，宿主若一直不调 `submit` 或一直不递状态，队列会一直长。
-   * 今天不设上限的理由：`act` 是可靠保序通道（D11），对端发多少条就有多少条该被应用，
-   * 丢任何一条都等于分叉；设一个上限只是把分叉推迟到更难查的地方。
+   * ## 上限与溢出（T6 落地；原来那句"无上限"已作废）
+   *
+   * T5 当初不设上限的理由是：`act` 是可靠保序通道（D11），对端发多少条就有多少条**该**被应用，
+   * 丢任何一条都等于分叉，设一个上限只是把分叉推迟到更难查的地方。
+   * **那条理由没有被推翻**，所以这里的处置不是"丢掉多余的就算了"，而是：到上限时
+   * **这一帧不收下**（`enqueue` 的溢出分支）＋ 报一条可读失败 ＋ 计数，由调用方折成会话层的
+   * `needsResync` —— 也就是"**承认本地跟不上了，去走一次追平**"（房主手里那份档案才是权威，
+   * 见 `session.ts` 的 `resync` 那一支）。静默 `shift()` 掉最旧的一条正是本仓最恨的形态
+   * （"动作发生了、语义没发生"）；变异 M7 就是把它改成那个样子。
    */
   const pendingTexts: string[] = [];
+
+  /** 入站队列的帧数上限（可注入；见 `NetDriverOptions.inboundCapacity` 与 `DEFAULT_INBOUND_CAPACITY`） */
+  const inboundCapacity = opts.inboundCapacity ?? DEFAULT_INBOUND_CAPACITY;
+
+  /** 溢出过多少次（"本端曾经跟丢过"是一条不可逆的事实，所以用计数而不是只看最近一次失败） */
+  let inboundOverflows = 0;
+
+  /**
+   * 收下一帧（**唯一的入队口**：`onMessage` 与 `feedText` 都走它）。
+   *
+   * ★ **溢出分支只此一处**（变异 M7 的锚点）：上限判定、"这一帧不收下"、报失败、计数四件事
+   * 必须在同一个地方做完 —— 分开写就会留下"某一处悄悄放行"的漏洞
+   * （与"超窗判定只能写一处"是同一条纪律）。
+   */
+  function enqueue(text: string): void {
+    if (pendingTexts.length >= inboundCapacity) {
+      inboundOverflows += 1;
+      report(
+        'inbound-overflow',
+        `入站队列已满（上限 ${inboundCapacity} 帧），这一帧**没有被收下**：宿主很久没有把当前` +
+          '状态递进来（arm / submit），本端已经比对端落后一大段操作，本地状态不再可信。' +
+          '请走一次追平（resync：拿房主的档案重建本地状态），不要在这种情况下继续推进回合。',
+      );
+      return;
+    }
+    pendingTexts.push(text);
+  }
 
   /**
    * 被卡住的那一帧：队列里最靠前的 `act` 的序号**不等于** `applied`。
@@ -431,7 +524,8 @@ export function createNetDriver(opts: NetDriverOptions): NetDriver {
   const onMessage = opts.onMessage ?? ((cb: (text: string, channel: NetChannel) => void) => transport.onMessage(cb));
   const unsubscribe: () => void = onMessage((text, _channel) => {
     // 生产路径：帧先到这里，再由宿主把当前状态递进来（见 `pendingTexts` 的注释）。
-    pendingTexts.push(text);
+    // T6：入队走 `enqueue`（它带着上限与溢出处置）。
+    enqueue(text);
     if (lastKnownState !== null) drain(lastKnownState);
   });
   /** 链路状态订阅（`onStatus` 转发用；`dispose` 时退订） */
@@ -580,6 +674,8 @@ export function createNetDriver(opts: NetDriverOptions): NetDriver {
 
     pendingCount: () => pendingTexts.length,
 
+    inboundOverflowCount: () => inboundOverflows,
+
     arm(s: GameState): void {
       if (disposed) return;
       lastKnownState = s;
@@ -588,7 +684,7 @@ export function createNetDriver(opts: NetDriverOptions): NetDriver {
 
     feedText(text: string, channel: NetChannel = 'act'): void {
       void channel;
-      pendingTexts.push(text);
+      enqueue(text);
       if (lastKnownState !== null) drain(lastKnownState);
     },
 

@@ -12,6 +12,8 @@ import {
 } from '../../src/net/session';
 import type { GuestSession, HostSession, SessionInbound, SessionRejectReason } from '../../src/net/session';
 import { CARD_DATA_HASH } from '../../src/app/card-data-hash';
+import { MATCH_FILE_FORMAT, MATCH_FILE_VERSION } from '../../src/app/match-file';
+import type { MatchFile } from '../../src/app/match-file';
 import { PROTO_VERSION, decodeMsg, encodeMsg, validateHello } from '../../src/net/protocol';
 import type { HelloAckMsg, HelloMsg } from '../../src/net/protocol';
 
@@ -298,6 +300,28 @@ function guestAwaitingSalt(): GuestSession {
   expect(g.phase(), '夹具问题：这个夹具该停在 reveal-salt-sent').toBe('reveal-salt-sent');
   return g;
 }
+
+/**
+ * 一份**形状可归一化、但零步**的重连档案（T6 加的两处要用它）。
+ *
+ * 为什么不从 `createGame()` 造一份真的：本节需要的是"`canonicalMatchFile` 能读得动"这件事，
+ * 而 `stateAtStep` 的重放语义由 T4 的腿负责；这里手写一份最小档案，是为了让
+ * T3 的这条闭合腿不去依赖 `src/core` 的引擎状态。真正带 60 步、两端指纹比对的追平腿
+ * 在 `tests/net/reconnect.test.ts`（那里走的是完整的档案）。
+ *
+ * `actions: []` 是**刻意的**：`resync-step-mismatch` 那一格要构造"自报 1 步、档案 0 步"，
+ * 差异是非零的（不是"少零步"那种掷硬币）。
+ */
+const RESYNC_PROBE_FILE: MatchFile = {
+  format: MATCH_FILE_FORMAT,
+  version: MATCH_FILE_VERSION,
+  cardDataHash: CARD_DATA_HASH,
+  seed: 'probe-seed',
+  setup: { draftMode: 'normal', draftStarter: 0, firstToPlay: 1, draftPool: [], draftPicks: [], bannedProtocols: [] },
+  players: [{ nick: 'a' }, { nick: 'b' }],
+  actions: [],
+  createdAt: '2026-01-01T00:00:00.000Z',
+};
 
 /* ------------------------------------------------------------------ *
  * 判据 1（★ 全阶段唯一可机器判定的安全属性）
@@ -971,6 +995,8 @@ const REASON_NEEDS_LEG = {
   'bad-face': true,
   'unexpected-message': true,
   'resync-not-wired': true,
+  'bad-resync': true,
+  'resync-step-mismatch': true,
 } satisfies Record<SessionRejectReason, true>;
 
 const declaredRejectReasonList = declaredRejectReasons();
@@ -1115,6 +1141,24 @@ describe('判据 3：版本不符与卡牌指纹不符各给一句设计稿口�
     const rs = h2.sendRevealSeed();
     expect(rs.ok).toBe(true);
     collect('face-hash-mismatch', h2.accept({ t: 'reveal-face', msg: { t: 'reveal-face', face: 1, faceNonce: '不一样' } }));
+
+    // T6 新增的两个理由码（**跨文件的必要同步**：闭合腿的口径是"实际构造出的 ∪ 豁免"必须
+    // 等于 `SessionRejectReason` 的声明集合，所以新码必须在这里真的构造一次）。
+    //  - `bad-resync`：房主收到的 `resync-req` 属于**另一局**（sessionId 不符）⇒ 拒绝且不回档案。
+    //    T6 之前这条走的是"追平还没接上"，现在追平接上了，拒绝的理由只能由"请求本身不可用"
+    //    来承担（判据 10 的形状腿）。
+    collect(
+      'bad-resync',
+      hostSession().accept({ t: 'resync-req', msg: { t: 'resync-req', sessionId: '另一局', appliedSteps: 0 } }),
+    );
+    //  - `resync-step-mismatch`：调用方自报的步数与档案长度对不上（**少一步也算**）。
+    //    这里故意报 1 而档案是 0 条操作：判据 11 的负向那一半。走的是真实路径
+    //    （markResuming → hello-ack → resync-res → applyResyncFile）。
+    const gResync = rawGuestSession();
+    expect(gResync.markResuming().ok).toBe(true);
+    acceptHelloAck(gResync);
+    acceptOk(gResync, { t: 'resync-res', msg: overWire({ t: 'resync-res', file: RESYNC_PROBE_FILE }) });
+    collect('resync-step-mismatch', gResync.applyResyncFile(RESYNC_PROBE_FILE, 1));
 
     // ★ 覆盖面**双向闭合**（修复轮 N-2，形态照 T1 阶段一评审 N-1 的处置）。
     //
@@ -1638,6 +1682,7 @@ type PhaseRecipe = (role: 'host' | 'guest') => HostSession | GuestSession;
 const PHASE_ROLES: Readonly<Record<string, readonly ('host' | 'guest')[]>> = {
   handshaking: ['host', 'guest'],
   resuming: ['host', 'guest'],
+  'resync-pending': ['guest'],
   'awaiting-commit-face': ['host'],
   'awaiting-commit': ['guest'],
   'seed-committed': ['guest'],
@@ -1679,6 +1724,20 @@ const PHASE_RECIPES: Readonly<Record<string, PhaseRecipe>> = {
     const h = hostSession();
     handshakeHost(h);
     return h;
+  },
+  /**
+   * T6 新增的相位：**档案已经到了本端、还没被追平应用**。
+   *
+   * 只有加入方到得了（`acceptResyncRes` 是它唯一的入口，而那个口只长在加入方会话上）；
+   * 房主那一格登记在 `PHASE_UNREACHABLE` 里。
+   */
+  'resync-pending': (role) => {
+    expect(role).toBe('guest');
+    const g = rawGuestSession();
+    expect(g.markResuming().ok).toBe(true);
+    acceptHelloAck(g);
+    acceptOk(g, { t: 'resync-res', msg: overWire({ t: 'resync-res', file: RESYNC_PROBE_FILE }) });
+    return g;
   },
   'awaiting-commit': (role) => {
     expect(role).toBe('guest');
@@ -1775,6 +1834,10 @@ const PHASE_UNREACHABLE: readonly string[] = [
   'host/awaiting-commit-ack',
   'host/reveal-salt-sent',
   'host/seed-committed',
+  // T6 新增的那一格：`resync-pending` 只由**加入方**的 `acceptResyncRes` 进入（房主没有那个口：
+  // 它这一侧发的是 `resync-res`，收档案的是加入方）。登记在这里是**双向闭合**的要求 ——
+  // "新增一个取不到的格子要登记 + 写清为什么"。
+  'host/resync-pending',
 ];
 
 /**
@@ -1784,7 +1847,7 @@ const PHASE_UNREACHABLE: readonly string[] = [
  *   不许从 `inbounds` / `wire` 这些抽取结果派生**（派生会让比对它的断言退化成本文件里
  *   已经被抓到过的"自证恒真"）。理由与完整说明见 `PHASE_RECIPES` 的头注。
  */
-const WIRE_OUT_OF_SCOPE: readonly string[] = ['act', 'busy', 'bye', 'forfeit', 'resync-res'];
+const WIRE_OUT_OF_SCOPE: readonly string[] = ['act', 'busy', 'bye', 'forfeit'];
 
 /**
  * **允许抛错**的格子白名单。今天**为空**：144 格里没有任何一格允许抛。
