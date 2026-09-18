@@ -157,25 +157,31 @@ export type SessionResult<T> = ({ ok: true } & T) | { ok: false; reason: Session
  * 相位。**这是顺序约束唯一的载体** —— 它是闭包里的私有变量，没有 setter，只能由本文件的
  * 几个推进函数改，没有旁路。
  *
- * 两个角色走的是**两套**相位（不是一套），因为两个方向能做的事不一样：
+ * ## 两条流水线（修复轮 N-7 之后，两边的"等什么"各自有了名字）
  *
  * | 角色 | 相位推进 |
  * |---|---|
- * | 房主 | `handshaking` → 握手成功 → `awaiting-commit-face` → `sendCommit`（**相位不变**，仍在等对端的承诺）→ 收到 `commit-face` → `face-committed` → `sendRevealSeed` → `seed-revealed` → 收到 `reveal-face` → `complete` |
- * | 加入方 | `handshaking` → 收到 `commit` → `seed-committed` → `sendCommitAck` → `awaiting-commit-face` → `commitFace` → `face-committed` → 收到 `reveal-seed` → `seed-revealed` → `sendRevealFace` → `reveal-salt-sent` → 收到 `reveal-salt` → `complete` |
+ * | 房主 | `handshaking` →（收 `hello`，回 ack）`awaiting-commit-face` →（`sendCommit`：**相位不变**）→（收 `commit-face`）`face-committed` →（`sendRevealSeed`）`seed-revealed` →（收 `reveal-face`）`complete`；**发盐**用 `sendRevealSalt()`（`seed-revealed` → `complete`） |
+ * | 加入方 | `handshaking` →（收 `hello-ack`）`awaiting-commit` →（收 `commit`）`seed-committed` →（`sendCommitAck`）`awaiting-commit-ack` →（`commitFace`：发出自己的承诺）`face-committed` →（收 `reveal-seed`）`seed-revealed` →（`sendRevealFace`）`reveal-salt-sent` →（收 `reveal-salt`）`complete` |
  *
- * 房主**没有** `awaiting-commit-face` 之外的中转相位：发过 `commit` 之后它等的还是同一样东西
- * （对端的 `commit-face`），多造一个中间相位只会给 `sendRevealSeed()` 的守卫多加一条与安全无关的分支。
- * 同理，加入方也**没有** `'face-committed'` 之外的第二个"可以收种子"的相位。
+ * **三个"等"的相位各自只属于一个角色，不许合并**（实测踩过一次：把加入方 ack 之后的
+ * 相位写成房主那个 `'awaiting-commit-face'`，守卫就分不清"等对方的承诺"与"等自己发承诺"，
+ * 于是"还没收到 commit 就能选面"这条腿当场红）：
+ *  - `'awaiting-commit'` = **加入方**在等房主的 `commit`（它刚收到 `hello-ack`，**还没**收到承诺）；
+ *  - `'awaiting-commit-ack'` = **加入方**已经回了 `commit-ack`、正在等它自己发出 `commit-face`
+ *    （`commitFace()` 的**唯一**合法相位）；
+ *  - `'awaiting-commit-face'` = **房主**在等加入方的 `commit-face`。
  *
- * 不过两套相位里都有一个 `'face-committed'`，而它的含义在两边都恰好是"加入方的承诺已经成立"：
- * 房主那边是收到了对端的 `commit-face`，加入方那边是自己发出了 `commit-face`。
+ * 两个角色的相位里都有 `'face-committed'`，而它的含义在两边**恰好相同**：
+ * "加入方的 `commit-face` 已经成立" —— 房主那边是收到了对端的，加入方那边是自己发出了。
  * **`'face-committed'` 就是"允许揭示种子"的唯一相位**（`mayRevealSeed`）。
  */
 export type SessionPhase =
   | 'handshaking'
   | 'resuming'
+  | 'awaiting-commit'
   | 'seed-committed'
+  | 'awaiting-commit-ack'
   | 'awaiting-commit-face'
   | 'face-committed'
   | 'seed-revealed'
@@ -197,6 +203,7 @@ export type SessionPhase =
  */
 export type SessionInbound =
   | { t: 'hello'; msg: unknown }
+  | { t: 'hello-ack'; msg: unknown }
   | { t: 'commit'; msg: unknown }
   | { t: 'commit-ack'; msg: unknown }
   | { t: 'commit-face'; msg: unknown }
@@ -502,10 +509,14 @@ interface NetSessionCommon {
    *  - 判据 1 真正的闸门只有一个：`sendRevealSeed()` 的相位判定（`mayRevealSeed`），
    *    它决定种子**能不能出线**。房主自己手里一直有种子这件事不是缺陷，是它的角色。
    *
-   * （为什么不干脆改成"没公开就回 `null`"：那会让房主**永远读不到自己的种子** ——
-   * `commit` 之后、揭示之前正是它要用种子的时刻（`src/main.ts:1107-1113` 那条
-   * "硬币决定 `draftStarter` 与 `firstToPlay`"的链路），T5/T8 接上去时会当场撞墙。
-   * 两者选一时我选了"改注释说清语义"，理由写在上面。）
+   * （为什么不干脆改成"没公开就回 `null`"：那是一次**API 变更** —— 需要一个
+   * `ownSeed()` 之类的本地读数口，而"房主在 reveal 之前要不要读自己的种子"这件事
+   * 取决于 T5/T8 的接线形状（联机那条链还没接）。今天**没有任何调用方**需要在 reveal 之前
+   * 读它（`src/main.ts:1107-1113` 是热座掷硬币那条链，与联机无关），所以这件事留给 T5/T8
+   * 一并定，不在本轮擅自改形状。
+   * 早先这里写的理由是"不改成 null 的话房主永远读不到自己的种子"—— **那条不成立**
+   * （阶段二复验指出）：`sendRevealSeed()` 的成功面就带 `seed`，房主在需要的时刻拿得到它。
+   * 结论不变，理由换成上面这条成立的。）
    */
   seed(): string | null;
   /** 揭示之后读面（房主收 `reveal-face` 之后、加入方自己提交之后都有值） */
@@ -535,8 +546,15 @@ export interface HostSession extends NetSessionCommon {
   sendRevealSeed(): SessionResult<{ output: SessionOutbound; seed: string }>;
   /** 收到加入方的 `reveal-face` ⇒ 当场用注入哈希验 `hash(face, faceNonce)` 是否等于那条承诺 */
   acceptRevealFace(msg: unknown): SessionDecision;
-  /** 收到 `reveal-salt` ⇒ 结束（盐的**校验方**是加入方，不是房主；这里只收下） */
-  acceptRevealSalt(msg: unknown): SessionDecision;
+  /**
+   * 把 `reveal-salt` 发出去（对局结束后，设计稿 `:475`）。
+   *
+   * **房主这一侧没有"收下 reveal-salt"的口**（修复轮 N-8）：盐是房主自己的，
+   * `reveal-salt` 的发送方只能是它 ⇒ "合法收下"这件事不存在，所以那个方法被删掉了
+   * （原来叫 `acceptRevealSalt`，调用方是 T5/T8）。入站 `reveal-salt` 在房主侧一律
+   * `unexpected-message` 且不改状态。
+   */
+  sendRevealSalt(): SessionResult<{ output: SessionOutbound; salt: string }>;
   /** 本方承诺的 `hash(seed+salt)`（对端用它验 `reveal-salt`）；还没 `sendCommit` 时是 `null` */
   seedHashOfCommit(): string | null;
   /** 本方手里的盐（对端要用它验承诺）；还没 `sendCommit` 时是 `null` */
@@ -666,6 +684,13 @@ function mayIntakeSalt(phase: SessionPhase): { ok: true } | { ok: false; reason:
   };
 }
 
+/** 从（可能来自网络的）unknown 里取一个**给人看**的消息类型串（诊断与文案用，不参与分支） */
+function whatOf(msg: unknown): string {
+  if (!isObj(msg)) return '非对象的消息';
+  const t = msg.t;
+  return typeof t === 'string' ? t : '没有 t 字段的消息';
+}
+
 function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSession {
   const selfSeat: PlayerId = opts.seat ?? (role === 'host' ? 0 : 1);
 
@@ -715,6 +740,22 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
    * 确认"这里的协议长这样"。所以形状失败根本不产出发包，`busy` 只在**四步业务拒绝 + 观战**
    * 这五种情况下产出。这与 `protocol.ts:599-611` 的取舍同源（形状失败不占用四条的顺序）。
    */
+  /**
+   * 回绝一次握手（**真的把这次握手判死**：相位进 `'rejected'`）。
+   *
+   * `busyReason` 与 `reason` **分开传**，因为两个类型不一样：`BusyMsg.reason` 是
+   * `HelloRejectReason | 'unsupported'`，不含 `'bad-shape'`。
+   *
+   * 「形状不对」为什么**不**回一条 `busy`：那种输入连"它是不是一条 hello"都不确定
+   * （`protocol.ts` 的形状检查就是为这个存在的）—— 回一条 `busy` 等于向一个身份不明的对端
+   * 确认"这里的协议长这样"。所以形状失败根本不产出发包，`busy` 只在**四步业务拒绝 + 观战**
+   * 这五种情况下产出。这与 `protocol.ts:599-611` 的取舍同源（形状失败不占用四条的顺序）。
+   *
+   * **它不该被用来处理"迟到/重复的 hello"**（修复轮 N-6，阶段二复验实测）：
+   * 那种消息不构成"这次握手失败"，把它推成 `'rejected'` 会**一条重放消息废掉健康会话**
+   * （在途的 `reveal-face` 再也进不来、`handshakeDone` 从 true 变回 false）。迟到的 hello 走
+   * 下面的 `refuseLateHello`。
+   */
   function rejectHello(
     reason: SessionHelloReason,
     message: string,
@@ -737,16 +778,58 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     return { ok: false, reason, message, phase: s.phase, emit: true, busy: { t: 'busy', reason: busyReason, detail } };
   }
 
+  /**
+   * 拒绝一条**不该在此时出现的 `hello`**，但**不动任何状态**（修复轮 N-6）。
+   *
+   * 三条后果是阶段二复验实测出来的（`AUDIT-duplicate-hello`），逐条对上：
+   *  1. `seed-revealed` 之后合法的 `reveal-face` **再也进不来** —— 在途的承诺流程被一条
+   *     重放消息作废；
+   *  2. `peerStatus().handshakeDone` 从 `true` **变回 `false`**；
+   *  3. 之后 `sendRevealSeed()` 报 `seed-before-face`，而那句文案说"加入方还没有提交承诺" ——
+   *     在 `seed-revealed` 相位下这是**一句假话**（承诺早就提交过了）。
+   *
+   * ⇒ 迟到的 hello 与"握手被回绝"是**两件事**，因此：相位不动、`emit: false`（不回一条
+   * `busy` —— 会话是好的，回 busy 会让对端以为这局没戏）、文案按**当前相位**如实说。
+   *
+   * 为什么 `emit: false`：`busy` 的语义是"这个房间不收你"，而这里的事实是"握手早就成了，
+   * 这条消息来晚了"。发一条 busy 会误导对端去换房间。
+   */
+  function refuseLateHello(what: string): HelloRejection {
+    const why =
+      s.phase === 'rejected'
+        ? '这次握手已经被本端回绝过了'
+        : '握手已经成功过（这一局已经在承诺流程里）';
+    return {
+      ok: false,
+      reason: 'unexpected-message',
+      message:
+        `${what}：${why}，当前相位是 ${s.phase} —— 本端**忽略**它，会话状态一点都没动。` +
+        '已经完成的步骤不会因为你重发握手就退回去；若确实要开新的一局，请换一个新的 sessionId 重新握手。',
+      phase: s.phase,
+      emit: false,
+      busy: { t: 'busy', reason: 'unsupported', detail: '这条 hello 来得太晚，被忽略（会话未改动）。' },
+    };
+  }
+
   function acceptHello(msg: unknown): HelloDecision {
+    // N-7：`hello` 的合法发送方是**加入方**，所以只有房主该收它。
+    // 加入方收到入站 hello 是对端搞错了方向 —— 那既不构成"握手回绝"，也不该改任何状态
+    // （阶段二复验实测：一条 `{t:'hello',resuming:true}` 能把加入方推到 `resuming`，
+    //  此后真正的 `commit` 永久进不来；普通 hello 还会改写它的座位读数）。
+    if (role !== 'host') {
+      return {
+        ok: false,
+        reason: 'unexpected-message',
+        message:
+          `收到了一条 ${JSON.stringify(whatOf(msg))}：hello 只能由**加入方**发给房主，本端是加入方，` +
+          '这条消息方向反了，本端忽略它且不改动任何状态（本端要等的是 hello-ack）。',
+        phase: s.phase,
+        emit: false,
+        busy: { t: 'busy', reason: 'unsupported', detail: 'hello 的方向反了（本端是加入方），已忽略。' },
+      };
+    }
     if (s.phase !== 'handshaking') {
-      return rejectHello(
-        'unexpected-message',
-        s.phase === 'rejected'
-          ? '这次握手已经被回绝过了，不再接受第二条 hello；请让对端开一个新的会话。'
-          : `当前相位是 ${s.phase}，握手已经完成，不再接受 hello。`,
-        null,
-        '握手已完成，这条 hello 被丢弃。',
-      );
+      return refuseLateHello('重复/迟到的 hello');
     }
     // D13：校验顺序与文案全在 `protocol.ts` 的 `validateHello` 里（那是**唯一出处**，
     // 本模块不再判一遍 —— 两处判定迟早会漂移）。
@@ -754,8 +837,8 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
       localProtoVersion: opts.localProtoVersion,
       localCardDataHash: opts.localCardDataHash,
       occupied: { players: occupiedPlayers(), spectators: [] },
-      // D7：座位是主机的决定。房主替加入方定座位（`protocol.ts` 里 `ctx.seat` 优先于对端自报值）。
-      seat: role === 'host' ? s.peerSeat : s.selfSeat,
+      // D7：座位是主机的决定 —— 房主替加入方定座位（`protocol.ts` 里 `ctx.seat` 优先于对端自报值）。
+      seat: s.peerSeat,
     });
     if (!v.ok) {
       // `validateHello` 的四条（含 `'bad-shape'`）原样透传：同一件事不在两处各给一句话。
@@ -778,12 +861,11 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     }
 
     s.peerSeat = v.seat;
-    if (role === 'guest') s.selfSeat = v.seat;
 
     // ---- 重连（D8）：`resuming: true` 能通过握手，相位标成 `'resuming'` ----
     // 追平（`resync-res` 与档案重放）是 T6 的事：本模块只把这件事**记下来**
     // （`needsResync` 给 T6 与 UI 一个读口），不假装已经追平。
-    s.phase = hello.resuming === true ? 'resuming' : role === 'host' ? 'awaiting-commit-face' : 'handshaking';
+    s.phase = hello.resuming === true ? 'resuming' : 'awaiting-commit-face';
     return {
       ok: true,
       output: {
@@ -796,6 +878,61 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
       phase: s.phase,
       seat: s.peerSeat,
     };
+  }
+
+  /**
+   * 加入方收下 `hello-ack`（修复轮 N-7）。
+   *
+   * ## 为什么必须新增这一条入站消息
+   *
+   * 在它存在之前，加入方那一侧的"握手"在相位上**没有表示**：`SessionInbound` 里没有
+   * `hello-ack`，于是 `guest.peerStatus().handshakeDone` 在握手刚成功时仍是 `false`
+   * （阶段一评审 N-4 记录过，交给了 T5/T8）。
+   *
+   * 更要紧的是 N-7：加入方**唯一**能表达"握手完成"的办法此前竟是**收一条入站 `hello`** ——
+   * 而 `hello` 的合法发送方是加入方自己。那条路一旦被对端利用，一条
+   * `{t:'hello',resuming:true}` 就能把加入方推到 `resuming`（**假读数**），此后真正的
+   * `commit` 永久进不来。⇒ 把"收到 hello"（方向错，忽略）与"收到 hello-ack"（对，推进）
+   * 分开，加入方的相位才由**它真正该等的消息**驱动。
+   */
+  function acceptHelloAck(msg: unknown): SessionDecision {
+    if (role !== 'guest') {
+      return {
+        ...fail('unexpected-message', 'hello-ack 只能由房主发出、由加入方接收；本端是房主，收到的方向反了。'),
+        phase: s.phase,
+      };
+    }
+    if (
+      !isObj(msg) ||
+      !isNonEmptyString(msg.sessionId) ||
+      typeof msg.peerNick !== 'string' ||
+      (msg.seat !== 0 && msg.seat !== 1)
+    ) {
+      return {
+        ...fail('unexpected-message', '收到的 hello-ack 形状不对（缺 sessionId / peerNick / seat）；拒绝，状态不动。'),
+        phase: s.phase,
+      };
+    }
+    if (msg.sessionId !== opts.sessionId) {
+      return {
+        ...fail(
+          'unexpected-message',
+          `收到的 hello-ack 属于另一局（对端回的 sessionId 是 ${JSON.stringify(msg.sessionId)}，` +
+            `本端这一局是 ${JSON.stringify(opts.sessionId)}）；拒绝，状态不动。`,
+        ),
+        phase: s.phase,
+      };
+    }
+    if (s.phase !== 'handshaking' && s.phase !== 'resuming') {
+      return { ...fail('unexpected-message', `当前相位是 ${s.phase}，不接受第二条 hello-ack。`), phase: s.phase };
+    }
+    // D7：座位是**房主**的决定 —— 以 ack 里的座位为准（本端自报的只是初值）。
+    s.selfSeat = msg.seat;
+    s.peerSeat = msg.seat === 0 ? 1 : 0;
+    // 相位往前走一格：本端等的东西从"hello-ack"变成"房主的 commit"。
+    // `'resuming'` 保持不动（重连那一支的追平是 T6 的事，见 N-4）。
+    if (s.phase === 'handshaking') s.phase = 'awaiting-commit';
+    return { ok: true, output: null, phase: s.phase };
   }
 
   /* ---------------- 承诺流程：房主 ---------------- */
@@ -906,20 +1043,37 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     return { ok: true, output: null, phase: s.phase };
   }
 
+  /* ---------------- 承诺流程：房主的揭示 ---------------- */
+
   /**
-   * 房主收下 `reveal-salt`（对局结束后）。
+   * 房主把盐发出去（对局结束后；设计稿 `:475`）。
    *
-   * 现在是**共用实现**（`intakeRevealSalt`）：形状检查 + 相位守卫。
-   * 相位守卫是修复轮 N-1 加的 —— 理由与复现都写在那个函数的头注里。
+   * 与 `sendRevealSeed()` 同一形状：**产出**一条要发的消息，不由状态机自己发包。
+   * 相位守卫与种子那条同源（`mayIntakeSalt` 认的两个相位）：只有**本方已经揭示过种子**之后
+   * 才谈得上揭示盐 —— 先盐后种毫无意义，而且那时对方还没法验。
+   *
+   * 为什么房主这一侧**只有发、没有收**（修复轮 N-8）：`reveal-salt` 的发送方只能是房主
+   * （盐是它的），所以"房主合法收下 reveal-salt"这件事不存在。原来那个 `acceptRevealSalt(msg)`
+   * 因此被**删掉**（阶段二复验实测 `AUDIT-host-salt-overwrite`：合法窗口里一条入站
+   * `{t:'reveal-salt', salt:'对端塞进来的盐'}` 会把房主自己的盐覆盖掉）。入站 `reveal-salt`
+   * 在房主侧一律 `unexpected-message` 且不改状态。
+   * 这是一次 API 变更，调用方是 T5/T8 —— 比"留一个永远拒绝的方法"更诚实：调用方**编译期**
+   * 就知道房主不收这东西。
    */
-  function acceptRevealSalt(msg: unknown): SessionDecision {
-    const shape = intakeRevealSalt(msg);
-    if (!shape.ok) return { ...fail(shape.reason, shape.message), phase: s.phase };
+  function sendRevealSalt(): SessionResult<{ output: SessionOutbound; salt: string }> {
+    if (s.salt === null) {
+      throw new Error('session.ts 内部不一致：还没发过 commit 就要揭示盐（sendCommit 没设上？）。');
+    }
     const guard = mayIntakeSalt(s.phase);
-    if (!guard.ok) return { ...fail(guard.reason, guard.message), phase: s.phase };
-    s.salt = shape.salt;
+    if (!guard.ok) {
+      return fail(
+        'unexpected-message',
+        `当前相位是 ${s.phase}，还不能揭示盐：盐要在**种子揭示之后**才发（设计稿 §5.3 最后一步），` +
+          '那时对方才能拿它去验 `hash(seed + salt)`。',
+      );
+    }
     s.phase = 'complete';
-    return { ok: true, output: null, phase: s.phase };
+    return ok({ output: outbound({ t: 'reveal-salt', salt: s.salt }), salt: s.salt });
   }
 
   /* ---------------- 承诺流程：加入方 ---------------- */
@@ -929,8 +1083,16 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     if (!isHashString(hash)) {
       return { ...fail('bad-hash', '收到的 commit 没有可用的 hash（空串 / 缺失 / 不是字符串）；拒绝。'), phase: s.phase };
     }
-    if (s.phase !== 'handshaking') {
-      return { ...fail('unexpected-message', `当前相位是 ${s.phase}，不接受第二条 commit。`), phase: s.phase };
+    // 加入方等 `commit` 的相位是 `'awaiting-commit'`（收到 `hello-ack` 之后进入）。
+    // N-7 之前它靠"收一条入站 hello"进相位 —— 那是方向错的用法，现在由 `hello-ack` 驱动。
+    if (s.phase !== 'awaiting-commit') {
+      return {
+        ...fail(
+          'unexpected-message',
+          `当前相位是 ${s.phase}，此时不接受 commit（要么握手还没完成，要么这条是重复的）。`,
+        ),
+        phase: s.phase,
+      };
     }
     s.seedHash = hash;
     s.phase = 'seed-committed';
@@ -946,20 +1108,25 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
         `当前相位是 ${s.phase}，还不能回 commit-ack：先收到房主的 commit 再确认（设计稿 §5.3 第 3 步）。`,
       );
     }
-    s.phase = 'awaiting-commit-face';
+    // 加入方发过 ack 之后等的是**自己**发出 `commit-face` —— 那与"房主在等对方的承诺"、
+    // 以及"加入方还在等房主的 commit"都不是同一件事，所以它有**自己的**相位
+    // `'awaiting-commit-ack'`（`commitFace()` 只认这一个）。
+    s.phase = 'awaiting-commit-ack';
     return ok({ output: outbound({ t: 'commit-ack' }) });
   }
-
   function commitFace(face: 0 | 1, faceNonce: string): SessionResult<{ output: SessionOutbound; hash: string }> {
     if (face !== 0 && face !== 1) {
       throw new Error(`session.ts 的 commitFace 收到越界的 face ${String(face)}（契约是 0 | 1）；这是调用方违约。`);
     }
     const nonce = requireNonEmpty('faceNonce', faceNonce);
-    if (s.phase !== 'awaiting-commit-face') {
+    // `commitFace()` 的**唯一**合法相位：本方已经回过 `commit-ack`（`'awaiting-commit-ack'`）。
+    // 刻意**不**接受 `'awaiting-commit'`（那时连房主的 commit 都还没到 —— 面的承诺会抢在
+    // 种子承诺之前，正是判据 1 要堵的形状）。
+    if (s.phase !== 'awaiting-commit-ack') {
       return fail(
         'unexpected-message',
         `当前相位是 ${s.phase}，还不能提交 commit-face：` +
-          (s.phase === 'handshaking'
+          (s.phase === 'handshaking' || s.phase === 'awaiting-commit'
             ? '先收到房主的 commit（否则面的承诺会早于种子承诺）。'
             : '这条承诺已经提交过了。'),
       );
@@ -1023,6 +1190,16 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     s.phase = 'complete';
     commitmentOk = actual === s.seedHash;
     if (commitmentOk !== true) {
+      // 这里**推进了相位**（与房主的 `reveal-face` 失配那条路**刻意不同**），
+      // 理由有两条，都是可核对的（修复轮 N-9 要求写清）：
+      //  1. **角色不同**：加入方是**验证方**，它的职责是"验完并如实记下结论"——
+      //     `commitmentVerified() === false` 就是那个结论，而这条结论必须能被上层读到。
+      //     房主那条路是**见证方**（对端在揭示自己承诺过的面），失配时它手上不能留下一个
+      //     没通过校验的面（`face()` 的语义是"这一局实际采用的面"）。
+      //  2. **能继续的东西不同**：加入方验不过之后没有"下一步"要做（盐都到了，流程到头了），
+      //     所以收尾到 `complete` 并把结论摆在读数里；房主失配时后面还有它要做的事，
+      //     而它**不该**基于一个假的面继续 —— 所以 fail-closed（相位不动、面不落）。
+      // ⇒ 两条路的**收尾纪律**不同是设计，不是漏改；判据 2 的负向腿各自钉住了它们。
       return {
         ...fail(
           'salt-hash-mismatch',
@@ -1057,7 +1234,9 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     peerStatus: (): PeerStatus => ({
       phase: s.phase,
       handshakeDone:
+        s.phase === 'awaiting-commit' ||
         s.phase === 'seed-committed' ||
+        s.phase === 'awaiting-commit-ack' ||
         s.phase === 'awaiting-commit-face' ||
         s.phase === 'face-committed' ||
         s.phase === 'seed-revealed' ||
@@ -1084,6 +1263,8 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     switch (req.t) {
       case 'hello':
         return acceptHello(req.msg);
+      case 'hello-ack':
+        return acceptHelloAck(req.msg);
       case 'commit':
         return s.role === 'guest' ? acceptCommit(req.msg) : wrongWay('commit');
       case 'commit-ack':
@@ -1095,7 +1276,9 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
       case 'reveal-face':
         return s.role === 'host' ? acceptRevealFace(req.msg) : wrongWay('reveal-face');
       case 'reveal-salt':
-        return s.role === 'guest' ? acceptRevealSaltFinal(req.msg) : acceptRevealSalt(req.msg);
+        // N-8：`reveal-salt` 的发送方**只能是房主**。加入方照旧走"收下并兑现校验"那一支；
+        // 房主**不再有**"收下自己那条 reveal-salt"的路（它的盐是本地持有的，见 `sendRevealSalt`）。
+        return s.role === 'guest' ? acceptRevealSaltFinal(req.msg) : wrongWay('reveal-salt');
       case 'resync-req':
         return acceptResyncReq(req.msg);
       default: {
@@ -1119,7 +1302,7 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
       acceptCommitFace,
       sendRevealSeed,
       acceptRevealFace,
-      acceptRevealSalt,
+      sendRevealSalt,
       seedHashOfCommit: () => s.seedHash,
       salt: () => s.salt,
     };

@@ -156,8 +156,32 @@ function hostSession(seat: 0 | 1 = 0): HostSession {
   return createHostSession({ ...LOCAL, sessionId: SESSION_ID, seat, hash: sha256Concat });
 }
 
+/**
+ * 加入方：**已经握手成功**（收到 `hello-ack`）的那种，供大多腿直接用。
+ *
+ * N-7 之前加入方是靠"收一条入站 `hello`"进相位的 —— 那是**方向错**的用法（`hello` 的
+ * 发送方是加入方自己）。现在由 `hello-ack` 驱动，所以这个夹具替调用方把那一步做掉。
+ * 需要"还没握手"的加入方，用下面的 `rawGuestSession()`。
+ */
 function guestSession(seat: 0 | 1 = 1): GuestSession {
+  const g = createGuestSession({ ...LOCAL, sessionId: SESSION_ID, seat, hash: sha256Concat });
+  acceptHelloAck(g);
+  return g;
+}
+
+/** **还没握手**的加入方（原样建出来，一条消息都没喂）—— 给那些要测"握手前"的腿用 */
+function rawGuestSession(seat: 0 | 1 = 1): GuestSession {
   return createGuestSession({ ...LOCAL, sessionId: SESSION_ID, seat, hash: sha256Concat });
+}
+
+/** 加入方侧"握手成功"的唯一夹具：它收到的是 **hello-ack**（N-7 之后 hello 只归房主收） */
+function acceptHelloAck(g: GuestSession): void {
+  acceptOk(g, { t: 'hello-ack', msg: overWire(helloAck()) });
+}
+
+/** 房主会回的那条 `hello-ack`（座位由房主定：D7）；走一遍线协议再喂给加入方 */
+function helloAck(over: Partial<HelloAckMsg> = {}): HelloAckMsg {
+  return { t: 'hello-ack', protoVersion: PROTO_VERSION, seat: 1, peerNick: 'host', sessionId: SESSION_ID, ...over };
 }
 
 /**
@@ -206,7 +230,8 @@ function handshakeHost(h: HostSession): void {
 /** 走完"承诺 → 确认 → 选面 → 揭示种子 → 揭示面 → 揭示盐"，返回两个会话 */
 function runCommitRevealFull(): { h: HostSession; g: GuestSession } {
   const h = hostSession();
-  const g = guestSession();
+  const g = rawGuestSession();
+  acceptHelloAck(g);
   handshakeHost(h);
 
   // 1. 房主 commit
@@ -251,14 +276,21 @@ function runCommitRevealFull(): { h: HostSession; g: GuestSession } {
   return { h, g };
 }
 
-/** 走完一遍完整承诺流程、但**还没发 reveal-salt** 的加入方（停在 `reveal-salt-sent`） */
+/**
+ * 走完一遍完整承诺流程、但**还没发 reveal-salt** 的加入方。
+ *
+ * 它停在 `'reveal-salt-sent'`（不是 `seed-revealed`）：`sendRevealFace()` 已经调用过，
+ * 相位因此从 `seed-revealed` 前进了一格。修复轮 N-10 修的就是这句注释
+ * （原话说停在 `seed-revealed`，与实际不符 —— 函数在 `acceptRevealSeed` 之后还有一步）。
+ */
 function guestAwaitingSalt(): GuestSession {
   const g = guestSession();
-  acceptOk(g, { t: 'hello', msg: overWire(hello()) });
   acceptOk(g, { t: 'commit', msg: overWire({ t: 'commit', hash: sha256Concat(SEED, SALT) }) });
   expect(g.sendCommitAck().ok).toBe(true);
   expect(g.commitFace(0, 'n').ok).toBe(true);
   acceptOk(g, { t: 'reveal-seed', msg: overWire({ t: 'reveal-seed', seed: SEED }) });
+  expect(g.sendRevealFace().ok, '夹具问题：加入方发不出 reveal-face').toBe(true);
+  expect(g.phase(), '夹具问题：这个夹具该停在 reveal-salt-sent').toBe('reveal-salt-sent');
   return g;
 }
 
@@ -306,7 +338,7 @@ describe('判据 1：seed 不得早于 commit-face 被揭示（设计稿 :479-48
   });
 
   it('★ 加入方侧：承诺之前收到的 reveal-seed 一律被拒，且不落进任何状态', () => {
-    const g = guestSession();
+    const g = rawGuestSession();
     const seedMsg = overWire({ t: 'reveal-seed', seed: SEED });
 
     // (a) 握手都还没做
@@ -316,7 +348,7 @@ describe('判据 1：seed 不得早于 commit-face 被揭示（设计稿 :479-48
     expect(g.phase()).toBe('handshaking');
 
     // 握手（加入方这一侧：它自己收 hello-ack，用 `accept` 走同一条路）
-    acceptOk(g, { t: 'hello', msg: overWire(hello()) });
+    acceptHelloAck(g);
 
     // (b) 收到房主的 commit 之后、还没回 ack / 还没提交面
     acceptOk(g, { t: 'commit', msg: overWire({ t: 'commit', hash: sha256Concat(SEED, SALT) }) });
@@ -327,7 +359,7 @@ describe('判据 1：seed 不得早于 commit-face 被揭示（设计稿 :479-48
 
     // (c) 回了 ack、但**还没提交 commit-face** ← 攻击者会卡在这一步等种子
     expect(g.sendCommitAck().ok).toBe(true);
-    expect(g.phase()).toBe('awaiting-commit-face');
+    expect(g.phase()).toBe('awaiting-commit-ack');
     const c = acceptRejected(g, { t: 'reveal-seed', msg: seedMsg });
     expect(c.reason).toBe('seed-before-face');
     expect(
@@ -344,8 +376,7 @@ describe('判据 1：seed 不得早于 commit-face 被揭示（设计稿 :479-48
   });
 
   it('★ 反过来也堵住：加入方没有收到房主的 commit 时不能提交面（否则面的承诺会抢在种子承诺之前）', () => {
-    const g = guestSession();
-    acceptOk(g, { t: 'hello', msg: overWire(hello()) });
+    const g = rawGuestSession();
     const r = g.commitFace(1, 'nonce-A');
     expect(r.ok, '还没收到房主的 commit 就提交了面').toBe(false);
     expect(r.ok ? null : r.reason).toBe('unexpected-message');
@@ -355,7 +386,6 @@ describe('判据 1：seed 不得早于 commit-face 被揭示（设计稿 :479-48
 
   it('空 seed 的 reveal-seed 也不算"揭示"（形状失败与顺序失败分开报）', () => {
     const g = guestSession();
-    acceptOk(g, { t: 'hello', msg: overWire(hello()) });
     acceptOk(g, { t: 'commit', msg: overWire({ t: 'commit', hash: sha256Concat(SEED, SALT) }) });
     expect(g.sendCommitAck().ok).toBe(true);
     // 形状失败先判：`bad-seed`（它说的是"这条消息本身不可用"），而不是 `seed-before-face`
@@ -372,7 +402,6 @@ describe('判据 1：seed 不得早于 commit-face 被揭示（设计稿 :479-48
     expect(again.reason).toBe('seed-not-expected');
     // 加入方还没发 reveal-face 时再来一条种子 ⇒ 那才是"重复"（`seed-duplicate`）
     const g2 = guestSession();
-    acceptOk(g2, { t: 'hello', msg: overWire(hello()) });
     acceptOk(g2, { t: 'commit', msg: overWire({ t: 'commit', hash: sha256Concat(SEED, SALT) }) });
     expect(g2.sendCommitAck().ok).toBe(true);
     expect(g2.commitFace(1, 'nonce-A').ok).toBe(true);
@@ -438,7 +467,8 @@ describe('判据 2：commit → commit-ack → commit-face → reveal-seed → r
 
   it('篡改 salt ⇒ 承诺验不过，理由码是 salt-hash-mismatch 且不冒充成功', () => {
     const h = hostSession();
-    const g = guestSession();
+    const g = rawGuestSession();
+    acceptHelloAck(g);
     handshakeHost(h);
     const c = h.sendCommit(SEED, SALT);
     expect(c.ok).toBe(true);
@@ -512,27 +542,149 @@ describe('判据 2：commit → commit-ack → commit-face → reveal-seed → r
     );
   });
 
-  it('★ N-1 的正控：房主在**合法窗口**（已揭示种子、还没收到 reveal-face）里收下 reveal-salt', () => {
-    // 没有这条，"上面那条拒绝"可能只是"房主这一支根本不通"（那样守卫就白加了）。
+  it('★ N-1 的正控 / N-8：房主只**发**盐，不收盐 —— 合法窗口里入站 reveal-salt 也被拒且不覆盖本方', () => {
+    // 两条合在一起立在这里，因为它们说的是同一件事的两面：
+    //  - N-1 的正控面：`sendRevealSalt()` 必须真的能在这条路径上走通
+    //    （否则"入站被拒"可能只是"房主这一支根本不通"）；
+    //  - N-8：**方向**。`reveal-salt` 的发送方只能是房主，所以房主侧不存在"合法收下"。
+    //    阶段二复验实测 `AUDIT-host-salt-overwrite`：合法窗口里一条入站
+    //    `{t:'reveal-salt', salt:'对端塞进来的盐'}` 会被收下并覆盖房主自己的盐。
     const h = hostSession();
     handshakeHost(h);
     expect(h.sendCommit(SEED, SALT).ok).toBe(true);
     acceptOk(h, { t: 'commit-face', msg: overWire({ t: 'commit-face', hash: sha256Concat('1', 'n') }) });
     expect(h.sendRevealSeed().ok, '承诺成立后房主应该能揭示种子').toBe(true);
     expect(h.phase()).toBe('seed-revealed');
-    expect(h.salt()).toBe(SALT);
-    const r = h.acceptRevealSalt(overWire({ t: 'reveal-salt', salt: SALT }));
-    expect(r.ok, `合法窗口里房主收不下 reveal-salt：${r.ok ? '' : `${r.reason} / ${r.message}`}`).toBe(true);
+
+    // 入站：被按"方向反了"拒绝，**且不改任何状态**（盐仍是本方的）
+    const inbound = acceptRejected(h, { t: 'reveal-salt', msg: overWire({ t: 'reveal-salt', salt: '对端塞进来的盐' }) });
+    expect(inbound.reason).toBe('unexpected-message');
+    expect(h.salt(), '房主自己的盐被一条入站消息覆盖了').toBe(SALT);
+    expect(h.phase()).toBe('seed-revealed');
+
+    // 出站：房主用 `sendRevealSalt()` 把**自己的**盐发出去（这才是它该做的事）
+    const out = h.sendRevealSalt();
+    expect(out.ok, `合法窗口里房主发不出 reveal-salt：${out.ok ? '' : `${out.reason} / ${out.message}`}`).toBe(true);
+    expect(out.ok ? out.salt : null, '发出去的不是房主自己的盐').toBe(SALT);
     expect(h.phase()).toBe('complete');
+  });
+
+  it('★ N-6：健康会话收到重复/迟到的 hello 不许被打成 rejected（在途的 reveal-face 必须还能进来）', () => {
+    // 阶段二复验实测 `AUDIT-duplicate-hello`：旧行为下 15 相位里每一个都会 -hello-> rejected，
+    // 后果三条 —— ① `seed-revealed` 之后合法的 `reveal-face` 再也进不来（在途承诺流程被作废）；
+    // ② `peerStatus().handshakeDone` 从 true 变回 false；③ `sendRevealSeed()` 报
+    // `seed-before-face` 并打印"加入方还没有提交承诺"—— 在 `seed-revealed` 相位下那是**假话**。
+    const h = hostSession();
+    handshakeHost(h);
+    expect(h.sendCommit(SEED, SALT).ok).toBe(true);
+    acceptOk(h, { t: 'commit-face', msg: overWire({ t: 'commit-face', hash: sha256Concat('1', 'n') }) });
+    expect(h.sendRevealSeed().ok).toBe(true);
+    expect(h.phase()).toBe('seed-revealed');
+    const beforeStatus = h.peerStatus();
+    expect(beforeStatus.handshakeDone).toBe(true);
+
+    // 一条重放的 hello 砸进来
+    const late = h.accept({ t: 'hello', msg: overWire(hello()) });
+    expect(late.ok, '迟到的 hello 被"接受"了（那等于重开握手）').toBe(false);
+    if (late.ok) throw new Error('unreachable');
+    expect(late.reason).toBe('unexpected-message');
+    // ① 相位不动
+    expect(h.phase(), '一条重放消息把相位打走了').toBe('seed-revealed');
+    // ② 读数不回退
+    expect(h.peerStatus(), '一条重放消息改动了状态读数').toEqual(beforeStatus);
+    expect(h.peerStatus().handshakeDone, 'handshakeDone 从 true 变回 false 了').toBe(true);
+    // ③ 文案不能说假话：此刻承诺**早就提交过**了
+    expect(late.message, '文案说"加入方还没有提交承诺" —— 在这个相位下是假话').not.toContain('还没有提交承诺');
+    expect(late.message).toContain('忽略');
+
+    // 最关键的一条：**在途的合法 reveal-face 仍然必须能进来**
+    const rf = acceptOk(h, { t: 'reveal-face', msg: overWire({ t: 'reveal-face', face: 1, faceNonce: 'n' }) });
+    expect(rf.phase).toBe('complete');
+    expect(h.face()).toBe(1);
+  });
+
+  it('★ N-6 的正控：`rejected` 相位的迟到 hello 仍然被拒，且不去改那个终态', () => {
+    // 拒绝一条迟到 hello 不能把"已经回绝"的会话**复活**（正控方向：两种相位都不动）。
+    const h = hostSession();
+    expect(h.accept({ t: 'hello', msg: hello({ protoVersion: 2 }) }).ok).toBe(false);
+    expect(h.phase()).toBe('rejected');
+    const again = h.accept({ t: 'hello', msg: overWire(hello()) });
+    expect(again.ok).toBe(false);
+    if (again.ok) throw new Error('unreachable');
+    expect(again.message, '对已被回绝的会话说"握手已经成功过"是假话').toContain('回绝');
+    expect(h.phase(), '迟到的 hello 把 rejected 相位改了').toBe('rejected');
+  });
+
+  it('★ N-7：加入方收到入站 `hello` 是方向错误 —— 拒绝、不动任何状态、且不阻断后续 commit', () => {
+    // 阶段二复验实测 `AUDIT-guest-hello-resuming`：旧行为下一条 `{t:'hello',resuming:true}` 就能把
+    // 加入方推到 `resuming`（**假读数**），此后真正的 `commit` **永久进不来**；
+    // 普通 hello 还会改写它的座位读数（`座位 self 1->1 peer 0->1`）。
+    const g = rawGuestSession();
+    const beforeStatus = g.peerStatus();
+    const beforeSelf = g.selfSeat();
+    const beforePeer = g.peerSeat();
+
+    const resuming = g.accept({ t: 'hello', msg: overWire(hello({ resuming: true })) });
+    expect(resuming.ok, '加入方收下了入站 hello（方向反了）').toBe(false);
+    if (resuming.ok) throw new Error('unreachable');
+    expect(resuming.reason).toBe('unexpected-message');
+    expect(g.phase(), '加入方被推到了 resuming（假读数）').toBe('handshaking');
+    expect(g.peerStatus(), '加入方的状态读数被改动了').toEqual(beforeStatus);
+    expect(g.selfSeat(), '座位读数被改写了').toBe(beforeSelf);
+    expect(g.peerSeat(), '对端座位读数被改写了').toBe(beforePeer);
+
+    // 普通 hello 同样不许改写座位
+    expect(g.accept({ t: 'hello', msg: overWire(hello()) }).ok).toBe(false);
+    expect(g.selfSeat()).toBe(beforeSelf);
+    expect(g.peerSeat()).toBe(beforePeer);
+
+    // 最关键的一条：此后**真正的 commit 必须还能进来**
+    acceptHelloAck(g);
+    const c = g.accept({ t: 'commit', msg: overWire({ t: 'commit', hash: sha256Concat(SEED, SALT) }) });
+    expect(c.ok, `真正的 commit 被永久挡住了：${c.ok ? '' : c.message}`).toBe(true);
+    expect(g.phase()).toBe('seed-committed');
+  });
+
+  it('★ N-7 的正控：加入方的握手由 `hello-ack` 驱动 —— 它到了才进承诺流程', () => {
+    const g = rawGuestSession();
+    expect(g.phase()).toBe('handshaking');
+    // 还没收到 ack：commit 不该被接受（相位是 handshaking）
+    expect(g.accept({ t: 'commit', msg: { t: 'commit', hash: 'h' } }).ok, '握手都没完成就收 commit').toBe(false);
+    acceptHelloAck(g);
+    expect(g.phase()).toBe('awaiting-commit');
+    expect(g.peerStatus().handshakeDone, 'N-4 的"加入方握手已成功"现在有相位表示了').toBe(true);
+    expect(g.accept({ t: 'commit', msg: { t: 'commit', hash: 'h' } }).ok).toBe(true);
+  });
+
+  it('★ N-7：座位以 `hello-ack` 为准（D7：座位是房主的决定）', () => {
+    const g = rawGuestSession(1);
+    expect(g.selfSeat()).toBe(1);
+    // 房主把它安排在 0 号位
+    acceptOk(g, { t: 'hello-ack', msg: overWire(helloAck({ seat: 0 })) });
+    expect(g.selfSeat(), '加入方没有采用房主给的座位').toBe(0);
+    expect(g.peerSeat()).toBe(1);
+  });
+
+  it('★ 加入方拒绝属于另一局的 `hello-ack`（sessionId 不符）', () => {
+    const g = rawGuestSession();
+    const r = acceptRejected(g, { t: 'hello-ack', msg: overWire(helloAck({ sessionId: '另一局' })) });
+    expect(r.reason).toBe('unexpected-message');
+    expect(g.phase(), '一条不属于本局的 ack 把相位推走了').toBe('handshaking');
+  });
+
+  it('★ 房主收到 `hello-ack` 是方向错误（那是它自己发出去的）', () => {
+    const h = hostSession();
+    handshakeHost(h);
+    const r = acceptRejected(h, { t: 'hello-ack', msg: overWire(helloAck()) });
+    expect(r.reason).toBe('unexpected-message');
+    expect(h.phase()).toBe('awaiting-commit-face');
   });
 
   it('乱序被拒：commit-ack 早于 commit、reveal-face 早于 reveal-seed、reveal-salt 早于 reveal-seed', () => {
     const g = guestSession();
-    acceptOk(g, { t: 'hello', msg: overWire(hello()) });
     expect(g.sendCommitAck().ok, '还没收到 commit 就回了 ack').toBe(false);
 
     const g2 = guestSession();
-    acceptOk(g2, { t: 'hello', msg: overWire(hello()) });
     acceptOk(g2, { t: 'commit', msg: overWire({ t: 'commit', hash: sha256Concat(SEED, SALT) }) });
     expect(g2.sendCommitAck().ok).toBe(true);
     expect(g2.commitFace(0, 'n').ok).toBe(true);
@@ -637,21 +789,47 @@ const HELLO_REASON_WHY: Readonly<Record<string, string>> = {
  */
 const declaredHelloReasonList = declaredHelloReasons();
 
-const declaredReasons = declaredRejectReasons();
-
 /**
- * **类型绑定**：把"从源码抽出来的运行时集合"与**类型本身**绑在一起。
+ * **类型绑定**（修复轮 N-2 的整改；阶段二复验 F6 实测第一版是空的）。
  *
- * 为什么值得加：上面那条闭合腿是**运行期**的（它比对的是源码文本与实测集合）。
- * 若有人往 `SessionRejectReason` 加一个成员、但那个成员恰好也没被任何路径用到，
- * 闭合腿会红（缺腿）—— 那是好的；但若他同时往豁免清单里登记了它，闭合腿就绿了。
- * 这里让 `Record<SessionRejectReason, true>` 与抽取结果做**双向静态检查**：
- * 两者都是穷尽的 ⇒ 类型加了成员而映射没跟上，`tsc` 当场报缺属性（`tests/net/session.ts` 里
- * `protocol.ts` 的 `MSG_TYPES` 用的就是这一招，理由是"漏登记只会在运行期表现为别的样子"）。
+ * ## 第一版为什么是空的
+ *
+ * 它写的是 `Object.fromEntries(...) as Record<SessionRejectReason, true>`：
+ * **`as` 断言把"缺键"与"多键"两个检查一起压掉了** —— 编译器不再核对这个对象的键集，
+ * 于是它只是"把抽取结果原样包了一层"。而配套那条
+ * `expect(Object.keys(...)).toEqual(declaredReasons)` 的两边**同一个来源** ⇒ **恒真**。
+ * 决定性实验 F6：把新成员写成**双引号**（抽取正则只认单引号）⇒ `tsc exit 0` 且判据面全绿。
+ *
+ * ## 现在这一版
+ *
+ * - **对象字面量 + `satisfies`**：编译器**同时**管缺键与多键 —— 少一个成员 ⇒ 报"缺属性"，
+ *   多一个不在类型里的键 ⇒ 报"对象字面量只能指定已知属性"。`satisfies` 不做类型断言，
+ *   所以它**不会**像 `as` 那样把检查压掉。
+ * - 每个成员**显式列一行**（不用 `fromEntries`）：只有字面量才谈得上"编译器核对键集"。
+ * - 下面还有一条腿拿它做**运行期**一致性断言（多键/少键都会红），
+ *   与"闭合腿"互补：闭合腿查"有没有腿"，这一层查"抽取口径有没有跟类型脱钩"。
+ *
+ * 它的**已知边界**（如实登记，不粉饰）：`tsconfig` 没开 `noUnusedLocals`，
+ * 所以这个常量"没被用到"不会报错；它承重的是**编译期键集核对**本身 ——
+ * 而"编译器真的会红"由 `verify-type-binding.mjs` 的**注入实验**机械证明
+ * （往 `SessionRejectReason` 加一个成员 ⇒ 这条 `tsc` 报缺属性；`.superpowers/g5-T3/out/` 里有日志）。
+ * 抽取正则只认单引号这件事也由下面那条腿钉住（双引号写法会让抽取集合变小 ⇒ 闭合腿红）。
  */
-const REASON_NEEDS_LEG: Record<SessionRejectReason, true> = Object.fromEntries(
-  declaredReasons.map((r) => [r, true]),
-) as Record<SessionRejectReason, true>;
+const REASON_NEEDS_LEG = {
+  'seed-before-face': true,
+  'seed-duplicate': true,
+  'seed-not-expected': true,
+  'face-hash-mismatch': true,
+  'salt-hash-mismatch': true,
+  'bad-hash': true,
+  'bad-seed': true,
+  'bad-salt': true,
+  'bad-face': true,
+  'unexpected-message': true,
+  'resync-not-wired': true,
+} satisfies Record<SessionRejectReason, true>;
+
+const declaredRejectReasonList = declaredRejectReasons();
 
 describe('判据 3：版本不符与卡牌指纹不符各给一句设计稿口径的话，且两句不同（D13）', () => {
   it('两条各自的 reason 与文案，且两句不相等', () => {
@@ -699,7 +877,7 @@ describe('判据 3：版本不符与卡牌指纹不符各给一句设计稿口�
     // 一句**假话**（报文说"哈希不可用"，实际是顺序问题）。
     // ⇒ 必须再加一层：每句话里要有**只有它才有**的事实词。
     const h = hostSession();
-    acceptOk(h, { t: 'hello', msg: overWire(hello()) });
+    handshakeHost(h);
 
     // 形状失败：必须点出"哈希不可用"，且**不能**说成顺序问题
     const shape = acceptRejected(h, { t: 'commit-face', msg: { t: 'commit-face', hash: '' } });
@@ -742,7 +920,7 @@ describe('判据 3：版本不符与卡牌指纹不符各给一句设计稿口�
     const hNoHandshake = hostSession();
     collect('seed-before-face(host)', hNoHandshake.sendRevealSeed());
 
-    const g0 = guestSession();
+    const g0 = rawGuestSession();
     collect('seed-before-face(guest)', g0.accept({ t: 'reveal-seed', msg: { t: 'reveal-seed', seed: 's' } }));
     collect('bad-seed', g0.accept({ t: 'reveal-seed', msg: { t: 'reveal-seed', seed: '' } }));
     collect('bad-hash', g0.accept({ t: 'commit', msg: { t: 'commit', hash: '' } }));
@@ -763,8 +941,15 @@ describe('判据 3：版本不符与卡牌指纹不符各给一句设计稿口�
 
     // `seed-duplicate`：必须在**收过种子、还没发出 reveal-face** 的那个窗口里再收一条
     // （`runCommitRevealFull` 之后加入方已经是 `complete`，那时来的是 `seed-not-expected` ——
-    //  实测踩过：拿它去凑 `seed-duplicate` 会让闭合腿报"缺一条"）
-    const gDup = guestAwaitingSalt();
+    //  实测踩过：拿它去凑 `seed-duplicate` 会让闭合腿报"缺一条"）。
+    // 注：`guestAwaitingSalt()` 已经推进到 `reveal-salt-sent`（N-10 的注释修正），
+    //     那时再来种子走的是 `seed-not-expected`——所以这里要**它之前**的那一格。
+    const gDup = guestSession();
+    acceptOk(gDup, { t: 'commit', msg: overWire({ t: 'commit', hash: sha256Concat(SEED, SALT) }) });
+    expect(gDup.sendCommitAck().ok).toBe(true);
+    expect(gDup.commitFace(1, 'nonce-A').ok).toBe(true); // 承诺要先于种子（§5.3）
+    acceptOk(gDup, { t: 'reveal-seed', msg: overWire({ t: 'reveal-seed', seed: SEED }) });
+    expect(gDup.phase(), '夹具问题：这一格该是 seed-revealed').toBe('seed-revealed');
     collect('seed-duplicate', gDup.accept({ t: 'reveal-seed', msg: { t: 'reveal-seed', seed: SEED } }));
 
     // 相位**合法**（`reveal-salt-sent`）但 salt 是空串：形状先判 ⇒ `bad-salt`
@@ -803,17 +988,18 @@ describe('判据 3：版本不符与卡牌指纹不符各给一句设计稿口�
     //  - "握手理由"（`proto-version` / `card-data-hash` / `bad-shape` / `unsupported-spectator`）：
     //    它们来自 `validateHello` 与会话层的观战回绝，**不属于**上面那个类型，混进来会报"extra"。
     //    它们由 `HELLO_REASONS` 单独覆盖（同一条腿里也断它们一句文案都不重）。
-    // 类型绑定：抽取出来的集合必须**恰好**是类型本身（多一个 → tsc 报"属性不存在"；
-    // 少一个 → tsc 报 `Record` 缺属性）。上面那些运行期断言在这一点上是**互补**的：
-    // 它们查"有没有腿"，这一条查"抽取口径有没有跟类型脱钩"。
-    expect(Object.keys(REASON_NEEDS_LEG).sort(), '抽取出的理由码与类型本身不符（抽取口径脱钩了？）').toEqual(
-      declaredReasons,
+    // 类型绑定（运行期那一半）：`REASON_NEEDS_LEG` 的键集合必须**恰好**等于抽取出来的集合。
+    // 这一条与上一层的 `satisfies` **互补**：`satisfies` 管"字面量键集 vs 类型"（编译期），
+    // 这一条管"字面量键集 vs 源码抽取"（运行期）—— 少了任何一边，脱钩都会从另一边溜过去。
+    // 它**不是**恒真的：两边来源不同（一边是我手写的字面量，一边是从 `session.ts` 抽的）。
+    expect(Object.keys(REASON_NEEDS_LEG).sort(), '理由码字面量与源码抽取结果不符（哪一边脱钩了？）').toEqual(
+      declaredRejectReasonList,
     );
 
     const covered = new Set(messages.filter((m) => m.kind === 'wire').map((m) => m.reason));
     const closed = [...new Set([...covered, ...REJECT_REASON_EXEMPT])].sort();
-    const missing = declaredReasons.filter((r) => !closed.includes(r));
-    const extra = closed.filter((r) => !declaredReasons.includes(r));
+    const missing = declaredRejectReasonList.filter((r) => !closed.includes(r));
+    const extra = closed.filter((r) => !declaredRejectReasonList.includes(r));
     expect(
       { missing, extra },
       'SessionRejectReason 的成员集合与"实际构造出的 ∪ 豁免"不一致（新增/删除理由码后忘了同步这条腿或豁免清单？）',
@@ -821,7 +1007,7 @@ describe('判据 3：版本不符与卡牌指纹不符各给一句设计稿口�
     // 握手面同样**双向闭合**（差集口径：`SessionHelloReason` 与 `SessionRejectReason` 有重叠，
     // 重叠的那些由线理由那一侧负责；实测踩过：不差集的话 `unexpected-message` 会被当成
     // "已经有了"而掩盖别的缺口）。
-    const helloOnly = declaredHelloReasonList.filter((r) => !declaredReasons.includes(r));
+    const helloOnly = declaredHelloReasonList.filter((r) => !declaredRejectReasonList.includes(r));
     const helloCovered = new Set(messages.filter((m) => m.kind === 'hello').map((m) => m.reason));
     const helloClosed = [...new Set([...helloCovered, ...HELLO_REASON_EXEMPT])].sort();
     const helloMissing = helloOnly.filter((r) => !helloClosed.includes(r));
@@ -995,9 +1181,12 @@ describe('判据 5：选面者固定为加入方，房主不能成为选面者�
   });
 
   it('加入方是唯一能发起承诺的一方：它的 commit-face 一定出现在它自己的相位上', () => {
-    const g = guestSession();
-    acceptOk(g, { t: 'hello', msg: overWire(hello()) });
-    // 没收到 commit 之前不能选面（相位 `'handshaking'`）
+    const g = rawGuestSession();
+    // 没收到 `hello-ack` 之前不能选面（相位 `'handshaking'`）
+    expect(g.commitFace(0, 'n').ok).toBe(false);
+    acceptHelloAck(g); // 握手成功 ⇒ 相位 `'awaiting-commit'`
+    expect(g.phase()).toBe('awaiting-commit');
+    // 收到 hello-ack、但还没收到 commit 也不能选面
     expect(g.commitFace(0, 'n').ok).toBe(false);
     acceptOk(g, { t: 'commit', msg: overWire({ t: 'commit', hash: 'h' }) });
     // 收到 commit、但还没回 ack 也不能选面（相位 `'seed-committed'`）
@@ -1177,13 +1366,12 @@ describe('判据 6：哈希是注入能力（状态机不算哈希、保持同�
     expect(() => h.sendCommit('', SALT)).toThrow(/调用方违约/);
     expect(() => h.sendCommit(SEED, '')).toThrow(/调用方违约/);
     const g = guestSession();
-    acceptOk(g, { t: 'hello', msg: overWire(hello()) });
     acceptOk(g, { t: 'commit', msg: overWire({ t: 'commit', hash: 'h' }) });
     expect(g.sendCommitAck().ok).toBe(true);
     expect(() => g.commitFace(1, '')).toThrow(/调用方违约/);
     // 网络来的空串走结果对象（**不抛**）—— 两条路的区别在这里
     const h2 = hostSession();
-    acceptOk(h2, { t: 'hello', msg: overWire(hello()) });
+    handshakeHost(h2);
     expect(h2.sendCommit(SEED, SALT).ok).toBe(true);
     expect(() => h2.accept({ t: 'commit-face', msg: { t: 'commit-face', hash: '' } })).not.toThrow();
   });
