@@ -227,7 +227,18 @@ function handshakeHost(h: HostSession): void {
   if (!d.ok) throw new Error('unreachable');
 }
 
-/** 走完"承诺 → 确认 → 选面 → 揭示种子 → 揭示面 → 揭示盐"，返回两个会话 */
+/**
+ * 走完"承诺 → 确认 → 选面 → 揭示种子 → 揭示面 → 揭示盐"，返回两个会话。
+ *
+ * **收尾两条消息全部用真实产出**（第三阶段复验的阻断项 B-1 就是在这里藏的）：
+ * 早先第 6 步是**手工构造** `overWire({t:'reveal-salt', salt: SALT})` 直接喂给加入方，
+ * 于是这条腿只证明"加入方验得动"，**没有**证明"房主在那个时刻发得出"。两条腿各自绿、
+ * 合起来矛盾（房主先收 `reveal-face` 就到 `complete`，而当时的守卫不许在 `complete` 发盐）。
+ * 现在两步都走真实产出：`g.sendRevealFace()` 与 `h.sendRevealSalt()`。
+ *
+ * 顺序取的是**设计稿的字面顺序**（`:475`："结束后房主发 `reveal-salt`"）：先 `reveal-face`
+ * （"结束"那一步），再发盐。反过来的顺序由 N-13/B-1 的另一条腿单独钉住。
+ */
 function runCommitRevealFull(): { h: HostSession; g: GuestSession } {
   const h = hostSession();
   const g = rawGuestSession();
@@ -258,31 +269,25 @@ function runCommitRevealFull(): { h: HostSession; g: GuestSession } {
   if (!rs.ok) throw new Error('unreachable');
   acceptOk(g, { t: 'reveal-seed', msg: overWire(rs.output.msg) });
 
-  // 5. 加入方 reveal-face ⇒ 房主这一侧也走完承诺流程（`complete`）
+  // 5. 加入方 reveal-face（"对局结束"那一步）⇒ 房主据此拿到面
   const rf = g.sendRevealFace();
   expect(rf.ok, '加入方发不出 reveal-face').toBe(true);
   if (!rf.ok) throw new Error('unreachable');
   acceptOk(h, { t: 'reveal-face', msg: overWire(rf.output.msg) });
   expect(h.phase(), '房主收下合法的 reveal-face 之后应该到 complete').toBe('complete');
+  expect(h.face(), '房主没从 reveal-face 里拿到面').toBe(1);
 
-  // 6. 房主 reveal-salt（对局结束后）：房主发，加入方验 `hash(seed + salt) === commit`
-  //
-  // 这里**不**再把同一条 reveal-salt 喂回房主：修复轮 N-1 给房主的收下口加了相位守卫，
-  //    而"房主已经 `complete`"不属于合法窗口（它自己的盐压根不需要从线上收）。
-  //    房主那一支的合法窗口（`seed-revealed`）由判据 2 的独立腿单独钉住。
-  const saltMsg = overWire({ t: 'reveal-salt', salt: SALT });
-  acceptOk(g, { t: 'reveal-salt', msg: saltMsg });
+  // 6. 房主 reveal-salt（**真实产出**）：加入方据此验 `hash(seed + salt) === commit`
+  const rv = h.sendRevealSalt();
+  expect(rv.ok, `房主在收完 reveal-face 之后发不出 reveal-salt：${rv.ok ? '' : `${rv.reason} / ${rv.message}`}`).toBe(
+    true,
+  );
+  if (!rv.ok) throw new Error('unreachable');
+  acceptOk(g, { t: 'reveal-salt', msg: overWire(rv.output.msg) });
 
   return { h, g };
 }
 
-/**
- * 走完一遍完整承诺流程、但**还没发 reveal-salt** 的加入方。
- *
- * 它停在 `'reveal-salt-sent'`（不是 `seed-revealed`）：`sendRevealFace()` 已经调用过，
- * 相位因此从 `seed-revealed` 前进了一格。修复轮 N-10 修的就是这句注释
- * （原话说停在 `seed-revealed`，与实际不符 —— 函数在 `acceptRevealSeed` 之后还有一步）。
- */
 function guestAwaitingSalt(): GuestSession {
   const g = guestSession();
   acceptOk(g, { t: 'commit', msg: overWire({ t: 'commit', hash: sha256Concat(SEED, SALT) }) });
@@ -432,6 +437,84 @@ describe('判据 1：seed 不得早于 commit-face 被揭示（设计稿 :479-48
  * ------------------------------------------------------------------ */
 
 describe('判据 2：commit → commit-ack → commit-face → reveal-seed → reveal-face → reveal-salt 全程通过', () => {
+  it('★ B-1：两条收尾动作**在同一局里都完成**，且**全程只用真实产出**', () => {
+    // 这条腿是第三阶段复验的阻断项 B-1 的正面形态。B-1 的成因是：
+    //  - 房主**先收** `reveal-face` ⇒ 相位 `complete` ⇒ 当时的守卫拒掉 `sendRevealSalt()`
+    //    ⇒ 加入方永远验不了承诺；
+    //  - 房主**先发**盐 ⇒ 相位 `complete` ⇒ 此后的 `reveal-face` 被拒 ⇒ 房主拿不到面。
+    // ⇒ 设计稿 §5.3 的两条收尾动作互斥。修法见 `mayRevealSalt`（发盐的窗口包含 `complete`）。
+    //
+    // 这条腿的要害在"**全程真实产出**"：每一步的消息都来自 `send*()` / `commitFace()` 的返回，
+    //    一个手工构造的收尾消息都不许有。旧的"全程通过"腿正是在最后一步手工构造了
+    //    `{t:'reveal-salt'}`，于是只证明"加入方验得动"、没证明"房主发得出"（两条腿各自绿、
+    //    合起来矛盾）—— 那正是 B-1 能藏这么久的原因。
+    const { h, g } = runCommitRevealFull();
+    expect(h.phase(), '房主没走到 complete').toBe('complete');
+    expect(g.phase(), '加入方没走到 complete').toBe('complete');
+    expect(h.face(), '房主没拿到面（reveal-face 那一半没完成）').toBe(1);
+    expect(g.commitmentVerified(), '加入方没验通承诺（reveal-salt 那一半没完成）').toBe(true);
+    expect(g.salt(), '加入方没收到盐').toBe(SALT);
+  });
+
+  it('★ B-1：发盐的合法窗口是"种子已揭示 或 已 complete"（其余相位一律拒）', () => {
+    // 这条腿把**窗口**钉死，免得将来有人把它放宽成"随便哪个相位"。
+    //
+    // 顺带说明一个**不是缺陷**的性质（我实测过、写下来免得下一个人当成 B-1 的残留）：
+    //    **发盐必须晚于"收 reveal-face"**，因为发盐会把相位推到 `complete`，而 `complete` 上
+    //    不再收 `reveal-face`。这不是互斥 —— 设计稿 `:475` 写的就是"**结束后**房主发
+    //    `reveal-salt`"，"结束"那一步正是加入方揭示 `reveal-face`。把两条收尾动作按任意顺序
+    //    排列本来就不是协议的一部分；B-1 的真问题只是**后来那条（先收面、后发盐）当时被拒**。
+    //    ⇒ 窗口含 `complete` 正是为了让**设计稿那个顺序**走得通。
+    const h = hostSession();
+    handshakeHost(h);
+    expect(h.sendCommit(SEED, SALT).ok).toBe(true);
+
+    // 窗口外 1：握手刚完（还没揭示种子）
+    expect(h.sendRevealSalt().ok, '还没揭示种子就发得出盐').toBe(false);
+    expect(h.phase()).toBe('awaiting-commit-face');
+
+    acceptOk(h, { t: 'commit-face', msg: overWire({ t: 'commit-face', hash: sha256Concat('1', 'n') }) });
+    // 窗口外 2：承诺成立、但种子还没揭示
+    expect(h.sendRevealSalt().ok, '承诺刚成立（种子未揭示）就发得出盐').toBe(false);
+    expect(h.phase()).toBe('face-committed');
+
+    // 窗口内 1：种子已揭示
+    expect(h.sendRevealSeed().ok).toBe(true);
+    expect(h.phase()).toBe('seed-revealed');
+    expect(h.sendRevealSalt().ok, '种子揭示之后发不出盐（B-1 的形态）').toBe(true);
+    expect(h.phase()).toBe('complete');
+
+    // 窗口内 2：已 complete（**这条就是 B-1 的修法**：先收 reveal-face 之后仍然发得出）
+    const h2 = hostSession();
+    handshakeHost(h2);
+    expect(h2.sendCommit(SEED, SALT).ok).toBe(true);
+    acceptOk(h2, { t: 'commit-face', msg: overWire({ t: 'commit-face', hash: sha256Concat('1', 'n') }) });
+    expect(h2.sendRevealSeed().ok).toBe(true);
+    acceptOk(h2, { t: 'reveal-face', msg: overWire({ t: 'reveal-face', face: 1, faceNonce: 'n' }) });
+    expect(h2.phase()).toBe('complete');
+    expect(h2.sendRevealSalt().ok, '先收 reveal-face 之后发不出盐 ⇒ 加入方永远验不了承诺').toBe(true);
+  });
+
+  it('★ B-1 的边界：盐只发一次（`complete` 是终态，幂等靠 `saltMadePublic` 而不是相位）', () => {
+    const { h } = runCommitRevealFull();
+    const again = h.sendRevealSalt();
+    expect(again.ok, '同一局里把盐发了两次').toBe(false);
+    expect(again.ok ? null : again.reason).toBe('unexpected-message');
+    expect(h.salt(), '重复发盐改动了本方的盐').toBe(SALT);
+    expect(h.phase()).toBe('complete');
+  });
+
+  it('B-1 的窗口边界：种子都没揭示时发不出盐（发盐窗口不是"随便哪个相位"）', () => {
+    const h = hostSession();
+    handshakeHost(h);
+    expect(h.sendCommit(SEED, SALT).ok).toBe(true);
+    expect(h.phase()).toBe('awaiting-commit-face');
+    const early = h.sendRevealSalt();
+    expect(early.ok, '还没揭示种子就把盐发了').toBe(false);
+    expect(early.ok ? null : early.reason).toBe('unexpected-message');
+    expect(h.phase(), '被拒的早发把相位推走了').toBe('awaiting-commit-face');
+  });
+
   it('全程走完，两端都到 complete，且 hash(seed + salt) === commit 为真', () => {
     const { h, g } = runCommitRevealFull();
 
@@ -670,6 +753,65 @@ describe('判据 2：commit → commit-ack → commit-face → reveal-seed → r
     const r = acceptRejected(g, { t: 'hello-ack', msg: overWire(helloAck({ sessionId: '另一局' })) });
     expect(r.reason).toBe('unexpected-message');
     expect(g.phase(), '一条不属于本局的 ack 把相位推走了').toBe('handshaking');
+  });
+
+  it('★ `hello-ack` 的 `protoVersion` 必须校（第三阶段复验点名的漏项，已补）', () => {
+    // `HelloAckMsg` 带着 `protoVersion`（`protocol.ts` 的形状里有），而 `decodeMsg` 只对
+    // `hello` / `hello-ack` 校它（`:503-505`，而且那是"消息自带的值 vs 本机值"）。本模块还需要
+    // 自己判一次"该不该**接受**这个 ack"：不校的后果是"房主用的是别的协议版本"会在加入方
+    // **静默通过**，直到后面某条消息解析不出形状才炸 —— 那时已经离现场很远了。
+    const g = rawGuestSession();
+    // 这条**不走 `overWire`**：`decodeMsg` 在那一层就先按"消息自带的值 vs 本机值"拒掉了
+    // 版本不符的 ack，于是消息根本到不了本模块。这一条要验的正是"**到了本模块之后**该不该接受"，
+    // 所以直接把对象喂进 `accept`（T1 那一层的腿由 `tests/net/protocol.test.ts` 负责）。
+    const r = acceptRejected(g, {
+      t: 'hello-ack',
+      msg: helloAck({ protoVersion: PROTO_VERSION + 1 }),
+    });
+    expect(r.reason).toBe('unexpected-message');
+    expect(r.message, '版本不符的文案与握手第 1 步不是同一句（同一件事两种说法）').toContain('游戏版本不一致');
+    expect(r.message).toContain(`对端协议 v${PROTO_VERSION + 1}`);
+    expect(g.phase(), '版本不符的 ack 把相位推走了').toBe('handshaking');
+    expect(g.peerStatus().handshakeDone).toBe(false);
+
+    // 形状腿：`protoVersion` 整个缺失
+    const g2 = rawGuestSession();
+    const bad = acceptRejected(g2, {
+      t: 'hello-ack',
+      msg: { t: 'hello-ack', seat: 1, peerNick: 'host', sessionId: SESSION_ID },
+    });
+    expect(bad.reason).toBe('unexpected-message');
+    expect(g2.phase()).toBe('handshaking');
+
+    // 正控：版本对得上时**必须**接受（否则上面两条对"这一支整个坏了"也成立）
+    const g3 = rawGuestSession();
+    acceptOk(g3, { t: 'hello-ack', msg: overWire(helloAck()) });
+    expect(g3.phase()).toBe('awaiting-commit');
+  });
+
+  it('★ N-11：加入方靠 `markResuming()` 显式进 `resuming`（否则它是死相位）', () => {
+    // 第三阶段复验实测：N-7 封掉"加入方收入站 hello"之后，加入方**没有任何入站消息**能进
+    // `resuming`（8 相位 × 11 入站消息逐格扫，`needsResync` 恒 false）。而 D8/设计稿 `:497`
+    // 写的是"从机用 `hello{sessionId, resuming:true}` 回来" —— 那句话当时在相位上没落点。
+    const g = rawGuestSession();
+    expect(g.peerStatus().needsResync, '刚建出来就报 needResync').toBe(false);
+    const r = g.markResuming();
+    expect(r.ok, '加入方进不了 resuming').toBe(true);
+    expect(g.phase()).toBe('resuming');
+    expect(g.peerStatus().needsResync, 'N-11：这一位必须有真实的置位路径').toBe(true);
+    expect(g.peerStatus().handshakeDone, 'resuming 不算握手完成').toBe(false);
+
+    // 边界：已经进了承诺流程的会话不许"变成重连"
+    const g2 = guestSession();
+    const late = g2.markResuming();
+    expect(late.ok, '已经在承诺流程里的会话被标成了重连').toBe(false);
+    expect(late.ok ? null : late.reason).toBe('unexpected-message');
+    expect(g2.phase(), '被拒的 markResuming 改了相位').toBe('awaiting-commit');
+
+    // 重连相位下 `hello-ack` 仍然收得下（追平留给 T6，但握手这一格不能死）
+    expect(g.accept({ t: 'hello-ack', msg: overWire(helloAck()) }).ok).toBe(true);
+    expect(g.phase(), 'resuming 相位下的 hello-ack 该保持 resuming（等 T6 追平）').toBe('resuming');
+    expect(g.peerStatus().needsResync).toBe(true);
   });
 
   it('★ 房主收到 `hello-ack` 是方向错误（那是它自己发出去的）', () => {

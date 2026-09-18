@@ -161,7 +161,7 @@ export type SessionResult<T> = ({ ok: true } & T) | { ok: false; reason: Session
  *
  * | 角色 | 相位推进 |
  * |---|---|
- * | 房主 | `handshaking` →（收 `hello`，回 ack）`awaiting-commit-face` →（`sendCommit`：**相位不变**）→（收 `commit-face`）`face-committed` →（`sendRevealSeed`）`seed-revealed` →（收 `reveal-face`）`complete`；**发盐**用 `sendRevealSalt()`（`seed-revealed` → `complete`） |
+ * | 房主 | `handshaking` →（收 `hello`，回 ack）`awaiting-commit-face` →（`sendCommit`：**相位不变**）→（收 `commit-face`）`face-committed` →（`sendRevealSeed`）`seed-revealed` → 之后**两条收尾动作，顺序任意**：收 `reveal-face` ⇒ `complete`；`sendRevealSalt()` ⇒ `complete`（**两个顺序都合法**，见 `mayRevealSalt` 的 B-1 说明） |
  * | 加入方 | `handshaking` →（收 `hello-ack`）`awaiting-commit` →（收 `commit`）`seed-committed` →（`sendCommitAck`）`awaiting-commit-ack` →（`commitFace`：发出自己的承诺）`face-committed` →（收 `reveal-seed`）`seed-revealed` →（`sendRevealFace`）`reveal-salt-sent` →（收 `reveal-salt`）`complete` |
  *
  * **三个"等"的相位各自只属于一个角色，不许合并**（实测踩过一次：把加入方 ack 之后的
@@ -521,6 +521,15 @@ interface NetSessionCommon {
   seed(): string | null;
   /** 揭示之后读面（房主收 `reveal-face` 之后、加入方自己提交之后都有值） */
   face(): 0 | 1 | null;
+  /**
+   * 读盐。
+   *
+   * 语义与 `seed()` 同款（**本方此刻持有的盐**，不是"对端已经看到的"）：
+   *  - **房主**：`sendCommit()` 之后就有值（盐是它的），对端要等 `sendRevealSalt()` 之后才拿得到；
+   *  - **加入方**：只在自己收到 `reveal-salt` 之后才有值（之前是 `null`）。
+   * 它是**诊断与测试**用的读数（B-1 的腿要断言"加入方确实收到了盐"），不参与任何顺序判定。
+   */
+  salt(): string | null;
 }
 
 /**
@@ -557,8 +566,6 @@ export interface HostSession extends NetSessionCommon {
   sendRevealSalt(): SessionResult<{ output: SessionOutbound; salt: string }>;
   /** 本方承诺的 `hash(seed+salt)`（对端用它验 `reveal-salt`）；还没 `sendCommit` 时是 `null` */
   seedHashOfCommit(): string | null;
-  /** 本方手里的盐（对端要用它验承诺）；还没 `sendCommit` 时是 `null` */
-  salt(): string | null;
 }
 
 /**
@@ -575,7 +582,9 @@ export interface GuestSession extends NetSessionCommon {
   /**
    * 提交正/反的承诺 `commit-face { hash(face, faceNonce) }`（设计稿 `:481`）。
    *
-   * ★ 它只能在 `acceptCommit` 之后（相位 `'awaiting-commit-face'` 只有那一条到达路径）。
+   * ★ 它只能在 `acceptCommit` + `sendCommitAck` 之后（相位 `'awaiting-commit-ack'` 只有那一条
+   * 到达路径 —— N-12 修正：这里早先写的 `'awaiting-commit-face'` 是**房主**那一格的相位名，
+   * 加入方这一格是 `'awaiting-commit-ack'`）。
    * 这不是流程洁癖：它保证加入方的承诺哈希是在看到房主的 `seedHash`（而不是 seed）之后定下的，
    * 而 `face` 与 `faceNonce` 是加入方在**看到 seed 之前**就选好的。两条合起来，
    * "先看种子再挑面"在结构上没有位置可放。
@@ -591,6 +600,27 @@ export interface GuestSession extends NetSessionCommon {
   commitmentVerified(): boolean | null;
   /** 本方承诺的 `hash(face+faceNonce)`（对端用它验 `reveal-face`）；还没 `commitFace` 时是 `null` */
   faceHashOfCommit(): string | null;
+  /**
+   * **显式声明"这是一次重连"**（第三阶段复验 N-11 补的入口）。
+   *
+   * ## 为什么需要它（原来加入方的 `resuming` 是**死相位**）
+   *
+   * N-7 把"加入方收入站 `hello`"封掉之后，加入方那一侧**没有任何入站消息**能把它推进
+   * `'resuming'`（复验实测：8 相位 × 11 入站消息逐格扫，`AUDIT-guest-resuming-reachable=[]`，
+   * 且 `needsResync` 恒为 `false`）。而 D8/设计稿 `:497` 写的是"从机用
+   * `hello{sessionId, resuming:true}` 回来" —— 那句话在相位上**没有落点**了。
+   *
+   * 为什么不由 `acceptHelloAck` 猜：ack 里**没有** `resuming` 字段（`HelloAckMsg` 的形状是
+   * `t`/`protoVersion`/`seat`/`peerNick`/`sessionId`），而"这一次是不是重连"是**本端**
+   * （加入方自己）知道的事实 —— 它刚刚带着同一个 `sessionId` 回来就是为了重连。
+   * 所以这件事必须**由调用方显式声明**，不能从网络输入里推断（推断就是猜，而猜错会让
+   * `needsResync` 变成假读数 —— 那正是这个模块一直在防的东西）。
+   *
+   * 只允许在握手完成前调用（`handshaking`）：已经进了承诺流程的会话不该"变成重连"。
+   * 真正的追平（`resync-req` / `resync-res` / 档案重放）是 **T6** 的事，本模块只把相位与
+   * `needsResync` 置起来。
+   */
+  markResuming(): SessionResult<Record<never, never>>;
 }
 
 /** 一个会话对象（两个角色的并集；用 `role` 窄化） */
@@ -657,7 +687,7 @@ function intakeRevealSalt(msg: unknown): { ok: true; salt: string } | { ok: fals
 }
 
 /**
- * `reveal-salt` 的**相位守卫**：只有"本方已经揭示过种子"之后的相位才该收到它。
+ * **收** `reveal-salt` 的相位守卫（只有**加入方**会走到它）。
  *
  * 这是修复轮 N-1 加的（阶段一评审实测 C2）：第一版没有守卫，于是一条**入站**
  * `{t:'reveal-salt', salt:'peer-salt'}` 就能把房主推到 `complete` —— `handshakeDone` 与
@@ -665,12 +695,16 @@ function intakeRevealSalt(msg: unknown): { ok: true; salt: string } | { ok: fals
  * 握手都没做也照样成立。
  *
  * 为什么这不是"小毛病"：`phase` 是顺序约束**唯一的运行期载体** —— 一个能被单条网络消息推到
- * 终态的相位机，等于把"顺序由相位保证"这句话打了个洞。它今天不泄 seed（`sendRevealSeed()`
+ * 终态的相位机，等于把"顺序由相位保证"这句话打了个洞。它不泄 seed（`sendRevealSeed()`
  * 那时被拒），但 T5/T6 会读 `acceptsInput` / `handshakeDone` 去做"能不能收操作""要不要重连"，
  * 读到一个**由对端凭空写出来的** `complete` 就是实质故障。
  *
- * 允许的两个相位：`seed-revealed`（房主发过 `reveal-seed` 之后、加入方收过之后）与
- * `reveal-salt-sent`（加入方已经发出 `reveal-face`）。其余一律拒，且**不改任何状态**。
+ * 允许的两个相位：`seed-revealed`（本方收到过种子）与 `reveal-salt-sent`（本方已经发出
+ * `reveal-face`）。其余一律拒，且**不改任何状态**。
+ *
+ * **它只管"收"，别拿它当"发"的窗口用**（第三阶段复验 N-13 点名的语义错位，也正是 B-1 的成因）：
+ * 收盐的合法集合与发盐的合法集合**不是同一个**（发盐在 `complete` 也要允许）。发盐走
+ * `mayRevealSalt`。
  */
 function mayIntakeSalt(phase: SessionPhase): { ok: true } | { ok: false; reason: SessionRejectReason; message: string } {
   if (phase === 'seed-revealed' || phase === 'reveal-salt-sent') return { ok: true };
@@ -681,6 +715,34 @@ function mayIntakeSalt(phase: SessionPhase): { ok: true } | { ok: false; reason:
       `当前相位是 ${phase}，此时收到 reveal-salt：` +
       '盐是**对局结束后、由房主**揭示的，本方还没有揭示过种子（或握手都还没完成），' +
       '所以这条消息只可能是对端搞错了方向或提前重放；拒绝，且不改变任何状态。',
+  };
+}
+
+/**
+ * **发** `reveal-salt` 的相位守卫（只有**房主**会走到它）—— 与 `mayIntakeSalt` **分开**（N-13）。
+ *
+ * ## 为什么必须在 `complete` 也放行（第三阶段复验的**阻断项 B-1**）
+ *
+ * 第一版拿收盐那个守卫当发盐的窗口用（允许 `seed-revealed` / `reveal-salt-sent`），于是两条收尾
+ * 动作**互斥**、设计稿 §5.3 的完整形态走不通：
+ *  - **先收 `reveal-face`**（房主据此才拿得到对端选的面）⇒ 相位到 `complete` ⇒ `sendRevealSalt()`
+ *    被拒 ⇒ **加入方永远验不了** `hash(seed+salt) === commit`；
+ *  - **先发盐** ⇒ 相位到 `complete` ⇒ 此后的 `reveal-face` 被拒（它只认 `seed-revealed`）
+ *    ⇒ **房主拿不到面**。
+ *
+ * 两者本就不该抢同一步：设计稿写的是"**结束后**房主发 `reveal-salt`"（`:475`），而在协议里
+ * "结束后"正是加入方揭示 `reveal-face` 之后 —— 所以发盐的合法窗口必须**包含 `complete`**。
+ * ⇒ 允许 `seed-revealed`（先发盐、后收面）**与** `complete`（先收面、后发盐）两种顺序；
+ *   幂等由调用方的 `saltMadePublic` 位保证（发第二次走 `'seed-duplicate'` 那条出口）。
+ */
+function mayRevealSalt(phase: SessionPhase): { ok: true } | { ok: false; reason: SessionRejectReason; message: string } {
+  if (phase === 'seed-revealed' || phase === 'complete') return { ok: true };
+  return {
+    ok: false,
+    reason: 'unexpected-message',
+    message:
+      `当前相位是 ${phase}，还不能揭示盐：盐要在**种子揭示之后**才发（设计稿 §5.3 最后一步），` +
+      '那时对方才能拿它去验 `hash(seed + salt)`。',
   };
 }
 
@@ -721,6 +783,15 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
    * 而它恰好出现在安全属性最要命的那个窗口里（上层可能据此以为"可以公开种子了"）。
    */
   let seedMadePublic = false;
+
+  /**
+   * **盐已经发出去过了**（房主侧的幂等位；照 `seedMadePublic` 的写法）。
+   *
+   * 为什么需要它：`mayRevealSalt` 现在允许 `complete`（B-1 的修法 —— 先收 `reveal-face`
+   * 再发盐），而 `complete` 是个**终态**，没有"再前进一格"这回事。所以"发过没有"必须**另记一位**，
+   * 不能靠相位区分（相位在发盐前后都可能是 `complete`）。
+   */
+  let saltMadePublic = false;
 
   /* ---------------- 握手 ---------------- */
 
@@ -913,6 +984,37 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
         phase: s.phase,
       };
     }
+    // ---- `protoVersion`：**补上**（第三阶段复验交回时点名的那一项，我判定它是**漏项**）----
+    // 理由：`HelloAckMsg`（`protocol.ts`，T1 冻结）确实带着 `protoVersion`，而它就是房主
+    // 自己的线协议版本 —— 加入方收到它必须与自己的比一次。不校的后果是**不对称**：
+    // `decodeMsg` 只在握手消息带 `protoVersion` 时校验（`protocol.ts:503-505` 明写"其余消息没有
+    // 这个字段 ⇒ 跳过"），而 ack 恰好带着它，于是"房主用的是别的协议版本"这件事会在加入方
+    // **静默通过**，直到后面某条消息解析不出形状才炸 —— 那时离现场很远了。
+    // 文案与 `validateHello` 的第 1 步逐字同源（同一件事不给第二种说法）。
+    if (typeof msg.protoVersion !== 'number') {
+      return {
+        ...fail('unexpected-message', '收到的 hello-ack 里 protoVersion 不是数字；拒绝，状态不动。'),
+        phase: s.phase,
+      };
+    }
+    if (msg.protoVersion !== opts.localProtoVersion) {
+      return {
+        ...fail(
+          'unexpected-message',
+          `游戏版本不一致，请双方都更新到最新版（对端协议 v${msg.protoVersion}，本机 v${opts.localProtoVersion}）。`,
+        ),
+        phase: s.phase,
+      };
+    }
+    // **`cardDataHash` 不校，这是有意的、不是漏项**，理由两条都是可核对的：
+    //  1. `HelloAckMsg` **根本没有这个字段**（`protocol.ts` 的形状里只有
+    //     `t` / `protoVersion` / `seat` / `peerNick` / `sessionId`），想校就得改
+    //     `protocol.ts` 的冻结形状 —— 那是 T1 的交付物，不在本任务边界内；
+    //  2. 这件事**已经在握手第一步做过了**：加入方的 `hello.cardDataHash` 是发给房主的，
+    //     房主用 `validateHello` 的第 2 步（D13）比过一次，比不过就回 `busy`
+    //     （`reason='card-data-hash'`）而**不会回 ack**。⇒ 拿到 ack 就蕴含"房主那边的指纹
+    //     已经与本端一致"，再在 ack 里回传一次是冗余的（也会把指纹多送一趟网络）。
+    //  ⇒ 若将来要把指纹也放进 ack，先改 `protocol.ts` 的 `HelloAckMsg` 形状并同轮重钉 T1 的腿。
     if (msg.sessionId !== opts.sessionId) {
       return {
         ...fail(
@@ -1064,14 +1166,19 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     if (s.salt === null) {
       throw new Error('session.ts 内部不一致：还没发过 commit 就要揭示盐（sendCommit 没设上？）。');
     }
-    const guard = mayIntakeSalt(s.phase);
-    if (!guard.ok) {
-      return fail(
-        'unexpected-message',
-        `当前相位是 ${s.phase}，还不能揭示盐：盐要在**种子揭示之后**才发（设计稿 §5.3 最后一步），` +
-          '那时对方才能拿它去验 `hash(seed + salt)`。',
-      );
+    if (saltMadePublic) {
+      // 幂等出口（B-1 的修法带来的必要一位）：`mayRevealSalt` 现在也认 `complete`，
+      // 而 `complete` 是终态 ⇒"发过没有"必须另记，不能靠相位分辨。
+      //
+      // 理由码用 `'unexpected-message'`（不是 `'seed-duplicate'`）：后者是**种子**那一条的码，
+      // 它的文案说的是"同一条承诺只揭示一次**种子**"；拿它报盐会让 T5/T8 按码分支时读到假话。
+      // 为盐单独造一个码要考虑 `SessionRejectReason` 的闭合表与 T5/T8 的分支，收益不抵成本 ——
+      // 第二次揭示盐本来就属于"此刻不该发这条"。
+      return fail('unexpected-message', '这条 reveal-salt 已经发过一次了，不重复发：同一条承诺只揭示一次盐。');
     }
+    const guard = mayRevealSalt(s.phase);
+    if (!guard.ok) return fail(guard.reason, guard.message);
+    saltMadePublic = true;
     s.phase = 'complete';
     return ok({ output: outbound({ t: 'reveal-salt', salt: s.salt }), salt: s.salt });
   }
@@ -1146,7 +1253,8 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     }
     // ★★ 判据 1 的守卫点（加入方这一侧）。
     // 只有相位 `'face-committed'`（= 本方已经 `commitFace`）才接受种子，而 `commitFace` 又只能在
-    // `sendCommitAck()` 之后（`'awaiting-commit-face'`）。⇒ 加入方**结构上**不可能在看种子之前
+    // `sendCommitAck()` 之后（相位 `'awaiting-commit-ack'` —— N-12 修正：早先这里写的是房主那一格的
+    // `'awaiting-commit-face'`）。⇒ 加入方**结构上**不可能在看种子之前
     // 不承诺，也不可能先看种子再挑面。
     if (!mayRevealSeed(s.phase)) {
       const refusal = seedRefusal(s.phase, '加入方');
@@ -1214,8 +1322,22 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
 
   /* ---------------- 重连（T6 的接口先留出来） ---------------- */
 
-  function acceptResyncReq(msg: unknown): SessionDecision {
-    if (!isObj(msg)) {
+  /**
+   * 加入方显式声明"这是一次重连"（N-11）。理由与允许的相位见接口注释。
+   */
+  function markResuming(): SessionResult<Record<never, never>> {
+    if (s.phase !== 'handshaking') {
+      return fail(
+        'unexpected-message',
+        `当前相位是 ${s.phase}，不能把它标成重连：这一局已经在承诺流程里，` +
+          '"变成重连"只对还没握完手的加入方有意义。',
+      );
+    }
+    s.phase = 'resuming';
+    return ok({});
+  }
+
+  function acceptResyncReq(msg: unknown): SessionDecision {    if (!isObj(msg)) {
       return { ...fail('unexpected-message', '收到的 resync-req 不是对象；拒绝。'), phase: s.phase };
     }
     // 不静默吞掉：T6 要接的就是这条。今天明确回一句"还没接上"。
@@ -1231,6 +1353,7 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     phase: () => s.phase,
     seed: () => s.seed,
     face: () => s.face,
+    salt: () => s.salt,
     peerStatus: (): PeerStatus => ({
       phase: s.phase,
       handshakeDone:
@@ -1304,7 +1427,6 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
       acceptRevealFace,
       sendRevealSalt,
       seedHashOfCommit: () => s.seedHash,
-      salt: () => s.salt,
     };
     return host;
   }
@@ -1319,6 +1441,7 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     acceptRevealSeed,
     sendRevealFace,
     acceptRevealSalt: acceptRevealSaltFinal,
+    markResuming,
     commitmentVerified: () => commitmentOk,
     faceHashOfCommit: () => s.faceHash,
   };
