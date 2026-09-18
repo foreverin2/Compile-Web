@@ -250,7 +250,8 @@ export function stateAfterDraft(f: MatchFile): GameState {
  * 之后再喂给引擎。这一层拷贝不是洁癖，是必需的 —— 引擎会把调用方传进去的 `choice` 数组
  * **原样存进状态**（`src/core/effects/resolve.ts:168` 的 `pe.lastAnswer = { selected }`），
  * 而 `effect-choice` 的 `args.choice` 恰好就是档案里的那个数组。实测（`.superpowers/g5-T4/`
- * 的探索件，60 步档案 `g5t4-diff-first-9`）：不拷贝时 `n = 36` 处返回的状态与 `f.actions`
+ * 的探索件，**37 步**档案 `g5t4-diff-first-9`，共享出现在 `n = 36`，即走完前 36 条之后的那一步）：
+ * 不拷贝时那一步返回的状态与 `f.actions`
  * **共享 1 个对象**，改返回值就顺着那条引用改掉了档案里的一条操作。重连恰好会落在这种
  * "选择答到一半"的步上（挂起效果 2 个），所以这不是理论风险。
  * 腿见 `tests/app/match-replay.test.ts`「判据 4：返回的状态不共享档案的引用」。

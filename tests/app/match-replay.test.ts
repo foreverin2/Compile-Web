@@ -1038,6 +1038,25 @@ function replayStepByStep(f: MatchFile, n: number): GameState {
   return s;
 }
 
+/**
+ * 判据 4 的**判别力测量器**：完全不深拷贝地逐 n 重放，返回"返回值与档案共享对象数"的最大值。
+ *
+ * 为什么要它（阶段一评审 N-2）：`normalizeAction` 那层拷贝在**值**上是恒等变换，指纹一字不变
+ * ⇒ 判据 1/2 在结构上抓不住"到底拷没拷"，判据 4 是唯一能抓它的腿。而这条腿的判别力
+ * **不是均匀分布**的：主档案（60 步）每一步都是 0，第二份档案（37 步）才有 1（出现在 n=36）。
+ * 所以"主档案本身不含可共享对象"这句必须**写进腿里**（见判据 4 的第二条腿），
+ * 否则将来夹具一改（步数 / 策略 / 引擎行为），判据 4 会悄悄退化成红不了也绿得没意义的空转。
+ */
+function maxSharedWithoutCopy(f: MatchFile): number {
+  let max = 0;
+  for (let n = 0; n <= f.actions.length; n += 1) {
+    const s = stateAfterDraft(f);
+    for (let i = 0; i < n; i += 1) applyRecordedAction(s, f.actions[i]); // 故意不深拷贝
+    max = Math.max(max, sharedWithArchive(s, f));
+  }
+  return max;
+}
+
 /* ------------------------------------------------------------------ *
  * 判据 1（★ 差分腿）
  * ------------------------------------------------------------------ */
@@ -1160,6 +1179,22 @@ function countOf(hay: string, needle: string): number {
 }
 
 describe('T4 判据 3：match-replay.ts 里「ActionRecord → 引擎调用」只有一处', () => {
+  /**
+   * ★ **这条腿的能力边界，写死在这里**（阶段一评审 N-3 实测）：
+   *
+   * 它只扫 `src/app/match-replay.ts` **一个文件**（任务书 §3 判据 3 与 T4.md §3 就是这么规定的）。
+   * 把同一份映射**搬到**别处（评审的 M7：搬进 `src/core/zz-mapping.ts`，语义逐字相同；
+   * M7b：搬走且第二份漏掉「控制权归还」那一半）时实测：
+   *  - M7：判据面只红这条腿，**行为腿一次都没红**；
+   *  - M7b：判据面红 4 条（判据 1 两条 / 判据 2 一条 / 判据 3），因为语义真的被改坏了。
+   *
+   * ⇒ 本腿保证的是「**`match-replay.ts` 内**唯一出处」，**不保证全仓唯一**。
+   * "别处另开一份语义相同的映射"这件事，今天唯一的拦路石就是这条文本腿，而它看不见别的文件；
+   * 全仓口径的守卫不在本任务边界内（越界加全仓行为判据属 T5/T10）。
+   * 顺带一条实测：`src/**` 里 `executeAction(` 今天只出现在 `src/core/game.ts`（声明与重载）
+   * 与 `src/app/match-replay.ts`（8 处调用，全在 `applyRecordedAction` 体内）。
+   */
+
   /** 正控：提取器与计数器对合成样本可用（否则下面全在空片段上恒真） */
   it('正控：functionBody / countOf 对合成样本给得出东西', () => {
     const sample = 'export function f(a: string): void {\n  if (a) { g(a); }\n}\n';
@@ -1183,11 +1218,11 @@ describe('T4 判据 3：match-replay.ts 里「ActionRecord → 引擎调用」�
     const engineCallsTotal = countOf(src, 'executeAction(');
     const engineCallsInApply = countOf(applyBody, 'executeAction(');
     expect(engineCallsInApply).toBeGreaterThan(0);
-    expect(engineCallsTotal, '除了 applyRecordedAction 体内，别处不许再调引擎').toBe(engineCallsInApply);
+    expect(engineCallsTotal, 'match-replay.ts 里除了 applyRecordedAction 体内，别处不许再调引擎').toBe(engineCallsInApply);
     expect(countOf(stepBody, 'executeAction('), 'stateAtStep 里不许出现第二处引擎调用').toBe(0);
 
     // ② 分支只有一处 switch
-    expect(countOf(src, 'switch ('), '全文件只能有一个 switch').toBe(1);
+    expect(countOf(src, 'switch ('), 'match-replay.ts 里只能有一个 switch').toBe(1);
     expect(countOf(applyBody, 'switch (')).toBe(1);
     expect(countOf(stepBody, 'switch ('), 'stateAtStep 里不许出现第二处 switch').toBe(0);
 
@@ -1220,20 +1255,13 @@ describe('T4 判据 4：返回的状态是全新的', () => {
     const live = stepArchive('g5t4-diff-first-9', 37);
     const f = live.file;
     expect(f.actions.length).toBe(37);
-    let maxShared = 0;
-    let worstN = -1;
-    for (let n = 0; n <= f.actions.length; n += 1) {
+    // 反空转：这一份档案里真的出现过"挂起效果带 lastAnswer"的中途状态（共享的成因）
+    {
       const s = stateAfterDraft(f);
-      for (let i = 0; i < n; i += 1) applyRecordedAction(s, f.actions[i]); // 故意不深拷贝
-      const shared = sharedWithArchive(s, f);
-      if (shared > maxShared) {
-        maxShared = shared;
-        worstN = n;
-      }
-      // 反空转：这一份档案里真的出现过"挂起效果带 lastAnswer"的中途状态
-      if (n === 36) expect(s.pendingEffects.length, 'n=36 处必须挂着效果').toBeGreaterThan(1);
+      for (let i = 0; i < 36; i += 1) applyRecordedAction(s, f.actions[i]); // 故意不深拷贝
+      expect(s.pendingEffects.length, 'n=36 处必须挂着效果').toBeGreaterThan(1);
     }
-    expect(maxShared, `不深拷贝时共享对象数（最多的一步 n=${worstN}）`).toBeGreaterThan(0);
+    expect(maxSharedWithoutCopy(f), '不深拷贝时共享对象数').toBeGreaterThan(0);
   });
 
   it('stateAtStep 在**每一个** n 上都不与档案共享对象；改返回值不影响档案，也不影响另一次调用', () => {
@@ -1245,6 +1273,16 @@ describe('T4 判据 4：返回的状态是全新的', () => {
     }
 
     const f = stepArchive().file;
+    // 反空转（阶段一评审 N-2）：**主档案本身不承重** —— 不做深拷贝时它 0..60 每一步都是 0 共享，
+    // 判据 4 的判别力全在第二份档案（37 步，n=36）上。把这件事写进腿里：
+    // 将来有人改夹具而忘了重估"判据 4 还抓不抓得住"时，这里会红给他看。
+    expect(maxSharedWithoutCopy(f), '主档案本身不含可共享对象（maxShared 必须是 0）').toBe(0);
+    // 正控：**同一段测量**在含共享的那份档案上必须 > 0 —— 否则上一句是恒真的空断言
+    expect(
+      maxSharedWithoutCopy(stepArchive('g5t4-diff-first-9', 37).file),
+      '正控：含共享的档案上这段测量必须 > 0（证明它不是恒真）',
+    ).toBeGreaterThan(0);
+
     const snapshot = JSON.stringify(f);
     const s1 = stateAtStep(f, STEP_SPLIT);
     const s2 = stateAtStep(f, STEP_SPLIT);
