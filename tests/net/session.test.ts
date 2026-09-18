@@ -1454,7 +1454,8 @@ function declaredInboundTypes(): string[] {
   //    （`'([^']+)'`），于是往 `SessionInbound` 加一个**双引号**成员时抽取会**静默缩水**，
   //    而 `expectedCells` 用同一份缩水清单算 ⇒ 自查自洽、全绿。
   //    这是 T1 那条"表里的集合必须与样本实际打中的集合相等"的同族问题。
-  //    下面的说明符接受 `'` 与 `"` 两种引号；并用一条**交叉计数**断言兜住半缩水（见腿里）。
+  //    下面的说明符接受 `'` 与 `"` 两种引号；"写法变化导致漏抽"由**交叉计数**兜住 ——
+  //    但那条计数正则必须与这里**容忍同一种写法**（见 `declaredInboundTCount` 的说明）。
   const decl = /^export type SessionInbound =([\s\S]*?)\n\n/m.exec(src);
   if (decl === null) throw new Error('session.ts 里找不到 `SessionInbound`（结构被改动？）');
   const keys = [...decl[1].matchAll(/\{ t: ['"]([^'"]+)['"]/g)].map((m) => m[1]);
@@ -1463,19 +1464,33 @@ function declaredInboundTypes(): string[] {
 }
 
 /**
- * `SessionInbound` 里 `t:` 出现的**总次数**（不挑引号风格）。
+ * `SessionInbound` 里 `t:` 出现的**总次数**（不挑引号风格、**也不挑冒号前的空格**）。
  *
- * 用途：与"抽取到的成员数"做**交叉计数** —— 抽取正则若因为引号风格/书写变化漏掉成员，
- * 那个数会**小于**这个数 ⇒ 当场红。这是"半缩水"能被察觉的关键（只断言"非空"防不住它）。
+ * 用途：与"抽取到的成员数"做**交叉计数** —— 抽取正则若因为写法变化漏掉成员，那个数会
+ * **小于**这个数 ⇒ 当场红。这是"半缩水"能被察觉的关键（只断言"非空"防不住它）。
+ *
+ * **这条计数正则必须容忍与抽取正则同一种写法**（第六阶段复验实测的教训，我上一轮的登记
+ * 说反了）：第一版这里写的是 `/\bt:/g`（不容忍 `t :`），而抽取正则同样不容忍 —— 两边**一起漏**，
+ * 于是 `| { t : 'zz-inbound'; msg: unknown };`（冒号前一个空格）**49/49 全绿**。
+ * ⇒ 口径是：**计数与抽取要么同时容忍某种写法，要么同时不容忍**；现在两边都容忍空格
+ * （抽取是 `\{ t: ` 还是 `\{ t : `？见 `declaredInboundTypes` —— 它按**源码实际写法**收紧，
+ * 所以这里用 `\s*` 把"多空格"这种**写法变化**兜住，让计数小于抽取时立刻红）。
  */
 function declaredInboundTCount(): number {
   const src = String(readFileSync(join(NET_SRC_DIR, 'session.ts')));
   const decl = /^export type SessionInbound =([\s\S]*?)\n\n/m.exec(src);
   if (decl === null) throw new Error('session.ts 里找不到 `SessionInbound`（结构被改动？）');
-  return [...decl[1].matchAll(/\bt:/g)].length;
+  return [...decl[1].matchAll(/\bt\s*:/g)].length;
 }
 
-/** `MSG_TYPES` 里条目出现的**总次数**（不挑引号风格）；与抽取结果交叉计数 */
+/**
+ * `MSG_TYPES` 里条目出现的**总次数**（不挑引号风格，**也不挑冒号前的空格**）；与抽取结果交叉计数。
+ *
+ * 与上面同一条纪律：**计数正则必须容忍与抽取正则同一种写法**。
+ * 这一侧今天是好的：抽取正则 `^ {2}'?([\w-]+)'?:\s*true` 里键名后**没有**要求紧贴冒号，
+ * 所以 `'zz-wire' : true`（键前多空格）两边都能认（第六阶段复验实测"世界 D 红 1"）。
+ * 这里的 `:\s*true` 也容忍键与冒号之间的空白与冒号后的空白 —— 保持同口径，别改坏。
+ */
 function declaredWireEntryCount(): number {
   const src = String(readFileSync(join(NET_SRC_DIR, 'protocol.ts')));
   const decl = /^const MSG_TYPES: Record<NetMsgType, true> = \{([\s\S]*?)\n\};/m.exec(src);
@@ -1637,8 +1652,15 @@ const PHASE_ROLES: Readonly<Record<string, readonly ('host' | 'guest')[]>> = {
 /**
  * **相位配方**：从一张白纸把会话推到目标相位。
  *
- * 这份表是**手写的**，但腿里有一句"表里的相位集合必须与 `SessionPhase` 抽取结果相等"的断言，
- * 于是**新增相位而没给配方会当场红** —— 手写在这里是安全的，闭合腿替它兜着。
+ * ★ **这几张登记表（`PHASE_RECIPES` / `PHASE_ROLES` / `PHASE_UNREACHABLE`）必须手写，
+ *   不许从抽取结果（`declaredPhaseList()` / `declaredInboundTypes()` 等）派生**。
+ *   理由（第六阶段复验推理、我在此钉住）：一旦某张表改成从抽取结果派生，比对它的那条断言就
+ *   退化成"自己和自己比"——正是本文件里已经被抓到过的"自证恒真"那一族
+ *   （`WIRE_OUT_OF_SCOPE` 第一版、`REASON_NEEDS_LEG` 第一版都是这个形态）。
+ *   手写在这里是**安全的**，因为闭合腿替它兜着：表里的集合必须恰好等于抽取结果，
+ *   于是"新增相位/成员而没登记"会红。
+ *
+ * 这份表与 `SessionPhase` 抽取结果的相等性由腿里那句断言钉住（新增相位而没给配方 ⇒ 当场红）。
  */
 const PHASE_RECIPES: Readonly<Record<string, PhaseRecipe>> = {
   handshaking: (role) => (role === 'host' ? hostSession() : rawGuestSession()),
@@ -1755,7 +1777,13 @@ const PHASE_UNREACHABLE: readonly string[] = [
   'host/seed-committed',
 ];
 
-/** 线上有、但本会话层今天不接收的消息（显式登记；线上新增消息而没人决定它归谁 ⇒ 上面那条断言会红） */
+/**
+ * 线上有、但本会话层今天不接收的消息（显式登记；线上新增消息而没人决定它归谁 ⇒ 上面那条断言会红）。
+ *
+ * ★ 与 `PHASE_RECIPES` / `PHASE_ROLES` / `PHASE_UNREACHABLE` 同一条纪律：**必须手写，
+ *   不许从 `inbounds` / `wire` 这些抽取结果派生**（派生会让比对它的断言退化成本文件里
+ *   已经被抓到过的"自证恒真"）。理由与完整说明见 `PHASE_RECIPES` 的头注。
+ */
 const WIRE_OUT_OF_SCOPE: readonly string[] = ['act', 'busy', 'bye', 'forfeit', 'resync-res'];
 
 /**
@@ -1773,9 +1801,12 @@ describe('契约：网络来的输入一律不抛（生成式：全部相位 × 
   it('矩阵的维度确实是从生产代码抽出来的（不是手抄，也不是空集）', () => {
     expect(phases.length, 'SessionPhase 抽空了').toBeGreaterThanOrEqual(10);
     expect(inbounds.length, 'SessionInbound 抽空了').toBeGreaterThanOrEqual(9);
-    // ★ **交叉计数**（第五阶段复验要求的"半缩水"防线）：抽取正则若因引号风格或书写变化
-    //   漏掉成员，抽到的成员数会**小于**源码里 `t:` 的总数 ⇒ 当场红。
+    // ★ **交叉计数**（第五阶段复验要求的"半缩水"防线）：抽取正则若因引号风格或写法变化
+    //   漏掉成员，抽到的成员数会**小于**源码里的总数 ⇒ 当场红。
     //   只断言"非空 / >= N"防不住半缩水（评审实测：加一个**双引号**成员 ⇒ 全绿）。
+    //   **计数正则必须与抽取正则容忍同一种写法**（第六阶段复验实测的教训）：第一版计数写的是
+    //   `\bt:`、抽取也不容忍 `t :` ⇒ 两边**一起漏**，"冒号前多空格"照样全绿。
+    //   现在两边都容忍空格（计数用 `\bt\s*:`），世界 C（`t : '…'`）会红。
     expect(
       inbounds.length,
       `SessionInbound 抽到 ${inbounds.length} 个成员，但源码里有 ${declaredInboundTCount()} 个 t: —— 抽取漏了（引号风格？）`,
