@@ -82,10 +82,20 @@ import { applyRecordedAction } from './match-replay';
  * 1. 契约
  * ------------------------------------------------------------------ */
 
-export type DriverMode = 'local' | 'replay';
+/**
+ * 驱动的模式（这个 driver 的输入是从哪来的）。
+ *
+ * 三个取值分别对应三种"操作从哪来"：
+ *  - `'local'`：热座 —— 人直接在同一个界面上点（`createLocalDriver`，本文件）。
+ *  - `'replay'`：重放 —— 操作来自一份已经打过的档案（`createReplayDriver`，本文件）。
+ *  - `'net'`：联机锁步 —— 操作来自传输层（G5 T5 的 `createNetDriver`，`src/net/net-driver.ts`）。
+ *    **不在这里 import 它**：依赖方向是 `net → app`（G5 计划 D7），`src/app` 反过来 import
+ *    `src/net` 会变成环。这里的字面量与那边的 `NET_DRIVER_MODE` 是同一个词，两边都有注释互指。
+ */
+export type DriverMode = 'local' | 'replay' | 'net';
 
 /**
- * 拒绝形态。四个取值**今天都可达**，逐个给出触发的**事实**（不写"将来谁会用到"）：
+ * 拒绝形态。五个取值**今天都可达**，逐个给出触发的**事实**（不写"将来谁会用到"）：
  *  - `'not-the-next-action'`：`ReplayDriver` 的主拒绝形态 —— 提交的不是档案的下一条（判据 3 / D12）。
  *  - `'exhausted'`：档案走完（`position >= total`）之后再提交（判据 6）。
  *    它**排在** `engine-error` 之前判定 ⇒ "已经走完"永远可判，不会被先前的一次引擎抛错遮住。
@@ -93,8 +103,13 @@ export type DriverMode = 'local' | 'replay';
  *  - `'read-only'`：**`dispose()` 之后**的任何 `submit`。它是"H 轮评审曾判它该删、协调者裁决保留"
  *    的那个取值 —— 保留的理由不是"将来 G5 会用到"（那是预测，不作依据），而是它**确实可达**：
  *    见 `tests/app/match-driver.test.ts` 里"dispose 之后 submit ⇒ read-only"那条腿。
+ *  - `'offline'`：**对端此刻不可达**（G5 D16 新增，`createNetDriver` 是它唯一的产出方）。
+ *    它与上面那个 `'read-only'` 是**两件不同的事**，这正是它没有被并进 `'read-only'` 的理由：
+ *    "对端暂时不在"（会好）与"这一局已经结束"（不会好）在界面上要给玩家完全不同的下一步。
+ *    判据见 `tests/net/net-driver.test.ts` 里"断线被拒 ⇒ offline / dispose 之后被拒 ⇒ read-only"
+ *    那两条腿（**两者必须给出不同的码**，否则这条区分就没有牙）。
  */
-export type SubmitRefusal = 'read-only' | 'not-the-next-action' | 'exhausted' | 'engine-error';
+export type SubmitRefusal = 'read-only' | 'not-the-next-action' | 'exhausted' | 'engine-error' | 'offline';
 
 export interface SubmitResult {
   ok: boolean;
