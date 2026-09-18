@@ -91,9 +91,12 @@ const cleanRules = (css: string): CssRule[] => cssRules(css).filter((r) => {
  * | `styles-gen3-cards.css` | `main.ts:3` | 只服务 3 代卡牌的**附加层**（`.g3card-*` 一族），那些节点不在这两条链上 |
  * | `styles-local.css` | `main.ts:9` | 只带 `.consent-*` / `.local-data-*` 前缀类（G3 的授权弹窗与数据屏） |
  * | `styles-replay.css` | `main.ts:10`（G4 新增） | 只带 `.replay-*` 前缀类（重放页控制条与只读遮罩） |
+ * | `styles-net-lobby.css` | `main.ts`（**G5/T8 新增**，import 排在 `styles-net.css` 之后） | 只带 `.net-lobby-*` 前缀类（联机大厅：建房 / 加入 / 连接设置）。两条理由：① 那条腿解算的两条链只关心 `.board` / `.board-grid` / `.player-strip` / `.hand` / `.card` / `.net-*` / `.smoke-puff` / `.scan-overlay` 这一族，而本表的每条选择器都带 `net-lobby-` 前缀类，两者不可能相交；② 大厅是**独立屏**（`renderNetLobby` 自己清 root），与棋盘节点**不同时**在屏上 |
  */
 const CASCADE_SOURCES = ['styles.css', 'styles-gen3.css', 'styles-gen3-sync.css', 'styles-net.css'] as const;
-const EXCLUDED_SOURCES = ['styles-gen3-cards.css', 'styles-local.css', 'styles-replay.css'] as const;
+const EXCLUDED_SOURCES = [
+  'styles-gen3-cards.css', 'styles-local.css', 'styles-replay.css', 'styles-net-lobby.css',
+] as const;
 /** 表名 → 表体（只给收进模型的那四张；`CASCADE` 由它按源序拼出来，避免"文档与代码两处各写一份"） */
 const SRC_OF: Record<string, string> = {
   'styles.css': HOT_SRC,

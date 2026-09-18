@@ -225,6 +225,19 @@ export interface ModeSelectNav {
   /** 玩家选定「热坐」并携带两个开关状态继续（→ 掷硬币） */
   startHotseat(banEnabled: boolean, randomPoolEnabled: boolean): void;
   /**
+   * G5/T8：进入**联机大厅**（建房 / 加入 / 连接设置）—— 真正的联机入口。
+   *
+   * 与 `startNetPreview` 的**唯一区别**：大厅是**独立屏**（没有 `state`、不掷硬币、不进草稿页），
+   * 宿主把页面模式切成第四值（`renderMode = 'lobby'`）之后直接画大厅。
+   *
+   * ⚠️ **这个入口（以及它的模式卡）必须排在 `startNetPreview` 之前**（计划 §5 T8 的实现顺序
+   * 约束，D24 补）：`tests/ui/net-preview-wiring.test.ts:210-213` 用
+   * `mode.slice(mode.indexOf('startNetPreview:'))` 切出"预览那一段"，再在那一段里断言
+   * `renderMode = 'net'` 与 `netViewSeat = viewSeat`。新入口若排在它**之后**，那段切片会被拉长到
+   * 含新入口 ⇒ 断言可能被新入口里的字符串满足 —— 它仍然绿，但**测的已经不是原来那件事**（失焦）。
+   */
+  startNetLobby(): void;
+  /**
    * G2 Task 4：进入**远程对战页单视角预览**（本地、零联机）—— G2 视觉验收用。
    *
    * 与 `startHotseat` 的**唯一区别**是宿主会把页面模式切成远程页（`renderMode = 'net'`）；
@@ -257,6 +270,22 @@ export function renderModeSelect(root: HTMLElement, nav: ModeSelectNav): void {
     mkMode('热坐（双人）', '两名玩家轮流在同一设备上对战（当前可用）', true, () => {
       nav.startHotseat(banBox.checked, randomBox.checked);
     })
+  );
+  // G5/T8：**真正的联机入口**（建房 / 加入 / 连接设置）。
+  // 为什么排在预览卡**之前**：计划 §5 T8 的实现顺序约束（D24）—— 见 `ModeSelectNav.startNetLobby`
+  // 的说明（`net-preview-wiring.test.ts:210-213` 的 `indexOf` 切片不许被新入口拉长）。
+  // 描述句里**不手写**任何隐私/信令承诺：那两句的唯一出处是 `src/app/privacy.ts` 与
+  // `src/net/invite.ts` 的 `NO_ENDPOINT_MESSAGE`，大厅里有地方看（本卡只说"见大厅内的说明"）。
+  list.appendChild(
+    mkMode(
+      '联机对战（两台设备）',
+      '两台设备直连（P2P）。默认不向任何服务器发请求：没有配置信令端点时用邀请码，'
+        + '端点与中继（TURN）在「高级 / 连接设置」里填。隐私与信令说明见大厅内的说明。',
+      true,
+      () => {
+        nav.startNetLobby();
+      }
+    )
   );
   // G2 Task 4：远程对战页的**单视角预览**（本地、零联机）。放在热坐卡之后 —— 它是热坐流程的
   // 一个"看布局"变体，视觉上从属于它；热坐卡的文案与行为一行未改。

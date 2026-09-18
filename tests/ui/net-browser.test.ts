@@ -1006,18 +1006,36 @@ describe('地址栏 fragment 的读与抹（§8.3；T8 在启动路径调用）'
 });
 
 /* ============================================================================
- * 9. 判据 14：划界（T7 不许建页面 / 不许碰 main.ts；T8 不许自己写提示）
+ * 9. 判据 14：划界（行为面在 T7、渲染与接线在 T8）
+ *
+ * ⚠️ **本轮（G5/T8）改过这一组**（计划 D24 ② 逐条授权的三处之一）。旧文本钉的是**T7 那一刻**的
+ * 划界 —— "T7 没建 `net-lobby.ts`、`main.ts` 不含 net-browser"。T8 一接线，那条**必然红**，
+ * 而它红得**正确**：它钉的那个"冻结期"已经结束了。
+ * ⇒ 处置是按 D24 ② 把划界从"T7 冻结期"换成"T8 接线之后"，**并把结构腿那一半一字不动地留下**
+ *   （`driver.submit(` 恰 8 处）—— 那一半不因 T8 而变，它证明的是"这轮接线没有溢出到结构腿"。
+ *   这不是绕过守卫：改的是"哪一刻的划界"，不是"要不要查"。
  * ========================================================================== */
 
-describe('判据 14：行为面在 T7、渲染在 T8', () => {
-  it('T7 没有新建 `src/ui/net-lobby.ts`、没有动 `src/main.ts`', () => {
-    expect(readdirSync(fileURLToPath(new URL('../../src/ui/', import.meta.url)))).not.toContain('net-lobby.ts');
+describe('判据 14：行为面在 T7、渲染与接线在 T8', () => {
+  it('T8 已经接线：`src/ui/net-lobby.ts` 存在且被 `main.ts` 引用；结构腿仍为 8 处', () => {
+    // ① 旧文本（T7 冻结期）：「T7 没有新建 src/ui/net-lobby.ts」
+    //    新文本（T8 接线后）：这个文件**必须存在** —— 那五件义务的落点就是它
+    const uiFiles = readdirSync(fileURLToPath(new URL('../../src/ui/', import.meta.url)));
+    expect(uiFiles, 'T8 的落点 src/ui/net-lobby.ts 不存在（那五件义务没有地方落）').toContain('net-lobby.ts');
     const main = readSrc(fileURLToPath(new URL('../../src/main.ts', import.meta.url)));
     // `main.ts` 是结构敏感文件：8 处 driver.submit(、1 处 renderApp(root, state, cb)（口径：剥注释）
+    // ★ 结构腿这一半**一个字都没动**（D24 ② 明写"保留它的另一半"）
     const code = stripComments(main);
     expect((code.match(/driver\.submit\(/g) ?? []).length, 'main.ts 的 driver.submit( 不是 8 处').toBe(8);
-    // 它**不许**已经 import 这个新文件（接线是 T8 的事）
-    expect(code.includes('net-browser'), 'main.ts 已经被接线了 —— 那是 T8 的活').toBe(false);
+    // ② 旧文本（T7 冻结期）：「`expect(code.includes('net-browser')).toBe(false)` —— main.ts 已经被
+    //    接线了，那是 T8 的活」。
+    //    新文本（T8 接线后）：接线**必须已经发生**，而且必须真的把这两个模块接上 ——
+    //    既 import 了浏览器层（能力的唯一出处），也 import 了大厅（渲染与路由的落点）。
+    expect(code, 'main.ts 没有 import ./ui/net-browser（T8 的接线没有发生）').toContain("from './ui/net-browser'");
+    expect(code, 'main.ts 没有 import ./ui/net-lobby（大厅没有接上）').toContain("from './ui/net-lobby'");
+    // 反向（防"文件里出现这个词就算接线"）：第四个 `renderMode` 值必须真的存在并在 `rerender` 里被路由
+    expect(code, "renderMode 的联合类型里没有第四个值 'lobby'").toContain("| 'lobby'");
+    expect(code, "rerender 里没有 'lobby' 分支（大厅进不去那一帧）").toMatch(/renderMode === 'lobby'/);
   });
 
   it('那句提示的**唯一出处**在 `src/net/invite.ts`：全仓只有一处带它的正文', () => {

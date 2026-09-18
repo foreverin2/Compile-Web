@@ -12,6 +12,12 @@ import './ui/styles-local.css';
 // 新增样式表时必须按那条腿里写下的「收录准则」处理（本表只带 `.replay-*` 前缀类、永不命中
 // 棋盘节点 ⇒ **不收**进那份模型，但要在它的排除清单里显式登记）。
 import './ui/styles-replay.css';
+// G5/T8：联机大厅那一屏的样式（新文件）。
+// ⚠️ **必须排在 `styles-net.css`（上面第 7 行）之后**：同权重时靠后者胜 —— 那正是浏览器里
+// 发生的事，也是 `tests/ui/net-body-layer-rules.test.ts` 的层叠模型建模的东西。
+// 本表只带 `net-lobby-*` 前缀类、且大厅是独立屏 ⇒ 已在那条腿的 `EXCLUDED_SOURCES` 里显式登记
+// （登记处写着"为什么不可能命中棋盘节点"的两条理由）。
+import './ui/styles-net-lobby.css';
 import { createGame, performDraftPick, performDraftUnpick, performDraftBan, randomPoolFromSeed, setSeedNonce } from './core/state/create';
 import { getCompilableLines } from './core/rules/compile';
 import { collectTriggers } from './core/effects/triggers';
@@ -61,6 +67,32 @@ import { trace, stateDigest, initEventTracing } from './core/trace';
 import type { GameState, PlayerId, Line } from './core/models/types';
 // G3 Task 8：PWA（manifest + service worker + 自动提示更新 + 一键更新）。零依赖、手写。
 import { initPwaUpdate } from './ui/pwa-update';
+// ── G5/T8：联机大厅的接线（本任务的**唯一**新入口）──────────────────────────────
+// 这个屏的渲染、状态、以及"入站消息喂进 accept"那条路由**全住** `src/ui/net-lobby.ts`；
+// 本文件只做三件事：把**能力**注入进去（D6：浏览器 API 的唯一出处是 `./ui/net-browser`）、
+// 给它一条 `renderMode` 分支、在复位时收拾它。
+import {
+  createLobbyClient,
+  errorCopy,
+  inviteLengthText,
+  qrNote,
+  renderNetLobby,
+  type LobbyClient,
+  type LobbyDraftInput,
+  type LobbyErrorKey,
+  type LobbyState,
+} from './ui/net-lobby';
+import {
+  browserHash,
+  createBrowserTransport,
+  createInvite,
+  inviteLengthReport,
+  readIceServers,
+  readInviteFromAddressBar,
+  signalingEndpointSetting,
+  stripInviteFromAddressBar,
+} from './ui/net-browser';
+import { PROTO_VERSION } from './net/protocol';
 
 const root = document.getElementById('app')!;
 // 启动时注入运行期 nonce（G0）：使任何未显式传 seed 的 createGame() 也不会跨重启重复同一牌序
@@ -108,8 +140,14 @@ let resetEpoch = 0;
  *   - `showModeSelect` 的 `startHotseat` → `'hotseat'`（显式复位，幂等）；
  *   - `resetToMainInterface` → `'hotseat'`（**必须**，否则"打完一局预览 → 返回主页面 → 开热座"
  *     会渲染成远程页 —— 那是最难自查的一类串味）。
+ *
+ * ## G5/T8 补的第四个值：`'lobby'`（联机大厅）
+ *
+ * **不复用 `'net'`**：那个值已经是**远程页单视角预览**（零联机、从草稿流程进来），而大厅没有
+ * `state`（对局还没开始）。让一个字段同时承担"大厅"与"预览"两种语义，正是 D16 那条教训的形态。
+ * 大厅也**不写** `renderMode = 'hotseat'`（那两个字面量点各有腿在数）—— 它只写 `'lobby'`。
  */
-let renderMode: 'hotseat' | 'net' | 'replay' = 'hotseat';
+let renderMode: 'hotseat' | 'net' | 'replay' | 'lobby' = 'hotseat';
 /** 预览视角座位（**绝对玩家号**；仅 `renderMode === 'net'` 时有意义）。页内工具条可切换。 */
 let netViewSeat: PlayerId = 0;
 /* G2 Task 4F（终审 I-2 + N4）：**这里原先还有一个 `netHandVisibility` 常量，现已删除。**
@@ -185,6 +223,190 @@ let replayStepPending = false;
  */
 let lastArchive: MatchFile | null = null;
 
+/* ──────────────────────────────────────────────────────────────────────────── *
+ * G5/T8：联机大厅的**宿主侧**接线（本任务唯一的新入口那一支）
+ *
+ * 分工写死：**渲染、状态、"入站消息喂进 accept"那条路由全住 `src/ui/net-lobby.ts`**；
+ * 本文件只做三件事 —— 把能力注入进去（D6：浏览器 API 的唯一出处是 `./ui/net-browser`）、
+ * 给它一条 `renderMode` 分支、在复位时收拾它。
+ *
+ * ⚠️ **本任务不做的事，如实写在代码里**（免得被读成"已经能联机了"）：
+ *   - **不构造信令客户端**：`createSignalingSession` / `discoverSignalingEndpoint` 属 T9 的真浏览器线。
+ *     所以"输 6 位码"这条路今天只到"端点判定 + 归一化 + 频道名"为止（那正是不发任何请求的那一段）；
+ *   - **不拿真 SDP / ICE**：非 trickle 的 offer 要等 ICE 收集完成，那是真 `RTCPeerConnection` 的事。
+ *     邀请码的**形状**（`<协议版本>.<压缩段>`、载荷只在 fragment）是真的，里面的 SDP 是占位串；
+ *   - **不落盘**连接设置：`netSettings` 只活在内存里（本任务不动存储面）。
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * 大厅客户端与它的角色。
+ *
+ * 为什么这两样住本文件而不是 `net-lobby.ts` 的模块态：大厅的渲染是"读状态画一帧"
+ * （照 `local-consent.ts` / `local-data.ts` 的形状），而模块态会跨页残留 —— 本仓已经栽过三次
+ * 同族的坑（`resetUiState` / `resetNetUiState` / `setFxViewSeat`）。⇒ 复位点只有一个，
+ * 就是 `resetToMainInterface()`。
+ */
+let lobbyClient: LobbyClient | null = null;
+let lobbyMode: 'host' | 'guest' | null = null;
+
+/** 本机 `sessionId`（16 字节 → 十六进制）。**只住会话层、不进档案**（D2） */
+function newSessionId(): string {
+  const c = (globalThis as { crypto?: { getRandomValues<T extends Uint8Array>(a: T): T } }).crypto;
+  if (c === undefined) {
+    // 没有随机源时**不能**悄悄退化成一个可预测的 id（两台设备会撞进同一个会话）
+    throw new Error('这台设备拿不到随机源（安全上下文才提供它），联机会话开不起来。');
+  }
+  const bytes = new Uint8Array(16);
+  c.getRandomValues(bytes);
+  return 'sid-' + [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** 连接设置的**内存**副本（今天不落盘） */
+const netSettings: { turnUrl: string; turnUsername: string; turnCredential: string } = {
+  turnUrl: '',
+  turnUsername: '',
+  turnCredential: '',
+};
+
+/** 大厅要的注入环境：**只读设置**。`signalingEndpointSetting` 在这一层不发任何请求（§8.1） */
+function lobbyEnv() {
+  return { settings: () => netSettings };
+}
+
+/** 大厅要的时钟能力（注入形状；`net-lobby.ts` 里零命中裸 `setTimeout`） */
+const lobbyTicker = {
+  schedule: (fn: () => void, ms: number): number => window.setTimeout(fn, ms),
+  cancel: (h: number): void => { window.clearTimeout(h); },
+};
+
+/**
+ * 入口那一屏的状态（还没建房也没加入）。
+ *
+ * ⚠️ 它**不是**"第二份状态"：这一格只有两个按钮，没有任何读数需要从会话层取。
+ * 一旦玩家建房或加入，屏上的每一格都由 `LobbyClient.state()` 给（见 `renderLobbyFrame`）。
+ */
+function lobbyEntryState(): LobbyState {
+  return {
+    role: null,
+    sessionId: '',
+    invite: null,
+    joined: null,
+    roomCodeInput: '',
+    roomCodeGate: null,
+    transport: 'idle',
+    peer: null,
+    endpoint: signalingEndpointSetting(lobbyEnv()),
+    ice: readIceServers(netSettings),
+    advancedOpen: false,
+    waitExpired: null,
+    error: null,
+    notice: null,
+    routedIn: 0,
+    routedOut: 0,
+  };
+}
+
+/**
+ * 画出大厅这一帧。
+ *
+ * ## 为什么 `sync()` 排在这一帧之前
+ *
+ * `peerStatus()` 是**拉**的读数（会话层不推送，见 `session.ts:768-776`："订阅是一个有生命周期的
+ * 副作用，纯状态机不该持有它"）⇒ 每次重渲染前读一次，屏上那句"对端在线 / 断线"才是**这一刻**的
+ * 事实，而不是上一次交互留下的快照。
+ */
+function renderLobbyFrame(): void {
+  const client = lobbyClient;
+  if (client !== null) client.sync();
+  const st = client === null ? lobbyEntryState() : client.state();
+  renderNetLobby(root, {
+    state: st,
+    backHome: () => { showModeSelect(); },
+    startHost: () => { startLobby('host'); },
+    startJoin: () => { startLobby('guest'); },
+    makeInvite: () => { void makeLobbyInvite(); },
+    inviteLength: (payload: string) => {
+      const r = inviteLengthReport(payload);
+      return inviteLengthText(r.chars, r.withinMeasuredRange);
+    },
+    qrNote,
+    setRoomCode: (text: string) => { lobbyClient?.setRoomCode(text); },
+    submitRoomCode: () => {
+      // ★ **端点为空时这一步不发任何请求**：`submitRoomCode()` 只调纯判定
+      //   （`roomCodeEntryReachability` / `normalizeRoomCode` / `roomChannel`）。
+      //   真正的网络动作（信令客户端）属 T9，见本节头注。
+      lobbyClient?.submitRoomCode();
+      renderLobbyFrame();
+    },
+    joinWithInvite: (text: string) => { void joinLobbyWithInvite(text); },
+    toggleAdvanced: () => { lobbyClient?.toggleAdvanced(); renderLobbyFrame(); },
+    settingsValue: (key) => netSettings[key],
+    setSetting: (key, value) => { netSettings[key] = value; renderLobbyFrame(); },
+    errorText: (key: LobbyErrorKey) => errorCopy(key),
+  });
+}
+
+/** 建房 / 加入的入口：**第一次**进大厅时才造客户端（两样状态都只活在这一屏里） */
+function startLobby(role: 'host' | 'guest'): void {
+  lobbyMode = role;
+  if (lobbyClient === null) {
+    lobbyClient = createLobbyClient({
+      role,
+      sessionId: newSessionId(),
+      localProtoVersion: PROTO_VERSION,
+      localCardDataHash: CARD_DATA_HASH,
+      hash: browserHash(),
+      ticker: lobbyTicker,
+      createTransport: () => createBrowserTransport(lobbyEnv()),
+      signalingEndpoint: signalingEndpointSetting(lobbyEnv()),
+      readSettings: () => netSettings,
+      buildInvite: async (draft: LobbyDraftInput) => {
+        const r = await createInvite({ ...draft }, lobbyEnv());
+        return r.ok ? { ok: true, payload: r.payload, link: r.link } : { ok: false, message: r.message };
+      },
+      // 真解压是异步的（`decompressBase64`），而 `decodeInviteText` 要一个同步口 ⇒
+      // `joinLobbyWithInvite` 先把字节 await 出来再喂进去（照 `net-browser.ts:createInvite` 的同一种缝法）。
+      decompressBase64: () => null,
+      readAddressBar: () => {
+        const payload = readInviteFromAddressBar(lobbyEnv());
+        if (payload === null) return null;
+        // ★ 判据 6 的 ⑤：**只在读到载荷之后**抹地址栏（读不到时抹会把别人的 hash 抹掉）
+        return { payload, stripped: stripInviteFromAddressBar(lobbyEnv()) };
+      },
+    });
+  }
+  renderLobbyFrame();
+  if (role === 'guest') void lobbyClient.readFromAddressBar().then(() => { renderLobbyFrame(); });
+}
+
+/** 房主：生成一条邀请码（SDP 是占位串，见本节头注），起一次 8 秒窗口 */
+async function makeLobbyInvite(): Promise<void> {
+  const client = lobbyClient;
+  if (client === null) return;
+  const originAndPath = window.location.href.split('#')[0].split('?')[0];
+  await client.startHost({
+    originAndPath,
+    p: PROTO_VERSION,
+    // `encodeInvite` 会拒绝空 SDP（那是调用方违约），所以它必须非空；
+    // 真的 offer 要等 ICE 收集完成 —— 那是 T9 的真浏览器线。
+    sdp: 'v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\n',
+    ice: [],
+    hostPromise: 'host-promise-pending',
+    guestPromise: 'guest-promise-pending',
+  });
+  client.startWait();
+  renderLobbyFrame();
+}
+
+/** 加入方：贴一条邀请码 ⇒ 解载荷 + 明文协议版本比对 */
+async function joinLobbyWithInvite(text: string): Promise<void> {
+  const client = lobbyClient;
+  if (client === null) return;
+  await client.joinWithInvite(text);
+  renderLobbyFrame();
+}
+
+
 /**
  * **整帧重渲染的唯一入口**：按 `renderMode` 路由到当前页面。
  *
@@ -218,6 +440,13 @@ function rerender(): void {
       } : {}),
       verifyHooks: dev,
     });
+    return;
+  }
+  // ── G5/T8：联机大厅分支 ─────────────────────────────────────────────────────
+  // 它是一个**独立屏**（没有 `state`），所以在这里早退：下面的 `renderApp(root, state, cb)`
+  // （全文件唯一一处）一个字都不动。大厅自己的渲染器负责清 root（`renderNetLobby` 首行）。
+  if (renderMode === 'lobby') {
+    renderLobbyFrame();
     return;
   }
   renderApp(root, state, cb);
@@ -1037,6 +1266,23 @@ function showModeSelect(): void {
       showCoin();
     },
     /**
+     * G5/T8：**联机对战（两台设备）** —— 真正的联机入口（建房 / 加入 / 连接设置）。
+     *
+     * ⚠️ **它必须排在 `startNetPreview` 之前**（计划 §5 T8 的实现顺序约束，D24 补）：
+     * `tests/ui/net-preview-wiring.test.ts:210-213` 用 `mode.slice(mode.indexOf('startNetPreview:'))`
+     * 切出"预览那一段"再在里面断言 `renderMode = 'net'` 与 `netViewSeat = viewSeat`；
+     * 新入口若排在它之后，那段切片会被拉长到含新入口 ⇒ 断言可能被新入口里的字符串满足 ——
+     * 它仍然绿，但**测的已经不是原来那件事**（失焦）。所以排在前面是**判据面**的要求，
+     * 不是排版偏好。
+     *
+     * 它**不写** `renderMode = 'hotseat'`（那两个字面量点各有腿在数），也不碰 `showCoin()`：
+     * 大厅没有 `state`，它只是把页面模式切成第四值。
+     */
+    startNetLobby: () => {
+      renderMode = 'lobby';
+      renderLobbyFrame();
+    },
+    /**
      * G2 Task 4：**单视角预览（本地、零联机）** —— 远程对战页的视觉验收入口。
      *
      * 设计取舍（为什么不另写一套"直接进对战"的捷径）：预览**沿用完整的热座流程**
@@ -1179,6 +1425,14 @@ function resetToMainInterface(): void {
   const archived = buildSessionArchive();
   if ('file' in archived) lastArchive = archived.file;
   localDriver.recorder()?.clear();
+  // ── G5/T8：**大厅**（第五份跨页状态）也要在这里收拾（与上面四份并排：各归各的模块）──
+  // 大厅的模块态是 `lobbyClient`（客户端 + 它自己那条会话/传输路由）与 `lobbyMode`。
+  // `dispose()` 一次清干净：停掉 8 秒窗口、退订传输、把路由丢掉。
+  // 漏掉它的症状与上面几份同族：下一局从主页进大厅时会**接着上一局那条会话**跑，
+  // 而读数是上一局的（不报任何错）。
+  lobbyClient?.dispose();
+  lobbyClient = null;
+  lobbyMode = null;
   renderMode = 'hotseat'; // 防"预览模式泄漏到热座"（见本节注释）
   netViewSeat = 0;
   // 手牌可见性无需复位：本页无该选项（档位字段已删，恒为信息遮蔽，I-2/N4）。

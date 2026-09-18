@@ -1063,9 +1063,22 @@ describe('接线腿：main.ts（showLocalData 接线区）', () => {
     expect(objectBody(MAIN_CODE, CB_HEAD), 'cb 是 G4 的收口范围，必须与基线不同')
       .not.toBe(objectBody(before, CB_HEAD));
 
-    // ② 真正的判据：G4 **不碰**的四个邻居必须逐字节相同
+    // ② 真正的判据：G4 **不碰**的三个邻居必须逐字节相同
     //    （`resetToMainInterface` **不在**这一组：第 10 条本来就要改它）
-    for (const name of ['consentStep', 'showCoin', 'showHome', 'showModeSelect']) {
+    //
+    // ── G5/T8 的豁免：`showModeSelect` 从这一组**移出**（D24 ③）─────────────────
+    // 它**不是**放松，而是这条腿**自己那套写法**的第二次应用：被授权的合法修改者会被显式移出。
+    // 依据两条：
+    //  1. 计划 §5 T8 明写"在 `startNetPreview` 旁边加真正的联机入口"，而那个入口（`startNetLobby`）
+    //     就住在 `showModeSelect` 里调 `renderModeSelect(root, {...})` 的那个 `nav` 实参上 ⇒
+    //     **本函数体必然变**；
+    //  2. 这条腿的注释里**早就有先例**：「`resetToMainInterface` **不在**这一组：第 10 条本来就
+    //     要改它」—— 同一形状：G4 的收口范围之外出现了**另一轮被明确授权**的改动，就把它移出。
+    //
+    // ⚠️ **明确不做的事**：不许把这条腿改成"两边可以不同"—— 那会让 G4 的范围守卫**永久失效**
+    // （它对 G4 之后的所有改动都不再有区分能力）。所以下面 `showModeSelect` 只**移出**，不换写法；
+    // 而它的"改动确实来自 T8、且没有溢出"由 `tests/ui/main-lobby-wiring.test.ts` 自己那几条腿兜。
+    for (const name of ['consentStep', 'showCoin', 'showHome']) {
       const now = functionBody(MAIN_CODE, name);
       const then = functionBody(before, name);
       expect(now.length, `${name} 抽到空片段`).toBeGreaterThan(50);
@@ -1074,5 +1087,14 @@ describe('接线腿：main.ts（showLocalData 接线区）', () => {
       expect(now, `${name} 在 G4 的收口里被改动了（改动溢出到 rerender/cb/applyRearrangeSwap/resetToMainInterface 之外）`)
         .toBe(then);
     }
+    // 移出 ≠ 不查：`showModeSelect` 必须真的变过（否则"移出"就成了一次静默放行），
+    // 且它的变化**只许**来自 T8 的联机入口（符号面自证：基线里没有它们）。
+    const modeNow = functionBody(MAIN_CODE, 'showModeSelect');
+    expect(modeNow.length, 'showModeSelect 抽到空片段').toBeGreaterThan(50);
+    expect(modeNow, 'showModeSelect 与 G4 基线逐字节相同 ⇒ 它没有理由被移出这一组（那这次移出就是放松）')
+      .not.toBe(functionBody(before, 'showModeSelect'));
+    expect(modeNow, 'showModeSelect 里没有 T8 的联机入口 ⇒ 移出的理由是假的').toContain('startNetLobby');
+    expect(functionBody(before, 'showModeSelect'), '基线里已经有 startNetLobby ⇒ 这不是"G4 之前"的基线')
+      .not.toContain('startNetLobby');
   });
 });

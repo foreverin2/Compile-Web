@@ -1,0 +1,215 @@
+/*
+ * 联机大厅（G5 T8，`src/ui/net-lobby.ts`）的样式。**新文件**，只服务这一个屏。
+ *
+ * ## 类名纪律（写在这里，因为它是被机检钉住的事实）
+ *
+ * 本文件里**只出现** `net-lobby-` 前缀的类名（外加两条无类的裸元素规则之外一个都没有）。
+ * 理由有两条，第二条是硬的：
+ *  1. 与 `styles-local.css` 同款的理由：新屏的样式不许与 `styles.css` 的选择器撞名，
+ *     撞了就会让热座页/远程页的观感连带变化（而那种变化不报任何错）；
+ *  2. `tests/ui/net-body-layer-rules.test.ts:111-118` 那条腿要求 `src/ui/*.css` 的**全集**必须
+ *     被显式归类。本表被写进它的 `EXCLUDED_SOURCES`，而写进去的理由必须站得住：
+ *     **本文件的每一条选择器都带 `net-lobby-` 前缀类，而那条腿解算的两条链只关心
+ *     `.board` / `.board-grid` / `.player-strip` / `.hand` / `.card` / `.net-*` / `.smoke-puff` /
+ *     `.scan-overlay` 这一族** —— 两者不可能相交。另外，大厅是**独立屏**
+ *     （`renderNetLobby` 自己清 root），与棋盘节点**不同时**在屏上。
+ *
+ * ## 两条硬约束（任务书 §1.3 第 3 条要求写进文件头）
+ *
+ *  1. **`main.ts` 里本表的 import 必须排在 `styles-net.css` 之后**。同权重时靠后者胜 ——
+ *     那正是浏览器里发生的事，也是 `net-body-layer-rules.test.ts` 的层叠模型建模的东西。
+ *     排在前面会让本表在两者都命中时被覆盖（今天两者不命中同一族节点，但"不命中"这件事
+ *     依赖上面那条类名前缀纪律，而不是依赖顺序 —— 顺序只是第二道保险）。
+ *  2. **不许出现 `!important`、ID 选择器（`#…`）、内联覆盖**。那条层叠模型的解析器**不建模**
+ *     这三样，写了它们就等于在模型的视野之外改层叠（`net-board-grid.test.ts:384-388` 有同款前提腿）。
+ *
+ * ## 视觉语言
+ *
+ * 对齐既有的 `.consent-screen` / `.mode-screen`：深底 + `#00ffcc` 主色 + 12px 圆角 + rgba 面板。
+ * 大厅是"整屏屏"，不是 `position:fixed` 覆盖层（本仓有过 `document.body` 级浮层残留的惨痛历史）。
+ */
+
+.net-lobby-screen {
+  position: relative;
+  width: 100%;
+  min-height: 100vh;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 48px 20px 72px;
+  background: radial-gradient(120% 90% at 50% 0%, #141430 0%, #0b0b16 62%, #07070f 100%);
+  color: #eef;
+}
+
+.net-lobby-title {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  color: #00ffcc;
+}
+
+.net-lobby-back {
+  align-self: flex-start;
+}
+
+.net-lobby-h2 {
+  margin: 0 0 6px;
+  font-size: 17px;
+  font-weight: 600;
+  color: #cfe;
+}
+
+.net-lobby-h3 {
+  margin: 10px 0 4px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #bcd;
+}
+
+.net-lobby-note,
+.net-lobby-relay-hint,
+.net-lobby-endpoint {
+  margin: 0;
+  max-width: 720px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: #9aa;
+}
+
+/* ── 两个入口 ─────────────────────────────────────────────────────── */
+
+.net-lobby-pick {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  max-width: 720px;
+}
+
+/* ── 邀请码 / 加入两栏 ────────────────────────────────────────────── */
+
+.net-lobby-invite,
+.net-lobby-join-box,
+.net-lobby-status,
+.net-lobby-advanced {
+  width: 100%;
+  max-width: 720px;
+  box-sizing: border-box;
+  padding: 16px 18px;
+  border: 1px solid #4a4a68;
+  border-radius: 12px;
+  background: rgba(24, 24, 48, 0.85);
+}
+
+.net-lobby-invite-link,
+.net-lobby-invite-payload {
+  margin: 4px 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  word-break: break-all;
+  color: #9fe;
+}
+
+.net-lobby-invite-length,
+.net-lobby-qr-note {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #99a;
+}
+
+.net-lobby-code,
+.net-lobby-paste {
+  margin-bottom: 10px;
+}
+
+.net-lobby-code-input,
+.net-lobby-paste-input,
+.net-lobby-turn-url-input,
+.net-lobby-turn-user-input,
+.net-lobby-turn-cred-input {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 420px;
+  margin: 4px 0 8px;
+  padding: 8px 10px;
+  border: 1px solid #4a4a68;
+  border-radius: 8px;
+  background: rgba(10, 10, 22, 0.9);
+  color: #eef;
+  font-size: 14px;
+}
+
+.net-lobby-code-gate,
+.net-lobby-error,
+.net-lobby-notice {
+  margin: 8px 0 0;
+  max-width: 720px;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+/* 错误与提示用**文字色**区分，不用图标（本仓任何文本都不用表情符号） */
+.net-lobby-error {
+  color: #ff9a9a;
+}
+
+.net-lobby-notice {
+  color: #ffd48a;
+}
+
+/* ── 连接状态 ─────────────────────────────────────────────────────── */
+
+.net-lobby-link {
+  margin: 0 0 6px;
+  font-size: 14px;
+  line-height: 1.75;
+  color: #dfe;
+}
+
+.net-lobby-phase {
+  margin: 0;
+  font-size: 12px;
+  color: #99a;
+}
+
+/* ── 高级 / 连接设置（默认折叠：内容不进 DOM） ────────────────────── */
+
+.net-lobby-advanced-toggle {
+  cursor: pointer;
+}
+
+.net-lobby-advanced-panel {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #34345a;
+}
+
+.net-lobby-field {
+  display: block;
+  margin: 8px 0;
+  font-size: 13px;
+  color: #bcd;
+}
+
+.net-lobby-field-label {
+  display: block;
+  margin-bottom: 2px;
+}
+
+.net-lobby-relay-note {
+  margin: 10px 0 0;
+  max-width: 720px;
+  padding: 10px 12px;
+  border: 1px solid #2f6f63;
+  border-radius: 8px;
+  background: rgba(0, 255, 204, 0.06);
+  font-size: 13px;
+  line-height: 1.75;
+  color: #cfd;
+}
