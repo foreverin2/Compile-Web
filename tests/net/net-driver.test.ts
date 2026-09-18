@@ -15,28 +15,40 @@
  *
  * 除五条判据之外，文件里另有几条**边界腿**（它们不属于判据，但少了就会有"不报错的停摆"）：
  * 走线帧的两处 `seq` 一致（`decodeMsg` 真的被喂过）、入站坏帧的三种处置
- * （序号错位 / 解不出来 / 非 `act` 放行）、链路状态转发与退订。全文 18 条腿。
+ * （序号错位 / 解不出来 / 非 `act` 放行）、链路状态转发与退订、入站队列深度读数
+ * （`pendingCount()`）、`send` 三种失败来源都落到 `'offline'`、以及**座位守卫**那条（判据 2 里）。
+ * 全文 **24 条腿**。
  *
- * ## 60 步差分腿的具体形状（判据 1）
+ * ## ★ 判据 1 的**牙长在哪**（T5 阶段一评审实测后更正，务必读这一段再看那个 `describe`）
  *
- *  - 两端**各自**从 `createGame({ seed })` + 同一套草稿策略起跑（**不是**一方把状态复制给另一方）；
- *  - 每一步都用**本端当前状态**上的确定性策略算"下一条该谁动、动什么"，再调那一端的 `submit`；
- *  - `pump(ACT_LATENCY_TICKS)` 推进 fake 传输（缺省延迟 1 ⇒ 第 0 步发出的帧到第 2 步才交付，
- *    见 `ACT_LATENCY_TICKS` 的注释：这里第一次写的就是 `pump(1)`，当场踩红）；
- *  - **每一步之后**用 `stateFingerprint`（`src/core/fingerprint.ts:50`，全仓唯一的状态指纹出处）
- *    取两端指纹并断言相等 —— 60 次比对，不是只在最后比一次。
+ * 这条腿声称的是"每一步之后两端指纹相等"，但它的判据是**"两端相等"**，因此：
  *
- * 指纹来自 `src/core/fingerprint.ts` 的 `stateFingerprint`，**不自己拼**（判据 1 的原文）。
+ *  1. 它抓得住**不对称**的错：一端落地、另一端没落地（变异 M2 / 评审的 V2、V7 都红在
+ *     `第 N 步之后两端指纹必须相等` 那一句上）。这是它真实的能力。
+ *  2. 它**抓不住"两端都错、且错得一样"**：变异 M1（两端都只推进序号、都不落地）在位时，
+ *     那 60 次指纹比对**一次都没红** —— 两端都冻在开局、次次相等。
+ *     评审的实证：把本文件的前缀另接一条"只比指纹、去掉全部反空转"的腿，M1 在位时它**全绿**。
+ *  3. 它**只在一个瞬间取样**，因此抓不住"每一步都迟一拍、但永远迟得一样多"的实现：
+ *     比对发生在 `submit -> pump(2) -> arm` 之后，而 `pump` 只推进 tick（第 k 步的帧要到
+ *     下一次 pump 才交付）⇒ 第 k 步比的是"两端都还没应用第 k 步"的同步瞬间。
+ *     ⚠️ 这是这条腿的**能力边界**，不是缺陷 —— 但在读到"60 次都相等"时要知道它保证的是什么。
  *
- * ## 为什么"每一维都要有非平凡的动作"
+ * ⇒ **那四句反空转断言是判据 1 的牙，不是锦上添花**：
+ * `appliedSteps() === 60`（两端）、`players` 恰为 `[0, 1]`、`kinds` 必须覆盖
+ * `REQUIRED_KINDS[seed]` 里的每一项、`new Set(fingerprints).size > 30`。
+ * 删掉它们，判据 1 就退化成一条"60 次比较同一个值"的恒真腿，而 60 步循环照跑、照绿。
+ * 谁哪天为了"跑得快"动它们，请先看这一段。
+ * （M1 另外还有两条直接的牙：判据 1 里"**只 `arm` 不 `submit`**"那条腿，
+ * 以及独立探针 `.superpowers/g5-T5/probes/` 里的探针 M1。）
  *
- * 60 步里若全是 `advance`，那"两端相等"证明的东西很薄。所以断言里有反空转：步数恰为 60、
- * 两个座位都动过、操作种类 ≥ 4、以及 60 步的指纹取值数 > 30（不然"60 次比较"比的是同一个值）。
+ * ## 为什么"每一维都要有非平凡的动作"（逐局要求，不是全局阈值）
  *
- * **4 这个数不是拍的**：本文件用同一条策略普查了 8 个种子（`.superpowers/g5-T5/` 的探索件），
- * 每一个都恰好给出 4 种 —— `advance` / `play` / `effect-choice` 三种必有，第四种在
- * `resolve-trigger` 与 `refresh`（`g5-t5-theta` 是 `compile`）之间随种子变。
- * ⇒ 阈值写 5 会变成"必须换到某个特定种子才绿"，那是在测种子而不是测驱动。
+ * 60 步里若全是 `advance`，那"两端相等"证明的东西很薄。所以反空转是**按局**断言的：
+ * 每一局必须覆盖它自己那一格 `REQUIRED_KINDS`。全局写"种类 ≥ 4"会让"某一局的某一维一次都没走到"
+ * 永远不被发现 —— 实测就是如此：`g5-t5-gamma` 那一局里 `compile` **一次都没有**，
+ * 而当时的全局阈值照样绿。⇒ 本文件用两个种子：`g5-t5-gamma`（含 `resolve-trigger`）与
+ * `g5-t5-theta`（含 `compile`），两条腿各自钉住自己那一格。
+ *
  * 本文里出现的具体数字都是这次跑出来的，**换种子要重测**。
  */
 
@@ -50,7 +62,8 @@ import type { NetDriver } from '../../src/net/net-driver';
 import { createFakeTransportPair } from '../../src/net/fake-transport';
 import type { FakeTransportPair } from '../../src/net/fake-transport';
 import { decodeMsg } from '../../src/net/protocol';
-import { createMatchFileRecorder, setupFromState } from '../../src/app/match-file';
+import type { NetChannel } from '../../src/net/transport';
+import { createMatchFileRecorder, normalizeAction, setupFromState } from '../../src/app/match-file';
 import type { ActionRecord, MatchFileRecorder } from '../../src/app/match-file';
 import { createGame, draftNextAction, getDraftPool, performDraftPick, performDraftBan } from '../../src/core/state/create';
 import { getLegalActions, type LegalAction } from '../../src/core/game';
@@ -101,15 +114,48 @@ function opening(seed: string): GameState {
 const ACT_LATENCY_TICKS = 2;
 
 /**
- * 本文件统一用的种子。**选它的理由是实测出来的**（`.superpowers/g5-T5/` 的探索件，
- * 6 个候选种子里只有它同时满足下面几条；换种子必须重测并重写这里的数字）：
+ * 本文件统一用的种子。选它的理由是实测出来的（`.superpowers/g5-T5/` 的探索件；换种子必须重测）：
  *  - 60 步走得完（没有在第 60 步之前终局）；
  *  - 两个座位**都**有操作（30 : 30）；
- *  - 操作种类 ≥ 5（`advance` / `play` / `compile` / `effect-choice` …），
+ *  - 操作种类 ≥ 4（`advance` / `play` / `effect-choice` / `resolve-trigger`），
  *    这样判据 1 的"每步指纹相等"才不是"60 次 advance 相等"；
  *  - 开局第一步的行动方是 **P0**（host）—— 判据 2 的"让另一端提交"因此有一个确定的对象。
+ *
+ * ⚠️ 它**不含 `compile`**（T5 阶段一评审实测：`{advance:46, play:9, effect-choice:4,
+ * resolve-trigger:1}`）⇒ `compile` 那一维由 `G5_T5_SEED_WITH_COMPILE` 那一局补。
  */
 const G5_T5_SEED = 'g5-t5-gamma';
+
+/**
+ * 判据 1 用的**第二份档案**的种子。
+ *
+ * ## 为什么需要第二个种子（T5 阶段一评审的发现）
+ *
+ * 评审普查了 `G5_T5_SEED`（`g5-t5-gamma`）的 kind 分布：
+ * `{"advance":46,"play":9,"effect-choice":4,"resolve-trigger":1}` —— **`compile` 一次都没有**。
+ * 而判据 1 原来的反空转只断言"操作种类 ≥ 4"，所以 `compile` 那条分支在判据 1 里
+ * **从未被走过**。我按同一条策略普查了 8 个种子（探查件
+ * `.superpowers/g5-T5/probes/seed-kinds.test.ts`，命令与原始输出见报告），
+ * 其中 `g5-t5-theta` 的分布是 `{"advance":39,"play":9,"effect-choice":8,"compile":4}` —— 含 `compile`。
+ * ⇒ 第二个种子不是"多跑一遍"，它**专门补上 `compile` 这一维**；两条腿各自断言自己那一局
+ * 必须出现哪些 kind（见 `REQUIRED_KINDS`），所以"哪一局补哪一维"是机械可查的，不靠人记。
+ */
+const G5_T5_SEED_WITH_COMPILE = 'g5-t5-theta';
+
+/**
+ * 每个种子**必须**出现的操作种类（判据 1 的反空转按它**逐局**断言）。
+ *
+ * 为什么写成"逐局要求"而不是"全局 ≥ N"：全局阈值会让"某一局的某一维一次都没走到"
+ * 永远不被发现 —— 这正是 `compile` 今天的状态（评审发现的那一条）。
+ * 表里的名字是**样本反推**的实测值，不是手写清单：
+ *  - `g5-t5-gamma`：`advance` 46 / `play` 9 / `effect-choice` 4 / `resolve-trigger` 1；
+ *  - `g5-t5-theta`：`advance` 39 / `play` 9 / `effect-choice` 8 / `compile` 4。
+ * 数字是这次跑出来的，**换种子必须重测并改这张表**。
+ */
+const REQUIRED_KINDS: Record<string, readonly string[]> = {
+  [G5_T5_SEED]: ['advance', 'play', 'effect-choice', 'resolve-trigger'],
+  [G5_T5_SEED_WITH_COMPILE]: ['advance', 'play', 'effect-choice', 'compile'],
+};
 
 /** 挂起选择的首选答案（与 `tests/helpers.ts:19` 的 `pickFirst` 同口径，这里复制一份以免跨文件耦合） */
 function pickFirst(prompt: {
@@ -239,65 +285,183 @@ function arrive(pair: FakeTransportPair, receiver: Endpoint): void {
  * 判据 1（★）：60 步差分腿
  * ------------------------------------------------------------------ */
 
+/**
+ * 走完 60 步，返回这一局观测到的读数（kind 集合、座位集合、每一步之后的指纹）。
+ *
+ * 提出来是为了让"两个种子各跑一遍"共用同一条腿体：若两条腿各抄一份循环，
+ * 两份就可能各自漂移（本仓"同一份 switch 抄两处"那一族的同形）。
+ * 它只做一件事之外的一切：**不做反空转断言** —— 那些单独放在 `assertNonVacuous` 里，
+ * 这样"哪条腿红"始终对应"哪一条主张不成立"。
+ */
+function walk60With(
+  pair: FakeTransportPair,
+  host: Endpoint,
+  guest: Endpoint,
+): { kinds: Set<string>; players: Set<number>; fingerprints: string[] } {
+  const kinds = new Set<string>();
+  const players = new Set<number>();
+  const fingerprints: string[] = [];
+  // 两端都先递一次状态：驱动不持有状态，`arrive` 那一侧才知道"轮到谁"
+  host.driver.arm(host.s);
+  guest.driver.arm(guest.s);
+  for (let step = 0; step < 60; step += 1) {
+    const { ep, a } = actorOf(host, guest, step);
+    const peer = ep === host ? guest : host;
+    const r = ep.driver.submit(ep.s, a);
+    expect(r.ok, `第 ${step} 步的 submit 必须成功（${a.player}:${a.kind}）`).toBe(true);
+    // 让帧到达对端，并让对端把收到的帧落地（见 `arrive` 的注释：这一下不能省）
+    arrive(pair, peer);
+    // ★ 判据 1 的核心：**每一步之后**都取一次两端的 stateFingerprint
+    const fpHost = stateFingerprint(host.s);
+    const fpGuest = stateFingerprint(guest.s);
+    expect(fpHost, `第 ${step} 步之后两端指纹必须相等（${a.player}:${a.kind}）`).toBe(fpGuest);
+    fingerprints.push(fpHost);
+    kinds.add(a.kind);
+    players.add(a.player);
+  }
+  return { kinds, players, fingerprints };
+}
+
+/**
+ * 判据 1 的**反空转断言**（同一个种子共用一份：两条腿的牙必须一模一样）。
+ *
+ * ⚠️ **这四句是判据 1 的牙，不是锦上添花**（T5 阶段一评审的实测结论，详见文件头）：
+ * 差分腿判的是"两端相等"，所以"两端都只推进序号、都不落地"（变异 M1）在位时，
+ * 那 60 次指纹比对**一次都没红**，红的就是下面这四句。删掉它们，判据 1 会退化成
+ * 一条"60 次比较同一个值"的恒真腿，而 60 步循环照跑、照绿。
+ *
+ * 逐条为什么不可删：
+ *  - `appliedSteps() === 60`：两端步数都要走到 60 —— 抓"什么都没发生"（M1 的第一个症状）。
+ *  - `players` 恰为 `[0, 1]`：两个座位都要真的动过 —— 抓"只有本端在走"。
+ *  - `kinds ⊇ REQUIRED_KINDS[seed]`：**逐局**要求，抓"某一维一次都没走到"
+ *    （评审实测：`g5-t5-gamma` 那局的 `compile` 一次都没有）。
+ *  - `new Set(fingerprints).size > 30`：指纹不许退化成常数 —— 否则"60 次相等"毫无信息。
+ */
+function assertNonVacuous(
+  seed: string,
+  host: Endpoint,
+  guest: Endpoint,
+  observed: { kinds: Set<string>; players: Set<number>; fingerprints: string[] },
+): void {
+  expect(host.driver.appliedSteps(), '走完的步数').toBe(60);
+  expect(guest.driver.appliedSteps(), '两端已应用步数必须相同').toBe(60);
+  expect([...observed.players].sort(), '两个座位都必须动过').toEqual([0, 1]);
+  const required = REQUIRED_KINDS[seed];
+  expect(required, `REQUIRED_KINDS 里必须有 ${seed} 这一格（新加种子时要补表）`).toBeDefined();
+  // 每局都把自己的 kind 分布打出来：`REQUIRED_KINDS` 这张表必须能由这条输出复算，
+  // 而不是我自己抄一遍（第一版我在探针里手抄了一份策略，结果普查出的分布与这条腿对不上）。
+  console.log(`KINDS seed=${seed} ${JSON.stringify([...observed.kinds].sort())}`);
+  for (const kind of required) {
+    expect(
+      [...observed.kinds].includes(kind),
+      `seed=${seed} 这一局必须走出 ${kind}（实际 ${[...observed.kinds].sort().join('/')}）`,
+    ).toBe(true);
+  }
+  expect(new Set(observed.fingerprints).size, '60 步的指纹不该只有少数几个值').toBeGreaterThan(30);
+  // 终局的最后一步之后仍然相等（循环里已经比过，这里再钉一次"事后"）
+  expect(stateFingerprint(host.s)).toBe(stateFingerprint(guest.s));
+}
+
 describe('判据 1（★）：两端接 fake 传输，确定性走 60 步，每一步之后两端指纹相等', () => {
-  it('60 步 / 每一步都比对 stateFingerprint / 非平凡（两个座位 + 至少 4 种 kind）', async () => {
+  it(`60 步 / 逐局覆盖 kind（seed=${G5_T5_SEED}：含 resolve-trigger）`, async () => {
     const seed = G5_T5_SEED;
     const { pair, host, guest } = await makePair(seed);
-
     // 起跑点必须一致（否则后面的"每一步都相等"从一开始就是假的）
     expect(stateFingerprint(host.s), '两端起跑指纹必须相同').toBe(stateFingerprint(guest.s));
+    const observed = walk60With(pair, host, guest);
+    assertNonVacuous(seed, host, guest, observed);
+  });
 
-    const kinds = new Set<string>();
-    const players = new Set<number>();
-    const fingerprints: string[] = [];
+  it(`60 步 / 逐局覆盖 kind（seed=${G5_T5_SEED_WITH_COMPILE}：补 compile 这一维）`, async () => {
+    const seed = G5_T5_SEED_WITH_COMPILE;
+    const { pair, host, guest } = await makePair(seed);
+    expect(stateFingerprint(host.s), '两端起跑指纹必须相同').toBe(stateFingerprint(guest.s));
+    const observed = walk60With(pair, host, guest);
+    assertNonVacuous(seed, host, guest, observed);
+  });
 
-    // 两端都先递一次状态：驱动不持有状态，`arrive` 那一侧才知道"轮到谁"
+  /**
+   * ★ **只 `arm`、不 `submit`**（T5 阶段一评审交办的第 3 条；评审的 V1 实证：
+   * 把 `arm` 里的 `drain(s)` 删掉，原来 22 条腿**全绿**）。
+   *
+   * 它为什么必须单独一条：
+   *  - `arrive()` 之后紧跟着下一次 `submit`，而 `submit` 自己也会 `drain` ⇒ 原来没有任何一条腿
+   *    区分"`arm` 真的落地了"与"下一次 `submit` 顺手排空了"；
+   *  - 于是 `arm` 的文档承诺（"宿主必须在帧到达之后把状态递进来，不能只靠 `submit`"）
+   *    是一句**没有腿的断言**；
+   *  - 它同时把"对端真的调用了 `applyRecordedAction`"从判据 1 的**间接**证明
+   *    （反空转的副产物）变成一条**直接的语义断言** —— 这正是评审在 §3.1 拆开的那个间接性。
+   *
+   * 这条腿不调 `submit`、不调 `arrive`，只调 `pump` + `arm`。
+   */
+  it('★ 只 arm 不 submit：对端也必须把收到的帧落地（arm 的承诺要有腿）', async () => {
+    const seed = G5_T5_SEED;
+    const { pair, host, guest } = await makePair(seed);
     host.driver.arm(host.s);
     guest.driver.arm(guest.s);
 
-    for (let step = 0; step < 60; step += 1) {
-      const { ep, a } = actorOf(host, guest, step);
-      const peer = ep === host ? guest : host;
-      const r = ep.driver.submit(ep.s, a);
-      expect(r.ok, `第 ${step} 步的 submit 必须成功（${a.player}:${a.kind}）`).toBe(true);
-      // 让帧到达对端，并让对端把收到的帧落地（见 `arrive` 的注释：这一下不能省）
-      arrive(pair, peer);
-      // ★ 判据 1 的核心：**每一步之后**都取一次两端的 stateFingerprint
-      const fpHost = stateFingerprint(host.s);
-      const fpGuest = stateFingerprint(guest.s);
-      expect(fpHost, `第 ${step} 步之后两端指纹必须相等（${a.player}:${a.kind}）`).toBe(fpGuest);
-      fingerprints.push(fpHost);
-      kinds.add(a.kind);
-      players.add(a.player);
-    }
+    // 本端走一步（这一步会真的上线）
+    const { ep, a } = actorOf(host, guest, 0);
+    const peer = ep === host ? guest : host;
+    const peerBefore = stateFingerprint(peer.s);
+    expect(ep.driver.submit(ep.s, a).ok, '本端这一步必须成功').toBe(true);
+    expect(peer.driver.appliedSteps(), '对端此刻还没收到，步数必须是 0').toBe(0);
 
-    // 反空转：步数、座位、操作种类都要真的出现过，否则"指纹相等"很容易因为"什么都没发生"而恒真
-    expect(host.driver.appliedSteps(), '走完的步数').toBe(60);
-    expect(guest.driver.appliedSteps(), '两端已应用步数必须相同').toBe(60);
-    expect([...players].sort(), '两个座位都必须动过').toEqual([0, 1]);
-    expect(kinds.size, `操作种类太少（实际 ${[...kinds].sort().join('/')}）`).toBeGreaterThanOrEqual(4);
-    // 指纹不许退化成常数（那会让上一条断言变成"60 次比较同一个值"）
-    expect(new Set(fingerprints).size, '60 步的指纹不该只有少数几个值').toBeGreaterThan(30);
-    // 终局的最后一步之后仍然相等（循环里已经比过，这里再钉一次"事后"）
-    expect(stateFingerprint(host.s)).toBe(stateFingerprint(guest.s));
+    // 只做两件事：让帧到达 + 把状态交给对端。**不**调对端的 submit。
+    pair.pump(ACT_LATENCY_TICKS);
+    peer.driver.arm(peer.s);
+
+    // 直接断言语义落地（不是"下一次 submit 顺手排空"的副产物）
+    expect(peer.driver.appliedSteps(), 'arm 必须把收到的帧落地（只 arm、不 submit）').toBe(1);
+    expect(stateFingerprint(peer.s), '对端的状态必须真的变了').not.toBe(peerBefore);
+    expect(stateFingerprint(peer.s), '两端指纹必须相等').toBe(stateFingerprint(ep.s));
+    expect(peer.driver.pendingCount(), '落地之后队列必须空').toBe(0);
+    // 反向自证：对端这时**确实**还能提交下一步（说明它没被别的东西挡住，是 arm 干的活）
+    expect(peer.driver.lastFailure(), '落地的路上不该留下诊断').toBeNull();
   });
 
-  it('主机的记录器里是完整的 60 条（两端记录同一条序列），从机可以是 null', async () => {
+  it('主机记录器逐条等于提交序列（T6 resync 的凭据不能只是"条数对"）', async () => {
     const seed = G5_T5_SEED;
     const { pair, host, guest } = await makePair(seed);
     expect(host.recorder, '主机必须有记录器').not.toBeNull();
     expect(guest.driver.recorder(), '从机可以是 null').toBeNull();
+
+    // 记下**本端提交的那条序列**（这才是"档案应该长什么样"的唯一出处）
+    const submitted: Omit<ActionRecord, 'seq'>[] = [];
+    host.driver.arm(host.s);
+    guest.driver.arm(guest.s);
     for (let step = 0; step < 60; step += 1) {
       const { ep, a } = actorOf(host, guest, step);
       const peer = ep === host ? guest : host;
+      submitted.push(normalizeAction({ ...a, seq: step }));
       expect(ep.driver.submit(ep.s, a).ok).toBe(true);
       arrive(pair, peer);
     }
+
     const actions = host.recorder!.actions();
     expect(actions.length, '主机记录器里的条数').toBe(60);
     // `seq` 必须是 0..59 且严格递增 —— 记录器的编号是它自己的事（本驱动不覆盖它）
     expect(actions.map((x) => x.seq)).toEqual([...Array(60).keys()]);
-    // 记录器里的序列必须真的来自两个座位（不是"只有本端"）
+
+    // ★ 逐条比对（不只是条数 + 两个座位）：评审的 V3（对端落地但**不进记录器**）
+    //   今天只被"条数 34 !== 60"这一句**计数**抓住，而记录器是 D8 给 T6 resync 的凭据,
+    //   "少了 26 条"与"某一条被换成别的操作"在计数上同形。所以这里比到**值**这一层。
+    //   比什么：`player` + `kind` + `normalizeAction` 之后的 `args`（深比，靠 `toEqual`）。
+    //   不比 `via`：它是档案层元数据、本驱动按 `'user'` 补，不是"提交序列"的一部分。
+    expect(
+      actions.map((x) => ({ player: x.player, kind: x.kind, args: normalizeAction(x).args })),
+      '记录器必须**逐条**等于本端提交的那条序列（uid 序列与 kind 序列一起比）',
+    ).toEqual(submitted.map((x) => ({ player: x.player, kind: x.kind, args: normalizeAction({ ...x, seq: 0 }).args })));
+
+    // 两句话分开写，红了能立刻看出是"位置错"还是"内容错"
+    expect(actions.map((x) => x.kind), 'kind 序列').toEqual(submitted.map((x) => x.kind));
+    expect(
+      actions.map((x) => (x.args as { cardUid?: string; promptId?: string } | undefined)?.cardUid ?? (x.args as { promptId?: string } | undefined)?.promptId ?? null),
+      'uid 序列（`play` 的 cardUid / `effect-choice` 的 promptId；无参 kind 记 null）',
+    ).toEqual(
+      submitted.map((x) => (x.args as { cardUid?: string; promptId?: string } | undefined)?.cardUid ?? (x.args as { promptId?: string } | undefined)?.promptId ?? null),
+    );
+    // 两个座位都要有（这条是**辅助**，不能替代上面的逐条比对 —— 34 条里各一条也满足它）
     expect(new Set(actions.map((x) => x.player)).size, '记录器里要有两个座位的操作').toBe(2);
   });
 
@@ -359,6 +523,92 @@ describe('判据 2：非本端回合 ⇒ not-the-next-action；断线 ⇒ offlin
     expect(r.refusal, 'D16：断线的拒绝码必须是 offline').toBe('offline');
     expect(stateFingerprint(ep.s), '离线时不许本地应用').toBe(before);
     expect(ep.driver.appliedSteps(), '离线时步数不许前进').toBe(0);
+  });
+
+  /**
+   * ★ **座位守卫的永久腿**（T5 阶段一评审交办的**第 1 条**，也是这一轮最重要的补丁）。
+   *
+   * ## 为什么原来那条"不是本端的回合"腿没有牙
+   *
+   * 那条腿（上一条）让 `other` 去提交**同一条** `a`，而 `a` 本来就是按开局状态算出来的
+   * ⇒ `liveTurn(other.s, a.player)` 里 `turnPlayer === a.player`，所以**不管有没有座位守卫**
+   * 都会被 `liveTurn` 拒成同一个码 `'not-the-next-action'`。
+   * ⇒ 它对座位守卫**零区分能力**。评审实测：删掉座位守卫，原来 22 条腿**全绿**。
+   *
+   * ## 真正的坏输入长什么样
+   *
+   * **让从机去提交主机的那条"当前该走"的操作** —— 而这条操作恰好也"通过"从机眼里的回合检查
+   * （从机手里的状态里 `turnPlayer` 就是主机）。没有座位守卫时：
+   * `liveTurn` 放行 ⇒ `encodeMsg` 成功 ⇒ `send` 成功 ⇒ **从机在自己的状态上把主线走了一步**，
+   * 并把这条已经不再合法的操作发给主机；主机当时正等第 0 条、`seq` 也对得上 ⇒ 主机**会**应用它
+   * ⇒ 两端从这里**永久分叉**。它不会被"序号错位"挡住。
+   *
+   * ## 这条腿断言四件事（删掉座位守卫必须红在其中之一）
+   *
+   * ① 拒绝码是 `'not-the-next-action'`；② 从机的 `appliedSteps()` 仍是 0；
+   * ③ 从机的状态指纹一字未动；④ 线上**没有**因为这次调用多出一帧（"没发出去"的旁证）。
+   */
+  it('★ 座位守卫：从机提交主机的**当前**操作必须被拒（删掉守卫这条腿必红）', async () => {
+    const seed = G5_T5_SEED;
+    const { pair, host, guest } = await makePair(seed);
+    host.driver.arm(host.s);
+    guest.driver.arm(guest.s);
+
+    // 夹具前提：开局第一步是 host（P0）的，且它现在是合法操作
+    const { ep, a } = actorOf(host, guest, 0);
+    expect(ep, '夹具前提：第 0 步必须轮到 host').toBe(host);
+    expect(a.player, '夹具前提：这条操作的主人是 host').toBe(0);
+
+    const guestBefore = stateFingerprint(guest.s);
+    const framesBefore = pair.steps().length;
+
+    // ★ 让**从机**提交这条**主机的当前操作**
+    const r = guest.driver.submit(guest.s, a);
+
+    expect(r.ok, '从机提交主机当前操作必须被拒').toBe(false);
+    expect(r.refusal, '① 拒绝码').toBe('not-the-next-action');
+    expect(guest.driver.appliedSteps(), '② 从机步数不许前进').toBe(0);
+    expect(stateFingerprint(guest.s), '③ 从机状态一字未动').toBe(guestBefore);
+    expect(pair.steps().length, '④ 线上不许因为这次调用多出一帧').toBe(framesBefore);
+    // 两端仍然同步（没有分叉）—— 这才是这条坏输入真正的危害所在
+    expect(stateFingerprint(host.s), '两端不许因为这次调用分叉').toBe(stateFingerprint(guest.s));
+
+    // 反空转：同一条操作由**主机自己**提交则必须成功（否则上一条"被拒"可能只是操作不合法）
+    expect(host.driver.submit(host.s, a).ok, '同一条操作由主机提交必须成功').toBe(true);
+  });
+
+  it('本端发送失败（含 queue-full）也归到 offline：不新增拒码，但三个来源都要能落到这里', async () => {
+    const seed = G5_T5_SEED;
+    const { pair, host, guest } = await makePair(seed);
+    const { ep, a } = actorOf(host, guest, 0);
+    const peer = ep === host ? guest : host;
+    ep.driver.arm(ep.s);
+    peer.driver.arm(peer.s);
+
+    // 让传输**只在这一条腿期间**回报发送失败。为什么可以这样桩：
+    // fake 传输**永不**返回 `'queue-full'`（`transport.ts:99-101` 自己写着这一点），
+    // 所以"积压 ⇒ 归到 offline"这条分支在 fake 上没有任何输入能碰到 ——
+    // 不桩它，这条分支就是一句没有腿的断言。
+    const realSend = ep.driver.transport.send;
+    const before = stateFingerprint(ep.s);
+    (ep.driver.transport as { send: typeof realSend }).send = () => ({
+      ok: false,
+      reason: 'queue-full',
+      message: '本端待发队列积压（由测试桩制造）。',
+    });
+    try {
+      const r = ep.driver.submit(ep.s, a);
+      expect(r.ok, '发送失败必须是拒绝').toBe(false);
+      expect(r.refusal, '裁决：不新增拒码，queue-full 也归 offline').toBe('offline');
+      // 与"对端不可达"同一条取向：**不许**本地应用（本地应用 = 静默分叉）
+      expect(stateFingerprint(ep.s), '发不出去就不许本地应用').toBe(before);
+      expect(ep.driver.appliedSteps(), '发失败时步数不许前进').toBe(0);
+      expect(ep.driver.pendingCount(), '什么都没进队列').toBe(0);
+    } finally {
+      (ep.driver.transport as { send: typeof realSend }).send = realSend;
+    }
+    // 桩拆掉之后同一条操作必须成功（证明上一条的被拒**是桩造成的**，不是操作不合法）
+    expect(ep.driver.submit(ep.s, a).ok, '拆掉桩之后同一条操作必须成功').toBe(true);
   });
 
   it('三个码互不相同：offline ≠ read-only ≠ not-the-next-action（D16 的区分有牙）', async () => {
@@ -467,6 +717,125 @@ describe('判据 3：从机没有自己的映射（文本腿，只扫 src/net）
     const sample = 'export function f(s) { executeAction(s, 0, "advance"); resetControlIfHeld(s, 0); }';
     expect(sample.includes('executeAction(')).toBe(true);
     expect(sample.includes('resetControlIfHeld')).toBe(true);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * 边界腿：入站队列深度（T5 修复轮按评审 §5.2 的接口缺口补的只读读数）
+ * ------------------------------------------------------------------ */
+
+describe('入站队列的只读读数 pendingCount()（T6 落地上限要用它）', () => {
+  /**
+   * 这条腿造一个**"帧到了、但驱动手里还没有状态"**的场面 —— 那正是队列真正会攒起来的时刻
+   * （G4 D2：驱动不持有 `GameState`，所以 `onMessage` 推到的那一刻可能还没有状态可应用）。
+   *
+   * 做法：建 B 时注入一个 `onMessage`（驱动会**同步**把它的订阅回调交给我们，
+   * 见 `net-driver.ts`：`const onMessage = opts.onMessage ?? …; const unsubscribe = onMessage(cb)`），
+   * 于是"帧什么时候到达本端"由这条腿精确控制。**先**把 A 真实产出的帧喂进去、**后**才 `arm(sB)`
+   * ⇒ 中间那段队列深度必须是 N、步数必须是 0。反过来（先 `arm` 再喂）会走驱动的"到达即落地"
+   * 那一半，队列当场被排空 —— 这条腿把这个区别也钉住。
+   */
+  it('喂 N 条不 drain ⇒ 读数是 N；arm 之后 ⇒ 0 且对端落地', async () => {
+    const seed = G5_T5_SEED;
+    const pair = createFakeTransportPair();
+    await pair.A.transport.init({ selfId: 'A', peerId: 'B' });
+    await pair.B.transport.init({ selfId: 'B', peerId: 'A' });
+    const sA = opening(seed);
+    const sB = opening(seed);
+    let deliverToB: ((text: string, channel: NetChannel) => void) | null = null;
+    let subscribeCount = 0;
+    const dA = createNetDriver({ transport: pair.A.transport, seat: 0, recorder: null });
+    const dB = createNetDriver({
+      transport: pair.B.transport,
+      seat: 1,
+      recorder: null,
+      onMessage: (cb) => {
+        subscribeCount += 1;
+        deliverToB = cb;
+        return () => {};
+      },
+    });
+    expect(deliverToB, '订阅回调必须被同步交给注入的 onMessage').not.toBeNull();
+    expect(subscribeCount, '驱动只订阅一次').toBe(1);
+    dA.arm(sA);
+    // ⚠️ 故意**先不** `arm(sB)`：这样入站的帧只能进队列（没有状态可应用）
+    expect(dB.pendingCount(), '一开始队列是空的').toBe(0);
+
+    // A 连走三步，每一步都把它**那条线上真实产出的帧**交给 B 的订阅回调
+    let fed = 0;
+    for (let step = 0; step < 8 && fed < 3; step += 1) {
+      const a = nextAction(sA, step);
+      if (a === null || a.player !== 0) break;
+      const before = pair.steps().length;
+      expect(dA.submit(sA, a).ok, `第 ${step} 步（A）必须成功`).toBe(true);
+      pair.pump(ACT_LATENCY_TICKS);
+      const produced = pair.steps().slice(before).filter((x) => x.from === 'A');
+      expect(produced.length, `第 ${step} 步必须真的产出一帧（否则"攒队列"的前提不成立）`).toBeGreaterThan(0);
+      for (const frame of produced) {
+        (deliverToB as unknown as (text: string, channel: NetChannel) => void)(frame.text, frame.channel);
+        fed += 1;
+      }
+    }
+    expect(fed, '夹具前提：要真的喂进 3 帧').toBe(3);
+    expect(dB.pendingCount(), `喂了 ${fed} 帧、一次都没排空 ⇒ 读数就是 ${fed}`).toBe(fed);
+    expect(dB.appliedSteps(), '入队不等于落地').toBe(0);
+    expect(stateFingerprint(sB), 'B 的状态这时还没动').toBe(stateFingerprint(opening(seed)));
+
+    // `arm` 是排空的正规口：排空之后读数归零、对端真的落地
+    dB.arm(sB);
+    expect(dB.pendingCount(), 'arm 之后队列必须空').toBe(0);
+    expect(dB.appliedSteps(), 'arm 必须让对端落地').toBe(fed);
+    expect(stateFingerprint(sB), '落地之后两端指纹必须相等').toBe(stateFingerprint(sA));
+
+    // 只读读数不许有副作用：连读三次结果一样，状态也不动
+    const fp = stateFingerprint(sB);
+    expect([dB.pendingCount(), dB.pendingCount(), dB.pendingCount()], '读 pendingCount 不许消费/改状态').toEqual([0, 0, 0]);
+    expect(stateFingerprint(sB)).toBe(fp);
+    dA.dispose();
+    dB.dispose();
+  });
+
+  /**
+   * 另一半：**已经有状态**时到达的帧会走"到达即落地" ⇒ 队列**不会**攒起来。
+   *
+   * 这条不是重复：它证明 `pendingCount()` 读到 0 的两种情形**不是同一件事**
+   * （"队列空" vs "帧还没来"），也证明"帧到了就落"这条生产路径在注入 `onMessage` 时同样成立。
+   */
+  it('已经有状态时到达的帧走"到达即落地"：队列不攒、步数当场前进', async () => {
+    const seed = G5_T5_SEED;
+    const pair = createFakeTransportPair();
+    await pair.A.transport.init({ selfId: 'A', peerId: 'B' });
+    await pair.B.transport.init({ selfId: 'B', peerId: 'A' });
+    const sA = opening(seed);
+    const sB = opening(seed);
+    let deliverToB: ((text: string, channel: NetChannel) => void) | null = null;
+    const dA = createNetDriver({ transport: pair.A.transport, seat: 0, recorder: null });
+    const dB = createNetDriver({
+      transport: pair.B.transport,
+      seat: 1,
+      recorder: null,
+      onMessage: (cb) => {
+        deliverToB = cb;
+        return () => {};
+      },
+    });
+    dA.arm(sA);
+    dB.arm(sB); // ★ 先给状态
+
+    const a = nextAction(sA, 0);
+    expect(a, '第 0 步必须有操作').not.toBeNull();
+    const before = pair.steps().length;
+    expect(dA.submit(sA, a as Omit<ActionRecord, 'seq'>).ok).toBe(true);
+    pair.pump(ACT_LATENCY_TICKS);
+    const produced = pair.steps().slice(before).filter((x) => x.from === 'A');
+    expect(produced.length).toBeGreaterThan(0);
+    (deliverToB as unknown as (text: string, channel: NetChannel) => void)(produced[0].text, produced[0].channel);
+
+    expect(dB.pendingCount(), '有状态时到达 ⇒ 当场排空，队列不攒').toBe(0);
+    expect(dB.appliedSteps(), '有状态时到达 ⇒ 语义当场落地').toBe(1);
+    expect(stateFingerprint(sB), '两端指纹必须相等').toBe(stateFingerprint(sA));
+    dA.dispose();
+    dB.dispose();
   });
 });
 

@@ -29,15 +29,24 @@
  *  - `receiveAct` 的成功分支（对端是行动方）。
  *
  * ★ **本任务最重要的那条缺陷族正好住在这里**：收到对端 `act` 时**只推进序号、不落地语义**
- * （"动作发生了、语义没发生"）。它在任何纯粹的**行为腿**上都不会自己红 —— 只有"每步之后两端
- * 指纹相等"那条差分腿能抓（G5 计划 §5 T5 的变异 M1 就是它）。所以 `applyOnce` 里那行
- * `applyRecordedAction(s, record)` 必须留在原位，注释与测试都不要把它改写成"信任对端已应用"。
+ * （"动作发生了、语义没发生"）。所以 `applyOnce` 里那行 `applyRecordedAction(s, record)`
+ * 必须留在原位，注释与测试都不要把它改写成"信任对端已应用"。
+ *
+ * ⚠️ **这条缺陷今天是被哪条腿抓住的**（T5 阶段一评审实测后更正，原来的说法不准）：
+ * 不是"每步之后两端指纹相等"那条差分腿抓的 —— 差分腿判的是"两端**相等**"，
+ * 而"两端都只推进序号、都不落地"恰恰相等（M1 在位时那 60 次比对一次都没红；
+ * 真红的是同一 `describe` 里的**反空转**断言）。⇒ 这条路径的牙长在：
+ *  ① 判据 1 的四句反空转（`appliedSteps` / 两个座位 / kind 种类 / 指纹取值数）；
+ *  ② 判据 1 里"**只 `arm` 不 `submit`**"那条腿（它直接断言对端落地了语义）；
+ *  ③ 探针 M1（`.superpowers/g5-T5/probes/`，独立于判据文件）。
+ * 差分腿与记录器腿负责的是**不对称**的错（一端动了、另一端没动）。三者的分工别记错。
  *
  * ## 为什么驱动**不持有** `GameState`（照 G4 D2 的既有结构约束）
  *
  * `submit(s, …)` 的 `s` 是**宿主传进来的**那个状态，也是唯一的被推进对象：驱动没有私有副本、
  * 没有缓存、没有 getter。`src/app/match-driver.ts:32-45` 记着这条约束的代价（两条各自改状态的
- * 路 ⇒ 永久分叉且不报错）。本模块照办，代价写在 `pendingQueue` 的注释里。
+ * 路 ⇒ 永久分叉且不报错）。本模块照办，代价写在 `pendingTexts` 的注释里，队列深度可以由
+ * `pendingCount()` 读到（T6 落地上限时要用它）。
  *
  * ## 序号：`seq` 就是"已应用的条数"（唯一的顺序依据）
  *
@@ -57,9 +66,14 @@
  *
  * | 码 | 什么时候 | 为什么不能合并 |
  * |---|---|---|
- * | `'offline'` | 传输不在 `online`（对端不可达 / 掉线 / 还没连上） | 它是"暂时不在"，会好 |
+ * | `'offline'` | 传输此刻不在 `online`（对端不可达 / 掉线 / 还没连上），**或** `send` 返回失败 | 它是"暂时不在"，会好 |
  * | `'read-only'` | `dispose()` 之后 | 它的原义就是"这局结束了"（`match-driver.ts:93-95`） |
  * | `'not-the-next-action'` | 不是本端回合 / 顺序未到 / 引擎拒绝 | 它是**本端策略**的拒绝，与网络状态无关 |
+ *
+ * `'offline'` 的产出面比"对端不可达"这句话宽一点，如实写清（`submit` 里那张表是权威版）：
+ * 它覆盖 `send` 失败的 `'offline'` / `'closed'` / `'queue-full'` 三种来源。
+ * 它们对调用方是**同一个可行动事实**（"这一条没发出去"），所以共用一个码；
+ * 但玩家文案要分得清这三件事（归 T8）。
  *
  * `'offline'` 是 T5 给 `SubmitRefusal` 新增的那个值（D16）：`'read-only'` 的原义
  * **一个字都不改**。这里也不去动 `'read-only'` 在 `match-driver.ts` 里的既有说明。
@@ -174,6 +188,27 @@ export interface NetDriver extends MatchDriver {
   onStatus(cb: (change: StatusChange) => void): () => void;
   /** 已应用的操作条数（**也就是下一条的 `seq`**）。主机可以拿它与记录器对账 */
   appliedSteps(): number;
+  /**
+   * 入站队列**还没落地**的帧数（只读读数）。
+   *
+   * ## 为什么要有它（T5 阶段一评审交办；队列上限本身归 T6）
+   *
+   * 队列无上限这件事计划 §5 T6 判据 7 已经判归 **T6**，而 T6 要落地"上限 + 溢出标
+   * `needsResync`"时，必须能读到"现在积压了多少"。没有这个读数，T6 只有两条路：
+   * 改**本文件**（那就是第二次越界改 T5 的交付物，证据链要重走），或者从外面拿
+   * `transport.steps()` 减 `appliedSteps()` 去估（那是一份**近似的第二真相**，
+   * 而且它对 `close-res` / `beat` 这类非 `act` 帧会数错）。
+   * ⇒ 加一个只读读数，把 T6 的裁决留在 T6 自己手里。今天**没有任何生产调用方**读它，
+   * 这一点如实登记（"将来谁会用到"不作为存在理由，这里的理由是为下一个任务留口）。
+   *
+   * 语义说清三件（免得被当成别的东西）：
+   *  - 它数的是 `pendingTexts`（已到达、**还没被解码落地**的帧），**不含** `stuck` 那一帧
+   *    （那一帧已经判定为错位、已经离开了队列，见 `pendingCount` 的实现）；
+   *  - 它**不**区分 `act` 与别的消息（`drain` 只在消费时才解码分类）⇒ 它是"待处理帧数"，
+   *    不是"待应用操作数"；
+   *  - 它**不含**"在传输层排队、还没到达本端"的帧（那要问传输）。
+   */
+  pendingCount(): number;
   /**
    * 把**当前状态**交给驱动，并顺手消费排队中的入站帧。
    *
@@ -317,8 +352,13 @@ export function createNetDriver(opts: NetDriverOptions): NetDriver {
    * 收到对端一条 `act`。
    *
    * ★ 这里的 `applyOnce(s, msg.action, 'peer')` 就是"语义真的发生了"的那一半。
-   * 变异 M1（只推进 `applied`、不落地语义）能且只能被"每步之后两端指纹相等"那条差分腿抓住
-   * （见文件头）。改这一行之前先想清楚这件事。
+   *
+   * ⚠️ 这条路径的**强度边界**（T5 阶段一评审实测后写清，别再记错功劳）：差分腿判的是
+   * "两端指纹相等"，因此它抓得住**不对称**的错（一端落地、另一端没落地），却抓不住
+   * **对称**的错 —— 变异 M1（两端都只推进序号、都不落地）在位时，那 60 次指纹比对
+   * **一次都没红**（两端都冻在开局、次次相等）。真正抓住 M1 的是判据 1 里那四句**反空转**
+   * 断言，以及新增的"只 `arm` 不 `submit`"腿（见 `tests/net/net-driver.test.ts`）。
+   * 改这一行之前先想清楚这件事：这条路径的牙不在"指纹相等"上。
    */
   function receiveAct(s: GameState, msg: ActMsg): void {
     if (msg.action === undefined || msg.action === null) {
@@ -482,6 +522,18 @@ export function createNetDriver(opts: NetDriverOptions): NetDriver {
       if (!sent.ok) {
         // 传输层说这条没发出去。这里**不**把它当成"本端可以自己玩下去"：
         // 发不出去就等于对端拿不到这一步，本地应用它只会让两端永久分叉（D1 禁止静默分叉）。
+        //
+        // ★ 拒绝码与来源的对应关系（T5 修复轮按评审 §2 的裁决收紧措辞，**未新增拒码**）：
+        //   `SendFailureReason` 有四个值（`transport.ts:103`），除 `'not-initialized'`（调用顺序错，
+        //   属于编程错误、由 `init` 的文档管）之外的三个都落到这里，而它们**对调用方是同一个
+        //   可行动事实**："这一条没发出去"。三个来源逐个点名（别让文档只说"不可达"）：
+        //     · `'offline'`  —— 对端不可达（掉线 / 还没连上）；
+        //     · `'closed'`   —— 本端已经 `close()`（驱动还没 `dispose()`，所以不是 `'read-only'`）；
+        //     · `'queue-full'` —— 本端待发队列积压（真 WebRTC 的 `bufferedAmount` 过高）。
+        //   为什么不拆出第四个拒码：`SubmitRefusal` 是 `src/app` 的 union，加值要同步所有消费方，
+        //   而"怎么办"在三者上完全一样（重试 / 等对端回来 / 等积压排空，都不是本驱动能决定的）。
+        //   但**玩家文案必须分得清**这是三种不同的事 —— 那句文案归 T8，届时按 `lastFailure()`
+        //   或传输自己的 `onError`（`transport.ts:235`）给的真因写。这里只保证：一条都没漏。
         return { ok: false, refusal: 'offline' };
       }
       const fail = applyOnce(s, a, 'local');
@@ -495,6 +547,13 @@ export function createNetDriver(opts: NetDriverOptions): NetDriver {
     note(a: Omit<ActionRecord, 'seq'>): void {
       // 旁路留痕。`dispose()` 之后一律丢弃（同 `submit` 的第一条）：把一条"没发生过的操作"
       // 留在档案里会让 T6 的追平把一个不存在的步数当成真相。
+      //
+      // ⚠️ 这里**静默**丢弃，而 `submit` 在同样情形下**报** `'read-only'` —— 两者取向不同，
+      // 这是**有意的**（T5 阶段一评审点过一句，这里写清理由）：`note` 的契约返回 `void`
+      // （`match-driver.ts:115` 写着"旁路留痕，不执行、不进 actions、只 note"），没有码可报；
+      // 而它的语义是"尽力而为"，调用方本来就不该依赖它成功。若哪天要给 `note` 一个可读的失败，
+      // 那是一次**契约变更**（返回值类型变宽），要先改 `MatchDriver` 的文档与所有实现，
+      // 不能在这里单独加。
       if (disposed) return;
       recorder?.note(a);
     },
@@ -518,6 +577,8 @@ export function createNetDriver(opts: NetDriverOptions): NetDriver {
     },
 
     appliedSteps: () => applied,
+
+    pendingCount: () => pendingTexts.length,
 
     arm(s: GameState): void {
       if (disposed) return;

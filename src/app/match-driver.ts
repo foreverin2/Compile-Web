@@ -103,11 +103,20 @@ export type DriverMode = 'local' | 'replay' | 'net';
  *  - `'read-only'`：**`dispose()` 之后**的任何 `submit`。它是"H 轮评审曾判它该删、协调者裁决保留"
  *    的那个取值 —— 保留的理由不是"将来 G5 会用到"（那是预测，不作依据），而是它**确实可达**：
  *    见 `tests/app/match-driver.test.ts` 里"dispose 之后 submit ⇒ read-only"那条腿。
- *  - `'offline'`：**对端此刻不可达**（G5 D16 新增，`createNetDriver` 是它唯一的产出方）。
+ *  - `'offline'`：**传输此刻不能用**（G5 D16 新增，`createNetDriver` 是它唯一的产出方）。
  *    它与上面那个 `'read-only'` 是**两件不同的事**，这正是它没有被并进 `'read-only'` 的理由：
  *    "对端暂时不在"（会好）与"这一局已经结束"（不会好）在界面上要给玩家完全不同的下一步。
- *    判据见 `tests/net/net-driver.test.ts` 里"断线被拒 ⇒ offline / dispose 之后被拒 ⇒ read-only"
- *    那两条腿（**两者必须给出不同的码**，否则这条区分就没有牙）。
+ *    产出面有**三个来源**（都在 `src/net/net-driver.ts` 的 `submit` 里，**共用一个码**）：
+ *    ① 传输状态不是 `online`（对端不可达 / 掉线 / 还没连上）；② 本端已 `close()`（终态，
+ *    但驱动还没 `dispose()` ⇒ 那时是 `'offline'` 而不是 `'read-only'`）；③ `send` 返回失败，
+ *    含 `'queue-full'`（本端待发队列积压，真 WebRTC 的 `bufferedAmount` 过高）。
+ *    三者对调用方是**同一个可行动事实**（"这一条没发出去"），所以不拆第四个码；
+ *    但**玩家文案要分得清**这三件事 —— 那是 T8 的事，别在这里复制它们的文案。
+ *    判据见 `tests/net/net-driver.test.ts` 里这三条**真实腿名**（T5 阶段一评审指出过旧文档
+ *    写的腿名与实际不符，已改成逐字对得上的）：
+ *    "对端不可达时 submit ⇒ offline（**不是** read-only），且状态一字未动"、
+ *    "本端发送失败（含 queue-full）也归到 offline：不新增拒码，但三个来源都要能落到这里"、
+ *    "三个码互不相同：offline ≠ read-only ≠ not-the-next-action（D16 的区分有牙）"。
  */
 export type SubmitRefusal = 'read-only' | 'not-the-next-action' | 'exhausted' | 'engine-error' | 'offline';
 
