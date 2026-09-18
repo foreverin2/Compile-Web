@@ -17,7 +17,8 @@ import {
   type MatchFile,
   type MatchFileSetup,
 } from '../../src/app/match-file';
-import { applyRecordedAction, replayDraftFromSetup, stateAfterDraft } from '../../src/app/match-replay';
+import { applyRecordedAction, replayDraftFromSetup, stateAfterDraft, stateAtStep } from '../../src/app/match-replay';
+import { stripComments, functionBody } from '../ui/source-text';
 import { CARD_DATA_HASH } from '../../src/app/card-data-hash';
 import { DEMO_PROTOCOLS } from '../../src/data/demo';
 import {
@@ -868,5 +869,393 @@ describe('T1-G6：`effect-choice` 必须用**档案里的 player**（chooser）�
       applyRecordedAction(s, { seq: 0, player: chooser, kind: 'effect-choice', args: { promptId, choice } });
       expect(s.pendingEffects.length, '应答后该效果必须出栈').toBe(0);
     }
+  });
+});
+
+/* ==================================================================== *
+ * G5 T4（裁决 D9）：`stateAtStep` —— 差分腿 / 边界 / 唯一出处 / 引用独立
+ * ==================================================================== */
+
+/**
+ * T4 的 60 步差分档案。
+ *
+ * **现场侧走 `executeAction` 直跑，不经过 `applyRecordedAction`** —— 与 G4 的 G2a 腿同一个
+ * 理由：现场与重放都过助手，证明的只是"助手与自己一致"。所以现场侧另有一份按 kind 逐个
+ * 收窄的调用（`liveApply`），它是这条腿的**真值锚点**（不是生产代码的第二份映射：
+ * 它只住在测试里，判据 3 的文本腿只读 `src/app/match-replay.ts`）。
+ *
+ * 三个刻意的设计：
+ *  1. **每一步挂起的选择都记成 `effect-choice`**（现场用 `pickFirst` 应答，那条应答进档案）
+ *     ⇒ 档案自称一体：重放只需逐条 `applyRecordedAction`，不需要任何测试侧策略补答案。
+ *  2. 在**持有控制组件**的窗口里做真重排（形状照 `main.ts:266`：UI 打开重排模态**之前**先
+ *     `resetControlIfHeld`，那次归还带一条 `pushLog` 但**不进档案**）⇒ 重放侧唯一的还原来源
+ *     就是 `applyRecordedAction` 里「控制权归还」那一半。没有这一步，M1 打不红判据 1。
+ *  3. 只走 `getLegalActions(s, player)[0]` 这一条确定性启发式 ⇒ 现场真值可复算。
+ */
+const STEP_SEED = 'g5t4-diff-first-7';
+const STEP_COUNT = 60;
+/** 差分腿的分叉点（任务书 §3 判据 1 点名的 24） */
+const STEP_SPLIT = 24;
+
+interface StepArchive {
+  /** 现场（走 `executeAction`）走到第 steps 条操作之后的真值状态 */
+  s: GameState;
+  file: MatchFile;
+  /** 现场真正走过"持有控制组件时重排"的那几条下标 */
+  rearrangeSeqs: number[];
+  /** 现场记录 `effect-choice` 的那几条下标 */
+  effectChoiceSeqs: number[];
+  /** `fpAfter[k]` = 现场走完前 k 条操作之后的指纹（`fpAfter[0]` = 草稿结束） */
+  fpAfter: string[];
+}
+
+/** 现场侧的引擎调用（按 kind 逐个收窄；档案里出现没覆盖的 kind 会响亮抛错，不静默跳过） */
+function liveApply(s: GameState, player: PlayerId, kind: ActionKind, args: Record<string, unknown>): void {
+  switch (kind) {
+    case 'play':
+      executeAction(s, player, 'play', args as unknown as { cardUid: string; faceUp: boolean; line: Line; target?: PlayerId });
+      return;
+    case 'compile':
+      executeAction(s, player, 'compile', args as unknown as { line: Line });
+      return;
+    case 'refresh':
+      executeAction(s, player, 'refresh');
+      return;
+    case 'advance':
+      executeAction(s, player, 'advance');
+      return;
+    case 'clear-cache':
+      executeAction(s, player, 'clear-cache');
+      return;
+    case 'resolve-trigger':
+      executeAction(s, player, 'resolve-trigger', args as unknown as { cardUid: string });
+      return;
+    case 'effect-choice':
+      executeAction(s, player, 'effect-choice', args as unknown as { promptId: string; choice: string[] });
+      return;
+    case 'rearrange-protocols':
+      executeAction(s, player, 'rearrange-protocols', args as unknown as { target: PlayerId; a: Line; b: Line });
+      return;
+    default:
+      throw new Error(`T4 差分夹具的现场侧没有覆盖 kind=${String(kind)}（生成式清单派出了新取值？）`);
+  }
+}
+
+function buildStepArchive(seed: string, steps: number): StepArchive {
+  const s = createGame({ seed });
+  while (s.phase === 'draft') performDraftPick(s, getDraftPool(s)[0].defId);
+  const rec = createMatchFileRecorder();
+  const rearrangeSeqs: number[] = [];
+  const effectChoiceSeqs: number[] = [];
+  const fpAfter: string[] = [stateFingerprint(s)];
+  let rearrangedThisWindow = false;
+  let guard = 0;
+  while (rec.nextSeq() < steps) {
+    if (guard++ > 4000) throw new Error('T4 差分档案没有收敛');
+    if (s.winner !== null || s.phase !== 'turn') break;
+    if (s.pendingEffects.length > 0) {
+      const top = s.pendingEffects[s.pendingEffects.length - 1];
+      // 反空转：现场只会遇到"带 prompt"的挂起效果。不带 prompt 的挂起没法被档案唯一确定
+      // （重放侧只能靠测试策略补，那就不是"档案能重放"了）⇒ 直接响亮抛错。
+      expect(top.prompt, 'T4 夹具：挂起效果必须带 prompt（否则档案不能唯一确定这一步）').toBeTruthy();
+      const chooser = (top.prompt!.chooser ?? top.player ?? s.turnPlayer) as PlayerId;
+      const choice = pickFirst(top.prompt!);
+      const args = { promptId: top.id, choice };
+      rec.record({ player: chooser, kind: 'effect-choice', args, via: 'user' });
+      executeAction(s, chooser, 'effect-choice', args);
+      effectChoiceSeqs.push(rec.nextSeq() - 1);
+      fpAfter.push(stateFingerprint(s));
+      continue;
+    }
+    const player = s.turnPlayer;
+    if (s.control === player && (s.step === 'check-compile' || s.step === 'action') && !rearrangedThisWindow) {
+      expect(resetControlIfHeld(s, player), 'T4 夹具：重排窗口里必须真的持有控制组件').toBe(true);
+      const args = { target: player, a: 0 as Line, b: 2 as Line };
+      rec.record({ player, kind: 'rearrange-protocols', args, via: 'user' });
+      executeAction(s, player, 'rearrange-protocols', args);
+      rearrangeSeqs.push(rec.nextSeq() - 1);
+      rearrangedThisWindow = true;
+      fpAfter.push(stateFingerprint(s));
+      continue;
+    }
+    if (s.step !== 'check-compile' && s.step !== 'action') rearrangedThisWindow = false;
+    const acts = getLegalActions(s, player);
+    if (acts.length === 0) break;
+    const a = acts[0];
+    const args: Record<string, unknown> = {};
+    if (a.cardUid !== undefined) args.cardUid = a.cardUid;
+    if (a.faceUp !== undefined) args.faceUp = a.faceUp;
+    if (a.line !== undefined) args.line = a.line;
+    if (a.target !== undefined) args.target = a.target;
+    if (a.promptId !== undefined) args.promptId = a.promptId;
+    if (a.choice !== undefined) args.choice = a.choice;
+    const hasArgs = Object.keys(args).length > 0;
+    rec.record({ player, kind: a.kind, ...(hasArgs ? { args } : {}), via: 'user' });
+    liveApply(s, player, a.kind, args);
+    fpAfter.push(stateFingerprint(s));
+  }
+  return { s, file: rec.toMatchFile(metaFor(seed, setupFromState(s))), rearrangeSeqs, effectChoiceSeqs, fpAfter };
+}
+
+/** 夹具**懒建**：绝不在 `describe`/模块作用域里建（套件级抛错会表现成"0 条失败用例却退 1"） */
+const stepArchives = new Map<string, StepArchive>();
+function stepArchive(seed = STEP_SEED, steps = STEP_COUNT): StepArchive {
+  const key = `${seed}#${steps}`;
+  const hit = stepArchives.get(key);
+  if (hit) return hit;
+  const built = buildStepArchive(seed, steps);
+  stepArchives.set(key, built);
+  return built;
+}
+
+/** 从任意对象图里收集**对象身份**（用来判"返回值与档案共享引用"） */
+function collectObjects(root: unknown, into: Set<object>, seen = new Set<object>()): void {
+  if (root === null || typeof root !== 'object') return;
+  const o = root as object;
+  if (seen.has(o)) return;
+  seen.add(o);
+  into.add(o);
+  if (Array.isArray(o)) {
+    for (const v of o) collectObjects(v, into, seen);
+    return;
+  }
+  for (const k of Object.keys(o)) collectObjects((o as Record<string, unknown>)[k], into, seen);
+}
+
+/** 共享对象个数（0 = 返回值不持有档案里的任何引用） */
+function sharedWithArchive(state: GameState, f: MatchFile): number {
+  const archiveRefs = new Set<object>();
+  collectObjects(f.actions, archiveRefs);
+  const stateRefs = new Set<object>();
+  collectObjects(state, stateRefs);
+  return [...stateRefs].filter((o) => archiveRefs.has(o)).length;
+}
+
+/** 测试自己写的"逐步重放"（判据 1 的路径 B：循环写在测试里，不经过 `stateAtStep`） */
+function replayStepByStep(f: MatchFile, n: number): GameState {
+  const s = stateAfterDraft(f);
+  for (let i = 0; i < n; i += 1) applyRecordedAction(s, f.actions[i]);
+  return s;
+}
+
+/* ------------------------------------------------------------------ *
+ * 判据 1（★ 差分腿）
+ * ------------------------------------------------------------------ */
+
+describe('T4 判据 1（★）：stateAtStep 与"逐步重放"逐字相等，且第 24 步之后仍不分叉', () => {
+  it('★ 60 步档案：第 24 步两条路径指纹相等（且等于现场），24 之后各自走完仍相等', () => {
+    const live = stepArchive();
+    const f = live.file;
+
+    // 反空转①：档案真的 60 步；且**分叉点之前**就含"持有控制组件时的重排"
+    //   —— 否则 M1（`stateAtStep` 跳过 control 复原那一半）根本打不红这条腿，这条腿就是空的。
+    expect(f.actions, '档案必须是 60 步').toHaveLength(STEP_COUNT);
+    // 档案形状**写死当锚点**（实测值）：它把"报告里那几个指纹"钉在这份交付的夹具上，
+    // 也顺带拦住"档案形状悄悄漂移、两条路径却仍然相等"这种一起漂的假绿。
+    const hist: Record<string, number> = {};
+    for (const a of f.actions) hist[a.kind] = (hist[a.kind] ?? 0) + 1;
+    expect(hist, '档案的 kind 直方图').toEqual({
+      advance: 45,
+      play: 8,
+      'rearrange-protocols': 4,
+      'effect-choice': 2,
+      compile: 1,
+    });
+    expect(live.rearrangeSeqs, '控制组件重排的下标').toEqual([14, 28, 42, 55]);
+    expect(live.effectChoiceSeqs, 'effect-choice 的下标').toEqual([23, 31]);
+    expect(live.rearrangeSeqs.length, '档案里必须真的走过控制组件重排').toBeGreaterThanOrEqual(2);
+    const early = live.rearrangeSeqs.filter((q) => q < STEP_SPLIT);
+    expect(early, `前 ${STEP_SPLIT} 步里的重排下标（实测：${JSON.stringify(live.rearrangeSeqs)}）`).not.toHaveLength(0);
+
+    // 反空转②：承重前提 —— 那条重排**之前**控制组件确实在发起者手里。
+    //   不成立的话"跳过复原"与"不跳过"逐字相同，这条腿的判别力就等于零。
+    const firstRearrange = live.rearrangeSeqs[0];
+    const beforeRearrange = stateAtStep(f, firstRearrange);
+    const ra = f.actions[firstRearrange];
+    expect(ra.kind).toBe('rearrange-protocols');
+    expect(beforeRearrange.control, '重排前控制组件必须在发起者手里').toBe(ra.player);
+
+    // 路径 A：库（stateAtStep）一步到第 24 步
+    const a24 = stateAtStep(f, STEP_SPLIT);
+    // 路径 B：测试自己写的逐步重放
+    const b24 = replayStepByStep(f, STEP_SPLIT);
+    expect(stateFingerprint(a24), '两条路径在第 24 步的指纹').toBe(stateFingerprint(b24));
+    // 真值锚点：这一对指纹还等于**现场**（现场侧走 executeAction，不过任何助手）
+    expect(stateFingerprint(a24), '第 24 步的指纹还必须等于现场').toBe(live.fpAfter[STEP_SPLIT]);
+
+    // 再把第 24 步之后的行动在两条路径上各自走完（尾部两条路吃的是同一个操作序列，
+    // 差别只在**前缀怎么到达第 24 步** —— 一条是库的循环，一条是测试的循环）
+    for (let i = STEP_SPLIT; i < f.actions.length; i += 1) {
+      applyRecordedAction(a24, f.actions[i]);
+      applyRecordedAction(b24, f.actions[i]);
+    }
+    expect(stateFingerprint(a24), '尾部走完后两条路径仍必须相等').toBe(stateFingerprint(b24));
+    expect(stateFingerprint(a24), '终局必须等于现场').toBe(stateFingerprint(live.s));
+    expect(stateFingerprint(a24), '终局必须等于 stateAtStep(f, 全部)').toBe(
+      stateFingerprint(stateAtStep(f, f.actions.length)),
+    );
+    // 反空转③：比的是"真走了 60 步"的状态，不是草稿态
+    expect(stateFingerprint(a24)).not.toBe(stateFingerprint(stateAfterDraft(f)));
+  });
+
+  it('★ 对照：两条路径在**每一个** n 上都相等（只差一个 n 也会红，不是只比 24 这一个点）', () => {
+    const f = stepArchive().file;
+    for (let n = 0; n <= f.actions.length; n += 1) {
+      expect(stateFingerprint(stateAtStep(f, n)), `n=${n}`).toBe(stateFingerprint(replayStepByStep(f, n)));
+    }
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * 判据 2：n 的边界（0 / 终局 / 越界一律拒绝）
+ * ------------------------------------------------------------------ */
+
+describe('T4 判据 2：n 的边界', () => {
+  it('n = 0 等于 stateAfterDraft(f)（逐字节），且真的在 turn 期', () => {
+    const f = stepArchive().file;
+    const s0 = stateAtStep(f, 0);
+    expect(stateFingerprint(s0)).toBe(stateFingerprint(stateAfterDraft(f)));
+    expect(s0.phase).toBe('turn');
+    // 反空转：这条腿比的状态真的会被后续操作推动（否则"相等"可能来自两边都没动）
+    expect(stateFingerprint(s0)).not.toBe(stateFingerprint(stateAtStep(f, 1)));
+  });
+
+  it('n = f.actions.length 是终局（等于现场、不等于倒数第二步）', () => {
+    const live = stepArchive();
+    const len = live.file.actions.length;
+    const end = stateAtStep(live.file, len);
+    expect(stateFingerprint(end)).toBe(stateFingerprint(live.s));
+    expect(stateFingerprint(end)).not.toBe(stateFingerprint(stateAtStep(live.file, len - 1)));
+  });
+
+  it('越界一律**拒绝**（负数 / 超长 / 非整数 / NaN），消息可读且带那个 n', () => {
+    const f = stepArchive().file;
+    const tooLong = f.actions.length + 1;
+    expect(() => stateAtStep(f, -1)).toThrow(/stateAtStep/);
+    expect(() => stateAtStep(f, -1)).toThrow(/整数/);
+    expect(() => stateAtStep(f, tooLong)).toThrow(/stateAtStep/);
+    expect(() => stateAtStep(f, tooLong)).toThrow(new RegExp(String(tooLong)));
+    expect(() => stateAtStep(f, tooLong)).toThrow(/超出档案长度/);
+    expect(() => stateAtStep(f, 1.5)).toThrow(/整数/);
+    expect(() => stateAtStep(f, Number.NaN)).toThrow(/整数/);
+    // 正控：两个合法边界都不抛（证明上面不是"什么都抛"）
+    expect(() => stateAtStep(f, 0)).not.toThrow();
+    expect(() => stateAtStep(f, f.actions.length)).not.toThrow();
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * 判据 3：唯一出处（文本腿）
+ * ------------------------------------------------------------------ */
+
+/** 子串计数（不重叠） */
+function countOf(hay: string, needle: string): number {
+  let n = 0;
+  let at = hay.indexOf(needle);
+  while (at >= 0) {
+    n += 1;
+    at = hay.indexOf(needle, at + needle.length);
+  }
+  return n;
+}
+
+describe('T4 判据 3：match-replay.ts 里「ActionRecord → 引擎调用」只有一处', () => {
+  /** 正控：提取器与计数器对合成样本可用（否则下面全在空片段上恒真） */
+  it('正控：functionBody / countOf 对合成样本给得出东西', () => {
+    const sample = 'export function f(a: string): void {\n  if (a) { g(a); }\n}\n';
+    expect(functionBody(sample, 'f')).toContain('g(a)');
+    expect(countOf(sample, 'g(')).toBe(1);
+    expect(() => functionBody(sample, '不存在')).toThrow(/找不到/);
+  });
+
+  it('所有 executeAction / 唯一那份 switch / 唯一那处还原规则，都落在 applyRecordedAction 体内', () => {
+    const raw = readFileSync(fileURLToPath(new URL('../../src/app/match-replay.ts', import.meta.url)))
+      .subarray(0, 4 * 1024 * 1024)
+      .toString('utf8');
+    const src = stripComments(raw);
+    const applyBody = functionBody(src, 'applyRecordedAction');
+    const stepBody = functionBody(src, 'stateAtStep');
+    // 反空转：抽到的函数体必须真的是那两段（空片段会让下面每条断言恒真）
+    expect(applyBody.length, 'applyRecordedAction 的函数体长度').toBeGreaterThan(500);
+    expect(stepBody.length, 'stateAtStep 的函数体长度').toBeGreaterThan(200);
+
+    // ① 引擎调用只有一处：全文件的 executeAction( 次数 == applyRecordedAction 体内的次数
+    const engineCallsTotal = countOf(src, 'executeAction(');
+    const engineCallsInApply = countOf(applyBody, 'executeAction(');
+    expect(engineCallsInApply).toBeGreaterThan(0);
+    expect(engineCallsTotal, '除了 applyRecordedAction 体内，别处不许再调引擎').toBe(engineCallsInApply);
+    expect(countOf(stepBody, 'executeAction('), 'stateAtStep 里不许出现第二处引擎调用').toBe(0);
+
+    // ② 分支只有一处 switch
+    expect(countOf(src, 'switch ('), '全文件只能有一个 switch').toBe(1);
+    expect(countOf(applyBody, 'switch (')).toBe(1);
+    expect(countOf(stepBody, 'switch ('), 'stateAtStep 里不许出现第二处 switch').toBe(0);
+
+    // ③ stateAtStep 的映射来源就是那两个既有出口
+    expect(countOf(stepBody, 'stateAfterDraft('), 'stateAtStep 必须从 stateAfterDraft 起跑').toBe(1);
+    expect(countOf(stepBody, 'applyRecordedAction('), 'stateAtStep 必须逐条走 applyRecordedAction').toBe(1);
+
+    // ④「控制权归还」还原规则也只有一处（M1 的靶子：它就是 applyRecordedAction 里那一半）
+    expect(countOf(src, 'resetControlIfHeld(')).toBe(1);
+    expect(countOf(applyBody, 'resetControlIfHeld(')).toBe(1);
+
+    // ⑤ 生成式：case 标签集合 == 从 src/core/game.ts 派生的 ActionKind 集合
+    //    （加一个 kind 或漏一个分支都会红 —— 手写清单做不到这一点）
+    const kinds = actionKindsFromDisk();
+    const cases = [...applyBody.matchAll(/case '([a-z-]+)'/g)].map((m) => m[1]);
+    expect(new Set(cases), `case 标签：${cases.join(',')}`).toEqual(new Set(kinds));
+    expect(cases).toHaveLength(kinds.length);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * 判据 4：返回的状态不共享档案的引用
+ * ------------------------------------------------------------------ */
+
+describe('T4 判据 4：返回的状态是全新的', () => {
+  /** 负控：**不深拷贝**就真的会共享 —— 这条证明下面那条断言有牙，而不是恒真 */
+  it('负控：stateAtDraft + 裸 applyRecordedAction（不深拷贝）在"选择答到一半"处共享档案数组', () => {
+    // 这一份档案的第 36 步落在"一个选择刚答完、另一个还挂着"的中途
+    // （实测：该处 pendingEffects 有 2 个，其中一个的 lastAnswer.selected 就是档案里的那个数组）。
+    const live = stepArchive('g5t4-diff-first-9', 37);
+    const f = live.file;
+    expect(f.actions.length).toBe(37);
+    let maxShared = 0;
+    let worstN = -1;
+    for (let n = 0; n <= f.actions.length; n += 1) {
+      const s = stateAfterDraft(f);
+      for (let i = 0; i < n; i += 1) applyRecordedAction(s, f.actions[i]); // 故意不深拷贝
+      const shared = sharedWithArchive(s, f);
+      if (shared > maxShared) {
+        maxShared = shared;
+        worstN = n;
+      }
+      // 反空转：这一份档案里真的出现过"挂起效果带 lastAnswer"的中途状态
+      if (n === 36) expect(s.pendingEffects.length, 'n=36 处必须挂着效果').toBeGreaterThan(1);
+    }
+    expect(maxShared, `不深拷贝时共享对象数（最多的一步 n=${worstN}）`).toBeGreaterThan(0);
+  });
+
+  it('stateAtStep 在**每一个** n 上都不与档案共享对象；改返回值不影响档案，也不影响另一次调用', () => {
+    for (const seed of [STEP_SEED, 'g5t4-diff-first-9']) {
+      const f = stepArchive(seed, seed === STEP_SEED ? STEP_COUNT : 37).file;
+      for (let n = 0; n <= f.actions.length; n += 1) {
+        expect(sharedWithArchive(stateAtStep(f, n), f), `${seed} n=${n} 与档案共享的对象数`).toBe(0);
+      }
+    }
+
+    const f = stepArchive().file;
+    const snapshot = JSON.stringify(f);
+    const s1 = stateAtStep(f, STEP_SPLIT);
+    const s2 = stateAtStep(f, STEP_SPLIT);
+    expect(stateFingerprint(s1)).toBe(stateFingerprint(s2));
+    // 深改返回值（含挂起效果与 log 这些最容易被共享的容器）
+    s1.log.push('篡改');
+    s1.players[0].hand.length = 0;
+    s1.players[0].protocols[0] = { defId: 'zz-篡改', compiled: false };
+    s1.control = 1;
+    s1.pendingEffects.length = 0;
+    expect(JSON.stringify(f), '改返回值不能改动档案').toBe(snapshot);
+    expect(stateFingerprint(s2), '两次调用的返回值必须互不影响').toBe(stateFingerprint(stateAtStep(f, STEP_SPLIT)));
   });
 });

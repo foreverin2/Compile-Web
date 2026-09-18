@@ -26,7 +26,13 @@ import {
   performDraftPick,
 } from '../core/state/create';
 import { resetControlIfHeld } from '../core/rules/control';
-import { matchFileToCreateOptions, type ActionRecord, type MatchFile, type MatchFileSetup } from './match-file';
+import {
+  matchFileToCreateOptions,
+  normalizeAction,
+  type ActionRecord,
+  type MatchFile,
+  type MatchFileSetup,
+} from './match-file';
 
 /* ------------------------------------------------------------------ *
  * 1. 一条档案操作 → 一次引擎调用（全仓唯一）
@@ -217,5 +223,51 @@ export function replayDraftFromSetup(s: GameState, setup: MatchFileSetup): Draft
 export function stateAfterDraft(f: MatchFile): GameState {
   const s = createGame(matchFileToCreateOptions(f));
   replayDraftFromSetup(s, f.setup);
+  return s;
+}
+
+/* ------------------------------------------------------------------ *
+ * 4. 档案 → 第 n 步的状态（G5 T4；见 G5 实现计划 D9 / §5 T4）
+ * ------------------------------------------------------------------ */
+
+/**
+ * 从档案重建到**第 n 条操作之后**的状态（T6 断线重连的 `resync-res` 落点）。
+ *
+ * 内部只做两件事：`stateAfterDraft(f)` 起跑，再逐条 `applyRecordedAction` 走前 n 条 ——
+ * 「`ActionRecord` → 引擎调用」的映射**仍然只有那一处**（D9 的硬要求）。重连不能另开一份：
+ * 在那个映射收口之前，同一份 `switch` 曾在现场与测试各有一份，"档案能重放"因此有两个
+ * 可能各自漂移的定义（本文件头注第 1 条）。
+ *
+ * **`n` 是操作条数，不是 `seq`**：`n = 0` 就是草稿结束的状态（逐字节等于 `stateAfterDraft(f)`），
+ * `n = f.actions.length` 是终局。
+ *
+ * **越界一律拒绝（抛错），不夹紧**。理由：夹紧会把"对端比我多走了几步"静默变成一个**看起来
+ * 同步**的状态 —— 那正是 D1「分叉就停下来给可读提示，不静默继续」要避免的形态，也与本模块
+ * 既有的取舍一致（未覆盖的 `kind` 抛错，`replayDraftFromSetup` 的不足/多余/池外三种错全抛）。
+ * 非整数（含 `NaN`）同样拒绝：不拒的话 `[0, n)` 这个循环会把 `1.5` 悄悄当成 1 走完。
+ *
+ * 返回的状态是**全新**的：每一轮都把那条记录**规范化（`normalizeAction` 深拷贝 `args`）**
+ * 之后再喂给引擎。这一层拷贝不是洁癖，是必需的 —— 引擎会把调用方传进去的 `choice` 数组
+ * **原样存进状态**（`src/core/effects/resolve.ts:168` 的 `pe.lastAnswer = { selected }`），
+ * 而 `effect-choice` 的 `args.choice` 恰好就是档案里的那个数组。实测（`.superpowers/g5-T4/`
+ * 的探索件，60 步档案 `g5t4-diff-first-9`）：不拷贝时 `n = 36` 处返回的状态与 `f.actions`
+ * **共享 1 个对象**，改返回值就顺着那条引用改掉了档案里的一条操作。重连恰好会落在这种
+ * "选择答到一半"的步上（挂起效果 2 个），所以这不是理论风险。
+ * 腿见 `tests/app/match-replay.test.ts`「判据 4：返回的状态不共享档案的引用」。
+ * 顺带：`normalizeAction` 在值上是恒等变换（只丢未知 `via`），指纹因此一字不变。
+ */
+export function stateAtStep(f: MatchFile, n: number): GameState {
+  if (!Number.isInteger(n) || n < 0) {
+    throw new Error(`stateAtStep: n 必须是不小于 0 的整数（收到 ${String(n)}）`);
+  }
+  if (n > f.actions.length) {
+    throw new Error(
+      `stateAtStep: n=${n} 超出档案长度 ${f.actions.length}（拒绝夹紧：夹紧会把"对端比我多走了几步"静默成一个看起来同步的状态）`,
+    );
+  }
+  const s = stateAfterDraft(f);
+  for (let i = 0; i < n; i += 1) {
+    applyRecordedAction(s, normalizeAction(f.actions[i]));
+  }
   return s;
 }
