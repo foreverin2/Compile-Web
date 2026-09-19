@@ -159,6 +159,20 @@ export interface TransportInit {
   selfId: string;
   /** 对端 id */
   peerId: string;
+  /**
+   * ★ **D25：这一侧是出 offer 的一方还是答 offer 的一方**。
+   *
+   * 为什么这件事必须由调用方在 `init` 时就告诉传输层：**加入方过去在 `init` 里也
+   * `createOffer` + `setLocalDescription`**（它先建了一条自己的 offer），等到对端那条 offer
+   * 真的到了、再由同一条连接去 `setRemoteDescription` + `createAnswer` ⇒ 真浏览器实测：
+   * 那条连接的 ICE 收集被 offer 的回滚打成 `gathering -> new`，之后再没产出任何候选
+   * （40 秒零候选、零 `icecandidateerror`），握手**永远推进不了**。
+   * ⇒ 加入方**不许**在收到对端 offer 之前建自己的 offer。
+   *
+   * 缺省语义：**`undefined` = `'host'`**（照旧出 offer）—— 这样既有调用点（假传输、
+   * 各条既有测试的 `init({ selfId, peerId })`）一个字都不用改。
+   */
+  readonly role?: 'host' | 'guest';
 }
 
 /** 状态变化的一张快照（`onStatus` 收到的东西） */
@@ -231,6 +245,34 @@ export interface NetTransport {
   onMessage(cb: (text: string, channel: NetChannel) => void): () => void;
   /** 订阅状态变化。返回退订函数。回调只报**变化**，同状态不重复报 */
   onStatus(cb: (change: StatusChange) => void): () => void;
+  /**
+   * ★★ **订阅"数据通道真的可以发了"**（G5/T8-E 加的**可选**成员）。
+   *
+   * ## 为什么必须有这一个口（真机实测，D25 之后的第三个断点）
+   *
+   * 传输状态转 `online`（来自 `connectionstatechange` / `iceconnectionstatechange`）与数据通道
+   * 真正 `open` **不是同一个时刻**。只读探针实测（`.superpowers/g5-T8/ice-chan-probe.txt`）：
+   * 两者都在 `t+11521ms` 报 `connected`，而两条 DataChannel 的 `open` 在 `t+11524ms` ——
+   * **晚 3 毫秒**。`send()` 在那一瞬间看到 `readyState === 'connecting'` ⇒ 直接丢
+   * （`sendIfOpen` 的既有语义：不排队、失败即报）。
+   * ⇒ 调用方（加入方的第一条 `hello`）在 `online` 那一刻发不出去时，**必须有一个事件能再叫醒它**；
+   * 否则那条消息永远发不出去，两端握手停在 `handshaking`。
+   *
+   * ## 为什么不做成"传输层自己排队"
+   *
+   * `send()` 的既有语义是"失败即返回结果、**不排队**"（`transport.ts` 的头注：静默排队会让
+   * "对端不在"这类事实被藏起来）。给 `send` 加队列会改掉那条语义；这里只**多发一个事件**，
+   * 把"要不要重发"留给调用方。
+   *
+   * ## 契约
+   *
+   *  - 回调在**至少一条**数据通道首次 open 之后被叫（实现可以对每条通道都叫）；
+   *  - 通道**已经** open 时才订阅 ⇒ 实现应当**立刻**叫一次（别让调用方漏掉这个时机）；
+   *  - 返回退订函数；
+   *  - **可选成员**：假传输不实现它（`fake-transport` 的通道是同步 open 的，没有这个空窗），
+   *    调用方必须写 `?.`。
+   */
+  onChannelOpen?(cb: () => void): () => void;
   /** 本端**发送**失败的旁路口（调用方不想在每一处都写 `if (!r.ok)` 时用它） */
   onError(cb: (failure: SendFailure) => void): () => void;
   status(): TransportStatus;

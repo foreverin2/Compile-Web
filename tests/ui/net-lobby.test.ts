@@ -1144,6 +1144,70 @@ describe('★ 修复轮 A1 · 邀请码那两条入口用**宿主给的那个**�
   });
 });
 
+/* ==================================================================== *
+ * 14. ★★ D25：加入方在收到对端 offer 之前**不许**建自己的 offer
+ *
+ * 真浏览器只读探针（`.superpowers/g5-T8/T8E-ICE-CONFIG.md`）实测：加入方过去在 `init` 里
+ * 也 `createOffer` + `setLocalDescription`，之后又在**同一条**连接上
+ * `setRemoteDescription(对端 offer)` + `createAnswer` ⇒ 那条连接的 ICE 收集被回滚成
+ * `gathering -> new`，重新 `gathering` 之后再没产出任何候选（40 秒零候选、零
+ * `icecandidateerror`、`iceConnectionState` 一直 `new`）⇒ 握手永远推进不了。
+ *
+ * 下面三条腿钉的就是这个分流（账本用假 peer connection 的 `fake.calls`）：
+ *   ① 加入方：收到 remote offer **之前** `createOffer` 调用数 = 0；
+ *   ② 房主：`createOffer` >= 1（对照，防"两边都不出 offer"也算过）；
+ *   ③ 收到 remote offer 之后：加入方 `createAnswer` = 1（而且要落在**同一条**连接上）。
+ * ==================================================================== */
+
+describe('★★ D25 · 加入方在收到对端 offer 之前不建自己的 offer', () => {
+  /** 造一条真 `createBrowserTransport`（内核是假 peer connection，账本记在 `fake.calls` 上） */
+  function transportWithLedger() {
+    const { pc, fake } = makeFakePc({ iceGatheringState: 'complete' });
+    const tr = createBrowserTransport({ peerConnection: () => pc as never, settings: () => null });
+    return { tr, fake, pc };
+  }
+  const countOf = (fake: ReturnType<typeof makeFakePc>['fake'], op: string): number =>
+    fake.calls.filter((c) => c.op === op).length;
+
+  it('★ ① 加入方 `init({ role: \'guest\' })` ⇒ `createOffer` 调用数 **= 0**，但通道照建', async () => {
+    const { tr, fake } = transportWithLedger();
+    const r = await tr.init({ selfId: 'g', peerId: 'h', role: 'guest' });
+    expect(r.ok, `加入方的传输没起来：${r.ok ? '' : r.message}`).toBe(true);
+    expect(countOf(fake, 'createOffer'), '加入方在收到对端 offer 之前就建了自己的 offer（D25 的靶子）').toBe(0);
+    expect(countOf(fake, 'setLocalDescription'), '加入方在 init 里就把自己的描述落下去了').toBe(0);
+    // 反空转：该做的两件事一件都没少（通道 + 监听），否则上面那两条"零"是废话
+    expect(countOf(fake, 'createDataChannel'), '加入方连数据通道都没建（那它就收不到 hello-ack）').toBe(2);
+  });
+
+  it('★ ② 房主 `init({ role: \'host\' })` ⇒ `createOffer` **>= 1**（对照：房主本来就该出 offer）', async () => {
+    const { tr, fake } = transportWithLedger();
+    const r = await tr.init({ selfId: 'h', peerId: 'g', role: 'host' });
+    expect(r.ok, '房主的传输没起来').toBe(true);
+    expect(countOf(fake, 'createOffer'), '房主没出 offer（那它就没有可发出去的邀请码）').toBeGreaterThanOrEqual(1);
+    expect(countOf(fake, 'setLocalDescription'), '房主没把自己的 offer 落下去').toBeGreaterThanOrEqual(1);
+    // 缺省语义：**不给 role** 的既有调用点走同一条路（`undefined` = 'host'，见 `TransportInit.role`）
+    const legacy = transportWithLedger();
+    expect((await legacy.tr.init({ selfId: 'h', peerId: 'g' })).ok).toBe(true);
+    expect(countOf(legacy.fake, 'createOffer'), '省略 role 的既有调用点行为变了（缺省必须是 host）')
+      .toBeGreaterThanOrEqual(1);
+  });
+
+  it('★ ③ 收到对端 offer 之后：加入方 `createAnswer` **= 1**，且与通道同一条连接', async () => {
+    const { tr, fake, pc } = transportWithLedger();
+    await tr.init({ selfId: 'g', peerId: 'h', role: 'guest' });
+    expect(countOf(fake, 'createAnswer'), '还没收到 offer 就 createAnswer 了').toBe(0);
+    const r = await acceptOffer(peerConnectionOf(tr) ?? (pc as never), { sdp: 'HOST-OFFER' });
+    expect(r.ok, `收下对端 offer 之后产不出 answer：${r.ok ? '' : r.message}`).toBe(true);
+    expect(countOf(fake, 'createAnswer'), '收到 offer 之后没有产 answer（或产了不止一条）').toBe(1);
+    // ★ 落在**同一条**连接上（缺口 ① 的回归）：通道与 answer 的账在同一份 calls 上
+    const ops = fake.calls.map((c) => c.op);
+    expect(ops, 'answer 不在承载消息的那条连接上').toEqual(
+      expect.arrayContaining(['createDataChannel', 'setRemoteDescription', 'createAnswer', 'setLocalDescription']),
+    );
+    expect(fake.remoteSeen[0]?.sdp, '喂进去的不是那条 offer').toBe('HOST-OFFER');
+  });
+});
+
 describe('★ 修复轮 A2/A3/A4/A5 · 建链路 / 发 hello / 入站重画 / 重连新建对象', () => {
   /** 造一对真客户端：各自的传输来自成对假件，`sessionId` 相同 */
   function pairClients() {
@@ -1401,6 +1465,54 @@ describe('★★ J-1/J-2 · 真浏览器那两条断点（入口不设角色 / �
     expect(statusSeen, '夹具失败：状态订阅没收到 online').toContain('online');
     expect(pair.B.sendSeq(), '没人发 hello，线上却有帧（这条反证不成立）').toBe(0);
     off();
+  });
+
+  /**
+   * ★★ **D25 之后的第三个断点**：真机实测 `connectionstatechange -> connected`（= 传输转
+   * `online`）与 DataChannel 真的 `open` **差约 3 毫秒**（`.superpowers/g5-T8/ice-chan-probe.txt`：
+   * 11521ms vs 11524ms）⇒ 在 `online` 那一刻发那条 `hello`，`readyState` 还是 `connecting`，
+   * `send` 直接失败；而"等状态"这条路不会再响 ⇒ 必须由**通道 open** 这个事件再叫一次。
+   *
+   * 这条腿把那个 3 毫秒的窗口摆出来：`status()` 报 `online`（状态事件已经来过），但**发是失败的**
+   * 直到夹具喊"通道开了"。判据两半：open 之前不许记成"发过了"；open 之后真发、且只发一条。
+   */
+  it('★ J-2b：传输报 `online` 但通道还没 open ⇒ 发失败、不许记成"发过了"；通道 open ⇒ 补发成功', async () => {
+    const pair = createFakeTransportPair();
+    const raw = pair.B.transport;
+    let channelOpen = false;
+    const openCbs: Array<() => void> = [];
+    const racy: NetTransport = {
+      ...raw,
+      status: () => 'online', // 状态事件已经来过（真机上它比通道 open 早约 3ms）
+      send: (ch, text) => {
+        if (!channelOpen) {
+          return { ok: false, reason: 'offline', message: '通道还没 open（这一条没有发出去）。' };
+        }
+        return raw.send(ch, text);
+      },
+      sendIfOpen: (ch, text) => {
+        if (!channelOpen) {
+          return { ok: false, reason: 'offline', message: '通道还没 open（这一条没有发出去）。' };
+        }
+        return raw.sendIfOpen(ch, text);
+      },
+      onChannelOpen: (cb: () => void) => { openCbs.push(cb); return () => { /* 这条腿不退订 */ }; },
+    };
+    const guest = makePairClient('guest', [racy]);
+    await guest.connect('first');
+    expect(pair.B.sendSeq(), '夹具失败：通道没开却已经有帧上线').toBe(0);
+    expect(guest.state().helloSent, '通道还没 open 就记成"发过了" ⇒ 没有人会再补发它').toBe(false);
+    expect(openCbs.length, '发失败之后没有请传输层"通道 open 时叫我"（那这条 hello 永远发不出去）')
+      .toBeGreaterThan(0);
+    // 通道开了 ⇒ 由那个订阅补发
+    channelOpen = true;
+    for (const cb of openCbs) cb();
+    expect(guest.state().helloSent, '通道 open 之后那条 hello 还是没发出去').toBe(true);
+    expect(pair.B.sendSeq(), '通道 open 之后线上还是空的').toBeGreaterThan(0);
+    // 幂等：再叫一次不许补第二条
+    const after = pair.B.sendSeq();
+    for (const cb of openCbs) cb();
+    expect(pair.B.sendSeq(), '通道 open 被通知两次就补发了第二条 hello').toBe(after);
   });
 });
 

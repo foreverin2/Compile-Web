@@ -824,20 +824,40 @@ export function createLobbySessionLink(opts: {
    */
   let pending = false;
 
+  /** 是否已经请传输层"通道一 open 就把这句叫醒"（只请一次；`flushHello` 里那句 `send` 只是重试） */
+  let openHooked = false;
+
   /**
-   * 把待发的那条 `hello` 真发出去（状态订阅与 `sendHello()` 共用这一份）。
+   * 把待发的那条 `hello` 真发出去（状态订阅 / 通道 open / `sendHello()` 共用这一份）。
    *
    * 返回 `true` = **这一次真的发出了**。三种 `false` 都是"没发"，且各有各的可读理由：
    * 没有待发位 / 传输还没 `online` / 传输层拒了。
+   *
+   * ## ★★ 为什么"传输转 `online`"与"通道真的 open"是**两个**时机（真机实测）
+   *
+   * 只读探针实测（`.superpowers/g5-T8/ice-chan-probe.txt`）：真 Chrome 里
+   * `connectionstatechange -> connected` 与 `iceconnectionstatechange -> connected` 都在
+   * **t+11521ms**，而两条数据通道的 `open` 事件在 **t+11524ms** —— 传输状态先转 `online`
+   * **3 毫秒**，`readyState` 还是 `connecting` ⇒ 那一刻 `sendIfOpen` 把这一条**丢掉**，
+   * 而这边又不重试 ⇒ 两端相位永远停在 `handshaking`（`send()` 一次都没被调用过）。
+   *
+   * ⇒ 本函数在"发失败"这一支上**请传输层在通道真的 open 时再叫一次**
+   * （`transport.onChannelOpen`；真实现按 `RTCDataChannel` 的 `open` 事件触发）。
+   * 这不是计时器：它是**事件订阅**，与"等 `online`"同一条纪律（本仓计时一律注入）。
    */
   function flushHello(): boolean {
     if (!pending || helloDone) return false;
     if (opts.transport.status() !== 'online') return false;
+    // ⚠️ 走 `send()`（= `sendIfOpen` + 记发件数）：把失败广播给 `onError` 订阅者这一点在这里是
+    //    可接受的 —— "通道晚 3 毫秒 open"是正常的重试过程，而重试由下面的订阅兜住。
     const r = send(helloMsg());
     if (!r.ok) {
-      // 传输报 online 却发不出去：把真因记在链路的可读拒绝位上（别静默 —— 否则屏上只会看到
-      // "握手停住"）。下一次状态再转 `online` 还会重试（待发位不动）。
+      // 传输报 online 却发不出去（通道还没 open / 队列满 / 已关）：记下可读真因，等下一次机会。
       driveRefusal = r.message;
+      if (!openHooked) {
+        openHooked = true;
+        opts.transport.onChannelOpen?.(() => { flushHello(); });
+      }
       return false;
     }
     pending = false;
@@ -1345,7 +1365,13 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
     const linkSessionId = opts.role === 'guest' && s.joined?.ok === true
       ? s.joined.payload.sessionId
       : opts.sessionId;
-    const started = await transport.init({ selfId: linkSessionId, peerId: `peer-of-${linkSessionId}` });
+    // ★ D25：把**角色**交给传输层 —— 加入方在收到对端 offer 之前不许建自己的 offer
+    //   （它先出 offer、之后又在同一条连接上当 answerer，会让那条连接的 ICE 收集被回滚成
+    //   零候选；真浏览器只读探针实测：40 秒零候选、零 icecandidateerror）。`opts.role` 就是
+    //   建会话对象用的那个角色，两侧同源。
+    const started = await transport.init({
+      selfId: linkSessionId, peerId: `peer-of-${linkSessionId}`, role: opts.role,
+    });
     const link = createLobbySessionLink({
       // ⚠️ 这里必须是 `opts.role`（**注入的角色**），**不是** `s.role`：`s.role` 要到
       //    `startHost()` / `applyInvite()` 才被赋值，而 `connect()` 会在它**之前**被调
@@ -1389,6 +1415,15 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
     link.session.noteTransportStatus(link.transportStatus());
     s.link = link;
     currentLink = link;
+    /**
+     * ★ **顺序写死：先把第一条 `hello` 交下去，再重接宿主的订阅。**
+     *
+     * 为什么：加入方交下这一条时传输通常还没 `online`（真机实测：`online` 比通道 `open` 早
+     * 约 3 毫秒）⇒ `sendHello()` 走"发失败"那一支、在那里注册 `onChannelOpen` 重试。
+     * 若反过来先 `reattachStatus()`，宿主的订阅会先建起来，而后面的失败重试与它无关 ——
+     * 两条路互不依赖，但"先注册重试"在读代码时更不容易被误读成"重试是靠宿主订阅兜的"。
+     */
+    if (opts.role === 'guest') link.sendHello();
     // ★ **把宿主的订阅重接到这条新链路上**（`statusWatchers` 是宿主的，链路每次都换新对象）。
     //   漏了这一步的后果是**静默**的：`onStatus` 照样收得到订阅、却永远收不到事件
     //   ⇒ `main.ts` 的"断线就重连"（A5）与"通道 open 之后补发 hello"（J-2）一起失效。
@@ -1397,10 +1432,6 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
     s.peer = link.session.peerStatus();
     // `init()` 只报**本侧**链路（D18）⇒ 失败时把它的真因显示出来，但**不**据此说"对端不在"
     if (!started.ok) s.notice = started.message;
-    // 加入方**交下第一条 `hello`**；房主不发（`hello` 的方向是加入方 → 房主）。
-    // ⚠️ J-2：这一步在真浏览器里发生时通道**还没 open** ⇒ 它多半只是把这一条**攒住**，
-    //    真发由上面那次 `reattachStatus()` 接上的状态订阅在转 `online` 时补（`flushHello`）。
-    if (opts.role === 'guest') link.sendHello();
     // 建链路那一刻就把读数读一次（否则第一帧 peerStatus() 是 'idle' 时的旧值）
     syncNow();
   };

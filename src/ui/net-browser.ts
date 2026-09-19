@@ -89,6 +89,8 @@ export interface DataChannelLike {
   send(data: string): void;
   close(): void;
   addEventListener(type: 'open' | 'close' | 'error' | 'message', cb: (ev: unknown) => void): void;
+  /** 退订（真件恒有；假件可以不实现 —— 可选 ⇒ 两边同形，不会逼测试伪造一个用不上的方法） */
+  removeEventListener?(type: 'open' | 'close' | 'error' | 'message', cb: (ev: unknown) => void): void;
 }
 
 /** 真实 `RTCPeerConnection` 的最小结构面（含 `restartIce`：计划 §5 T7 的交付物之一） */
@@ -1313,22 +1315,44 @@ export function createBrowserTransport(env?: NetBrowserEnv): NetTransport {
           if (typeof data === 'string') for (const cb of listeners.message) cb(data, spec.channel);
         });
       }
-      try {
-        const offer = await conn.createOffer();
-        await conn.setLocalDescription(offer);
-      } catch (e) {
-        return { ok: false, reason: 'offer-failed', message: `本侧连接描述没有建起来：${String(e)}` };
+      /**
+       * ★★ **D25：按角色分流 —— 加入方在收到对端 offer 之前不许建自己的 offer**。
+       *
+       * 过去两边都在 `init` 里 `createOffer` + `setLocalDescription`。加入方那条连接随后
+       * 又要 `setRemoteDescription(对端 offer)` + `createAnswer` ⇒ 真浏览器实测（只读探针）：
+       * 那条连接的 ICE 收集被回滚成 `gathering -> new`，重新 `gathering` 之后**再没产出任何
+       * 候选**（40 秒零候选、零 `icecandidateerror`、`iceConnectionState` 一直 `new`），
+       * 于是 `waitForIceGathering` 到点给可读失败、握手永远推进不了。
+       *
+       * 分流之后：
+       *  - **房主/缺省**（`role !== 'guest'`）：照旧 `createOffer` + `setLocalDescription`，
+       *    并把"等 ICE"排下来供 `localDescription()` 用；
+       *  - **加入方**（`role === 'guest'`）：只建通道与监听，**不** createOffer、**不**
+       *    setLocalDescription ⇒ 它那条连接的第一次描述就是 `acceptOffer` 里的
+       *    `setLocalDescription(answer)`（那条路自己在 `acceptOffer` 里等 ICE，不走 `gather`）。
+       *
+       * ⚠️ 缺省语义是 **`undefined` = `'host'`**（`transport.ts` 的 `TransportInit.role` 写了
+       * 理由）：既有调用点一个字都不用改，而这个分流只由**注入的角色**决定，不靠猜。
+       */
+      const asGuest = init.role === 'guest';
+      if (!asGuest) {
+        try {
+          const offer = await conn.createOffer();
+          await conn.setLocalDescription(offer);
+        } catch (e) {
+          return { ok: false, reason: 'offer-failed', message: `本侧连接描述没有建起来：${String(e)}` };
+        }
+        // ★ **B2**：`setLocalDescription` 之后 ICE 收集才刚开始 ⇒ 此刻 `localDescription.sdp` 里
+        //   还没有候选。这里把"等它收完"排下来（带上界），但**不 await**（`init()` 只等本侧，D18）。
+        //   要发一条非 trickle 的 offer 的调用方去 `await transport.localDescription()`。
+        //
+        //   ⚠️ **D 轮 I-2**：这里曾经传的是**原始的** `env`（不是上面那份 `resolved`）——
+        //   `waitForIceGathering` 自己会与缺省环境合并，但**缺省环境里没有 `ticker`**
+        //   （那是注入能力，`defaultEnv()` 拿不到 `window`）。于是"宿主给了 ticker、这一句却看不见"
+        //   ⇒ `iceGatheringState !== 'complete'` 时它回 `'unsupported'` ⇒ 房主永远取不到连接描述。
+        //   结算：传 `resolved`（就是本函数这一路上读的那个合并结果），不再有第二处合并。
+        gather = waitForIceGathering(conn, resolved);
       }
-      // ★ **B2**：`setLocalDescription` 之后 ICE 收集才刚开始 ⇒ 此刻 `localDescription.sdp` 里
-      //   还没有候选。这里把"等它收完"排下来（带上界），但**不 await**（`init()` 只等本侧，D18）。
-      //   要发一条非 trickle 的 offer 的调用方去 `await transport.localDescription()`。
-      //
-      //   ⚠️ **D 轮 I-2**：这里曾经传的是**原始的** `env`（不是上面那份 `resolved`）——
-      //   `waitForIceGathering` 自己会与缺省环境合并，但**缺省环境里没有 `ticker`**
-      //   （那是注入能力，`defaultEnv()` 拿不到 `window`）。于是"宿主给了 ticker、这一句却看不见"
-      //   ⇒ `iceGatheringState !== 'complete'` 时它回 `'unsupported'` ⇒ 房主永远取不到连接描述。
-      //   结算：传 `resolved`（就是本函数这一路上读的那个合并结果），不再有第二处合并。
-      gather = waitForIceGathering(conn, resolved);
       // 切回前台 / 换网之后重启 ICE。这个订阅是**能力**（`env.onVisibilityChange`）：
       // 纯层不知道"可见性"这个东西，宿主没给就不绑（无头 / 测试环境很常见）
       const onVis = resolved.onVisibilityChange;
@@ -1455,6 +1479,36 @@ export function createBrowserTransport(env?: NetBrowserEnv): NetTransport {
       return () => {
         const i = listeners.error.indexOf(cb);
         if (i >= 0) listeners.error.splice(i, 1);
+      };
+    },
+
+    /**
+     * ★★ **"通道真的可以发了"**（`transport.ts` 的 `onChannelOpen` 契约，T8-E）。
+     *
+     * 为什么它与 `onStatus('online')` **不是**同一件事（真机实测，`.superpowers/g5-T8/ice-chan-probe.txt`）：
+     * `connectionstatechange -> connected` 与两条 DataChannel 的 `open` 在真 Chrome 里差
+     * **约 3 毫秒**（11521ms vs 11524ms）⇒ 在 `online` 那一刻 `send()` 看到
+     * `readyState === 'connecting'`、直接丢掉那条消息。加入方的第一条 `hello` 正是这么丢的。
+     *
+     * 实现：对**每一条**已建出来的通道挂一个一次性的 `open` 监听；若订阅时**已经**有通道 open，
+     * **立刻**叫一次（不叫就等于让调用方漏掉那个时机）。返回把所有监听摘掉的退订函数。
+     */
+    onChannelOpen(cb: () => void): () => void {
+      const attached: Array<{ dc: DataChannelLike; fn: (ev: unknown) => void }> = [];
+      let done = false;
+      const fire = (): void => { if (done) return; done = true; cb(); };
+      for (const dc of channels.values()) {
+        if (dc.readyState === 'open') { fire(); break; } // 已经能发了：这个口是"可以发了"的通知
+        const fn = (): void => { fire(); };
+        try {
+          dc.addEventListener('open', fn);
+        } catch {
+          continue; // 这条实现不给 open 事件：不影响别的通道
+        }
+        attached.push({ dc, fn });
+      }
+      return () => {
+        for (const a of attached) a.dc.removeEventListener?.('open', a.fn);
       };
     },
 
