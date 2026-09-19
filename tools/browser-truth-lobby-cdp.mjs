@@ -452,19 +452,21 @@ try {
       const m = /会话相位：(\S+)/.exec(line ?? '');
       return m ? m[1] : null;
     };
+    // 「握手真的推进」= 两端都离开 `handshaking`/`idle`。**不再要求恰好停在 `awaiting-commit-face`**：
+    // T8-C 接上驱动者之后两端会一路走到 `complete`，用"那个相位"判会让**走得更远反而算失败**（2026-09-18 实测）。
+    const advancedPhase = (p) => p !== null && p !== 'handshaking' && p !== 'idle';
     const t1 = Date.now();
     while (Date.now() - t1 < budgetMs) {
       hostPhase = await phaseOf(host);
       guestPhase = await phaseOf(guest);
-      if (hostPhase === 'awaiting-commit-face' && guestPhase !== null && guestPhase !== 'handshaking') break;
+      if (advancedPhase(hostPhase) && advancedPhase(guestPhase)) break;
       await sleep(500);
     }
     if (!appliedOk) push(false, `房主贴回示码的结论是失败那一支：${errLine ?? '（没有结论）'}`);
     else push(true, `房主贴回的结论：${applied}`);
-    const advanced = hostPhase === 'awaiting-commit-face'
-      && guestPhase !== null && guestPhase !== 'handshaking' && guestPhase !== 'idle';
+    const advanced = advancedPhase(hostPhase) && advancedPhase(guestPhase);
     push(advanced, advanced
-      ? `两端相位推进到等待承诺：房主 ${hostPhase} / 加入方 ${guestPhase}`
+      ? `两端相位都推进了（离开 handshaking）：房主 ${hostPhase} / 加入方 ${guestPhase}`
       : `相位没推进：房主 ${hostPhase ?? '未读到'} / 加入方 ${guestPhase ?? '未读到'}（加入方停在 handshaking 就是 I-3 的症状）`);
   }
   say('');
