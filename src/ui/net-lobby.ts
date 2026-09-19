@@ -55,11 +55,15 @@ import {
 } from '../net/invite';
 import type { InviteDecodeResult } from '../net/invite';
 import { createGuestSession, createHostSession } from '../net/session';
-import type { HashLike, NetSession, PeerStatus, SessionInbound, SessionOutbound } from '../net/session';
+import type { HashLike, NetSession, PeerStatus, SessionInbound, SessionOutbound, SessionPhase } from '../net/session';
 import { decodeMsg, encodeMsg, normalizeRoomCode, roomChannel } from '../net/protocol';
 import type { NetMsg } from '../net/protocol';
 import type { NetChannel, NetTransport, SendResult, TransportStatus } from '../net/transport';
 import { PRIVACY_COPY } from '../app/privacy';
+import { coinLanding, draftStarterFor, faceFromSide, sideFromFace } from '../app/coin';
+import type { CoinSide } from '../app/coin';
+import type { CoinNetView } from './home';
+import type { PlayerId } from '../core/models/types';
 import { readIceServers, MESSAGE_CHANNEL } from './net-browser';
 import type { IceServersRead } from './net-browser';
 
@@ -178,6 +182,27 @@ export interface LobbyClientOptions {
   readonly matchSeed: string;
   /** 要一条真随机串（房主的盐、加入方的面 nonce）。调用两次得到两条不同的串，且各只调一次 */
   readonly randomToken: () => string;
+  /**
+   * ★★ **T11-B：向注入的能力要"这一局叫哪一面"**（加入方的 `commit-face` 用它）。
+   *
+   * ## 时机是写死的（D27 那条结构约束在代码里的样子）
+   *
+   * 要面发生在**`seed-committed` 那一格**（加入方收下房主的 `commit` 之后、发 `commit-ack` 之后），
+   * **不是**等到 `complete`：等到 `complete` 就意味着种子**先**公开、加入方**后**叫面，
+   * 硬币永远归它赢（D27 的两个选项里用户选了"保留顺序约束"）。
+   *
+   * ## 未注入时保持今天的行为（常量 0），并由测试钉住"屏上没有硬币屏"
+   *
+   * 缺了这个注入项 ⇒ 相位机照旧往下走、`commit-face` 照旧发面 `0`（`sideFromFace(1)`），
+   * 也就是 T11-B 之前那套**常量面**的行为。它**不是**可选兜底意义上的"随便挑一面"，
+   * 而是"这条调用方没有接硬币屏"这件事的显式后果：`main.ts` 接了硬币屏，测试夹具可以只走流程。
+   *
+   * ## 为什么是 Promise
+   *
+   * 面来自**玩家的点击**（硬币屏上那两枚芯片）：`Promise` 恰好是"这一刻还没定、定了就 resolve"
+   * 的形状。`driveOnce` 在它 resolve 之前**不推进那一格**（也就不会先发 `reveal-seed`）。
+   */
+  readonly chooseFace?: () => Promise<CoinSide>;
   /** 本机协议版本与卡牌指纹（`NetSessionOptions` 的两个必填本地事实） */
   readonly localProtoVersion: number;
   readonly localCardDataHash: string;
@@ -553,6 +578,13 @@ export function relayNoticeOf(read: IceServersRead): string | null {
 export interface LobbyState {
   /** 本端角色（`null` = 还没选"建房/加入"） */
   readonly role: 'host' | 'guest' | null;
+  /**
+   * ★ **T11-B**：这一刻的握手相位（没有链路时是 `'idle'`）。
+   *
+   * 它进来的理由：硬币屏（`src/ui/home.ts` 的联机分支）**不画**相位行，而真浏览器门在那块屏上
+   * 要读"握手走到哪一格" ⇒ 需要 `data-net-phase` 这个口（见 `renderNetLobby` 里的挂法）。
+   */
+  readonly phase?: SessionPhase | 'idle';
   /** 本局的 `sessionId`（只住会话层，不进档案，D2） */
   readonly sessionId: string;
   /** 房主生成的邀请码（`null` = 还没生成） */
@@ -704,6 +736,91 @@ export interface LobbySessionLink {
    * 它们是"**本对象**已经发过这一条"的事实，不是"流程到哪一步"的状态（后者归相位机）。
    */
   driveOnce(): boolean;
+  /**
+   * ★★ **T11-B：硬币屏要的三个读数**（屏按它们决定画什么，屏自己不记状态）。
+   *
+   * 为什么是**读数**而不是"屏直接读 `session`"：`LobbySessionLink` 已经把 `session` 暴露出来了，
+   * 但"哪些读数构成一帧硬币屏"这件事必须只有一个出处 —— 否则 `main.ts` 会自己拼一套
+   * （`role` 从哪来、落点什么时候算得出），而拼错的那一套在屏上看起来完全正常。
+   */
+  /** 本端角色（房主 = 等对方叫面；加入方 = 叫面的一方，D3） */
+  readonly role: 'host' | 'guest';
+  /**
+   * 加入方**叫出去的那一面**（屏上口径 `1 | 2`；`null` = 还没叫）。
+   *
+   * 叫面者只有加入方（D3），所以房主侧恒为 `null`。
+   */
+  chosenSide(): CoinSide | null;
+  /**
+   * ★★ **对端叫出去的那一面**（房主侧；`null` = 还没揭示，或本端就是叫面者）。
+   *
+   * 判"叫中 / 叫错"时**房主那一侧**该读的就是它：加入方在 `reveal-face` 里揭示的面就是
+   * 它叫出去的那一面（`session.face()` 在校验通过之后才有值）。
+   *
+   * ⚠️ 它**不是**落点（`landedSide()`）。两者在"叫中"时同值、在"叫错"时**必然相反** ——
+   * 真浏览器门实测（2026-09-19）：房主曾经拿落点当"对端叫的面"去算（`main.ts` 读的是
+   * `landedSide()`），于是它永远算"叫中了"：加入方没错时两端恰好同值、叫错时两端定格出
+   * 相反的先选者（`__coinTrace` 实测：房主 chosen=2 / 加入方 chosen=1、两端 landed 都是 2）。
+   */
+  peerChosenSide(): CoinSide | null;
+  /**
+   * ★★ **本端能算出的"落点"**（屏上口径 `1 | 2`；`null` = 还没到手）。
+   *
+   * ★ 两端用的是**同一条规则**：`coinLanding(种子)`（`src/app/coin.ts`，只此一处）。
+   * 种子的到手时刻两侧不同（房主 `sendCommit` 之后就有；加入方要等 `reveal-seed`），
+   * 所以两端的 `null → 有值` 会有先后 —— 但**值必然相同**（同一份种子、同一条式子）。
+   *
+   * ⚠️ 房主那份读数**不许早于**"加入方的面已经揭示"给屏用：种子在房主手里本来就有，
+   * 而房主先看到落点没有任何信息优势 —— 问题在于它会让等待方的屏上一个回合更早定格
+   * （实测踩过：房主显示"掷出 正面"而加入方显示"掷出 反面"，两端读数不同）。
+   * 屏那一侧的闸在 `verdictReady()`（见它）。
+   */
+  landedSide(): CoinSide | null;
+  /**
+   * ★★ **等待方（房主）此刻能不能拿这个落点算胜负**。
+   *
+   * 房主的胜负依据是"加入方叫的那一面 vs 落点"，而那个面只能从 `reveal-face` 得到
+   * （`session.face()` 在校验通过之后才有值）—— 在那之前它算不出"叫中 / 叫错"。
+   * 加入方自己就是叫面者（不需要这个口），恒 `true`。
+   */
+  verdictReady(): boolean;
+  /**
+   * ★★ **本端手里的"胜负依据"齐了没有**（落点 + 叫出去的那一面都在）。
+   *
+   * 为什么必须与 `landedSide()` 分开：房主比加入方**更早**算得出落点（种子在它手里），
+   * 而"叫中还是叫错"要看加入方的面。只看落点就在屏上定格，会定格出一个**胜负装错**的读数
+   * —— 真浏览器门实测（2026-09-19）：房主"玩家 2 先选协议"、加入方"玩家 1 先选协议"。
+   * 加入方那一侧还多一个条件：它自己叫出去的那一面也得在（`chosenSide() !== null`），
+   * 否则会在"面还没写进 `chosenFace`、而 Promise 的反应已经跑过"那个窗口里定格一次错读数。
+   */
+  winnerReady(): boolean;
+  /**
+   * 本端这条链路上**有没有"要面"的能力**（`LobbyClientOptions.chooseFace` 注入了没有）。
+   *
+   * 屏据它决定"要不要画硬币屏"：没有这个能力时那块屏根本不该出现（任务书 §5 的接口要求，
+   * 一条测试腿钉住这件事）。
+   */
+  hasFaceChooser(): boolean;
+  /**
+   * ★★ T11-B：**叫面者的座位**（= 加入方的座位；D3 说选面者永远是加入方）。
+   *
+   * ⚠️ **两端都要能读出同一个数**（判据 3 的"两端 `draftStarter` 相等"就靠它）：
+   *  - 加入方读**自己**的座位（`selfSeat`，由 `hello-ack.seat` 定下，D7）；
+   *  - 房主读**对端**的座位（`peerSeat`，由加入方的 `hello` 带过来）。
+   *
+   * 两端各读"本端座位"是不行的：那给出的是**两个不同的数**（房主 0 / 加入方 1），
+   * 而 `draftStarterFor` 的 `caller` 要的是**叫面者那一个座位** —— 真浏览器门实测
+   * （2026-09-19）房主算出"玩家 1 先选"、加入方算出"玩家 2 先选"，就是这一格写错的形状。
+   */
+  callerSeat(): PlayerId;
+  /**
+   * ★★ **本端此刻持有的种子**（`null` = 还没到手）。
+   *
+   * 语义照会话层那个口（`session.ts:717-742`）：**本方此刻持有**，不是"对端已经看到"——
+   * 房主在 `sendCommit` 之后就有，加入方要等 `reveal-seed`。宿主用它算先选协议者
+   * （`draftStarterFor(caller, chosen, seed)`）；"时机对不对"那一半由 `winnerReady()` 挡。
+   */
+  seedOfSession(): string | null;
 }
 
 /**
@@ -729,6 +846,12 @@ export function createLobbySessionLink(opts: {
   readonly matchSeed: string;
   /** ★ T11-A：要一条真随机串的动作（salt / nonce） */
   readonly randomToken: () => string;
+  /**
+   * ★★ T11-B：要面（加入方的 `commit-face` 用它）。见 `LobbyClientOptions.chooseFace`。
+   *
+   * 未注入 ⇒ 保持今天的行为（常量面 0）并由 `driveOnce` 直接往下走。
+   */
+  readonly chooseFace?: () => Promise<CoinSide>;
   readonly seat?: 0 | 1;
   readonly localProtoVersion: number;
   readonly localCardDataHash: string;
@@ -775,8 +898,51 @@ export function createLobbySessionLink(opts: {
    */
   let commitSent = false;
   let saltSent = false;
-  /** 加入方选的面（`seed-committed` 那一格要用；没有就默认 0） */
-  let chosenFace: 0 | 1 = 0;
+  /**
+   * 加入方选的面（`seed-committed` 那一格要用）。
+   *
+   * ★ **T11-B**：它的**唯一**赋值点就是"注入的能力 resolve 出来的那一面"，
+   * 并且必须经过 `faceFromSide`（屏上是 `1 | 2`、会话层是 `0 | 1`）。
+   * 没有注入 `chooseFace` 时它保持初值 `0` —— 也就是 T11-B 之前那套常量面的行为。
+   *
+   * ⚠️ `null` 是"**还没叫**"，不是"叫了正面"：`0 | 1` 里没有能表达"还没叫"的值，
+   * 而这两件事的后果完全不同（后者会当场发出 `commit-face`，前者要停在硬币屏上等玩家点）。
+   */
+  let chosenFace: 0 | 1 | null = null;
+  /**
+   * 是否已经**向注入的能力要过面**（每条链路一次）。
+   *
+   * 它防的是重复调 `chooseFace()`：`driveOnce` 会被反复调用（每次入站、每次 `drive()`），
+   * 而在面到手之前相位**不动**（这正是判据 1 要的"停在等面那一格"）⇒ 没有这个位，
+   * 同一个 `awaiting-commit-ack` 会被问很多次，屏上就会反复重开硬币屏。
+   */
+  let faceAsked = false;
+  /**
+   * ★★ **向注入的能力要一次面**（T11-B；唯一的调用点是 `driveOnce` 的 `awaiting-commit-ack`）。
+   *
+   * 三条纪律：
+   *  1. **每条链路只问一次**（`faceAsked`）—— 这一格会被反复驱动，重复问会让屏上反复重开硬币屏；
+   *  2. **结果一 resolve 就写进 `chosenFace`，并且必须经过 `faceFromSide`**（屏上 `1 | 2` ⇒
+   *     会话层 `0 | 1`；`chosenFace` 的赋值点数由 `tests/ui/coin-seed-injection.test.ts` 钉住）；
+   *  3. **不在这里驱动**：resolve 只写值，推进由调用方（屏上的点击 ⇒ `client.drive()`，
+   *     或下一次入站）进行 —— 本层不做隐式重入，免得"发一条"变成"发一串"。
+   */
+  function askFaceOnce(): void {
+    if (faceAsked) return;
+    const ask = opts.chooseFace;
+    if (ask === undefined) return;
+    faceAsked = true;
+    ask().then(
+      (side) => {
+        // 唯一的赋值点：屏上的面 → 会话层的面（映射只此一处，`src/app/coin.ts`）
+        chosenFace = faceFromSide(side);
+      },
+      (e: unknown) => {
+        // 面这条路断了（屏抛了 / 玩家没得选）：把真因留在读数里，绝不静默
+        driveRefusal = `要面失败：${e instanceof Error ? e.message : String(e)}`;
+      },
+    );
+  }
   /**
    * ★★ **面 nonce 每条链路只取一次**（T11-A 修复轮恢复；盐仍然不缓存）。
    *
@@ -1026,7 +1192,26 @@ export function createLobbySessionLink(opts: {
       case 'awaiting-commit-ack': {
         // `commitFace()` 的**唯一**合法相位（`session.ts:292`）⇒ 该发的是本方那条承诺。
         if (session.role !== 'guest') return false;
-        const r = session.commitFace(chosenFace, faceNonce());
+        /**
+         * ★★ **T11-B：面必须先到手，才允许往下走**（D27 的顺序约束落在这里）。
+         *
+         * 这一格是相位机的入口，也**只**是入口：`commitFace()` 一发出去，房主就据此揭示种子。
+         * 所以"要面"的时机就是这一刻，**不是** `complete` 之后 —— 后者会让加入方先看到种子，
+         * 硬币永远归它赢（D27 的两个选项里用户选了保留顺序约束）。
+         *
+         * 两种"还没有面"要分开（这条分界就是注入项存不存在）：
+         *  - **注入了 `chooseFace`**（`main.ts` 那条真路）：问一次，然后**停在原地等它 resolve**。
+         *    返回 `false` = "本端暂时没东西可发"，屏上那块硬币屏因此停在"等玩家点"的状态；
+         *  - **没有注入**（测试夹具 / 还没有硬币屏的调用方）：保持 T11-B 之前那套**常量面 0**
+         *    的行为，一步不差 —— 不能因为"没人给面"就让整条流程停住。
+         */
+        askFaceOnce();
+        // 没有注入 `chooseFace` ⇒ 常量面「正面」（会话层 0），也就是 T11-B 之前那句
+        // `session.commitFace(chosenFace, …)` 里 `chosenFace = 0` 的行为。走同一个映射口。
+        const legacyFace: 0 | 1 | null = opts.chooseFace === undefined ? faceFromSide(1) : null;
+        const face: 0 | 1 | null = chosenFace ?? legacyFace;
+        if (face === null) return false;
+        const r = session.commitFace(face, faceNonce());
         if (!r.ok) { driveRefusal = r.message; return false; }
         send(r.output.msg);
         return true;
@@ -1083,6 +1268,44 @@ export function createLobbySessionLink(opts: {
     helloSent: () => helloDone,
     helloDiag: () => helloTrace.join(' | '),
     driveOnce,
+    role: opts.role,
+    /**
+     * 加入方叫出去的那一面。`chosenFace` 是**会话层口径**（`0 | 1`），屏上要的是 `1 | 2`
+     * ⇒ 过 `sideFromFace`（映射只此一处）。房主侧恒 `null`（它不是叫面的一方，D3）。
+     */
+    chosenSide: (): CoinSide | null => (session.role === 'guest' && chosenFace !== null ? sideFromFace(chosenFace) : null),
+    /**
+     * 本端能算出的落点：**两端同一条规则**（`coinLanding(种子)`，`src/app/coin.ts` 只此一处）。
+     * 房主那份的**可用时机**另由 `verdictReady()` 把关（见接口上的说明）。
+     */
+    landedSide: (): CoinSide | null => {
+      const seed = session.seed();
+      return seed === null ? null : coinLanding(seed);
+    },
+    /**
+     * 对端叫出去的那一面（房主侧）。只有房主读得到（加入方自己就是叫面者）；
+     * `session.face()` 在 `acceptRevealFace` **校验通过之后**才被写（`session.ts:1828`）。
+     */
+    peerChosenSide: (): CoinSide | null => {
+      if (session.role !== 'host') return null;
+      const f = session.face();
+      return f === null ? null : sideFromFace(f);
+    },
+    /** 加入方自己就是叫面者（它读自己的 `chosenSide()`）⇒ 恒 `true`；房主要等面揭示进来 */
+    verdictReady: (): boolean => session.role === 'guest' || session.face() !== null,
+    /**
+     * 胜负依据齐了没有：落点在 + 叫出去的那一面在（各自那一侧能拿到的那一个）。
+     */
+    winnerReady: (): boolean => {
+      if (session.seed() === null) return false;
+      if (session.role === 'host') return session.face() !== null;
+      return chosenFace !== null;
+    },
+    hasFaceChooser: () => opts.chooseFace !== undefined,
+    /** 叫面者的座位（= 加入方的座位）：加入方读自己、房主读对端（见接口上的说明） */
+    callerSeat: () => (session.role === 'guest' ? session.selfSeat() : session.peerSeat()),
+    /** 本端此刻持有的种子（语义照会话层：房主 `sendCommit` 之后就有、加入方要等 `reveal-seed`） */
+    seedOfSession: () => session.seed(),
     routedIn: () => inCount,
     routedOut: () => outCount,
     transportStatus: () => opts.transport.status(),
@@ -1201,6 +1424,41 @@ export interface LobbyClient {
   commitmentVerified(): boolean | null;
   /** 本端是否能产回示码（屏上据此决定那个按钮出不出现） */
   canMakeAnswer(): boolean;
+  /**
+   * ★★ **T11-B：硬币屏所需的全部读数**（房主/加入方各读哪几个见 `LobbySessionLink`）。
+   *
+   * `role()` / `phase()` 是"这一刻在哪一格"的事实；`chosenSide()` / `landedSide()` 是
+   * "面到手了没有"的两个来源（叫面者读前者、等待方读后者）。**没有链路时**：
+   * `role()` 是 `null`（还没接上）、`phase()` 是 `'idle'`、两个 side 都是 `null`。
+   */
+  role(): 'host' | 'guest' | null;
+  /**
+   * 会话相位（没有链路时是 `'idle'` —— 那不是 `SessionPhase` 的成员：`SessionPhase` 描述的是
+   * "会话建起来之后在哪一格"，而"还没接上"是**大厅这一层**的事实，所以这里是一个更宽的联合）。
+   */
+  phase(): SessionPhase | 'idle';
+  /** 加入方叫出去的那一面（屏上口径 `1 | 2`；`null` = 还没叫 / 本端不是叫面者） */
+  chosenSide(): CoinSide | null;
+  /** 对端已经揭示的**落点**（房主侧；`null` = 还没到手）—— 屏上那颗大币停在哪一面 */
+  landedSide(): CoinSide | null;
+  /** 对端叫出去的那一面（房主侧；见 `LobbySessionLink.peerChosenSide` 的说明） */
+  peerChosenSide(): CoinSide | null;
+  /** 等待方此刻能不能用这个落点算胜负（见 `LobbySessionLink.verdictReady` 的说明） */
+  verdictReady(): boolean;
+  /** 胜负依据齐了没有（见 `LobbySessionLink.winnerReady` 的说明）—— 屏据它决定定不定格 */
+  winnerReady(): boolean;
+  /** 这条链路上有没有"要面"的能力（没有 ⇒ 屏上不出现硬币屏） */
+  canChooseFace(): boolean;
+  /**
+   * ★★ **叫面者的座位**（= 加入方的座位；D3）。
+   *
+   * 两端的这个数**必须相同**：加入方读自己的 `selfSeat`（`hello-ack.seat` 定下的），
+   * 房主读 `peerSeat`（加入方 `hello` 里带过来的）—— 两个读数同源，所以判据 3 的
+   * "两端 `draftStarter` 相等"是这条事实的直接后果。
+   */
+  callerSeat(): PlayerId;
+  /** 本端此刻持有的种子（见 `LobbySessionLink.seedOfSession` 的语义；`null` = 还没到手） */
+  seedOfSession(): string | null;
   /**
    * ★★ **按相位驱动承诺-揭示流程**（C 轮；结构缺口 ②）。
    *
@@ -1498,6 +1756,10 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
       // ★ T11-A：种子的素材与"再要一条随机串"的动作都从宿主注入（**不是** sessionId 派生）
       matchSeed: opts.matchSeed,
       randomToken: opts.randomToken,
+      // ★★ T11-B：**"要面"的能力必须跟着走下去**（`createLobbySessionLink` 才是真正消费它的那一层）。
+      //   漏了这一行 ⇒ 硬币屏永远不出现、面永远是常量 0，而屏上/线上都看不出哪里错了
+      //   （实测踩过：`hasFaceChooser()` 恒 false，`driveOnce` 走的是常量面那一支）。
+      ...(opts.chooseFace === undefined ? {} : { chooseFace: opts.chooseFace }),
       ...(opts.seat === undefined ? {} : { seat: opts.seat }),
       localProtoVersion: opts.localProtoVersion,
       localCardDataHash: opts.localCardDataHash,
@@ -1542,6 +1804,19 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
     //   漏了这一步的后果是**静默**的：`onStatus` 照样收得到订阅、却永远收不到事件
     //   ⇒ `main.ts` 的"断线就重连"（A5）与"通道 open 之后补发 hello"（J-2）一起失效。
     reattachStatus();
+    /**
+     * ★ T11-B：新链路建好之后，若**已经**落在"等面"那一格就把"要面"那件事当场问下去
+     * （重连回来的加入方就是这种）。
+     *
+     * 为什么要这一句：那一格**不会有**下一次入站（它在等玩家按芯片）⇒ 只在 `driveOnce` 里问，
+     * 这条路上就永远没人问。为什么复用 `driveOnce()` 而不是另开一个"只问面"的口：
+     * 相位→动作的对照只许有一个消费者，多一个入口就是第二份真相；而这一格上它做的事**只有**
+     * 要面这一件（没有别的消息可发）。
+     *
+     * ⚠️ 条件写死"加入方 + 等面那一格"：不带条件地驱动会在握手各格上顺手发消息
+     * （那是 `onInbound` 的活，不是建链路这一步的活）。
+     */
+    if (link.role === 'guest' && link.session.phase() === 'awaiting-commit-ack') link.driveOnce();
     s.transport = link.transportStatus();
     s.peer = link.session.peerStatus();
     // `init()` 只报**本侧**链路（D18）⇒ 失败时把它的真因显示出来，但**不**据此说"对端不在"
@@ -1553,6 +1828,8 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
   return {
     state: (): LobbyState => ({
       role: s.role,
+      // ★ T11-B：相位从当前链路读（没有链路 = 'idle'），给 `data-net-phase` 用
+      phase: s.link?.session.phase() ?? 'idle',
       sessionId: opts.sessionId,
       invite: s.invite,
       joined: s.joined,
@@ -1668,6 +1945,22 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
     canMakeAnswer: (): boolean => opts.buildAnswer !== undefined && s.joined?.ok === true,
 
     /**
+     * ★ T11-B：硬币屏要的读数。**没有链路**那一格：没接上就没有"本端角色"（`null`），
+     * 相位是 `'idle'`（`SessionPhase` 的初值），两个 side 都是 `null` —— 屏据这三件事
+     * 画出的必然是"还没有硬币屏"，而不是一个假装已经接上的空壳。
+     */
+    role: (): 'host' | 'guest' | null => s.link?.role ?? null,
+    phase: (): SessionPhase | 'idle' => s.link?.session.phase() ?? 'idle',
+    chosenSide: (): CoinSide | null => s.link?.chosenSide() ?? null,
+    landedSide: (): CoinSide | null => s.link?.landedSide() ?? null,
+    peerChosenSide: (): CoinSide | null => s.link?.peerChosenSide() ?? null,
+    verdictReady: (): boolean => s.link?.verdictReady() ?? false,
+    winnerReady: (): boolean => s.link?.winnerReady() ?? false,
+    canChooseFace: (): boolean => s.link?.hasFaceChooser() ?? false,
+    callerSeat: (): PlayerId => s.link?.callerSeat() ?? (opts.seat ?? 1),
+    seedOfSession: (): string | null => s.link?.seedOfSession() ?? null,
+
+    /**
      * ★★ **按相位把承诺-揭示流程驱动到"本端暂时没东西可发"为止**（C 轮；结构缺口 ②）。
      *
      * 为什么是循环而不是发一条：`driveOnce()` 一次只发一条（那是"读数→一条动作"的干净形态），
@@ -1757,6 +2050,103 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
 }
 
 /* ==================================================================== *
+ * 6.5 硬币屏的读数（T11-B）
+ * ==================================================================== */
+
+/**
+ * ★★ **本端这一刻在硬币屏上该看到什么**（`null` = 还没有硬币屏，照旧画大厅那一屏）。
+ *
+ * ## 为什么它住在这一层（修复轮从 `main.ts` 搬过来的）
+ *
+ * 它是"从客户端读数算出一帧硬币屏"的**唯一**一处，而它此前长在 `src/main.ts` 里 ——
+ * 那个文件一 import 就会把整个游戏跑起来（要真 DOM），**node 里测不了** ⇒ 这条链路上
+ * 最要命的那一格（"先选协议者用哪一面算"）只有真浏览器门一条腿，而那条腿是抽样的。
+ * 搬到这里之后，`tests/ui/net-lobby-coin-consensus.test.ts` 能用**真客户端 + 假传输**
+ * 直接跑它，把"两端算出的先选协议者必须相同"钉成 node 腿。
+ *
+ * ## 什么时候才该有硬币屏（D27 那条顺序约束在屏上的样子）
+ *
+ *  - **没有注入 `chooseFace` 的调用方**：恒 `null` —— 没有"要面"这条路，屏上就不该出现硬币屏；
+ *  - **房主**（等待方）：从它发完 `commit`（`awaiting-commit-face`）起，到走完 `complete` 为止；
+ *  - **加入方**（叫面方）：从 `awaiting-commit-ack`（它该叫面那一格）起。
+ *
+ * ## 三条判据只在这里算一次
+ *
+ *  - `caller` = **叫面者的座位**（两端读同一个数：加入方读自己、房主读对端）；
+ *  - `landed` = `coinLanding(种子)`（两端同一条规则）；
+ *  - `chosen` = **叫出去的那一面**（加入方读自己叫的、房主读对端揭示的）——
+ *    ⚠️ 它**不是**落点：拿落点当它会让房主永远算"叫中了"（真浏览器门实测的那个缺陷）。
+ *  - `winner` 与 `chosen` 一样只在**胜负依据齐了**（`winnerReady()`）之后才给，否则交 `null`
+ *    （屏上不定格），免得两端在各自"更早到手"的那一半上定格出两个相反读数。
+ *
+ * ## 两个注入的回调（宿主给行为，这一层只给读数）
+ *
+ *  - `choose`：玩家按了某一枚芯片（只有 `role === 'caller'` 会调）；
+ *  - `onChosen`：叫完之后**驱动一次**（面是异步到的，而驱动循环是同步的；缺这一下，
+ *    屏上看着正常、握手永远不走 —— 真浏览器门实测）。
+ */
+export function lobbyCoinViewOf(
+  client: LobbyClient,
+  hooks: { readonly choose: (side: CoinSide) => void; readonly onChosen: () => void },
+): CoinNetView | null {
+  if (!client.canChooseFace()) return null; // 没有"要面"的能力 ⇒ 屏上不出现硬币屏
+  const role = client.role();
+  if (role === null) return null;
+  const phase = client.phase();
+  const verdictReady = client.winnerReady();
+  const caller: PlayerId = client.callerSeat();
+  /**
+   * ★★ 先选协议者用到的那一面（**叫出去的那一面**，不是落点）：
+   * 加入方读自己叫的、房主读对端在 `reveal-face` 里揭示的。
+   */
+  const chosenForVerdict: CoinSide | null = role === 'host' ? client.peerChosenSide() : client.chosenSide();
+  const seed = client.seedOfSession();
+  const ready = verdictReady && chosenForVerdict !== null && seed !== null;
+  const landed = ready ? client.landedSide() : null;
+  const winner: PlayerId | null = ready && landed !== null
+    ? draftStarterFor(caller, chosenForVerdict, seed)
+    : null;
+  if (ready && landed !== null) {
+    /**
+     * ★★ **跨端判据读的就是它**（真浏览器门 ③.5）：在"胜负依据齐了"的**那一帧**把四个读数
+     * 挂到 `globalThis.__coinInputs`（`caller` / `chosen` / `landed` / `winner`，后两个都是**座位**）。
+     *
+     * 两端的重画时刻不同 ⇒ 只读"此刻的文案"可能读到一个**瞬时**帧；工具据此比读数，
+     * 再比"文案里那个 `玩家 N` 是否等于各自 `winner + 1`"（全局座位编号：玩家 1 = 座位 0）。
+     * 它**不改文案、不占屏**（与 `data-net-phase` 同族）。
+     */
+    const g = globalThis as { __coinReady?: boolean; __coinInputs?: Record<string, unknown> };
+    g.__coinReady = true;
+    g.__coinInputs = { role, caller, chosen: chosenForVerdict, landed, winner, seed, phase };
+  }
+  if (role === 'host') {
+    // 房主：发完承诺（`awaiting-commit-face`）就在等对方叫面；走完 `complete` 也还在这块屏上
+    if (phase !== 'awaiting-commit-face' && phase !== 'face-committed' && phase !== 'complete') return null;
+    return {
+      role: 'waiter',
+      phase,
+      choose: () => { /* 等待方没有可点的东西（`renderCoin` 也把芯片禁掉了） */ },
+      chosen: null,
+      landed,
+      winner,
+      caller,
+    };
+  }
+  // 加入方：`awaiting-commit-ack` 之后的每一格都属于"它该叫面 / 已经叫了"那一族
+  if (phase !== 'awaiting-commit-ack' && phase !== 'face-committed' && phase !== 'seed-revealed'
+    && phase !== 'reveal-salt-sent' && phase !== 'complete') return null;
+  return {
+    role: 'caller',
+    phase,
+    choose: (side) => { hooks.choose(side); hooks.onChosen(); },
+    chosen: client.chosenSide(),
+    landed,
+    winner,
+    caller,
+  };
+}
+
+/* ==================================================================== *
  * 7. 渲染（整屏屏；默认不渲染的东西**不进 DOM**）
  * ==================================================================== */
 
@@ -1835,6 +2225,13 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
   root.classList.remove('screen-home');
   const s = nav.state;
   const screen = el('div', 'net-lobby-screen');
+  /**
+   * ★ **把相位挂成属性**（T11-B）：大厅那一屏本来就画着「会话相位：…」那一行，
+   * 但硬币屏（`src/ui/home.ts` 的 `renderCoin` 联机分支）没有那一行 ——
+   * 真浏览器门在硬币屏上要读"握手走到哪一格"就只剩这个口。
+   * 与下面的 `data-hello-diag` 同一套做法：**不占屏、不改文案、不参与任何判定**。
+   */
+  screen.setAttribute('data-net-phase', s.phase ?? 'idle');
   /**
    * ★ **诊断读数挂在属性上**（T8-E）：不占屏、不改文案、不参与任何判定 —— 只是让
    * `document.querySelector('.net-lobby-screen').dataset.helloDiag` 一次就能读到
@@ -2029,3 +2426,8 @@ export function protoOfPayload(payload: string): { ok: true; proto: number } | {
 export function linkOf(originAndPath: string, payload: string): string {
   return inviteLinkOf(originAndPath, payload);
 }
+
+
+
+
+

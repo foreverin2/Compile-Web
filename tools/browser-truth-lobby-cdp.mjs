@@ -19,7 +19,10 @@
  *     （不是"本机还没有建起对端连接"，那正是 I-1 的症状）；
  *  ③ 握手真的推进 ⇒ 两端相位走到"等待承诺"（房主 `awaiting-commit-face` /
  *     加入方 `awaiting-commit`），不是各自停在 `handshaking`（I-3 的症状）；
- *  ④ 负控：把那条邀请码**改坏一个字符**再贴 ⇒ 屏上必须给**可读**的失败，且**不假装成功**
+ *  ③.5 **硬币屏插在握手中间**（G5 T11-B / D27）：两端屏上都出现硬币屏、标题说清"由加入方选面"、
+ *     可见文案不含禁用词；加入方**点芯片之前**屏上没有落点读数（种子还没公开）、
+ *     两枚芯片可点；点了之后落点出现、两端读数逐字相同、握手继续走到 `complete`；
+ *  ④ 负控：把那条邀请码的**压缩段截断**再贴 ⇒ 屏上必须给**可读**的失败，且**不假装成功**
  *     （不产回示码、相位不前进）。
  *
  * ## 它怎么起环境（端口怎么选）
@@ -88,7 +91,7 @@
  *   node tools/browser-truth-lobby-cdp.mjs --repo <路径>    # 打到一棵变异镜像上（见下面"变异镜像实测"）
  *   node tools/browser-truth-lobby-cdp.mjs --json <路径>    # 原始结果落盘
  *
- * 退出码：0 = 四条判定全通过；1 = 有判定不通过；2 = 环境错误（找不到 Chrome / vite 起不来 / CDP 连不上）。
+ * 退出码：0 = 全部判定通过；1 = 有判定不通过；2 = 环境错误（找不到 Chrome / vite 起不来 / CDP 连不上）。
  * ========================================================================== */
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -330,6 +333,25 @@ async function driveToLobby(p) {
 
 /* ── 主流程 ─────────────────────────────────────────────────────────────── */
 
+/**
+ * 读某一侧的握手相位。
+ *
+ * ★ **优先读屏幕属性 `data-net-phase`**：它是**两块屏都挂**的那一个口。T11-B 之后加入方会切到
+ * 硬币屏，而那块屏上**没有**大厅的「会话相位：…」行 ⇒ 只读那一行会读到 `null`，
+ * 把"走得更远"判成"没推进"（实测：第 1 次跑 ③ 就是这么红的）。老那一行留作兜底。
+ */
+async function phaseOfSide(p) {
+  const v = await p.evaluate(
+    "document.querySelector('.coin-screen')?.getAttribute('data-net-phase')"
+    + " ?? document.querySelector('.net-lobby-screen')?.getAttribute('data-net-phase')"
+    + ' ?? null',
+  );
+  if (typeof v === 'string' && v.length > 0) return v;
+  const line = await p.text('.net-lobby-phase');
+  const m = /会话相位：(\S+)/.exec(line ?? '');
+  return m ? m[1] : null;
+}
+
 const chrome = findChrome();
 if (!chrome) die('找不到 Chrome/Edge（可用 CHROME_PATH 指定）');
 if (!existsSync(VITE_BIN)) die(`找不到 vite：${VITE_BIN}`);
@@ -436,43 +458,290 @@ try {
   if (answerCode === null) {
     push(false, '未到达：没有可贴回去的回示码（②没产出）');
   } else {
+    /**
+     * ★★ **先把"贴码那一刻的结论"抓下来**（修复轮；评审建议的延迟判定必须靠它）。
+     *
+     * 为什么不能在旁边慢慢轮询：`type()` 会派发真的 `input` 事件 ⇒ 大厅那一屏**会整屏重画**
+     * ⇒ `.net-lobby-notice` 上那一行被抹掉。等 400ms 再读就已经晚了（实测：轮询一直读到
+     * `notice=null`，而那一行其实**出现过**）。所以在同一次 `evaluate` 里做两件事：
+     * 先装一个 MutationObserver 把"这一行出现过没有"记进 `window.__answerWatch`，
+     * 再 `insertText` 触发 `input`。之后读那个记账位，不读 DOM 的此刻。
+     */
+    await host.evaluate(`(() => {
+      const w = { notice: null, error: null };
+      window.__answerWatch = w;
+      const grab = () => {
+        const n = document.querySelector('.net-lobby-notice');
+        if (n && n.textContent && n.textContent.trim().length > 0) w.notice = n.textContent.trim();
+        const e = document.querySelector('.net-lobby-error');
+        if (e && e.textContent && e.textContent.trim().length > 0) w.error = e.textContent.trim();
+      };
+      const obs = new MutationObserver(grab);
+      obs.observe(document.getElementById('app'), { childList: true, subtree: true, characterData: true });
+      grab();
+      return true;
+    })()`);
     await host.type('.net-lobby-answer-input', answerCode);
     const t0 = Date.now();
     let applied = null;
+    let errLine = null;
+    /**
+     * 等结论：**优先读那个记账位**（它记的是"出现过没有"），DOM 的此刻作兜底。
+     *
+     * ⚠️ **两种读数都要看**：`applyAnswer` 是异步的（`setRemoteDescription` 之后要等 ICE 那一步），
+     * 而成功那一支写的**不是** `state().notice`，是 `state().answerApplied.message`
+     * —— 它渲染出来的那行也是 `.net-lobby-notice`（失败那一支渲染成 `.net-lobby-error`）。
+     */
     while (Date.now() - t0 < budgetMs) {
-      applied = await host.text('.net-lobby-notice');
-      if ((await host.count('.net-lobby-error')) > 0) break;
+      const watch = await host.evaluate('JSON.stringify(window.__answerWatch ?? null)');
+      let w = null;
+      try { w = JSON.parse(String(watch)); } catch { w = null; }
+      applied = (w && typeof w.notice === 'string' && w.notice.length > 0 ? w.notice : null)
+        ?? (await host.text('.net-lobby-notice'));
+      errLine = (w && typeof w.error === 'string' && w.error.length > 0 ? w.error : null)
+        ?? (await host.text('.net-lobby-error'));
+      if (errLine !== null && errLine.length > 0) break;
       if (applied !== null && applied.length > 0) break;
-      await sleep(400);
+      await sleep(200);
     }
-    const errLine = await host.text('.net-lobby-error');
+    if (errLine === null) errLine = await host.text('.net-lobby-error');
+    // 记账位里的那一份优先（它记的是"出现过"，不会被后来的重画抹掉）
+    const watchFinal = await host.evaluate('JSON.stringify(window.__answerWatch ?? null)');
+    try {
+      const w = JSON.parse(String(watchFinal));
+      if (w && typeof w.notice === 'string' && w.notice.length > 0) applied = w.notice;
+      if (w && typeof w.error === 'string' && w.error.length > 0) errLine = w.error;
+    } catch { /* 读不到就用上面那一份 */ }
+    /**
+     * ★ **两种"成功"都算通过**（T11-B 实测的判据收口，**不是**放宽）：
+     *
+     *  1. 屏上出现了应用结论（`.net-lobby-answer-applied` / `.net-lobby-notice`）—— 原来那一条；
+     *  2. **两端相位真的往后走了**（下面 `advanced` 那一条就是它）。
+     *
+     * 为什么第 2 条也算：`applyAnswer` 成功那一支**也会**写 `answerApplied`，但它要先等
+     * 本机那条对端连接建起来（`hostPeerConnection` 由 `onPeerConnection` 回执填）——
+     * 本机 ICE 收集慢的时候（实测 4.8-5.2 秒，预算 25 秒足够）它可能还没轮到那一格，
+     * 而加入方那条路**不依赖**它 ⇒ 两端相位照样一路走到 `awaiting-commit-face` / `awaiting-commit-ack`。
+     * 于是"结论那行还没写"与"这条路没通"是两件事，原判据把前者读成了后者（实测：先红后绿两次）。
+     * **失败那一支仍然是失败**：`errLine` 非空一律不通过（下面那句）。
+     */
     const appliedOk = errLine === null && applied !== null && applied.length > 0;
-    const phaseOf = async (p) => {
-      const line = await p.text('.net-lobby-phase');
-      const m = /会话相位：(\S+)/.exec(line ?? '');
-      return m ? m[1] : null;
-    };
+    if (!appliedOk) {
+      // 不通过时把那一屏的原始读数记下来（否则只能猜"是没结论还是读错了"）
+      const noticeRaw = await host.text('.net-lobby-notice');
+      const phaseRaw = await phaseOfSide(host);
+      notes.push(`③ 未通过时的原始读数：notice=${JSON.stringify(noticeRaw)}`
+        + ` error=${JSON.stringify(errLine)} 相位=${String(phaseRaw)} 轮询读数=${JSON.stringify(applied)}`);
+    }
     // 「握手真的推进」= 两端都离开 `handshaking`/`idle`。**不再要求恰好停在 `awaiting-commit-face`**：
     // T8-C 接上驱动者之后两端会一路走到 `complete`，用"那个相位"判会让**走得更远反而算失败**（2026-09-18 实测）。
+    // T11-B 之后加入方会停在 `awaiting-commit-ack`（等玩家叫面）—— 那同样算推进。
     const advancedPhase = (p) => p !== null && p !== 'handshaking' && p !== 'idle';
     const t1 = Date.now();
     while (Date.now() - t1 < budgetMs) {
-      hostPhase = await phaseOf(host);
-      guestPhase = await phaseOf(guest);
+      hostPhase = await phaseOfSide(host);
+      guestPhase = await phaseOfSide(guest);
       if (advancedPhase(hostPhase) && advancedPhase(guestPhase)) break;
       await sleep(500);
     }
-    if (!appliedOk) push(false, `房主贴回示码的结论是失败那一支：${errLine ?? '（没有结论）'}`);
-    else push(true, `房主贴回的结论：${applied}`);
     const advanced = advancedPhase(hostPhase) && advancedPhase(guestPhase);
+    if (errLine !== null && errLine.length > 0) {
+      push(false, `房主贴回示码的结论是失败那一支：${errLine}`);
+    } else if (appliedOk) {
+      push(true, `房主贴回的结论：${applied}`);
+    } else {
+      push(advanced, advanced
+        ? `房主那行结论还没写上去（等 ICE 收集），但两端相位已经推进到 房主 ${hostPhase} / 加入方 ${guestPhase}`
+        : '房主贴回示码之后既没有结论、相位也没动');
+    }
     push(advanced, advanced
       ? `两端相位都推进了（离开 handshaking）：房主 ${hostPhase} / 加入方 ${guestPhase}`
       : `相位没推进：房主 ${hostPhase ?? '未读到'} / 加入方 ${guestPhase ?? '未读到'}（加入方停在 handshaking 就是 I-3 的症状）`);
+    /**
+     * ★★ **延迟判定：房主那行结论最终必须出现**（评审对 ③ 收口的建议，修复轮补上）。
+     *
+     * 上面那条收口允许"结论行还没写上去、但相位已经推进"算通过 —— 理由是 `applyAnswer` 是
+     * 异步的（要等本机那条对端连接建起来、`hostPeerConnection` 由 `onPeerConnection` 回执填），
+     * 而加入方那条路不依赖它。代价：**万一它永远不出现**，上面那条会把 ③ 判绿。
+     * ⇒ 这里认"**出现过**"（上面那个 `MutationObserver` 的记账位）：
+     * 既没有可读失败、也没有结论行出现过 ⇒ 红。
+     */
+    const tLate = Date.now();
+    let lateLine = applied;
+    let lateErr = errLine;
+    while ((lateLine === null || lateLine.length === 0) && (lateErr === null || lateErr.length === 0)
+      && Date.now() - tLate < 20000) {
+      const raw = await host.evaluate('JSON.stringify(window.__answerWatch ?? null)');
+      try {
+        const w = JSON.parse(String(raw));
+        if (w && typeof w.notice === 'string' && w.notice.length > 0) lateLine = w.notice;
+        if (w && typeof w.error === 'string' && w.error.length > 0) lateErr = w.error;
+      } catch { /* 记账位读不到就继续等 */ }
+      if ((lateLine === null || lateLine.length === 0) && (lateErr === null || lateErr.length === 0)) await sleep(400);
+    }
+    const lateOk = (lateLine !== null && lateLine.length > 0) || (lateErr !== null && lateErr.length > 0);
+    if (!lateOk) {
+      const phaseLate = await phaseOfSide(host);
+      notes.push(`③ 延迟判定未通过时的原始读数：notice=${JSON.stringify(await host.text('.net-lobby-notice'))}`
+        + ` error=${JSON.stringify(await host.text('.net-lobby-error'))} 房主相位=${String(phaseLate)}`
+        + ` 轮询读数=${JSON.stringify(applied)}`);
+    }
+    push(lateOk, lateOk
+      ? `房主那行结论出现过：「${lateLine ?? lateErr ?? ''}」`
+      + '（③ 收口放行的那一格里，它最终确实出现了）'
+      : '房主贴回示码之后**始终**没有结论行、也没有可读失败（③ 那条收口会把它漏过去）');
   }
   say('');
 
-  /* ── ④ 负控：邀请码改坏一个字符 ─────────────────────────────────────── */
-  say('=== ④ 负控（把邀请码改坏一个字符再贴：必须给可读失败，且不假装成功）===');
+  /* ── ③.5 硬币屏：加入方叫面之前屏上没有落点，点了之后握手才继续（G5 T11-B）───── */
+  say('=== ③.5 硬币屏插在握手中间（D27：叫面早于公开种子）===');
+  if (answerCode === null) {
+    push(false, '未到达：握手没推进（③不通过）⇒ 硬币屏那几条也没到');
+  } else {
+    // 两端都该出现硬币屏：加入方叫面、房主等（`lobbyCoinView()` 按会话角色分）
+    const hostCoin = await host.waitFor('.coin-face-chip', budgetMs);
+    const guestCoin = await guest.waitFor('.coin-face-chip', budgetMs);
+    push(hostCoin && guestCoin, hostCoin && guestCoin
+      ? '两端屏上都出现了硬币屏（同一套 `coin-face-chip`）'
+      : `硬币屏没出现：房主 ${hostCoin ? '有' : '没有'} / 加入方 ${guestCoin ? '有' : '没有'}`);
+    if (guestCoin) {
+      const guestTitle = (await guest.text('.coin-title')) ?? '';
+      // 标题必须说清"由加入方选面"（热座那句在联机下不成立）
+      push(guestTitle.includes('加入方'), guestTitle.includes('加入方')
+        ? `硬币屏标题说清了选面的一方：「${guestTitle}」`
+        : `硬币屏标题没有说清"由加入方选面"：「${guestTitle}」`);
+      const banned = ['公平', '防作弊', '无法作弊'];
+      const guestAll = (await guest.evaluate('document.body.innerText')) ?? '';
+      const hostAll = (await host.evaluate('document.body.innerText')) ?? '';
+      const hit = banned.filter((w) => guestAll.includes(w) || hostAll.includes(w));
+      push(hit.length === 0, hit.length === 0
+        ? '硬币屏可见文案不含「公平 / 防作弊 / 无法作弊」'
+        : `硬币屏可见文案里出现了禁用词：${hit.join('、')}`);
+      /**
+       * ★ 点芯片**之前**：屏上不许有落点读数（判据 4 的那一半）。
+       *
+       * 为什么这条能钉住"种子不早于叫面"：落点是从种子派生的，种子的唯一来源是
+       * 房主的 `reveal-seed`，而那条消息只在 `commit-face` 之后才发 —— 所以"点之前没有落点"
+       * 与"叫面早于公开种子"在屏上是同一件事。
+       */
+      const preResult = await guest.text('.coin-result-text');
+      const preChips = await guest.evaluate(`[...document.querySelectorAll('.coin-face-chip')].map((c) => c.disabled)`);
+      push(preResult === null, preResult === null
+        ? '点芯片之前屏上没有落点读数（种子还没公开）'
+        : `点芯片之前屏上已经有落点读数了：「${preResult}」`);
+      /**
+       * ★ **等待方也不许提前显示落点**（变异 M4 的锚点）。
+       *
+       * 房主手里**本来就有种子**（`sendCommit` 之后），比加入方更早算得出落点；
+       * 而"叫中还是叫错"要看加入方叫的那一面 —— 那个面在 `reveal-face` 进来之前谁也拿不到。
+       * 不挡住这一格，等待方的屏会在一个回合之前定格出一个**胜负装错**的读数
+       * （实测症状：房主"玩家 2 先选协议"、加入方"玩家 1 先选协议"）。
+       */
+      const preHostResult = await host.text('.coin-result-text');
+      push(preHostResult === null, preHostResult === null
+        ? '点芯片之前，等待方（房主）的屏上也没有落点读数'
+        : `等待方的屏上提前出现了落点：「${preHostResult}」`);
+      push(
+        Array.isArray(preChips) && preChips.length === 2 && preChips.every((d) => d === false),
+        Array.isArray(preChips) && preChips.length === 2 && preChips.every((d) => d === false)
+          ? '加入方那两枚芯片可点（叫面的一方）'
+          : `加入方的芯片状态不对：${JSON.stringify(preChips)}`,
+      );
+      // 真鼠标点第一枚（正面）
+      await guest.click('.coin-face-chip');
+      const landed = await guest.waitFor('.coin-result-text', budgetMs);
+      /**
+       * 诊断读数：点完那一刻芯片上的 `selected` 与屏上的相位。
+       *
+       * 它的用处是**分辨两种失败**：芯片被选中 = 点击真的进了处理函数（问题在握手那一侧）；
+       * 一枚都没选 = 点击没到（`Input.dispatchMouseEvent` 与元素矩形的问题）。
+       * 只进 `notes`，不参与判定。
+       */
+      const pickedNow = await guest.evaluate(
+        "[...document.querySelectorAll('.coin-face-chip')].map((c) => c.className)",
+      );
+      const phaseNow = await phaseOfSide(guest);
+      notes.push(`点完芯片之后：芯片类名 ${JSON.stringify(pickedNow)} / 相位 ${String(phaseNow)} / 落点 ${String(landed)}`);
+      push(landed, landed
+        ? `点完芯片之后屏上出现了落点：${(await guest.text('.coin-result-text')) ?? ''}`
+        : '点了芯片之后屏上没有出现落点（握手没继续 ⇒ 种子没到）');
+      if (landed) {
+        /**
+         * ★★ **跨端判据**（修复轮）：等两端**读数就绪**，再比**读数**（座位号），文案按同一套
+         * 全局座位编号归一化后比 —— 不比本地化字符串的逐字相等。
+         *
+         * ## 上一版为什么读不出那个缺陷
+         *
+         * 上一版只比"两端 `.coin-result-text` 的整句是否逐字相同"。那有两个毛病：
+         *  1. 两句都合法、只是**先选者不同**时，它给出的是一句"文案不同"，读者分不清
+         *     "两端算的是两件事"还是"编号口径不同"；
+         *  2. 更糟的是它**可能读到瞬时帧**（两端的重画时刻本来就不同）。
+         *
+         * ## 现在比什么
+         *
+         * `main.ts` 在**胜负依据齐了的那一帧**把四个输入挂到 `globalThis.__coinInputs`
+         * （`caller` / `chosen` / `landed` / `winner`，后两个都是**座位**）。判据：
+         *  - ① 四个数两端逐个相同；
+         *  - ② 两端**文案里那个 `玩家 N`** 都等于各自 `winner + 1`（全局座位编号：玩家 1 = 座位 0）。
+         * ② 是把"读数对、文案却写了另一个数"这条也钉住 —— 只比读数时它看不见。
+         */
+        const readReady = async (p) => (await p.evaluate('String(globalThis.__coinReady ?? false)')) === 'true';
+        const t3 = Date.now();
+        while (Date.now() - t3 < budgetMs) {
+          if ((await readReady(host)) && (await readReady(guest))) break;
+          await sleep(200);
+        }
+        const inputsOf = async (p) => await p.evaluate('JSON.stringify(globalThis.__coinInputs ?? null)');
+        const parse = (s) => { try { return JSON.parse(String(s)); } catch { return null; } };
+        const hObj = parse(await inputsOf(host));
+        const gObj = parse(await inputsOf(guest));
+        notes.push(`硬币屏读数：房主 ${JSON.stringify(hObj)} / 加入方 ${JSON.stringify(gObj)}`);
+        const sameInputs = hObj !== null && gObj !== null
+          && hObj.caller === gObj.caller && hObj.chosen === gObj.chosen
+          && hObj.landed === gObj.landed && hObj.winner === gObj.winner;
+        push(sameInputs, sameInputs
+          ? `两端四个读数逐个相同：caller=${String(hObj.caller)} chosen=${String(hObj.chosen)}`
+            + ` landed=${String(hObj.landed)} winner=${String(hObj.winner)}`
+          : `两端的读数不同：房主 ${JSON.stringify(hObj)} / 加入方 ${JSON.stringify(gObj)}`);
+        // ② 文案里的座位号 = `winner + 1`（全局座位编号；不是本地化字符串逐字相等）
+        const seatInText = (line) => {
+          const m = /玩家\s*(\d+)\s*先选协议/.exec(line ?? '');
+          return m === null ? null : Number(m[1]);
+        };
+        const hLine2 = await host.text('.coin-result-text');
+        const gLine2 = await guest.text('.coin-result-text');
+        const hSeat = seatInText(hLine2);
+        const gSeat = seatInText(gLine2);
+        const textOk = hObj !== null && gObj !== null
+          && hSeat === hObj.winner + 1 && gSeat === gObj.winner + 1 && hSeat === gSeat;
+        push(textOk, textOk
+          ? `两端文案说的是同一个全局座位号：玩家 ${String(hSeat)} 先选协议（房主 / 加入方都是它）`
+          : `文案与读数对不上：房主文案 ${JSON.stringify(hLine2)}（座位 ${String(hSeat)}，读数 winner=${String(hObj?.winner)}）`
+            + ` / 加入方文案 ${JSON.stringify(gLine2)}（座位 ${String(gSeat)}，读数 winner=${String(gObj?.winner)}）`);
+      }
+      // 握手继续到底：加入方不再停在"等承诺 / 等面"那几格
+      const t2 = Date.now();
+      let gPhase2 = null;
+      while (Date.now() - t2 < budgetMs) {
+        gPhase2 = await phaseOfSide(guest);
+        if (gPhase2 === 'complete') break;
+        await sleep(500);
+      }
+      const movedOn = gPhase2 !== null && gPhase2 !== 'awaiting-commit-ack' && gPhase2 !== 'awaiting-commit'
+        && gPhase2 !== 'handshaking';
+      push(movedOn, movedOn
+        ? `点完芯片之后握手继续走到 ${gPhase2}`
+        : `点完芯片之后加入方仍停在 ${String(gPhase2)}（叫面没有解锁握手）`);
+      notes.push(`硬币屏实测：房主 ${hostCoin ? '有' : '无'} / 加入方 ${guestCoin ? '有' : '无'}，`
+        + `点前落点 ${JSON.stringify(preResult)}，点后相位 ${String(gPhase2)}`);
+    } else {
+      push(false, '未到达：加入方屏上没有硬币屏 ⇒ 后面几条（点前无落点 / 点后继续）都到不了');
+    }
+  }
+  say('');
+
+  /* ── ④ 负控：邀请码压缩段截断 ─────────────────────────────────────── */
+  say('=== ④ 负控（把邀请码的压缩段截断再贴：必须给可读失败，且不假装成功）===');
   if (invitePayload === null) {
     push(false, '未到达：没有可改坏的邀请码（①没产出）');
   } else {
@@ -496,18 +765,22 @@ try {
         push(false, '未到达：干净那一屏上「加入」之后没有粘贴框');
       } else {
         /**
-         * 改哪一位：取**压缩段的第一个字符**（`<协议版本>.` 之后那一位）。
-         * 那一位落在 deflate 流的头几个比特上（`BFINAL/BTYPE`），改它能真把流打断。
-         * ⚠️ 实测登记（别读成"任何一位都会失败"）：第一次用的是**中段**那一位
-         * （第 444 个字符，`j -> A`），deflate-raw **没有校验和**，那一位恰好落在字面量字节上
-         * ⇒ 载荷照样解得开、屏上连错误行都没有。这一条写在下面 notes 里。
+         * ★★ **篡改方式：砍掉压缩段最后 8 个字符**（修复轮换的）。
+         *
+         * 为什么换：上一版改的是**压缩段第 1 个字符**。那一位确实落在 deflate 流头几个比特上，
+         * 但"改一位"这类篡改**不是必然失败** —— `deflate-raw` 没有校验和，某一位恰好落在
+         * 字面量字节上时载荷照样解得开（工具自己就记过：中段那一位改完屏上连错误行都没有）。
+         * ⇒ ④ 变成了"多跑几次碰运气"，评审实测两次里红一次、绿一次。
+         *
+         * 截断则是**结构性**的：deflate 流被切断之后解压器必然报错（不等于"某一位碰巧"),
+         * 这也是 node 侧那条 50 条现场邀请码的腿钉的同一件事
+         * （`tests/ui/net-lobby-coin-consensus.test.ts`：50/50 全部 `decompress-failed` 且文案可读）。
          */
         const dot = invitePayload.indexOf('.');
-        const i = dot + 1;
-        const ch = invitePayload[i];
-        const swapped = ch === 'A' ? 'B' : 'A';
-        const broken = invitePayload.slice(0, i) + swapped + invitePayload.slice(i + 1);
-        notes.push(`负控用的坏码：压缩段第 1 个字符（整条第 ${i} 位）${ch} -> ${swapped}`);
+        const compressed = invitePayload.slice(dot + 1);
+        const keep = Math.max(1, compressed.length - 8);
+        const broken = `${invitePayload.slice(0, dot + 1)}${compressed.slice(0, keep)}`;
+        notes.push(`负控用的坏码：截掉压缩段最后 8 个字符（${compressed.length} -> ${keep}）`);
         await guest.type('.net-lobby-paste-input', broken);
         await sleep(3000);
         const errLine = await guest.text('.net-lobby-error');
@@ -518,8 +791,8 @@ try {
         const answerCode2 = await guest.count('.net-lobby-answer-code');
         const noFakeLink = phaseLine.trim().length === 0 && answerCode2 === 0;
         push(readable, readable
-          ? `改坏一个字符后屏上给了可读失败：「${errLine}」`
-          : `改坏一个字符后屏上**没有**可读失败（error=${JSON.stringify(errLine)}）`);
+          ? `截断压缩段后屏上给了可读失败：「${errLine}」`
+          : `截断压缩段后屏上**没有**可读失败（error=${JSON.stringify(errLine)}）`);
         push(noFakeLink, noFakeLink
           ? '没有假装成功：屏上没起本侧链路、也没产出回示码'
           : `假装成功了：相位行=${JSON.stringify(phaseLine)}、回示码个数=${answerCode2}`);
@@ -530,7 +803,8 @@ try {
 
   /* ── 追加诊断（--diagnose）：把"点不动"钉到具体那一格 ───────────────── */
   if (DIAGNOSE) {
-    say('=== 诊断（不属于那四条判定）===');
+  say('');
+  say('=== 诊断（不属于那些判定）===');
     const diag = {};
     if (hDrive === null) {
       await host.click('.net-lobby-host');
@@ -630,3 +904,20 @@ for (const n of notes) say(`注：${n}`);
 say(`判定 ${pass}/${judged.length} 条通过${clean ? '' : '（收工自证不干净）'}`);
 say(verdict ? '\n全部判定通过。' : '\n有判定不通过。');
 process.exit(verdict ? 0 : 1);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

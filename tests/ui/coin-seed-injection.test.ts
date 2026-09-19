@@ -31,7 +31,8 @@ import { stripComments } from '../ui/source-text';
  *    `reveal-salt.salt === 队列里那条盐`、`commit.hash === hash(seed, salt)`（测试哈希重算）；
  *    另有"换 matchSeed ⇒ 报告级不同"与"同注入两次 **逐字相同**（原始 `text`）"两条；
  *  - 判据 2：换 nonce ⇒ `commit-face.hash` 变；
- *  - 判据 3：`chosenFace` 当前是常量 0（"叫面"归 T11-B）⇒ `commit-face.hash === hash('0', nonce)`，
+ *  - 判据 3：本文件的夹具**不注入 `chooseFace`**（T11-B 之后"没注入"这条路的语义就是常量面 0）
+ *    ⇒ `commit-face.hash === hash('0', nonce)`，
  *    且 `reveal-face.faceNonce` 就是注入的那条；屏上 `2 ⇒ '1'` 那一支见文件末那条腿；
  *  - 判据 6：`net-lobby.ts` 里 `sendCommit(` / `commitFace(` 的参数表里不再出现 `sessionId`
  *    （正控用 HEAD 的真实原文）。
@@ -215,7 +216,8 @@ describe('G5 T11-A · 种子、盐、nonce 来自注入（I-5 的实质）', () 
     const r = await runPair({ matchSeed: 'mseed-A', randomToken: tokenQueue('salt-x', 'nonce-X') });
     const cf = firstOf(r.msgs, 'commit-face');
     expect(cf, '没有发出 commit-face').not.toBeNull();
-    // `chosenFace` 在 T11-A 是常量 0（"叫面"归 T11-B）；会话层把面写成 `String(face)`（session.ts:1963）
+    // 本夹具**不注入 `chooseFace`** ⇒ 走的是"没有叫面入口"那条路（常量面 0，即 T11-B 之前的行为）；
+    // 会话层把面写成 `String(face)`（session.ts:1963）
     expect(cf!.hash, 'commit-face 的哈希不是 hash("0", 注入的 nonce)').toBe(browserHashOf('0', 'nonce-X'));
     // 反向：拿另一个 nonce 重算必须**不**相等（否则上面那条恒真）
     expect(cf!.hash).not.toBe(browserHashOf('0', 'nonce-Y'));
@@ -268,14 +270,17 @@ describe('G5 T11-A · 判据 6 源码腿', () => {
  * ------------------------------------------------------------------ */
 
 /**
- * 判据 3 的字面分支（`side = 2 ⇒ '1'`）在 A 段的**生产代码里不可达**：`chosenFace` 恒 0，
- * `sideFromFace` 那时还没有生产调用方（"叫面"归 T11-B，评审发现 6）。
+ * 判据 3 的字面分支（`side = 2 ⇒ '1'`）在这里仍是**纯函数 + 源码腿**：
+ * 这个文件的夹具不注入 `chooseFace`（走常量面那条路），所以它自己跑不出 `side = 2`。
  *
- * ⇒ 这条腿钉的是"口径 + 接线形状"，**不假装**端到端跑通了 `side = 2`：
- *  1. 映射本身：`sideFromFace` 对两个 side 给出会话层的 `0 | 1`；
+ * ⇒ 它钉的是"口径 + 接线形状"，**不假装**端到端跑通了 `side = 2`：
+ *  1. 映射本身：`sideFromFace` / `faceFromSide` 对两个 side 给出会话层的 `0 | 1`；
  *  2. 会话层的字面口径：`hash(String(face), nonce)` 对两个面给出两个不同值；
- *  3. 接线形状（源码腿）：`chosenFace` 的**每一个赋值点**都必须经过 `sideFromFace` ——
- *     T11-B 落地时最容易顺手写错的一格就是"把 side 直接当 face 用"。
+ *  3. 接线形状（源码腿）：`chosenFace` 的**每一个赋值点**都必须经过 `faceFromSide` ——
+ *     "把 side 直接当 face 用"是这一格最容易顺手写错的地方。
+ *
+ * ★ **T11-B 之后"端到端跑通 `side = 2`"这件事有腿了**，但不在这个文件里：
+ * `tests/ui/net-lobby-coin.test.ts`（真驱动循环 + 注入一个返回 `2` 的 `chooseFace`）。
  */
 describe('G5 T11-A · 判据 3 的另一个面（屏上 2 ⇒ 会话 1）', () => {
   it('`faceFromSide` / `sideFromFace`：屏上 1|2 ⇒ 会话 0|1，且两个面进哈希给出两个不同的承诺', () => {
@@ -292,31 +297,29 @@ describe('G5 T11-A · 判据 3 的另一个面（屏上 2 ⇒ 会话 1）', () =
     ).not.toBe(browserHashOf(String(faceFromSide(2)), 'n'));
   });
 
-  it('接线形状（源码腿）：`chosenFace` 的赋值点必须经过 `sideFromFace`', () => {
+  it('接线形状（源码腿）：`chosenFace` 的赋值点必须经过 `faceFromSide`', () => {
     const src = stripComments(
       readFileSync(fileURLToPath(new URL('../../src/ui/net-lobby.ts', import.meta.url)))
         .subarray(0, 4 * 1024 * 1024)
         .toString('utf8'),
     );
     const assignments = [...src.matchAll(/chosenFace\s*=\s*([^;]+);/g)].map((m) => m[1].trim());
-    // ★ **今天钉住 0 个赋值点**（评审发现 6）：只有声明（`let chosenFace: 0 | 1 = 0;`，
-    //   `: 0 | 1` 那截让正则天然抓不到）与那个读。没有这条断言，下面的循环 0 次恒真 ——
-    //   把 `chosenFace` 删掉或改名，这条腿都不会红。
-    //   ⚠️ T11-B 把联机硬币屏接上之后这里会变成 1（`chosenFace = sideFromFace(...)` 那种形状），
-    //   届时**同步改这个数**；在那之前它就是"接线守卫还没被生产代码走到"的机械事实。
+    // ★ **T11-B 接线后就是 1 个赋值点**（A 段当时钉的是 0：那时还没有叫面入口）：
+    //   `chosenFace = faceFromSide(side)` —— 屏上 `1 | 2` ⇒ 会话层 `0 | 1`。
+    //   没有这条断言，下面的循环 0 次恒真 —— 把 `chosenFace` 删掉或改名，这条腿都不会红。
     expect(
       assignments.length,
       `chosenFace 的赋值点数变了（现在是 ${assignments.length}：${assignments.join(' | ')}）—— ` +
-        'T11-B 接线后应为 1，请同步这条断言与它上面那句注释',
-    ).toBe(0);
+        'T11-B 接线后应为 1（`faceFromSide(side)`），请同步这条断言与它上面那句注释',
+    ).toBe(1);
     // 反空转锚点：同一条正则必须能抓到"直接赋值"（否则上面那条在"正则写坏"时也恒 0）
     const anchor = [...'chosenFace = side;'.matchAll(/chosenFace\s*=\s*([^;]+);/g)].map((m) => m[1].trim());
     expect(anchor, '锚点正则失效：抓不到 `chosenFace = side;`').toEqual(['side']);
-    expect(/sideFromFace\s*\(/.test('sideFromFace(2)'), '正控失效').toBe(true);
+    expect(/faceFromSide\s*\(/.test('faceFromSide(2)'), '正控失效').toBe(true);
     for (const rhs of assignments) {
       expect(
-        /sideFromFace\s*\(/.test(rhs),
-        `chosenFace 被赋成了 ${rhs}：屏上 1|2 与会话 0|1 的映射必须走 sideFromFace`,
+        /faceFromSide\s*\(/.test(rhs),
+        `chosenFace 被赋成了 ${rhs}：屏上 1|2 与会话 0|1 的映射必须走 faceFromSide`,
       ).toBe(true);
     }
   });

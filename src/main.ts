@@ -35,6 +35,10 @@ import { handCardBox, handFanLead, handFanStep } from './ui/fx-card-size';
 import { handOuterFor } from './ui/fx-seat';
 import { openControlRearrangeModal, closeControlRearrangeModal, refreshControlRearrangeModal, isControlRearrangeOpen, orderChanged, orderToAction } from './ui/control-rearrange';
 import { renderHome, renderCoin, renderLibrary, renderRules, renderModeSelect } from './ui/home';
+import { lobbyCoinViewOf } from './ui/net-lobby';
+import type { CoinNetView } from './ui/home';
+// ★ T11-B：硬币屏要的"面"（屏上口径 `1 | 2`）
+import type { CoinSide } from './app/coin';
 // G3 Task 4：L1 授权状态机（纯层）+ 其浏览器后端 + 授权弹窗屏
 import { createLocalStore, readNickName } from './app/local-store';
 import { openL1Store } from './ui/local-store-browser';
@@ -260,6 +264,79 @@ let lastArchive: MatchFile | null = null;
 let lobbyClient: LobbyClient | null = null;
 let lobbyMode: 'host' | 'guest' | null = null;
 
+/* ── ★ T11-B：联机硬币屏（D27 把这块屏插在握手中间）──────────────────────────── */
+
+/**
+ * 硬币屏上"叫哪一面"这个未决问题的 resolve（`null` = 这一刻没有人在等叫面）。
+ *
+ * ## 为什么它必须活在 `main.ts`
+ *
+ * 两个接口在这里对上：大厅那头是 `LobbyClientOptions.chooseFace(): Promise<CoinSide>`
+ * （"这一局叫哪一面"），屏这头是 `CoinNav.net.choose(side)`（玩家按下了那一枚芯片）。
+ * 库那头**不认识屏**、屏那头**不认识库**，所以"把点击变成那次 resolve"这件事只能住在宿主。
+ *
+ * ## 为什么只有一个槽位（而不是一个队列）
+ *
+ * 叫面**一局只有一次**（D3：只有加入方叫，相位机只认一条 `commit-face`）。多出来的那次 resolve
+ * 要么是重复点击、要么是上一局的残留 —— 两种都不该被"排队等着"，所以这里只留最新的那一个。
+ */
+let chooseFaceResolve: ((side: CoinSide) => void) | null = null;
+
+/**
+ * 这一局的硬币屏上是否**已经叫过面**（一局只叫一次）。
+ *
+ * 为什么它必须存在，而不是靠"屏上已经点了"这件事自己保证：相位机只认一条 `commit-face`
+ * （`session.ts:292` 的 `mayCommitFace`），第二次 resolve 会落到一个**已经没人听**的 Promise 上；
+ * 而重复点击在真浏览器里是很容易发生的（禁用态要等下一次整帧重画才生效）。
+ */
+let faceChosen = false;
+
+/**
+ * 上一帧硬币屏画的**是哪一份读数**（`null` = 这一帧没有硬币屏）。
+ *
+ * 为什么是"读数指纹"而不是一个布尔闩：硬币屏会**变**（叫完面 ⇒ 相位变、落点到手 ⇒ 屏上出现落点），
+ * 而它只能从 `renderLobbyFrame` 那个入口画出去。用一个一次性布尔闩会让屏**冻在第一次那一帧**上
+ * —— 实测症状（2026-09-19）：落点已经算出来、相位也走到 `complete` 了，屏上却永远停在
+ * "等对方叫面"那一格，看起来像握手没继续。指纹只在**读数真的变了**的时候重画，于是
+ * "每条入站都重画一帧"这件事不会变成"每条入站都整屏重建"。
+ */
+let lobbyCoinShown: string | null = null;
+
+/**
+ * 本端这一刻在硬币屏上的读数（`null` = 还没有硬币屏，照旧画大厅那一屏）。
+ *
+ * ★★ **读数怎么算的搬去了 `src/ui/net-lobby.ts` 的 `lobbyCoinViewOf()`**（修复轮）：
+ * 那个文件能在 node 里用真客户端跑（`tests/ui/net-lobby-coin-consensus.test.ts` 拿它钉"两端
+ * 算出的先选协议者必须相同"），而本文件一 import 就把整个游戏跑起来、node 里测不了。
+ * 这里只剩宿主的两件事：把点击接到"要面"那个 Promise 上，以及叫完之后驱动一次。
+ */
+function lobbyCoinView(): CoinNetView | null {
+  const client = lobbyClient;
+  if (client === null) return null;
+  return lobbyCoinViewOf(client, {
+    choose: (side) => {
+      // 一局只叫一次面（相位机也只认一条 `commit-face`）：多出来的那次 resolve 无处可去
+      if (faceChosen) return;
+      faceChosen = true;
+      chooseFaceResolve?.(side);
+    },
+    /**
+     * ★ **叫完面就驱动一次**（与 `onInbound` 里那一句同源）。
+     *
+     * 为什么非要这一句：面是**异步**到的（`chooseFace` 是个 Promise），而驱动循环是**同步**的
+     * —— `driveOnce` 在面到手之前只会返回"这一格没东西发"。等面 resolve 时，那个驱动循环
+     * 早就走完了；而这一格**不会有**下一次入站把它叫醒（它在等玩家按芯片）。
+     * 没有这一句，屏上看着一切正常（芯片选中、相位停在等面），而握手**永远不会继续**
+     * —— 真浏览器门实测就是这个形状（2026-09-19）。
+     *
+     * 放在微任务里跑（`queueMicrotask`）而不是当场同步调：`resolve` 的反应也是微任务，
+     * 排在它后面才能保证 `chosenFace` 已经写好 —— 当场调会驱动一个面还是 null 的相位
+     * （那一格只能返回 false，白跑一次）。
+     */
+    onChosen: () => { queueMicrotask(() => { lobbyClient?.drive(); }); },
+  });
+}
+
 /** 本机 `sessionId`（16 字节 → 十六进制）。**只住会话层、不进档案**（D2） */
 function newSessionId(): string {
   const c = (globalThis as { crypto?: { getRandomValues<T extends Uint8Array>(a: T): T } }).crypto;
@@ -407,6 +484,29 @@ function lobbyEntryState(): LobbyState {
 function renderLobbyFrame(): void {
   const client = lobbyClient;
   if (client !== null) client.sync();
+  /**
+   * ★★ **T11-B：先问"这一刻该不该画硬币屏"**（D27：硬币屏插在握手中间）。
+   *
+   * 顺序写死：这一帧是**大厅与硬币屏共用的唯一入口**，所以判定必须排在 `renderNetLobby` 之前。
+   * 重画的条件是"读数指纹变了"（`lobbyCoinShown`）—— 这一帧会被每条入站重画，
+   * 无条件重画就是整屏重建（玩家点下去的那一刻屏会闪、大币会重置）。
+   */
+  const coin = client === null ? null : lobbyCoinView();
+  if (coin !== null) {
+    // 只在这一帧的读数**与上一帧不同**时重画（见 `lobbyCoinShown` 的说明）
+    const sig = `${coin.role}|${coin.phase ?? ''}|${String(coin.chosen)}|${String(coin.landed)}|${String(coin.winner)}|${String(coin.caller)}`;
+    if (sig !== lobbyCoinShown) {
+      lobbyCoinShown = sig;
+      renderCoin(root, {
+        backHome: () => { showModeSelect(); },
+        // ⚠️ 联机那一支**不读种子**（D27：叫面必须早于公开种子）⇒ 这里刻意不给 `seed`
+        beginGame: () => { /* 进牌桌归 T11-C：本段到"算出落地"为止 */ },
+        net: coin,
+      });
+    }
+    return;
+  }
+  lobbyCoinShown = null;
   const st = client === null ? lobbyEntryState() : client.state();
   renderNetLobby(root, {
     state: st,
@@ -481,6 +581,10 @@ function attachLobbyReconnect(client: LobbyClient): void {
  */
 function startLobby(role: 'host' | 'guest'): void {
   lobbyMode = role;
+  // ★ T11-B：这一局的硬币屏还没画过（`renderLobbyFrame` 只画一次，见那里的说明）
+  lobbyCoinShown = null;
+  chooseFaceResolve = null;
+  faceChosen = false;
   if (lobbyClient === null) {
     lobbyClient = createLobbyClient({
       role,
@@ -491,6 +595,15 @@ function startLobby(role: 'host' | 'guest'): void {
       //   `newMatchSeed()` 与 `newRandomToken` 都只从 `src/ui/match-seed.ts` 出熵（全项目唯一口子）。
       matchSeed: newMatchSeed(),
       randomToken: () => newRandomToken(),
+      /**
+       * ★★ **T11-B：要面**（唯一的那一个入口，D27 把硬币屏插在握手中间）。
+       *
+       * 这个 Promise 由**硬币屏上的一次点击** resolve（`lobbyCoinView()` 里的 `choose`）：
+       * 大厅那头在 `seed-committed` 那一格等它（等的时候相位不动、种子不揭示），
+       * 玩家按下「正面/反面」之后流程才继续。两端都不按，这条路就停在那块屏上
+       * （超时语义归 T10）。
+       */
+      chooseFace: () => new Promise<CoinSide>((resolve) => { chooseFaceResolve = resolve; }),
       localProtoVersion: PROTO_VERSION,
       localCardDataHash: CARD_DATA_HASH,
       hash: browserHash(),
@@ -1688,6 +1801,12 @@ function resetToMainInterface(): void {
   lobbyClient?.dispose();
   lobbyClient = null;
   lobbyMode = null;
+  // ★ T11-B：硬币屏那两个模块态也归这里（与上面几份同族：漏了下一局会带着上一局的读数）——
+  //   `chooseFaceResolve` 悬着会让新一局的第一次叫面落到一个没人听的 Promise 上；
+  //   `lobbyCoinShown` 不重置会让新一局的硬币屏**冻在上一局那一帧的指纹上**（读数一样就不重画）。
+  chooseFaceResolve = null;
+  faceChosen = false;
+  lobbyCoinShown = null;
   renderMode = 'hotseat'; // 防"预览模式泄漏到热座"（见本节注释）
   netViewSeat = 0;
   // 手牌可见性无需复位：本页无该选项（档位字段已删，恒为信息遮蔽，I-2/N4）。
@@ -1860,4 +1979,10 @@ const syncPersistentFx = (): void => {
   });
 };window.addEventListener('scroll', syncPersistentFx, { passive: true, capture: true });
 window.addEventListener('resize', syncPersistentFx, { passive: true });
+
+
+
+
+
+
 
