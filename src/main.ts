@@ -18,7 +18,7 @@ import './ui/styles-replay.css';
 // 本表只带 `net-lobby-*` 前缀类、且大厅是独立屏 ⇒ 已在那条腿的 `EXCLUDED_SOURCES` 里显式登记
 // （登记处写着"为什么不可能命中棋盘节点"的两条理由）。
 import './ui/styles-net-lobby.css';
-import { createGame, performDraftPick, performDraftUnpick, performDraftBan, randomPoolFromSeed, setSeedNonce } from './core/state/create';
+import { createGame, performDraftPick, performDraftUnpick, performDraftBan, randomPoolFromSeed, setSeedNonce, getDraftPool } from './core/state/create';
 import { getCompilableLines } from './core/rules/compile';
 import { collectTriggers } from './core/effects/triggers';
 import { renderApp, renderDraft, resetUiState, syncCompiledFxLayers, syncSmokeOverlays, syncScanOverlays, syncPsychicParticles, syncPlagueMists, syncApathyMists, syncApathyMosaics, syncSpirit0Glows, syncSpirit1Cards, syncMetal0Glows, syncMetalPlates, syncMetal6Mans, syncMetal1LineGlows, syncMirror0BatteryGlows, syncClarity0BatteryGlows, syncIceFx, syncSmoke2LineGlows, syncFear0TriGlows, syncWarBlades, syncChainLayerPosition, syncDiversity3Fx, type UiCallbacks } from './ui/render';
@@ -50,6 +50,15 @@ import { renderLocalData } from './ui/local-data';
 // `src/app/match-replay.ts`，唯一的触发入口是 `driver.submit(...)`（腿见
 // `tests/ui/main-driver-wiring.test.ts` 第 1/6 条 —— 那是设计稿 §4.5 验收项 1 的源码守卫）。
 import { createLocalDriver, createReplayDriver, type MatchDriver, type ReplayDriver, type Ticker } from './app/match-driver';
+// ★ G5 T11-C：联机对局的驱动（锁步：两端同一条操作序列，见 `src/net/net-driver.ts`）。
+//   ⚠️ 它**不是**第二个 `main.ts` 的动作入口：造好之后交给同一个 `driver` 变量，全文件的
+//   `driver.submit(` 提交点数一个不变（T11-C 判据 2 的源码腿钉着这个数）。
+import { createNetDriver, type NetDriver } from './net/net-driver';
+import type { NetSession } from './net/session';
+// ★ G5 T11-C：跨端状态指纹（真浏览器门读的那个口）。`stableStringify` 是 `stateFingerprint`
+//   的序列化那一半 —— 用它而不是另写一份，是为了"工具比的那个串"与"node 腿比的那个指纹"
+//   同口径（`src/core/fingerprint.ts` 的注释写着它是"指纹与联机校验"共用的那一个）。
+import { stableStringify } from './core/fingerprint';
 // 重放的起跑状态（`createGame(matchFileToCreateOptions(f))` + 草稿序列真重建）
 import { stateAfterDraft } from './app/match-replay';
 import { setupFromState, type MatchFile, type MatchFileMeta } from './app/match-file';
@@ -85,6 +94,7 @@ import {
   type AnswerCodeResult,
   type LobbyDraftInput,
   type LobbyErrorKey,
+  type LobbyHandoff,
   type LobbyState,
 } from './ui/net-lobby';
 import {
@@ -117,6 +127,17 @@ let state = createGame();
 /** 非玩家输入步骤之间自动推进的间隔（毫秒） */
 const AUTO_ADVANCE_DELAY = 400;
 let autoTimer: number | null = null;
+/**
+ * ★ G5 T11-C：门禁专用的"关掉本机自动推进"开关（默认 `false` = 正常行为）。
+ *
+ * 为什么它存在（评审阻断项 3 的第二条）：③.9 要证的"一端的动作让另一端的状态变了"，
+ * 而两端**各自**每 400ms 会自行推进一格 ⇒ 即使那一帧根本没送到，对端的指纹也会自己走到
+ * 同一个地方（评审实测 M2-wiring 在旧判据下 **33/33 全绿**）。关掉它之后，
+ * "对端的状态变了"就只可能来自收到的那一帧。
+ *
+ * 它**只**关掉本地这一条时序（`scheduleAutoAdvance`），不动驱动、不动玩家输入。
+ */
+let autoAdvanceOff = false;
 /** 抽牌飞入动画进行中标志：防止动画期间再次触发刷新导致并发动画/双重渲染 */
 let drawAnimBusy = false;
 /** 抽牌幽灵卡尺寸与扇形步进。**G2 修正 R15-A：改成"按页取值"的函数出口** ——
@@ -337,6 +358,432 @@ function lobbyCoinView(): CoinNetView | null {
   });
 }
 
+/* ── ★★ T11-C：握手完 ⇒ 进牌桌（任务书 §6 那一格的落点）────────────────────────── */
+
+/**
+ * 这一局联机对局（`null` = 还没进 / 已经复位）。
+ *
+ * ## 为什么 `handoff` 要留一份
+ *
+ * 它携带的那条**传输**是握手用的那一条（`link.transport`）——`createNetDriver` 吃的就是它，
+ * 本文件**不另造第二条**（另造一条 = 两条各说各话的连接，`net-lobby.ts` 的 C1 缺陷同形）。
+ * 会话对象与传输的寿命都在这里：复位时由 `netSession.detach()` + `netDriver.dispose()` 收拾。
+ *
+ * ## 为什么这里只存一份最小读数（而不是整份 `LobbyHandoff`）
+ *
+ * 宿主需要的只有"这一局是怎么开的"（种子 / 先选者 / 叫出去的面 / 落点 / 各自的座位）——
+ * 它们是排查跨端分歧时唯一能指明"两边算的是不是同一局"的东西。把一整份握手对象长期留在这里
+ * 会让它看起来像"第二个真相源"，而它对局中一次都不会被读。
+ */
+type NetMatch = {
+  readonly driver: NetDriver;
+  readonly session: NetSession;
+  readonly seed: string;
+  readonly draftStarter: PlayerId;
+  readonly caller: PlayerId;
+  readonly chosen: CoinSide;
+  readonly landed: CoinSide;
+  readonly selfSeat: PlayerId;
+};
+let netGame: NetMatch | null = null;
+
+/**
+ * ★★ **把握手走出来的那一组数变成一局真的对局**（T11-C；任务书 §6 的实现面）。
+ *
+ * ## 顺序写死，而且每一条都有理由（这是本段最容易被"顺手调一下"弄坏的地方）
+ *
+ *  1. `handoff.ready === false` ⇒ **什么都不做**（屏那边还停在硬币屏上等）；
+ *  2. `createGame({ seed, draftStarter, firstToPlay: 1 - draftStarter, draftMode, draftPool })`
+ *     —— 种子与先选者**都来自握手**（两端同一个种子 ⇒ 同一副牌、同一个池子；同一个
+ *     `draftStarter` ⇒ 同一个轮选顺序）；
+ *  3. `createNetDriver({ transport, seat })` —— 传输是**握手那一条**（`handoff.transport`）；
+ *  4. **`driver.arm(state)` 先于任何入站帧**（任务书 §8 第 4 条）：驱动的入站是推送的、
+ *     而它不持有 `GameState`（G4 D2）⇒ 入站帧先入队，`arm` 才让它们落地。放在
+ *     `state = createGame(...)` **之后**、`rerender()` **之前**：这一刻到下一帧之间没有
+ *     任何页面代码能跑，所以"第一帧被当成宿主从没递过状态"在结构上不可能发生；
+ *  5. 换 `driver` / `renderMode`，最后 `rerender()` 画草稿屏。
+ *
+ * ## 为什么 `renderMode` 换成 `'net'` 而不是留在 `'lobby'`
+ *
+ * 草稿期两条分支都画热座那套草稿页（`rerender` 的 `net` 分支带 `state.phase !== 'draft'` 守卫）。
+ * 而草稿**打完**那一刻相位变 `'turn'`：留在 `'lobby'` 会让 `rerender()` 去画**联机大厅**
+ * （把大厅盖在牌桌上），换成 `'net'` 才是"远程页单视角"那一套。座位口径（哪一侧是自己）
+ * 归后续任务：本段只到"进草稿 + 真的选一步"。
+ *
+ * ## `draftMode` / `draftPool` 两端怎么做到逐字一致（判据：两端状态指纹相等）
+ *
+ * **协议里没有传设置的消息**（`src/net/protocol.ts` 本阶段冻结），所以设置只能由两端
+ * **共享的值派生**：
+ *  - `draftMode` 取**常量** `'normal'`（热座那个勾选框是本地偏好，联机下没有传它的路，
+ *    取"假设两端勾的一样"就是判据 3 会红的那种"大概一样"）；
+ *  - `draftPool` 取 `randomPoolFromSeed(seed, 12)` —— `seed` 是握手走出来的**同一个**种子，
+ *    而 `randomPoolFromSeed` 是**纯函数**（同一个种子恒给同一个池）⇒ 两端逐字一致。
+ *    房主离线磨种子这件事 D3 已承认（本段不承诺公平），它影响的是种子，不是"两端是否一致"。
+ */
+function enterNetGame(): void {
+  if (netGame !== null) return; // 幂等：入站帧与重画都会走到这里
+  const client = lobbyClient;
+  if (client === null) return;
+  const hand = client.handoff();
+  if (!hand.ready || hand.transport === null || hand.session === null
+    || hand.seed === null || hand.draftStarter === null) return;
+  const seed = hand.seed;
+  const draftStarter = hand.draftStarter;
+  state = createGame({
+    seed,
+    draftStarter,
+    firstToPlay: (1 - draftStarter) as PlayerId,
+    draftMode: 'normal',
+    draftPool: randomPoolFromSeed(seed, 12),
+  });
+  const netDriver = createNetDriver({ transport: hand.transport, seat: hand.seat });
+  // ★ 递状态必须排在 `rerender()` 之前（见上面第 4 条）：这一刻到下一帧之间没有页面代码能跑
+  netDriver.arm(state);
+  netGame = {
+    driver: netDriver,
+    session: hand.session,
+    seed,
+    draftStarter,
+    caller: hand.caller,
+    chosen: hand.chosen,
+    landed: hand.landed,
+    selfSeat: hand.seat,
+  };
+  driver = netDriver;
+  renderMode = 'net';
+  /**
+   * ★★ **进牌桌之前，先把"硬币落地"这一帧补画出来**（评审 R2 §8 遗留 1 的连带发现）。
+   *
+   * ## 为什么必须有这一句
+   *
+   * 走进 `enterNetGame()` 说明**这一刻读数已经齐了**（`handoff().ready`）—— 而读数是由
+   * `lobbyCoinView()` 在同一帧算出来的，算完这一帧就 `return` 去画牌桌了 ⇒ 硬币屏上那句
+   * "掷出 X —— 玩家 N 先选协议"**在房主那一侧一次都没出现过**。
+   * 实测（2026-09-19，工具装了 `MutationObserver` 才看得见）：房主 `frames: 0 / text: null`，
+   * 加入方 `frames: 1 / text: "掷出 反面 —— 玩家 1 先选协议 · 玩家 2 先出牌"`。
+   * ⇒ 两端**看到的屏不一样**（一端看过落地、一端没看过），而"两端文案说的是同一个座位号"
+   * 这条判据在房主那侧**无从判起**。
+   *
+   * ## 为什么画这一帧不会多留一帧
+   *
+   * 它是**同步**画完就走的：这一句之后紧接 `rerender()` 把牌桌画上去。玩家看不到中间态
+   * （同一帧内两次 `root` 重写，只有最后一次进合成）—— 不能改的只是"它到底有没有被画过"。
+   *
+   * ## 与 `lobbyCoinShown` 的关系
+   *
+   * 只在这一帧确实是"刚落地的硬币屏"时补画（`coinVerdict !== null && !coinSettledShown`）；
+   * 画过就置位，`resetToMainInterface` 复位 —— 与那三份模块态同族。
+   */
+  if (coinVerdict !== null && !coinSettledShown) {
+    coinSettledShown = true;
+    renderCoin(root, {
+      backHome: () => { showModeSelect(); },
+      beginGame: () => { /* 联机进牌桌由 enterNetGame() 触发，不是这个按钮 */ },
+      net: {
+        role: hand.role === 'host' ? 'waiter' : 'caller',
+        phase: hand.phase,
+        choose: () => { /* 面已经叫过了（读数齐了才走到这一格） */ },
+        chosen: hand.chosen,
+        landed: hand.landed,
+        winner: draftStarter,
+        caller: hand.caller,
+      },
+    });
+  }
+  lobbyCoinShown = null;
+  // ★ 把"这段读数 → 喂进 createGame 的那两个数"留一份（**只跟着 `#g5probe=1` 走**，
+  //   见 `exposeMatchProbe` 的说明）。存在的理由是**判据 3 需要对照物**：门禁能比
+  //   "两端是否一致"，却比不出"两端**一致地**算错"（镜像实测 2026-09-19：把喂进去的
+  //   `draftStarter` 取反，跨端那几条全绿）。
+  const probeHolder = globalThis as { __g5Handoff?: unknown; __coinVerdict?: unknown };
+  if (probeHolder.__g5Handoff !== undefined) {
+    probeHolder.__g5Handoff = {
+      seed,
+      draftStarter,
+      caller: hand.caller,
+      chosen: hand.chosen,
+      landed: hand.landed,
+      /**
+       * ⚠️ **两个座位字段有意义地分开**（评审 M2-seat 的落点）：
+       *  - `seat` = **喂进 `createNetDriver` 的那一个**（门禁据此判"驱动吃到的座位对不对"）；
+       *  - `handSeat` = `handoff()` 交出来的那一个（**不经任何加工**）；
+       *  - `driverSeat` = **驱动自己那个只读字段**（`NetDriver.seat`，`net-driver.ts:208`
+       *    在构造时直接存下来的那一个）—— 不是 `netGame.selfSeat`（那是本文件自己赋的副本，
+       *    与 `handSeat` 同源 ⇒ 拿它比是自证；评审 R2 §7 点出过这条）。
+       * 三者不相等就说明主代码把座位加工过（取反 / 写死）—— 那是跨端比指纹**看不见**的缺陷。
+       */
+      seat: hand.seat,
+      handSeat: hand.seat,
+      driverSeat: netDriver.seat,
+      role: hand.role,
+    };
+    /**
+     * ★ 兜底再写一遍硬币那帧的读数（`coinVerdict` 的说明里有全部理由）。
+     * 这一句是**为了那一帧与这一帧重叠**的情形：真到了这一格说明读数是齐的，
+     * 那就没有理由让上层那个读数继续是 `null`。幂等，写同一个值。
+     */
+    if (probeHolder.__coinVerdict === null || probeHolder.__coinVerdict === undefined) {
+      probeHolder.__coinVerdict = {
+        role: hand.role, caller: hand.caller, chosen: hand.chosen,
+        landed: hand.landed, winner: draftStarter, seed, phase: hand.phase,
+      };
+    }
+  }
+  rerender();
+}
+
+/**
+ * ★ 跨端状态指纹的**读取口**（真浏览器门 `tools/browser-truth-lobby-cdp.mjs` 用它）。
+ *
+ * ## 为什么要有它，以及为什么它只能是"只读的一根函数"
+ *
+ * 判据 1/3 要比的是**两端的对局状态**，而 `main.ts` 是应用入口、node 里跑不起来
+ * （见 `tests/ui/main-lobby-wiring.test.ts` 头注）⇒ 唯一能读到它的是真浏览器里的 CDP。
+ * 所以这里挂一个**只读**的全局口：`state()` 返回 `stableStringify(state)`（与
+ * `stateFingerprint` 的序列化那一半**同一份实现**）、再加三个派生读数
+ * （种子 / 先选者 / 选到第几个）。
+ *
+ * ## 为什么跟着 `#g5probe=1` 走（而 `data-net-phase` / `__coinInputs` 是无条件的）
+ *
+ * 那两样是**小读数**（一个短语 / 四个数），挂上去不花钱；这一样是**整份状态的规范串**
+ * （含整局 log，几万字符）。每次重画都序列化一遍是纯开销，而它只服务门禁与排查
+ * ⇒ 用一个显式的查询片段把它打开，默认路径一个字节都不多算。工具在驱动到界面之前
+ * 用 `Page.navigate` 加上这一段即可。
+ *
+ * 三条纪律：
+ *  1. **只读**：它不改任何状态、不驱动任何流程（工具拿到串之后自己比）；
+ *  2. **不是第二个真相源**：串就是 `state` 本身，没有"另算一份摘要"；
+ *  3. **不参与屏上任何一格**：与 `data-net-phase` 同族（排查与门禁用）。
+ */
+/**
+ * ★ 门禁探针的两个计数器（只给 `advanceOnce()` 的读数用，默认路径零开销）：
+ * `advanceProbeCalled` = 门禁调了几次 `advanceOnce()`；`advanceProbeActions` = 其中真的
+ * 走到了 `cb.onAction` 的有几次。两者分开是为了分辨"编排早退"与"提交被拒"。
+ */
+let advanceProbeCalled = 0;
+let advanceProbeActions = 0;
+
+function exposeMatchProbe(): void {
+  if (!window.location.hash.includes('g5probe=1')) return;  /**
+   * ★ `__g5Handoff` 只是一个**存在性标志**（值之后由 `enterNetGame()` 覆盖）：
+   * 它让 `enterNetGame()` 能在**不 import 任何调试模块**的前提下知道"这个页面开了探针"。
+   * 值本身是那一段读数（`handoff()` 的结果 + 真正喂进 `createGame` 的 `seed` / `draftStarter`），
+   * 供门禁比"先选者对不对"（跨端相等比不出"两端一致地算错"）。
+   */
+  (globalThis as { __g5Handoff?: unknown }).__g5Handoff = null;
+  const g = globalThis as {
+    __g5Match?: {
+      state(): string;
+      seed(): string;
+      draftStarter(): number;
+      draftRound(): number;
+      seat(): number;
+      finishDraft(): { steps: number; state: string };
+      rebootDraft(): { steps: number; state: string };
+      /** 对局相那一小撮读数（`main.ts` 的自动推进只碰这几样；门禁读它不必解析整串） */
+      turn(): { phase: string; step: string; turnPlayer: number; winner: number | null; transitioning: boolean };
+      /** 驱动侧读数（只给门禁排查用）：应用步数 / 队列里还压着几帧 / 最近一次失败 */
+      drive(): { applied: number; pending: number; failure: string | null };
+      /** 关掉本机自动推进（见 `autoAdvanceOff`）；返回关掉之前的状态 */
+      noAutoAdvance(): boolean;
+      /** 设/读自动推进开关（门禁要在"等它推进"与"关掉它"之间来回切） */
+      setAutoAdvance(on: boolean): boolean;
+      autoAdvanceOff(): boolean;
+      /** 走一步本机的非玩家输入步骤（门禁专用；走的是**真的**那条编排） */
+      advanceOnce(): { ok: boolean; why: string; op: number; seat: number; turnPlayer: number; failure?: string | null; actions: number; submit: string; called: number };
+    };
+  };
+  g.__g5Match = {
+    state: () => stableStringify(state),
+    seed: () => state.rng.seed,
+    draftStarter: () => state.draftStarter,
+    draftRound: () => state.draftRound,
+    /** 本端座位：**驱动自己那个只读字段**（`NetDriver.seat`）；没有驱动时 `-1` */
+    seat: () => (netGame === null ? -1 : netGame.driver.seat),
+    /**
+     * ★ **把本机的草稿按规则走完**（排查与门禁用；走的是**真的那个回调**）。
+     *
+     * 与 `rebootDraft()` 的差别很要紧：本方法**不重开对局、不动驱动、不碰传输** ——
+     * 它只是在当前这一局上把剩下的草稿选完（每一轮取"当前可选池里第一个还没被选的"）。
+     * 门禁 ③.8 要的正是这个：两端各自从同一局走完、再比终态。
+     *
+     * 为什么不能用 `rebootDraft()` 来"回到起点"（实测踩过，值得写下来）：那个方法会
+     * `driver.dispose()`，而 `dispose()` 会 **`transport.close()`**（`src/net/net-driver.ts:784`）
+     * ⇒ 握手那条链路被关掉 ⇒ 之后**所有** `submit` 都拿到 `'offline'`
+     * （实测：`submit ok=false refusal=offline`，而 `lastFailure()` 是 `null` —— 那条路
+     * **不上报失败**，看起来像"驱动坏了"）。
+     */
+    finishDraft: () => {
+      let n = 0;
+      while (state.phase === 'draft') {
+        const avail = getDraftPool(state);
+        if (avail.length === 0) break;
+        cb.onDraftPick(avail[0].defId);
+        n += 1;
+      }
+      return { steps: n, state: stableStringify(state) };
+    },
+    /**
+     * ★ **重开同一局，再把草稿走完**（**只给排查用**）。
+     *
+     * ⚠️⚠️ **它会关掉握手那条传输**（`driver.dispose()` → `transport.close()`，
+     * `src/net/net-driver.ts:784`）⇒ 调用之后这一局**再也没有线上通道**（所有 `submit`
+     * 返回 `'offline'`，而 `lastFailure()` 是 `null` ⇒ 不报错的失效）。
+     * ⇒ 需要"重来一局再走线上"时请用 `finishDraft()`。
+     *
+     * 这一条是评审登记的实现缺陷"漏 dispose"的修法带来的**新认识**：补上 dispose 是对的
+     * （不补会泄漏订阅），但补上之后它就不再是"无副作用的重开"了。
+     */
+    rebootDraft: () => {
+      if (netGame === null) return { steps: -1, state: '' };
+      netGame.driver.dispose(); // ★ 先退旧驱动的两条订阅（它同时会关掉传输，见上）
+      netGame = null; // 置空之后 `enterNetGame()` 就是"第一次进牌桌"那条路（幂等闸放行）
+      enterNetGame();
+      let n = 0;
+      while (state.phase === 'draft') {
+        const avail = getDraftPool(state);
+        if (avail.length === 0) break;
+        cb.onDraftPick(avail[0].defId);
+        n += 1;
+      }
+      return { steps: n, state: stableStringify(state) };
+    },
+    /**
+     * ★ **对局相那一小撮读数**（`phase` / `step` / `turnPlayer` / `winner`）。
+     *
+     * 为什么单开一个口而不是让工具去 `JSON.parse(state())`：那份规范串有几万字符，
+     * 为了读四个数解析一遍既慢又脆（`state()` 里含整局 `log`，还有挂起效果的
+     * `gen` 会被序列化成 `{}`）。这四个数是门禁判"该谁动 / 到哪一步了"唯一的输入。
+     */
+    turn: () => ({
+      phase: state.phase, step: state.step, turnPlayer: state.turnPlayer, winner: state.winner,
+      /**
+       * ★ **草稿→对局的过渡还在不在飞**（`transitioning`）。自动推进在过渡期间**不排**
+       * （`runAutoAdvance` / `scheduleAutoAdvance` 的守卫），而 `advanceOnce()` 走的是同一条
+       * 编排 ⇒ 门禁必须能看见它 —— 实测踩过：`rebootDraft()` 会重新触发一次过渡，
+       * 门禁抢在那 4.5s+ 窗口里调 `advanceOnce()`，`applied` 一直是 0、看起来像"驱动坏了"。
+       */
+      transitioning,
+    }),
+    /**
+     * ★ **驱动侧读数**（`appliedSteps` / `pendingCount` / `lastFailure`）。
+     *
+     * 为什么要有它：判"这一步真的走驱动了吗"不能只看状态指纹变没变 —— 状态也可能被
+     * **本机的自动推进**（`runAutoAdvance` → `cb.onAction` → `submit`）改动。
+     * 有了这三个数，门禁能分清"对端那一帧落了地"（`applied` 加一）与"两端各自本地推了一格"。
+     */
+    drive: () => {
+      const d = netGame?.driver ?? null;
+      if (d === null) return { applied: -1, pending: -1, failure: null };
+      const f = d.lastFailure();
+      return { applied: d.appliedSteps(), pending: d.pendingCount(), failure: f === null ? null : `${f.reason}: ${f.message}` };
+    },
+    /**
+     * ★★ **关掉本机的自动推进**（门禁专用；评审要求"把等价性判据改成不靠自动推进"）。
+     *
+     * 为什么必须有它：③.9 原来只在"对端跟上了"这一层比指纹，而两端**各自**每 400ms 会
+     * `cb.onAction({kind:'advance'})` 自行推进一格 ⇒ 即使一端的动作根本没送到对端，
+     * 对端的指纹也会自己走到同一个地方（评审实测 M2-wiring：**33/33 全绿**）。
+     * 关掉它之后，"对端的状态变了"就**只可能**来自收到的那一帧。
+     *
+     * 语义：只关掉 `scheduleAutoAdvance` 这一条本地时序（`autoAdvanceOff` 一个布尔），
+     * **不动**驱动、不动玩家输入（点牌仍然会 `submit`）；它是门禁的开关，不是游戏规则。
+     */
+    noAutoAdvance: () => {
+      const before = autoAdvanceOff;
+      autoAdvanceOff = true;
+      // 与 `setAutoAdvance(false)` 同一件事（那里有全部理由）：**已排上的那一次也要取消**。
+      if (autoTimer !== null) {
+        window.clearTimeout(autoTimer);
+        autoTimer = null;
+      }
+      return before;
+    },
+    /**
+     * ★ **设/读自动推进开关**（门禁要来回切：③.9 先靠它把"轮到的那一位"推到行动步、再关掉它
+     * 让"对端跟上"承重）。返回**设置之前**的状态（与 `noAutoAdvance()` 同款，便于门禁记账）。
+     *
+     * ## 关闭时必须**连带清掉已经排上的那个定时器**（评审 R2 §8 遗留 3）
+     *
+     * `scheduleAutoAdvance()` 只在**排程时**看这个开关 —— 它拦的是"之后不再排"，而**已经挂上**的
+     * 那个 400ms 定时器照样会到点、照样会调 `runAutoAdvance()`。于是"关了"并不等于"真不跑了"：
+     * ③.9 判"对端有没有自己动"时，那一次残留的自动推进就是一个**自证窗口**（8 跑没观察到污染，
+     * 但窗口在）。两道一起上：
+     *  1. 这里 `clearTimeout(autoTimer)` —— 把**已经排上的那一次**取消；
+     *  2. `runAutoAdvance()` 自己也读这个开关（见那里的第一句）—— 兜住"回调已经在飞 / 别处还会
+     *     调它"的边角。两条都是必要的：只有 1 挡不住"其它路径直呼 runAutoAdvance"，
+     *     只有 2 挡不住"定时器白跑一次再早退"（虽然无害，但那不是"关了就不跑"）。
+     */
+    setAutoAdvance: (on: boolean) => {
+      const before = autoAdvanceOff;
+      autoAdvanceOff = !on;
+      if (autoAdvanceOff && autoTimer !== null) {
+        window.clearTimeout(autoTimer);
+        autoTimer = null;
+      }
+      return before;
+    },
+    /**
+     * ★★ **走一步本机的非玩家输入步骤**（门禁专用）。
+     *
+     * 为什么需要它（评审阻断项 3 的第二条）：③.9 要证的是"一端的动作**靠那一帧**到达另一端"，
+     * 而自动推进（400ms）会自己把两端的状态推到同一个地方 ⇒ 那一格原来**不承重**
+     * （评审实测 M2-wiring 在旧判据下 33/33 全绿）。把它关掉之后，门禁就没有"把这一局往前推"
+     * 的手段了 —— 本方法补上这一步，而且**走的是同一条真编排**：
+     * `runAutoAdvance()`（与自动推进调的**同一个函数**）→ `cb.onAction` → `driver.submit`。
+     * 于是"提交"这件事仍然经过驱动（座位与轮次的闸门都在），只是由门禁按步调、而不是计时器。
+     */
+    advanceOnce: () => {
+      advanceProbeCalled += 1;
+      const why = (): string => {
+        if (state.phase !== 'turn') return `not-turn(${state.phase})`;
+        if (state.step === 'action') return 'at-action';
+        if (transitioning) return 'transitioning';
+        if (state.pendingEffects.length > 0) return 'pending-effects';
+        if (state.pendingPlay.length > 0) return 'pending-play';
+        if (state.pendingShift.length > 0) return 'pending-shift';
+        if (netGame === null) return 'no-net-game';
+        if (state.turnPlayer !== netGame.selfSeat) return `not-my-turn(${state.turnPlayer}!=${netGame.selfSeat})`;
+        return 'ran';
+      };
+      const w = why();
+      if (w !== 'ran') {
+        return {
+          ok: false, why: w, op: 0, seat: netGame?.selfSeat ?? -1, turnPlayer: state.turnPlayer,
+          actions: advanceProbeActions, submit: 'not-attempted', called: advanceProbeCalled,
+        };
+      }
+      const before = `${state.step}|${state.turnPlayer}|${state.log.length}|${state.draftRound}`;
+      /**
+       * ★ **走 `cb.onAction`（与自动推进的落点同一个调用），不直呼 `driver.submit`。**
+       *
+       * 为什么必须这样（两条都是既有守卫）：
+       *  - `driver.submit(` 在 `src/main.ts` 里**恰好 8 处**、且必须落在 `cb.onAction` /
+       *    `applyRearrangeSwap` 里（`main-driver-wiring.test.ts` / `main-lobby-wiring.test.ts` /
+       *    `g4-closure-guard.test.ts` 三条腿都钉着）—— 探针自己再调一次就会变成第 9 处
+       *    （实测踩过：全绿变 6 红）；
+       *  - `cb.onAction` 那条路**本来就更真**：它就是自动推进与玩家点击共用的那一个落点，
+       *    引擎抛错守卫、FX 排空、`rerender()` 都在里面。
+       */
+      cb.onAction({ kind: 'advance' });
+      const after = `${state.step}|${state.turnPlayer}|${state.log.length}|${state.draftRound}`;
+      const d = netGame?.driver.lastFailure() ?? null;
+      return {
+        ok: after !== before,
+        why: after !== before ? `moved ${before} -> ${after}` : `ran-but-no-change ${before}`,
+        op: netGame?.driver.appliedSteps() ?? -1,
+        seat: netGame?.selfSeat ?? -1,
+        turnPlayer: state.turnPlayer,
+        failure: d === null ? null : `${d.reason}: ${d.message}`,
+        actions: advanceProbeActions,
+        submit: 'via-cb.onAction',
+        called: advanceProbeCalled,
+      };
+    },
+    autoAdvanceOff: () => autoAdvanceOff,
+  };
+}
+
 /** 本机 `sessionId`（16 字节 → 十六进制）。**只住会话层、不进档案**（D2） */
 function newSessionId(): string {
   const c = (globalThis as { crypto?: { getRandomValues<T extends Uint8Array>(a: T): T } }).crypto;
@@ -473,6 +920,37 @@ function lobbyEntryState(): LobbyState {
 }
 
 /**
+ * ★★ **硬币那一帧的结算读数**（模块态；`null` = 还没算出来）。
+ *
+ * ## 为什么必须持久（评审阻断项：门不确定，实测 9 跑 3 红）
+ *
+ * 这一帧的读数由 `lobbyCoinViewOf()` 写进 `globalThis.__coinInputs` —— 而那个函数**只在
+ * "这一帧画硬币屏"时才跑**。T11-C 之后多了一个出口：`renderLobbyFrame` 的帧首
+ * `enterNetGame()` 一旦成功进牌桌就 `return`，那一帧**不再画硬币屏** ⇒ 如果房主的
+ * "读数齐了"那一帧与我进牌桌的那一帧**重叠**（相位 `complete` 与 `winnerReady()` 在同一帧
+ * 一起变真，实测就是这个形状），`__coinInputs` 在房主那一侧**永远没被写过**。
+ *
+ * 症状（评审的 `DIAG HOST ready=false coinScreen=0 inputs=null`）：工具 ③.5 的跨端读数比对
+ * 读到房主 `null` ⇒ **固红**，而且红不红取决于"那一帧有没有抢到"⇒ 门**不确定**
+ * （镜像实测：4 跑 1 红，红在 `两端读数不同：房主 null / 加入方 {...}`）。
+ *
+ * 修法：把那一帧的读数**在 `enterNetGame()` 之前**也写一遍，并留在模块态里 ——
+ * 读数一旦算出来就不再依赖"屏还在不在"。它不是第二个真相源：值与 `lobbyCoinViewOf()`
+ * 算出来的是同一组（都由 `handoff()` 交出来的那一组数派生）。
+ */
+let coinVerdict: {
+  role: string; caller: PlayerId; chosen: CoinSide; landed: CoinSide;
+  winner: PlayerId; seed: string; phase: string;
+} | null = null;
+
+/**
+ * ★ "硬币落地"那一帧已经补画过了（见 `enterNetGame()` 里那句 `renderCoin`）。
+ * 一局只画一次；复位点与 `coinVerdict` 同族（`resetToMainInterface`）。
+ */
+let coinSettledShown = false;
+
+
+/**
  * 画出大厅这一帧。
  *
  * ## 为什么 `sync()` 排在这一帧之前
@@ -483,6 +961,33 @@ function lobbyEntryState(): LobbyState {
  */
 function renderLobbyFrame(): void {
   const client = lobbyClient;
+  /**
+   * ★★ **T11-C：这一帧先问"是不是该进牌桌了"**（任务书 §7：硬币屏上刻意**没有**
+   * "开始对局"按钮 ⇒ 进对局的触发条件只能做在"读数齐了"这一层，不许加按钮）。
+   *
+   * ⚠️ **顺序写死，而且"先算读数、再进牌桌"**：`lobbyCoinView()` 里那句
+   * `lobbyCoinViewOf()` 是 `__coinInputs`（硬币屏那一帧的结算读数）**唯一**的写入点，
+   * 而进牌桌之后这一帧就 `return` 了、那块屏再也不画 ⇒ 两件事挤在同一帧时，
+   * 先 `enterNetGame()` 会把读数**吃掉**（评审的阻断项就是这么来的；详见 `coinVerdict` 的说明）。
+   * 反过来先算读数只是多算一次纯读数（`lobbyCoinViewOf` 无副作用，除了它自己写的那两个全局读数），
+   * 屏上那一帧仍然由下面的 `lobbyCoinShown` 指纹决定要不要重画 —— 不会多画。
+   */
+  const coin = client === null ? null : lobbyCoinView();
+  if (coin !== null && coin.winner !== null) {
+    const hand = client?.handoff() ?? null;
+    if (hand !== null && hand.ready && hand.seed !== null && hand.draftStarter !== null) {
+      coinVerdict = {
+        role: coin.role, caller: coin.caller, chosen: coin.chosen ?? hand.chosen,
+        // ⚠️ 相位取 `hand.phase`（= `'complete'`，两端同一个值），**不取** `coin.phase`：
+        //   加入方那一帧可能还写着 `reveal-salt-sent`（T11-B 留下的读数），于是两端这一格
+        //   不同 —— 而门禁比的是"同一帧的结算读数"，让它们逐字一致才比得动。
+        landed: hand.landed, winner: coin.winner, seed: hand.seed, phase: hand.phase,
+      };
+      (globalThis as { __coinVerdict?: unknown }).__coinVerdict = coinVerdict;
+    }
+  }
+  enterNetGame();
+  if (netGame !== null) return; // 已经进牌桌：这一帧不该再画大厅/硬币屏（`enterNetGame` 里画过了）
   if (client !== null) client.sync();
   /**
    * ★★ **T11-B：先问"这一刻该不该画硬币屏"**（D27：硬币屏插在握手中间）。
@@ -491,7 +996,6 @@ function renderLobbyFrame(): void {
    * 重画的条件是"读数指纹变了"（`lobbyCoinShown`）—— 这一帧会被每条入站重画，
    * 无条件重画就是整屏重建（玩家点下去的那一刻屏会闪、大币会重置）。
    */
-  const coin = client === null ? null : lobbyCoinView();
   if (coin !== null) {
     // 只在这一帧的读数**与上一帧不同**时重画（见 `lobbyCoinShown` 的说明）
     const sig = `${coin.role}|${coin.phase ?? ''}|${String(coin.chosen)}|${String(coin.landed)}|${String(coin.winner)}|${String(coin.caller)}`;
@@ -500,7 +1004,9 @@ function renderLobbyFrame(): void {
       renderCoin(root, {
         backHome: () => { showModeSelect(); },
         // ⚠️ 联机那一支**不读种子**（D27：叫面必须早于公开种子）⇒ 这里刻意不给 `seed`
-        beginGame: () => { /* 进牌桌归 T11-C：本段到"算出落地"为止 */ },
+        // ⚠️ T11-C：`beginGame` 仍然**空实现** —— 联机这一支没有"开始对局"按钮（上面 §7），
+        //    进对局的触发点是本函数开头那句 `enterNetGame()`。热座那一支照旧（那边有按钮）。
+        beginGame: () => { /* 联机进牌桌由 enterNetGame() 触发，不是这个按钮 */ },
         net: coin,
       });
     }
@@ -561,7 +1067,9 @@ function attachLobbyReconnect(client: LobbyClient): void {
     reconnecting = true;
     void client.reconnect().then(() => {
       reconnecting = false;
-      renderLobbyFrame();
+      // ★ T11-C：重连发生在**对局中**时不许画大厅（那会把牌桌盖掉）。而重连本身对局中的语义
+      //   （带着同一局回来）归 T9/T10 —— 这里只保证"不静默改屏"，不假装重连已经能续局。
+      if (netGame !== null) rerender(); else renderLobbyFrame();
     }, () => { reconnecting = false; });
   });
 }
@@ -667,7 +1175,15 @@ function startLobby(role: 'host' | 'guest'): void {
         return r.ok ? { ok: true as const } : { ok: false as const, message: r.message };
       },
       localNick: () => readNickName(localStore),
-      onInbound: () => { renderLobbyFrame(); },
+      /**
+       * ★ **入站帧到了就重画一帧**（评审 1.3 的 A4）。
+       *
+       * ★ T11-C 补的分支：**进了牌桌之后**这一帧该画的是**牌桌**，不是大厅 ——
+       * 对局的 `act` 帧也走这条传输（同一份 `transport.onMessage`），而它到达时
+       * `renderMode` 已经是 `'net'`。缺这个分支的症状是"对手每动一下，屏上被大厅盖一次"
+       * （状态没错、屏错了，且不报任何错）。
+       */
+      onInbound: () => { if (netGame !== null) rerender(); else renderLobbyFrame(); },
     });
     // ── ★ 修复轮 A5：**断线时重连**（计划 §5 T8 那条硬约束的产出代码调用点）──────────────
     // 为什么订阅放在这里而不是 `net-lobby.ts` 内部：会话层与传输层都**不自己**订阅生命周期
@@ -1259,6 +1775,7 @@ const cb: UiCallbacks = {
       const chooser = top?.prompt?.chooser ?? top?.player ?? state.turnPlayer;
       driver.submit(state, { player: chooser, kind: 'effect-choice', args: { promptId: a.promptId!, choice: a.choice! } });
     } else if (a.kind === 'advance') {
+      advanceProbeActions += 1; // 门禁读数用：这一条真的走到了 `submit`（见 `advanceOnce`）
       driver.submit(state, { player, kind: a.kind });
     } else if (a.kind === 'clear-cache') {
       driver.submit(state, { player, kind: a.kind });
@@ -1807,6 +2324,22 @@ function resetToMainInterface(): void {
   chooseFaceResolve = null;
   faceChosen = false;
   lobbyCoinShown = null;
+  // ★ T11-C：硬币那帧的读数与"补画过没有"也归这里（同族：漏了下一局会带着上一局的落地）
+  coinVerdict = null;
+  coinSettledShown = false;
+  // ── ★ T11-C：**联机对局**（第六份跨页状态）也要在这里收拾（与上面五份并排：各归各的模块）──
+  // 它的订阅有两条、分属两个对象，**两条都要退**：
+  //   ① 驱动的 `onMessage` / `onStatus`（`createNetDriver` 里各订阅一次）⇒ `driver.dispose()`；
+  //   ② 大厅路由的 `transport.onMessage` / `transport.onStatus`（`createLobbySessionLink` 里
+  //      各订阅一次）⇒ 由下面那一行 `lobbyClient.dispose()` → `link.detach()` 退掉。
+  //      会话对象**自己没有** detach / dispose（`NetSession` 上零命中，它是纯状态机、
+  //      不持有订阅 —— `session.ts:768-776`），所以这一步不许写成 `session.detach()`。
+  //  ③ `driver = localDriver` —— **必须**，否则回主页之后热座的动作会被联机驱动接走
+  //      （它只在 `turnPlayer === seat` 时收输入 ⇒ 热座会变成"只有一方能动"，不报任何错）。
+  // 漏掉①的症状：下一局一进牌桌就接着上一局的对端收帧（序号对不上，报的还是上一局的分叉）。
+  netGame?.driver.dispose();
+  driver = localDriver;
+  netGame = null;
   renderMode = 'hotseat'; // 防"预览模式泄漏到热座"（见本节注释）
   netViewSeat = 0;
   // 手牌可见性无需复位：本页无该选项（档位字段已删，恒为信息遮蔽，I-2/N4）。
@@ -1824,6 +2357,14 @@ function resetToMainInterface(): void {
  * - 其余步骤（start/check-control/check-cache 手牌合规/end）→ 自动 advance
  */
 function runAutoAdvance(): void {
+  /**
+   * ★ **门禁关掉自动推进时，这里必须也早退**（评审 R2 §8 遗留 3）。
+   *
+   * `scheduleAutoAdvance()` 只在排程时看开关，而**已经挂上**的那个定时器照样会到点调到这里；
+   * `setAutoAdvance(false)` 会把它 `clearTimeout` 掉，这一句是**第二道**：兜住"回调已经在飞 /
+   * 别的路径直呼本函数"的边角。两条一起，"关了"才真的等于"这一局不会再自己往前走一格"。
+   */
+  if (autoAdvanceOff) return;
   // ── G4 Task 4（D8）：**重放期间不自动推进** ──
   // 自动推进（400ms）与重放的步进时钟（注入的 ticker，900ms/档）是两套独立时钟，同时跑必然
   // 互相踩：`runAutoAdvance` 会替玩家合成 `advance`，而档案里的 `advance` 是**显式记录**的
@@ -1852,6 +2393,9 @@ function runAutoAdvance(): void {
 function scheduleAutoAdvance(): void {
   // G4 Task 4（D8）：重放页**不排**自动推进（它有自己的步进时钟，见 `runAutoAdvance` 的同款守卫）
   if (renderMode === 'replay') return;
+  // ★ G5 T11-C：门禁可以把它关掉（见 `noAutoAdvance()` 的说明）。
+  //   存在的理由：不关掉的话"对端的指纹变了"分不清是**收到的那一帧**还是**它自己推的**。
+  if (autoAdvanceOff) return;
   if (autoTimer !== null) return;
   autoTimer = window.setTimeout(() => {
     autoTimer = null;
@@ -1932,6 +2476,8 @@ gameBus.subscribe((e) => {
 });
 // 2026-09-03：应用入口 = 主页面（开始游戏 → 掷硬币 → 草稿 → 对局）
 // G3 Task 4：入口改为**启动门** —— 首次进入先过授权弹窗（同意前零写入），表过态则直进主页。
+// ★ G5 T11-C：跨端状态指纹的读取口（只跟着 `#g5probe=1` 打开，见那里的说明）
+exposeMatchProbe();
 showStartScreen();
 // 常驻特效层随滚动/缩放重新对齐：已编译环（compiledFx）、暗2 黑烟（smokeOverlays）、
 // 能量扫描线（scanOverlays）与 FX-3 念能粒子/瘟疫浓雾（psychicParticles/plagueMists）、

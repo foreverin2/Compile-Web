@@ -21,9 +21,29 @@
  *     加入方 `awaiting-commit`），不是各自停在 `handshaking`（I-3 的症状）；
  *  ③.5 **硬币屏插在握手中间**（G5 T11-B / D27）：两端屏上都出现硬币屏、标题说清"由加入方选面"、
  *     可见文案不含禁用词；加入方**点芯片之前**屏上没有落点读数（种子还没公开）、
- *     两枚芯片可点；点了之后落点出现、两端读数逐字相同、握手继续走到 `complete`；
+ *     两枚芯片可点；点了之后落点出现、两端读数逐字相同、握手继续走到 `complete`。
+ *     ⚠️ **T11-C 起，这一组里"点后落点出现"那条读的是 `globalThis.__coinInputs`（那一帧的
+ *     记账位），不再读屏上的 `.coin-result-text`**：硬币屏在联机下从"终点"变成了"中间站"
+ *     （两端一 ready 就进草稿），读屏上此刻会读到一个**已经被换走**的屏。判据本身没放宽
+ *     ——仍然是"落点必须算出来过"，只是改成读"发生过的事"；
+ *  ③.6 **握手完 ⇒ 两端真的进草稿**（G5 T11-C）：两端屏上都出现 `.draft-screen`、
+ *     两端 `__g5Match` 报的种子与先选协议者相同、**两端状态指纹逐字相等**；
+ *  ③.7 **真的选一步协议**（判据 3）：按"谁先选"的那一侧在池子里真鼠标拖一张卡
+ *     （真 `mousedown/mousemove/mouseup`，走 `bindDraftDrag`）⇒ 选中的那一侧状态变了、
+ *     没选的那一侧**一字未动**（草稿动作今天不走线上，登记在报告里）；
+ *  ③.8 **两端各自走完整场草稿 ⇒ 两端状态规范串逐字相等**（判据 3 的收口）：六次选完、
+ *     进对局相。走草稿走 `__g5Match.finishDraft()`（**不动驱动、不碰传输**；它调的就是拖拽落点
+ *     那一句调的同一个 `cb.onDraftPick`）。⚠️ 判据 3 的"跨端草稿同步"今天**不成立**（草稿动作
+ *     不过线），所以这一格证的是"同一起始状态 + 各自确定性重演"，标题里写明了这一点；
  *  ④ 负控：把那条邀请码的**压缩段截断**再贴 ⇒ 屏上必须给**可读**的失败，且**不假装成功**
  *     （不产回示码、相位不前进）。
+ *
+ * ## 读对局读数为什么要带 `#g5probe=1`
+ *
+ * 两端状态指纹那几条读的是 `globalThis.__g5Match`（`src/main.ts` 的 `exposeMatchProbe()`），
+ * 而它**只在这个查询片段出现时挂上**：它返回的是**整份 `GameState` 的规范串**（几万字符），
+ * 无条件挂上去会让每次重画都序列化一遍。⇒ 本工具起的两个 Chrome 一开始就带这个片段
+ * （见下面的 `launchChrome` 调用），其余两道浏览器门不带它、行为一字不变。
  *
  * ## 它怎么起环境（端口怎么选）
  *
@@ -107,6 +127,11 @@ const VITE_BIN = join(REPO, 'node_modules', 'vite', 'bin', 'vite.js');
 /** 任务书点名不许用的四个端口（5173 用户自己的 dev server、9341/9342 既有 CDP 夹具的调试端口、5199 同列） */
 const FORBIDDEN_PORTS = [5199, 9341, 9342, 5173];
 const PROFILE_PREFIX = 'btl-lobby-';
+/**
+ * 打开"跨端状态指纹"那个只读读取口的查询片段（`src/main.ts` 的 `exposeMatchProbe()`）。
+ * 两个 Chrome 从一开始就带它 —— 见文件头"读对局读数为什么要带 `#g5probe=1`"。
+ */
+const PROBE_FRAGMENT = '#g5probe=1';
 
 const argv = process.argv.slice(2);
 const argVal = (name, dflt = null) => {
@@ -352,6 +377,127 @@ async function phaseOfSide(p) {
   return m ? m[1] : null;
 }
 
+/* ── ★★ G5 T11-C：跨端对局读数（判据 5/6/7 的读数口）────────────────────── */
+
+/** 32 位 FNV-1a（**与 `src/core/rng.ts:26` 的 `hash32` 同一份算式**：`0x811c9dc5` 起始、
+ * 每字节 `^=` 之后 `Math.imul(h, 0x01000193)`）。
+ *
+ * 为什么在工具这一侧再写一遍：跨端比的那份串是 `stableStringify(state)`，几万字符，
+ * 不相等的两份逐字打印出来是十几万字符的差异（人读不了、日志也放不下）。
+ * 比哈希与比串在"**不相等**"这件事上等价；而"相等"那一刻两边给出的是同一个哈希 ——
+ * 真正的逐字比较（以及那个哈希本身的出处）由 node 腿钉着
+ * （`tests/ui/net-lobby-handoff.test.ts` 比的是 `stateFingerprint`）。
+ */
+function hash32(text) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i += 1) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16).padStart(8, '0');
+}
+
+/** `JSON.parse` 的安全版（页面里那个记账位可能是 `null` / 半个对象） */
+function parseJson(text) {
+  try { return JSON.parse(String(text)); } catch { return null; }
+}
+
+/**
+ * ★★ **读"硬币那一帧的结算读数"**（评审阻断项 1 的修法那一半）。
+ *
+ * 两个来源，**先 `__coinInputs`（T11-B 那一帧写下的原文）、再 `__coinVerdict`（`main.ts`
+ * 在进牌桌之前持久下来的那一份）**：
+ *
+ * 为什么需要第二个来源：`__coinInputs` 的**唯一**写入点是 `lobbyCoinViewOf()`，而进牌桌之后
+ * 那一帧就 `return` 了、硬币屏再也不画 ⇒ 房主的"读数齐了"那一帧与"进牌桌"那一帧**重叠**时，
+ * 它那一侧**永远没被写过** ⇒ 这条跨端判据读到 `null`、固红（评审实测：镜像 9 跑 3 红，
+ * 红点正是 `两端读数不同：房主 null / 加入方 {...}`）。
+ *
+ * 两者是**同一组数**（都由 `handoff()` 交出来的那一组派生），`__coinVerdict` 只是把它
+ * 留在模块态里、不再依赖"屏还在不在"。
+ */
+async function coinVerdictOf(p) {
+  const raw = await p.evaluate(`(() => {
+    const v = globalThis.__coinInputs ?? globalThis.__coinVerdict ?? null;
+    return v === null ? null : JSON.stringify(v);
+  })()`);
+  return parseJson(raw);
+}
+
+/**
+ * 本端这一刻的对局读数（`__g5Match`，`src/main.ts` 的 `exposeMatchProbe()`）。
+ *
+ * `null` = 这一页还没挂那个读取口（没带 `#g5probe=1`，或页面还在旧版本上）。
+ */
+async function matchOf(p) {
+  const raw = await p.evaluate(`(() => {
+    const m = globalThis.__g5Match;
+    if (!m) return null;
+    return JSON.stringify({
+      state: m.state(), seed: m.seed(),
+      draftStarter: m.draftStarter(), draftRound: m.draftRound(),
+    });
+  })()`);
+  if (typeof raw !== 'string' || raw.length === 0) return null;
+  let parsed = null;
+  try { parsed = JSON.parse(raw); } catch { return null; }
+  if (parsed === null || typeof parsed.state !== 'string') return null;
+  return {
+    fp: hash32(parsed.state),
+    chars: parsed.state.length,
+    seed: String(parsed.seed),
+    draftStarter: parsed.draftStarter,
+    draftRound: parsed.draftRound,
+  };
+}
+
+/**
+ * 读某一侧草稿屏上的读数（**屏面那一半**：不经过任何全局探针）。
+ *
+ * `drafter` = 顶部横幅里那个「玩家 N」的座位号（-1 = 读不到）。它与 `__g5Match` 的
+ * `draftStarter` 是**两件事**，正是判据要交叉比的那两件：屏上写的是谁在选、状态里算的是谁先选。
+ */
+async function draftScreenOf(p) {
+  return await p.evaluate(`(() => {
+    const s = document.querySelector('.draft-screen');
+    if (!s) return null;
+    const banner = s.querySelector('.draft-turn-banner .turn-badge');
+    const m = /玩家\\s*(\\d+)/.exec(banner ? banner.textContent : '');
+    return {
+      cards: s.querySelectorAll('.draft-card').length,
+      picks: s.querySelectorAll('.draft-pick-card').length,
+      drafter: m ? Number(m[1]) - 1 : -1,
+      progress: (s.querySelector('.draft-progress-text') || {}).textContent || '',
+      note: (s.querySelector('.draft-mode-note') || {}).textContent || '',
+    };
+  })()`);
+}
+
+/** 真鼠标拖拽（`bindDraftDrag` 要的是 mousedown → 动 >6px → mouseup 落在目标框里） */
+async function drag(send, label, from, to) {
+  const a = { x: Math.round(from.x), y: Math.round(from.y), button: 'left', clickCount: 1 };
+  const b = { x: Math.round(to.x), y: Math.round(to.y), button: 'left', clickCount: 1 };
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: a.x, y: a.y });
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...a });
+  // 分两步移动：第一步越过 6px 阈值（这一步才 `beginDrag()`）、第二步落到目标框中心
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: a.x + 10, y: a.y + 10, button: 'left' });
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: b.x, y: b.y, button: 'left' });
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...b });
+  void label;
+}
+
+/** 某个选择器的矩形中心（拖拽的目标点用） */
+async function centerOf(p, selector) {
+  return await p.evaluate(`(() => {
+    const el = document.querySelector(${JSON.stringify(selector)});
+    if (!el) return null;
+    el.scrollIntoView({ block: 'center', inline: 'center' });
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) return null;
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+  })()`);
+}
+
 const chrome = findChrome();
 if (!chrome) die('找不到 Chrome/Edge（可用 CHROME_PATH 指定）');
 if (!existsSync(VITE_BIN)) die(`找不到 vite：${VITE_BIN}`);
@@ -379,13 +525,22 @@ let hostInst = null;
 let guestInst = null;
 let host = null;
 let guest = null;
+/**
+ * ★ 判据②（`coin-result-text` 里「玩家 N」== `winner + 1`）的取样槽：在 ③.5**点完芯片之后**
+ * 取（那是唯一的窗口 —— 两端一 ready 就进草稿屏，结论行会被换掉），在 ③.6 判。
+ * 声明在**模块级**（不是那个 if 块里）：③.5 在 `if (guestCoin) { … }` 里取样，③.6 在块外判。
+ */
+let coinSnapHost = null;
+let coinSnapGuest = null;
 const raw = { when: new Date().toISOString(), chrome, vitePort, waitS: WAIT_S, diagnose: DIAGNOSE };
 let envError = null;
+/** 收工清理失败的真因（见下面的删除重试）；写进 `raw` 供事后查证 */
+const cleanupErrors = [];
 
 try {
   if (!(await httpOk(`${origin}/`, 40000))) throw new Error('vite 没起来（40s 内没有 HTTP 200）');
-  hostInst = await launchChrome(chrome, origin);
-  guestInst = await launchChrome(chrome, `${origin}/`);
+  hostInst = await launchChrome(chrome, `${origin}/${PROBE_FRAGMENT}`);
+  guestInst = await launchChrome(chrome, `${origin}/${PROBE_FRAGMENT}`);
   host = await attach('host', hostInst.port, origin);
   guest = await attach('guest', guestInst.port, origin);
   say(`chrome 调试端口：host=${hostInst.port} guest=${guestInst.port}（都是 --remote-debugging-port=0）`);
@@ -647,9 +802,102 @@ try {
           ? '加入方那两枚芯片可点（叫面的一方）'
           : `加入方的芯片状态不对：${JSON.stringify(preChips)}`,
       );
+      /**
+       * ★★ **判据②的取样：在点芯片之前装一个 `MutationObserver`，把"**出现过的**结论行"记下来**
+       * （评审 R2 §8 遗留 1 的补回；同一套做法在 T11-B 的 ③ 里用过 —— 那里记的是
+       * `.net-lobby-notice`）。
+       *
+       * ## 为什么不能靠轮询
+       *
+       * 实测（2026-09-19，两次）：点完芯片之后**两端在几十毫秒内就进了草稿屏**，
+       * `.coin-result-text` 只在一两帧里存在；而 CDP 每轮 `evaluate` 要几十毫秒 ⇒ 轮询
+       * 整整 30 秒都读不到（两次都是 `房主 null / 加入方 null`，而同一刻 `coinReady=true`、
+       * `hasVerdict=true`、`draft:1`）。**读 DOM 的"此刻"必然错过它**。
+       *
+       * ## 记的东西是"同一帧的一对"
+       *
+       * 观察者的回调在浏览器那一侧跑：`__coinInputs` 是 `lobbyCoinViewOf()` 在**同一帧**里、
+       * 画屏**之前**写的（`net-lobby.ts` 里那句），所以回调里读到的 `winner` 与刚出现的
+       * 结论行**是同一帧的一对** —— 判据②要的就是这个配对，而不是"事后拿一个持久读数配一条
+       * 已经被换掉的屏"。
+       */
+      const installResultWatch = async (p) => await p.evaluate(`(() => {
+        const w = { text: null, winner: null, frames: 0, scans: 0 };
+        globalThis.__coinResultWatch = w;
+        /**
+         * ⚠️ **必须在 records 的 addedNodes 里找，不能查 document**（实测踩过）：
+         * 进牌桌那一帧是"先补画落地帧、紧接着 rerender() 画牌桌"——同一任务里 root 被重写，
+         * 而 MutationObserver 的回调在**微任务之后**才跑，那时节点**已经被换掉了** ⇒
+         * document.querySelector('.coin-result-text') 恒为 null（实测：房主 frames: 0
+         * 而 renderCoin 明明跑了两次）。从 record.addedNodes 里找才拿得到**那一刻**的文本。
+         */
+        const grabFrom = (node) => {
+          if (!(node instanceof Element)) return null;
+          if (node.classList && node.classList.contains('coin-result-text')) return node.textContent;
+          const inner = node.querySelector ? node.querySelector('.coin-result-text') : null;
+          return inner === null ? null : inner.textContent;
+        };
+        const note = (t) => {
+          w.frames += 1;
+          if (w.text !== null) return;
+          w.text = t;
+          const v = globalThis.__coinInputs ?? globalThis.__coinVerdict ?? null;
+          w.winner = v === null || typeof v.winner !== 'number' ? null : v.winner;
+        };
+        const obs = new MutationObserver((records) => {
+          w.scans += 1;
+          for (const rec of records) {
+            for (const n of rec.addedNodes) {
+              const t = grabFrom(n);
+              if (t !== null && t.length > 0) { note(t); return; }
+            }
+          }
+        });
+        obs.observe(document.getElementById('app'), { childList: true, subtree: true, characterData: true });
+        const now = document.querySelector('.coin-result-text');
+        if (now !== null && now.textContent) note(now.textContent);
+        return true;
+      })()`);
+      await installResultWatch(host);
+      await installResultWatch(guest);
       // 真鼠标点第一枚（正面）
       await guest.click('.coin-face-chip');
+      /**
+       * ⚠️ 它**只是诊断读数**（"屏上此刻还看不看得到结论行"），不参与判定 —— 它几乎总是
+       * `false`（硬币屏是中间站）。判据②读的是上面那个观察者记下的"出现过的那一对"。
+       */
       const landed = await guest.waitFor('.coin-result-text', budgetMs);
+      {
+        /**
+         * 点完等一会儿取样（观察者已经在记了）：两端各自"第一次出现的那一对"。
+         * 等的是**观察者记到**，不是"屏上此刻还在" —— 所以零点几秒就够。
+         */
+        const t4 = Date.now();
+        while (Date.now() - t4 < Math.min(budgetMs, 8000)) {
+          coinSnapHost = parseJson(await host.evaluate('JSON.stringify(globalThis.__coinResultWatch ?? null)'));
+          coinSnapGuest = parseJson(await guest.evaluate('JSON.stringify(globalThis.__coinResultWatch ?? null)'));
+          if (coinSnapHost !== null && coinSnapGuest !== null
+            && coinSnapHost.text !== null && coinSnapGuest.text !== null) break;
+          await sleep(150);
+        }
+        notes.push(`结论行取样（观察者记的，等了 ${String(Date.now() - t4)}ms）：`
+          + `房主 ${JSON.stringify(coinSnapHost)} / 加入方 ${JSON.stringify(coinSnapGuest)}`);
+        if (coinSnapHost === null || coinSnapGuest === null
+          || coinSnapHost.text === null || coinSnapGuest.text === null) {
+          const probePage = async (p) => parseJson(await p.evaluate(`(() => {
+            const el = document.querySelector('.coin-result-text');
+            return JSON.stringify({
+              coinScreen: document.querySelectorAll('.coin-screen').length,
+              resultText: el === null ? null : el.textContent,
+              coinReady: globalThis.__coinReady === true,
+              hasVerdict: globalThis.__coinVerdict !== undefined,
+              draft: document.querySelectorAll('.draft-screen').length,
+            });
+          })()`));
+          notes.push(`取样失败时的屏面：房主 ${JSON.stringify(await probePage(host))}`
+            + ` / 加入方 ${JSON.stringify(await probePage(guest))}`);
+        }
+      }
       /**
        * 诊断读数：点完那一刻芯片上的 `selected` 与屏上的相位。
        *
@@ -661,83 +909,613 @@ try {
         "[...document.querySelectorAll('.coin-face-chip')].map((c) => c.className)",
       );
       const phaseNow = await phaseOfSide(guest);
-      notes.push(`点完芯片之后：芯片类名 ${JSON.stringify(pickedNow)} / 相位 ${String(phaseNow)} / 落点 ${String(landed)}`);
-      push(landed, landed
-        ? `点完芯片之后屏上出现了落点：${(await guest.text('.coin-result-text')) ?? ''}`
-        : '点了芯片之后屏上没有出现落点（握手没继续 ⇒ 种子没到）');
+      notes.push(`点完芯片之后：芯片类名 ${JSON.stringify(pickedNow)} / 相位 ${String(phaseNow)}`
+        + ` / 屏上此刻的落点行 ${JSON.stringify(landed)}`);
+      /**
+       * ★★ **T11-C：判据从"读屏上的此刻"换成"读那一帧的记账位"**（判定口径的替换，**不是放宽**：
+       * 下面那句仍然是"落点必须算出来过"，而且是**同一条**判据）。
+       *
+       * T11-B 时硬币屏是**终点**：落点到手之后它一直留在屏上，所以读 `.coin-result-text` 是稳的。
+       * T11-C 把它变成**中间站**：两端一 ready 就立刻进草稿 ⇒ 那块屏连同落点这一行会被
+       * `.draft-screen` **换掉**。实测（2026-09-19，本工具，第一版 21/26，其中一条就是这里）：
+       * `点完芯片之后：芯片类名 [] / 相位 null / 落点 false` —— 屏在三次轮询内就换掉了，
+       * 于是"点后没有落点"看起来是红的，其实落点**算出来过**（记账位里 `landed=2`）。
+       *
+       * 现在读 `globalThis.__coinInputs`（`lobbyCoinViewOf()` 在"胜负依据齐了"那一帧写下的
+       * 四个读数 + 落点）：它记的是**发生过的事**，不会因为屏被换掉而消失。
+       * 屏面那一半（两端落点文案里的座位号）仍是 T11-B 那几条腿钉的，本段一个字没动 ——
+       * 那块屏在联机下是**中间站**，读到它需要抢在进牌桌之前（T11-B 的腿用的是假传输、
+       * 没有"进牌桌"这一步，所以那几条腿不受影响）。
+       */
+      const readyGuest = (await guest.evaluate('String(globalThis.__coinReady ?? false)')) === 'true';
+      const gObj2 = parseJson(await guest.evaluate('JSON.stringify(globalThis.__coinInputs ?? null)'));
+      push(readyGuest && gObj2 !== null && typeof gObj2.landed === 'number',
+        readyGuest && gObj2 !== null
+          ? `点完芯片之后落点算出来了：掷出 ${String(gObj2.landed)}（读数由那一帧的记账位给出；`
+            + '屏此时可能已经让位给草稿屏了）'
+          : '点了芯片之后加入方**始终**没有算出落点（`__coinInputs` 一直是空的 ⇒ 握手没有继续）');
       if (landed) {
-        /**
-         * ★★ **跨端判据**（修复轮）：等两端**读数就绪**，再比**读数**（座位号），文案按同一套
-         * 全局座位编号归一化后比 —— 不比本地化字符串的逐字相等。
-         *
-         * ## 上一版为什么读不出那个缺陷
-         *
-         * 上一版只比"两端 `.coin-result-text` 的整句是否逐字相同"。那有两个毛病：
-         *  1. 两句都合法、只是**先选者不同**时，它给出的是一句"文案不同"，读者分不清
-         *     "两端算的是两件事"还是"编号口径不同"；
-         *  2. 更糟的是它**可能读到瞬时帧**（两端的重画时刻本来就不同）。
-         *
-         * ## 现在比什么
-         *
-         * `main.ts` 在**胜负依据齐了的那一帧**把四个输入挂到 `globalThis.__coinInputs`
-         * （`caller` / `chosen` / `landed` / `winner`，后两个都是**座位**）。判据：
-         *  - ① 四个数两端逐个相同；
-         *  - ② 两端**文案里那个 `玩家 N`** 都等于各自 `winner + 1`（全局座位编号：玩家 1 = 座位 0）。
-         * ② 是把"读数对、文案却写了另一个数"这条也钉住 —— 只比读数时它看不见。
-         */
-        const readReady = async (p) => (await p.evaluate('String(globalThis.__coinReady ?? false)')) === 'true';
-        const t3 = Date.now();
-        while (Date.now() - t3 < budgetMs) {
-          if ((await readReady(host)) && (await readReady(guest))) break;
-          await sleep(200);
-        }
-        const inputsOf = async (p) => await p.evaluate('JSON.stringify(globalThis.__coinInputs ?? null)');
-        const parse = (s) => { try { return JSON.parse(String(s)); } catch { return null; } };
-        const hObj = parse(await inputsOf(host));
-        const gObj = parse(await inputsOf(guest));
-        notes.push(`硬币屏读数：房主 ${JSON.stringify(hObj)} / 加入方 ${JSON.stringify(gObj)}`);
-        const sameInputs = hObj !== null && gObj !== null
-          && hObj.caller === gObj.caller && hObj.chosen === gObj.chosen
-          && hObj.landed === gObj.landed && hObj.winner === gObj.winner;
-        push(sameInputs, sameInputs
-          ? `两端四个读数逐个相同：caller=${String(hObj.caller)} chosen=${String(hObj.chosen)}`
-            + ` landed=${String(hObj.landed)} winner=${String(hObj.winner)}`
-          : `两端的读数不同：房主 ${JSON.stringify(hObj)} / 加入方 ${JSON.stringify(gObj)}`);
-        // ② 文案里的座位号 = `winner + 1`（全局座位编号；不是本地化字符串逐字相等）
-        const seatInText = (line) => {
-          const m = /玩家\s*(\d+)\s*先选协议/.exec(line ?? '');
-          return m === null ? null : Number(m[1]);
-        };
-        const hLine2 = await host.text('.coin-result-text');
-        const gLine2 = await guest.text('.coin-result-text');
-        const hSeat = seatInText(hLine2);
-        const gSeat = seatInText(gLine2);
-        const textOk = hObj !== null && gObj !== null
-          && hSeat === hObj.winner + 1 && gSeat === gObj.winner + 1 && hSeat === gSeat;
-        push(textOk, textOk
-          ? `两端文案说的是同一个全局座位号：玩家 ${String(hSeat)} 先选协议（房主 / 加入方都是它）`
-          : `文案与读数对不上：房主文案 ${JSON.stringify(hLine2)}（座位 ${String(hSeat)}，读数 winner=${String(hObj?.winner)}）`
-            + ` / 加入方文案 ${JSON.stringify(gLine2)}（座位 ${String(gSeat)}，读数 winner=${String(gObj?.winner)}）`);
+        notes.push('加入方屏上还看得到落点行（这一格的两条判据已挪到 ③.6，见那里的"判据②"）');
       }
-      // 握手继续到底：加入方不再停在"等承诺 / 等面"那几格
+      // ★ T11-C：硬币屏被换掉之后 `phaseOfSide()` 读不到任何东西（两块屏都不在），
+      //   而那正是"走完了"的形态 ⇒ 屏不在就当"不在等"。
       const t2 = Date.now();
-      let gPhase2 = null;
+      let gPhase2 = await phaseOfSide(guest);
       while (Date.now() - t2 < budgetMs) {
         gPhase2 = await phaseOfSide(guest);
-        if (gPhase2 === 'complete') break;
+        if (gPhase2 === 'complete' || (await guest.count('.coin-screen')) === 0) break;
         await sleep(500);
       }
-      const movedOn = gPhase2 !== null && gPhase2 !== 'awaiting-commit-ack' && gPhase2 !== 'awaiting-commit'
-        && gPhase2 !== 'handshaking';
+      const gCoinGone = (await guest.count('.coin-screen')) === 0;
+      const movedOn = gCoinGone || (gPhase2 !== null && gPhase2 !== 'awaiting-commit-ack'
+        && gPhase2 !== 'awaiting-commit' && gPhase2 !== 'handshaking');
       push(movedOn, movedOn
-        ? `点完芯片之后握手继续走到 ${gPhase2}`
+        ? `点完芯片之后握手继续走（加入方相位 ${String(gPhase2)}${gCoinGone ? '，硬币屏已经让位' : ''}）`
         : `点完芯片之后加入方仍停在 ${String(gPhase2)}（叫面没有解锁握手）`);
       notes.push(`硬币屏实测：房主 ${hostCoin ? '有' : '无'} / 加入方 ${guestCoin ? '有' : '无'}，`
-        + `点前落点 ${JSON.stringify(preResult)}，点后相位 ${String(gPhase2)}`);
+        + `点前落点 ${JSON.stringify(preResult)}，点后相位 ${String(gPhase2)}，`
+        + `点后硬币屏还在=${!gCoinGone}，__coinInputs=${JSON.stringify(gObj2)}`);
     } else {
       push(false, '未到达：加入方屏上没有硬币屏 ⇒ 后面几条（点前无落点 / 点后继续）都到不了');
     }
   }
+  say('');
+
+  /* ── ③.6 握手完 ⇒ 两端真的进草稿（G5 T11-C 判据 1/3）──────────────────── */
+  say('=== ③.6 进牌桌：两端都进草稿 + 两端状态指纹相等（T11-C）===');
+  let hMatch = null;
+  let gMatch = null;
+  let gEndDraft = null;
+  let hEndDraft = null;
+  let hReboot = null;
+  let gReboot = null;
+  let hVerdict = null;
+  let gVerdict = null;
+  let draftAdmitted = false;
+  if (answerCode === null) {
+    push(false, '未到达：握手没推进（③不通过）⇒ 进牌桌那几条也没到');
+  } else {
+    /**
+     * ★★ **等待判据：两端各自的 `__g5Match` 都在、种子相同、`.draft-screen` 都在。**
+     *
+     * 为什么等这三样而不是等"屏上出现某个类"：进牌桌是**两端各自**由 `enterNetGame()` 触发的
+     * （没有服务器告诉它们"该开始了"），所以"都进去了"这件事只能在两端各读一次再比。
+     * 拿屏面当唯一判据会漏掉"一端进去了、另一端还停在硬币屏上"（那正是 T11-C 要抓的形态）。
+     */
+    const t0 = Date.now();
+    while (Date.now() - t0 < budgetMs) {
+      hMatch = await matchOf(host);
+      gMatch = await matchOf(guest);
+      // 顺带把"这段读数 → 喂进 createGame 的那两个数"也读下来
+      // （`__g5Handoff`，见下面那条"先选者必须是硬币算出来的那一个"）。
+      // ⚠️ 两端**都要**读它：`__coinInputs` 只有**叫面方那一支**会写（T11-B 的实现），
+      //    房主那一侧恒为 `null` —— 实测（2026-09-19）：拿 `__coinInputs` 当对照物时
+      //    房主那半边永远是 `null`，那一条当场变红。
+      hVerdict = parseJson(await host.evaluate('JSON.stringify(globalThis.__g5Handoff ?? null)'));
+      gVerdict = parseJson(await guest.evaluate('JSON.stringify(globalThis.__g5Handoff ?? null)'));
+      draftAdmitted = hMatch !== null && gMatch !== null
+        && hMatch.seed === gMatch.seed
+        && hMatch.draftStarter === gMatch.draftStarter;
+      if (draftAdmitted && hVerdict !== null && gVerdict !== null) break;
+      await sleep(300);
+    }
+    const hDraft = await host.count('.draft-screen');
+    const gDraft = await guest.count('.draft-screen');
+    const hSeedHint = await host.text('.coin-result-text');
+    const gSeedHint = await guest.text('.coin-result-text');
+    notes.push(`进牌桌读数：房主 ${JSON.stringify(hMatch)}（.draft-screen=${hDraft}，硬币屏残留=${JSON.stringify(hSeedHint)}）`
+      + ` / 加入方 ${JSON.stringify(gMatch)}（.draft-screen=${gDraft}，硬币屏残留=${JSON.stringify(gSeedHint)}）`);
+    push(hDraft > 0 && gDraft > 0, hDraft > 0 && gDraft > 0
+      ? '两端屏上都出现了草稿屏（`.draft-screen`）'
+      : `草稿屏没出现：房主 ${hDraft} 个 / 加入方 ${gDraft} 个（进牌桌那一步没有在两端都发生）`);
+    push(draftAdmitted, draftAdmitted
+      ? `两端都进了同一局：种子 ${String(hMatch && hMatch.seed)}、先选协议者 ${String(hMatch && hMatch.draftStarter)}`
+      : `两端没有进到同一局：房主 ${JSON.stringify(hMatch)} / 加入方 ${JSON.stringify(gMatch)}`);
+    const sameFp = draftAdmitted && hMatch.fp === gMatch.fp;
+    push(sameFp, sameFp
+      ? `两端状态指纹相等：${hMatch.fp}（各 ${hMatch.chars} 字符的规范串）`
+      : `两端状态指纹不同：房主 ${String(hMatch && hMatch.fp)} / 加入方 ${String(gMatch && gMatch.fp)}`);
+    // 反空转：两个指纹必须不是"都没算"（`null` 的 `null === null` 会让上一条假绿）
+    push(hMatch !== null && gMatch !== null, hMatch !== null && gMatch !== null
+      ? '两端的读数口都在（上面那两条不是在比两个 null）'
+      : '有一端的 `__g5Match` 读不到（页面没带 #g5probe=1？）');
+    /**
+     * ★★ **先选协议者必须是硬币算出来的那一个**（判据 3 的"值"那一半）。
+     *
+     * 为什么必须有这一条（镜像实测，2026-09-19）：上面那几条比的都是**两端是否一致**，
+     * 而"两端一致地算错"它是看不见的 —— 变异 M1（把喂给 `createGame` 的 `draftStarter`
+     * 取反）跑了两轮浏览器门**都 27/27 通过**（两次报出的先选者一次 1、一次 0），
+     * 而节点腿也照样全绿（它测的是自己复刻的那几行）。
+     *
+     * 对照物是 `__g5Handoff`（`enterNetGame()` 把 `handoff()` 的结果与**真正喂进 `createGame`
+     * 的那两个数**一起留下的那一份）：两端的 `draftStarter` 都必须等于各自 `handoff()` 里
+     * 由硬币算出来的那一个。
+     */
+    const verdictMatches = hVerdict !== null && gVerdict !== null
+      && typeof hVerdict.draftStarter === 'number' && typeof gVerdict.draftStarter === 'number'
+      && hVerdict.seed === gVerdict.seed
+      && hMatch !== null && gMatch !== null
+      && hMatch.draftStarter === hVerdict.draftStarter
+      && gMatch.draftStarter === gVerdict.draftStarter
+      && hVerdict.draftStarter === gVerdict.draftStarter;
+    push(verdictMatches, verdictMatches
+      ? `两端喂进 createGame 的 draftStarter 都等于硬币交出来的先选者 ${String(hVerdict && hVerdict.draftStarter)}`
+        + `（叫面者座位 ${String(hVerdict && hVerdict.caller)}、叫的面 ${String(hVerdict && hVerdict.chosen)}、`
+        + `落点 ${String(hVerdict && hVerdict.landed)}）`
+      : `先选者对不上：握手交出来的是 房主 ${String(hVerdict && hVerdict.draftStarter)} / 加入方 ${String(gVerdict && gVerdict.draftStarter)}，`
+        + `实际喂进 createGame 的是 房主 ${String(hMatch && hMatch.draftStarter)} / 加入方 ${String(gMatch && gMatch.draftStarter)}`);
+    /**
+     * ★★ **硬币那一帧的四个读数两端逐个相同**（T11-B 的跨端判据；T11-C 挪到这一格）。
+     *
+     * 为什么挪：那两条原来住在 ③.5 的 `if (landed)` 里 —— 而"加入方屏上还读得到落点行"
+     * 在 T11-C 之后是**偶然**的（硬币屏是中间站，两端一 ready 就进草稿屏）⇒ 那两条
+     * 有时**根本不跑**（判定条数 39 / 41 抖动），而那正是评审看到的"门不确定"之一。
+     * 挪到 ③.6 之后它们**每次都在**，读数还是那两个持久来源（`__coinInputs` /
+     * `__coinVerdict`，见 `coinVerdictOf`）。
+     *
+     * ⚠️ 必须**在 `enterNetGame` 已经跑过之后**读才稳：`__coinVerdict` 就是它在那一格写的。
+     */
+    const hV = await coinVerdictOf(host);
+    const gV = await coinVerdictOf(guest);
+    const readingsSame = hV !== null && gV !== null
+      && hV.caller === gV.caller && hV.chosen === gV.chosen
+      && hV.landed === gV.landed && hV.winner === gV.winner;
+    push(readingsSame, readingsSame
+      ? `硬币那一帧的四个读数两端逐个相同：caller=${String(hV.caller)} chosen=${String(hV.chosen)}`
+        + ` landed=${String(hV.landed)} winner=${String(hV.winner)}`
+      : `两端的硬币读数不同：房主 ${JSON.stringify(hV)} / 加入方 ${JSON.stringify(gV)}`);
+    notes.push(`硬币读数（③.6 这一格读的）：房主 ${JSON.stringify(hV)} / 加入方 ${JSON.stringify(gV)}`);
+    /**
+     * ★★ **判据②：`coin-result-text` 里那个「玩家 N」== 各自 `winner + 1`**（两端都判）。
+     *
+     * ## 它被删过一次，现在补回来（评审 R2 §8 遗留 1）
+     *
+     * 上一轮我把 ③.5 `if (landed)` 里的两条一起搬走，实际只搬走①（四个读数两端逐个相同），
+     * **②被删掉了**；删的理由只写在注释里，而报告写成了"文案与读数改成同一次求值"——
+     * 那句不成立（全仓 `snapshotOf` 只在 `tests/net/session.test.ts`）。**这是覆盖面被悄悄
+     * 收窄**，协调者不接受 ⇒ 补回来，而且放在**会真的跑到的地方**。
+     *
+     * ## 取样在 ③.5 点完芯片之后（`coinSnapHost` / `coinSnapGuest`），判定在这一格
+     *
+     * 放在 ③.5 取样是因为**那是唯一的窗口**：点完之后两端一路走到 `complete` 就进草稿屏，
+     * `.coin-result-text` 会被换掉（实测：在 ③.6 读两次都是 `text: null`，而 `__coinVerdict`
+     * 两端都在）。判定放在 ③.6（每次都会走到）是为了**条数恒定、且不静默跳过**。
+     *
+     * ## 与"原来那条"的差别（说清楚，免得被读成换了个写法）
+     *
+     * 原来读"点完那一刻的 `.coin-result-text`"、读到 `null` 就整条不判；现在**同一时刻**把
+     * 读数与结论行一起取回，并且**把"读不到"也写成一条判据**（不再是静默跳过）。
+     * 判据本身不放宽：读到了就必须 `座位 === winner + 1` 且两端一致。
+     */
+    const resultSeatOf = (line) => {
+      const m = /玩家\s*(\d+)\s*先选协议/.exec(line ?? '');
+      return m === null ? null : Number(m[1]);
+    };
+    const hS = coinSnapHost === null ? null : resultSeatOf(coinSnapHost.text);
+    const gS = coinSnapGuest === null ? null : resultSeatOf(coinSnapGuest.text);
+    const hW = coinSnapHost === null ? null : coinSnapHost.winner;
+    const gW = coinSnapGuest === null ? null : coinSnapGuest.winner;
+    const resultSeen = hS !== null && gS !== null && hW !== null && gW !== null;
+    const textMatches = resultSeen && hS === hW + 1 && gS === gW + 1 && hS === gS;
+    push(textMatches, textMatches
+      ? `两端文案说的是同一个全局座位号：玩家 ${String(hS)} 先选协议（各自 winner=${String(hW)} / ${String(gW)}）`
+      : resultSeen
+        ? `文案与读数对不上：房主文案 ${JSON.stringify(coinSnapHost.text)}（座位 ${String(hS)}，winner=${String(hW)}）`
+          + ` / 加入方文案 ${JSON.stringify(coinSnapGuest.text)}（座位 ${String(gS)}，winner=${String(gW)}）`
+        : `这一格没取到结论行（房主 ${JSON.stringify(coinSnapHost && coinSnapHost.text)}`
+          + ` / 加入方 ${JSON.stringify(coinSnapGuest && coinSnapGuest.text)}）⇒ 判据②不成立`);
+    notes.push(`结论行快照（③.6 判的）：房主 ${JSON.stringify(coinSnapHost)} / 加入方 ${JSON.stringify(coinSnapGuest)}`);
+  }
+  say('');
+
+  /* ── ③.7 真的选一步协议（判据 3）────────────────────────────────────── */
+  say('=== ③.7 真的选一步协议：先选者那一侧在池子里拖一张卡（真鼠标）===');
+  let stepOk = false;
+  let firstPicker = null;
+  if (!draftAdmitted) {
+    push(false, '未到达：两端没进同一局（③.6 不通过）⇒ 选协议那几条也没到');
+  } else {
+    // 谁先选：状态里那个数（两端相同，上面已经比过）
+    const starterSeat = Number(hMatch.draftStarter);
+    // 座位 -> 哪一页：`__g5Match` 不带座位，用草稿屏横幅上那句「玩家 N」反推（N-1 = 座位）
+    const hScreen = await draftScreenOf(host);
+    const gScreen = await draftScreenOf(guest);
+    notes.push(`草稿屏读数：房主 ${JSON.stringify(hScreen)} / 加入方 ${JSON.stringify(gScreen)}`);
+    firstPicker = hScreen !== null && hScreen.drafter === starterSeat ? host
+      : (gScreen !== null && gScreen.drafter === starterSeat ? guest : null);
+    push(firstPicker !== null, firstPicker !== null
+      ? `找出了先选协议的那一页（座位 ${starterSeat}，房主屏 drafter=${String(hScreen && hScreen.drafter)}`
+        + ` / 加入方屏 drafter=${String(gScreen && gScreen.drafter)}）`
+      : `两端屏上都读不出"轮到谁选"（房主 ${JSON.stringify(hScreen)} / 加入方 ${JSON.stringify(gScreen)}）`);
+    if (firstPicker !== null) {
+      const label = firstPicker === host ? '房主' : '加入方';
+      const other = firstPicker === host ? guest : host;
+      const before = await matchOf(firstPicker);
+      const otherBefore = await matchOf(other);
+      // 拖拽：从池子里第一张卡拖到**先选者那一侧**的选择框（`.draft-picks.pN`）
+      const from = await centerOf(firstPicker, '.draft-card');
+      const to = await centerOf(firstPicker, `.draft-picks.p${starterSeat + 1}`);
+      if (from === null || to === null) {
+        push(false, `找不到可拖的卡或目标选择框（卡 ${JSON.stringify(from)} / 框 ${JSON.stringify(to)}）`);
+      } else {
+        await drag(firstPicker.send, label, from, to);
+        // 等读数变（`draftRound` 加一）—— 只等 DOM 会读到重画前的那一帧
+        const t1 = Date.now();
+        let after = null;
+        while (Date.now() - t1 < budgetMs) {
+          after = await matchOf(firstPicker);
+          if (after !== null && before !== null && after.draftRound === before.draftRound + 1) break;
+          await sleep(300);
+        }
+        const picked = after !== null && before !== null && after.draftRound === before.draftRound + 1;
+        push(picked, picked
+          ? `${label}真的选中了一张协议（草稿轮次 ${before.draftRound} -> ${after.draftRound}，`
+            + `状态指纹 ${before.fp} -> ${after.fp}）`
+          : `${label}的拖拽没有选中任何协议（草稿轮次 ${String(before && before.draftRound)}`
+            + ` -> ${String(after && after.draftRound)}）`);
+        // 反空转：选中的那一侧状态**必须真的变了**（指纹不同）
+        push(picked && after.fp !== before.fp, picked && after.fp !== before.fp
+          ? '选中之后那一侧的状态指纹变了（不是"点了但状态没动"）'
+          : `拖拽之后状态指纹没变：${String(before && before.fp)} -> ${String(after && after.fp)}`);
+        /**
+         * ★ **没选的那一侧不许动**（草稿动作今天不走线上，见报告里的缺口登记）。
+         *
+         * 这一条把"选协议是本地发生的"这件事**如实钉住**：它的状态必须与拖拽之前**逐字相同**。
+         * 如果它变了，说明草稿动作被同步过去了（那是下一段的事）；如果它"变了但两端指纹随后相等"，
+         * 那才是真正的分叉风险。
+         */
+        const otherAfter = await matchOf(other);
+        const otherUntouched = otherAfter !== null && otherBefore !== null && otherAfter.fp === otherBefore.fp;
+        push(otherUntouched, otherUntouched
+          ? `没选的那一侧状态一字未动（指纹仍 ${String(otherBefore && otherBefore.fp)}）—— 草稿动作今天不走线上`
+          : `没选的那一侧状态变了：${String(otherBefore && otherBefore.fp)} -> ${String(otherAfter && otherAfter.fp)}`);
+        stepOk = picked;
+      }
+    }
+  }
+  say('');
+
+  /* ── ③.8 同一起始状态 + 各自确定性重演 ⇒ 结果逐字相等（**不是**跨端同步）────────── */
+  say('=== ③.8 同一起始状态 + 各自确定性重演：两端独立走完六次 ⇒ 结果逐字相等（判据 3 未达成）===');
+  if (!stepOk) {
+    push(false, '未到达：上一步没真的选中（③.7 不通过）⇒ 收口那条也没到');
+  } else {
+    /**
+     * ★★ **这一格证的是"同一起始状态 + 各自确定性重演"，不是"跨端同步"**（评审 §2 的收口）。
+     *
+     * ## 为什么不能写成判据 3 原文那条
+     *
+     * 任务书判据 3 写的是"进草稿后两端各走一步真实选协议 ⇒ 两端状态指纹相等"。**今天做不到**：
+     * 草稿动作（`performDraftPick`）**不在驱动的 `ActionKind` 里**（`src/core/game.ts:22`
+     * 那张表只有对局动作），协议里也没有草稿报文 ⇒ 一次本地选择**只改本端状态**。
+     * 实测（2026-09-19，本工具第一版）：拖过一次之后
+     * `房主 {"picks":1,"drafter":1} / 加入方 {"picks":0,"drafter":0}` —— 两端各自停在自己的
+     * 草稿上，于是"轮次对不上"是**必然**的，不是竞态。⇒ **判据 3 未达成**，这条缺口登记在报告里。
+     *
+     * ## 所以这一格改成什么（以及它**能**证明什么）
+     *
+     * 两端**各自**从同一局出发、各自独立走完六次本地选牌 ⇒ 结果状态**逐字相等**。
+     * 能证的：`同一种子 + 同一 draftStarter ⇒ 两端算的是同一局`（轮选顺序由 `draftStarter` 派生、
+     * 池子由 `seed` 派生 ⇒ 六个 `defId` 相同、分配相同、洗牌相同），且这**不是**两端在同步 ——
+     * 两个 Chrome 是独立进程，相等只可能来自"同一局 + 同一条确定性序列"。
+     * **不能证**的：任何跨端传播。跨端传播那一条由 ③.9（对局相的 `act` 帧）负责。
+     *
+     * 顺带：③.7 已经用真鼠标证明"没选的那一侧一字未动"—— 那正是"草稿不走线上"的直接读数。
+     *
+     * 走草稿用的是 `__g5Match.finishDraft()`（**不重开对局、不动驱动、不碰传输**）：
+     * 它调的就是拖拽落点那一句调的同一个 `cb.onDraftPick`（`src/ui/render.ts:4679`）
+     * —— 不是第二套实现。③.7 已经用真鼠标钉过那条回调能通。
+     *
+     * ## ⚠️ 为什么**不能**用 `rebootDraft()` 来"回到起点"（实测踩过，值得写下来）
+     *
+     * 第一版用的是 `rebootDraft()`（它 `driver.dispose()` 之后重新 `enterNetGame()`）。
+     * 但 `dispose()` 会 **`transport.close()`**（`src/net/net-driver.ts:784`）⇒ 握手那条
+     * 链路被关掉 ⇒ ③.9 里**每一个** `submit` 都拿到 `'offline'`（实测
+     * `submit ok=false refusal=offline`，而 `lastFailure()` 是 `null` —— 不报错的失效）。
+     * ⇒ "重来一局再走线上"这条路在同一局内**不存在**；`finishDraft()` 才是这一格要的。
+     */
+    hReboot = parseJson(await host.evaluate('JSON.stringify(globalThis.__g5Match ? globalThis.__g5Match.finishDraft() : null)'));
+    gReboot = parseJson(await guest.evaluate('JSON.stringify(globalThis.__g5Match ? globalThis.__g5Match.finishDraft() : null)'));
+    const hSteps = hReboot === null ? -1 : Number(hReboot.steps);
+    const gSteps = gReboot === null ? -1 : Number(gReboot.steps);
+    // ③.7 已经在先选那一侧真鼠标选过一次 ⇒ 它这边只剩 5 步，另一侧仍是 6 步。
+    // 断言写成"**步数不同、但两边都到达了 `draftRound 6`**"（那才是不变量）。
+    push(hSteps >= 0 && gSteps >= 0 && hSteps !== gSteps, hSteps >= 0 && gSteps >= 0
+      ? `两端各自把本机剩下的草稿选完（房主 ${hSteps} 步 / 加入方 ${gSteps} 步；`
+        + `差 1 步 = ③.7 真鼠标选过的那一次只落在其中一侧）`
+      : `有一端没走完：房主 ${hSteps} 步 / 加入方 ${gSteps} 步`);
+    const hStr = hReboot === null ? null : String(hReboot.state);
+    const gStr = gReboot === null ? null : String(gReboot.state);
+    const literalEq = typeof hStr === 'string' && hStr.length > 0 && hStr === gStr;
+    // ⚠️ 它比的是"**各自重演**的终态相同"（⇒ 两端算的是同一局），**不是**"选牌同步到对端"。
+    push(literalEq, literalEq
+      ? `两端各自重演六个本地选择的终态**逐字相同**（各 ${hStr.length} 字符，指纹 ${hash32(hStr)}）`
+      : `两端重演的终态不同：房主 ${String(hStr && hStr.length)} 字符（${hStr === null ? 'null' : hash32(hStr)}）`
+        + ` / 加入方 ${String(gStr && gStr.length)} 字符（${gStr === null ? 'null' : hash32(gStr)}）`);
+    hEndDraft = await matchOf(host);
+    gEndDraft = await matchOf(guest);
+    const inTurn = hEndDraft !== null && gEndDraft !== null && hEndDraft.draftRound >= 6 && gEndDraft.draftRound >= 6;
+    push(inTurn, inTurn
+      ? `两端都进了对局相（草稿轮次 ${hEndDraft.draftRound} / ${gEndDraft.draftRound}）`
+      : `还有一端停在草稿：轮次 ${String(hEndDraft && hEndDraft.draftRound)} / ${String(gEndDraft && gEndDraft.draftRound)}`);
+    // 屏面那一半：两端都**离开**草稿页（进了对局相）
+    /**
+     * ⚠️ 必须**轮询**而不是读一次：草稿完成那一格会先画"六张全选"的最终草稿页、再播过渡动画，
+     * 之后才画牌桌（`main.ts` 的 `cb.onDraftPick` → `playDraftToGameTransition()`）。
+     * 实测（2026-09-19，本工具，第二版 25/28）：走完草稿之后立刻读，两端都还挂着
+     * `.draft-screen`（而状态已经是 `turn`）—— 那一条是**读早了**，不是缺陷。
+     */
+    const tS = Date.now();
+    let hTurn = await host.count('.draft-screen');
+    let gTurn = await guest.count('.draft-screen');
+    while ((hTurn > 0 || gTurn > 0) && Date.now() - tS < budgetMs) {
+      await sleep(400);
+      hTurn = await host.count('.draft-screen');
+      gTurn = await guest.count('.draft-screen');
+    }
+    push(hTurn === 0 && gTurn === 0, hTurn === 0 && gTurn === 0
+      ? '两端都离开了草稿屏（六次选完 ⇒ 进对局相）'
+      : `还有一页停在草稿屏：房主 ${hTurn} 个 / 加入方 ${gTurn} 个（等了 ${String(Date.now() - tS)}ms）`);
+    notes.push(`走完草稿：房主 ${JSON.stringify(hEndDraft)} / 加入方 ${JSON.stringify(gEndDraft)}，`
+      + `规范串逐字相同=${literalEq}`);
+  }
+  say('');
+  /* ── ③.9 真的打一步对局动作（`createNetDriver` 在真浏览器里**唯一承重**的行为腿）──── */
+  say('=== ③.9 走一步真对局动作：一端提交、另一端靠那一帧跟上（座位 + 锁步驱动）===');
+  if (!stepOk || hReboot === null || gReboot === null
+    || hEndDraft === null || gEndDraft === null || hEndDraft.draftRound < 6 || gEndDraft.draftRound < 6) {
+    push(false, '未到达：草稿没走完（③.8 不通过）⇒ 对局动作那条也没到');
+  } else {
+    /**
+     * ★★ **这一条是 `createNetDriver` 在真浏览器里唯一**承重**的行为腿**。
+     *
+     * ## 为什么 ③.6~③.8 全绿还不够
+     *
+     * 那三条都停在**草稿相**，而草稿动作**根本不经过驱动**（它不在 `ActionKind` 里）。
+     * 于是"驱动接线是否真的在工作"在那几条上**完全没有承重**。
+     *
+     * ## ★★ 为什么必须先**关掉本机自动推进**（评审阻断项 3 的第二条）
+     *
+     * 原来这一格只比"对端指纹跟上了"，而两端**各自**每 400ms 会
+     * `cb.onAction({kind:'advance'})` 自行推进一格 ⇒ 即使那一帧根本没送到对端，
+     * 对端的指纹也会**自己走到同一个地方**。评审实测（2026-09-19，M2-wiring：
+     * 保留 `createNetDriver(...)` 那一行、只把交给 `driver` 的对象换成本地驱动）
+     * 在旧判据下 **33/33 全绿** ⇒ 那一格的"对端跟上"**不承重**。
+     *
+     * 修法：进这一格先在两页上 `__g5Match.noAutoAdvance()`（`main.ts` 里一个布尔，
+     * 只关 `scheduleAutoAdvance` 这一条本地时序，不动驱动、不动玩家输入）。
+     * 关掉之后，**对端的状态只可能因为收到那一帧而变** ⇒ 这一格才有牙。
+     *
+     * ## 判据（四样）
+     *
+     *  1. **座位**：两页各自"自己以为的座位"必须**不同**，且**轮到的那一位就是提交方**
+     *     （评审 M2-seat：把 `createNetDriver` 的 `seat` 取反 ⇒ 旧判据 33/33 全绿，座位写错无门可查）；
+     *  2. 提交之后**提交方**的状态真的变了（指纹不同 ⇒ 不是空转）；
+     *  3. **对端**的状态随后变成与提交方**逐字相同**（关掉自动推进之后 ⇒ 只能来自那一帧）；
+     *  4. 两端的规范串**逐字相等**。
+     *
+     * ## ⚠️ 它**不是** `arm(state)` 的判别腿（实测结论，别再往上加戏）
+     *
+     * 镜像实测（2026-09-19）：把 `enterNetGame()` 里那句 `netDriver.arm(state)` 删掉
+     * （变异 M4），这一格**照样绿**。原因在**实现里那条冗余路径**：`onInbound` 收到帧就
+     * `rerender()`，而重画会走 `scheduleAutoAdvance()` → `cb.onAction` → `driver.submit`，
+     * 而 `submit` 内部第一件事就是 `drain(s)`（`src/net/net-driver.ts:704`）⇒ 队列照样排空。
+     * ⇒ M4 由**两条腿**钉住：`tests/ui/coin-screen-net.test.ts` 的源码腿 与
+     * `tests/ui/net-lobby-handoff.test.ts` 的驱动行为腿（不给对端 `arm` ⇒ 帧留在队列里）。
+     *
+     * ## 谁提交、提交什么
+     *
+     * 提交方是**轮到的那一位**（`liveTurn`：`submit` 会拒掉不是本端的操作）。
+     * 动作是"点自己手牌第一张"（远程页没有通用推进按钮）。
+     */
+    // ★ 自动推进**暂时不关**：要先靠它把"轮到的那一位"推到 `step === 'action'`（见下）
+    const hNow = await matchOf(host);
+    const gNow = await matchOf(guest);
+    // ★ 座位读数走 `__g5Match.seat()`（它就是 `createNetDriver` 拿到的那个数），
+    //   `__g5Handoff.seat` 作兜底 —— 两者不同就说明"交出去的"与"驱动吃到的"不是一个数。
+    const seatOf = {
+      host: parseJson(await host.evaluate('JSON.stringify(globalThis.__g5Handoff ?? null)')),
+      guest: parseJson(await guest.evaluate('JSON.stringify(globalThis.__g5Handoff ?? null)')),
+    };
+    const driverSeatOf = async (page) => Number(await page.evaluate('globalThis.__g5Match ? globalThis.__g5Match.seat() : -1'));
+    const hDriverSeat = await driverSeatOf(host);
+    const gDriverSeat = await driverSeatOf(guest);
+    const hSeat = hDriverSeat >= 0 ? hDriverSeat : (seatOf.host === null ? null : Number(seatOf.host.seat));
+    const gSeat = gDriverSeat >= 0 ? gDriverSeat : (seatOf.guest === null ? null : Number(seatOf.guest.seat));
+    /**
+     * ★★ **座位腿**（评审 M2-seat 的落点）：**驱动吃到的座位**必须等于 `handoff()`
+     * **不做任何加工**交出来的那一个。三处读数：`__g5Match.seat()`（驱动自己的）、
+     * `__g5Handoff.driverSeat`（同一件事的另一个口）、`__g5Handoff.handSeat`（原样那一个）。
+     *
+     * ⚠️ 第一版比的是 `__g5Handoff.seat` —— 而那个字段**本身**就是"喂进去的值"，
+     * 于是"把 `seat` 取反"的变异会让两边**一起**变、比出来仍然相等（实测：那一条全绿，
+     * 真正红的是下面"一步都没走出去"）。现在比的是"**加工前后**是否一致"。
+     */
+    const hHandSeat = seatOf.host === null ? null : seatOf.host.handSeat;
+    const gHandSeat = seatOf.guest === null ? null : seatOf.guest.handSeat;
+    const seatUnprocessed = typeof hHandSeat === 'number' && typeof gHandSeat === 'number'
+      && hDriverSeat === hHandSeat && gDriverSeat === gHandSeat
+      && seatOf.host.driverSeat === hHandSeat && seatOf.guest.driverSeat === gHandSeat;
+    push(seatUnprocessed, seatUnprocessed
+      ? `驱动吃到的座位就是 handoff() 原样交出来的那一个：房主 ${String(hDriverSeat)} / 加入方 ${String(gDriverSeat)}`
+      : `座位被加工过：驱动吃到 房主 ${String(hDriverSeat)} / 加入方 ${String(gDriverSeat)}，`
+        + `而 handoff() 原样交出来的是 房主 ${String(hHandSeat)} / 加入方 ${String(gHandSeat)}`);
+    /**
+     * ★ 再钉一条：喂进 `createNetDriver` 的那个数**与 `handoff()` 原样交出来的**是同一个。
+     * ⚠️ 能力边界（实测 M2-seat）：把 `seat` 取反时**这四个读数一起变**（它们同源），
+     * 所以这一条**绿**；真正抓住它的是**下面那条走不动**（`advanceOnce()` 一直 `not-my-turn`，
+     * 因为 `turnPlayer` 与被打错的 `selfSeat` 对不上）。⇒ 座位这件事的硬钉子在 node 面
+     * （`net-lobby-handoff.test.ts` 比 `driver.seat === handoff().seat` 与"反向驱动必须被拒"）
+     * 与源码腿（`coin-screen-net.test.ts` 要求那串字面量）。
+     */
+    const seatConsistent = hHandSeat !== null && gHandSeat !== null
+      && Number(seatOf.host.seat) === hHandSeat && Number(seatOf.guest.seat) === gHandSeat;
+    push(seatConsistent, seatConsistent
+      ? `座位读数三处一致（房主 ${String(hDriverSeat)} / 加入方 ${String(gDriverSeat)}）`
+      : `座位读数不一致：房主 ${String(seatOf.host && seatOf.host.seat)} vs ${String(hHandSeat)}`
+        + ` / 加入方 ${String(seatOf.guest && seatOf.guest.seat)} vs ${String(gHandSeat)}`);
+    // 两端的"该谁动"必须一致（同一个状态 ⇒ 同一个 turnPlayer）
+    const turnOf = async (page) => parseJson(
+      await page.evaluate('JSON.stringify(globalThis.__g5Match ? globalThis.__g5Match.turn() : null)'),
+    );
+    const hTurnInfo = await turnOf(host);
+    const gTurnInfo = await turnOf(guest);
+    const sameTurn = hTurnInfo !== null && gTurnInfo !== null
+      && hTurnInfo.turnPlayer === gTurnInfo.turnPlayer && hTurnInfo.phase === gTurnInfo.phase;
+    push(sameTurn, sameTurn
+      ? `两端对局相一致：phase=${hTurnInfo.phase} step=${hTurnInfo.step} turnPlayer=${hTurnInfo.turnPlayer}`
+      : `两端的对局相/turnPlayer 不一致：房主 ${JSON.stringify(hTurnInfo)} / 加入方 ${JSON.stringify(gTurnInfo)}`);
+    /**
+     * ★★ **座位腿**（评审 M2-seat 的落点）：两页各自"自己以为的座位"必须**不同**，
+     * 且**轮到的那一位正是提交方** —— 座位写错时这一条必然红。
+     *
+     * 为什么旧判据看不见座位写错：座位只影响"谁该动"（`liveTurn`），而两端各自的
+     * 400ms 自动推进会把状态推成一样 ⇒ 指纹照样相等。关了自动推进之后，座位错的那些
+     * 页面根本不会去提交（`submit` 会拒），于是"提交方是轮到的那位"这条就把它抓出来了。
+     */
+    const seatsDistinct = hSeat !== null && gSeat !== null && hSeat !== gSeat;
+    push(seatsDistinct, seatsDistinct
+      ? `两页各自的座位不同：房主 ${String(hSeat)} / 加入方 ${String(gSeat)}`
+      : `两页的座位相同或读不到：房主 ${String(hSeat)} / 加入方 ${String(gSeat)}（写错座位时正是这个形状）`);
+    const turnSeatKnown = hTurnInfo !== null && gTurnInfo !== null
+      && (hTurnInfo.turnPlayer === hSeat || hTurnInfo.turnPlayer === gSeat);
+    push(turnSeatKnown, turnSeatKnown
+      ? `轮到的座位（${String(hTurnInfo && hTurnInfo.turnPlayer)}）就是两页之一：房主 ${String(hSeat)} / 加入方 ${String(gSeat)}`
+      : `轮到的座位不是两页任何一个：turnPlayer=${String(hTurnInfo && hTurnInfo.turnPlayer)}`);
+    const submitter = hTurnInfo !== null && hSeat !== null && hTurnInfo.turnPlayer === hSeat ? host : guest;
+    const submitterLabel = submitter === host ? '房主' : '加入方';
+    const peer = submitter === host ? guest : host;
+    /**
+     * ★★ **一步一步走（每一帧都要求"对端跟上"）—— 判据不再靠自动推进。**
+     *
+     * ## 为什么不能"点一张牌然后等两端指纹相等"（评审阻断项 3 的第二条）
+     *
+     * 两端**各自**每 400ms 会 `cb.onAction({kind:'advance'})` 自行推进一格 ⇒ 即使那一帧
+     * 根本没送到对端，对端的指纹也会**自己走到同一个地方**。评审实测（M2-wiring：
+     * 保留 `createNetDriver(...)` 那一行、只把交给 `driver` 的对象换成本地驱动）
+     * 在旧判据下 **33/33 全绿** ⇒ 那一格不承重。
+     *
+     * ## 现在的判据（四样，都不靠计时器）
+     *
+     *  1. **座位**：驱动吃到的座位与 `handoff()` 交给它的是同一个数、且两页**不同**
+     *     （评审 M2-seat：座位取反时旧判据 33/33 全绿）；
+     *  2. 两页的自动推进**关掉**（`setAutoAdvance(false)`）⇒ 状态不会自己动；
+     *  3. 由门禁**一步一步**调 `advanceOnce()`（它走的是**真的**那条编排：
+     *     `runAutoAdvance()` → `cb.onAction` → `driver.submit`，座位与轮次的闸门都在）
+     *     ⇒ 每一步之后**对端必须逐字跟上**（否则就是那一帧没过去）；
+     *  4. 提交方每一步的 `applied` 都必须**涨**（帧真的发出去了），且两端队列为 0。
+     *
+     * ⚠️ 第 3 条是"**每一步都比**"而不是"最后比一次"：一次走多步时，某一步丢了、
+     * 后面的自动收殓可能把终态抹平（旧判据栽的正是这个）。逐步比之后，
+     * 丢任何一帧都会当场红。
+     *
+     * ## 为什么不是"点手牌"
+     *
+     * 远程页没有通用推进按钮，而"点手牌"只在 `step === 'action'` 时才有意义（实测踩过：
+     * 刚进对局相时 `step === 'start'`，点手牌什么都不改 ⇒ 那条会红在"动作挑错了时机"上）。
+     * `advanceOnce()` 把开局那几步走完，动作面本身（选线、特效）不在本段面内。
+     */
+    const hAutoBefore = await host.evaluate('globalThis.__g5Match ? globalThis.__g5Match.setAutoAdvance(false) : null');
+    const gAutoBefore = await guest.evaluate('globalThis.__g5Match ? globalThis.__g5Match.setAutoAdvance(false) : null');
+    notes.push(`关自动推进（返回的是"关之前"）：房主 ${String(hAutoBefore)} / 加入方 ${String(gAutoBefore)}`);
+    const stepOf = async (p) => parseJson(
+      await p.evaluate('JSON.stringify(globalThis.__g5Match ? globalThis.__g5Match.turn() : null)'),
+    );
+    const driveOf = async (p) => parseJson(
+      await p.evaluate('JSON.stringify(globalThis.__g5Match ? globalThis.__g5Match.drive() : null)'),
+    );
+    /**
+     * ★ **等草稿→对局的过渡落地**（`turn().transitioning === false`）。
+     *
+     * 为什么必须等：过渡期间自动推进**不排**（`runAutoAdvance` 的守卫），而 `advanceOnce()`
+     * 走的就是那条编排 ⇒ 抢在那个窗口里调它只会白跑（实测踩过：`applied` 一直是 0、
+     * 看起来像"驱动没工作"，其实是过渡还在飞 —— 它最长 450ms + 4.5s 兜底 + 420ms）。
+     */
+    const tTrans = Date.now();
+    let hTrans = await stepOf(host);
+    let gTrans = await stepOf(guest);
+    while (((hTrans !== null && hTrans.transitioning) || (gTrans !== null && gTrans.transitioning))
+      && Date.now() - tTrans < budgetMs) {
+      await sleep(300);
+      hTrans = await stepOf(host);
+      gTrans = await stepOf(guest);
+    }
+    push(hTrans !== null && gTrans !== null && hTrans.transitioning === false && gTrans.transitioning === false,
+      `两端都离开了草稿→对局的过渡（transitioning=false，等了 ${String(Date.now() - tTrans)}ms）`);
+    const submitAtStart = parseJson(await submitter.evaluate(
+      'JSON.stringify(globalThis.__g5Match ? globalThis.__g5Match.drive() : null)',
+    ));
+    let stepsWalked = 0;
+    let firstBadStep = null;
+    const walkLog = [];
+    const tWalk = Date.now();
+    while (stepsWalked < 8 && Date.now() - tWalk < budgetMs) {
+      const before = await matchOf(submitter);
+      const peerBefore = await matchOf(peer);
+      const walkBefore = { turn: await stepOf(submitter), drive: await driveOf(submitter) };
+      const moved = parseJson(await submitter.evaluate(
+        'JSON.stringify(globalThis.__g5Match ? globalThis.__g5Match.advanceOnce() : null)',
+      ));
+      if (moved === null || moved.ok !== true) {
+        notes.push(`第 ${stepsWalked + 1} 次 advanceOnce：${JSON.stringify(moved)}`
+          + ` / 调用前 ${JSON.stringify(walkBefore)} / 对端相 ${JSON.stringify(await stepOf(peer))}`);
+        break; // 走到行动步（或非玩家输入步骤没了）
+      }
+      stepsWalked += 1;
+      // 本端：等它自己的状态变（`submit` 是同步的，一次 RPC 之后就该变了）
+      const selfNow = await matchOf(submitter);
+      // 对端：它**没有**自动推进（上面关了）⇒ 它变了就只可能因为收到那一帧
+      let peerNow = null;
+      const tPeer = Date.now();
+      while (Date.now() - tPeer < Math.min(budgetMs, 8000)) {
+        peerNow = await matchOf(peer);
+        if (peerNow !== null && selfNow !== null && peerNow.fp === selfNow.fp) break;
+        await sleep(120);
+      }
+      const ok = selfNow !== null && peerNow !== null && peerNow.fp === selfNow.fp
+        && selfNow.fp !== (before && before.fp);
+      walkLog.push(`第 ${stepsWalked} 步：自己 ${String(before && before.fp)} -> ${String(selfNow && selfNow.fp)}，`
+        + `对端 ${String(peerBefore && peerBefore.fp)} -> ${String(peerNow && peerNow.fp)}${ok ? '' : ' ← 没跟上'}`);
+      if (!ok && firstBadStep === null) firstBadStep = stepsWalked;
+      if (!ok) break;
+      const s = await stepOf(submitter);
+      if (s !== null && (s.step === 'action' || s.phase !== 'turn')) break; // 走到行动步就停
+    }
+    push(stepsWalked > 0, stepsWalked > 0
+      ? `门禁按步走了 ${stepsWalked} 步非玩家输入步骤（advanceOnce()，走的是真编排）`
+      : '一步都没走出去（`advanceOnce()` 一直返 false ⇒ 这一局已经停在行动步或已结束）');
+    push(firstBadStep === null && stepsWalked > 0, firstBadStep === null && stepsWalked > 0
+      ? `每一步之后对端都逐字跟上（${stepsWalked} 步，两端指纹始终相同）`
+      : firstBadStep === null
+        ? '没走到任何一步 ⇒ 这条判不了（上面那条已经红）'
+        : `第 ${firstBadStep} 步对端没跟上（逐帧判据：旧判据下这条会因为两端各自自动推进而假绿）`);
+    const submitAtEnd = await driveOf(submitter);
+    const peerAtEnd = await driveOf(peer);
+    push(submitAtEnd !== null && submitAtStart !== null && submitAtEnd.applied > submitAtStart.applied,
+      `提交方的驱动真的应用了这些步：applied ${String(submitAtStart && submitAtStart.applied)}`
+        + ` -> ${String(submitAtEnd && submitAtEnd.applied)}（applied 不涨就说明那些 submit 没走驱动）`);
+    /**
+     * ⚠️ 这里**只**比 `applied` 的**涨**（本端自己的步骤），不拿它当"对端收到帧"的证据 ——
+     * 对端那半边由"逐帧指纹相等"负责（它没有自动推进了，变了就只能是收到了帧）。
+     */
+    const noBacklog = submitAtEnd !== null && peerAtEnd !== null
+      && submitAtEnd.pending === 0 && peerAtEnd.pending === 0
+      && submitAtEnd.failure === null && peerAtEnd.failure === null;
+    push(noBacklog, noBacklog
+      ? `两端都没有积压也没有驱动失败（入站队列 ${String(submitAtEnd.pending)} / ${String(peerAtEnd.pending)} 帧）`
+      : `驱动侧不干净：提交方 ${JSON.stringify(submitAtEnd)} / 对端 ${JSON.stringify(peerAtEnd)}`);
+    const hFin = await matchOf(host);
+    const gFin = await matchOf(guest);
+    const hStr2 = await host.evaluate('globalThis.__g5Match ? globalThis.__g5Match.state() : null');
+    const gStr2 = await guest.evaluate('globalThis.__g5Match ? globalThis.__g5Match.state() : null');
+    const eq2 = typeof hStr2 === 'string' && hStr2.length > 0 && hStr2 === gStr2;
+    push(eq2, eq2
+      ? `走完之后两端规范串仍然**逐字相同**（各 ${hStr2.length} 字符，指纹 ${hash32(hStr2)}）`
+      : `走完之后两端规范串不同：房主 ${String(hFin && hFin.fp)} / 加入方 ${String(gFin && gFin.fp)}`);
+    notes.push(`逐步走：提交方=${submitterLabel}，${walkLog.join(' ｜ ')}`
+      + ` / 驱动 提交方 ${JSON.stringify(submitAtEnd)}`);
+  }
+  say('');
   say('');
 
   /* ── ④ 负控：邀请码压缩段截断 ─────────────────────────────────────── */
@@ -751,8 +1529,10 @@ try {
      * 假的不通过）。所以先把加入方那一页**重新载入**、重新走一遍到大堂，再点「加入」。
      */
     // 真导航回起点（不是同文档改 hash）：这样加入方那一屏是**干净**的。
+    // ★ 必须带一个每次都不同的查询片段，否则与上面 ③.8 同款的"同文档导航"会发生
+    //   （`origin/` 与 `origin/?x#y` 之间的差别才是"换文档"）。
     // 等"入口屏"由下面 driveToLobby 的第一步负责（它会等授权屏/主页出现，最多 90 秒）。
-    await guest.send('Page.navigate', { url: `${origin}/` });
+    await guest.send('Page.navigate', { url: `${origin}/?g5r=${Date.now()}` });
     await sleep(1000);
     const gDrive2 = await driveToLobby(guest);
     if (gDrive2 !== null) {
@@ -860,8 +1640,38 @@ try {
     killTree(guestInst?.proc.pid);
     killTree(vite.pid);
     await sleep(600);
+    /**
+     * ★ **两轮杀**（T11-C 实测）：`taskkill /T /F` 在第一轮有时只杀掉了顶层进程 ——
+     * 此时子进程还握着 profile 里的文件（`Local State` / `Cache`）⇒ `rmSync` 一直失败。
+     * 实测（2026-09-19）：第一轮之后隔 600ms 再杀一次，profile 就能删干净了。
+     * 这不是"重试删除"，是"**重试杀进程**"——比删不掉再删更接近真因。
+     */
+    for (const inst of [hostInst, guestInst]) {
+      if (!inst) continue;
+      for (let i = 0; i < 3; i += 1) {
+        killTree(inst.proc.pid);
+        await sleep(500);
+      }
+    }
     for (const p of [hostInst?.profile, guestInst?.profile]) {
-      if (p) { try { rmSync(p, { recursive: true, force: true }); } catch { /* 偶尔被占 */ } }
+      if (!p) continue;
+      /**
+       * ★ 清理**重试**（T11-C 实测：单次 `rmSync` 偶尔会撞上"Chrome 还没死透"的占用窗口
+       * —— 收工自证报"残留 2 个"，而它们过几百毫秒就删得掉了）。
+       * 只重试删除（幂等、只影响临时 profile 目录），**不改**自证的口径：
+       * 真删不掉时那两条判定照样红。
+       *
+       * ⚠️ 失败原因**写进 `raw`**（`raw.cleanupErrors`）：不写就只剩"残留 N 个"这一句，
+       * 查的时候只能猜（实测踩过：真正的错误信息是 `EBUSY` 之类的系统级原因）。
+       */
+      for (let i = 0; i < 8; i += 1) {
+        if (!existsSync(p)) break;
+        try { rmSync(p, { recursive: true, force: true }); } catch (e) {
+          cleanupErrors.push(`${p}（第 ${i + 1} 次）：${e instanceof Error ? e.message : String(e)}`);
+        }
+        if (!existsSync(p)) break;
+        await sleep(400);
+      }
     }
   }
 }
@@ -882,6 +1692,16 @@ if (!KEEP && envError === null) {
     for (const n of readdirSync(tmpdir())) if (n.startsWith(PROFILE_PREFIX)) left.push(n);
   } catch { /* 读不了就不断言 */ }
   say(`  [${left.length === 0 ? '通过' : '不通过'}] 临时 profile 已清（残留 ${left.length} 个）`);
+  for (const n of left) {
+    /**
+     * ★ 残留时把"这是不是**本次**起的 profile"写清楚（T11-C 实测踩过）：被强杀的旧一轮
+     * （例如超时 `Ctrl-C`、或上一轮清理失败）会留下目录，下一次跑就会把它们算成"本次残留"，
+     * 于是干净的一跑也报"不干净"。判定**不放宽**（残留 > 0 就算不干净），但要把归属写明，
+     * 否则下一次又要从"哪个是这次的"查起。
+     */
+    const mine = [hostInst?.profile, guestInst?.profile].some((p) => p !== undefined && p.endsWith(n));
+    say(`      残留：${n}（${mine ? '**本次**起的' : '**别人的**：不是这一跑起的 profile'}）`);
+  }
   if (left.length > 0) clean = false;
   say('');
 }
@@ -890,6 +1710,7 @@ const pass = judged.filter((x) => x.ok).length;
 const verdict = envError === null && judged.length > 0 && pass === judged.length && clean;
 raw.judged = judged;
 raw.clean = clean;
+raw.cleanupErrors = cleanupErrors;
 raw.envError = envError;
 raw.verdict = verdict;
 if (JSON_OUT) {
@@ -904,13 +1725,6 @@ for (const n of notes) say(`注：${n}`);
 say(`判定 ${pass}/${judged.length} 条通过${clean ? '' : '（收工自证不干净）'}`);
 say(verdict ? '\n全部判定通过。' : '\n有判定不通过。');
 process.exit(verdict ? 0 : 1);
-
-
-
-
-
-
-
 
 
 

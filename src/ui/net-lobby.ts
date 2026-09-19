@@ -814,6 +814,16 @@ export interface LobbySessionLink {
    */
   callerSeat(): PlayerId;
   /**
+   * ★★ **T11-C：本端自己的座位**（`hello-ack.seat` 定下的那一个，D7）。
+   *
+   * 为什么它与 `callerSeat()` 是**两个**口而不是一个：它们回答的是两个不同的问题 ——
+   *   · `callerSeat()` = "叫面的是谁"（两端都必须是同一个数，`draftStarterFor` 的入参）；
+   *   · `selfSeat()`   = "**我**坐在哪"（两端**必须不同**，`createNetDriver` 的 `seat` 入参）。
+   *
+   * 合成一个口就是 T11-B 踩过的那类错：房主读自己的座位（0）= 错把等待方当成叫面者。
+   */
+  selfSeat(): PlayerId;
+  /**
    * ★★ **本端此刻持有的种子**（`null` = 还没到手）。
    *
    * 语义照会话层那个口（`session.ts:717-742`）：**本方此刻持有**，不是"对端已经看到"——
@@ -1304,6 +1314,11 @@ export function createLobbySessionLink(opts: {
     hasFaceChooser: () => opts.chooseFace !== undefined,
     /** 叫面者的座位（= 加入方的座位）：加入方读自己、房主读对端（见接口上的说明） */
     callerSeat: () => (session.role === 'guest' ? session.selfSeat() : session.peerSeat()),
+    /**
+     * ★ T11-C：**本端自己的座位**（`createNetDriver` 的 `seat` 用它）。
+     * 与 `callerSeat()` 是两个不同的问题，见接口上的说明。
+     */
+    selfSeat: () => session.selfSeat(),
     /** 本端此刻持有的种子（语义照会话层：房主 `sendCommit` 之后就有、加入方要等 `reveal-seed`） */
     seedOfSession: () => session.seed(),
     routedIn: () => inCount,
@@ -1457,8 +1472,36 @@ export interface LobbyClient {
    * "两端 `draftStarter` 相等"是这条事实的直接后果。
    */
   callerSeat(): PlayerId;
+  /** ★ T11-C：**本端自己的座位**（`createNetDriver` 的 `seat`）；与 `callerSeat()` 是两个问题 */
+  selfSeat(): PlayerId;
   /** 本端此刻持有的种子（见 `LobbySessionLink.seedOfSession` 的语义；`null` = 还没到手） */
   seedOfSession(): string | null;
+  /**
+   * ★★ **T11-C：握手链路的交接口**（任务书 §6 的接口要求 —— "名字自定，但只能有一个入口"）。
+   *
+   * 交出的就是那一组 `{ transport, seat, role, seed, draftStarter }`，外加本端读数
+   * （`phase` / `caller` / `chosen` / `landed` / `winner`）供宿主重算与排查用。
+   *
+   * ## 为什么"进对局"这件事的口必须开在**这一层**
+   *
+   * 造对局要的那五个数里，四个只有本层知道：`transport`（每次 `connect()` 都会换成新对象
+   * ⇒ 宿主自己记一份引用副本必然悬空，B2 那条注释同款）、`seat`（`hello-ack.seat` 定下的）、
+   * `seed`（房主 `sendCommit` 后就有、加入方要等 `reveal-seed`）、`draftStarter`（要 `callerSeat`
+   * 与"叫出去的那一面"两个读数才算得出）。宿主只该拿到**算好的结果**，不该把这条算式抄第二份
+   * —— 抄出来的那一份在屏上看起来完全正常（T11-B 的修复轮就是这个形状）。
+   *
+   * ## `ready` 的判据（写死三条，免得"大概齐了"）
+   *
+   *  1. 有链路，且**相位是 `'complete'`** —— 两端到这一格都说明：房主已经揭示种子、
+   *     加入方已经揭示面、盐已经揭示（`session.ts:1868` / `:2030`）；
+   *  2. `winnerReady()`（本端能拿到"叫出去的那一面"）；
+   *  3. 种子与落点都在。
+   *
+   * 相位要求 **恰好 `'complete'`** 而不是"至少走到某处"：早一格（房主 `face-committed`）
+   * 时房主手里的 `peerChosenSide()` 还是 `null`（加入方的 `reveal-face` 没进来）⇒ 两端会
+   * 各自早一格开局，且房主那端算不出先选者 —— 那是 T11-B 已修缺陷的同一族形态。
+   */
+  handoff(): LobbyHandoff;
   /**
    * ★★ **按相位驱动承诺-揭示流程**（C 轮；结构缺口 ②）。
    *
@@ -1512,8 +1555,43 @@ export type LobbyLinkMode = 'first' | 'resume';
 
 /** 连接设置里的三个键 */
 export type SettingKey = 'turnUrl' | 'turnUsername' | 'turnCredential';
-
 const SETTING_KEYS: readonly SettingKey[] = ['turnUrl', 'turnUsername', 'turnCredential'];
+
+/**
+ * ★★ **握手链路的交接口**（T11-C；任务书 §6：交出 `{ transport, seat, role, seed, draftStarter }`
+ * 这一组）。语义与 `ready` 的三条判据写在 `LobbyClient.handoff()` 上，这里只固定形状。
+ *
+ * `ready === false` 时：`transport`/`seed`/`draftStarter` 允许是 `null`（还没到手），
+ * 其余读数是"这一刻的屏上读数"（房主在硬币屏上那一格就靠它画）。
+ * `ready === true` 时：四样都必须是真值 —— 宿主据此 `createGame` + `createNetDriver`。
+ */
+export interface LobbyHandoff {
+  /** 四样齐了没有（判据见 `LobbyClient.handoff()`）—— 宿主只在 `true` 时开局 */
+  readonly ready: boolean;
+  readonly transport: NetTransport | null;
+  /**
+   * 这一局那条**会话对象**（`ready === false` 时为 `null`）。
+   *
+   * 交它出去的理由只有一个：驱动与路由的**寿命**在宿主手里 —— 复位时宿主调
+   * `session.detach()`（会话层不自己订阅传输状态，`session.ts:768-776`）而路由那边由
+   * `LobbyClient.dispose()` 收拾。宿主不需要读它的任何其它方法（读数一律走这个接口）。
+   */
+  readonly session: NetSession | null;
+  /** **本端**座位（`createNetDriver` 的 `seat`；来自 `hello-ack.seat` / `hello.seat`，D7） */
+  readonly seat: PlayerId;
+  readonly role: 'host' | 'guest';
+  readonly phase: SessionPhase;
+  /** 这一局的种子（`matchSeed`） */
+  readonly seed: string | null;
+  /** 先选协议者（`draftStarterFor(caller, chosen, seed)`；两端必须算出同一个数） */
+  readonly draftStarter: PlayerId | null;
+  /** 叫面者的座位（= 加入方的座位）；两端同值 */
+  readonly caller: PlayerId;
+  /** 叫出去的那一面（加入方读自己叫的、房主读对端揭示的）；两端同值 */
+  readonly chosen: CoinSide;
+  /** 落点（`coinLanding(seed)`）；两端同值 */
+  readonly landed: CoinSide;
+}
 
 /**
  * 造一个大厅客户端。
@@ -1958,7 +2036,48 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
     winnerReady: (): boolean => s.link?.winnerReady() ?? false,
     canChooseFace: (): boolean => s.link?.hasFaceChooser() ?? false,
     callerSeat: (): PlayerId => s.link?.callerSeat() ?? (opts.seat ?? 1),
+    selfSeat: (): PlayerId => s.link?.selfSeat() ?? (opts.seat ?? 1),
     seedOfSession: (): string | null => s.link?.seedOfSession() ?? null,
+
+    /**
+     * ★★ **T11-C：把握手链路交出去**（`LobbyClient.handoff` 的判据写在接口上）。
+     *
+     * 实现只有一件事：把**已经算好的**那一组数拼出来。这里**没有**任何"到哪一步了"的第二个
+     * 真相源 —— `ready` 是三条读数当场算的（相位 / `winnerReady` / 落点），`draftStarter`
+     * 是那一份规则（`src/app/coin.ts`）当场算的。
+     *
+     * ⚠️ 两条纪律，都写在这里免得下一个人顺手写错：
+     *  1. **`chosen` 必须按角色取**（房主读对端揭示的面、加入方读自己叫的面）——
+     *     拿 `landedSide()` 代替它会让"叫中/叫错"永远判成叫中（T11-B 修复轮的那个缺陷）；
+     *  2. **`seat` 是本端座位、`caller` 是叫面者座位**，两者在两端**恰好相反**
+     *     （真浏览器实测：房主 selfSeat=0 / caller=1；加入方 selfSeat=1 / caller=1）。
+     */
+    handoff: (): LobbyHandoff => {
+      const link = s.link;
+      if (link === null) {
+        return { ready: false, transport: null, session: null, seat: opts.seat ?? 1, role: opts.role, phase: 'handshaking', seed: null, draftStarter: null, caller: opts.seat ?? 1, chosen: 1, landed: 1 };
+      }
+      const role = link.role;
+      const caller: PlayerId = link.callerSeat();
+      const chosen: CoinSide = (role === 'host' ? link.peerChosenSide() : link.chosenSide()) ?? 1;
+      const seed = link.seedOfSession();
+      const phase = link.session.phase();
+      const landed: CoinSide = seed === null ? 1 : coinLanding(seed);
+      const ready = phase === 'complete' && link.winnerReady() && seed !== null;
+      return {
+        ready,
+        transport: ready ? link.transport : null,
+        session: ready ? link.session : null,
+        seat: link.selfSeat(),
+        role,
+        phase,
+        seed: ready ? seed : null,
+        draftStarter: ready ? draftStarterFor(caller, chosen, seed) : null,
+        caller,
+        chosen,
+        landed,
+      };
+    },
 
     /**
      * ★★ **按相位把承诺-揭示流程驱动到"本端暂时没东西可发"为止**（C 轮；结构缺口 ②）。

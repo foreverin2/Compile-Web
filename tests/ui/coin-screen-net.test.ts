@@ -172,6 +172,15 @@ describe('G5 T11-B · `main.ts` 的接线形状（文本腿；`main.ts` 不能 i
       .subarray(0, 8 * 1024 * 1024).toString('utf8'),
   );
 
+  /** 某个 token 的全部出现（1-based 行号 + 该行）——失败信息里指名道姓 */
+  function occurrences(src: string, token: string): string[] {
+    const out: string[] = [];
+    src.split('\n').forEach((line, i) => {
+      if (line.includes(token)) out.push(`src/main.ts:${i + 1}: ${line.trim()}`);
+    });
+    return out;
+  }
+
   it('★ `renderLobbyFrame` 先问"该不该画硬币屏"，再画大厅；且硬币屏只画一次', () => {
     const body = functionBody(MAIN, 'renderLobbyFrame');
     expect(body.length, '抽到空片段 ⇒ 本判据假绿').toBeGreaterThan(200);
@@ -238,8 +247,66 @@ describe('G5 T11-B · `main.ts` 的接线形状（文本腿；`main.ts` 不能 i
     expect(body, 'resetToMainInterface 没有把 faceChosen 复位（下一局第一次叫面会被吞掉）').toContain('faceChosen = false;');
   });
 
-  it('★ 结构腿：`main.ts` 里 `createNetDriver` 零命中（接线归 T11-C，本段不许碰）', () => {
-    expect(MAIN, 'T11-B 里出现了 createNetDriver（那是 T11-C 的接线）').not.toContain('createNetDriver');
+  it('★ 结构腿：`main.ts` 里 `createNetDriver(` 恰 1 处，且第一条 `arm(` 排在 `rerender()` 之前', () => {
+    /**
+     * ★★ T11-C 把 T11-B 的那条"零命中"腿换成了**计数 + 顺序**腿 —— 任务书 §6 判据 2 的
+     * 原文是"`createNetDriver(` 在 `src/main.ts` 恰好 1 处"。零命中那条在 T11-B 是对的
+     * （接线归 T11-C），本段接线落地之后它必然红：**红一次就说明它当时真的在数**。
+     */
+    const hits = occurrences(MAIN, 'createNetDriver(');
+    expect(hits.length, `main.ts 里 createNetDriver( 出现 ${hits.length} 处（应为恰好 1 处）：\n${hits.join('\n')}`)
+      .toBe(1);
+    const body = functionBody(MAIN, 'enterNetGame');
+    expect(body.length, '抽到空片段（enterNetGame 被改名了？）⇒ 本判据假绿').toBeGreaterThan(200);
+    expect(body, 'enterNetGame 里没有 createNetDriver(').toContain('createNetDriver(');
+    // ★ 顺序：`arm(state)` 必须排在 `rerender()` 之前（否则第一帧会被当成"宿主从没递过状态"）
+    const iArm = body.indexOf('.arm(state)');
+    const iRender = body.indexOf('rerender()');
+    expect(iArm, 'enterNetGame 里没有 arm(state)（对端帧会烂在队列里）').toBeGreaterThanOrEqual(0);
+    expect(iRender, 'enterNetGame 里没有 rerender()（进不了草稿屏）').toBeGreaterThanOrEqual(0);
+    expect(iArm, 'arm(state) 排在 rerender() 之后（第一帧会被当成"宿主从没递过状态"）').toBeLessThan(iRender);
+    // 不许出现**第二处** `createBrowserTransport`：传输必须复用握手那一条
+    const transports = occurrences(MAIN, 'createBrowserTransport(');
+    expect(transports.length, `main.ts 里 createBrowserTransport( 出现 ${transports.length} 处（只许 1 处：握手那一条）:\n${transports.join('\n')}`)
+      .toBe(1);
+  });
+
+  it('★ 接线腿（值那一半）：`enterNetGame()` 用的是握手交出来的那一组数，四样逐字可查', () => {
+    /**
+     * ## 为什么这几条必须是**文本腿**（说清能力边界，别高估）
+     *
+     * node 腿（`tests/ui/net-lobby-handoff.test.ts`）能真跑 `handoff()` 与 `createGame`，
+     * 但它**读不到 `main.ts`**（应用入口，node 里 import 不了）⇒ 它其实是在**测试自己复刻的
+     * 那几行**。镜像实测（2026-09-19，见报告 §变异）：
+     *  - M1（把喂给 `createGame` 的 `draftStarter` 取反）⇒ node 腿 **16/16 全绿**；
+     *  - M2（去掉 `createNetDriver` 接线、换成本地驱动）⇒ node 腿 **16/16 全绿**；
+     *  - M4（删掉 `arm(state)`）⇒ node 腿 **16/16 全绿**。
+     *
+     * 三条都只在**真浏览器门**上红（`tools/browser-truth-lobby-cdp.mjs` ③.6/③.7/③.8：
+     * 两端指纹不再相等 / 帧烂在队列里）。而浏览器门要起两个 Chrome、跑一分钟 ——
+     * 这一组文本腿把同一件事在**毫秒级**再钉一遍：它问的是"`enterNetGame` 里那四样
+     * 到底写的是什么值"，而不是"某一行文本在不在"。
+     */
+    const body = functionBody(MAIN, 'enterNetGame');
+    expect(body.length, '抽到空片段 ⇒ 本判据假绿').toBeGreaterThan(200);
+    // 句内空格规范化（源码里换行/缩进会变，值不会）
+    const flat = body.replace(/\s+/g, ' ');
+    // ① 种子与先选者：都来自 `handoff()`，且 `draftStarter` **原样**喂给 `createGame`
+    expect(body, '没有从 client.handoff() 取那一组数').toContain('client.handoff()');
+    expect(flat, 'createGame 没有用握手交出来的 seed（`seed,` 简写不见了？）').toContain('seed, draftStarter,');
+    expect(flat, 'draftStarter 不是原样喂进去的（取反/换值 ⇒ 两端会开出两局不同的棋）')
+      .not.toMatch(/draftStarter:\s*\(?1 - /);
+    // ② firstToPlay 逐字是 1 - draftStarter（任务书 §3 第 7 条：只搬家、不改值）
+    expect(flat, "firstToPlay 不是 `(1 - draftStarter) as PlayerId`").toContain('firstToPlay: (1 - draftStarter) as PlayerId,');
+    // ③ 驱动与座位：传输必须是握手那一条、座位必须是 `hand.seat`
+    expect(flat, 'createNetDriver 用的不是握手那条传输/本端座位')
+      .toContain('createNetDriver({ transport: hand.transport, seat: hand.seat })');
+    // ④ 递状态：`arm(state)` 逐字在，且排在 `rerender()` 之前
+    expect(body, '没有 arm(state)（对端帧会烂在队列里）').toContain('netDriver.arm(state);');
+    // ⑤ 草稿设置两端逐字一致：常量模式 + 由种子派生的池（协议里没有传设置的消息）
+    expect(flat, 'draftMode 不是常量 normal（两端会不一致）').toContain("draftMode: 'normal',");
+    expect(flat, 'draftPool 不是由同一个种子派生（两端会拿到不同的池）')
+      .toContain('draftPool: randomPoolFromSeed(seed, 12),');
   });
 });
 
