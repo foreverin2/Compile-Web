@@ -996,8 +996,13 @@ describe('接线腿：main.ts（showLocalData 接线区）', () => {
     expect(body, 'back 没接 showStartScreen').toMatch(/back:\s*showStartScreen/);
     expect(body, '没接 onImported 接缝').toMatch(/onImported/);
     // G4 Task 5：进入重放的唯一入口 = `startReplayFile`（T4 交付的入口函数，此前零调用）
+    // ⚠️ G5 T12 小修复轮把这条箭头**包了一层 try/catch**（档案自相矛盾时 `startReplayFile` 会抛，
+    //    包起来是为了让用户留在档案屏、失败原因进 console）⇒ 正则从"箭头体直接是 `startReplayFile(`"
+    //    放宽成"箭头体内出现 `startReplayFile(`"。**判据本身没放宽**：`startReplayFile(` 在全仓
+    //    仍然**只有两处**（定义 + 这一句调用），下面那条反向腿钉着"这一句必须真的在 startReplay 里"。
     expect(body, '「重放这一局」没接到 startReplayFile（进入重放的唯一入口）')
-      .toMatch(/startReplay:\s*\([^)]*\)\s*=>\s*startReplayFile\s*\(/);
+      .toMatch(/startReplay:\s*\([^)]*\)\s*=>\s*\{[\s\S]{0,600}?startReplayFile\s*\(/);
+    expect((body.match(/startReplayFile\s*\(/g) ?? []).length, 'showLocalData 里 startReplayFile( 的调用点数').toBe(1);
     expect(body, '导出没有接到宿主的 record 来源（buildSessionArchive）')
       .toMatch(/buildArchive:\s*\(\)\s*=>\s*buildSessionArchive\s*\(\s*\)/);
     // 反向：本函数**不许**再出现第二套"自己拼档案"的调用（G3 的 snapshotMatchFile 已删）

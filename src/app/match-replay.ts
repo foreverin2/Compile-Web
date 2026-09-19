@@ -27,9 +27,11 @@ import {
 } from '../core/state/create';
 import { resetControlIfHeld } from '../core/rules/control';
 import {
+  DRAFT_PICK_KIND,
   matchFileToCreateOptions,
   normalizeAction,
   type ActionRecord,
+  type AppActionKind,
   type MatchFile,
   type MatchFileSetup,
 } from './match-file';
@@ -126,13 +128,53 @@ export function applyRecordedAction(s: GameState, a: ActionRecord): void {
       executeAction(s, a.player, 'clear-cache');
       return;
     }
+    /**
+     * ★★ **G5 T12：草稿选牌走的就是这条流水线**（用户裁决 A：把它接进既有的 `act` 通道，
+     * 而不是另起一条"各自算"的路）。
+     *
+     * 这一格是**应用层**的那一格：`performDraftPick` 是 `src/core/state/create.ts` 的草稿原语，
+     * 它**不在** `executeAction` 的 8 个分支里（所以上面 8 格调用的是引擎，这一格调用的是
+     * core 的草稿函数 —— "调用 core 的函数"是允许的，改 core 才是红线）。
+     *
+     * ## 为什么"轮到谁"不用在这里校验
+     *
+     * `performDraftPick` 自己就带轮次语义：`getCurrentDrafter(s)` 按 `draftRoundOwner` 派生
+     * 当前轮选者，而 `getDraftPool(s)` 会把已选/已禁的 defId 排除 ⇒ "不是本回合的人选了"
+     * 与"选了池外/重复的 defId"都会被**引擎/or 原语**拒掉（抛错），于是重放与联机接收方
+     * 都不需要第二份校验。**发送方**那一侧另有一道闸（`src/net/net-driver.ts` 的 `liveTurn`
+     * 的草稿分支），两端各自校验同一规则。
+     *
+     * ⚠️ 与 `'rearrange-protocols'` 那条"控制权归还"还原规则**无关**：草稿期没有控制组件，
+     * 也不是被那个规则覆盖的动作。
+     */
+    case DRAFT_PICK_KIND: {
+      const args = a.args as { defId: string };
+      performDraftPick(s, args.defId);
+      return;
+    }
   }
-  // 穷尽性守卫：上面的 switch 覆盖了全部 8 个 ActionKind，TypeScript 在这里把 `a.kind` 收成
-  // `never`。若将来 `ActionKind` 新增取值而这里漏了分支，**这行会在 tsc 阶段就报错**
-  // （`never` 不可赋给形参），而不是到运行时才静默走空。`as ActionKind` 只为让运行时兜底
-  // 分支也能编译通过（调用方可能喂进一份被篡改的档案）。
-  const unknownKind = (a as { kind: ActionKind }).kind;
-  throw new Error(`applyRecordedAction: 未覆盖的操作 kind=${String(unknownKind)}（档案被篡改或 ActionKind 新增后漏了分支）`);
+  // 穷尽性守卫：上面的 switch 覆盖了**全部 9 个** `AppActionKind`（引擎的 8 个 + 应用层的
+  // `'draft-pick'`），TypeScript 在这里把 `a.kind` 收成 `never`。若将来任一**词表**新增取值
+  // 而这里漏了分支，**这一行会在 tsc 阶段就报错**（`never` 不可赋给 `AppActionKind` 形参），
+  // 而不是到运行时才静默走空。
+  //
+  // 为什么写成"取一个函数"而不是上一版那样 `const narrowed: never = a.kind` 再转一次类型：
+  // 把 `never` 交给一个**形参类型是 `AppActionKind`** 的函数，是 TypeScript 里表达"这个值已经
+  // 属于空集"的标准写法，且**它的报错就是我们要的那条**（`Argument of type '"xxx"' is not
+  // assignable to parameter of type 'AppActionKind'`）。上一版那两句靠两处 cast 才编译过，
+  // 读起来像"为了绕过类型系统"，而这里要的恰好相反：让漏分支**在编译期就爆**。
+  return assertNeverAction(a.kind);
+}
+
+/**
+ * `applyRecordedAction` 的穷尽性兜底（见那里的注释）：**只在运行期**给一份被篡改的档案兜底。
+ *
+ * 调用点把 `a.kind` 收窄成 `never` 之后传进来 ⇒ 漏了分支时**先烂在 tsc**，运行期这条
+ * 只在"档案里的 kind 是一个字符串、不在任何词表里"（`parseMatchFile` 会先拦，
+ * 但直呼本函数的人可以绕过它）时走到。
+ */
+function assertNeverAction(kind: AppActionKind): never {
+  throw new Error(`applyRecordedAction: 未覆盖的操作 kind=${String(kind)}（档案被篡改或 ActionKind 新增后漏了分支）`);
 }
 
 /* ------------------------------------------------------------------ *
@@ -215,14 +257,138 @@ export function replayDraftFromSetup(s: GameState, setup: MatchFileSetup): Draft
  * ------------------------------------------------------------------ */
 
 /**
- * 从档案重建到草稿结束的状态：`createGame(matchFileToCreateOptions(f))` + 草稿重放。
+ * 档案里**草稿选牌**那几条（按 log 顺序）。
+ *
+ * ★ G5 T12：这是"两条重放路走哪一条"的**判据**。新档案（T12 之后录的）把草稿选牌记进了
+ * `actions`（`kind: 'draft-pick'`）⇒ 这条非空 ⇒ 草稿由**动作流**重演，`setup` 那两条顺序快照
+ * **不再被消费**。老档案（T12 之前录的）里没有这种记录 ⇒ 这条为空 ⇒ 走
+ * `replayDraftFromSetup` 的老路（它一个字都没动）。
+ *
+ * 为什么用"日志里有没有草稿动作"当判据、而不是给档案加一个版本位或标志字段：
+ *  - 加字段要动 `parseMatchFile` 的校验面与 `canonicalMatchFile` 的规范化面（两份都可能漏）；
+ *  - 而"日志里有没有草稿动作"是**数据本身**的事，读一下就有，不可能与档案内容不同步；
+ *  - 一份档案的草稿永远是**从第 0 步开始**记的（`draftRound === 0` 时选第一张）⇒ "有草稿动作"
+ *    与"整场草稿都在日志里"是同一件事，不存在"只记了一半"的形态需要另行判断。
+ *
+ * 代价（如实登记）：一份**被手工编辑过**、把草稿动作从 `actions` 里删掉一半的新档案会退回老路
+ * 并用 `setup` 重演 —— 那与"老档案"不可区分，而它本来就是被篡改的档案（`checkAction` 的
+ * `seq === 下标` 判据会先把它拦住）。
+ */
+function draftPicksInLog(f: MatchFile): Array<ActionRecord & { kind: typeof DRAFT_PICK_KIND }> {
+  // `filter` 之后类型仍然是 `ActionRecord` ⇒ 这里的 cast 只是把**已经由谓词保证**的那件事
+  // 写进类型里（`a.kind === DRAFT_PICK_KIND` 是过滤条件本身，不是猜测）。
+  return f.actions.filter((a) => a.kind === DRAFT_PICK_KIND) as Array<
+    ActionRecord & { kind: typeof DRAFT_PICK_KIND }
+  >;
+}
+
+/**
+ * ★★ **草稿前导的条数**（G5 T12 小修复轮）：档案日志**开头**那几条 `'draft-pick'` 的个数。
+ *
+ * ## 它是谁的唯一出处
+ *
+ * 两个消费方都要这个数，所以它只能有一处（本仓库对"同一件事两处各算一遍"的成见）：
+ *  1. `src/main.ts` 的重放页：起跑状态是 `stateAfterDraft(f)`（**已经**把草稿走完了）⇒ 游标的
+ *     初始位置必须跳过这几条，否则第一步就会把一条 `'draft-pick'` 交给一个 `'turn'` 相的状态
+ *     （实测两种拒绝：`not-the-next-action` / `engine-error: not in draft phase`）；
+ *  2. `assertDraftPreludeMatchesSetup`：拿它与 `setup.draftPicks.length` 对账（见那里的说明）。
+ *
+ * 实现：数的是**前导**（从下标 0 开始连续的那几条），不是"日志里一共有几条 `'draft-pick'`"——
+ * 后者会把"对局中混进一条同名 kind"也算上，而前者的语义才是"起跑点已经走掉的那一段"。
+ * 一份正常档案里两者相等（草稿永远从第 0 步记起），但语义要按前导写。
+ */
+export function draftPreludeCount(log: readonly { kind: string }[]): number {
+  let n = 0;
+  while (n < log.length && log[n].kind === DRAFT_PICK_KIND) n += 1;
+  return n;
+}
+
+/**
+ * ★★ **前导草稿条数必须与 `setup.draftPicks` 的条数一致** —— 不一致是**档案自相矛盾**，
+ * 必须给可读失败，**不许静默跳过**（T12 小修复轮，协调者交办）。
+ *
+ * ## 为什么这条前提不能"默认成立"
+ *
+ * 重放页新起点的算法是"起始状态用 `stateAfterDraft(f)`（它读 `setup` 那份派生回显走完草稿）+
+ * 游标跳过日志前导那几条"。两边的**条数**因此是这条算法的隐含前提：
+ *  - `setup.draftPicks` 比日志前导**多** ⇒ 起始状态"多走了"几步，而游标跳得少 ⇒ 中间那几步
+ *    会被应用**两次**（`performDraftPick` 在 `'turn'` 相上抛 `not in draft phase` ——
+ *    那次抛错是"碰巧"救回来的，不该拿它当保证）；
+ *  - `setup.draftPicks` 比日志前导**少** ⇒ 起始状态与日志的前进量对不上，重放出来的盘面
+ *    来历不明（看起来能走，但走出来的东西不是这份档案说的那一局）。
+ *  两种形态都不该被静默吸收：档案自相矛盾时，重放页唯一诚实的反应是**说不出来**。
+ *
+ * ## 调用点
+ *
+ * `src/main.ts` 的 `startReplayFile` **第一句**（在任何状态被改写之前抛）—— 那里也是最容易
+ * 看见这条失败的地方（重放页进不去，屏上留在档案屏）。老档案（日志无草稿动作）⇒ 前导 0，
+ * 而 `setup.draftPicks` 恒为 6（它只住在 setup 里）⇒ **不能**拿这条去卡老档案：判据是
+ * "日志里**有没有**草稿前导"，没有就说明这一份是旧格式，`stateAfterDraft` 走 `replayDraftFromSetup`，
+ * 两边本来就不该对账（`stateAtStep` 对它也没有"跳过"这回事）。
+ */
+export function assertDraftPreludeMatchesSetup(f: MatchFile): number {
+  const prelude = draftPreludeCount(f.actions);
+  if (prelude === 0) return 0; // 旧格式：草稿不住在日志里，这一层不适用（见上面）
+  const declared = f.setup.draftPicks.length;
+  if (prelude !== declared) {
+    const which = prelude > declared
+      ? `日志前导比 setup 多 ${prelude - declared} 条（日志 ${prelude} / setup.draftPicks ${declared}）`
+      : `setup.draftPicks 比日志前导多 ${declared - prelude} 条（日志 ${prelude} / setup.draftPicks ${declared}）`;
+    throw new Error(
+      `这份档案自相矛盾，不能重放：${which}。` +
+        '档案里"草稿动作的日志"与"草稿的顺序快照（setup.draftPicks）"必须逐条对应，' +
+        '否则重放的起点说不清（会把草稿多走一遍，或者走出一局来历来不明的棋）。' +
+        '请重新导出这一局的档案，不要手工改动其中任何一部分。',
+    );
+  }
+  return prelude;
+}
+
+/**
+ * 从档案重建到**开局那一帧**（`createGame` 之后、任何操作之前）的状态。
+ *
+ * 它只是"`createGame(matchFileToCreateOptions(f))`"这一句的具名化。存在的理由：T12 之后
+ * `stateAfterDraft()` 要走两条路（新档案走动作流、老档案走 setup 快照），而两条路都从
+ * **同一帧**起跑 —— 具名之后"起跑点是什么"在这一个地方说清，两处不再各写一遍。
+ */
+function stateAtStart(f: MatchFile): GameState {
+  return createGame(matchFileToCreateOptions(f));
+}
+
+/**
+ * 从档案重建到草稿结束的状态：`createGame(matchFileToCreateOptions(f))` + **草稿重放**。
  *
  * 返回的状态是**全新**的（不共享档案里的任何引用），调用方可以随意推进它。
  * `ReplayDriver` 从这里起跑，再逐步 `applyRecordedAction` 走 `f.actions`。
+ *
+ * ★★ **G5 T12：草稿重放有两条路，同一次调用只许走一条**（用户裁决 (i)："重放时不许双应用"）。
+ *
+ * | 档案 | 走哪条 | 为什么 |
+ * |---|---|---|
+ * | 老档案（`actions` 里没有 `'draft-pick'`） | `replayDraftFromSetup(s, f.setup)` | 它的草稿**只**住在 `setup` 的两条顺序快照里（T12 之前的唯一记法），日志里没有可应用的东西 |
+ * | 新档案（`actions` 里有 `'draft-pick'`） | 逐条 `applyRecordedAction` | **真值是动作流**：草稿就在日志里，`setup.draftPicks` 只是它的派生读数 |
+ *
+ * 判据是**数据本身**（`draftPicksInLog(f).length > 0`），不是版本号、也不是"两边都试一下看哪个
+ * 走得通"——后者会在"两条都能走"的形态上静默双应用，而那正是本仓最恨的那类缺陷
+ * （`match-file.ts:228-236` 的同族取舍：宁可响亮地失败，不要静默错位）。
+ *
+ * ⚠️ **新档案这条路走完之后的 `phase` 一定是 `'turn'`**：日志里草稿动作齐 6 条
+ * （`DRAFT_PICK_COUNT`）时 `performDraftPick` 自己会把相位翻过去（`create.ts:271-279`）。
+ * "草稿没走完就录了档案"这种档案今天不存在（`MatchFile` 只在有记录器的地方产生，
+ * 而那两处都是对局中/终局导出）。
  */
 export function stateAfterDraft(f: MatchFile): GameState {
-  const s = createGame(matchFileToCreateOptions(f));
-  replayDraftFromSetup(s, f.setup);
+  const s = stateAtStart(f);
+  const logged = draftPicksInLog(f);
+  if (logged.length === 0) {
+    replayDraftFromSetup(s, f.setup);
+    return s;
+  }
+  // 新路：只走草稿那几条（`applyRecordedAction` 的草稿分支）—— 本函数的契约是"到草稿结束为止"，
+  // 对局那几条由 `stateAtStep` / `ReplayDriver` 负责。
+  for (const a of logged) {
+    applyRecordedAction(s, normalizeAction(a));
+  }
   return s;
 }
 
@@ -238,8 +404,16 @@ export function stateAfterDraft(f: MatchFile): GameState {
  * 在那个映射收口之前，同一份 `switch` 曾在现场与测试各有一份，"档案能重放"因此有两个
  * 可能各自漂移的定义（本文件头注第 1 条）。
  *
- * **`n` 是操作条数，不是 `seq`**：`n = 0` 就是草稿结束的状态（逐字节等于 `stateAfterDraft(f)`），
- * `n = f.actions.length` 是终局。
+ * ⚠️ **T12 的一处修正（不改口径，改的是"起跑点已经包含什么"）**：新档案的 `f.actions` 前
+ * 六条是草稿（`'draft-pick'`），而 `stateAfterDraft(f)` 起跑时**已经把它们走完了**
+ * （相位都是 `'turn'` 了）⇒ 循环必须**跳过**那几条，否则第一条就会被
+ * `performDraftPick` 的相位守卫抛错（T12 实现期实测："game not in turn phase"）。
+ * 跳过之后 `n` 的含义仍然是**档案第 n 条操作之后**：`n = 6` 就是 "6 条草稿走完"，
+ * 与 `stateAfterDraft(f)` 逐字节相等（有腿）。
+ *
+ * **`n` 是操作条数，不是 `seq`**：`n = 0` 就是草稿结束的状态（与 T12 之前一致，
+ * 逐字节等于 `stateAfterDraft(f)`；两条重放路径的这一点都有腿），`n = f.actions.length`
+ * 是终局。这也是重连要的口径：房主报的 `appliedSteps` 与档案下标是同一个数。
  *
  * **越界一律拒绝（抛错），不夹紧**。理由：夹紧会把"对端比我多走了几步"静默变成一个**看起来
  * 同步**的状态 —— 那正是 D1「分叉就停下来给可读提示，不静默继续」要避免的形态，也与本模块
@@ -267,8 +441,17 @@ export function stateAtStep(f: MatchFile, n: number): GameState {
     );
   }
   const s = stateAfterDraft(f);
-  for (let i = 0; i < n; i += 1) {
-    applyRecordedAction(s, normalizeAction(f.actions[i]));
+  /**
+   * 起跑点已经走完了多少条**草稿**动作（老档案是 0：它的草稿不在日志里，是 `setup` 重建的）。
+   * 这个数就是循环要跳过的前导条数 —— 它由**同一个** `draftPicksInLog` 数出来，
+   * 与 `stateAfterDraft` 挑路用的是同一份判据。
+   */
+  let applied = draftPicksInLog(f).length;
+  while (applied < n) {
+    const a = f.actions[applied];
+    if (a === undefined) break; // `n > f.actions.length` 已在上面被拒，这里是防御性兜底
+    applyRecordedAction(s, normalizeAction(a));
+    applied += 1;
   }
   return s;
 }

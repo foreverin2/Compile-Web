@@ -288,22 +288,40 @@ const DEFAULT_SETTLE_WATCHDOG_MS = 8000;
  * 不是顺手加的）：`null` = **显式关掉**看门狗。理由是可测的 —— 判据 8 的多条腿要求
  * "在飞时钟恰好一个"，而看门狗**本身也是一个在飞时钟**；没有这个开关，那些腿只能靠
  * "把 ms 调得足够大"来绕，那会把断言变成时间假设。生产永远不传 `null`（走缺省值）。
+ *
+ * ⚠️ `env.initialPosition`（G5 T12 小修复轮加的）也是**有意的契约扩宽**，而且它修的是一个
+ * **用户可见的回归**：T12 之后录的档案，日志**开头**是几条草稿动作（`'draft-pick'`），
+ * 而重放页的起跑状态 `stateAfterDraft(f)` **已经**把草稿走完（相位 `'turn'`）⇒ 游标若从 0 起，
+ * 第一步就会把一条草稿动作交给一个 `'turn'` 相的状态（实测两种拒绝：`not-the-next-action` /
+ * `engine-error: not in draft phase`）⇒ 重放页**永久停在第 0 步**。跳过前导那几条之后，
+ * 重放页看到的第一条就是"对局的第一条"，**语义与 T12 之前逐字相同**（重放页本来就不展示草稿）。
+ * 缺省 0 ⇒ 老档案与既有调用方一个字都不用改。取值越界 / 非整数 = 调用方违约 ⇒ **抛**
+ * （照 `commitFace` 与 `realign` 的既有口径：这不是网络输入，是"你报了一个不可能的数"）。
  */
 export function createReplayDriver(
   f: MatchFile,
-  env: { ticker: Ticker; stepMs?: number; settleWatchdogMs?: number | null },
+  env: { ticker: Ticker; stepMs?: number; settleWatchdogMs?: number | null; initialPosition?: number },
 ): ReplayDriver {
   const ticker = env.ticker;
   const stepMs = env.stepMs ?? DEFAULT_STEP_MS;
   // `null` = **显式关掉**看门狗；缺省 = 用上面的缺省值。测试可以用 `null` 只测握手、不被看门狗干扰
   // （判据 8 的每一条都要求"到点前恰好一个在飞时钟"，看门狗本身也是一个在飞时钟）。
   const watchdogMs = env.settleWatchdogMs === undefined ? DEFAULT_SETTLE_WATCHDOG_MS : env.settleWatchdogMs;
+  // 游标初始位置：见上面那段（T12 小修复轮）。越界 / 非整数当场抛 —— 它决定"哪一条是下一步"，
+  // 悄悄夹紧会把"起跑点算错了"变成一个看起来正常的重放。
+  const startAt = env.initialPosition ?? 0;
 
   const actions = f.actions;
+  if (!Number.isInteger(startAt) || startAt < 0 || startAt > actions.length) {
+    throw new Error(
+      `createReplayDriver 的 initialPosition 越界：收到 ${String(env.initialPosition)}，` +
+        `档案长度 ${actions.length}（要求是 [0, ${actions.length}] 里的整数）；这是调用方违约。`,
+    );
+  }
   const cur: ReplayCursor = {
-    position: 0,
+    position: startAt,
     total: actions.length,
-    done: actions.length === 0,
+    done: startAt >= actions.length,
     paused: true,
     rate: 1,
     error: null,

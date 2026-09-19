@@ -12,12 +12,21 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
   createMatchFileRecorder,
+  matchFileToCreateOptions,
+  normalizeAction,
   setupFromState,
   type ActionRecord,
   type MatchFile,
   type MatchFileSetup,
 } from '../../src/app/match-file';
-import { applyRecordedAction, replayDraftFromSetup, stateAfterDraft, stateAtStep } from '../../src/app/match-replay';
+import {
+  applyRecordedAction,
+  assertDraftPreludeMatchesSetup,
+  draftPreludeCount,
+  replayDraftFromSetup,
+  stateAfterDraft,
+  stateAtStep,
+} from '../../src/app/match-replay';
 import { stripComments, functionBody } from '../ui/source-text';
 import { CARD_DATA_HASH } from '../../src/app/card-data-hash';
 import { DEMO_PROTOCOLS } from '../../src/data/demo';
@@ -25,11 +34,13 @@ import {
   canUnpick,
   createGame,
   draftNextAction,
+  getCurrentDrafter,
   getDraftPool,
   performDraftBan,
   performDraftPick,
   performDraftUnpick,
 } from '../../src/core/state/create';
+import { createLocalDriver, createReplayDriver, type Ticker } from '../../src/app/match-driver';
 import { executeAction, getLegalActions, type ActionKind } from '../../src/core/game';
 import { getCompilableLines } from '../../src/core/rules/compile';
 import { resetControlIfHeld } from '../../src/core/rules/control';
@@ -1031,10 +1042,19 @@ function sharedWithArchive(state: GameState, f: MatchFile): number {
   return [...stateRefs].filter((o) => archiveRefs.has(o)).length;
 }
 
-/** 测试自己写的"逐步重放"（判据 1 的路径 B：循环写在测试里，不经过 `stateAtStep`） */
+/** 测试自己写的"逐步重放"（判据 1 的路径 B：循环写在测试里，不经过 `stateAtStep`）。
+ *
+ *  ★ G5 T12：与 `stateAtStep` 同口径 —— 起跑点是 `stateAfterDraft(f)`（**已经**把日志里的
+ *  草稿动作走完了），所以循环要**跳过**前导的草稿那几条。这里写字符串字面量而不是 import
+ *  `DRAFT_PICK_KIND`：本文件的口径是"行为腿不 import 生产常量来给自己对口径"，而这一格的
+ *  判据是"档案里到底写了什么 kind"——用字面量才是**独立**的核对。 */
 function replayStepByStep(f: MatchFile, n: number): GameState {
   const s = stateAfterDraft(f);
-  for (let i = 0; i < n; i += 1) applyRecordedAction(s, f.actions[i]);
+  let applied = f.actions.filter((a) => a.kind === 'draft-pick').length;
+  while (applied < n) {
+    applyRecordedAction(s, f.actions[applied]);
+    applied += 1;
+  }
   return s;
 }
 
@@ -1049,13 +1069,344 @@ function replayStepByStep(f: MatchFile, n: number): GameState {
  */
 function maxSharedWithoutCopy(f: MatchFile): number {
   let max = 0;
+  const logged = f.actions.filter((a) => a.kind === 'draft-pick').length; // T12：与 stateAtStep 同口径
   for (let n = 0; n <= f.actions.length; n += 1) {
     const s = stateAfterDraft(f);
-    for (let i = 0; i < n; i += 1) applyRecordedAction(s, f.actions[i]); // 故意不深拷贝
+    for (let i = logged; i < n; i += 1) applyRecordedAction(s, f.actions[i]); // 故意不深拷贝
     max = Math.max(max, sharedWithArchive(s, f));
   }
   return max;
 }
+
+/* ==================================================================== *
+ * G5 T12（用户裁决 A + (i)）：草稿选牌进动作流 ⇒ 两条草稿重放路各自有腿
+ * ==================================================================== */
+
+/**
+ * ★★ T12 的现场夹具：**草稿走驱动**（`LocalDriver` = 热座那条真路），于是档案的
+ * `actions` 里真的留下 6 条 `'draft-pick'`。
+ *
+ * 与上面 `buildStepArchive` 的关键差别（别混淆，两者**故意**不同）：
+ *  - 那一份的草稿走 `performDraftPick` 直调 ⇒ 日志里**没有**草稿动作 ⇒ 它是**老档案**的形态
+ *    （T12 之前录的），由 `replayDraftFromSetup` 重演（那条路一个字都没动，腿在 T1/T4）；
+ *  - 这一份的草稿走 `driver.submit` ⇒ 日志里有草稿动作 ⇒ 它是**新档案**的形态（T12 之后录的），
+ *    由日志逐条应用。两条路各自有腿，且**同一次重放只走一条**（下面第二、三条腿钉这个）。
+ */
+interface T12LiveArchive {
+  file: MatchFile;
+  live: GameState;
+  /** 现场选出来的 defId 序列（按选择顺序） */
+  picks: string[];
+}
+
+function t12LiveWithDraftInLog(seed: string, turnSteps = 8): T12LiveArchive {
+  const s = createGame({ seed });
+  const driver = createLocalDriver();
+  const draftActionCount = (): number => driver.recorder()!.actions().filter((a) => a.kind === 'draft-pick').length;
+  const picks: string[] = [];
+  let guard = 0;
+  while (s.phase === 'draft') {
+    if (guard++ > 40) throw new Error('T12 夹具：草稿没有收敛');
+    const defId = getDraftPool(s)[0]?.defId;
+    if (defId === undefined) break;
+    // 走**真回调**的形状：`player` 是草稿轮选者（`getCurrentDrafter`），kind 是应用层那一格
+    const player = getCurrentDrafter(s);
+    const r = driver.submit(s, { player, kind: 'draft-pick', args: { defId } });
+    expect(r.ok, `T12 夹具：草稿第 ${picks.length + 1} 步提交被拒：${JSON.stringify(r)}`).toBe(true);
+    picks.push(defId);
+  }
+  expect(s.phase, 'T12 夹具：草稿必须走完').toBe('turn');
+  expect(draftActionCount(), '夹具：档案里草稿动作的条数').toBe(6);
+  // 再走几步真对局动作（用现场那条编排的形状：逐字段重建 args）
+  for (let i = 0; i < turnSteps; i += 1) {
+    const legal = getLegalActions(s, s.turnPlayer);
+    if (legal.length === 0) break;
+    const a = legal[i % Math.min(legal.length, 3)];
+    const args: Record<string, unknown> = {};
+    if (a.cardUid !== undefined) args.cardUid = a.cardUid;
+    if (a.faceUp !== undefined) args.faceUp = a.faceUp;
+    if (a.line !== undefined) args.line = a.line;
+    if (a.target !== undefined) args.target = a.target;
+    const hasArgs = Object.keys(args).length > 0;
+    const r = driver.submit(s, {
+      player: s.turnPlayer,
+      kind: a.kind,
+      ...(hasArgs ? { args } : {}),
+    } as Omit<ActionRecord, 'seq'>);
+    expect(r.ok, `T12 夹具：对局第 ${i + 1} 步提交被拒：${JSON.stringify(r)}`).toBe(true);
+  }
+  const file = driver.recorder()!.toMatchFile(metaFor(seed, setupFromState(s)));
+  return { file, live: s, picks };
+}
+
+describe('G5 T12：草稿选牌进动作流（新档案走日志、老档案走 setup，不许双应用）', () => {
+  it('★ 新档案：日志里有 6 条 draft-pick，setup.draftPicks 与它逐项相同（派生读数）', () => {
+    const { file, picks } = t12LiveWithDraftInLog('g5t12-log-invariant');
+    const logged = file.actions.filter((a) => a.kind === 'draft-pick');
+    expect(logged, '日志里的草稿动作条数').toHaveLength(6);
+    // 前六条就是草稿（草稿是这一局最早发生的事）—— 顺序也是语义
+    expect(file.actions.slice(0, 6).every((a) => a.kind === 'draft-pick'), '前六条必须都是草稿动作').toBe(true);
+    for (const a of logged) {
+      expect(Object.keys(a.args as Record<string, unknown>), '草稿动作的 args 只许有 defId').toEqual(['defId']);
+    }
+    const loggedDefIds = logged.map((a) => (a.args as { defId: string }).defId);
+    // ★ 判据：`setup.draftPicks` **恒等于**日志里那串（裁决 (i)：它降级为派生读数）
+    expect(file.setup.draftPicks, 'setup.draftPicks 与日志里的 defId 序列').toEqual(loggedDefIds);
+    expect(loggedDefIds, '与现场真正选出来的那串').toEqual(picks);
+    // 反空转：这六条不是"都选同一张"（否则"序列相等"这条判据没有判别力）
+    expect(new Set(loggedDefIds).size, '六次选的是同一个 defId ⇒ 顺序信息为零').toBe(6);
+    // 座位：轮选者由 `draftRoundOwner` 派生（1-2-2-1），两端算的是同一个函数
+    expect(logged.map((a) => a.player), '草稿动作的 player（轮选者）').toEqual(
+      [0, 1, 1, 0, 0, 1].map((rel) => (rel === 0 ? file.setup.draftStarter : 1 - file.setup.draftStarter)),
+    );
+  });
+
+  it('★★ 新档案重放（走日志）：草稿那 6 条应用完之后状态与现场逐字相同，且**没有双应用**', () => {
+    const { file, live } = t12LiveWithDraftInLog('g5t12-new-path');
+    const replayed = stateAfterDraft(file);
+    expect(replayed.phase, '重放出来必须已经在 turn 期').toBe('turn');
+    // ★ 与现场对拍：现场在**草稿刚走完那一帧**的指纹 = 现场跑着同一条驱动、只提交了草稿那几步
+    //   ⇒ 用 `stateAtStep(file, 6)`（= 日志前 6 条之后）作为那个时刻的独立重建，两者都要相等
+    const fromStep = stateAtStep(file, 6);
+    expect(stateFingerprint(replayed), '★ 新路（日志应用）的指纹必须等于 stateAtStep(f, 6)').toBe(
+      stateFingerprint(fromStep),
+    );
+    // ★ T12 的语义锚点（**别按"n=0 就是开局"的直觉改这一条**）：`stateAtStep(f, 0)`
+    //   是"**草稿已结束**、一步对局动作都没走"的那一帧（相位 `'turn'`），与 T12 之前一致 ——
+    //   新档案的日志里那 6 条草稿动作**已经**由 `stateAfterDraft` 走掉了 ⇒ 循环跳过它们。
+    //   这也是重连要的口径：房主报的 `appliedSteps` 与档案下标是同一个数。
+    expect(stateAtStep(file, 0).phase, 'n=0 是草稿结束那一帧').toBe('turn');
+    expect(stateFingerprint(stateAtStep(file, 0)), 'n=0 等于 stateAfterDraft').toBe(stateFingerprint(replayed));
+    // 现场那一局确实在草稿之后又走了几步（否则"重放 == 现场终局"这条就退化成草稿态对齐）
+    expect(file.actions.length, '现场必须走过草稿之后的对局动作').toBeGreaterThan(6);
+    expect(stateFingerprint(live)).not.toBe(stateFingerprint(replayed));
+    // ★★ 不许双应用：把日志里的草稿动作**再**应用一遍 ⇒ 引擎必须当场拒绝（相位已翻），
+    //    也就是说"多走一遍"这件事**在结构上不可能静默成功**。
+    const s2 = stateAfterDraft(file);
+    const again = file.actions.find((a) => a.kind === 'draft-pick')!;
+    expect(() => applyRecordedAction(s2, again), '双应用居然成功了 ⇒ 重放会静默多选一次')
+      .toThrow(/not in draft phase/);
+    // ★★ **"静默双应用"为什么在结构上不可能**（T12 实现期实测，写清楚免得被误读）：
+    //    `setup.draftPicks` 是**派生读数** ⇒ 只走 setup 的那条老路在这份档案上**也会成功**，
+    //    且结果与日志路**逐字节相同**（下面那条钉的就是这个）。所以"不许双应用"这句话
+    //    **不是**靠"老路会抛"实现的（那是"各自算"的旧形态），而是靠这两条：
+    //      ① `stateAfterDraft` 是 if/else —— 走日志那条时，`replayDraftFromSetup` **一次都不调**；
+    //      ② 上一条腿已经证明"把草稿动作再应用一遍 ⇒ `not in draft phase` 当场抛" ⇒
+    //         "把两条路叠起来"在任何一份新档案上都会立刻失败（不会静默多选一次）。
+    //    这两条一起才是判据 5 要的那件事：两条路各自有腿，且同一次重放只走一条。
+    const s3 = createGame(matchFileToCreateOptions(file));
+    const legacyResult = replayDraftFromSetup(s3, file.setup);
+    expect(legacyResult, '老路（setup 重演）的读数').toEqual({ picks: 6, bans: 0 });
+    expect(
+      stateFingerprint(s3),
+      '★ 两条路必须**一致**（setup.draftPicks 是日志的派生读数）；不一致就说明裁决 (i) 没落地',
+    ).toBe(stateFingerprint(replayed));
+    expect(s3.draftPicks.map((p) => p.defId), '两条路选出来的序列').toEqual(
+      replayed.draftPicks.map((p) => p.defId),
+    );
+  });
+
+  it('★★ 老档案重放（走 setup）：日志里没有草稿动作 ⇒ `replayDraftFromSetup` 照旧重演，指纹与现场相同', () => {
+    // 老档案 = T12 之前的形态：草稿只在 setup 里（`buildStepArchive` 的草稿是直调 `performDraftPick`）
+    const live = stepArchive('g4t1-t12-legacy', 12);
+    const f = live.file;
+    expect(f.actions.some((a) => a.kind === 'draft-pick'), '反空转：这份档案的日志里不许有草稿动作').toBe(false);
+    expect(f.setup.draftPicks, '老档案的草稿只住在 setup 里').toHaveLength(6);
+    const replayed = stateAfterDraft(f);
+    // 与现场逐条对拍：现场跑完第 k 步的指纹（`fpAfter[k]`）就是它
+    expect(stateFingerprint(replayed), '老路重放的指纹必须等于现场').toBe(live.fpAfter[0]);
+    expect(replayed.phase).toBe('turn');
+    // 而且**不许**因为"日志里没有草稿动作"就把草稿跳过（六条都选上了）
+    expect(replayed.draftPicks.map((p) => p.defId), '老路必须真的把 6 条草稿选出来').toEqual(f.setup.draftPicks);
+  });
+
+  it('★ 两条路各自也走一遍驱动器 / 状态机：终态与现场相同（`stateAtStep` 与 `stateAfterDraft` 都覆盖到）', () => {
+    const { file, live } = t12LiveWithDraftInLog('g5t12-step-path', 10);
+    const end = stateAtStep(file, file.actions.length);
+    expect(stateFingerprint(end), 'stateAtStep(全部) 必须等于现场').toBe(stateFingerprint(live));
+    expect(stateFingerprint(stateAtStep(file, 0)), 'stateAtStep(0) 必须等于 stateAfterDraft').toBe(
+      stateFingerprint(stateAfterDraft(file)),
+    );
+  });
+
+  /**
+   * ★★ **判据 4（档案等价）在 T12 的新档案形状上**：把这一局录下来再重放，盘面与实时那局逐字相同。
+   *
+   * ## 为什么必须有这条（变异 M4 暴露的缺口）
+   *
+   * 上面那两条只把"重放 == 现场"钉在**开头**（n=0 那一帧）。一个"重放时少应用一步草稿"的
+   * 变异（M4）在那两条上**两边一起漂**：`stateAtStep(f, 0)` 与 `stateAfterDraft(f)` 都少一步
+   * ⇒ 比出来仍然相等（实测：浏览器门 52/52 全绿、这一组全绿）。⇒ 必须有一条腿把重放的**终态**
+   * 与**现场跑完那一局的状态**对拍。
+   *
+   * ## 对拍的时点与做法
+   *
+   * 现场那一局是**真驱动**跑出来的（`t12LiveWithDraftInLog` 的 `live`：6 条草稿 + 若干条对局，
+   * 全程 `LocalDriver.submit`）。重放侧从 `f.actions` **逐条**走完（草稿那 6 条也在里面，
+   * 由 `applyRecordedAction` 那条唯一映射处理）⇒ 两边的指纹必须逐字节相同。
+   * 现场走的是"提前动手"的顺序，重放走的是同一条路 ⇒ 这条腿也顺带钉住
+   * "草稿动作进日志之后，档案仍然能忠实重放"。
+   */
+  it('★★ 判据 4：新档案（日志含草稿）录下来再重放，终态与**现场那一局**逐字相同', () => {
+    const { file, live } = t12LiveWithDraftInLog('g5t12-roundtrip', 12);
+    expect(file.actions.filter((a) => a.kind === 'draft-pick').length, '夹具：日志里要有 6 条草稿动作').toBe(6);
+    expect(file.actions.length, '夹具：对局那一段必须真的走过若干步').toBeGreaterThan(6);
+    // 重放：草稿结束那一帧起跑，再逐条走完对局那一段（`applyRecordedAction` 是唯一映射）
+    const replayed = stateAfterDraft(file);
+    for (let i = 6; i < file.actions.length; i += 1) {
+      applyRecordedAction(replayed, normalizeAction(file.actions[i]));
+    }
+    expect(stateFingerprint(replayed), '★ 重放的终态必须与现场那一局逐字相同').toBe(stateFingerprint(live));
+    // 反空转：**草稿那一段也必须真的重建出来**（只比终态的话，"草稿全跳过"也可能碰巧相等）
+    expect(replayed.draftPicks.map((p) => p.defId), '重放出来的草稿序列').toEqual(
+      live.draftPicks.map((p) => p.defId),
+    );
+    expect(replayed.players[0].protocols.map((p) => p.defId), 'P1 的三套协议').toEqual(
+      live.players[0].protocols.map((p) => p.defId),
+    );
+    expect(replayed.players[1].protocols.map((p) => p.defId), 'P2 的三套协议').toEqual(
+      live.players[1].protocols.map((p) => p.defId),
+    );
+    // 负控：拿掉**最后一条**草稿动作 ⇒ 指纹必须不同（否则上面那条"相等"没有判别力）。
+    // ⚠️ 只比**草稿结束那一帧**（`stateAfterDraft` 的产物）：少了那一条，这一局根本还在草稿里
+    //    （而"拿草稿动作之后的日志去喂一个还在草稿的状态"会被引擎的相位守卫拒掉 —— 那是**正确**的
+    //    行为，但它不是这条负控要证的事）。
+    const crippled: MatchFile = {
+      ...file,
+      actions: file.actions.filter((a, i) => !(a.kind === 'draft-pick' && i === 5)),
+    };
+    expect(
+      stateFingerprint(stateAfterDraft(crippled)),
+      '负控：少一条草稿动作之后，草稿结束那一帧的指纹必须不同',
+    ).not.toBe(stateFingerprint(replayed));
+    expect(stateAfterDraft(crippled).draftPicks.length, '负控：少了那一条之后只剩 5 个选择').toBe(5);
+  });
+
+  /**
+   * ★★ **重放页那条路**（评审阻断项的靶子，G5 T12 小修复轮重写）。
+   *
+   * ## 这条腿原来为什么是假绿（评审实测点名）
+   *
+   * 上一版从 `createGame(matchFileToCreateOptions(file))`（**开局帧**）起跑，而生产的起跑点是
+   * `src/main.ts` 的 `state = stateAfterDraft(file)`（**草稿结束**那一帧）⇒ 两者差着草稿那 6 条
+   * ⇒ "闸门能一条条过"在测试里成立、在生产上第一步就停（`not-the-next-action` /
+   * `engine-error: not in draft phase`）。**起点必须与生产一致**，这条腿才有意义。
+   *
+   * ## 现在钉的四样（起点 = `stateAfterDraft`，与生产逐字相同）
+   *
+   *  1. 游标从 `draftPreludeCount(file.actions)` 起（= 生产传进 `createReplayDriver` 的那个数）；
+   *  2. 第一条被应用的动作**是对局第一条**（不是草稿）；
+   *  3. 全程没有一步被拒（⇒ 不会出现 `replayHostError`）；
+   *  4. 走到最后的规范串 == 实时那一局的规范串。
+   */
+  it('★★ 重放页那条路（起点与生产一致 = stateAfterDraft）：第一条就是对局第一条、一路放行、终态等于现场', () => {
+    const { file, live } = t12LiveWithDraftInLog('g5t12-replay-driver', 8);
+    const prelude = draftPreludeCount(file.actions);
+    expect(prelude, '反空转：这份档案必须有草稿前导（否则这条腿与老档案同形）').toBe(6);
+    const ticker: Ticker = { schedule: () => 0, cancel: () => {} };
+    // ★ 起点与生产逐字相同：状态 = `stateAfterDraft`，游标 = 草稿前导条数
+    const drv = createReplayDriver(file, { ticker, settleWatchdogMs: null, initialPosition: prelude });
+    const s = stateAfterDraft(file);
+    expect(s.phase, '生产的起跑状态确实是"草稿已结束"').toBe('turn');
+    expect(drv.cursor().position, '游标必须从草稿前导之后起（生产传的就是这个数）').toBe(6);
+    const appliedKinds: string[] = [];
+    for (;;) {
+      const a = drv.next();
+      if (!a) break;
+      expect(a.kind, '第一条被应用的动作必须是对局动作（草稿不该出现在重放页）').not.toBe('draft-pick');
+      const r = drv.submit(s, { player: a.player, kind: a.kind, ...(a.args === undefined ? {} : { args: a.args }) });
+      expect(r.ok, `第 ${drv.cursor().position} 步（kind=${a.kind}）被闸门拒了（生产上这就是 replayHostError）：${JSON.stringify(r)}`)
+        .toBe(true);
+      appliedKinds.push(a.kind);
+    }
+    expect(appliedKinds.length, '被应用的动作条数 = 档案长度 - 草稿前导').toBe(file.actions.length - prelude);
+    expect(drv.cursor().position, '游标必须走完档案每一步').toBe(file.actions.length);
+    expect(drv.cursor().done).toBe(true);
+    expect(stateFingerprint(s), '★★ 重放走到最后必须等于实时那一局的规范串').toBe(stateFingerprint(live));
+  });
+
+  /**
+   * ★★ **反向腿（把评审那条缺陷钉死）**：硬把草稿步应用到 `stateAfterDraft` 之后的状态上，
+   * 必须得到评审实测的那**两种拒绝之一** —— 不许它再悄悄回来。
+   *
+   * 两种形态各自可达、且都指向同一件事（起跑点错了）：
+   *  - **`not-the-next-action`**：游标从 0 起（生产修之前的形态）⇒ `cb.onDraftPick` 用
+   *    `getCurrentDrafter(state)` 现算的 `player`（`draftRoundOwner(starter, 6)` 越界回落 ⇒
+   *    `1 - draftStarter`）与档案里第 0 轮 owner（`draftStarter`）不符 ⇒ 闸门当场拒；
+   *  - **`engine-error` + `not in draft phase`**：把 `player` 换成记录里那个（评审试过的另一条路）
+   *    ⇒ 闸门放行、引擎的相位守卫抛（`src/core/state/create.ts:261`）。
+   */
+  it('★★ 反向：把草稿步应用到"草稿结束"之后的状态 ⇒ 必得两种拒绝之一（这条缺陷不许悄悄回来）', () => {
+    const { file } = t12LiveWithDraftInLog('g5t12-replay-driver-bad', 4);
+    const ticker: Ticker = { schedule: () => 0, cancel: () => {} };
+    const first = file.actions[0];
+    expect(first.kind, '反空转：档案第一条必须是草稿动作').toBe('draft-pick');
+    // ① 游标从 0 起 + 用 `getCurrentDrafter(state)` 现算的 player（= 生产修之前那一版）
+    {
+      const drv = createReplayDriver(file, { ticker, settleWatchdogMs: null });
+      const s = stateAfterDraft(file);
+      const cur = drv.next();
+      expect(cur === null ? null : cur.kind).toBe('draft-pick');
+      const r = drv.submit(s, {
+        player: getCurrentDrafter(s),
+        kind: 'draft-pick',
+        args: first.args as { defId: string },
+      });
+      expect(r.ok, '把草稿步从 0 游标起走竟然成功了 ⇒ 评审那条阻断项又回来了').toBe(false);
+      expect(r.refusal, `拒码：${String(r.refusal)}`).toBe('not-the-next-action');
+      expect(drv.cursor().position, '被拒之后游标必须不动（这正是"停在第 0 步"的形态）').toBe(0);
+    }
+    // ② 把 player 换成记录里那个（评审试过的另一条路）⇒ 引擎的相位守卫拒（engine-error）
+    {
+      const drv = createReplayDriver(file, { ticker, settleWatchdogMs: null });
+      const s = stateAfterDraft(file);
+      drv.next();
+      const r = drv.submit(s, { player: first.player, kind: 'draft-pick', args: first.args as { defId: string } });
+      expect(r.ok, '把 player 换成记录里那个竟然成功了').toBe(false);
+      expect(r.refusal, `拒码：${String(r.refusal)}`).toBe('engine-error');
+      expect(String((r.error as Error).message), '真因必须是相位守卫').toMatch(/not in draft phase/);
+      expect(drv.cursor().position, '被拒之后游标必须不动').toBe(0);
+    }
+  });
+
+  /**
+   * ★ **日志前导草稿条数必须与 `setup.draftPicks` 对得上**（G5 T12 小修复轮，协调者交办）：
+   * 不一致 = **档案自相矛盾** ⇒ 给可读失败，**不许静默跳过**。
+   *
+   * 为什么这条前提非查不可：重放页的新起点是"起始状态用 `stateAfterDraft(f)`（读 `setup` 那份
+   * 派生回显走完草稿）+ 游标跳过日志前导那几条"⇒ 两边的**条数**是算法的隐含前提。少了这层对账，
+   * "档案自相矛盾"会变成"重放正常，但盘面来历不明"（本仓最恨的那类静默）。
+   */
+  it('★★ 前导草稿条数 != setup.draftPicks 长度 ⇒ 抛可读失败（两个方向各一条），且绝不静默跳过', () => {
+    const { file } = t12LiveWithDraftInLog('g5t12-prelude-mismatch', 4);
+    expect(draftPreludeCount(file.actions), '反空转：夹具的前导必须是 6').toBe(6);
+    // 方向 ①：日志前导**多**于 setup（删掉 setup 里的一条声明）
+    const logMore: MatchFile = { ...file, setup: { ...file.setup, draftPicks: file.setup.draftPicks.slice(0, 5) } };
+    const e1 = ((): Error | null => { try { assertDraftPreludeMatchesSetup(logMore); return null; } catch (e) { return e as Error; } })();
+    expect(e1, '日志比 setup 多时竟然没抛').not.toBeNull();
+    expect(String(e1?.message), '消息必须说清哪一边多').toMatch(/日志前导比 setup 多 1 条/);
+    expect(String(e1?.message)).toMatch(/日志 6 \/ setup\.draftPicks 5/);
+    // 方向 ②：setup **多**于日志前导（补一条声明）
+    const setupMore: MatchFile = { ...file, setup: { ...file.setup, draftPicks: [...file.setup.draftPicks, 'zz-extra'] } };
+    const e2 = ((): Error | null => { try { assertDraftPreludeMatchesSetup(setupMore); return null; } catch (e) { return e as Error; } })();
+    expect(e2, 'setup 比日志多时竟然没抛').not.toBeNull();
+    expect(String(e2?.message), '消息必须说清哪一边多').toMatch(/setup\.draftPicks 比日志前导多 1 条/);
+    // 正控：一致时返回前导条数、不抛（证明上面两条不是"什么都抛"）
+    expect(assertDraftPreludeMatchesSetup(file), '一致时应当返回前导条数').toBe(6);
+    // 老格式（日志无草稿前导）**不适用**这条对账：`stateAfterDraft` 走 `replayDraftFromSetup`
+    const legacy = stepArchive('g5t12-prelude-legacy', 6).file;
+    expect(draftPreludeCount(legacy.actions), '老档案的日志里没有草稿前导').toBe(0);
+    expect(() => assertDraftPreludeMatchesSetup(legacy), '老档案不该被这条对账卡住').not.toThrow();
+  });
+
+  it('★ `draftPreludeCount` 数的是**前导**（从下标 0 起连续的那几条），不是"日志里一共几条"', () => {
+    expect(draftPreludeCount([])).toBe(0);
+    expect(draftPreludeCount([{ kind: 'advance' }])).toBe(0);
+    expect(draftPreludeCount([{ kind: 'draft-pick' }, { kind: 'draft-pick' }, { kind: 'advance' }])).toBe(2);
+    // 对局中间混进来的一条不计入（那正是"前导"与"总数"的差别）
+    expect(draftPreludeCount([{ kind: 'draft-pick' }, { kind: 'advance' }, { kind: 'draft-pick' }])).toBe(1);
+  });
+});
 
 /* ------------------------------------------------------------------ *
  * 判据 1（★ 差分腿）
@@ -1137,6 +1488,27 @@ describe('T4 判据 2：n 的边界', () => {
     expect(s0.phase).toBe('turn');
     // 反空转：这条腿比的状态真的会被后续操作推动（否则"相等"可能来自两边都没动）
     expect(stateFingerprint(s0)).not.toBe(stateFingerprint(stateAtStep(f, 1)));
+  });
+
+  /**
+   * ★★ **G5 T12：`n = 0` 与 `stateAfterDraft` 的相等对**新档案**也必须成立**。
+   *
+   * 新档案的 `f.actions` 前六条是草稿动作，而 `stateAfterDraft(f)` 起跑时已经把它们走完了
+   * ⇒ `stateAtStep` 里那个循环必须**跳过**这几条（实现期实测：不跳的话第 1 条就被
+   * `performDraftPick` 的相位守卫抛成 `game not in turn phase`）。
+   * 这条腿比的是"跳过之后两边逐字节相等"，而 `n = 6`（草稿那几条走完）那一格同样要相等。
+   */
+  it('★★ T12：新档案（日志含草稿动作）上 n=0 / n=草稿条数 都等于 stateAfterDraft(f)', () => {
+    const live = t12LiveWithDraftInLog('g4t1-t12-boundary');
+    const f = live.file;
+    const logged = f.actions.filter((a) => a.kind === 'draft-pick').length;
+    expect(logged, '反空转：这份档案的日志里必须有草稿动作（否则这条腿与 T4 的老腿同一个形态）')
+      .toBe(6);
+    expect(stateFingerprint(stateAtStep(f, 0)), 'n=0').toBe(stateFingerprint(stateAfterDraft(f)));
+    expect(stateFingerprint(stateAtStep(f, logged)), `n=${logged}`).toBe(stateFingerprint(stateAfterDraft(f)));
+    expect(stateAtStep(f, 0).phase, 'n=0 时相位').toBe('turn');
+    // 反空转：跳过之后**剩下来的**那几步真的会推动状态（否则上面两条相等可能来自"都没动"）
+    expect(stateFingerprint(stateAtStep(f, logged + 1)), 'n=草稿+1').not.toBe(stateFingerprint(stateAfterDraft(f)));
   });
 
   it('n = f.actions.length 是终局（等于现场、不等于倒数第二步）', () => {

@@ -28,13 +28,13 @@
  *     ——仍然是"落点必须算出来过"，只是改成读"发生过的事"；
  *  ③.6 **握手完 ⇒ 两端真的进草稿**（G5 T11-C）：两端屏上都出现 `.draft-screen`、
  *     两端 `__g5Match` 报的种子与先选协议者相同、**两端状态指纹逐字相等**；
- *  ③.7 **真的选一步协议**（判据 3）：按"谁先选"的那一侧在池子里真鼠标拖一张卡
- *     （真 `mousedown/mousemove/mouseup`，走 `bindDraftDrag`）⇒ 选中的那一侧状态变了、
- *     没选的那一侧**一字未动**（草稿动作今天不走线上，登记在报告里）；
- *  ③.8 **两端各自走完整场草稿 ⇒ 两端状态规范串逐字相等**（判据 3 的收口）：六次选完、
- *     进对局相。走草稿走 `__g5Match.finishDraft()`（**不动驱动、不碰传输**；它调的就是拖拽落点
- *     那一句调的同一个 `cb.onDraftPick`）。⚠️ 判据 3 的"跨端草稿同步"今天**不成立**（草稿动作
- *     不过线），所以这一格证的是"同一起始状态 + 各自确定性重演"，标题里写明了这一点；
+ *  ③.7 **真的选一步协议 ⇒ 它上线了**（G5 T12）：按"谁先选"那一侧在池子里真鼠标拖一张卡
+ *     （真 `mousedown/mousemove/mouseup`，走 `bindDraftDrag`），**另一端一次都不点** ⇒
+ *     断言另一端盘面跟着变、两端规范串**逐字相同**，而且另一端**从线上收到了恰好 1 条
+ *     `act` 帧**且那一帧的 `kind` 就是 `'draft-pick'`（判据 1 的两半：一致 + 来自线上）；
+ *  ③.8 **走完整场草稿 ⇒ 两端盘面逐字相同**（判据 3 在 T12 达成）：逐轮只由**轮选者**提交
+ *     （`__g5Match.finishDraft()` 只走本端回合那一格），另一端靠帧跟上；收口时两端
+ *     `draftRound` 都到 6、规范串逐字相同、`appliedSteps` 也逐字相同；
  *  ④ 负控：把那条邀请码的**压缩段截断**再贴 ⇒ 屏上必须给**可读**的失败，且**不假装成功**
  *     （不产回示码、相位不前进）。
  *
@@ -81,8 +81,7 @@
  *    「邀请码的压缩段解不开（内容被改动或截断过）。…」⇒ 点击链路本身是通的。
  * 根因与逐行定位见 `.superpowers/g5-T9/FINDINGS.md`（`src/**` 一个字未改）。
  *
- * ## 变异镜像实测（候选修法就是一行；`--repo` 指到镜像上跑）
- *
+ * ## 变异镜像实测（候选修法就是一行；`--repo` 指到镜像上跑） *
  * 镜像：`.superpowers/g5-T9/mirror`（`src/` 的副本 + `public` 目录联接），里面只改了
  * `src/ui/net-lobby.ts:1099` 的初值：`role: null` → `role: opts.role`（外加一次诊断用的
  * 重驱动定时器，第三次运行才加）。三次运行：
@@ -473,7 +472,27 @@ async function draftScreenOf(p) {
   })()`);
 }
 
-/** 真鼠标拖拽（`bindDraftDrag` 要的是 mousedown → 动 >6px → mouseup 落在目标框里） */
+/**
+ * ★★ **G5 T12：线上帧读数**（判定集 ③.7 用它证"B 端的变化来自线上的帧"）。
+ *
+ * `netFrames()`（`src/main.ts` 的探针）读的是**挂在驱动那条传输上的入站 `act` 计数**，
+ * 而 `drive()` 读的是驱动自己的进度事实（`appliedSteps` / 队列 / 最近失败）。
+ * 两者一起看才有牙：`applied` 涨 + `act` 帧涨 + 对端**一次都没点** ⇒ 变化只可能来自那一帧。
+ *
+ * `null` = 探针读不到（页面没带 `#g5probe=1`，或还是旧版本）。
+ */
+async function wireOf(p) {
+  const raw = await p.evaluate(`(() => {
+    const m = globalThis.__g5Match;
+    if (!m) return null;
+    return JSON.stringify({ frames: m.netFrames(), drive: m.drive() });
+  })()`);
+  return parseJson(raw);
+}
+
+/**
+ * 真鼠标拖拽（`bindDraftDrag` 要的是 mousedown → 动 >6px → mouseup 落在目标框里）
+ */
 async function drag(send, label, from, to) {
   const a = { x: Math.round(from.x), y: Math.round(from.y), button: 'left', clickCount: 1 };
   const b = { x: Math.round(to.x), y: Math.round(to.y), button: 'left', clickCount: 1 };
@@ -969,6 +988,14 @@ try {
   let hEndDraft = null;
   let hReboot = null;
   let gReboot = null;
+  /**
+   * ★ T12：③.8 走完之后各端的草稿轮次与驱动 `applied`（判据 1 的第三样：两端 `appliedSteps`
+   * 必须逐字相同 —— 任务书 §8 第 2 条）。声明在这里是因为 ③.9 的"未到达"守卫要读它们。
+   */
+  let hFinalRound = -1;
+  let gFinalRound = -1;
+  let hFinalApplied = -1;
+  let gFinalApplied = -1;
   let hVerdict = null;
   let gVerdict = null;
   let draftAdmitted = false;
@@ -1108,36 +1135,142 @@ try {
   }
   say('');
 
-  /* ── ③.7 真的选一步协议（判据 3）────────────────────────────────────── */
-  say('=== ③.7 真的选一步协议：先选者那一侧在池子里拖一张卡（真鼠标）===');
+  /* ── ③.7 真的选一步协议 ⇒ **它上线了**（G5 T12 判据 1 的承重腿）────────── */
+  say('=== ③.7 真鼠标选一张协议：一端拖、另一端一次都不点 ⇒ 两端盘面逐字相同且变化来自线上的帧（T12）===');
   let stepOk = false;
   let firstPicker = null;
   if (!draftAdmitted) {
     push(false, '未到达：两端没进同一局（③.6 不通过）⇒ 选协议那几条也没到');
   } else {
-    // 谁先选：状态里那个数（两端相同，上面已经比过）
-    const starterSeat = Number(hMatch.draftStarter);
-    // 座位 -> 哪一页：`__g5Match` 不带座位，用草稿屏横幅上那句「玩家 N」反推（N-1 = 座位）
+    /**
+     * ★★ **先把两端的自动推进关掉，再决定"该轮到谁"**（G5 T12 实现期实测的竞态）。
+     *
+     * ## 症状与根因（同一份代码 9 跑 4 红，探针把两种形态都抓到了）
+     *
+     * 症状一：拖拽**什么都不发生**，而探针证明拖拽本身没问题（`down=1 / move=3 / up=1`、
+     * `elementFromPoint` 命中 `draft-card-img-wrap`、松手那一帧 `inTargetAtUp=true`）；
+     * `lastDraftSubmit` 显示 `ok:false refusal:'not-the-next-action' player:1`，而
+     * `driverSeat:0` —— **提交的是一个不该它提交的座位**。
+     *
+     * 根因：`runAutoAdvance` 的草稿守卫只看 `state.step`（`start`/`end`）与挂起效果，
+     * **没有**"轮到的是不是人"这一条 ⇒ 进草稿之后每 400ms 它就会替当前轮选者把草稿往前推。
+     * 于是 ③.6 读到的 `draftStarter`（那一次是 1）与门禁真正动手时状态里的轮次
+     * （已经推到第 2 轮、`draftStarter` 实际是 0）**不是一个时刻**：门禁据此选了"房主那一页"
+     * 去拖，而房主（座位 0）当时**不是**轮选者 ⇒ 驱动按座位拒掉。
+     *
+     * ⇒ 顺序改成：**先关门、再重读轮次、再选页**。关门之后状态只会因为门禁的
+     * `finishDraft()`（③.8）与对端发来的 `act` 帧而变 —— 这正是判据 1 要的那两个来源。
+     *
+     * ⚠️ **但不能一直关着**：草稿→对局那一屏的收尾（`playDraftToGameTransition` 的
+     * `finish()`）末尾要调 `scheduleAutoAdvance()`，而它在关闭状态下**直接早退**
+     * （`main.ts` 的 `scheduleAutoAdvance` 第一句）⇒ 那一局会停在 `phase === 'turn'`
+     * 但屏上永远是草稿页。实测（第一版）：③.8 的"两端都离开草稿屏"等 30 秒也不动，48/49。
+     * ⇒ ③.8 在**两端都到 `draftRound 6` 之后立刻打开**。
+     */
+    const hAutoOff7 = await host.evaluate('globalThis.__g5Match ? globalThis.__g5Match.setAutoAdvance(false) : null');
+    const gAutoOff7 = await guest.evaluate('globalThis.__g5Match ? globalThis.__g5Match.setAutoAdvance(false) : null');
+    notes.push(`③.7 关自动推进（返回"关之前"）：房主 ${String(hAutoOff7)} / 加入方 ${String(gAutoOff7)}`);
+    // 关掉之后**重读**一次：`starterSeat` 取"现在这一局真正的先选者"，而 `firstPicker`
+    // 取"屏上横幅说的当前轮选者"（两者在草稿第 1 轮必须一致 —— 不一致就说明屏是过期的）。
+    const hNow7 = await matchOf(host);
+    const gNow7 = await matchOf(guest);
+    const starterSeat = hNow7 === null ? Number(hMatch.draftStarter) : Number(hNow7.draftStarter);
     const hScreen = await draftScreenOf(host);
     const gScreen = await draftScreenOf(guest);
-    notes.push(`草稿屏读数：房主 ${JSON.stringify(hScreen)} / 加入方 ${JSON.stringify(gScreen)}`);
-    firstPicker = hScreen !== null && hScreen.drafter === starterSeat ? host
-      : (gScreen !== null && gScreen.drafter === starterSeat ? guest : null);
+    /**
+     * ★★ **哪一页是**哪个座位**：读驱动自己的 `seat`（`__g5Match.seat()`），**不读屏**。
+     *
+     * ## 为什么这里必须换判据（T12 实现期实测踩了两轮）
+     *
+     * 第一版用"屏上横幅那句「玩家 N」"来推座位（`N-1`）。那是**循环论证**：横幅上的
+     * `drafter` 是**对局状态**派生的（`draftRoundOwner(draftStarter, draftRound)`），
+     * 两端**完全一样** —— 它说的是"轮到座位 N 选"，**不是**"这一页是座位 N"。
+     * 于是当 `draftStarter = 1`（客人先选）时，房主那一页的横幅也写着「玩家 2」，
+     * 门禁就把**房主那一页**当成"先选者那一页"去拖 ⇒ 房主（座位 0）用座位 1 提交
+     * ⇒ 驱动按座位拒掉（`lastDraftSubmit.refusal='not-the-next-action'`，而状态一动不动）。
+     * 实测就是这个形态：`draftStarter=1 / driverSeat=0 / 提交 player=1`。
+     *
+     * 现在按"驱动吃到的座位"分页：它是**应用层自己判权限用的那个数**
+     * （`net-driver.ts` 的 `liveTurn`、`main.ts` 的 `cb.onDraftPick` 都用它），
+     * 拿它来选页才是与主代码同源。两个读数（驱动座位 / 屏上 drafter）仍然各读一次、
+     * 下面逐条比 —— 那才是"我选的页真的轮得到它"的证据。
+     */
+    const hSeat7 = Number(await host.evaluate('globalThis.__g5Match ? globalThis.__g5Match.seat() : -1'));
+    const gSeat7 = Number(await guest.evaluate('globalThis.__g5Match ? globalThis.__g5Match.seat() : -1'));
+    const bothAtRound0 = hNow7 !== null && gNow7 !== null
+      && hNow7.draftRound === 0 && gNow7.draftRound === 0 && hNow7.fp === gNow7.fp;
+    push(bothAtRound0, bothAtRound0
+      ? `动手之前两端都在草稿第 0 轮、盘面逐字相同（指纹 ${hNow7.fp}）`
+      : `动手之前这一局已经不是"两端都在草稿第 0 轮"（房主 ${JSON.stringify(hNow7)} / 加入方 ${JSON.stringify(gNow7)}）`
+        + ' —— 自动推进抢在门禁前面动过状态，后面的判定不能当真');
+    notes.push(`草稿屏读数（关掉自动推进之后重读）：房主 ${JSON.stringify(hScreen)} / 加入方 ${JSON.stringify(gScreen)}`
+      + `；draftStarter 房主 ${String(hNow7 && hNow7.draftStarter)} / 加入方 ${String(gNow7 && gNow7.draftStarter)}`
+      + `；驱动座位 房主 ${hSeat7} / 加入方 ${gSeat7}`);
+    push(hSeat7 >= 0 && gSeat7 >= 0 && hSeat7 !== gSeat7
+      && (starterSeat === hSeat7 || starterSeat === gSeat7)
+      && hScreen !== null && gScreen !== null
+      && hScreen.drafter === starterSeat && gScreen.drafter === starterSeat,
+    `两页的座位不同（房主 ${hSeat7} / 加入方 ${gSeat7}）且两端屏上都写着"轮到座位 ${starterSeat} 选"`
+      + `（房主屏 drafter=${String(hScreen && hScreen.drafter)} / 加入方屏 drafter=${String(gScreen && gScreen.drafter)}）`);
+    /**
+     * 选页：**驱动座位等于当前轮选者的那一页**（两端屏上的横幅说的是同一件事，不参与选页）。
+     */
+    firstPicker = starterSeat === hSeat7 ? host : (starterSeat === gSeat7 ? guest : null);
     push(firstPicker !== null, firstPicker !== null
-      ? `找出了先选协议的那一页（座位 ${starterSeat}，房主屏 drafter=${String(hScreen && hScreen.drafter)}`
-        + ` / 加入方屏 drafter=${String(gScreen && gScreen.drafter)}）`
-      : `两端屏上都读不出"轮到谁选"（房主 ${JSON.stringify(hScreen)} / 加入方 ${JSON.stringify(gScreen)}）`);
-    if (firstPicker !== null) {
+      ? `先选协议那一页 = ${firstPicker === host ? '房主' : '加入方'}（座位 ${starterSeat}）`
+      : `两端驱动座位（${hSeat7} / ${gSeat7}）里没有当前轮选者（${starterSeat}）—— 座位分配有问题`);
+    if (firstPicker !== null && bothAtRound0) {
       const label = firstPicker === host ? '房主' : '加入方';
       const other = firstPicker === host ? guest : host;
+      const otherLabel = firstPicker === host ? '加入方' : '房主';
       const before = await matchOf(firstPicker);
       const otherBefore = await matchOf(other);
+      const wireBefore = await wireOf(firstPicker);
+      const peerWireBefore = await wireOf(other);
       // 拖拽：从池子里第一张卡拖到**先选者那一侧**的选择框（`.draft-picks.pN`）
       const from = await centerOf(firstPicker, '.draft-card');
       const to = await centerOf(firstPicker, `.draft-picks.p${starterSeat + 1}`);
       if (from === null || to === null) {
         push(false, `找不到可拖的卡或目标选择框（卡 ${JSON.stringify(from)} / 框 ${JSON.stringify(to)}）`);
       } else {
+        /**
+         * ⚠️ **拖拽前的探针**（只进 `notes`，不参与判定）：在**捕获阶段**把三种鼠标事件、
+         * 当时的元素位置、以及按下那一刻 `elementFromPoint` 命中的类名都记下来。
+         * 拖拽失灵有四种形态（事件没到页面 / 事件到了但没触发 `bindDraftDrag` /
+         * 回调走到了但被驱动的轮次闸拒 / 回调抛错），只报一句"没选中"是查不动的。
+         *
+         * ⚠️ 它必须排在 `from` / `to` **之后**（实测踩过：写在前面会撞上 `const` 的
+         * 暂时性死区，报 `Cannot access 'from' before initialization`，整个工具以环境错误退出）。
+         */
+        await firstPicker.evaluate(`(() => {
+          const w = { down: 0, move: 0, up: 0, errors: [], downAt: null, upAt: null,
+                      cardAtDown: null, cardHitAtPress: null, hitAtUp: null, inTargetAtUp: null };
+          globalThis.__dragWatch = w;
+          globalThis.__dragPlan = { from: ${JSON.stringify({ x: Math.round(from.x), y: Math.round(from.y) })},
+                                   to: ${JSON.stringify({ x: Math.round(to.x), y: Math.round(to.y) })} };
+          window.addEventListener('error', (e) => w.errors.push(String(e.message)), true);
+          document.addEventListener('mousedown', (e) => {
+            w.down += 1;
+            if (w.downAt !== null) return;
+            w.downAt = { x: e.clientX, y: e.clientY, target: e.target ? String(e.target.className) : null };
+            const card = document.querySelector('.draft-card');
+            const b = card ? card.getBoundingClientRect() : null;
+            w.cardAtDown = b === null ? null
+              : { x: Math.round(b.left), y: Math.round(b.top), w: Math.round(b.width), h: Math.round(b.height) };
+            const el = document.elementFromPoint(${Math.round(from.x)}, ${Math.round(from.y)});
+            w.cardHitAtPress = el ? String(el.className) : null;
+          }, true);
+          document.addEventListener('mousemove', () => { w.move += 1; }, true);
+          document.addEventListener('mouseup', (e) => {
+            w.up += 1;
+            if (w.upAt !== null) return;
+            w.upAt = { x: e.clientX, y: e.clientY };
+            const el = document.elementFromPoint(e.clientX, e.clientY);
+            w.hitAtUp = el ? String(el.className) : null;
+            w.inTargetAtUp = el ? (el.closest('.draft-picks.p${starterSeat + 1}') !== null) : false;
+          }, true);
+          return true;
+        })()`);
         await drag(firstPicker.send, label, from, to);
         // 等读数变（`draftRound` 加一）—— 只等 DOM 会读到重画前的那一帧
         const t1 = Date.now();
@@ -1147,6 +1280,37 @@ try {
           if (after !== null && before !== null && after.draftRound === before.draftRound + 1) break;
           await sleep(300);
         }
+        /**
+         * ⚠️ **拖拽失败时的现场诊断**（只进 `notes`，不参与判定）：拖拽这条路上有四个可能
+         * 失灵的地方（没点中卡 / 没落进目标框 / 回调被驱动的轮次闸拒 / 回调抛错），
+         * 只报一句"没选中"是查不动的。这里把"坐标 + 当前 drafter + 驱动最近一次失败"一起抄下来。
+         */
+        const dragDiag = await firstPicker.evaluate(`(() => {
+          const m = globalThis.__g5Match;
+          const pool = document.querySelector('.draft-card');
+          const target = document.querySelector(${JSON.stringify(`.draft-picks.p${starterSeat + 1}`)});
+          const r = (el) => { if (!el) return null; const b = el.getBoundingClientRect(); return { x: Math.round(b.left), y: Math.round(b.top), w: Math.round(b.width), h: Math.round(b.height) }; };
+          const hit = globalThis.__lastDragHit ?? null;
+          return JSON.stringify({
+            poolRect: r(pool), targetRect: r(target),
+            elementsAtFrom: (() => { const el = document.elementFromPoint(${Math.round(from.x)}, ${Math.round(from.y)}); return el ? el.className : null; })(),
+            elementsAtTo: (() => { const el = document.elementFromPoint(${Math.round(to.x)}, ${Math.round(to.y)}); return el ? String(el.className) : null; })(),
+            drive: m ? m.drive() : null, hit,
+            lastDraftSubmit: m ? m.lastDraftSubmit() : null,
+            driverSeat: m ? m.seat() : null,
+            handoffNow: (() => {
+              const h = globalThis.__g5Handoff;
+              return h === null || h === undefined ? null
+                : { seat: h.seat, handSeat: h.handSeat, driverSeat: h.driverSeat, role: h.role };
+            })(),
+            currentDrafter: (() => {
+              const b = document.querySelector('.draft-turn-banner');
+              return b ? String(b.className) + '|' + String(b.textContent).slice(0, 40) : null;
+            })(),
+            events: globalThis.__dragWatch ?? null,
+          });
+        })()`);
+        notes.push(`③.7 拖拽现场（${label}，座位 ${starterSeat}）：${String(dragDiag)}`);
         const picked = after !== null && before !== null && after.draftRound === before.draftRound + 1;
         push(picked, picked
           ? `${label}真的选中了一张协议（草稿轮次 ${before.draftRound} -> ${after.draftRound}，`
@@ -1158,53 +1322,127 @@ try {
           ? '选中之后那一侧的状态指纹变了（不是"点了但状态没动"）'
           : `拖拽之后状态指纹没变：${String(before && before.fp)} -> ${String(after && after.fp)}`);
         /**
-         * ★ **没选的那一侧不许动**（草稿动作今天不走线上，见报告里的缺口登记）。
+         * ★★ **T12 的承重腿：另一端一次都没点，却被那一帧带到了同一个盘面。**
          *
-         * 这一条把"选协议是本地发生的"这件事**如实钉住**：它的状态必须与拖拽之前**逐字相同**。
-         * 如果它变了，说明草稿动作被同步过去了（那是下一段的事）；如果它"变了但两端指纹随后相等"，
-         * 那才是真正的分叉风险。
+         * `other` 这一侧从头到尾**只有 CDP 在读**（没有任何 click / drag 落在它身上），
+         * 而它的自动推进在上面已经关掉 ⇒ 它的状态变了就只可能是收到了帧。
          */
-        const otherAfter = await matchOf(other);
-        const otherUntouched = otherAfter !== null && otherBefore !== null && otherAfter.fp === otherBefore.fp;
-        push(otherUntouched, otherUntouched
-          ? `没选的那一侧状态一字未动（指纹仍 ${String(otherBefore && otherBefore.fp)}）—— 草稿动作今天不走线上`
-          : `没选的那一侧状态变了：${String(otherBefore && otherBefore.fp)} -> ${String(otherAfter && otherAfter.fp)}`);
-        stepOk = picked;
+        const tPeer = Date.now();
+        let otherAfter = null;
+        let peerWireAfter = null;
+        while (Date.now() - tPeer < budgetMs) {
+          otherAfter = await matchOf(other);
+          peerWireAfter = await wireOf(other);
+          if (after !== null && otherAfter !== null && otherAfter.fp === after.fp) break;
+          await sleep(150);
+        }
+        const propagated = after !== null && otherAfter !== null && otherAfter.fp === after.fp
+          && otherAfter.draftRound === after.draftRound;
+        push(propagated, propagated
+          ? `★ ${otherLabel}一次都没点，盘面跟着走到了同一个（指纹 ${String(otherAfter && otherAfter.fp)}，`
+            + `草稿轮次 ${String(otherAfter && otherAfter.draftRound)}）`
+          : `★ ${otherLabel}没有跟上：它 ${String(otherBefore && otherBefore.fp)} -> ${String(otherAfter && otherAfter.fp)}`
+            + ` / 拖拽那一侧 ${String(after && after.fp)}（草稿轮次 ${String(otherAfter && otherAfter.draftRound)}`
+            + ` vs ${String(after && after.draftRound)}）`);
+        /**
+         * ★★ **而它一定是逐字相同、不只是哈希相同**（判据 1 明写"`stableStringify` 整串，
+         * 不许只比长度"）⇒ 这里把两端的规范串**整串**取回来比一次（`===`）。
+         * 上面的 `fp` 只是给失败信息用的诊断（哈希相等几乎必然是同一串，但判据不靠它）。
+         */
+        const hStr7 = await host.evaluate('globalThis.__g5Match ? globalThis.__g5Match.state() : null');
+        const gStr7 = await guest.evaluate('globalThis.__g5Match ? globalThis.__g5Match.state() : null');
+        const literalSame = typeof hStr7 === 'string' && hStr7.length > 0 && hStr7 === gStr7;
+        push(literalSame, literalSame
+          ? `两端的盘面规范串逐字相同（各 ${hStr7.length} 字符）`
+          : `两端的盘面规范串不同：房主 ${typeof hStr7 === 'string' ? hStr7.length : 'null'} 字符`
+            + ` / 加入方 ${typeof gStr7 === 'string' ? gStr7.length : 'null'} 字符`);
+        /**
+         * ★★ **变化来自线上的帧**（判据 1 的另一半）：对端收到的 `act` 帧数必须**恰好 +1**，
+         * 且最后一帧的 `kind` 就是草稿选牌那一格（应用层新增的 `'draft-pick'`）。
+         *
+         * 为什么"收到一帧"这件事必须单独证：上面那些指纹相等**只**证明"两端一致"，
+         * 而"一致"也可能来自"两边各自算出了同一个结果"（那正是 T12 之前的形态：同一种子 +
+         * 同一个 `draftStarter` ⇒ 各自算也能算出同一张牌）。所以这里钉的是**传播**本身。
+         */
+        const peerFramesBefore = peerWireBefore === null ? -1 : Number(peerWireBefore.frames.act);
+        const peerFramesAfter = peerWireAfter === null ? -1 : Number(peerWireAfter.frames.act);
+        const lastFrameText = peerWireAfter === null ? null : peerWireAfter.frames.last;
+        const lastFrame = parseJson(lastFrameText);
+        const oneFrame = peerFramesBefore >= 0 && peerFramesAfter === peerFramesBefore + 1;
+        push(oneFrame, oneFrame
+          ? `${otherLabel}**从线上**收到了恰好 1 条 act 帧（${peerFramesBefore} -> ${peerFramesAfter}）`
+          : `${otherLabel}收到的 act 帧数不对：${peerFramesBefore} -> ${peerFramesAfter}`
+            + '（没收到 ⇒ 变化不是线上来的；收到多条 ⇒ 有别的东西在写它）');
+        /**
+         * ⚠️ **这一格没有关自动推进**（理由写在上面的注释里）：所以"对端收到了帧"这条
+         * **必须**钉得比"两端指纹相等"更紧 —— 帧数恰好 +1 是关键。自动推进不产生 `act` 帧
+         * （它走本端提交），所以帧计数仍然只反映**线上来的东西**。
+         */
+        const frameIsDraftPick = lastFrame !== null && lastFrame.t === 'act'
+          && lastFrame.action && lastFrame.action.kind === 'draft-pick';
+        push(frameIsDraftPick, frameIsDraftPick
+          ? `那一帧的 kind 就是草稿选牌那一格（action.kind=draft-pick，action.args=${JSON.stringify(lastFrame.action.args)}）`
+          : `那一帧不是草稿选牌：${JSON.stringify(lastFrameText)}`);
+        /**
+         * ★ 对端的驱动进度事实也必须只涨 1，而且**没有积压、没有失败**（`applied` 涨而
+         * 队列里留着帧就说明"帧到了、没落地"）。
+         */
+        const peerDriveAfter = peerWireAfter === null ? null : peerWireAfter.drive;
+        const peerAppliedBefore = peerWireBefore === null ? -1 : Number(peerWireBefore.drive.applied);
+        const appliedOne = peerDriveAfter !== null && Number(peerDriveAfter.applied) === peerAppliedBefore + 1
+          && peerDriveAfter.pending === 0 && peerDriveAfter.failure === null;
+        push(appliedOne, appliedOne
+          ? `${otherLabel}的驱动只应用了那一步（applied ${peerAppliedBefore} -> ${String(peerDriveAfter && peerDriveAfter.applied)}，`
+            + `队列 ${String(peerDriveAfter && peerDriveAfter.pending)} 帧，无失败）`
+          : `${otherLabel}的驱动读数不对：applied ${peerAppliedBefore} -> ${String(peerDriveAfter && peerDriveAfter.applied)}`
+            + `，pending=${String(peerDriveAfter && peerDriveAfter.pending)}，failure=${String(peerDriveAfter && peerDriveAfter.failure)}`);
+        // 提交方那一侧：它也必须是"发出去了一条"（`applied` 涨、无失败）
+        const selfWire = await wireOf(firstPicker);
+        const selfApplied = selfWire === null ? -1 : Number(selfWire.drive.applied);
+        const selfAppliedBefore = wireBefore === null ? -1 : Number(wireBefore.drive.applied);
+        const selfOk = wireBefore !== null && selfWire !== null
+          && selfApplied === selfAppliedBefore + 1 && selfWire.drive.failure === null;
+        push(selfOk, selfOk
+          ? `${label}自己那一侧也正好应用了一步（applied ${selfAppliedBefore} -> ${selfApplied}，无失败）`
+          : `${label}自己那一侧的驱动读数不对：applied ${selfAppliedBefore} -> ${selfApplied}`
+            + `，failure=${String(selfWire && selfWire.drive.failure)}`);
+        notes.push(`③.7 帧读数：拖拽侧 ${JSON.stringify(wireBefore && wireBefore.drive)}`
+          + ` -> ${JSON.stringify(selfWire && selfWire.drive)}；`
+          + `对端 ${JSON.stringify(peerWireBefore && peerWireBefore.frames)}`
+          + ` -> ${JSON.stringify(peerWireAfter && peerWireAfter.frames)}`);
+        stepOk = picked && propagated;
       }
     }
   }
   say('');
 
-  /* ── ③.8 同一起始状态 + 各自确定性重演 ⇒ 结果逐字相等（**不是**跨端同步）────────── */
-  say('=== ③.8 同一起始状态 + 各自确定性重演：两端独立走完六次 ⇒ 结果逐字相等（判据 3 未达成）===');
+  /* ── ③.8 把草稿走完：**逐轮只由轮选者提交**，另一侧靠帧跟上（G5 T12）────── */
+  say('=== ③.8 走完草稿：逐轮只由轮选者提交（另一端靠线上的帧跟上）⇒ 两端盘面逐字相同 ===');
   if (!stepOk) {
     push(false, '未到达：上一步没真的选中（③.7 不通过）⇒ 收口那条也没到');
   } else {
     /**
-     * ★★ **这一格证的是"同一起始状态 + 各自确定性重演"，不是"跨端同步"**（评审 §2 的收口）。
+     * ★★ **T12 把这一格从"各自重演"改成了"真的跨端走完"**（判据 3 在 T12 达成）。
      *
-     * ## 为什么不能写成判据 3 原文那条
+     * ## 改之前的形态（T11-C，评审 §2 的收口）
      *
-     * 任务书判据 3 写的是"进草稿后两端各走一步真实选协议 ⇒ 两端状态指纹相等"。**今天做不到**：
-     * 草稿动作（`performDraftPick`）**不在驱动的 `ActionKind` 里**（`src/core/game.ts:22`
-     * 那张表只有对局动作），协议里也没有草稿报文 ⇒ 一次本地选择**只改本端状态**。
-     * 实测（2026-09-19，本工具第一版）：拖过一次之后
-     * `房主 {"picks":1,"drafter":1} / 加入方 {"picks":0,"drafter":0}` —— 两端各自停在自己的
-     * 草稿上，于是"轮次对不上"是**必然**的，不是竞态。⇒ **判据 3 未达成**，这条缺口登记在报告里。
+     * 那时草稿动作**不过线**，所以这一格只能证"同一起始状态 + 各自确定性重演"：
+     * 两端各自 `finishDraft()` 走完六次本地选牌 ⇒ 结果逐字相等（同一种子 + 同一
+     * `draftStarter` ⇒ 两端算出同一局）。标题里写明了"**不是**跨端同步"。
      *
-     * ## 所以这一格改成什么（以及它**能**证明什么）
+     * ## 现在（T12）：真的同步
      *
-     * 两端**各自**从同一局出发、各自独立走完六次本地选牌 ⇒ 结果状态**逐字相等**。
-     * 能证的：`同一种子 + 同一 draftStarter ⇒ 两端算的是同一局`（轮选顺序由 `draftStarter` 派生、
-     * 池子由 `seed` 派生 ⇒ 六个 `defId` 相同、分配相同、洗牌相同），且这**不是**两端在同步 ——
-     * 两个 Chrome 是独立进程，相等只可能来自"同一局 + 同一条确定性序列"。
-     * **不能证**的：任何跨端传播。跨端传播那一条由 ③.9（对局相的 `act` 帧）负责。
+     * 草稿选牌走应用层的 `'draft-pick'` 动作 ⇒ 两端**只能用同一条** `act` 通道传播。
+     * 于是 `finishDraft()` 也变了语义（见 `src/main.ts` 的注释）：它**只走本端回合**那一格
+     * （不是本端回合就停手），因为驱动会把非本端的提交拒掉、而这里若继续转圈就是死循环。
+     * ⇒ 门禁要在两端**交替**调它，直到两端都到 `draftRound 6`：
+     * 每一轮的轮选者由 `draftRoundOwner` 决定（两端一致），轮选者那一侧提交、另一侧收帧。
      *
-     * 顺带：③.7 已经用真鼠标证明"没选的那一侧一字未动"—— 那正是"草稿不走线上"的直接读数。
+     * ## 三条判据（都是"跨端"口径，不再是"各自算")
      *
-     * 走草稿用的是 `__g5Match.finishDraft()`（**不重开对局、不动驱动、不碰传输**）：
-     * 它调的就是拖拽落点那一句调的同一个 `cb.onDraftPick`（`src/ui/render.ts:4679`）
-     * —— 不是第二套实现。③.7 已经用真鼠标钉过那条回调能通。
+     *  1. 两端**都**到 `draftRound >= 6`（每一轮都真的有人提交、有人跟上）；
+     *  2. 两端的盘面规范串**逐字相同**（不是只比长度）；
+     *  3. 两端的 `appliedSteps` **逐字相同**（任务书 §8 第 2 条：草稿动作进来之后仍必须一致）。
      *
      * ## ⚠️ 为什么**不能**用 `rebootDraft()` 来"回到起点"（实测踩过，值得写下来）
      *
@@ -1214,23 +1452,55 @@ try {
      * `submit ok=false refusal=offline`，而 `lastFailure()` 是 `null` —— 不报错的失效）。
      * ⇒ "重来一局再走线上"这条路在同一局内**不存在**；`finishDraft()` 才是这一格要的。
      */
-    hReboot = parseJson(await host.evaluate('JSON.stringify(globalThis.__g5Match ? globalThis.__g5Match.finishDraft() : null)'));
-    gReboot = parseJson(await guest.evaluate('JSON.stringify(globalThis.__g5Match ? globalThis.__g5Match.finishDraft() : null)'));
-    const hSteps = hReboot === null ? -1 : Number(hReboot.steps);
-    const gSteps = gReboot === null ? -1 : Number(gReboot.steps);
-    // ③.7 已经在先选那一侧真鼠标选过一次 ⇒ 它这边只剩 5 步，另一侧仍是 6 步。
-    // 断言写成"**步数不同、但两边都到达了 `draftRound 6`**"（那才是不变量）。
-    push(hSteps >= 0 && gSteps >= 0 && hSteps !== gSteps, hSteps >= 0 && gSteps >= 0
-      ? `两端各自把本机剩下的草稿选完（房主 ${hSteps} 步 / 加入方 ${gSteps} 步；`
-        + `差 1 步 = ③.7 真鼠标选过的那一次只落在其中一侧）`
-      : `有一端没走完：房主 ${hSteps} 步 / 加入方 ${gSteps} 步`);
-    const hStr = hReboot === null ? null : String(hReboot.state);
-    const gStr = gReboot === null ? null : String(gReboot.state);
-    const literalEq = typeof hStr === 'string' && hStr.length > 0 && hStr === gStr;
-    // ⚠️ 它比的是"**各自重演**的终态相同"（⇒ 两端算的是同一局），**不是**"选牌同步到对端"。
-    push(literalEq, literalEq
-      ? `两端各自重演六个本地选择的终态**逐字相同**（各 ${hStr.length} 字符，指纹 ${hash32(hStr)}）`
-      : `两端重演的终态不同：房主 ${String(hStr && hStr.length)} 字符（${hStr === null ? 'null' : hash32(hStr)}）`
+    const hRoundBefore = await hMatch === null ? -1 : Number(hMatch.draftRound);
+    const gRoundBefore = gMatch === null ? -1 : Number(gMatch.draftRound);
+    let hSteps = 0;
+    let gSteps = 0;
+    const tDraft = Date.now();
+    let hRound = hRoundBefore;
+    let gRound = gRoundBefore;
+    while ((hRound < 6 || gRound < 6) && Date.now() - tDraft < budgetMs) {
+      const hR = parseJson(await host.evaluate('JSON.stringify(globalThis.__g5Match ? globalThis.__g5Match.finishDraft() : null)'));
+      hSteps += hR === null ? 0 : Number(hR.steps);
+      const gR = parseJson(await guest.evaluate('JSON.stringify(globalThis.__g5Match ? globalThis.__g5Match.finishDraft() : null)'));
+      gSteps += gR === null ? 0 : Number(gR.steps);
+      // 让两端的 `submit` / `drain` 有机会跑（帧是**推送**的，宿主在每次重画前 `arm`）
+      for (let i = 0; i < 10; i += 1) {
+        await sleep(120);
+        hRound = Number(await host.evaluate('globalThis.__g5Match ? globalThis.__g5Match.draftRound() : -1'));
+        gRound = Number(await guest.evaluate('globalThis.__g5Match ? globalThis.__g5Match.draftRound() : -1'));
+        if (hRound >= 6 && gRound >= 6) break;
+      }
+      hReboot = hR;
+      gReboot = gR;
+    }
+    /**
+     * ★★ **两端都到 `draftRound 6` ⇒ 立刻把自动推进打开**（把 ③.7 关掉的那一把还回去）。
+     *
+     * 为什么必须在这里打开（而不是等 ③.9 之前）：草稿→对局那一屏的收尾
+     * （`playDraftToGameTransition` → `finish()` → `rerender()` → `scheduleAutoAdvance()`）
+     * 在关闭状态下**画不出牌桌**（`scheduleAutoAdvance` 第一句就 `return`）⇒ 那一局会永远
+     * 停在草稿页上（实测：48/49，红的就是"两端都离开草稿屏"那一条）。
+     * 而这里打开是安全的：草稿已经打完（`phase === 'turn'`），过渡期间 `runAutoAdvance`
+     * 有 `transitioning` 守卫 ⇒ 它不会抢在过渡中间动状态。
+     */
+    const hAutoOn8 = await host.evaluate('globalThis.__g5Match ? globalThis.__g5Match.setAutoAdvance(true) : null');
+    const gAutoOn8 = await guest.evaluate('globalThis.__g5Match ? globalThis.__g5Match.setAutoAdvance(true) : null');
+    notes.push(`③.8 草稿打完，把自动推进打开（返回"改之前"）：房主 ${String(hAutoOn8)} / 加入方 ${String(gAutoOn8)}`);
+    push(hSteps + gSteps > 0 && hSteps >= 0 && gSteps >= 0, hSteps + gSteps > 0
+      ? `两端交替把草稿走完（房主提交 ${hSteps} 步 / 加入方提交 ${gSteps} 步；`
+        + `每一轮只由轮选者提交，另一侧收帧跟上）`
+      : `两端一步都没提交出去（房主 ${hSteps} / 加入方 ${gSteps}）—— 草稿卡住了`);
+    push(hRound >= 6 && gRound >= 6, hRound >= 6 && gRound >= 6
+      ? `两端的草稿轮次都到 6（房主 ${hRound} / 加入方 ${gRound}）`
+      : `有一端没走完草稿：房主 ${hRound} / 加入方 ${gRound}`);
+    const hStr = await host.evaluate('globalThis.__g5Match ? globalThis.__g5Match.state() : null');
+    const gStr = await guest.evaluate('globalThis.__g5Match ? globalThis.__g5Match.state() : null');
+    const literalEqAtDraft = typeof hStr === 'string' && hStr.length > 0 && hStr === gStr;
+    // ★ 这一格的措辞按 T12 改口：两端是**真的同步**（草稿动作走 `act` 帧），不是"各自重演"。
+    push(literalEqAtDraft, literalEqAtDraft
+      ? `两端走完六次草稿之后的盘面规范串**逐字相同**（各 ${hStr.length} 字符，指纹 ${hash32(hStr)}）`
+      : `两端走完草稿之后的盘面不同：房主 ${String(hStr && hStr.length)} 字符（${hStr === null ? 'null' : hash32(hStr)}）`
         + ` / 加入方 ${String(gStr && gStr.length)} 字符（${gStr === null ? 'null' : hash32(gStr)}）`);
     hEndDraft = await matchOf(host);
     gEndDraft = await matchOf(guest);
@@ -1256,23 +1526,67 @@ try {
     push(hTurn === 0 && gTurn === 0, hTurn === 0 && gTurn === 0
       ? '两端都离开了草稿屏（六次选完 ⇒ 进对局相）'
       : `还有一页停在草稿屏：房主 ${hTurn} 个 / 加入方 ${gTurn} 个（等了 ${String(Date.now() - tS)}ms）`);
+    /**
+     * ★★ **两端的驱动进度事实必须逐字相同**（任务书 §8 第 2 条：草稿动作进来之后
+     * `appliedSteps` 是否仍逐字一致 —— 要有腿，不许只推理）。
+     *
+     * ⚠️ **测量的时刻要紧**：这一格**没有关自动推进**（理由见 ③.7 的注释），而草稿打完那一刻
+     * 两端的过渡动画各自在飞 ⇒ 抢在过渡中间读 `appliedSteps` 会读到"一端刚走完、另一端还在
+     * 过渡"的瞬时差。所以这条放在**两端都离开草稿屏之后**（上一句刚等过），那时两端的
+     * `act` 通道已经安静下来，读到的才是同一个位置。
+     */
+    const hDrive8 = await wireOf(host);
+    const gDrive8 = await wireOf(guest);
+    hFinalApplied = hDrive8 === null ? -1 : Number(hDrive8.drive.applied);
+    gFinalApplied = gDrive8 === null ? -1 : Number(gDrive8.drive.applied);
+    hFinalRound = hRound;
+    gFinalRound = gRound;
+    /**
+     * ★ 再比一次**盘面逐字相同** —— 这一次是在**过渡都结束了**之后（T12 实现期实测的时序）：
+     * 草稿打完那一刻两端的过渡动画各自在飞、自动推进也各自在跑，抢在中间读会读到瞬时差。
+     */
+    const hStrSettled = await host.evaluate('globalThis.__g5Match ? globalThis.__g5Match.state() : null');
+    const gStrSettled = await guest.evaluate('globalThis.__g5Match ? globalThis.__g5Match.state() : null');
+    const literalEq = typeof hStrSettled === 'string' && hStrSettled.length > 0 && hStrSettled === gStrSettled;
+    push(literalEq, literalEq
+      ? `过渡结束之后两端的盘面仍然逐字相同（各 ${hStrSettled.length} 字符，指纹 ${hash32(hStrSettled)}）`
+      : `过渡之后两端盘面不同：房主 ${String(hStrSettled && hStrSettled.length)} 字符`
+        + `（${hStrSettled === null ? 'null' : hash32(hStrSettled)}）`
+        + ` / 加入方 ${String(gStrSettled && gStrSettled.length)} 字符`
+        + `（${gStrSettled === null ? 'null' : hash32(gStrSettled)}）`);
+    const appliedSame = hFinalApplied >= 0 && gFinalApplied >= 0 && hFinalApplied === gFinalApplied;
+    push(appliedSame, appliedSame
+      ? `两端的驱动进度事实逐字相同：appliedSteps 都是 ${hFinalApplied}（草稿几步也走的是同一条 act 通道）`
+      : `两端的 appliedSteps 不同：房主 ${hFinalApplied} / 加入方 ${gFinalApplied}`
+        + '（状态碰巧一样也不行：重连追平就靠这个数）');
+    // 顺便钉一次"两边都没有积压、也没有失败"（帧到了没落地会在 pending 里露出来）
+    const noBacklog8 = hDrive8 !== null && gDrive8 !== null
+      && hDrive8.drive.pending === 0 && gDrive8.drive.pending === 0
+      && hDrive8.drive.failure === null && gDrive8.drive.failure === null;
+    push(noBacklog8, noBacklog8
+      ? '两端都没有积压也没有驱动失败（草稿走完之后队列是空的）'
+      : `驱动侧不干净：房主 ${JSON.stringify(hDrive8 && hDrive8.drive)} / 加入方 ${JSON.stringify(gDrive8 && gDrive8.drive)}`);
     notes.push(`走完草稿：房主 ${JSON.stringify(hEndDraft)} / 加入方 ${JSON.stringify(gEndDraft)}，`
-      + `规范串逐字相同=${literalEq}`);
+      + `规范串逐字相同=${literalEq}，applied ${hFinalApplied}/${gFinalApplied}`);
   }
   say('');
   /* ── ③.9 真的打一步对局动作（`createNetDriver` 在真浏览器里**唯一承重**的行为腿）──── */
   say('=== ③.9 走一步真对局动作：一端提交、另一端靠那一帧跟上（座位 + 锁步驱动）===');
   if (!stepOk || hReboot === null || gReboot === null
+    || hFinalRound < 6 || gFinalRound < 6
     || hEndDraft === null || gEndDraft === null || hEndDraft.draftRound < 6 || gEndDraft.draftRound < 6) {
     push(false, '未到达：草稿没走完（③.8 不通过）⇒ 对局动作那条也没到');
   } else {
     /**
-     * ★★ **这一条是 `createNetDriver` 在真浏览器里唯一**承重**的行为腿**。
+     * ★★ **这一条是 `createNetDriver` 在真浏览器里承重的行为腿**。
      *
      * ## 为什么 ③.6~③.8 全绿还不够
      *
-     * 那三条都停在**草稿相**，而草稿动作**根本不经过驱动**（它不在 `ActionKind` 里）。
-     * 于是"驱动接线是否真的在工作"在那几条上**完全没有承重**。
+     * ⚠️ **T12 起这句话要改口**：草稿动作从 T12 起**已经**走驱动了（③.7 的承重腿就是它），
+     * 所以"草稿相不走驱动"这个理由**不再成立**。这一格现在补的是**对局相**那一半：
+     * 席位/回合的闸门在两种相位下走的是**不同分支**（草稿看 `draftRoundOwner`、对局看
+     * `turnPlayer` 与挂起效果的应答者），而 ③.7/③.8 只覆盖草稿那一条。⇒ 换来的是
+     * "草稿分支没有把对局分支踩坏"这条事实（M5 座位取反、M6 把本地驱动交给接线会在这里红）。
      *
      * ## ★★ 为什么必须先**关掉本机自动推进**（评审阻断项 3 的第二条）
      *

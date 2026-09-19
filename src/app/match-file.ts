@@ -4,8 +4,15 @@
  * 一份数据，五处复用（§3.2）：存档 / 录像 / 断线重连凭据 / 联机传输内容 / 观战中途加入。
  * 因此这里**只有纯数据与纯函数**：无 DOM、无存储、无网络 —— 联机与浏览器能力都不该渗进来。
  *
- * 与设计稿 §3.1 的**唯一差异**：`setup` 多了 `draftPicks` / `bannedProtocols` 两个**顺序快照**。
- * 理由见 setup 字段的注释（缺它 ban 模式无法完整重放）。
+ * 与设计稿 §3.1 的差异有**两处**（改一处都要回到这一行来改）：
+ *  1. `setup` 多了 `draftPicks` / `bannedProtocols` 两个**顺序快照**（理由见 setup 字段的注释）；
+ *  2. ★ G5 T12（用户裁决 A + (i)）：`ActionRecord.kind` 的类型是 `AppActionKind`，
+ *     **比设计稿的 `ActionKind` 宽一格** —— 多了应用层的草稿选牌 `'draft-pick'`。
+ *     **真值是动作流**：新档案里草稿选牌就在 `actions` 里，`setup.draftPicks` 降级为
+ *     **派生读数**（它仍照写，因为它恒等于动作流里那串 defId，腿见
+ *     `tests/app/match-replay.test.ts` 的 T12 那一组）。老档案（草稿只在 setup 里、
+ *     `actions` 里没有草稿动作）照旧由 `replayDraftFromSetup` 重演 —— 两条路各自有腿，
+ *     且**同一次重放只走一条**（判据由 `stateAfterDraft` 挑路，见那里的注释）。
  */
 import type { CreateGameOptions } from '../core/state/create';
 import type { ActionKind } from '../core/game';
@@ -16,13 +23,36 @@ import { getProtocolDef } from '../data/demo';
 export const MATCH_FILE_FORMAT = 'compile-match';
 export const MATCH_FILE_VERSION = 1;
 
+/**
+ * ★★ **G5 T12：档案动作词表 = 引擎的 8 个 + 应用层的草稿选牌**（用户 2026-09-19 裁决 A）。
+ *
+ * 为什么那一格加在**这里**而不是 `src/core/game.ts` 的 `ActionKind` 里（那条路被否，见 D28）：
+ * 草稿选牌**不是引擎动作**（`performDraftPick` 是 `src/core/state/create.ts` 的草稿原语，
+ * 不在 `executeAction` 的 8 个分支里）⇒ 把它塞进 `ActionKind` 会同时改 core 与那一整批既有的
+ * 穷尽性腿。改在**应用层**：线上格式本来就只要求 `kind` 是字符串（`src/net/protocol.ts:192-196`），
+ * 拦人的一直是"档案校验 + `applyRecordedAction` 的穷尽 switch"这两处应用层的东西。
+ *
+ * ⚠️ **它与 core 的 `DraftActionKind`（`'pick' | 'ban'`，`create.ts:129`）不是一回事，且刻意不同名**：
+ * 那个是"**这一格草稿动作是什么**"（引擎侧的草稿原语分类），这个是"**档案里这一条记录是什么**"。
+ * 同名的后果是两处会被读成一个词，而这正是本仓最怕的"同一概念长出两个叫法"的反面：
+ * 一个词长出两个概念。**联机草稿只做 pick 那一半**（`draftMode` 在 T11-C 定为常量 `'normal'`
+ * ⇒ ban 在联机里不可达），所以下面**只有** `'draft-pick'` 一个取值，`ban` 那条登记为缺口。
+ */
+export const DRAFT_PICK_KIND = 'draft-pick';
+export type AppActionKind = ActionKind | typeof DRAFT_PICK_KIND;
+
 /** §3.1：`via` 是**档案层元数据，不进引擎状态**（§3.1 注释、§14.2） */
 export interface ActionRecord {
   /** 单调递增，从 0 开始 */
   seq: number;
   /** 执行者座位 */
   player: PlayerId;
-  kind: ActionKind;
+  /**
+   * `AppActionKind`：引擎的 8 个取值 + 应用层的 `'draft-pick'`（见上面那段）。
+   * 类型比设计稿 §3.1 的 `kind: ActionKind` **宽一格** —— 设计稿写的是"现有 8 种之一"，
+   * T12 之后档案里合法的是 9 种。
+   */
+  kind: AppActionKind;
   /** 随 kind 收窄 */
   args?: unknown;
   /** user = 玩家操作；timeout = 决策窗口超时自动合成；ai = 本地 AI 产生 */
@@ -45,6 +75,11 @@ export interface MatchFileSetup {
   /**
    * **顺序快照**（相对 §3.1 的补齐）：草稿实际选出的协议，按选择顺序。
    * `draftPool` 是集合、`draftPicks` 是序列 —— 少了序列，ban 模式（选/禁交错）无法重放。
+   *
+   * ★ G5 T12 起它是**派生读数**（用户裁决 (i)：真值是动作流）：新档案里草稿选牌同时也在
+   * `actions` 里（`kind: 'draft-pick'`），本字段恒等于那串 `args.defId`（有腿）。留着它的
+   * 唯一理由是**老档案**：T12 之前的档案草稿只住在这里、`actions` 里没有草稿动作，
+   * 重放只能靠 `replayDraftFromSetup` 重演 —— 那条路一个字都没动。
    */
   draftPicks: string[];
   /** **顺序快照**：被禁用的协议 defId，按禁用顺序（§3.1 的 setup 未含此字段） */
@@ -175,7 +210,14 @@ export function matchFileFingerprint(f: MatchFile): string {
  * 校验
  * ------------------------------------------------------------------ */
 
-const KINDS: readonly ActionKind[] = [
+/**
+ * 档案的**合法种类清单**（`AppActionKind` 的运行时对应物）。
+ *
+ * ⚠️ 它与 `src/core/game.ts` 的 `ActionKind` 相差**恰好一格**（`'draft-pick'`）—— 这不是漂移，
+ * 是有意的：那一格住在应用层。想核对"引擎词表还是不是 8 个"的腿去读 `game.ts` 的 union
+ * （`tests/app/match-replay.test.ts:440-453` 那条生成式提取腿），不要读这里。
+ */
+const KINDS: readonly AppActionKind[] = [
   'play',
   'refresh',
   'compile',
@@ -184,10 +226,11 @@ const KINDS: readonly ActionKind[] = [
   'resolve-trigger',
   'clear-cache',
   'rearrange-protocols',
+  DRAFT_PICK_KIND,
 ];
 
 /** 该 kind 的 args 必须含有的键；空数组 = 必须**不带** args */
-const ARGS_REQUIRED: Record<ActionKind, readonly string[]> = {
+const ARGS_REQUIRED: Record<AppActionKind, readonly string[]> = {
   play: ['cardUid', 'faceUp'],
   compile: ['line'],
   'effect-choice': ['promptId', 'choice'],
@@ -196,6 +239,10 @@ const ARGS_REQUIRED: Record<ActionKind, readonly string[]> = {
   refresh: [],
   advance: [],
   'clear-cache': [],
+  // 草稿选牌：只带一个 `defId`（`performDraftPick(s, defId)` 的全部入参）。
+  // "哪个座位选的"不在这里 —— 它由 `ActionRecord.player` 承载，而 `player` 由现场按引擎的
+  // 草稿轮次（`draftRoundOwner`）写出（`src/main.ts` 的 `cb.onDraftPick`）。
+  [DRAFT_PICK_KIND]: ['defId'],
 };
 
 function isPlayerId(v: unknown): v is PlayerId {
@@ -241,13 +288,13 @@ function checkAction(a: unknown, i: number): MatchFileParseError | null {
     };
   }
   if (!isPlayerId(a.player)) return { code: 'bad-action', message: `第 ${i} 条操作的 player 不是 0/1` };
-  if (typeof a.kind !== 'string' || !KINDS.includes(a.kind as ActionKind)) {
+  if (typeof a.kind !== 'string' || !KINDS.includes(a.kind as AppActionKind)) {
     return { code: 'bad-action', message: `第 ${i} 条操作的 kind 未知：${String(a.kind)}` };
   }
   if (a.via !== undefined && !VIA_VALUES.includes(a.via as ActionRecord['via'])) {
     return { code: 'bad-action', message: `第 ${i} 条操作的 via 未知：${String(a.via)}` };
   }
-  const need = ARGS_REQUIRED[a.kind as ActionKind];
+  const need = ARGS_REQUIRED[a.kind as AppActionKind];
   const args = a.args;
   if (need.length === 0) {
     if (args !== undefined) return { code: 'bad-action', message: `第 ${i} 条 ${a.kind} 不该带 args` };

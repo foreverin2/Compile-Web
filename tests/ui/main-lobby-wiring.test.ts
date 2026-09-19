@@ -13,7 +13,8 @@
  * ## 它钉的是什么（逐条对上任务书 §1.2 与 §2 判据 4）
  *
  *  1. 四处最小侵入各自到位（`renderMode` 第四值 / 新入口 / `rerender` 分支 / 复位）；
- *  2. **结构腿一个字都没动**：剥注释后 `driver.submit(` 恰 8 处、`renderApp(root, state, cb)` 恰 1 处、
+ *  2. **结构腿按 T12 的新数字**：剥注释后 `driver.submit(` 恰 9 处（8 类动作 + 1 处重排；
+ *     T12 加的那一处是 `cb.onDraftPick`，理由见第 5 条腿）、`renderApp(root, state, cb)` 恰 1 处、
  *     `renderMode = 'hotseat'` 恰 2 处、`rerender` 里 `renderMode === 'replay'` 恰 1 处；
  *  3. ★ **实现顺序约束**：新入口排在 `startNetPreview` **之前**（D24；见 `net-preview-wiring.test.ts:210-213`）；
  *  4. 大厅符号**没有**溢进 `cb` / `applyRearrangeSwap` / `runAutoAdvance` 三个函数体。
@@ -117,11 +118,18 @@ describe('G5 T8 · main.ts 的四处最小侵入', () => {
 });
 
 describe('G5 T8 · 结构腿一个字都没动（剥注释口径）', () => {
-  it('5. `driver.submit(` 恰 8 处（7 类动作 + 1 处重排），且逐处落在两个函数体里', () => {
+  it('5. `driver.submit(` 恰 9 处（8 类动作 + 1 处重排），且逐处落在两个函数体里', () => {
     const cbBody = objectBody(MAIN, CB_HEAD);
     const swapBody = functionBody(MAIN, 'applyRearrangeSwap');
     const total = offsetsOf(MAIN, 'driver.submit(').length;
-    expect(total, `driver.submit( 出现 ${total} 处（1 处重排 + 7 类动作 ≥ 8）`).toBe(8);
+    /**
+     * ★ **G5 T12：8 -> 9**（任务书 §3 第 4 条明写"既有守卫按新数字改，并在提交信息里写明
+     * 为什么 +1"）。第 9 处是 **`cb.onDraftPick`** —— 草稿选牌从 T12 起走应用层的
+     * `'draft-pick'` 动作（用户裁决 A），于是它必须提交给当前驱动（`src/main.ts` 里那一行
+     * `const r = driver.submit(state, { player, kind: DRAFT_PICK_KIND, args: { defId } });`）。
+     * 逐处分类仍然要求它落在 `cb` 里：`cb.onAction` 从 7 处不变，`cb` 整体从 7 变 8。
+     */
+    expect(total, `driver.submit( 出现 ${total} 处（1 处重排 + 8 类动作 = 9）`).toBe(9);
     // 逐处分类：任何一处落在这两个函数体之外就报红并指名
     const cbAt = MAIN.indexOf(CB_HEAD);
     const cbEnd = cbAt + cbBody.length;
@@ -131,7 +139,7 @@ describe('G5 T8 · 结构腿一个字都没动（剥注释口径）', () => {
       .filter((i) => !(i >= cbAt && i < cbEnd) && !(i >= swapAt && i < swapEnd));
     expect(outside.map((i) => MAIN.slice(i, i + 40)), '有 driver.submit( 落在 cb / applyRearrangeSwap 之外')
       .toEqual([]);
-    expect((cbBody.match(/driver\.submit\(/g) ?? []).length, 'cb 里的提交点').toBeGreaterThanOrEqual(7);
+    expect((cbBody.match(/driver\.submit\(/g) ?? []).length, 'cb 里的提交点').toBeGreaterThanOrEqual(8);
     expect((swapBody.match(/driver\.submit\(/g) ?? []).length, 'applyRearrangeSwap 里的提交点').toBe(1);
   });
 

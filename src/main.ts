@@ -18,7 +18,7 @@ import './ui/styles-replay.css';
 // 本表只带 `net-lobby-*` 前缀类、且大厅是独立屏 ⇒ 已在那条腿的 `EXCLUDED_SOURCES` 里显式登记
 // （登记处写着"为什么不可能命中棋盘节点"的两条理由）。
 import './ui/styles-net-lobby.css';
-import { createGame, performDraftPick, performDraftUnpick, performDraftBan, randomPoolFromSeed, setSeedNonce, getDraftPool } from './core/state/create';
+import { createGame, getCurrentDrafter, performDraftPick, performDraftUnpick, performDraftBan, randomPoolFromSeed, setSeedNonce, getDraftPool } from './core/state/create';
 import { getCompilableLines } from './core/rules/compile';
 import { collectTriggers } from './core/effects/triggers';
 import { renderApp, renderDraft, resetUiState, syncCompiledFxLayers, syncSmokeOverlays, syncScanOverlays, syncPsychicParticles, syncPlagueMists, syncApathyMists, syncApathyMosaics, syncSpirit0Glows, syncSpirit1Cards, syncMetal0Glows, syncMetalPlates, syncMetal6Mans, syncMetal1LineGlows, syncMirror0BatteryGlows, syncClarity0BatteryGlows, syncIceFx, syncSmoke2LineGlows, syncFear0TriGlows, syncWarBlades, syncChainLayerPosition, syncDiversity3Fx, type UiCallbacks } from './ui/render';
@@ -60,8 +60,8 @@ import type { NetSession } from './net/session';
 //   同口径（`src/core/fingerprint.ts` 的注释写着它是"指纹与联机校验"共用的那一个）。
 import { stableStringify } from './core/fingerprint';
 // 重放的起跑状态（`createGame(matchFileToCreateOptions(f))` + 草稿序列真重建）
-import { stateAfterDraft } from './app/match-replay';
-import { setupFromState, type MatchFile, type MatchFileMeta } from './app/match-file';
+import { assertDraftPreludeMatchesSetup, draftPreludeCount, stateAfterDraft } from './app/match-replay';
+import { DRAFT_PICK_KIND, setupFromState, type MatchFile, type MatchFileMeta } from './app/match-file';
 import { CARD_DATA_HASH } from './app/card-data-hash';
 import { renderReplayBar, type ReplayBarNav } from './ui/replay-bar';
 import { openArchivePicker, openArchiveSink } from './ui/archive-fs-browser';
@@ -78,6 +78,9 @@ import { gameBus } from './core/events/bus';
 import { pushLog } from './core/log';
 import { trace, stateDigest, initEventTracing } from './core/trace';
 import type { GameState, PlayerId, Line } from './core/models/types';
+// ★ G5 T12：重放页把档案记录交给 `cb.onAction` 时那一句收口需要它（见 `replayStep` 的注释）。
+//   注意它**只是类型**：本文件里 `executeAction(` 仍然零命中（收口的源码腿钉着这一条）。
+import type { LegalAction } from './core/game';
 // G3 Task 8：PWA（manifest + service worker + 自动提示更新 + 一键更新）。零依赖、手写。
 import { initPwaUpdate } from './ui/pwa-update';
 // ── G5/T8：联机大厅的接线（本任务的**唯一**新入口）──────────────────────────────
@@ -419,14 +422,22 @@ let netGame: NetMatch | null = null;
  *  - `draftPool` 取 `randomPoolFromSeed(seed, 12)` —— `seed` 是握手走出来的**同一个**种子，
  *    而 `randomPoolFromSeed` 是**纯函数**（同一个种子恒给同一个池）⇒ 两端逐字一致。
  *    房主离线磨种子这件事 D3 已承认（本段不承诺公平），它影响的是种子，不是"两端是否一致"。
+ *
+ * ## 返回值（T12 加）
+ *
+ * 返回**它造出来的那个驱动**（没造出来 / 已经造过 ⇒ `null`）。加这个返回值的理由只有一个、
+ * 但是硬的：`rebootDraft()`（排查用）需要在 `enterNetGame()` 之后读**新驱动**的座位，而
+ * TypeScript 的控制流分析不追被调函数里的赋值 —— `netGame = null; enterNetGame();` 之后
+ * 它仍把 `netGame` 当成 `null` ⇒ 那句 `netGame.driver.seat` 会被判成"在 `never` 上取属性"。
+ * 交回驱动比在调用点写一句类型断言更诚实：那个数**就是**这一刻造出来的那一个。
  */
-function enterNetGame(): void {
-  if (netGame !== null) return; // 幂等：入站帧与重画都会走到这里
+function enterNetGame(): NetDriver | null {
+  if (netGame !== null) return null; // 幂等：入站帧与重画都会走到这里
   const client = lobbyClient;
-  if (client === null) return;
+  if (client === null) return null;
   const hand = client.handoff();
   if (!hand.ready || hand.transport === null || hand.session === null
-    || hand.seed === null || hand.draftStarter === null) return;
+    || hand.seed === null || hand.draftStarter === null) return null;
   const seed = hand.seed;
   const draftStarter = hand.draftStarter;
   state = createGame({
@@ -437,6 +448,9 @@ function enterNetGame(): void {
     draftPool: randomPoolFromSeed(seed, 12),
   });
   const netDriver = createNetDriver({ transport: hand.transport, seat: hand.seat });
+  // ★ G5 T12：给这条传输挂一个**只读**的入站 `act` 帧计数（判定集 ③.7 用它证"变化来自线"）。
+  //   默认路径（没带 `#g5probe=1`）也挂得上，但只有探针会去读它 ⇒ 开销是一个闭包与一个整数。
+  watchInboundFrames(netDriver);
   // ★ 递状态必须排在 `rerender()` 之前（见上面第 4 条）：这一刻到下一帧之间没有页面代码能跑
   netDriver.arm(state);
   netGame = {
@@ -530,6 +544,7 @@ function enterNetGame(): void {
     }
   }
   rerender();
+  return netDriver;
 }
 
 /**
@@ -563,8 +578,85 @@ function enterNetGame(): void {
 let advanceProbeCalled = 0;
 let advanceProbeActions = 0;
 
+/**
+ * ★★ **T12 门禁的"变化来自线上"计数器**（判定集 ③.7 用；默认路径零开销）。
+ *
+ * ## 为什么必须是**真的收到帧**的计数（不能拿 `appliedSteps` 代替）
+ *
+ * ③.7 要证的是"B 端的盘面变化**来自线上的那一帧**，不是它自己算的"。`drive().applied`
+ * 在这个场景里**几乎等价**，但它证明不了"线"：任何一条能让本端应用一步的路径（自动推进、
+ * 本地提交、重放闸门）都会让它涨。而这个计数只挂在
+ * `netGame.driver.transport.onMessage` 上 —— **只有真的从传输收到帧**才会 +1。
+ * 两个一起看才有牙：`applied` 涨 + `act` 帧计数涨 + 对端没被任何人点过。
+ *
+ * ## 它记的是什么（三条边界，别读多）
+ *
+ *  - 记的是**本端驱动所订阅的那条传输**上交来的帧（`NetDriver.transport`），不区分通道；
+ *  - `act` 那一格只数**操作帧**（`t === 'act'`），握手/心跳/承诺那些不算 —— 否则"硬币屏
+ *    那几帧"会把读数提前推高，这一格就分不清"草稿那一帧到底来没来"；
+ *  - `last` 存**原文**（截断到 400 字，够看清 `kind` 与 `seq`），给排查用，不参与判定。
+ *
+ * 它与 `advanceProbe*` 同族：只在 `#g5probe=1` 时才有读数（`exposeMatchProbe` 会把它挂到
+ * `__g5Match.netFrames()`），平时一个字节都不多算。
+ */
+interface NetFrameCounter {
+  act: number;
+  last: string | null;
+  /** `transport.onMessage` 的退订函数（`enterNetGame` 每次接线时覆盖） */
+  off: (() => void) | null;
+}
+let netFrameCounterIn: NetFrameCounter = { act: 0, last: null, off: null };
+
+/**
+ * ★ **最近一次草稿提交的结果**（`#g5probe=1` 才挂出去，见 `exposeMatchProbe` 的
+ * `lastDraftSubmit()`）。它只服务排查：`cb.onDraftPick` 每次提交都写一遍，包括被拒的那几次。
+ */
+let lastDraftSubmit: {
+  ok: boolean;
+  refusal: string | null;
+  player: number;
+  phase: string;
+  round: number;
+  turn: number;
+} | null = null;
+
+/**
+ * `#g5probe=1` 开过没有（`exposeMatchProbe()` 会置真）。
+ *
+ * 存在的理由只有一个：让"门禁专用"的那几个记账位在**默认路径上一次都不写**
+ * （`lastDraftSubmit` 是每步草稿都写的一个小对象 —— 不贵，但默认路径本就不该为门禁付钱，
+ * 这与 `state()` 那个"整份规范串只跟着查询片段走"的取舍同族）。
+ */
+let probeOn = false;
+
+/**
+ * 给驱动**刚拿到的那条传输**挂一个只读的入站帧计数（幂等：先退订旧的）。
+ *
+ * ⚠️ 订阅顺序（`enterNetGame` 里调用的位置）：排在 `createNetDriver(...)` **之后**。
+ * 驱动自己也在构造时订阅了同一条传输，而"谁先被回调"**不影响本计数器的正确性** ——
+ * 它数的是"帧到过本端"，不是"帧到过驱动之后"。
+ */
+function watchInboundFrames(d: NetDriver): void {
+  netFrameCounterIn.off?.();
+  netFrameCounterIn = { act: 0, last: null, off: null };
+  const counter = netFrameCounterIn;
+  counter.off = d.transport.onMessage((text) => {
+    let kind: unknown = null;
+    try {
+      kind = (JSON.parse(text) as { t?: unknown }).t;
+    } catch {
+      kind = 'undecodable';
+    }
+    if (kind !== 'act') return;
+    counter.act += 1;
+    counter.last = text.length > 400 ? `${text.slice(0, 400)}…（共 ${text.length} 字）` : text;
+  });
+}
+
 function exposeMatchProbe(): void {
-  if (!window.location.hash.includes('g5probe=1')) return;  /**
+  if (!window.location.hash.includes('g5probe=1')) return;
+  probeOn = true;
+  /**
    * ★ `__g5Handoff` 只是一个**存在性标志**（值之后由 `enterNetGame()` 覆盖）：
    * 它让 `enterNetGame()` 能在**不 import 任何调试模块**的前提下知道"这个页面开了探针"。
    * 值本身是那一段读数（`handoff()` 的结果 + 真正喂进 `createGame` 的 `seed` / `draftStarter`），
@@ -578,6 +670,10 @@ function exposeMatchProbe(): void {
       draftStarter(): number;
       draftRound(): number;
       seat(): number;
+      /** 本机从**线上**收到过几帧 `act`、最后一帧原文是什么（G5 T12；判定集 ③.7 用它证"变化来自线"） */
+      netFrames(): { act: number; last: string | null };
+      /** 最近一次**草稿**提交的结果（只给门禁排查用：`ok` / 拒码 + 当时的几个读数） */
+      lastDraftSubmit(): { ok: boolean; refusal: string | null; player: number; phase: string; round: number; turn: number } | null;
       finishDraft(): { steps: number; state: string };
       rebootDraft(): { steps: number; state: string };
       /** 对局相那一小撮读数（`main.ts` 的自动推进只碰这几样；门禁读它不必解析整串） */
@@ -601,13 +697,40 @@ function exposeMatchProbe(): void {
     /** 本端座位：**驱动自己那个只读字段**（`NetDriver.seat`）；没有驱动时 `-1` */
     seat: () => (netGame === null ? -1 : netGame.driver.seat),
     /**
+     * ★ **本机从线上收到过几帧 `act` / 最后一帧原文**（G5 T12 加；判定集 ③.7 的"变化来自线"）。
+     *
+     * 它只读上面那个 `netFrameCounterIn`（挂在 `netGame.driver.transport.onMessage` 上），
+     * 不改任何状态、不驱动任何流程。没有联机局时给 `{ act: 0, last: null }`。
+     */
+    netFrames: () => ({ act: netFrameCounterIn.act, last: netFrameCounterIn.last }),
+    /**
+     * ★ **最近一次草稿提交的结果**（G5 T12 门禁排查用；只读，不参与任何流程）。
+     *
+     * 为什么需要一个"记账位"而不是只看状态：拖拽没生效可能是**四种**原因（拖拽没到回调 /
+     * 回调到了但 `driver.submit` 拒了 / 引擎的草稿原语抛了 / 提交成功但帧没出去），
+     * 而这四种在状态指纹上**长得一模一样**（都是一动不动）。记下"提交过没有 + 拒码 +
+     * 提交那一刻的三个读数"，现场就能一眼分开它们。
+     */
+    lastDraftSubmit: () => lastDraftSubmit,
+    /**
      * ★ **把本机的草稿按规则走完**（排查与门禁用；走的是**真的那个回调**）。
      *
      * 与 `rebootDraft()` 的差别很要紧：本方法**不重开对局、不动驱动、不碰传输** ——
      * 它只是在当前这一局上把剩下的草稿选完（每一轮取"当前可选池里第一个还没被选的"）。
-     * 门禁 ③.8 要的正是这个：两端各自从同一局走完、再比终态。
      *
-     * 为什么不能用 `rebootDraft()` 来"回到起点"（实测踩过，值得写下来）：那个方法会
+     * ## ★★ T12 起它**只走本端的回合**（这条改动是必须的，不是收紧）
+     *
+     * 草稿选牌从 T12 起走驱动（`cb.onDraftPick` → `driver.submit` → `act` 帧）。而驱动的
+     * 轮次闸只认"当前轮选者是本端座位"（`net-driver.ts` 的 `liveTurn` 草稿分支）⇒ 在
+     * **不是**本端回合的那些轮次上提交会被拒（`'not-the-next-action'`，状态一字不动）。
+     * 旧版本这里会因此**空转一圈就退**（`state.phase` 仍是 `'draft'`、`n` 只涨了本端那几步），
+     * 于是"两端各自走完草稿"变成"谁也没走完"。
+     *
+     * 现在的语义：**逐轮只由轮选者那一侧提交**，另一侧靠**收到的那一帧**往前走
+     * （那正是 T12 要证的事）。所以调用方（门禁 ③.8）要在两端**交替**调本方法、直到两端都
+     * 到 `draftRound >= 6` —— 每一轮谁是轮选者由 `draftRoundOwner` 决定，两端一致。
+     *
+     * 为什么不用 `rebootDraft()` 来"回到起点"（实测踩过，值得写下来）：那个方法会
      * `driver.dispose()`，而 `dispose()` 会 **`transport.close()`**（`src/net/net-driver.ts:784`）
      * ⇒ 握手那条链路被关掉 ⇒ 之后**所有** `submit` 都拿到 `'offline'`
      * （实测：`submit ok=false refusal=offline`，而 `lastFailure()` 是 `null` —— 那条路
@@ -616,6 +739,9 @@ function exposeMatchProbe(): void {
     finishDraft: () => {
       let n = 0;
       while (state.phase === 'draft') {
+        // 不是本端回合就**停手**（那一轮由对端提交、本端等帧）。判据与驱动用的是同一个
+        // `getCurrentDrafter`（同一个 `draftRoundOwner`）⇒ 不存在"两边都以为轮到自己"。
+        if (netGame !== null && getCurrentDrafter(state) !== netGame.driver.seat) break;
         const avail = getDraftPool(state);
         if (avail.length === 0) break;
         cb.onDraftPick(avail[0].defId);
@@ -638,9 +764,18 @@ function exposeMatchProbe(): void {
       if (netGame === null) return { steps: -1, state: '' };
       netGame.driver.dispose(); // ★ 先退旧驱动的两条订阅（它同时会关掉传输，见上）
       netGame = null; // 置空之后 `enterNetGame()` 就是"第一次进牌桌"那条路（幂等闸放行）
-      enterNetGame();
+      const d = enterNetGame();
+      // ★ 座位在**这里**读一次并留在局部：`enterNetGame()` 之后 TS 的控制流分析仍把 `netGame`
+      //   当成 `null`（它不追被调函数里的赋值）⇒ 循环里再读 `netGame.driver` 会被判成 `never`。
+      //   而这个数在整段循环里确实不变（本方法刚重建的那个驱动就是这一局的驱动）。
+      const seatAfterReboot = d === null ? -1 : d.seat;
       let n = 0;
       while (state.phase === 'draft') {
+        // ★ T12：与 `finishDraft()` 同款守卫 —— 只走本端回合那一格（否则驱动会拒掉
+        //   非本端的提交，而这一圈会**永远转下去**：状态不动、循环条件恒真）。
+        //   它在本方法里其实**必然早退**（上面那句 `dispose()` 关掉了传输 ⇒ 所有 submit 都是
+        //   `'offline'`）—— 留着是为了"万一哪天传输又活了"，也不想让这条排查路径变成死循环。
+        if (seatAfterReboot >= 0 && getCurrentDrafter(state) !== seatAfterReboot) break;
         const avail = getDraftPool(state);
         if (avail.length === 0) break;
         cb.onDraftPick(avail[0].defId);
@@ -1401,7 +1536,53 @@ function replayStep(): void {
   // 档案走完 / 引擎报错 ⇒ 让这一帧把"已重放完"或错误显示出来（`settle()` 在 done/error 下不排步）
   if (!a) { rerender(); return; }
   const before = drv.cursor().position;
-  cb.onAction(a);
+  /**
+   * ★★ **G5 T12：草稿选牌那一条走"本地草稿应用"那条既有路，不经过 `cb.onAction`。**
+   *
+   * ## 为什么这样分流（而不是把 `UiCallbacks.onAction` 加宽成"也收草稿步"）
+   *
+   * `cb.onAction` 的入参类型是 `LegalAction`（引擎那 8 个 kind，`src/ui/render.ts`），
+   * 而 `'draft-pick'` **不在**那 8 个里。两条路：
+   *  - 加宽 `UiCallbacks.onAction` ⇒ 要改 `src/ui/render.ts` —— 那是 T12 任务书 §2 的**红线**
+   *    （协调者 2026-09-20 明确否掉）；
+   *  - 在这里分流 ⇒ 渲染侧**一行都不用改**：`cb.onDraftPick(defId)` 本来就是草稿屏拖拽落点
+   *    调的那**同一个回调**（`src/ui/render.ts:4679`，那是**调用**它，不需要改它的类型）。
+   *    ⇒ 取这一条。
+   *
+   * ## 为什么"走 `cb.onDraftPick`"仍然是**同一条流水线**（不是第二套实现）
+   *
+   * `cb.onDraftPick` 里做的事只有一件与状态有关的：`driver.submit(state, { player, kind: 'draft-pick', … })`。
+   * 而重放页此刻的 `driver` 正是 `ReplayDriver` ⇒ 闸门逐项比 `kind` + `args` + `player`，
+   * 放行之后应用的是**记录里那一条**（不是这里算出来的那条）。
+   *
+   * ⚠️ **但闸门放行的前提是"起跑点已经跳过了草稿前导"**（G5 T12 小修复轮改口的正是这句：
+   * 上一版这里写的是"`player` 由 `currentDraftDrafter()` 现算 ⇒ 闸门放行、游标前进"，
+   * **那句是错的**，评审实测抓到了它）。事实是：重放页的起跑状态是 `stateAfterDraft(file)`
+   * —— **已经**把草稿走完（相位 `'turn'`、`draftRound = 6`），而此刻 `currentDraftDrafter()` 走的是
+   * `draftRoundOwner(starter, 6)`，`create.ts:42-45` 对越界轮次回落 `?? 1` ⇒ 它给出的是
+   * `1 - draftStarter`，**不是** `f.actions[0].player`（那是第 0 轮的 owner = `draftStarter`）
+   * ⇒ 闸门判 `not-the-next-action`；就算把 `player` 换成记录里那个，`performDraftPick` 也会在
+   * `'turn'` 相上抛 `not in draft phase` ⇒ 只剩 `engine-error`。**这条路在"游标从 0 起"的形态下结构上无解。**
+   *
+   * ⇒ 修法是**起跑点**那一半（`startReplayFile` 的 `initialPosition: draftPreludeCount(...)`）：
+   * 草稿前导那几条根本不该交给页面编排（重放页不展示草稿）。跳掉它们之后，这条分流的**正常形态**
+   * 是"档案里出现了草稿前导之外的 `'draft-pick'`"（被篡改的档案）—— 那时闸门拒绝、重放停机，
+   * 由下面那段兜底诊断报出来。
+   *
+   * ⚠️ 判据是 `kind` 的字面量，而 `AppActionKind` 只有 9 个取值 ⇒ 这个 if/else 是穷尽的。
+   */
+  if (a.kind === DRAFT_PICK_KIND) {
+    cb.onDraftPick((a.args as { defId: string }).defId);
+  } else {
+    /**
+     * 其余 8 个 kind **一定是** `LegalAction`（`ActionKind` 就是那 8 个的字面量联合），
+     * 这句收口要说明的是"档案记录多带了 `seq` / `via` / `args` 三个字段，而 `onAction`
+     * 只读 `kind` 与那几个参数槽，从不整体透传"。`seq` / `via` 是档案层元数据、不进引擎
+     * （`match-file.ts:19-30`），`args` 是**同一条记录**里的参数容器 —— 与 `LegalAction`
+     * 的那些槽在值上同源（现场就是照 `LegalAction` 逐字段记的，`main.ts` 的 `cb.onAction`）。
+     */
+    cb.onAction(a as unknown as LegalAction);
+  }
   if (drv.cursor().position === before) {
     // 停机：只在**第一次**留诊断（否则每次都重写，日志与屏上都是噪音）。注意重放到这一步
     // 之前可能已经有 FX 在飞 —— 停机之后 `pause()` 会取消在飞时钟，不会再自动重试。
@@ -1500,6 +1681,17 @@ function replayNav(): ReplayBarNav {
  * （否则上一局的抽牌幽灵会落进重放帧）。
  */
 function startReplayFile(file: MatchFile): void {
+  /**
+   * ★★ **G5 T12 小修复轮：起跑点的一致性先对账**（在任何状态被改写之前抛）。
+   *
+   * 修的是什么（评审实测的用户可见回归）：T12 之后录的档案，日志**开头**是 6 条 `'draft-pick'`，
+   * 而下面 `state = stateAfterDraft(file)` 那一帧**已经**把草稿走完（相位 `'turn'`）⇒ 游标若从 0 起，
+   * 第一步就把一条草稿动作交给一个 `'turn'` 相的状态 ⇒ `replayHostError` 写屏、**永久停在第 0 步**。
+   * 修法是"游标从草稿前导之后开始"（下面 `initialPosition`），而那条算法的隐含前提就是
+   * **日志前导的条数 == `setup.draftPicks` 的条数** ⇒ 前提不成立时必须**可读失败**（协调者交办），
+   * 不许静默跳过。这条对账排在**最前**：不成立时这一页根本不该被改写成"正在重放"。
+   */
+  assertDraftPreludeMatchesSetup(file);
   // ① 上一屏 / 上一局留下的状态（逐项与 resetToMainInterface 对齐：这里只是**不回主页**）
   resetEpoch += 1;
   if (autoTimer !== null) {
@@ -1519,7 +1711,18 @@ function startReplayFile(file: MatchFile): void {
   setFxViewSeat(null);
   // ② 换驱动与状态：`state` 只换**绑定**（类型与名字不变 —— 见驱动声明块的理由）
   replayDriver?.dispose();
-  replayDriver = createReplayDriver(file, { ticker: replayTicker });
+  /**
+   * ★★ **游标从"草稿前导"之后开始**（G5 T12 小修复轮；见本函数第一句的说明）。
+   *
+   * 起跑**状态**不动（仍是下面的 `stateAfterDraft(file)`），只把游标的初始位置往前挪
+   * `draftPreludeCount(file.actions)` 条 —— 那个数由 `src/app/match-replay.ts` 的唯一出处给出
+   * （不在这里现算，否则"跳几条"就有两个说法）。语义与 T12 之前**逐字相同**：重放页本来就不展示
+   * 草稿，用户看到的第一条永远是"对局的第一条"。
+   */
+  replayDriver = createReplayDriver(file, {
+    ticker: replayTicker,
+    initialPosition: draftPreludeCount(file.actions),
+  });
   // 订阅"该走下一步了"（注入时钟驱动）。退订随 `dispose()`（T2 判据 8）⇒ 退出侧不需要单独记句柄。
   replayDriver.onTick(replayStep);
   driver = replayDriver;
@@ -1650,6 +1853,22 @@ function syncRearrangeModalForEffect(): void {
   }
 }
 
+/**
+ * ★ **草稿这一刻轮到谁选**（T12）：`draftRoundOwner(draftStarter, draftRound)` 的**唯一出处**。
+ *
+ * 为什么要有这个具名助手（而不是在 `cb.onDraftPick` 里直接调 `getCurrentDrafter`）：
+ * 它是"发送方那一侧的轮次闸"与"写进档案的 `ActionRecord.player`"**同一个数** ——
+ * 两处各算一遍就会长出两个可能漂移的说法，而症状是"选牌发到对端被拒/被算到别人头上"
+ * （一个不报错的错位）。收在这里之后，改轮次规则只有一处要改。
+ *
+ * 它在草稿**之外**没有意义（`draftRound` 恒为 `DRAFT_PICK_COUNT`）：`cb.onDraftPick` 只在
+ * 草稿屏上被调（`src/ui/render.ts` 的 `bindDraftDrag`），而那条路径在 `phase === 'turn'` 时
+ * 已经不存在了。
+ */
+function currentDraftDrafter(): PlayerId {
+  return getCurrentDrafter(state);
+}
+
 const cb: UiCallbacks = {
   onRendered() {
     // 效果内重排窗口（动量4）随每帧渲染同步：栈顶是重排请求 → 打开；结算完毕 → 自动关闭
@@ -1667,8 +1886,42 @@ const cb: UiCallbacks = {
   rerender() {
     rerender();
   },
+  /**
+   * ★★ **G5 T12：草稿选牌走动作流水线**（用户裁决 A + (i)）——不再"只改本端状态"。
+   *
+   * 改之前（T11-C 的实测缺口）：这里直接 `performDraftPick(state, defId)` ⇒ 一次真选牌只改
+   * **本端**状态，两端停在不同的 `draftRound`（工具实测 `房主 picks=1 / 加入方 picks=0`）。
+   * 改之后：选牌变成一条 `ActionRecord`（`kind: 'draft-pick'`、`player` = 轮选者），走
+   * **与对局动作同一条**流水线 —— `driver.submit` → `act` 帧 → 对端 `applyRecordedAction`
+   * → `performDraftPick`（全仓唯一的"档案操作 → 引擎调用"映射，`src/app/match-replay.ts`）。
+   *
+   * ## 三个细节（都是"不写就静默错"的那种）
+   *
+   *  1. **`player` 取 `draftRoundOwner(draftStarter, draftRound)`，不取 `state.turnPlayer`**：
+   *     草稿期 `turnPlayer` 恒为 `0`（`createGame` 的初值），拿它当提交者会让"座位 1 先选"
+   *     的局在座位 0 那一侧被驱动的座位闸拒掉（`liveTurn` 的草稿分支）。轮选者是**同一个
+   *     纯函数**算的（`getCurrentDrafter`，`src/core/state/create.ts:120-122`），两端一致。
+   *  2. **`driver.submit` 的返回值必须看**：`ok === false` 时**什么都不做**（不前进、不重画）。
+   *     非本回合的输入/离线/只读页都从这里被拒（发送方不提交 = 判据 3 的前一半），
+   *     而"拒了却照旧重画"会让屏上出现一个**引擎里没发生**的中间态（本仓最恨的那类缺陷）。
+   *  3. **只用 `state.phase` 判"草稿打完没有"**，不再拿"重画前它是不是 `'draft'`"当依据：
+   *     提交成功之后状态已经是**提交后**那一帧，所以两处 `state.phase` 读的是同一个时刻。
+   */
   onDraftPick(defId) {
-    performDraftPick(state, defId);
+    const player = currentDraftDrafter();
+    const r = driver.submit(state, { player, kind: DRAFT_PICK_KIND, args: { defId } });
+    // ★ 记账（只给 `#g5probe=1` 的排查用；默认路径不写 —— 见 `probeOn` 的说明）
+    if (probeOn) {
+      lastDraftSubmit = {
+        ok: r.ok,
+        refusal: r.ok ? null : String(r.refusal ?? ''),
+        player,
+        phase: state.phase,
+        round: state.draftRound,
+        turn: state.turnPlayer,
+      };
+    }
+    if (!r.ok) return;
     if (state.phase === 'turn') {
       // 草案完成：先渲染最终草案（6 张全选）→ 渐进离场 → 全屏加载视频 → 对战界面渐进入场
       renderDraft(root, state, cb);
@@ -1677,11 +1930,33 @@ const cb: UiCallbacks = {
       rerender();
     }
   },
+  /**
+   * 取消选择（拖出本回合已选的协议）：**草稿动作里它没有走线上**（T12 不做这条），
+   * 所以联机下它会把两端分开 ⇒ **联网时直接拒绝**，不留一条会分叉的路。
+   *
+   * ## 为什么是"拒绝"而不是"也把它做上线"
+   *
+   * 用户裁决 A 只批了 `pick` 那一半（`ban` 都登记为不可达）；`unpick` 还要多一条
+   * "撤销也进动作日志"的语义（`performDraftUnpick` 会**回退** `draftRound`），
+   * 那是下一段的活。而留着它在本端乱改的代价是**两端分叉**（本仓最恨的形态之一），
+   * 所以宁可让它在这里明确地不生效。
+   *
+   * ⚠️ **已知缺口（要进 README 与已知清单）**：联机草稿期"拖出已选协议"没有任何反应，
+   * 屏上也不提示为什么（提示要动 `src/ui/render.ts`，那是本任务的红线）。
+   */
   onDraftUnpick(defId) {
+    if (netGame !== null) return;
     performDraftUnpick(state, defId);
     rerender();
   },
+  /**
+   * 禁用协议（ban 模式）：**同 unpick，今天不可达也不上线**。
+   *
+   * 联机的 `draftMode` 在 T11-C 里定为常量 `'normal'`（见 `enterNetGame`）⇒ 联机里永远没有
+   * ban 步骤。这条留下是给**热座**的 ban 模式用的（那条路一个字都没变）。
+   */
   onDraftBan(defId) {
+    if (netGame !== null) return;
     performDraftBan(state, defId);
     rerender();
   },
@@ -2222,7 +2497,21 @@ function showLocalData(): void {
       void file;
       void warnings;
     },
-    startReplay: (file) => startReplayFile(file),
+    startReplay: (file) => {
+      /**
+       * ★ **进重放页前先对账**（G5 T12 小修复轮）：档案自相矛盾时（日志前导草稿条数 !=
+       * `setup.draftPicks.length`）`startReplayFile` 会**抛**，而这一句把"屏上留下的东西"
+       * 从"重放到一半的页面"换成"**用户还留在档案屏 + 一条可读的失败**"（console 里的是真因）。
+       *
+       * 为什么不做"在屏上画一条错误行"：那要动 `src/ui/local-data.ts` 的渲染面，而本轮的边界
+       * 是"只修评审那一条阻断项"（协调者交办）。**登记为缺口**：失败原因只到 console。
+       */
+      try {
+        startReplayFile(file);
+      } catch (e) {
+        console.error('[重放] 这份档案不能重放：', e);
+      }
+    },
     buildArchive: () => buildSessionArchive(),
   });
 }

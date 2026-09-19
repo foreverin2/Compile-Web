@@ -131,8 +131,12 @@ describe('G4 T4 · 收口：动作只走 driver', () => {
     const inAction = ON_ACTION.split('driver.submit(').length - 1;
     const inSwap = swapBody.split('driver.submit(').length - 1;
     const total = MAIN.split('driver.submit(').length - 1;
-    expect(total, `main.ts 里 driver.submit( 出现 ${total} 处（应用面：cb.onAction ${inAction} + applyRearrangeSwap ${inSwap}）`)
-      .toBe(inAction + inSwap);
+    // ★ G5 T12：总数与"两段之和"比会差 1（草稿那一处落在 `cb.onDraftPick` 里，不在
+    //   `cb.onAction` 里）⇒ 改成与"**`cb` 整体** + `applyRearrangeSwap`"比。不变式不变：
+    //   提交点只许落在这两个函数体里。
+    const inCb = CB_BODY.split('driver.submit(').length - 1;
+    expect(total, `main.ts 里 driver.submit( 出现 ${total} 处（cb ${inCb} 内：onAction ${inAction} + onDraftPick 1 + applyRearrangeSwap ${inSwap}）`)
+      .toBe(inCb + inSwap);
     // —— 生成式：把**每一个**出现点分类，任何一处落在两个函数体之外就报红并指名 ——
     const cbAt = MAIN.indexOf(CB_HEAD);
     const cbEnd = cbAt + CB_BODY.length;
@@ -144,14 +148,19 @@ describe('G4 T4 · 收口：动作只走 driver', () => {
     expect(onAt, '找不到 cb.onAction 的函数体').toBeGreaterThanOrEqual(0);
     expect(swapAt, '找不到 applyRearrangeSwap 的函数体').toBeGreaterThanOrEqual(0);
     const outside = offsetsOf(MAIN, 'driver.submit(').filter(
-      (i) => !(i >= onAt && i < onEnd) && !(i >= swapAt && i < swapEnd),
+      (i) => !(i >= onAt && i < onEnd) && !(i >= swapAt && i < swapEnd)
+        // ★ G5 T12：新增的那一处落在 `cb.onDraftPick` 里（草稿选牌走驱动）——
+        //   它仍在 `cb` 这个对象里（`cbAt`..`cbEnd` 是按花括号配平取的），所以"提交点只在
+        //   `cb` / `applyRearrangeSwap` 两个出口里"这条不变式**没有被放宽**：
+        //   放宽的只是"哪一个成员"。
+        && !(i >= cbAt && i < cbEnd),
     );
-    expect(outside.map((i) => MAIN.slice(i, i + 40)), '有 driver.submit( 落在 cb.onAction / applyRearrangeSwap 之外').toEqual([]);
+    expect(outside.map((i) => MAIN.slice(i, i + 40)), '有 driver.submit( 落在 cb / applyRearrangeSwap 之外').toEqual([]);
     // 反空转：两个函数体**各自**都必须有提交点（少了任何一个，上面的"分类"都可能是空的）
     expect(inAction, 'cb.onAction 里一个 driver.submit( 都没有 ⇒ 动作没有走驱动').toBeGreaterThanOrEqual(7);
     expect(inSwap, 'applyRearrangeSwap 里没有 driver.submit( ⇒ 重排旁路没收口').toBe(1);
     // 逐条列出来（失败信息与会话报告都要能指名）
-    expect(offsetsOf(MAIN, 'driver.submit(').length, '驱动提交点总数（1 处重排 + 7 类动作）').toBe(8);
+    expect(offsetsOf(MAIN, 'driver.submit(').length, '驱动提交点总数（1 处重排 + 8 类动作，G5 T12 起含草稿选牌）').toBe(9);
   });
 
   it('3. 反控：把一处提交挪出这两个函数 ⇒ 上面那条判据必须报出它（比较器不恒真）', () => {
@@ -332,7 +341,18 @@ describe('G4 T4 · 重放路由与 settle 的单一重排点', () => {
     expect(start, '没有把注入时钟的 tick 接到步进函数上（重放永远不动）').toMatch(/replayDriver\.onTick\(replayStep\)/);
     const step = functionBody(MAIN, 'replayStep');
     expect(step, 'replayStep 没有取档案的下一条').toContain('drv.next()');
-    expect(step, 'replayStep 没有走同一条编排（D3/D12）').toMatch(/cb\.onAction\(a\)/);
+    /**
+     * ★ **G5 T12 起，"走同一条编排"这句话有两个落点**：
+     *  - `cb.onAction(a as unknown as LegalAction)`：8 个引擎动作（原样保留）；
+     *  - `cb.onDraftPick(defId)`：草稿选牌那一条。它**不能**塞进 `cb.onAction` ——
+     *    那个入参是 `LegalAction`（引擎那 8 个 kind），收下 `'draft-pick'` 就得改
+     *    `src/ui/render.ts` 的类型，而那是 T12 的红线（协调者 2026-09-20 否掉）。
+     *  ⇒ 判据必须**两条都认**：只认前者的话，"重放草稿那一步不走编排"会被这条腿漏掉
+     *    （那正是 T12 要防的形态）。
+     */
+    expect(step, 'replayStep 没有走同一条编排（D3/D12）').toMatch(/cb\.onAction\(/);
+    expect(step, 'replayStep 里草稿选牌那一条没有走编排（T12：它必须交给 cb.onDraftPick）')
+      .toMatch(/cb\.onDraftPick\(/);
     // 反向：重放**不许**自己直呼引擎（那是 pendingDraws/pendingReveals 泄漏的形态）
     expect(step, 'replayStep 里出现了直呼引擎的痕迹').not.toMatch(/executeAction\(/);
     // 游标不前进即停（否则注入时钟会每 900ms 重试同一个拒绝）
@@ -344,6 +364,37 @@ describe('G4 T4 · 重放路由与 settle 的单一重排点', () => {
     const iAdvanceCheck = step.indexOf('if (drv.cursor().position === before)');
     const iClear = step.indexOf('replayHostError = null;');
     expect(iClear, '清诊断的分支不在"游标前进了"之后（顺序反了会连停机那一次的诊断一起清掉）').toBeGreaterThan(iAdvanceCheck);
+  });
+
+  /**
+   * ★★ **G5 T12：草稿选牌那两条路都走驱动 / 编排**（用户裁决 A 的源码面）。
+   *
+   * 这两条腿补的是**行为腿覆盖不到的那一半**：`src/main.ts` 不可 import（见文件头注）⇒
+   * "草稿选牌到底走没走驱动"在 node 面**只能**读源码。它们各自对应一条浏览器腿
+   * （`tools/browser-truth-lobby-cdp.mjs` 的 ③.7），而这两条**先**红在本地：
+   *  - 变异 M1（把 `cb.onDraftPick` 改回直呼 `performDraftPick`）⇒ 这里当场红；
+   *  - 把 `replayStep` 的草稿分流删掉 ⇒ 重放页的草稿那一步会停住（游标不动）。
+   */
+  it('11. T12：`cb.onDraftPick` 走驱动（不是直呼草稿原语），草稿步在 `replayStep` 里分流给它', () => {
+    const pick = memberBody(CB_BODY, 'onDraftPick(defId) {');
+    // ① 提交：草稿选牌必须**经驱动**（`driver.submit` + 应用层那一格 kind）
+    expect(pick, 'cb.onDraftPick 没有走 driver.submit（T12 的整条意义就在这里）')
+      .toMatch(/driver\.submit\(state, \{ player[^}]*kind: DRAFT_PICK_KIND/);
+    // ② 反向：**不许**再直呼草稿原语（那正是变异 M1 的形态：只改本端状态、不发线）
+    expect(pick, 'cb.onDraftPick 里又出现了直呼 performDraftPick（T11-C 的老形态：只改本端）')
+      .not.toMatch(/performDraftPick\(/);
+    // ③ 提交被拒时**什么都不做**（否则屏上会出现一个引擎里没发生的中间态）
+    expect(pick, 'cb.onDraftPick 没有看 submit 的返回值（被拒之后会照旧重画）').toMatch(/if \(!r\.ok\) return;/);
+    // ④ 重放页那一条：**草稿步走 `cb.onDraftPick`**（现场拖拽落点调的同一个回调），
+    //    不进 `cb.onAction`。理由：`cb.onAction` 的入参是 `LegalAction`（引擎那 8 个 kind），
+    //    而 `'draft-pick'` 不在里面 —— 让它收下就得改 `src/ui/render.ts` 的类型，
+    //    那是 T12 的红线（协调者 2026-09-20 否掉了那条路）。
+    //    所以这里钉的是**分流**：草稿那一条交给 `cb.onDraftPick`，其余 8 个照旧交给 `cb.onAction`。
+    const step = functionBody(MAIN, 'replayStep');
+    expect(step, 'replayStep 没有把草稿那一条交给 cb.onDraftPick（重放页的草稿会停住）')
+      .toMatch(/a\.kind === DRAFT_PICK_KIND[\s\S]{0,120}cb\.onDraftPick\(/);
+    expect(step, 'replayStep 里草稿那一条没有走"同一个回调"（自己调了草稿原语？）')
+      .not.toMatch(/performDraftPick\(/);
   });
 
   it('10. CSS import 顺序：styles-replay.css 排在 styles-local.css 之后', () => {

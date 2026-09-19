@@ -109,11 +109,11 @@
  */
 
 import type { GameState, PlayerId } from '../core/models/types';
-import type { ActionKind } from '../core/game';
 import { normalizeAction } from '../app/match-file';
-import type { ActionRecord, MatchFileRecorder } from '../app/match-file';
+import type { ActionRecord, AppActionKind, MatchFileRecorder } from '../app/match-file';
 import type { MatchDriver, SubmitResult } from '../app/match-driver';
 import { applyRecordedAction } from '../app/match-replay';
+import { draftNextAction } from '../core/state/create';
 import { decodeMsg, encodeMsg } from './protocol';
 import type { ActMsg } from './protocol';
 import type { NetChannel, NetTransport, StatusChange } from './transport';
@@ -590,9 +590,15 @@ export function createNetDriver(opts: NetDriverOptions): NetDriver {
     // 不认识引擎的操作种类；"这个 kind 引擎认不认"由 `applyRecordedAction` 的穷尽性分支回答
     // （`match-replay.ts:130-135`：未覆盖的 kind 抛错，不静默 no-op）。所以这里只把类型收窄，
     // **不**在这里写第二份 kind 白名单 —— 那正是判据 3 要防的"第二个映射"。
+    //
+    // ★ G5 T12：收窄的目标从 `ActionKind`（引擎那 8 个）换成 `AppActionKind`（+ 应用层的
+    //   `'draft-pick'`）。这不是"放宽校验"：白名单仍然只有 `applyRecordedAction` 那一处，
+    //   这里换的只是**类型标注**，而它必须跟着词表走 —— 不换的话草稿选牌会在这一句被
+    //   tsc 拦下（`'draft-pick'` 不属于 `ActionKind`），那正是"线上格式不拦、拦人的是应用层"
+    //   这条事实的编译期体现。
     const wire: Omit<ActionRecord, 'seq'> = {
       player: msg.action.player,
-      kind: msg.action.kind as ActionKind,
+      kind: msg.action.kind as AppActionKind,
       ...(msg.action.args === undefined ? {} : { args: msg.action.args }),
     };
     const fail = applyOnce(s, wire, 'peer');
@@ -649,19 +655,33 @@ export function createNetDriver(opts: NetDriverOptions): NetDriver {
   });
 
   /**
-   * `a.player` 现在动得了吗。
+   * `a.player` 现在动得了吗（**发送方那一侧的轮次闸**）。
    *
-   * 两条路（都来自引擎的既有语义，**没有**本模块自己发明的规则）：
+   * 三条路（都来自引擎/原语的既有语义，**没有**本模块自己发明的规则）：
+   *  - ★ **草稿相**（G5 T12）：`phase === 'draft'` 时，能动的**只有当前轮选者**
+   *    —— `draftRoundOwner(draftStarter, draftRound)`，由 `draftNextAction` 交出来
+   *    （`src/core/state/create.ts:139-141`）。这一格是 T12 新加的：草稿选牌从 T12 起也走
+   *    这条 `act` 通道（应用层的 `'draft-pick'`，用户裁决 A），而**轮次规则与对局相不同**
+   *    （草稿看轮选者、对局看 `turnPlayer`）。两端各自校验同一规则：发送方在这里被拒，
+   *    接收方在 `applyRecordedAction` 的草稿分支被 `performDraftPick` 的池子/相位守卫拒
+   *    （⇒ 报 `'peer-action-refused'`，不静默吞）。
    *  - `GameState.turnPlayer === author`：常规回合行动；
    *  - 有一个**带 `prompt` 的挂起效果**、且 `author` 是它的应答者（`prompt.chooser` 优先，
    *    缺省回落到该效果的 `player`）：`effect-choice` 的应答者就是它（`main.ts:307-314` 同口径）。
    *
-   * 为什么要放开第二条：`effect-choice` 的 `player` 不一定是 `turnPlayer`（效果可以让**对方**
+   * 为什么要放开第三条：`effect-choice` 的 `player` 不一定是 `turnPlayer`（效果可以让**对方**
    * 做选择）。只认 `turnPlayer` 会把合法的应答判成"不是你的回合"，而那条腿在两端**同时**
    * 拒绝 ⇒ 谁都不动 ⇒ 差分腿停在那儿（一个不报错的死锁，不是分叉）。
+   *
+   * ⚠️ **草稿分支与对局分支是 if/else，不是"或"**：草稿期的状态里 `turnPlayer` 恒为 `0`
+   * （`createGame` 的初值）⇒ 写成"或"会让座位 0 在对局规则的判据下**冒充**轮选者
+   * （`turnPlayer === author` 恒真）⇒ 座位 1 真该选的那一回合反而被拒。对局分支自己带
+   * `phase !== 'turn'` 早退，两个分支互斥这件事因此是**结构上**成立的，不靠调用顺序。
    */
   function liveTurn(s: GameState, author: PlayerId): boolean {
-    if (s.phase !== 'turn' || s.winner !== null) return false;
+    if (s.winner !== null) return false;
+    if (s.phase === 'draft') return draftNextAction(s)?.player === author;
+    if (s.phase !== 'turn') return false;
     if (s.turnPlayer === author) return true;
     const top = s.pendingEffects[s.pendingEffects.length - 1];
     if (top === undefined) return false;

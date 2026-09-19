@@ -1017,22 +1017,26 @@ describe('地址栏 fragment 的读与抹（§8.3；T8 在启动路径调用）'
  * ⚠️ **本轮（G5/T8）改过这一组**（计划 D24 ② 逐条授权的三处之一）。旧文本钉的是**T7 那一刻**的
  * 划界 —— "T7 没建 `net-lobby.ts`、`main.ts` 不含 net-browser"。T8 一接线，那条**必然红**，
  * 而它红得**正确**：它钉的那个"冻结期"已经结束了。
- * ⇒ 处置是按 D24 ② 把划界从"T7 冻结期"换成"T8 接线之后"，**并把结构腿那一半一字不动地留下**
- *   （`driver.submit(` 恰 8 处）—— 那一半不因 T8 而变，它证明的是"这轮接线没有溢出到结构腿"。
- *   这不是绕过守卫：改的是"哪一刻的划界"，不是"要不要查"。
+ * ⇒ 处置是按 D24 ② 把划界从"T7 冻结期"换成"T8 接线之后"，**并把结构腿那一半留着**
+ *   （`driver.submit(` 的计数：T8 时 8 处，G5 T12 加了草稿选牌那一处之后 9 处）—— 它证明的是
+ *   "这轮接线没有溢出到结构腿"。这不是绕过守卫：改的是"哪一刻的划界"与"那个数字跟着
+ *   `src/main.ts` 的真实结构走"，不是"要不要查"。
  * ========================================================================== */
 
 describe('判据 14：行为面在 T7、渲染与接线在 T8', () => {
-  it('T8 已经接线：`src/ui/net-lobby.ts` 存在且被 `main.ts` 引用；结构腿仍为 8 处', () => {
+  it('T8 已经接线：`src/ui/net-lobby.ts` 存在且被 `main.ts` 引用；结构腿仍为 9 处', () => {
     // ① 旧文本（T7 冻结期）：「T7 没有新建 src/ui/net-lobby.ts」
     //    新文本（T8 接线后）：这个文件**必须存在** —— 那五件义务的落点就是它
     const uiFiles = readdirSync(fileURLToPath(new URL('../../src/ui/', import.meta.url)));
     expect(uiFiles, 'T8 的落点 src/ui/net-lobby.ts 不存在（那五件义务没有地方落）').toContain('net-lobby.ts');
     const main = readSrc(fileURLToPath(new URL('../../src/main.ts', import.meta.url)));
-    // `main.ts` 是结构敏感文件：8 处 driver.submit(、1 处 renderApp(root, state, cb)（口径：剥注释）
-    // ★ 结构腿这一半**一个字都没动**（D24 ② 明写"保留它的另一半"）
+    // `main.ts` 是结构敏感文件：9 处 driver.submit(（T8 时是 8；G5 T12 加了草稿选牌那一处，
+    // 理由写在 `tests/ui/main-lobby-wiring.test.ts` 第 5 条腿上）、1 处 renderApp(root, state, cb)
+    // （口径：剥注释）
+    // ★ 结构腿这一半**保留着**（D24 ② 明写"保留它的另一半"）—— 变的只是那个数字，
+    //   而它必须跟着 `src/main.ts` 的真实结构走，否则这条腿会变成"钉住一个过期的数字"。
     const code = stripComments(main);
-    expect((code.match(/driver\.submit\(/g) ?? []).length, 'main.ts 的 driver.submit( 不是 8 处').toBe(8);
+    expect((code.match(/driver\.submit\(/g) ?? []).length, 'main.ts 的 driver.submit( 不是 9 处').toBe(9);
     // ② 旧文本（T7 冻结期）：「`expect(code.includes('net-browser')).toBe(false)` —— main.ts 已经被
     //    接线了，那是 T8 的活」。
     //    新文本（T8 接线后）：接线**必须已经发生**，而且必须真的把这两个模块接上 ——

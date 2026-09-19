@@ -124,7 +124,12 @@ describe('G4 T7 · 收口面（跨模块归拢：`executeAction` 零命中 + `dr
 
   /**
    * **生成式落点表**：把每一个 `driver.submit(` 分类到 `cb.onAction` / `applyRearrangeSwap` 之外，
-   * 并**打印出全部落点**（今天的正确答案是 8 处：`cb.onAction` 7 + `applyRearrangeSwap` 1）。
+   * 并**打印出全部落点**（今天的正确答案是 9 处：`cb.onAction` 7 + `cb.onDraftPick` 1
+   * + `applyRearrangeSwap` 1）。
+   *
+   * ★ **G5 T12 把总数从 8 改成 9**：草稿选牌从 T12 起走应用层的 `'draft-pick'` 动作
+   * （用户裁决 A），于是 `cb.onDraftPick` 也提交给当前驱动。落点分类的两个区间没变
+   * （两处都在 `cb` 里，`cb` 那个区间按花括号配平取，自然把新成员包进去）。
    *
    * 与 `main-driver-wiring.test.ts` 第 2 条的差别只有一点、但很重要：那里把"落点表"和
    * "落在外面的一律报红"合在一腿里；这里额外断言**两段各自的下界都来自真实计数**，
@@ -134,8 +139,15 @@ describe('G4 T7 · 收口面（跨模块归拢：`executeAction` 零命中 + `dr
     const swapBody = functionBody(MAIN, 'applyRearrangeSwap');
     const inAction = ON_ACTION.split('driver.submit(').length - 1;
     const inSwap = swapBody.split('driver.submit(').length - 1;
+    /**
+     * ★ G5 T12：多了一种落点 —— `cb.onDraftPick`（草稿选牌走驱动）。它**在 `cb` 里**，
+     * 但不在 `cb.onAction` 里 ⇒ 这条"总数独立比一次"的判据要把 `cb` 整体也算进来，
+     * 否则它会读成"9 处 = 7 + 1"而报红（一个纯粹的记账口径问题，不是不变式被破坏）。
+     * 不变式本身一个字没动：**提交点只许落在 `cb` 或 `applyRearrangeSwap` 里**。
+     */
+    const inCb = CB_BODY.split('driver.submit(').length - 1;
     const total = offsetsOf(MAIN, 'driver.submit(').length;
-    expect(total, `main.ts 里 driver.submit( 出现 ${total} 处（cb.onAction ${inAction} + applyRearrangeSwap ${inSwap}）`).toBe(inAction + inSwap);
+    expect(total, `main.ts 里 driver.submit( 出现 ${total} 处（cb ${inCb} 内：onAction ${inAction} + onDraftPick 1 + applyRearrangeSwap ${inSwap}）`).toBe(inCb + inSwap);
     const cbAt = MAIN.indexOf(CB_HEAD);
     const onAt = MAIN.indexOf(ON_ACTION);
     const swapAt = MAIN.indexOf(swapBody);
@@ -144,12 +156,22 @@ describe('G4 T7 · 收口面（跨模块归拢：`executeAction` 零命中 + `dr
     expect(swapAt, '找不到 applyRearrangeSwap 的函数体').toBeGreaterThanOrEqual(0);
     const onEnd = onAt + ON_ACTION.length;
     const swapEnd = swapAt + swapBody.length;
-    const outside = offsetsOf(MAIN, 'driver.submit(').filter((i) => !(i >= onAt && i < onEnd) && !(i >= swapAt && i < swapEnd));
+    /**
+     * ★ G5 T12：出口从"`cb.onAction` + `applyRearrangeSwap`"扩成"**`cb` 对象整体** +
+     * `applyRearrangeSwap`" —— 因为新加的草稿选牌那一处落在 `cb.onDraftPick` 里（同一个
+     * `cb` 对象、另一个成员）。**不变式没有被放宽**：提交点仍然只许落在这两个函数体里
+     * （`cb` 是那个对象的全文，落进它之外的函数仍然报红）。下面那条"每一个落点都逐条打印"
+     * 与 `main-driver-wiring.test.ts` 第 2 条一起，把"落在哪里"钉到具体成员上。
+     */
+    const cbEnd = cbAt + CB_BODY.length;
+    const outside = offsetsOf(MAIN, 'driver.submit(').filter(
+      (i) => !(i >= cbAt && i < cbEnd) && !(i >= swapAt && i < swapEnd),
+    );
     expect(outside.map((i) => MAIN.slice(i, i + 48)), '有 driver.submit( 落在两个出口之外').toEqual([]);
     // 两段各自下界（反空转：少了任何一段，"分类"都可能是空的）
     expect(inAction, 'cb.onAction 里没有提交点 ⇒ 动作没走驱动').toBeGreaterThanOrEqual(7);
     expect(inSwap, 'applyRearrangeSwap 里没有提交点 ⇒ 重排旁路没收口').toBe(1);
-    expect(occurrences(MAIN, 'driver.submit(').map((s) => s.replace(/\s+/g, ' ').slice(0, 96))).toHaveLength(8);
+    expect(occurrences(MAIN, 'driver.submit(').map((s) => s.replace(/\s+/g, ' ').slice(0, 96))).toHaveLength(9);
   });
 
   /**
