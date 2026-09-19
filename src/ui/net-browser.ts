@@ -46,6 +46,7 @@ import {
   type TransportStatus,
 } from '../net/transport';
 import { roomCodeFromRandom } from '../net/protocol';
+import type { NetMsgType } from '../net/protocol';
 import type { HashLike } from '../net/session';
 import {
   COMPRESSED_BYTES_MAX,
@@ -1222,6 +1223,53 @@ function dataChannelInit(channel: NetChannel): { ordered: boolean; maxRetransmit
 }
 
 /**
+ * ★★ **一张显式的「消息 → 通道」表**（T8-E 收口）。
+ *
+ * 口径照 `protocol.ts` 的 `MSG_TYPES` 与 `transport.ts` 的 `CHANNEL_SPECS`：一行一条，
+ * 而且**用 `Record<NetMsgType, NetChannel>` 声明** —— 给 `NetMsg` 加一条消息却忘了登记时
+ * tsc 当场报"缺属性"（与 `MSG_TYPES` 的同一条纪律，别改成 `as const` 数组）。
+ *
+ * ## 为什么必须**显式**（真机实测，不是风格问题）
+ *
+ * 原先这条判定是 `net-lobby.ts` 里的一句 `msg.t === 'act' ? 'act' : 'beat'` ⇒ **整条握手**
+ * （`hello` / `hello-ack` / `commit*` / `reveal-*` / `resync*` / `bye`）全被塞进了 `beat`，
+ * 而 `beat` 按 `CHANNEL_SPECS` 是 `{reliable:false, ordered:false}`（`maxRetransmits: 0`）
+ * 的**不可靠、可乱序**通道。真机实测（`.superpowers/g5-T8/ice-diag-afterleg.txt`）：加入方那条
+ * `hello` 真的上了线，而**房主侧 `send()` 一次都没被调用**（没有 `hello-ack`）⇒ 两端永远停在
+ * `handshaking`。**假传输两条通道都不丢包/不重排** ⇒ 这个缺陷在 node 面**永远看不见**。
+ *
+ * ## 口径（计划 §3 的通道表 + D11）
+ *
+ *  - `act` = **reliable + ordered**：操作记录、**握手**、重连、档案传输；
+ *  - `beat` = **unreliable + unordered**：**心跳、在线状态**（G5 的 `beat` 只做这两样）。
+ *
+ * ⚠️ 今天 `NetMsg` 里**没有任何心跳/在线消息类型**（`MSG_TYPES` 那 14 条全是协议/档案那一族）
+ * ⇒ 表里每条都是 `'act'`；`beat` 是**为心跳预留**的通道（T6 的心跳发送方还没有消息类型）。
+ * 这张表把"哪条消息走哪条通道"从一句三元表达式变成**可核对的一处**：将来加心跳消息时，
+ * 在这里写 `'beat'` 并写清理由，而不是让下一个人再去猜。
+ */
+export const MESSAGE_CHANNEL: Readonly<Record<NetMsgType, NetChannel>> = {
+  // ── 握手（丢一条就永远握不上：这正是真机实测卡住的那一族）──────────────
+  hello: 'act',          // 加入方的第一条；不可靠通道上会静默丢（实测的正是这一格）
+  'hello-ack': 'act',    // 握手的一半，与 hello 同族
+  busy: 'act',           // 拒绝入局：玩家必须看得到，不许丢
+  // ── 承诺-揭示（顺序错就得出错判：必须保序）──────────────────────────
+  commit: 'act',
+  'commit-ack': 'act',
+  'commit-face': 'act',
+  'reveal-seed': 'act',
+  'reveal-face': 'act',
+  'reveal-salt': 'act',
+  // ── 重连 / 追平（档案那一族：必须可靠且保序）──────────────────────────
+  'resync-req': 'act',
+  'resync-res': 'act',
+  // ── 对局数据与收尾 ───────────────────────────────────────────────────
+  act: 'act',            // 操作记录：`act` 通道的本来用途（D11）
+  bye: 'act',            // 道别必须到得了，否则对端要等宽限期
+  forfeit: 'act',        // 投降是对局状态的改变，不许丢
+};
+
+/**
  * 造一个 `NetTransport`（真 WebRTC）。
  *
  * ## ★ `init()` 只等**本侧**（D18 / 判据 12）
@@ -1260,6 +1308,15 @@ export function createBrowserTransport(env?: NetBrowserEnv): NetTransport {
    * （邀请码那条路）去 `await` 它，普通路径（切前台/局域网直连）不必等。
    */
   let gather: Promise<IceGatherResult> | null = null;
+  /**
+   * ★ **"某条通道可以发了"的订阅者**（T8-E）。
+   *
+   * 为什么是一个**集合**而不是"订阅时快照一遍通道"：加入方的通道是**认领**来的
+   * （`datachannel` 事件），订阅那一刻可能**一条都还没有**（D26）；若按快照挂 `open` 监听，
+   * 认领来的那两条永远报不出来 ⇒ 那条等通道的握手消息永远发不出去。
+   */
+  const channelOpenListeners = new Set<() => void>();
+  const notifyChannelOpen = (): void => { for (const cb of [...channelOpenListeners]) cb(); };
 
   const emitStatus = (to: TransportStatus, message: string): void => {
     if (to === status) return; // 契约：回调只报**变化**（transport.ts:232）
@@ -1307,12 +1364,43 @@ export function createBrowserTransport(env?: NetBrowserEnv): NetTransport {
       conn.addEventListener('iceconnectionstatechange', () => onPeerState(String(conn.iceConnectionState ?? '')));
       conn.addEventListener('connectionstatechange', () => onPeerState(String(conn.connectionState ?? '')));
       emitStatus('connecting', `正在建立本侧链路（本端 ${init.selfId}，对端 ${init.peerId}）。`);
-      for (const spec of CHANNEL_SPECS) {
-        const dc = conn.createDataChannel(spec.channel, dataChannelInit(spec.channel));
-        channels.set(spec.channel, dc);
+      /** 通道登记 / 认领的**唯一一处**：出 offer 方建、加入方认领，两边共用这一份接线 */
+      const registerChannel = (label: NetChannel, dc: DataChannelLike): void => {
+        channels.set(label, dc);
         dc.addEventListener('message', (ev) => {
           const data = (ev as { data?: unknown }).data;
-          if (typeof data === 'string') for (const cb of listeners.message) cb(data, spec.channel);
+          if (typeof data === 'string') for (const cb of listeners.message) cb(data, label);
+        });
+        // 通道一 open 就把"可以发了"报给订阅者（订阅者里可能正等着这条握手消息）
+        dc.addEventListener('open', () => { notifyChannelOpen(); });
+      };
+      /**
+       * ★★ **D26：只有出 offer 的一方 `createDataChannel`，另一方在 `datachannel` 里认领**。
+       *
+       * 真机实测（`.superpowers/g5-T8/ice-diag-chanmap.txt`）：加入方那条 `hello` 在**它自己的**
+       * `act` 上 `send` 成功（`readyState === 'open'`），而房主侧 `routedIn() === 0` —— 一帧都没
+       * 收到、会话层**一次都没拒**。机制：过去**两边各自**建 `act`/`beat`，同一个 label 的两条通道
+       * 在 SCTP 上是**两条不同的流**；应用把 `message` 监听挂在**本地建的那一条**上，而对端发来的
+       * 帧落在**对端建的那一条**（只有 `datachannel` 事件认得它）⇒ 谁都没收到。
+       * 假传输按 **label** 对接（`fake-transport` 的 `theirs.get(label)`）、**没有双流问题**
+       * ⇒ 这个缺陷在 node 面永远看不见。
+       *
+       * 与 D25 同一个方向：**出 offer 方建，另一方认领**。认领来的通道那一刻通常还没 `open`
+       * （`send` 会按 `readyState` 拒），所以"能发了"仍由**通道自己的 `open` 事件**驱动。
+       */
+      const asGuest = init.role === 'guest';
+      if (!asGuest) {
+        for (const spec of CHANNEL_SPECS) {
+          registerChannel(spec.channel, conn.createDataChannel(spec.channel, dataChannelInit(spec.channel)));
+        }
+      } else {
+        conn.addEventListener('datachannel', (ev) => {
+          const dc = (ev as { channel?: DataChannelLike }).channel;
+          // 只认两条已知通道（label 是唯一的口径来源 `CHANNEL_SPECS`）
+          if (dc === undefined || !CHANNEL_SPECS.some((sp) => sp.channel === dc.label)) return;
+          registerChannel(dc.label as NetChannel, dc);
+          // 认领那一刻它可能已经 open（那时 `open` 事件不会再响）⇒ 认领后补报一次
+          if (dc.readyState === 'open') notifyChannelOpen();
         });
       }
       /**
@@ -1327,14 +1415,13 @@ export function createBrowserTransport(env?: NetBrowserEnv): NetTransport {
        * 分流之后：
        *  - **房主/缺省**（`role !== 'guest'`）：照旧 `createOffer` + `setLocalDescription`，
        *    并把"等 ICE"排下来供 `localDescription()` 用；
-       *  - **加入方**（`role === 'guest'`）：只建通道与监听，**不** createOffer、**不**
-       *    setLocalDescription ⇒ 它那条连接的第一次描述就是 `acceptOffer` 里的
-       *    `setLocalDescription(answer)`（那条路自己在 `acceptOffer` 里等 ICE，不走 `gather`）。
+       *  - **加入方**（`role === 'guest'`）：不 createOffer、不 setLocalDescription ⇒ 它那条连接的
+       *    第一次描述就是 `acceptOffer` 里的 `setLocalDescription(answer)`（那条路自己在
+       *    `acceptOffer` 里等 ICE，不走 `gather`）。
        *
        * ⚠️ 缺省语义是 **`undefined` = `'host'`**（`transport.ts` 的 `TransportInit.role` 写了
        * 理由）：既有调用点一个字都不用改，而这个分流只由**注入的角色**决定，不靠猜。
        */
-      const asGuest = init.role === 'guest';
       if (!asGuest) {
         try {
           const offer = await conn.createOffer();
@@ -1490,26 +1577,23 @@ export function createBrowserTransport(env?: NetBrowserEnv): NetTransport {
      * **约 3 毫秒**（11521ms vs 11524ms）⇒ 在 `online` 那一刻 `send()` 看到
      * `readyState === 'connecting'`、直接丢掉那条消息。加入方的第一条 `hello` 正是这么丢的。
      *
-     * 实现：对**每一条**已建出来的通道挂一个一次性的 `open` 监听；若订阅时**已经**有通道 open，
-     * **立刻**叫一次（不叫就等于让调用方漏掉那个时机）。返回把所有监听摘掉的退订函数。
+     * 实现：对**每一条**已建出来的通道各挂一个 `open` 监听，**每条 open 各叫一次**（不是"第一次
+     * open 就叫一次就完"）；若订阅时某条通道**已经** open，那条**立刻**叫一次。
+     *
+     * ⚠️ **为什么必须"每条各叫一次"**（真机实测，`.superpowers/g5-T8/ice-diag-read.txt`）：
+     * 两条通道的 `open` 不同时到（先 `act` 后 `beat`），而 `hello` 走的是 **`beat`**
+     * （`net-lobby` 的 `send()`：`msg.t === 'act' ? 'act' : 'beat'`）⇒ 只在第一条 open 时叫一次，
+     * 那次重试仍会撞上 `beat` 还没 open、报 `offline`，而**再没有第二次机会** —— 症状就是
+     * 诊断读数里那串 `flush:挂通道open | channelOpen回调 | flush:失败(offline)` 之后彻底停住。
+     * 返回把所有监听摘掉的退订函数。
      */
     onChannelOpen(cb: () => void): () => void {
-      const attached: Array<{ dc: DataChannelLike; fn: (ev: unknown) => void }> = [];
-      let done = false;
-      const fire = (): void => { if (done) return; done = true; cb(); };
+      channelOpenListeners.add(cb);
+      // 订阅时**已经**有通道 open ⇒ 立刻叫一次（别让调用方漏掉这个时机）
       for (const dc of channels.values()) {
-        if (dc.readyState === 'open') { fire(); break; } // 已经能发了：这个口是"可以发了"的通知
-        const fn = (): void => { fire(); };
-        try {
-          dc.addEventListener('open', fn);
-        } catch {
-          continue; // 这条实现不给 open 事件：不影响别的通道
-        }
-        attached.push({ dc, fn });
+        if (dc.readyState === 'open') { cb(); break; }
       }
-      return () => {
-        for (const a of attached) a.dc.removeEventListener?.('open', a.fn);
-      };
+      return () => { channelOpenListeners.delete(cb); };
     },
 
     status(): TransportStatus {

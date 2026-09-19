@@ -60,7 +60,7 @@ import { decodeMsg, encodeMsg, normalizeRoomCode, roomChannel } from '../net/pro
 import type { NetMsg } from '../net/protocol';
 import type { NetChannel, NetTransport, SendResult, TransportStatus } from '../net/transport';
 import { PRIVACY_COPY } from '../app/privacy';
-import { readIceServers } from './net-browser';
+import { readIceServers, MESSAGE_CHANNEL } from './net-browser';
 import type { IceServersRead } from './net-browser';
 
 /* ==================================================================== *
@@ -568,6 +568,8 @@ export interface LobbyState {
    * 就意味着"握手在产出路径上还没开始"—— 那正是评审 1.1 第 4 点的形态。
    */
   readonly helloSent: boolean;
+  /** ★ 诊断读数（T8-E，**可选**）：第一条 `hello` 走到哪一步；屏上挂在 `data-hello-diag` */
+  readonly helloDiag?: string;
   /**
    * ★ **收方产出的那条回示码**（B3；`null` = 还没产）。
    *
@@ -645,6 +647,14 @@ export interface LobbySessionLink {
   sendHello(): boolean;
   /** 本端那条 `hello` 是否**真的发到了线上**（`sendHello()` 的记账口；攒着还没发时为 `false`） */
   helloSent(): boolean;
+  /**
+   * ★ **诊断读数（T8-E，可选）**：第一条 `hello` 走到哪一步的一串短句。
+   *
+   * 只给排查用（屏上挂在 `data-hello-diag`）：加入方"传输 online、通道 open、而 `send()` 一次
+   * 都没被调用"这种缺口在屏上是**看不出任何东西**的 —— 有了这串读数，一次 CDP 就能读到
+   * "交下没有 / 等什么状态 / 失败的原因 / 有没有挂通道 open"。
+   */
+  helloDiag?(): string;
   /**
    * ★★ **按当前相位发"这一格该本端发的那条"**（C 轮；结构缺口 ②）。
    *
@@ -747,7 +757,9 @@ export function createLobbySessionLink(opts: {
     if (!enc.ok) {
       return { ok: false, reason: 'not-initialized', message: '这条消息编不出来，没有发出去。' };
     }
-    const channel: NetChannel = msg.t === 'act' ? 'act' : 'beat';
+    // ★ **T8-E：通道由唯一一张表定**（`net-browser.ts` 的 `MESSAGE_CHANNEL`）—— 这里原来是
+    //   一句 `msg.t === 'act' ? 'act' : 'beat'`，把整条握手全塞进了不可靠通道（真机实测的堵点）。
+    const channel: NetChannel = MESSAGE_CHANNEL[msg.t];
     const r = opts.transport.sendIfOpen(channel, enc.text);
     outCount += 1;
     return r;
@@ -777,7 +789,13 @@ export function createLobbySessionLink(opts: {
     }
     const decision = session.accept({ t: dec.msg.t, msg: dec.msg } as SessionInbound);
     inCount += 1;
-    if (!decision.ok) { opts.onInbound?.(); return true; } // 情形 1：被会话层拒了
+    if (!decision.ok) {
+      // ★ 诊断（T8-E）：被会话层拒了 —— 把那条消息的**类型**与**可读拒绝理由**记进读数，
+      //   否则"两端停在 handshaking"在屏上完全看不出是被拒还是没收到。
+      trace(`accept拒绝(${dec.msg.t}:${decision.message})`);
+      opts.onInbound?.();
+      return true;
+    }
     if (decision.output === null) { opts.onInbound?.(); return true; } // 情形 2：收下了但不必回话
     if (dec.msg.t === 'hello') {
       // `hello` 的成功面**直接是** `HelloAckMsg`（不是 `SessionOutbound`）
@@ -810,8 +828,9 @@ export function createLobbySessionLink(opts: {
    *     （吞掉它等于让"没发出去"看起来像"没事发生"）。
    */
   function sendHello(): boolean {
-    if (session.role !== 'guest') return false;
-    if (helloDone) return false;
+    if (session.role !== 'guest') { trace(`sendHello:拒绝(role=${String(session.role)})`); return false; }
+    if (helloDone) { trace('sendHello:拒绝(helloDone)'); return false; }
+    trace(`sendHello:交下(status=${opts.transport.status()})`);
     pending = true;
     return flushHello();
   }
@@ -826,6 +845,21 @@ export function createLobbySessionLink(opts: {
 
   /** 是否已经请传输层"通道一 open 就把这句叫醒"（只请一次；`flushHello` 里那句 `send` 只是重试） */
   let openHooked = false;
+
+  /**
+   * ★ **诊断读数（T8-E）**：第一条 `hello` 走到哪一步。**只读、只拼字符串**，不参与任何判定
+   * （判定仍是 `pending` / `helloDone` / 传输状态那三样）。
+   *
+   * 为什么要有它：真浏览器里"两端握手不动"时，屏上什么都看不出来（传输 online、通道 open、
+   * 而 `send()` 一次都没被调用）。只靠探针猜了三轮都猜错（`SyntaxError` 的探针、把
+   * `getConfiguration` 读在构造器里、`online` 与 `open` 差 3 毫秒）—— 所以把这条路的每一步
+   * 记成一串读数，挂到屏上（`data-hello-diag`），下一次 CDP 直接读，不再猜。
+   */
+  const helloTrace: string[] = [];
+  const trace = (s: string): void => {
+    helloTrace.push(s);
+    if (helloTrace.length > 10) helloTrace.shift();
+  };
 
   /**
    * 把待发的那条 `hello` 真发出去（状态订阅 / 通道 open / `sendHello()` 共用这一份）。
@@ -846,20 +880,29 @@ export function createLobbySessionLink(opts: {
    * 这不是计时器：它是**事件订阅**，与"等 `online`"同一条纪律（本仓计时一律注入）。
    */
   function flushHello(): boolean {
-    if (!pending || helloDone) return false;
-    if (opts.transport.status() !== 'online') return false;
+    if (!pending || helloDone) {
+      trace(`flush:跳过(pending=${String(pending)},done=${String(helloDone)})`);
+      return false;
+    }
+    if (opts.transport.status() !== 'online') {
+      trace(`flush:等状态(status=${opts.transport.status()})`);
+      return false;
+    }
     // ⚠️ 走 `send()`（= `sendIfOpen` + 记发件数）：把失败广播给 `onError` 订阅者这一点在这里是
     //    可接受的 —— "通道晚 3 毫秒 open"是正常的重试过程，而重试由下面的订阅兜住。
     const r = send(helloMsg());
     if (!r.ok) {
       // 传输报 online 却发不出去（通道还没 open / 队列满 / 已关）：记下可读真因，等下一次机会。
       driveRefusal = r.message;
+      trace(`flush:失败(${r.reason})`);
       if (!openHooked) {
         openHooked = true;
-        opts.transport.onChannelOpen?.(() => { flushHello(); });
+        trace('flush:挂通道open');
+        opts.transport.onChannelOpen?.(() => { trace('channelOpen回调'); flushHello(); });
       }
       return false;
     }
+    trace('flush:成功');
     pending = false;
     helloDone = true;
     return true;
@@ -959,6 +1002,7 @@ export function createLobbySessionLink(opts: {
   // ★ J-2：这里也是"待发的那条 `hello`"唯一的补发时机（状态订阅 = 注入的机制，不用时钟）：
   //   加入方那条 `hello` 是在通道 open **之前**被交下来的，转 `online` 那一刻才算真的发得出去。
   const detachStatus = opts.transport.onStatus((change) => {
+    trace(`status:${change.to}`);
     session.noteTransportStatus(change.to);
     // 顺序写死：**先补发、再通知宿主** —— 宿主收到这个变化时会重画一帧，
     // 屏上那句 `helloSent` 必须已经是补发之后的真值。
@@ -971,6 +1015,7 @@ export function createLobbySessionLink(opts: {
     receive,
     sendHello,
     helloSent: () => helloDone,
+    helloDiag: () => helloTrace.join(' | '),
     driveOnce,
     routedIn: () => inCount,
     routedOut: () => outCount,
@@ -1455,6 +1500,8 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
       routedIn: linkOf()?.routedIn() ?? 0,
       routedOut: linkOf()?.routedOut() ?? 0,
       helloSent: linkOf()?.helloSent() ?? false,
+      helloDiag: `${linkOf()?.helloDiag?.() ?? '（没有链路）'} | in=${String(linkOf()?.routedIn() ?? -1)}`
+        + ` out=${String(linkOf()?.routedOut() ?? -1)}`,
       answerCode: s.answerCode,
       answerApplied: s.answerApplied,
     }),
@@ -1719,6 +1766,14 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
   root.classList.remove('screen-home');
   const s = nav.state;
   const screen = el('div', 'net-lobby-screen');
+  /**
+   * ★ **诊断读数挂在属性上**（T8-E）：不占屏、不改文案、不参与任何判定 —— 只是让
+   * `document.querySelector('.net-lobby-screen').dataset.helloDiag` 一次就能读到
+   * "加入方那条 `hello` 走到哪一步"（这类缺口在屏上本来是**完全看不见**的）。
+   */
+  if (typeof s.helloDiag === 'string' && s.helloDiag.length > 0) {
+    screen.setAttribute('data-hello-diag', s.helloDiag);
+  }
   screen.appendChild(el('h1', 'net-lobby-title', '联机对战'));
   screen.appendChild(button('btn-link net-lobby-back', '← 返回模式选择', nav.backHome));
 

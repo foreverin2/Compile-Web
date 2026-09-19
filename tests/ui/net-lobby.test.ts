@@ -38,7 +38,7 @@ import {
   acceptOffer, applyAnswer, createBrowserTransport, createInvite, decodeBase64Url, decodeInviteFromAddressBar, decodeInvitePayload,
   decompressBytes, inviteLengthReport, peerConnectionOf, readIceServers, roomCodeEntry,
   stripInviteFromAddressBar, waitForIceGathering,
-  DEFAULT_ICE_GATHER_TIMEOUT_MS,
+  DEFAULT_ICE_GATHER_TIMEOUT_MS, MESSAGE_CHANNEL,
   type NetBrowserEnv, type WebSocketLike,
 } from '../../src/ui/net-browser';
 
@@ -1169,41 +1169,45 @@ describe('★★ D25 · 加入方在收到对端 offer 之前不建自己的 off
   const countOf = (fake: ReturnType<typeof makeFakePc>['fake'], op: string): number =>
     fake.calls.filter((c) => c.op === op).length;
 
-  it('★ ① 加入方 `init({ role: \'guest\' })` ⇒ `createOffer` 调用数 **= 0**，但通道照建', async () => {
+  it('★ ① 加入方 `init({ role: \'guest\' })` ⇒ `createOffer` **= 0**，且**通道一条都不建**（D26）', async () => {
     const { tr, fake } = transportWithLedger();
     const r = await tr.init({ selfId: 'g', peerId: 'h', role: 'guest' });
     expect(r.ok, `加入方的传输没起来：${r.ok ? '' : r.message}`).toBe(true);
     expect(countOf(fake, 'createOffer'), '加入方在收到对端 offer 之前就建了自己的 offer（D25 的靶子）').toBe(0);
     expect(countOf(fake, 'setLocalDescription'), '加入方在 init 里就把自己的描述落下去了').toBe(0);
-    // 反空转：该做的两件事一件都没少（通道 + 监听），否则上面那两条"零"是废话
-    expect(countOf(fake, 'createDataChannel'), '加入方连数据通道都没建（那它就收不到 hello-ack）').toBe(2);
+    // ★ D26：通道由**出 offer 方**建、加入方认领 ⇒ 这里一条都不许建（建了就是两条流，对端收不到）
+    expect(countOf(fake, 'createDataChannel'), '加入方自己建了通道（D26：那会和对端那条成为两条不同的流）').toBe(0);
   });
 
-  it('★ ② 房主 `init({ role: \'host\' })` ⇒ `createOffer` **>= 1**（对照：房主本来就该出 offer）', async () => {
+  it('★ ② 房主 `init({ role: \'host\' })` ⇒ `createOffer` **>= 1** 且**建两条通道**（D26）', async () => {
     const { tr, fake } = transportWithLedger();
     const r = await tr.init({ selfId: 'h', peerId: 'g', role: 'host' });
     expect(r.ok, '房主的传输没起来').toBe(true);
     expect(countOf(fake, 'createOffer'), '房主没出 offer（那它就没有可发出去的邀请码）').toBeGreaterThanOrEqual(1);
     expect(countOf(fake, 'setLocalDescription'), '房主没把自己的 offer 落下去').toBeGreaterThanOrEqual(1);
+    // ★ D26：出 offer 的一方建两条通道（`act` + `beat`），认领方一条都不建
+    expect(countOf(fake, 'createDataChannel'), '房主没建够两条通道').toBe(2);
     // 缺省语义：**不给 role** 的既有调用点走同一条路（`undefined` = 'host'，见 `TransportInit.role`）
     const legacy = transportWithLedger();
     expect((await legacy.tr.init({ selfId: 'h', peerId: 'g' })).ok).toBe(true);
     expect(countOf(legacy.fake, 'createOffer'), '省略 role 的既有调用点行为变了（缺省必须是 host）')
       .toBeGreaterThanOrEqual(1);
+    expect(countOf(legacy.fake, 'createDataChannel'), '省略 role 的既有调用点没建通道（缺省必须是 host）').toBe(2);
   });
 
-  it('★ ③ 收到对端 offer 之后：加入方 `createAnswer` **= 1**，且与通道同一条连接', async () => {
+  it('★ ③ 收到对端 offer 之后：加入方 `createAnswer` **= 1**，且落在**同一条**连接上', async () => {
     const { tr, fake, pc } = transportWithLedger();
     await tr.init({ selfId: 'g', peerId: 'h', role: 'guest' });
     expect(countOf(fake, 'createAnswer'), '还没收到 offer 就 createAnswer 了').toBe(0);
     const r = await acceptOffer(peerConnectionOf(tr) ?? (pc as never), { sdp: 'HOST-OFFER' });
     expect(r.ok, `收下对端 offer 之后产不出 answer：${r.ok ? '' : r.message}`).toBe(true);
     expect(countOf(fake, 'createAnswer'), '收到 offer 之后没有产 answer（或产了不止一条）').toBe(1);
-    // ★ 落在**同一条**连接上（缺口 ① 的回归）：通道与 answer 的账在同一份 calls 上
+    // ★ 落在**同一条**连接上（缺口 ① 的回归）：answer 的三步与"认领通道用的那条连接"是同一份 calls
     const ops = fake.calls.map((c) => c.op);
     expect(ops, 'answer 不在承载消息的那条连接上').toEqual(
-      expect.arrayContaining(['createDataChannel', 'setRemoteDescription', 'createAnswer', 'setLocalDescription']),
+      expect.arrayContaining(['setRemoteDescription', 'createAnswer', 'setLocalDescription']),
     );
+    expect(countOf(fake, 'createDataChannel'), 'D26：加入方在 answer 这条路上也不该建通道').toBe(0);
     expect(fake.remoteSeen[0]?.sdp, '喂进去的不是那条 offer').toBe('HOST-OFFER');
   });
 });
@@ -1513,6 +1517,147 @@ describe('★★ J-1/J-2 · 真浏览器那两条断点（入口不设角色 / �
     const after = pair.B.sendSeq();
     for (const cb of openCbs) cb();
     expect(pair.B.sendSeq(), '通道 open 被通知两次就补发了第二条 hello').toBe(after);
+  });
+
+  /* ==================================================================== *
+   * ★★ **通道时序 / 认领腿**（T8-E 收口）：
+   *
+   *  - 真机里两条 `RTCDataChannel` 的 `open` **不同时到**（`.superpowers/g5-T8/ice-diag-read.txt`：
+   *    当时 `onChannelOpen` 里那个全局一次性 `done` 让 `beat` 的 open 再也没有第二次机会）；
+   *  - 而 **D26** 之后，加入方的通道是**认领**来的（`datachannel` 事件，见 `net-browser.init`）
+   *    ⇒ 这个假件必须能演 `ondatachannel`，否则腿测的不是真形状。
+   *
+   * 用**真** `createBrowserTransport` + 一个"按 label 认领、通道逐个 open"的假 peer connection
+   * （**注入局部桩件**，不动 `fake-transport.ts`）。
+   * ==================================================================== */
+
+  /** 一个"通道可由对端认领、且能逐个 open"的假 peer connection */
+  function sequencingRig() {
+    const pcListeners = new Map<string, Array<(ev: unknown) => void>>();
+    const channels: Array<{ label: string; readyState: string; sent: string[]; fireOpen: () => void }> = [];
+    /** 按 label 造一条通道记录 + 它的对外视图（认领方拿到的是**对端那条**的视图） */
+    const makeChan = (label: string) => {
+      const own = new Map<string, Array<(ev: unknown) => void>>();
+      const rec = {
+        label,
+        readyState: 'connecting',
+        sent: [] as string[],
+        fireOpen: (): void => {
+          rec.readyState = 'open';
+          for (const cb of own.get('open') ?? []) cb({});
+        },
+      };
+      channels.push(rec);
+      const view = {
+        label,
+        get readyState(): string { return rec.readyState; },
+        send: (text: string): void => { rec.sent.push(text); },
+        close: (): void => {},
+        addEventListener: (type: string, cb: (ev: unknown) => void): void => {
+          const arr = own.get(type) ?? [];
+          arr.push(cb);
+          own.set(type, arr);
+        },
+      };
+      return { rec, view };
+    };
+    let created = 0;
+    const pc: Record<string, unknown> = {
+      iceConnectionState: 'new',
+      connectionState: 'new',
+      iceGatheringState: 'complete',
+      localDescription: null,
+      // 出 offer 方才走这一格（D26：加入方一条都不建）
+      createDataChannel: (label: string) => { created += 1; return makeChan(label).view; },
+      createOffer: async () => ({ type: 'offer', sdp: 'v=0\r\n' }),
+      setLocalDescription: async () => { /* 加入方不走这一格 */ },
+      setRemoteDescription: async () => { /* 这条腿不喂 offer */ },
+      createAnswer: async () => ({ type: 'answer', sdp: 'v=0\r\n' }),
+      addEventListener: (type: string, cb: (ev: unknown) => void): void => {
+        const arr = pcListeners.get(type) ?? [];
+        arr.push(cb);
+        pcListeners.set(type, arr);
+      },
+      close: (): void => {},
+    };
+    return {
+      pc,
+      channels,
+      /** 本侧 createDataChannel 被调了几次（D26：加入方必须是 0） */
+      created: () => created,
+      /** ★ **D26**：把对端那条通道"递"过来（真 WebRTC 的 `datachannel` 事件） */
+      adopt: (label: string): void => {
+        const { view } = makeChan(label);
+        for (const cb of pcListeners.get('datachannel') ?? []) cb({ channel: view });
+      },
+      /** 把对端连上这件事报出来（真传输据此转 `online`） */
+      fireConnected: (): void => {
+        pc.connectionState = 'connected';
+        for (const cb of pcListeners.get('connectionstatechange') ?? []) cb({});
+      },
+    };
+  }
+
+  /** 注入桩传输的加入方客户端（一次 `connect('first')`，`hello` 落在"通道还没 open"的窗口里） */
+  async function guestOnSequencingRig() {
+    const rig = sequencingRig();
+    const t = fakeTicker();
+    const client = createLobbyClient({
+      role: 'guest',
+      sessionId: 'sid-chan',
+      localProtoVersion: PROTO_VERSION,
+      localCardDataHash: CARD_DATA_HASH,
+      hash: browserHash(),
+      ticker: t.ticker,
+      createTransport: () => createBrowserTransport({
+        peerConnection: () => rig.pc as never,
+        settings: () => null,
+      }),
+      signalingEndpoint: '',
+      readSettings: () => ({ turnUrl: '', turnUsername: '', turnCredential: '' }),
+      buildInvite: async () => ({ ok: true as const, payload: 'P', link: `${REAL_HREF}#invite=P` }),
+      decompressBase64: async () => null,
+      readAddressBar: () => null,
+      localNick: () => 'g',
+    });
+    await client.connect('first');
+    rig.fireConnected(); // 传输转 online：这一刻 `beat` 还没 open
+    return { client, rig };
+  }
+  const hellosOf = (rig: ReturnType<typeof sequencingRig>): string[] =>
+    rig.channels.flatMap((c) => c.sent).filter((t2) => t2.includes('"t":"hello"'));
+
+  it('★ D26/时序：认领 `act` + 认领 `beat`（逐个 open）⇒ `hello` 真发出、且只发一条', async () => {
+    const { client, rig } = await guestOnSequencingRig();
+    // ★ D26：加入方**认领**两条（自己一条都不建）
+    expect(rig.created(), 'D26：加入方自己建了通道 —— 那会和对端那条成为两条不同的流（真机收不到）').toBe(0);
+    rig.adopt('act');
+    rig.adopt('beat');
+    expect(  rig.channels.map((c) => c.label).sort(), 'D26：两条通道要按 label 各认领到一条',  ).toEqual(['act', 'beat']);
+    expect(hellosOf(rig), 'online 那一刻（两条通道都没 open）就不该有 hello 上线').toEqual([]);
+    // ★ `hello` 走 **`act`**（`MESSAGE_CHANNEL`）⇒ `act` 一 open，它就该发出去
+    rig.channels.find((c) => c.label === 'act')?.fireOpen();
+    expect(hellosOf(rig).length, 'act 的 open 到了，hello 还没发出去').toBe(1);
+    rig.channels.find((c) => c.label === 'beat')?.fireOpen();
+    expect(hellosOf(rig).length, 'beat 后 open 不该再补一条').toBe(1);
+    expect(client.state().helloSent, '发出去了但读数还是 false').toBe(true);
+    // 只发一条：再 open 一遍 / 再叫一次 sendHello 都不许补
+    rig.channels.forEach((c) => { c.readyState = 'connecting'; c.fireOpen(); });
+    expect(client.sendHello(), '重复调 sendHello 竟然又发了一条').toBe(false);
+    expect(hellosOf(rig).length, '通道 open 被通知两次就补发了第二条 hello').toBe(1);
+  });
+
+  it('★ D26/反顺序：`beat` 先 open、`act` 后 open ⇒ 仍只发一条（顺序无关）', async () => {
+    const { client, rig } = await guestOnSequencingRig();
+    rig.adopt('beat');
+    rig.adopt('act');
+    rig.channels.find((c) => c.label === 'beat')?.fireOpen();
+    expect(hellosOf(rig), '`hello` 走 act ⇒ beat 先 open 时它还不该出去').toEqual([]);
+    // ★ 判据：`beat` 那次 open 已经叫过一次回声，`act` 的 open 必须**再叫一次**
+    //   （「第一条通道 open 就叫一次就完」那种写法会让这条 hello 永远发不出去）
+    rig.channels.find((c) => c.label === 'act')?.fireOpen();
+    expect(hellosOf(rig).length, 'act 后 open 时 hello 该发出去（onChannelOpen 只叫了一次？）').toBe(1);
+    expect(client.state().helloSent).toBe(true);
   });
 });
 
@@ -2179,3 +2324,97 @@ function srcTsFiles(): string[] {
   walk(fileURLToPath(new URL('../../src/', import.meta.url)));
   return out;
 }
+
+/* ==================================================================== *
+ * ★★ **T8-E：一条消息走哪条通道，由唯一一张表定**（`MESSAGE_CHANNEL`）
+ *
+ * 缺陷形状（真机实测）：`net-lobby.send()` 原来写的是 `msg.t === 'act' ? 'act' : 'beat'`
+ * ⇒ **整条握手**（hello / hello-ack / commit* / reveal-* / resync* / bye）全挤在 `beat`
+ * 上，而 `beat` 是 `{reliable:false, ordered:false}`（`maxRetransmits: 0`）的不可靠通道。
+ * 真机读数（`.superpowers/g5-T8/ice-diag-afterleg.txt`）：加入方那条 `hello` 上了线，
+ * 房主侧 `send()` 一次都没被调用 ⇒ 没有 `hello-ack` ⇒ 两端永远停在 `handshaking`。
+ * **假传输两条通道都不丢包/不重排** ⇒ 这个缺陷在 node 面永远看不见 —— 所以这里两条腿都要：
+ * 一条钉表，一条钉**线上实际走的那条通道**。
+ * ==================================================================== */
+
+describe('★★ T8-E · 消息 → 通道（`act` = reliable+ordered / `beat` = 心跳与在线）', () => {
+  /** 本文件 `C2` 那节的 `wireSide` 是那个 describe 的局部函数 ⇒ 这里照它的形状再造一份最小版 */
+  function wireSideLocal(role: 'host' | 'guest', tr: NetTransport) {
+    const pending: string[] = [];
+    tr.onMessage((text) => { pending.push(text); });
+    const client: LobbyClient = createLobbyClient({
+      role,
+      sessionId: 'sid-chan-map',
+      localProtoVersion: PROTO_VERSION,
+      localCardDataHash: CARD_DATA_HASH,
+      hash: browserHash(),
+      ticker: fakeTicker().ticker,
+      createTransport: () => tr,
+      signalingEndpoint: '',
+      readSettings: () => ({ turnUrl: '', turnUsername: '', turnCredential: '' }),
+      buildInvite: async () => ({ ok: true as const, payload: 'P', link: `${REAL_HREF}#invite=P` }),
+      decompressBase64: hostDecompress,
+      readAddressBar: () => null,
+      localNick: () => 'nick',
+      onInbound: () => { client.drive(); },
+    });
+    return {
+      client,
+      /** 消费待投帧（消费掉就从 pending 里移除；返回消费了几条） */
+      async consume(n: number): Promise<number> {
+        const take = pending.splice(0, n);
+        for (const text of take) client.drive();
+        return take.length;
+      },
+    };
+  }
+
+  /** 握手的整族（全在 `act` 上的判据按这一族逐条核） */
+  const HANDSHAKE_FAMILY = [
+    'hello', 'hello-ack', 'busy',
+    'commit', 'commit-ack', 'commit-face', 'reveal-seed', 'reveal-face', 'reveal-salt',
+    'resync-req', 'resync-res', 'act', 'bye', 'forfeit',
+  ] as const;
+
+  it('★ 表腿：`MESSAGE_CHANNEL` 覆盖全部 14 条消息，且**每条都在 `act`**（`beat` 上没有协议消息）', () => {
+    // 覆盖：与 `protocol.ts` 的 `MSG_TYPES` 同一份清单（那边是 `Record<NetMsgType, true>`，
+    // 少一条 tsc 就报；这条腿钉的是"这张表也跟着全"）
+    expect(
+      Object.keys(MESSAGE_CHANNEL).sort(),
+      '`MESSAGE_CHANNEL` 的键与协议的消息类型对不上（漏登记 / 写错名字）',
+    ).toEqual([...HANDSHAKE_FAMILY].sort());
+    for (const t of HANDSHAKE_FAMILY) {
+      expect(MESSAGE_CHANNEL[t], `${t} 没走 act（握手/协议消息丢不起）`).toBe('act');
+    }
+    // 反空转：这张表真的只有两条通道、没有第三种值
+    expect([...new Set(Object.values(MESSAGE_CHANNEL))].sort()).toEqual(['act']);
+  });
+
+  it('★ 线腿：走完握手 + 承诺-揭示全程，线上**每一帧协议消息都在 `act`**（`beat` 上零帧）', async () => {
+    const pair = createFakeTransportPair();
+    const host = wireSideLocal('host', pair.A.transport);
+    const guest = wireSideLocal('guest', pair.B.transport);
+    await host.client.connect('first');
+    await guest.client.connect('first');
+    for (let round = 0; round < 20; round += 1) {
+      pair.pump(2);
+      await host.consume(8);
+      await guest.consume(8);
+      host.client.drive();
+      guest.client.drive();
+      if (host.client.state().peer?.phase === 'complete' && guest.client.state().peer?.phase === 'complete') break;
+    }
+    const frames = pair.steps().map((s) => ({
+      channel: String(s.channel),
+      type: /"t":"([a-z-]+)"/.exec(s.text)?.[1] ?? '?',
+    }));
+    // 反空转：线上真的运过握手与承诺-揭示两族（否则下面那条"全在 act"可能是空集恒真）
+    for (const must of ['hello', 'hello-ack', 'commit', 'commit-face', 'reveal-seed', 'reveal-salt']) {
+      expect(frames.some((f) => f.type === must), `线上从来没有出现过 ${must}（这条腿没走完全程）`).toBe(true);
+    }
+    const wrong = frames.filter((f) => HANDSHAKE_FAMILY.includes(f.type as typeof HANDSHAKE_FAMILY[number]) && f.channel !== 'act');
+    expect(wrong, `有协议消息走了非 act 通道：${JSON.stringify(wrong)}`).toEqual([]);
+    const onBeat = frames.filter((f) => f.channel === 'beat');
+    expect(onBeat.map((f) => f.type), '`beat` 上出现了协议消息（它只该跑心跳/在线读数）').toEqual([]);
+  });
+});

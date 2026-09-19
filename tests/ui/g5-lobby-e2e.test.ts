@@ -123,6 +123,20 @@ interface WireChannel {
 type WireMap = Map<string, (text: string) => void>;
 
 /**
+ * ★ **D26 的桥**（两侧共用一份）：加入方不再 `createDataChannel`，改为在 `datachannel` 事件里
+ * **认领**。假件必须能演那件事，否则端到端腿会变成"什么都没建、也没人认领"（不是产品的形状）。
+ *  - 出 offer 方建通道时 `notify(label)`；
+ *  - 认领方把自己的认领函数 `register` 进来（建得比认领先，所以是真事件）；
+ *  - `mark`/`bothCreated` 是**两条流**那条现实：两侧都建同一个 label ⇒ 谁都没收到。
+ */
+interface WireBridge {
+  notify(label: string): void;
+  register(f: (label: string) => void): void;
+  mark(role: 'host' | 'guest', label: string): void;
+  bothCreated(label: string): boolean;
+}
+
+/**
  * 把 `makeFakePc` 的结果改造成"能真的收发帧"的假连接。
  *
  * ## 为什么必须改造
@@ -151,6 +165,14 @@ function wireChannels(
   theirs: WireMap,
   /** 本侧**发出去**的每一帧（记账：看哪几条消息真的上过线） */
   onSend: (text: string) => void,
+  /**
+   * ★ **D26 的桥**：加入方不再 `createDataChannel`，改为在 `datachannel` 事件里**认领**。
+   * 假件必须能演那件事，否则这条端到端腿会变成"什么都没建、也没人认领"（不是产品的形状）。
+   *  - 出 offer 方建通道时 `notify(label)`；
+   *  - 认领方把自己的认领函数 `register` 进来（建得比认领先，所以是真事件）。
+   */
+  bridge: WireBridge,
+  role: 'host' | 'guest',
 ): {
   /**
    * ★ J-2 的夹具动作：把这条假连接的"接上了"报出来（见 `Side.markConnected` 的说明）。
@@ -171,7 +193,8 @@ function wireChannels(
     statusListeners.set(type, arr);
     origAdd(type, cb);
   };
-  pc.createDataChannel = (label: string): WireChannel => {
+  /** 造一条"本侧视图"的通道（出 offer 方建的那条、与认领方认领的那条共用这一份形状） */
+  const makeView = (label: string): WireChannel => {
     const listeners: Array<(ev: unknown) => void> = [];
     mine.set(label, (text: string) => { for (const cb of listeners) cb({ data: text }); });
     return {
@@ -179,8 +202,15 @@ function wireChannels(
       readyState: 'open',
       send: (text: string) => {
         onSend(text);
+        /**
+         * ★★ **两条流的现实**（D26 的判别力就在这里）：若**两侧都 `createDataChannel`** 了同一个
+         * label，真 WebRTC 里那是**两条不同的 SCTP 流**，本侧发出去的帧落在**对端建的那条**上，
+         * 而应用把 `message` 监听挂在**自己建的那条**上 ⇒ **谁都没收到**。
+         * 夹具必须照这个来，否则"加入方也建通道"那个回退在腿里**照样绿**（实测踩过）。
+         */
+        if (bridge.bothCreated(label)) return;
         const dest = theirs.get(label);
-        if (dest === undefined) return; // 对端还没建出这条通道 ⇒ 丢掉（真 WebRTC 也会丢）
+        if (dest === undefined) return; // 对端还没认领这条通道 ⇒ 丢掉（真 WebRTC 也会丢）
         dest(text);
       },
       close: () => {},
@@ -189,6 +219,36 @@ function wireChannels(
       },
     };
   };
+  pc.createDataChannel = (label: string): WireChannel => {
+    const view = makeView(label);
+    bridge.mark(role, label);
+    // 出 offer 方建完就通知认领方（真 WebRTC 的 `datachannel` 事件就是这个时机）
+    bridge.notify(label);
+    return view;
+  };
+  if (role === 'guest') {
+    /**
+     * 认领方的动作：把桥上的通知转成一次 `datachannel` 事件（带上"对端那条"的视图）。
+     *
+     * ⚠️ 时序（腿里必须摆对）：房主 `connect('first')` 时就建了通道，而加入方要到**它自己**
+     * `connect('first')` 时才挂 `datachannel` 监听 ⇒ 监听还没挂上时的通知先**攒着**，
+     * 等真传输挂上监听那一刻**补投**（真 WebRTC 的时序也是这样：事件在连接建立之后到）。
+     */
+    const adoptQueue: string[] = [];
+    const emitAdopt = (label: string): void => {
+      const cbs = statusListeners.get('datachannel') ?? [];
+      if (cbs.length === 0) { adoptQueue.push(label); return; }
+      for (const cb of cbs) cb({ channel: makeView(label) });
+    };
+    bridge.register(emitAdopt);
+    const addBefore = pc.addEventListener as ((type: string, cb: (ev: unknown) => void) => void);
+    pc.addEventListener = (type: string, cb: (ev: unknown) => void): void => {
+      addBefore(type, cb);
+      if (type === 'datachannel' && adoptQueue.length > 0) {
+        for (const label of adoptQueue.splice(0, adoptQueue.length)) cb({ channel: makeView(label) });
+      }
+    };
+  }
   const origSetLocal = pc.setLocalDescription as (d: { type: string; sdp?: string }) => Promise<void>;
   pc.setLocalDescription = async (desc: { type: string; sdp?: string }): Promise<void> => {
     await origSetLocal(desc);
@@ -243,7 +303,14 @@ interface Side {
  * `onPeerConnection`。D 轮 I-1 / I-2 的修法就是把后两样挪进 `main.ts` 的 `lobbyEnv()` ——
  * 这条腿能红能绿，靠的正是"这份 env 里有没有那两样"。
  */
-function makeSide(role: 'host' | 'guest', env: NetBrowserEnv, mine: WireMap, theirs: WireMap): Side {
+function makeSide(
+  role: 'host' | 'guest',
+  env: NetBrowserEnv,
+  mine: WireMap,
+  theirs: WireMap,
+  /** ★ D26 的桥（见 `wireChannels`）：出 offer 方建通道时通知认领方 */
+  bridge: WireBridge,
+): Side {
   // ★ I-2 的**判别力**靠这一格：`'gathering'` 起步 ⇒ 第一次调用一定会去问
   //   "等多久算超时"（`resolved.ticker`）——`'complete'` 起步会**同步早退**，那条问题根本不问。
   const { pc, fake } = makeFakePc({ iceGatheringState: role === 'host' ? 'gathering' : 'complete' });
@@ -266,6 +333,8 @@ function makeSide(role: 'host' | 'guest', env: NetBrowserEnv, mine: WireMap, the
     mine,
     theirs,
     (text) => { side.sent.push(text); },
+    bridge,
+    role,
   );
   // ★ J-2 的夹具动作（见 `Side.markConnected` 的说明）：把假件缺省不报的那个"接上了"补上。
   side.markConnected = (): void => { wires.markConnected(); };
@@ -363,14 +432,42 @@ function makeSide(role: 'host' | 'guest', env: NetBrowserEnv, mine: WireMap, the
 function makeBothSides(): { host: Side; guest: Side } {
   const hostWires: WireMap = new Map();
   const guestWires: WireMap = new Map();
+  /**
+   * ★ **D26 的桥**：出 offer 方（房主）建通道时 `notify(label)`；认领方（加入方）
+   * 在 `init` 里 `register` 自己的认领函数。房主建得**晚**（`connect('first')` 时），
+   * 所以这是"真事件"而不是"建好再补"。
+   */
+  const adopters: Array<(label: string) => void> = [];
+  const pendingAdopt: string[] = [];
+  /** ★ 每条 label 被哪几侧 `createDataChannel` 过（两侧都建 ⇒ 两条流，见 `makeView` 的 `send`） */
+  const createdBy = new Map<string, Set<'host' | 'guest'>>();
+  const bridge = {
+    notify: (label: string): void => {
+      // ⚠️ 真 WebRTC 里 `datachannel` 事件是在**连接建立之后**才到认领方的；腿里的顺序是
+      //    房主先 `connect('first')`（那一刻建通道）、加入方后 `connect('first')`（那一刻挂
+      //    `datachannel` 监听）⇒ 没人在场时先攒着，等认领方一注册再补投（否则腿会假红）。
+      if (adopters.length === 0) { pendingAdopt.push(label); return; }
+      for (const f of adopters) f(label);
+    },
+    register: (f: (label: string) => void): void => {
+      adopters.push(f);
+      for (const label of pendingAdopt.splice(0, pendingAdopt.length)) f(label);
+    },
+    mark: (role: 'host' | 'guest', label: string): void => {
+      const set = createdBy.get(label) ?? new Set<'host' | 'guest'>();
+      set.add(role);
+      createdBy.set(label, set);
+    },
+    bothCreated: (label: string): boolean => (createdBy.get(label)?.size ?? 0) > 1,
+  };
   /** ★ 这份 env 就是 `main.ts` 那份 `lobbyEnv()` 的形状（I-1 / I-2 的落点） */
   const env: NetBrowserEnv = {
     settings: () => ({ turnUrl: '', turnUsername: '', turnCredential: '' }),
     onPeerConnection: () => {},
   };
   return {
-    host: makeSide('host', env, hostWires, guestWires),
-    guest: makeSide('guest', env, guestWires, hostWires),
+    host: makeSide('host', env, hostWires, guestWires, bridge),
+    guest: makeSide('guest', env, guestWires, hostWires, bridge),
   };
 }
 
@@ -410,7 +507,9 @@ describe('★ D 轮：env 缺 ticker 时"取连接描述"这条路', () => {
     const { pc, fake } = makeFakePc({ iceGatheringState: 'gathering' });
     (pc as Record<string, unknown>).connectionState = 'new';
     (pc as Record<string, unknown>).iceConnectionState = 'new';
-    wireChannels(pc, 'gathering', fake, wires, peerWires, () => {});
+    // 这条腿只关心"等 ICE 的上界"，没有对端 ⇒ 桥上没人认领（`notify` 是空操作）
+    wireChannels(pc, 'gathering', fake, wires, peerWires, () => {},
+      { notify: () => {}, register: () => {}, mark: () => {}, bothCreated: () => false }, 'host');
     /**
      * ★ 故意**不给** `ticker`：计时是本仓"一律注入"的能力，而"等 ICE 的上界"是这一层
      * （`net-browser.ts`）自己的职责 —— 传不传计时能力是调用方的事，不该因此把这条路关掉。
