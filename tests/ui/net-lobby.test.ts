@@ -295,6 +295,9 @@ function makeGuestClient(over: Partial<Parameters<typeof createLobbyClient>[0]> 
   const client = createLobbyClient({
     role: 'guest',
     sessionId: 'sid-guest',
+    // ★ T11-A：种子与随机串改成注入（不再是 `sessionId` 的派生串）——夹具给确定性值
+    matchSeed: 'mseed-fixture',
+    randomToken: () => 'rtok-fixture',
     localProtoVersion: PROTO_VERSION,
     localCardDataHash: CARD_DATA_HASH,
     hash: browserHash(),
@@ -322,6 +325,9 @@ function makePairClient(role: 'host' | 'guest', transports: NetTransport[]) {
   return createLobbyClient({
     role,
     sessionId: 'sid-shared',
+    // ★ T11-A：注入的种子/随机串（两端同值 ⇒ 与真实两端各自取熵的差别只在这两个数上）
+    matchSeed: 'mseed-fixture',
+    randomToken: () => 'rtok-fixture',
     localProtoVersion: PROTO_VERSION,
     localCardDataHash: CARD_DATA_HASH,
     hash: browserHash(),
@@ -366,6 +372,9 @@ function makeClient(over: Partial<Parameters<typeof createLobbyClient>[0]> = {})
   return createLobbyClient({
     role: 'guest',
     sessionId: 'sid-1',
+    // ★ T11-A：种子与随机串改成注入（不再是 `sessionId` 的派生串）——夹具给确定性值
+    matchSeed: 'mseed-fixture',
+    randomToken: () => 'rtok-fixture',
     localProtoVersion: PROTO_VERSION,
     localCardDataHash: CARD_DATA_HASH,
     hash: browserHash(),
@@ -945,6 +954,8 @@ describe('★ 判据 14 · 入站消息喂进 `accept`（D24 的裁决 + D19）'
       transport: pair.A.transport,
       sessionId: 'sid-1',
       hash: browserHash(),
+      matchSeed: 'mseed-fixture',
+      randomToken: () => 'rtok-fixture',
       seat: 0,
       localProtoVersion: PROTO_VERSION,
       localCardDataHash: CARD_DATA_HASH,
@@ -954,6 +965,8 @@ describe('★ 判据 14 · 入站消息喂进 `accept`（D24 的裁决 + D19）'
       transport: pair.B.transport,
       sessionId: 'sid-1',
       hash: browserHash(),
+      matchSeed: 'mseed-fixture',
+      randomToken: () => 'rtok-fixture',
       seat: 1,
       localProtoVersion: PROTO_VERSION,
       localCardDataHash: CARD_DATA_HASH,
@@ -1301,6 +1314,8 @@ describe('★ 修复轮 A2/A3/A4/A5 · 建链路 / 发 hello / 入站重画 / �
     const watched = createLobbyClient({
       role: 'guest',
       sessionId: 'sid-shared',
+      matchSeed: 'mseed-fixture',
+      randomToken: () => 'rtok-fixture',
       localProtoVersion: PROTO_VERSION,
       localCardDataHash: CARD_DATA_HASH,
       hash: browserHash(),
@@ -1605,6 +1620,8 @@ describe('★★ J-1/J-2 · 真浏览器那两条断点（入口不设角色 / �
     const client = createLobbyClient({
       role: 'guest',
       sessionId: 'sid-chan',
+      matchSeed: 'mseed-fixture',
+      randomToken: () => 'rtok-fixture',
       localProtoVersion: PROTO_VERSION,
       localCardDataHash: CARD_DATA_HASH,
       hash: browserHash(),
@@ -2110,6 +2127,8 @@ describe('★★ C2 · 承诺-揭示流程的驱动者（结构缺口 ②）', (
     const client = createLobbyClient({
       role,
       sessionId: 'sid-c2',
+      matchSeed: 'mseed-fixture',
+      randomToken: () => 'rtok-fixture',
       localProtoVersion: PROTO_VERSION,
       localCardDataHash: CARD_DATA_HASH,
       hash: browserHash(),
@@ -2345,6 +2364,8 @@ describe('★★ T8-E · 消息 → 通道（`act` = reliable+ordered / `beat` =
     const client: LobbyClient = createLobbyClient({
       role,
       sessionId: 'sid-chan-map',
+      matchSeed: 'mseed-fixture',
+      randomToken: () => 'rtok-fixture',
       localProtoVersion: PROTO_VERSION,
       localCardDataHash: CARD_DATA_HASH,
       hash: browserHash(),

@@ -11,7 +11,7 @@
  *
  * ## 为什么这条顺序不能只靠"调用方按顺序调"
  *
- * 硬币结果今天是 `deriveInt(seed, 'coin', 2)`（`src/ui/home.ts:394`，**只吃 seed**，不吃 salt）。
+ * 硬币结果今天是 `deriveInt(seed, 'coin', 2)`（`src/app/coin.ts:39` 的 `coinLanding`，**只吃 seed**，不吃 salt）。
  * 于是"谁先看到 seed"直接等于"谁可以先算出硬币"。若顺序只写在文档里，任何一个调用方
  * （今天的 T5、明天的 UI 接线）把 `reveal-seed` 挪到前面，**没有任何机制会拦住**。
  * 所以顺序落成两处**结构事实**：

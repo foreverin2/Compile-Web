@@ -379,6 +379,10 @@ function makeSide(
     role,
     // ★ 两端的 `sessionId` **故意不同**（I-3：真实调用方就是各自 `newSessionId()`）
     sessionId: ownSessionId,
+    // ★ T11-A：种子与随机串是**注入**的（不再是 `sessionId` 的派生串）—— 这条 e2e 腿不校验
+    //   它们的值，给两个确定性串即可（判据 1/2 的牙由 `tests/ui/coin-seed-injection.test.ts` 钉）
+    matchSeed: 'mseed-e2e',
+    randomToken: () => 'rtok-e2e',
     localProtoVersion: PROTO_VERSION,
     localCardDataHash: CARD_DATA_HASH,
     hash: browserHash(),

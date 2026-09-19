@@ -156,6 +156,28 @@ export interface LobbyClientOptions {
   readonly role: 'host' | 'guest';
   /** 本局 `sessionId`。**由调用方生成**（`src/net` 不许取随机，§2 第 2 条） */
   readonly sessionId: string;
+  /**
+   * ★★ **T11-A（I-5 的修正）**：本局的**种子素材**，以及本端要一条真随机串时用的那个口子。
+   *
+   * ## 为什么必须注入，且必须与 `sessionId` 无关
+   *
+   * 承诺流程里房主要发 `commit { hash(seed, salt) }`。修正前这里是
+   * `sessionId` 派生的常量（`` `seed-${sessionId}` `` / `` `salt-${sessionId}` ``），
+   * 而 `sessionId` **明文写在邀请码里**（`InvitePayload.sessionId`）⇒ 加入方在叫面之前
+   * 就能把种子算出来，那条"叫面早于公开种子"的结构约束在**值**上被绕过（I-5）。
+   *
+   * ⇒ 熵只能来自注入：`matchSeed` 是本局的种子（由宿主在 `startLobby()` 那一刻取一次），
+   * `randomToken` 是"再要一条随机串"的动作（`src/ui/match-seed.ts` 的 `newRandomToken`）。
+   *
+   * ## 为什么两个都是**必填**（不是可选 + 兜底）
+   *
+   * 可选 + 回落 `sessionId` 会让"忘了注入"退化成 I-5 原形，而且在屏上完全看不出来。
+   * 必填 ⇒ `main.ts` 与新写的测试都必须显式给；漏了就在 tsc 上红，
+   * 而不是在真机上表现成"这局的种子怎么总是同一串"。
+   */
+  readonly matchSeed: string;
+  /** 要一条真随机串（房主的盐、加入方的面 nonce）。调用两次得到两条不同的串，且各只调一次 */
+  readonly randomToken: () => string;
   /** 本机协议版本与卡牌指纹（`NetSessionOptions` 的两个必填本地事实） */
   readonly localProtoVersion: number;
   readonly localCardDataHash: string;
@@ -662,12 +684,17 @@ export interface LobbySessionLink {
    *
    * | 相位 | 谁 | 发什么 |
    * |---|---|---|
-   * | `'awaiting-commit-face'` | 房主 | `sendCommit(seed, salt)`（**相位不变** ⇒ 靠"发过就返回 false"防重） |
+   * | `'awaiting-commit-face'` | 房主 | `sendCommit(matchSeed, randomToken())`（**相位不变** ⇒ 靠"发过就返回 false"防重） |
    * | `'awaiting-commit-ack'` | 加入方 | `sendCommitAck()` |
-   * | `'seed-committed'` | 加入方 | `commitFace(face, nonce)` |
+   * | `'seed-committed'` | 加入方 | `commitFace(face, faceNonce())` |
    * | `'face-committed'` | 房主 | `sendRevealSeed()` |
    * | `'seed-revealed'` | 加入方 | `sendRevealFace()` |
    * | `'complete'` | 房主 | `sendRevealSalt()`（这一步**不改相位** ⇒ 同样靠"发过就返回 false"防重） |
+   *
+   * ★ T11-A：`matchSeed` / `salt` / `nonce` 都来自**注入**（`LobbyClientOptions.matchSeed` 与
+   * `randomToken()`），**不是** `sessionId` 的派生串 —— 后者明文写在邀请码里（I-5）。
+   * 盐由会话层存下并在揭示那一步原样交回（本层不缓存）；面 nonce 本层按链路记一次，
+   * 为的是重连回退后的重发保持幂等（见 `faceNonce()` 那段）。
    *
    * ## 为什么它不存任何"到哪一步了"
    *
@@ -698,6 +725,10 @@ export function createLobbySessionLink(opts: {
   readonly transport: NetTransport;
   readonly sessionId: string;
   readonly hash: HashLike;
+  /** ★ T11-A：本局种子（房主的 `commit` 用它；**不再**由 `sessionId` 派生） */
+  readonly matchSeed: string;
+  /** ★ T11-A：要一条真随机串的动作（salt / nonce） */
+  readonly randomToken: () => string;
   readonly seat?: 0 | 1;
   readonly localProtoVersion: number;
   readonly localCardDataHash: string;
@@ -736,11 +767,46 @@ export function createLobbySessionLink(opts: {
    *
    * ⚠️ 它们**不是**"流程到哪一步了"（那归相位机）—— 它们是"**本对象**已经发过这一条"的事实。
    * 没有它们，`sendCommit` 与 `sendRevealSalt` 会被`driveOnce`无限重发（那两条不改相位）。
+   *
+   * ⚠️ 范围：**只管房主那两条**（`commit` / `reveal-salt`）。加入方的 `commit-face`
+   * **不在这里**：它靠相位机只发一次（`driveOnce` 的 `awaiting-commit-ack` 那一格 +
+   * `commitFace` 成功后把相位推到 `face-committed`）。相位机在重连回退路径上不单调，
+   * 所以还得靠 `faceNonce()` 那条按链路记忆的 nonce 兜住重发（见那段注释）。
    */
   let commitSent = false;
   let saltSent = false;
   /** 加入方选的面（`seed-committed` 那一格要用；没有就默认 0） */
   let chosenFace: 0 | 1 = 0;
+  /**
+   * ★★ **面 nonce 每条链路只取一次**（T11-A 修复轮恢复；盐仍然不缓存）。
+   *
+   * ## 为什么盐不需要、nonce 需要（这两者的机制不一样，别照抄）
+   *
+   *  - **盐**：`sendCommit(seed, salt)` 把盐写进会话状态 `s.salt`（`session.ts:1724`），
+   *    `sendRevealSalt()` 揭示的就是 `s.salt`（`session.ts:1869`）⇒ 承诺与揭示用的是
+   *    会话里那一个值，本层每次现取也不会错位。
+   *  - **面 nonce**：为什么这里必须记一次 —— 它防的不是"承诺与揭示错位"（那个同样由
+   *    `s.faceNonce` 兜住），而是**重发**：相位机在重连回退路径上**不单调**
+   *    （`applyResyncFile`，`session.ts:2263-2269`：`phaseBeforeResyncApply ∈ {null,'resuming',
+   *    'handshaking'}` 时把相位写回 `seed-committed`；而 `acceptCommit` 也认 `resuming` /
+   *    `resync-pending`，`session.ts:1906-1916`）⇒ 加入方**可以再走一遍**到
+   *    `awaiting-commit-ack`，`driveOnce` 于是再发一条 `commit-face`。
+   *    重发时若现取一条新 nonce，新承诺的哈希与房主记下的 `faceHash` 不同，
+   *    而 `acceptCommitFace`（`session.ts:1738`）对重复一律 `unexpected-message` ⇒
+   *    房主最后验 `reveal-face` 失配。旧代码那条 `sessionId` 常量 nonce 恰好让重发**幂等**，
+   *    所以这条记忆位是"旧行为里隐式存在的性质"，不能被当成冗余删掉。
+   *
+   * ⚠️ **今天不可达**：`acceptResyncRes` / `applyResyncFile` 在生产里零调用者
+   * （`main.ts:455` 自己写着，任务书 §2 把重连归 T9/T10）。这是潜伏项，不是现行 bug。
+   *
+   * ⚠️ 它**不是**"流程到哪一步了"的又一个状态位：只有"本链路取过的那条 nonce"这一个事实。
+   */
+  let faceNonceOnce: string | null = null;
+  /** 本链路的面 nonce（只在此处取熵；重发承诺时复用同一条） */
+  function faceNonce(): string {
+    if (faceNonceOnce === null) faceNonceOnce = opts.randomToken();
+    return faceNonceOnce;
+  }
   /** 订阅链路状态变化的宿主回调（本路由转发 `NetTransport.onStatus`） */
   const statusListeners = new Set<(to: TransportStatus) => void>();
 
@@ -942,7 +1008,7 @@ export function createLobbySessionLink(opts: {
       case 'awaiting-commit-face': {
         if (session.role !== 'host') return false;
         if (commitSent) return false; // 这一格发了相位也不动 ⇒ 只发一次
-        const r = session.sendCommit(`seed-${opts.sessionId}`, `salt-${opts.sessionId}`);
+        const r = session.sendCommit(opts.matchSeed, opts.randomToken());
         if (!r.ok) { driveRefusal = r.message; return false; }
         send(r.output.msg);
         commitSent = true;
@@ -960,7 +1026,7 @@ export function createLobbySessionLink(opts: {
       case 'awaiting-commit-ack': {
         // `commitFace()` 的**唯一**合法相位（`session.ts:292`）⇒ 该发的是本方那条承诺。
         if (session.role !== 'guest') return false;
-        const r = session.commitFace(chosenFace, `nonce-${opts.sessionId}`);
+        const r = session.commitFace(chosenFace, faceNonce());
         if (!r.ok) { driveRefusal = r.message; return false; }
         send(r.output.msg);
         return true;
@@ -1429,6 +1495,9 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
       // ★ I-3 甲：加入方照邀请码里房主那一串建会话（见上面 `linkSessionId` 的说明）
       sessionId: linkSessionId,
       hash: opts.hash,
+      // ★ T11-A：种子的素材与"再要一条随机串"的动作都从宿主注入（**不是** sessionId 派生）
+      matchSeed: opts.matchSeed,
+      randomToken: opts.randomToken,
       ...(opts.seat === undefined ? {} : { seat: opts.seat }),
       localProtoVersion: opts.localProtoVersion,
       localCardDataHash: opts.localCardDataHash,

@@ -1,5 +1,6 @@
 import type { PlayerId } from '../core/models/types';
-import { deriveInt } from '../core/rng';
+// G5 T11-A：硬币落点、胜负规则、面映射的**唯一出处**（联机那条路也算同一件事）
+import { coinLanding, draftStarterFor } from '../app/coin';
 import { DEMO_PROTOCOLS, DEMO_CARD_DEFS, protocolImgSrc, cardImgSrc, cardTextParts } from '../data/demo';
 import { openZoom, buildCardTextEl, buildProtocolRatingPanel, bindClickOrDouble } from './render';
 
@@ -422,8 +423,10 @@ export function renderCoin(root: HTMLElement, nav: CoinNav): void {
     for (const pe of pickEls) (pe as HTMLButtonElement).disabled = true;
     stage.classList.add('flipping');
     // G0：硬币结果由种子派生（原来是 Math.random）—— 动画只是把已确定的结果演出来
-    const landed: 1 | 2 = deriveInt(nav.seed, 'coin', 2) === 0 ? 1 : 2;
-    const winner: PlayerId = landed === chosen ? 0 : 1;
+    // G5 T11-A：落点式与胜负规则**都搬去 `src/app/coin.ts`**（只搬家、不改值）；
+    //   联机那条路要算同一件事，规则不能再长在屏上这一份里。
+    const landed: 1 | 2 = coinLanding(nav.seed);
+    const winner: PlayerId = draftStarterFor(0, chosen, nav.seed);
     // 交替闪现间隔逐次拉长（模拟硬币逐渐停下），最后停在 landed 面
     const delays = [90, 90, 110, 130, 160, 190, 230, 280, 340, 420, 520];
     let shown: 1 | 2 = chosen === 1 ? 2 : 1; // 首跳先翻到另一面

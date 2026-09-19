@@ -52,7 +52,7 @@ import { setupFromState, type MatchFile, type MatchFileMeta } from './app/match-
 import { CARD_DATA_HASH } from './app/card-data-hash';
 import { renderReplayBar, type ReplayBarNav } from './ui/replay-bar';
 import { openArchivePicker, openArchiveSink } from './ui/archive-fs-browser';
-import { newMatchSeed } from './ui/match-seed';
+import { newMatchSeed, newRandomToken } from './ui/match-seed';
 import { resetControlIfHeld } from './core/rules/control';
 import { initEffects, initCompileFx, initRearrangeFx, initGen3StackSwapFx, initShuffleFx, playRevealFly, buildLoveHeart, playSpeedDrawExtra, SPEED_TOTAL_MS } from './ui/effects';
 import { gen3ClearCacheFx, gen3ControlChangedFx, gen3ControlCheckFx, syncGen3Persistent } from './ui/gen3-control';
@@ -485,6 +485,12 @@ function startLobby(role: 'host' | 'guest'): void {
     lobbyClient = createLobbyClient({
       role,
       sessionId: newSessionId(),
+      // ★ T11-A（I-5 的修正）：这一局的种子与"再要一条随机串"的动作都**在这里注入**。
+      //   修正前大厅把两者写成 `seed-${sessionId}` / `nonce-${sessionId}`（模板串），而
+      //   `sessionId` 明文写在邀请码里 ⇒ 加入方能在叫面之前算出种子（I-5）。
+      //   `newMatchSeed()` 与 `newRandomToken` 都只从 `src/ui/match-seed.ts` 出熵（全项目唯一口子）。
+      matchSeed: newMatchSeed(),
+      randomToken: () => newRandomToken(),
       localProtoVersion: PROTO_VERSION,
       localCardDataHash: CARD_DATA_HASH,
       hash: browserHash(),
