@@ -1739,7 +1739,16 @@ describe('★★ J-1/J-2 · 真浏览器那两条断点（入口不设角色 / �
     for (const [token, why] of [
       ['connect(', '建链路/接上的落点（A3）'],
       ["connect('first')", '第一次接上（A3）'],
-      ['reconnect(', '重连的落点（A5）'],
+      /**
+       * ★★ **G5 T13-C 换的 token（原先是 `reconnect(`）**：这一格的判据是"**重连在产出代码里
+       * 有落点**"，不是"必须调 `client.reconnect()` 这个名字"。T13-C 按用户 2026-09-20 的指示
+       * 改掉了"宽限到点自动 `client.reconnect()`"那条路（新传输永远连不上 ⇒ 玩家被丢在一个
+       * 没有出口的死牌桌上，§9 第 27 条）—— 现在重连的落点是**玩家重新生成邀请码 / 重新贴码**
+       * 之后那句 `client.connect('resume')`（它才是真的"新建会话对象 + 先 `markResuming()`"，
+       * 见 `tests/ui/net-link-recovery.test.ts` 判据 5 的那条端到端腿）。
+       * token 因此换成更具体的 `connect('resume')`（比 `reconnect(` 更严：它钉住了模式）。
+       */
+      ["connect('resume')", '重连的落点（A5；T13-C 起由玩家重新贴码触发）'],
       ['decompressBase64:', '真解压的注入（A1）'],
       ['decodeBase64Url', '真解压的实现（A1）'],
       ['onInbound:', '入站重画的落点（A4）'],

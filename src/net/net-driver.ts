@@ -351,6 +351,28 @@ export interface NetDriver extends MatchDriver {
   feedText(text: string, channel?: NetChannel): void;
   /** 最近一次失败（`null` = 还没有过） */
   lastFailure(): DriverFailure | null;
+  /**
+   * ★★ **G5 T13-C（§9 第 14 条）：这条链路是不是已经"判死"了**（只读）。
+   *
+   * ## 它答的是哪一件事（与 `submit` 的 `'offline'` 是两件不同的事）
+   *
+   * 判据只有一个、而且是**不可逆**的那一个：`transport.status() === 'closed'`
+   * （`src/net/transport.ts:229`：`close()` 之后那条链路回不来）。它与下面两件事分开：
+   *  - `'offline'`（掉线 / 还没连上 / 发不出去）：**会好** —— 等对端回来或链路自己恢复；
+   *  - `disposed`（驱动被 `dispose()` 过）：那是"本驱动不再收输入"，`submit` 报 `'read-only'`。
+   *
+   * ## 为什么必须有这个读数（§9 第 14 条的原文）
+   *
+   * §9 第 14 条：`dispose()` 会 `transport.close()`（不可逆）⇒ **在那之后**（例如
+   * `enterNetGame()` 拿一条已经关掉的传输造了新驱动）每次 `submit` 都返回 `refusal === 'offline'`，
+   * 而 `lastFailure()` 仍是 `null`（它只由 `report()` 写、那条路不上报失败）⇒ 调用方
+   * **只能看见"离线"**，看不见"这条链路已经死了"。两者对玩家的含义完全不同：
+   * 前者是"等一等"，后者是"必须重新交换邀请码/回示码"。
+   *
+   * 它是**读数**，不参与任何判定（不改 `submit` 的拒码，也不制造失败记录）：驱动这一层的
+   * 语义仍是 D16 那三个码，多出来的只是"这一格到底属于哪一类"。
+   */
+  linkClosed(): boolean;
   /** 订阅失败事件（返回退订函数）。**不抛**：网络来的坏输入不是异常 */
   onFailure(cb: (failure: DriverFailure) => void): () => void;
 }
@@ -848,6 +870,12 @@ export function createNetDriver(opts: NetDriverOptions): NetDriver {
     },
 
     lastFailure: () => failure,
+
+    /**
+     * ★★ G5 T13-C（§9 第 14 条）：唯一判据是 `transport.status() === 'closed'`（不可逆）。
+     * 头注在 `NetDriver.linkClosed` 上 —— 那里写了它与 `'offline'` / `disposed` 的分界。
+     */
+    linkClosed: () => transport.status() === 'closed',
 
     onStatus(cb: (change: StatusChange) => void): () => void {
       statusListeners.add(cb);

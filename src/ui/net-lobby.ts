@@ -55,7 +55,9 @@ import {
 } from '../net/invite';
 import type { InviteDecodeResult } from '../net/invite';
 import { createGuestSession, createHostSession } from '../net/session';
-import type { HashLike, NetSession, PeerStatus, SessionInbound, SessionOutbound, SessionPhase } from '../net/session';
+import type {
+  ClockLike, HashLike, NetSession, PeerStatus, SessionInbound, SessionOutbound, SessionPhase,
+} from '../net/session';
 import { decodeMsg, encodeMsg, normalizeRoomCode, roomChannel } from '../net/protocol';
 import type { NetMsg } from '../net/protocol';
 import type { NetChannel, NetTransport, SendResult, TransportStatus } from '../net/transport';
@@ -213,6 +215,21 @@ export interface LobbyClientOptions {
   readonly seat?: 0 | 1;
   /** 计时能力（8 秒窗口） */
   readonly ticker: LobbyTicker;
+  /**
+   * ★★ **G5 T13-C：300s 重连窗口的时钟能力**（D8 的 2026-09-18 补充裁决；可选）。
+   *
+   * ## 为什么它是一个**注入项**，以及不注入时的语义
+   *
+   * `src/net` 是纯层、不许读时钟（§2 第 2 条）⇒ 窗口的时间来源只能由宿主注入
+   * （`NetSessionOptions.clock`）。这里把它**照传**给这一局建出来的会话对象：注入了 ⇒
+   * `peerStatus().windowExpired` 是 `false`/`true`（判得了）；不注入 ⇒ 恒 `null`（**判不了**，
+   * 屏上走 `'offline-window-unknown'` 那一格，不许说"超窗"）。
+   *
+   * ⚠️ **生产今天不注入它**（`src/main.ts` 的 `startLobby` 没传；理由写在报告 §判据 1 里：
+   * 心跳（D11 的 `beat`）还没接线，注入真时钟会让"两边都在、但 5 分钟没说话"的对局被判成
+   * 对端离线）⇒ 玩家今天看到的是"判不了"那一格。这条注入缝是给"要判窗口的宿主"与腿留的。
+   */
+  readonly clock?: ClockLike;
   /**
    * 造一个传输。**生产实现是 `createBrowserTransport(env)`**；测试传
    * `createFakeTransportPair().A.transport`。
@@ -570,6 +587,43 @@ export function lobbyLinkText(status: PeerStatus): string {
   const detail = status.needsResyncDetail;
   if (!status.needsResync || detail === null || detail.length === 0) return base;
   return `${base}（${detail}）`;
+}
+
+/**
+ * ★★ **G5 T13-C 判据 5：对局中掉线超过宽限 ⇒ 把玩家带回"建房 / 加入房"那一屏时那一行话。**
+ *
+ * ## 为什么它必须与 `LOBBY_LINK_COPY` 分开（两句话答的不是同一件事）
+ *
+ * `lobbyLinkText()` 答"对端现在什么状态"（读数同源的那张表）；这一句答**"你该做什么、
+ * 以及这一局还能不能接着打"** —— 它是**动作指引**，只在"链路判死、玩家被带回大厅"那一刻出现。
+ * 合成一句会让大厅平时那一行也变成一段操作说明（屏上那三样控件的存在感反而没了）。
+ *
+ * ## 三值口径与 D8 的裁决写死在这里（判据 1 的同一份三值）
+ *
+ *  - `windowExpired === true`（超窗）⇒ **不可续**：D8 说超窗只是"不许再追平"，
+ *    **不自动结束对局**（`session.ts` 那边一个字都不动）⇒ 文案必须同时说清这两半：
+ *    不能再追平、只能重开；而本地这份对局**不会被程序自动结束**。
+ *    不许写成"这一局已经结束了"（那是我们没做的事），也不许写成"会自动接回来"（没这回事）。
+ *  - `windowExpired === false`（还在宽限期内）⇒ **可续**：请重新贴一次码，接上之后走
+ *    `resuming` 追平（机制在 T13-A/B 已接好）。如实说清"要重新交接邀请码"，不承诺后台自动接回。
+ *  - `windowExpired === null`（没注入时钟 ⇒ 判不了）⇒ **不许说超窗**，也不许承诺可续：
+ *    把两个方向的条件都说出来（5 分钟内回来可以追平；超过之后不允许），让玩家自己判断。
+ */
+export function linkRecoveryNotice(status: PeerStatus | null): string {
+  const expired = status === null ? null : status.windowExpired;
+  if (expired === true) {
+    return '对端离线已经超过了宽限期：按 D8 的规则这一局不能再追平了，'
+      + '但本地这份对局不会被程序自动结束（它只是不再接受追平）。要接着打只能重新开一局：'
+      + '请重新生成邀请码 / 重新加入。';
+  }
+  if (expired === false) {
+    return '这一局的宽限期还没过：请重新生成邀请码 / 重新加入。'
+      + '对方带着同一个会话接上之后，本地会把这一局追平接着打（追平要把缺掉的那几步补齐）'
+      + '—— 这是重新交接一次邀请码，不是后台自己把链路接回来。';
+  }
+  return '这一侧判不了宽限期还剩多少（没有可用的时钟读数）：'
+    + '对端若带着同一个会话回来，可以追平接着打；超过 5 分钟之后再回来就不允许追平、只能重开。'
+    + '请重新生成邀请码 / 重新加入。';
 }
 
 /* ==================================================================== *
@@ -955,6 +1009,8 @@ export function createLobbySessionLink(opts: {
   readonly readFaceMemory?: () => 0 | 1 | null;
   readonly onFaceChosen?: (face: 0 | 1) => void;
   readonly seat?: 0 | 1;
+  /** ★ G5 T13-C：300s 窗口的时钟能力（照传 `LobbyClientOptions.clock`；不注入 = 判不了窗口） */
+  readonly clock?: ClockLike;
   readonly localProtoVersion: number;
   readonly localCardDataHash: string;
   /** 本机昵称（`hello.nick` 的唯一来源；`session.ts:2438` 说"`hello` 里还有 `nick`"） */
@@ -973,6 +1029,12 @@ export function createLobbySessionLink(opts: {
    *  3. **不弹硬币屏**、复用旧链路记下的面（`driveOnce()` 的 `awaiting-commit-ack` 那一格）。
    */
   const resumeMode = opts.resume === true;
+  /**
+   * ★★ **G5 T13-C：窗口的时钟注入照传两条会话**（D8 补充裁决：`src/net` 只问时间、不取时间）。
+   * 不注入时 `clock` 是 `undefined` ⇒ 会话层 `windowExpired` 恒 `null`（**判不了**），
+   * 屏上走 `'offline-window-unknown'` 那一格；注入了才有 `false` / `true` 两种真读数。
+   */
+  const clockOpt = opts.clock === undefined ? {} : { clock: opts.clock };
   const session: NetSession = opts.role === 'host'
     ? createHostSession({
       localProtoVersion: opts.localProtoVersion,
@@ -980,6 +1042,7 @@ export function createLobbySessionLink(opts: {
       sessionId: opts.sessionId,
       seat: opts.seat ?? 0,
       hash: opts.hash,
+      ...clockOpt,
       // ★ D8 的重连凭据：房主侧把"当前档案"的来源注进去（没有它 ⇒ `resync-not-wired`，fail-closed）
       ...(opts.resyncSource === undefined ? {} : { resyncSource: opts.resyncSource }),
     })
@@ -989,6 +1052,7 @@ export function createLobbySessionLink(opts: {
       sessionId: opts.sessionId,
       seat: opts.seat ?? 1,
       hash: opts.hash,
+      ...clockOpt,
     });
 
   let inCount = 0;
@@ -1668,6 +1732,28 @@ export interface LobbyClient {
    */
   showNotice(text: string | null): void;
   /**
+   * ★★ **G5 T13-C 判据 5：把"上一条链路那一次交接的产物"作废**（只清显示屏上的交接产物，
+   * 不动对局、不动会话对象）。
+   *
+   * ## 为什么必须有它（不清的后果是"玩家手里只剩一条过期的码"）
+   *
+   * 邀请码 / 回示码里的**承载段是那一次协商的 SDP**（`LobbyDraftInput.sdp`）。链路判死之后
+   * 那条 SDP 所属的连接已经关了（`transport.close()` 不可逆）⇒ 屏上继续显示它，玩家把它
+   * 发给对方只会得到一条**连不上**的码；更要紧的是 `renderNetLobby` 的房主那一支
+   * **只在 `invite === null` 时才画「生成邀请码」按钮** ⇒ 不清它，玩家**没有入口**重新生成
+   * （这正是 §9 第 27 条那个缺口的另一半）。
+   *
+   * ## 清的恰好是这四样（每一样都"属于那一次交接"）
+   *
+   *  - `invite`：房主那一次交接产出的邀请码；
+   *  - `joined`：加入方解出来的那一条邀请码（它的 `payload.sdp` 就是那条死连接的 offer）；
+   *  - `answerCode` / `answerApplied`：同一次交接里那一来一回的回示码与它的处理结论。
+   *
+   * **不清** `notice`（调用方紧接着要写那一行如实结论）、不清房间码输入与端点读数
+   * （它们与链路无关）。它**不**碰 `sessionId` / `log` / 对局状态 —— 玩家没有被踢出这一局。
+   */
+  invalidateHandshakeArtifacts(): void;
+  /**
    * ★ **建链路并接上**（修复轮 A3/A4/A5）：造传输 → 建会话对象 → `attach` → 加入方发第一条 `hello`。
    *
    * `mode` 是**两件不同的事**，别合并：
@@ -2211,6 +2297,8 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
       readFaceMemory: () => rememberedFace,
       onFaceChosen: (face) => { rememberedFace = face; },
       ...(opts.seat === undefined ? {} : { seat: opts.seat }),
+      // ★★ G5 T13-C：300s 窗口的时钟照传（不注入 ⇒ 会话层判不了窗口，屏上那一格不许说"超窗"）
+      ...(opts.clock === undefined ? {} : { clock: opts.clock }),
       localProtoVersion: opts.localProtoVersion,
       localCardDataHash: opts.localCardDataHash,
       ...(opts.localNick === undefined ? {} : { localNick: opts.localNick }),
@@ -2367,6 +2455,17 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
     },
 
     showNotice: (text: string | null): void => { s.notice = text; },
+
+    /**
+     * ★★ G5 T13-C：作废上一条链路那一次交接的四样产物（理由与边界写在接口上）。
+     * 它是**纯清理**：不建链路、不动会话、不驱动任何流程。
+     */
+    invalidateHandshakeArtifacts: (): void => {
+      s.invite = null;
+      s.joined = null;
+      s.answerCode = null;
+      s.answerApplied = null;
+    },
 
     connect,
     /**

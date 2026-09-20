@@ -35,7 +35,7 @@ import { handCardBox, handFanLead, handFanStep } from './ui/fx-card-size';
 import { handOuterFor } from './ui/fx-seat';
 import { openControlRearrangeModal, closeControlRearrangeModal, refreshControlRearrangeModal, isControlRearrangeOpen, orderChanged, orderToAction } from './ui/control-rearrange';
 import { renderHome, renderCoin, renderLibrary, renderRules, renderModeSelect } from './ui/home';
-import { lobbyCoinViewOf, lobbyLinkText } from './ui/net-lobby';
+import { linkRecoveryNotice, lobbyCoinViewOf, lobbyLinkText } from './ui/net-lobby';
 import type { CoinNetView } from './ui/home';
 // ★ T11-B：硬币屏要的"面"（屏上口径 `1 | 2`）
 import type { CoinSide } from './app/coin';
@@ -456,6 +456,19 @@ function enterNetGame(): NetDriver | null {
   const existing = netGame;
   const raw = client.handoff();
   /**
+   * ★★ **G5 T13-C：换驱动（或第一次进牌桌）的唯一前提是"这一局的读数齐了"**
+   * （`handoff().ready`：相位 `complete` + 胜负依据齐 + 种子落点都在）。
+   *
+   * ## 为什么这一条要提到最前面（它对两条路都成立）
+   *
+   * 第一次进牌桌本来就要求它（下面那句 `!hand.ready && existing === null`）。而**重连那条路**
+   * 原来**不要求** —— 只要新链路造出来了（`client.transport()` 非空）就当场换驱动。T13-C 把
+   * "从屏上重新贴码回来"做成生产路径之后，这个宽口径会立刻变成缺陷：玩家点「生成邀请码」
+   * 那一刻新传输就建出来了，而**握手还没开始** ⇒ 换驱动会把屏切回牌桌、把刚拿到的大厅屏
+   * 盖掉（玩家再没有入口贴码回示码）。⇒ 判据统一成一句：**没握手完就不进牌桌**。
+   */
+  if (!raw.ready) return null;
+  /**
    * `handoff()` 在重连中间态里把 `transport` / `session` 置成 `null`（`ready` 为假：
    * 相位还没回到 `complete`）⇒ 这一格里"新链路那条传输"要从 `client.transport()` 补上，
    * 否则换驱动这一步拿不到东西、而旧驱动手里那条传输已经死了（症状是静默停摆）。
@@ -465,7 +478,6 @@ function enterNetGame(): NetDriver | null {
     : { ...raw, transport: client.transport(), session: existing.session };
   const alreadyOnThisTransport = existing !== null && hand.transport === existing.driver.transport;
   if (existing !== null && (hand.transport === null || alreadyOnThisTransport)) return null;
-  if (!hand.ready && existing === null) return null;
   // 上面两条已经挡掉了两种 null；这一句把 `hand.transport` 收窄成非空（下面那句要用它）
   if (hand.transport === null) return null;
   /**
@@ -502,6 +514,8 @@ function enterNetGame(): NetDriver | null {
     netGame = { ...existing, driver: netDriver };
     driver = netDriver;
     renderMode = 'net';
+    // ★ G5 T13-C：真的回到牌桌了 ⇒ "屏该画大厅那一屏"那个读数复位（同族的复位点见它的声明）
+    linkRecoveryNeeded = false;
     rerender();
     return netDriver;
   }
@@ -530,6 +544,8 @@ function enterNetGame(): NetDriver | null {
   };
   driver = netDriver;
   renderMode = 'net';
+  // ★ G5 T13-C：进牌桌 ⇒ "屏该画大厅那一屏"那个读数复位（与上面重连那一支同源）
+  linkRecoveryNeeded = false;
   /**
    * ★★ **进牌桌之前，先把"硬币落地"这一帧补画出来**（评审 R2 §8 遗留 1 的连带发现）。
    *
@@ -1348,8 +1364,13 @@ function renderLobbyFrame(): void {
    * 那一格没有可续的对局，屏该退回到**大厅那一屏** —— 那里才有「生成邀请码」/ 粘贴框 /
    * 「出示回示码」三样控件，玩家点一下就能重来（不必刷新页面）。这一格**不是**"重连可用"：
    * 硬币只是那一局的开头，而那一局已经没了。
+   *
+   * ★★ **G5 T13-C：对局中掉线超过宽限也走同一条屏路**（`linkRecoveryNeeded`，用户 2026-09-20
+   * 第 2 条指示）。区别是那一局**还在**：玩家在大厅上重新交接一次邀请码/回示码之后，
+   * 新链路走 `resuming` 追平（T13-A/B 接好的机制），`enterNetGame()` 一进牌桌这一位就复位。
+   * 两个位都在时也不画硬币屏 —— 硬币在断线前就定过了。
    */
-  if (coin !== null && !lobbyRestartNeeded) {
+  if (coin !== null && !lobbyRestartNeeded && !linkRecoveryNeeded) {
     // 只在这一帧的读数**与上一帧不同**时重画（见 `lobbyCoinShown` 的说明）
     const sig = `${coin.role}|${coin.phase ?? ''}|${String(coin.chosen)}|${String(coin.landed)}|${String(coin.winner)}|${String(coin.caller)}`;
     if (sig !== lobbyCoinShown) {
@@ -1415,31 +1436,43 @@ function renderLobbyFrame(): void {
 }
 
 /**
- * ★ **断线时重连**（修复轮 A5）：订阅链路状态，`'offline'` 就把整条链重建一遍。
+ * ★ **断线时重连**（修复轮 A5；G5 T13-A/B/C 逐步改了它的形状）：订阅链路状态，
+ * 宽限期内自己回来 ⇒ 什么都不做；超过宽限 ⇒ **把屏交回给玩家**（不再自动重建链路）。
  *
  * 为什么它必须存在（评审 1.1 第 3 点）：计划 §5 T8 写死了"重连必须新建会话对象"，而第一版
  * 产出代码里 `reconnect(` **0 处命中** ⇒ 那条硬约束只在 `net-lobby.ts` 的实现与注释里成立，
  * 没有任何调用者。
  *
- * 三条纪律：
- *  1. **新建对象**由 `client.reconnect()` 保证（它就是 `connect('resume')`）；
- *  2. **并发挡板**：`connect()` 是异步的（建传输 + `init()`），断线事件可能连着来几次；
+ * ★★ **G5 T13-C 改掉了这里最后那件"自动重建"**（用户 2026-09-20 第 2 条指示）：
+ * `connect()` 每次都 `createTransport()`，新传输**必须重新交换邀请码/回示码**才可能连上
+ * ⇒ 自动重建出来的是一条永远连不上的链路，而玩家已经被换到它上面、屏上又没有回大厅的入口
+ * （§9 第 27 条）。现在两种掉线（开局期 / 对局中）都走同一条路：**如实一行话 + 退回大厅那一屏**，
+ * 由玩家自己重新交接一次码。三种纪律仍然成立：
+ *  1. **新建会话对象**由 `client.connect('resume')` 保证（玩家点「生成邀请码」/ 贴码时）；
+ *  2. **并发挡板**：宽限期内那条调度是**一次性的**（`graceHandle` 到点即清、`online` 时取消）
+ *     —— 没有异步的自动重建在飞，所以也不需要"正在重连"那种闩；
  *  3. **不在这里做重发**：把"卡在半路的握手/收官消息"重新驱动起来归 **T6 的 `redrive()`**（D23），
- *     不是 UI 的活。这里只负责"把链路重建起来"。
+ *     不是 UI 的活。这里只负责"把屏与玩家手里的码准备好"。
  *     ★ **G5 T13-A 接线之后**：`redrive()` 的调用点在 `src/ui/net-lobby.ts` 的链路状态订阅里
  *     （`offline -> online` 恢复那一刻）与"房主应答完 `resync-req` 之后"那一格 —— 本函数**不**
- *     调它（本函数的活只有"宽限内没回来才重建"这一件）。
+ *     调它。
  */
 
 /**
- * ★★ **G5 T13-A：offline 之后等多久才重建链路**（毫秒；用户裁决 2026-09-20）。
+ * ★★ **G5 T13-A：offline 之后等多久才判"这条链路回不来了"**（毫秒；用户裁决 2026-09-20）。
  *
  * ## 两个量不许混（写在常量旁边，免得下一个人把它们合成一个）
  *
  *  - **这个宽限期是秒级的**：短暂断线（网络抖一下 / ICE 自己重协商回来），链路会自己转回
- *    `online` ⇒ 不重建会话、由 `redrive()` 把在途消息重发。它**不是** D8 那个 300 秒窗口；
+ *    `online` ⇒ 什么都不做（会话对象一个字不丢），由 `redrive()` 把在途消息重发。
+ *    它**不是** D8 那个 300 秒窗口；
  *  - **300s 窗口是另一件事**（D8：超窗不许追平、**不自动结束对局**，屏上那句话说"只能重开一局"）。
- *    窗口的判定与可见性都归会话层与大厅文案，本文件一个字都不判。
+ *    窗口的判定与可见性都归会话层与大厅文案，本文件一个字都不判（T13-C 只把它的三值读数
+ *    接进"带回大厅"那一行话里，见 `linkRecoveryNotice`）。
+ *
+ * ★ **G5 T13-C：到点之后不再自动重建链路**（本轮改掉的旧行为）——
+ * 新传输必须重新交换邀请码/回示码才可能连上，自动重建只会把玩家丢在一个没有出口的死牌桌上
+ * （§9 第 27 条）。到点意味着"把屏交回给玩家、让他重新交接一次码"。
  */
 const RECONNECT_GRACE_MS = 4_000;
 
@@ -1455,8 +1488,26 @@ const RECONNECT_GRACE_MS = 4_000;
  */
 let lobbyRestartNeeded = false;
 
+/**
+ * ★★ **G5 T13-C（用户 2026-09-20 第 2 条指示 / §9 第 27 条）：对局中掉线超过宽限之后，
+ * "屏该画大厅那一屏、让玩家重新贴码回来"这个事实**（模块态）。
+ *
+ * ## 它与 `lobbyRestartNeeded` 是两件**不同**的事（别合并成一个布尔）
+ *
+ *  - `lobbyRestartNeeded`：**开局期**掉线 —— 没有可续的进度，这一局该**重来**；
+ *  - `linkRecoveryNeeded`：**对局中**掉线 —— 这一局**还在**（`netGame` 与它的档案一个字没动），
+ *    只是链路判死了，玩家要重新交接一次邀请码/回示码把它接回来（可续与否见
+ *    `linkRecoveryNotice()` 的三值文案：超窗之后按 D8 只能重开）。
+ *
+ * 两者对屏的**唯一**影响是同一件：**这一帧不画硬币屏**（硬币在断线前就定过了，
+ * 再画一次等于让玩家以为又要掷一次）⇒ `renderLobbyFrame` 那一句同时读这两个位。
+ *
+ * 复位点：玩家真的重新开始一次交接（生成邀请码 / 贴码）、真的回到牌桌
+ * （`enterNetGame()` 换完驱动）、或整局复位（`resetToMainInterface`）。
+ */
+let linkRecoveryNeeded = false;
+
 function attachLobbyReconnect(client: LobbyClient): void {
-  let reconnecting = false;
   /** 宽限期内那条待重建的调度（`null` = 没有在等） */
   let graceHandle: number | null = null;
   const cancelGrace = (): void => {
@@ -1472,6 +1523,18 @@ function attachLobbyReconnect(client: LobbyClient): void {
      */
     client.sync();
     /**
+     * ★★ **G5 T13-C：对局那条会话（`netGame.session`）也要跟上当前链路的状态** ——
+     * 补的是 T13-A/B 留下的一处**接线缺口**（不是 T6 的机制问题）。
+     *
+     * 事实：牌桌上那一行连接状态读的是 `netGame.session.peerStatus()`（`netLinkLine()`），
+     * 而对局中重建链路时 `enterNetGame()` 有意**沿用旧会话对象**（`{ ...raw, session: existing.session }`：
+     * 开局读数与承诺进度都不重算）。旧会话的状态是**它的旧链路**喂的，那条链路在
+     * `connect()` 里被 `detach()` ⇒ 换链路之后旧会话**再也收不到任何状态** ⇒ 牌桌上会永远
+     * 停在上一次那条链路的最后一次状态（实测形状：重连成功、两边都在打，屏上却一直写着
+     * "对端现在不在线"）。这里把当前链路的状态原样转给它；没有对局时是空操作。
+     */
+    if (netGame !== null) netGame.session.noteTransportStatus(to);
+    /**
      * ★★ **G5 T13-A：链路自己回来了 ⇒ 不重建**。
      *
      * 会话对象与它的相位进度因此**一个字不丢**，而"卡在半路的那条握手/收官消息"由链路自己的
@@ -1485,7 +1548,7 @@ function attachLobbyReconnect(client: LobbyClient): void {
       if (netGame !== null) rerender(); else renderLobbyFrame();
       return;
     }
-    if (to !== 'offline' || reconnecting) return;
+    if (to !== 'offline') return;
     /**
      * ★ **掉线那一刻要重画一帧**：屏上那一行（"对端现在不在线（链路断了）…"）是从
      * `peerStatus()` 派生的读数，而它是**拉**的（`sync()` 刚更新，屏还没画）。
@@ -1501,8 +1564,7 @@ function attachLobbyReconnect(client: LobbyClient): void {
      * 都停在"新链路永远连不上"，而"卡在半路的那条消息"没有任何机会被重发（`redrive()` 在新
      * 会话上推不出任何东西）。宽限期把这两件事分开：
      *  - 期间恢复（`to === 'online'`）⇒ 走上面那一支，`redrive()`；
-     *  - 期间没恢复 ⇒ 走下面这一支，照旧 `client.reconnect()`（**A5 的原行为一个字没改**，
-     *    只是晚了几秒）。
+     *  - 期间没恢复 ⇒ 走下面这一支：**把屏交回给玩家**（T13-C 改掉的那条旧行为见下）。
      *
      * 时间来源是本仓既有的注入计时能力（`lobbyTicker`）—— 本文件不直呼 `setTimeout` 之外的
      * 东西，也没有裸定时器散在页面里。
@@ -1512,7 +1574,6 @@ function attachLobbyReconnect(client: LobbyClient): void {
       graceHandle = null;
       client.sync();
       if (client.state().transport === 'online') return; // 期间真的回来了 ⇒ 不重建
-      if (reconnecting) return;
       /**
        * ★★ **开局期（还没有可续的对局）掉线 ⇒ 不假装续上，也不自动重贴码**（修复轮，2026-09-20；
        * 评审判上一版"两端重新走到 complete"在生产路径上不成立）。
@@ -1532,26 +1593,48 @@ function attachLobbyReconnect(client: LobbyClient): void {
        * —— 玩家不必刷新页面，点一下就能重来。**本轮只做到"可读 + 可重来"，没有做自动重贴码。**
        *
        * ⚠️ 不许把它写成"重连可用"：这一局没有任何可续的进度。
+       *
+       * ★ T13-C 补的一句：那三样控件要真的**可用**，得先把上一次交接的产物作废 ——
+       * 房主那一支**只在 `invite === null` 时**才画「生成邀请码」按钮，而断线那一刻
+       * `s.invite` 里还留着那条**属于死链路**的旧码（`invalidateHandshakeArtifacts()`）。
        */
       if (netGame === null) {
-        reconnecting = false;
         lobbyRestartNeeded = true;
+        client.invalidateHandshakeArtifacts();
         client.showNotice(
           '连接断了，这一局还没开始：请重新生成邀请码 / 重新加入。'
           + '（这一次断线没有可续的对局进度 —— 不是"接上了"，也不是"续上了"。）',
         );
         renderLobbyFrame();
-        return;
+      } else {
+        /**
+         * ★★ **G5 T13-C（用户 2026-09-20 第 2 条指示 / §9 第 27 条）：对局中掉线超过宽限 ⇒
+         * 把玩家带回"双人远程模式 -> 建房 / 加入房"那一屏。**
+         *
+         * ## 为什么不再在这里自动重建链路（本轮改掉的旧行为）
+         *
+         * `connect()` 每次都 `createTransport()`，而新传输要**重新交换邀请码/回示码**才可能连上
+         * ⇒ 自动重建出来的那条链路永远连不上，而驱动已经被换到它上面（`enterNetGame()` 的
+         * `existing !== null` 那一支）⇒ 玩家面对的是一个**没有任何按钮能救**的死牌桌：
+         * 牌桌那一支先 `return`，大厅那三样控件进不了 DOM（§9 第 27 条就是这条缺口）。
+         *
+         * ## 现在的处置：把屏交回给玩家，可续与否如实说
+         *
+         *  - `linkRecoveryNeeded = true` + `renderMode = 'lobby'`：屏退回大厅那一屏；
+         *  - `invalidateHandshakeArtifacts()`：旧邀请码/回示码的 SDP 属于那条死链路 ⇒ 作废，
+         *    于是「生成邀请码」/ 粘贴框 /「出示回示码」三样控件**都回到可用状态**；
+         *  - `showNotice(linkRecoveryNotice(...))`：三种窗口读数各一句（超窗说"只能重开"、
+         *    窗口内说"接上能追平"、判不了就说判不了），文案本体只有一个出处；
+         *  - **这一局一个字都没丢**：`netGame`（驱动、档案、种子、座位）原地不动。玩家重新交接
+         *    一次码之后走 `resuming` 追平（T13-A/B 接好的机制），`handoff().ready` 那一刻
+         *    `enterNetGame()` 把驱动换到新传输上并回到牌桌。
+         */
+        linkRecoveryNeeded = true;
+        client.invalidateHandshakeArtifacts();
+        client.showNotice(linkRecoveryNotice(client.state().peer));
+        renderMode = 'lobby';
+        renderLobbyFrame();
       }
-      reconnecting = true;
-      void client.reconnect().then(() => {
-        reconnecting = false;
-        // ★ T13-B：换了传输 ⇒ 把握手交出来的那一组数重新接上（`enterNetGame()` 里那一支
-        //   会把驱动换到新传输并 `realign`，**不重建这一局**）
-        enterNetGame();
-        // ★ T11-C：重连发生在**对局中**时不许画大厅（那会把牌桌盖掉）。
-        if (netGame !== null) rerender(); else renderLobbyFrame();
-      }, () => { reconnecting = false; });
     }, RECONNECT_GRACE_MS);
   });
 }
@@ -1575,6 +1658,8 @@ function startLobby(role: 'host' | 'guest'): void {
   lobbyCoinShown = null;
   // ★ 修复轮：进大厅这一屏 ⇒ "这一局该重来"那个读数归零
   lobbyRestartNeeded = false;
+  // ★ G5 T13-C：对局中掉线留下的"屏该画大厅那一屏"那个读数也归零（同族：漏了下一局会带着上一局的屏）
+  linkRecoveryNeeded = false;
   chooseFaceResolve = null;
   faceChosen = false;
   if (lobbyClient === null) {
@@ -1595,7 +1680,25 @@ function startLobby(role: 'host' | 'guest'): void {
        * 玩家按下「正面/反面」之后流程才继续。两端都不按，这条路就停在那块屏上
        * （超时语义归 T10）。
        */
-      chooseFace: () => new Promise<CoinSide>((resolve) => { chooseFaceResolve = resolve; }),
+      chooseFace: () => new Promise<CoinSide>((resolve) => {
+        /**
+         * ★★ **G5 T13-C 判据 2：这里是"新链路又一次要面"的落点，两个模块态必须在这里复位。**
+         *
+         * 事实：`askFaceOnce()` 是**每条链路一次**（`faceAsked` 在链路对象里）⇒ 每建一条
+         * 需要叫面的链路，`chooseFace` 都会被调用一次。而 `faceChosen` / `chooseFaceResolve`
+         * 是**本文件**的模块态、寿命比链路长 ⇒ 不复位它们，上一条链路留下的两样会一起挡掉新链路：
+         *  - `faceChosen === true` ⇒ 屏上点芯片被 `lobbyCoinView()` 里那句直接吞掉；
+         *  - `chooseFaceResolve` 还指着**上一条链路**那个已经 resolve 过的 Promise
+         *    ⇒ 就算点下去，面也落不到新链路那一次 resolve 上。
+         * 症状（实测形状）：开局期掉线之后玩家重新贴码回来，新硬币屏画得出来、点下去没反应，
+         * 握手永远停在"等玩家叫面"那一格 —— 而屏上看起来完全正常。
+         *
+         * 复位点选在这里（而不是只在 `startLobby`）的理由：这一句正是"新链路"的**事件**，
+         * 复位与它同源；`startLobby` 那一处只覆盖"第一次进大厅"。
+         */
+        faceChosen = false;
+        chooseFaceResolve = resolve;
+      }),
       localProtoVersion: PROTO_VERSION,
       localCardDataHash: CARD_DATA_HASH,
       hash: browserHash(),
@@ -1729,6 +1832,12 @@ async function makeLobbyInvite(): Promise<void> {
   // ★ 修复轮：玩家真的重新开始一次尝试 ⇒ 清掉"这一局该重来"那个读数（屏回到硬币/大厅的正常分支）
   lobbyRestartNeeded = false;
   /**
+   * ★ G5 T13-C：玩家真的重新生成一次邀请码 ⇒ "对局中掉线、屏该画大厅"那个读数也复位。
+   * 注意复位的**时机**：链路 `ready` 之前 `enterNetGame()` 不会把人带回牌桌（见那里的
+   * `raw.ready` 闸），所以这一刻屏仍然留在大厅 —— 玩家能接着贴回示码。
+   */
+  linkRecoveryNeeded = false;
+  /**
    * ★★ **G5 T13-A：重连时这条新链路走 `'resume'`**（"带着同一局回来"）。
    *
    * 判据与加入方那一侧同源（`knowsSession`：这一局的会话号本端用过）—— 区别是房主**不发**
@@ -1805,6 +1914,10 @@ async function joinLobbyWithInvite(text: string): Promise<void> {
   if (client === null) return;
   // ★ 修复轮：玩家真的重新开始一次尝试（贴了一条新的邀请码）⇒ 清掉"这一局该重来"那个读数
   lobbyRestartNeeded = false;
+  // ★ G5 T13-C：同 `makeLobbyInvite()` —— 玩家真的开始了一次交接 ⇒ "屏该画大厅"那个读数复位。
+  //   这一次交接走 `'resume'`（这个会话号本端用过）时不弹硬币屏；走 `'first'`（开局期）时
+  //   硬币屏**应该**出现（那是一次新握手）。
+  linkRecoveryNeeded = false;
   await client.joinWithInvite(text);
   // 邀请码解不开时**不建链路**（建了也没用：连不上对端，而"解不开"这件事已经写在屏上了）
   if (client.state().joined?.ok === true) {
@@ -3038,6 +3151,8 @@ function resetToMainInterface(): void {
   lobbyCoinShown = null;
   // ★ 修复轮：开局期那次断线留下的"这一局该重来"读数也归这里（同族：漏了下一局会带着上一局的屏）
   lobbyRestartNeeded = false;
+  // ★ G5 T13-C：对局中掉线留下的"屏该画大厅那一屏"读数同族，一起归零
+  linkRecoveryNeeded = false;
   // ★ T11-C：硬币那帧的读数与"补画过没有"也归这里（同族：漏了下一局会带着上一局的落地）
   coinVerdict = null;
   coinSettledShown = false;
