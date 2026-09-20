@@ -299,8 +299,18 @@ describe('G5 T11-B · `main.ts` 的接线形状（文本腿；`main.ts` 不能 i
     // ② firstToPlay 逐字是 1 - draftStarter（任务书 §3 第 7 条：只搬家、不改值）
     expect(flat, "firstToPlay 不是 `(1 - draftStarter) as PlayerId`").toContain('firstToPlay: (1 - draftStarter) as PlayerId,');
     // ③ 驱动与座位：传输必须是握手那一条、座位必须是 `hand.seat`
+    /**
+     * ★ **G5 T13-B 同步了这一条**（值一个字没改，多的只是 `recorder` 那一个入参）：
+     * D8 的重连凭据是"主机内存里的当前 `MatchFile`"，而档案的唯一载体是驱动的记录器
+     * （`createNetDriver` 的 `recorder` 选项）⇒ 这一句多了第三个字段。
+     * 判据要钉的两件事仍是"传输是握手那一条、座位是 `hand.seat`"，所以这里按**前缀**匹配。
+     */
     expect(flat, 'createNetDriver 用的不是握手那条传输/本端座位')
-      .toContain('createNetDriver({ transport: hand.transport, seat: hand.seat })');
+      .toContain('createNetDriver({ transport: hand.transport, seat: hand.seat,');
+    expect(flat, 'createNetDriver 没有把重连凭据的记录器挂上（D8：档案只能从这里来）')
+      .toContain('createNetDriver({ transport: hand.transport, seat: hand.seat, recorder });');
+    expect(body, '记录器不是 `createMatchFileRecorder()` 造的（那就成了第二份档案载体）')
+      .toContain('createMatchFileRecorder()');
     // ④ 递状态：`arm(state)` 逐字在，且排在 `rerender()` 之前
     expect(body, '没有 arm(state)（对端帧会烂在队列里）').toContain('netDriver.arm(state);');
     // ⑤ 草稿设置两端逐字一致：常量模式 + 由种子派生的池（协议里没有传设置的消息）

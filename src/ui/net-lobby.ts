@@ -60,6 +60,7 @@ import { decodeMsg, encodeMsg, normalizeRoomCode, roomChannel } from '../net/pro
 import type { NetMsg } from '../net/protocol';
 import type { NetChannel, NetTransport, SendResult, TransportStatus } from '../net/transport';
 import { PRIVACY_COPY } from '../app/privacy';
+import type { MatchFile } from '../app/match-file';
 import { coinLanding, draftStarterFor, faceFromSide, sideFromFace } from '../app/coin';
 import type { CoinSide } from '../app/coin';
 import type { CoinNetView } from './home';
@@ -280,6 +281,41 @@ export interface LobbyClientOptions {
    * 它是**每个入站帧调一次**（包括解不开的坏帧）—— 因为"收到过一帧"本身就是屏上该反映的事实。
    */
   readonly onInbound?: () => void;
+  /**
+   * ★★ **G5 T13-A/B：重连接线要的三样能力**（全部由宿主注入，本文件不自己发明）。
+   *
+   * ## 为什么是"能力注入"而不是"本文件自己算"
+   *
+   *  - `appliedSteps`：`resync-req.appliedSteps` 是**本端驱动**的进度事实（下一条 `seq`），
+   *    而驱动住在 `src/main.ts` 手里（`NetDriver.appliedSteps()`）。本文件**不持有**它
+   *    （`src/net` 那套"驱动不持有 GameState"的同一条纪律：谁的状态谁报数）；
+   *  - `resyncSource`：**房主侧**的重连凭据（D8："重连凭据 = 主机内存里的当前 MatchFile"）。
+   *    档案住在 `MatchFileRecorder` 里（`src/app/match-file.ts:551`），本文件既拿不到也不该持有；
+   *    返回 `null` = 本端此刻没有可发的档案（会话层会回 `'resync-not-wired'`，**fail-closed**）；
+   *  - `onResyncRes`：**加入方侧**收到档案之后"把状态真的重建出来"的那一步。它必须由宿主做，
+   *    因为重建要 `stateAtStep`（`src/app/match-replay.ts` 的单一出处）与宿主持有的 `GameState`
+   *    ⇒ 本文件只把**档案**交出去，宿主回一个"我应用了几步"；返回 `null` = 宿主拒绝/失败
+   *    （可读原因由宿主写到屏上），此时**不许**再走 `applyResyncFile`（否则会把"没重建"记成"追平完成"）。
+   */
+  readonly appliedSteps?: () => number;
+  readonly resyncSource?: () => MatchFile | null;
+  readonly onResyncRes?: (file: MatchFile) => number | null;
+  /**
+   * ★★ **G5 T13-A（协调者 2026-09-20 第 2 条裁决）：本端此刻有没有"可续的对局进度"**。
+   *
+   * 断线重连的**两条路**由此分开，后果完全不同：
+   *  - `true`（已经进过牌桌）：走 `connect('resume')` —— `markResuming()`、`hello` 带
+   *    `resuming: true`、要档案追平。**这条才是"重连"**；
+   *  - `false`（**还没进牌桌**：握手还没走完 / 硬币还没落地）：**没有可续的进度**，而
+   *    `resync-res` 在机制上不可能到位（房主手里还没有档案 ⇒ `acceptResyncReq` 回
+   *    `'resync-not-wired'`，`session.ts:2139-2143`）⇒ 若仍走 `'resume'`，加入方会**永久停在
+   *    `resuming`**、屏上一直说"正在把这一局追平"（不报错的死挂）。
+   *    ⇒ 这一格走 `connect('first')`：**重新来一次握手**，两端各自新建会话对象，谁也不欠谁。
+   *
+   * ⚠️ 它不是"第二份状态"：语义只有"本端手里有没有一局已经在打的对局"，而那个事实的唯一主人
+   * 是宿主（`main.ts` 的 `netGame`）⇒ 由它注入。
+   */
+  readonly hasResumableGame?: () => boolean;
 }
 
 /* ==================================================================== *
@@ -737,6 +773,48 @@ export interface LobbySessionLink {
    */
   driveOnce(): boolean;
   /**
+   * ★★ **G5 T13-A：这条链路上"按相位重发"**真的发出去了**几次**（只读计数）。
+   *
+   * ## 口径（修复轮 2026-09-20 改准，评审第 3 条）
+   *
+   * 它数的是 **`send()` 报成功**的条数 —— 不是"尝试次数"：`send()` 返回失败（通道没 open /
+   * 对端不可达 / 队列满）时**不计数**，而是把 `SendResult.message` 记进 `driveRefusal`
+   * （屏上/门里读到的因此是"真的重发成功了几条"，与判据 2 要问的那件事一致）。
+   * 想区分"试过但失败"就读 `driveRefusal()`（那里有可读原因）与 `helloDiag()`（那里有 `redrive失败` 的痕迹）。
+   */
+  redrivenCount(): number;
+  /**
+   * ★★ **G5 T13-B：去要一份档案**（`resync-req` 的**唯一**构造点）。
+   *
+   * 会话层只有 acceptor（`acceptResyncReq` 在房主侧），**没有**产出 `resync-req` 的口
+   * （`src/net/session.ts` 全文件核对过）⇒ 这一条由接线层按 `protocol.ts:171-177` 的形状拼。
+   *
+   * 两个触发点（两条 cause 各走各的）：
+   *  - 重连握手（`resume` 链路收到 `hello-ack`）⇒ 本层内部自动调；
+   *  - 入站队列溢出（`queue-overflow`，发生在**任何**相位）⇒ 宿主调（`client.requestResync()`）。
+   *
+   * 幂等：同一条链路上只发一次（`resyncReqSent`）—— 重复发只会让房主重复打包同一份档案。
+   */
+  requestResync(): boolean;
+  /**
+   * ★★ **G5 T13-B：用房主给的档案追平**（`session.applyResyncFile(` 的**唯一**调用点）。
+   *
+   * 调用链写死：宿主（`onResyncRes`）先按 `stateAtStep` 把状态重建出来、`realign()` 对齐驱动，
+   * 再回到这里把"我应用了几步"交给会话层核对（会话层比 `statesAtStep === file.actions.length`，
+   * 只此一处）并把相位/`needsResync` 放回去。
+   *
+   * 返回 `false` = 会话层拒了（步数对不上 / 相位不对），可读原因在 `driveRefusal()` 里。
+   */
+  applyResync(file: MatchFile, statesAtStep: number): boolean;
+  /**
+   * ★★ **重连链路上不许再弹硬币屏**（用户裁决，2026-09-20：重连**不重掷硬币**）。
+   *
+   * 硬币在断线前就定过了：重建/恢复后的那条链路用的是**旧链路记下的那一面**
+   * （没有记忆时取面 0，与"没有注入 `chooseFace`"那条常量面同值 + 一条新 nonce）。
+   * 屏那边据本读数**不画**硬币屏（`lobbyCoinViewOf` 的第一句）。
+   */
+  suppressesCoinScreen(): boolean;
+  /**
    * ★★ **T11-B：硬币屏要的三个读数**（屏按它们决定画什么，屏自己不记状态）。
    *
    * 为什么是**读数**而不是"屏直接读 `session`"：`LobbySessionLink` 已经把 `session` 暴露出来了，
@@ -862,6 +940,20 @@ export function createLobbySessionLink(opts: {
    * 未注入 ⇒ 保持今天的行为（常量面 0）并由 `driveOnce` 直接往下走。
    */
   readonly chooseFace?: () => Promise<CoinSide>;
+  /** ★ 本链路是**重连**（`connect('resume')`）⇒ `hello` 带 `resuming: true`、不弹硬币屏 */
+  readonly resume?: boolean;
+  /** 本端驱动已经应用了几步（`resync-req.appliedSteps` 的来源；缺省 0） */
+  readonly appliedSteps?: () => number;
+  /** 房主侧：当前权威档案（D8 的重连凭据）；返回 `null` = 现在没有可发的档案 */
+  readonly resyncSource?: () => MatchFile | null;
+  /** 加入方侧：收下档案 ⇒ 宿主重建状态并回"应用了几步"；`null` = 拒绝/失败 */
+  readonly onResyncRes?: (file: MatchFile) => number | null;
+  /**
+   * ★ 旧链路记下的那一面（重连**不重掷硬币**：复用旧链路记下的面；没有就取面 0）。
+   * 读写方向分开：`readFaceMemory` 由新链路读、`onFaceChosen` 由旧链路写。
+   */
+  readonly readFaceMemory?: () => 0 | 1 | null;
+  readonly onFaceChosen?: (face: 0 | 1) => void;
   readonly seat?: 0 | 1;
   readonly localProtoVersion: number;
   readonly localCardDataHash: string;
@@ -874,6 +966,13 @@ export function createLobbySessionLink(opts: {
    */
   readonly onInbound?: () => void;
 }): LobbySessionLink {
+  /**
+   * ★ **本链路是不是一次重连**（`connect('resume')`）。三处行为由它决定，逐条在下面点名：
+   *  1. `hello` 带 `resuming: true`（`helloMsg()`）—— D8 那条"带着同一个 sessionId 回来"的形态；
+   *  2. 收到 `hello-ack` 之后**去要档案**（`receive()` 里 `requestResync()`）；
+   *  3. **不弹硬币屏**、复用旧链路记下的面（`driveOnce()` 的 `awaiting-commit-ack` 那一格）。
+   */
+  const resumeMode = opts.resume === true;
   const session: NetSession = opts.role === 'host'
     ? createHostSession({
       localProtoVersion: opts.localProtoVersion,
@@ -881,6 +980,8 @@ export function createLobbySessionLink(opts: {
       sessionId: opts.sessionId,
       seat: opts.seat ?? 0,
       hash: opts.hash,
+      // ★ D8 的重连凭据：房主侧把"当前档案"的来源注进去（没有它 ⇒ `resync-not-wired`，fail-closed）
+      ...(opts.resyncSource === undefined ? {} : { resyncSource: opts.resyncSource }),
     })
     : createGuestSession({
       localProtoVersion: opts.localProtoVersion,
@@ -896,18 +997,31 @@ export function createLobbySessionLink(opts: {
   let driveRefusal: string | null = null;
   let helloDone = false;
   /**
+   * ★ G5 T13-A：**按相位把卡在半路的那条消息重发出去、并且真的发出去了**的次数
+ * （`send()` 报成功才 +1；只读读数，进 `redrivenCount()`）。
+   *
+   * 为什么要有这个计数：`session.redrive()` 在没有在途消息时**合法地**返回 `null`（空操作），
+   * 所以"链路恢复过"与"那条消息真的被重发过"是两件事 —— 判据 2 的计数腿要能分开看见它们。
+   */
+  let redriven = 0;
+  /** ★ G5 T13-B：这条链路上**已经发过** `resync-req`（同一条链路只发一次） */
+  let resyncReqSent = false;
+  /** ★ 本链路曾经转过 `offline`（"恢复"的判定：`offline -> online` 才算恢复，冷启动不算） */
+  let wasOffline = false;
+  /**
    * 承诺流程里两条"**发了相位也不动**"的消息各自的记账位（见 `driveOnce` 的说明）。
    *
    * ⚠️ 它们**不是**"流程到哪一步了"（那归相位机）—— 它们是"**本对象**已经发过这一条"的事实。
    * 没有它们，`sendCommit` 与 `sendRevealSalt` 会被`driveOnce`无限重发（那两条不改相位）。
    *
-   * ⚠️ 范围：**只管房主那两条**（`commit` / `reveal-salt`）。加入方的 `commit-face`
-   * **不在这里**：它靠相位机只发一次（`driveOnce` 的 `awaiting-commit-ack` 那一格 +
-   * `commitFace` 成功后把相位推到 `face-committed`）。相位机在重连回退路径上不单调，
-   * 所以还得靠 `faceNonce()` 那条按链路记忆的 nonce 兜住重发（见那段注释）。
+   * ⚠️ 范围：房主那两条（`commit` / `reveal-salt`）**与**加入方的一条（`commit-face`，G5 T13-A
+   * 补的第二条 —— §9 第 9 条那条相位回退路径会让 `awaiting-commit-ack` 出现第二次，
+   * 见 `driveOnce` 那一格的注释）。三者的语义一样：**本对象已经发过这一条**。
    */
   let commitSent = false;
   let saltSent = false;
+  /** ★ G5 T13-A：本链路已经发过 `commit-face`（§9 第 9 条的一次性位；与 `commitSent` 同级） */
+  let faceSent = false;
   /**
    * 加入方选的面（`seed-committed` 那一格要用）。
    *
@@ -946,6 +1060,8 @@ export function createLobbySessionLink(opts: {
       (side) => {
         // 唯一的赋值点：屏上的面 → 会话层的面（映射只此一处，`src/app/coin.ts`）
         chosenFace = faceFromSide(side);
+        // ★ G5 T13-A：把这一面记到**客户端**那一层（旧链路会被丢掉，而重连不许重掷硬币）
+        opts.onFaceChosen?.(chosenFace);
       },
       (e: unknown) => {
         // 面这条路断了（屏抛了 / 玩家没得选）：把真因留在读数里，绝不静默
@@ -1008,6 +1124,89 @@ export function createLobbySessionLink(opts: {
   }
 
   /**
+   * ★★ **G5 T13-A：把"卡在半路的那条握手/收官消息"按相位重发一次**（D23 ②）。
+   *
+   * ## ★ 这是本文件里 `session.redrive()` 的**唯一**调用点（计数腿的锚点）
+   *
+   * 两个触发点都走这一个 helper（`session.redrive()` 在源码里因此只出现一处）：
+   *  - **链路恢复**（`offline -> online`）：`detachStatus` 的订阅分支。这正是 D23 那句
+   *    "重连后两端谁都不会再发它"的反面 —— 恢复那一刻由本端主动重发；
+   *  - **房主应答完 `resync-req`**：`receive()` 里那一格（T6 的接口注释明写这条）。
+   *
+   * ## 为什么"确有在途消息才发"是硬条件（判据 2 的后半，变异 M2 的锚点）
+   *
+   * `session.redrive()` 的语义是**推导**（`session.ts:1349-1370`）：按当前相位 + 相位机本来
+   * 维护的那些值算"该发而未确认"的那一条。相位上没有在途消息时它**合法地**返回 `null`
+   * —— 那不是失败，是"这一格本端没有欠对端的消息"。把它当成"发点什么"（例如无条件发
+   * `commit`）会制造重复投递：房主已经收到过的 `commit` / `reveal-seed` / `reveal-salt`
+   * 会被再发一遍，而收方对**不是自己那条**的重复一律 `unexpected-message`（D23 ①的收窄口径，
+   * `session.ts:1879-1902`）。⇒ 这里**只**在 `output !== null` 时发，并把**真的发出去了的**条数
+   * 记进 `redriven`（修复轮，2026-09-20：评审指出原来数的是"发送尝试" —— `send()` 返回失败时
+   * `redriven` 照样 +1，而屏幕上/门里读的是"重发成功了吗" ⇒ 现在只有 `send()` 报成功才 +1，
+   * 失败那条把 `SendResult.message` 记进 `driveRefusal`，**不静默**）。
+   */
+  function redriveOnce(): boolean {
+    const r = session.redrive();
+    if (!r.ok) { driveRefusal = r.message; return false; }
+    if (r.output === null) return false; // 相位上没有在途消息 ⇒ 合法的空操作
+    const sent = send(r.output.msg);
+    if (!sent.ok) { driveRefusal = sent.message; trace(`redrive失败(${r.output.msg.t}:${sent.reason})`); return false; }
+    redriven += 1;
+    trace(`redrive发出(${r.output.msg.t})`);
+    return true;
+  }
+
+  /**
+   * ★★ **G5 T13-B：去要一份档案**（`resync-req` 的**唯一**构造点）。
+   *
+   * 会话层只有 acceptor（`acceptResyncReq` 只在房主侧、方向由 `accept()` 分派）⇒ 这条
+   * **请求**由接线层按 `protocol.ts:171-177` 的形状拼：`{ t, sessionId, appliedSteps }`。
+   *
+   * 两条 cause 各走各的触发（判据 2 的"两种 cause 别混成一条"）：
+   *  - `resuming-handshake`：`resume` 链路收到 `hello-ack` ⇒ 本层内部调（见 `receive()`）；
+   *  - `queue-overflow`：宿主读 `driver.onFailure('inbound-overflow')` ⇒ 宿主调
+   *    `client.requestResync()`（溢出可能在任何相位，本层不知道）。
+   *
+   * `appliedSteps` 是**自报数**（`protocol.ts:175-176`：权威值仍是档案里那一步）⇒ 它只用于诊断，
+   * 传 0 也不会让追平出错。
+   */
+  function requestResync(): boolean {
+    if (session.role !== 'guest') return false; // 只有加入方能发（房主没有可要的对象）
+    if (resyncReqSent) return false;            // 同一条链路上只发一次
+    resyncReqSent = true;
+    const applied = opts.appliedSteps?.() ?? 0;
+    send({
+      t: 'resync-req',
+      sessionId: opts.sessionId,
+      appliedSteps: Number.isInteger(applied) && applied >= 0 ? applied : 0,
+    });
+    trace('发出 resync-req');
+    return true;
+  }
+
+  /**
+   * ★★ **G5 T13-B：用房主给的档案追平**（`session.applyResyncFile(` 的**唯一**调用点）。
+   *
+   * 会话层那一步只做两件事：比"调用方自报的步数 vs 档案长度"（§9 第 9 条那条比较的锚点）、
+   * 把相位与 `needsResync` 放回去，并把"追平完成后该重发的那一条"放进返回值（`session.ts:2273`）。
+   * 状态的**重建**不在这里（那要 `stateAtStep` 与宿主的 `GameState`）—— 见 `onResyncRes`。
+   */
+  function applyResync(file: MatchFile, statesAtStep: number): boolean {
+    if (session.role !== 'guest') return false;
+    const r = session.applyResyncFile(file, statesAtStep);
+    if (!r.ok) { driveRefusal = r.message; trace(`applyResync拒绝(${r.message})`); return false; }
+    trace(`applyResync成功(phase=${r.phase})`);
+    // ★ D23 ② 的加入方那一半：追平完成 ⇒ 按相位把"该发而未确认"的那条发出去
+    if (r.output !== null) {
+      const sent = send(r.output.msg);
+      // ★ 修复轮：这一条也**只有真发出去了**才计数（与 `redriveOnce` 同一口径）
+      if (sent.ok) redriven += 1;
+      else { driveRefusal = sent.message; trace(`applyResync重发失败(${r.output.msg.t}:${sent.reason})`); }
+    }
+    return true;
+  }
+
+  /**
    * ★ **入站文本 → `accept` 的唯一一处**（变异 M8 的锚点）。
    *
    * 三步：解码（`decodeMsg`，`protocol.ts` 的唯一解码口）→ 喂会话层 → 把产出的消息发回去。
@@ -1021,6 +1220,14 @@ export function createLobbySessionLink(opts: {
    *
    * ⚠️ 第 2 条在实现时踩过一次：只判 `!decision.ok` 就去取 `.msg`，撞上 `output: null` 会当场
    * `TypeError`（而它本该是一条安静的正常路径）。所以这里两个都要判。
+   *
+   * ## ★ G5 T13：三格重连动作都挂在这里（**入站路由仍然只有一处** `session.accept`）
+   *
+   *  - `hello-ack` 且本链路是重连 ⇒ **要档案**（`requestResync()`）；
+   *  - `resync-req`（房主侧）被收下 ⇒ 按相位重发（`redriveOnce()`，D23 ②的房主那一半）；
+   *  - `resync-res`（加入方侧）被收下 ⇒ 把档案交给宿主重建状态，再 `applyResync()`。
+   *    宿主回 `null` ⇒ **不**走 `applyResyncFile`（会话层停在 `resync-pending`、`needsResync`
+   *    仍为真），并把可读原因留在 `driveRefusal` —— 判据 3 要的"不许静默覆盖"就落在这里。
    */
   function receive(text: string): boolean {
     const dec = decodeMsg(text, { protoVersion: opts.localProtoVersion });
@@ -1035,6 +1242,25 @@ export function createLobbySessionLink(opts: {
       // ★ 诊断（T8-E）：被会话层拒了 —— 把那条消息的**类型**与**可读拒绝理由**记进读数，
       //   否则"两端停在 handshaking"在屏上完全看不出是被拒还是没收到。
       trace(`accept拒绝(${dec.msg.t}:${decision.message})`);
+      opts.onInbound?.();
+      return true;
+    }
+    // ── ★ G5 T13-A：重连握手完成 ⇒ 去要档案（`resuming-handshake` 那条 cause 的动作）──────
+    if (resumeMode && dec.msg.t === 'hello-ack') requestResync();
+    // ── ★ G5 T13-A：房主应答完 `resync-req` ⇒ 按相位重发（D23 ② 的房主那一半）──────────
+    if (dec.msg.t === 'resync-req') redriveOnce();
+    // ── ★ G5 T13-B：加入方收下 `resync-res` ⇒ 宿主重建状态，再由本层交给会话层核对 ────────
+    if (dec.msg.t === 'resync-res') {
+      const file = (dec.msg as { file?: unknown }).file;
+      const rebuild = opts.onResyncRes;
+      const steps = rebuild === undefined ? null : rebuild(file as MatchFile);
+      if (steps === null) {
+        driveRefusal = '追平失败：本端没能用这份档案重建状态（原因见屏上那一行提示）；'
+          + '本端状态一个字没动，也不假装已经追平。';
+        trace('追平失败(宿主拒绝)');
+      } else {
+        applyResync(file as MatchFile, steps);
+      }
       opts.onInbound?.();
       return true;
     }
@@ -1160,6 +1386,19 @@ export function createLobbySessionLink(opts: {
       cardDataHash: opts.localCardDataHash,
       seat: (opts.seat ?? 1),
       nick: opts.localNick?.() ?? '',
+      /**
+       * ★★ **G5 T13-A：重连的 `hello` 必须带 `resuming: true`**（D8 的原始形态）。
+       *
+       * 不带它会发生什么（实测读码，`session.ts:1515-1518`）：房主那一侧的 `acceptHello` 把
+       * "非 `handshaking` 相位收到的 hello"一律判成**迟到/重复的 hello**，走 `refuseLateHello`
+       * —— 相位不动、`emit: false`、**不回 `hello-ack`**。而加入方那一侧的整条重连路
+       * （`markResuming()` → `resuming` → 等 ack → 要档案）**第一步就是在等 ack** ⇒
+       * 少了这个字段，D8 那条"重新握手 → resync-res → 重放 → 继续"在产出路径上发不起来。
+       *
+       * 方向与时机：只有 `connect('resume')` 那条链路才置它（`resumeMode`）；第一次接上
+       * 不带 —— 普通 hello 走的是"握手刚完成"那一支（`awaiting-commit-face`），一字不改。
+       */
+      ...(resumeMode ? { resuming: true } : {}),
     };
   }
 
@@ -1214,8 +1453,37 @@ export function createLobbySessionLink(opts: {
          *    返回 `false` = "本端暂时没东西可发"，屏上那块硬币屏因此停在"等玩家点"的状态；
          *  - **没有注入**（测试夹具 / 还没有硬币屏的调用方）：保持 T11-B 之前那套**常量面 0**
          *    的行为，一步不差 —— 不能因为"没人给面"就让整条流程停住。
+         *
+         * ## ★★ G5 T13-A：**重连链路上不重掷硬币**（用户裁决 2026-09-20）
+         *
+         * 硬币在断线之前就已经定过了：重建/恢复出来的这条链路用的是**旧链路记下的那一面**
+         * （`readFaceMemory`；没有记忆时取面 0，也就是"没有注入 `chooseFace`"那条常量面的同值），
+         * nonce 仍然由本链路新取一条（承诺必须是一条新承诺，`faceNonce()` 只保证**本链路内**
+         * 幂等）。⇒ 三个后果：① 屏上**不再弹**硬币屏（`suppressesCoinScreen()`）；
+         * ② `commit-face` 照常发得出去（这条链路的房主在等它）；③ 两端算出的落点/先选协议者
+         * 与断线前**逐字相同**（同一个种子 + 同一面 ⇒ 同一条 `draftStarterFor`）。
          */
-        askFaceOnce();
+        if (resumeMode) {
+          chosenFace = chosenFace ?? opts.readFaceMemory?.() ?? faceFromSide(1);
+        } else {
+          askFaceOnce();
+        }
+        /**
+         * ★★ **G5 T13-A：`commit-face` 的一次性位**（§9 第 9 条相位不单调的处置）。
+         *
+         * 相位机在重连回退路径上**不单调**（`applyResyncFile`，`session.ts:2263-2269` 在
+         * `phaseBeforeResyncApply ∈ {null,'resuming','handshaking'}` 时把相位写回
+         * `seed-committed`；而 `acceptCommit` 也认 `resuming` / `resync-pending`）⇒
+         * 同一条链路上相位可以**第二次**走到 `awaiting-commit-ack`，于是这一格会再发一条
+         * `commit-face`。房主侧 `acceptCommitFace`（`session.ts:1738`）对重复一律
+         * `unexpected-message` ⇒ 第二条是**纯粹的多余投递**（判据 2 要抓的形态），
+         * 而"再发一条内容不同的承诺"更坏（房主最后验 `reveal-face` 会失配）。
+         *
+         * ⇒ 每个**链路对象**一条 `commit-face`（与房主的 `commitSent` / `saltSent` 同级、
+         * 同一族纪律：那是"本对象已经发过这一条"的事实，不是"流程到哪一步"的第二份状态）。
+         * 已经发过就返回 `false`（本格没东西可发），相位机与重发链（`redriveOnce`）继续各自干活。
+         */
+        if (faceSent) return false;
         // 没有注入 `chooseFace` ⇒ 常量面「正面」（会话层 0），也就是 T11-B 之前那句
         // `session.commitFace(chosenFace, …)` 里 `chosenFace = 0` 的行为。走同一个映射口。
         const legacyFace: 0 | 1 | null = opts.chooseFace === undefined ? faceFromSide(1) : null;
@@ -1224,6 +1492,7 @@ export function createLobbySessionLink(opts: {
         const r = session.commitFace(face, faceNonce());
         if (!r.ok) { driveRefusal = r.message; return false; }
         send(r.output.msg);
+        faceSent = true;
         return true;
       }
       case 'face-committed': {
@@ -1265,9 +1534,27 @@ export function createLobbySessionLink(opts: {
   const detachStatus = opts.transport.onStatus((change) => {
     trace(`status:${change.to}`);
     session.noteTransportStatus(change.to);
-    // 顺序写死：**先补发、再通知宿主** —— 宿主收到这个变化时会重画一帧，
-    // 屏上那句 `helloSent` 必须已经是补发之后的真值。
-    if (change.to === 'online') flushHello();
+    /**
+     * ★★ **G5 T13-A：链路"自己回来了"那一刻 ⇒ 把卡在半路的那条消息重发一次**（D23 ②）。
+     *
+     * 判据写死成 `offline -> online`：冷启动的 `idle -> connecting -> online` **不算恢复**
+     * （那时相位机本来就在正常推进，重发只会制造重复投递）。`wasOffline` 就是这个事实。
+     *
+     * 这条分支与 `main.ts` 的 A5（宽限内没回来才重建链路）配套：宽限期内恢复 ⇒ 不重建、
+     * 会话对象的相位进度**一个字不丢** ⇒ `redriveOnce()` 推得出那条该重发的消息；
+     * 超过宽限 ⇒ 重建，走 `resync` 追平（那条路上相位是新的，`redrive()` 合法地返回 `null`）。
+     *
+     * ⚠️ 顺序：先 `noteTransportStatus`（读数跟上）、再补发 `hello`、再重发在途消息、
+     * 最后才通知宿主重画 —— 屏上那一帧要看到的就是"补发之后"的真值。
+     */
+    if (change.to === 'offline') wasOffline = true;
+    if (change.to === 'online') {
+      flushHello();
+      if (wasOffline) {
+        wasOffline = false;
+        redriveOnce();
+      }
+    }
     for (const cb of statusListeners) cb(change.to);
   });
   return {
@@ -1278,6 +1565,14 @@ export function createLobbySessionLink(opts: {
     helloSent: () => helloDone,
     helloDiag: () => helloTrace.join(' | '),
     driveOnce,
+    redrivenCount: () => redriven,
+    requestResync,
+    applyResync,
+    /**
+     * ★ G5 T13-A：重连链路上不弹硬币屏（用户裁决：重连**不重掷硬币**）。
+     * 屏那一侧的唯一消费者是 `lobbyCoinViewOf()` 的第一句。
+     */
+    suppressesCoinScreen: () => resumeMode,
     role: opts.role,
     /**
      * 加入方叫出去的那一面。`chosenFace` 是**会话层口径**（`0 | 1`），屏上要的是 `1 | 2`
@@ -1414,6 +1709,45 @@ export interface LobbyClient {
   sendHello(): boolean;
   /** 本端是否已经发过 `hello` */
   helloSent(): boolean;
+  /**
+   * ★★ **G5 T13-A 的读数口**（判据 2 的计数腿）：
+   *  - `redrivenCount()`：这条链路上"按相位重发在途消息"真的发出去了几次；
+   *  - `suppressesCoinScreen()`：这条链路是不是重连链路（重连不重掷硬币，屏不画硬币屏）。
+   */
+  redrivenCount(): number;
+  suppressesCoinScreen(): boolean;
+  /**
+   * ★★ **G5 T13-B：去要一份档案**（`queue-overflow` 那条 cause 的动作）。
+   *
+   * 宿主在 `driver.onFailure('inbound-overflow')` 之后调它：溢出这件事**可能发生在任何相位**
+   * （`session.ts:1244-1247`），所以它不能挂在"重连握手"那个触发点上 —— 两条 cause 各有各的
+   * 入口（判据 2）。会话层那一位由 `noteResyncNeeded('queue-overflow', …)` 置起来（宿主调
+   * `noteResyncNeeded()`）。
+   */
+  requestResync(): boolean;
+  /**
+   * ★★ **G5 T13-B：把"本端需要一次追平"这件事交给会话层**（`queue-overflow` 那条 cause）。
+   *
+   * 溢出的真因由驱动给（`DriverFailure`），可读提示由宿主转写（纯层不产玩家文案）。
+   */
+  noteResyncNeeded(cause: 'resuming-handshake' | 'queue-overflow', detail: string): boolean;
+  /**
+   * ★★ **G5 T13-B：用房主给的档案追平**（转发到当前链路的 `applyResync()`）。
+   *
+   * 正常路径上宿主**不直接调它**：收下档案那一格在 `createLobbySessionLink().receive()` 里，
+   * 它先问宿主 `onResyncRes` 要"应用了几步"，再自己调。这个公开口是给"宿主需要自己走一遍"
+   * 的场合（例如重放调试）留的，也是计数腿"追平入口各有且仅有一处"的对照。
+   */
+  applyResync(file: MatchFile, statesAtStep: number): boolean;
+  /**
+   * ★★ **这一局本端打过没有**（G5 T13-A：`resume` 还是 `first` 的判定）。
+   *
+   * 语义只有一件：**本端上一次建链路用的会话号就是它** ⇒ 这次贴的码是"带着同一局回来"，
+   * 于是 `connect('resume')`（先 `markResuming()`、`hello` 带 `resuming: true`）；
+   * 否则是第一次接上。为什么不让本层自己猜：`'first'` 与 `'resume'` 的后果差一整条
+   * 追平路径（`session.ts:925-935` 写死了时机），猜错会让 `needsResync` 变成假读数。
+   */
+  knowsSession(sessionId: string): boolean;
   /**
    * ★ **收方产出回示码**（B3）：拿当前那条邀请码里的 offer 去产一条 answer 回示码。
    *
@@ -1779,6 +2113,32 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
   let currentLink: LobbySessionLink | null = null;
 
   /**
+   * ★★ **G5 T13-A：这一局已经叫出去的那一面**（跨链路记忆；`0 | 1`，`null` = 还没叫过）。
+   *
+   * ## 为什么必须住在**客户端**这一层而不是链路里
+   *
+   * 重连**必须新建链路对象**（D23 的充分性前提），旧链路连着它那份 `chosenFace` 一起被丢掉
+   * ⇒ 新链路重新要面时会**再弹一次硬币屏**，而硬币在断线前就已经定过了（用户裁决
+   * 2026-09-20："重连**不重掷硬币**"）。所以那一面必须记在比链路活得久的地方 ——
+   * 这一层就是"这一局的大厅客户端"，它的寿命与这一局相同。
+   *
+   * 两条纪律：① 只有**屏上真的点了**才会被写（`onFaceChosen` 的调用点在 `askFaceOnce` 的
+   * resolve 里）；② 重连链路上没有记忆时取面 0（与"没有注入 `chooseFace`"那条常量面同值），
+   * 而不是重新问玩家 —— 重新问就等于重掷。
+   */
+  let rememberedFace: 0 | 1 | null = null;
+
+  /**
+   * ★★ **G5 T13-A：上一次建链路用的是哪个会话号**（`knowsSession()` 的唯一输入）。
+   *
+   * 它答的是"这次贴的码是不是**带着同一局回来**"⇒ 决定 `connect('resume')` 还是 `'first'`。
+   * 反过来说错一次的后果很具体：拿 `'first'` 去接同一局 ⇒ 不带 `resuming` ⇒ 房主
+   * `refuseLateHello`（不回 ack）⇒ 整条追平路发不起来；拿 `'resume'` 去接新的一局 ⇒
+   * `needsResync` 变成假读数（`session.ts:925-935` 明写的那条）。
+   */
+  let lastLinkSessionId: string | null = null;
+
+  /**
    * ★ **按相位驱动到"本端暂时没东西可发"为止**（C 轮；结构缺口 ②）。
    *
    * 上界 16 是**防御**：正常流程两端合计最多 6 条（commit / commit-ack / commit-face /
@@ -1838,6 +2198,18 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
       //   漏了这一行 ⇒ 硬币屏永远不出现、面永远是常量 0，而屏上/线上都看不出哪里错了
       //   （实测踩过：`hasFaceChooser()` 恒 false，`driveOnce` 走的是常量面那一支）。
       ...(opts.chooseFace === undefined ? {} : { chooseFace: opts.chooseFace }),
+      // ── ★★ G5 T13-A/B：重连接线要的那几样，一律**照传**（漏任何一样都是静默失效）────────
+      //   ① `resume`：本链路是重连 ⇒ `hello` 带 `resuming: true`、不弹硬币屏（见 `helloMsg`）；
+      //   ② `appliedSteps`：`resync-req.appliedSteps` 的自报数（宿主的驱动才是那个事实的主人）；
+      //   ③ `resyncSource`：房主侧的重连凭据（D8：主机内存里的当前 MatchFile）；
+      //   ④ `onResyncRes`：加入方侧"把状态真的重建出来"那一步（宿主做，见它的接口注释）；
+      //   ⑤ 面记忆：重连**不重掷硬币**（读旧链路记下的那一面、把本链路选中的面记回去）。
+      ...(mode === 'resume' ? { resume: true } : {}),
+      ...(opts.appliedSteps === undefined ? {} : { appliedSteps: opts.appliedSteps }),
+      ...(opts.resyncSource === undefined ? {} : { resyncSource: opts.resyncSource }),
+      ...(opts.onResyncRes === undefined ? {} : { onResyncRes: opts.onResyncRes }),
+      readFaceMemory: () => rememberedFace,
+      onFaceChosen: (face) => { rememberedFace = face; },
       ...(opts.seat === undefined ? {} : { seat: opts.seat }),
       localProtoVersion: opts.localProtoVersion,
       localCardDataHash: opts.localCardDataHash,
@@ -1869,6 +2241,8 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
     link.session.noteTransportStatus(link.transportStatus());
     s.link = link;
     currentLink = link;
+    // ★ G5 T13-A：记住"这一局用的是哪个会话号"（下一次贴码据此判 first / resume）
+    lastLinkSessionId = linkSessionId;
     /**
      * ★ **顺序写死：先把第一条 `hello` 交下去，再重接宿主的订阅。**
      *
@@ -1995,11 +2369,22 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
     showNotice: (text: string | null): void => { s.notice = text; },
 
     connect,
-    reconnect: (): Promise<void> => connect('resume'),
+    /**
+     * ★★ **断线之后重建链路**（A5 的入口）。**模式由"有没有可续的对局"决定**（协调者 2026-09-20
+     * 第 2 条裁决）：
+     *  - 已经进过牌桌（`hasResumableGame() === true`）⇒ `'resume'`：声明重连、要档案追平；
+     *  - **还没进牌桌** ⇒ `'first'`：**重新来一次握手**。
+     *    为什么不能也走 `'resume'`：那一格房主手里**没有档案**（还没 `netGame`）⇒
+     *    `acceptResyncReq` 回 `'resync-not-wired'` 且不动相位，而 `markResuming` 已经把加入方钉在
+     *    `resuming` ⇒ 加入方**永久停在"正在把这一局追平"**（不报错的死挂，报告 §6 第 1 条那个洞）。
+     *    开局期本来就没有"进度"可续 ⇒ 重来一次握手是唯一诚实的退路。
+     */
+    reconnect: (): Promise<void> => connect(opts.hasResumableGame?.() === true ? 'resume' : 'first'),
 
     attach: (link: LobbySessionLink): void => {
       s.link = link;
       currentLink = link;
+      lastLinkSessionId = link.session.sessionId();
       s.transport = link.transportStatus();
       s.peer = link.session.peerStatus();
       reattachStatus();
@@ -2013,6 +2398,20 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
     sendHello: (): boolean => s.link?.sendHello() ?? false,
 
     helloSent: (): boolean => s.link?.helloSent() ?? false,
+
+    // ── ★★ G5 T13-A/B 的三个转发口（没有链路时一律"没做成"，不假装成功）──────────────
+    redrivenCount: (): number => s.link?.redrivenCount() ?? 0,
+    suppressesCoinScreen: (): boolean => s.link?.suppressesCoinScreen() ?? false,
+    requestResync: (): boolean => s.link?.requestResync() ?? false,
+    noteResyncNeeded: (cause, detail): boolean => {
+      const link = s.link;
+      if (link === null) return false;
+      const r = link.session.noteResyncNeeded(cause, detail);
+      return r.ok;
+    },
+    applyResync: (file: MatchFile, statesAtStep: number): boolean =>
+      s.link?.applyResync(file, statesAtStep) ?? false,
+    knowsSession: (sessionId: string): boolean => lastLinkSessionId !== null && lastLinkSessionId === sessionId,
 
     commitmentVerified: (): boolean | null => {
       const link = s.link;
@@ -2209,6 +2608,15 @@ export function lobbyCoinViewOf(
   hooks: { readonly choose: (side: CoinSide) => void; readonly onChosen: () => void },
 ): CoinNetView | null {
   if (!client.canChooseFace()) return null; // 没有"要面"的能力 ⇒ 屏上不出现硬币屏
+  /**
+   * ★★ **G5 T13-A：重连链路上不弹硬币屏**（用户裁决 2026-09-20："重连**不重掷硬币**"）。
+   *
+   * 硬币在断线之前就定过了：那条链路上的面是**旧链路记下的那一面**（`driveOnce` 的
+   * `awaiting-commit-ack` 那一格），而这一帧屏只需要继续往下走 —— 再画一次硬币屏等于
+   * 让玩家以为又要掷一次（哪怕算出来的落点一样）。⇒ 判定放在**最前面**，
+   * 与"有没有要面能力"同族（都是"这一帧该不该有硬币屏"的输入）。
+   */
+  if (client.suppressesCoinScreen()) return null;
   const role = client.role();
   if (role === null) return null;
   const phase = client.phase();

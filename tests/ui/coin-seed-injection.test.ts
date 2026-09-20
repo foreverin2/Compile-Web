@@ -304,14 +304,21 @@ describe('G5 T11-A · 判据 3 的另一个面（屏上 2 ⇒ 会话 1）', () =
         .toString('utf8'),
     );
     const assignments = [...src.matchAll(/chosenFace\s*=\s*([^;]+);/g)].map((m) => m[1].trim());
-    // ★ **T11-B 接线后就是 1 个赋值点**（A 段当时钉的是 0：那时还没有叫面入口）：
-    //   `chosenFace = faceFromSide(side)` —— 屏上 `1 | 2` ⇒ 会话层 `0 | 1`。
-    //   没有这条断言，下面的循环 0 次恒真 —— 把 `chosenFace` 删掉或改名，这条腿都不会红。
+    /**
+     * ★ **T11-B 接线后是 1 个赋值点**（A 段当时钉的是 0：那时还没有叫面入口）：
+     *   `chosenFace = faceFromSide(side)` —— 屏上 `1 | 2` ⇒ 会话层 `0 | 1`。
+     * ★ **G5 T13-A 同步成 2 个**（用户裁决 2026-09-20："重连**不重掷硬币**"）：
+     *   重连链路上没有可问的玩家（`resumeMode` ⇒ 不弹硬币屏），那一面来自**旧链路记下的那一面**
+     *   （`readFaceMemory()`；没有记忆时取面 0，也就是"没有注入 `chooseFace`"那条常量面的同值）
+     *   ⇒ `chosenFace = chosenFace ?? opts.readFaceMemory?.() ?? faceFromSide(1);`。
+     *   两条赋值的 RHS 都经过 `faceFromSide`（下面那个循环就是这条判据的牙），
+     *   而且**只有**这两条 —— 多出第三条（例如把 `side` 直接当 `face` 用）照样红。
+     */
     expect(
       assignments.length,
       `chosenFace 的赋值点数变了（现在是 ${assignments.length}：${assignments.join(' | ')}）—— ` +
-        'T11-B 接线后应为 1（`faceFromSide(side)`），请同步这条断言与它上面那句注释',
-    ).toBe(1);
+        'T11-B 接线后 1 个 + T13-A 的重连记忆 1 个 = 2（两侧都必须经过 `faceFromSide`）',
+    ).toBe(2);
     // 反空转锚点：同一条正则必须能抓到"直接赋值"（否则上面那条在"正则写坏"时也恒 0）
     const anchor = [...'chosenFace = side;'.matchAll(/chosenFace\s*=\s*([^;]+);/g)].map((m) => m[1].trim());
     expect(anchor, '锚点正则失效：抓不到 `chosenFace = side;`').toEqual(['side']);

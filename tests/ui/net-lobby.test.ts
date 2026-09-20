@@ -314,6 +314,15 @@ function makeGuestClient(over: Partial<Parameters<typeof createLobbyClient>[0]> 
     decompressBase64: hostDecompress,
     readAddressBar: () => null,
     localNick: () => 'join-nick',
+    /**
+     * ★ **G5 T13-A 同步（协调者 2026-09-20 第 2 条裁决）**：`reconnect()` 的模式现在由
+     * `hasResumableGame()` 决定 —— 有可续的对局走 `'resume'`（`markResuming()` + `resuming` 的 hello），
+     * 开局期走 `'first'`（重新握一次手）。
+     * ⚠️ 这份夹具模特的是"这一局已经在打"（A5 那条腿要验的正是 `markResuming()` 的时机）
+     * ⇒ 这里如实声明"有可续的对局"。开局期那一支的腿在
+     * `tests/ui/net-reconnect-wiring.test.ts`。
+     */
+    hasResumableGame: () => true,
     ...over,
   });
   return { client, ticker: t, built };
@@ -343,6 +352,14 @@ function makePairClient(role: 'host' | 'guest', transports: NetTransport[]) {
     decompressBase64: hostDecompress,
     readAddressBar: () => null,
     localNick: () => 'join-nick',
+    /**
+     * ★ **G5 T13-A 同步（协调者 2026-09-20 第 2 条裁决）**：`reconnect()` 的模式由
+     * `hasResumableGame()` 决定 —— 有可续的对局走 `'resume'`（`markResuming()` + 带 `resuming`
+     * 的 hello），**开局期**走 `'first'`（重新握一次手）。这份夹具模特的是"这一局已经在打"
+     * （A5 那条腿要验的正是 `markResuming()` 的时机）⇒ 如实声明"有可续的对局"；
+     * 开局期那一支的腿在 `tests/ui/net-reconnect-wiring.test.ts`。
+     */
+    hasResumableGame: () => true,
   });
 }
 
@@ -1351,6 +1368,41 @@ describe('★ 修复轮 A2/A3/A4/A5 · 建链路 / 发 hello / 入站重画 / �
       .toBe(true);
     expect(st.peer?.needsResyncCause, 'needsResync 的原因不是"对端回来握手"').toBe('resuming-handshake');
     void firstPhase;
+  });
+
+  /**
+   * ★★ **G5 T13-A 修复轮（评审第 1 条）：开局期掉线之后，大厅控件必须**可再次使用**。**
+   *
+   * 生产口径：开局期（还没有可续的对局）掉线 ⇒ **不假装续上**（`main.ts` 的
+   * `attachLobbyReconnect` 那一支不调 `client.reconnect()`），把屏退回大厅那一屏并给一行如实结论。
+   * 这条腿钉的是"退回大厅之后玩家手里真的还有东西可用"：三样控件都在，而且点了宿主真收到回调
+   * —— **不必刷新页面**就能重来。
+   */
+  it('★ 开局期掉线之后：屏退回大厅，三样控件都在且真的接上了宿主回调（不必刷新页面）', () => {
+    const hostLobby = mountLobby({
+      role: 'host',
+      peer: peer({ online: false, windowExpired: null }),
+    });
+    hostLobby.render();
+    expect(queryAllIn(hostLobby.root, 'button.net-lobby-make-invite').length,
+      '开局期掉线之后房主屏上没有「生成邀请码」（玩家没法重来）').toBe(1);
+    click(hostLobby.root, 'button.net-lobby-make-invite');
+    expect(hostLobby.calls, '点了「生成邀请码」但宿主没收到回调').toContain('make-invite');
+
+    const guestLobby = mountLobby({
+      role: 'guest',
+      peer: peer({ online: false, windowExpired: null }),
+    });
+    guestLobby.render();
+    expect(queryAllIn(guestLobby.root, 'input.net-lobby-paste-input').length,
+      '开局期掉线之后加入方屏上没有粘贴框（玩家没法重来）').toBe(1);
+    expect(queryAllIn(guestLobby.root, 'button.net-lobby-make-answer').length,
+      '开局期掉线之后加入方屏上没有「出示回示码」').toBe(1);
+    click(guestLobby.root, 'button.net-lobby-make-answer');
+    expect(guestLobby.calls, '点了「出示回示码」但宿主没收到回调').toContain('make-answer');
+    // 反空转：那一格屏上确实有可读结论的位置（掉线那一行），不是空白页
+    expect(textOf(guestLobby.root), '大厅那一屏没有连接状态行（玩家看不到"断了"）')
+      .toContain(LOBBY_LINK_COPY['offline-window-unknown']);
   });
 
 /* ==================================================================== *

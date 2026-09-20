@@ -35,7 +35,7 @@ import { handCardBox, handFanLead, handFanStep } from './ui/fx-card-size';
 import { handOuterFor } from './ui/fx-seat';
 import { openControlRearrangeModal, closeControlRearrangeModal, refreshControlRearrangeModal, isControlRearrangeOpen, orderChanged, orderToAction } from './ui/control-rearrange';
 import { renderHome, renderCoin, renderLibrary, renderRules, renderModeSelect } from './ui/home';
-import { lobbyCoinViewOf } from './ui/net-lobby';
+import { lobbyCoinViewOf, lobbyLinkText } from './ui/net-lobby';
 import type { CoinNetView } from './ui/home';
 // ★ T11-B：硬币屏要的"面"（屏上口径 `1 | 2`）
 import type { CoinSide } from './app/coin';
@@ -60,8 +60,8 @@ import type { NetSession } from './net/session';
 //   同口径（`src/core/fingerprint.ts` 的注释写着它是"指纹与联机校验"共用的那一个）。
 import { stableStringify } from './core/fingerprint';
 // 重放的起跑状态（`createGame(matchFileToCreateOptions(f))` + 草稿序列真重建）
-import { assertDraftPreludeMatchesSetup, draftPreludeCount, stateAfterDraft } from './app/match-replay';
-import { DRAFT_PICK_KIND, setupFromState, type MatchFile, type MatchFileMeta } from './app/match-file';
+import { assertDraftPreludeMatchesSetup, draftPreludeCount, stateAfterDraft, stateAtStep } from './app/match-replay';
+import { DRAFT_PICK_KIND, createMatchFileRecorder, setupFromState, type MatchFile, type MatchFileMeta, type MatchFileRecorder } from './app/match-file';
 import { CARD_DATA_HASH } from './app/card-data-hash';
 import { renderReplayBar, type ReplayBarNav } from './ui/replay-bar';
 import { openArchivePicker, openArchiveSink } from './ui/archive-fs-browser';
@@ -381,6 +381,14 @@ function lobbyCoinView(): CoinNetView | null {
 type NetMatch = {
   readonly driver: NetDriver;
   readonly session: NetSession;
+  /**
+   * ★★ **G5 T13-B：本局主机侧的档案记录器**（D8："重连凭据 = 主机内存里的当前 `MatchFile`"）。
+   *
+   * 它是 `resyncSource` 的唯一内容来源（`netFileOf()`），也是"追平之后两端规范串逐字相等"
+   * 这条判据能成立的前提：没有它，房主手里根本没有可发的档案 ⇒ 会话层只能回
+   * `'resync-not-wired'`（fail-closed），而加入方永远追不平。
+   */
+  readonly recorder: MatchFileRecorder;
   readonly seed: string;
   readonly draftStarter: PlayerId;
   readonly caller: PlayerId;
@@ -432,12 +440,72 @@ let netGame: NetMatch | null = null;
  * 交回驱动比在调用点写一句类型断言更诚实：那个数**就是**这一刻造出来的那一个。
  */
 function enterNetGame(): NetDriver | null {
-  if (netGame !== null) return null; // 幂等：入站帧与重画都会走到这里
   const client = lobbyClient;
   if (client === null) return null;
-  const hand = client.handoff();
-  if (!hand.ready || hand.transport === null || hand.session === null
-    || hand.seed === null || hand.draftStarter === null) return null;
+  /**
+   * ★★ **G5 T13-A：已经进过牌桌时，这个口只做一件事 —— 把驱动换到重连后的新传输上。**
+   *
+   * 为什么归这里（而不是另开一个 `reattachNetDriver()`）：`createNetDriver(` 在 `src/main.ts`
+   * 里**只许有一处**（`tests/ui/coin-screen-net.test.ts` 的计数腿），而"造驱动"这件事本来就
+   * 只有这一格；两个入口会让"驱动是拿哪条传输造的"分叉（T11-B 的 I-1/I-2 那一族缺陷）。
+   *
+   * 顺带把开局读数**不重算**这件事写死：`existing !== null` 时这一局的 seed / 先选者 /
+   * 座位都在 `existing` 里，重连之后权威是**追平回来的档案**，不是又一次握手（用户裁决
+   * 2026-09-20："别让玩家以为又掷了一次"）。
+   */
+  const existing = netGame;
+  const raw = client.handoff();
+  /**
+   * `handoff()` 在重连中间态里把 `transport` / `session` 置成 `null`（`ready` 为假：
+   * 相位还没回到 `complete`）⇒ 这一格里"新链路那条传输"要从 `client.transport()` 补上，
+   * 否则换驱动这一步拿不到东西、而旧驱动手里那条传输已经死了（症状是静默停摆）。
+   */
+  const hand = existing === null
+    ? raw
+    : { ...raw, transport: client.transport(), session: existing.session };
+  const alreadyOnThisTransport = existing !== null && hand.transport === existing.driver.transport;
+  if (existing !== null && (hand.transport === null || alreadyOnThisTransport)) return null;
+  if (!hand.ready && existing === null) return null;
+  // 上面两条已经挡掉了两种 null；这一句把 `hand.transport` 收窄成非空（下面那句要用它）
+  if (hand.transport === null) return null;
+  /**
+   * ★★ **G5 T13-B：重连凭据的记录器**（D8："重连凭据 = 主机内存里的当前 MatchFile"）。
+   *
+   * 两端都挂 —— 加入方那一份不进 `resync-res`（凭据只在房主手里），但它是"本端手里有一份与线上
+   * 同序的记录"的唯一载体，也是追平之后 `realign` 的对账面。**座位与传输仍是握手交出来的那两个**
+   * （`createNetDriver({ transport: hand.transport, seat: hand.seat, … })` 那一条判据的口径没变）。
+   *
+   * 重连换驱动时**沿用同一个记录器**：它是这一局的档案，不能因为换了驱动就断代。
+   */
+  const recorder = existing === null ? createMatchFileRecorder() : existing.recorder;
+  // ★ `createNetDriver(` 在 `src/main.ts` 里**只此一处**（计数腿）：两条路（第一次进牌桌 /
+  //   重连换传输）共用这一句，免得"驱动是拿哪条传输造的"分叉。
+  const netDriver = createNetDriver({ transport: hand.transport, seat: hand.seat, recorder });
+  // ★ G5 T12：给这条传输挂一个**只读**的入站 `act` 帧计数（判定集 ③.7 用它证"变化来自线"）。
+  //   默认路径（没带 `#g5probe=1`）也挂得上，但只有探针会去读它 ⇒ 开销是一个闭包与一个整数。
+  watchInboundFrames(netDriver);
+  // ★★ G5 T13-B：**入站队列溢出 ⇒ 走一次追平**（`queue-overflow` 那条 cause 的动作）。
+  //   T5 的驱动会把溢出报成一条 `'inbound-overflow'` 失败（`net-driver.ts:177`），
+  //   而"承认本端跟不上了"这件事要由宿主转成会话层的 `needsResync` 并去要档案 ——
+  //   没有这条接线，溢出会被标出来但**永远恢复不了**（`net-driver.ts:103-108` 的登记）。
+  netDriver.onFailure((f) => { noteNetOverflow(f.reason, f.message); });
+  if (existing !== null) {
+    /** ── ★ G5 T13-A：重连换了传输 ⇒ 换驱动，**不重建这一局**（开局读数一律不重算）────── */
+    const carried = existing.driver.appliedSteps();
+    existing.driver.dispose();
+    /**
+     * ★ 新驱动的 `applied` 从 0 起，而这一局已经走了 `carried` 步 ⇒ "下一条该是几"必须接上，
+     * 否则之后每一条入站 `act` 都 `seq-mismatch`（`net-driver.ts:263-270` 的原话就是这个形状）。
+     */
+    netDriver.realign(carried);
+    netDriver.arm(state);
+    netGame = { ...existing, driver: netDriver };
+    driver = netDriver;
+    renderMode = 'net';
+    rerender();
+    return netDriver;
+  }
+  if (hand.seed === null || hand.draftStarter === null || hand.session === null) return null;
   const seed = hand.seed;
   const draftStarter = hand.draftStarter;
   state = createGame({
@@ -447,15 +515,12 @@ function enterNetGame(): NetDriver | null {
     draftMode: 'normal',
     draftPool: randomPoolFromSeed(seed, 12),
   });
-  const netDriver = createNetDriver({ transport: hand.transport, seat: hand.seat });
-  // ★ G5 T12：给这条传输挂一个**只读**的入站 `act` 帧计数（判定集 ③.7 用它证"变化来自线"）。
-  //   默认路径（没带 `#g5probe=1`）也挂得上，但只有探针会去读它 ⇒ 开销是一个闭包与一个整数。
-  watchInboundFrames(netDriver);
   // ★ 递状态必须排在 `rerender()` 之前（见上面第 4 条）：这一刻到下一帧之间没有页面代码能跑
   netDriver.arm(state);
   netGame = {
     driver: netDriver,
     session: hand.session,
+    recorder: netDriver.recorder() as MatchFileRecorder,
     seed,
     draftStarter,
     caller: hand.caller,
@@ -545,6 +610,127 @@ function enterNetGame(): NetDriver | null {
   }
   rerender();
   return netDriver;
+}
+
+/* ══════════════════════════════════════════════════════════════════════ *
+ * ★★ G5 T13-A/B：重连接线的四处宿主动作
+ * ══════════════════════════════════════════════════════════════════════ */
+
+/**
+ * ★★ **入站队列溢出 ⇒ 走一次追平**（`queue-overflow` 那条 cause 的宿主动作）。
+ *
+ * ## 为什么必须有这一格（`net-driver.ts:103-108` 登记的那个"标出来但永远恢复不了"）
+ *
+ * 溢出的语义是"**本端跟不上了，本地状态不可信**"（`net-driver.ts:171-177`），而唯一的诚实
+ * 出路是拿房主的档案重建。T5 那一侧已经把它报成一条真失败（`'inbound-overflow'` +
+ * `inboundOverflowCount()`），但"承认落后 ⇒ 去要档案"这一步在**宿主**这一层 ——
+ * 没有它，溢出只会留在 `lastFailure()` 里，屏上照旧能操作，而本端的状态已经不可信。
+ *
+ * ## 两条 cause 各走各的入口（判据 2）
+ *
+ *  - `resuming-handshake`：重连握手（`createLobbySessionLink().receive()` 收到 `hello-ack`）；
+ *  - `queue-overflow`：**这里**。溢出可能发生在任何相位（`session.ts:1244-1247`），
+ *    所以它不能挂在"握手"那个触发点上，而要由驱动的失败事件驱动。
+ *
+ * ⚠️ 房主那一侧的溢出**没有出路**（协议里只有加入方能发 `resync-req`，而档案只在房主手里）
+ * —— 那一条如实登记在 `net-driver.ts:107-108`，本函数只把"本端落后了"如实标出来（屏上有行），
+ * 不假装它能被追平。
+ */
+function noteNetOverflow(reason: string, message: string): void {
+  if (reason !== 'inbound-overflow') return;
+  const client = lobbyClient;
+  const g = netGame;
+  if (client === null || g === null) return;
+  client.noteResyncNeeded('queue-overflow', message);
+  client.requestResync(); // 加入方：要档案；房主侧这条返回 false（会话层/角色会挡）
+  client.sync();
+  rerender();
+}
+
+/**
+ * ★★ **房主侧的重连凭据**（D8：主机内存里的当前 `MatchFile`）—— `resyncSource` 的唯一内容来源。
+ *
+ * 返回 `null` = 本端此刻没有可发的档案（还没有联机对局 ⇒ 会话层回 `'resync-not-wired'`，
+ * **fail-closed**，绝不编一份空档案出去）。
+ *
+ * 档案里的 `setup` 用 `setupFromState(state)`（草稿两条顺序快照的唯一抽取点，T4 第 11 条），
+ * `seed` 用本局的种子；`createdAt` 由 UI 层读时钟（`src/app` 不许读时钟）。
+ */
+function netFileOf(): MatchFile | null {
+  const g = netGame;
+  if (g === null) return null;
+  return g.recorder.toMatchFile(matchFileMeta(state));
+}
+
+/**
+ * ★★ **把档案真的应用出来**（`onResyncRes` 的唯一实现；T13-B 判据 1 与 3 的落点）。
+ *
+ * ## 三步，顺序写死
+ *
+ *  1. **先判"这是落后还是分叉"**：本端已经应用了 `local` 步、而档案只有 `n` 步。
+ *     `local > n` ⇒ 本端比权威档案**还多走了** —— 那是**分叉**（D1 的代价：信任制下不能修），
+ *     不许拿档案把本端已有的进度**静默覆盖**（判据 3）。给可读失败并**不动任何状态**。
+ *  2. **重建**：`stateAtStep(file, file.actions.length)`（D9 的单一出处；起点是
+ *     `stateAfterDraft(file)`，与重放页/生产起点逐字一致 —— §9 第 19 条那条教训）。
+ *  3. **对齐驱动的进度事实**：`realign(n)` + `arm(state)`。少了这一步就是
+ *     `net-driver.ts:263-270` 写的那个形状："会话层把 `needsResync` 清成 false、相位也放回去了，
+ *     但驱动这一侧之后每一条入站 `act` 都继续 `seq-mismatch`"。
+ *
+ * 返回**应用了几步**（= 档案长度），会话层拿它与档案长度核对（那一步才是 `applyResyncFile`）；
+ * 返回 `null` = 拒绝（原因已经写进屏上的可读提示）。
+ */
+function applyResyncToGame(file: MatchFile): number | null {
+  const client = lobbyClient;
+  const g = netGame;
+  if (g === null) return null;
+  const n = file.actions.length;
+  const local = g.driver.appliedSteps();
+  if (local > n) {
+    // 两端都动过、而且本端比档案还多 ⇒ 分叉，不是落后（判据 3：给可读失败，不许静默覆盖）
+    client?.showNotice(
+      `追平失败：本端已经走到第 ${local} 步，而对方的档案只有 ${n} 步 —— `
+      + '这说明两端各自走过不同的操作（分叉）。本端状态一个字都没动：'
+      + '覆盖它只会把分叉藏起来，而这一局已经不可能与对方一致了，请结束这一局并如实记录。',
+    );
+    return null;
+  }
+  let rebuilt: GameState;
+  try {
+    rebuilt = stateAtStep(file, n);
+  } catch (e) {
+    client?.showNotice(`追平失败：用对方的档案重放不出状态（${e instanceof Error ? e.message : String(e)}）；本端状态没动。`);
+    return null;
+  }
+  state = rebuilt;
+  g.driver.realign(n);
+  g.driver.arm(state);
+  client?.showNotice(null);
+  return n;
+}
+
+/**
+ * ★★ **重连之后把驱动换到新传输上**（G5 T13-A/B）—— 实现已经并进 `enterNetGame()`
+ * （见那里 `existing !== null` 那一支：`createNetDriver(` 在 `src/main.ts` 里只许有一处，
+ * 两个入口会让"驱动是拿哪条传输造的"分叉）。
+ */
+
+/**
+ * ★★ **牌桌上那一行可读的连接状态**（本轮必需：掉线/追平的观感不许只有"对面好像卡住了"）。
+ *
+ * 文案本体**只有一处**：`lobbyLinkText(peerStatus)`（`src/ui/net-lobby.ts` 那张映射表 +
+ * `needsResyncDetail`）。这里不写第二句、也不自己判"超窗了没有"—— 三值判定归会话层，
+ * 播放哪一句归映射表。掉线期间玩家看到的因此是"对端现在不在线（链路断了）…"，
+ * 追平时是"对端带着同一个会话回来了…"。
+ */
+function netLinkLine(): string | null {
+  const g = netGame;
+  /**
+   * 两个来源，一个读数：进了牌桌读**本局会话**的 `peerStatus()`，还没进牌桌（握手/硬币屏）
+   * 读**大厅客户端**那一份（`state().peer`）—— 后者正是"掉线那一刻玩家看到的那一行"的来源。
+   */
+  const st = g !== null ? g.session.peerStatus() : (lobbyClient?.state().peer ?? null);
+  if (st === null || st.online) return null; // 一切正常 ⇒ 不占屏
+  return lobbyLinkText(st);
 }
 
 /**
@@ -687,6 +873,14 @@ function exposeMatchProbe(): void {
       autoAdvanceOff(): boolean;
       /** 走一步本机的非玩家输入步骤（门禁专用；走的是**真的**那条编排） */
       advanceOnce(): { ok: boolean; why: string; op: number; seat: number; turnPlayer: number; failure?: string | null; actions: number; submit: string; called: number };
+      /**
+       * ★★ **G5 T13-A：重发链的只读读数**（门禁的"卡在半路的那条消息真的被重发"靠它）。
+       *
+       *  - `redriven`：本端链路上"按相位重发在途消息"**真的发出去了**几次（`LobbyClient.redrivenCount()`）；
+       *  - `phase`：会话层此刻的相位（没有链路时 `'idle'`）；
+       *  - `link`：传输状态；`needsResync` / `suppressCoin`：重连链路的两个读数。
+       */
+      netLink(): { redriven: number; phase: string; link: string; needsResync: boolean; suppressCoin: boolean };
     };
   };
   g.__g5Match = {
@@ -703,6 +897,17 @@ function exposeMatchProbe(): void {
      * 不改任何状态、不驱动任何流程。没有联机局时给 `{ act: 0, last: null }`。
      */
     netFrames: () => ({ act: netFrameCounterIn.act, last: netFrameCounterIn.last }),
+    /**
+     * ★★ **G5 T13-A：重发链的只读读数**（真浏览器门用；不驱动任何流程）。
+     * 见 `__g5Match` 类型上那一段：`redriven` 是"真的重发出去过几次"，不是"恢复过几次"。
+     */
+    netLink: () => ({
+      redriven: lobbyClient?.redrivenCount() ?? -1,
+      phase: lobbyClient?.phase() ?? 'idle',
+      link: lobbyClient?.state().transport ?? 'idle',
+      needsResync: lobbyClient?.state().peer?.needsResync ?? false,
+      suppressCoin: lobbyClient?.suppressesCoinScreen() ?? false,
+    }),
     /**
      * ★ **最近一次草稿提交的结果**（G5 T12 门禁排查用；只读，不参与任何流程）。
      *
@@ -982,6 +1187,14 @@ function lobbyEnv(): NetBrowserEnv {
     ticker: lobbyTicker,
     // ★ I-1：真传输在 `init()` 里把"刚造出来的那条连接"交回来，房主那格才拿得到它
     onPeerConnection: (pc) => { hostPeerConnection = pc; },
+    /**
+     * ★★ **G5 T13-A：探针专用的掐线钩子**（只在 `#g5probe=1` 时打开）。
+     *
+     * 浏览器里没有可逆的包级断线手段（三次实测见报告 §5）⇒ "同链路恢复 ⇒ `redrive()` 重发"
+     * 这条真浏览器腿只能由页面**真关通道 + 真重建 + 如实报状态**来造。默认路径（不带那个查询
+     * 片段）一个字节都不多走：`probeLinkCut` 缺省 `false`。
+     */
+    ...(window.location.hash.includes('g5probe=1') ? { probeLinkCut: true } : {}),
   };
 }
 
@@ -1130,8 +1343,13 @@ function renderLobbyFrame(): void {
    * 顺序写死：这一帧是**大厅与硬币屏共用的唯一入口**，所以判定必须排在 `renderNetLobby` 之前。
    * 重画的条件是"读数指纹变了"（`lobbyCoinShown`）—— 这一帧会被每条入站重画，
    * 无条件重画就是整屏重建（玩家点下去的那一刻屏会闪、大币会重置）。
+   *
+   * ★★ **G5 T13-A（修复轮）：开局期那次断线之后不再画硬币屏**（`lobbyRestartNeeded`）。
+   * 那一格没有可续的对局，屏该退回到**大厅那一屏** —— 那里才有「生成邀请码」/ 粘贴框 /
+   * 「出示回示码」三样控件，玩家点一下就能重来（不必刷新页面）。这一格**不是**"重连可用"：
+   * 硬币只是那一局的开头，而那一局已经没了。
    */
-  if (coin !== null) {
+  if (coin !== null && !lobbyRestartNeeded) {
     // 只在这一帧的读数**与上一帧不同**时重画（见 `lobbyCoinShown` 的说明）
     const sig = `${coin.role}|${coin.phase ?? ''}|${String(coin.chosen)}|${String(coin.landed)}|${String(coin.winner)}|${String(coin.caller)}`;
     if (sig !== lobbyCoinShown) {
@@ -1144,6 +1362,22 @@ function renderLobbyFrame(): void {
         beginGame: () => { /* 联机进牌桌由 enterNetGame() 触发，不是这个按钮 */ },
         net: coin,
       });
+    }
+    /**
+     * ★★ **G5 T13-A：硬币屏上也要有那一行连接状态**（掉线/追平的观感不许只有"对面好像卡住了"）。
+     *
+     * 为什么必须补在这里：硬币屏是**握手中间**的一站（D27），而掉线恰恰最可能发生在这一刻
+     * （玩家还在犹豫叫哪一面）。没有这一行，掉线在两个真浏览器上**一次都看不见**
+     * （实测：真浏览器门第一轮就是这么红的 —— 两端都停在硬币屏，`.net-lobby-link` 根本不在 DOM 里）。
+     *
+     * 文案本体仍然只有一处：`lobbyLinkText(peerStatus)`（`netLinkLine()` 里那句）。
+     */
+    const coinLinkText = netLinkLine();
+    if (coinLinkText !== null) {
+      const line = document.createElement('div');
+      line.className = 'net-link-line';
+      line.textContent = coinLinkText;
+      root.appendChild(line);
     }
     return;
   }
@@ -1192,20 +1426,133 @@ function renderLobbyFrame(): void {
  *  2. **并发挡板**：`connect()` 是异步的（建传输 + `init()`），断线事件可能连着来几次；
  *  3. **不在这里做重发**：把"卡在半路的握手/收官消息"重新驱动起来归 **T6 的 `redrive()`**（D23），
  *     不是 UI 的活。这里只负责"把链路重建起来"。
- *     ⚠️ **已知缺口（T8-D 登记，勿读成"重发已工作"）**：`redrive()` 在 `src/**` 里**零调用者**
- *     ⇒ 这条重发链**今天没接上**（`applyResyncFile` / `acceptResyncRes` 同样零调用者）。
+ *     ★ **G5 T13-A 接线之后**：`redrive()` 的调用点在 `src/ui/net-lobby.ts` 的链路状态订阅里
+ *     （`offline -> online` 恢复那一刻）与"房主应答完 `resync-req` 之后"那一格 —— 本函数**不**
+ *     调它（本函数的活只有"宽限内没回来才重建"这一件）。
  */
+
+/**
+ * ★★ **G5 T13-A：offline 之后等多久才重建链路**（毫秒；用户裁决 2026-09-20）。
+ *
+ * ## 两个量不许混（写在常量旁边，免得下一个人把它们合成一个）
+ *
+ *  - **这个宽限期是秒级的**：短暂断线（网络抖一下 / ICE 自己重协商回来），链路会自己转回
+ *    `online` ⇒ 不重建会话、由 `redrive()` 把在途消息重发。它**不是** D8 那个 300 秒窗口；
+ *  - **300s 窗口是另一件事**（D8：超窗不许追平、**不自动结束对局**，屏上那句话说"只能重开一局"）。
+ *    窗口的判定与可见性都归会话层与大厅文案，本文件一个字都不判。
+ */
+const RECONNECT_GRACE_MS = 4_000;
+
+/**
+ * ★★ **G5 T13-A（修复轮）：开局期那次断线之后，"这一局该重来"这个事实**（模块态）。
+ *
+ * 它只有一件作用：**让屏退回大厅那一屏**（跳过硬币屏分支），于是玩家能直接用大厅上本来就有的
+ * 三样控件重来（「生成邀请码」/ 粘贴框 /「出示回示码」）——不必刷新页面，也不需要自动重贴码
+ * （本轮**没做**自动重贴码，见 `attachLobbyReconnect` 里那一段的理由）。
+ *
+ * 复位点只有一个方向：**玩家真的重新开始一次尝试**时（生成邀请码 / 贴码 / 回到主页）。
+ * 与 `lobbyCoinShown` 同族：它是"屏该画哪一屏"的读数，不是第二份对局状态。
+ */
+let lobbyRestartNeeded = false;
+
 function attachLobbyReconnect(client: LobbyClient): void {
   let reconnecting = false;
+  /** 宽限期内那条待重建的调度（`null` = 没有在等） */
+  let graceHandle: number | null = null;
+  const cancelGrace = (): void => {
+    if (graceHandle !== null) {
+      lobbyTicker.cancel(graceHandle);
+      graceHandle = null;
+    }
+  };
   client.onStatus((to) => {
-    if (to !== 'offline' || reconnecting) return;
-    reconnecting = true;
-    void client.reconnect().then(() => {
-      reconnecting = false;
-      // ★ T11-C：重连发生在**对局中**时不许画大厅（那会把牌桌盖掉）。而重连本身对局中的语义
-      //   （带着同一局回来）归 T9/T10 —— 这里只保证"不静默改屏"，不假装重连已经能续局。
+    /**
+     * ★ 读数先跟上：屏上那一行与下面"宽限到点时到底回来了没有"那个判断都读 `state()`，
+     *   而它是**拉**的读数（`s.transport` 只在 `sync()` 里更新）。
+     */
+    client.sync();
+    /**
+     * ★★ **G5 T13-A：链路自己回来了 ⇒ 不重建**。
+     *
+     * 会话对象与它的相位进度因此**一个字不丢**，而"卡在半路的那条握手/收官消息"由链路自己的
+     * 恢复分支重发（`createLobbySessionLink` 的 `detachStatus`：`offline -> online` ⇒
+     * `session.redrive()`，源码里只此一处）。这条分支与下面那条宽限配套，合起来是两条路：
+     *  - 宽限期内恢复 ⇒ **同链路**，`redrive()` 重发；
+     *  - 超过宽限 ⇒ 重建 + `resync` 追平（下面那一支）。
+     */
+    if (to === 'online') {
+      cancelGrace();
       if (netGame !== null) rerender(); else renderLobbyFrame();
-    }, () => { reconnecting = false; });
+      return;
+    }
+    if (to !== 'offline' || reconnecting) return;
+    /**
+     * ★ **掉线那一刻要重画一帧**：屏上那一行（"对端现在不在线（链路断了）…"）是从
+     * `peerStatus()` 派生的读数，而它是**拉**的（`sync()` 刚更新，屏还没画）。
+     * 不重画的话玩家看到的是"对面好像卡住了"——正是本轮判据要消灭的观感。
+     */
+    if (netGame !== null) rerender(); else renderLobbyFrame();
+    /**
+     * ★★ **G5 T13-A：offline 不再当场重建 —— 先给一个秒级宽限期**（用户裁决 2026-09-20）。
+     *
+     * 为什么原来那句"offline 立刻 `reconnect()`"不够（实测读码）：它把**可恢复的短暂断线**
+     * 也当成永久掉线 —— 会话对象（相位进度）连同旧传输一起被丢掉，而新传输要**重新交换
+     * SDP** 才可能连上（`connect()` 每次都 `createTransport()`）⇒ 一次网络抖动之后两端
+     * 都停在"新链路永远连不上"，而"卡在半路的那条消息"没有任何机会被重发（`redrive()` 在新
+     * 会话上推不出任何东西）。宽限期把这两件事分开：
+     *  - 期间恢复（`to === 'online'`）⇒ 走上面那一支，`redrive()`；
+     *  - 期间没恢复 ⇒ 走下面这一支，照旧 `client.reconnect()`（**A5 的原行为一个字没改**，
+     *    只是晚了几秒）。
+     *
+     * 时间来源是本仓既有的注入计时能力（`lobbyTicker`）—— 本文件不直呼 `setTimeout` 之外的
+     * 东西，也没有裸定时器散在页面里。
+     */
+    cancelGrace();
+    graceHandle = lobbyTicker.schedule(() => {
+      graceHandle = null;
+      client.sync();
+      if (client.state().transport === 'online') return; // 期间真的回来了 ⇒ 不重建
+      if (reconnecting) return;
+      /**
+       * ★★ **开局期（还没有可续的对局）掉线 ⇒ 不假装续上，也不自动重贴码**（修复轮，2026-09-20；
+       * 评审判上一版"两端重新走到 complete"在生产路径上不成立）。
+       *
+       * ## 为什么"自动重建"在这一格是错的（两道墙，都是读码可核的事实）
+       *
+       *  1. **房主会拒那条新 hello**：`acceptHello`（`src/net/session.ts:1515-1517`）在"相位不是
+       *     `handshaking` 且 hello 不带 `resuming`"时走 `refuseLateHello`（不回 ack）。开局期房主
+       *     的会话**还活着**、相位正是 `awaiting-commit-face` ⇒ 加入方那条"新的一次握手"的普通
+       *     hello 当场被拒，加入方停在 `handshaking`（`helloDone` 已烧掉，不会再补发）；
+       *  2. **新传输不再连得上**：`connect()` 每次都 `createTransport()`（`src/ui/net-lobby.ts`
+       *     的 `connect`）⇒ 新链路要**重新交换邀请码/回示码**才可能通，而自动分支里没有任何
+       *     "重贴码"这一动作。
+       *
+       * ⇒ 这一格唯一诚实的做法是：**如实说清"这一局还没开始、请重新生成邀请码 / 重新加入"**，
+       * 并把屏**退回大厅那一屏**（那里本来就有「生成邀请码」/ 粘贴框 /「出示回示码」三样控件）
+       * —— 玩家不必刷新页面，点一下就能重来。**本轮只做到"可读 + 可重来"，没有做自动重贴码。**
+       *
+       * ⚠️ 不许把它写成"重连可用"：这一局没有任何可续的进度。
+       */
+      if (netGame === null) {
+        reconnecting = false;
+        lobbyRestartNeeded = true;
+        client.showNotice(
+          '连接断了，这一局还没开始：请重新生成邀请码 / 重新加入。'
+          + '（这一次断线没有可续的对局进度 —— 不是"接上了"，也不是"续上了"。）',
+        );
+        renderLobbyFrame();
+        return;
+      }
+      reconnecting = true;
+      void client.reconnect().then(() => {
+        reconnecting = false;
+        // ★ T13-B：换了传输 ⇒ 把握手交出来的那一组数重新接上（`enterNetGame()` 里那一支
+        //   会把驱动换到新传输并 `realign`，**不重建这一局**）
+        enterNetGame();
+        // ★ T11-C：重连发生在**对局中**时不许画大厅（那会把牌桌盖掉）。
+        if (netGame !== null) rerender(); else renderLobbyFrame();
+      }, () => { reconnecting = false; });
+    }, RECONNECT_GRACE_MS);
   });
 }
 
@@ -1226,6 +1573,8 @@ function startLobby(role: 'host' | 'guest'): void {
   lobbyMode = role;
   // ★ T11-B：这一局的硬币屏还没画过（`renderLobbyFrame` 只画一次，见那里的说明）
   lobbyCoinShown = null;
+  // ★ 修复轮：进大厅这一屏 ⇒ "这一局该重来"那个读数归零
+  lobbyRestartNeeded = false;
   chooseFaceResolve = null;
   faceChosen = false;
   if (lobbyClient === null) {
@@ -1311,6 +1660,27 @@ function startLobby(role: 'host' | 'guest'): void {
       },
       localNick: () => readNickName(localStore),
       /**
+       * ★★ **G5 T13-A/B：重连接线要的三样能力**（全部由本文件注入，`net-lobby.ts` 不自己发明）。
+       *
+       *  1. `appliedSteps`：`resync-req.appliedSteps` 的自报数 —— 本端驱动的进度事实
+       *     （下一条 `seq`），只有本文件手里有它（`netGame.driver.appliedSteps()`）；
+       *  2. `resyncSource`：**房主侧**的重连凭据（D8："重连凭据 = 主机内存里的当前 MatchFile"）。
+       *     档案来自这一局的记录器（`netGame.recorder`）⇒ `enterNetGame` 造驱动时挂上它；
+       *  3. `onResyncRes`：**加入方侧**收到档案之后把状态真的重建出来那一步（`applyResyncToGame`）。
+       *     它也是"追平与本端已有进度冲突 ⇒ 给可读失败"那条判据的落点。
+       */
+      appliedSteps: () => netGame?.driver.appliedSteps() ?? 0,
+      resyncSource: () => netFileOf(),
+      onResyncRes: (file) => applyResyncToGame(file),
+      /**
+       * ★★ **G5 T13-A：本端有没有"可续的对局"**（协调者 2026-09-20 第 2 条裁决的注入点）。
+       *
+       * 事实的唯一主人是这一层（`netGame`）：已经进过牌桌 ⇒ 走 `'resume'`（真重连）；
+       * 还没进牌桌 ⇒ 走 `'first'`（重新来一次握手，因为那一格没有任何可续的进度，
+       * 而 `resync-res` 在机制上不可能到位 —— 见 `net-lobby.ts` 的 `reconnect`）。
+       */
+      hasResumableGame: () => netGame !== null,
+      /**
        * ★ **入站帧到了就重画一帧**（评审 1.3 的 A4）。
        *
        * ★ T11-C 补的分支：**进了牌桌之后**这一帧该画的是**牌桌**，不是大厅 ——
@@ -1356,7 +1726,21 @@ function startLobby(role: 'host' | 'guest'): void {
 async function makeLobbyInvite(): Promise<void> {
   const client = lobbyClient;
   if (client === null) return;
-  await client.connect('first');
+  // ★ 修复轮：玩家真的重新开始一次尝试 ⇒ 清掉"这一局该重来"那个读数（屏回到硬币/大厅的正常分支）
+  lobbyRestartNeeded = false;
+  /**
+   * ★★ **G5 T13-A：重连时这条新链路走 `'resume'`**（"带着同一局回来"）。
+   *
+   * 判据与加入方那一侧同源（`knowsSession`：这一局的会话号本端用过）—— 区别是房主**不发**
+   * `hello`、也没有 `markResuming()`（那个口只在加入方会话上），所以 `'resume'` 在这里的
+   * 实际含义是"新链路知道自己是重连"：**不弹硬币屏**（硬币在断线前就定过了，
+   * `createLobbySessionLink` 的 `suppressesCoinScreen()`）、`hello` 那侧的行为一个字不影响。
+   *
+   * ⚠️ **必须同时要求"已经进过牌桌"**（协调者 2026-09-20 第 2 条）：开局期没有可续的进度，
+   * 而房主手里也还没有档案 ⇒ 那一格走 `'resume'` 只会让加入方永远停在"正在追平"。
+   */
+  const mode = netGame !== null && client.knowsSession(client.state().sessionId) ? 'resume' : 'first';
+  await client.connect(mode);
   // ★ B2：取一份**非 trickle** 的本侧描述（等 ICE 收集；上界走注入的 ticker）
   const transport = client.transport();
   if (transport?.localDescription === undefined) {
@@ -1419,9 +1803,31 @@ async function makeLobbyAnswerCode(): Promise<void> {
 async function joinLobbyWithInvite(text: string): Promise<void> {
   const client = lobbyClient;
   if (client === null) return;
+  // ★ 修复轮：玩家真的重新开始一次尝试（贴了一条新的邀请码）⇒ 清掉"这一局该重来"那个读数
+  lobbyRestartNeeded = false;
   await client.joinWithInvite(text);
   // 邀请码解不开时**不建链路**（建了也没用：连不上对端，而"解不开"这件事已经写在屏上了）
-  if (client.state().joined?.ok === true) await client.connect('first');
+  if (client.state().joined?.ok === true) {
+    /**
+     * ★★ **G5 T13-A：这次是"带着同一局回来"还是第一次接上**（`first` 与 `resume` 的分界）。
+     *
+     * 判据只有一条：**这张邀请码里的会话号，本端上一次建链路用的就是它**（`knowsSession`）
+     * —— 那意味着同一局在对端手里还在，本端这次是回去续（要先 `markResuming()`、
+     * `hello` 带 `resuming: true`，房主才会回 ack 并把档案交出来）；否则就是第一次接上。
+     *
+     * 反过来会怎样（两个方向都有具体后果）：拿 `first` 去接同一局 ⇒ 房主的 `acceptHello`
+     * 把这条 hello 判成迟到的、**不回 ack** ⇒ 加入方永远停在 `handshaking`；
+     * 拿 `resume` 去接新的一局 ⇒ `needsResync` 变成假读数（`session.ts:925-935`）。
+     */
+    const joined = client.state().joined;
+    const sid = joined !== null && joined.ok === true ? joined.payload.sessionId : null;
+    /**
+     * ⚠️ 与 `makeLobbyInvite` 同源：**只有"已经进过牌桌"才谈得上带着同一局回来**
+     * （协调者 2026-09-20 第 2 条）。开局期那一格走 `'first'` ⇒ 重新握一次手，不装"续上了"。
+     */
+    if (sid !== null && netGame !== null && client.knowsSession(sid)) await client.connect('resume');
+    else await client.connect('first');
+  }
   renderLobbyFrame();
 }
 
@@ -1459,6 +1865,23 @@ function rerender(): void {
       } : {}),
       verifyHooks: dev,
     });
+    /**
+     * ★★ **G5 T13：牌桌上那一行连接状态**（掉线 / 追平时的玩家可见读数）。
+     *
+     * 为什么追加在**渲染之后**而不是给 `renderNetBoard` 加参数：本轮的边界是"接线"——
+     * 棋盘渲染器（`src/ui/render-net.ts`）一个字都不动；而这一行只读**一个**读数
+     * （`netLinkLine()` → 会话层的 `peerStatus()` → `lobbyLinkText` 那张唯一映射表），
+     * 对局正常（`online === true`）时**不进 DOM**，所以它不占屏、也不改既有布局纪律。
+     *
+     * 它答的是本轮必需的那件事：掉线期间玩家的观感不许只是"对面好像卡住了"。
+     */
+    const linkText = netLinkLine();
+    if (linkText !== null) {
+      const line = document.createElement('div');
+      line.className = 'net-link-line';
+      line.textContent = linkText;
+      root.appendChild(line);
+    }
     return;
   }
   // ── G5/T8：联机大厅分支 ─────────────────────────────────────────────────────
@@ -2613,6 +3036,8 @@ function resetToMainInterface(): void {
   chooseFaceResolve = null;
   faceChosen = false;
   lobbyCoinShown = null;
+  // ★ 修复轮：开局期那次断线留下的"这一局该重来"读数也归这里（同族：漏了下一局会带着上一局的屏）
+  lobbyRestartNeeded = false;
   // ★ T11-C：硬币那帧的读数与"补画过没有"也归这里（同族：漏了下一局会带着上一局的落地）
   coinVerdict = null;
   coinSettledShown = false;

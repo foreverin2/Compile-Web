@@ -214,6 +214,18 @@ export interface NetBrowserEnv {
    */
   readonly onPeerConnection?: (pc: PeerConnectionLike) => void;
   /**
+   * ★★ **G5 T13-A：探针专用的"掐线/恢复"能力开关**（缺省 `false` ⇒ 默认路径一个字节都不多走）。
+   *
+   * 打开时本文件会挂两个全局函数（`__g5LinkCut()` / `__g5LinkRestore()`）：前者**真的**关掉本端
+   * 的两条数据通道（于是 `send` 如实失败、`readyState === 'closed'`），后者由出 offer 的一方
+   * **真的重建**那两条通道（认领侧靠 `datachannel` 事件接上）—— 实测可行（SCTP/DCEP 允许在已
+   * 建立的连接上换通道，不需要重新协商 SDP）。状态也**如实**转 `offline`/`online`。
+   *
+   * 为什么必须做成开关而不是无条件：它是测试钩子（`#g5probe=1` 才开），生产路径不该有
+   * "把自己掐线"的能力。理由与代价见 `.superpowers/g5-T13/T13AB-REPORT.md` §5。
+   */
+  readonly probeLinkCut?: boolean;
+  /**
    * ★ **计时能力**（G5/T8 修复轮 B2 加）。
    *
    * 为什么需要它：等 ICE 收集完成**必须有一个上界**——"无上界的 `await` 就是一次静默挂起"，
@@ -1298,6 +1310,11 @@ export function createBrowserTransport(env?: NetBrowserEnv): NetTransport {
   let sent = 0;
   let initDone = false;
   let peerOnline = false;
+  /**
+   * ★ T13 探针：本侧此刻处在"被探针掐线"的状态（只有 `resolved.probeLinkCut === true` 时才可能为真）。
+   * 它唯一的用处是"认领侧认领齐两条通道之后如实报回 `online`"（见 `datachannel` 那一格）。
+   */
+  let probeCut = false;
   let detachVisibility: (() => void) | null = null;
   /**
    * ★ **本侧 ICE 收集的等待**（B2）。
@@ -1401,7 +1418,50 @@ export function createBrowserTransport(env?: NetBrowserEnv): NetTransport {
           registerChannel(dc.label as NetChannel, dc);
           // 认领那一刻它可能已经 open（那时 `open` 事件不会再响）⇒ 认领后补报一次
           if (dc.readyState === 'open') notifyChannelOpen();
+          // ★ T13 探针：掐线之后对手重建通道 ⇒ 本侧认领齐了两条 ⇒ 如实报 online（见 installProbeCut）
+          if (probeCut) {
+            const all = CHANNEL_SPECS.every((sp) => channels.get(sp.channel)?.readyState === 'open');
+            if (all) { probeCut = false; emitStatus('online', '探针恢复：对手重建了通道。'); }
+          }
         });
+      }
+      /**
+       * ★★ **G5 T13-A：探针专用的"掐线/恢复"钩子**（`#g5probe=1` 门控，默认路径不装）。
+       *
+       * ## 为什么需要它（三次只读实验的结论，见 `.superpowers/g5-T13/T13AB-REPORT.md` §5）
+       *
+       * 浏览器里**没有**由外部施加、可逆的包级断线手段：CDP 的
+       * `Network.emulateNetworkConditions(offline)` 实测**完全不影响** WebRTC（两端一直 `connected`）；
+       * 杀 NetworkService 进程能真断，但那条连接**回不来**（转 `failed`、零新候选）；
+       * 关卡端进程更不用说。⇒ "同链路恢复 ⇒ 重发"这条腿要在真浏览器里做，只能由页面自己
+       * **真把通道关掉再重建**（实测可行：SCTP/DCEP 允许在已建立的连接上换通道，不需要重新协商
+       * SDP）+ **如实报状态**（通道关了就是发不出去，报 `offline` 不是假话）。
+       *
+       * ## 代价（如实登记）
+       *
+       * 这是**测试钩子进了生产文件**：多两个全局函数与一个布尔，只在 `#g5probe=1` 时可达
+       * （与 `main.ts` 的 `exposeMatchProbe` 同族的既成做法，§9 第 15 条为那一族登记过一次）。
+       * 它**不改任何生产行为**：默认路径连这段代码都不会执行（`resolved.probeLinkCut !== true`）。
+       */
+      if (resolved.probeLinkCut === true) {
+        const g = globalThis as { __g5LinkCut?: () => string; __g5LinkRestore?: () => string };
+        g.__g5LinkCut = () => {
+          for (const dc of channels.values()) dc.close();
+          probeCut = true;
+          emitStatus('offline', '探针掐线：数据通道被关掉（这一侧真的发不出去了）。');
+          return 'cut';
+        };
+        g.__g5LinkRestore = () => {
+          // 只有出 offer 的一方建通道（D26）；认领那一侧由 `datachannel` 事件接上（见上面那一格）
+          if (!asGuest) {
+            for (const spec of CHANNEL_SPECS) {
+              registerChannel(spec.channel, conn.createDataChannel(spec.channel, dataChannelInit(spec.channel)));
+            }
+            probeCut = false;
+            emitStatus('online', '探针恢复：通道已重建。');
+          }
+          return 'restore';
+        };
       }
       /**
        * ★★ **D25：按角色分流 —— 加入方在收到对端 offer 之前不许建自己的 offer**。
