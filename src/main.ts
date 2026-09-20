@@ -120,6 +120,8 @@ import {
   type PeerConnectionLike,
 } from './ui/net-browser';
 import { PROTO_VERSION } from './net/protocol';
+// ★ G5 T15：「生成邀请码」等链路就绪那一步要读传输自己的类型（`transport()` 的返回面）
+import type { NetTransport } from './net/transport';
 import { answerPayloadFields } from './net/invite';
 
 const root = document.getElementById('app')!;
@@ -1574,6 +1576,8 @@ function renderLobbyFrame(): void {
     },
     joinWithInvite: (text: string) => { void joinLobbyWithInvite(text); },
     toggleAdvanced: () => { lobbyClient?.toggleAdvanced(); renderLobbyFrame(); },
+    // ★ G5 T15：区里那一小块 TURN（三项输入框默认不渲染，由这个开关展开）
+    toggleRelay: () => { lobbyClient?.toggleRelay(); renderLobbyFrame(); },
     settingsValue: (key) => netSettings[key],
     setSetting: (key, value) => { netSettings[key] = value; renderLobbyFrame(); },
     errorText: (key: LobbyErrorKey) => errorCopy(key),
@@ -2030,6 +2034,135 @@ function startLobby(role: 'host' | 'guest'): void {
 }
 
 /**
+ * ★★ **G5 T15：「生成邀请码」之前先把链路等就绪**（有界，走注入的 `lobbyTicker`）。
+ *
+ * ## 它修的是什么（用户实测，2026-09-21）
+ *
+ * 玩家点「生成邀请码」，屏上出现 `net-browser.ts:1529` 那句
+ * 「本侧链路还没建立（init 还没成功），现在没有连接描述。」
+ * 而那一句是 `localDescription()` 的**兜底**口径，真因（`init()` 的 `reason + message`）
+ * 在同一次调用里被它盖掉了 ⇒ 玩家与排查的人都只看到"没建立"，看不到为什么。
+ *
+ * ## 为什么不是"轮询重画"
+ *
+ * 读数只有两个：`client.state().transport`（传输自己的状态）与 `transport()`（链路在不在）。
+ * `connect()` 回来之后先**同步**看一次：正常路径那一刻已经是 `connecting`/`online`
+ * （`init()` 里 `emitStatus('connecting', …)` 排在 `createOffer` 之前），一次都不用等；
+ * 只有"此刻还是 `idle`"这一格才需要等——那是**真 WebRTC 还在 init 的异步里**那一瞬间。
+ * 那一格的重画由 `showNotice` 那句 + 本函数**只在状态真的变了时**再画一次驱动，
+ * 没有周期性重画（屏不会闪）。上界与 ICE 那一步同一族：`lobbyTicker`。
+ *
+ * ⚠️ **`init()` 失败之后状态会永远停在 `idle`**（失败那几支在 `emitStatus` 之前就返回了）
+ * ⇒ 这一格靠 `linkReady` 判失败、由调用方把真因写出来，而不是硬等满上界。
+ *
+ * 上界 `LOBBY_LINK_READY_TIMEOUT_MS`：`init()` 在本机实测是几十毫秒级（真 ICE 收集是
+ * `localDescription()` 那一步的事，不在这里）；10 秒是"这一格不该轮到玩家来等"的量级，
+ * 同时也是"等不到就要说出来"的那条线。
+ */
+const LOBBY_LINK_READY_TIMEOUT_MS = 10_000;
+
+async function waitLobbyLinkReady(
+  client: {
+    state: () => LobbyState;
+    transport: () => NetTransport | null;
+    linkInitDiagnostic: () => { readonly ok: boolean } | null;
+  },
+  timeoutMs: number,
+): Promise<{ ok: true; status: string } | { ok: false; status: string; waitedMs: number }> {
+  /**
+   * 链路就绪 = **两个读数里任一个**说"本侧连接已经造出来了"：
+   *  1. `linkInitDiagnostic()` 非 `null`：**本次** `init()` 已经有结论（成功/失败都算"跑完了"）；
+   *  2. 传输状态不是 `idle`/`closed`：`init()` 里 `emitStatus('connecting', …)` 已经报过
+   *     （`idle` = 连本侧连接都还没造出来，`closed` = 这一局完了）。
+   *
+   * ⚠️ 为什么**两个都要**（CDP 实测的理由）：只有 ① 时，"`init()` 在飞、但状态已经是
+   * `connecting`"那一格会被判成"没就绪"（那一格里 `createOffer` 还没回来、描述确实取不到）；
+   * 只有 ② 时，`init()` 失败后状态永远停在 `idle` ⇒ 会把失败当成"还没跑完"硬等满上界。
+   * 两个一起用：**失败那几支由 ① 立刻认出**（诊断说了 `ok:false`），**在飞那一格由 ② 挡住**。
+   */
+  const linkReady = (): boolean => lobbyLinkReadyNow(client);
+  if (linkReady()) return { ok: true, status: client.state().transport };
+  const t0 = Date.now();
+  const done = await new Promise<boolean>((resolve) => {
+    let settled = false;
+    let tickerHandle = 0;
+    let healthHandle = 0;
+    const settle = (v: boolean): void => {
+      if (settled) return;
+      settled = true;
+      lobbyTicker.cancel(tickerHandle);
+      lobbyTicker.cancel(healthHandle);
+      resolve(v);
+    };
+    /**
+     * ① 上界：到点就判失败（**不许死等**）。
+     * ② 健康检查：每 250ms 看一眼，**只在状态真的变了时重画一次**
+     *    —— 屏上要有一行"正在建立链路…"，从"还没建"走到"建起来了"那一格要看得见。
+     */
+    tickerHandle = lobbyTicker.schedule(() => { settle(false); }, timeoutMs);
+    let last = client.state().transport;
+    const check = (): void => {
+      if (settled) return;
+      if (linkReady()) { settle(true); return; }
+      const now = client.state().transport;
+      if (now !== last) { last = now; renderLobbyFrame(); }
+      healthHandle = lobbyTicker.schedule(check, 250);
+    };
+    healthHandle = lobbyTicker.schedule(check, 250);
+  });
+  const status = client.state().transport;
+  return done ? { ok: true, status } : { ok: false, status, waitedMs: Date.now() - t0 };
+}
+
+/**
+ * 链路现在就可以取连接描述了没有（**同步**读数，不等待）。
+ *
+ * 与 `waitLobbyLinkReady` 里那把尺子**同源**（就是同一个表达式）——写成函数是为了让调用点
+ * 读起来是"先问一句"，而不是把判据复制到两处（复制过的地方迟早会漂移）。
+ */
+function lobbyLinkReadyNow(client: {
+  state: () => LobbyState;
+  transport: () => NetTransport | null;
+  linkInitDiagnostic: () => { readonly ok: boolean } | null;
+}): boolean {
+  if (client.linkInitDiagnostic() !== null) return true;
+  if (client.transport() === null) return false;
+  const st = client.state().transport;
+  return st !== 'idle' && st !== 'closed';
+}
+
+/**
+ * ★★ **G5 T15：链路没建起来时，屏上写"真因 + 此刻的状态"**（不许写成"网络不好"这种猜的话）。
+ *
+ * 两个来源都是现成的读数，本函数只把它们拼成人话：
+ *  - `reason` / `message`：`TransportActionResult`（`localDescription()` 或"`init()` 没成功"那一格给）；
+ *  - `status`：传输此刻自己的状态（`NetTransport.status()`）；
+ *  - `initMessage`：`init()` 的失败真因。今天有两个回流口（调用方按"更具体优先"取）：
+ *    ① `client.linkInitDiagnostic()`（G5 T15 新加的跨 `connect()` 记忆 —— 重试时旧链路已被换掉，
+ *    老那个口读不回来了）；② `net-lobby.ts` 的 `connect()` 写进 `s.notice` 的那句。
+ *
+ * 下一步只给"从真因直接读得出来的那一句"：`not-initialized` 这一族今天只有两个来源
+ * （`init()` 没成功 / 失败被吞掉），所以能说的就是"重试一次、并把这行连同失败原因记下来"。
+ * **不编**"换个浏览器 / 关掉扩展"这类具体建议 —— 那些要有真因支撑才说。
+ */
+function lobbyLinkFailureText(
+  reason: string,
+  message: string,
+  status: string,
+  initMessage: string | null,
+): string {
+  const cause = initMessage !== null && initMessage.length > 0
+    ? `${message} 失败原因：${initMessage}`
+    : message;
+  const state = status === 'idle'
+    ? '（传输此刻的状态是 idle：它连本侧连接都还没造出来，也就是 init() 没有成功。）'
+    : `（传输此刻的状态是 ${status}：本侧连接已经造出来了，但连接描述这一刻还取不到。）`;
+  return `${cause}${state}`
+    + '下一步：再点一次「生成邀请码」重试；重试仍然失败时，请把这一整行连同"失败原因"里那句话记下来'
+    + '（它就是这个问题的真因，不是猜测）。';
+}
+
+/**
  * 房主：生成一条邀请码，然后**建链路并接上**。
  *
  * ## ★ B2：SDP 不再是占位串（修复轮 B 档）
@@ -2044,58 +2177,138 @@ function startLobby(role: 'host' | 'guest'): void {
  * 失败处置（三种都可读，见 `waitForIceGathering`）：拿不到真描述时**不编一条假的**，
  * 而是把真因写到屏上、并**不**生成邀请码（生成一条连不上的邀请码比不生成更坏）。
  *
- * ⚠️ 真对端连接的 SDP 内容与 ICE 可达性**真浏览器未验证，由 T9 的 CDP 场景覆盖**。
+ * ## ★★ G5 T15：这一格的失败从此**可诊断**（用户实测那一句"本侧链路还没建立"）
+ *
+ * 两处改动（都在本函数里，改的**不是**判据）：
+ *  1. **等链路就绪**：`connect()` 回来之后看**本次** `init()` 的结论（`linkInitDiagnostic`）；
+ *     还没有结论（在飞）就**有界地等**（`waitLobbyLinkReady`，上界走注入的 `lobbyTicker`），
+ *     等的过程屏上有一行「正在建立链路…」，有结论之后再取连接描述 —— "点早了"不再是玩家的问题；
+ *  2. **真因上屏**：`init()` 的失败结果（`reason` + `message`）与传输此刻的状态一起写出来
+ *     （`lobbyLinkFailureText`），不再被 `localDescription()` 的兜底句盖掉；
+ *     本函数**抛出的任何异常**也被 catch 住如实写出来（原先它是 `void makeLobbyInvite()`
+ *     ⇒ 抛出只会变成一条没人看的未捕获拒绝）。
  */
 async function makeLobbyInvite(): Promise<void> {
   const client = lobbyClient;
   if (client === null) return;
-  // ★ 修复轮：玩家真的重新开始一次尝试 ⇒ 清掉"这一局该重来"那个读数（屏回到硬币/大厅的正常分支）
-  lobbyRestartNeeded = false;
-  /**
-   * ★ G5 T13-C：玩家真的重新生成一次邀请码 ⇒ "对局中掉线、屏该画大厅"那个读数也复位。
-   * 注意复位的**时机**：链路 `ready` 之前 `enterNetGame()` 不会把人带回牌桌（见那里的
-   * `raw.ready` 闸），所以这一刻屏仍然留在大厅 —— 玩家能接着贴回示码。
-   */
-  linkRecoveryNeeded = false;
-  /**
-   * ★★ **G5 T13-A：重连时这条新链路走 `'resume'`**（"带着同一局回来"）。
-   *
-   * 判据与加入方那一侧同源（`knowsSession`：这一局的会话号本端用过）—— 区别是房主**不发**
-   * `hello`、也没有 `markResuming()`（那个口只在加入方会话上），所以 `'resume'` 在这里的
-   * 实际含义是"新链路知道自己是重连"：**不弹硬币屏**（硬币在断线前就定过了，
-   * `createLobbySessionLink` 的 `suppressesCoinScreen()`）、`hello` 那侧的行为一个字不影响。
-   *
-   * ⚠️ **必须同时要求"已经进过牌桌"**（协调者 2026-09-20 第 2 条）：开局期没有可续的进度，
-   * 而房主手里也还没有档案 ⇒ 那一格走 `'resume'` 只会让加入方永远停在"正在追平"。
-   */
-  const mode = netGame !== null && client.knowsSession(client.state().sessionId) ? 'resume' : 'first';
-  await client.connect(mode);
-  // ★ B2：取一份**非 trickle** 的本侧描述（等 ICE 收集；上界走注入的 ticker）
-  const transport = client.transport();
-  if (transport?.localDescription === undefined) {
-    client.showNotice('这条实现不给连接描述（没有 `localDescription`），所以生成不了邀请码。');
+  try {
+    // ★ 修复轮：玩家真的重新开始一次尝试 ⇒ 清掉"这一局该重来"那个读数（屏回到硬币/大厅的正常分支）
+    lobbyRestartNeeded = false;
+    /**
+     * ★ G5 T13-C：玩家真的重新生成一次邀请码 ⇒ "对局中掉线、屏该画大厅"那个读数也复位。
+     * 注意复位的**时机**：链路 `ready` 之前 `enterNetGame()` 不会把人带回牌桌（见那里的
+     * `raw.ready` 闸），所以这一刻屏仍然留在大厅 —— 玩家能接着贴回示码。
+     */
+    linkRecoveryNeeded = false;
+    /**
+     * ★★ **G5 T13-A：重连时这条新链路走 `'resume'`**（"带着同一局回来"）。
+     *
+     * 判据与加入方那一侧同源（`knowsSession`：这一局的会话号本端用过）—— 区别是房主**不发**
+     * `hello`、也没有 `markResuming()`（那个口只在加入方会话上），所以 `'resume'` 在这里的
+     * 实际含义是"新链路知道自己是重连"：**不弹硬币屏**（硬币在断线前就定过了，
+     * `createLobbySessionLink` 的 `suppressesCoinScreen()`）、`hello` 那侧的行为一个字不影响。
+     *
+     * ⚠️ **必须同时要求"已经进过牌桌"**（协调者 2026-09-20 第 2 条）：开局期没有可续的进度，
+     * 而房主手里也还没有档案 ⇒ 那一格走 `'resume'` 只会让加入方永远停在"正在追平"。
+     */
+    const mode = netGame !== null && client.knowsSession(client.state().sessionId) ? 'resume' : 'first';
+    /**
+     * ★★ **G5 T15：这一次尝试的"链路就绪"判定只按**本次**`connect()` 的结果走。**
+     *
+     * ## 为什么必须清掉上一次的结论（CDP 实测踩到的假绿灯）
+     *
+     * 玩家再点一次「生成邀请码」时，`connect()` 会**换一条新链路**（每次都新建）——
+     * 旧链路可能是 `connecting`/`online`，于是"链路是不是就绪了"这个问题会被**上一次**的
+     * 残留读数回答成"已经就绪"，`localDescription()` 却在新传输上返回 `not-initialized`
+     * （实测：连点两次的那一格就是这样）。
+     *
+     * ⇒ 每次尝试前把读数清回 `null`，之后只认**这一次** `init()` 写进来的那一份。
+     * ⚠️ 清的是**诊断读数**，不是链路本身：链路该换还得换（D23 的充分性前提）。
+     */
+    client.clearLinkInitDiagnostic();
+    await client.connect(mode);
+    /**
+     * ★★ **G5 T15 的"提前点"那一格**：链路还没就绪就先等它（有界）。
+     *
+     * 判据是**这一次 `init()` 的结论**（`linkInit`）：`null` = 这次还没跑完（在飞）；
+     * `ok: false` = 这次真失败了（那就没什么好等的，直接把真因说出来）；
+     * `ok: true` = 本侧链路已经落地，可以直接取连接描述。
+     *
+     * 上界取 10 秒：`init()` 在本机实测是几十毫秒级（真 ICE 收集是 `localDescription()` 那一步
+     * 的事，不在这里），而"等不到"这件事本身要被说出来而不是无限等。
+     */
+    if (!lobbyLinkReadyNow(client)) {
+      client.showNotice('正在建立链路…（好了会自动接着生成邀请码，不用再点）');
+      renderLobbyFrame();
+      const ready = await waitLobbyLinkReady(client, LOBBY_LINK_READY_TIMEOUT_MS);
+      if (!ready.ok) {
+        const stNow = client.state();
+        const diag = client.linkInitDiagnostic();
+        client.showNotice(lobbyLinkFailureText(
+          diag !== null && !diag.ok ? diag.reason : 'not-initialized',
+          `等了 ${String(Math.round(ready.waitedMs / 1000))} 秒，本侧链路还没有建立起来`
+            + '（init 至今没有成功，所以没有连接描述可给）。',
+          ready.status,
+          diag === null ? null : diag.message,
+        ));
+        renderLobbyFrame();
+        return;
+      }
+      client.showNotice(null);
+    }
+    // ★ B2：取一份**非 trickle** 的本侧描述（等 ICE 收集；上界走注入的 ticker）
+    const transport = client.transport();
+    const stBefore = client.state();
+    /**
+     * ★★ `init()` 的失败真因有**两个**回流口，这里按"更具体优先"取：
+     *  1. `client.linkInitDiagnostic()`：**这一次** `connect()` 里 `init()` 的 `message`
+     *     （G5 T15 新加的跨 `connect()` 记忆 —— 重试时旧链路早被换掉，`s.notice` 那个口
+     *     已经读不回上一次的结论了）；
+     *  2. `s.notice`：`connect()` 在 `init()` 失败时写进状态那一句（老口径，仍然是真因）。
+     * 两者都没有时**不编**：交给 `lobbyLinkFailureText` 只报"还没建立"。
+     */
+    const initDiag = client.linkInitDiagnostic();
+    const initMessage = initDiag !== null && !initDiag.ok
+      ? `init 返回 ${initDiag.reason}：${initDiag.message}`
+      : (stBefore.notice !== null && !stBefore.notice.startsWith('正在建立链路') ? stBefore.notice : null);
+    if (transport?.localDescription === undefined) {
+      client.showNotice('这条实现不给连接描述（没有 `localDescription`），所以生成不了邀请码。');
+      renderLobbyFrame();
+      return;
+    }
+    const desc = await transport.localDescription();
+    if (!desc.ok || typeof desc.sdp !== 'string' || desc.sdp.length === 0) {
+      // **不编一条假的**：把真因（含 `init()` 的失败原因）与"传输此刻的状态"一起写到屏上；
+      // 邀请码这一轮不生成
+      client.showNotice(lobbyLinkFailureText(
+        desc.ok ? 'no-description' : desc.reason,
+        desc.ok ? '本侧没有可用的连接描述，生成不了邀请码。' : desc.message,
+        client.state().transport,
+        initMessage,
+      ));
+      renderLobbyFrame();
+      return;
+    }
+    await client.startHost({
+      originAndPath: currentOriginAndPath(),
+      p: PROTO_VERSION,
+      // ★ D 轮（I-3 甲）：邀请码里带上**这一局的房主会话号**（与建会话对象用的是同一串）
+      sessionId: client.state().sessionId,
+      sdp: desc.sdp,
+      ice: candidatesOf(desc.sdp),
+      hostPromise: 'host-promise-pending',
+      guestPromise: 'guest-promise-pending',
+    });
+    client.startWait();
     renderLobbyFrame();
-    return;
-  }
-  const desc = await transport.localDescription();
-  if (!desc.ok || typeof desc.sdp !== 'string' || desc.sdp.length === 0) {
-    // **不编一条假的**：把真因写到屏上（可读），邀请码这一轮不生成
-    client.showNotice(desc.ok ? '本侧没有可用的连接描述，生成不了邀请码。' : desc.message);
+  } catch (e) {
+    /**
+     * ★★ **G5 T15：这里原来是空的**（调用点是 `void makeLobbyInvite()`）⇒ `connect()` 若抛，
+     * 玩家只得到一条没人看的未捕获拒绝。现在如实写出来，并且**只说发生了什么**。
+     */
+    client.showNotice(`生成邀请码这一步抛了一个错误，没有生成出邀请码：${e instanceof Error ? e.message : String(e)}`);
     renderLobbyFrame();
-    return;
   }
-  await client.startHost({
-    originAndPath: currentOriginAndPath(),
-    p: PROTO_VERSION,
-    // ★ D 轮（I-3 甲）：邀请码里带上**这一局的房主会话号**（与建会话对象用的是同一串）
-    sessionId: client.state().sessionId,
-    sdp: desc.sdp,
-    ice: candidatesOf(desc.sdp),
-    hostPromise: 'host-promise-pending',
-    guestPromise: 'guest-promise-pending',
-  });
-  client.startWait();
-  renderLobbyFrame();
 }
 
 /**

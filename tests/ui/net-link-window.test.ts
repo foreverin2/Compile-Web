@@ -132,6 +132,7 @@ function mount(): Mount {
     submitRoomCode: () => { /* 本文件不点它 */ },
     joinWithInvite: () => { /* 本文件不点它 */ },
     toggleAdvanced: () => { /* 本文件不点它 */ },
+    toggleRelay: () => { /* 本文件不点它 */ },
     settingsValue: (_k: SettingKey) => '',
     setSetting: () => { /* 本文件不点它 */ },
     errorText: (k: LobbyErrorKey) => errorCopy(k),

@@ -158,6 +158,7 @@ function mount(initial: Partial<LobbyState>): Mount {
       submitRoomCode: () => { calls.push('submit-code'); },
       joinWithInvite: (t: string) => { calls.push(`join-invite:${t}`); },
       toggleAdvanced: () => { calls.push('toggle-advanced'); },
+      toggleRelay: () => { calls.push('toggle-relay'); },
       settingsValue: (_k: SettingKey) => '',
       setSetting: () => { calls.push('set-setting'); },
       errorText: (k: LobbyErrorKey) => errorCopy(k),

@@ -735,6 +735,19 @@ export function relayNoticeOf(read: IceServersRead): string | null {
  * 5. 大厅状态（宿主可读；渲染的唯一输入）
  * ==================================================================== */
 
+/**
+ * ★★ **G5 T15：最近一次 `connect()` 里 `init()` 的结论**（见 `LobbyState.linkInit`）。
+ *
+ * `reason` / `message` **逐字来自传输层**（`TransportActionResult`），`statusAfter` 是那一刻
+ * 传输自己的状态 —— 本层只做搬运，不改写、不翻译。
+ */
+export interface LobbyLinkInitDiagnostic {
+  readonly ok: boolean;
+  readonly reason: string;
+  readonly message: string;
+  readonly statusAfter: TransportStatus;
+}
+
 /** 大厅这一屏的**全部**可显示状态 */
 export interface LobbyState {
   /** 本端角色（`null` = 还没选"建房/加入"） */
@@ -766,6 +779,34 @@ export interface LobbyState {
   readonly ice: IceServersRead;
   /** 高级区是否展开（**默认折叠**：初值 `false`） */
   readonly advancedOpen: boolean;
+  /**
+   * ★★ **G5 T15：「中继（TURN）」那一小块展开了没有**（**默认收起**：初值 `false`）。
+   *
+   * 与 `advancedOpen` 是**两层**折叠，不是一条：
+   *  - `advancedOpen`：整个「高级 / 连接设置」区（默认不渲染，T8 既有）；
+   *  - `relayOpen`：区里的 TURN 三项（默认不渲染 —— 普通玩家不该看见三个空输入框）。
+   *
+   * 缺省/未给 = `false`（收起）。三项的"要么都不填、要么三项齐全"校验**一个字没放宽**：
+   * 它仍然只由 `readIceServers()` 判（`relayNoticeOf` 转发），与展开状态无关。
+   */
+  readonly relayOpen?: boolean;
+  /**
+   * ★★ **G5 T15：最近一次 `connect()` 里 `init()` 的结论**（诊断读数；`null` = 还没建过链路）。
+   *
+   * ## 为什么必须有它（用户实测那一句"本侧链路还没建立"为什么诊断不了）
+   *
+   * `connect()` 在 `init()` 失败时把失败原因写进 `s.notice` —— 那条路只对**这一次**调用有效：
+   * 玩家再点一次「生成邀请码」就会**换一条新链路**（`connect()` 每次都新建），旧的那句被
+   * 新的（可能是成功的）调用覆盖 ⇒ 之前那一次为什么失败，屏上再也读不回来。
+   *
+   * 这一位把"每一次 `init()` 的结论"留下来（`reason` + `message` + 那一刻的传输状态），
+   * 于是"链路没建起来"这一类失败**从此可诊断**：屏上那句话里能带上真因。
+   *
+   * ⚠️ 它**参与"链路就绪了没有"那一问**（宿主 `waitLobbyLinkReady` 的第一条判据就是
+   * "本次 `init()` 有没有结论"），也**参与屏上那句失败文案**（真因）。除此之外没有任何判定
+   * 按它分支；`message` 逐字来自传输层，本层不改写。
+   */
+  readonly linkInit?: LobbyLinkInitDiagnostic | null;
   /** 八秒窗口是否已经走完（`null` = 还没开始等） */
   readonly waitExpired: boolean | null;
   /** 此刻该显示哪条**错误路径**的文案（`null` = 没有错误） */
@@ -1783,6 +1824,14 @@ export interface LobbyClient {
   submitRoomCode(): void;
   /** 展开 / 收起「高级 / 连接设置」（内容**默认不渲染**） */
   toggleAdvanced(): void;
+  /**
+   * ★★ **G5 T15：展开 / 收起区里的「中继（TURN）」那一小块**（三项输入框**默认不渲染**）。
+   *
+   * 它**只**管这三项显不显示，不碰任何判定：三项齐不齐仍由 `readIceServers()` 判
+   * （`relayNoticeOf` 转发），"配了一半"仍然给那句可读提示。收起时**不抹**已填的值 ——
+   * 填过的值仍留在设置里、仍然按原口径生效（`readIceServers` 读的是设置，不是这个开关）。
+   */
+  toggleRelay(): void;
   /** 读一项连接设置（渲染输入框的初值） */
   settingsValue(key: SettingKey): string;
   /** 写一项连接设置（写完之后重算 `readIceServers` 的读数） */
@@ -2034,6 +2083,15 @@ export interface LobbyClient {
   /** 起一次"等对端"的窗口（8s 之后置 `waitExpired`） */
   startWait(): void;
   dispose(): void;
+  /**
+   * ★★ **G5 T15：最近一次 `init()` 的结论**（`null` = 还没建过链路）。
+   *
+   * 它就是 `state().linkInit` 的那个读数，单独开一个口是因为宿主要**在 `connect()` 之前**
+   * 清掉它（"正在建立链路…"那一格不该带着上一次失败的结论）。
+   */
+  linkInitDiagnostic(): LobbyLinkInitDiagnostic | null;
+  /** ★ G5 T15：把那个读数清成 `null`（宿主在"要重新等一次链路"之前调） */
+  clearLinkInitDiagnostic(): void;
 }
 
 /**
@@ -2109,6 +2167,15 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
     transport: TransportStatus;
     peer: PeerStatus | null;
     advancedOpen: boolean;
+    /** ★ G5 T15：区里那一小块 TURN 是否展开（默认收起，见 `LobbyState.relayOpen`） */
+    relayOpen: boolean;
+    /**
+     * ★★ **G5 T15：最近一次 `init()` 的结论**（`null` = 还没建过链路）。
+     *
+     * 它是**跨 `connect()` 的记忆**：每次 `connect()` 换一条新链路，而"上一次为什么失败"
+     * 必须活得比那条链路久，否则玩家一点重试就再也查不出原因（见 `LobbyState.linkInit`）。
+     */
+    linkInit: LobbyLinkInitDiagnostic | null;
     waitExpired: boolean | null;
     error: LobbyErrorKey | null;
     notice: string | null;
@@ -2140,6 +2207,8 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
     transport: 'idle',
     peer: null,
     advancedOpen: false,
+    relayOpen: false,
+    linkInit: null,
     waitExpired: null,
     error: null,
     notice: null,
@@ -2156,6 +2225,14 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
    * 这条纪律与 `src/ui/consent` 的 `renderPrivacyDetail`（`local-consent.ts:111-113`）同款。
    */
   s.advancedOpen = false;
+  /**
+   * ★★ **G5 T15：`relayOpen` 的初值也恰好一处 —— 收起（`false`）。**
+   *
+   * 普通玩家看不懂 TURN URL / 用户名 / 凭据，三个空输入框摆在眼前只会让人以为"必须填"。
+   * ⇒ 默认**不渲染**它们（同一条"默认不渲染而不是渲染好再藏"的纪律），
+   * 只留一句"不用管这一块"；要自建中继的玩家自己点开那个开关。
+   */
+  s.relayOpen = false;
 
   let waitHandle: number | null = null;
 
@@ -2336,6 +2413,22 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
     const started = await transport.init({
       selfId: linkSessionId, peerId: `peer-of-${linkSessionId}`, role: opts.role,
     });
+    /**
+     * ★★ **G5 T15：把这一次 `init()` 的结论留下来**（跨 `connect()` 的记忆）。
+     *
+     * `statusAfter` 读的是**这一刻**传输自己的状态：`init()` 成功时它恒为 `connecting`
+     * （那句 `emitStatus` 排在 `createOffer` 之前），失败时那几支**在 `emitStatus` 之前**就
+     * 返回了 ⇒ 它恒为 `idle`。这个差别正是屏上"为什么没有连接描述"要说的那件事。
+     *
+     * ⚠️ 放在 `createLobbySessionLink` **之前**：那一步会建会话、发 `hello`，与"这次 init
+     * 的结论"无关；顺序写在这里是为了让"读到的状态"确定是 `init()` 刚回来的那一刻。
+     */
+    s.linkInit = {
+      ok: started.ok,
+      reason: started.ok ? 'ok' : started.reason,
+      message: started.ok ? '' : started.message,
+      statusAfter: transport.status(),
+    };
     const link = createLobbySessionLink({
       // ⚠️ 这里必须是 `opts.role`（**注入的角色**），**不是** `s.role`：`s.role` 要到
       //    `startHost()` / `applyInvite()` 才被赋值，而 `connect()` 会在它**之前**被调
@@ -2451,6 +2544,10 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
       endpoint: opts.signalingEndpoint,
       ice: iceOf(),
       advancedOpen: s.advancedOpen,
+      // ★ G5 T15：区里那一小块 TURN 的展开状态（默认收起，见初值那一处）
+      relayOpen: s.relayOpen,
+      // ★ G5 T15：最近一次 init() 的结论（跨 connect 的记忆，见 LobbyState.linkInit）
+      linkInit: s.linkInit,
       waitExpired: s.waitExpired,
       error: s.error,
       notice: s.notice,
@@ -2511,6 +2608,9 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
     },
 
     toggleAdvanced: (): void => { s.advancedOpen = !s.advancedOpen; },
+
+    /** ★ G5 T15：TURN 三项那一小块的折叠（只管显示；判定仍在 `readIceServers()`） */
+    toggleRelay: (): void => { s.relayOpen = !s.relayOpen; },
 
     settingsValue: (key: SettingKey): string => settings[key],
 
@@ -2734,6 +2834,12 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
       s.link?.detach();
       s.link = null;
     },
+
+    /** ★ G5 T15：最近一次 `init()` 的结论（只读；写入点是 `connect()` 里 `init()` 回来的那一刻） */
+    linkInitDiagnostic: (): LobbyLinkInitDiagnostic | null => s.linkInit,
+
+    /** ★ G5 T15：清掉那个读数（宿主在"要重新等一次链路"之前调，免得带上一次失败的结论） */
+    clearLinkInitDiagnostic: (): void => { s.linkInit = null; },
   };
 }
 
@@ -2862,6 +2968,8 @@ export interface LobbyRenderNav {
   submitRoomCode(): void;
   joinWithInvite(text: string): void;
   toggleAdvanced(): void;
+  /** ★ G5 T15：区里的「中继（TURN）」那一小块展开 / 收起（三项输入框默认不渲染） */
+  toggleRelay(): void;
   settingsValue(key: SettingKey): string;
   setSetting(key: SettingKey, value: string): void;
   /** 错误文案的取值口（本文件的 `errorCopy`）；渲染层不自己写文案 */
@@ -3056,13 +3164,40 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
       : `已配置信令端点：${s.endpoint}`));
     panel.appendChild(el('p', 'net-lobby-endpoint-reason', NO_ENDPOINT_REASON));
     panel.appendChild(el('h3', 'net-lobby-h3', '中继（TURN）'));
-    panel.appendChild(el('p', 'net-lobby-relay-hint',
-      '中继是可选的：不填就只走直连与公共 STUN。要填就得三项齐全（URL、用户名、凭据）。'));
-    appendField(panel, 'net-lobby-turn-url', 'TURN URL', 'turnUrl', nav);
-    appendField(panel, 'net-lobby-turn-user', 'TURN 用户名', 'turnUsername', nav);
-    appendField(panel, 'net-lobby-turn-cred', 'TURN 凭据', 'turnCredential', nav);
+    /**
+     * ★★ **G5 T15：这一小块默认收起**（普通玩家不该看见三个空输入框）。
+     *
+     * 收起时屏上**只留一句"不用管"**：说清默认走哪条路、什么时候才需要自建中继，
+     * 并给一个显式开关（"我要用自建中继（TURN）"）展开那三项。
+     *
+     * ⚠️ **D22**：这里**不写**任何隐私承诺 —— 中继那句隐私说明的唯一出处是
+     * `src/app/privacy.ts:111`，启用之后由下面那句 `relayNoticeOf(s.ice)` 原样引用进来。
+     * 本块新增的只是"要不要展开这三个框"的操作说明。
+     */
+    const relayShown = s.relayOpen === true;
+    panel.appendChild(el('p', 'net-lobby-relay-hint', '不用管这一块：默认走直连 + 公共 STUN，'
+      + '绝大多数情况够用。只有直连不通（比如两边都在管得很严的网络里）才需要自建中继。'));
+    const relayToggle = el('label', 'net-lobby-relay-toggle');
+    const relayBox = document.createElement('input');
+    relayBox.type = 'checkbox';
+    relayBox.className = 'net-lobby-relay-toggle-box';
+    relayBox.checked = relayShown;
+    relayBox.addEventListener('change', () => { nav.toggleRelay(); });
+    relayToggle.appendChild(relayBox);
+    relayToggle.appendChild(el('span', 'net-lobby-relay-toggle-label', '我要用自建中继（TURN）'));
+    panel.appendChild(relayToggle);
+    if (relayShown) {
+      // 展开之后才渲染那三项（同"默认不渲染"纪律：桩上分不出 `display:none` 与"已展开"）
+      panel.appendChild(el('p', 'net-lobby-relay-hint',
+        '要填就得三项齐全（URL、用户名、凭据）。'));
+      appendField(panel, 'net-lobby-turn-url', 'TURN URL', 'turnUrl', nav);
+      appendField(panel, 'net-lobby-turn-user', 'TURN 用户名', 'turnUsername', nav);
+      appendField(panel, 'net-lobby-turn-cred', 'TURN 凭据', 'turnCredential', nav);
+    }
     // ★ 启用（或配了一半）之后让玩家**看见**那句：文案本体逐字来自 `src/app/privacy.ts:111`
     // （D22：本文件一个字都不许改写它，也不许再加第二句）
+    // ★ G5 T15：收起时**也照旧**说 —— 收起只影响那三个输入框显不显示，不影响判定
+    //   （三项齐不齐仍由 `readIceServers()` 判）。填过的值不会被这个开关抹掉。
     const relay = relayNoticeOf(s.ice);
     if (relay !== null) panel.appendChild(line('net-lobby-relay-note', relay));
     adv.appendChild(panel);

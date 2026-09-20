@@ -217,6 +217,7 @@ function mountLobby(initial?: Partial<LobbyState>): Harness {
       endpoint: '',
       ice: { servers: [], relayConfigured: false, relayIncomplete: false },
       advancedOpen: false,
+      relayOpen: false,
       waitExpired: null,
       error: null,
       notice: null,
@@ -251,6 +252,7 @@ function mountLobby(initial?: Partial<LobbyState>): Harness {
       submitRoomCode: () => { calls.push('submit-code'); },
       joinWithInvite: (t: string) => { calls.push(`join-invite:${t}`); },
       toggleAdvanced: () => { h.state = { ...h.state, advancedOpen: !h.state.advancedOpen }; },
+      toggleRelay: () => { h.state = { ...h.state, relayOpen: !(h.state.relayOpen === true) }; },
       settingsValue: (_k: SettingKey) => '',
       setSetting: (_k: SettingKey, _v: string) => { calls.push('set-setting'); },
       errorText: (k: LobbyErrorKey) => errorCopy(k),
@@ -446,7 +448,7 @@ describe('判据 7 · 「高级 / 连接设置」默认折叠，启用后才让�
     expect(queryAllIn(h.root, 'div.net-lobby-advanced-panel').length, '展开之后面板没进 DOM').toBe(1);
   });
 
-  it('点开折叠区：出现 TURN 三项的输入框 + 配了一半时的可读提示；TURN 未填齐时**没有**那句', () => {
+  it('点开折叠区：**TURN 三项默认不出现**，勾上「我要用自建中继」才出现 + 配了一半时的可读提示；TURN 未填齐时**没有**那句', () => {
     const h = mountLobby({ role: 'guest' });
     h.render();
     click(h.root, 'button.net-lobby-advanced-toggle');
@@ -454,6 +456,18 @@ describe('判据 7 · 「高级 / 连接设置」默认折叠，启用后才让�
     // 这里直接重画一帧（把"点开"这件事写实：展开状态由 `state.advancedOpen` 决定）
     h.draw((s) => ({ ...s, advancedOpen: true }));
     expect(queryAllIn(h.root, 'div.net-lobby-advanced-panel').length, '展开之后没有面板').toBe(1);
+    /**
+     * ★★ **G5 T15：三个输入框默认不渲染**（用户实测："我不知道填什么，用户肯定都是不懂这些的"）。
+     * 展开的是「高级 / 连接设置」这整块；块里的 TURN 那一小块**还要再点一下开关**才展开。
+     */
+    expect(queryAllIn(h.root, 'input.net-lobby-turn-url-input').length, 'TURN URL 输入框默认就渲染了').toBe(0);
+    expect(queryAllIn(h.root, 'input.net-lobby-turn-user-input').length, 'TURN 用户名输入框默认就渲染了').toBe(0);
+    expect(queryAllIn(h.root, 'input.net-lobby-turn-cred-input').length, 'TURN 凭据输入框默认就渲染了').toBe(0);
+    // 收起时屏上留着"不用管"那一句 + 一个显式开关（不是把这一段藏起来不让人找到）
+    expect(textOf(h.root), '收起时没有"不用管这一块"那句').toContain('不用管这一块');
+    expect(queryAllIn(h.root, 'input.net-lobby-relay-toggle-box').length, '没有那个显式开关').toBe(1);
+    // ★ 勾上开关（`relayOpen`）⇒ 三项进 DOM（开关自己的处理函数由 `nav.toggleRelay` 接）
+    h.draw((s) => ({ ...s, relayOpen: true }));
     expect(queryAllIn(h.root, 'input.net-lobby-turn-url-input').length, 'TURN URL 输入框没了').toBe(1);
     expect(queryAllIn(h.root, 'input.net-lobby-turn-user-input').length, 'TURN 用户名输入框没了').toBe(1);
     expect(queryAllIn(h.root, 'input.net-lobby-turn-cred-input').length, 'TURN 凭据输入框没了').toBe(1);
@@ -940,7 +954,7 @@ function mountLobbyNavFor(_root: StubNode): LobbyRenderNav {
     state: s,
     backHome: () => {}, startHost: () => {}, startJoin: () => {}, makeInvite: () => {},
     inviteLength: () => '', qrNote: () => '', setRoomCode: () => {}, submitRoomCode: () => {},
-    joinWithInvite: () => {}, toggleAdvanced: () => {},
+    joinWithInvite: () => {}, toggleAdvanced: () => {}, toggleRelay: () => {},
     settingsValue: () => '', setSetting: () => {}, errorText: (k) => errorCopy(k),
     makeAnswerCode: () => {}, applyAnswerCode: () => {},
   };

@@ -213,3 +213,24 @@
   line-height: 1.75;
   color: #cfd;
 }
+
+/* ── G5 T15：TURN 三项的显式开关（默认收起；勾上才展开那三个输入框） ───── */
+
+.net-lobby-relay-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 4px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #bcd;
+  cursor: pointer;
+}
+
+.net-lobby-relay-toggle-box {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: #00ffcc;
+  cursor: pointer;
+}
