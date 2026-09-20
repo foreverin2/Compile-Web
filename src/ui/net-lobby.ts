@@ -135,9 +135,13 @@ export type MakeInviteResult =
  * `payload` 是它本来的名字（与邀请码同形状），`code` 是"玩家看到的那个东西"的名字。
  * 两个字段装同一个值会让"同一概念两个名字"那条纪律看起来被破坏，所以这里**只留 `code`**
  * （它就是载荷），调用方要什么自己取。
+ *
+ * ★★ **G5 T16**：`note` 是"上界到点、但手上已经有候选"那一刻要说给人听的那一句
+ * （宿主从 `acceptOffer()` 的 `note` 原样带过来，本层只负责写上屏）。
+ * ⚠️ 它**不是**失败，也不是成功承诺：跨网能不能连，那句话里写的是"还不知道"。
  */
 export type AnswerCodeResult =
-  | { readonly ok: true; readonly code: string }
+  | { readonly ok: true; readonly code: string; readonly note?: string }
   | { readonly ok: false; readonly message: string };
 
 /**
@@ -2785,8 +2789,13 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
         return false;
       }
       s.answerCode = r.code;
-      s.notice = null;
-      opts.onNotice?.(null);
+      /**
+       * ★★ **G5 T16**：收方那条路上界到点放行时，屏上也必须留一句如实的话
+       * （"只拿到这些候选、跨网能不能连还不知道"）。正常收完时它是 `undefined` ⇒ 回到 `null`
+       * （即"没有额外的话要说"，不是"清掉别的提示"——`notice` 此刻本来就没有别的来源）。
+       */
+      s.notice = typeof r.note === 'string' && r.note.length > 0 ? r.note : null;
+      opts.onNotice?.(s.notice);
       return true;
     },
 

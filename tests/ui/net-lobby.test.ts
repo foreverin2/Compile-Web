@@ -35,8 +35,9 @@ import {
 } from '../../src/ui/net-lobby';
 import { PRIVACY_COPY, privacyLines } from '../../src/app/privacy';
 import {
-  acceptOffer, applyAnswer, createBrowserTransport, createInvite, decodeBase64Url, decodeInviteFromAddressBar, decodeInvitePayload,
-  decompressBytes, inviteLengthReport, peerConnectionOf, readIceServers, roomCodeEntry,
+  acceptOffer, applyAnswer, candidateKindsOf, candidateTypeOf, createBrowserTransport, createInvite,
+  decodeBase64Url, decodeInviteFromAddressBar, decodeInvitePayload,
+  decompressBytes, describeCandidates, inviteLengthReport, peerConnectionOf, readIceServers, roomCodeEntry,
   stripInviteFromAddressBar, waitForIceGathering,
   DEFAULT_ICE_GATHER_TIMEOUT_MS, MESSAGE_CHANNEL,
   type NetBrowserEnv, type WebSocketLike,
@@ -1915,6 +1916,63 @@ describe('★ 修复轮 B1 · 收方那条序列（顺序错就要红）', () =>
     // ② 取到的是 `localDescription`（不是占位串），候选也从 SDP 里抠出来了
     expect(r.ok && r.sdp.includes('candidate:9'), '返回的不是 answer 那份 localDescription').toBe(true);
     expect(r.ok && r.ice.length, 'ICE 候选没从 SDP 里抠出来').toBeGreaterThan(0);
+    // ★ T16：正常收完那条路不许标记成"上界放行"，也不许带话
+    expect(r.ok && r.timedOut, '正常收完却被标成"上界放行"').toBe(false);
+    expect(r.ok && r.note, '正常收完却带了一句 `note`').toBeNull();
+  });
+
+  /**
+   * ★★ **G5 T16：收方那条路上界到点也要放行**（房主与加入方是**同一条** `waitForIceGathering`，
+   * 这条腿钉的是"answer 那一半也把读数带出来了" —— 漏一个字段，收方屏上就会只剩回示码、
+   * 没有任何"跨网能不能连还不知道"的说明）。
+   */
+  it('★★ T16：收方等 ICE 到点、但手上有候选 ⇒ 放行，且 `note` 被带出来', async () => {
+    // 本 describe 里没有共享的假时钟（那一份在 B2 的 describe 里）⇒ 这里就地造一个最小的
+    const makeClock = (): { t: { schedule: (fn: () => void, ms: number) => number; cancel: (h: number) => void }; fire: () => void } => {
+      let next = 1;
+      const jobs = new Map<number, () => void>();
+      return {
+        t: {
+          schedule: (fn: () => void) => { const id = next++; jobs.set(id, fn); return id; },
+          cancel: (id: number) => { jobs.delete(id); },
+        },
+        fire: () => { for (const [id, fn] of [...jobs.entries()]) { jobs.delete(id); fn(); } },
+      };
+    };
+    const clk = makeClock();
+    // 假件永不完成，SDP 里有 1 条 host 候选（answer 那份缺省 SDP 是 `candidate:9 … typ host`）
+    const { pc } = makeFakePc({ iceGatheringState: 'gathering' });
+    const p = acceptOffer(pc as never, { sdp: 'OFFER-SDP-X' }, { ticker: clk.t, iceGatherTimeoutMs: 2_000 });
+    /**
+     * ⚠️ `acceptOffer` 里"等 ICE"那一步在三个 `await`（setRemoteDescription / createAnswer /
+     * setLocalDescription）**之后**才排计时器 ⇒ 立刻 `fire()` 会扑空（那一刻还没有 job，
+     * 于是一条都没被触发、Promise 永不 settle、这条腿超时）。`setTimeout 0` 是**宏任务**，
+     * 它保证前面那些微任务先跑完（假件那三个方法都是 async，全是微任务）。
+     */
+    await new Promise((r) => setTimeout(r, 0));
+    clk.fire();
+    const r = await p;
+    expect(r.ok, `上界到点、手上有候选却失败了：${r.ok ? '' : r.message}`).toBe(true);
+    if (r.ok) {
+      expect(r.timedOut, '没有标记"上界到点放行的"').toBe(true);
+      expect(r.ice.length, '候选没被带出来').toBe(1);
+      expect(r.sdp, '放行的不是 answer 那份描述').toContain('candidate:9');
+      expect(r.note ?? '', '收方那条路没有那句如实的 note').toContain('还不知道');
+    }
+    // 0 候选 + 到点 ⇒ 仍然是硬失败（与房主那条路同口径）
+    //   ⚠️ 收方那条路的 `localDescription` 是 **answer** 那份 ⇒ 0 候选要同时把 `answerSdp` 给空
+    const bare = makeFakePc({
+      iceGatheringState: 'gathering',
+      localSdp: 'v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\n',
+      answerSdp: 'v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\n',
+    });
+    const bareClk = makeClock();
+    const p2 = acceptOffer(bare.pc as never, { sdp: 'OFFER-SDP-X' }, { ticker: bareClk.t, iceGatherTimeoutMs: 1 });
+    await new Promise((r) => setTimeout(r, 0));
+    bareClk.fire();
+    const r2 = await p2;
+    expect(r2.ok, '一个候选都没有竟然答出了一条码').toBe(false);
+    if (!r2.ok) expect(r2.reason, '0 候选的理由不是 ice-timeout').toBe('ice-timeout');
   });
 
   it('★ 反证：把序列倒过来（先 `createAnswer` 再 `setRemoteDescription`）⇒ 这条腿必须红', async () => {
@@ -1985,10 +2043,17 @@ describe('★ 修复轮 B2 · 等 ICE 收集的**上界**（唯一失败形态�
     };
   }
 
-  it('★ 上界用注入的时钟；到点 ⇒ `ice-timeout`（**可读、非空、且真的返回了**）', async () => {
+  it('★ 上界用注入的时钟；到点且**一个候选都没有** ⇒ `ice-timeout`（**可读、非空、且真的返回了**）', async () => {
     const clk = ticker();
-    // 假件的 ICE **永不完成**（它不会自己触发 `icegatheringstatechange`）
-    const { pc } = makeFakePc({ iceGatheringState: 'gathering' });
+    /**
+     * ★★ G5 T16：**0 个候选**才是硬失败那一支。假件的 ICE **永不完成**（它不会自己触发
+     * `icegatheringstatechange`），而且描述里**一条候选都没有**。
+     *
+     * 为什么这条腿必须显式给一份空候选的 SDP：`makeFakePc` 的缺省 SDP 里**有一条 host 候选**，
+     * 而 T16 之后"到点 + 有候选"是**放行**那一支 —— 不改这一处，这条腿会变成
+     * "拿放行的读数去断言硬失败"（改之前它恰好绿，因为那时任何超时都是失败）。
+     */
+    const { pc } = makeFakePc({ iceGatheringState: 'gathering', localSdp: 'v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\n' });
     const p = waitForIceGathering(pc as never, { ticker: clk.t, iceGatherTimeoutMs: 1_234 });
     // 反空转：上界那个数**真的是注入值**
     expect(clk.scheduled(), '排的计时不是注入的上界').toEqual([1_234]);
@@ -1998,14 +2063,55 @@ describe('★ 修复轮 B2 · 等 ICE 收集的**上界**（唯一失败形态�
     // 到点
     clk.fire();
     const r = await p;
-    expect(r.ok, '上界到点之后竟然成功了').toBe(false);
+    expect(r.ok, '上界到点、一个候选都没有，竟然成功了').toBe(false);
     if (!r.ok) {
       expect(r.reason, '唯一失败形态不是 ice-timeout').toBe('ice-timeout');
       expect(r.message.length, '超时的原因是空的（玩家看不到任何东西）').toBeGreaterThan(10);
       expect(r.message, '超时那句里没有那个秒数').toContain('秒');
+      /**
+       * ★★ **T16 的真因口径**：这一支的理由只能说**本侧**的事实（这台设备这次一个候选都没
+       * 收集到）。**不许**再出现"对端的网络可能把候选挡住了"那类没有真因支撑的猜测 ——
+       * 假的真因比没有真因更坏（用户实测那一句正是它）。
+       */
+      expect(r.message, '理由又在猜对端的网络（T16 删掉的那句猜测）').not.toContain('对端');
+      expect(r.message, '没有说清"一个候选都没收集到"').toContain('一个');
+      expect(r.message, '没有给出可操作的下一步').toContain('重试');
     }
     // 到点之后计时器被取消（不许留一个悬着的句柄）
     expect(clk.cancelled().length, '到点之后没有取消计时器').toBe(1);
+  });
+
+  /**
+   * ★★ **G5 T16 的主腿：上界到点不再整条放弃。**
+   *
+   * 用户真机实测（2026-09-22）：他所在网络到公共 STUN 不可达 ⇒ 收集永远不 `complete`
+   * （本机候选早就有）⇒ 改之前邀请码**根本不生成**。这条腿钉两件事：
+   *  1. **有候选就放行**（`ok: true` + 真 SDP + 真候选）；
+   *  2. **放行时那句 `note` 必须是事实**：说清拿到了几个、并明说跨网能不能连"还不知道"
+   *     —— 不许写成能用，也不许写成连不上。
+   */
+  it('★★ T16：上界到点但**手上已经有候选** ⇒ 按现状放行，并给一句如实的 `note`', async () => {
+    const clk = ticker();
+    // 缺省假件：ICE 永不完成，SDP 里有 1 条 host 候选（`candidate:1 … typ host`）
+    const { pc } = makeFakePc({ iceGatheringState: 'gathering' });
+    const p = waitForIceGathering(pc as never, { ticker: clk.t, iceGatherTimeoutMs: 1_234 });
+    expect(clk.scheduled(), '上界不是注入值').toEqual([1_234]);
+    clk.fire();
+    const r = await p;
+    expect(r.ok, '手上有候选却仍然硬失败（用户实测那条路又回来了）').toBe(true);
+    if (r.ok) {
+      expect(r.timedOut, '没有标记"这一份是上界到点放行的"').toBe(true);
+      expect(r.ice.length, '候选没被带出来').toBe(1);
+      expect(r.sdp, '放行的不是那条真描述').toContain('candidate:1');
+      const note = r.note ?? '';
+      expect(note.length, '上界放行时没有一句如实的话（屏上会只剩一条邀请码）').toBeGreaterThan(0);
+      expect(note, '那句 note 在猜对端（没有真因支撑）').not.toContain('对端');
+      expect(note, '那句 note 没说清只有本机候选').toContain('本机');
+      expect(note, '那句 note 没把候选个数说出来').toContain('1 个');
+      expect(note, '那句 note 把"跨网能不能连"说成了结论（那是未知的）').toContain('还不知道');
+      // 反空转：放行不等于"提前成功" —— 计时器照样被取消、只 settle 一次
+      expect(clk.cancelled().length, '放行之后没有取消计时器').toBe(1);
+    }
   });
 
   it('★ 已经 `complete` ⇒ **同步**成功，且**不排计时器**（别为一个已完成的等待排时钟）', () => {
@@ -2017,8 +2123,29 @@ describe('★ 修复轮 B2 · 等 ICE 收集的**上界**（唯一失败形态�
       if (r.ok) {
         expect(r.sdp, '取到的不是 localDescription').toContain('candidate:7');
         expect(r.ice, '候选没抠出来').toEqual(['candidate:7 1 udp 1 10.0.0.7 7000 typ host']);
+        // ★ T16：正常收完那条路**不许**带 `timedOut` / `note`（带话就等于把两条路混成一条）
+        expect(r.timedOut, '正常收完却被标成"上界放行"').toBe(false);
+        expect(r.note, '正常收完却带了一句 `note`').toBeNull();
       }
     });
+  });
+
+  /**
+   * ★★ **G5 T16 的负控（node 侧那一半）**：收集"结束"了却一个候选都没有。
+   *
+   * 一条没有候选的**非 trickle** 描述发出去，收方无论如何都连不上（它没有任何地方补候选）
+   * ⇒ 与"0 候选 + 超时"同族：**硬失败**，而不是"成功但空"。
+   * 真浏览器那一格（0 候选）见 `tools/browser-truth-ice-fallback-cdp.mjs`。
+   */
+  it('★ 收集完成却一个候选都没有 ⇒ `no-candidates`（硬失败，不是"成功但空"）', async () => {
+    const { pc } = makeFakePc({ iceGatheringState: 'complete', localSdp: 'v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\n' });
+    const r = await waitForIceGathering(pc as never, { ticker: ticker().t });
+    expect(r.ok, '一条候选都没有却放行了（收下它的人连不上，且屏上不会说为什么）').toBe(false);
+    if (!r.ok) {
+      expect(r.reason, '原因不是 no-candidates').toBe('no-candidates');
+      expect(r.message, '理由在猜对端的网络').not.toContain('对端');
+      expect(r.message, '没有说清"一个候选都没有"').toContain('候选');
+    }
   });
 
   it('★ 没有计时能力 ⇒ 响亮地拒绝（**绝不静默挂起**）', async () => {
@@ -2048,7 +2175,14 @@ describe('★ 修复轮 B2 · 等 ICE 收集的**上界**（唯一失败形态�
    */
   it('★ 缺省上界：不注入时仍然排**一个**计时器，且那个数就是 `DEFAULT_ICE_GATHER_TIMEOUT_MS`', async () => {
     const clk = ticker();
-    const { pc } = makeFakePc({ iceGatheringState: 'gathering' }); // 假件永不完成
+    /**
+     * 假件永不完成，而且**一条候选都没有**（★ T16：有候选时到点是**放行**那一支；
+     * 这条腿要钉的是"缺省上界真的会被排下去、到点真的会走硬失败那一支"）。
+     */
+    const { pc } = makeFakePc({
+      iceGatheringState: 'gathering',
+      localSdp: 'v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\n',
+    });
     // ★ 只给 ticker（= 真实调用方给的那份环境），**不给** iceGatherTimeoutMs
     const p = waitForIceGathering(pc as never, { ticker: clk.t });
     expect(
@@ -2060,13 +2194,41 @@ describe('★ 修复轮 B2 · 等 ICE 收集的**上界**（唯一失败形态�
     // 反空转：那个缺省值真的能触发"可读失败"这一支（不是排了个永不使用的计时器）
     clk.fire();
     const r = await p;
-    expect(r.ok, '到点之后竟然成功了').toBe(false);
+    expect(r.ok, '到点、零候选，竟然成功了').toBe(false);
     if (!r.ok) {
       expect(r.reason, '缺省上界到点不是 ice-timeout').toBe('ice-timeout');
       expect(r.message.length, '超时那句是空的').toBeGreaterThan(10);
       // 可读失败句**保留**（有上界 + 可读真因这两条都不许丢）：秒数来自那个常量本身
       expect(r.message, '那句里没有那个秒数').toContain(`${DEFAULT_ICE_GATHER_TIMEOUT_MS / 1000} 秒`);
     }
+  });
+
+  /**
+   * ★★ **G5 T16：上界取 15 秒这件事仍由这个常量说了算**，同时缺省超时那条腿的**秒数**只许
+   * 来自这个常量（写死一个 15 就等于第二份真相）。
+   *
+   * ⚠️ 这条**不**断言 15 秒是"对的"（那是真浏览器量的活，见报告）；它只钉住"上界存在、
+   * 且缺省值就是那个导出常量"。T16 之后上界到点**不再整条放弃**：所以"等多久"这件事
+   * 的代价从"这一轮有没有邀请码"降成了"这一轮晚几秒出邀请码"，这也是 15 秒保留下来的理由。
+   */
+  it('★ T16：候选种类与那句人话都从 SDP 的 `typ` 读出来（不是猜的）', () => {
+    const ice = [
+      'candidate:1 1 udp 1 127.0.0.1 5000 typ host',
+      'candidate:2 1 udp 1 10.0.0.9 6000 typ host raddr 0.0.0.0 rport 0 generation 0 network-cost 999',
+      'candidate:3 1 udp 1 203.0.113.7 6100 typ srflx raddr 10.0.0.9 rport 6000 generation 0',
+      'candidate:4 1 udp 1 198.51.100.7 6200 typ relay raddr 203.0.113.7 rport 6100 generation 0',
+      'candidate:5 1 udp 1 198.51.100.9 6300 typ prflx',
+      'candidate:6 1 udp 1 198.51.100.9 6400 typ wat',
+    ];
+    expect(candidateTypeOf(ice[0]), 'host 认错了').toBe('host');
+    expect(candidateTypeOf(ice[4]), 'prflx 认错了').toBe('prflx');
+    expect(candidateTypeOf(ice[5]), '认不出的类型没有被归到 other（会把它当成 host 去报）').toBe('other');
+    expect(candidateKindsOf(ice), '计数不对').toEqual({ host: 2, srflx: 1, prflx: 1, relay: 1, other: 1 });
+    const said = describeCandidates(ice);
+    for (const w of ['本机（host） 2 个', '公网映射（srflx） 1 个', '中继（relay） 1 个']) {
+      expect(said, `那句人话里少了「${w}」：${said}`).toContain(w);
+    }
+    expect(describeCandidates([]), '空清单的说法不是"一个都没有"').toBe('一个都没有');
   });
 
   it('★ `localDescription` 为空 ⇒ `no-description`（不是"成功但空串"）', async () => {

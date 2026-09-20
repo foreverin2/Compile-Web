@@ -1901,7 +1901,14 @@ function startLobby(role: 'host' | 'guest'): void {
           ice: r.ice,
         });
         const enc = await createInvite({ ...fields, originAndPath: currentOriginAndPath() }, lobbyEnv());
-        return enc.ok ? { ok: true, code: enc.payload } : { ok: false, message: enc.message };
+        if (!enc.ok) return { ok: false, message: enc.message };
+        /**
+         * ★★ **G5 T16**：收方这条路上界到点、但手上有候选时也放行 —— 那句 `note`
+         * 原样交给大厅写进屏（`net-lobby.ts` 的 `makeAnswer`）。理由与房主那一侧逐字相同。
+         */
+        return typeof r.note === 'string' && r.note.length > 0
+          ? { ok: true, code: enc.payload, note: r.note }
+          : { ok: true, code: enc.payload };
       },
       // ★ **B3 的第一半（房主侧收口）**：把对方回示的 answer 喂进**同一条**连接（`applyAnswer`）。
       //   为什么必须是同一条：拿一条新连接去 `setRemoteDescription` 会得到
@@ -2300,6 +2307,15 @@ async function makeLobbyInvite(): Promise<void> {
       guestPromise: 'guest-promise-pending',
     });
     client.startWait();
+    /**
+     * ★★ **G5 T16：上界到点放行时，屏上必须有一句如实的话。**
+     *
+     * `localDescription()` 回 `timedOut: true` 时手上已经有 ≥1 个候选（否则它回的是**失败**，
+     * 上面那一支已经处理了），邀请码照常产出 —— 但那句 `note` 要说清"只拿到了这些、
+     * 跨网能不能连**还不知道**"。**不许**把它省掉：省掉之后屏上就只剩一条邀请码，
+     * 玩家会以为它跨网也一定能连。
+     */
+    if (typeof desc.note === 'string' && desc.note.length > 0) client.showNotice(desc.note);
     renderLobbyFrame();
   } catch (e) {
     /**

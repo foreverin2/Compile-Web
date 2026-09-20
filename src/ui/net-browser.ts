@@ -463,13 +463,30 @@ export function browserRoomCode(env?: NetBrowserEnv): string {
  * ② 默认数组里只有公共 STUN；③ 本文件里不出现任何**字面**的 TURN 主机名/端口
  * （所以这里只有 `stun:` 前缀的地址，没有任何中继的样例）。
  *
- * 为什么默认给两个公共 STUN：一个是底线，第二个是厂商冗余。**这不是"内置了服务"**：
+ * 为什么默认给公共 STUN：一个是底线，第二个是厂商冗余。**这不是"内置了服务"**：
  * STUN 只帮两端发现自己的公网地址，不转发任何数据；TURN 才是中继，而中继的地址
  * 只能由玩家自己在设置里填。
+ *
+ * ## ★★ G5 T16：第三个是**非 Google** 的公共 STUN（用户真机实测的修法）
+ *
+ * **为什么加**（2026-09-22，用户真机）：他所在的那张网到 Google 的这两个 STUN **不可达**
+ * ⇒ `iceGatheringState` 永远走不到 `complete` ⇒ 点「生成邀请码」在 15 秒上界上一句
+ * "ICE 候选还没有收集完"然后**什么都不产出**（本机候选其实早就有了）。三个都不可达时
+ * 也不该阻塞 —— 那条路由 `waitForIceGathering` 的"上界到点就用已经拿到的候选"兜住
+ * （见那里的注释），所以这里加地址只是**提高拿到公网映射的概率**，不是新的前提。
+ *
+ * **为什么是 Cloudflare**：厂商文档明写 `stun.cloudflare.com` 的 `3478/udp` 就是它的
+ * STUN 服务地址（<https://developers.cloudflare.com/realtime/turn/>，"Service address and
+ * ports" 那张表第一行），anycast、不需要账号，且与 Google 是两套完全独立的网络
+ * ——冗余才有意义。**这不是中继**：它只回答"你的公网地址是什么"，不替两端转发任何字节。
+ *
+ * ⚠️ 本机可达性**未在写这段注释时验证**（这台开发机的出网策略与用户那张网无关）；
+ * 真机读数见 `.superpowers/g5-T16/T16-REPORT.md`。
  */
 export const DEFAULT_ICE_SERVERS: readonly IceServerLike[] = [
   { urls: ['stun:stun.l.google.com:19302'] },
   { urls: ['stun:stun1.l.google.com:19302'] },
+  { urls: ['stun:stun.cloudflare.com:3478'] },
 ];
 
 /** 中继 URL 的两个前缀（`turn` / `turns`）。写成一张表是为了让"判据只认这两个"是一处 */ 
@@ -999,8 +1016,20 @@ export const DEFAULT_ICE_GATHER_TIMEOUT_MS = 15_000;
 
 /** `waitForIceGathering` 的结论（**失败有可读原因**，不是 `null`） */
 export type IceGatherResult =
-  | { readonly ok: true; readonly sdp: string; readonly ice: readonly string[] }
-  | { readonly ok: false; readonly reason: 'ice-timeout' | 'unsupported' | 'no-description'; readonly message: string };
+  | {
+      readonly ok: true;
+      readonly sdp: string;
+      readonly ice: readonly string[];
+      /** 上界到点时还没收完（但已经拿到了 ≥1 个候选，于是按现状放行，见 `waitForIceGathering`） */
+      readonly timedOut: boolean;
+      /** 上界放行那一刻要**如实**写给人看的那一句；正常收完时为 `null` */
+      readonly note: string | null;
+    }
+  | {
+      readonly ok: false;
+      readonly reason: 'ice-timeout' | 'unsupported' | 'no-description' | 'no-candidates';
+      readonly message: string;
+    };
 
 /** 从一条 SDP 里把候选串抠出来（`a=candidate:` 那几行）——**非 trickle** 的载荷要它们 */
 export function candidatesOf(sdp: string): string[] {
@@ -1008,6 +1037,93 @@ export function candidatesOf(sdp: string): string[] {
     .split(/\r?\n/)
     .filter((l) => l.startsWith('a=candidate:'))
     .map((l) => l.slice('a='.length));
+}
+
+/**
+ * ★★ **G5 T16：候选的种类与数量**（屏上那句"只收集到本机候选"就是从这里来的）。
+ *
+ * 为什么要有它：上界到点之后**不能**把"候选不全"写成"能用"，也**不能**一律写成"连不上"
+ * ——要么如实说清拿到了哪几种，要么硬失败。判据只能是 SDP 里那几行 `a=candidate:` 的 `typ`，
+ * 所以把它抠出来计数（**不猜**：认不出的类型进 `other`，不假装它是 host）。
+ */
+export interface CandidateKinds {
+  readonly host: number;
+  readonly srflx: number;
+  readonly prflx: number;
+  readonly relay: number;
+  readonly other: number;
+}
+
+/** 一条候选的 `typ`（`a=candidate:… typ host …` 里那个词）。认不出就是 `'other'` */
+export function candidateTypeOf(candidate: string): keyof CandidateKinds {
+  const m = /\btyp\s+([A-Za-z]+)/.exec(candidate);
+  const t = m === null ? '' : m[1].toLowerCase();
+  if (t === 'host' || t === 'srflx' || t === 'prflx' || t === 'relay') return t;
+  return 'other';
+}
+
+/** 候选按种类计数（`candidateTypeOf` 的汇总） */
+export function candidateKindsOf(ice: readonly string[]): CandidateKinds {
+  const out = { host: 0, srflx: 0, prflx: 0, relay: 0, other: 0 };
+  for (const c of ice) out[candidateTypeOf(c)] += 1;
+  return out;
+}
+
+/** 种类的中文名（只写在这一处：屏上与报告都从它取，免得两处各说各话） */
+const KIND_LABELS: Readonly<Record<keyof CandidateKinds, string>> = {
+  host: '本机（host）',
+  srflx: '公网映射（srflx）',
+  prflx: '对端映射（prflx）',
+  relay: '中继（relay）',
+  other: '类型认不出的',
+};
+
+/** 把一份候选清单说成一句人话（例：`本机（host）2 个、公网映射（srflx）1 个`） */
+export function describeCandidates(ice: readonly string[]): string {
+  if (ice.length === 0) return '一个都没有';
+  const kinds = candidateKindsOf(ice);
+  const parts: string[] = [];
+  for (const k of ['host', 'srflx', 'prflx', 'relay', 'other'] as const) {
+    if (kinds[k] > 0) parts.push(`${KIND_LABELS[k]} ${String(kinds[k])} 个`);
+  }
+  return parts.join('、');
+}
+
+/**
+ * ★★ **G5 T16：上界到点、但手上已经有候选** ⇒ 这就是要写到屏上的那一句。
+ *
+ * 两条纪律：
+ *  1. **只说事实**：拿到几种、各几个，来自 SDP 本身（`describeCandidates`）；
+ *  2. **跨网能不能连是未知的，就写"还不知道"** —— 不许写成"能用"，也不许写成"连不上"。
+ *     "同机 / 同一局域网通常能用"是有依据的那一半（host 候选就是给这两种场景用的）。
+ */
+function partialGatherNote(ice: readonly string[], timeoutMs: number): string {
+  const sec = timeoutMs / 1000;
+  const kinds = candidateKindsOf(ice);
+  const onlyHost = kinds.srflx === 0 && kinds.prflx === 0 && kinds.relay === 0 && kinds.other === 0;
+  const head = onlyHost
+    ? `等了 ${String(sec)} 秒，公网映射（srflx）一个都没收到，只收集到本机候选：${describeCandidates(ice)}。`
+    : `等了 ${String(sec)} 秒，ICE 候选没有收集完；已经拿到的：${describeCandidates(ice)}。`;
+  return head
+    + '这些候选已经写进这条邀请码里了。同一台机器上的两个窗口、同一个局域网里的两台设备，'
+    + '用它们通常能直接连上；跨网络（两边不在同一个局域网）能不能连上，现在还不知道'
+    + ' —— 那要拿到公网映射或者中继地址才行，这一次没拿全。';
+}
+
+/** ★★ **G5 T16：上界到点时一个候选都没有** ⇒ 硬失败。理由只说本侧的事实，不猜对端 */
+function noCandidateTimeoutMessage(timeoutMs: number): string {
+  return `等了 ${String(timeoutMs / 1000)} 秒，这台设备这一次一个 ICE 候选都没有收集到（本机候选也没有）。`
+    + '一个候选都没有的连接描述发出去也连不上，所以这条邀请码不生成。'
+    + '下一步：确认浏览器没有被扩展 / 企业策略关掉 WebRTC（本程序只用它做直连），然后重试一次；'
+    + '若还是一个候选都没有，请把这一行原样记下来。';
+}
+
+/** ★★ **G5 T16：收集已经"结束"了却一个候选都没有** ⇒ 同样硬失败（发出去也连不上） */
+function noCandidateNowMessage(): string {
+  return 'ICE 收集已经结束，但这台设备这一次一个候选都没有（本机候选也没有），'
+    + '这样的连接描述发出去也连不上，所以这条邀请码不生成。'
+    + '下一步：确认浏览器没有被扩展 / 企业策略关掉 WebRTC（本程序只用它做直连），然后重试一次；'
+    + '若还是一个候选都没有，请把这一行原样记下来。';
 }
 
 /**
@@ -1020,48 +1136,81 @@ export function candidatesOf(sdp: string): string[] {
  * 所以必须等到 `iceGatheringState === 'complete'` 再取 —— 否则收方拿到的是一条
  * **需要 trickle 的 offer**，而它没有任何地方可以 trickle。
  *
- * ## 上界与**唯一**的失败形态
+ * ## ★★ G5 T16：上界到点**不再整条放弃**——手上有候选就按现状放行
  *
- * 上界走注入的 `env.ticker`（本仓纪律：计时一律注入）+ `env.iceGatherTimeoutMs`。
- * 超时 ⇒ `{ ok: false, reason: 'ice-timeout', message }` —— **可读、非空**，
- * 调用方据此在屏上给一句人话。**没有"沉默地一直等"这条路**：没有 `ticker` 时
- * 直接回 `'unsupported'`（**响亮地拒绝**，而不是挂住）。
+ * 用户真机实测（2026-09-22）：他所在的那张网到 Google 的公共 STUN 不可达 ⇒
+ * `iceGatheringState` **永远**到不了 `complete`（而**本机 / mDNS 候选早就有了**）⇒
+ * 上面那条规则让邀请码**根本不生成**。他真正要的只是**同一台机器 / 同一个局域网**两个窗口对打，
+ * 本机候选完全够用。
  *
- * ## 真浏览器未验证
+ * ⇒ 现在的规则是"**候选数决定过不过**"，三种结局各自可读：
+ *  - **0 个候选** ⇒ 硬失败（`'ice-timeout'` 或 `'no-candidates'`）。理由只说**本侧**的事实
+ *    （"这台设备这一次一个候选都没收集到"），**不猜**对端的网络 —— 一个候选都没有的描述
+ *    发出去也连不上，这才是真因；
+ *  - **≥1 个候选 + 上界到点** ⇒ `ok: true`，并把"只拿到这些、跨网能不能连是未知的"
+ *    写进 `note`（`partialGatherNote`：候选种类与个数都来自 SDP 本身，不是猜的）；
+ *  - **正常收完（`complete`）且有候选** ⇒ `ok: true`，`note` 为 `null`。
+ *
+ * ⚠️ **换句话说：`timedOut: true` 不是"能用"的证明。** 它只证明"这条码按现状产出、
+ * 同机 / 同局域网有得打"；跨网能不能连，屏上写的是"还不知道"。**不许**把这一段读成
+ * "超时也没关系"。
+ *
+ * ## 上界怎么排
+ *
+ * 走注入的 `env.ticker`（本仓纪律：计时一律注入）+ `env.iceGatherTimeoutMs`。
+ * **没有"沉默地一直等"这条路**：没有 `ticker` 时直接回 `'unsupported'`（**响亮地拒绝**）。
+ *
+ * ## 真浏览器读数
  *
  * `iceGatheringState` 的真实时序（尤其"候选一个都没收集到"时它会不会走到 `'complete'`）
- * **在 node 里验不了**，由 T9 的 CDP 场景覆盖。
+ * 在 node 里验不了 —— 夹具与实测读数见 `.superpowers/g5-T16/T16-REPORT.md`
+ * 与 `tools/browser-truth-ice-fallback-cdp.mjs`。
  */
 export function waitForIceGathering(
   pc: PeerConnectionLike,
   env?: NetBrowserEnv,
 ): Promise<IceGatherResult> {
   const resolved: NetBrowserEnv = { ...defaultEnv(), ...env };
-  /** 取当前的 `localDescription`（**唯一的读取点**：成功与"已经 complete"两条路共用） */
-  const take = (): IceGatherResult => {
+  /** 读此刻的 `localDescription` 的 SDP（**唯一的读取点**：三条路共用） */
+  const readSdp = (): string | null => {
     const desc = pc.localDescription ?? null;
-    const sdp = typeof desc?.sdp === 'string' ? desc.sdp : '';
-    if (sdp.length === 0) {
-      return {
-        ok: false,
-        reason: 'no-description',
-        message: '本侧还没有连接描述可发（`setLocalDescription` 没成功，或实现没把它暴露出来）。',
-      };
-    }
-    return { ok: true, sdp, ice: candidatesOf(sdp) };
+    return typeof desc?.sdp === 'string' && desc.sdp.length > 0 ? desc.sdp : null;
   };
+  const noDescription = (): IceGatherResult => ({
+    ok: false,
+    reason: 'no-description',
+    message: '本侧还没有连接描述可发（`setLocalDescription` 没成功，或实现没把它暴露出来）。',
+  });
+  /**
+   * ★★ 取结论（**候选数在这里定生死**，见上面那段）：
+   *  - 拿不到描述 ⇒ `no-description`（与 T8 同口径）；
+   *  - 0 个候选 ⇒ 硬失败（超时那条路是 `'ice-timeout'`，收完了却空的是 `'no-candidates'`）；
+   *  - ≥1 个候选 ⇒ `ok`，`timedOut` 如实标记，只有超时那条路才带 `note`。
+   */
+  const take = (timedOut: boolean, timeoutMs: number): IceGatherResult => {
+    const sdp = readSdp();
+    if (sdp === null) return noDescription();
+    const ice = candidatesOf(sdp);
+    if (ice.length === 0) {
+      return timedOut
+        ? { ok: false, reason: 'ice-timeout', message: noCandidateTimeoutMessage(timeoutMs) }
+        : { ok: false, reason: 'no-candidates', message: noCandidateNowMessage() };
+    }
+    return { ok: true, sdp, ice, timedOut, note: timedOut ? partialGatherNote(ice, timeoutMs) : null };
+  };
+  const timeoutMs = resolved.iceGatherTimeoutMs ?? DEFAULT_ICE_GATHER_TIMEOUT_MS;
   // 已经收集完了：同步返回（**不要**在这种情况下也去排一个计时器）
-  if (pc.iceGatheringState === 'complete') return Promise.resolve(take());
+  if (pc.iceGatheringState === 'complete') return Promise.resolve(take(false, timeoutMs));
   const ticker = resolved.ticker;
   if (ticker === undefined) {
     // ★ **响亮地拒绝**，而不是挂住：没有计时能力就判不了"等多久算超时"
     return Promise.resolve({
       ok: false,
       reason: 'unsupported',
-      message: '这台设备没有可用的计时能力，所以判不了"ICE 收集等多久算超时"；这一条路不走了（不静默挂起）。',
+      message: '这台设备没有可用的计时能力，所以判不了"ICE 收集等多久算超时"；'
+        + '为了不静默挂住，这一轮不生成邀请码（请重试）。',
     });
   }
-  const timeoutMs = resolved.iceGatherTimeoutMs ?? DEFAULT_ICE_GATHER_TIMEOUT_MS;
   return new Promise<IceGatherResult>((resolve) => {
     let settled = false;
     const finish = (r: IceGatherResult): void => {
@@ -1070,26 +1219,37 @@ export function waitForIceGathering(
       ticker.cancel(handle);
       resolve(r);
     };
-    const handle = ticker.schedule(() => {
-      finish({
-        ok: false,
-        reason: 'ice-timeout',
-        message:
-          `等了 ${timeoutMs / 1000} 秒，ICE 候选还没有收集完（对端的网络可能把候选挡住了）。` +
-          '这一条路不走了：请重试，或者让两台设备换一个网络（同一局域网通常最快）。',
-      });
-    }, timeoutMs);
+    // ★ T16：到点先看**手上已经有几个候选** —— 有就按现状放行，没有才是硬失败
+    const handle = ticker.schedule(() => { finish(take(true, timeoutMs)); }, timeoutMs);
     // 真件会在 `icegatheringstatechange` 上回调；**假件也可以直接改状态再调它**
     pc.addEventListener('icegatheringstatechange', () => {
-      if (pc.iceGatheringState === 'complete') finish(take());
+      if (pc.iceGatheringState === 'complete') finish(take(false, timeoutMs));
     });
   });
 }
 
 /** `acceptOffer` 的结论（成功面是"一条可以回示的 answer 描述"） */
 export type AcceptOfferResult =
-  | { readonly ok: true; readonly sdp: string; readonly ice: readonly string[] }
-  | { readonly ok: false; readonly reason: 'unsupported' | 'set-remote-failed' | 'answer-failed' | 'ice-timeout' | 'no-description'; readonly message: string };
+  | {
+      readonly ok: true;
+      readonly sdp: string;
+      readonly ice: readonly string[];
+      /** ★ T16：等 ICE 的上界到点、但拿到了 ≥1 个候选 ⇒ 按现状放行（与 `IceGatherResult` 同口径） */
+      readonly timedOut: boolean;
+      /** ★ T16：上界放行时要如实写给人看的那一句；正常收完为 `null` */
+      readonly note: string | null;
+    }
+  | {
+      readonly ok: false;
+      readonly reason:
+        | 'unsupported'
+        | 'set-remote-failed'
+        | 'answer-failed'
+        | 'ice-timeout'
+        | 'no-description'
+        | 'no-candidates';
+      readonly message: string;
+    };
 
 /**
  * ★ **收方那一侧：把对方的 offer 吃进来，产一条可以回示的 answer**（B1）。
@@ -1158,10 +1318,11 @@ export async function acceptOffer(
     return { ok: false, reason: 'answer-failed', message: `本侧的 answer 没能落到连接上：${String(e)}` };
   }
   // ④ 等 ICE 收集（非 trickle：候选必须已经在 SDP 里）
+  //    ★ T16：上界到点时手上已经有候选 ⇒ 也在这里放行（`note` 由调用方写到屏上）
   const gathered = await waitForIceGathering(pc, env);
   return gathered.ok
-    ? { ok: true, sdp: gathered.sdp, ice: gathered.ice }
-    : { ok: false, reason: gathered.reason === 'no-description' ? 'no-description' : gathered.reason, message: gathered.message };
+    ? { ok: true, sdp: gathered.sdp, ice: gathered.ice, timedOut: gathered.timedOut, note: gathered.note }
+    : { ok: false, reason: gathered.reason, message: gathered.message };
 }
 
 /**
@@ -1522,9 +1683,16 @@ export function createBrowserTransport(env?: NetBrowserEnv): NetTransport {
     /**
      * ★ **取一份非 trickle 的本侧描述**（B2）：等 ICE 收集完成再读 `localDescription`。
      *
-     * 三种失败都**可读**，而且都**不会挂住**：没 `init` 过 / 没有等的能力 / 等到了上界。
+     * 三种失败都**可读**，而且都**不会挂住**：没 `init` 过 / 没有等的能力 / 等到上界却
+     * 一个候选都没有。
+     *
+     * ★★ **G5 T16**：上界到点、但已经拿到了 ≥1 个候选时**不再整条失败** —— 返回 `ok: true`
+     * 加上 `timedOut: true` 与一句 `note`（调用方把它写到屏上，如实说明"只拿到这些、
+     * 跨网能不能连还不知道"）。`timedOut: false` 且 `note: null` = 正常收完那条路。
      */
-    async localDescription(): Promise<TransportActionResult & { readonly sdp?: string }> {
+    async localDescription(): Promise<
+      TransportActionResult & { readonly sdp?: string; readonly timedOut?: boolean; readonly note?: string }
+    > {
       if (!initDone) {
         return { ok: false, reason: 'not-initialized', message: '本侧链路还没建立（init 还没成功），现在没有连接描述。' };
       }
@@ -1533,7 +1701,7 @@ export function createBrowserTransport(env?: NetBrowserEnv): NetTransport {
       }
       const g = await gather;
       if (!g.ok) return { ok: false, reason: g.reason, message: g.message };
-      return { ok: true, sdp: g.sdp };
+      return { ok: true, sdp: g.sdp, timedOut: g.timedOut, note: g.note ?? undefined };
     },
 
     seq(): number {

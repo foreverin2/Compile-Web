@@ -297,6 +297,15 @@ export interface NetTransport {
    *
    * ⇒ 加一个**可选**成员是**非破坏性**的：既有实现（fake 与 T7 的浏览器实现）都不必改签名。
    * 失败的 `message` 是可读的真因（例如"等 ICE 超时了"）。
+   *
+   * ## ★★ G5 T16：上界到点**但手上已经有候选**时不再整条失败
+   *
+   * `ok: true` 之外还多两个**可选**读数（旧实现不填 ⇒ `undefined`，语义 = "正常收完"）：
+   *  - `timedOut`：真的撞上了上界（"按现状放行"这条路的标记）；
+   *  - `note`：一句**如实**的话（拿到了几种候选、跨网能不能连**还不知道**），调用方把它写到屏上。
+   *    ⚠️ `timedOut: true` **不是**"能用"的证明，调用方不许把它渲染成成功承诺。
    */
-  localDescription?(): Promise<TransportActionResult & { readonly sdp?: string }>;
+  localDescription?(): Promise<
+    TransportActionResult & { readonly sdp?: string; readonly timedOut?: boolean; readonly note?: string }
+  >;
 }
