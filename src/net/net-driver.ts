@@ -317,6 +317,10 @@ export interface NetDriver extends MatchDriver {
    */
   pendingCount(): number;
   /**
+   * ★ G5 T14 只读实验：**入队点被走到过几次**（单调）。与宿主侧"`onInbound` 被调了几次"
+   * 一起读，就能定出"通知与入队谁先"（同一个 `transport.onMessage` 上有两条订阅）。
+   */
+  enqueuedCount(): number;  /**
    * **入站队列溢出过多少次**（T6 落地上限时加的读数；`0` = 没溢出过）。
    *
    * 为什么要一个**计数**而不是只看 `lastFailure()`：`lastFailure` 会被后来的失败覆盖
@@ -342,6 +346,25 @@ export interface NetDriver extends MatchDriver {
    * 幂等、可重复调用；`dispose()` 之后是 no-op。
    */
   arm(s: GameState): void;
+  /**
+   * ★★ **G5 T14：把已经到达、还没落地的入站帧应用进宿主递进来的那一枚状态**（落地口）。
+   *
+   * ## 它为什么必须是一个**公开**的口（本轮实测的拦路）
+   *
+   * `arm(s)` 已经会在拿到状态时顺手 `drain(s)`，可它有一格盖不住：**帧到得比第一次
+   * `arm` 早**（传输 `online` 与"读数齐了"不是同一刻）。那时 `lastKnownState === null`
+   * ⇒ 回调里只 `enqueue`、**不落地**（`:671`）；而宿主那一侧的重画触发（`main.ts` 的
+   * `onInbound`）只 `rerender()`、**不递状态** ⇒ 屏画的是**还没含这一帧**的状态；
+   * 之后某次 `submit` 顺手 `drain` 把帧落地、状态前进，而**那一步被拒就早退、不再重画**
+   * ⇒ 症状正是"状态进了、屏停在上一手"（本轮两页都量到了这个形态）。
+   *
+   * ## 语义（与 `drain` 逐字一致，不多做一件事）
+   *
+   * 把 `pendingTexts` 里**紧接着该用的**那几条应用进 `s`，返回**落地了几条**。
+   * 不改 `submit` 的语义、不改三个拒绝码、不动排队/溢出既有行为、不持有 `s` 的副本
+   * （`s` 由宿主递进来，与 `arm(s)` 同一条纪律）。`dispose()` 之后是 no-op（返回 0）。
+   */
+  pump(s: GameState): number;
   /**
    * 喂一条**原始文本**进来（与 `transport.onMessage` 的回调同一条路）。
    *
@@ -504,6 +527,11 @@ export function createNetDriver(opts: NetDriverOptions): NetDriver {
    * 溢出之后的**恢复路径**是"重建状态 + `realign(n)`"，见 `NetDriver.realign` 的头注；
    * 这条 message 里说的"请走一次追平"指的就是那条路。
    */
+  /**
+   * ★ G5 T14 只读实验：入队点的单调计数（`enqueue` 里 +1；经 `enqueuedCount()` 读）。
+   * 声明在 `enqueue` 之前（它是函数声明、提升，但 `let` 不提升）。
+   */
+  let enqueueSeq = 0;
   function enqueue(text: string): void {
     if (pendingTexts.length >= inboundCapacity) {
       inboundOverflows += 1;
@@ -517,6 +545,15 @@ export function createNetDriver(opts: NetDriverOptions): NetDriver {
       return;
     }
     pendingTexts.push(text);
+    /**
+     * ★★ **G5 T14 只读实验：入队点的单调计数**（`__g5Match.diag()` 的 `enqueueSeq`）。
+     *
+     * 要证的是"**通知（大厅链的 `onInbound`）与入队谁先**"：同一个 `transport.onMessage`
+     * 上有两条订阅（驱动这条 + 大厅链那条），浏览器按**注册顺序**逐个调。若通知先到，
+     * `onInbound` 里的 `pump(state)` 面对的是空队列（落地 0 条），帧随后才入队，
+     * 而此后没有任何东西再 pump 它。只读计数，不改任何行为。
+     */
+    enqueueSeq += 1;
   }
 
   /**
@@ -634,11 +671,12 @@ export function createNetDriver(opts: NetDriverOptions): NetDriver {
    * 因为排在它后面的每一条都依赖它先被应用 —— 继续往下应用就是静默错位。
    * 解不出来的帧在这里直接记诊断并丢弃：它不该把提交永远挡在门外，也不该静默消失。
    */
-  function drain(s: GameState): void {
+  function drain(s: GameState): number {
+    let landed = 0;
     for (;;) {
-      if (stuck !== null) return;
+      if (stuck !== null) return landed;
       const text = pendingTexts.shift();
-      if (text === undefined) return;
+      if (text === undefined) return landed;
       const decoded = decodeMsg(text);
       if (!decoded.ok) {
         report('undecodable', `收到一条解不出来的帧（${decoded.reason}）：${decoded.message}`);
@@ -657,9 +695,10 @@ export function createNetDriver(opts: NetDriverOptions): NetDriver {
           `入站 act 的序号对不上：它自称第 ${String(decoded.msg.seq)} 条，本端正在等第 ${applied} 条。` +
             '两端的位置不同（丢帧 / 重放 / 半截发送），这一条没有被应用，本端也不会抢在它前面提交。',
         );
-        return;
+        return landed;
       }
       receiveAct(s, decoded.msg);
+      landed += 1;
     }
   }
 
@@ -855,12 +894,26 @@ export function createNetDriver(opts: NetDriverOptions): NetDriver {
 
     pendingCount: () => pendingTexts.length,
 
+    enqueuedCount: () => enqueueSeq,
+
     inboundOverflowCount: () => inboundOverflows,
 
     arm(s: GameState): void {
       if (disposed) return;
       lastKnownState = s;
       drain(s);
+    },
+
+    /**
+     * ★★ **G5 T14 的落地口**（语义与 `drain` 逐字一致；头注在接口上）。
+     *
+     * ⚠️ 它**不**更新 `lastKnownState`：那个字段的语义是"宿主最后一次 `arm` / `submit` 递进来的
+     * 那一枚"（入站推送那条路也靠它落地）。把它换成本次传进来的那一枚会让"驱动持有状态"
+     * 从这一条缝里长回来 —— 而 G4 D2 明确不许。宿主每一帧递的就是同一枚（`main.ts` 的 `state`）。
+     */
+    pump(s: GameState): number {
+      if (disposed) return 0;
+      return drain(s);
     },
 
     feedText(text: string, channel: NetChannel = 'act'): void {

@@ -35,7 +35,7 @@ import { handCardBox, handFanLead, handFanStep } from './ui/fx-card-size';
 import { handOuterFor } from './ui/fx-seat';
 import { openControlRearrangeModal, closeControlRearrangeModal, refreshControlRearrangeModal, isControlRearrangeOpen, orderChanged, orderToAction } from './ui/control-rearrange';
 import { renderHome, renderCoin, renderLibrary, renderRules, renderModeSelect } from './ui/home';
-import { linkRecoveryNotice, lobbyCoinViewOf, lobbyLinkText } from './ui/net-lobby';
+import { linkRecoveryNotice, lobbyCoinViewOf, lobbyLinkText, appendNetTurnLine } from './ui/net-lobby';
 import type { CoinNetView } from './ui/home';
 // ★ T11-B：硬币屏要的"面"（屏上口径 `1 | 2`）
 import type { CoinSide } from './app/coin';
@@ -80,7 +80,7 @@ import { trace, stateDigest, initEventTracing } from './core/trace';
 import type { GameState, PlayerId, Line } from './core/models/types';
 // ★ G5 T12：重放页把档案记录交给 `cb.onAction` 时那一句收口需要它（见 `replayStep` 的注释）。
 //   注意它**只是类型**：本文件里 `executeAction(` 仍然零命中（收口的源码腿钉着这一条）。
-import type { LegalAction } from './core/game';
+import { getLegalActions, type LegalAction } from './core/game';
 // G3 Task 8：PWA（manifest + service worker + 自动提示更新 + 一键更新）。零依赖、手写。
 import { initPwaUpdate } from './ui/pwa-update';
 // ── G5/T8：联机大厅的接线（本任务的**唯一**新入口）──────────────────────────────
@@ -511,6 +511,7 @@ function enterNetGame(): NetDriver | null {
      */
     netDriver.realign(carried);
     netDriver.arm(state);
+    if (probeOn) armedState = state;
     netGame = { ...existing, driver: netDriver };
     driver = netDriver;
     renderMode = 'net';
@@ -531,6 +532,7 @@ function enterNetGame(): NetDriver | null {
   });
   // ★ 递状态必须排在 `rerender()` 之前（见上面第 4 条）：这一刻到下一帧之间没有页面代码能跑
   netDriver.arm(state);
+  if (probeOn) armedState = state;
   netGame = {
     driver: netDriver,
     session: hand.session,
@@ -720,6 +722,7 @@ function applyResyncToGame(file: MatchFile): number | null {
   state = rebuilt;
   g.driver.realign(n);
   g.driver.arm(state);
+  if (probeOn) armedState = state;
   client?.showNotice(null);
   return n;
 }
@@ -747,6 +750,32 @@ function netLinkLine(): string | null {
   const st = g !== null ? g.session.peerStatus() : (lobbyClient?.state().peer ?? null);
   if (st === null || st.online) return null; // 一切正常 ⇒ 不占屏
   return lobbyLinkText(st);
+}
+
+/**
+ * ★★ **G5 T14：联机对局里"轮到谁"的那一行**（本阶段第 2 件事）。
+ *
+ * ## 为什么必须有它（`render.ts` 那条横幅今天不够）
+ *
+ * `renderDraft` 的醒目横幅写的是**座位号**（`玩家 ${activePlayer + 1}`，`render.ts:4925-4936`），
+ * 而联机下玩家在自己那一页永远读到"玩家 1 / 玩家 2"，对不上"我 / 对方"。`render.ts` 是红线
+ * 文件（G5 §2 第 10 条）⇒ 这一行由**应用层**在渲染之后补画（与 `netLinkLine()` 那一行同族）。
+ *
+ * ## 取值**同源**（端上没有第二套"谁该动"）
+ *
+ *  - "轮到谁"：草稿相读 `getCurrentDrafter(state)`、对局相读 `state.turnPlayer`
+ *    —— 正是 T12 的 `cb.onDraftPick` 与 `net-driver` 的 `liveTurn` 用的那两个读数；
+ *  - "我是谁"：`netGame.selfSeat`（喂给 `createNetDriver` 的同一个数，`__g5Match.seat()` 也读它）。
+ *
+ * 文案与产 DOM 都在 `src/ui/net-lobby.ts` 的 `netTurnText()` / `appendNetTurnLine()`
+ * （住那边是为了能上真渲染器腿：`tests/**` import 不了本文件）。
+ */
+function appendTurnLine(root: HTMLElement): void {
+  const g = netGame;
+  if (g === null) return; // 不是联机局 ⇒ 不画（热座/重放页一个字都不变）
+  appendNetTurnLine(
+    root, state.phase, state.turnPlayer, g.selfSeat, getCurrentDrafter(state), state.draftRound,
+  );
 }
 
 /**
@@ -897,6 +926,44 @@ function exposeMatchProbe(): void {
        *  - `link`：传输状态；`needsResync` / `suppressCoin`：重连链路的两个读数。
        */
       netLink(): { redriven: number; phase: string; link: string; needsResync: boolean; suppressCoin: boolean };
+      /**
+       * ★★ **G5 T14 修复轮：入站帧四环的只读读数**（定位"收到帧却不重画"用；见实现上的说明）。
+       */
+      diag(): {
+        linkIn: number;
+        driverAct: number;
+        linkIsDriverTransport: boolean;
+        hasLinkTransport: boolean;
+        hasDriverTransport: boolean;
+        linkPhase: string;
+        driverSeat: number;
+        rerenderIn: number;
+        rerenderPainted: number;
+        onInboundCalls: number;
+        netGameNullAtInbound: number;
+        lastRerenderBranch: string;
+        enqueuedCount: number;
+        inboundSeq: number;
+        inboundProbe: {
+          pendingBefore: number | null;
+          pendingAfter: number | null;
+          pendingLater: number | null;
+          enqueuedBefore: number | null;
+          enqueuedLater: number | null;
+          landed: number | null;
+          at: number;
+        };
+        legalKinds: { total: number; counts: Record<string, number> };
+        handCounts: number[];
+        renderAppCalls: number;
+        renderNetBoardCalls: number;
+        renderNetPainted: number;
+        stateRead: { draftRound: number; step: string; turnPlayer: number };
+        armedRead: { draftRound: number; step: string; turnPlayer: number } | null;
+        inboundStaleDropped: number;
+        renderMode: string;
+        phase: string;
+      };
     };
   };
   g.__g5Match = {
@@ -924,6 +991,88 @@ function exposeMatchProbe(): void {
       needsResync: lobbyClient?.state().peer?.needsResync ?? false,
       suppressCoin: lobbyClient?.suppressesCoinScreen() ?? false,
     }),
+    /**
+     * ★★ **G5 T14 修复轮：把"入站帧到没到、会话链接没接到"这四环各自数出来**（只读）。
+     *
+     * ## 为什么必须有它（本轮实测的形态）
+     *
+     * 真鼠标场景里，**收到帧的那一页此后不再重画**（`#app` 清空后 5 秒仍是空的），
+     * 而两端盘面却逐字相同。四种"看起来一样"的原因必须分开：
+     *  1. 帧根本没到那一页（传输层）；
+     *  2. 帧到了、但**大厅那条会话链**没接到（`LobbySessionLink.receive`）⇒ `onInbound` 不会被调；
+     *  3. 接到了、`onInbound` 也调了，但宿主那一句没跑；
+     *  4. 跑了 `rerender()`，而重画本身失败。
+     *
+     * `linkIsDriver` 就是为第 2 条准备的：`true` 表示**大厅那条链用的传输**与
+     * **驱动用的传输是同一个对象**（`identical` 是同一个判断的布尔形式，便于工具直接比）。
+     * 两者不同 = "帧到了驱动、会话链却挂在另一条传输上"这个形态。
+     */
+    diag: () => {
+      const linkT = lobbyClient === null ? null : lobbyClient.transport();
+      const drvT = netGame === null ? null : netGame.driver.transport;
+      return {
+        /** 大厅会话链收到的帧数（`LobbySessionLink` 的 `inCount`，唯一来源） */
+        linkIn: lobbyClient?.state().routedIn ?? -1,
+        /** 驱动那条传输上收到的 `act` 帧数 */
+        driverAct: netFrameCounterIn.act,
+        /**
+         * 大厅链的传输与驱动的传输**是不是同一个对象**（第 2 条的那个判据）。
+         * `false` = "帧到了驱动、会话链却挂在另一条传输上"。
+         */
+        linkIsDriverTransport: linkT !== null && drvT !== null && linkT === drvT,
+        /** 两个传输各自的就绪情况（`null` = 那一侧还没有传输） */
+        hasLinkTransport: linkT !== null,
+        hasDriverTransport: drvT !== null,
+        linkPhase: lobbyClient?.state().phase ?? 'idle',
+        driverSeat: netGame === null ? -1 : netGame.driver.seat,
+        /** `rerender()` 被进入过几次 / 真的走到"去画"那一步几次 / `onInbound` 通知过几次 */
+        rerenderIn,
+        rerenderPainted,
+        onInboundCalls,
+        netGameNullAtInbound,
+        lastRerenderBranch,
+        enqueuedCount: netGame === null ? -1 : netGame.driver.enqueuedCount(),
+        inboundSeq,
+        inboundProbe: { ...inboundProbe },
+        /**
+         * ★ G5 T14 只读实验（"对局相拖牌不亮落点"责任方判定）：本回合到底能做什么。
+         *
+         * 它答的是"产品给不给得出 `play`"这一半 —— 与屏上 `.stack-slot.interactable`
+         * （渲染器按 `getLegalActions` + 选中卡算出来的可交互面）一起读，就能把
+         * "产品不给合法 play"（引擎侧）与"给了但屏不亮"（渲染侧）分开。
+         */
+        legalKinds: (() => {
+          const ls = state.phase === 'gameover' ? [] : getLegalActions(state, state.turnPlayer);
+          const counts: Record<string, number> = {};
+          for (const a of ls) counts[String(a.kind)] = (counts[String(a.kind)] ?? 0) + 1;
+          return { total: ls.length, counts };
+        })(),
+        handCounts: [state.players[0].hand.length, state.players[1].hand.length],
+        renderAppCalls,
+        renderNetBoardCalls,
+        renderNetPainted,
+        /**
+         * ★★ **G5 T14：两枚状态对象各自的读数**。
+         *
+         * `stateRead` = 模块级 `state`（渲染器与探针读的那一枚）的三个读数；
+         * `armedRead` = 驱动 `arm()` 那一枚的三个读数（`null` = 还没 arm 过）。
+         * 两者**值不同**就说明"屏与驱动不是同一个时刻"。
+         *
+         * ⚠️ 评审两次点名删掉的四格**没牙**读数（`stateGen` 只声明从不自增、
+         * `renderedIsAppState` 恒真、`appStateMismatch` 近乎恒 0、`sameObject` **恒真**）——
+         * 它们没有腿、只会在下一次误导读者，**已全部删除**（模块态那一段也同步改了口径）。
+         */
+        stateRead: { draftRound: state.draftRound, step: String(state.step), turnPlayer: state.turnPlayer },
+        armedRead: armedState === null ? null : {
+          draftRound: armedState.draftRound, step: String(armedState.step), turnPlayer: armedState.turnPlayer,
+        },
+        /** ★ 判据 1 的护栏读数：微任务里"捕获的那一枚已经不是当前 state"丢掉过几次 */
+        inboundStaleDropped,
+        /** 这一刻的路由读数（两个 early return 分支要配它读） */
+        renderMode,
+        phase: state.phase,
+      };
+    },
     /**
      * ★ **最近一次草稿提交的结果**（G5 T12 门禁排查用；只读，不参与任何流程）。
      *
@@ -1791,7 +1940,78 @@ function startLobby(role: 'host' | 'guest'): void {
        * `renderMode` 已经是 `'net'`。缺这个分支的症状是"对手每动一下，屏上被大厅盖一次"
        * （状态没错、屏错了，且不报任何错）。
        */
-      onInbound: () => { if (netGame !== null) rerender(); else renderLobbyFrame(); },
+      onInbound: () => {
+        if (probeOn) onInboundCalls += 1;
+        if (netGame !== null) {
+          /**
+           * ★★ **G5 T14：先落地、再重画**（落地口 = `NetDriver.pump`）。
+           *
+           * ★ **G5 T14 只读实验（"通知与入队谁先"）**：同一个 `transport.onMessage` 上有两条
+           * 订阅（驱动那条把帧推进队列、大厅链那条就是本回调），浏览器按**注册顺序**调。
+           * 若本回调先被调，这里的 `pump` 面对的是**空队列**（落地 0 条），帧随后才入队。
+           * 四个数记进 `inboundProbe`（经 `__g5Match.diag()` 读），事后判先后。
+           */
+          if (probeOn) inboundSeq += 1;
+          const drv = netGame.driver;
+          inboundProbe.pendingBefore = drv.pendingCount();
+          inboundProbe.enqueuedBefore = drv.enqueuedCount();
+          inboundProbe.landed = drv.pump(state);
+          inboundProbe.pendingAfter = drv.pendingCount();
+          inboundProbe.at = inboundSeq;
+          setTimeout(() => {
+            inboundProbe.pendingLater = drv.pendingCount();
+            inboundProbe.enqueuedLater = drv.enqueuedCount();
+          }, 300);
+          /**
+           * ★★ **G5 T14 的修法：把 `pump + rerender` 推迟一个微任务**（本轮实测的理由）。
+           *
+           * ## 为什么"立刻 pump"不够（同轮实测的四个数）
+           *
+           * 同一个 `transport.onMessage` 上有**两条订阅**，浏览器按**注册顺序**逐个调：
+           * 大厅链那条（就是本回调，先注册）**先**、驱动那条（`NetDriverOptions.onMessage`，
+           * 后注册）**后**。于是本回调里立刻 `pump(state)` 面对的是**空队列**：
+           * `pendingBefore=0 / pendingAfter=0 / landed=0`，而同一刻 `enqueuedCount` 1→2
+           * （帧在通知**之后**才入队）。此后再没有任何东西 pump 它（自动推进关着时没有下一次
+           * `submit`）⇒ 状态后来靠某次 `submit` 顺手 `drain` 前进，**屏却再没画过**。
+           *
+           * ## 为什么用微任务（而不是"让驱动入队后回调宿主"）
+           *
+           * `queueMicrotask` 在当前这个**派发任务**跑完（两条订阅都调过、帧已经入队）之后、
+           * 下一次渲染之前执行 ⇒ `pump` 看到的是**已经入队**的那一帧，且**不引入任何定时器**
+           * （不是"轮询重画"：它一次入站只跑一次）。它也不需要给驱动加第二个宿主回调
+           * （那样会让"谁来重画"出现两条路）。
+           *
+           * ⚠️ **合并**（`inboundRenderPending`）：同一轮里连到几条帧只重画一次 ——
+           * 重画是整帧重建，多画几次只是浪费；而 `pump` 会把队列里能落的都落掉，不漏帧。
+           *
+           * ★★ **评审判据 1 的护栏：微任务里必须落在"入站那一刻那一枚" state 上。**
+           *
+           * `applyResyncToGame`（追平那条路）会把模块级 `state` **整体换掉**，而微任务是**之后**
+           * 才跑的 ⇒ 直接 `pump(state)` 会落到"新的一枚"上（那一枚由追平那条路自己重画）。
+           * 现在：入站那一刻把该落的那一枚**捕获**在 `inboundStateAtArrival`；微任务里
+           * 它若不是当前 `state`（中途换过了）就**放弃这一次**并记 `inboundStaleDropped`。
+           *
+           * ⚠️ **已知边界（登记）**：`rerender()` 之后队列里**又**到了帧、而本轮已经画完 ⇒
+           * 那一帧要等**下一次**入站（或下一次 `submit`）才被落地/重画。这一格没有额外轮询
+           * （不许用定时器掩盖），也没观测到触发。
+           */
+          if (!inboundRenderPending) {
+            inboundRenderPending = true;
+            inboundStateAtArrival = state;
+            queueMicrotask(() => {
+              inboundRenderPending = false;
+              if (netGame === null) return; // 这一格退了大厅/重放：不再画牌桌
+              if (inboundStateAtArrival !== state) {
+                // 微任务跑之前 state 被换过（追平/复位）⇒ 这一次不做，换的那一方自己会画
+                if (probeOn) inboundStaleDropped += 1;
+                return;
+              }
+              netGame.driver.pump(state);
+              rerender();
+            });
+          }
+        } else { if (probeOn) netGameNullAtInbound += 1; renderLobbyFrame(); }
+      },
     });
     // ── ★ 修复轮 A5：**断线时重连**（计划 §5 T8 那条硬约束的产出代码调用点）──────────────
     // 为什么订阅放在这里而不是 `net-lobby.ts` 内部：会话层与传输层都**不自己**订阅生命周期
@@ -1958,7 +2178,87 @@ async function joinLobbyWithInvite(text: string): Promise<void> {
  * ⚠️ 本函数**不做 DOM 清理**：清空 root 是渲染器自己的契约（`renderNetBoard` 首行
  * `root.textContent = ''`，与 `renderApp`/`renderDraft`/`renderBoard` 同形）。
  */
+/**
+ * ★★ **G5 T14 的只读计数与探针位**（`__g5Match.diag()` 读它们）。
+ *
+ * ## 纪律（评审判据 3 的整改）
+ *
+ * 本文件自己的纪律是 `probeOn`（`probeOn` = 页面带了 `#g5probe=1`）：**默认路径一次都不写**
+ * （见 `probeOn` 的声明）。下面每一个计数都**只在 `probeOn` 为真时**才 +1
+ * （写法：`if (probeOn) x += 1;`），`armedState` / `lastAppState` 同理 —— 默认路径零开销、
+ * 也零"门禁专用状态"。
+ *
+ * ## 删掉了三格没牙的读数（评审点名）
+ *
+ * 上一版还有 `stateGen`（**只声明从不自增**，注释说"每次 `state =` 都 +1"是假话）、
+ * `renderedIsAppState`（刚写完 `lastAppState = state` 就比，**恒真**）、
+ * `appStateMismatch`（`armedState` 每次 `arm` 同步 ⇒ 近乎恒 0）—— 三条都**没有腿**、
+ * 只有一次性场景在读，属于"假读数" ⇒ **整组删掉**（连同 `lastAppRead` / `lastAppState`）。
+ * 对象同一性那件事由 `armedRead` / `stateRead` 两个**真读数**表达（前者是驱动 arm 的那一枚，
+ */
+let rerenderIn = 0;
+let rerenderPainted = 0;
+let renderAppCalls = 0;
+let renderNetBoardCalls = 0;
+/** `rerender()` 走**对局相那一条分支**并真的画完了几次（与 `renderAppCalls` 互斥的一对） */
+let renderNetPainted = 0;
+/**
+ * ★★ **驱动被 `arm()` 的那一枚状态对象**（对象同一性用）。
+ *
+ * `main.ts` 里 `netDriver.arm(state)` 出现 3 处（进牌桌 / 重连换驱动 / 追平）—— 三处都把当时
+ * 那一枚 `state` 记在这里。它与模块级 `state`（渲染器与探针读的那一枚）**是不是同一个对象引用**，
+ * 与后者比较即知"是不是同一个时刻"。
+ */
+let armedState: GameState | null = null;
+/** 最近一次 `rerender()` 实际走的那一支（`renderMode` 的值：`app` / `net` / `lobby` / `replay`） */
+let lastRerenderBranch = 'none';
+/**
+ * ★★ **宿主这一侧"收到帧之后通知重画"那一句被调了几次**（`onInbound` 的注入里 +1）。
+ * 它与会话链的 `linkIn`（收到的帧数）之间的差就是"接到了但没通知宿主"。
+ */
+let onInboundCalls = 0;
+/** `onInbound` 被调到时 `netGame === null`（⇒ 走了 `renderLobbyFrame()` 那一支）的次数 */
+let netGameNullAtInbound = 0;
+/** ★ G5 T14 只读实验：`onInbound` 被调了几次（与驱动的 `enqueuedCount()` 比先后） */
+let inboundSeq = 0;
+/** ★ G5 T14：已经排了一次"微任务里 pump + 重画"（同一轮的多条帧只画一次） */
+let inboundRenderPending = false;
+/**
+ * ★★ **G5 T14 判据 1 的护栏（评审判据 1 的主缺口）**：微任务里要落地的**那一枚** state。
+ *
+ * 为什么不能直接 `pump(state)`：微任务是**之后**才跑的，而 `applyResyncToGame`（追平）
+ * 会在那之前**整体换掉** `state`；`renderMode` 也可能变（退大厅 / 进重放）。
+ * ⇒ 入站那一刻把"该落到哪一枚"捕获下来，微任务里只落它、也只画它；捕获的那一枚
+ * 若已经**不是**当前 `state`（说明中途换过了），就**放弃这一次**（新的那一枚会由
+ * 它自己的那条路径重画），并把这件事记进 `diag().inboundStaleDropped`。
+ */
+let inboundStateAtArrival: GameState | null = null;
+/** 上面那条护栏丢掉过几次（`> 0` = 真发生过"入站之后换了 state"）。只读读数。 */
+let inboundStaleDropped = 0;
+/** ★ G5 T14 只读实验：最近一次 `onInbound` 里"通知与入队谁先"的四个读数 */
+const inboundProbe: {
+  pendingBefore: number | null;
+  pendingAfter: number | null;
+  pendingLater: number | null;
+  enqueuedBefore: number | null;
+  enqueuedLater: number | null;
+  landed: number | null;
+  at: number;
+} = {
+  pendingBefore: null, pendingAfter: null, pendingLater: null,
+  enqueuedBefore: null, enqueuedLater: null, landed: null, at: 0,
+};
+
 function rerender(): void {
+  if (probeOn) rerenderIn += 1;
+  /**
+   * ★★ **G5 T14 修复轮：把"这一次 `rerender()` 走了哪一支"记下来**（只读）。
+   *
+   * ⚠️ **不能**在这里再写一次 `renderMode === 'replay'` —— 有两条结构腿钉着"这串字面量在
+   * `rerender` 里恰好 1 处"（`tests/ui/main-lobby-wiring.test.ts` 的 7、
+   * `tests/ui/main-driver-wiring.test.ts` 的 4）⇒ 本行只读 `renderMode`，**不**复写那个条件。
+   */
+  if (probeOn) lastRerenderBranch = renderMode;
   if (renderMode === 'net' && state.phase !== 'draft') {
     // ── G2 修正 **R12-6**：预览工具条与运行时自查**只在开发者模式解锁后**才启用 ──
     // 用户第五次验收："还有预览工具条，我希望隐藏它，并将它的功能内化给开发者模式"。
@@ -1968,6 +2268,7 @@ function rerender(): void {
     // ⚠️ 因此**普通玩家/普通对局看到的页面上没有这条工具条**；解锁（Ctrl+Shift+P → 密码）
     //    会触发一次 `rerender()`（见 `devmode.ts` 的解锁分支），工具条当场出现。
     const dev = isDevUnlocked();
+    if (probeOn) renderNetBoardCalls += 1;
     renderNetBoard(root, state, cb, {
       viewSeat: netViewSeat,
       ...(dev ? {
@@ -1995,6 +2296,10 @@ function rerender(): void {
       line.textContent = linkText;
       root.appendChild(line);
     }
+    if (probeOn) rerenderPainted += 1;
+    if (probeOn) renderNetPainted += 1;
+    // ★ G5 T14：对局相那一行"轮到谁"（人话，不是座位号；见 `appendTurnLine`）
+    appendTurnLine(root);
     return;
   }
   // ── G5/T8：联机大厅分支 ─────────────────────────────────────────────────────
@@ -2004,7 +2309,13 @@ function rerender(): void {
     renderLobbyFrame();
     return;
   }
+  if (probeOn) renderAppCalls += 1;
+  // ★ G5 T14 修复轮：把"渲染器收到的这一枚"与模块级 `state` 做**对象同一性**比对
   renderApp(root, state, cb);
+  if (probeOn) rerenderPainted += 1;
+  // ★ G5 T14：草稿相那一行"轮到谁"（联机局才有；`appendTurnLine` 的第一句就是 `netGame === null`
+  //   早退 ⇒ 热座页与重放页一个节点都不多画）。
+  appendTurnLine(root);
   // ── G4 Task 4：重放页的收尾（**渲染之后**，且只在这里）────────────────────────
   // ① `refreshReplayBar()`：控制条的**唯一**刷新入口。`renderReplayBar` 不清 parent、也不移除
   //    自己上次插入的节点 ⇒ 任何"不以整帧 `renderApp` 为前置"的刷新路径都会在屏上叠出

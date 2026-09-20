@@ -67,6 +67,8 @@ import { coinLanding, draftStarterFor, faceFromSide, sideFromFace } from '../app
 import type { CoinSide } from '../app/coin';
 import type { CoinNetView } from './home';
 import type { PlayerId } from '../core/models/types';
+// ★ G5 T14：「轮到谁」那一行里的"第 N / 6 步"用的是引擎自己的常量（不在这里另写一个 6）
+import { DRAFT_PICK_COUNT } from '../core/state/create';
 import { readIceServers, MESSAGE_CHANNEL } from './net-browser';
 import type { IceServersRead } from './net-browser';
 
@@ -587,6 +589,75 @@ export function lobbyLinkText(status: PeerStatus): string {
   const detail = status.needsResyncDetail;
   if (!status.needsResync || detail === null || detail.length === 0) return base;
   return `${base}（${detail}）`;
+}
+
+/**
+ * ★★ **G5 T14：联机对局里"轮到谁"要说人话**（本阶段第 2 件事）。
+ *
+ * ## 为什么需要它（`src/ui/render.ts:4925-4936` 那条横幅不够）
+ *
+ * `renderDraft` 的醒目横幅（`draft-turn-banner` / `turn-badge`）写的是**座位号**
+ * （`玩家 ${activePlayer + 1}`），而座位号是协议里的 `PlayerId`：联机下玩家在自己那一页
+ * 看到的永远是"玩家 1 / 玩家 2"，对不上"我 / 对方"（用户 2026-09-20 的指示）。
+ * 而 `render.ts` 是**红线文件**（G5 §2 第 10 条），本轮不许动它 ⇒ 这一行由**应用层**补画（见
+ * `appendNetTurnLine()` 的调用点）。
+ *
+ * ## 取值**同源**（不是另算一套）
+ *
+ * 轮次归属的两半读的都是**引擎自己那几个读数**：
+ *  - 草稿相 → `getCurrentDrafter(s)`（T12 起 `cb.onDraftPick` 与驱动 `liveTurn` 用的同一个）；
+ *  - 对局相 → `s.turnPlayer`（`liveTurn` 与 `net-driver` 的座位闸读的同一个）。
+ * 而"我是谁"那一半由调用方把**驱动自己的 `seat`**（`netGame.selfSeat`）交进来 ——
+ * 与 `__g5Match.seat()` 同一个数。⇒ 端上没有第二套"谁该动"的判定。
+ *
+ * ## 文案纪律（短、如实、不夸张）
+ *
+ * 只说这一刻的事实，**不写**"公平 / 防作弊"那一类承诺，也不承诺"网络一定没问题"。
+ * 四个格子两两不同，且**不出现座位号**（座位号已经在 render.ts 那条横幅上了，这一行的存在
+ * 理由正是把座位号翻成人话）。
+ */
+export function netTurnText(
+  phase: string,
+  turnPlayer: 0 | 1,
+  selfSeat: 0 | 1,
+  draftDrafter: 0 | 1,
+  draftRound: number,
+): string {
+  const mine = phase === 'draft'
+    ? draftDrafter === selfSeat
+    : turnPlayer === selfSeat;
+  if (phase === 'draft') {
+    return mine
+      ? `轮到你选协议（第 ${draftRound + 1} 步，共 ${DRAFT_STEPS} 步）`
+      : `现在轮到对方选协议（第 ${draftRound + 1} 步，共 ${DRAFT_STEPS} 步）—— 等他选`;
+  }
+  return mine
+    ? '轮到你出牌或点「下一步」'
+    : '现在轮到对方出牌或点「下一步」—— 等他动';
+}
+
+/** 草稿一共几步（屏上那句话里用；`DRAFT_PICK_COUNT = 6` 是引擎的常量，别在这里另写一个数） */
+const DRAFT_STEPS = DRAFT_PICK_COUNT;
+
+/**
+ * 把"轮到谁"那一行**画到屏上**（唯一产出点；`src/main.ts` 的两个相各调一次）。
+ *
+ * 为什么渲染住在这里而不是 `main.ts`：这一行是**联机文案**，与 `lobbyLinkText` 同族；
+ * 而 `tests/**` import 不了 `src/main.ts`（应用入口要真 `document`）⇒ 住在这里，真渲染器腿
+ * 才画得出来（照 `tests/ui/net-link-recovery.test.ts` 的形状）。
+ */
+export function appendNetTurnLine(
+  root: HTMLElement,
+  phase: string,
+  turnPlayer: 0 | 1,
+  selfSeat: 0 | 1,
+  draftDrafter: 0 | 1,
+  draftRound: number,
+): void {
+  const line = document.createElement('div');
+  line.className = 'net-turn-line';
+  line.textContent = netTurnText(phase, turnPlayer, selfSeat, draftDrafter, draftRound);
+  root.appendChild(line);
 }
 
 /**
