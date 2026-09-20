@@ -43,10 +43,12 @@
  */
 
 import {
+  INVITE_FRAGMENT_KEY,
   INVITE_PROTO_VERSION,
   NO_ENDPOINT_HEADLINE,
   NO_ENDPOINT_REASON,
   decodeInviteText,
+  inviteFragmentOf,
   inviteLinkOf,
   isAnswerPayload,
   protocolVersionCheck,
@@ -839,6 +841,87 @@ export interface LobbyState {
   readonly answerCode: string | null;
   /** 房主**粘回来**的那条回示码的处理结论（`null` = 还没粘） */
   readonly answerApplied: { readonly ok: boolean; readonly message: string } | null;
+}
+
+/* ==================================================================== *
+ * 5b. ★★ G5/T17：粘贴框里那一串的**形态**（唯一一处）
+ * ==================================================================== */
+
+/**
+ * fragment 的前缀（`#invite=`）。**不写字面量**：键名只有 `INVITE_FRAGMENT_KEY` 一处。
+ *
+ * ⚠️ 那个字面量在**本文件的代码位里**也不许出现 —— `tests/ui/net-lobby.test.ts` 有一条腿
+ * （判据 6 的"第二处链接组装"）钉着这一点。所以这里**拼**出来，而不是抄一遍。
+ */
+const FRAGMENT_PREFIX = `#${INVITE_FRAGMENT_KEY}=`;
+
+/**
+ * 粘贴框旁边那句短提示（T17 第 4 件）：说清**三种形态都能粘**。
+ *
+ * 它存在的理由就是用户真机实测的那个事故：房主屏上写的是"把这条**邀请链接**发给对方"，
+ * 玩家照做、把整条链接粘进加入方的框里，而那条路当时只吃裸载荷。
+ */
+export const PASTE_SHAPE_HINT =
+  `整条链接、链接里 ${FRAGMENT_PREFIX} 后面那一串、或者只粘邀请码本身，三种都可以。`;
+
+/**
+ * 粘进来的**是一条链接，但链接里没有 `#invite=…` 那一段**时给邀请码那一侧的文案。
+ *
+ * 为什么必须与"开头不是整数"分开：那句话是对着**载荷**说的（"这不是本程序产出的邀请码"），
+ * 而玩家手上这条链接**是本程序产出的**，只是他少复制了后半截（或者粘成了别的地址）。
+ * 拿前一句回答后一种输入，玩家会以为程序坏了。
+ */
+const LINK_WITHOUT_FRAGMENT_INVITE_MESSAGE =
+  `你粘的是一条链接，但链接里没有 ${FRAGMENT_PREFIX} 后面那一段；`
+  + '请确认你复制的是整条链接（井号后面那一截也要一起复制），或者只粘邀请码本身。';
+
+/** 回示码那一侧的同一件事（形状相同、被粘的东西不同 ⇒ 文案里的名字不同） */
+const LINK_WITHOUT_FRAGMENT_ANSWER_MESSAGE =
+  `你粘的是一条链接，但链接里没有 ${FRAGMENT_PREFIX} 后面那一段；`
+  + '请确认你复制的是整条链接（井号后面那一截也要一起复制），或者只粘对方给你的回示码本身。';
+
+/** 粘贴框里那一串的两种形态（`payload` 那一种是**改动前就有的**那条路） */
+type PastedShape =
+  | { readonly kind: 'payload'; readonly payload: string }
+  | { readonly kind: 'link-without-fragment' };
+
+/**
+ * "这一串看起来是一条链接吗"—— 只用来挑那句失败文案，不用来接受/拒绝任何东西。
+ *
+ * 判据就是 T17 给的那两条：含 `http://` / `https://`，或含 `#`。
+ * ⚠️ 刻意**不**把裸 `?invite=…` 算进"链接"：它也读不出载荷，但它的失败仍走纯载荷那几类
+ * 文案（判据 6 ④ 只要求"拒"，没要求换文案；而它**必须继续被拒**，见 `pasteShapeOf` 的注释）。
+ */
+function looksLikeLink(text: string): boolean {
+  const t = text.toLowerCase();
+  return t.includes('http://') || t.includes('https://') || t.includes('#');
+}
+
+/**
+ * 粘贴框里那一串的形态判定（**唯一一处**：邀请码与回示码两个入口共用它）。
+ *
+ * ## 三种能用的形态都从这里走
+ *
+ *  1. **整条链接** `http://x/#invite=<载荷>` ⇒ 取出 `<载荷>`（用户真机实测的那一次）；
+ *  2. **只要片段** `#invite=<载荷>` ⇒ 同上；
+ *  3. **纯载荷** ⇒ 原样交给 `decodeInviteText`（与改动前**逐字相同**的那条路）。
+ *
+ * ## 取不到 fragment 时为什么还要分两种
+ *
+ *  - 看起来像链接 ⇒ `'link-without-fragment'`：调用方给**分形态**的文案（"链接里没有那一段"）；
+ *  - 其余 ⇒ 仍当纯载荷 ⇒ 失败由纯层的既有几类给出（池外 / 截断 / 版本不符），文案一个字没动。
+ *
+ * ## 判据 6 ④ 在这里的位置
+ *
+ * 本函数**只认 fragment**（`inviteFragmentOf` 就是这么写的：`?invite=` 与路径段一律返回 `null`）
+ * ⇒ `?invite=<载荷>` 落进上面第二种情形：**它仍然被拒**。
+ * 顺手"认一下查询串"会让载荷出现在服务器看得见的地方，那正是那条判据不许的。
+ */
+function pasteShapeOf(text: string): PastedShape {
+  const payload = inviteFragmentOf(text);
+  if (payload !== null) return { kind: 'payload', payload };
+  if (looksLikeLink(text)) return { kind: 'link-without-fragment' };
+  return { kind: 'payload', payload: text };
 }
 
 /* ==================================================================== *
@@ -2286,13 +2369,25 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
   };
 
   /**
-   * 收下一条裸载荷（`joinWithInvite` 与 `readFromAddressBar` **共用**这一份：
+   * 收下一条邀请码（`joinWithInvite` 与 `readFromAddressBar` **共用**这一份：
    * "收下"的判定只有一处，免得两条入口对同一条载荷给出两种结论）。
+   *
+   * ## ★★ G5/T17：第一步是**判形态**，不是直接解码
+   *
+   * 玩家粘进来的可能是整条链接（房主屏上那句话就是这么让他发的）、`#invite=…` 片段、
+   * 或裸载荷。形态判定只有 `pasteShapeOf` 一处 —— 拿到载荷之后**下面每一句都与改动前逐字相同**。
    */
   const applyInvite = async (payload: string): Promise<void> => {
     s.role = 'guest';
     s.error = null;
-    const text = payload.trim();
+    const shape = pasteShapeOf(payload.trim());
+    if (shape.kind === 'link-without-fragment') {
+      // 看起来是链接却没有那一段 ⇒ 分形态的那句话（**不是**"开头不是整数"，那句是对载荷说的）
+      s.joined = { ok: false, reason: 'bad-base64url', message: LINK_WITHOUT_FRAGMENT_INVITE_MESSAGE };
+      opts.onNotice?.(null);
+      return;
+    }
+    const text = shape.payload.trim();
     if (text.length === 0) {
       s.joined = { ok: false, reason: 'bad-base64url', message: '邀请码是空的：请把对方发来的整条邀请码完整粘贴进来。' };
       opts.onNotice?.(null);
@@ -2802,12 +2897,20 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
     /**
      * ★ **房主把回示码粘回来**（B3）：解出 answer，喂进同一条连接。
      *
+     * ★ G5/T17：与邀请码**同形状** ⇒ 第一步同样走 `pasteShapeOf`（整条链接也收得下），
+     * 失败文案同样分形态。
+     *
      * 解不开 / 没注入 `applyAnswer` ⇒ `false`，并把真因写进 `notice`（屏上能看见）。
      */
     submitAnswerCode: async (code: string): Promise<boolean> => {
       const apply = opts.applyAnswer;
-      const text = code.trim();
       if (apply === undefined) return false;
+      const shape = pasteShapeOf(code.trim());
+      if (shape.kind === 'link-without-fragment') {
+        s.answerApplied = { ok: false, message: LINK_WITHOUT_FRAGMENT_ANSWER_MESSAGE };
+        return false;
+      }
+      const text = shape.payload.trim();
       if (text.length === 0) {
         s.answerApplied = { ok: false, message: '回示码是空的：请把对方发来的整条回示码完整粘贴进来。' };
         return false;
@@ -3105,6 +3208,8 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
     const pasteBox = el('div', 'net-lobby-paste');
     pasteBox.appendChild(el('h2', 'net-lobby-h2', '粘贴邀请码'));
     pasteBox.appendChild(textInput('net-lobby-paste-input', '', (v) => { nav.joinWithInvite(v); }));
+    // ★ G5/T17：三种形态都能粘的那句短提示（正文只有 `PASTE_SHAPE_HINT` 一处）
+    pasteBox.appendChild(el('p', 'net-lobby-paste-hint', PASTE_SHAPE_HINT));
     if (s.joined !== null && !s.joined.ok) {
       pasteBox.appendChild(line('net-lobby-error', s.joined.message));
     }

@@ -26,6 +26,10 @@
  *     不再猜对端的网络）。
  *  ⑥（**只记录、不判定**）这台机器到 Google / Cloudflare 两家公共 STUN 的可达性读数 ——
  *     它是"默认值里第三个 STUN 该不该加"的现场依据，不是本任务的门禁。
+ *  ⑦ ★ **G5/T17**：④ 里粘进加入方粘贴框的是房主屏上那条**整条链接**（不是裸载荷）——
+ *     用户真机实测就是这么粘的，而那时这条路只吃裸载荷（屏上回一句"开头不是整数"）。
+ *     对应两格：②b（屏上那条链接的 fragment 与裸载荷逐字相同）、④（整条链接 ⇒ 两端硬币屏），
+ *     外加一格界面提示（粘贴框旁边那句"三种都能粘"必须在屏上）。
  *
  * ## 它怎么把"STUN 不可达"造出来（**不改一个字节的生产代码**）
  *
@@ -446,6 +450,23 @@ function decodeInvite(payload) {
 const KIND_CN = { host: '本机（host）', srflx: '公网映射（srflx）', prflx: '对端映射（prflx）',
   relay: '中继（relay）', other: '类型认不出的' };
 
+/**
+ * ★ G5/T17：从一条 URL 里取 `#invite=` 那一段的载荷。
+ *
+ * 与 `src/net/invite.ts` 的 `inviteFragmentOf` **同义**（只吃 fragment；`?invite=` 与路径段不认），
+ * 但这里是**测试侧独立实现**：这条腿要证的是"房主屏上那条链接里真的带着同一条载荷"，
+ * 拿被测代码去验被测屏面等于自证。
+ */
+function linkFragmentOf(url) {
+  if (typeof url !== 'string') return null;
+  const i = url.indexOf('#');
+  if (i < 0) return null;
+  const frag = url.slice(i + 1);
+  if (!frag.startsWith('invite=')) return null;
+  const p = frag.slice('invite='.length);
+  return p.length === 0 ? null : p;
+}
+
 /** 把种类的计数拼成屏上那句话里应当出现的那几个片段（判据③用它逐项对） */
 function kindPhrases(kinds) {
   const out = [];
@@ -570,6 +591,8 @@ try {
   /* ── ① 房主：注入的 STUN 不可达 ⇒ 收集到不了 complete ──────────────────── */
   say(`=== ① STUN 不可达（${UNREACHABLE_STUN}）⇒ iceGatheringState 到不了 complete ===`);
   let invitePayload = null;
+  /** ★ G5/T17：房主屏上那条**整条链接**（`.net-lobby-invite-link` 的正文）——用户真机粘的就是它 */
+  let inviteLink = null;
   let hostNotice = null;
   let hostProbeAtInvite = null;
   let inviteMs = null;
@@ -586,6 +609,7 @@ try {
       const appeared = await host.waitFor('.net-lobby-invite-payload', budgetMs);
       inviteMs = Date.now() - t0;
       invitePayload = appeared ? await host.text('.net-lobby-invite-payload') : null;
+      inviteLink = appeared ? await host.text('.net-lobby-invite-link') : null;
       hostNotice = await host.text('.net-lobby-notice');
       hostProbeAtInvite = await host.evaluate('JSON.stringify(window.__iceProbe ?? null)');
       let probe = null;
@@ -633,6 +657,22 @@ try {
   }
   say('');
 
+  /* ── ②b ★ G5/T17：房主屏上给的是一条**整条链接**，且它就是这次要粘的东西 ──── */
+  say('=== ②b G5/T17：房主屏上那条整条链接（加入方以前只吃纯载荷，用户真机就栽在这里） ===');
+  {
+    const frag = linkFragmentOf(inviteLink);
+    const linkOk = typeof inviteLink === 'string' && /^https?:\/\//.test(inviteLink)
+      && typeof invitePayload === 'string' && invitePayload.length > 0 && frag === invitePayload;
+    raw.inviteLink = inviteLink;
+    raw.inviteLinkFragmentMatches = frag === invitePayload;
+    push(linkOk, linkOk
+      ? `房主屏上那条**整条链接**（${inviteLink.length} 字符，${inviteLink.slice(0, inviteLink.indexOf('#'))}…）`
+        + '里取出的 fragment 与裸载荷**逐字相同**'
+      : `房主屏上那条链接取不出同一条载荷（link=${String(inviteLink).slice(0, 140)}；`
+        + `fragment=${String(frag).slice(0, 40)}）`);
+  }
+  say('');
+
   /* ── ③ 屏上那句话与实测一致 ───────────────────────────────────────────── */
   say('=== ③ 屏上那句话与实测（候选个数 / 种类）逐项对得上 ===');
   if (decoded === null) {
@@ -668,12 +708,15 @@ try {
   }
   say('');
 
-  /* ── ④ 拿这条邀请码把两端真的接起来 ───────────────────────────────────── */
-  say('=== ④ 拿这条邀请码真的接起来（能走到握手 / 硬币） ===');
+  /* ── ④ ★ G5/T17：把房主屏上那条**整条链接**真粘进加入方的粘贴框 ─────────── */
+  say('=== ④ 把房主屏上那条整条链接真粘进加入方的粘贴框 ⇒ 两端走到硬币屏 ===');
   let answerCode = null;
   let guestNotice = null;
-  if (invitePayload === null) {
-    push(false, '未到达：没有可贴的邀请码（②没产出）');
+  /** ★ G5/T17 的读数：那句界面提示 / 加入方到底吃没吃下那条**整条链接** */
+  let pasteHint = null;
+  let linkAccepted = false;
+  if (inviteLink === null) {
+    push(false, '未到达：房主屏上没有可粘的整条链接（②没产出）');
   } else if (gDrive !== null) {
     push(false, `加入方这一屏驱动失败：${gDrive}`);
   } else {
@@ -684,10 +727,33 @@ try {
     if (!hasPaste) {
       push(false, '点「加入」之后屏上没有出现粘贴邀请码的输入框');
     } else {
-      await guest.type('.net-lobby-paste-input', invitePayload);
+      /**
+       * ★ G5/T17 的界面提示那一格：粘贴框旁边那句短提示必须在屏上，且三种形态都点名。
+       * （读在**粘之前**：粘完整链接之后这一屏会被硬币屏替掉。）
+       */
+      pasteHint = await guest.text('.net-lobby-paste-hint');
+      const hintOk = typeof pasteHint === 'string'
+        && pasteHint.includes('链接') && pasteHint.includes('#invite=') && pasteHint.includes('邀请码');
+      raw.pasteHint = pasteHint;
+      push(hintOk, hintOk
+        ? `粘贴框旁边那句提示在屏上、三种形态都点名了：「${pasteHint}」`
+        : `粘贴框旁边没有那句提示（读到：${String(pasteHint)}）`);
+      // ★ 真鼠标先点进输入框（记一笔焦点读数，**不判定** —— 无头 Chrome 的焦点行为不是被测对象）
+      await guest.click('.net-lobby-paste-input');
+      const focused = await guest.evaluate(
+        "document.querySelector('.net-lobby-paste-input') === document.activeElement");
+      raw.pasteInputFocused = focused === true;
+      // ★ 真输入：粘的是**整条链接**（用户真机实测那一次就是这么粘的）
+      await guest.type('.net-lobby-paste-input', inviteLink);
       const hasAnswer = await guest.waitFor('.net-lobby-make-answer', 20000);
+      raw.linkAccepted = hasAnswer;
+      linkAccepted = hasAnswer;
+      // ★ G5/T17 的那一格：**整条链接**被吃下了（改之前这一格恒红：屏上会是一句"开头不是整数"）
+      push(hasAnswer, hasAnswer
+        ? '整条链接粘进粘贴框之后加入方真的收下了（屏上出现「出示回示码」）'
+        : `整条链接没被收下（输入框旁边那句：${(await guest.text('.net-lobby-error')) ?? '无'}）`);
       if (!hasAnswer) {
-        push(false, `贴了邀请码之后没有「出示回示码」按钮（通知：${(await guest.text('.net-lobby-notice')) ?? '无'}）`);
+        push(false, `贴了整条链接之后没有「出示回示码」按钮（通知：${(await guest.text('.net-lobby-notice')) ?? '无'}）`);
       } else {
         const tAns = Date.now();
         await guest.click('.net-lobby-make-answer');
@@ -722,6 +788,16 @@ try {
         ? `两端都走到硬币屏：房主相位 ${String(hostPhase)} / 加入方相位 ${String(guestPhase)}`
         : `没有接起来：房主硬币屏 ${hostCoin ? '有' : '没有'} / 加入方硬币屏 ${guestCoin ? '有' : '没有'}`
           + `（相位：房主 ${String(hostPhase)} / 加入方 ${String(guestPhase)}）`);
+    /**
+     * ★ G5/T17 的整格：**"粘进去的是整条链接"这件事与"两端走到硬币屏"连起来**。
+     * 它与上一条分开judged：上一条只说"接起来了"，这一条钉的是"接起来用的那条链接
+     * 是**原样整条**粘进去的"——改之前加入方连收都收不下（`linkAccepted` 恒 false）。
+     */
+    push(linkAccepted && hostCoin && guestCoin,
+      linkAccepted && hostCoin && guestCoin
+        ? '整条链接原样粘进粘贴框 ⇒ 加入方收下 ⇒ 两端都走到硬币屏（T17 的那一格）'
+        : `整条链接那一格没走通：加入方收下=${String(linkAccepted)} / 房主硬币屏=${String(hostCoin)}`
+          + ` / 加入方硬币屏=${String(guestCoin)}`);
   } else if (answerCode === null) {
     push(false, '未到达：没有可贴回去的回示码（②/④上半没产出）');
   }

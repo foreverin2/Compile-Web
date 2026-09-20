@@ -28,7 +28,8 @@ import {
 } from './net-dom-stub';
 import { stripComments } from './source-text';
 import {
-  LOBBY_ERROR_KEYS, LOBBY_LINK_COPY, createLobbyClient, createLobbySessionLink, errorCopy,
+  LOBBY_ERROR_KEYS, LOBBY_LINK_COPY, PASTE_SHAPE_HINT, createLobbyClient, createLobbySessionLink,
+  errorCopy,
   errorKeyOfRejection, lobbyLinkOf, lobbyLinkText, protoOfPayload, qrNote, refusalNotice,
   relayNoticeOf, relayStateOf, renderNetLobby,
   type LobbyClient, type LobbyErrorKey, type LobbyRenderNav, type LobbyState, type SettingKey,
@@ -51,7 +52,7 @@ import { CARD_DATA_HASH } from '../../src/app/card-data-hash';
 import { makeFakePc } from './fake-peer-connection';
 import {
   ANSWER_PROMISE_PLACEHOLDER, NO_ENDPOINT_HEADLINE, NO_ENDPOINT_MESSAGE, NO_ENDPOINT_REASON,
-  answerPayloadFields, inviteLinkOf, isAnswerPayload, roomCodeEntryReachability,
+  answerPayloadFields, inviteFragmentOf, inviteLinkOf, isAnswerPayload, roomCodeEntryReachability,
 } from '../../src/net/invite';
 import { browserHash } from '../../src/ui/net-browser';
 
@@ -2674,5 +2675,215 @@ describe('★★ T8-E · 消息 → 通道（`act` = reliable+ordered / `beat` =
     expect(wrong, `有协议消息走了非 act 通道：${JSON.stringify(wrong)}`).toEqual([]);
     const onBeat = frames.filter((f) => f.channel === 'beat');
     expect(onBeat.map((f) => f.type), '`beat` 上出现了协议消息（它只该跑心跳/在线读数）').toEqual([]);
+  });
+});
+
+/* ==================================================================== *
+ * 16. ★★ G5/T17：粘贴框先判形态（整条链接 / 片段 / 纯载荷）
+ * ==================================================================== */
+
+/**
+ * ## 这个文件里为什么必须新增这一节
+ *
+ * 用户真机实测（G5/T17）：房主屏上写的是"把这条**邀请链接**发给对方"，玩家照做、把整条
+ * `http://localhost:5173/#invite=1.xlJz…` 粘进加入方的「粘贴邀请码」框，得到的却是
+ * "邀请码开头的协议版本不是整数（收到 "http://localhost:5173/#invite=1"）"——
+ * 那句话是对着**载荷**说的，而玩家粘进来的**是本程序产出的链接**。
+ *
+ * 根因：纯层早就有 `inviteFragmentOf(url)`（只吃 fragment、取不到回 `null`），
+ * 而粘贴那条路（`applyInvite` / `submitAnswerCode`）**第一步就直接**把它整串交给
+ * `decodeInviteText`。修法只有一处：**先判形态**（`pasteShapeOf`），拿到载荷之后每一句都不动。
+ *
+ * ## 五条腿（T17 任务书 §5 的原编号）
+ *
+ *  ① 整条链接 ⇒ 收下，且载荷（含会话号）与直接粘载荷**逐字相同**；
+ *  ② 只有 `#invite=<载荷>` 片段 ⇒ 同上；
+ *  ③ 纯载荷 ⇒ **回归腿**：与改动前逐字相同（失败文案仍是纯层那几类）；
+ *  ④ 链接里没有 `#invite=` ⇒ 可读失败，且文案是"链接里没有那一段"这一族；
+ *  ⑤ `?invite=<载荷>`（查询串形态）⇒ **仍被拒**（判据 6 ④：那种形态服务器看得见）。
+ *  另加：回示码那一侧同形状的两条（T17 §3）+ 界面提示那条（T17 §4）。
+ */
+describe('★★ G5/T17 · 粘贴框先判形态：整条链接、`#invite=` 片段、纯载荷三种都能用', () => {
+  /** 房主屏上那条链接的来源地址（`createInvite` 的 `originAndPath`） */
+  const ORIGIN = 'http://127.0.0.1:5199/';
+  /** `realInvite()` 夹具写进载荷里的会话号（见该夹具） */
+  const FIXTURE_SESSION_ID = 'sid-00000000000000000000000000000000';
+  /** 一条回示码形状的 SDP（内容不重要，`encodeInvite` 只要求非空） */
+  const ANSWER_SDP = 'v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=answer-shape\r\n';
+
+  /** 房主那份"整条链接 + 裸载荷"（两者都出自**真件** `createInvite`，不是手拼的） */
+  async function linkAndPayload(): Promise<{ link: string; payload: string }> {
+    const inv = await realInvite(ORIGIN);
+    return { link: inv.link, payload: inv.payload };
+  }
+
+  /** 用既有夹具造一个加入方客户端，把 `text` 粘进去，返回它收下的结论 */
+  async function joinWith(text: string) {
+    const { client } = makeGuestClient();
+    await client.joinWithInvite(text);
+    return client.state().joined;
+  }
+
+  it('① 整条链接 ⇒ 收下，且载荷（含会话号）与直接粘载荷**逐字相同**', async () => {
+    const { link, payload } = await linkAndPayload();
+    // 反空转：夹具那条"整条链接"确实是我们以为的形状（否则下面两条腿扫的是别的东西）
+    expect(link, '夹具失败：真件的 link 不是 `地址#invite=载荷`').toBe(`http://127.0.0.1:5199/#invite=${payload}`);
+    expect(inviteFragmentOf(link), '夹具失败：唯一出处从这条 link 里取不出载荷').toBe(payload);
+
+    const viaLink = await joinWith(link);
+    const viaPayload = await joinWith(payload);
+    expect(viaLink?.ok, `整条链接没收下：${viaLink?.ok === false ? viaLink.message : '（没有结论）'}`).toBe(true);
+    expect(viaPayload?.ok, '夹具失败：同一条裸载荷没收下').toBe(true);
+    // ★ 判据就是这一句：两条路**逐字相同**（会话号也在里面）
+    expect(viaLink, '整条链接与裸载荷的结论不是同一个（会话号 / SDP 有差别）').toEqual(viaPayload);
+    if (viaLink?.ok !== true) return;
+    expect(viaLink.payload.sessionId, '会话号不是邀请码里那一串').toBe(FIXTURE_SESSION_ID);
+    // 与**另一条实现路**（浏览器层的 `decodeInvitePayload`）对一遍：逐字相同
+    const ref = await decodeInvitePayload(payload, REAL_ENV);
+    expect(ref.ok, '夹具失败：浏览器层也解不开这条真载荷').toBe(true);
+    if (ref.ok) expect(viaLink.payload, '解出来的载荷与浏览器层那条路不一致').toEqual(ref.payload);
+
+    /**
+     * ★ 会话号那一半的**行为**证据：粘完整链接之后建会话用的号就是邀请码里那一串
+     * （`connect()` 读 `s.joined.payload.sessionId`）。用既有成对假传输跑一次真 `connect`。
+     */
+    const pair = createFakeTransportPair();
+    const { client } = makeGuestClient({ createTransport: () => pair.A.transport });
+    await client.joinWithInvite(link);
+    await client.connect('first');
+    expect(client.knowsSession(FIXTURE_SESSION_ID), '建会话用的号不是邀请码里那一串').toBe(true);
+  });
+
+  it('② 只有 `#invite=<载荷>` 片段 ⇒ 同样收下，且与整条链接的结果逐字相同', async () => {
+    const { link, payload } = await linkAndPayload();
+    const fragment = link.slice(link.indexOf('#'));
+    expect(fragment, '夹具失败：从链接上切下来的不是那段 fragment').toBe(`#invite=${payload}`);
+    expect(fragment.includes('http'), '夹具失败：这一段里还有协议头（那就不是"片段"那条腿了）').toBe(false);
+
+    const viaFragment = await joinWith(fragment);
+    const viaLink = await joinWith(link);
+    expect(viaFragment?.ok, `片段形态没收下：${viaFragment?.ok === false ? viaFragment.message : '（没有结论）'}`)
+      .toBe(true);
+    expect(viaFragment, '片段形态与整条链接的结论不是同一个').toEqual(viaLink);
+  });
+
+  it('③ 纯载荷（回归腿）⇒ 与改动前逐字相同：结论同源，失败文案仍是纯层那几类', async () => {
+    const { payload } = await linkAndPayload();
+    const joined = await joinWith(payload);
+    expect(joined?.ok, '裸载荷这条老路被改坏了').toBe(true);
+    if (joined?.ok === true) {
+      // 与浏览器层那条路逐字相同（"纯载荷被原样交给 decodeInviteText"这件事的读数）
+      const ref = await decodeInvitePayload(payload, REAL_ENV);
+      expect(ref.ok).toBe(true);
+      if (ref.ok) expect(joined.payload).toEqual(ref.payload);
+      expect(joined.proto.ok, '版本一致却给了版本不符的结论').toBe(true);
+    }
+    /**
+     * ★ 失败面也一个字没动：`1.@@@@` 仍然走纯层"压缩段不是 base64url"那一句，
+     * **不**许被"看起来像链接"那套文案顶掉（它既没有协议头也没有井号 ⇒ 仍是纯载荷）。
+     */
+    const bad = await joinWith('1.@@@@');
+    expect(bad?.ok, '一条坏载荷竟然被收下了').toBe(false);
+    if (bad?.ok === false) {
+      expect(bad.reason, '失败原因不是纯层那几类之一').toBe('bad-base64url');
+      expect(bad.message, '纯层的"字符集"那句被改了').toContain('不属于 base64url 的字符');
+      expect(bad.message.includes('你粘的是一条链接'), '纯载荷的失败被换成了"链接"那套文案').toBe(false);
+    }
+  });
+
+  it('④ 链接里没有 `#invite=` ⇒ 可读失败，且文案说的是"链接里没有那一段"（不是"开头不是整数"）', async () => {
+    const cases = [
+      'http://127.0.0.1:5199/',                 // 完全没有 fragment
+      'http://127.0.0.1:5199/#section-3',       // 有 fragment，但不是 invite 那一段
+      'https://example.test/compile/#other=1',  // https + 别的片段
+      'http://127.0.0.1:5199/#invite=',         // 有那一段，但后面是空的
+    ];
+    for (const input of cases) {
+      const joined = await joinWith(input);
+      expect(joined?.ok, `「${input}」竟然被收下了`).toBe(false);
+      if (joined?.ok === false) {
+        expect(joined.message, `「${input}」的失败文案不是"链接里没有那一段"这一族`).toContain('链接');
+        expect(joined.message, `「${input}」的失败文案没点名那一段`).toContain('#invite=');
+        expect(joined.message.includes('不是整数'), `「${input}」又出现了对着 URL 说的"开头不是整数"`).toBe(false);
+        expect(joined.message.includes('不是本程序产出的邀请码'), `「${input}」仍说"不是本程序产出的"`).toBe(false);
+      }
+    }
+    // 屏上看得见（渲染腿：`.net-lobby-error` 那一行画的就是 `joined.message`）
+    const shown = await joinWith('http://127.0.0.1:5199/');
+    const h = mountLobby({ role: 'guest', joined: shown });
+    h.render();
+    expect(textOf(h.root), '那句失败没画到屏上').toContain('链接里没有');
+  });
+
+  it('⑤ 查询串形态（`?invite=<载荷>`）⇒ **仍然被拒**（判据 6 ④：那种形态服务器看得见）', async () => {
+    const { payload } = await linkAndPayload();
+    // ① 整条 URL + 查询串：看起来是链接、但取不到 fragment ⇒ 被拒（且文案是"链接"那一族）
+    const asQuery = await joinWith(`http://127.0.0.1:5199/?invite=${payload}`);
+    expect(asQuery?.ok, '查询串形态竟然被收下了 —— 那会让载荷出现在服务器看得见的地方').toBe(false);
+    if (asQuery?.ok === false) expect(asQuery.message).toContain('链接');
+    // ② 裸查询串（没有协议头、没有井号）：也仍被拒 —— 这一支落回纯载荷那几类文案（**旧的**那句）
+    const bare = await joinWith(`?invite=${payload}`);
+    expect(bare?.ok, '裸的 `?invite=` 竟然被收下了').toBe(false);
+    if (bare?.ok === false) {
+      expect(bare.message, '裸 `?invite=` 走的不是纯载荷那条路').toContain('不是整数');
+    }
+    // ★ 反空转：**同一条载荷**换成 fragment 形态必须收下 ⇒ 上面两条"被拒"不是夹具坏了
+    const frag = await joinWith(`#invite=${payload}`);
+    expect(frag?.ok, '同一条载荷换成 fragment 形态也没收下 ⇒ 上面两条"被拒"没有区分力').toBe(true);
+  });
+
+  it('★ 回示码那一侧同形状：整条链接收得下；链接里没有那一段时说的是"链接"那一族', async () => {
+    const enc = await createInvite(
+      {
+        ...answerPayloadFields({
+          protoVersion: PROTO_VERSION, sessionId: 'sid-answer', sdp: ANSWER_SDP, ice: [],
+        }),
+        originAndPath: ORIGIN,
+      },
+      REAL_ENV,
+    );
+    expect(enc.ok, `夹具失败：造不出回示码（${enc.ok ? '' : enc.message}）`).toBe(true);
+    if (!enc.ok) return;
+    // 反空转：它确实是**回示码形状**（两个承诺位是那个具名占位串）
+    const dec = await decodeInvitePayload(enc.payload, REAL_ENV);
+    expect(dec.ok && isAnswerPayload(dec.payload), '夹具失败：造出来的不是回示码形状').toBe(true);
+    expect(ANSWER_PROMISE_PLACEHOLDER.length, '反空转：占位串是空的').toBeGreaterThan(0);
+
+    const applied: string[] = [];
+    const { client } = makeGuestClient({
+      role: 'host',
+      applyAnswer: async (answer) => { applied.push(answer.sdp); return { ok: true as const }; },
+    });
+    // ① 整条链接（房主屏上"粘贴回示码"那个框粘进去的东西）
+    expect(await client.submitAnswerCode(enc.link), '整条链接形态的回示码没收下').toBe(true);
+    expect(client.state().answerApplied?.ok, '收下了但结论不是 ok').toBe(true);
+    expect(applied, '喂进 `applyAnswer` 的不是载荷里那条 SDP').toEqual([ANSWER_SDP]);
+    // ② 同一条码的裸载荷也照旧收得下（回归）
+    expect(await client.submitAnswerCode(enc.payload), '裸回示码收不下了（回归）').toBe(true);
+    // ③ 链接但取不到 fragment ⇒ 分形态的失败文案（点名"回示码"，不出现"开头不是整数"）
+    expect(await client.submitAnswerCode('http://127.0.0.1:5199/'), '没有 fragment 的链接竟然被收下了').toBe(false);
+    const msg = client.state().answerApplied?.message ?? '';
+    expect(msg, '回示码那一侧的失败文案不是"链接"那一族').toContain('链接');
+    expect(msg, '回示码那一侧的失败文案没点名那一段').toContain('#invite=');
+    expect(msg, '回示码那一侧的失败文案没点名回示码').toContain('回示码');
+    expect(msg.includes('不是整数'), '回示码那一侧又出现了"开头不是整数"').toBe(false);
+  });
+
+  it('★ 界面提示：粘贴框旁边那句话在屏上，且三种形态都点名了', () => {
+    const h = mountLobby({ role: 'guest' });
+    h.render();
+    const hint = oneOf(h.root, '.net-lobby-paste-hint');
+    expect(hint.text, '粘贴框旁边那句提示不是 `PASTE_SHAPE_HINT` 的正文').toBe(PASTE_SHAPE_HINT);
+    // 三种形态都要点名（否则等于没说）
+    for (const word of ['链接', '#invite=', '邀请码']) {
+      expect(PASTE_SHAPE_HINT.includes(word), `那句提示里没有「${word}」`).toBe(true);
+    }
+    // 反空转：它是**加入方**那一屏的东西，别处不出现（房主那屏没有粘贴框）
+    const host = mountLobby({ role: 'host' });
+    host.render();
+    expect(queryAllIn(host.root, '.net-lobby-paste-hint').length, '房主那屏上也出现了粘贴提示').toBe(0);
+    // 本仓纪律：任何玩家可见文本不许带表情符号
+    expect(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(PASTE_SHAPE_HINT), '那句提示里带了表情符号')
+      .toBe(false);
   });
 });

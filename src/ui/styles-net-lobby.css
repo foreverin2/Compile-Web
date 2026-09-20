@@ -71,7 +71,8 @@
 
 .net-lobby-note,
 .net-lobby-relay-hint,
-.net-lobby-endpoint {
+.net-lobby-endpoint,
+.net-lobby-paste-hint {
   margin: 0;
   max-width: 720px;
   font-size: 13px;
