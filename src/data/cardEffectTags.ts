@@ -1,10 +1,10 @@
 // 自动生成：node tools/card-effect-index.mjs --write-tags ——勿手改
-// 图鉴右下角「按效果分类筛选」的标签目录（31 类）与每卡标签。
+// 图鉴右下角「按效果分类筛选」的标签目录（30 类）与每卡标签。
 // 标签来自效果代码的事实（op / trigger / chooser / 选择请求标题），不是按卡面文本现算；
 // 口径与已知偏差见 docs/2026-09-21-卡牌效果分类与关键词.md（第二版）§8 / §9。
 export interface CardEffectTag { id: string; label: string; group: string }
 
-/** 31 个标签，顺序 = 界面分组顺序（任务书 §1 表序） */
+/** 30 个标签，顺序 = 界面分组顺序（任务书 §1 表序） */
 export const CARD_EFFECT_TAGS: readonly CardEffectTag[] = [
   // 指令位置
   { id: 'dir-top', label: '顶部指令', group: '指令位置' }, // 卡面 top 非空
@@ -40,7 +40,6 @@ export const CARD_EFFECT_TAGS: readonly CardEffectTag[] = [
   // 其它
   { id: 'misc-declare', label: '宣告（幸运）', group: '其它' }, // 选择请求标题含"宣告"
   { id: 'misc-opp-choice', label: '对手来选', group: '其它' }, // chooser: foe / opp / holder
-  { id: 'misc-window', label: '整屏窗口', group: '其它' }, // rearrangeSide
   { id: 'misc-restrict', label: '限制 / 无效化', group: '其它' }, // chaos-3 / ice-4 / ice-6 / metal-2 ＋ apathy-2 / fear-0 / rigidity-7
 ];
 
@@ -65,7 +64,7 @@ export const CARD_EFFECT_TAGS_BY_CARD: Readonly<Record<string, readonly string[]
   'assimilation-5': ['dir-middle', 'trig-play', 'op-discard'],
   'assimilation-6': ['dir-bottom', 'trig-end', 'trig-conditional', 'op-transfer'],
   'chaos-0': ['dir-middle', 'dir-bottom', 'trig-play', 'trig-start', 'trig-conditional', 'op-flip', 'op-draw'],
-  'chaos-1': ['dir-middle', 'trig-play'],
+  'chaos-1': ['dir-middle', 'trig-play', 'op-rearrange'],
   'chaos-2': ['dir-middle', 'trig-play', 'op-shift'],
   'chaos-3': ['dir-bottom', 'misc-restrict'],
   'chaos-4': ['dir-bottom', 'trig-end', 'trig-conditional', 'op-discard', 'op-draw'],
@@ -217,7 +216,7 @@ export const CARD_EFFECT_TAGS_BY_CARD: Readonly<Record<string, readonly string[]
   'momentum-0': ['dir-middle', 'trig-play', 'op-play'],
   'momentum-1': ['dir-top', 'dir-bottom', 'trig-chain', 'trig-hidden-top', 'op-discard', 'op-draw', 'op-play'],
   'momentum-3': ['dir-middle', 'trig-play', 'op-draw'],
-  'momentum-4': ['dir-middle', 'trig-play', 'op-rearrange', 'misc-window'],
+  'momentum-4': ['dir-middle', 'trig-play', 'op-rearrange'],
   'momentum-5': ['dir-middle', 'trig-play', 'op-discard'],
   'momentum-6': ['dir-top', 'dir-middle', 'trig-play', 'trig-chain', 'trig-hidden-top', 'op-discard', 'op-delete'],
   'nova-0': ['dir-top', 'dir-middle', 'dir-bottom', 'trig-play', 'trig-start', 'trig-end', 'trig-hidden-top', 'trig-conditional', 'op-delete', 'op-play', 'op-rearrange', 'ctl-related', 'misc-opp-choice'],
@@ -292,7 +291,7 @@ export const CARD_EFFECT_TAGS_BY_CARD: Readonly<Record<string, readonly string[]
   'time-3': ['dir-middle', 'trig-play', 'op-reveal', 'op-play'],
   'time-4': ['dir-middle', 'trig-play', 'op-discard', 'op-draw'],
   'time-5': ['dir-middle', 'trig-play', 'op-discard'],
-  'unity-0': ['dir-middle', 'dir-bottom', 'trig-play', 'trig-before-covered'],
+  'unity-0': ['dir-middle', 'dir-bottom', 'trig-play', 'trig-before-covered', 'op-flip', 'op-draw'],
   'unity-1': ['dir-top', 'dir-middle', 'dir-bottom', 'trig-play', 'trig-start', 'trig-hidden-top', 'trig-conditional', 'op-shift', 'ctl-related'],
   'unity-2': ['dir-middle', 'trig-play', 'op-draw'],
   'unity-3': ['dir-middle', 'trig-play', 'op-flip'],

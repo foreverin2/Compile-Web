@@ -39,7 +39,8 @@ describe('G5 T24 判据 3：纯逻辑（全勾 / 全不勾 / 单类 / 并集 / �
     expect(flat, '分组摊平之后必须与 CARD_EFFECT_TAGS 逐条同序').toEqual(CARD_EFFECT_TAGS.map((t) => t.id));
     expect(LIB_ALL_TAG_IDS).toEqual(CARD_EFFECT_TAGS.map((t) => t.id));
     expect(LIB_TAG_GROUPS.map((g) => g.group)).toEqual(['指令位置', '触发时机', '效果动作', '控制权', '其它']);
-    expect(LIB_ALL_TAG_IDS.length).toBe(31);
+    // 2026-09-22（G5 T25）：用户删掉了 `misc-window` 这一类（"图鉴里去掉这个分类"）⇒ 30 条。
+    expect(LIB_ALL_TAG_IDS.length).toBe(30);
   });
 
   it('全勾 ⇒ 270 张卡全可见、45 套协议全可见', () => {

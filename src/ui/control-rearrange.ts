@@ -38,6 +38,14 @@ export interface ControlRearrangeModalOptions {
   canCommit?: (order: Line[]) => boolean;
   /** 仅 draft：替换默认提示文案 */
   hint?: string;
+  /**
+   * 2026-09-22（T25）：draft 模式的「跳过」按钮文案。**与 `onSkip` 成对出现才渲染** ——
+   * 只给可选（`prompt.optional`）的重排请求用（`nova-2`「你可以重排你的协议」那半步原先是
+   * 5 个布局按钮 + 一个「跳过」，窗口化之后这个出口不能丢；`momentum-4` 是必选，不传）。
+   */
+  skipLabel?: string;
+  /** 只给 `skipLabel` 一起用时有效：点「跳过」⇒ 关闭窗口并走这条回调（应答为空 `choice: []`） */
+  onSkip?: () => void;
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -70,7 +78,7 @@ export function orderToAction(order: Line[]): string {
  * ★ **G5 T23：这条"效果内重排"请求该不该在**本屏**开窗**（纯函数，腿在 node 里）。
  *
  * 联机下两端持有**同一份** `GameState` ⇒ `pendingEffects` 栈顶那条带 `rearrangeSide` 的请求
- * （今天只有 `momentum-4`：`src/core/effects/cards/momentum.ts:58-63`）在**两屏**都读得到，
+ * （`momentum-4`：`src/core/effects/cards/momentum.ts:58-64`；`nova-2`：T25 起同款）在**两屏**都读得到，
  * 而这个窗口是 **body 级遮罩**（`openControlRearrangeModal` 直接 append 到 `document.body`）——
  * 没有这道判据时，**对手那一屏**也会弹出"重排你的协议"窗口：他能拖着别人的协议摆，
  * 点「完成重排」再走 `main.ts` 的 `commitEffectRearrange` → `cb.onAction({kind:'effect-choice'})`
@@ -218,6 +226,22 @@ function renderModal(): void {
     o.onCommit(draftOrder.slice());
   });
   actions.appendChild(done);
+  /**
+   * 2026-09-22（T25）：**可选重排的出口**。`nova-2` 的重排是 `optional: true`（"你可以重排"），
+   * 原按钮流里有一个「跳过」；改走窗口之后这个出口必须还在，否则可选的重排变成"必须摆一次"。
+   * 只在 `mode: 'draft'` 且调用方**同时**给了 `skipLabel` + `onSkip` 时渲染 —— `momentum-4`
+   * 是必选（`optional: false`），`main.ts` 不给这两个字段，所以那里不多出按钮。
+   * 点击即 `onSkip()` 并关窗：与 `render.ts` 的 `.choice-skip` 同义（应答 `choice: []`）。
+   */
+  if (draft && o.skipLabel !== undefined && o.onSkip !== undefined) {
+    const skip = el('button', 'btn rearrange-skip', o.skipLabel);
+    skip.addEventListener('click', () => {
+      const fn = opts?.onSkip;
+      closeControlRearrangeModal();
+      fn?.();
+    });
+    actions.appendChild(skip);
+  }
   panel.appendChild(actions);
 
   overlay.appendChild(panel);

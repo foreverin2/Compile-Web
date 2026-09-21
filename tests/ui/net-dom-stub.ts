@@ -285,7 +285,25 @@ export function makeStubEl(tag: string): StubNode {
   };
   const extra: Record<string, unknown> = {
     removeChild: () => { /* noop */ },
-    remove: () => { /* noop */ },
+    /**
+     * **G5 T25 修正：`remove()` 真的从父节点摘掉自己了**（改之前是 noop）。
+     *
+     * 为什么要改：`control-rearrange.ts` 的 `closeControlRearrangeModal()` 唯一的收尾动作就是
+     * `overlay.remove()`。桩此前是 noop ⇒ 关掉的模态**仍留在 `document.body` 的树里**，于是
+     * "点了「跳过」之后窗口关没关"这条判据在桩上**恒假**（只能退化成读模块态，而任务书判据 3
+     * 要的是"点它真的生效"）。真实 DOM 里 `remove()` 的语义就是"从父节点摘掉自己"。
+     *
+     * ⚠️ 只补这一条语义，**不放宽**任何既有断言：全仓改前没有一个用例断言过"`remove()` 之后
+     *    节点还在树里"（noop 只是让节点留下，没有任何断言依赖这个后果）。父子指针用产出代码
+     *    自己的读法（`parentElement` / `children.indexOf`）来维护，与浏览器一致。
+     */
+    remove: () => {
+      const parent = node.parentElement;
+      if (parent === null) return;
+      const i = parent.children.indexOf(node);
+      if (i >= 0) parent.children.splice(i, 1);
+      node.parentElement = null;
+    },
     /**
      * **R19 修正：`setAttribute` 真的记属性了**（改之前是 noop）。
      *

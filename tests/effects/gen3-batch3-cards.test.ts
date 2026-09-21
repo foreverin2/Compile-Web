@@ -116,6 +116,12 @@ describe('nova（新星）', () => {
     resolveMiddle(s2, 0, src2);
     const top = s2.pendingEffects[s2.pendingEffects.length - 1];
     expect(top?.prompt?.kind).toBe('select-action'); // 可重排（optional）
+    // 2026-09-22（G5 T25，用户要求"所有会重排协议的卡都走动量4那种整屏窗口"）：这条请求带上
+    // `rearrangeSide` ⇒ UI 不画 5 个布局按钮、改由重排窗口承接；**引擎侧一个字没变** ——
+    // 应答仍是同一条 `action:order:XYZ`（下面两条钉住它）。
+    expect(top?.prompt?.rearrangeSide, 'nova-2 未标记 rearrangeSide（UI 会退回画布局按钮）').toBe(0);
+    expect(top?.prompt?.actions, 'nova-2 的 5 条 action:order 被动了（引擎靠它校验应答）')
+      .toEqual(['action:order:021', 'action:order:102', 'action:order:120', 'action:order:201', 'action:order:210']);
     s2.pendingEffects.length = 0; // 跳过重排
     expect(s2.control).toBe(-1); // 未获得控制权
   });

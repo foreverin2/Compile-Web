@@ -3477,8 +3477,9 @@ function syncRearrangeModalForEffect(): void {
    * ★★ **G5 T23：这个窗口只属于"操作方那一屏"**（与 `render-net.ts` 的 `renderChoiceUi` 修的是
    * 同一族缺陷：用户 2026-09-21 反馈"别人选牌弹到我这一屏"）。
    *
-   * 联机下两端持有**同一份** `state` ⇒ 那条带 `rearrangeSide` 的请求（今天只有 `momentum-4`，
-   * `src/core/effects/cards/momentum.ts:58-63`，`chooser = ctx.player`）在**两屏**都读得到，
+   * 联机下两端持有**同一份** `state` ⇒ 那条带 `rearrangeSide` 的请求（`momentum-4`
+   * `src/core/effects/cards/momentum.ts:58-64` 显式给了 `chooser`；`nova-2` T25 起也带
+   * `rearrangeSide`，没给 `chooser` ⇒ 按 `top.player` 算）在**两屏**都读得到，
    * 而 `openControlRearrangeModal` 是 **body 级遮罩**（`control-rearrange.ts` 直接 append 到
    * `document.body`，不看棋盘 DOM）⇒ 没有这道闸门时**对手那一屏**也会弹出"重排你的协议"窗口：
    * 他能拖着别人的协议摆、点「完成重排」再走 `commitEffectRearrange` → `cb.onAction({kind:'effect-choice'})`
@@ -3501,6 +3502,16 @@ function syncRearrangeModalForEffect(): void {
       sides: [side],
       sessionKey: effectRearrangeKey,
       canCommit: orderChanged,
+      /**
+       * 2026-09-22（T25）：**可选重排的出口**。`nova-2`「你可以重排你的协议」是 `optional: true`，
+       * 原按钮流里有一个「跳过」；窗口化之后由窗口自己画这一个按钮。只在这条请求**可选**时给，
+       * 空应答语义与 `render.ts` 的 `.choice-skip`（`choiceSkipBtn`）逐字一致：`choice: []`。
+       * `momentum-4` 是必选（`optional: false`）⇒ 不给这两个字段，窗口里不会多出「跳过」。
+       */
+      ...(prompt.optional ? {
+        skipLabel: '跳过',
+        onSkip: () => cb.onAction({ kind: 'effect-choice', promptId: top.id, choice: [] }),
+      } : {}),
       onCommit: (order) => commitEffectRearrange(top.id, order),
     });
     return;

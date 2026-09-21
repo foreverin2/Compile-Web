@@ -130,11 +130,16 @@ function belowIsNova(ctx: EffectCtx): boolean {
 const NOVA_PERMS = ['021', '102', '120', '201', '210'];
 
 /** nova-2 中：若此牌覆盖着1张新星牌，你可以重排你的协议。否则，获得控制权。
- *  （C5：else 分支必得控制权；重排可选——select-action 布局） */
+ *  （C5：else 分支必得控制权；重排可选——select-action + rearrangeSide）
+ *  2026-09-22 用户裁决：**所有会重排协议的卡**都走动量4那种整屏重排窗口，不用布局按钮。
+ *  `rearrangeSide` = UI 提示（与 `momentum.ts:62` 同款）：render.ts 不渲染那 5 个
+ *  `action:order:*` 按钮，改由 `main.ts` 的 `syncRearrangeModalForEffect` 开窗口承接。
+ *  `actions` 一个都不删 —— 引擎靠它校验应答（窗口完成时回填的正是其中一条）。 */
 function* nova2Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   if (belowIsNova(ctx)) {
     const aAns = yield {
       kind: 'select-action', title: 'nova-2：覆盖着新星牌——你可以重排你的协议', min: 1, max: 1, optional: true, candidates: [],
+      rearrangeSide: ctx.player,
       actions: NOVA_PERMS.map((p) => `action:order:${p}`),
     };
     if (aAns.selected.length === 0) return; // 跳过（不重排）

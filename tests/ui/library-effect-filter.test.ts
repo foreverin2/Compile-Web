@@ -158,13 +158,14 @@ describe('G5 T24 判据 4：图鉴右下角效果筛选面板（桩 DOM 真跑�
     }
   });
 
-  it('标签目录 31 条 / 每个标签恰好一个勾控件 / 默认为"勾的"', () => {
+  it('标签目录 30 条 / 每个标签恰好一个勾控件 / 默认为"勾的"', () => {
     const restore = installStubDom();
     try {
       const screen = renderLibraryTree();
       const rows = byClass(screen, 'lib-effect-tag');
       expect(rows.length, '面板里的标签行数必须等于生成物的标签数').toBe(CARD_EFFECT_TAGS.length);
-      expect(rows.length).toBe(31);
+      // 2026-09-22（G5 T25）：用户删掉 `misc-window` 一类 ⇒ 31 → 30（生成物为 30 类标签）。
+      expect(rows.length).toBe(30);
       // 每行恰好一个勾控件，且 id 不重不漏
       const ids = rows.map((r) => r.dataset.tagId);
       for (const r of rows) {

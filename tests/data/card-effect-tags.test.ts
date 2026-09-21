@@ -95,6 +95,16 @@ describe('G5 T24 判据 1：生成物与生成器逐字一致', () => {
     }
   });
 
+  /**
+   * ⚠️ **这条腿的基线在 T25 被有意重写过一次**（2026-09-22）：
+   * `tools/card-effect-index.mjs` 原先只扫"登记块里**直接引用**到的函数体"，不跟 `yield*`
+   * 调用的助手 ⇒ 全仓漏两张卡（`chaos-1` 漏 `rearrangeProtocols`、`unity-0` 漏 `draw`/`flip`）。
+   * 修成传递闭包之后**解析行为确实变了**（这正是本条腿要拦的那类事，所以它当时报红是**对的**）。
+   * 处置：改前那份基线留存在 `.superpowers/g5-T25/index-before-closure.json`，
+   * 差异清单在 `.superpowers/g5-T25/rebaseline.txt`（**标签数组变了的只有那两张卡**；
+   * 其余 24 张只是 `refs` 多了"闭包展开到的函数名"，标签一个字节没动）。
+   * 基线**继续有效**：它守的是"以后有人再动解析而不说一声"。
+   */
   it('无参数输出与升级前同源（把新增的 cardTexts 摘掉之后逐字相同）', () => {
     let baseline: string;
     try {
@@ -104,7 +114,7 @@ describe('G5 T24 判据 1：生成物与生成器逐字一致', () => {
     }
     const now = JSON.parse(JSON.stringify(index)) as Record<string, unknown>;
     delete now.cardTexts;
-    expect(JSON.stringify(now, null, 2), '解析行为与升级前漂移了（cardTexts 之外还有别的差异）').toBe(
+    expect(JSON.stringify(now, null, 2), '解析行为相对基线漂移了（cardTexts 之外还有别的差异）').toBe(
       baseline.replace(/\r\n/g, '\n').trimEnd(),
     );
   });
@@ -154,10 +164,26 @@ describe('G5 T24 判据 2：标签目录与覆盖率', () => {
   });
 
   it('口径抽查：标签数、四个"只有一张卡"的标签、以及几个与分类文档对得上的数', () => {
-    // 任务书 §1 的表格是 31 行（表头那句"共 28 个"与表格自身矛盾，报告里如实记了这条）
-    expect(TAG_DEFS.length).toBe(31);
+    // 任务书 §1 的表格是 31 行（表头那句"共 28 个"与表格自身矛盾，报告里如实记了这条）；
+    // 2026-09-22（G5 T25）用户裁决**删掉 `misc-window`**（"图鉴里关于整屏窗口的分类也要改，去掉这个分类"，
+    // 把所有会重排协议的卡合到 `op-rearrange` 一类）⇒ 31 - 1 = **30**。
+    expect(TAG_DEFS.length).toBe(30);
     const count = (tag: string): number => DATA_IDS.filter((id) => tagsOfCard(index, id).includes(tag)).length;
-    expect(count('misc-window'), 'rearrangeSide 只有 momentum-4').toBe(1);
+    // ⚠️ 这里**逐字写死**（不许换成 `>= 1` / `toBeGreaterThan`）：这 9 张就是"会重排协议的卡"的全集，
+    //    少一张（`chaos-1` 曾被工具漏掉）或多一张都要红。量法与根因见 T25 报告"标签变更"一节。
+    expect(count('op-rearrange'), '会重排协议的卡不是这 9 张').toBe(9);
+    expect(DATA_IDS.filter((id) => tagsOfCard(index, id).includes('op-rearrange')).sort(),
+      '`op-rearrange` 的卡清单（用户要求"把所有重排协议效果的卡放到一起"，一个不漏）').toEqual(
+      ['chaos-1', 'flexibility-3', 'fulcrum-3', 'momentum-4', 'nova-0', 'nova-2', 'psychic-2', 'spirit-4', 'water-2'],
+    );
+    // 2026-09-22（G5 T25）：`misc-window` 这一类**已删除**（不是改名、不是保留）——
+    // 生成物里不许再有这个 id，也不许有"整屏窗口"这类单独分类。
+    expect(TAG_DEFS.some((t) => t.id === 'misc-window'), '`misc-window` 又回来了（用户要求删掉这一类）').toBe(false);
+    expect(TAG_DEFS.some((t) => (t.label ?? '').includes('整屏窗口')), '又长出一个"整屏窗口"类').toBe(false);
+    // 工具漏扫助手体的根因（T25 修：沿 `yield*` 展开传递闭包）—— 这两张是当时**唯一**漏掉的两张卡
+    expect(tagsOfCard(index, 'chaos-1'), 'chaos-1 的重排写在助手 chaos1Session 里，工具没跟 yield*').toContain('op-rearrange');
+    expect(tagsOfCard(index, 'unity-0'), 'unity-0 的 flip/draw 写在助手 flipOrDraw 里，工具没跟 yield*')
+      .toEqual(expect.arrayContaining(['op-flip', 'op-draw']));
     expect(count('op-copy'), 'copyMiddle 只有 mirror-1').toBe(1);
     expect(count('trig-before-flip'), 'before-flip 只有 metal-6').toBe(1);
     expect(count('misc-declare'), '宣告只有幸运那两张').toBe(2);

@@ -98,6 +98,69 @@ const TITLE_RE = /title:\s*(`[^`]*`|'[^']*')/;
 const CHOOSER_RE = /chooser:\s*([A-Za-z0-9_.]+)/;
 const ACTIONS_RE = /actions:\s*\[([^\]]*)\]/;
 
+/**
+ * 递归展开的**深度上限**（防环、也防"助手 A 调 B、B 调 A"这类互相递归）。
+ *
+ * 6 是量出来的：本仓最深的"登记体 → 助手 → 助手"链是 `chaos-1`（`chaos1Main` → `chaos1Session`，
+ * 2 层）；留到 6 是为了以后有人在中间再插一层时不用同时改工具。
+ */
+const SCAN_DEPTH_LIMIT = 6;
+
+/**
+ * **传递闭包：从登记的钩子体出发，沿 `yield* <name>(` 一路展开**（2026-09-22，G5 T25）。
+ *
+ * ## 它修的是什么（协调者探针已定位，见 `.superpowers/g5-T25/probe-ops-closure.mjs`）
+ *
+ * 改之前只扫"登记块里**直接**引用到的函数体"（`:151` 那个 `all` 集合）。而本仓的助手写法是
+ * 卡效主体 `yield* helper(ctx, …)`：真正产出 `op` 的那几行住在**助手**里 ⇒ 助手体从不被扫到
+ * ⇒ 那张卡的 `ops` 少一条、标签跟着少一类。全仓因此只漏两张：
+ *
+ *  - `chaos-1` 漏 `rearrangeProtocols`（重排写在助手 `chaos1Session`，`chaos.ts:72-103`）⇒
+ *    它是"会重排协议的卡"，却**没有** `op-rearrange` 标签（T25 用户要"把重排协议的卡放到一起"时才暴露）；
+ *  - `unity-0` 漏 `draw` 与 `flip`。
+ *
+ * ## 为什么是"跟 `yield*`"而不是"加一条关键词特判"
+ *
+ * 特判（"文件里出现 `x` 就算"）会把**别人**的重排算到这张卡头上，而且下次换个助手名字就再漏一次。
+ * 跟调用边是结构性的：只要 `yield*` 这条语法还在，链路就自动跟上。
+ *
+ * ## 边界（诚实声明）
+ *
+ * 只跟 `yield* <标识符>(`（本仓写助手一律是这个形状）。**不跟**：`yield { op: … }` 之外的
+ * 动态调用、`EFFECTS[...]` 之类的间接引用、跨文件调用（每个卡效文件的助手都写在同文件里）。
+ * 今天真实树里这三类都零命中；以后若出现，表现为"某张卡少一条 op"，与这条修法之前同形。
+ */
+function collectWithHelpers(src, seeds) {
+  /**
+   * `names` = 扫体的顺序（**与改前逐字一致**：先按"登记块里出现过的标识符"的发现顺序放
+   * 命中的函数，再补闭包新展开到的）。为什么不排序：`prompts` 数组会进索引 JSON（也会进
+   * "解析行为不许漂移"的基线对照），排序会把十几张卡的 `prompts` 顺序跟着改掉，
+   * 把真正的差异淹在纯顺序 diff 里（T25 实测：排序版有差异的卡 37 张、保序版 26 张，
+   * 而其中"真的多了 ops"的只有 `chaos-1` 与 `unity-0` 两张）。
+   */
+  const names = new Set();
+  const depths = new Map();
+  const scanAt = new Map();
+  const queue = [...seeds].map((name) => ({ name, depth: 0 }));
+  const seen = new Set();
+  while (queue.length > 0) {
+    const { name, depth } = queue.shift();
+    if (seen.has(name) || depth > SCAN_DEPTH_LIMIT) continue;
+    seen.add(name);
+    const body = bodyOfName(src, name);
+    if (body === null) continue;          // 撞到 `true` 这类字面量：不是函数，跳过（与改前一致）
+    names.add(name);
+    depths.set(name, depth);
+    scanAt.set(name, body);
+    const first = body.indexOf('yield*');
+    if (first < 0) continue;              // 没有 `yield*` ⇒ 省掉逐行正则（绝大多数函数体）
+    for (const m of body.matchAll(/yield\s*\*\s*([A-Za-z_$][\w$]*)\s*\(/g)) {
+      if (!seen.has(m[1])) queue.push({ name: m[1], depth: depth + 1 });
+    }
+  }
+  return { names: [...names], depths, scanAt };
+}
+
 function scan(text) {
   const ops = new Set();
   for (const m of text.matchAll(OP_RE)) ops.add(m[1]);
@@ -149,6 +212,12 @@ export function buildIndex() {
         if (bodyOfName(src, r[1]) !== null) scanned.add(r[1]);
       }
       const all = new Set([...refs, ...scanned]);
+      // ★ 2026-09-22（G5 T25）：**再沿 `yield*` 展开传递闭包** —— 只扫"登记块里直接引用的函数"
+      //   会漏掉助手体里产出的 op（`chaos-1` 的 `rearrangeProtocols` 就写在 `chaos1Session` 里）。
+      //   展开到的函数名一并记进 `refs`（它是"从这张卡的块出发、按本文件函数名可达的标识符"），
+      //   于是生成物里**看得见**这条链路（`chaos-1` 的 `refs` 会多出 `chaos1Session`）。
+      const closure = collectWithHelpers(src, all);
+      for (const name of closure.names) refs.add(name);
       // 钩子形状
       const hooks = [];
       if (/\bmiddle\s*:/.test(block)) hooks.push('middle');
@@ -176,15 +245,17 @@ export function buildIndex() {
       const prompts = [];
       const unresolved = [];
       let controlRefs = false;
-      for (const name of all) {
-        const body = bodyOfName(src, name);
-        if (body === null) { unresolved.push(name); continue; }
+      for (const name of closure.names) {
+        // 体已在闭包那一步取好（`scanAt`）—— 不再 `bodyOfName` 第二遍，免得两份读数分叉
+        const body = closure.scanAt.get(name);
         const s = scan(body);
         s.ops.forEach((o) => ops.add(o));
         prompts.push(...s.prompts.map((p) => ({ ...p, from: name })));
         // 「控制权有关」的代码口径：这段效果里读写了控制权 / 走了持控者重排 / 应答权按持控者算
         if (/s\.control|controlRearrangeFlow|ctx\.control|\bholder\b/.test(body)) controlRefs = true;
       }
+      // 登记块里引用了、但本文件找不到同名函数的标识符（如 `true`）：与改前同形地留在 unresolved
+      for (const name of all) if (bodyOfName(src, name) === null) unresolved.push(name);
       const t = texts[id] ?? null;
       cards.push({
         id,
@@ -308,7 +379,6 @@ export const TAG_DEFS = [
   { id: 'ctl-related', label: '控制权相关', group: '控制权' },
   { id: 'misc-declare', label: '宣告（幸运）', group: '其它' },
   { id: 'misc-opp-choice', label: '对手来选', group: '其它' },
-  { id: 'misc-window', label: '整屏窗口', group: '其它' },
   { id: 'misc-restrict', label: '限制 / 无效化', group: '其它' },
 ];
 
@@ -343,7 +413,6 @@ const TAG_SOURCE = {
   'ctl-related': 's.control / controlRearrangeFlow / holder，或卡面文本含"控制权"',
   'misc-declare': '选择请求标题含"宣告"',
   'misc-opp-choice': 'chooser: foe / opp / holder',
-  'misc-window': 'rearrangeSide',
   'misc-restrict': 'chaos-3 / ice-4 / ice-6 / metal-2 ＋ apathy-2 / fear-0 / rigidity-7',
 };
 
@@ -409,9 +478,22 @@ export function tagsOfCard(index, defId) {
         return c.controlRefs === true || /控制权/.test(texts);
       case 'misc-declare': return prompts.some((p) => (p.title ?? '').includes('宣告'));
       case 'misc-opp-choice': return prompts.some((p) => ['foe', 'opp', 'holder'].includes(p.chooser));
-      case 'misc-window': return prompts.some((p) => p.rearrangeSide === true);
       case 'misc-restrict': return RESTRICT_CARDS.has(defId);
       case 'op-value': return (c.hooks ?? []).includes('valueModifier');
+      /**
+       * 2026-09-22（G5 T25）：**"会重排协议的卡"这一类要一张不漏**（用户要求把它们放到一起）。
+       *
+       * 三种产出形态都算：
+       *  1. `op: 'rearrangeProtocols'` —— 点选两个协议位交换（`chaos-1` / `nova-0` / `psychic-2` /
+       *     `spirit-4` / `water-2` / `fulcrum-3`）；
+       *  2. `op: 'reorderProtocols'` —— 一次性回填整条新排列（`momentum-4` / `nova-2`）；
+       *  3. 选择请求的 `actions` 里含 `action:order:` —— 走整屏重排窗口那条路（**同一批卡的第二重保险**：
+       *     `nova-2` 的重排写在 `nova2Middle` 里、`momentum-4` 的在 `momentum4Middle` 里，`ops` 已经
+       *     覆盖，但"窗口承接"这件事只有 `actions` 这一个机器可读的痕迹）。
+       */
+      case 'op-rearrange':
+        return hasAnyOp(c, OP_TAGS['op-rearrange'])
+          || prompts.some((p) => /action:order:/.test(p.actions ?? ''));
       default: return OP_TAGS[id] === undefined ? false : hasAnyOp(c, OP_TAGS[id]);
     }
   };
@@ -432,7 +514,8 @@ const jsonLines = (arr, indent) => arr.map((x) => `${indent}${JSON.stringify(x)}
  *
  * 形状逐字照任务书 §2.2：
  *  - 第一行是"自动生成：… ——勿手改"（与 `src/data/protocolRatings.ts` 同款抬头）；
- *  - `CARD_EFFECT_TAGS` = 31 条（**以 `TAG_DEFS` 为准**），顺序 = `TAG_DEFS` 顺序；
+ *  - `CARD_EFFECT_TAGS` = **`TAG_DEFS` 的条数**（今天 30；**别在这里抄数字**，改标签时只改 `TAG_DEFS`），
+ *    顺序 = `TAG_DEFS` 顺序；
  *  - `CARD_EFFECT_TAGS_BY_CARD` = 每一张**卡面数据里的**卡（270 条，含 4 张无代码钩子的持续型），
  *    键序 = defId 码点序（`[...keys].sort()` 是码点序，不是 locale 序）。
  */
