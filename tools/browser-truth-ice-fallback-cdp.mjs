@@ -12,11 +12,17 @@
  * 修复（`src/ui/net-browser.ts` 的 `waitForIceGathering`）之后，那条路变成：
  * **上界到点先看手上已经有几个候选** —— 有 ⇒ 按现状生成邀请码 + 一句**如实**的话；
  * 0 个 ⇒ 仍然是硬失败，但理由只说"这台设备这一次一个候选都没收集到"。
+ * ★ **G5/T18 修复轮**：只有 host（没有 srflx / relay，也没配中继）时不再等满 15 秒 ——
+ * 起一段 **1.5 秒宽限**（`ICE_HOST_ONLY_GRACE_MS`），到点走上面那条"放行 + 如实 note"；
+ * 15 秒上界只留给"一个候选都没有"那一档（⑤ 的负控量的就是它）。够用（host + srflx/relay，
+ * 配了中继时必须是 relay）则**立刻**收工。屏上那句话因此有三种：空（收完）/ 含"等了"（到点）/
+ * 含"够用"（早退）—— 本工具用 `gatherOutcomeOf` 按那三个字面分类，不猜。
  *
  * **这一条证明的就是那四件事**（全部在**两个真 Chrome**上点真界面拿读数）：
  *  ① 注入一个**必然不可达**的 STUN（`stun:192.0.2.1:3478`，RFC 5737 的 TEST-NET-1）⇒
- *     `iceGatheringState` 在 15 秒上界之前**到不了** `complete`（页内探针逐条记时间线）；
- *  ② 上界到点之后**仍然产出邀请码**（形状 + 长度，长度从盘上原文里给）；
+ *     `iceGatheringState` 到不了 `complete`（页内探针逐条记时间线）；T18 起这种"只有 host"的
+ *     情形走 **1.5 秒宽限**就到点放行，**不等满 15 秒**（那 15 秒只留给 0 候选的硬失败）；
+ *  ② 宽限到点之后**仍然产出邀请码**（形状 + 长度，长度从盘上原文里给）；
  *  ③ 屏上那句话与**实测**一致：把邀请码解压开、数它 SDP 里的候选种类与个数，
  *     与 `.net-lobby-notice` 上那句里的数字逐个对上，且那句话里**没有**旧的猜测措辞；
  *  ④ 拿这条邀请码把两端**真的接起来**（加入方产出回示码 → 房主贴回 → 两端走到硬币屏），
@@ -476,6 +482,24 @@ function kindPhrases(kinds) {
   return out;
 }
 
+/**
+ * ★★ **G5/T18 修复轮：从屏上那句话读出"ICE 收集是怎么收工的"**。
+ *
+ * 为什么要有它：`note` 现在有**三种**来路（`src/ui/net-browser.ts` 的 `earlyEnoughNote` /
+ * `partialGatherNote` / 正常收完那条 `null`），所以"没有 note ⇒ 收完了"那句推断**不再成立**
+ * （早退也带话）。本函数只按屏上**确实写着**的字分类，不猜：
+ *  - 空 ⇒ `complete`（正常收完）；
+ *  - 含"等了" ⇒ `bounded`（宽限或上界到点放行，两句都长这样）；
+ *  - 含"够用" ⇒ `early`（够用就收工，`stoppedEarly: true`）。
+ */
+function gatherOutcomeOf(notice) {
+  const text = typeof notice === 'string' ? notice.trim() : '';
+  if (text.length === 0) return { kind: 'complete', text: '(屏上没有额外的话)' };
+  if (text.includes('等了')) return { kind: 'bounded', text };
+  if (text.includes('够用')) return { kind: 'early', text };
+  return { kind: 'other', text };
+}
+
 /* ── 主流程 ─────────────────────────────────────────────────────────────── */
 
 const chrome = findChrome();
@@ -589,7 +613,7 @@ try {
   say('');
 
   /* ── ① 房主：注入的 STUN 不可达 ⇒ 收集到不了 complete ──────────────────── */
-  say(`=== ① STUN 不可达（${UNREACHABLE_STUN}）⇒ iceGatheringState 到不了 complete ===`);
+  say(`=== ① STUN 不可达（${UNREACHABLE_STUN}）⇒ iceGatheringState 到不了 complete ⇒ 走 1.5 秒宽限 ===`);
   let invitePayload = null;
   /** ★ G5/T17：房主屏上那条**整条链接**（`.net-lobby-invite-link` 的正文）——用户真机粘的就是它 */
   let inviteLink = null;
@@ -633,12 +657,28 @@ try {
             + `（状态变化：${JSON.stringify(states)}；时间线：${JSON.stringify(probe?.timeline ?? null)}；`
             + `iceCandidateError ${String(probe?.errors?.length ?? 0)} 条）`
           : `居然到过 complete（${JSON.stringify(completed)}）—— "STUN 不可达"这一格没有造出来`);
+      /**
+       * ★★ **G5/T18 修复轮：只要 host 就不许等满 15 秒** —— 现在起的是 **1.5 秒宽限**
+       * （`ICE_HOST_ONLY_GRACE_MS`），到点走"放行 + 如实 `note`"。这一格钉两件事：
+       *  1. 出码时刻落在宽限那一档（≥1s 且远小于 15s 上界）⇒ 说明宽限真的生效了；
+       *  2. 屏上那句就是宽限那句（含"1.5 秒"），不是别的路的话。
+       * ⚠️ 15 秒上界本身**没被放宽**：⑤ 的 0 候选负控仍然量到 ≥14s。
+       */
+      const outcome = gatherOutcomeOf(hostNotice);
+      raw.hostOutcomeAtInvite = outcome;
+      const graceOk = typeof inviteMs === 'number' && inviteMs >= 1000 && inviteMs < 10000
+        && outcome.kind === 'bounded' && outcome.text.includes('1.5 秒');
+      push(graceOk, graceOk
+        ? `只有 host（STUN 不可达）⇒ ${String(inviteMs)}ms 就走**宽限**那一档放行了（不再等满 15 秒上界）；`
+          + `屏上那句：「${outcome.text}」`
+        : `"只有 host 时走 1.5 秒宽限"这一格不对（用时 ${String(inviteMs)}ms；`
+          + `收工方式 ${outcome.kind}；屏上：「${outcome.text}」）`);
     }
   }
   say('');
 
   /* ── ② 上界到点之后仍然产出邀请码 ─────────────────────────────────────── */
-  say('=== ② 上界到点之后仍然产出邀请码（改之前这一格恒失败） ===');
+  say('=== ② 宽限到点之后仍然产出邀请码（改之前这一格恒失败） ===');
   const shaped = typeof invitePayload === 'string' && /^\d+\.[A-Za-z0-9_-]{40,}$/.test(invitePayload);
   push(shaped, shaped
     ? `屏上产出了一条邀请码：${invitePayload.length} 个字符（用时 ${String(inviteMs)}ms）`
@@ -765,12 +805,21 @@ try {
         const guestProbeRaw = await guest.evaluate('JSON.stringify(window.__iceProbe ?? null)');
         try { raw.guestProbe = JSON.parse(String(guestProbeRaw)); } catch { raw.guestProbe = null; }
         raw.guestAnswer = typeof answerCode === 'string' && answerCode.length > 0 ? decodeInvite(answerCode) : null;
+        /**
+         * ★★ **G5/T18 修复轮**：收工方式**按屏上确实写着的字分类**（`gatherOutcomeOf`），
+         * 不再用"没有 note ⇒ 收完了"那句推断 —— 早退现在也带话，那句已经不成立了。
+         */
+        const guestOutcome = gatherOutcomeOf(guestNotice);
+        raw.guestOutcomeAtAnswer = guestOutcome;
+        push(guestOutcome.kind !== 'other', guestOutcome.kind !== 'other'
+          ? `加入方那条路的收工方式可读：${guestOutcome.kind}（${guestOutcome.text}）`
+          : `加入方屏上那句话读不出收工方式（既不是空、也不含"等了/够用"）：「${guestOutcome.text}」`);
         push(typeof answerCode === 'string' && answerCode.length > 0,
           typeof answerCode === 'string' && answerCode.length > 0
             ? `加入方产出了回示码：${answerCode.length} 个字符（用时 ${String(raw.guestAnswerMs)}ms；`
               + `收方那条路的候选 ${String(raw.guestAnswer?.candidates?.length ?? 0)} 个 `
               + `${JSON.stringify(raw.guestAnswer?.kinds ?? null)}；`
-              + `屏上那句：${guestNotice === null || guestNotice.length === 0 ? '（没有额外的话 ⇒ 它那条路是"收完了"而不是上界放行）' : `「${guestNotice}」`}）`
+              + `收工方式：${guestOutcome.kind}）`
             : `加入方没有产出回示码（屏上：${(await guest.text('.net-lobby-error')) ?? (await guest.text('.net-lobby-notice')) ?? '无'}）`);
       }
     }

@@ -124,6 +124,58 @@
   color: #99a;
 }
 
+/* ── G5 T18：一键复制（载荷那一行 + 按钮 + 那行读数） ────────────────
+ *
+ * 视觉分工：**载荷那一行**是主角（等宽、可手选），按钮就在它下面一行；
+ * 整条链接退到 `details` 的小字里（不展开就看不到那串码的第二遍）。
+ */
+
+/* 载荷那一行是主角：比链接那行更亮、带个底框，而且是**可手选**的（复制失败时的退路） */
+.net-lobby-invite-payload,
+.net-lobby-answer-code {
+  padding: 8px 10px;
+  border: 1px solid #34345a;
+  border-radius: 8px;
+  background: rgba(10, 10, 22, 0.9);
+  font-size: 13px;
+  color: #cff;
+  user-select: text;
+}
+
+.net-lobby-copy-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.net-lobby-copy {
+  padding: 6px 14px;
+  border: 1px solid #2f8f7e;
+  border-radius: 8px;
+  background: rgba(0, 255, 204, 0.08);
+  color: #cff;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.net-lobby-copy-status {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #ffd48a;
+}
+
+.net-lobby-invite-link-more {
+  margin-top: 10px;
+  font-size: 12px;
+  color: #889;
+}
+
+.net-lobby-invite-link-summary {
+  cursor: pointer;
+}
+
 .net-lobby-code,
 .net-lobby-paste {
   margin-bottom: 10px;

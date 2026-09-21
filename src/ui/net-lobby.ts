@@ -3092,6 +3092,114 @@ export interface LobbyRenderNav {
   applyAnswerCode(code: string): void;
 }
 
+/* ==================================================================== *
+ * 7b. ★★ G5 T18：一键复制（那串载荷 / 整条链接）
+ * ==================================================================== */
+
+/**
+ * 剪贴板的最小结构面（**只写**：本文件不读剪贴板）。
+ *
+ * ⚠️ 这是 `src/ui/**` 里**允许**碰浏览器 API 的那一层 —— `src/net` / `src/app` 的纯净约束
+ * 不管这里（扫描面见 `tests/net/net-purity.test.ts`、`tests/app-purity.test.ts`）。
+ * 这一层碰它的理由：`navigator.clipboard` **只**在浏览器里有，而"复制"是纯界面动作。
+ */
+export interface ClipboardWriter {
+  writeText(text: string): Promise<void>;
+}
+
+/**
+ * 取浏览器的剪贴板；取不到就回 `null`（**不抛**）。
+ *
+ * 取不到是**正常情况**之一：非 https / localhost 的页面、老浏览器、被策略关掉的实现。
+ * 那种时候屏上给的是"没有剪贴板接口"那一句，而不是假装复制成功。
+ */
+export function browserClipboard(): ClipboardWriter | null {
+  const nav = (globalThis as { navigator?: { clipboard?: ClipboardWriter } }).navigator;
+  const c = nav?.clipboard;
+  return c !== undefined && typeof c.writeText === 'function' ? c : null;
+}
+
+/** 复制成功那一句（短、说人话；`what` 是"邀请码 / 回示码 / 链接"） */
+export function copyOkText(what: string): string {
+  return `已复制${what}。`;
+}
+
+/** 浏览器**明确拒绝**（不给剪贴板权限，或写失败）那一句：如实说 + 给出退路 */
+export function copyDeniedText(): string {
+  return '复制不了（浏览器不给剪贴板权限），请手动全选复制。';
+}
+
+/** 这台浏览器**根本没有**剪贴板接口那一句（非 https / localhost 的页面很常见） */
+export function copyUnavailableText(): string {
+  return '复制不了（这个页面没有剪贴板接口；不是 https 或 localhost 时常见），请手动全选复制。';
+}
+
+/**
+ * 复制一段文本，并把**如实**的结论写进 `status`（那一行就是屏上的读数）。
+ *
+ * 三个分支，一个都不许含糊：
+ *  - 真写进去了（`writeText` 的 Promise resolve 了）⇒ `copyOkText`；
+ *  - 浏览器拒了 / 写失败 ⇒ `copyDeniedText`（**绝不假装成功**）；
+ *  - 没有剪贴板接口 ⇒ `copyUnavailableText`。
+ *
+ * ⚠️ `clipboard` 是**参数**（缺省取浏览器真件）⇒ 三个分支都能在 node 的 DOM 桩上真跑一遍。
+ */
+export async function copyTextWithStatus(
+  text: string,
+  what: string,
+  status: HTMLElement,
+  clipboard: ClipboardWriter | null = browserClipboard(),
+): Promise<boolean> {
+  if (clipboard === null) {
+    status.textContent = copyUnavailableText();
+    return false;
+  }
+  try {
+    await clipboard.writeText(text);
+  } catch {
+    status.textContent = copyDeniedText();
+    return false;
+  }
+  status.textContent = copyOkText(what);
+  return true;
+}
+
+/**
+ * 尽力把那个节点的文字**选中**（复制失败时的退路：玩家按 Ctrl+C 就能拿走）。
+ *
+ * 选不中就算了 —— 那一行本来就是可手选的，这里只是替他省一步。**不抛**。
+ */
+function selectNodeContents(node: HTMLElement): void {
+  const g = globalThis as {
+    getSelection?: () => { removeAllRanges(): void; addRange(r: unknown): void } | null;
+    document?: { createRange?: () => { selectNodeContents(n: unknown): void } };
+  };
+  try {
+    const range = g.document?.createRange?.();
+    if (range === undefined) return;
+    range.selectNodeContents(node);
+    const sel = g.getSelection?.() ?? null;
+    if (sel === null) return;
+    sel.removeAllRanges();
+    sel.addRange(range);
+  } catch { /* 选不中就算了（无头 / 没有 selection 的环境） */ }
+}
+
+/**
+ * "复制某个东西"的那个按钮（**一键复制的唯一形状**）：点了之后 `status` 那一行是唯一读数。
+ *
+ * 失败时顺带把 `source` 的文字选中，并且**绝不**把状态改成成功。
+ */
+function copyButton(
+  cls: string, label: string, text: string, what: string, status: HTMLElement, source: HTMLElement,
+): HTMLButtonElement {
+  return button(`btn net-lobby-copy ${cls}`, label, () => {
+    void copyTextWithStatus(text, what, status).then((ok) => {
+      if (!ok) selectNodeContents(source);
+    });
+  });
+}
+
 function el(tag: string, cls: string, text?: string): HTMLElement {
   const node = document.createElement(tag);
   node.className = cls;
@@ -3175,18 +3283,37 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
   /* ── 2. 房主：邀请码 ───────────────────────────────────────────── */
   if (s.role === 'host') {
     const box = el('div', 'net-lobby-invite');
-    box.appendChild(el('h2', 'net-lobby-h2', '把这条邀请链接发给对方'));
+    box.appendChild(el('h2', 'net-lobby-h2', '把这条邀请码发给对方'));
     if (s.invite === null) {
       box.appendChild(button('btn net-lobby-make-invite', '生成邀请码', nav.makeInvite));
     } else if (!s.invite.ok) {
       // 生成失败的原因来自宿主（压缩能力缺失之类），本文件只转发它
       box.appendChild(line('net-lobby-error', s.invite.message));
     } else {
-      // ★ 载荷只进 fragment（判据 6）：`link` 由 `inviteLinkOf` 组装，本文件不碰 query
-      box.appendChild(line('net-lobby-invite-link', s.invite.link));
-      box.appendChild(line('net-lobby-invite-payload', s.invite.payload));
+      /**
+       * ★★ **G5 T18：屏上只出现一次那条可复制的载荷，复制靠按钮。**
+       *
+       * 用户真机实测的两件事：① 那一块"不好复制"（屏上先是 `http://…/#invite=…` 那条链接，
+       * 载荷跟在后面）；② 同一串码**显示了两遍**（链接的 fragment 里一遍、载荷那一行一遍）。
+       * 现在：`.net-lobby-invite-payload` 那一行是**唯一**显示载荷的地方，紧挨着
+       * 「复制邀请码」；链接形态退到**默认折叠的小字**里（`.net-lobby-invite-link` 的正文
+       * 一字未变 —— T17 让对手可以直接粘整条链接，真浏览器门读的就是它）。
+       */
+      const payloadLine = line('net-lobby-invite-payload', s.invite.payload);
+      const copyStatus = line('net-lobby-copy-status', '');
+      box.appendChild(payloadLine);
       // 长度读数**只能**来自 T7 的唯一取值路径（判据 9：本文件里零命中那两个区间数）
       box.appendChild(el('p', 'net-lobby-invite-length', nav.inviteLength(s.invite.payload)));
+      const row = el('div', 'net-lobby-copy-row');
+      row.appendChild(copyButton('net-lobby-copy-invite', '复制邀请码', s.invite.payload, '邀请码', copyStatus, payloadLine));
+      const linkLine = line('net-lobby-invite-link', s.invite.link);
+      row.appendChild(copyButton('net-lobby-copy-link', '复制链接', s.invite.link, '链接', copyStatus, linkLine));
+      box.appendChild(row);
+      box.appendChild(copyStatus);
+      const more = el('details', 'net-lobby-invite-link-more');
+      more.appendChild(el('summary', 'net-lobby-invite-link-summary', '链接形态（也可以把整条链接发过去）'));
+      more.appendChild(linkLine);
+      box.appendChild(more);
     }
     // 二维码形态**只留占位**（D17）：编码器另开任务，本文件不许实现它
     box.appendChild(el('p', 'net-lobby-qr-note', nav.qrNote()));
@@ -3223,8 +3350,17 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
     if (s.answerCode === null) {
       ansBox.appendChild(button('btn net-lobby-make-answer', '出示回示码', nav.makeAnswerCode));
     } else {
-      // 载荷本体（与邀请码同形状）；房主把它粘回来
-      ansBox.appendChild(line('net-lobby-answer-code', s.answerCode));
+      /**
+       * 载荷本体（与邀请码同形状）；房主把它粘回来。
+       *
+       * ★ G5 T18：与邀请码那一块同款 —— 屏上**只出现一次**这条码，复制走「复制回示码」
+       * （回示码没有链接形态，所以这里只有那一个按钮）。
+       */
+      const codeLine = line('net-lobby-answer-code', s.answerCode);
+      const ansStatus = line('net-lobby-copy-status', '');
+      ansBox.appendChild(codeLine);
+      ansBox.appendChild(copyButton('net-lobby-copy-answer', '复制回示码', s.answerCode, '回示码', ansStatus, codeLine));
+      ansBox.appendChild(ansStatus);
     }
     box.appendChild(ansBox);
     screen.appendChild(box);

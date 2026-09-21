@@ -28,7 +28,8 @@ import {
 } from './net-dom-stub';
 import { stripComments } from './source-text';
 import {
-  LOBBY_ERROR_KEYS, LOBBY_LINK_COPY, PASTE_SHAPE_HINT, createLobbyClient, createLobbySessionLink,
+  LOBBY_ERROR_KEYS, LOBBY_LINK_COPY, PASTE_SHAPE_HINT, copyDeniedText, copyOkText, copyTextWithStatus,
+  copyUnavailableText, createLobbyClient, createLobbySessionLink,
   errorCopy,
   errorKeyOfRejection, lobbyLinkOf, lobbyLinkText, protoOfPayload, qrNote, refusalNotice,
   relayNoticeOf, relayStateOf, renderNetLobby,
@@ -38,9 +39,10 @@ import { PRIVACY_COPY, privacyLines } from '../../src/app/privacy';
 import {
   acceptOffer, applyAnswer, candidateKindsOf, candidateTypeOf, createBrowserTransport, createInvite,
   decodeBase64Url, decodeInviteFromAddressBar, decodeInvitePayload,
-  decompressBytes, describeCandidates, inviteLengthReport, peerConnectionOf, readIceServers, roomCodeEntry,
+  decompressBytes, describeCandidates, enoughCandidatesForInvite, inviteLengthReport, peerConnectionOf,
+  readIceServers, roomCodeEntry,
   stripInviteFromAddressBar, waitForIceGathering,
-  DEFAULT_ICE_GATHER_TIMEOUT_MS, MESSAGE_CHANNEL,
+  DEFAULT_ICE_GATHER_TIMEOUT_MS, ICE_HOST_ONLY_GRACE_MS, MESSAGE_CHANNEL,
   type NetBrowserEnv, type WebSocketLike,
 } from '../../src/ui/net-browser';
 
@@ -2241,6 +2243,194 @@ describe('★ 修复轮 B2 · 等 ICE 收集的**上界**（唯一失败形态�
     if (!r.ok) expect(r.reason, '原因不是 no-description').toBe('no-description');
   });
 
+  /* ── ★★ G5 T18：够用就收工（"点「生成邀请码」要干等十几秒"那件事） ──────────
+   *
+   * 四条腿（修复轮按评审判据 1 补的）：
+   *  ① `host + srflx`（没配中继）⇒ **立刻**收工（连上界计时器都不排）；
+   *  ② 配了中继（`settings.turn*` 三项齐）⇒ **relay 没到手就不许收工**，哪怕 srflx 已经到手；
+   *     `host + relay` 才算够用（`relayConfigured` 为真时只认 relay）；
+   *  ③ 只有 host ⇒ 起 **1.5 秒宽限**，宽限到点放行 + 一句如实 `note`（不再等满 15 秒上界）；
+   *  ④ 变异（"配了中继但 relay 未到就收工"）⇒ ② 必须红 —— 见报告里手工变异那一段。
+   */
+
+  /** 只有最后一个排下的计时器（宽限那条腿要用：上界那条不许跟着一起响） */
+  function clock(): {
+    t: { schedule(fn: () => void, ms: number): number; cancel(h: number): void };
+    ms: number[];
+    fireLast(): void;
+    cancelled(): number;
+  } {
+    let next = 1;
+    const jobs = new Map<number, () => void>();
+    const ms: number[] = [];
+    let cancelledCount = 0;
+    return {
+      t: {
+        schedule: (fn: () => void, m: number) => { const id = next++; jobs.set(id, fn); ms.push(m); return id; },
+        cancel: (id: number) => { cancelledCount += 1; jobs.delete(id); },
+      },
+      ms,
+      fireLast: () => {
+        const ids = [...jobs.keys()];
+        const id = ids[ids.length - 1];
+        const fn = jobs.get(id);
+        jobs.delete(id);
+        fn?.();
+      },
+      cancelled: () => cancelledCount,
+    };
+  }
+
+  /** 一个能"逐条吐候选"的最小假件：SDP 可改、能派发 `icecandidate` */
+  function candPc(initialSdp: string): {
+    pc: Record<string, unknown>;
+    fire(t: string): void;
+    setSdp(s: string): void;
+  } {
+    const listeners = new Map<string, Array<(ev: unknown) => void>>();
+    let sdp = initialSdp;
+    const pc: Record<string, unknown> = {
+      iceGatheringState: 'gathering',
+      get localDescription(): { type: string; sdp: string } { return { type: 'offer', sdp }; },
+      addEventListener: (t: string, cb: (ev: unknown) => void): void => {
+        const arr = listeners.get(t) ?? [];
+        arr.push(cb);
+        listeners.set(t, arr);
+      },
+    };
+    return {
+      pc,
+      fire: (t: string) => { for (const cb of [...(listeners.get(t) ?? [])]) cb({}); },
+      setSdp: (s: string) => { sdp = s; },
+    };
+  }
+
+  /** 假件里的三种候选（形状与真 SDP 同族） */
+  const HOST_C = 'a=candidate:1 1 udp 1 127.0.0.1 5000 typ host\r\n';
+  const SRFLX_C = 'a=candidate:2 1 udp 1 203.0.113.7 6100 typ srflx raddr 10.0.0.9 rport 6000\r\n';
+  const RELAY_C = 'a=candidate:3 1 udp 1 198.51.100.7 6200 typ relay raddr 203.0.113.7 rport 6100\r\n';
+  /** 配齐三项 TURN 的设置（`readIceServers` 会判 `relayConfigured: true`） */
+  const TURN_SETTINGS = (): { turnUrl: string; turnUsername: string; turnCredential: string } =>
+    ({ turnUrl: 'turn:x.invalid:3478', turnUsername: 'u', turnCredential: 'c' });
+
+  it('★★ T18①：`enoughCandidatesForInvite` 只认"host ≥ 1 且（srflx 或 relay）"；配了中继时只认 relay', () => {
+    const host = 'candidate:1 1 udp 1 127.0.0.1 5000 typ host';
+    const mdns = 'candidate:1 1 udp 1 abcd.local 5000 typ host generation 0';
+    const srflx = 'candidate:2 1 udp 1 203.0.113.7 6100 typ srflx raddr 10.0.0.9 rport 6000';
+    const relay = 'candidate:3 1 udp 1 198.51.100.7 6200 typ relay raddr 203.0.113.7 rport 6100';
+    expect(enoughCandidatesForInvite([]), '一个候选都没有也算够用').toBe(false);
+    expect(enoughCandidatesForInvite([host]), '只有 host 也算够用').toBe(false);
+    expect(enoughCandidatesForInvite([relay]), '只有 relay（没有本机候选）也算够用').toBe(false);
+    expect(enoughCandidatesForInvite([srflx]), '没有本机候选也算够用').toBe(false);
+    expect(enoughCandidatesForInvite([mdns, srflx]), 'mDNS 形态的本机候选没被认成 host').toBe(true);
+    expect(enoughCandidatesForInvite([host, srflx]), 'host + srflx 不算够用').toBe(true);
+    // ★ 修复轮：没配中继时 relay 也算够用（别的 STUN 挂了但 TURN 通了那种网络）
+    expect(enoughCandidatesForInvite([host, relay]), 'host + relay（没配中继）不算够用').toBe(true);
+    // ★ 修复轮：配了中继的玩家只认 relay —— 光有 srflx 就收工会把中继砍掉（评审判据 1）
+    expect(enoughCandidatesForInvite([host, srflx], true), '配了中继时光有 srflx 就算够用（relay 会被砍掉）').toBe(false);
+    expect(enoughCandidatesForInvite([host], true), '配了中继时只有 host 也算够用').toBe(false);
+    expect(enoughCandidatesForInvite([host, relay], true), 'host + relay（配了中继）不算够用').toBe(true);
+  });
+
+  it('★★ T18①：本机候选 + srflx 都在描述里 ⇒ **立刻**收工（不排计时器）+ 一句可读的 `stoppedEarly`', async () => {
+    const clk = ticker();
+    const { pc } = makeFakePc({
+      iceGatheringState: 'gathering',
+      localSdp: `v=0\r\n${HOST_C}${SRFLX_C}`,
+    });
+    const r = await waitForIceGathering(pc as never, { ticker: clk.t, iceGatherTimeoutMs: 1_234 });
+    expect(r.ok, `够用了却失败了：${r.ok ? '' : r.message}`).toBe(true);
+    if (r.ok) {
+      // 它**没到**上界 ⇒ 不许标成"到点放行"，但**必须**能被下游认出来是早退
+      expect(r.timedOut, '够用收工被标成了"上界到点放行"').toBe(false);
+      expect(r.stoppedEarly, '早退没有被标出来（下游只能按"没 note 就是收完了"误读）').toBe(true);
+      expect(r.note ?? '', '早退没有一句如实的话').toContain('够用');
+      expect(r.ice.length, '候选没被带出来').toBe(2);
+    }
+    expect(clk.scheduled(), '够用了还排了上界计时器（那就是"又等十几秒"的来源）').toEqual([]);
+    expect(clk.cancelled(), '够用了还取消了一个不存在的计时器').toEqual([]);
+  });
+
+  it('★★ T18②：配了中继、relay **还没到手** ⇒ 不许收工（到点才放行 + 补一句）；host+relay 才收工', async () => {
+    // ① 配了中继，srflx 到手（relay 未到）⇒ 仍然 pending
+    const clk = clock();
+    const f = candPc(`v=0\r\n${HOST_C}`);
+    const p = waitForIceGathering(f.pc as never, {
+      ticker: clk.t, iceGatherTimeoutMs: 9_999, settings: TURN_SETTINGS,
+    });
+    expect(clk.ms, '这一刻只该排上界').toEqual([9_999]);
+    f.setSdp(`v=0\r\n${HOST_C}${SRFLX_C}`);
+    f.fire('icecandidate');
+    expect(await Promise.race([p.then(() => 'settled'), Promise.resolve('pending')]),
+      '配了中继却在 relay 未到时收工了（那会把中继砍掉：跨网那一档退化成直连失败）').toBe('pending');
+    expect(clk.ms, '配了中继时不该排宽限（那一档必须等 relay 或到上界）').toEqual([9_999]);
+    clk.fireLast();
+    const r = await p;
+    expect(r.ok, `到点却失败了：${r.ok ? '' : r.message}`).toBe(true);
+    if (r.ok) {
+      expect(r.timedOut, '到点放行没有标记 `timedOut`').toBe(true);
+      expect(r.stoppedEarly, '到点放行被标成了"够用就收工"').toBe(false);
+      expect(r.note ?? '', '配了中继却没拿到 relay，`note` 里没有那句话').toContain('你配了中继');
+    }
+    // ② relay 到手（配了中继）⇒ 立刻收工，且那句 note 说的是"中继地址"
+    const clk2 = clock();
+    const g = candPc(`v=0\r\n${HOST_C}`);
+    const p2 = waitForIceGathering(g.pc as never, {
+      ticker: clk2.t, iceGatherTimeoutMs: 9_999, settings: TURN_SETTINGS,
+    });
+    g.setSdp(`v=0\r\n${HOST_C}${RELAY_C}`);
+    g.fire('icecandidate');
+    const r2 = await p2;
+    expect(r2.ok, `relay 到手却没收工：${r2.ok ? '' : r2.message}`).toBe(true);
+    if (r2.ok) {
+      expect(r2.stoppedEarly, 'relay 到手了却没被标成早退').toBe(true);
+      expect(r2.note ?? '', 'relay 到手那句 note 没说中继').toContain('中继地址');
+    }
+    expect(clk2.cancelled(), 'relay 到手收工之后没有取消上界计时器').toBe(1);
+    // ③ 没配中继时 relay 同样算够用（别的 STUN 不通、TURN 通那种网络）
+    const clk3 = clock();
+    const h = candPc(`v=0\r\n${HOST_C}`);
+    const p3 = waitForIceGathering(h.pc as never, { ticker: clk3.t, iceGatherTimeoutMs: 9_999 });
+    h.setSdp(`v=0\r\n${HOST_C}${RELAY_C}`);
+    h.fire('icecandidate');
+    const r3 = await p3;
+    expect(r3.ok && r3.stoppedEarly, '没配中继时 host + relay 也该收工').toBe(true);
+  });
+
+  it('★★ T18③：只有 host（没配中继）⇒ 1.5 秒宽限后放行 + 如实 `note`（不等满上界）', async () => {
+    const clk = clock();
+    const f = candPc(`v=0\r\n${HOST_C}`);
+    const p = waitForIceGathering(f.pc as never, { ticker: clk.t, iceGatherTimeoutMs: 9_999 });
+    expect(clk.ms, '这一刻只该排上界').toEqual([9_999]);
+    f.fire('icecandidate');
+    expect(clk.ms, `只有 host 时没有起宽限（排的是 ${JSON.stringify(clk.ms)}）`)
+      .toEqual([9_999, ICE_HOST_ONLY_GRACE_MS]);
+    expect(await Promise.race([p.then(() => 'settled'), Promise.resolve('pending')]),
+      '宽限还没到就放行了').toBe('pending');
+    clk.fireLast(); // 宽限到点（上界那条不许跟着响）
+    const r = await p;
+    expect(r.ok, `宽限到点却失败了：${r.ok ? '' : r.message}`).toBe(true);
+    if (r.ok) {
+      expect(r.timedOut, '宽限放行没有标成"到点还没收完"').toBe(true);
+      expect(r.stoppedEarly, '宽限放行被标成了"够用就收工"').toBe(false);
+      expect(r.note ?? '', '宽限那句里没有 1.5 秒（那就还是等满上界的口径）').toContain('1.5 秒');
+      expect(r.note ?? '', '宽限那句没说清只有本机候选').toContain('本机');
+    }
+    expect(clk.cancelled(), '放行之后没有把两个计时器都收掉').toBe(2);
+  });
+
+  it('★★ T18③：一个候选都没有 ⇒ **不排宽限**（那一档照旧走满 15 秒上界）', async () => {
+    const clk = clock();
+    const f = candPc('v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\n');
+    const p = waitForIceGathering(f.pc as never, { ticker: clk.t, iceGatherTimeoutMs: 9_999 });
+    f.fire('icecandidate');
+    expect(clk.ms, '一个候选都没有却排了宽限（那会把 0 候选的硬失败预算砍短）').toEqual([9_999]);
+    clk.fireLast();
+    const r = await p;
+    expect(r.ok, '0 候选竟然放行了').toBe(false);
+    if (!r.ok) expect(r.reason, '0 候选的理由不是 ice-timeout').toBe('ice-timeout');
+  });
+
   it('★ B3：房主把回示的 answer 喂进**同一条**连接（`applyAnswer`）', async () => {
     const { pc, fake } = makeFakePc({});
     const r = await applyAnswer(pc as never, { sdp: 'ANSWER-SDP-9' });
@@ -2251,6 +2441,163 @@ describe('★ 修复轮 B2 · 等 ICE 收集的**上界**（唯一失败形态�
     // 反证：空 answer 被响亮拒绝
     const bad = await applyAnswer(pc as never, { sdp: '' });
     expect(bad.ok, '空 answer 竟然被接受了').toBe(false);
+  });
+});
+
+/* ==================================================================== *
+ * 6b. ★★ G5 T18：屏上只显示一次那条码 + 一键复制（成功 / 失败两态）
+ * ==================================================================== */
+
+describe('★★ G5 T18 · 邀请码 / 回示码：屏上只显示一次 + 一键复制', () => {
+  /** 一条形状合法的邀请码载荷（`1.` + 足够的 base64url 片段） */
+  const PAYLOAD = `1.${'A'.repeat(60)}`;
+  /** 它的链接形态（由唯一出处 `inviteLinkOf` 组装 —— 测试自己也不拼 `#invite=`） */
+  const LINK = inviteLinkOf('https://x.invalid/lobby', PAYLOAD);
+
+  /**
+   * 这个节点是不是在**没展开的** `details` 里。
+   *
+   * 浏览器不会显示没展开的 `details` 里的内容 ⇒ 用它区分"屏上看得见"与"在 DOM 里但没显示"。
+   * 桩上 `details` 没有 `open` 属性（= 缺省收起），与真实 DOM 的缺省语义一致。
+   */
+  function inClosedDetails(n: StubNode): boolean {
+    for (let p = n.parentElement; p !== null; p = p.parentElement) {
+      if (p.tag.toLowerCase() === 'details' && (p as unknown as { open?: unknown }).open !== true) return true;
+    }
+    return false;
+  }
+
+  /** 装一个假 `navigator.clipboard`（node 下没有；装/拆都用 defineProperty，可配置） */
+  async function withClipboard(clipboard: unknown, body: () => Promise<void>): Promise<void> {
+    const desc = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+    Object.defineProperty(globalThis, 'navigator', { value: { clipboard }, configurable: true, writable: true });
+    try { await body(); } finally {
+      if (desc) Object.defineProperty(globalThis, 'navigator', desc);
+      else Reflect.deleteProperty(globalThis, 'navigator');
+    }
+  }
+
+  /** 等点击里那条异步的复制链跑完（`writeText` 是 async 的 ⇒ 让宏任务转两圈） */
+  const flush = async (): Promise<void> => { await new Promise((r) => setTimeout(r, 20)); };
+
+  const HOST_INVITE = { role: 'host' as const, invite: { ok: true as const, payload: PAYLOAD, link: LINK } };
+
+  it('★★ 房主屏：载荷那一行是**唯一**默认看得见的码，链接退到折叠里（两种形态都还拿得到）', () => {
+    const h = mountLobby(HOST_INVITE);
+    h.render();
+    // ① 载荷元素恰一个，正文**逐字**就是那条裸载荷（真浏览器门读的就是它）
+    const payloadEl = oneOf(h.root, '.net-lobby-invite-payload');
+    expect(payloadEl.text, '载荷元素的正文不是那条裸载荷').toBe(PAYLOAD);
+    // ② 默认看得见的文本里，含这条载荷的节点**只有它一个**（第二遍在折叠区里，不算显示）
+    const shown = descendants(h.root).filter((n) => !inClosedDetails(n) && n.text.includes(PAYLOAD));
+    expect(shown.length, `屏上默认看得见的载荷出现了 ${shown.length} 次（要求恰好 1 次）`).toBe(1);
+    expect(shown[0], '那唯一一次不是载荷那一行').toBe(payloadEl);
+    // ③ 链接形态仍然拿得到：正文逐字是整条链接，且它退在折叠区里
+    const linkEl = oneOf(h.root, '.net-lobby-invite-link');
+    expect(linkEl.text, '链接元素的正文不是整条链接').toBe(LINK);
+    expect(inClosedDetails(linkEl), '链接那一行没有退到折叠里（屏上还是显示两遍）').toBe(true);
+    // ④ 长度读数照旧（正文只来自唯一取值路径，本文件不写区间常量）
+    expect(oneOf(h.root, '.net-lobby-invite-length').text.length, '长度读数是空的').toBeGreaterThan(0);
+    // ⑤ 两个按钮的文案（短、说人话、不带术语）
+    expect(oneOf(h.root, 'button.net-lobby-copy-invite').text).toBe('复制邀请码');
+    expect(oneOf(h.root, 'button.net-lobby-copy-link').text).toBe('复制链接');
+  });
+
+  it('★★ 加入方屏：回示码只显示一次 + 「复制回示码」', () => {
+    const h = mountLobby({ role: 'guest', answerCode: PAYLOAD });
+    h.render();
+    const codeEl = oneOf(h.root, '.net-lobby-answer-code');
+    expect(codeEl.text, '回示码元素的正文不是那条裸载荷').toBe(PAYLOAD);
+    const shown = descendants(h.root).filter((n) => n.text.includes(PAYLOAD));
+    expect(shown.length, `屏上出现了 ${shown.length} 次回示码（要求恰好 1 次）`).toBe(1);
+    expect(oneOf(h.root, 'button.net-lobby-copy-answer').text).toBe('复制回示码');
+  });
+
+  it('★★ 复制成功态：点了按钮 ⇒ 载荷真的进了剪贴板，读数是成功那一句', async () => {
+    const h = mountLobby(HOST_INVITE);
+    h.render();
+    const written: string[] = [];
+    await withClipboard({ writeText: async (t: string) => { written.push(t); } }, async () => {
+      click(h.root, 'button.net-lobby-copy-invite');
+      await flush();
+      expect(written, '点了「复制邀请码」却没把那条载荷交给剪贴板').toEqual([PAYLOAD]);
+      expect(oneOf(h.root, '.net-lobby-copy-status').text, '成功那行读数不对').toBe(copyOkText('邀请码'));
+      expect(textOf(h.root).includes('复制不了'), '成功了却写着"复制不了"').toBe(false);
+    });
+    // 链接那个按钮走的是同一条路，只是交给剪贴板的是整条链接
+    const writtenLink: string[] = [];
+    await withClipboard({ writeText: async (t: string) => { writtenLink.push(t); } }, async () => {
+      click(h.root, 'button.net-lobby-copy-link');
+      await flush();
+      expect(writtenLink, '点了「复制链接」却没把整条链接交给剪贴板').toEqual([LINK]);
+      expect(oneOf(h.root, '.net-lobby-copy-status').text).toBe(copyOkText('链接'));
+    });
+  });
+
+  it('★★ 复制失败态（浏览器拒绝）：**不假装成功**，读数给出如实退路，且载荷仍可手选', async () => {
+    const h = mountLobby(HOST_INVITE);
+    h.render();
+    await withClipboard({ writeText: async () => { throw new Error('NotAllowedError'); } }, async () => {
+      click(h.root, 'button.net-lobby-copy-invite');
+      await flush();
+      const status = oneOf(h.root, '.net-lobby-copy-status').text;
+      expect(status, '拒绝那一态的读数不是那句如实的提示').toBe(copyDeniedText());
+      expect(status.includes('复制不了'), '失败读数没有说"复制不了"').toBe(true);
+      expect(status.includes('手动全选复制'), '失败读数没给退路').toBe(true);
+      expect(textOf(h.root).includes('已复制'), '失败了还出现"已复制"（假装成功）').toBe(false);
+      // 退路真的在屏上：那条载荷还在、正文没变（玩家能手动全选）
+      expect(oneOf(h.root, '.net-lobby-invite-payload').text).toBe(PAYLOAD);
+    });
+  });
+
+  it('★★ 复制失败态（这台浏览器没有剪贴板接口）：另一句读数，同样不假装成功', async () => {
+    const h = mountLobby(HOST_INVITE);
+    h.render();
+    // 连 `navigator` 本身都摘掉（非 https / localhost 的页面就是这一类）
+    const desc = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+    Reflect.deleteProperty(globalThis, 'navigator');
+    try {
+      click(h.root, 'button.net-lobby-copy-invite');
+      await flush();
+      expect(oneOf(h.root, '.net-lobby-copy-status').text, '没有剪贴板接口时的读数不对')
+        .toBe(copyUnavailableText());
+      expect(textOf(h.root).includes('已复制'), '没有接口还写着"已复制"（假装成功）').toBe(false);
+    } finally {
+      if (desc) Object.defineProperty(globalThis, 'navigator', desc);
+    }
+  });
+
+  it('★★ 剪贴板那条路是**注入可测**的（`copyTextWithStatus` 三态各自可读）', async () => {
+    const status = makeStubEl('p') as unknown as HTMLElement;
+    expect(await copyTextWithStatus(PAYLOAD, '邀请码', status, { writeText: async () => {} }),
+      'resolve 了却报失败').toBe(true);
+    expect(status.textContent).toBe(copyOkText('邀请码'));
+    expect(await copyTextWithStatus(PAYLOAD, '邀请码', status, { writeText: async () => { throw new Error('x'); } }),
+      '拒绝了却报成功').toBe(false);
+    expect(status.textContent).toBe(copyDeniedText());
+    expect(await copyTextWithStatus(PAYLOAD, '邀请码', status, null), '没有接口却报成功').toBe(false);
+    expect(status.textContent).toBe(copyUnavailableText());
+    // 三句话两两不同（不许把三种结局写成同一句）
+    expect(new Set([copyOkText('邀请码'), copyDeniedText(), copyUnavailableText()]).size).toBe(3);
+  });
+
+  it('★★ 真浏览器门依赖的那七个选择器与它们的语义都在（T18 只是**绕着**它们做）', () => {
+    // 房主屏：邀请码三件（link / payload / length）+ 粘回示码那个框 + 提示行
+    const host = mountLobby({ ...HOST_INVITE, notice: '上界到点那句话' });
+    host.render();
+    expect(oneOf(host.root, '.net-lobby-invite-link').text, '`.net-lobby-invite-link` 的正文变了').toBe(LINK);
+    expect(oneOf(host.root, '.net-lobby-invite-payload').text, '`.net-lobby-invite-payload` 的正文变了').toBe(PAYLOAD);
+    expect(/\d/.test(oneOf(host.root, '.net-lobby-invite-length').text), '`.net-lobby-invite-length` 里没有数字了').toBe(true);
+    expect(queryAllIn(host.root, '.net-lobby-paste-input').length, '房主屏上不该有粘贴邀请码的框').toBe(0);
+    expect(oneOf(host.root, '.net-lobby-notice').text, '`.net-lobby-notice` 的正文变了').toBe('上界到点那句话');
+
+    // 加入方屏：短码/粘贴框 + 「出示回示码」都在（回示码还没产出来时）
+    const guest = mountLobby({ role: 'guest' });
+    guest.render();
+    expect(queryAllIn(guest.root, '.net-lobby-paste-input').length, '`.net-lobby-paste-input` 不在了').toBe(1);
+    expect(oneOf(guest.root, 'button.net-lobby-make-answer').text, '`.net-lobby-make-answer` 的文案变了')
+      .toBe('出示回示码');
+    expect(queryAllIn(guest.root, '.net-lobby-answer-code').length, '回示码还没产出来就不该有它的元素').toBe(0);
   });
 });
 

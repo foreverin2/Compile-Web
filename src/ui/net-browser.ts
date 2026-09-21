@@ -1008,9 +1008,12 @@ export function createSignalingSession(
  * ⚠️ 这是**经验选择，不是测量结论**：上面量到的是"本机这一天的网络",
  * 真值（不同 NAT / 移动网 / 差网）只能在真浏览器里继续量（T9/用户验收的活）。
  *
- * ⚠️ **登记（不是本次做的事）**：还有一个更聪明的策略 —— "等到第一条 **host** 候选就够，
- * 不必等 srflx/relay 收集完"。它属于设计改进：先在真浏览器上量清"少了哪些候选会连不上"，
- * 再决定，别顺手换掉这条"等到 `complete` 或到点给可读失败"的简单规则。
+ * ★★ **G5 T18：这个数现在是"最坏情况"的上界，不再是"每次都要等满"的时间。**
+ * 那个曾经登记为"不是本次做的事"的更聪明的策略**已经做了**（见 `enoughCandidatesForInvite`）：
+ * 一旦手上已经有**本机（host / mDNS）候选 + 至少一个公网映射（srflx）**，就**立刻**返回，
+ * 不再等满 15 秒；只有"本机候选到手、但一个 srflx 都没有"时才走满这个上界（**故意的**：
+ * 那种描述只能同机 / 同局域网用，提前收工等于把"跨网也许能连"的可能性一起砍掉）。
+ * 上界的**含义一字未变**：`timedOut: true` 仍然是"到点时还没收完"。
  */
 export const DEFAULT_ICE_GATHER_TIMEOUT_MS = 15_000;
 
@@ -1020,9 +1023,16 @@ export type IceGatherResult =
       readonly ok: true;
       readonly sdp: string;
       readonly ice: readonly string[];
-      /** 上界到点时还没收完（但已经拿到了 ≥1 个候选，于是按现状放行，见 `waitForIceGathering`） */
+      /** 上界（或宽限）到点时还没收完（但已经拿到了 ≥1 个候选，于是按现状放行，见 `waitForIceGathering`） */
       readonly timedOut: boolean;
-      /** 上界放行那一刻要**如实**写给人看的那一句；正常收完时为 `null` */
+      /**
+       * ★ **T18：这一份是"**够用就收工**"提前返回的**（收集还没结束、也没到上界）。
+       *
+       * 与 `timedOut: false, note: null`（**正常收完**）**不是**同一件事 ⇒ 这里显式分开，
+       * 不许让下游按"没有 `note` 就是收完了"去推断。
+       */
+      readonly stoppedEarly: boolean;
+      /** 放行那一刻要**如实**写给人看的那一句；正常收完时为 `null` */
       readonly note: string | null;
     }
   | {
@@ -1069,6 +1079,59 @@ export function candidateKindsOf(ice: readonly string[]): CandidateKinds {
   return out;
 }
 
+/**
+ * ★★ **G5 T18：候选"已经够用了"没有** —— "够用就收工"那条判据的**唯一出处**。
+ *
+ * ## 判据
+ *
+ * **本机（host / mDNS）候选 ≥ 1**（`typ host` 就够：Chrome 默认把本机地址写成 mDNS 名，
+ * 但它仍然是 `typ host`）**且**下面两条按玩家配没配中继二选一：
+ *  - **没配**自建中继（`relayConfigured === false`）：公网映射（srflx）≥ 1 **或** 中继（relay）≥ 1；
+ *  - **配了**自建中继（`relayConfigured === true`）：**中继（relay）≥ 1**（光有 srflx 不算够）。
+ *
+ * ## 为什么
+ *
+ *  - 一条 host 候选只能让**同一台机器 / 同一个局域网**连上（T16 用户实测那条路的价值就在这）；
+ *  - srflx 是"STUN 服务器看到了我的公网地址"的**证据**：有它，跨网直连才有得谈；
+ *  - **配了 TURN 的人，跨网那一档靠的就是 relay**，而 TURN 分配要走一趟服务器往返 ⇒ relay 是
+ *    收集顺序里的**最后一段**。早退会把 relay 砍掉 ⇒ 那条邀请码 / 回示码里没有中继，
+ *    直连一失败就真的失败，而屏上还不会说为什么（T18 评审判据 1 的那条）。
+ *    ⇒ **配了中继就必须等 relay 到手或到上界**。
+ *
+ * ⚠️ 它**不是**"跨网一定能连"的证明 —— 那件事本次没有断言（也不该由这几个候选断言）。
+ * 它只回答一个更小的问题："现在这条描述值不值得写进邀请码"。
+ *
+ * ⚠️ 只有 host（没有 srflx / relay）时**故意不**立刻收工，但也不等满 15 秒：给一段**宽限**
+ * （`ICE_HOST_ONLY_GRACE_MS`，1.5 秒）让 STUN 把公网映射拿回来；到点按现状放行 + 一句如实的
+ * `note`。15 秒那个上界只留给"一个候选都没有 ⇒ 硬失败"那一档。
+ */
+export function enoughCandidatesForInvite(ice: readonly string[], relayConfigured = false): boolean {
+  const kinds = candidateKindsOf(ice);
+  if (kinds.host === 0) return false;
+  // 配了中继：中继没到手就不算够（那一档跨网靠的就是它）
+  if (relayConfigured) return kinds.relay > 0;
+  return kinds.srflx > 0 || kinds.relay > 0;
+}
+
+/**
+ * ★★ **G5 T18 修复轮：只有 host 时那段"宽限"**（毫秒）。
+ *
+ * ## 为什么有它
+ *
+ * 只有 host 意味着 STUN 还没回应（或者那张网把它挡了）。早先这里是"等到 15 秒上界"，
+ * 但 15 秒是留给"**一个候选都没有 ⇒ 硬失败**"那一档的预算，跟玩家手上这条**已经能用**的描述
+ * 没关系 —— 白白干等十几秒（真机实测 15152 / 15166ms）。
+ *
+ * 宽限给的是"再等一会儿公网映射"的那点时间：
+ *  - 公网 STUN 通常几百毫秒就回（本机实测 Google 229ms / Cloudflare 324ms，
+ *    见 `.superpowers/g5-T18/measure-run1.txt` 与 `gate-ice-run1.txt`），1.5 秒够用；
+ *  - 到点就走 T16 那条"放行 + 如实 `note`"的路（`timedOut: true`，note 说清只拿到本机候选）。
+ *
+ * ⚠️ 它**不**替上界：一个候选都没有时**不**排它（那一档照旧走满 `iceGatherTimeoutMs`）；
+ * 玩家配了中继时也**不**排它（那一档必须等 relay 到手或到上界）。
+ */
+export const ICE_HOST_ONLY_GRACE_MS = 1_500;
+
 /** 种类的中文名（只写在这一处：屏上与报告都从它取，免得两处各说各话） */
 const KIND_LABELS: Readonly<Record<keyof CandidateKinds, string>> = {
   host: '本机（host）',
@@ -1090,14 +1153,17 @@ export function describeCandidates(ice: readonly string[]): string {
 }
 
 /**
- * ★★ **G5 T16：上界到点、但手上已经有候选** ⇒ 这就是要写到屏上的那一句。
+ * ★★ **G5 T16：上界到点（或宽限到点）、但手上已经有候选** ⇒ 这就是要写到屏上的那一句。
  *
  * 两条纪律：
  *  1. **只说事实**：拿到几种、各几个，来自 SDP 本身（`describeCandidates`）；
  *  2. **跨网能不能连是未知的，就写"还不知道"** —— 不许写成"能用"，也不许写成"连不上"。
  *     "同机 / 同一局域网通常能用"是有依据的那一半（host 候选就是给这两种场景用的）。
+ *
+ * ★ T18 修复轮：玩家**配了中继却一个 relay 都没到手**时补一句（那种情况下"跨网靠 relay"这条
+ * 路这一轮没走成，屏上必须说出来，而不是只报 srflx 的账）。
  */
-function partialGatherNote(ice: readonly string[], timeoutMs: number): string {
+function partialGatherNote(ice: readonly string[], timeoutMs: number, relayConfigured = false): string {
   const sec = timeoutMs / 1000;
   const kinds = candidateKindsOf(ice);
   const onlyHost = kinds.srflx === 0 && kinds.prflx === 0 && kinds.relay === 0 && kinds.other === 0;
@@ -1105,9 +1171,24 @@ function partialGatherNote(ice: readonly string[], timeoutMs: number): string {
     ? `等了 ${String(sec)} 秒，公网映射（srflx）一个都没收到，只收集到本机候选：${describeCandidates(ice)}。`
     : `等了 ${String(sec)} 秒，ICE 候选没有收集完；已经拿到的：${describeCandidates(ice)}。`;
   return head
+    + (relayConfigured && kinds.relay === 0 ? '你配了中继，但这一轮中继地址也没收到。' : '')
     + '这些候选已经写进这条邀请码里了。同一台机器上的两个窗口、同一个局域网里的两台设备，'
     + '用它们通常能直接连上；跨网络（两边不在同一个局域网）能不能连上，现在还不知道'
     + ' —— 那要拿到公网映射或者中继地址才行，这一次没拿全。';
+}
+
+/**
+ * ★★ **G5 T18：早退那一刻的如实读数**。
+ *
+ * 三种收工方式在 `note` 上必须**互相区分**（别让下游按"没有 note 就是收完了"去推断 ——
+ * 真浏览器门 `.superpowers/g5-T18/` 的冰门 §④ 原来就是这么推的，早退带话之后那句就不成立了）：
+ *  - 正常收完（`complete`）⇒ `stoppedEarly: false`、`note: null`；
+ *  - 宽限 / 上界到点放行 ⇒ `timedOut: true`、`note: partialGatherNote(…)`（含"等了 N 秒"）；
+ *  - **够用就收工** ⇒ `stoppedEarly: true`、`note:` 就是这一句（短、说人话，不带术语）。
+ */
+function earlyEnoughNote(kinds: CandidateKinds): string {
+  const head = kinds.relay > 0 ? '本机候选和中继地址都拿到了' : '本机候选和公网映射都拿到了';
+  return `${head}，够用，不再等剩下的候选。`;
 }
 
 /** ★★ **G5 T16：上界到点时一个候选都没有** ⇒ 硬失败。理由只说本侧的事实，不猜对端 */
@@ -1155,6 +1236,26 @@ function noCandidateNowMessage(): string {
  * 同机 / 同局域网有得打"；跨网能不能连，屏上写的是"还不知道"。**不许**把这一段读成
  * "超时也没关系"。
  *
+ * ## ★★ G5 T18：够用就收工（真机点「生成邀请码」要干等十几秒那件事）
+ *
+ * 用户真机实测（2026-09-22 之后那一局）：网络正常时（本机候选 + srflx 都有），
+ * 这里仍然**死等** `iceGatheringState === 'complete'`，而收尾那一段（relay 试探、超时收口）
+ * 常常要十几秒 ⇒ 玩家对着一个没有任何反馈的按钮干等。
+ *
+ * ⇒ 现在的规则是"**够用就收工**"：四条路各自可读（`note` 上互相区分，见 `earlyEnoughNote`）
+ *  - **已经够用**（`enoughCandidatesForInvite`）⇒ **立刻** `ok`、`stoppedEarly: true`、
+ *    一句短 `note`（"…够用，不再等剩下的候选。"）。两个触发点：`icecandidate`
+ *    （真件每收到一条候选派发一次）与 `icegatheringstatechange`；函数入口也先查一次
+ *    （调用方不一定"刚 `setLocalDescription` 完"就进来）。
+ *    ⚠️ **配了中继的玩家要等 relay 到手**才算够用（T18 修复轮：早退不许砍掉 relay）。
+ *  - **正常收完**（`complete`）⇒ 照旧 `ok`、`timedOut: false`、`stoppedEarly: false`、`note: null`；
+ *  - **只有 host** ⇒ 起一段**宽限**（`ICE_HOST_ONLY_GRACE_MS` = 1.5 秒）等公网映射；
+ *    宽限到点 ⇒ T16 那条"放行 + 如实 `note`"（`timedOut: true`）；
+ *  - **到点还没收完** ⇒ T16 那条规则一字未动（0 候选硬失败；≥1 候选放行 + `note`）。
+ *
+ * **一个候选都没有是唯一还等满上界的那一档**（15 秒是它的预算）。配了中继而 relay 一直没到，
+ * 也走满上界 —— 那一档宁可等，也不许把中继砍掉。
+ *
  * ## 上界怎么排
  *
  * 走注入的 `env.ticker`（本仓纪律：计时一律注入）+ `env.iceGatherTimeoutMs`。
@@ -1184,10 +1285,12 @@ export function waitForIceGathering(
   /**
    * ★★ 取结论（**候选数在这里定生死**，见上面那段）：
    *  - 拿不到描述 ⇒ `no-description`（与 T8 同口径）；
-   *  - 0 个候选 ⇒ 硬失败（超时那条路是 `'ice-timeout'`，收完了却空的是 `'no-candidates'`）；
-   *  - ≥1 个候选 ⇒ `ok`，`timedOut` 如实标记，只有超时那条路才带 `note`。
+   *  - 0 个候选 ⇒ 硬失败（到点那条路是 `'ice-timeout'`，收完了却空的是 `'no-candidates'`）；
+   *  - ≥1 个候选 ⇒ `ok`：`timedOut` / `stoppedEarly` 如实标记，`note` 按三种收工方式各写各的。
    */
-  const take = (timedOut: boolean, timeoutMs: number): IceGatherResult => {
+  const take = (
+    timedOut: boolean, timeoutMs: number, stoppedEarly: boolean, relayConfigured: boolean,
+  ): IceGatherResult => {
     const sdp = readSdp();
     if (sdp === null) return noDescription();
     const ice = candidatesOf(sdp);
@@ -1196,11 +1299,19 @@ export function waitForIceGathering(
         ? { ok: false, reason: 'ice-timeout', message: noCandidateTimeoutMessage(timeoutMs) }
         : { ok: false, reason: 'no-candidates', message: noCandidateNowMessage() };
     }
-    return { ok: true, sdp, ice, timedOut, note: timedOut ? partialGatherNote(ice, timeoutMs) : null };
+    const note = timedOut
+      ? partialGatherNote(ice, timeoutMs, relayConfigured)
+      : (stoppedEarly ? earlyEnoughNote(candidateKindsOf(ice)) : null);
+    return { ok: true, sdp, ice, timedOut, stoppedEarly, note };
   };
   const timeoutMs = resolved.iceGatherTimeoutMs ?? DEFAULT_ICE_GATHER_TIMEOUT_MS;
+  /**
+   * ★★ **T18 修复轮：玩家配了自建中继没有** —— 从**同一个读数**取（`readIceServers()`），
+   * 不另造一份判据。配了中继时"够用"的条件收紧成"relay 到手"（见 `enoughCandidatesForInvite`）。
+   */
+  const relayConfigured = readIceServers(resolved.settings?.() ?? null).relayConfigured;
   // 已经收集完了：同步返回（**不要**在这种情况下也去排一个计时器）
-  if (pc.iceGatheringState === 'complete') return Promise.resolve(take(false, timeoutMs));
+  if (pc.iceGatheringState === 'complete') return Promise.resolve(take(false, timeoutMs, false, relayConfigured));
   const ticker = resolved.ticker;
   if (ticker === undefined) {
     // ★ **响亮地拒绝**，而不是挂住：没有计时能力就判不了"等多久算超时"
@@ -1213,17 +1324,73 @@ export function waitForIceGathering(
   }
   return new Promise<IceGatherResult>((resolve) => {
     let settled = false;
+    /** 上界那个计时器的句柄（"够用就收工"那一支**不排**计时器 ⇒ 它可以一直是 `null`） */
+    let handle: number | null = null;
+    /**
+     * ★ T18 修复轮：只有 host 时那段**宽限**的句柄（"配了中继"与"一个候选都没有"时不排它）。
+     */
+    let graceHandle: number | null = null;
     const finish = (r: IceGatherResult): void => {
       if (settled) return;
       settled = true;
-      ticker.cancel(handle);
+      if (handle !== null) ticker.cancel(handle);
+      if (graceHandle !== null) ticker.cancel(graceHandle);
       resolve(r);
     };
+    /**
+     * ★ T18：读一次此刻的描述，**够用就收工**（`stoppedEarly: true` + 一句如实的 `note`）。
+     * 不够用（或读不到描述）⇒ `null`，交给下面那几条路。
+     */
+    const takeIfEnough = (): IceGatherResult | null => {
+      const sdp = readSdp();
+      return sdp !== null && enoughCandidatesForInvite(candidatesOf(sdp), relayConfigured)
+        ? take(false, timeoutMs, true, relayConfigured)
+        : null;
+    };
+    /**
+     * ★ T18 修复轮：**只有 host** 时起一段宽限（只起一次）。
+     *
+     *  - 玩家**配了中继** ⇒ 不排它：那一档必须等 relay 到手或到上界（不能把 relay 砍掉）；
+     *  - **一个候选都没有** ⇒ 也不排它：那一档照旧走满上界（`ice-timeout` 的预算没变）。
+     *
+     * ⚠️ 宽限从"**看到候选到手**那一刻"起算：产出路径上 `gather` 是在 `setLocalDescription()`
+     * 之后**立刻**排下的（`createBrowserTransport` / `acceptOffer`），进函数时一条候选都还没有
+     * ⇒ 那一格到不了。真到了（比如 `localDescription()` 被很晚才 `await`）也不排它，照旧走上界。
+     */
+    const armGraceIfOnlyHost = (): void => {
+      if (settled || graceHandle !== null || relayConfigured) return;
+      const sdp = readSdp();
+      if (sdp === null) return;
+      const kinds = candidateKindsOf(candidatesOf(sdp));
+      if (kinds.host === 0 || kinds.srflx > 0 || kinds.relay > 0) return;
+      graceHandle = ticker.schedule(
+        () => { finish(take(true, ICE_HOST_ONLY_GRACE_MS, false, relayConfigured)); },
+        ICE_HOST_ONLY_GRACE_MS,
+      );
+    };
+    // 入口先查一次：调用方可能不是"刚 `setLocalDescription` 完"就进来的（比如 `localDescription()` 被晚调）
+    const already = takeIfEnough();
+    if (already !== null) { finish(already); return; }
     // ★ T16：到点先看**手上已经有几个候选** —— 有就按现状放行，没有才是硬失败
-    const handle = ticker.schedule(() => { finish(take(true, timeoutMs)); }, timeoutMs);
+    handle = ticker.schedule(() => { finish(take(true, timeoutMs, false, relayConfigured)); }, timeoutMs);
     // 真件会在 `icegatheringstatechange` 上回调；**假件也可以直接改状态再调它**
     pc.addEventListener('icegatheringstatechange', () => {
-      if (pc.iceGatheringState === 'complete') finish(take(false, timeoutMs));
+      if (pc.iceGatheringState === 'complete') { finish(take(false, timeoutMs, false, relayConfigured)); return; }
+      // ★ T18：还没 `complete`，但手上已经够用了 ⇒ 不必等收尾那一段
+      const enough = takeIfEnough();
+      if (enough !== null) { finish(enough); return; }
+      armGraceIfOnlyHost();
+    });
+    /**
+     * ★ T18：真件每收到一条候选就派发一次 `icecandidate`（收尾那一条的 `candidate` 是 `null`）
+     * ⇒ 这是"srflx / relay 到手了没有"最及时的观测点。**假件可以不派发它**
+     * （不派发就退回上面两条路）。
+     */
+    pc.addEventListener('icecandidate', () => {
+      if (settled) return;
+      const enough = takeIfEnough();
+      if (enough !== null) { finish(enough); return; }
+      armGraceIfOnlyHost();
     });
   });
 }
@@ -1236,7 +1403,9 @@ export type AcceptOfferResult =
       readonly ice: readonly string[];
       /** ★ T16：等 ICE 的上界到点、但拿到了 ≥1 个候选 ⇒ 按现状放行（与 `IceGatherResult` 同口径） */
       readonly timedOut: boolean;
-      /** ★ T16：上界放行时要如实写给人看的那一句；正常收完为 `null` */
+      /** ★ T18：这一份是"够用就收工"提前返回的（与"正常收完"不是一件事，见 `IceGatherResult`） */
+      readonly stoppedEarly: boolean;
+      /** ★ T16/T18：放行（宽限 / 上界 / 早退）时要如实写给人看的那一句；正常收完为 `null` */
       readonly note: string | null;
     }
   | {
@@ -1319,9 +1488,13 @@ export async function acceptOffer(
   }
   // ④ 等 ICE 收集（非 trickle：候选必须已经在 SDP 里）
   //    ★ T16：上界到点时手上已经有候选 ⇒ 也在这里放行（`note` 由调用方写到屏上）
+  //    ★ T18：够用就收工（`stoppedEarly`）、只有 host 时走 1.5 秒宽限 —— 都由 `waitForIceGathering` 判
   const gathered = await waitForIceGathering(pc, env);
   return gathered.ok
-    ? { ok: true, sdp: gathered.sdp, ice: gathered.ice, timedOut: gathered.timedOut, note: gathered.note }
+    ? {
+        ok: true, sdp: gathered.sdp, ice: gathered.ice,
+        timedOut: gathered.timedOut, stoppedEarly: gathered.stoppedEarly, note: gathered.note,
+      }
     : { ok: false, reason: gathered.reason, message: gathered.message };
 }
 
@@ -1686,12 +1859,21 @@ export function createBrowserTransport(env?: NetBrowserEnv): NetTransport {
      * 三种失败都**可读**，而且都**不会挂住**：没 `init` 过 / 没有等的能力 / 等到上界却
      * 一个候选都没有。
      *
-     * ★★ **G5 T16**：上界到点、但已经拿到了 ≥1 个候选时**不再整条失败** —— 返回 `ok: true`
+     * ★★ **G5 T16**：上界（或宽限）到点、但已经拿到了 ≥1 个候选时**不再整条失败** —— 返回 `ok: true`
      * 加上 `timedOut: true` 与一句 `note`（调用方把它写到屏上，如实说明"只拿到这些、
-     * 跨网能不能连还不知道"）。`timedOut: false` 且 `note: null` = 正常收完那条路。
+     * 跨网能不能连还不知道"）。
+     *
+     * ★★ **G5 T18**：`note` 现在有**三种**来路，别按"没有 `note` = 收完了"推断 ——
+     * 正常收完（`stoppedEarly: false` + `note` 空）/ 够用就收工（`stoppedEarly: true` + 一句短话）/
+     * 宽限或上界放行（`timedOut: true` + `partialGatherNote`）。
      */
     async localDescription(): Promise<
-      TransportActionResult & { readonly sdp?: string; readonly timedOut?: boolean; readonly note?: string }
+      TransportActionResult & {
+        readonly sdp?: string;
+        readonly timedOut?: boolean;
+        readonly stoppedEarly?: boolean;
+        readonly note?: string;
+      }
     > {
       if (!initDone) {
         return { ok: false, reason: 'not-initialized', message: '本侧链路还没建立（init 还没成功），现在没有连接描述。' };
@@ -1701,7 +1883,9 @@ export function createBrowserTransport(env?: NetBrowserEnv): NetTransport {
       }
       const g = await gather;
       if (!g.ok) return { ok: false, reason: g.reason, message: g.message };
-      return { ok: true, sdp: g.sdp, timedOut: g.timedOut, note: g.note ?? undefined };
+      return {
+        ok: true, sdp: g.sdp, timedOut: g.timedOut, stoppedEarly: g.stoppedEarly, note: g.note ?? undefined,
+      };
     },
 
     seq(): number {
