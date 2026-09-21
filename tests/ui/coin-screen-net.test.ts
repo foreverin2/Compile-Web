@@ -20,7 +20,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { descendants, installStubDom, isClass, makeStubEl, queryAllIn, stubAnimsOf, type StubNode } from './net-dom-stub';
-import { stripComments, functionBody } from './source-text';
+import { stripComments, functionBody, objectBody } from './source-text';
 import { renderCoin, type CoinNetView } from '../../src/ui/home';
 import type { CoinSide } from '../../src/app/coin';
 
@@ -392,10 +392,64 @@ describe('G5 T11-B · `main.ts` 的接线形状（文本腿；`main.ts` 不能 i
       .toContain('createMatchFileRecorder()');
     // ④ 递状态：`arm(state)` 逐字在，且排在 `rerender()` 之前
     expect(body, '没有 arm(state)（对端帧会烂在队列里）').toContain('netDriver.arm(state);');
-    // ⑤ 草稿设置两端逐字一致：常量模式 + 由种子派生的池（协议里没有传设置的消息）
+    // ⑤ 草稿设置两端逐字一致：常量模式 + 不传池（协议里没有传设置的消息）
     expect(flat, 'draftMode 不是常量 normal（两端会不一致）').toContain("draftMode: 'normal',");
-    expect(flat, 'draftPool 不是由同一个种子派生（两端会拿到不同的池）')
-      .toContain('draftPool: randomPoolFromSeed(seed, 12),');
+    /**
+     * ★★ **G5 T21 同步了这一条**（用户真机反馈 1：联机草稿只给了 12 套协议）。
+     *
+     * 原判据断言联机这一条里有 `draftPool: randomPoolFromSeed(seed, 12),`。T21 把它改成
+     * **不传池**（`createGame` 落回全量默认池 `create.ts:77`，与热座默认一致）⇒ 这一格从
+     * "值等于某个随机池"换成"**显式不传**"：那一个字面量在 `enterNetGame` 里必须不在，
+     * 否则联机的池又被限成 12 套（这正是本轮修掉的那个缺陷）。两端一致这条判据没变 ——
+     * 全量池是常量，比"同种子派生的池"更不依赖本地读数。
+     */
+    expect(flat, 'enterNetGame 又给联机传了 12 套随机池（本轮修掉的缺陷回来了）')
+      .not.toContain('randomPoolFromSeed(');
+    expect(flat, 'enterNetGame 没有显式不传 draftPool（两端会各自落回不同的默认？）')
+      .toContain('draftPool: undefined,');
+  });
+
+  /**
+   * ★★ **G5 T21 缺陷 2：视角座位 = 本端座位**（用户真机反馈：两端看到的是同一个视角）。
+   *
+   * ## 这条腿能证什么、不能证什么（先写清边界）
+   *
+   * 它读**源码文本**：`enterNetGame()` 里有没有"把 `netViewSeat` 赋成本端座位"这一句。
+   * 证不了"真浏览器里渲染器真的按它画"（那要真浏览器 —— 本轮的边界里没有加门的判定；
+   * `__g5Match.diag().netViewSeat` 是给真浏览器门/排查用的只读读数，不是本文件的门）。
+   *
+   * ## 反空转（写死 0 必须红）
+   *
+   * 断言取的是 `=` 右边**那一个词**（`/netViewSeat\s*=\s*([^;]+);/`）并要求它逐字是 `hand.seat`。
+   * 把这一句改成 `netViewSeat = 0;`（这正是缺陷原来的形态：初值 0 一路带进对局）⇒ 右边是 `0`
+   * ⇒ 本条**红**。取 `1` 同理。也就是说"座位被写死"这件事在这条腿上是可分辨的。
+   *
+   * ## 为什么必须在**重连分支之前**
+   *
+   * 两条路（新开一局 / 重连换驱动）都要赋到。赋在 `if (existing !== null) { … return; }` 里面
+   * ⇒ 新开一局那条路漏；赋在那个 `if` 之后（本实现在 `createNetDriver(...)` 之后、`if` 之前）
+   * ⇒ 两条路都经过。所以这里连"赋值点排在重连分支的 `return` 之前"一起钉住。
+   */
+  it('★★ G5 T21 · 视角座位：`enterNetGame()` 把 netViewSeat 设成本端座位（写死 0 必红）', () => {
+    const body = functionBody(MAIN, 'enterNetGame');
+    expect(body.length, '抽到空片段 ⇒ 本判据假绿').toBeGreaterThan(200);
+    const m = /netViewSeat\s*=\s*([^;]+);/.exec(body);
+    expect(m, 'enterNetGame 里没有给 netViewSeat 赋值的句子（视角永远停在模块初值 0）').not.toBeNull();
+    const rhs = (m![1] ?? '').replace(/\s+/g, ' ').trim();
+    expect(rhs, `netViewSeat 赋的不是本端座位（实际右边是 \`${rhs}\`）—— 写死座位号会让两端看同一个视角`)
+      .toBe('hand.seat');
+    // 同一个 `hand.seat` 也是喂给驱动的那一个数（同源，不是第二套座位）
+    expect(body, '驱动拿到的座位与视角那个数不同源')
+      .toContain('createNetDriver({ transport: hand.transport, seat: hand.seat,');
+    // 赋值点必须在**重连分支的提前 return 之前**（否则"重连换驱动"那条路赋不到）
+    const iSeat = body.indexOf('netViewSeat = hand.seat;');
+    const iReconnect = body.indexOf('if (existing !== null) {');
+    expect(iReconnect, '找不到重连那一支（判据要按它定位）').toBeGreaterThanOrEqual(0);
+    expect(iSeat, 'netViewSeat 的赋值排在重连分支之后 ⇒ 重连那条路赋不到').toBeLessThan(iReconnect);
+    // 只读读数：`diag()` 里要看得到渲染器真正吃到的那一个数（真浏览器门/排查用）
+    const diag = objectBody(MAIN, 'diag: () => {');
+    expect(diag, 'diag() 读不到视图座位（真浏览器里 "netSeat === selfSeat" 这条无从判起）')
+      .toContain('netViewSeat,');
   });
 });
 

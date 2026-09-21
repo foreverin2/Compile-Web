@@ -6,7 +6,8 @@
  * T11-B 的腿停在"两块硬币屏上的读数逐字相同"（`net-lobby-coin-consensus.test.ts`）。
  * T11-C 要的是**那一组数真的变成两局同一局**：`handoff()` 交出的
  * `{ transport, seat, role, seed, draftStarter }` 各自正确、两端算出**同一个**
- * `draftStarter`/`draftMode`/`draftPool`，于是两端的 `stateFingerprint` 逐步相等。
+ * `draftStarter`/`draftMode`/`draftPool`（★ G5 T21 起 `draftPool` 是**不传** ⇒ 两端都取默认
+ * 全量池；见 `stateOf()` 的说明），于是两端的 `stateFingerprint` 逐步相等。
  *
  * `src/main.ts` 是应用入口，node 里 import 不了（见 `tests/ui/main-lobby-wiring.test.ts` 头注）
  * ⇒ 这里能证的是"**产出代码里那条算式**"（`LobbyClient.handoff()` + `src/app/coin.ts` 的规则
@@ -128,6 +129,13 @@ function openMatch(rig: Rig): { hs: ReturnType<LobbyClient['handoff']>; gs: Retu
   return { hs, gs };
 }
 
+/**
+ * ★★ **G5 T21：联机这条**不传** `draftPool`**（用户真机反馈 1：联机草稿只给了 12 套协议）。
+ *
+ * 与热座默认一致 —— `createGame` 落回 `opts.draftPool ?? [...DEMO_PROTOCOLS]`
+ * （`src/core/state/create.ts:77`）。所以两端拿到的是**同一份常量协议全集**，
+ * 一致性的理由从"同一粒种子派生同一个随机池"换成"同一份常量"（判据没变）。
+ */
 function stateOf(h: ReturnType<LobbyClient['handoff']>, seat: PlayerId) {
   void seat;
   return createGame({
@@ -135,7 +143,7 @@ function stateOf(h: ReturnType<LobbyClient['handoff']>, seat: PlayerId) {
     draftStarter: h.draftStarter!,
     firstToPlay: (1 - h.draftStarter!) as PlayerId,
     draftMode: 'normal',
-    draftPool: randomPoolFromSeed(h.seed!, 12),
+    draftPool: undefined,
   });
 }
 
@@ -239,8 +247,34 @@ describe('G5 T11-C · 两端开同一局（同一 seed / draftStarter ⇒ 同一
       hostState.draftPool.map((p) => p.defId).join(','),
       'draftPool 两端不同（同一个种子必须派生出同一个池）',
     ).toBe(guestState.draftPool.map((p) => p.defId).join(','));
-    // 反空转：池子不许"因为两边都用默认值而恰好相同" —— 它必须真的是 12 套的随机池
-    expect(hostState.draftPool.length, 'draftPool 不是 12 套（那这条比的是默认值，不是派生）').toBe(12);
+    /**
+     * ★★ **G5 T21 同步（语义变化：联机这一条不再传 12 套随机池）**。
+     *
+     * 原来这一条钉的是"池子不是**因为两边都用默认值**而恰好相同"（反空转），做法是断言
+     * `draftPool.length === 12`。T21 把联机的池改成与热座默认一致的**全部协议** ⇒ 那个
+     * 反空转做法本身失效（"等于默认值"现在正是要求）。换成一条**同样有牙、但不假定池大小**的腿：
+     * 两端各自的池必须逐字等于"本机默认池"（`createGame({ seed })` 的 `draftPool`），
+     * 且它与"同种子派生的 12 套随机池"**不同** —— 后半个断言正是反空转：如果哪天有人把联机
+     * 又改回 12 套随机池，这条会红（那 12 套必然是真子集）。
+     */
+    const defaultPool = createGame({ seed: hs.seed! }).draftPool.map((p) => p.defId).join(',');
+    expect(hostState.draftPool.map((p) => p.defId).join(','), '房主的池不是默认全量池').toBe(defaultPool);
+    expect(guestState.draftPool.map((p) => p.defId).join(','), '加入方的池不是默认全量池').toBe(defaultPool);
+    expect(defaultPool, '默认池与随机池恰好同长同序 —— 这条反空转失去判别力')
+      .not.toBe(randomPoolFromSeed(hs.seed!, 12).map((p) => p.defId).join(','));
+    /**
+     * ★★ **G5 T21 的两把实测尺子**（`getDraftPool` = 开局那一刻的整池，草稿还没起始 ⇒ 未过滤）。
+     *
+     * 读的三个数：联机这条（不传池）与热座默认（同样不传池）**必须相等**；T21 之前那条
+     * `randomPoolFromSeed(seed, 12)` **必须不同**（不然这条腿分不出修没修）。数字由
+     * `console.log` 落盘（报告里引的就是它）。
+     */
+    const netLen = getDraftPool(hostState).length;
+    const hotseatLen = getDraftPool(createGame({ seed: hs.seed! })).length;
+    const oldNetLen = getDraftPool(createGame({ seed: hs.seed!, draftPool: randomPoolFromSeed(hs.seed!, 12) })).length;
+    console.log(`[G5-T21 实测] 联机开局 getDraftPool=${netLen} / 热座默认=${hotseatLen} / 旧联机(12 套随机池)=${oldNetLen}`);
+    expect(netLen, `联机开局池 ${netLen} 与热座默认 ${hotseatLen} 不等（本轮缺陷 1 没修好）`).toBe(hotseatLen);
+    expect(oldNetLen, '旧那条 12 套随机池与全量池同长 —— 这条腿分不出修没修').not.toBe(netLen);
     expect(hostState.phase, '开出来的不是草稿相').toBe('draft');
   });
 

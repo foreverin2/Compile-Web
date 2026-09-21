@@ -425,13 +425,21 @@ let netGame: NetMatch | null = null;
  *
  * ## `draftMode` / `draftPool` 两端怎么做到逐字一致（判据：两端状态指纹相等）
  *
- * **协议里没有传设置的消息**（`src/net/protocol.ts` 本阶段冻结），所以设置只能由两端
- * **共享的值派生**：
+ * **协议里没有传设置的消息**（`src/net/protocol.ts` 本阶段冻结），所以设置只能是两端都能
+ * **构造性**得到的那一份值：
  *  - `draftMode` 取**常量** `'normal'`（热座那个勾选框是本地偏好，联机下没有传它的路，
  *    取"假设两端勾的一样"就是判据 3 会红的那种"大概一样"）；
- *  - `draftPool` 取 `randomPoolFromSeed(seed, 12)` —— `seed` 是握手走出来的**同一个**种子，
- *    而 `randomPoolFromSeed` 是**纯函数**（同一个种子恒给同一个池）⇒ 两端逐字一致。
- *    房主离线磨种子这件事 D3 已承认（本段不承诺公平），它影响的是种子，不是"两端是否一致"。
+ *  - `draftPool` **不传**（`undefined`）⇒ `createGame` 落回 `opts.draftPool ?? [...DEMO_PROTOCOLS]`
+ *    （`src/core/state/create.ts:77`）—— 两端读的是**同一份常量协议全集**，与种子、
+ *    与任何本地读数都无关 ⇒ 逐字一致。**G5 T21 起**这条从"同种子派生的 12 套随机池"
+ *    换成"全部协议"（用户真机反馈：联机只给了 12 套，而热座默认是全部）——
+ *    一致性的**理由换了，判据没换**（两端仍必然相等，且这次连"房主离线磨种子"都不相关）。
+ *
+ * ## 视角座位（G5 T21 加；用户真机反馈 2）
+ *
+ * `netViewSeat` 必须等于**本端座位**（喂给 `createNetDriver` 的那个 `hand.seat`），否则
+ * 两端都渲染座位 0 的视角、加入方看到的"我"是对手。赋值点就在 `createNetDriver(...)` 之后、
+ * 那条重连分支**之前**（一处覆盖新开一局与重连换驱动两条路）。
  *
  * ## 返回值（T12 加）
  *
@@ -536,6 +544,41 @@ function enterNetGame(): NetDriver | null {
   // ★ `createNetDriver(` 在 `src/main.ts` 里**只此一处**（计数腿）：两条路（第一次进牌桌 /
   //   重连换传输）共用这一句，免得"驱动是拿哪条传输造的"分叉。
   const netDriver = createNetDriver({ transport: hand.transport, seat: hand.seat, recorder });
+  /**
+   * ★★ **G5 T21：本端视角座位 = 喂给驱动的那个本端座位**（用户真机反馈 2）。
+   *
+   * ## 它修的是什么
+   *
+   * `netViewSeat`（`:193`）在本次改动之前只在**开发者的预览切换器**里被改过
+   * （`:3010` 的 `onPreviewChange`、devmode 的 `netSeat`）⇒ 生产路径上它的初值 `0` 一路带进
+   * 对局，`rerender()` 那句 `viewSeat: netViewSeat`（`:3007`）于是**两端都画座位 0 的视角**：
+   * 房主（座位 0）看着对，加入方（座位 1）看到的"我"是**对手**。
+   *
+   * ## 为什么赋在这里（一处覆盖两条路）
+   *
+   * 这一句紧跟在 `createNetDriver({ …, seat: hand.seat, … })` 之后，而那一个 `seat` 正是
+   * `handoff()` 交出来的本端座位（`__g5Match.seat()` 读驱动的那个数）⇒ "驱动认为我是谁"与
+   * "渲染器认为我是谁"**同源、无加工**。两条路都经过这一格：
+   *  - **新开一局**：下面的 `createGame` + `arm(state)`；
+   *  - **重连换驱动**（`existing !== null` 那一支，`hand.seat` 来自新链路那次握手）——
+   *    "只在新开一局那条路上赋一次"会漏掉这一支，所以赋在**分支之前**。
+   *
+   * ## 为什么不会踩掉开发者那条路
+   *
+   * 预览切换器（`视角` / `seat 1|2` 指令）写的是**同一个** `netViewSeat`，而它只在 dev 解锁后
+   * 才在屏上/指令里可达（`isDevUnlocked()`）—— 本函数只在**进牌桌那一刻**跑，之后开发者再切
+   * 依旧生效（下一次进牌桌才回正）。这正是"dev 预览切换器仍要能用"那条要求。
+   *
+   * ## FX 层的视角座位
+   *
+   * 不在本文件重复设：`renderNetBoard(root, state, cb, { viewSeat })` 内部就写
+   * `applyFxViewSeat(opts.viewSeat)`（`render-net.ts`；`tests/ui/render-net.test.ts` 的 R3-2
+   * 与 `tests/ui/fx-seat.test.ts` 钉着"必须来自 `opts.viewSeat`、不得直调 `setFxViewSeat`"）
+   * ⇒ 只要上面那个 `viewSeat` 对了，FX 那一侧跟着对。本文件剩下的两处 `setFxViewSeat(null)`
+   * 是**复位**（回主页 / 进重放），不是设视角。
+   */
+  netViewSeat = hand.seat;
+  // ★ `probeOn` 下这一段有个只读读数：`__g5Match.diag().netViewSeat`。
   // ★ G5 T12：给这条传输挂一个**只读**的入站 `act` 帧计数（判定集 ③.7 用它证"变化来自线"）。
   //   默认路径（没带 `#g5probe=1`）也挂得上，但只有探针会去读它 ⇒ 开销是一个闭包与一个整数。
   watchInboundFrames(netDriver);
@@ -586,7 +629,12 @@ function enterNetGame(): NetDriver | null {
     draftStarter,
     firstToPlay: (1 - draftStarter) as PlayerId,
     draftMode: 'normal',
-    draftPool: randomPoolFromSeed(seed, 12),
+    // ★★ G5 T21：**不传池 = 全部协议**（用户真机反馈 1）。原来是 `randomPoolFromSeed(seed, 12)`
+    //   ⇒ 联机草稿被限成 12 套，而热座默认（`showCoin` 那条 `gameOptions.randomPool ? … : undefined`）
+    //   是全部 ⇒ 联机与热座"池子大小不一样"。两端一致这条判据一个字都没变：池的**来源**从
+    //   "同一粒种子派生的随机池"换成"同一份常量协议全集"（`create.ts:77` 的
+    //   `opts.draftPool ?? [...DEMO_PROTOCOLS]`），两端都不依赖任何本地读数 ⇒ 仍逐字一致。
+    draftPool: undefined,
   });
   /**
    * ★★ **G5 T19：新开一局 ⇒ 这一局的草稿 → 对局转场还没演过**（`createGame` 之后相位必是
@@ -1023,6 +1071,8 @@ function exposeMatchProbe(): void {
         hasDriverTransport: boolean;
         linkPhase: string;
         driverSeat: number;
+        /** ★★ G5 T21：渲染器吃到的视角座位（`renderNetBoard` 的 `opts.viewSeat`，即 `netViewSeat`） */
+        netViewSeat: number;
         rerenderIn: number;
         rerenderPainted: number;
         onInboundCalls: number;
@@ -1127,6 +1177,7 @@ function exposeMatchProbe(): void {
         hasDriverTransport: drvT !== null,
         linkPhase: lobbyClient?.state().phase ?? 'idle',
         driverSeat: netGame === null ? -1 : netGame.driver.seat,
+        netViewSeat,
         /** `rerender()` 被进入过几次 / 真的走到"去画"那一步几次 / `onInbound` 通知过几次 */
         rerenderIn,
         rerenderPainted,
