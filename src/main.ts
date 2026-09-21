@@ -34,7 +34,7 @@ import { setFxViewSeat } from './ui/fx-seat';
 import { handCardBox, handFanLead, handFanStep } from './ui/fx-card-size';
 import { handOuterFor } from './ui/fx-seat';
 import { openControlRearrangeModal, closeControlRearrangeModal, refreshControlRearrangeModal, isControlRearrangeOpen, orderChanged, orderToAction } from './ui/control-rearrange';
-import { renderHome, renderCoin, renderLibrary, renderRules, renderModeSelect } from './ui/home';
+import { renderHome, renderCoin, renderLibrary, renderRules, renderModeSelect, COIN_TOSS_MS } from './ui/home';
 import { linkRecoveryNotice, lobbyCoinViewOf, lobbyLinkText, appendNetTurnLine } from './ui/net-lobby';
 import type { CoinNetView } from './ui/home';
 // ★ T11-B：硬币屏要的"面"（屏上口径 `1 | 2`）
@@ -471,6 +471,47 @@ function enterNetGame(): NetDriver | null {
    */
   if (!raw.ready) return null;
   /**
+   * ★★ **G5 T19：读数齐了还不够 —— 硬币阶段三格必须都走完。**
+   *
+   * ## 它修的是什么（用户真机提的第 1 件事）
+   *
+   * T11-C 起，进牌桌的触发点是**这一句**（硬币屏上没有"开始对局"按钮），于是"读数齐了"
+   * 就直接进草稿 —— 硬币阶段是"叫完面 ⇒ 立刻看到结果"，中间**没有抛的动作**。
+   *
+   * ## 判据：`coinPhase === 'settled'` 且那一格也到期
+   *
+   * ⚠️ **不许只看时刻**（第一版的阻断项）：`coinPhaseAt` 为空有两种意思 ——"还没起头"与
+   * "已经落定"，只按时刻判会把"停在中途"当成"可以进"。相位那一半由
+   * `advanceCoinPhaseIfReady()`（**本函数之前**、`renderLobbyFrame` 每帧的第一件事）负责推进。
+   *
+   * ⚠️ **兜底：如果这一帧没推过阶段**（例如硬币屏那一支被 `lobbyRestartNeeded` 挡住、
+   * 或这条调用来自 `rebootDraft()` 这类排查路径），就在这里起一次并**返回 null** ——
+   * 起完那一帧还不该进，要等三格走完。
+   *
+   * ## 为什么判据是一段时间而不是"等一个动画事件"
+   *
+   * 动画是屏那一层的东西（`src/ui/home.ts`），而进牌桌是应用层的事 —— 让应用层去读屏的事件
+   * 会把两层耦在一起，且"动画被取消/元素被换掉"这类情形会让事件永远不来（不报错的死挂）。
+   * 三段都是**有界**的（900 + 1620 + 1200 = 3720ms；动态偏好下动画那一段压到 120ms）。
+   *
+   * ⚠️ **两端各自本地等**（各自的 `performance.now()`），但判据（`landed` / `winner`）是
+   * 同一份握手读数 ⇒ "谁先选协议"在两端不会分叉。
+   */
+  if (coinPhase !== 'settled') {
+    // 没起头（或停在中途）⇒ 交给推格子那条路（它幂等），这一帧无论如何不进牌桌
+    if (coinPhase === null && coinVerdict !== null) {
+      coinPhaseSeed = coinVerdict.seed;
+      coinPhase = 'call';
+      coinCallStartedAt = performance.now();
+      coinPhaseAt = coinCallStartedAt + COIN_CALL_HOLD_MS;
+      // ★ 走唯一包装（它自带"必须还没到点"的判断；这里虽然是刚算出来的未来时刻，也不留第二个入口）
+      armCoinPhaseWake(coinPhaseAt, coinVerdict.seed);
+    }
+    return null;
+  }
+  // 落定了、但结论行那一格还没停够 ⇒ 再等（结果行必须在屏上真的停留 COIN_SETTLED_HOLD_MS）
+  if (!coinPhaseElapsedAt(coinPhaseAt)) return null;
+  /**
    * `handoff()` 在重连中间态里把 `transport` / `session` 置成 `null`（`ready` 为假：
    * 相位还没回到 `complete`）⇒ 这一格里"新链路那条传输"要从 `client.transport()` 补上，
    * 否则换驱动这一步拿不到东西、而旧驱动手里那条传输已经死了（症状是静默停摆）。
@@ -519,6 +560,21 @@ function enterNetGame(): NetDriver | null {
     renderMode = 'net';
     // ★ G5 T13-C：真的回到牌桌了 ⇒ "屏该画大厅那一屏"那个读数复位（同族的复位点见它的声明）
     linkRecoveryNeeded = false;
+    /**
+     * ★★ **G5 T19：重连换驱动时把"草稿转场演过没有"按这一刻的相位定**。
+     *
+     * 这一支**不重建这一局**（`existing` 里那一局的相位早已跨过 `draft`：它在断线之前就打完
+     * 草稿了）⇒ 置 `true`，于是"重连回到牌桌"**不会**补播一次转场（同"别让玩家以为又重新
+     * 开了一局"那条纪律）。反过来，万一重连发生在草稿还没打完时，相位仍是 `'draft'` ⇒ 置
+     * `false`，那一局剩下的那一步跨过去时照样会播。
+     */
+    draftTransitionPlayed = state.phase !== 'draft';
+    /**
+     * ⚠️ **这一句的语义**（评审登记：原来写成 `= 0` 与闩的语义不符）：`transitionPlayed` 是
+     * "**这一局的草稿转场播过几次**"。重连时那一局多半已经播过 1 次（相位早已跨过 `draft`）
+     * ⇒ 跟着闩写 1；万一重连发生在草稿还没打完时，闩是 `false` ⇒ 写 0，那一步跨过去时照数。
+     */
+    transitionPlayed = draftTransitionPlayed ? 1 : 0;
     rerender();
     return netDriver;
   }
@@ -532,6 +588,15 @@ function enterNetGame(): NetDriver | null {
     draftMode: 'normal',
     draftPool: randomPoolFromSeed(seed, 12),
   });
+  /**
+   * ★★ **G5 T19：新开一局 ⇒ 这一局的草稿 → 对局转场还没演过**（`createGame` 之后相位必是
+   * `'draft'`，所以这一句是"这一局从草稿开始"的**事实**，不是一个猜的初值）。
+   *
+   * 复位点只有这一处与 `resetToMainInterface()`：漏了前者会让第二局的转场永远不播
+   * （上一局的闩还在），漏了后者会让"打完一局回主页再开"带着上一局的闩。
+   */
+  draftTransitionPlayed = false;
+  transitionPlayed = 0;
   // ★ 递状态必须排在 `rerender()` 之前（见上面第 4 条）：这一刻到下一帧之间没有页面代码能跑
   netDriver.arm(state);
   if (probeOn) armedState = state;
@@ -586,6 +651,9 @@ function enterNetGame(): NetDriver | null {
         landed: hand.landed,
         winner: draftStarter,
         caller: hand.caller,
+        // ★ G5 T19：走到这一格说明硬币阶段**已经到落定**（上面那道闸），所以这一帧是结论行那一格。
+        //   它几乎是多余的（屏上早就在这一格停够 1200ms 了），留着是同一条链路的兜底。
+        coinPhase: 'settled',
       },
     });
   }
@@ -625,6 +693,22 @@ function enterNetGame(): NetDriver | null {
       probeHolder.__coinVerdict = {
         role: hand.role, caller: hand.caller, chosen: hand.chosen,
         landed: hand.landed, winner: draftStarter, seed, phase: hand.phase,
+        /**
+         * ★★ **G5 T19 修复轮：硬币三段各自的实测停留**（见 `turn().coinTiming` 的说明）。
+         *
+         * 挂在这里（而不是只挂 `turn()`）的理由：这一格是 `enterNetGame()` 里、**硬币阶段
+         * 已经走完**的那一刻，而 `__coinVerdict` 是门禁（`coinVerdictOf`）**已经在读**的读数口
+         * ⇒ 报告里的"三段各停了多少毫秒"是可复核的实测值，不是源码自洽。
+         */
+        timing: {
+          callHoldMs: coinCallStartedAt === null || coinTossStartedAt === null
+            ? null : Math.round(coinTossStartedAt - coinCallStartedAt),
+          tossHoldMs: coinTossStartedAt === null || coinSettledStartedAt === null
+            ? null : Math.round(coinSettledStartedAt - coinTossStartedAt),
+          settledHoldMs: coinSettledStartedAt === null
+            ? null : Math.round(performance.now() - coinSettledStartedAt),
+          reducedMotion: reducedMotion(),
+        },
       };
     }
   }
@@ -963,6 +1047,22 @@ function exposeMatchProbe(): void {
         stateRead: { draftRound: number; step: string; turnPlayer: number };
         armedRead: { draftRound: number; step: string; turnPlayer: number } | null;
         inboundStaleDropped: number;
+        /** ★★ G5 T19：硬币阶段这一刻在哪一格（`null` = 读数还没齐 / 没起头） */
+        coinPhase: 'call' | 'toss' | 'settled' | null;
+        /** ★★ G5 T19：`'call'`（告知"谁叫了哪一面"）那一格的起跑时刻 */
+        coinCallStartedAt: number | null;
+        /** ★★ G5 T19：`'toss'`（抛硬币动画）那一格的起跑时刻；与上一格之差 = 告知停了多久 */
+        coinTossStartedAt: number | null;
+        /** ★★ G5 T19：`'settled'`（结论行）那一格的起跑时刻；这一格必须停够才进牌桌 */
+        coinSettledStartedAt: number | null;
+        /** ★★ G5 T19：到点叫醒的回调抛过几次异常（见 `wakeCoinPhase` 的兜底） */
+        coinWakeThrew: number;
+        /** ★★ G5 T19 修复轮 2：排过几次**已经到点**的唤醒（正常路径恒 0；> 0 = 自唤醒链回来了） */
+        coinWakeStaleScheduled: number;
+        /** ★★ G5 T19 修复轮 2：排过的唤醒总数（含重试） */
+        coinWakeScheduled: number;
+        /** ★★ G5 T19：这一局的草稿 → 对局转场播过几次（两端各自数自己那一个） */
+        transitionPlayed: number;
         renderMode: string;
         phase: string;
       };
@@ -1070,6 +1170,33 @@ function exposeMatchProbe(): void {
         },
         /** ★ 判据 1 的护栏读数：微任务里"捕获的那一枚已经不是当前 state"丢掉过几次 */
         inboundStaleDropped,
+        /**
+         * ★★ **G5 T19 的只读读数**（硬币阶段的顺序 / 转场两端各播一次）。
+         *
+         * 五个数分开答四件事，缺一个就分不清"没播"与"播了但看不出来"：
+         *  - `coinPhase`：这一端硬币阶段此刻在哪一格（`null`/`call`/`toss`/`settled`）；
+         *  - `coinCallStartedAt` / `coinTossStartedAt`：两格的起跑时刻（`performance.now()`；
+         *    `null` = 还没到过）。两者之差就是"告知那一格"停了多久，而
+         *    `COIN_TOSS_MS` 是动画本身的长度 ⇒ 门禁不必去读屏就能判"动画真的走了那么久"；
+         *  - `transitionPlayed`：这一局的草稿 → 对局转场**播过几次**（两端各自数自己的；
+         *    同一次转变只该 +1 —— 收到对端帧不会让它变成 2）。
+         */
+        coinPhase,
+        coinCallStartedAt,
+        coinTossStartedAt,
+        coinSettledStartedAt,
+        /** ★ G5 T19 修复轮：到点叫醒时回调抛过异常几次（> 0 = 那条腿真的兜过一次底） */
+        coinWakeThrew,
+        /**
+         * ★★ **G5 T19 修复轮 2：自唤醒链的证伪位**（正常路径必须恒 0）。
+         *
+         * `coinWakeStaleScheduled > 0` = "排了一个已经到点的唤醒" ⇒ 那条 0ms 自唤醒链回来了
+         * （修复轮 1 的缺陷形态）；`coinWakeScheduled` 是分母（排过多少次），两个一起读才分得清
+         * "没在排"与"排了但都没过期"。
+         */
+        coinWakeStaleScheduled,
+        coinWakeScheduled,
+        transitionPlayed,
         /** 这一刻的路由读数（两个 early return 分支要配它读） */
         renderMode,
         phase: state.phase,
@@ -1171,6 +1298,50 @@ function exposeMatchProbe(): void {
        * 门禁抢在那 4.5s+ 窗口里调 `advanceOnce()`，`applied` 一直是 0、看起来像"驱动坏了"。
        */
       transitioning,
+      /**
+       * ★★ **G5 T19 修复轮：硬币阶段三段各自的停留毫秒 + 结果行在屏上停了多久**（只读）。
+       *
+       * ## 为什么把这三个数挂进 `turn()`（一个既有读数口）而不是新开一个
+       *
+       * 硬币阶段没有自己的探针口，而"三段真的各停够"这件事**在门禁侧原来无读数可核**
+       * （评审 §6：`transitionPlayed` 与三个常量"只在源码里可核"）。挂进 `turn()` 之后，
+       * 门禁已经会打印 `turn()`（③.9 的 `stepOf`）⇒ 报告里能贴**实测**数字，
+       * 而不是"源码自洽"。数值都在本端算（`performance.now()` 差值），没有跨端可比性要求。
+       *
+       * 字段名与语义：
+       *  - `callHoldMs` / `tossHoldMs` / `settledHoldMs`：三段各自的实测停留（`null` = 还没走到）；
+       *  - `settledAgoMs`：**结论行还在屏上多久了**（这证实"结果行看得见"—— 第一版它是
+       *    同步一帧就被草稿屏盖掉，这个数根本量不到）；
+       *  - `holdsOk`：三段是否都达到设计下限（`COIN_CALL_HOLD_MS` / 动画时长 / `COIN_SETTLED_HOLD_MS`）；
+       *  - `reducedMotion`：这一局动画那一格有没有被动态偏好压缩。
+       */
+      coinTiming: (() => {
+        const d = (a: number | null, b: number | null): number | null =>
+          a === null || b === null ? null : Math.round(b - a);
+        const callHoldMs = d(coinCallStartedAt, coinTossStartedAt);
+        const tossHoldMs = d(coinTossStartedAt, coinSettledStartedAt);
+        const settledHoldMs = coinSettledStartedAt === null || coinPhase !== 'settled'
+          ? null
+          : Math.round(performance.now() - coinSettledStartedAt);
+        return {
+          coinPhase,
+          callHoldMs,
+          tossHoldMs,
+          settledHoldMs,
+          settledAgoMs: settledHoldMs,
+          holdsOk: callHoldMs !== null && tossHoldMs !== null
+            && callHoldMs >= COIN_CALL_HOLD_MS - 5
+            && tossHoldMs >= coinTossHoldMs() - 5
+            && settledHoldMs !== null && settledHoldMs >= COIN_SETTLED_HOLD_MS - 5,
+          reducedMotion: reducedMotion(),
+          /**
+           * ★★ **G5 T19 修复轮 2：自唤醒链的证伪位**（见 `coinWakeStaleScheduled` 的说明）。
+           * 进牌桌之后这一位必须恒 0；`wakes` 是分母。
+           */
+          staleWakes: coinWakeStaleScheduled,
+          wakes: coinWakeScheduled,
+        };
+      })(),
     }),
     /**
      * ★ **驱动侧读数**（`appliedSteps` / `pendingCount` / `lastFailure`）。
@@ -1464,6 +1635,290 @@ let coinVerdict: {
  */
 let coinSettledShown = false;
 
+/**
+ * ★ G5 T19 **只读读数**：这一局的草稿 → 对局转场**播过几次**（`#g5probe=1` 时经 `diag()` 读）。
+ *
+ * 它与 `draftTransitionPlayed` 是**两件事**：闩位只答"这一局演过没有"（布尔，流程用它），
+ * 这个计数器答"到底播了几次"（诊断用）。分成两个而不是"拿计数当闩"，是因为"变成 2"这件事
+ * 本身要能被读到 —— 那正是"收到对端帧又补播一次"这个缺陷在读数上的形状。
+ */
+let transitionPlayed = 0;
+
+/* ── ★★ G5 T19：硬币阶段的**顺序**（叫面读数 ⇒ 抛硬币动画 ⇒ 落定 ⇒ 才进牌桌）──────────── */
+
+/**
+ * 硬币阶段各格在屏上停多久（毫秒）。
+ *
+ * ## 为什么是这三个数（评审 2026-09-21 的裁决）
+ *
+ *  - `COIN_CALL_HOLD_MS = 900`：**"玩家 N 叫了「某面」"那一格**。420ms 人眼看不完（第一版就是
+ *    420，评审实测屏上根本留不住）⇒ 900ms 是"读得完一句短句 + 认得出一枚芯片被选中"的量级；
+ *  - `COIN_TOSS_MS`（`src/ui/home.ts` 的出口）= 1620：**动画**本身，保持第一版的长度；
+ *  - `COIN_SETTLED_HOLD_MS = 1200`：**结论行那一格**（"掷出 X —— 玩家 N 先选协议"）。它必须
+ *    独立存在：结论行是用户要的"最终结果"，一个同步任务里画完就被草稿屏盖掉等于没做。
+ *
+ * 三段合计 ≈ 3720ms（+ 一帧），全部走完才进草稿屏。代价是每局开局多花 3.7s；真浏览器门
+ * （`tools/browser-truth-lobby-cdp.mjs`）从"点芯片"到"两端进草稿"等的是 `--wait` 那个每步预算
+ * （收尾跑 30s）⇒ 占比 12% 量级，不是贴着上限。
+ *
+ * ## 为什么"告知"那一格必须先停一下（用户要的第一步就是它）
+ *
+ * "叫了哪一面"与"落点"在**同一帧**到手（真机实测形状：加入方按下芯片 ⇒ 面揭示与种子公开
+ * 在一次入站里接连落地；房主那边同一族）⇒ 只按读数分支的话，这一步在屏上**一帧都留不住**，
+ * 而那正是用户说的"而不是先给双方告知选的是哪一面"。
+ *
+ * ⚠️ **动态偏好（`prefers-reduced-motion`）只压动画那一格**：`'call'` 与 `'settled'` 两格的停留
+ * 是"把话说完"，不是动画，一个字都不减（见 `coinTossHoldMs`）。
+ */
+const COIN_CALL_HOLD_MS = 900;
+const COIN_SETTLED_HOLD_MS = 1_200;
+
+/** 动态偏好下动画那一格压缩到多长（毫秒）；正常路径下它等于 `COIN_TOSS_MS` */
+const COIN_TOSS_REDUCED_MS = 120;
+
+/**
+ * 读完 `prefers-reduced-motion` 那种动态偏好并折算成**动画那一格**的长度。
+ *
+ * 为什么它对屏那一层也要生效（`renderCoinNet` 收到的 `reducedMotion`）：动画是屏自己起的
+ * （`playCoinTossAnimation`），应用层只能告诉它"这一局别演"。
+ * 判据只问一次（每局开头），不做 `change` 订阅 —— 硬币阶段一共 1.6s，中途改偏好不是一条值得
+ * 花钱去追的路。
+ */
+function reducedMotion(): boolean {
+  try {
+    return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  } catch {
+    return false; // 没有这个能力 ⇒ 按"不压缩"走（宁可演动画，不要静默变成另一套行为）
+  }
+}
+
+/** 动画那一格该停多久（正常 `COIN_TOSS_MS`；动态偏好下 `COIN_TOSS_REDUCED_MS`） */
+function coinTossHoldMs(): number {
+  return reducedMotion() ? COIN_TOSS_REDUCED_MS : COIN_TOSS_MS;
+}
+
+/**
+ * 硬币阶段此刻在哪一格（模块态；`null` = 这一局还没到最后那一格）。
+ *
+ * 四格与屏上的对应（`renderCoin` 的 `net.coinPhase` 就是从这里来的）：
+ *  - `null`：读数没齐 ⇒ 屏上是"叫了哪一面 / 等对方叫面"，**没有落点**；
+ *  - `'call'`：读数齐了 ⇒ 屏上**只**说"玩家 N 叫了「某面」"，**不播动画、不给结论**；
+ *  - `'toss'`：动画**正在演**（屏上 `net.coinPhase === 'toss'`）；
+ *  - `'settled'`：动画演完 ⇒ **结论行出现**，停 `COIN_SETTLED_HOLD_MS` 之后
+ *    `enterNetGame()` 那道闸才放行 ⇒ 硬币阶段结束。
+ *
+ * ⚠️ **屏上那一格由这个相位决定，不许由"落点有没有到手"反推**（第一版就是反推的：`'call'`
+ * 那一格在屏上已经当成动画在播 —— 评审实测的"告知停留不存在"）。
+ */
+let coinPhase: 'call' | 'toss' | 'settled' | null = null;
+/** `coinPhase` 那几格属于**哪一枚结算**（`coinVerdict.seed`；`null` = 还没绑定） */
+let coinPhaseSeed: string | null = null;
+/** 当前这一格的到期时刻（`performance.now()` 毫秒；`null` = 没有在走） */
+let coinPhaseAt: number | null = null;
+/** ★ 只读读数：`'call'` 那一格的起跑时刻（`null` = 还没到过；见 `diag()`） */
+let coinCallStartedAt: number | null = null;
+/** ★ 只读读数：`'toss'` 那一格的起跑时刻（与上一格之差 = 告知那一格实际停了多久；见 `diag()`） */
+let coinTossStartedAt: number | null = null;
+/** ★ 只读读数：`'settled'` 那一格的起跑时刻（= 结论行出现那一刻；见 `diag()`） */
+let coinSettledStartedAt: number | null = null;
+/** 推进硬币阶段的那一个定时器句柄（`null` = 没有在等） */
+let coinPhaseTimer: number | null = null;
+/** ★ 只读读数：定时器到点叫醒时**回调里抛过异常**几次（只读；见 `wakeCoinPhase` 的兜底） */
+let coinWakeThrew = 0;
+/**
+ * ★★ **只读读数（G5 T19 修复轮 2）：`wakeCoinPhase` 真的排过一次【已经到点】的唤醒几次**。
+ *
+ * ## 它为什么必须存在（评审实测的"机器卡"缺陷）
+ *
+ * 修复轮 1 的兜底写成"`coinPhaseAt` 非空而 `coinPhaseTimer` 为空 ⇒ 重排一次"，而 `'settled'`
+ * 那一格**没有清空 `coinPhaseAt`** ⇒ 进牌桌那一帧 `coinPhaseAt` 已是过去时刻、定时器刚被回调
+ * 置空 ⇒ **排一个 0ms 唤醒**；此后**每次 `renderLobbyFrame()` 都在同一处再排一个** ⇒ 从进桌到
+ * `resetToMainInterface` 一直挂着一条 0ms 自唤醒链（每轮都跑一遍 `lobbyCoinView()` + `handoff()`
+ * + 进门早退）。屏上完全看不出来，所以只能靠计数抓。
+ *
+ * 现在两处都堵了：`'settled'` 到期就 `coinPhaseAt = null`（见 `advanceCoinPhaseIfReady`），且
+ * 这一位只在 `due <= now`（= 真的已经到点）时才 +1。**正常路径上它必须恒为 0** ——
+ * `turn().coinTiming.staleWakes` 与 `diag().coinWakeStaleScheduled` 都读它。
+ */
+let coinWakeStaleScheduled = 0;
+/** ★ 只读读数：`wakeCoinPhase` 排过的唤醒总数（含重试）；与上面那位对照"有没有在排" */
+let coinWakeScheduled = 0;
+
+/** 硬币阶段这一刻到点了没有（`at` 为空 ⇒ 没在等 ⇒ 不挡任何事） */
+function coinPhaseElapsedAt(at: number | null): boolean {
+  return at === null || performance.now() >= at;
+}
+
+/** 取消那条"到点叫醒"的定时器（任何一次换格都要走它，免得留下第二条腿） */
+function clearCoinPhaseTimer(): void {
+  if (coinPhaseTimer !== null) {
+    window.clearTimeout(coinPhaseTimer);
+    coinPhaseTimer = null;
+  }
+}
+
+/**
+ * 叫醒一次 `renderLobbyFrame`（到点那一帧会把格子推过去）。
+ *
+ * ## 兜底（评审登记的缺口 A，能顺手补的就补）
+ *
+ * 回调里 `renderLobbyFrame()` 抛异常时**重新排一次**（下一个到期时刻 = 现在 + 250ms），
+ * 而不是让这一格从此只能等下一条入站帧（读数齐之后握手通常已经 `complete`，没有下一条）。
+ * 只重排固定次数（`COIN_WAKE_RETRY_MAX`）—— 真正的病（渲染器抛）不该被无限重试掩盖成"卡住"。
+ *
+ * ⚠️ **`due` 必须是未来时刻**（两处调用都先判 `!coinPhaseElapsedAt(...)`）。这一位计数
+ * （`coinWakeStaleScheduled`）就是为"万一有人绕过那个前提"留的证伪点。
+ */
+const COIN_WAKE_RETRY_MS = 250;
+const COIN_WAKE_RETRY_MAX = 8;
+function wakeCoinPhase(due: number, seed: string): void {
+  clearCoinPhaseTimer();
+  coinWakeScheduled += 1;
+  if (due <= performance.now()) coinWakeStaleScheduled += 1;
+  coinPhaseTimer = window.setTimeout(() => {
+    coinPhaseTimer = null;
+    if (coinPhaseSeed !== seed) return; // 中途换局/复位 ⇒ 那一边自己会画
+    try {
+      renderLobbyFrame();
+    } catch (e) {
+      coinWakeThrew += 1;
+      if (coinWakeThrew > COIN_WAKE_RETRY_MAX) throw e;
+      wakeCoinPhase(performance.now() + COIN_WAKE_RETRY_MS, seed);
+    }
+  }, Math.max(0, due - performance.now()));
+}
+
+/**
+ * ★★ **G5 T19 修复轮：页面重新可见时补推一次硬币阶段**（评审登记的缺口 A 的兜底之一）。
+ *
+ * 为什么需要它：三段是靠 `window.setTimeout` 走到点的，而**后台标签页的定时器会被浏览器节流
+ * 甚至合并**（Chrome 对隐藏页的定时器最粗可到每分钟一次；本机 headless 门里没踩到，但玩家把页面
+ * 切走再切回来是很常见的动作）。那一段被节流之后，屏会停在某一格上等到定时器被放行 ——
+ * 玩家看到的是"卡在抛硬币/结果那里"。
+ *
+ * 这里只补一次"重新看一眼相位"的调用（`renderLobbyFrame` 里那句 `advanceCoinPhaseIfReady`
+ * 是幂等的：时刻到了就推格子、没到就什么都不做）；**不引入第二条时间轴**，
+ * 也不改变任何判据 —— 它只是把"该推了没有"这个问题再问一遍。
+ *
+ * ⚠️ 监听器是**模块级、一次性**的（本模块在整页生命周期里只求值一次）⇒ 不会随局数累积。
+ *
+ * ⚠️ **如实登记（评审 2 点名，不改）**：闸是那个模块位 `coinPhase !== null`，而进牌桌之后它**永久
+ * 停在 `'settled'`** ⇒ 玩家在大厅那几屏上切标签页回来会**多调一次** `renderLobbyFrame()`
+ * （那一次会走 `lobbyCoinView()` + `enterNetGame()` 早退）。它与 `onInbound` 早有的同类触发同源
+ * （早就存在"大厅屏上收到帧也重画一帧"的路径），代价是有界的、屏上无副作用，所以留着。
+ */
+window.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  if (coinPhase === null) return; // 没有在走硬币阶段 ⇒ 什么都不做
+  renderLobbyFrame();
+});
+
+/**
+ * ★★ **推一次硬币阶段的格子**（`renderLobbyFrame` **每一帧的第一件事**；幂等）。
+ *
+ * ## 顺序（用户要的那一条，也是评审的阻断项）
+ *
+ * 1. 读数一到手（`landed` 与 `winner` 都有）⇒ 进 `'call'`：屏上**只**出现"玩家 N 叫了「某面」"，
+ *    停 `COIN_CALL_HOLD_MS`（900ms），**不播动画**；
+ * 2. 到点 ⇒ 进 `'toss'`：屏上开始演抛硬币，停 `COIN_TOSS_MS`（1620ms）；
+ * 3. 到点 ⇒ 进 `'settled'`：屏上出**结论行**，停 `COIN_SETTLED_HOLD_MS`（1200ms）；
+ * 4. 到点 ⇒ `coinPhase` 已经在 `'settled'` 且到期，`enterNetGame()` 那道闸放行 ⇒ 进草稿屏。
+ *
+ * ## ⚠️ 它必须排在 `enterNetGame()` **之前**（第一版的阻断项就在这里）
+ *
+ * 第一版把"进门"排在"推格子"之前，而闸只看**当前这一格**的到期时刻 ⇒ 兜底支把
+ * `coinPhaseAt` 设成"告知 + 动画"之和之后，到点那一帧闸先判"到期"并 `return`（`enterNetGame`
+ * 成功就 return），**推格子那一步再也跑不到** ⇒ `'toss'`/`'settled'` 永不写入、结论行永不出现。
+ * 现在：推格子在一帧的最前面，闸只认"`'settled'` 且到期"。
+ *
+ * ## 起点只在"换了一枚结算"时重设（`coinPhaseSeed`）
+ *
+ * 绑定的是**种子**而不是一个"演过没有"的布尔：布尔闩会跨局带过去；也**不是每一帧都重设** ——
+ * 那样"读数齐了"期间的连续重画会把起点一直往后推，动画永远起不来。
+ */
+function advanceCoinPhaseIfReady(): void {
+  const coin = lobbyClient === null ? null : lobbyCoinView();
+  // 读数没齐 ⇒ 硬币阶段还没到最后一格（屏上是"叫了哪一面 / 等对方叫面"）
+  if (coin === null || coin.landed === null || coin.winner === null) return;
+  const seed = coinVerdict?.seed;
+  if (seed === undefined) return;
+  const now = performance.now();
+  let changed = false;
+  if (coinPhaseSeed !== seed) {
+    // 新的一枚结算（新的一局 / 第一次算出来）：从第 1 格起
+    coinPhaseSeed = seed;
+    coinPhase = 'call';
+    coinCallStartedAt = now;
+    coinPhaseAt = now + COIN_CALL_HOLD_MS;
+    changed = true;
+  } else if (coinPhase === 'call' && coinPhaseElapsedAt(coinPhaseAt)) {
+    coinPhase = 'toss';
+    coinTossStartedAt = now;
+    coinPhaseAt = now + coinTossHoldMs();
+    changed = true;
+  } else if (coinPhase === 'toss' && coinPhaseElapsedAt(coinPhaseAt)) {
+    coinPhase = 'settled';
+    coinSettledStartedAt = now;
+    coinPhaseAt = now + COIN_SETTLED_HOLD_MS;
+    changed = true;
+  } else if (coinPhase === 'settled' && coinPhaseElapsedAt(coinPhaseAt)) {
+    /**
+     * ★★ **`'settled'` 那一格到期 ⇒ 清空 `coinPhaseAt`**（G5 T19 修复轮 2 的必改项）。
+     *
+     * 不清它的后果（评审实测的"机器卡"）：下面那段兜底判的是"`coinPhaseAt` 非空而定时器
+     * 为空 ⇒ 重排一次"，而进牌桌那一帧恰好是"`coinPhaseAt` 已过期 + 定时器刚被回调置空"
+     * ⇒ 每帧排一个 **0ms** 唤醒，从进桌一直挂到 `resetToMainInterface`（屏上完全看不出来）。
+     * 清空之后那段的前提直接不成立（只剩 `'call'`/`'toss'` 两格会走兜底，而它们**确实**
+     * 需要一个到点叫醒）。
+     */
+    coinPhaseAt = null;
+    clearCoinPhaseTimer();
+    changed = true;
+  }
+  if (changed) {
+    if (coinPhaseAt !== null) armCoinPhaseWake(coinPhaseAt, seed);
+    return;
+  }
+  /**
+   * **没有换格、但定时器不在了**（页面在后台被节流时把定时器丢了、或上面那次回调抛过异常）
+   * ⇒ 按同一判据重新排一次"到点叫醒"。没有这一条，格子会永远停在 `'call'`/`'toss'` 上：
+   * 屏不动、牌桌也进不去（不报错的死挂）。
+   *
+   * ⚠️ **只在"到期时刻还没到"时重排**（G5 T19 修复轮 2）：已经过期的时刻重排出来就是一个 0ms
+   * 定时器 —— 那正是评审抓到的那条自唤醒链。到点之后就**没人**再排了（格子由本函数下一次被调
+   * 时按判据推过去；真的推不动时还有 `visibilitychange` 那条腿）。
+   */
+  if (coinPhaseAt !== null && coinPhaseTimer === null && !coinPhaseElapsedAt(coinPhaseAt)) {
+    armCoinPhaseWake(coinPhaseAt, seed);
+  }
+}
+
+/**
+ * ★ **只在"到期时刻还没到"时排一次到点叫醒**（`wakeCoinPhase` 的唯一入口）。
+ *
+ * 为什么单开一个包装：`wakeCoinPhase` 的语义是"到 `due` 那一刻叫醒一次"，而传一个**已经过去**的
+ * 时刻进去的唯一效果就是排一个 0ms 定时器（评审实测的那条自唤醒链）。把"必须还没到点"这条前提
+ * 收在**一个**判断里，两个调用点（换格 / 兜底补排）都不可能绕过它。
+ */
+function armCoinPhaseWake(due: number, seed: string): void {
+  if (coinPhaseElapsedAt(due)) return; // 已经到点 ⇒ 不排（到点该由"推格子"处理，不是叫醒）
+  wakeCoinPhase(due, seed);
+}
+
+/** 复位硬币阶段那几个模块态（与 `coinVerdict` / `coinSettledShown` 同族；`resetToMainInterface` 调） */
+function resetCoinPhase(): void {
+  clearCoinPhaseTimer();
+  coinPhaseSeed = null;
+  coinPhase = null;
+  coinPhaseAt = null;
+  coinCallStartedAt = null;
+  coinTossStartedAt = null;
+  coinSettledStartedAt = null;
+  coinWakeThrew = 0;
+  coinWakeScheduled = 0;
+  coinWakeStaleScheduled = 0;
+}
+
 
 /**
  * 画出大厅这一帧。
@@ -1480,17 +1935,29 @@ function renderLobbyFrame(): void {
    * ★★ **T11-C：这一帧先问"是不是该进牌桌了"**（任务书 §7：硬币屏上刻意**没有**
    * "开始对局"按钮 ⇒ 进对局的触发条件只能做在"读数齐了"这一层，不许加按钮）。
    *
-   * ⚠️ **顺序写死，而且"先算读数、再进牌桌"**：`lobbyCoinView()` 里那句
-   * `lobbyCoinViewOf()` 是 `__coinInputs`（硬币屏那一帧的结算读数）**唯一**的写入点，
-   * 而进牌桌之后这一帧就 `return` 了、那块屏再也不画 ⇒ 两件事挤在同一帧时，
-   * 先 `enterNetGame()` 会把读数**吃掉**（评审的阻断项就是这么来的；详见 `coinVerdict` 的说明）。
-   * 反过来先算读数只是多算一次纯读数（`lobbyCoinViewOf` 无副作用，除了它自己写的那两个全局读数），
-   * 屏上那一帧仍然由下面的 `lobbyCoinShown` 指纹决定要不要重画 —— 不会多画。
+   * ⚠️ **顺序写死，而且"先算读数、再推硬币阶段、最后才进牌桌"**：
+   *  - `lobbyCoinView()` 里那句 `lobbyCoinViewOf()` 是 `__coinInputs`（硬币屏那一帧的结算读数）
+   *    **唯一**的写入点，而进牌桌之后这一帧就 `return` 了、那块屏再也不画 ⇒ 先 `enterNetGame()`
+   *    会把读数**吃掉**（T11-C 的评审阻断项就是这么来的；详见 `coinVerdict` 的说明）；
+   *  - ★★ **G5 T19 修复轮：推硬币阶段也必须排在 `enterNetGame()` 之前。**
+   *    第一版把它排在后面，而 `enterNetGame` 成功就 `return` ⇒ 到点那一帧只放行、不推格子，
+   *    `'toss'`/`'settled'` 永不写入、结论行永不出现（评审实测：门里 30s 轮询从未看到结论行）。
+   *    现在一帧的顺序是：**算读数 ⇒ 推阶段 ⇒ 画屏 ⇒ 问进门**；进门那道闸只认
+   *    "`coinPhase === 'settled'` 且这一格也到期"。
    */
   const coin = client === null ? null : lobbyCoinView();
   if (coin !== null && coin.winner !== null) {
     const hand = client?.handoff() ?? null;
-    if (hand !== null && hand.ready && hand.seed !== null && hand.draftStarter !== null) {
+    /**
+     * ⚠️ **G5 T19：已经算出来的那一枚不重算**。
+     *
+     * `coinPhase` 那几格是按 `coinVerdict.seed` 绑定的（见 `advanceCoinPhaseIfReady`），
+     * 而这个块每帧都会重算一次 `coinVerdict` —— 重算本身是幂等的（值逐字相同），
+     * 但换一个新对象、并把同一枚结算的起点重设一遍是**没有意义**的（那一枚的格子已经在走）。
+     * 所以只在"还没有"或"换了一局（种子不同）"时写它。
+     */
+    const fresh = coinVerdict === null || (hand !== null && hand.ready && hand.seed !== coinVerdict.seed);
+    if (hand !== null && hand.ready && hand.seed !== null && hand.draftStarter !== null && fresh) {
       coinVerdict = {
         role: coin.role, caller: coin.caller, chosen: coin.chosen ?? hand.chosen,
         // ⚠️ 相位取 `hand.phase`（= `'complete'`，两端同一个值），**不取** `coin.phase`：
@@ -1501,7 +1968,20 @@ function renderLobbyFrame(): void {
       (globalThis as { __coinVerdict?: unknown }).__coinVerdict = coinVerdict;
     }
   }
-  enterNetGame();
+  /**
+   * ★★ **G5 T19：推硬币阶段**（闸在那个函数里判，见它的说明）。**必须在 `enterNetGame()` 之前** ——
+   * 第一版的阻断项就是在这一行上：进门排在推格子之前，而 `enterNetGame` 成功就 `return`
+   * ⇒ 到点那一帧只放行、不推格子，`'toss'`/`'settled'` 永不写入、结论行永不出现。
+   */
+  advanceCoinPhaseIfReady();
+  /**
+   * ★★ **这一帧要不要现在进牌桌**。闸只看一件事：**硬币阶段已经到 `'settled'` 且那一格也到期**。
+   *
+   * `'call'` / `'toss'` / `'settled'` 三格各自的时间由 `advanceCoinPhaseIfReady` 记在
+   * `coinPhaseAt` 上，这里不再看"当前格到期没有"那种模糊判据（那正是第一版把 `'call'` 当成
+   * "已经全部到期"的原因）。
+   */
+  if (coinPhase === 'settled' && coinPhaseElapsedAt(coinPhaseAt)) enterNetGame();
   if (netGame !== null) return; // 已经进牌桌：这一帧不该再画大厅/硬币屏（`enterNetGame` 里画过了）
   if (client !== null) client.sync();
   /**
@@ -1523,16 +2003,29 @@ function renderLobbyFrame(): void {
    */
   if (coin !== null && !lobbyRestartNeeded && !linkRecoveryNeeded) {
     // 只在这一帧的读数**与上一帧不同**时重画（见 `lobbyCoinShown` 的说明）
-    const sig = `${coin.role}|${coin.phase ?? ''}|${String(coin.chosen)}|${String(coin.landed)}|${String(coin.winner)}|${String(coin.caller)}`;
+    /**
+     * ⚠️ **G5 T19：指纹里加了 `coinPhase`**（`call` / `toss` / `settled`）。
+     *
+     * 不加它的话，"动画开始"与"动画结束"这两格会与"读数齐了"那一格**指纹相同** ⇒
+     * 屏上永远不会重画到抛硬币/落定（而 `landed`/`winner` 在整段时间里都不变）。
+     */
+    const sig = `${coin.role}|${coin.phase ?? ''}|${String(coin.chosen)}|${String(coin.landed)}|${String(coin.winner)}|${String(coin.caller)}|${String(coinPhase)}`;
     if (sig !== lobbyCoinShown) {
       lobbyCoinShown = sig;
       renderCoin(root, {
         backHome: () => { showModeSelect(); },
         // ⚠️ 联机那一支**不读种子**（D27：叫面必须早于公开种子）⇒ 这里刻意不给 `seed`
         // ⚠️ T11-C：`beginGame` 仍然**空实现** —— 联机这一支没有"开始对局"按钮（上面 §7），
-        //    进对局的触发点是本函数开头那句 `enterNetGame()`。热座那一支照旧（那边有按钮）。
+        //    进对局的触发点是 `renderLobbyFrame` 里那句带闸的 `enterNetGame()`。热座那一支照旧。
         beginGame: () => { /* 联机进牌桌由 enterNetGame() 触发，不是这个按钮 */ },
-        net: coin,
+        /**
+         * ★★ **G5 T19 修复轮：屏上画哪一格由 `coinPhase` 决定**（不许按"落点到手没有"反推）。
+         *
+         * 三个相位与屏上的对应写在 `renderCoinNet` 的开头：`'call'` 只说"谁叫了哪一面"、
+         * `'toss'` 才起播动画、`'settled'` 才出结论行。`reducedMotion` 是给动画那一格的动态偏好
+         * 开关（`'call'`/`'settled'` 两格的停留不受它影响）。
+         */
+        net: { ...coin, coinPhase: coinPhase ?? undefined, reducedMotion: reducedMotion() },
       });
     }
     /**
@@ -2018,6 +2511,18 @@ function startLobby(role: 'host' | 'guest'): void {
                 return;
               }
               netGame.driver.pump(state);
+              /**
+               * ★★ **G5 T19：对端那一侧也要播草稿 → 对局的转场**（用户真机提的第 3 件事）。
+               *
+               * 本端的状态是**收到那一帧之后**才跨过 `draft → turn` 的（`pump` 把它落了地），
+               * 而转场原来只挂在"本端自己提交成功"那一支上（`cb.onDraftPick`）⇒ 非轮选者
+               * 直接从草稿屏跳到牌桌。这里是**同一个判据**（本端状态跨过了那一刻）、
+               * 同一个入口（`playDraftToGameTransitionOnce`，含"同一次转变只播一次"的闩）。
+               *
+               * 位置：`pump` **之后**（相位已经是 `'turn'`）、`rerender()` **之前**
+               * ——与轮选者那支的顺序一致（先画最终态/盖上转场，再由转场收尾时重画牌桌）。
+               */
+              playDraftToGameTransitionOnce();
               rerender();
             });
           }
@@ -2777,6 +3282,10 @@ function startReplayFile(file: MatchFile): void {
   drawAnimBusy = false;
   revealFlyBusy = false;
   transitioning = false;
+  // ★ G5 T19：进重放页 ⇒ "草稿转场演过没有"复位（重放页不播那个转场，但这一位是本文件的
+  //   每局闩，与 `transitioning` 并排复位 —— 漏了它会让重放之后开的新局不播转场）
+  draftTransitionPlayed = false;
+  transitionPlayed = 0;
   pendingDraws = [];
   pendingReveals = [];
   clearGen2Fx();
@@ -2945,6 +3454,49 @@ function currentDraftDrafter(): PlayerId {
   return getCurrentDrafter(state);
 }
 
+/* ── ★★ G5 T19：草稿 → 对局的转场，**两端各播一次**（修"只有一端播"那条）────────────── */
+
+/**
+ * 这一局的草稿 → 对局转场**演过了没有**（模块态）。
+ *
+ * ## 它修的是什么（用户真机提的第 3 件事）
+ *
+ * 转场原来只有**一个**触发点：`cb.onDraftPick` 里"提交成功 && `state.phase === 'turn'`"
+ * 那一支（`playDraftToGameTransition()` 的唯一调用点）—— 那是**轮选者那一侧**的路径。
+ * 另一端的状态是**收到 `act` 帧之后**才跨过 `draft → turn` 的（走 `onInbound` 的
+ * `pump` + `rerender`），那一支里**没有任何转场调用** ⇒ 它直接看到牌桌。
+ *
+ * ## 为什么用一个"演过没有"的闩，而不是"谁没演过就补一次"
+ *
+ * 同一端**可能两条路都走到**：轮选者提交之后自己也会因为别的路径再 `rerender()` 一次
+ * （自动推进的调度、对端帧、开发模式解锁……），而 `state.phase` 从那以后**恒为 `'turn'`**
+ * ⇒ 按"相位是 turn 就播"会**反复播**同一段动画（每帧一次）。所以跨过那一刻时置位，
+ * 之后同一局的每一次重画都看得见它（同一次转变只播一次）。
+ *
+ * 复位点与本文件其它"每局的闩"同族：`enterNetGame()` 起新的一局时清、`resetToMainInterface()`
+ * 清、进重放页时清（见 `startReplayFile`）。
+ */
+let draftTransitionPlayed = false;
+
+/**
+ * ★★ **在这一刻跨过 `draft → turn` 时播一次转场**（两个调用点的**唯一**入口）。
+ *
+ * 判据只有一条：`state.phase !== 'draft'`（跨过去了）且这一局还没演过。
+ * `enterNetGame()` 里那两处赋值（新开一局 / 重连换驱动）会按当时的相位把它置位，
+ * 所以"重连回到对局中"不会补播一次转场。
+ *
+ * ## 为什么第二端不需要额外的信号
+ *
+ * 两端的转场**同源**：都是"本端状态跨过那一刻" ⇒ 各自 `pump`/`submit` 之后判一次就够。
+ * 这条与"对端屏要更新"那条路**同一个源**（状态变化 ⇒ 该端自己播），所以不需要协议里加消息。
+ */
+function playDraftToGameTransitionOnce(): void {
+  if (state.phase === 'draft' || draftTransitionPlayed) return;
+  draftTransitionPlayed = true;
+  transitionPlayed += 1;
+  playDraftToGameTransition();
+}
+
 const cb: UiCallbacks = {
   onRendered() {
     // 效果内重排窗口（动量4）随每帧渲染同步：栈顶是重排请求 → 打开；结算完毕 → 自动关闭
@@ -3001,7 +3553,8 @@ const cb: UiCallbacks = {
     if (state.phase === 'turn') {
       // 草案完成：先渲染最终草案（6 张全选）→ 渐进离场 → 全屏加载视频 → 对战界面渐进入场
       renderDraft(root, state, cb);
-      playDraftToGameTransition();
+      // ★ G5 T19：走唯一的那个入口（本端跨过那一刻 ⇒ 播一次；见 `playDraftToGameTransitionOnce`）
+      playDraftToGameTransitionOnce();
     } else {
       rerender();
     }
@@ -3499,6 +4052,22 @@ function showModeSelect(): void {
       // 控制轨特效变竖向，**不报任何错**。
       setFxViewSeat(null);
       gameOptions = { ban, randomPool };
+      /**
+       * ★★ **G5 T19 修复轮：热座开局前复位"草稿 → 对局转场演过没有"那个闩。**
+       *
+       * ## 为什么必须补，以及为什么写在这里（不是 `showCoin` 里）
+       *
+       * 从联机那几屏回到模式选择**不走**整屏复位 —— 硬币屏的"← 返回游戏模式选择"
+       * （`renderCoin` 的 `nav.backHome`）与大厅恢复屏都直调 `showModeSelect()`。若那一局联机的
+       * 草稿已经打完（闩已置 `true`），接着开热座时闩还留着 ⇒ **热座那局的转场不播**。
+       *
+       * ⚠️ 写在**模式选择的入口回调**里而不是 `showCoin` 里：`showCoin` 是
+       * `tests/ui/local-data-screen.test.ts` 钉住的"G4 不碰的邻居"之一（要求与 G4 之前的提交
+       * **逐字节相同**）⇒ 往里加一行等于为了让新功能过审而放松一条既有守卫。这里改的是
+       * `showModeSelect`，它本来就已经被移出那一组（T8 的联机入口）。
+       */
+      draftTransitionPlayed = false;
+      transitionPlayed = 0;
       showCoin();
     },
     /**
@@ -3531,6 +4100,15 @@ function showModeSelect(): void {
       gameOptions = { ban, randomPool };
       renderMode = 'net';
       netViewSeat = viewSeat;
+      /**
+       * ★★ **G5 T19 修复轮 2：预览这条路也要复位"草稿 → 对局转场演过没有"那个闩。**
+       *
+       * 它与 `startHotseat` 同源（两条都调 `showCoin()`），而下面那条注释（"不会绕过过渡动画"）
+       * 说的正是这件事：联机那局打完草稿之后闩已置 `true`，接着点"单视角预览"时闩还留着 ⇒
+       * **预览的草稿 → 对局转场不播**（用户那次抱怨的就是这个观感）。
+       */
+      draftTransitionPlayed = false;
+      transitionPlayed = 0;
       // 手牌可见性不在这里设：本页无该选项（I-2/N4 已把档位字段删掉，恒为信息遮蔽形态）。
       showCoin();
     },
@@ -3689,6 +4267,12 @@ function resetToMainInterface(): void {
   chooseFaceResolve = null;
   faceChosen = false;
   lobbyCoinShown = null;
+  // ★ G5 T19：硬币阶段那几格（'call'/'toss'/'settled'）+ 它的定时器也归这里
+  //   （同族：漏了下一局会带着上一局的格子 ⇒ 新一局的硬币阶段直接被判成"已经演完"）
+  resetCoinPhase();
+  // ★ G5 T19：草稿 → 对局那个转场的"演过没有"同族（漏了下一局的转场永远不播）
+  draftTransitionPlayed = false;
+  transitionPlayed = 0;
   // ★ 修复轮：开局期那次断线留下的"这一局该重来"读数也归这里（同族：漏了下一局会带着上一局的屏）
   lobbyRestartNeeded = false;
   // ★ G5 T13-C：对局中掉线留下的"屏该画大厅那一屏"读数同族，一起归零

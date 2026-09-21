@@ -19,7 +19,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { descendants, installStubDom, makeStubEl, queryAllIn, type StubNode } from './net-dom-stub';
+import { descendants, installStubDom, isClass, makeStubEl, queryAllIn, stubAnimsOf, type StubNode } from './net-dom-stub';
 import { stripComments, functionBody } from './source-text';
 import { renderCoin, type CoinNetView } from '../../src/ui/home';
 import type { CoinSide } from '../../src/app/coin';
@@ -159,6 +159,85 @@ describe('G5 T11-B · 联机硬币屏（`renderCoin` 的 `nav.net` 分支）', (
     expect(text, '热座硬币屏的标题被改掉了').toContain('玩家一掷硬币决定先后手');
     expect(queryAllIn(root, 'button.coin-flip-btn').length, '热座硬币屏上没有了「掷硬币」按钮').toBe(1);
     expect(queryAllIn(root, '.coin-result-text').length, '热座硬币屏还没掷就出现了落点').toBe(0);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * ★★ G5 T19 修复轮：**三格由相位决定**（行为腿；本轮评审的阻断项）
+ *
+ * ## 为什么这三条是行为腿，而不是"读源码符号"
+ *
+ * 第一版把"这一刻该不该播动画"写成 `tossing = landed !== null && !settled` —— 从**落点**反推
+ * 相位 ⇒ `'call'`（告知"谁叫了哪一面"）那一格在屏上**已经在播动画**，用户要的"先告知"那一格
+ * 实际不存在（评审实测）。
+ *
+ * 这一族判据要问的是"**哪一枚元素被起了动画**"，所以桩里补了 `animate`/`getAnimations` 的
+ * 记录实现（`tests/ui/net-dom-stub.ts` 的 `stubAnimsOf`）—— 没有它，产出代码里那句
+ * `typeof disc.animate === 'function'` 守卫恒假，这三条**全是空腿**。
+ * ------------------------------------------------------------------ */
+
+describe('G5 T19 · 硬币屏三格（`net.coinPhase` 决定画什么）', () => {
+  /** 这一帧里被起过动画的元素（按元素树顺序） */
+  function animated(root: StubNode): { disc: number; stage: number } {
+    const disc = descendants(root).filter((n) => isClass(n, 'coin-disc-big'));
+    const stage = descendants(root).filter((n) => isClass(n, 'coin-stage'));
+    return {
+      disc: disc.reduce((n, el) => n + stubAnimsOf(el).length, 0),
+      stage: stage.reduce((n, el) => n + stubAnimsOf(el).length, 0),
+    };
+  }
+
+  it("★ `'call'` 格：只说「谁叫了哪一面」，**一条动画都不起**", () => {
+    const { root } = renderNet({
+      role: 'caller', choose: () => {}, chosen: 2, landed: 2, winner: 1, caller: 1, coinPhase: 'call',
+    });
+    const text = textOf(root);
+    expect(text, "`'call'` 格没有说清谁叫了哪一面").toContain('玩家 2 叫了「反面」');
+    expect(text, "`'call'` 格就已经说「正在抛硬币」了").not.toContain('正在抛硬币');
+    // ★ 本轮的核心：这一格**不许**播动画（第一版在这里就播了）
+    expect(animated(root), "`'call'` 格起了动画（告知那一格被动画盖掉了）").toEqual({ disc: 0, stage: 0 });
+    // 也不许提前给结论
+    expect(queryAllIn(root, '.coin-result-text').length, "`'call'` 格出现了结论行（结果提前了）").toBe(0);
+  });
+
+  it("★ `'toss'` 格：起两条动画（`disc` 转 + `stage` 抛），仍然只说「谁叫了哪一面」", () => {
+    const { root } = renderNet({
+      role: 'caller', choose: () => {}, chosen: 2, landed: 1, winner: 0, caller: 1, coinPhase: 'toss',
+    });
+    expect(animated(root), "`'toss'` 格没有起动画（或起的条数不对）").toEqual({ disc: 1, stage: 1 });
+    const text = textOf(root);
+    expect(text, "`'toss'` 格没有说清谁叫了哪一面").toContain('玩家 2 叫了「反面」');
+    expect(text, "`'toss'` 格没有那句「正在抛硬币」").toContain('正在抛硬币');
+    expect(queryAllIn(root, '.coin-result-text').length, "`'toss'` 格就把结论给出了（动画还没演完）").toBe(0);
+  });
+
+  it("★ `'settled'` 格：出结论行、**不再起动画**；`prefers-reduced-motion` 下动画那一格也不起", () => {
+    const { root } = renderNet({
+      role: 'caller', choose: () => {}, chosen: 2, landed: 2, winner: 1, caller: 1, coinPhase: 'settled',
+    });
+    expect(animated(root), "`'settled'` 格又起了一次动画（每格只该演一次）").toEqual({ disc: 0, stage: 0 });
+    const hit = queryAllIn(root, '.coin-result-text');
+    expect(hit.length, "`'settled'` 格没有结论行").toBe(1);
+    expect(hit[0].text, '结论行里的先选协议者不对').toContain('玩家 2 先选协议');
+    // 动态偏好：动画那一格也不许起动画（换图照做 —— 结论仍要正确）
+    const reduced = renderNet({
+      role: 'caller', choose: () => {}, chosen: 2, landed: 1, winner: 0, caller: 1,
+      coinPhase: 'toss', reducedMotion: true,
+    });
+    expect(animated(reduced.root), '`prefers-reduced-motion` 下仍然起了动画').toEqual({ disc: 0, stage: 0 });
+    expect(textOf(reduced.root), '动态偏好下没有那句「正在抛硬币」（告知那一半丢了）').toContain('正在抛硬币');
+  });
+
+  it('★ 屏上把"这一刻在哪一格"挂成 `data-coin-stage`（门禁/排查读它）', () => {
+    for (const phase of ['call', 'toss', 'settled'] as const) {
+      const { root } = renderNet({
+        role: 'waiter', choose: () => {}, chosen: 1, landed: 1, winner: 1, caller: 1, coinPhase: phase,
+      });
+      const screens = queryAllIn(root, '.coin-screen');
+      expect(screens.length, '屏上没有 `.coin-screen`').toBe(1);
+      expect((screens[0].getAttribute as (n: string) => unknown)('data-coin-stage'),
+        `\`${phase}\` 格没有挂到 data-coin-stage`).toBe(phase);
+    }
   });
 });
 

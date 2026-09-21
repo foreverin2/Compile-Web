@@ -86,6 +86,24 @@ export interface CoinNetView {
   winner: PlayerId | null;
   /** 叫面者是谁（落点那句"玩家 N 先选协议"的座位口径；`0` = 房主位、`1` = 加入方位） */
   caller: PlayerId;
+  /**
+   * ★★ **G5 T19 修复轮：这一帧画硬币阶段的哪一格**（由 app 的相位交下来，**不许按落点反推**）。
+   *
+   * 三个值与屏上的对应（`renderCoinNet` 开头那段说明）：
+   *  - `'call'`：**只说**"玩家 N 叫了「某面」"—— 不播动画、不出结论行；
+   *  - `'toss'`：开始演抛硬币（`playCoinTossAnimation`）；
+   *  - `'settled'`：出**结论行**（`coin-result-text`），并且这一格要在屏上停够（归 app 计时）。
+   *
+   * ⚠️ 缺省（`undefined`）时按 `'settled'` 处理：那是"重画一帧落定屏"的调用点
+   * （`main.ts` 进牌桌之前那次补画）与既有单测的口径。
+   */
+  coinPhase?: 'call' | 'toss' | 'settled';
+  /**
+   * `prefers-reduced-motion: reduce` ⇒ **动画那一格不演**（换图照做）。
+   *
+   * 注意它只影响动画：`'call'` 与 `'settled'` 两格的停留是"把话说完"，与动态偏好无关。
+   */
+  reducedMotion?: boolean;
 }
 
 const SET_LABEL: Record<string, string> = {
@@ -445,6 +463,164 @@ export function renderCoin(root: HTMLElement, nav: CoinNav): void {
 }
 
 /**
+ * 联机硬币屏上**抛硬币动画**的时长（毫秒）。**有界**，而且是**唯一**的一个数。
+ *
+ * ## 为什么是这个量级（1.62 秒）
+ *
+ *  - **下界**：抛硬币的观感要有"上抛 → 空中翻 → 落地回弹"三个阶段，各段至少能被看见
+ *    （实测：低于 ~1.2s 时三段挤在一起，看起来只是"闪了一下"——而那正是用户说的
+ *    "原来的完全就不是抛硬币"）；
+ *  - **上界**：这段时长**每一局都花在进牌桌之前**（进对局的触发点是"动画播完"，
+ *    见 `main.ts` 的 `coinSettleDeadline`），而真浏览器门（`tools/browser-truth-lobby-cdp.mjs`）
+ *    在"点完芯片"到"两端进草稿"之间等的是 `--wait` 那个每步预算（收尾跑的是 30s）。
+ *    1.62s 在这条预算里占比 5% 量级 —— 不是"贴着上限"，也不是"偷偷缩成 0"。
+ *
+ * 拆解：上抛 0.675s（到顶）+ 下落 0.270s（回到底）+ 回弹 0.075s + 二次下落 0.060s
+ * + 落定 0.540s（原地定住给玩家看落点），合计 1620ms。
+ */
+export const COIN_TOSS_MS = 1_620;
+
+/** 动画里"币面翻到侧面（转 90°）"那一刻在总时长里的比例（角度剖面里写死的 42%）。 */
+const COIN_TOSS_APEX_RATIO = 0.42;
+
+/**
+ * 抛硬币动画的**角度与高度剖面**（两枚大币共用；`rotations` 由落点决定）。
+ *
+ * ## 剖面怎么来的（写下来，免得下一个人以为几个数是随手填的）
+ *
+ *  - **高度**（`translateY`，负值向上）：抛体的匀减速上升 + 匀加速下落。
+ *    取"0.675s 到顶、顶点 160px"⇒ 初速 2*160/0.675 = 474px/s、加速度 2*160/0.675² = 702px/s²。
+ *    按这两个数逐段取样（每 90ms 一个点），于是后半段**是真抛物线的样子**：
+ *    落地那一格的间距明显大于顶点附近的间距（顶点处速度接近 0）。落地后 `-26px → 0px`
+ *    是一次回弹（0.075s 到顶、0.06s 落回）。
+ *  - **翻转**（`rotateX`）：t ∈ [0, 0.42] 从 0 匀加速到 90°（角加速度 ≈ 2*90/0.42² ≈ 1020 °/s²，
+ *    与上抛同步"先慢后快"）；t ∈ [0.42, 0.925] 从 90° 匀减速到终点角度 —— 终点角度由
+ *    **落点面**决定：正面 2 整圈 + 90° = 810°、反面 2.5 整圈 = 900°，两者都落在
+ *    "该面朝前、且不倾斜"的姿态上（`rotateX(810deg)` 与 `rotateX(90deg)` 的朝向相同）。
+ *  - t ∈ [0.925, 1] 角度不动（原地落定）。
+ *
+ * `easing: 'linear'` 写死：所有加减速都已经在关键帧的角度/位移里，再叠一条缓动只会让抛物线走形。
+ *
+ * @returns 关键帧：`transform` 里**同时**含 `translate3d`（高度）与 `rotateX`（角度）
+ */
+function coinTossFrames(rotations: number): Keyframe[] {
+  const lunge = 2 * 160 / 0.675; // ≈ 474 px/s
+  const gravity = 2 * 160 / (0.675 * 0.675); // ≈ 702 px/s²
+  /** t（秒）时的高度：上抛段用匀减速、下落段用同一加速度往回走 */
+  const yAt = (t: number): number => {
+    const top = 0.675;
+    if (t <= top) return -(lunge * t - (gravity * t * t) / 2);
+    const d = t - top;
+    return -Math.max(0, 160 - (gravity * d * d) / 2);
+  };
+  const angleAt = (t: number): number => {
+    const a = 0.42;
+    const b = 0.925;
+    if (t <= a) return 90 * (t / a) * (t / a);
+    if (t <= b) return 90 + (rotations * 360 - 90) * ((t - a) / (b - a));
+    return rotations * 360;
+  };
+  /** 关键帧的 t 列表：0.42 与 0.925 是两个"折点"，必须各占一帧 */
+  const stops = [
+    0, 0.09, 0.18, 0.27, 0.36, 0.42, 0.51, 0.6, 0.69, 0.78, 0.87, 0.925,
+    0.94, 0.965, 1,
+  ];
+  return stops.map((t) => {
+    // 回弹那两帧单独给高度（抛物线与它无关：那是落地之后的事）
+    const y = t <= 0.925 ? yAt(t) : (t <= 0.965 ? -26 : 0);
+    // x 漂移：上抛时向右一点点，落地时回到起点附近（不是第二套物理，只是别让它直上直下）
+    const x = t <= 0.42 ? 14 * (t / 0.42) : 14 * (1 - (t - 0.42) / 0.583);
+    return {
+      offset: t,
+      transform: `translate3d(${x.toFixed(2)}px, ${y.toFixed(2)}px, 0) rotateX(${angleAt(t).toFixed(2)}deg)`,
+    };
+  });
+}
+
+/**
+ * 从剖面里取**单向成分**（某一枚元素只该收其中一样）。
+ *
+ * ## 为什么要拆（不拆就是两份位移/两份旋转）
+ *
+ * 高度与角度是同一条抛物线的两个投影，所以剖面函数**只有一份**（拆成两个函数会立刻出现
+ * 两份会漂移的常量）。但同一份剖面不能同时挂到两枚元素上：`stage` 与 `disc` 是父子，
+ * 两条动画的位移会叠加（币飞两倍高）、角度也会叠加（转两倍圈）。⇒ 挂之前各取自己那一半。
+ */
+function onlyTranslate(frame: Keyframe): Keyframe {
+  return { offset: frame.offset, transform: `translate3d(${/translate3d\(([^)]*)\)/.exec(String(frame.transform))![1]}, 0)` };
+}
+function onlyRotate(frame: Keyframe): Keyframe {
+  return { offset: frame.offset, transform: `rotateX(${/rotateX\(([-\d.]+)deg\)/.exec(String(frame.transform))![1]}deg)` };
+}
+
+/**
+ * 播一次抛硬币动画（**只给联机分支**；热座那条路的交替闪现一个字没动）。
+ *
+ * ## 用 Web Animations API + transform 的理由（本仓的红线决定）
+ *
+ * `src/ui/styles.css` 是**红线文件**（本任务不许动），所以这里不新增任何 CSS 类与关键帧，
+ * 一律走 `el.animate([...], {...})` 的内联 `transform`。位置上：`stage` 被抬起来时同一行的
+ * 其它元素**不跟着动**（`transform` 不参与布局；`.coin-stage` 是 flex 项，位移只在绘制层）。
+ *
+ * ## 角色分工（两枚币面是两张图，不是一张图的两面）
+ *
+ *  - `stage` 收**竖直上抛 + x 漂移**（高度）；
+ *  - `disc` 收**绕 x 轴翻转**（角度），并且 `perspective` 挂在它自己身上 ——
+ *    这样旋转有透视，看起来像一枚硬币在翻，而不是一张纸片在压扁。
+ */
+function playCoinTossAnimation(
+  disc: HTMLElement,
+  stage: HTMLElement,
+  landed: CoinSide,
+  reduced: boolean,
+): void {
+  const rotations = landed === 1 ? 2.25 : 2.5;
+  const frames = coinTossFrames(rotations);
+  const img = disc.querySelector('img');
+  disc.style.transformOrigin = '50% 50%';
+  disc.style.perspective = '700px';
+  /**
+   * ⚠️ **动画能力缺失 / 动态偏好要求少动时，只跳过动画本身，换图照做**。
+   *
+   * 三种环境会走到这一格：动态偏好（`prefers-reduced-motion: reduce`）、极老的浏览器
+   * （`Element.animate` / `getAnimations` 是 2016 年前后的 API，本仓的浏览器基线远晚于它）、
+   * 以及**单测的 DOM 桩**（`tests/ui/net-dom-stub.ts` 只实现元素树与选择器，没有 Web Animations）。
+   * 少了这道守卫，宿主那边"落点已经到手"的帧会在这里抛异常 —— 而这一段的失败**不该**
+   * 把硬币阶段卡死（它只负责好看）。
+   *
+   * ⚠️ `getAnimations` 单独查（评审登记：它比 `animate` 晚 48 个版本；只查前者会在那种环境抛）。
+   */
+  const canAnimate = !reduced
+    && typeof disc.animate === 'function' && typeof stage.animate === 'function'
+    && typeof disc.getAnimations === 'function' && typeof stage.getAnimations === 'function';
+  if (canAnimate) {
+    // 先取消上一轮（同一次转变只该有一条动画在跑；重连/重画不会留下第二条）
+    disc.getAnimations().forEach((a) => { a.cancel(); });
+    stage.getAnimations().forEach((a) => { a.cancel(); });
+    const timing: KeyframeAnimationOptions = { duration: COIN_TOSS_MS, easing: 'linear', fill: 'forwards' };
+    disc.animate(frames.map(onlyRotate), timing);
+    stage.animate(frames.map(onlyTranslate), timing);
+  }
+  /**
+   * ★ **换图的那一刻 = 币面转到侧面那一刻**（总时长的 42%，与剖面里那个折点同一个数）。
+   *
+   * 此刻币面与视线平行、图看不见 ⇒ 换成 `landed` 那一面是"翻过来之后是这一面"，
+   * 而不是"图被换了一下"。停在侧面那一帧不写 `img.src` 会让玩家看到**叫的那一面**
+   * 一直翻到落定 —— 那是错的（落点由读数决定，不由动画决定）。
+   *
+   * ⚠️ **不演动画时立刻换图**（没有"侧面那一刻"可言）：屏上定格到落点那一面是"结论正确"
+   * 的一部分，而动画只是观感。
+   */
+  if (canAnimate) {
+    window.setTimeout(() => {
+      if (img !== null) img.src = coinFaceSrc(landed);
+    }, Math.round(COIN_TOSS_MS * COIN_TOSS_APEX_RATIO));
+  } else if (img !== null) {
+    img.src = coinFaceSrc(landed);
+  }
+}
+
+/**
  * 联机硬币屏（G5 T11-B）。
  *
  * 复用热座的**视觉件**（同一套 `coin-*` 类、同一张 `coin-face-chip` 芯片、同一份
@@ -453,7 +629,17 @@ export function renderCoin(root: HTMLElement, nav: CoinNav): void {
  *  2. 没有「掷硬币」按钮：落点由种子派生，而种子要等叫面之后才到手；
  *  3. 等待方芯片禁用、且**没有**落点读数。
  *
- * ⚠️ 这里**不做落地动画**、也**不进牌桌**：那两件事归 T11-C（本段只到"算出落地"为止）。
+ * ★★ **G5 T19：这块屏现在真的抛硬币**（用户："原来的完全就不是抛硬币"）。三格按
+ * `net.coinPhase` 切开（**由 app 的相位决定，不按落点反推** —— 第一版反过来推，结果
+ * `'call'` 那一格就在播动画、"告知停留"从不发生，评审实测的阻断项）：
+ *
+ *  1. **`'call'`**：芯片选中叫出去的那一面，状态行说"玩家 N 叫了「某面」"，**不播动画**；
+ *  2. **`'toss'`**：`playCoinTossAnimation` 演上抛+翻转+回弹，状态行仍只说"谁叫了哪一面"
+ *     （**不**提前给结论）；
+ *  3. **`'settled'`**：`coin-result-text` 给出落点与先选协议者 —— 到这一步硬币阶段才结束，
+ *     `main.ts` 那边还要让这一格停够才进牌桌。
+ *
+ * ⚠️ 这里**不进牌桌**：进牌桌的触发点在 `src/main.ts`。
  */
 function renderCoinNet(root: HTMLElement, nav: CoinNav, net: CoinNetView): void {
   const screen = el('div', 'coin-screen');
@@ -465,9 +651,39 @@ function renderCoinNet(root: HTMLElement, nav: CoinNav, net: CoinNetView): void 
    * 同一套做法。
    */
   screen.setAttribute('data-net-phase', net.phase ?? '');
+  /**
+   * ★★ **G5 T19 修复轮：把"这一帧画哪一格"也挂成属性**（`data-coin-stage`）。
+   *
+   * 理由与 `data-net-phase` 同一族：真浏览器门在硬币屏上读不到"三段走到哪一格"时，
+   * "没有结果行"与"结果行已经过去"分不开。属性不占屏、不参与任何判定。
+   */
+  screen.setAttribute('data-coin-stage', net.coinPhase ?? '');
   screen.appendChild(button('btn coin-back-btn', '← 返回游戏模式选择', nav.backHome));
 
   const isCaller = net.role === 'caller';
+  /**
+   * ★★ **这一帧在哪一格**（缺省 = `'settled'`：那是"重画一帧落定屏"的调用点与既有单测的口径）。
+   *
+   * ⚠️ **不许从 `landed` 反推**：落点一到手就说明"可以演动画了"，但"什么时候开始演"是
+   * **app 的相位**说了算（`'call'` 那一格要先把"谁叫了哪一面"说完）。
+   */
+  const phase: 'call' | 'toss' | 'settled' = net.coinPhase ?? 'settled';
+  const tossing = phase === 'toss';
+  const settled = phase === 'settled';
+  const reduced = net.reducedMotion === true;
+  /**
+   * ★ **叫面者是谁**（"谁叫了哪一面"那句话的座位口径）。
+   *
+   * 它取自 `net.caller` —— 与结论行里那句"玩家 N 先选协议"用的是**同一个数**
+   * （`callerSeat()`，两端一致），屏上不自己猜"叫面的总是加入方"。
+   */
+  const callerSeat = net.caller;
+  /** 叫出去的那一面：叫面方读自己的、等待方读对端揭示进来的（`net.chosen` 由 app 给） */
+  const chosenFace = net.chosen;
+  /** "谁叫了哪一面"整句（读数为空时是 `null` ⇒ 这一格不出现这句话） */
+  const callLine: string | null = chosenFace === null
+    ? null
+    : `玩家 ${callerSeat + 1} 叫了「${coinFaceName(chosenFace)}」`;
   // ★ 标题必须说清"由加入方选面"（热座那句「玩家一掷硬币决定先后手」在联机下不成立）
   screen.appendChild(el('h1', 'coin-title', isCaller ? '加入方选硬币面定先后手（联机）' : '等加入方选硬币面（联机）'));
   screen.appendChild(
@@ -479,16 +695,25 @@ function renderCoinNet(root: HTMLElement, nav: CoinNav, net: CoinNetView): void 
         : '由加入方选硬币的正/反面。对方选完之后，双方都看得到掷出的那一面。'
     )
   );
-  // 等待文案挂在 `coin-rule-2`（既有类，橙字）—— 联机路不写第二套样式
+  /**
+   * 状态行挂在 `coin-rule-2`（既有类，橙字）—— 联机路不写第二套样式。
+   *
+   * ★★ **G5 T19：这一行是"告知叫了哪一面"那一格**（用户要求的第一步）。三格各说什么：
+   *  - `'call'`：**只说**"玩家 N 叫了「某面」"（不播动画、不说落点）；
+   *  - `'toss'`：同一句 + "正在抛硬币…"；
+   *  - `'settled'`：落点与先选协议者交给下面的结论行说（这一行只说"掷出 X。"）。
+   */
   screen.appendChild(
     el(
       'p',
       'coin-rule coin-rule-2',
-      net.landed !== null
+      settled && net.landed !== null
         ? `掷出${coinFaceName(net.landed)}。`
-        : isCaller
-          ? '请选择硬币的正/反面。'
-          : '等对方叫面（对方按下正/反之后，掷硬币才会继续）。'
+        : callLine !== null
+          ? (tossing ? `${callLine} —— 正在抛硬币…` : `${callLine}，等掷硬币。`)
+          : isCaller
+            ? '请选择硬币的正/反面。'
+            : '等对方叫面（对方按下正/反之后，掷硬币才会继续）。'
     )
   );
 
@@ -500,9 +725,17 @@ function renderCoinNet(root: HTMLElement, nav: CoinNav, net: CoinNetView): void 
   img.src = coinFaceSrc(shown);
   img.alt = coinFaceName(shown);
   disc.appendChild(img);
-  if (net.landed !== null) disc.classList.add('settled');
+  if (settled && net.landed !== null) disc.classList.add('settled');
   stage.appendChild(disc);
   screen.appendChild(stage);
+  /**
+   * ★★ **抛硬币那一格：动画在这里起**（`phase === 'toss'` 才算）。
+   *
+   * 起点的币面就是"叫出去的那一面"（上面 `shown` 取的 `net.chosen`）—— 于是玩家看到的是
+   * "我把这一面朝上扔出去、翻过来落到另一面"，而不是"图被换了一下"。
+   * 换图的那一刻是转到侧面那一下（见 `playCoinTossAnimation`）。
+   */
+  if (tossing && net.landed !== null) playCoinTossAnimation(disc, stage, net.landed, reduced);
 
   // 芯片：叫面方点得动，等待方禁用（任务书 §5 的接口：`role === 'waiter'` ⇒ 芯片禁用）
   const pickRow = el('div', 'coin-pick-row');
@@ -525,7 +758,18 @@ function renderCoinNet(root: HTMLElement, nav: CoinNav, net: CoinNetView): void 
   });
   screen.appendChild(pickRow);
 
-  if (net.landed !== null && net.winner !== null) {
+  /**
+   * ★★ **结论行只在 `'settled'` 那一格出现**。
+   *
+   * 这一句是用户要的顺序里**最后一格**（"然后显示最终的结果，这个硬币阶段就结束了"）。
+   * 它出现之后**不许**在同一帧被草稿屏盖掉：`main.ts` 那边给这一格留了
+   * `COIN_SETTLED_HOLD_MS`（1200ms）—— 屏这一层只负责画，停留由相位机计时。
+   * ⚠️ 它**不许**提前出现：真浏览器门（`tools/browser-truth-lobby-cdp.mjs` ③.5）用
+   * `MutationObserver` 抓"`coin-result-text` 第一次出现的那一对读数"，而它抓到的那一条
+   * 就是它判"文案里的座位号 == 读数里的 winner + 1"的依据 —— 提前写一句没有座位号的
+   * 中间态会当场把那条判据打红。
+   */
+  if (settled && net.landed !== null && net.winner !== null) {
     const landed: CoinSide = net.landed;
     /**
      * ★ **芯片的高亮跟着"叫出去的那一面"，不跟着落点**（T11-B 真浏览器实测纠正）。
@@ -548,7 +792,8 @@ function renderCoinNet(root: HTMLElement, nav: CoinNav, net: CoinNetView): void 
       el(
         'div',
         'coin-result-text',
-        `掷出 ${coinFaceName(landed)} —— 玩家 ${winner + 1} 先选协议 · 玩家 ${2 - winner} 先出牌`
+        `${callLine !== null ? `${callLine} —— ` : ''}掷出 ${coinFaceName(landed)} —— `
+        + `玩家 ${winner + 1} 先选协议 · 玩家 ${2 - winner} 先出牌`
       )
     );
     /**

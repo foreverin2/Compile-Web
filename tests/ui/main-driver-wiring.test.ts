@@ -176,7 +176,6 @@ describe('G4 T4 · 收口：动作只走 driver', () => {
 /* ==================================================================== *
  * 4-5. `rerender` 的 replay 分支 + settle 的唯一重排点
  * ==================================================================== */
-
 describe('G4 T4 · 重放路由与 settle 的单一重排点', () => {
   it('4. rerender 里有 replay 分支，且 `renderApp(` 在整份 main.ts 里仍然只有 1 处（沿用 L1 的牙）', () => {
     const body = functionBody(MAIN, 'rerender');
@@ -1006,3 +1005,111 @@ describe('G4 T4 · 重放节奏（一审 B1 + S4：FX 窗口内不许回话、�
 });
 
 
+
+/* ==================================================================== *
+ * G5 T19 修复轮 · 草稿 → 对局转场：**同一次转变只播一次**（那道闩的牙）
+ * ==================================================================== */
+
+/**
+ * ## 为什么这一段必须存在（本轮评审的变异存活）
+ *
+ * 评审把 `playDraftToGameTransitionOnce` 里的闩去掉（改成 `if (state.phase === 'draft') return;`）
+ * 之后，全仓 2411 条测试**一条不红**；而两道真浏览器门也不读这个读数 ⇒ "同一次转变只播一次"
+ * 这件事在自动化里**零覆盖**。
+ *
+ * ## 能力边界（说清它证不了什么，免得被读成行为腿）
+ *
+ * `src/main.ts` 是应用入口（import 即跑整个游戏，要真 DOM），本仓测试环境是 node、没有 jsdom
+ * ⇒ 这里**只能**读剥注释后的源码文本。它能钉住的是"闩在不在、闸的条件是不是那一句、
+ * 两条路是不是都走同一个入口、三个复位点少不少"——**不能**证"真的只播了一次"。
+ * 这一条由真浏览器门的两端计时读数兜（见报告 §三）。
+ */
+describe('G5 T19 · 草稿 → 对局转场：同一次转变只播一次（源码腿）', () => {
+  it('闩 + 唯一入口：闸的条件逐字是那两句，且两条路都走 `playDraftToGameTransitionOnce()`', () => {
+    const body = functionBody(MAIN, 'playDraftToGameTransitionOnce');
+    expect(body.length, '抽到空片段（函数被改名了？）⇒ 本判据假绿').toBeGreaterThan(40);
+    // ① 闸的两半：还没跨过 draft、以及这一局还没演过
+    expect(body, '唯一入口里没有"还没跨过 draft 就不播"那一半').toMatch(/state\.phase === 'draft'/);
+    expect(body, '唯一入口里没有闩（同一次转变会被播两次）').toMatch(/draftTransitionPlayed/);
+    expect(body, '闩不在闸里（只在别处出现不算）')
+      .toMatch(/if\s*\(\s*state\.phase === 'draft'\s*\|\|\s*draftTransitionPlayed\s*\)\s*return;/);
+    // ② 置闩 + 计数腿都在这一个入口里
+    expect(body, '唯一入口没有置闩').toMatch(/draftTransitionPlayed = true;/);
+    expect(body, '唯一入口没有计数腿（播了几次读不到）').toMatch(/transitionPlayed \+= 1;/);
+    // ③ 两个调用点都走它，且 `playDraftToGameTransition(` 的调用形态**只此一处**
+    const raw = occurrences(MAIN, 'playDraftToGameTransition();');
+    expect(raw.length, `直接调 \`playDraftToGameTransition();\` 的地方有 ${raw.length} 处（只许 1 处：\n${raw.join('\n')}）`).toBe(1);
+    const once = occurrences(MAIN, 'playDraftToGameTransitionOnce();');
+    expect(once.length, `\`playDraftToGameTransitionOnce();\` 的调用点有 ${once.length} 处（本端提交 / 对端入站两条路各一处）：\n${once.join('\n')}`).toBe(2);
+    expect(objectBody(MAIN, CB_HEAD), 'cb.onDraftPick 没有走唯一入口（本端那条路绕过了闩）')
+      .toContain('playDraftToGameTransitionOnce();');
+  });
+
+  it('三个复位点都在（新开一局 / 重放 / 回主页），且热座开局也有一个', () => {
+    // 新开一局（联机）：createGame 之后
+    const enter = functionBody(MAIN, 'enterNetGame');
+    expect(enter, 'enterNetGame 新开一局那条路没有复位闩').toMatch(/draftTransitionPlayed = false;/);
+    expect(enter, 'enterNetGame 重连那条路没有按当时相位定闩').toMatch(/draftTransitionPlayed = state\.phase !== 'draft';/);
+    // 热座开局：写在 `showModeSelect().startHotseat` 里，**不是** `showCoin` 里
+    // （`showCoin` 被 `tests/ui/local-data-screen.test.ts` 的 G4 腿钉成"与基线逐字节相同"，
+    //   往里加一行等于为了让新功能过审而放松一条既有守卫）。
+    const mode = functionBody(MAIN, 'showModeSelect');
+    expect(mode, '热座开局入口（showModeSelect.startHotseat）没有复位闩 —— 联机那局留下的闩会让热座转场不播')
+      .toMatch(/draftTransitionPlayed = false;/);
+    expect(functionBody(MAIN, 'showCoin'), 'showCoin 被改了（它是 G4 腿钉住的邻居，复位不该写在这里）')
+      .not.toContain('draftTransitionPlayed');
+    // 重放页与回主页
+    expect(functionBody(MAIN, 'startReplayFile'), 'startReplayFile 没有复位闩').toMatch(/draftTransitionPlayed = false;/);
+    expect(functionBody(MAIN, 'resetToMainInterface'), 'resetToMainInterface 没有复位闩').toMatch(/draftTransitionPlayed = false;/);
+    /**
+     * ★★ **G5 T19 修复轮 2：预览那条入口也要复位**（评审 2 的第二处）。
+     *
+     * "单视角预览"与"热座"**都调 `showCoin()`**（`showModeSelect` 的两个回调），而它自己的注释
+     * 写着"不会绕过过渡动画"⇒ 漏了复位会让联机那局留下的闩把预览的草稿→对局转场吃掉。
+     * 用**计数腿**钉住"`showCoin()` 的调用点数 == 复位点数"（多一个入口就得多一次复位）。
+     */
+    const coinCalls = occurrences(MAIN, 'showCoin();');
+    const playResets = occurrences(MAIN, 'draftTransitionPlayed = false;');
+    expect(coinCalls.length, `showCoin(); 的调用点有 ${coinCalls.length} 处：\n${coinCalls.join('\n')}`).toBe(2);
+    expect(mode.match(/draftTransitionPlayed = false;/g)?.length ?? 0,
+      'showModeSelect 里"复位闩"的次数 != `showCoin()` 的调用点数（有一个入口漏复位 ⇒ 那条路的转场不播）')
+      .toBe(coinCalls.length);
+    expect(playResets.length, `draftTransitionPlayed = false; 共 ${playResets.length} 处（≥ 入口数 + 复位点）：\n${playResets.join('\n')}`)
+      .toBeGreaterThanOrEqual(5);
+  });
+
+  /**
+   * ★★ **G5 T19 修复轮 2：0ms 自唤醒链必须断掉**（评审实测的"机器卡"）。
+   *
+   * ## 它钉的是什么
+   *
+   * 修复轮 1 的兜底是"`coinPhaseAt` 非空而 `coinPhaseTimer` 为空 ⇒ 重排一次"，而 `'settled'`
+   * 那一格**没有清空 `coinPhaseAt`** ⇒ 进牌桌那一帧排一个 **0ms** 唤醒，此后每一帧再排一个
+   * ⇒ 从进桌挂到 `resetToMainInterface`（屏上看不出来，只能靠读数）。
+   *
+   * ## 为什么是源码腿（能力边界）
+   *
+   * 这条链的**行为**读数是 `turn().coinTiming.staleWakes` / `diag().coinWakeStaleScheduled`
+   * （门禁与人工都能读，正常路径恒 0）；本仓测试环境 import 不了 `main.ts`（一 import 就跑整局）
+   * ⇒ 这里只能在**源码面**钉住两件事：兜底带"还没到点"的判断、且 `'settled'` 到期会清空
+   * `coinPhaseAt`。少了任一条，那条链就会回来。
+   */
+  it('★ 0ms 自唤醒链断掉：兜底只排"还没到点"的唤醒，且 `settled` 到期清空 `coinPhaseAt`', () => {
+    const body = functionBody(MAIN, 'advanceCoinPhaseIfReady');
+    expect(body.length, '抽到空片段（函数改名了？）⇒ 本判据假绿').toBeGreaterThan(200);
+    // ① settled 那一格到期必须清空 coinPhaseAt（清了之后兜底的前提就不成立）
+    expect(body, "`'settled'` 那一格没有清空 `coinPhaseAt`（兜底会在进桌之后再排 0ms 唤醒）")
+      .toMatch(/coinPhase === 'settled'[\s\S]{0,900}?coinPhaseAt = null;[\s\S]{0,120}?clearCoinPhaseTimer\(\);/);
+    // ② 兜底自己也要判"还没到点"（双保险：即使别处漏清，也不会排已经到点的唤醒）
+    expect(body, '兜底没有"到期时刻还没到"的判断（会排 0ms 自唤醒）')
+      .toMatch(/coinPhaseTimer === null\s*&&\s*!coinPhaseElapsedAt\(coinPhaseAt\)/);
+    // ③ 排唤醒走唯一包装，而包装里第一句就是那条判断
+    const arm = functionBody(MAIN, 'armCoinPhaseWake');
+    expect(arm, '排唤醒的包装里没有"已经到点就直接返回"').toMatch(/if \(coinPhaseElapsedAt\(due\)\) return;/);
+    expect(body, '换格那条路没有走包装（直接调 wakeCoinPhase 就绕过了判断）')
+      .not.toMatch(/wakeCoinPhase\(coinPhaseAt/);
+    // ④ 证伪位在（没有它，"链断了"只能靠嘴说）
+    expect(functionBody(MAIN, 'wakeCoinPhase'), 'wakeCoinPhase 里没有 stale 计数（那条链没有证伪位）')
+      .toMatch(/if \(due <= performance\.now\(\)\) coinWakeStaleScheduled \+= 1;/);
+  });
+});

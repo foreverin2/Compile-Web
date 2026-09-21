@@ -76,6 +76,24 @@ export interface StubNode {
    * （实现仍是 `makeStubEl` 里那个"按节点覆盖 → 全局 → 全 0"的 `rectOf`）。
    */
   getBoundingClientRect(): StubRect;
+  /**
+   * ★ **G5 T19 修复轮新增：Web Animations 的**记录桩**（`animate` / `getAnimations`）。
+   *
+   * ## 为什么必须加（本轮评审的变异存活教训）
+   *
+   * 硬币屏"哪一格该播动画"这件事原来**零机检**：产出代码的守卫是
+   * `typeof disc.animate === 'function'`，而桩**没有** `animate` ⇒ 那个守卫恒假 ⇒
+   * 无论把相位映射写成什么样子（甚至写反），测试都只能看到"没播"。于是"`'call'` 那一格
+   * 不许播动画"这条判据在桩上是**恒真**的空腿。
+   *
+   * 现在桩提供可读回的实现（`stubAnimsOf(node)` 是读侧），于是
+   * "`'call'` 零条动画 / `'toss'` 两条动画（`stage` 一条 `disc` 一条）"可以真的断言。
+   *
+   * 语义刻意做小：动画**立刻结束**（不排任何时钟、不产生第二个定时器）；`timing` 记在
+   * 返回的那条记录上供断言读；`cancel()` 只把 `cancelled` 置真。
+   */
+  animate(frames?: unknown, timing?: unknown): unknown;
+  getAnimations(): unknown[];
   [k: string]: unknown;
 }
 
@@ -170,6 +188,13 @@ export function makeStubEl(tag: string): StubNode {
   const set = new Set<string>();
   /** **R19**：`setAttribute` 记下的非 `data-` 属性（`getAttribute` 的读侧，见那里的说明）。 */
   const attrs = new Map<string, string>();
+  /**
+   * ★ **G5 T19 修复轮**：这一枚元素上"被起过"的动画记录（`animate` / `getAnimations` 的载体）。
+   *
+   * 它是**每节点一份**的闭包数组（不是全局计数器）：判据要问的是"**哪一枚**元素被起了动画"
+   * （`stage` 与 `disc` 各一条），全局计数答不了这个问题。读侧是 `stubAnimsOf(node)`。
+   */
+  const anims: Array<{ timing: unknown; cancelled: boolean; cancel(): void }> = [];
   const node: StubNode = {
     tag,
     cls: '',
@@ -203,6 +228,18 @@ export function makeStubEl(tag: string): StubNode {
      *  `StubNode` 接口的**显式成员**（此前它在 `extra` 里 ⇒ 测试侧读到的是 `unknown`）。
      *  闭包引用 `node` 是安全的：它只在这个箭头被**调用**时才求值。 */
     getBoundingClientRect: () => rectOf(node),
+    /**
+     * ★ **G5 T19 修复轮：`animate` / `getAnimations` 的桩实现**（类型与理由见 `StubNode` 上的说明）。
+     *
+     * ⚠️ 放在字面量里（不是 `extra`）：产出代码的守卫是 `typeof disc.animate === 'function'`，
+     * 而"守卫能不能过"在测试里必须**可断言** —— 放进索引签名会让测试侧读到 `unknown`。
+     */
+    animate: (_frames?: unknown, timing?: unknown) => {
+      const a = { timing, cancelled: false, cancel(): void { a.cancelled = true; } };
+      anims.push(a);
+      return a;
+    },
+    getAnimations: () => anims,
     /**
      * **R22 修正：`querySelector` / `querySelectorAll` 从 `extra` 搬进字面量。**
      *
@@ -442,6 +479,14 @@ export const drainRaf = (): Promise<void> => new Promise((r) => { setTimeout(r, 
 
 /** 节点类名（数组形式）。 */
 export const classListOf = (n: StubNode): string[] => n.cls.split(/\s+/).filter(Boolean);
+
+/**
+ * ★ **G5 T19 修复轮**：这一枚元素上"被起过"的动画记录（`animate` 的读侧）。
+ *
+ * 返回同一个数组（不是副本）—— 调用方只读它，且"起过几条"必须当场可见。
+ */
+export const stubAnimsOf = (n: StubNode): ReadonlyArray<{ timing: unknown; cancelled: boolean }> =>
+  (n.getAnimations() as Array<{ timing: unknown; cancelled: boolean }>);
 
 /** 节点是否带某个类。 */
 export const isClass = (n: StubNode, c: string): boolean => classListOf(n).includes(c);
