@@ -33,7 +33,7 @@ import { setFxViewSeat } from './ui/fx-seat';
 // 远程页 100.572×137.601 / 78.909），方向按**容器排列方向**取值。出处见 `./ui/fx-card-size`。
 import { handCardBox, handFanLead, handFanStep } from './ui/fx-card-size';
 import { handOuterFor } from './ui/fx-seat';
-import { openControlRearrangeModal, closeControlRearrangeModal, refreshControlRearrangeModal, isControlRearrangeOpen, orderChanged, orderToAction } from './ui/control-rearrange';
+import { openControlRearrangeModal, closeControlRearrangeModal, refreshControlRearrangeModal, isControlRearrangeOpen, orderChanged, orderToAction, hostsEffectRearrange } from './ui/control-rearrange';
 import { renderHome, renderCoin, renderLibrary, renderRules, renderModeSelect, COIN_TOSS_MS } from './ui/home';
 import { linkRecoveryNotice, lobbyCoinViewOf, lobbyLinkText, appendNetTurnLine } from './ui/net-lobby';
 import type { CoinNetView } from './ui/home';
@@ -3469,7 +3469,25 @@ function syncRearrangeModalForEffect(): void {
   const top = state.pendingEffects[state.pendingEffects.length - 1];
   const prompt = top?.prompt;
   const side = prompt?.rearrangeSide;
-  if (top && prompt && side !== undefined) {
+  /**
+   * ★★ **G5 T23：这个窗口只属于"操作方那一屏"**（与 `render-net.ts` 的 `renderChoiceUi` 修的是
+   * 同一族缺陷：用户 2026-09-21 反馈"别人选牌弹到我这一屏"）。
+   *
+   * 联机下两端持有**同一份** `state` ⇒ 那条带 `rearrangeSide` 的请求（今天只有 `momentum-4`，
+   * `src/core/effects/cards/momentum.ts:58-63`，`chooser = ctx.player`）在**两屏**都读得到，
+   * 而 `openControlRearrangeModal` 是 **body 级遮罩**（`control-rearrange.ts` 直接 append 到
+   * `document.body`，不看棋盘 DOM）⇒ 没有这道闸门时**对手那一屏**也会弹出"重排你的协议"窗口：
+   * 他能拖着别人的协议摆、点「完成重排」再走 `commitEffectRearrange` → `cb.onAction({kind:'effect-choice'})`
+   * ⇒ **用自己这个座位**提交本该由操作方提交的应答（引擎会拒，界面却请我做这件事）。
+   *
+   * 判据收在纯函数 `hostsEffectRearrange`（腿在 node 里）：**联机**下只有"这一屏就是操作方"才开；
+   * 热座/单机一屏两人 ⇒ 恒开。座位用 `netViewSeat`（T21 起与喂给驱动的那个本端座位同源），
+   * **不是** `s.turnPlayer`（那是回合概念，与"谁来应答这条效果"是两件事）。
+   */
+  const who = top && prompt ? (prompt.chooser ?? top.player) : null;
+  const mine = who !== null
+    && hostsEffectRearrange({ chooser: who, localSeat: netViewSeat, net: renderMode === 'net' });
+  if (top && prompt && side !== undefined && mine) {
     effectRearrangeKey = `effect:${top.id}`;
     openControlRearrangeModal({
       getState: () => state,

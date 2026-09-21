@@ -1404,51 +1404,80 @@ function renderChoiceUi(
    * **R11-3 的闸门**：选择条**只在"操作方就是自己（`who === viewSeat`）"时才挂**。
    * 对手那一侧**只显示信息**（用户第四次验收的字面要求）—— 真联机下对手的选择条画在我的屏幕上
    * 等于把对手的操作面板摊开给我看。
-   * ⚠️ 候选高亮 / 点击绑定**不**在这里面：它们只作用于**我这台机器上的节点**，不影响"按钮在哪一侧"，
-   * 而且 `deferredFx`（透彻眼睛 / 幸运骰子）的落点也取决于它们所在的这一帧。
    * ⚠️ 本地预览的代价（诚实、已报告用户）：轮到对手应答时预览页上没有确认/跳过按钮 ⇒
    * **切「视角」**（切过去后对手就是 self）即可操作；预览工具条第 2 行会写明这一句。
+   *
+   * ── **G5 T23：同一个闸门现在也管"装饰"（用户真机反馈的那一格）** ──
+   * 用户 2026-09-21 两个真窗口看到：P2 打出 `speed-5`（"弃1张牌"、无 `chooser`）之后，
+   * **P1 的窗口**弹出居中的"P2 操作 — speed-5：弃1张牌"选牌浮层，里面列着 **P2 手牌的四张正面**；
+   * P2 自己的窗口上反而没有。根因就是这一段里"操作方那一侧"有**两条**出口，而闸门只管了
+   * 其中一条（`.choice-bar`）：候选卡"在不在这台机器的 DOM 里"这个判据在**对手屏上必然为假**
+   * （对手手牌只渲染数量占位、没有 `.card[data-uid]`，见 `buildP0Hand`/`buildP1Hand` 的
+   * `handVisibility`）⇒ 对手屏把**全部**候选都判成"不在棋盘上" ⇒ 浮层 + 操作方手牌正面
+   * 一起画到对手那一屏上。
+   *
+   * 所以下面**每一个"只有操作方该看见"的产出**都必须先过这个闸门：定向选牌浮层（含候选正面）、
+   * `.choice-dim`（别人选牌时把我的卡整体压暗）、`.choice-target` / `.choice-selected`
+   * （候选在场上时发光，且挂着 `bindClickOrDouble` ⇒ 对手能替我点头）、`select-line` 的
+   * `.choice-target` / `.choice-line` + 整条带的点击，以及 `deferredFx`（透彻牌库眼睛 /
+   * 幸运宣告骰子 —— 在对手屏上排它们等于替操作方"表演"一遍他的效果）。
+   *
+   * ⚠️ **`.choice-mode` 不在这里面，也不许挪进来**：它是"现在不能操作"的**锁**
+   * （`styles-net.css:1277`/`:1284` 的 `pointer-events: none`），不是装饰 —— 闸门后面只会让
+   * **对手屏**失去这把锁（对手屏上我仍然不该能拖自己的牌）。`net-dock` 的 G-15 与
+   * `net-board-grid` 的 G-9b 各自在**两个座位**下钉着它：见它们的 `chooser=0/1 × viewSeat=0/1`
+   * 循环 —— 这两条腿就是"把 `.choice-mode` 也挪进闸门"这个变异的哨兵。
    */
   const mountIfMine = (bar: HTMLElement): void => {
     if (who !== viewSeat) return;
     mountChoiceBar(wrap, who, bar);
   };
+  /** 这一帧的**装饰**（浮层 / 调暗 / 候选高亮 / 线槽高亮 / 几何型 FX）是不是该由本屏产出。
+   *  与 `mountIfMine` 同一条判据（`who === viewSeat`），但是给**各分支内**的产出用的 ——
+   *  `mountIfMine` 只收一个"条"参数，管不到分支里那些先于它执行的加类 / 挂点击 / 排 FX。 */
+  const mineSeat = who === viewSeat;
 
   if (prompt.kind === 'select') {
     const sel = new Set(getChoiceSelection());
     // 2代 clarity-2/3：从牌库选阈值卡 → 效果属主牌库上方浮现古埃及眼睛（M-3：
     // 热座 render.ts:4849 的同款 deferredFx；几何型 FX 必须等 wrap 进 DOM 后执行）
-    if (prompt.title.startsWith('透彻：从牌库中选择')) {
+    // G5 T23：只在操作方自己屏上排 —— 对手屏上排它等于替操作方"表演"一遍他的效果。
+    if (mineSeat && prompt.title.startsWith('透彻：从牌库中选择')) {
       const eyePlayer: PlayerId = who;
       deferredFx.push(() => startClarityDeckEye(eyePlayer));
     }
     // 候选卡高亮 / 其余置灰（本页所有 .card 此时都已入 wrap —— 见 C-1 的调用时机说明）
-    for (const node of wrap.querySelectorAll<HTMLElement>('.card[data-uid]')) {
-      const uid = node.dataset.uid!;
-      const candidate: ChoiceCard | undefined = prompt.candidates.find((c) => c.uid === uid);
-      if (!candidate) {
-        node.classList.add('choice-dim');
-        continue;
+    // G5 T23：这一整段（含 `onBoard` 的收集）都只在操作方自己屏上跑 —— 见 `mountIfMine` 上方的
+    // T23 说明。`onBoard` 与浮层的判据同源（都问"候选在这台机器的 DOM 里有没有单卡节点"），
+    // 所以并进同一个循环，保持"一次遍历得出两件事"且**两侧都不可能只算一半**。
+    const onBoard = new Set<string>();
+    if (mineSeat) {
+      for (const node of wrap.querySelectorAll<HTMLElement>('.card[data-uid]')) {
+        const uid = node.dataset.uid!;
+        onBoard.add(uid);
+        const candidate: ChoiceCard | undefined = prompt.candidates.find((c) => c.uid === uid);
+        if (!candidate) {
+          node.classList.add('choice-dim');
+          continue;
+        }
+        node.classList.add('choice-target');
+        if (sel.has(uid)) node.classList.add('choice-selected');
+        bindClickOrDouble(
+          node,
+          () => {
+            const next = getChoiceSelection();
+            if (next.includes(uid)) setChoiceSelection(next.filter((x) => x !== uid));
+            else if (next.length < prompt.max) setChoiceSelection([...next, uid]);
+            cb.rerender?.();
+          },
+          () => openZoom(candidate.defId, candidate.faceUp, false, false),
+          true,
+        );
       }
-      node.classList.add('choice-target');
-      if (sel.has(uid)) node.classList.add('choice-selected');
-      bindClickOrDouble(
-        node,
-        () => {
-          const next = getChoiceSelection();
-          if (next.includes(uid)) setChoiceSelection(next.filter((x) => x !== uid));
-          else if (next.length < prompt.max) setChoiceSelection([...next, uid]);
-          cb.rerender?.();
-        },
-        () => openZoom(candidate.defId, candidate.faceUp, false, false),
-        true,
-      );
     }
     // 棋盘上没有单卡 DOM 的候选（从弃牌堆自选打出 / 从牌库选阈值卡…）→ 复用定向选牌浮层
-    const onBoard = new Set<string>();
-    for (const node of wrap.querySelectorAll<HTMLElement>('.card[data-uid]')) onBoard.add(node.dataset.uid!);
     const offBoard = prompt.candidates.filter((c) => !onBoard.has(c.uid));
-    if (offBoard.length > 0) wrap.appendChild(buildChoicePickOverlay(prompt, offBoard, sel, root, s, cb, top));
+    if (mineSeat && offBoard.length > 0) wrap.appendChild(buildChoicePickOverlay(prompt, offBoard, sel, root, s, cb, top));
 
     const bar = el('div', 'choice-bar');
     appendOperatorHeader(bar, who, prompt.title);
@@ -1473,14 +1502,18 @@ function renderChoiceUi(
 
   if (prompt.kind === 'select-line') {
     // 线槽高亮：点整条带即答 ['line:N']（带覆盖双方的槽，比热座的单行更符合甲读法）
-    for (const band of wrap.querySelectorAll<HTMLElement>('.net-lane-band')) {
-      const ln = Number(band.dataset.line);
-      if (!prompt.lines?.includes(ln as Line)) continue;
-      band.classList.add('choice-target', 'choice-line');
-      band.addEventListener('click', () => {
-        setChoiceSelection([], null);
-        cb.onAction({ kind: 'effect-choice', promptId: top.id, choice: [`line:${ln}`] });
-      });
+    // G5 T23：这一段也只在操作方自己屏上跑 —— 否则对手屏会看见**操作方该选哪些线槽**
+    // （发光），而且挂上的整条带点击能让对手直接替他应答（比"看见"更糟）。
+    if (mineSeat) {
+      for (const band of wrap.querySelectorAll<HTMLElement>('.net-lane-band')) {
+        const ln = Number(band.dataset.line);
+        if (!prompt.lines?.includes(ln as Line)) continue;
+        band.classList.add('choice-target', 'choice-line');
+        band.addEventListener('click', () => {
+          setChoiceSelection([], null);
+          cb.onAction({ kind: 'effect-choice', promptId: top.id, choice: [`line:${ln}`] });
+        });
+      }
     }
     const bar = choiceBar(top, prompt, cb, '点击高亮的线路选择目标线');
     if (prompt.optional) bar.appendChild(choiceSkipBtn(top.id, cb));
@@ -1498,7 +1531,9 @@ function renderChoiceUi(
   // 注意：源卡必须是**已在 DOM 里、有非零 rect** 的节点才有骰子 —— 若源卡在对手手里（对手手牌
   // 只剩数量占位、查不到 `[data-uid]`），骰子不出现
   // （函数内部 `cardCenterByUid` 返回 null 即安全跳过，不报错）。这是信息遮蔽的必然取舍。
+  // G5 T23：同样只在操作方自己屏上排（对手屏上排它 = 替操作方"表演"骰子）。
   if (
+    mineSeat &&
     prompt.rearrangeSide === undefined &&
     (prompt.title.startsWith('luck-0：宣告') || prompt.title.startsWith('luck-3：宣告')) &&
     top.sourceUid

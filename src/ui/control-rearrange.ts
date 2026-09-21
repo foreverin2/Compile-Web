@@ -66,6 +66,30 @@ export function orderToAction(order: Line[]): string {
   return `action:order:${order.join('')}`;
 }
 
+/**
+ * ★ **G5 T23：这条"效果内重排"请求该不该在**本屏**开窗**（纯函数，腿在 node 里）。
+ *
+ * 联机下两端持有**同一份** `GameState` ⇒ `pendingEffects` 栈顶那条带 `rearrangeSide` 的请求
+ * （今天只有 `momentum-4`：`src/core/effects/cards/momentum.ts:58-63`）在**两屏**都读得到，
+ * 而这个窗口是 **body 级遮罩**（`openControlRearrangeModal` 直接 append 到 `document.body`）——
+ * 没有这道判据时，**对手那一屏**也会弹出"重排你的协议"窗口：他能拖着别人的协议摆，
+ * 点「完成重排」再走 `main.ts` 的 `commitEffectRearrange` → `cb.onAction({kind:'effect-choice'})`
+ * ⇒ **用自己这个座位**提交一条本该由操作方提交的应答（引擎会拒，但界面不该请我做这件事）。
+ *
+ * ## 判据只看"这一屏是不是操作方"，不看 `rearrangeSide`
+ *
+ * `sides: [side]` 那个字段说的是"**谁的协议**要被重排"，与"**谁来点**完成重排"不是同一个问题。
+ * 今天 `momentum-4` 两者恰好同值（都 = `ctx.player`），把巧合写成规则的话，将来第一条
+ * "你重排对手的协议"的效果会静默地把窗口开到对手屏上。
+ *
+ * ## 热座/单机为什么恒开
+ *
+ * 一屏两人（`net === false`）：两个座位都是本地的，窗口就该开在这一屏上。
+ */
+export function hostsEffectRearrange(o: { chooser: PlayerId; localSeat: PlayerId; net: boolean }): boolean {
+  return !o.net || o.chooser === o.localSeat;
+}
+
 let overlay: HTMLElement | null = null;
 let opts: ControlRearrangeModalOptions | null = null;
 let activeSide: PlayerId | null = null;
