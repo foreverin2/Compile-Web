@@ -925,6 +925,208 @@ function pasteShapeOf(text: string): PastedShape {
 }
 
 /* ==================================================================== *
+ * 5c. ★★ G5 T22：交接步骤（屏上的"步骤感"）
+ * ==================================================================== */
+
+/**
+ * 一步的状态（四值）。
+ *
+ * 为什么有四值而不是"做完 / 没做完"两值：这条交接**两头都有人**，
+ * "现在该我做"与"现在卡在对方那边"是两件事 —— 合成一值会让屏上在等人时
+ * 仍高亮一句"该你动手"，而那一刻玩家其实没有可做的事（T20/T21 反馈里那种"不知道自己该干什么"）。
+ */
+export type LobbyStepState = 'done' | 'current' | 'waiting' | 'todo';
+
+/** 一步在屏上长什么样（`title` 是这一步做什么，`tag` 是它此刻的状态小字） */
+export interface LobbyStepView {
+  readonly n: number;
+  readonly title: string;
+  readonly state: LobbyStepState;
+  readonly tag: string;
+}
+
+/** 四个步骤 + 那句"现在" */
+export interface LobbyStepsView {
+  readonly steps: readonly LobbyStepView[];
+  /** 屏上最显眼的那一句指引（"现在：…"）；`''` = 这一帧没有步骤（`role === null`） */
+  readonly now: string;
+}
+
+/** 状态 → 小字。**文案只有这一处**（四格两两不同，空的那格是 `''`，不是缺字段） */
+const STEP_TAG: Readonly<Record<LobbyStepState, string>> = {
+  done: '已完成',
+  current: '现在做这一步',
+  waiting: '在对方那边',
+  todo: '',
+};
+
+function step(n: number, title: string, state: LobbyStepState): LobbyStepView {
+  return { n, title, state, tag: STEP_TAG[state] };
+}
+
+/** 「已经走完」那一句（两侧同形：交接完了，屏要让位给硬币那一屏） */
+const STEPS_DONE_NOW = '这一局的交接已经走完，往下就交给硬币那一屏了。';
+
+/**
+ * ★★ **这一帧该显示哪四步、现在停在哪一步**（T22 的唯一一处）。
+ *
+ * ## 输入只有既有读数（这条纪律是硬约束：**不许造新语义**）
+ *
+ * 逐格写清每一步的判据，好让"步骤状态不是凭空画的"这件事可以逐条核：
+ *
+ * | 步骤（房主） | `done` 的判据 | `current` / `waiting` 的判据 |
+ * |---|---|---|
+ * | ① 生成邀请码 | `invite?.ok === true` | 其余 ⇒ `current` |
+ * | ② 把邀请码发给对方 | `answerApplied !== null` 或 `peer.handshakeDone` | ① 之后、上面两条都不成立 ⇒ `current` |
+ * | ③ 对方回示 | 同 ②（回示码回到本端这件事，本端**只能**从 `answerApplied` 看见） | ② 之后 ⇒ `waiting`（这一步在对方手里） |
+ * | ④ 把回示码贴回来 | `answerApplied?.ok === true` 或 `peer.handshakeDone` | 粘过一次但没成 ⇒ `current` |
+ *
+ * | 步骤（加入方） | `done` 的判据 | `current` / `waiting` 的判据 |
+ * |---|---|---|
+ * | ① 粘贴邀请码 | `joined?.ok === true` | 其余 ⇒ `current` |
+ * | ② 出示回示码 | `answerCode !== null` | ① 之后 ⇒ `current` |
+ * | ③ 把回示码发回给房主 | `peer.handshakeDone` | ② 之后 ⇒ `current`（发这一下是本端的事） |
+ * | ④ 房主贴进来之后开始 | `peer.handshakeDone` | ③ 之后 ⇒ `waiting`（这一步在房主手里） |
+ *
+ * ## 两条刻意的取舍
+ *
+ *  1. **`handshakeDone` 是"两边接上了"的读数**（`session.ts:2301`：它从 `awaiting-commit` 起为真，
+ *     而 `handshaking` / `resuming` 两格为假）⇒ 它就是这条交接"通了"那一刻的既有读数，
+ *     不另立一个"连通了没有"的判定；
+ *  2. **"我发出去了没有"这件事本端看不见**（没有回执）⇒ ② 在房主那侧一直停在 `current`，
+ *     直到对方的回示真的回来。屏上因此**不谎报**"已经发出去了"，只说"把码发给对方"。
+ *
+ * ⚠️ 它**不读** `Date.now`、不读任何新状态位：四个读数
+ * （`invite` / `joined` / `answerCode` / `answerApplied`）+ `peer.handshakeDone`，仅此而已。
+ */
+export function lobbyStepsOf(s: LobbyState): LobbyStepsView {
+  const linked = s.peer !== null && s.peer.handshakeDone === true;
+  if (s.role === 'host') {
+    const inviteOk = s.invite !== null && s.invite.ok === true;
+    const answered = s.answerApplied !== null;
+    const answerOk = s.answerApplied !== null && s.answerApplied.ok === true;
+    if (!inviteOk) {
+      return {
+        steps: [
+          step(1, '生成邀请码', 'current'),
+          step(2, '把邀请码发给对方', 'todo'),
+          step(3, '对方回示（对方会产出一条回示码）', 'todo'),
+          step(4, '把回示码贴回来', 'todo'),
+        ],
+        now: '现在：点「生成邀请码」。',
+      };
+    }
+    if (linked || answerOk) {
+      return {
+        steps: [
+          step(1, '生成邀请码', 'done'),
+          step(2, '把邀请码发给对方', 'done'),
+          step(3, '对方回示（对方会产出一条回示码）', 'done'),
+          step(4, '把回示码贴回来', 'done'),
+        ],
+        now: STEPS_DONE_NOW,
+      };
+    }
+    if (answered) {
+      return {
+        steps: [
+          step(1, '生成邀请码', 'done'),
+          step(2, '把邀请码发给对方', 'done'),
+          step(3, '对方回示（对方会产出一条回示码）', 'done'),
+          step(4, '把回示码贴回来', 'current'),
+        ],
+        now: '现在：把对方发回的回示码贴到下面那个框里。',
+      };
+    }
+    return {
+      steps: [
+        step(1, '生成邀请码', 'done'),
+        step(2, '把邀请码发给对方', 'current'),
+        step(3, '对方回示（对方会产出一条回示码）', 'waiting'),
+        step(4, '把回示码贴回来', 'todo'),
+      ],
+      now: '现在：把邀请码发给对方（对方贴进去之后才会产出回示码）。',
+    };
+  }
+  if (s.role === 'guest') {
+    const joinedOk = s.joined !== null && s.joined.ok === true;
+    const hasAnswer = s.answerCode !== null;
+    if (!joinedOk) {
+      return {
+        steps: [
+          step(1, '把邀请码贴进来', 'current'),
+          step(2, '出示回示码', 'todo'),
+          step(3, '把回示码发回给房主', 'todo'),
+          step(4, '房主贴回来之后接通', 'todo'),
+        ],
+        now: '现在：把对方发来的邀请码贴到下面那个框里。',
+      };
+    }
+    if (linked) {
+      return {
+        steps: [
+          step(1, '把邀请码贴进来', 'done'),
+          step(2, '出示回示码', 'done'),
+          step(3, '把回示码发回给房主', 'done'),
+          step(4, '房主贴回来之后接通', 'done'),
+        ],
+        now: STEPS_DONE_NOW,
+      };
+    }
+    if (hasAnswer) {
+      return {
+        steps: [
+          step(1, '把邀请码贴进来', 'done'),
+          step(2, '出示回示码', 'done'),
+          step(3, '把回示码发回给房主', 'current'),
+          step(4, '房主贴回来之后接通', 'waiting'),
+        ],
+        now: '现在：把上面那条回示码发回给房主（房主贴进去之后链路才会通）。',
+      };
+    }
+    return {
+      steps: [
+        step(1, '把邀请码贴进来', 'done'),
+        step(2, '出示回示码', 'current'),
+        step(3, '把回示码发回给房主', 'todo'),
+        step(4, '房主贴回来之后接通', 'todo'),
+      ],
+      now: '现在：点「出示回示码」，再把它发回给房主。',
+    };
+  }
+  return { steps: [], now: '' };
+}
+
+/**
+ * ★ **连接状态那一块的"人话"那一行**（T22 第 5 件）。
+ *
+ * 它**不替换** `lobbyLinkText()`（那张表答的是"对端什么状态"，判据 8 的读数同源腿钉着它），
+ * 只在 T6 那张表**没说到的两格**上补一句：还在不在追平、两边是不是都接上了。
+ *
+ * ## 两格刻意**不出这一行**（`null`，交给 T6 那句）—— 评审 T22 点出的同屏自相矛盾
+ *
+ *  - `online === true && handshakeDone === false`：这一格的语义**就是** T6 那句
+ *    （"对端在线，可以开始这一局。"）。原来这里另写一句"对端在线，这一步还没走完。"，
+ *    两句在同一屏上顶着说（评审：`.superpowers/g5-T22/T22-REVIEW.md` §判据 X）⇒ 交回去；
+ *  - 没有链路读数（`peer === null`）：这一格屏上本来就有"本机链路：…"那句话。
+ *
+ * ## 离线那一格为什么只说"还没接上来"
+ *
+ * 离线三格的**细节**（宽限内 / 超窗 / 判不了）由 T6 那句给。原来这一行还带着动作
+ * （"把邀请码发给对方"），于是它与步骤条的「现在：…」在同一屏上说同一件事；更糟的是
+ * 房主刚点「建房」、码还没生成时它也在说"把邀请码发给对方"——那与步骤条的
+ * "现在：点「生成邀请码」"直接矛盾。⇒ 这一行只说对端那一半，动作归步骤条。
+ */
+export function lobbyPlainStatus(s: LobbyState): string | null {
+  const p = s.peer;
+  if (p === null) return null;
+  if (p.needsResync) return '这一局在追平：等对方把缺掉的那几步补上。';
+  if (p.online && p.handshakeDone) return '两边都接上了。';
+  if (p.online) return null;
+  return '对端还没接上来。';
+}
+
+/* ==================================================================== *
  * 6. 大厅客户端：状态 + 接线（第 5 件义务 = D24 的裁决）
  * ==================================================================== */
 
@@ -3221,14 +3423,100 @@ function line(cls: string, text: string): HTMLElement {
   return el('p', cls, text);
 }
 
-/** 一个输入框 + 它的输入回报 */
-function textInput(cls: string, value: string, onInput: (v: string) => void): HTMLInputElement {
+/** 一个输入框 + 它的输入回报（`onEnter` 可选：回车提交，T22 第 4 件） */
+function textInput(
+  cls: string, value: string, onInput: (v: string) => void, onEnter?: () => void,
+): HTMLInputElement {
   const input = document.createElement('input');
   input.className = cls;
   input.type = 'text';
   input.value = value;
   input.addEventListener('input', () => { onInput(String(input.value)); });
+  if (onEnter !== undefined) {
+    input.addEventListener('keydown', (ev: unknown) => {
+      if ((ev as { key?: unknown }).key === 'Enter') onEnter();
+    });
+  }
   return input;
+}
+
+/* ------------------------------------------------------------------ *
+ * 7c. ★★ G5 T22：步骤条 + 输入框的焦点/光标搬运
+ * ------------------------------------------------------------------ */
+
+/**
+ * 把四个步骤画进屏里（**唯一产出点**）。
+ *
+ * 三个类名按状态分开（`net-lobby-step-done` / `-current` / `-waiting` / `-todo`）——
+ * 于是"当前该做哪一步显眼、已完成与没开始的弱化"这件事**只由 CSS 决定**，
+ * 而"哪一步是当前"只由 `lobbyStepsOf` 决定（两者不混在 JS 里）。
+ */
+function appendSteps(host: HTMLElement, view: LobbyStepsView): void {
+  if (view.steps.length === 0) return;
+  const box = el('div', 'net-lobby-steps');
+  box.appendChild(el('h2', 'net-lobby-h2 net-lobby-steps-title', '交接步骤'));
+  // 「现在」那一行：整条步骤条里最显眼的一句
+  box.appendChild(el('p', 'net-lobby-steps-now', view.now));
+  const list = el('ol', 'net-lobby-steps-list');
+  for (const s of view.steps) {
+    const li = el('li', `net-lobby-step net-lobby-step-${s.state}`);
+    li.appendChild(el('span', 'net-lobby-step-num', String(s.n)));
+    const body = el('span', 'net-lobby-step-body');
+    body.appendChild(el('span', 'net-lobby-step-title', s.title));
+    if (s.tag.length > 0) body.appendChild(el('span', 'net-lobby-step-tag', s.tag));
+    li.appendChild(body);
+    list.appendChild(li);
+  }
+  box.appendChild(list);
+  host.appendChild(box);
+}
+
+/**
+ * 上一帧某个输入框里有什么、焦点在不在它身上、光标在哪。
+ *
+ * ⚠️ **不抛**：没有这个框（或这个环境没有 `selectionStart`）时一律给"空 + 没焦点"，
+ * 于是"没有 DOM 的布局能力"这件事不会在这里变成一次崩溃。
+ */
+interface InputMemory {
+  readonly text: string;
+  readonly focused: boolean;
+  readonly existed: boolean;
+  readonly selStart: number | null;
+  readonly selEnd: number | null;
+}
+
+function readInputMemory(root: HTMLElement, selector: string): InputMemory {
+  const empty: InputMemory = { text: '', focused: false, existed: false, selStart: null, selEnd: null };
+  const node = root.querySelector<HTMLInputElement>(selector);
+  if (node === null) return empty;
+  const g = globalThis as { document?: { activeElement?: unknown } };
+  const active = g.document?.activeElement ?? null;
+  const v = (node as unknown as { value?: unknown }).value;
+  const a = (node as unknown as { selectionStart?: unknown }).selectionStart;
+  const b = (node as unknown as { selectionEnd?: unknown }).selectionEnd;
+  return {
+    text: typeof v === 'string' ? v : '',
+    focused: active !== null && active === node,
+    existed: true,
+    selStart: typeof a === 'number' ? a : null,
+    selEnd: typeof b === 'number' ? b : null,
+  };
+}
+
+/** 把焦点放上去（`focus` 缺席的环境——比如本仓的 DOM 桩——安静跳过） */
+function focusIfPossible(node: HTMLElement): void {
+  const f = (node as unknown as { focus?: unknown }).focus;
+  if (typeof f === 'function') (f as () => void).call(node);
+}
+
+/** 把光标搬回去（`setSelectionRange` 缺席时安静跳过；位置越界就收到末尾） */
+function restoreCaret(node: HTMLInputElement, mem: InputMemory): void {
+  const f = (node as unknown as { setSelectionRange?: unknown }).setSelectionRange;
+  if (typeof f !== 'function' || mem.selStart === null) return;
+  const len = String(node.value).length;
+  const a = Math.max(0, Math.min(mem.selStart, len));
+  const b = mem.selEnd === null ? a : Math.max(a, Math.min(mem.selEnd, len));
+  (f as (s: number, e: number) => void).call(node, a, b);
 }
 
 /**
@@ -3246,10 +3534,39 @@ function textInput(cls: string, value: string, onInput: (v: string) => void): HT
  *  5. 「高级 / 连接设置」折叠区：**默认折叠**（内容不进 DOM），展开后才有 TURN 三项与那句中继说明。
  */
 export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
+  /**
+   * ★★ **G5 T22：清屏之前先把"上一帧那两个长码输入框"读下来**（第 4 件义务：打字 / 光标 / 焦点）。
+   *
+   * 为什么必须读在 `root.textContent = ''` **之前**：那一行之后旧节点就没了。读下来的三件事
+   * 各有去处：
+   *  - `text`：重画之后写回输入框 ⇒ **一次粘贴 / 一次按键不会被自己的重画抹掉**
+   *    （`main.ts` 的 `joinWithInvite` 每敲一下都会整帧重画 —— 不留住正文的话这个框实际上
+   *    只能粘、不能打字：第一个字符进来就被下一帧清掉，焦点也跟着丢）；
+   *  - `focused` / `existed`：焦点只在"上一帧焦点就在它身上"或"这一帧刚长出这个框"时才放回去，
+   *    免得把焦点从「高级 / 连接设置」那三个框里抢走；
+   *  - `selStart` / `selEnd`：光标位置一起搬过去（否则每帧跳回开头，改一个字符等于重打一遍）。
+   *
+   * ⚠️ 这**不是新增状态**：读的是上一帧 DOM 里已有的两个值，读完就用完。
+   */
+  const pasteMem = readInputMemory(root, 'input.net-lobby-paste-input');
+  const answerMem = readInputMemory(root, 'input.net-lobby-answer-input');
   root.textContent = '';
   root.classList.remove('screen-home');
   const s = nav.state;
-  const screen = el('div', 'net-lobby-screen');
+  /**
+   * ★ T22：入口那一屏（`role === null`）**多挂一个类**，好让它在竖向上居中 ——
+   * 那一屏只有两张卡，顶上对齐会显得上半屏挤、下半屏空。
+   * ⚠️ `.net-lobby-screen` 这个类**照旧在**（三道真浏览器门读的是它），只是多一个修饰类。
+   */
+  const screen = el('div', s.role === null ? 'net-lobby-screen net-lobby-screen-pick' : 'net-lobby-screen');
+  /**
+   * ★ **焦点要等这棵树真的挂上 `root` 之后才放**（T22 实测踩过）：`focus()` 对一个还没进
+   * 文档的节点是**空操作**（真 Chrome 里实测：进"加入"那一屏时 `document.activeElement`
+   * 仍是 `body`，而"自动聚焦"那条要求就没落地）。所以这里只记下"要聚焦谁"，
+   * 真正的调用排在最后 `root.appendChild(screen)` 之后。
+   */
+  let focusTarget: HTMLInputElement | null = null;
+  let focusMemory: InputMemory | null = null;
   /**
    * ★ **把相位挂成属性**（T11-B）：大厅那一屏本来就画着「会话相位：…」那一行，
    * 但硬币屏（`src/ui/home.ts` 的 `renderCoin` 联机分支）没有那一行 ——
@@ -3268,6 +3585,9 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
   screen.appendChild(el('h1', 'net-lobby-title', '联机对战'));
   screen.appendChild(button('btn-link net-lobby-back', '← 返回模式选择', nav.backHome));
 
+  /* ── ★★ G5 T22：交接步骤（`role === null` 时不画：那时这一局还没开始） ── */
+  if (s.role !== null) appendSteps(screen, lobbyStepsOf(s));
+
   /* ── 1. 还没选角色：两个入口 ────────────────────────────────────── */
   if (s.role === null) {
     const pick = el('div', 'net-lobby-pick');
@@ -3275,8 +3595,25 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
     //   屏上这一句是 `src/net/invite.ts` 的 `NO_ENDPOINT_REASON` —— "本程序默认不向任何服务器
     //   发请求"这句话的**唯一出处**。大厅只**引用**它，不另写一份（判据 1 的引用纪律）。
     pick.appendChild(el('p', 'net-lobby-note', NO_ENDPOINT_REASON));
-    pick.appendChild(button('btn net-lobby-host', '建房（生成邀请码）', nav.startHost));
-    pick.appendChild(button('btn net-lobby-join', '加入（粘贴邀请码 / 输 6 位码）', nav.startJoin));
+    /**
+     * ★★ **G5 T22：两条路各占一张卡**（用户反馈原话："双方建房或者加入的页面以及交互方式都太潦草了"）。
+     *
+     * 分工写在卡里：谁是主角、要对方做什么。两个入口按钮的**类名与文案一字未改**
+     * （`.net-lobby-host` / `.net-lobby-join` 是两道真浏览器门点的东西；6 位码那条路仍然
+     * 由 `NO_ENDPOINT_MESSAGE` 那一格如实挡着，标签照旧点它的名）。
+     */
+    const entries = el('div', 'net-lobby-entries');
+    const hostCard = el('div', 'net-lobby-entry');
+    hostCard.appendChild(el('h2', 'net-lobby-entry-title', '我建房'));
+    hostCard.appendChild(el('p', 'net-lobby-entry-desc', '由你生成一条邀请码，把码发给对方。'));
+    hostCard.appendChild(button('btn net-lobby-host', '建房（生成邀请码）', nav.startHost));
+    entries.appendChild(hostCard);
+    const joinCard = el('div', 'net-lobby-entry');
+    joinCard.appendChild(el('h2', 'net-lobby-entry-title', '我加入'));
+    joinCard.appendChild(el('p', 'net-lobby-entry-desc', '粘贴对方发来的邀请码或整条邀请链接。'));
+    joinCard.appendChild(button('btn net-lobby-join', '加入（粘贴邀请码 / 输 6 位码）', nav.startJoin));
+    entries.appendChild(joinCard);
+    pick.appendChild(entries);
     screen.appendChild(pick);
   }
 
@@ -3302,14 +3639,15 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
       const payloadLine = line('net-lobby-invite-payload', s.invite.payload);
       const copyStatus = line('net-lobby-copy-status', '');
       box.appendChild(payloadLine);
-      // 长度读数**只能**来自 T7 的唯一取值路径（判据 9：本文件里零命中那两个区间数）
-      box.appendChild(el('p', 'net-lobby-invite-length', nav.inviteLength(s.invite.payload)));
       const row = el('div', 'net-lobby-copy-row');
       row.appendChild(copyButton('net-lobby-copy-invite', '复制邀请码', s.invite.payload, '邀请码', copyStatus, payloadLine));
       const linkLine = line('net-lobby-invite-link', s.invite.link);
       row.appendChild(copyButton('net-lobby-copy-link', '复制链接', s.invite.link, '链接', copyStatus, linkLine));
       box.appendChild(row);
       box.appendChild(copyStatus);
+      // 长度读数**只能**来自 T7 的唯一取值路径（判据 9：本文件里零命中那两个区间数）
+      // ★ T22：它是**佐证**（这条码多长、会不会被聊天工具截断）⇒ 退到按钮下面那行小字
+      box.appendChild(el('p', 'net-lobby-invite-length', nav.inviteLength(s.invite.payload)));
       const more = el('details', 'net-lobby-invite-link-more');
       more.appendChild(el('summary', 'net-lobby-invite-link-summary', '链接形态（也可以把整条链接发过去）'));
       more.appendChild(linkLine);
@@ -3320,25 +3658,51 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
     screen.appendChild(box);
   }
 
-  /* ── 3. 加入方：短码 + 粘贴邀请码 ──────────────────────────────── */
+  /* ── 3. 加入方：粘贴邀请码（主角） + 回示码 + 短码 ──────────────── */
   if (s.role === 'guest') {
     const box = el('div', 'net-lobby-join-box');
 
-    const codeBox = el('div', 'net-lobby-code');
-    codeBox.appendChild(el('h2', 'net-lobby-h2', '输 6 位房间码'));
-    codeBox.appendChild(textInput('net-lobby-code-input', s.roomCodeInput, nav.setRoomCode));
-    codeBox.appendChild(button('btn net-lobby-code-submit', '用这个房间码连接', nav.submitRoomCode));
-    // ★ 端点为空时的那句提示：**逐字**来自 `NO_ENDPOINT_MESSAGE`（本文件不写第二份）
-    if (s.roomCodeGate !== null) codeBox.appendChild(line('net-lobby-code-gate', s.roomCodeGate));
-    box.appendChild(codeBox);
-
+    /**
+     * ★★ **G5 T22：粘贴框排在第一位**（用户反馈："交互方式太潦草"）。
+     *
+     * 今天是"邀请码"那条路真的走得通、6 位码那条路要等信令端点 ⇒ 主角给粘贴框，
+     * 短码那一块退到这一屏的最后（它的提示词仍然**逐字**来自 `NO_ENDPOINT_MESSAGE`）。
+     */
     const pasteBox = el('div', 'net-lobby-paste');
-    pasteBox.appendChild(el('h2', 'net-lobby-h2', '粘贴邀请码'));
-    pasteBox.appendChild(textInput('net-lobby-paste-input', '', (v) => { nav.joinWithInvite(v); }));
+    pasteBox.appendChild(el('h2', 'net-lobby-h2', '粘贴对方发来的邀请码'));
+    const pasteInput = textInput(
+      'net-lobby-paste-input',
+      pasteMem.text,
+      (v) => { nav.joinWithInvite(v); },
+      // ★ T22：回车 = 把框里这一刻的正文再交一次。走的是**同一个**接缝
+      //   （`nav.joinWithInvite`）⇒ 没有第二条解析路，也没有第二份失败文案。
+      () => {
+        const v = String(pasteInput.value);
+        if (v.trim().length > 0) nav.joinWithInvite(v);
+      },
+    );
+    pasteBox.appendChild(pasteInput);
     // ★ G5/T17：三种形态都能粘的那句短提示（正文只有 `PASTE_SHAPE_HINT` 一处）
     pasteBox.appendChild(el('p', 'net-lobby-paste-hint', PASTE_SHAPE_HINT));
+    /**
+     * ★★ **G5 T22：粘完之后立刻说"读到了什么"**（成败两态都如实）。
+     *
+     * 这一句只说**读到没读到**；失败的真因仍由下面那条 `.net-lobby-error` 给
+     * （那句的唯一出处是纯层/`pasteShapeOf` 那一套，本文件不抄第二遍）。
+     */
+    if (s.joined !== null) {
+      pasteBox.appendChild(el('p', 'net-lobby-paste-read', s.joined.ok
+        ? '读到了：这是一条邀请码，接下来会尝试接上对端。'
+        : '没读到可用的邀请码。'));
+    }
     if (s.joined !== null && !s.joined.ok) {
       pasteBox.appendChild(line('net-lobby-error', s.joined.message));
+    }
+    // 焦点与光标（T22）：这个框刚长出来 ⇒ 自动聚焦；上一帧焦点就在它身上 ⇒ 收回来接着打字
+    // （真正的 `focus()` 排在整棵树挂上 root 之后 —— 见 `focusTarget` 那一处）
+    if (!pasteMem.existed || pasteMem.focused) {
+      focusTarget = pasteInput;
+      focusMemory = pasteMem;
     }
     box.appendChild(pasteBox);
 
@@ -3363,6 +3727,20 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
       ansBox.appendChild(ansStatus);
     }
     box.appendChild(ansBox);
+
+    // ── 短码那一块（T22 排到这一屏最后：它不是今天能走通的那条路）──────────────
+    const codeBox = el('div', 'net-lobby-code');
+    codeBox.appendChild(el('h2', 'net-lobby-h2', '输 6 位房间码'));
+    // 输入框与按钮排成一行（窄屏自动换行 —— 见 `.net-lobby-code-row` 那条规则）
+    const codeRow = el('div', 'net-lobby-code-row');
+    codeRow.appendChild(textInput(
+      'net-lobby-code-input', s.roomCodeInput, nav.setRoomCode, () => { nav.submitRoomCode(); },
+    ));
+    codeRow.appendChild(button('btn net-lobby-code-submit', '用这个房间码连接', nav.submitRoomCode));
+    codeBox.appendChild(codeRow);
+    // ★ 端点为空时的那句提示：**逐字**来自 `NO_ENDPOINT_MESSAGE`（本文件不写第二份）
+    if (s.roomCodeGate !== null) codeBox.appendChild(line('net-lobby-code-gate', s.roomCodeGate));
+    box.appendChild(codeBox);
     screen.appendChild(box);
   }
 
@@ -3370,7 +3748,22 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
   if (s.role === 'host') {
     const back = el('div', 'net-lobby-answer-back');
     back.appendChild(el('h2', 'net-lobby-h2', '对方回示之后：粘贴回示码'));
-    back.appendChild(textInput('net-lobby-answer-input', '', (v) => { nav.applyAnswerCode(v); }));
+    const answerInput = textInput(
+      'net-lobby-answer-input',
+      answerMem.text,
+      (v) => { nav.applyAnswerCode(v); },
+      // ★ T22：回车提交（与粘贴框同一条接缝：`nav.applyAnswerCode`）
+      () => {
+        const v = String(answerInput.value);
+        if (v.trim().length > 0) nav.applyAnswerCode(v);
+      },
+    );
+    back.appendChild(answerInput);
+    // 焦点与光标（T22）：与粘贴框同一条纪律（刚出现 ⇒ 自动聚焦；原本在它身上 ⇒ 收回来）
+    if (!answerMem.existed || answerMem.focused) {
+      focusTarget = answerInput;
+      focusMemory = answerMem;
+    }
     if (s.answerApplied !== null) {
       back.appendChild(line(s.answerApplied.ok ? 'net-lobby-notice' : 'net-lobby-error', s.answerApplied.message));
     }
@@ -3381,13 +3774,24 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
   if (s.peer !== null) {
     const st = el('div', 'net-lobby-status');
     st.appendChild(el('h2', 'net-lobby-h2', '连接状态'));
+    /**
+     * ★ G5 T22 的顺序：**先说人话**（这一步在等什么）→ 再说 T6 那张表那句（对端什么状态）
+     * → 最后才是相位名（调试读数，小字）。人话那一行**不是每格都有**（见 `lobbyPlainStatus`：
+     * "对端在线但这一步没走完"那一格**有意**交回 T6 那句，免得两句同屏顶着说）。
+     */
+    const plain = lobbyPlainStatus(s);
+    if (plain !== null) st.appendChild(line('net-lobby-status-human', plain));
     st.appendChild(line('net-lobby-link', lobbyLinkText(s.peer)));
     st.appendChild(line('net-lobby-phase', `会话相位：${s.peer.phase}`));
     screen.appendChild(st);
   } else if (s.transport !== 'idle') {
     // ⚠️ `transport.status()` **不是**"对端在线"（D18）：它只报本侧链路。
     // 所以这一格刻意不说"已连上对端"，只说本侧链路到了哪一步。
-    screen.appendChild(line('net-lobby-phase', `本机链路：${s.transport}（这只表示本侧，不代表对端在）`));
+    const st = el('div', 'net-lobby-status');
+    st.appendChild(el('h2', 'net-lobby-h2', '连接状态'));
+    st.appendChild(line('net-lobby-status-human', '本侧的链路已经建起来了，在等对端接上。'));
+    st.appendChild(line('net-lobby-phase', `本机链路：${s.transport}（这只表示本侧，不代表对端在）`));
+    screen.appendChild(st);
   }
 
   /* ── 4b. 错误路径 / 可读提示 ───────────────────────────────────── */
@@ -3454,6 +3858,14 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
   }
   screen.appendChild(adv);
   root.appendChild(screen);
+  /**
+   * ★ **焦点与光标放在最后**（T22）：到这里 `focusTarget` 已经是文档里的节点，
+   * `focus()` 才真的生效（对游离节点是空操作 —— 实测踩过，见上面 `focusTarget` 的说明）。
+   */
+  if (focusTarget !== null) {
+    focusIfPossible(focusTarget);
+    if (focusMemory !== null) restoreCaret(focusTarget, focusMemory);
+  }
 }
 
 /** 连接设置的三项共用一种形状：标签 + 输入框（写回的落点是 `nav.setSetting`） */

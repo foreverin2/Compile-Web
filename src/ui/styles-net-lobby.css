@@ -27,6 +27,18 @@
  *
  * 对齐既有的 `.consent-screen` / `.mode-screen`：深底 + `#00ffcc` 主色 + 12px 圆角 + rgba 面板。
  * 大厅是"整屏屏"，不是 `position:fixed` 覆盖层（本仓有过 `document.body` 级浮层残留的惨痛历史）。
+ *
+ * ## ★★ G5 T22 加的层级（用户反馈："建房 / 加入的页面以及交互方式都太潦草"）
+ *
+ * 三层层级，全部用**本表已有的设计语言**（同一套色、同一套圆角）表达，不引入新素材：
+ *  1. **步骤条**（`.net-lobby-steps`）：四步 + 一句「现在」；`-current` 亮、`-done` 弱、
+ *     `-waiting` 虚线、`-todo` 最淡 —— "当前该做哪一步"是这一屏第一眼要看到的东西；
+ *  2. **主角块**（`.net-lobby-paste` / `.net-lobby-invite`）：比其余块更亮的边框与更松的留白，
+ *     长码那一行等宽、可手选、**能换行不溢出**（`word-break` + `overflow-wrap`）；
+ *  3. **次要读数**（`.net-lobby-phase` / `.net-lobby-invite-length`）：小字、低对比，
+ *     保留但不刺眼（相位名是调试读数，不是给玩家读的）。
+ *
+ * 窄屏（约 900px 起）：两张入口卡改纵排、内边距收窄，长码仍然只换行不横向溢出。
  */
 
 .net-lobby-screen {
@@ -43,6 +55,12 @@
   color: #eef;
 }
 
+/* 入口那一屏（只有两张卡）在竖向上居中：不然上半屏挤、下半屏空 */
+.net-lobby-screen-pick {
+  justify-content: center;
+  padding-bottom: 48px;
+}
+
 .net-lobby-title {
   margin: 0;
   font-size: 26px;
@@ -53,6 +71,19 @@
 
 .net-lobby-back {
   align-self: flex-start;
+  margin: -6px 0 0;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #9bd;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.net-lobby-back:hover {
+  border-color: #34345a;
+  color: #cfe;
 }
 
 .net-lobby-h2 {
@@ -80,7 +111,7 @@
   color: #9aa;
 }
 
-/* ── 两个入口 ─────────────────────────────────────────────────────── */
+/* ── 两个入口（`role === null` 那一帧） ───────────────────────────── */
 
 .net-lobby-pick {
   display: flex;
@@ -89,6 +120,181 @@
   gap: 12px;
   width: 100%;
   max-width: 720px;
+}
+
+.net-lobby-entries {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  width: 100%;
+}
+
+.net-lobby-entry {
+  flex: 1 1 260px;
+  min-width: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 16px 16px 18px;
+  border: 1px solid #4a4a68;
+  border-radius: 12px;
+  background: rgba(24, 24, 48, 0.85);
+}
+
+.net-lobby-entry-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  color: #cfe;
+}
+
+.net-lobby-entry-desc {
+  margin: 0 0 4px;
+  font-size: 13px;
+  line-height: 1.65;
+  color: #9aa;
+}
+
+/* 两个入口按钮：卡片里的主按钮（类名是两道真浏览器门点的那个，一字未改） */
+.net-lobby-host,
+.net-lobby-join {
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: auto;
+  padding: 10px 14px;
+  border: 1px solid #2f8f7e;
+  border-radius: 8px;
+  background: rgba(0, 255, 204, 0.1);
+  color: #dff;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.net-lobby-host:hover,
+.net-lobby-join:hover {
+  background: rgba(0, 255, 204, 0.18);
+}
+
+/* ── ★★ G5 T22：交接步骤（四步 + 一句「现在」） ──────────────────── */
+
+.net-lobby-steps {
+  width: 100%;
+  max-width: 720px;
+  box-sizing: border-box;
+  padding: 14px 18px 16px;
+  border: 1px solid #34345a;
+  border-radius: 12px;
+  background: rgba(16, 16, 34, 0.8);
+}
+
+.net-lobby-steps-title {
+  margin-bottom: 4px;
+  font-size: 14px;
+  letter-spacing: 1px;
+  color: #9bd;
+}
+
+/* 「现在」那一行：整条步骤条里最显眼的一句 */
+.net-lobby-steps-now {
+  margin: 0 0 10px;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.6;
+  color: #00ffcc;
+}
+
+.net-lobby-steps-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.net-lobby-step {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.net-lobby-step-num {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border: 1px solid #4a4a68;
+  border-radius: 50%;
+  font-size: 11px;
+  line-height: 17px;
+  text-align: center;
+  color: #9aa;
+}
+
+.net-lobby-step-body {
+  min-width: 0;
+}
+
+.net-lobby-step-title {
+  word-break: break-word;
+}
+
+.net-lobby-step-tag {
+  margin-left: 8px;
+  font-size: 12px;
+  color: #889;
+}
+
+/* 已完成：淡下去（做过的事不该再抢注意力） */
+.net-lobby-step-done {
+  color: #7f8;
+  opacity: 0.72;
+}
+
+.net-lobby-step-done .net-lobby-step-num {
+  border-color: #2f8f7e;
+  color: #7f8;
+}
+
+/* 现在该做这一步：整条里最亮的一格 */
+.net-lobby-step-current {
+  border-color: #2f8f7e;
+  background: rgba(0, 255, 204, 0.1);
+  color: #dff;
+  font-weight: 600;
+}
+
+.net-lobby-step-current .net-lobby-step-num {
+  border-color: #00ffcc;
+  color: #00ffcc;
+}
+
+.net-lobby-step-current .net-lobby-step-tag {
+  color: #9fe;
+}
+
+/* 在对方那边：虚线（这一步卡着，但不是本端能推进的） */
+.net-lobby-step-waiting {
+  border-style: dashed;
+  border-color: #4a4a68;
+  color: #9aa;
+}
+
+.net-lobby-step-waiting .net-lobby-step-tag {
+  color: #889;
+}
+
+/* 还没到：最淡 */
+.net-lobby-step-todo {
+  color: #778;
 }
 
 /* ── 邀请码 / 加入两栏 ────────────────────────────────────────────── */
@@ -106,13 +312,55 @@
   background: rgba(24, 24, 48, 0.85);
 }
 
+/* 主角块（要发给对方的那条码 / 要粘进来的那个框）再亮一档 */
+.net-lobby-invite {
+  border-color: #2f6f63;
+}
+
+/* ⚠️ 这一块是 `screen` 那个 flex 列的直接子项 ⇒ **必须自己写 width**，
+ * 否则它会缩到内容宽度（真浏览器里实测：那一格缩成中间一条，两边空着）。 */
+.net-lobby-paste,
+.net-lobby-answer-back {
+  width: 100%;
+  max-width: 720px;
+  box-sizing: border-box;
+  padding: 14px 16px 16px;
+  border: 1px solid #2f6f63;
+  border-radius: 12px;
+  background: rgba(12, 26, 28, 0.8);
+}
+
+/* 6 位房间码那一行：输入框与按钮排成一行（输入框吃掉剩余宽度，按钮不被挤出去） */
+.net-lobby-code-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.net-lobby-code-row .net-lobby-code-input {
+  flex: 1 1 220px;
+  width: auto;
+  max-width: none;
+  margin: 4px 0 8px;
+}
+
+.net-lobby-code-row .net-lobby-code-submit {
+  flex: 0 0 auto;
+  margin: 4px 0 8px;
+}
+
 .net-lobby-invite-link,
-.net-lobby-invite-payload {
+.net-lobby-invite-payload,
+.net-lobby-answer-code {
   margin: 4px 0;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
   line-height: 1.6;
+  /* 长串**只换行、不溢出**（窄屏尤其要紧：600+ 字符的载荷必须能折行） */
   word-break: break-all;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
   color: #9fe;
 }
 
@@ -133,11 +381,12 @@
 /* 载荷那一行是主角：比链接那行更亮、带个底框，而且是**可手选**的（复制失败时的退路） */
 .net-lobby-invite-payload,
 .net-lobby-answer-code {
-  padding: 8px 10px;
+  padding: 10px 12px;
   border: 1px solid #34345a;
   border-radius: 8px;
   background: rgba(10, 10, 22, 0.9);
   font-size: 13px;
+  letter-spacing: 0.4px;
   color: #cff;
   user-select: text;
 }
@@ -146,17 +395,31 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 8px;
+  margin-top: 10px;
 }
 
 .net-lobby-copy {
-  padding: 6px 14px;
+  padding: 8px 16px;
   border: 1px solid #2f8f7e;
   border-radius: 8px;
   background: rgba(0, 255, 204, 0.08);
   color: #cff;
   font-size: 13px;
   cursor: pointer;
+}
+
+/* 「复制邀请码」/「复制回示码」是主按钮（载荷右边这一下就是整条路的出口） */
+.net-lobby-copy-invite,
+.net-lobby-copy-answer {
+  background: rgba(0, 255, 204, 0.16);
+  font-weight: 600;
+}
+
+/* 「复制链接」是次要动作（链接形态本身就已经退到折叠区里了） */
+.net-lobby-copy-link {
+  border-color: #4a4a68;
+  background: transparent;
+  color: #9bd;
 }
 
 .net-lobby-copy-status {
@@ -181,8 +444,39 @@
   margin-bottom: 10px;
 }
 
-.net-lobby-code-input,
+/* ── 两个长码输入框（T22：粘贴框是主角 —— 更大、更醒目、自动聚焦） ── */
+
 .net-lobby-paste-input,
+.net-lobby-answer-input {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 6px 0 8px;
+  padding: 12px 14px;
+  border: 1px solid #2f8f7e;
+  border-radius: 8px;
+  background: rgba(6, 12, 14, 0.95);
+  color: #eef;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.net-lobby-paste-input:focus,
+.net-lobby-answer-input:focus {
+  outline: none;
+  border-color: #00ffcc;
+  box-shadow: 0 0 0 2px rgba(0, 255, 204, 0.18);
+}
+
+/* 粘完之后的"读到了什么"（成败两态都如实；失败的真因在下面那条错误行里） */
+.net-lobby-paste-read {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: #ffd48a;
+}
+
+.net-lobby-code-input,
 .net-lobby-turn-url-input,
 .net-lobby-turn-user-input,
 .net-lobby-turn-cred-input {
@@ -218,6 +512,14 @@
 
 /* ── 连接状态 ─────────────────────────────────────────────────────── */
 
+/* 人话那一行（这一步在等什么）：比读数行更亮一档 */
+.net-lobby-status-human {
+  margin: 0 0 6px;
+  font-size: 14px;
+  line-height: 1.7;
+  color: #dfe;
+}
+
 .net-lobby-link {
   margin: 0 0 6px;
   font-size: 14px;
@@ -225,6 +527,7 @@
   color: #dfe;
 }
 
+/* 相位名是**调试读数**：留着小字、低对比（不刺眼，但看得到） */
 .net-lobby-phase {
   margin: 0;
   font-size: 12px;
@@ -234,6 +537,12 @@
 /* ── 高级 / 连接设置（默认折叠：内容不进 DOM） ────────────────────── */
 
 .net-lobby-advanced-toggle {
+  padding: 4px 8px;
+  border: 1px solid #34345a;
+  border-radius: 8px;
+  background: transparent;
+  color: #9bd;
+  font-size: 13px;
   cursor: pointer;
 }
 
@@ -286,4 +595,36 @@
   margin: 0;
   accent-color: #00ffcc;
   cursor: pointer;
+}
+
+/* ── 窄屏（约 900px 起）：只收留白、不横向溢出 ─────────────────────── */
+
+@media (max-width: 900px) {
+  .net-lobby-screen {
+    padding: 28px 14px 48px;
+    gap: 12px;
+  }
+
+  .net-lobby-title {
+    font-size: 22px;
+  }
+
+  /* 两张入口卡改成一行一张（窄屏下并排会把说明挤成逐字断行） */
+  .net-lobby-entry {
+    flex: 1 1 100%;
+  }
+
+  .net-lobby-invite,
+  .net-lobby-join-box,
+  .net-lobby-status,
+  .net-lobby-advanced,
+  .net-lobby-steps {
+    padding: 14px 14px 16px;
+  }
+
+  .net-lobby-paste-input,
+  .net-lobby-answer-input {
+    font-size: 14px;
+    padding: 10px 12px;
+  }
 }
