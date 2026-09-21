@@ -154,6 +154,25 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const budgetMs = WAIT_S * 1000;
 
+/* ── 超时上界（清理与超时这两类代码；判定一条没碰）────────────────────────────
+ *
+ * 这些上界盯着的是"**调用永远不回来**"，不是"这一步跑得慢"：
+ *  - 实测（2026-09-21，本工具）：整跑约 83-100 秒，单步等待大多 ≤30 秒，
+ *    而**单次** `Runtime.evaluate` / `Input.*` 的往返是毫秒级 ⇒ 下面这个上界
+ *    对正常路径**一次都不会命中**（连跑三次的耗时与改造前同档，见 T20-REPORT.md）。
+ *  - 为什么必须有：评审那次挂 24 分钟无输出 —— Chrome 中途死了，而 CDP 调用
+ *    既没有上界、也没有 close 事件兜底 ⇒ 那个 Promise **永远不 settle**，
+ *    门既不退回也不报错。现在上界一到就**如实报错**，走环境错误那条路（退出码 2）。
+ */
+const CDP_CALL_TIMEOUT_MS = 25_000;
+const NAVIGATE_TIMEOUT_MS = 60_000;
+const FETCH_TIMEOUT_MS = 5_000;
+/** 收工：杀完之后等进程消失的上界（轮询确认，不是睡一觉就断言） */
+const KILL_CONFIRM_MS = 5_000;
+/** 收工：临时 profile 删除的上界（串行处理两个目录） */
+const PROFILE_DELETE_MS = 8_000;
+const TASKKILL_TIMEOUT_MS = 15_000;
+
 /* ── 端口与进程 ─────────────────────────────────────────────────────────── */
 
 /** 让内核给一个空闲端口：listen(0) 读回分配到的端口，再关掉。 */
@@ -202,10 +221,108 @@ function findChrome() {
   return null;
 }
 
+/** 有没有上界的等待（超时如实抛出，不挂住）。 */
+function withTimeout(promise, ms, what) {
+  return new Promise((res, rej) => {
+    const t = setTimeout(() => rej(new Error(`${what}：${ms}ms 内没有回来（超时上界；不是"这一步跑得慢"——单次调用实测是毫秒级）`)), ms);
+    promise.then(
+      (v) => { clearTimeout(t); res(v); },
+      (e) => { clearTimeout(t); rej(e); },
+    );
+  });
+}
+
+/** `fetch` 也要有上界（裸 `fetch` 撞上一个半死的监听者会一直挂着）。 */
+function fetchBounded(url, ms = FETCH_TIMEOUT_MS) {
+  return fetch(url, { signal: AbortSignal.timeout(ms) });
+}
+
+/** 连某个 pid 上有没有活进程。 */
+function processAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  if (process.platform === 'win32') {
+    const r = spawnSync('tasklist', ['/FI', `PID eq ${pid}`, '/NH', '/FO', 'CSV'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: TASKKILL_TIMEOUT_MS });
+    return typeof r.stdout === 'string' && r.stdout.includes(`"${pid}"`);
+  }
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+/**
+ * 枚举当前机器上**按 `--user-data-dir` 属于这一跑**的浏览器进程（pid + 完整命令行）。
+ *
+ * 为什么按整条 `--user-data-dir=<这一跑的 profile>` **全等**匹配，而不是 `endsWith`：
+ * profile 是 `mkdtempSync(tmpdir(),'btl-lobby-')` 造的**整条**路径，`p.endsWith(n)` 那种
+ * 比法把"别人的 profile"与"这一跑的"分不开（`gate-fix4b` 实测就是这么把自己的判成别人的）。
+ * `--user-data-dir` 是**进程级**属性 ⇒ 精确匹配它，归属就是确定的。
+ *
+ * 返回 `null` = 这台机器上枚举不出来（platform 不支持）。**不许**把"枚举不出来"
+ * 当成"没有残留" —— 调用方据此把自证写成不确定（见收工那一段）。
+ */
+function chromeProcsWithProfile(profiles) {
+  const want = new Set(profiles.filter((p) => typeof p === 'string' && p.length > 0));
+  if (want.size === 0) return [];
+  const out = [];
+  if (process.platform === 'win32') {
+    const script = 'Get-CimInstance Win32_Process -Filter "Name=\'chrome.exe\' or Name=\'msedge.exe\'"'
+      + ' | ForEach-Object { "$($_.ProcessId)`t$($_.CommandLine)" }';
+    const r = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: TASKKILL_TIMEOUT_MS });
+    if (typeof r.stdout !== 'string') return null;
+    for (const line of r.stdout.split(/\r?\n/)) {
+      const tab = line.indexOf('\t');
+      if (tab <= 0) continue;
+      const pid = Number(line.slice(0, tab).trim());
+      const cmd = line.slice(tab + 1);
+      for (const p of want) {
+        if (cmd.includes(`--user-data-dir=${p}`)) { out.push({ pid, cmd }); break; }
+      }
+    }
+    return out;
+  }
+  const r = spawnSync('ps', ['-Ao', 'pid=,args='],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: TASKKILL_TIMEOUT_MS });
+  if (typeof r.stdout !== 'string') return null;
+  for (const line of r.stdout.split('\n')) {
+    const m = /^\s*(\d+)\s+(.*)$/.exec(line);
+    if (m === null) continue;
+    for (const p of want) {
+      if (m[2].includes(`--user-data-dir=${p}`)) { out.push({ pid: Number(m[1]), cmd: m[2] }); break; }
+    }
+  }
+  return out;
+}
+
+/** 只杀某一个 pid（不带 `/T`）—— 用于"整棵树已经杀过、只剩漏网的"那一轮。 */
+function killPid(pid) {
+  if (!pid) return;
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/PID', String(pid), '/F'], { stdio: 'ignore', timeout: TASKKILL_TIMEOUT_MS });
+  } else {
+    try { process.kill(pid, 'SIGKILL'); } catch { /* 已退出 */ }
+  }
+}
+
+/**
+ * 有上界地等一组 pid 真的消失（轮询确认，不是"杀完就断言"）。
+ * 返回还没消失的那些 pid（空数组 = 确认都死了）。
+ */
+async function waitPidsGone(pids, maxMs = KILL_CONFIRM_MS) {
+  const t0 = Date.now();
+  let left = pids.slice();
+  while (left.length > 0 && Date.now() - t0 < maxMs) {
+    left = left.filter((p) => processAlive(p));
+    if (left.length === 0) return [];
+    await sleep(200);
+  }
+  return left.filter((p) => processAlive(p));
+}
+
 function killTree(pid) {
   if (!pid) return;
   if (process.platform === 'win32') {
-    spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' });
+    spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'],
+      { stdio: 'ignore', timeout: TASKKILL_TIMEOUT_MS });
   } else {
     try { process.kill(-pid, 'SIGKILL'); } catch { try { process.kill(pid, 'SIGKILL'); } catch { /* 已退出 */ } }
   }
@@ -216,20 +333,20 @@ function killTree(pid) {
 async function attach(label, port, urlPrefix) {
   let wsUrl = null;
   const t0 = Date.now();
-  while (Date.now() - t0 < 25000) {
+  while (Date.now() - t0 < 12000) {
     try {
-      const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+      const list = await (await fetchBounded(`http://127.0.0.1:${port}/json/list`)).json();
       const page = list.find((t) => t.type === 'page' && String(t.url).startsWith(urlPrefix));
       if (page && page.webSocketDebuggerUrl) { wsUrl = page.webSocketDebuggerUrl; break; }
-    } catch { /* CDP 端口还没起来 */ }
+    } catch { /* CDP 端口还没起来 / 这一次 fetch 超时 */ }
     await sleep(200);
   }
   if (!wsUrl) throw new Error(`${label}: 拿不到 page target 的 webSocketDebuggerUrl`);
   const ws = new WebSocket(wsUrl);
-  await new Promise((res, rej) => {
+  await withTimeout(new Promise((res, rej) => {
     ws.addEventListener('open', res, { once: true });
     ws.addEventListener('error', () => rej(new Error(`${label}: CDP WebSocket 连接失败`)), { once: true });
-  });
+  }), CDP_CALL_TIMEOUT_MS, `${label}: CDP WebSocket 握手`);
   let nextId = 1;
   const pending = new Map();
   const events = [];
@@ -238,20 +355,38 @@ async function attach(label, port, urlPrefix) {
     if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); return; }
     if (m.method) events.push(m);
   });
-  const send = (method, params) => {
+  /**
+   * ★★ **每一次 CDP 调用都有上界**（超时那条修法的落点）。
+   *
+   * 两处一起兜：`close`（Chrome 没了 ⇒ 这个连接上**所有**在等的调用当场抛出，
+   * 不用等各自的表走到点）与 `withTimeout`（连接还在、但对端不回 ⇒ 到点如实报错）。
+   * 两者都**不 settle** 的那个洞就是评审那次挂 24 分钟无输出的形态。
+   */
+  let closed = false;
+  ws.addEventListener('close', () => {
+    closed = true;
+    for (const [, res] of pending) res({ error: { message: `${label}: CDP 连接关闭（Chrome 进程没了？）` } });
+    pending.clear();
+  });
+  const send = (method, params, timeoutMs = CDP_CALL_TIMEOUT_MS) => {
+    if (closed) return Promise.reject(new Error(`${label}: CDP 连接已关闭，${method} 发不出去`));
     const id = nextId++;
     const p = new Promise((res) => pending.set(id, res));
     ws.send(JSON.stringify({ id, method, params: params ?? {} }));
-    return p;
+    return withTimeout(p, timeoutMs, `${label}: CDP ${method}`);
   };
   /** 页面里求值（`returnByValue`）。页面抛异常时**响亮地**抛出，不返回 undefined。 */
-  const evaluate = async (expr) => {
-    const r = await send('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true });
+  const evaluate = async (expr, timeoutMs = CDP_CALL_TIMEOUT_MS) => {
+    const r = await send('Runtime.evaluate',
+      { expression: expr, awaitPromise: true, returnByValue: true }, timeoutMs);
+    if (r?.error) throw new Error(`${label}: CDP 返回错误 ${JSON.stringify(r.error)}`);
     if (r?.result?.exceptionDetails) {
       throw new Error(`${label}: 页面异常 ${JSON.stringify(r.result.exceptionDetails.exception?.description ?? r.result.exceptionDetails)}`);
     }
     return r?.result?.result?.value;
   };
+  /** 真导航（换文档）：单独给时间 —— 它本来就要等页面起来，别拿 25 秒那条当上界。 */
+  const navigate = (url) => send('Page.navigate', { url }, NAVIGATE_TIMEOUT_MS);
   const text = async (selector) => {
     const v = await evaluate(`(document.querySelector(${JSON.stringify(selector)})?.textContent) ?? null`);
     return typeof v === 'string' ? v : null;
@@ -294,7 +429,7 @@ async function attach(label, port, urlPrefix) {
     if (!focused) throw new Error(`${label}: 聚焦失败 ${selector}`);
     await send('Input.insertText', { text: value });
   };
-  return { label, send, evaluate, text, count, waitFor, click, type, events, close: () => ws.close() };
+  return { label, send, evaluate, navigate, text, count, waitFor, click, type, events, close: () => ws.close() };
 }
 
 /* ── 起环境：临时 vite + 两个真 Chrome ─────────────────────────────────── */
@@ -302,7 +437,7 @@ async function attach(label, port, urlPrefix) {
 async function httpOk(url, ms) {
   const t0 = Date.now();
   while (Date.now() - t0 < ms) {
-    try { if ((await fetch(url)).ok) return true; } catch { /* 还没起来 */ }
+    try { if ((await fetchBounded(url)).ok) return true; } catch { /* 还没起来 / 这一次 fetch 超时 */ }
     await sleep(200);
   }
   return false;
@@ -555,6 +690,10 @@ const raw = { when: new Date().toISOString(), chrome, vitePort, waitS: WAIT_S, d
 let envError = null;
 /** 收工清理失败的真因（见下面的删除重试）；写进 `raw` 供事后查证 */
 const cleanupErrors = [];
+/** 收工清理的**过程读数**（杀了几个 / 确认了多久 / 目录删没删）：写进收工自证与 `raw` */
+const cleanupFacts = [];
+/** 清理这一侧判出的"不干净"（进程没退 / 枚举不出来）—— 与自证里"残留 N 个"一起进 `clean` */
+let cleanByCleanup = true;
 
 try {
   if (!(await httpOk(`${origin}/`, 40000))) throw new Error('vite 没起来（40s 内没有 HTTP 200）');
@@ -1846,7 +1985,7 @@ try {
     // ★ 必须带一个每次都不同的查询片段，否则与上面 ③.8 同款的"同文档导航"会发生
     //   （`origin/` 与 `origin/?x#y` 之间的差别才是"换文档"）。
     // 等"入口屏"由下面 driveToLobby 的第一步负责（它会等授权屏/主页出现，最多 90 秒）。
-    await guest.send('Page.navigate', { url: `${origin}/?g5r=${Date.now()}` });
+    await guest.navigate(`${origin}/?g5r=${Date.now()}`);
     await sleep(1000);
     const gDrive2 = await driveToLobby(guest);
     if (gDrive2 !== null) {
@@ -1922,7 +2061,7 @@ try {
       // 「加入」这条路要看的是**同一屏**上另一个按钮能不能推进。地址栏那段用真导航改
       // （同文档 fragment 导航：页面不重载，与点一条 `#invite=...` 链接同效），
       // 因为 `readInviteFromAddressBar` 是在**点「加入」那一刻**读的 `location.href`。
-      await guest.send('Page.navigate', { url: `${origin}/#invite=1.zzzzzzzzzz` });
+      await guest.navigate(`${origin}/#invite=1.zzzzzzzzzz`);
       await sleep(1500);
       let guestBox = 0;
       let errLine = null;
@@ -1945,11 +2084,20 @@ try {
   }
 } catch (e) {
   envError = String(e);
-  say(`\n[X] 环境错误：${envError}`);
 } finally {
   if (host) host.close();
   if (guest) guest.close();
   if (!KEEP) {
+    /* ★★ **收工清理**（清理那条修法的落点）：杀 → 按 profile 全等扫漏网的 → 轮询确认 → 再删目录。
+     *
+     * 为什么不是"杀完睡一觉就删"：`gate-fix4b` 实测 **18 个 headless Chrome 没被退干净**
+     * + 2 个临时 profile 留下。`killTree`（`taskkill /PID x /T /F`）杀的是"那一刻 pid x
+     * 底下的那棵树"，顶层死了之后**另起的**子进程 / 已经换了父的进程它够不着 ⇒ 光靠它
+     * 不足以保证一棵树全没了。所以这里补一层：**凡是 `--user-data-dir` 全等这一跑 profile
+     * 的浏览器进程，一个不留**（归属确定 —— profile 是这一跑 mkdtemp 造的独一份路径）。
+     */
+    const myProfiles = [hostInst, guestInst].map((i) => i?.profile).filter((p) => typeof p === 'string');
+    const myPids = [hostInst, guestInst].map((i) => i?.proc.pid).filter((p) => Number.isInteger(p) && p > 0);
     killTree(hostInst?.proc.pid);
     killTree(guestInst?.proc.pid);
     killTree(vite.pid);
@@ -1967,7 +2115,44 @@ try {
         await sleep(500);
       }
     }
-    for (const p of [hostInst?.profile, guestInst?.profile]) {
+    // 漏网的：按 `--user-data-dir` **全等**这一跑 profile 找出来，逐个杀（不带 /T，别误伤别人）
+    const enumBefore = chromeProcsWithProfile(myProfiles);
+    let orphansKilled = 0;
+    if (enumBefore !== null && enumBefore.length > 0) {
+      for (const { pid } of enumBefore) { killPid(pid); orphansKilled += 1; }
+      cleanupFacts.push(`轮到的第二轮：按 --user-data-dir 全等匹配到 ${enumBefore.length} 个还没退的浏览器进程`
+        + `（pid ${enumBefore.map((x) => x.pid).join('/')}），已逐个杀`);
+    }
+    cleanupFacts.push(`枚举支持=${enumBefore !== null ? 'yes' : 'no'}；漏网杀掉 ${orphansKilled} 个`);
+    // 轮询确认（有上界）：进程真的没了才算数
+    const tKill = Date.now();
+    const stillTree = await waitPidsGone(myPids, KILL_CONFIRM_MS);
+    const tTree = Date.now() - tKill;
+    cleanupFacts.push(`顶层进程消失确认：${myPids.join('/') || '（无）'}`
+      + `${stillTree.length === 0 ? ' 全部消失' : ` 仍有 ${stillTree.join('/')} 没死`}（轮询 ${tTree}ms）`);
+    const tOrphan = Date.now();
+    let enumAfter = null;
+    while (Date.now() - tOrphan < KILL_CONFIRM_MS) {
+      enumAfter = chromeProcsWithProfile(myProfiles);
+      if (enumAfter !== null && enumAfter.length === 0) break;
+      if (enumAfter === null) break;
+      await sleep(200);
+    }
+    const tOrphanMs = Date.now() - tOrphan;
+    if (enumAfter === null) {
+      cleanupFacts.push('按 --user-data-dir 的残留确认：**这台机器上枚举不出来** ⇒ 不敢说"确认干净"');
+      cleanupErrors.push('收工清理：进程枚举不可用，无法确认 Chrome 进程树已退干净');
+      cleanByCleanup = false;
+    } else if (enumAfter.length > 0) {
+      cleanupFacts.push(`按 --user-data-dir 的残留确认：仍有 ${enumAfter.length} 个没退（轮询 ${tOrphanMs}ms）：`
+        + enumAfter.map((x) => x.pid).join('/'));
+      cleanupErrors.push(`收工清理：仍有 ${enumAfter.length} 个这一跑的 Chrome 进程没退（pid ${enumAfter.map((x) => x.pid).join('/')}）`);
+      cleanByCleanup = false;
+    } else {
+      cleanupFacts.push(`按 --user-data-dir 的残留确认：0 个（轮询 ${tOrphanMs}ms）`);
+    }
+    // 进程确认没了之后才动目录
+    for (const p of myProfiles) {
       if (!p) continue;
       /**
        * ★ 清理**重试**（T11-C 实测：单次 `rmSync` 偶尔会撞上"Chrome 还没死透"的占用窗口
@@ -1977,15 +2162,19 @@ try {
        *
        * ⚠️ 失败原因**写进 `raw`**（`raw.cleanupErrors`）：不写就只剩"残留 N 个"这一句，
        * 查的时候只能猜（实测踩过：真正的错误信息是 `EBUSY` 之类的系统级原因）。
+       * ⚠️ 重试本身也有**总上界**（`PROFILE_DELETE_MS`）：不能因为删不掉就又挂住。
        */
-      for (let i = 0; i < 8; i += 1) {
-        if (!existsSync(p)) break;
+      const tDel = Date.now();
+      let tries = 0;
+      while (existsSync(p) && Date.now() - tDel < PROFILE_DELETE_MS) {
+        tries += 1;
         try { rmSync(p, { recursive: true, force: true }); } catch (e) {
-          cleanupErrors.push(`${p}（第 ${i + 1} 次）：${e instanceof Error ? e.message : String(e)}`);
+          cleanupErrors.push(`${p}（第 ${tries} 次）：${e instanceof Error ? e.message : String(e)}`);
         }
         if (!existsSync(p)) break;
         await sleep(400);
       }
+      cleanupFacts.push(`临时 profile 删除：${p}${existsSync(p) ? ' **仍在**（重试 ' + String(tries) + ' 次）' : ' 已删'}`);
     }
   }
 }
@@ -1994,6 +2183,7 @@ try {
 let clean = true;
 if (!KEEP && envError === null) {
   say('=== 收工自证 ===');
+  for (const f of cleanupFacts) say(`  · 清理：${f}`);
   const ports = [['vite dev server', vitePort], ['host 调试端口', hostInst?.port], ['guest 调试端口', guestInst?.port]];
   for (const [name, p] of ports) {
     if (p === undefined) continue;
@@ -2001,6 +2191,25 @@ if (!KEEP && envError === null) {
     say(`  [${listening ? '不通过' : '通过'}] ${name} ${p} 未在监听`);
     if (listening) clean = false;
   }
+  /**
+   * ★ 兜底复查一次"这一跑的浏览器进程还在不在"（按 `--user-data-dir` **全等**匹配）。
+   * 清理那一段已经确认过一次；这里再读一次是为了让**自证自己**就带这个读数
+   * （不然"干净"只能从上一段的日志里推）。枚举不出来时**不**当作干净。
+   */
+  const myProfiles = [hostInst, guestInst].map((i) => i?.profile).filter((p) => typeof p === 'string');
+  if (myProfiles.length > 0) {
+    const procsNow = chromeProcsWithProfile(myProfiles);
+    if (procsNow === null) {
+      say('  [不通过] 这一跑的浏览器进程残留：这台机器上枚举不出来（不敢说干净）');
+      clean = false;
+    } else {
+      const okProcs = procsNow.length === 0;
+      say(`  [${okProcs ? '通过' : '不通过'}] 这一跑（--user-data-dir 全等）的浏览器进程残留 ${procsNow.length} 个`
+        + `${okProcs ? '' : `：pid ${procsNow.map((x) => x.pid).join('/')}`}`);
+      if (!okProcs) clean = false;
+    }
+  }
+  if (!cleanByCleanup) clean = false;
   const left = [];
   try {
     for (const n of readdirSync(tmpdir())) if (n.startsWith(PROFILE_PREFIX)) left.push(n);
@@ -2012,8 +2221,12 @@ if (!KEEP && envError === null) {
      * （例如超时 `Ctrl-C`、或上一轮清理失败）会留下目录，下一次跑就会把它们算成"本次残留"，
      * 于是干净的一跑也报"不干净"。判定**不放宽**（残留 > 0 就算不干净），但要把归属写明，
      * 否则下一次又要从"哪个是这次的"查起。
+     *
+     * ⚠️ 归属比的是**整条路径全等**（`gate-fix4b` 实测：`p.endsWith(n)` 那种比法把
+     * "本跑自己的"判成了"别人的" —— profile 是 `mkdtempSync(tmpdir(),'btl-lobby-')`
+     * 造出来的**整条**路径，`n` 只是它末一段）。
      */
-    const mine = [hostInst?.profile, guestInst?.profile].some((p) => p !== undefined && p.endsWith(n));
+    const mine = myProfiles.includes(join(tmpdir(), n));
     say(`      残留：${n}（${mine ? '**本次**起的' : '**别人的**：不是这一跑起的 profile'}）`);
   }
   if (left.length > 0) clean = false;
@@ -2025,6 +2238,7 @@ const verdict = envError === null && judged.length > 0 && pass === judged.length
 raw.judged = judged;
 raw.clean = clean;
 raw.cleanupErrors = cleanupErrors;
+raw.cleanupFacts = cleanupFacts;
 raw.envError = envError;
 raw.verdict = verdict;
 if (JSON_OUT) {
@@ -2033,6 +2247,10 @@ if (JSON_OUT) {
 }
 
 if (envError !== null) {
+  say(`\n[X] 环境错误：${envError}`);
+  say('  （退出码 2；清理仍然做了，读数如下）');
+  for (const f of cleanupFacts) say(`  · 清理：${f}`);
+  if (cleanupErrors.length > 0) say(`  · 清理报错：${cleanupErrors.join(' ｜ ')}`);
   process.exit(2);
 }
 for (const n of notes) say(`注：${n}`);
