@@ -1,0 +1,280 @@
+/*
+ * 图鉴右下角「按效果分类筛选」面板（G5 T24，`src/ui/home.ts` 的 `renderLibrary`）。**新文件**，
+ * 只服务图鉴这一块。`src/ui/styles.css` 是红线（一个字都没动），所以这里不复用它的类、也不覆盖它。
+ *
+ * ## 类名纪律（写在这里，因为它是被机检钉住的事实）
+ *
+ * `node .superpowers/g5-T24/check-css-selectors.mjs`（2026-09-21 修复轮重跑，逐字原文在
+ * `.superpowers/g5-T24/fix-css-selectors.txt`）的读数：
+ *
+ *   规则数（不含 @media 行）= 22
+ *   带 .lib-effect 前缀的 = 21
+ *   不带前缀的 = 1
+ *     L261: .library-list .lib-card img
+ *
+ * 唯一的例外 `.library-list .lib-card img` 是本屏布局必需：给卡图按比例占位 —— 不补，列表行高会在
+ * 图片加载中变化，面板就"跳格子"（实测过）。另一个本屏必需的写法 —— 给 `.library-layout` 右列的两个
+ * 孩子补列位 —— 写在**一个规则块里的两条选择器**上（`.library-layout > .library-preview, .lib-effect-panel`），
+ * 脚本按"`{` 所在行"取选择器段，于是它只计到 `.lib-effect-panel` 那一条 ⇒ "带前缀 21"里含了它一次；
+ * 若按选择器逐条数，是 20 条带前缀 + 1 条不带的例外（合计 21 条规则 / 22 个选择器）。
+ * 该规则块不写 `!important`、不写 ID 选择器，`styles.css` 一行未动（红线）。
+ *
+ * 理由与 `styles-net-lobby.css` 同款，也是硬的：
+ *
+ *  1. 与既有样式表不撞名 —— 撞了就会让图鉴/草稿页的观感连带变化，而那种变化不报任何错；
+ *  2. `tests/ui/net-body-layer-rules.test.ts:115` 那条腿要求 `src/ui/*.css` 的**全集**必须被显式
+ *     归类。本表被写进它的 `EXCLUDED_SOURCES`，理由必须站得住：**本表的目标节点是图鉴页的
+ *     `.lib-effect*` / `.library-layout` / `.library-list`**（`.lib-card` 与棋盘 `.card` 是两个
+ *     不同的类），而那条腿解算的两条链只关心 `.board` / `.board-grid` / `.player-strip` /
+ *     `.hand` / `.card` / `.net-*` / `.smoke-puff` / `.scan-overlay` 这一族
+ *     —— 两者不可能相交；另外本表只在**图鉴屏**上命中节点（`renderLibrary` 自己清 root），
+ *     与棋盘节点不同时在屏上。
+ *
+ * ## 位置与观感（任务书 §5）
+ *
+ *  - **位置与绘制顺序**：`.library-layout` 是 `grid-template-columns: minmax(0,1fr) 520px` 的两列网格，
+ *    DOM 顺序是 列表 / 展示框 / 本面板。注意 **光靠 DOM 顺序落不到右下角**：网格的自动落位是
+ *    "按行填"，列表 + 展示框把**第一行**占满之后，第三个孩子落到**第二行第一格**（= 左列，
+ *    与列表同列）—— 实测（真 Chrome）面板就一直坐在 x=108 那一列，而不是展示框下面的 x=637。
+ *    ⇒ 这里给展示框与本面板都写上 `grid-column: 2`（**明写**那一列），于是两者同列、面板在
+ *    展示框正下方那块空白。
+ *    **绘制顺序**：展示框与面板都靠 `position: sticky` 建了定位元素（`z-index: auto` 与 `5`），
+ *    同一层叠上下文里定位元素画在普通流之上、其中 `z-index` 大的在上 ⇒ 面板画在展示框之上。
+ *    这里把 `z-index: 5` 写死，是为了"两者万一重叠时点得到的必须是面板"；正常情况下根本用不到它，
+ *    因为面板高度被压到不与展示框相交（见下一条）。
+ *    （`.library-layout > .library-preview` 这条只加列位、不动 `styles.css`
+ *    里的任何一条 —— 它在 `styles.css` 里没有 `grid-column` 声明。）
+ *  - **不遮挡展示框**：展示框是 `position: sticky; top: 16px`，本面板是 `position: sticky; bottom: 12px`
+ *    —— 两者是同一条滚动轴的两端：展示框吸在视口上沿，本面板吸在视口下沿。但**只靠"粘在下面"不够**，
+ *    这条是 T24 修复轮实测出来的：展示框高 560px，900px 视口里它一个人就占了 16..576，而面板自然高
+ *    约 563px（31 个标签 3 列）⇒ 两者必然在视口中段叠在一起。修前实测滚到整页最底：面板 `static`
+ *    自然落在 y=192..750，与展示框重叠 384px，`elementFromPoint` 读到的最上层是 `library-preview`，
+ *    真鼠标点勾控件等于点在展示框上（勾数恒 31 / 卡数恒 270）。⇒ 面板高度必须收进
+ *    `100vh - 726px`（展示框 560 + 其上沿 16 + 面板在最底处离视口下沿的 138 + 12 余量），900px 视口
+ *    ⇒ 上限 174px、面板顶边 576 正好等于展示框底边 576（闭合不相交，实测相交 520x0）。两个视口、
+ *    三个滚动位置的矩形读数见 `.superpowers/g5-T24/fix-after.txt`。
+ *  - **重叠了也点得到**：面板 `z-index: 5`，展示框 `z-index: auto` ⇒ 面板画在上层。这条只在视口矮到
+ *    上限落到 170px 地板时才用得到；它是"点得到"的兜底，不是主手段。
+ *  - **短视口/极矮视口**：上限用 `max(170px, calc(100vh - 726px))`，视口低于约 896px 时面板不再缩、
+ *    改为与展示框少量重叠 —— 但那时它在最上层，能点、能滚（面板自己 `overflow: auto`）。
+ *  - **不把列表挤变形**：本面板在 520px 那一列里，宽度与展示框同宽；列表在主列，列宽由网格定
+ *    ⇒ 勾选任何一类都不会让列表换列或改宽（唯一的列表变化就是"某组被整组拿掉"）。
+ *
+ * ## 窄屏（<= 1100px，与 `styles.css` 的图鉴媒体查询同一个断点）
+ *
+ * 那时 `.library-layout` 塌成单列、展示框也不再是 sticky（`styles.css` 自己把 `position` 收回 `static`），
+ * 本面板跟着变整宽、回到普通流（`position: static`）、去掉高度上限：整页从下往上排，没有可压住它的东西。
+ * 标签行在 901..1100px 是 4 列（更宽，一行放更多），900px 以下折成 2 列（`styles.css` 那次实测里，
+ * 900px 宽下列宽只有 131px，2 列才放得下文案 —— 窄屏那条老缺陷见 T24 报告 §9，不在本任务范围）。
+ */
+
+.lib-effect-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid #3a3a55;
+  border-radius: 14px;
+  padding: 14px;
+  background: rgba(13, 13, 28, 0.92);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  /* 高度上限的基值：窄屏（单列）用它，宽屏那段媒体查询再按视口算（见文件头"位置与观感"） */
+  max-height: 320px;
+  overflow: auto; /* 31 个标签不把右列撑出屏：面板自己滚（上限之外的部分真滚得出来） */
+}
+
+/*
+ * 列位：**只在宽屏（> 1100px）**给展示框与本面板明写"第 2 列"。
+ *
+ * ## 为什么必须带这个媒体查询（踩过）
+ *
+ * 第一版是不带条件的 `grid-column: 2`。结果窄屏（900px）下**整页布局坏掉**：`styles.css` 那条
+ * `@media (max-width: 1100px) { .library-layout { grid-template-columns: 1fr } }` 把列数降到 1，
+ * 而"明写第 2 列"会**凭空造出一条隐式列**（实测：`grid-template-columns` 解成 `131px 520px`，
+ * 面板被压成 131px 宽、文字一行一个字）。
+ *
+ * 根因是**同权重、我的表在后面**：那两条 `grid-column` 覆盖的是 `styles.css` 给
+ * `.library-preview` 的默认落位，而单列媒体查询是靠"不写 grid-column"生效的 ⇒ 我在 base 层
+ * 写死它，就把那条媒体查询架空了。**修法是把我的列位缩到"媒体查询之外"**：
+ * `min-width: 1101px`（与 `styles.css` 的 `max-width: 1100px` 正好互补），单列区段一个字节不碰。
+ * 这一条是"本表只加不改"的边界落实：窄屏那条规则仍由 `styles.css` 独家负责。
+ */
+@media (min-width: 1101px) {
+  .library-layout > .library-preview,
+  .lib-effect-panel {
+    grid-column: 2;
+  }
+
+  /*
+   * 宽屏这一段同时负责"面板吸在视口下沿且不压住展示框"（T24 修复轮）：
+   *
+   *  - `position: sticky; bottom: 12px`：面板粘在视口下沿。它仍然是网格项（不脱流、不脱网格），
+   *    列宽照旧由 `.library-layout` 的 `520px` 定，粘性只沿滚动轴生效。粘性边界是网格容器
+   *    `.library-layout` 自己（容器底部有 40px padding，且它不是吸顶容器）⇒ 滚到整页最底时面板
+   *    停在离视口下沿 150px 处（实测 `bottom=750`，视口高 900），不是死贴 12px。
+   *  - `max-height: max(170px, calc(100vh - 726px))`：726 = 展示框 560 + 它的 sticky 上沿 16
+   *    + 面板在整页最底时离视口下沿的 138 + 12 余量。900px 视口 ⇒ 上限 174px，1022px ⇒ 296px；
+   *    实测两个视口、三个滚动位置下展示框与面板的矩形**都不相交**。视口矮到 896px 以下时上限落到
+   *    170px 地板，那时允许少量重叠，靠下面的 `z-index` 兜底。
+   *  - `z-index: 5`：展示框是 `z-index: auto`（不建层叠上下文）⇒ 面板画在它之上，重叠时勾控件
+   *    仍点得到（900x 与 1022x 两个视口实测不相交、用不到它）。
+   *
+   * 标签列数**不在这里改**：它必须写在基础规则 `.lib-effect-tags` 之后（同权重、靠后者胜），
+   * 否则基础那条 `repeat(2, …)` 会把它吃掉 —— 修复轮实测踩过这个坑，故下面另起一段媒体查询。
+   */
+  .lib-effect-panel {
+    position: sticky;
+    bottom: 12px;
+    z-index: 5;
+    max-height: max(170px, calc(100vh - 726px));
+  }
+}
+
+.lib-effect-title {
+  font-size: 15px;
+  color: #eef;
+  font-weight: bold;
+  letter-spacing: 0.02em;
+}
+
+.lib-effect-hint {
+  font-size: 12px;
+  color: #7c8ba0;
+  line-height: 1.5;
+}
+
+.lib-effect-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.lib-effect-btn {
+  flex: 1 1 0;
+  font-size: 12px;
+  padding: 4px 8px;
+  border: 1px solid #3f4a63;
+  border-radius: 8px;
+  background: rgba(24, 28, 48, 0.9);
+  color: #cfe;
+  cursor: pointer;
+}
+
+.lib-effect-btn:hover {
+  border-color: #00ffcc;
+  color: #00ffcc;
+}
+
+.lib-effect-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-top: 1px solid rgba(58, 58, 85, 0.6);
+  padding-top: 6px;
+}
+
+.lib-effect-group-name {
+  font-size: 12px;
+  color: #00ffcc;
+  opacity: 0.85;
+}
+
+.lib-effect-tags {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px 8px;
+}
+
+/*
+ * 宽屏 3 列（面板内容宽 490px，两列会让标签区偏高、内部滚动条偏长；3 列下 31 条约 11 行）。
+ *
+ * 位置有讲究：**必须在上面那条基础规则之后**。同权重（都是 0,1,0）、同一张表里靠后者胜，
+ * 所以写在基础规则之前会被 `repeat(2, …)` 吃掉 —— 修复轮真机上撞过一次（文件头那条"宽屏 3 列"
+ * 的说法当时是假的，浏览器算出来还是 2 列）。断点仍是 `min-width: 1101px`，与 `styles.css` 的
+ * `max-width: 1100px` 互补。
+ */
+@media (min-width: 1101px) {
+  .lib-effect-tags {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.lib-effect-tag {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: #9aa4b6;
+  line-height: 1.6;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.lib-effect-tag:hover {
+  color: #eef;
+}
+
+/* 勾中的那一行亮起来（"默认全部勾选"这件事第一眼可见） */
+.lib-effect-tag-on {
+  color: #eef;
+}
+
+.lib-effect-box {
+  flex: 0 0 auto;
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: #00ffcc;
+  cursor: pointer;
+}
+
+.lib-effect-label {
+  overflow-wrap: anywhere;
+}
+
+/* 一条都没命中时的空态（列表里，不是面板里；跟着 `.lib-effect` 前缀命名以保住类名纪律） */
+.lib-effect-empty {
+  border: 1px dashed #3a3a55;
+  border-radius: 12px;
+  padding: 28px 16px;
+  text-align: center;
+  color: #8a94a8;
+  font-size: 14px;
+  background: rgba(13, 13, 28, 0.6);
+}
+
+/* ===== 列表里的卡图先占住位置（否则面板会在右列里"跳格子"） =====
+ *
+ * ## 为什么本表要管到列表里的卡图（这是 T24 实测出来的一条，不是顺手加的）
+ *
+ * 图鉴有 270 张卡图，每张是 ~2MB 的 PNG；`<img>` 上没有写尺寸 ⇒ **图没到之前它高度是 0**，
+ * 于是 `.library-list` 的高度在加载过程中一路往上长（实测：同一页从 10594px 长到 13506px）。
+ * 而 `.library-layout` 是 `grid-template-columns: minmax(0,1fr) 520px`：列表那一行的行高由列表决定，
+ * 行高变了 ⇒ **第三行/第二列的落位整个重算** —— 实测同一份代码能读到两种结果：
+ * 面板在右列（x=637，展示框正下方）、或掉进左列第一个隐式行（x=108，与列表同列）。
+ *
+ * 这一条只做一件事：**给卡图按 0.73 的宽高比先占住位置**（真图加载完后的比例由图片自身决定，
+ * `aspect-ratio` 只影响"还没拿到固有尺寸"那一刻）⇒ 行高从第一帧起就是终值，面板的落位不再跳。
+ *
+ * 它是**附加**规则（`.library-list .lib-card img`，权重 0,2,1 > `styles.css` 的 `.lib-card img`
+ * 的 0,1,1）⇒ `styles.css` 一行未动（红线）；此处也不写 `!important`、不写 ID 选择器。
+ * 影响面：图鉴页首帧的卡位从"塌成一条"变成"按比例占位"，图到了之后两者一致（观感只变好不变差）。
+ */
+.library-list .lib-card img {
+  aspect-ratio: 0.73;
+  object-fit: cover;
+}
+
+@media (max-width: 1100px) {
+  .lib-effect-panel {
+    max-height: none;
+  }
+
+  .lib-effect-tags {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .lib-effect-tags {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

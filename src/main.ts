@@ -18,6 +18,10 @@ import './ui/styles-replay.css';
 // 本表只带 `net-lobby-*` 前缀类、且大厅是独立屏 ⇒ 已在那条腿的 `EXCLUDED_SOURCES` 里显式登记
 // （登记处写着"为什么不可能命中棋盘节点"的两条理由）。
 import './ui/styles-net-lobby.css';
+// G5/T24：图鉴右下角「按效果分类筛选」面板的样式（新文件，只带 `.lib-effect-*` 前缀类）。
+// 不参与远程页/热座页的层叠模型 ⇒ 已在 `tests/ui/net-body-layer-rules.test.ts` 的
+// `EXCLUDED_SOURCES` 里显式登记（理由写在登记处）。
+import './ui/styles-library-filter.css';
 import { createGame, getCurrentDrafter, performDraftPick, performDraftUnpick, performDraftBan, randomPoolFromSeed, setSeedNonce, getDraftPool } from './core/state/create';
 import { getCompilableLines } from './core/rules/compile';
 import { collectTriggers } from './core/effects/triggers';

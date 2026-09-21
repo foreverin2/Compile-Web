@@ -3,6 +3,7 @@ import type { PlayerId } from '../core/models/types';
 import { coinLanding, draftStarterFor } from '../app/coin';
 import type { CoinSide } from '../app/coin';
 import { DEMO_PROTOCOLS, DEMO_CARD_DEFS, protocolImgSrc, cardImgSrc, cardTextParts } from '../data/demo';
+import { LIB_TAG_GROUPS, LIB_ALL_TAG_IDS, filterLibrary } from '../app/library-filter';
 import { openZoom, buildCardTextEl, buildProtocolRatingPanel, bindClickOrDouble } from './render';
 
 /**
@@ -935,7 +936,7 @@ function renderCoinHotseat(root: HTMLElement, nav: CoinNav): void {
 
 /* =====================================================================
  * 图鉴：查看协议及其所属卡牌。右侧固定大展示框：鼠标悬停协议/卡牌 → 自动展示；
- * 点击仍走 openZoom 放大详情。
+ * 点击仍走 openZoom 放大详情。右下角（右列展示框之后）是按效果分类的筛选面板（G5 T24）。
  * ===================================================================== */
 export function renderLibrary(root: HTMLElement, back: () => void): void {
   clearRoot(root);
@@ -971,7 +972,7 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
       if (libEnabled.has(group)) libEnabled.delete(group);
       else libEnabled.add(group);
       refreshChips();
-      buildList();
+      refreshList();
     });
     filter.appendChild(chip);
   }
@@ -1067,10 +1068,80 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
     libPinnedKey = key;
     previewEntry(key);
   };
-  // 列表占主列，展示框占右列（DOM 顺序 = 网格列序：先列表后展示框）
+  // 列表占主列，展示框与效果筛选面板占右列（DOM 顺序 = 网格列序：先列表，后右列两块）
   const list = el('div', 'library-list');
   layout.appendChild(list);
   layout.appendChild(preview);
+
+  /* ── 图鉴右下角「按效果分类筛选」面板（G5 T24，用户 2026-09-21 的第 2 点）────────────
+   * 位置：`.library-layout` 右列里、展示框**之后**的空白处（DOM 顺序第四个子节点，
+   * 网格自动落到第二列下一行；`styles-library-filter.css` 只负责观感与分组排版）。
+   *
+   * 口径（与 `src/app/library-filter.ts` 一一对应，这里一个字都不重算）：
+   *  - 标签来自生成物 `src/data/cardEffectTags.ts`（构建期由效果代码算出，不是文本关键词现算）；
+   *  - **默认全部勾选**；点一下切换勾 / 不勾；
+   *  - 卡牌命中任一勾中的标签 ⇒ 连同它所属协议显示；一条都不命中 ⇒ 不显示；
+   *  - 某协议所有卡都被排除 ⇒ 连它的 `.lib-group` 框一起不建（不是"隐藏样式"）。
+   * 另给两个"全选 / 全不选"按钮（任务书 §5 的可选项，做了就写进报告）。
+   */
+  const libCheckedTags = new Set<string>(LIB_ALL_TAG_IDS);
+  const effectPanel = el('div', 'lib-effect-panel');
+  effectPanel.appendChild(el('div', 'lib-effect-title', '按效果分类筛选'));
+  const effectHint = (): void => {
+    const r = filterLibrary(libFilterState());
+    effectPanelHint.textContent = r.visibleCards.size === 0 && libEnabled.size === 0
+      ? `当前 0 张（${r.totalCards} 张全被排除）`
+      : `${libCheckedTags.size} / ${LIB_ALL_TAG_IDS.length} 类已勾选 · 命中 ${r.visibleCards.size} / ${r.totalCards} 张卡`;
+  };
+  const effectPanelHint = el('div', 'lib-effect-hint');
+  // 读数行要挂进面板才看得见（它原来只被写 textContent、没入树 ⇒ 面板上没有"已勾 N / 命中 M 张"）
+  effectPanel.appendChild(effectPanelHint);
+  const effectPanelActions = el('div', 'lib-effect-actions');
+  const effectCheckboxes = new Map<string, HTMLInputElement>();
+  const refreshEffectPanel = (): void => {
+    for (const [id, box] of effectCheckboxes) {
+      box.checked = libCheckedTags.has(id);
+      box.parentElement?.classList.toggle('lib-effect-tag-on', box.checked);
+    }
+    effectHint();
+  };
+  const setAllTags = (onto: boolean): void => {
+    libCheckedTags.clear();
+    if (onto) for (const id of LIB_ALL_TAG_IDS) libCheckedTags.add(id);
+    refreshEffectPanel();
+    refreshList();
+  };
+  effectPanelActions.appendChild(button('lib-effect-btn lib-effect-all', '全选', () => setAllTags(true)));
+  effectPanelActions.appendChild(button('lib-effect-btn lib-effect-none', '全不选', () => setAllTags(false)));
+  effectPanel.appendChild(effectPanelActions);
+  for (const { group, tags } of LIB_TAG_GROUPS) {
+    const groupBox = el('div', 'lib-effect-group');
+    groupBox.appendChild(el('div', 'lib-effect-group-name', group));
+    const tagList = el('div', 'lib-effect-tags');
+    for (const tag of tags) {
+      const row = el('label', 'lib-effect-tag');
+      row.dataset.tagId = tag.id; // 测试与排查按标签 id 寻址（不读文案）
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.className = 'lib-effect-box';
+      box.checked = true; // 默认全部勾选
+      row.classList.toggle('lib-effect-tag-on', true);
+      box.addEventListener('change', () => {
+        // 浏览器会把 checked 翻好再派发 change；以控件读数为准（不自己再 toggle 一次）
+        if (box.checked) libCheckedTags.add(tag.id);
+        else libCheckedTags.delete(tag.id);
+        refreshEffectPanel();
+        refreshList();
+      });
+      row.appendChild(box);
+      row.appendChild(el('span', 'lib-effect-label', tag.label));
+      effectCheckboxes.set(tag.id, box);
+      tagList.appendChild(row);
+    }
+    groupBox.appendChild(tagList);
+    effectPanel.appendChild(groupBox);
+  }
+
   screen.appendChild(filter); // 世代筛选条在 head 之后（先于 layout 挂载，勿用 insertBefore 前置）
 
   /** 协议封面小图（loading/compiled 通用）：竖版存储 + CSS rotate(-90) 横置（三代同规格） */
@@ -1085,10 +1156,23 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
     return img;
   }
 
+  /** 这一刻的筛选读数：世代 chips + 效果标签勾选，交给纯层的 `filterLibrary` 算 */
+  const libFilterState = () => ({
+    protocols: DEMO_PROTOCOLS.map((p) => ({ defId: p.defId, set: p.set })),
+    cards: DEMO_CARD_DEFS.map((c) => ({ defId: c.defId, protocol: c.protocol, value: c.value })),
+    enabledSets: libEnabled as ReadonlySet<string>,
+    checkedTags: libCheckedTags as ReadonlySet<string>,
+  });
+
   const buildList = (): void => {
+    const r = filterLibrary(libFilterState());
     list.textContent = '';
+    if (r.visibleProtocols.size === 0) {
+      list.appendChild(el('div', 'lib-effect-empty', '没有符合当前筛选项的卡牌 —— 勾几个效果分类，或把世代重新打开。'));
+      return;
+    }
     for (const proto of DEMO_PROTOCOLS) {
-      if (!libEnabled.has(proto.set)) continue;
+      if (!r.visibleProtocols.has(proto.defId)) continue; // 协议全被排除 ⇒ 这一组连框都不建
       const motto = `${proto.name} · ${proto.loadingText}`; // 座右铭（去「X代 基础/拓展」代号）
       const group = el('div', 'lib-group');
       const headRow = el('div', 'lib-proto');
@@ -1127,6 +1211,7 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
 
       const row = el('div', 'lib-cards');
       for (const c of DEMO_CARD_DEFS.filter((x) => x.protocol === proto.defId)) {
+        if (!r.visibleCards.has(c.defId)) continue; // 这张卡一条都不命中 ⇒ 不画它
         const cell = el('div', 'lib-card');
         const cimg = document.createElement('img');
         cimg.src = cardImgSrc(proto.defId, c.value);
@@ -1150,11 +1235,19 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
       list.appendChild(group);
     }
   };
-  buildList();
+
+  /** 列表重建 + 面板读数刷新（世代 chips 与效果标签两条路都走它） */
+  function refreshList(): void {
+    buildList();
+    refreshEffectPanel();
+  }
+  refreshList();
   refreshChips();
   // hover 内容保留（移出列表不清空——可移到右侧展示框细读）；更新由 hover 新条目 /
   // 点击固定 / 再点取消固定驱动（与草稿页同款机制）
   screen.appendChild(layout);
+  // 效果筛选面板排在右列展示框之后（右下角那块空白；DOM 顺序即网格落位）
+  layout.appendChild(effectPanel);
   root.appendChild(screen);
 }
 /* =====================================================================
