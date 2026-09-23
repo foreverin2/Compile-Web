@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import type { GameState, Line } from '../../src/core/models/types';
+import type { EffectStep, StepResult } from '../../src/core/models/types';
 import { executeAction } from '../../src/core/game';
 import { collectTriggers, resolveTrigger } from '../../src/core/effects/triggers';
 import { runStack } from '../../src/core/effects/resolve';
+import { answerEffect } from '../../src/core/effects/resolve';
 import { makeCard, pickFirst, resolveAllChoices, draftDeathP1, advanceToStep } from '../helpers';
 
 function deathLine(s: GameState): Line {
@@ -330,5 +332,86 @@ describe('death protocol effects', () => {
     resolveAllChoices(s, pickFirst);
     expect(s.pendingEffects).toHaveLength(0);
     expect(s.players[0].trash).toHaveLength(0); // 无牌可弃
+  });
+
+  // T30 腿 1：death-4 的候选只含【未被覆盖】的正面 0/1 分顶卡 —— 被盖的 0 分卡、
+  // 3 分正面顶卡、反面顶卡都必须进不去（listCandidates 不给 covered 只列顶卡）。
+  it('death-4: covered 0-point card is not a candidate; 3-point and face-down tops are excluded', () => {
+    const s = draftDeathP1();
+    advanceToStep(s, 0, 'action');
+    s.players[0].hand = [makeCard('death-4', 0, 'hand')];
+    // P2 线 1：[metal-0（正面，被盖）, metal-1（正面，顶）] —— 两张都是 0/1 分，只有顶卡该进候选
+    const coveredZero = makeCard('metal-0', 1, 'field', true, 1, 0);
+    const topOne = makeCard('metal-1', 1, 'field', true, 1, 1);
+    s.players[1].stacks[1] = [coveredZero, topOne];
+    // P2 线 0：3 分正面顶卡（分值排除）；P2 线 2：反面顶卡（faceUp 排除）
+    const three = makeCard('metal-3', 1, 'field', true, 0, 0);
+    const faceDown = makeCard('metal-1', 1, 'field', false, 2, 0);
+    s.players[1].stacks[0] = [three];
+    s.players[1].stacks[2] = [faceDown];
+    const card = s.players[0].hand[0];
+    executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: deathLine(s) });
+    const p = s.pendingEffects[s.pendingEffects.length - 1];
+    expect(p.prompt?.kind).toBe('select');
+    expect(p.prompt?.candidates.map((c) => c.uid)).toEqual([topOne.uid]); // 恰好只有顶卡那一张
+    expect(p.prompt?.candidates.some((c) => c.uid === coveredZero.uid)).toBe(false); // 被盖卡不在
+    expect(p.prompt?.candidates.some((c) => c.uid === three.uid)).toBe(false); // 3 分不在
+    expect(p.prompt?.candidates.some((c) => c.uid === faceDown.uid)).toBe(false); // 反面不在
+    executeAction(s, 0, 'effect-choice', { promptId: p.id, choice: [topOne.uid] });
+    expect(s.players[1].trash.map((c) => c.uid)).toEqual([topOne.uid]);
+    expect(s.players[1].stacks[1].map((c) => c.uid)).toEqual([coveredZero.uid]); // 被盖卡仍在原链路
+    // 删掉顶卡后被盖的 metal-0 变成顶卡并被「揭开」→ 它自己的中指令（翻转1张牌）入栈，与 death-4 选牌无关；
+    // 把栈走空，证明这次删除没留下悬挂效果。
+    resolveAllChoices(s, pickFirst);
+    expect(s.pendingEffects).toHaveLength(0);
+  });
+
+  // T30 腿 2：delete op 不带 allowCovered 删被盖卡 ⇒ 抛 covered card，且卡的 zone 与链路长度都没变
+  //（证明是"校验先拒"，不是"删了一半才抛"）。
+  it('delete without allowCovered on a covered card throws /covered card/ and changes nothing', () => {
+    const s = draftDeathP1();
+    s.players[1].stacks[1] = [makeCard('metal-0', 1, 'field', true, 1, 0), makeCard('metal-1', 1, 'field', true, 1, 1)];
+    const covered = s.players[1].stacks[1][0];
+    const top = s.players[1].stacks[1][1];
+    s.pendingEffects.push({
+      id: 'e1', player: 0,
+      gen: (function* (): Generator<EffectStep, void, StepResult> {
+        yield { op: 'delete', uid: covered.uid }; // 故意不带 allowCovered
+      })(),
+      sourceUid: 'src', sourceDefId: 'system', system: true, prompt: null, lastAnswer: null,
+    });
+    expect(() => runStack(s)).toThrow(/covered card/);
+    expect(covered.zone).toBe('field');
+    expect(covered.line).toBe(1);
+    expect(covered.pos).toBe(0);
+    expect(s.players[1].stacks[1].map((c) => c.uid)).toEqual([covered.uid, top.uid]); // 链路长度与顺序不变
+    expect(s.players[1].trash).toHaveLength(0);
+  });
+
+  // T30 腿 3：硬提交非候选 uid（被盖卡）⇒ answerEffect 抛 invalid selection，prompt 仍在、状态指纹未变
+  //（候选校验先于 pe.prompt = null 与生成器恢复）。
+  it('death-4: answering with a covered (non-candidate) uid throws /invalid selection/ and state is frozen', () => {
+    const s = draftDeathP1();
+    advanceToStep(s, 0, 'action');
+    s.players[0].hand = [makeCard('death-4', 0, 'hand')];
+    const coveredZero = makeCard('metal-0', 1, 'field', true, 1, 0);
+    const topOne = makeCard('metal-1', 1, 'field', true, 1, 1);
+    s.players[1].stacks[1] = [coveredZero, topOne];
+    const card = s.players[0].hand[0];
+    executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: deathLine(s) });
+    const p = s.pendingEffects[s.pendingEffects.length - 1];
+    expect(p.prompt?.kind).toBe('select');
+    const fingerprint = (): string => JSON.stringify({
+      stacks: s.players.map((pl) => pl.stacks.map((st) => st.map((c) => [c.uid, c.faceUp, c.zone, c.line, c.pos]))),
+      hand: s.players.map((pl) => pl.hand.map((c) => c.uid)),
+      trash: s.players.map((pl) => pl.trash.map((c) => c.uid)),
+      effects: s.pendingEffects.map((e) => [e.id, e.prompt !== null, e.lastAnswer]),
+    });
+    const before = fingerprint();
+    expect(() => answerEffect(s, p.id, [coveredZero.uid])).toThrow(/invalid selection/);
+    expect(s.pendingEffects[s.pendingEffects.length - 1].prompt).not.toBeNull(); // prompt 仍在
+    expect(fingerprint()).toBe(before); // 状态指纹未变
+    expect(s.players[1].trash).toHaveLength(0);
+    expect(s.players[1].stacks[1]).toHaveLength(2);
   });
 });
