@@ -18,4 +18,11 @@
 - **推送：不用每次问，也不要推得太勤**（用户 2026-09-21 明确要求）。一个阶段/一批任务收口、门禁全绿之后，
   自己判断该推就推，然后**一句话说明推没推成**（推成功给出行号范围，推失败就说失败原因，不要反复重试、
   不要为推送来回磨）。网络/代理不通时直接说"这次没推上去"，把提交留在本地即可。
+- **推送失败时的第一条排查：先试直连**（2026-09-23 实测）。本机 `~/.gitconfig` 里给 github 配了
+  `http.proxy` / `https.proxy`（以及 per-URL 的 `http.https://github.com.proxy`）指向 `127.0.0.1:7890`；
+  **代理没开时它会挡住本来能用的直连**，报错是 `Failed to connect to github.com port 443 via 127.0.0.1`。
+  一次不做任何配置改动的直连重试通常是通的：
+  `git -c "http.https://github.com.proxy=" -c "https.https://github.com.proxy=" -c "http.proxy=" -c "https.proxy=" push origin main`
+  （反过来也一样：直连被 reset 时报 `Recv failure: Connection was reset`，那就走默认的代理配置。两条都失败 ⇒
+  直接说"这次没推上去"，不要再变着法重试。）
 - 临时文件一律放 `.superpowers/<任务>/`（已 gitignore），不要放进 `tests/` 或仓库根。
