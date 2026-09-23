@@ -796,8 +796,18 @@ try {
         push(false, `贴了整条链接之后没有「出示回示码」按钮（通知：${(await guest.text('.net-lobby-notice')) ?? '无'}）`);
       } else {
         const tAns = Date.now();
-        await guest.click('.net-lobby-make-answer');
-        const appeared = await guest.waitFor('.net-lobby-answer-code', budgetMs);
+        /**
+         * ★ **有界重试**（计划 §9 第 32/43 条登记的"这一步没有重试"）：这一格过去偶发"点了没反应"
+         * （判定个位数 + exit 1、紧接着重跑全绿）。**只加重试，判定集一个字没动**：每次重试仍然是
+         * 真点击 + 同样的 `waitFor` 上界；三次都拿不到码 ⇒ 照旧 `answerCode = null`，后面的判定照旧判红。
+         * 重试次数与既有那道大厅门的写法同量级（大厅门是 3 次）。
+         */
+        let appeared = false;
+        for (let attempt = 1; attempt <= 3 && !appeared; attempt += 1) {
+          await guest.click('.net-lobby-make-answer');
+          appeared = await guest.waitFor('.net-lobby-answer-code', budgetMs);
+          if (!appeared) raw[`guestAnswerAttempt${String(attempt)}Failed`] = true;
+        }
         answerCode = appeared ? await guest.text('.net-lobby-answer-code') : null;
         guestNotice = await guest.text('.net-lobby-notice');
         raw.guestAnswerMs = Date.now() - tAns;

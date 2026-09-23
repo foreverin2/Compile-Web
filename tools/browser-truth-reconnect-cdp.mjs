@@ -345,8 +345,16 @@ try {
   if (!(await guest.waitFor('.net-lobby-paste-input', 8000))) throw new Error('加入方屏上没有粘贴框');
   await guest.type('.net-lobby-paste-input', String(invitePayload));
   if (!(await guest.waitFor('.net-lobby-make-answer', 20000))) throw new Error('加入方屏上没有「出示回示码」');
-  await guest.click('.net-lobby-make-answer');
-  const ansOk = await guest.waitFor('.net-lobby-answer-code', budgetMs);
+  /**
+   * ★ **有界重试**（计划 §9 第 32 条登记的"这一步没有重试"）：过去这一步偶发"点了没反应"，
+   * 一次红就把整道门拖成"判定个位数 + exit 1"，紧接着重跑又是 17/17。**只加重试，判定集一个字没动**：
+   * 每次仍是真点击 + 同一个 `waitFor` 上界；三次都拿不到 ⇒ `answerCode = null`，下面那条判定照旧判红。
+   */
+  let ansOk = false;
+  for (let attempt = 1; attempt <= 3 && !ansOk; attempt += 1) {
+    await guest.click('.net-lobby-make-answer');
+    ansOk = await guest.waitFor('.net-lobby-answer-code', budgetMs);
+  }
   const answerCode = ansOk ? await guest.text('.net-lobby-answer-code') : null;
   push(typeof answerCode === 'string' && answerCode.length > 0, `加入方产出了回示码（${answerCode?.length ?? 0} 字符）`);
 
