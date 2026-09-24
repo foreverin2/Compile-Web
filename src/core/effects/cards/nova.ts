@@ -190,7 +190,7 @@ function* nova4Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const line = ctx.card.line;
   if (line === null) return;
   const count = s_len(ctx.s, ctx.player, line);
-  const cand = ctx.candidates({ zone: 'field' }).filter((c) => c.faceUp && getCardDef(c.defId).value < count);
+  const cand = ctx.candidates({ zone: 'field' }).filter((c) => getCardDef(c.defId).value < count);
   if (cand.length === 0) return;
   const ans = yield { kind: 'select', title: 'nova-4：翻转1张阈值小于此链路牌数的牌', min: 1, max: 1, optional: false, candidates: cand };
   if (ans.selected.length > 0) yield { op: 'flip', uid: ans.selected[0] };
