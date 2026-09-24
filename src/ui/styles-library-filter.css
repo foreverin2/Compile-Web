@@ -383,3 +383,82 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* ===== 窄屏单列（G5 T29；追加，不改上面任何一条既有规则） =====
+ *
+ * ## 为什么本表要在 `max-width: 1100px` 里重写一遍 `styles.css` 已经写过的东西
+ *
+ * `styles.css` 自己有两条 `@media (max-width:1100px) { .library-layout { grid-template-columns: 1fr }
+ * .library-preview { position: static; min-height: 0 } }`（`:5426`、`:5458`），但它们**后面**还有
+ * 两条**裸**规则把媒体查询架空 —— `:5490` 的 `.library-layout { … 520px }` 与 `:5491` 的
+ * `.library-preview { min-height: 560px }`（还有 `:5498` 的 `.library-preview-hint { margin-top: 150px }`，
+ * 它同样压掉了媒体查询里的 `margin-top: 6px`）。同权重（都是 0,1,0）、同一张表里**靠后者胜** ⇒
+ * 窄屏解出来的仍是那两条裸规则。实测（真 Chrome 夹具 `.superpowers/g5-T29/measure-narrow.mjs`，
+ * 2026-09-23，读数原文 `measure-before.txt`）：
+ *
+ *   1280x900 ⇒ grid-template-columns = `511px 520px`（对照档，正确）
+ *   1100x900 ⇒ `331px 520px` + 展示框 `position: static`（媒体查询里那条生效了、列数那条没有）
+ *    900x900 ⇒ `131px 520px` + **面板被压成 131px 宽**（31 个标签一行一个字）
+ *
+ * 所以缺陷不是"媒体查询没写"，而是"它被同一张表里排在后面的裸规则按源序压掉了"。
+ *
+ * ## 修法：本表补一份同断点的覆盖（**红线文件一个字节未动**）
+ *
+ * `src/main.ts:1` import `styles.css`、`:24` import 本表 ⇒ **本表排在后面**；这里的三条选择器
+ * 与 `styles.css` 那几条**同权重**（`.library-layout` / `.library-preview` /
+ * `.library-preview-hint` 各 0,1,0）⇒ 按"同权重、后表胜"压过 `:5490` / `:5491` / `:5498`。
+ * 这正是本仓这张表已在用的机制（上面 `@media (min-width:1101px)` 那段、以及
+ * `@media (min-width:1101px) and (max-height:895px)` 那条松 `min-height`，都是同一个手法）。
+ * 层叠顺序在**构建产物**上也核对过：`docs/2026-09-17-G5-传输层联机-实现计划.md` §9 第 70 条
+ * 记着 `dist` 里本表整段排在 `styles.css` 那条裸规则**之后**（偏移 349799 之后 vs 128709）。
+ *
+ * ## 为什么单独起一段、不并进上面那条 `@media (max-width: 900px)`
+ *
+ * 断点不同：标签列数那条只管 <= 900px（2 列），单列布局要覆盖 901..1100px 那一段（那一段标签是
+ * 4 列，见上面 `@media (max-width: 1100px)`）。合成一条会把 901..1100 的单列布局漏掉。
+ *
+ * ## 与既有规则的关系（三条都不重叠，写清楚免得下一个人以为重复）
+ *
+ *  - `@media (min-width:1101px)` 那两段（列位 / 高度上限、标签 3 列）：与 `max-width:1100px`
+ *    **互斥**，一个视口只会命中一边；
+ *  - `@media (min-width:1101px) and (max-height:895px)` 那条松 `min-height`：同样在 1101px 以上；
+ *  - 本表 `@media (max-width: 1100px)` / `(max-width: 900px)` 两条标签列数规则：与这里的三条是
+ *    **不同选择器**，不互相覆盖。
+ *
+ * 窄屏下展示框 `position: static`、面板也在普通流里，DOM 顺序是 列表 / 展示框 / 面板 ⇒
+ * 从上往下排，没有互相压住的东西（实测三档相交面积都是 0，读数 `measure-after.txt`）。
+ */
+@media (max-width: 1100px) {
+  .library-layout {
+    grid-template-columns: 1fr;
+  }
+
+  /*
+   * 这一条不是顺手加的，是实测挖出来的一半缺陷。
+   *
+   * `styles.css:5325` 那条 `.library-list { … max-width: 1500px; margin: 0 auto }` 里的**自动横向
+   * 外边距**会让它在这个单列网格里**收缩成 max-content**（= 712px，等于那一列里最宽的 `.lib-group`
+   * 的 700 + 左右各 6px 内边距），再由 auto 居中 ⇒ 列表只占 869px 容器里的 712px、两侧各空 78.5px。
+   * 只把网格改成单列、不写这一条时实测（探针 `probe-matched.txt`，1100 宽）：
+   *
+   *   A 现状（只改了列数）  ⇒ 列 `869px`，列表 x=187 宽=712（居中）
+   *   B 再加 `margin: 0`    ⇒ 列 `869px`，列表 x=108 宽=869（占满，正确）
+   *   C 改 `justify-self: stretch` ⇒ 仍 712（grid 的 stretch 对 auto 外边距无效）
+   *
+   * 所以 `margin: 0` 是把列表放回"占满主列"的那一条；它只在 <= 1100px 生效，1280 档不受影响
+   * （对照档实测逐字不变）。列表内容本身在 869px 里放得下（`.lib-group` 没有写死宽度，实测 1100 档
+   * 协议框排成 1 行 2 个、卡牌 400+ 行），不需要横向滚动。
+   */
+  .library-list {
+    margin: 0;
+  }
+
+  .library-preview {
+    position: static;
+    min-height: 0;
+  }
+
+  .library-preview-hint {
+    margin-top: 6px;
+  }
+}
