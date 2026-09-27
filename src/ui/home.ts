@@ -299,6 +299,15 @@ export function renderHome(root: HTMLElement, nav: HomeNav): void {
  * ===================================================================== */
 export interface ModeSelectNav {
   backHome(): void;
+  /**
+   * G5/T41（用户 2026-09-27 第 1 条）：**设备体检** —— 模式选择页最下方那个跳转按钮。
+   *
+   * 它**不是游戏模式**：宿主不设 `renderMode`、不碰 `state`，只做一次
+   * `location.href = './probe.html'`（同源静态页，源文件在 `public/probe.html`）。
+   * 为什么走宿主而不是在这里直接写 `location`：本文件的渲染函数要能在无 jsdom 的 DOM 桩上
+   * 真跑（`tests/ui/net-preview-wiring.test.ts` 的行为腿），跳转由宿主注入才可观测。
+   */
+  openDeviceCheck(): void;
   /** 玩家选定「热坐」并携带两个开关状态继续（→ 掷硬币） */
   startHotseat(banEnabled: boolean, randomPoolEnabled: boolean): void;
   /**
@@ -307,27 +316,54 @@ export interface ModeSelectNav {
    * 与 `startNetPreview` 的**唯一区别**：大厅是**独立屏**（没有 `state`、不掷硬币、不进草稿页），
    * 宿主把页面模式切成第四值（`renderMode = 'lobby'`）之后直接画大厅。
    *
-   * ⚠️ **这个入口（以及它的模式卡）必须排在 `startNetPreview` 之前**（计划 §5 T8 的实现顺序
-   * 约束，D24 补）：`tests/ui/net-preview-wiring.test.ts:210-213` 用
-   * `mode.slice(mode.indexOf('startNetPreview:'))` 切出"预览那一段"，再在那一段里断言
-   * `renderMode = 'net'` 与 `netViewSeat = viewSeat`。新入口若排在它**之后**，那段切片会被拉长到
-   * 含新入口 ⇒ 断言可能被新入口里的字符串满足 —— 它仍然绿，但**测的已经不是原来那件事**（失焦）。
+   * **这个入口（以及它的模式卡）排在 `startNetPreview` 之前**（计划 §5 T8 的实现顺序约束，
+   * D24 补）：`showModeSelect` 的 nav 键顺序与**源码里**的模式卡顺序「热坐 → 联机 → 预览」一致，
+   * 读代码时不用两头跳。
+   *
+   * 注意：那个"模式卡顺序"只在**开发者路径**下等于玩家看到的清单：`dev=false` 时预览卡**根本不会
+   * 被建出来**（`renderModeSelect` 的 `if (devUnlocked)`），普通玩家看到的是「热坐 → 联机 →
+   * 单人 → 三人」四张。
+   *
+   * G5/T41 起 `tests/ui/net-preview-wiring.test.ts` 第 6 条改用**花括号配平的 `startNetPreview`
+   * 箭头函数体**当锚点（不再是"从 `startNetPreview:` 一直切到 `showModeSelect` 末尾"的切片）——
+   * 那种切片会被排在后面的新入口拉长，于是判据可能被新入口里的字符串满足：它仍然绿，但**测的
+   * 已经不是原来那件事**（失焦）。配平后判据面只剩预览那一段，
+   * `tests/ui/main-lobby-wiring.test.ts` 第 2 条继续拿同一顺序约束当顺序一致性检查。
    */
   startNetLobby(): void;
   /**
    * G2 Task 4：进入**远程对战页单视角预览**（本地、零联机）—— G2 视觉验收用。
    *
+   * **G5/T41 起，模式卡只在开发者模式已解锁时才渲染**（`renderModeSelect` 的 `devUnlocked`，
+   * 见那里的说明）；**这条回调本身与 `main.ts` 里它的实现一行未动** —— `renderMode === 'net'`
+   * 那条渲染路径联机大厅也还在用，删它等于把东西一起带走。
+   *
    * 与 `startHotseat` 的**唯一区别**是宿主会把页面模式切成远程页（`renderMode = 'net'`）；
    * 流程本身完全沿用热座（掷硬币 → 草稿页 → 过渡 → 对战阶段）。
    *
    * `viewSeat` 只给**起始**视角：进预览即 `0`（P1 视角 = 验收第 1 项要看的形态：对手手牌只显示数量）。
-   * 切到 P2 视角、把对手手牌改成全部可见，都靠**页内工具条**（`NetViewOpts.onPreviewChange`）——
-   * 有意不为这两个开关再加模式卡：模式选择页已经够挤，而工具条只在预览时出现，语义更准。
+   * 切到 P2 视角靠开发者指令 `视角` / `seat 1|2`（`NetViewOpts.onPreviewChange` 那条路）——
+   * 有意不为这个开关再加模式卡：模式选择页已经够挤，而工具条只在预览时出现，语义更准。
    */
   startNetPreview(viewSeat: 0 | 1, banEnabled: boolean, randomPoolEnabled: boolean): void;
 }
 
-export function renderModeSelect(root: HTMLElement, nav: ModeSelectNav): void {
+/**
+ * 游戏模式选择页。
+ *
+ * ## `devUnlocked`（G5/T41，用户 2026-09-27 第 2 条）
+ *
+ * 用户原话：**"单视角预览这个模式没有实际作用，仅仅是可以用于测试，所以不要放在游戏模式里面"**。
+ * ⇒ 它**不再属于玩家看到的模式清单**，但测试能力**保留**：那张卡只在**开发者模式已解锁**
+ * （`Ctrl+Shift+P` + 密码，`src/ui/devmode.ts` 的 `isDevUnlocked()`）时才渲染，位置仍在最下方。
+ * 宿主把当前解锁状态当**参数**传进来（`src/main.ts` 的 `showModeSelect`，接线见那里的注释）——
+ * 不在本文件里直接读那面模块级旗标：本函数要能在 DOM 桩上真跑，旗标是宿主的事。
+ *
+ * 判据面（`tests/ui/net-preview-wiring.test.ts` 第 6 条 + 行为腿）：dev=false 时页面上**没有**
+ * 这张卡，dev=true 时**才有**。`renderMode === 'net'` 那条渲染路径与 `startNetPreview` 本身
+ * 一行未动（联机大厅与开发者预览都还要用它）。
+ */
+export function renderModeSelect(root: HTMLElement, nav: ModeSelectNav, devUnlocked = false): void {
   clearRoot(root);
   const screen = el('div', 'mode-screen');
   screen.appendChild(el('h1', 'mode-title', '选择游戏模式'));
@@ -350,7 +386,9 @@ export function renderModeSelect(root: HTMLElement, nav: ModeSelectNav): void {
   );
   // G5/T8：**真正的联机入口**（建房 / 加入 / 连接设置）。
   // 为什么排在预览卡**之前**：计划 §5 T8 的实现顺序约束（D24）—— 见 `ModeSelectNav.startNetLobby`
-  // 的说明（`net-preview-wiring.test.ts:210-213` 的 `indexOf` 切片不许被新入口拉长）。
+  // 的说明；G5/T41 起预览那一段的判据面改成花括号配平的箭头函数体（这条顺序约束只剩"源码里的
+  // 卡顺序与 nav 键顺序一致"这一个理由，且预览卡只在开发者路径下才会被建出来），它仍在
+  // `tests/ui/main-lobby-wiring.test.ts` 第 2 条上。
   //
   // ★ **本卡的描述句里一个字的信令/隐私说明都没有**（修复轮改；评审 §4.2 判第一版这里违了
   //   §2 第 6 条）：第一版手写了"两台设备直连（P2P）。默认不向任何服务器发请求…"—— 那是
@@ -366,20 +404,24 @@ export function renderModeSelect(root: HTMLElement, nav: ModeSelectNav): void {
       }
     )
   );
-  // G2 Task 4：远程对战页的**单视角预览**（本地、零联机）。放在热坐卡之后 —— 它是热坐流程的
-  // 一个"看布局"变体，视觉上从属于它；热坐卡的文案与行为一行未改。
-  list.appendChild(
-    mkMode(
-      '单视角预览（本地）',
-      '远程对战页布局预览：上方是对手、下方是你；你的卡正立、对手的卡倒置。'
-        + '仍是本地热座流程，零联机。页内工具条可切换视角与对手手牌可见性。',
-      true,
-      () => {
-        // P1 视角起手：一进预览就是验收第 1 项要看的形态（对手手牌只显示数量）。
-        nav.startNetPreview(0, banBox.checked, randomBox.checked);
-      }
-    )
-  );
+  // G5/T41：远程对战页的**单视角预览**（本地、零联机）—— **只在开发者模式已解锁时**渲染。
+  // 用户 2026-09-27 的口径：这个模式对普通玩家没有实际作用、只是测试用，**不要放在游戏模式里面**；
+  // 但测试能力保留 ⇒ 卡在这里，闸门是宿主传进来的 `devUnlocked`（`Ctrl+Shift+P` + 密码解锁）。
+  // 普通玩家进这一页时 `devUnlocked === false`，这张卡**根本不会被建出来**（不是隐藏的 CSS）。
+  if (devUnlocked) {
+    list.appendChild(
+      mkMode(
+        '单视角预览（仅开发）',
+        '开发者模式专用（Ctrl+Shift+P 解锁可见）。远程对战页布局预览：上方是对手、下方是你；'
+          + '你的卡正立、对手的卡倒置。仍是本地热座流程，零联机。',
+        true,
+        () => {
+          // P1 视角起手：一进预览就是验收第 1 项要看的形态（对手手牌只显示数量）。
+          nav.startNetPreview(0, banBox.checked, randomBox.checked);
+        }
+      )
+    );
+  }
   list.appendChild(
     mkMode('单人模式', '对战 AI 对手', false, () => showToast('单人模式：开发中'))
   );
@@ -422,6 +464,15 @@ export function renderModeSelect(root: HTMLElement, nav: ModeSelectNav): void {
     nav.startHotseat(banBox.checked, randomBox.checked);
   }));
   actions.appendChild(button('btn', '返回主页面', nav.backHome));
+  /**
+   * G5/T41（用户 2026-09-27 第 1 条）：**设备体检** —— 模式选择页最下方的一个跳转按钮。
+   *
+   * 它与上面那些 `mode-card` 是**两回事**：不是游戏模式，点了不开局，只跳到同源静态页
+   * `./probe.html`（源文件 `public/probe.html`，Vite 会把它拷进 `dist/probe.html`）。
+   * 放在 `mode-actions` 这一区（与「返回主页面」同一行），因为它是"离开这一页"的动作之一，
+   * 不占模式卡的位置；用的是既有 `btn` 类，**不动 styles.css**（红线）。
+   */
+  actions.appendChild(button('btn mode-probe-btn', '设备体检 / 网络自检', nav.openDeviceCheck));
   screen.appendChild(actions);
 
   root.appendChild(screen);

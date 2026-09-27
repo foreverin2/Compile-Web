@@ -32,7 +32,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   acceptOffer, applyAnswer, browserHash, createInvite, createBrowserTransport,
-  peerConnectionOf, type NetBrowserEnv,
+  peerConnectionOf, readCompressionMode, type NetBrowserEnv,
 } from '../../src/ui/net-browser';
 import { answerPayloadFields } from '../../src/net/invite';
 import { createLobbyClient, type LobbyClient, type LobbyTicker } from '../../src/ui/net-lobby';
@@ -93,13 +93,16 @@ const zlibEnv: NetBrowserEnv = {
       Blob?: new (parts: readonly Uint8Array[]) => { stream(): unknown };
       Response?: new (body: unknown) => { arrayBuffer(): Promise<ArrayBuffer> };
     };
-    const Ctor = mode === 'compress' ? g.CompressionStream : g.DecompressionStream;
+    // ★ G5/T40：模式串的解读走产出代码那一处（压 / 解两个构造器 + 格式名），
+    //   于是"降级链换了一档"这件事在本夹具上也是**真**的（不是永远压 deflate-raw）
+    const read = readCompressionMode(mode);
+    const Ctor = read.decompress ? g.DecompressionStream : g.CompressionStream;
     const BlobCtor = g.Blob;
     const ResponseCtor = g.Response;
     if (Ctor === undefined || BlobCtor === undefined || ResponseCtor === undefined) return null;
     return {
       run: async (input: Uint8Array): Promise<Uint8Array> => {
-        const stream = new Ctor('deflate-raw');
+        const stream = new Ctor(read.format);
         const piped = (new BlobCtor([input]).stream() as { pipeThrough(s: unknown): unknown }).pipeThrough(stream);
         return new Uint8Array(await new ResponseCtor(piped).arrayBuffer());
       },

@@ -54,6 +54,7 @@ import {
   COMPRESSION_RATIO_MAX as COMPRESSION_RATIO_MAX_K,
   COMPRESSION_RATIO_MIN as COMPRESSION_RATIO_MIN_K,
   INVITE_CHARS_MAX,
+  INVITE_CHARS_MAX_UNCOMPRESSED,
   INVITE_CHARS_MIN,
   NO_ENDPOINT_MESSAGE,
   base64UrlToBytes,
@@ -63,10 +64,14 @@ import {
   encodeInvite,
   inviteFragmentOf,
   inviteLinkOf,
+  kindOfMarker,
+  markerOfKind,
   payloadBytesOf,
+  readInviteSegment,
   roomCodeEntryReachability,
   utf8Decode,
   utf8Encode,
+  type CompressionKind,
   type InviteDecodeResult,
   type InviteFields,
 } from '../net/invite';
@@ -154,11 +159,20 @@ export interface HistoryLike {
   replaceState(data: unknown, title: string, url: string): void;
 }
 
-/** 玩家设置里与传输层有关的那几项。**全部可缺省**，缺省即"没配"（D14） */
+/** 玩家设置里与传输层有关的那几项。**全部可缺省**，缺省即"用产品默认值"（D14；T38 起默认带中继） */
 export interface NetSettingsLike {
-  /** 信令端点（`wss://…` / `ws://…`）。**默认没有**：本程序默认不向任何服务器发请求（§8.1） */
+  /**
+   * 信令端点（`wss://…` / `ws://…`）。**默认没有**：没配它就走"邀请码 / 回示码"那条手递路，
+   * 短码那条路不可用（见 `NO_ENDPOINT_MESSAGE`）。
+   *
+   * ⚠️ 它**不等于**"本程序不向任何服务器发请求"：ICE 默认就要联系 STUN/TURN
+   * （`DEFAULT_ICE_SERVERS` 第一项就是 8.130.97.243）。
+   */
   readonly signalingEndpoint?: string;
-  /** TURN 中继的 URL。**默认没有**：本程序不内置任何中继（D14） */
+  /**
+   * TURN 中继的 URL（三项之一）。**留空 = 用产品默认值那台**（`DEFAULT_ICE_SERVERS` 里的
+   * `turn:8.130.97.243:3478`）；三项填齐则**追加**为玩家自己那台（覆盖默认地址）。
+   */
   readonly turnUrl?: string;
   readonly turnUsername?: string;
   readonly turnCredential?: string;
@@ -179,7 +193,8 @@ export interface IceServerLike {
 /** 注入缝的参数表：**只放"环境"**，本文件只读它、不写它 */
 export interface NetBrowserEnv {
   /**
-   * 造一个对端连接。入参是 `iceServers`（D14：从设置读，默认只给公共 STUN）——
+   * 造一个对端连接。入参是 `iceServers`（D14：从设置读；没填就用 `DEFAULT_ICE_SERVERS`，
+   * 那份默认值自带一台中继）——
    * 传**动作**而不是现成对象，理由照 `L1StoreEnv.localStorage`：读 `globalThis.X`
    * 这件事本身就可能抛，而"抛"正是最该被兜住的一种环境。
    */
@@ -187,12 +202,18 @@ export interface NetBrowserEnv {
   /** 造一个信令连接（WebSocket）的动作。**只有端点非空时才会被调用**（§8.1） */
   readonly webSocket?: (url: string) => WebSocketLike | null;
   /**
-   * 造一个**压缩流**的动作（`deflate-raw`）。
+   * 造一个**压缩流**的动作。
    *
-   * 入参是"压"还是"解"，由本文件两处实现决定；假件据此返回一个能立刻给出结果的流。
+   * 入参是**压缩格式名**（`'deflate-raw'` / `'deflate'` / `'gzip'`），或者老口径那两个字
+   * `'compress'` / `'decompress'`（含义分别是"压 `deflate-raw`"与"解 `deflate-raw`"）。
+   *
+   * ★ **G5/T40 的兼容口径**：老代码 / 老假件按 `'compress' | 'decompress'` 两档写
+   * （那时格式名写死在实现里，只有一个 `deflate-raw`）。为了让那些调用点**一字不改**，
+   * 本参数收下这五种字符串 —— 老假件在收到格式名时按"自己那一套恒等/记账语义"回答即可。
+   *
    * 真实实现走 `CompressionStream` / `DecompressionStream` + `Blob` + `Response`。
    */
-  readonly compressionStream?: (mode: 'compress' | 'decompress') => CompressionStreamLike | null;
+  readonly compressionStream?: (mode: CompressionStreamMode) => CompressionStreamLike | null;
   readonly crypto?: () => CryptoLike | null;
   readonly location?: () => LocationLike | null;
   readonly history?: () => HistoryLike | null;
@@ -262,17 +283,143 @@ export interface CompressionStreamLike {
   run(input: Uint8Array): Promise<Uint8Array>;
 }
 
+/**
+ * ★★ **G5/T40**：`CompressionStream` / `DecompressionStream` 认得的**格式名**。
+ *
+ * 顺序就是**降级链的顺序**（`COMPRESSION_FALLBACK`）：`deflate-raw` → `deflate` → `gzip`。
+ * 三档都不成 ⇒ **不压缩**（那个"档"没有格式名 —— 它就是原文，见 `CompressionKind` 的 `'none'`）。
+ */
+export type CompressionFormat = 'deflate-raw' | 'deflate' | 'gzip';
+
+/**
+ * **解压**方向的格式名：在压缩格式名后面加一个 `+`（`'deflate-raw+'` / `'deflate+'` / `'gzip+'`）。
+ *
+ * ## 为什么方向要写进这个字符串（而不是另开一个注入成员）
+ *
+ * 真件里"压"和"解"是**两个不同的构造函数**（`CompressionStream` / `DecompressionStream`），
+ * 而注入缝只有一个 `compressionStream(mode)`。老口径用 `'compress' | 'decompress'` 表达方向，
+ * 那时格式名写死（只有 `deflate-raw`）所以够用；T40 起格式名也进了这个参数，
+ * 于是"方向 + 格式"两件事必须都在同一个字符串里 —— **`+` 就是那个方向位**。
+ *
+ * 这样做的直接好处：**假件不可能把两个方向搞混**（老口径只有 `'deflate'` 一个词，
+ * 假件分不清"压 gzip"与"解 gzip"）。判据 ④ 要逐档读两个方向，这一点必须是可判的。
+ */
+export type DecompressFormat = 'deflate-raw+' | 'deflate+' | 'gzip+';
+
+/** 解压格式名（按降级链顺序；判据 ④ 逐档读它） */
+export const DECOMPRESS_FORMATS: readonly DecompressFormat[] = ['deflate-raw+', 'deflate+', 'gzip+'];
+
+/** 解压格式名 → 纯层的档名 */
+const KIND_OF_DECOMPRESS_FORMAT: Readonly<Record<DecompressFormat, 'raw' | 'deflate' | 'gzip'>> = {
+  'deflate-raw+': 'raw',
+  'deflate+': 'deflate',
+  'gzip+': 'gzip',
+};
+
+/** 解压格式名 → 纯层的档名（**判据 ④ 的读数面**：把"这一档解压能力试过没有"读成档名） */
+export function kindOfDecompressFormat(format: DecompressFormat): CompressionKind {
+  return KIND_OF_DECOMPRESS_FORMAT[format];
+}
+
+/**
+ * 解压格式名 → 压缩格式名（**去掉方向位**）。
+ *
+ * ⚠️ 只有真的带 `+` 时才切：`'deflate-raw'` 这类**压缩**格式名直接原样返回。
+ * 曾经写成无条件 `slice(0, -1)`，于是 `'deflate-raw'` 被切成 `'deflate-ra'`
+ * ⇒ 降级链每一档的构造都抛 `TypeError` ⇒ 一路退到"不压缩"（**实测抓到的坑**：
+ * 那次真机上一条 600 字符的码会变成 1600 字符，而屏上还显示成功）。
+ */
+export function compressFormatOf(format: CompressionFormat | DecompressFormat): CompressionFormat {
+  return (format.endsWith('+') ? format.slice(0, -1) : format) as CompressionFormat;
+}
+
+/**
+ * ★ **一个模式串的完整解读**（判据 ④ 与所有假件共用这一处，别各写一份）。
+ *
+ * 把 `CompressionStreamMode` 拆成三件事：**方向**（压 / 解）、**格式名**、**这一档的纯层名字**。
+ * 老口径两个字也在这里折成"`deflate-raw` + 方向" ⇒ 老调用点与新调用点走**同一套**解读，
+ * 假件不可能把两个方向搞混。
+ */
+export interface CompressionModeRead {
+  /** `true` = 解压（用 `DecompressionStream`），`false` = 压缩 */
+  readonly decompress: boolean;
+  /** 格式名（不含方向位） */
+  readonly format: CompressionFormat;
+  /** 纯层的档名（`raw` / `deflate` / `gzip`） */
+  readonly kind: CompressionKind;
+}
+
+export function readCompressionMode(mode: CompressionStreamMode): CompressionModeRead {
+  if (mode === 'compress') return { decompress: false, format: 'deflate-raw', kind: 'raw' };
+  if (mode === 'decompress') return { decompress: true, format: 'deflate-raw', kind: 'raw' };
+  const decompress = mode.endsWith('+');
+  const format = compressFormatOf(mode as DecompressFormat);
+  return { decompress, format, kind: KIND_OF_FORMAT[format] };
+}
+
+/**
+ * 注入缝 `NetBrowserEnv.compressionStream` 的入参。
+ *
+ *  - `'compress'`：压缩，格式 `deflate-raw`（**老调用点的语义，逐字不变**）；
+ *  - `'decompress'`：解压 `deflate-raw`（**老调用点的语义，逐字不变**）；
+ *  - `'deflate-raw' | 'deflate' | 'gzip'`：**压缩**成这一档；
+ *  - `'deflate-raw+' | 'deflate+' | 'gzip+'`：**解压**这一档（`+` 是方向位，见 `DecompressFormat`）。
+ *
+ * ⚠️ **故意只有这一个成员、而不是加一个 `decompressionStream`**：判据 1（唯一出处）那条腿
+ * 扫的是"浏览器 API 出现在哪个文件"，多一个成员不会更安全，只会让两处的默认实现漂移。
+ */
+export type CompressionStreamMode = 'compress' | 'decompress' | CompressionFormat | DecompressFormat;
+
+/**
+ * 格式名 → `CompressionKind`（纯层的名字）。**一一对应**，只有这一处。
+ *
+ * 两套名字的存在理由：格式名是浏览器 API 的字符串（`new CompressionStream('gzip')`），
+ * 而 `CompressionKind` 是载荷标记与解压器表用的名字（纯层不认识浏览器 API）。
+ */
+const KIND_OF_FORMAT: Readonly<Record<CompressionFormat, 'raw' | 'deflate' | 'gzip'>> = {
+  'deflate-raw': 'raw',
+  deflate: 'deflate',
+  gzip: 'gzip',
+};
+
+/** `kind → 格式名`（解压侧按标记选格式用；`'none'` 没有格式名） */
+const FORMAT_OF_KIND: Readonly<Record<'raw' | 'deflate' | 'gzip', CompressionFormat>> = {
+  raw: 'deflate-raw',
+  deflate: 'deflate',
+  gzip: 'gzip',
+};
+
+/** 压缩格式名 → 解压格式名（`+` 是方向位） */
+const DECOMPRESS_OF_FORMAT: Readonly<Record<CompressionFormat, DecompressFormat>> = {
+  'deflate-raw': 'deflate-raw+',
+  deflate: 'deflate+',
+  gzip: 'gzip+',
+};
+
+/** ★★ **G5/T40 的降级链顺序**（判据 ④ 逐档读的就是它）：先 deflate-raw，再一次退，最后不压缩 */
+export const COMPRESSION_FALLBACK: readonly CompressionFormat[] = ['deflate-raw', 'deflate', 'gzip'];
+
 type EnvGlobal = {
   RTCPeerConnection?: new (config: unknown) => PeerConnectionLike;
   WebSocket?: new (url: string) => WebSocketLike;
-  CompressionStream?: new (format: string) => unknown;
-  DecompressionStream?: new (format: string) => unknown;
+  /**
+   * 压缩 / 解压流的构造函数。
+   *
+   * ⚠️ 返回类型写成 `unknown`（而不是某个具体结构）：本文件只需要"构造它、把它交给
+   * `pipeThrough`"这两件事，`pipeThrough` 那一步本来就在 `as` 之外（类型面够用就行）。
+   * **构造会抛**（不支持的格式抛 `TypeError`），这正是降级链要真去试的原因。
+   */
+  CompressionStream?: CompressionStreamCtor;
+  DecompressionStream?: CompressionStreamCtor;
   Blob?: new (parts: readonly Uint8Array[]) => { stream(): unknown };
   Response?: new (body: unknown) => { arrayBuffer(): Promise<ArrayBuffer> };
   crypto?: CryptoLike;
   location?: LocationLike;
   history?: HistoryLike;
 };
+
+/** `CompressionStream` / `DecompressionStream` 的构造面（两个构造函数的形状逐字相同） */
+export type CompressionStreamCtor = new (format: string) => unknown;
 
 function g(): EnvGlobal {
   return globalThis as unknown as EnvGlobal;
@@ -294,17 +441,36 @@ function defaultEnv(): NetBrowserEnv {
       if (Ctor === undefined) return null;
       return new Ctor(url);
     },
+    /**
+     * ★★ **G5/T40：格式名在这里落地**。
+     *
+     * 默认实现只做一件事：**真去 `new CompressionStream(format)` / `new DecompressionStream(format)`**
+     * （构造成功才算这台设备支持这一档）。"支持不支持"的判据**不许靠 UA 猜** ——
+     * 用户真机事故就是一台设备对 `deflate-raw` 直接抛
+     * `TypeError: Failed to construct 'CompressionStream': Unsupported compression format: 'deflate-raw'`，
+     * 而 UA 上看不出任何区别。
+     *
+     * ⚠️ 构造**可能抛**（不支持的格式就是抛 `TypeError`）。这里**故意不吞**：
+     * 探测（`probeCompressionFormat`）与降级链（`compressBytesWithFormat`）都在各自的
+     * `try` 里接住它，并把它翻成**人话**（判据 ⑤：原始异常字符串永远到不了界面）。
+     */
     compressionStream: (mode) => {
-      const Ctor = mode === 'compress' ? g().CompressionStream : g().DecompressionStream;
-      if (Ctor === undefined) return null;
       return {
         run: async (input) => {
-          const stream = new Ctor(mode === 'compress' ? 'deflate-raw' : 'deflate-raw');
+          // ★ 模式串的解读只有一处（`readCompressionMode`）：压 / 解两个构造函数 + 格式名
+          const read = readCompressionMode(mode);
+          const ctor = read.decompress ? g().DecompressionStream : g().CompressionStream;
+          if (ctor === undefined) {
+            // 这台设备连这两个构造函数都没有（老浏览器 / 非安全上下文）
+            throw new Error(`这台设备没有压缩流能力（缺少 CompressionStream，格式 ${read.format}）。`);
+          }
           const BlobCtor = g().Blob;
           const ResponseCtor = g().Response;
           if (BlobCtor === undefined || ResponseCtor === undefined) {
             throw new Error('这台设备缺少把字节喂进压缩流所需的两个内置对象。');
           }
+          // ★ 构造放在这里：不支持的格式**当场抛**，由调用方的 try 接住（见上面的说明）
+          const stream = new ctor(read.format);
           const piped = (new BlobCtor([input]).stream() as { pipeThrough(s: unknown): unknown }).pipeThrough(stream);
           const buf = await new ResponseCtor(piped).arrayBuffer();
           return new Uint8Array(buf);
@@ -457,33 +623,74 @@ export function browserRoomCode(env?: NetBrowserEnv): string {
  * ================================================================== */
 
 /**
- * ★ **默认**的 `iceServers`：只给公共 STUN，**一个中继都没有**（D14 / §8.2）。
+ * ★★ **G5/T38 起，这里的裁决变了**：默认不再是"一个中继都没有"，而是**默认就带一台中继**。
  *
- * 判据 9 的三条钉的就是它：① 默认值的每一项都不是 `turn:` / `turns:` 开头；
- * ② 默认数组里只有公共 STUN；③ 本文件里不出现任何**字面**的 TURN 主机名/端口
- * （所以这里只有 `stun:` 前缀的地址，没有任何中继的样例）。
+ * ## 新的事实
  *
- * 为什么默认给公共 STUN：一个是底线，第二个是厂商冗余。**这不是"内置了服务"**：
- * STUN 只帮两端发现自己的公网地址，不转发任何数据；TURN 才是中继，而中继的地址
- * 只能由玩家自己在设置里填。
+ * 用户 2026-09-25 的裁决（原话）："如果两人使用开发的连接方式连接不上时，就走这个服务器
+ * 通过这个服务器去实现我的要求"、"记得尽量不要让玩家手动填各种参数啥的，尽量自动通过
+ * 已预先设置好的去连接懂我意思吗"。服务器侧由协调者带起并**从外网实测通过**：`8.130.97.243`
+ * 上的 coturn 同时当 STUN 与 TURN 用（`:3478`，UDP/TCP 都通，中继端口段 `49152-49200`），
+ * 实测收到过 `relay 8.130.97.243:49171`（udp）与 `relay 8.130.97.243:49195`（tcp 档），
+ * 原文 `.superpowers/g5-server/turn-probe.json`。
  *
- * ## ★★ G5 T16：第三个是**非 Google** 的公共 STUN（用户真机实测的修法）
+ * ⇒ 默认第一项是这台 coturn 的 TURN（带长期凭据）。
+ * **直连打不通时（比如两边都在管得很严的网络里）会自动经这台中继转发**，玩家零填写。
  *
- * **为什么加**（2026-09-22，用户真机）：他所在的那张网到 Google 的这两个 STUN **不可达**
- * ⇒ `iceGatheringState` 永远走不到 `complete` ⇒ 点「生成邀请码」在 15 秒上界上一句
- * "ICE 候选还没有收集完"然后**什么都不产出**（本机候选其实早就有了）。三个都不可达时
- * 也不该阻塞 —— 那条路由 `waitForIceGathering` 的"上界到点就用已经拿到的候选"兜住
- * （见那里的注释），所以这里加地址只是**提高拿到公网映射的概率**，不是新的前提。
+ * ## ★★ G5/T40：这里**删掉了**那条 `stun:8.130.97.243:3478`（多余且报错）
  *
- * **为什么是 Cloudflare**：厂商文档明写 `stun.cloudflare.com` 的 `3478/udp` 就是它的
- * STUN 服务地址（<https://developers.cloudflare.com/realtime/turn/>，"Service address and
- * ports" 那张表第一行），anycast、不需要账号，且与 Google 是两套完全独立的网络
- * ——冗余才有意义。**这不是中继**：它只回答"你的公网地址是什么"，不替两端转发任何字节。
+ * 用户真机体检（2026-09-27，Chromium 97 平板，协调侧 `probe.html`）的读数：
+ * `stun:8.130.97.243:3478` 回 `code=701 STUN server address is incompatible`，
+ * 而**同一个 `:3478`** 的 `turn:` 那项**正常**产出了 `relay udp 8.130.97.243:49181`。
  *
- * ⚠️ 本机可达性**未在写这段注释时验证**（这台开发机的出网策略与用户那张网无关）；
- * 真机读数见 `.superpowers/g5-T16/T16-REPORT.md`。
+ * 为什么这条 STUN 是多余的（机制，不是猜测）：TURN 的分配流程本身就包含一次 Binding 请求，
+ * WebRTC 的实现会在 `turn:` 这一项上**照样**产 `srflx` 候选 —— 也就是说这台服务器能给的
+ * 公网映射，`turn:` 那一项**已经给全了**，`stun:` 那一项一个字节的额外能力都没有。
+ * 而它每次协商都会多打一行 701（那台服务器在 NAT 后，返回的映射地址与配置地址不一致，
+ * 规范要求客户端把它判为"地址不兼容"并拒绝）。
+ *
+ * ⇒ 删掉它只有好处：少一条服务器错误、少一次无用的 `:3478` 请求。
+ * **这不影响"中继仍然在默认路径上"** —— 判据 9 的 ①/② 钉的是那一项 `turn:`，
+ * 而 `readIceServers()` 的 `relayConfigured` / `relaySource: 'builtin'` 一个字都没动
+ * （`tests/ui/net-browser.test.ts` 判据 9 那组腿当场自证）。
+ *
+ * ⚠️ **T38 那条老断言的更正**：T38 时这里写着"实测 srflx 就是它给的"并据此要求它必须在。
+ * 真机读数说明那句话**归因错了**：给 srflx/relay 的是 `turn:` 那一项。
+ * 老断言已在同一次改动里改成"**不许**再有一条指向这台服务器的 `stun:`"（带日期与出处）。
+ *
+ * ## 为什么凭据直接内联在这里（T38 的明确要求，不是疏忽）
+ *
+ * "玩家零填写"只能靠产品默认值实现 ⇒ 默认值必须自带一套能用的凭据。coturn 的长期凭据
+ * 不是密钥：它只换来一个中继端口，换不来任何牌局内容（转发的是 DTLS 密文）。凭据原文住在
+ * `.superpowers/g5-server/turn-credentials.txt`（该目录已 gitignore，不随仓库分发）。
+ *
+ * ## 判据 9 为什么是这三条（**不许**为了让它绿而把中继删掉）
+ *
+ * 原判据 9 钉的是"默认 `iceServers` 每一项都不是 `turn:` / `turns:`"，当时是对的
+ * （中继只能由玩家自配）。它现在与新事实**直接冲突** ⇒ 改成钉这三条：
+ *  ① 默认里**必须有一项**中继，且主机就是这台服务器（"连不上时走服务器"在默认路径上存在）；
+ *  ② 中继那一项**必须带凭据**（没凭据的默认中继在真实网络里必然 401，等于没有）；
+ *  ③ 玩家自己配的中继仍然由 `readIceServers` 追加，本数组里不出现玩家那一项。
+ * 判据 9 的**意图没变**（"默认值不许偷偷替玩家接一台来路不明的中继"），变的是事实。
+ *
+ * ## 为什么留着那两个 Google STUN
+ *
+ * 它们是后备（T16 加 Cloudflare 是同一个理由：厂商冗余）。**实测从这里发不出去**
+ * （`stun:stun.l.google.com:19302` 回 `errorCode 701`，见上面那份探测原文）。
+ * 它们与本机那台 **不同**：它们是**独立的一台服务器**，在别的网络环境下可能真给到公网映射
+ * （那是"多一条路"），而这台本机的 `stun:` 是"同一台服务器上的第二次问话"（重复而不是冗余）
+ * —— 差别就在这里：前者留，后者删。
+ * 不通也不会拖慢：ICE 自己会挑，`waitForIceGathering` 的上界到点就用已经拿到的候选。
  */
 export const DEFAULT_ICE_SERVERS: readonly IceServerLike[] = [
+  // ★ 主力：这台 coturn 的 TURN（`:3478`）。**不再单列一条同址的 `stun:`**（见上面那段）
+  {
+    urls: ['turn:8.130.97.243:3478'],
+    // 长期凭据（原文 `.superpowers/g5-server/turn-credentials.txt`，该目录已 gitignore）
+    username: 'compile',
+    credential: 'PsN4kLbZ3sesnKzmSt7R9Ct6',
+  },
+  // 后备：公共 STUN（实测从这里不通，只为别的网络环境留着；不通不会拖慢）
   { urls: ['stun:stun.l.google.com:19302'] },
   { urls: ['stun:stun1.l.google.com:19302'] },
   { urls: ['stun:stun.cloudflare.com:3478'] },
@@ -501,94 +708,473 @@ export function isRelayUrl(url: string): boolean {
 /** `readIceServers` 的读数（默认面与"配了一半"都在这里，判据 9 断言的就是它） */
 export interface IceServersRead {
   readonly servers: readonly IceServerLike[];
-  /** 玩家真的配了一项可用的中继 */
+  /**
+   * 这份 `iceServers` 里有一项**能用的**中继（默认内置的那台，或玩家自己配齐的那台）。
+   *
+   * ⚠️ T38 起语义从"玩家配了中继"收紧成"这份配置里有能用的中继"：默认值现在自带一台，
+   * 而大厅那条中继隐私说明由它触发 —— 那句话本来就该在屏上（见 `net-lobby.ts` 的 `relayNoticeOf`）。
+   */
   readonly relayConfigured: boolean;
-  /** 填了 URL 但用户名 / 凭据不齐 —— 中继**没有**被加上，但这件事要能被说出来 */
+  /** 填了 URL 但用户名 / 凭据不齐 —— 玩家那一项**没有**被换上，但这件事要能被说出来 */
   readonly relayIncomplete: boolean;
+  /**
+   * 这一份 `iceServers` 里的那一项中继**是怎么来的**：
+   *  - `'player'` = 三项齐全，那一项是按玩家给的地址/凭据写进去的
+   *    （内容可能**恰好等于**产品默认值 —— 那是 T38 把三项预填成默认值的结果，
+   *    要分辨"没动过"和"玩家改过"请看 `settingsAreDefault`，不要看这个字段）；
+   *  - `'builtin'` = 三项不齐（含"只填了一半"）⇒ 用的是 `DEFAULT_ICE_SERVERS` 里那台；
+   *  - `'none'` = 这一份里没有能用的中继。
+   */
+  readonly relaySource: 'player' | 'builtin' | 'none';
+  /**
+   * ★★ **这三项设置是不是"没被玩家动过"**（= 与产品默认预填值逐字相同）。
+   *
+   * ## 为什么必须与 `relaySource` 分开（T38 实测推出来的）
+   *
+   * T38 把大厅那三项**预填成默认值**了 ⇒ "设置里有内容"不再等于"玩家改过"，
+   * 而 `readIceServers` 的"三项齐全就按玩家给的写"那一支**只看内容形状**
+   * ⇒ `relaySource` 在默认状态下也报 `'player'`。两个后果：
+   *  1. **判据 3 的证据读不出区别**（默认与玩家覆盖长得一样）—— 所以有本字段；
+   *  2. `waitForIceGathering` 的**严格档**（"中继没到手就不算够用、必须等满上界"）
+   *     若按 `relaySource === 'player'` 二分，**每一次出邀请码都会等满 15 秒上界**
+   *     （宽限档也被跳过）。严格档的语义前提是"**玩家指定了一台中继，早退不许把它砍掉**"
+   *     ⇒ 只有本字段为 `false` 时才该生效（见 `waitForIceGathering` 里的取法）。
+   */
+  readonly settingsAreDefault: boolean;
+}
+
+/** 三项连接设置长什么样（`settingsAreDefault` 要与它逐字比） */
+type TurnSettingsShape = { readonly turnUrl?: string; readonly turnUsername?: string; readonly turnCredential?: string };
+
+/**
+ * ★ **这三项是不是"就是产品默认值"**（逐字比：`turnUrl` 去过首尾空白，凭据原样比）。
+ *
+ * 单独一个函数（而不是写在 `readIceServers` 里）是为了让调用方与它**共用同一处判定**：
+ * 门禁要回答"玩家到底改没改过"，而这份判定不许有两个家。
+ *
+ * ## 调用者（T38 收尾时核过，不是死代码）
+ *
+ *  - `src/main.ts` 的 `__g5Match.ice()`（`#g5probe=1` 的只读探针）—— 判据 3 的"改前/改后"证据靠它；
+ *  - `tests/ui/net-browser.test.ts` 的 T38 腿（正向 + 反证）；
+ *  - ⚠️ **`waitForIceGathering` 现在不调它**：那条口径在 T38 被真浏览器读数推翻
+ *    （默认档也必须等 relay 到手），它只读 `readIceServers(settings).relayConfigured`。
+ *    所以浏览器层里 `defaultTurnShape()` 暂时没有调用者（见那个函数的说明）。
+ */
+export function turnSettingsAreDefault(
+  settings: NetSettingsLike | null | undefined,
+  defaults: TurnSettingsShape,
+): boolean {
+  // 先说清"这一份空到什么程度"：**三项都没有**是"没给设置"（题设里到处都有这种调用：
+  // `readIceServers(undefined)` / `waitForIceGathering(pc, { ticker })`），它既不是
+  // "就是默认值"、也不是"玩家改过"。
+  const raw = [settings?.turnUrl, settings?.turnUsername, settings?.turnCredential];
+  if (raw.every((v) => typeof v !== 'string' || v.trim().length === 0)) return false;
+  const url = typeof settings?.turnUrl === 'string' ? settings.turnUrl.trim() : '';
+  const user = typeof settings?.turnUsername === 'string' ? settings.turnUsername : '';
+  const cred = typeof settings?.turnCredential === 'string' ? settings.turnCredential : '';
+  return url === (defaults.turnUrl ?? '')
+    && user === (defaults.turnUsername ?? '')
+    && cred === (defaults.turnCredential ?? '');
 }
 
 /**
- * ★ 读 `iceServers`（D14）：默认只给公共 STUN；玩家在设置里把 TURN 三项填齐了才追加**一项**中继。
+ * 产品默认预填的 TURN 三项（= `DEFAULT_ICE_SERVERS` 里那一项中继）。
  *
- * **三项必须齐全**才追加：只填了 URL 而没有凭据的中继在真实环境里必然 401，
- * 而"配了一半"这件事必须让玩家看见（`relayIncomplete: true`），不能静默忽略。
+ * ## 谁在用（T38 收尾时核过）
+ *
+ *  - **导出面**：判据 3 的证据面与测试都用它当"默认长什么样"的**对照物**，
+ *    不自己手写一份同形状的字面量（那会让"默认值改了、对照物没跟着改"变成假绿）；
+ *  - `src/main.ts` 的 `__g5Match.ice()` 也用它（它自己那份 `defaultTurnSetting()` 是
+ *    从同一处 `DEFAULT_ICE_SERVERS` 取的，两个函数是同源的两个投影）；
+ *  - ⚠️ **`waitForIceGathering` 不调它**：那条口径在 T38 被真浏览器读数推翻
+ *    （默认档也必须等 relay 到手，见那里的注释），它只读 `readIceServers(settings).relayConfigured`。
  */
-export function readIceServers(settings?: NetSettingsLike | null): IceServersRead {
-  const out: IceServerLike[] = DEFAULT_ICE_SERVERS.map((s) => ({ urls: [...s.urls] }));
+export function defaultTurnShape(): { turnUrl: string; turnUsername: string; turnCredential: string } {
+  const relay = DEFAULT_ICE_SERVERS.find((s) => s.urls.some(isRelayUrl));
+  return {
+    turnUrl: relay?.urls.find(isRelayUrl) ?? '',
+    turnUsername: typeof relay?.username === 'string' ? relay.username : '',
+    turnCredential: typeof relay?.credential === 'string' ? relay.credential : '',
+  };
+}
+
+/**
+ * ★ 读 `iceServers`（D14；G5/T38 起默认带一台中继）。
+ *
+ * 三种形态（`settingsAreDefault` 由调用方给：它说的是"这些设置与产品默认预填值一样吗"，
+ * 那个判定住在 `turnSettingsAreDefault` 一处，本函数不重复实现 —— 它只认内容形状）：
+ *  - **三项为空** ⇒ 整份默认值（含那台内置中继）原样给出，`relayConfigured: true`、来源 `builtin`；
+ *  - **三项填齐** ⇒ 卡片与 STUN 照着默认值给，但**中继那一项按玩家给的写**
+ *    （不是"两台都留着"）：**改完以玩家的为准**——他要是把地址写错了，用不上的就是他写的那台，
+ *    而不是我们悄悄把他接回默认那台（那会让他以为自己配的那台在生效）。`relaySource: 'player'`；
+ *  - **只填了一半** ⇒ 玩家那项**不换上**（缺凭据的中继在真实网络里必然 401），
+ *    照样回默认值；"配了一半"这件事必须让玩家看见（`relayIncomplete: true`），不静默忽略。
+ */
+export function readIceServers(
+  settings?: NetSettingsLike | null,
+  settingsAreDefault = false,
+): IceServersRead {
+  /**
+   * 打开默认值：这份数组里**最多一项中继**（就是默认那台），打开的人可以在它身上做覆盖。
+   * 逐字段拷（不整对象展开）：`IceServerLike` 的可选字段在 `exactOptionalPropertyTypes`
+   * 下不许被显式写成 `undefined`，这里只把**真的存在**的那两个键带过去。
+   */
+  const openDefaults = (): IceServerLike[] => DEFAULT_ICE_SERVERS.map((s) => ({
+    urls: [...s.urls],
+    ...(typeof s.username === 'string' ? { username: s.username } : {}),
+    ...(typeof s.credential === 'string' ? { credential: s.credential } : {}),
+  }));
+  const out = openDefaults();
   const url = typeof settings?.turnUrl === 'string' ? settings.turnUrl.trim() : '';
   if (url.length === 0) {
-    return { servers: out, relayConfigured: false, relayIncomplete: false };
+    // 三项为空 ⇒ 就是那份默认值（里面有内置中继 ⇒ relayConfigured 为真、来源是 builtin）
+    return {
+      servers: out,
+      relayConfigured: out.some((s) => s.urls.some(isRelayUrl)),
+      relayIncomplete: false,
+      relaySource: 'builtin',
+      settingsAreDefault,
+    };
   }
   const username = typeof settings?.turnUsername === 'string' ? settings.turnUsername : '';
   const credential = typeof settings?.turnCredential === 'string' ? settings.turnCredential : '';
   if (username.length === 0 || credential.length === 0) {
-    // ★ 注意这一支**不动** out：配了一半的中继**不许**被塞进默认值里（否则判据 9 的
-    //   "默认值里没有中继"这条腿会在"玩家配了一半"的世界里变成假绿）
-    return { servers: out, relayConfigured: false, relayIncomplete: true };
+    // ★ 配了一半：玩家那一项**不换上**（没有凭据的中继必然 401），但这件事要被说出来。
+    //   注意来源仍然报 'builtin'：这一份里唯一"能用"的中继就是内置那台，严格档不该被叫醒。
+    return { servers: out, relayConfigured: false, relayIncomplete: true, relaySource: 'builtin', settingsAreDefault };
   }
-  out.push({ urls: [url], username, credential });
-  return { servers: out, relayConfigured: true, relayIncomplete: false };
+  /**
+   * ★ 三项齐全 ⇒ **按玩家给的写**：把默认那一项中继摘掉，换成这一项（判据 3："改成别的值 ⇒
+   * 默认那台**不再**出现在 `iceServers` 里"）。玩家没写 `turn:` 前缀时补上（否则浏览器
+   * 认不出它是中继），补完仍以玩家给的地址为准。
+   *
+   * ⚠️ 预填之后"三项齐全"**包含**"玩家根本没动过"那一档（T38）⇒ 这一个分支里既可能是
+   * 玩家改过、也可能就是默认值本身；分辨它们的是 `settingsAreDefault`（**不要**用
+   * `relaySource === 'player'` 去代表"玩家改过"）。
+   */
+  const cover = isRelayUrl(url) ? url : `turn:${url}`;
+  const replaced = out.filter((s) => !s.urls.some(isRelayUrl));
+  replaced.push({ urls: [cover], username, credential });
+  return { servers: replaced, relayConfigured: true, relayIncomplete: false, relaySource: 'player', settingsAreDefault };
 }
 
 /* ================================================================== *
- * 5. 压缩 / 解压（判据 7）
+ * 5. 压缩 / 解压：★ G5/T40 的**降级链**（判据 7 + 判据 ④）
+ *
+ * 事故形状（用户 2026-09-27 截图）：某台设备上 `new CompressionStream('deflate-raw')`
+ * 直接抛 `TypeError: Failed to construct 'CompressionStream': Unsupported compression
+ * format: 'deflate-raw'` ⇒ 邀请码**根本生成不出来**（屏上一句 `压缩没有完成: TypeError: …`）；
+ * 另一端粘码得到"压缩段解不开"。两台设备**都**失败。
+ *
+ * 处置两条：
+ *  ① 压缩能力改成**降级链**：`deflate-raw` → `deflate` → `gzip` → **不压缩**，
+ *     用第一档**真能构造**的（判据不许猜 UA：真去 `new CompressionStream(format)` 试一次）；
+ *  ② 玩家可见的失败必须是**人话**（原始异常字符串永远到不了界面）。
  * ================================================================== */
 
-/** 压缩的读数（判据 7 断言的就是这些数） */
+/** 压缩的读数（判据 7 断言的就是这些数；★ T40 多一个 `format` 与逐档 `probes`） */
 export interface CompressResult {
   readonly ok: true;
   readonly bytes: Uint8Array;
+  /** ★ T40：这一份字节是用哪一档压出来的（`'none'` = 没压） */
+  readonly format: CompressionKind;
   readonly rawBytes: number;
   readonly compressedBytes: number;
   readonly ratio: number;
   readonly withinMeasuredRange: boolean;
+  /**
+   * ★ T40：走到这一档之前，降级链上试过的那几档（成功的这一档也在里面）。
+   * 判据 ④ 的"每一档都被真的试过"读的就是它。
+   */
+  readonly probes?: readonly CompressionProbe[];
 }
 
-/** 压缩 / 解压的失败形态（**不抛**：浏览器能力缺失是常态，不是异常） */
+/**
+ * 压缩 / 解压的失败形态（**不抛**：浏览器能力缺失是常态，不是异常）。
+ *
+ * ★ T40：多一个 `probes` —— "这台设备逐档试过什么"的读数。玩家看到的那句话由它拼出来，
+ * **不是**原始异常串（判据 ⑤ 的落点）。
+ */
 export interface CompressFailure {
   readonly ok: false;
   readonly reason: 'unsupported' | 'failed';
   readonly message: string;
+  readonly probes?: readonly CompressionProbe[];
+}
+
+/** 某一档压缩能力的**探测读数**（真构造过一次 `CompressionStream(format)` 的结果） */
+export interface CompressionProbe {
+  readonly format: CompressionFormat;
+  /** 真构造成功了吗（**不许**靠 UA 猜：这条就是判据本身） */
+  readonly supported: boolean;
+  /** 失败时那句**原始**异常串（只在诊断读数里，**不许**进界面） */
+  readonly note?: string;
+}
+
+/** 格式名 → 纯层的档名（降级链与探测读数共用这一处映射） */
+export function kindOfFormat(format: CompressionFormat): CompressionKind {
+  return KIND_OF_FORMAT[format];
+}
+
+/** 解压侧按标记选格式（`'none'` 没有格式名 ⇒ 返回 `null`，它不需要任何设备能力） */
+export function formatOfKind(kind: CompressionKind): CompressionFormat | null {
+  return kind === 'none' ? null : FORMAT_OF_KIND[kind];
 }
 
 /**
- * ★ 把字节压成 `deflate-raw`。
+ * ★ 探测某一档压缩能力：**真去构造一次** `CompressionStream(format)`。
  *
- * **异步**：`CompressionStream` 是流式的。这不是本文件的自由选择 —— 它决定了
- * "邀请码的压缩住在浏览器层"这条结构（纯层交不出 `Promise`，见 `src/net/invite.ts` 的文件头）。
+ * 判据不许猜 UA —— 用户那台设备的 UA 与能用的设备**没有区别**，区别只在构造抛不抛。
  *
- * 判据 7 的三条都落在返回值上：
- *  ① 压缩后字节数落在**实测区间**（400-470；出处见 `src/net/invite.ts` 的
- *     `COMPRESSED_BYTES_MIN` 注释：`.superpowers/g5-recon/FINDINGS.md` §6 实测 431 / 404）；
- *  ② 压缩比落在 0.70-0.78；
- *  ③ **`compressedBytes < rawBytes` 必须成立** —— 否则"压缩了"与"忘了压缩"逐字同形。
- *     这一条必须与 ① 同时成立：只钉区间会让"把原文直接 base64 当压缩结果"漏过去（M4）。
+ * ## ★★ 为什么必须**穿过注入缝让它干一次活**（评审实测抓到的"诊断口在说谎"）
+ *
+ * 缺省实现（`defaultEnv().compressionStream`）把真构造**推迟到 `run()` 里**（那是它的形状：
+ * 工厂只返回一个惰性流，构造发生在真正要压那一刻）。⇒ 只调工厂**探不到"不支持"**：
+ * 把全局构造器换成"`deflate-raw` 构造即抛"之后，只调工厂的探测口**照样报 `supported: true`**
+ * （评审复跑实测）。一个恒报 true 的诊断口比没有更坏 —— 它会给"这台设备到底支持哪几档"一个假答案。
+ *
+ * ⇒ 这里给一小段字节**真跑一遍**（`run()` 那条路），构造失败/运行失败都算"这一档不可用"。
+ *
+ * ⚠️ 只对**压缩档**（`CompressionFormat`）有意义：对某一档的**解压**探不了（拿一小段明文当
+ * 压缩流喂进去必然 reject，那说明的是"输入不是压缩流"，不是"这一档不支持"）。
+ * 解压侧的支持面由 `decompressBytes(bytes, env, kind)` 在真数据上如实回答。
  */
-export async function compressBytes(raw: Uint8Array, env?: NetBrowserEnv): Promise<CompressResult | CompressFailure> {
+export async function probeCompressionFormat(format: CompressionFormat, env?: NetBrowserEnv): Promise<CompressionProbe> {
   const resolved: NetBrowserEnv = { ...defaultEnv(), ...env };
-  const stream = resolved.compressionStream?.('compress') ?? null;
+  try {
+    const s = resolved.compressionStream?.(format) ?? null;
+    if (s === null) {
+      return { format, supported: false, note: '这台设备的浏览器没有压缩流能力（CompressionStream 缺失）。' };
+    }
+    // ★ 真构造一次（缺省实现在这一句里才 `new Ctor(format)`）
+    await s.run(PROBE_INPUT);
+    return { format, supported: true };
+  } catch (e) {
+    return { format, supported: false, note: rawErrorText(e) };
+  }
+}
+
+/** 探测用的那一小段字节（几个字符，压/解都无副作用） */
+const PROBE_INPUT = utf8Encode('t40-probe');
+
+/**
+ * ★★ **把一次真探测的结果，翻成给玩家看的人话**（判据 ⑤ 的唯一出口）。
+ *
+ * 规则：**原始异常字符串一个字符都不进界面**。下面每一句都只说"哪一档不行、这台设备还能怎么办"。
+ * 界面上出现 `TypeError` 或 `Unsupported compression format` 就算这条判据红 ——
+ * 那正是用户截图里那两串东西。
+ *
+ * ## 为什么要逐档说（而不是一句"这台设备不支持压缩"）
+ *
+ * 逐档说是**能指导下一步**的真因：三档都失败 ⇒ 走不压缩（这条路仍然能出码，只是一条长码），
+ * 所以玩家该看到的不是"生成失败"，而是"会给你一条更长的码"。四档全废才谈得上失败，
+ * 而那种设备是"连 Blob / Response 都没有"的老浏览器，那句话里要让他换浏览器。
+ */
+export function readableCompressionFailureText(probes: readonly CompressionProbe[]): string {
+  const failed = probes.filter((p) => !p.supported).map((p) => p.format);
+  const ok = probes.filter((p) => p.supported).map((p) => p.format);
+  if (failed.length === 0) {
+    return '这台设备的压缩能力探测没有给出结果，邀请码没能生成。请刷新页面再试一次。';
+  }
+  if (ok.length === 0 && failed.length === COMPRESSION_FALLBACK.length) {
+    return `这台设备的浏览器不支持本程序用到的任何一种压缩方式（${failed.join('、')}），`
+      + '连"不压缩"那条兜底路也没走通。请换一个较新的浏览器打开本页再试。';
+  }
+  return `这台设备编不出邀请码：可用的压缩方式里，${failed.join('、')} 这一档用不了，`
+    + `而不压缩那条兜底路也没走通（${ok.join('、')} 虽然探测通过，但没有产出可用的字节）。`
+    + '请刷新页面再试一次；如果一直这样，换一个较新的浏览器打开本页。';
+}
+
+/** 原始异常 → 诊断用的一行字（**只进读数、不进界面**） */
+function rawErrorText(e: unknown): string {
+  const s = String(e);
+  return s.length > 200 ? `${s.slice(0, 200)}…` : s;
+}
+
+/**
+ * 把字节压成指定格式（`compressBytesWithFormat` 的单档口）。
+ *
+ * ⚠️ 构造**可能抛**（不支持的格式就抛 `TypeError`）—— 这里**故意接住并翻成人话**，
+ * 因为这是"某几档不可用"的**正常情形**（正是降级链存在的理由），不是异常。
+ */
+export async function compressBytesWithFormat(
+  raw: Uint8Array,
+  format: CompressionFormat,
+  env?: NetBrowserEnv,
+): Promise<CompressResult | CompressFailure> {
+  const resolved: NetBrowserEnv = { ...defaultEnv(), ...env };
+  let stream: CompressionStreamLike | null;
+  try {
+    stream = resolved.compressionStream?.(format) ?? null;
+  } catch (e) {
+    return {
+      ok: false,
+      reason: 'unsupported',
+      message: `这一档压缩方式（${format}）在这台设备上不可用，改用下一档。`,
+      probes: [{ format, supported: false, note: rawErrorText(e) }],
+    };
+  }
   if (stream === null) {
     return {
       ok: false,
       reason: 'unsupported',
       message: '这台设备的浏览器没有压缩流能力，邀请码生成不了（对端仍可用"输 6 位码"那条路）。',
+      probes: [{ format, supported: false, note: '压缩流能力缺失（CompressionStream / DecompressionStream 不存在）。' }],
     };
   }
   let out: Uint8Array;
   try {
     out = await stream.run(raw);
   } catch (e) {
-    return { ok: false, reason: 'failed', message: `压缩没有完成：${String(e)}` };
+    // ★ 用户截图里那串 `TypeError: …` 就是从这里冒出去的。现在它只进 `probes`（读数），
+    //   玩家看到的是 `readableCompressionFailureText()` 拼的那句人话。
+    //
+    // ⚠️ `supported: false`（不是 true）：缺省实现的**构造发生在 `run()` 里** ⇒ 走到这一句
+    //   说明"这一档在这台设备上产不出可用的字节"。标成 true 会让诊断读数与玩家看到的那句话
+    //   互相矛盾（评审点名的"诊断口在说谎"同族）。
+    return {
+      ok: false,
+      reason: 'failed',
+      message: `这一档压缩方式（${format}）没有产出可用的字节，改用下一档。`,
+      probes: [{ format, supported: false, note: rawErrorText(e) }],
+    };
   }
   const ratio = raw.length === 0 ? 0 : out.length / raw.length;
   return {
     ok: true,
     bytes: out,
+    format: kindOfFormat(format),
     rawBytes: raw.length,
     compressedBytes: out.length,
     ratio,
     withinMeasuredRange: out.length >= COMPRESSED_BYTES_MIN && out.length <= COMPRESSED_BYTES_MAX,
   };
+}
+
+/**
+ * ★★ **G5/T40：按降级链压一次**（`deflate-raw` → `deflate` → `gzip` → 不压缩）。
+ *
+ * ## 每一档都要**真能往回解**才算这一档可用
+ *
+ * 只"压得出来"不够：`encodeInvite` 的自洽检查要求"压出来的解得动、且解出来还是那份载荷"。
+ * 一台设备可能"压得出 gzip 但解不开 gzip"（两台构造函数的支持面本来就不同）⇒
+ * 那样产出的邀请码发出去，**对端与它自己都解不回来**。所以这里对每一档多做一次真解压
+ * （`decompressBytes(bytes, env, kind)`），解不回来就**继续降级**。
+ *
+ * ## 全都不成 ⇒ `'none'`
+ *
+ * 不压缩那一档是**兜底**：载荷就是 `payloadBytesOf()` 的 UTF-8 JSON 直接 base64url，
+ * 对端只要有 base64url 就能解开（`decodeInviteText` 里 `'none'` 那一支不走任何设备能力）。
+ * 它的代价是**长**（实测 1250 字符，同语料压缩档 631），不是"不能用"。
+ *
+ * ★★ **`preferKind`：先试这一档，成了就用它**。
+ *
+ * 为什么需要它（真浏览器门实测抓到的**跨机**缺陷）：两端**各按自己的**能力选档时，
+ * 房主那台 `deflate-raw` 坏掉 ⇒ 它出 `-d` 码；而加入方那台好着 ⇒ 它产的回示码落在 `-r`
+ * ⇒ **房主解不开自己那一局的回示码**（屏上"压缩段解不开"、两端停在 `handshaking`）。
+ * ⇒ 回示码要**跟着邀请码那一档**走（那是唯一"两端都解得开"的选择：房主能产出那一档，
+ * 就说明它能解那一档）。这一档在这台设备上不可用时**照旧降级**（宁可换档，也不要产不出来）。
+ */
+export async function compressBytesWithFallback(
+  raw: Uint8Array,
+  env?: NetBrowserEnv,
+  preferKind?: CompressionKind,
+): Promise<CompressResult | CompressFailure> {
+  const resolved: NetBrowserEnv = { ...defaultEnv(), ...env };
+  const probes: CompressionProbe[] = [];
+  if (preferKind !== undefined) {
+    const c = await compressOrNull(raw, preferKind, resolved);
+    if (c !== null) {
+      probes.push({
+        format: formatOfKind(preferKind) as CompressionFormat,
+        supported: true,
+        note: `按调用方指定的档位（${preferKind}）产出（不再走降级链）。`,
+      });
+      return { ...c, probes };
+    }
+    probes.push({
+      format: (formatOfKind(preferKind) ?? 'deflate-raw') as CompressionFormat,
+      supported: false,
+      note: `调用方指定的档位（${preferKind}）在这台设备上用不了，回退到降级链。`,
+    });
+  }
+  for (const format of COMPRESSION_FALLBACK) {
+    const c = await compressBytesWithFormat(raw, format, resolved);
+    if (c.ok) {
+      const back = await decompressBytes(c.bytes, resolved, kindOfFormat(format));
+      if (back.ok) {
+        // ★ 这一档可用：把它的读数记上，并给一句"它为什么是这一档"（前面跳过了哪些档）
+        const skipped = probes.filter((p) => !p.supported).map((p) => p.format);
+        probes.push({
+          format,
+          supported: true,
+          ...(skipped.length === 0
+            ? {}
+            : { note: `降级链从这里开始可用（前面跳过了 ${skipped.join('、')}）。` }),
+        });
+        return { ...c, probes };
+      }
+      probes.push({ format, supported: true, note: `压得出但解不回来（${back.reason}），继续降级。` });
+      continue;
+    }
+    // ★ 这一档不可用：把 `compressBytesWithFormat` 交回的**原始异常串**留在读数里
+    //   （判据 ⑤ 要断言的正是"它只在这里、不在界面上"）
+    probes.push(c.probes?.[0] ?? { format, supported: false });
+  }
+  // ★ 最后一档：**不压缩**。它不需要任何设备能力，所以永远不会"探测失败" ——
+  //   它只需要"有那份字节"，而那份字节本来就在手上。
+  const ratio = raw.length === 0 ? 0 : raw.length / raw.length;
+  return {
+    ok: true,
+    bytes: raw,
+    format: 'none',
+    rawBytes: raw.length,
+    compressedBytes: raw.length,
+    ratio,
+    withinMeasuredRange: false,
+    probes,
+  };
+}
+
+/**
+ * 压成**指定那一档**并**验证解得回来**；任何一步不成就返回 `null`（**不抛**）。
+ *
+ * 它是"指定档位"那条路（`compressBytesWithFallback(..., preferKind)`）用的口径：
+ * 与降级链里"压得出 + 解回来"两道检查**同一套**，只是不往下试别的档。
+ */
+async function compressOrNull(
+  raw: Uint8Array,
+  kind: CompressionKind,
+  env: NetBrowserEnv,
+): Promise<CompressResult | null> {
+  if (kind === 'none') {
+    return {
+      ok: true,
+      bytes: raw,
+      format: 'none',
+      rawBytes: raw.length,
+      compressedBytes: raw.length,
+      ratio: 1,
+      withinMeasuredRange: false,
+    };
+  }
+  const format = formatOfKind(kind);
+  if (format === null) return null;
+  const c = await compressBytesWithFormat(raw, format, env);
+  if (!c.ok) return null;
+  const back = await decompressBytes(c.bytes, env, kind);
+  return back.ok ? c : null;
+}
+
+/**
+ * 把字节压成 `deflate-raw`（**老口径**：`compressBytes` 的兼容面）。
+ *
+ * ⚠️ T40 起"邀请码的压缩"走 `compressBytesWithFallback`（带降级链）；本函数留着是因为
+ * 它的老调用点（判据 7 的语料腿）钉的正是"deflate-raw 这一档本身压出多少字节"。
+ * 它在 deflate-raw 不支持时**不再**给玩家抛原始异常，而是给人话。
+ */
+export function compressBytes(raw: Uint8Array, env?: NetBrowserEnv): Promise<CompressResult | CompressFailure> {
+  return compressBytesWithFormat(raw, 'deflate-raw', env);
 }
 
 /** 把一段文本压成 `deflate-raw`（`compressBytes` 的文本口，判据 7 的语料走它） */
@@ -600,7 +1186,9 @@ export function compressText(text: string, env?: NetBrowserEnv): Promise<Compres
 export type DecompressResult = { ok: true; bytes: Uint8Array } | { ok: false; reason: string; message: string };
 
 /**
- * 把 `deflate-raw` 的字节解回原文。
+ * 把压缩段解回原文。`kind` 缺省 = `'raw'`（`deflate-raw`，**老口径逐字不变**）。
+ *
+ * `'none'` 是**恒等**：不压缩那一段没有可解的东西 ⇒ 原样交回（它不会失败）。
  *
  * **异步**（同 `compressText`）。这条是"纯层的解码入口为什么在浏览器侧"的答案：
  * `src/net/invite.ts` 的 `decodeInviteText` 需要一个**同步**的解压函数，
@@ -608,9 +1196,26 @@ export type DecompressResult = { ok: true; bytes: Uint8Array } | { ok: false; re
  *
  * ⚠️ **不许**把本函数（或它的 `Promise`）喂给 `src/net/session.ts` 的状态机 —— 那是 M7 那条错路。
  */
-export async function decompressBytes(compressed: Uint8Array, env?: NetBrowserEnv): Promise<DecompressResult> {
+export async function decompressBytes(
+  compressed: Uint8Array,
+  env?: NetBrowserEnv,
+  kind: CompressionKind = 'raw',
+): Promise<DecompressResult> {
+  if (kind === 'none') return { ok: true, bytes: compressed };
   const resolved: NetBrowserEnv = { ...defaultEnv(), ...env };
-  const stream = resolved.compressionStream?.('decompress') ?? null;
+  const format = FORMAT_OF_KIND[kind];
+  let stream: CompressionStreamLike | null;
+  try {
+    // ★ `'deflate-raw+' | 'deflate+' | 'gzip+'`：**解压**这一档（`+` 是方向位，见 `DecompressFormat`）
+    stream = resolved.compressionStream?.(DECOMPRESS_OF_FORMAT[format]) ?? null;
+  } catch (e) {
+    // 这台设备没有这一档的解压能力（构造就抛）—— **不**把原始异常交给玩家
+    return {
+      ok: false,
+      reason: 'unsupported',
+      message: `这台设备的浏览器解不开这一档压缩（${format}）：${readableCompressionFailureText([{ format, supported: false, note: rawErrorText(e) }])}`,
+    };
+  }
   if (stream === null) {
     return { ok: false, reason: 'unsupported', message: '这台设备的浏览器没有解压流能力，这条邀请码打不开。' };
   }
@@ -636,6 +1241,12 @@ export async function decompressBytes(compressed: Uint8Array, env?: NetBrowserEn
 /** `createInvite` 的入参（`originAndPath` 由浏览器层给：纯层不知道自己在哪个地址上） */
 export interface CreateInviteInput extends InviteFields {
   readonly originAndPath: string;
+  /**
+   * ★★ **G5/T40：优先用这一档压**（回示码要跟邀请码同一档 —— 见
+   * `compressBytesWithFallback` 的 `preferKind` 说明）。缺省 = 走完整降级链。
+   * 这一档在这台设备上用不了时**照旧降级**（宁可换档，也不要产不出来）。
+   */
+  readonly preferKind?: CompressionKind;
 }
 
 /** `createInvite` 的读数 */
@@ -648,15 +1259,34 @@ export interface CreatedInvite {
   readonly compressedBytes: number;
   readonly rawBytes: number;
   readonly ratio: number;
+  /** ★ G5/T40：这条码用的是哪一档编码（`raw` / `deflate` / `gzip` / `none`） */
+  readonly format: CompressionKind;
+  /** ★ G5/T40：压缩段的明文标记（`raw` 是空串 ⇒ 老格式 `N.<base64>`） */
+  readonly marker: string;
+  /**
+   * ★ G5/T40：**当这一条是"不压缩"那一档时**，长度是否落在未压缩变体的实测上界内。
+   * 压缩档恒为 `true`（`withinMeasuredRange` 才是它的判据）。
+   */
+  readonly withinUncompressedRange: boolean;
+  /**
+   * ★ G5/T40：这台设备逐档试过的**原始读数**（界面上不许出现里面的 `note` 原文；
+   * 它是给人核对的诊断面，判据 ④ 读的就是它）。
+   */
+  readonly probes: readonly CompressionProbe[];
 }
+
+/** `createInvite` 的失败形态：压缩那条链的失败（带逐档读数）或纯层的编码拒绝 */
+export type CreateInviteFailure =
+  | CompressFailure
+  | { readonly ok: false; readonly reason: string; readonly message: string; readonly probes?: readonly CompressionProbe[] };
 
 /**
  * ★ 生成一条邀请码（链接形态 + 二维码形态的**同一条**载荷）。
  *
- * 载荷的形状（纯层的 `encodeInvite` 定的）是 `<协议版本>.<压缩段>`：
- *  - 压缩段 = `compressBytes(payloadBytesOf(fields))` 的 base64url ——压缩的对象是那份
- *    位置数组（`v` / `sdp` / `ice` / 两个承诺串），**协议版本不在里面**（它要能被明文读到）；
- *  - 协议版本是明文十进制（握手第一步就比对它，D13）。
+ * 载荷的形状（纯层的 `encodeInvite` 定的）是 `<协议版本>.<标记><压缩段>`：
+ *  - 压缩段 = 按**降级链**压出来的字节的 base64url（T40：`deflate-raw` → `deflate` → `gzip`
+ *    → 不压缩，用第一档真能构造的；压缩的对象是那份位置数组）；
+ *  - 协议版本是明文十进制（握手第一步就比对它，D13）；标记说明用的是哪一档（`COMPRESSION_MARKERS`）。
  *
  * 压缩是**异步**的、而 `encodeInvite` 要一个**同步**的压缩函数：这里先 `await` 出字节，
  * 再把它当作"已经算好的结果"交给纯层（D15 那条"状态机不 await"的同一种缝法）。
@@ -667,7 +1297,7 @@ export interface CreatedInvite {
 export async function createInvite(
   input: CreateInviteInput,
   env?: NetBrowserEnv,
-): Promise<CreatedInvite | CompressFailure | { ok: false; reason: string; message: string }> {
+): Promise<CreatedInvite | CreateInviteFailure> {
   const fields: InviteFields = {
     p: input.p,
     // ★ D 轮（I-3 甲）：房主这一局的会话号也进载荷（加入方照它建会话，两端才配得上对）
@@ -678,24 +1308,57 @@ export async function createInvite(
     guestPromise: input.guestPromise,
   };
   const raw = payloadBytesOf(fields);
-  const c = await compressBytes(raw, env);
-  if (!c.ok) return c;
   /**
-   * ★ 编码侧的自洽检查必须用**真的解压结果**。
+   * ★★ **G5/T40：降级链那一整段也必须被兜住**（判据 ⑤ 的另一半）。
+   *
+   * 为什么要在**这里**再包一层：`compressBytesWithFallback` 内部把"每一档的构造与 run"都
+   * 收进了结果对象，但**调用注入缝本身**（`resolved.compressionStream?.(...)`）仍然可能由
+   * 一个坏的假件抛出（返回的不是"像流的东西"、getter 抛、等等）。那种抛出如果冒到调用方，
+   * 屏上就会出现原始异常串 —— 而"原始异常串不进界面"正是本任务要钉的判据 ⑤。
+   */
+  let c: CompressResult | CompressFailure;
+  try {
+    // ★ `input.preferKind` 给"回示码跟邀请码同一档"那条路用（缺省 = 完整降级链）
+    c = await compressBytesWithFallback(raw, env, input.preferKind);
+  } catch (e) {
+    // ⚠️ 那句话里**不写** `rawErrorText(e)`：判据 ⑤ 钉的是"界面上没有原始异常字样"，
+    //   而这条路唯一的去处就是界面。原始串留在返回值里（`probes` 的诊断面），不进文案。
+    return {
+      ok: false,
+      reason: 'compress-failed',
+      message: '邀请码没能生成：这台设备在准备压缩能力时出错了。请刷新页面再试一次；'
+        + '如果一直这样，换一个较新的浏览器打开本页。',
+      probes: [{ format: 'deflate-raw', supported: false, note: rawErrorText(e) }],
+    };
+  }
+  if (!c.ok) {
+    /**
+     * ★ 判据 ⑤ 的收口：失败面上**交给玩家的那句话**由读数拼出来
+     * （`readableCompressionFailureText`），而 `c.message` 里那句是"内部路标"（"改用下一档"），
+     * 不是给玩家看的。`c.probes` 里的 `note` **只在诊断面**，一个字符都不进这一句。
+     */
+    return { ...c, message: readableCompressionFailureText(c.probes ?? []) };
+  }
+  /**
+   * ★★ **G5/T40：编码侧的自洽检查仍然必须用"真的解压结果"**。
    *
    * 评审（`.superpowers/g5-T7-review/REVIEW.md` 评审 D）实测：这里原来写的是
    * `(compressed) => (compressed === c.bytes ? raw : null)` —— 那是"同一性检查"，
    * 不是解压：一份**真解不开**的 40 字节当"压缩件"喂进去，纯层那条
    * "压出来的必须解得动"的检查**照样放行**（恒定真）。评审用真解压口喂同一份字节 ⇒ 当场拒。
-   * ⇒ 这里先 `await decompressBytes(c.bytes)` **真解一遍**，只把**真解出来的字节**交给同步口。
+   *
+   * ⇒ 这里先 `await decompressBytes(c.bytes, env, c.format)` **按同一档真解一遍**，
+   * 只把**真解出来的字节**交给同步口（`'none'` 那一档，`decompressBytes` 在纯层与这里都是恒等，
+   * 于是这道检查在"没压缩"时退化成"解出来还是同一份字节" —— 仍然是真检查，不是恒真）。
    */
-  const roundTrip = await decompressBytes(c.bytes, env);
+  const roundTrip = await decompressBytes(c.bytes, env, c.format);
   const encoded = encodeInvite(
     fields,
     // 同步压缩口：这里交出的**就是**上面那次 await 的结果（不重压一次，也不换内容）
     () => c.bytes,
     // 同步解压口：反映的是**上面那次真解压**的结果（不是同一性检查）
     (compressed) => (compressed === c.bytes && roundTrip.ok ? roundTrip.bytes : null),
+    c.format,
   );
   if (!encoded.ok) return encoded;
   const payload = encoded.payload;
@@ -708,10 +1371,30 @@ export async function createInvite(
     compressedBytes: c.compressedBytes,
     rawBytes: c.rawBytes,
     ratio: c.ratio,
+    /** ★ T40：这一条码用的是哪一档（判据 ① 的界面读数从这里取） */
+    format: c.format,
+    marker: markerOfKind(c.format),
+    /** ★ T40：未压缩变体的**实测上界**（压缩档的 600-900 一个字不动） */
+    withinUncompressedRange: c.format === 'none' ? payload.length <= INVITE_CHARS_MAX_UNCOMPRESSED : true,
+    probes: c.probes ?? [],
   };
 }
 
-/** 解码一条裸载荷（**异步**：先解压压缩段、再交给纯层解析）。链接形态与二维码形态共用它 */
+/**
+ * ★★ **G5/T40：解一条裸载荷（按压缩段的明文标记挑解压器）**。
+ *
+ * 顺序：切明文协议版本 → **读压缩段的标记**（`u` / `d` / `g`，空 = 老格式 deflate-raw）
+ * → 按那一档 `await` 真解压 → 把**已经解好的字节**当同步口交给纯层的 `decodeInviteText`。
+ *
+ * ## 为什么"缺某一档解压能力"要单独给人话
+ *
+ * 一台设备可能"压得出 gzip、解不开 gzip"（两个构造函数的支持面本来就不同）。
+ * 那不是"这条码坏了"（`decompress-failed`），而是"本机没有这一档能力"
+ * （`decompress-unsupported`）—— 玩家要做的下一步完全不同（换浏览器 / 让对方重发），
+ * 所以两句话必须分开。
+ *
+ * ⚠️ `'none'` 那一档**不进解压器表**：它自己就是 base64url，纯层直接还原（任何设备都解得开）。
+ */
 export async function decodeInvitePayload(
   payload: string,
   env?: NetBrowserEnv,
@@ -727,25 +1410,55 @@ export async function decodeInvitePayload(
       message: '这不是一条邀请码：它没有"协议版本.压缩段"这个两段结构（要么少了那一段，要么被截断了）。',
     };
   }
-  const compressed = payload.slice(dot + 1);
-  const d = await decompressBase64(compressed, env);
-  if (!d.ok) {
-    // 解压侧分得开"字符集不对"与"压缩流解不开"；纯层那条路只拿到字节，分不了，所以在这里收口
-    return { ok: false, reason: 'decompress-failed', message: d.message };
+  const body = payload.slice(dot + 1);
+  // ★ 切段只有 `readInviteSegment` 一处（手写 `slice(1)` 会咬掉老格式的第一个字符）
+  const seg = readInviteSegment(body);
+  const kind = seg.kind;
+  if (kind === null) {
+    return {
+      ok: false,
+      reason: 'bad-base64url',
+      message: `邀请码的压缩段带了一个本程序不认得的编码标记（"${seg.marker}"）：这不是本程序产出的邀请码。`,
+    };
   }
-  const bytes = d.bytes;
-  return decodeInviteText(payload, (b64) => (b64 === compressed ? bytes : null));
+  /**
+   * 解出这一档的字节（`'none'` 交给纯层自己还原 —— 那里不需要任何设备能力）。
+   * `bytes` 为 `null` 只表示"这一档没解出来"，"这一档本机没有"由下面那句人话区分。
+   */
+  let bytes: Uint8Array | null = null;
+  if (kind === 'none') {
+    // ★ 未压缩那一档：**这里**就把 base64url 解开（纯层在 'none' 那一支也会自己解，
+    //   两边都行；这里先解开是为了让同步口回答的是"真的解开的那份字节"）。
+    bytes = decodeBase64Url(seg.body);
+  } else {
+    const d = await decompressBase64(seg.body, env, kind);
+    if (!d.ok) {
+      // 解压侧分得开"字符集不对"与"压缩流解不开"；纯层那条路只拿到字节，分不了，所以在这里收口。
+      // ⚠️ `'unsupported'` 原样传上去（那是"本机没有这一档能力"，不是"这条码坏了"）
+      return { ok: false, reason: d.reason === 'unsupported' ? 'decompress-unsupported' : 'decompress-failed', message: d.message };
+    }
+    bytes = d.bytes;
+  }
+  // 同步口要回答的那一段：**去掉标记之后**的正文（纯层按同一口径切段）
+  return decodeInviteText(payload, (b64) => (b64 === seg.body ? bytes : null), { marker: seg.marker });
 }
 
 /**
  * 把 base64url 的压缩段解回字节（先判字符集再解压，好让判据 4 的 ①② 分得开）。
+ *
+ * ★ G5/T40：`kind` 缺省是 `'raw'`（**老口径逐字不变**）；`'none'` 是恒等（不压缩那一段
+ * 没有可解的东西，base64url 解出来就是原文）。
  */
-export async function decompressBase64(b64: string, env?: NetBrowserEnv): Promise<DecompressResult> {
+export async function decompressBase64(
+  b64: string,
+  env?: NetBrowserEnv,
+  kind: CompressionKind = 'raw',
+): Promise<DecompressResult> {
   const pre = decodeBase64Url(b64);
   if (pre === null) {
     return { ok: false, reason: 'bad-base64url', message: '压缩段不是 base64url，解不出字节。' };
   }
-  return decompressBytes(pre, env);
+  return decompressBytes(pre, env, kind);
 }
 
 /**
@@ -894,7 +1607,8 @@ export async function discoverSignalingEndpoint(
   return {
     ok: false,
     reason: 'unreachable',
-    message: '这些信令端点一个都没连上。可以改用邀请码（它不需要任何服务器），或换一个端点再试。',
+    message: '这些信令端点一个都没连上。可以改用邀请码（邀请码这条路不需要信令端点，'
+      + '两端直接把连接描述交给对方；在默认配置下，直连打不通时会经那台默认中继转发），或换一个端点再试。',
   };
 }
 
@@ -1084,22 +1798,33 @@ export function candidateKindsOf(ice: readonly string[]): CandidateKinds {
  *
  * ## 判据
  *
- * **本机（host / mDNS）候选 ≥ 1**（`typ host` 就够：Chrome 默认把本机地址写成 mDNS 名，
- * 但它仍然是 `typ host`）**且**下面两条按玩家配没配中继二选一：
- *  - **没配**自建中继（`relayConfigured === false`）：公网映射（srflx）≥ 1 **或** 中继（relay）≥ 1；
- *  - **配了**自建中继（`relayConfigured === true`）：**中继（relay）≥ 1**（光有 srflx 不算够）。
+ *  - **有中继可用**（`relayConfigured === true`：默认那台内置中继也算）：**中继（relay）≥ 1**
+ *    （光有 srflx 不算够）。★ T38 实测修正：默认路径也必须走这一档 —— 否则"够用就收工"会把
+ *    relay 候选砍掉，邀请码里只剩 host + srflx，**跨网直连一失败就没有中继可走**
+ *    （而默认带上中继的全部意义就是"打不通时经它转发"）；
+ *  - **没有中继**（`relayConfigured === false`）：公网映射（srflx）≥ 1 **或** 中继（relay）≥ 1。
  *
  * ## 为什么
  *
  *  - 一条 host 候选只能让**同一台机器 / 同一个局域网**连上（T16 用户实测那条路的价值就在这）；
  *  - srflx 是"STUN 服务器看到了我的公网地址"的**证据**：有它，跨网直连才有得谈；
- *  - **配了 TURN 的人，跨网那一档靠的就是 relay**，而 TURN 分配要走一趟服务器往返 ⇒ relay 是
- *    收集顺序里的**最后一段**。早退会把 relay 砍掉 ⇒ 那条邀请码 / 回示码里没有中继，
+ *  - **玩家自己指定了 TURN 的人，跨网那一档靠的就是 relay**，而 TURN 分配要走一趟服务器往返
+ *    ⇒ relay 是收集顺序里的**最后一段**。早退会把 relay 砍掉 ⇒ 那条邀请码 / 回示码里没有中继，
  *    直连一失败就真的失败，而屏上还不会说为什么（T18 评审判据 1 的那条）。
- *    ⇒ **配了中继就必须等 relay 到手或到上界**。
+ *    ⇒ **玩家指定了中继就必须等 relay 到手或到上界**。
  *
  * ⚠️ 它**不是**"跨网一定能连"的证明 —— 那件事本次没有断言（也不该由这几个候选断言）。
  * 它只回答一个更小的问题："现在这条描述值不值得写进邀请码"。
+ *
+ * ★★ **T38：调用侧传进来的那个布尔值 = "这一份 `iceServers` 里有没有可用的中继"**
+ * （`readIceServers().relayConfigured`），**默认那台内置中继也算**。
+ *
+ * 我一度把它改成"只有玩家自己改过才算"（理由是默认档早退更快），真浏览器读数把它否掉了：
+ * 默认路径 **77ms** 就收工，邀请码里只有 `host + srflx`、**一条 relay 都没有** ⇒
+ * "直连打不通时经中继转发"在默认路径上等于不存在。现在的口径要付一点时间代价
+ * （生成邀请码 **77ms → 180-203ms**，其中 relay 到手 **155-164ms**，见
+ * `.superpowers/g5-T38/t38-ice-probe.json`），换来的是**邀请码里真的带上中继**。
+ * 参数名保留 `relayConfigured`（它是本仓既有测试用的名字，语义由上面这几句钉住）。
  *
  * ⚠️ 只有 host（没有 srflx / relay）时**故意不**立刻收工，但也不等满 15 秒：给一段**宽限**
  * （`ICE_HOST_ONLY_GRACE_MS`，1.5 秒）让 STUN 把公网映射拿回来；到点按现状放行 + 一句如实的
@@ -1306,10 +2031,28 @@ export function waitForIceGathering(
   };
   const timeoutMs = resolved.iceGatherTimeoutMs ?? DEFAULT_ICE_GATHER_TIMEOUT_MS;
   /**
-   * ★★ **T18 修复轮：玩家配了自建中继没有** —— 从**同一个读数**取（`readIceServers()`），
-   * 不另造一份判据。配了中继时"够用"的条件收紧成"relay 到手"（见 `enoughCandidatesForInvite`）。
+   * ★★ **T18 修复轮起：这份配置里"有没有可用中继"决定"够用"的口径** ——
+   * 从**同一个读数**取（`readIceServers()`），不另造一份判据。有中继时条件收紧成
+   * "relay 到手"（见 `enoughCandidatesForInvite`）。
+   *
+   * ★★ **T38 的实测修正（这条是本轮真浏览器读数逼出来的，不是措辞偏好）**
+   *
+   * T38 给默认值加了一台内置中继之后，我先把这里改成"**只有玩家自己改过**才算有中继"
+   * （理由是"否则每次出邀请码都要等 relay"）。**真浏览器读数把它否掉了**：
+   * 默认路径上"够用就收工"在 77ms 就返回，邀请码里只有 `host + srflx`，
+   * **一条 relay 都没有** —— 于是"直连打不通时经中继转发"这件事在默认路径上**不存在**
+   * （用户 2026-09-25 的原话就是"连接不上时走这个服务器"）。
+   *
+   * ⇒ 口径改回"这一份 `iceServers` 里有中继就等 relay"，**默认那台内置中继也算**。
+   * 代价是默认路径要等 relay 到手（**生成邀请码 77ms → 180-203ms**，其中 relay 到手
+   * **155-164ms**，gather 总耗时 253-530ms；中继不可达时才走满上界），换来的是邀请码里
+   * **真的带上中继** —— 这一档值得。读数原文 `.superpowers/g5-T38/t38-ice-probe.json`。
+   *
+   * `settingsAreDefault`（`turnSettingsAreDefault` 算出来的那个"三项没被玩家动过"）**不参与**
+   * 这里的判定，它只给 `readIceServers()` 标注来源；判据 3 的证据面在 `__g5Match.ice()`（`main.ts`）。
    */
-  const relayConfigured = readIceServers(resolved.settings?.() ?? null).relayConfigured;
+  const settings = resolved.settings?.() ?? null;
+  const relayConfigured = readIceServers(settings).relayConfigured;
   // 已经收集完了：同步返回（**不要**在这种情况下也去排一个计时器）
   if (pc.iceGatheringState === 'complete') return Promise.resolve(take(false, timeoutMs, false, relayConfigured));
   const ticker = resolved.ticker;
@@ -2022,16 +2765,44 @@ export function createBrowserTransport(env?: NetBrowserEnv): NetTransport {
 /** 纯层给的"没有配置信令端点"那句提示的**转发出口** */
 export const NO_SIGNALING_ENDPOINT_MESSAGE = NO_ENDPOINT_MESSAGE;
 
-/** 量一条载荷的长度并给出区间判定（判据 7 与 T8 的提示共用这一处） */
+/**
+ * 量一条载荷的长度并给出区间判定（判据 7 与 T8 的提示共用这一处）。
+ *
+ * ## ★★ G5/T40：区间按**这条码实际用的档位**选（评审点名的那一处）
+ *
+ * 未压缩变体（`-u`）本来就比压缩档长得多（实测 1823-1826 字符），拿 600-900 去判它 ⇒
+ * 一条**完全正常**的 `-u` 码会被判成"不在实测区间内…可能被截断" —— 而那正是**最老内核
+ * 唯一能用**的那一档，最不该在屏上吓人。所以这里先读压缩段的明文标记：
+ *  - `'none'` ⇒ 用 `INVITE_CHARS_MAX_UNCOMPRESSED`（它自己的实测上界）；
+ *  - 其余（raw / deflate / gzip） ⇒ 600-900（压缩档的实测区间，一个字没动）。
+ *
+ * ⚠️ 字段名仍是 `withinMeasuredRange`（调用方 `src/main.ts` 读的就是它）⇒
+ * 它的含义收紧成"落在**这一档的**实测区间内"，`min` / `max` 也回**这一档**的区间。
+ * 这样屏上那句长度读数不需要知道档位就已经是对的（`inviteLengthText(chars, within)`）。
+ */
 export function inviteLengthReport(payload: string): InviteLengthReport {
+  const max = kindOfPayloadText(payload) === 'none' ? INVITE_CHARS_MAX_UNCOMPRESSED : INVITE_CHARS_MAX;
   return {
     chars: payload.length,
-    withinMeasuredRange: payload.length >= INVITE_CHARS_MIN && payload.length <= INVITE_CHARS_MAX,
+    withinMeasuredRange: payload.length >= INVITE_CHARS_MIN && payload.length <= max,
     min: INVITE_CHARS_MIN,
-    max: INVITE_CHARS_MAX,
+    max,
   };
 }
 
+/**
+ * 一条**裸载荷**用的是哪一档（读压缩段的明文标记；读不出来按 `'raw'` 算）。
+ *
+ * 它只服务"区间判定"这一件事 —— 真解码那条路在 `decodeInvitePayload` 里，那里对
+ * 认不出的标记给的是**可读拒绝**，这里给的是一个保守的默认档（长度读数不该因为一条坏码就报错）。
+ */
+function kindOfPayloadText(payload: string): CompressionKind {
+  const dot = payload.indexOf('.');
+  if (dot <= 0 || dot === payload.length - 1) return 'raw';
+  return readInviteSegment(payload.slice(dot + 1)).kind ?? 'raw';
+}
+
+/** `inviteLengthReport` 的区间读数（**不含**任何"这条码好不好用"的结论） */
 export interface InviteLengthReport {
   readonly chars: number;
   readonly withinMeasuredRange: boolean;

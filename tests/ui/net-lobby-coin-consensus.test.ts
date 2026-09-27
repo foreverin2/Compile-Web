@@ -19,13 +19,13 @@ import { describe, it, expect } from 'vitest';
 import { createLobbyClient, lobbyCoinViewOf, type LobbyClient, type LobbyTicker } from '../../src/ui/net-lobby';
 import { createFakeTransportPair } from '../../src/net/fake-transport';
 import { decodeMsg, PROTO_VERSION, type NetMsg } from '../../src/net/protocol';
-import { browserHashOf, createInvite, decodeBase64Url, decompressBytes, inviteLengthReport } from '../../src/ui/net-browser';
+import { browserHashOf, createInvite, decodeBase64Url, decompressBytes, inviteLengthReport, readCompressionMode } from '../../src/ui/net-browser';
 import type { NetBrowserEnv } from '../../src/ui/net-browser';
 import { CARD_DATA_HASH } from '../../src/app/card-data-hash';
 import type { NetTransport } from '../../src/net/transport';
 import type { PlayerId } from '../../src/core/models/types';
 import { coinLanding, draftStarterFor, type CoinSide } from '../../src/app/coin';
-import { decodeInviteText, protocolVersionCheck } from '../../src/net/invite';
+import { decodeInviteText, protocolVersionCheck, readInviteSegment } from '../../src/net/invite';
 import type { InviteFields } from '../../src/net/invite';
 
 /* ------------------------------------------------------------------ *
@@ -307,13 +307,15 @@ const zlibEnv: NetBrowserEnv = {
       Blob?: new (parts: readonly Uint8Array[]) => { stream(): unknown };
       Response?: new (body: unknown) => { arrayBuffer(): Promise<ArrayBuffer> };
     };
-    const Ctor = mode === 'compress' ? g.CompressionStream : g.DecompressionStream;
+    // ★ G5/T40：与产出代码共用模式串解读（压 / 解 + 格式名）
+    const read = readCompressionMode(mode);
+    const Ctor = read.decompress ? g.DecompressionStream : g.CompressionStream;
     const BlobCtor = g.Blob;
     const ResponseCtor = g.Response;
     if (Ctor === undefined || BlobCtor === undefined || ResponseCtor === undefined) return null;
     return {
       run: async (input: Uint8Array): Promise<Uint8Array> => {
-        const stream = new Ctor('deflate-raw');
+        const stream = new Ctor(read.format);
         const piped = (new BlobCtor([input]).stream() as { pipeThrough(s: unknown): unknown }).pipeThrough(stream);
         return new Uint8Array(await new ResponseCtor(piped).arrayBuffer());
       },
@@ -351,15 +353,21 @@ async function realInvite(n: number): Promise<string> {
  *
  * `decodeInviteText` 要的是一个**同步**的"这段 base64 解出来了吗"的回答，而真解压是异步的
  * ⇒ 这里先 `await` 出字节，再把它当"已经算好的结果"交回去（D15 的缝法）。
+ *
+ * ★ **G5/T40**：压缩段现在带明文标记（`-r` / `-u` / `-d` / `-g`），所以切段走产出代码那**唯一一处**
+ * （`readInviteSegment`）—— 手写 `slice(1)` 会咬掉老格式 base64url 的第一个字符（实测抓到的坑）。
  */
 async function decodeWithRealInflate(payload: string): Promise<{ ok: boolean; reason: string; message: string }> {
   const dot = payload.indexOf('.');
   if (dot < 0) return { ok: false, reason: 'bad-base64url', message: '' };
-  const compressed = payload.slice(dot + 1);
-  const raw = decodeBase64Url(compressed);
-  const inflated = raw === null ? null : await decompressBytes(raw, zlibEnv);
-  const bytes = inflated !== null && inflated.ok ? inflated.bytes : null;
-  const dec = decodeInviteText(payload, (b64) => (b64 === compressed ? bytes : null));
+  const seg = readInviteSegment(payload.slice(dot + 1));
+  if (seg.kind === null) return { ok: false, reason: 'bad-base64url', message: '标记不认得' };
+  const raw = decodeBase64Url(seg.body);
+  const inflated = seg.kind === 'none' || raw === null
+    ? null
+    : await decompressBytes(raw, zlibEnv, seg.kind);
+  const bytes = seg.kind === 'none' ? raw : (inflated !== null && inflated.ok ? inflated.bytes : null);
+  const dec = decodeInviteText(payload, (b64) => (b64 === seg.body ? bytes : null), { marker: seg.marker });
   return dec.ok ? { ok: true, reason: '', message: '' } : { ok: false, reason: dec.reason, message: dec.message };
 }
 

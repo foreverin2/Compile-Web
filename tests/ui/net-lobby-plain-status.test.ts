@@ -61,7 +61,7 @@ function state(over: Partial<LobbyState>): LobbyState {
     transport: 'idle',
     peer: null,
     endpoint: '',
-    ice: { servers: [], relayConfigured: false, relayIncomplete: false },
+    ice: { servers: [], relayConfigured: false, relayIncomplete: false, relaySource: 'none', settingsAreDefault: false },
     advancedOpen: false,
     relayOpen: false,
     waitExpired: null,

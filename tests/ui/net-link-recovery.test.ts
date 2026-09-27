@@ -116,7 +116,7 @@ const BASE_STATE: LobbyState = {
   transport: 'offline',
   peer: null,
   endpoint: '',
-  ice: { servers: [], relayConfigured: false, relayIncomplete: false },
+  ice: { servers: [], relayConfigured: false, relayIncomplete: false, relaySource: 'none', settingsAreDefault: false },
   advancedOpen: false,
   waitExpired: null,
   error: null,

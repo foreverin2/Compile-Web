@@ -10,6 +10,7 @@ import {
   COMPRESSION_RATIO_MAX,
   COMPRESSION_RATIO_MIN,
   INVITE_CHARS_MAX,
+  INVITE_CHARS_MAX_UNCOMPRESSED,
   INVITE_CHARS_MIN,
   INVITE_FRAGMENT_KEY,
   INVITE_PAYLOAD_VERSION,
@@ -20,6 +21,8 @@ import {
   decodeInvite,
   decodeInviteText,
   encodeInvite,
+  markerOfKind,
+  readInviteSegment,
   inviteFragmentOf,
   inviteLinkOf,
   payloadBytesOf,
@@ -168,12 +171,20 @@ describe('损坏输入给可读原因，不静默返回空对象（判据 4）',
     ['② 截断（载荷被砍掉一半）', () => {
       const full = encodeWith(fields());
       /**
-       * 截断点取 60%：要让**压缩段**仍然是合法的 base64url 长度 —— 否则这一条会掉进
+       * 截断点必须让**压缩段**仍然是"长度合法的 base64url" —— 否则这一条会掉进
        * `'bad-base64url'`（长度 % 4 === 1 不可能解码），与 ① 撞成同一个 reason，
-       * 判据 4 的"三类互不相同"就测不出东西了。实测 585 字符的载荷下 60% 处长度 % 4 === 2。
+       * 判据 4 的"三类互不相同"就测不出东西了。
+       *
+       * ★ G5/T40：原来是按"整串的 60%"取的（那时刚好 % 4 === 2）。现在压缩段带明文标记
+       * （`-r`，见 `COMPRESSION_MARKERS`），整串长度变了 ⇒ 那个百分比不再保证余数。
+       * **别再猜百分比**：按段切、把正文砍到 60% 再回退到余数不为 1 的位置。
        */
-      const cut = Math.floor(full.length * 0.6);
-      return decodeWith(full.slice(0, cut), () => null);
+      const dot = full.indexOf('.');
+      const seg = readInviteSegment(full.slice(dot + 1));
+      let keep = Math.floor(seg.body.length * 0.6);
+      if (keep % 4 === 1) keep -= 1;
+      const cut = `${full.slice(0, dot + 1)}${seg.marker}${seg.body.slice(0, keep)}`;
+      return decodeWith(cut, () => null);
     }],
     ['③ 结构缺失（能解出对象但缺字段）', () => {
       // 两段结构**合法**（明文版本 + 合法 base64url 压缩段），解出来的是一个**项数不够**的
@@ -182,7 +193,13 @@ describe('损坏输入给可读原因，不静默返回空对象（判据 4）',
       //
       // ⚠️ 这里的"解压器"必须交出**真 JSON 字节**：恒返回 `new Uint8Array([1,2,3])` 会让这一条
       // 掉进 `'bad-json'`（那不是"缺字段"，是"连 JSON 都不是"），实测踩过一次。
-      const json = JSON.stringify([INVITE_PAYLOAD_VERSION, SESSION_ID, SDP, ['']]);
+      //
+      // ⚠️ ★ G5/T40：位置数组里**必须有一项非空字符串**。四项全是数字 / 空数组时，
+      // `JSON.stringify` 出来是 `[2,"","",[1]…]` 这种以 `[` 开头的串，base64url 之后可能
+      // 以 `-` 开头 —— 而 `-` 是新格式的**标记起始字符**（见 `COMPRESSION_MARKERS` 的说明）
+      // ⇒ 那一段会被当成"带标记的压缩段" ⇒ 报 `bad-base64url`（标记不认得），与 ① 撞车。
+      // 给一项非空文本（真载荷本来就有）就不会踩到那个边界。
+      const json = JSON.stringify([INVITE_PAYLOAD_VERSION, SESSION_ID, SDP, [''], 'x']);
       const body = bytesToBase64Url(utf8Encode(json));
       return decodeWith(`${PROTO_VERSION}.${body}`, () => utf8Encode(json));
     }],
@@ -417,6 +434,16 @@ describe('长度区间与短码占比（判据 7 的纯层一半）', () => {
     // 所以上界停在 900，不许写成 1024 —— 这条断言就是那句话的可执行形态。
     expect(INVITE_CHARS_MAX).toBeLessThan(1024);
   });
+
+  it('★ G5/T40：未压缩变体**单独**一个上界常量（压缩档的 600-900 一个字没动）', () => {
+    // 为什么必须分开：未压缩那一段就是原文 JSON 的 base64url（4/3 膨胀），必然越过 900。
+    // 实测两个读数：合成语料（SDP 619 字符）**1250**；真浏览器 CDP（真 SDP）**1826**。
+    // 上界照**真浏览器**那个数取（2000）—— 拿合成语料那个 1250 当上界，真机产出的正常码
+    // 会被判越界（实测踩到：CDP 的 E 场景 1826 > 1800）。
+    // 这条腿钉的是"两个变体互不冒充"：改 INVITE_CHARS_MAX 去容纳未压缩 ⇒ 当场红。
+    expect(INVITE_CHARS_MAX_UNCOMPRESSED).toBe(2000);
+    expect(INVITE_CHARS_MAX_UNCOMPRESSED).toBeGreaterThan(INVITE_CHARS_MAX);
+  });
 });
 
 /* ============================================================================
@@ -440,8 +467,10 @@ describe('端点判定与那句提示（判据 5 的文案本体，判据 14 的
     expect(NO_ENDPOINT_MESSAGE).toContain('6 位码');
     expect(NO_ENDPOINT_MESSAGE).toContain('邀请码');
     expect(NO_ENDPOINT_MESSAGE).toContain('高级 / 连接设置');
-    // 它必须说清"默认不发请求"这件事（§8.1 的唯一承诺）
-    expect(NO_ENDPOINT_MESSAGE).toContain('默认不向任何服务器发请求');
+    // ★★ G5/T38：原句"默认不向任何服务器发请求"**不再成立**（默认 ICE 就要联系 STUN/TURN），
+    //    所以这句提示改成说**端点这件事**的默认状态。这条腿的意图没变：那句话必须自己说清
+    //    "为什么短码走不了"，而不是只给一个"不可用"。
+    expect(NO_ENDPOINT_MESSAGE).toContain('默认没有配置信令端点');
   });
 
   it('端点非空 ⇒ 通过，且**原样**带回（不在这里做 URL 校验：那是浏览器层的事）', () => {
@@ -586,3 +615,120 @@ function qrCodeHitsIn(sources: readonly string[]): string[] {
   }
   return hits;
 }
+
+/* ============================================================================
+ * ★★ G5/T40：压缩段的**明文标记**（老格式兼容 + 认标记选解压器）
+ *
+ * 事故形状（用户 2026-09-27 截图）：一台设备上 `new CompressionStream('deflate-raw')` **抛**
+ * `TypeError: Failed to construct ... Unsupported compression format: 'deflate-raw'` ⇒
+ * 邀请码根本没生成出来。修法之一是让载荷**带上用的是哪一种编码**，对端就不用猜。
+ * 这一组腿钉的就是那个标记的三种性质：
+ *   ① 老格式（`N.<base64>`，没有标记）**照旧解得开**；
+ *   ② 四档各自往返（含"不压缩"那一档）；
+ *   ③ 标记认不出来 / 本端没有那一档能力 ⇒ **人话**（不是"压缩段坏了"）。
+ * ========================================================================== */
+
+describe('★★ G5/T40：压缩段的明文标记（老格式兼容 + 按标记选解压器）', () => {
+  /** 恒等压缩：压出来就是原文（这样"解压器"用 `base64UrlToBytes` 就能真解） */
+  const idc = (raw: Uint8Array): Uint8Array => Uint8Array.from(raw);
+
+  it('四档各自编码 ⇒ 用对应标记，且都能逐字段解回来', () => {
+    const f = fields();
+    for (const kind of ['raw', 'deflate', 'gzip', 'none'] as const) {
+      const enc = encodeInvite(f, idc, idc, kind);
+      expect(enc.ok, `${kind} 编码失败：${enc.ok ? '' : enc.message}`).toBe(true);
+      if (!enc.ok) continue;
+      // 标记就是 `markerOfKind` 说的那一个（唯一出处）
+      const marker = markerOfKind(kind);
+      expect(enc.payload.startsWith(`${f.p}.${marker}`), `${kind} 的标记不是 ${JSON.stringify(marker)}：${enc.payload.slice(0, 8)}`)
+        .toBe(true);
+      // 按标记选解压器（`'none'` 自己解，其余用恒等"解压器"）
+      const dec = decodeInviteText(enc.payload, {
+        raw: (b64) => base64UrlToBytes(b64),
+        deflate: (b64) => base64UrlToBytes(b64),
+        gzip: (b64) => base64UrlToBytes(b64),
+      });
+      expect(dec.ok, `${kind} 解不回来：${dec.ok ? '' : dec.reason + ' / ' + dec.message}`).toBe(true);
+      if (!dec.ok) continue;
+      expect(dec.payload.sessionId).toBe(f.sessionId);
+      expect(dec.payload.sdp).toBe(f.sdp);
+      expect(dec.format.kind).toBe(kind);
+      expect(dec.format.marker).toBe(marker);
+    }
+  });
+
+  it('★ 向后兼容：**老格式**（`N.<base64>`，一个标记都没有）仍用**老调用形态**解得开', () => {
+    const f = fields();
+    // 手搓一条老码：不带任何标记，正文就是载荷字节的 base64url
+    const legacy = `${f.p}.${bytesToBase64Url(payloadBytesOf(f))}`;
+    expect(legacy.includes('.-'), '夹具坏：这条"老码"里出现了标记起始符').toBe(false);
+    // 老调用形态：第二个参数是**函数**（老代码就是这么传的）
+    const r = decodeInviteText(legacy, (b64) => base64UrlToBytes(b64));
+    expect(r.ok, `老格式的码解不开了（这是向后兼容的破口）：${r.ok ? '' : r.reason + ' / ' + r.message}`).toBe(true);
+    if (!r.ok) return;
+    expect(r.payload.sessionId).toBe(f.sessionId);
+    // 它被读成 `raw`（deflate-raw）——语义一字未变
+    expect(r.format.kind).toBe('raw');
+    expect(r.format.marker).toBe('');
+  });
+
+  it('★ 老格式的正文**恰好以 d / g / u 开头**时，不许被当成带标记（T40 实测踩过的歧义）', () => {
+    // 第一版标记取的是单字母 `u`/`d`/`g`，与 base64url 的字符表**重叠** ⇒
+    // 一条老码的 base64 段恰好以 `d` 开头时，那一个字符被剥掉 ⇒ 6 比特错位 ⇒
+    // 一条本来好用的码报"压缩段解不开"。现在的标记以 `-` 开头，而 `-` 不可能出现在
+    // base64url 编码的**首位** ⇒ 歧义消失。这条腿把那个边界钉住。
+    const f = fields();
+    for (const first of ['d', 'g', 'u', 'A', '_', '0']) {
+      const seg = readInviteSegment(`${first}zzz`);
+      expect(seg.kind, `以 ${first} 开头的正文被当成了带标记`).toBe('raw');
+      expect(seg.marker).toBe('');
+      expect(seg.body, `正文被咬掉了一个字符`).toBe(`${first}zzz`);
+    }
+    // 反控：真标记（`-` 开头）必须被认出来并剥掉
+    for (const [marker, kind] of [['-u', 'none'], ['-d', 'deflate'], ['-g', 'gzip'], ['-r', 'raw']] as const) {
+      const seg = readInviteSegment(`${marker}zzz`);
+      expect(seg.kind, `${marker} 没被认出来`).toBe(kind);
+      expect(seg.body, `${marker} 之后的正文不对`).toBe('zzz');
+    }
+    // 而且老码里**不会**出现 `-` 开头的第二段（它是我们产出的 base64url，首位不可能是 `-`）
+    expect(f.p).toBeGreaterThan(0);
+    expect(bytesToBase64Url(utf8Encode('{')).startsWith('-')).toBe(false);
+  });
+
+  it('★ 认不出的标记 ⇒ `bad-base64url` + 人话（不是"压缩段坏了"）', () => {
+    const r = decodeInviteText(`${PROTO_VERSION}.-zzzz`, (b64) => base64UrlToBytes(b64));
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe('bad-base64url');
+    expect(r.message).toContain('标记');
+    expect(r.message).not.toContain('TypeError');
+  });
+
+  it('★ 本端没有那一档解压能力 ⇒ `decompress-unsupported` + 人话（与"码坏了"分开）', () => {
+    const f = fields();
+    // 用 gzip 档编一条，但只给 `raw` 那一档的解压器
+    const enc = encodeInvite(f, idc, idc, 'gzip');
+    expect(enc.ok).toBe(true);
+    if (!enc.ok) return;
+    const r = decodeInviteText(enc.payload, { raw: (b64) => base64UrlToBytes(b64) });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason, '缺一档能力被报成了"压缩段坏了"（两件事的下一步不同）').toBe('decompress-unsupported');
+    expect(r.message).toContain('本机');
+    expect(r.message).not.toContain('TypeError');
+    // 反控：把那一档补上 ⇒ 同一条码解得开（否则上面那条只是恒失败）
+    const ok = decodeInviteText(enc.payload, { gzip: (b64) => base64UrlToBytes(b64) });
+    expect(ok.ok, '补上 gzip 那一档之后仍然解不开').toBe(true);
+  });
+
+  it('★ 函数形态的第二个参数**服务所有档**（不是只服务 raw）', () => {
+    // 曾经写成"函数只当 raw 用"⇒ 降级链挑出来的 deflate/gzip 一律报"本机解不开"（实测踩到）。
+    const f = fields();
+    const enc = encodeInvite(f, idc, idc, 'deflate');
+    expect(enc.ok).toBe(true);
+    if (!enc.ok) return;
+    const r = decodeInviteText(enc.payload, (b64) => base64UrlToBytes(b64));
+    expect(r.ok, `函数形态解不开 deflate 档：${r.ok ? '' : r.reason}`).toBe(true);
+    if (r.ok) expect(r.format.kind).toBe('deflate');
+  });
+});

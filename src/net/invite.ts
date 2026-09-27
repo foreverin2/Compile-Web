@@ -81,6 +81,144 @@ export const INVITE_CHARS_MIN = 600;
 export const INVITE_CHARS_MAX = 900;
 
 /* ------------------------------------------------------------------ *
+ * 1b. ★★ G5/T40：压缩能力的**降级链**与明文段标记
+ * ------------------------------------------------------------------ */
+
+/**
+ * 邀请码压缩段用的**哪一种**编码（**本变体的名字只有这一处**）。
+ *
+ *  - `'raw'`：`deflate-raw`。**老格式**（`N.<base64url>`，没有标记）就是它，语义一字未变；
+ *  - `'deflate'`：zlib 包装的 deflate（`CompressionStream('deflate')`）；
+ *  - `'gzip'`：gzip 包装（`CompressionStream('gzip')`）；
+ *  - `'none'`：**不压缩**。压缩段就是 `payloadBytesOf()` 的 UTF-8 JSON 直接 base64url。
+ *
+ * ## 为什么它住在纯层
+ *
+ * 它**不是浏览器 API**：它只是"这一段字节是用哪一种编码得到的"这个名字。
+ * 编码侧（`src/ui/net-browser.ts` 的 `compressBytesWithFormat`）按
+ * `'deflate-raw' → 'deflate' → 'gzip' → 不压缩` 的顺序真去试构造 `CompressionStream`，
+ * 解出第一个成功的、把它的 `kind` 交给本文件；本文件只负责把 `kind` 写进明文段、
+ * 并在解码时按标记挑解压器。名字只有一处，两端才不会各叫各的。
+ */
+export type CompressionKind = 'raw' | 'deflate' | 'gzip' | 'none';
+
+/**
+ * 压缩段开头的**明文标记**。形状：`<协议版本>.<标记><base64url>`。
+ *
+ * 协议版本**仍然是数字**（`N`），标记住在**压缩段**里，所以"按第一个 `.` 切两段、左边必须是
+ * 十进制整数"这条老解析规则**一个字都不用改**：老码 `3.xxxx` 与新码 `3.-u…` 都能切出
+ * 同一对（版本、压缩段）。
+ *
+ * ## ★★ 标记必须**不可能**与 base64url 正文撞车（T40 实现时踩过的坑）
+ *
+ * 第一版标记取的是 `u` / `d` / `g`（都取自压缩格式名）。它有**歧义**：base64url 的字符表里
+ * 就包含这三个字母 ⇒ 老格式（无标记）那一段**恰好以 `u`/`d`/`g` 开头**时会被当成"带标记"，
+ * 于是那一个字符被剥掉 ⇒ 6 个比特错位 ⇒ 一条**本来好用**的码报"压缩段解不开"
+ * （实测：一条 SDP 恰好让 base64 段以 `d` 开头，整条回示码当场解不开）。
+ *
+ * ⇒ 标记改用 **`-` 加一个字母**，而 **`-` 不可能出现在"标记之后"的位置**：
+ * 它是 base64url 的合法字符，但 base64url 的**无 padding 编码里第一个字符只可能是 `A`-`Z` /
+ * `a`-`z` / `0`-`9` / `_`** —— `-` 是 6 位组 `111111`，只可能出现在**后面的组**里。
+ * 所以 `'-'` 当标记的开头**没有任何歧义**：第二段以 `-` 开头就一定是新格式，
+ * 否则一定是老格式（`deflate-raw`）。
+ *
+ * 老格式（`CompressionKind` 的 `'raw'`）**不带标记**（`''`）⇒ `N.<base64>` 逐字不变、向后兼容。
+ */
+export const COMPRESSION_MARKERS: Readonly<Record<CompressionKind, string>> = {
+  raw: '',
+  none: '-u',
+  deflate: '-d',
+  gzip: '-g',
+};
+
+/**
+ * 生成侧用的 `kind → 标记`：与 `COMPRESSION_MARKERS` 只差 `raw` 那一档。
+ *
+ * `raw` 生成时也带 `'-r'`（**两份都能解**：`-r` 与"没有标记"都读成 `'raw'`），
+ * 理由是让新产出的码**显式**说明自己的编码方式 —— 唯一的例外是"兼容老码"那条读路径。
+ */
+export const ENCODE_MARKER_OF_KIND: Readonly<Record<CompressionKind, string>> = {
+  raw: '-r',
+  none: '-u',
+  deflate: '-d',
+  gzip: '-g',
+};
+
+/** `kind → 标记`（**生成**用：`ENCODE_MARKER_OF_KIND` 的唯一取法） */
+export function markerOfKind(kind: CompressionKind): string {
+  return ENCODE_MARKER_OF_KIND[kind];
+}
+
+/** 标记的**字符宽度**（`raw` 读路径是 0，其余是 2；判据靠它，别写死常量） */
+export function markerWidth(kind: CompressionKind): number {
+  return COMPRESSION_MARKERS[kind].length;
+}
+
+/** `标记 → kind`（**读**用）：`''`（老格式）与 `'-r'`（新格式显式写出的 raw）都是 `'raw'`；不认得返回 `null` */
+export function kindOfMarker(marker: string): CompressionKind | null {
+  if (marker === '') return 'raw';
+  // ★ `'-r'` 走**生成侧**那张表：它是 raw 的"显式标记"，读的时候必须与老格式的空标记等价
+  //   （见 `ENCODE_MARKER_OF_KIND` 的说明）。这样"新码显式写清编码方式"这件事不需要
+  //   在读侧多一份特例 —— 两张表都查一次就够。
+  const hit = (Object.keys(ENCODE_MARKER_OF_KIND) as CompressionKind[])
+    .find((k) => ENCODE_MARKER_OF_KIND[k] === marker);
+  return hit ?? null;
+}
+
+/**
+ * ★★ **一段载荷的第二段（`<协议版本>.` 之后那一整段）** → 三个读数。
+ *
+ * 这是"标记怎么读、正文从哪切"的**唯一一处**。T40 实现时在四个地方各写了一遍
+ * `body.slice(1)`，其中三处漏了"老格式没有标记"这一档 ⇒ 咬掉 base64url 的第一个字符
+ * ⇒ **每一条老格式邀请码都报"压缩段解不开"**（实测抓到的坑）。所以收成一个函数：
+ * 谁要切这一段，就调它。
+ *
+ * 返回 `kind: null` = 这段带了一个本程序不认得的标记（调用方给"这不是本程序产出的邀请码"）。
+ */
+export interface InviteSegmentRead {
+  /** 这一段的编码档位；`null` = 标记不认得 */
+  readonly kind: CompressionKind | null;
+  /** 标记（老格式是空串） */
+  readonly marker: string;
+  /** **去掉标记之后**的正文（喂给解压器的就是它） */
+  readonly body: string;
+}
+
+export function readInviteSegment(segment: string, markerHint?: string): InviteSegmentRead {
+  // ★ 判标记只需看**前两个字符**（标记是 `''` 或 `-x`）：`-` 不可能出现在 base64url 的首位，
+  //   所以"第二段以 `-` 开头"就等于"这是新格式"，与正文内容无关（见 `COMPRESSION_MARKERS` 的说明）。
+  const marker = markerHint ?? (segment.startsWith('-') ? segment.slice(0, 2) : '');
+  const kind = kindOfMarker(marker);
+  if (kind === null) return { kind: null, marker, body: segment };
+  return { kind, marker, body: segment.slice(marker.length) };
+}
+
+/**
+ * **未压缩变体的实测字符数上界**（判据：任务书 §2 第 4 条要求单独记一个）。
+ *
+ * ## 为什么必须与 `INVITE_CHARS_MAX` 分开
+ *
+ * `INVITE_CHARS_MIN/MAX`（600-900）钉的是**压缩档**的实测区间（出处见上一段的注释），
+ * 任务书明写"别把原来的 600-900 改掉"。未压缩的比压缩的长得多（base64 本身就有 4/3 的膨胀，
+ * 而压缩档压掉了一大半）⇒ 它落不进那个区间，也不该落进去。两个变体两个上界，互不冒充。
+ *
+ * ## 实测读数（G5/T40，2026-09-27）
+ *
+ * 第一轮用 `tests/ui/net-browser.test.ts` 判据 7 那段**语料**（SDP 619 字符）量：
+ * 裸载荷 934 字节 ⇒ 未压缩变体 **1250 字符**（同语料压缩档 631）。
+ * 第二轮用**真浏览器**（CDP，见 `.superpowers/g5-T40/run-cdp.txt`）量真 SDP：
+ * 未压缩变体 **1826 字符**（同一次会话的压缩档 804-826 —— 与"798-808"那个实测区间吻合）。
+ *
+ * ⚠️ 上界照**真浏览器那个数**取（**2000**，实测的 1.10 倍）：合成语料量出来的 1250 只是
+ * "这段语料有多长"的读数，拿它当上界会让真机产出的正常码被判越界。2000 留的余量是
+ * "真机候选数再多一两个 / SDP 再长一点"，同时仍然远在"这条码没法用"之外。
+ *
+ * ⚠️ 它**不是**"这条码一定好用"的保证：超过上界只说明这一条比实测的长，仍然可用
+ * （大厅那句长度读数会说清楚）。
+ */
+export const INVITE_CHARS_MAX_UNCOMPRESSED = 2000;
+
+/* ------------------------------------------------------------------ *
  * 2. 载荷形状
  * ------------------------------------------------------------------ */
 
@@ -142,6 +280,7 @@ export type InviteFields = Omit<InvitePayload, 'v'>;
 export type InviteRejectReason =
   | 'bad-base64url'
   | 'decompress-failed'
+  | 'decompress-unsupported'
   | 'bad-json'
   | 'bad-payload'
   | 'version-mismatch';
@@ -152,9 +291,11 @@ export type InviteRejectReason =
  * ★ 成功面多带一个 `proto`：明文段的协议版本与本机的比对结论（`protocolVersionCheck`）。
  * 它**不是**失败面的一部分 —— 版本不一致时邀请码本身仍然解得出（"邀请码坏了"与
  * "两端版本不一样"是两件事），提示由调用方（T8 的大厅）渲染。
+ *
+ * ★★ **G5/T40**：成功面再带一个 `format` —— "这条码用的是哪一档编码"。
  */
 export type InviteDecodeResult =
-  | { ok: true; payload: InvitePayload; proto: ProtocolVersionVerdict }
+  | { ok: true; payload: InvitePayload; proto: ProtocolVersionVerdict; format: InviteFormatRead }
   | { ok: false; reason: InviteRejectReason; message: string };
 
 /**
@@ -360,32 +501,67 @@ const TUPLE_LEN = 6;
 /** 压缩能力的形状：**同步**、把字节压成字节、解不动返回 `null`（不抛） */
 export type ByteCompressor = (raw: Uint8Array) => Uint8Array | null;
 
+/**
+ * 解码侧按**标记**分派的解压器表。
+ *
+ * 形状与 `CompressionKind` 同键：`'raw'` / `'deflate'` / `'gzip'` 各是一个"把 base64url
+ * 解成字节"的同步口；`'none'` **不进这张表**（不压缩那段自己就是 base64url，
+ * 解码时用 `base64UrlToBytes` 直接还原，不需要任何设备能力 —— 这正是"降级到不压缩"
+ * 在**任何**设备上都能解开的理由）。
+ *
+ * 缺项 = 本端没有这一档的解压能力 ⇒ 给**人话**拒绝（`decompress-unsupported`），
+ * 不是"压缩段坏了"（那是两件不同的事，玩家要做的下一步也不同）。
+ */
+export type DecompressorSet = Partial<Record<'raw' | 'deflate' | 'gzip', (b64: string) => Uint8Array | null>>;
+
 /** 编码的失败形态（**不抛**：压缩能力的缺失是常态） */
 export type InviteEncodeResult = { ok: true; payload: string } | { ok: false; reason: string; message: string };
 
 /**
- * ★ 编码：字段 →（压缩）→ 载荷串。
+ * ★ 编码：字段 →（按 `kind` 编码）→ 载荷串。
  *
- * ## 载荷的形状（`<协议版本>.<压缩段>`）
+ * ## 载荷的形状（`<协议版本>.<标记><压缩段>`）
  *
  *  - **协议版本**：明文的十进制（**不压缩**）。它要在握手第一步就被读到并比对（D13），
  *    压进压缩流里就等于"为了读一个整数先解压"；
- *  - **压缩段**：`compress(payloadBytesOf(fields))` 的 base64url —— 压缩的对象是那份
+ *  - **标记**：`''` / `u` / `d` / `g`，说的是**压缩段是用哪一种编码得到的**（`COMPRESSION_MARKERS`）。
+ *    老格式（`raw`）的标记是空串 ⇒ **`N.<base64>` 逐字不变**，向后兼容；
+ *  - **压缩段**：`compress(payloadBytesOf(fields))` 的 base64url —— 编码的对象是那份
  *    位置数组（含 `v` / `sdp` / `ice` / 两个承诺串），**只有这一段**。
  *
- * 为什么不做"压缩段 + 明文数据段"两段：那等于把同一份内容**导两遍**，实测整条载荷
- * 从约 750 涨到 1570-1755（判据 7 的上界是 900）。
+ * ## 为什么标记要进载荷（而不是让对端猜）
  *
- * ## `compress` / `decompress` 必须**同步**
+ * 各台设备的 `CompressionStream` 支持面**不一样**（用户真机事故：有一台对 `deflate-raw`
+ * 直接抛 `TypeError`）。让对端"挨个试"会把"解不开"变成一种**必然出现**的日常路径，
+ * 而试错顺序还可能与发送端不同 ⇒ 明明有解却报"压缩段坏了"。带上标记，对端一次就选对解压器。
  *
- * 真实实现在浏览器层，是异步的流 ⇒ 调用方要**先 await 出结果**，再把一个同步函数交给本函数
- * （`net-browser.ts` 的 `createInvite()` 就是这么做的）。纯层交不出 `Promise`（D15 的同一种缝法）。
- * 编码侧还要用 `decompress` 做一次**自洽检查**（"压出来的能不能解得动"）。
+ * ## `kind` 与 `decompress` 的取法（**老调用形态仍然可用**）
+ *
+ *  - `kind` 缺省 = `'raw'`（老格式，`N.<base64>`）；
+ *  - `decompress` 是**函数**时（老调用形态）：它就是**这一档**的解压器。调用方既然把 `kind`
+ *    交给了本函数，就说明它手上那个"真解一遍"的结果**就是这一档**的（`createInvite()` 就是
+ *    这么做：降级链挑出哪一档，它就把哪一档的真解压结果交进来）。
+ *    ⚠️ 这里曾经写成"函数只当 `'raw'` 用、`kind !== 'raw'` 一律 `null`" —— 那会让**降级链
+ *    每一档都失败**（实测：`deflate` 档压得出来、真也解得出，却被自洽检查判成"解不回来"，
+ *    整条邀请码生成不了）。**不为了兼容形状而牺牲正确性**：函数形态照样服务非 raw 的档。
+ *  - `decompress` 是 `{ raw, deflate, gzip }`**表**时：按 `kind` 取那一档的解压器做自洽检查。
+ *
+ * ## 自洽检查（两道）与调用方的义务
+ *
+ * 压出来的东西**必须**（a）解得动、（b）解出来还是那份载荷。它挡住的是"压缩与编码各走各的"
+ * 这一类缝。本函数同步 ⇒ 检查也只能是同步的，而真实解压是异步的 ⇒
+ * **调用方先 `await` 出"真解一遍"的结果，再把那个结果当同步口交进来**
+ * （`src/ui/net-browser.ts` 的 `createInvite()` 就是这么做的；评审 D 实测过
+ * "把同一性检查冒充解压"的写法会让这道检查恒真）。
+ *
+ * ⚠️ 当 `kind === 'none'` 时，调用方给的那个"同步解压口"应当返回**原样字节**
+ * （不压缩那段没有可解的东西）—— `createInvite()` 交的就是真解一遍的结果，不是恒真判断。
  */
 export function encodeInvite(
   fields: InviteFields,
   compress: ByteCompressor,
-  decompress: (compressed: Uint8Array) => Uint8Array | null,
+  decompress: ((compressed: Uint8Array) => Uint8Array | null) | DecompressorSet,
+  kind: CompressionKind = 'raw',
 ): InviteEncodeResult {
   if (fields.sdp.length === 0) {
     // 调用方违约（不是玩家输入）：一条没有 SDP 的邀请码收方无论如何都连不上
@@ -407,14 +583,10 @@ export function encodeInvite(
   }
   // ★ 自洽检查（两道）：压出来的东西**必须**（a）解得动、（b）解出来还是那份载荷。
   //   它挡住的是"压缩与编码各走各的"这一类缝（压的是别的内容、或者压完被截断）。
-  //   本函数同步 ⇒ 这个检查也只能是同步的。
-  //
-  //   ⚠️ **`decompress` 必须是真解压**：评审（`.superpowers/g5-T7-review/REVIEW.md` 评审 D）
-  //   实测过这一处曾经写成 `(c) => (c === compressed ? raw : null)` —— 那是同一性检查，
-  //   于是整个自洽检查**恒真**（一份真解不开的字节照样放行）。调用方
-  //   （`src/ui/net-browser.ts` 的 `createInvite()`）现在先 `await decompressBytes()` 真解一遍，
-  //   再把结果喂给这个同步口。
-  const back = decompress(compressed);
+  //   函数形态**服务所有档**（不是只服务 raw）：见上面那段说明与实测踩过的坑。
+  const back = typeof decompress === 'function'
+    ? decompress(compressed)
+    : (decompress[kind as 'raw' | 'deflate' | 'gzip']?.(bytesToBase64Url(compressed)) ?? null);
   if (back === null || back.length === 0) {
     return { ok: false, reason: 'compress-failed', message: '压缩结果解不回来（压缩这一步没有产出可用的字节）。' };
   }
@@ -426,7 +598,7 @@ export function encodeInvite(
       message: `压缩结果解出来不是一份可用的载荷（${roundTrip.reason}）：${roundTrip.message}`,
     };
   }
-  return { ok: true, payload: `${fields.p}.${bytesToBase64Url(compressed)}` };
+  return { ok: true, payload: `${fields.p}.${markerOfKind(kind)}${bytesToBase64Url(compressed)}` };
 }
 
 /** 承诺串的允许形状：非空、且不含 `.` 与换行（那两样会把载荷的分段读坏） */
@@ -555,25 +727,42 @@ export function parseInvitePayload(raw: unknown): ParsedInviteResult {
 }
 
 /**
- * **整条**解码：读明文协议版本 → 判压缩段的字符集 → 解压 → 解析位置数组。
+ * **整条**解码：读明文协议版本与压缩标记 → 判压缩段的字符集 → 解压 → 解析位置数组。
  *
- * `decompress` 的契约：把**压缩段**（base64url）解回字节；解不动就返回 `null`
- * （**不抛**：坏的输入是常态）。它是同步的 —— 真实实现（`deflate-raw` 的
- * `CompressionStream`）是异步的，所以那个实现在调用本函数**之前**就要把结果算好；
- * 拿一个没算好的结果进来属于调用方违约，由 `src/ui/net-browser.ts` 的
- * `decodeInvitePayload()` 负责给出可读的失败结果。
+ * ## 两种调用形态（老调用一字不改）
  *
- * 这个顺序（先判字符集、再解压）让判据 4 的 ① 与 ② 分得开：
- * 非法字符给 `'bad-base64url'`，字符合法但压缩流坏了给 `'decompress-failed'`。
+ *  - **老形态**：`decodeInviteText(text, (b64) => bytes|null)` —— 这个函数就是**本档**
+ *    的解压器。老载荷（`N.<base64>`，没有标记）走 `'raw'` ⇒ 老调用点与老码**逐字兼容**；
+ *  - **新形态**：`decodeInviteText(text, { raw, deflate, gzip })` —— 按压缩段的**明文标记**
+ *    挑解压器（`COMPRESSION_MARKERS`）。缺的那一档给 **`'decompress-unsupported'`**
+ *    （一句"本端没有这一档解压能力"的人话），不是"压缩段坏了" —— 那是两件不同的事。
+ *
+ * ⚠️ **函数形态不是"只给 raw 用"**：调用方把 `kind` 交过来，就说明它手上那个解压结果
+ * **就是这一档**的（`decodeInvitePayload` / 大厅的 `decodeWithFormat` 都这么做）。
+ * 曾经写成只认 `'raw'`，结果是**降级链挑出来的 `deflate` / `gzip` 档一律报"本机解不开"**
+ * （实测抓到的坑）。表形态与函数形态的区别只是"能不能一次给多档"，不是"能服务哪一档"。
+ *
+ * `'none'`（未压缩变体）**不进那张表**：不压缩那段自己就是 base64url，用 `base64UrlToBytes`
+ * 直接还原 ⇒ 任何设备都解得开（这正是降级链最后一档的意义）。
+ *
+ * ## 字符集先判还是先解压
+ *
+ * 顺序是**先判字符集、再解压**，让判据 4 的 ① 与 ② 分得开：非法字符给
+ * `'bad-base64url'`，字符合法但压缩流坏了给 `'decompress-failed'`。
  *
  * ★ **明文段的协议版本会被比对**（`protocolVersionCheck`）：不等时**不在这里拒绝**
- * （拒绝时机归 T8 的大厅），而是把结论与一句可读提示放进成功面的 `proto` 字段 ——
- * 邀请码本身是"可达性兜底"，两端版本不一致这件事在握手阶段还会被 `validateHello` 拦一次
- * （`protocol.ts:627`），所以这一层给提示而不是硬拒。
+ * （拒绝时机归 T8 的大厅），而是把结论与一句可读提示放进成功面的 `proto` 字段。
+ *
+ * ★★ **G5/T40**：成功面还带一个 `format`（用的是哪一档、标记是什么、压缩段多少字符）——
+ * 界面上"这条码是哪一档"这个读数**只能**从这里取，别在渲染层再猜一次。
  */
 export function decodeInviteText(
   text: string,
-  decompress: (b64: string) => Uint8Array | null,
+  decompress: ((b64: string) => Uint8Array | null) | DecompressorSet,
+  options?: {
+    readonly marker?: string;
+    readonly decompressors?: DecompressorSet;
+  },
 ): InviteDecodeResult {
   if (typeof text !== 'string') {
     throw new Error('decodeInviteText 收到了非字符串：这是调用方违约，不是网络输入。');
@@ -596,7 +785,7 @@ export function decodeInviteText(
     };
   }
   const protoText = text.slice(0, dot);
-  const compressed = text.slice(dot + 1);
+  const body = text.slice(dot + 1);
   const proto = Number(protoText);
   if (!/^\d+$/.test(protoText) || !Number.isSafeInteger(proto)) {
     return {
@@ -605,6 +794,23 @@ export function decodeInviteText(
       message: `邀请码开头的协议版本不是整数（收到 "${protoText}"）：这不是本程序产出的邀请码。`,
     };
   }
+  /**
+   * 压缩段的**明文标记**：第二段的第一个字符若是本程序认得的标记（`u` / `d` / `g`），
+   * 它就是"这一档编码"的说明、**不属于** base64url 正文。空标记 = 老格式（`deflate-raw`）。
+   *
+   * ⚠️ 切段只有 `readInviteSegment` 一处（见那里的注释：手写 `slice(1)` 会咬掉老格式的第一个字符）。
+   * 调用方给的 `options.marker` 优先（宿主可能在切段时自己判过形态）；没给就自己判。
+   */
+  const seg = readInviteSegment(body, options?.marker);
+  const kind = seg.kind;
+  if (kind === null) {
+    return {
+      ok: false,
+      reason: 'bad-base64url',
+      message: `邀请码的压缩段带了一个本程序不认得的编码标记（"${seg.marker}"）：这不是本程序产出的邀请码。`,
+    };
+  }
+  const compressed = seg.body;
   // **压缩段**的字符集先判：这样"非 base64url 字符"与"压缩流坏了"分得开（判据 4 的 ①②）
   if (base64UrlToBytes(compressed) === null) {
     return {
@@ -615,7 +821,37 @@ export function decodeInviteText(
         '常见原因是复制时被聊天软件截断或替换成了别的符号，请重新完整复制一次。',
     };
   }
-  const decoded = decompress(compressed);
+  const format: InviteFormatRead = { kind, marker: seg.marker, compressedChars: compressed.length };
+  /**
+   * ★ 挑解压器：`'none'` 自己解（不需要任何设备能力）；其余按表取，缺项给人话。
+   */
+  let decoded: Uint8Array | null;
+  if (kind === 'none') {
+    decoded = base64UrlToBytes(compressed);
+  } else {
+    /**
+     * ★ 函数形态**服务所有档**（不是只服务 `'raw'`）。
+     *
+     * 这里曾经写成 `kind === 'raw' ? decompress : undefined` ⇒ **降级链挑出来的每一档
+     * 都解不开**（调用方明明把 `deflate` 那一档的真解压结果交进来了，纯层却当它不存在，
+     * 报"本机没有这一档解压能力"）。实测抓到的坑：`1.-d…` 这条码在**能力齐全**的设备上
+     * 也解不开，而 `decompressBase64` 单独调是同一条字节解得开的。
+     * ⇒ 谁把 `kind` 交给了本函数，谁交的那个函数就**是**这一档的解压器。
+     */
+    const fn = typeof decompress === 'function'
+      ? decompress
+      : (decompress[kind] ?? options?.decompressors?.[kind]);
+    if (fn === undefined) {
+      return {
+        ok: false,
+        reason: 'decompress-unsupported',
+        message:
+          '这条邀请码用的是一种本机解不开的压缩方式（这条码是压缩档，而本机没有对应的解压能力）。' +
+          '请把这台设备换成较新的浏览器打开本页，或让对方在你这台设备上重新生成一条邀请码。',
+      };
+    }
+    decoded = fn(compressed);
+  }
   if (decoded === null || decoded.length === 0) {
     return {
       ok: false,
@@ -629,7 +865,20 @@ export function decodeInviteText(
   if (!r.ok) return r;
   // 协议版本来自**明文段**（压缩段里没有它，见 `payloadBytesOf` 的注释）；
   // ★ 它同时被**比对**：不等时 `proto.ok === false`（结论 + 可读提示），但不在这里拒绝
-  return { ok: true, payload: { ...r.payload, p: proto }, proto: protocolVersionCheck(proto) };
+  return { ok: true, payload: { ...r.payload, p: proto }, proto: protocolVersionCheck(proto), format };
+}
+
+/**
+ * 解码出来的"这一条码是用哪一档编码的"读数（成功面 `format` 字段；判据 ① 的界面读数靠它）。
+ *
+ *  - `kind`：`raw` / `deflate` / `gzip` / `none`（`CompressionKind`）；
+ *  - `marker`：压缩段那个明文标记（老格式是空串）；
+ *  - `compressedChars`：**去掉标记之后**的压缩段字符数（不含协议版本段与那个 `.`）。
+ */
+export interface InviteFormatRead {
+  readonly kind: CompressionKind;
+  readonly marker: string;
+  readonly compressedChars: number;
 }
 
 /* ------------------------------------------------------------------ *
@@ -770,20 +1019,28 @@ export type EndpointGate =
  *
  * ## ★ 它由**两个片段**拼成（G5/T8 修复轮：为了消掉"第二份信令说明"）
  *
- * 大厅需要把"没有配端点 ⇒ 短码走不了"与"**本程序默认不向任何服务器发请求**"这两件事
- * **分开**展示（它有一个「高级 / 连接设置」区，那两句分别落在不同位置）。修复轮之前，
- * 大厅把后者**手写**了一遍（评审 §4.2 判为 §2 第 6 条的违例：同一件事有两个家）。
+ * 大厅需要把"没有配端点 ⇒ 短码走不了"与"端点这件事默认是什么状态"这两件事**分开**展示
+ * （它有一个「高级 / 连接设置」区，那两句分别落在不同位置）。修复轮之前，大厅把后者**手写**
+ * 了一遍（评审 §4.2 判为 §2 第 6 条的违例：同一件事有两个家）。
  *
  * ⇒ 处置是把那两句提成**导出常量**，本整句由它们拼成 —— 于是：
- *  - **唯一出处还是一个**（`NO_ENDPOINT_MESSAGE` 的正文一字未变，那条既有文本腿仍然成立）；
- *  - 大厅渲染的是**这两个常量本身**，不是新写的一句（判据 1 的"引用而不是复制"照旧成立）。
+ *  - **唯一出处还是一个**（大厅渲染的是这两个常量本身，不是新写的一句）；
+ *  - 判据 1 的"引用而不是复制"照旧成立。
+ *
+ * ## ★★ G5/T38：`NO_ENDPOINT_REASON` 的正文改了（**越界改动，已如实登记**）
+ *
+ * 原句是"…而本程序默认不向任何服务器发请求。" —— **T38 起这句不再成立**：默认 ICE 就要联系
+ * `8.130.97.243` 的 STUN/TURN（`src/ui/net-browser.ts` 的 `DEFAULT_ICE_SERVERS`）。
+ * 任务书 §2 要求"凡这类句子都要按事实改"，而这句话的**唯一出处就在本文件**
+ * ⇒ 不改它就没法满足判据 4。改后说的是**端点这件事**的默认状态（仍然是真的），
+ * 不再对本程序的出网行为下一个已经不成立的断言。
  */
 export const NO_ENDPOINT_HEADLINE =
   '这台设备还没有配置信令端点，所以"输 6 位码"这条路暂时不可用：';
 
-/** "为什么短码要端点" + "默认不发请求"（大厅的「高级 / 连接设置」区单独渲染它） */
+/** "为什么短码要端点" + "默认没有信令端点"（大厅的「高级 / 连接设置」区单独渲染它） */
 export const NO_ENDPOINT_REASON =
-  '6 位房间码要经一个信令服务才能把两端对上，而本程序默认不向任何服务器发请求。';
+  '6 位房间码要经一个信令服务才能把两端对上，而本程序默认没有配置信令端点（中继是另一件事，默认已经配好）。';
 
 /** 两条可行的下一步（贴邀请码 / 去「高级 / 连接设置」填端点） */
 export const NO_ENDPOINT_NEXT_STEPS =
@@ -921,7 +1178,8 @@ export interface BuildInviteLinkInput {
 export function buildInviteLink(
   input: BuildInviteLinkInput,
   compress: ByteCompressor,
-  decompress: (compressed: Uint8Array) => Uint8Array | null,
+  decompress: ((compressed: Uint8Array) => Uint8Array | null) | DecompressorSet,
+  kind: CompressionKind = 'raw',
 ): BuiltInvite | Extract<InviteEncodeResult, { ok: false }> {
   const encoded = encodeInvite(
     {
@@ -934,6 +1192,7 @@ export function buildInviteLink(
     },
     compress,
     decompress,
+    kind,
   );
   if (!encoded.ok) return encoded;
   const payload = encoded.payload;
@@ -943,6 +1202,8 @@ export function buildInviteLink(
     link: inviteLinkOf(input.originAndPath, payload),
     chars: payload.length,
     withinMeasuredRange: payload.length >= INVITE_CHARS_MIN && payload.length <= INVITE_CHARS_MAX,
+    kind,
+    marker: markerOfKind(kind),
   };
 }
 
@@ -956,6 +1217,13 @@ export interface BuiltInvite {
   /**
    * 是否落在**实测区间**内（600 到 900）。调用方拿它给玩家一句提示，**不要**把它当成
    * "这串一定好用" —— 区间出处见 `INVITE_CHARS_MIN` 的注释。
+   *
+   * ⚠️ 它钉的**只是压缩档**：未压缩变体（`kind === 'none'`）必然为 `false`
+   * （见 `INVITE_CHARS_MAX_UNCOMPRESSED`），那不是异常，是这一档的固有长度。
    */
   readonly withinMeasuredRange: boolean;
+  /** ★ G5/T40：这条码用的是哪一档编码 */
+  readonly kind: CompressionKind;
+  /** 压缩段的明文标记（`raw` 是空串） */
+  readonly marker: string;
 }

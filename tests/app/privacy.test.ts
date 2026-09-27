@@ -104,7 +104,8 @@ const BOUNDARY_DECLARATIONS: readonly PrivacyBoundaryDeclaration[] = [
   /* ── §5.9 第 2 行"TURN 中继" ── */
   {
     id: 'relay-sees-ip',
-    text: '§5.9：中继（若启用）能看到加密流量与你的 IP（评审 N3 之前完全没有落点）',
+    text: '§5.9：中继能看到你的 IP（评审 N3 之前完全没有落点）。★ G5/T38：中继现在是**产品默认**，'
+      + '所以文案从"若你自行配置了中继"改成"默认带一台中继…中继转发时能看到你的 IP 地址"',
     group: 'signalAndRelay',
     line: 1,
     requiredText: ['中继', '端到端加密', /中继[^。]*能看到你的 IP 地址/],
@@ -377,7 +378,9 @@ const COPY_PINS: ReadonlyArray<{ group: PrivacyGroupKey; line: number; hash: str
   { group: 'offlineCacheNote', line: 1, hash: '9bcdf3506e9b4361' },
   // §5.9 第 1、2 行：信令 / 中继
   { group: 'signalAndRelay', line: 0, hash: '930ebfa765c90da0' },
-  { group: 'signalAndRelay', line: 1, hash: '4dd1a1a32afa8dfe' },
+  // ★ G5/T38 重钉：中继那句的正文改了（默认带一台中继 ⇒ 元数据看得到、内容不可读）。
+  //   改动理由与人工复核记录见 `src/app/privacy.ts` 的 `signalAndRelay` 注释。
+  { group: 'signalAndRelay', line: 1, hash: '50005fd698eadb9b' },
 ];
 
 /** `组[行号]` 的稳定键（钉住表与真实文案之间的**唯一**连接方式 —— 它不含任何文案本身） */
@@ -514,7 +517,8 @@ const MODULE_PINS: ReadonlyArray<{ key: string; hash: string }> = [
   { key: 'PRIVACY_COPY.offlineCacheNote[0]', hash: '25cc9a98f0cff4dc' },
   { key: 'PRIVACY_COPY.offlineCacheNote[1]', hash: '9bcdf3506e9b4361' },
   { key: 'PRIVACY_COPY.signalAndRelay[0]', hash: '930ebfa765c90da0' },
-  { key: 'PRIVACY_COPY.signalAndRelay[1]', hash: '4dd1a1a32afa8dfe' },
+  // ★ G5/T38 重钉（与 `COPY_PINS` 逐字相同）：中继那句改成"默认带中继 + 元数据可见/内容不可读"
+  { key: 'PRIVACY_COPY.signalAndRelay[1]', hash: '50005fd698eadb9b' },
 ];
 
 /** 钉住表的导出路径（**排序**后比较 —— 模块命名空间的键序是实现细节，不是判据） */

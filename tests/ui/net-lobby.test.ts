@@ -31,7 +31,7 @@ import {
   LOBBY_ERROR_KEYS, LOBBY_LINK_COPY, PASTE_SHAPE_HINT, copyDeniedText, copyOkText, copyTextWithStatus,
   copyUnavailableText, createLobbyClient, createLobbySessionLink,
   errorCopy,
-  errorKeyOfRejection, lobbyLinkOf, lobbyLinkText, protoOfPayload, qrNote, refusalNotice,
+  errorKeyOfRejection, inviteLengthText, lobbyLinkOf, lobbyLinkText, protoOfPayload, qrNote, refusalNotice,
   relayNoticeOf, relayStateOf, renderNetLobby,
   type LobbyClient, type LobbyErrorKey, type LobbyRenderNav, type LobbyState, type SettingKey,
 } from '../../src/ui/net-lobby';
@@ -40,9 +40,10 @@ import {
   acceptOffer, applyAnswer, candidateKindsOf, candidateTypeOf, createBrowserTransport, createInvite,
   decodeBase64Url, decodeInviteFromAddressBar, decodeInvitePayload,
   decompressBytes, describeCandidates, enoughCandidatesForInvite, inviteLengthReport, peerConnectionOf,
+  readCompressionMode,
   readIceServers, roomCodeEntry,
   stripInviteFromAddressBar, waitForIceGathering,
-  DEFAULT_ICE_GATHER_TIMEOUT_MS, ICE_HOST_ONLY_GRACE_MS, MESSAGE_CHANNEL,
+  DEFAULT_ICE_SERVERS, DEFAULT_ICE_GATHER_TIMEOUT_MS, ICE_HOST_ONLY_GRACE_MS, MESSAGE_CHANNEL,
   type NetBrowserEnv, type WebSocketLike,
 } from '../../src/ui/net-browser';
 
@@ -53,8 +54,11 @@ import type { NetTransport } from '../../src/net/transport';
 import { CARD_DATA_HASH } from '../../src/app/card-data-hash';
 import { makeFakePc } from './fake-peer-connection';
 import {
-  ANSWER_PROMISE_PLACEHOLDER, NO_ENDPOINT_HEADLINE, NO_ENDPOINT_MESSAGE, NO_ENDPOINT_REASON,
-  answerPayloadFields, inviteFragmentOf, inviteLinkOf, isAnswerPayload, roomCodeEntryReachability,
+  ANSWER_PROMISE_PLACEHOLDER, INVITE_CHARS_MAX, INVITE_CHARS_MAX_UNCOMPRESSED, NO_ENDPOINT_HEADLINE,
+  NO_ENDPOINT_MESSAGE, NO_ENDPOINT_REASON,
+  answerPayloadFields, bytesToBase64Url, inviteFragmentOf, inviteLinkOf, isAnswerPayload,
+  roomCodeEntryReachability, utf8Encode,
+  type CompressionKind,
 } from '../../src/net/invite';
 import { browserHash } from '../../src/ui/net-browser';
 
@@ -156,15 +160,48 @@ function fakeAddressBar(href: string): { loc: { href: string; hash: string }; hi
 /**
  * 压缩能力（判据 6 要用**真的** `createInvite` 与 `decodeInvitePayload`）。
  *
- * 用**真件**（`net-browser.ts` 的 `defaultEnv()` 走 `CompressionStream` / `DecompressionStream`）
+ * 用**真件**（浏览器里就是 `CompressionStream` / `DecompressionStream`，这里用的是同一对内置构造器）
  * 而不写假件：`encodeInvite` 有一道**自洽检查**（"压出来的必须解得动、且解出来还是那份载荷"），
  * 一个"异或充数"的假压缩件会当场被它拒绝（实测：`bad-json`）—— 那正说明那道检查是有牙的。
  * 真件的另一个好处：这条腿顺带证明了"邀请码在真压缩下真的能往返"。
  *
+ * ★★ **G5/T40：这里必须显式写出来，不能留空 `{}`。**
+ *
+ * 留空时走 `net-browser.ts` 的 `defaultEnv()`，而那个默认实现在**老口径**下（收到
+ * `'compress' | 'decompress'`）固定用 `deflate-raw`。T40 的降级链会**按格式名**问
+ * （`deflate-raw` / `deflate` / `gzip`），默认实现当然照格式名给流 —— 但假件不行：
+ * 老假件收到 `'gzip'` 会当成"不是 compress 就是 decompress"，于是**压 gzip、解 deflate-raw**
+ * ⇒ 每一档都解不回来 ⇒ 降级链一路退到"不压缩"，于是整条夹具生出一条 `Nu.` 长码。
+ * 那不是在测实现，是在测夹具。
+ *
+ * ⇒ 这里按**产出代码的口径**（`readCompressionMode`）真构造 `read.format` 那一档，
+ * 与 `g5-lobby-e2e.test.ts` / `net-lobby-coin-consensus.test.ts` 两个夹具逐字同款。
+ *
  * ⚠️ **确定性**：压缩算法本身确定，而这里的输入（固定的 SDP / 承诺串）逐字节固定 ⇒
  * 同一脚本跑两遍结果相同（本机 Node 22.22.2 实测）。
  */
-const REAL_ENV: NetBrowserEnv = {};
+const REAL_ENV: NetBrowserEnv = {
+  compressionStream: (mode) => {
+    const g = globalThis as unknown as {
+      CompressionStream?: new (f: string) => unknown;
+      DecompressionStream?: new (f: string) => unknown;
+      Blob?: new (parts: readonly Uint8Array[]) => { stream(): unknown };
+      Response?: new (body: unknown) => { arrayBuffer(): Promise<ArrayBuffer> };
+    };
+    const read = readCompressionMode(mode);
+    const Ctor = read.decompress ? g.DecompressionStream : g.CompressionStream;
+    const BlobCtor = g.Blob;
+    const ResponseCtor = g.Response;
+    if (Ctor === undefined || BlobCtor === undefined || ResponseCtor === undefined) return null;
+    return {
+      run: async (input: Uint8Array): Promise<Uint8Array> => {
+        const stream = new Ctor(read.format);
+        const piped = (new BlobCtor([input]).stream() as { pipeThrough(s: unknown): unknown }).pipeThrough(stream);
+        return new Uint8Array(await new ResponseCtor(piped).arrayBuffer());
+      },
+    };
+  },
+};
 
 /** 一条可用的 offer SDP（长度与真件同族；`encodeInvite` 只要求非空） */
 const OFFER_SDP = 'v=0\r\no=- 0 0 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\na=group:BUNDLE 0\r\n';
@@ -219,7 +256,14 @@ function mountLobby(initial?: Partial<LobbyState>): Harness {
       transport: 'idle',
       peer: null,
       endpoint: '',
-      ice: { servers: [], relayConfigured: false, relayIncomplete: false },
+      /**
+       * ★ T38：这里改成**产品默认读数**（`readIceServers({})`）。
+       *
+       * 旧值是一个空壳 `{servers: [], relayConfigured: false, relayIncomplete: false}` ——
+       * T38 起"默认"就是**带一台中继**，空壳会让这个夹具描述的世界与真产品不一样
+       * （判据 7 那类"展开后屏上有什么"的腿就会在假世界上下结论）。
+       */
+      ice: readIceServers({}),
       advancedOpen: false,
       relayOpen: false,
       waitExpired: null,
@@ -279,18 +323,21 @@ const REAL_HREF = 'https://x.invalid/lobby';
 
 /**
  * ★ **修复轮 A1 用的那个"宿主注入函数"**：与 `main.ts` 传给
- * `LobbyClientOptions.decompressBase64` 的**同一份实现**（`decodeBase64Url`）。
+ * `LobbyClientOptions.decompressBase64` 的**同一份实现**（`decodeBase64Url` + 真解压）。
  *
  * ⚠️ 这条腿的关键是"**用宿主给的那个注入函数**"，不是测试自造一个解压器 —— 后者会绕开
  * 产出的那条注入缝，于是"宿主传错了函数"这件事就永远测不出来（第一版 `main.ts` 传的是
  * `() => null`，那种腿照样绿）。
+ *
+ * ★ **G5/T40**：`main.ts` 那一份现在也收 `kind`（压缩段带标记，降级链可能挑出
+ * `deflate` / `gzip` 档）⇒ 本夹具**逐字同款**：不传 = `'raw'`（deflate-raw，老口径）。
  */
-async function hostDecompress(b64: string): Promise<Uint8Array | null> {
-  // 与 `main.ts` **同一份实现**：base64url 解码 + 真解压（deflate-raw）两步。
+async function hostDecompress(b64: string, kind: CompressionKind = 'raw'): Promise<Uint8Array | null> {
+  // 与 `main.ts` **同一份实现**：base64url 解码 + 按档真解压两步。
   // 只做第一步会让纯层拿到压缩态的字节 ⇒ `bad-json`（实测）。
   const raw = decodeBase64Url(b64);
   if (raw === null) return null;
-  const d = await decompressBytes(raw, REAL_ENV);
+  const d = await decompressBytes(raw, REAL_ENV, kind);
   return d.ok ? d.bytes : null;
 }
 
@@ -452,7 +499,7 @@ describe('判据 7 · 「高级 / 连接设置」默认折叠，启用后才让�
     expect(queryAllIn(h.root, 'div.net-lobby-advanced-panel').length, '展开之后面板没进 DOM').toBe(1);
   });
 
-  it('点开折叠区：**TURN 三项默认不出现**，勾上「我要用自建中继」才出现 + 配了一半时的可读提示；TURN 未填齐时**没有**那句', () => {
+  it('点开折叠区：**TURN 三项默认不出现**（要再点一下开关），收起时那一句说的是"默认已配好"', () => {
     const h = mountLobby({ role: 'guest' });
     h.render();
     click(h.root, 'button.net-lobby-advanced-toggle');
@@ -470,14 +517,25 @@ describe('判据 7 · 「高级 / 连接设置」默认折叠，启用后才让�
     // 收起时屏上留着"不用管"那一句 + 一个显式开关（不是把这一段藏起来不让人找到）
     expect(textOf(h.root), '收起时没有"不用管这一块"那句').toContain('不用管这一块');
     expect(queryAllIn(h.root, 'input.net-lobby-relay-toggle-box').length, '没有那个显式开关').toBe(1);
+    // ★ T38：收起那一句必须说**事实**（默认已经配好一台中继），不再是旧的"默认走直连 + 公共 STUN"
+    expect(textOf(h.root), '收起时那句还在说"默认走直连 + 公共 STUN"（T38 之前的世界）')
+      .toContain('默认已经配好一台中继');
     // ★ 勾上开关（`relayOpen`）⇒ 三项进 DOM（开关自己的处理函数由 `nav.toggleRelay` 接）
     h.draw((s) => ({ ...s, relayOpen: true }));
     expect(queryAllIn(h.root, 'input.net-lobby-turn-url-input').length, 'TURN URL 输入框没了').toBe(1);
     expect(queryAllIn(h.root, 'input.net-lobby-turn-user-input').length, 'TURN 用户名输入框没了').toBe(1);
     expect(queryAllIn(h.root, 'input.net-lobby-turn-cred-input').length, 'TURN 凭据输入框没了').toBe(1);
-    // ★ 反证（防"屏上永远有它"）：TURN **没填齐**时那句必须不在
+    /**
+     * ★★ **T38 的裁决变了**：这个夹具的 `ice` 现在是 `readIceServers({})`（**产品默认读数**，
+     * 带一台内置中继）⇒ 那句中继隐私说明**应该**在屏上。
+     *
+     * 旧腿这里写的是"TURN 一项都没填 ⇒ 那句必须不在"（`relayConfigured: false` 的空壳世界）。
+     * 新世界下"没填"不再等于"没有中继"，那句话正是要让玩家看见的（默认就会经中继转发）。
+     * 钉住它 = 钉住"默认路径上中继这件事对玩家是可见的"。
+     */
     const text = textOf(h.root);
-    expect(text, 'TURN 一项都没填，那句中继说明就已经在屏上了').not.toContain(PRIVACY_COPY.signalAndRelay[1]);
+    expect(text, '默认配置带中继，屏上却没有那句隐私说明（默认走中继这件事对玩家不可见）')
+      .toContain(PRIVACY_COPY.signalAndRelay[1]);
   });
 
   it('★ TURN 三项填齐 ⇒ 屏上出现 `privacy.ts:111` 那句的**完整正文**（含 ONLINE_GATE_MARK 前缀）', () => {
@@ -499,8 +557,18 @@ describe('判据 7 · 「高级 / 连接设置」默认折叠，启用后才让�
     expect(relayStateOf(half)).toBe('partial');
     expect(relayNoticeOf(half), '配了一半时给出了与"配齐"相同的那句').not.toBe(PRIVACY_COPY.signalAndRelay[1]);
     expect(relayNoticeOf(half), '配了一半时没有可读提示').not.toBeNull();
-    // 没配：什么都不说
-    expect(relayNoticeOf(readIceServers({})), '没配 TURN 时却给出了提示').toBeNull();
+    /**
+     * ★★ **T38 的裁决变了：`relayNoticeOf` 只认读数的 `relayConfigured`**。
+     *
+     * 旧腿这里写的是 `relayNoticeOf(readIceServers({}))` 必须为 `null`（"没配 TURN 时什么都不说"）。
+     * 现在 `readIceServers({})` 交的是**产品默认值**（带一台内置中继）⇒ 它当然不是 `null`，
+     * 而且**应该**给出那句隐私说明（默认就走中继，"看得到元数据、看不到内容"这件事必须让玩家看得见）。
+     * ⇒ 这条腿改成两面都钉：① 真正没有中继的读数必须什么都不说；② 默认那份读数必须说那一句。
+     */
+    const noRelayAtAll = { servers: [{ urls: ['stun:example.invalid:3478'] }], relayConfigured: false, relayIncomplete: false, relaySource: 'none', settingsAreDefault: true } as const;
+    expect(relayNoticeOf(noRelayAtAll), '这一份读数里一个中继都没有，却给出了提示').toBeNull();
+    expect(relayNoticeOf(readIceServers({})), '默认那份读数带中继，却没给出那句隐私说明')
+      .toBe(PRIVACY_COPY.signalAndRelay[1]);
   });
 
   it('D22 的文本腿：大厅两个文件里**零命中**手写的中继结论片段', () => {
@@ -548,7 +616,7 @@ describe('判据 5 · 端点为空：可读提示逐字来自唯一出处，且�
     expect(entry.ok, '夹具失败：空端点竟然给出可用').toBe(false);
     // 通过式（不是抛错）—— 说明那是一条**正常返回**的路
     if (!entry.ok) expect(entry.message).toBe(NO_ENDPOINT_MESSAGE);
-    expect(ledger.fetched, '端点为空时发生了 fetch（§8.1：默认不向任何服务器发请求）').toEqual([]);
+    expect(ledger.fetched, '端点为空时发生了 fetch（§8.1：端点为空就不该有任何网络动作）').toEqual([]);
     expect(ledger.wsUrls, '端点为空时构造了 WebSocket').toEqual([]);
     // ⚠️ 记账假件**确实接上了**：同一份假件喂给一条真网络动作必须记账 > 0
     //   （否则上面那两个 `toEqual([])` 是"假件没接上"造成的假绿）
@@ -951,7 +1019,7 @@ describe('判据 1 / 9 / 10 · 引用而不复制、不自己编区间、不自�
 function mountLobbyNavFor(_root: StubNode): LobbyRenderNav {
   const s: LobbyState = {
     role: null, sessionId: '', invite: null, joined: null, roomCodeInput: '', roomCodeGate: null,
-    transport: 'idle', peer: null, endpoint: '', ice: { servers: [], relayConfigured: false, relayIncomplete: false },
+    transport: 'idle', peer: null, endpoint: '', ice: readIceServers({}),
     advancedOpen: false, waitExpired: null, error: null, notice: null, routedIn: 0, routedOut: 0, helloSent: false, answerCode: null, answerApplied: null,
   };
   return {
@@ -1805,10 +1873,11 @@ describe('★ 修复轮 · D22 的第二份信令说明（评审 §4.2 的违例
     expect(lobby.includes('NO_ENDPOINT_REASON'), '大厅没有引用 `NO_ENDPOINT_REASON`（说明被删了而不是改成引用）')
       .toBe(true);
     expect(lobby.includes('NO_ENDPOINT_HEADLINE'), '大厅没有引用 `NO_ENDPOINT_HEADLINE`').toBe(true);
-    // ③ 反空转：那两句话确实在唯一出处里（否则上面两条是在扫不存在的串）
+    // ③ 反空转：那句话确实在唯一出处里（否则上面两条是在扫不存在的串）
+    //    ★ T38：出处里那句的正文已按新事实改过（不再断言"不向任何服务器发请求"）
     const invite = readFileSync(fileURLToPath(new URL('../../src/net/invite.ts', import.meta.url)))
       .subarray(0, 8 * 1024 * 1024).toString('utf8');
-    expect(invite.includes('本程序默认不向任何服务器发请求'), '唯一出处里没有那句话（词表过时了）').toBe(true);
+    expect(invite.includes('默认没有配置信令端点'), '唯一出处里没有那句话（词表过时了）').toBe(true);
     // ④ 整句仍然逐字可拼（`NO_ENDPOINT_MESSAGE` 的正文一字未变）
     expect(NO_ENDPOINT_HEADLINE + NO_ENDPOINT_REASON, 'HEADLINE+REASON 不再是原句的前两段')
       .toBe(NO_ENDPOINT_MESSAGE.slice(0, (NO_ENDPOINT_HEADLINE + NO_ENDPOINT_REASON).length));
@@ -1828,8 +1897,8 @@ describe('★ 修复轮 · D22 的第二份信令说明（评审 §4.2 的违例
     const text2 = textOf(h2.root);
     expect(text2.includes(NO_ENDPOINT_HEADLINE), '端点已配置却还说"还没有配置信令端点"').toBe(false);
     expect(text2, '端点配好了却没把它显示出来').toContain('wss://x.invalid');
-    // 而"默认不发请求"那半句**两种情况都在**（它说的是本程序的设计，不是当前配置）
-    expect(text2, '端点配好之后少了"默认不向任何服务器发请求"那句').toContain(NO_ENDPOINT_REASON);
+    // 而"端点默认状态"那半句**两种情况都在**（它说的是端点这件事的设计，不是当前配置）
+    expect(text2, '端点配好之后少了"默认没有配置信令端点"那半句').toContain(NO_ENDPOINT_REASON);
   });
 });
 
@@ -2309,9 +2378,30 @@ describe('★ 修复轮 B2 · 等 ICE 收集的**上界**（唯一失败形态�
   const HOST_C = 'a=candidate:1 1 udp 1 127.0.0.1 5000 typ host\r\n';
   const SRFLX_C = 'a=candidate:2 1 udp 1 203.0.113.7 6100 typ srflx raddr 10.0.0.9 rport 6000\r\n';
   const RELAY_C = 'a=candidate:3 1 udp 1 198.51.100.7 6200 typ relay raddr 203.0.113.7 rport 6100\r\n';
-  /** 配齐三项 TURN 的设置（`readIceServers` 会判 `relayConfigured: true`） */
+  /** 配齐三项 TURN 的设置（`readIceServers` 会按玩家给的写） */
   const TURN_SETTINGS = (): { turnUrl: string; turnUsername: string; turnCredential: string } =>
     ({ turnUrl: 'turn:x.invalid:3478', turnUsername: 'u', turnCredential: 'c' });
+  /**
+   * ★ T38：**大厅预填的那三项**（= 产品默认值）。从 `DEFAULT_ICE_SERVERS` 里取，
+   * 不在这里抄一份字面量 —— 这一条腿要证的正是"预填成默认值之后仍然早退"。
+   */
+  const DEFAULT_TURN_SETTINGS: { turnUrl: string; turnUsername: string; turnCredential: string } = (() => {
+    const relay = DEFAULT_ICE_SERVERS.find((s) => s.urls.some((u) => u.startsWith('turn:')));
+    return {
+      turnUrl: relay?.urls.find((u) => u.startsWith('turn:')) ?? '',
+      turnUsername: relay?.username ?? '',
+      turnCredential: relay?.credential ?? '',
+    };
+  })();
+  /**
+   * ★ T38：**"这一份配置里读不出可用中继"**的设置 —— 玩家只填了 URL、凭据不齐。
+   *
+   * 为什么不写成"三项都空"：三项都空时 `readIceServers()` 交的是**带内置中继的默认值**
+   * （`relayConfigured: true`），那走的是"等 relay"那一档。产品里唯一能让
+   * `relayConfigured` 为 `false` 的形状就是"玩家只填了一半"。
+   */
+  const PARTIAL_RELAY_SETTINGS = (): { turnUrl: string; turnUsername: string; turnCredential: string } =>
+    ({ turnUrl: 'turn:partial.invalid:3478', turnUsername: '', turnCredential: '' });
 
   it('★★ T18①：`enoughCandidatesForInvite` 只认"host ≥ 1 且（srflx 或 relay）"；配了中继时只认 relay', () => {
     const host = 'candidate:1 1 udp 1 127.0.0.1 5000 typ host';
@@ -2332,13 +2422,29 @@ describe('★ 修复轮 B2 · 等 ICE 收集的**上界**（唯一失败形态�
     expect(enoughCandidatesForInvite([host, relay], true), 'host + relay（配了中继）不算够用').toBe(true);
   });
 
-  it('★★ T18①：本机候选 + srflx 都在描述里 ⇒ **立刻**收工（不排计时器）+ 一句可读的 `stoppedEarly`', async () => {
+  it('★★ T18①：本机候选 + srflx 都在描述里、且玩家那只填了一半 ⇒ 立刻收工（不排计时器）', async () => {
+    /**
+     * ⚠️ T38：这一条测的是**"这份配置里没有可用的中继"**那一档（`enoughCandidatesForInvite`
+     * 的 `relayConfigured === false` 半边）。产品里现在**只有一种**形状能走到它：
+     * 玩家只填了 URL / 凭据不齐 —— 那一支**不换上**玩家那项，`relayConfigured` 报 `false`
+     * （默认那台内置中继仍然在 `iceServers` 里，所以严格档被叫醒的判据不成立）。
+     * "有中继时必须等 relay 到手"那一档由下面那条 T38 腿覆盖。
+     */
     const clk = ticker();
     const { pc } = makeFakePc({
       iceGatheringState: 'gathering',
       localSdp: `v=0\r\n${HOST_C}${SRFLX_C}`,
     });
-    const r = await waitForIceGathering(pc as never, { ticker: clk.t, iceGatherTimeoutMs: 1_234 });
+    expect(enoughCandidatesForInvite([
+      'candidate:1 1 udp 1 127.0.0.1 5000 typ host',
+      'candidate:2 1 udp 1 203.0.113.7 6100 typ srflx raddr 10.0.0.9 rport 6000',
+    ], false), '没有可用中继时 host + srflx 应当算够用').toBe(true);
+    const r = await waitForIceGathering(pc as never, {
+      ticker: clk.t,
+      iceGatherTimeoutMs: 1_234,
+      // 玩家的中继只填了一半 ⇒ 这一份里读不出"有中继"（见上面那段说明）
+      settings: () => ({ turnUrl: 'turn:partial.invalid:3478' }),
+    });
     expect(r.ok, `够用了却失败了：${r.ok ? '' : r.message}`).toBe(true);
     if (r.ok) {
       // 它**没到**上界 ⇒ 不许标成"到点放行"，但**必须**能被下游认出来是早退
@@ -2349,6 +2455,54 @@ describe('★ 修复轮 B2 · 等 ICE 收集的**上界**（唯一失败形态�
     }
     expect(clk.scheduled(), '够用了还排了上界计时器（那就是"又等十几秒"的来源）').toEqual([]);
     expect(clk.cancelled(), '够用了还取消了一个不存在的计时器').toEqual([]);
+  });
+
+  it('★★ T38：默认那台内置中继**同样**要求 relay 到手才收工；relay 一到就立刻收工', async () => {
+    /**
+     * ## 为什么这条腿的方向是"**不许早退**"（T38 真浏览器读数逼出来的）
+     *
+     * 我第一版按"只有玩家自己改过才算有中继"来分档，理由是"默认档早退更快"。
+     * 真浏览器读数把它否掉了：默认路径上 77ms 就收工，**邀请码里只有 host + srflx**，
+     * 一条 relay 都没有 ⇒ "直连打不通时经中继转发"在默认路径上**不存在**。
+     * 用户 2026-09-25 的原话就是"连接不上时走这个服务器" ⇒ 这一档必须等 relay。
+     *
+     * 代价实测只有 155-164ms（relay 到手那一刻，见 `.superpowers/g5-T38/t38-ice-probe.json`）。
+     * 下面同时钉住另一半：**relay 到手就立刻收工**（不是死等 15 秒上界）。
+     */
+    // ① 默认配置（不给 settings ⇒ `readIceServers(null)` 交的就是带内置中继的默认值）：
+    //    srflx 到手 **不许**早退
+    const clk = clock();
+    const f = candPc(`v=0\r\n${HOST_C}`);
+    const p = waitForIceGathering(f.pc as never, { ticker: clk.t, iceGatherTimeoutMs: 9_999 });
+    f.setSdp(`v=0\r\n${HOST_C}${SRFLX_C}`);
+    f.fire('icecandidate');
+    expect(await Promise.race([p.then(() => 'settled'), Promise.resolve('pending')]),
+      '默认配置（带内置中继）在 srflx 到手时就早退了 —— 那条邀请码里不会有 relay 候选').toBe('pending');
+    expect(clk.ms, '默认配置下没有排上界').toEqual([9_999]);
+    // ② relay 到手 ⇒ 立刻收工（`stoppedEarly`，且 note 说的是"中继地址"）
+    const clk2 = clock();
+    const g = candPc(`v=0\r\n${HOST_C}`);
+    const p2 = waitForIceGathering(g.pc as never, { ticker: clk2.t, iceGatherTimeoutMs: 9_999 });
+    g.setSdp(`v=0\r\n${HOST_C}${RELAY_C}`);
+    g.fire('icecandidate');
+    const r2 = await p2;
+    expect(r2.ok, `relay 到手却没收工：${r2.ok ? '' : r2.message}`).toBe(true);
+    if (r2.ok) {
+      expect(r2.stoppedEarly, 'relay 到手了却没被标成早退').toBe(true);
+      expect(r2.note ?? '', 'relay 到手那句 note 没说中继').toContain('中继地址');
+      expect(r2.ice.some((c) => c.includes('typ relay')), '收工那一刻的候选里没有 relay（等于没收工）').toBe(true);
+    }
+    // ③ 三项预填成默认值（**真产品走的就是这一条**）⇒ 行为与 ① 一致：仍然等 relay
+    const clk3 = clock();
+    const h = candPc(`v=0\r\n${HOST_C}`);
+    const p3 = waitForIceGathering(h.pc as never, {
+      ticker: clk3.t, iceGatherTimeoutMs: 9_999, settings: () => ({ ...DEFAULT_TURN_SETTINGS }),
+    });
+    h.setSdp(`v=0\r\n${HOST_C}${SRFLX_C}`);
+    h.fire('icecandidate');
+    expect(await Promise.race([p3.then(() => 'settled'), Promise.resolve('pending')]),
+      '大厅预填成默认值之后 srflx 一到就早退了（真要出邀请码时就会丢掉中继）').toBe('pending');
+    expect(clk3.ms, '预填成默认值之后没有排上界').toEqual([9_999]);
   });
 
   it('★★ T18②：配了中继、relay **还没到手** ⇒ 不许收工（到点才放行 + 补一句）；host+relay 才收工', async () => {
@@ -2397,10 +2551,17 @@ describe('★ 修复轮 B2 · 等 ICE 收集的**上界**（唯一失败形态�
     expect(r3.ok && r3.stoppedEarly, '没配中继时 host + relay 也该收工').toBe(true);
   });
 
-  it('★★ T18③：只有 host（没配中继）⇒ 1.5 秒宽限后放行 + 如实 `note`（不等满上界）', async () => {
+  it('★★ T18③：只有 host、且这份配置读不出可用中继 ⇒ 1.5 秒宽限后放行 + 如实 `note`', async () => {
+    /**
+     * ⚠️ T38：与上一条同源 —— "读不出可用中继"在产品里只剩"玩家只填了一半"这一种形状
+     * （默认那台内置中继仍然在 `iceServers` 里，但 `relayConfigured` 报 `false`）。
+     * 这条腿测的是**宽限档**（只有 host 时给 1.5 秒），它按定义只在没有可用中继时排。
+     */
     const clk = clock();
     const f = candPc(`v=0\r\n${HOST_C}`);
-    const p = waitForIceGathering(f.pc as never, { ticker: clk.t, iceGatherTimeoutMs: 9_999 });
+    const p = waitForIceGathering(f.pc as never, {
+      ticker: clk.t, iceGatherTimeoutMs: 9_999, settings: () => ({ turnUrl: 'turn:partial.invalid:3478' }),
+    });
     expect(clk.ms, '这一刻只该排上界').toEqual([9_999]);
     f.fire('icecandidate');
     expect(clk.ms, `只有 host 时没有起宽限（排的是 ${JSON.stringify(clk.ms)}）`)
@@ -3232,5 +3393,239 @@ describe('★★ G5/T17 · 粘贴框先判形态：整条链接、`#invite=` 片
     // 本仓纪律：任何玩家可见文本不许带表情符号
     expect(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(PASTE_SHAPE_HINT), '那句提示里带了表情符号')
       .toBe(false);
+  });
+});
+
+/* ==================================================================== *
+ * ★★ G5/T40：大厅按**压缩标记**选解压器（老格式 / 未压缩 / deflate / gzip）
+ *
+ * 事故原文（用户 2026-09-27）：一台设备上 `deflate-raw` 构造就抛 ⇒ 邀请码没生成出来；
+ * 加入方粘了码之后是"压缩段解不开"。修法：生成侧走降级链并把"用的哪一种"写进载荷，
+ * 收码侧按那个标记挑解压器。
+ *
+ * 这一节钉的是**收码侧**（`decodeWithFormat`：本文件里那条"按标记挑解压器"的路）：
+ *   ① 未压缩那一档（`-u`）**必须**解得开（它不需要任何设备能力 —— 宿主那个注入口
+ *      会先 base64 解码再走 deflate-raw，对它是必失败的一条路，所以本地那一支必须接上）；
+ *   ② 老格式（没有标记）仍走老路（回归）；
+ *   ③ 宿主那个注入口拿到的 `kind` 是对的（deflate 档不能被当成 raw 去解）。
+ * ==================================================================== */
+
+describe('★★ G5/T40：收码侧按压缩标记选解压器', () => {
+  /** 造一条指定档位的邀请码（用**真**压缩件，只把档位换掉） */
+  async function inviteOfKind(kind: 'raw' | 'deflate' | 'gzip' | 'none') {
+    const fields = {
+      p: PROTO_VERSION,
+      originAndPath: 'https://x.invalid/lobby',
+      sdp: OFFER_SDP,
+      ice: ['candidate:1 1 udp 1 127.0.0.1 1 typ host'],
+      sessionId: 'sid-00000000000000000000000000000000',
+      hostPromise: 'host-promise-x',
+      guestPromise: 'guest-promise-x',
+    };
+    if (kind === 'none') {
+      // 未压缩：把三档都打成"不可用"（真构造那一刻抛），降级链就落到最后一档
+      const noZip: NetBrowserEnv = {
+        compressionStream: () => ({
+          run: async () => {
+            throw new TypeError("Failed to construct 'CompressionStream': Unsupported compression format: 'deflate-raw'");
+          },
+        }),
+      };
+      const made = await createInvite(fields, noZip);
+      expect(made.ok, `未压缩档没造出来：${made.ok ? '' : made.message}`).toBe(true);
+      if (!made.ok) throw new Error('unreachable');
+      expect(made.format, '三档全废时没有落到未压缩档').toBe('none');
+      return made.payload;
+    }
+    // 其余档：让降级链从前面几档都失败，落到目标那一档
+    const kill: readonly string[] = kind === 'raw' ? [] : kind === 'deflate' ? ['deflate-raw'] : ['deflate-raw', 'deflate'];
+    const env: NetBrowserEnv = {
+      compressionStream: (mode) => {
+        const read = readCompressionMode(mode);
+        if (kill.includes(read.format)) {
+          return {
+            run: async () => {
+              throw new TypeError(`Failed to construct 'CompressionStream': Unsupported compression format: '${read.format}'`);
+            },
+          };
+        }
+        return REAL_ENV.compressionStream?.(mode) ?? null;
+      },
+    };
+    const made = await createInvite(fields, env);
+    expect(made.ok, `${kind} 档没造出来：${made.ok ? '' : made.message}`).toBe(true);
+    if (!made.ok) throw new Error('unreachable');
+    expect(made.format, `落到的不是 ${kind} 档`).toBe(kind);
+    return made.payload;
+  }
+
+  it('★ 未压缩档（`-u`）：大厅必须解得开 —— 它不需要任何设备能力', async () => {
+    const payload = await inviteOfKind('none');
+    expect(payload.startsWith(`${PROTO_VERSION}.-u`), `未压缩档的标记不对：${payload.slice(0, 8)}`).toBe(true);
+    // 宿主那个注入口照 `main.ts` 的老口径写（**先 base64 解码、再走 deflate-raw**）
+    // ⇒ 它对未压缩那一段必然返回 null；解得开只能靠本文件那条本地支路。
+    const { client } = makeGuestClient();
+    await client.joinWithInvite(payload);
+    const joined = client.state().joined;
+    expect(joined?.ok, `未压缩档的码解不开：${joined?.ok === false ? joined.message : '（没有结论）'}`).toBe(true);
+    if (joined?.ok === true) {
+      expect(joined.payload.sessionId).toBe('sid-00000000000000000000000000000000');
+      expect(joined.payload.sdp).toBe(OFFER_SDP);
+    }
+  });
+
+  it('★ deflate 档（`-d`）：大厅把**那一档**交给宿主（不是当成 raw 去解）', async () => {
+    const payload = await inviteOfKind('deflate');
+    expect(payload.startsWith(`${PROTO_VERSION}.-d`)).toBe(true);
+    const kinds: Array<string | undefined> = [];
+    const { client } = makeGuestClient({
+      // 记账：宿主那个注入口收到的 `kind` 与内容
+      decompressBase64: async (b64: string, kind?: string) => {
+        kinds.push(kind);
+        // ★ 必须把 `kind` 转下去（宿主那一份的契约就是"按档解压"）
+        return hostDecompress(b64, (kind ?? 'raw') as CompressionKind);
+      },
+    });
+    await client.joinWithInvite(payload);
+    const joined = client.state().joined;
+    expect(joined?.ok, `deflate 档的码解不开：${joined?.ok === false ? joined.message : '（没有结论）'}`).toBe(true);
+    expect(kinds, '宿主那个口收到的档位不是 deflate').toEqual(['deflate']);
+    if (joined?.ok === true) expect(joined.payload.sdp).toBe(OFFER_SDP);
+  });
+
+  it('★ 老格式（没有标记）回归：仍走老路解得开', async () => {
+    const payload = await inviteOfKind('raw');
+    // T40 起生成侧会**显式**写 `-r`；把标记去掉就是老格式（老码的形状）
+    const legacy = `${payload.slice(0, payload.indexOf('.') + 1)}${payload.slice(payload.indexOf('.') + 3)}`;
+    expect(legacy.includes('.-'), '夹具坏：去掉标记之后仍然带标记').toBe(false);
+    const { client } = makeGuestClient();
+    await client.joinWithInvite(legacy);
+    const joined = client.state().joined;
+    expect(joined?.ok, `老格式的码解不开了（向后兼容的破口）：${joined?.ok === false ? joined.message : '（没有结论）'}`).toBe(true);
+    if (joined?.ok === true) expect(joined.payload.sdp).toBe(OFFER_SDP);
+  });
+});
+
+/* ==================================================================== *
+ * ★★ G5/T40：回示码跟**邀请码那一档**走（`buildAnswer` 的第二个入参）
+ *
+ * 真浏览器门实测抓到的**跨机**缺陷：房主那台 `deflate-raw` 坏掉 ⇒ 它出 `-d` 码；
+ * 加入方那台好着 ⇒ 它按自己的能力产回示码、落在 `-r` ⇒ **房主解不开自己那一局的回示码**。
+ * 这一节钉的是大厅那一半：解出邀请码时把它的档位**记下来**，产回示码时**传下去**。
+ * ==================================================================== */
+
+describe('★★ G5/T40：回示码跟邀请码同一档', () => {
+  /** 造一条指定档位的邀请码（真压缩件，只换档位） */
+  async function inviteOfKind(kind: 'raw' | 'deflate' | 'none'): Promise<string> {
+    const fields = {
+      p: PROTO_VERSION,
+      originAndPath: 'https://x.invalid/lobby',
+      sdp: OFFER_SDP,
+      ice: ['candidate:1 1 udp 1 127.0.0.1 1 typ host'],
+      sessionId: 'sid-00000000000000000000000000000000',
+      hostPromise: 'host-promise-x',
+      guestPromise: 'guest-promise-x',
+    };
+    const made = await createInvite(
+      kind === 'raw' ? fields : { ...fields, preferKind: kind },
+      REAL_ENV,
+    );
+    expect(made.ok, `夹具：${kind} 档的邀请码没造出来（${made.ok ? '' : made.message}）`).toBe(true);
+    if (!made.ok) throw new Error('unreachable');
+    expect(made.format, `夹具：落到的不是 ${kind} 档`).toBe(kind);
+    return made.payload;
+  }
+
+  it('★ 解出 `-d` 邀请码 ⇒ 产回示码时把 `deflate` 传下去（房主才解得开）', async () => {
+    const payload = await inviteOfKind('deflate');
+    // 真 buildAnswer 会走浏览器 API 序列（那条由 `main.ts` 与 T9 覆盖）⇒ 这里只验"传下来的档位"
+    const got: Array<CompressionKind | null> = [];
+    const { client } = makeGuestClient({
+      buildAnswer: async (_offer: { sdp: string; ice: readonly string[] }, kind: CompressionKind | null) => {
+        got.push(kind);
+        return { ok: true as const, code: 'answer-not-a-promise' };
+      },
+    });
+    await client.joinWithInvite(payload);
+    expect(client.state().joined?.ok, '邀请码没解出来').toBe(true);
+    expect(client.state().answerFormat, '解出邀请码之后没有记下它的档位').toBe('deflate');
+    expect(await client.makeAnswer(), '产回示码失败').toBe(true);
+    expect(got, `产回示码时传下去的档位不是 deflate：${JSON.stringify(got)}`).toEqual(['deflate']);
+  });
+
+  it('★ 未压缩档（`-u`）⇒ 传下去的是 `none`', async () => {
+    const payload = await inviteOfKind('none');
+    const got: Array<CompressionKind | null> = [];
+    const { client } = makeGuestClient({
+      buildAnswer: async (_offer: { sdp: string; ice: readonly string[] }, kind: CompressionKind | null) => {
+        got.push(kind);
+        return { ok: true as const, code: 'answer-not-a-promise' };
+      },
+    });
+    await client.joinWithInvite(payload);
+    expect(await client.makeAnswer()).toBe(true);
+    expect(got).toEqual(['none']);
+  });
+
+  it('★ 还没解出邀请码时 `answerFormat` 是 `null`（不是猜一个）', () => {
+    const { client } = makeGuestClient();
+    expect(client.state().answerFormat ?? null).toBeNull();
+  });
+});
+
+/* ==================================================================== *
+ * ★★ G5/T40 收尾（评审点名的第 2 处）：屏上那句长度读数按**档位**说
+ *
+ * 修复前 `inviteLengthReport` 恒按 600-900 判 ⇒ 一条 1826 字符的 `-u` 码（**最老内核唯一
+ * 能用**的那一档）在屏上被说成"不在实测区间内…可能被截断"。这一节钉两件事：
+ *   ① 区间由 `inviteLengthReport` 按标记选（未压缩档用它自己的上界）；
+ *   ② 那句话用的是"**这一档**的实测区间"，且正常 `-u` 码落进"落在…区间内"那一支。
+ * 组装方式与 `src/main.ts:2248` 逐字同款（`inviteLengthText(r.chars, r.withinMeasuredRange)`）。
+ * ==================================================================== */
+
+describe('★★ G5/T40 收尾：长度读数按档位判（`-u` 码不再被说成"可能被截断"）', () => {
+  /** 与 `main.ts` 那句逐字同款的组装 */
+  const screenTextOf = (payload: string): string => {
+    const r = inviteLengthReport(payload);
+    return inviteLengthText(r.chars, r.withinMeasuredRange);
+  };
+
+  it('★ 正常 `-u` 码（真机那一档的 1800 字符上下）⇒ 屏上读数**不含**那句吓人的提醒', () => {
+    /**
+     * ⚠️ 语料要让这条码落在 **(900, 2000]** 这个区间里：低于 900 则旧实现也会说"落在区间内"
+     * （这条腿就没有牙），高于 2000 则**新实现自己也该**提醒（那是真的越界，不是这条腿要证的）。
+     * 29 行候选 ≈ 1700 字符，与真机那一档（1826）同一量级。实测踩过两次：14 行只有 832、
+     * 36 行到 2123，两种都让这条腿失去判别力。
+     */
+    const longSdp = `v=0\r\n${'a=candidate:1 1 udp 1 127.0.0.1 1 typ host\r\n'.repeat(29)}`;
+    const payload = `${PROTO_VERSION}.-u${bytesToBase64Url(utf8Encode(longSdp))}`;
+    expect(payload.length, `这条腿的载荷只有 ${payload.length} 字符 —— 没超过 900，失去判别力`)
+      .toBeGreaterThan(INVITE_CHARS_MAX);
+    expect(payload.length, `这条腿的载荷 ${payload.length} 字符越过了未压缩上界 —— 那样它就真该提醒了`)
+      .toBeLessThanOrEqual(INVITE_CHARS_MAX_UNCOMPRESSED);
+    const text = screenTextOf(payload);
+    // ⚠️ 断言用的子串必须**逐字**取自那句提醒（写成"可能被截断"会恒真 —— 实测踩过）
+    expect(text, `未压缩码被说成"会被聊天工具截断"：${text}`).not.toContain('可能被某些聊天工具截断');
+    expect(text, '没有说出"落在这一档的实测区间内"').toContain('这一档的实测区间内');
+    expect(text, '读数里没有字符数').toMatch(/\d+ 个字符/);
+  });
+
+  it('★ 压缩档的读数一字未松：`-r` 正常码仍说"落在…区间内"，超长码仍说那句话', () => {
+    const ok = screenTextOf(`${PROTO_VERSION}.-r${'A'.repeat(700)}`);
+    expect(ok).toContain('这一档的实测区间内');
+    expect(ok).not.toContain('可能被某些聊天工具截断');
+    const tooLong = screenTextOf(`${PROTO_VERSION}.-r${'A'.repeat(1200)}`);
+    expect(tooLong, '压缩档超长码没有被提醒').toContain('可能被某些聊天工具截断');
+  });
+
+  it('★ 反证：区间确实按标记分流（同长度、不同标记 ⇒ 结论相反）', () => {
+    // 长度落在 600-900 之外一点点、但在未压缩上界之内 ⇒ 只有 `-u` 那一档能是"落在区间内"
+    const body = 'A'.repeat(1000);
+    const none = inviteLengthReport(`${PROTO_VERSION}.-u${body}`);
+    const raw = inviteLengthReport(`${PROTO_VERSION}.-r${body}`);
+    expect(none.max).toBe(INVITE_CHARS_MAX_UNCOMPRESSED);
+    expect(raw.max).toBe(INVITE_CHARS_MAX);
+    expect(none.withinMeasuredRange, '未压缩档应当收下这条长度').toBe(true);
+    expect(raw.withinMeasuredRange, '压缩档不应当收下这条长度').toBe(false);
   });
 });

@@ -93,11 +93,12 @@ const cleanRules = (css: string): CssRule[] => cssRules(css).filter((r) => {
  * | `styles-replay.css` | `main.ts:10`（G4 新增） | 只带 `.replay-*` 前缀类（重放页控制条与只读遮罩） |
  * | `styles-net-lobby.css` | `main.ts`（**G5/T8 新增**，import 排在 `styles-net.css` 之后） | 只带 `.net-lobby-*` 前缀类（联机大厅：建房 / 加入 / 连接设置）。两条理由：① 那条腿解算的两条链只关心 `.board` / `.board-grid` / `.player-strip` / `.hand` / `.card` / `.net-*` / `.smoke-puff` / `.scan-overlay` 这一族，而本表的每条选择器都带 `net-lobby-` 前缀类，两者不可能相交；② 大厅是**独立屏**（`renderNetLobby` 自己清 root），与棋盘节点**不同时**在屏上 |
  * | `styles-library-filter.css` | `main.ts`（**G5/T24 新增**，import 紧挨 `styles-net-lobby.css`） | 按规则数 28 条（T24 第二个修复轮给展示框补高度上限 + 矮视口松 `min-height`，多出两条规则块；G5 T29 追加窄屏单列覆盖块，多出 4 条：`.library-layout` / `.library-list` / `.library-preview` / `.library-preview-hint`），其中 21 条带 `.lib-effect*` 前缀、7 条不带（两处 `.library-layout > .library-preview`：一处补右列列位 + 高度上限、一处矮视口松 `min-height`；`.library-list .lib-card img` 给卡图占位；T29 那 4 条窄屏覆盖；逐字输出见 `.superpowers/g5-T29/css-selectors.txt`，T24 那段历史读数见 `.superpowers/g5-T24/fix2-css-selectors.txt`）——**例外选择器只命中图鉴页的容器/卡图**。两条理由：① 那条腿解算的两条链只关心 `.board` / `.board-grid` / `.player-strip` / `.hand` / `.card` / `.net-*` / `.smoke-puff` / `.scan-overlay` 这一族，而本表的目标节点是 `.lib-effect*` / `.library-layout` / `.library-list`，两者不可能相交（`.lib-card` 与棋盘 `.card` 是两个不同的类）；② 图鉴是**独立屏**（`renderLibrary` 自己清 root），与棋盘节点**不同时**在屏上 |
+ * | `styles-touch.css` | `main.ts`（**G5/T39 新增**，import 排在最后一位，见那张表里的"必须最后"理由） | 它**确实会命中棋盘节点**（`.hand-shield` / `.card` / `.draft-card` 三族）—— 所以"不可能命中"这句对它是**假的**，排除的真实理由是另外三条：① 三条命中棋盘节点的规则只写 `touch-action` / `-webkit-touch-callout` / `user-select` 三类属性，而本模型的解算面是 `animation-name` / `transform` / `grid-*` / `width` / `height` / `padding` / `overflow-*` / `align-*` / `position` / `aspect-ratio` / `min-width` 那一族（全仓 `subjectPropOf(` / `cssVarOf(` 的**实参逐条核过**，无一条解算这三类属性）；② 旋转那条规则的选择器是 `html.t39-rot90 #app`，**含 ID**，而本文件的解算器遇到含 ID 的命中规则**直接抛错**（`net-css-parse.ts` 的"解析器前提守卫"）⇒ 收进模型只会制造假红；③ 门与旋转的其余规则只作用于 `.t39-gate*` 与 `<html>` 上的类，不是棋盘节点 |
  */
 const CASCADE_SOURCES = ['styles.css', 'styles-gen3.css', 'styles-gen3-sync.css', 'styles-net.css'] as const;
 const EXCLUDED_SOURCES = [
   'styles-gen3-cards.css', 'styles-local.css', 'styles-replay.css', 'styles-net-lobby.css',
-  'styles-library-filter.css',
+  'styles-library-filter.css', 'styles-touch.css',
 ] as const;
 /** 表名 → 表体（只给收进模型的那四张；`CASCADE` 由它按源序拼出来，避免"文档与代码两处各写一份"） */
 const SRC_OF: Record<string, string> = {

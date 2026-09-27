@@ -16,13 +16,14 @@
  *  2. **结构腿按 T12 的新数字**：剥注释后 `driver.submit(` 恰 9 处（8 类动作 + 1 处重排；
  *     T12 加的那一处是 `cb.onDraftPick`，理由见第 5 条腿）、`renderApp(root, state, cb)` 恰 1 处、
  *     `renderMode = 'hotseat'` 恰 2 处、`rerender` 里 `renderMode === 'replay'` 恰 1 处；
- *  3. ★ **实现顺序约束**：新入口排在 `startNetPreview` **之前**（D24；见 `net-preview-wiring.test.ts:210-213`）；
+ *  3. ★ **实现顺序约束**：新入口排在 `startNetPreview` **之前**（D24；G5/T41 起那条腿的锚点
+ *     已换成花括号配平的箭头函数体，见第 2 条里的说明）；
  *  4. 大厅符号**没有**溢进 `cb` / `applyRearrangeSwap` / `runAutoAdvance` 三个函数体。
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { stripComments, functionBody, objectBody } from './source-text';
+import { stripComments, functionBody, objectBody, braceBlock } from './source-text';
 
 const MAIN = stripComments(
   readFileSync(fileURLToPath(new URL('../../src/main.ts', import.meta.url)))
@@ -66,17 +67,36 @@ describe('G5 T8 · main.ts 的四处最小侵入', () => {
     const iPreview = mode.indexOf('startNetPreview:');
     expect(iLobby, '找不到 startNetLobby: 的键（入口写法变了？）').toBeGreaterThanOrEqual(0);
     expect(iPreview, '找不到 startNetPreview: 的键').toBeGreaterThanOrEqual(0);
-    // ★ 这条就是 D24 那条实现顺序约束：`net-preview-wiring.test.ts:210-213` 用
-    //   `mode.slice(mode.indexOf('startNetPreview:'))` 切片 ⇒ 排在后面会让那段切片被新入口满足。
+    /**
+     * ★ 这条就是 D24 那条实现顺序约束。
+     *
+     * **G5/T41 的成组改动（改的是理由，不是松紧）**：原先它存在的唯一理由是"顺序会决定
+     * `net-preview-wiring.test.ts` 那条 `mode.slice(mode.indexOf('startNetPreview:'))` 切片有多长"
+     * —— 排在后面的新入口会被切进"预览那一段"，于是那条腿可能被新入口里的字符串满足（失焦）。
+     * G5/T41 把那条腿的锚点换成**花括号配平的 `startNetPreview` 箭头函数体**
+     * （`source-text.ts` 的 `braceBlock`），切片**不可能**再被后面的东西拉长 ⇒ 失焦风险从根上没了。
+     *
+     * 顺序约束**保留**，理由换成现在仍然成立的那一条：`showModeSelect` 的 nav 键顺序与
+     * `home.ts` 里**源码层面**的模式卡顺序（热坐 → 联机 → 预览）一致 —— 读代码 / 改卡片顺序时
+     * 不用两头跳。（那张预览卡只在**开发者路径**下才会被建出来：`dev=false` 时普通玩家的清单是
+     * 「热坐 → 联机 → 单人 → 三人」，所以这里的"卡顺序"说的是源码位置，不是玩家看到的清单。）
+     * 断言**没有放松**：`iLobby < iPreview` 仍逐字保留，且新增一条"预览那一段里不含联机符号"
+     * 的**结构化**下界（比原来那条靠切片长度的间接证据更硬）。
+     */
     expect(
       iLobby,
-      'startNetLobby 排在 startNetPreview **之后**：net-preview-wiring.test.ts:210-213 的 indexOf 切片'
-      + '会被拉长到含新入口 ⇒ 它仍绿，但测的已经不是原来那件事（失焦）',
+      'startNetLobby 排在 startNetPreview **之后**：nav 键顺序与 home.ts 源码里的模式卡顺序'
+      + '（热坐 → 联机 → 预览）不一致',
     ).toBeLessThan(iPreview);
-    // 顺序约束的**外部自证**：把切片照那条腿的写法真的切一遍，切片里不许出现新入口的符号
-    const previewSlice = mode.slice(iPreview);
-    expect(previewSlice, 'startNetPreview 之后的切片里出现了 startNetLobby（失焦的证据）')
+    // 顺序约束的**外部自证**（G5/T41 换锚点）：真的把预览那一段按花括号配平切出来，
+    // 它里面既不许出现新入口的符号，也不许是空片段（空片段会让上面三条断言假绿）。
+    const previewSlice = braceBlock(mode, iPreview);
+    expect(previewSlice.length, 'startNetPreview 的箭头函数体抽到空片段 ⇒ 本判据假绿')
+      .toBeGreaterThan(80);
+    expect(previewSlice, 'startNetPreview 的函数体里出现了 startNetLobby（锚点被拉长 ⇒ 失焦）')
       .not.toContain('startNetLobby');
+    expect(mode.slice(iPreview).indexOf('startNetLobby'),
+      'startNetPreview 之后仍出现 startNetLobby（nav 里有两个联机入口？）').toBe(-1);
     // 新入口只写第四值，**不许**写 `renderMode = 'hotseat'`（那两个字面量点各有腿在数）
     const lobbySlice = mode.slice(iLobby, iPreview);
     expect(lobbySlice, '大厅入口里写了 renderMode = hotseat（会撞上那两条计数腿）')

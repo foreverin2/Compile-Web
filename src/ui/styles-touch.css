@@ -1,0 +1,185 @@
+/* ============================================================================
+ * G5/T39：触屏相关样式（新文件，只服务"触屏手势"与"手机横屏门"两件事）
+ *
+ * ## 为什么必须有一份 CSS（而不是只靠 JS 桥）
+ *
+ * 触屏上"滑动"的默认归属是**浏览器**（滚动 / 双指缩放）。手势要进得来 JS，必须先声明
+ * `touch-action`。全仓改动之前 `touch-action` **零命中** ⇒ 手指在卡上移动会被当成滚页面，
+ * 浏览器于是根本不派发 `pointermove`（在 `touch-action: auto` 上它改成派发 `pointercancel`），
+ * `touch-bridge.ts` 那套合成 `mousemove` 就没有原料。
+ *
+ * ## 边界（任务书 §1.2）
+ *
+ * - 只按**类**命中，不用全局 `*` 规则去砸别处；
+ * - `touch-action` 不是继承属性，但浏览器算"这次手势能不能滚"时会把命中元素**及其祖先**
+ *   的值取交 ⇒ 只要卡根写了 `none`，卡里面的 `<img>` / `<span>` 也一并归 `none`；
+ * - 本表只写 `touch-action` / `-webkit-touch-callout` / `user-select` / 门的样式 / 旋转类
+ *   —— 都是**既有层叠模型（`tests/ui/net-body-layer-rules.test.ts`）不留意的属性**
+ *   （它解算的是 `animation-name` / `transform` / `grid-*` / `width` / `padding` 那几族）。
+ * ========================================================================== */
+
+/* ===== 1) 可拖面：手势归 JS ===== */
+/* `render.ts` 里挂了 `mousedown` 的那几族：手牌挡板、卡（手牌/草稿/场上）、草稿卡。 */
+.hand-shield,
+.card,
+.draft-card {
+  touch-action: none;
+  -webkit-touch-callout: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* 卡里的子节点（图片/文字）不许弹"长按菜单"，也不许被选中 */
+.card img,
+.card span,
+.draft-card img,
+.draft-card span,
+.hand-shield .shield-count,
+.hand-shield .shield-handle {
+  -webkit-touch-callout: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* 拖拽幽灵卡是 body 级节点（`document.body.appendChild`）⇒ 单独一条，别让它自己吃掉手势 */
+.drag-ghost,
+.draft-drag-ghost {
+  touch-action: none;
+  pointer-events: none;
+}
+
+/* ===== 2) 手机横屏门（`phone-landscape.ts` 产出 `.t39-gate`） ===== */
+.t39-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 4000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 24px;
+  text-align: center;
+  background: #0a0e1a;
+  color: #eafffb;
+  font-family: system-ui, sans-serif;
+}
+
+.t39-gate-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: bold;
+  letter-spacing: 1px;
+}
+
+.t39-gate-hint {
+  margin: 0;
+  max-width: 22em;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #9fd8cf;
+}
+
+.t39-gate-btn {
+  min-width: 160px;
+  min-height: 48px;
+  padding: 10px 22px;
+  font-size: 17px;
+  font-family: inherit;
+  color: #04121a;
+  background: linear-gradient(180deg, #4ff0d8, #12b39a);
+  border: 1px solid rgba(0, 255, 204, 0.7);
+  border-radius: 8px;
+  box-shadow: 0 0 14px rgba(0, 255, 204, 0.35);
+  touch-action: manipulation;
+}
+
+/* ===== 3) CSS 旋转兜底（全屏与方向锁都不行时的那条路） =====
+ * 竖屏 390×844 下：`100vh` = 844（宽）、`100vw` = 390（高）⇒ `#app` 按 844×390 排版，
+ * 再整体转 90° 贴回物理竖屏。**读法是"把设备逆时针转 90°"**：布局的上边落到屏幕右边。
+ * 视口坐标与命中测试的关系由浏览器带着 `transform` 算（本模块不换算坐标）。 */
+html.t39-rot90,
+html.t39-rot90 body {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+html.t39-rot90 #app {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vh;
+  height: 100vw;
+  max-width: none;
+  margin: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  box-sizing: border-box;
+  transform: rotate(90deg) translateY(-100%);
+  transform-origin: top left;
+}
+
+/* ===== 4) 修复轮 a + b：整页等比缩放 + 关键按钮钉在视口内 =====
+ *
+ * **(a) 谁被缩放**：`#app` 整体（`translate + scale`，旋转档多带后半截 rotate）。
+ * 变量由 `phone-landscape.ts` 的 `syncFit()` 现算现写（`--t39-k` / `--t39-tx` / `--t39-ty`）。
+ *
+ * **为什么 `overflow` 要从 `auto` 改成 `visible`**（这一条是第一轮那个洞的根因）：
+ * `overflow: auto` 的行内滚动区**不含负方向** ⇒ 落在 x<0 / y<0 的左栏（自己手牌区、
+ * `.next-btn`）既滚不出来、`elementFromPoint` 也命中不了（实测：把 `#app` 滚到极限、
+ * 再在视口里扫 9x6 网格，命中 0 次）。改成 `visible` 之后它们会照常绘制，再由
+ * `#app` 的 `translate` 摆进视口。外层 `html/body` 用 `overflow: hidden` 兜底（不出现滚动条）。
+ *
+ * **(b) 按钮**：`.next-btn` / `.choice-confirm` 被 JS 挪到 `document.body` 后挂 `.t39-pin`。
+ * 之所以必须挪出 `#app`：带 `transform` 的元素是 `position: fixed` 后代的**包含块**，
+ * 留在里面"固定到视口角"是做不到的（而且缩放会把按钮一起缩小，本来就该保持 1:1 好点）。
+ * 选择器带上 `html.t39-fit` 前缀把权重抬到 (0,3,1)，不依赖 import 顺序。 */
+html.t39-fit,
+html.t39-fit body {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+html.t39-fit #app {
+  overflow: visible;
+  overscroll-behavior: none;
+  transform-origin: top left;
+}
+
+/* 横屏布局是"物理横屏"（没有旋转类）：不带后半截 */
+html.t39-fit:not(.t39-rot90) #app {
+  transform: translate(var(--t39-tx, 0px), var(--t39-ty, 0px)) scale(var(--t39-k, 1));
+}
+
+/* 横屏布局来自 CSS 旋转：把原来的 rotate 那一段原样接在后面 */
+html.t39-fit.t39-rot90 #app {
+  transform: translate(var(--t39-tx, 0px), var(--t39-ty, 0px)) scale(var(--t39-k, 1)) rotate(90deg) translateY(-100%);
+}
+
+html.t39-fit .t39-pin {
+  position: fixed;
+  margin: 0;
+  z-index: 3000;
+  touch-action: manipulation;
+}
+
+html.t39-fit .t39-pin.t39-pin-next {
+  right: 10px;
+  bottom: 10px;
+  left: auto;
+  top: auto;
+  min-width: 104px;
+  min-height: 46px;
+  font-size: 15px;
+}
+
+html.t39-fit .t39-pin.t39-pin-choice {
+  left: 50%;
+  bottom: 10px;
+  right: auto;
+  top: auto;
+  transform: translateX(-50%);
+  min-width: 132px;
+  min-height: 46px;
+  font-size: 15px;
+}

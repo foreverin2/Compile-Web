@@ -218,6 +218,73 @@ export function objectBody(src: string, head: string): string {
 }
 
 /**
+ * 取 `from`（含）之后**第一个**花括号块的配平整段（`{ … }`，字符串/模板串按整段跳过）。
+ *
+ * ## 为什么必须有它（G5/T41）
+ *
+ * `tests/ui/net-preview-wiring.test.ts` 第 6 条的旧判据面是
+ * `mode.slice(mode.indexOf('startNetPreview:'))` —— 从预览那个键**一直切到 `showModeSelect`
+ * 末尾**。于是"预览接线那三行还在不在"这件事，会被**排在预览之后的任何一段文本**满足：
+ * 有人把 `renderMode = 'net'` / `netViewSeat = viewSeat` / `showCoin()` 搬到一个新增的、
+ * 排在后面的 nav 成员里，旧切片照样绿（它只是"预览之后出现过这些字"）。这就是失焦。
+ *
+ * `braceBlock` 把判据面收成**那一个块本身**：从 `from` 起找到第一个 `{` 再配平到它对应的 `}`。
+ * `functionBody` / `objectBody` 都不能干这件事 —— 前者要 `function <name>(`，后者要
+ * `const NAME … = {`，而这里的目标是**对象字面量里的一个箭头函数成员**（`key: (…) => { … }`）
+ * 与**一个 `if (…) { … }` 块**。
+ *
+ * ## 边界（与 `functionBody` / `objectBody` 同一套纪律）
+ *
+ *  - `from` 必须是**代码位**（调用方用 `indexOf('key:')` 之类定位；传进字符串中间会切错）；
+ *  - 扫描过程中字符串/模板串整段跳过（块里就有 `'…{…}…'` 这种文本），但不解析 `${}` 插值
+ *    （与 `stripComments` 的已知局限同款；本仓被扫处零命中）；
+ *  - 找不到 `{`、或花括号不配平 ⇒ **抛错**（响亮），而不是返回空串让上层断言变成假绿。
+ */
+export function braceBlock(src: string, from: number): string {
+  if (from < 0) throw new Error('braceBlock：调用方给的起点是负下标（没找到锚点）');
+  let i = from;
+  for (; i < src.length; i += 1) {
+    const ch = src[i];
+    if (ch === "'" || ch === '"' || ch === '`') {
+      const quote = ch;
+      i += 1;
+      while (i < src.length) {
+        const c = src[i];
+        i += 1;
+        if (c === '\\') { i += 1; continue; }
+        if (c === quote) break;
+      }
+      i -= 1; // 让外层 for 的 i += 1 落到引号之后
+      continue;
+    }
+    if (ch === '{') break;
+  }
+  if (i >= src.length) throw new Error('braceBlock：从给定起点起找不到 {（结构被改动？）');
+  let depth = 0;
+  for (; i < src.length; i += 1) {
+    const ch = src[i];
+    if (ch === "'" || ch === '"' || ch === '`') {
+      const quote = ch;
+      i += 1;
+      while (i < src.length) {
+        const c = src[i];
+        i += 1;
+        if (c === '\\') { i += 1; continue; }
+        if (c === quote) break;
+      }
+      i -= 1;
+      continue;
+    }
+    if (ch === '{') depth += 1;
+    else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) return src.slice(from, i + 1);
+    }
+  }
+  throw new Error('braceBlock：花括号不配平');
+}
+
+/**
  * 整段剔除一个 `[export] const NAME [: 类型] = [ … ];` 形式的**数组字面量声明体**
  * （含 `NAME` 之前的声明头与结尾的 `];`），替换为等长空白（保留换行 → 行号不变）。
  *

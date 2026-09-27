@@ -22,6 +22,9 @@ import './ui/styles-net-lobby.css';
 // 不参与远程页/热座页的层叠模型 ⇒ 已在 `tests/ui/net-body-layer-rules.test.ts` 的
 // `EXCLUDED_SOURCES` 里显式登记（理由写在登记处）。
 import './ui/styles-library-filter.css';
+// G5/T39：触屏手势与"手机横屏"的样式（新文件）。**必须排在最后**：里面有
+// `html.t39-rot90 #app` 这条要盖过 `styles.css` 的 `#app`，同权重时靠后者胜。
+import './ui/styles-touch.css';
 import { createGame, getCurrentDrafter, performDraftPick, performDraftUnpick, performDraftBan, randomPoolFromSeed, setSeedNonce, getDraftPool } from './core/state/create';
 import { getCompilableLines } from './core/rules/compile';
 import { collectTriggers } from './core/effects/triggers';
@@ -77,6 +80,10 @@ import { gen3FulcrumSwapFx, gen3ProtocolSwapFx } from './ui/fx-gen3-swap';
 import { syncFollowers } from './ui/fx-follow';
 import { initGen2Fx, clearGen2Fx } from './ui/fx-gen2';
 import { initDiag } from './ui/diag';
+// G5/T39：触屏 → 鼠标手势桥（红线 `render.ts` 一个字节不改；只在触摸指针上启用）
+import { initTouchBridge } from './ui/touch-bridge';
+// G5/T39：手机竖屏 ⇒ 横屏游玩（平板不进来；全屏/方向锁都试过之后才退化成 CSS 旋转）
+import { initPhoneLandscape } from './ui/phone-landscape';
 import { initDevMode, isDevUnlocked } from './ui/devmode';
 import { gameBus } from './core/events/bus';
 import { pushLog } from './core/log';
@@ -119,6 +126,9 @@ import {
   readInviteFromAddressBar,
   signalingEndpointSetting,
   stripInviteFromAddressBar,
+  DEFAULT_ICE_SERVERS,
+  isRelayUrl,
+  turnSettingsAreDefault as turnSettingsAreDefaultOf,
   type IceServerLike,
   type NetBrowserEnv,
   type PeerConnectionLike,
@@ -1120,6 +1130,48 @@ function exposeMatchProbe(): void {
         renderMode: string;
         phase: string;
       };
+      /**
+       * ★★ **G5/T38：`iceServers` 的只读读数**（真浏览器判据 1 / 3 用）。
+       *
+       * ## 为什么必须由产品代码交出来（判据 1 的原话就是"必须读产品代码里的默认配置，
+       * 不要手写一份"）
+       *
+       * 它读的是**这一刻**的 `netSettings`（大厅「高级 / 连接设置」三个字段的**内存副本**，
+       * 也是 `createTransport` / `waitForIceGathering` 真正读的那一个对象）与
+       * **产品自己的** `readIceServers()` —— 门禁只把结果转交给 `RTCPeerConnection`，
+       * 不自己拼一份 `iceServers`。
+       *
+       * 判据 3（覆盖仍然有效）走的是**真路径**：门禁先点开大厅那个开关、往三个输入框里敲值
+       * （`settingsValue` 会跟着变），再回来读这一个读数 —— 于是"改了就以玩家为准"这件事
+       * 是被**真界面**验证的，不是被测试里的合成设置验证的。
+       */
+      ice(): {
+        settings: { turnUrl: string; turnUsername: string; turnCredential: string };
+        servers: readonly IceServerLike[];
+        relayConfigured: boolean;
+        relayIncomplete: boolean;
+        relaySource: 'player' | 'builtin' | 'none';
+        /** ★ 这三项**没被玩家动过**（与产品默认预填值逐字相同）—— 判据 3 的证据靠它分辨 */
+        settingsAreDefault: boolean;
+      };
+      /**
+       * ★★ **G5/T38：走真产品的「建房 → 生成邀请码」那条路，把本侧连接描述与候选交出来**
+       * （真浏览器判据 2 用）。
+       *
+       * 它调的就是玩家点「生成邀请码」时走的那一个函数（`makeLobbyInvite`）⇒ 门禁不需要
+       * 自己拼 ICE、也不需要手写 `iceServers`。返回的 `ice` 是**这条邀请码里真的写进去的**
+       * 候选清单（从 `localDescription` 的 SDP 抠出来），与屏上那条码同源。
+       */
+      makeInviteProbe(): Promise<{
+        ok: boolean;
+        remoteCandidates: readonly IceServerLike[];
+        ice: readonly string[];
+        stoppedEarly: boolean;
+        timedOut: boolean;
+        note: string | null;
+        invitePayloadLength: number;
+        error: string | null;
+      }>;
     };
   };
   g.__g5Match = {
@@ -1147,6 +1199,57 @@ function exposeMatchProbe(): void {
       needsResync: lobbyClient?.state().peer?.needsResync ?? false,
       suppressCoin: lobbyClient?.suppressesCoinScreen() ?? false,
     }),
+    /**
+     * ★★ **G5/T38：`iceServers` 的只读读数**（见类型上那一段）。
+     *
+     * 只读：不写 `netSettings`、不建连接、不发请求。`servers` 是 `readIceServers()` 的**返回值**
+     * （同一份会被 `createPeerConnection` 喂进 `RTCPeerConnection` 的数组）。
+     */
+    ice: () => {
+      const settingsAreDefault = turnSettingsAreDefault();
+      const read = readIceServers(netSettings, settingsAreDefault);
+      return {
+        settings: { ...netSettings },
+        servers: read.servers,
+        relayConfigured: read.relayConfigured,
+        relayIncomplete: read.relayIncomplete,
+        relaySource: read.relaySource,
+        settingsAreDefault: read.settingsAreDefault,
+      };
+    },
+    /**
+     * ★★ **G5/T38：真产品那条「生成邀请码」的路**（见类型上那一段）。
+     *
+     * 调用面是**玩家按钮那一个函数**（`nav.makeInvite` 走的就是 `makeLobbyInvite`），
+     * 这里只多做两件只读的事：等它写完 `client.state().invite`，再读一次
+     * `readIceServers()`（= 真正喂进 `RTCPeerConnection` 的那一份）与屏上那条码的长度。
+     * 它**不**替玩家点任何按钮 —— 按钮由门禁按真界面点。
+     */
+    makeInviteProbe: async () => {
+      await makeLobbyInvite();
+      const after = lobbyClient?.state().invite ?? null;
+      const okInvite = after !== null && after.ok ? after : null;
+      /**
+       * 候选从**真传输**上再读一次（`transport.localDescription()` 是那一步的唯一出处，
+       * 与 `makeLobbyInvite` 里喂给 `startHost` 的是同一份 SDP）—— 只读，不重建链路。
+       */
+      const tr = lobbyClient?.transport() ?? null;
+      const desc = tr?.localDescription === undefined ? null : await tr.localDescription();
+      const goodDesc = desc !== null && desc.ok ? desc : null;
+      const sdp = goodDesc !== null && typeof goodDesc.sdp === 'string' ? goodDesc.sdp : '';
+      /** 早退标记在传输那一面是可选字段（有的实现不报它）⇒ 只做**如实**读取，不猜 */
+      const stoppedEarly = (goodDesc as { stoppedEarly?: unknown } | null)?.stoppedEarly === true;
+      return {
+        ok: okInvite !== null,
+        remoteCandidates: readIceServers(netSettings, turnSettingsAreDefault()).servers,
+        ice: sdp.length === 0 ? [] : [...candidatesOf(sdp)],
+        stoppedEarly,
+        timedOut: goodDesc?.timedOut === true,
+        note: typeof goodDesc?.note === 'string' ? goodDesc.note : null,
+        invitePayloadLength: okInvite === null ? -1 : okInvite.payload.length,
+        error: after !== null && !after.ok ? after.message : null,
+      };
+    },
     /**
      * ★★ **G5 T14 修复轮：把"入站帧到没到、会话链接没接到"这四环各自数出来**（只读）。
      *
@@ -1529,12 +1632,44 @@ function newSessionId(): string {
   return 'sid-' + [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-/** 连接设置的**内存**副本（今天不落盘） */
-const netSettings: { turnUrl: string; turnUsername: string; turnCredential: string } = {
-  turnUrl: '',
-  turnUsername: '',
-  turnCredential: '',
-};
+/**
+ * 连接设置的**内存**副本（今天不落盘）。
+ *
+ * ## ★★ G5/T38：三项**预填**成产品默认值（用户 2026-09-25 的裁决："尽量不要让玩家手动填
+ * 各种参数啥的，尽量自动通过已预先设置好的去连接"）
+ *
+ * 原先三个字段都是空串，意味着大厅「高级 / 连接设置」里看到的是三个空框、默认路径上
+ * 没有中继。现在预填那台 coturn（`8.130.97.243:3478`）⇒
+ *  - 大厅里看到的是**已配置**状态，不是空框；
+ *  - `readIceServers()` 的"三项齐全就按你给的写"那一支自动生效；
+ *  - **覆盖能力不变**：玩家在大厅里改这三个字段仍然以玩家的为准（`setSetting` 直接改本对象）。
+ *
+ * 值**不在这里写第二份**：从 `DEFAULT_ICE_SERVERS` 里取那一项中继（唯一出处 = `net-browser.ts`，
+ * 判据 1 的"引用而不复制"纪律）。取不到就回空串，那样只是退化成 T38 之前的形态，
+ * 不会把链路弄坏。
+ */
+function defaultTurnSetting(): { turnUrl: string; turnUsername: string; turnCredential: string } {
+  const relay = DEFAULT_ICE_SERVERS.find((s) => s.urls.some(isRelayUrl));
+  const url = relay?.urls.find(isRelayUrl) ?? '';
+  return {
+    turnUrl: url,
+    turnUsername: typeof relay?.username === 'string' ? relay.username : '',
+    turnCredential: typeof relay?.credential === 'string' ? relay.credential : '',
+  };
+}
+
+const netSettings: { turnUrl: string; turnUsername: string; turnCredential: string } = defaultTurnSetting();
+
+/**
+ * ★★ **G5/T38：玩家到底改没改过那三项**（探针与判据 3 的证据面）。
+ *
+ * 为什么必须单独一个读数：三项**预填成默认值**之后，"设置里有内容"不再等于"玩家改过"
+ * ⇒ 光看 `readIceServers().relaySource`（它报的是"这一项是按设置内容写的"）分辨不出
+ * "默认"与"玩家覆盖"。判定本身**只住一处**（`turnSettingsAreDefault`），这里只转发。
+ */
+function turnSettingsAreDefault(): boolean {
+  return turnSettingsAreDefaultOf(netSettings, defaultTurnSetting());
+}
 
 /**
  * **这一局的房主会话号**（D 轮 I-3 甲）。
@@ -2412,13 +2547,21 @@ function startLobby(role: 'host' | 'guest'): void {
         return r.ok ? { ok: true, payload: r.payload, link: r.link } : { ok: false, message: r.message };
       },
       // ★ **真解压（两步）**（修复轮 A1）：`decodeBase64Url` 只做 base64url 解码，
-      //   之后**必须**再走一次 `decompressBytes`（deflate-raw 解压）—— 只做第一步会让纯层
+      //   之后**必须**再走一次 `decompressBytes`（真解压）—— 只做第一步会让纯层
       //   拿到"仍是压缩态"的字节，`decodeInviteText` 会把它当解压结果去 `JSON.parse`，
       //   于是每条邀请码都返回 `bad-json`（实测）。返回 `null` 只表示"这段解不开"。
-      decompressBase64: async (b64: string) => {
+      //
+      // ★★ **G5/T40：第二个参数 `kind`（缺省 `'raw'` = deflate-raw，老调用一字不改）**。
+      //   邀请码的压缩段现在带明文标记（`-r` 老格式 / `-u` 未压缩 / `-d` deflate / `-g` gzip），
+      //   大厅按标记把这个档位传下来。不传它的话，**降级链在收码这台设备上挑出的 deflate /
+      //   gzip 档一律报"压缩段解不开"** —— 那等于把用户那台设备的失败从"生成失败"搬到"解不开"。
+      //   本文件**只**把 `kind` 转下去，选解压器那件事在 `src/ui/net-browser.ts` 一处。
+      //   ⚠️ 类型写成**字面量联合**而不是 import `CompressionKind`：本文件正被另一个任务同时改，
+      //   为一行改动**不动 import 区**（少一处冲突面）。语义与那个类型逐字相同。
+      decompressBase64: async (b64: string, kind: 'raw' | 'deflate' | 'gzip' | 'none' = 'raw') => {
         const raw = decodeBase64Url(b64);
         if (raw === null) return null;
-        const d = await decompressBytes(raw, lobbyEnv());
+        const d = await decompressBytes(raw, lobbyEnv(), kind);
         return d.ok ? d.bytes : null;
       },
       readAddressBar: () => {
@@ -2430,7 +2573,14 @@ function startLobby(role: 'host' | 'guest'): void {
       // ★ **B3 的第二半（收方）**：把对方的 offer 吃进来，产一条可以回示的回示码。
       //   序列在 `acceptOffer`（B1）；承诺位由 `answerPayloadFields` 填**具名占位串**（B4）。
       //   ⚠️ 真对端连接的协商结果（ICE 能不能打通）**真浏览器未验证，由 T9 覆盖**。
-      buildAnswer: async (offer: { sdp: string; ice: readonly string[] }): Promise<AnswerCodeResult> => {
+      //
+      //   ★★ **G5/T40：第二个入参 `kind` = 邀请码用的压缩档位，回示码照它走。**
+      //   为什么必须同一档（真浏览器门实测的**跨机**缺陷）：两端各按自己的设备能力选档时，
+      //   房主那台 `deflate-raw` 坏掉 ⇒ 它出 `-d` 码；而加入方那台好着 ⇒ 回示码落在 `-r`
+      //   ⇒ **房主解不开自己那一局的回示码**（屏上"压缩段解不开"、两端停在 handshaking）。
+      //   房主能产出那一档，就说明它能解那一档 ⇒ 照它走是唯一"两端都解得开"的选择。
+      //   `null`（还没解出邀请码）⇒ 交给降级链自己挑。
+      buildAnswer: async (offer: { sdp: string; ice: readonly string[] }, kind: 'raw' | 'deflate' | 'gzip' | 'none' | null): Promise<AnswerCodeResult> => {
         // ★ C1（结构缺口 ①）：answer 必须落在**承载 hello/act 的那条连接**上。
         //   原来这里把环境交给 acceptOffer 而不交出那条连接 ⇒ 它自己造了**第二条**连接
         //   ⇒ offer/answer 在 B 上完成、消息通道在 A 上 ⇒ 两端从来没为"传消息"连上。
@@ -2448,7 +2598,11 @@ function startLobby(role: 'host' | 'guest'): void {
           sdp: r.sdp,
           ice: r.ice,
         });
-        const enc = await createInvite({ ...fields, originAndPath: currentOriginAndPath() }, lobbyEnv());
+        const enc = await createInvite(
+          // ★ T40：`preferKind` = 邀请码那一档（这条回示码必须让房主解得开）
+          { ...fields, originAndPath: currentOriginAndPath(), ...(kind === null ? {} : { preferKind: kind }) },
+          lobbyEnv(),
+        );
         if (!enc.ok) return { ok: false, message: enc.message };
         /**
          * ★★ **G5 T16**：收方这条路上界到点、但手上有候选时也放行 —— 那句 `note`
@@ -4126,6 +4280,16 @@ function showHome(): void {
 function showModeSelect(): void {
   renderModeSelect(root, {
     backHome: showHome,
+    /**
+     * G5/T41（用户 2026-09-27 第 1 条）：**设备体检**。
+     *
+     * 它**不是游戏模式**：不设 `renderMode`、不碰 `state`、不掷硬币，只做一次跳转 ——
+     * `./probe.html` 是同源静态页，源文件收在 `public/probe.html`（Vite 会拷进 `dist/probe.html`），
+     * 所以重新部署不会再丢。
+     */
+    openDeviceCheck: () => {
+      location.href = './probe.html';
+    },
     startHotseat: (ban, randomPool) => {
       // 显式复位（幂等）：从"单人/三人开发中"或任何历史路径过来时，保证是热座模式。
       // 防的是"预览模式泄漏到热座"这一类串味（另一个堵点是 resetToMainInterface）。
@@ -4157,12 +4321,21 @@ function showModeSelect(): void {
     /**
      * G5/T8：**联机对战（两台设备）** —— 真正的联机入口（建房 / 加入 / 连接设置）。
      *
-     * ⚠️ **它必须排在 `startNetPreview` 之前**（计划 §5 T8 的实现顺序约束，D24 补）：
-     * `tests/ui/net-preview-wiring.test.ts:210-213` 用 `mode.slice(mode.indexOf('startNetPreview:'))`
-     * 切出"预览那一段"再在里面断言 `renderMode = 'net'` 与 `netViewSeat = viewSeat`；
-     * 新入口若排在它之后，那段切片会被拉长到含新入口 ⇒ 断言可能被新入口里的字符串满足 ——
-     * 它仍然绿，但**测的已经不是原来那件事**（失焦）。所以排在前面是**判据面**的要求，
-     * 不是排版偏好。
+     * **它排在 `startNetPreview` 之前**（计划 §5 T8 的实现顺序约束，D24 补）。G5/T41 之后这条
+     * 顺序约束**只剩一个理由**：`showModeSelect` 的 nav 键顺序与**源码里**的模式卡顺序
+     * （热坐 → 联机 → 预览）一致，读代码 / 改卡片顺序时不用两头跳；它仍由
+     * `tests/ui/main-lobby-wiring.test.ts` 第 2 条钉着。
+     *
+     * 原先的理由（"别让预览那一段的判据面被排在后面的新入口拉长"）**已经作废**：G5/T41 把
+     * `tests/ui/net-preview-wiring.test.ts` 第 6 条的锚点从
+     * `mode.slice(mode.indexOf('startNetPreview:'))` 换成了**花括号配平**的 `startNetPreview`
+     * 箭头函数体（`source-text.ts` 的 `braceBlock`）⇒ 判据面只剩预览那一段，不可能再被后面的
+     * 入口拉长。注意 `net-preview-wiring.test.ts:210-213` 现在是一条**反空转的长度断言**
+     * （"闸门块不得几乎覆盖整份文件"），与 `startNetPreview` 无关，别再把它当切片锚点的出处。
+     *
+     * 另外注意："模式卡顺序 热坐 → 联机 → 预览"只在**开发者路径**下成立：`dev=false` 时
+     * 预览卡**根本不会被建出来**（`renderModeSelect` 的 `if (devUnlocked)`），普通玩家看到的
+     * 清单是「热坐 → 联机 → 单人 → 三人」。顺序约束说的是**源码里**的卡位置，不是玩家看到的清单。
      *
      * 它**不写** `renderMode = 'hotseat'`（那两个字面量点各有腿在数），也不碰 `showCoin()`：
      * 大厅没有 `state`，它只是把页面模式切成第四值。
@@ -4196,7 +4369,19 @@ function showModeSelect(): void {
       // 手牌可见性不在这里设：本页无该选项（I-2/N4 已把档位字段删掉，恒为信息遮蔽形态）。
       showCoin();
     },
-  });
+    /**
+     * G5/T41（用户 2026-09-27 第 2 条）：**开发者模式解锁状态**是"单视角预览"那张模式卡的闸门。
+     *
+     * 用户原话："单视角预览这个模式没有实际作用，仅仅是可以用于测试，所以不要放在游戏模式里面"
+     * ⇒ 普通玩家进这一页时 `isDevUnlocked()` 为 false，那张卡**根本不会被建出来**；
+     * `Ctrl+Shift+P` + 密码（`src/ui/devmode.ts`）解锁后，再次进到这一页就能看见它。
+     * 解锁动作本身**不重画这一页**（devmode 的 `host.render()` 走 `rerender()`，按 `renderMode`
+     * 路由）—— 解锁后要**退出去再进来**一次；这是"闸门读一次"的必然形态，本轮不改。
+     *
+     * 这不放松任何东西：`startNetLobby` / `startNetPreview` 两条接线与 `renderMode === 'net'`
+     * 那条渲染路径一个字未动（`tests/ui/net-preview-wiring.test.ts` 第 6 条仍逐条断言）。
+     */
+  }, isDevUnlocked());
 }
 
 /**
@@ -4515,6 +4700,10 @@ gameBus.subscribe((e) => {
 // G3 Task 4：入口改为**启动门** —— 首次进入先过授权弹窗（同意前零写入），表过态则直进主页。
 // ★ G5 T11-C：跨端状态指纹的读取口（只跟着 `#g5probe=1` 打开，见那里的说明）
 exposeMatchProbe();
+// G5/T39 接线（就这两行）：触屏桥要在任何一屏渲染之前装好（它只挂 document 级监听器，
+// 与渲染顺序无关）；横屏门只碰 `<html>` 的类与 body 级的门节点，同样与屏无关。
+initTouchBridge();
+initPhoneLandscape();
 showStartScreen();
 // 常驻特效层随滚动/缩放重新对齐：已编译环（compiledFx）、暗2 黑烟（smokeOverlays）、
 // 能量扫描线（scanOverlays）与 FX-3 念能粒子/瘟疫浓雾（psychicParticles/plagueMists）、

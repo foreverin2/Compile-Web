@@ -47,15 +47,17 @@ import {
   INVITE_PROTO_VERSION,
   NO_ENDPOINT_HEADLINE,
   NO_ENDPOINT_REASON,
+  base64UrlToBytes,
   decodeInviteText,
   inviteFragmentOf,
   inviteLinkOf,
   isAnswerPayload,
   protocolVersionCheck,
   qrPlaceholder,
+  readInviteSegment,
   roomCodeEntryReachability,
 } from '../net/invite';
-import type { InviteDecodeResult } from '../net/invite';
+import type { CompressionKind, DecompressorSet, InviteDecodeResult } from '../net/invite';
 import { createGuestSession, createHostSession } from '../net/session';
 import type {
   ClockLike, HashLike, NetSession, PeerStatus, SessionInbound, SessionOutbound, SessionPhase,
@@ -260,8 +262,19 @@ export interface LobbyClientOptions {
    * （`setRemoteDescription` → `createAnswer` → `setLocalDescription` → 等 ICE），
    * 而 D6 说浏览器 API 的唯一出处是 `src/ui/net-browser.ts`。大厅只**搬运**。
    * 可选：不注入时"产回示码"这条路在屏上**不出现**（而不是给一个点了没反应的按钮）。
+   *
+   * ★★ **G5/T40：第二个入参 `kind` = 邀请码用的压缩档位，回示码要照它走。**
+   * （第一个入参是 `offer`；`kind` 是**紧跟它**的那一个 —— 本文件调它的地方在 `makeAnswer`。）
+   *
+   * 真浏览器门实测（A 场景）：房主那台 `deflate-raw` 坏掉 ⇒ 它出的是 `-d` 码；而加入方那台
+   * 好着 ⇒ 它按**自己**的能力产回示码，落在 `-r` ⇒ **房主解不开自己那一局的回示码**
+   * （屏上"压缩段解不开"、两端停在 `handshaking`）。⇒ 回示码跟着邀请码那一档走，
+   * 这是唯一"两端都解得开"的选择（房主能产出那一档，就说明它能解那一档）。
    */
-  readonly buildAnswer?: (offer: { readonly sdp: string; readonly ice: readonly string[] }) => Promise<AnswerCodeResult>;
+  readonly buildAnswer?: (
+    offer: { readonly sdp: string; readonly ice: readonly string[] },
+    kind: CompressionKind | null,
+  ) => Promise<AnswerCodeResult>;
   /**
    * ★ **B3 的第一半（房主侧收口）**：把对方回示的 answer 喂进**同一条**连接。
    *
@@ -273,23 +286,31 @@ export interface LobbyClientOptions {
    *
    * ## 它是两件事，别只做一半（修复轮 A1 的第一次尝试就栽在这里）
    *
-   * 压缩段要解**两步**：**base64url 解码 → deflate-raw 解压**。只做第一步会让
+   * 压缩段要解**两步**：**base64url 解码 → 解压**。只做第一步会让
    * `decodeInviteText` 拿到一串**仍是压缩态**的字节，它会把那串当"解压结果"去 `JSON.parse`
    * ⇒ 必然返回 `bad-json`（"解压后的内容不是 JSON 文本"）。**真解压才是这一步的全部内容**。
    *
    * ## 为什么是异步的
    *
-   * 真解压走 `DecompressionStream`，流式、**必须 `await`**（`net-browser.ts:526` 的
+   * 真解压走 `DecompressionStream`，流式、**必须 `await`**（`net-browser.ts` 的
    * `decompressBytes` 就是它）。而纯层的 `decodeInviteText` 要一个**同步**口 ⇒ 宿主先 `await`
    * 出字节、再把它当"已经算好的结果"交进来（D15 的同一种缝法，`createInvite` 也这么做）。
    *
    * 返回 `null` = "这段解不开"（形状不对 / 压缩流坏了）—— 那是**失败**，不是"没解压"。
    *
+   * ## ★★ G5/T40：第二个参数 `kind` 是压缩**档位**
+   *
+   * 邀请码的压缩段现在带明文标记（`N.` 老格式 / `Nu.` 未压缩 / `Nd.` deflate / `Ng.` gzip），
+   * 宿主按它选解压器。不传 = `'raw'`（deflate-raw，**老调用点逐字不变**）。
+   *
+   * ⚠️ `'none'`（未压缩）**不会**走到这里：那一段就是 base64url，本文件自己解
+   * （见 `decodeWithFormat` 的说明）—— 它不需要注入任何能力。
+   *
    * ⚠️ **修复轮 A1 的历史**：这里曾经被 `main.ts` 传成 `() => null`，于是 `decodeInviteText`
-   * 必走 `decompress-failed` 那一支（`invite.ts:581-590`）⇒ **对方发来的每条邀请码都解不开**。
+   * 必走 `decompress-failed` 那一支 ⇒ **对方发来的每条邀请码都解不开**。
    * 那是"功能上不可能成立"，不是"缺一条腿"。
    */
-  readonly decompressBase64: (b64: string) => Promise<Uint8Array | null>;
+  readonly decompressBase64: (b64: string, kind?: CompressionKind) => Promise<Uint8Array | null>;
   /** 读地址栏里的邀请码并**在读到之后**抹掉它（`readInviteFromAddressBar` + `stripInviteFromAddressBar`） */
   readonly readAddressBar: () => InviteRead | null;
   /** 本机昵称（`hello.nick` 的唯一来源；`session.ts:2438` 说"`hello` 里还有 `nick`"） */
@@ -841,6 +862,16 @@ export interface LobbyState {
   readonly answerCode: string | null;
   /** 房主**粘回来**的那条回示码的处理结论（`null` = 还没粘） */
   readonly answerApplied: { readonly ok: boolean; readonly message: string } | null;
+  /**
+   * ★★ **G5/T40：这条邀请码用的压缩档位**（加入方产回示码时**照它走**）。
+   *
+   * 为什么必须记下来：两端各按**自己的**设备能力选档时会出现"房主解不开回示码"——
+   * 详见 `applyInvite` 里那段说明。`null` = 还没解出一条邀请码。
+   *
+   * ⚠️ **可选**：它只是给渲染层的**读数**（屏上不画它），断言侧不需要知道它 ⇒
+   * 老夹具（`LobbyState` 的字面量）不必逐处补一个新字段。
+   */
+  readonly answerFormat?: CompressionKind | null;
 }
 
 /* ==================================================================== *
@@ -2473,6 +2504,8 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
     answerCode: string | null;
     /** B3：房主粘回来的那条回示码的处理结论 */
     answerApplied: { ok: boolean; message: string } | null;
+    /** ★ T40：这条邀请码用的压缩档位（回示码照它走；`null` = 还没解出邀请码） */
+    answerFormat?: CompressionKind | null;
   } = {
     /**
      * ★ **J-1：初值是注入的角色，不是 `null`**。
@@ -2504,6 +2537,8 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
     link: null,
     answerCode: null,
     answerApplied: null,
+    // ★ T40：还没解出邀请码 ⇒ 回示码用哪一档还不知道（解出来时在 `applyInvite` 里填）
+    answerFormat: null,
   };
 
   /**
@@ -2579,6 +2614,60 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
    * 玩家粘进来的可能是整条链接（房主屏上那句话就是这么让他发的）、`#invite=…` 片段、
    * 或裸载荷。形态判定只有 `pasteShapeOf` 一处 —— 拿到载荷之后**下面每一句都与改动前逐字相同**。
    */
+  /**
+   * ★★ **G5/T40：把一条载荷的两步解码收在一处**（`applyInvite` 与 `submitAnswerCode` 共用）。
+   *
+   * 与改动前的差别只有一件：**按压缩段的明文标记挑解压器**。
+   *  - `Nu.`（未压缩）：**本地**解 —— 它就是 base64url，不需要任何设备能力；
+   *  - `N.`（老格式，deflate-raw）/ `Nd.` / `Ng.`：交给宿主注入的 `opts.decompressBase64`
+   *    （它住在浏览器层，那里才知道本机能不能解这一档）。
+   *
+   * ## 为什么本地那一档必须在这里解（不能只靠宿主那个注入口）
+   *
+   * 宿主那个口（`main.ts` 注入的）拿到 base64 后会**先 base64url 解码、再走 `deflate-raw` 解压**。
+   * 未压缩那一段解出来的是 JSON 原文而不是压缩流 ⇒ 那个口必然返回 `null` ⇒
+   * 明明"这一档不需要任何能力"却报"压缩段解不开"。本地这一档把这条路接通。
+   *
+   * ## ★★ 同一条理由对 `Nd.`（deflate）/ `Ng.`（gzip）也成立
+   *
+   * 宿主那个口**写死了 deflate-raw**（它的形状是 T7 时代定的，只服务当时唯一那一档）。
+   * 而降级链在**收码这台设备**上同样可能挑出 deflate 或 gzip ⇒ 那个口必须按 `kind` 选档。
+   * 本文件把 `kind` 传下去（见下面"宿主那个口是被调用的那一个"那段说明：**不**另开一条
+   * 绕过去的路，否则"宿主注入对没对"就测不出来了）。
+   *
+   * 返回纯层的 `decodeInviteText` 结果（含 `format` 读数），**不抛**。
+   */
+  const decodeWithFormat = async (text: string): Promise<InviteDecodeResult> => {
+    const dot = text.indexOf('.');
+    if (dot <= 0 || dot === text.length - 1) {
+      // 形态不对：交给纯层给那句"这不是一条邀请码"（文案的唯一出处在那里）
+      return decodeInviteText(text, {});
+    }
+    const body = text.slice(dot + 1);
+    // ★ 切段只有 `readInviteSegment` 一处（手写 `slice(1)` 会咬掉老格式的第一个字符）
+    const seg = readInviteSegment(body);
+    const kind: CompressionKind = seg.kind ?? 'raw';
+    let bytes: Uint8Array | null = null;
+    if (kind === 'none') {
+      bytes = base64UrlToBytes(seg.body);
+    } else {
+      /**
+       * ★ **宿主那个口是被调用的那一个，没有第二条路**。
+       *
+       * 这里**不许**加"本地再解一遍"的兜底：那会让 `decodeWithFormat` 与"宿主到底注入对了没有"
+       * 脱钩 —— `tests/ui/net-lobby.test.ts` 那条"换成恒 null ⇒ 必须解不开"的反证腿会当场变绿
+       * （它存在的理由正是"宿主传错了函数"这件事要能被测出来）。
+       * ⇒ 多档的能力由**那个口**给（`kind` 是它的参数），不另开一条绕过去的路。
+       */
+      bytes = await opts.decompressBase64(seg.body, kind);
+    }
+    const local: DecompressorSet = {};
+    if (kind !== 'none') {
+      local[kind] = (b64: string) => (b64 === seg.body ? bytes : null);
+    }
+    return decodeInviteText(text, local, { marker: seg.marker });
+  };
+
   const applyInvite = async (payload: string): Promise<void> => {
     s.role = 'guest';
     s.error = null;
@@ -2595,13 +2684,28 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
       opts.onNotice?.(null);
       return;
     }
-    // ★ **先把压缩段真解出来**（异步），再交一个**同步**口给纯层的 `decodeInviteText`。
+    // ★ **先按标记把压缩段真解出来**（异步），再交一个**同步**口给纯层的 `decodeInviteText`。
     //   那个同步口只对"上面那一段 base64"回答，别的一律 `null` —— 于是纯层拿到的
     //   是"真的解得动"这个事实，而不是一个恒真的同一性检查（D15 的同一种缝法）。
-    const compressed = text.slice(text.indexOf('.') + 1);
-    const bytes = text.includes('.') ? await opts.decompressBase64(compressed) : null;
-    const r = decodeInviteText(text, (b64) => (b64 === compressed && bytes !== null ? bytes : null));
+    const r = await decodeWithFormat(text);
     s.joined = r;
+    if (r.ok) {
+      /**
+       * ★★ **G5/T40：把这条邀请码用的压缩档位记下来**（回示码要用**同一档**）。
+       *
+       * ## 为什么必须同一档（真浏览器门实测抓到的跨机缺陷）
+       *
+       * 两端**各按自己的设备能力**选档时，会出现这种局面：房主那台 `deflate-raw` 坏了
+       * （降级到 `-d`），而加入方那台好着 ⇒ 它产的回示码落在 `-r`（deflate-raw，它那儿能用）
+       * ⇒ **房主解不开自己那一局的回示码**：屏上"压缩段解不开"、两端停在 `handshaking`。
+       * 实测读数（`.superpowers/g5-T40/run-cdp.txt` A 场景）：房主 `-d` 出码、另一端回 `-r`
+       * 656 字符，房主贴回去 ⇒ `answerApplied` 没成、相位 `handshaking`。
+       *
+       * 邀请码是房主**自己**产出、且它必须解得开回示码 ⇒ 回示码跟着**邀请码那一档**走，
+       * 这是唯一"两端都解得开"的选择（房主能产出那一档，就说明它能解那一档）。
+       */
+      s.answerFormat = r.format.kind;
+    }
     if (r.ok) {
       // ★ 版本比对：`proto` 是明文段的结论（T7 已经算好），T8 只负责**渲染**它。
       // 这一步刻意排在"收下邀请码"之后、建立连接之前 —— 拒绝时机归大厅（`protocolVersionCheck` 的函数注释）。
@@ -2859,6 +2963,8 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
         + ` out=${String(linkOf()?.routedOut() ?? -1)}`,
       answerCode: s.answerCode,
       answerApplied: s.answerApplied,
+      // ★ T40：回示码要用的压缩档位（= 邀请码那一档）
+      answerFormat: s.answerFormat ?? null,
     }),
 
     startHost: async (draft: LobbyDraftInput): Promise<void> => {
@@ -3078,7 +3184,7 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
       const build = opts.buildAnswer;
       const joined = s.joined;
       if (build === undefined || joined === null || !joined.ok) return false;
-      const r = await build({ sdp: joined.payload.sdp, ice: joined.payload.ice });
+      const r = await build({ sdp: joined.payload.sdp, ice: joined.payload.ice }, s.answerFormat ?? null);
       if (!r.ok) {
         s.answerCode = null;
         s.notice = r.message;
@@ -3117,10 +3223,8 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
         s.answerApplied = { ok: false, message: '回示码是空的：请把对方发来的整条回示码完整粘贴进来。' };
         return false;
       }
-      // 回示码与邀请码**同形状** ⇒ 共用同一套解码（`decodeInviteText` + 真正的两步解压）
-      const compressed = text.slice(text.indexOf('.') + 1);
-      const bytes = text.includes('.') ? await opts.decompressBase64(compressed) : null;
-      const dec = decodeInviteText(text, (b64) => (b64 === compressed && bytes !== null ? bytes : null));
+      // 回示码与邀请码**同形状** ⇒ 共用同一套解码（`decodeInviteText` + 按标记的真解压）
+      const dec = await decodeWithFormat(text);
       if (!dec.ok) {
         s.answerApplied = { ok: false, message: dec.message };
         return false;
@@ -3592,8 +3696,11 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
   if (s.role === null) {
     const pick = el('div', 'net-lobby-pick');
     // ★ **零手写信令/隐私说明**（修复轮；评审 §4.2 判第一版这里是 §2 第 6 条的违例）：
-    //   屏上这一句是 `src/net/invite.ts` 的 `NO_ENDPOINT_REASON` —— "本程序默认不向任何服务器
-    //   发请求"这句话的**唯一出处**。大厅只**引用**它，不另写一份（判据 1 的引用纪律）。
+    //   屏上这一句是 `src/net/invite.ts` 的 `NO_ENDPOINT_REASON` —— "短码要信令服务、
+    //   而本程序默认没有配置信令端点"这件事的**唯一出处**。大厅只**引用**它，不另写一份
+    //   （判据 1 的引用纪律；`defaultTurnShape` 那类"默认值对照物"与本屏无关，本文件也不碰）。
+    //   ⚠️ T38：那句的正文已经改过一轮（原先写的是"默认不向任何服务器发请求"，带上默认中继
+    //   之后不成立）。这里**只引用、不追写**：本文件一个字都不许再描述出网行为。
     pick.appendChild(el('p', 'net-lobby-note', NO_ENDPOINT_REASON));
     /**
      * ★★ **G5 T22：两条路各占一张卡**（用户反馈原话："双方建房或者加入的页面以及交互方式都太潦草了"）。
@@ -3829,8 +3936,16 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
      * 本块新增的只是"要不要展开这三个框"的操作说明。
      */
     const relayShown = s.relayOpen === true;
-    panel.appendChild(el('p', 'net-lobby-relay-hint', '不用管这一块：默认走直连 + 公共 STUN，'
-      + '绝大多数情况够用。只有直连不通（比如两边都在管得很严的网络里）才需要自建中继。'));
+    /**
+     * ★★ **G5/T38 起文案改成事实**：现在是"**默认已经配好一台中继**"，不再是"什么都没有、
+     * 你可能得自己搭一台"。旧句写的是"默认走直连 + 公共 STUN" —— 那是 T38 之前的世界。
+     *
+     * 仍然不含任何隐私承诺：中继那句隐私说明的唯一出处是 `src/app/privacy.ts`，
+     * 启用/默认生效之后由下面那句 `relayNoticeOf(s.ice)` 原样引用进来（D22）。
+     */
+    panel.appendChild(el('p', 'net-lobby-relay-hint', '不用管这一块：默认已经配好一台中继（TURN）——'
+      + '两端能直连时走直连，直连打不通（比如两边都在管得很严的网络里）会自动经它转发。'
+      + '只有在你要换成自己的中继时才需要填下面这三项。'));
     const relayToggle = el('label', 'net-lobby-relay-toggle');
     const relayBox = document.createElement('input');
     relayBox.type = 'checkbox';
@@ -3838,12 +3953,12 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
     relayBox.checked = relayShown;
     relayBox.addEventListener('change', () => { nav.toggleRelay(); });
     relayToggle.appendChild(relayBox);
-    relayToggle.appendChild(el('span', 'net-lobby-relay-toggle-label', '我要用自建中继（TURN）'));
+    relayToggle.appendChild(el('span', 'net-lobby-relay-toggle-label', '改用我自己的中继（TURN）'));
     panel.appendChild(relayToggle);
     if (relayShown) {
       // 展开之后才渲染那三项（同"默认不渲染"纪律：桩上分不出 `display:none` 与"已展开"）
       panel.appendChild(el('p', 'net-lobby-relay-hint',
-        '要填就得三项齐全（URL、用户名、凭据）。'));
+        '要改就得三项齐全（URL、用户名、凭据）；三项填齐之后以你填的为准。'));
       appendField(panel, 'net-lobby-turn-url', 'TURN URL', 'turnUrl', nav);
       appendField(panel, 'net-lobby-turn-user', 'TURN 用户名', 'turnUsername', nav);
       appendField(panel, 'net-lobby-turn-cred', 'TURN 凭据', 'turnCredential', nav);
@@ -3886,11 +4001,16 @@ function appendField(
  * 8. 转发口（唯一出处都在别的模块里；本文件只把它们的结论搬给渲染层）
  * ==================================================================== */
 
-/** 邀请码长度读数的**唯一**组装处（区间由 T7 给；本文件不写那两个数） */
+/** 邀请码长度读数的**唯一**组装处（区间由 T7/T40 给；本文件不写那两个数） */
 export function inviteLengthText(chars: number, withinMeasuredRange: boolean): string {
+  /**
+   * ⚠️ **G5/T40 收尾**：那句话里说的是"**这一档**的实测区间"，不写死"600-900 那一档"。
+   * 区间由 `inviteLengthReport` 按这条码**实际用的档位**选（未压缩变体用它自己的上界）⇒
+   * 一条 1826 字符的正常 `-u` 码不会在屏上被说成"可能被截断"（那是最老内核唯一能用的那档）。
+   */
   return `这条邀请码 ${chars} 个字符；${withinMeasuredRange
-    ? '落在实测区间内。'
-    : '不在实测区间内（比实测的长或短）—— 仍然可用，但可能被某些聊天工具截断，发送时注意。'}`;
+    ? '落在这一档的实测区间内。'
+    : '不在这一档的实测区间内（比实测的长或短）—— 仍然可用，但可能被某些聊天工具截断，发送时注意。'}`;
 }
 
 /** 二维码占位说明（`qrPlaceholder()` 的唯一出口；本文件不实现编码器） */

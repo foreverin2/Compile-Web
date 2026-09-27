@@ -14,6 +14,7 @@ import {
   COMPRESSION_RATIO_MAX,
   COMPRESSION_RATIO_MIN,
   INVITE_CHARS_MAX,
+  INVITE_CHARS_MAX_UNCOMPRESSED,
   INVITE_CHARS_MIN,
   NO_ENDPOINT_MESSAGE,
   bytesToBase64Url,
@@ -30,6 +31,7 @@ import {
   browserRoomCode,
   compressText,
   compressionWithinMeasuredRange,
+  COMPRESSION_FALLBACK,
   createBrowserTransport,
   createInvite,
   createSignalingSession,
@@ -38,8 +40,13 @@ import {
   discoverSignalingEndpoint,
   inviteLengthReport,
   isRelayUrl,
+  probeCompressionFormat,
+  readableCompressionFailureText,
   readIceServers,
+  turnSettingsAreDefault,
+  defaultTurnShape,
   readInviteFromAddressBar,
+  readCompressionMode,
   roomCodeEntry,
   sha256Bytes,
   signalEndpointOf,
@@ -47,6 +54,9 @@ import {
   stripInviteFromAddressBar,
   utf8TextOf,
   type CompressionStreamLike,
+  type CompressionStreamMode,
+  type CompressionFormat,
+  type DecompressFormat,
   type DataChannelLike,
   type NetBrowserEnv,
   type PeerConnectionLike,
@@ -164,29 +174,63 @@ function fakeFetch(ledger: Ledger): (url: string) => Promise<{ ok: boolean; stat
 }
 
 /**
- * 一个**真实**的压缩流假件：用 Node 22 自带的 `CompressionStream('deflate-raw')`。
+ * 一个**真实**的压缩流假件：用 Node 22 自带的 `CompressionStream`。
  *
  * 为什么这不算"假"：它就是浏览器里的同一个 API（本机 Node 22.22.2 实测
  * `typeof CompressionStream === 'function'`）。用它量出来的字节数才是真的 deflate 输出，
  * 而不是"假件编出来的数字"。
+ *
+ * ★ **G5/T40**：**方向由模式串自己带**（`'decompress'` 或 `'gzip+'` 那类带 `+` 的名字），
+ * 格式名也由它带。所以本假件只有一个入参 —— 第二个参数只是为了让老调用点那两个字
+ * （`'compress'` / `'decompress'`）继续可读，**不参与判定**。
  */
-const realCompression: (mode: 'compress' | 'decompress') => CompressionStreamLike | null = (mode) => {
-  const Ctor = mode === 'compress' ? globalThis.CompressionStream : globalThis.DecompressionStream;
-  if (Ctor === undefined) return null;
-  return {
-    run: async (input) => {
-      // `Uint8Array` 的 `buffer` 在 TS 5.7+ 的泛型里是 `ArrayBufferLike`，而 `BlobPart` 只要
-      // `ArrayBufferView<ArrayBuffer>` —— 这一处必须显式断言（本仓没有 `@types/node`，不能用别的手段）
-      const piped = new Blob([input as unknown as BlobPart]).stream().pipeThrough(new Ctor('deflate-raw'));
-      return new Uint8Array(await new Response(piped).arrayBuffer());
-    },
+const realCompression: (mode?: CompressionStreamMode) => CompressionStreamLike | null =
+  (mode = 'compress') => {
+    const read = readCompressionMode(mode);
+    const Ctor = read.decompress ? globalThis.DecompressionStream : globalThis.CompressionStream;
+    if (Ctor === undefined) return null;
+    return {
+      run: async (input) => {
+        // `Uint8Array` 的 `buffer` 在 TS 5.7+ 的泛型里是 `ArrayBufferLike`，而 `BlobPart` 只要
+        // `ArrayBufferView<ArrayBuffer>` —— 这一处必须显式断言（本仓没有 `@types/node`，不能用别的手段）
+        const piped = new Blob([input as unknown as BlobPart]).stream().pipeThrough(new Ctor!(read.format));
+        return new Uint8Array(await new Response(piped).arrayBuffer());
+      },
+    };
   };
-};
 
-/** 一个**恒等**的压缩流假件：原样交回（只用在"不关心压缩语义"的腿上） */
-const identityCompression: (mode: 'compress' | 'decompress') => CompressionStreamLike = () => ({
-  run: async (input) => Uint8Array.from(input),
-});
+/**
+ * ★★ **G5/T40：一台"照用户真机那样坏掉一半"的压缩流假件**（判据 ①②④ 的锚点）。
+ *
+ * 形态来自**真机体检原文**（协调侧 `probe.html`，两台平板、Chromium 97）：
+ * `deflate-raw` **FAIL**（原文 `Failed to construct 'CompressionStream': Unsupported
+ * compression format: 'deflate-raw'`），而 `deflate` / `gzip` **OK**（含解压侧）。
+ *
+ * 它**真抛**那句原文（不是返回 null）：这正是必须被降级链接住、且**不许**进界面的那种失败。
+ */
+function chromium97Compression(
+  unsupported: readonly CompressionFormat[] = ['deflate-raw'],
+): (mode?: CompressionStreamMode) => CompressionStreamLike | null {
+  return (mode = 'compress') => {
+    const read = readCompressionMode(mode);
+    if (unsupported.includes(read.format)) {
+      throw new TypeError(`Failed to construct 'CompressionStream': Unsupported compression format: '${read.format}'`);
+    }
+    return realCompression(mode);
+  };
+}
+
+/**
+ * 一个**恒等**的压缩流假件：压缩原样交回（只用在"不关心压缩语义"的腿上）。
+ *
+ * ⚠️ **解压那一路必须落到真件**：恒等的"解压"会把"仍是压缩态的字节"当解压结果交出去，
+ * 而 `createInvite` 的自洽检查会当场把它判成 `bad-json`（实测踩过）。老代码里
+ * `decompressBytes` 写死走 `'decompress'` 所以没暴露；T40 起解压也走这个注入缝。
+ */
+const identityCompression: (mode?: CompressionStreamMode) => CompressionStreamLike = (mode = 'compress') =>
+  (readCompressionMode(mode).decompress ? realCompression(mode) : null) ?? {
+    run: async (input) => Uint8Array.from(input),
+  };
 
 const newLedger = (): Ledger => ({ wsUrls: [], fetched: [], iceConfigs: [], sent: [], restarts: 0, ws: [] });
 
@@ -543,12 +587,19 @@ describe('判据 7：SDP 压缩区间与邀请码总长', () => {
    * 从**小 `createInvite` 的公开口**打进去，断言它必须响亮失败。
    */
   describe('★ 编码侧的自洽检查有牙（坏的压缩结果不许放行）', () => {
-    /** 一个"压出来是垃圾"的压缩流：压缩给 40 字节随机内容，解压只认真 deflate */
-    const garbageCompression = (mode: 'compress' | 'decompress'): CompressionStreamLike | null => {
-      if (mode === 'compress') {
+    /**
+     * 一个"压出来解不回来"的压缩流：**压缩是真 deflate**（所以降级链会认这一档），
+     * 但解压交回 40 字节垃圾（所以"压出来的必须解得动"这条自洽检查必须把它拦下）。
+     *
+     * ★ T40 起这里必须做成**格式/方向感知**的：压缩那一路收到格式名（`deflate-raw` 等），
+     * 解压那一路收到的是带 `+` 的格式名（`deflate-raw+` 等，见 `DecompressFormat`）。
+     */
+    const garbageCompression = (mode: CompressionStreamMode = 'compress'): CompressionStreamLike | null => {
+      if (readCompressionMode(mode).decompress) {
         return { run: async () => Uint8Array.from({ length: 40 }, (_, i) => (i * 37) % 256) };
       }
-      return realCompression('decompress');
+      // 压缩：真 deflate（用真件），这样"压得出"这一条成立、失败的只能是"解不回来"
+      return realCompression(mode);
     };
 
     it('压缩流交出的字节真解不开 ⇒ `createInvite` 给**可读失败**，不静默产出一条坏邀请码', async () => {
@@ -686,29 +737,62 @@ describe('判据 8：交出的哈希能力在会话状态机里可用（D15）',
 });
 
 /* ============================================================================
- * 5. 判据 9：`iceServers` 默认不硬编码任何中继（变异 M2）
+ * 5. 判据 9：默认 `iceServers` 里**必须**有一项带凭据的中继（G5/T38 裁决变了）
+ *
+ * ## ★★ 裁决为什么变（不许为了让它绿而把默认里的中继删掉）
+ *
+ * 原判据 9（判据："默认值的每一项都不是 `turn:` / `turns:`"）在 T38 **之前**是对的：
+ * 那时中继只能由玩家自配，所以"默认里不许出现 `turn:`"等价于"程序不偷偷替玩家接一台中继"。
+ * 用户 2026-09-25 的裁决与协调者的外网实测把事实改了：默认就要带 `8.130.97.243` 那台
+ * coturn（"连不上时走服务器"必须在**默认路径**上存在，玩家零填写）。
+ * ⇒ 判据 9 的**意图照旧钉住**（默认值不许偷偷接一台**来路不明**的中继），
+ * 钉的形态换成三条：① 默认里必有一项中继、主机就是这台服务器；② 它必须带凭据；
+ * ③ 玩家自己配的中继仍然只由 `readIceServers` 追加（默认数组里不出现玩家那一项）。
  * ========================================================================== */
 
-describe('判据 9：默认 iceServers 里一个中继都没有（D14）', () => {
-  it('① 默认值的每一项都不是 turn:/turns:；② 只有公共 STUN', () => {
-    for (const s of DEFAULT_ICE_SERVERS) {
-      for (const url of s.urls) {
-        expect(isRelayUrl(url), `默认值里出现了中继：${url}`).toBe(false);
-        expect(url.startsWith('stun:'), `默认值里出现了非 STUN 项：${url}`).toBe(true);
-      }
-      expect(s.username, '默认值里带了中继凭据').toBeUndefined();
-      expect(s.credential, '默认值里带了中继凭据').toBeUndefined();
-    }
-    expect(DEFAULT_ICE_SERVERS.length).toBeGreaterThan(0);
+describe('判据 9（T38 重钉）：默认 iceServers 里必须有一台带凭据的服务器中继', () => {
+  /** 这一份 `iceServers` 里的中继 URL（判定只认 `isRelayUrl` 这一个出处） */
+  const relayUrlsIn = (servers: readonly { readonly urls: readonly string[] }[]): string[] =>
+    servers.flatMap((s) => s.urls).filter(isRelayUrl);
+
+  it('① 默认里恰好一项中继，且主机就是这台已实测通过的服务器；② 它带凭据（没凭据的默认中继必然 401）', () => {
+    const relays = DEFAULT_ICE_SERVERS.filter((s) => s.urls.some(isRelayUrl));
+    expect(relays.length, '默认值里应当恰好有一项中继（多一项就要人工复核一次）').toBe(1);
+    const relay = relays[0];
+    const url = relay.urls.find(isRelayUrl) ?? '';
+    expect(url, `默认中继的地址不是这台服务器：${url}`).toContain('8.130.97.243');
+    expect(url).toContain(':3478');
+    // 凭据：只要"带了"就够（值是产品默认值，不在这里复述）
+    expect(typeof relay.username === 'string' && relay.username.length > 0, '默认中继没带用户名').toBe(true);
+    expect(typeof relay.credential === 'string' && relay.credential.length > 0, '默认中继没带凭据').toBe(true);
+    // ★★ T40 更正（真机读数）：**不许**再有一条指向这台服务器的 `stun:`。
+    //
+    // T38 时这里写的是反过来的断言（"默认里应当有一项指向它的 STUN，实测 srflx 就是它给的"）。
+    // 用户真机体检（2026-09-27，Chromium 97 平板）实测：`stun:8.130.97.243:3478` 回
+    // `code=701 STUN server address is incompatible`，而**同一个 `:3478`** 的 `turn:` 那项
+    // 正常产出 `relay udp 8.130.97.243:49181` ⇒ T38 那句归因错了：给 srflx/relay 的是 `turn:`。
+    // TURN 的分配流程本身带 Binding 请求 ⇒ 同址的 `stun:` 提供不了任何额外能力，只是每次协商
+    // 多打一行 701。所以它被删掉，这条腿改成钉"删掉了"（防有人又把它加回来）。
+    const stunToIt = DEFAULT_ICE_SERVERS.some((s) => s.urls.some((u) => u.startsWith('stun:8.130.97.243')));
+    expect(
+      stunToIt,
+      '默认里又出现了一条指向这台服务器的 stun:（真机实测它回 701 且不提供额外能力，'
+      + '同一端口上 turn: 那项已经给了 srflx；见 src/ui/net-browser.ts 的 DEFAULT_ICE_SERVERS 注释）',
+    ).toBe(false);
   });
 
-  it('③ 行为腿：`readIceServers()` 不给设置时只有 STUN、`relayConfigured === false`', () => {
+  it('③ 行为腿：`readIceServers()` 不给设置时**带中继**（`relayConfigured === true`、来源 builtin）', () => {
     for (const settings of [undefined, null, {}]) {
       const read = readIceServers(settings);
-      expect(read.relayConfigured).toBe(false);
+      expect(read.relayConfigured, '默认配置里没有可用的中继 —— "连不上时走服务器"在默认路径上不存在').toBe(true);
       expect(read.relayIncomplete).toBe(false);
-      expect(read.servers.every((s) => s.urls.every((u) => !isRelayUrl(u)))).toBe(true);
+      expect(read.relaySource, '默认那份中继的来源应当是 builtin').toBe('builtin');
+      expect(relayUrlsIn(read.servers).length, '默认那份 iceServers 里应当恰好一项中继').toBe(1);
+      expect(relayUrlsIn(read.servers)[0]).toContain('8.130.97.243');
     }
+    // ★ 默认值**不等于**"玩家配了中继"：严格档（等满上界）只对玩家自己填的那项生效
+    expect(readIceServers({}).relaySource, '默认值被当成了"玩家配的中继"（那样每次出邀请码都会等满上界）')
+      .not.toBe('player');
   });
 
   it('★ 反证：合成一个含 `turn:example.invalid` 的 `iceServers` ⇒ 必须被判红', () => {
@@ -717,16 +801,24 @@ describe('判据 9：默认 iceServers 里一个中继都没有（D14）', () =>
     expect(bad, '自带的中继样本没被判红 —— 上面那些"零中继"断言是假的').toEqual(['turn:example.invalid:3478']);
   });
 
-  it('★ 文本腿：`net-browser.ts` 里不出现任何**字面**的 TURN 主机名 / 端口', () => {
+  it('★ 文本腿（T38 重钉）：`net-browser.ts` 里的字面中继地址**恰好一个**，就是默认那台', () => {
     const code = stripComments(
       readSrc(fileURLToPath(new URL('../../src/ui/net-browser.ts', import.meta.url))),
     );
     /**
-     * 口径：**先把字符串字面量抽出来**，再看它是不是一个**中继地址**（`turn:` / `turns:`
-     * 后面还跟着东西）。两个纯前缀常量（`'turn:'` / `'turns:'`，`isRelayUrl` 用它做比较）
-     * **不算**"字面中继地址" —— 判据说的是"不许硬编码中继主机名/端口"，不是"不许认识这两个前缀"。
+     * ## 口径（T38：这条腿的裁决也翻了——原来是"一个都不许有"）
      *
-     * ⚠️ 两处口径都是实测踩出来的：
+     * 旧口径（"本文件里不出现任何字面的 TURN 主机名/端口"）当时是对的：默认值里没有中继，
+     * 出现字面地址就意味着"有人偷偷接了一台中继"。T38 起默认**必须**是这台服务器
+     * ⇒ 口径换成"**恰好一个，且就是这个地址**"：多一个就会红（防有人又塞一台），
+     * 少一个也红（防有人把默认中继悄悄删掉换门禁绿）。
+     *
+     * 抽取方式不变：**先把字符串字面量抽出来**，再看它是不是一个**中继地址**
+     * （`turn:` / `turns:` 后面还跟着东西）。两个纯前缀常量（`'turn:'` / `'turns:'`，
+     * `isRelayUrl` 用它做比较）**不算**"字面中继地址" —— 判据说的是"硬编码了哪些中继主机"，
+     * 不是"不许认识这两个前缀"。
+     *
+     * ⚠️ 两处口径都是实测踩出来的（保留，免得后人再踩一遍）：
      *  1. 第一版写成 `/['"`][^'"`]*\bturns?:/` —— 那个 `[^'"`]*` 会**跨过引号**一路吃到同一行
      *     后面出现的 `turn` 字样上，把一条 `'wss://…'` 报成了中继（假红）；
      *  2. 第二版只抽字面量、但没排除纯前缀，于是把 `'turn:'` 这个常量本身报了出来（假红）。
@@ -735,7 +827,9 @@ describe('判据 9：默认 iceServers 里一个中继都没有（D14）', () =>
      */
     const isRelayLiteral = (s: string): boolean => /(^|[^A-Za-z])turns?:\S/i.test(s);
     const relayish = literalsIn(code).filter(isRelayLiteral);
-    expect(relayish, `net-browser.ts 里出现了字面中继地址：${relayish.join(' | ')}`).toEqual([]);
+    expect(relayish, `net-browser.ts 里的字面中继地址不是恰好一个：${relayish.join(' | ')}`).toEqual([
+      'turn:8.130.97.243:3478',
+    ]);
     // 正控：真中继地址必须被判出来
     expect(literalsIn('const x = "turn:example.invalid:3478";').filter(isRelayLiteral))
       .toEqual(['turn:example.invalid:3478']);
@@ -747,20 +841,67 @@ describe('判据 9：默认 iceServers 里一个中继都没有（D14）', () =>
     expect(literalsIn("const s = ['turn:', 'turns:'];").filter(isRelayLiteral)).toEqual([]);
   });
 
-  it('玩家自己配齐了三项 ⇒ 恰好追加**一项**中继（D14 允许玩家配）', () => {
+  it('玩家自己配齐了三项 ⇒ 中继那一项**换成玩家的**（默认那台不再出现），来源标成 player', () => {
     const read = readIceServers({ turnUrl: 'turn:relay.invalid:3478', turnUsername: 'u', turnCredential: 'c' });
     expect(read.relayConfigured).toBe(true);
-    expect(read.servers.length).toBe(DEFAULT_ICE_SERVERS.length + 1);
+    expect(read.relaySource, '玩家配齐了却没标成 player（严格档会失效）').toBe('player');
+    // ★ 覆盖而不是追加：条数不变，玩家那一项**顶掉**默认那一项（判据 3 的"改了就覆盖"）
+    expect(read.servers.length, '覆盖之后条数变了（说明是追加而不是替换）').toBe(DEFAULT_ICE_SERVERS.length);
     const relay = read.servers[read.servers.length - 1];
     expect(relay.urls).toEqual(['turn:relay.invalid:3478']);
     expect(relay.username).toBe('u');
+    expect(
+      read.servers.some((s) => s.urls.some((u) => u.includes('8.130.97.243') && isRelayUrl(u))),
+      '玩家改了中继地址，默认那台**还在** iceServers 里（判据 3 不成立）',
+    ).toBe(false);
   });
 
-  it('配了一半（只有 URL、没凭据）⇒ 中继**不被加上**，但这件事被报出来', () => {
+  it('★ T38：预填成默认值 ≠ 玩家改过（`relaySource` 报 player，但 `settingsAreDefault` 为真）', () => {
+    /**
+     * ## 为什么这条腿非有不可
+     *
+     * T38 把大厅三项**预填成默认值** ⇒ 设置里"有内容"不再等于"玩家改过"。
+     * `readIceServers` 只看内容形状 ⇒ 它在这两种世界里都报 `relaySource: 'player'`。
+     * 要分辨它们的是 `settingsAreDefault`（`__g5Match.ice()` 的证据面就是它）
+     * —— 只报 `relaySource` 的话，"默认"与"玩家覆盖"读起来一模一样。
+     *
+     * ⚠️ 对照物用**导出面**的 `defaultTurnShape()`，**不**在这里手写一份同形状的字面量：
+     * 手写的那份不会跟着 `DEFAULT_ICE_SERVERS` 走，默认值一改这条腿就变成拿旧默认去比新默认。
+     */
+    const defaults = defaultTurnShape();
+    // ① 预填 = 默认值 ⇒ 与默认预填逐字相同 ⇒ "没动过"
+    expect(turnSettingsAreDefault(defaults, defaults), '预填成默认值却没被判成"没动过"').toBe(true);
+    expect(turnSettingsAreDefault({ turnUrl: 'turn:other.invalid:3478', turnUsername: 'u', turnCredential: 'c' }, defaults),
+      '玩家改了地址却被判成"没动过"（严格档会失效）').toBe(false);
+    // ② 三项全空 / 什么都没给 ⇒ **不算**"就是默认值"（那是"没给设置"那一档，别混进来）
+    expect(turnSettingsAreDefault(null, defaults), 'null 被判成了"就是默认值"').toBe(false);
+    expect(turnSettingsAreDefault({}, defaults), '空设置被判成了"就是默认值"').toBe(false);
+    expect(turnSettingsAreDefault({ turnUrl: '   ' }, defaults), '全空白被判成了"就是默认值"').toBe(false);
+    // ③ 读数上两者分开：内容形状（relaySource）与"改没改"（settingsAreDefault）各自可读
+    const asDefault = readIceServers(defaults, true);
+    expect(asDefault.relaySource, '预填值被写进 iceServers 时来源应当是 player（内容是玩家形状的）').toBe('player');
+    expect(asDefault.settingsAreDefault, 'settingsAreDefault 没有从入参透传出来').toBe(true);
+    const changed = readIceServers({ turnUrl: 'turn:other.invalid:3478', turnUsername: 'u', turnCredential: 'c' }, false);
+    expect(changed.relaySource).toBe('player');
+    expect(changed.settingsAreDefault).toBe(false);
+  });
+
+  it('玩家没写 `turn:` 前缀 ⇒ 补上前缀（否则浏览器认不出它是中继）', () => {
+    const read = readIceServers({ turnUrl: 'relay.invalid:3478', turnUsername: 'u', turnCredential: 'c' });
+    expect(read.servers[read.servers.length - 1].urls).toEqual(['turn:relay.invalid:3478']);
+  });
+
+  it('配了一半（只有 URL、没凭据）⇒ 玩家那一项**不被加上**，但这件事被报出来', () => {
     const read = readIceServers({ turnUrl: 'turn:relay.invalid:3478' });
     expect(read.relayConfigured).toBe(false);
     expect(read.relayIncomplete).toBe(true);
-    expect(read.servers.some((s) => s.urls.some(isRelayUrl)), '配了一半的中继被塞进了默认值').toBe(false);
+    // ★ T38：默认那份里本来就有内置中继 ⇒ 这里判的是"**玩家那一项**没被塞进来"
+    //   （判据 9 的意图：不许把玩家配了一半的东西当成能用的中继）
+    expect(read.servers.some((s) => s.urls.includes('turn:relay.invalid:3478')), '配了一半的中继被当成能用的加进来了')
+      .toBe(false);
+    // 而默认那台内置中继照旧在（"配了一半"不该把产品默认值也一起弄丢）
+    expect(read.servers.some((s) => s.urls.some((u) => u.includes('8.130.97.243'))), '配了一半之后连默认中继都没了')
+      .toBe(true);
   });
 });
 
@@ -790,7 +931,14 @@ describe('判据 12：init() 只等本侧，对端在线只由 onStatus 回答�
     }
     // `iceServers` 真的被喂进了构造（不是"读出来就扔了"）
     expect(ledger.iceConfigs.length).toBe(1);
-    expect(ledger.iceConfigs[0]).toEqual({ iceServers: DEFAULT_ICE_SERVERS.map((s2) => ({ urls: [...s2.urls] })) });
+    expect(ledger.iceConfigs[0]).toEqual({
+      iceServers: DEFAULT_ICE_SERVERS.map((s2) => ({
+        urls: [...s2.urls],
+        // 中继那一项带凭据（默认值现在就有中继）—— 逐字段拼，与 `readIceServers` 同口径
+        ...(typeof s2.username === 'string' ? { username: s2.username } : {}),
+        ...(typeof s2.credential === 'string' ? { credential: s2.credential } : {}),
+      })),
+    });
   });
 
   it('对端连上 ⇒ **只**由状态事件报 online；再断 ⇒ offline', async () => {
@@ -1106,5 +1254,297 @@ describe('夹具自证', () => {
     const after = s.sendText('x');
     expect(after.ok).toBe(false);
     if (!after.ok) expect(after.reason).toBe('closed');
+  });
+});
+
+/* ============================================================================
+ * ★★ G5/T40：压缩能力的**降级链**（`deflate-raw` → `deflate` → `gzip` → 不压缩）
+ *
+ * 事故原文（用户 2026-09-27 截图）：`压缩没有完成: TypeError: Failed to construct
+ * 'CompressionStream': Unsupported compression format: 'deflate-raw'` ⇒ 邀请码根本没生成出来。
+ * 协调侧的真机体检（两台平板、**Chromium 97**）给出这台设备的三档读数：
+ *   `deflate-raw` **FAIL**（就是那句原文）、`deflate` **OK**、`gzip` **OK**（含解压侧）。
+ * ⇒ 下面这一组腿就用那个形状的假件（`chromium97Compression`），逐档验：
+ *   ① 不许猜 UA（真构造一次才算"支持"）；
+ *   ② 坏掉的那一档必须被**跳过**，落到下一档能用的（而不是跳到"不压缩"）；
+ *   ③ 三档全废 ⇒ 走"不压缩"，仍然能编能解；
+ *   ④ 任何分支的**界面文案里没有原始异常字样**。
+ * ========================================================================== */
+
+describe('★★ G5/T40：压缩能力降级链（真机 Chromium 97 的形状）', () => {
+  /** 与判据 7 同一份字段（同一段语料） */
+  const t40Fields = () => ({
+    originAndPath: 'https://example.invalid/compile/index.html',
+    p: PROTO_VERSION,
+    sdp: FULL_OFFER_SDP,
+    ice: ['candidate:1467250027 1 udp 2122260223 15344d9b-1c48-4496-8365-65d7e1b67fe5.local 63625 typ host'],
+    sessionId: 'sid-00000000000000000000000000000000',
+    hostPromise: 'a'.repeat(64),
+    guestPromise: 'b'.repeat(64),
+  });
+
+  it('① 探测**真去构造一次**（判据不许猜 UA）：坏掉的那一档报 supported:false，好的报 true', async () => {
+    const env = { compressionStream: chromium97Compression(['deflate-raw']) };
+    const bad = await probeCompressionFormat('deflate-raw', env);
+    expect(bad.supported, 'deflate-raw 明明抛了，却被报成"支持"').toBe(false);
+    // ★ 原始异常只进读数（诊断面），文案一个字都不用它
+    expect(bad.note ?? '', '探测读数里没留下原始异常串').toContain('Unsupported compression format');
+    expect((await probeCompressionFormat('deflate', env)).supported).toBe(true);
+    expect((await probeCompressionFormat('gzip', env)).supported).toBe(true);
+    // 反控：本机（node 22 自带三个构造器）三档都应当是真的支持
+    expect((await probeCompressionFormat('deflate-raw', { compressionStream: realCompression })).supported).toBe(true);
+  });
+
+  /**
+   * ★★ **评审点名的"诊断口在说谎"**（T40 收尾补的腿）。
+   *
+   * 缺省实现把真构造**推迟到 `run()` 里** ⇒ 只调工厂的探测口对"全局构造器构造即抛"这种情况
+   * **恒报 `supported: true`**（评审复跑实测）。这条腿把**全局构造器**换成用户那台设备的行为，
+   * 走**零参**（= 真走 `defaultEnv()`）调探测口 ⇒ 必须报 false。
+   * 它才是"这个口到底能不能探到不支持"的判据；上面那条用的是工厂即抛的假件，探不到这一层。
+   */
+  it('①b 把**全局构造器**打桩成"deflate-raw 构造即抛" ⇒ 探测口必须报 false（缺省 env 那条路）', async () => {
+    const original = globalThis.CompressionStream;
+    expect(typeof original, '本机没有 CompressionStream，这条腿没有判别力').toBe('function');
+    // 用**函数**而不是 class：构造器返回一个对象会替换实例（class 的 `return` 在 TS 里过不去）
+    function ThrowingForRaw(this: unknown, format: string): unknown {
+      if (format === 'deflate-raw') {
+        throw new TypeError("Failed to construct 'CompressionStream': Unsupported compression format: 'deflate-raw'");
+      }
+      return new original!(format as CompressionFormat);
+    }
+    (globalThis as { CompressionStream?: unknown }).CompressionStream = ThrowingForRaw;
+    try {
+      // 零参 ⇒ 走 `defaultEnv()` ⇒ 真构造发生在 `run()` 里（正是"说谎"那一层）
+      const bad = await probeCompressionFormat('deflate-raw');
+      expect(bad.supported, '全局构造器对 deflate-raw 构造即抛，探测口却报 true —— 诊断口在说谎').toBe(false);
+      expect(bad.note ?? '').toContain('Unsupported compression format');
+      // 反控：同一次打桩下 `deflate` 照常可用 ⇒ 上面那条不是"什么都报 false"
+      expect((await probeCompressionFormat('deflate')).supported, '打桩之后连 deflate 也报不支持').toBe(true);
+    } finally {
+      (globalThis as { CompressionStream?: unknown }).CompressionStream = original;
+    }
+    // 收工后本机恢复原样
+    expect((await probeCompressionFormat('deflate-raw')).supported).toBe(true);
+  });
+
+  it('② 降级链顺序写死在 COMPRESSION_FALLBACK 里（deflate-raw 先，不压缩最后）', () => {
+    expect(COMPRESSION_FALLBACK).toEqual(['deflate-raw', 'deflate', 'gzip']);
+  });
+
+  it('★ 判据 ①②：`deflate-raw` 抛用户那句原文 ⇒ **仍然出码**，落在 `deflate` 档，另一端解得开', async () => {
+    const env = { compressionStream: chromium97Compression(['deflate-raw']) };
+    const made = await createInvite(t40Fields(), env);
+    expect(made.ok, `打桩成真机形状之后竟然没出码：${made.ok ? '' : made.message}`).toBe(true);
+    if (!made.ok) return;
+    // 哪一档：**deflate**（不是跳过一切、也不是不压缩）
+    expect(made.format, '没有落到 deflate 档（那台真机 deflate/gzip 都是 OK 的）').toBe('deflate');
+    expect(made.marker).toBe('-d');
+    expect(made.payload.startsWith(`${PROTO_VERSION}.-d`)).toBe(true);
+    // 逐档读数：deflate-raw 那条**不可用**，deflate 那条可用
+    const probes = made.probes;
+    expect(probes.map((x) => x.format)).toEqual(['deflate-raw', 'deflate']);
+    expect(probes[0].supported).toBe(false);
+    expect(probes[0].note ?? '').toContain('Unsupported compression format');
+    expect(probes[1].supported).toBe(true);
+    // 长度仍落在**压缩档**的实测区间（600-900）—— 降级没有把它变成一条长码
+    expect(made.withinMeasuredRange, `${made.chars} 字符越出 600-900`).toBe(true);
+    // 另一端（能力齐全）解得开，且逐字一致
+    const back = await decodeInvitePayload(made.payload, { compressionStream: realCompression });
+    expect(back.ok, `另一端解不开这条 deflate 档的码：${back.ok ? '' : back.reason + ' / ' + back.message}`).toBe(true);
+    if (back.ok) {
+      expect(back.format.kind).toBe('deflate');
+      expect(back.payload.sdp).toBe(FULL_OFFER_SDP);
+      expect(back.payload.sessionId).toBe(t40Fields().sessionId);
+    }
+  });
+
+  it('★ 只有 gzip 可用（前两档都抛）⇒ 落在 gzip 档，另一端解得开', async () => {
+    const env = { compressionStream: chromium97Compression(['deflate-raw', 'deflate']) };
+    const made = await createInvite(t40Fields(), env);
+    expect(made.ok, `只有 gzip 可用时没出码：${made.ok ? '' : made.message}`).toBe(true);
+    if (!made.ok) return;
+    expect(made.format).toBe('gzip');
+    expect(made.payload.startsWith(`${PROTO_VERSION}.-g`)).toBe(true);
+    expect(made.probes.filter((x) => !x.supported).map((x) => x.format)).toEqual(['deflate-raw', 'deflate']);
+    const back = await decodeInvitePayload(made.payload, { compressionStream: realCompression });
+    expect(back.ok).toBe(true);
+    if (back.ok) expect(back.format.kind).toBe('gzip');
+  });
+
+  it('★ 判据 ④：三档**全抛** ⇒ 走"不压缩"那一档，仍然能编能解，长度落在未压缩上界内', async () => {
+    const env = { compressionStream: chromium97Compression(['deflate-raw', 'deflate', 'gzip']) };
+    const made = await createInvite(t40Fields(), env);
+    expect(made.ok, `三档全废时没出码：${made.ok ? '' : made.message}`).toBe(true);
+    if (!made.ok) return;
+    expect(made.format, '三档全废却没有落到"不压缩"').toBe('none');
+    expect(made.payload.startsWith(`${PROTO_VERSION}.-u`)).toBe(true);
+    // 未压缩变体的长度：比压缩档长得多，但仍在上界内（上界出处见 invite.ts 的常量注释）
+    expect(made.withinMeasuredRange, '未压缩变体不该落在压缩档的 600-900 里').toBe(false);
+    expect(made.withinUncompressedRange, `未压缩变体 ${made.chars} 字符越出上界`).toBe(true);
+    expect(made.chars).toBeGreaterThan(INVITE_CHARS_MAX);
+    // 另一端（能力齐全）必须解得开 —— "不压缩"那一档不需要任何设备能力
+    const back = await decodeInvitePayload(made.payload, { compressionStream: realCompression });
+    expect(back.ok, `未压缩变体另一端解不开：${back.ok ? '' : back.reason + ' / ' + back.message}`).toBe(true);
+    if (back.ok) {
+      expect(back.format.kind).toBe('none');
+      expect(back.payload.sdp).toBe(FULL_OFFER_SDP);
+      expect(back.payload.hostPromise).toBe(t40Fields().hostPromise);
+    }
+  });
+
+  it('★ 判据 ③（回归）：不打桩时**仍走 deflate-raw**（老格式 `N.<base64>` 的味道没变）', async () => {
+    const made = await createInvite(t40Fields(), { compressionStream: realCompression });
+    expect(made.ok).toBe(true);
+    if (!made.ok) return;
+    expect(made.format).toBe('raw');
+    // ★ "仍是 deflate-raw"这条腿：`-r` 就是它的显式标记；老读法（没有标记）也读成 raw
+    expect(made.payload.startsWith(`${PROTO_VERSION}.-r`)).toBe(true);
+    expect(made.withinMeasuredRange, `${made.chars} 字符越出 600-900`).toBe(true);
+    expect(made.compressedBytes).toBeGreaterThanOrEqual(COMPRESSED_BYTES_MIN);
+    expect(made.compressedBytes).toBeLessThanOrEqual(COMPRESSED_BYTES_MAX);
+  });
+
+  /**
+   * ★★ **T40 收尾（评审点名的第 2 处）**：长度读数必须按**这条码实际用的档位**选区间。
+   *
+   * 修复前 `inviteLengthReport` 恒按 600-900 判 ⇒ 一条**完全正常**的 `-u` 码（1826 字符）
+   * 会在屏上被说成"不在实测区间内…可能被截断" —— 而那正是**最老内核唯一能用**的那一档。
+   */
+  it('★ 收尾：`-u` 码的长度读数按**未压缩档**判（不再报"越出区间"）', async () => {
+    const env = { compressionStream: chromium97Compression(['deflate-raw', 'deflate', 'gzip']) };
+    const made = await createInvite(t40Fields(), env);
+    expect(made.ok).toBe(true);
+    if (!made.ok) return;
+    expect(made.format, '这条腿要的是一条未压缩码').toBe('none');
+    const report = inviteLengthReport(made.payload);
+    expect(report.chars).toBe(made.chars);
+    expect(report.chars, `未压缩码只有 ${report.chars} 字符 —— 这条腿的语料太短，失去判别力`)
+      .toBeGreaterThan(INVITE_CHARS_MAX);
+    expect(report.max, '区间上界不是未压缩档那一个').toBe(INVITE_CHARS_MAX_UNCOMPRESSED);
+    expect(report.withinMeasuredRange, `${report.chars} 字符的正常 -u 码被判成"越出区间"`).toBe(true);
+  });
+
+  it('★ 收尾：压缩档的长度读数仍按 600-900 判（未压缩上界没有把压缩档放宽）', async () => {
+    const made = await createInvite(t40Fields(), { compressionStream: realCompression });
+    expect(made.ok).toBe(true);
+    if (!made.ok) return;
+    const report = inviteLengthReport(made.payload);
+    expect(report.max, '压缩档的上界被未压缩常量顶替了').toBe(INVITE_CHARS_MAX);
+    expect(report.withinMeasuredRange).toBe(true);
+    // 反证：同一条压缩档的读数**仍然会**拒绝一条超长码（区间没被放宽成"永远 true"）
+    const tooLong = `${PROTO_VERSION}.-r${'A'.repeat(1200)}`;
+    expect(inviteLengthReport(tooLong).withinMeasuredRange, '压缩档的区间被放宽了').toBe(false);
+  });
+
+  it('★ 判据 ⑤：三档全废时那句文案是**人话** —— 没有 TypeError / Unsupported compression format 字样', () => {
+    const probes = [
+      { format: 'deflate-raw' as const, supported: false, note: "TypeError: Failed to construct 'CompressionStream': Unsupported compression format: 'deflate-raw'" },
+      { format: 'deflate' as const, supported: false, note: "TypeError: Failed to construct 'CompressionStream': Unsupported compression format: 'deflate'" },
+      { format: 'gzip' as const, supported: false, note: "TypeError: Failed to construct 'CompressionStream': Unsupported compression format: 'gzip'" },
+    ];
+    const msg = readableCompressionFailureText(probes);
+    expect(msg).not.toContain('TypeError');
+    expect(msg).not.toContain('Unsupported compression format');
+    expect(msg).not.toContain('Failed to construct');
+    expect(msg.length, '那句话太短，不像一句能指导下一步的话').toBeGreaterThan(20);
+    // 它要能指导下一步：换浏览器
+    expect(msg).toContain('浏览器');
+    // 反控：读数里**仍然**保留原始异常串（诊断面不许被文案那一层抹掉）
+    expect(probes.every((p) => (p.note ?? '').includes('Unsupported compression format'))).toBe(true);
+  });
+
+  it('★ 连压缩能力都没有（`compressionStream` 返回 null）⇒ 走"不压缩"那一档，**不是**报错', async () => {
+    // 这条腿钉的是 T40 之后"生成失败"这件事的**边界**：降级链的最后一档不需要任何设备能力
+    // ⇒ 单靠"没有 CompressionStream"已经构不成一次生成失败（这正是事故的修法想要的结果）。
+    const made = await createInvite(t40Fields(), { compressionStream: () => null });
+    expect(made.ok, '没有压缩能力时竟然没出码 —— 降级链最后一档没接上').toBe(true);
+    if (!made.ok) return;
+    expect(made.format).toBe('none');
+    expect(made.probes.every((p) => !p.supported), '三档都应当是"探测失败"').toBe(true);
+  });
+
+  it('★ 判据 ⑤（失败分支）：真正的生成失败那一支，文案也是人话（界面拿到的不是原始异常）', async () => {
+    // 唯一的失败路径：纯层拒绝（这里用"承诺串带空格"⇒ `bad-promise`）。
+    // ⚠️ 降级链接上之后，**环境类**失败已经不再是失败（见上一条腿）⇒ 这一条钉的是文案面。
+    const made = await createInvite(
+      { ...t40Fields(), hostPromise: 'has space', guestPromise: 'b'.repeat(64) },
+      { compressionStream: realCompression },
+    );
+    expect(made.ok, '承诺串带空格竟然被收下了（纯层那道形状校验没了）').toBe(false);
+    if (made.ok) return;
+    expect(made.message).not.toContain('TypeError');
+    expect(made.message).not.toContain('Unsupported compression format');
+    expect(made.message).not.toContain('Failed to construct');
+    expect(made.message.length, '失败文案太短').toBeGreaterThan(8);
+  });
+
+  it('★ 判据 ⑤（兜底）：注入缝**自己抛**时，`createInvite` 收成可读失败，不把异常丢给界面', async () => {
+    // 这条腿验的是 `createInvite` 里那个 try/catch（坏假件可能在这里抛）。
+    // 用 getter 抛：`{...defaultEnv(), ...env}` 展开时就会炸。
+    const boom = {
+      get compressionStream(): never {
+        throw new TypeError("Failed to construct 'CompressionStream': Unsupported compression format: 'deflate-raw'");
+      },
+    } as unknown as NetBrowserEnv;
+    const made = await createInvite(t40Fields(), boom);
+    expect(made.ok, '注入缝抛异常时竟然"成功"了').toBe(false);
+    if (made.ok) return;
+    expect(made.message).not.toContain('TypeError');
+    expect(made.message).not.toContain('Unsupported compression format');
+    expect(made.message).not.toContain('Failed to construct');
+    // 原始串留在**读数**里（诊断面），不进文案
+    expect(made.probes?.[0]?.note ?? '').toContain('Unsupported compression format');
+  });
+});
+
+/* ============================================================================
+ * ★★ G5/T40：回示码必须跟**邀请码那一档**走（`createInvite({ preferKind })`）
+ *
+ * 真浏览器门实测抓到的**跨机**缺陷：两端各按自己的设备能力选档时，房主那台 `deflate-raw`
+ * 坏掉 ⇒ 它出 `-d` 码；而加入方那台好着 ⇒ 它产的回示码落在 `-r`（它那儿 deflate-raw 能用）
+ * ⇒ **房主解不开自己那一局的回示码**（屏上"压缩段解不开"、两端停在 `handshaking`）。
+ * ⇒ `preferKind` 让"产回示码"这一步照邀请码那一档走。
+ * ========================================================================== */
+
+describe('★★ G5/T40：`preferKind`（回示码跟邀请码同一档）', () => {
+  const f = () => ({
+    originAndPath: 'https://example.invalid/compile/index.html',
+    p: PROTO_VERSION,
+    sdp: FULL_OFFER_SDP,
+    ice: ['candidate:1467250027 1 udp 2122260223 15344d9b-1c48-4496-8365-65d7e1b67fe5.local 63625 typ host'],
+    sessionId: 'sid-00000000000000000000000000000000',
+    hostPromise: 'a'.repeat(64),
+    guestPromise: 'b'.repeat(64),
+  });
+
+  it('★ 指定 `deflate` ⇒ 即使这台设备 deflate-raw 可用，也用 deflate（另一端解得开）', async () => {
+    const made = await createInvite({ ...f(), preferKind: 'deflate' }, { compressionStream: realCompression });
+    expect(made.ok, `指定档位时没出码：${made.ok ? '' : made.message}`).toBe(true);
+    if (!made.ok) return;
+    expect(made.format, '指定了 deflate 却挑了别的档').toBe('deflate');
+    expect(made.payload.startsWith(`${PROTO_VERSION}.-d`)).toBe(true);
+    // 逐档读数里说明"这是调用方指定的档位"
+    expect(made.probes.some((p) => (p.note ?? '').includes('调用方指定'))).toBe(true);
+    const back = await decodeInvitePayload(made.payload, { compressionStream: realCompression });
+    expect(back.ok).toBe(true);
+    if (back.ok) expect(back.format.kind).toBe('deflate');
+  });
+
+  it('★ 指定档位在这台设备上**不可用** ⇒ 照旧降级（宁可换档，也不要产不出来）', async () => {
+    // 房主指定的那一档在加入方这台设备上坏了 ⇒ 必须降级出码，而不是报错
+    const env = { compressionStream: chromium97Compression(['deflate-raw', 'deflate']) };
+    const made = await createInvite({ ...f(), preferKind: 'deflate' }, env);
+    expect(made.ok, '指定档位不可用时竟然没出码（应当降级）').toBe(true);
+    if (!made.ok) return;
+    expect(made.format, '指定档不可用时没有降级到 gzip').toBe('gzip');
+    expect(made.probes[0].supported, '第一条读数应当是"指定的档位不可用"').toBe(false);
+    expect(made.probes[0].note ?? '').toContain('调用方指定的档位');
+  });
+
+  it('★ 不传 `preferKind` ⇒ 走完整降级链（本机落在 raw，回归）', async () => {
+    const made = await createInvite(f(), { compressionStream: realCompression });
+    expect(made.ok).toBe(true);
+    if (made.ok) expect(made.format).toBe('raw');
   });
 });

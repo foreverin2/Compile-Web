@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Compile 设备体检</title>
+<!--
+  G5/T41：设备体检页。
+
+  它原来只是协调侧手工上传到线上的一个静态文件（.superpowers/g5-server/probe.html ->
+  /var/www/compile/probe.html），不在仓库里，每次重新部署都可能丢。2026-09-27 收进
+  public/probe.html：Vite 会把 public/ 原样拷进 dist/，于是 dist/probe.html 随构建产出。
+
+  入口：模式选择页最下方那个「设备体检 / 网络自检」按钮（location.href = './probe.html'）。
+  这里只放浏览器能力探测：打开页面时不做任何网络请求；只有用户点按钮才做压缩 / ICE 测试。
+-->
+<style>
+  body { margin: 0; padding: 0 16px 40px; background: #14161c; color: #e8eaf0;
+         font: 13px/1.6 ui-monospace, Consolas, monospace; }
+  .bar { position: sticky; top: 0; background: #14161c; padding: 12px 0 10px;
+         display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+         border-bottom: 1px solid #2a3140; }
+  h1 { font-size: 15px; margin: 0; color: #ffd98a; font-weight: 700; flex: 1 1 auto; }
+  .note { margin: 12px 0; padding: 10px 12px; background: #171b23; border: 1px solid #2a3140;
+          border-radius: 8px; color: #c9cedb; }
+  .note b { color: #ffd98a; }
+  .note ul { margin: 6px 0 0; padding-left: 20px; }
+  .note li { margin: 3px 0; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
+  button { font: inherit; padding: 8px 12px; border-radius: 8px; border: 1px solid #4a5568;
+           background: #232936; color: #e8eaf0; }
+  button:active { background: #2f3746; }
+  #home { font-weight: 700; border-color: #ffd98a; color: #ffd98a; }
+  pre { white-space: pre-wrap; word-break: break-all; background: #0d0f14; border: 1px solid #2a3140;
+        border-radius: 8px; padding: 10px; }
+  .ok { color: #7ee787; } .no { color: #ff7b72; } .warn { color: #ffd98a; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <h1>Compile 设备体检</h1>
+  <button id="home">← 返回首页</button>
+</div>
+
+<div class="note">
+  <b>这个页面是干什么的</b>：查这台设备能不能跑联机（WebRTC），以及原生压缩流好不好使。
+  <ul>
+    <li>页面一打开就先读一批本机能力（见下面「结果」那段），<b>不发任何网络请求</b>。</li>
+    <li>点 <b>「测压缩格式」</b>：把本机的 CompressionStream / DecompressionStream 对
+        deflate-raw、deflate、gzip 三档各真压一遍再解一遍。联机邀请码靠它把连接描述压小；
+        哪一档坏掉，那一档就不能用（事故就出在 deflate-raw 不被支持）。</li>
+    <li>点 <b>「测中继（只走 relay）」</b>：强制 iceTransportPolicy=relay，看能不能从 TURN 拿到
+        relay 候选。拿得到 = 两边网络都很严时也能连上；拿不到 = 只能同网直连。
+        这一步会连一次 TURN 服务器（8.130.97.243:3478），最多等 15 秒。</li>
+    <li>两个按钮都点完之后，把 <b>「结果」和「附加结果」两段文字整段复制发给我</b>
+        （连同最上面的 UA 一行，我要知道是哪台设备）。</li>
+  </ul>
+</div>
+
+<pre id="out">收集中…</pre>
+<div class="row">
+  <button id="turn">测中继（只走 relay）</button>
+  <button id="comp">测压缩格式</button>
+  <button id="home2">← 返回首页</button>
+</div>
+<pre id="extra"></pre>
+
+<script>
+const out = document.getElementById('out');
+const extra = document.getElementById('extra');
+const lines = [];
+function line(k, v, cls) { lines.push(String(k).padEnd(26) + String(v)); }
+function draw() { out.textContent = lines.join('\n'); }
+
+// 返回首页：主站在同源的 ./（dist/index.html 与 public/probe.html 是兄弟）
+document.getElementById('home').addEventListener('click', () => { location.href = './'; });
+document.getElementById('home2').addEventListener('click', () => { location.href = './'; });
+
+line('UA', navigator.userAgent);
+line('platform', navigator.platform || '-');
+line('屏幕', screen.width + 'x' + screen.height + ' dpr=' + (window.devicePixelRatio || 1));
+line('视口', window.innerWidth + 'x' + window.innerHeight + ' (client ' + document.documentElement.clientWidth + 'x' + document.documentElement.clientHeight + ')');
+line('短边', Math.min(window.innerWidth, window.innerHeight));
+line('maxTouchPoints', navigator.maxTouchPoints);
+line('pointer: coarse', matchMedia('(pointer: coarse)').matches);
+line('hover: none', matchMedia('(hover: none)').matches);
+line('any-pointer: coarse', matchMedia('(any-pointer: coarse)').matches);
+line('RTCPeerConnection', typeof RTCPeerConnection);
+line('createDataChannel', typeof RTCPeerConnection === 'function' && !!RTCPeerConnection.prototype.createDataChannel);
+line('CompressionStream', typeof CompressionStream);
+line('DecompressionStream', typeof DecompressionStream);
+line('screen.orientation', typeof screen.orientation);
+line('orientation.lock', !!(screen.orientation && screen.orientation.lock));
+line('requestFullscreen', typeof document.documentElement.requestFullscreen);
+line('crypto.subtle', !!(window.crypto && window.crypto.subtle));
+line('serviceWorker', 'serviceWorker' in navigator);
+line('WebSocket', typeof WebSocket);
+line('位置协议', location.protocol + ' secureContext=' + String(window.isSecureContext));
+
+// 压缩格式逐个真试（这一步最要紧：事故就出在 deflate-raw 不被支持）
+(function testFormats() {
+  const list = ['deflate-raw', 'deflate', 'gzip'];
+  if (typeof CompressionStream !== 'function') { line('压缩格式', 'CompressionStream 不存在'); return; }
+  for (const f of list) {
+    try { new CompressionStream(f); line('压缩格式 ' + f, 'OK'); }
+    catch (e) { line('压缩格式 ' + f, 'FAIL ' + (e && e.message ? e.message.slice(0, 70) : e)); }
+  }
+  if (typeof DecompressionStream === 'function') {
+    for (const f of list) {
+      try { new DecompressionStream(f); line('解压格式 ' + f, 'OK'); }
+      catch (e) { line('解压格式 ' + f, 'FAIL ' + (e && e.message ? e.message.slice(0, 70) : e)); }
+    }
+  } else { line('解压格式', 'DecompressionStream 不存在'); }
+})();
+draw();
+
+document.getElementById('comp').addEventListener('click', async () => {
+  extra.textContent = '正在逐个试压缩/解压（原生流）…\n';
+  const words = 'iVBORw0KGgoAAAANSUhEUg'.repeat(40);
+  const enc = new TextEncoder();
+  const raw = enc.encode(words);
+  for (const f of ['deflate-raw', 'deflate', 'gzip']) {
+    try {
+      const cs = new CompressionStream(f);
+      const w = cs.writable.getWriter(); w.write(raw); w.close();
+      const buf = await new Response(cs.readable).arrayBuffer();
+      const ds = new DecompressionStream(f);
+      const w2 = ds.writable.getWriter(); w2.write(new Uint8Array(buf)); w2.close();
+      const back = await new Response(ds.readable).arrayBuffer();
+      const same = back.byteLength === raw.byteLength;
+      extra.textContent += `${f}: 压缩 ${raw.byteLength} -> ${buf.byteLength} 字节，解回一致=${same}\n`;
+    } catch (e) {
+      extra.textContent += `${f}: 失败 ${String(e && e.message ? e.message : e).slice(0, 90)}\n`;
+    }
+  }
+});
+
+document.getElementById('turn').addEventListener('click', async () => {
+  extra.textContent = '正在测中继（iceTransportPolicy=relay，只允许走 TURN）…\n';
+  const t0 = Date.now();
+  try {
+    const pc = new RTCPeerConnection({
+      iceServers: [{ urls: 'turn:8.130.97.243:3478', username: 'compile', credential: 'PsN4kLbZ3sesnKzmSt7R9Ct6' }],
+      iceTransportPolicy: 'relay',
+    });
+    const cands = [];
+    const errs = [];
+    pc.onicecandidateerror = (e) => errs.push((e.url || '') + ' code=' + e.errorCode + ' ' + String(e.errorText || '').slice(0, 60));
+    pc.onicecandidate = (e) => { if (e.candidate) cands.push(e.candidate.type + ' ' + e.candidate.protocol + ' ' + e.candidate.address + ':' + e.candidate.port); };
+    pc.createDataChannel('probe');
+    await pc.setLocalDescription(await pc.createOffer());
+    await new Promise((res) => {
+      if (pc.iceGatheringState === 'complete') return res();
+      const t = setTimeout(res, 15000);
+      pc.addEventListener('icegatheringstatechange', () => { if (pc.iceGatheringState === 'complete') { clearTimeout(t); res(); } });
+    });
+    const relay = cands.filter((c) => c.startsWith('relay'));
+    extra.textContent = '中继测试结果：\n' +
+      '  gatheringState = ' + pc.iceGatheringState + '（' + (Date.now() - t0) + 'ms）\n' +
+      '  候选总数 = ' + cands.length + '，relay = ' + relay.length + '\n' +
+      cands.map((c) => '  · ' + c).join('\n') +
+      (errs.length ? '\n  错误：\n' + errs.map((e) => '  · ' + e).join('\n') : '') +
+      '\n\n判定：' + (relay.length > 0 ? '这台设备能用中继（跨网有救）' : '这台设备拿不到 relay 候选（跨网会连不上）');
+    pc.close();
+  } catch (e) {
+    extra.textContent = '中继测试抛错：' + String(e && e.message ? e.message : e);
+  }
+});
+</script>
+</body>
+</html>

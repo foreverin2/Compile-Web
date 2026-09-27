@@ -1,7 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { stripComments, functionBody, objectBody } from './source-text';
+import { stripComments, functionBody, objectBody, braceBlock } from './source-text';
+import { descendants, installStubDom, isClass, makeStubEl, type StubNode } from './net-dom-stub';
+import { renderModeSelect, type ModeSelectNav } from '../../src/ui/home';
 
 /**
  * G2 Task 4 守卫：**接线**（`src/main.ts` 的页面路由 + 预览入口 + 重置）与**契约配套**。
@@ -185,34 +187,79 @@ describe('G2 Task 4 · 接线：远程页进入产物 + 重渲染路由唯一入
       .toMatch(/applyFxViewSeat\(/);
   });
 
-  it('6. 预览入口：home.ts 的模式卡 + main.ts 的 startNetPreview 三件事', () => {
+  it('6. 预览入口：home.ts 的开发者闸门 + main.ts 的 startNetPreview 三件事', () => {
     const home = stripComments(read('src/ui/home.ts'));
     expect(home, 'ModeSelectNav 未定义 startNetPreview（宿主无法接上预览入口）')
       .toMatch(/startNetPreview\s*\(/);
-    expect(home, '模式选择页未加预览卡（用户无法进入远程页预览）').toContain('单视角预览（本地）');
-    // **恰好一张**预览卡：断言"列表里加一张卡"，两张会让模式选择页出现两个入口
-    const PREVIEW_CARD = "'单视角预览（本地）'";
-    expect((home.match(new RegExp(PREVIEW_CARD.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) ?? []).length,
-      '预览卡必须**恰好一张**（模式卡名字面量出现次数不符）').toBe(1);
-    // 预览卡必须在热坐卡**之后**（它是热坐流程的布局变体，视觉上从属）
+    // ★ G5/T41：文案从「单视角预览（本地）」改成「单视角预览（仅开发）」，并且**只在开发者模式
+    //   已解锁时才渲染**（用户 2026-09-27："它没有实际作用、只用于测试，不要放在游戏模式里面"）。
+    const PREVIEW_CARD = "'单视角预览（仅开发）'";
+    const countOf = (s: string, needle: string): number => s.split(needle).length - 1;
+    expect(countOf(home, PREVIEW_CARD), '预览卡必须**恰好一张**（模式卡名字面量出现次数不符）').toBe(1);
+    expect(home, '模式卡文案还是"（本地）"那一版 —— 普通玩家会在游戏模式清单里看到它')
+      .not.toContain("'单视角预览（本地）'");
+    // 闸门：卡片必须在 `if (devUnlocked) { … }` 的**花括号体里**。
+    // "同文件里出现过 devUnlocked" 这类弱形态**不算**（它可能只是别处的一句判断）——
+    //    所以这里用 `braceBlock` 把那一段真的切出来，再在里面找卡片。
+    const gateAt = home.indexOf('if (devUnlocked)');
+    expect(gateAt, 'home.ts 里找不到 `if (devUnlocked)` 闸门 —— 预览卡会无条件建给普通玩家')
+      .toBeGreaterThanOrEqual(0);
+    const gateBlock = braceBlock(home, gateAt);
+    expect(gateBlock, '预览卡不在 `if (devUnlocked)` 的块里（闸门是摆设：卡片照样会被建出来）')
+      .toContain(PREVIEW_CARD);
+    // 反空转：切出来的那一块必须**明显小于整份文件** —— 否则"在块里找到卡片"会退化成
+    // "在整份 home.ts 里找到卡片"（配平切错时正是这个形态）
+    expect(home.length - gateBlock.length, '闸门块几乎覆盖整个文件（配平切错了？判据退化）')
+      .toBeGreaterThan(400);
+    // 预览卡在**源码里**排于热坐卡与联机卡之后（源码卡顺序：热坐 → 联机 → 预览；G5/T41 不改它）。
+    // 注意这只说**源码位置**：运行期 `dev=false` 时预览卡不会被建出来，玩家看到的是四张卡
+    // （行为腿第 12 条读的就是那两份清单）。
     const iPreview = home.indexOf(PREVIEW_CARD);
-    expect(iPreview, '找不到预览卡的名字面量').toBeGreaterThanOrEqual(0);
     expect(iPreview, '预览卡排在热坐卡之前（模式选择页的层级被改）')
       .toBeGreaterThan(home.indexOf("mkMode('热坐（双人）'"));
+    expect(iPreview, '预览卡排在联机卡之前（模式选择页的层级被改）')
+      .toBeGreaterThan(home.indexOf("'联机对战（两台设备）'"));
     // 热坐卡的文案与行为**一行未改**（本任务红线：热座观感零变化）
     expect(home, '热坐卡的文案被改动了（本任务不得动热座路径）')
       .toContain("mkMode('热坐（双人）', '两名玩家轮流在同一设备上对战（当前可用）', true, () => {");
     expect(home, '热坐卡不再调用 nav.startHotseat(banBox.checked, randomBox.checked)')
       .toContain('nav.startHotseat(banBox.checked, randomBox.checked)');
+    // ★ G5/T41 第 1 条：**设备体检**按钮（不是模式卡，住在 mode-actions 那一区）
+    expect(home, '模式选择页没有「设备体检」按钮（用户 2026-09-27 第 1 条）')
+      .toContain("button('btn mode-probe-btn', '设备体检 / 网络自检', nav.openDeviceCheck)");
+    // 它不是游戏模式：这一行不许碰 renderMode / state（只跳转）
+    expect(home.split('\n').find((l) => l.includes('mode-probe-btn')) ?? '',
+      '设备体检按钮那一行碰了 renderMode / state（它不该是游戏模式）')
+      .not.toMatch(/renderMode|\bstate\b/);
 
     const main = mainSrc();
     const mode = functionBody(main, 'showModeSelect');
-    const net = mode.slice(mode.indexOf('startNetPreview:'));
-    expect(net, 'main.ts 未实现 startNetPreview').toBeTruthy();
+    // ★ 新锚点（G5/T41）：预览那一段 = **花括号配平**的 `startNetPreview` 箭头函数体。
+    const net = braceBlock(mode, mode.indexOf('startNetPreview:'));
+    expect(net.length, 'startNetPreview 的箭头函数体抽到空片段（锚点配平失败）⇒ 本判据假绿')
+      .toBeGreaterThan(80);
     expect(net, "startNetPreview 未设 renderMode = 'net'（预览会画成热座棋盘）")
       .toMatch(/renderMode\s*=\s*'net'/);
     expect(net, 'startNetPreview 未接收/落地 viewSeat').toMatch(/netViewSeat\s*=\s*viewSeat/);
     expect(net, 'startNetPreview 未沿用现有掷硬币流程（showCoin）').toMatch(/\bshowCoin\(\)/);
+    // ★ 新锚点的**下界**：预览那一段里不许出现别的入口 —— 旧切片（切到 showModeSelect 末尾）
+    //   正是被"排在预览之后的文本"满足的。
+    expect(net, 'startNetPreview 的函数体里出现了 startNetLobby（锚点被拉长 ⇒ 失焦）')
+      .not.toContain('startNetLobby');
+    expect(net, 'startNetPreview 的函数体里出现了 startHotseat（锚点被拉长 ⇒ 失焦）')
+      .not.toContain('startHotseat');
+    // nav 键顺序仍是「联机 → 预览」（与 home.ts **源码里**的模式卡顺序一致；玩家看到的清算见上一段）
+    const iLobbyKey = mode.indexOf('startNetLobby:');
+    const iPreviewKey = mode.indexOf('startNetPreview:');
+    expect(iLobbyKey, 'showModeSelect 里找不到 startNetLobby:').toBeGreaterThanOrEqual(0);
+    expect(iPreviewKey, 'showModeSelect 里找不到 startNetPreview:').toBeGreaterThanOrEqual(0);
+    expect(iLobbyKey, 'startNetLobby 排在 startNetPreview 之后（nav 键顺序与源码里的模式卡顺序不一致）')
+      .toBeLessThan(iPreviewKey);
+    // ★ G5/T41 的闸门接线：`isDevUnlocked()` 必须当第三个实参交给 `renderModeSelect`
+    //   （漏了它 ⇒ 预览卡对开发者也不出现；写成常量 true ⇒ 对普通玩家也出现）
+    expect(mode, 'showModeSelect 未把 isDevUnlocked() 传给 renderModeSelect'
+      + '（预览卡的闸门接不上：开发者看不到、或普通玩家照样看到）')
+      .toMatch(/renderModeSelect\(root,\s*\{[\s\S]*?\},\s*isDevUnlocked\(\)\)/);
     // ── R12-6：工具条与自查**只在开发者模式解锁后**启用（用户："隐藏它，功能内化给开发者模式"）──
     // 判据从"传 verifyHooks: true"改成"**由 `isDevUnlocked()` 闸门**决定" —— 两者都必须查：
     //  · 闸门在（`const dev = isDevUnlocked()` + `verifyHooks: dev`）⇒ 普通对局里页面上没有工具条；
@@ -546,5 +593,91 @@ describe('G2 Task 4 · 接线：远程页进入产物 + 重渲染路由唯一入
       .not.toMatch(/^\s*handVisibility:\s*'all'\s*\|\s*'viewSeat'\s*;/m);
     // 视角开关必须真的回传 viewSeat（两态都覆盖）
     expect(bar, '视角开关未回传 viewSeat').toMatch(/onChange\(\s*\{\s*viewSeat:\s*opts\.viewSeat === 0 \? 1 : 0\s*\}\s*\)/);
+  });
+});
+
+/**
+ * G5/T41 · **行为腿**：模式选择页的开发者闸门（真跑 `renderModeSelect`）。
+ *
+ * ## 为什么要有它（上面那些源码腿做不到的事）
+ *
+ * 第 6 条能证明"home.ts 里有 `if (devUnlocked)`、卡片在它的花括号体里"，**证明不了**
+ * "`devUnlocked === false` 时页面上真的没有那张卡"—— 例如把闸门写成 `if (!devUnlocked)`、
+ * 或者把卡片在闸门**外面**又建了一次，源码腿都可能照样绿。这里用共用的 DOM 桩
+ * （`tests/ui/net-dom-stub.ts`，无 jsdom）真跑一帧，**读模式卡文案清单本身**。
+ *
+ * 能力边界：桩只记结构、不模拟布局 ⇒ 能证明"卡片建没建、顺序、点击落到哪个回调"，
+ * 证明不了观感；真浏览器里的读数（跳转前的清单、点设备体检后的 `location.pathname`）
+ * 在 `.superpowers/g5-T41/run-*.txt` 里。
+ */
+describe('G5 T41 · 模式选择页的开发者闸门（行为腿：真跑 renderModeSelect）', () => {
+  let restoreDom: (() => void) | null = null;
+  afterEach(() => { restoreDom?.(); restoreDom = null; });
+
+  const navOf = (calls: string[]): ModeSelectNav => ({
+    backHome: () => { calls.push('backHome'); },
+    openDeviceCheck: () => { calls.push('openDeviceCheck'); },
+    startHotseat: () => { calls.push('startHotseat'); },
+    startNetLobby: () => { calls.push('startNetLobby'); },
+    startNetPreview: () => { calls.push('startNetPreview'); },
+  });
+
+  /** 真跑一帧模式选择页：返回模式卡文案清单（DOM 顺序）与点击记录 */
+  const run = (dev: boolean): { root: StubNode; names: string[]; calls: string[] } => {
+    const root = makeStubEl('div');
+    const calls: string[] = [];
+    renderModeSelect(root as unknown as HTMLElement, navOf(calls), dev);
+    const names = descendants(root).filter((n) => isClass(n, 'mode-card-name')).map((n) => n.text);
+    return { root, names, calls };
+  };
+
+  /** 在某个节点上**真派发一次点击**（挂一个空子节点再派发，冒泡到它自己） */
+  const clickInner = (node: StubNode): void => {
+    const clicker = makeStubEl('span');
+    node.appendChild(clicker);
+    clicker.dispatchEvent({ type: 'click', target: clicker });
+  };
+
+  it('12. dev=false 没有预览卡、dev=true 才有；设备体检按钮两条路径都在、点了真回调', () => {
+    restoreDom = installStubDom();
+    const off = run(false);
+    const on = run(true);
+
+    // ① 普通路径（没解锁开发者模式）—— 用户要的就是这个：**游戏模式清单里没有它**
+    expect(off.names, `普通路径（dev=false）的模式卡清单：${JSON.stringify(off.names)}`)
+      .not.toContain('单视角预览（仅开发）');
+    expect(off.names, '普通路径的模式卡清单被改动了（热坐/联机/单人/三人应当都在）')
+      .toEqual(['热坐（双人）', '联机对战（两台设备）', '单人模式', '三人模式']);
+
+    // ② 开发者路径（Ctrl+Shift+P + 密码解锁之后）
+    expect(on.names, `开发者路径（dev=true）的模式卡清单：${JSON.stringify(on.names)}`)
+      .toEqual(['热坐（双人）', '联机对战（两台设备）', '单视角预览（仅开发）', '单人模式', '三人模式']);
+
+    // ③ 设备体检按钮：**两条路径下都在**（它不是模式卡，开发者闸门管不着它）
+    for (const [label, r] of [['dev=false', off], ['dev=true', on]] as const) {
+      const btn = descendants(r.root).find((n) => n.tag === 'button' && n.text === '设备体检 / 网络自检');
+      expect(btn, `${label}：模式选择页没有「设备体检 / 网络自检」按钮`).toBeTruthy();
+      clickInner(btn as StubNode);
+      expect(r.calls, `${label}：点了「设备体检」按钮，宿主回调没被调到（或调到了别的东西）`)
+        .toEqual(['openDeviceCheck']);
+    }
+
+    // ④ 反向：模式卡真的点得动，且**普通路径下没有第三条通往预览的路**
+    const off2 = run(false);
+    const off2Cards = descendants(off2.root).filter((n) => isClass(n, 'mode-card'));
+    expect(off2Cards.length, 'dev=false 的模式卡数量（应为 4：热坐/联机/单人/三人）').toBe(4);
+    clickInner(off2Cards[1]);
+    expect(off2.calls, 'dev=false 下点第二张模式卡（联机对战）没有走 startNetLobby')
+      .toEqual(['startNetLobby']);
+    const off2Names = descendants(off2.root).filter((n) => isClass(n, 'mode-card-name')).map((n) => n.text);
+    expect(off2Names, 'dev=false 下第三张模式卡不是"单人模式"（少了一张卡之后顺序错了）')
+      .toEqual(['热坐（双人）', '联机对战（两台设备）', '单人模式', '三人模式']);
+
+    const on2 = run(true);
+    const on2Cards = descendants(on2.root).filter((n) => isClass(n, 'mode-card'));
+    expect(on2Cards.length, 'dev=true 的模式卡数量（普通 4 张 + 预览 1 张）').toBe(5);
+    clickInner(on2Cards[2]);
+    expect(on2.calls, 'dev=true 下第三张模式卡不是预览卡（点了没进 startNetPreview）')
+      .toEqual(['startNetPreview']);
   });
 });
