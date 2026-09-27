@@ -138,12 +138,16 @@ html.t39-fit,
 html.t39-fit body {
   overflow: hidden;
   overscroll-behavior: none;
+  /* ★ 同上：拖动通道要在 html/body 上就放行，不然手势会被浏览器当滚动接管 */
+  touch-action: none;
 }
 
 html.t39-fit #app {
   overflow: visible;
   overscroll-behavior: none;
   transform-origin: top left;
+  /* 修复轮：同上 —— 背景单指拖动＝平移 */
+  touch-action: none;
 }
 
 /* 横屏布局是"物理横屏"（没有旋转类）：不带后半截 */
@@ -182,4 +186,206 @@ html.t39-fit .t39-pin.t39-pin-choice {
   min-width: 132px;
   min-height: 46px;
   font-size: 15px;
+}
+
+/* 第三个钉住的按钮：「导出日志」（`.diag-btn`）。它在 styles.css 里本来就是 fixed，
+   但 `#app` 带 transform 之后包含块变成 `#app` ⇒ 缩放档下会跟着跑到视口外（平板实测）。
+   钉在**左下角**，与右下角的「下一步」、底部中央的「确认」错开。 */
+html.t39-fit .t39-pin.t39-pin-diag,
+html.t44-fit-wide .t39-pin.t39-pin-diag {
+  left: 10px;
+  bottom: 10px;
+  right: auto;
+  top: auto;
+  min-width: 92px;
+  min-height: 40px;
+  font-size: 13px;
+}
+
+/* ============================================================================
+ * 5) ★★ G6/T44（用户 2026-09-27 第 ③④⑤⑦ 条）
+ *
+ * ## 5.1 `html.t44-fit-wide`：**非手机视口**上同一套自适应（平板 1024×768 / 1280×800）
+ *
+ * 与第 4 节逐字同式，只换类名与生效条件（JS 侧见 `phone-landscape.ts` 的
+ * `canFitWide()` / `syncWideFit()`）。为什么另起一个类而不复用 `t39-fit`：
+ * T39 的浏览器腿在 1280×900 桌面档上断言 `t39-fit` **必须不在**（"桌面零影响"）。
+ *
+ * 平移量由 JS 现算现写（`--t39-k/-tx/-ty` 三个变量沿用 T39 的名字：同一套算术、
+ * 同一处唯一真相；改名只会让两侧不一致）。
+ * ========================================================================== */
+html.t44-fit-wide,
+html.t44-fit-wide body {
+  overflow: hidden;
+  overscroll-behavior: none;
+  /* ★ 修复轮实测：`touch-action` 只写在 `#app` 上时，手指落在**空白处**（命中 `body`）
+     起拖 ⇒ 浏览器把这一串手势当成滚动接管，`pointercancel` 一来拖动只走了第一步
+     （实测：要拖 178px，`pan.y` 只动了 30px = 6 步里的第 1 步）。⇒ html/body 也要 `none`。 */
+  touch-action: none;
+}
+
+html.t44-fit-wide #app {
+  overflow: visible;
+  overscroll-behavior: none;
+  transform-origin: top left;
+  transform: translate(var(--t39-tx, 0px), var(--t39-ty, 0px)) scale(var(--t39-k, 1));
+  /* 修复轮：背景单指拖动＝平移（JS 的 pointerdown/pointermove 接管）。卡面照旧
+     `touch-action: none`（拖牌不受影响），按钮/浮层由 JS 的 `PAN_BLOCK_SEL` 放行。 */
+  touch-action: none;
+}
+
+/* 与手机档同一套钉法：关键按钮 1:1 钉在视口角（缩放档里它们不再被缩） */
+html.t44-fit-wide .t39-pin {
+  position: fixed;
+  margin: 0;
+  z-index: 3000;
+  touch-action: manipulation;
+}
+
+html.t44-fit-wide .t39-pin.t39-pin-next {
+  right: 10px;
+  bottom: 10px;
+  left: auto;
+  top: auto;
+  min-width: 104px;
+  min-height: 46px;
+  font-size: 15px;
+}
+
+html.t44-fit-wide .t39-pin.t39-pin-choice {
+  left: 50%;
+  bottom: 10px;
+  right: auto;
+  top: auto;
+  transform: translateX(-50%);
+  min-width: 132px;
+  min-height: 46px;
+  font-size: 15px;
+}
+
+/* 第三个钉住的按钮：「导出日志」（`.diag-btn`）—— 钉在**左下角** */
+html.t44-fit-wide .t39-pin.t39-pin-diag {
+  left: 10px;
+  bottom: 10px;
+  right: auto;
+  top: auto;
+  min-width: 92px;
+  min-height: 40px;
+  font-size: 13px;
+}
+
+/* ============================================================================
+ * 5.3 ★★ T44 修复轮（用户裁决 B 的后半句）：两轴拖动平移的**看得见的提示**
+ *
+ * 提示是 body 级、`pointer-events: none`（绝不抢手势）。旋转档里它**跟着 UI 一起转**
+ * （与 `#app` 同式：`rotate(90deg) translateY(-100%)`）—— 不然用户把手机横过来之后
+ * 这句话是躺着的。
+ * ========================================================================== */
+.t44-pan-hint {
+  position: fixed;
+  left: 50%;
+  bottom: 8px;
+  transform: translateX(-50%);
+  z-index: 2600;
+  margin: 0;
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(79, 240, 255, 0.45);
+  background: rgba(10, 14, 26, 0.88);
+  color: #d7f6ff;
+  font-family: system-ui, sans-serif;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+
+.t44-pan-hint.is-on { opacity: 1; }
+
+/* 旋转档：与 `#app` 同一个 90°，摆在物理屏幕的角落（布局空间 240×24，转完是竖着的一条） */
+html.t39-rot90 .t44-pan-hint {
+  left: 0;
+  top: 0;
+  right: auto;
+  bottom: auto;
+  width: 240px;
+  height: 24px;
+  padding: 0 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transform-origin: top left;
+  transform: rotate(90deg) translateY(-100%);
+}
+
+/* ============================================================================
+ * 5.4 ★★ T44 修复轮（用户第 ④ 条"先试钉住层"）：手机旋转档里被钉住的协议信息框
+ *
+ * 只做两件事：把两块从 `.net-left-rail` 的流里**摘出来**（绝对定位）并抬到棋盘之上。
+ * **位置由 JS 按仿射反解写 `left/top`**（见 `phone-landscape.ts` 的 `syncInfoPins()`）——
+ * 因为它要落在"屏幕上的某个格子"，而布局坐标到屏幕坐标之间隔着 `#app` 那圈 rotate+scale。
+ * 尺寸被 `max-width/height` 收住，保证转完仍能塞进视口（两块并排 ≈ 屏幕 150×100）。
+ * ========================================================================== */
+html.t39-rot90 .net-info-block.t44-info-pin {
+  position: absolute;
+  margin: 0;
+  z-index: 1400;
+  max-width: 150px;
+  max-height: 190px;
+  overflow: hidden;
+  box-shadow: 0 0 12px rgba(0, 255, 204, 0.25);
+}
+
+/* ============================================================================
+ * 5.2 卡牌查看页（`render.ts` 的 `.zoom-overlay`）跟着棋盘一起横置
+ *
+ * **为什么它原来不转**：`openZoom()` 把遮罩 append 到 `document.body`
+ * （`render.ts:5896`，红线文件），而 T39 的旋转类只作用在 `html.t39-rot90 #app` 上
+ * ⇒ 同级的 `.zoom-overlay` 是**物理视口**里的一个节点：`position: fixed; inset: 0`
+ * 还是竖着铺满 390×844，里面的 `max-height: 92vh` 等一族也是按**竖屏**算的
+ * （实测读数见 `.superpowers/g6-T44/T44-REPORT.md` 第 ③ 条修前那一组）。
+ *
+ * **修法**：给遮罩自己加上与 `#app` **同一个 90°**（`-90deg` 不行、`180deg` 是上下颠倒；
+ * 方向必须与 `#app` 一致才不会"看卡的时候棋盘是歪的"）。位置同理：
+ * `width: 100vh; height: 100vw` = 布局空间的 844×390，绕左上角转 90° 之后
+ * `transform: rotate(90deg) translateY(-100%)` 正好铺满物理屏幕
+ * （与 `html.t39-rot90 #app` 逐字同式）。
+ *
+ * 旋转之后遮罩内部的一切（`.zoom-body` 的 flex、`.zoom-text` 的 `max-height: 80vh`、
+ * `.zoom-img` 的 `80vw/80vh`）都在**横屏坐标系**里解算 —— 这正是"卡与棋盘同向"的实现方式。
+ * ========================================================================== */
+/**
+ * ★ 尺寸：`100vh × 100vw` 还不够 —— 布局空间里要给它 **`innerWidth + (innerHeight - innerWidth)`**
+ * 那么多宽度。理由：这块布局空间是 844 宽的（`html.t39-rot90 #app` 就是 `width: 100vh`），
+ * 而 `position: fixed` 的包含块是**视觉视口**（390 宽）⇒ 只写 `100vh` 时它反而被**收窄**
+ * 到 390（实测：`.zoom-overlay` 的 `width` 读数是 844px，但 `.zoom-body` 只有 374px 宽，
+ * 文字栏被挤到 `x -78`、右缘 5 —— 整块在屏幕外）。加上那一截 454px 才是 844。
+ * 物理横屏（没有旋转类）那一档的 `100vw` 已经等于视觉视口宽，本规则不作用到它。
+ */
+html.t39-rot90 .zoom-overlay {
+  width: calc(100vw + (100vh - 100vw));
+  height: 100vw;
+  inset: auto;
+  top: 0;
+  left: 0;
+  transform-origin: top left;
+  transform: rotate(90deg) translateY(-100%);
+  z-index: 2500;
+}
+
+/**
+ * 协议卡（`.zoom-protocol`）的**二次旋转**：`render.ts` 的 `apply()` 会给协议图写**内联**
+ * `translate(-50%,-50%) rotate(-90deg) scale(1)`（"协议卡横向显示"，2026-09-12 那次修复），
+ * 那是按**竖屏视口**设计的。整个遮罩已经跟着棋盘转了 +90° ⇒ 协议图在物理屏幕上会变成
+ * **竖的**（与手里那张横置的协议卡不一致）。
+ *
+ * 内联 transform 只有 `!important` 压得住 ⇒ 这一条必须带 `!important`。
+ * 代价（如实说）：**协议卡被放大查看时，查看器自带的滚轮/双指缩放失效**
+ * （用户缩了它也被这条压回 1×）。换来的是"协议卡在横屏手机上朝向正确"。
+ * 卡牌（非协议）不受影响 —— 它们的 transform 是 `scale(n)`，本表不碰。
+ */
+html.t39-rot90 .zoom-overlay .zoom-img.zoom-protocol {
+  transform: translate(-50%, -50%) rotate(0deg) scale(1) !important;
 }
