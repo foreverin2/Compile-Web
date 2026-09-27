@@ -22,7 +22,9 @@ describe('searchProtocols', () => {
 
   it('中文协议名命中（如 光 → light）', () => {
     expect(searchProtocols('光').map((p) => p.defId)).toEqual(['light']);
-    expect(searchProtocols('死').map((p) => p.defId)).toEqual(['death']);
+    // 2026-09-27 起「僵化」的显示名是「死板」⇒ 单字「死」除了精确命中 death，还前缀命中 死板
+    // （精确 3 分 > 前缀 2 分，所以 death 在前）。
+    expect(searchProtocols('死').map((p) => p.defId)).toEqual(['death', 'rigidity']);
   });
 
   it('空查询 → 返回全部协议（供点选；三代并池共 45 套）', () => {

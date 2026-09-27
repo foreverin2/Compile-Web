@@ -53,7 +53,7 @@ import './cards/wrath';
 import './cards/ambush';
 import './cards/fulcrum';
 import './cards/overwhelm';
-// —— 3代 批3（2026-09，动量/新星/惰性/僵化/灵活）——
+// —— 3代 批3（2026-09，动量/新星/惰性/死板/灵活）——
 import './cards/momentum';
 import './cards/nova';
 import './cards/inertia';
@@ -440,7 +440,7 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
         (card.defId === 'ice-4' && card.faceUp && !cardCommandDisabled(s, card, 'bottom'))
       ) {
         pushLog(s, `${card.defId} 不可被翻转，跳过`);
-        // 3代 特效（批次 D）：免疫反馈事件——UI 据此让"僵化7 挡下翻转"可见
+        // 3代 特效（批次 D）：免疫反馈事件——UI 据此让"死板7 挡下翻转"可见
         if (rigidity7Immune(s, card)) {
           gameBus.emit({ type: 'card:immune', state: s, payload: { uid: card.uid, defId: card.defId, kind: 'flip' } });
         }

@@ -1066,7 +1066,7 @@ export function gen3DrawFx(p: Gen3DrawPayload, api: Gen3CardFxApi): boolean {
 /* ====================== 反面打出（A-FACEDOWN，批次 C） ====================== */
 
 /**
- * 3 代反面打出附加层（点名：暴食0 顶 G1 / 压制 O1 / 僵化 Y1 / 惰性 I2）。
+ * 3 代反面打出附加层（点名：暴食0 顶 G1 / 压制 O1 / 死板 Y1 / 惰性 I2）。
  * kind：'deck' = 牌库顶反打（card:deck-played）、'hand' = 手牌反打（card:hand-played）。
  * 基础飞行照常调用（惰性按协议语法放慢到 700ms）。
  */
@@ -1147,7 +1147,7 @@ export function gen3FaceDownFx(kind: 'deck' | 'hand', p: Gen3CardPayload, api: G
       base();
       return true;
     }
-    // 僵化 Y1：紫底荧光黄护板自目标线下方升起（板面迷宫走线）→ 落位后收边 + 荧光黄扫线
+    // 死板 Y1：紫底荧光黄护板自目标线下方升起（板面迷宫走线）→ 落位后收边 + 荧光黄扫线
     case 'rigidity': {
       if (slotRect) {
         const layer = bodyLayer('g3-rig-plate-layer', api.extraZ);

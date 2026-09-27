@@ -7,7 +7,7 @@ import { executeAction } from '../../src/core/game';
 import { makeCard, pickFirst, resolveAllChoices } from '../helpers';
 
 /**
- * 3代 批3（动量/新星/惰性/僵化/灵活）效果测试——代表性用例。
+ * 3代 批3（动量/新星/惰性/死板/灵活）效果测试——代表性用例。
  * 卡文：src/data/cards3.ts（compile3文本.txt）；裁决：docs/3代-批3-规格与裁决清单.md。
  */
 
@@ -247,9 +247,9 @@ describe('inertia（惰性）', () => {
   });
 });
 
-// ============ 僵化 rigidity ============
+// ============ 死板 rigidity ============
 
-describe('rigidity（僵化）', () => {
+describe('rigidity（死板，卡面原文：僵化）', () => {
   it('rigidity-7 bottom: cannot be flipped or shifted while uncovered; can after covered', () => {
     const s = setup();
     const r7 = placeSrc(s, 'rigidity-7', 0, 0); // 顶卡（值 7）

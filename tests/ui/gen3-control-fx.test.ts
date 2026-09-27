@@ -67,7 +67,7 @@ describe('批次 D 守卫：控制权族 + 常驻层', () => {
     expect(mainTs).toContain('gen3ControlChangedFx(');
     expect(mainTs).toContain('gen3ControlCheckFx(');
     expect(mainTs).toContain('gen3ClearCacheFx(');
-    // 免疫事件 → 僵化7 护壁闪亮
+    // 免疫事件 → 死板7 护壁闪亮
     expect(effectsTs).toContain("case 'card:immune'");
     expect(effectsTs).toContain('flashRigidity7Guard(');
   });
@@ -81,7 +81,7 @@ describe('批次 D 守卫：控制权族 + 常驻层', () => {
     // 惰性1：必须是未覆盖顶卡（= 引擎 lineBottomCommandsDisabled）
     const inertia = controlTs.slice(controlTs.indexOf('export function syncInertiaNullify'), controlTs.indexOf('export function syncRigidity7Guard'));
     expect(inertia).toMatch(/inertia-1' && c\.faceUp && isUncovered\(s, c\)/);
-    // 僵化7：正面 + 未被覆盖 + 底框可用（= 引擎 rigidity7Immune）
+    // 死板7：正面 + 未被覆盖 + 底框可用（= 引擎 rigidity7Immune）
     expect(controlTs).toMatch(/faceUp && isUncovered\(s, c\) && !cardCommandDisabled\(s, c, 'bottom'\)/);
     // 嫉妒0：对手该线全部卡（含被盖/反面）取最大
     expect(controlTs).toMatch(/for \(const c of foeCards\)/);
@@ -127,7 +127,7 @@ describe('批次 D 守卫：控制权族 + 常驻层', () => {
     expect(wrath, '中缝未按能量槽定位').toMatch(/const b1 = batteryNode\(1, line\)/);
     expect(wrath, '中缝缺少文字标').toContain("'g3sync-wrath0-chip'");
     expect(syncCss, 'CSS 缺少 .g3sync-wrath0-chip').toContain('.g3sync-wrath0-chip');
-    // ② 僵化7 迷宫纹：必须是"卡外一圈边框"（border-image 重复渐变），不能再是铺满卡面的网格
+    // ② 死板7 迷宫纹：必须是"卡外一圈边框"（border-image 重复渐变），不能再是铺满卡面的网格
     const mazeBlock = syncCss.slice(syncCss.indexOf('.g3sync-rig7-maze {'), syncCss.indexOf('@keyframes g3-rig7-maze'));
     expect(mazeBlock, '迷宫纹未改为卡外边框（border-image）').toContain('border-image: repeating-linear-gradient');
     expect(mazeBlock, '迷宫纹仍在铺满卡面（background 重复渐变）').not.toMatch(/background:\s*\n?\s*repeating-linear-gradient/);

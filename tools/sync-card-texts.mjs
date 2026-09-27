@@ -10,6 +10,11 @@
  * 转写规则（与 data 文件头注释一致）：数量词阿拉伯数字化、句末补句号、`空` 不落字段、
  * 其余文字照录（术语不归一——偏转/平移/链路/堆叠以文本文件为准）。
  *
+ * 显示名改名（2026-09-27）：外部卡面/txt 原文作「僵化」，本作显示名用「死板」——
+ * 两侧靠 `tools/protocol-display-renames.mjs` 的 `EXPECTED_RENAMES` 对齐（比对前只替换
+ * **外部 txt 那一侧**），所以 `npm run texts:check` 仍然是 0 差异，而显示层（data / 图鉴 /
+ * 各模式卡文）用的是「死板」。
+ *
  * 用法：
  *   node tools/sync-card-texts.mjs          # 只报告差异（不写文件）
  *   node tools/sync-card-texts.mjs --write  # 把差异写回 data 文件（仅动文本字段）
@@ -17,11 +22,19 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { EXPECTED_RENAMES, toDisplayName } from './protocol-display-renames.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, '..');
 const TXT_DIR = 'E:\\studyE\\compile\\正版compile';
 const WRITE = process.argv.includes('--write');
+
+/**
+ * 显示名改名表（**唯一出处 = `tools/protocol-display-renames.mjs`**，本文件只 import）：
+ * 「外部原文 → 本作显示名」。表上的每一项都会被下面的「改名表自检」核对
+ * （本仓 data 里必须恰好命中 1 个同名协议），`tests/data/*.test.ts` 还从两侧各钉一条。
+ */
+export { EXPECTED_RENAMES, toDisplayName };
 
 /** 中文数字 → 阿拉伯数字（仅数量语境：一张/两点/三条/1个…） */
 const CN_NUM = { 一: '1', 二: '2', 两: '2', 三: '3', 四: '4', 五: '5', 六: '6', 七: '7', 八: '8', 九: '9', 十: '10' };
@@ -127,15 +140,34 @@ const report = { cardDiffs: [], protoDiffs: [], missing: [], extra: [] };
 for (const { file, data } of txtAll) {
   const txt = parseTxt(join(TXT_DIR, file));
   const dat = parseData(join(repo, 'src', 'data', data));
-  // 协议名 → defId（用 data 的 name 反查）
+  // 协议名 → defId（用 data 的 name 反查；txt 一侧先过改名表）
   const nameToDefId = new Map();
   for (const [defId, p] of dat.protocols) nameToDefId.set(p.name, defId);
 
+  // 改名表自检（有牙）：txt 里出现过的「原文名」，必须在本文件 data 里恰好有 1 个「显示名」——
+  // 表写错字 / 改名漏做（写错、写了两个）都会在这里变成一条差异，而不是一句没人管的注释。
+  const txtNames = new Set(txt.protocols.map((p) => p.name));
+  for (const [oldName, newName] of Object.entries(EXPECTED_RENAMES)) {
+    if (!txtNames.has(oldName)) continue; // 这套改名不属于本文件
+    const hits = Array.from(dat.protocols.values()).filter((p) => p.name === newName).length;
+    if (hits !== 1) {
+      report.protoDiffs.push({
+        file,
+        defId: 'EXPECTED_RENAMES',
+        field: 'name',
+        from: `本作显示名「${newName}」在 ${data} 里命中 ${hits} 个协议`,
+        to: `应恰好 1 个（外部原文「${oldName}」的显示名）`,
+      });
+    }
+  }
+
   // 协议元数据对比
   for (const tp of txt.protocols) {
-    const defId = nameToDefId.get(tp.name);
+    const shown = toDisplayName(tp.name);
+    const defId = nameToDefId.get(shown);
     if (!defId) {
-      report.missing.push(`[${file}] 文本协议「${tp.name}」在 ${data} 中找不到同名协议`);
+      const detail = shown === tp.name ? '' : `（改名表映射为「${shown}」）`;
+      report.missing.push(`[${file}] 文本协议「${tp.name}」${detail}在 ${data} 中找不到同名协议`);
       continue;
     }
     const dp = dat.protocols.get(defId);
@@ -157,7 +189,7 @@ for (const { file, data } of txtAll) {
 
   // 卡牌文本对比
   for (const tc of txt.cards) {
-    const defId = nameToDefId.get(tc.protoName);
+    const defId = nameToDefId.get(toDisplayName(tc.protoName));
     if (!defId) continue; // 协议名映射缺失已在上面报告
     const key = `${defId}-${tc.value}`;
     const dc = dat.cards.get(key);
@@ -187,7 +219,11 @@ function withPeriod(s) {
 }
 
 // ============ 输出 ============
-console.log(`卡牌文本差异 ${report.cardDiffs.length} 处；协议元数据差异 ${report.protoDiffs.length} 处`);
+// 缺失/映射问题也进总数与退出码：改名表失配（协议名找不到）会被算成非 0 —— 否则这道门对
+// 「协议改名」这一类缺陷是没牙的（差异 0 处、exit 0，只在正文里印几行）。
+console.log(
+  `卡牌文本差异 ${report.cardDiffs.length} 处；协议元数据差异 ${report.protoDiffs.length} 处；缺失/映射问题 ${report.missing.length} 处`
+);
 console.log('');
 if (report.missing.length > 0) {
   console.log('---- 缺失/映射问题 ----');
@@ -214,7 +250,7 @@ if (report.cardDiffs.length > 0) {
 
 if (!WRITE) {
   console.log('\n（未写文件；加 --write 应用）');
-  process.exit(report.cardDiffs.length + report.protoDiffs.length > 0 ? 1 : 0);
+  process.exit(report.cardDiffs.length + report.protoDiffs.length + report.missing.length > 0 ? 1 : 0);
 }
 
 // ============ 写回（仅文本字段） ============

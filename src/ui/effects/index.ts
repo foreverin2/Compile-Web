@@ -2272,7 +2272,7 @@ export function initEffects(): () => void {
         }
         break;
       case 'card:deck-played':
-        // 3代点名卡牌反面打出附加层（暴食0 顶 G1 / 压制 O1 / 僵化 Y1 / 惰性 I2，含基础飞行）
+        // 3代点名卡牌反面打出附加层（暴食0 顶 G1 / 压制 O1 / 死板 Y1 / 惰性 I2，含基础飞行）
         if (gen3FaceDownFx('deck', payload as unknown as Gen3CardPayload, GEN3_CARD_FX_API)) break;
         // 反面打出牌堆顶：仅 gravity 触发源（gravity-0/6）播品红牌库框光 + 终点黑洞 + 品红射线
         // （前置段后延后基础打出）；2代 smoke-0 迷雾反打（牌库顶 → 落点灰雾罩 + 卡从雾中现）；
@@ -2288,7 +2288,7 @@ export function initEffects(): () => void {
         } else playDeckPlay(payload);
         break;
       case 'card:hand-played':
-        // 3代点名卡牌反面打出附加层（同上；僵化3 中「在此牌正下方反面打出」走此路径）
+        // 3代点名卡牌反面打出附加层（同上；死板3 中「在此牌正下方反面打出」走此路径）
         if (gen3FaceDownFx('hand', payload as unknown as Gen3CardPayload, GEN3_CARD_FX_API)) break;
         // playFromHand：从手牌中该卡的 rect 起飞飞入目标线链路末尾（区别于牌堆顶打出）
         // 2代 smoke-3 迷雾手牌反打 → 落点灰雾罩 + 卡从雾中现（基础飞行照常）
@@ -2298,7 +2298,7 @@ export function initEffects(): () => void {
         } else playHandPlay(payload);
         break;
       case 'card:immune':
-        // 3代（批次 D）僵化7 底「此牌不能被翻转或偏转」挡下时：护壁闪亮 + 锚钉震动
+        // 3代（批次 D）死板7 底「此牌不能被翻转或偏转」挡下时：护壁闪亮 + 锚钉震动
         flashRigidity7Guard((e.payload as { uid?: string } | undefined)?.uid ?? '');
         break;
       case 'deck:discarded':

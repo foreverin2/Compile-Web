@@ -13,6 +13,12 @@ import type { CardDef, ProtocolDef } from '../core/models/types';
  * （txt 行 2 明列）；拓展 3 套 = 惰性/僵化/灵活（txt 末尾三套，卡图扫描尺寸亦不同，
  * 对应 1/2代 AX 拓展惯例）。set：MN03 / AX03。
  *
+ * 显示名改名（2026-09-27 用户要求）：协议「僵化」→「死板」，卡名随之「死板1..7」。
+ * 卡面与外部 txt 原文仍是「僵化」（`compile3文本.txt:122-129`，不改那个文件），
+ * 映射表在 `tools/protocol-display-renames.mjs`（**唯一出处**；`sync-card-texts.mjs` 与
+ * `parse-ratings.mjs` 都 import 它，`npm run texts:check` 靠它保持 0 差异）。
+ * 本文件的注释里：指外部 txt / 卡图扫描的仍写「僵化」（那是原文），指显示名的写「死板」。
+ *
  * 资源命名修正（2026-09-06 用户操作）：协议图「懒惰」→「怠惰」、「2压垮」→「2压制」；
  * 卡牌图「懒惰0-5.png」→「怠惰0-5.png」（本会话已同步改名后入库）。
  *
@@ -52,7 +58,7 @@ export const ALL_PROTOCOLS_3: ProtocolDef[] = [
   { defId: 'nova', name: '新星', set: 'MN03', commands: ['堆叠数量', '偏转', '重排'], loadingText: '璀璨爆发' },
   // 3代 拓展 3 套（AX03）
   { defId: 'inertia', name: '惰性', set: 'AX03', commands: ['无效化', '正面朝上', '对称效果'], loadingText: '寂然不动' },
-  { defId: 'rigidity', name: '僵化', set: 'AX03', commands: ['反面打出', '阻止'], loadingText: '坚不可摧' },
+  { defId: 'rigidity', name: '死板', set: 'AX03', commands: ['反面打出', '阻止'], loadingText: '坚不可摧' },
   { defId: 'flexibility', name: '灵活', set: 'AX03', commands: ['选择', '偏转', '抽牌'], loadingText: '随机应变' },
 ];
 
@@ -161,7 +167,7 @@ export const ALL_CARD_DEFS_3: CardDef[] = [
   { defId: 'inertia-4', protocol: 'inertia', value: 4, middle: '弃置你的牌库。对手弃置其牌库。' },
   { defId: 'inertia-5', protocol: 'inertia', value: 5, middle: '弃1张牌。' },
 
-  // 僵化——坚不可摧
+  // 死板——坚不可摧（卡面原文：僵化）
   { defId: 'rigidity-1', protocol: 'rigidity', value: 1, middle: '翻转对手1张正面朝上的牌。', bottom: '结束：在每条对手有未被覆盖的反面牌的链路中以反面打出1张牌到己方对应的链路中。' },
   { defId: 'rigidity-2', protocol: 'rigidity', value: 2, bottom: '在你用行动反面打出1张牌后：从你的牌库顶端反面打出1张牌到同一堆叠。' },
   { defId: 'rigidity-3', protocol: 'rigidity', value: 3, middle: '在此牌正下方反面打出1张牌。' },
