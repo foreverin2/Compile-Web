@@ -12,16 +12,42 @@
  * 修复（`src/ui/net-browser.ts` 的 `waitForIceGathering`）之后，那条路变成：
  * **上界到点先看手上已经有几个候选** —— 有 ⇒ 按现状生成邀请码 + 一句**如实**的话；
  * 0 个 ⇒ 仍然是硬失败，但理由只说"这台设备这一次一个候选都没收集到"。
- * ★ **G5/T18 修复轮**：只有 host（没有 srflx / relay，也没配中继）时不再等满 15 秒 ——
- * 起一段 **1.5 秒宽限**（`ICE_HOST_ONLY_GRACE_MS`），到点走上面那条"放行 + 如实 note"；
- * 15 秒上界只留给"一个候选都没有"那一档（⑤ 的负控量的就是它）。够用（host + srflx/relay，
+ * ★ **G5/T18 修复轮**：只有 host（没有 srflx / relay）**且这份配置里没有可用中继**时不再等满
+ * 15 秒 —— 起一段 **1.5 秒宽限**（`ICE_HOST_ONLY_GRACE_MS`），到点走上面那条"放行 + 如实 note"；
+ * 15 秒上界留给"一个候选都没有"那一档（⑤ 的负控量的就是它）。够用（host + srflx/relay，
  * 配了中继时必须是 relay）则**立刻**收工。屏上那句话因此有三种：空（收完）/ 含"等了"（到点）/
  * 含"够用"（早退）—— 本工具用 `gatherOutcomeOf` 按那三个字面分类，不猜。
  *
- * **这一条证明的就是那四件事**（全部在**两个真 Chrome**上点真界面拿读数）：
+ * ★★ **G5/T42（2026-09-27）：① 这一格的前提过期了，拆成两条腿。**
+ *
+ * 起因：收口门（`.superpowers/g5-final/gates-final-20260927.txt`，门 9）在冻结树上跑出
+ * **14/17 红**，红的三格是 ①（用时 15128ms，不是 1.5 秒宽限那一档）、②（邀请码解不开）、
+ * ③（跟着"未到达"）。产品行为本身是对的，是**夹具量的还是 T38/T40 之前的世界**：
+ *  1. **T38 起产品默认就带一台中继**（`DEFAULT_ICE_SERVERS` 里那项 `turn:`，三项设置也预填
+ *     同样的值）⇒ `readIceServers().relayConfigured === true` 是**默认状态**，于是
+ *     `waitForIceGathering` 走**严格档**：中继不可达时真的等满 15 秒上界再放行
+ *     （那句里的"你配了中继，但这一轮中继地址也没收到"）。这是 T38 当面做过的裁决，不是 bug。
+ *  2. **T40 起压缩段一定带明文标记**（`ENCODE_MARKER_OF_KIND`：`-r` / `-d` / `-g` / `-u`）⇒
+ *     本文件旧的 `decodeInvite()` 只会 `inflateRawSync`，把 `-r` 当正文 ⇒ 必然解不开。
+ *
+ * 于是 ① 拆成**两条腿**，各自钉一个契约（两条都能在产品行为变了时变红，见
+ * `.superpowers/g5-T42/T42-REPORT.md` 里的变异实验）：
+ *  - **①-a 严格档**（默认设置 + 不可达 STUN）：用时落在**上界那一档**（≥14s）、收工方式
+ *    `bounded`、那句里**同时**含"等了 15 秒"与"你配了中继，但这一轮中继地址也没收到"，
+ *    且 `iceGatheringState` 一次都没到过 `complete`；
+ *  - **①-b 宽限档**（走真界面把三项设置弄成"配了一半" ⇒ `relayConfigured === false` +
+ *    不可达 STUN）：用时落在 **1.5 秒宽限那一档**（1s ≤ 用时 < 10s）、那句含"等了 1.5 秒"
+ *    且**不含**"你配了中继"。
+ *    ⚠️ `relayConfigured === false` 只有一条路能造出来：**URL 非空、用户名或凭据为空**
+ *    （`readIceServers` 的"配了一半"那一支）。"三项空 + 关掉中继开关"造不出来 ——
+ *    三项空回的是**默认值**（含内置中继 ⇒ `true`），而那个开关只控制**三个输入框显不显示**
+ *    （`net-lobby.ts` 的 `toggleRelay`）。实测形态与读数见报告。
+ *
+ * **这一条证明的就是那四件事**（全部在**真 Chrome**上点真界面拿读数）：
  *  ① 注入一个**必然不可达**的 STUN（`stun:192.0.2.1:3478`，RFC 5737 的 TEST-NET-1）⇒
- *     `iceGatheringState` 到不了 `complete`（页内探针逐条记时间线）；T18 起这种"只有 host"的
- *     情形走 **1.5 秒宽限**就到点放行，**不等满 15 秒**（那 15 秒只留给 0 候选的硬失败）；
+ *     `iceGatheringState` 到不了 `complete`（页内探针逐条记时间线）；默认那份配置里**有中继**
+ *     ⇒ 走满 15 秒上界（①-a）；把中继弄成"配了一半"（`relayConfigured === false`）⇒ 只有 host
+ *     的那种情形走 **1.5 秒宽限**就到点放行（①-b，T18 那条修复量的是它）；
  *  ② 宽限到点之后**仍然产出邀请码**（形状 + 长度，长度从盘上原文里给）；
  *  ③ 屏上那句话与**实测**一致：把邀请码解压开、数它 SDP 里的候选种类与个数，
  *     与 `.net-lobby-notice` 上那句里的数字逐个对上，且那句话里**没有**旧的猜测措辞；
@@ -69,7 +95,7 @@ import { createServer, connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { inflateRawSync } from 'node:zlib';
+import { deflateSync, gunzipSync, inflateRawSync, inflateSync } from 'node:zlib';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, '..');
@@ -81,6 +107,16 @@ const PROFILE_PREFIX = 'btl-icefall-';
 
 /** ★ 必然不可达的 STUN：RFC 5737 的 TEST-NET-1（192.0.2.0/24 是保留段，不做路由） */
 const UNREACHABLE_STUN = 'stun:192.0.2.1:3478';
+
+/**
+ * ★ G5/T42：①-b 用来造"**配了一半**"的那个 TURN URL。
+ *
+ * 同样的 TEST-NET-1 段，同样必然不可达；取一个与 STUN 那个不同的端口只为让读数里一眼能分清
+ * "这是玩家填的那一项"。**它不会被真的连**（注入把整份 `iceServers` 换掉了）——
+ * 这一格量的是 `readIceServers()` 的 `relayConfigured` 怎么影响 `waitForIceGathering`，
+ * 不是"这台中继通不通"。
+ */
+const RELAY_HALF_CONFIGURED_URL = 'turn:192.0.2.2:3478';
 
 const argv = process.argv.slice(2);
 const argVal = (name, dflt = null) => {
@@ -421,23 +457,70 @@ async function phaseOfSide(p) {
 /* ── 邀请码的**真解码**（判据③：屏上那句里的数字要与 SDP 实测对得上） ─────── */
 
 /**
+ * 压缩段的**明文标记 → 编码档位**（测试侧独立实现，照 `src/net/invite.ts` 的明文契约写，
+ * **不 import 产品代码** —— 与本文件里的 `linkFragmentOf` 同一套纪律）。
+ *
+ * 两处出处（T42 动手前逐字核过）：
+ *  - `COMPRESSION_MARKERS`（**读**）：`raw: ''` / `none: '-u'` / `deflate: '-d'` / `gzip: '-g'`；
+ *  - `ENCODE_MARKER_OF_KIND`（**生成**）：`raw: '-r'`，其余三档同上。
+ * 生成侧把 `raw` 也显式写成 `-r`，**读侧也认它**（`kindOfMarker` 两张表都查）。
+ */
+const READ_MARKER_OF_KIND = { raw: '', none: '-u', deflate: '-d', gzip: '-g' };
+const ENCODE_MARKER_OF_KIND = { raw: '-r', none: '-u', deflate: '-d', gzip: '-g' };
+
+/** 标记的**宽度**：`-x` 就是 2 个字符。第二段以 `-` 开头 ⇒ 前两个字符是标记（否则老格式 `''`）。 */
+function markerOfSegment(segment) {
+  return segment.startsWith('-') ? segment.slice(0, 2) : '';
+}
+
+/** `标记 → kind`（**读**用）：`''`（老格式）与 `'-r'` 都是 `'raw'`；不认得返回 `null` */
+function kindOfMarker(marker) {
+  if (marker === '') return 'raw';
+  const keys = [...Object.keys(ENCODE_MARKER_OF_KIND), ...Object.keys(READ_MARKER_OF_KIND)];
+  const hit = keys.find((k) => ENCODE_MARKER_OF_KIND[k] === marker || READ_MARKER_OF_KIND[k] === marker);
+  return hit ?? null;
+}
+
+/**
  * 把一条邀请码解回那份位置数组。
  *
- * 形状（`src/net/invite.ts`）：`<协议版本>.<base64url(deflate-raw(JSON 数组))>`，
+ * 形状（`src/net/invite.ts`，T40 起）：`<协议版本>.<标记?><base64url(压缩正文)>`，
+ * 标记是 `-r` / `-d` / `-g` / `-u` 之一；**老格式（无标记）按 `raw` 读**。
  * 数组的下标是契约：`[v, sessionId, sdp, ice[], hostPromise, guestPromise]`。
- * **在 node 里真解一遍**（`zlib.inflateRawSync` 就是 deflate-raw），不靠页面自报。
+ * **在 node 里真解一遍**（`zlib` 那几个解压器），不靠页面自报。
+ *
+ * 返回 `null` = 解不开；**解不开的原因**由 `decodeFailureNote()` 说出来（"标记不认得"与
+ * "正文解不开"是两回事，报告里要分得清）。
  */
 function decodeInvite(payload) {
   const dot = payload.indexOf('.');
-  if (dot <= 0) return null;
-  const b64 = payload.slice(dot + 1);
-  let tuple = null;
+  if (dot <= 0) { lastDecodeFailure = '第一段不是"第一个点在中间"的形状（拿不到协议版本与压缩段）'; return null; }
+  const segment = payload.slice(dot + 1);
+  const marker = markerOfSegment(segment);
+  const kind = kindOfMarker(marker);
+  if (kind === null) { lastDecodeFailure = `压缩段带了一个不认得的标记 ${JSON.stringify(marker)}`; return null; }
+  const body = segment.slice(marker.length);
+  const buf = Buffer.from(body, 'base64url');
+  let plain = null;
   try {
-    tuple = JSON.parse(inflateRawSync(Buffer.from(b64, 'base64url')).toString('utf8'));
-  } catch {
+    if (kind === 'raw') plain = inflateRawSync(buf);
+    else if (kind === 'deflate') plain = inflateSync(buf);
+    else if (kind === 'gzip') plain = gunzipSync(buf);
+    else plain = buf;
+  } catch (e) {
+    lastDecodeFailure = `压缩段解不开（标记 ${marker === '' ? "''（老格式）" : marker} ⇒ ${kind}）：`
+      + String(e instanceof Error ? e.message : e);
     return null;
   }
-  if (!Array.isArray(tuple) || typeof tuple[2] !== 'string') return null;
+  let tuple = null;
+  try { tuple = JSON.parse(plain.toString('utf8')); } catch (e) {
+    lastDecodeFailure = `解出来的正文不是 JSON：${String(e instanceof Error ? e.message : e)}`;
+    return null;
+  }
+  if (!Array.isArray(tuple) || typeof tuple[2] !== 'string') {
+    lastDecodeFailure = '解出来的不是那份位置数组（tuple[2] 不是字符串）';
+    return null;
+  }
   const sdp = tuple[2];
   const ice = Array.isArray(tuple[3]) ? tuple[3].filter((x) => typeof x === 'string' && x.length > 0) : [];
   const candidates = sdp.split(/\r?\n/).filter((l) => l.startsWith('a=candidate:'));
@@ -448,9 +531,13 @@ function decodeInvite(payload) {
     if (t === 'host' || t === 'srflx' || t === 'prflx' || t === 'relay') kinds[t] += 1;
     else kinds.other += 1;
   }
-  return { protoVersion: payload.slice(0, dot), payloadVersion: tuple[0], sdpLen: sdp.length,
-    candidates, kinds, iceField: ice };
+  return { protoVersion: payload.slice(0, dot), marker, kind, bodyLen: body.length,
+    payloadVersion: tuple[0], sdpLen: sdp.length, candidates, kinds, iceField: ice };
 }
+
+/** 最近一次 `decodeInvite()` 为什么返回 `null`（只在报告/失败信息里用，不参与判定） */
+let lastDecodeFailure = null;
+const decodeFailureNote = (payload) => lastDecodeFailure ?? `只拿到 ${String(payload?.length ?? 0)} 个字符`;
 
 /** 候选种类的中文名（与 `src/ui/net-browser.ts` 的 `KIND_LABELS` **同义**；屏上那句里就会出现它） */
 const KIND_CN = { host: '本机（host）', srflx: '公网映射（srflx）', prflx: '对端映射（prflx）',
@@ -500,6 +587,121 @@ function gatherOutcomeOf(notice) {
   return { kind: 'other', text };
 }
 
+/* ── ★ G5/T42：①-b 造 `relayConfigured === false`（走大厅真界面） ───────────── */
+
+/**
+ * 走大厅的「高级 / 连接设置」把三项弄成**配了一半**。
+ *
+ * 为什么只有这一条路能造出 `relayConfigured === false`（`readIceServers`，T42 动手前核过）：
+ *  - **三项为空** ⇒ 回默认值，里面**有**内置中继 ⇒ `relayConfigured: true`（`relaySource: 'builtin'`）；
+ *  - **三项填齐** ⇒ 按玩家给的写 ⇒ `true`；
+ *  - **只填一半**（URL 非空、用户名或凭据为空）⇒ 玩家那项**不换上**、回默认值，
+ *    但报 `relayConfigured: false` + `relayIncomplete: true`（`net-browser.ts` 那一支就是这么写的）。
+ * 大厅那个中继开关（`input.net-lobby-relay-toggle-box`）**只控制三个输入框显不显示**
+ * （`net-lobby.ts` 的 `toggleRelay` 只翻 `s.relayOpen`），它跟 `iceServers` 一个字节都不沾。
+ *
+ * ⚠️ 三个输入框是**真 DOM 输入框 + `input` 事件**（`textInput()` 把 `onInput` 接在 DOM 事件上，
+ * 不是受控组件）⇒ 直接设 `.value` 再派发 `input`/`change` 就是产品的正常输入路径。
+ */
+async function setRelayHalfConfigured(p, turnUrl) {
+  const fail = (step) => ({ ok: false, step, relayConfigured: null, settings: null, inputsReadback: null });
+  const probeSnapshot = async () => {
+    const out = await p.evaluate('typeof window.__g5Match === "object" ? JSON.stringify(window.__g5Match.ice()) : null');
+    try { return JSON.parse(String(out)); } catch { return null; }
+  };
+  /** 点一下屏上某个选择器（真 `click` 事件按顺序派发） */
+  const clickSel = (sel) => p.evaluate(`(() => {
+    const el = document.querySelector(${JSON.stringify(sel)});
+    if (el === null) return false;
+    for (const t of ['mousedown', 'mouseup', 'click']) el.dispatchEvent(new Event(t, { bubbles: true }));
+    return true;
+  })()`);
+  /**
+   * ★ **勾选框**要按"从**未勾**到勾上"来点：`relayOpen` 是渲染时用 `box.checked = relayShown`
+   * 写进 DOM 的，而 `box.checked = true` 是**用户赋值**（之后 `getAttribute('checked')` 仍是 null）
+   * ⇒ 如果我把它设成 `true` 之后又点一次，渲染层按 `s.relayOpen` 算出的仍是"没变"（它读的是自己的
+   * 状态，不是 DOM）⇒ 三个输入框**永远不出现**（实测 `dbg-run4.txt`：面板开了、勾选框找不到时
+   * 报的就是这一格）。所以这里先把它按回 `false` 再派发 `change`，下一次状态翻转一定是"勾上"。
+   */
+  const checkBox = (sel) => p.evaluate(`(() => {
+    const el = document.querySelector(${JSON.stringify(sel)});
+    if (el === null) return false;
+    if (el.checked === true) el.checked = false;
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  })()`);
+  const count = async (sel) => Number(await p.evaluate(`document.querySelectorAll(${JSON.stringify(sel)}).length`));
+  /**
+   * 点到"条件成立"为止（每次点完等 700ms 让那一帧画完）。
+   *
+   * ⚠️ **为什么不能点一下就当它成了**（2026-09-28 实测，`.superpowers/g5-T42/dbg-run3.txt`）：
+   * 这一路走到大厅时那一屏可能还停在**"还没选角色"**（`role === null` ⇒ 只有两张入口卡，
+   * 没有「生成邀请码」按钮）；一次点击落在应用自己那次重渲染上就会被整棵树换掉、**静默无效**。
+   * 大厅那几处（选角色 / 展开高级 / 展开 TURN）都是这样，所以各自点到条件成立为止，
+   * 失败要能说出点了几次、当时屏上是什么。
+   */
+  const clickUntil = async (sel, cond, fire = clickSel, tries = 6) => {
+    let hits = 0;
+    for (let i = 0; i < tries; i += 1) {
+      if (await cond()) return { ok: true, hits };
+      if (!(await fire(sel))) return { ok: false, hits, why: `屏上找不到 ${sel}` };
+      hits += 1;
+      await sleep(700);
+    }
+    return { ok: await cond(), hits, why: `点了 ${String(hits)} 次，条件一直没成立` };
+  };
+
+  // 1) 选角色：必须真的点到"房主那一屏"（`.net-lobby-make-invite` 在屏上）
+  const role = await clickUntil('.net-lobby-host', async () => (await count('.net-lobby-make-invite')) > 0);
+  if (!role.ok) {
+    return fail(`选角色那一步没成：${String(role.why)}`
+      + `（大厅屏 ${String(await count('.net-lobby-screen'))} 个；入口卡 ${String(await count('.net-lobby-host'))} 个）`);
+  }
+  // 2) 展开「高级 / 连接设置」：点到面板真的渲染出来
+  const panel = await clickUntil('.net-lobby-advanced-toggle',
+    async () => (await count('div.net-lobby-advanced-panel')) > 0);
+  if (!panel.ok) return fail(`展开「高级 / 连接设置」没成：${String(panel.why)}`);
+  // 3) 展开 TURN 三项（那个勾选框只翻 `relayOpen`，不碰 iceServers）
+  const box = await clickUntil('input.net-lobby-relay-toggle-box',
+    async () => (await count('input.net-lobby-turn-url-input')) > 0, checkBox);
+  if (!box.ok) return fail(`展开 TURN 三项没成：${String(box.why)}`);
+  // 4) URL 填上、用户名与凭据清空 ⇒ readIceServers() 走"配了一半"那一支
+  const wrote = await p.evaluate(`(() => {
+    const q = (c) => document.querySelector('input.' + c);
+    const set = (el, v) => {
+      if (el === null) return false;
+      el.value = v;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    };
+    const url = set(q('net-lobby-turn-url-input'), ${JSON.stringify(turnUrl)});
+    const user = set(q('net-lobby-turn-user-input'), '');
+    const cred = set(q('net-lobby-turn-cred-input'), '');
+    return JSON.stringify({ url, user, cred });
+  })()`);
+  await sleep(500);
+  let flags = { url: false, user: false, cred: false };
+  try { flags = JSON.parse(String(wrote)); } catch { flags = { url: false, user: false, cred: false }; }
+  if (!flags.url || !flags.user || !flags.cred) return fail(`三个 TURN 输入框没有全部写到（${String(wrote)}）`);
+  const readback = await p.evaluate(`(() => JSON.stringify({
+    url: document.querySelector('input.net-lobby-turn-url-input')?.value ?? null,
+    user: document.querySelector('input.net-lobby-turn-user-input')?.value ?? null,
+    cred: document.querySelector('input.net-lobby-turn-cred-input')?.value ?? null,
+  }))()`);
+  say(`  [记录] ①-b 三个输入框的写后读数：${String(readback)}`);
+  const settings = await probeSnapshot();
+  return {
+    ok: settings !== null && settings.relayConfigured === false,
+    step: '大厅真界面：点「建房（生成邀请码）」定下房主那一屏 ⇒ 点开「高级 / 连接设置」'
+      + ' ⇒ 勾上「改用我自己的中继（TURN）」展开三项 '
+      + `⇒ URL 填 ${turnUrl}、用户名与凭据清空`,
+    relayConfigured: settings === null ? null : settings.relayConfigured === true,
+    settings,
+    inputsReadback: readback,
+  };
+}
+
 /* ── 主流程 ─────────────────────────────────────────────────────────────── */
 
 const chrome = findChrome();
@@ -528,9 +730,12 @@ const notes = [];
 let hostInst = null;
 let guestInst = null;
 let negInst = null;
+/** ★ G5/T42：①-b 那一台（专造"配了一半 ⇒ relayConfigured === false"的那个房主） */
+let relayInst = null;
 let host = null;
 let guest = null;
 let neg = null;
+let relay = null;
 const raw = { when: new Date().toISOString(), chrome, vitePort, waitS: WAIT_S, unreachableStun: UNREACHABLE_STUN };
 let envError = null;
 const cleanupErrors = [];
@@ -612,8 +817,9 @@ try {
   say(`驱动到大厅：host ${hDrive ?? 'ok'} / guest ${gDrive ?? 'ok'}`);
   say('');
 
-  /* ── ① 房主：注入的 STUN 不可达 ⇒ 收集到不了 complete ──────────────────── */
-  say(`=== ① STUN 不可达（${UNREACHABLE_STUN}）⇒ iceGatheringState 到不了 complete ⇒ 走 1.5 秒宽限 ===`);
+  /* ── ①-a 房主：默认配置（含内置中继）+ 注入的 STUN 不可达 ⇒ 严格档等满上界 ─────── */
+  say(`=== ①-a 严格档：默认配置里有中继（T38 起）而 ${UNREACHABLE_STUN} 不可达`
+    + ' ⇒ iceGatheringState 到不了 complete ⇒ 等满 15 秒上界才放行 ===');
   let invitePayload = null;
   /** ★ G5/T17：房主屏上那条**整条链接**（`.net-lobby-invite-link` 的正文）——用户真机粘的就是它 */
   let inviteLink = null;
@@ -646,7 +852,7 @@ try {
         probe !== null && Array.isArray(probe.configs) && probe.configs.length > 0
           ? `注入生效：应用真的建了 ${probe.pcs} 条连接，构造参数被改成 ${UNREACHABLE_STUN}`
           : '注入没生效（页内探针一条连接都没记到）—— 后面的读数都不能算');
-      // ①-b 到不了 complete
+      // 到不了 complete（**保留**的那一格：没有它就证不了"STUN 不可达"这件事真的造出来了）
       const states = probe === null || !Array.isArray(probe.states) ? [] : probe.states;
       const completed = states.filter((s) => s[1] === 'complete');
       raw.hostStatesAtInvite = states;
@@ -658,42 +864,87 @@ try {
             + `iceCandidateError ${String(probe?.errors?.length ?? 0)} 条）`
           : `居然到过 complete（${JSON.stringify(completed)}）—— "STUN 不可达"这一格没有造出来`);
       /**
-       * ★★ **G5/T18 修复轮：只要 host 就不许等满 15 秒** —— 现在起的是 **1.5 秒宽限**
-       * （`ICE_HOST_ONLY_GRACE_MS`），到点走"放行 + 如实 `note`"。这一格钉两件事：
-       *  1. 出码时刻落在宽限那一档（≥1s 且远小于 15s 上界）⇒ 说明宽限真的生效了；
-       *  2. 屏上那句就是宽限那句（含"1.5 秒"），不是别的路的话。
-       * ⚠️ 15 秒上界本身**没被放宽**：⑤ 的 0 候选负控仍然量到 ≥14s。
+       * ★★ **①-a 严格档（G5/T42 改口径：这一格量的不再是 1.5 秒宽限）**。
+       *
+       * T38 起默认那三项设置里就有一台中继 ⇒ `readIceServers().relayConfigured === true`
+       * ⇒ `waitForIceGathering` 走**严格档**（`enoughCandidatesForInvite(ice, true)` 要求 relay ≥ 1）
+       * ⇒ 中继不可达时**真的等满 15 秒上界**再放行。这一格钉三件事：
+       *  1. 出码时刻落在**上界那一档**（≥14s；上界本身是 15000ms，留 1s 余量，
+       *     另给一个宽松上界 30s 只为挡住"卡到远超上界"，不把 15s 写死成精确值）；
+       *  2. 收工方式是 `bounded`（含"等了"那一句），且那句里**同时**有"等了 15 秒"与
+       *     "你配了中继，但这一轮中继地址也没收到"（后半句是本轮契约的核心：配了中继而
+       *     relay 没到手这件事必须被说出来 —— 它变红就说明产品不再说这件事了）；
+       *  3. `iceGatheringState` 一次都没到过 `complete`（上一格）。
+       *
+       * ⚠️ 宽限那一档（T18 的修复）现在由 **①-b** 专门造 `relayConfigured === false` 来量 ——
+       * 上面这份"默认配置"是造不出宽限档的（有中继就不排宽限计时器）。
        */
       const outcome = gatherOutcomeOf(hostNotice);
       raw.hostOutcomeAtInvite = outcome;
-      const graceOk = typeof inviteMs === 'number' && inviteMs >= 1000 && inviteMs < 10000
-        && outcome.kind === 'bounded' && outcome.text.includes('1.5 秒');
-      push(graceOk, graceOk
-        ? `只有 host（STUN 不可达）⇒ ${String(inviteMs)}ms 就走**宽限**那一档放行了（不再等满 15 秒上界）；`
-          + `屏上那句：「${outcome.text}」`
-        : `"只有 host 时走 1.5 秒宽限"这一格不对（用时 ${String(inviteMs)}ms；`
-          + `收工方式 ${outcome.kind}；屏上：「${outcome.text}」）`);
+      const upperBoundNote = '你配了中继，但这一轮中继地址也没收到';
+      /**
+       * ⚠️ **上界 20000 这一头必须有牙**（T42 修复轮，评审指出 `<= 30000` 是无牙合取项）：
+       * `inviteMs` 就是 `waitFor('.net-lobby-invite-payload', budgetMs)` 的墙钟耗时，而
+       * `budgetMs = WAIT_S*1000 = 30000` ⇒ 原来那个 `<= 30000` 等于"没拿到码就等满预算"，
+       * **产品把上界从 15s 放宽到 25s 也照样绿**。实测三次 15160 / 15197 / 15204ms（这一轮
+       * 又量到 15222 / 15274ms）⇒ 收成 `<= 20000`：两边各留几秒给慢机器，25s 那种一定红。
+       */
+      const STRICT_MS_MIN = 14000;
+      const STRICT_MS_MAX = 20000;
+      const strictOk = typeof inviteMs === 'number' && inviteMs >= STRICT_MS_MIN && inviteMs <= STRICT_MS_MAX
+        && outcome.kind === 'bounded' && outcome.text.includes('等了 15 秒')
+        && outcome.text.includes(upperBoundNote);
+      raw.strictUpperBound = { inviteMs, min: STRICT_MS_MIN, max: STRICT_MS_MAX, kind: outcome.kind,
+        has15s: outcome.text.includes('等了 15 秒'), hasRelayNote: outcome.text.includes(upperBoundNote) };
+      push(strictOk, strictOk
+        ? `①-a 严格档：默认配置里有中继（不可达）⇒ ${String(inviteMs)}ms **走满上界**那一档才放行`
+          + `（窗口 ${String(STRICT_MS_MIN)}-${String(STRICT_MS_MAX)}ms）；`
+          + `那句里同时有"等了 15 秒"与"${upperBoundNote}"（收工方式 ${outcome.kind}）`
+        : `①-a 严格档没量到（用时 ${String(inviteMs)}ms，窗口 ${String(STRICT_MS_MIN)}-${String(STRICT_MS_MAX)}ms；`
+          + `收工方式 ${outcome.kind}；含"等了 15 秒"=${String(outcome.text.includes('等了 15 秒'))}；`
+          + `含"${upperBoundNote}"=${String(outcome.text.includes(upperBoundNote))}）：「${outcome.text}」`);
     }
   }
   say('');
 
-  /* ── ② 上界到点之后仍然产出邀请码 ─────────────────────────────────────── */
-  say('=== ② 宽限到点之后仍然产出邀请码（改之前这一格恒失败） ===');
+  /* ── ② 严格档（①-a）到点之后仍然产出邀请码 ─────────────────────────────── */
+  say('=== ② ①-a 那份配置到点之后仍然产出邀请码（改之前这一格恒失败） ===');
   const shaped = typeof invitePayload === 'string' && /^\d+\.[A-Za-z0-9_-]{40,}$/.test(invitePayload);
   push(shaped, shaped
     ? `屏上产出了一条邀请码：${invitePayload.length} 个字符（用时 ${String(inviteMs)}ms）`
     : `屏上没有产出邀请码（通知：${hostNotice ?? '无'}）`);
   let decoded = null;
+  /**
+   * ★★ **G5/T42 修复轮：新码必须带显式压缩标记**（评审指出这条契约在门禁里不承重）。
+   *
+   * T40 起生成侧 `ENCODE_MARKER_OF_KIND` **一定**把标记写进压缩段（`raw` 也写成 `-r`），
+   * 而本夹具把 `''`（老格式）与 `-r` **都**读成 raw ⇒ 产品哪天悄悄退回"无标记老格式"，
+   * ② 照样绿（它只打印 marker、不判 marker）。所以单独一格钉住"标记非空且在四档里"，
+   * 并把它落到 `raw.decoded` 里（"这一跑用的是哪一档"要能进报告）。
+   * ⚠️ 老格式（`''`）仍是**读**得通的（向后兼容那条读路径不能破），但它不该是**新产出**的形状。
+   */
+  const MARKERS = ['-r', '-d', '-g', '-u'];
+  const markerOk = (d) => d !== null && MARKERS.includes(d.marker);
   if (shaped) {
     decoded = decodeInvite(invitePayload);
     raw.invite = { length: invitePayload.length, ms: inviteMs, decoded };
     push(decoded !== null && decoded.candidates.length >= 1,
       decoded === null
-        ? '邀请码解不开（node 侧 inflate-raw + JSON 都失败了）'
-        : `邀请码真的解得开：SDP ${String(decoded.sdpLen)} 字符，候选 ${String(decoded.candidates.length)} 个`
+        ? `邀请码解不开（node 侧：${decodeFailureNote(invitePayload)}）`
+        : `邀请码真的解得开：压缩段标记 ${decoded.marker === '' ? "''（老格式，按 raw 读）" : decoded.marker}`
+          + ` ⇒ ${decoded.kind}；SDP ${String(decoded.sdpLen)} 字符，候选 ${String(decoded.candidates.length)} 个`
           + `（${JSON.stringify(decoded.kinds)}），ice 字段 ${String(decoded.iceField.length)} 项`);
+    raw.decoded = { marker: decoded?.marker ?? null, kind: decoded?.kind ?? null, length: invitePayload.length };
+    push(markerOk(decoded), markerOk(decoded)
+      ? `这条码的压缩段带了**显式标记** ${String(decoded.marker)}（T40 起生成侧一定写标记；`
+        + `''（无标记老格式）只允许出现在**读**旧码那条路上）`
+      : decoded === null
+        ? `未到达：这条码解不开，读不出标记（${decodeFailureNote(invitePayload)}）`
+        : `这条码的压缩段标记是 ${decoded.marker === '' ? "''（无标记老格式）" : decoded.marker}`
+          + ` —— 不是 ${MARKERS.join(' / ')} 里的一档（T40 起新码必须显式写标记）`);
   } else {
     push(false, '未到达：②没有产出邀请码 ⇒ 解不开、也接不起来');
+    push(false, '未到达：②没有产出邀请码 ⇒ 读不出压缩段标记');
   }
   say('');
 
@@ -710,6 +961,106 @@ try {
         + '里取出的 fragment 与裸载荷**逐字相同**'
       : `房主屏上那条链接取不出同一条载荷（link=${String(inviteLink).slice(0, 140)}；`
         + `fragment=${String(frag).slice(0, 40)}）`);
+  }
+  say('');
+
+  /* ── ①-b 宽限档：把设置弄成"配了一半"（relayConfigured === false）+ 不可达 STUN ─ */
+  say('=== ①-b 宽限档：走真界面把中继弄成"配了一半"（relayConfigured === false）'
+    + ' ⇒ 只有 host 时走 1.5 秒宽限（T18 那条修复量的是它） ===');
+  {
+    let relayStep = null;
+    let relaySettingsBefore = null;
+    let relayConfiguredFalse = null;
+    let relaySettingsAfter = null;
+    let relayMs = null;
+    let relayNotice = null;
+    let relayProbeAtInvite = null;
+    let relayPayload = null;
+    relayInst = await launchChrome(chrome);
+    relay = await attach('relay', relayInst.port, 'about:blank');
+    await relay.injectOnNewDocument(stunOverrideScript(UNREACHABLE_STUN));
+    await relay.navigate(`${origin}/#g5probe=1`);
+    // 注入有没有生效**当场自证**（与 host / guest 同一格纪律）
+    const relayProbeType = await relay.evaluate('typeof window.__iceProbe');
+    if (relayProbeType !== 'object') {
+      throw new Error(`relay: 注入没生效（window.__iceProbe = ${String(relayProbeType)}）`
+        + '—— 拒绝在"真实网络"上得出读数');
+    }
+    const rDrive = await driveToLobby(relay);
+    if (rDrive !== null) {
+      push(false, `①-b 那一屏驱动失败：${rDrive}`);
+    } else {
+      /**
+       * ⚠️ **走真界面之前先给这一屏一点落定时间**（实测 2026-09-28，`.superpowers/g5-T42/dbg-run3.txt`）：
+       * `driveToLobby()` 一返回时那一屏还可能停在**"还没选角色"**（`role === null` ⇒ 屏上只有两张
+       * 入口卡），而应用自己那次重渲染会**静默吃掉**落在它身上的点击。
+       * `setRelayHalfConfigured()` 里每一步都点到条件成立为止，这里的 800ms 只是让它少绕几圈。
+       */
+      await sleep(800);
+      const pre = await relay.evaluate('JSON.stringify(window.__g5Match ? window.__g5Match.ice() : null)');
+      try { relaySettingsBefore = JSON.parse(String(pre)); } catch { relaySettingsBefore = null; }
+      const set = await setRelayHalfConfigured(relay, RELAY_HALF_CONFIGURED_URL);
+      relayStep = set.step;
+      relayConfiguredFalse = set.relayConfigured;
+      relaySettingsAfter = set.settings;
+      // 这一格必须有牙：设置没被改动（或探针读不到）时**当场红**，后面的读数才作数
+      push(set.ok, set.ok
+        ? `这一跑造出的 relayConfigured === false 是**"配了一半"**那一支：URL 非空、用户名与凭据为空`
+          + `（relaySource=${String(relaySettingsAfter?.relaySource)}、`
+          + `relayIncomplete=${String(relaySettingsAfter?.relayIncomplete)}、`
+          + `settingsAreDefault=${String(relaySettingsAfter?.settingsAreDefault)}；`
+          + `写后读数 ${String(set.inputsReadback)}）；`
+          + `改之前那一份是 relayConfigured=${String(relaySettingsBefore?.relayConfigured)}`
+        : `没能把设置弄成 relayConfigured === false（${String(relayStep)}；读到 ${String(pre)}）`);
+      if (set.ok) {
+        const t0r = Date.now();
+        await relay.click('.net-lobby-make-invite');
+        const rAppeared = await relay.waitFor('.net-lobby-invite-payload', budgetMs);
+        relayMs = Date.now() - t0r;
+        relayPayload = rAppeared ? await relay.text('.net-lobby-invite-payload') : null;
+        relayNotice = await relay.text('.net-lobby-notice');
+        const rProbeRaw = await relay.evaluate('JSON.stringify(window.__iceProbe ?? null)');
+        try { relayProbeAtInvite = JSON.parse(String(rProbeRaw)); } catch { relayProbeAtInvite = null; }
+        const rOutcome = gatherOutcomeOf(relayNotice);
+        raw.relayHalfConfigured = {
+          settingsBefore: relaySettingsBefore, settingsAfter: relaySettingsAfter,
+          inputsReadback: set.inputsReadback,
+          step: relayStep, inviteMs: relayMs, notice: relayNotice, outcome: rOutcome,
+          payloadLength: typeof relayPayload === 'string' ? relayPayload.length : null,
+          probeStates: relayProbeAtInvite?.states ?? null,
+        };
+        const graceOk = typeof relayMs === 'number' && relayMs >= 1000 && relayMs < 10000
+          && rOutcome.kind === 'bounded' && rOutcome.text.includes('等了 1.5 秒')
+          && !rOutcome.text.includes('你配了中继');
+        push(graceOk, graceOk
+          ? `①-b 宽限档：这套配置没有可用中继（relayConfigured === false）+ STUN 不可达`
+            + ` ⇒ ${String(relayMs)}ms 就走**1.5 秒宽限**那一档放行（不是 15 秒上界）；`
+            + `那句里含"等了 1.5 秒"、不含"你配了中继"：「${rOutcome.text}」`
+          : `①-b 宽限档没量到（用时 ${String(relayMs)}ms；收工方式 ${rOutcome.kind}；`
+            + `含"等了 1.5 秒"=${String(rOutcome.text.includes('等了 1.5 秒'))}；`
+            + `含"你配了中继"=${String(rOutcome.text.includes('你配了中继'))}）：「${rOutcome.text}」`);
+        const rShaped = typeof relayPayload === 'string' && /^\d+\.[A-Za-z0-9_-]{40,}$/.test(relayPayload);
+        push(rShaped, rShaped
+          ? `①-b 这条路照样产出了邀请码：${String(relayPayload.length)} 个字符`
+          : `①-b 这条路没有产出邀请码（通知：${String(relayNotice ?? '无')}）`);
+        /**
+         * ★ T42 修复轮顺手加的一格：①-b 那条码也过同一份"必须带显式标记"的判定。
+         * 顺手能判就判 —— 这一格用的是同一个 `decodeInvite()` + 同一张 `MARKERS` 表，
+         * 成本是多解一条码；好处是"标记契约"在**两份不同配置**产出的码上都被钉住。
+         */
+        const rDecoded = rShaped ? decodeInvite(relayPayload) : null;
+        raw.relayHalfConfigured.payloadMarker = rDecoded?.marker ?? null;
+        push(markerOk(rDecoded), markerOk(rDecoded)
+          ? `①-b 那条码也带了显式标记 ${String(rDecoded.marker)}（⇒ ${String(rDecoded.kind)}）`
+          : rShaped
+            ? `①-b 那条码的标记不对（${rDecoded === null ? decodeFailureNote(relayPayload) : `读到 ${JSON.stringify(rDecoded.marker)}`}）`
+            : '未到达：①-b 没有产出邀请码 ⇒ 读不出标记');
+      } else {
+        push(false, '未到达：①-b 的设置没造成 ⇒ 宽限那一档量不到');
+        push(false, '未到达：①-b 没有产出邀请码');
+        push(false, '未到达：①-b 没有产出邀请码 ⇒ 读不出标记');
+      }
+    }
   }
   say('');
 
@@ -920,22 +1271,24 @@ try {
   if (host) host.close();
   if (guest) guest.close();
   if (neg) neg.close();
+  if (relay) relay.close();
   if (!KEEP) {
     killTree(hostInst?.proc.pid);
     killTree(guestInst?.proc.pid);
     killTree(negInst?.proc.pid);
+    killTree(relayInst?.proc.pid);
     killTree(vite.pid);
     await sleep(600);
     // ★ 两轮杀（T11-C 的实验结论）：`taskkill /T /F` 第一轮有时只杀掉顶层进程，
     //   子进程还握着 profile 里的文件 ⇒ `rmSync` 一直失败
-    for (const inst of [hostInst, guestInst, negInst]) {
+    for (const inst of [hostInst, guestInst, negInst, relayInst]) {
       if (!inst) continue;
       for (let i = 0; i < 3; i += 1) {
         killTree(inst.proc.pid);
         await sleep(500);
       }
     }
-    for (const p of [hostInst?.profile, guestInst?.profile, negInst?.profile]) {
+    for (const p of [hostInst?.profile, guestInst?.profile, negInst?.profile, relayInst?.profile]) {
       if (!p) continue;
       for (let i = 0; i < 8; i += 1) {
         if (!existsSync(p)) break;
@@ -954,7 +1307,8 @@ let clean = true;
 if (!KEEP && envError === null) {
   say('=== 收工自证 ===');
   const ports = [['vite dev server', vitePort], ['host 调试端口', hostInst?.port],
-    ['guest 调试端口', guestInst?.port], ['neg 调试端口', negInst?.port]];
+    ['guest 调试端口', guestInst?.port], ['neg 调试端口', negInst?.port],
+    ['relay 调试端口（①-b 那一台）', relayInst?.port]];
   for (const [name, p] of ports) {
     if (p === undefined) continue;
     const listening = await portListening(p);
@@ -967,7 +1321,7 @@ if (!KEEP && envError === null) {
   } catch { /* 读不了就不断言 */ }
   say(`  [${left.length === 0 ? '通过' : '不通过'}] 临时 profile 已清（残留 ${left.length} 个）`);
   for (const n of left) {
-    const mine = [hostInst?.profile, guestInst?.profile, negInst?.profile]
+    const mine = [hostInst?.profile, guestInst?.profile, negInst?.profile, relayInst?.profile]
       .some((p) => p !== undefined && p.endsWith(n));
     say(`      残留：${n}（${mine ? '**本次**起的' : '**别人的**：不是这一跑起的 profile'}）`);
   }
