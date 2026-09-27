@@ -41,7 +41,7 @@ import {
   performDraftUnpick,
 } from '../../src/core/state/create';
 import { createLocalDriver, createReplayDriver, type Ticker } from '../../src/app/match-driver';
-import { executeAction, getLegalActions, type ActionKind } from '../../src/core/game';
+import { executeAction, executeDevSkip, getLegalActions, type ActionKind } from '../../src/core/game';
 import { getCompilableLines } from '../../src/core/rules/compile';
 import { resetControlIfHeld } from '../../src/core/rules/control';
 import { stateFingerprint } from '../../src/core/fingerprint';
@@ -532,7 +532,10 @@ describe('T1 判据 5：8 个 ActionKind 全覆盖，未覆盖的 kind 抛错（
         const src = makeCard('light-1', player, 'field', true, 0, 0);
         s.players[player].stacks[0] = [src];
         let guard = 0;
-        while (s.step !== 'end' && guard++ < 8) executeAction(s, player, 'advance');
+        // 2026-09-27（G6 T45，用户 ⑥）：行动步能出牌/刷新就不许 `advance`。本夹具的目的是
+        // "把步推到 end"，真打一张牌会改掉刚摆好的 stacks[0] ⇒ 这里走**显式旁路**
+        // `executeDevSkip`（与开发者指令 `/skip` 同一出口；必编译/空手/超5/必选触发照旧拦）。
+        while (s.step !== 'end' && guard++ < 8) executeDevSkip(s, player);
         expect(s.step).toBe('end');
         const pending = getLegalActions(s, player).filter((x) => x.kind === 'resolve-trigger');
         expect(pending.length, 'end 步必须有可结算的 light-1 触发').toBeGreaterThan(0);

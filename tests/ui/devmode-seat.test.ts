@@ -86,9 +86,18 @@ describe('R12-6 · 开发者模式 `视角` 指令（从预览工具条内化过
     expect(isDevUnlocked(), '默认就解锁了 —— 预览工具条会常驻在普通对局的页面上').toBe(false);
   });
 
-  it('源码腿：解锁后**立刻重渲染**一次（否则工具条要等下一次操作才出现）', () => {
+  /**
+   * ⚠️ **源码腿（grep）**：它只证明"源码里那两句挨着"，**证明不了用户在屏上看得见**
+   * （解锁动作真跑起来要 DOM 与真键盘事件，那一路在 `.superpowers/g6-T45/rowgate-cdp.mjs`
+   * 的真机读数里：真 `Ctrl+Shift+P` → 填密码 → 真 Enter，探针 `env.unlockRenders` 读的就是
+   * 解锁那一次 `host.render()`）。留着它是因为真机探针不在 `npx vitest run` 里跑。
+   */
+  it('源码腿（只证接线，不证用户看得见）：解锁后**立刻重渲染**一次', () => {
     const src = stripComments(read('ui/devmode.ts'));
-    const unlock = /passwordUnlocked = true;[\s\S]{0,400}?host\.render\(\)/.exec(src);
+    // G6 T45：解锁那一句抽成了纯函数 `tryUnlockDevMode`（node 下 `/skip` 的解锁判据要用它），
+    // 判据跟着改成"密码校验通过之后 400 字符内必须 host.render()"——语义未变：
+    // 少了这一句，用户会以为"我进了开发者模式但工具条没出来"。
+    const unlock = /tryUnlockDevMode\([\s\S]{0,400}?host\.render\(\)/.exec(src);
     expect(unlock, '密码正确的分支里没有 `host.render()` —— 解锁后工具条不会当场出现'
       + '（用户会以为"我进了开发者模式但工具条没出来"）').toBeTruthy();
     expect(src, '指令页提示行（HINT）没有登记 `视角` / `seat` 指令 —— 用户无从知道它存在')

@@ -4658,6 +4658,11 @@ initDevMode({
   render: () => rerender(),
   // G2 修正 **R12-6**：远程页的视角切换从"页面上的预览工具条"内化进开发者模式（`视角` 指令）
   netSeat: { get: () => netViewSeat, set: (seat) => { netViewSeat = seat; } },
+  // G6 T45（用户 2026-09-27 ⑧）：**真的在联机牌桌上**时，会改状态的开发者指令一律拒绝
+  // —— 判据是 `netGame !== null`（已经进了联机对局），不是 `renderMode === 'net'`
+  // （后者把本地"单视角预览"也算进去，而预览没有第二个客户端、改状态不会造成分歧）。
+  // eslint 无此规则；这一行只把"是不是联机"这一件事告诉 devmode，不新增任何状态。
+  isNetMatch: () => netGame !== null,
 });
 // 效果触发的抽牌：累计 card:drawn 事件（love 协议触发 → love 标志 → 抽牌动画挂爱心），
 // 行动结算后统一播新抽牌特效

@@ -1,7 +1,7 @@
 import type { Card, ChoiceRequest, GameState, Line, PlayerId, Step, Zone } from '../src/core/models/types';
 import { createGame, getDraftPool, performDraftPick } from '../src/core/state/create';
 import { answerEffect } from '../src/core/effects/resolve';
-import { executeAction } from '../src/core/game';
+import { executeAction, executeDevSkip, MUST_ACT_BEFORE_ADVANCE } from '../src/core/game';
 
 /** 循环应答所有挂起选择（含连锁新产生的），直到效果栈清空 */
 export function resolveAllChoices(s: GameState, pick: (prompt: ChoiceRequest) => string[]): void {
@@ -186,9 +186,25 @@ export function draftApathyP1(): GameState {
   return s;
 }
 
-/** 推进到指定步骤（起始手牌下堆叠为空，不会触发强制编译） */
+/** 推进到指定步骤（起始手牌下堆叠为空，不会触发强制编译）。
+ *
+ * ⚠️ 2026-09-27（G6 T45，用户 ⑥）起，**行动步只要能出牌或刷新就不许 `advance`**。
+ * 本夹具的职责是"把状态摆到第 X 步"，而那几个要经过行动步的目标（`check-cache` / `end` /
+ * `check-compile`）如果真去打一张牌或刷新，会把测试刚摆好的盘面改掉。⇒ 被这条**新**守卫
+ * 拦下时改走那个**显式旁路** `executeDevSkip`（与开发者指令 `/skip` 同一个出口：必编译 /
+ * 空手必刷新 / 超 5 必清 / 必选触发未结算四条老守卫一条不放松，照旧抛）。
+ *
+ * 只兜这一条守卫：别的错误（例：`mandatory trigger must be resolved`）**原样抛出去**，
+ * 免得夹具把真错误一起吞掉。 */
 export function advanceToStep(s: GameState, player: PlayerId, step: Step): void {
-  while (s.phase === 'turn' && s.step !== step) executeAction(s, player, 'advance');
+  while (s.phase === 'turn' && s.step !== step) {
+    try {
+      executeAction(s, player, 'advance');
+    } catch (e) {
+      if (!(e instanceof Error) || e.message !== MUST_ACT_BEFORE_ADVANCE) throw e;
+      executeDevSkip(s, player);
+    }
+  }
 }
 
 let testUid = 0;

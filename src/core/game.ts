@@ -42,40 +42,63 @@ export interface LegalAction {
   defId?: string;
 }
 
+/**
+ * 行动步"此刻能做的手"（`play` / `refresh`）——**只有这一份实现**。
+ *
+ * 为什么抽出来：`getLegalActions` 要拿它列行动，而"行动步不许跳过"那条守卫
+ * （用户 2026-09-27 ⑥：只要能出牌或能刷新就不能跳过）必须与它**同一口径**。
+ * 两份实现一旦漂移，就会退回"UI 不给按钮、引擎照样放行"那种半吊子状态
+ * （只改一处的经典失效）。
+ */
+function collectActionStepMoves(s: GameState, player: PlayerId): LegalAction[] {
+  const out: LegalAction[] = [];
+  // 被动限制（Task A2）：psychic-1 全局禁对手正面打；plague-0 此列完全禁打；metal-2 此列禁反面打
+  const faceUpBanned = opponentMustPlayFaceDown(s, player);
+  for (const card of s.players[player].hand) {
+    for (const line of [0, 1, 2] as Line[]) {
+      if (lineBlocksOpponent(s, line, player)) continue; // plague-0：此列完全禁打
+      if (!faceUpBanned && isPlayableFaceUp(s, player, card.uid, line)) {
+        out.push({ kind: 'play', cardUid: card.uid, faceUp: true, line });
+      }
+      if (!lineBlocksOpponentFaceDown(s, line, player)) {
+        out.push({ kind: 'play', cardUid: card.uid, faceUp: false, line });
+      }
+      // 修改提示词 15：corruption-0 底「此牌可以打在任意一方的任意协议处」→ 落点可扩至
+      // 对方任一链路（target=对方；正面：底放行任意协议匹配已由 isPlayableFaceUp 覆盖；
+      // 反面：打对方场反面无意义——腐化0 以正面落对方场发挥干扰/翻转作用，只出正面）
+      if (
+        cardCanPlayToOpponentSide(card.defId) &&
+        !faceUpBanned &&
+        !lineBlocksOpponent(s, line, player)
+      ) {
+        const opp: PlayerId = player === 0 ? 1 : 0;
+        out.push({ kind: 'play', cardUid: card.uid, faceUp: true, line, target: opp });
+      }
+    }
+  }
+  if (s.players[player].hand.length < 5 && !shouldBlockDraw(s, player)) {
+    // ice-6 顶在场且手牌>0 → 不可刷新（FAQ 冰6：刷新想抽必须能抽上牌）
+    out.push({ kind: 'refresh' });
+  }
+  return out;
+}
+
+/**
+ * 行动步"还能出牌或刷新"时不许跳过（用户 2026-09-27 ⑥）的拒绝文案。
+ * 导出是给夹具与判据用的：`tests/helpers.ts` 的 `advanceToStep` 靠它区分
+ * "被这条新守卫拦下（→ 走显式旁路）"与"真的推不动（→ 照旧抛出去）"。
+ */
+export const MUST_ACT_BEFORE_ADVANCE = 'must play or refresh before advancing (action step)';
+
 export function getLegalActions(s: GameState, player: PlayerId): LegalAction[] {
   if (s.phase !== 'turn' || s.turnPlayer !== player || s.winner !== null) return [];
   // 效果结算挂起 / 落牌（浮空）中：无标准行动（选择经 UI 直接应答）
   if (s.pendingEffects.length > 0 || s.pendingPlay.length > 0 || s.pendingShift.length > 0) return [];
   const out: LegalAction[] = [];
+  // 行动步的可用动作只算一次：既用于列行动，也用于下面"能不能跳过"的判定
+  const actionMoves = s.step === 'action' ? collectActionStepMoves(s, player) : [];
   if (s.step === 'action') {
-    // 被动限制（Task A2）：psychic-1 全局禁对手正面打；plague-0 此列完全禁打；metal-2 此列禁反面打
-    const faceUpBanned = opponentMustPlayFaceDown(s, player);
-    for (const card of s.players[player].hand) {
-      for (const line of [0, 1, 2] as Line[]) {
-        if (lineBlocksOpponent(s, line, player)) continue; // plague-0：此列完全禁打
-        if (!faceUpBanned && isPlayableFaceUp(s, player, card.uid, line)) {
-          out.push({ kind: 'play', cardUid: card.uid, faceUp: true, line });
-        }
-        if (!lineBlocksOpponentFaceDown(s, line, player)) {
-          out.push({ kind: 'play', cardUid: card.uid, faceUp: false, line });
-        }
-        // 修改提示词 15：corruption-0 底「此牌可以打在任意一方的任意协议处」→ 落点可扩至
-        // 对方任一链路（target=对方；正面：底放行任意协议匹配已由 isPlayableFaceUp 覆盖；
-        // 反面：打对方场反面无意义——腐化0 以正面落对方场发挥干扰/翻转作用，只出正面）
-        if (
-          cardCanPlayToOpponentSide(card.defId) &&
-          !faceUpBanned &&
-          !lineBlocksOpponent(s, line, player)
-        ) {
-          const opp: PlayerId = player === 0 ? 1 : 0;
-          out.push({ kind: 'play', cardUid: card.uid, faceUp: true, line, target: opp });
-        }
-      }
-    }
-    if (s.players[player].hand.length < 5 && !shouldBlockDraw(s, player)) {
-      // ice-6 顶在场且手牌>0 → 不可刷新（FAQ 冰6：刷新想抽必须能抽上牌）
-      out.push({ kind: 'refresh' });
-    }
+    out.push(...actionMoves);
   } else if (s.step === 'check-compile') {
     for (const line of getCompilableLines(s, player)) {
       out.push({ kind: 'compile', line });
@@ -100,9 +123,12 @@ export function getLegalActions(s: GameState, player: PlayerId): LegalAction[] {
     }
   }
   const mustRefresh = s.step === 'action' && s.players[player].hand.length === 0;
+  // 行动步不许跳过（用户 2026-09-27 ⑥）：只要有一条 play 或 refresh，就不产出 advance
+  const mustAct = actionMoves.length > 0;
   if (
     !(s.step === 'check-compile' && getCompilableLines(s, player).length > 0) &&
-    !mustRefresh
+    !mustRefresh &&
+    !mustAct
   ) {
     out.push({ kind: 'advance' });
   }
@@ -211,46 +237,84 @@ export function executeAction(s: GameState, player: PlayerId, kind: ActionKind, 
       break;
     }
     case 'advance': {
-      if (s.step === 'check-compile' && getCompilableLines(s, player).length > 0) {
-        throw new Error('compile is mandatory at check-compile');
-      }
-      if (s.step === 'action' && s.players[player].hand.length === 0) {
-        throw new Error('must refresh with no cards in hand');
-      }
-      if (s.step === 'check-cache' && s.players[player].hand.length > 5 && !shouldSkipCacheCheck(s, player)) {
-        throw new Error('must clear cache first');
-      }
-      if (s.step === 'end' || s.step === 'start') {
-        const k: 'end' | 'start' = s.step;
-        const pending = collectTriggers(s, k);
-        if (pending.some((t) => !t.optional)) {
-          throw new Error('mandatory trigger must be resolved');
-        }
-        // 3代 特效（Q5「空动作反馈」，2026-09-13 批次 F 追加）：玩家**不结算可选触发**直接推进时，
-        // 为每个被放弃的可选触发放一条语义事件 `card:trigger-skipped`。UI 据此播"空动作"反馈
-        // （贪婪2 底的青玉爪空抓一下、傲慢金色指针变灰下坠、暴食空咬等）——否则玩家完全看不出
-        // "这张卡的触发被跳过了"。只发**可选**触发：必选触发在上面的守卫里已被拦下。
-        for (const t of pending) emitTriggerSkipped(s, t);
-      }
-      if (s.step === 'check-cache' && !shouldSkipCacheCheck(s, player)) {
-        // 防御路径（正常手牌>5 走 clear-cache 自选弃牌，advance 被拦截）；真弃了牌才触发
-        const cleared = clearCache(s, player);
-        // 3代 特效（批次 D）：清缓存时刻语义事件——暴食 0 顶 / 1 底的齿颚咬合要精确落在这一刻
-        if (cleared.length > 0) gameBus.emit({ type: 'rule:clear-cache', state: s, payload: { player, count: cleared.length } });
-        if (cleared.length > 0) {
-          fireReactive(s, 'after-clear-cache', player);
-          fireReactive(s, 'after-any-clear-cache', player); // 3代 暴食1 底「任意玩家清缓存后」
-        }
-      }
-      if (s.step === 'check-control') {
-        checkControl(s);
-        // 控制权易主（行动玩家获得）→ after-opponent-gain-control 即时连锁（3代 色欲4 底/傲慢6 顶）
-        if (s.pendingEffects.length > 0) runStack(s);
-      }
-      advanceStep(s);
+      performAdvance(s, player, true);
       break;
     }
   }
+}
+
+/**
+ * 推进一格的**本体**（原 `advance` 分支整段搬进来，逻辑一个字没改）：
+ * - `check-compile` 有可编译线 → 必编译，不许过；
+ * - `action` 手牌为 0 → 必刷新，不许过；
+ * - `check-cache` 手牌 > 5 → 必先清缓存；
+ * - `end` / `start` 有必选触发未结算 → 不许过（并给被放弃的可选触发补 `card:trigger-skipped`）。
+ *
+ * `allowActionStepSkip`：`true` = 额外拦住"行动步还能出牌/刷新"这一种（用户 2026-09-27 ⑥）。
+ * `executeAction('advance')` 传 `true`（要拦），开发者模式 `/skip` 的旁路传 `false`（要放）。
+ * 其余四条老守卫**两条路都一样**：`/skip` 不是"强行初始化"，它是那个"跳过"的显式旁路。
+ */
+function performAdvance(s: GameState, player: PlayerId, allowActionStepSkip: boolean): void {
+  if (s.step === 'check-compile' && getCompilableLines(s, player).length > 0) {
+    throw new Error('compile is mandatory at check-compile');
+  }
+  if (s.step === 'action' && s.players[player].hand.length === 0) {
+    throw new Error('must refresh with no cards in hand');
+  }
+  // 行动步不许跳过（用户 2026-09-27 ⑥）：与 `getLegalActions` 共用同一份"此刻能做的手"
+  if (allowActionStepSkip && s.step === 'action' && collectActionStepMoves(s, player).length > 0) {
+    throw new Error(MUST_ACT_BEFORE_ADVANCE);
+  }
+  if (s.step === 'check-cache' && s.players[player].hand.length > 5 && !shouldSkipCacheCheck(s, player)) {
+    throw new Error('must clear cache first');
+  }
+  if (s.step === 'end' || s.step === 'start') {
+    const k: 'end' | 'start' = s.step;
+    const pending = collectTriggers(s, k);
+    if (pending.some((t) => !t.optional)) {
+      throw new Error('mandatory trigger must be resolved');
+    }
+    // 3代 特效（Q5「空动作反馈」，2026-09-13 批次 F 追加）：玩家**不结算可选触发**直接推进时，
+    // 为每个被放弃的可选触发放一条语义事件 `card:trigger-skipped`。UI 据此播"空动作"反馈
+    // （贪婪2 底的青玉爪空抓一下、傲慢金色指针变灰下坠、暴食空咬等）——否则玩家完全看不出
+    // "这张卡的触发被跳过了"。只发**可选**触发：必选触发在上面的守卫里已被拦下。
+    for (const t of pending) emitTriggerSkipped(s, t);
+  }
+  if (s.step === 'check-cache' && !shouldSkipCacheCheck(s, player)) {
+    // 防御路径（正常手牌>5 走 clear-cache 自选弃牌，advance 被拦截）；真弃了牌才触发
+    const cleared = clearCache(s, player);
+    // 3代 特效（批次 D）：清缓存时刻语义事件——暴食 0 顶 / 1 底的齿颚咬合要精确落在这一刻
+    if (cleared.length > 0) gameBus.emit({ type: 'rule:clear-cache', state: s, payload: { player, count: cleared.length } });
+    if (cleared.length > 0) {
+      fireReactive(s, 'after-clear-cache', player);
+      fireReactive(s, 'after-any-clear-cache', player); // 3代 暴食1 底「任意玩家清缓存后」
+    }
+  }
+  if (s.step === 'check-control') {
+    checkControl(s);
+    // 控制权易主（行动玩家获得）→ after-opponent-gain-control 即时连锁（3代 色欲4 底/傲慢6 顶）
+    if (s.pendingEffects.length > 0) runStack(s);
+  }
+  advanceStep(s);
+}
+
+/**
+ * **开发者模式 `/skip` 的显式旁路**（用户 2026-09-27 ⑥：原来"行动步随手跳过"收进开发者指令）。
+ *
+ * 它走的是 `performAdvance` 那一个本体，只额外放过"行动步还能出牌/刷新"这一条；
+ * 必编译 / 空手必刷新 / 超 5 必清 / 必选触发四条守卫一条都不放松 —— 所以它推进出来的历史
+ * 与当年那个 `advance` 按钮产生的历史逐字相同，只是**必须显式喊出来**。
+ *
+ * 它**不是对局路径**：联机对局里 `src/ui/devmode.ts` 会先拒掉整条指令（`/skip` 会改状态 ⇒
+ * 两端指纹分叉，用户 2026-09-27 ⑧）。前置检查与 `executeAction` 同款（回合/挂起），
+ * 少一样就会出现"用旁路把挂起的效果顶掉"这种状态损坏。
+ */
+export function executeDevSkip(s: GameState, player: PlayerId): void {
+  if (s.phase !== 'turn' || s.winner !== null) throw new Error('game not in turn phase');
+  if (s.turnPlayer !== player) throw new Error('not your turn');
+  if (s.pendingEffects.length > 0) throw new Error('resolve pending effect choices first');
+  if (s.pendingPlay.length > 0 || s.pendingShift.length > 0) throw new Error('pending play/shift in progress');
+  performAdvance(s, player, false);
 }
 
 export function getWinner(s: GameState): PlayerId | null {

@@ -58,7 +58,12 @@ describe('game facade', () => {
     executeAction(s, 0, 'advance'); // start → check-control
     executeAction(s, 0, 'advance'); // check-control → check-compile
     executeAction(s, 0, 'advance'); // check-compile → action
-    executeAction(s, 0, 'advance'); // action → check-cache
+    // 2026-09-27（G6 T45，用户 ⑥）：行动步**能出牌或能刷新就不许跳过** ⇒ 走完这一格必须先
+    // 做一个真动作。这里清空手牌 = 只剩"刷新"（起始手牌 5 张时 refresh 不合法，清空后必刷新），
+    // 刷新不往场上加牌 ⇒ 后面的 check-cache / end 步骤与旧用例逐字相同。
+    s.players[0].hand = [];
+    expect(() => executeAction(s, 0, 'advance')).toThrow(/must refresh/);
+    executeAction(s, 0, 'refresh'); // action → check-cache（刷新抽满手牌）
     executeAction(s, 0, 'advance'); // check-cache → end
     executeAction(s, 0, 'advance'); // end → (P1 结束) start(换人)
     expect(s.turnPlayer).toBe(1);

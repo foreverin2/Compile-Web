@@ -5,6 +5,7 @@ import type { Card, CardDef, GameState, Line, ProtocolDef } from '../core/models
 import { DEMO_CARD_DEFS as ALL_CARD_DEFS, DEMO_PROTOCOLS as ALL_PROTOCOLS } from '../data/demo';
 import { executeCompileUnchecked } from '../core/rules/compile';
 import { resetControlIfHeld } from '../core/rules/control';
+import { executeDevSkip } from '../core/game';
 import { nextUid } from '../core/state/create';
 
 /**
@@ -37,6 +38,21 @@ export interface DevModeHost {
    * 传了它才有这条指令（热座页/真实联机不传 ⇒ 指令报"此页没有视角开关"）。
    */
   netSeat?: { get(): 0 | 1; set(seat: 0 | 1): void };
+  /**
+   * **这一页是不是"真的在联机对局里"**（用户 2026-09-27 ⑧）。
+   *
+   * 传了它、且返回 `true` 时，**会改游戏状态的指令一律拒绝**（`get` / `clean` /
+   * `Compile` / `/skip`）——开发者在某一端直接改 `state` 不经 `executeAction`，
+   * 行动日志里没有这一步，另一端无从复现 ⇒ 两端的牌局当场分叉（用户原话：
+   * "使用指令进行某一步操作后，会导致双方的游戏数据不同步"）。
+   * 只读/视角类（`视角` / `seat`）不改状态、只影响本机视图 ⇒ 保持可用。
+   *
+   * 缺省（不传）= **不是联机对局**：热座页与"单视角预览"都要照常改状态做测试
+   * （预览没有第二个客户端，改状态不会造成两端分歧）。
+   * `src/main.ts` 传的是"已经进了联机牌桌"（`netGame !== null`），不是
+   * `renderMode === 'net'` —— 后者把本地预览也算进去了。
+   */
+  isNetMatch?: () => boolean;
 }
 
 /** 隐藏密码（任一匹配即解锁；用户指定备选密码 ssxxzyzybaba） */
@@ -52,9 +68,45 @@ export function isDevUnlocked(): boolean {
   return passwordUnlocked;
 }
 
+/**
+ * 校验一个密码（**纯函数，无 DOM**）：命中即把会话内解锁标记置 true 并返回 `true`。
+ *
+ * 为什么把这一句从密码框里抽出来：密码框是 DOM 路径（`openPasswordPrompt`），
+ * vitest(node) 下走不到，于是"`/skip` 解锁后才可用"这条判据在 node 层**没有腿**
+ * （只能靠人眼看浏览器，等于没牙）。抽成纯函数后，node 判据可以自己解锁、自己验证。
+ * 行为与抽出前逐字一致：`PASSWORDS` 命中才算，大小写敏感（与原来一样）。
+ */
+export function tryUnlockDevMode(password: string): boolean {
+  if (!PASSWORDS.has(password.trim())) return false;
+  passwordUnlocked = true;
+  return true;
+}
+
 /** 指令页提示行 */
 const HINT = '指令：get 牌名 / Compile 协议（输入即模糊预览，点列表行执行）· clean（清空当前玩家手牌）'
-  + '· 视角 / seat 1|2（远程页切视角；不写数字 = 切换）· 如 get light-2、Compile life（中文名 死/生/光 也可）';
+  + '· /skip（强制推进一格，就是以前那个"跳过"）· 视角 / seat 1|2（远程页切视角；不写数字 = 切换）'
+  + '· 如 get light-2、Compile life（中文名 死/生/光 也可）';
+
+/**
+ * **联机对局里拒绝"会改状态"的开发者指令**时写在屏上的那句话
+ * （用户 2026-09-27 ⑧：用了指令之后两端不同步）。
+ */
+export const NET_STATE_REFUSAL = '联机对局中不可用：这条指令会直接改本机牌局状态，'
+  + '另一端复现不出来，用完两边就不同步了（要改状态请断开联机，在热座页或单视角预览里用）';
+
+/**
+ * 这条指令会不会**改游戏状态**（联机对局里一律拒绝）。
+ *
+ * 判的是**指令名**，不是"这次输入解析成功没有"：`get 不存在的牌` 不改状态，但它与
+ * `get light-2` 是同一个入口，按名字拒更简单、也不会出现"拼错名字就绕过了闸门"。
+ * `视角` / `seat` 只动 `host.netSeat`（本机视图座位），不进这个名单。
+ */
+function isStateChangingCommand(cmd: string): boolean {
+  return /^clean$/i.test(cmd)
+    || /^\/?skip$/i.test(cmd)
+    || /^compile\s+.+$/i.test(cmd)
+    || /^get\s+.+$/i.test(cmd);
+}
 
 /** 是否有开发者浮层打开（打开任一浮层时置 true，关闭时置 false） */
 let overlayOpen = false;
@@ -304,17 +356,47 @@ export function searchProtocols(query: string, limit: number = SEARCH_DEFAULT_LI
     .map((hit) => hit.proto);
 }
 
-/** 日志：同时写入 console（diag 全量捕获）与 state.log（游戏事件日志，diag 导出含尾部） */
+/**
+ * 日志：写入 console（diag 全量捕获）与 state.log（游戏事件日志，屏上日志面板画的就是它）。
+ *
+ * ⚠️ **联机对局里只写 console，不进 `state.log`**（G6 T45）：`state.log` 是**跨端规范串**
+ * 的一部分（`__g5Match.state()` = `stableStringify(state)`，含整局 log）——本机多写一行，
+ * 两端规范串就不再逐字相等。⑧ 那条"用了指令之后两端不同步、拒绝之后两端指纹必须相等"的
+ * 判据会被这一行**打假**（牌的盘面一模一样，却报"不同步"）。
+ * 屏上那句说明改由**指令页自己那行状态区**承载（见 `openCommandPage` 的 `notice`），
+ * 于是"屏上有人话"与"两端规范串逐字相等"两件事同时成立。
+ */
 function log(host: DevModeHost, msg: string): void {
   const full = `[开发者模式] ${msg}`;
   console.log(full);
+  if (host.isNetMatch?.() === true) return; // 联机：一个字节都不进 state.log
   pushLog(host.getState(), full);
+}
+
+/**
+ * 联机对局闸门（用户 2026-09-27 ⑧）——**唯一一处判断**，而且长在"改状态"那一层上。
+ *
+ * ## 为什么不能只长在 `runCommand` 里（2026-09-27 评审逮到的真洞）
+ *
+ * 指令页里除了回车，还有**两条检索行的点击**：协议行 → `forceCompileProtocol`、
+ * 卡片行 → `addCardToCurrentPlayer`。这两条**不走 `runCommand`** ⇒ 闸门只挡得住回车那条路，
+ * 鼠标一点照样把本机 `state` 改了（评审真机读数：手牌 5→6、规范串 9139→9232 字符、
+ * 屏上还没有任何说明），两端当场分叉。
+ *
+ * 现在闸门长在**两个改状态函数的本体**上（`addCardToCurrentPlayer` / `forceCompileProtocol`
+ * 是 devmode 里仅有的两处"把牌局改掉"的出口），谁调它们都拦得住；将来再加第三条入口，
+ * 只要它改状态就必然经过这两个函数之一。
+ * `runCommand` 里那一道**仍然留着**：它要能在**写任何日志之前**就把整条指令挡掉
+ * （联机下一个字节都不许进 `state.log`，见 `log`）。
+ */
+function netGateBlocks(host: DevModeHost, cmd: string): boolean {
+  return host.isNetMatch?.() === true && isStateChangingCommand(cmd);
 }
 
 /**
  * 把指定 defId 的卡牌加入当前玩家（state.turnPlayer）手牌并触发重渲染。
  * get 指令与检索列表点击共用此加牌路径；suffix 追加到日志末尾（如检索来源）。
- * 找不到 defId 返回 false（不改变状态）。
+ * 找不到 defId 返回 null（不改变状态）；**联机对局里被闸门挡下**，返回那句拒绝说明。
  *
  * ⚠️ uid 走引擎的 `nextUid(state)`（G0：uid 计数器已进状态）。此前这里是
  * `dev-` + 模块计数器 + 时钟时间戳拼出来的 uid —— 全项目唯一一个既绕过 `nextUid(s)`、
@@ -322,9 +404,14 @@ function log(host: DevModeHost, msg: string): void {
  * 另注：**开发者模式注入绕过行动日志**（直接 push 进手牌，不经 executeAction），
  * 因此注入过的对局不可重放/不可联机校验 —— 这是调试工具，不是对局路径。
  */
-function addCardToCurrentPlayer(host: DevModeHost, defId: string, suffix = ''): boolean {
+function addCardToCurrentPlayer(host: DevModeHost, defId: string, suffix = ''): string | null {
+  // 闸门必须在 `nextUid(state)` **之前**：那个调用本身就把 uid 计数器推了一格（也是改状态）
+  if (netGateBlocks(host, `get ${defId}`)) {
+    log(host, NET_STATE_REFUSAL);
+    return NET_STATE_REFUSAL;
+  }
   const def = CARD_LOOKUP.get(normalizeKey(defId));
-  if (!def) return false;
+  if (!def) return null;
   const state = host.getState();
   const player = state.turnPlayer;
   const card: Card = {
@@ -339,7 +426,7 @@ function addCardToCurrentPlayer(host: DevModeHost, defId: string, suffix = ''): 
   state.players[player].hand.push(card);
   log(host, `已添加 ${def.defId} 到 P${player + 1} 手牌${suffix}`);
   host.render();
-  return true;
+  return null;
 }
 
 /**
@@ -351,19 +438,26 @@ function addCardToCurrentPlayer(host: DevModeHost, defId: string, suffix = ''): 
  *   本体）：未编译 → 删双方该线全部卡牌 + 翻协议；已编译 → 重新编译（删牌 +
  *   抽对手牌库顶 1 张所有权变更）。与正式编译同一状态变更/事件路径（line:compiled
  *   事件照发 → 编译清牌 FX 正常播放），不破坏引擎行动流。
+ *
+ * 返回值：正常情况下 `null`；**联机对局里被闸门挡下**时返回那句拒绝说明
+ * （见 `netGateBlocks`——闸门长在这里而不是只长在 `runCommand`，见那边的注释）。
  */
-function forceCompileProtocol(host: DevModeHost, name: string): void {
+function forceCompileProtocol(host: DevModeHost, name: string): string | null {
+  if (netGateBlocks(host, `compile ${name}`)) {
+    log(host, NET_STATE_REFUSAL);
+    return NET_STATE_REFUSAL;
+  }
   const state = host.getState();
   const player = state.turnPlayer;
   const proto = resolveProtocolName(name);
   if (!proto) {
     log(host, `未找到协议: ${name}`);
-    return;
+    return null;
   }
   const line = state.players[player].protocols.findIndex((p) => p.defId === proto.defId);
   if (line === -1) {
     log(host, `P${player + 1} 场上没有协议 ${proto.defId}（${proto.name}）`);
-    return;
+    return null;
   }
   // 与正式编译一致：编译玩家若持有控制组件先归还中立（规则文本「控制组件相关规则」；
   // devmode 旁路不弹重排模态——重排交互在正式 UI 流程 main.ts）
@@ -371,6 +465,7 @@ function forceCompileProtocol(host: DevModeHost, name: string): void {
   executeCompileUnchecked(state, player, line as Line, { force: true });
   log(host, `已强制编译 P${player + 1} 的 ${proto.defId}（line ${line + 1}）`);
   host.render();
+  return null;
 }
 
 /**
@@ -381,12 +476,57 @@ function forceCompileProtocol(host: DevModeHost, name: string): void {
  * - `Compile 协议名`（大小写不敏感）：在当前玩家回合强制触发当前场上已存在的该协议
  *   的编译效果（无视线值；未编译翻协议、已编译重新编译抽对手牌库顶 1 张），调用引擎
  *   编译规则本体 executeCompileUnchecked 并触发重渲染。
+ * - `/skip`（G6 T45，用户 2026-09-27 ⑥）：**显式旁路**，强制把当前玩家推进一步；
+ *   只在开发者模式解锁后可用，四条老守卫（必编译 / 空手必刷新 / 超 5 必清 / 必选触发）
+ *   照旧拦（见 `executeDevSkip`）。
+ * - **联机对局里会改状态的指令一律拒绝**（G6 T45，用户 2026-09-27 ⑧）：见 `isStateChangingCommand`。
  * 未知指令 / 未找到卡牌：记录日志，不改变状态。
+ *
+ * 返回值 = **给屏上那行状态区的一句话**（联机拒绝原因 / `/skip` 回执），其它情况 `null`。
+ * 它必须存在：联机下这些说明不能进 `state.log`（`state.log` 在跨端规范串里），
+ * 屏上就只剩指令页这一行能说清"为什么没执行"。
  */
-export function runCommand(host: DevModeHost, line: string): void {
+export function runCommand(host: DevModeHost, line: string): string | null {
   const trimmed = line.trim();
-  if (trimmed === '') return;
+  if (trimmed === '') return null;
+  /**
+   * ── 联机对局闸门（用户 2026-09-27 ⑧）──
+   * 会改状态的指令在**真的联机对局**里一律不执行，只留一句人话说明：这些指令直接改本机
+   * `state`（不经 `executeAction`、不进行动日志），另一端没有这一步可复现 ⇒ 用完两端分叉。
+   * 只读/视角类不走这里（`视角` / `seat` 只动本机视图座位）。
+   *
+   * ⚠️ 这道闸门必须**排在 `log(host, '收到指令: …')` 之前**：联机下 `log` 只写 console
+   * （见 `log` 的注释），"收到指令"那一行也不许落进 `state.log`，否则两端规范串照样不等。
+   */
+  if (netGateBlocks(host, trimmed)) {
+    console.log(`[开发者模式] 收到指令: ${trimmed}`);
+    log(host, NET_STATE_REFUSAL);
+    return NET_STATE_REFUSAL; // 屏上：指令页那行状态区
+  }
   log(host, `收到指令: ${trimmed}`);
+  // ── `/skip`：行动步那个"跳过"的显式旁路（用户 2026-09-27 ⑥）──
+  // 行动步只要能出牌或能刷新，引擎与 UI 都不再给跳过；这个指令是**开发者专用**的显式出口，
+  // 所以它额外要求"本会话已用密码解锁过"（`Ctrl+Shift+P` + 密码）——普通玩家敲不出来。
+  if (/^\/?skip$/i.test(trimmed)) {
+    if (!isDevUnlocked()) {
+      const msg = '/skip 未执行：先按 Ctrl+Shift+P 输入开发者密码解锁（普通对局里没有跳过这个操作）';
+      log(host, msg);
+      return msg;
+    }
+    const state = host.getState();
+    const before = `P${state.turnPlayer + 1} ${state.step}`;
+    try {
+      executeDevSkip(state, state.turnPlayer);
+    } catch (e) {
+      const msg = `/skip 没有推进（${before}）：${e instanceof Error ? e.message : String(e)}`;
+      log(host, msg);
+      return msg;
+    }
+    const msg = `/skip 已推进：${before} → P${state.turnPlayer + 1} ${state.step}`;
+    log(host, msg);
+    host.render();
+    return msg;
+  }
   // clean：把当前玩家整手手牌直接 splice 进弃牌堆（zone/faceUp/line/pos 与 discard op
   // 的落牌一致；手牌 = 已知信息 → 一并清除 secret）。只改 state，不调用引擎。
   if (/^clean$/i.test(trimmed)) {
@@ -406,12 +546,12 @@ export function runCommand(host: DevModeHost, line: string): void {
     p.hand = [];
     log(host, `已清空 P${player + 1} 手牌（clean，${count} 张）`);
     host.render();
-    return;
+    return null;
   }
   const cm = /^compile\s+(.+)$/i.exec(trimmed);
   if (cm) {
-    forceCompileProtocol(host, cm[1].trim());
-    return;
+    // 闸门在最上面已经判过（`compile x` 属于会改状态的指令）⇒ 这里回来的一定是 null
+    return forceCompileProtocol(host, cm[1].trim());
   }
   // ── G2 修正 **R12-6**：`视角` / `seat 1|2` —— 远程页切视角（从预览工具条内化过来）──
   // 为什么搬进开发者模式：工具条常驻在棋盘右侧（用户要求隐藏它），而"切到对方视角把一局打完"
@@ -420,27 +560,29 @@ export function runCommand(host: DevModeHost, line: string): void {
     const box = host.netSeat;
     if (!box) {
       log(host, '此页没有视角开关（`视角` 只在远程对战页预览里可用）');
-      return;
+      return null;
     }
     const m2 = /(\d)\s*$/.exec(trimmed);
     const next = m2 ? (Number(m2[1]) === 2 ? 1 : 0) : (box.get() === 0 ? 1 : 0);
     box.set(next);
     log(host, `视角已切到 P${next + 1}（现在"自己"是 P${next + 1}）`);
     host.render();
-    return;
+    return null;
   }
   const m = /^get\s+(.+)$/i.exec(trimmed);
   if (!m) {
     log(host, `未知指令: ${trimmed}`);
-    return;
+    return null;
   }
   const name = m[1].trim();
   const def = resolveCardName(name);
   if (!def) {
     log(host, `未找到卡牌: ${name}`);
-    return;
+    return null;
   }
-  addCardToCurrentPlayer(host, def.defId);
+  // 闸门在 `addCardToCurrentPlayer` 本体上（see `netGateBlocks`）——那里才是改状态的那一行，
+  // 于是"检索行点击"这条不走 runCommand 的路也拦得住
+  return addCardToCurrentPlayer(host, def.defId);
 }
 
 /** 密码输入框：全屏暗色遮罩 + 居中面板；点击遮罩 / Esc / 密码错误 → 立即关闭 */
@@ -482,8 +624,7 @@ function openPasswordPrompt(host: DevModeHost): void {
     }
     if (e.key !== 'Enter') return;
     if (input.value.trim() === '') return;
-    if (PASSWORDS.has(input.value.trim())) {
-      passwordUnlocked = true; // 会话内解锁：本局游戏内后续免密进入
+    if (tryUnlockDevMode(input.value)) {
       log(host, '密码正确，打开指令页');
       close('密码输入框已关闭（密码正确）');
       // ── G2 修正 **R12-6**：解锁后**立刻重渲染**一次 ──
@@ -519,12 +660,23 @@ function openCommandPage(host: DevModeHost): void {
   const results = document.createElement('div');
   results.className = 'dev-results';
   results.hidden = true;
+  /**
+   * **指令回执行**（G6 T45）：`runCommand` 的返回值画在这里。
+   *
+   * 为什么它在屏上是必须的：联机对局里"会改状态的指令被拒"那句说明**不能进 `state.log`**
+   * （`state.log` 在跨端规范串里 —— 见 `log` 的注释），而 `state.log` 又是日志面板的数据源
+   * ⇒ 联机下只剩这一行能把"为什么被拒"说给用户看。复用 `dev-console-hint` 这个既有类，
+   * 不动 `styles.css`（红线）。
+   */
+  const notice = document.createElement('div');
+  notice.className = 'dev-console-hint';
   const closeBtn = document.createElement('button');
   closeBtn.className = 'btn dev-console-close';
   closeBtn.textContent = '关闭';
   panel.appendChild(title);
   panel.appendChild(hint);
   panel.appendChild(input);
+  panel.appendChild(notice);
   panel.appendChild(results);
   panel.appendChild(closeBtn);
   backdrop.appendChild(panel);
@@ -565,7 +717,13 @@ function openCommandPage(host: DevModeHost): void {
         hintSpan.textContent = fieldIds.has(proto.defId) ? '本局场上 · 点击强制编译' : '不在当前玩家场上';
         row.appendChild(hintSpan);
         row.addEventListener('click', () => {
-          forceCompileProtocol(host, proto.defId); // 与 Compile 指令同一执行路径
+          /**
+           * ⚠️ 走 `runCommand`，**不许**直接调 `forceCompileProtocol`（2026-09-27 评审逮到的洞）：
+           * 这两个函数之间差着"联机对局里会改状态的指令一律拒绝"那道闸门。点击行原来绕过它
+           * ⇒ 联机里鼠标一点就把本机 `state` 改了（手牌/协议变了、引擎自己还 pushLog），
+           * 而两端当场分叉。`forceCompileProtocol` 本体上另有第二道闸门兜底（见 `netGateBlocks`）。
+           */
+          notice.textContent = runCommand(host, `compile ${proto.defId}`) ?? '';
           input.value = '';
           results.hidden = true;
           input.focus(); // 点击行后保持焦点，便于连续操作
@@ -606,8 +764,8 @@ function openCommandPage(host: DevModeHost): void {
         row.appendChild(hintSpan);
       }
       row.addEventListener('click', () => {
-        // 与 get 指令共用同一加牌路径（defId 必然有效，忽略返回值）
-        addCardToCurrentPlayer(host, def.defId, '（检索）');
+        // 同上：走 `runCommand`（同一个闸门），不许直接调 `addCardToCurrentPlayer`
+        notice.textContent = runCommand(host, `get ${def.defId}`) ?? '';
         input.value = '';
         results.hidden = true;
         input.focus(); // 点击行后保持焦点在输入框，便于连续检索
@@ -642,7 +800,8 @@ function openCommandPage(host: DevModeHost): void {
       return;
     }
     if (e.key !== 'Enter') return;
-    runCommand(host, input.value);
+    // 返回值 = 屏上那行说明（联机拒绝原因 / `/skip` 回执）；其它指令给 null（回执行清空）
+    notice.textContent = runCommand(host, input.value) ?? '';
     // 成功或失败都清空输入并隐藏检索列表，保持指令页打开，便于连续批量 get
     input.value = '';
     results.hidden = true;
