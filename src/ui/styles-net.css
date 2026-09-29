@@ -1409,7 +1409,7 @@ body.net-page .scan-overlay.scan-horiz .scan-line {
   box-shadow: 0 0 18px rgba(0, 255, 204, 0.25);
   font-size: 12px;
 }
-/* ⚠️ R12-7：工具条**没有** grid 指派（它是 fixed 浮层）—— 故意不写 grid-row：ixed 元素不参与
+/* ⚠️ R12-7：工具条**没有** grid 指派（它是 fixed 浮层）—— 故意不写 grid-row：fixed 元素不参与
    grid 布局，写了就是**死声明**（本项目专门猎杀这一类）。 */
 .net-preview-title { color: #00ffcc; font-weight: 700; letter-spacing: 0.08em; }
 .net-preview-btn { font-size: 12px; padding: 4px 8px; cursor: pointer; }

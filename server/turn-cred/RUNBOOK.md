@@ -8,26 +8,39 @@ coturn 侧配置（**由协调侧在那台 ECS 上执行，本文件只写步骤
 
 ---
 
-## 0. 上线三步（**必须同一批完成，否则中继会断**）
+## 0. 上线记录：**2026-09-29 已完成**（单实例切换，没走 §5 的并行第二实例）
 
-**当前代码的状态（本机做通 B1 这一轮）**：`src/main.ts` 的缺省端点是**空串**（"没配"），
-`src/ui/net-browser.ts` 里留着 `PRE_LAUNCH_FALLBACK_CREDENTIAL`（那对**临时**静态凭据）——
-**故意**这样：发版必须保持今天线上的行为，而线上 coturn 还是 `lt-cred-mech`、`/turn-cred` 也还不存在。
+线上状态（2026-09-29 12:2x–12:3x，`8.130.97.243`，协调侧实测）：
 
-1. **起签发服务**（§1 + §2）：systemd + nginx 同源反代 `/turn-cred` ⇒
-   `curl -sS https://<站点>/turn-cred` 能拿到 JSON。**这一步不影响线上**（没人请求它）。
-2. **改缺省端点 + 删静态兜底 + 部署新前端**：把 `src/main.ts` 的 `let turnCredEndpoint = ''`
-   改成 `'/turn-cred'`，**同时**删掉 `src/ui/net-browser.ts` 的 `PRE_LAUNCH_FALLBACK_CREDENTIAL`
-   与 `usesPreLaunchFallback` 那条支路（删完 `readIceServers` 在"没配端点"时就只剩降级那一档），
-   再 `npm run build`、把新产物发上去。
-   ⚠️ **这一刻旧 coturn 还没切**：新前端换来的 REST 凭据在旧 coturn 上**验不过**
-   ⇒ 这两步之间中继不可用（同网直连不受影响，客户端自动降级并在屏上写"这一轮没有中继可用"）。
-   ⇒ 第 2、3 步要连着做，中间别过夜。
-3. **切 coturn（并行第二实例，§5）**：起 `3479` 的 REST 实例 ⇒ 把 `TURN_URLS` 指过去
-   （`systemctl restart turn-cred`）⇒ 确认新前端拿到 `:3479` 的凭据。这一刻中继回到可用；
-   旧 `3478` 留到确认没人用旧前端再下线。
+| 步骤 | 做了什么 | 当场读数 |
+|---|---|---|
+| ① 起签发服务 | Node 20.19.5（npmmirror 官方包 + sha256 校验）⇒ `/opt/turn-cred`；systemd 单元 `turn-cred.service`（**专用用户 `turncred`**，只监听 `127.0.0.1:8788`）；密钥 64 hex 在 `/etc/turn-cred/secret` | `--check` 输出：`realm=compile-turn urls=turn:8.130.97.243:3478 ttl=600(max 900) 限流=10/分钟、并发 3`；`curl 127.0.0.1:8788/healthz` = 200 |
+| ② nginx 同源反代 | `location = /turn-cred`（`limit_except GET`）+ `location = /healthz-turn-cred`（只放 127.0.0.1）；站点标记改成 `X-Compile-Deploy: b1-turncred-20260929` | 外网 `GET /turn-cred` = 200，报文 `{"urls":["turn:8.130.97.243:3478"],"username":"1790656412:player","credential":"…","ttl":600,"realm":"compile-turn"}`；`POST` = **403**；外网 `/healthz-turn-cred` = 403 |
+| ③ 改客户端 | `src/main.ts` 端点缺省 `'' → '/turn-cred'`；删掉 `net-browser.ts` 的内置静态兜底凭据与那条支路；`tests/ui/net-browser.test.ts`（4 处）与 `tests/ui/net-lobby.test.ts`（1 处）钉"兜底"的断言改成新口径 | `npm run build` 后 `assets/index-BFXy4syc.js`：含 `/turn-cred`、**不含**任何静态密码（全产物 0 命中） |
+| ④ 部署前端 | tar 上传后解到 `/var/www/compile`（439 个文件） | 线上三个关键文件 md5 与本地逐字相同：`index.html cbce3ae6…`、`sw-manifest.json 443cccee…`、`index-BFXy4syc.js c436c10b…` |
+| ⑤ 切 coturn | 删 `user=compile:…`（0 行残留）与 `simple-log`，加 `use-auth-secret` + `static-auth-secret=<64 hex>`；**三根保险丝一个字没动** | 真签一份跑 `turnutils_uclient`：8 个包 0 丢失；**旧静态密码**：`ERROR: Cannot complete Allocation` |
+| ⑥ 端到端 | 产品界面 + 外网探针 + relay-only | `live-check.mjs`：出码 358 字符、tier `-d`、通知含"中继地址也拿到了"；`turn-probe.mjs`：relay 候选 `8.130.97.243:49152`（凭据来源=签发服务）；`relay-only-e2e.mjs`：两端 relay-only、pair succeeded、1106/934 字节 |
 
-回滚按逆序：③ 先切回旧 coturn 配置（§8②）⇒ ② 前端切回旧产物（§8①）⇒ ① 签发服务留着无害。
+**与原文不同的两处**（照实记，别照旧文档理解）：
+
+1. **没走"并行第二实例"**。§5 那条是为零停机（旧前端继续吃 3478 静态、新前端吃 3479 REST）。
+   这次是单人项目、**当场没有人在玩**，直接单实例切换 ⇒ "部署新前端"与"重启 coturn"之间约一分钟
+   中继不可用（客户端自动降级直连，屏上写"这一轮没有中继可用"）。要零停机仍可按 §5 做，
+   代价是第二个端口段（`49201-49249`）与第二份配置文件。
+2. **`User=nobody` 那版起不来**。原 §1 让服务以 `nobody` 跑、密钥却是 root 独占（`/etc/turn-cred`
+   = 0700、`secret` = 600）⇒ `nobody` 读不到密钥、单元 `exit 2`。线上改成**专用系统用户
+   `turncred`**：`/etc/turn-cred` = `root:turncred 0750`、`secret`/`env` = `root:turncred 0640`、
+   `/var/log/turn-cred.log` = `turncred:adm 0640`（单元里 `ReadWritePaths=/var/log`）。
+   自检同样用 `runuser -u turncred -- env … --check` 复现同一身份。
+
+**顺带记一条会咬人的读数**（不是故障）：`TURN_CRED_PER_IP_CONCURRENT` 缺省 **3** —— 同一出口 IP
+**同时有效的凭据最多 3 份**，第 4 个请求就 429（实测：同一 IP 连打 12 次 ⇒ `200 200 429 429 …`）。
+同网一起玩的人本来就能直连，但**运营商 CGNAT**（手机流量常是一大片人共用一个出口 IP）会把不同
+玩家算成同一个 IP ⇒ 第 4 个人拿不到中继。要放宽就改 `/etc/turn-cred/env` 的
+`TURN_CRED_PER_IP_CONCURRENT` / `TURN_CRED_PER_IP_PER_MINUTE` 再 `systemctl restart turn-cred`；
+**重启会清空内存里的记账**（验证时想复位配额也用它）。
+
+回滚按逆序：⑤ 切回旧 coturn 配置（§8②）⇒ ④ 前端切回旧产物（§8①）⇒ ①② 签发服务留着无害。
 
 ---
 
@@ -131,7 +144,7 @@ sudo cp -a /etc/turnserver.conf /etc/turnserver.conf.bak-$(date +%Y%m%d-%H%M)
 ### 3.2 改成 TURN REST（**一次性**，与前端部署同时进行）
 
 ```diff
--user=compile:PsN4kLbZ3sesnKzmSt7R9Ct6
+-user=compile:<旧静态密码，已随 2026-09-29 重建作废；真实值只在 .superpowers/g5-server/turn-credentials.txt，仓库公开所以不写进来>
 +use-auth-secret
 +static-auth-secret=<与 /etc/turn-cred/secret 逐字相同的那个串>
 ```

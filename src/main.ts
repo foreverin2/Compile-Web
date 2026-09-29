@@ -1975,19 +1975,17 @@ const netSettings: { turnUrl: string; turnUsername: string; turnCredential: stri
 /**
  * 签发服务的地址。
  *
- * ★★ **缺省是空串 = "没配"**（这是**部署安全**的缺省，不是忘了填）。
+ * ★★ **2026-09-29 B1 已上线**：缺省就是同源 `'/turn-cred'` —— runbook 里 nginx 把这个路径
+ * 反代到那只监听 `127.0.0.1:8788` 的签发服务（`server/turn-cred/`）。
  *
- * 为什么不能缺省 `'/turn-cred'`（协调侧 2026-09-28 的裁决）：T50 已把静态凭据从 `src/` 与
- * `public/` 清空，而线上那台 coturn 现在还是 `lt-cred-mech` 静态用户 ⇒ 一旦把这版发到
- * `http://8.130.97.243/`，客户端会去请求一个**还不存在的** `/turn-cred`、拿不到凭据
- * ⇒ **线上中继当场不可用、跨网直接废**。用户明令"先在本机做通 B1、**不切线上 coturn**"
- * ⇒ **发版必须保持今天的行为** ⇒ 端点没配时走 `net-browser.ts` 的 B1 上线前兜底
- * （那台 coturn + 一对临时静态凭据，代码里显式标了"上线时与端点一起删"）。
+ * 上线前这里缺省是空串（"没配"），配套的是 `net-browser.ts` 里那对内置静态凭据 —— 那一版只在
+ * "线上 coturn 还是 `lt-cred-mech`、`/turn-cred` 还不存在"的窗口里成立。2026-09-29 签发服务与
+ * coturn 一起上线，两端（端点 + 兜底凭据）**同一批**删掉：**一对长期凭据内联在公开仓库里
+ * 等于公开**，所以只能靠"不再内联长期凭据"来收口，不能靠轮换。
  *
- * **上线时**把它取成同源 `'/turn-cred'`（runbook 里 nginx 反代的那个），并与"删静态兜底 +
- * 切 coturn（并行第二实例）"**同一批**做 —— 见 `server/turn-cred/RUNBOOK.md` §0 的三步。
+ * 探针仍可用 `#g5probe=1&turnCred=<url>` 把它指到别的地址（见下面那个函数）。
  */
-let turnCredEndpoint = '';
+let turnCredEndpoint = '/turn-cred';
 
 /**
  * ★★ **探针专用：允许门禁把签发服务指到别的地址**（`#g5probe=1&turnCred=<url>`）。
@@ -2018,9 +2016,11 @@ const turnCredStore: TurnCredentialStore = createTurnCredentialStore({
 /**
  * 这一刻的产品凭据读数（**同步、只读**）。
  *
- * ★★ **端点没配（空串）⇒ 返回 `undefined`** —— 那是"这个宿主没接签发服务"的**唯一**表达方式，
- * `net-browser.ts` 据此走 B1 上线前的兜底（保留中继、保持今天的行为）。
- * 端点配了但取不到 ⇒ 返回一份 `available: false` 的读数 ⇒ **真的降级成直连**。
+ * ★★ **端点没配（空串）⇒ 返回 `undefined`** —— 那是"这个宿主没接签发服务"的**唯一**表达方式。
+ * B1（2026-09-29）之后这种宿主就是**没有中继**：`readIceServers` 报 `'not-configured'`，
+ * 不会再有任何内置兜底把它接回默认那台。
+ * 端点配了但取不到 ⇒ 返回一份 `available: false` 的读数 ⇒ 也是降级直连，只是原因是
+ * `'credential-unavailable'`（屏上那句会带上具体是超时/拒绝/连不上/报文读不懂）。
  */
 function turnCredentialRead(): TurnCredentialRead | undefined {
   return turnCredEndpoint.length === 0 ? undefined : turnCredStore.read();
@@ -2033,7 +2033,7 @@ function turnCredentialRead(): TurnCredentialRead | undefined {
  * 由 `turn-cred.ts` 自己管，而"没取到"这件事已经被降级路径接住了（屏上说一句、ICE 里没有中继）。
  */
 function prefetchTurnCredential(): Promise<TurnCredentialRead | undefined> {
-  // ★ 端点没配（B1 上线前）⇒ 不去取：那一段的行为是"内置那台 + 临时静态凭据"（见 net-browser.ts）
+  // ★ 端点没配 ⇒ 不去取：没有签发服务就没有中继，屏上按 `'not-configured'` 说一句
   if (turnCredEndpoint.length === 0) return Promise.resolve(undefined);
   const p = turnCredStore.refresh();
   void p.then((r) => {

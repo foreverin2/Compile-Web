@@ -338,14 +338,14 @@ export interface NetBrowserEnv {
   /**
    * ★★ **G6/T50：这一刻手上有没有中继凭据**（`turn-cred.ts` 的读数）。
    *
-   * ★ **返回值的三态**（这是"B1 上线前 vs 上线后"的分界，别混）：
-   *  - `undefined` ⇒ **这个宿主没接签发服务**（端点没配）⇒ 走 `PRE_LAUNCH_FALLBACK_CREDENTIAL`
-   *    那条兜底：保留中继、保持今天的行为；
+   * ★ **返回值的三态**（B1 上线前后语义不同，别照旧文档理解）：
+   *  - `undefined` ⇒ **这个宿主没接签发服务**（端点没配）⇒ **没有中继**（`'not-configured'`）；
    *  - `{available: true, …}` ⇒ 用服务端给的那一份（REST 那条路）；
    *  - `{available: false, …}` ⇒ **真的降级**成直连（ICE 列表里没有 `turn:`）。
    *
-   * 为什么把"没接"表达成 `undefined` 而不是一份 `available: false` 的读数：那样会被判成
-   * "取不到凭据 ⇒ 降级"，而这版一旦发上线就会把线上中继弄没（协调侧 2026-09-28 的 P0）。
+   * 为什么把"没接"表达成 `undefined` 而不是一份 `available: false` 的读数：宿主那一侧
+   * （`src/main.ts` 的 `turnCredentialRead()`）要能区分"压根没接"与"接了却没换到"，
+   * 屏上那两句话也因此不一样。
    */
   readonly credentialRead?: () => TurnCredentialRead | undefined;
   /**
@@ -874,46 +874,21 @@ export interface IceServersRead {
 export type RelayUnavailableReason = 'credential-unavailable' | 'not-configured';
 
 /**
- * ★★ **G6/T50：B1 上线前的**临时兜底**静态凭据（**这一段是要删的**）。
+ * ★★ **2026-09-29：内置的"B1 上线前兜底静态凭据"已经删掉了，别再往回加。**
  *
- * ## 它为什么在这里（部署安全，不是"忘了删"）
+ * 它存在的那段时间（T50 到 B1 上线之间）是有理由的：线上 coturn 还是 `lt-cred-mech`、
+ * `/turn-cred` 还不存在，把端点缺省成 `'/turn-cred'` 会把线上中继当场弄没。所以当时的缺省是
+ * "端点没配 ⇒ 用内置那台 coturn + 一对临时静态凭据"，并在代码里显式标了"上线时与端点一起删"。
  *
- * T50 把凭据从 `src/` 与 `public/` 清空、改成"开局前向签发服务换一份" ⇒ 一旦把这版发到线上，
- * 客户端会去请求一个**还不存在的** `/turn-cred` ⇒ 拿不到凭据 ⇒ **线上中继当场不可用**
- * （而那台 coturn 现在还是 `lt-cred-mech` 静态用户，REST 凭据也验不过）。
+ * 2026-09-29 这一步做完了：签发服务在线上跑着、端点缺省就是同源 `'/turn-cred'`、coturn 换成了
+ * `use-auth-secret`。**一对长期凭据内联在客户端里、而仓库是公开的** —— 那对密码等于公开的，
+ * 轮换也没有意义（旧值还在 git 历史里）。所以现在的口径是：
  *
- * 用户的裁决是"**先在本机做通 B1，不切线上 coturn**" ⇒ **发版必须保持今天的行为**：
- * 端点**没配**（空串，缺省）时，客户端照旧用这台 coturn + 下面这对静态凭据；**只有配了端点**
- * 才走 REST 那条路（取不到就降级成直连）。
+ *  - 换到服务端签发的凭据（600 秒有效期）⇒ 用产品那台中继（`relayCredentialSource: 'app'`）；
+ *  - 没配端点 / 配了却取不到 ⇒ **真的没有中继**，降级直连并把原因说出来。
  *
- * ## 删它的时机（与端点同一批，见 `server/turn-cred/RUNBOOK.md` §0 的三步）
- *
- * `起签发服务 → 改缺省端点为 '/turn-cred' + 删掉下面这一对 → 切 coturn（并行第二实例）`。
- * **这三步必须同一批完成**，否则中继会断。删掉之后 `readIceServers` 的
- * `'builtin-fallback'` 那一支就永远不会命中（它只认"没配端点"）。
- *
- * ⚠️ 判据 5（"全仓 grep 那份密码 0 命中"）说的是**上线之后**的状态；在"端点未配置"这一段里，
- * 这一对**必然在源码里**（它就是今天线上那份行为）。上线时它和端点一起删。
+ * 见 `server/turn-cred/RUNBOOK.md` 与 `docs/2026-09-28-账号体系与中继凭据-待开发方案.md`。
  */
-const PRE_LAUNCH_FALLBACK_CREDENTIAL = Object.freeze({
-  username: 'compile',
-  // 2026-09-29：服务器遭 SSH 爆破入侵后重建，TURN 凭据随之一并轮换（旧值已作废）。
-  credential: 'jfKrPVcu6qWXNgBFasHIEAGTpvDdSxoZ',
-});
-
-/**
- * ★★ **G6/T50：什么时候用上面那份兜底** —— **只在"这个宿主根本没接签发服务"时**。
- *
- * 判据是 `credentialRead === undefined`：宿主在**没配端点**时就是这么答的
- * （见 `src/main.ts` 的 `turnCredentialRead()`）。三个必须分清的输入：
- *  - `undefined`（**没配端点**）⇒ 走兜底：保留中继，保持 B1 上线前今天的行为；
- *  - `null`（老调用点 / 测试）⇒ 也走兜底（"没接签发服务"与"没配端点"是同一件事）；
- *  - 一份**读数**且 `available: false`（**配了端点但取不到**）⇒ **不走兜底**，
- *    必须真的降级成直连（判据 3 的 14/14 就是它）。
- */
-function usesPreLaunchFallback(credentialRead: TurnCredentialRead | null | undefined): boolean {
-  return credentialRead === null || credentialRead === undefined;
-}
 
 /**
  * ★★ **G6/T50：把"为什么没有中继"说成玩家能懂的一句**（屏上那行用；**唯一**措辞出处）。
@@ -1081,18 +1056,15 @@ export function readIceServers(
   const appRelay = appUser.length > 0 && appCred.length > 0 ? { username: appUser, credential: appCred } : null;
 
   /**
-   * ★★ **G6/T50：B1 上线前的兜底** —— **端点没配**（`'not-configured'`）时，照今天的线上行为工作：
-   * 默认那台 coturn + `PRE_LAUNCH_FALLBACK_CREDENTIAL`。
+   * ★★ **G6/T50 + B1（2026-09-29 上线）**：有中继 ⇔ **这一轮真的拿到了服务端换来的凭据**。
    *
-   * 它**不改**判据 3：配了端点但取不到（`'credential-unavailable'`）时这里返回 `null`，
-   * 下面那条降级路照样把中继整个摘掉。上线时这一段连同端点一起删（见那个常量的说明）。
+   * 上线前这里还有一条"端点没配 ⇒ 用内置那对临时静态凭据"的兜底支路（T50 到 B1 之间的
+   * 部署安全窗口），已随 B1 一起删掉：现在"没配端点"与"配了却取不到"都归到下面那条降级路 ——
+   * 只是原因不同（`'not-configured'` 与 `'credential-unavailable'`），屏上那两句话也不一样。
    */
-  const fallbackRelay = appRelay ?? (usesPreLaunchFallback(credentialRead)
-    ? { ...PRE_LAUNCH_FALLBACK_CREDENTIAL } : null);
-
-  if (fallbackRelay !== null) {
+  if (appRelay !== null) {
     const servers = openDefaults().map((s) => (s.urls.includes(defaultRelay)
-      ? { urls: [...s.urls], username: fallbackRelay.username, credential: fallbackRelay.credential }
+      ? { urls: [...s.urls], username: appRelay.username, credential: appRelay.credential }
       : s));
     /**
      * ⚠️ `relayConfigured` 读的是**列表里真的有一项能用的中继**（= 产品这一份在不在），
@@ -1114,15 +1086,15 @@ export function readIceServers(
       relayIncomplete: halfConfigured,
       relaySource: 'builtin',
       settingsAreDefault,
-      relayCredentialSource: appRelay === null ? 'builtin-fallback' : 'app',
+      relayCredentialSource: 'app',
     };
   }
 
   /**
-   * ★★ **降级**：**配了端点**但这一轮取不到凭据 ⇒ 默认那台**整个摘掉**（只剩 STUN），并把原因如实报出来。
+   * ★★ **降级**：这一轮**没有可用的产品凭据** ⇒ 默认那台**整个摘掉**（只剩 STUN），并把原因如实报出来。
    *
-   * ⚠️ 与上面那条兜底的分工就在这一个判断上：`'not-configured'`（没配端点）走兜底、
-   * 保持今天的线上行为；`'credential-unavailable'`（配了却取不到）走**降级**。
+   * B1（2026-09-29）之后两种原因都走这条路，分得清清楚楚：
+   * `'not-configured'` = 这个宿主压根没接签发服务；`'credential-unavailable'` = 配了却没换到。
    */
   const noRelay = openDefaults().filter((s) => !s.urls.some(isRelayUrl));
   const unavailable = credentialRead !== null && credentialRead !== undefined && !credentialRead.available;

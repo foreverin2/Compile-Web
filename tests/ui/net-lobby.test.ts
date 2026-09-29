@@ -586,7 +586,7 @@ describe('判据 7 · 「高级 / 连接设置」默认折叠，启用后才让�
     expect(read.relayCredentialFailure).toBe('timeout');
     expect(read.servers.some((s) => s.urls.some((u) => u.startsWith('turn:'))), '降级之后中继还在列表里').toBe(false);
     // 屏面：展开到能看见那一块（默认折叠），那句话必须逐字出现
-    // ★ 关键：**不展开**高级区（dvancedOpen 默认 false）—— 那句话必须在屏上
+    // ★ 关键：**不展开**高级区（advancedOpen 默认 false）—— 那句话必须在屏上
     const h = mountLobby({
       role: 'guest',
       ice: read,
@@ -618,16 +618,15 @@ describe('判据 7 · 「高级 / 连接设置」默认折叠，启用后才让�
     expect(relayNoticeOf(read), 'relayNoticeOf 在 on 时交的不是 privacy.ts 那一句')
       .toBe(PRIVACY_COPY.signalAndRelay[1]);
     /**
-     * ★★ **T50（P0 之后）：
-elayStateOf 的顺序 = 先看有没有能用的中继**。
+     * ★★ **B1 之后（2026-09-29）：`relayStateOf` 的顺序 = 先看有没有能用的中继**。
      *
-     * 玩家"配了一半"而**没接签发服务**时，默认那台带着上线前兜底凭据仍然可用
-     * ⇒ 状态是 'on'（屏上那句隐私说明该出），
-elayIncomplete 仍然单独报 	rue。
-     * 'partial' 只剩**真正**没有可用中继（降级档）时才会出现 —— 见下面第二段。
+     * 玩家"配了一半"（只填了 URL）而**这一轮没有产品凭据**时，默认那台**不在**列表里
+     * ⇒ 状态是 'partial'（'on' 只在真换到凭据、或玩家三项齐全时出现，见上面第一段）；
+     * `relayIncomplete` 仍然单独报 true —— "玩家那一项没被用上"这件事不许被吞掉。
+     * 'partial' 与"彻底没有中继"（下面第二段那种）是两档，别混。
      */
     const half = readIceServers({ turnUrl: 'turn:x.invalid:3478' });
-    expect(relayStateOf(half), '兜底档下默认那台还能用 ⇒ 该判 on（不是 partial）').toBe('on');
+    expect(relayStateOf(half), '没有可用中继时该判 partial（不是 on）').toBe('partial');
     expect(half.relayIncomplete, '判据 9：玩家那一项被跳过了，这件事仍要报出来').toBe(true);
     const halfNoRelay = readIceServers(
       { turnUrl: 'turn:x.invalid:3478' },
@@ -636,20 +635,26 @@ elayIncomplete 仍然单独报 	rue。
     );
     expect(halfNoRelay.relayConfigured).toBe(false);
     expect(relayStateOf(halfNoRelay), '真的没有可用中继时应当是 partial').toBe('partial');
-    expect(relayNoticeOf(half), '兜底档下该出"有中继"那句').toBe(PRIVACY_COPY.signalAndRelay[1]);
+    /**
+     * ★★ **B1 之后（2026-09-29）**：`half` 这一档（玩家只填了 URL、宿主又没接签发服务）
+     * **没有**可用中继 ⇒ 该说的是"中继只填了一部分"那句，**不是** `privacy.ts` 那句。
+     * 上线前这里正好反过来（兜底让默认那台仍然带着凭据可用）—— 那个世界没有了。
+     */
+    expect(relayNoticeOf(half), '没有可用中继时却给出了"有中继"那句隐私说明')
+      .not.toBe(PRIVACY_COPY.signalAndRelay[1]);
+    expect(relayNoticeOf(half), '没有可用中继时没有可读提示').not.toBeNull();
     expect(relayNoticeOf(halfNoRelay), '真的没有可用中继时给出了与"配齐"相同的那句')
       .not.toBe(PRIVACY_COPY.signalAndRelay[1]);
     expect(relayNoticeOf(halfNoRelay), '真的没有可用中继时没有可读提示').not.toBeNull();
     /**
-     * ★★ **T38 的裁决：`relayNoticeOf` 只认读数的 `relayConfigured`**；
-     * ★★ **T50（P0 之后）**：`readIceServers({})`（**宿主没接签发服务**）走 **B1 上线前的兜底**
-     * ⇒ 中继在、来源 builtin ⇒ 那句隐私说明**应该**在（与 T38 同口径）。
-     * 真正"没有中继"的那一档是**配了端点却取不到**（见下面那一句）。
+     * ★★ **T38 的裁决：`relayNoticeOf` 只认读数的 `relayConfigured`**（B1 之后没变）。
      *
-     * ⇒ 这条腿三面都钉：① 没有中继的读数什么都不说；② 兜底档说那一句；③ 降级档也什么都不说。
+     * ⇒ 这条腿三面都钉：① 有中继（`DEFAULT_ICE_SETTINGS_WITH_APP_CRED` + 真凭据读数，见下面）
+     * 说那一句；② 没接签发服务（`readIceServers({})`）**没有**中继 ⇒ 什么都不说；
+     * ③ 配了端点却取不到（降级）⇒ 也什么都不说。
      */
-    expect(relayNoticeOf(readIceServers({})), '兜底档（有中继）却没给出"有中继"那句隐私说明')
-      .toBe(PRIVACY_COPY.signalAndRelay[1]);
+    expect(relayNoticeOf(readIceServers({})), '没接签发服务（= 没有中继）时却给出了"有中继"那句')
+      .toBeNull();
     expect(
       relayNoticeOf(readIceServers({}, false, { available: false, source: 'app', reason: 'timeout' })),
       '配了端点却取不到（= 降级）时却给出了"有中继"那句',

@@ -860,51 +860,46 @@ describe('判据 9（T38 重钉）：默认 iceServers 里必须有一台带凭�
     expect(up.relayUnavailableReason, '有中继可用却报了降级原因').toBeUndefined();
     expect(relayUnavailableNoteOf(up), '有中继可用却说了"没有中继可用"').toBeNull();
     /**
-     * ★★ **T50（协调侧 2026-09-28 的 P0）：宿主"没接签发服务"（credentialRead 缺省）⇒
-     * 走 **B1 上线前的兜底** —— 保留中继、保持今天线上的行为**。
+     * ★★ **B1 之后（2026-09-29 上线）**：宿主"没接签发服务"（credentialRead 缺省）⇒ **没有中继**，
+     * 原因是 `'not-configured'`，屏上那句话照说。
      *
-     * 为什么这一格不能是"降级"：这版一旦发上线而 coturn 还没切 REST，客户端会去请求一个
-     * 还不存在的 /turn-cred、拿不到凭据 ⇒ 线上中继当场没了。所以"没配端点"必须 = 今天的行为。
+     * 这一格原来是反过来的（缺省走内置静态兜底、保留中继）—— 那是 T50 到 B1 上线之间的部署安全
+     * 窗口：那时候线上 coturn 还是 `lt-cred-mech`。B1 上线时那份兜底凭据与支路一起删了。
      */
     const untouched = readIceServers(undefined);
-    expect(untouched.relayConfigured, '没接签发服务时不该把中继摘掉（那会把线上中继弄没）').toBe(true);
-    expect(untouched.relayCredentialSource).toBe('builtin-fallback');
-    expect(untouched.relayUnavailableReason, '兜底那一档不该报"没有中继可用"').toBeUndefined();
-    expect(relayUnavailableNoteOf(untouched)).toBeNull();
+    expect(untouched.relayConfigured, '没接签发服务却没有降级').toBe(false);
+    expect(untouched.relayCredentialSource, 'B1 之后不该再有内置兜底这个来源').not.toBe('builtin-fallback');
+    expect(untouched.relayUnavailableReason, '没接签发服务时该报"这一份里本来就没有中继"')
+      .toBe('not-configured');
+    expect(relayUnavailableNoteOf(untouched), '降级了却没有可读的那句话').toContain('这一轮没有中继可用');
     // 反证：**给了**一份"取不到"的读数 ⇒ 必须降级（上面那条 for 循环已经逐条钉过四种原因）
     expect(readIceServers(undefined, false, { available: false, source: 'app', reason: 'unreachable' })
       .relayConfigured, '配了端点却取不到时还保留中继').toBe(false);
   });
 
   /**
-   * ★★ **G6/T50 部署安全（协调侧 2026-09-28 的 P0）**：**端点没配 = 今天的行为**。
+   * ★★ **G6/T50 的部署安全 → B1 上线后的口径（2026-09-29）**：**端点没配 = 没有中继**。
    *
-   * ## 这一条为什么非有不可
-   *
-   * T50 把静态凭据从源码与 `public/` 清空了；如果"没配端点"被判成"取不到凭据 ⇒ 降级"，
-   * 那么这版一发到线上（coturn 还是 `lt-cred-mech`、`/turn-cred` 还不存在）⇒ **线上中继当场没了**。
-   * ⇒ 缺省必须是"**保留中继 + 用那对临时静态凭据**"，并且这段兜底在代码里显式标了"上线时删"。
-   *
-   * 判据面（三条读数，坐标侧点名要的）：
-   *  ① 端点空（`credentialRead` 缺省）⇒ `turn:` 在列表里、`relayConfigured=true`、
-   *     来源 `builtin-fallback`、**没有**降级原因；
+   * 这条腿原来钉的是"缺省必须有兜底，否则一发版就把线上中继弄没"（T50 到 B1 之间的部署安全
+   * 窗口）。B1 上线时：签发服务在线上跑着、端点缺省改成同源 `'/turn-cred'`、coturn 换成
+   * `use-auth-secret`、内置兜底凭据删掉。于是现在的判据面是三条读数：
+   *  ① 端点空（`credentialRead` 缺省）⇒ `relayConfigured=false`、ICE 列表里没有 `turn:`、
+   *     原因 `'not-configured'`；
    *  ② 端点指向真服务 ⇒ `relayCredentialSource='app'`（REST 那条路，见上面"有服务端凭据"那条腿）；
-   *  ③ 端点指向死端口 ⇒ `relayConfigured=false`、ICE 列表里没有 `turn:`（见上面"降级腿"）。
+   *  ③ 端点指向死端口 ⇒ `relayConfigured=false`、原因 `'credential-unavailable'`。
    */
-  it('★ P0：端点**没配** ⇒ 保留中继（B1 上线前的兜底），只有配了端点才走 REST', () => {
+  it('★ B1 后：端点没配 ⇒ 没有中继（不再有内置兜底），只有真换到凭据才有中继', () => {
     // ① 端点空（宿主没接签发服务）
     const empty = readIceServers({});
-    expect(empty.relayConfigured, '端点没配时把中继摘了 —— 这版一发上线就会把线上中继弄没').toBe(true);
-    expect(empty.relayCredentialSource, '端点没配时该走"上线前兜底"这一来源').toBe('builtin-fallback');
-    expect(relayUrlsIn(empty.servers), '端点没配时 ICE 列表里必须有那台 turn:').toEqual(['turn:8.130.97.243:3478']);
-    const relay = empty.servers.find((s) => s.urls.some(isRelayUrl));
-    expect(typeof relay?.username === 'string' && relay.username.length > 0, '兜底那一项没带用户名').toBe(true);
-    expect(typeof relay?.credential === 'string' && relay.credential.length > 0, '兜底那一项没带凭据').toBe(true);
-    expect(empty.relayUnavailableReason, '兜底档（有中继）不该报降级原因').toBeUndefined();
-    // ② 端点指向真服务 ⇒ app（REST）；③ 端点指向死端口 ⇒ 降级
+    expect(empty.relayConfigured, '端点没配却还报"有中继可用"').toBe(false);
+    expect(empty.relayCredentialSource, 'B1 之后不该再有内置兜底这个来源').not.toBe('builtin-fallback');
+    expect(relayUrlsIn(empty.servers), '端点没配时 ICE 列表里不该再有那台 turn:').toEqual([]);
+    expect(empty.relayUnavailableReason, '端点没配时该报"这一份里本来就没有中继"').toBe('not-configured');
+    // ② 端点指向真服务 ⇒ app（REST）；③ 端点指向死端口 ⇒ 降级（原因不同）
     expect(readIceServers(APP_SETTINGS, false, APP_CRED).relayCredentialSource).toBe('app');
-    expect(readIceServers({}, false, { available: false, source: 'app', reason: 'unreachable' }).relayConfigured)
-      .toBe(false);
+    const dead = readIceServers({}, false, { available: false, source: 'app', reason: 'unreachable' });
+    expect(dead.relayConfigured, '配了端点却取不到时还保留中继').toBe(false);
+    expect(dead.relayUnavailableReason, '取不到凭据与"没配端点"必须是两个原因').toBe('credential-unavailable');
   });
 
   it('★ 玩家三项齐全**优先于**产品凭据（玩家配的赢，默认那台不再出现）', () => {
@@ -1015,15 +1010,14 @@ describe('判据 9（T38 重钉）：默认 iceServers 里必须有一台带凭�
     expect(turnSettingsAreDefault({ turnUrl: '   ' }, defaults), '全空白被判成了"就是默认值"').toBe(false);
     // ④ 读数上两者分开：内容形状（relaySource）与"改没改"（settingsAreDefault）各自可读
     /**
-     * ★★ **T50（P0 之后）**：这一份（URL 在、用户名/凭据空 = 玩家没动过设置的那一档形状）
-     * 在**没接签发服务**时走的是 **B1 上线前的兜底** ⇒ 默认那台**带着临时静态凭据**在列表里、
-     * 来源仍是 uiltin（那不是"玩家配的中继"）。判据 9 的"配了一半"那一格另有它的腿
-     * （见上面"配了一半"那条：玩家**真的**填了 URL 才算半配）。
+     * ★★ **B1 之后（2026-09-29）**：这一份（URL 在、用户名/凭据空 = 玩家没动过设置的那一档形状）
+     * 在**没接签发服务**时**没有中继**（`relaySource: 'none'`、原因 `'not-configured'`）。
+     * 判据 9 的"配了一半"那一格另有它的腿（见上面"配了一半"那条：玩家**真的**填了 URL 才算半配）。
      */
     const asDefault = readIceServers(defaults, true);
-    expect(asDefault.relaySource, '默认预填那一形状在兜底档下来源仍是 builtin').toBe('builtin');
-    expect(asDefault.relayCredentialSource, '没接签发服务 ⇒ 走上线前兜底').toBe('builtin-fallback');
-    expect(asDefault.relayConfigured, '兜底档必须保留中继（否则发版会把线上中继弄没）').toBe(true);
+    expect(asDefault.relaySource, '没换到凭据、玩家也没配 ⇒ 来源该是 none').toBe('none');
+    expect(asDefault.relayCredentialSource, 'B1 之后不该再有内置兜底这个来源').not.toBe('builtin-fallback');
+    expect(asDefault.relayConfigured, '没接签发服务却还报有中继').toBe(false);
     expect(asDefault.settingsAreDefault, 'settingsAreDefault 没有从入参透传出来').toBe(true);
     const changed = readIceServers({ turnUrl: 'turn:other.invalid:3478', turnUsername: 'u', turnCredential: 'c' }, false);
     expect(changed.relaySource).toBe('player');
@@ -1105,18 +1099,13 @@ describe('判据 12：init() 只等本侧，对端在线只由 onStatus 回答�
      * 旧断言逐字比的是 `DEFAULT_ICE_SERVERS`（那时默认那台自带凭据）—— 那个世界没有了。
      */
     /**
-     * ★★ **T50（P0 之后）**：这一格里没有给 credentialRead ⇒ 那是"宿主没接签发服务"⇒ 走
-     * **B1 上线前的兜底**：默认那台 coturn **带着临时静态凭据**被喂进 RTCPeerConnection
-     * （= 今天线上的行为，发版不能变）。**配了端点却取不到**那一档才是降级，见上面"降级腿"。
+     * ★★ **B1 之后（2026-09-29）**：这一格里没有给 credentialRead ⇒ "宿主没接签发服务"
+     * ⇒ **没有中继**（旧断言比的是"默认那台带着上线前兜底凭据也在列表里"，那个世界没有了）。
      */
     const cfgSeen = ledger.iceConfigs[0] as { iceServers: readonly { readonly urls: readonly string[]; readonly username?: string; readonly credential?: string }[] };
-    const relayEntry = cfgSeen.iceServers.find((s2) => s2.urls.some(isRelayUrl));
-    expect(relayEntry, '没接签发服务时中继那一项不见了（发版会把线上中继弄没）').toBeDefined();
-    expect(typeof relayEntry?.username === 'string' && relayEntry.username.length > 0,
-      '兜底那一项没带用户名（coturn 会 401）').toBe(true);
-    expect(typeof relayEntry?.credential === 'string' && relayEntry.credential.length > 0,
-      '兜底那一项没带凭据（coturn 会 401）').toBe(true);
-    expect(cfgSeen.iceServers.length).toBe(DEFAULT_ICE_SERVERS.length);
+    expect(cfgSeen.iceServers.some((s2) => s2.urls.some(isRelayUrl)),
+      '没接签发服务时还往 RTCPeerConnection 里塞了中继').toBe(false);
+    expect(cfgSeen.iceServers.length, '降级后该只剩 STUN 那几项').toBe(DEFAULT_ICE_SERVERS.length - 1);
   });
 
   it('对端连上 ⇒ **只**由状态事件报 online；再断 ⇒ offline', async () => {
