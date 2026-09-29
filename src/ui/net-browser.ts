@@ -897,7 +897,8 @@ export type RelayUnavailableReason = 'credential-unavailable' | 'not-configured'
  */
 const PRE_LAUNCH_FALLBACK_CREDENTIAL = Object.freeze({
   username: 'compile',
-  credential: 'PsN4kLbZ3sesnKzmSt7R9Ct6',
+  // 2026-09-29：服务器遭 SSH 爆破入侵后重建，TURN 凭据随之一并轮换（旧值已作废）。
+  credential: 'jfKrPVcu6qWXNgBFasHIEAGTpvDdSxoZ',
 });
 
 /**
