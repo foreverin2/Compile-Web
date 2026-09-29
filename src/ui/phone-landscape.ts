@@ -142,7 +142,7 @@ export interface PhoneFitRecord {
   minFontPx: number | null;
   minFontPxScaled: number | null;
   /** 被钉到视口角的按钮 */
-  pinned: { next: boolean; choice: boolean; diag: boolean };
+  pinned: { next: boolean; choice: boolean; diag: boolean; /** ★ T48 跟进：两侧「查看弃牌堆」各钉了一个 */ trash: number };
   /** ★ 修复轮：可读优先地板（`10 / minFontPx`，封顶 1）与实际用的 `k` 的对照读数 */
   kRead: number | null;
   /** ★ 修复轮：可读地板量的那一族的实测最小字号 / 缩放后字号；整块棋盘的最小字号只作旁证 */
@@ -190,6 +190,21 @@ const PIN_CHOICE_CLASS = 't39-pin-choice';
  *  它与 `.next-btn` 同一条 `syncPin` 路，只是钉在**左下角**（右下角归「下一步」、
  *  底部中央归「确认」）。 */
 const PIN_DIAG_CLASS = 't39-pin-diag';
+/**
+ * ★★ G6/T48 跟进（用户 2026-09-28 裁决 ②）：**第四个被钉住的东西 —— 「查看弃牌堆」**。
+ *
+ * 为什么（T48 三档实测的残差）：牌库/弃牌堆是**绝对定位在手牌区外侧一列**的，手机横屏
+ * 844×390 那一档整块棋盘 `1510×1484` 塞进 `844×390` 要 `k≈0.26`（远低于可读地板）⇒
+ * 纵轴可拖区间只有 `-606..525`（1131px），而两个 `.trash-view-btn` 在手牌上方约 900px 处，
+ * **拖到区间端点仍差约 70px 够不到**（读数 `rect.y -301..-273`、连拖 13 次 `max-steps`）。
+ * 用户裁决：**不许降可读地板**（那会把"可读优先"推翻）⇒ 把这个入口按既有 `.t39-pin`
+ * 那一套钉到视口角（1:1、不缩放），与「下一步」「确认」「导出日志」同族。
+ *
+ * 钉法：`document.body` + `position: fixed`（`#app` 带 transform ⇒ 它才是 fixed 的包含块）。
+ * 两侧各一个 ⇒ 用 `bulk = true` 把**同族多个**一起钉（左上角 / 右上角，与左下「导出日志」、
+ * 右下「下一步」、底部中央「确认」错开）。
+ */
+const PIN_TRASH_CLASS = 't39-pin-trash';
 /** 手机判定的短边上界（CSS px）。平板短边 ≥ 600 ⇒ 不进这一格。 */
 const PHONE_SHORT_SIDE_MAX = 500;
 /**
@@ -239,8 +254,24 @@ const INFO_PIN_CLASS = 't44-info-pin';
  * 必须落进视口的那一族（(a) 的目标：**整块棋盘 + 自己手牌**）。
  * **不含** `.next-btn` / `.choice-confirm`（它们由 (b) 单独钉到视口角，且 1:1 不缩放）——
  * 这样"去掉缩放类"与"去掉按钮固定"两个变异各自都有一格会红。
+ *
+ * ★★ G6/T48 补：再加三类**在流外的可点面** —— `.deck`（牌库）、`.trash-pile`（弃牌堆）、
+ * `.trash-view-btn`（「查看弃牌堆」按钮）。
+ *
+ * 为什么必须补（T48 三档实测，`run-hotseat-before.txt` / `run-hotseat-final.txt`）：
+ * `styles.css` 把牌库/弃牌堆**绝对定位到手牌区外侧一列**（P1 在左、P2 在右），
+ * 而"要摆进视口的那一族"原来只算了 `.board` / `.net-board` / `.hand.self` ⇒
+ * **拖动区间是按棋盘内流盒算的**，那两列落在区间之外：
+ *   · 平板 1024×768：`pan.loX..hiX = 0..0`（横轴被钳死），两块「查看弃牌堆」恒 `off-viewport`、
+ *     `panTargetIntoView` 连拖 13 次仍 `max-steps`；
+ *   · 平板 1280×800：同一条（对家那摞牌库 `rect.x 1289..1365`，视口 1280）；
+ *   · 手机 844×390：`pan` 是 0/0/0/0（整页缩放档当时没生效，见 `syncFit()` 里那段）。
+ * 补进来之后同一批读数的 `pan` 变成：1024 档横轴 `-69..69`、纵轴 `-196..178`，
+ * 1280 档纵轴 `-196..146`，手机档横轴 `258..925`、纵轴 `-606..525` ⇒
+ * 三档的"每一张手牌 + 每一个按钮（含两摞牌库与两个「查看弃牌堆」）"都能拖进视口并命中自己。
+ * 热座是**两个人共用一屏**，两边的牌库/弃牌堆都要够得到 ⇒ 它们必须进这个包围盒。
  */
-const FIT_TARGETS: readonly string[] = ['.board', '.net-board', '.hand.self'];
+const FIT_TARGETS: readonly string[] = ['.board', '.net-board', '.hand.self', '.deck', '.trash-pile', '.trash-view-btn'];
 /**
  * **主判据那一族**（§5 判据 1 逐个判的就是它们）：自己手牌区的每一张卡（在 `.hand.self` 里）
  * 与两个关键按钮。缩放档算 `k` 的第一目标是 `FIT_TARGETS`（整块棋盘），但那一族要的 `k`
@@ -332,6 +363,43 @@ function removeGate(): void {
   }
 }
 
+/**
+ * ★★ G6/T51：**"这一屏是牌桌类"的判据**（门的白名单，见 `syncGate()`）。
+ *
+ * 前三个选择器是渲染器**只在牌桌那一屏**才会建的根节点：`render.ts:5098` 的 `.board`
+ * （热座）、`render-net.ts:2540` 的 `board net-board`（联机；它同时带 `.board`）、
+ * 两边手牌区的 `.hand.self`。
+ *
+ * **第四个 `.draft-screen` 是任务书点名的"草稿选协议那一屏"，但它并不是靠前三个根节点命中的**
+ * —— 实测（T48 夹具的进牌桌采样，`.superpowers/g6-T48/run-hotseat-final.txt` 的
+ * `"draft":1,"board":0,"hand":0`）草稿屏上 `.board` / `.net-board` / `.hand.self` **一个都没有**。
+ * 任务书 §1① 的列表把草稿屏算进"牌桌类"（"联机牌桌 / 本地热座牌桌 / 草稿选协议那一屏"），
+ * 所以这里按**列表**取并集：草稿屏照样拦（它的版式是 `--draft-u: 76px` 的固定宽版面，
+ * 390px 竖屏里放不下，改前它是被门拦着的 —— 不拦就是把它单独降级）。
+ *
+ * ## 非牌桌屏的标记（`PLAIN_SCREEN_SEL`）与"去抖"（`boardScreenLatch`）
+ *
+ * 光看"有没有牌桌根节点"不够：牌桌每帧重画，`#app` 在某一瞬间可能**两者都没有**
+ * （旧节点先摘、新节点后挂）。那一刻若判成"不是牌桌"，`syncGate()` 就会 `removeGate()`、
+ * 下一帧再建一个新门 —— 门会被反复摘掉又装上，而**真机/真输入点门会失效**
+ * （按下时命中的是旧按钮、抬起时它已经被换掉 ⇒ 浏览器不合成 click；实测：
+ * `.superpowers/g6-T51/run-t51net.txt` 里连真触摸与真鼠标都点不动 `press()`，`lastPress()` 恒 null）。
+ * ⇒ 两个都没有时**保持上一次的判定**（`boardScreenLatch`），只在"看到明确标记"时才翻转。
+ */
+const BOARD_SCREEN_SEL = '.board, .net-board, .hand.self, .draft-screen';
+/** 明确"不是牌桌类"的屏根（渲染器各屏的根节点；`.consent-screen` 是授权屏）。 */
+const PLAIN_SCREEN_SEL = '.home-screen, .mode-screen, .library-screen, .rules-screen, .coin-screen, '
+  + '.net-lobby-screen, .local-data-screen, .consent-screen';
+/** 上一次的判定（重画中间态两个选择器都不命中时沿用；见上面那段"去抖"）。 */
+let boardScreenLatch = false;
+
+/** 这一刻屏上是不是牌桌类页面（门只在 `true` 时出现）。 */
+function onBoardScreen(): boolean {
+  if (document.querySelector(BOARD_SCREEN_SEL) !== null) { boardScreenLatch = true; return true; }
+  if (document.querySelector(PLAIN_SCREEN_SEL) !== null) { boardScreenLatch = false; return false; }
+  return boardScreenLatch;
+}
+
 function buildGate(): HTMLElement {
   const box = document.createElement('div');
   box.className = GATE_CLASS;
@@ -354,7 +422,7 @@ function buildGate(): HTMLElement {
   return box;
 }
 
-/** 门只在"手机 + 竖屏 + 还没旋转"这一格存在；其余一律从 DOM 摘掉。 */
+/** 门只在"手机 + 竖屏 + 还没旋转 + **这一屏是牌桌类**"这一格存在；其余一律从 DOM 摘掉。 */
 function syncGate(): void {
   /**
    * ★ 真的横过来了 ⇒ **立刻把 CSS 旋转撤掉**。
@@ -367,7 +435,20 @@ function syncGate(): void {
   if (detect().portrait === false && detect().rotated) clearRotation();
   const d = detect();
   const need = d.isPhone && d.portrait && !d.rotated;
-  if (!need) {
+  /**
+   * ★★ G6/T51（用户 2026-09-28 口径）：`need` 之后再过一道**牌桌类白名单** ——
+   * 非牌桌屏（图鉴 / 首页 / 模式选择 / 大厅 / 规则图纸 / 探针页）一律摘门。
+   *
+   * 为什么必须加这一道（T48 实测 + 用户裁决）：门原来只看"手机 + 竖屏 + 没旋转"，是**全局**的 ⇒
+   * 390×844 竖屏下它盖满视口（`rect 0,0,478,1035`、`z-index 4000`、`inset: 0`），
+   * 图鉴里**每一个可点控件**的 `elementFromPoint` 都回 `.t39-gate`（逐条 429/429 全命中门）、
+   * 返回键点不到；连**授权屏**都被吃掉（`driveHome` 点「允许（本地数据）」两次都命中门、主页没出来）。
+   * 而门要管的只是"牌桌按横屏排版"这一件事，图鉴/大厅这些屏本来就该竖屏可读。
+   *
+   * `need` 那一行**逐字未动**：T39 的源码腿（`tests/ui/t39-touch-and-landscape.test.ts`）
+   * 与浏览器腿都钉着它。白名单是**并列的第二个条件**，不是改写。
+   */
+  if (!need || !onBoardScreen()) {
     removeGate();
     return;
   }
@@ -485,7 +566,7 @@ function readFit(): PhoneFitRecord {
       loY: Math.round(panRange.loY), hiY: Math.round(panRange.hiY),
       hint: panHint !== null && panHint.isConnected && panHint.classList.contains('is-on') },
     infoPins: lastFit.infoPins,
-    pinned: { next: document.querySelectorAll(`.${PIN_CLASS}.${PIN_NEXT_CLASS}`).length > 0, choice: document.querySelectorAll(`.${PIN_CLASS}.${PIN_CHOICE_CLASS}`).length > 0, diag: document.querySelectorAll(`.${PIN_CLASS}.${PIN_DIAG_CLASS}`).length > 0 },
+    pinned: { next: document.querySelectorAll(`.${PIN_CLASS}.${PIN_NEXT_CLASS}`).length > 0, choice: document.querySelectorAll(`.${PIN_CLASS}.${PIN_CHOICE_CLASS}`).length > 0, diag: document.querySelectorAll(`.${PIN_CLASS}.${PIN_DIAG_CLASS}`).length > 0, trash: document.querySelectorAll(`.${PIN_CLASS}.${PIN_TRASH_CLASS}`).length },
     appOverflow: cs === null ? null : cs.overflow,
     appTransform: cs === null ? null : cs.transform,
   };
@@ -516,8 +597,14 @@ const pinGens = new Map<string, Element | null>();
  * 而这一代里找不到该按钮 ⇒ 把钉住的旧节点摘掉。
  *
  * ⚠️ 代是**按 `cls` 各记一个**（见 `pinGens` 的说明：共享一次就会漏摘 `.choice-confirm`）。
+ *
+ * ★★ G6/T48 跟进：加了第 4 个参数 `bulk` —— 把**同族多个按钮**（两侧各一个的
+ * `.trash-view-btn`）一起钉住。`bulk=false`（默认）时逐字保留原来那条路：
+ * 用 `root.querySelector` 取**第一个**、只钉一个；`bulk=true` 时取全部，逐个钉。
+ * 陈旧节点照旧按渲染代摘：这一代里**没有被钉的新节点**（数量不足或换了代）
+ * ⇒ 把多出来的/全都不该在的钉住节点摘掉。
  */
-function syncPin(root: HTMLElement, selectors: readonly string[], cls: string): boolean {
+function syncPin(root: HTMLElement, selectors: readonly string[], cls: string, bulk = false): boolean {
   const gen = root.firstElementChild;
   const prev = pinGens.get(cls) ?? null;
   const genChanged = prev !== null && gen !== null && gen !== prev;
@@ -526,12 +613,42 @@ function syncPin(root: HTMLElement, selectors: readonly string[], cls: string): 
     const el = root.querySelector<HTMLElement>(sel);
     if (el !== null) { live = el; break; }
   }
+  /** 同族多个（`bulk`）：一个个都钉住；单个时就是 `live` 那一个 */
+  const lives: HTMLElement[] = [];
+  if (bulk) {
+    for (const sel of selectors) for (const el of Array.from(root.querySelectorAll<HTMLElement>(sel))) {
+      if (!lives.includes(el)) lives.push(el);
+    }
+  }
   const existing = document.querySelector<HTMLElement>(`.${PIN_CLASS}.${cls}`);
   /**
    * ⚠️ `pinGen = gen` 这几句是**给 T39 的源码腿**留的（`tests/ui/t39-touch-and-landscape.test.ts`
    * 逐字钉着 `pinGen = gen`）。它现在只是"最后一次钉的代"的记录 —— **判断一律走 `pinGens`**，
    * 原因见上面那段"共享一个 `pinGen` 会漏摘 `.choice-confirm`"。
    */
+  if (bulk) {
+    /** 已经在 body 上、而且这一代里还是它的那些 = 保持不变；其余按位置逐个替换 */
+    const pinned = Array.from(document.querySelectorAll<HTMLElement>(`.${PIN_CLASS}.${cls}`));
+    if (lives.length === 0) {
+      // 这一代里一个都没有 ⇒ 只把**陈旧的**摘掉（没换代就不动，避免误摘）
+      if (genChanged) { for (const el of pinned) el.remove(); pinGens.set(cls, gen); pinGen = gen; return false; }
+      pinGens.set(cls, gen ?? prev);
+      pinGen = gen;
+      return pinned.length > 0;
+    }
+    for (let i = 0; i < lives.length; i += 1) {
+      const el = lives[i];
+      if (pinned[i] === el) continue; // 这一格已经是它
+      if (pinned[i] !== undefined) pinned[i].remove();
+      el.classList.add(PIN_CLASS, cls);
+      el.setAttribute('data-t48-pin-index', String(i));
+      document.body.appendChild(el);
+    }
+    for (let i = lives.length; i < pinned.length; i += 1) pinned[i].remove(); // 多出来的（这一代少了一个）
+    pinGens.set(cls, gen);
+    pinGen = gen;
+    return true;
+  }
   if (live === null) {
     // 这一代里没有这个按钮：只有"换过代"才说明它真的不该在屏上 ⇒ 摘掉陈旧的
     if (existing !== null && genChanged) { existing.remove(); pinGens.set(cls, gen); pinGen = gen; return false; }
@@ -560,8 +677,18 @@ function clearFit(): void {
   resetPan();
   syncInfoPins(null);
   for (const el of Array.from(document.querySelectorAll<HTMLElement>(`.${PIN_CLASS}`))) {
-    el.classList.remove(PIN_CLASS, PIN_NEXT_CLASS, PIN_CHOICE_CLASS, PIN_DIAG_CLASS);
-    el.remove(); // 它是上一帧的重画产物 ⇒ 下一次 renderApp 会产出新的那个，这里直接扔掉
+    el.classList.remove(PIN_CLASS, PIN_NEXT_CLASS, PIN_CHOICE_CLASS, PIN_DIAG_CLASS, PIN_TRASH_CLASS);
+    /**
+     * ★★ G6/T48 跟进：**不再 `el.remove()`，改成"放回 `#app`"**。
+     *
+     * 原来这里直接把钉住的节点扔掉，赌"下一次 renderApp 会产出新的那个"。撤缩放档通常紧跟一次
+     * 重画，所以一直没暴露；但**没重画**时（T48 跟进实测：在牌桌就绪之后立刻摘掉 fit 类）那两个
+     * 「查看弃牌堆」会**停在 `document.body` 上、挂着 `position: fixed` 的钉住样式**，
+     * 而 fit 类已经摘了 ⇒ 屏幕上留着两个"钉在角上的旧按钮"（读数：`parent BODY / pinned:true`）。
+     * 放回 `#app` 之后：非 fit 档这两个节点照旧由它自己的样式摆在信息条里；若紧接着真的重画了，
+     * 新节点会取代它们（旧节点随 `#app` 清空一起扔掉）。两种次序都不会留脏节点。
+     */
+    if (app !== null && el.parentElement === document.body) app.appendChild(el);
   }
   lastFit = { box: null, critBox: null, need: null, kRaw: null, k: null, kCrit: null, kRead: null, tx: 0, ty: 0, fits: null, boardFit: false, kUnionNeeded: null, measured: [], minFontPx: null, infoPins: [], fonts: { readMin: null, readScaled: null, boardMin: null } };
 }
@@ -612,11 +739,41 @@ function syncFit(): void {
       lastFit.measured = [];
       return;
     }
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
+    /**
+     * ★★ G6/T48：视口尺寸改用 `visibleViewport()`（= `min(doc.clientWidth, visualViewport.width,
+     * innerWidth)`），**不再直接用 `window.innerWidth/innerHeight`**。
+     *
+     * 为什么（手机 844×390 档实测）：移动端仿真的**布局视口**会被内容撑大 —— 实测那一刻
+     * `innerWidth/innerHeight = 1516×701`，而 `visualViewport = 844×390`
+     * （`documentElement.clientWidth` 也是 844）。下面这段的 `tx/ty` 是**屏幕坐标**上的摆放量，
+     * 它必须与 `correctIntoViewport` / `applyTransformVars`（两处都在用 `visibleViewport()`）
+     * 用同一个尺寸，否则整块版面会被摆到一个 1516×701 的坐标系里：
+     * 实测读数就是"手牌 x 1232..1362 / 视口 844 宽"，5 张手牌**全在可视区之外**。
+     * 改完这一处之后，三处（算 k、算 tx/ty、钳制拖动区间）用的是同一个"看得见的那块视口"。
+     */
+    const vp = visibleViewport();
+    const vw = vp.w;
+    const vh = vp.h;
     const H = app.offsetHeight; // 元素**未变换**的高度（旋转档 = 100vw）
-    const union = measureFitBox(app, FIT_TARGETS);
-    const crit = measureFitBox(app, critTargets());
+    /**
+     * ★★ G6/T48：测量改用 `measureWideLayout()`（`getBoundingClientRect` + `#app` 内容坐标），
+     * **不再用 `measureFitBox()` 的 `offsetTop/offsetLeft` 累加**。
+     *
+     * 为什么（热座 844×390 档实测的真缺陷）：`measureFitBox` 依赖 `offsetParent` 链能走到
+     * `#app`，而那条链在热座牌桌上是**断的** —— 实测那一跑 `.hand.self` 与 `.board` 都在
+     * DOM 里、`union.measured` 也是 `[{'.board',1},{'.hand.self',1}]`，但 `box` 恒 `null`
+     * （读数 `fit.k === null`、`classes` 里一个 fit 类都没有、手牌停在 x 1232..1362）。
+     * 也就是说：**手机横屏进热座牌桌时，整页缩放档一次都没生效**，5 张手牌全在视口之外。
+     *
+     * 这个坑 T44 在**宽视口那一格**已经踩过一次（`measureWideLayout()` 的头注写了同一个
+     * 根因），当时的结论是"手机旋转档恰好掩盖了它（`html.t39-rot90 #app` 是 `position: fixed`，
+     * 链走得到）"——**热座牌桌（`.board`）并不是旋转档**，于是这条链又断了。
+     * ⇒ 两条路共用同一个测量函数，`t39-fit` 那一支也走"量 `getBoundingClientRect` 再折算
+     * 回 `#app` 内容坐标"的口径；`measureFitBox` 不再被任何分支调用（留着是为了少动既有函数）。
+     */
+    const union = measureLayoutWithTransformZeroed(app, FIT_TARGETS) ?? { box: null, measured: [] as { sel: string; count: number }[] };
+    const crit = measureLayoutWithTransformZeroed(app, critTargets()) ?? { box: null, measured: [] as { sel: string; count: number }[] };
+
     lastFit.measured = union.measured;
     const needOf = (b: FitBox) => (d.rotated ? { w: b.h, h: b.w } : { w: b.w, h: b.h });
     const kOf = (b: FitBox) => { const n = needOf(b); return Math.min(vw / n.w, vh / n.h, 1); };
@@ -667,6 +824,8 @@ function syncFit(): void {
     syncPin(app, ['.next-btn'], PIN_NEXT_CLASS);
     syncPin(app, ['.choice-confirm'], PIN_CHOICE_CLASS);
     syncPin(app, ['.diag-btn'], PIN_DIAG_CLASS);
+  /** ★ T48 跟进：两侧「查看弃牌堆」一起钉（同族多个） */
+  syncPin(app, ['.trash-view-btn'], PIN_TRASH_CLASS, true);
     correctIntoViewport(app, vw, vh);
     /** (c)：用户第 ④ 条 —— 旋转档把双方协议信息框收进**钉住层**（见 `syncInfoPins` 的头注） */
     if (d.rotated) syncInfoPins({ k, tx: fitBase.tx, ty: fitBase.ty, H });
@@ -711,18 +870,126 @@ function visibleViewport(): { w: number; h: number } {
 }
 
 /**
- * 宽视口那一格的"要不要动"：**整块棋盘 + 手牌在可见视口里放得下就一个字节都不碰**。
+ * ★★ G6/T48 跟进：**"放得下"必须包含"自己那 5 张手牌都在可视视口内"**。
+ *
+ * ## 抓到的真缺陷（联机页 1280×800，`run-nettab-1280.txt`）
+ *
+ * `canFitWide()` 原来只比**两个比值**（`vp.w / box.w`、`vp.h / box.h`），这两个数都 ≥ 1 就判
+ * "放得下、一个字节都不碰"。可**比值看不到"越界"**：棋盘比视口**宽一点点**时，内容被居中
+ * （`#app` 的 `padding-left: 100px` + 棋盘自身宽度），左边的牌会**负方向溢出** ——
+ * 实测那一刻 `classes` 里一个 fit 类都没有、`appTransform:"none"`、`k=null`，
+ * 而自己 5 张手牌里第一张 `rect x -40..53`（**中心都贴在左缘外**，`hitCount 2`）。
+ * 这正是用户最初抱怨的"看不到左侧手牌"在 1280×800 这一档**还没被解决**的形态
+ * （评审在 HEAD 对照树上看到同样形态 ⇒ 不是 T48 引入的，但判据确实漏了这一条）。
+ *
+ * ## 判法（与既有口径同源：纯几何、不看类）
+ *
+ * 每个 `.hand.self .card[data-uid]` 的**屏幕矩形**必须落在
+ * "`#app` 内边距之内 ∩ 可视视口" 里（`#app` 有 `padding: 12px 100px` 一族 ⇒ 左边 100px
+ * 本来就是留白，牌贴到那儿不算越界；出到 `x < 0` 才算）。任何一张出界 ⇒ 返回 `true`，
+ * 交给 `syncWideFit()` 的 `correctIntoViewport()` 把这一族平移回视口内。
+ * 只读、不改 DOM；量不到手牌（还没进牌桌）时按"不动"处理，与原来一致。
+ */
+function handOutsideViewport(app: HTMLElement): boolean {
+  const vp = visibleViewport();
+  const cards = Array.from(app.querySelectorAll<HTMLElement>('.hand.self .card[data-uid]'));
+  if (cards.length === 0) return false;
+  const cs = window.getComputedStyle(app);
+  const padL = Number.parseFloat(cs.paddingLeft) || 0;
+  const padT = Number.parseFloat(cs.paddingTop) || 0;
+  const padR = Number.parseFloat(cs.paddingRight) || 0;
+  const padB = Number.parseFloat(cs.paddingBottom) || 0;
+  const loX = Math.max(0, padL);
+  const loY = Math.max(0, padT);
+  const hiX = vp.w - Math.max(0, padR);
+  const hiY = vp.h - Math.max(0, padB);
+  for (const el of cards) {
+    const fixed = window.getComputedStyle(el).position === 'fixed';
+    if (fixed) continue; // 钉住的那种 1:1 元素不参与（它们本来就在视口角上）
+    const b = el.getBoundingClientRect();
+    if (b.width <= 0 && b.height <= 0) continue;
+    if (b.left < loX - 1 || b.top < loY - 1 || b.right > hiX + 1 || b.bottom > hiY + 1) return true;
+  }
+  return false;
+}
+
+/**
+ * 宽视口那一格的"要不要动"：**整块棋盘 + 手牌在可见视口里放得下、且自己那 5 张手牌
+ * 全都真的在可视视口内，才一个字节都不碰**。
  *
  * 判据是纯几何的（**不看当前挂着哪个类** —— 看类会自激："上一帧缩过 ⇒ 这一帧又量出放不下"）。
  * 返回 `true` 时测量已经把缩放摘掉了 ⇒ 调用方必须重新落盘（`syncWideFit` 会做）。
+ *
+ * ⚠️ 三道守卫（都被实测咬过，别删）：
+ *  ① `d.isPhone` ⇒ `false`：手机那一支有自己的路（旋转档 + `t39-fit`），宽视口档**绝不能**
+ *     接管手机页 —— 实测漏了这条守卫时，联机手机旋转档被宽视口档改造，
+ *     画布变成 `vw 980×vh 2121`、`cardsUnreachable 5 / buttonsUnreachable 1`（整页做废）；
+ *  ② `d.rotated` ⇒ `false`：同理，旋转档不走这条；
+ *  ③ `visibleViewport().w <= 600` ⇒ `false`：**窄屏一律不接管**。为什么还要这一道（实测踩到）：
+ *     手机页刚按完门、方向锁/CSS 旋转**还没落定的那一两秒**里，`detect()` 可能报
+ *     `rotated:false`（而 `isPhone` 那一刻也可能是 false）⇒ 宽视口档会在这一两秒里接管一个
+ *     390 宽的视口。守住"宽度 ≤ 600 就不是宽视口"之后，这种过渡窗口不会再改坏页面。
  */
 function canFitWide(): boolean {
   const app = document.getElementById('app');
   if (app === null) return false;
+  const d = detect();
+  if (d.isPhone || d.rotated) return false; // 守卫 ①②
   const vp = visibleViewport();
-  const measured = measureWideLayout(app);
-  if (measured === null) return false; // 量不到东西（还没进牌桌）⇒ 不动
-  return !(vp.w / measured.box.w >= 1 && vp.h / measured.box.h >= 1);
+  if (vp.w <= 600) return false; // 守卫 ③：窄屏交给手机那一支 / 谁都不动
+  const measured = measureLayoutWithTransformZeroed(app, FIT_TARGETS);
+  if (measured === null || measured.box === null) return false; // 量不到东西（还没进牌桌）⇒ 不动
+  const fitsByRatio = vp.w / measured.box.w >= 1 && vp.h / measured.box.h >= 1;
+  if (!fitsByRatio) return true;
+  /**
+   * ★ T48 跟进：比值过了**还要**看"有没有牌负方向溢出" —— 这一条是 1280×800 联机页那个
+   * "判成放得下、却有一张手牌在 `x -40..53`"的真缺陷。放得下且牌都在里面 ⇒ 不动（既有档位逐字不变）。
+   */
+  return handOutsideViewport(app);
+}
+
+/**
+ * ★★ G6/T48 稳定性修复（用户 2026-09-28 裁决：**先修稳振荡**）：
+ * **量之前把"已经应用的那一层变换"真正归零，量完原子恢复。**
+ *
+ * ## 为什么需要它（T48 诊断的读数，`.superpowers/g6-T48/T48-INSTABILITY.md`）
+ *
+ * `measureWideLayout()` 下面只摘掉了 `app.style.transform`（**内联**那一份），可旋转档的变换是
+ * **类规则**给的：`styles-touch.css` 的 `html.t39-fit.t39-rot90 #app { transform: translate(var(--t39-tx), var(--t39-ty)) scale(var(--t39-k)) rotate(90deg) … }`
+ * ⇒ 量的时候那份 `translate` **还在**，量出来的不是"布局盒"而是"当前这帧摆在哪"。
+ * 于是同一个盘面会交替量到两个盒：
+ *   上一次落盘 `tx=382` ⇒ 手牌宽 `117`、内容盒 `660` ⇒ `k=0.99998`（手牌 0 张在视口内）；
+ *   按它落盘后手牌宽变 `128`、盒 `722` ⇒ 下一次 `resync()` 得 `k=0.91358`（手牌 5/5 在视口内）；
+ *   再落盘又回 `117` —— **两个值互为对方的输入**（实测同一页连做 3 次 `resync()` 就是 0.99998 ↔ 0.91358 交替）。
+ *
+ * ## 怎么做到"不闪"
+ *
+ * 归零与恢复都在**同一个任务**里同步做完（中间只有 `getBoundingClientRect()` 这类同步读，
+ * 没有 `await`/`setTimeout`）⇒ 浏览器**不会在中间插入一次绘制**，用户看不到闪动。
+ * 恢复写回的是**进来时读到的原值**（`--t39-k/tx/ty` 与内联 `transform` 逐字还原），
+ * 所以"量之前那一刻的可见状态"byte-for-byte 不变。异常路径也走 `finally` 还原。
+ */
+function measureLayoutWithTransformZeroed(app: HTMLElement, sels: readonly string[] = FIT_TARGETS): { box: FitBox | null; measured: { sel: string; count: number }[] } | null {
+  const root = document.documentElement;
+  const inline = app.style.transform;
+  const kBefore = root.style.getPropertyValue('--t39-k');
+  const txBefore = root.style.getPropertyValue('--t39-tx');
+  const tyBefore = root.style.getPropertyValue('--t39-ty');
+  const patch: [string, string][] = [
+    ['--t39-k', '1'], ['--t39-tx', '0px'], ['--t39-ty', '0px'],
+  ];
+  for (const [p, v] of patch) root.style.setProperty(p, v);
+  if (inline !== '') app.style.transform = '';
+  try {
+    return measureWideLayout(app, sels);
+  } finally {
+    if (inline !== '') app.style.transform = inline;
+    const restore: [string, string][] = [['--t39-k', kBefore], ['--t39-tx', txBefore], ['--t39-ty', tyBefore]];
+    for (const [p, v] of restore) {
+      if (v === '') root.style.removeProperty(p);
+      else root.style.setProperty(p, v);
+    }
+  }
 }
 
 /**
@@ -737,9 +1004,10 @@ function canFitWide(): boolean {
  *
  * 量法：先摘掉本模块写的 `transform`（继承那份"量未变换布局盒"的既有口径），
  * 用 `getBoundingClientRect` 量，再用 `scrollTop/scrollLeft` 的差值把它折算回
- * **`#app` 内容坐标**（`rect + (已滚过的距离)`）。
+ * **`#app` 内容坐标**（`rect` + 已滚过的距离）。
  *
- * ⚠️ 它**只**服务宽视口那一格：手机旋转档走 T39 那套（一个字没动）。
+ * ⚠️ 调用方**一律走上面的 `measureLayoutWithTransformZeroed()`**（它保证"量的时候变换真的是零"）；
+ * 直接调本函数在旋转档下量到的不是布局盒（见上面那段读数）。
  */
 function measureWideLayout(app: HTMLElement, sels: readonly string[] = FIT_TARGETS): { box: FitBox; measured: { sel: string; count: number }[] } | null {
   const root = document.documentElement;
@@ -821,6 +1089,12 @@ function syncPanHint(on: boolean): void {
  *
  * 钳制口径：内容比视口大时，屏上不许出现空白 —— 左缘 ≤ 0 且右缘 ≥ `vp.w`（两轴同理）；
  * 内容比视口小时不给拖（区间退化成 `0`，宁可居中）。
+ *
+ * ★★ G6/T48 口径：**"能拖到哪儿"与"摆谁进视口"用同一个盒。**
+ * T48 试过把它们拆成两个盒（把牌库/弃牌堆单独算进拖动区间），实测两条读数**逐位相同**
+ * —— `union.box` 本来就等于那个"可及范围"盒（`.board` 的 border box 已经把它们包住了）
+ * ⇒ 那是死分支，本轮没留在代码里。真正让那两列进拖动区间的改动是把 `.deck` /
+ * `.trash-pile` / `.trash-view-btn` 加进 `FIT_TARGETS`（见那里的头注与三档读数）。
  */
 function applyTransformVars(k: number, tx: number, ty: number, vp: { w: number; h: number }, box: FitBox | null, rot?: { rotated: boolean; H: number }): void {
   const rotated = rot?.rotated ?? fitBase.rotated;
@@ -1112,9 +1386,11 @@ function slotCandidates(sw: number, sh: number, vp: { w: number; h: number }): {
  */
 function syncWideFit(app: HTMLElement): void {
   const vp = visibleViewport();
-  const union = measureWideLayout(app, FIT_TARGETS);
-  if (union === null) { clearFit(); return; }
-  const crit = measureWideLayout(app, wideCritTargets()) ?? union;
+  const unionRaw = measureLayoutWithTransformZeroed(app, FIT_TARGETS);
+  if (unionRaw === null || unionRaw.box === null) { clearFit(); return; }
+  const union = { box: unionRaw.box, measured: unionRaw.measured };
+  const critRaw = measureLayoutWithTransformZeroed(app, wideCritTargets());
+  const crit = critRaw !== null && critRaw.box !== null ? { box: critRaw.box, measured: critRaw.measured } : union;
   const kUnion = Math.min(vp.w / union.box.w, vp.h / union.box.h, 1);
   const kRead = readFloorK();
   const takeUnion = kUnion >= K_FLOOR_WIDE;
@@ -1152,6 +1428,8 @@ function syncWideFit(app: HTMLElement): void {
   syncPin(app, ['.next-btn'], PIN_NEXT_CLASS);
   syncPin(app, ['.choice-confirm'], PIN_CHOICE_CLASS);
   syncPin(app, ['.diag-btn'], PIN_DIAG_CLASS);
+  /** ★ T48 跟进：两侧「查看弃牌堆」一起钉（同族多个） */
+  syncPin(app, ['.trash-view-btn'], PIN_TRASH_CLASS, true);
   correctIntoViewport(app, vp.w, vp.h, wideCritTargets());
 }
 
@@ -1323,7 +1601,13 @@ export function initPhoneLandscape(): void {
   // `#app` 每次重画都会换掉 `.next-btn` / `.choice-confirm` 节点 ⇒ 去抖之后重算（钉回去）
   const app = document.getElementById('app');
   if (app !== null && typeof MutationObserver === 'function') {
-    const mo = new MutationObserver(() => { scheduleFit(); });
+    /**
+     * ★ T51：门的白名单看的是"**当前**这一屏"（`onBoardScreen()` 现查 DOM）⇒ `#app` 一重画
+     * 就必须重算门，不能只重算缩放 —— 否则从大厅进牌桌那一刻门永远不会出现（大厅里没有
+     * `.board`，进对局之后 `#app` 整棵换掉但没有任何 `resize`/`orientationchange` 事件）。
+     * 门挂在 `document.body`（**不在被观察的 `#app` 子树里**）⇒ 这一句不会自激。
+     */
+    const mo = new MutationObserver(() => { syncGate(); scheduleFit(); });
     mo.observe(app, { childList: true, subtree: true });
   }
   window.addEventListener('resize', scheduleFit, { passive: true });

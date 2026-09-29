@@ -49,6 +49,16 @@ import { roomCodeFromRandom } from '../net/protocol';
 import type { NetMsgType } from '../net/protocol';
 import type { HashLike } from '../net/session';
 import {
+  DEFAULT_TURN_CRED_SETTINGS,
+  describeTurnCredentialFailure,
+  type TurnCredential,
+  type TurnCredentialFailure,
+  type TurnCredentialRead,
+} from './turn-cred';
+import {
+  COMPACT_INVITE_CHARS_MAX,
+  COMPACT_INVITE_CHARS_MIN,
+  COMPACT_PAYLOAD_VERSION,
   COMPRESSED_BYTES_MAX,
   COMPRESSED_BYTES_MIN,
   COMPRESSION_RATIO_MAX as COMPRESSION_RATIO_MAX_K,
@@ -62,11 +72,14 @@ import {
   decodeInvite,
   decodeInviteText,
   encodeInvite,
+  icePwdOfSessionId,
+  iceUfragOfSessionId,
   inviteFragmentOf,
   inviteLinkOf,
   kindOfMarker,
   markerOfKind,
   payloadBytesOf,
+  rawBytesForInvite,
   readInviteSegment,
   roomCodeEntryReachability,
   utf8Decode,
@@ -74,6 +87,7 @@ import {
   type CompressionKind,
   type InviteDecodeResult,
   type InviteFields,
+  type InvitePayloadMode,
 } from '../net/invite';
 
 /* ================================================================== *
@@ -97,6 +111,22 @@ export interface DataChannelLike {
   addEventListener(type: 'open' | 'close' | 'error' | 'message', cb: (ev: unknown) => void): void;
   /** 退订（真件恒有；假件可以不实现 —— 可选 ⇒ 两边同形，不会逼测试伪造一个用不上的方法） */
   removeEventListener?(type: 'open' | 'close' | 'error' | 'message', cb: (ev: unknown) => void): void;
+}
+
+/**
+ * 真实 `RTCStatsReport` 的最小结构面（G6/T46）。
+ *
+ * 真件是 `Map<string, 条目>`（`forEach` / `get` / `values` 都有）。本文件只用到
+ * `forEach`（遍历一遍、自己挑出"被提名且已成功的那一对"）—— 结构面越小，假件越容易与真件同形
+ * （理由与 `DataChannelLike` 逐字相同）。
+ *
+ * 条目一律当**开放的记录**读（`Record<string, unknown>`）：`RTCStatsReport` 里每种条目的字段
+ * 由 `type` 决定（`candidate-pair` 有 `localCandidateId`、`local-candidate` 有 `candidateType`），
+ * 而本文件**只读它真的会用到的那几个字段**，并把"字段不在/类型不对"当成"读不出来"
+ * （⇒ 如实回"建立中…"，不许猜）。
+ */
+export interface RTCStatsReportLike {
+  forEach(cb: (entry: Record<string, unknown>) => void): void;
 }
 
 /** 真实 `RTCPeerConnection` 的最小结构面（含 `restartIce`：计划 §5 T7 的交付物之一） */
@@ -127,6 +157,18 @@ export interface PeerConnectionLike {
   /** 对端描述（answer / offer）。收方把它喂进来 */
   setRemoteDescription?(desc: { readonly type: string; readonly sdp?: string }): Promise<void>;
   restartIce?(): void;
+  /**
+   * ★ **G6/T46：`RTCPeerConnection.getStats()`**（"这一局到底走没走中继"的**唯一**真值来源）。
+   *
+   * 真件返回一棵 `RTCStatsReport`（`Map<id, 条目>`）。本仓的产出代码在此之前**一处都没有**
+   * 读过它 ⇒ "现在是不是经中继"这件事在界面上无从判断（`candidate-pair` 的
+   * `nominated === true && state === 'succeeded'` 那一对里，两端的 `candidateType`
+   * 有没有 `relay`，只有它答得了）。
+   *
+   * 可选（与 `setRemoteDescription?` / `restartIce?` 同款）：假件可以不实现，两边同形；
+   * 拿不到就**如实**回"建立中…"，**不许猜成"直连"**（判据本体见 `readRelayStats`）。
+   */
+  getStats?(): Promise<RTCStatsReportLike>;
   close(): void;
   addEventListener(type: string, cb: (ev: unknown) => void): void;
 }
@@ -172,10 +214,26 @@ export interface NetSettingsLike {
   /**
    * TURN 中继的 URL（三项之一）。**留空 = 用产品默认值那台**（`DEFAULT_ICE_SERVERS` 里的
    * `turn:8.130.97.243:3478`）；三项填齐则**追加**为玩家自己那台（覆盖默认地址）。
+   *
+   * ★★ **G6/T50 起，"谁提供凭据"分成了两条路**（方案 B1）：
+   *  - **玩家自己那台**：仍然走下面这三项（三项齐全 ⇒ 按玩家给的写，来源 `player`）；
+   *  - **产品那台**：凭据**不再内联在前端**，而是开局前向签发服务换一份短时凭据，
+   *    由宿主经 `TurnCredentialRead` 交进来（见 `IceCredentialSources`）。
    */
   readonly turnUrl?: string;
   readonly turnUsername?: string;
   readonly turnCredential?: string;
+  /**
+   * ★★ **G6/T50**：刚换到手的**产品凭据**（`<expiry>:<scope>` / `base64(HMAC-SHA1(...))`）。
+   *
+   * 为什么用设置里"额外两个字段"来表达它、而不是再加一个注入成员：`readIceServers` 的入参
+   * 就是**一份设置**，宿主在这里合成"玩家三项 + 产品凭据"这一份，判定仍然只有一处；
+   * `waitForIceGathering` 也因此看得见"这一轮到底有没有中继"（它读的是同一个函数）。
+   *
+   * 三项为空（= 玩家没指定）而这两个字段在 ⇒ 用产品那台地址 + 这份凭据，来源 `builtin`。
+   */
+  readonly appTurnUsername?: string;
+  readonly appTurnCredential?: string;
 }
 
 /**
@@ -265,6 +323,44 @@ export interface NetBrowserEnv {
    * 构造出超时"的东西**，否则"超时之后会怎样"这条判据只能靠读代码相信。
    */
   readonly iceGatherTimeoutMs?: number;
+  /**
+   * ★★ **G6/T50（B1）：这一刻手上有没有中继凭据**（`turn-cred.ts` 的读数）。
+   *
+   * 它是**同步的只读动作**（不建连接、不发请求）：
+   *  - 拿得到 ⇒ 默认那台 coturn 配上这份短时凭据（`relaySource: 'builtin'`、`relayConfigured: true`）；
+   *  - 拿不到 ⇒ **降级成不含中继的 ICE 列表**（直连），并把"为什么没有"如实带给屏上；
+   *  - 宿主不给它 ⇒ 与"拿不到"同一条路（测试与老调用点因此天然走降级那一档）。
+   *
+   * 为什么"取"这一步不在这里做：取凭据是**异步**的（有 2 秒上界），而 `readIceServers`
+   * 与 `waitForIceGathering` 都是同步的。取/续/降级的责任归 `turn-cred.ts`，宿主在开局前
+   * 先 `refresh()` 一次（见 `src/main.ts` 的大厅环境）。
+   */
+  /**
+   * ★★ **G6/T50：这一刻手上有没有中继凭据**（`turn-cred.ts` 的读数）。
+   *
+   * ★ **返回值的三态**（这是"B1 上线前 vs 上线后"的分界，别混）：
+   *  - `undefined` ⇒ **这个宿主没接签发服务**（端点没配）⇒ 走 `PRE_LAUNCH_FALLBACK_CREDENTIAL`
+   *    那条兜底：保留中继、保持今天的行为；
+   *  - `{available: true, …}` ⇒ 用服务端给的那一份（REST 那条路）；
+   *  - `{available: false, …}` ⇒ **真的降级**成直连（ICE 列表里没有 `turn:`）。
+   *
+   * 为什么把"没接"表达成 `undefined` 而不是一份 `available: false` 的读数：那样会被判成
+   * "取不到凭据 ⇒ 降级"，而这版一旦发上线就会把线上中继弄没（协调侧 2026-09-28 的 P0）。
+   */
+  readonly credentialRead?: () => TurnCredentialRead | undefined;
+  /**
+   * ★★ **G6/T50：等"这一轮取凭据"这件事结算完**（可缺省；缺省 = 不等，直接读缓存）。
+   *
+   * 为什么 `init()` 需要它：`waitForIceGathering` 在**同一次 `init()` 里**读
+   * `readIceServers().relayConfigured`，而那个读数决定"够用"的口径（有中继 ⇒ 必须等 relay 到手）。
+   * 如果取凭据还在飞，这一刻读到的是 `false` ⇒ 产品会按"没有中继"去排 1.5 秒宽限
+   * ⇒ 中继那一档**永远不会生效**（实测症状：`relayConfigured` 在邀请码产出的那一刻已经是 `true`，
+   * 可邀请码里一条 relay 都没有 —— `.superpowers/g6-T50/run/gate9-ice.txt` 那次）。
+   *
+   * 它**必须有上界**：那个承诺由取凭据那一侧（`turn-cred.ts` 的 `timeoutMs`，2 秒）保证，
+   * 所以这里的 `await` 不会把"生成邀请码"卡住。
+   */
+  readonly ensureCredential?: () => Promise<unknown>;
 }
 
 /** 等 ICE 用的计时能力（形状与 `match-driver.ts` 的 `Ticker` 同形，见 `NetBrowserEnv.ticker`） */
@@ -658,11 +754,19 @@ export function browserRoomCode(env?: NetBrowserEnv): string {
  * 真机读数说明那句话**归因错了**：给 srflx/relay 的是 `turn:` 那一项。
  * 老断言已在同一次改动里改成"**不许**再有一条指向这台服务器的 `stun:`"（带日期与出处）。
  *
- * ## 为什么凭据直接内联在这里（T38 的明确要求，不是疏忽）
+ * ## ★★ G6/T50：**凭据不再内联在这里**（B1 的落地）
  *
- * "玩家零填写"只能靠产品默认值实现 ⇒ 默认值必须自带一套能用的凭据。coturn 的长期凭据
- * 不是密钥：它只换来一个中继端口，换不来任何牌局内容（转发的是 DTLS 密文）。凭据原文住在
- * `.superpowers/g5-server/turn-credentials.txt`（该目录已 gitignore，不随仓库分发）。
+ * 下面那一格（T38 写的"默认值必须自带一套能用的凭据"）当时的代价是把**永久有效**的
+ * 用户名/密码打进了前端 JS ⇒ 白嫖中继的成本 = 0。B1 把它换成"**开局前向签发服务换一份
+ * 短时凭据**"：
+ *  - 这一份数组里**只剩地址**（`turn:8.130.97.243:3478`，没有 `username` / `credential`）；
+ *  - 凭据由 `readIceServers` 在**运行时**从 `settings.appTurnUsername` / `appTurnCredential`
+ *    合上（宿主先经 `turn-cred.ts` 取好再放进来，见那里的说明）；
+ *  - **拿不到凭据 ⇒ 这一项整个不进 `iceServers`**（降级成直连），屏上如实说
+ *    "这一轮没有中继可用"（`relayUnavailableNoteOf`）。
+ *
+ * ⇒ 判据 9 的意图一个字没变（"默认那台是这台已实测通过的服务器、而且只有一台"），
+ * 变的是"凭据从哪来"：**从签发服务来，不再从仓库来**（T50 判据 5：全仓与前端产物 grep 0 命中）。
  *
  * ## 判据 9 为什么是这三条（**不许**为了让它绿而把中继删掉）
  *
@@ -683,13 +787,9 @@ export function browserRoomCode(env?: NetBrowserEnv): string {
  * 不通也不会拖慢：ICE 自己会挑，`waitForIceGathering` 的上界到点就用已经拿到的候选。
  */
 export const DEFAULT_ICE_SERVERS: readonly IceServerLike[] = [
-  // ★ 主力：这台 coturn 的 TURN（`:3478`）。**不再单列一条同址的 `stun:`**（见上面那段）
-  {
-    urls: ['turn:8.130.97.243:3478'],
-    // 长期凭据（原文 `.superpowers/g5-server/turn-credentials.txt`，该目录已 gitignore）
-    username: 'compile',
-    credential: 'PsN4kLbZ3sesnKzmSt7R9Ct6',
-  },
+  // ★ 主力：这台 coturn 的 TURN（`:3478`）。**只有地址**，凭据在运行时合上（见上面那段）。
+  //   **不再单列一条同址的 `stun:`**（见上面那段）
+  { urls: ['turn:8.130.97.243:3478'] },
   // 后备：公共 STUN（实测从这里不通，只为别的网络环境留着；不通不会拖慢）
   { urls: ['stun:stun.l.google.com:19302'] },
   { urls: ['stun:stun1.l.google.com:19302'] },
@@ -741,6 +841,95 @@ export interface IceServersRead {
    *     ⇒ 只有本字段为 `false` 时才该生效（见 `waitForIceGathering` 里的取法）。
    */
   readonly settingsAreDefault: boolean;
+  /**
+   * ★★ **G6/T50（B1）：这份列表里**没有**可用中继时的原因**（`null` = 有中继，或玩家自己
+   * 配了一半那种另有说法的情形）。
+   *
+   * 为什么要有它：降级是一条**要对玩家说清楚**的决定 —— "这一轮只能试直连"必须带上
+   * "为什么"（凭据服务没回应 / 拒绝了 / 回的格式读不懂 / 连不上）。屏上那行由
+   * `relayUnavailableNoteOf` 从它拼出来，**不是**在渲染层另写一句。
+   */
+  readonly relayUnavailableReason?: RelayUnavailableReason;
+  /**
+   * ★★ **G6/T50**：`relayUnavailableReason === 'credential-unavailable'` 时，
+   * **为什么没换到**（`turn-cred.ts` 的那四种；屏上那句话里会带上它）。
+   */
+  readonly relayCredentialFailure?: TurnCredentialFailure;
+  /**
+   * ★★ **G6/T50**：这一刻手上有**哪一份**凭据（`'app'` = 从签发服务换来的短时凭据；
+   * `'player'` = 玩家自己在高级设置里填的那一组）。
+   *
+   * 它是**给屏上与探针看的读数**，不参与任何判定（判定只看 `relayConfigured`）。
+   */
+  readonly relayCredentialSource?: 'app' | 'player' | 'builtin-fallback';
+}
+
+/**
+ * ★★ **G6/T50**：没有可用中继的两条来路。
+ *
+ *  - `'credential-unavailable'`：产品那台中继**要凭据**，而这一轮**没换到**（签发服务
+ *    超时 / 拒绝 / 回的格式读不懂 / 连不上）⇒ 降级成直连；
+ *  - `'not-configured'`：既没有产品凭据、玩家也没配自己的中继 ⇒ 这一份里本来就没有中继。
+ */
+export type RelayUnavailableReason = 'credential-unavailable' | 'not-configured';
+
+/**
+ * ★★ **G6/T50：B1 上线前的**临时兜底**静态凭据（**这一段是要删的**）。
+ *
+ * ## 它为什么在这里（部署安全，不是"忘了删"）
+ *
+ * T50 把凭据从 `src/` 与 `public/` 清空、改成"开局前向签发服务换一份" ⇒ 一旦把这版发到线上，
+ * 客户端会去请求一个**还不存在的** `/turn-cred` ⇒ 拿不到凭据 ⇒ **线上中继当场不可用**
+ * （而那台 coturn 现在还是 `lt-cred-mech` 静态用户，REST 凭据也验不过）。
+ *
+ * 用户的裁决是"**先在本机做通 B1，不切线上 coturn**" ⇒ **发版必须保持今天的行为**：
+ * 端点**没配**（空串，缺省）时，客户端照旧用这台 coturn + 下面这对静态凭据；**只有配了端点**
+ * 才走 REST 那条路（取不到就降级成直连）。
+ *
+ * ## 删它的时机（与端点同一批，见 `server/turn-cred/RUNBOOK.md` §0 的三步）
+ *
+ * `起签发服务 → 改缺省端点为 '/turn-cred' + 删掉下面这一对 → 切 coturn（并行第二实例）`。
+ * **这三步必须同一批完成**，否则中继会断。删掉之后 `readIceServers` 的
+ * `'builtin-fallback'` 那一支就永远不会命中（它只认"没配端点"）。
+ *
+ * ⚠️ 判据 5（"全仓 grep 那份密码 0 命中"）说的是**上线之后**的状态；在"端点未配置"这一段里，
+ * 这一对**必然在源码里**（它就是今天线上那份行为）。上线时它和端点一起删。
+ */
+const PRE_LAUNCH_FALLBACK_CREDENTIAL = Object.freeze({
+  username: 'compile',
+  credential: 'PsN4kLbZ3sesnKzmSt7R9Ct6',
+});
+
+/**
+ * ★★ **G6/T50：什么时候用上面那份兜底** —— **只在"这个宿主根本没接签发服务"时**。
+ *
+ * 判据是 `credentialRead === undefined`：宿主在**没配端点**时就是这么答的
+ * （见 `src/main.ts` 的 `turnCredentialRead()`）。三个必须分清的输入：
+ *  - `undefined`（**没配端点**）⇒ 走兜底：保留中继，保持 B1 上线前今天的行为；
+ *  - `null`（老调用点 / 测试）⇒ 也走兜底（"没接签发服务"与"没配端点"是同一件事）；
+ *  - 一份**读数**且 `available: false`（**配了端点但取不到**）⇒ **不走兜底**，
+ *    必须真的降级成直连（判据 3 的 14/14 就是它）。
+ */
+function usesPreLaunchFallback(credentialRead: TurnCredentialRead | null | undefined): boolean {
+  return credentialRead === null || credentialRead === undefined;
+}
+
+/**
+ * ★★ **G6/T50：把"为什么没有中继"说成玩家能懂的一句**（屏上那行用；**唯一**措辞出处）。
+ *
+ * 措辞纪律（照 `privacy.ts` 那条）：说事实、给出下一步，不用内部标识符。中继那句隐私说明的
+ * 唯一出处仍是 `src/app/privacy.ts`（这一句只在**没有中继**时说，与它不冲突）。
+ */
+export function relayUnavailableNoteOf(read: IceServersRead): string | null {
+  if (read.relayUnavailableReason === undefined) return null;
+  if (read.relayUnavailableReason === 'credential-unavailable') {
+    const why = read.relayCredentialFailure === undefined
+      ? '' : `（${describeTurnCredentialFailure(read.relayCredentialFailure)}）`;
+    return `这一轮没有中继可用${why}，只能试直连：两端在同一个局域网里通常能直接连上，`
+      + '跨网络能不能连上现在还不知道。稍后重试一次就好。';
+  }
+  return '这一轮没有中继可用（既没有拿到中继凭据，也没有自己配中继），只能试直连：'
+    + '两端在同一个局域网里通常能直接连上，跨网络能不能连上现在还不知道。';
 }
 
 /** 三项连接设置长什么样（`settingsAreDefault` 要与它逐字比） */
@@ -799,63 +988,153 @@ export function defaultTurnShape(): { turnUrl: string; turnUsername: string; tur
 }
 
 /**
- * ★ 读 `iceServers`（D14；G5/T38 起默认带一台中继）。
+ * ★ 读 `iceServers`（D14；T38 起默认那台在，**T50 起凭据是运行时换来的**）。
  *
- * 三种形态（`settingsAreDefault` 由调用方给：它说的是"这些设置与产品默认预填值一样吗"，
+ * 四种形态（`settingsAreDefault` 由调用方给：它说的是"玩家那三项与产品默认预填值一样吗"，
  * 那个判定住在 `turnSettingsAreDefault` 一处，本函数不重复实现 —— 它只认内容形状）：
- *  - **三项为空** ⇒ 整份默认值（含那台内置中继）原样给出，`relayConfigured: true`、来源 `builtin`；
- *  - **三项填齐** ⇒ 卡片与 STUN 照着默认值给，但**中继那一项按玩家给的写**
- *    （不是"两台都留着"）：**改完以玩家的为准**——他要是把地址写错了，用不上的就是他写的那台，
- *    而不是我们悄悄把他接回默认那台（那会让他以为自己配的那台在生效）。`relaySource: 'player'`；
- *  - **只填了一半** ⇒ 玩家那项**不换上**（缺凭据的中继在真实网络里必然 401），
- *    照样回默认值；"配了一半"这件事必须让玩家看见（`relayIncomplete: true`），不静默忽略。
+ *  - **玩家三项填齐** ⇒ 卡片与 STUN 照默认值给，但**中继那一项按玩家给的写**
+ *    （不是"两台都留着"）：改完以玩家的为准 —— 他要是把地址写错了，用不上的就是他写的那台，
+ *    而不是我们悄悄把他接回默认那台。`relaySource: 'player'`、`relayCredentialSource: 'player'`；
+ *  - **玩家三项为空 + 有产品凭据** ⇒ 默认那台地址 + 这一轮换到的短时凭据。
+ *    `relaySource: 'builtin'`、`relayConfigured: true`、`relayCredentialSource: 'app'`；
+ *  - **只填了一半**（有 URL 没凭据）⇒ 玩家那项不换上，也不报"配好了"；
+ *    "配了一半"这件事必须让玩家看见（`relayIncomplete: true`），不静默忽略；
+ *  - ★★ **没有可用凭据**（没给 / 取失败）⇒ **中继那一项整个不进 `iceServers`**（降级成直连），
+ *    并把原因写进 `relayUnavailableReason`（屏上如实说"这一轮没有中继可用，只能试直连"）。
+ *
+ * ⚠️ **降级不是"用一份旧的硬编码凭据顶着"**：那样等于把 T38 的白嫖问题原样留下，
+ * 而且屏上那句"没有中继可用"会变成假话（T50 判据 3/5 的变异正是这条错路）。
  */
+/**
+ * ★★ **G6/T50：把"有一份产品凭据"合进设置里**（`readIceServers` 的第三处输入）。
+ *
+ * 为什么合成**设置里的两个字段**、而不是给 `readIceServers` 再加一个参数：判定必须只有一处，
+ * 而 `readIceServers` 的入参本来就是"一份设置"。合成之后：
+ *  - `readIceServers(settings)` 与 `waitForIceGathering`（它也读同一份设置）看到的是**同一件事**；
+ *  - 玩家自己的三项与产品凭据的**优先级**写在 `readIceServers` 一处（玩家齐全 ⇒ 玩家的赢）。
+ *
+ * 返回 `null` = 这一轮没有产品凭据（`read` 为空，或它报的是"没有"）。
+ */
+export function appCredentialOf(
+  read: TurnCredentialRead | null | undefined,
+): { readonly appTurnUsername: string; readonly appTurnCredential: string } | null {
+  if (read === null || read === undefined || !read.available) return null;
+  const c: TurnCredential = read.credential;
+  if (c.username.length === 0 || c.credential.length === 0) return null;
+  return { appTurnUsername: c.username, appTurnCredential: c.credential };
+}
+
+/** ★★ **G6/T50：这个 `turn:` URL 是不是产品默认那台**（凭据要合在它身上，不能合到玩家那台） */
+function isDefaultRelayUrl(url: string): boolean {
+  return DEFAULT_ICE_SERVERS.some((s) => s.urls.includes(url));
+}
+
 export function readIceServers(
   settings?: NetSettingsLike | null,
   settingsAreDefault = false,
+  /** 这一刻的凭据读数（缺省 = 没有：老调用点与测试因此天然走"降级成直连"那一档） */
+  credentialRead?: TurnCredentialRead | null,
 ): IceServersRead {
   /**
    * 打开默认值：这份数组里**最多一项中继**（就是默认那台），打开的人可以在它身上做覆盖。
    * 逐字段拷（不整对象展开）：`IceServerLike` 的可选字段在 `exactOptionalPropertyTypes`
-   * 下不许被显式写成 `undefined`，这里只把**真的存在**的那两个键带过去。
+   * 下不许被显式写成 `undefined`，这里只把**真的存在**的那些键带过去。
    */
   const openDefaults = (): IceServerLike[] => DEFAULT_ICE_SERVERS.map((s) => ({
     urls: [...s.urls],
     ...(typeof s.username === 'string' ? { username: s.username } : {}),
     ...(typeof s.credential === 'string' ? { credential: s.credential } : {}),
   }));
-  const out = openDefaults();
+  /** 默认那台的中继 URL（认它只认 `isRelayUrl` 这一个出处） */
+  const defaultRelayUrl = (): string =>
+    DEFAULT_ICE_SERVERS.flatMap((s) => [...s.urls]).find(isRelayUrl) ?? '';
+
   const url = typeof settings?.turnUrl === 'string' ? settings.turnUrl.trim() : '';
-  if (url.length === 0) {
-    // 三项为空 ⇒ 就是那份默认值（里面有内置中继 ⇒ relayConfigured 为真、来源是 builtin）
-    return {
-      servers: out,
-      relayConfigured: out.some((s) => s.urls.some(isRelayUrl)),
-      relayIncomplete: false,
-      relaySource: 'builtin',
-      settingsAreDefault,
-    };
-  }
   const username = typeof settings?.turnUsername === 'string' ? settings.turnUsername : '';
   const credential = typeof settings?.turnCredential === 'string' ? settings.turnCredential : '';
-  if (username.length === 0 || credential.length === 0) {
-    // ★ 配了一半：玩家那一项**不换上**（没有凭据的中继必然 401），但这件事要被说出来。
-    //   注意来源仍然报 'builtin'：这一份里唯一"能用"的中继就是内置那台，严格档不该被叫醒。
-    return { servers: out, relayConfigured: false, relayIncomplete: true, relaySource: 'builtin', settingsAreDefault };
+  // ★ T50：默认那台**只有地址**（凭据运行时合上）⇒ 这一句是"默认那台地址"的唯一读取点，
+  //   下面每一支都从它取（"把默认那台摘掉"也就有了一个可读的锚）。
+  const defaultRelay = defaultRelayUrl();
+
+  /** ① 玩家三项齐全 ⇒ 按玩家的写（**优先**，与 T38 同口径） */
+  if (url.length > 0 && username.length > 0 && credential.length > 0) {
+    const cover = isRelayUrl(url) ? url : `turn:${url}`;
+    const replaced = openDefaults().filter((s) => !s.urls.some(isRelayUrl));
+    replaced.push({ urls: [cover], username, credential });
+    return {
+      servers: replaced,
+      relayConfigured: true,
+      relayIncomplete: false,
+      relaySource: 'player',
+      settingsAreDefault,
+      relayCredentialSource: 'player',
+    };
   }
+
+  /** 玩家那一项配了一半：这件事要能被说出来（下面各支都带着它） */
+  const halfConfigured = url.length > 0 && (username.length === 0 || credential.length === 0);
+
+  /** 产品那一份：设置里带了"服务端换来的"两个字段 ⇒ 用默认那台地址 + 这份凭据 */
+  const appUser = typeof settings?.appTurnUsername === 'string' ? settings.appTurnUsername : '';
+  const appCred = typeof settings?.appTurnCredential === 'string' ? settings.appTurnCredential : '';
+  const appRelay = appUser.length > 0 && appCred.length > 0 ? { username: appUser, credential: appCred } : null;
+
   /**
-   * ★ 三项齐全 ⇒ **按玩家给的写**：把默认那一项中继摘掉，换成这一项（判据 3："改成别的值 ⇒
-   * 默认那台**不再**出现在 `iceServers` 里"）。玩家没写 `turn:` 前缀时补上（否则浏览器
-   * 认不出它是中继），补完仍以玩家给的地址为准。
+   * ★★ **G6/T50：B1 上线前的兜底** —— **端点没配**（`'not-configured'`）时，照今天的线上行为工作：
+   * 默认那台 coturn + `PRE_LAUNCH_FALLBACK_CREDENTIAL`。
    *
-   * ⚠️ 预填之后"三项齐全"**包含**"玩家根本没动过"那一档（T38）⇒ 这一个分支里既可能是
-   * 玩家改过、也可能就是默认值本身；分辨它们的是 `settingsAreDefault`（**不要**用
-   * `relaySource === 'player'` 去代表"玩家改过"）。
+   * 它**不改**判据 3：配了端点但取不到（`'credential-unavailable'`）时这里返回 `null`，
+   * 下面那条降级路照样把中继整个摘掉。上线时这一段连同端点一起删（见那个常量的说明）。
    */
-  const cover = isRelayUrl(url) ? url : `turn:${url}`;
-  const replaced = out.filter((s) => !s.urls.some(isRelayUrl));
-  replaced.push({ urls: [cover], username, credential });
-  return { servers: replaced, relayConfigured: true, relayIncomplete: false, relaySource: 'player', settingsAreDefault };
+  const fallbackRelay = appRelay ?? (usesPreLaunchFallback(credentialRead)
+    ? { ...PRE_LAUNCH_FALLBACK_CREDENTIAL } : null);
+
+  if (fallbackRelay !== null) {
+    const servers = openDefaults().map((s) => (s.urls.includes(defaultRelay)
+      ? { urls: [...s.urls], username: fallbackRelay.username, credential: fallbackRelay.credential }
+      : s));
+    /**
+     * ⚠️ `relayConfigured` 读的是**列表里真的有一项能用的中继**（= 产品这一份在不在），
+     * **不是**"玩家那一项被采纳了"：玩家"配了一半"时产品那一份仍然带着有效凭据在列表里，
+     * 于是它照样为真 —— 而"玩家那一项没被用上"由 `relayIncomplete` 单独说。
+     * （旧口径把这两件事合成一个布尔，会让"玩家配了一半"顺带把产品的中继也一起否掉。）
+     */
+    return {
+      servers,
+      relayConfigured: servers.some((s) => s.urls.some(isRelayUrl)),
+      /**
+       * ★ **判据 9 的既有语义一字不改**：`relayIncomplete` 说的是"**玩家那一项**没被用上"
+       * （他填了 URL 却没填用户名/凭据）。这一格**不许**因为"产品那台还能用"就把它抹成 `false`
+       * —— 那条判据钉的是"配了一半这件事必须被报出来"。
+       *
+       * 于是它与 `relayConfigured` 是两个读数、各说各的事（屏上那句该不该说，由
+       * `net-lobby.ts` 的 `relayStateOf` 按 `relayConfigured` **优先**判，见那里的说明）。
+       */
+      relayIncomplete: halfConfigured,
+      relaySource: 'builtin',
+      settingsAreDefault,
+      relayCredentialSource: appRelay === null ? 'builtin-fallback' : 'app',
+    };
+  }
+
+  /**
+   * ★★ **降级**：**配了端点**但这一轮取不到凭据 ⇒ 默认那台**整个摘掉**（只剩 STUN），并把原因如实报出来。
+   *
+   * ⚠️ 与上面那条兜底的分工就在这一个判断上：`'not-configured'`（没配端点）走兜底、
+   * 保持今天的线上行为；`'credential-unavailable'`（配了却取不到）走**降级**。
+   */
+  const noRelay = openDefaults().filter((s) => !s.urls.some(isRelayUrl));
+  const unavailable = credentialRead !== null && credentialRead !== undefined && !credentialRead.available;
+  return {
+    servers: noRelay,
+    relayConfigured: false,
+    relayIncomplete: halfConfigured,
+    relaySource: 'none',
+    settingsAreDefault,
+    relayUnavailableReason: unavailable ? 'credential-unavailable' : 'not-configured',
+    ...(unavailable && credentialRead !== null && credentialRead !== undefined
+      ? { relayCredentialFailure: credentialRead.reason } : {}),
+  };
 }
 
 /* ================================================================== *
@@ -1247,6 +1526,14 @@ export interface CreateInviteInput extends InviteFields {
    * 这一档在这台设备上用不了时**照旧降级**（宁可换档，也不要产不出来）。
    */
   readonly preferKind?: CompressionKind;
+  /**
+   * ★★ **G6/T49**：这条码带什么进载荷。
+   *  - 缺省 / `'compact'`：v3，**最小必要集**（没有整段 SDP）；
+   *  - `'full'`：v2，整段 SDP 进载荷（缺凭据时的兜底，或"就是要老格式"的显式选择）。
+   *
+   * 紧凑档缺任一必要项时**自动退回** `'full'`（结果里的 `fallbackReason` 说的是为什么）。
+   */
+  readonly payloadFormat?: 'compact' | 'full';
 }
 
 /** `createInvite` 的读数 */
@@ -1273,6 +1560,17 @@ export interface CreatedInvite {
    * 它是给人核对的诊断面，判据 ④ 读的就是它）。
    */
   readonly probes: readonly CompressionProbe[];
+  /**
+   * ★ G6/T49：紧凑档**没能用**、退回整段 SDP（v2）那一档时的**真因**（人话）；
+   * 一直走紧凑档时为 `null`。这不是失败 —— 是那条兜底路真的走过一次的证据。
+   */
+  readonly fallbackReason: string | null;
+  /**
+   * ★ G6/T49：这一条码最终带的是哪一档载荷（`'compact'` = v3 最小必要集 / `'full'` = v2 整段 SDP）。
+   * 调用方（大厅那句长度读数）拿它去选**这一档**的实测区间 —— 版本号住在压缩段里，
+   * 只看字符判不出来。
+   */
+  readonly payloadFormat: 'compact' | 'full';
 }
 
 /** `createInvite` 的失败形态：压缩那条链的失败（带逐档读数）或纯层的编码拒绝 */
@@ -1293,6 +1591,14 @@ export type CreateInviteFailure =
  * **解压也一样**：先 `await decompressBytes()` 真解一遍，纯层拿到的才是"真的解得动"这个事实，
  * 而不是一个恒真的同一性检查。
  * **载荷只进 fragment**（判据 6）。
+ *
+ * ★★ **G6/T49：紧凑档（v3）是新的缺省**。`payloadFormat` 缺省 = `'compact'`：
+ * 载荷里不再放整段 SDP，只放最小必要集（`ice-ufrag` / `ice-pwd` / DTLS 指纹 / 候选的
+ * `type·地址·端口` / `a=setup` / 承诺位），对端本地重建一份最小可用 SDP。
+ *
+ * **兜底**（任务书 A4/A5）：缺 ICE 凭据 / DTLS 指纹 / 候选中的任何一项 ⇒ 这一档**不可用**，
+ * 当场退回 `'full'`（v2，整段 SDP 进载荷），**不许**为了变小而少带那几样。
+ * `fallbackReason` 记的就是"为什么退了"（探针与报告读它）。
  */
 export async function createInvite(
   input: CreateInviteInput,
@@ -1307,7 +1613,39 @@ export async function createInvite(
     hostPromise: input.hostPromise,
     guestPromise: input.guestPromise,
   };
-  const raw = payloadBytesOf(fields);
+  /**
+   * ★★ **G6/T49：紧凑档那一半**。
+   *
+   * ## ICE 凭据只从 SDP 里取（**不许本地推**；第一版本地推，真机当场红）
+   *
+   * `a=ice-ufrag` / `a=ice-pwd` 是**这一条连接真正在用的那一对**：浏览器收下我们 advertised
+   * 的 offer 之后，就按它校验对端发来的 STUN 请求。把它们换成"本端按 `sessionId` 推出来的
+   * 另一串"会让两端的凭据对不上 —— `setRemoteDescription(offer)` 当场报
+   * `InvalidAccessError: … Failed to apply the description for m= section with mid='0': Invalid ICE …`
+   * （2026-09-28 真浏览器实测，见 `.superpowers/g6-T49/run-t49.txt`）。
+   *
+   * ⇒ SDP 里没有那两行（等 ICE 收集的上界档）时**退回 v2**（整段 SDP）：码会长一点，
+   * 但那样至少是对的。`iceUfragOfSessionId()` / `icePwdOfSessionId()` 这对纯层工具因此
+   * **产品路径不再使用**（留着只给"知道自己在做什么"的调用点）。
+   */
+  const mode: InvitePayloadMode = input.payloadFormat === 'full'
+    ? { mode: 'full' }
+    : { mode: 'compact' };
+  let prefer: InvitePayloadMode = mode;
+  let prepared = rawBytesForInvite(fields, prefer);
+  /**
+   * ★ 兜底那条路：紧凑档不可用（缺凭据 / 缺指纹 / 缺候选 / 认不出的候选行）⇒ **当场改走 v2**。
+   * 只在这一个原因上回退；压缩那几条失败照旧往上抛（那是设备能力问题，不是格式问题）。
+   */
+  let fallbackReason: string | null = null;
+  if (!prepared.ok) {
+    if (prepared.reason !== 'compact-unavailable') return prepared;
+    fallbackReason = prepared.message;
+    prefer = { mode: 'full' };
+    prepared = rawBytesForInvite(fields, prefer);
+    if (!prepared.ok) return prepared;
+  }
+  let raw = prepared.bytes;
   /**
    * ★★ **G5/T40：降级链那一整段也必须被兜住**（判据 ⑤ 的另一半）。
    *
@@ -1352,22 +1690,44 @@ export async function createInvite(
    * 于是这道检查在"没压缩"时退化成"解出来还是同一份字节" —— 仍然是真检查，不是恒真）。
    */
   const roundTrip = await decompressBytes(c.bytes, env, c.format);
-  const encoded = encodeInvite(
+  let encoded = encodeInvite(
     fields,
     // 同步压缩口：这里交出的**就是**上面那次 await 的结果（不重压一次，也不换内容）
     () => c.bytes,
     // 同步解压口：反映的是**上面那次真解压**的结果（不是同一性检查）
     (compressed) => (compressed === c.bytes && roundTrip.ok ? roundTrip.bytes : null),
     c.format,
+    // ★ G6/T49：这一条码带的是紧凑载荷（v3）还是整段 SDP（v2）
+    prefer,
   );
+  /**
+   * ★ G6/T49：紧凑档的**第二道兜底** —— 纯层那道"重建出来的 SDP 必须带齐 ICE 凭据与
+   * DTLS 指纹"的自洽检查没过时，**当场退回 v2**（而不是把"生成不了邀请码"丢给玩家）。
+   * 这与 `compact-unavailable` 是同一族的两条路：一条在压之前判、一条在重建之后判。
+   */
+  if (!encoded.ok && prefer.mode === 'compact' && encoded.reason === 'compact-rebuild-incomplete') {
+    fallbackReason = encoded.message;
+    prefer = { mode: 'full' };
+    const fullRaw = rawBytesForInvite(fields, prefer);
+    if (!fullRaw.ok) return fullRaw;
+    raw = fullRaw.bytes;
+    encoded = encodeInvite(
+      fields,
+      () => c.bytes,
+      (compressed) => (compressed === c.bytes && roundTrip.ok ? roundTrip.bytes : null),
+      c.format,
+      prefer,
+    );
+  }
   if (!encoded.ok) return encoded;
   const payload = encoded.payload;
+  const report = inviteLengthReportOf(payload, prefer.mode === 'compact');
   return {
     ok: true,
     payload,
     link: inviteLinkOf(input.originAndPath, payload),
     chars: payload.length,
-    withinMeasuredRange: payload.length >= INVITE_CHARS_MIN && payload.length <= INVITE_CHARS_MAX,
+    withinMeasuredRange: report.withinMeasuredRange,
     compressedBytes: c.compressedBytes,
     rawBytes: c.rawBytes,
     ratio: c.ratio,
@@ -1377,6 +1737,8 @@ export async function createInvite(
     /** ★ T40：未压缩变体的**实测上界**（压缩档的 600-900 一个字不动） */
     withinUncompressedRange: c.format === 'none' ? payload.length <= INVITE_CHARS_MAX_UNCOMPRESSED : true,
     probes: c.probes ?? [],
+    fallbackReason,
+    payloadFormat: prefer.mode === 'compact' ? 'compact' : 'full',
   };
 }
 
@@ -2052,7 +2414,7 @@ export function waitForIceGathering(
    * 这里的判定，它只给 `readIceServers()` 标注来源；判据 3 的证据面在 `__g5Match.ice()`（`main.ts`）。
    */
   const settings = resolved.settings?.() ?? null;
-  const relayConfigured = readIceServers(settings).relayConfigured;
+  const relayConfigured = readIceServers(settings, false, resolved.credentialRead?.() ?? null).relayConfigured;
   // 已经收集完了：同步返回（**不要**在这种情况下也去排一个计时器）
   if (pc.iceGatheringState === 'complete') return Promise.resolve(take(false, timeoutMs, false, relayConfigured));
   const ticker = resolved.ticker;
@@ -2136,6 +2498,147 @@ export function waitForIceGathering(
       armGraceIfOnlyHost();
     });
   });
+}
+
+/* ================================================================== *
+ * 4.5 ★★ G6/T46：这一局到底走没走中继（`getStats()` 是真值来源）
+ *
+ * ## 为什么值得单独一段
+ *
+ * TURN 中继只在直连打不通时用；一旦用上，**整局的每个包都穿过服务器**（带宽是玩家的成本）。
+ * 而在此之前本仓产出代码**一处都没有**读过 `getStats()` ⇒ 界面上完全看不出这一局是直连
+ * 还是经中继。选协议那一屏上那一行（`src/ui/net-conn-line.ts`）读的就是本段。
+ *
+ * ## 判据
+ *
+ * 规范里"这一对候选正在被用来传数据"的标志是 `candidate-pair` 条目上的两个字段一起成立：
+ * `nominated === true` **且** `state === 'succeeded'`。只有这一对的两个端点的
+ * `candidateType` 才决定"走没走中继"（`relay` = 中继，`host` / `srflx` / `prflx` = 直连）。
+ *
+ * ## 拿不到就如实说"还不知道"
+ *
+ * 没有 `succeeded` 的候选对（`pc` 刚建 / 还在收集）、没有 `getStats`（假件）、
+ * `stats` 里有 `type: 'local-candidate'` 条目缺失 —— 一律回 `kind: 'pending'`。
+ * **不许**回落到"直连"：猜一次"直连"会让玩家看到一条假读数。
+ * ================================================================== */
+
+/** "这一局走没走中继"的三值（`'pending'` = 还没有可用读数，屏上写"建立中…"） */
+export type RelayStatsKind = 'direct' | 'relay' | 'pending';
+
+/** 读 `getStats()` 这一个动作的结论（屏上那一行与测试腿读的都是它） */
+export interface RelayStatsRead {
+  readonly kind: RelayStatsKind;
+  /** 被提名且已成功的那一对的 id（`kind === 'pending'` 时为 `null`） */
+  readonly pairId: string | null;
+  /** 那一对两端的候选 id（读数证据：跨重连会比它变没变） */
+  readonly localCandidateId: string | null;
+  readonly remoteCandidateId: string | null;
+  /** 两端各自的 `candidateType` 原文（`relay` / `host` / `srflx` / `prflx`；读不到为 `null`） */
+  readonly localCandidateType: string | null;
+  readonly remoteCandidateType: string | null;
+}
+
+/** `kind: 'pending'` 的那一份读数（**唯一出处**：别在别处手写第二份同形状的字面量） */
+export function pendingRelayRead(): RelayStatsRead {
+  return {
+    kind: 'pending',
+    pairId: null,
+    localCandidateId: null,
+    remoteCandidateId: null,
+    localCandidateType: null,
+    remoteCandidateType: null,
+  };
+}
+
+/** 中继那一类的名字（`RTCIceCandidateType` 里只有它是"服务器替两端转发"） */
+export const RELAY_CANDIDATE_TYPE = 'relay';
+
+/** 从一条 stats 条目里按字段名取字符串（不在 / 不是字符串 ⇒ `null`，**不抛**） */
+function statsString(entry: Record<string, unknown> | undefined, field: string): string | null {
+  const v = entry?.[field];
+  return typeof v === 'string' && v.length > 0 ? v : null;
+}
+
+/**
+ * ★★ **这一份 `RTCStatsReport` 说的是直连还是经中继**（本段的**唯一**分类函数）。
+ *
+ * 逐条按 `type` 归到三张表里（`candidate-pair` / `local-candidate` / `remote-candidate`），
+ * 再挑出"被提名且已成功"的那一对。**不做任何猜测**：缺哪一块就读不出来。
+ *
+ * ⚠️ 多个 `succeeded` 的候选对时取**最后一条被提名**的（`getStats()` 的遍历顺序里，
+ * 被提名的那一对是此刻真在用的那一条；这一条不参与判据，只是"两份都读得到时取哪一份"的口径）。
+ */
+export function readRelayStats(report: RTCStatsReportLike): RelayStatsRead {
+  const candidates = new Map<string, string>();
+  let pairId: string | null = null;
+  let localId: string | null = null;
+  let remoteId: string | null = null;
+  report.forEach((entry) => {
+    const type = statsString(entry, 'type');
+    if (type === 'local-candidate' || type === 'remote-candidate') {
+      const id = statsString(entry, 'id');
+      const kind = statsString(entry, 'candidateType');
+      if (id !== null && kind !== null) candidates.set(id, kind);
+      return;
+    }
+    if (type !== 'candidate-pair') return;
+    if (entry.nominated !== true || statsString(entry, 'state') !== 'succeeded') return;
+    pairId = statsString(entry, 'id');
+    localId = statsString(entry, 'localCandidateId');
+    remoteId = statsString(entry, 'remoteCandidateId');
+  });
+  const local = localId === null ? null : (candidates.get(localId) ?? null);
+  const remote = remoteId === null ? null : (candidates.get(remoteId) ?? null);
+  const base = {
+    pairId,
+    localCandidateId: localId,
+    remoteCandidateId: remoteId,
+    localCandidateType: local,
+    remoteCandidateType: remote,
+  };
+  if (pairId === null || local === null || remote === null) return { kind: 'pending', ...base };
+  // ★ 判据本体：**任一侧**是 `relay` ⇒ 这一对经中继（两侧都是 relay 也仍然是 relay）
+  const relay = local === RELAY_CANDIDATE_TYPE || remote === RELAY_CANDIDATE_TYPE;
+  return { kind: relay ? 'relay' : 'direct', ...base };
+}
+
+/**
+ * ★ 从一条真连接上读这一刻的结论（`getStats()` 是**异步**的，真件在下一轮微/宏任务里回答）。
+ *
+ * 三种"读不出来"各自如实收口，**都不抛**：
+ *  - 这条连接**没有** `getStats`（假件 / 老实现）⇒ `pending`，`note` 说明原因；
+ *  - `getStats()` **抛了**（连接已经关掉）⇒ `pending` + `note`；界面那一行只显示三值里的一个，
+ *    所以 `note` 只进诊断读数（不改变屏上那一行的判定）。
+ *  - `getStats()` 回的东西不是一份报告（没有 `forEach`）⇒ `pending`。
+ *
+ * 为什么返回 `{ read, note }` 而不是只返回 `RelayStatsRead`：`note` 是"为什么读不出来"的
+ * **人话**，它让"屏上写建立中"这件事可排查（与 `IceGatherResult.note` 同一个用途）。
+ */
+export async function readRelayStatsOf(
+  pc: PeerConnectionLike | null | undefined,
+): Promise<{ readonly read: RelayStatsRead; readonly note: string | null }> {
+  if (pc === null || pc === undefined) {
+    return { read: pendingRelayRead(), note: '这条连接还不存在（`pc` 还没建）。' };
+  }
+  if (typeof pc.getStats !== 'function') {
+    return { read: pendingRelayRead(), note: '这条连接不提供 `getStats()`，读不出走没走中继。' };
+  }
+  let raw: RTCStatsReportLike;
+  try {
+    raw = await pc.getStats();
+  } catch (e) {
+    return { read: pendingRelayRead(), note: `读连接统计失败：${rawErrorText(e)}` };
+  }
+  if (typeof (raw as { forEach?: unknown } | null)?.forEach !== 'function') {
+    return { read: pendingRelayRead(), note: '`getStats()` 没有回一份可遍历的报告。' };
+  }
+  const read = readRelayStats(raw);
+  return {
+    read,
+    note: read.kind === 'pending'
+      ? '还没有"被提名且已成功"的候选对（链路还在建立），所以这一刻读不出直连还是经中继。'
+      : null,
+  };
 }
 
 /** `acceptOffer` 的结论（成功面是"一条可以回示的 answer 描述"） */
@@ -2439,8 +2942,13 @@ export function createBrowserTransport(env?: NetBrowserEnv): NetTransport {
     async init(init: TransportInit): Promise<TransportActionResult> {
       // **幂等**：已经起来过就 no-op（重连路上会被反复调用，见 transport.ts:204）
       if (initDone || pc !== null) return { ok: true };
+      // ★ T50：**先**等这一轮取凭据结算（有上界，见 `ensureCredential` 的说明），再读设置 ——
+      //   否则 `waitForIceGathering` 会在"凭据还在飞"的那一刻读到"没有中继"，把严格档关掉。
+      if (resolved.ensureCredential !== undefined) {
+        try { await resolved.ensureCredential(); } catch { /* 取不到不是错误：降级那一条路接着走 */ }
+      }
       const settings = resolved.settings?.() ?? null;
-      const ice = readIceServers(settings);
+      const ice = readIceServers(settings, false, resolved.credentialRead?.() ?? null);
       const conn = resolved.peerConnection?.({ iceServers: ice.servers }) ?? null;
       if (conn === null) {
         return {
@@ -2779,13 +3287,51 @@ export const NO_SIGNALING_ENDPOINT_MESSAGE = NO_ENDPOINT_MESSAGE;
  * ⚠️ 字段名仍是 `withinMeasuredRange`（调用方 `src/main.ts` 读的就是它）⇒
  * 它的含义收紧成"落在**这一档的**实测区间内"，`min` / `max` 也回**这一档**的区间。
  * 这样屏上那句长度读数不需要知道档位就已经是对的（`inviteLengthText(chars, within)`）。
+ *
+ * ## ★★ G6/T49：紧凑档（v3）用它自己那一组区间（`createInvite` 走精确路径）
+ *
+ * v3 的载荷里没有整段 SDP ⇒ 长度掉到三分之一上下。它要是继续按 600-900 判，**产品自己刚
+ * 产出的**正常码会被屏上说成"不在这一档的实测区间内"（那句话本身按字面仍然是真的，
+ * 但它对玩家是噪音）。
+ *
+ * ⚠️ **本函数只看这一个字符串**：v3 与 v2 的版本号都住在**压缩段里面**（不解压读不到），
+ * 所以它**不能**从这个字符串可靠地判出版本。⇒ 产品路径由 `createInvite()` 走**精确**路径
+ * （它手里有 `prefer.mode`，直接调 `inviteLengthReportOf(payload, compact)`），
+ * 而本函数（缺省 = 不假定紧凑）服务"手上只有一串字符"的调用点。**不猜**。
  */
 export function inviteLengthReport(payload: string): InviteLengthReport {
-  const max = kindOfPayloadText(payload) === 'none' ? INVITE_CHARS_MAX_UNCOMPRESSED : INVITE_CHARS_MAX;
+  return inviteLengthReportOf(payload, false);
+}
+
+/**
+ * ★ G6/T49：**知道这条码是哪一档**时的长度读数（`createInvite` 与大厅那句长度提示用它）。
+ *
+ * ## ★★ 档位判定的优先级：**先载荷版本（v3/v2），再压缩档（none/其余）**
+ *
+ * 评审（2026-09-28 定向复验 P0）在真屏上读到：一条 **476 字符的 v3 `-u` 码**被判成
+ * 「不在这一档的实测区间内…可能被某些聊天工具截断」—— 而 476 正落在 v3 `-u` 自己的实测区间里。
+ * 原因就是这里原来写的是"`none` 优先"：`kindOfPayloadText(payload) === 'none'` 直接选
+ * `INVITE_CHARS_MAX_UNCOMPRESSED`（v2 未压缩档的 2000 上界），紧凑档那一组**根本没被看到**。
+ *
+ * ⇒ 顺序改成：
+ *  1. `compact === true`（v3）⇒ `COMPACT_INVITE_CHARS_MIN/MAX`（不管它压没压：v3 `-u` 实测
+ *     **476**、v3 压缩档实测 **348**，都在这一组里）；
+ *  2. 否则（v2）看压缩档：`'none'` ⇒ `INVITE_CHARS_MIN`-`INVITE_CHARS_MAX_UNCOMPRESSED`；
+ *  3. 其余（v2 压缩档）⇒ 600-900。
+ *
+ * ⚠️ 不传 `compact` 的调用点（`inviteLengthReport()`）仍然只按"压缩档"判 —— 那是**只为旧调用
+ * 保留**的口径：v3 码走它会被归到 v2 那一组区间（v3 的版本号住在压缩段里，不解压读不出来）。
+ * 产品路径两处都传了准确值（`createInvite` 与 `src/main.ts` 那段接线）。
+ */
+export function inviteLengthReportOf(payload: string, compact: boolean): InviteLengthReport {
+  const none = kindOfPayloadText(payload) === 'none';
+  const min = compact ? COMPACT_INVITE_CHARS_MIN : INVITE_CHARS_MIN;
+  const max = compact ? COMPACT_INVITE_CHARS_MAX
+    : (none ? INVITE_CHARS_MAX_UNCOMPRESSED : INVITE_CHARS_MAX);
   return {
     chars: payload.length,
-    withinMeasuredRange: payload.length >= INVITE_CHARS_MIN && payload.length <= max,
-    min: INVITE_CHARS_MIN,
+    withinMeasuredRange: payload.length >= min && payload.length <= max,
+    min,
     max,
   };
 }

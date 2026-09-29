@@ -124,6 +124,28 @@ const BOUNDARY_DECLARATIONS: readonly PrivacyBoundaryDeclaration[] = [
     line: 1,
     requiredText: [/[^。]*不存储/],
   },
+  /**
+   * ★★ **G6/T50（B1）新增的第三句：向签发服务请求中继凭据**。
+   *
+   * 为什么它是新的一条**落点**而不是"并进 relay-sees-ip"：它说的是一件**新的事实**
+   * （客户端会主动向我们自己的服务器发一个请求，而这个请求会记下 IP 与时间），
+   * 与"中继转发流量时露出什么元数据"是两件事。判据必须逐条对得上文案，
+   * 所以表里也要有它这一条（`table-covers-gated-group` 那条腿管的是"组被引用过"，
+   * 管不了"这一**行**有没有声明"）。
+   */
+  {
+    id: 'relay-credential-request',
+    text: 'B1：联机时客户端会向签发服务请求中继凭据，该请求会记录 IP 与时间；凭据只用于转发',
+    group: 'signalAndRelay',
+    line: 2,
+    requiredText: [
+      /向我们的服务器请求一份中继凭据/,
+      /记录请求的 IP 地址与时间/,
+      // 与第 2 行同一条纪律：只出现"转发"不算数，必须**同句**说清这份凭据能换来什么（不能换来内容）
+      /凭据只用于转发/,
+      /不含你的昵称、卡组与对局数据/,
+    ],
+  },
   /* ── §5.9 第 3 行"对端玩家" ── */
   {
     id: 'peer-sees-ip',
@@ -381,6 +403,9 @@ const COPY_PINS: ReadonlyArray<{ group: PrivacyGroupKey; line: number; hash: str
   // ★ G5/T38 重钉：中继那句的正文改了（默认带一台中继 ⇒ 元数据看得到、内容不可读）。
   //   改动理由与人工复核记录见 `src/app/privacy.ts` 的 `signalAndRelay` 注释。
   { group: 'signalAndRelay', line: 1, hash: '50005fd698eadb9b' },
+  // ★★ G6/T50（B1）：新增"向签发服务请求中继凭据（记录 IP 与时间）"那一句。
+  //     由 `tests/app/privacy.test.ts` 自己在红的时候打印出实际哈希，人工复核后抄回。
+  { group: 'signalAndRelay', line: 2, hash: '2a2f7b57c099fed0' },
 ];
 
 /** `组[行号]` 的稳定键（钉住表与真实文案之间的**唯一**连接方式 —— 它不含任何文案本身） */
@@ -519,6 +544,8 @@ const MODULE_PINS: ReadonlyArray<{ key: string; hash: string }> = [
   { key: 'PRIVACY_COPY.signalAndRelay[0]', hash: '930ebfa765c90da0' },
   // ★ G5/T38 重钉（与 `COPY_PINS` 逐字相同）：中继那句改成"默认带中继 + 元数据可见/内容不可读"
   { key: 'PRIVACY_COPY.signalAndRelay[1]', hash: '50005fd698eadb9b' },
+  // ★★ G6/T50（B1）：新增那一句（与 `COPY_PINS` 的 signalAndRelay[2] 逐字相同）
+  { key: 'PRIVACY_COPY.signalAndRelay[2]', hash: '2a2f7b57c099fed0' },
 ];
 
 /** 钉住表的导出路径（**排序**后比较 —— 模块命名空间的键序是实现细节，不是判据） */
@@ -849,7 +876,10 @@ describe('隐私说明文案（§5.9 / §8.1）', () => {
     //    而"这一组该有几条边界"是设计稿 §5.9 第 1、2 行的事实 ⇒ 变化必须由人看一眼。
     //    这个常数是**人工复核闸门**（不是"手写清单代替生成式"）：上面 ① 已经把 id 集合
     //    与 union 双向钉住，这里只补"数量"这一维。
-    expect(gateRows.length, 'signalAndRelay 的边界声明数变了（净增/净减都必须人工复核）').toBe(5);
+    expect(gateRows.length, 'signalAndRelay 的边界声明数变了（净增/净减都必须人工复核）').toBe(6);
+    // ★ G6/T50：新增的那一条（"向签发服务请求凭据"）必须在表里 —— 否则这一**行**文案没有落点
+    expect(gateRows.some((d) => d.id === 'relay-credential-request'), 'T50 新增的凭据那一句没有边界声明')
+      .toBe(true);
     // ③ 下界仍然保留（不是放宽）：抽空该组后**每一条**声明都必须不匹配，一条都不许蒙对；
     //    `assertBoundaryTable` 还会额外产出两条表自身的不匹配，所以这里只能是 `>=` 而不是 `==`。
     expect(mismatches.length, '抽空 signalAndRelay 后，门槛边界竟然还全部命中（落点跑到别组去了）')

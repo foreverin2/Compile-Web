@@ -122,10 +122,12 @@ import {
   peerConnectionOf,
   candidatesOf,
   inviteLengthReport,
+  inviteLengthReportOf,
   readIceServers,
   readInviteFromAddressBar,
   signalingEndpointSetting,
   stripInviteFromAddressBar,
+  appCredentialOf,
   DEFAULT_ICE_SERVERS,
   isRelayUrl,
   turnSettingsAreDefault as turnSettingsAreDefaultOf,
@@ -133,10 +135,22 @@ import {
   type NetBrowserEnv,
   type PeerConnectionLike,
 } from './ui/net-browser';
+// ★★ G6/T50（B1）：中继凭据的取 / 续 / 降级（唯一出处；本文件只做接线与探针）
+import {
+  createTurnCredentialStore,
+  type TurnCredentialRead,
+  type TurnCredentialStore,
+} from './ui/turn-cred';
+import {
+  NET_CONN_LINE_CLASS,
+  netConnText,
+  startNetConnLine,
+  type NetConnLineHandle,
+} from './ui/net-conn-line';
 import { PROTO_VERSION } from './net/protocol';
 // ★ G5 T15：「生成邀请码」等链路就绪那一步要读传输自己的类型（`transport()` 的返回面）
 import type { NetTransport } from './net/transport';
-import { answerPayloadFields } from './net/invite';
+import { answerPayloadFields, COMPACT_PAYLOAD_VERSION } from './net/invite';
 
 const root = document.getElementById('app')!;
 // 启动时注入运行期 nonce（G0）：使任何未显式传 seed 的 createGame() 也不会跨重启重复同一牌序
@@ -303,6 +317,25 @@ let lastArchive: MatchFile | null = null;
  */
 let lobbyClient: LobbyClient | null = null;
 let lobbyMode: 'host' | 'guest' | null = null;
+
+/**
+ * ★★ **G6/T49**：这一局的邀请码 / 回示码带哪一档载荷（`'compact'` = v3 最小必要集，缺省）。
+ *
+ * 它是**探针面**（`#g5probe=1` 的 `__g5Match.setInviteFormat()`）为了做"同一次会话里
+ * 新旧两种码长的对照"而存在的一个可切开关；产品路径**不切它**（一直是 `'compact'`，
+ * 缺凭据时由 `createInvite` 自己退回 v2）。除探针外没有第二个地方写它。
+ */
+let lobbyInviteFormat: 'compact' | 'full' = 'compact';
+
+/**
+ * ★★ **G6/T49**：**加入方读到的**那条邀请码带的是哪一档载荷（`null` = 还没读到）。
+ *
+ * 回示码必须与它**同档**。为什么不能用 `lobbyInviteFormat`：房主那条码在"缺 ICE 凭据 /
+ * 缺候选"时会退回 v2（`createInvite` 的兜底），而加入方那一侧的 `lobbyInviteFormat` 还是
+ * 缺省的 `'compact'` ⇒ 回示码会变成 v3，房主解不开自己那一局的回示码（两端停在 handshaking）。
+ * 这个字段就是"邀请码**实际**用了哪一档"的落点，由 `joined.payload.v` 判。
+ */
+let invitedCodeFormat: 'compact' | 'full' | null = null;
 
 /* ── ★ T11-B：联机硬币屏（D27 把这块屏插在握手中间）──────────────────────────── */
 
@@ -927,6 +960,100 @@ function appendTurnLine(root: HTMLElement): void {
 }
 
 /**
+ * ★★ **G6/T46**：选协议那一屏上那一行"当前连接：…"的**活句柄**（`null` = 此刻屏上没有它）。
+ *
+ * 只被 `appendNetConnLine()` / `disposeNetConnLine()` 两处写（**唯一**的建与收口点），
+ * 而"现在那一行在不在"只由它回答 —— 不给屏上的 DOM 当第二个真相源。
+ */
+let netConnLine: NetConnLineHandle | null = null;
+
+/**
+ * ★★ **G6/T46：选协议那一屏上那一行"当前连接：直连 / 经中继 / 建立中…"**。
+ *
+ * ## 它答的是什么
+ *
+ * TURN 中继只在直连打不通时用；一旦用上，**整局的每个包都穿过服务器**。这一行是
+ * **成本可见性**：用户 2026-09-28 要求"加一行显示『当前连接：直连 / 中继』到选择协议的页面中
+ * 的合适位置，只占一点空间，不要影响到其他组件了"。
+ *
+ * ## 三个口径都在别处，本函数只做接线
+ *
+ *  - **真值**：`readRelayStatsOf(pc)`（`src/ui/net-browser.ts`）—— 真 `RTCPeerConnection`
+ *    的 `getStats()`，挑 `nominated === true && state === 'succeeded'` 那一对，看两端
+ *    `candidateType` 有没有 `relay`。**拿不到就回"建立中…"**（不许猜成"直连"）；
+ *  - **文案**：`netConnText(kind)`（`src/ui/net-conn-line.ts`）；
+ *  - **几何**：`startNetConnLine()` 的行内样式（`position: fixed` + `pointer-events: none`
+ *    ⇒ 不挤走任何组件、不抢点击）。**加载这一行不许动 `src/ui/render.ts`**（红线）——
+ *    那一屏是它画的，本函数在渲染之后补一个浮层（与 `appendTurnLine` 同款）。
+ *
+ * ## 为什么只在**草稿相**画
+ *
+ * 用户点名的是"选择协议的页面"。对局相（`renderNetBoard` 那一支）已经有一行掉线提示
+ * （`.net-link-line`，G5/T13），多一行归本任务之外 ⇒ 这里用 `state.phase === 'draft'` 卡住。
+ *
+ * ## 幂等与收口（**收口不在这里**，见 `rerender()` 第一句）
+ *
+ * 每一帧重画都重起一次（`root.textContent = ''` 把上一帧那个节点抹掉了）⇒ 收口由
+ * `rerender()` 的**第一句** `disposeNetConnLine()` 统一做（放在所有早退分支**之前**）。
+ * 本函数自己也先收一次：它**只在草稿相那一支**被调到，而"上一条是谁建的、现在还在不在"
+ * 只由 `netConnLine` 这一个句柄回答 ⇒ 这里再收一次是**幂等**的，防的是将来有人把本函数
+ * 挪到别的分支里调用（那时 `rerender()` 第一句仍然覆盖得到，这一句只是不让它叠出第二行）。
+ */
+function appendNetConnLine(root: HTMLElement): void {
+  disposeNetConnLine();
+  if (netGame === null) return; // 不是联机局 ⇒ 不画（热座页一个字都不变）
+  if (state.phase !== 'draft') return;
+  const transport = lobbyClient?.transport() ?? null;
+  netConnLine = startNetConnLine({
+    root,
+    peerConnection: () => (transport === null ? null : peerConnectionOf(transport)),
+    intervalMs: NET_CONN_LINE_POLL_MS,
+  });
+}
+
+/** 把上一帧那一行收掉（停轮询 + 摘节点）。**幂等**；`rerender()` 的第一句无条件调它。 */
+function disposeNetConnLine(): void {
+  netConnLine?.dispose();
+  netConnLine = null;
+}
+
+/**
+ * ★★ **这一行此刻在屏上的原文 + 它在 DOM 上的读数**（`#g5probe=1` 的只读探针面）。
+ *
+ * 为什么要有它：判据 1/3/4 的读数必须**来自真浏览器**（`getStats()` 与矩形都只在真页面里
+ * 存在），而本文件在 node 里 import 不了 ⇒ 与 `__g5Match` 同款，给真浏览器门一个只读口。
+ * **只读**：它不改任何状态、不驱动任何流程；`text` 直接从屏上那个节点读（不是另算一份），
+ * 于是"屏上是什么"与"探针报什么"不可能漂移。
+ */
+function netConnLineProbe(): {
+  readonly text: string | null;
+  readonly kind: string | null;
+  readonly rect: { readonly x: number; readonly y: number; readonly w: number; readonly h: number } | null;
+  readonly display: string | null;
+} | null {
+  const el = root.querySelector<HTMLElement>(`.${NET_CONN_LINE_CLASS}`);
+  if (el === null) return null;
+  const text = el.textContent ?? null;
+  const r = el.getBoundingClientRect();
+  return {
+    text,
+    // 三句字面各自对应哪一个 kind（屏上原文 → 三值；`null` = 屏上那句话不在三个字面里）
+    kind: text === null ? null : (['relay', 'direct', 'pending'] as const).find((k) => netConnText(k) === text) ?? null,
+    rect: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) },
+    display: el.style.display === '' ? null : el.style.display,
+  };
+}
+
+/**
+ * 这一行多久重读一次 `getStats()`（毫秒）。
+ *
+ * 为什么必须**轮询**：链路换掉（`restartIce()` / 重连）这件事**没有**任何回调会通知界面
+ * （本仓一处都没绑 `onicecandidate` 那一族），而 `getStats()` 只回答"此刻"⇒ 不轮询就永远
+ * 停在第一次读到的那个形态（判据 4"重连要跟着变"会假绿）。1 秒一次只读、无副作用。
+ */
+const NET_CONN_LINE_POLL_MS = 1000;
+
+/**
  * ★ 跨端状态指纹的**读取口**（真浏览器门 `tools/browser-truth-lobby-cdp.mjs` 用它）。
  *
  * ## 为什么要有它，以及为什么它只能是"只读的一根函数"
@@ -1058,8 +1185,7 @@ function exposeMatchProbe(): void {
       /** 对局相那一小撮读数（`main.ts` 的自动推进只碰这几样；门禁读它不必解析整串） */
       turn(): { phase: string; step: string; turnPlayer: number; winner: number | null; transitioning: boolean };
       /** 驱动侧读数（只给门禁排查用）：应用步数 / 队列里还压着几帧 / 最近一次失败 */
-      drive(): { applied: number; pending: number; failure: string | null };
-      /** 关掉本机自动推进（见 `autoAdvanceOff`）；返回关掉之前的状态 */
+      drive(): { applied: number; pending: number; failure: string | null };      /** 关掉本机自动推进（见 `autoAdvanceOff`）；返回关掉之前的状态 */
       noAutoAdvance(): boolean;
       /** 设/读自动推进开关（门禁要在"等它推进"与"关掉它"之间来回切） */
       setAutoAdvance(on: boolean): boolean;
@@ -1068,12 +1194,21 @@ function exposeMatchProbe(): void {
       advanceOnce(): { ok: boolean; why: string; op: number; seat: number; turnPlayer: number; failure?: string | null; actions: number; submit: string; called: number };
       /**
        * ★★ **G5 T13-A：重发链的只读读数**（门禁的"卡在半路的那条消息真的被重发"靠它）。
-       *
        *  - `redriven`：本端链路上"按相位重发在途消息"**真的发出去了**几次（`LobbyClient.redrivenCount()`）；
        *  - `phase`：会话层此刻的相位（没有链路时 `'idle'`）；
        *  - `link`：传输状态；`needsResync` / `suppressCoin`：重连链路的两个读数。
        */
       netLink(): { redriven: number; phase: string; link: string; needsResync: boolean; suppressCoin: boolean };
+      /** ★ G6/T49：这一局的邀请码 / 回示码带哪一档载荷（只读） */
+      inviteFormat(): 'compact' | 'full';
+      /** ★ G6/T49：切下一档载荷格式（**门禁专用**；见 `lobbyInviteFormat` 的说明） */
+      setInviteFormat(format: string): 'compact' | 'full';
+      /** ★ G6/T49：再产一条邀请码并只回报它的字符数（**门禁专用**；见实现上的说明） */
+      inviteProbe(format: string): Promise<
+        { readonly ok: true; readonly chars: number; readonly head: string; readonly compact: boolean }
+        | { readonly ok: false; readonly message: string }
+      >;
+      /** ★ P0 追查：同一次会话里"真 SDP vs 重建 SDP"的 relay-only A/B（**门禁专用**，只读） */
       /**
        * ★★ **G5 T14 修复轮：入站帧四环的只读读数**（定位"收到帧却不重画"用；见实现上的说明）。
        */
@@ -1153,7 +1288,40 @@ function exposeMatchProbe(): void {
         relaySource: 'player' | 'builtin' | 'none';
         /** ★ 这三项**没被玩家动过**（与产品默认预填值逐字相同）—— 判据 3 的证据靠它分辨 */
         settingsAreDefault: boolean;
+        /** ★ G6/T50：没有可用中继时的原因（`null` = 有中继）—— 判据 3 的证据面 */
+        relayUnavailableReason: 'credential-unavailable' | 'not-configured' | null;
+        /** ★ G6/T50：没换到凭据的那四种原因之一（`null` = 不适用） */
+        relayCredentialFailure: 'timeout' | 'rejected' | 'unreachable' | 'malformed' | null;
+        /** ★ G6/T50：这一份里的凭据是"服务端换来的"还是"玩家自己填的"（`null` = 没有） */
+        relayCredentialSource: 'app' | 'player' | 'builtin-fallback' | null;
       };
+      /**
+       * ★★ **G6/T50（B1）：中继凭据的只读读数**（判据 3/1 的证据面）。
+       *
+       * 只读（不取、不续、不写状态）：`available` / `reason` 就是**这一刻** `readIceServers`
+       * 会看到的那一份；`attempts` / `issued` 是真发出去过几次请求的计数。
+       */
+      turnCred(): {
+        endpoint: string;
+        available: boolean;
+        reason: 'timeout' | 'rejected' | 'unreachable' | 'malformed' | 'not-configured' | null;
+        detail: string | null;
+        /** 用户名前 12 个字符（`<expiry>:<scope>` 的头部；**不是**凭据原文） */
+        usernameHead: string | null;
+        ttlSeconds: number | null;
+        attempts: number;
+        issued: number;
+        servedFromCache: number;
+        lastFailureDetail: string | null;
+        /** ★ T50 诊断：取凭据这条线上的几个时刻（页面启动起算的毫秒） */
+        timeline: readonly string[];
+      };
+      /** ★ G6/T50：**门禁专用**：把签发服务指到别的地址（默认路径读不到也改不了） */
+      setTurnCredEndpoint(url: string): string;
+      /** ★ G6/T50：加入方那条邀请码解开了没有（只读） */
+      lobbyJoinedOk(): boolean | null;
+
+
       /**
        * ★★ **G5/T38：走真产品的「建房 → 生成邀请码」那条路，把本侧连接描述与候选交出来**
        * （真浏览器判据 2 用）。
@@ -1172,6 +1340,19 @@ function exposeMatchProbe(): void {
         invitePayloadLength: number;
         error: string | null;
       }>;
+      /**
+       * ★★ **G6/T46：选协议那一屏上那一行"当前连接：…"的只读读数**。
+       *
+       * 为什么必须由产品代码交出来：`text` 是**屏上那个节点**此刻的原文（不是另算一份），
+       * 而"那一行到底在不在、显示没显示、占多大一块"只有在**真浏览器**里才量得到
+       * （本文件在 node 里 import 不了）⇒ 与 `__g5Match` 同族的一个只读口。
+       */
+      connLine(): {
+        readonly text: string | null;
+        readonly kind: string | null;
+        readonly rect: { readonly x: number; readonly y: number; readonly w: number; readonly h: number } | null;
+        readonly display: string | null;
+      } | null;
     };
   };
   g.__g5Match = {
@@ -1207,7 +1388,12 @@ function exposeMatchProbe(): void {
      */
     ice: () => {
       const settingsAreDefault = turnSettingsAreDefault();
-      const read = readIceServers(netSettings, settingsAreDefault);
+      const handled = turnCredentialRead();
+      const read = readIceServers(
+        { ...netSettings, ...(appCredentialOf(handled) ?? {}) },
+        settingsAreDefault,
+        handled,
+      );
       return {
         settings: { ...netSettings },
         servers: read.servers,
@@ -1215,8 +1401,58 @@ function exposeMatchProbe(): void {
         relayIncomplete: read.relayIncomplete,
         relaySource: read.relaySource,
         settingsAreDefault: read.settingsAreDefault,
+        // ★ G6/T50：降级那两格（判据 3 的证据面就是它们）
+        relayUnavailableReason: read.relayUnavailableReason ?? null,
+        relayCredentialFailure: read.relayCredentialFailure ?? null,
+        relayCredentialSource: read.relayCredentialSource ?? null,
       };
     },
+    /**
+     * ★★ **G6/T50：中继凭据的只读读数**（判据 3 的另一半证据面）。
+     *
+     * 只读：不取、不续、不写任何状态 —— 它报的就是**这一刻** `readIceServers` 会看到的那一份。
+     * `attempts` / `issued` 是**真发出去过几次请求**的计数（"取不到时是不是真的试过"靠它）。
+     */
+    turnCred: () => {
+      const read = turnCredentialRead();
+      const stats = turnCredStore.stats();
+      const failure = turnCredStore.lastFailure();
+      return {
+        endpoint: turnCredEndpoint,
+        /** ★ 端点没配（空串）⇒ `false` + `reason: 'not-configured'`（B1 上线前那一档） */
+        available: read === undefined ? false : read.available,
+        reason: read === undefined ? 'not-configured' : (read.available ? null : read.reason),
+        detail: read === undefined || read.available ? null : (read.detail ?? null),
+        usernameHead: read !== undefined && read.available ? read.credential.username.slice(0, 12) : null,
+        ttlSeconds: read !== undefined && read.available ? read.credential.ttlSeconds : null,
+        attempts: stats.attempts,
+        issued: stats.issued,
+        servedFromCache: stats.servedFromCache,
+        lastFailureDetail: failure === null ? null : (failure.detail ?? null),
+        /** ★ T50 诊断：取凭据这条线上的几个时刻（页面启动起算的毫秒） */
+        timeline: [...turnCredTimeline],
+      };
+    },
+    /**
+     * ★★ **G6/T50：探针专用**：把签发服务指到别的地址（只在 `#g5probe=1` 时可达）。
+     *
+     * 为什么需要它：门禁要跑**两档** —— "凭据取得到"（起一个真签发服务）与"取不到 ⇒ 直连降级"
+     * （让它 500 / 停掉）。而临时 vite 没有 `/turn-cred` 反代，所以探针得能把地址指过去。
+     * 默认路径（不带那个查询片段）**读不到也改不了**（与 `setInviteFormat` 同款纪律）。
+     */
+    setTurnCredEndpoint: (url: string) => {
+      // ★ 空串 = "没配"（B1 上线前那一档）⇒ 照实存，别偷偷退化成 '/turn-cred'
+      turnCredEndpoint = typeof url === 'string' ? url.trim() : '';
+      return turnCredEndpoint === '' ? '(没配)' : turnCredEndpoint;
+    },
+
+    /** ★ G6/T50：加入方那条邀请码解开了没有（只读；没建大厅客户端时为 `null`） */
+    lobbyJoinedOk: () => {
+      const st = lobbyClient?.state() ?? null;
+      if (st === null) return null;
+      return st.joined !== null && st.joined.ok === true;
+    },
+
     /**
      * ★★ **G5/T38：真产品那条「生成邀请码」的路**（见类型上那一段）。
      *
@@ -1239,9 +1475,14 @@ function exposeMatchProbe(): void {
       const sdp = goodDesc !== null && typeof goodDesc.sdp === 'string' ? goodDesc.sdp : '';
       /** 早退标记在传输那一面是可选字段（有的实现不报它）⇒ 只做**如实**读取，不猜 */
       const stoppedEarly = (goodDesc as { stoppedEarly?: unknown } | null)?.stoppedEarly === true;
+      const handled = turnCredentialRead();
       return {
         ok: okInvite !== null,
-        remoteCandidates: readIceServers(netSettings, turnSettingsAreDefault()).servers,
+        remoteCandidates: readIceServers(
+          { ...netSettings, ...(appCredentialOf(handled) ?? {}) },
+          turnSettingsAreDefault(),
+          handled,
+        ).servers,
         ice: sdp.length === 0 ? [] : [...candidatesOf(sdp)],
         stoppedEarly,
         timedOut: goodDesc?.timedOut === true,
@@ -1249,6 +1490,47 @@ function exposeMatchProbe(): void {
         invitePayloadLength: okInvite === null ? -1 : okInvite.payload.length,
         error: after !== null && !after.ok ? after.message : null,
       };
+    },
+    /**
+     * ★ G6/T46：那一行"当前连接：…"的只读读数（见类型上那一段）。
+     *
+     * 实现就是上面那个 `netConnLineProbe()`（**屏上原文**由它从 DOM 读，不另算一份）；
+     * 这一句只是把它挂到探针口上，**不写**任何状态。
+     */
+    connLine: () => netConnLineProbe(),
+    /**
+     * ★★ **G6/T49：这条码带哪一档载荷**（只读；见 `lobbyInviteFormat`）。
+     *
+     * 判据 1 要的是**同一次会话的两种码长对照**（新格式 vs 老格式）—— 光有屏幕上的字符数
+     * 分不出"差的是格式还是那一次收集到的候选不一样"，所以这里给一个可切的口：
+     * `setInviteFormat('full')` 之后**下一条**邀请码走 v2（整段 SDP），再切回来走 v3。
+     * 默认 `'compact'`（= 产品路径），`#g5probe=1` 之外**读不到也切不了**。
+     */
+    inviteFormat: () => lobbyInviteFormat,
+    setInviteFormat: (f: string) => {
+      lobbyInviteFormat = f === 'full' ? 'full' : 'compact';
+      return lobbyInviteFormat;
+    },
+    /**
+     * ★★ **G6/T49：只读地再产一条邀请码**（判据 1 的"同一次会话新旧两种码长"靠它）。
+     *
+     * 它走的是**玩家那个按钮同一个函数**（`makeLobbyInvite()`），只多做两件事：
+     * ① 把这一档暂时切成 `format`；② 写完 `client.state().invite` 之后把字符数读回来。
+     * 之后**恢复**原来那一档。为什么不能在屏上连点两次按钮：那一屏生成过之后**换屏**
+     * （不再有「生成邀请码」那个按钮），而长度对照要的是同一页面、同一份字段下两档的字符数。
+     */
+    inviteProbe: async (format: string) => {
+      const before = lobbyInviteFormat;
+      lobbyInviteFormat = format === 'full' ? 'full' : 'compact';
+      try {
+        await makeLobbyInvite();
+        const after = lobbyClient?.state().invite ?? null;
+        return after !== null && after.ok
+          ? { ok: true, chars: after.payload.length, head: after.payload.slice(0, 16), compact: after.compact === true }
+          : { ok: false, message: after === null ? '这一条没产出来' : after.message };
+      } finally {
+        lobbyInviteFormat = before;
+      }
     },
     /**
      * ★★ **G5 T14 修复轮：把"入站帧到没到、会话链接没接到"这四环各自数出来**（只读）。
@@ -1649,16 +1931,126 @@ function newSessionId(): string {
  * 不会把链路弄坏。
  */
 function defaultTurnSetting(): { turnUrl: string; turnUsername: string; turnCredential: string } {
+  /**
+   * ★★ **G6/T50（B1）：这里不再预填凭据**（原来预填的是 T38 那对**长期**用户名/密码）。
+   *
+   * 为什么必须清空（三条，都是 T50 判据）：
+   *  1. **凭据不泄漏**（判据 5）：那对凭据打在前端 JS 里 = 任何人 `grep` 一下就能白嫖；
+   *  2. **降级要真的生效**（判据 3）：预填了"三项齐全"，`readIceServers` 的"玩家分支"会
+   *     一直赢，于是"取不到凭据 ⇒ 直连"那条路在产出代码里**根本走不到**
+   *     （变异 M2 正是把降级改成"用旧的硬编码凭据顶着"）；
+   *  3. **凭据在运行时换**：中继地址照旧来自 `DEFAULT_ICE_SERVERS`（唯一出处），
+   *     凭据由 `turnCredStore` 从签发服务取（见下面那一格）。
+   *
+   * ⚠️ 返回值**保留 `turnUrl`**（那台 coturn 的地址是公开信息，也仍然是大厅输入框里的预填值），
+   * 但 `turnUsername` / `turnCredential` 回**空串** ⇒ `readIceServers` 的"三项齐全"不成立，
+   * 产品那一份凭据才有机会生效；玩家真要在高级设置里填自己的中继，照旧以他的为准。
+   */
   const relay = DEFAULT_ICE_SERVERS.find((s) => s.urls.some(isRelayUrl));
   const url = relay?.urls.find(isRelayUrl) ?? '';
-  return {
-    turnUrl: url,
-    turnUsername: typeof relay?.username === 'string' ? relay.username : '',
-    turnCredential: typeof relay?.credential === 'string' ? relay.credential : '',
-  };
+  return { turnUrl: url, turnUsername: '', turnCredential: '' };
 }
 
 const netSettings: { turnUrl: string; turnUsername: string; turnCredential: string } = defaultTurnSetting();
+
+/* ──────────────────────────────────────────────────────────────────── *
+ * ★★ G6/T50（B1）：中继凭据的接线（取 / 续 / 降级）
+ *
+ * ## 三件事各住在哪
+ *
+ *  1. **取与续**：`turnCredStore`（`src/ui/turn-cred.ts`）。它有 2 秒上界、按 `ttl` 提前
+ *     10 秒续期、失败**绝不写进缓存**（下一次会再试）；
+ *  2. **合进 `iceServers`**：`readIceServers` 一处判定（玩家三项齐全 ⇒ 玩家的赢；否则用
+ *     产品凭据；再不然**整个摘掉中继** = 直连降级）；
+ *  3. **屏上那句话**：`net-browser.ts` 的 `relayUnavailableNoteOf`（本文件一个字都不写）。
+ *
+ * ## 为什么要"开局前先 refresh 一次"
+ *
+ * `readIceServers` / `waitForIceGathering` 都是**同步**的（前者被后者调），而取凭据是异步的
+ * （有上界）。所以时序是：进大厅 / 每次生成邀请码之前**先** `refresh()`（在飞的那一次会搭车，
+ * 不会重复请求），之后同步读到的就是"这一刻手上有什么"。
+ * `init()` 也**不等**它 —— 那是 T50 §1(2) 的硬要求：取不到凭据**不许**把"生成邀请码"卡死。
+ * ──────────────────────────────────────────────────────────────────── */
+
+/**
+ * 签发服务的地址。
+ *
+ * ★★ **缺省是空串 = "没配"**（这是**部署安全**的缺省，不是忘了填）。
+ *
+ * 为什么不能缺省 `'/turn-cred'`（协调侧 2026-09-28 的裁决）：T50 已把静态凭据从 `src/` 与
+ * `public/` 清空，而线上那台 coturn 现在还是 `lt-cred-mech` 静态用户 ⇒ 一旦把这版发到
+ * `http://8.130.97.243/`，客户端会去请求一个**还不存在的** `/turn-cred`、拿不到凭据
+ * ⇒ **线上中继当场不可用、跨网直接废**。用户明令"先在本机做通 B1、**不切线上 coturn**"
+ * ⇒ **发版必须保持今天的行为** ⇒ 端点没配时走 `net-browser.ts` 的 B1 上线前兜底
+ * （那台 coturn + 一对临时静态凭据，代码里显式标了"上线时与端点一起删"）。
+ *
+ * **上线时**把它取成同源 `'/turn-cred'`（runbook 里 nginx 反代的那个），并与"删静态兜底 +
+ * 切 coturn（并行第二实例）"**同一批**做 —— 见 `server/turn-cred/RUNBOOK.md` §0 的三步。
+ */
+let turnCredEndpoint = '';
+
+/**
+ * ★★ **探针专用：允许门禁把签发服务指到别的地址**（`#g5probe=1&turnCred=<url>`）。
+ *
+ * 为什么必须让门禁能改它：判据 6 的两道真浏览器门要跑**两档** —— "签发服务在、凭据取得到"
+ * 与"取不到 ⇒ 直连降级"。生产默认是同源 `/turn-cred`（runbook 里 nginx 就是这么反代的），
+ * 而临时 vite 上**没有**那个反代 ⇒ 门禁得能把它指到一个真在监听的本地服务上。
+ *
+ * 位置：**只认带 `g5probe=1` 的 hash**（与 `setTurnCredEndpoint`、`setInviteFormat` 同款纪律：
+ * 默认路径读不到也改不了）。参数值原样使用（`/turn-cred` 或完整 URL 都行）。
+ */
+function turnCredEndpointFromHash(): string | null {
+  if (!window.location.hash.includes('g5probe=1')) return null;
+  const m = /[#&]turnCred=([^&]+)/.exec(window.location.hash);
+  if (m === null) return null;
+  try { return decodeURIComponent(m[1]); } catch { return m[1]; }
+}
+{
+  const fromHash = turnCredEndpointFromHash();
+  if (fromHash !== null && fromHash.length > 0) turnCredEndpoint = fromHash;
+}
+
+/** 真浏览器里的计时与时钟（`turn-cred.ts` 的注入面；它自己零参调用时也用这一对） */
+const turnCredStore: TurnCredentialStore = createTurnCredentialStore({
+  settings: () => ({ endpoint: turnCredEndpoint }),
+});
+
+/**
+ * 这一刻的产品凭据读数（**同步、只读**）。
+ *
+ * ★★ **端点没配（空串）⇒ 返回 `undefined`** —— 那是"这个宿主没接签发服务"的**唯一**表达方式，
+ * `net-browser.ts` 据此走 B1 上线前的兜底（保留中继、保持今天的行为）。
+ * 端点配了但取不到 ⇒ 返回一份 `available: false` 的读数 ⇒ **真的降级成直连**。
+ */
+function turnCredentialRead(): TurnCredentialRead | undefined {
+  return turnCredEndpoint.length === 0 ? undefined : turnCredStore.read();
+}
+
+/**
+ * ★ **开局前取一次凭据**（幂等：缓存还新就复用，在飞就搭车）。
+ *
+ * **绝不 await 它来卡流程**：调用点都是 `void prefetchTurnCredential()` —— 上界（2 秒）
+ * 由 `turn-cred.ts` 自己管，而"没取到"这件事已经被降级路径接住了（屏上说一句、ICE 里没有中继）。
+ */
+function prefetchTurnCredential(): Promise<TurnCredentialRead | undefined> {
+  // ★ 端点没配（B1 上线前）⇒ 不去取：那一段的行为是"内置那台 + 临时静态凭据"（见 net-browser.ts）
+  if (turnCredEndpoint.length === 0) return Promise.resolve(undefined);
+  const p = turnCredStore.refresh();
+  void p.then((r) => {
+    turnCredTimeline.push(`settled:${r.available ? 'ok' : r.reason}@${String(Date.now() - bootAt)}`);
+  }, () => { turnCredTimeline.push(`threw@${String(Date.now() - bootAt)}`); });
+  return p;
+}
+
+/** 页面启动时刻（诊断读数用的相对时间基准；`turnCredTimeline` 只给探针看） */
+const bootAt = Date.now();
+/**
+ * ★ **T50 诊断读数**（只给 `#g5probe=1` 的探针看）：取凭据这条线上的几个时刻。
+ *
+ * 为什么需要它：真浏览器门 ①-a 那一格量的是"有中继 ⇒ 等满上界"，而"有没有中继"取决于
+ * 取凭据**什么时候**结算。只报最终读数会分不清"产品没等"与"夹具没把凭据说服"（实测踩过）。
+ */
+const turnCredTimeline: string[] = [];
 
 /**
  * ★★ **G5/T38：玩家到底改没改过那三项**（探针与判据 3 的证据面）。
@@ -1710,11 +2102,39 @@ function sessionIdOfJoinedInvite(): string {
  */
 function lobbyEnv(): NetBrowserEnv {
   return {
-    settings: () => netSettings,
+    /**
+     * ★★ **G6/T50：这一份设置 = 玩家三项 + 服务端换来的那一份凭据**（合成**一处**）。
+     *
+     * 为什么必须在这里合：`readIceServers(settings, …)` 的入参就是这一份设置，而
+     * `createBrowserTransport.init()`（决定"这一轮有没有中继"）与 `waitForIceGathering`
+     * （决定"要不要等 relay 到手"）读的**都是它**。只把凭据交给大厅那一屏的 `ice()`
+     * 就会出现"探针说 `relayConfigured: true`，而真实 ICE 列表里一条 relay 都没有"
+     * （T50 实测踩过：`init` 那一侧读到的仍是空凭据 ⇒ 按 1.5 秒宽限放行）。
+     *
+     * 合成是**每次读的时候算**（`turnCredentialRead()` 是同步只读）：于是"续期之后自动用新的"
+     * 不需要任何额外的通知机制。
+     */
+    settings: () => ({ ...netSettings, ...(appCredentialOf(turnCredentialRead()) ?? {}) }),
     // ★ I-2：等 ICE 收集必须有上界，而计时在本仓一律注入
     ticker: lobbyTicker,
     // ★ I-1：真传输在 `init()` 里把"刚造出来的那条连接"交回来，房主那格才拿得到它
     onPeerConnection: (pc) => { hostPeerConnection = pc; },
+    /**
+     * ★★ **G6/T50（B1）**：这一刻手上有没有中继凭据。
+     *
+     * 它是**同步只读**的（取的那一步由 `prefetchTurnCredential()` 在开局前做掉）——
+     * 于是 `readIceServers`（同一次 `init()` 里被调两次）看到的是同一份凭据，
+     * 而"取不到 ⇒ 降级成直连"这条判定在产出路径上真的走得到。
+     */
+    credentialRead: () => turnCredentialRead(),
+    /**
+     * ★★ **G6/T50：`init()` 里等这一轮取凭据结算**（有上界 —— 2 秒那一档由 `turn-cred.ts` 保证）。
+     *
+     * 为什么必须有：`waitForIceGathering` 与 `init()` 读的是**同一个** `relayConfigured`，
+     * 而取凭据是异步的。不等它就会出现"凭据在飞 ⇒ 读到没有中继 ⇒ 按 1.5 秒宽限放行 ⇒
+     * 邀请码里一条 relay 都没有"，而屏上还显示 `relayConfigured: true`（实测就是这个症状）。
+     */
+    ensureCredential: () => prefetchTurnCredential(),
     /**
      * ★★ **G5 T13-A：探针专用的掐线钩子**（只在 `#g5probe=1` 时打开）。
      *
@@ -1782,7 +2202,12 @@ function lobbyEntryState(): LobbyState {
     transport: 'idle',
     peer: null,
     endpoint: signalingEndpointSetting(lobbyEnv()),
-    ice: readIceServers(netSettings),
+    // ★ G6/T50：入口那一屏也要如实报"这一轮有没有中继"（与 `__g5Match.ice()` 同一份合成）
+    ice: readIceServers(
+      { ...netSettings, ...(appCredentialOf(turnCredentialRead()) ?? {}) },
+      turnSettingsAreDefault(),
+      turnCredentialRead(),
+    ),
     advancedOpen: false,
     waitExpired: null,
     error: null,
@@ -2244,8 +2669,9 @@ function renderLobbyFrame(): void {
     startHost: () => { startLobby('host'); },
     startJoin: () => { startLobby('guest'); },
     makeInvite: () => { void makeLobbyInvite(); },
-    inviteLength: (payload: string) => {
-      const r = inviteLengthReport(payload);
+    inviteLength: (payload: string, compact?: boolean) => {
+      // ★ G6/T49：`compact` 由大厅从 `MakeInviteResult` 带过来（版本号住在压缩段里，看字符判不出来）
+      const r = inviteLengthReportOf(payload, compact === true);
       return inviteLengthText(r.chars, r.withinMeasuredRange);
     },
     qrNote,
@@ -2267,6 +2693,7 @@ function renderLobbyFrame(): void {
     // ★ C3：回示码的两个入口（产出代码里已经有 makeLobbyAnswerCode / applyLobbyAnswerCode，
     //   C 轮之前它们**零调用者** ⇒ 玩家在界面上看不到这条路）
     makeAnswerCode: () => { void makeLobbyAnswerCode(); },
+
     applyAnswerCode: (code: string) => { void applyLobbyAnswerCode(code); },
   });
 }
@@ -2490,6 +2917,15 @@ function attachLobbyReconnect(client: LobbyClient): void {
  */
 function startLobby(role: 'host' | 'guest'): void {
   lobbyMode = role;
+  /**
+   * ★★ **G6/T50（B1）：进大厅就先换一份中继凭据**（不 await —— 上界 2 秒由 `turn-cred.ts` 管）。
+   *
+   * 为什么放在这里而不是"点生成邀请码时再取"：玩家在大厅里可能先看设置、先读地址栏里的邀请码，
+   * 早点开始取 ⇒ 真正要用的时候大概率已经在手上了（`refresh()` 幂等，重复调用不会重复请求）。
+   */
+  void prefetchTurnCredential();
+  // ★ G6/T49：这一局还没读到任何邀请码 ⇒ "加入方那一条是哪一档"归零（下一局不带着上一局的档位）
+  invitedCodeFormat = null;
   // ★ T11-B：这一局的硬币屏还没画过（`renderLobbyFrame` 只画一次，见那里的说明）
   lobbyCoinShown = null;
   // ★ 修复轮：进大厅这一屏 ⇒ "这一局该重来"那个读数归零
@@ -2542,9 +2978,16 @@ function startLobby(role: 'host' | 'guest'): void {
       createTransport: () => createBrowserTransport(lobbyEnv()),
       signalingEndpoint: signalingEndpointSetting(lobbyEnv()),
       readSettings: () => netSettings,
+      // ★ G6/T50（B1）：大厅的 `iceOf()` 要看到"服务端换来的那一份"（判定仍在 readIceServers 一处）
+      credentialRead: () => turnCredentialRead(),
       buildInvite: async (draft: LobbyDraftInput) => {
-        const r = await createInvite({ ...draft }, lobbyEnv());
-        return r.ok ? { ok: true, payload: r.payload, link: r.link } : { ok: false, message: r.message };
+        // ★ G6/T49：缺省走**紧凑档**（v3）；缺凭据时 `createInvite` 自己退回 v2，
+        //   并把"为什么退"写进 `fallbackReason`。`payloadFormat` 一路带到屏上那句长度读数。
+        //   `lobbyInviteFormat` 是探针面为了让"同一次会话里新旧两档码长"可比而留的开关。
+        const r = await createInvite({ ...draft, payloadFormat: lobbyInviteFormat }, lobbyEnv());
+        return r.ok
+          ? { ok: true, payload: r.payload, link: r.link, compact: r.payloadFormat === 'compact' }
+          : { ok: false, message: r.message };
       },
       // ★ **真解压（两步）**（修复轮 A1）：`decodeBase64Url` 只做 base64url 解码，
       //   之后**必须**再走一次 `decompressBytes`（真解压）—— 只做第一步会让纯层
@@ -2600,7 +3043,13 @@ function startLobby(role: 'host' | 'guest'): void {
         });
         const enc = await createInvite(
           // ★ T40：`preferKind` = 邀请码那一档（这条回示码必须让房主解得开）
-          { ...fields, originAndPath: currentOriginAndPath(), ...(kind === null ? {} : { preferKind: kind }) },
+          // ★ G6/T49：`payloadFormat` 与**收到的那条邀请码**同一档（`invitedCodeFormat`）——
+          //   房主那条码可能是"缺凭据 ⇒ 退回 v2"的，照 `lobbyInviteFormat` 抄会得到一条
+          //   房主解不开的 v3 回示码（两端停在 handshaking，2026-09-28 门禁里抓到过）。
+          //   还没读到邀请码时（`null`）退回本机的 `lobbyInviteFormat`（= 产品缺省 compact）。
+          { ...fields, originAndPath: currentOriginAndPath(),
+            payloadFormat: invitedCodeFormat ?? lobbyInviteFormat,
+            ...(kind === null ? {} : { preferKind: kind }) },
           lobbyEnv(),
         );
         if (!enc.ok) return { ok: false, message: enc.message };
@@ -2912,6 +3361,14 @@ function lobbyLinkFailureText(
 async function makeLobbyInvite(): Promise<void> {
   const client = lobbyClient;
   if (client === null) return;
+  /**
+   * ★★ **G6/T50（B1）：开局前把凭据换到手**（进大厅时已经起过一次，这里是"再确认一次"）。
+   *
+   * ⚠️ 这里 `await` 它**不会卡住流程**：上界是 2 秒（`turn-cred.ts` 的 `timeoutMs`），
+   * 而且取不到也只是降级成直连（屏上说一句），不失败、不阻塞。
+   * 放在 `connect()` **之前**：`connect()` 会建传输、`init()` 会读凭据 ⇒ 顺序反了就会用上一份旧的。
+   */
+  await prefetchTurnCredential();
   try {
     // ★ 修复轮：玩家真的重新开始一次尝试 ⇒ 清掉"这一局该重来"那个读数（屏回到硬币/大厅的正常分支）
     lobbyRestartNeeded = false;
@@ -3062,6 +3519,41 @@ async function applyLobbyAnswerCode(code: string): Promise<void> {
 async function makeLobbyAnswerCode(): Promise<void> {
   const client = lobbyClient;
   if (client === null) return;
+  /**
+   * ★★ **G6/T50：点下去必须**立刻**有可读结果**（"点早了什么都不发生"是这一格的真因）。
+   *
+   * `client.makeAnswer()` 会先把 `answerStatus` 写成"正在建立回示码…"（或"还没读到邀请码…"），
+   * 但**状态自己不会上屏** —— 上屏靠这一帧。所以：先同步画一帧（那一句立刻可见），
+   * 再等链路、再产码，最后再画一帧。
+   */
+  renderLobbyFrame();
+  /**
+   * ★★ **G6/T50：链路还没建好时，这一次点击**等它**（有界），而不是当场失败**。
+   *
+   * 贴码之后 `joinLobbyWithInvite` 里那条 `connect()` 是**异步**的（它里面还会先等这一轮的中继凭据，
+   * T50：2 秒上界），而玩家/门禁可能在它回来之前就点了「出示回示码」。旧行为是当场给
+   * "本机还没有建起用来传消息的那条对端连接" —— 一句**真话**，但对"我刚贴完码就点了"的玩家来说
+   * 等于"点了没反应"（真浏览器门实测：那一刻 `buildAnswer` 拿不到连接 ⇒ 判定②红）。
+   * ⇒ 这里**有界地等链路就绪**（与「生成邀请码」那条路同一个判据、同一个上界），再产码。
+   */
+  if (client.state().joined?.ok === true && !lobbyLinkReadyNow(client)) {
+    client.showNotice('正在建立链路…（好了会自动接着出示回示码，不用再点）');
+    renderLobbyFrame();
+    const ready = await waitLobbyLinkReady(client, LOBBY_LINK_READY_TIMEOUT_MS);
+    if (!ready.ok) {
+      const diag = client.linkInitDiagnostic();
+      client.showNotice(lobbyLinkFailureText(
+        diag !== null && !diag.ok ? diag.reason : 'not-initialized',
+        `等了 ${String(Math.round(ready.waitedMs / 1000))} 秒，本侧链路还没有建立起来`
+          + '（init 至今没有成功，所以产不了回示码）。',
+        ready.status,
+        diag === null ? null : diag.message,
+      ));
+      renderLobbyFrame();
+      return;
+    }
+    client.showNotice(null);
+  }
   await client.makeAnswer();
   renderLobbyFrame();
 }
@@ -3081,28 +3573,49 @@ async function joinLobbyWithInvite(text: string): Promise<void> {
   //   这一次交接走 `'resume'`（这个会话号本端用过）时不弹硬币屏；走 `'first'`（开局期）时
   //   硬币屏**应该**出现（那是一次新握手）。
   linkRecoveryNeeded = false;
-  await client.joinWithInvite(text);
-  // 邀请码解不开时**不建链路**（建了也没用：连不上对端，而"解不开"这件事已经写在屏上了）
-  if (client.state().joined?.ok === true) {
-    /**
-     * ★★ **G5 T13-A：这次是"带着同一局回来"还是第一次接上**（`first` 与 `resume` 的分界）。
-     *
-     * 判据只有一条：**这张邀请码里的会话号，本端上一次建链路用的就是它**（`knowsSession`）
-     * —— 那意味着同一局在对端手里还在，本端这次是回去续（要先 `markResuming()`、
-     * `hello` 带 `resuming: true`，房主才会回 ack 并把档案交出来）；否则就是第一次接上。
-     *
-     * 反过来会怎样（两个方向都有具体后果）：拿 `first` 去接同一局 ⇒ 房主的 `acceptHello`
-     * 把这条 hello 判成迟到的、**不回 ack** ⇒ 加入方永远停在 `handshaking`；
-     * 拿 `resume` 去接新的一局 ⇒ `needsResync` 变成假读数（`session.ts:925-935`）。
-     */
-    const joined = client.state().joined;
-    const sid = joined !== null && joined.ok === true ? joined.payload.sessionId : null;
-    /**
-     * ⚠️ 与 `makeLobbyInvite` 同源：**只有"已经进过牌桌"才谈得上带着同一局回来**
-     * （协调者 2026-09-20 第 2 条）。开局期那一格走 `'first'` ⇒ 重新握一次手，不装"续上了"。
-     */
-    if (sid !== null && netGame !== null && client.knowsSession(sid)) await client.connect('resume');
-    else await client.connect('first');
+  /**
+   * ★★ **G6/T50：这一段里「出示回示码」禁用 + 写出还差什么**（"点早了没反应"的真因）。
+   *
+   * 贴码之后有两段异步路：`joinWithInvite`（解那条码）与 `connect()`（建对端连接，而它里面
+   * 还会**先等这一轮的中继凭据**）。这两段里点那个按钮，旧行为是"按钮在、按下去什么都不发生"
+   * —— 屏上 `notice`/`error` 都是 `null`（真浏览器门实测）。现在置这一位 ⇒ 按钮禁用 + 一句人话。
+   */
+  client.setGuestJoinPending(true);
+  renderLobbyFrame();
+  try {
+    await client.joinWithInvite(text);
+    // 邀请码解不开时**不建链路**（建了也没用：连不上对端，而"解不开"这件事已经写在屏上了）
+    if (client.state().joined?.ok === true) {
+      /**
+       * ★★ **G6/T49：这条邀请码带的是哪一档载荷** —— 回示码必须与它同档
+       * （`v === COMPACT_PAYLOAD_VERSION` 才是紧凑档 v3，否则按 v2 回）。
+       */
+      const joinedPayload = client.state().joined;
+      invitedCodeFormat = joinedPayload !== null && joinedPayload.ok === true
+        && joinedPayload.payload.v === COMPACT_PAYLOAD_VERSION ? 'compact' : 'full';
+      /**
+       * ★★ **G5 T13-A：这次是"带着同一局回来"还是第一次接上**（`first` 与 `resume` 的分界）。
+       *
+       * 判据只有一条：**这张邀请码里的会话号，本端上一次建链路用的就是它**（`knowsSession`）
+       * —— 那意味着同一局在对端手里还在，本端这次是回去续（要先 `markResuming()`、
+       * `hello` 带 `resuming: true`，房主才会回 ack 并把档案交出来）；否则就是第一次接上。
+       *
+       * 反过来会怎样（两个方向都有具体后果）：拿 `first` 去接同一局 ⇒ 房主的 `acceptHello`
+       * 把这条 hello 判成迟到的、**不回 ack** ⇒ 加入方永远停在 `handshaking`；
+       * 拿 `resume` 去接新的一局 ⇒ `needsResync` 变成假读数（`session.ts:925-935`）。
+       */
+      const joined = client.state().joined;
+      const sid = joined !== null && joined.ok === true ? joined.payload.sessionId : null;
+      /**
+       * ⚠️ 与 `makeLobbyInvite` 同源：**只有"已经进过牌桌"才谈得上带着同一局回来**
+       * （协调者 2026-09-20 第 2 条）。开局期那一格走 `'first'` ⇒ 重新握一次手，不装"续上了"。
+       */
+      if (sid !== null && netGame !== null && client.knowsSession(sid)) await client.connect('resume');
+      else await client.connect('first');
+    }
+  } finally {
+    // ★ 这一段走完（解开或没解开、接上或没接上）都要把按钮放回来 —— 失败由 `notice` 说
+    client.setGuestJoinPending(false);
   }
   renderLobbyFrame();
 }
@@ -3195,6 +3708,24 @@ const inboundProbe: {
 function rerender(): void {
   if (probeOn) rerenderIn += 1;
   /**
+   * ★★ **G6/T46（评审扣项的修法①）：先把上一帧那一行收掉，再按"这一帧是哪一屏"决定要不要重建。**
+   *
+   * ## 为什么必须在**最前面**（这是评审实测出来的缺陷，不是风格偏好）
+   *
+   * 上一版把这一句放在函数**尾部**的 `else if (renderMode !== 'net')` 里 ⇒ **对局相与大厅这两条
+   * 早退分支根本走不到它**。评审读数：草稿推完进对局相之后 6 秒内产品 `getStats()` 调用 **+6**
+   * （正好 1Hz），而 `.net-conn-line` 早已不在 DOM ⇒ **轮询整局在跑、节点是游离的**
+   * （`renderNetBoard()` 的 `root.textContent = ''` 把节点抹了，没人停计时器）。
+   *
+   * ⇒ 收口改成"**每次重渲染一进来就无条件收**"，重建只由下面那些**真的产出它**的分支负责
+   * （今天只有草稿相那一条：`appendNetConnLine(root)`）。这样"离开那一屏"与"又加了一条早退
+   * 分支"都不需要谁记得补一句 —— 早退之前的这一句已经覆盖了全部出口。
+   *
+   * ⚠️ 本条**不是**唯一的保险：`startNetConnLine()` 里还有一层自保（轮询发现自己的节点
+   * `!isConnected` 就自己停），防的是"以后又有人把收口写回某个分支里"。
+   */
+  disposeNetConnLine();
+  /**
    * ★★ **G5 T14 修复轮：把"这一次 `rerender()` 走了哪一支"记下来**（只读）。
    *
    * ⚠️ **不能**在这里再写一次 `renderMode === 'replay'` —— 有两条结构腿钉着"这串字面量在
@@ -3259,6 +3790,9 @@ function rerender(): void {
   // ★ G5 T14：草稿相那一行"轮到谁"（联机局才有；`appendTurnLine` 的第一句就是 `netGame === null`
   //   早退 ⇒ 热座页与重放页一个节点都不多画）。
   appendTurnLine(root);
+  // ★ G6/T46：联机草稿相那一行"当前连接：直连 / 经中继 / 建立中…"（只在联机局 + 草稿相产出；
+  //   本函数第一句就把上一帧那个句柄收掉 ⇒ 同一时刻至多一行、至多一个轮询）
+  appendNetConnLine(root);
   // ── G4 Task 4：重放页的收尾（**渲染之后**，且只在这里）────────────────────────
   // ① `refreshReplayBar()`：控制条的**唯一**刷新入口。`renderReplayBar` 不清 parent、也不移除
   //    自己上次插入的节点 ⇒ 任何"不以整帧 `renderApp` 为前置"的刷新路径都会在屏上叠出

@@ -218,6 +218,25 @@ export function readInviteSegment(segment: string, markerHint?: string): InviteS
  */
 export const INVITE_CHARS_MAX_UNCOMPRESSED = 2000;
 
+/**
+ * ★★ **G6/T49：紧凑档（v3）整条码的字符数区间** —— 实测值，不是估算。
+ *
+ * ## 为什么必须另立一组（不能沿用 600-900）
+ *
+ * 600-900 钉的是 **v2**（整段 SDP 进载荷）那一档的实测形态。v3 的载荷里没有整段 SDP
+ * ⇒ 长度掉到三分之一上下，拿 600 当下界会把**产品自己刚产出的**正常码判成
+ * "不在这一档的实测区间内（比实测的长或短）—— 仍然可用，但可能被某些聊天工具截断"。
+ *
+ * ## 实测出处（2026-09-28，`.superpowers/g6-T49/run-*.json` 与 `run-gates-*.txt`）
+ *
+ * 真浏览器两窗口走完"建房 → 贴码 → 回示码 → 贴回 → 硬币屏"那一轮的真实码长见
+ * `T49-REPORT.md` 的对照表；下面这组界线按那一轮 + 三条老码语料量出来的区间取，
+ * 上界留出"候选再多两三条"的余量。与 `INVITE_CHARS_MIN/MAX` 一样：**它只判长度**，
+ * 不保证这条码好用。
+ */
+export const COMPACT_INVITE_CHARS_MIN = 150;
+export const COMPACT_INVITE_CHARS_MAX = 600;
+
 /* ------------------------------------------------------------------ *
  * 2. 载荷形状
  * ------------------------------------------------------------------ */
@@ -262,6 +281,278 @@ export interface InvitePayload {
 
 /** `encodeInvite` 的入参：`v` 由本文件补，调用方只管它真有的那几项 */
 export type InviteFields = Omit<InvitePayload, 'v'>;
+
+/* ------------------------------------------------------------------ *
+ * 2.5 ★★ G6/T49：**紧凑载荷 v3**（码里不再带整段 SDP）
+ *
+ * ## 为什么另起一个版本号而不是改 v2 的形状
+ *
+ * v2 的位置数组（6 项、第 3 项是整段 SDP 原文）是**已经发出去的码**的读法，一个字都不能动。
+ * 新格式换成一个**新版本号**（`COMPACT_PAYLOAD_VERSION = 3`）与一套**并行**的解析分支：
+ * 老码走老分支（逐字不变）、新码走新分支。`INVITE_PAYLOAD_VERSION`（= 2）这个名字与含义
+ * 都不动 —— 它仍然只描述 v2 那一套。
+ *
+ * ## 哪些字段进、哪些不进（判据 2 的"最小必要集"）
+ *
+ * 进：`ice-ufrag`、`ice-pwd`、`a=fingerprint:sha-256`、每条候选的 `type / 地址 / 端口`、
+ * `a=setup`（offer 是 `actpass`、answer 是 `passive`）、以及 v2 里本来就有的
+ * `sessionId` 与两个承诺位。**不进**：`v=0 / o=- / s=- / t=0 0 / a=group:BUNDLE 0 /
+ * a=msid-semantic / m=application … / a=mid:0 / a=sctp-port:5000 / a=max-message-size` ——
+ * 这些每场都一样，由 `sdpOfCompactPayload()` 在本地重建。
+ *
+ * ## 候选行里被丢掉的字段（本地重算，实测过）
+ *
+ * `foundation` 与 `priority` **本地重算**（`compactPriorityOf`：RFC 8445 的
+ * `(type preference << 24) + (local preference << 8) + (256 - component)`；
+ * `local preference` 由调用方从原候选里取出来带着，取不到按 65535 算）。
+ * `raddr` / `rport` **不带**（真浏览器探针 `.superpowers/g6-T49/probe-minimal-sdp.mjs`
+ * 实测：不带它们、priority 甚至写死成常数，两端照样 `connected` + 数据通道真的通了）。
+ * ⇒ 两端连不上与"重算出来的 priority 取值"无关（那只影响 ICE 先试哪一对），
+ * 而**判据 2 必须能假**：真正的承重项是 ufrag / pwd / fingerprint / 地址 / 端口。
+ * ------------------------------------------------------------------ */
+
+/** 紧凑载荷（v3）自己的版本号。`INVITE_PAYLOAD_VERSION`（v2）不动 */
+export const COMPACT_PAYLOAD_VERSION = 3;
+
+/** `a=setup` 在紧凑载荷里的两个取值（`offer` / `answer` 两端各自一个） */
+export type CompactIceRole = 'actpass' | 'passive';
+
+/**
+ * 一条候选的**最小必要集**。
+ *
+ * `localPref` 只服务 `priority` 的重算（0-255；取不到时按 65535 = 最大算）。
+ * 地址**原样字符串**：IPv4 点分式、IPv6 冒号式、mDNS 的 `xxxx.local` 三种都走同一条路
+ * （打包成二进制能再省十几个字符，但会把"地址是不是合法"这件事从"原样带过去"
+ * 变成"解包算出来"，多一层出错面 —— 本任务的判据是"真的变小且真的能连"，不是"最小可能"）。
+ */
+export interface CompactCandidate {
+  /** `typ` 原文（`host` / `srflx` / `prflx` / `relay`） */
+  readonly type: string;
+  /** 地址（IPv4 / IPv6 / mDNS 名） */
+  readonly address: string;
+  /** 端口（1-65535） */
+  readonly port: number;
+  /** RFC 8445 里 `priority` 那 8 个比特（0-255；缺省 255） */
+  readonly localPref?: number;
+}
+
+/** 紧凑载荷的全部入参（调用方要么给齐 ufrag/pwd/fingerprint，要么退回整段 SDP 那一档） */
+export interface CompactInviteFields {
+  /** 本机协议版本（明文段那一位） */
+  readonly p: number;
+  readonly sessionId: string;
+  /** `a=ice-ufrag` 的值（缺 = 从 SDP 里抠） */
+  readonly iceUfrag?: string;
+  /** `a=ice-pwd` 的值（缺 = 从 SDP 里抠） */
+  readonly icePwd?: string;
+  /** `a=fingerprint:sha-256` 的**冒号十六进制**正文（缺 = 从 SDP 里抠） */
+  readonly fingerprint?: string;
+  /** `a=setup`（缺省 `actpass` = offer 那一侧） */
+  readonly iceRole?: CompactIceRole;
+  /** 候选（空数组 ⇒ 这一档不可用：重建出来会把 `u` / `p` 报成"没有可用候选"） */
+  readonly candidates: readonly CompactCandidate[];
+  readonly hostPromise: string;
+  readonly guestPromise: string;
+}
+
+/** `type` 前缀表与它的门禁：`null` = 认不出（调用方退回整段 SDP 那一档） */
+export const CANDIDATE_TYPE_PREFIXES: Readonly<Record<string, string>> = {
+  host: 'h',
+  srflx: 's',
+  prflx: 'f',
+  relay: 'r',
+};
+
+/** 前缀 → `type`（`CANDIDATE_TYPE_PREFIXES` 的反查，只有一处取法） */
+export function candidateTypeOfPrefix(prefix: string): string | null {
+  for (const type of Object.keys(CANDIDATE_TYPE_PREFIXES)) {
+    if (CANDIDATE_TYPE_PREFIXES[type] === prefix) return type;
+  }
+  return null;
+}
+
+/** `typ` 原文 → 前缀（认不出给 `null`：紧凑载荷只承载认识的四种） */
+export function candidateTypePrefix(type: string): string | null {
+  return CANDIDATE_TYPE_PREFIXES[type] ?? null;
+}
+
+/** RFC 8445 的 type preference（与 Chrome 一致：host 126 / prflx 110 / srflx 100 / relay 0） */
+export const CANDIDATE_TYPE_PREFERENCE: Readonly<Record<string, number>> = {
+  host: 126,
+  prflx: 110,
+  srflx: 100,
+  relay: 0,
+};
+
+/** 用于 `priority` 重算的组件号（本程序只用 SCTP 的 component 1，见 `sdpOfCompactPayload`） */
+export const CANDIDATE_COMPONENT = 1;
+
+/** `localPref` 缺省值（0-255；255 = 本机优先级最高） */
+export const COMPACT_DEFAULT_LOCAL_PREF = 255;
+
+/**
+ * ★ **候选 priority 的本地重算**（RFC 8445 §5.1.2.1）：
+ * `priority = (type preference << 24) + (local preference << 8) + (256 - component)`。
+ *
+ * 认不出的 `type` 返回 `null`（调用方退回整段 SDP 那一档，**不猜**）。
+ */
+export function compactPriorityOf(type: string, localPref = COMPACT_DEFAULT_LOCAL_PREF): number | null {
+  const typePref = CANDIDATE_TYPE_PREFERENCE[type];
+  if (typePref === undefined) return null;
+  const local = Math.max(0, Math.min(255, Math.trunc(localPref)));
+  return ((typePref << 24) >>> 0) + ((local << 8) >>> 0) + (256 - CANDIDATE_COMPONENT);
+}
+
+/**
+ * ★ 候选 `foundation` 的本地重算：`type` 前缀 + 地址字符和（十进制）。
+ *
+ * RFC 8445 只要求"同一对 (type, base, protocol) 的候选 foundation 相同、
+ * 不同的尽量不同"，并**没有**规定算法（原文只说 "an arbitrary integer"）⇒ 这一处是**本实现
+ * 的规则**，两端一致即可，收方不会拿它当判据（`probe-minimal-sdp.mjs` 里我把它换成
+ * 行号 `1/2/3`，两端照样连通）。
+ */
+export function compactFoundationOf(type: string, address: string): string {
+  const prefix = candidateTypePrefix(type) ?? 'x';
+  let sum = 0;
+  for (let i = 0; i < address.length; i += 1) sum = (sum + address.charCodeAt(i)) % 100_000;
+  return `${prefix}${String(sum)}`;
+}
+
+/** 紧凑载荷里"本端这一侧"那两项（`ufrag` / `pwd` / 指纹 / 候选），**位置数组**：长度是形状的一部分 */
+function compactTupleOf(f: CompactInviteFields): readonly unknown[] {
+  return [
+    f.iceUfrag ?? '',
+    f.icePwd ?? '',
+    f.fingerprint ?? '',
+    f.candidates.map((c) => [
+      candidateTypePrefix(c.type) ?? '?',
+      c.address,
+      c.port,
+      Math.max(0, Math.min(255, Math.trunc(c.localPref ?? COMPACT_DEFAULT_LOCAL_PREF))),
+    ]),
+  ];
+}
+
+/**
+ * `a=setup` 的**本地判定**：一条载荷的两个承诺位都是占位串 ⇒ 它是**answer**那一侧
+ * （`isAnswerPayload` 的定义，见本文件后面那一节）。
+ *
+ * ⚠️ 判据与 `ANSWER_PROMISE_PLACEHOLDER` **同一处语义**，但这里不能直接引用那个常量：
+ * 它在本文件里声明得比这一段晚（`const` 的 TDZ），而 `sdpToCompact()` 会在模块加载之后
+ * 才被调用 —— 真引用也能跑，但"依赖加载时序"是没必要的脆弱。改占位串时**两处一起改**
+ * （`sdpToCompact` 的判据与 `ANSWER_PROMISE_PLACEHOLDER`，它们是同一个事实）。
+ */
+const COMPACT_ANSWER_PLACEHOLDER = 'answer-not-a-promise';
+
+/**
+ * ★ 紧凑载荷的**编码**：位置数组 → JSON 文本（压缩的对象就是它）。
+ *
+ * 形状：`[3, sessionId, [ufrag, pwd, fingerprint, [[类型, 地址, 端口, localPref], …]],
+ * 本端这一侧那两项, [setup], hostPromise, guestPromise]`。
+ * **逐字段一句**：
+ *  - `[0]` 版本（= `COMPACT_PAYLOAD_VERSION`）；
+ *  - `[1]` `sessionId`（这一局的名字）；
+ *  - `[2]` 本端这一侧的连接材料（ufrag / pwd / 指纹 / 候选）；
+ *  - `[3]` 与 `[2]` 同形 —— **备用**（今天恒为空数组；v4 若要带第二条 ICE 世代就往这里放）；
+ *  - `[4]` `a=setup` 一个字（`'a'` = actpass / `'p'` = passive）；
+ *  - `[5]` / `[6]` 两个承诺位（与 v2 同一个位置语义）。
+ */
+export function compactPayloadText(f: CompactInviteFields): string {
+  return JSON.stringify([
+    COMPACT_PAYLOAD_VERSION,
+    f.sessionId,
+    compactTupleOf(f),
+    [],
+    f.iceRole === 'passive' ? 'p' : 'a',
+    f.hostPromise,
+    f.guestPromise,
+  ]);
+}
+
+/** 紧凑载荷的**字节**形态（`encodeInvite` 压的就是它） */
+export function compactPayloadBytesOf(f: CompactInviteFields): Uint8Array {
+  return utf8Encode(compactPayloadText(f));
+}
+
+/** `sessionId` → `a=ice-ufrag` / `a=ice-pwd` 的**唯一前缀**（两端同一个盐：它只要唯一，不需要保密） */
+export const COMPACT_ICE_CREDENTIAL_PREFIX = 'compile-';
+
+/** `sessionId` → `a=ice-ufrag`：`compile-` + 会话号的**十六进制**哈希（同会话号 ⇒ 同一串） */
+export function iceUfragOfSessionId(sessionId: string, hash: (text: string) => string): string {
+  return `${COMPACT_ICE_CREDENTIAL_PREFIX}${hash(`ufrag|${sessionId}`)}`;
+}
+
+/** `sessionId` → `a=ice-pwd`：同上，换一个盐 */
+export function icePwdOfSessionId(sessionId: string, hash: (text: string) => string): string {
+  return `${COMPACT_ICE_CREDENTIAL_PREFIX}${hash(`pwd|${sessionId}`)}`;
+}
+
+/* ------------------------------------------------------------------ *
+ * 2.6 整段 SDP → 最小必要集（**唯一的提取处**；缺任何一项就回 `null` ⇒ 调用方退回 v2）
+ * ------------------------------------------------------------------ */
+
+/** `sdpToCompact()` 的结论：`ok: false` 的 `missing` 说的是"缺哪一项"（给探针/报告看） */
+export type CompactExtractResult =
+  | { readonly ok: true; readonly fields: CompactInviteFields }
+  | { readonly ok: false; readonly missing: string };
+
+/** 从一行 `a=candidate:` 里抠出最小必要集（认不出的行回 `null`） */
+export function compactCandidateOfLine(line: string): CompactCandidate | null {
+  const m = /^a=candidate:(\S+) (\d+) (udp) (\d+) (\S+) (\d+) typ (\S+)/.exec(line.trim());
+  if (m === null) return null;
+  const prefix = candidateTypePrefix(m[7]);
+  if (prefix === null) return null;
+  const port = Number(m[6]);
+  if (!Number.isSafeInteger(port) || port <= 0 || port > 65535) return null;
+  const priority = Number(m[4]);
+  const localPref = Number.isSafeInteger(priority) && priority > 0
+    ? Math.floor(((priority - (256 - CANDIDATE_COMPONENT)) % 0x1_0000_0000) / 256) & 0xff
+    : COMPACT_DEFAULT_LOCAL_PREF;
+  return { type: m[7], address: m[5], port, localPref };
+}
+
+/** `sdp` 里一条 `a=candidate:` 行都找不到（调用方据此退回 v2） */
+export const NO_CANDIDATES_IN_SDP = '此端这一份 SDP 里没有 a=candidate: 行（等 ICE 收集完成之后再来）';
+
+/**
+ * ★★ **整段 SDP → 紧凑载荷字段**（本文件里唯一做这件事的地方）。
+ *
+ * 缺 `a=ice-ufrag` / `a=ice-pwd` / `a=fingerprint:sha-256` / 候选 中的**任何一项**就回
+ * `ok: false` ⇒ 调用方**必须**退回带全量 SDP 的 v2 档（任务书 A4 那条兜底：
+ * 不许为了变小而少带 ICE 凭据或 DTLS 指纹）。承诺位原样带过去。
+ */
+export function sdpToCompact(fields: InviteFields): CompactExtractResult {
+  const sdp = fields.sdp;
+  const ufrag = /a=ice-ufrag:(\S+)/.exec(sdp);
+  if (ufrag === null || ufrag[1].length === 0) return { ok: false, missing: 'a=ice-ufrag' };
+  const pwd = /a=ice-pwd:(\S+)/.exec(sdp);
+  if (pwd === null || pwd[1].length === 0) return { ok: false, missing: 'a=ice-pwd' };
+  const fp = /a=fingerprint:sha-256 (\S+)/.exec(sdp);
+  if (fp === null || fp[1].length === 0) return { ok: false, missing: 'a=fingerprint:sha-256' };
+  const candidates: CompactCandidate[] = [];
+  for (const line of sdp.split(/\r?\n/)) {
+    if (!line.startsWith('a=candidate:')) continue;
+    const c = compactCandidateOfLine(line);
+    // 认不出的候选行**不跳过**：跳掉它等于悄悄少给对端一条路 ⇒ 退回 v2 更诚实
+    if (c === null) return { ok: false, missing: `认不出的候选行：${line.slice(0, 60)}` };
+    candidates.push(c);
+  }
+  if (candidates.length === 0) return { ok: false, missing: NO_CANDIDATES_IN_SDP };
+  return {
+    ok: true,
+    fields: {
+      p: fields.p,
+      sessionId: fields.sessionId,
+      iceUfrag: ufrag[1],
+      icePwd: pwd[1],
+      fingerprint: fp[1],
+      iceRole: fields.hostPromise === COMPACT_ANSWER_PLACEHOLDER ? 'passive' : 'actpass',      candidates,
+      hostPromise: fields.hostPromise,
+      guestPromise: fields.guestPromise,
+    },
+  };
+}
+
 
 /* ------------------------------------------------------------------ *
  * 3. 结果与失败原因
@@ -459,6 +750,23 @@ export function utf8Decode(bytes: Uint8Array): string | null {
 export const INVITE_PAYLOAD_VERSION = 2;
 
 /**
+ * ★★ **G6/T49：解不开一条"结构上比本机新"的载荷时，给玩家的那一句提示**。
+ *
+ * ## 为什么必须有它
+ *
+ * T49 起新产出的码缺省是**紧凑载荷 v3**，而**旧版前端只认 v2 的 6 项布局**。旧版收到一条
+ * v3 码时，`parseInvitePayload` 只能走到"这份载荷不完整 / 这不是本程序产出的形状"那一支 ——
+ * 那句**按字面是真的**，但对玩家毫无下一步：他手里那条码明明是对方刚给的。
+ * 补上这一句之后，屏上会直接说出**最可能的那件事**与**下一步**（刷新页面）。
+ *
+ * ⚠️ 它**只挂在"形状不对"那一族失败上**（不是所有失败）：压缩段解不开 / base64url 不合法
+ * 是"码被改坏了"，那时候说"版本旧"会把人带偏。
+ */
+export const INVITE_NEWER_VERSION_HINT =
+  '（也请对方确认他用的是最新版本：这条码可能是更新的版本产出的格式，旧版本的前端读不懂 —— '
+  + '让对方刷新页面之后重新生成一条，或把本机更新到最新版本。）';
+
+/**
  * 把一份**完整**载荷编成**定长位置**的 JSON 数组字节（**压缩的对象就是它**）。
  *
  * ## 为什么是位置数组，而不是 `{ v: 1, p: 3, sdp: "…", … }` 这种具名对象
@@ -556,12 +864,20 @@ export type InviteEncodeResult = { ok: true; payload: string } | { ok: false; re
  *
  * ⚠️ 当 `kind === 'none'` 时，调用方给的那个"同步解压口"应当返回**原样字节**
  * （不压缩那段没有可解的东西）—— `createInvite()` 交的就是真解一遍的结果，不是恒真判断。
+ *
+ * ★★ **G6/T49：`payload` 那个参数**（缺省 = `{ mode: 'full' }`，**老调用与老行为一字不变**）。
+ *  - `'full'`：v2 那一份（整段 SDP 进载荷）；
+ *  - `'compact'`：v3（**最小必要集**）。候选的 `foundation` / `priority` 在收方本地重算，
+ *    这条码里**不出现整段 SDP**。`compact` 缺哪一项（ufrag / pwd / 指纹 / 候选）
+ *    一律回 `{ ok: false, reason: 'compact-unavailable' }` ⇒ **调用方必须退回 `'full'`**，
+ *    不许为了变小而少带 ICE 凭据或 DTLS 指纹（任务书 A4/A5 那条兜底）。
  */
 export function encodeInvite(
   fields: InviteFields,
   compress: ByteCompressor,
   decompress: ((compressed: Uint8Array) => Uint8Array | null) | DecompressorSet,
   kind: CompressionKind = 'raw',
+  payload: InvitePayloadMode = { mode: 'full' },
 ): InviteEncodeResult {
   if (fields.sdp.length === 0) {
     // 调用方违约（不是玩家输入）：一条没有 SDP 的邀请码收方无论如何都连不上
@@ -576,7 +892,10 @@ export function encodeInvite(
     // 形状校验：两个承诺串必须是非空且不含分隔符 / 换行的文本（它们会进载荷）
     return { ok: false, reason: 'bad-promise', message: '两个承诺串必须是非空、且不含分隔符的文本。' };
   }
-  const raw = payloadBytesOf(fields);
+  /** 压的对象：紧凑档是 v3 那一份（最小必要集），否则是 v2 那一份（整段 SDP） */
+  const prepared = rawBytesForInvite(fields, payload);
+  if (!prepared.ok) return prepared;
+  const raw = prepared.bytes;
   const compressed = compress(raw);
   if (compressed === null || compressed.length === 0) {
     return { ok: false, reason: 'compress-unsupported', message: '这台设备压不出邀请码要用的压缩流（压缩能力缺失）。' };
@@ -598,7 +917,117 @@ export function encodeInvite(
       message: `压缩结果解出来不是一份可用的载荷（${roundTrip.reason}）：${roundTrip.message}`,
     };
   }
+  /**
+   * ★ 紧凑档的**第二道自洽检查**：重建出来的 SDP 必须真的带着 ICE 凭据与 DTLS 指纹
+   * （"漏 `a=ice-pwd`"这一类变异会在这里当场变红，而不是等到两端连不上才发现）。
+   * `'full'` 档不做这件事（那一档的 `sdp` 就是原文，没什么可查的）。
+   */
+  if (payload.mode === 'compact') {
+    const rebuilt = roundTrip.payload.sdp;
+    if (!rebuilt.includes('a=ice-pwd:') || !rebuilt.includes('a=fingerprint:sha-256 ')
+      || !rebuilt.includes('a=ice-ufrag:')) {
+      return {
+        ok: false,
+        reason: 'compact-rebuild-incomplete',
+        message: '紧凑格式重建出来的 SDP 缺 ICE 凭据或 DTLS 指纹：这一档不可用，请退回带整段 SDP 的那一档。',
+      };
+    }
+  }
   return { ok: true, payload: `${fields.p}.${markerOfKind(kind)}${bytesToBase64Url(compressed)}` };
+}
+
+/**
+ * 一条码**带什么进载荷**（`encodeInvite` 的第五个入参）。
+ *
+ *  - `{ mode: 'full' }`：**缺省**。v2 那一档（整段 SDP 进载荷），老调用与老行为一字不变；
+ *  - `{ mode: 'compact' }`：从 `fields.sdp` 里抠出最小必要集（`sdpToCompact`）。抠不齐
+ *    （缺 `a=ice-ufrag` / `a=ice-pwd` / `a=fingerprint:sha-256` / 候选）就回
+ *    `'compact-unavailable'` ⇒ 调用方退回 `'full'`；
+ *  - `{ mode: 'compact', compact }`：**调用方自己造好了 ICE 凭据**（`createInvite` 就是：
+ *    两端各自从 `sessionId` 本地推同一个 ufrag/pwd，这一路不依赖 SDP 里有没有那两行）。
+ *    指纹与候选仍然从 `sdp` 里取。
+ */
+export type InvitePayloadMode =
+  | { readonly mode: 'full' }
+  | { readonly mode: 'compact'; readonly compact?: InviteCompactPreset };
+
+/** 调用方自己造好的那一半（进 `InvitePayloadMode` 的 `compact` 位） */
+export interface InviteCompactPreset {
+  readonly iceUfrag?: string;
+  readonly icePwd?: string;
+  readonly fingerprint?: string;
+  readonly iceRole?: CompactIceRole;
+}
+
+/**
+ * ★ 把 `(fields, payload)` 收成**要压的那份字节**（唯一的取法；`encodeInvite` 用它）。
+ *
+ * 紧凑档的取值顺序：`payload.compact` 里给的 > `fields.sdp` 里抠的。
+ * 缺 `a=ice-ufrag` / `a=ice-pwd` / `a=fingerprint:sha-256` / 候选里**任何一项**，
+ * 而 `payload.compact` 又没把那一样给出来 ⇒ `'compact-unavailable'`（调用方退回 `'full'`）。
+ */
+export function rawBytesForInvite(
+  fields: InviteFields,
+  payload: InvitePayloadMode = { mode: 'full' },
+): { readonly ok: true; readonly bytes: Uint8Array } | Extract<InviteEncodeResult, { ok: false }> {
+  if (payload.mode === 'full') return { ok: true, bytes: payloadBytesOf(fields) };
+  const preset = payload.compact ?? {};
+  const sdp = fields.sdp;
+  const fromSdp = {
+    iceUfrag: /a=ice-ufrag:(\S+)/.exec(sdp)?.[1],
+    icePwd: /a=ice-pwd:(\S+)/.exec(sdp)?.[1],
+    fingerprint: /a=fingerprint:sha-256 (\S+)/.exec(sdp)?.[1],
+  };
+  const ufrag = preset.iceUfrag ?? fromSdp.iceUfrag;
+  const pwd = preset.icePwd ?? fromSdp.icePwd;
+  const fingerprint = preset.fingerprint ?? fromSdp.fingerprint;
+  const missing = ufrag === undefined || ufrag.length === 0 ? 'a=ice-ufrag'
+    : pwd === undefined || pwd.length === 0 ? 'a=ice-pwd'
+      : fingerprint === undefined || fingerprint.length === 0 ? 'a=fingerprint:sha-256'
+        : null;
+  if (missing !== null) {
+    // ★ A4/A5 的那条兜底：缺 ICE 凭据 / DTLS 指纹 ⇒ **不缩**，交给调用方走 'full'
+    return {
+      ok: false,
+      reason: 'compact-unavailable',
+      message: `这条码没法用紧凑格式（缺 ${missing}）：请退回带整段 SDP 的那一档。`,
+    };
+  }
+  const candidates: CompactCandidate[] = [];
+  for (const line of sdp.split(/\r?\n/)) {
+    if (!line.startsWith('a=candidate:')) continue;
+    const c = compactCandidateOfLine(line);
+    // 认不出的候选行**不跳过**：跳掉它等于悄悄少给对端一条路 ⇒ 退回 v2 更诚实
+    if (c === null) {
+      return {
+        ok: false,
+        reason: 'compact-unavailable',
+        message: `这条码没法用紧凑格式（认不出的候选行：${line.slice(0, 60)}）：请退回带整段 SDP 的那一档。`,
+      };
+    }
+    candidates.push(c);
+  }
+  if (candidates.length === 0) {
+    return {
+      ok: false,
+      reason: 'compact-unavailable',
+      message: `这条码没法用紧凑格式（${NO_CANDIDATES_IN_SDP}）：请退回带整段 SDP 的那一档。`,
+    };
+  }
+  return {
+    ok: true,
+    bytes: compactPayloadBytesOf({
+      p: fields.p,
+      sessionId: fields.sessionId,
+      iceUfrag: ufrag as string,
+      icePwd: pwd as string,
+      fingerprint: fingerprint as string,
+      iceRole: preset.iceRole ?? (fields.hostPromise === COMPACT_ANSWER_PLACEHOLDER ? 'passive' : 'actpass'),
+      candidates,
+      hostPromise: fields.hostPromise,
+      guestPromise: fields.guestPromise,
+    }),
+  };
 }
 
 /** 承诺串的允许形状：非空、且不含 `.` 与换行（那两样会把载荷的分段读坏） */
@@ -654,6 +1083,169 @@ export function decodeInvite(bytes: Uint8Array): ParsedInviteResult {
   }
 }
 
+/** 紧凑载荷（v3）的位置数组长度（7 项：版本 / 会话号 / 材料 / 备用 / setup / 两个承诺位） */
+const COMPACT_TUPLE_LEN = 7;
+/** 紧凑载荷里"本端这一侧的材料"的下标（`[ufrag, pwd, fingerprint, 候选]`） */
+const COMPACT_AT_MATERIAL = 2;
+/** 紧凑载荷里备用那一项的下标（与材料同形；今天恒为空数组） */
+const COMPACT_AT_SPARE = 3;
+/** 紧凑载荷里 `a=setup` 那一个字的下标 */
+const COMPACT_AT_SETUP = 4;
+/** 紧凑载荷里两个承诺位的下标 */
+const COMPACT_AT_HOST_PROMISE = 5;
+const COMPACT_AT_GUEST_PROMISE = 6;
+
+/**
+ * ★★ **本地重建一份最小可用 SDP**（`setRemoteDescription` 吃的那一串）。
+ *
+ * 每一行都在这里，**一处不多一处不少**：
+ *  - `v=0` / `o=-` / `s=-` / `t=0 0`：SDP 的骨架（`o=` 的会话 id 取 0：对端只用它比"是不是同一次协商"，
+ *    而 offer 与 answer 各自那一份都由本函数重建，两端一致）；
+ *  - `a=group:BUNDLE 0` / `a=msid-semantic: WMS`：与真机那一份同形（少一行也让 Chrome 收，但同形更省心）；
+ *  - `m=application 9 UDP/DTLS/SCTP webrtc-datachannel` + `a=mid:0` + `a=sctp-port:5000`
+ *    + `a=max-message-size:262144`：数据通道那一份媒体描述（本程序只用这一条 m 行）；
+ *  - `c=IN IP4 0.0.0.0`：媒体级连接行（**必须**在 m 行之后 —— 第一版把它放在 m 行之前，
+ *    那是会话级的写法，候选行就落不到媒体上）；
+ *  - `a=candidate:`：每一条候选一行（`foundation` 与 `priority` 本地重算）；
+ *  - `a=ice-ufrag` / `a=ice-pwd` / `a=fingerprint:sha-256` / `a=setup`：ICE 与 DTLS 的凭据。
+ */
+export function sdpOfCompactPayload(
+  material: { readonly ufrag: string; readonly pwd: string; readonly fingerprint: string;
+    readonly candidates: readonly CompactCandidate[] },
+  setup: CompactIceRole,
+): string {
+  const lines = [
+    'v=0',
+    'o=- 0 2 IN IP4 127.0.0.1',
+    's=-',
+    't=0 0',
+    'a=group:BUNDLE 0',
+    'a=msid-semantic: WMS',
+    'm=application 9 UDP/DTLS/SCTP webrtc-datachannel',
+    'c=IN IP4 0.0.0.0',
+  ];
+  for (const c of material.candidates) {
+    const priority = compactPriorityOf(c.type, c.localPref ?? COMPACT_DEFAULT_LOCAL_PREF) ?? 0;
+    lines.push(
+      `a=candidate:${compactFoundationOf(c.type, c.address)} ${String(CANDIDATE_COMPONENT)} udp `
+        + `${String(priority)} ${c.address} ${String(c.port)} typ ${c.type}`,
+    );
+  }
+  lines.push(
+    `a=ice-ufrag:${material.ufrag}`,
+    `a=ice-pwd:${material.pwd}`,
+    `a=fingerprint:sha-256 ${material.fingerprint}`,
+    `a=setup:${setup}`,
+    'a=mid:0',
+    'a=sctp-port:5000',
+    'a=max-message-size:262144',
+  );
+  return `${lines.join('\r\n')}\r\n`;
+}
+
+/** 一条候选行的**合法性**（重建之后逐条复读：跨得过这条才交给 `setRemoteDescription`） */
+const REBUILT_CANDIDATE_LINE = /^a=candidate:[A-Za-z0-9+/-]+ [0-9]+ udp [0-9]+ \S+ [0-9]+ typ (host|srflx|prflx|relay)$/;
+
+/**
+ * ★ 紧凑载荷（v3）→ 一份完整载荷（含**本地重建**的 SDP）。
+ *
+ * 只被 `parseInvitePayload()` 调用；失败用 `InviteDecodeError` 抛出来、由调用方接住，
+ * 好让本文件的失败出口仍然只有 `parseInvitePayload` 里那一处（M3 的锚点）。
+ *
+ * 校验顺序：**版本** → **会话号** → **材料**（`ufrag` / `pwd` / 指纹 / 候选）→ **承诺位**
+ * → 重建 SDP → **逐条复读候选行**。缺 ICE 凭据或 DTLS 指纹的一律拒（那两样是不可省的）。
+ */
+function readCompactInvite(raw: readonly unknown[]): { readonly payload: InvitePayload; readonly sdp: string } {
+  const ver = raw[AT_VERSION];
+  if (typeof ver !== 'number' || !Number.isInteger(ver)) {
+    throw new InviteDecodeError('bad-payload', '邀请码里缺少格式版本（第 1 项不是整数）：这不是一份完整的邀请码。');
+  }
+  if (ver !== COMPACT_PAYLOAD_VERSION) {
+    throw new InviteDecodeError(
+      'version-mismatch',
+      `邀请码的格式版本是 ${String(ver)}，本程序只认 ${INVITE_PAYLOAD_VERSION}（或紧凑格式的 ${COMPACT_PAYLOAD_VERSION}）：`
+        + '两端版本不一致，请让对端用同一个版本重新生成。',
+    );
+  }
+  if (!nonEmptyString(raw[AT_SESSION_ID])) {
+    throw new InviteDecodeError('bad-payload', '邀请码里缺少这一局的房主会话号（sessionId）：没有它对不上房主，握手会被当场拒掉。');
+  }
+  const material = raw[COMPACT_AT_MATERIAL];
+  if (!Array.isArray(material) || material.length !== 4) {
+    throw new InviteDecodeError('bad-payload', '紧凑邀请码里的连接材料不是 4 项（ufrag / pwd / 指纹 / 候选）：这份载荷不完整。');
+  }
+  const [ufrag, pwd, fingerprint, rawCandidates] = material as readonly unknown[];
+  if (!nonEmptyString(ufrag) || !nonEmptyString(pwd)) {
+    throw new InviteDecodeError(
+      'bad-payload',
+      '紧凑邀请码里缺少 ICE 凭据（a=ice-ufrag / a=ice-pwd）：这两样一个都不能省，这份载荷不完整。',
+    );
+  }
+  if (!nonEmptyString(fingerprint)) {
+    throw new InviteDecodeError(
+      'bad-payload',
+      '紧凑邀请码里缺少 DTLS 指纹（a=fingerprint:sha-256）：没有它就验不了对端身份，不能收下这份邀请码。',
+    );
+  }
+  if (!Array.isArray(rawCandidates)) {
+    throw new InviteDecodeError('bad-payload', '紧凑邀请码里的候选不是数组：这份载荷不完整。');
+  }
+  const candidates: CompactCandidate[] = [];
+  for (const item of rawCandidates) {
+    if (!Array.isArray(item) || item.length !== 4) {
+      throw new InviteDecodeError('bad-payload', '紧凑邀请码里有一条候选不是 4 项（类型 / 地址 / 端口 / 本机优先级）。');
+    }
+    const [prefix, address, port, localPref] = item as readonly unknown[];
+    const type = typeof prefix === 'string' ? candidateTypeOfPrefix(prefix) : null;
+    if (type === null) {
+      throw new InviteDecodeError('bad-payload', `紧凑邀请码里的候选类型认不出（读到 ${JSON.stringify(prefix)}）。`);
+    }
+    if (!nonEmptyString(address) || typeof port !== 'number' || !Number.isSafeInteger(port) || port <= 0 || port > 65535) {
+      throw new InviteDecodeError('bad-payload', '紧凑邀请码里有一条候选的地址或端口不合法（端口要 1-65535 的整数）。');
+    }
+    if (typeof localPref !== 'number' || !Number.isSafeInteger(localPref) || localPref < 0 || localPref > 255) {
+      throw new InviteDecodeError('bad-payload', '紧凑邀请码里有一条候选的本机优先级不是 0-255 的整数。');
+    }
+    candidates.push({ type, address, port, localPref });
+  }
+  if (candidates.length === 0) {
+    throw new InviteDecodeError('bad-payload', '紧凑邀请码里一条候选都没有：没有可用候选就建不起连接，这份载荷不完整。');
+  }
+  const spare = raw[COMPACT_AT_SPARE];
+  if (!Array.isArray(spare) || spare.length !== 0) {
+    throw new InviteDecodeError('bad-payload', '紧凑邀请码里本端材料之后那一项今天必须是空数组（备用位）：这份载荷不完整或被改过。');
+  }
+  const setup = raw[COMPACT_AT_SETUP];
+  if (setup !== 'a' && setup !== 'p') {
+    throw new InviteDecodeError('bad-payload', `紧凑邀请码里的 a=setup 认不出（读到 ${JSON.stringify(setup)}）。`);
+  }
+  if (!nonEmptyString(raw[COMPACT_AT_HOST_PROMISE]) || !nonEmptyString(raw[COMPACT_AT_GUEST_PROMISE])) {
+    throw new InviteDecodeError('bad-payload', '紧凑邀请码里缺少承诺位：这份载荷不完整。');
+  }
+  const sdp = sdpOfCompactPayload(
+    { ufrag, pwd, fingerprint, candidates },
+    setup === 'p' ? 'passive' : 'actpass',
+  );
+  // ★ 逐条复读：重建出来的每一行候选都要**跨得过**合法性判定（地址/端口里的空格、换行、
+  //   空串都会在这里露出来 ⇒ 宁可当场拒，也不把一串畸形 SDP 交给 setRemoteDescription）
+  const rebuilt = sdp.split('\r\n').filter((l) => l.startsWith('a=candidate:'));
+  if (rebuilt.length !== candidates.length || !rebuilt.every((l) => REBUILT_CANDIDATE_LINE.test(l))) {
+    throw new InviteDecodeError('bad-payload', '紧凑邀请码重建出来的候选行不合法（地址或端口里有不该有的字符）。');
+  }
+  return {
+    sdp,
+    payload: {
+      v: COMPACT_PAYLOAD_VERSION,
+      p: -1,
+      sessionId: raw[AT_SESSION_ID] as string,
+      sdp,
+      ice: rebuilt,
+      hostPromise: raw[COMPACT_AT_HOST_PROMISE] as string,
+      guestPromise: raw[COMPACT_AT_GUEST_PROMISE] as string,
+    },
+  };
+}
+
 /**
  * 已经解出来的 JSON → 载荷。**唯一的失败出口**在这里。
  *
@@ -661,6 +1253,15 @@ export function decodeInvite(bytes: Uint8Array): ParsedInviteResult {
  * 校验顺序：**项数** → **格式版本** → **逐位结构**。三项分别给
  * `'bad-payload'`（项数不对 ⇒ 缺字段）、`'version-mismatch'`、`'bad-payload'`；
  * `'bad-json'` 一族在调用方（`decodeInvite`）判 —— 那时还没有对象可看。
+ *
+ * ★★ **G6/T49**：v2（6 项、带整段 SDP）与 v3（7 项、最小必要集，`COMPACT_PAYLOAD_VERSION`）
+ * 是两个**并列**的分支。**分派只看第 1 项那个版本号**（不看项数）：项数不对是"缺字段"
+ * （`bad-payload`），版本不对是"格式新"（`version-mismatch`）—— 这两件事**不能**混。
+ * 曾经按"项数是不是 7"分派，结果是"6 项 + 版本号 3"被读成 v3 的形状 ⇒ 一条**项数写着 6**
+ * 的载荷拿到 `version-mismatch` 而不是 `bad-payload`（老那条判据当场红）。
+ *
+ * 老码的六条校验一个字没动；新码的失败走 `readCompactInvite()` 那条内部
+ * `throw`，由本函数接住之后**仍然只有下面那一处 `throw`**（M3 的锚点不变）。
  */
 export function parseInvitePayload(raw: unknown): ParsedInviteResult {
   /** 第一处失败（链式取反会同时命中多条 ⇒ 只留第一条，报错才指得准） */
@@ -669,24 +1270,51 @@ export function parseInvitePayload(raw: unknown): ParsedInviteResult {
     if (fail === null) fail = new InviteDecodeError(reason, message);
   };
 
+  /** 第 1 项（格式版本号）—— 分支的唯一依据 */
+  const ver: unknown = Array.isArray(raw) ? (raw as readonly unknown[])[AT_VERSION] : undefined;
+  /** v3 那一支的结论 / 失败（`readCompactInvite` 会 throw，这里接住） */
+  let compactFail: InviteDecodeError | null = null;
+  let compact: { readonly payload: InvitePayload; readonly sdp: string } | null = null;
+  if (Array.isArray(raw) && typeof ver === 'number' && ver === COMPACT_PAYLOAD_VERSION
+    && raw.length === COMPACT_TUPLE_LEN) {
+    try {
+      compact = readCompactInvite(raw);
+    } catch (e) {
+      if (e instanceof InviteDecodeError) compactFail = e;
+      else throw e;
+    }
+  }
+
   if (!Array.isArray(raw)) {
-    miss('bad-payload', '邀请码里的内容不是本程序产出的形状（它不是一个位置数组）：这份载荷不完整或被改过。');
+    miss('bad-payload', '邀请码里的内容不是本程序产出的形状（它不是一个位置数组）：这份载荷不完整或被改过。'
+      + INVITE_NEWER_VERSION_HINT);
+  } else if (typeof ver !== 'number' || !Number.isInteger(ver)) {
+    miss('bad-payload', '邀请码里缺少格式版本（第 1 项不是整数）：这不是一份完整的邀请码。'
+      + INVITE_NEWER_VERSION_HINT);
+  } else if (ver === COMPACT_PAYLOAD_VERSION && raw.length === COMPACT_TUPLE_LEN) {
+    /**
+     * v3：形状与逐字段校验都在 `readCompactInvite()` 里（它的失败已经收在 `compactFail`）。
+     * ⚠️ v3 这一支的**所有**失败都是"这份要紧载荷缺项 / 被改过"⇒ 一律带上那句版本提示
+     * （它正是"旧版前端读到新版码"最可能落到的那一格）。
+     */
+    if (compactFail !== null) miss(compactFail.reason, compactFail.message + INVITE_NEWER_VERSION_HINT);
+    else if (compact === null) {
+      miss('bad-payload', '紧凑邀请码的载荷不完整（会话号 / 材料 / setup / 承诺位有缺项）。'
+        + INVITE_NEWER_VERSION_HINT);
+    }
+  } else if (ver !== INVITE_PAYLOAD_VERSION) {
+    miss(
+      'version-mismatch',
+      `邀请码的格式版本是 ${String(ver)}，本程序只认 ${INVITE_PAYLOAD_VERSION}（或紧凑格式的 ${COMPACT_PAYLOAD_VERSION}）：` +
+        '两端版本不一致，请让对端用同一个版本重新生成。' + INVITE_NEWER_VERSION_HINT,
+    );
   } else if (raw.length !== TUPLE_LEN) {
     miss(
       'bad-payload',
-      `邀请码里只有 ${raw.length} 项，本程序需要 ${TUPLE_LEN} 项：这份载荷缺字段，收下也没法开局。`,
+      `邀请码里只有 ${raw.length} 项，本程序需要 ${TUPLE_LEN} 项：这份载荷缺字段，收下也没法开局。`
+        + INVITE_NEWER_VERSION_HINT,
     );
   } else {
-    const ver = raw[AT_VERSION];
-    if (typeof ver !== 'number' || !Number.isInteger(ver)) {
-      miss('bad-payload', '邀请码里缺少格式版本（第 1 项不是整数）：这不是一份完整的邀请码。');
-    } else if (ver !== INVITE_PAYLOAD_VERSION) {
-      miss(
-        'version-mismatch',
-        `邀请码的格式版本是 ${String(ver)}，本程序只认 ${INVITE_PAYLOAD_VERSION}：` +
-          '两端版本不一致，请让对端用同一个版本重新生成。',
-      );
-    }
     if (!nonEmptyString(raw[AT_SESSION_ID])) {
       miss('bad-payload', '邀请码里缺少这一局的房主会话号（sessionId）：没有它对不上房主，握手会被当场拒掉。');
     }
@@ -707,6 +1335,14 @@ export function parseInvitePayload(raw: unknown): ParsedInviteResult {
 
   // ★ 唯一的失败出口（M3 的锚点）
   if (fail !== null) throw fail;
+
+  if (compact !== null) {
+    /**
+     * v3：`sdp` 是**本地重建**出来的（`readCompactInvite` 已经把候选行逐条核对过），
+     * `ice` 那一项与 v2 同义（`candidatesOf(sdp)` 会再抠一遍，值相同）。
+     */
+    return { ok: true, payload: { ...compact.payload, p: -1 } };
+  }
 
   const t = raw as readonly unknown[];
   return {

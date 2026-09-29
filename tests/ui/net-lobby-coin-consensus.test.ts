@@ -431,13 +431,17 @@ describe('G5 T11-B 修复轮 · 负控的确定性（工具 ④ 不再靠碰运�
     expect(wrongClass, `改版本段那一路不对的码：${wrongClass.slice(0, 3).join('、')}`).toEqual([]);
   });
 
-  it('★ 长度读数对真码有牙（现场造的码是一条"长码"，不是空壳）', async () => {
+  it('★ 长度读数对真码有牙（现场造的码不是空壳）', async () => {
     const payload = await realInvite(0);
     const r = inviteLengthReport(payload);
     expect(r.chars, '长度读数与载荷长度对不上').toBe(payload.length);
     // ⚠️ 这里**不**断言"落在 T7 的实测区间内"：区间是拿真浏览器产出的 SDP 量出来的，
     //    而本夹具的 SDP 是手搓的（比真的短）—— 断言区间会变成"夹具与那条常量对齐"的假腿。
-    //    能钉的是"它确实是一条长码"（几百个字符），空壳码混不过去。
-    expect(r.chars, `现场造的邀请码太短（${String(r.chars)} 个字符）⇒ 这条腿在空壳上会假绿`).toBeGreaterThan(300);
+    //    能钉的是"它确实不是空壳"（上百个字符），空壳码混不过去。
+    //
+    // ★ G6/T49：门槛从 300 放到 150。`createInvite` 现在缺省走**紧凑档（v3，没有整段 SDP）**
+    //   ⇒ 同一条手搓 SDP 压出来从"几百字符"变成 **208**。这条腿的意图是"空壳混不过去"
+    //   （空壳只有几十个字符），而动它去走 v2 会让它不再覆盖**产品缺省那一档**。
+    expect(r.chars, `现场造的邀请码太短（${String(r.chars)} 个字符）⇒ 这条腿在空壳上会假绿`).toBeGreaterThan(150);
   });
 });

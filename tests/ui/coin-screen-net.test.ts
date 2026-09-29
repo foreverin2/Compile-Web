@@ -61,6 +61,55 @@ function renderNet(view: CoinNetView, rootIn?: StubNode): { root: StubNode; pick
 }
 
 describe('G5 T11-B · 联机硬币屏（`renderCoin` 的 `nav.net` 分支）', () => {
+  /**
+   * ★★ **G6/T50（收尾项）：每一次点击都必须留下可读结果**（旧行为是静默 `return`）。
+   *
+   * 产品侧那处静默分支：`renderCoin` 的芯片处理器原本只有一句
+   * `if (!isCaller || net.landed !== null) return;` —— 两个条件都不满足时点下去屏上**什么都不变**。
+   * 真浏览器里"禁用态要等下一次整帧重画才生效"（`main.ts` 那段注释自己写了）⇒ 存在
+   * "点了没反应、而且看起来还能点"的窗口。这条腿钉的就是"点了要说话"。
+   *
+   * **能假**：把处理器里那三处 `sayWhyNot(...)` 去掉（回到旧的一句 `return`）⇒ 下面三条全红。
+   */
+  it('★ T50：叫过面之后再点 ⇒ 屏上给一句人话（不再静默）', () => {
+    const { root, picked } = renderNet({ role: 'caller', choose: () => {}, chosen: 1, landed: null, winner: null, caller: 1 });
+    const chips = queryAllIn(root, 'button.coin-face-chip');
+    const before = queryAllIn(root, '.coin-rule-2')[0]?.text;
+    fireClick(chips[0]);
+    expect(picked, '已经叫过面了却又叫了一次（一局只认一条 `commit-face`）').toEqual([]);
+    const after = queryAllIn(root, '.coin-rule-2')[0]?.text;
+    expect(after, '重复点击之后状态行一个字都没变（玩家看到的就是"点了没反应"）').not.toBe(before);
+    expect(String(after), '那句里没说清"已经叫过"').toContain('已经叫过');
+  });
+
+  it('★ T50：等待方点芯片 ⇒ 状态行**真的变了**并说清"由对方叫面"（不是静默）', () => {
+    const { root, picked } = renderNet({ role: 'waiter', choose: () => {}, chosen: null, landed: null, winner: null, caller: 1 });
+    const before = queryAllIn(root, '.coin-rule-2')[0]?.text;
+    const chips = queryAllIn(root, 'button.coin-face-chip');
+    fireClick(chips[0]);
+    expect(picked).toEqual([]);
+    const after = queryAllIn(root, '.coin-rule-2')[0]?.text;
+    expect(after, '等待方点了之后状态行一个字都没变（= 静默）').not.toBe(before);
+    expect(String(after), '等待方点了之后那句没说清该等谁').toContain('对方叫面');
+  });
+
+  it('★ T50：落点已经到手 ⇒ 叫面方的芯片**置为不可点**（看得见那一层），结论不被抹掉', () => {
+    const { root, picked } = renderNet({
+      role: 'caller', choose: () => {}, chosen: 1 as CoinSide, landed: 1 as CoinSide, winner: 0, caller: 1,
+    });
+    const chips = queryAllIn(root, 'button.coin-face-chip');
+    for (const chip of chips) {
+      expect(Boolean((chip as unknown as { disabled?: boolean }).disabled),
+        `落点已经到手，芯片「${chip.text}」却还是可点的（玩家会点下去、然后什么都看不见）`).toBe(true);
+    }
+    const before = queryAllIn(root, '.coin-rule-2')[0]?.text;
+    fireClick(chips[1]);
+    expect(picked, '落点已经到手却又叫了一次面').toEqual([]);
+    // 结论行在（落点 + 先选协议者），状态行原样不动 —— 抹掉它会是更坏的不实陈述
+    expect(textOf(root), '落点到手之后屏上没有结论行').toMatch(/掷出/);
+    expect(queryAllIn(root, '.coin-rule-2')[0]?.text, '点芯片把"掷出 X。"那一行抹掉了').toBe(before);
+  });
+
   it('★ 等待方（房主）：芯片禁用 + 等待文案；落点没到手时**屏上没有落点**', () => {
     const { root, picked } = renderNet({ role: 'waiter', choose: () => {}, chosen: null, landed: null, winner: null, caller: 1 });
     const chips = queryAllIn(root, 'button.coin-face-chip');

@@ -41,7 +41,7 @@ import {
   decodeBase64Url, decodeInviteFromAddressBar, decodeInvitePayload,
   decompressBytes, describeCandidates, enoughCandidatesForInvite, inviteLengthReport, peerConnectionOf,
   readCompressionMode,
-  readIceServers, roomCodeEntry,
+  readIceServers, relayUnavailableNoteOf, roomCodeEntry,
   stripInviteFromAddressBar, waitForIceGathering,
   DEFAULT_ICE_SERVERS, DEFAULT_ICE_GATHER_TIMEOUT_MS, ICE_HOST_ONLY_GRACE_MS, MESSAGE_CHANNEL,
   type NetBrowserEnv, type WebSocketLike,
@@ -229,6 +229,34 @@ async function realInvite(originAndPath = 'https://x.invalid/lobby', p: number =
  * 夹具 2：一个能在桩上渲染的大厅（状态两段式：setup 改状态 → 再渲染）
  * ==================================================================== */
 
+/**
+ * ★★ **G6/T50（B1）：一份"服务端换来了凭据"的合成读数**（大厅那一屏的默认夹具）。
+ *
+ * 为什么夹具要有它：T50 之后"默认带一台中继"这件事**不再内联在前端**，而是
+ * "开局前换到一份短时凭据"⇒ 一份 `readIceServers({})` 的读数在**没有凭据**时是
+ * "没有中继"（降级）。要让夹具描述真产品的那一档（凭据在手上、中继可用），就得把这份合成读数喂进去。
+ *
+ * 它是**合成**的：不含任何真密钥，只为驱动判定与屏面，不参与任何密码学。
+ */
+const DEFAULT_APP_CRED_READ = {
+  available: true as const,
+  source: 'app' as const,
+  credential: {
+    urls: ['turn:8.130.97.243:3478'],
+    username: '1800000000:player',
+    credential: 'synthetic-not-a-real-credential=',
+    ttlSeconds: 600,
+  },
+};
+/** 与上面那份读数配套的设置（`readIceServers` 的第三处输入） */
+const DEFAULT_ICE_SETTINGS_WITH_APP_CRED = {
+  turnUrl: '',
+  turnUsername: '',
+  turnCredential: '',
+  appTurnUsername: DEFAULT_APP_CRED_READ.credential.username,
+  appTurnCredential: DEFAULT_APP_CRED_READ.credential.credential,
+};
+
 interface Harness {
   root: StubNode;
   state: LobbyState;
@@ -257,13 +285,14 @@ function mountLobby(initial?: Partial<LobbyState>): Harness {
       peer: null,
       endpoint: '',
       /**
-       * ★ T38：这里改成**产品默认读数**（`readIceServers({})`）。
+       * ★ T38 起这里改成**产品默认读数**；★ T50 起"默认读数"多了一份**服务端换来的凭据**
+       * （`DEFAULT_APP_CRED_READ`）—— T50 之后凭据不再内联在前端，所以"默认带中继"这件事
+       * 只有"凭据在手上"那一档才成立（取不到就是降级，见 `relayUnavailableNoteOf`）。
        *
        * 旧值是一个空壳 `{servers: [], relayConfigured: false, relayIncomplete: false}` ——
-       * T38 起"默认"就是**带一台中继**，空壳会让这个夹具描述的世界与真产品不一样
-       * （判据 7 那类"展开后屏上有什么"的腿就会在假世界上下结论）。
+       * 那会让这个夹具描述的世界与真产品不一样（判据 7 那类"展开后屏上有什么"的腿会在假世界上下结论）。
        */
-      ice: readIceServers({}),
+      ice: readIceServers(DEFAULT_ICE_SETTINGS_WITH_APP_CRED, false, DEFAULT_APP_CRED_READ),
       advancedOpen: false,
       relayOpen: false,
       waitExpired: null,
@@ -526,16 +555,52 @@ describe('判据 7 · 「高级 / 连接设置」默认折叠，启用后才让�
     expect(queryAllIn(h.root, 'input.net-lobby-turn-user-input').length, 'TURN 用户名输入框没了').toBe(1);
     expect(queryAllIn(h.root, 'input.net-lobby-turn-cred-input').length, 'TURN 凭据输入框没了').toBe(1);
     /**
-     * ★★ **T38 的裁决变了**：这个夹具的 `ice` 现在是 `readIceServers({})`（**产品默认读数**，
-     * 带一台内置中继）⇒ 那句中继隐私说明**应该**在屏上。
+     * ★★ **T50 的裁决变了**：这个夹具的 `ice` 现在是"**换到了凭据**"那一档
+     * （`DEFAULT_APP_CRED_READ` + 对应的设置）⇒ 那一项中继真的在列表里 ⇒ 那句中继隐私说明
+     * **应该**在屏上（与 T38 的结论同向：默认路径上"中继这件事"对玩家必须是可见的）。
      *
-     * 旧腿这里写的是"TURN 一项都没填 ⇒ 那句必须不在"（`relayConfigured: false` 的空壳世界）。
-     * 新世界下"没填"不再等于"没有中继"，那句话正是要让玩家看见的（默认就会经中继转发）。
-     * 钉住它 = 钉住"默认路径上中继这件事对玩家是可见的"。
+     * ⚠️ T50 之前这条腿的措辞是"`readIceServers({})` 带一台内置中继" —— 那句话现在**不成立**了：
+     * `readIceServers({})`（没凭据）交的是**降级**读数（没有中继），屏上那句隐私说明也就不该出现
+     * （该出现的是"这一轮没有中继可用"，见下面那条腿）。
      */
     const text = textOf(h.root);
-    expect(text, '默认配置带中继，屏上却没有那句隐私说明（默认走中继这件事对玩家不可见）')
+    expect(text, '有中继可用时屏上却没有那句隐私说明（走中继这件事对玩家不可见）')
       .toContain(PRIVACY_COPY.signalAndRelay[1]);
+  });
+
+  /**
+   * ★★ **G6/T50（B1）判据 3 的屏面那一半**：取不到凭据 ⇒ 降级成直连，而且**说清楚**。
+   *
+   * 这一条腿钉三件事：
+   *  1. 那一项中继**不进** `iceServers`（`relayConfigured: false`）；
+   *  2. 屏上出现"这一轮没有中继可用…只能试直连"（措辞的唯一出处是 `net-browser.ts`
+   *     的 `relayUnavailableNoteOf`）；
+   *  3. 那句**带上了真原因**（"凭据服务没有及时回应"），而不是一句查不出因的"失败"。
+   */
+  it('★ T50：取不到凭据 ⇒ 中继不进 ICE 列表，屏上如实说"这一轮没有中继可用，只能试直连"', () => {
+    const down = { available: false as const, source: 'app' as const, reason: 'timeout' as const, detail: '等了 2000 毫秒没有回应' };
+    const read = readIceServers({ turnUrl: '', turnUsername: '', turnCredential: '' }, false, down);
+    expect(read.relayConfigured, '取不到凭据却还报"有中继可用"').toBe(false);
+    expect(read.relaySource).toBe('none');
+    expect(read.relayUnavailableReason).toBe('credential-unavailable');
+    expect(read.relayCredentialFailure).toBe('timeout');
+    expect(read.servers.some((s) => s.urls.some((u) => u.startsWith('turn:'))), '降级之后中继还在列表里').toBe(false);
+    // 屏面：展开到能看见那一块（默认折叠），那句话必须逐字出现
+    // ★ 关键：**不展开**高级区（dvancedOpen 默认 false）—— 那句话必须在屏上
+    const h = mountLobby({
+      role: 'guest',
+      ice: read,
+      relayFallback: relayUnavailableNoteOf(read),
+    });
+    h.render();
+    const text = textOf(h.root);
+    expect(text, '降级了却没在屏上说').toContain('这一轮没有中继可用');
+    expect(text, '那句里没有带真原因（凭据服务没有及时回应）').toContain('凭据服务没有及时回应');
+    expect(text, '降级之后还同时给了"有中继"那句隐私说明（两句自相矛盾）')
+      .not.toContain(PRIVACY_COPY.signalAndRelay[1]);
+    // 反证：有凭据那一档**不许**出现降级那句（否则它会变成一句恒真的空话）
+    const up = readIceServers(DEFAULT_ICE_SETTINGS_WITH_APP_CRED, false, DEFAULT_APP_CRED_READ);
+    expect(relayUnavailableNoteOf(up), '有中继可用时也报了"没有中继可用"').toBeNull();
   });
 
   it('★ TURN 三项填齐 ⇒ 屏上出现 `privacy.ts:111` 那句的**完整正文**（含 ONLINE_GATE_MARK 前缀）', () => {
@@ -552,23 +617,47 @@ describe('判据 7 · 「高级 / 连接设置」默认折叠，启用后才让�
     // 而且它是**引用**来的：与导出面逐字相等，不是本地拼的
     expect(relayNoticeOf(read), 'relayNoticeOf 在 on 时交的不是 privacy.ts 那一句')
       .toBe(PRIVACY_COPY.signalAndRelay[1]);
-    // 配了一半：是**另一句**（不是"没配"也不是"配好了"）
-    const half = readIceServers({ turnUrl: 'turn:x.invalid:3478' });
-    expect(relayStateOf(half)).toBe('partial');
-    expect(relayNoticeOf(half), '配了一半时给出了与"配齐"相同的那句').not.toBe(PRIVACY_COPY.signalAndRelay[1]);
-    expect(relayNoticeOf(half), '配了一半时没有可读提示').not.toBeNull();
     /**
-     * ★★ **T38 的裁决变了：`relayNoticeOf` 只认读数的 `relayConfigured`**。
+     * ★★ **T50（P0 之后）：
+elayStateOf 的顺序 = 先看有没有能用的中继**。
      *
-     * 旧腿这里写的是 `relayNoticeOf(readIceServers({}))` 必须为 `null`（"没配 TURN 时什么都不说"）。
-     * 现在 `readIceServers({})` 交的是**产品默认值**（带一台内置中继）⇒ 它当然不是 `null`，
-     * 而且**应该**给出那句隐私说明（默认就走中继，"看得到元数据、看不到内容"这件事必须让玩家看得见）。
-     * ⇒ 这条腿改成两面都钉：① 真正没有中继的读数必须什么都不说；② 默认那份读数必须说那一句。
+     * 玩家"配了一半"而**没接签发服务**时，默认那台带着上线前兜底凭据仍然可用
+     * ⇒ 状态是 'on'（屏上那句隐私说明该出），
+elayIncomplete 仍然单独报 	rue。
+     * 'partial' 只剩**真正**没有可用中继（降级档）时才会出现 —— 见下面第二段。
      */
-    const noRelayAtAll = { servers: [{ urls: ['stun:example.invalid:3478'] }], relayConfigured: false, relayIncomplete: false, relaySource: 'none', settingsAreDefault: true } as const;
-    expect(relayNoticeOf(noRelayAtAll), '这一份读数里一个中继都没有，却给出了提示').toBeNull();
-    expect(relayNoticeOf(readIceServers({})), '默认那份读数带中继，却没给出那句隐私说明')
+    const half = readIceServers({ turnUrl: 'turn:x.invalid:3478' });
+    expect(relayStateOf(half), '兜底档下默认那台还能用 ⇒ 该判 on（不是 partial）').toBe('on');
+    expect(half.relayIncomplete, '判据 9：玩家那一项被跳过了，这件事仍要报出来').toBe(true);
+    const halfNoRelay = readIceServers(
+      { turnUrl: 'turn:x.invalid:3478' },
+      false,
+      { available: false, source: 'app', reason: 'timeout' },
+    );
+    expect(halfNoRelay.relayConfigured).toBe(false);
+    expect(relayStateOf(halfNoRelay), '真的没有可用中继时应当是 partial').toBe('partial');
+    expect(relayNoticeOf(half), '兜底档下该出"有中继"那句').toBe(PRIVACY_COPY.signalAndRelay[1]);
+    expect(relayNoticeOf(halfNoRelay), '真的没有可用中继时给出了与"配齐"相同的那句')
+      .not.toBe(PRIVACY_COPY.signalAndRelay[1]);
+    expect(relayNoticeOf(halfNoRelay), '真的没有可用中继时没有可读提示').not.toBeNull();
+    /**
+     * ★★ **T38 的裁决：`relayNoticeOf` 只认读数的 `relayConfigured`**；
+     * ★★ **T50（P0 之后）**：`readIceServers({})`（**宿主没接签发服务**）走 **B1 上线前的兜底**
+     * ⇒ 中继在、来源 builtin ⇒ 那句隐私说明**应该**在（与 T38 同口径）。
+     * 真正"没有中继"的那一档是**配了端点却取不到**（见下面那一句）。
+     *
+     * ⇒ 这条腿三面都钉：① 没有中继的读数什么都不说；② 兜底档说那一句；③ 降级档也什么都不说。
+     */
+    expect(relayNoticeOf(readIceServers({})), '兜底档（有中继）却没给出"有中继"那句隐私说明')
       .toBe(PRIVACY_COPY.signalAndRelay[1]);
+    expect(
+      relayNoticeOf(readIceServers({}, false, { available: false, source: 'app', reason: 'timeout' })),
+      '配了端点却取不到（= 降级）时却给出了"有中继"那句',
+    ).toBeNull();
+    expect(
+      relayNoticeOf(readIceServers(DEFAULT_ICE_SETTINGS_WITH_APP_CRED, false, DEFAULT_APP_CRED_READ)),
+      '凭据在手（中继可用）时却没给出那句隐私说明',
+    ).toBe(PRIVACY_COPY.signalAndRelay[1]);
   });
 
   it('D22 的文本腿：大厅两个文件里**零命中**手写的中继结论片段', () => {
@@ -2442,8 +2531,13 @@ describe('★ 修复轮 B2 · 等 ICE 收集的**上界**（唯一失败形态�
     const r = await waitForIceGathering(pc as never, {
       ticker: clk.t,
       iceGatherTimeoutMs: 1_234,
-      // 玩家的中继只填了一半 ⇒ 这一份里读不出"有中继"（见上面那段说明）
+      /**
+       * ★★ **T50（P0 之后）**："这一份里读不出可用中继"现在**只有一条**来路：
+       * **配了端点却取不到凭据**（降级档）。玩家"只填了一半"在兜底档下**不再是**这一档
+       * （默认那台带着上线前兜底凭据仍然可用）。所以这里显式喂一份失败的凭据读数。
+       */
       settings: () => ({ turnUrl: 'turn:partial.invalid:3478' }),
+      credentialRead: () => ({ available: false, source: 'app', reason: 'timeout' }),
     });
     expect(r.ok, `够用了却失败了：${r.ok ? '' : r.message}`).toBe(true);
     if (r.ok) {
@@ -2553,14 +2647,17 @@ describe('★ 修复轮 B2 · 等 ICE 收集的**上界**（唯一失败形态�
 
   it('★★ T18③：只有 host、且这份配置读不出可用中继 ⇒ 1.5 秒宽限后放行 + 如实 `note`', async () => {
     /**
-     * ⚠️ T38：与上一条同源 —— "读不出可用中继"在产品里只剩"玩家只填了一半"这一种形状
-     * （默认那台内置中继仍然在 `iceServers` 里，但 `relayConfigured` 报 `false`）。
+     * ⚠️ T38/T50：**读不出可用中继**现在只剩**一条**来路 —— **配了端点却取不到凭据**（降级档）。
+     * 下面显式喂一份失败的凭据读数（玩家"只填了一半"在兜底档下不再是这一档）。
      * 这条腿测的是**宽限档**（只有 host 时给 1.5 秒），它按定义只在没有可用中继时排。
      */
     const clk = clock();
     const f = candPc(`v=0\r\n${HOST_C}`);
     const p = waitForIceGathering(f.pc as never, {
-      ticker: clk.t, iceGatherTimeoutMs: 9_999, settings: () => ({ turnUrl: 'turn:partial.invalid:3478' }),
+      ticker: clk.t,
+      iceGatherTimeoutMs: 9_999,
+      settings: () => ({ turnUrl: 'turn:partial.invalid:3478' }),
+      credentialRead: () => ({ available: false, source: 'app', reason: 'timeout' }),
     });
     expect(clk.ms, '这一刻只该排上界').toEqual([9_999]);
     f.fire('icecandidate');
@@ -3551,6 +3648,47 @@ describe('★★ G5/T40：回示码跟邀请码同一档', () => {
     expect(client.state().answerFormat, '解出邀请码之后没有记下它的档位').toBe('deflate');
     expect(await client.makeAnswer(), '产回示码失败').toBe(true);
     expect(got, `产回示码时传下去的档位不是 deflate：${JSON.stringify(got)}`).toEqual(['deflate']);
+  });
+
+  /**
+   * ★★ **G6/T50：点早了**不许**静默什么都不发生**（"点早了没反应"的真因）。
+   *
+   * 真浏览器门实测的旧形状：贴码之后屏上先出现「出示回示码」，而解码与建链路都还没回来
+   * ⇒ 点下去 `makeAnswer` 静默 `return false`（不写 notice、不重画）⇒ 屏上 `btn:1 / notice:null`，
+   * 看起来像按钮坏了。**产品侧的修法就是这几条断言**：
+   *  ① 还没读到邀请码 ⇒ 返回 false，但 `answerStatus` 必须是一句人话（屏上一行）；
+   *  ② 已经读到 ⇒ 真的去产码，并且过程中 `answerStatus` 说"正在建立…"；
+   *  ③ 同一个动作**重叠点击**不许跑两次（第二次当场返回，且不把状态改坏）。
+   */
+  it('★ T50：还没读到邀请码就点「出示回示码」⇒ 给一句人话（不是静默 false）', async () => {
+    const { client } = makeGuestClient({});
+    expect(client.state().joined, '夹具：这一局还没读过邀请码').toBeNull();
+    const ok = await client.makeAnswer();
+    expect(ok, '还没读到邀请码却报"成功了"').toBe(false);
+    const st = client.state();
+    expect(st.answerStatus, '点下去没有留下任何可读结果（玩家看到的就是"按钮没反应"）').not.toBeNull();
+    expect(String(st.answerStatus), '那句里没说清该干什么').toContain('邀请码');
+  });
+
+  it('★ T50：读到邀请码之后产码 ⇒ 过程中有"正在…"、结束后状态清空', async () => {
+    const payload = await inviteOfKind('raw');
+    let answerStatusDuringBuild: string | null | undefined;
+    /** 先建一个空壳，回调里用 `ref.client` 读"正在产码"那一刻的状态 */
+    const ref: { client: LobbyClient | null } = { client: null };
+    const made = makeGuestClient({
+      buildAnswer: async () => {
+        answerStatusDuringBuild = ref.client?.state().answerStatus;
+        return { ok: true as const, code: 'answer-1' };
+      },
+    });
+    ref.client = made.client;
+    await made.client.joinWithInvite(payload);
+    expect(made.client.state().joined?.ok).toBe(true);
+    expect(await made.client.makeAnswer()).toBe(true);
+    expect(answerStatusDuringBuild, '产码过程中屏上没有"正在…"那句').not.toBeNull();
+    expect(String(answerStatusDuringBuild)).toContain('正在');
+    expect(made.client.state().answerStatus, '产码成功之后那句"正在…"没有清掉').toBeNull();
+    expect(made.client.state().answerCode).toBe('answer-1');
   });
 
   it('★ 未压缩档（`-u`）⇒ 传下去的是 `none`', async () => {

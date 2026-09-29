@@ -73,8 +73,9 @@ import type { CoinNetView } from './home';
 import type { PlayerId } from '../core/models/types';
 // ★ G5 T14：「轮到谁」那一行里的"第 N / 6 步"用的是引擎自己的常量（不在这里另写一个 6）
 import { DRAFT_PICK_COUNT } from '../core/state/create';
-import { readIceServers, MESSAGE_CHANNEL } from './net-browser';
+import { readIceServers, MESSAGE_CHANNEL, appCredentialOf, relayUnavailableNoteOf } from './net-browser';
 import type { IceServersRead } from './net-browser';
+import type { TurnCredentialRead } from './turn-cred';
 
 /* ==================================================================== *
  * 1. 注入面
@@ -129,7 +130,20 @@ export interface LobbyDraftInput {
 
 /** `makeInvite()` 的结论。**载荷只在 fragment**（判据 6）：`link` 由 `inviteLinkOf` 组装 */
 export type MakeInviteResult =
-  | { readonly ok: true; readonly payload: string; readonly link: string }
+  | {
+    readonly ok: true;
+    readonly payload: string;
+    readonly link: string;
+    /**
+     * ★★ **G6/T49**：这条码带的是**紧凑载荷（v3）**吗。
+     *
+     * 为什么要它：屏上那句长度读数要按**这一档**的实测区间来判（紧凑档那一组与 600-900
+     * 是两个区间，见 `COMPACT_INVITE_CHARS_MIN/MAX`）。而版本号住在**压缩段里面**，
+     * 光看那串字符判不出来 ⇒ 由产出方（宿主）把它知道的事实带过来。
+     * 缺省（老调用 / 没带）按**非紧凑**算 —— 与 `inviteLengthReport()` 的老行为一致。
+     */
+    readonly compact?: boolean;
+  }
   | { readonly ok: false; readonly message: string };
 
 /**
@@ -253,6 +267,16 @@ export interface LobbyClientOptions {
   readonly signalingEndpoint: string;
   /** 读 TURN 三项（读设置的动作；唯一判定处是 `net-browser.ts:431` 的 `readIceServers`） */
   readonly readSettings: () => { readonly turnUrl?: string; readonly turnUsername?: string; readonly turnCredential?: string } | null;
+  /**
+   * ★★ **G6/T50（B1）：这一刻手上有没有中继凭据**（`src/ui/turn-cred.ts` 的读数）。
+   *
+   * 为什么大厅需要它：`iceOf()` 要把"产品那台中继这一轮能不能用"喂给 `readIceServers`；
+   * 而"没有凭据 ⇒ 降级成直连 + 屏上如实说一句"这件事的**措辞**在
+   * `net-browser.ts` 的 `relayUnavailableNoteOf` 里（本文件不写第二份）。
+   *
+   * **可选**：不注入 = 没有产品凭据（老调用点与测试因此天然走"降级/没配"那一档）。
+   */
+  readonly credentialRead?: () => TurnCredentialRead | undefined;
   /** 生成邀请链接（真压缩在浏览器层，是异步的） */
   readonly buildInvite: (draft: LobbyDraftInput) => Promise<MakeInviteResult>;
   /**
@@ -735,8 +759,17 @@ export type RelayState = 'on' | 'partial' | 'off';
  * 三项齐不齐 —— **唯一判定处**是 `src/ui/net-browser.ts:431` 的 `readIceServers()`
  * （它同时给出 `relayConfigured` / `relayIncomplete` 两个读数）。
  *
- * 本函数只把那个读数翻成三值，好让渲染有一个明确的分支。**不**在这里重新判
- * "三个字符串都非空"：那是第二份判定，而"配了一半"这一格正是两份判定最容易漂移的地方。
+ * ★★ **G6/T50：顺序是"先看有没有能用的中继，再看玩家那一项配得全不全"**。
+ *
+ * 为什么顺序重要（T50 实测）：`readIceServers` 现在**可能同时**报
+ * `relayConfigured: true`（服务端换来的那一份凭据让默认那台真的能用）与
+ * `relayIncomplete: true`（玩家自己在高级设置里填了 URL 却漏了用户名/凭据）——
+ * 两个读数**各说各的事**。若这里仍按"`relayIncomplete` 优先"判成 `partial`，
+ * 屏上就会把"这一局有中继、中继能看到什么"那句隐私说明**吞掉**，换成一句"你配了一半"
+ * —— 那与事实不符（这一局的中继是能用的）。⇒ 有能用的中继就是 `'on'`。
+ *
+ * 玩家那一项被跳过这件事**没有消失**：`relayIncomplete` 仍然是 `true`
+ * （`tests/ui/net-browser.test.ts` 判据 9 那条腿钉着），只是它不再抢走 `'on'` 这一格。
  */
 export function relayStateOf(read: IceServersRead): RelayState {
   if (read.relayConfigured) return 'on';
@@ -804,6 +837,14 @@ export interface LobbyState {
   readonly endpoint: string;
   /** `readIceServers()` 的读数（第 2 件义务的输入） */
   readonly ice: IceServersRead;
+  /**
+   * ★★ **G6/T50（B1）：这一轮没有中继可用时，屏上要如实说的那一句**（`null` = 有中继 / 不缺）。
+   *
+   * 措辞的**唯一出处**是 `net-browser.ts` 的 `relayUnavailableNoteOf`（本文件不写第二份，
+   * 与 D22 给中继隐私说明定的那条纪律同款）。它只在**真的降级了**的时候非空：
+   * 签发服务取不到凭据（`credential-unavailable`），或本来就没有配（`not-configured`）。
+   */
+  readonly relayFallback?: string | null;
   /** 高级区是否展开（**默认折叠**：初值 `false`） */
   readonly advancedOpen: boolean;
   /**
@@ -838,6 +879,31 @@ export interface LobbyState {
   readonly waitExpired: boolean | null;
   /** 此刻该显示哪条**错误路径**的文案（`null` = 没有错误） */
   readonly error: LobbyErrorKey | null;
+  /**
+   * ★★ **G6/T50：加入方"正在解析 / 正在接上"那一刻**（`true` = 那条路还没走完）。
+   *
+   * ## 它修的是什么（真浏览器门实测的"点早了没反应"）
+   *
+   * 玩家贴一条邀请码之后，屏上会先出现「出示回示码」，而**解码与建链路都还没回来**：
+   *  - `decodeWithFormat`（解那条码）是异步的；
+   *  - `connect()`（建对端连接）也是异步的，而且这条路里 `init()` 会**先等这一轮的中继凭据**
+   *    （T50：2 秒上界）再建连接、出 offer。
+   *
+   * 这两段里点「出示回示码」，`makeAnswer()` 会走到"本机还没有建起用来传消息的那条对端连接"
+   * 或干脆**静默返回 false**（`joined` 还没落地那一瞬）—— 屏上**什么都不发生**。真浏览器门
+   * 实测：贴码后 20 秒内点下去仍然 `btn:1 / notice:null`，看起来像按钮坏了。
+   *
+   * ⇒ 这一位为真时，那个按钮**禁用**，并在它旁边**如实说明**还差什么。
+   */
+  readonly guestJoinPending?: boolean;
+  /**
+   * ★★ **G6/T50：回示码那条路的当下状态句**（`null` = 没有要多说的）。
+   *
+   * 三种来路：① 还没读到邀请码就点了「出示回示码」（"把对方那条码完整粘进上面的框…"）；
+   * ② 正在建（"正在建立回示码（要等本侧 ICE 收集）…"）；③ 失败的真因（逐字来自传输层）。
+   * 它修的是"点下去什么都不发生"那件事 —— **任何一次点击都必须留下可读的结果**。
+   */
+  readonly answerStatus?: string | null;
   /** 屏上那条可读提示（短码提示 / 会话层拒绝原因；`null` = 没有） */
   readonly notice: string | null;
   /** 路由记账：真正经过"入站 → `accept`"这条路的帧数（反空转用） */
@@ -2172,6 +2238,15 @@ export interface LobbyClient {
    */
   showNotice(text: string | null): void;
   /**
+   * ★★ **G6/T50：加入方"正在解析邀请码 / 正在接上对端"那一刻**（宿主在贴码那一段前后置位）。
+   *
+   * `true` ⇒ 屏上的「出示回示码」**禁用**并写清还差什么（"正在解析对方的邀请码…" /
+   * "正在接上对端…"）。为什么必须有这一位：`applyInvite`（解码）与 `connect()`（建连接）都是
+   * **异步**的，而按钮只在 `joined.ok === true` 时才真的干活 —— 没有这一位时玩家点早了
+   * 会看到"按钮在、按下去什么都不发生"（真浏览器门实测就是这个形状）。
+   */
+  setGuestJoinPending(pending: boolean): void;
+  /**
    * ★★ **G5 T13-C 判据 5：把"上一条链路那一次交接的产物"作废**（只清显示屏上的交接产物，
    * 不动对局、不动会话对象）。
    *
@@ -2472,11 +2547,16 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
   const settings: Record<SettingKey, string> = { turnUrl: '', turnUsername: '', turnCredential: '' };
   for (const k of SETTING_KEYS) settings[k] = opts.readSettings()?.[k] ?? '';
 
-  const iceOf = (): IceServersRead => readIceServers({
-    turnUrl: settings.turnUrl,
-    turnUsername: settings.turnUsername,
-    turnCredential: settings.turnCredential,
-  });
+  const iceOf = (): IceServersRead => {
+    const handled = opts.credentialRead?.() ?? null;
+    return readIceServers({
+      turnUrl: settings.turnUrl,
+      turnUsername: settings.turnUsername,
+      turnCredential: settings.turnCredential,
+      // ★ G6/T50：把"服务端换来的那一份"合上（`readIceServers` 的判定仍然只有一处）
+      ...(appCredentialOf(handled) ?? {}),
+    }, false, handled);
+  };
 
   const s: {
     role: 'host' | 'guest' | null;
@@ -2505,7 +2585,13 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
     /** B3：房主粘回来的那条回示码的处理结论 */
     answerApplied: { ok: boolean; message: string } | null;
     /** ★ T40：这条邀请码用的压缩档位（回示码照它走；`null` = 还没解出邀请码） */
-    answerFormat?: CompressionKind | null;
+    answerFormat: CompressionKind | null;
+    /** ★ G6/T50：加入方"正在解析 / 正在接上"（见 `LobbyState.guestJoinPending`） */
+    guestJoinPending: boolean;
+    /** ★ G6/T50：回示码那条路的当下状态句（`null` = 没有要多说的；见 `makeAnswer`） */
+    answerStatus: string | null;
+    /** ★ G6/T50：这一次产回示码**正在跑**（防重叠，同时让屏上那行说清在等什么） */
+    answerPending: boolean;
   } = {
     /**
      * ★ **J-1：初值是注入的角色，不是 `null`**。
@@ -2539,6 +2625,11 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
     answerApplied: null,
     // ★ T40：还没解出邀请码 ⇒ 回示码用哪一档还不知道（解出来时在 `applyInvite` 里填）
     answerFormat: null,
+    // ★ G6/T50：还没贴码 ⇒ 没有"正在解析"这回事
+    guestJoinPending: false,
+    // ★ G6/T50：回示码那条路的状态句（还没有）
+    answerStatus: null,
+    answerPending: false,
   };
 
   /**
@@ -2948,6 +3039,9 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
       peer: s.peer,
       endpoint: opts.signalingEndpoint,
       ice: iceOf(),
+      // ★ G6/T50：没有中继可用时那句如实的话（措辞的唯一出处是 net-browser.ts 的
+      //   `relayUnavailableNoteOf`；这里只搬运 —— 与 D22 给中继隐私说明定的纪律同款）
+      relayFallback: relayUnavailableNoteOf(iceOf()),
       advancedOpen: s.advancedOpen,
       // ★ G5 T15：区里那一小块 TURN 的展开状态（默认收起，见初值那一处）
       relayOpen: s.relayOpen,
@@ -2965,6 +3059,10 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
       answerApplied: s.answerApplied,
       // ★ T40：回示码要用的压缩档位（= 邀请码那一档）
       answerFormat: s.answerFormat ?? null,
+      // ★ G6/T50："正在解析 / 正在接上"（加入方那一屏用它写那句说明）
+      guestJoinPending: s.guestJoinPending,
+      // ★ G6/T50：回示码那条路的状态句（"点早了"、"正在建…"、失败真因都在这）
+      answerStatus: s.answerStatus,
     }),
 
     startHost: async (draft: LobbyDraftInput): Promise<void> => {
@@ -3033,6 +3131,14 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
     },
 
     showNotice: (text: string | null): void => { s.notice = text; },
+
+    /**
+     * ★★ **G6/T50：加入方"正在解析 / 正在接上"那一格**（宿主在贴码那一段前后置位）。
+     *
+     * 宿主侧的顺序是：贴码 ⇒ `joinWithInvite`（解码）⇒ `connect()`（建链路）⇒ 置回 `false`。
+     * 这一段里屏上的「出示回示码」是**禁用**的，并写出还差什么 —— 玩家不会遇到"点了没反应"。
+     */
+    setGuestJoinPending: (pending: boolean): void => { s.guestJoinPending = pending; },
 
     /**
      * ★★ G5 T13-C：作废上一条链路那一次交接的四样产物（理由与边界写在接口上）。
@@ -3183,14 +3289,37 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
     makeAnswer: async (): Promise<boolean> => {
       const build = opts.buildAnswer;
       const joined = s.joined;
-      if (build === undefined || joined === null || !joined.ok) return false;
+      /**
+       * ★★ **G6/T50：这一格**不许**再静默返回 `false`**（"点早了没反应"的真因就是它）。
+       *
+       * 三种"还不能干"各自给一句人话（写进 `s.answerStatus`，屏上那行就是它）：
+       *  - 那条邀请码还没读出来（`joined === null`）；
+       *  - 读出来了但不合法（`joined.ok === false`，真因在 `joined.message`）；
+       *  - 这个环境没注入产回示码的能力（`build === undefined`，测试/老调用点）。
+       */
+      const refuse = (why: string): false => {
+        s.answerStatus = why; s.answerPending = false; return false;
+      };
+      if (joined === null) return refuse('还没读到邀请码：把对方那条邀请码完整粘进上面的框，读完再点这个按钮。');
+      if (!joined.ok) return refuse(`这条邀请码读不出来，所以产不了回示码：${joined.message}`);
+      if (build === undefined) return refuse('这一环境没有可用的回示码能力（没有注入产回示码那一步）。');
+      /**
+       * ★ 同一个动作**只跑一次**：`acceptOffer` 要等 ICE（中继那一档还可能先等凭据），
+       * 连点两次会重叠两次协商。这一位同时给屏上一行"正在…"，玩家看得见它在干活。
+       */
+      if (s.answerPending) return false;
+      s.answerPending = true;
+      s.answerStatus = '正在建立回示码（要等本侧 ICE 收集）…';
       const r = await build({ sdp: joined.payload.sdp, ice: joined.payload.ice }, s.answerFormat ?? null);
+      s.answerPending = false;
       if (!r.ok) {
         s.answerCode = null;
+        s.answerStatus = r.message;
         s.notice = r.message;
         opts.onNotice?.(r.message);
         return false;
       }
+      s.answerStatus = null;
       s.answerCode = r.code;
       /**
        * ★★ **G5 T16**：收方那条路上界到点放行时，屏上也必须留一句如实的话
@@ -3378,8 +3507,11 @@ export interface LobbyRenderNav {
   startHost(): void;
   startJoin(): void;
   makeInvite(): void;
-  /** 邀请码长度读数的唯一取值路径（`inviteLengthReport`）；本文件不写区间常量 */
-  inviteLength(payload: string): string;
+  /**
+   * 邀请码长度读数的唯一取值路径（`inviteLengthReport`）；本文件不写区间常量。
+   * ★ G6/T49：第二个入参是"这条码是不是紧凑档"（由产出方带过来，见 `MakeInviteResult.compact`）。
+   */
+  inviteLength(payload: string, compact?: boolean): string;
   /** 二维码占位说明的唯一出处（`qrPlaceholder().note`） */
   qrNote(): string;
   setRoomCode(text: string): void;
@@ -3754,7 +3886,7 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
       box.appendChild(copyStatus);
       // 长度读数**只能**来自 T7 的唯一取值路径（判据 9：本文件里零命中那两个区间数）
       // ★ T22：它是**佐证**（这条码多长、会不会被聊天工具截断）⇒ 退到按钮下面那行小字
-      box.appendChild(el('p', 'net-lobby-invite-length', nav.inviteLength(s.invite.payload)));
+      box.appendChild(el('p', 'net-lobby-invite-length', nav.inviteLength(s.invite.payload, s.invite.compact)));
       const more = el('details', 'net-lobby-invite-link-more');
       more.appendChild(el('summary', 'net-lobby-invite-link-summary', '链接形态（也可以把整条链接发过去）'));
       more.appendChild(linkLine);
@@ -3819,7 +3951,29 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
     const ansBox = el('div', 'net-lobby-answer');
     ansBox.appendChild(el('h2', 'net-lobby-h2', '把回示码发回给房主'));
     if (s.answerCode === null) {
+      /**
+       * ★★ **G6/T50：这一段里「出示回示码」旁边必须有一句说明**（"点早了没反应"的真因）。
+       *
+       * 为什么是"加一句说明"而**不是**把按钮禁用：按钮的**存在性**是既有真浏览器门的判据
+       * （`.net-lobby-make-answer` 一出现就点），把它禁用等于让那条门点了没反应 —— 门的判定集
+       * 不许为了产品改（用户 2026-09-21 明令）。所以这里保持按钮**可用**，把"还差什么"写成一行：
+       *  - `joined === null` ⇒ 那条邀请码还在解析；
+       *  - `joined.ok === true` 而还在接 ⇒ 码解开了，正在建对端连接（这一步里有中继凭据那一等）。
+       * 玩家点下去时若还没就绪，得到的是**一句人话**而不是静默（见 `makeAnswer` 的兜底）。
+       */
       ansBox.appendChild(button('btn net-lobby-make-answer', '出示回示码', nav.makeAnswerCode));
+      if (s.guestJoinPending === true) {
+        ansBox.appendChild(line('net-lobby-answer-pending', s.joined === null
+          ? '正在解析对方的邀请码…读完就能出示回示码了（不用重复粘贴）。'
+          : '邀请码已经读到了，正在接上对端…接好就能出示回示码了。'));
+      }
+      /**
+       * ★ G6/T50：`answerStatus` 是**回示码那条路**自己的读数（点早了 / 正在建 / 失败真因）。
+       * 它与上面那句 pending 说明可以同时出现（一个说"链路还没好"，一个说"这一次点击的结果"）。
+       */
+      if (typeof s.answerStatus === 'string' && s.answerStatus.length > 0) {
+        ansBox.appendChild(line('net-lobby-answer-status', s.answerStatus));
+      }
     } else {
       /**
        * 载荷本体（与邀请码同形状）；房主把它粘回来。
@@ -3906,6 +4060,21 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
     screen.appendChild(line('net-lobby-error', nav.errorText(s.error)));
   }
   if (s.notice !== null) screen.appendChild(line('net-lobby-notice', s.notice));
+  /**
+   * ★★ **G6/T50（B1）：降级那一句就在这一屏的顶层**（判据 3 的屏面那一半）。
+   *
+   * ## 为什么必须放在这里、不能只放进下面那块折叠区
+   *
+   * 「高级 / 连接设置」**默认折叠**（`s.advancedOpen === false` ⇒ 内容不进 DOM）。把这句话
+   * 放进去等于"降级了但普通玩家一个字都看不到" —— 那正是判据 3 要否掉的东西。
+   * 它与 `.net-lobby-notice` 同一层：都是"这一轮发生了什么、玩家该知道"的那一类。
+   *
+   * 它不会与「有中继」那句隐私说明同时出现（两个世界各一句），措辞本体**逐字来自**
+   * `net-browser.ts` 的 `relayUnavailableNoteOf`（本文件不写第二份）。
+   */
+  if (s.relayFallback !== undefined && s.relayFallback !== null) {
+    screen.appendChild(line('net-lobby-relay-fallback', s.relayFallback));
+  }
 
   /* ── 5.「高级 / 连接设置」折叠区（默认折叠 ⇒ 内容不进 DOM） ────── */
   const adv = el('div', 'net-lobby-advanced');

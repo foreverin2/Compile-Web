@@ -398,6 +398,43 @@ async function httpOk(url, ms) {
   return false;
 }
 
+/**
+ * ★★ **G6/T50：①-a 那一格必须给一组**真的**能取到中继凭据的配置**（否则严格档量不到）。
+ *
+ * 背景：T50（B1）之后"默认带一台中继"不再内联在前端 —— 凭据是**开局前向签发服务换来的**。
+ * 临时 vite 上没有 `/turn-cred` 反代（生产里由 nginx 同源反代，见 `server/turn-cred/RUNBOOK.md`），
+ * 所以这里**自己起一个真签发服务**，并把地址经 `#g5probe=1&turnCred=<url>` 交给页面
+ * （`src/main.ts` 的 `turnCredEndpointFromHash`；默认路径读不到这个参数）。
+ *
+ * ⚠️ 这是"服务端在、凭据取得到"那一档的**唯一**造法：不这么干，`readIceServers()` 交的是
+ * **降级**读数（没有中继）⇒ `waitForIceGathering` 走 1.5 秒宽限 ⇒ ①-a 那条"等满上界"的判定
+ * 必然红（T50 第一次跑实测：1752ms + "等了 1.5 秒"，见 `.superpowers/g6-T50/run/gate9-ice-before.txt`）。
+ */
+const TURN_CRED_SERVER = join(REPO, 'server', 'turn-cred', 'server.mjs');
+
+async function startTurnCredService() {
+  if (!existsSync(TURN_CRED_SERVER)) return null;
+  const port = await pickFreePort();
+  if (FORBIDDEN_PORTS.includes(port)) return null;
+  const proc = spawn(process.execPath, [TURN_CRED_SERVER], {
+    cwd: REPO,
+    stdio: 'ignore',
+    env: {
+      ...process.env,
+      TURN_CRED_SECRET: 'gate9-local-secret-not-a-real-key',
+      TURN_CRED_PORT: String(port),
+      TURN_CRED_PER_IP_PER_MINUTE: '200',
+      TURN_CRED_PER_IP_CONCURRENT: '50',
+    },
+  });
+  const base = `http://127.0.0.1:${String(port)}`;
+  if (!(await httpOk(`${base}/healthz`, 10_000))) {
+    try { proc.kill(); } catch { /* 已经退了 */ }
+    return null;
+  }
+  return { proc, port, base, url: `${base}/turn-cred` };
+}
+
 async function launchChrome(chrome) {
   const profile = mkdtempSync(join(tmpdir(), PROFILE_PREFIX));
   const flags = [
@@ -457,6 +494,124 @@ async function phaseOfSide(p) {
 /* ── 邀请码的**真解码**（判据③：屏上那句里的数字要与 SDP 实测对得上） ─────── */
 
 /**
+ * ★★ **G6/T49：两条读路径都要真的被走到过（自证，**不判定**）**。
+ *
+ * 为什么要有它：v3 那一支是这次新加的，而"夹具还能读 v2 老码"这件事**没有任何一格在判**
+ * （这门里产出的码现在都是 v3）。用仓库里那几条**改之前产出的真码**
+ * （`.superpowers/g6-T49/old-codes.json`）当夹具，在这里**只登记读数**：
+ * 谁把 v2 那一支删了，这一行会当场变成"读不出来"。
+ *
+ * ⚠️ 它**不参与判定**（判定集一个字没动，仍是 24 条）—— 那几条真码来自另一个任务的临时目录，
+ * 门禁不该依赖它是否存在。
+ */
+function v2SelfCheckNote() {
+  const file = resolve(HERE, '..', '.superpowers', 'g6-T49', 'old-codes.json');
+  if (!existsSync(file)) return '（跳过：拿不到 .superpowers/g6-T49/old-codes.json）';
+  try {
+    const j = JSON.parse(readFileSync(file, 'utf8'));
+    const lines = [];
+    for (const key of ['B_raw', 'A_deflate', 'C_none']) {
+      const code = j[key];
+      if (typeof code !== 'string') { lines.push(`${key}=没有这一条`); continue; }
+      const d = decodeInvite(code);
+      lines.push(d === null
+        ? `${key}（${String(code.length)} 字符）=**读不出来**：${String(lastDecodeFailure)}`
+        : `${key}（${String(code.length)} 字符）=v${String(d.payloadVersion)} / ${String(d.kind)} / `
+          + `${String(d.candidates.length)} 候选 / 标记 ${d.marker === '' ? "''" : d.marker}`
+          + ` / SDP ${String(d.sdpLen)} 字符 / ice 字段 ${String(d.iceField.length)} 项`);
+    }
+    return lines.join('；');
+  } catch (e) {
+    return `（跳过：读夹具失败 ${String(e)}）`;
+  }
+}
+
+/**
+ * ★★ **G6/T49：v3（紧凑载荷）的本地重建**（测试侧独立实现，照 `src/net/invite.ts` 的明文契约写，
+ * **不 import 产品代码** —— 与本文件的 `linkFragmentOf` 同一套纪律）。
+ *
+ * 契约（逐字对着 `COMPACT_PAYLOAD_VERSION` / `sdpOfCompactPayload` / `compactPriorityOf`
+ * / `compactFoundationOf` 抄下来的形状，改产品那几处时这里也要跟着改）：
+ *
+ *  - 候选类型前缀：`h` = host / `s` = srflx / `f` = prflx / `r` = relay；
+ *  - `foundation` = 类型前缀 + 地址字符和的十进制（取模 100000）；
+ *  - `priority` = `(type preference << 24) + (本机优先级 << 8) + (256 - component)`，
+ *    type preference `host 126 / prflx 110 / srflx 100 / relay 0`、component 恒为 1；
+ *  - `a=setup`：`'a'` = actpass（offer）/ `'p'` = passive（answer）；
+ *  - 骨架行是固定的那一组（`v=0` / `o=-` / `s=-` / `t=0 0` / `a=group:BUNDLE 0` /
+ *    `a=msid-semantic: WMS` / `m=application 9 UDP/DTLS/SCTP webrtc-datachannel` /
+ *    `c=IN IP4 0.0.0.0`），收尾 `a=mid:0` / `a=sctp-port:5000` / `a=max-message-size:262144`。
+ *
+ * 返回 `null` = 这份材料不合法（`lastDecodeFailure` 说清哪里不对）。
+ */
+const COMPACT_TYPE_PREFIX = { h: 'host', s: 'srflx', f: 'prflx', r: 'relay' };
+const COMPACT_TYPE_PREFERENCE = { host: 126, prflx: 110, srflx: 100, relay: 0 };
+const COMPACT_COMPONENT = 1;
+
+function compactPriorityOf(type, localPref) {
+  const typePref = COMPACT_TYPE_PREFERENCE[type];
+  if (typePref === undefined) return null;
+  const local = Math.max(0, Math.min(255, Math.trunc(localPref)));
+  return ((typePref << 24) >>> 0) + ((local << 8) >>> 0) + (256 - COMPACT_COMPONENT);
+}
+
+function compactFoundationOf(type, address) {
+  const prefix = Object.keys(COMPACT_TYPE_PREFIX).find((k) => COMPACT_TYPE_PREFIX[k] === type) ?? 'x';
+  let sum = 0;
+  for (let i = 0; i < address.length; i += 1) sum = (sum + address.charCodeAt(i)) % 100_000;
+  return `${prefix}${String(sum)}`;
+}
+
+function sdpOfCompactTuple(tuple) {
+  const material = tuple[2];
+  if (!Array.isArray(material) || material.length !== 4) {
+    lastDecodeFailure = 'v3 紧凑载荷的第 3 项不是 4 项材料（ufrag / pwd / 指纹 / 候选）';
+    return null;
+  }
+  const [ufrag, pwd, fingerprint, rawCandidates] = material;
+  for (const [name, v] of [['a=ice-ufrag', ufrag], ['a=ice-pwd', pwd], ['a=fingerprint', fingerprint]]) {
+    if (typeof v !== 'string' || v.length === 0) {
+      lastDecodeFailure = `v3 紧凑载荷缺 ${name}`;
+      return null;
+    }
+  }
+  if (!Array.isArray(rawCandidates) || rawCandidates.length === 0) {
+    lastDecodeFailure = 'v3 紧凑载荷里一条候选都没有';
+    return null;
+  }
+  const lines = ['v=0', 'o=- 0 2 IN IP4 127.0.0.1', 's=-', 't=0 0',
+    'a=group:BUNDLE 0', 'a=msid-semantic: WMS',
+    'm=application 9 UDP/DTLS/SCTP webrtc-datachannel', 'c=IN IP4 0.0.0.0'];
+  for (const item of rawCandidates) {
+    if (!Array.isArray(item) || item.length !== 4) {
+      lastDecodeFailure = 'v3 紧凑载荷里有一条候选不是 4 项（前缀 / 地址 / 端口 / 本机优先级）';
+      return null;
+    }
+    const [prefix, address, port, localPref] = item;
+    const type = typeof prefix === 'string' ? COMPACT_TYPE_PREFIX[prefix] : undefined;
+    if (type === undefined) {
+      lastDecodeFailure = `v3 紧凑载荷里的候选类型前缀认不出（读到 ${JSON.stringify(prefix)}）`;
+      return null;
+    }
+    if (typeof address !== 'string' || address.length === 0 || typeof port !== 'number') {
+      lastDecodeFailure = 'v3 紧凑载荷里有一条候选的地址或端口不合法';
+      return null;
+    }
+    const priority = compactPriorityOf(type, typeof localPref === 'number' ? localPref : 255);
+    if (priority === null) {
+      lastDecodeFailure = `v3 紧凑载荷里候选的 priority 算不出来（类型 ${type}）`;
+      return null;
+    }
+    lines.push(`a=candidate:${compactFoundationOf(type, address)} ${String(COMPACT_COMPONENT)} udp `
+      + `${String(priority)} ${address} ${String(port)} typ ${type}`);
+  }
+  const setup = tuple[4] === 'p' ? 'passive' : 'actpass';
+  lines.push(`a=ice-ufrag:${ufrag}`, `a=ice-pwd:${pwd}`, `a=fingerprint:sha-256 ${fingerprint}`,
+    `a=setup:${setup}`, 'a=mid:0', 'a=sctp-port:5000', 'a=max-message-size:262144');
+  return `${lines.join('\r\n')}\r\n`;
+}
+
+/**
  * 压缩段的**明文标记 → 编码档位**（测试侧独立实现，照 `src/net/invite.ts` 的明文契约写，
  * **不 import 产品代码** —— 与本文件里的 `linkFragmentOf` 同一套纪律）。
  *
@@ -486,8 +641,32 @@ function kindOfMarker(marker) {
  *
  * 形状（`src/net/invite.ts`，T40 起）：`<协议版本>.<标记?><base64url(压缩正文)>`，
  * 标记是 `-r` / `-d` / `-g` / `-u` 之一；**老格式（无标记）按 `raw` 读**。
- * 数组的下标是契约：`[v, sessionId, sdp, ice[], hostPromise, guestPromise]`。
  * **在 node 里真解一遍**（`zlib` 那几个解压器），不靠页面自报。
+ *
+ * ## ★★ G6/T49：这条解码器现在有**两条读路径**（v2 老格式 / v3 紧凑格式）
+ *
+ * ### 为什么又要改它
+ *
+ * T49 起邀请码缺省走**紧凑载荷 v3**：位置数组里**不再有整段 SDP**，只有"最小必要集"
+ * （`ice-ufrag` / `ice-pwd` / DTLS 指纹 / 候选的 type·地址·端口 / `a=setup`），SDP 由收方
+ * **本地重建**。旧解码器按 v2 读 `tuple[2]`（那里本该是 SDP 字符串），而 v3 的 `tuple[2]`
+ * 是**材料数组**、`tuple[3]` 才是被保留的位 ⇒ 它结构上读不了 v3：实测
+ * `lastDecodeFailure = '解出来的不是那份位置数组（tuple[2] 不是字符串）'`，本文件 ②③ 那几格
+ * 连锁成"未到达"（`.superpowers/g6-T49/gate9-ice-fallback-before.txt`：**18/22**，
+ * 四条红全是这同一个原因）。
+ *
+ * ### 分派口径：**版本号 + 项数**（与产品侧同一套判据，但这里是独立实现）
+ *
+ *  - `[0] === 3` 且 `length === 7` ⇒ **v3**：`[v, sessionId, [ufrag, pwd, 指纹, 候选[]], 备用[], setup, hostPromise, guestPromise]`；
+ *    候选是 `[类型前缀, 地址, 端口, 本机优先级]`，类型前缀 `h/s/f/r` = `host/srflx/prflx/relay`。
+ *  - `[0] === 2` ⇒ **v2**（老格式）：`[v, sessionId, sdp, ice[], hostPromise, guestPromise]`。
+ *  - 其余（含 v2 的 6 项 + 版本号 3 这种错配）⇒ 按 v2 的形状判，读不出来就报真因。
+ *
+ * **两条路径都留着**：老码那几条兼容腿（v2 的 804/814/1826）不许删。
+ *
+ * ⚠️ 与产品侧一样，v3 的 `foundation` / `priority` 是**本地重算**的：这里照
+ * `src/net/invite.ts` 的明文契约独立实现一遍（`(type preference << 24) + (localPref << 8) +
+ * (256 - component)`），**不 import 产品代码** —— 与本文件的 `linkFragmentOf` 同一套纪律。
  *
  * 返回 `null` = 解不开；**解不开的原因**由 `decodeFailureNote()` 说出来（"标记不认得"与
  * "正文解不开"是两回事，报告里要分得清）。
@@ -517,12 +696,28 @@ function decodeInvite(payload) {
     lastDecodeFailure = `解出来的正文不是 JSON：${String(e instanceof Error ? e.message : e)}`;
     return null;
   }
-  if (!Array.isArray(tuple) || typeof tuple[2] !== 'string') {
-    lastDecodeFailure = '解出来的不是那份位置数组（tuple[2] 不是字符串）';
+  if (!Array.isArray(tuple)) {
+    lastDecodeFailure = '解出来的不是那份位置数组（它甚至不是数组）';
     return null;
   }
-  const sdp = tuple[2];
-  const ice = Array.isArray(tuple[3]) ? tuple[3].filter((x) => typeof x === 'string' && x.length > 0) : [];
+  /** v3（紧凑载荷）那一支：版本号 3 **且** 项数 7 */
+  const compact = tuple[0] === 3 && tuple.length === 7;
+  let sdp = null;
+  let ice = [];
+  if (compact) {
+    const rebuilt = sdpOfCompactTuple(tuple);
+    if (rebuilt === null) return null;
+    sdp = rebuilt;
+    ice = sdp.split(/\r?\n/).filter((l) => l.startsWith('a=candidate:')).map((l) => l.slice(2));
+  } else {
+    if (typeof tuple[2] !== 'string') {
+      lastDecodeFailure = `解出来的不是那份位置数组（版本 ${JSON.stringify(tuple[0])} / ${String(tuple.length)} 项：`
+        + '既不是 v2 的 6 项、也不是 v3 的 7 项，tuple[2] 不是字符串）';
+      return null;
+    }
+    sdp = tuple[2];
+    ice = Array.isArray(tuple[3]) ? tuple[3].filter((x) => typeof x === 'string' && x.length > 0) : [];
+  }
   const candidates = sdp.split(/\r?\n/).filter((l) => l.startsWith('a=candidate:'));
   const kinds = { host: 0, srflx: 0, prflx: 0, relay: 0, other: 0 };
   for (const c of candidates) {
@@ -723,6 +918,8 @@ say('');
 
 const vite = spawn(process.execPath, [VITE_BIN, '--port', String(vitePort), '--strictPort',
   '--host', '127.0.0.1', '--clearScreen', 'false'], { cwd: ROOT, stdio: 'ignore' });
+/** ★ G6/T50：本题的签发服务（起不来就如实说 —— 那说明这一轮量的是降级档，不是默认档） */
+let credService = null;
 
 const judged = [];
 const push = (ok, what) => { judged.push({ ok, what }); say(`  [${ok ? '通过' : '不通过'}] ${what}`); };
@@ -751,11 +948,23 @@ try {
   neg = await attach('neg', negInst.port, 'about:blank');
   say(`chrome 调试端口：host=${hostInst.port} guest=${guestInst.port} neg=${negInst.port}`
     + '（都是 --remote-debugging-port=0）');
+  /**
+   * ★ G6/T50：起签发服务，并把 host / guest 导航到带 `turnCred=` 的地址 ⇒
+   * `readIceServers()` 拿得到真凭据 ⇒ `relayConfigured: true` ⇒ ①-a 走**严格档**。
+   * 拿不到服务时**不静默**：后面那条判定会红，并把"这一轮量的是哪一档"写进读数。
+   */
+  credService = await startTurnCredService();
+  raw.credService = credService === null ? null : { port: credService.port, url: credService.url };
+  say(`签发服务：${credService === null ? '**没起来**（这一轮 ①-a 量的是降级档，严格档判定会红）'
+    : `${credService.url}（本工具自己起的，收工一起停）`}`);
+  const pageUrl = credService === null
+    ? `${origin}/`
+    : `${origin}/#g5probe=1&turnCred=${encodeURIComponent(credService.url)}`;
   // ★ 注入**必须在导航之前**：下一次文档的任何脚本之前就会跑（生产代码零改动）
   await host.injectOnNewDocument(stunOverrideScript(UNREACHABLE_STUN));
   await guest.injectOnNewDocument(stunOverrideScript(UNREACHABLE_STUN));
-  await host.navigate(`${origin}/`);
-  await guest.navigate(`${origin}/`);
+  await host.navigate(pageUrl);
+  await guest.navigate(pageUrl);
   // ★ 注入有没有生效**当场自证**：探针对象必须在页面一加载就存在（否则这一轮所有读数都不是被测世界）
   for (const [name, p] of [['host', host], ['guest', guest]]) {
     const hasProbe = await p.evaluate('typeof window.__iceProbe');
@@ -766,7 +975,12 @@ try {
   say('');
 
   /* ── ⑥（只记录）两家公共 STUN 在这台机器上的可达性 ─────────────────────── */
-  say('=== ⑥（只记录、不判定）公共 STUN 在这台机器上的可达性 ===');
+  say('=== ⑥（只记录、不判定）两条读路径的自证 + 公共 STUN 在这台机器上的可达性 ===');
+  /**
+   * ★★ G6/T49：先登记"夹具的两条读路径都能读" —— v3 由本门 ②③ 那几格判（它们产出的就是 v3），
+   * v2 老码这里只登记读数（见 `v2SelfCheckNote()` 的说明），**不进判定集**。
+   */
+  say(`  两条读路径自证：${v2SelfCheckNote()}`);
   {
     const probeExpr = `(async () => {
       const out = [];
@@ -844,6 +1058,25 @@ try {
       hostProbeAtInvite = await host.evaluate('JSON.stringify(window.__iceProbe ?? null)');
       let probe = null;
       try { probe = JSON.parse(String(hostProbeAtInvite)); } catch { probe = null; }
+      /**
+       * ★★ **G6/T50 的档位自证**（这一格不判定，只登记"这一轮量的是哪一档"）。
+       *
+       * ①-a 的前提是"默认配置里**有**可用中继"（`relayConfigured === true`）。T50 之后
+       * "有中继"= 开局前**真的换到了凭据** ⇒ 这根线必须在读数里看得见，否则红了也说不清
+       * 是产品坏了还是夹具没把凭据说服。
+       */
+      try {
+        raw.iceAtInvite = JSON.parse(String(await host.evaluate(
+          'typeof globalThis.__g5Match === "object" || typeof globalThis.__g5Match === "function"'
+          + ' ? JSON.stringify(globalThis.__g5Match.ice()) : "null"')));
+        raw.credAtInvite = JSON.parse(String(await host.evaluate(
+          'typeof globalThis.__g5Match === "object" || typeof globalThis.__g5Match === "function"'
+          + ' ? JSON.stringify(globalThis.__g5Match.turnCred()) : "null"')));
+      } catch { /* 探针不在（比如 --legacy 那种跑法）：后面那条判定会如实报红 */ }
+      say(`  [记录] 这一档的档位读数：relayConfigured=${String(raw.iceAtInvite?.relayConfigured ?? null)}`
+        + ` relayCredentialSource=${String(raw.iceAtInvite?.relayCredentialSource ?? null)}`
+        + ` 凭据 available=${String(raw.credAtInvite?.available ?? null)} reason=${String(raw.credAtInvite?.reason ?? null)}`
+        + ` attempts=${String(raw.credAtInvite?.attempts ?? null)}`);
       raw.hostProbe = probe;
       raw.hostNoticeAtInvite = hostNotice;
       raw.inviteMs = inviteMs;
@@ -979,7 +1212,20 @@ try {
     relayInst = await launchChrome(chrome);
     relay = await attach('relay', relayInst.port, 'about:blank');
     await relay.injectOnNewDocument(stunOverrideScript(UNREACHABLE_STUN));
-    await relay.navigate(`${origin}/#g5probe=1`);
+    /**
+     * ★★ **G6/T50（P0 之后）：①-b 这一屏要显式给一个"取不到凭据"的端点。**
+     *
+     * ## 为什么（改之前这一格必红）
+     *
+     * T50 的部署安全缺省是"**端点没配 ⇒ 保留中继 + 用那对临时静态凭据**"（= 今天线上的行为，
+     * 发版不能变）。而 ①-b 这一格量的是 `relayConfigured === false` 那条路（1.5 秒宽限档）——
+     * 端点没配时**永远量不到**（兜底让中继一直可用）。
+     *
+     * ⇒ 这一屏把端点指向一个**没人监听**的端口（与"停掉签发服务"同一档）：
+     * 客户端"配了端点却取不到" ⇒ 降级 ⇒ `relayConfigured: false` ⇒ 宽限档量得到。
+     * 这个端点只影响**这一屏自己的**取凭据行为，不改任何判定。
+     */
+    await relay.navigate(`${origin}/#g5probe=1&turnCred=${encodeURIComponent('http://127.0.0.1:9/turn-cred')}`);
     // 注入有没有生效**当场自证**（与 host / guest 同一格纪律）
     const relayProbeType = await relay.evaluate('typeof window.__iceProbe');
     if (relayProbeType !== 'object') {
@@ -1278,6 +1524,8 @@ try {
     killTree(negInst?.proc.pid);
     killTree(relayInst?.proc.pid);
     killTree(vite.pid);
+    // ★ G6/T50：本工具自己起的签发服务也要跟着停（否则会留下一个监听端口）
+    if (credService !== null) killTree(credService.proc.pid);
     await sleep(600);
     // ★ 两轮杀（T11-C 的实验结论）：`taskkill /T /F` 第一轮有时只杀掉顶层进程，
     //   子进程还握着 profile 里的文件 ⇒ `rmSync` 一直失败

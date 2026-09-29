@@ -118,6 +118,7 @@ export const PRIVACY_COPY: PrivacyCopy = {
   signalAndRelay: [
     '（联机功能上线后才适用）信令服务只能看到房间码、IP 地址与连接时刻，看不到你的昵称、卡组、操作内容或对局数据。',
     '（联机功能上线后才适用）联机默认带一台中继（TURN）服务器：两端能直连时走直连，直连打不通时会经它转发。中继转发时能看到你的 IP 地址、两端在通信、通信的时刻与大概的数据量（这些是转发流量必然露出的元数据），但转发的是端到端加密后的数据包：内容不可读，也不存储。',
+    '（联机功能上线后才适用）联机时会先向我们的服务器请求一份中继凭据（会记录请求的 IP 地址与时间），用它来连接中继；这份凭据只用于转发，不含你的昵称、卡组与对局数据。',
   ],
 };
 
@@ -213,6 +214,14 @@ export const BOUNDARY_IDS = [
   'relay-sees-ip',
   'relay-encrypted-unreadable',
   'relay-no-storage',
+  /**
+   * ★★ **G6/T50（B1）**：联机时会**向我们的服务器请求一份中继凭据**（会记录 IP 与时间）。
+   *
+   * 为什么它是**新的一条边界**而不是并进 `relay-sees-ip`：那是"中继转发流量时露出什么"
+   * （被动元数据），这是"客户端主动发一个请求、那个请求被记下来"（主动的一次联系）——
+   * 两件事对玩家的含义不同，所以文案与判据都各占一条（`signalAndRelay` 的第 3 句）。
+   */
+  'relay-credential-request',
   'peer-sees-ip',
   'peer-cannot-see-deck',
   'peer-nickname-via-channel',

@@ -792,15 +792,53 @@ function renderCoinNet(root: HTMLElement, nav: CoinNav, net: CoinNetView): void 
   // 芯片：叫面方点得动，等待方禁用（任务书 §5 的接口：`role === 'waiter'` ⇒ 芯片禁用）
   const pickRow = el('div', 'coin-pick-row');
   const chips = new Map<CoinSide, HTMLButtonElement>();
+  /**
+   * ★★ **G6/T50（收尾项）：这一次点击**必须留下可读结果**（旧行为是静默 `return`）。
+   *
+   * 旧处理器只有一句 `if (!isCaller || net.landed !== null) return;` —— 两个条件都不满足时
+   * 点下去**屏上什么都不变**（不选中、不说一句话）。真浏览器里"禁用态要等下一次整帧重画才生效"
+   * （`main.ts:363` 那段注释自己写了这件事）⇒ 存在"点了没反应、而且看起来还能点"的窗口。
+   * 现在：能叫面才叫；叫不了就在 `coin-rule-2` 那一行**说清为什么**（那是屏上原有的状态行，
+   * 不新增元素、不改任何判定读的那几行）。
+   */
+  const statusLine = screen.querySelector('.coin-rule-2');
+  const sayWhyNot = (text: string): void => {
+    if (statusLine !== null) statusLine.textContent = text;
+  };
+  /**
+   * ★★ **G6/T50（收尾项）：落点已经到手 ⇒ 芯片**置为不可点**（看得见的那一层）。
+   *
+   * 旧行为是"按钮还亮着、点下去静默 `return`"。落点到手意味着这一格已经进到 `'settled'`
+   * （结论行在下面写着"掷出 X。"），置灰之后玩家不会再点第二个；而"`disabled` 要等下一次
+   * 整帧重画才生效"的那段窗口由下面 ② 的说明文字兜住。
+   */
+  const landedAlready = net.landed !== null;
   COIN_FACES.forEach((face) => {
     const chip = el('button', 'coin-face-chip', face.name) as HTMLButtonElement;
     chip.type = 'button';
-    chip.disabled = !isCaller;
+    chip.disabled = !isCaller || landedAlready;
     // 叫出去的那一面在落点之前就选中（玩家点完立刻看得到自己叫了什么）
     if (net.chosen === face.side) chip.classList.add('selected');
     chip.addEventListener('click', () => {
-      // 落点已经到手 ⇒ 叫面这件事已经发生过，再点不许改（相位机那边也已经走过去了）
-      if (!isCaller || net.landed !== null) return;
+      // ① 不是叫面的一方（等待方）：芯片本来就禁用，这里再兜一层并说明
+      if (!isCaller) {
+        sayWhyNot('这一局由对方叫面（你这一侧没有可点的东西）——等对方按下正/反。');
+        return;
+      }
+      // ② 落点已经到手 ⇒ 叫面这件事已经发生过，再点不许改（相位机那边也已经走过去了）
+      //    ⚠️ 这一格**不动**状态行：它此刻写的是"掷出 X。"（结论行在下面），抹掉它是更坏的不实陈述
+      if (net.landed !== null) return;
+      /**
+       * ③ 同一条链路上**已经叫过一次**（`main.ts` 的 `faceChosen`）⇒ 第二次点击落不到任何地方。
+       *
+       * 为什么把它说出来（而不是像旧代码那样静默）：一局只认一条 `commit-face`，重复点击的
+       * resolve 无处可去；而"第二次点击发生在第一次还没被对端确认的那一段"在真浏览器里是
+       * 会发生的（禁用态要等重画）。不说的话，玩家看到的就是"我明明点了，屏上没反应"。
+       */
+      if (net.chosen !== null) {
+        sayWhyNot(`你已经叫过「${coinFaceName(net.chosen)}」了 —— 正在等对端揭示，不用重复点击。`);
+        return;
+      }
       // 立刻把"我按了哪一面"画出来（下一次整帧重画之前也要看得见）
       for (const [side, other] of chips) other.classList.toggle('selected', side === face.side);
       net.choose(face.side);
@@ -1109,8 +1147,49 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
   const hoverEntry = (key: string): void => {
     if (libPinnedKey === null) previewEntry(key);
   };
+  /**
+   * 单击给"看得见的反馈"的那条路的**开关**：触摸能力（任一条成立）
+   * **且** 可见视口宽度 <= `TAP_ZOOM_MAX_W`。
+   *
+   *  - 触摸能力：`(pointer: coarse)` / `(any-pointer: coarse)` / `maxTouchPoints > 0` /
+   *    `(hover: none)` —— 与 `phone-landscape.ts:328` 的手机判据同族，但**没有**"短边 <= 500"
+   *    那一条（这里判的是"窄屏/触摸"，不是"手机"：触摸平板的展示框同样在折线之下）；
+   *  - 宽度用 `window.visualViewport.width`（**不是** `innerWidth`）：手机横屏 844×390 实测
+   *    `innerWidth 1516` 而 `visualViewport 844`，用 `innerWidth` 会把它判成宽屏；
+   *  - 两条都不成立（= 桌面鼠标 + 宽视口）⇒ 走原路 `togglePin`，与改前逐字相同。
+   */
+  const TAP_ZOOM_MAX_W = 1100;
+  const needsTapZoom = (): boolean => {
+    const coarse = window.matchMedia('(pointer: coarse)').matches
+      || window.matchMedia('(any-pointer: coarse)').matches
+      || (navigator.maxTouchPoints ?? 0) > 0
+      || window.matchMedia('(hover: none)').matches;
+    const vv = window.visualViewport;
+    const w = vv !== null && vv.width > 0 ? vv.width : window.innerWidth;
+    return coarse && w <= TAP_ZOOM_MAX_W;
+  };
+  /** 键 → "放大浮层"那条路（与双击同一个 thunk）。`buildList()` 每次重画都会重填一次。 */
+  const zoomPath = new Map<string, () => void>();
   /** 单击固定：同 key 再点 = 取消固定（回 hover）；点其它 key = 切换固定目标 */
   const togglePin = (key: string): void => {
+    /**
+     * ★★ G6/T51（用户 2026-09-28 口径的第 ② 条）：**窄屏 / 触摸视口下，单击直接开放大浮层**。
+     *
+     * 为什么（T48 实测）：产品这条路是 `bindClickOrDouble`（`render.ts:6002`）——单击=把条目
+     * 固定到右侧展示框、双击=开 `.zoom-overlay`。可**窄屏（<= 1100px）下展示框是普通流里的
+     * 静态盒**、排在整张列表**之后**：844×390 实测单击之后展示框确实被填上了，但它在
+     * **折线下方 18938px**（`previewDocTop 19338 / vh 390`，T48 报的 `pxBelowFold 18967`
+     * 是同一件事的另一种取法）⇒ 手指点一下屏幕什么都不动，观感就是"点了没反应"。
+     * 桌面宽视口（1280×800 实测 `docTop 126`、hover 与单击固定在屏上）⇒ **那一档一个字节都不改**。
+     *
+     * 「窄」的判据见 `needsTapZoom()`：触摸能力 + **可见**视口宽度 <= 1100px 两条同时成立。
+     * 放大浮层与双击走的是**同一个 thunk**（三个入口各在 `zoomPath` 里注册一次，见下面三处
+     * `zoomPath.set(...)`）—— 不新造第二条详情路，关掉的方式（点空白 / Esc）也沿用既有那套。
+     */
+    if (needsTapZoom()) {
+      const zoom = zoomPath.get(key);
+      if (zoom !== undefined) { zoom(); return; }
+    }
     if (libPinnedKey === key) {
       libPinnedKey = null;
       clearPreview();
@@ -1233,6 +1312,8 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
       protoFaceImg(proto.defId, false, face);
       const faceKey = `proto:${proto.defId}:0`;
       face.addEventListener('mouseenter', () => hoverEntry(faceKey));
+      // 窄屏/触摸那条路要用的放大 thunk（与下面双击传的是同一个）—— 见 `needsTapZoom()`
+      zoomPath.set(faceKey, () => openZoom(proto.defId, true, true, false));
       bindClickOrDouble(
         face,
         () => togglePin(faceKey),
@@ -1246,6 +1327,7 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
       protoFaceImg(proto.defId, true, faceC);
       const faceCKey = `proto:${proto.defId}:1`;
       faceC.addEventListener('mouseenter', () => hoverEntry(faceCKey));
+      zoomPath.set(faceCKey, () => openZoom(proto.defId, true, true, true));
       bindClickOrDouble(
         faceC,
         () => togglePin(faceCKey),
@@ -1274,6 +1356,7 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
         cell.appendChild(el('div', 'lib-card-value', String(c.value)));
         const cardKey = `card:${c.defId}`;
         cell.addEventListener('mouseenter', () => hoverEntry(cardKey));
+        zoomPath.set(cardKey, () => openZoom(c.defId, true, false, false));
         bindClickOrDouble(
           cell,
           () => togglePin(cardKey),

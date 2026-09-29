@@ -137,10 +137,26 @@ document.getElementById('comp').addEventListener('click', async () => {
 
 document.getElementById('turn').addEventListener('click', async () => {
   extra.textContent = '正在测中继（iceTransportPolicy=relay，只允许走 TURN）…\n';
+  /**
+   * ★★ **G6/T50：这里原来内联着那对永久静态凭据**（`username: 'compile'` / `credential: 'PsN4…'`）。
+   *
+   * B1 之后凭据**不再进前端**（判据 5：全仓与 `dist/` 里 grep 那份密码必须 0 命中），
+   * 所以这一页改成**从地址栏参数拿**（它本来就是个手动诊断页）：
+   *   `probe.html#turnUser=<username>&turnCred=<credential>`
+   * 两个参数都在时按 TURN REST 的那一份打；缺一个就**如实说缺**，不拿旧密码顶着。
+   */
+  const q = new URLSearchParams(location.hash.replace(/^#/, ''));
+  const turnUser = q.get('turnUser') ?? '';
+  const turnCred = q.get('turnCred') ?? '';
+  if (turnUser.length === 0 || turnCred.length === 0) {
+    extra.textContent += '没有凭据：请用 `probe.html#turnUser=<用户名>&turnCred=<凭据>` 打开 '
+      + '（凭据从签发服务拿，前端里不再内联任何静态密码 —— G6/T50）。\n';
+    return;
+  }
   const t0 = Date.now();
   try {
     const pc = new RTCPeerConnection({
-      iceServers: [{ urls: 'turn:8.130.97.243:3478', username: 'compile', credential: 'PsN4kLbZ3sesnKzmSt7R9Ct6' }],
+      iceServers: [{ urls: 'turn:8.130.97.243:3478', username: turnUser, credential: turnCred }],
       iceTransportPolicy: 'relay',
     });
     const cands = [];

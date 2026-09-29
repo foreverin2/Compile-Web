@@ -23,6 +23,17 @@
  * 与 `overflow`）又加了一段矮视口松 `min-height`，于是"不带前缀"从 1 变成 3、规则数从 22 变成 24。
  * 三条例外都不写 `!important`、不写 ID 选择器，`styles.css` 一行未动（红线）。
  *
+ * **★★ G6/T51 追加（2026-09-28）**：本表末尾新加了一块 `@media (max-width: 1100px)` 与一条
+ * `.library-screen .draft-filter-chip`，又多了几条**不带 `.lib-effect` 前缀**的选择器
+ * （`.library-layout` / `.lib-proto` / `.library-preview-img*` / `.library-screen .draft-filter-chip`）。
+ * 上面**那份 24 / 21 / 3 的读数是 T24 第二个修复轮的历史读数**，本轮没有重跑那个脚本；
+ * 新增的几条与原有的三条例外同一族：目标节点全是**图鉴页的容器/卡图/筛选条**
+ * （`.library-layout` / `.library-list` / `.library-preview*` / `.lib-proto` / `.draft-filter-chip`
+ * 在 `.library-screen` 里），而 `net-board-grid.test.ts` 与 `net-body-layer-rules.test.ts` 解算的
+ * 两条链只关心 `.board` / `.board-grid` / `.player-strip` / `.hand` / `.card` / `.net-*` /
+ * `.smoke-puff` / `.scan-overlay` 这一族 —— 两者不可能相交，理由与文件头那段逐条相同。
+ * 逐条判据与读数见 `.superpowers/g6-T51/T51-REPORT.md`。
+ *
  * 理由与 `styles-net-lobby.css` 同款，也是硬的：
  *
  *  1. 与既有样式表不撞名 —— 撞了就会让图鉴/草稿页的观感连带变化，而那种变化不报任何错；
@@ -461,4 +472,66 @@
   .library-preview-hint {
     margin-top: 6px;
   }
+}
+
+/* ===== G6/T51 竖屏（窄屏）三条：横向溢出归零 + 世代 chip 的字号地板（**只加不改上面任何一条**）=====
+ *
+ * ## 1) 横向溢出 88px ⇒ 0（用户 2026-09-28 口径第 ④ 条）
+ *
+ * T48 在 390×844 竖屏量到 `documentElement.scrollWidth − clientWidth = +88`；本轮自己再量一遍
+ * （真 Chrome、CDP 触摸仿真，读数 `.superpowers/g6-T51/run-t51-before.txt`）：
+ *
+ *   clientW 390 / scrollW 478 / overflowX 88
+ *   轨道 `grid-template-columns` 解成 `370px`，`.library-list` 与 `.library-preview` 都是
+ *   `x 108 .. 478`（`w 370`）；493 个元素右边界越过 `clientWidth`
+ *
+ * 根因是**上面 T29 那条 `grid-template-columns: 1fr` 的最小值**：`1fr` = `minmax(auto, 1fr)`，
+ * 而 `auto` 最小值取网格项的最小内容宽 ⇒ 那一列被撑到 370px，越出 `#app` 的内容盒
+ * （`#app` 是 `padding: 12px 100px 110px`，390 宽下内容盒只剩 190px；370 + 左内边距 8
+ *  正好把右边界顶到 478）。**改成 `minmax(0, 1fr)`**（T29 先例：`styles.css` 那份 `1fr` 被
+ * 本表按"同权重、后表胜"压过，红线一个字节未动）之后轨道可以缩到可用宽度。
+ *
+ * ## 2) 里面那两族要能跟着缩（否则轨道缩了、内容照样顶出去）
+ *
+ *  - `.lib-proto` 是 `display: flex`（默认 `nowrap`）：两个 122px 协议封面 `flex: 0 0 auto`
+ *    + 文案，最小内容宽实测 334px（`.lib-group` 358 = 334 + 左右各 12 内边距）⇒ 单列窄屏
+ *    里必须允许**换行**；
+ *  - `.library-preview-img` 在 `styles.css:5496` 是写死的 `width: 340px; height: 476px`
+ *    （`.portrait` / `.landscape` 两条），加左右内边距/边框后是 370px ⇒ 窄屏里给它
+ *    `max-width: 100%` + `height: auto`，让它在列内收住。
+ *
+ * 这两条都只在**图鉴页的容器/卡图**上生效（与文件头那份类名纪律的例外同族：目标仍是
+ * `.library-layout` / `.library-list` 里的图鉴节点，不碰 `.board` / `.net-*` 那一族，
+ * 也不与棋盘节点同时在屏上）。
+ *
+ * ## 3) 世代 chip 的字号地板（同一份口径的后半句）
+ *
+ * `.draft-filter-chip` 的字号在 `styles.css:1468` 是 `calc(0.12 * var(--draft-u))`，而
+ * `--draft-u: 76px`（`styles.css:1366` 的 `:root`）⇒ 图鉴页上解出 **9.12px**，是全页唯一
+ * 小于 10px 的文本（T48 与 T51 两次实测一致：`fontSizePx 9.12`、`rect 58x19`）。
+ * 这里给图鉴屏一个 `max(10px, …)` 的地板，**只作用于 `.library-screen`**：草稿页那 6 个 chip
+ * （`render.ts:4968`）一个字节不变。**刻意不写 `min-height`**：触摸面尺寸属用户口径的第 ③ 条
+ * （与 30 类勾选框的 13×13 同一族），本轮明确不动；实测给 24px 会把 1280 桌面整页下移 5px，
+ * 而只改字号只下移 1px（读数见 `.superpowers/g6-T51/T51-REPORT.md`）。
+ */
+@media (max-width: 1100px) {
+  .library-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .lib-proto {
+    flex-wrap: wrap;
+  }
+
+  .library-preview-img,
+  .library-preview-img.portrait,
+  .library-preview-img.landscape {
+    width: 100%;
+    max-width: 340px;
+    height: auto;
+  }
+}
+
+.library-screen .draft-filter-chip {
+  font-size: max(10px, calc(0.12 * var(--draft-u)));
 }
