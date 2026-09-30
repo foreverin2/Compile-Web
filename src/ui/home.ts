@@ -270,7 +270,7 @@ export function renderHome(root: HTMLElement, nav: HomeNav): void {
 
   const menu = el('div', 'home-menu');
   menu.appendChild(el('div', 'home-logo', 'Compile'));
-  menu.appendChild(el('div', 'home-sub', '译世界 · 非官方网页粉丝版'));
+  menu.appendChild(el('div', 'home-sub', '译世界 · 非官方网页版'));
   const btns = el('div', 'home-menu-buttons');
   btns.appendChild(button('btn home-btn home-btn-primary', '开始游戏', nav.startGame));
   btns.appendChild(button('btn home-btn', '查看协议及其所属卡牌', nav.openLibrary));
@@ -285,7 +285,7 @@ export function renderHome(root: HTMLElement, nav: HomeNav): void {
     el(
       'footer',
       'home-footer',
-      'Compile 桌游由原作者 MICHAEL YANG 创作 · 本网页版由「我吃吃吃吃」作为非官方粉丝开发'
+      'Compile 桌游由原作者 MICHAEL YANG 创作 · 本网页由「我吃吃吃吃」使用 DSH 辅助开发'
     )
   );
 

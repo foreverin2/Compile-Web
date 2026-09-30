@@ -1365,7 +1365,7 @@ describe('判据 14：行为面在 T7、渲染与接线在 T8', () => {
 
   it('那句提示的**唯一出处**在 `src/net/invite.ts`：全仓只有一处带它的正文', () => {
     const files = walkTs(SRC);
-    const withBody = files.filter((f) => readSrc(f).includes('6 位房间码要经一个信令服务'));
+    const withBody = files.filter((f) => readSrc(f).includes('6 位房间码需要一台中间服务器把两端牵上线'));
     expect(withBody.map(rel)).toEqual(['net/invite.ts']);
   });
 });

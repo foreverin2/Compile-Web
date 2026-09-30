@@ -4112,9 +4112,9 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
      * 仍然不含任何隐私承诺：中继那句隐私说明的唯一出处是 `src/app/privacy.ts`，
      * 启用/默认生效之后由下面那句 `relayNoticeOf(s.ice)` 原样引用进来（D22）。
      */
-    panel.appendChild(el('p', 'net-lobby-relay-hint', '不用管这一块：默认已经配好一台中继（TURN）——'
-      + '两端能直连时走直连，直连打不通（比如两边都在管得很严的网络里）会自动经它转发。'
-      + '只有在你要换成自己的中继时才需要填下面这三项。'));
+    panel.appendChild(el('p', 'net-lobby-relay-hint', '这一块平时不用管：默认那台中继够用 ——'
+      + '两端能直连时走直连，直连打不通时会自动经它转发。'
+      + '只有你想换成自己的中继，才需要填下面这三项。'));
     const relayToggle = el('label', 'net-lobby-relay-toggle');
     const relayBox = document.createElement('input');
     relayBox.type = 'checkbox';

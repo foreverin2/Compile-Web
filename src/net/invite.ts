@@ -1672,16 +1672,16 @@ export type EndpointGate =
  * 不再对本程序的出网行为下一个已经不成立的断言。
  */
 export const NO_ENDPOINT_HEADLINE =
-  '这台设备还没有配置信令端点，所以"输 6 位码"这条路暂时不可用：';
+  '输 6 位码这条路暂时走不通：这台设备还没有配置信令端点。';
 
 /** "为什么短码要端点" + "默认没有信令端点"（大厅的「高级 / 连接设置」区单独渲染它） */
 export const NO_ENDPOINT_REASON =
-  '6 位房间码要经一个信令服务才能把两端对上，而本程序默认没有配置信令端点（中继是另一件事，默认已经配好）。';
+  '6 位房间码需要一台中间服务器把两端牵上线，而本程序默认没有配置信令端点。';
 
 /** 两条可行的下一步（贴邀请码 / 去「高级 / 连接设置」填端点） */
 export const NO_ENDPOINT_NEXT_STEPS =
-  '可以改用邀请码（把它整条复制给对方、让对方粘贴进来），' +
-  '或者到「高级 / 连接设置」里填一个信令端点之后再用短码。';
+  '请改用邀请码：把整条码复制给对方、让他粘贴进来就行。' +
+  '想用 6 位码的话，先在「高级 / 连接设置」里填一台服务器地址。';
 
 export const NO_ENDPOINT_MESSAGE =
   NO_ENDPOINT_HEADLINE + NO_ENDPOINT_REASON + NO_ENDPOINT_NEXT_STEPS;

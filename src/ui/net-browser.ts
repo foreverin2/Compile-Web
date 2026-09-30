@@ -901,11 +901,10 @@ export function relayUnavailableNoteOf(read: IceServersRead): string | null {
   if (read.relayUnavailableReason === 'credential-unavailable') {
     const why = read.relayCredentialFailure === undefined
       ? '' : `（${describeTurnCredentialFailure(read.relayCredentialFailure)}）`;
-    return `这一轮没有中继可用${why}，只能试直连：两端在同一个局域网里通常能直接连上，`
-      + '跨网络能不能连上现在还不知道。稍后重试一次就好。';
+    return `这一轮没有中继可用${why}，只能试直连：同一个局域网里一般能直接连上，`
+      + '跨网络就不一定了。过一会儿再点一次试试。';
   }
-  return '这一轮没有中继可用（既没有拿到中继凭据，也没有自己配中继），只能试直连：'
-    + '两端在同一个局域网里通常能直接连上，跨网络能不能连上现在还不知道。';
+  return '这一轮没有中继可用，只能试直连：同一个局域网里一般能直接连上，跨网络就不一定了。';
 }
 
 /** 三项连接设置长什么样（`settingsAreDefault` 要与它逐字比） */

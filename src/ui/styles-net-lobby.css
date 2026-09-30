@@ -51,7 +51,15 @@
   align-items: center;
   gap: 14px;
   padding: 48px 20px 72px;
-  background: radial-gradient(120% 90% at 50% 0%, #141430 0%, #0b0b16 62%, #07070f 100%);
+  background-color: #07070f;
+  /* ★ 2026-09-29（用户）：这一屏原来只有一层近乎纯色的径向渐变，整页空空荡荡 ⇒ 垫上素材库
+   * 里已有的场景图（`public/assets/bg-scene.png`，不新增文件），上面压一层深色渐变保证文字对比度。 */
+  background-image:
+    linear-gradient(180deg, rgba(7, 7, 15, 0.86) 0%, rgba(7, 7, 15, 0.93) 55%, rgba(7, 7, 15, 0.97) 100%),
+    url('/assets/bg-scene.png');
+  background-size: cover, cover;
+  background-position: center top, center top;
+  background-repeat: no-repeat, no-repeat;
   color: #eef;
 }
 

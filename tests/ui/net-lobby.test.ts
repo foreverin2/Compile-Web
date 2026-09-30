@@ -544,11 +544,11 @@ describe('判据 7 · 「高级 / 连接设置」默认折叠，启用后才让�
     expect(queryAllIn(h.root, 'input.net-lobby-turn-user-input').length, 'TURN 用户名输入框默认就渲染了').toBe(0);
     expect(queryAllIn(h.root, 'input.net-lobby-turn-cred-input').length, 'TURN 凭据输入框默认就渲染了').toBe(0);
     // 收起时屏上留着"不用管"那一句 + 一个显式开关（不是把这一段藏起来不让人找到）
-    expect(textOf(h.root), '收起时没有"不用管这一块"那句').toContain('不用管这一块');
+    expect(textOf(h.root), '收起时没有"这一块平时不用管"那句').toContain('这一块平时不用管');
     expect(queryAllIn(h.root, 'input.net-lobby-relay-toggle-box').length, '没有那个显式开关').toBe(1);
-    // ★ T38：收起那一句必须说**事实**（默认已经配好一台中继），不再是旧的"默认走直连 + 公共 STUN"
+    // ★ T38：收起那一句必须说**事实**（默认那台中继够用），不再是旧的"默认走直连 + 公共 STUN"
     expect(textOf(h.root), '收起时那句还在说"默认走直连 + 公共 STUN"（T38 之前的世界）')
-      .toContain('默认已经配好一台中继');
+      .toContain('默认那台中继够用');
     // ★ 勾上开关（`relayOpen`）⇒ 三项进 DOM（开关自己的处理函数由 `nav.toggleRelay` 接）
     h.draw((s) => ({ ...s, relayOpen: true }));
     expect(queryAllIn(h.root, 'input.net-lobby-turn-url-input').length, 'TURN URL 输入框没了').toBe(1);
@@ -734,11 +734,11 @@ describe('判据 5 · 端点为空：可读提示逐字来自唯一出处，且�
     const code = stripComments(
       readFileSync(fileURLToPath(new URL('../../src/ui/net-lobby.ts', import.meta.url))).subarray(0, 8 * 1024 * 1024).toString('utf8'),
     );
-    expect(code.includes('6 位房间码要经一个信令服务'), '大厅里手写了那句提示的正文（唯一出处是 net/invite.ts）')
+    expect(code.includes('6 位房间码需要一台中间服务器把两端牵上线'), '大厅里手写了那句提示的正文（唯一出处是 net/invite.ts）')
       .toBe(false);
     // 反空转：那个片段在真树别处确实存在
     const invite = readFileSync(fileURLToPath(new URL('../../src/net/invite.ts', import.meta.url))).subarray(0, 8 * 1024 * 1024).toString('utf8');
-    expect(invite.includes('6 位房间码要经一个信令服务'), '夹具失败：invite.ts 里没有那个片段').toBe(true);
+    expect(invite.includes('6 位房间码需要一台中间服务器把两端牵上线'), '夹具失败：invite.ts 里没有那个片段').toBe(true);
   });
 });
 
@@ -1976,7 +1976,7 @@ describe('★ 修复轮 · D22 的第二份信令说明（评审 §4.2 的违例
     expect(NO_ENDPOINT_HEADLINE + NO_ENDPOINT_REASON, 'HEADLINE+REASON 不再是原句的前两段')
       .toBe(NO_ENDPOINT_MESSAGE.slice(0, (NO_ENDPOINT_HEADLINE + NO_ENDPOINT_REASON).length));
     expect(NO_ENDPOINT_MESSAGE, '整句里少了"否则既有的那条文本腿会红"的那一段')
-      .toContain('6 位房间码要经一个信令服务');
+      .toContain('6 位房间码需要一台中间服务器把两端牵上线');
   });
 
   it('行为腿：端点为空时屏上出现那两行，且都是唯一出处的正文', () => {

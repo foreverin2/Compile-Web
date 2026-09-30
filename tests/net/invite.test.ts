@@ -485,7 +485,7 @@ describe('端点判定与那句提示（判据 5 的文案本体，判据 14 的
     // 它导出的是同一个常量（转发），而不是一段新写的字符串
     expect(code).toContain('export const NO_SIGNALING_ENDPOINT_MESSAGE = NO_ENDPOINT_MESSAGE;');
     // 那句提示的正文**不许**在 net-browser.ts 里再出现一次（各写一份就是同一概念两个家）
-    expect(code.includes('6 位房间码要经一个信令服务'), 'net-browser.ts 里复制了那句提示的正文').toBe(false);
+    expect(code.includes('6 位房间码需要一台中间服务器把两端牵上线'), 'net-browser.ts 里复制了那句提示的正文').toBe(false);
   });
 });
 

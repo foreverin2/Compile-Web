@@ -2665,7 +2665,8 @@ function renderLobbyFrame(): void {
   const st = client === null ? lobbyEntryState() : client.state();
   renderNetLobby(root, {
     state: st,
-    backHome: () => { showModeSelect(); },
+    // ★ 2026-09-29：离开大厅就把大厅的模块态丢掉（否则再进来会直接进上一次那个模式，见 leaveLobbyModule）
+    backHome: () => { leaveLobbyModule(); showModeSelect(); },
     startHost: () => { startLobby('host'); },
     startJoin: () => { startLobby('guest'); },
     makeInvite: () => { void makeLobbyInvite(); },
@@ -2915,6 +2916,27 @@ function attachLobbyReconnect(client: LobbyClient): void {
  *    `transport.onMessage` 只更新它自己的记账数 ⇒ 屏上停在上一帧的读数上（评审 1.3 的 A4）。
  *  - `localNick`：`hello.nick` 的唯一来源（`session.ts:2438` 说"`hello` 里还有 `nick`"）。
  */
+/**
+ * ★ 2026-09-29（用户实测的 bug）：**丢掉大厅的模块态**（客户端 + role + 硬币/邀请码那几格读数）。
+ *
+ * 语义是"大厅这一屏不要了" ⇒ 下一次进大厅应当重新问"建房还是加入"。没有它的话，
+ * `lobbyClient` 会带着上一次的 `role` 一直活着，入口那一屏（`role === null`）再也不出现。
+ *
+ * 调用者：大厅那一屏的「← 返回模式选择」。`resetToMainInterface` 里有一段等价的 inline 代码
+ * （打完一局回主界面那条路），**故意没合并**过去 —— 那个函数牵着一局收尾的既有读数，不动它更稳。
+ */
+function leaveLobbyModule(): void {
+  lobbyClient?.dispose();
+  lobbyClient = null;
+  lobbyMode = null;
+  invitedCodeFormat = null;
+  lobbyCoinShown = null;
+  lobbyRestartNeeded = false;
+  linkRecoveryNeeded = false;
+  chooseFaceResolve = null;
+  faceChosen = false;
+}
+
 function startLobby(role: 'host' | 'guest'): void {
   lobbyMode = role;
   /**

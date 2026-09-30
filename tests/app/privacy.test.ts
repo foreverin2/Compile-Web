@@ -402,7 +402,7 @@ const COPY_PINS: ReadonlyArray<{ group: PrivacyGroupKey; line: number; hash: str
   { group: 'signalAndRelay', line: 0, hash: '930ebfa765c90da0' },
   // ★ G5/T38 重钉：中继那句的正文改了（默认带一台中继 ⇒ 元数据看得到、内容不可读）。
   //   改动理由与人工复核记录见 `src/app/privacy.ts` 的 `signalAndRelay` 注释。
-  { group: 'signalAndRelay', line: 1, hash: '50005fd698eadb9b' },
+  { group: 'signalAndRelay', line: 1, hash: '105917b7fe17b0d8' },
   // ★★ G6/T50（B1）：新增"向签发服务请求中继凭据（记录 IP 与时间）"那一句。
   //     由 `tests/app/privacy.test.ts` 自己在红的时候打印出实际哈希，人工复核后抄回。
   { group: 'signalAndRelay', line: 2, hash: '2a2f7b57c099fed0' },
@@ -543,7 +543,7 @@ const MODULE_PINS: ReadonlyArray<{ key: string; hash: string }> = [
   { key: 'PRIVACY_COPY.offlineCacheNote[1]', hash: '9bcdf3506e9b4361' },
   { key: 'PRIVACY_COPY.signalAndRelay[0]', hash: '930ebfa765c90da0' },
   // ★ G5/T38 重钉（与 `COPY_PINS` 逐字相同）：中继那句改成"默认带中继 + 元数据可见/内容不可读"
-  { key: 'PRIVACY_COPY.signalAndRelay[1]', hash: '50005fd698eadb9b' },
+  { key: 'PRIVACY_COPY.signalAndRelay[1]', hash: '105917b7fe17b0d8' },
   // ★★ G6/T50（B1）：新增那一句（与 `COPY_PINS` 的 signalAndRelay[2] 逐字相同）
   { key: 'PRIVACY_COPY.signalAndRelay[2]', hash: '2a2f7b57c099fed0' },
 ];
