@@ -55,6 +55,10 @@ export const CHANGELOG: readonly ChangelogDay[] = [
     date: '2026-09-30',
     items: [
       {
+        problem: '控制权易主时会冒出"色欲"的红色特效，哪怕场上根本没有色欲这张牌。',
+        fix: '已修复，改成只有色欲在场时才显示。',
+      },
+      {
         problem: '双人热座对局下方的日志一直占着地方。',
         fix: '已改为默认隐藏，右上角新增「显示日志」按钮可随时展开。',
       },

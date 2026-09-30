@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { Card, GameState, Line, PlayerId } from '../../src/core/models/types';
 import { createGame } from '../../src/core/state/create';
-import { clearGen3Persistent, syncWrath0Cull } from '../../src/ui/gen3-control';
+import { clearGen3Persistent, lustHoldOf, syncWrath0Cull } from '../../src/ui/gen3-control';
 import { setFxViewSeat } from '../../src/ui/fx-seat';
 import { installStubDom, makeStubEl, type StubNode } from './net-dom-stub';
 import { stripComments } from './source-text';
@@ -344,5 +344,41 @@ describe('R14-6 · 暴怒0 中缝按页面轴向画（热座横 / 远程竖）',
     // 基础规则（hot 侧那份表）一个数都没动
     expect(syncCss, 'styles-gen3-sync.css 的横版中缝被改了（它是热座页的样式）')
       .toMatch(/\.g3sync-wrath0-seam \{[\s\S]{0,160}border-top: 2px dashed rgba\(192, 57, 43, 0\.85\)/);
+  });
+});
+
+/* ============================================================================
+ * ★ 2026-09-30（用户实测）：控制权易主就冒"色欲红环"那个 bug
+ * ========================================================================== */
+
+describe('★ 色欲持有中：必须真的有色欲在场（2026-09-30 用户实测）', () => {
+  // isUncovered 要求 zone='field' + line/owner 齐（core/effects/context.ts:31）⇒ 夹具补上
+  const card = (over: Partial<Card>): Card =>
+    ({ uid: 'u1', defId: 'lust-0', faceUp: true, zone: 'field', line: 0, owner: 0, ...over } as Card);
+  const state = (cards: Card[], control: number = 0): GameState =>
+    ({ control, players: [{ stacks: [cards] }, { stacks: [] }] } as unknown as GameState);
+
+  it('持有者场上没有色欲 ⇒ 判据为假（红环/链/徽标与封条都该缺席）', () => {
+    expect(lustHoldOf(state([card({ defId: 'water-0' })]), 0), '没色欲也算"色欲持有中"').toBe(false);
+    expect(lustHoldOf(state([]), 0)).toBe(false);
+  });
+
+  it('未覆盖正面 lust-0 ⇒ 判据为真；反面 / 被盖 都不算', () => {
+    expect(lustHoldOf(state([card({})]), 0)).toBe(true);
+    expect(lustHoldOf(state([card({ faceUp: false })]), 0), '反面也算').toBe(false);
+    // 栈底是 lust-0、栈顶是别的牌 ⇒ lust-0 被盖住（isUncovered 只看顶卡）
+    const covered: Card[] = [card({ uid: 'u1' }), card({ uid: 'top', defId: 'water-0' })];
+    expect(lustHoldOf(state(covered), 0), '被盖住的 lust-0 也算').toBe(false);
+  });
+
+  it('源码腿：红环那一段进 `holds` 条件（与封条同一个判据），不许再"谁持有就画"', () => {
+    const fn = controlTs.slice(controlTs.indexOf('export function syncLustHold'));
+    const holds = fn.indexOf('const holds = lustHoldOf(s, holder);');
+    const ring = fn.indexOf("ensure(key, 'g3sync-lusthold', Z_LINE)");
+    const seal = fn.indexOf("ensure(key, 'g3sync-lustblock', Z_LINE)");
+    expect(holds, '找不到 holds 判据').toBeGreaterThan(-1);
+    expect(fn, '红环没有进 holds 条件').toContain('if (holds && r) {');
+    expect(ring, '红环的 ensure 必须在 holds 之后').toBeGreaterThan(holds);
+    expect(seal, '封条的 ensure 必须在 holds 之后').toBeGreaterThan(holds);
   });
 });

@@ -561,15 +561,33 @@ export function flashRigidity7Guard(uid: string): void {
 
 /* ============================== 6. 色欲持有中 / 禁编译（C3·C6） ============================== */
 
+/**
+ * ★ 2026-09-30（用户实测的 bug）：**这套视觉是"色欲持有中"，必须真的有色欲在场才画**。
+ *
+ * 判据 = 持有者场上有**未覆盖正面 `lust-0`**（与 C6 禁编译判据同一个）。
+ * 提成函数是因为它现在同时管两件事：C3 常驻红环/牵引链/lust 徽标、C6 对手侧封条。
+ *
+ * 原来红环那一段**没有查这一条** —— 只要有人持有控制权就画红环 + `lust` 徽标；用户那局
+ * 双方协议是 `[water,fire,life]` / `[speed,light,darkness]`（一张色欲都没有），
+ * 控制权一易主（`control:changed` reason=`check`）就冒出"色欲的红环"，所以他报了这个 bug。
+ */
+export function lustHoldOf(s: GameState, holder: PlayerId): boolean {
+  return s.players[holder].stacks.some((st) =>
+    st.some((c) => c.defId === 'lust-0' && c.faceUp && isUncovered(s, c)),
+  );
+}
+
 /** C3 持有中：持有者一侧常驻红色牵引环 + 组件徽标；C6：持有者未覆盖正面 lust-0 → 对手协议区暗紫封条。 */
 export function syncLustHold(s: GameState): string[] {
   const active = new Set<string>();
   if (s.control === 0 || s.control === 1) {
     const holder = s.control;
+    /** ★ 2026-09-30：红环/链/徽标与封条**共用**这一个判据（见 `lustHoldOf` 的说明） */
+    const holds = lustHoldOf(s, holder);
     const mod = document.querySelector<HTMLElement>('.control-module');
     const img = document.querySelector<HTMLElement>('.control-slider-img');
     const r = img ? rectOf(img) : mod ? rectOf(mod) : null;
-    if (r) {
+    if (holds && r) {
       const key = 'lusthold';
       active.add(key);
       const rec = ensure(key, 'g3sync-lusthold', Z_LINE);
@@ -586,11 +604,8 @@ export function syncLustHold(s: GameState): string[] {
       const badge = rec.node.querySelector<HTMLElement>('.g3sync-badge.lust');
       if (badge) { badge.style.left = `${r.left + r.width / 2 - 10}px`; badge.style.top = `${r.top - 14}px`; }
     }
-    // C6：禁编译（持有者场上有未覆盖正面 lust-0）
-    const blocks = s.players[holder].stacks.some((st) =>
-      st.some((c) => c.defId === 'lust-0' && c.faceUp && isUncovered(s, c)),
-    );
-    if (blocks) {
+    // C6：禁编译（持有者场上有未覆盖正面 lust-0）—— 与上面同一个条件
+    if (holds) {
       const foe: PlayerId = holder === 0 ? 1 : 0;
       const key = `lustblock-${foe}`;
       active.add(key);
