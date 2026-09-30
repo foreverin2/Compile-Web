@@ -9,10 +9,11 @@
  * （行内样式，不新增样式表、不碰 `styles.css`），并**自己判断该不该显示**。判据来自 DOM 上的
  * 页面标记（不去问宿主，也就不需要改每帧都在变的渲染代码）：
  *
- *  - **有对局画面**：`#app` 里有 `.board` / `.draft-screen` / `.coin-screen` 之一；
+ *  - **在牌桌上**：`#app` 里有 `.board`（**游玩页**）。★ 2026-09-30（用户口径）：
+ *    硬币屏（`.coin-screen`）与选协议屏（`.draft-screen`）**都不算** —— 那两个屏上不显示这两个按钮；
  *  - **不是远程页**：`body` 上没有 `.net-page`（那条标记只由 `render-net.ts` 加/清，
  *    热座渲染路径从不写它 —— 见 `render-net.ts` 里 `NET_PAGE_CLASS` 的注释）；
- *  - **不是大厅**：没有 `.net-lobby-screen`；**不是回放**：没有 `[class*="replay"]`。
+ *  - **不是大厅**（`.net-lobby-screen`）/ **不是回放**（`[class*="replay"]`）。
  *
  * ## 为什么用 MutationObserver
  *
@@ -22,6 +23,7 @@
 export const HOTSEAT_EXIT_CLASS = 'hotseat-exit-btn';
 
 export interface ExitButtonFlags {
+  /** 此刻在牌桌（游玩页）上 —— 硬币屏 / 选协议屏都不算（用户 2026-09-30 口径） */
   readonly hasGameScreen: boolean;
   readonly isNetPage: boolean;
   readonly isLobby: boolean;
@@ -39,7 +41,8 @@ export function exitButtonFlagsOf(
   body: Pick<HTMLElement, 'classList'> = document.body,
 ): ExitButtonFlags {
   return {
-    hasGameScreen: root.querySelector('.board, .draft-screen, .coin-screen') !== null,
+    // ★ 只看 `.board`（游玩页）；`.coin-screen` / `.draft-screen` 不算（用户 2026-09-30 口径）
+    hasGameScreen: root.querySelector('.board') !== null,
     isNetPage: body.classList.contains('net-page'),
     isLobby: root.querySelector('.net-lobby-screen') !== null,
     isReplay: root.querySelector('[class*="replay"]') !== null,

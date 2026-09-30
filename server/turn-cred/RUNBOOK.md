@@ -33,11 +33,14 @@ coturn 侧配置（**由协调侧在那台 ECS 上执行，本文件只写步骤
    `/var/log/turn-cred.log` = `turncred:adm 0640`（单元里 `ReadWritePaths=/var/log`）。
    自检同样用 `runuser -u turncred -- env … --check` 复现同一身份。
 
-**顺带记一条会咬人的读数**（不是故障）：`TURN_CRED_PER_IP_CONCURRENT` 缺省 **3** —— 同一出口 IP
-**同时有效的凭据最多 3 份**，第 4 个请求就 429（实测：同一 IP 连打 12 次 ⇒ `200 200 429 429 …`）。
+**顺带记一条会咬人的读数**（不是故障）：`TURN_CRED_PER_IP_CONCURRENT` 原来的缺省是 **3** —— 同一出口
+IP **同时有效的凭据最多 3 份**，第 4 个请求就 429（实测：同一 IP 连打 12 次 ⇒ `200 200 429 429 …`）。
 同网一起玩的人本来就能直连，但**运营商 CGNAT**（手机流量常是一大片人共用一个出口 IP）会把不同
-玩家算成同一个 IP ⇒ 第 4 个人拿不到中继。要放宽就改 `/etc/turn-cred/env` 的
-`TURN_CRED_PER_IP_CONCURRENT` / `TURN_CRED_PER_IP_PER_MINUTE` 再 `systemctl restart turn-cred`；
+玩家算成同一个 IP ⇒ 第 4 个人拿不到中继。
+
+**用户 2026-09-29 拍板放宽**（理由：真正限制滥用的是 coturn 那三根保险丝，按 IP 的额度是另一回事）：
+`/etc/turn-cred/env` 里 `TURN_CRED_PER_IP_PER_MINUTE=30`、`TURN_CRED_PER_IP_CONCURRENT=10`，重启后
+`/healthz` 报 `perIpPerMinute: 30, perIpConcurrent: 10`，外网连打 12 次 ⇒ `200 ×10, 429 ×2`。
 **重启会清空内存里的记账**（验证时想复位配额也用它）。
 
 回滚按逆序：⑤ 切回旧 coturn 配置（§8②）⇒ ④ 前端切回旧产物（§8①）⇒ ①② 签发服务留着无害。

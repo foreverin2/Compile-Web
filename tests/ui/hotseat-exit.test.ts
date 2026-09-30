@@ -38,6 +38,16 @@ describe('热座「退出游戏」按钮：显示判据', () => {
     });
     expect(shouldShowExitButton(exitButtonFlagsOf(root as never, body as never))).toBe(true);
   });
+
+  it('★ 2026-09-30 用户口径：硬币屏与选协议屏**不算游玩页** ⇒ 按钮不出现', () => {
+    // 只认 `.board`：`.coin-screen` / `.draft-screen` 一律读成"不在牌桌上"
+    for (const screen of ['.coin-screen', '.draft-screen', '.net-lobby-screen']) {
+      const root = { querySelector: (sel: string) => (sel.includes(screen) ? ({} as Element) : null) };
+      const body = { classList: { contains: () => false } };
+      expect(exitButtonFlagsOf(root as never, body as never).hasGameScreen, `${screen} 被当成了游玩页`)
+        .toBe(false);
+    }
+  });
 });
 
 describe('热座「退出游戏」按钮：注入实现（不动 render.ts）', () => {
