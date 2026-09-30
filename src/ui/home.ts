@@ -15,7 +15,8 @@ import { changelogElement } from './changelog';
  * - renderCoin：掷硬币先手机制（玩家一选正/反 → 掷币；掷胜者先选协议，后选协议者
  *   先出牌——main 以 createGame({ draftStarter: 胜者, firstToPlay: 1-胜者 }) 开局）。
  * - renderLibrary：查看全部协议及其所属卡牌（分组行 + 点卡放大；复用 render.openZoom）。
- * - renderRules：查看 1/2/3 代说明书与 FAQ（public/assets/rules PDF + iframe 查看）。
+ * - renderRules：查看 1/2/3 代说明书与 FAQ（**2026-09-30 起按页显示图片**，
+ *   页图见 `public/assets/rules/pages/`；原版 PDF 留成一个显式按钮）。
  */
 export interface HomeNav {
   /** 开始游戏 → 游戏模式选择页（2026-09-03：热坐/单人/三人 + 禁用/随机池开关） */
@@ -1414,14 +1415,26 @@ interface RuleDoc {
   file: string;
   title: string;
   desc: string;
+  /**
+   * ★ 2026-09-30：这本规则书**有几页页图**（`public/assets/rules/pages/<base>/page-NN.jpg`）。
+   *
+   * 它与 `tests/ui/rules-pages.test.ts` 逐页比对（数量 + 两位零填充的文件名）—— PDF 换了、
+   * 页图没重转，会当场变红，不会让玩家看到"少一页"或者"第四页开始是上一本的图"。
+   */
+  pages: number;
 }
 
-const RULES: RuleDoc[] = [
-  { file: 'rule-mn01.pdf', title: '1代说明书', desc: 'Compile MN01（水/火/光/暗/生/死…）' },
-  { file: 'rule-mn02.pdf', title: '2代说明书', desc: 'Compile MN02（冰/明镜/混乱/恐惧…）' },
-  { file: 'rule-mn03.pdf', title: '3代说明书', desc: 'Compile MN03' },
-  { file: 'rule-mn03-solo.pdf', title: '3代单人游玩说明书', desc: '单人规则扩展' },
-  { file: 'rule-faq.pdf', title: '游戏详细FAQ说明书', desc: '官方 FAQ 汇总' },
+/** 页图的目录名 = PDF 文件名去掉 `.pdf`；这条映射只在这里写一次（渲染与测试都照它） */
+export function rulePageDir(file: string): string {
+  return file.replace(/\.pdf$/, '');
+}
+
+export const RULES: readonly RuleDoc[] = [
+  { file: 'rule-mn01.pdf', title: '1代说明书', desc: 'Compile MN01（水/火/光/暗/生/死…）', pages: 2 },
+  { file: 'rule-mn02.pdf', title: '2代说明书', desc: 'Compile MN02（冰/明镜/混乱/恐惧…）', pages: 2 },
+  { file: 'rule-mn03.pdf', title: '3代说明书', desc: 'Compile MN03', pages: 2 },
+  { file: 'rule-mn03-solo.pdf', title: '3代单人游玩说明书', desc: '单人规则扩展', pages: 2 },
+  { file: 'rule-faq.pdf', title: '游戏详细FAQ说明书', desc: '官方 FAQ 汇总', pages: 12 },
 ];
 
 export function renderRules(root: HTMLElement, back: () => void): void {
@@ -1446,26 +1459,43 @@ export function renderRules(root: HTMLElement, back: () => void): void {
     info.appendChild(el('div', 'rules-desc', doc.desc));
     item.appendChild(cover);
     item.appendChild(info);
-    item.addEventListener('click', () => openPdfViewer(doc));
+    item.addEventListener('click', () => openRulePages(doc));
     grid.appendChild(item);
   }
   screen.appendChild(grid);
   root.appendChild(screen);
 }
 
-/** PDF 全屏查看遮罩：iframe 内嵌 + 新标签打开 + 关闭 */
-function openPdfViewer(doc: RuleDoc): void {
-  const url = `/assets/rules/${doc.file}`;
+/**
+ * ★ 2026-09-30（用户要求）：点规则书**按页显示图片**，不再内嵌 PDF。
+ *
+ * 为什么改：内嵌 `<iframe src="*.pdf">` 在别人那台设备上会变成"下载一个 PDF"（用户实测：
+ * "别人点击规则书查看后是下PDF"），手机浏览器里更常见——iframe 里的 PDF 直接触发下载，
+ * 内容根本看不到。现在按页显示图片（每本已用 `pdftoppm` 转好：150dpi / jpeg，
+ * 放在 `public/assets/rules/pages/<base>/page-NN.jpg`），原版 PDF 留成一个显式按钮。
+ *
+ * 遮罩与顶栏复用既有的 `.pdf-overlay` / `.pdf-bar` / `.pdf-title`（红线 `styles.css` 里的
+ * 那三条规则本来就是给这块屏用的），只给页图加两条新类（见 `styles-local.css`）。
+ */
+function openRulePages(doc: RuleDoc): void {
+  const dir = rulePageDir(doc.file);
   const overlay = el('div', 'pdf-overlay');
   const bar = el('div', 'pdf-bar');
-  bar.appendChild(el('div', 'pdf-title', doc.title));
-  bar.appendChild(button('btn', '新标签打开', () => window.open(url, '_blank')));
+  bar.appendChild(el('div', 'pdf-title', `${doc.title}（共 ${doc.pages} 页）`));
+  bar.appendChild(button('btn', '原版 PDF', () => window.open(`/assets/rules/${doc.file}`, '_blank')));
   bar.appendChild(button('btn', '关闭', () => overlay.remove()));
   overlay.appendChild(bar);
-  const frame = document.createElement('iframe');
-  frame.className = 'pdf-frame';
-  frame.src = url;
-  overlay.appendChild(frame);
+
+  const body = el('div', 'rules-pages');
+  for (let i = 1; i <= doc.pages; i += 1) {
+    const img = document.createElement('img');
+    img.className = 'rules-page';
+    img.src = `/assets/rules/pages/${dir}/page-${String(i).padStart(2, '0')}.jpg`;
+    img.alt = `${doc.title} 第 ${i} 页`;
+    img.loading = i <= 2 ? 'eager' : 'lazy'; // 头两页先到，后面的滚到再拉
+    body.appendChild(img);
+  }
+  overlay.appendChild(body);
   overlay.addEventListener('click', (e) => {
     if (e.target === overlay) overlay.remove();
   });
