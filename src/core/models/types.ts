@@ -276,8 +276,15 @@ export interface CandidateFilter {
   covered?: boolean;
   /** 允许把【结算中的源卡自己】列入候选（默认排除，防幽灵状态）。
    *  2026-09-13 用户实测新增：3代 flexibility-1「翻转或偏转**你的**1张牌」、inertia-2/wrath-2
-   *  「…中**所有**正面朝上的牌」等文案含自身 → 这些卡需要 includeSelf:true。 */
+   *  「…中**所有**正面朝上的牌」等文案含自身 → 这些卡需要 includeSelf:true。
+   *  ★ 口径（2026-09-30 用户）：`includeSelf:true` 是"结算中源卡一律都放行"（文案确实写了"所有牌"
+   *  时才用）；只是"文本没排除源卡自己"的情形（如 life-1「翻转1张牌」）应改用下面的
+   *  `includeSelfUid`，这样**只放行这张源卡**，其他同时结算中的源卡仍被排除。 */
   includeSelf?: boolean;
+  /** 只放行【这一张】uid 的结算中源卡（别人的防护保留：其他 pendingEffects 的 sourceUid 仍排除）。
+   *  2026-09-30 用户实测新增：life-1「翻转1张牌」文本只说"1张牌"、没排除源卡自己 → 玩家应能点到
+   *  自己这张 life-1；但同一时刻别的卡若也在结算（偏转触发的悬浮等），那些卡不该因此变得可选。 */
+  includeSelfUid?: string;
 }
 
 /** 牌库揭示状态（2代 clarity-1 top 揭示牌库顶 / clarity-2/3 揭示整副牌库；UI 依此弹展示浮层）。

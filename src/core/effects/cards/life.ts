@@ -30,13 +30,14 @@ function* life0End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
 
 /** life-1：翻转1张牌。再翻转1张牌。—— 两次各选 1 张未覆盖牌翻转；第二次可再选第一次那张
  *  ★ 2026-09-30（用户实测）：**两次选择都允许指向自己（源卡）** —— 文本只说"翻转1张牌"，
- *  没有排除源卡；而 `candidates` 默认把源卡排除（`context.ts` 的 `resolving` 集合）⇒ 要显式传
- *  `includeSelf: true`，否则玩家在选效果那一步点不到自己这张 life-1。 */
+ *  没有排除源卡；而 `candidates` 默认把源卡排除（`context.ts` 的 `resolving` 集合）⇒ 要显式放行。
+ *  放行方式用 `includeSelfUid`（只放行这一张），**不用 `includeSelf:true`**：后者会把同一时刻
+ *  所有结算中源卡一起放行，把别人的幽灵状态防护也拆了（用户 2026-09-30 口径）。 */
 function* life1(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
-  const targets = ctx.candidates({ zone: 'field', includeSelf: true });
+  const targets = ctx.candidates({ zone: 'field', includeSelfUid: ctx.card.uid });
   const ans1 = yield { kind: 'select', title: 'life-1：翻转1张牌', min: 1, max: 1, optional: false, candidates: targets };
   if (ans1.selected.length > 0) yield { op: 'flip', uid: ans1.selected[0] };
-  const ans2 = yield { kind: 'select', title: 'life-1：再翻转1张牌', min: 1, max: 1, optional: false, candidates: ctx.candidates({ zone: 'field', includeSelf: true }) };
+  const ans2 = yield { kind: 'select', title: 'life-1：再翻转1张牌', min: 1, max: 1, optional: false, candidates: ctx.candidates({ zone: 'field', includeSelfUid: ctx.card.uid }) };
   if (ans2.selected.length > 0) yield { op: 'flip', uid: ans2.selected[0] };
 }
 

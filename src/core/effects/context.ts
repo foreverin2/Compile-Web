@@ -66,7 +66,12 @@ function toChoiceCard(c: Card): ChoiceCard {
 export function listCandidates(s: GameState, filter: CandidateFilter): ChoiceCard[] {
   // 2026-09-13（用户实测）：flexibility-1「翻转或偏转**你的**1张牌」、inertia-2/wrath-2「**所有**正面朝上的牌」
   // 文案含卡自身 → 这些卡传 includeSelf:true，此时不排除结算中源卡。
-  const resolving = filter.includeSelf ? new Set<string>() : new Set(s.pendingEffects.map((pe) => pe.sourceUid));
+  // 2026-09-30（用户口径，`includeSelfUid`）：只放行指定那一张 —— life-1「翻转1张牌」文本没排除源卡自己
+  // （要能点到自己），但同一时刻**别的**卡若也在结算中（偏转触发的悬浮等），那些卡的防护必须保住
+  // ⇒ 这时用 includeSelfUid，而不是把 resolving 整个清空。
+  const resolving = filter.includeSelf
+    ? new Set<string>()
+    : new Set(s.pendingEffects.map((pe) => pe.sourceUid).filter((uid) => uid !== filter.includeSelfUid));
   const out: ChoiceCard[] = [];
   if (filter.zone === 'hand') {
     const p = s.players[filter.owner!];

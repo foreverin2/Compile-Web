@@ -13,6 +13,28 @@ describe('covered targeting', () => {
     expect(all.some((c) => c.pos === 1)).toBe(false); // 顶卡不列出（covered 仅覆盖卡）
   });
 
+  it('★ 2026-09-30 includeSelfUid：只放行这一张源卡，别人的结算中源卡仍排除', () => {
+    const s = draftFireP1();
+    const mine = makeCard('life-1', 0, 'field', true, 0, 0);
+    const other = makeCard('metal-0', 0, 'field', true, 1, 0);
+    s.players[0].stacks[0] = [mine];
+    s.players[0].stacks[1] = [other];
+    const pending = (uid: string, id: string) => ({
+      id, player: 0 as const,
+      gen: (function* (): Generator<EffectStep, void, StepResult> {})(),
+      sourceUid: uid, sourceDefId: 'system', system: true, prompt: null, lastAnswer: null,
+    });
+    s.pendingEffects.push(pending(mine.uid, 'e1'), pending(other.uid, 'e2'));
+    // 默认（既不 includeSelf 也不 includeSelfUid）：两张都在结算中 ⇒ 都排除（幽灵状态防护）
+    expect(listCandidates(s, { zone: 'field' }).map((c) => c.uid)).toEqual([]);
+    // includeSelfUid：只放行指定的那一张，别人的防护保住
+    expect(listCandidates(s, { zone: 'field', includeSelfUid: mine.uid }).map((c) => c.uid))
+      .toEqual([mine.uid]);
+    // includeSelf:true 的旧语义不变：结算中源卡一律放行
+    expect(listCandidates(s, { zone: 'field', includeSelf: true }).map((c) => c.uid).sort())
+      .toEqual([mine.uid, other.uid].sort());
+  });
+
   it('shift with allowCovered moves a covered card', () => {
     const s = draftFireP1();
     s.players[1].stacks[0] = [makeCard('water-1', 1, 'field', true, 0, 0), makeCard('water-2', 1, 'field', true, 0, 1)];
