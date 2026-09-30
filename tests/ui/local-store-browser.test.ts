@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { L1_DECKS, L1_PROBE_KEY, L1_SETTINGS, readJson, writeJson } from '../../src/app/storage';
+import { L1_CONSENT, L1_DECKS, L1_PROBE_KEY, L1_SETTINGS, readJson, writeJson } from '../../src/app/storage';
 import { createLocalStore, readDecks, readNickName, writeDecks, writeNickName } from '../../src/app/local-store';
 import { openL1Store, memoryFallback, type StorageLike } from '../../src/ui/local-store-browser';
 
@@ -213,7 +213,8 @@ describe('端到端：createLocalStore(openL1Store(假件))', () => {
     expect(readNickName(s)).toBe('甲');
     // ⚠️ 判据落在**假件**上（不是"读回来看着对"）：值必须真的在 localStorage 里
     const stored = ls.snapshot();
-    expect(Object.keys(stored), '只有 compile-settings 一个键（探针键已自净）').toEqual([L1_SETTINGS]);
+    expect(Object.keys(stored).sort(), '授权标记 + compile-settings 两个键（探针键已自净）')
+      .toEqual([L1_CONSENT, L1_SETTINGS].sort());
     expect(JSON.parse(stored[L1_SETTINGS]) as unknown).toEqual({ nick: '甲' });
     // 卡组也走同一条链
     expect(writeDecks(s, [{ id: 'd1', name: '我的卡组', seed: 's', defIds: ['water'], updatedAt: 't' }])).toBe(true);

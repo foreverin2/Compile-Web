@@ -80,6 +80,19 @@ export const L1_KEY_PREFIX = 'compile-';
  */
 export const L1_SETTINGS = `${L1_KEY_PREFIX}settings`;
 export const L1_DECKS = `${L1_KEY_PREFIX}decks`;
+/**
+ * ★ 2026-09-29（用户口径）：**授权选择的标记**（值只有一个：`allowed`）。
+ *
+ * 为什么现在要落盘：原来授权状态只活在内存里（"刷新即重问"），于是**每次整页加载都会再问一次** ——
+ * 站内点来点去不换文档时感觉不到，但刷新页面、或从「设备体检」这种独立页返回时就会再弹一次
+ * （用户实测报的就是这个）。弹窗自己的文案写着"你随时可以…改变这个选择"，能"改"就意味着该记住。
+ *
+ * 时机：**只在用户点「允许」之后写**（`createLocalStore.grant()`，且写探针通过才写）——
+ * "授权之前零写入"这条红线不变（写探针的全仓唯一落点仍在 `grant()` 里）。`deny` **不写**这个键：
+ * 那个按钮写的是"不用，本次不保存"，下次仍然问。
+ * 它列在 `clearAllLocalData` 的键表里 ⇒「清除本机数据」会把选择一起忘掉，下次重新问。
+ */
+export const L1_CONSENT = `${L1_KEY_PREFIX}consent`;
 
 /**
  * 探测用的键：`set` 探针写进去、**立刻删掉**（`probeWritable`），探测之前不存在、
@@ -262,7 +275,7 @@ export function writeJson(kv: KeyValueStore, key: string, value: unknown): Write
 
 /** 清掉 L1 自己的全部键（**不动别人的键**）；返回清掉的个数。`remove` 的异常不吞。 */
 export function clearAllLocalData(kv: KeyValueStore): number {
-  const mine = [L1_SETTINGS, L1_DECKS];
+  const mine = [L1_SETTINGS, L1_DECKS, L1_CONSENT];
   let n = 0;
   for (const k of mine) {
     if (kv.get(k) !== null) {

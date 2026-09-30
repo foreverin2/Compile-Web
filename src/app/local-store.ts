@@ -3,11 +3,11 @@
  *
  * 关键不变式（红线的机检形态）：
  *  1. `consent === 'denied'`（游客模式）⇒ 任何写入都不碰 persistent（走内存 KV）；
- *  2. **授权状态本身从不落盘** —— 它只活在闭包里，刷新即回 'unknown'，于是"下次进入重新问"；
- *     （设计稿 §3.6 的另一条路 `sessionStorage` 被否：它也是磁盘写入，违反红线 3。）
- *     ⚠️ `grant()` 里那次**写探针**（`probeWritable`，键 `L1_PROBE_KEY`，写完即删）是这条
- *     不变式的**唯一例外**，且它写的是**探针键**、不是授权状态：授权状态仍然只活在内存里。
- *     "探针键无残留"与"没有任何 `compile-consent` 之类的状态键"都有腿钉住。
+ *  2. **"允许"这个选择会落盘**（键 `L1_CONSENT`，值只有 `allowed`）—— 2026-09-29 用户口径：
+ *     弹窗文案写着"你随时可以…改变这个选择"，那就该记住。原来"只活内存、刷新即重问"的代价是
+ *     **每次整页加载都重问一次**（刷新页面、或从「设备体检」那种独立页返回都会弹；用户实测报的
+ *     就是这个）。`deny` **不落盘**（那个按钮写的是"不用，本次不保存"）⇒ 下次仍然问。
+ *     时机不变：标记与写探针都**只在 `grant()` 里写**（授权之前零写入这条红线不碰）。
  *  3. persistent 不可用（null）时**功能仍可用**，只是全部退化到内存；
  *  4. `grant()` 之后**真的写得进去**才算持久（写探针结论）—— 只读探测发现不了的
  *     Safari 隐私模式在这里被挡在"任何用户数据落盘之前"（见 `src/app/storage.ts` 头注）。
@@ -17,11 +17,12 @@
  *  unknown ──ask()──> ask ──grant()──> allowed   （allowed 才允许落盘；grant 里跑一次写探针）
  *     │                 │
  *     └────deny()───────┴────────────> denied    （denied = 游客模式 = 零写入）
- *  reset() （"清除本机数据"后）→ 回到 unknown
+ *  reset() （"清除本机数据"后）→ 回到 unknown（并把 `L1_CONSENT` 标记一起删掉 ⇒ 下次重新问）
  * ```
  * `ask` 存在的唯一理由：**弹窗已显示、等用户点**。`unknown` 与 `ask` 下都不得有任何落盘写入。
  */
 import {
+  L1_CONSENT,
   L1_DECKS,
   L1_SETTINGS,
   clearAllLocalData,
@@ -33,6 +34,9 @@ import {
 } from './storage';
 
 export type ConsentState = 'unknown' | 'ask' | 'allowed' | 'denied';
+
+/** `L1_CONSENT` 里存的**唯一**值（只记"允许"；`deny` 不落盘） */
+const CONSENT_GRANTED = 'allowed';
 
 export interface LocalStore {
   consent(): ConsentState;
@@ -57,6 +61,25 @@ export function createLocalStore(opts: { persistent: KeyValueStore | null }): Lo
    */
   let persistentWritable: boolean | null = null;
   /**
+   * ★ 2026-09-29：这个 store 有没有把"已允许"标记**真的落到磁盘上**。
+   *
+   * 它只为 `reset()` 服务：只有"标记确实存在过"时才去删它 —— `deny`（游客模式）下**一个字节都
+   * 不许碰 persistent**（红线 3：denied ⇒ 任何写入都不碰 persistent），那种情况下这里恒 false。
+   */
+  let consentMarkerOnDisk = false;
+  /**
+   * ★ 2026-09-29：**上一轮点过「允许」就直接视为已允许**（标记键 `L1_CONSENT`）。
+   *
+   * 这里只读一次 `get`（授权之前零写入的红线不碰）。标记存在 ⇒ 后端上一轮已经证明过写得进去
+   * （标记就是它写下去的、写探针通过才写）⇒ **不再跑写探针**：`probeWritable` 的全仓唯一落点
+   * 必须留在 `grant()` 里（两处按源码位置钉住它：本文件的头注与 `tests/app/local-store.test.ts`）。
+   */
+  if (opts.persistent !== null && opts.persistent.get(L1_CONSENT) === CONSENT_GRANTED) {
+    consent = 'allowed';
+    persistentWritable = true;
+    consentMarkerOnDisk = true;
+  }
+  /**
    * 能用持久后端吗？三个条件缺一不可：
    *  1. 用户点了「允许」（`allowed`）；
    *  2. 注入的后端不是 `null`；
@@ -73,7 +96,17 @@ export function createLocalStore(opts: { persistent: KeyValueStore | null }): Lo
       // ⚠️ **写探针落点**：这是全仓唯一一处"同意之后、用户数据之前"的写。
       // 只对**注入的 KeyValueStore** 跑（纯层不碰浏览器 API）；失败 ⇒ 本次会话退化为
       // 内存 KV（`isPersistent()` 回 false，功能全可用、只是刷新即丢），**不抛错**。
-      if (opts.persistent !== null) persistentWritable = probeWritable(opts.persistent);
+      if (opts.persistent !== null) {
+        persistentWritable = probeWritable(opts.persistent);
+        // ★ 2026-09-29：探针通过才落"已允许"这个标记（写不进去就不落 —— 下一轮照旧会问，
+        // 而那正是 Safari 隐私模式该有的表现）。写失败不抛：本次会话照旧可用。
+        if (persistentWritable === true) {
+          try {
+            opts.persistent.set(L1_CONSENT, CONSENT_GRANTED);
+            consentMarkerOnDisk = true;
+          } catch { /* 忽略：标记没落下而已 */ }
+        }
+      }
     },
     deny: () => { consent = 'denied'; },
     // 回 unknown 时把探针结论也清掉。
@@ -94,7 +127,16 @@ export function createLocalStore(opts: { persistent: KeyValueStore | null }): Lo
     // 保留它的**真实**理由（不是"防止残留结论触发写入"这种夸大说法）：`grant()` 无论如何
     // 都会重新探一次（里面无条件调 `probeWritable`），所以清空的真正价值是让"结论"与
     // "consent"两个变量在 reset 之后**一起**复位，不留"半复位"的中间态。
-    reset: () => { consent = 'unknown'; persistentWritable = null; },
+    reset: () => {
+      consent = 'unknown';
+      persistentWritable = null;
+      // ★ 2026-09-29：把"已允许"标记一起删掉 ⇒「清除本机数据」之后下次启动重新问（"改变这个选择"）。
+      // ⚠️ 只在标记**确实在磁盘上**时才碰 persistent —— 游客模式（deny）下必须零写入（红线 3）。
+      if (consentMarkerOnDisk && opts.persistent !== null) {
+        try { opts.persistent.remove(L1_CONSENT); } catch { /* 删不掉就当没这个标记 */ }
+      }
+      consentMarkerOnDisk = false;
+    },
     kv: () => (usingPersistent() ? (opts.persistent as KeyValueStore) : memory),
     isPersistent: usingPersistent,
   };

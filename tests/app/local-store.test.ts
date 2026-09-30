@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
+  L1_CONSENT,
   L1_DECKS,
   L1_SETTINGS,
   L1_KEY_PREFIX,
@@ -171,15 +172,18 @@ describe('L1：授权状态机', () => {
     expect(s.isPersistent()).toBe(true);
     expect(writeNickName(s, '甲')).toBe(true);
     expect(writeDecks(s, [{ id: 'd1', name: '我的卡组', seed: 's', defIds: ['water', 'fire'], updatedAt: 'now' }])).toBe(true);
-    // 修复轮后：grant() 自己会先跑一次**写探针**（set 探针键 → remove 探针键），
-    // 所以"用户数据的写入"是 writes 的第 2、3 次；探针必须**用完即删**（无残留）。
-    expect(kv.writes.length, 'grant 的写探针 + 昵称 + 卡组 = 3 次 set').toBe(3);
+    // grant() 会先跑一次**写探针**（set 探针键 → remove 探针键），再落一次**授权标记**
+    // （2026-09-29 起"点过允许就记住"），所以用户数据是 writes 的第 3、4 次；探针必须**用完即删**。
+    expect(kv.writes.length, 'grant 的写探针 + 授权标记 + 昵称 + 卡组 = 4 次 set').toBe(4);
     expect(kv.writes[0], '第 1 次 set 必须是探针键（授权后、用户数据前）').toEqual([L1_PROBE_KEY, '1']);
-    expect(kv.writes[1][0]).toBe(L1_SETTINGS);
-    expect(kv.writes[2][0]).toBe(L1_DECKS);
-    expect(kv.keys(), '探针键不许残留（只剩两个真键）').toEqual([L1_SETTINGS, L1_DECKS]);
+    expect(kv.writes[1], '第 2 次 set 是授权标记').toEqual([L1_CONSENT, 'allowed']);
+    expect(kv.writes[2][0]).toBe(L1_SETTINGS);
+    expect(kv.writes[3][0]).toBe(L1_DECKS);
+    expect(kv.keys(), '探针键不许残留（剩授权标记 + 两个真键）').toEqual([L1_CONSENT, L1_SETTINGS, L1_DECKS]);
 
     const again = createLocalStore({ persistent: kv });
+    expect(again.consent(), '★ 2026-09-29：标记在 ⇒ 新开的 store 直接是 allowed（模拟刷新不再问授权）')
+      .toBe('allowed');
     again.grant();
     expect(readNickName(again)).toBe('甲');
     expect(readDecks(again).map((d) => d.name)).toEqual(['我的卡组']);
@@ -194,18 +198,20 @@ describe('L1：授权状态机', () => {
     expect(readNickName(s)).toBe('甲');
   });
 
-  it('reset() 回到 unknown（授权状态本身从不写盘）', () => {
+  it('reset() 回到 unknown，并把授权标记一起删掉（下次启动重新问）', () => {
     const kv = spyStore();
     const s = createLocalStore({ persistent: kv });
     s.ask();
     s.grant();
+    expect(kv.get(L1_CONSENT), '夹具失败：grant 之后没有授权标记').toBe('allowed');
     const afterGrant = kv.mutations();
     s.reset();
     expect(s.consent()).toBe('unknown');
     expect(
       kv.mutations(),
-      'reset 只改内存闭包变量，不得有落盘调用（grant 的写探针是它之前发生的，不算）',
-    ).toBe(afterGrant);
+      'reset 恰恰只多做一件事：删掉授权标记（探针是 grant 那一步发生的，不算）',
+    ).toBe(afterGrant + 1);
+    expect(kv.keys(), 'reset 之后 persistent 里不该再有键').toEqual([]);
   });
 
   it('reset 之后即使探针结论残留也不许回到 persistent（两把锁必须同时复位）', () => {
@@ -231,23 +237,33 @@ describe('L1：授权状态机', () => {
     expect(kv.keys(), 'reset 之后 persistent 里不许出现任何键').toEqual([]);
   });
 
-  it('授权状态本身不落盘：grant(写探针) + deny 之后，persistent 里没有授权痕迹、探针键也不残留', () => {
+  it('★ 2026-09-29：**"允许"这个选择会落盘**（键 L1_CONSENT，值只有 allowed）；deny 不落盘', () => {
     const kv = spyStore();
     const s = createLocalStore({ persistent: kv });
     s.grant();
-    s.deny();
     // (a) 探针键无残留（写探针的唯一副作用必须自净）
     expect(kv.get(L1_PROBE_KEY), '写探针的键必须用完即删').toBeNull();
-    expect(kv.keys(), 'persistent 里不许有任何键残留').toEqual([]);
-    // (b) **没有任何形如"授权状态"的键** —— 授权只活在内存闭包里（设计稿 §3.6：刷新即重问）。
-    //     这条用**生成式**口径：把所有短暂的写/删记录摊平，逐个键名查"是不是状态键"。
+    // (b) 探针之后落下**唯一的**授权标记，值只有 'allowed'
+    expect(kv.get(L1_CONSENT), 'grant 之后应当落下"已允许"标记').toBe('allowed');
+    expect(kv.keys(), 'persistent 里只该有这一个键').toEqual([L1_CONSENT]);
+    // (c) 生成式口径：写/删记录里只许出现**探针键**与这个**标记键**
     const touched = [...kv.writes.map((w) => w[0]), ...kv.removals];
-    expect(touched.length, 'grant 应当恰好跑一次写探针（set + remove）').toBe(2);
-    expect(
-      touched.filter((k) => /consent|grant|deny|allowed|拒绝|允许/i.test(k)),
-      '持久层里出现了疑似"授权状态键" —— 授权状态不许落盘，刷新必须重新问',
-    ).toEqual([]);
-    expect(new Set(touched)).toEqual(new Set([L1_PROBE_KEY]));
+    expect(new Set(touched), '除了探针键与授权标记，不许碰别的键')
+      .toEqual(new Set([L1_PROBE_KEY, L1_CONSENT]));
+    // (d) deny **不落盘**：那个按钮写的是"不用，本次不保存"（下次仍然问）
+    const kv2 = spyStore();
+    const s2 = createLocalStore({ persistent: kv2 });
+    s2.deny();
+    expect(kv2.keys(), 'deny 不许留下任何键').toEqual([]);
+    expect(kv2.mutations(), 'deny 不许有任何落盘动作').toBe(0);
+    // (e) 同一后端下一轮启动 ⇒ 直接视为已允许（用户要的"点过允许就永不再问"）
+    const again = createLocalStore({ persistent: kv });
+    expect(again.consent(), '标记在 ⇒ 启动即 allowed，不再弹授权弹窗').toBe('allowed');
+    expect(again.isPersistent(), '标记在 ⇒ 直接用 persistent（不必再跑写探针）').toBe(true);
+    // (f) reset（清除本机数据）⇒ 标记清掉、回到 unknown，下次重新问
+    again.reset();
+    expect(again.consent()).toBe('unknown');
+    expect(kv.keys(), 'reset 之后标记也该没了').toEqual([]);
   });
 });
 
@@ -294,7 +310,8 @@ describe('L1：grant() 的写探针（Safari 隐私模式在授权那一刻被�
     expect(kv.mutations(), '游客模式连探针都不许有').toBe(0);
     s.reset();
     s.grant();
-    expect(kv.mutations(), 'reset → grant 应当重新探一次（set + remove）').toBe(2);
+    // reset → grant：重新探一次（set + remove）+ 重新落一次授权标记 = 3
+    expect(kv.mutations(), 'reset → grant 应当重新探一次并重新落标记').toBe(3);
     expect(s.isPersistent()).toBe(true);
   });
 
