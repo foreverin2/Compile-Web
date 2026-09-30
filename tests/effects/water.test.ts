@@ -233,8 +233,10 @@ describe('water protocol effects', () => {
     executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: waterLine(s) });
     const p = s.pendingEffects[s.pendingEffects.length - 1];
     expect(p.prompt?.kind).toBe('select');
-    expect(p.prompt?.candidates.map((c) => c.uid)).toEqual([own.uid]); // 只列自己的未覆盖卡
-    executeAction(s, 0, 'effect-choice', { promptId: p.id, choice: [own.uid] });
+    // ★ 2026-09-30 口径：源卡自己进候选（water-4 文本没排除源卡）→ 只列自己的未覆盖卡 = [源卡自己, own]，对手卡不在其中
+    expect(p.prompt?.candidates.map((c) => c.uid).sort()).toEqual([card.uid, own.uid].sort());
+    expect(p.prompt?.candidates.some((c) => c.uid === card.uid), '候选里没有源卡自己').toBe(true);
+    executeAction(s, 0, 'effect-choice', { promptId: p.id, choice: [own.uid] }); // 显式点自己的另一张顶卡
     expect(own.zone).toBe('hand');
     expect(s.players[0].hand.map((c) => c.uid)).toContain(own.uid);
     expect(s.players[0].stacks[1]).toHaveLength(0);

@@ -4,7 +4,7 @@ import { findCard } from '../context';
 import { cardPointValue } from '../../state/create';
 
 function* light0(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
-  const targets = ctx.candidates({ zone: 'field' });
+  const targets = ctx.candidates({ zone: 'field', includeSelfUid: ctx.card.uid });
   const ans = yield { kind: 'select', title: 'light-0：翻转1张牌', min: 1, max: 1, optional: false, candidates: targets };
   if (ans.selected.length === 0) return;
   yield { op: 'flip', uid: ans.selected[0] };

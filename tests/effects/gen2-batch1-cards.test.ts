@@ -104,7 +104,17 @@ describe('luck effects', () => {
     s.players[1].stacks[1] = [target];
     s.players[1].deck = [makeCard('death-5', 1, 'deck', false), makeCard('fire-1', 1, 'deck', false)]; // 顶 = fire-1（protocol fire）
     resolveMiddle(s, 0, src);
-    resolveAllChoices(s, eagerPick); // 宣告第一个 action（fire）→ 命中 → 删除候选第一张
+    // 显式宣告 fire（命中）→ 进入删除选择
+    const decl = s.pendingEffects[s.pendingEffects.length - 1];
+    expect(decl.prompt?.kind).toBe('select-action');
+    expect(decl.prompt?.actions).toContain('action:proto:fire');
+    executeAction(s, 0, 'effect-choice', { promptId: decl.id, choice: ['action:proto:fire'] });
+    const pick = s.pendingEffects[s.pendingEffects.length - 1];
+    expect(pick.prompt?.kind).toBe('select');
+    // ★ 2026-09-30 口径：源卡自己进候选（luck-3 文本没排除源卡）→ 候选 = [源卡自己, 对手顶卡]
+    expect(pick.prompt?.candidates.map((c) => c.uid).sort()).toEqual([src.uid, target.uid].sort());
+    expect(pick.prompt?.candidates.some((c) => c.uid === src.uid), '候选里没有源卡自己').toBe(true);
+    executeAction(s, 0, 'effect-choice', { promptId: pick.id, choice: [target.uid] }); // 显式点对手顶卡
     expect(s.players[1].deck).toHaveLength(1);
     expect(s.players[1].trash).toHaveLength(2); // fire-1（弃库顶） + fire-5（删除目标）
     expect(s.players[1].trash.map((c) => c.defId)).toEqual(expect.arrayContaining(['fire-1', 'fire-5']));

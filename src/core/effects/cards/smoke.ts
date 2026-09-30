@@ -25,9 +25,10 @@ function* smoke0Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> 
   }
 }
 
-/** smoke-1 中：翻转你的1张卡牌。你可以偏转此牌（=刚翻的那张，compile-apo 核对） */
+/** smoke-1 中：翻转你的1张卡牌。你可以偏转此牌（=刚翻的那张，compile-apo 核对）。
+ *  ★ 2026-09-30 用户拍板：**含源卡自己**（文本没有「其他」）→ `includeSelfUid`。 */
 function* smoke1Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
-  const mine = ctx.candidates({ zone: 'field', owner: ctx.player });
+  const mine = ctx.candidates({ zone: 'field', includeSelfUid: ctx.card.uid, owner: ctx.player });
   const fAns = yield { kind: 'select', title: 'smoke-1：翻转你的1张卡牌', min: 1, max: 1, optional: false, candidates: mine };
   if (fAns.selected.length === 0) return;
   const uid = fAns.selected[0];

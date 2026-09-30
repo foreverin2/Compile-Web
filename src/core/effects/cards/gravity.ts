@@ -23,7 +23,7 @@ function* gravity0(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
  *  shift 无需 allowCovered。无场上顶卡 → 选卡步 fizzle（抽牌仍结算）。 */
 function* gravity1(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   yield { op: 'draw', count: 2 };
-  const targets = ctx.candidates({ zone: 'field' });
+  const targets = ctx.candidates({ zone: 'field', includeSelfUid: ctx.card.uid });
   const ans = yield { kind: 'select', title: 'gravity-1：把1张牌偏转进或偏转出此列', min: 1, max: 1, optional: false, candidates: targets };
   if (ans.selected.length === 0) return; // fizzle：无场上顶卡
   const card = findCard(ctx.s, ans.selected[0]);
@@ -45,7 +45,7 @@ function* gravity1(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
  *  若卡不在此列：select-line 只能选此列 → shift 带 allowCovered（FAQ 137：被翻转的卡即使被覆盖
  *  也移动——"那张卡牌"规则优先）。已在此列 → 无偏转。 */
 function* gravity2(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
-  const targets = ctx.candidates({ zone: 'field' });
+  const targets = ctx.candidates({ zone: 'field', includeSelfUid: ctx.card.uid });
   const ans = yield { kind: 'select', title: 'gravity-2：翻转1张牌', min: 1, max: 1, optional: false, candidates: targets };
   if (ans.selected.length === 0) return; // fizzle：无场上顶卡
   yield { op: 'flip', uid: ans.selected[0] };

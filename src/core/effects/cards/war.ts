@@ -28,7 +28,7 @@ function* war0AfterRefresh(ctx: EffectCtx): Generator<EffectStep, void, StepResu
 
 /** war-0 底（after-opponent-draw，无 top 仅顶卡）：当对手抽牌时：你可以删除1张卡牌（可选） */
 function* war0AfterOppDraw(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
-  const cand = ctx.candidates({ zone: 'field' });
+  const cand = ctx.candidates({ zone: 'field', includeSelfUid: ctx.card.uid });
   const tAns = yield { kind: 'select', title: 'war-0：对手抽牌，你可以删除1张卡牌', min: 1, max: 1, optional: true, candidates: cand };
   if (tAns.selected.length === 0) return;
   yield { op: 'delete', uid: tAns.selected[0] };
@@ -60,7 +60,7 @@ function* war1AfterOppRefresh(ctx: EffectCtx): Generator<EffectStep, void, StepR
 
 /** war-2 中：翻转1张牌 */
 function* war2Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
-  const cand = ctx.candidates({ zone: 'field' });
+  const cand = ctx.candidates({ zone: 'field', includeSelfUid: ctx.card.uid });
   const tAns = yield { kind: 'select', title: 'war-2：翻转1张牌', min: 1, max: 1, optional: false, candidates: cand };
   if (tAns.selected.length === 0) return;
   yield { op: 'flip', uid: tAns.selected[0] };

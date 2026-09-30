@@ -9,9 +9,10 @@ function metal0ValueModifier(_s: GameState, _owner: PlayerId, _line: Line, total
   return total - 2;
 }
 
-/** metal-0 中指令：翻转1张牌。—— 选 1 张场上未覆盖顶卡（双方，源卡被候选排除）翻转。 */
+/** metal-0 中指令：翻转1张牌。—— 选 1 张场上未覆盖顶卡（双方，**含源卡自己**：文本没有「其他」，
+ *  2026-09-30 用户口径 `includeSelfUid`）翻转。 */
 function* metal0Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
-  const targets = ctx.candidates({ zone: 'field' });
+  const targets = ctx.candidates({ zone: 'field', includeSelfUid: ctx.card.uid });
   const ans = yield { kind: 'select', title: 'metal-0：翻转1张牌', min: 1, max: 1, optional: false, candidates: targets };
   if (ans.selected.length === 0) return; // fizzle：无其他场上顶卡
   yield { op: 'flip', uid: ans.selected[0] };

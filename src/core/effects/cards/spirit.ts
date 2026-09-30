@@ -44,7 +44,7 @@ function* spirit1Start(ctx: EffectCtx): Generator<EffectStep, void, StepResult> 
 
 /** spirit-2 中指令：你可以翻转1张牌。—— 可选：选 1 张场上未覆盖顶卡（双方）翻转；跳过则无事发生 */
 function* spirit2(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
-  const targets = ctx.candidates({ zone: 'field' });
+  const targets = ctx.candidates({ zone: 'field', includeSelfUid: ctx.card.uid });
   const ans = yield { kind: 'select', title: 'spirit-2：你可以翻转1张牌', min: 1, max: 1, optional: true, candidates: targets };
   if (ans.selected.length > 0) yield { op: 'flip', uid: ans.selected[0] };
 }

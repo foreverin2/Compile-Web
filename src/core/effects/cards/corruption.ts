@@ -36,7 +36,7 @@ function* corruption0Start(ctx: EffectCtx): Generator<EffectStep, void, StepResu
 
 /** corruption-1 中：召回1张卡牌（任意方未覆盖场卡回持有者手牌） */
 function* corruption1Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
-  const cand = ctx.candidates({ zone: 'field' });
+  const cand = ctx.candidates({ zone: 'field', includeSelfUid: ctx.card.uid });
   const tAns = yield { kind: 'select', title: 'corruption-1：召回1张卡牌', min: 1, max: 1, optional: false, candidates: cand };
   if (tAns.selected.length === 0) return;
   yield { op: 'return', uid: tAns.selected[0] };

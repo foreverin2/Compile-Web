@@ -134,7 +134,7 @@ function* luck3Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   // FX 宣告结果：弃顶后与宣告协议相同 = 成功（删除 1 张）；不同 = 失败
   emitLuckRoll(ctx, 'luck-3', !!card && getCardDef(card.defId).protocol === proto);
   if (!card || getCardDef(card.defId).protocol !== proto) return; // 未命中
-  const targets = ctx.candidates({ zone: 'field' }); // 双方未覆盖顶卡
+  const targets = ctx.candidates({ zone: 'field', includeSelfUid: ctx.card.uid }); // 双方未覆盖顶卡
   const tAns = yield { kind: 'select', title: 'luck-3：命中！删除1张牌', min: 1, max: 1, optional: false, candidates: targets };
   if (tAns.selected.length === 0) return;
   yield { op: 'delete', uid: tAns.selected[0] };
@@ -150,7 +150,7 @@ function* luck4Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   if (!top) return;
   const n = cardPointValue(ctx.s, top); // 弃牌堆正面 → 印刷值
   const cand = [
-    ...ctx.candidates({ zone: 'field' }),
+    ...ctx.candidates({ zone: 'field', includeSelfUid: ctx.card.uid }),
     ...ctx.candidates({ zone: 'field', covered: true }),
   ].filter((c) => {
     const card = findCard(ctx.s, c.uid);

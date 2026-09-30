@@ -43,8 +43,10 @@ function* flexibility1Middle(ctx: EffectCtx): Generator<EffectStep, void, StepRe
     actions: ['action:flip', 'action:shift'],
   };
   if (act.selected.length === 0) return;
-  // 2026-09-13（用户实测）：卡文「翻转或偏转**你的**1张牌」含此牌自身 → includeSelf
-  const cand = ctx.candidates({ zone: 'field', owner: ctx.player, includeSelf: true });
+  // 2026-09-13（用户实测）：卡文「翻转或偏转**你的**1张牌」含此牌自身 → 放行源卡。
+  // 2026-09-30：改用 `includeSelfUid`（只放行这一张）；旧的 `includeSelf: true` 会把同一时刻
+  // 其他结算中源卡一起放行，把别人的幽灵状态防护也拆了 —— 用户口径：保住别人的防护。
+  const cand = ctx.candidates({ zone: 'field', owner: ctx.player, includeSelfUid: ctx.card.uid });
   const tAns = yield { kind: 'select', title: 'flexibility-1：选择你的1张牌（含此牌自身）', min: 1, max: 1, optional: false, candidates: cand };
   if (tAns.selected.length === 0) return;
   if (act.selected[0] === 'action:flip') {

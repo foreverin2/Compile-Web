@@ -37,9 +37,11 @@ function* mirror2Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult>
   yield { op: 'swapStacks', a: a as Line, b: b as Line };
 }
 
-/** mirror-3 中：翻转你的1张牌；在同一链路（第一句那张的线）翻转对手的1张牌（裁决 [Q10]） */
+/** mirror-3 中：翻转你的1张牌；在同一链路（第一句那张的线）翻转对手的1张牌（裁决 [Q10]）。
+ *  ★ 2026-09-30 用户拍板：第一句**含源卡自己**（文本没有「其他」），1/2 代「你的1张牌」排除源卡
+ *  的旧惯例（批1规格:252）作废 → 用 `includeSelfUid`（只放行源卡这一张）。 */
 function* mirror3Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
-  const mine = ctx.candidates({ zone: 'field', owner: ctx.player });
+  const mine = ctx.candidates({ zone: 'field', includeSelfUid: ctx.card.uid, owner: ctx.player });
   const aAns = yield { kind: 'select', title: 'mirror-3：翻转你的1张牌', min: 1, max: 1, optional: false, candidates: mine };
   if (aAns.selected.length === 0) return; // fizzle
   const aUid = aAns.selected[0];

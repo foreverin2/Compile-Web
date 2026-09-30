@@ -155,13 +155,15 @@ describe('fire protocol effects', () => {
     expect(s.players[0].hand).toHaveLength(2); // 抽 2 仍发生
   });
 
-  it('fire-1 first card on empty board: both selects fizzle, no hang', () => {
+  it('fire-1 first card on empty board: 弃牌候选空 → 整条效果停在第一步，不挂起', () => {
     const s = draftFireP1();
     advanceToStep(s, 0, 'action');
     s.players[0].hand = [makeCard('fire-1', 0, 'hand')];
     const card = s.players[0].hand[0];
     executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: fireLine(s) });
-    // 打出后手牌空（弃牌候选空）+ 场上仅源卡（删除候选空）→ 两步都 fizzle，不挂起
+    // 打出后手牌空 → 弃牌候选空 → 第一步就 return，第二步「删除1张牌」根本没执行
+    // （★ 2026-09-30 口径：删除候选**不再是空**——火1 文本没有「其他」，源卡自己在候选里；
+    //   这条腿测的是"第一步空候选不挂起"，与删除步无关）
     resolveAllChoices(s, pickFirst);
     expect(s.pendingEffects).toHaveLength(0);
     expect(s.step).toBe('check-cache');

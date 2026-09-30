@@ -112,7 +112,8 @@ describe('gravity protocol effects', () => {
       expect(s.players[0].deck).toHaveLength(deckBefore - 2);
       const p = s.pendingEffects[s.pendingEffects.length - 1];
       expect(p.prompt?.kind).toBe('select');
-      expect(p.prompt?.candidates.map((c) => c.uid)).toEqual([target.uid]);
+      // 2026-09-30 口径：源卡自己进候选（源卡在 gl 列，排第 0 位）→ 显式选 target，不用 pickFirst
+      expect(p.prompt?.candidates.map((c) => c.uid)).toEqual([card.uid, target.uid]);
       executeAction(s, 0, 'effect-choice', { promptId: p.id, choice: [target.uid] });
       const p2 = s.pendingEffects[s.pendingEffects.length - 1];
       expect(p2.prompt?.kind).toBe('select-line');
@@ -135,8 +136,9 @@ describe('gravity protocol effects', () => {
       executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: gl });
       const p = s.pendingEffects[s.pendingEffects.length - 1];
       expect(p.prompt?.kind).toBe('select');
-      expect(p.prompt?.candidates.map((c) => c.uid)).toEqual([target.uid]);
-      executeAction(s, 0, 'effect-choice', { promptId: p.id, choice: [target.uid] });
+      // 2026-09-30 口径：源卡自己进候选 —— 它与 target 同在此列，排第 0 位
+      expect(p.prompt?.candidates.map((c) => c.uid)).toEqual([card.uid, target.uid]);
+      executeAction(s, 0, 'effect-choice', { promptId: p.id, choice: [target.uid] }); // 显式选 target
       const p2 = s.pendingEffects[s.pendingEffects.length - 1];
       expect(p2.prompt?.kind).toBe('select-line');
       expect(p2.prompt?.lines).toEqual(([0, 1, 2] as Line[]).filter((l) => l !== gl)); // 平移出：排除此列
@@ -147,17 +149,29 @@ describe('gravity protocol effects', () => {
       expect(s.pendingEffects).toHaveLength(0);
     });
 
-    it('no field top cards → the shift select fizzles (draw still happened)', () => {
+    it('only the source on field → 候选恰为源卡自己；选自己（已在此列）则平移出此列，抽牌照常结算', () => {
       const s = draftGravityP1();
       advanceToStep(s, 0, 'action');
+      const gl = gravityLine(s);
+      const out = ([0, 1, 2] as Line[]).find((l) => l !== gl)!;
       s.players[0].hand = [makeCard('gravity-1', 0, 'hand')];
       const deckBefore = s.players[0].deck.length;
       const card = s.players[0].hand[0];
-      executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: gravityLine(s) });
-      resolveAllChoices(s, pickFirst); // 候选空 → 自动 fizzle，不挂起
+      executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: gl });
       expect(s.players[0].hand).toHaveLength(2); // 抽牌仍结算
       expect(s.players[0].deck).toHaveLength(deckBefore - 2);
-      expect(s.pendingEffects).toHaveLength(0);
+      // 2026-09-30 口径：源卡自己进候选 —— 场上只有源卡 → 候选恰为自己（旧口径这里是空候选 fizzle）
+      const p = s.pendingEffects[s.pendingEffects.length - 1];
+      expect(p.prompt?.kind).toBe('select');
+      expect(p.prompt?.candidates.map((c) => c.uid)).toEqual([card.uid]);
+      executeAction(s, 0, 'effect-choice', { promptId: p.id, choice: [card.uid] });
+      const p2 = s.pendingEffects[s.pendingEffects.length - 1];
+      expect(p2.prompt?.kind).toBe('select-line');
+      expect(p2.prompt?.lines).toEqual(([0, 1, 2] as Line[]).filter((l) => l !== gl)); // 自己已在此列 → 排此列
+      executeAction(s, 0, 'effect-choice', { promptId: p2.id, choice: [`line:${out}`] });
+      expect(s.players[0].stacks[gl]).toHaveLength(0);
+      expect(s.players[0].stacks[out].map((c) => c.uid)).toEqual([card.uid]); // 自己平移出此列
+      expect(s.pendingEffects).toHaveLength(0); // 不挂起
     });
   });
 
@@ -251,14 +265,22 @@ describe('gravity protocol effects', () => {
       expect(s.pendingEffects).toHaveLength(0);
     });
 
-    it('no field top cards → select fizzles without hanging', () => {
+    it('only the source on field → 候选恰为源卡自己；选自己后已在此列 → 无平移，不挂起', () => {
       const s = draftGravityP1();
       advanceToStep(s, 0, 'action');
+      const gl = gravityLine(s);
       s.players[0].hand = [makeCard('gravity-2', 0, 'hand')];
       const card = s.players[0].hand[0];
-      executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: gravityLine(s) });
-      resolveAllChoices(s, pickFirst); // 场上只有源卡 → 候选空 → 自动 fizzle
-      expect(s.pendingEffects).toHaveLength(0);
+      executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: gl });
+      // 2026-09-30 口径：源卡自己进候选 —— 场上只有源卡 → 候选恰为自己（旧口径这里是空候选 fizzle）
+      const p = s.pendingEffects[s.pendingEffects.length - 1];
+      expect(p.prompt?.kind).toBe('select');
+      expect(p.prompt?.candidates.map((c) => c.uid)).toEqual([card.uid]);
+      executeAction(s, 0, 'effect-choice', { promptId: p.id, choice: [card.uid] });
+      expect(card.zone).toBe('field');
+      expect(card.faceUp).toBe(false); // flip 是切换：自己原本正面 → 翻成反面
+      expect(s.players[0].stacks[gl].map((c) => c.uid)).toEqual([card.uid]); // 已在此列 → 无平移
+      expect(s.pendingEffects).toHaveLength(0); // 不挂起
     });
   });
 

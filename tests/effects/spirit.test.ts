@@ -166,7 +166,7 @@ describe('spirit protocol effects', () => {
   });
 
   describe('spirit-2 middle: you may flip 1 card', () => {
-    it('optional: flip a field top card of either player', () => {
+    it('optional: flip a field top card of either player (the source card itself is also a candidate)', () => {
       const s = draftSpiritP1();
       advanceToStep(s, 0, 'action');
       const target = makeCard('spirit-1', 1, 'field', true, 1, 0); // 对手正面顶卡
@@ -177,9 +177,12 @@ describe('spirit protocol effects', () => {
       const p = s.pendingEffects[s.pendingEffects.length - 1];
       expect(p.prompt?.kind).toBe('select');
       expect(p.prompt?.optional).toBe(true);
-      expect(p.prompt?.candidates.map((c) => c.uid)).toEqual([target.uid]);
-      executeAction(s, 0, 'effect-choice', { promptId: p.id, choice: [target.uid] });
+      // ★ 2026-09-30 口径：源卡自己进候选（spirit-2 文本没排除源卡）→ 候选 = [源卡自己, 对手顶卡]
+      expect(p.prompt?.candidates.map((c) => c.uid).sort()).toEqual([card.uid, target.uid].sort());
+      expect(p.prompt?.candidates.some((c) => c.uid === card.uid), '候选里没有源卡自己').toBe(true);
+      executeAction(s, 0, 'effect-choice', { promptId: p.id, choice: [target.uid] }); // 显式点对手顶卡
       expect(target.faceUp).toBe(false);
+      expect(card.faceUp).toBe(true); // 选的是对手卡 → 源卡自身不翻
       expect(s.pendingEffects).toHaveLength(0);
     });
 

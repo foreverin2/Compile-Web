@@ -1427,15 +1427,18 @@ describe('T4 判据 1（★）：stateAtStep 与"逐步重放"逐字相等，且
     // 也顺带拦住"档案形状悄悄漂移、两条路径却仍然相等"这种一起漂的假绿。
     const hist: Record<string, number> = {};
     for (const a of f.actions) hist[a.kind] = (hist[a.kind] ?? 0) + 1;
+    // 2026-09-30 重估：`includeSelfUid` 口径上线后，候选里多了源卡自己 ⇒ 夹具里
+    //   `getLegalActions[0]` 与 `pickFirst` 的选择路径改变，档案形状随之改变（实测值）：
+    //   advance 45→43、play 8→9、effect-choice 2→4（下标 58/59 是新增的两条）、compile 1→0。
+    //   compile 重放覆盖不靠这份档案：见本文件 674/730-733/783/802 那几条显式 compile 腿。
     expect(hist, '档案的 kind 直方图').toEqual({
-      advance: 45,
-      play: 8,
+      advance: 43,
+      play: 9,
       'rearrange-protocols': 4,
-      'effect-choice': 2,
-      compile: 1,
+      'effect-choice': 4,
     });
     expect(live.rearrangeSeqs, '控制组件重排的下标').toEqual([14, 28, 42, 55]);
-    expect(live.effectChoiceSeqs, 'effect-choice 的下标').toEqual([23, 31]);
+    expect(live.effectChoiceSeqs, 'effect-choice 的下标').toEqual([23, 31, 58, 59]);
     expect(live.rearrangeSeqs.length, '档案里必须真的走过控制组件重排').toBeGreaterThanOrEqual(2);
     const early = live.rearrangeSeqs.filter((q) => q < STEP_SPLIT);
     expect(early, `前 ${STEP_SPLIT} 步里的重排下标（实测：${JSON.stringify(live.rearrangeSeqs)}）`).not.toHaveLength(0);
@@ -1648,10 +1651,11 @@ describe('T4 判据 4：返回的状态是全新的', () => {
     }
 
     const f = stepArchive().file;
-    // 反空转（阶段一评审 N-2）：**主档案本身不承重** —— 不做深拷贝时它 0..60 每一步都是 0 共享，
-    // 判据 4 的判别力全在第二份档案（37 步，n=36）上。把这件事写进腿里：
-    // 将来有人改夹具而忘了重估"判据 4 还抓不抓得住"时，这里会红给他看。
-    expect(maxSharedWithoutCopy(f), '主档案本身不含可共享对象（maxShared 必须是 0）').toBe(0);
+    // 反空转（阶段一评审 N-2，2026-09-30 重估）：主档案的 no-copy 基线**从 0 变成 1** ——
+    // `includeSelfUid` 口径改变了夹具的选择路径（见判据 1 的直方图注释），新的 60 步档案
+    // 也会在某一处留下与档案共享对象的中途状态（成因与第二份档案同类，具体落在哪一 n 未逐点定位）。
+    // 于是判据 4 在主档案上也真的能红（覆盖变多，不是变少）。这里钉住这个实测值。
+    expect(maxSharedWithoutCopy(f), '主档案 no-copy 基线（实测 1）').toBe(1);
     // 正控：**同一段测量**在含共享的那份档案上必须 > 0 —— 否则上一句是恒真的空断言
     expect(
       maxSharedWithoutCopy(stepArchive('g5t4-diff-first-9', 37).file),

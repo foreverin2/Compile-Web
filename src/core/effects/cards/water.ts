@@ -53,9 +53,10 @@ function* water3(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   for (const uid of targets) yield { op: 'return', uid, allowCovered: true };
 }
 
-/** water-4：回手1张你的牌（自己的未覆盖场上卡） */
+/** water-4：回手1张你的牌（自己的未覆盖场上卡；**含源卡自己** —— 文本没有「其他」。
+ *  2026-09-30 用户拍板：1/2 代「你的1张牌」排除源卡的旧惯例作废，与 3 代 greed-2 对齐） */
 function* water4(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
-  const targets = ctx.candidates({ zone: 'field', owner: ctx.player });
+  const targets = ctx.candidates({ zone: 'field', includeSelfUid: ctx.card.uid, owner: ctx.player });
   const ans = yield { kind: 'select', title: 'water-4：回手1张你的牌', min: 1, max: 1, optional: false, candidates: targets };
   if (ans.selected.length === 0) return; // fizzle：无自己的未覆盖卡
   yield { op: 'return', uid: ans.selected[0] };

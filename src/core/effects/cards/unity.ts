@@ -53,7 +53,7 @@ function* flipOrDraw(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
     yield { op: 'draw', count: 1 };
     return;
   }
-  const cand = ctx.candidates({ zone: 'field' });
+  const cand = ctx.candidates({ zone: 'field', includeSelfUid: ctx.card.uid });
   const tAns = yield { kind: 'select', title: 'unity：翻转1张牌', min: 1, max: 1, optional: false, candidates: cand };
   if (tAns.selected.length === 0) return;
   yield { op: 'flip', uid: tAns.selected[0] };
@@ -114,7 +114,7 @@ function* unity2Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> 
 /** unity-3 中：如果场上有其它统一牌，你可以翻转1张正面朝上的卡牌 */
 function* unity3Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   if (unityCount(ctx.s) < 2) return;
-  const cand = ctx.candidates({ zone: 'field' }).filter((c) => c.faceUp);
+  const cand = ctx.candidates({ zone: 'field', includeSelfUid: ctx.card.uid }).filter((c) => c.faceUp);
   const tAns = yield { kind: 'select', title: 'unity-3：你可以翻转1张正面朝上的卡牌', min: 1, max: 1, optional: true, candidates: cand };
   if (tAns.selected.length === 0) return;
   yield { op: 'flip', uid: tAns.selected[0] };

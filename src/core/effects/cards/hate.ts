@@ -11,9 +11,10 @@ function toChoice(c: Card): ChoiceCard {
 }
 
 /** hate-0 中指令：删除1张牌。
- *  选 1 张场上未覆盖顶卡（双方，结算中源卡被候选排除——同 metal-0 口径）删除。空 → fizzle。 */
+ *  选 1 张场上未覆盖顶卡（双方，**含源卡自己**——文本没有「其他」；2026-09-30 口径
+ *  `includeSelfUid`，同 metal-0）删除。空 → fizzle。 */
 function* hate0(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
-  const targets = ctx.candidates({ zone: 'field' });
+  const targets = ctx.candidates({ zone: 'field', includeSelfUid: ctx.card.uid });
   const ans = yield { kind: 'select', title: 'hate-0：删除1张牌', min: 1, max: 1, optional: false, candidates: targets };
   if (ans.selected.length === 0) return; // fizzle：无场上顶卡
   yield { op: 'delete', uid: ans.selected[0] };
@@ -28,9 +29,9 @@ function* hate1(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
     const ans = yield { kind: 'select', title: 'hate-1：弃3张牌', min: Math.min(3, hand.length), max: 3, optional: false, candidates: hand };
     if (ans.selected.length > 0) yield { op: 'discardMany', uids: ans.selected };
   }
-  const del1 = yield { kind: 'select', title: 'hate-1：删除1张牌', min: 1, max: 1, optional: false, candidates: ctx.candidates({ zone: 'field' }) };
+  const del1 = yield { kind: 'select', title: 'hate-1：删除1张牌', min: 1, max: 1, optional: false, candidates: ctx.candidates({ zone: 'field', includeSelfUid: ctx.card.uid }) };
   if (del1.selected.length > 0) yield { op: 'delete', uid: del1.selected[0] };
-  const del2 = yield { kind: 'select', title: 'hate-1：再删除1张牌', min: 1, max: 1, optional: false, candidates: ctx.candidates({ zone: 'field' }) };
+  const del2 = yield { kind: 'select', title: 'hate-1：再删除1张牌', min: 1, max: 1, optional: false, candidates: ctx.candidates({ zone: 'field', includeSelfUid: ctx.card.uid }) };
   if (del2.selected.length > 0) yield { op: 'delete', uid: del2.selected[0] };
 }
 

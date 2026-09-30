@@ -27,7 +27,7 @@ function pushDeleteGen(s: GameState, player: 0 | 1, uid: string): void {
 
 describe('hate protocol effects', () => {
   describe('hate-0 middle: 删除1张牌。', () => {
-    it('selects 1 uncovered field top card (both players; self excluded) and deletes it', () => {
+    it('selects 1 uncovered field top card (both players; 源卡自己也在候选里) and deletes it', () => {
       const s = draftHateP1();
       advanceToStep(s, 0, 'action');
       const hl = hateLine(s);
@@ -43,9 +43,9 @@ describe('hate protocol effects', () => {
       expect(p.prompt?.min).toBe(1);
       expect(p.prompt?.max).toBe(1);
       const uids = p.prompt!.candidates.map((c) => c.uid);
-      expect(uids).toEqual([own.uid, opp.uid]);
-      expect(uids).not.toContain(card.uid); // 结算中源卡（hate-0 自己）不作为候选
-      executeAction(s, 0, 'effect-choice', { promptId: p.id, choice: [opp.uid] });
+      // 2026-09-30 口径：源卡自己进候选（文案无「其他/另」）→ 源卡在 p0 本列顶卡，排第 0 位
+      expect(uids).toEqual([card.uid, own.uid, opp.uid]);
+      executeAction(s, 0, 'effect-choice', { promptId: p.id, choice: [opp.uid] }); // 显式选对手顶卡
       expect(opp.zone).toBe('trash');
       expect(s.players[1].stacks[2]).toHaveLength(0);
       expect(s.players[1].trash.map((c) => c.uid)).toEqual([opp.uid]);
@@ -53,17 +53,21 @@ describe('hate protocol effects', () => {
       expect(s.pendingEffects).toHaveLength(0);
     });
 
-    it('only self on field → fizzles without hanging (self excluded → no candidate)', () => {
+    it('only self on field → 候选恰为源卡自己；选自己则删掉自己，不挂起', () => {
       const s = draftHateP1();
       advanceToStep(s, 0, 'action');
       const hl = hateLine(s);
       s.players[0].hand = [makeCard('hate-0', 0, 'hand')];
       const card = s.players[0].hand[0];
       executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: hl });
-      resolveAllChoices(s, pickFirst);
-      expect(card.zone).toBe('field'); // 自己不被删
-      expect(s.players[0].trash).toHaveLength(0);
-      expect(s.pendingEffects).toHaveLength(0);
+      const p = s.pendingEffects[s.pendingEffects.length - 1];
+      expect(p.prompt?.kind).toBe('select');
+      // 2026-09-30 口径：源卡自己进候选 —— 场上只剩自己 → 候选恰为自己（旧口径这里是空候选 fizzle）
+      expect(p.prompt?.candidates.map((c) => c.uid)).toEqual([card.uid]);
+      executeAction(s, 0, 'effect-choice', { promptId: p.id, choice: [card.uid] });
+      expect(card.zone).toBe('trash'); // 只有自己 → 只能删自己
+      expect(s.players[0].trash.map((c) => c.uid)).toEqual([card.uid]);
+      expect(s.pendingEffects).toHaveLength(0); // 不挂起
     });
   });
 
@@ -91,14 +95,14 @@ describe('hate protocol effects', () => {
       executeAction(s, 0, 'effect-choice', { promptId: p1.id, choice: discardUids });
       expect(s.players[0].hand).toHaveLength(0);
       expect(s.players[0].trash.map((c2) => c2.uid)).toEqual(discardUids);
-      // 删 1：field 顶卡候选（源卡 excluded；b1 顶、c、d）
+      // 删 1：field 顶卡候选（2026-09-30 口径：源卡自己进候选，排第 0 位；其后 b1 顶、c、d）
       const p2 = s.pendingEffects[s.pendingEffects.length - 1];
-      expect(p2.prompt?.candidates.map((c2) => c2.uid)).toEqual([b1.uid, c.uid, d.uid]);
+      expect(p2.prompt?.candidates.map((c2) => c2.uid)).toEqual([card.uid, b1.uid, c.uid, d.uid]);
       executeAction(s, 0, 'effect-choice', { promptId: p2.id, choice: [b1.uid] });
       expect(b1.zone).toBe('trash');
-      // 再删 1：候选重新列出——b1 删后新顶卡 b0 出现（上一步删后顶卡变化）
+      // 再删 1：候选重新列出——b1 删后新顶卡 b0 出现（上一步删后顶卡变化）；源卡自己仍在候选里
       const p3 = s.pendingEffects[s.pendingEffects.length - 1];
-      expect(p3.prompt?.candidates.map((c2) => c2.uid)).toEqual([b0.uid, c.uid, d.uid]);
+      expect(p3.prompt?.candidates.map((c2) => c2.uid)).toEqual([card.uid, b0.uid, c.uid, d.uid]);
       executeAction(s, 0, 'effect-choice', { promptId: p3.id, choice: [b0.uid] });
       expect(b0.zone).toBe('trash');
       expect(s.players[0].trash.map((c2) => c2.uid)).toEqual([...discardUids, b1.uid, b0.uid]);
@@ -120,7 +124,14 @@ describe('hate protocol effects', () => {
       expect(p.prompt?.max).toBe(3);
       executeAction(s, 0, 'effect-choice', { promptId: p.id, choice: [other.uid] });
       expect(s.players[0].trash.map((c) => c.uid)).toEqual([other.uid]);
-      expect(s.pendingEffects).toHaveLength(0); // 无场上顶卡 → 删除两步 fizzle，无挂起
+      // 删除1：场上只剩源卡自己 → 2026-09-30 口径下候选恰为自己（旧口径此处两步删除均 fizzle）
+      const p2 = s.pendingEffects[s.pendingEffects.length - 1];
+      expect(p2.prompt?.kind).toBe('select');
+      expect(p2.prompt?.candidates.map((c) => c.uid)).toEqual([card.uid]);
+      executeAction(s, 0, 'effect-choice', { promptId: p2.id, choice: [card.uid] });
+      expect(card.zone).toBe('trash'); // 删掉源卡自己
+      expect(s.players[0].trash.map((c) => c.uid)).toEqual([other.uid, card.uid]);
+      expect(s.pendingEffects).toHaveLength(0); // sourceValid 终止「再删除1张牌」→ 不挂起
     });
 
     it('hand empty → discard step skipped, delete steps still run (每句独立)', () => {
@@ -134,14 +145,21 @@ describe('hate protocol effects', () => {
       executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: hl });
       const p = s.pendingEffects[s.pendingEffects.length - 1];
       expect(p.prompt?.kind).toBe('select');
-      expect(p.prompt?.candidates.map((c) => c.uid)).toEqual([opp.uid]); // 第一个提示直接是删除（弃牌跳过）
+      // 2026-09-30 口径：源卡自己进候选 → 删除1的候选 = [源卡自己, opp]（第一个提示直接是删除，弃牌步跳过）
+      expect(p.prompt?.candidates.map((c) => c.uid)).toEqual([card.uid, opp.uid]);
       executeAction(s, 0, 'effect-choice', { promptId: p.id, choice: [opp.uid] });
       expect(s.players[0].trash).toHaveLength(0); // 无弃牌
       expect(opp.zone).toBe('trash'); // 删除照常执行
-      expect(s.pendingEffects).toHaveLength(0); // 再删 1：无顶卡 → fizzle
+      // 再删 1：场上只剩源卡自己 → 候选恰为自己（源卡自己进候选）
+      const p2 = s.pendingEffects[s.pendingEffects.length - 1];
+      expect(p2.prompt?.kind).toBe('select');
+      expect(p2.prompt?.candidates.map((c) => c.uid)).toEqual([card.uid]);
+      executeAction(s, 0, 'effect-choice', { promptId: p2.id, choice: [card.uid] });
+      expect(card.zone).toBe('trash'); // 第二句删掉源卡自己
+      expect(s.pendingEffects).toHaveLength(0); // 不挂起
     });
 
-    it('no field top card → both delete steps fizzle without hanging', () => {
+    it('no field top card except self → 删除候选恰为源卡自己；删自己后 sourceValid 终止后续句子（不挂起）', () => {
       const s = draftHateP1();
       advanceToStep(s, 0, 'action');
       const hl = hateLine(s);
@@ -151,8 +169,14 @@ describe('hate protocol effects', () => {
       const p = s.pendingEffects[s.pendingEffects.length - 1];
       executeAction(s, 0, 'effect-choice', { promptId: p.id, choice: p.prompt!.candidates.map((c) => c.uid) });
       expect(s.players[0].trash).toHaveLength(3); // 只弃了牌
-      expect(s.pendingEffects).toHaveLength(0); // 无场上顶卡 → 两步删除均 fizzle
-      expect(card.zone).toBe('field');
+      // 删除1：场上只剩源卡自己 → 2026-09-30 口径下候选恰为自己
+      const p2 = s.pendingEffects[s.pendingEffects.length - 1];
+      expect(p2.prompt?.kind).toBe('select');
+      expect(p2.prompt?.candidates.map((c) => c.uid)).toEqual([card.uid]);
+      executeAction(s, 0, 'effect-choice', { promptId: p2.id, choice: [card.uid] });
+      expect(card.zone).toBe('trash'); // 删掉源卡自己
+      expect(s.players[0].trash).toHaveLength(4);
+      expect(s.pendingEffects).toHaveLength(0); // 源卡失效 → 「再删除1张牌」不触发，不挂起
     });
   });
 

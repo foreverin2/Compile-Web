@@ -50,7 +50,7 @@ describe('metal protocol effects', () => {
   });
 
   describe('metal-0 middle: flip 1 card', () => {
-    it('selects 1 uncovered field top card (self excluded) and flips it', () => {
+    it('selects 1 uncovered field top card (the source card itself is also a candidate) and flips it', () => {
       const s = draftMetalP1();
       advanceToStep(s, 0, 'action');
       const target = makeCard('fire-5', 1, 'field', true, 1, 0); // 对手另列正面顶卡
@@ -62,22 +62,29 @@ describe('metal protocol effects', () => {
       expect(p.prompt?.kind).toBe('select');
       expect(p.prompt?.min).toBe(1);
       expect(p.prompt?.max).toBe(1);
-      expect(p.prompt?.candidates.map((c) => c.uid)).toEqual([target.uid]); // 源卡被候选排除
-      executeAction(s, 0, 'effect-choice', { promptId: p.id, choice: [target.uid] });
+      // ★ 2026-09-30 口径：源卡自己进候选（metal-0 文本没排除源卡）→ 候选 = [源卡自己, 对手顶卡]
+      expect(p.prompt?.candidates.map((c) => c.uid).sort()).toEqual([card.uid, target.uid].sort());
+      expect(p.prompt?.candidates.some((c) => c.uid === card.uid), '候选里没有源卡自己').toBe(true);
+      executeAction(s, 0, 'effect-choice', { promptId: p.id, choice: [target.uid] }); // 显式点对手顶卡
       expect(target.faceUp).toBe(false); // 翻转
-      expect(card.faceUp).toBe(true); // 自身不翻
+      expect(card.faceUp).toBe(true); // 选的是对手卡 → 源卡自身不翻
       expect(s.pendingEffects).toHaveLength(0);
     });
 
-    it('no other field top card → fizzles without hanging', () => {
+    it('only the source card on the field → candidates is exactly the source itself; picking it flips it, no hang', () => {
       const s = draftMetalP1();
       advanceToStep(s, 0, 'action');
       s.players[0].hand = [makeCard('metal-0', 0, 'hand')];
       const card = s.players[0].hand[0];
       executeAction(s, 0, 'play', { cardUid: card.uid, faceUp: true, line: metalLine(s) });
-      resolveAllChoices(s, pickFirst);
-      expect(s.pendingEffects).toHaveLength(0);
-      expect(card.faceUp).toBe(true); // 源卡不被翻转
+      const p = s.pendingEffects[s.pendingEffects.length - 1];
+      expect(p.prompt?.kind).toBe('select');
+      // ★ 2026-09-30 口径：源卡自己进候选 ⇒ 场上只剩源卡时不再 fizzle，候选恰为源卡自己
+      expect(p.prompt?.candidates.map((c) => c.uid)).toEqual([card.uid]);
+      // 显式选源卡自己：效果照常结算、栈排空（这一步同时守住"不挂起"）
+      executeAction(s, 0, 'effect-choice', { promptId: p.id, choice: [card.uid] });
+      expect(card.faceUp).toBe(false); // 源卡自己被翻转
+      expect(s.pendingEffects).toHaveLength(0); // 结算完毕，无挂起
     });
   });
 
