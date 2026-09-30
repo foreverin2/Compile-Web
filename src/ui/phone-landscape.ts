@@ -935,6 +935,19 @@ function canFitWide(): boolean {
   if (app === null) return false;
   const d = detect();
   if (d.isPhone || d.rotated) return false; // 守卫 ①②
+  /**
+   * ★★ **守卫 ④（2026-09-29 用户实测的 bug）**：**主指针不是"粗"的（= 鼠标设备）一律不接管**。
+   *
+   * 现场：桌面窗口 1280 宽下打热座，棋盘（`.lane-row` 合计 1800px）放不下 ⇒ 前三道守卫都放行
+   * ⇒ 宽视口档接管：`#app` 被改成 `position: fixed` + 整体 scale ⇒ 屏上**卡牌大小全错**、
+   * 鼠标滚轮再也滚不动（只能按提示拖动）。用户报的两条其实是同一个根因。
+   *
+   * 为什么用 `d.coarse`（**主**指针）而不是 `any-pointer: coarse`/`maxTouchPoints`：带触摸屏的
+   * 笔记本/一体机会同时报 `any-pointer: coarse`，用宽口径等于这个 bug 原样留在那些机器上。
+   * 代价（如实记）：平板/手机**外接鼠标**时主指针可能变成 `fine` ⇒ 那一档不再自动缩放，
+   * 退化成普通滚动 —— 能用，只是少了自动适配。要放开就把这里换成 `!(d.coarse || d.anyCoarse)`。
+   */
+  if (!d.coarse) return false; // 守卫 ④：鼠标设备（桌面）永不接管
   const vp = visibleViewport();
   if (vp.w <= 600) return false; // 守卫 ③：窄屏交给手机那一支 / 谁都不动
   const measured = measureLayoutWithTransformZeroed(app, FIT_TARGETS);
@@ -1153,7 +1166,14 @@ function panActive(): boolean {
 
 function onPanDown(e: PointerEvent): void {
   if (panDrag !== null) return;
-  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  /**
+   * ★ 2026-09-29：**触摸才算拖动**（与本仓既有的触屏纪律一致：指针处理器一律先挡非触摸）。
+   *
+   * 用户实测的 bug 之二：桌面 1280 宽窗口下鼠标左键拖动被当成平移手势（宽视口档误接管所致，
+   * 守卫 ④ 已从源头关掉）。这里再加一道：即使某台设备真的进了缩放档，鼠标也**不许**被吃掉 ——
+   * 滚轮/选择/点击照旧归浏览器。
+   */
+  if (e.pointerType !== 'touch') return;
   if (!panActive()) return;
   const t = e.target;
   if (!(t instanceof Element)) return;
