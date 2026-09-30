@@ -50,6 +50,7 @@ import type { CoinSide } from './app/coin';
 import { createLocalStore, readNickName } from './app/local-store';
 import { openL1Store } from './ui/local-store-browser';
 import { renderLocalConsent, nextConsentStep } from './ui/local-consent';
+import { installHotseatExit } from './ui/hotseat-exit';
 // G3 Task 7：「本地数据与隐私」屏 + 档案的选择/落盘口（浏览器实现只在 `showLocalData` 里注入）
 import { renderLocalData } from './ui/local-data';
 // G4 Task 4：会话层驱动（热座 = 执行 + 记录；重放 = 只读闸门）与档案重放的接线。
@@ -5279,6 +5280,14 @@ exposeMatchProbe();
 // 与渲染顺序无关）；横屏门只碰 `<html>` 的类与 body 级的门节点，同样与屏无关。
 initTouchBridge();
 initPhoneLandscape();
+/**
+ * ★ 2026-09-30（用户要求）：热座对局左上角的「退出游戏」按钮（注入式，见 `ui/hotseat-exit.ts`）。
+ *
+ * 退出 = 丢掉这一局（`resetToMainInterface`：档案照旧归档、各模块态清干净）+ 回**模式选择页**。
+ * 它只在对局画面上显示（自己看 DOM 标记判断，远程页/大厅/回放都不显示）—— 所以这里不需要
+ * 在渲染路径里插任何调用，也就不必碰 `render.ts`。
+ */
+installHotseatExit({ onExit: () => { resetToMainInterface(); showModeSelect(); } });
 showStartScreen();
 // 常驻特效层随滚动/缩放重新对齐：已编译环（compiledFx）、暗2 黑烟（smokeOverlays）、
 // 能量扫描线（scanOverlays）与 FX-3 念能粒子/瘟疫浓雾（psychicParticles/plagueMists）、

@@ -55,6 +55,10 @@ export const CHANGELOG: readonly ChangelogDay[] = [
     date: '2026-09-30',
     items: [
       {
+        problem: '双人热座对局里没有退出游戏的入口。',
+        fix: '已新增左上角「退出游戏」按钮：退出当前对局并回到游戏选择页。',
+      },
+      {
         problem: '点击规则书查看后会下载 PDF，看不到内容。',
         fix: '已修复，改为按页显示图片。',
       },
