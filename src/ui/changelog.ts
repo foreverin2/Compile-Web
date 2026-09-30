@@ -20,7 +20,7 @@
  *  - **最新的一天在最上面**，越往下越早；
  *  - 一天一块：先日期，然后每条"问题 + 下一行'已修复，…'"；
  *  - 同一天里每条之间**隔开一点**（渲染时给每条加分隔，见 `changelogElement`）；
- *  - 相邻两天之间是一条横线。
+ *  - 相邻两天之间**空三行**（用户 2026-09-30：原来那条长横线改成空三格）。
  *
  * ## 怎么加（只改这个文件）
  *
@@ -78,8 +78,12 @@ export const CHANGELOG: readonly ChangelogDay[] = [
   },
 ];
 
-/** 相邻两天之间那条横线（用户给的格式；渲染时插在日期块之间） */
-export const CHANGELOG_SEPARATOR = '------------------------------------------';
+/**
+ * 相邻两天之间**空几行**（用户 2026-09-30：原来那条长横线改成"空三格"）。
+ *
+ * 屏上由 `.changelog-sep` 那个空占位按"三行正文高度"落地（见样式表），文本形态按这个数拼空行。
+ */
+export const CHANGELOG_BLANK_LINES = 3;
 
 /** 列表为空时面板上显示的那一句（不是"没有日志"这种冷话，给清楚下一步） */
 export const CHANGELOG_EMPTY_NOTE = '还没有写进来的更新记录。给我内容，我按你的格式加。';
@@ -93,13 +97,14 @@ function el(tag: string, cls: string, text?: string): HTMLElement {
 }
 
 /**
- * **纯文本形态**（与屏上逐字同形）：日期 → 每条"问题 / 已修复，…"，相邻两天之间一条横线。
+ * **纯文本形态**（与屏上逐字同形）：日期 → 每条"问题 / 已修复，…"，相邻两天之间空三行。
  * 有了它，"顺序与格式"这件事能在 node 环境里直接机检（不必造 DOM）。空列表 ⇒ 空串。
  */
 export function changelogText(days: readonly ChangelogDay[] = CHANGELOG): string {
+  const gap = '\n'.repeat(CHANGELOG_BLANK_LINES + 1);
   return days
     .map((d) => [d.date, ...d.items.flatMap((i) => [i.problem, i.fix])].join('\n'))
-    .join(`\n${CHANGELOG_SEPARATOR}\n`);
+    .join(gap);
 }
 
 /**
@@ -129,7 +134,12 @@ export function changelogElement(nav: { readonly onClose: () => void } = { onClo
 
   panel.appendChild(el('div', 'changelog-hint', '最新的在最上面，往下翻是更早的。'));
   CHANGELOG.forEach((day, index) => {
-    if (index > 0) panel.appendChild(el('div', 'changelog-sep', CHANGELOG_SEPARATOR));
+    if (index > 0) {
+      // ★ 2026-09-30：两天之间是**空三行**（用户口径），所以这里放一个空占位，不写任何字符
+      const gap = el('div', 'changelog-sep');
+      gap.setAttribute('aria-hidden', 'true');
+      panel.appendChild(gap);
+    }
     panel.appendChild(el('div', 'changelog-date', day.date));
     for (const item of day.items) {
       const box = el('div', 'changelog-item');

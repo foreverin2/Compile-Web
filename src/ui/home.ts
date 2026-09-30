@@ -6,7 +6,6 @@ import { DEMO_PROTOCOLS, DEMO_CARD_DEFS, protocolImgSrc, cardImgSrc, cardTextPar
 import { LIB_TAG_GROUPS, LIB_ALL_TAG_IDS, filterLibrary } from '../app/library-filter';
 import { openZoom, buildCardTextEl, buildProtocolRatingPanel, bindClickOrDouble } from './render';
 import { changelogElement } from './changelog';
-import { onPageZoomChange, pageZoomHintText } from './page-zoom';
 
 /**
  * 主界面/掷硬币/图鉴/规则图纸 —— 非对局屏（main.ts 导航）。
@@ -122,6 +121,16 @@ const SET_LABEL: Record<string, string> = {
   MN03: '3代 基础', AX03: '3代 拓展',
 };
 void SET_LABEL; // 图鉴改显示座右铭后不再直接使用（保留作 chip/调试标签源）
+
+/**
+ * ★ 2026-09-30（用户要求）：模式页那句"建议 65% 游玩"。
+ *
+ * ⚠️ **只用浏览器自带的缩放**（Ctrl + 滚轮，或 Ctrl 与 +/−），本程序**不许**自己去改页面缩放：
+ * 第一版我顺手实现了"Ctrl + 滚轮改整页缩放"，用户实测**特效层会错位** —— 那些特效的坐标是按
+ * 100% 布局算出来的，整页一缩放就对不上；而且用户的原话是"我只是让你加个建议上去就可以了"。
+ * ⇒ 那套实现已整份撤掉（删了 `src/ui/page-zoom.ts` 与它的测试，`main.ts` 的 `installPageZoom()` 也没了）。
+ */
+const PLAY_SIZE_HINT = '建议把画面调到 65% 左右游玩：用浏览器自带的缩放（Ctrl + 滚轮，或 Ctrl 和 +/−）调整。';
 
 function el(tag: string, cls: string, text?: string): HTMLElement {
   const node = document.createElement(tag);
@@ -454,14 +463,13 @@ export function renderModeSelect(root: HTMLElement, nav: ModeSelectNav, devUnloc
   screen.appendChild(list);
 
   /**
-   * ★ 2026-09-30（用户要求）：**"建议 65% 游玩"的提示 + Ctrl+滚轮调整大小**。
+   * ★ 2026-09-30（用户要求，第二轮口径）：**只放一句"建议 65% 游玩"的提示**。
    *
-   * 放在模式卡下面：这一页才是"要开热座"的那一刻。文案的唯一出处是 `page-zoom.ts` 的
-   * `pageZoomHintText()`（本文件不写第二份），并订阅缩放变化把百分比实时刷新。
+   * 第一版我顺手做了"Ctrl + 滚轮改整页缩放"⇒ 用户实测特效错位，且原话是"我只是让你加个建议
+   * 上去就可以了" ⇒ 那套实现整份撤掉（见 `PLAY_SIZE_HINT` 的说明）。这里只渲染这一句，
+   * 不挂任何监听器；文案的唯一出处就是上面那个常量。
    */
-  const zoomHint = el('div', 'zoom-hint', pageZoomHintText());
-  onPageZoomChange(() => { zoomHint.textContent = pageZoomHintText(); });
-  screen.appendChild(zoomHint);
+  screen.appendChild(el('div', 'zoom-hint', PLAY_SIZE_HINT));
 
   // 两个开关（默认关闭）+ 圆形问号帮助
   const toggles = el('div', 'mode-toggles');

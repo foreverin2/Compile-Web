@@ -263,10 +263,9 @@
 .changelog-date { margin-top: 16px; font-size: 15px; font-weight: 700; color: #9fd8ff; letter-spacing: 1px; }
 .changelog-problem { margin-top: 10px; font-size: 14px; line-height: 1.65; color: #e6ecf5; }
 .changelog-fix { margin-top: 3px; font-size: 13px; line-height: 1.65; color: #93a0bd; }
-.changelog-sep {
-  margin: 20px 0 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px; color: #313a55; white-space: nowrap; overflow: hidden;
-}
+/* ★ 2026-09-30（用户口径）：两天之间不再是长横线，改成**空三格** —— 一个空占位，
+ * 高度 = 三行正文（面板正文 13px / line-height 1.7 ⇒ 一行约 22px，这里给 66px）。 */
+.changelog-sep { height: 66px; }
 
 .changelog-empty { margin-top: 14px; font-size: 13px; line-height: 1.7; color: #93a0bd; }
 

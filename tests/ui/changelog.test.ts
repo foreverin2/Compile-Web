@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   CHANGELOG,
+  CHANGELOG_BLANK_LINES,
   CHANGELOG_EMPTY_NOTE,
-  CHANGELOG_SEPARATOR,
   changelogText,
   type ChangelogDay,
 } from '../../src/ui/changelog';
@@ -30,24 +30,25 @@ const FIXTURE: readonly ChangelogDay[] = [
 ];
 
 describe('首页「更新日志」：版式机器（用户 2026-09-29 给的格式）', () => {
-  it('★ 纯文本形态逐字同形：日期 → 问题 → 已修复 → 横线 → 更早那天', () => {
+  it('★ 纯文本形态逐字同形：日期 → 问题 → 已修复 → 空三行 → 更早那天', () => {
+    const gap = '\n'.repeat(CHANGELOG_BLANK_LINES + 1);
     expect(changelogText(FIXTURE)).toBe([
       '2026-10-02',
       '夹具：较新那天的问题一',
       '已修复，夹具解释一',
       '夹具：较新那天的问题二',
       '已修复，夹具解释二',
-      CHANGELOG_SEPARATOR,
+    ].join('\n') + gap + [
       '2026-10-01',
       '夹具：较早那天的问题',
       '已修复，夹具解释',
     ].join('\n'));
   });
 
-  it('★ 横线条数 = 天数 - 1（相邻两天之间恰好一条，首尾不加）', () => {
-    const count = changelogText(FIXTURE).split(CHANGELOG_SEPARATOR).length - 1;
-    expect(count).toBe(FIXTURE.length - 1);
-    expect(changelogText([FIXTURE[0]])).not.toContain(CHANGELOG_SEPARATOR);
+  it('★ 相邻两天之间恰好空三行（首尾不加空行）', () => {
+    // 「已修复，夹具解释二」与下一天的日期之间正好 3 个空行 = 4 个换行
+    expect(changelogText(FIXTURE)).toContain(`已修复，夹具解释二${'\n'.repeat(CHANGELOG_BLANK_LINES + 1)}2026-10-01`);
+    expect(changelogText([FIXTURE[0]]), '只有一天时不该出现空行分隔').not.toContain('\n\n');
   });
 
   it('空列表 ⇒ 空串（面板另有那句空态提示，别把空白当成日志）', () => {
