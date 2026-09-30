@@ -8,9 +8,13 @@ import {
   descendants,
   queryAllIn,
   isClass,
+  classOf,
   type StubNode,
 } from './net-dom-stub';
 import { renderLocalData, type LocalDataNav } from '../../src/ui/local-data';
+// ★ 2026-10-01（用户要求）：设置从小窗落地 —— 本文件末尾第 9 组钉它的落点与行为
+import { settingsOverlayElement } from '../../src/ui/home';
+import { FX_SETTINGS, isMetal6StrobeOn, resetFxSettingsForTest } from '../../src/ui/fx-settings';
 import {
   createLocalStore,
   readNickName,
@@ -74,6 +78,9 @@ function mountRoot(): StubNode {
 
 afterEach(() => {
   while (restores.length > 0) restores.pop()?.();
+  // ★ 2026-10-01：第 9 组会真的勾掉"金属6 频闪"（那是**模块级内存态**）⇒ 用完必须复位，
+  // 否则这条腿会污染同进程里别的文件的默认值（vitest 各文件独立，但同文件内不该留脏）。
+  resetFxSettingsForTest();
 });
 
 /** 渲染根的纯文本（按 DOM 顺序拼接全部元素节点的文本）。 */
@@ -1120,8 +1127,14 @@ describe('接线腿：main.ts（showLocalData 接线区）', () => {
 
     // ── 2026-09-30 的第二次豁免：`showHome` 从这一组**移出**（同一天，用户要求"首页加设置按钮"）──
     // 依据：设置入口就住在 `showHome` 里那个 `renderHome(root, {...})` 的 nav 实参上
-    // （`openSettings: () => { renderSettings(root, showHome); }`）⇒ 本函数体必然变。
+    // （`openSettings` 那个键的值就是"打开设置"这件事本身）⇒ 本函数体必然变。
     // 做法与 `showModeSelect`（G5/T8）、`showCoin`（同一天）**逐字同形**：只移出、不换写法。
+    //
+    // ★ 2026-10-01 追加（用户要求"设置只用小窗"）：那次改的正是 `openSettings` 这个键的**值**
+    //   —— 从"`renderSettings(root, showHome)` 切整屏"换成"把 `settingsOverlayElement()` 造的
+    //   遮罩挂到 `document.body`"。**移出的理由与范围一字未变**：仍然是"入口住在 `showHome` 的
+    //   nav 实参上，本函数体必然变"。所以这一组**不动**（既不新增移出项，也不改判据），
+    //   小窗本身由文件末尾第 9 组那三条腿兜（那组 2026-10-01 新增）。
     const homeNow = functionBody(MAIN_CODE, 'showHome');
     expect(homeNow.length, 'showHome 抽到空片段').toBeGreaterThan(50);
     expect(homeNow, 'showHome 与 G4 基线逐字节相同 ⇒ 它没有理由被移出这一组（那这次移出就是放松）')
@@ -1129,5 +1142,151 @@ describe('接线腿：main.ts（showLocalData 接线区）', () => {
     expect(homeNow, 'showHome 里没有那次改动的锚点（设置入口）').toContain('openSettings');
     expect(functionBody(before, 'showHome'), '基线里已经有 openSettings ⇒ 移出的理由要重写')
       .not.toContain('openSettings');
+  });
+});
+
+/* ==================================================================== *
+ * 9. ★ 2026-10-01（用户要求）：「设置」从小窗落地 —— 落点与行为
+ *
+ * 用户原话：「我希望设置页面只需要使用小窗即可，而不是目前这样单独放一个页面出来」。
+ * 改之前是**整页**：`openSettings` 调 `renderSettings(root, showHome)` —— 那一下 `clearRoot(root)`
+ * 把首页整棵换掉，关掉只能"再画一次首页"。
+ *
+ * 这一组钉三件事（都属于"被授权改动的那两个函数"的**落点**与**行为**）：
+ *   ① 旧那套**真的没了**（`renderSettings` 这个名字在 `src/ui/home.ts` 里一次不出现）；
+ *   ② 新那套的两个落点：`home.ts` 造元素（一个不调 `clearRoot`、不往 `root` 挂东西的纯构造器），
+ *      `main.ts` 的 `openSettings` 负责挂到 `document.body` 并统一收尾（含 Esc）；
+ *   ③ 元素**真跑**一次（桩 DOM，`tests/ui/net-dom-stub.ts`）：结构、开关真写状态、
+ *      三条关闭路径里能在桩上跑的两条（点遮罩 / 点「关闭」按钮）真的只关一次。
+ *
+ * **不能**证明的：真实浏览器里的观感与层叠、Esc 那条（要真 `document` 的 keydown 冒泡，
+ * 桩的 `document.addEventListener` 是 noop，本文件不断言它）。
+ * ==================================================================== */
+
+const HOME_CODE = stripComments(
+  readFileSync(fileURLToPath(new URL('../../src/ui/home.ts', import.meta.url)))
+    .subarray(0, 1024 * 1024).toString('utf8'),
+);
+
+/**
+ * 把产出代码吐出来的 `HTMLElement` 当**桩节点**读。
+ *
+ * 这是本仓既有写法（`tests/ui/library-effect-filter.test.ts:49` 的 `asStub`）：`settingsOverlayElement()`
+ * 的静态返回类型是 `HTMLElement`（产出代码要能在真浏览器里跑），而运行时装的是桩的节点 ——
+ * 断言用的 `classOf` / `getAttribute` / `dispatchEvent` 都是桩那一侧的能力。
+ */
+const asStub = (n: unknown): StubNode => n as StubNode;
+
+/**
+ * 在某个节点上"真派发一次事件"。
+ *
+ * ⚠️ 桩的两条边界（都写明了才敢用）：
+ *  1. `dispatchEvent` **不调用派发节点自己的监听器**（只沿 `parentElement` 向上冒泡）⇒ 临时挂一个
+ *     空子节点，在**它**上面派发，让冒泡路径经过目标节点（与 Task 4 的 `clickRole` 同源）；
+ *  2. 按钮的监听器自己不看 `e.target`，而遮罩那条**要看**（`e.target !== overlay` 就不关 ——
+ *     这正是"点小窗里面不关"的实现）⇒ 想让遮罩那条判据为真，必须把 `target` 显式写成**遮罩本身**
+ *     （真浏览器里点遮罩空白处就是 `e.target === overlay`；桩没有"点在空白处"这回事，
+ *     所以这个形状由测试补上，与 `library-effect-filter.test.ts` 补"label 激活"是同一手法）。
+ */
+function fireIn(target: StubNode, type: string, evTarget: StubNode = target): void {
+  const clicker = makeStubEl('span');
+  target.appendChild(clicker);
+  clicker.dispatchEvent({ type, target: evTarget });
+}
+
+/** 派发一次 `click`（最常用的那个 `fireIn`）。 */
+function clickIn(target: StubNode, evTarget: StubNode = target): void {
+  fireIn(target, 'click', evTarget);
+}
+
+/** 找唯一一个带某类名的节点（找不到 / 多于一个都**响亮**报错）。 */
+function oneClass(root: StubNode, cls: string): StubNode {
+  const hits = classOf(root, cls);
+  expect(hits.length, `树里应有唯一一个 .${cls}，实际 ${hits.length} 个`).toBe(1);
+  return hits[0];
+}
+
+describe('★ 2026-10-01：设置小窗（落点 + 真跑一次）', () => {
+  it('① 旧那套整屏真的没了：home.ts 里不再有 renderSettings', () => {
+    // 锚点：这次改动**加**的东西先在场（否则下面的"没有 X"可能只是因为抽错了文件）
+    expect(HOME_CODE, 'home.ts 里没有 settingsOverlayElement ⇒ 抽错文件或改动没落地')
+      .toContain('export function settingsOverlayElement(');
+    expect(HOME_CODE, '`renderSettings` 这个名字还在 ⇒ 旧那套整屏没删干净')
+      .not.toContain('renderSettings');
+  });
+
+  it('② 新那套的两个落点：纯构造器（不 clearRoot / 不碰 root）+ 宿主挂到 document.body 并收尾', () => {
+    const fn = functionBody(HOME_CODE, 'settingsOverlayElement');
+    expect(fn.length, 'functionBody 抽到空片段 ⇒ 本判据假绿').toBeGreaterThan(400);
+    // 判据：这个构造器**只造元素**。`clearRoot` 一次都不能出现 —— 它是那次"整屏被换掉"的元凶
+    // （首页背景动画、滚动位置全没）；往 `root` 上挂东西也不能出现（那种写法等于又开了一屏）。
+    expect(fn, '小窗构造器里出现了 clearRoot ⇒ 首页会被整棵换掉（用户要的正是"关掉还停在原来的页面"）')
+      .not.toContain('clearRoot');
+    expect(fn, '小窗构造器往 root 挂东西 ⇒ 又变成一整屏了').not.toMatch(/root\.appendChild/);
+    // 锚点：它就是那个挂到 body 上的遮罩，且开关仍是既有那套类（不新造控件样式）
+    expect(fn, "小窗不是 settings-overlay（挂到 body 上的是它吗）").toContain("'settings-overlay'");
+    expect(fn, '开关控件没复用既有的 .mode-toggle / .mode-check / .mode-toggle-label')
+      .toContain("'mode-toggle'");
+    expect(fn, '开关控件没复用既有的 .mode-check').toContain("'mode-check'");
+    expect(fn, '开关控件没复用既有的 .mode-toggle-label').toContain("'mode-toggle-label'");
+
+    const open = functionBody(MAIN_CODE, 'showHome');
+    expect(open, 'openSettings 里没有 settingsOverlayElement ⇒ 没接到小窗上').toContain('settingsOverlayElement');
+    expect(open, '小窗没挂到 document.body 上').toMatch(/document\.body\.appendChild\(\s*overlay\s*\)/);
+    expect(open, 'openSettings 里还留着旧的整屏调用（renderSettings）').not.toContain('renderSettings');
+    expect(open, '小窗没有关掉之后的收尾（移除节点）').toContain('overlay?.remove()');
+    expect(open, '小窗没接 Esc（用户列的可选项，实现里接了就必须有）').toMatch(/addEventListener\('keydown'/);
+  });
+
+  it('③ 元素真跑一次：结构对、开关真写状态、点遮罩与点「关闭」都只关一次', () => {
+    const restore = installStubDom();
+    try {
+      let closed = 0;
+      const overlay = asStub(settingsOverlayElement({ onClose: () => { closed += 1; } }));
+      // 挂进 `document.body`：桩的 `dispatchEvent` 只沿 `parentElement` 向上冒泡，没挂上去就收不到
+      // 遮罩自己的监听器（`document.body` 是桩的节点 ⇒ 这里只能强转，见 `asStub` 的说明）
+      document.body.appendChild(overlay as unknown as Node);
+
+      // 结构：role=dialog 的面板 + 右上角「关闭」按钮
+      const dialog = oneClass(overlay, 'settings-panel');
+      expect(overlay.cls, '遮罩的类名不是 settings-overlay').toBe('settings-overlay');
+      // ⚠️ 桩的 `getAttribute` 只存在于 `StubNode` 的**索引签名**里（`unknown`）⇒ 调用点要显式收窄，
+      //    否则 `tsc` 报 `TS18046: 'dialog.getAttribute' is of type 'unknown'`
+      const readAttr = dialog.getAttribute as unknown as (n: string) => string | null;
+      expect(readAttr('role'), '小窗没有 role=dialog（读屏认不出这是个弹窗）').toBe('dialog');
+      const closeBtn = oneClass(overlay, 'settings-close');
+      expect(closeBtn.text, '右上角那个按钮的文案不是「关闭」').toBe('关闭');
+
+      // 开关：默认按 isMetal6StrobeOn() 落子，并且真的写进了 fx-settings 的内存态
+      const boxes = classOf(overlay, 'mode-check');
+      expect(boxes.length, '小窗里的开关数 = FX_SETTINGS 的条目数').toBe(FX_SETTINGS.length);
+      const box = boxes[0];
+      expect(box.tag, '开关不是 <input>').toBe('input');
+      expect(box.dataset.fxSetting, '开关没带 data-fx-setting（测试与调试都靠它定位）').toBe('metal6-strobe');
+      expect((box as unknown as { checked: boolean }).checked, '默认不是开启（isMetal6StrobeOn 的默认值）').toBe(true);
+
+      // 本地就地反馈（不重画整屏）：勾选一次 ⇒ 状态真的被写进内存态，说明文案跟着变
+      const note = oneClass(overlay, 'settings-note');
+      const before = note.text;
+      (box as unknown as { checked: boolean }).checked = false;
+      fireIn(box, 'change');
+      expect(isMetal6StrobeOn(), '勾掉开关之后 isMetal6StrobeOn() 还是 true').toBe(false);
+      expect(note.text, '说明没跟着改（"当前：关闭"应就地写上去，而不是重画整屏）')
+        .toBe(`${before}（当前：关闭）`);
+
+      // 关闭路径 ①：点小窗**里面**不关（遮罩那条看 `e.target`，而这里的 target 是小窗内部）
+      clickIn(note);
+      expect(closed, '点了小窗内部也把它关掉了（那玩家没法在窗里操作）').toBe(0);
+      // 关闭路径 ②：点遮罩空白处关一次（target = 遮罩本身，与真浏览器点空白处同形）
+      const backdrop = makeStubEl('span'); // 空白处：挂在遮罩里、不遮任何东西
+      overlay.appendChild(backdrop);
+      backdrop.dispatchEvent({ type: 'click', target: overlay });
+      expect(closed, '点遮罩空白处没关掉').toBe(1);
+      // 关闭路径 ③：右上角「关闭」按钮关一次
+      clickIn(closeBtn);
+      expect(closed, '右上角「关闭」按钮没关掉').toBe(2);
+    } finally {
+      restore();
+    }
   });
 });

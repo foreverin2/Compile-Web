@@ -88,12 +88,26 @@ function* hate3AfterDelete(ctx: EffectCtx): Generator<EffectStep, void, StepResu
 
 /** hate-4 底指令：被盖住前：先删除此列分值最低的被盖住的牌。
  *  before-covered 触发（此时本卡必为顶卡；不注册 top 标志——before-covered 只查顶卡，无影响）。
- *  候选 = 自己该线链路中被盖的卡（pos < len-1，不含自己）中 cardPointValue 最低者集合；
- *  唯一 → 直接删；并列 → 玩家选 1 → {op:'delete', allowCovered}。无被盖卡 → fizzle。 */
+ *  2026-10-01（用户拍板 + 卡文）：compile1文本.txt:129 / 官方英文卡面（cards.json）逐字为
+ *  「被盖住前：先删除此列分值最低的被盖住的牌。」/「First, delete the lowest value covered card in
+ *  this line.」——「此列 / this line」= **双方链路**（规则文本.txt:117「线路：贯穿分属两名玩家两张
+ *  协议的整条对战区域」），与 apathy.ts:5 countFaceDownInLine 同一口径（那里也是用户拍板「双方链路」）。
+ *  改前只取 `ctx.s.players[ctx.card.owner].stacks[ctx.card.line]` 一侧。
+ *  候选 = **双方**该线链路中各自被盖的卡（非本堆顶卡，不含结算中的源卡自己）里 cardPointValue 最低者集合；
+ *  唯一 → 直接删；并列 → 玩家选 1 → {op:'delete', allowCovered}。无被盖卡 → fizzle。
+ *  未变语义：「另一列」的排除（只看本 line）、allowCovered（删被盖卡）保持原样。 */
 function* hate4BeforeCovered(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
-  const stack = ctx.s.players[ctx.card.owner].stacks[ctx.card.line!];
-  const covered = stack.filter((c) => c.uid !== ctx.card.uid && c !== stack[stack.length - 1]);
-  if (covered.length === 0) return; // fizzle：此列无被盖卡
+  const line = ctx.card.line!;
+  const covered: Card[] = [];
+  for (const owner of [0, 1] as PlayerId[]) {
+    const stack = ctx.s.players[owner].stacks[line];
+    for (let i = 0; i < stack.length - 1; i++) {
+      // i < len-1 ⇒ 逐堆排除各自顶卡（顶卡未被覆盖）；源卡自己必是本堆顶卡，天然不在内
+      const c = stack[i];
+      if (c.uid !== ctx.card.uid) covered.push(c);
+    }
+  }
+  if (covered.length === 0) return; // fizzle：此列双方都没有被盖卡
   let min = Infinity;
   for (const c of covered) {
     const v = cardPointValue(ctx.s, c);

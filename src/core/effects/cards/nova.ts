@@ -74,16 +74,23 @@ function* nova0Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
 }
 
 /** nova-0 底（end，无 top 仅顶卡）：结束：在1张未被覆盖的新星牌下方，从你的牌库顶端反面打出1张牌。
- *  选 1 张【自己场上】未被覆盖的 nova 卡（faceUp 顶卡，含自己；落点同侧不变主——从你牌库顶垫到
- *  自己 nova 卡正下方，belowUid，该 nova 保持未覆盖）。 */
+ *  2026-10-01（用户拍板 + 卡文）：compile3文本.txt:106 逐字为「结束：在一张未被覆盖的新星牌下方，
+ *  从你的牌库顶端反面打出一张牌。」——「未被覆盖的新星牌」**没有「你的」**（同卡顶框写的是
+ *  「在一条**你**恰好有5张牌的链路中」，两处用词刻意不同）；规则文本.txt:93「除非文本特殊说明，
+ *  效果可以选择场上任意一侧未被覆盖的卡牌作为目标」⇒ 候选 = **双方**场上任一条链路的未覆盖【正面】
+ *  nova 顶卡（含自己）。改前写死 `s_owner(ctx.s, ctx.player)`，只能选己方一侧。
+ *  「你的牌库」不变：牌库仍是 ctx.player 的（deckTopAvailable(ctx.player) 守卫）。
+ *  落点：选中己方 nova 卡时按 belowUid 垫到其正下方；选中对手那一侧 nova 卡时的落点见下方 yield 处注记。 */
 function* nova0End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   if (!deckTopAvailable(ctx.s, ctx.player)) return;
   const cand: ChoiceCard[] = [];
-  for (const line of [0, 1, 2] as Line[]) {
-    const stack = s_owner(ctx.s, ctx.player).stacks[line];
-    const top = stack[stack.length - 1];
-    if (top && top.defId.startsWith('nova-') && top.faceUp) {
-      cand.push({ uid: top.uid, defId: top.defId, faceUp: true, owner: ctx.player, zone: 'field' as const, line, pos: top.pos, label: String(getCardDef(top.defId).value) });
+  for (const owner of [0, 1] as PlayerId[]) {
+    for (const line of [0, 1, 2] as Line[]) {
+      const stack = ctx.s.players[owner].stacks[line];
+      const top = stack[stack.length - 1];
+      if (top && top.defId.startsWith('nova-') && top.faceUp) {
+        cand.push({ uid: top.uid, defId: top.defId, faceUp: true, owner, zone: 'field' as const, line, pos: top.pos, label: String(getCardDef(top.defId).value) });
+      }
     }
   }
   if (cand.length === 0) return;
@@ -92,12 +99,12 @@ function* nova0End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const picked = cand.find((c) => c.uid === ans.selected[0]);
   if (!picked || picked.line === null) return;
   // belowUid：牌库顶反打插到所选 nova 卡【正下方】（line = 该 nova 卡所在线——belowUid 落点解析按源卡所在链路）
+  // 2026-10-01 注记（候选放开双方后暴露的落点缺口，**未改引擎**，等用户授权）：
+  // completePlay（resolve.ts:1016）只在**打牌者自己的**堆叠里按 belowUid 找落点 ⇒ 选中对手那一侧的
+  // nova 卡时 belowIdx = -1，按既有「belowUid 找不到 → 回退落顶」规则，牌会落回自己该线堆顶。
+  // 卡文要求的是「垫到那张 nova 卡正下方」（跨侧 = 进对方该线堆叠 + 易主，口径同 actions/base.ts:81
+  // 腐化0 落对方场），要补这一段需动 resolve.ts，不在本次授权范围内，已在回报里单列。
   yield { op: 'playTopDeck', line: picked.line, faceUp: false, belowUid: picked.uid };
-}
-
-/** 直接取玩家对象（nova0End 用） */
-function s_owner(s: GameState, owner: PlayerId) {
-  return s.players[owner];
 }
 
 /** nova-1 中：对手弃等同于此链路中牌数量的牌（尽力而为）。 */
@@ -150,12 +157,20 @@ function* nova2Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   }
 }
 
-/** nova-2 底（after-self-rearrange，无 top 仅顶卡）：当你重排协议后：你可以偏转1张反面朝下的牌。 */
+/** nova-2 底（after-self-rearrange，无 top 仅顶卡）：当你重排协议后：你可以偏转1张反面朝下的牌。
+ *  2026-10-01（用户拍板 + 卡文）：compile3文本.txt:108 逐字为「当你重排协议后：你可以偏转1张反面
+ *  朝下的牌。」——「1张反面朝下的牌」**没有「你的」**；规则文本.txt:93「除非文本特殊说明，效果可以
+ *  选择场上任意一侧未被覆盖的卡牌作为目标」⇒ 候选 = **双方**场上未覆盖的反面顶卡（`.filter(!faceUp)`
+ *  保持不动）。改前写死 `owner: ctx.player`，只能选己方一侧。 */
 function* nova2AfterSelfRearrange(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
-  const cand = ctx.candidates({ zone: 'field', owner: ctx.player }).filter((c) => !c.faceUp);
+  // includeSelfUid：文本没有「其他」→ 含源卡自己（2026-09-30 口径，同 nova-3/nova-4；源卡恒正面，
+  // 被下面的 !faceUp 过滤掉，此处只是与兄弟卡保持同一套候选口径）
+  const cand = ctx.candidates({ zone: 'field', includeSelfUid: ctx.card.uid }).filter((c) => !c.faceUp);
   const tAns = yield { kind: 'select', title: 'nova-2：你重排协议后——你可以偏转1张反面朝下的牌', min: 1, max: 1, optional: true, candidates: cand };
   if (tAns.selected.length === 0) return;
-  const card = ctx.s.players[ctx.player].stacks.flat().find((c) => c.uid === tAns.selected[0]);
+  // 2026-10-01：候选放开双方后，源卡也可能在对手那一侧 ⇒ 两侧堆叠一起找（同 nova-3 中的写法），
+  // 否则 srcLine 会错误地回退成 ctx.card.line，「另一列」的排除跟着错。
+  const card = ctx.s.players.flatMap((p) => p.stacks).flat().find((c) => c.uid === tAns.selected[0]);
   const srcLine = card?.line ?? ctx.card.line;
   if (srcLine === null) return;
   const lAns = yield {
@@ -219,16 +234,18 @@ registerCardEffects('nova-0', {
     end: {
       fn: nova0End,
       optional: false,
-      // 自动判定：牌库不可抽或己方无未被覆盖的正面新星牌 → 无对象自动跳过
+      // 自动判定：牌库不可抽或**场上双方**任一链路顶卡都不是未覆盖的正面新星牌 → 无对象自动跳过
+      // 2026-10-01（用户拍板 + 卡文 compile3文本.txt:106）：卡文「在一张未被覆盖的新星牌下方」没有
+      // 「你的」⇒ 预检也要看双方（改前只查 s.players[card.owner]，只要对手那一侧有新星牌就不弹按钮）。
       cond: (s, card) => {
-        const p = s.players[card.owner];
-        if (p.deck.length === 0) return false;
-        const stacks = p.stacks;
-        return ([0, 1, 2] as Line[]).some((l) => {
-          const st = stacks[l];
-          const top = st[st.length - 1];
-          return !!top && top.defId.startsWith('nova-') && top.faceUp;
-        });
+        if (s.players[card.owner].deck.length === 0) return false; // 「从你的牌库顶端」= 仍是打出者牌库
+        return ([0, 1] as PlayerId[]).some((owner) =>
+          ([0, 1, 2] as Line[]).some((l) => {
+            const st = s.players[owner].stacks[l];
+            const top = st[st.length - 1];
+            return !!top && top.defId.startsWith('nova-') && top.faceUp;
+          }),
+        );
       },
     },
   },

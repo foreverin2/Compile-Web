@@ -41,7 +41,7 @@ import { setFxViewSeat } from './ui/fx-seat';
 import { handCardBox, handFanLead, handFanStep } from './ui/fx-card-size';
 import { handOuterFor } from './ui/fx-seat';
 import { openControlRearrangeModal, closeControlRearrangeModal, refreshControlRearrangeModal, isControlRearrangeOpen, orderChanged, orderToAction, hostsEffectRearrange } from './ui/control-rearrange';
-import { renderHome, renderCoin, renderLibrary, renderRules, renderModeSelect, renderSettings, COIN_TOSS_MS } from './ui/home';
+import { renderHome, renderCoin, renderLibrary, renderRules, renderModeSelect, settingsOverlayElement, COIN_TOSS_MS } from './ui/home';
 import { linkRecoveryNotice, lobbyCoinViewOf, lobbyLinkText, appendNetTurnLine } from './ui/net-lobby';
 import type { CoinNetView } from './ui/home';
 // ★ T11-B：硬币屏要的"面"（屏上口径 `1 | 2`）
@@ -4832,8 +4832,47 @@ function showHome(): void {
     openRules: () => renderRules(root, showHome),
     // G3 Task 7：本地数据与隐私屏（授权状态可见 + 清除本机数据 + 档案导入导出入口）
     openLocalData: () => showLocalData(),
-    // ★ 2026-09-30（用户要求）：设置屏（特效开关；现在只有金属6 频闪一项）
-    openSettings: () => { renderSettings(root, showHome); },
+    /**
+     * ★ 2026-10-01（用户要求）：「设置」不再是一整屏 ⇒ **浮在首页上面的小窗**。
+     *
+     * 用户原话：「我希望设置页面只需要使用小窗即可，而不是目前这样单独放一个页面出来」。
+     * 所以这里既不 `renderSettings(root, ...)` 也不碰 `#app`：只把
+     * `settingsOverlayElement()` 造的那层遮罩挂到 `document.body`，于是关掉之后**原来的首页
+     * 原样还在**（没有"进设置页 → 返回首页"那一次重画，背景动画、滚动位置都不动）。
+     *
+     * 三条关闭路径（右上角「关闭」按钮 / 点遮罩空白处 / Esc）都汇到下面这个 `close()`：
+     * 移除节点 + 撤掉 keydown 监听 + 焦点还给首页那个「设置」按钮。改的是 `document` 级的东西，
+     * 所以**必须**在这里统一收尾（不能靠 `clearRoot` —— 那清的是 `#app`，够不着 body 上的遮罩）。
+     */
+    openSettings: () => {
+      document.querySelector('.settings-overlay')?.remove(); // 幂等：连点两次不留第二层
+      /**
+       * 焦点收尾用：关掉之后还给首页那个「设置」按钮。
+       *
+       * ⚠️ **不用 `instanceof HTMLElement`**（与 `render-net.ts:826` 同一条理由）：node 环境的
+       * DOM 桩里没有这个全局，`instanceof` 会当场抛 `ReferenceError`；而桩上那个"活动元素"也没有
+       * `focus()`。所以按**能力**判：有 `focus` 方法才拿它当回调，否则这次收尾就算了。
+       */
+      const active: unknown = document.activeElement;
+      const trigger = active !== null
+        && typeof (active as { focus?: unknown }).focus === 'function'
+        ? () => { (active as HTMLElement).focus(); }
+        : null;
+      const onKey = (ev: KeyboardEvent): void => {
+        if (ev.key === 'Escape') close();
+      };
+      let overlay: HTMLElement | null = null;
+      const close = (): void => {
+        document.removeEventListener('keydown', onKey);
+        overlay?.remove();
+        overlay = null;
+        trigger?.(); // 点遮罩 / 按 Esc 之后不至于把焦点丢在 body 上
+      };
+      overlay = settingsOverlayElement({ onClose: close });
+      document.body.appendChild(overlay);
+      document.addEventListener('keydown', onKey); // Esc 关闭（用户列的可选项，一并接上）
+      document.querySelector<HTMLButtonElement>('.settings-close')?.focus();
+    },
   });
 }
 

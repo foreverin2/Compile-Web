@@ -1158,11 +1158,28 @@ body {
 .action-bar:empty { display: none; }
 /* 「下一步」区块：纵向排列（提示文本在上、按钮在下），整体随操作行水平居中 */
 .next-block { display: flex; flex-direction: column; align-items: center; gap: 3px; }
-.btn { padding: 6px 12px; border-radius: 6px; border: none; background: #e0a030; color: #111; font-weight: bold; cursor: pointer; }
-.btn:hover { background: #f0b040; }
+/**
+ * ★ 2026-10-01（用户要求）：**所有非首页按钮统一成"联机大厅那个返回按钮"的样式** ——
+ * 透明底 + 细边框 + 浅色字（原来这里是黄底 `#e0a030` / 深色字 / `border: none`）。
+ * 参考实现是 `styles-net-lobby.css` 的 `.net-lobby-back`（用户指定"那个按钮 css 好看一些"）。
+ * 首页按钮走的是 `.home-btn` 那一套，**不在此列**（用户明确排除）。
+ * 各处的专属按钮（`.play-btn`、`.choice-confirm`、`.coin-flip-btn` 等）仍按"后声明覆盖"的
+ * 老规矩在自己的规则里改尺寸/配色 —— 本组只定底色、边框、圆角、字号这套基准。
+ */
+.btn {
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #9bd;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.btn:hover { border-color: #34345a; color: #cfe; }
 /* 「翻面」按钮：单个小按钮（宽度远小于卡面），青色霓虹风格（与 .choice-bar 一致）。
    按钮 class 含 .btn（btn play-btn），且 .btn 声明在前 —— 本组规则必须置于 .btn 之后，
-   层叠（同特异性、后声明胜）才让霓虹配色覆盖 .btn 的黄色底。 */
+   层叠（同特异性、后声明胜）才让霓虹配色覆盖 .btn 的底色（2026-10-01 起 .btn 是透明底）。 */
 .play-btn {
   background: #0e1c2a; color: #4ff0ff; border: 1px solid #4ff0ff88;
   border-radius: 6px; font-size: 12px; padding: 4px 12px; cursor: pointer;
@@ -2027,7 +2044,7 @@ body.dragging { cursor: grabbing; user-select: none; }
 /* ===== 诊断日志导出 ===== */
 /* 导出日志按钮：放大 + 固定于视口右下角（right 16px / bottom 18px），z-index 300 高于底部
    操作台与选择条（均 200）——滚动时始终可见、不被操作台覆盖。霓虹青色与 .play-btn /
-   .choice-bar 一致（覆盖 .btn 的黄色底，.diag-btn 声明在 .btn 之后、同特异性后声明胜）。 */
+   .choice-bar 一致（覆盖 .btn 的底色，.diag-btn 声明在 .btn 之后、同特异性后声明胜）。 */
 .diag-btn {
   position: fixed; right: 16px; bottom: 18px; z-index: 300;
   font-size: 16px; padding: 10px 18px; margin-top: 0;

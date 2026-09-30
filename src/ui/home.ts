@@ -1076,22 +1076,52 @@ function renderCoinHotseat(root: HTMLElement, nav: CoinNav): void {
 }
 
 /* =====================================================================
- * ★ 2026-09-30（用户要求）：**设置屏**（首页 →「设置」）。
+ * ★ 2026-10-01（用户要求）：**设置改成浮在上面的小窗**（原来是单独一整屏）。
  *
- * 现在只有一项：金属6 的频闪特效开关（默认开启）。开关只写 `src/ui/fx-settings.ts` 里那个内存态；
- * 消费点也只有一处（`render.ts` 的 `syncMetal6Mans`）⇒ 关掉它不影响任何其它卡牌的特效。
- * 用的是模式选择页那两个开关的同一套类（`.mode-toggle` / `.mode-check`），不新增样式。
+ * 用户原话：「我希望设置页面只需要使用小窗即可，而不是目前这样单独放一个页面出来」。
+ * ⇒ 屏上不再有"设置页"这回事：`openSettings` 只是把下面这个遮罩挂到 `document.body`，
+ * 关掉之后原来的首页**原样还在**（本函数一不调 `clearRoot`、二不碰 `#app`，所以不存在
+ * "进设置页再返回首页"那套重画）。
+ *
+ * ## 与既有浮层同款
+ *
+ * `openRulePages()`（`document.body` 级遮罩 + 关闭按钮 + 点遮罩关闭）与 `.changelog-*`
+ * （一个 `Element`，谁用谁挂）两种做法在本仓都有。这里取**两者之间**：函数只**造**元素
+ * （同 `changelogElement()`，可单测、不依赖某个宿主），**挂到 `document.body`** 由宿主的
+ * `openSettings` 接缝做（同 `openRulePages()` 的那种 body 级遮罩）；Esc 与"焦点还给入口按钮"
+ * 同样在宿主那一侧接（它们读的是 `document` 级的东西，放这里会让这个构造器不再纯粹）。
+ *
+ * ## 样式
+ *
+ * 红线 `styles.css` 一行不动；新版式全部落在 `styles-local.css` 的 `settings-*` 类上
+ * （那几个名字在 5 张既有 CSS 里零命中，照 `changelog-*` 那次的做法）。开关控件复用既有的
+ * `.mode-toggle` / `.mode-check` / `.mode-toggle-label`，与模式选择页那两个开关同款。
+ *
+ * ## 功能与 2026-09-30 那版**一字不差**
+ *
+ * 条目仍只来自 `FX_SETTINGS`，开关仍只写 `src/ui/fx-settings.ts` 的内存态（消费点仍只有
+ * `render.ts` 的 `syncMetal6Mans`）；唯一的差别：勾选后不再整屏重画，改成**就地写状态**
+ * （`box.checked` 就是刚翻过的值，另外把那一行的说明改成"当前：开启 / 关闭"，玩家能一眼看见）。
+ *
+ * ## 怎么关（三条，缺一不可）
+ *
+ * 右上角「关闭」按钮 / 点遮罩空白处 / 按 Esc —— 三条都走 `onClose`，由宿主统一收尾
+ * （`main.ts` 的 `openSettings`：移除节点 + 撤掉 keydown 监听 + 焦点还给入口按钮）。
  * ===================================================================== */
-export function renderSettings(root: HTMLElement, back: () => void): void {
-  clearRoot(root);
-  const screen = el('div', 'mode-screen');
-  const head = el('div', 'subpage-head');
-  head.appendChild(el('h1', 'subpage-title', '设置'));
-  head.appendChild(el('div', 'subpage-sub', '特效开关（默认开启；改动只在本次会话有效）'));
-  head.appendChild(button('btn', '← 返回主页面', back));
-  screen.appendChild(head);
+export function settingsOverlayElement(nav: { readonly onClose: () => void }): HTMLElement {
+  const overlay = el('div', 'settings-overlay');
+  const dialog = el('div', 'settings-panel');
+  dialog.setAttribute('role', 'dialog');
+  dialog.setAttribute('aria-modal', 'true');
+  dialog.setAttribute('aria-label', '设置');
 
-  const list = el('div', 'mode-toggles');
+  const head = el('div', 'settings-head');
+  head.appendChild(el('div', 'settings-title', '设置'));
+  const close = button('btn settings-close', '关闭', () => { nav.onClose(); });
+  head.appendChild(close);
+  dialog.appendChild(head);
+
+  const list = el('div', 'settings-list');
   for (const def of FX_SETTINGS) {
     const row = el('label', 'mode-toggle');
     const box = document.createElement('input');
@@ -1099,17 +1129,26 @@ export function renderSettings(root: HTMLElement, back: () => void): void {
     box.className = 'mode-check';
     box.checked = isMetal6StrobeOn();
     box.dataset.fxSetting = def.id;
+    // 开关说明（每行一条）：勾选后就地改写它，把当前状态写在屏上（不重画整屏）
+    const note = el('div', 'settings-note', def.desc);
     box.addEventListener('change', () => {
       if (def.id === 'metal6-strobe') setMetal6Strobe(box.checked);
-      renderSettings(root, back); // 立刻重画，把状态写在屏上
+      note.textContent = `${def.desc}（当前：${box.checked ? '开启' : '关闭'}）`;
     });
     row.appendChild(box);
     row.appendChild(el('span', 'mode-toggle-label', def.label));
     list.appendChild(row);
-    list.appendChild(el('div', 'zoom-hint', def.desc));
+    list.appendChild(note);
   }
-  screen.appendChild(list);
-  root.appendChild(screen);
+  dialog.appendChild(list);
+  dialog.appendChild(el('div', 'settings-hint', '改动只在本次会话有效，刷新后回到默认开启。'));
+  overlay.appendChild(dialog);
+
+  // 点遮罩空白处关闭（点小窗内部不关：`e.target` 只会在**遮罩本身**上等于 overlay）
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) nav.onClose();
+  });
+  return overlay;
 }
 
 /* =====================================================================

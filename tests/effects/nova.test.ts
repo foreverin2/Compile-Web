@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import type { Card, ChoiceCard, GameState, Line, PlayerId } from '../../src/core/models/types';
 import { createGame } from '../../src/core/state/create';
-import { answerEffect, resolveMiddle } from '../../src/core/effects/resolve';
+import { answerEffect, resolveMiddle, runStack } from '../../src/core/effects/resolve';
+import { collectTriggers, resolveTrigger, fireReactive } from '../../src/core/effects/triggers';
 import { getCardDef } from '../../src/data/demo';
 import { makeCard } from '../helpers';
 
@@ -205,4 +206,94 @@ describe('nova-3 / nova-4 阈值候选（用户 2026-09-23 裁决）', () => {
       );
     });
   }
+});
+
+/**
+ * 新星2 底 / 新星0 底 的候选范围（用户 2026-10-01 拍板 + 卡文）。
+ *
+ * 卡文（`E:\studyE\compile\正版compile\compile3文本.txt`，权威文本）：
+ *  - 108 行 新星2：「…/当你重排协议后：你可以偏转1张反面朝下的牌。」——「1张反面朝下的牌」没有「你的」；
+ *  - 106 行 新星0：「结束：在一张未被覆盖的新星牌下方，从你的牌库顶端反面打出一张牌。」——「未被覆盖的
+ *    新星牌」没有「你的」（同句后半「**你的**牌库」有，用词刻意不同）。
+ * 规则文本（`游戏规则说明书\规则文本.txt`）93 行：「除非文本特殊说明，效果可以选择场上任意一侧未被覆盖
+ * 的卡牌作为目标。」⇒ 两张卡的候选都放开到**双方**。
+ *
+ * 这两条腿都是**正向**断言：改前 nova-2 底写死 `owner: ctx.player`、nova-0 底的 cond 只查 `card.owner`
+ * 一侧，对手那一侧的卡既进不了候选、也过不了触发预检 —— 下面每条断言在改前都会失败。
+ */
+
+describe('nova-2 底（after-self-rearrange）：候选放开双方（2026-10-01 用户拍板 + 卡文 108 行）', () => {
+  it('双方的反面顶卡都进候选、正面顶卡不进；选对手那张后按【它所在线】排除目标线，偏转不改归属/朝向', () => {
+    const s = setup();
+    const ownDown = placeCard(s, 'fire-1', 0, 0, false); // 己方线 0 反面顶卡（候选）
+    placeCard(s, 'fire-3', 0, 1, true); // 己方线 1 正面顶卡（不进候选）
+    const foeDown = placeCard(s, 'fire-1', 1, 1, false); // 对手线 1 反面顶卡（候选；改前选不到）
+    placeCard(s, 'fire-3', 1, 2, true); // 对手线 2 正面顶卡（不进候选）
+    const src = placeCard(s, 'nova-2', 0, 2, true); // 源卡：底命令，未覆盖顶卡
+
+    fireReactive(s, 'after-self-rearrange', 0); // 「当你重排协议后」由 P1 引发
+    runStack(s);
+    const pe = promptOf(s, src.uid);
+    expect(pe.prompt!.kind).toBe('select');
+    expect(pe.prompt!.optional, '「你可以偏转」= 可选').toBe(true);
+    const uids = pe.prompt!.candidates.map((c) => c.uid);
+    const reading = `[原始读数 候选=${brief(pe.prompt!.candidates)}]`;
+    expect(uids, `对手那一侧的反面顶卡现在也能选 ${reading}`).toContain(foeDown.uid);
+    expect(uids, `己方那一侧的反面顶卡仍在候选 ${reading}`).toContain(ownDown.uid);
+    expect([...uids].sort(), `${reading} 候选必须恰好是两张反面顶卡（正面顶卡被 !faceUp 过滤掉）`).toEqual(
+      [ownDown.uid, foeDown.uid].sort(),
+    );
+    for (const c of pe.prompt!.candidates) expect(c.faceUp, `${reading} 候选里不该有正面卡`).toBe(false);
+
+    answerEffect(s, pe.id, [foeDown.uid]); // 选对手那一张
+    const lPe = promptOf(s, src.uid);
+    expect(lPe.prompt!.kind).toBe('select-line');
+    // 源卡在 P1 自己的线 2；被选卡在对手的线 1 ⇒ 「另一列」排除必须按【线 1】走（改前只在自己堆叠找、
+    // 找不到就回退成源卡所在线 2，这里会错成 [0, 1]）
+    expect(lPe.prompt!.lines, '目标线排除的是被选卡所在线 1（不是源卡所在线 2）').toEqual([0, 2]);
+    answerEffect(s, lPe.id, ['line:0']);
+    expect(s.players[1].stacks[0].map((c) => c.uid), '对手的反面卡偏转进对手线 0').toEqual([foeDown.uid]);
+    expect(s.players[1].stacks[1], '原线 1 已空').toHaveLength(0);
+    expect(foeDown.owner, '偏转不改归属').toBe(1);
+    expect(foeDown.faceUp, '偏转不改朝向（仍反面）').toBe(false);
+    expect(s.pendingEffects).toHaveLength(0);
+  });
+});
+
+describe('nova-0 底（end）：候选放开双方（2026-10-01 用户拍板 + 卡文 106 行）', () => {
+  it('只有对手那一侧有未覆盖正面新星牌时触发预检也成立、那张卡进候选，牌仍从【你的】牌库顶端出', () => {
+    const s = setup();
+    s.turnPlayer = 0;
+    s.step = 'end';
+    const src = placeCard(s, 'nova-0', 0, 0, true); // 底命令源卡（未覆盖顶卡）
+    const foe = placeCard(s, 'nova-1', 1, 2, true); // 对手那一侧的未覆盖正面新星牌
+    s.players[0].deck = [makeCard('fire-1', 0, 'deck', false)];
+
+    const t = collectTriggers(s, 'end').find((x) => x.cardUid === src.uid);
+    expect(
+      t,
+      '卡文没有「你的」⇒ 对手那一侧有新星牌也要弹按钮（改前 cond 只查 card.owner 一侧 → 这里收集不到）',
+    ).toBeTruthy();
+    resolveTrigger(s, t!);
+    runStack(s);
+    const pe = promptOf(s, src.uid);
+    const cands = pe.prompt!.candidates;
+    const uids = cands.map((c) => c.uid);
+    const reading = `[原始读数 候选=${brief(cands)}]`;
+    expect(uids, `对手那一侧的未覆盖正面新星牌在候选 ${reading}`).toContain(foe.uid);
+    expect(uids, `源卡自己（nova-0 也是新星牌）在候选 ${reading}`).toContain(src.uid);
+    expect(cands.find((c) => c.uid === foe.uid)?.owner, `${reading} 对手那张的 owner 应为 P2`).toBe(1);
+
+    // 应答对手那一张：牌从【你的】牌库顶端出（「从你的牌库顶端」这句有「你的」，不跟着放开）
+    answerEffect(s, pe.id, [foe.uid]);
+    expect(s.players[0].deck, '牌库顶被消耗').toHaveLength(0);
+    const played = ([0, 1, 2] as Line[])
+      .flatMap((l) => s.players[0].stacks[l])
+      .find((c) => c.uid !== src.uid);
+    expect(played, '打出的那张落在打牌者自己场地侧（引擎 belowUid 只在自己堆叠找落点）').toBeTruthy();
+    expect(played!.faceUp, '「反面打出」').toBe(false);
+    expect(played!.owner, '牌库来源的卡归属不变').toBe(0);
+    expect(s.players[1].stacks[2].map((c) => c.uid), '对手那张新星牌不受影响，仍在原处未被覆盖').toEqual([foe.uid]);
+    expect(s.pendingEffects).toHaveLength(0);
+  });
 });

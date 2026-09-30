@@ -396,7 +396,7 @@ describe('hate protocol effects', () => {
       expect(s.pendingEffects).toHaveLength(0);
     });
 
-    it('only covered cards in THIS line are candidates (lower-value covered card elsewhere untouched)', () => {
+    it('另一列的被盖卡不参与（更低分也不动）：范围是「此列」而不是「全场」', () => {
       const s = draftHateP1();
       advanceToStep(s, 0, 'action');
       const coveredLo = makeCard('death-4', 0, 'field', false, 0, 0); // 本线：2
@@ -411,6 +411,58 @@ describe('hate protocol effects', () => {
       expect(coveredLo.zone).toBe('trash'); // 只删本线最低
       expect(otherLo.zone).toBe('field'); // 他线（更低分）不动
       expect(otherTop.zone).toBe('field');
+      expect(s.pendingEffects).toHaveLength(0);
+    });
+
+    // 2026-10-01（用户拍板 + 卡文）：compile1文本.txt:129「被盖住前：先删除此列分值最低的被盖住的牌。」
+    // 「此列」= 双方链路（规则文本 117 行「线路：贯穿分属两名玩家两张协议的整条对战区域」），口径同
+    // apathy.ts:5 的 countFaceDownInLine。改前只取 `players[ctx.card.owner]` 一侧 ⇒ 下面两条在改前失败。
+    it('对手那一侧同列的被盖卡一起比大小：跨侧最低者被删（改前只看己方，会错删己方那张）', () => {
+      const s = draftHateP1();
+      advanceToStep(s, 0, 'action');
+      const ownCovered = makeCard('death-5', 0, 'field', true, 0, 0); // 己方线 0 被盖：5
+      const h4 = makeCard('hate-4', 0, 'field', true, 0, 1);
+      s.players[0].stacks[0] = [ownCovered, h4];
+      const foeCovered = makeCard('death-4', 1, 'field', false, 0, 0); // 对手线 0 被盖：反面 = 2（更低）
+      const foeTop = makeCard('fire-3', 1, 'field', true, 0, 1);
+      s.players[1].stacks[0] = [foeCovered, foeTop];
+      const played = makeCard('water-1', 0, 'hand');
+      s.players[0].hand = [played];
+      executeAction(s, 0, 'play', { cardUid: played.uid, faceUp: false, line: 0 });
+      expect(foeCovered.zone, '此列双方链路里最低 = 对手那张反面 2 → 直接删它').toBe('trash');
+      expect(s.players[1].trash.map((c) => c.uid), '进的是它持有者的弃牌堆').toEqual([foeCovered.uid]);
+      expect(ownCovered.zone, '己方那张 5 分不动（改前因只看己方而被删）').toBe('field');
+      expect(foeTop.zone, '对手侧顶卡未被覆盖，不在候选').toBe('field');
+      expect(s.players[0].stacks[0].map((c) => c.uid), '落地卡仍盖在 hate-4 上').toEqual([
+        ownCovered.uid,
+        h4.uid,
+        played.uid,
+      ]);
+      expect(s.pendingEffects).toHaveLength(0); // 唯一最低 → 不挂起
+    });
+
+    it('跨侧并列最低 → 提示同时列出双方那两张，可以选对手那张删（allowCovered 保留）', () => {
+      const s = draftHateP1();
+      advanceToStep(s, 0, 'action');
+      const ownCovered = makeCard('death-4', 0, 'field', false, 0, 0); // 己方线 0 被盖：反面 = 2
+      const h4 = makeCard('hate-4', 0, 'field', true, 0, 1);
+      s.players[0].stacks[0] = [ownCovered, h4];
+      const foeCovered = makeCard('water-1', 1, 'field', false, 0, 0); // 对手线 0 被盖：反面 = 2（并列）
+      const foeTop = makeCard('fire-3', 1, 'field', true, 0, 1);
+      s.players[1].stacks[0] = [foeCovered, foeTop];
+      const played = makeCard('water-1', 0, 'hand');
+      s.players[0].hand = [played];
+      executeAction(s, 0, 'play', { cardUid: played.uid, faceUp: false, line: 0 });
+      const p = s.pendingEffects[s.pendingEffects.length - 1];
+      expect(p.prompt?.kind).toBe('select');
+      expect(p.prompt?.candidates.map((c) => c.uid), '双方并列最低都列出（排序 = 先己方后对手）').toEqual([
+        ownCovered.uid,
+        foeCovered.uid,
+      ]);
+      executeAction(s, 0, 'effect-choice', { promptId: p.id, choice: [foeCovered.uid] });
+      expect(foeCovered.zone, '被盖的对手卡也能删（allowCovered 语义不变）').toBe('trash');
+      expect(s.players[1].trash.map((c) => c.uid)).toEqual([foeCovered.uid]);
+      expect(ownCovered.zone).toBe('field');
       expect(s.pendingEffects).toHaveLength(0);
     });
 

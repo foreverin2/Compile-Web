@@ -291,3 +291,39 @@
   width: min(100%, 900px); height: auto; background: #fff; border-radius: 6px;
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
 }
+
+
+/* ---------- ★ 2026-10-01（用户要求）：设置改成**浮在上面的小窗**，不再单独占一整屏 ----------
+ * 依据（用户原话）：「我希望设置页面只需要使用小窗即可，而不是目前这样单独放一个页面出来」。
+ * 元素由 `src/ui/home.ts` 的 `settingsOverlayElement()` 造，宿主（`src/main.ts` 的
+ * `openSettings`）把它挂到 `document.body`；这里只管版式。
+ *
+ * 纪律不变：`styles.css` 一行不动，下面这 8 个类名在那 5 张既有 CSS 里**零命中**
+ * （2026-10-01 用 PowerShell 逐个子串数过：全部 0 处），所以 `local-data-screen.test.ts`
+ * 那条"新类名不冲突"的腿照旧成立。
+ * 开关控件仍复用既有的 `.mode-toggle` / `.mode-check` / `.mode-toggle-label`（与模式选择页同款）。 */
+.settings-overlay {
+  position: fixed; inset: 0; z-index: 10000;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px 16px; box-sizing: border-box;
+  background: rgba(6, 6, 14, 0.72);
+}
+.settings-panel {
+  width: min(520px, 94vw); max-height: 84vh; box-sizing: border-box;
+  display: flex; flex-direction: column;
+  padding: 18px 20px 22px;
+  border: 1px solid #4a4a68; border-radius: 12px;
+  background: rgba(20, 20, 40, 0.97);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.6);
+  color: #eef;
+}
+.settings-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.settings-title { font-size: 18px; font-weight: 700; letter-spacing: 1px; color: #00ffcc; }
+.settings-close { font-size: 12px; padding: 5px 12px; }
+.settings-list {
+  margin-top: 8px; overflow-y: auto; overscroll-behavior: contain;
+  display: flex; flex-direction: column; gap: 4px;
+}
+/* 每一行的说明（勾选后就地改写它，把"当前：开启/关闭"写在屏上；不重画整屏） */
+.settings-note { font-size: 12px; line-height: 1.6; color: #8f9ac0; }
+.settings-hint { margin-top: 12px; font-size: 12px; line-height: 1.6; color: #7d86a8; }

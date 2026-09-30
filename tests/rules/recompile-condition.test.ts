@@ -156,7 +156,7 @@ describe('全量追踪与详细快照（2026-09-12 日志强化）', () => {
     place(s, 'greed-2', 1, 1);
     s.pendingEffects.push({
       id: 'e9', player: 0, gen: undefined as never, sourceUid: 'x', sourceDefId: 'lust-2',
-      prompt: { kind: 'select', title: 'lust-2：你可以将对手1张被覆盖的牌平移到此链路', min: 1, max: 1, optional: true, candidates: [] },
+      prompt: { kind: 'select', title: 'lust-2：你可以将对手1张被覆盖的牌偏转到此链路', min: 1, max: 1, optional: true, candidates: [] },
       lastAnswer: null,
     });
     const digest = stateDigest(s);
@@ -167,7 +167,7 @@ describe('全量追踪与详细快照（2026-09-12 日志强化）', () => {
     expect(detail).toContain('lust-0[色欲]');
     expect(detail).toContain('线2（总值 12');
     expect(detail).toContain('效果栈（自底向上）');
-    expect(detail).toContain('lust-2：你可以将对手1张被覆盖的牌平移到此链路');
+    expect(detail).toContain('lust-2：你可以将对手1张被覆盖的牌偏转到此链路');
     expect(detail).toContain('追踪条目数=');
   });
 });

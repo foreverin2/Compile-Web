@@ -3818,8 +3818,10 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
   if (typeof s.helloDiag === 'string' && s.helloDiag.length > 0) {
     screen.setAttribute('data-hello-diag', s.helloDiag);
   }
-  screen.appendChild(el('h1', 'net-lobby-title', '联机对战'));
+  // ★ 2026-10-01（用户要求）：这个「← 返回模式选择」挪到**最前面**（屏的左上角），
+  //   与其他页面「← 返回…」的位置保持一致 —— 原来它排在标题下面，看着像标题的附属。
   screen.appendChild(button('btn-link net-lobby-back', '← 返回模式选择', nav.backHome));
+  screen.appendChild(el('h1', 'net-lobby-title', '联机对战'));
 
   /* ── ★★ G5 T22：交接步骤（`role === null` 时不画：那时这一局还没开始） ── */
   if (s.role !== null) appendSteps(screen, lobbyStepsOf(s));
