@@ -269,3 +269,7 @@
 }
 
 .changelog-empty { margin-top: 14px; font-size: 13px; line-height: 1.7; color: #93a0bd; }
+
+
+/* ★ 2026-09-30：模式页那句"建议 65% 游玩 + Ctrl+滚轮调整"（文案出处 src/ui/page-zoom.ts） */
+.zoom-hint { width: min(560px, 92vw); margin-top: 4px; font-size: 12px; line-height: 1.6; color: #8f9ac0; }

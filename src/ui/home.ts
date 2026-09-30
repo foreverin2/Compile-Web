@@ -6,6 +6,7 @@ import { DEMO_PROTOCOLS, DEMO_CARD_DEFS, protocolImgSrc, cardImgSrc, cardTextPar
 import { LIB_TAG_GROUPS, LIB_ALL_TAG_IDS, filterLibrary } from '../app/library-filter';
 import { openZoom, buildCardTextEl, buildProtocolRatingPanel, bindClickOrDouble } from './render';
 import { changelogElement } from './changelog';
+import { onPageZoomChange, pageZoomHintText } from './page-zoom';
 
 /**
  * 主界面/掷硬币/图鉴/规则图纸 —— 非对局屏（main.ts 导航）。
@@ -51,6 +52,14 @@ export interface CoinNav {
    * 这个分支**不读 `nav.seed`**（种子在屏打开时还不该有）。
    */
   net?: CoinNetView;
+  /**
+   * ★ 2026-09-30：**热座那条路的动态偏好**（`prefers-reduced-motion: reduce`）。
+   *
+   * 热座现在与联机共用同一段抛硬币动画（`playCoinTossAnimation`），而那段函数的第一个入参
+   * 就是"要不要演"。联机那侧原本由 `CoinNetView.reducedMotion` 传，热座这侧补上同一个口子 ——
+   * 屏自己不读媒体查询（宿主 `main.ts` 的 `reducedMotion()` 是唯一出处）。
+   */
+  reducedMotion?: boolean;
 }
 
 /**
@@ -443,6 +452,16 @@ export function renderModeSelect(root: HTMLElement, nav: ModeSelectNav, devUnloc
     mkMode('三人模式', '三人同台对战', false, () => showToast('三人模式：开发中'))
   );
   screen.appendChild(list);
+
+  /**
+   * ★ 2026-09-30（用户要求）：**"建议 65% 游玩"的提示 + Ctrl+滚轮调整大小**。
+   *
+   * 放在模式卡下面：这一页才是"要开热座"的那一刻。文案的唯一出处是 `page-zoom.ts` 的
+   * `pageZoomHintText()`（本文件不写第二份），并订阅缩放变化把百分比实时刷新。
+   */
+  const zoomHint = el('div', 'zoom-hint', pageZoomHintText());
+  onPageZoomChange(() => { zoomHint.textContent = pageZoomHintText(); });
+  screen.appendChild(zoomHint);
 
   // 两个开关（默认关闭）+ 圆形问号帮助
   const toggles = el('div', 'mode-toggles');
@@ -981,59 +1000,38 @@ function renderCoinHotseat(root: HTMLElement, nav: CoinNav): void {
     flipping = true;
     flipBtn.disabled = true;
     for (const pe of pickEls) (pe as HTMLButtonElement).disabled = true;
-    stage.classList.add('flipping');
     // G0：硬币结果由种子派生（原来是 Math.random）—— 动画只是把已确定的结果演出来
     // G5 T11-A：落点式与胜负规则**都搬去 `src/app/coin.ts`**（只搬家、不改值）；
     //   联机那条路要算同一件事，规则不能再长在屏上这一份里。
     const landed: 1 | 2 = coinLanding(seed);
     const winner: PlayerId = draftStarterFor(0, chosen, seed);
-    // 交替闪现间隔逐次拉长（模拟硬币逐渐停下），最后停在 landed 面
-    const delays = [90, 90, 110, 130, 160, 190, 230, 280, 340, 420, 520];
-    let shown: 1 | 2 = chosen === 1 ? 2 : 1; // 首跳先翻到另一面
-    let step = 0;
-    const tick = (): void => {
-      shown = shown === 1 ? 2 : 1;
-      img.src = COIN_FACES.find((c) => c.side === shown)!.src;
-      disc.classList.remove('flip-tick');
-      void disc.offsetWidth; // 重启动画
-      disc.classList.add('flip-tick');
-      step += 1;
-      if (step < delays.length) {
-        flipTimer = window.setTimeout(tick, delays[step]);
-      } else {
-        // 收尾：若最后所示 ≠ landed，再来一跳并最终定格
-        const finalize = (): void => {
-          stage.classList.remove('flipping');
-          flipping = false;
-          disc.classList.add('settled');
-          img.src = COIN_FACES.find((c) => c.side === landed)!.src;
-          const faceName = COIN_FACES.find((c) => c.side === landed)!.name;
-          result.style.display = '';
-          result.textContent = '';
-          result.appendChild(
-            el(
-              'div',
-              'coin-result-text',
-              `掷出 ${faceName} —— 玩家 ${winner + 1} 先选协议 · 玩家 ${2 - winner} 先出牌`
-            )
-          );
-          result.appendChild(button('btn coin-begin-btn', '开始对局', () => nav.beginGame(winner)));
-        };
-        if (shown !== landed) {
-          flipTimer = window.setTimeout(() => {
-            shown = shown === 1 ? 2 : 1;
-            img.src = COIN_FACES.find((c) => c.side === shown)!.src;
-            disc.classList.remove('flip-tick');
-            void disc.offsetWidth;
-            disc.classList.add('flip-tick');
-            flipTimer = window.setTimeout(finalize, 650);
-          }, 650);
-        } else {
-          flipTimer = window.setTimeout(finalize, 620);
-        }
-      }
-    };
-    flipTimer = window.setTimeout(tick, 120);
+    /**
+     * ★ 2026-09-30（用户要求）：热座改用**联机那套抛硬币动画**。
+     *
+     * 老做法是"两枚币面交替闪现、间隔逐次拉长"（那段代码的注释里也写着"热座那条路的交替闪现
+     * 一个字没动"）；联机那边 T19 已经换成真·上抛 + 绕 x 轴翻转 + 回弹（`playCoinTossAnimation`）。
+     * 现在两边**共用同一个函数、同一个时长** `COIN_TOSS_MS` ⇒ 观感一致，而且这只有一个实现。
+     *
+     * 收尾与老那条**一字不差**：结果行 + 「开始对局」按钮，落点仍由 `nav.seed` 派生。
+     * 动态偏好（`prefers-reduced-motion`）与"没有动画能力"的环境由那个函数自己兜住（换图照做）。
+     */
+    playCoinTossAnimation(disc, stage, landed, nav.reducedMotion === true);
+    flipTimer = window.setTimeout(() => {
+      flipping = false;
+      disc.classList.add('settled');
+      img.src = COIN_FACES.find((c) => c.side === landed)!.src;
+      const faceName = COIN_FACES.find((c) => c.side === landed)!.name;
+      result.style.display = '';
+      result.textContent = '';
+      result.appendChild(
+        el(
+          'div',
+          'coin-result-text',
+          `掷出 ${faceName} —— 玩家 ${winner + 1} 先选协议 · 玩家 ${2 - winner} 先出牌`
+        )
+      );
+      result.appendChild(button('btn coin-begin-btn', '开始对局', () => nav.beginGame(winner)));
+    }, COIN_TOSS_MS);
   });
   actions.appendChild(flipBtn);
   screen.appendChild(actions);

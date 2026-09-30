@@ -50,6 +50,7 @@ import type { CoinSide } from './app/coin';
 import { createLocalStore, readNickName } from './app/local-store';
 import { openL1Store } from './ui/local-store-browser';
 import { renderLocalConsent, nextConsentStep } from './ui/local-consent';
+import { installPageZoom } from './ui/page-zoom';
 // G3 Task 7：「本地数据与隐私」屏 + 档案的选择/落盘口（浏览器实现只在 `showLocalData` 里注入）
 import { renderLocalData } from './ui/local-data';
 // G4 Task 4：会话层驱动（热座 = 执行 + 记录；重放 = 只读闸门）与档案重放的接线。
@@ -5014,6 +5015,8 @@ function showCoin(): void {
   renderCoin(root, {
     backHome: showModeSelect,
     seed,
+    // ★ 2026-09-30：热座与联机共用同一段抛硬币动画 ⇒ 动态偏好也从同一个唯一出处传下去
+    reducedMotion: reducedMotion(),
     beginGame: (starter) => {
       state = createGame({
         seed,
@@ -5277,6 +5280,9 @@ exposeMatchProbe();
 // 与渲染顺序无关）；横屏门只碰 `<html>` 的类与 body 级的门节点，同样与屏无关。
 initTouchBridge();
 initPhoneLandscape();
+// ★ 2026-09-30（用户要求）：Ctrl + 滚轮调画面大小（热座建议 65%）。只挂一个 wheel 监听，
+// 不按 Ctrl 的滚轮一律放行；摆在这儿是因为它也只碰 `<html>` 与一个 document 级监听。
+installPageZoom();
 showStartScreen();
 // 常驻特效层随滚动/缩放重新对齐：已编译环（compiledFx）、暗2 黑烟（smokeOverlays）、
 // 能量扫描线（scanOverlays）与 FX-3 念能粒子/瘟疫浓雾（psychicParticles/plagueMists）、
