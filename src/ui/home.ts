@@ -460,9 +460,12 @@ export function renderModeSelect(root: HTMLElement, nav: ModeSelectNav, devUnloc
   screen.appendChild(toggles);
 
   const actions = el('div', 'mode-actions');
-  actions.appendChild(button('btn mode-next-btn', '下一步：掷硬币定先手', () => {
-    nav.startHotseat(banBox.checked, randomBox.checked);
-  }));
+  /**
+   * ★ 2026-09-29（用户："那就去掉它"）：原来这里还有一个「下一步：掷硬币定先手」按钮，
+   * 它调的是与**热座卡**（上面那张 `热座（双人）`，见 `mkMode` 那一处）**同一个** `startHotseat`，
+   * 也就是说它是个重复入口；而它排在整页最下面，看着像"对所有模式生效"，玩家会以为联机也走它。
+   * ⇒ 去掉这个按钮：开局入口就是那张热座卡（它还带着上面两个开关的当前状态）。
+   */
   actions.appendChild(button('btn', '返回主页面', nav.backHome));
   /**
    * G5/T41（用户 2026-09-27 第 1 条）：**设备体检** —— 模式选择页最下方的一个跳转按钮。
