@@ -55,6 +55,18 @@ export const CHANGELOG: readonly ChangelogDay[] = [
     date: '2026-09-30',
     items: [
       {
+        problem: '点击规则书查看后会下载 PDF，看不到内容。',
+        fix: '已修复，改为按页显示图片。',
+      },
+      {
+        problem: '双人热座模式下抛硬币动画播完后，有时硬币会消失。',
+        fix: '已修复。',
+      },
+      {
+        problem: '场上卡牌右上角的角标写着"活跃"。',
+        fix: '已更新为"未覆盖"。',
+      },
+      {
         problem: '某些卡牌特效会粘在屏幕上，页面下滑时不跟着卡片走。',
         fix: '已修复。',
       },

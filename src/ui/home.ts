@@ -671,7 +671,18 @@ function playCoinTossAnimation(
   landed: CoinSide,
   reduced: boolean,
 ): void {
-  const rotations = landed === 1 ? 2.25 : 2.5;
+  /**
+   * ★ 2026-09-30（用户实测："有时硬币在动画播完后会消失"）：**圈数必须是整圈**。
+   *
+   * 老值 2.25 / 2.5 圈 ⇒ 终点角度 810° / 900°，即 `rotateX(90°)` / `rotateX(180°)`：
+   * 前者是**侧着**（平面图侧对镜头 = 完全看不见！），后者是倒过来。上面那段注释里
+   * "810° 与 90° 的朝向相同"这句话本身没错 —— 错在 90° 就是侧面。落点恰是正面那一档时，
+   * 硬币就在动画结束后凭空消失（用户截图里结果行是"掷出 正面"，币正好不见了）。
+   *
+   * 现在统一 2 整圈（720° ≡ 0°）：币面朝前、不倾斜。两面的区别由"42% 那一下换图"承担
+   * （那正是它存在的意义），不需要靠终点角度去表达。
+   */
+  const rotations = 2;
   const frames = coinTossFrames(rotations);
   const img = disc.querySelector('img');
   disc.style.transformOrigin = '50% 50%';
@@ -712,6 +723,18 @@ function playCoinTossAnimation(
     window.setTimeout(() => {
       if (img !== null) img.src = coinFaceSrc(landed);
     }, Math.round(COIN_TOSS_MS * COIN_TOSS_APEX_RATIO));
+    /**
+     * ★ 2026-09-30（同上那个 bug 的第二道保险）：**播完把动画收掉**。
+     *
+     * `fill: 'forwards'` 会把最后一帧的 `transform` 一直保留 —— 万一将来又有人把终点角度
+     * 改成半圈（90°/180°），币就会停在侧面或倒着的姿态上。收掉动画之后，币回到它自己的
+     * 静态姿态（`rotateX(0)`，正面朝前），"停在看不见的角度"这件事从根上不可能再发生。
+     * 收尾时机 = 总时长 + 30ms（比最后那一帧晚一点点）。
+     */
+    window.setTimeout(() => {
+      disc.getAnimations().forEach((a) => { a.cancel(); });
+      stage.getAnimations().forEach((a) => { a.cancel(); });
+    }, COIN_TOSS_MS + 30);
   } else if (img !== null) {
     img.src = coinFaceSrc(landed);
   }

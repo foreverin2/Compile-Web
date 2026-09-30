@@ -471,9 +471,10 @@ body {
   z-index: 60 !important;
 }
 
-/* ===== 顶层（未覆盖）牌：唯一活跃 ===== */
+/* ===== 顶层（未覆盖）牌 ===== */
+/* ★ 2026-09-30（用户要求）：角标文案由"活跃"改为"未覆盖"（与引擎/规则书里的说法一致） */
 .card.top-card { border-color: #e0a030; box-shadow: 0 0 8px rgba(224, 160, 48, 0.5); }
-.card.top-card::after { content: '活跃'; position: absolute; top: -8px; right: -6px; background: #e0a030; color: #111; font-size: 9px; font-weight: bold; padding: 1px 5px; border-radius: 8px; z-index: 5; }
+.card.top-card::after { content: '未覆盖'; position: absolute; top: -8px; right: -6px; background: #e0a030; color: #111; font-size: 9px; font-weight: bold; padding: 1px 5px; border-radius: 8px; z-index: 5; }
 
 /* ===== 协议格（位于 lane-row 中间两列，行高由协议撑起，槽随之 stretch 对齐） ===== */
 /* ── R25：协议列的**最小宽**（两层：无条件兜底 + 窄屏档位里的完整宽）──
