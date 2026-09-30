@@ -42,8 +42,24 @@ export interface ChangelogDay {
   readonly items: readonly ChangelogItem[];
 }
 
-/** 最新的一天在最上面。**目前为空**：只加用户点名要加的内容（见文件头注）。 */
-export const CHANGELOG: readonly ChangelogDay[] = [];
+/** 最新的一天在最上面。**只加用户点名要加的内容**（见文件头注）。 */
+export const CHANGELOG: readonly ChangelogDay[] = [
+  {
+    date: '2026-09-30',
+    items: [
+      {
+        problem: '热座模式下用鼠标滚轮滚不动页面。',
+        fix: '已修复，牌桌原来会被平板那套"自动缩放 + 拖动查看其余部分"接管（接管之后整页就不再滚动了），'
+          + '现在只在触摸设备上启用，桌面恢复正常滚动。',
+      },
+      {
+        problem: '热座模式下场上的卡牌被周围的组件挤得特别小。',
+        fix: '已修复，同一个原因：桌面窗口下整块盘面被那套自动缩放压小了。桌面不再被接管之后，'
+          + '卡牌恢复原本大小（联机页的卡牌与特效尺寸没有改动）。',
+      },
+    ],
+  },
+];
 
 /** 相邻两天之间那条横线（用户给的格式；渲染时插在日期块之间） */
 export const CHANGELOG_SEPARATOR = '------------------------------------------';
