@@ -239,3 +239,31 @@
   line-height: 1.6;
   color: #9ab;
 }
+
+
+/* ---------- ★ 2026-09-29：首页右上角「更新日志」（内容与版式出处：`src/ui/changelog.ts`） ----------
+ * 为什么写在这里：`styles.css` 是红线（一行不许动），而本表按纪律只定义**不与 styles.css 同名**的
+ * 选择器 —— `changelog-*` 是全新的名字，不撞任何既有类名（`tests/ui/local-consent.test.ts` 那条
+ * "类名不冲突"的腿照旧成立）。 */
+.changelog-wrap { position: absolute; top: 16px; right: 18px; z-index: 40; }
+.changelog-open { font-size: 13px; padding: 7px 14px; }
+.changelog-panel {
+  display: none;
+  position: fixed; top: 0; right: 0; z-index: 60;
+  width: min(560px, 94vw); height: 100vh; box-sizing: border-box;
+  overflow-y: auto; overscroll-behavior: contain;
+  background: rgba(9, 11, 20, 0.97); border-left: 1px solid #2a3140;
+  padding: 18px 22px 48px; color: #dde;
+}
+.changelog-wrap.changelog-open .changelog-panel { display: block; }
+.changelog-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.changelog-title { font-size: 18px; font-weight: 700; color: #00ffcc; letter-spacing: 1px; }
+.changelog-close { font-size: 12px; padding: 5px 12px; }
+.changelog-hint { margin-top: 6px; font-size: 12px; color: #7d86a8; }
+.changelog-date { margin-top: 16px; font-size: 15px; font-weight: 700; color: #9fd8ff; letter-spacing: 1px; }
+.changelog-problem { margin-top: 10px; font-size: 14px; line-height: 1.65; color: #e6ecf5; }
+.changelog-fix { margin-top: 3px; font-size: 13px; line-height: 1.65; color: #93a0bd; }
+.changelog-sep {
+  margin: 20px 0 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px; color: #313a55; white-space: nowrap; overflow: hidden;
+}

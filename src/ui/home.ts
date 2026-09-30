@@ -5,6 +5,7 @@ import type { CoinSide } from '../app/coin';
 import { DEMO_PROTOCOLS, DEMO_CARD_DEFS, protocolImgSrc, cardImgSrc, cardTextParts } from '../data/demo';
 import { LIB_TAG_GROUPS, LIB_ALL_TAG_IDS, filterLibrary } from '../app/library-filter';
 import { openZoom, buildCardTextEl, buildProtocolRatingPanel, bindClickOrDouble } from './render';
+import { changelogElement } from './changelog';
 
 /**
  * 主界面/掷硬币/图鉴/规则图纸 —— 非对局屏（main.ts 导航）。
@@ -288,6 +289,19 @@ export function renderHome(root: HTMLElement, nav: HomeNav): void {
       'Compile 桌游由原作者 MICHAEL YANG 创作 · 本网页由「我吃吃吃吃」使用 DSH 辅助开发'
     )
   );
+
+  /**
+   * ★ 2026-09-29（用户要求）：**右上角"更新日志"入口**。
+   *
+   * 内容与版式都在 `src/ui/changelog.ts`（那里是唯一出处，本文件只负责"谁来开合"）。
+   * 格式按用户给的：日期 → 每条"问题 / 已修复，解释"，相邻两天之间一条横线，最新在最上面。
+   */
+  const logWrap = el('div', 'changelog-wrap');
+  logWrap.appendChild(button('btn changelog-open', '更新日志', () => {
+    logWrap.classList.toggle('changelog-open');
+  }));
+  logWrap.appendChild(changelogElement({ onClose: () => { logWrap.classList.remove('changelog-open'); } }));
+  screen.appendChild(logWrap);
 
   root.appendChild(screen);
 }
