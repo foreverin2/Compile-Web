@@ -246,6 +246,56 @@ describe('corruption', () => {
     expect(oppCard.faceUp).toBe(false); // 对方场上对方卡被翻（干扰对方）
     expect(c.faceUp).toBe(true); // 腐化0 自身不被翻
   });
+
+  // 2026-10-01（用户追加授权 PendingLanding.actor）：下面两条钉住「落对方场易主」之后 after-play 的
+  // 打出者语义 —— 打出者是**行动玩家 player**（actions/base.ts 入队时写 actor: player），
+  // 不是接收方（改前 actor 缺省回退 card.owner = dest = 接收方，方向是反的）。
+  // 探针用真实卡冰1 底「对手在此链路出牌后：他要弃置1张牌」（ice.ts:29），它注册在冰1 所在侧的该线上。
+  it('corruption-0 打到【自己】那侧线 1：after-play 点在对手那侧（P2 线 1 的冰1 触发，行动玩家 P1 弃1张）——对照，证明探针有效', () => {
+    const s = setup();
+    s.turnPlayer = 0;
+    s.step = 'action';
+    const c = makeCard('corruption-0', 0, 'hand');
+    const extra = makeCard('death-4', 0, 'hand'); // 留 1 张给冰1 底弃
+    s.players[0].hand = [c, extra];
+    const probe = placeSrc(s, 'ice-1', 1, 1); // P2 线 1 顶卡：after-play 探针
+    const p2Hand = makeCard('light-1', 1, 'hand');
+    s.players[1].hand = [p2Hand];
+
+    executeAction(s, 0, 'play', { cardUid: c.uid, faceUp: true, line: 1 });
+    expect(c.owner, '打自己那侧 ⇒ 归属不变').toBe(0);
+    const icePe = s.pendingEffects.find((e) => e.sourceDefId === 'ice-1');
+    expect(icePe, '打出者 = P1 ⇒ 定向触发查 P2 线 1（顶卡冰1）→ 冰1 必须被点到').toBeTruthy();
+    expect(icePe!.sourceUid).toBe(probe.uid);
+    expect(icePe!.prompt!.chooser, '弃牌者是打出者 P1').toBe(0);
+    expect(icePe!.prompt!.candidates.map((x) => x.uid), '候选 = P1 手牌（此时只剩 extra）').toEqual([extra.uid]);
+    answerEffect(s, icePe!.id, [extra.uid]);
+    expect(s.players[0].hand).toHaveLength(0);
+    expect(s.players[0].trash.map((x) => x.uid)).toEqual([extra.uid]);
+    expect(s.players[1].hand.map((x) => x.uid), 'P2 手牌一张没动').toEqual([p2Hand.uid]);
+  });
+
+  it('corruption-0 打到【对方】那侧（易主）：after-play 仍按打出者 P1 判定 —— 不许点到 P1 自己那侧的冰1', () => {
+    const s = setup();
+    s.turnPlayer = 0;
+    s.step = 'action';
+    const c = makeCard('corruption-0', 0, 'hand');
+    s.players[0].hand = [c];
+    const probe = placeSrc(s, 'ice-1', 0, 1); // P1 线 1 顶卡：错把打出者当接收方 P2 时才会点它
+    const p2Hand = makeCard('light-1', 1, 'hand');
+    s.players[1].hand = [p2Hand]; // 有手牌 ⇒ 错方向会真的弹出「P2 弃1张」
+
+    executeAction(s, 0, 'play', { cardUid: c.uid, faceUp: true, line: 1, target: 1 });
+    expect(s.players[0].stacks.flat().some((x) => x.uid === c.uid), '不在 P1 场').toBe(false);
+    expect(s.players[1].stacks[1].map((x) => x.uid), '落在 P2 线 1 顶').toEqual([c.uid]);
+    expect(c.owner, '易主给 P2').toBe(1);
+    expect(probe.faceUp, '局面前提：P1 线 1 的冰1 是未覆盖正面顶卡（真会被点到的探针）').toBe(true);
+    // 正确方向：查 P2 线 1 顶卡 = 腐化0（不注册 after-play）⇒ 无人被点到；
+    // 改前（actor = card.owner = P2）会查 P1 线 1 顶卡 = 冰1 → 弹出「P2 弃1张」
+    expect(s.pendingEffects, 'P1 自己那侧的冰1 不许被点到（打出者是行动的 P1，不是接收方）').toHaveLength(0);
+    expect(s.players[1].hand.map((x) => x.uid), 'P2 手牌一张没动').toEqual([p2Hand.uid]);
+    expect(s.log.some((l) => l.includes('ice-1')), '日志里也不该出现冰1 的结算').toBe(false);
+  });
 });
 
 // ============ 战争 war ============

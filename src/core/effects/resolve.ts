@@ -590,7 +590,10 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       card.secret = !op.faceUp;
       card.line = op.line;
       card.pos = null;
-      s.pendingPlay.push({ card, beforeCoveredDone: false, belowUid: op.belowUid });
+      // actor（2026-10-01 用户追加授权）：打出者视角 = 从谁的牌库打出（player 缺省 = 效果属主）。
+      // 跨侧落点易主（belowUid 命中对手堆叠，见 completePlay）之后 card.owner 会变成接收方，
+      // 但「打出者」不变——after-play 定向触发（冰1/嫉妒3）按 actor 而非 card.owner 推导。
+      s.pendingPlay.push({ card, beforeCoveredDone: false, belowUid: op.belowUid, actor: op.player ?? pe.player });
       // triggerProtocol = 触发这张打牌堆顶的效果源协议（life-0/life-3/water-1/gravity-0/6），
       // FX 层据此只给 gravity 播黑洞+射线（life/water 打牌堆顶不误播重力特效）
       emitCardEvent(s, 'card:deck-played', card, {
@@ -613,7 +616,8 @@ export function executeOp(s: GameState, pe: PendingEffect, op: Op): void {
       card.line = op.line;
       card.pos = null;
       // belowUid（3代 rigidity-3「在此牌正下方反面打出1张牌」）：落地时插入该卡下方（该卡保持未覆盖）
-      s.pendingPlay.push({ card, beforeCoveredDone: false, belowUid: op.belowUid });
+      // actor（2026-10-01 用户追加授权）：手牌打出者 = 入队时的持卡者（此后 owner 不会变，显式写死口径）
+      s.pendingPlay.push({ card, beforeCoveredDone: false, belowUid: op.belowUid, actor: card.owner });
       // playFromHand（手牌打出）与 playTopDeck（牌堆顶打出）区分事件：
       // FX 层据此从手牌卡 rect 起飞（而非牌库 rect）飞入目标线链路末尾
       emitCardEvent(s, 'card:hand-played', card, {
@@ -1012,11 +1016,26 @@ function completePlay(s: GameState): void {
   const ps = s.pendingPlay[0];
   if (!ps) return;
   const card = ps.card;
-  const p = s.players[card.owner];
-  const stack = p.stacks[card.line!];
+  const line = card.line!;
   // belowUid 落点先行解析：插入源卡下方不覆盖顶卡 → 跳过 before-covered 检查；
-  // 回退落顶（源卡已不在，确实覆盖顶卡）→ 保留检查
-  const belowIdx = ps.belowUid !== undefined ? stack.findIndex((c) => c.uid === ps.belowUid) : -1;
+  // 回退落顶（源卡已不在，确实覆盖顶卡）→ 保留检查。
+  // 2026-10-01（用户授权改本文件 + 卡文 compile3文本.txt:106）：源卡可能不在打牌者自己那一侧——
+  // nova-0 底「在一张未被覆盖的新星牌下方，从你的牌库顶端反面打出一张牌」里「未被覆盖的新星牌」
+  // 没有「你的」⇒ 可以选对手那一侧的牌。查找顺序仍是**己方优先**（gravity-0 `belowUid=自己`、
+  // rigidity-3 `belowUid=自己` 的行为一个字节不变），己方找不到才查对手堆叠；找到哪一侧就把新卡
+  // 插到那一侧该卡的正下方（源卡仍是该堆顶卡/覆盖者），并按既有口径「落对方场 ⇒ 易主」把
+  // card.owner 改成那一侧（同 actions/base.ts:81 corruption-0 落对方场 / deckTopTransfer）。
+  // 定位范围仍是 card.line 这条链路（调用方传的 line 恒等于源卡所在线，跨线 belowUid 依旧走回退落顶）。
+  const ownSide: PlayerId = card.owner;
+  const foeSide: PlayerId = ownSide === 0 ? 1 : 0;
+  let destSide: PlayerId = ownSide;
+  let stack = s.players[ownSide].stacks[line];
+  let belowIdx = ps.belowUid !== undefined ? stack.findIndex((c) => c.uid === ps.belowUid) : -1;
+  if (belowIdx === -1 && ps.belowUid !== undefined) {
+    const foeStack = s.players[foeSide].stacks[line];
+    const foeIdx = foeStack.findIndex((c) => c.uid === ps.belowUid);
+    if (foeIdx !== -1) { destSide = foeSide; stack = foeStack; belowIdx = foeIdx; }
+  }
   if ((ps.belowUid === undefined || belowIdx === -1) && stack.length > 0 && !ps.beforeCoveredDone) {
     const top = stack[stack.length - 1];
     const t = top.faceUp ? collectTriggerFor(s, top, 'before-covered') : null;
@@ -1024,8 +1043,9 @@ function completePlay(s: GameState): void {
   }
   card.zone = 'field';
   if (belowIdx !== -1) {
+    if (destSide !== ownSide) card.owner = destSide; // 落对方场 ⇒ 易主（先改归属，随后的日志/连锁一律看新归属）
     stack.splice(belowIdx, 0, card); // 插到源卡下方（该位置 = 源卡之下、其下卡之上）
-    for (let i = 0; i < stack.length; i++) stack[i].pos = i; // 重索引整堆 pos
+    reindexStack(stack); // 重索引整堆 pos（中部插入 → 源卡仍为顶卡/覆盖者）
   } else {
     stack.push(card);
     card.pos = stack.length - 1;
@@ -1034,7 +1054,10 @@ function completePlay(s: GameState): void {
   emitCardEvent(s, 'card:played', card);
   if (card.faceUp) pushMiddle(s, card.owner, card, '打出');
   // 批2 ice-1 底「对手在此链路出牌后：他要弃置1张牌」：打出者【对手】同线顶卡注册 after-play → 触发。
-  // actor（行动打出者）：腐化0 落对方场易主后 card.owner ≠ 打出者——触发侧应看打出者视角
+  // actor（打出者）：2026-10-01 用户追加授权后由各入队点显式写入——playTopDeck = op.player ?? pe.player、
+  // playFromHand = 入队时持卡者、playCard（行动）= player。腐化0 落对方场 / nova-0 底跨侧落点易主后
+  // card.owner 已经是接收方，但触发侧须看打出者视角 ⇒ 只对没写 actor 的入队点（playFromTrash/
+  // deckTopTransfer：入队时 owner 即打出者）回退到 card.owner。
   const actor: PlayerId = ps.actor ?? card.owner;
   fireDirectedTop(s, 'after-play', actor === 0 ? 1 : 0, card.line!);
   // 3代 rigidity-2 底「在你用行动反面打出1张牌后：从你的牌库顶端反面打出1张牌到同一链路」（E10）：

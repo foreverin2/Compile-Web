@@ -80,7 +80,8 @@ function* nova0Middle(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
  *  效果可以选择场上任意一侧未被覆盖的卡牌作为目标」⇒ 候选 = **双方**场上任一条链路的未覆盖【正面】
  *  nova 顶卡（含自己）。改前写死 `s_owner(ctx.s, ctx.player)`，只能选己方一侧。
  *  「你的牌库」不变：牌库仍是 ctx.player 的（deckTopAvailable(ctx.player) 守卫）。
- *  落点：选中己方 nova 卡时按 belowUid 垫到其正下方；选中对手那一侧 nova 卡时的落点见下方 yield 处注记。 */
+ *  落点：按 belowUid 垫到所选 nova 卡正下方（两侧同一套落点解析：己方堆叠优先、再查对手堆叠；
+ *  跨侧落点 ⇒ 打出卡易主给那一侧，见下方 yield 处注记）。 */
 function* nova0End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   if (!deckTopAvailable(ctx.s, ctx.player)) return;
   const cand: ChoiceCard[] = [];
@@ -99,11 +100,11 @@ function* nova0End(ctx: EffectCtx): Generator<EffectStep, void, StepResult> {
   const picked = cand.find((c) => c.uid === ans.selected[0]);
   if (!picked || picked.line === null) return;
   // belowUid：牌库顶反打插到所选 nova 卡【正下方】（line = 该 nova 卡所在线——belowUid 落点解析按源卡所在链路）
-  // 2026-10-01 注记（候选放开双方后暴露的落点缺口，**未改引擎**，等用户授权）：
-  // completePlay（resolve.ts:1016）只在**打牌者自己的**堆叠里按 belowUid 找落点 ⇒ 选中对手那一侧的
-  // nova 卡时 belowIdx = -1，按既有「belowUid 找不到 → 回退落顶」规则，牌会落回自己该线堆顶。
-  // 卡文要求的是「垫到那张 nova 卡正下方」（跨侧 = 进对方该线堆叠 + 易主，口径同 actions/base.ts:81
-  // 腐化0 落对方场），要补这一段需动 resolve.ts，不在本次授权范围内，已在回报里单列。
+  // 2026-10-01（用户授权改 resolve.ts 后**已修**）：completePlay 的 belowUid 落点解析现在是「己方堆叠优先、
+  // 找不到再查对手堆叠」——找到哪一侧就插到那一侧该卡的正下方（该卡保持顶卡/覆盖者），跨侧时按「落对方场
+  // ⇒ 易主」把打出卡 owner 改成那一侧（口径同 actions/base.ts:81 腐化0 落对方场 / deckTopTransfer）。
+  // 所以选对手那一侧的新星牌时，牌进【对手】该线堆叠、垫在那张 nova 卡正下方；选己方那一侧时与改前一致；
+  // 源卡已不在（被删/被移）才走既有「回退落顶」退路，那条退路未动。
   yield { op: 'playTopDeck', line: picked.line, faceUp: false, belowUid: picked.uid };
 }
 

@@ -83,7 +83,11 @@ export function playCard(
   card.faceUp = faceUp;
   card.line = line;
   card.pos = null;
-  s.pendingPlay.push({ card, beforeCoveredDone: false, fromAction: true }); // fromAction：玩家行动打出（rigidity-2 底触发依据）
+  // fromAction：玩家行动打出（rigidity-2 底触发依据）
+  // actor（2026-10-01 用户追加授权，types.ts:252-253 原本就这么写）：行动打出者 = player。
+  // 落对方场（修改提示词 15，dest ≠ player）易主后 card.owner 变 dest，但打出者仍是 player ——
+  // completePlay 的 after-play 定向触发（冰1/嫉妒3）据此点到 player 的【对手】那侧，而不是接收方视角。
+  s.pendingPlay.push({ card, beforeCoveredDone: false, fromAction: true, actor: player });
   pushLog(s, `P${player + 1} 打出 ${card.defId}（${faceUp ? '正面' : '反面'}）到${dest !== player ? '对方' : ''}线 ${line + 1}`); // 修改提示词 8/15：日志中文 + 落对方标注
   runStack(s); // 结算 before-covered（若有）→ 栈空时 completePlay 落地 + 中指令
   return card;
