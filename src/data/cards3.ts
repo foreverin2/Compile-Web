@@ -3,8 +3,11 @@ import type { CardDef, ProtocolDef } from '../core/models/types';
 /**
  * 3代（官方 MN03）全部协议定义（15 套）与全部卡牌定义（每套 6 张）。
  *
- * 权威文本源：`E:\studyE\compile\正版compile\compile3\compile3文本.txt`（用户指定为准，
- * 2026-09-06 入库）。卡面图资源：`…\compile3\卡图\卡牌\Front\Not Rounded`（90 张，按
+ * 权威文本源：`E:\studyE\compile\正版compile\compile3文本.txt`（用户 2026-10-01 明确：卡文以
+ * 这个根目录下的 compile1/compile2/compile3 三份 txt 为准）。此前注释指的
+ * `…\compile3\compile3文本.txt` 是旧副本（全篇「平移」、协议名还是「愤怒」），不用它。
+ * `npm run texts:check`（`tools/sync-card-texts.mjs`）读的是根目录那三份，当前 0 差异。
+ * 卡面图资源：`…\compile3\卡图\卡牌\Front\Not Rounded`（90 张，按
  * 「协议名+点数」命名）与 `…\compile3\卡图\协议\Not Rounded`（30 张，1=未编译 2=已编译）。
  * 用户 2026-09-06 拍板：**3代 图为成品方向（卡牌竖向正置、协议横向正置），直接使用不旋转**，
  * 与 1/2代（协议图竖版存储 + CSS rotate 横显）不同——UI 展示按世代（MN03/AX03）跳过旋转。
@@ -38,7 +41,7 @@ import type { CardDef, ProtocolDef } from '../core/models/types';
  * 傲慢{0,2,3,4,5,6}/怠惰0-5/暴怒0-5/伏击0-5/支点0-5/压制1-6/动量{0,1,3,4,5,6}/
  * 新星0-5/惰性0-5/僵化{1,2,3,4,5,7}/灵活0-5。
  *
- * ⚠️ 效果未实现（2026-09-06 用户指示「先做卡图，不要求做效果」）：引擎对未注册卡安全空转
+ * 效果未实现（2026-09-06 用户指示「先做卡图，不要求做效果」）：引擎对未注册卡安全空转
  * （EFFECTS[defId]?.middle/triggers 可选链）。本文件卡文为图鉴/开发者模式展示数据源，
  * 效果按后续批次裁决实现（见 docs/handoff §14）。
  */

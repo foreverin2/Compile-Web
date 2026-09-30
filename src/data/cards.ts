@@ -3,7 +3,12 @@ import type { CardDef, ProtocolDef } from '../core/models/types';
 /**
  * 全部协议定义（15 套）与全部卡牌定义（每套 6 张）。
  *
- * 文本来源：docs/card-text-source.txt（权威），卡牌文本为中文（游戏 UI 语言）。
+ * 权威文本源：`E:\studyE\compile\正版compile\compile1文本.txt`（用户 2026-10-01 明确：卡文以
+ * 这个根目录下的 compile1/compile2/compile3 三份 txt 为准）；`npm run texts:check`
+ * （`tools/sync-card-texts.mjs`）就是读这三份 txt，与 cards.ts / cards2.ts / cards3.ts 比对
+ * （协议显示名先过 `tools/protocol-display-renames.mjs`），当前 0 差异。
+ * `docs/card-text-source.txt` 只是 1 代文本的派生转录本，不参与 texts:check，不是权威。
+ * 卡牌文本为中文（游戏 UI 语言）。
  * 格式 `甲x：A/B/C`：协议甲中分值为 x 的牌，A=顶部指令、B=中部指令、C=底部指令；"空"= 无该指令。
  */
 

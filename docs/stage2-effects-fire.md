@@ -87,7 +87,7 @@
 
 ## 0.2 Fire 6 卡效果清单与验证
 
-效果注册在 `src/core/effects/cards/fire.ts`（`registerCardEffects`），文本与 `src/data/cards.ts` / 权威源 `docs/card-text-source.txt` 一致：
+效果注册在 `src/core/effects/cards/fire.ts`（`registerCardEffects`），文本与 `src/data/cards.ts` / 权威源 `E:\studyE\compile\正版compile\compile1文本.txt` 一致：
 
 | 卡 | 触发时机 | 实现效果（与卡面文本一致） |
 |---|---|---|

@@ -189,7 +189,7 @@ HEAD `4a73b40`，51 测试全绿：
 ### 1.2 数据层（`src/data`）
 
 - **15 套协议、90 张卡定义全部录入**（`data/cards.ts`）：MN01×12（water/fire/light/darkness/life/death/spirit/gravity/psychic/plague/metal/speed）+ AX01×3（love/hate/apathy），每套 6 张。
-- 卡牌文本为**中文**（游戏 UI 语言），与权威源 `docs/card-text-source.txt` 逐字一致（Task 3 已独立核对）。
+- 卡牌文本为**中文**（游戏 UI 语言），与权威源 `E:\studyE\compile\正版compile\compile1文本.txt`（用户 2026-10-01 指定）逐字一致（Task 3 已独立核对）。
 - 演示草案池（`data/demo.ts`）：前 6 套 **water / fire / light / darkness / life / death** 及其卡定义；`DEMO_PROTOCOLS` / `DEMO_CARD_DEFS` 供草案使用；`getCardDef` / `getProtocolDef` 按 defId 查定义（未知 defId 抛错）。
 
 ### 1.3 UI 层（`src/ui` + `src/main.ts`）
@@ -233,7 +233,7 @@ compile/
 │   │   ├── events/bus.ts       #   createBus：subscribe/emit（阶段 2 特效订阅用）
 │   │   └── game.ts             #   动作面门面：ActionKind/LegalAction/getLegalActions/executeAction（重载）/getWinner
 │   ├── data/                   # 数据层
-│   │   ├── cards.ts            #   ALL_PROTOCOLS（15）+ ALL_CARD_DEFS（90），文本来自 docs/card-text-source.txt
+│   │   ├── cards.ts            #   ALL_PROTOCOLS（15）+ ALL_CARD_DEFS（90），文本来自 E:\studyE\compile\正版compile\compile1文本.txt
 │   │   └── demo.ts             #   演示草案池（6 套）+ DEMO_PROTOCOLS/DEMO_CARD_DEFS + getCardDef/getProtocolDef 索引
 │   └── ui/                     # 渲染层（DOM）
 │       ├── render.ts           #   renderDraft/renderBoard/renderApp；手牌选择状态 + 合法动作派发（getLegalActions 校验）
@@ -252,7 +252,7 @@ compile/
 ├── docs/
 │   ├── stage1-framework.md     # 本文件（阶段 1 交接文档）
 │   ├── gemini-task-template.md # Gemini 生成任务单模板（阶段 2 用）
-│   ├── card-text-source.txt    # 权威中文卡牌文本（15 协议，格式 `甲x：A/B/C`）
+│   ├── card-text-source.txt    # 1 代中文卡牌文本的派生转录本（权威源是仓库外 compile1文本.txt；15 协议，格式 `甲x：A/B/C`）
 │   └── superpowers/
 │       ├── specs/2026-08-28-compile-web-design.md   # 已批准的设计文档（规则要点/架构/特效/Gemini 工作流/测试策略）
 │       └── plans/2026-08-28-compile-stage1-framework.md  # 阶段 1 实施计划（含 Task 12 与阶段 2 入口）
@@ -309,7 +309,7 @@ npm run preview    # 5. 预览构建产物
 
 ### 5.1 现状澄清（重要）
 
-- **Fire 0-5 的真实中文卡牌文本已就位**：`src/data/cards.ts` 的 `fire-0 … fire-5` 与权威源 `docs/card-text-source.txt`（"火——玉石俱焚"段）一致，含 Codex 勘误后的 fire-0 底命令（"被盖住前：先抽1张牌并翻转另1张牌"）；`tests/data/cards.test.ts` 有 `'fire uses real card text'` 用例守护。
+- **Fire 0-5 的真实中文卡牌文本已就位**：`src/data/cards.ts` 的 `fire-0 … fire-5` 与权威源 `E:\studyE\compile\正版compile\compile1文本.txt`（"火——玉石俱焚"段）一致，含 Codex 勘误后的 fire-0 底命令（"被盖住前：先抽1张牌并翻转另1张牌"）；`tests/data/cards.test.ts` 有 `'fire uses real card text'` 用例守护。
 - 因此阶段 2 **不再阻塞于"等待用户提供 Fire 卡牌文本"**——剩余工作是把 Fire 文本变成可结算的效果与特效。
 
 ### 5.2 阶段 2 工作分解（需另立实施计划）
@@ -334,7 +334,7 @@ npm run preview    # 5. 预览构建产物
 1. `docs/superpowers/specs/2026-08-28-compile-web-design.md` — 设计文档（规则要点 §2、架构 §3、交互 §4、特效系统 §5、Gemini 工作流 §6、测试策略 §7）
 2. `docs/stage1-framework.md` — 本文件
 3. `docs/gemini-task-template.md` — Gemini 任务单模板（阶段 2 第 4 步用）
-4. `docs/card-text-source.txt` — 权威中文卡牌文本（15 协议；Fire 在"火——玉石俱焚"段）
+4. `docs/card-text-source.txt` — 1 代中文卡牌文本的派生转录本（权威源是仓库外 compile1文本.txt；15 协议；Fire 在"火——玉石俱焚"段）
 5. `src/core/models/types.ts` + `src/core/game.ts` + `src/core/state/create.ts` — 引擎核心
 6. `src/data/cards.ts` + `src/data/demo.ts` — 数据层
 7. `tests/data/cards.test.ts` — Fire 真实文本守护用例（参考断言写法）

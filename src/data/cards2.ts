@@ -3,9 +3,11 @@ import type { CardDef, ProtocolDef } from '../core/models/types';
 /**
  * 2代（官方 MN02）全部协议定义（15 套）与全部卡牌定义（每套 6 张）。
  *
- * 权威文本源：`E:\studyE\compile\正版compile\compile2\compile2文本.txt`（用户指定为准，
- * 2026-09-03；2026-09-04 用户再次更新该文件——正版与 `自制compile\compile1\` 下为
- * 同内容镜像副本）。文本为中文（游戏 UI 语言）；格式 `甲x：A/B/C`：A=顶部指令、B=中部指令、
+ * 权威文本源：`E:\studyE\compile\正版compile\compile2文本.txt`（用户 2026-10-01 明确：卡文以
+ * 这个根目录下的 compile1/compile2/compile3 三份 txt 为准）。此前注释指的是
+ * `…\compile2\compile2文本.txt`，那是旧副本且该文件现已不存在。
+ * `npm run texts:check`（`tools/sync-card-texts.mjs`）读的是根目录那三份，当前 0 差异。
+ * 文本为中文（游戏 UI 语言）；格式 `甲x：A/B/C`：A=顶部指令、B=中部指令、
  * C=底部指令；「空」= 无该指令。
  *
  * 本模块独立于 `cards.ts`（1代）。2026-09-03 用户拍板「直接并入协议选择池」：DEMO 池 =
