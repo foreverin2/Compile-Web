@@ -3892,8 +3892,9 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
       more.appendChild(linkLine);
       box.appendChild(more);
     }
-    // 二维码形态**只留占位**（D17）：编码器另开任务，本文件不许实现它
-    box.appendChild(el('p', 'net-lobby-qr-note', nav.qrNote()));
+    // ★ 2026-09-29（用户）：这里原来挂着一行 `qrNote`（"二维码形态的载荷与链接形态同一条…
+    //   本任务只留这个接口，不生成任何图形"）—— 那是写给开发看的任务书口吻，玩家不需要读它。
+    //   渲染点去掉（`qrNote()` 这个导出留着：测试与别处仍在引用它）。
     screen.appendChild(box);
   }
 
@@ -4061,20 +4062,16 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
   }
   if (s.notice !== null) screen.appendChild(line('net-lobby-notice', s.notice));
   /**
-   * ★★ **G6/T50（B1）：降级那一句就在这一屏的顶层**（判据 3 的屏面那一半）。
+   * ★ 2026-09-29（用户实测后要求）：这一屏原来会在"这一轮没有中继可用"时挂一行白字提示
+   * （`.net-lobby-relay-fallback`，措辞来自 `net-browser.ts` 的 `relayUnavailableNoteOf`）。
+   * 用户要求去掉 —— 交给人测试时不想在屏上看到这类口吻的句子；真没有中继时，牌桌上那行
+   * 「当前连接：直连」会如实说（T46 的 `net-conn-line.ts`），不必在交接屏再喊一次。
    *
-   * ## 为什么必须放在这里、不能只放进下面那块折叠区
-   *
-   * 「高级 / 连接设置」**默认折叠**（`s.advancedOpen === false` ⇒ 内容不进 DOM）。把这句话
-   * 放进去等于"降级了但普通玩家一个字都看不到" —— 那正是判据 3 要否掉的东西。
-   * 它与 `.net-lobby-notice` 同一层：都是"这一轮发生了什么、玩家该知道"的那一类。
-   *
-   * 它不会与「有中继」那句隐私说明同时出现（两个世界各一句），措辞本体**逐字来自**
-   * `net-browser.ts` 的 `relayUnavailableNoteOf`（本文件不写第二份）。
+   * ⚠️ **机制没删**：`s.relayFallback` 这个读数、`relayUnavailableNoteOf` 这个唯一措辞出处、
+   * 以及 `#g5probe=1` 的 `__g5Match.ice()` 探针都还在（门禁与排查照旧能读到"为什么没有中继"），
+   * 只是不再渲染到屏上。原来那句"必须放在顶层，否则普通玩家一个字都看不到"的判据，
+   * 按用户口径改成"不上屏"。
    */
-  if (s.relayFallback !== undefined && s.relayFallback !== null) {
-    screen.appendChild(line('net-lobby-relay-fallback', s.relayFallback));
-  }
 
   /* ── 5.「高级 / 连接设置」折叠区（默认折叠 ⇒ 内容不进 DOM） ────── */
   const adv = el('div', 'net-lobby-advanced');

@@ -51,15 +51,13 @@
   align-items: center;
   gap: 14px;
   padding: 48px 20px 72px;
-  background-color: #07070f;
-  /* ★ 2026-09-29（用户）：这一屏原来只有一层近乎纯色的径向渐变，整页空空荡荡 ⇒ 垫上素材库
-   * 里已有的场景图（`public/assets/bg-scene.png`，不新增文件），上面压一层深色渐变保证文字对比度。 */
-  background-image:
-    linear-gradient(180deg, rgba(7, 7, 15, 0.86) 0%, rgba(7, 7, 15, 0.93) 55%, rgba(7, 7, 15, 0.97) 100%),
-    url('/assets/bg-scene.png');
-  background-size: cover, cover;
-  background-position: center top, center top;
-  background-repeat: no-repeat, no-repeat;
+  /**
+   * ★ 2026-09-29（用户："背景还是黑色的"）：原来这里铺的是一层**不透明**的径向渐变
+   * （`#141430 → #0b0b16 → #07070f`），把 `body` 上那张场景图整个盖住了 —— 那张图是
+   * `styles.css:2-13` 的 `bg-scene.png`（`fixed` + `cover`，首页/模式页都靠它），
+   * 于是只有大厅这一屏是纯黑、跟别的屏不是一个风格。现在只压一层很淡的暗色。
+   */
+  background: linear-gradient(180deg, rgba(6, 8, 16, 0.35) 0%, rgba(6, 8, 16, 0.6) 100%);
   color: #eef;
 }
 

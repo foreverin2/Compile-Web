@@ -577,7 +577,7 @@ describe('判据 7 · 「高级 / 连接设置」默认折叠，启用后才让�
    *     的 `relayUnavailableNoteOf`）；
    *  3. 那句**带上了真原因**（"凭据服务没有及时回应"），而不是一句查不出因的"失败"。
    */
-  it('★ T50：取不到凭据 ⇒ 中继不进 ICE 列表，屏上如实说"这一轮没有中继可用，只能试直连"', () => {
+  it('★ T50：取不到凭据 ⇒ 中继不进 ICE 列表，交接屏上不再喊（2026-09-29 用户口径）', () => {
     const down = { available: false as const, source: 'app' as const, reason: 'timeout' as const, detail: '等了 2000 毫秒没有回应' };
     const read = readIceServers({ turnUrl: '', turnUsername: '', turnCredential: '' }, false, down);
     expect(read.relayConfigured, '取不到凭据却还报"有中继可用"').toBe(false);
@@ -585,8 +585,8 @@ describe('判据 7 · 「高级 / 连接设置」默认折叠，启用后才让�
     expect(read.relayUnavailableReason).toBe('credential-unavailable');
     expect(read.relayCredentialFailure).toBe('timeout');
     expect(read.servers.some((s) => s.urls.some((u) => u.startsWith('turn:'))), '降级之后中继还在列表里').toBe(false);
-    // 屏面：展开到能看见那一块（默认折叠），那句话必须逐字出现
-    // ★ 关键：**不展开**高级区（advancedOpen 默认 false）—— 那句话必须在屏上
+    // 屏面：这一屏**不再**喊降级那句（用户 2026-09-29 要求去掉 `.net-lobby-relay-fallback`）；
+    // 但读数面照旧齐全（上面那五条），"为什么没有中继"仍能从读数与探针里查到。
     const h = mountLobby({
       role: 'guest',
       ice: read,
@@ -594,8 +594,8 @@ describe('判据 7 · 「高级 / 连接设置」默认折叠，启用后才让�
     });
     h.render();
     const text = textOf(h.root);
-    expect(text, '降级了却没在屏上说').toContain('这一轮没有中继可用');
-    expect(text, '那句里没有带真原因（凭据服务没有及时回应）').toContain('凭据服务没有及时回应');
+    expect(text, '降级了却还在屏上喊（用户 2026-09-29 要求去掉这一行）').not.toContain('这一轮没有中继可用');
+    expect(text, '那句失败真因也不该再上屏').not.toContain('凭据服务没有及时回应');
     expect(text, '降级之后还同时给了"有中继"那句隐私说明（两句自相矛盾）')
       .not.toContain(PRIVACY_COPY.signalAndRelay[1]);
     // 反证：有凭据那一档**不许**出现降级那句（否则它会变成一句恒真的空话）
