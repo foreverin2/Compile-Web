@@ -6,14 +6,21 @@
  * > "我告诉你加什么你就加什么。"
  *
  * ⇒ **这个数组里只放用户点名要加的东西**。不要自己从 git 记录 / 文档 / 提交信息里替他总结，
- * 也不要"顺手补全" —— 之前我自己写了一版 19 条，被用户全部要求撤掉。
- * 现在是**空的**，等用户给条目。
+ * 也不要"顺手补全"。
+ *
+ * ## 写法（用户 2026-09-30 明确交代，**以后都照这个来**）
+ *
+ * > "以开发者的视角说明修复了什么就可以了，不用解释如何修复的。"
+ *
+ * ⇒ **`fix` 只说"修了什么/加了什么"**，不要写实现细节（不提"平板那套自动缩放""宽视口"这类
+ * 内部机制），也不要写"为什么"。一句话收尾即可，短到"已修复。"也行。
  *
  * ## 用户给的格式（别改）
  *
  *  - **最新的一天在最上面**，越往下越早；
- *  - 一天一块：先日期，然后每条"问题 + 下一行'已修复，解释'"；
- *  - 相邻两天之间是一条横线（由 `changelogElement()` 渲染，不写进数据里）。
+ *  - 一天一块：先日期，然后每条"问题 + 下一行'已修复，…'"；
+ *  - 同一天里每条之间**隔开一点**（渲染时给每条加分隔，见 `changelogElement`）；
+ *  - 相邻两天之间是一条横线。
  *
  * ## 怎么加（只改这个文件）
  *
@@ -21,9 +28,9 @@
  *
  * ```ts
  * {
- *   date: '2026-09-30',
+ *   date: '2026-10-01',
  *   items: [
- *     { problem: '玩家视角的问题，一句话说清现象', fix: '已修复，改法与解释' },
+ *     { problem: '玩家视角的问题，一句话说清现象', fix: '已修复。' },
  *   ],
  * }
  * ```
@@ -32,7 +39,7 @@
 export interface ChangelogItem {
   /** 玩家视角的问题（一句话说清现象） */
   readonly problem: string;
-  /** 修法 + 解释，**以"已修复"开头**（渲染与测试都按这个前缀认它） */
+  /** 修了什么 / 加了什么，**以"已修复 / 已新增 / 已更新"开头**（不解释怎么做的） */
   readonly fix: string;
 }
 
@@ -48,14 +55,24 @@ export const CHANGELOG: readonly ChangelogDay[] = [
     date: '2026-09-30',
     items: [
       {
+        problem: '某些卡牌特效会粘在屏幕上，页面下滑时不跟着卡片走。',
+        fix: '已修复。',
+      },
+      {
+        problem: '双人热座模式没有画面大小的提示。',
+        fix: '已新增游玩建议：以 65% 的画面大小游玩，按住 Ctrl 滚动鼠标滚轮可以调整。',
+      },
+      {
+        problem: '双人热座模式的抛硬币动画与联机模式不一致。',
+        fix: '已更新为联机模式的抛硬币动画。',
+      },
+      {
         problem: '热座模式下用鼠标滚轮滚不动页面。',
-        fix: '已修复，牌桌原来会被平板那套"自动缩放 + 拖动查看其余部分"接管（接管之后整页就不再滚动了），'
-          + '现在只在触摸设备上启用，桌面恢复正常滚动。',
+        fix: '已修复，桌面恢复正常滚动。',
       },
       {
         problem: '热座模式下场上的卡牌被周围的组件挤得特别小。',
-        fix: '已修复，同一个原因：桌面窗口下整块盘面被那套自动缩放压小了。桌面不再被接管之后，'
-          + '卡牌恢复原本大小（联机页的卡牌与特效尺寸没有改动）。',
+        fix: '已修复，卡牌恢复原本大小。',
       },
     ],
   },
@@ -88,6 +105,9 @@ export function changelogText(days: readonly ChangelogDay[] = CHANGELOG): string
 /**
  * 面板本体：`nav.onClose` 由调用方接（首页那个入口用它把面板收起来）。
  * 摆版式只在这里；日期与条目的内容**只来自 `CHANGELOG`**。
+ *
+ * 同一天里的每条包一层 `.changelog-item` —— 用户 2026-09-30 要求"每天之中的问题隔开一点"，
+ * 分隔（留白 + 一条细线）由样式表按这一层给，改版式不用动内容。
  */
 export function changelogElement(nav: { readonly onClose: () => void } = { onClose: () => {} }): HTMLElement {
   const panel = el('div', 'changelog-panel');
@@ -112,8 +132,10 @@ export function changelogElement(nav: { readonly onClose: () => void } = { onClo
     if (index > 0) panel.appendChild(el('div', 'changelog-sep', CHANGELOG_SEPARATOR));
     panel.appendChild(el('div', 'changelog-date', day.date));
     for (const item of day.items) {
-      panel.appendChild(el('div', 'changelog-problem', item.problem));
-      panel.appendChild(el('div', 'changelog-fix', item.fix));
+      const box = el('div', 'changelog-item');
+      box.appendChild(el('div', 'changelog-problem', item.problem));
+      box.appendChild(el('div', 'changelog-fix', item.fix));
+      panel.appendChild(box);
     }
   });
   return panel;

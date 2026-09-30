@@ -67,8 +67,13 @@ describe('首页「更新日志」：真数据（空的时候跳过，不假绿�
       expect(day.date, '日期不是 YYYY-MM-DD').toMatch(/^\d{4}-\d{2}-\d{2}$/);
       for (const item of day.items) {
         expect(item.problem.trim().length, `${day.date} 有一条问题描述是空的`).toBeGreaterThan(0);
-        expect(item.fix.startsWith('已修复'), `${day.date} 的这条没以"已修复"开头`).toBe(true);
+        // ★ 2026-09-30 用户口径："以开发者视角说明修复了什么就行，不用解释如何修复的"
+        //   ⇒ 开头只许是"已修复/已新增"，且整句别写成一段实现说明（60 字上限是个机械代理）
+        expect(/^已(修复|新增|更新)/.test(item.fix), `${day.date} 的这条没以"已修复/已新增/已更新"开头：${item.fix.slice(0, 16)}`)
+          .toBe(true);
         expect(item.problem.startsWith('已修复'), `${day.date} 的"问题"那行写成了修复说明`).toBe(false);
+        expect(item.fix.length, `${day.date} 的这条写太长了（只说明修了什么，不解释怎么修的）`)
+          .toBeLessThanOrEqual(60);
       }
     }
     for (let i = 1; i < CHANGELOG.length; i += 1) {

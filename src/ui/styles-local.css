@@ -273,3 +273,10 @@
 
 /* ★ 2026-09-30：模式页那句"建议 65% 游玩 + Ctrl+滚轮调整"（文案出处 src/ui/page-zoom.ts） */
 .zoom-hint { width: min(560px, 92vw); margin-top: 4px; font-size: 12px; line-height: 1.6; color: #8f9ac0; }
+
+
+/* ★ 2026-09-30（用户要求）：同一天里的每条之间隔开一点 —— 留白 + 一条细线；
+ * 当天第一条不画线（它紧跟日期，画了会像"日期下面还挂着东西"）。 */
+.changelog-item { margin-top: 14px; padding-top: 12px; border-top: 1px solid rgba(42, 49, 64, 0.75); }
+.changelog-date + .changelog-item { margin-top: 10px; padding-top: 0; border-top: none; }
+.changelog-problem { margin-top: 0; }
