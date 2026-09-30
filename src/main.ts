@@ -51,6 +51,7 @@ import { createLocalStore, readNickName } from './app/local-store';
 import { openL1Store } from './ui/local-store-browser';
 import { renderLocalConsent, nextConsentStep } from './ui/local-consent';
 import { installHotseatExit } from './ui/hotseat-exit';
+import { installLogToggle } from './ui/log-toggle';
 // G3 Task 7：「本地数据与隐私」屏 + 档案的选择/落盘口（浏览器实现只在 `showLocalData` 里注入）
 import { renderLocalData } from './ui/local-data';
 // G4 Task 4：会话层驱动（热座 = 执行 + 记录；重放 = 只读闸门）与档案重放的接线。
@@ -5288,6 +5289,11 @@ initPhoneLandscape();
  * 在渲染路径里插任何调用，也就不必碰 `render.ts`。
  */
 installHotseatExit({ onExit: () => { resetToMainInterface(); showModeSelect(); } });
+/**
+ * ★ 2026-09-30（用户要求）：热座日志**默认隐藏** + 右上角显示/隐藏开关。
+ * 同样是注入式（`.log` 每帧重建 ⇒ 观察者每次换完重新落偏好），判据复用上面那一条。
+ */
+installLogToggle();
 showStartScreen();
 // 常驻特效层随滚动/缩放重新对齐：已编译环（compiledFx）、暗2 黑烟（smokeOverlays）、
 // 能量扫描线（scanOverlays）与 FX-3 念能粒子/瘟疫浓雾（psychicParticles/plagueMists）、

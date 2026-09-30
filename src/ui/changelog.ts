@@ -39,7 +39,7 @@
 export interface ChangelogItem {
   /** 玩家视角的问题（一句话说清现象） */
   readonly problem: string;
-  /** 修了什么 / 加了什么，**以"已修复 / 已新增 / 已更新"开头**（不解释怎么做的） */
+  /** 修了什么 / 加了什么，**以"已修复 / 已新增 / 已更新 / 已改为"等开头**（不解释怎么做的） */
   readonly fix: string;
 }
 
@@ -54,6 +54,10 @@ export const CHANGELOG: readonly ChangelogDay[] = [
   {
     date: '2026-09-30',
     items: [
+      {
+        problem: '双人热座对局下方的日志一直占着地方。',
+        fix: '已改为默认隐藏，右上角新增「显示日志」按钮可随时展开。',
+      },
       {
         problem: '双人热座对局里没有退出游戏的入口。',
         fix: '已新增左上角「退出游戏」按钮：退出当前对局并回到游戏选择页。',
