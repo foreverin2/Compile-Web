@@ -1085,7 +1085,7 @@ describe('接线腿：main.ts（showLocalData 接线区）', () => {
     // ⚠️ **明确不做的事**：不许把这条腿改成"两边可以不同"—— 那会让 G4 的范围守卫**永久失效**
     // （它对 G4 之后的所有改动都不再有区分能力）。所以下面 `showModeSelect` 只**移出**，不换写法；
     // 而它的"改动确实来自 T8、且没有溢出"由 `tests/ui/main-lobby-wiring.test.ts` 自己那几条腿兜。
-    for (const name of ['consentStep', 'showHome']) {
+    for (const name of ['consentStep']) {
       const now = functionBody(MAIN_CODE, name);
       const then = functionBody(before, name);
       expect(now.length, `${name} 抽到空片段`).toBeGreaterThan(50);
@@ -1117,5 +1117,17 @@ describe('接线腿：main.ts（showLocalData 接线区）', () => {
       .toContain('reducedMotion: reducedMotion(),');
     expect(functionBody(before, 'showCoin'), '基线里已经有 reducedMotion 注入 ⇒ 移出的理由要重写')
       .not.toContain('reducedMotion: reducedMotion(),');
+
+    // ── 2026-09-30 的第二次豁免：`showHome` 从这一组**移出**（同一天，用户要求"首页加设置按钮"）──
+    // 依据：设置入口就住在 `showHome` 里那个 `renderHome(root, {...})` 的 nav 实参上
+    // （`openSettings: () => { renderSettings(root, showHome); }`）⇒ 本函数体必然变。
+    // 做法与 `showModeSelect`（G5/T8）、`showCoin`（同一天）**逐字同形**：只移出、不换写法。
+    const homeNow = functionBody(MAIN_CODE, 'showHome');
+    expect(homeNow.length, 'showHome 抽到空片段').toBeGreaterThan(50);
+    expect(homeNow, 'showHome 与 G4 基线逐字节相同 ⇒ 它没有理由被移出这一组（那这次移出就是放松）')
+      .not.toBe(functionBody(before, 'showHome'));
+    expect(homeNow, 'showHome 里没有那次改动的锚点（设置入口）').toContain('openSettings');
+    expect(functionBody(before, 'showHome'), '基线里已经有 openSettings ⇒ 移出的理由要重写')
+      .not.toContain('openSettings');
   });
 });

@@ -6,6 +6,7 @@ import { DEMO_PROTOCOLS, DEMO_CARD_DEFS, protocolImgSrc, cardImgSrc, cardTextPar
 import { LIB_TAG_GROUPS, LIB_ALL_TAG_IDS, filterLibrary } from '../app/library-filter';
 import { openZoom, buildCardTextEl, buildProtocolRatingPanel, bindClickOrDouble } from './render';
 import { changelogElement } from './changelog';
+import { FX_SETTINGS, isMetal6StrobeOn, setMetal6Strobe } from './fx-settings';
 
 /**
  * 主界面/掷硬币/图鉴/规则图纸 —— 非对局屏（main.ts 导航）。
@@ -25,6 +26,8 @@ export interface HomeNav {
   openRules(): void;
   /** G3：本地数据与隐私（授权状态、清除本机数据、档案导入导出入口） */
   openLocalData(): void;
+  /** ★ 2026-09-30（用户要求）：设置（特效开关；现在只有金属6 频闪一项） */
+  openSettings(): void;
 }
 
 export interface CoinNav {
@@ -298,6 +301,8 @@ export function renderHome(root: HTMLElement, nav: HomeNav): void {
   btns.appendChild(button('btn home-btn', '查看一/二/三代规则图纸', nav.openRules));
   // G3（Task 4）：本地数据与隐私入口 —— 授权状态、清除本机数据、档案导入导出（Task 7 落地屏）
   btns.appendChild(button('btn home-btn', '本地数据与隐私', nav.openLocalData));
+  // ★ 2026-09-30（用户要求）：设置入口（现在只有金属6 频闪特效一个开关）
+  btns.appendChild(button('btn home-btn', '设置', nav.openSettings));
   menu.appendChild(btns);
   screen.appendChild(menu);
 
@@ -1067,6 +1072,43 @@ function renderCoinHotseat(root: HTMLElement, nav: CoinNav): void {
   });
   actions.appendChild(flipBtn);
   screen.appendChild(actions);
+  root.appendChild(screen);
+}
+
+/* =====================================================================
+ * ★ 2026-09-30（用户要求）：**设置屏**（首页 →「设置」）。
+ *
+ * 现在只有一项：金属6 的频闪特效开关（默认开启）。开关只写 `src/ui/fx-settings.ts` 里那个内存态；
+ * 消费点也只有一处（`render.ts` 的 `syncMetal6Mans`）⇒ 关掉它不影响任何其它卡牌的特效。
+ * 用的是模式选择页那两个开关的同一套类（`.mode-toggle` / `.mode-check`），不新增样式。
+ * ===================================================================== */
+export function renderSettings(root: HTMLElement, back: () => void): void {
+  clearRoot(root);
+  const screen = el('div', 'mode-screen');
+  const head = el('div', 'subpage-head');
+  head.appendChild(el('h1', 'subpage-title', '设置'));
+  head.appendChild(el('div', 'subpage-sub', '特效开关（默认开启；改动只在本次会话有效）'));
+  head.appendChild(button('btn', '← 返回主页面', back));
+  screen.appendChild(head);
+
+  const list = el('div', 'mode-toggles');
+  for (const def of FX_SETTINGS) {
+    const row = el('label', 'mode-toggle');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.className = 'mode-check';
+    box.checked = isMetal6StrobeOn();
+    box.dataset.fxSetting = def.id;
+    box.addEventListener('change', () => {
+      if (def.id === 'metal6-strobe') setMetal6Strobe(box.checked);
+      renderSettings(root, back); // 立刻重画，把状态写在屏上
+    });
+    row.appendChild(box);
+    row.appendChild(el('span', 'mode-toggle-label', def.label));
+    list.appendChild(row);
+    list.appendChild(el('div', 'zoom-hint', def.desc));
+  }
+  screen.appendChild(list);
   root.appendChild(screen);
 }
 

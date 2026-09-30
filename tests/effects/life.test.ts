@@ -71,7 +71,10 @@ describe('life protocol effects', () => {
     const p1 = s.pendingEffects[s.pendingEffects.length - 1];
     expect(p1.prompt?.kind).toBe('select');
     expect(p1.prompt?.title).toContain('翻转1张牌');
-    expect(p1.prompt?.candidates.map((c) => c.uid).sort()).toEqual([a.uid, b.uid].sort());
+    // ★ 2026-09-30（用户实测）：**候选里必须含源卡自己**（life-1 的文本没有排除源卡；
+    //   而 `candidates` 默认把源卡排除 ⇒ 玩家在选效果那一步点不到自己这张牌）
+    expect(p1.prompt?.candidates.map((c) => c.uid).sort()).toEqual([card.uid, a.uid, b.uid].sort());
+    expect(p1.prompt?.candidates.some((c) => c.uid === card.uid), '候选里没有源卡自己').toBe(true);
     executeAction(s, 0, 'effect-choice', { promptId: p1.id, choice: [a.uid] });
     expect(a.faceUp).toBe(false); // 第 1 张翻转
     // 第 2 次选择：同一张卡仍可再选（reference excludeSelf:false，无已选排除）

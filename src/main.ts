@@ -41,7 +41,7 @@ import { setFxViewSeat } from './ui/fx-seat';
 import { handCardBox, handFanLead, handFanStep } from './ui/fx-card-size';
 import { handOuterFor } from './ui/fx-seat';
 import { openControlRearrangeModal, closeControlRearrangeModal, refreshControlRearrangeModal, isControlRearrangeOpen, orderChanged, orderToAction, hostsEffectRearrange } from './ui/control-rearrange';
-import { renderHome, renderCoin, renderLibrary, renderRules, renderModeSelect, COIN_TOSS_MS } from './ui/home';
+import { renderHome, renderCoin, renderLibrary, renderRules, renderModeSelect, renderSettings, COIN_TOSS_MS } from './ui/home';
 import { linkRecoveryNotice, lobbyCoinViewOf, lobbyLinkText, appendNetTurnLine } from './ui/net-lobby';
 import type { CoinNetView } from './ui/home';
 // ★ T11-B：硬币屏要的"面"（屏上口径 `1 | 2`）
@@ -4832,6 +4832,8 @@ function showHome(): void {
     openRules: () => renderRules(root, showHome),
     // G3 Task 7：本地数据与隐私屏（授权状态可见 + 清除本机数据 + 档案导入导出入口）
     openLocalData: () => showLocalData(),
+    // ★ 2026-09-30（用户要求）：设置屏（特效开关；现在只有金属6 频闪一项）
+    openSettings: () => { renderSettings(root, showHome); },
   });
 }
 

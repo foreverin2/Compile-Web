@@ -13,6 +13,7 @@ import { DEMO_PROTOCOLS, cardImgSrc, protocolImgSrc, cardTextParts, getCardDef, 
 import type { CardTextParts } from '../data/demo';
 import { COMPILED_PROTOCOL_COLORS, protocolColorOf, hexToRgba } from './protocol-colors';
 import { PROTOCOL_RATINGS } from '../data/protocolRatings';
+import { isMetal6StrobeOn } from './fx-settings';
 import { actionCn } from '../core/log';
 import { cardCommandDisabled } from '../core/effects/context';
 import { downloadLog } from './diag';
@@ -976,12 +977,23 @@ export function syncMetalPlates(s: GameState): void {
 }
 
 /** metal-6：手牌含 metal-6 → 该卡牌面循环渐现 man.png（key = uid，定位 .hand[data-player]
- *  内 .card[data-uid]；卡离开手牌 / 超 15 张隐藏无节点 → 移除层） */
+ *  内 .card[data-uid]；卡离开手牌 / 超 15 张隐藏无节点 → 移除层）
+ *
+ *  ★ 2026-09-30（用户要求两处）：
+ *   ① **只对正面的 metal-6 生效**：原来只查 `defId`，反面的 metal-6 也在闪（用户实测）。
+ *      文本是顶命令、反面没有文本 ⇒ 反面不该有这个特效。
+ *   ② **设置里可以关掉**（`isMetal6StrobeOn()`，默认开）：关掉时把已挂的层清掉并直接返回
+ *      —— 只影响这一个特效，其它卡牌的特效一个字节都不动。 */
 export function syncMetal6Mans(s: GameState): void {
+  if (!isMetal6StrobeOn()) {
+    for (const [, layer] of metal6Mans) layer.remove();
+    metal6Mans.clear();
+    return;
+  }
   const activeUids = new Set<string>();
   for (const player of [0, 1] as PlayerId[]) {
     for (const card of s.players[player].hand) {
-      if (card.defId !== 'metal-6') continue;
+      if (card.defId !== 'metal-6' || !card.faceUp) continue;
       activeUids.add(card.uid);
       const node = document.querySelector<HTMLElement>(
         `.hand[data-player="${player}"] .card[data-uid="${card.uid}"]`
