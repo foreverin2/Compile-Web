@@ -61,7 +61,6 @@
 <div class="row">
   <button id="turn">测中继（只走 relay）</button>
   <button id="comp">测压缩格式</button>
-  <button id="home2">← 返回首页</button>
 </div>
 <pre id="extra"></pre>
 
@@ -72,9 +71,19 @@ const lines = [];
 function line(k, v, cls) { lines.push(String(k).padEnd(26) + String(v)); }
 function draw() { out.textContent = lines.join('\n'); }
 
-// 返回首页：主站在同源的 ./（dist/index.html 与 public/probe.html 是兄弟）
-document.getElementById('home').addEventListener('click', () => { location.href = './'; });
-document.getElementById('home2').addEventListener('click', () => { location.href = './'; });
+// 返回：走 `history.back()` —— 体检页是由游戏页 `location.href` 推上来的，浏览器会用 bfcache
+// 把**游戏那一份文档原样恢复**（授权状态与当前那一屏都还在），于是不会重载、也不会再弹授权。
+// 直接打开体检页（没有上一条历史）时退回同源首页。
+// ★ 2026-09-29（用户）：下面那排里的第二个返回按钮（`#home2`）已去掉，一页留一个就够。
+{
+  const homeBtn = document.getElementById('home');
+  const fromGame = history.length > 1;
+  if (fromGame) homeBtn.textContent = '← 回到游戏';
+  homeBtn.addEventListener('click', () => {
+    if (fromGame) { history.back(); return; }
+    location.href = './';
+  });
+}
 
 line('UA', navigator.userAgent);
 line('platform', navigator.platform || '-');
