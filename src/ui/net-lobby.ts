@@ -613,6 +613,18 @@ export const LOBBY_LINK_COPY: Readonly<Record<LobbyLink, string>> = {
     + '如果房主就是这一侧，这一局只能由上层结束，不能继续推进回合。',
 };
 
+/* ==================================================================== *
+ * 「轮到谁」那一行（2026-10-01 用户真机反馈：挪到「当前连接：…」正上方）
+ * ==================================================================== */
+
+/**
+ * 「轮到谁」那一行在 DOM 上的类名（唯一产出点与读取口径；真浏览器门/单测都按它取）。
+ *
+ * 2026-10-01 之前这个字面量只写在 `appendNetTurnLine()` 里（一行一处），之所以提成导出常量：
+ * 同一轮里**位置**（那一行钉在屏上哪里）也进了机检，测试要按同一个口径取节点。
+ */
+export const NET_TURN_LINE_CLASS = 'net-turn-line';
+
 /**
  * 把 T6 的读数折成上面那张表的一个键。**只有这一处**做这个判定。
  *
@@ -691,11 +703,65 @@ export function netTurnText(
 const DRAFT_STEPS = DRAFT_PICK_COUNT;
 
 /**
+ * ★★ **2026-10-01 用户真机反馈（第 1 件）：把这一行挪到「当前连接：…」正上方。**
+ *
+ * 用户原话："看我图中选中的左下角那行字（就是那句『现在轮到对方选协议（第 1 步，共 5 步）—— 等他选』），
+ * 我希望给他挪到『当前连接：直连』的上方，方便查看"。
+ *
+ * ## 改之前它为什么在左下角
+ *
+ * `appendNetTurnLine()` 从前只写类名、**一个样式都不给** ⇒ 它是一个普通的流内 `div`，
+ * 排在渲染器画的那一帧之后（一整页的最末尾），于是落在页面左下角、协议池下方 —— 用户报的
+ * 就是这个形态（`docs/2026-09-17-G5-手动验收清单.md` 里也记过"没有 CSS 规则"）。
+ *
+ * ## 为什么用行内样式（而不是给 `styles.css` 加一条规则）
+ *
+ * 与「当前连接：…」那一行（`src/ui/net-conn-line.ts` 的 `LINE_STYLE`）**同一套做法**：
+ * `position: fixed` + `left: 50%` + `translateX(-50%)` + `pointer-events: none`，写在节点自己身上。
+ * 两条收益：
+ *  - 不新增样式表类规则 ⇒ 不参与 `tests/ui/**` 那一族 CSS 解算腿的层叠模型（不引入假红）；
+ *  - 本文件/本行**不依赖**任何样式表被加载（那一屏本来就由红线文件 `src/ui/render.ts` 画，
+ *    我们只在帧末补一个浮层）。
+ *
+ * ## 几何：为什么是 `bottom: 34px`
+ *
+ *  - 连接行自己写在 `bottom: 6px`，高度 = 字号 12px × 行高 1.2 + 上下内边距 2px×2 ≈ 18.4px
+ *    ⇒ 它的上沿离视口底 ≈ 24.4px；
+ *  - 本行同字号、同内边距 ⇒ 自身高 ≈ 18.4px；
+ *  - 取 `bottom: 34px` ⇒ 本行下沿离视口底 34px，与连接行上沿（≈24.4px）之间留 ≈9.6px，
+ *    两行**不叠字**，且本行上沿离底 ≈52px，仍远低于牌桌底部那一族控件。
+ *  - 对局相那一屏**没有**连接行（`appendNetConnLine()` 只在草稿相产出，见 `src/main.ts` 的分支）
+ *    ⇒ 这一行在那里比改前高 28px，同样只占屏底一条，不压棋盘内容（它是 `fixed` + `pointer-events: none`，
+ *    既挤不走别人、也抢不走拖拽）。
+ *
+ * ⚠️ `z-index` 取 `1000`：与 `net-conn-line.ts` 的 `9000` 不同值只是"两条浮层不必争同一个号"，
+ * 草稿页里没有任何东西压在这两条提示之上（它们都不可点）。
+ */
+const TURN_LINE_STYLE = [
+  'position: fixed',
+  'left: 50%',
+  'bottom: 34px',
+  'transform: translateX(-50%)',
+  'z-index: 1000',
+  'pointer-events: none',
+  'white-space: nowrap',
+  'font-size: 12px',
+  'line-height: 1.2',
+  'color: #ffd98a',
+  'background: rgba(8, 12, 22, 0.72)',
+  'padding: 2px 10px',
+  'border-radius: 10px',
+].join('; ');
+
+/**
  * 把"轮到谁"那一行**画到屏上**（唯一产出点；`src/main.ts` 的两个相各调一次）。
  *
  * 为什么渲染住在这里而不是 `main.ts`：这一行是**联机文案**，与 `lobbyLinkText` 同族；
  * 而 `tests/**` import 不了 `src/main.ts`（应用入口要真 `document`）⇒ 住在这里，真渲染器腿
  * 才画得出来（照 `tests/ui/net-link-recovery.test.ts` 的形状）。
+ *
+ * ⚠️ **2026-10-01 起它是 `position: fixed` 的屏底浮层**（见 `TURN_LINE_STYLE`）：
+ * 它不再进文档流 ⇒ 位置与"渲染器画了多长的一页"无关，缩放到多小的视口都钉在同一个地方。
  */
 export function appendNetTurnLine(
   root: HTMLElement,
@@ -706,7 +772,8 @@ export function appendNetTurnLine(
   draftRound: number,
 ): void {
   const line = document.createElement('div');
-  line.className = 'net-turn-line';
+  line.className = NET_TURN_LINE_CLASS;
+  line.setAttribute('style', TURN_LINE_STYLE);
   line.textContent = netTurnText(phase, turnPlayer, selfSeat, draftDrafter, draftRound);
   root.appendChild(line);
 }

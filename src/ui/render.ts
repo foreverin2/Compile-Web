@@ -4528,11 +4528,52 @@ function picksOf(s: GameState, player: PlayerId): ProtocolDef[] {
   return s.draftPicks.filter((_, i) => draftRoundOwner(s.draftStarter, i) === player);
 }
 
-/** 一方的已选协议列：loading 面 PNG 按选择顺序竖排；空槽显示「尚未选择」占位。
- *  本回合选中的协议（尚未完成该回合）可【拖出选择框】取消选择（回到协议池原位） */
-function renderPickColumn(s: GameState, player: PlayerId, drafter: PlayerId, cb: UiCallbacks): HTMLElement {
+/**
+ * 一方的已选协议列：loading 面 PNG 按选择顺序竖排；空槽显示「尚未选择」占位。
+ *  本回合选中的协议（尚未完成该回合）可【拖出选择框】取消选择（回到协议池原位）
+ *
+ * ★★ **2026-10-01：联机局在标题上标出"哪一列是我"**（用户真机反馈："有玩家反馈：联机后开始
+ * 选协议阶段没法确认谁是玩家 1/2，你想个办法"）。
+ *
+ * ## `selfSeat` 是**可选**的，而"没给"就是热座/单机
+ *
+ *  - 给了（联机局与单机视角预览，来源是 `src/main.ts` 的 `netViewSeat` = 喂给 `createNetDriver`
+ *    的那个本端座位）：标题右侧追加一个标记 —— 被画的那一列就是我 ⇒ `（你）`，
+ *    另一列 ⇒ `（对方）`；
+ *  - **没给**（热座：一个人操作两边、单机/重放）：`undefined` ⇒ **一个标记节点都不产出**
+ *    ⇒ 热座页的 DOM 与改动前逐字节相同（热座里标"你"是错的：两边都是同一个人在操作）。
+ *
+ * ## 为什么这两个标记的文案写在**本文件**（而不是从 `src/ui/net-lobby.ts` import）
+ *
+ * 方向问题：`net-lobby.ts` 已经 `import type { CoinNetView } from './home'` 那条线，
+ * 而 `render.ts` 反过去 import 联机模块会**制造环形依赖**，并且本文件现有守卫明确禁止
+ * `render.ts` 出现联机那一族的名字（`tests/ui/net-lobby.test.ts` 的 "from './render'" 反查
+ * 与 `tests/ui/net-turn-line.test.ts` 的禁用字面量表）。所以文案在这里就地写死，由
+ * `tests/ui/draft-pick-seat-mark.test.ts` 逐字钉住 —— 只有一处产出、只有一处守卫，不存在两份真相。
+ *
+ * ## 标记用行内样式（不新增样式表类规则）
+ *
+ * 比标题小一号、用弱色，且**不设**字号以外的行高/边距 ⇒ `.draft-picks-title` 那一行的行盒高
+ * 不变（`tests/ui/draft-fit.test.ts` 的预算里"标题行 = 字号 × line-height"仍然成立）。
+ *
+ * ⚠️ `export` 只为**机检**（`tests/ui/draft-pick-seat-mark.test.ts` 直接喂三个入参调它，
+ * 断言"给了座位才标、且两侧标记不同、热座一个都没有"）；`renderDraft` 是它唯一的产出侧调用点。
+ */
+export function renderPickColumn(
+  s: GameState, player: PlayerId, drafter: PlayerId, cb: UiCallbacks,
+  /** 本机座位（联机/预览才有；热座与单机**不传** ⇒ 不加任何标记，见上面的说明） */
+  selfSeat?: PlayerId,
+): HTMLElement {
   const col = el('div', `draft-picks p${player + 1}${drafter === player ? ' active' : ''}`);
   const title = el('div', 'draft-picks-title', `玩家 ${player + 1} 已选`);
+  if (selfSeat !== undefined) {
+    const mine = player === selfSeat;
+    const mark = el('span', mine ? 'draft-picks-seat-self' : 'draft-picks-seat-foe',
+      mine ? '（你）' : '（对方）');
+    mark.setAttribute('style',
+      'font-size: 0.78em; font-weight: normal; color: ' + (mine ? '#7fe3c0' : '#c8a2ff') + ';');
+    title.appendChild(mark);
+  }
   if (drafter === player) title.appendChild(el('span', 'draft-picks-turn', '● 轮选'));
   col.appendChild(title);
   const list = el('div', 'draft-picks-list');
@@ -4793,6 +4834,34 @@ const DRAFT_GROUP_LABELS: ReadonlyArray<readonly [string, string]> = [
 ];
 let draftEnabledGroups: Set<string> = new Set(DRAFT_GROUP_LABELS.map(([g]) => g));
 
+/* ===== 2026-10-01：选协议那一屏的"我是几号"（联机局/单机预览才有的座位） =====
+ *
+ * ## 为什么是一个**页级开关**（而不是只加一个函数参数）
+ *
+ * 座位这件事属于页面级状态（与 `renderMode` / `netViewSeat` 同族），而它必须到达
+ * **两层**：`renderDraft`（草稿页入口）→ `renderPickColumn`（两侧列的产出）。
+ * 参数能穿过这两层，但入口那条链路在 `src/main.ts` 里是
+ * `renderApp(root, state, cb)` —— **那一行的字面量被两条结构腿钉着**
+ * （`tests/ui/g4-closure-guard.test.ts` 的 L4、`tests/ui/main-lobby-wiring.test.ts` 第 3 条：
+ * `renderApp(` 全文件恰 1 处、且必须逐字是这一串）⇒ 给它加第 4 个实参会把两条腿弄红，
+ * 而那两条腿守的是"整帧重画只有一个入口"这条**与本任务无关**的纪律。
+ * ⇒ 页级开关 + 一个 setter：`renderDraft` 的**显式参数**优先，缺省时读这个开关。
+ *
+ * ## 两条纪律
+ *
+ *  - **缺省 `null` = 没有座位概念**（热座：一个人操作两边；单机/重放：没有对手在线上）
+ *    ⇒ `renderPickColumn` 一个标记节点都不产出（热座里标"你"是错的）；
+ *  - setter **只由 `src/main.ts` 的 `rerender()` 在一个地方调**（每次重画都写一次，
+ *    值与 `netViewSeat` 同源）⇒ 不存在"上一局的座位漏到这一屏"这种状态泄漏。
+ */
+let draftSelfSeat: PlayerId | null = null;
+
+/** 写页级座位（`null` = 这一屏没有座位概念 ⇒ 不标"你/对方"）。返回值给测试/排查用。 */
+export function setDraftSelfSeat(seat: PlayerId | null): PlayerId | null {
+  draftSelfSeat = seat;
+  return draftSelfSeat;
+}
+
 /* ===== 草稿 hover 展示框（修改提示词 21）：鼠标悬停协议池卡 → 下方展示框放大协议图
  * + 名称/座右铭/关键词/定位/六维评分/点评/推荐搭配协议/推荐流派（数据：protocolRatings.ts）===== */
 /** 双方玩家的展示框容器（renderDraft 每次重建并登记；玩家 N → [N]） */
@@ -4923,7 +4992,18 @@ function buildDraftPreviewBox(player: PlayerId, showPinned: { player: PlayerId; 
   return box;
 }
 
-export function renderDraft(root: HTMLElement, s: GameState, cb: UiCallbacks): void {
+export function renderDraft(
+  root: HTMLElement, s: GameState, cb: UiCallbacks,
+  /**
+   * ★★ **2026-10-01：本机座位**（联机局与单机视角预览才有；来源是 `src/main.ts` 的
+   * `netViewSeat` = 喂给 `createNetDriver` 的那个本端座位）。缺省时回落到页级开关
+   * `draftSelfSeat`（由 `setDraftSelfSeat()` 写，见那一段的说明）；**两者都没有 ⇒ 热座/单机/
+   * 重放一个标记都不加**（热座是一个人操作两边，标"你"是错的；见 `renderPickColumn` 的说明）。
+   */
+  selfSeat?: PlayerId,
+): void {
+  // 显式参数优先；没给就看页级开关（`null` = 这一屏没有座位概念 ⇒ 不标）
+  const seatForMarks: PlayerId | undefined = selfSeat ?? draftSelfSeat ?? undefined;
   root.textContent = '';
   const wrap = el('div', 'draft-screen');
 
@@ -4986,7 +5066,7 @@ export function renderDraft(root: HTMLElement, s: GameState, cb: UiCallbacks): v
       } else {
         draftEnabledGroups.add(group);
       }
-      renderDraft(root, s, cb);
+      renderDraft(root, s, cb, selfSeat);
     });
     filter.appendChild(chip);
   }
@@ -5030,11 +5110,11 @@ export function renderDraft(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   // 展示框为 body 级 fixed 大面板（P1 左下 / P2 右下，见 buildDraftPreviewBox）——
   // 固定屏幕、大字可读、不遮挡中间池；hover 即时预览 / 点击固定共用该面板。
   const side0 = el('div', 'draft-side p1');
-  side0.appendChild(renderPickColumn(s, 0, activePlayer, cb));
+  side0.appendChild(renderPickColumn(s, 0, activePlayer, cb, seatForMarks));
   layout.appendChild(side0);
   layout.appendChild(renderDraftPool(s, cb, banStep, activePlayer));
   const side1 = el('div', 'draft-side p2');
-  side1.appendChild(renderPickColumn(s, 1, activePlayer, cb));
+  side1.appendChild(renderPickColumn(s, 1, activePlayer, cb, seatForMarks));
   layout.appendChild(side1);
   wrap.appendChild(layout);
   buildDraftPreviewBox(0, draftPinned);
@@ -5589,6 +5669,9 @@ export function resetUiState(): void {
   batteryPrev.clear();
   // 草稿页世代筛选复位为全开（1代+2代 30 套）
   draftEnabledGroups = new Set(DRAFT_GROUP_LABELS.map(([g]) => g));
+  // ★ 2026-10-01：页级座位也随局复位（回到"这一屏没有座位概念"）—— 下一帧 `rerender()`
+  //   会按当时的 `renderMode` 重新写一次；这一句是**兜底**（不让上一局的座位留到主界面/热座）。
+  draftSelfSeat = null;
   // 草稿展示框容器（body 级 fixed 大面板）随局移除 + 固定状态复位
   removeDraftPreviews();
   clearGen3Persistent(); // 3代（批次 D）常驻层（控制权族/顶部持续/硬币堆等级）随局清理

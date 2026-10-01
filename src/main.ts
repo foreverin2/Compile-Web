@@ -28,7 +28,7 @@ import './ui/styles-touch.css';
 import { createGame, getCurrentDrafter, performDraftPick, performDraftUnpick, performDraftBan, randomPoolFromSeed, setSeedNonce, getDraftPool } from './core/state/create';
 import { getCompilableLines } from './core/rules/compile';
 import { collectTriggers } from './core/effects/triggers';
-import { renderApp, renderDraft, resetUiState, syncCompiledFxLayers, syncSmokeOverlays, syncScanOverlays, syncPsychicParticles, syncPlagueMists, syncApathyMists, syncApathyMosaics, syncSpirit0Glows, syncSpirit1Cards, syncMetal0Glows, syncMetalPlates, syncMetal6Mans, syncMetal1LineGlows, syncMirror0BatteryGlows, syncClarity0BatteryGlows, syncIceFx, syncSmoke2LineGlows, syncFear0TriGlows, syncWarBlades, syncChainLayerPosition, syncDiversity3Fx, type UiCallbacks } from './ui/render';
+import { renderApp, renderDraft, resetUiState, setDraftSelfSeat, syncCompiledFxLayers, syncSmokeOverlays, syncScanOverlays, syncPsychicParticles, syncPlagueMists, syncApathyMists, syncApathyMosaics, syncSpirit0Glows, syncSpirit1Cards, syncMetal0Glows, syncMetalPlates, syncMetal6Mans, syncMetal1LineGlows, syncMirror0BatteryGlows, syncClarity0BatteryGlows, syncIceFx, syncSmoke2LineGlows, syncFear0TriGlows, syncWarBlades, syncChainLayerPosition, syncDiversity3Fx, type UiCallbacks } from './ui/render';
 // G2 Task 4：远程对战页（单视角预览）。**本 import 是 render-net.ts 第一次进入 JS 产物** ——
 // 在此之前它没有任何生产代码引用它（Task 3/3F/3F2 改了 700+ 行而产物哈希一字未动），
 // 也就是说 build 那道门此前对整个远程页是瞎的。
@@ -3808,6 +3808,26 @@ function rerender(): void {
     return;
   }
   if (probeOn) renderAppCalls += 1;
+  /**
+   * ★★ **2026-10-01：把"本机是哪个座位"提前交给草稿页**（用户真机反馈："有玩家反馈：联机后
+   * 开始选协议阶段没法确认谁是玩家 1/2，你想个办法"）。
+   *
+   * ## 为什么是"页级开关"而不是给 `renderApp` 加第 4 个实参
+   *
+   * 座位要到达 `renderDraft` → `renderPickColumn` 两层，而入口那一行的字面量
+   * `renderApp(root, state, cb);` **被两条结构腿逐字钉着**（`tests/ui/g4-closure-guard.test.ts`
+   * 的 L4、`tests/ui/main-lobby-wiring.test.ts` 第 3 条：全文件 `renderApp(` 恰 1 处）——
+   * 那两条腿守的是"整帧重画只有一个入口"，与本次改动无关，不该为了让位而放松。
+   * ⇒ 走 `setDraftSelfSeat()` 这个页级开关（`src/ui/render.ts` 里那一段写了同样的理由）。
+   *
+   * ## 值与 `netViewSeat` **同源**
+   *
+   *  - `renderMode === 'net'`（联机局 + 单机视角预览）：本机座位 = `netViewSeat`，
+   *    而它在 `enterNetGame()` 里就是喂给 `createNetDriver` 的那个 `hand.seat`；
+   *  - 其余（热座 / 重放 / 大厅）：**`null`** ⇒ 两侧列标题一个标记都不加
+   *    （热座是一个人操作两边、单机没有线上对手 ⇒ 标"你"是错的）。
+   */
+  setDraftSelfSeat(renderMode === 'net' ? netViewSeat : null);
   // ★ G5 T14 修复轮：把"渲染器收到的这一枚"与模块级 `state` 做**对象同一性**比对
   renderApp(root, state, cb);
   if (probeOn) rerenderPainted += 1;
