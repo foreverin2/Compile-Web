@@ -154,12 +154,23 @@ describe('批次 D 守卫：控制权族 + 常驻层', () => {
     for (const cls of ['g3ctrl-caption', 'g3ctrl-result', 'g3ctrl-cmp', 'g3ctrl-cmp-own', 'g3ctrl-cmp-opp', 'g3ctrl-cmp-scan', 'g3ctrl-cmp-num', 'g3ctrl-lead-ring']) {
       expect(syncCss, `CSS 缺少 .${cls}`).toContain(`.${cls}`);
     }
-    // 条高：**唯一出处是 JS 常量**（`CTRL_CMP_BAR_H`），由 `cmp.style.height` 内联写出 ——
+    // 条高：**唯一出处是 JS 常量**（`CTRL_CMP_BAR_H`），由内联 style 写出 ——
     // ⚠️ 不能断言 CSS 里的 `height`：`styles-gen3-sync.css` 是红线文件（本轮不改），
     //    那里保留着旧的 9px，真实高度由内联值赢。所以判据钉"内联写出用的常量是 6"。
     expect(controlTs, 'JS 侧的条高常量不是 6（条会越出到协议卡面或能量槽上）').toMatch(/const CTRL_CMP_BAR_H = 6;/);
+    // ⚠️ **2026-10-01 判据随修法搬家（不是放宽）**：条高原来写在 `gen3ControlCheckFx` 的循环里
+    //    （`cmp.style.height = \`${barH}px\``），现在与 left/top/width 一起收进 `applyCmpBar`
+    //    （初次落点与每帧跟随**共用同一份** ⇒ 滚动重定位不会把高度写丢）。
+    //    新句查两件事，which 都比旧句**更严**：
+    //      ① 写高度的**唯一一处**必须是把值取成整数的 `${g.barH}px`（`barH` 若被小数/别的来源
+    //         接管，条就压到卡上 —— 这正是旧句想抓的后果）；
+    //      ② 那唯一一处的函数必须真的被 C4 的产出路径（条与跟随）调用过 ⇒ 防"写了个没人调的助手"。
+    const hWrites = controlTs.match(/cmp\.style\.height = /g) ?? [];
+    expect(hWrites.length, '对比条高度的内联写入不唯一（多一处就多一个真相）').toBe(1);
     expect(controlTs, '条高没有内联写出（会被样式表的旧值 9px 接管 ⇒ 压到卡上）')
-      .toMatch(/cmp\.style\.height = `\$\{barH\}px`/);
+      .toMatch(/cmp\.style\.height = `\$\{g\.barH\}px`/);
+    expect((controlTs.match(/applyCmpBar\(/g) ?? []).length, 'applyCmpBar 没有被调用（写了助手但没人用 ⇒ 高度/落点根本没写）')
+      .toBeGreaterThanOrEqual(2);
   });
 
   it('C1/C2 落点锚定轨道实测位置 + 仅色欲驱动时才牵链条（2026-09-13 用户清单 #1/#8）', () => {

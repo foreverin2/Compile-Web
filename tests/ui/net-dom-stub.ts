@@ -61,6 +61,15 @@ export interface StubNode {
   querySelectorAll(sel: string): StubNode[];
   /** 父子指针（由 `appendChild`/`insertBefore`/`textContent=''` 维护；R7 起）。 */
   parentElement: StubNode | null;
+  /**
+   * ★ **2026-10-01 新增（默认关闭，见 `setStubConnectedModel`）**：
+   * "该节点是否挂在文档里"。**默认不在**（`undefined`）—— 只有主动打开
+   * `setStubConnectedModel(true)` 之后，`makeStubEl` 才会定义这个 getter。
+   *
+   * ⚠️ 声明成**可选**：它默认确实不存在（产出代码里 `if (!node.isConnected)` 的守卫在桩上
+   * 恒早退 —— 这正是 `net-conn-line.ts` 那条三档判据依赖的现状）。要读它的用例先打开模型。
+   */
+  readonly isConnected?: boolean;
   style: Record<string, unknown>;
   /**
    * **R19 修正补上显式类型**：与 `appendChild` **同一族问题** —— `dispatchEvent` 此前只存在于
@@ -95,6 +104,23 @@ export interface StubNode {
   animate(frames?: unknown, timing?: unknown): unknown;
   getAnimations(): unknown[];
   [k: string]: unknown;
+}
+
+/**
+ * ★ **2026-10-01 新增**：桩的 `isConnected` 模型开关（默认**关**，见 `makeStubEl` 里那段说明）。
+ *
+ * 打开之后，`makeStubEl` 造出的每个节点都带一个 `isConnected` getter（如实按 `parentElement`
+ * 链走到 `body` 判定；`remove()` 之后自然为 `false`）。**只在"被跟随的层是否还在文档里"
+ * 这类判据真的承重时打开**（例如 `tests/ui/gen3-control-check-follow.test.ts` 的跟随行为腿）——
+ * 打开它会改变 `src/ui/net-conn-line.ts` 那种三档判据代码走到的分支。
+ *
+ * ⚠️ `installStubDom()` 的 `restore()` 会把它复位成 `false`（与 `setStubRect` 同一套纪律：
+ * 用例的输入不许漏到别的用例）。
+ */
+let stubConnectedModel = false;
+
+export function setStubConnectedModel(on: boolean): void {
+  stubConnectedModel = on;
 }
 
 /** `getBoundingClientRect()` 的返回形状（与浏览器同字段）。 */
@@ -438,6 +464,41 @@ export function makeStubEl(tag: string): StubNode {
   Object.defineProperty(node, 'lastElementChild', {
     get: () => (node.children.length > 0 ? node.children[node.children.length - 1] : null),
   });
+  /**
+   * ★ **2026-10-01 新增（默认关闭，见 `setStubConnectedModel`）**：`isConnected` 的
+   * "已挂载"模型 —— 如实按 `parentElement` 链走到 `body` 判定。
+   *
+   * ## 为什么需要它（一条被判据"骗"过去的行为腿）
+   *
+   * 那一天把 C4（控制权判定）的对比条/数值/金圈接进**跟随注册表**（`src/ui/fx-follow.ts`）后，
+   * "滚动时特效跟着主体走"这条行为腿在桩上**恒真空转**：`syncFollowers()` 的第一句是
+   * `if (!f.el.isConnected) { 出栈; continue; }`，而桩上此属性**根本不存在**（`undefined` ⇒ falsy）
+   * ⇒ 每次 `syncFollowers()` 都把**所有**注册项当"已移除"出栈（实测 `followCount()` 2 → 0），
+   * 跟随回调一次都不跑，而"条没动"的断言照样绿（因为断言写的是"再调一次看有没有动"）。
+   * 这正是本文件头注反复警告的那类假绿。
+   *
+   * ## 为什么**默认关闭**（而不是直接给所有桩节点加上）
+   *
+   * 加在共用桩上会改变**已经写好的**用例走到的分支：`src/ui/net-conn-line.ts` 的
+   * `stillMounted()` 是**三档**判据（`isConnected` → `ownerDocument.contains` →
+   * `parentElement !== null`），而 `tests/ui/net-conn-line.test.ts` 的夹具**刻意**只挂
+   * `parentElement`（`root` 自己有父指针、那个行节点只 `appendChild` 到 root）⇒ 一旦桩有了
+   * `isConnected`，它会走**第一档**并判成"没挂载"，那两条用例当场红（实测 2 failed）。
+   *
+   * ⇒ 按"按用例注入"的既有口径做成**显式开关**：只有主动打开它的用例才拿到这个属性，
+   * 其余 200+ 个文件走到的分支**一个都没变**。
+   */
+  if (stubConnectedModel) {
+    Object.defineProperty(node, 'isConnected', {
+      configurable: true,
+      get: () => {
+        for (let p: StubNode | null = node; p !== null; p = p.parentElement) {
+          if (p.tag === 'body') return true;
+        }
+        return false;
+      },
+    });
+  }
   return node;
 }
 
@@ -486,6 +547,7 @@ export function installStubDom(): () => void {
     g.window = prevWin;
     g.requestAnimationFrame = prevRaf ?? (() => 0);
     setStubRect(null);   // 矩形常量是**本用例**的输入，不许漏到别的用例
+    setStubConnectedModel(false);   // 同上：`isConnected` 模型也是本用例的输入
     // ⚠️ 按节点矩形**不需要**显式清：它是 `WeakMap`，键是**本用例新建的那些桩节点**，
     //    用例结束后键不可达 ⇒ 条目随之回收；`installStubDom()` 每次都用**新的** `body`，
     //    所以"新用例里同名节点的旧矩形"不可能被读到。

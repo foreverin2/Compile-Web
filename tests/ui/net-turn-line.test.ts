@@ -68,15 +68,15 @@ describe('★★ G5 T14：联机下"轮到谁"的那一行是人话（draft 与 
     expect(theirs === mine, '两格文案一样（那就是把两件不同的事说成一件）').toBe(false);
   });
 
-  it('对局相两格：轮到我说"轮到你出牌或点「下一步」"、轮到对方说"轮到对方 … 等他动"', () => {
+  it('对局相两格：轮到我说"轮到你出牌"、轮到对方说"现在轮到对方出牌"（2026-10-01 用户要求删掉两截尾巴）', () => {
     const s = createGame({ seed: 'g5-t14-turn-line-turn', draftStarter: 0, firstToPlay: 1, draftMode: 'normal' });
     const mine = netTurnText('turn', s.turnPlayer, s.turnPlayer, 0, s.draftRound);
     expect(mine, '轮到我的那一格没有说"轮到你出牌"').toContain('轮到你出牌');
-    expect(mine, '轮到我的那一格没有提到「下一步」（远程页的通用推进按钮）').toContain('下一步');
+    expect(mine, '文案里又出现了「下一步」（用户 2026-10-01 要求去掉）').not.toContain('下一步');
 
     const theirs = netTurnText('turn', s.turnPlayer, (1 - s.turnPlayer) as PlayerId, 0, s.draftRound);
     expect(theirs, '轮到对端那一格没有说"轮到对方出牌"').toContain('轮到对方出牌');
-    expect(theirs, '轮到对端那一格没有交代"等他动"').toContain('等他动');
+    expect(theirs, '文案里又出现了"等他动"（用户 2026-10-01 要求去掉）').not.toContain('等他动');
     expect(theirs === mine, '两格文案一样（那就是把两件不同的事说成一件）').toBe(false);
 
     // 四格两两不同（把任意两格合并就是"读数不同、话却一样"）

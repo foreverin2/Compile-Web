@@ -18,6 +18,10 @@ import { visibleRectOf } from './gen3-util';
 // G2 修正 R3：控制轨**端归属**按座位判（自己端在下 / 对手端在上）；热座 `null` ⇒ 走改动前的左右逻辑。
 import { fxOuterForSeat, fxTrackEndPos, fxTrackFallbackPct, fxViewSeat } from './fx-seat';
 import { protocolColorOf } from './protocol-colors';
+// 2026-10-01（用户原话要点："这个特效是粘在屏幕上的，我希望调整为跟随其对应的主体的特效"）：
+// 长寿命 FX 的「跟随」注册表（`render.ts` 每帧 + `main.ts` 的滚动/缩放 rAF 各调一次 `syncFollowers`）。
+// C4 判定的条/数值/金圈是 body 级 `position: fixed` 层，坐标只在创建那一帧算一次 ⇒ 必须挂进来。
+import { registerFollow } from './fx-follow';
 
 /* ============================== 小工具 ============================== */
 
@@ -1115,6 +1119,20 @@ export function checkBarProtocolEdge(
  * ⚠️ 热座页（`fxViewSeat() === null`）走的是**同一条算式**：热座的能量槽是槽外侧的竖条、
  * 协议在列中间（`styles.css:178` 的 `.stack-slot.pN .battery`），"协议侧那条边"由
  * `checkBarProtocolEdge` 用**协议格矩形**判（两页共用的唯一出处）。
+ *
+ * ## 2026-10-01：条/数值/金圈改为**跟随主体**（用户原话："这个特效是粘在屏幕上的，
+ * 我希望调整为跟随其对应的主体的特效"）
+ *
+ * 三样东西在样式表里都是 `position: fixed`（`.g3ctrl-cmp` / `.g3ctrl-cmp-num` /
+ * `.g3ctrl-lead-ring`，`styles-gen3-sync.css:335/360/368`，**红线文件本轮不动**），
+ * 而本函数只在**事件那一帧**算一次坐标 ⇒ 这段时间里滚动/缩放/换布局，它们会停在旧的
+ * 视口坐标上（= 用户看到的"粘在屏幕上"），而它们的**主体**（能量槽 / 协议格）已经走掉了。
+ *
+ * 修法照抄仓库既有的"跟随"管线（`fx-follow.ts` 的 `registerFollow`：`render.ts` 每帧 +
+ * `main.ts` 的滚动/缩放 rAF 各调一次 `syncFollowers`；爱意牌库光芒 / 迷雾卡框灰光 /
+ * 透彻落点眼三处 >1.6s 的层就是这么接的）：每个元素注册一个 place 回调，回调**重新查一次
+ * 主体节点**、用同一个 `cmpBarGeom` 重算，所以"条跟着能量槽走、数字跟着条走、金圈跟着能量槽走"
+ * 是**同一条算式**的必然结果，不是三份各写一遍的偏移。
  */
 export function gen3ControlCheckFx(
   p: { player: PlayerId; wins: number; leading: Line[]; gained: boolean },
@@ -1142,86 +1160,218 @@ export function gen3ControlCheckFx(
   l.appendChild(result);
 
   for (const line of [0, 1, 2] as Line[]) {
-    const own = getLineValue(s, p.player, line);
-    const opp = getLineValue(s, foe, line);
-    const total = Math.max(1, own + opp);
-    const lead = leading.has(line);
-    // 对比条贴在该线【己方能量槽】**靠协议那一侧**（宽度≈能量槽 → 短条、有归属感）。
-    // ⚠️ R23：方向由 `checkBarProtocolEdge` 唯一给出（它同时覆盖远程竖排与热座横排），
-    //    本函数不再自己判"上/下/左/右"。
-    const mine = batteryNode(p.player, line);
-    const mineR = mine ? rectOf(mine) : null;
-    const slotR = (() => { const sl = slotNode(p.player, line); return sl ? rectOf(sl) : null; })();
-    const cellR = (() => {
-      const c = document.querySelector<HTMLElement>(`.protocol-cell[data-player="${p.player}"][data-line="${line}"]`);
-      return c ? rectOf(c) : null;
-    })();
-    const anchor = mineR ?? slotR;
-    if (!anchor) continue;
-    const axisIsY = fxViewSeat() !== null;   // 与 `controlTrackAxis()` 同一判据（远程竖 / 热座横）
-    const edge = checkBarProtocolEdge(anchor, cellR, fxOuterForSeat(p.player, fxViewSeat()), fxViewSeat());
-    const barH = CTRL_CMP_BAR_H;
-    // 条沿轴的起点：从"能量槽协议侧那条边"（`edge.at`）朝协议一侧让开 `CTRL_CMP_OUTER_GAP`，
-    // 再从那里**朝能量槽方向**长出 `barH` ⇒ 条整根落在能量槽协议侧那条边之外的那条缝里。
-    const barLo = edge.dir > 0 ? edge.at + CTRL_CMP_OUTER_GAP : edge.at - CTRL_CMP_OUTER_GAP - barH;
-    const barHi = barLo + barH;
-    const barW = Math.max(64, Math.min(150, anchor.width));
-    const cmp = el('div', `g3ctrl-cmp${lead ? ' lead' : ''}${p.gained ? '' : ' failed'}`);
-    // ⚠️ **条高内联写出**：样式表里的 `.g3ctrl-cmp { height: 9px }` 所在文件是红线文件
-    //    （本轮一个字节都不改），而新落点要求条高 == "协议卡面 → 能量槽"那条 flex 缝的宽
-    //    （6px），否则条会越出到协议卡面或能量槽上。内联值优先 ⇒ 高度只有这一个出处。
-    cmp.style.height = `${barH}px`;
-    // 条落在"能量槽盒外、贴协议侧那条边"的位置：沿协议轴的起点用 `barLo`，另一条轴取能量槽中心。
-    // ⚠️ 两条轴**各取各的中心**（轴心混用会让竖排的条横向跑到别的列上 —— R23 第一版就是
-    //    把 (top+bottom)/2 当成了 left，实测条横移到相邻列，本轮的 DOM 腿把它抓住了）。
-    if (axisIsY) {
-      const axisCenterX = (anchor.left + anchor.right) / 2;
-      cmp.style.left = `${axisCenterX - barW / 2}px`;
-      cmp.style.top = `${barLo}px`;
-      cmp.style.width = `${barW}px`;
-    } else {
-      const axisCenterY = (anchor.top + anchor.bottom) / 2;
-      cmp.style.left = `${barLo}px`;
-      cmp.style.top = `${axisCenterY - barH / 2}px`;
-      cmp.style.width = `${barW}px`;
-    }
+    const g = cmpBarGeom(p.player, line, s, leading.has(line));
+    if (!g) continue;
+    const { own, opp, barH } = g;
+    const cmp = el('div', `g3ctrl-cmp${g.lead ? ' lead' : ''}${p.gained ? '' : ' failed'}`);
+    // 主体标记：跟随回调按 (player, line) 重新查回来（与 `layer()` 上那条"层只建一次、
+    // 位置每帧重算"的约定同款 —— 2026-09-13 那批"签名相同就 continue ⇒ 漏重定位"的教训）。
+    markSubject(cmp, p.player, line);
+    applyCmpBar(cmp, g, null);
     const ownFill = el('i', 'g3ctrl-cmp-own');
-    ownFill.style.width = `${((own / total) * 100).toFixed(1)}%`;
+    ownFill.style.width = `${g.ownPct}%`;
     const oppFill = el('i', 'g3ctrl-cmp-opp');
-    oppFill.style.width = `${((opp / total) * 100).toFixed(1)}%`;
+    oppFill.style.width = `${g.oppPct}%`;
     cmp.appendChild(ownFill);
     cmp.appendChild(oppFill);
     cmp.appendChild(el('i', 'g3ctrl-cmp-scan'));
     l.appendChild(cmp);
     // 数值（贴在条两端，明确"这是数值对比"）：与条**同一个轴心**（数字盒比条高，居中让视觉重心对齐）。
-    const numCenter = (barLo + barHi) / 2;
     const ownNum = el('i', 'g3ctrl-cmp-num own', String(own));
     const oppNum = el('i', 'g3ctrl-cmp-num opp', String(opp));
-    if (axisIsY) {
-      const axisCenterX = (anchor.left + anchor.right) / 2;
-      ownNum.style.left = `${axisCenterX - barW / 2 - CTRL_CMP_NUM_W - CTRL_CMP_NUM_GAP}px`;
-      oppNum.style.left = `${axisCenterX + barW / 2 + CTRL_CMP_NUM_GAP}px`;
-    } else {
-      ownNum.style.left = `${barLo - CTRL_CMP_NUM_W - CTRL_CMP_NUM_GAP}px`;
-      oppNum.style.left = `${barHi + CTRL_CMP_NUM_GAP}px`;
-    }
-    ownNum.style.top = `${numCenter - CTRL_CMP_NUM_H / 2}px`;
-    oppNum.style.top = `${numCenter - CTRL_CMP_NUM_H / 2}px`;
+    markSubject(ownNum, p.player, line);
+    markSubject(oppNum, p.player, line);
+    applyCmpNum(ownNum, 'own', g);
+    applyCmpNum(oppNum, 'opp', g);
     l.appendChild(ownNum);
     l.appendChild(oppNum);
-    // 领先线：双方能量槽加金圈
-    if (lead) {
+    // 三样（条 + 两个数值盒）各自跟随。⚠️ 回调里**按 data 属性重新查回**数值盒，不闭包捕获
+    // （闭包捕获的那两枚若被别处摘掉/换掉，回调会去写一个已经不在 DOM 里的节点：条动数字不动）。
+    // 轴心与条同源于 `cmpBarGeom`（同一个函数、同一份几何）。
+    registerFollow(cmp, () => followCmp(cmp, p.player, line, s));
+    // 领先线：双方能量槽加金圈（各自跟随自己那根能量槽）
+    if (g.lead) {
       for (const pid of [p.player, foe] as PlayerId[]) {
         const bn = batteryNode(pid, line);
-        const br = bn ? rectOf(bn) : null;
-        if (!br) continue;
+        if (!bn || !rectOf(bn)) continue;
         const ring = el('i', 'g3ctrl-lead-ring');
-        place(ring, br, 4);
+        ring.dataset.player = String(pid);
+        ring.dataset.line = String(line);
+        placeLeadRing(ring, pid, line);
         l.appendChild(ring);
+        registerFollow(ring, (node) => placeLeadRing(node, pid, line));
       }
     }
   }
   window.setTimeout(() => l.remove(), 1250);
+}
+
+/** 给一枚 C4 元素打上"主体坐标"（谁的第几条线）—— 跟随回调靠它重新查回主体节点。
+ *  ⚠️ 走 `dataset`（= `data-*` 属性）而不是闭包变量：桩 DOM 与真浏览器都读得回来，
+ *  于是"重新查一次主体"这件事在两处是同一条路径（与 `batteryNode` 的按属性寻址同款）。 */
+function markSubject(node: HTMLElement, player: PlayerId, line: Line): void {
+  node.dataset.player = String(player);
+  node.dataset.line = String(line);
+}
+
+/** 重新查回主体节点（每帧调用；查不到 ⇒ 元素已被移除/换页，跟随直接跳过、停在原地）。 */
+function subjectBattery(player: PlayerId, line: Line): HTMLElement | null {
+  return document.querySelector<HTMLElement>(`.battery[data-player="${player}"][data-line="${line}"]`);
+}
+
+/** 该线【己方】协议格（`checkBarProtocolEdge` 在热座分支用它定"协议侧"的方向）。 */
+function subjectProtocolCell(player: PlayerId, line: Line): HTMLElement | null {
+  return document.querySelector<HTMLElement>(`.protocol-cell[data-player="${player}"][data-line="${line}"]`);
+}
+
+/** C4 对比条的几何（位置 + 两条填充比例）：**初次落点与每帧跟随共用同一份**。
+ *
+ *  为什么值得抽出来：`gen3ControlCheckFx` 的初次落点与 `followCmp` 的重定位如果各写一份算式，
+ *  两份迟早漂移 —— 而漂移的表现正是"滚动之后条与数字不再同轴心"（本项目反复栽过的"两份真相"）。
+ *  这里返回 `null` 表示**这一帧算不出来**（能量槽与链路槽都取不到 ⇒ 该线的条压根不该画）。 */
+function cmpBarGeom(player: PlayerId, line: Line, s: GameState, lead: boolean): {
+  own: number; opp: number; lead: boolean; ownPct: string; oppPct: string; axisIsY: boolean;
+  barH: number; barW: number; barLo: number; barHi: number; numCenter: number; axisCenter: number;
+  /** 落点用的是**能量槽**（false = 退到了链路槽的兜底），见 `followCmp` 里为什么只认前者。 */
+  anchorIsBattery: boolean;
+} | null {
+  const foe: PlayerId = player === 0 ? 1 : 0;
+  const own = getLineValue(s, player, line);
+  const opp = getLineValue(s, foe, line);
+  // 两条填充的比例（条上蓝/红两段的宽度）
+  const total = Math.max(1, own + opp);
+  const ownPct = ((own / total) * 100).toFixed(1);
+  const oppPct = ((opp / total) * 100).toFixed(1);
+  // 对比条贴在该线【己方能量槽】**靠协议那一侧**（宽度≈能量槽 → 短条、有归属感）。
+  // ⚠️ R23：方向由 `checkBarProtocolEdge` 唯一给出（它同时覆盖远程竖排与热座横排），
+  //    本函数不再自己判"上/下/左/右"。
+  const mine = batteryNode(player, line);
+  const mineR = mine ? rectOf(mine) : null;
+  const slotR = (() => { const sl = slotNode(player, line); return sl ? rectOf(sl) : null; })();
+  const cell = subjectProtocolCell(player, line);
+  const cellR = cell ? rectOf(cell) : null;
+  const anchor = mineR ?? slotR;
+  if (!anchor) return null;
+  const axisIsY = fxViewSeat() !== null;   // 与 `controlTrackAxis()` 同一判据（远程竖 / 热座横）
+  const edge = checkBarProtocolEdge(anchor, cellR, fxOuterForSeat(player, fxViewSeat()), fxViewSeat());
+  const barH = CTRL_CMP_BAR_H;
+  // 条沿轴的起点：从"能量槽协议侧那条边"（`edge.at`）朝协议一侧让开 `CTRL_CMP_OUTER_GAP`，
+  // 再从那里**朝能量槽方向**长出 `barH` ⇒ 条整根落在能量槽协议侧那条边之外的那条缝里。
+  const barLo = edge.dir > 0 ? edge.at + CTRL_CMP_OUTER_GAP : edge.at - CTRL_CMP_OUTER_GAP - barH;
+  const barHi = barLo + barH;
+  const barW = Math.max(64, Math.min(150, anchor.width));
+  // 另一条轴取能量槽中心。
+  // ⚠️ 两条轴**各取各的中心**（轴心混用会让竖排的条横向跑到别的列上 —— R23 第一版就是
+  //    把 (top+bottom)/2 当成了 left，实测条横移到相邻列，R23 的 DOM 腿把它抓住了）。
+  const axisCenter = axisIsY ? (anchor.left + anchor.right) / 2 : (anchor.top + anchor.bottom) / 2;
+  return {
+    own, opp, lead, ownPct, oppPct, axisIsY, barH, barW, barLo, barHi,
+    numCenter: (barLo + barHi) / 2, axisCenter, anchorIsBattery: mineR !== null,
+  };
+}
+
+/** 把几何写进一条对比条。`prev` = 上一次写进去的轴（用来判"页面轴向变了"，那时才需要清另一条轴）。
+ *  ⚠️ 条高**内联写出**：样式表里的 `.g3ctrl-cmp { height: 9px }` 所在文件是红线文件
+ *  （本轮一个字节都不改），而落点要求条高 == "协议卡面 → 能量槽"那条 flex 缝的宽（6px），
+ *  否则条会越出到协议卡面或能量槽上。内联值优先 ⇒ 高度只有这一个出处。 */
+function applyCmpBar(cmp: HTMLElement, g: NonNullable<ReturnType<typeof cmpBarGeom>>, prev: boolean | null): void {
+  cmp.style.height = `${g.barH}px`;
+  if (g.axisIsY) {
+    cmp.style.left = `${g.axisCenter - g.barW / 2}px`;
+    cmp.style.top = `${g.barLo}px`;
+    cmp.style.width = `${g.barW}px`;
+  } else {
+    cmp.style.left = `${g.barLo}px`;
+    cmp.style.top = `${g.axisCenter - g.barH / 2}px`;
+    cmp.style.width = `${g.barW}px`;
+  }
+  // 换轴（竖排 ↔ 横排）时，上一条轴留下的那条边要显式写回 —— 否则会残留一个越出条的旧值
+  if (prev !== null && prev !== g.axisIsY) {
+    if (g.axisIsY) cmp.style.top = `${g.barLo}px`;
+    else cmp.style.left = `${g.barLo}px`;
+  }
+}
+
+/** 把几何写进一枚数值盒（`which` 决定它贴条的哪一端）。
+ *
+ *  ## 2026-10-01：修掉"数字不跟主体纵向走"（真浏览器读数暴露的**既有**缺陷）
+ *
+ *  数值盒的两个坐标分别落在**两条不同的轴**上：
+ *   - **沿轴**（= 条那条轴，"贴条端"）：`barLo − NUM_W − GAP` / `barHi + GAP` —— 轴是 y 时写 `top`，是 x 时写 `left`；
+ *   - **垂轴**（与条同轴心）：本来写 `numCenter` —— ⚠️ 而 `numCenter = (barLo + barHi) / 2`
+ *     是**条在沿轴上的中点**，与垂轴完全无关。
+ *
+ *  写 `numCenter` 的后果（热座页实测）：条的 `barLo` 由**能量槽 left** 派生（热座横向布局下
+ *  不随上下移动变化）⇒ 数字的 `top` 被钉死在一个常量上（实测 74.01px 一直不动），
+ *  而它的主体（能量槽）上下移动 140px 时条走了、数字没走（真浏览器读数：条 Δ=(60,140)、
+ *  数字 Δ=(60,60) —— **垂直方向少跟了 140px**）。
+ *  ⇒ 垂轴一律取 `axisCenter`（条在**另一条轴**上贴着的"能量槽中心"，条自己的垂轴位置就是它）。
+ *    竖排（远程页）那一支同理：那时条沿 y、数字沿 y 贴两端，垂轴是 x，也取 `axisCenter`。
+ */
+function applyCmpNum(num: HTMLElement, which: 'own' | 'opp', g: NonNullable<ReturnType<typeof cmpBarGeom>>): void {
+  if (g.axisIsY) {
+    // 竖排（远程页）：条沿 y 走 ⇒ 数字贴条的上下两端，垂轴（x）取能量槽中心
+    num.style.left = `${g.axisCenter - CTRL_CMP_NUM_W / 2}px`;
+    num.style.top = which === 'own'
+      ? `${g.barLo - CTRL_CMP_NUM_H - CTRL_CMP_NUM_GAP}px`
+      : `${g.barHi + CTRL_CMP_NUM_GAP}px`;
+  } else {
+    // 横排（热座）：条沿 x 走 ⇒ 数字贴条的左右两端，垂轴（y）取能量槽中心
+    num.style.left = which === 'own'
+      ? `${g.barLo - CTRL_CMP_NUM_W - CTRL_CMP_NUM_GAP}px`
+      : `${g.barHi + CTRL_CMP_NUM_GAP}px`;
+    num.style.top = `${g.axisCenter - CTRL_CMP_NUM_H / 2}px`;
+  }
+}
+
+/** 一根能量槽的金圈（`place(node, r, 4)` 的语义原样保留：四条边各外扩 4px）。 */
+function placeLeadRing(ring: HTMLElement, player: PlayerId, line: Line): void {
+  const bn = subjectBattery(player, line);
+  const br = bn ? rectOf(bn) : null;
+  if (!br) return;
+  place(ring, br, 4);
+}
+
+/** 该线的一块 C4 子件（数值盒）—— 跟随回调靠 (player, line) + 类名重新查回它。
+ *  ⚠️ 两个类名之间用 `.` 拼：写成 `` `.${cls}` `` 而 `cls` 里带空格 =
+ *  `.g3ctrl-cmp-num own` —— 那是**后代选择器**（找 `.g3ctrl-cmp-num` 里的 `<own>` 元素），
+ *  一个都查不到。实测过：拼接方式写错时"条跟着走、数字一动不动"。 */
+function subjectCmpEl(cls: string, player: PlayerId, line: Line): HTMLElement | null {
+  const compound = cls.trim().split(/\s+/).filter(Boolean).map((c) => `.${c}`).join('');
+  const sel = `${compound}[data-player="${player}"][data-line="${line}"]`;
+  const found = document.querySelector<HTMLElement>(sel);
+  const dbg = (globalThis as unknown as { __c4sel?: unknown[] }).__c4sel;
+  if (dbg) {
+    dbg.push({
+      sel, found: found !== null,
+      all: [...document.querySelectorAll<HTMLElement>('.g3ctrl-cmp-num')].map((n) => n.className + '|' + n.dataset.player + '|' + n.dataset.line),
+    });
+  }
+  return found;
+}
+
+/** 两枚数值盒的类名（`own`/`opp` 是并排的第二个类，见 `styles-gen3-sync.css`）。 */
+const CMP_NUM_OWN = 'g3ctrl-cmp-num own';
+const CMP_NUM_OPP = 'g3ctrl-cmp-num opp';
+
+/** C4 每帧跟随：**重新查一次主体**（能量槽/协议格）与**两枚数值盒**，再用同一条 `cmpBarGeom` 重算。
+ *  主体取不到时（层正在被移除 / 主体节点已被重渲染换掉）**留在原地不动**，绝不清坐标
+ *  （清了会让元素跳到视口左上角，比停在旧位置更难看）。 */
+function followCmp(
+  cmp: HTMLElement, player: PlayerId, line: Line, s: GameState,
+): void {
+  const ownNum = subjectCmpEl(CMP_NUM_OWN, player, line);
+  const oppNum = subjectCmpEl(CMP_NUM_OPP, player, line);
+  const g = cmpBarGeom(player, line, s, cmp.classList.contains('lead'));
+  // 主体（能量槽）取不到 ⇒ **留在原地不动**：一半是"层正在被移除"，一半是"能量槽节点被重渲染
+  // 换掉了"。绝不退到链路槽兜底 —— 那会让条**横跳**到另一个基准上（实测差 1px：热座能量槽顶
+  // 395 与链路槽顶 387 之间那条 flex 缝），而"没人看的那一帧悄悄挪一下"正是本仓反复栽的假正确。
+  if (!g || !g.anchorIsBattery) return;
+  const prev = cmp.dataset.axis === undefined ? null : cmp.dataset.axis === 'y';
+  cmp.dataset.axis = g.axisIsY ? 'y' : 'x';
+  applyCmpBar(cmp, g, prev);
+  if (ownNum) applyCmpNum(ownNum, 'own', g);
+  if (oppNum) applyCmpNum(oppNum, 'opp', g);
 }
 
 /** 清缓存时刻（rule:clear-cache）：**清缓存那位玩家**场上有未覆盖正面 gluttony-0 → 齿颚咬合（G1"咬合时刻"）。
