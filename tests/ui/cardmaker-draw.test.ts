@@ -135,6 +135,33 @@ describe('★ 2026-10-01：logo 的两种画法（drawLogoHex）', () => {
     expect([x, y, w, h]).not.toEqual([ZONES.hex.x, ZONES.hex.y, ZONES.hex.w, ZONES.hex.h]);
   });
 
+  it('★ `zoom` 只改"画多大"，**锚点是六边形中心**（中心不动、宽高按倍数走）', () => {
+    // 用户要求："以六边形中心为锚点缩放 logo"。这一条用**调用参数**钉住那件事：
+    // 放大之后矩形宽高按倍数走，而**中心点**（x + w/2, y + h/2）必须与六边形中心重合。
+    const img = makeLogoImage(); // 320×100
+    const box = ZONES.hex;
+    const shots: Array<{ x: number; y: number; w: number; h: number }> = [];
+    for (const zoom of [1, 2] as const) {
+      const { rec, ctx } = makeRecorder();
+      drawLogoHex(ctx as never, img, box, 'v', { zoom, whiten: false });
+      const [, x, y, w, h] = callsOf(rec, 'drawImage')[0].args as [unknown, number, number, number, number];
+      shots.push({ x, y, w, h });
+    }
+    // ① 倍数真的作用在尺寸上（100% → 200%：宽高各 ×2）
+    expect(shots[0].w).toBe(432);
+    expect(shots[1].w, '200% 的宽度不是 100% 的两倍（缩放没生效）').toBe(864);
+    expect(shots[1].h).toBe(270);
+    // ② 锚点：两张图的**中心**都落在六边形中心上（放大没有从左上角长出去）
+    const centerOf = (s: { x: number; y: number; w: number; h: number }): [number, number] =>
+      [s.x + s.w / 2, s.y + s.h / 2];
+    for (const s of shots) {
+      expect(centerOf(s)[0], '缩放锚点不是六边形中心的 x').toBeCloseTo(box.x + box.w / 2, 9);
+      expect(centerOf(s)[1], '缩放锚点不是六边形中心的 y').toBeCloseTo(box.y + box.h / 2, 9);
+    }
+    // ③ 反向锚点：左上角**变了**（否则"中心不动"可能来自"整张图根本没动"）
+    expect(shots[1].x).not.toBe(shots[0].x);
+  });
+
   it('`whiten` 缺省（老存档）与显式 `true` 走**同一条**白化路：原图 → 离屏 → 白色 source-in', () => {
     const img = makeLogoImage();
     const sources: unknown[] = [];

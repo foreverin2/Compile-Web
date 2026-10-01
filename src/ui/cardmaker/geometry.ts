@@ -5,7 +5,7 @@
  * https://github.com/albrtbc/compiler）的 `src/core/geometry.js`。原文件里的
  * `cellTransform`（马赛克分割用）本项目不做，故未移植。
  */
-import { CARD_W, CARD_H, SCALE_MIN, SCALE_MAX } from './config';
+import { CARD_W, CARD_H, LOGO_SCALE_MAX, LOGO_SCALE_MIN, SCALE_MIN, SCALE_MAX } from './config';
 
 /** 只要"有宽高"就行 —— `HTMLImageElement` / `ImageBitmap` / `Canvas` 都满足 */
 export interface Sized {
@@ -19,6 +19,19 @@ export interface Sized {
  */
 export function clampScale(s: number | null | undefined): number {
   return Math.min(SCALE_MAX, Math.max(SCALE_MIN, s || 1));
+}
+
+/**
+ * ★ 2026-10-01（用户要求）：**标志缩放的夹取** —— 与背景的 `clampScale()` 是**两条独立的
+ * 区间**（背景 25%~1600%，标志 50%~200%），所以必须是两个函数：共用一个的话，
+ * "两者互不影响"这件事在上下限上就会串味。
+ *
+ * 与 `clampScale()` 同一个约定：传 `0 / null / undefined / NaN` 时回 **1（= 100%）** ——
+ * 老牌组 JSON 里没有 `zoom` 字段时按"不缩放"处理，而不是把它缩到 50%。
+ */
+export function clampLogoScale(z: number | null | undefined): number {
+  const n = typeof z === 'number' && Number.isFinite(z) && z > 0 ? z : 1;
+  return Math.min(LOGO_SCALE_MAX, Math.max(LOGO_SCALE_MIN, n));
 }
 
 /**

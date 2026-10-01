@@ -26,6 +26,19 @@ export const LAND_H = 744;
 export const SCALE_MIN = 0.25;
 export const SCALE_MAX = 16;
 
+/**
+ * ★ 2026-10-01（用户要求）：**标志（六边形 logo）自己的缩放区间** —— 与背景那条**互相独立**。
+ *
+ * 100% = 铺满六边形（cover：`drawLogoHex()` 里那个 `Math.max(box.w/img.width, box.h/img.height)`）。
+ * 上下限取 50%~200%：再小就成了六边形里一个孤零零的小图标（卡框上原本的图案会露出来），
+ * 再大也只是把同一块图放得更糊，没有信息量。步进 5%（滑杆的 `step`）。
+ * ⚠️ 滑杆的 `min/max/step` 与绘制层的夹取都从这三个数来（`clampLogoScale()`），不许各写一套。
+ */
+export const LOGO_SCALE_MIN = 0.5;
+export const LOGO_SCALE_MAX = 2;
+/** 滑杆步进（百分比读数上的 5%） */
+export const LOGO_SCALE_STEP = 5;
+
 /** 上/中/下三条文本面板的字体与排版 */
 export const PANEL_FONT = 'SupermolotR';
 export const PANEL_MAX = 38;

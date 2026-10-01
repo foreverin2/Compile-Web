@@ -14,8 +14,11 @@ import {
   ZONES,
   DECK_FORMAT,
   DECK_VERSION,
+  LOGO_SCALE_MAX,
+  LOGO_SCALE_MIN,
+  LOGO_SCALE_STEP,
 } from '../../src/ui/cardmaker/config';
-import { bgBaseScale, clampScale, zoomAt } from '../../src/ui/cardmaker/geometry';
+import { bgBaseScale, clampLogoScale, clampScale, zoomAt } from '../../src/ui/cardmaker/geometry';
 import { cutoutBackground, shouldWhitenLogo } from '../../src/ui/cardmaker/images';
 import { hashStr, mulberry32 } from '../../src/ui/cardmaker/rng';
 import {
@@ -127,6 +130,31 @@ describe('几何（移植自 test/geometry.test.js）', () => {
     const down = zoomAt({ scale: SCALE_MIN, offsetX: 7, offsetY: -3 }, 400, 400, 50, 60, 0.5);
     expect(down).toEqual({ scale: SCALE_MIN, offsetX: 7, offsetY: -3 });
   });
+
+  /**
+   * ★ 2026-10-01（用户要求）：标志自己的缩放区间 —— 与背景**必须是两条独立的区间**。
+   * 这一组是"两者互不影响"在上下限上的那一半：同一个输入值在两条路上得到**不同**的结果。
+   */
+  it('clampLogoScale：50%~200%，缺省/坏值一律回 100%（与背景的 25%~1600% 是两条区间）', () => {
+    expect(LOGO_SCALE_MIN).toBe(0.5);
+    expect(LOGO_SCALE_MAX).toBe(2);
+    expect(clampLogoScale(1)).toBe(1);
+    expect(clampLogoScale(1.6)).toBe(1.6);
+    // 上下限各自被夹住
+    expect(clampLogoScale(0.1), '小于 50% 没被夹住').toBe(LOGO_SCALE_MIN);
+    expect(clampLogoScale(9), '大于 200% 没被夹住').toBe(LOGO_SCALE_MAX);
+    // 缺省与坏值 ⇒ 100%（老存档缺字段时不是"缩到 50%"）
+    expect(clampLogoScale(undefined)).toBe(1);
+    expect(clampLogoScale(null)).toBe(1);
+    expect(clampLogoScale(0)).toBe(1);
+    expect(clampLogoScale(Number.NaN)).toBe(1);
+    expect(clampLogoScale(Number.POSITIVE_INFINITY)).toBe(1);
+    // 反向锚点：**同一批输入**下背景那条给的是别的答案 —— 证明这不是同一个函数的两件马甲
+    expect(clampScale(0.1), '背景那条把 10% 夹到了 50%（那就串味了）').toBe(SCALE_MIN);
+    expect(clampScale(9), '背景那条把 900% 夹到了 200%（那就串味了）').toBe(9);
+    expect(clampLogoScale(9)).not.toBe(clampScale(9));
+    expect(clampLogoScale(0.1)).not.toBe(clampScale(0.1));
+  });
 });
 
 describe('确定性随机（移植自 test/rng.test.js；用途：同一份内容同一把卡 id）', () => {
@@ -215,6 +243,11 @@ describe('migrateBg / hydrate（移植自 test/bg.test.js）', () => {
   it('hydrateLogo 填默认值', () => {
     expect(hydrateLogo({ zoom: 2 })).toEqual({ dataUrl: null, zoom: 2, offsetX: 0, offsetY: 0, whiten: true });
     expect(hydrateLogo(null)).toEqual(defaultLogo());
+    // ★ 2026-10-01（用户要求）：**老存档没有 `zoom` 字段 ⇒ 缺省 100%**（不是 0、不是抛错）
+    expect(hydrateLogo({ dataUrl: 'data:image/png;base64,AA' }).zoom, '老档缺 zoom 时不是 100%').toBe(1);
+    // 水化层与参考项目逐字一致（`Object.assign(defaultLogo(), src)`），**不做夹取** ——
+    // 手改过的 JSON 里写 `zoom: null` / `zoom: 9` 时，由绘制层的 `clampLogoScale()` 兜住
+    // （下面那条腿钉的就是"画出来到底是几倍"）。
   });
 
   it('hydrateCard 补全一张卡；kind 只认那两个值', () => {
@@ -324,6 +357,9 @@ describe('牌组 JSON：导出 / 导入往返', () => {
     // ★ 2026-10-01：新增的 `whiten` 必须真的**往返**（不是读回时被默认值糊上的 true）
     expect(round.deck.shared.compile.logo.whiten, '`whiten: false` 没被写进文件').toBe(false);
     expect(round.deck.cards[0].logoOwn.whiten).toBe(true);
+    // ★ 2026-10-01（用户要求"标志缩放要写进牌组 JSON"）：缩放值也必须真的往返
+    expect(round.deck.shared.compile.logo.zoom, '标志缩放没被写进文件 / 读回来变了').toBe(1.5);
+    expect(round.deck.cards[0].logoOwn.zoom).toBe(1);
     // 反向锚点：把上游那个牌组改一个字段，往返结果就该不同（证明比较不是恒真）
     const other = fullDeck();
     other.cards[0].value = '8';
@@ -331,6 +367,39 @@ describe('牌组 JSON：导出 / 导入往返', () => {
     expect(round2.ok).toBe(true);
     if (!round2.ok) return;
     expect(round2.deck).not.toEqual(deck);
+  });
+
+  it('★ 老牌组 JSON（logo 里**没有** `zoom` 字段）⇒ 读回来是 100%，不报错也不把老档读坏', () => {
+    // 手写一份"上一版导出"的文件：那时还没有标志缩放这一项
+    const legacy = {
+      format: DECK_FORMAT,
+      version: DECK_VERSION,
+      deck: {
+        title: '老牌组',
+        shared: {
+          perCardBg: false,
+          compile: { bg: { type: 'preset', name: 'Fire', dataUrl: null, transform: { scale: 1, offsetX: 0, offsetY: 0 } }, logo: { dataUrl: null, offsetX: 2, offsetY: -3 } },
+          protocol: { bg: { type: 'none', name: null, dataUrl: null, transform: { scale: 1, offsetX: 0, offsetY: 0 } }, logo: { dataUrl: null, offsetX: 0, offsetY: 0 } },
+        },
+        cards: [{ id: 'c1', kind: 'compile', title: 'A', value: '1', panelTop: '', panelMid: '', panelBot: '', compile: { top: '', subtitle: '', bottom: '', back: '' }, bgOwn: { type: 'none', name: null, dataUrl: null, transform: { scale: 1, offsetX: 0, offsetY: 0 } }, logoOwn: { dataUrl: null, offsetX: 0, offsetY: 0 } }],
+      },
+      imgs: {},
+    };
+    const round = parseDeck(JSON.stringify(legacy));
+    expect(round.ok, '老牌组读不回来了').toBe(true);
+    if (!round.ok) return;
+    expect(round.deck.shared.compile.logo.zoom, '老档缺 zoom 时不是 100%').toBe(1);
+    expect(round.deck.cards[0].logoOwn.zoom).toBe(1);
+    // 老档里其它字段一个都不许被这次改动弄坏（偏移、背景、文本）
+    expect(round.deck.shared.compile.logo.offsetY).toBe(-3);
+    expect(round.deck.shared.compile.bg.name).toBe('Fire');
+    expect(round.deck.cards[0].value).toBe('1');
+    // 再导出一遍：这次文件里**会**带上 zoom: 1（老档被无损升级，不是被改坏）
+    const again = parseDeck(stringifyDeck(round.deck));
+    expect(again.ok).toBe(true);
+    if (!again.ok) return;
+    expect(again.deck.shared.compile.logo.zoom).toBe(1);
+    expect(again.deck.shared.compile.logo.offsetY).toBe(-3);
   });
 
   it('自定图以 base64 **内嵌**进 imgs 池；预设背景**只存名字**', () => {
@@ -436,6 +505,16 @@ describe('配置表的形状（防止把参考项目的几何改坏）', () => {
   it('15 套预设，名字不重复', () => {
     expect(PRESETS.length).toBe(15);
     expect(new Set(PRESETS).size).toBe(15);
+  });
+
+  it('★ 标志缩放的区间（滑杆与绘制层共用这三个数）', () => {
+    expect([LOGO_SCALE_MIN, LOGO_SCALE_MAX, LOGO_SCALE_STEP]).toEqual([0.5, 2, 5]);
+    // 100% 必须落在区间内、且能被步进取到（否则"回到 100%"这件事本身就不成立）
+    expect(LOGO_SCALE_MIN).toBeLessThan(1);
+    expect(LOGO_SCALE_MAX).toBeGreaterThan(1);
+    expect((100 - LOGO_SCALE_MIN * 100) % LOGO_SCALE_STEP, '100% 不是步进的整数倍').toBe(0);
+    // 反向锚点：它**不是**背景那条区间（25%~1600%）—— 两条滑杆的上下限本来就不是一回事
+    expect([LOGO_SCALE_MIN, LOGO_SCALE_MAX]).not.toEqual([SCALE_MIN, SCALE_MAX]);
   });
 
   it('横版协议卡的 max 不小于 min；名字区比小字区大（排版层级看得见）', () => {

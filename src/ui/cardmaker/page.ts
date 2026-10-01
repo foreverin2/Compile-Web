@@ -32,6 +32,9 @@ import {
   CARD_W,
   LAND_H,
   LAND_W,
+  LOGO_SCALE_MAX,
+  LOGO_SCALE_MIN,
+  LOGO_SCALE_STEP,
   PANEL_MAX,
   PANEL_MIN,
   PRESETS,
@@ -44,7 +47,7 @@ import {
   type PanelZone,
   type TextZone,
 } from './config';
-import { clampScale, zoomAt } from './geometry';
+import { clampLogoScale, clampScale, zoomAt } from './geometry';
 import {
   getImageFromDataUrl,
   getPresetImage,
@@ -361,7 +364,8 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
   previewWrap.appendChild(el(
     'div',
     'cardmaker-note',
-    '在卡面上拖动 = 平移背景；滚轮 = 以光标为中心缩放背景；在六边形里拖 = 移动 logo。',
+    '在卡面上拖动 = 平移背景；滚轮 = 以光标为中心缩放背景；在六边形里拖 = 移动 logo。'
+    + '背景与标志各自有一条缩放滑杆（左栏「标志缩放」/ 这里下面那条「背景缩放」），互不影响。',
   ));
   previewCol.appendChild(previewWrap);
 
@@ -579,6 +583,48 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     + '图片本身已经是透明背景时，勾不勾选都一样。上传时生效。',
   ));
   optionsCol.appendChild(logoRow);
+
+  /**
+   * ★ 2026-10-01（用户要求）：**标志自己的缩放条** —— 与背景那条**互相独立**。
+   *
+   * 用户原话：「给标志也加上独立的一条放大缩小缩放条」。所以：
+   *  - 上下限与步进来自 `config.ts` 的 `LOGO_SCALE_MIN/MAX/STEP`（50%~200%、步进 5%），
+   *    与背景的 25%~1600% 是**两条独立的区间**（`clampLogoScale()` vs `clampScale()`）；
+   *  - 写回的地方是 **`logoOf(card)` 指的那个对象**（见 `setLogoZoom()`）——
+   *    logo 的作用域是什么，缩放的作用域就是什么（默认"每种卡型一个、整副共用"；
+   *    打开「每张卡单独的背景」之后变成每卡一份）；
+   *  - 锚点在绘制层（`drawLogoHex()` 里以六边形中心对齐），滑杆只改一个倍数。
+   *
+   * 做法照抄背景那条：标签 + `input[type=range]` + 百分比读数 + 重置按钮，
+   * 类名沿用既有的 `.cardmaker-row` / `.cardmaker-range` / `.cardmaker-mini`（不新增 CSS）。
+   */
+  const logoZoomRow = elRole('div', 'cardmaker-row', 'logo-zoom-row');
+  const logoZoom = document.createElement('input');
+  logoZoom.type = 'range';
+  logoZoom.className = 'cardmaker-range';
+  logoZoom.dataset.role = 'logo-zoom';
+  logoZoom.min = String(Math.round(LOGO_SCALE_MIN * 100));
+  logoZoom.max = String(Math.round(LOGO_SCALE_MAX * 100));
+  // ⚠️ `step` 是**百分比读数上的步进**（5 ⇒ 100 → 105 → 110…），不是 0.05 那个倍数
+  logoZoom.step = String(LOGO_SCALE_STEP);
+  (logoZoom as unknown as { setAttribute(n: string, v: string): void }).setAttribute('aria-label', '标志缩放');
+  const logoZoomValue = elRole('span', 'cardmaker-note', 'logo-zoom-value', '100%');
+  const logoZoomReset = btnRole('btn cardmaker-mini', 'logo-zoom-reset', '重置标志缩放');
+  logoZoomRow.appendChild(el('span', 'cardmaker-note', '标志缩放'));
+  logoZoomRow.appendChild(logoZoom);
+  logoZoomRow.appendChild(logoZoomValue);
+  logoZoomRow.appendChild(logoZoomReset);
+  logoZoomRow.appendChild(el(
+    'span',
+    'cardmaker-hint',
+    `把六边形里的标志按中心放大 / 缩小（${Math.round(LOGO_SCALE_MIN * 100)}%~`
+    + `${Math.round(LOGO_SCALE_MAX * 100)}%，100% = 正好铺满六边形）。`
+    + '放大之后超出六边形的部分会被裁掉，不会溢到卡面别处。'
+    + '这条与右边那条「背景缩放」互不影响；「重置标志缩放」只把倍数拉回 100%，'
+    + '不会动你拖出来的位置偏移。',
+  ));
+  optionsCol.appendChild(logoZoomRow);
+
   optionsCol.appendChild(logoCutRow);
 
   /* ── ⑦ 导出 / 导入（按用途分两组） ──
@@ -987,6 +1033,10 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
       zoomLabel.textContent = '100%';
       zoomInput.disabled = true;
       resetBtn.disabled = true;
+      logoZoom.value = '100';
+      logoZoomValue.textContent = '100%';
+      logoZoom.disabled = true;
+      logoZoomReset.disabled = true;
       return;
     }
     const bg = bgOf(card);
@@ -1016,6 +1066,17 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
      * `whiten` 缺省（老存档）视为 `true`，与 `drawLogoHex` 的判据一致。
      */
     logoCutBox.checked = lg.dataUrl === null ? true : lg.whiten !== false;
+    /**
+     * ★ 2026-10-01（用户要求）：标志缩放条的读数回显 —— 读的是**绘制层实际会用的那个值**
+     * （`clampLogoScale`，与老存档缺字段时回 100% 同一套规则），而不是 JSON 里那个原始数字：
+     * 手改过的牌组 JSON 里写着 `zoom: 9` 时，滑杆与卡面必须说同一件事（都是 200%）。
+     * 没有 logo 时这条滑杆禁用（与背景那条"没背景就把滑杆禁掉"同一个做法）。
+     */
+    const lgPct = Math.round(clampLogoScale(lg.zoom) * 100);
+    logoZoom.value = String(lgPct);
+    logoZoomValue.textContent = `${lgPct}%`;
+    logoZoom.disabled = lg.dataUrl === null;
+    logoZoomReset.disabled = lg.dataUrl === null;
   }
 
   /** 取 2D 上下文（拿不到就返回 null；调用方一律据此跳过绘制） */
@@ -1382,13 +1443,28 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
         say(`这张 logo 处理不了：${String(e)}`, 'logo-normalize-failed', 'error');
         return;
       }
-      // logo **整副牌共用**（与参考项目一致：一张卡上的 logo 就是这套牌的标志）
-      const logo: Logo = { ...logoOf(card), dataUrl: small, whiten: shouldWhitenLogo(cutEnabled, cutRejected) };
+      /**
+       * 写回的地方分两种，**与参考项目的作用域逐条对齐**（那边 `app.js:56-80` 写得很清楚：
+       * 「the logo IMAGE is deck-wide (both kinds) … but its zoom/offset stay PER KIND」）：
+       *
+       *  - 每卡模式（「每张卡单独的背景」打开）：这张卡自己那份，缩放/偏移都归这张卡；
+       *  - 默认模式：**图片**（`dataUrl` + `whiten`，它们描述的是"这张图被怎么处理过"）写到
+       *    **两种卡型**上 —— 与参考项目的 `setLogoImage()` 一字不差；而**各自的缩放/偏移保留**
+       *    （参考项目的原话是 "preserving each kind's own zoom/offset"，横版与竖版卡尺寸/版式
+       *    不同，缩放本来就该各调各的）。所以我们**不**把 `zoom/offset` 一起抄过去。
+       */
+      const whiten = shouldWhitenLogo(cutEnabled, cutRejected);
       if (deck.shared.perCardBg) {
-        card.logoOwn = logo;
+        card.logoOwn = { ...card.logoOwn, dataUrl: small, whiten };
       } else {
-        deck.shared.compile = { ...deck.shared.compile, logo };
-        deck.shared.protocol = { ...deck.shared.protocol, logo };
+        deck.shared.compile = {
+          ...deck.shared.compile,
+          logo: { ...deck.shared.compile.logo, dataUrl: small, whiten },
+        };
+        deck.shared.protocol = {
+          ...deck.shared.protocol,
+          logo: { ...deck.shared.protocol.logo, dataUrl: small, whiten },
+        };
       }
       refreshAssets();
       void refreshPreview();
@@ -1410,6 +1486,45 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     void refreshPreview();
     scheduleSave(0);
     say('logo 已清除。', 'logo-cleared', 'info');
+  });
+
+  /**
+   * ★ 2026-10-01（用户要求）：把标志缩放写回**与 logo 同一个作用域**。
+   *
+   * 这里刻意**只写 `logoOf(card)` 指的那个对象**，不另发明一套存法：
+   *  - `deck.shared.perCardBg === false`（默认）⇒ 那个对象是
+   *    `deck.shared[当前卡型].logo` ⇒ **缩放跟着卡型整副共用**（与参考项目的 logo 作用域一致）；
+   *  - `perCardBg === true` ⇒ 那个对象是 `card.logoOwn` ⇒ **每张卡各记一个**。
+   *
+   * 与画布上的拖动（`pointermove` 里改 `logo.offsetX/offsetY`）是同一个写法：就地改那个对象。
+   * 之所以**不能**照抄上传那一支（它把 logo 同时写进 compile 与 protocol 两种卡型），是因为
+   * 缩放要跟着"logo 现在到底在哪"，而两种卡型的 logo 完全可能已经不一样（例如单独清除过
+   * 一侧）—— 那时候把缩放同时写两边，就会出现"卡面上的 logo 没变、另一侧的却变了"。
+   */
+  function setLogoZoom(zoom: number): void {
+    const card = current();
+    if (card === null) return;
+    logoOf(card).zoom = clampLogoScale(zoom);
+  }
+
+  logoZoom.addEventListener('input', () => {
+    const card = current();
+    if (card === null || !logoOf(card).dataUrl) return;
+    setLogoZoom(Number(logoZoom.value) / 100);
+    const lgPct = Math.round(clampLogoScale(logoOf(card).zoom) * 100);
+    logoZoomValue.textContent = `${lgPct}%`;
+    void refreshPreview();
+    scheduleSave();
+  });
+
+  logoZoomReset.addEventListener('click', () => {
+    const card = current();
+    if (card === null) return;
+    setLogoZoom(1);
+    refreshAssets();
+    void refreshPreview();
+    scheduleSave(0);
+    say('标志缩放已重置为 100%（位置偏移没动）。', 'logo-zoom-reset', 'info');
   });
 
   /* ── 文本编辑（写回当前卡 → 重画预览 → 排一次保存） ── */

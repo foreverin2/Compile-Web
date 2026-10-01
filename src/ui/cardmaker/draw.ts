@@ -7,7 +7,7 @@
  * 用户 2026-10-01 拍板的范围里没有它，留着就是一条没有任何 UI 入口的死代码。
  */
 import { CARD_H, CARD_W, POKER_H, POKER_W } from './config';
-import { bgBaseScale, clampScale, type Sized } from './geometry';
+import { bgBaseScale, clampLogoScale, clampScale, type Sized } from './geometry';
 import type { DrawableImage } from './images';
 import type { HexBox, TextZone } from './config';
 import type { AllCtx } from './text';
@@ -51,15 +51,21 @@ export function hexPath(ctx: DrawCtx, box: HexBox, pointy: 'v' | 'h'): void {
 /**
  * 把 logo 铺满六边形（盖住卡框上原本的图案），裁剪到六边形形状。
  *
- * ## 两种画法（★ 2026-10-01 用户要求）
+ * ## 三种画法（★ 2026-10-01 用户要求）
  *
  *  - `logo.whiten !== false`（**默认**）：**染成白色**（参考项目的做法）。用 `source-in`：
  *    先把 logo 画到一块离屏画布上，再用白色铺满同一块离屏画布 —— `source-in` 只保留
  *    "两幅图都有的地方"，于是得到"logo 的形状 + 纯白"。
  *  - `logo.whiten === false`：**原图直上** —— 不抠背景、不染白、不做任何处理，原图的颜色
  *    与背景原样进卡面。用户原话：「若未勾选去掉 logo 背景，则直接放原图上去，不用管其他的」。
+ *  - `logo.zoom`（★ 2026-10-01 用户要求的**独立缩放条**）：在"铺满"的基础上再乘一个倍数。
+ *    **锚点是六边形的中心**（`(box.w - w)/2` 这一项让缩放前后中心不动），`offsetX/Y` 是
+ *    用户拖出来的像素偏移。两条画法（白化 / 原图直上）都支持缩放 —— 缩放只改 `s`。
  *
- * `logo.zoom` 可以在铺满的基础上再放大（用户滚轮调的），`offsetX/Y` 是像素偏移。
+ * ## 裁剪（放大之后尤其要紧）
+ *
+ * `hexPath()` + `clip()` 把绘制**限制在六边形内**：放大到 200% 时那张图会比六边形宽出一大截，
+ * 但一个像素都不许溢到卡面别处（真浏览器实测：六边形外 0 个 logo 像素）。
  */
 export function drawLogoHex(
   ctx: DrawCtx,
@@ -69,7 +75,8 @@ export function drawLogoHex(
   logo: { zoom?: number; offsetX?: number; offsetY?: number; whiten?: boolean } | null | undefined,
 ): void {
   const lg = logo || {};
-  const z = Math.max(0.3, Math.min(4, lg.zoom || 1));
+  // 夹取用 `clampLogoScale()`（与滑杆同一套上下限）：老存档没有 `zoom` ⇒ 1（= 100%）
+  const z = clampLogoScale(lg.zoom);
   const ox = lg.offsetX || 0;
   const oy = lg.offsetY || 0;
   const s = Math.max(box.w / img.width, box.h / img.height) * z;

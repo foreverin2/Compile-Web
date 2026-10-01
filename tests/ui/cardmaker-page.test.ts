@@ -10,7 +10,7 @@ import {
   type StubNode,
 } from './net-dom-stub';
 import { CREDIT, renderCardmaker, type CardmakerNav, type CardmakerStore } from '../../src/ui/cardmaker/page';
-import { CARD_H, CARD_W, LAND_H, LAND_W, PROTOCOL_BACK, PROTOCOL_FRONT, SCALE_MAX, SCALE_MIN, ZONES } from '../../src/ui/cardmaker/config';
+import { CARD_H, CARD_W, LAND_H, LAND_W, LOGO_SCALE_MAX, LOGO_SCALE_MIN, LOGO_SCALE_STEP, PROTOCOL_BACK, PROTOCOL_FRONT, SCALE_MAX, SCALE_MIN, ZONES } from '../../src/ui/cardmaker/config';
 import { parseDeck, stringifyDeck } from '../../src/ui/cardmaker/serialize';
 import { stripComments } from './source-text';
 import { defaultCard, defaultDeck, type Deck } from '../../src/ui/cardmaker/types';
@@ -628,6 +628,200 @@ describe('背景与平移缩放', () => {
 });
 
 /* ==================================================================== *
+ * 6.5 ★ 2026-10-01（用户要求）：**标志自己的缩放条**
+ *
+ * 用户原话：「给标志也加上独立的一条放大缩小缩放条」—— 与背景那条**互相独立**，
+ * 作用域跟 logo 一致（本项目：默认"每种卡型一份、图片整副共享"，打开每卡模式后每卡一份；
+ * 与参考项目 `app.js` 的 `editLogo()` / `setLogoImage()` 注释逐字对应）。
+ *
+ * ⚠️ 这一组必须用 **`loaded` 夹具**（本机里已经存了带 logo 的牌组）：桩上没有 `Image`，
+ * 上传那条路走不到"缩图"就会如实报错（见上面"上传背景与 logo"那一组），拿不到"屏上有 logo"
+ * 这个前置。用夹具直接开局就把前置摆好，比在桩上假装上传成功干净。
+ * ==================================================================== */
+
+/** 一份"已经存过、并且带 logo"的牌组（可指定 logo 缩放、每卡模式、几张竖版卡） */
+function deckWithLogo(opts: { zoom?: number; perCardBg?: boolean; compileCards?: number; logoOffsetY?: number } = {}): Deck {
+  const zoom = opts.zoom ?? 1;
+  const logo = (z: number) => ({
+    dataUrl: 'data:image/png;base64,LOGO', zoom: z, offsetX: 0, offsetY: opts.logoOffsetY ?? 0, whiten: true,
+  });
+  const d = defaultDeck();
+  d.shared.perCardBg = opts.perCardBg ?? false;
+  d.title = '带标志的牌组';
+  d.shared.compile = { ...d.shared.compile, logo: logo(zoom) };
+  d.shared.protocol = { ...d.shared.protocol, logo: logo(zoom) };
+  const n = opts.compileCards ?? 1;
+  const cards: Deck['cards'] = [];
+  for (let i = 0; i < n; i++) {
+    const c = defaultCard(`c${i + 1}`, 'compile');
+    c.title = `C${i + 1}`;
+    c.logoOwn = logo(zoom);
+    cards.push(c);
+  }
+  d.cards = cards;
+  return d;
+}
+
+/** range 输入框上那几个网页属性（桩上就是普通属性，读出来断言） */
+interface RangeProps { type: string; min: string; max: string; step: string; value: string; disabled?: boolean }
+const rangeProps = (node: StubNode): RangeProps => node as unknown as RangeProps;
+
+describe('★ 2026-10-01：标志缩放条（与背景那条互相独立）', () => {
+  it('滑杆存在且是 range：上下限/步进来自 config（50~200、步进 5），读数带「标志缩放」标签', async () => {
+    const h = harness({ loaded: deckWithLogo() });
+    const root = await renderSettled(h);
+    const slNode = one(root, 'logo-zoom');
+    const sl = rangeProps(slNode);
+    expect(sl.type).toBe('range');
+    expect([sl.min, sl.max, sl.step]).toEqual([
+      String(Math.round(LOGO_SCALE_MIN * 100)),
+      String(Math.round(LOGO_SCALE_MAX * 100)),
+      String(LOGO_SCALE_STEP),
+    ]);
+    // 具体数字也钉一遍（配置本身另有纯函数腿；这里钉的是"屏上真的用了它"）
+    expect([sl.min, sl.max, sl.step]).toEqual(['50', '200', '5']);
+    expect(valueOf(slNode), '开局（100%）时滑杆不在 100').toBe('100');
+    expect(sl.disabled, '有 logo 时滑杆不该禁用').not.toBe(true);
+    const row = one(root, 'logo-zoom-row');
+    expect(textOf(row), '读数旁边没有「标志缩放」这几个字').toContain('标志缩放');
+    expect(textOf(one(root, 'logo-zoom-value'))).toBe('100%');
+    expect(textOf(one(root, 'logo-zoom-reset'))).toContain('重置标志缩放');
+    // 位置：在左栏（logo 那一块），**不是**背景那条所在的右栏
+    expect(descendants(one(root, 'options')).some((n) => n.dataset.role === 'logo-zoom-row'), '标志缩放不在左栏').toBe(true);
+    expect(descendants(one(root, 'preview-col')).some((n) => n.dataset.role === 'logo-zoom-row'), '标志缩放跑到右栏去了').toBe(false);
+    // 与背景那条是**两个不同的节点**（否则"独立"这件事从根上就不成立）
+    expect(one(root, 'logo-zoom')).not.toBe(one(root, 'zoom'));
+
+    // 反向锚点：没有 logo 时这条滑杆禁用（与"没有背景时背景滑杆禁用"同一个做法）
+    const h2 = harness({ loaded: { ...defaultDeck(), cards: [defaultCard('c1', 'compile')] } });
+    const root2 = await renderSettled(h2);
+    expect(rangeProps(one(root2, 'logo-zoom')).disabled, '没有 logo 时标志缩放滑杆居然可用').toBe(true);
+    expect(rangeProps(one(root2, 'logo-zoom-reset')).disabled).toBe(true);
+  });
+
+  it('读数跟着滑杆变、并且真的写进本机那份牌组（150% ⇒ zoom 1.5）', async () => {
+    const h = harness({ loaded: deckWithLogo() });
+    const root = await renderSettled(h);
+    const sl = one(root, 'logo-zoom');
+    setValue(sl, '150');
+    fire(sl, 'input');
+    // 读数当场更新（不等防抖）
+    expect(textOf(one(root, 'logo-zoom-value'))).toBe('150%');
+    // ⚠️ 滑杆走的是**防抖保存**（`scheduleSave()` 缺省 700ms，与背景那条滑杆同一个做法）
+    //    ⇒ 要读"写进本机的那份"必须先把防抖跑完，否则读到的是空数组（第一版就是这么红的）
+    await settle();
+    const last = h.saved[h.saved.length - 1];
+    expect(last.shared.compile.logo.zoom, '滑杆的值没写进牌组').toBe(1.5);
+    // 反向锚点：不是把 150 直接当倍数存了（那就是 15000%）
+    expect(last.shared.compile.logo.zoom).not.toBe(150);
+    // 缩小那一侧同理
+    setValue(sl, '50');
+    fire(sl, 'input');
+    expect(textOf(one(root, 'logo-zoom-value'))).toBe('50%');
+    await settle();
+    expect(h.saved[h.saved.length - 1].shared.compile.logo.zoom).toBe(0.5);
+  });
+
+  it('「重置标志缩放」回到 100%，**不动**位置偏移；结论码可辨识', async () => {
+    const h = harness({ loaded: deckWithLogo({ logoOffsetY: -7 }) });
+    const root = await renderSettled(h);
+    const sl = one(root, 'logo-zoom');
+    setValue(sl, '200');
+    fire(sl, 'input');
+    expect(textOf(one(root, 'logo-zoom-value'))).toBe('200%');
+    clickRole(root, 'logo-zoom-reset');
+    expect(statusCode(root), '重置的结论码不是 logo-zoom-reset').toBe('logo-zoom-reset');
+    expect(valueOf(sl), '重置之后滑杆没回 100').toBe('100');
+    expect(textOf(one(root, 'logo-zoom-value'))).toBe('100%');
+    await settle();
+    const last = h.saved[h.saved.length - 1];
+    expect(last.shared.compile.logo.zoom, '重置没有写回 1').toBe(1);
+    // 重置只管缩放：偏移是用户拖出来的，不该被这条按钮顺手抹掉
+    expect(last.shared.compile.logo.offsetY, '重置把位置偏移也抹了').toBe(-7);
+  });
+
+  it('★ 与背景那条**互不影响**（双向断言：改任一条，另一条的读数与数据都不动）', async () => {
+    const h = harness({ loaded: deckWithLogo() });
+    const root = await renderSettled(h);
+    clickRole(root, 'preset-Fire'); // 给整副牌一套背景 ⇒ 背景滑杆可用
+    await flush();
+    const bgSl = one(root, 'zoom');
+    const logoSl = one(root, 'logo-zoom');
+    expect(valueOf(bgSl)).toBe('100');
+    expect(valueOf(logoSl)).toBe('100');
+
+    // ① 只动标志 ⇒ 背景那条的读数当场不动
+    setValue(logoSl, '175');
+    fire(logoSl, 'input');
+    expect(valueOf(bgSl), '改标志缩放把背景滑杆的读数带跑了').toBe('100');
+    expect(textOf(one(root, 'zoom-value')), '改标志缩放把背景的读数带跑了').toBe('100%');
+    // ② 只动背景 ⇒ 标志那条的读数当场不动
+    setValue(bgSl, '140');
+    fire(bgSl, 'input');
+    expect(valueOf(logoSl), '改背景缩放把标志滑杆的读数带跑了').toBe('175');
+    expect(textOf(one(root, 'logo-zoom-value')), '改背景缩放把标志的读数带跑了').toBe('175%');
+    // ③ 数据面（同一次保存里两个倍数各是各的）
+    await settle();
+    const last = h.saved[h.saved.length - 1];
+    expect(last.shared.compile.logo.zoom, '标志倍数被背景那条带跑了').toBe(1.75);
+    expect(last.shared.compile.bg.transform.scale, '背景倍数被标志那条带跑了').toBe(1.4);
+    // 反向锚点：两个倍数此刻**确实不同**（否则上面几条"各自没变"可能来自两边一起动）
+    expect(last.shared.compile.logo.zoom).not.toBe(last.shared.compile.bg.transform.scale);
+  });
+
+  it('★ 作用域跟 logo 一致：默认**每种卡型一份**（改竖版那侧不影响协议卡那侧）', async () => {
+    const h = harness({ loaded: deckWithLogo({ zoom: 1 }) });
+    const root = await renderSettled(h);
+    setValue(one(root, 'logo-zoom'), '160');
+    fire(one(root, 'logo-zoom'), 'input');
+    await settle();
+    const last = h.saved[h.saved.length - 1];
+    expect(last.shared.compile.logo.zoom, '竖版那侧没被改').toBe(1.6);
+    expect(last.shared.protocol.logo.zoom, '协议卡那侧的缩放被顺手改了（作用域串了）').toBe(1);
+    // 切到协议卡模式 ⇒ 滑杆读数回到那一侧自己的值（100%），证明它读的是**当前卡型**那一份
+    clickRole(root, 'mode-protocol');
+    await flush();
+    expect(textOf(one(root, 'logo-zoom-value')), '切到协议卡之后读数没跟着那一侧走').toBe('100%');
+    // 在协议卡那侧改 ⇒ 只动协议卡那一份
+    setValue(one(root, 'logo-zoom'), '80');
+    fire(one(root, 'logo-zoom'), 'input');
+    await settle();
+    const last2 = h.saved[h.saved.length - 1];
+    expect(last2.shared.protocol.logo.zoom).toBe(0.8);
+    expect(last2.shared.compile.logo.zoom, '协议卡那侧改动串到了竖版那侧').toBe(1.6);
+  });
+
+  it('★ 打开「每张卡单独的背景」⇒ 缩放跟着变成**每卡一份**（同模式的另一张卡不被改）', async () => {
+    const h = harness({ loaded: deckWithLogo({ perCardBg: true, compileCards: 2 }) });
+    const root = await renderSettled(h);
+    expect(byRole(root, 'card-row').length, '前置：当前模式应当有两张卡').toBe(2);
+    setValue(one(root, 'logo-zoom'), '130');
+    fire(one(root, 'logo-zoom'), 'input');
+    await settle();
+    const last = h.saved[h.saved.length - 1];
+    expect(last.shared.perCardBg).toBe(true);
+    expect(last.cards[0].logoOwn.zoom, '当前这张卡的缩放没被改').toBe(1.3);
+    expect(last.cards[1].logoOwn.zoom, '另一张卡的缩放被顺手改了（作用域串了）').toBe(1);
+    // 切到另一张卡：读数回到它自己那份
+    clickRole(root, 'card-open-c2');
+    await flush();
+    expect(textOf(one(root, 'logo-zoom-value')), '切卡之后读数没跟着那张卡走').toBe('100%');
+    // 反向锚点：共享那一份**没有**被写（每卡模式下它不参与渲染）
+    expect(last.shared.compile.logo.zoom).toBe(1);
+  });
+
+  it('滑杆把越界的值夹回区间（手改过的牌组 JSON 写 zoom: 9 ⇒ 屏上按 200% 显示）', async () => {
+    const h = harness({ loaded: deckWithLogo({ zoom: 9 }) });
+    const root = await renderSettled(h);
+    expect(valueOf(one(root, 'logo-zoom')), '滑杆显示了越界值').toBe('200');
+    expect(textOf(one(root, 'logo-zoom-value'))).toBe('200%');
+    // 反向锚点：夹取是**显示层**的动作，原始值仍在牌组里（没有偷偷改用户的文件）
+    expect(h.loaded?.shared.compile.logo.zoom).toBe(9);
+    expect(h.saved.length, '开局不该写盘').toBe(0);
+  });
+});
+
+/* ==================================================================== *
  * 5. 上传背景 / logo
  * ==================================================================== */
 
@@ -958,7 +1152,7 @@ describe('★ 2026-10-01：左选项 / 右预览两栏', () => {
     const inOptions = (role: string): boolean => descendants(options).some((n) => n.dataset.role === role);
     const inPreview = (role: string): boolean => descendants(previewCol).some((n) => n.dataset.role === role);
 
-    for (const role of ['deck-row', 'cards', 'form', 'bg', 'logo', 'io']) {
+    for (const role of ['deck-row', 'cards', 'form', 'bg', 'logo', 'logo-zoom-row', 'io']) {
       expect(inOptions(role), `[data-role="${role}"] 不在左栏（选项）里`).toBe(true);
       expect(inPreview(role), `[data-role="${role}"] 出现在右栏（预览）里`).toBe(false);
     }
