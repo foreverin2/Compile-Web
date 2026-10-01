@@ -17,10 +17,17 @@
 | 数据目录 | `/var/lib/compile-feedback/`（`feedback:feedback 0700`） |
 | 日志 | `/var/log/feedback.log`（`feedback:adm 0640`，5MB 自轮转） |
 | 配置 | `/etc/feedback.env`（`root:root 0600`，密码只在这里） |
-| 源码 | `/opt/feedback/`（`server.mjs` + `lib/` + `deploy/`） |
+| 源码 | `/opt/feedback/`（`server.mjs` + `lib/` + `deploy/` + `tools/`） |
 | nginx | 站点 `/etc/nginx/sites-available/compile` 里新增 `location = /feedback/healthz` 与 `location ^~ /feedback/`；备份 `compile.bak-20261001-1223` |
 | 站点部署标记 | `X-Compile-Deploy: b2-feedback-20261001`（`curl -sSI http://8.130.97.243/ \| grep -i x-compile`） |
 | 没碰的东西 | `turn-cred.service`（仍在 `127.0.0.1:8788`）、端口 3080 / 5173、`/var/www/compile` 的静态文件、站点里原有的每个 location |
+
+**2026-10-01 当天晚些时候又改了一次口径并重新部署**（用户追加要求）：限额从"每天最多 5 个文件"
+改成"**每天最多 5 次成功的投稿**"（按份数计）。改动落在 `lib/rate-limit.mjs`（`FileQuota` -> `SubmitQuota`，
+记账文件 `files-<日期>.json` -> `submits-<日期>.json`）、`lib/handler.mjs`、`lib/config.mjs`、
+`lib/validate.mjs`、`server.mjs`、`tests/feedback/server.test.ts`、`tools/e2e-feedback.sh` 与本文件。
+`/opt/feedback` 与仓库 11 个源文件 sha256 逐个相同；服务重启后 `healthz` 回
+`{"ok":true,...,"submitsPerIpPerDay":5,...,"legacyRateFiles":0}`。实测读数见 §9。
 
 上线当天的实测读数见 §9（命令与输出都在那儿）。
 
@@ -45,10 +52,17 @@
 | 一次最多 5 个附件 | 400 |
 | 每个文件 <= 10MB | 413 |
 | 扩展名白名单 `png jpg jpeg gif webp pdf txt md log json csv`（大小写不敏感） | 415 |
-| 每个 IP **每天最多 5 份文件**（按文件个数计） | 429（带 `Retry-After`） |
+| 每个 IP **每天最多 5 次成功的投稿**（按**份数**计：一次提交带 0 / 1 / 5 个附件都只占 1 份） | 429（带 `Retry-After`） |
 
 成功：`200 {"ok":true,"id":"<id>"}`。落盘：`items/<id>/meta.json` + 附件原件。
 `id` 形状 = `<毫秒时间戳 base36>-<8 字节随机 hex>`（例：`mup16fh8-7263ccc0d77f1701`）。
+
+> ★ **限额口径在 2026-10-01 当天改过一次**（用户拍板）：原来是"每 IP 每天最多 5 个文件"
+> （按附件个数计），现在是"**每 IP 每天最多 5 次成功的投稿**"（按份数计）。
+> 一次提交不管带 0 个还是 5 个附件，都只占 **1** 个额度；第 6 次 429。
+> 每次提交内部"附件最多 5 个"是**另一条独立判据**（超了仍然 400），不受这次改动影响。
+> 旧口径的记账文件怎么处理见 §5 与 §6。
+> 被拒的那次不占额度（记账只在**真正落盘成功之后**做）。
 
 ### `POST /feedback/login`
 
@@ -117,18 +131,20 @@ bash /tmp/feedback-src/server/feedback/deploy/install.sh \
 curl -sS http://127.0.0.1:8790/feedback/healthz; echo
 ```
 
-期望输出（2026-10-01 实测）：
+期望输出（2026-10-01 实测；字段名跟着新口径改成了 `submitsPerIpPerDay`）：
 
 ```
 {"ok":true,"service":"feedback","items":0,"trash":0,"sessions":0,
- "filesPerIpPerDay":5,"maxFileBytes":10485760,"maxFilesPerItem":5}
+ "submitsPerIpPerDay":5,"maxFileBytes":10485760,"maxFilesPerItem":5,"legacyRateFiles":0}
 ```
+
+`legacyRateFiles` 是"旧口径（`files-*.json`）还剩几个没清"的个数，只报数不读内容（见 §6）。
 
 自检那一步（`install.sh` 的 §7）会打印配置摘要，形如：
 
 ```
 [feedback] 配置 OK：127.0.0.1:8790 数据 /var/lib/compile-feedback 密码来源=env:FEEDBACK_PASSWORD
-单文件上限=10485760 单次附件上限=5 每IP每天文件=5 会话=43200s 登录失败闸=5/600s
+单文件上限=10485760 单次附件上限=5 每IP每天份数=5 会话=43200s 登录失败闸=5/600s
 信代理=true 请求体上限=53477376 日志=/var/log/feedback.log
 ```
 
@@ -161,7 +177,7 @@ nginx -t && systemctl reload nginx
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         # ★ 服务端按最后一跳取客户端 IP（FEEDBACK_TRUST_PROXY=1 时才信）
-        #   这一条是"每 IP 每天 5 份文件"与"登录失败限流"的键
+        #   这一条是"每 IP 每天 5 次投稿"与"登录失败限流"的键
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Real-IP $remote_addr;
         # 附件最大 10MB，nginx 默认只放 1MB —— 放到 16m，**让服务端自己判 413**
@@ -223,7 +239,8 @@ journalctl -u feedback -n 30 --no-pager
 # 概览
 ls /var/lib/compile-feedback/items | wc -l          # 投稿份数
 ls /var/lib/compile-feedback/trash | wc -l          # 已软删除的份数
-cat /var/lib/compile-feedback/rate/files-$(date +%Y-%m-%d).json   # 今天的每 IP 附件额度记账
+cat /var/lib/compile-feedback/rate/submits-$(date +%Y-%m-%d).json   # 今天每个 IP 已经交了几份
+#   ↑ 形如 {"203.0.113.7":3,"198.51.100.9":5} —— 数字是**份数**（一次提交算 1，不管带几个附件）
 
 # 一份投稿
 cat /var/lib/compile-feedback/items/<id>/meta.json
@@ -243,6 +260,26 @@ tar -czf /tmp/item-<id>.tgz -C /var/lib/compile-feedback/items <id>
 `files[]` 每项是 `{ name, size, storedAs }` —— `name` 是净化后的文件名，`storedAs` 是磁盘上的基名
 （重名会自动加 `-1` / `-2`）。**接口回的 `name` 就是 `storedAs`。**
 
+### 5.1 两代额度记账文件（改口径留下的）
+
+| 文件 | 什么时候写的 | 数字的含义 | 现在读不读 |
+|---|---|---|---|
+| `rate/submits-<日期>.json` | 2026-10-01 改口径之后 | **提交份数**（一次提交 = 1） | 读，这就是当前额度 |
+| `rate/files-<日期>.json` | 2026-10-01 改口径之前 | **附件个数**（一次带 5 个附件 = 5） | **不读**，也不自动删 |
+
+为什么旧文件不能接着用：两个数字**不是一回事**（一次带 5 个附件的提交，旧文件记 5、新口径只算 1），
+换算不回去 ⇒ 宁可从零开始记，也不要把旧数据误读成"份数"把正常用户挡在门外。
+**代价**：升级当天，改口径之前已经投过稿的 IP 会重新拿到 5 份额度（多放几份，可以接受）。
+
+于是 `rate/` 下会同时躺着两代文件。要看/要清：
+
+```bash
+ls -l /var/lib/compile-feedback/rate/                 # 两代都在
+cat /var/lib/compile-feedback/rate/submits-*.json      # 当前额度（份）
+cat /var/lib/compile-feedback/rate/files-*.json        # 旧口径的历史，仅供对账
+curl -sS http://127.0.0.1:8790/feedback/healthz | python3 -m json.tool | grep legacyRateFiles
+```
+
 备份（整个数据目录，含 trash）：
 
 ```bash
@@ -256,7 +293,7 @@ tar -czf /root/compile-feedback-$(date +%Y%m%d).tgz -C /var/lib compile-feedback
 ```bash
 tail -f /var/log/feedback.log
 # 一行一条 JSON：ts / level / ip / method / path / status / result + 该事件的少量字段
-# result 取值：listening | healthz | submitted | rejected:xxx | rate-limited:files-per-day |
+# result 取值：listening | healthz | submitted | rejected:xxx | rate-limited:submits-per-day |
 #              login-ok | login-failed | rate-limited:login-failures | unauthenticated |
 #              list | item | item-not-found | file | attachment-not-found | read-set |
 #              deleted | trash-move-failed | meta-write-failed | method-not-allowed | not-found
@@ -272,6 +309,43 @@ grep '"result":"file"' /var/log/feedback.log | tail            # 谁在下载附
 `feedback.log` 超过 `FEEDBACK_LOG_MAX_BYTES`（缺省 5MB）自己轮转成 `feedback.log.1`；
 再要更长的历史用 `journalctl -u feedback`（stdout/stderr 也进 journal）。
 
+### 6.1 额度怎么清零 / 怎么查某个 IP 交了没
+
+额度按天记在 `rate/submits-<日期>.json` 里（`{"IP": 份数}`），跨天自动重算。
+**要立刻给某个 IP（或所有人）恢复额度**，把这个文件删掉再重启服务即可 ——
+进程启动时会重新读这个文件，读不到就是空表：
+
+```bash
+# ① 只清今天这一个 IP 的额度
+python3 - <<'PY'
+import json, os, datetime
+f = '/var/lib/compile-feedback/rate/submits-%s.json' % datetime.date.today()
+t = json.load(open(f, encoding='utf-8')) if os.path.exists(f) else {}
+t.pop('203.0.113.7', None)          # 换成要放行的 IP
+json.dump(t, open(f, 'w', encoding='utf-8'))
+PY
+systemctl restart feedback          # 让内存里那份缓存丢掉
+
+# ② 今天所有人的额度全清（明天自然也会清，这只用于"现在就要放行"）
+rm -f /var/lib/compile-feedback/rate/submits-$(date +%Y-%m-%d).json
+systemctl restart feedback
+
+# ③ 清掉旧口径（files-*）的历史文件 —— 只影响看起来干不干净，不影响额度
+rm -f /var/lib/compile-feedback/rate/files-*.json
+```
+
+查"这个 IP 今天还能交几份"：
+
+```bash
+IP=203.0.113.7
+python3 -c "import json,datetime;f='/var/lib/compile-feedback/rate/submits-%s.json'%datetime.date.today();\
+import os;t=json.load(open(f,encoding='utf-8')) if os.path.exists(f) else {};\
+print('已交', t.get('$IP',0), '份，还剩', 5-t.get('$IP',0), '份')"
+```
+
+**注意**：额度记在磁盘上，所以**重启不清零**（这是有意的：不然重启一下就又能刷）。
+只有登录失败闸在内存里，重启会清。
+
 常见故障：
 
 | 现象 | 先看这里 |
@@ -281,6 +355,8 @@ grep '"result":"file"' /var/log/feedback.log | tail            # 谁在下载附
 | 所有人都被算成同一个 IP（额度一开局就用光） | `/etc/feedback.env` 里的 `FEEDBACK_TRUST_PROXY=1` 在不在；nginx 有没有转发 `X-Forwarded-For` |
 | 10MB 附件返回的是 HTML 413 页面 | nginx 的 `client_max_body_size` 没放到 16m |
 | 登录一下就被 429 | 同一 IP 10 分钟内失败过 5 次。重启服务可立刻清空这个计数（在内存里） |
+| 投稿被 429，但看着"没交几份" | 看 `rate/submits-<今天>.json` 里这个 IP 的数字（单位是**份**，一次提交算 1）；日志里 `rate-limited:submits-per-day` 那条带 `used` |
+| 升级后 `rate/` 里同时有 `submits-` 与 `files-` | 正常，见 §5.1；旧文件不参与计数，可留可删 |
 | 投稿成功但 `list` 里没有 | 看 `journalctl -u feedback` 有没有 `write-failed`；再看 `/var/lib/compile-feedback/tmp` 有没有残留 |
 | 改完 nginx 起不来 | `nginx -t`；回滚：`cp -a /etc/nginx/sites-available/compile.bak-<ts> /etc/nginx/sites-available/compile` |
 
@@ -368,7 +444,11 @@ journalctl -u feedback -n 5 --no-pager
 | 带 Cookie `file` | `-b jar.txt .../file?id=<id>&name=note.log` | `200`，`content-type: text/plain; charset=utf-8`、`content-disposition: inline; filename="note.log"`、`cache-control: no-store`、字节数 29 = 原文件 29 |
 | 不带 Cookie | `list` / `item` / `file` 三个 | 都是 `401 {"ok":false,"error":"未登录"}` |
 | **路径穿越** | `name=../../etc/passwd`、`..%2F..%2Fetc%2Fpasswd`、`/etc/passwd`、`meta.json`、`x/../../meta.json`、`....//....//etc/passwd` | 六个全是 `404 {"ok":false,"error":"这个附件不在该投稿里。"}`；`file?id=../../etc/passwd` 也是 404；`delete` 的 `id=../../etc/passwd` 是 `400 id 里不能有路径分隔符或 ..`。**事前/事后 `/etc/passwd` 的 sha256 都是 `48c944fa…e42e`，所有报文里都没有 `root:x:`** ⇒ 没有任何仓库外文件被读到 |
-| 第 6 个文件 429 | 连投 6 次、每次 1 个附件 | 前 5 次 `200`，第 6 次 `429 {"ok":false,"error":"今天从你这个网络地址投稿的附件已经到上限了（每天最多 5 个文件，已用 5 个）…"}`；额度文件 `rate/files-2026-10-01.json` 记到 `5` |
+| 第 6 份 429（新口径） | 连投 6 次、每次 1 个附件 | 前 5 次 `200`，第 6 次 `429 {"ok":false,"error":"今天从你这个网络地址已经提交过 5 份反馈了（每天最多 5 份），请明天再来。"}`；额度文件 `rate/submits-2026-10-01.json` 记到 `5`；再打一次还是 429、计数仍是 `5`（没被顶过） |
+| ① 一次 5 个附件只占 1 份 | `-F files=@shot.png` × 5 | `200`；额度 `2 份 -> 3 份`（**只 +1**，不是 +5）；5 个附件都落盘 |
+| ② 连投 5 份后第 6 份 429 | 连投到 5 份再打一次 | 第 4、5 份 `200`；第 6 份 `429 {"ok":false,"error":"今天从你这个网络地址已经提交过 5 份反馈了（每天最多 5 份），请明天再来。"}` |
+| ③ 超 5 个附件仍然 400 且不占额度 | `-F files=@shot.png` × 6 | `400 {"ok":false,"error":"一次最多带 5 个附件，这次带了 6 个。"}`；额度 `5 -> 5 份`（**没变**） |
+| 旧口径文件不被误读 | 往 `rate/` 放一个写着该 IP = 999 的 `files-<今天>.json`，重启服务 | 额度 `5 份 -> 5 份`（**没变**，说明旧文件没被读成"份数"）；`healthz` 的 `legacyRateFiles` 报 `1`（被看见、没被读）；`rate/` 下两代文件并存 |
 | 标已读 | `POST /read {"id":..,"read":true}` | `200 {"ok":true,"id":..,"read":true}`；`list` 里 `unread` 由 2 变 1、该条 `read=true` / `readAt="2026-10-01T04:24:42.700Z"`；`meta.json` 磁盘上同样是 `read=true readAt=…` |
 | 标回未读 | `{"id":..,"read":false}` | `200`；`unread` 回到 2，该条 `read=false` / `readAt=null` |
 | 标已读：id 不存在 | `{"id":"zzzz-9","read":true}` | `404 {"ok":false,"error":"找不到这条反馈"}` |
@@ -379,7 +459,7 @@ journalctl -u feedback -n 5 --no-pager
 | 重复删除 | 再删一次同一个 id | `404 {"ok":false,"error":"找不到这条反馈"}` |
 | 删除：无 Cookie | 不带 `-b` | `401 {"ok":false,"error":"未登录"}` |
 | 日志不含敏感内容 | `grep` 正文 / 密码 / `fb_session=` | 命中数分别是 0 / 0 / 0 |
-| meta 与磁盘一致性 | 逐份核对 `meta.files[].storedAs` 是否真在磁盘上、大小是否相符 | 4 份投稿、4 个附件、**对不上的 0 处** |
+| meta 与磁盘一致性 | 逐份核对 `meta.files[].storedAs` 是否真在磁盘上、大小是否相符 | 4 份投稿、8 个附件、**对不上的 0 处**（改口径那一轮实测） |
 
 `/etc/passwd` 没有被读到的自证方式（可重复）：
 
@@ -399,7 +479,9 @@ sha256sum /etc/passwd                       # 事后，应与事前逐字相同
 - 文件名净化：两种路径分隔符、`..`、控制字符、隐藏文件前缀、超长截断、重名加序号、扩展名大小写；
 - multipart 解析：多段、空 `filename` 段、二进制里的 CRLF 与"像 boundary 的字节"；
 - 字段口径：`kind` 取值、`title` 1..80、`author` 1..40、`body` 1..5000、缺字段；
-- 额度与闸门：按 IP 每天 5 个文件（**重启后从磁盘恢复**）、跨天重算、登录失败 5 次 / 10 分钟；
+- 额度与闸门：按 IP 每天 5 **份提交**（2026-10-01 改口径，**重启后从磁盘恢复**）、跨天重算、
+  一次带 5 个附件只占 1 份、混合 5 份后第 6 次 429、超 5 个附件仍然 400 且不占额度、
+  旧口径 `files-*.json` 不被读成"份数"、登录失败 5 次 / 10 分钟；
 - 会话：token 形状、过期、数量上限、`Set-Cookie` 逐字（且**不带 `Secure`** —— 线上是 http，
   带了浏览器不存 cookie，后台直接登不进去）、cookie 头解析；
 - **路径穿越**：`resolveAttachment` 只在清单命中时才拼路径，穿越串一律 `null`；

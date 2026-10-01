@@ -18,7 +18,7 @@
  * 所以说明符用**运行时拼出来的非字面量**，让 TS 不解析它 —— 运行时行为完全一样。
  */
 
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -259,35 +259,174 @@ describe('投稿字段校验（契约口径）', () => {
   });
 });
 
-describe('按 IP 每天的文件额度', () => {
+describe('按 IP 每天的提交份数额度（2026-10-01 改口径）', () => {
   it('额度用满就拒，过了零点再算', () => {
     const dir = tempDir();
-    const q = new rateLimit.FileQuota({ dir, perDay: 5 });
+    const q = new rateLimit.SubmitQuota({ dir, perDay: 5 });
     const t0 = new Date(2026, 9, 1, 10, 0, 0).getTime();
-    expect(q.check('1.2.3.4', 5, t0).allowed).toBe(true);
-    q.record('1.2.3.4', 5, t0);
-    const denied = q.check('1.2.3.4', 1, t0);
+    expect(q.check('1.2.3.4', t0).allowed).toBe(true);
+    for (let i = 0; i < 5; i += 1) q.record('1.2.3.4', t0);   // 连交 5 份
+    const denied = q.check('1.2.3.4', t0);                    // 第 6 次
     expect(denied.allowed).toBe(false);
     expect(denied.used).toBe(5);
-    expect(denied.message).toContain('每天最多 5 个文件');
+    // 文案必须说"份"，不许再说"个文件"
+    expect(denied.message).toContain('每天最多 5 份');
+    expect(denied.message).toContain('提交过 5 份反馈');
+    expect(denied.message).not.toContain('个文件');
     // 换个 IP 不受影响
-    expect(q.check('5.6.7.8', 5, t0).allowed).toBe(true);
+    expect(q.check('5.6.7.8', t0).allowed).toBe(true);
     // 第二天重新有额度
     const t1 = new Date(2026, 9, 2, 0, 30, 0).getTime();
-    expect(q.check('1.2.3.4', 5, t1).allowed).toBe(true);
+    expect(q.check('1.2.3.4', t1).allowed).toBe(true);
     expect(rateLimit.dayKey(t1)).toBe('2026-10-02');
+  });
+
+  it('额度按**份**记：record 一次只加 1（不管那次带几个附件）', () => {
+    const dir = tempDir();
+    const q = new rateLimit.SubmitQuota({ dir, perDay: 5 });
+    const t0 = new Date(2026, 9, 1, 10, 0, 0).getTime();
+    expect(q.record('7.7.7.7', t0)).toBe(1);
+    expect(q.record('7.7.7.7', t0)).toBe(2);
+    expect(q.check('7.7.7.7', t0).used).toBe(2);
   });
 
   it('重启后从磁盘恢复今天的计数（额度不是内存里的）', () => {
     const dir = tempDir();
     const t0 = new Date(2026, 9, 1, 10, 0, 0).getTime();
-    const a = new rateLimit.FileQuota({ dir, perDay: 5 });
-    a.record('9.9.9.9', 3, t0);
-    const b = new rateLimit.FileQuota({ dir, perDay: 5 });
-    const v = b.check('9.9.9.9', 2, t0);
+    const a = new rateLimit.SubmitQuota({ dir, perDay: 5 });
+    a.record('9.9.9.9', t0);
+    a.record('9.9.9.9', t0);
+    a.record('9.9.9.9', t0);
+    const b = new rateLimit.SubmitQuota({ dir, perDay: 5 });
+    const v = b.check('9.9.9.9', t0);
     expect(v.allowed).toBe(true);
     expect(v.used).toBe(3);
-    expect(b.check('9.9.9.9', 3, t0).allowed).toBe(false);
+    b.record('9.9.9.9', t0);
+    b.record('9.9.9.9', t0);
+    // 第 6 次
+    expect(b.check('9.9.9.9', t0).allowed).toBe(false);
+  });
+
+  it('记账文件名换成 submits-（与旧口径的 files- 分开），旧文件不读也不删', () => {
+    const dir = tempDir();
+    const t0 = new Date(2026, 9, 1, 10, 0, 0).getTime();
+    const day = rateLimit.dayKey(t0);
+    const q = new rateLimit.SubmitQuota({ dir, perDay: 5 });
+    q.record('1.1.1.1', t0);
+    // 新口径的文件名
+    expect(readdirSync(dir)).toContain(`submits-${day}.json`);
+    expect(rateLimit.QUOTA_FILE_PREFIX).toBe('submits-');
+    expect(rateLimit.LEGACY_QUOTA_FILE_PREFIX).toBe('files-');
+
+    // 再手工放一个旧口径的文件：里面是"文件个数 5"。
+    // 要是被当成"已提交 5 份"，这个 IP 就再也交不了了 —— 那是我们必须避免的误读。
+    writeFileSync(join(dir, `files-${day}.json`), JSON.stringify({ '1.1.1.1': 5 }));
+    const q2 = new rateLimit.SubmitQuota({ dir, perDay: 5 });
+    // 只认 submits- 里的那 1 份；旧文件的 5 不参与计数
+    expect(q2.check('1.1.1.1', t0).used).toBe(1);
+    expect(q2.check('1.1.1.1', t0).allowed).toBe(true);
+    // 旧文件被"看见"了（列得出来，供运维决定要不要清），而且没被删掉
+    expect(q2.legacyFiles()).toEqual([`files-${day}.json`]);
+    expect(existsSync(join(dir, `files-${day}.json`))).toBe(true);
+  });
+});
+
+describe('提交接口的额度行为（改口径后的三条硬判据）', () => {
+  /** 拼一个带 n 个附件的 multipart 请求体 */
+  function submitBody(n: number, name = 'a.txt') {
+    const B = '----q';
+    const chunks = [];
+    const field = (k: string, v: string) => {
+      chunks.push(Buffer.from(`--${B}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`));
+    };
+    field('kind', 'bug');
+    field('title', '额度用例');
+    field('author', '小明');
+    field('body', '额度用例正文');
+    for (let i = 0; i < n; i += 1) {
+      chunks.push(Buffer.from(
+        `--${B}\r\nContent-Disposition: form-data; name="files"; filename="${name}"\r\n\r\nx\r\n`,
+      ));
+    }
+    chunks.push(Buffer.from(`--${B}--\r\n`));
+    return { body: Buffer.concat(chunks), headers: { 'content-type': `multipart/form-data; boundary=${B}` } };
+  }
+
+  it('① 带 5 个附件的一次提交只占 1 个额度', () => {
+    const root = tempDir();
+    const g = rig(root);
+    const { body, headers } = submitBody(5);
+    const r = g.call({ method: 'POST', pathname: '/feedback/submit', headers, body });
+    expect(r.status).toBe(200);
+    expect(r.body.ok).toBe(true);
+    // 5 个附件都落盘了，但额度只记 1 份
+    expect(g.store.readMeta(r.body.id).files.length).toBe(5);
+    expect(g.call({ headers: withCookie(g.token) }).body.total).toBe(1);
+    const saved = JSON.parse(String(readFileSync(join(g.store.rateDir, `${rateLimit.QUOTA_FILE_PREFIX}${rateLimit.dayKey(1759291200000)}.json`))));
+    expect(saved['203.0.113.9']).toBe(1);
+  });
+
+  it('② 连投 5 次成功、第 6 次 429（每次 1 个附件也一样）', () => {
+    const root = tempDir();
+    const g = rig(root);
+    for (let i = 1; i <= 5; i += 1) {
+      const { body, headers } = submitBody(1);
+      const r = g.call({ method: 'POST', pathname: '/feedback/submit', headers, body });
+      expect(r.status).toBe(200);
+    }
+    const { body, headers } = submitBody(1);
+    const sixth = g.call({ method: 'POST', pathname: '/feedback/submit', headers, body });
+    expect(sixth.status).toBe(429);
+    expect(sixth.body.ok).toBe(false);
+    expect(sixth.body.error).toContain('每天最多 5 份');
+    expect(sixth.body.error).not.toContain('个文件');
+    // 被拒的那次没有落盘、也没有把额度顶过 5
+    expect(g.call({ headers: withCookie(g.token) }).body.total).toBe(5);
+    const saved = JSON.parse(String(readFileSync(join(g.store.rateDir, `${rateLimit.QUOTA_FILE_PREFIX}${rateLimit.dayKey(1759291200000)}.json`))));
+    expect(saved['203.0.113.9']).toBe(5);
+  });
+
+  it('②b 混合：一次带 5 个附件 + 四次各 1 个 ⇒ 正好 5 份，第 6 次 429', () => {
+    const root = tempDir();
+    const g = rig(root);
+    const first = submitBody(5);
+    expect(g.call({ method: 'POST', pathname: '/feedback/submit', headers: first.headers, body: first.body }).status).toBe(200);
+    for (let i = 0; i < 4; i += 1) {
+      const s = submitBody(1);
+      expect(g.call({ method: 'POST', pathname: '/feedback/submit', headers: s.headers, body: s.body }).status).toBe(200);
+    }
+    const again = submitBody(1);
+    expect(g.call({ method: 'POST', pathname: '/feedback/submit', headers: again.headers, body: again.body }).status).toBe(429);
+    // 6 次请求、共 9 个附件都尝试过，只有前 5 份落盘（5+1+1+1+1 = 9 个附件）
+    expect(g.call({ headers: withCookie(g.token) }).body.total).toBe(5);
+  });
+
+  it('③ 附件超 5 个仍然 400（这条判据没被改口径影响）', () => {
+    const root = tempDir();
+    const g = rig(root);
+    const six = submitBody(6);
+    const r = g.call({ method: 'POST', pathname: '/feedback/submit', headers: six.headers, body: six.body });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toContain('一次最多带 5 个附件');
+    // 被 400 挡下的这次不占额度
+    const ratePath = join(g.store.rateDir, `${rateLimit.QUOTA_FILE_PREFIX}${rateLimit.dayKey(1759291200000)}.json`);
+    expect(existsSync(ratePath)).toBe(false);
+    expect(g.call({ headers: withCookie(g.token) }).body.total).toBe(0);
+  });
+
+  it('超限被拒之后额度不会被顶过头（反复打第 6 次还是 5）', () => {
+    const root = tempDir();
+    const g = rig(root);
+    for (let i = 0; i < 5; i += 1) {
+      const s = submitBody(1);
+      g.call({ method: 'POST', pathname: '/feedback/submit', headers: s.headers, body: s.body });
+    }
+    for (let i = 0; i < 3; i += 1) {
+      const s = submitBody(2);
+      expect(g.call({ method: 'POST', pathname: '/feedback/submit', headers: s.headers, body: s.body }).status).toBe(429);
+    }
+    const saved = JSON.parse(String(readFileSync(join(g.store.rateDir, `${rateLimit.QUOTA_FILE_PREFIX}${rateLimit.dayKey(1759291200000)}.json`))));
+    expect(saved['203.0.113.9']).toBe(5);
   });
 });
 
@@ -449,11 +588,21 @@ describe('Content-Type 映射与响应头', () => {
 // ---------------------------------------------------------------------------
 
 /** 往 store 里塞一份投稿，返回 id */
-function seed(store: { begin: (id: string) => string; saveAttachment: (d: string, n: string, b: LocalBuffer) => { storedAs: string; size: number }; commit: (id: string, meta: Record<string, unknown>) => string }, id: string, createdAt: string, withFile: boolean) {
+function seed(
+  store: {
+    begin: (id: string) => string;
+    saveAttachment: (d: string, n: string, b: LocalBuffer) => { storedAs: string; size: number };
+    commit: (id: string, meta: Record<string, unknown>) => string;
+  },
+  id: string,
+  createdAt: string,
+  withFile: boolean,
+) {
   const dir = store.begin(id);
-  const files = [];
+  const files: Array<{ name: string; size: number; storedAs: string }> = [];
   if (withFile) {
-    files.push(store.saveAttachment(dir, 'log.txt', Buffer.from('hello')));
+    const put = store.saveAttachment(dir, 'log.txt', Buffer.from('hello'));
+    files.push({ name: 'log.txt', size: put.size, storedAs: put.storedAs });
   }
   store.commit(id, {
     id, kind: 'bug', title: `标题-${id}`, author: '小明', body: '正文',
@@ -470,13 +619,14 @@ function seed(store: { begin: (id: string) => string; saveAttachment: (d: string
 function rig(root: string) {
   const store = new storage.Store({ root, maxFileBytes: 1024 * 1024 });
   const sessions = new auth.Sessions({ ttlSeconds: 43200 });
-  const quota = new rateLimit.FileQuota({ dir: store.rateDir, perDay: 5 });
+  // 额度单位是**份**（2026-10-01 改口径）
+  const quota = new rateLimit.SubmitQuota({ dir: store.rateDir, perDay: 5 });
   const loginFails = new rateLimit.LoginFailures({ max: 5, windowMs: 600000 });
   const lines: Array<Record<string, unknown>> = [];
   const logger = { line: (_level: string, fields: Record<string, unknown>) => lines.push(fields) };
   const config = {
     password: 'test-password', passwordSource: 'test', titleMax: 80, authorMax: 40, bodyMax: 5000,
-    maxFilesPerItem: 5, maxFileBytes: 1024 * 1024, filesPerIpPerDay: 5, sessionTtlSeconds: 43200,
+    maxFilesPerItem: 5, maxFileBytes: 1024 * 1024, submitsPerIpPerDay: 5, sessionTtlSeconds: 43200,
     loginFailMax: 5, loginFailWindowSeconds: 600, bodyBytesCap: 8 * 1024 * 1024, trustProxy: true,
   };
   const token = sessions.issue(1759291200000);

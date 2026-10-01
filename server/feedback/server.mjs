@@ -17,7 +17,7 @@
 import { createServer } from 'node:http';
 import { loadConfig } from './lib/config.mjs';
 import { Sessions } from './lib/auth.mjs';
-import { FileQuota, LoginFailures } from './lib/rate-limit.mjs';
+import { SubmitQuota, LoginFailures } from './lib/rate-limit.mjs';
 import { Logger } from './lib/log.mjs';
 import { Store } from './lib/storage.mjs';
 import { handleRequest, readBody } from './lib/handler.mjs';
@@ -68,7 +68,7 @@ function main(argv) {
     process.stdout.write(
       `[feedback] 配置 OK：${config.bindHost}:${config.port} 数据 ${config.dataDir} `
       + `密码来源=${config.passwordSource} 单文件上限=${config.maxFileBytes} 单次附件上限=${config.maxFilesPerItem} `
-      + `每IP每天文件=${config.filesPerIpPerDay} 会话=${config.sessionTtlSeconds}s `
+      + `每IP每天份数=${config.submitsPerIpPerDay} 会话=${config.sessionTtlSeconds}s `
       + `登录失败闸=${config.loginFailMax}/${config.loginFailWindowSeconds}s 信代理=${config.trustProxy} `
       + `请求体上限=${config.bodyBytesCap} 日志=${config.logFile ?? '(stderr)'}\n`,
     );
@@ -82,9 +82,10 @@ function main(argv) {
     maxFileBytes: config.maxFileBytes,
     log: (msg, extra) => logger.line('warn', { ip: '-', method: '-', path: '-', result: msg, ...extra }),
   });
-  const quota = new FileQuota({
+  const quota = new SubmitQuota({
     dir: store.rateDir,
-    perDay: config.filesPerIpPerDay,
+    // ★ 单位是**份**：每 IP 每天最多 5 次成功投稿（2026-10-01 改口径，原先是"文件个数"）
+    perDay: config.submitsPerIpPerDay,
     log: (msg, extra) => logger.line('warn', { ip: '-', method: '-', path: '-', result: msg, ...extra }),
   });
   const loginFails = new LoginFailures({
@@ -167,7 +168,7 @@ function main(argv) {
       bind: `${config.bindHost}:${config.port}`,
       dataDir: config.dataDir,
       passwordSource: config.passwordSource,
-      filesPerIpPerDay: config.filesPerIpPerDay,
+      submitsPerIpPerDay: config.submitsPerIpPerDay,
       maxFileBytes: config.maxFileBytes,
       maxFilesPerItem: config.maxFilesPerItem,
       sessionTtlSeconds: config.sessionTtlSeconds,

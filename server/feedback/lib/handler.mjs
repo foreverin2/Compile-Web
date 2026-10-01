@@ -13,6 +13,10 @@
  *   POST /feedback/delete   需会话，JSON { id } —— 软删除（目录移到 trash/）
  *   GET  /feedback/healthz  本地监控用（nginx 只放 127.0.0.1）
  *
+ * 限额口径（2026-10-01 当天改过一次）：
+ *   **每 IP 每天最多 5 次成功的投稿**（按提交份数计，一次提交带 0/1/5 个附件都只占 1 份），
+ *   第 6 次 429；每次提交内部"附件最多 5 个"是另一条独立上限（超了 400），不受这次改动影响。
+ *
  * `/feedback/read` 与 `/feedback/delete` 是 2026-10-01 用户口头追加的需求
  * （隐藏页要能"标记已读 / 删除"），由协调侧转达，与前端同一套口径。
  *
@@ -180,9 +184,12 @@ export function handleRequest(req) {
       items: store.listMetas().length,
       trash: store.trashCount(),
       sessions: sessions.size,
-      filesPerIpPerDay: config.filesPerIpPerDay,
+      // 额度单位是**份**（2026-10-01 改口径；字段名跟着从 filesPerIpPerDay 改掉，免得被误读）
+      submitsPerIpPerDay: config.submitsPerIpPerDay,
       maxFileBytes: config.maxFileBytes,
       maxFilesPerItem: config.maxFilesPerItem,
+      // 旧口径（files-*.json）还剩几个没清 —— 只报个数，内容一律不读，见 RUNBOOK §6
+      legacyRateFiles: quota.legacyFiles().length,
     });
   }
 
@@ -292,10 +299,11 @@ function handleSubmit({ headers, body, clientIp, nowMs, config, quota, store, lo
     }
   }
 
-  // ④ 每 IP 每天的文件额度（按**文件个数**计；先查后记，失败的请求不白吃额度）
-  const verdict = quota.check(clientIp, files.length, nowMs);
+  // ④ 每 IP 每天的**提交份数**额度（2026-10-01 改口径：一次提交不管带 0/1/5 个附件都只占 1 份；
+  //    先查后记 —— 失败或不合法的请求不白吃用户的额度）
+  const verdict = quota.check(clientIp, nowMs);
   if (!verdict.allowed) {
-    logger.line('warn', { ...base, status: 429, result: 'rate-limited:files-per-day', used: verdict.used, want: files.length });
+    logger.line('warn', { ...base, status: 429, result: 'rate-limited:submits-per-day', used: verdict.used });
     return fail(429, verdict.message, { 'retry-after': '3600' });
   }
 
@@ -322,7 +330,8 @@ function handleSubmit({ headers, body, clientIp, nowMs, config, quota, store, lo
       files: saved,
     };
     store.commit(id, meta);
-    if (saved.length > 0) quota.record(clientIp, saved.length, nowMs);
+    // ★ 记账：一次成功的投稿记 **1 份**（不管带 0 个还是 5 个附件）
+    quota.record(clientIp, nowMs);
     logger.line('info', {
       ...base, status: 200, result: 'submitted', id, kind: meta.kind, files: saved.length,
       // 只写净化后的名字，不写客户端原始文件名

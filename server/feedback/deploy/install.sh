@@ -79,7 +79,7 @@ elif [ -n "${FEEDBACK_PASSWORD:-}" ]; then
     printf 'FEEDBACK_LOG_MAX_BYTES=5242880\n'
     printf '# 走 nginx 反代，IP 取 X-Forwarded-For 的最后一跳（限流键）\n'
     printf 'FEEDBACK_TRUST_PROXY=1\n'
-    printf '# 单个附件上限 10MB，一次最多 5 个，每 IP 每天最多 5 份文件（契约值，别乱改）\n'
+    printf '# 单个附件上限 10MB，一次最多 5 个附件；每 IP 每天最多 5 份提交（契约值，别乱改）\n'
     printf 'FEEDBACK_MAX_FILE_BYTES=10485760\n'
     printf 'FEEDBACK_MAX_FILES=5\n'
     printf 'FEEDBACK_FILES_PER_IP_PER_DAY=5\n'

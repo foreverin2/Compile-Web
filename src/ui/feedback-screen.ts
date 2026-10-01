@@ -11,6 +11,8 @@
  * 4. 「可选附件：常见图片（pdf/jpg/png…）或常见文本（txt/markdown…），每份 ≤10MB，
  *    每个 IP 每天最多 5 份文件」——10MB 与 5 份在本地预检（`feedback-core.ts`），
  *    "每 IP 每天 5 份"由**服务端**强制，前端只把服务端那句中文原因原样显示。
+ *    ⚠️ **2026-10-01 当天改口径**：那条限额现在是「**每天最多提交 5 份**」（按提交次数，
+ *    不按附件个数）；**单次提交最多 5 个附件**（`FEEDBACK_MAX_FILES`）保持不变，是另一件事。
  * 5. 「首页按 `Ctrl+Shift+O` 打开一个口令输入框（正常情况下界面上不要出现任何提示/入口），
  *    输入正确口令后进入隐藏页」——`initFeedbackShortcut()` + 口令浮层。
  * 6. 「隐藏页样式参考「查看规则文档」那一页（卡片网格 + 点击看详情）」——网格复用既有的
@@ -18,6 +20,11 @@
  *    （`styles.css` 里那几条，本文件只加 `feedback-*` 新类做微调，红线一行不动）。
  * 7. 「每条反馈像规则书那样一张卡显示，点击可查看详细信息（含附件列表，能点开看/下载）」
  *    ——卡片 → 详情视图 → 返回列表。
+ * 8. ★ 2026-10-01 当天追加：「隐藏页想加删除/标记已读」。
+ * 9. ★ 2026-10-01 当天追加（提交成功后的行为）：用户原话「显示「提交成功」，**然后回到首页面**」
+ *    ⇒ 状态行先写「提交成功…」，`FEEDBACK_SUCCESS_CLOSE_MS` 之后**自动关闭浮层**
+ *    （浮层挂在首页之上 ⇒ 关掉它就等于回到首页；**首页那棵树一个字节都不重画**）。
+ *    定时器可取消：见 `FeedbackFormHandle.cancelAutoClose` 与 `openFeedbackOverlay` 的 `close()`。
  *
  * ## 契约（**不许改**，见任务书）
  *
@@ -50,6 +57,8 @@ import {
   FEEDBACK_PASSWORD_FAIL_TEXT,
   FEEDBACK_READ_FAIL_TEXT,
   FEEDBACK_SESSION_EXPIRED_TEXT,
+  FEEDBACK_SUBMIT_OK_TEXT,
+  FEEDBACK_SUCCESS_CLOSE_MS,
   buildDeleteBody,
   buildLoginBody,
   buildReadBody,
@@ -139,27 +148,103 @@ function role(e: HTMLElement, name: string): HTMLElement {
  * ===================================================================== */
 
 /**
+ * 「反馈」表单浮层的**返回值（句柄）**。
+ *
+ * 为什么不是直接返回 `HTMLElement`（★ 2026-10-01 改口径时改的）：提交成功后浮层会**自动关闭**，
+ * 那意味着本层手里有一个**待执行的定时器**——而"关掉浮层"这件事由宿主做（`openFeedbackOverlay`
+ * 里那个 `close()`）⇒ 宿主必须能把这个定时器**取消**掉。光给一个 `HTMLElement` 的话，
+ * 宿主没有取消的入口，"用户在一秒内自己点了关闭"就会留下一个到点还会跑的悬挂定时器
+ * （用户 2026-10-01 明确要求"定时器要能被清理，不要留下会报错的悬挂定时器"）。
+ */
+export interface FeedbackFormHandle {
+  /** 浮层本体（宿主挂到 `document.body`） */
+  readonly element: HTMLElement;
+  /**
+   * 取消"成功后自动关闭"那个**待执行的**定时器。
+   *
+   * 幂等、可以随便调：没排过 / 已经跑完 / 已经取消过 ⇒ 都是 no-op（不会误关浮层）。
+   */
+  cancelAutoClose(): void;
+}
+
+/**
  * 「反馈」表单浮层（用户点首页那个按钮之后看到的那一层）。
  *
  * 三件事都在这里：两种类型的切换、三行必填的校验、提交中/成功/失败三种状态。
- * 服务端那句中文原因（尤其 429 的"今天已达上限"）**原样**进状态行。
+ * 服务端那句中文原因（尤其 429 的"今天已达上限"那句）**原样**进状态行。
  *
- * 返回**元素本体**（同 `settingsOverlayElement`：宿主负责挂到 `document.body` 与 Esc 收尾）。
+ * ## 提交成功之后（★ 2026-10-01 用户改口径）
+ *
+ * 用户原话：「显示「提交成功」，然后回到首页面」⇒ 状态行先写
+ * `${FEEDBACK_SUBMIT_OK_TEXT}。编号：…`，**再等 `FEEDBACK_SUCCESS_CLOSE_MS` 毫秒自动关闭**浮层
+ * （浮层是挂在首页之上的 ⇒ 关掉它就等于回到首页，首页那棵树一个字节都不重画）。
+ * 关掉浮层的路径有两条，**两条都会先把定时器取消**：
+ *  - 自动（到点）：定时器自己跑一次，跑之前把它自己从"待执行"里摘掉；
+ *  - 手动（关掉按钮 / 点遮罩空白处 / 宿主按 Esc / 宿主换页）：走 `requestClose()`，它先取消再关。
  */
 export function feedbackFormElement(nav: {
   readonly onClose: () => void;
   /**
-   * 提交成功之后的去向（缺省 = 关闭浮层）。
+   * 提交成功之后的**通知**（缺省什么都不做）。
    *
    * 为什么留这个口子：用户要的是"提交后内容汇总进服务器上的隐藏页"，
    * 而"提交完要不要顺手刷新隐藏页"只有宿主知道（它知道隐藏页此刻开着没有）。
+   * ⚠️ 它**不改变**"随后自动关闭"这件事 —— 那条是用户点的行为，不论有没有这个回调都发生。
    */
   readonly onSubmitted?: (id: string) => void;
   readonly fetcher: FeedbackFetcher;
-}): HTMLElement {
+  /**
+   * 排一个"延迟后执行"的定时器，返回**取消函数**（缺省用 `globalThis.setTimeout`）。
+   *
+   * 为什么做成可注入：这条行为有一个"到点才发生"的部分（自动关闭），而不注入的话测试只能
+   * 真的等 1.2 秒或者去戳全局定时器。注入之后"延迟值是多少 / 到点调的是哪条路径 / 提前关掉
+   * 之后有没有被取消"这三件事都能**当场**断言（同 `fetcher` / `FilePicker` 的注入理由）。
+   */
+  readonly scheduleClose?: (fn: () => void, delayMs: number) => () => void;
+}): FeedbackFormHandle {
   let kind: FeedbackKind = 'protocol';
   let files: FeedbackAttachment[] = [];
   let busy = false;
+  /** 默认的调度器：`globalThis.setTimeout`（浏览器里就是 `window.setTimeout`） */
+  const schedule: (fn: () => void, delayMs: number) => () => void = nav.scheduleClose
+    ?? ((fn, delayMs) => {
+      const id = globalThis.setTimeout(fn, delayMs);
+      return () => { globalThis.clearTimeout(id); };
+    });
+  /** 待执行的"成功后自动关闭"（`null` = 没有；非 null 时**唯一**，连点两次提交不会叠） */
+  let autoCloseCancel: (() => void) | null = null;
+
+  /** 取消待执行的自动关闭（幂等；跑完/取消过之后再调是 no-op） */
+  function cancelAutoClose(): void {
+    const cancel = autoCloseCancel;
+    autoCloseCancel = null;
+    if (cancel !== null) cancel();
+  }
+
+  /**
+   * 关闭浮层（**唯一**的内部出口）：先取消自动关闭定时器，再交给宿主 `nav.onClose()`。
+   * 三条手动路径（右上角「关闭」/ 点遮罩空白处 / 宿主 Esc）全走它。
+   */
+  function requestClose(): void {
+    cancelAutoClose();
+    nav.onClose();
+  }
+
+  /** 提交成功之后：先让「提交成功」留在屏上，再排一个到点关闭 */
+  function scheduleAutoClose(): void {
+    cancelAutoClose(); // 幂等：万一已经有排着的，先撤掉再排（连点两次提交不会叠出两个定时器）
+    let fired = false;
+    const cancel = schedule(() => {
+      fired = true;
+      autoCloseCancel = null; // 已经跑过了 ⇒ 再调 cancelAutoClose 不该再做什么
+      nav.onClose();
+    }, FEEDBACK_SUCCESS_CLOSE_MS);
+    autoCloseCancel = () => {
+      if (fired) return;
+      fired = true;
+      cancel();
+    };
+  }
 
   const overlay = el('div', 'feedback-overlay');
   const dialog = el('div', 'feedback-panel');
@@ -169,7 +254,7 @@ export function feedbackFormElement(nav: {
 
   const head = el('div', 'feedback-head');
   head.appendChild(el('div', 'feedback-title', '反馈'));
-  head.appendChild(button('btn feedback-close', '关闭', () => { nav.onClose(); }));
+  head.appendChild(button('btn feedback-close', '关闭', () => { requestClose(); }));
   dialog.appendChild(head);
 
   /* ── 两种操作（用户原话：① 投稿自定义协议 ② bug 反馈）── */
@@ -354,23 +439,27 @@ export function feedbackFormElement(nav: {
       say(reading.error, 'error');
       return;
     }
-    say(`已提交，感谢。编号：${reading.id}`, 'ok');
+    // ★ 2026-10-01 用户改口径：状态行先出现「提交成功」（必须含这四个字），随后自动关闭浮层
+    say(`${FEEDBACK_SUBMIT_OK_TEXT}。编号：${reading.id}`, 'ok');
     // 成功后清掉正文与附件（避免连点两次把同一份内容提交两遍），标题与署名留着
     bodyInput.value = '';
     files = [];
     refreshFiles();
+    // 排"到点自动关闭"。**先排它、再通知宿主**：`onSubmitted` 是宿主的接缝，万一它抛错，
+    // 也不该把"浮层永远不关、用户被卡在这一层上"这个后果留给用户 ——
+    // "提交成功之后要回到首页"这件事必须已经排上（抛错仍旧照抛，由宿主那一侧去处理）。
+    scheduleAutoClose();
     if (nav.onSubmitted !== undefined) nav.onSubmitted(reading.id);
-    else nav.onClose();
   }
 
   overlay.addEventListener('click', (e) => {
     // 点遮罩空白处关闭（与 `settingsOverlayElement` 同款：`e.target` 只有点在遮罩本身时才等于它）
-    if (e.target === overlay) nav.onClose();
+    if (e.target === overlay) requestClose();
   });
 
   applyKind('protocol');
   refreshFiles();
-  return overlay;
+  return { element: overlay, cancelAutoClose };
 }
 
 /**
@@ -1166,11 +1255,21 @@ function fileRow(id: string, f: FeedbackFileMeta): HTMLElement {
  * ===================================================================== */
 
 let liveFormOverlay: HTMLElement | null = null;
+/**
+ * 关掉表单浮层的**唯一**出口（撤 keydown 监听 + **取消待执行的自动关闭** + 摘节点 + 清单例）。
+ *
+ * 为什么是"唯一出口"而不是各写一份（2026-10-01 改口径时收的）：这一层手里有**两样需要收尾的
+ * 东西**（`document` 级的 Esc 监听、以及提交成功后排下的那个自动关闭定时器），
+ * 分散收尾必然漏一样 —— 漏监听器会在每次开关之后留下一个还能跑的闭包，漏定时器会让它在浮层
+ * 已经摘掉之后再去关一次。`closeFeedbackOverlay()`（宿主换页时调）也走它，于是两条关法行为一致。
+ */
+let liveFormClose: (() => void) | null = null;
 
 /**
  * 首页那个「反馈」按钮的动作：把表单浮层挂到 `document.body`。
  *
- * 幂等（连点两次不留第二层，与 `main.ts` 的 `openSettings` 同款）；关掉时摘节点 + 清单例。
+ * 幂等（连点两次不留第二层，与 `main.ts` 的 `openSettings` 同款）；关掉时走 `liveFormClose`
+ * 那一个出口（摘节点 + 撤监听 + 取消定时器 + 清单例）。
  * 返回浮层本体；已经开着时返回**既有那一层**。
  */
 export function openFeedbackOverlay(nav: {
@@ -1179,30 +1278,36 @@ export function openFeedbackOverlay(nav: {
 }): HTMLElement {
   if (liveFormOverlay !== null) return liveFormOverlay;
   let overlay: HTMLElement | null = null;
+  let handle: FeedbackFormHandle | null = null;
   const onKey = (ev: KeyboardEvent): void => {
     if (ev.key === 'Escape') close();
   };
   const close = (): void => {
     document.removeEventListener('keydown', onKey);
+    // ① 先取消待执行的自动关闭（用户在这一秒里自己关了 / 换页了 —— 那个定时器不该再跑）
+    handle?.cancelAutoClose();
+    // ② 再摘节点、清单例（幂等：第二次调进来时 `overlay` 已经是 null）
     overlay?.remove();
     overlay = null;
     liveFormOverlay = null;
+    liveFormClose = null;
   };
-  overlay = feedbackFormElement({
+  handle = feedbackFormElement({
     onClose: close,
     fetcher: nav.fetcher,
     ...(nav.onSubmitted === undefined ? {} : { onSubmitted: nav.onSubmitted }),
   });
+  overlay = handle.element;
   document.body.appendChild(overlay);
   document.addEventListener('keydown', onKey);
   liveFormOverlay = overlay;
+  liveFormClose = close;
   return overlay;
 }
 
 /** 把已经挂上的表单浮层摘掉（宿主在离开首页时收尾；没开时是 no-op） */
 export function closeFeedbackOverlay(): void {
-  liveFormOverlay?.remove();
-  liveFormOverlay = null;
+  liveFormClose?.();
 }
 
 /* =====================================================================

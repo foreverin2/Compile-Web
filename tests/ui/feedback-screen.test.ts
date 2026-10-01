@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -14,6 +14,8 @@ import {
   FEEDBACK_ENDPOINTS,
   FEEDBACK_MAX_FILE_BYTES,
   FEEDBACK_MAX_FILES,
+  FEEDBACK_SUBMIT_OK_TEXT,
+  FEEDBACK_SUCCESS_CLOSE_MS,
   buildDeleteBody,
   buildReadBody,
   checkFileSelection,
@@ -31,6 +33,7 @@ import {
 } from '../../src/ui/feedback-core';
 import {
   FeedbackHiddenView,
+  closeFeedbackOverlay,
   closeHiddenView,
   feedbackFormElement,
   feedbackPasswordElement,
@@ -38,6 +41,7 @@ import {
   isFeedbackShortcut,
   isHomeScreenActive,
   isTypingTarget,
+  openFeedbackOverlay,
 } from '../../src/ui/feedback-screen';
 
 /**
@@ -47,9 +51,16 @@ import {
  *
  * 「首页左上角加一个「反馈」按钮」「点开后有**两种操作**：① 投稿自定义协议 ② bug 反馈」
  * 「简要标题 / 投稿人（反馈人）/ 说明文本」「可选附件（pdf/jpg/png…、txt/markdown…，
- * 每份 ≤10MB，每个 IP 每天最多 5 份）」「首页按 `Ctrl+Shift+O` 打开一个口令输入框
+ * 每份 ≤10MB，每个 IP 每天最多提交 5 份）」「首页按 `Ctrl+Shift+O` 打开一个口令输入框
  * （正常情况下界面上不要出现任何提示/入口），输入正确口令后进入隐藏页」「隐藏页样式参考
- * 「查看规则文档」那一页」「隐藏页想加删除/标记已读」。
+ * 「查看规则文档」那一页」「隐藏页想加删除/标记已读」「显示「提交成功」，然后回到首页面」。
+ *
+ * ⚠️ **2026-10-01 当天两次改口径**（都落在这个文件的腿上）：
+ *  1. 每天的限额从"5 个文件"改成"**每天最多提交 5 份**"（按**提交次数**）——
+ *     前端从来只**原样显示服务端那句中文原因**（429 那条腿），所以这里改的是夹具措辞；
+ *     **单次提交最多 5 个附件**（`FEEDBACK_MAX_FILES`）用户明确要求保留，另有一条腿钉着；
+ *  2. 提交成功后：状态行先出现「提交成功」，`FEEDBACK_SUCCESS_CLOSE_MS` 之后**自动关闭浮层**
+ *     （＝回到首页）——见"提交成功后…"那一组四条腿。
  *
  * ## 本文件证明什么 / 不能证明什么（**不要读成"浏览器里已验证"**）
  *
@@ -182,6 +193,8 @@ afterEach(() => {
     if (v !== undefined && v.isMounted) v.close();
   }
   closeHiddenView();
+  // 宿主那一层的单例（`liveFormOverlay` / `liveFormClose`）也跨用例留着 ⇒ 一并收掉
+  closeFeedbackOverlay();
   const g = globalThis as unknown as { document?: { body?: StubNode } };
   const body = g.document?.body;
   if (body !== undefined) {
@@ -495,22 +508,95 @@ describe('纯逻辑核：必填校验 / 附件预检 / 读数 / 响应读数', (
 });
 
 /* ==================================================================== *
+ * 夹具：可控时钟（测"提交成功后延迟自动关闭"那几条腿用）
+ * ==================================================================== */
+
+/**
+ * 一个**可控**的调度器（形状与 `FeedbackFormElement` 的 `nav.scheduleClose` 对齐：
+ * 排一个延迟任务、返回取消函数）。
+ *
+ * 为什么要它（而不是真的等 1.2 秒 / 或者去 `vi.useFakeTimers()` 戳全局）：
+ * "延迟到了才关闭"这件事有三半要断言 —— ①延迟值是多少 ②到点调的是哪条路径
+ * ③提前手动关掉之后有没有**取消**。可控时钟让这三半都能**当场**读出来，
+ * 且不依赖真实时间（用户 2026-10-01 明确要求"定时器要能被清理"，取消那一半必须有腿）。
+ */
+interface FakeClock {
+  /** 排一个任务（返回取消函数）；形状与产出代码要的 `scheduleClose` 逐字一致 */
+  schedule(fn: () => void, delayMs: number): () => void;
+  /** 推进 `ms` 毫秒（到点的任务按时间顺序跑；被取消的跳过） */
+  advance(ms: number): void;
+  /** 每个任务的延迟值（按排入顺序） */
+  delays(): number[];
+  /** 取消函数被调过几次 */
+  cancels(): number;
+  /** 还没跑、也没被取消的任务数 */
+  pending(): number;
+}
+
+function fakeClock(): FakeClock {
+  let now = 0;
+  let seq = 0;
+  let cancels = 0;
+  const delays: number[] = [];
+  const tasks: Array<{ due: number; order: number; fn: () => void; cancelled: boolean }> = [];
+  return {
+    schedule: (fn, delayMs) => {
+      delays.push(delayMs);
+      const task = { due: now + delayMs, order: seq++, fn, cancelled: false };
+      tasks.push(task);
+      return () => {
+        cancels += 1;
+        task.cancelled = true;
+      };
+    },
+    advance: (ms) => {
+      now += ms;
+      // 反复扫：到点的任务可能在跑的过程中又排新的（这里没有，但语义上要正确）
+      for (;;) {
+        const due = tasks
+          .filter((t) => !t.cancelled && t.due <= now)
+          .sort((a, b) => a.due - b.due || a.order - b.order);
+        if (due.length === 0) return;
+        for (const t of due) {
+          t.cancelled = true; // 摘掉：只跑一次
+          t.fn();
+        }
+      }
+    },
+    delays: () => [...delays],
+    cancels: () => cancels,
+    pending: () => tasks.filter((t) => !t.cancelled).length,
+  };
+}
+
+/* ==================================================================== *
  * 2. 表单浮层：两种操作 / 必填 / 附件预检 / 提交
  * ==================================================================== */
 
 describe('表单浮层（两种操作 + 必填 + 附件 + 提交）', () => {
-  /** 装好表单，返回桩节点树与"关掉了几次"的读数 */
-  function form(fake: FakeServer, opts: { onClose?: () => void; onSubmitted?: (id: string) => void } = {}) {
+  /**
+   * 装好表单，返回桩节点树、"关掉了几次"的读数、可控时钟与句柄。
+   *
+   * `clock` 缺省给一个新的可控时钟：**所有**用例都走它 ⇒ 没有一条腿会真的等 1.2 秒，
+   * 也没有一条腿会漏掉"定时器去哪了"这件事。
+   */
+  function form(fake: FakeServer, opts: {
+    onClose?: () => void;
+    onSubmitted?: (id: string) => void;
+    clock?: FakeClock;
+  } = {}) {
     setup();
     const closed: number[] = [];
-    const el0 = feedbackFormElement({
+    const clock = opts.clock ?? fakeClock();
+    const handle = feedbackFormElement({
       onClose: opts.onClose ?? (() => { closed.push(1); }),
       fetcher: fake,
+      scheduleClose: (fn, delayMs) => clock.schedule(fn, delayMs),
       ...(opts.onSubmitted === undefined ? {} : { onSubmitted: opts.onSubmitted }),
     });
-    const root = asStub(el0);
+    const root = asStub(handle.element);
     (globalThis as unknown as { document: { body: StubNode } }).document.body.appendChild(root);
-    return { root, closed };
+    return { root, closed, clock, handle };
   }
 
   /** 填好三行必填 */
@@ -637,7 +723,7 @@ describe('表单浮层（两种操作 + 必填 + 附件 + 提交）', () => {
     expect(fake.to(FEEDBACK_ENDPOINTS.submit)[0].info!.files).toEqual([]);
   });
 
-  it('提交成功：POST /feedback/submit（multipart，字段与契约逐字对齐）+ 清空正文与附件 + 说"已提交，感谢"', async () => {
+  it('提交成功：POST /feedback/submit（multipart，字段与契约逐字对齐）+ 清空正文与附件 + 说"提交成功"', async () => {
     const fake = FakeServer.empty().on(FEEDBACK_ENDPOINTS.submit, 200, { ok: true, id: 'f-77' });
     const submitted: string[] = [];
     const { root } = form(fake, { onSubmitted: (id) => { submitted.push(id); } });
@@ -670,24 +756,162 @@ describe('表单浮层（两种操作 + 必填 + 附件 + 提交）', () => {
       body: '效果这样结算……',
       files: [{ name: '示意图.png', size: 2048 }],
     });
-    expect(one(root, 'status').text).toContain('已提交，感谢');
+    // ★ 2026-10-01 改口径：成功那句必须含「提交成功」（用户原话："显示「提交成功」"）
+    expect(one(root, 'status').text, '成功那句里没有「提交成功」').toContain('提交成功');
+    expect(one(root, 'status').text, '编号没写出来（契约里 `id` 要可见）').toContain('f-77');
     expect(one(root, 'status').dataset.kind).toBe('ok');
     expect(submitted, '提交成功没通知宿主').toEqual(['f-77']);
     expect(byRole(root, 'file-remove'), '提交成功后附件清单没清').toHaveLength(0);
     expect((one(root, 'body') as unknown as { value: string }).value, '提交成功后正文没清').toBe('');
+    // 反向锚点：旧口径那句不该再出现（改口径改了一半的形态）
+    expect(one(root, 'status').text, '还留着旧口径「已提交，感谢」').not.toContain('已提交，感谢');
   });
 
-  it('提交成功（宿主没给 onSubmitted）⇒ 走 onClose 收尾（不留一层空浮层）', async () => {
-    const fake = FakeServer.empty().on(FEEDBACK_ENDPOINTS.submit, 200, { ok: true, id: 'f-1' });
-    const { root, closed } = form(fake);
+  it('提交成功后：**延迟内浮层不关**（让用户看得见「提交成功」），到点才走关闭路径', async () => {
+    const fake = FakeServer.empty().on(FEEDBACK_ENDPOINTS.submit, 200, { ok: true, id: 'f-9' });
+    const { root, closed, clock } = form(fake);
     fill(root);
     clickIn(one(root, 'submit'));
     await flush();
-    expect(closed, '没给 onSubmitted 时该关掉浮层').toEqual([1]);
+
+    // ① 排了一个定时器，延迟就是那个唯一出处（不是写死在两处的魔数）
+    expect(clock.delays(), '成功后没有排自动关闭，或者延迟值不是约定的那个').toEqual([FEEDBACK_SUCCESS_CLOSE_MS]);
+    expect(FEEDBACK_SUCCESS_CLOSE_MS, '用户要求 1.0~1.5 秒').toBeGreaterThanOrEqual(1000);
+    expect(FEEDBACK_SUCCESS_CLOSE_MS, '用户要求 1.0~1.5 秒').toBeLessThanOrEqual(1500);
+    // ② 还没到点：浮层**没关**（"先让用户看见"这一半）
+    expect(closed, '排上定时器之后立刻就关了（用户看不见「提交成功」）').toEqual([]);
+    expect(one(root, 'status').text).toContain('提交成功');
+
+    // ③ 到点：走的是关闭路径，且只关一次
+    clock.advance(FEEDBACK_SUCCESS_CLOSE_MS);
+    expect(closed, '到点之后没有关闭（＝没回到首页）').toEqual([1]);
+    // ④ 再推进也不会有第二次关闭（定时器是一次性的）
+    clock.advance(FEEDBACK_SUCCESS_CLOSE_MS * 3);
+    expect(closed, '到点关闭之后又关了一次').toEqual([1]);
+    expect(clock.pending(), '还有没跑完的定时器').toBe(0);
+  });
+
+  it('提交成功后**延迟内手动关闭**：关一次就好，且待执行的定时器真被取消（不再二次关闭）', async () => {
+    const fake = FakeServer.empty().on(FEEDBACK_ENDPOINTS.submit, 200, { ok: true, id: 'f-9' });
+    const { root, closed, clock } = form(fake);
+    fill(root);
+    clickIn(one(root, 'submit'));
+    await flush();
+    expect(clock.pending(), '前置：成功后该有一个待执行的自动关闭').toBe(1);
+
+    // 用户在那一秒里自己点了「关闭」
+    const closeBtn = descendants(root).find((n) => n.cls.includes('feedback-close'))!;
+    clickIn(closeBtn);
+    expect(closed, '手动关闭没生效').toEqual([1]);
+    expect(clock.cancels(), '手动关闭时没有取消待执行的定时器（用户要求"定时器要能被清理"）').toBe(1);
+    expect(clock.pending(), '取消之后还留着待执行的定时器').toBe(0);
+
+    // 把时间推过延迟：不许再关第二次（否则会对一个已经摘掉的浮层再动手）
+    clock.advance(FEEDBACK_SUCCESS_CLOSE_MS * 2);
+    expect(closed, '延迟到点之后又关了一次（二次关闭）').toEqual([1]);
+  });
+
+  it('提交成功后**延迟内点遮罩空白处**：同样只关一次、定时器同样被取消', async () => {
+    const fake = FakeServer.empty().on(FEEDBACK_ENDPOINTS.submit, 200, { ok: true, id: 'f-9' });
+    const { root, closed, clock } = form(fake);
+    fill(root);
+    clickIn(one(root, 'submit'));
+    await flush();
+
+    const blank = makeStubEl('span'); // 遮罩空白处：挂在浮层里、不遮任何东西
+    root.appendChild(blank);
+    blank.dispatchEvent({ type: 'click', target: root });
+    expect(closed, '点遮罩空白处没关掉').toEqual([1]);
+    expect(clock.cancels(), '点遮罩关闭时没有取消定时器').toBe(1);
+    clock.advance(FEEDBACK_SUCCESS_CLOSE_MS * 2);
+    expect(closed, '延迟到点之后又关了一次').toEqual([1]);
+  });
+
+  it('提交成功（宿主给了 onSubmitted）⇒ 回调照旧 + **仍会**自动关闭（用户口径不是"留给宿主决定"）', async () => {
+    const fake = FakeServer.empty().on(FEEDBACK_ENDPOINTS.submit, 200, { ok: true, id: 'f-42' });
+    const seen: string[] = [];
+    const { root, closed, clock } = form(fake, { onSubmitted: (id) => { seen.push(id); } });
+    fill(root);
+    clickIn(one(root, 'submit'));
+    await flush();
+    expect(seen, '宿主通知没收到').toEqual(['f-42']);
+    expect(closed, '还没到延迟就把浮层关了').toEqual([]);
+    clock.advance(FEEDBACK_SUCCESS_CLOSE_MS);
+    expect(closed, '给了 onSubmitted 就不自动关闭了（用户要求是"随后自动关闭"）').toEqual([1]);
+  });
+
+  it('失败路径**不排**自动关闭（429 之后把时间推过去也不会自己关掉）', async () => {
+    const fake = FakeServer.empty().on(FEEDBACK_ENDPOINTS.submit, 429, { ok: false, error: '今天已达上限。' });
+    const { root, closed, clock } = form(fake);
+    fill(root);
+    clickIn(one(root, 'submit'));
+    await flush();
+    expect(clock.delays(), '失败也排了自动关闭（用户要能改一改再交）').toEqual([]);
+    clock.advance(FEEDBACK_SUCCESS_CLOSE_MS * 3);
+    expect(closed, '失败之后浮层自己关掉了').toEqual([]);
+  });
+
+  it('默认调度器（不注入）走的是真的 `setTimeout`：延迟到点自己关，且提前关掉会被取消', async () => {
+    // 这一条钉的是**产线那条路**（`nav.scheduleClose` 缺省时用 `globalThis.setTimeout`）——
+    // 上面几条注入可控时钟的腿只证明"逻辑对"，证明不了"默认实现真的排了一个真的定时器"。
+    vi.useFakeTimers();
+    try {
+      const fake = FakeServer.empty().on(FEEDBACK_ENDPOINTS.submit, 200, { ok: true, id: 'f-1' });
+      setup();
+      const closed: number[] = [];
+      const handle = feedbackFormElement({
+        onClose: () => { closed.push(1); },
+        fetcher: fake,
+      });
+      const root = asStub(handle.element);
+      (globalThis as unknown as { document: { body: StubNode } }).document.body.appendChild(root);
+      setValue(one(root, 'title'), '标题');
+      setValue(one(root, 'author'), '甲');
+      setValue(one(root, 'body'), '正文');
+      clickIn(one(root, 'submit'));
+      // 假时钟下不能用 `flush()`（它自己也走 setTimeout）⇒ 用 advanceTimers 把微任务链推完
+      await vi.advanceTimersByTimeAsync(0);
+      expect(one(root, 'status').text, '默认路径下成功文案没出来').toContain('提交成功');
+      expect(closed, '还没到延迟就关了').toEqual([]);
+
+      // ① 提前手动关闭 ⇒ 真定时器被 clearTimeout 掉
+      const closeBtn = descendants(root).find((n) => n.cls.includes('feedback-close'))!;
+      clickIn(closeBtn);
+      expect(closed, '手动关闭没生效').toEqual([1]);
+      await vi.advanceTimersByTimeAsync(FEEDBACK_SUCCESS_CLOSE_MS * 2);
+      expect(closed, '真定时器没被取消 ⇒ 二次关闭').toEqual([1]);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // ② 不提前关：真定时器到点自己关
+    vi.useFakeTimers();
+    try {
+      const fake = FakeServer.empty().on(FEEDBACK_ENDPOINTS.submit, 200, { ok: true, id: 'f-2' });
+      setup();
+      const closed: number[] = [];
+      const handle = feedbackFormElement({ onClose: () => { closed.push(1); }, fetcher: fake });
+      const root = asStub(handle.element);
+      (globalThis as unknown as { document: { body: StubNode } }).document.body.appendChild(root);
+      setValue(one(root, 'title'), '标题');
+      setValue(one(root, 'author'), '甲');
+      setValue(one(root, 'body'), '正文');
+      clickIn(one(root, 'submit'));
+      await vi.advanceTimersByTimeAsync(0);
+      // 差 1ms 还不到点
+      await vi.advanceTimersByTimeAsync(FEEDBACK_SUCCESS_CLOSE_MS - 1);
+      expect(closed, '还没到点就关了（延迟值没生效？）').toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(closed, '真定时器到点了却没关').toEqual([1]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('服务端 429 的中文原因**原样**显示（"今天已达上限"那句一个字符都不改）', async () => {
-    const REASON = '今天已达上限：每个 IP 每天最多 5 份文件，请明天再试。';
+    // ★ 2026-10-01 改口径：服务端那句现在是"**每天最多提交 5 份**"（按提交次数）。
+    //    前端一个字都不参与：这句是**服务端给的原文**，怎么显示由 `say(outcome.text)` 原样带出。
+    const REASON = '今天已达上限：每个 IP 每天最多提交 5 份，请明天再试。';
     const fake = FakeServer.empty().on(FEEDBACK_ENDPOINTS.submit, 429, { ok: false, error: REASON });
     const { root, closed } = form(fake);
     fill(root);
@@ -696,8 +920,8 @@ describe('表单浮层（两种操作 + 必填 + 附件 + 提交）', () => {
     expect(one(root, 'status').text, '服务端原因没原样显示').toBe(REASON);
     expect(one(root, 'status').dataset.kind).toBe('error');
     expect(closed, '失败时不该把浮层关掉（用户要能改一改再交）').toEqual([]);
-    // 反向锚点：屏上不许出现"已提交"这类假成功
-    expect(textOf(root), '失败却说成了成功').not.toContain('已提交，感谢');
+    // 反向锚点：屏上不许出现"提交成功"这类假成功
+    expect(textOf(root), '失败却说成了成功').not.toContain('提交成功');
   });
 
   it('服务端 415 的中文原因原样显示；连不上服务时给人话（不抛未捕获异常）', async () => {
@@ -737,7 +961,7 @@ describe('表单浮层（两种操作 + 必填 + 附件 + 提交）', () => {
     expect(fd.get('title'), '正文/标题那一半也跟着丢了').toBe('标题');
     expect(fd.getAll('files'), '夹具给的不是字节 ⇒ 这一项本来就不该出现').toHaveLength(0);
     expect(reqs[0].info!.files.map((f) => f.name), '元信息里仍要看得到那一份附件').toEqual(['a.txt']);
-    expect(one(root, 'status').text).toContain('已提交，感谢');
+    expect(one(root, 'status').text).toContain('提交成功');
   });
 
   it('提交中：按钮禁用且写「正在提交…」；响应回来后恢复可点', async () => {
@@ -759,7 +983,7 @@ describe('表单浮层（两种操作 + 必填 + 附件 + 提交）', () => {
     await flush();
     expect(one(root, 'submit').text).toBe('提交');
     expect((one(root, 'submit') as unknown as { disabled?: boolean }).disabled).toBe(false);
-    expect(one(root, 'status').text).toContain('已提交，感谢');
+    expect(one(root, 'status').text).toContain('提交成功');
   });
 
   it('点遮罩空白处关一次；点浮层内部不关', () => {
@@ -774,6 +998,91 @@ describe('表单浮层（两种操作 + 必填 + 附件 + 提交）', () => {
     const closeBtn = descendants(root).find((n) => n.cls.includes('feedback-close'))!;
     clickIn(closeBtn);
     expect(closed, '「关闭」按钮没关掉').toEqual([1, 1]);
+  });
+});
+
+/* ==================================================================== *
+ * 2b. 宿主那一层（`openFeedbackOverlay`）：自动关闭之后**首页一个字节都不重画**
+ * ==================================================================== */
+
+describe('表单浮层（宿主那一层）：成功后自动回到首页，首页那棵树不动', () => {
+  /** 挂一个带"记号子节点"的首页根（`#app`），返回那个记号（用它证明首页没被重画） */
+  function homeWithMarker(): { app: StubNode; marker: StubNode } {
+    setup({ home: true });
+    const app = (globalThis as unknown as { document: { getElementById: (id: string) => StubNode | null } })
+      .document.getElementById('app')!;
+    const marker = makeStubEl('div');
+    marker.className = 'home-menu';
+    app.appendChild(marker);
+    return { app, marker };
+  }
+
+  it('成功后自动关闭：浮层没了、首页那棵树逐节点不变（不是"重画一遍首页"）', async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = FakeServer.empty().on(FEEDBACK_ENDPOINTS.submit, 200, { ok: true, id: 'f-1' });
+      const { app, marker } = homeWithMarker();
+      const before = [...app.children];
+      const overlay = openFeedbackOverlay({ fetcher: fake });
+      // 挂上浮层这一下**没有**碰 `#app`（浮层挂在 `document.body` 上）
+      expect(app.children.length, '开浮层时动了首页的 DOM').toBe(before.length);
+      app.children.forEach((n, i) => expect(n, `开浮层时首页第 ${i} 个子节点被换掉了`).toBe(before[i]));
+
+      const root = asStub(overlay);
+      setValue(one(root, 'title'), '标题');
+      setValue(one(root, 'author'), '甲');
+      setValue(one(root, 'body'), '正文');
+      clickIn(one(root, 'submit'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(one(root, 'status').text).toContain('提交成功');
+      expect(overlay.parentElement, '还没到延迟浮层就摘了').not.toBeNull();
+
+      await vi.advanceTimersByTimeAsync(FEEDBACK_SUCCESS_CLOSE_MS);
+      // ① 浮层真没了（＝回到首页）
+      expect(overlay.parentElement, '到点之后浮层还挂在 document.body 上').toBeNull();
+      expect(descendants(bodyStub()).filter((n) => n.cls.includes('feedback-overlay')), '还有浮层残留')
+        .toHaveLength(0);
+      // ② 首页那棵树**逐节点不变**：还是同一个记号节点、还挂在 `#app` 上、子节点数没变
+      expect(app.children.length, '首页的子节点数变了（重画了首页）').toBe(before.length);
+      app.children.forEach((n, i) => expect(n, `首页第 ${i} 个子节点不是原来那一个了`).toBe(before[i]));
+      expect(app.children[0], '首页那个记号节点不是原来那一个了').toBe(marker);
+      expect(marker.parentElement, '记号节点被从首页摘掉了').toBe(app);
+      // ③ 关掉之后**再开**是干净的一层（单例清了，不会叠出第二层）
+      const again = openFeedbackOverlay({ fetcher: fake });
+      expect(again, '关掉之后重开拿到的还是旧节点／或者根本没开').not.toBe(overlay);
+      expect(descendants(bodyStub()).filter((n) => n.cls.includes('feedback-overlay'))).toHaveLength(1);
+      closeFeedbackOverlay();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('宿主换页收尾 `closeFeedbackOverlay()`：真的取消待执行的自动关闭（且不会二次关闭）', async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = FakeServer.empty().on(FEEDBACK_ENDPOINTS.submit, 200, { ok: true, id: 'f-1' });
+      const { app } = homeWithMarker();
+      const overlay = openFeedbackOverlay({ fetcher: fake });
+      const root = asStub(overlay);
+      setValue(one(root, 'title'), '标题');
+      setValue(one(root, 'author'), '甲');
+      setValue(one(root, 'body'), '正文');
+      clickIn(one(root, 'submit'));
+      await vi.advanceTimersByTimeAsync(0);
+
+      // 还没到延迟，宿主就换页了（`main.ts` 的 `leaveHome()` 走的就是这个函数）
+      closeFeedbackOverlay();
+      expect(overlay.parentElement, '宿主收尾没把浮层摘掉').toBeNull();
+      // 推过延迟：那个定时器**必须**已经被取消（否则会对着已摘掉的浮层再关一次）
+      await vi.advanceTimersByTimeAsync(FEEDBACK_SUCCESS_CLOSE_MS * 2);
+      expect(app.children.length, '延迟到点之后又动了首页').toBe(1);
+      // 收尾之后重开一层是干净的（单例已清）
+      const again = openFeedbackOverlay({ fetcher: fake });
+      expect(again).not.toBe(overlay);
+      closeFeedbackOverlay();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

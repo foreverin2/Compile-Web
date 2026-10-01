@@ -49,8 +49,12 @@ LINE "自测前的状态与清理"
 echo "items: $(ls "$DATA/items" | wc -l) 项；trash: $(ls "$DATA/trash" | wc -l) 项；rate: $(ls "$DATA/rate" | wc -l) 个文件"
 find "$DATA/items" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null
 find "$DATA/trash" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null
+# ★ 额度记账**也要清**：额度记在磁盘上、重启不清零，不清就会拿上一轮的 5 份把自己挡在门外
+#   （第一次跑这脚本时就是这么红的：自测 1 直接 429）
 rm -f "$DATA/rate"/*.json 2>/dev/null
-echo "清空后：items: $(ls "$DATA/items" | wc -l) 项；trash: $(ls "$DATA/trash" | wc -l) 项；rate: $(ls "$DATA/rate" | wc -l) 个文件"
+systemctl restart feedback
+sleep 1
+echo "清空后：items: $(ls "$DATA/items" | wc -l) 项；trash: $(ls "$DATA/trash" | wc -l) 项；rate: $(ls "$DATA/rate" | wc -l) 个文件（并已重启服务让内存里的额度缓存丢掉）"
 echo "日志从这一行之后的内容都是本次自测产生的：$(date -Is)"
 
 # ---- 素材 ----
@@ -235,15 +239,51 @@ req "delete 不带 Cookie" -X POST "$BASE/feedback/delete" \
   -H 'content-type: application/json' --data '{"id":"whatever"}'
 
 # ===========================================================================
-LINE "自测 11：每 IP 每天 5 份文件 —— 第 6 个 429"
-echo "本次额度来源（$DATA/rate/）："; cat "$DATA/rate"/*.json 2>/dev/null; echo
-echo "已用掉 2 个（自测 1 的两份投稿各 1 个附件）；下面连投 4 次凑到 6 个："
-for i in 1 2 3 4; do
+LINE "自测 11：限额按**提交份数**计（2026-10-01 改口径）—— 三条硬判据"
+QUOTA=$DATA/rate/submits-$(date +%Y-%m-%d).json
+q_used() { python3 -c "import json,sys,os;f=sys.argv[1];t=json.load(open(f,encoding='utf-8')) if os.path.exists(f) else {};print(t.get('$FAKE_IP',0))" "$QUOTA" 2>/dev/null || echo "?"; }
+q_dump() { if [ -f "$QUOTA" ]; then echo "    $QUOTA = $(cat "$QUOTA")"; else echo "    $QUOTA 还不存在"; fi; }
+
+echo "--- 现在这个 IP 的额度记账："; q_dump
+echo "    （自测 1 成功投了 2 份 ⇒ 按新口径应当是 2，而不是附件个数 2）"
+
+echo "① 带 5 个附件的一次提交只占 1 个额度"
+BEFORE=$(q_used)
+req "一次带 5 个附件" -X POST "$BASE/feedback/submit" \
+  -F kind=bug -F title='额度口径①：一次五个附件' -F author=a -F body=b \
+  -F "files=@shot.png" -F "files=@shot.png" -F "files=@shot.png" -F "files=@shot.png" -F "files=@shot.png"
+AFTER=$(q_used)
+echo "    额度：$BEFORE 份 -> $AFTER 份（期望 +1，不是 +5）"
+q_dump
+
+echo "② 连投 5 次成功、第 6 次 429"
+echo "    目前 $AFTER 份；再投 $((5-AFTER)) 次应该都成功，第 6 次 429"
+n=$AFTER
+while [ "$n" -lt 5 ]; do
+  n=$((n+1))
   code=$(curl -sS "${XFF[@]}" -o "$WORK/q.out" -w '%{http_code}' -X POST "$BASE/feedback/submit" \
-    -F kind=bug -F title="额度测试 $i" -F author=a -F body=b -F "files=@shot.png")
-  echo "  第 $((i+2)) 次投稿 -> HTTP $code  body: $(head -c 250 "$WORK/q.out")"
+    -F kind=bug -F title="额度口径②：第 $n 份" -F author=a -F body=b -F "files=@shot.png")
+  echo "  第 $n 份投稿 -> HTTP $code  body: $(head -c 200 "$WORK/q.out")"
 done
-echo "跑完后的额度记账："; cat "$DATA/rate"/*.json 2>/dev/null; echo
+echo "  第 6 份投稿 ->"
+code=$(curl -sS "${XFF[@]}" -o "$WORK/q.out" -w '%{http_code}' -X POST "$BASE/feedback/submit" \
+  -F kind=bug -F title='额度口径②：第 6 份' -F author=a -F body=b -F "files=@shot.png")
+echo "    -> HTTP $code  body: $(cat "$WORK/q.out")"
+q_dump
+echo "  再打一次（确认计数没有被顶过 5）："
+code=$(curl -sS "${XFF[@]}" -o "$WORK/q6b.out" -w '%{http_code}' -X POST "$BASE/feedback/submit" \
+  -F kind=bug -F title='额度口径②：再来一次' -F author=a -F body=b -F "files=@shot.png")
+echo "    -> HTTP $code  额度：$(q_used) 份"
+q_dump
+
+echo "③ 附件超 5 个仍然 400（这条判据没被改口径影响，而且不占额度）"
+BEFORE6=$(q_used)
+req "一次带 6 个附件" -X POST "$BASE/feedback/submit" \
+  -F kind=bug -F title='额度口径③：六个附件' -F author=a -F body=b \
+  -F "files=@shot.png" -F "files=@shot.png" -F "files=@shot.png" \
+  -F "files=@shot.png" -F "files=@shot.png" -F "files=@shot.png"
+echo "    额度：$BEFORE6 -> $(q_used) 份（期望不变）"
+
 echo "--- 逐份核对 meta.json 里列的每个 storedAs 是否真在磁盘上（这是最容易悄悄坏掉的一处）："
 python3 - "$DATA" <<'PYEOF'
 import json, os, sys
@@ -267,6 +307,17 @@ print('  投稿 %d 份，附件 %d 个，对不上的 %d 处' % (len(os.listdir(
 PYEOF
 echo "--- 磁盘上的附件文件总数（应等于上面的附件数）："
 find "$DATA/items" -type f ! -name meta.json | wc -l
+
+echo "--- 旧口径的 files-*.json 不参与计数（放一个进 rate/，重启服务看额度有没有被误读）："
+LEGACY=$DATA/rate/files-$(date +%Y-%m-%d).json
+BEFORE_LEGACY=$(q_used)
+echo "{\"$FAKE_IP\": 999}" > "$LEGACY"
+systemctl restart feedback; sleep 1
+AFTER_LEGACY=$(q_used)
+echo "    放了 files-*.json（写着 $FAKE_IP = 999，即旧口径下用过 999 个文件）"
+echo "    重启后这个 IP 的额度：$BEFORE_LEGACY 份 -> $AFTER_LEGACY 份（期望不变，说明旧文件没被读成份数）"
+echo "    healthz 的 legacyRateFiles：$(curl -sS http://127.0.0.1:8790/feedback/healthz | python3 -c 'import json,sys;print(json.load(sys.stdin)["legacyRateFiles"])')（期望 >= 1：被看见了，但没被读）"
+echo "    额度目录里现在有：$(ls "$DATA/rate" | tr '\n' ' ')"
 
 # ===========================================================================
 LINE "自测 12：日志里没有正文 / 密码 / cookie"
