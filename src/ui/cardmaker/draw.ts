@@ -49,10 +49,16 @@ export function hexPath(ctx: DrawCtx, box: HexBox, pointy: 'v' | 'h'): void {
 }
 
 /**
- * 把 logo **染成白色**并铺满六边形（盖住卡框上原本的图案），裁剪到六边形形状。
+ * 把 logo 铺满六边形（盖住卡框上原本的图案），裁剪到六边形形状。
  *
- * 白化用 `source-in`：先把 logo 画到一块离屏画布上，再用白色铺满同一块离屏画布 ——
- * `source-in` 只保留"两幅图都有的地方"，于是得到"logo 的形状 + 纯白"。
+ * ## 两种画法（★ 2026-10-01 用户要求）
+ *
+ *  - `logo.whiten !== false`（**默认**）：**染成白色**（参考项目的做法）。用 `source-in`：
+ *    先把 logo 画到一块离屏画布上，再用白色铺满同一块离屏画布 —— `source-in` 只保留
+ *    "两幅图都有的地方"，于是得到"logo 的形状 + 纯白"。
+ *  - `logo.whiten === false`：**原图直上** —— 不抠背景、不染白、不做任何处理，原图的颜色
+ *    与背景原样进卡面。用户原话：「若未勾选去掉 logo 背景，则直接放原图上去，不用管其他的」。
+ *
  * `logo.zoom` 可以在铺满的基础上再放大（用户滚轮调的），`offsetX/Y` 是像素偏移。
  */
 export function drawLogoHex(
@@ -60,7 +66,7 @@ export function drawLogoHex(
   img: DrawableImage,
   box: HexBox,
   pointy: 'v' | 'h',
-  logo: { zoom?: number; offsetX?: number; offsetY?: number } | null | undefined,
+  logo: { zoom?: number; offsetX?: number; offsetY?: number; whiten?: boolean } | null | undefined,
 ): void {
   const lg = logo || {};
   const z = Math.max(0.3, Math.min(4, lg.zoom || 1));
@@ -69,20 +75,25 @@ export function drawLogoHex(
   const s = Math.max(box.w / img.width, box.h / img.height) * z;
   const w = img.width * s;
   const h = img.height * s;
-  const off = document.createElement('canvas');
-  off.width = Math.max(1, Math.round(w));
-  off.height = Math.max(1, Math.round(h));
-  const oc = off.getContext('2d') as unknown as DrawCtx | null;
-  // 拿不到 2D 上下文（无 jsdom 的桩）时**直接不画**：卡面少一个 logo 比抛异常好
-  if (!oc) return;
-  oc.drawImage(img, 0, 0, off.width, off.height);
-  oc.globalCompositeOperation = 'source-in';
-  oc.fillStyle = '#ffffff';
-  oc.fillRect(0, 0, off.width, off.height);
+  /** 要画的那幅图：白化时是离屏白化版；**原图直上**时就是原图本身 */
+  let source: CanvasImageSource = img;
+  if (lg.whiten !== false) {
+    const off = document.createElement('canvas');
+    off.width = Math.max(1, Math.round(w));
+    off.height = Math.max(1, Math.round(h));
+    const oc = off.getContext('2d') as unknown as DrawCtx | null;
+    // 拿不到 2D 上下文（无 jsdom 的桩）时**直接不画**：卡面少一个 logo 比抛异常好
+    if (!oc) return;
+    oc.drawImage(img, 0, 0, off.width, off.height);
+    oc.globalCompositeOperation = 'source-in';
+    oc.fillStyle = '#ffffff';
+    oc.fillRect(0, 0, off.width, off.height);
+    source = off;
+  }
   ctx.save();
   hexPath(ctx, box, pointy);
   ctx.clip();
-  ctx.drawImage(off, box.x + (box.w - w) / 2 + ox, box.y + (box.h - h) / 2 + oy, w, h);
+  ctx.drawImage(source, box.x + (box.w - w) / 2 + ox, box.y + (box.h - h) / 2 + oy, w, h);
   ctx.restore();
 }
 
@@ -110,33 +121,15 @@ export function drawBackground(
 }
 
 /**
- * 竖版编译卡的做法：**在横版空间画完之后整张转 90°**。
+ * ★ 2026-10-01：**删掉了 `rotateToPortrait()`**。
  *
- * 为什么不是"另写一套竖版绘制"：卡框美术只有一张 `frame.png`（竖版），横版那张是把它
- * 逆时针转 90° 得到的（`ASSETS.protocolFront` 的 `rotated`）。所以只要反着转回去就能拿回
- * 竖版卡 —— 文字、面板、六边形全部跟着一起转，**一套排版两处用**。
- *
- * 参考项目 `renderCompileVertical()` 写的是**逆时针**（`translate(0, CARD_H); rotate(-90°)`）
- * 且正/背两个面方向相反（双面打印翻面之后两面都正）。本项目只导出**正面**，
- * 故只保留正面那一个方向，且下面这条注释里的"为什么是逆时针"就是那次移植的结论：
- * 竖版卡框是原图，横版是它逆时针转出来的 ⇒ 转回去要用**同向**的逆时针。
- *
- * `master` 是横版（1039×744）那一张；返回一张 744×1039 的新画布，或 `null`
- * （拿不到 2D 上下文时，调用方据此放弃这一步，而不是画出一张空白卡）。
+ * 它是给「按竖版编译卡导出」那枚按钮服务的：在横版空间（1039×744）把卡面画好之后整张
+ * 逆时针转 90° 拿回竖版成品。而模式 tab 一按就能把当前卡切成竖版，那枚按钮要么与
+ * 「导出竖版编译卡 PNG」做同一件事、要么在协议卡模式下是永远置灰的摆设 —— 用户
+ * 2026-10-01 说"这几个按钮重复了"，按钮连同这条路径一起删掉，**旋转函数也随之没有调用方**。
+ * 参考项目里这段几何（`renderCompileVertical()` 的 `translate(0, CARD_H); rotate(-90°)`）
+ * 已经不再需要：竖版卡是直接画在 744×1039 里的（卡框素材本来就是竖版）。
  */
-export function rotateToPortrait(master: HTMLCanvasElement): HTMLCanvasElement | null {
-  const out = document.createElement('canvas');
-  out.width = CARD_H;
-  out.height = CARD_W;
-  const x = out.getContext('2d') as unknown as DrawCtx | null;
-  if (!x) return null;
-  x.imageSmoothingEnabled = true;
-  x.imageSmoothingQuality = 'high';
-  x.translate(0, out.height);
-  x.rotate(-Math.PI / 2);
-  x.drawImage(master, 0, 0);
-  return out;
-}
 
 /**
  * 把设计空间（744×1039）的母版重采样到打印分辨率（标准扑克牌 63.5×88.9mm @300dpi

@@ -16,7 +16,7 @@ import {
   DECK_VERSION,
 } from '../../src/ui/cardmaker/config';
 import { bgBaseScale, clampScale, zoomAt } from '../../src/ui/cardmaker/geometry';
-import { cutoutBackground } from '../../src/ui/cardmaker/images';
+import { cutoutBackground, shouldWhitenLogo } from '../../src/ui/cardmaker/images';
 import { hashStr, mulberry32 } from '../../src/ui/cardmaker/rng';
 import {
   hydrateBg,
@@ -157,7 +157,7 @@ describe('模型工厂（移植自 test/bg.test.js 的 factories）', () => {
   it('每次给的都是**新对象**（不共享引用）', () => {
     expect(defaultTransform()).toEqual({ scale: 1, offsetX: 0, offsetY: 0 });
     expect(defaultBg()).toEqual({ type: 'none', name: null, dataUrl: null, transform: { scale: 1, offsetX: 0, offsetY: 0 } });
-    expect(defaultLogo()).toEqual({ dataUrl: null, zoom: 1, offsetX: 0, offsetY: 0 });
+    expect(defaultLogo()).toEqual({ dataUrl: null, zoom: 1, offsetX: 0, offsetY: 0, whiten: true });
     expect(defaultBg().transform).not.toBe(defaultBg().transform);
   });
 
@@ -213,7 +213,7 @@ describe('migrateBg / hydrate（移植自 test/bg.test.js）', () => {
   });
 
   it('hydrateLogo 填默认值', () => {
-    expect(hydrateLogo({ zoom: 2 })).toEqual({ dataUrl: null, zoom: 2, offsetX: 0, offsetY: 0 });
+    expect(hydrateLogo({ zoom: 2 })).toEqual({ dataUrl: null, zoom: 2, offsetX: 0, offsetY: 0, whiten: true });
     expect(hydrateLogo(null)).toEqual(defaultLogo());
   });
 
@@ -300,12 +300,15 @@ describe('牌组 JSON：导出 / 导入往返', () => {
     d.title = '测试牌组';
     d.shared.perCardBg = true;
     const custom = 'data:image/jpeg;base64,/9j/AAAABBBBCCCC';
-    d.shared.compile = { bg: { type: 'custom', name: null, dataUrl: custom, transform: { scale: 2, offsetX: 10, offsetY: -20 } }, logo: { dataUrl: 'data:image/png;base64,LOGO', zoom: 1.5, offsetX: 3, offsetY: 4 } };
+    // ⚠️ `whiten` 必须显式写出来：它是 ★ 2026-10-01 新增的字段，而 `hydrateLogo()` 会给
+    //    缺省值补 `true` ⇒ 只写一半的话"往返逐字相等"会被这个默认值打破（这本身就是
+    //    一条有效的守卫：水化过的牌组与文件里的牌组必须能对上）。
+    d.shared.compile = { bg: { type: 'custom', name: null, dataUrl: custom, transform: { scale: 2, offsetX: 10, offsetY: -20 } }, logo: { dataUrl: 'data:image/png;base64,LOGO', zoom: 1.5, offsetX: 3, offsetY: 4, whiten: false } };
     d.shared.protocol = { bg: { type: 'preset', name: 'Fire', dataUrl: null, transform: { scale: 1, offsetX: 0, offsetY: 0 } }, logo: defaultLogo() };
     const c = richCard();
     // 同一张图再被这张卡自己引用一次：池化之后文件里只该出现一份
     c.bgOwn = { type: 'custom', name: null, dataUrl: custom, transform: { scale: 1, offsetX: 0, offsetY: 0 } };
-    c.logoOwn = { dataUrl: 'data:image/png;base64,LOGO', zoom: 1, offsetX: 0, offsetY: 0 };
+    c.logoOwn = { dataUrl: 'data:image/png;base64,LOGO', zoom: 1, offsetX: 0, offsetY: 0, whiten: true };
     const p = defaultCard('p1', 'protocol');
     p.title = 'PROTOCOL';
     d.cards = [c, p];
@@ -318,6 +321,9 @@ describe('牌组 JSON：导出 / 导入往返', () => {
     expect(round.ok).toBe(true);
     if (!round.ok) return;
     expect(round.deck).toEqual(deck);
+    // ★ 2026-10-01：新增的 `whiten` 必须真的**往返**（不是读回时被默认值糊上的 true）
+    expect(round.deck.shared.compile.logo.whiten, '`whiten: false` 没被写进文件').toBe(false);
+    expect(round.deck.cards[0].logoOwn.whiten).toBe(true);
     // 反向锚点：把上游那个牌组改一个字段，往返结果就该不同（证明比较不是恒真）
     const other = fullDeck();
     other.cards[0].value = '8';
@@ -486,7 +492,7 @@ describe('★ 2026-10-01：logo 抠背景（cutoutBackground）', () => {
     const src = makePixels(W, H, [255, 255, 255, 255], (x, y) => (
       x >= 20 && x < 44 && y >= 20 && y < 44 ? [20, 30, 90, 255] : null
     ));
-    const { data, removedRatio } = cutoutBackground(src, W, H, 42);
+    const { data, removedRatio, protectedThin } = cutoutBackground(src, W, H, 42);
 
     // ① 四角与四边中点：背景被抠成**全透明**
     for (const [x, y] of [[0, 0], [W - 1, 0], [0, H - 1], [W - 1, H - 1], [32, 0], [0, 32]] as const) {
@@ -498,11 +504,18 @@ describe('★ 2026-10-01：logo 抠背景（cutoutBackground）', () => {
     for (const [x, y] of [[21, 21], [42, 21], [21, 42], [42, 42]] as const) {
       expect(alphaAt(data, W, x, y), `形状角 (${x},${y}) 被误抠了`).toBe(255);
     }
-    // ④ **绝不是整块白**（这正是用户看到的现象）：透明像素要占大头、但又不能全透明
+    // ④ **绝不是整块白**（这正是用户看到的现象）：透明像素要占大头、但又不能全透明。
+    //    实测（2026-10-01，本文件）：0.7861 = (3520 背景 − 300 细笔画保护带) / 4096。
     expect(removedRatio, `被抠掉的比例=${removedRatio}`).toBeGreaterThan(0.6);
     expect(removedRatio, '整张图都被抠了（形状也没了）').toBeLessThan(0.95);
-    // 反向锚点：被抠掉的面积 ≈ 背景面积（64²-24²=3520 / 4096 ≈ 0.859），不是"随便抠了一半"
-    expect(removedRatio).toBeGreaterThan(0.8);
+    expect(removedRatio, '被抠掉的比例与实测值差太多').toBeCloseTo(0.7861, 3);
+    // ⑤ 反向锚点：背景面积是 3520/4096 = 0.859，实测**小于**它 —— 差额就是那圈保护带
+    expect(removedRatio, '细笔画保护带没有从可抠面积里扣掉').toBeLessThan((W * H - 24 * 24) / (W * H));
+    // ⑥ 保护带的边界：离形状 3 步以内不抠、第 4 步起抠（4 邻域距离 ⇒ 菱形保护带）
+    expect(alphaAt(data, W, 19, 32), '(19,32) 距形状 1 步，应被保护').toBe(255);
+    expect(alphaAt(data, W, 17, 32), '(17,32) 距形状 3 步，应被保护').toBe(255);
+    expect(alphaAt(data, W, 16, 32), '(16,32) 距形状 4 步，应被抠掉').toBe(0);
+    expect(protectedThin, '细笔画保护带像素数（菱形，GUARD = 3）').toBe(300);
   });
 
   it('形状**内部**与背景同色的洞**不被**抠（漫水填充相对全局颜色替换的关键优势）', () => {
@@ -513,11 +526,17 @@ describe('★ 2026-10-01：logo 抠背景（cutoutBackground）', () => {
       const inner = x >= 18 && x < 30 && y >= 18 && y < 30;
       return outer && !inner ? [20, 30, 90, 255] : null;
     });
-    const { data } = cutoutBackground(src, W, H, 42);
-    expect(alphaAt(data, W, 0, 0), '外部背景没被抠').toBe(0);
-    expect(alphaAt(data, W, 24, 12), '边框被误抠').toBe(255);
+    const cut = cutoutBackground(src, W, H, 42);
+    expect(alphaAt(cut.data, W, 0, 0), '外部背景没被抠').toBe(0);
+    expect(alphaAt(cut.data, W, 24, 12), '边框被误抠').toBe(255);
     // 内部那个"与背景同色的白色洞"**必须还在**（全局颜色替换会把它一起挖空）
-    expect(alphaAt(data, W, 24, 24), '内部的白色洞被误抠（说明用的是全局颜色替换？）').toBe(255);
+    expect(alphaAt(cut.data, W, 24, 24), '内部的白色洞被误抠（说明用的是全局颜色替换？）').toBe(255);
+    // 反向对照：洞里也有被细笔画保护挡住的像素，但它们**不是**"漫水进不去"的证据 ——
+    // 真正分辨这件事的是"离边框 6 步远的那一格"（超出 GUARD，若按颜色/距离抠就会被抠掉）。
+    expect(alphaAt(cut.data, W, 24, 24), '洞心离边框 6 步，只有"漫水进不去"能保住它').toBe(255);
+    // 实测 0.5087 = (48² − 28² − 348) / 48²：外侧背景抠掉、内部洞与保护带留下
+    expect(cut.removedRatio).toBeCloseTo(0.5087, 3);
+    expect(cut.rejected).toBe(false);
   });
 
   it('本来就带 alpha 的图**原样返回**（不二次破坏），removedRatio = 0', () => {
@@ -532,14 +551,84 @@ describe('★ 2026-10-01：logo 抠背景（cutoutBackground）', () => {
     expect(Array.from(data), '带 alpha 的图被改了像素').toEqual(before);
   });
 
-  it('四角不是全透明但形状贴边时不崩（退化路径有界）', () => {
-    // 整张一个颜色（纯色块）：会被全部抠掉 ⇒ removedRatio 接近 1，但**不抛**
+  it('整张都是背景色（纯色块）⇒ 无从判断形状 ⇒ 原样返回，并如实报"本来会抠 100%"', () => {
     const W = 16, H = 16;
     const src = makePixels(W, H, [255, 255, 255, 255]);
-    const { removedRatio } = cutoutBackground(src, W, H, 42);
-    expect(removedRatio).toBeGreaterThan(0.9);
+    const before = Array.from(src);
+    const solid = cutoutBackground(src, W, H, 42);
+    // 一个非背景色像素都没有 ⇒ 距离场里没有种子 ⇒ 谁也保护不了 ⇒ 判定为"可疑"
+    expect(solid.rejected, '纯色块应当走"可疑拒绝"（原样返回）').toBe(true);
+    expect(solid.removedRatio, 'rejected 时应当报出"本来会抠多少"').toBe(1);
+    expect(Array.from(solid.data), 'rejected 却改动了像素').toEqual(before);
+    expect(solid.protectedThin, '没有实心像素 ⇒ 没有可保护的像素').toBe(0);
     // 极小图（1×1 / 0 宽）走早退分支，不崩
     expect(cutoutBackground(new Uint8ClampedArray(4), 1, 1, 42).removedRatio).toBe(0);
     expect(cutoutBackground(new Uint8ClampedArray(0), 0, 0, 42).removedRatio).toBe(0);
+  });
+
+  it('★ 加固 A：**细条 / 贴边**的图形本体不会被洗掉（用户报的"关键位置被洗掉"）', () => {
+    const W = 64, H = 64;
+    // 白底 + 一条**从左边一直连到右边**的深色细横条（高 3px）—— 典型"笔画连到边缘"
+    const src = makePixels(W, H, [255, 255, 255, 255], (x, y) => (
+      y >= 30 && y < 33 ? [20, 30, 90, 255] : null
+    ));
+    const cut = cutoutBackground(src, W, H, 42);
+    expect(cut.rejected, '这条图不该被判定为"可疑"').toBe(false);
+    // ① 细条上的像素**全部还在**（老实现会从左右边缘"走"进去把它吃掉）
+    for (const x of [0, 1, 5, 32, 58, 63]) {
+      expect(alphaAt(cut.data, W, x, 31), `细条上的 (${x},31) 被洗掉了`).toBe(255);
+    }
+    // ② 细条上下两侧的**大片背景**仍然被抠掉
+    expect(alphaAt(cut.data, W, 32, 0), '上方背景没被抠').toBe(0);
+    expect(alphaAt(cut.data, W, 32, 63), '下方背景没被抠').toBe(0);
+    // ③ 条两侧各 3 行背景被保护（4 邻域距离 1…3），第 4 行起照旧抠掉
+    for (const y of [27, 28, 29, 33, 34, 35]) {
+      expect(alphaAt(cut.data, W, 32, y), `保护带上的 (32,${y}) 被抠了`).toBe(255);
+    }
+    expect(alphaAt(cut.data, W, 32, 26), '(32,26) 距细条 4 行，应被抠掉').toBe(0);
+    expect(cut.protectedThin, '细条保护带像素数 = 6 行 × 64').toBe(384);
+    // 实测 0.8594 = (4096 − 192 细条 − 384 保护带) / 4096
+    expect(cut.removedRatio).toBeCloseTo(0.8594, 3);
+    // ④ 贴边的竖条同理（另一条边）
+    const src2 = makePixels(W, H, [255, 255, 255, 255], (x, y) => (
+      x >= 30 && x < 33 ? [20, 30, 90, 255] : null
+    ));
+    const cut2 = cutoutBackground(src2, W, H, 42);
+    for (const y of [0, 31, 63]) {
+      expect(alphaAt(cut2.data, W, 31, y), `竖条上的 (31,${y}) 被洗掉了`).toBe(255);
+    }
+    expect(alphaAt(cut2.data, W, 0, 31), '竖条左侧背景没被抠').toBe(0);
+    expect(alphaAt(cut2.data, W, 63, 31), '竖条右侧背景没被抠').toBe(0);
+    expect(cut2.protectedThin).toBe(384);
+  });
+
+  it('★ 加固 B：要抠的面积**超过上限** ⇒ 原样返回（rejected，如实报"没抠"）', () => {
+    const W = 64, H = 64;
+    // 整张白底 + 左上角只有一个 1×1 的深色点 ⇒ 距离场几乎处处很大 ⇒ 可抠面积 ≈ 100%
+    // 这种"看起来整张都是背景"的图不该被洗成透明（宁可不动）
+    const src = makePixels(W, H, [255, 255, 255, 255], (x, y) => (
+      x === 0 && y === 0 ? [20, 30, 90, 255] : null
+    ));
+    const before = Array.from(src);
+    const cut = cutoutBackground(src, W, H, 42);
+    expect(cut.rejected, '超过上限却没有判定为可疑').toBe(true);
+    expect(cut.removedRatio, 'rejected 时应当报出"本来会抠多少"').toBeGreaterThan(0.9);
+    expect(cut.removedRatio, '实测 0.9976').toBeCloseTo(0.9976, 3);
+    expect(Array.from(cut.data), 'rejected 却改动了像素（必须原样返回）').toEqual(before);
+    // 反向锚点：稍微"像样"一点的图（中间一大块形状）不会被拒绝
+    const okSrc = makePixels(W, H, [255, 255, 255, 255], (x, y) => (
+      x >= 8 && x < 56 && y >= 8 && y < 56 ? [20, 30, 90, 255] : null
+    ));
+    const ok = cutoutBackground(okSrc, W, H, 42);
+    expect(ok.rejected, '正常图形被误判成可疑').toBe(false);
+    expect(ok.removedRatio, '实测 0.2939').toBeCloseTo(0.2939, 3);
+  });
+
+  it('★ 2026-10-01：抠不成时不染白（`shouldWhitenLogo` 只有"勾了 + 抠成了"才染）', () => {
+    // 三个组合各钉一格：默认（勾了 + 抠成了）才染白
+    expect(shouldWhitenLogo(true, false), '勾了去背景且抠成了 ⇒ 染白').toBe(true);
+    expect(shouldWhitenLogo(false, false), '没勾去背景 ⇒ 原图直上，不染白').toBe(false);
+    // 关键的一格：抠图因可疑而放弃 ⇒ 返回的是不透明方图，再染白就是"一片白色小卡片"
+    expect(shouldWhitenLogo(true, true), '抠不成时不该染白（否则又变成一整块白）').toBe(false);
   });
 });

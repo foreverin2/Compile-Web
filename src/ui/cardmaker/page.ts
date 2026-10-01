@@ -53,6 +53,7 @@ import {
   normalizeImage,
   normalizeLogo,
   removeLogoBackground,
+  shouldWhitenLogo,
   type DrawableImage,
 } from './images';
 import { hydrateDeck } from './model';
@@ -546,17 +547,20 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
   const logoState = elRole('span', 'cardmaker-note', 'logo-state', '未上传 logo');
   const logoUpload = btnRole('btn cardmaker-mini', 'logo-upload', '上传 logo');
   const logoClear = btnRole('btn cardmaker-mini', 'logo-clear', '清除 logo');
-  logoRow.appendChild(el('span', 'cardmaker-note', '六边形 logo（白色着色）'));
+  // 行首这句只描述位置，**不再写"白色着色"**：勾与不勾是两种画法，那句话在"原图直上"下是错的
+  logoRow.appendChild(el('span', 'cardmaker-note', '六边形 logo'));
   logoRow.appendChild(logoState);
   logoRow.appendChild(logoUpload);
   logoRow.appendChild(logoClear);
   /**
-   * ★ 2026-10-01（用户报"logo 上传后只出现一片白色的小卡片"）：**「去掉 logo 背景」开关**（默认开）。
+   * ★ 2026-10-01（用户要求"改死语义"）：**「去掉 logo 背景（推荐）」开关**（默认开）。
    *
-   * 为什么需要它：卡面上的 logo 会被**整体染成白色**（参考项目的做法），所以一张
-   * **不透明方形**的图会变成"一整块白"。默认开启时上传的图会先把**与边缘连通的背景**
-   * 抠成透明（只留形状），于是方形背景消失、只剩图形本身。
-   * 关掉它 = 「保留原图」，用于"我的图本来就是透明背景/就是要整块"这类情况。
+   * 两种状态**各自是完整的处理方式**，不是"开/关某个修饰"：
+   *  - **勾选（默认）** = 抠掉与四边相连的背景 → 再染成白色（卡面 logo 是白色的）；
+   *  - **不勾选** = **原图直上**：不抠背景、不染白、不做任何处理，原图的颜色与背景原样进卡面。
+   *
+   * 文案把这两条写清楚（用户上一轮的困惑正是"没说清不勾选会怎样"），并且**如实**交代
+   * 勾选时的两种结局：抠成了才染白；抠图因可疑而放弃时**不染白**（放原图，见 `shouldWhitenLogo`）。
    */
   const logoCutRow = el('label', 'cardmaker-toggle');
   const logoCutBox = document.createElement('input');
@@ -569,23 +573,41 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
   logoCutRow.appendChild(el(
     'span',
     'cardmaker-hint',
-    '卡面上的 logo 是白色的，所以上传一张不透明方图会变成一整块白。开着这一项时，'
-    + '会把与图片四边相连的背景色抠成透明，只留图形本身的形状；你的图本来就已经透明背景时不受影响。'
-    + '想原样保留就取消勾选。',
+    '勾选（默认）：只保留图形的形状 —— 把与图片四边相连的背景抠成透明，再把 logo 染成白色'
+    + '（卡面上的 logo 本来就是白色的）。抠不动的时候（整张图几乎都是背景色）不硬抠：'
+    + '直接放原图、也不染白。不勾选：**原图直上**，不抠背景也不染白，原图的颜色与背景原样进卡面。'
+    + '图片本身已经是透明背景时，勾不勾选都一样。上传时生效。',
   ));
   optionsCol.appendChild(logoRow);
   optionsCol.appendChild(logoCutRow);
 
-  /* ── ⑦ 导出 / 导入 ── */
+  /* ── ⑦ 导出 / 导入（按用途分两组） ──
+   *
+   * ★ 2026-10-01（用户："图中的这四个按钮我感觉没啥用呀，是不是重复了"）：
+   *
+   *  - **删掉了「按竖版编译卡导出」**：它是**真正的残留废按钮** —— 模式 tab 已经能把当前卡
+   *    切成竖版/横版，而它只对竖版卡有意义（协议卡模式下永远是置灰摆设）。
+   *    它的禁用态分支、`export-refused` 结论码与对应测试一并删掉（测试改成"这个按钮不存在"）。
+   *  - 留下的一行**按用途分两组**（不是四个并列的按钮）：
+   *      · **导出图片**：当前卡 PNG（尺寸跟着当前模式：竖版 750×1050 / 横版 1050×750）；
+   *      · **牌组存档**：导出 / 导入 JSON（换设备、备份用 —— 与"导出一张图"是两回事）。
+   *    文案统一成"导出…"的动宾式，不再出现"当前卡 PNG"这种半截指代。
+   */
   const ioRow = elRole('div', 'cardmaker-actions', 'io');
-  const exportPng = btnRole('btn', 'export-png', '导出当前卡 PNG');
-  const exportPortrait = btnRole('btn cardmaker-mini', 'export-portrait', '按竖版编译卡导出');
+  const imgGroup = elRole('div', 'cardmaker-group', 'io-image');
+  imgGroup.appendChild(el('span', 'cardmaker-note', '导出图片'));
+  // 初始文案就直接是**竖版**那一套（`refreshAll()` 之后由 `syncModeFields` 按模式/面重写；
+  // 首帧也不许出现"当前卡"这种半截指代 —— 用户上一轮的困惑原话就是"这四个按钮重复了"）
+  const exportPng = btnRole('btn', 'export-png', '导出竖版编译卡 PNG（750×1050）');
+  imgGroup.appendChild(exportPng);
+  const deckGroup = elRole('div', 'cardmaker-group', 'io-deck');
+  deckGroup.appendChild(el('span', 'cardmaker-note', '牌组存档'));
   const exportJson = btnRole('btn cardmaker-mini', 'export-json', '导出牌组 JSON');
   const importJson = btnRole('btn cardmaker-mini', 'import-json', '导入牌组 JSON');
-  ioRow.appendChild(exportPng);
-  ioRow.appendChild(exportPortrait);
-  ioRow.appendChild(exportJson);
-  ioRow.appendChild(importJson);
+  deckGroup.appendChild(exportJson);
+  deckGroup.appendChild(importJson);
+  ioRow.appendChild(imgGroup);
+  ioRow.appendChild(deckGroup);
   optionsCol.appendChild(ioRow);
 
   /* ── ⑧ 署名（用户明确要求：显眼且准确） ── */
@@ -952,16 +974,11 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
       faceBtns[side].classList.toggle('cardmaker-face-on', on);
     }
 
-    /* 导出按钮的文案/可用态跟着模式走（"当前卡"不许再指代不明） */
+    /* 唯一那个图片导出按钮的文案跟着模式/面走（"当前卡"这种半截指代不许出现） */
     exportPng.textContent = proto
       ? `导出协议卡${face === 'back' ? '背面' : '正面'} PNG（横版 1050×750）`
-      : '导出当前卡 PNG（竖版 750×1050）';
+      : '导出竖版编译卡 PNG（750×1050）';
     exportPng.disabled = card === null;
-    // 协议卡只有横版形态 ⇒ 竖版导出它对不上；置灰 + 文案说清，而不是点了才报错
-    exportPortrait.disabled = proto || card === null;
-    exportPortrait.textContent = mode === 'protocol'
-      ? '按竖版编译卡导出（协议卡只有横版形态，已停用）'
-      : '按竖版编译卡导出（当前已是竖版成品空间）';
 
     if (card === null) {
       bgMode.textContent = '没有可编辑的卡';
@@ -983,7 +1000,22 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     zoomLabel.textContent = `${pct}%`;
     zoomInput.disabled = bg.type === 'none';
     resetBtn.disabled = bg.type === 'none';
-    logoState.textContent = logoOf(card).dataUrl ? 'logo：已上传（白色着色）' : '未上传 logo';
+    /**
+     * logo 状态行必须**如实**：染白与原图直上是两种不同的画法，不能都写成"白色着色"
+     * （用户正是因为这句话与实际卡面不符才报的缺陷）。
+     */
+    const lg = logoOf(card);
+    logoState.textContent = !lg.dataUrl
+      ? '未上传 logo'
+      : lg.whiten === false
+        ? 'logo：已上传（原图直上，未染白）'
+        : 'logo：已上传（已抠背景 + 白色着色）';
+    /**
+     * 开关回显**当前 logo 实际用的处理方式**：切卡/读存档之后，勾选框必须与卡面上的那个 logo
+     * 一致 —— 否则用户看到"勾着去背景"，卡上却是一张原图，又一次"界面在说假话"。
+     * `whiten` 缺省（老存档）视为 `true`，与 `drawLogoHex` 的判据一致。
+     */
+    logoCutBox.checked = lg.dataUrl === null ? true : lg.whiten !== false;
   }
 
   /** 取 2D 上下文（拿不到就返回 null；调用方一律据此跳过绘制） */
@@ -1313,27 +1345,45 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
         return;
       }
       if (dataUrl === null) { say('已取消选择 logo：屏上没有任何改动。', 'logo-upload-cancelled', 'info'); return; }
+      /**
+       * ★ 2026-10-01（用户要求把语义改死）：
+       *  - **未勾选** ⇒ **原图直上**：不抠背景、不上白、不做任何处理
+       *    （`whiten: false` ⇒ 绘制层直接 `drawImage` 原图，颜色与背景原样进卡面）；
+       *  - **勾选**（默认）⇒ 抠背景 + 上白（`whiten: true`），并把抠的结果**如实**报出来
+       *    （抠了多少 / 因可疑而没抠 ⇒ 这时**不染白**，直接放原图原色）。
+       *
+       * ⚠️ "抠不成就不染白"是 `shouldWhitenLogo()` 定的规则，不是这里随手写的：抠图因可疑
+       * 放弃时返回的是一张**不透明方图**，再染白就正好回到用户报的"一片白色小卡片"。
+       */
+      const cutEnabled = logoCutBox.checked;
       let small: string;
-      let cutNote = '';
+      let note: string;
+      let cutRejected = false;
       try {
-        if (logoCutBox.checked) {
-          // ★ 2026-10-01：先抠背景（只留形状），再缩到 320px —— 顺序不能反
-          //   （先缩图会把背景与形状混色，边缘判断不准）。
+        if (cutEnabled) {
+          // 先抠背景（只留形状），再缩到 320px —— 顺序不能反
+          // （先缩图会把背景与形状混色，边缘判断不准）。
           const cut = await removeLogoBackground(dataUrl);
+          cutRejected = cut.rejected;
           small = await normalizeLogo(cut.dataUrl);
-          cutNote = cut.removedRatio > 0
-            ? `已把 ${Math.round(cut.removedRatio * 100)}% 的像素（与四边相连的背景）变成透明。`
-            : '这张图没有可去掉的背景（四角本来就是透明的）。';
+          note = cut.rejected
+            ? `这张图的背景占得太多（约 ${Math.round(cut.removedRatio * 100)}%），抠下去会把图形本身也洗掉，`
+              + '所以这次**没有抠背景**，直接放原图（保留它自己的颜色；染白会变成一整块白，所以也没染）。'
+              + '想要一开始就不做任何处理，取消勾选。'
+            : cut.removedRatio > 0
+              ? `已把与四边相连的背景抠掉（约 ${Math.round(cut.removedRatio * 100)}% 的像素），再染成白色。`
+              : '这张图没有可去掉的背景（四角本来就是透明的），直接染成白色。';
         } else {
+          // 原图直上：只做一次尺寸压缩（为了存得下），颜色与背景一个像素都不动
           small = await normalizeLogo(dataUrl);
-          cutNote = '按你的选择保留了原图（没有去背景）。';
+          note = '按你的选择**原图直上**：没有抠背景、没有染白，卡面上就是这张图原来的颜色与背景。';
         }
       } catch (e) {
         say(`这张 logo 处理不了：${String(e)}`, 'logo-normalize-failed', 'error');
         return;
       }
       // logo **整副牌共用**（与参考项目一致：一张卡上的 logo 就是这套牌的标志）
-      const logo: Logo = { ...logoOf(card), dataUrl: small };
+      const logo: Logo = { ...logoOf(card), dataUrl: small, whiten: shouldWhitenLogo(cutEnabled, cutRejected) };
       if (deck.shared.perCardBg) {
         card.logoOwn = logo;
       } else {
@@ -1343,7 +1393,7 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
       refreshAssets();
       void refreshPreview();
       scheduleSave(0);
-      say(`logo 已上传：卡面上会画成白色并裁剪到六边形。${cutNote}`, 'logo-uploaded', 'info');
+      say(`logo 已上传：${note}`, 'logo-uploaded', 'info');
     })();
   });
 
@@ -1463,19 +1513,20 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
    *
    *  - **横版空间 1039×744**：横版协议卡的成品空间；**也是竖版编译卡的"绘制"空间**
    *    —— 竖版卡的三条面板/数值/标题的坐标全是按横版空间量的，卡框在素材目录里是
-   *    竖版那张 `frame.png`，横版那张 `protocol-front.png` 是它转出来的。
-   *  - **竖版空间 744×1039**：竖版编译卡的**成品**空间（成品 PNG / 打印用）。
-   *
-   * 所以"按竖版导出"（`portrait === true`）的做法是：**在横版空间画完**，
-   * 再整张逆时针转 90° 拿回 744×1039（`rotateToPortrait`）。反着转回去就能一套排版两处用。
+   *    竖版那张 `frame.png`（横版那张 `protocol-front.png` 是它转出来的、加载时已转好）。
+   *  - **竖版空间 744×1039**：竖版编译卡的成品空间。
    *
    * ⚠️ 这里**不能**按 `land` 取尺寸：竖版编译卡在"画"的时候用的是横版空间。
    * 第一版写成 `land ? LAND : CARD` 并"画完再转" ⇒ 画的是 744×1039 的画布（竖版坐标被当成
    * 横版用），转出来是一张**空白卡**（浏览器自查抓到的：导出那条路没人验过像素）。
+   *
+   * ⚠️ 2026-10-01：**`portrait` 参数与 `rotateToPortrait` 已删除**。它们服务的是那个
+   * "按竖版编译卡导出"的独立按钮（把横版空间画的卡转成竖版成品）；按钮删掉之后，
+   * 竖版编译卡本来就直接画在成品空间里（`w === CARD_W`），那条转 90° 的路**没有任何调用点**
+   * —— 留着就是死代码。现在按卡自己的形态取空间，画完**不转**。
    */
-  async function renderOffscreen(card: CardState, side: 'front' | 'back', portrait: boolean): Promise<HTMLCanvasElement | null> {
-    // 竖版导出 = 在横版空间画；其余情况按卡自己的形态取空间
-    const drawLand = portrait || isLandscape(card.kind);
+  async function renderOffscreen(card: CardState, side: 'front' | 'back'): Promise<HTMLCanvasElement | null> {
+    const drawLand = isLandscape(card.kind);
     const w = drawLand ? LAND_W : CARD_W;
     const h = drawLand ? LAND_H : CARD_H;
     const master = dom.createCanvas();
@@ -1484,28 +1535,27 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     const mctx = getCtx(master);
     if (!mctx) return null;
     await paint(mctx, card, side, 1, w, h);
-    // 竖版导出 = 横版空间画完再逆时针转 90°；其余两种（协议卡 / 竖版卡的普通导出）
-    // 本来就画在成品空间里，**不转**。
-    return portrait ? rotateToPortrait(master, dom) : master;
+    return master;
   }
 
   /**
    * 导出**当前卡片的当前面**为 PNG：协议卡的双面靠上方的「正面 / 背面」切换决定 ——
    * **导出的就是预览里正在看的那一面**（所见即所得）。文件名里带上 `-front` / `-back`
    * 后缀，省得两面同名互相覆盖；想两面都要就切一次面再导一次（每次一个文件，行为可预期）。
+   *
+   * ⚠️ 2026-10-01：**不再有 `portrait` 参数** —— 那个"按竖版编译卡导出"的独立按钮已删
+   * （模式 tab 已经能把当前卡切成竖版/横版，它只是个置灰摆设）。当前模式决定成品尺寸：
+   * 竖版编译卡 ⇒ 750×1050；协议卡 ⇒ 1050×750。所以这里也不再需要"协议卡按竖版导出"的
+   * 拒绝分支与 `export-refused` 结论码。
    */
-  async function exportCardPng(portrait: boolean): Promise<void> {
+  async function exportCardPng(): Promise<void> {
     const card = current();
     if (card === null) return;
-    if (portrait && isLandscape(card.kind)) {
-      say('横版协议卡只有横版形态：这一张按竖版导出没有意义，已跳过。', 'export-refused', 'warn');
-      return;
-    }
     const side: CardSide = facesOf(card).includes(face) ? face : 'front';
     const sideSuffix = facesOf(card).length > 1 ? `-${side}` : '';
     say('正在渲染…（导出按 300dpi 的成品尺寸，比屏上预览大一档）', 'export-waiting', 'info');
     try {
-      const master = await renderOffscreen(card, side, portrait);
+      const master = await renderOffscreen(card, side);
       if (master === null) { say('这台设备拿不到 2D 画布，没法导出 PNG。', 'export-unsupported', 'error'); return; }
       const out = toPoker(master);
       const name = `${safeFileName(deck.title === '' ? card.title : deck.title, 'card')}-${card.id.slice(0, 6)}${sideSuffix}.png`;
@@ -1551,8 +1601,7 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     });
   }
 
-  exportPng.addEventListener('click', () => { void exportCardPng(false); });
-  exportPortrait.addEventListener('click', () => { void exportCardPng(true); });
+  exportPng.addEventListener('click', () => { void exportCardPng(); });
 
   /* ── 导出 / 导入牌组 JSON ── */
 
@@ -1628,33 +1677,15 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
   })();
 }
 
-/* ── 与本屏注入的 `dom` 配套的两处薄封装 ──────────────────────────────── */
+/* ── 与本屏注入的 `dom` 配套的薄封装 ──────────────────────────────── */
 
-/**
- * 横版母版 → 竖版卡（744×1039，逆时针 90°）。
- *
- * 这里没有直接调 `draw.ts` 的 `rotateToPortrait`：那个函数走全局 `document`，
- * 而本屏允许注入 `dom`（单测靠它喂桩）。两处实现同一件事 —— 所以 `draw.ts` 那份
- * 由**卡框素材的预旋转**使用（`main.ts` 的 `loadCardmakerAssets`），本行由导出的那条路使用。
+/*
+ * ⚠️ 2026-10-01：这里原本还有一个导出的 `rotateToPortrait(master, dom)`
+ * （横版母版 → 竖版卡 744×1039）。它只服务"按竖版编译卡导出"那个按钮，
+ * 而那个按钮是**残留废按钮**（模式 tab 已经能把当前卡切成竖版/横版），已随本轮删除。
+ * 竖版编译卡的成品导出现在直接画在 744×1039 里（见 `renderOffscreen`），不需要再转。
+ * 帧素材那侧的旋转是另一回事（`rotateAsset90ccw`，仍在使用）。
  */
-export function rotateToPortrait(master: HTMLCanvasElement, dom: CardmakerDom): HTMLCanvasElement | null {
-  const out = dom.createCanvas();
-  out.width = CARD_H;
-  out.height = CARD_W;
-  let ctx: CanvasRenderingContext2D | null = null;
-  try {
-    ctx = out.getContext('2d');
-  } catch {
-    ctx = null;
-  }
-  if (!ctx) return null;
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = 'high';
-  ctx.translate(0, out.height);
-  ctx.rotate(-Math.PI / 2);
-  ctx.drawImage(master, 0, 0);
-  return out;
-}
 
 /** data URL → Blob（只给"没有 `toBlob`"的环境用；`atob` 是浏览器自带的，零依赖） */
 export function dataUrlToBlob(dataUrl: string): Blob {

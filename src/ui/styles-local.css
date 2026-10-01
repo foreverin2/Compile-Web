@@ -582,6 +582,14 @@
 .cardmaker-presets { display: flex; flex-wrap: wrap; gap: 6px; }
 .cardmaker-thumb { font-size: 12px; padding: 4px 10px; }
 .cardmaker-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+/* ★ 2026-10-01（用户："这四个按钮我感觉没啥用呀，是不是重复了"）：导出那一排按**用途分两组** ——
+ * 「导出图片」（当前卡 PNG，尺寸跟着当前模式）与「牌组存档」（导出/导入 JSON，换设备/备份）。
+ * 组内是紧挨的按钮，组与组之间分开成两块，扫一眼就能看出"这是两类不同的事"。 */
+.cardmaker-group {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  padding: 6px 10px; border: 1px solid #333a50; border-radius: 10px;
+  background: rgba(18, 18, 34, 0.6);
+}
 .cardmaker-mini { font-size: 12px; padding: 5px 12px; }
 .cardmaker-row {
   display: flex; flex-wrap: wrap; align-items: center; gap: 10px;

@@ -33,12 +33,24 @@ export interface Bg {
   transform: BgTransform;
 }
 
-/** 六边形里的 logo（白色着色；缩放/偏移按"每种卡"各存一份） */
+/**
+ * 六边形里的 logo。
+ *
+ * ★ 2026-10-01（用户要求）：`whiten` = **画上去时要不要染成白色**。
+ *  - `true`（默认，也是历史行为）：抠掉背景后**整体染白**（参考项目的做法）；
+ *  - `false`：**原图直上** —— 不抠背景、不染白、不做任何处理，原图的颜色与背景原样进卡面。
+ *
+ * 用户原话：「若未勾选去掉 logo 背景，则直接放原图上去，不用管其他的」。
+ * 缺省 `true` 是有意的：老牌组 JSON 里没有这个字段，按"历史行为（染白）"读回来，
+ * 而不是让老用户的 logo 突然变色。
+ */
 export interface Logo {
   dataUrl: string | null;
   zoom: number;
   offsetX: number;
   offsetY: number;
+  /** 画上去时是否染成白色（`false` = 原图直上）。缺省/缺字段 = `true` */
+  whiten?: boolean;
 }
 
 /** 竖版编译卡独有的四段文字（其余三种文本是"卡自己的"：标题/数值/三面板） */
@@ -90,7 +102,7 @@ export const defaultTransform = (): BgTransform => ({ scale: 1, offsetX: 0, offs
 
 export const defaultBg = (): Bg => ({ type: 'none', name: null, dataUrl: null, transform: defaultTransform() });
 
-export const defaultLogo = (): Logo => ({ dataUrl: null, zoom: 1, offsetX: 0, offsetY: 0 });
+export const defaultLogo = (): Logo => ({ dataUrl: null, zoom: 1, offsetX: 0, offsetY: 0, whiten: true });
 
 /**
  * 竖版/横版卡上那四段"卡自己的"文字。**默认全空**。

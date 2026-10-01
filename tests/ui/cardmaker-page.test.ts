@@ -684,33 +684,86 @@ describe('导出与导入', () => {
     expect(one(root, 'status').text).toContain('2D 画布');
   });
 
-  it('「按竖版编译卡导出」在协议卡模式下是**置灰 + 文案说清**（不是点了才报错）', async () => {
+  it('★ 那个"按竖版编译卡导出"按钮**已经删掉**（残留废按钮不许再回来）', async () => {
+    /**
+     * 用户原话：「图中的这四个**按钮**我感觉没啥用呀，是不是重复了」。
+     *
+     * 实测的重复根因：`按竖版编译卡导出` 只在竖版模式下有意义，而"当前卡"本来就是竖版的
+     * （模式 tab 一按就切）⇒ 它要么与 `导出当前卡 PNG` 做同一件事，要么在协议卡模式下
+     * 是一枚永远置灰的摆设。所以**整条路删掉**：按钮、禁用态分支、`export-refused` 结论码、
+     * `rotateToPortrait` 那条旋转路径。
+     *
+     * 这一腿是**"它不存在"的锚点**：只要有人把它加回来，这里立刻红。
+     */
     const h = harness();
     const root = await renderSettled(h);
-    // 竖版模式下它是可用的，且文案说明"当前已是竖版成品空间"
-    expect((one(root, 'export-portrait') as unknown as { disabled?: boolean }).disabled, '竖版模式下不该禁用').toBe(false);
-    expect(textOf(one(root, 'export-portrait'))).toContain('当前已是竖版成品空间');
-
-    clickRole(root, 'mode-protocol');
-    await flush();
-    const btn = one(root, 'export-portrait') as unknown as { disabled?: boolean };
-    expect(btn.disabled, '协议卡模式下"按竖版导出"没置灰（协议卡只有横版形态）').toBe(true);
-    expect(textOf(one(root, 'export-portrait')), '置灰了但文案没说清为什么').toContain('协议卡只有横版形态，已停用');
-    // 置灰 ⇒ 点了也不该落盘、不该有产出
-    clickRole(root, 'export-portrait');
-    await flush();
-    expect(h.downloads, '置灰的按钮居然还是导出了').toHaveLength(0);
+    expect(byRole(root, 'export-portrait'), '被删掉的"按竖版编译卡导出"按钮又回来了').toHaveLength(0);
+    // 源码面（**剥掉注释**再看）：三个残留物一个都不许留在**代码**里
+    // —— 注释里可以提到"它被删了、为什么删"，那正是要留下的记录。
+    const code = stripComments(PAGE_SRC);
+    expect(code, '源码里还有 export-portrait 的 role').not.toContain('export-portrait');
+    expect(code, '源码里还有 export-refused 结论码').not.toContain('export-refused');
+    expect(code, '竖版旋转那条死路径还在（rotateToPortrait）').not.toContain('rotateToPortrait');
+    expect(code, '屏上还有"按竖版编译卡导出"这句文案').not.toContain('按竖版编译卡导出');
+    // ⚠️ 只查**导出区**那种半截指代（`导出当前卡 PNG`）；`删除当前卡` 是另一码事 ——
+    //    它指的是"正在编辑的这张卡"，上下文里没有歧义，不在本轮范围内。
+    expect(code, '导出按钮又用上了"导出当前卡"这种半截指代').not.toContain('导出当前卡');
+    // 反向锚点：真正留着的那三枚按钮的面板还在（否则上面那段"不存在"可能来自整屏没渲染）
+    expect(byRole(root, 'export-png')).toHaveLength(1);
+    expect(byRole(root, 'export-json')).toHaveLength(1);
+    expect(byRole(root, 'import-json')).toHaveLength(1);
   });
 
-  it('「导出当前卡 PNG」的文案跟着模式走（"当前卡"不再指代不明）', async () => {
+  it('导出那一片只剩**三枚按钮两组**（图片导出 / 牌组存档），三枚都可点、文案互不相同', async () => {
     const h = harness();
     const root = await renderSettled(h);
-    expect(textOf(one(root, 'export-png'))).toContain('竖版 750×1050');
-    expect(textOf(one(root, 'export-png'))).not.toContain('横版 1050×750');
+    const ioRow = one(root, 'io');
+    const buttons = descendants(ioRow).filter((n) => n.tag === 'button');
+    expect(buttons.map((b) => b.text), '导出区的按钮数量/文案与"三枚两组"不符')
+      .toEqual(['导出竖版编译卡 PNG（750×1050）', '导出牌组 JSON', '导入牌组 JSON']);
+    // 两组各自的标题（"这是导图片"还是"这是存档"要一眼分得开）
+    expect(textOf(one(root, 'io-image'))).toContain('导出图片');
+    expect(textOf(one(root, 'io-deck'))).toContain('牌组存档');
+    // 分组不是摆设：图片组里只有一枚按钮，存档组里有两枚
+    expect(descendants(one(root, 'io-image')).filter((n) => n.tag === 'button')).toHaveLength(1);
+    expect(descendants(one(root, 'io-deck')).filter((n) => n.tag === 'button')).toHaveLength(2);
+    // 三枚都**没被禁用**（上一版那枚废按钮是靠 disabled 装样子的）
+    for (const b of buttons) {
+      expect((b as unknown as { disabled?: boolean }).disabled, `「${b.text}」被禁用了`).not.toBe(true);
+    }
+    // 三枚都**真的接到了处理器**：各点一次，结论码必须是"各自那条路"的（不是没反应）
+    const h2 = harness();
+    const root2 = await renderSettled(h2);
+    clickRole(root2, 'export-png');
+    await flush();
+    expect(statusCode(root2), '图片导出按钮没接到处理器').toBe('export-unsupported');
+    clickRole(root2, 'export-json');
+    expect(statusCode(root2), '牌组导出按钮没接到处理器').toBe('export-json-ok');
+    h2.setReadText(null);
+    clickRole(root2, 'import-json');
+    await flush();
+    expect(statusCode(root2), '牌组导入按钮没接到处理器').toBe('import-cancelled');
+  });
+
+  it('「导出竖版编译卡 PNG」的文案跟着模式/面走（"当前卡"这种半截指代不许出现）', async () => {
+    const h = harness();
+    const root = await renderSettled(h);
+    expect(textOf(one(root, 'export-png'))).toContain('导出竖版编译卡 PNG（750×1050）');
+    expect(textOf(one(root, 'export-png'))).not.toContain('横版');
     clickRole(root, 'mode-protocol');
     await flush();
-    expect(textOf(one(root, 'export-png'))).toContain('横版 1050×750');
-    expect(textOf(one(root, 'export-png'))).not.toContain('竖版 750×1050');
+    expect(textOf(one(root, 'export-png'))).toContain('导出协议卡正面 PNG（横版 1050×750）');
+    expect(textOf(one(root, 'export-png'))).not.toContain('竖版');
+    // 协议卡的背面是**另一张纸**，文案要跟到面（不是只说"协议卡"）
+    clickRole(root, 'face-back');
+    await flush();
+    expect(textOf(one(root, 'export-png'))).toContain('导出协议卡背面 PNG（横版 1050×750）');
+    // 导出区里不许再出现"当前卡"这种指代不明的说法（用户的困惑原话）。
+    // ⚠️ 只查导出区：`删除当前卡` 那种"正在编辑的这张卡"在上下文里没有歧义。
+    expect(textOf(one(root, 'io')), '导出区还有"当前卡"这种半截指代').not.toContain('当前卡');
+    // 反向锚点：这两句**确实**是不同的文案（否则上面几条"跟着模式走"分辨不出来）
+    expect(textOf(one(root, 'io'))).toContain('导出图片');
+    expect(textOf(one(root, 'io'))).toContain('牌组存档');
   });
 
   it('「导出牌组 JSON」⇒ 落盘的文件名以 .cardmaker.json 结尾，内容是能读回来的牌组', async () => {
