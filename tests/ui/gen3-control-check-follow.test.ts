@@ -76,6 +76,9 @@ function makeState(): GameState {
   s.players[0].stacks[0] = [card('f-0', 'fire-1', 0, 0)];
   s.players[0].stacks[1] = [card('f-1', 'fire-2', 0, 1)];
   s.players[0].stacks[2] = [card('f-2', 'fire-3', 0, 2)];
+  // ⚠️ 本文件**不加** lust-0 夹具（2026-10-01 曾为"C4 按色欲在场门控"加过一张，随用户第二次
+  // 拍板"那根红蓝对比条还是作为公用的特效吧"一起回退）：C4 是**公用特效、不门控** ⇒
+  // 本文件三条跟随腿的局面里有没有色欲与产出无关。夹具保持改动前的样子。
   return s;
 }
 

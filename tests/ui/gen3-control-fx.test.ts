@@ -202,12 +202,18 @@ describe('批次 D 守卫：控制权族 + 常驻层', () => {
     expect(seatTs, '贴端距离不是单一出处常量（Minor M-4）').toMatch(/export const FX_TRACK_EDGE_PCT = 4;/);
     expect(seatTs, '竖向贴端距离不是单一出处常量（R14-5：渲染侧与 FX 侧会再次错开）')
       .toMatch(/export const FX_TRACK_EDGE_PCT_Y = 22;/);
-    // #8：牵引链只在"色欲卡效果"造成的易主时播；否则走轻量提示（不牵链条）
+    // #8 + ★2026-10-01 口径修正：**只有色欲卡触发的易主才播这套特效**。
+    // ⚠️ 判据随口径**收紧**（不是放宽）：旧句查的是"有 `controlMiniFx` 这个轻量版"——
+    //    那正是用户 2026-10-01 否掉的"跨协议共用"（别的协议触发的易主也播一套脉冲 + 文字标）。
+    //    新句查三件事，比旧句更严：
+    //      ① 判据仍是 `reason==='effect' && sourceDefId.startsWith('lust-')`（同一个 `lustDrivenControl`）；
+    //      ② 它必须在 `gen3ControlChangedFx` 的**最前面**当门用（`if (!lustDrivenControl(p)) return;`）；
+    //      ③ 旧的"轻量提示"那条路已经不存在（`controlMiniFx` 整体删除 ⇒ 非色欲一个节点都不建）。
     expect(controlTs).toContain('lustDrivenControl(');
     expect(controlTs).toMatch(/p\.reason === 'effect' && \(p\.sourceDefId \?\? ''\)\.startsWith\('lust-'\)/);
-    expect(controlTs).toContain('controlMiniFx(');
-    expect(syncCss, 'CSS 缺少轻量版脉冲/文字标').toContain('.g3ctrl-mini-pulse');
-    expect(syncCss).toContain('.g3ctrl-mini-chip');
+    expect(controlTs, '非色欲触发的易主没有在函数最前面被挡掉（= 仍会播/建层）')
+      .toMatch(/export function gen3ControlChangedFx\([\s\S]{0,400}if \(!lustDrivenControl\(p\)\) return;/);
+    expect(controlTs, '旧的"轻量提示"（controlMiniFx，跨协议共用）又回来了').not.toContain('controlMiniFx');
     // 引擎侧：卡牌效果必须带上效果源 defId（否则 UI 无法判定"是不是色欲在控制控制权"）
     for (const f of ['core/effects/cards/lust.ts', 'core/effects/cards/envy.ts', 'core/effects/cards/nova.ts', 'core/effects/cards/wrath.ts']) {
       expect(read(f), `${f} 的 setControl 未带效果源 defId`).toMatch(/setControl\(ctx\.s,[^)]*ctx\.card\.defId\)/);

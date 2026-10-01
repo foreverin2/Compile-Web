@@ -17,7 +17,6 @@ import { cardCommandDisabled, isUncovered } from '../core/effects/context';
 import { visibleRectOf } from './gen3-util';
 // G2 修正 R3：控制轨**端归属**按座位判（自己端在下 / 对手端在上）；热座 `null` ⇒ 走改动前的左右逻辑。
 import { fxOuterForSeat, fxTrackEndPos, fxTrackFallbackPct, fxViewSeat } from './fx-seat';
-import { protocolColorOf } from './protocol-colors';
 // 2026-10-01（用户原话要点："这个特效是粘在屏幕上的，我希望调整为跟随其对应的主体的特效"）：
 // 长寿命 FX 的「跟随」注册表（`render.ts` 每帧 + `main.ts` 的滚动/缩放 rAF 各调一次 `syncFollowers`）。
 // C4 判定的条/数值/金圈是 body 级 `position: fixed` 层，坐标只在创建那一帧算一次 ⇒ 必须挂进来。
@@ -760,46 +759,34 @@ function viewportFallback(to: PlayerId): { x: number; y: number } {
 
 /**
  * 2026-09-13 用户清单 #8：控制权"牵引链"是**色欲**的视觉语法（色欲 = 控制控制权）。
- * 只有**色欲卡效果**引发的变更才播链条/断链/幽灵飞卡；判定阶段或其他协议（嫉妒1/新星2/暴怒1·4）
- * 造成的易主只播轻量提示（组件脉冲 + 文字标）——用户实测反馈"没打色欲也每次判定都蹦链条"。
  * 判定依据：引擎 `control:changed` 载荷新增的 `sourceDefId`（setControl 第 4 参）。
+ *
+ * ★ 2026-10-01 口径修正（用户两轮原话："我想知道这个特效是否和色欲的移动控制权的特效一样，
+ * 原本是某个协议的专属特效，但是由于 bug 原因导致所有比较的情况都用上了" /
+ * "我之前希望的是将这些特效作为 3 代中部分协议的特色特效，而不是希望将其作为跨协议共用的特效，
+ * 懂我意思吗，请修复"）。
+ *
+ * 本函数是**控制权族特效唯一的那道门**（用户追问门控判据时的答复："色欲协议所属的卡牌在触发
+ * 控制权相关的效果时触发特效"）：
+ *  - 判据 = 事件载荷里 `reason === 'effect'` 且 `sourceDefId` 以 `lust-` 开头
+ *    （= 色欲协议所属卡牌触发的控制权效果）；
+ *  - 别的协议（新星2、嫉妒1、暴怒1·4）触发的易主、以及**规则步骤**（判定阶段 `reason='check'`、
+ *    编译/补满手牌归还 `reason='return'`）**这套特效一个都不播** —— 包括 2026-09-13 那版
+ *    "轻量提示"（脉冲 + 文字标）：那也是"跨协议共用"，与本轮口径相反，故一并撤掉。
  */
 function lustDrivenControl(p: { reason?: string; sourceDefId?: string }): boolean {
   return p.reason === 'effect' && (p.sourceDefId ?? '').startsWith('lust-');
 }
 
-/** C1/C2 轻量版：不牵链条，只在组件卡新位置播脉冲 + 文字标（判定阶段/其他协议的易主）。
- *  2026-09-13：颜色取**效果源卡协议**的主题色（如嫉妒1 底易主 = 玉青/橙），判定阶段（无源卡）用中性灰——
- *  这样既满足用户 #8「只有色欲才牵链条」，又保留了设计稿 E2② 那种"有来源的易主要能看出是谁做的"。
- *  G2 修正 R3：落点从"一个 x"扩成"(x, y, 轴)"—— 竖向轨道下"持有者一端"在 y 轴上；
- *  文字标沿轴的**反方向**偏 54px（横排偏上、竖排偏左）以免压住滑块。 */
-function controlMiniFx(
-  p: { from: number; to: number; reason?: string; sourceDefId?: string },
-  cx: number, cy: number, x: number, y: number, axis: 'x' | 'y',
-): void {
-  const l = layer('g3ctrl-layer', Z_CTRL);
-  const color = p.sourceDefId ? protocolColorOf(p.sourceDefId) : '#b4bac4';
-  const pulse = el('i', 'g3ctrl-mini-pulse');
-  pulse.style.left = `${x}px`;
-  pulse.style.top = `${y}px`;
-  pulse.style.setProperty('--mc', color);
-  l.appendChild(pulse);
-  const gained = p.to === 0 || p.to === 1;
-  const chip = el('i', 'g3ctrl-mini-chip', gained ? `控制组件 → P${p.to + 1}` : '控制组件归还中立');
-  chip.style.left = axis === 'y' ? `${x - 54}px` : `${x}px`;
-  chip.style.top = axis === 'y' ? `${y}px` : `${cy - 54}px`;
-  chip.style.setProperty('--mc', color);
-  chip.style.animationDelay = '120ms';
-  l.appendChild(chip);
-  void cx;
-  window.setTimeout(() => l.remove(), 900);
-}
-
-/** C1/C2/C5：控制权变更（获得 = 牵引链拉来 / 失去 = 链断 / 归还中立） */
+/** C1/C2/C5：控制权变更（获得 = 牵引链拉来 / 失去 = 链断 / 归还中立）。
+ *
+ *  ★ 2026-10-01（本轮）：**门在最前面** —— 非色欲卡触发时本函数**一个 DOM 节点都不建**
+ *  （`controlImgRect()` 也不查）。判据见 `lustDrivenControl` 的头注。 */
 export function gen3ControlChangedFx(
   p: { from: number; to: number; reason?: string; sourceDefId?: string },
   s: GameState,
 ): void {
+  if (!lustDrivenControl(p)) return;
   const r = controlImgRect();
   if (!r) return;
   const cx = r.left + r.width / 2;
@@ -810,11 +797,6 @@ export function gen3ControlChangedFx(
     // G2 修正 R3：热座在 x 轴（左右）、远程页在 y 轴（上下：自己端在下 / 对手端在上）。
     const axis = controlTrackAxis();
     const target = controlTrackPoint(p.to) ?? viewportFallback(p.to);
-    // #8：非色欲驱动的易主 → 只播轻量提示（不牵链条、不飞幽灵卡）
-    if (!lustDrivenControl(p)) {
-      controlMiniFx(p, cx, cy, target.x, target.y, axis);
-      return;
-    }
     const l = layer('g3ctrl-layer', Z_CTRL);
     // 获得：组件卡幽灵沿弧线飞到新持有者一侧 + 3 节红色牵引链 + 落位脉冲/冲击环
     const ghost = el('div', 'g3ctrl-ghost');
@@ -872,13 +854,10 @@ export function gen3ControlChangedFx(
   }
 
   // 失去/归还中立：3 节链条依次崩断 + 暗紫余温（留在原持有者一侧）
+  // 2026-10-01：非色欲分支已在本函数最前面统一返回（这里不再有"轻量提示"那一支）
   const axis = controlTrackAxis();
   const from = p.from === 0 || p.from === 1 ? (controlTrackPoint(p.from) ?? viewportFallback(p.from)) : null;
   const side = from ? (axis === 'y' ? from.y : from.x) : (axis === 'y' ? cy : cx);
-  if (!lustDrivenControl(p)) {
-    controlMiniFx(p, cx, cy, side, from ? (axis === 'y' ? from.x : from.y) : cy, axis);
-    return;
-  }
   const l = layer('g3ctrl-layer', Z_CTRL);
   for (let i = 0; i < 3; i++) {
     const link = el('i', 'g3ctrl-link break');
@@ -1138,6 +1117,15 @@ export function gen3ControlCheckFx(
   p: { player: PlayerId; wins: number; leading: Line[]; gained: boolean },
   s: GameState,
 ): void {
+  // ★ 2026-10-01（用户第二次拍板，"算了，那根红蓝对比条还是作为公用的特效吧"）：
+  // **C4 是公用特效，不门控** —— 每回合判定阶段照旧播（三条对比条 + 数值盒 + 领先金圈 + 标题/结果）。
+  //
+  // 与 C1/C2/C5 的区别（同一轮口径，别混）：判定阶段是**规则步骤** —— `core/rules/control.ts` 的
+  // `checkControl` 发 `rule:control-check` 那一刻**没有"哪张卡触发"的信号**，所以就算想按"色欲卡触发"
+  // 门控也没有判据；用户对它的裁决是"公用"，理由就是它是**判定这条规则的反馈**（谁都能看到自己
+  // 在哪两条线上领先），不是某个协议的"归属感"演出。
+  // ⇒ 本轮**不在这里加任何门**（曾按"色欲在场"门控过一版，已按用户口径回退）。
+  // ⚠️ `s` 仍要收下：下面 `cmpBarGeom` / `followCmp` 的线值都从它来。
   const l = layer('g3ctrl-check-layer', Z_CTRL);
   const foe: PlayerId = p.player === 0 ? 1 : 0;
   const leading = new Set(p.leading);
