@@ -18,6 +18,7 @@ import {
   FEEDBACK_SUCCESS_CLOSE_MS,
   buildDeleteBody,
   buildReadBody,
+  buildSubmitForm,
   checkFileSelection,
   feedbackCountText,
   feedbackMissingText,
@@ -36,7 +37,7 @@ import {
   closeFeedbackOverlay,
   closeHiddenView,
   feedbackFormElement,
-  feedbackPasswordElement,
+  feedbackPasswordPanel,
   initFeedbackShortcut,
   isFeedbackShortcut,
   isHomeScreenActive,
@@ -255,28 +256,53 @@ function setValue(n: StubNode, v: string): void {
   (n as unknown as { value: string }).value = v;
 }
 
-/** 附件夹具的**最小形状**（产出代码只读 `name` / `size`，见 `readInputFiles`） */
-interface PickedLike { name: string; size: number }
+/**
+ * 附件夹具的一项：`name` + **可选的** `size` 覆盖（缺省 = 真 `File` 自己的字节数）。
+ *
+ * `size` 覆盖是给预检那几条腿用的（要造 `>10MB` 的读数，不能真分配 10MB 内存）——
+ * 靠 `Object.defineProperty` 在**真 `File` 实例**上盖一个 own `size`，
+ * 于是"真字节"与"任意读数"两者都要得到（2026-10-01 实测可行）。
+ */
+interface PickedLike { name: string; size?: number }
 
 /**
  * 给 `<input type=file>` 塞一批"选中的文件"并派发 change。
  *
- * 夹具只给 `name` / `size` 两个字段 —— 产出代码的预检与请求元信息
- * （`FeedbackRequestInfo.files`）读的就是这两样，所以这里能逐字断言。
+ * ## ★ 2026-10-01 线上验收后**重写**（这是抓出真 bug 的那一处）
  *
- * ⚠️ **不伪造 `File`/`Blob`**（2026-10-01 实测的边界，写清楚免得后人以为漏了）：
- * 本文件的桩会把 `window` 换掉，之后在测试里造出来的 `Blob` 与**本进程真实 `FormData`**
- * 要的那个 `Blob` 不是同一个身份 ⇒ `FormData.append('files', …)` 会当场抛
- * `parameter 2 is not of type 'Blob'`（那是桩环境的性质，不是产出代码的缺陷）。
- * 真浏览器里 `<input type=file>` 给的就是 `File`（`name`/`size`/字节齐全），所以
- * "附件字节有没有随请求发出去"这一条只能由真浏览器/服务端那一侧证明；本文件证明的是
- * **预检、字段名、元信息与三条读数**（见下面那条"非 Blob 的实参也不会把提交打断"）。
+ * 旧夹具塞的是 `{ name, size }` 这种**纯对象**，并在注释里写着"桩环境里造不出真 Blob"——
+ * **那句话是错的**（真 `File`/`Blob` 在桩环境里好好的：标签正确、`FormData` 照收）。后果是：
+ * 产出代码里那条 `isBlobLike` 守卫当时**只认 `[object Blob]`、漏了 `File`**，
+ * 而纯对象本来就该被守卫挡掉 ⇒ "守卫恒假"这件事在本文件里**测不出来**，
+ * 于是线上的附件被静默丢掉（用户看到"已选择 1 份附件"、服务端 `files: []`）。
+ *
+ * 现在夹具塞的是**真 `File`**（`input.files[i]` 在浏览器里就是它：`name`/`size`/字节齐全），
+ * 产出代码读的 `f.name`/`f.size` 与随请求发出去的**字节**都是同一份对象 ⇒
+ * 守卫退回旧写法时，"附件真的进了 FormData"那条腿会**当场变红**。
  */
 function pickFiles(input: StubNode, files: ReadonlyArray<PickedLike>): void {
   const list: { length: number } & Record<number, unknown> = { length: files.length };
   files.forEach((f, i) => {
-    list[i] = { name: f.name, size: f.size };
+    const file = new File([`内容：${f.name}`], f.name, { type: 'application/octet-stream' });
+    if (f.size !== undefined) {
+      // own 属性盖住 Blob.prototype 上那个 size getter（真字节仍在，只是读数被改）
+      Object.defineProperty(file, 'size', { value: f.size, configurable: true });
+    }
+    list[i] = file;
   });
+  (input as unknown as { files: unknown }).files = list;
+  fireIn(input, 'change');
+}
+
+/**
+ * 塞一批**不是字节**的东西（纯对象）——给"宿主接缝给错了"那条腿用。
+ *
+ * 它与 `pickFiles` 的差别是刻意的：产出代码的守卫要能在"拿不到字节"时**跳过那一份**
+ * 而不是把整次提交弄炸，这一条用一个不带字节的对象来钉。
+ */
+function pickNonByteEntries(input: StubNode, files: ReadonlyArray<PickedLike>): void {
+  const list: { length: number } & Record<number, unknown> = { length: files.length };
+  files.forEach((f, i) => { list[i] = { name: f.name, size: f.size ?? 10 }; });
   (input as unknown as { files: unknown }).files = list;
   fireIn(input, 'change');
 }
@@ -394,6 +420,47 @@ describe('纯逻辑核：必填校验 / 附件预检 / 读数 / 响应读数', (
     expect(feedbackMissingText(oneMissing)).toBe('还有必填项没写：说明文本。');
     // 都填了 ⇒ 不该有任何提示（空串是"别说"的机器出口）
     expect(feedbackMissingText(missingFields({ title: 'a', author: 'b', body: 'c' }))).toBe('');
+  });
+
+  it('★ 附件守卫：真 File 与真 Blob 都必须进 FormData；纯对象 / null 被跳过（线上真 bug 的正反向）', () => {
+    // ## 这条腿为什么必须存在（2026-10-01 线上验收抓出的真 bug）
+    //
+    // 守卫第一版只认 `Object.prototype.toString.call(v) === '[object Blob]'`，**漏了 `File`**；
+    // 而真实浏览器里 `<input type=file>` 给的就是 `File`，标签是 **`[object File]`**
+    // ⇒ 守卫恒假 ⇒ 附件**一次都没发出去**（用户看到"已选择 1 份附件"、服务端收到 `files: []`）。
+    // 旧夹具只造 `{name, size}` 纯对象（本来就该被挡），所以"恒假"测不出来 —— 现在两个方向都钉住：
+    // 真 File 必须进、真 Blob 必须进、纯对象/null 必须不进。
+    const file = new File(['内容'], 'a.txt', { type: 'text/plain' });
+    const blob = new Blob(['内容'], { type: 'text/plain' });
+    // 前置锚点（这条腿的立论基础）：真 File 的标签**不是** `[object Blob]`
+    expect(Object.prototype.toString.call(file), '前置：File 的标签变了？那这条腿的立论要重写')
+      .toBe('[object File]');
+    expect(file instanceof Blob, '前置：File 不是 Blob 的子类？').toBe(true);
+    expect(Object.prototype.toString.call(blob)).toBe('[object Blob]');
+
+    const fd = buildSubmitForm({
+      kind: 'bug',
+      title: '标题',
+      author: '甲',
+      body: '正文',
+      files: [
+        { name: 'a.txt', size: 2, file },
+        { name: 'b.txt', size: 2, file: blob },
+        { name: 'c.txt', size: 2, file: { name: 'c.txt' } as unknown as Blob },
+        { name: 'd.txt', size: 2, file: null as unknown as Blob },
+      ],
+    });
+    const sent = fd.getAll('files');
+    expect(sent.length, '真 File / 真 Blob 没进 FormData —— 守卫漏掉 File 时就是这条红')
+      .toBe(2);
+    expect(sent.map((f) => (f as File).name)).toEqual(['a.txt', 'b.txt']);
+    expect(Object.prototype.toString.call(sent[0]), '发出去的第一份不是 File 语义').toBe('[object File]');
+    // 第二份是真 Blob（没有 name）：按**它自己的字节数**比（不写死魔数）
+    expect((sent[1] as Blob).size, '发出去的第二份没有字节').toBe(blob.size);
+    expect(blob.size).toBeGreaterThan(0);
+    // 反向：其余四个字段照旧在
+    expect(fd.get('kind')).toBe('bug');
+    expect(fd.get('title')).toBe('标题');
   });
 
   it('单份 >10MB 当场拒绝（不变量：恰好 10MB 放行、10MB+1 拒绝）', () => {
@@ -744,10 +811,20 @@ describe('表单浮层（两种操作 + 必填 + 附件 + 提交）', () => {
     expect(fd.get('title')).toBe('自创协议「回声」');
     expect(fd.get('author')).toBe('甲');
     expect(fd.get('body')).toBe('效果这样结算……');
-    // 附件按契约那个字段名（`files`）出现。⚠️ 夹具给的**不是字节**（见 `pickFiles` 的说明），
-    // 所以 `FormData` 里没有 `files` 条目（产出代码只把"真的是字节"的那些放进去）；
-    // 附件这一路的判据落在请求元信息上（下面那条），以及预检那几条腿上。
-    expect([...fd.keys()], 'multipart 的字段名与契约对不上').toEqual(['kind', 'title', 'author', 'body']);
+    // ★ 2026-10-01 线上验收后**加强**（原来是"断言 `files` 不在 FormData 里"，那是个错期望）：
+    //   附件必须**真的**进请求体。这条腿就是抓着"守卫漏掉 `File`"那条真 bug 的那一条 ——
+    //   把 `isBlobLike` 退回"只认 `[object Blob]`"的写法，这里当场变红。
+    const sent = fd.getAll('files');
+    expect(sent.length, '附件没有进 FormData（线上就是这条：服务端收到 files: []）').toBe(1);
+    const sentFile = sent[0] as File;
+    expect(Object.prototype.toString.call(sentFile), '发出去的不是 File/Blob 语义的东西')
+      .toBe('[object File]');
+    expect(sentFile.name, '发出去的那一份名字不对').toBe('示意图.png');
+    // 反向锚点：其余四个字段一个不少（附件加上去之后没把别的挤掉）
+    expect(fd.get('kind')).toBe('protocol');
+    expect(fd.get('title')).toBe('自创协议「回声」');
+    expect(fd.get('author')).toBe('甲');
+    expect(fd.get('body')).toBe('效果这样结算……');
     // 元信息（同一次请求的机器可读副本）
     expect(reqs[0].info).toEqual({
       kind: 'protocol',
@@ -952,14 +1029,16 @@ describe('表单浮层（两种操作 + 必填 + 附件 + 提交）', () => {
     const fake = FakeServer.empty().on(FEEDBACK_ENDPOINTS.submit, 200, { ok: true, id: 'f-1' });
     const { root } = form(fake);
     fill(root, '标题', '甲', '正文');
-    pickFiles(one(root, 'files'), [{ name: 'a.txt', size: 10 }]);
+    // ⚠️ 用 `pickNonByteEntries`（纯对象），**不是** `pickFiles`（真 `File`）：
+    //    这一条钉的正是"拿不到字节时跳过那一份"这半边守卫。
+    pickNonByteEntries(one(root, 'files'), [{ name: 'a.txt', size: 10 }]);
     clickIn(one(root, 'submit'));
     await flush();
     const reqs = fake.to(FEEDBACK_ENDPOINTS.submit);
     expect(reqs, '不拦的话这一句会在 fetch 之前同步抛，请求根本发不出去').toHaveLength(1);
     const fd = reqs[0].body as FormData;
     expect(fd.get('title'), '正文/标题那一半也跟着丢了').toBe('标题');
-    expect(fd.getAll('files'), '夹具给的不是字节 ⇒ 这一项本来就不该出现').toHaveLength(0);
+    expect(fd.getAll('files'), '给的不是字节 ⇒ 跳过那一份（不硬塞、也不把提交弄炸）').toHaveLength(0);
     expect(reqs[0].info!.files.map((f) => f.name), '元信息里仍要看得到那一份附件').toEqual(['a.txt']);
     expect(one(root, 'status').text).toContain('提交成功');
   });
@@ -1090,12 +1169,21 @@ describe('表单浮层（宿主那一层）：成功后自动回到首页，首�
  * 3. 口令框（独立那一层）
  * ==================================================================== */
 
-describe('口令框', () => {
-  it('输入 type=password、口令正确就回调 onOk（口令用完清空）；keydown 那条监听器真的挂着', async () => {
+/* ==================================================================== *
+ * 3. 口令框
+ *
+ * ★ 2026-10-01 线上验收：这一组原来打的是 `feedbackPasswordElement()` —— 一个**没有任何生产
+ * 调用点**的死函数（隐藏页走的一直是 `.feedback-sheet` + `feedbackPasswordPanel()`）。
+ * 死函数已整个删掉，三条腿改为直接打 `feedbackPasswordPanel()`：**那才是产线那条路**。
+ * 判据一条没少、也没放宽 —— 只是把"被测对象"从死代码换成真代码。
+ * ==================================================================== */
+
+describe('口令框（产线那条路：feedbackPasswordPanel）', () => {
+  it('输入 type=password、口令正确就回调 onOk（口令用完清空）', async () => {
     setup();
     const fake = FakeServer.empty().on(FEEDBACK_ENDPOINTS.login, 200, { ok: true });
     let okCount = 0;
-    const root = asStub(feedbackPasswordElement({
+    const root = asStub(feedbackPasswordPanel({
       onClose: () => { /* 本用例不关心 */ },
       onOk: () => { okCount += 1; },
       fetcher: fake,
@@ -1121,7 +1209,7 @@ describe('口令框', () => {
   it('空口令不发请求（先提示"请先输入口令"）', async () => {
     setup();
     const fake = FakeServer.empty();
-    const root = asStub(feedbackPasswordElement({
+    const root = asStub(feedbackPasswordPanel({
       onClose: () => { /* 无关 */ },
       onOk: () => { /* 不该被调 */ },
       fetcher: fake,
@@ -1136,7 +1224,7 @@ describe('口令框', () => {
     setup();
     const fake = FakeServer.empty().on(FEEDBACK_ENDPOINTS.login, 401, { ok: false, error: '密码不对' });
     let okCount = 0;
-    const root = asStub(feedbackPasswordElement({
+    const root = asStub(feedbackPasswordPanel({
       onClose: () => { /* 无关 */ },
       onOk: () => { okCount += 1; },
       fetcher: fake,
@@ -1147,6 +1235,18 @@ describe('口令框', () => {
     expect(one(root, 'password-status').text).toBe('密码不对');
     expect(one(root, 'password-status').dataset.kind).toBe('error');
     expect(okCount, '密码不对却还是放行了').toBe(0);
+  });
+
+  it('会话过期退回来时：`notice` 那句话写在状态行上（口令框唯一的提示通道）', async () => {
+    setup();
+    const root = asStub(feedbackPasswordPanel({
+      onClose: () => { /* 无关 */ },
+      onOk: () => { /* 无关 */ },
+      fetcher: FakeServer.empty(),
+      notice: '登录已过期，请重新输入口令。',
+    }));
+    expect(one(root, 'password-status').text).toBe('登录已过期，请重新输入口令。');
+    expect(one(root, 'password-status').dataset.kind).toBe('info');
   });
 });
 
@@ -1303,6 +1403,67 @@ describe('隐藏页：标记已读 / 标回未读（就地更新，不整页重�
     expect(one(root, 'count').text).toBe('共 2 条 · 未读 2 条');
     // 按钮文案也翻过来（再点一次会标回去）
     expect(byRole(root, 'card-read').find((b) => b.dataset.feedbackId === 'f-2')!.text).toBe('标记已读');
+  });
+
+  it('★ 同一张卡**连续点两次**：第一次 {read:true}、第二次必须 {read:false}（线上"死按钮"的正反向）', async () => {
+    // ## 这条腿为什么必须存在（2026-10-01 线上验收抓出的真 bug）
+    //
+    // 修之前那颗按钮的 `click` 闭包捕获的是**建卡那一刻**的 `item`，而 `applyRead` 是**换一份
+    // 新对象**放进 `this.items`（不原地改旧对象）⇒ `!item.read` 永远停在第一次的值
+    // ⇒ 第二次点下去服务端**仍然收到 `{read:true}`**（按钮文案已经写着「标为未读」，点了却没反应）。
+    // 判据必须落在**第二次请求的请求体**上 —— 只断"按钮文案变了"是抓不住它的（文案一直是好的）。
+    const fake = listServer();
+    const { view, root } = makeView(fake);
+    await enterList(view, root, fake);
+    const btn = (): StubNode => byRole(root, 'card-read').find((b) => b.dataset.feedbackId === 'f-1')!;
+    expect(btn().text, '前置：这条本来是未读').toBe('标记已读');
+
+    // ① 第一次：未读 → 已读
+    clickIn(btn());
+    await flush();
+    expect(btn().text, '第一次点完之后按钮文案没翻').toBe('标为未读');
+    expect(one(root, 'count').text).toBe('共 2 条 · 未读 0 条');
+
+    // ② 第二次：已读 → **未读**（修之前这里会再发一次 `{read:true}`）
+    clickIn(btn());
+    await flush();
+    const reqs = fake.to(FEEDBACK_ENDPOINTS.read);
+    expect(reqs, '第二次点击没有发请求').toHaveLength(2);
+    expect(await readJsonBody(reqs[0].body), '第一次的请求体').toEqual({ id: 'f-1', read: true });
+    expect(await readJsonBody(reqs[1].body), '第二次的请求体 —— 捕获旧 item 时这里会是 {read:true}（死按钮）')
+      .toEqual({ id: 'f-1', read: false });
+    // ③ 屏上真的转回去了（不是只发了请求）
+    expect(btn().text, '第二次点完之后按钮文案没翻回来').toBe('标记已读');
+    const card = byRole(root, 'card').find((c) => c.dataset.feedbackId === 'f-1')!;
+    expect(card.dataset.feedbackRead).toBe('false');
+    expect(card.cls, '徽章/色条没回来').toContain('feedback-card-unread');
+    expect(one(root, 'count').text, '未读数没加回来').toBe('共 2 条 · 未读 1 条');
+
+    // ④ 第三次再走一遍（证明"两向都能反复走"，不是只有第一次是好的）
+    clickIn(btn());
+    await flush();
+    const third = fake.to(FEEDBACK_ENDPOINTS.read)[2];
+    expect(await readJsonBody(third.body), '第三次又退化成死按钮了').toEqual({ id: 'f-1', read: true });
+    expect(one(root, 'count').text).toBe('共 2 条 · 未读 0 条');
+  });
+
+  it('★ 详情里连续点两次同理：{read:true} → {read:false}（同一处成因，详情那颗也在修的范围里）', async () => {
+    const fake = listServer();
+    const { view, root } = makeView(fake);
+    await enterList(view, root, fake);
+    clickIn(byRole(root, 'card').find((c) => c.dataset.feedbackId === 'f-1')!);
+    await flush();
+
+    clickIn(one(root, 'detail-read'));
+    await flush();
+    expect(one(root, 'detail-read').text).toBe('标为未读');
+    clickIn(one(root, 'detail-read'));
+    await flush();
+    const reqs = fake.to(FEEDBACK_ENDPOINTS.read);
+    expect(reqs).toHaveLength(2);
+    expect(await readJsonBody(reqs[1].body), '详情里第二次点击的请求体 —— 捕获旧 item 时会是 {read:true}')
+      .toEqual({ id: 'f-1', read: false });
+    expect(one(root, 'detail-read').text, '详情里的按钮文案没翻回来').toBe('标记已读');
   });
 
   it('详情里也能标记已读：就地换徽章与按钮文案（不退回列表、不重画整页）', async () => {

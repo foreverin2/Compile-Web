@@ -352,7 +352,8 @@
   background: rgba(6, 6, 14, 0.82);
   color: #eef;
 }
-.feedback-overlay-prompt { align-items: center; padding: 24px 16px; }
+/* ★ 2026-10-01 线上验收：这一条（`.feedback-overlay-prompt`）随死函数
+ * `feedbackPasswordElement()` 一起删掉了 —— 那条规则只服务它，全仓零引用。 */
 .feedback-panel {
   width: min(640px, 94vw); box-sizing: border-box;
   display: flex; flex-direction: column; gap: 10px;

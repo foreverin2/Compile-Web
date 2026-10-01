@@ -487,11 +487,17 @@ function readInputFiles(input: HTMLInputElement): FeedbackAttachment[] {
  * ===================================================================== */
 
 /**
- * 口令输入框的**面板**（不含外层遮罩）。
+ * 口令输入框的**面板**（就是 `Ctrl+Shift+O` 之后屏上那一个口令框）。
  *
- * 拆成"面板"与"浮层"两件，是为了让它能被两处复用而**不复制一份逻辑**：
- *  - `feedbackPasswordElement()` 把它包成独立浮层（直接按 `Ctrl+Shift+O` 时那一层）；
- *  - 隐藏页控制器把它嵌进自己的内容区（同一个口令框，同一个失败文案）。
+ * 它是口令这一路的**唯一**实现：隐藏页控制器（`FeedbackHiddenView.render`）把它嵌进
+ * `.feedback-sheet` 里；认证失败、401 退回来时也复用它（同一行状态区、同一句「密码不对」）。
+ *
+ * ⚠️ ★ 2026-10-01 线上验收指出的死代码：这里原来还有一个
+ * `feedbackPasswordElement()`（把这个面板再包一层遮罩的"独立浮层"版），并写着
+ * "直接按 `Ctrl+Shift+O` 时那一层"——**那句话是错的**：`openHiddenView()` 走的一直是
+ * `.feedback-sheet` + 本面板，那个包装函数**没有任何生产调用点**（只有测试在引它），
+ * 还把验收带偏过。已**整个删掉**（连同只为它存在的那条 `.feedback-overlay-prompt` 样式
+ * 与测试里对它的三处引用）；三条口令腿改为直接打本面板 —— 那才是产线那条路，判据反而更硬。
  *
  * 行为（用户原话 + 任务书要求）：`type=password`、回车提交、失败显示「密码不对」。
  * 口令**只**沿着 `fetcher` POST 出去一次，用完立刻把输入框清空。
@@ -590,20 +596,6 @@ export function feedbackPasswordPanel(nav: {
     void submit();
   });
   return panel;
-}
-
-/** 口令**浮层**（面板 + 遮罩）；独立使用时按 `Ctrl+Shift+O` 看到的就是它 */
-export function feedbackPasswordElement(nav: {
-  readonly onClose: () => void;
-  readonly onOk: () => void;
-  readonly fetcher: FeedbackFetcher;
-}): HTMLElement {
-  const overlay = el('div', 'feedback-overlay feedback-overlay-prompt');
-  overlay.appendChild(feedbackPasswordPanel(nav));
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) nav.onClose();
-  });
-  return overlay;
 }
 
 /**
@@ -952,7 +944,12 @@ export class FeedbackHiddenView {
 
     const actions = el('div', 'feedback-card-actions');
     const readBtn = actionButton('btn feedback-mini', item.read ? '标为未读' : '标记已读', () => {
-      void this.toggleRead(item, !item.read, gen);
+      // ⚠️ ★ 2026-10-01 线上验收抓出的真 bug：这里原来写的是 `!item.read` —— 那个 `item` 是
+      // **建卡那一刻**捕获的那一份，而 `applyRead` 是**换一份新对象**放进 `this.items` 的
+      // （不原地改旧对象）⇒ 捕获值永远是第一次的值 ⇒ 服务端**永远**收到 `{read:true}`，
+      // 按钮文案虽然翻成了「标为未读」，点下去却没反应（死按钮）。
+      // ⇒ 目标状态必须在**点击这一刻**现查（`readStateOf`），不许用捕获值。
+      void this.toggleRead(item, !this.readStateOf(item.id, item.read), gen);
     });
     role(readBtn, 'card-read');
     readBtn.dataset.feedbackId = item.id;
@@ -1048,6 +1045,23 @@ export class FeedbackHiddenView {
   }
 
   /**
+   * 某一条**此刻**的读状态（★ 2026-10-01 线上验收抓出的"死按钮"的修法）。
+   *
+   * 为什么必须有它：卡片与详情顶栏那两颗按钮的 `click` 闭包捕获的是**建那一格那一刻**的
+   * `item`，而 `applyRead` 是**换一份新对象**放进 `this.items`（不原地改旧对象）
+   * ⇒ 捕获值永远停在第一次的值，"标为未读"点下去仍然发 `{read:true}`（死按钮）。
+   * 所以目标状态一律**在点击那一刻**从这里现查。
+   *
+   * 优先级：详情那一格正在看的那一条（`detailItem` 是 `applyRead` 同步过的）
+   * → 列表数据 → 兜底用调用方捕获的那一份（例如详情里的条目还没进列表时）。
+   */
+  private readStateOf(id: string, fallback: boolean): boolean {
+    if (this.detailItem !== null && this.detailItem.id === id) return this.detailItem.read;
+    const fromList = this.items.find((it) => it.id === id);
+    return fromList === undefined ? fallback : fromList.read;
+  }
+
+  /**
    * ★ 2026-10-01 追加：删除（`POST /feedback/delete`，JSON `{ id }`）。
    *
    * 调用点**必须**是二次确认之后（卡片上那次点「删除」只是把确认行展开）。
@@ -1082,7 +1096,9 @@ export class FeedbackHiddenView {
       this.sayListStatus(reading.error);
       return;
     }
-    const wasUnread = !item.read;
+    // ⚠️ 这里也**不许**用捕获的 `item.read`（同"死按钮"那条缺陷的同一个成因）：先标已读、
+    //    紧接着删掉它时，捕获值还停在 `false` ⇒ 未读数会被多减一（读数当场对不上）。
+    const wasUnread = !this.readStateOf(item.id, item.read);
     this.items = this.items.filter((it) => it.id !== item.id);
     this.total = Math.max(0, this.total - 1);
     if (wasUnread) this.unread = Math.max(0, this.unread - 1);
@@ -1118,7 +1134,8 @@ export class FeedbackHiddenView {
     // ★ 2026-10-01 追加：详情里也放这两个动作（用户说"详情里更顺手"）
     if (item !== null) {
       const readBtn = button('btn feedback-mini', item.read ? '标为未读' : '标记已读', () => {
-        void this.toggleRead(item, !item.read, gen);
+        // ⚠️ 目标状态**点击这一刻现查**（原因与卡片那颗按钮逐字相同，见 `card()` 里的注释）
+        void this.toggleRead(item, !this.readStateOf(item.id, item.read), gen);
       });
       role(readBtn, 'detail-read');
       bar.appendChild(readBtn);

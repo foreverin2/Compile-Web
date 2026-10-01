@@ -571,20 +571,36 @@ export async function requestJson(
 }
 
 /**
- * 提交 + 登录这两条 POST 的**请求本体**（唯一出处）。
+ * 判断一份附件是不是"真的能交给 `FormData` 的字节"（`Blob` / **`File`**）。
  *
- * 键名与契约逐字对齐：`kind` / `title` / `author` / `body` / `files`（同一个键名重复 0..5 次）。
- */
-/**
- * 判断一份附件是不是"真的能交给 `FormData` 的字节"（`Blob` / `File`）。
+ * ## ★ 2026-10-01 线上验收抓出的真 bug（这条守卫的第一版是错的）
  *
- * 用 `Object.prototype.toString` 而不是 `instanceof Blob`：`instanceof` 在不同 realm
- * （同源 iframe、测试环境里被换掉的全局）之间会给出**假否定**，而这里要的是"它到底有没有
- * 字节语义"。`File` 与 `Blob` 的这个标签都是 `[object Blob]`。
+ * 第一版只认 `Object.prototype.toString.call(v) === '[object Blob]'`，**漏了 `File`** ——
+ * 而真实浏览器里 `<input type=file>` 给的就是 `File`，它的标签是 **`[object File]`**
+ * （`File` 是 `Blob` 的子类，但它有自己的 `Symbol.toStringTag`）。
+ * ⇒ 守卫**恒假** ⇒ `append('files', …)` 那一行**一次都没执行过** ⇒ 用户看到"已选择 1 份附件"、
+ * 服务端 `meta.json` 里 `"files": []`，**附件被静默丢掉**（实测：真 `File` ⇒ 0 条、
+ * 真 `Blob` ⇒ 1 条、纯对象 ⇒ 0 条）。
+ *
+ * 当时的单测没能抓住它，是因为夹具只造了 `{name, size}` 这种**纯对象**（当初还错误地以为
+ * "桩环境里造不出真 Blob"）⇒ 守卫对纯对象返回假是**预期**的，于是"恒假"这件事测不出来。
+ * 现在夹具用**真 `File`**（见 `tests/ui/feedback-screen.test.ts` 的 `pickFiles`），
+ * 这条守卫退回旧写法会当场变红。
+ *
+ * ## 判法（两层，都留着）
+ *
+ *  1. `instanceof Blob`：同 realm 下最快最准，且**天然认 `File`**（子类关系）；
+ *  2. 标签兜底 `[object Blob]` / **`[object File]`**：跨 realm（同源 iframe、测试桩换了全局）
+ *     时 `instanceof` 会给出假否定，标签仍然对。
+ *
+ * ⚠️ `typeof Blob === 'function'` 那一层保护是必要的：`Blob` 缺席的环境里直接写
+ * `v instanceof Blob` 会抛 `TypeError`（`instanceof` 的右操作数不是可调用对象）。
  */
 function isBlobLike(v: unknown): v is Blob {
-  return typeof v === 'object' && v !== null
-    && Object.prototype.toString.call(v) === '[object Blob]';
+  if (typeof v !== 'object' || v === null) return false;
+  if (typeof Blob === 'function' && v instanceof Blob) return true;
+  const tag = Object.prototype.toString.call(v);
+  return tag === '[object Blob]' || tag === '[object File]';
 }
 
 /**
@@ -593,11 +609,12 @@ function isBlobLike(v: unknown): v is Blob {
  * 键名与契约逐字对齐：`kind` / `title` / `author` / `body` / `files`（同一个键名重复 0..5 次）。
  *
  * ⚠️ 附件那一行**带 `isBlobLike` 守卫**：浏览器里 `<input type=file>` 给的一定是
- * `File`（`Blob` 的子类）⇒ 守卫必然为真、走标准那条 `append('files', 字节, 文件名)`。
- * 但真实 `FormData` 对第二个实参有类型检查，不是 `Blob` 就当场抛 `TypeError` —— 那个抛点
- * 在 `fetch` 之前的同步路径上，会把整次提交打断成"点了没反应"。所以拿不到字节时**跳过这一份**
- * （标题/正文/署名照发，用户至少能看到服务端对这份提交的回应），而不是把提交整个弄炸。
- * 万一将来 `append` 的形态又变了，`requestJson` 那层还有兜底（句人话，不抛未捕获异常）。
+ * `File` ⇒ 守卫为真、走标准那条 `append('files', 字节, 文件名)`（**这条路上线前是坏的**，
+ * 见 `isBlobLike` 的头注）。真实 `FormData` 对第二个实参有类型检查，不是 `Blob`/`File` 就当场抛
+ * `TypeError` —— 那个抛点在 `fetch` 之前的同步路径上，会把整次提交打断成"点了没反应"。
+ * 所以拿不到字节时**跳过这一份**（标题/正文/署名照发，用户至少能看到服务端对这份提交的回应），
+ * 而不是把提交整个弄炸。万一将来 `append` 的形态又变了，`requestJson` 那层还有兜底
+ * （句人话，不抛未捕获异常）。
  */
 export function buildSubmitForm(input: {
   readonly kind: FeedbackKind;
