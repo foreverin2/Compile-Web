@@ -498,6 +498,15 @@
   border-color: #00ffcc; color: #071; background: rgba(0, 255, 204, 0.85);
   box-shadow: 0 0 0 1px rgba(0, 255, 204, 0.45);
 }
+/* ---------- ★ 2026-10-01（用户要求）：协议卡的**正 / 背**切换（次级 tab） ----------
+ * 用户原话：「协议卡自定义选项里没有协议卡背的设计切换按钮，请调整」。
+ * 只在**协议卡模式**下出现（竖版编译卡没有第二个面；`refreshAssets` 里按模式开关 `hidden`）。
+ * 视觉上比模式 tab 轻一档（`cardmaker-mini` 那套），层级一眼看得出"主 / 次"。 */
+.cardmaker-faces { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.cardmaker-face { font-size: 13px; padding: 6px 14px; }
+.cardmaker-face[data-active='yes'] {
+  border-color: #00ffcc; color: #071; background: rgba(0, 255, 204, 0.85);
+}
 /* ---------- ★ 2026-10-01（用户要求）：左选项 / 右预览两栏，预览栏常驻 ----------
  * 用户原话：「将自定义协议页面内的预览展示框移至右边保持常驻，其他的选项移到左边」。
  * 桌面档是**硬性**两栏（测试按 `grid-template-columns` 的两个轨道断言）；
@@ -545,6 +554,16 @@
 /* 表单 */
 .cardmaker-form { display: flex; flex-direction: column; gap: 8px; }
 .cardmaker-field { display: flex; flex-direction: column; gap: 4px; }
+/* ⚠️⚠️ 2026-10-01（线上验收抓到的真 bug）：**这一条不能删**。
+ * 上面那条 `display: flex` 是**作者样式**，而浏览器 UA 样式表里的 `[hidden] { display: none }`
+ * 属于作者样式之外 ⇒ 作者样式优先，`element.hidden = true` **完全不生效**（实测：
+ * `getComputedStyle(row).display === 'flex'`、行高 54/122 照旧可见）。
+ * 用户报的"协议选项里还能看到数值与三段面板"就是这个。
+ * 本仓有同族先例：`styles.css:1825`「display:flex 会覆盖 hidden 属性，需显式声明 [hidden] 恢复隐藏」
+ * （那里的 `.dev-results` 当年栽在同一件事上）。下面这条用「类 + 属性」的选择器，特异性够高。 */
+.cardmaker-field[hidden] { display: none; }
+/* 同理：正/背那一组与三项面板的说明也可能是 flex/块级（`hidden` 同样会被作者样式压掉） */
+.cardmaker-faces[hidden], .cardmaker-note[hidden] { display: none; }
 .cardmaker-label { font-size: 13px; color: #9fd8ff; }
 .cardmaker-input, .cardmaker-textarea {
   width: 100%; padding: 7px 10px; font-size: 14px; color: #e6ecf5;

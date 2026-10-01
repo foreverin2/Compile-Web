@@ -16,6 +16,7 @@ import {
   DECK_VERSION,
 } from '../../src/ui/cardmaker/config';
 import { bgBaseScale, clampScale, zoomAt } from '../../src/ui/cardmaker/geometry';
+import { cutoutBackground } from '../../src/ui/cardmaker/images';
 import { hashStr, mulberry32 } from '../../src/ui/cardmaker/rng';
 import {
   hydrateBg,
@@ -444,5 +445,101 @@ describe('配置表的形状（防止把参考项目的几何改坏）', () => {
     expect(ZONES.hex.pointy).toBe('v');
     expect(PROTOCOL_FRONT.hex.pointy).toBe('h');
     expect(PROTOCOL_BACK.hex.pointy).toBe('h');
+  });
+});
+
+/* ==================================================================== *
+ * ★ 2026-10-01（用户报缺陷）：logo 只留形状 —— 抠背景的纯函数
+ *
+ * 用户传了一张**不透明方形**的图当 logo，卡面变成"一片白色的小卡片"（因为 logo 会被整体
+ * 染白）。原作者的答复（用户转述）：logo 只需保留形状、背景透明，因为应用会叠加一层白色。
+ *
+ * 这里喂**合成像素**（不需要 DOM、不需要真实图片解码）钉住抠图算法本身：
+ *  - 不透明方图 + 中间一个深色方块 ⇒ 背景被抠成透明、形状**保住**；
+ *  - 内部与背景同色的"洞"**不被**抠（这是漫水填充相对全局颜色替换的关键优势）；
+ *  - 本来就带 alpha 的图**原样返回**（不做二次破坏）。
+ * ==================================================================== */
+
+/** 造一张 `w×h` 的 RGBA 像素：`fill` 铺底，`paint` 可再画形状 */
+function makePixels(
+  w: number, h: number,
+  fill: [number, number, number, number],
+  paint?: (x: number, y: number) => [number, number, number, number] | null,
+): Uint8ClampedArray {
+  const d = new Uint8ClampedArray(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const c = (paint ? paint(x, y) : null) ?? fill;
+      const i = (y * w + x) * 4;
+      d[i] = c[0]; d[i + 1] = c[1]; d[i + 2] = c[2]; d[i + 3] = c[3];
+    }
+  }
+  return d;
+}
+/** 某点的 alpha */
+const alphaAt = (d: Uint8ClampedArray, w: number, x: number, y: number): number => d[(y * w + x) * 4 + 3];
+
+describe('★ 2026-10-01：logo 抠背景（cutoutBackground）', () => {
+  it('不透明方图 + 中间深色方块 ⇒ 背景全透明、形状保住（用户报的那个 case）', () => {
+    const W = 64, H = 64;
+    // 白底（不透明）+ 中间 24×24 的深蓝方块
+    const src = makePixels(W, H, [255, 255, 255, 255], (x, y) => (
+      x >= 20 && x < 44 && y >= 20 && y < 44 ? [20, 30, 90, 255] : null
+    ));
+    const { data, removedRatio } = cutoutBackground(src, W, H, 42);
+
+    // ① 四角与四边中点：背景被抠成**全透明**
+    for (const [x, y] of [[0, 0], [W - 1, 0], [0, H - 1], [W - 1, H - 1], [32, 0], [0, 32]] as const) {
+      expect(alphaAt(data, W, x, y), `(${x},${y}) 的背景没被抠掉`).toBe(0);
+    }
+    // ② 形状中心：**完全不透明**（形状保住了）
+    expect(alphaAt(data, W, 32, 32), '形状中心被误抠了').toBe(255);
+    // ③ 形状的四个角也在（边内 1px 处仍是不透明）
+    for (const [x, y] of [[21, 21], [42, 21], [21, 42], [42, 42]] as const) {
+      expect(alphaAt(data, W, x, y), `形状角 (${x},${y}) 被误抠了`).toBe(255);
+    }
+    // ④ **绝不是整块白**（这正是用户看到的现象）：透明像素要占大头、但又不能全透明
+    expect(removedRatio, `被抠掉的比例=${removedRatio}`).toBeGreaterThan(0.6);
+    expect(removedRatio, '整张图都被抠了（形状也没了）').toBeLessThan(0.95);
+    // 反向锚点：被抠掉的面积 ≈ 背景面积（64²-24²=3520 / 4096 ≈ 0.859），不是"随便抠了一半"
+    expect(removedRatio).toBeGreaterThan(0.8);
+  });
+
+  it('形状**内部**与背景同色的洞**不被**抠（漫水填充相对全局颜色替换的关键优势）', () => {
+    const W = 48, H = 48;
+    // 白底 + 深蓝方框（空心：内部又是白色 —— 与背景同色）
+    const src = makePixels(W, H, [255, 255, 255, 255], (x, y) => {
+      const outer = x >= 10 && x < 38 && y >= 10 && y < 38;
+      const inner = x >= 18 && x < 30 && y >= 18 && y < 30;
+      return outer && !inner ? [20, 30, 90, 255] : null;
+    });
+    const { data } = cutoutBackground(src, W, H, 42);
+    expect(alphaAt(data, W, 0, 0), '外部背景没被抠').toBe(0);
+    expect(alphaAt(data, W, 24, 12), '边框被误抠').toBe(255);
+    // 内部那个"与背景同色的白色洞"**必须还在**（全局颜色替换会把它一起挖空）
+    expect(alphaAt(data, W, 24, 24), '内部的白色洞被误抠（说明用的是全局颜色替换？）').toBe(255);
+  });
+
+  it('本来就带 alpha 的图**原样返回**（不二次破坏），removedRatio = 0', () => {
+    const W = 32, H = 32;
+    // 四角透明、中间不透明红色 —— 真·透明背景的 logo
+    const src = makePixels(W, H, [0, 0, 0, 0], (x, y) => (
+      x >= 8 && x < 24 && y >= 8 && y < 24 ? [200, 30, 30, 255] : null
+    ));
+    const before = Array.from(src);
+    const { data, removedRatio } = cutoutBackground(src, W, H, 42);
+    expect(removedRatio, '带 alpha 的图不该被改动').toBe(0);
+    expect(Array.from(data), '带 alpha 的图被改了像素').toEqual(before);
+  });
+
+  it('四角不是全透明但形状贴边时不崩（退化路径有界）', () => {
+    // 整张一个颜色（纯色块）：会被全部抠掉 ⇒ removedRatio 接近 1，但**不抛**
+    const W = 16, H = 16;
+    const src = makePixels(W, H, [255, 255, 255, 255]);
+    const { removedRatio } = cutoutBackground(src, W, H, 42);
+    expect(removedRatio).toBeGreaterThan(0.9);
+    // 极小图（1×1 / 0 宽）走早退分支，不崩
+    expect(cutoutBackground(new Uint8ClampedArray(4), 1, 1, 42).removedRatio).toBe(0);
+    expect(cutoutBackground(new Uint8ClampedArray(0), 0, 0, 42).removedRatio).toBe(0);
   });
 });

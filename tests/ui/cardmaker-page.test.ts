@@ -14,6 +14,7 @@ import { CARD_H, CARD_W, LAND_H, LAND_W, PROTOCOL_BACK, PROTOCOL_FRONT, SCALE_MA
 import { parseDeck, stringifyDeck } from '../../src/ui/cardmaker/serialize';
 import { stripComments } from './source-text';
 import { defaultCard, defaultDeck, type Deck } from '../../src/ui/cardmaker/types';
+import { hydrateCard } from '../../src/ui/cardmaker/model';
 
 /**
  * 「自定义协议与卡牌」屏的**接线行为腿**（2026-10-01）。
@@ -335,26 +336,28 @@ describe('编辑文本', () => {
    * 这不是放宽：`hidden` 比"禁用"更强（屏上根本读不到），而且这一组与下面第 10 组
    * 的逐项点名腿一起覆盖两个方向。
    */
-  it('按模式开关字段：竖版模式留着三段面板、藏掉横版那几段；切到协议卡反过来', async () => {
+  it('按模式开关字段：竖版模式留着三段面板、藏掉协议卡那两条面；切到协议卡反过来', async () => {
     const h = harness();
     const root = await renderSettled(h);
-    const rowHidden = (role: string): unknown => (one(root, role).parentElement as unknown as { hidden?: boolean }).hidden;
-    // 竖版模式下：竖版那套露着、横版那套藏着
+    const rowHidden = (role: string): unknown => {
+      const node = one(root, role) as unknown as { hidden?: boolean; parentElement: StubNode | null };
+      return node.hidden ?? (node.parentElement as unknown as { hidden?: boolean } | null)?.hidden;
+    };
+    // 竖版模式下：竖版那套露着、协议卡那套藏着
     expect(rowHidden('panel-top'), '竖版模式下三段面板被藏了').not.toBe(true);
     expect(rowHidden('value'), '竖版模式下数值被藏了').not.toBe(true);
-    expect(one(root, 'compile-top').parentElement?.isConnected ?? true).toBe(true); // 节点仍在（只是隐藏）
-    expect(rowHidden('compile-top'), '竖版模式下横版小字没藏').toBe(true);
-    expect(rowHidden('compile-back'), '竖版模式下横版背面那行字没藏').toBe(true);
-    // 切到协议卡：完全反过来
+    expect(rowHidden('compile-top'), '竖版模式下协议卡小字没藏').toBe(true);
+    expect(rowHidden('compile-back'), '竖版模式下协议卡背面那行字没藏').toBe(true);
+    // 切到协议卡：完全反过来（默认正面 ⇒ 正面三条露、背面那条藏）
     clickRole(root, 'mode-protocol');
     expect(rowHidden('panel-top'), '协议卡模式下三段面板没藏').toBe(true);
     expect(rowHidden('panel-mid')).toBe(true);
     expect(rowHidden('panel-bot')).toBe(true);
     expect(rowHidden('value'), '协议卡模式下数值没藏').toBe(true);
-    expect(rowHidden('compile-top'), '协议卡模式下横版小字没露出来').not.toBe(true);
+    expect(rowHidden('compile-top'), '协议卡模式下正面小字没露出来').not.toBe(true);
     expect(rowHidden('compile-subtitle')).not.toBe(true);
     expect(rowHidden('compile-bottom')).not.toBe(true);
-    expect(rowHidden('compile-back')).not.toBe(true);
+    expect(rowHidden('compile-back'), '协议卡正面不该露背面的字段').toBe(true);
     // 标题两种模式都用得到 ⇒ 两边都不许藏
     expect(rowHidden('title'), '标题在协议卡模式下被藏了').not.toBe(true);
   });
@@ -1119,8 +1122,14 @@ describe('★ 2026-10-01：双模式切换（协议卡 / 卡牌）', () => {
 
 /** 本模式**该有**的字段 role（逐项点名，不是"至少有一个"） */
 const COMPILE_FIELD_ROLES = ['value', 'panel-top', 'panel-mid', 'panel-bot'] as const;
-/** 协议卡**该有**的字段 role（逐项点名） */
-const PROTOCOL_FIELD_ROLES = ['compile-top', 'compile-subtitle', 'compile-bottom', 'compile-back'] as const;
+/**
+ * 协议卡**正面**该有的字段（逐项点名）。
+ * ⚠️ 2026-10-01 起协议卡分正/背两面（用户要求"协议卡背的设计切换按钮"）⇒ 判据面按**面**切开：
+ * `compile-back` 是**背面**字段，正面不该出现。旧判据把四条混在一起，已随新行为改写。
+ */
+const PROTOCOL_FRONT_FIELD_ROLES = ['compile-top', 'compile-subtitle', 'compile-bottom'] as const;
+/** 协议卡**背面**该有的字段（按参考项目 `COMPILE_BACK`：只有 name + backLine；name 就是共用的 title） */
+const PROTOCOL_BACK_FIELD_ROLES = ['compile-back'] as const;
 /** 两种模式**共用**的字段 role（不许被一起藏掉） */
 const SHARED_FIELD_ROLES = ['title'] as const;
 
@@ -1138,12 +1147,16 @@ describe('★ 2026-10-01：只显示当前模式的字段', () => {
     return node.hidden ?? (node.parentElement as unknown as { hidden?: boolean } | null)?.hidden;
   };
 
-  it('协议卡模式：协议卡字段**全在**，竖版专属字段**全不在**（逐项点名）', async () => {
+  it('协议卡模式·正面：正面三条**全在**，背面那条与竖版那四项**全不在**（逐项点名）', async () => {
     const h = harness();
     const root = await renderSettled(h);
     clickRole(root, 'mode-protocol');
-    for (const role of PROTOCOL_FIELD_ROLES) {
-      expect(rowHidden(root, role), `协议卡模式下缺少字段 [data-role="${role}"]`).not.toBe(true);
+    expect(one(root, 'screen').dataset.face, '进协议卡模式默认应当是正面').toBe('front');
+    for (const role of PROTOCOL_FRONT_FIELD_ROLES) {
+      expect(rowHidden(root, role), `协议卡正面缺少字段 [data-role="${role}"]`).not.toBe(true);
+    }
+    for (const role of PROTOCOL_BACK_FIELD_ROLES) {
+      expect(rowHidden(root, role), `协议卡正面仍然显示着背面字段 [data-role="${role}"]`).toBe(true);
     }
     for (const role of COMPILE_FIELD_ROLES) {
       expect(rowHidden(root, role), `协议卡模式下仍然显示着竖版字段 [data-role="${role}"]`).toBe(true);
@@ -1152,14 +1165,14 @@ describe('★ 2026-10-01：只显示当前模式的字段', () => {
     expect(rowHidden(root, 'panel-note'), '协议卡模式下还留着竖版的面板说明').toBe(true);
   });
 
-  it('卡牌模式：竖版字段**全在**，协议卡专属字段**全不在**（逐项点名）', async () => {
+  it('卡牌模式：竖版字段**全在**，协议卡两面字段**全不在**（逐项点名）', async () => {
     const h = harness();
     const root = await renderSettled(h);
     expect(one(root, 'screen').dataset.mode).toBe('compile');
     for (const role of COMPILE_FIELD_ROLES) {
       expect(rowHidden(root, role), `卡牌模式下缺少字段 [data-role="${role}"]`).not.toBe(true);
     }
-    for (const role of PROTOCOL_FIELD_ROLES) {
+    for (const role of [...PROTOCOL_FRONT_FIELD_ROLES, ...PROTOCOL_BACK_FIELD_ROLES]) {
       expect(rowHidden(root, role), `卡牌模式下仍然显示着协议卡字段 [data-role="${role}"]`).toBe(true);
     }
     expect(rowHidden(root, 'panel-note'), '卡牌模式下竖版的面板说明被藏了').not.toBe(true);
@@ -1189,20 +1202,27 @@ describe('★ 2026-10-01：只显示当前模式的字段', () => {
     const root = await renderSettled(h);
     const snapshot = (): string => {
       const on = (roles: readonly string[]): string => roles.filter((r) => rowHidden(root, r) !== true).join(',');
-      return `compile[${on(COMPILE_FIELD_ROLES)}] protocol[${on(PROTOCOL_FIELD_ROLES)}] shared[${on(SHARED_FIELD_ROLES)}]`;
+      return `compile[${on(COMPILE_FIELD_ROLES)}] protoFront[${on(PROTOCOL_FRONT_FIELD_ROLES)}]`
+        + ` protoBack[${on(PROTOCOL_BACK_FIELD_ROLES)}] shared[${on(SHARED_FIELD_ROLES)}]`;
     };
     const firstCompile = snapshot();
     clickRole(root, 'mode-protocol');
-    const proto = snapshot();
+    const protoFront = snapshot();
+    clickRole(root, 'face-back');
+    const protoBack = snapshot();
+    clickRole(root, 'face-front');
     clickRole(root, 'mode-compile');
     const backToCompile = snapshot();
-    // ① 协议卡模式下：协议卡那套全在、竖版那套全不在
-    expect(proto).toBe(`compile[] protocol[${PROTOCOL_FIELD_ROLES.join(',')}] shared[title]`);
-    // ② 切回来之后与**第一次**一模一样（逐字比对 = 字段一个不多一个不少）
+    // ① 协议卡正面：正面三条在、背面那条不在、竖版那套不在
+    expect(protoFront).toBe(`compile[] protoFront[${PROTOCOL_FRONT_FIELD_ROLES.join(',')}] protoBack[] shared[title]`);
+    // ①b 协议卡背面：反过来（只有背面那条 + 共用的 title）
+    expect(protoBack).toBe(`compile[] protoFront[] protoBack[${PROTOCOL_BACK_FIELD_ROLES.join(',')}] shared[title]`);
+    // ② 切回卡牌之后与**第一次**一模一样（逐字比对 = 字段一个不多一个不少）
     expect(backToCompile, '切两次之后字段集合变了（有字段没能复原）').toBe(firstCompile);
-    expect(firstCompile).toBe(`compile[${COMPILE_FIELD_ROLES.join(',')}] protocol[] shared[title]`);
-    // 反向锚点：两次的快照**确实不同**（否则"复原"这件事分辨不出来）
-    expect(proto).not.toBe(firstCompile);
+    expect(firstCompile).toBe(`compile[${COMPILE_FIELD_ROLES.join(',')}] protoFront[] protoBack[] shared[title]`);
+    // 反向锚点：三种快照**互不相同**（否则"复原"与"按面切"这两件事都分辨不出来）
+    expect(protoFront).not.toBe(firstCompile);
+    expect(protoBack).not.toBe(protoFront);
   });
 
   it('切字段是**隐藏**而不是"摆着灰掉"：另一模式那些输入框不再有 disabled 分支', async () => {
@@ -1216,6 +1236,216 @@ describe('★ 2026-10-01：只显示当前模式的字段', () => {
     // 源码面：第一版那句"只对竖版编译卡有效"的死提示必须已经删干净
     expect(PAGE_SRC, '源码里还留着"只对竖版编译卡有效"那句死提示').not.toContain('只对竖版编译卡有效');
     expect(PAGE_SRC, '源码里还在用 disabled 表达"另一模式不可编辑"').not.toContain('inValue.disabled');
+  });
+
+  /**
+   * ★★ 2026-10-01（用户报"协议选项里还能看到数值与三段面板"的**根因**）：
+   * `hidden` 属性在本屏**曾经完全不生效** —— 作者样式的 `.cardmaker-field { display: flex }`
+   * 压过了浏览器 UA 的 `[hidden] { display: none }`（同族先例：`styles.css:1825` 的 `.dev-results`）。
+   *
+   * 桩上**测不到** CSS 层叠（那要真浏览器），所以这一组钉三件能在本仓证明的事，
+   * 缺任何一件都可能让这个 bug 复发：
+   *  ① `styles-local.css` 里有那条**显式**的 `.cardmaker-field[hidden] { display: none }`；
+   *  ② 那条 `display: flex` 的**陷阱**仍在（否则第 ① 条就成了没必要的防御，注释也该改）；
+   *  ③ 桩上的行 `style.display` 确实被设成 `none`（内联兜底，浏览器语义下一定生效）。
+   * 真浏览器那一条（`probe-struct.mjs` 的读数：行高 0 / display none）由本轮的浏览器自查覆盖。
+   */
+  it('★ 回归锚点：`[hidden]` 必须有一条显式 CSS 规则（作者样式的 display:flex 会压掉它）', () => {
+    const fieldRule = cssRule(LOCAL_CSS, '.cardmaker-field {');
+    expect(fieldRule, 'styles-local.css 里没有 .cardmaker-field 规则').not.toBe('');
+    // 陷阱仍在：这一条是"为什么必须有下面那条显式规则"的证据
+    expect(fieldRule, '陷阱变了（.cardmaker-field 不再设 display）⇒ 那段根因注释要重写').toContain('display: flex');
+    // ① 显式规则必须在，且内容就是 display: none
+    const hiddenRule = cssRule(LOCAL_CSS, '.cardmaker-field[hidden]');
+    expect(hiddenRule, 'styles-local.css 里缺少 .cardmaker-field[hidden] 的显式规则 ⇒ [hidden] 会被 display:flex 压掉（用户报的 bug 会复发）').not.toBe('');
+    expect(hiddenRule.replace(/\s+/g, ' '), '.cardmaker-field[hidden] 的内容不是 display: none').toContain('display: none');
+    // 正/背那一组与面板说明也是同理（它们同样不是 UA 规则的天然受益者）
+    expect(cssRule(LOCAL_CSS, '.cardmaker-faces[hidden]'), '缺少 .cardmaker-faces[hidden] 的显式规则').not.toBe('');
+  });
+
+  it('★ 回归锚点（桩侧）：隐藏的行**内联** display 也被设成 none（浏览器语义下必然生效）', async () => {
+    const h = harness();
+    const root = await renderSettled(h);
+    clickRole(root, 'mode-protocol');
+    const hiddenRow = one(root, 'panel-top').parentElement as unknown as { hidden?: boolean; style: Record<string, unknown> };
+    const shownRow = one(root, 'compile-top').parentElement as unknown as { hidden?: boolean; style: Record<string, unknown> };
+    expect(hiddenRow.hidden, '竖版字段行没被标记 hidden').toBe(true);
+    expect(String(hiddenRow.style.display), '隐藏的行没有内联 display:none（只靠 [hidden] 会被作者样式压掉）').toBe('none');
+    expect(String(shownRow.style.display ?? ''), '显示的行被误设了内联 display').toBe('');
+    // 切回卡牌模式：隐藏状态必须**双向**复原（不是单向的"藏了就再也回不来"）
+    clickRole(root, 'mode-compile');
+    expect(String(hiddenRow.style.display ?? ''), '切回去之后内联 display 没清掉').toBe('');
+    expect(hiddenRow.hidden, '切回去之后 hidden 没复位').toBe(false);
+  });
+});
+
+/* ==================================================================== *
+ * 10b. ★ 2026-10-01（用户要求）：协议卡的**正 / 背**切换
+ *
+ * 用户原话：「协议卡自定义选项里没有协议卡背的设计切换按钮，请调整」。
+ * 参考项目里协议卡是双面的（`renderCompileLandscape` 的 side 分支）：正面 `COMPILE_FRONT`
+ * 四条横条，背面 `COMPILE_BACK` 只有 name + backLine。本项目是单预览 ⇒ 用一组次级 tab
+ * 切"在编哪一面"。
+ * ==================================================================== */
+
+describe('★ 2026-10-01：协议卡正 / 背切换', () => {
+  const rowHidden = (root: StubNode, role: string): unknown => {
+    const node = one(root, role) as unknown as { hidden?: boolean; parentElement: StubNode | null };
+    return node.hidden ?? (node.parentElement as unknown as { hidden?: boolean } | null)?.hidden;
+  };
+
+  it('两个正/背按钮在协议卡模式下出现、在卡牌模式下整组隐藏；带 role=tab 与 tablist', async () => {
+    const h = harness();
+    const root = await renderSettled(h);
+    // 竖版模式：整组隐藏
+    expect((one(root, 'faces') as unknown as { hidden?: boolean }).hidden, '卡牌模式下还露着正/背切换').toBe(true);
+    const readAttr = (n: StubNode, a: string): unknown => (n.getAttribute as unknown as (x: string) => unknown)(a);
+    expect(readAttr(one(root, 'faces'), 'role')).toBe('tablist');
+    expect(readAttr(one(root, 'face-front'), 'role')).toBe('tab');
+    expect(readAttr(one(root, 'face-back'), 'role')).toBe('tab');
+    // 切到协议卡：出现，且默认停在正面
+    clickRole(root, 'mode-protocol');
+    expect((one(root, 'faces') as unknown as { hidden?: boolean }).hidden, '协议卡模式下正/背切换没出现').not.toBe(true);
+    expect(one(root, 'screen').dataset.face, '进协议卡模式默认应当是正面').toBe('front');
+    expect(one(root, 'face-front').dataset.active).toBe('yes');
+    expect(one(root, 'face-back').dataset.active).toBe('no');
+    expect(textOf(one(root, 'face-front'))).toContain('正面');
+    expect(textOf(one(root, 'face-back'))).toContain('背面');
+  });
+
+  it('两向切面：预览读数、字段集合、导出文案都跟着换；画布尺寸不变（同一张卡同一空间）', async () => {
+    const h = harness();
+    const root = await renderSettled(h);
+    clickRole(root, 'mode-protocol');
+    const canvas = one(root, 'canvas') as unknown as { width: number; height: number };
+    // 正面
+    expect(one(root, 'preview-size').dataset.face).toBe('front');
+    expect(textOf(one(root, 'preview-size')), '正面读数没写"正面"').toContain('正面');
+    expect(textOf(one(root, 'export-png')), '正面导出文案没写"正面"').toContain('正面');
+    expect(rowHidden(root, 'compile-top')).not.toBe(true);
+    expect(rowHidden(root, 'compile-back'), '正面不该露背面字段').toBe(true);
+    // → 背面
+    clickRole(root, 'face-back');
+    expect(statusCode(root)).toBe('face-switched');
+    expect(one(root, 'screen').dataset.face).toBe('back');
+    expect(one(root, 'face-back').dataset.active).toBe('yes');
+    expect(one(root, 'face-front').dataset.active).toBe('no');
+    expect(one(root, 'preview-size').dataset.face).toBe('back');
+    expect(textOf(one(root, 'preview-size')), '背面读数没写"背面"').toContain('背面');
+    expect(textOf(one(root, 'export-png')), '背面导出文案没写"背面"').toContain('背面');
+    expect(rowHidden(root, 'compile-back'), '背面字段没露出来').not.toBe(true);
+    for (const role of PROTOCOL_FRONT_FIELD_ROLES) {
+      expect(rowHidden(root, role), `背面还露着正面字段 [${role}]`).toBe(true);
+    }
+    expect(rowHidden(root, 'title'), '标题是两面共用的，不该被藏').not.toBe(true);
+    // 同一张卡 ⇒ 画布尺寸不变（1039×744）
+    expect([canvas.width, canvas.height]).toEqual([LAND_W, LAND_H]);
+    // → 切回正面
+    clickRole(root, 'face-front');
+    expect(one(root, 'screen').dataset.face).toBe('front');
+    expect(rowHidden(root, 'compile-top')).not.toBe(true);
+    expect(rowHidden(root, 'compile-back')).toBe(true);
+  });
+
+  it('★ 切面**不丢**编辑内容：正/背各写各的，来回切都还在，且都落在牌组里', async () => {
+    const h = harness();
+    const root = await renderSettled(h);
+    clickRole(root, 'mode-protocol');
+    // 正面：标题 + 左上角小字
+    setValue(one(root, 'title'), '协议甲');
+    fire(one(root, 'title'), 'input');
+    setValue(one(root, 'compile-top'), '正面小字');
+    fire(one(root, 'compile-top'), 'input');
+    expect(valueOf(one(root, 'compile-top'))).toBe('正面小字');
+    // 背面：写背面那行字（标题在这里也该读得到同一个值）
+    clickRole(root, 'face-back');
+    expect(valueOf(one(root, 'title')), '切面后标题丢了').toBe('协议甲');
+    setValue(one(root, 'compile-back'), '背面那行');
+    fire(one(root, 'compile-back'), 'input');
+    // 切回正面：正面内容照旧；背面那个字段在正面是**隐藏**的（DOM 里仍留着该值，
+    // 但它不属于这个面 —— 这正是"只显示当前面字段"的形态，所以断言落在 hidden 上，
+    // 不去断言"输入框里的值是空的"：那个值是背面那一面的，留着才对）
+    clickRole(root, 'face-front');
+    expect(valueOf(one(root, 'compile-top')), '切回正面后正面的内容丢了').toBe('正面小字');
+    expect(rowHidden(root, 'compile-back'), '正面上还露着背面那个字段').toBe(true);
+    expect(rowHidden(root, 'compile-top'), '正面上正面字段被藏了').not.toBe(true);
+    // 再切回背面：背面内容也照旧
+    clickRole(root, 'face-back');
+    expect(valueOf(one(root, 'compile-back')), '背面内容丢了').toBe('背面那行');
+    // 数据面：两面 + 标题都在同一张协议卡上
+    clickRole(root, 'save');
+    await flush();
+    const proto = h.saved[h.saved.length - 1].cards.find((c) => c.kind === 'protocol');
+    expect(proto?.title).toBe('协议甲');
+    expect(proto?.compile.top).toBe('正面小字');
+    expect(proto?.compile.back).toBe('背面那行');
+  });
+
+  it('正/背是**协议卡专属**：切到卡牌模式再切回来，仍然停在刚才那一面', async () => {
+    const h = harness();
+    const root = await renderSettled(h);
+    clickRole(root, 'mode-protocol');
+    clickRole(root, 'face-back');
+    clickRole(root, 'mode-compile');
+    // 竖版模式下面这个概念没有意义（整组隐藏），但值被记住
+    expect(one(root, 'screen').dataset.face).toBe('back');
+    expect((one(root, 'faces') as unknown as { hidden?: boolean }).hidden).toBe(true);
+    clickRole(root, 'mode-protocol');
+    expect(one(root, 'screen').dataset.face, '切回来没停在刚才那一面').toBe('back');
+    expect(one(root, 'face-back').dataset.active).toBe('yes');
+  });
+});
+
+/* ==================================================================== *
+ * 10c. ★ 2026-10-01（用户要求）：协议卡不携带竖版专属字段（数据模型 + 导出）
+ * ==================================================================== */
+
+describe('★ 2026-10-01：协议卡不带竖版字段（value / panelTop / panelMid / panelBot）', () => {
+  it('hydrateCard：给协议卡塞竖版字段 ⇒ 一律清空（内存里就不留）', () => {
+    const proto = hydrateCard({
+      kind: 'protocol', title: 'P', value: '9', panelTop: 'a', panelMid: 'b', panelBot: 'c',
+    }, 'x');
+    expect([proto.value, proto.panelTop, proto.panelMid, proto.panelBot], '协议卡还带着竖版字段').toEqual(['', '', '', '']);
+    // 反向锚点：同一份输入给竖版卡 ⇒ 字段**保留**（证明上面不是"永远清空"）
+    const comp = hydrateCard({
+      kind: 'compile', title: 'C', value: '9', panelTop: 'a', panelMid: 'b', panelBot: 'c',
+    }, 'y');
+    expect([comp.value, comp.panelTop, comp.panelMid, comp.panelBot]).toEqual(['9', 'a', 'b', 'c']);
+  });
+
+  it('导出的牌组 JSON 里，协议卡那条**没有** value / panelTop / panelMid / panelBot 四个键', () => {
+    const deck = defaultDeck();
+    const proto = defaultCard('p', 'protocol');
+    proto.title = 'P';
+    proto.compile = { top: 'T', subtitle: 'S', bottom: 'B', back: 'K' };
+    deck.cards = [proto];
+    const json = JSON.parse(stringifyDeck(deck)) as { deck: { cards: Array<Record<string, unknown>> } };
+    const entry = json.deck.cards[0];
+    for (const key of ['value', 'panelTop', 'panelMid', 'panelBot']) {
+      expect(key in entry, `协议卡条目里还有 ${key} 这个键`).toBe(false);
+    }
+    // 该有的还在（协议卡的字段一个都不许被顺手删掉）
+    expect(entry.title).toBe('P');
+    expect(entry.compile).toEqual({ top: 'T', subtitle: 'S', bottom: 'B', back: 'K' });
+    // 反向锚点：竖版卡的条目**仍然**带那四个键（证明上面不是"所有卡都剔了"）
+    const d2 = defaultDeck();
+    d2.cards = [defaultCard('c', 'compile')];
+    const json2 = JSON.parse(stringifyDeck(d2)) as { deck: { cards: Array<Record<string, unknown>> } };
+    for (const key of ['value', 'panelTop', 'panelMid', 'panelBot']) {
+      expect(key in json2.deck.cards[0], `竖版卡条目里缺了 ${key}`).toBe(true);
+    }
+  });
+
+  it('往返仍然干净：导出 → 导入之后协议卡身上还是空的（清过的不会又被填回来）', () => {
+    const deck = defaultDeck();
+    const proto = defaultCard('p', 'protocol');
+    proto.title = 'P';
+    deck.cards = [proto];
+    const round = parseDeck(stringifyDeck(deck));
+    expect(round.ok).toBe(true);
+    if (!round.ok) return;
+    const back = round.deck.cards[0];
+    expect([back.value, back.panelTop, back.panelMid, back.panelBot]).toEqual(['', '', '', '']);
   });
 });
 
@@ -1323,9 +1553,12 @@ describe('★ 2026-10-01：协议卡默认版图（素材 + 几何 + 层序）',
     expect(one(root, 'screen').dataset.mode, '只有协议卡的牌组应当直接停在协议卡模式').toBe('protocol');
     expect(valueOf(one(root, 'title')), '默认协议卡的标题不是空的').toBe('');
     expect(valueOf(one(root, 'compile-subtitle')), '默认协议卡的副标题不是空的（占位串又回来了？）').toBe('');
-    expect(valueOf(one(root, 'compile-back')), '默认协议卡背面那行字不是空的').toBe('');
     expect(valueOf(one(root, 'compile-top'))).toBe('');
     expect(valueOf(one(root, 'compile-bottom'))).toBe('');
+    // 背面那行字在**背面**才回填（正面不显示那个字段 ⇒ 值仍是空的）
+    clickRole(root, 'face-back');
+    expect(valueOf(one(root, 'compile-back')), '默认协议卡背面那行字不是空的').toBe('');
+    expect(valueOf(one(root, 'title')), '切面之后标题不该丢').toBe('');
     // 反向锚点：把标题填成 "LOADING" ⇒ 它**会**出现在输入框里（证明上面的"空"不是读错了值）
     setValue(one(root, 'title'), 'LOADING');
     fire(one(root, 'title'), 'input');

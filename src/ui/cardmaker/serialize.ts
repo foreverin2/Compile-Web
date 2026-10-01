@@ -18,7 +18,7 @@
 import { DECK_FORMAT, DECK_VERSION } from './config';
 import { hydrateDeck } from './model';
 import { hashStr } from './rng';
-import type { Bg, CardState, Deck, DeckShared, Logo } from './types';
+import { isLandscape, type Bg, type CardState, type Deck, type DeckShared, type Logo } from './types';
 
 /** 兜底卡 id 用的短哈希（同一份内容 ⇒ 同一把 id，重复导入不会产生两套 id） */
 function shortHash(s: string): string {
@@ -87,8 +87,28 @@ function unpackShared(shared: DeckShared, index: ImageIndex): DeckShared {
   };
 }
 
+/**
+ * 一张卡 → 写进文件的那一份。
+ *
+ * ★ 2026-10-01（用户要求"协议卡不该顺手带着竖版字段"）：**协议卡导出的 JSON 里不带
+ * `value` / `panelTop` / `panelMid` / `panelBot`** —— 那四样是竖版编译卡专属
+ * （协议卡的三张分区表里没有数值位与三段面板）。它们在内存里也已经被
+ * `hydrateCard()` 清空，这里再把**键**剔掉，于是文件里那条协议卡是干净的。
+ *
+ * 竖版编译卡反过来只带 `compile` 里它用得上的部分（`top` 两种卡都用得到，保留）；
+ * 这是"文件表达一件事、内存表达全部"的分工，读回时由 `hydrateCard()` 补全。
+ */
 function packCard(card: CardState, dict: ImageDict): CardState {
-  return { ...card, bgOwn: packBg(card.bgOwn, dict), logoOwn: packLogo(card.logoOwn, dict) };
+  const packed: CardState = { ...card, bgOwn: packBg(card.bgOwn, dict), logoOwn: packLogo(card.logoOwn, dict) };
+  if (isLandscape(card.kind)) {
+    // 协议卡：剔除竖版专属的四个键（用 `delete` 而不是置空 —— 键都不该出现在文件里）
+    const proto = packed as unknown as Record<string, unknown>;
+    delete proto.value;
+    delete proto.panelTop;
+    delete proto.panelMid;
+    delete proto.panelBot;
+  }
+  return packed;
 }
 
 function unpackCard(card: CardState, index: ImageIndex): CardState {

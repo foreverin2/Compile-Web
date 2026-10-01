@@ -52,13 +52,14 @@ import {
   loadFonts,
   normalizeImage,
   normalizeLogo,
+  removeLogoBackground,
   type DrawableImage,
 } from './images';
 import { hydrateDeck } from './model';
 import { parseDeck, safeFileName, stringifyDeck } from './serialize';
 import { toPoker, drawBackground, drawLogoHex } from './draw';
 import { drawLine, drawPanelText } from './text';
-import { defaultCard, defaultDeck, isLandscape, type Bg, type CardKind, type CardState, type Deck, type Logo } from './types';
+import { defaultCard, defaultDeck, isLandscape, type Bg, type CardKind, type CardSide, type CardState, type Deck, type Logo } from './types';
 
 /* ── 宿主接缝 ─────────────────────────────────────────────────────────── */
 
@@ -214,6 +215,8 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
 
   const screen = elRole('div', 'cardmaker-screen', 'screen');
   screen.dataset.persistent = nav.store.isPersistent() ? 'yes' : 'no';
+  // 协议卡当前在编哪一面（初值 front；`setFace` 更新它）。写在屏上便于测试/CDP 读。
+  screen.dataset.face = 'front';
   // 当前编辑的是哪一种卡（「协议卡」/「卡牌」两个模式之一）。初值由启动那一段按牌组里的卡定。
   let mode: CardKind = 'compile';
   screen.dataset.mode = mode;
@@ -225,6 +228,15 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
    * 悄悄换成另一张卡。id 是稳定的。
    */
   const lastSeenId: Record<CardKind, string> = { compile: '', protocol: '' };
+  /**
+   * 协议卡现在在编**哪一面**（用户 2026-10-01 要求"协议卡背的设计切换"）。
+   *
+   * 只在 `mode === 'protocol'` 时有意义；竖版编译卡没有第二个面（它的 `facesOf` 只有一个）。
+   * 切换面与切换模式是**两件事**，各自独立：从协议卡背面切到竖版卡、再切回来，仍然停在背面。
+   */
+  let face: CardSide = 'front';
+  // 屏上一开始就标出来（测试与 CDP 都读 `screen.dataset.face`；切面时由 `setFace` 更新）。
+  // ⚠️ 这一句必须在 `screen` 建好之后 —— 见下面 `const screen = ...`。
 
   /* ── ① 顶栏 ── */
   const top = el('div', 'cardmaker-top');
@@ -266,6 +278,36 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
   modeBar.appendChild(modeBtns.compile);
   modeBar.appendChild(modeHint);
   screen.appendChild(modeBar);
+
+  /**
+   * ★★ 2026-10-01（用户要求）：**协议卡的正 / 背切换**。
+   *
+   * 用户原话：「协议卡自定义选项里没有协议卡背的设计切换按钮，请调整」。
+   *
+   * 参考项目里协议卡是**双面**的（`renderCompileLandscape` 的 `side` 分支）：
+   *  - **正面**：`COMPILE_FRONT` 四条横条 —— topBar → name → subtitle → bottomBar；
+   *  - **背面**：`COMPILE_BACK` 两条 —— name（厚底栏左半）+ backLine。
+   * 参考项目的编辑器两块画布并排显示（正面 / 背面），本项目是**单预览**，
+   * 所以这里用一组次级 tab 来切"在编哪一面"（语义比并排两个小画布清楚：一次只编一面）。
+   *
+   * 与模式 tab 的层级关系：模式 tab 决定"编哪种卡"，这一组只在**协议卡模式**下出现
+   * （`refreshAssets` 里按模式开关 `hidden`）；切面**不丢**编辑内容（内容一直在 `deck` 里，
+   * 这里只切"在看哪一面"），导出时按当前面导出（见 `exportCardPng`）。
+   */
+  const faceBar = elRole('div', 'cardmaker-faces', 'faces');
+  (faceBar as HTMLElement & { setAttribute(n: string, v: string): void }).setAttribute('role', 'tablist');
+  faceBar.appendChild(el('span', 'cardmaker-note', '这一面：'));
+  const faceBtns: Record<CardSide, HTMLButtonElement> = {
+    front: btnRole('btn cardmaker-mini cardmaker-face', 'face-front', '正面'),
+    back: btnRole('btn cardmaker-mini cardmaker-face', 'face-back', '背面'),
+  };
+  (faceBtns.front as unknown as { setAttribute(n: string, v: string): void }).setAttribute('role', 'tab');
+  (faceBtns.back as unknown as { setAttribute(n: string, v: string): void }).setAttribute('role', 'tab');
+  faceBtns.front.addEventListener('click', () => { setFace('front'); });
+  faceBtns.back.addEventListener('click', () => { setFace('back'); });
+  faceBar.appendChild(faceBtns.front);
+  faceBar.appendChild(faceBtns.back);
+  screen.appendChild(faceBar);
 
   /** 状态区：本屏**唯一**的提示通道（人读 `textContent`，机器读 `data-code`） */
   const status = elRole('div', 'cardmaker-status', 'status');
@@ -392,10 +434,19 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
    * 模式切换 / 状态行 / 署名）**照旧一直显示**，不参与这里的开关。
    */
   const form = elRole('div', 'cardmaker-form', 'form');
-  /** 每个字段行归属哪种卡（`null` = 两种模式都显示） */
-  const modeFields: Array<{ row: HTMLElement; kind: CardKind | null }> = [];
-  const trackRow = (row: HTMLElement, kind: CardKind | null): void => { modeFields.push({ row, kind }); };
-  const field = (role: string, label: string, kind: CardKind | null, hint?: string): HTMLInputElement => {
+  /**
+   * 每个字段行的归属：
+   *  - `kind`：哪种卡（`null` = 两种模式都显示）；
+   *  - `face`：**协议卡**的哪一面（`null` = 两面都显示；`'front'`/`'back'` 只在协议卡模式下有意义）。
+   *
+   * `face` 这一维是 2026-10-01 用户要"协议卡正/背切换"之后补的：切换面时同样只显示
+   * 该面的字段（与"只显示当前模式字段"是同一套口径）。
+   */
+  const modeFields: Array<{ row: HTMLElement; kind: CardKind | null; face: CardSide | null }> = [];
+  const trackRow = (row: HTMLElement, kind: CardKind | null, face: CardSide | null = null): void => {
+    modeFields.push({ row, kind, face });
+  };
+  const field = (role: string, label: string, kind: CardKind | null, face: CardSide | null, hint?: string): HTMLInputElement => {
     const row = el('label', 'cardmaker-field');
     row.appendChild(el('span', 'cardmaker-label', label));
     const input = document.createElement('input');
@@ -405,10 +456,10 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     row.appendChild(input);
     if (hint) row.appendChild(el('span', 'cardmaker-hint', hint));
     form.appendChild(row);
-    trackRow(row, kind);
+    trackRow(row, kind, face);
     return input;
   };
-  const area = (role: string, label: string, kind: CardKind | null, hint?: string): HTMLTextAreaElement => {
+  const area = (role: string, label: string, kind: CardKind | null, face: CardSide | null, hint?: string): HTMLTextAreaElement => {
     const row = el('label', 'cardmaker-field');
     row.appendChild(el('span', 'cardmaker-label', label));
     const input = document.createElement('textarea');
@@ -418,26 +469,39 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     row.appendChild(input);
     if (hint) row.appendChild(el('span', 'cardmaker-hint', hint));
     form.appendChild(row);
-    trackRow(row, kind);
+    trackRow(row, kind, face);
     return input;
   };
 
-  const inTitle = field('title', '协议名 / 标题', null, '协议卡上是正中大标题；竖版编译卡上是左上角标题');
-  const inValue = field('value', '数值（大号中心数字）', 'compile');
-  const inTop = area('panel-top', '上方面板', 'compile', '可写 **粗体** 与 __下划线__');
-  const inMid = area('panel-mid', '中部面板', 'compile', '可写 **粗体** 与 __下划线__');
-  const inBot = area('panel-bot', '下方面板', 'compile', '可写 **粗体** 与 __下划线__');
-  const inCTop = field('compile-top', '协议卡左上角小字', 'protocol');
-  const inCSub = field('compile-subtitle', '协议卡副标题', 'protocol');
-  const inCBot = field('compile-bottom', '协议卡底部小字', 'protocol');
-  const inCBack = field('compile-back', '协议卡背面那行字', 'protocol');
+  /**
+   * 逐字段归属（**唯一出处**，按参考项目的分区表定；不是"能填就留着"）：
+   *
+   * | 字段 | 竖版编译卡 | 协议卡正面 | 协议卡背面 | 依据 |
+   * |---|---|---|---|---|
+   * | 协议名 / 标题 | 有（`ZONES.title` 左上角） | 有（`COMPILE_FRONT.name` 正中大标题） | 有（`COMPILE_BACK.name` 厚底栏左半） | 三处都画 |
+   * | 数值 | 有（`ZONES.value`） | **无** | **无** | 协议卡的分区表里没有数值位 |
+   * | 上/中/下三面板 | 有（`ZONES.panels`） | **无** | **无** | 横版卡只有四条横条 |
+   * | 协议卡左上角小字 | **无** | 有（`COMPILE_FRONT.topBar`） | **无** | 只有正面画 topBar |
+   * | 协议卡副标题 | **无** | 有（`COMPILE_FRONT.subtitle`） | **无** | 只有正面画 subtitle |
+   * | 协议卡底部小字 | **无** | 有（`COMPILE_FRONT.bottomBar`） | **无** | 只有正面画 bottomBar |
+   * | 协议卡背面那行字 | **无** | **无** | 有（`COMPILE_BACK.backLine`） | 只有背面画 backLine |
+   */
+  const inTitle = field('title', '协议名 / 标题', null, null, '协议卡上是正中大标题；竖版编译卡上是左上角标题');
+  const inValue = field('value', '数值（大号中心数字）', 'compile', null);
+  const inTop = area('panel-top', '上方面板', 'compile', null, '可写 **粗体** 与 __下划线__');
+  const inMid = area('panel-mid', '中部面板', 'compile', null, '可写 **粗体** 与 __下划线__');
+  const inBot = area('panel-bot', '下方面板', 'compile', null, '可写 **粗体** 与 __下划线__');
+  const inCTop = field('compile-top', '协议卡左上角小字（正面）', 'protocol', 'front');
+  const inCSub = field('compile-subtitle', '协议卡副标题（正面）', 'protocol', 'front');
+  const inCBot = field('compile-bottom', '协议卡底部小字（正面）', 'protocol', 'front');
+  const inCBack = field('compile-back', '协议卡背面那行字（背面）', 'protocol', 'back');
   optionsCol.appendChild(form);
 
   const panelNote = elRole('p', 'cardmaker-note', 'panel-note', PANEL_EMPTY_HINT);
   // 面板说明紧贴它描述的那三个输入框（它们是 `form` 里的成员）⇒ 进**同一条 `label`**
   // 会让点击说明也聚焦输入框；这里保持同级块，按顺序紧跟表单。
   // ★ 它是**竖版专用**的说明（讲三段面板的），所以跟着竖版那三个字段一起开关。
-  trackRow(panelNote, 'compile');
+  trackRow(panelNote, 'compile', null);
   optionsCol.appendChild(panelNote);
 
   /* ── ⑤ 背景 ── */
@@ -482,11 +546,35 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
   const logoState = elRole('span', 'cardmaker-note', 'logo-state', '未上传 logo');
   const logoUpload = btnRole('btn cardmaker-mini', 'logo-upload', '上传 logo');
   const logoClear = btnRole('btn cardmaker-mini', 'logo-clear', '清除 logo');
-  logoRow.appendChild(el('span', 'cardmaker-note', '六边形 logo（自动白色着色）'));
+  logoRow.appendChild(el('span', 'cardmaker-note', '六边形 logo（白色着色）'));
   logoRow.appendChild(logoState);
   logoRow.appendChild(logoUpload);
   logoRow.appendChild(logoClear);
+  /**
+   * ★ 2026-10-01（用户报"logo 上传后只出现一片白色的小卡片"）：**「去掉 logo 背景」开关**（默认开）。
+   *
+   * 为什么需要它：卡面上的 logo 会被**整体染成白色**（参考项目的做法），所以一张
+   * **不透明方形**的图会变成"一整块白"。默认开启时上传的图会先把**与边缘连通的背景**
+   * 抠成透明（只留形状），于是方形背景消失、只剩图形本身。
+   * 关掉它 = 「保留原图」，用于"我的图本来就是透明背景/就是要整块"这类情况。
+   */
+  const logoCutRow = el('label', 'cardmaker-toggle');
+  const logoCutBox = document.createElement('input');
+  logoCutBox.type = 'checkbox';
+  logoCutBox.className = 'cardmaker-check';
+  logoCutBox.dataset.role = 'logo-cutout';
+  logoCutBox.checked = true;
+  logoCutRow.appendChild(logoCutBox);
+  logoCutRow.appendChild(el('span', 'cardmaker-note', '去掉 logo 背景（推荐）'));
+  logoCutRow.appendChild(el(
+    'span',
+    'cardmaker-hint',
+    '卡面上的 logo 是白色的，所以上传一张不透明方图会变成一整块白。开着这一项时，'
+    + '会把与图片四边相连的背景色抠成透明，只留图形本身的形状；你的图本来就已经透明背景时不受影响。'
+    + '想原样保留就取消勾选。',
+  ));
   optionsCol.appendChild(logoRow);
+  optionsCol.appendChild(logoCutRow);
 
   /* ── ⑦ 导出 / 导入 ── */
   const ioRow = elRole('div', 'cardmaker-actions', 'io');
@@ -635,6 +723,13 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
   function cardsOf(kind: CardKind): CardState[] {
     return deck.cards.filter((c) => c.kind === kind);
   }
+  /**
+   * 一张卡有哪几个面。**横版协议卡是双面**（参考项目 `renderCompileLandscape` 的 side 分支），
+   * 竖版编译卡只有一个面 —— 这是"正/背切换只在协议卡模式下出现"的唯一依据。
+   */
+  function facesOf(card: CardState): CardSide[] {
+    return isLandscape(card.kind) ? ['front', 'back'] : ['front'];
+  }
   function current(): CardState | null {
     return deck.cards.find((c) => c.id === currentId) ?? null;
   }
@@ -688,6 +783,20 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     const card = defaultCard(newCardId(), kind);
     deck.cards = kind === 'protocol' ? [card, ...deck.cards] : [...deck.cards, card];
     return true;
+  }
+
+  /**
+   * 换协议卡的**面**（正/背）。用户 2026-10-01 要求的那个"背面设计切换按钮"。
+   *
+   * 三件事：改 `face` → `screen.dataset.face` → `refreshAll()`（预览画面、字段按面显隐、
+   * 导出按钮文案都跟着走）。**不丢**编辑内容：两面各自的字段都一直存在 `deck` 里。
+   */
+  function setFace(next: CardSide): void {
+    if (face === next) return;
+    face = next;
+    screen.dataset.face = face;
+    refreshAll();
+    say(next === 'back' ? '已切到协议卡**背面**（底栏名字 + 背面那行字）。' : '已切到协议卡**正面**（四条横条）。', 'face-switched', 'info');
   }
 
   /* ── 保存（防抖：拖拽/打字时不要每帧写盘） ── */
@@ -750,13 +859,27 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
   }
 
   /**
-   * ★ 2026-10-01（用户要求）：按**当前模式**逐行开关字段 —— 另一模式那套字段**隐藏**
-   * （`hidden`，不是"摆着但灰掉"），于是屏上直接**读不到**它。
+   * ★ 2026-10-01（用户要求）：按**当前模式 + 当前面**逐行开关字段 —— 不该看的字段**隐藏**。
+   *
+   * ## ⚠️⚠️ 2026-10-01 修复：`hidden` 属性在本屏**曾经完全不生效**
+   *
+   * 用户反馈"协议选项里还能看到数值与三段面板"。真浏览器实测（`.superpowers/cardmaker/probe-struct.mjs`）：
+   * 行的 `hidden === true` **确实写上了**，但 `getComputedStyle(row).display === 'flex'`、
+   * 行高仍然 54/122 ⇒ **照样可见**。
+   *
+   * 根因：`styles-local.css` 给 `.cardmaker-field { display: flex }`，而浏览器 UA 样式表里的
+   * `[hidden] { display: none }` 属于**作者样式之外**的规则 ⇒ 作者样式优先，`[hidden]` 被压掉。
+   * 这与本仓既有的同族先例一模一样（`styles.css:1825`：「display:flex 会覆盖 hidden 属性，
+   * 需显式声明 [hidden] 恢复隐藏」，那里的 `.dev-results` 当年就栽在这上面）。
+   *
+   * 修法三件一起上，缺任何一件都可能再犯：
+   *  1. `hidden` 属性（语义化、桩上可断言、读屏认它）；
+   *  2. `styles-local.css` 的 `.cardmaker-field[hidden] { display: none }`（类+属性，特异性够）；
+   *  3. 行内 `style.display` 兜底（有人把第 2 条删了也不会再出这个 bug）。
    *
    * 为什么用 `hidden` 而不是"不产出节点"：输入框与它们的监听器是**只建一次**的
-   * （`onText` / `onCompile` 在启动时就挂好了），反复销毁重建会让监听器与 DOM 引用
-   * 对不上（本仓栽过这种"两份真相"的跟头）。`hidden` 是 DOM 属性（不是 CSS），
-   * 在无 jsdom 的桩上也能被断言，且浏览器里等效于不显示。
+   * （`onText` / `onCompile` 在启动时就挂好了），反复销毁重建会让监听器与 DOM 引用对不上
+   * （本仓栽过这种"两份真相"的跟头）。
    *
    * ⚠️ 与它配套的是 `formFromCard()` **不再**去设 `disabled` —— 第一版是"两套字段都摆着 +
    * 另一套灰掉 + 一句说明"，用户明确不要那个形态。所以这里的 `hidden` 是**唯一**的
@@ -764,24 +887,31 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
    */
   function syncModeFields(): void {
     for (const f of modeFields) {
-      f.row.hidden = f.kind !== null && f.kind !== mode;
+      // 归属：`kind` 是哪种卡（null = 两种都用），`face` 是协议卡的哪一面（null = 两面都用）
+      const hide = (f.kind !== null && f.kind !== mode)
+        || (f.face !== null && !(mode === 'protocol' && f.face === face));
+      f.row.hidden = hide;
+      f.row.style.display = hide ? 'none' : '';
     }
   }
 
   /**
-   * 表单 ← 当前卡（只在切换卡 / 导入 / 换模式之后回填；打字时不回填，免得把光标顶跑）。
+   * 表单 ← 当前卡（只在切换卡 / 导入 / 换模式 / 换面之后回填；打字时不回填，免得把光标顶跑）。
    *
-   * 只回填**当前模式**那几个字段的值，另一模式那几个**不碰**：它们仍旧反映它们那张卡
+   * 只回填**当前模式 + 当前面**那几个字段的值，其余不碰：它们仍旧反映它们那张卡/那个面
    * （切回去时 `syncModeFields` 放行、这一函数再回填一次，内容照旧）。
    */
   function formFromCard(card: CardState | null): void {
     syncModeFields();
     if (mode === 'protocol') {
       inTitle.value = card ? card.title : '';
-      inCTop.value = card ? card.compile.top : '';
-      inCSub.value = card ? card.compile.subtitle : '';
-      inCBot.value = card ? card.compile.bottom : '';
-      inCBack.value = card ? card.compile.back : '';
+      if (face === 'front') {
+        inCTop.value = card ? card.compile.top : '';
+        inCSub.value = card ? card.compile.subtitle : '';
+        inCBot.value = card ? card.compile.bottom : '';
+      } else {
+        inCBack.value = card ? card.compile.back : '';
+      }
       return;
     }
     inTitle.value = card ? card.title : '';
@@ -792,7 +922,7 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     panelNote.textContent = panelSummary(inTop.value, inMid.value, inBot.value);
   }
 
-  /** 背景 / logo 那一块 ← 当前卡；顺带同步模式按钮的选中态与导出按钮的文案/可用态 */
+  /** 背景 / logo 那一块 ← 当前卡；顺带同步模式按钮 / 正背按钮的选中态与导出按钮的文案 */
   function refreshAssets(): void {
     const card = current();
     perCardBox.checked = deck.shared.perCardBg;
@@ -810,11 +940,25 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
       ? `当前模式：协议卡（横版 · 正/背两面）· 整副牌只允许一张，现有 ${count} 张`
       : `当前模式：卡牌（竖版编译卡）· 现有 ${count} 张`;
 
+    /* ★ 正/背那一组只在**协议卡模式**下出现（竖版编译卡没有第二个面） */
+    const proto = mode === 'protocol';
+    faceBar.hidden = !proto;
+    faceBar.style.display = proto ? '' : 'none';
+    for (const side of ['front', 'back'] as const) {
+      const on = proto && face === side;
+      faceBtns[side].dataset.active = on ? 'yes' : 'no';
+      (faceBtns[side] as unknown as { setAttribute(n: string, v: string): void })
+        .setAttribute('aria-selected', on ? 'true' : 'false');
+      faceBtns[side].classList.toggle('cardmaker-face-on', on);
+    }
+
     /* 导出按钮的文案/可用态跟着模式走（"当前卡"不许再指代不明） */
-    exportPng.textContent = mode === 'protocol' ? '导出当前协议卡 PNG（横版 1050×750）' : '导出当前卡 PNG（竖版 750×1050）';
+    exportPng.textContent = proto
+      ? `导出协议卡${face === 'back' ? '背面' : '正面'} PNG（横版 1050×750）`
+      : '导出当前卡 PNG（竖版 750×1050）';
     exportPng.disabled = card === null;
     // 协议卡只有横版形态 ⇒ 竖版导出它对不上；置灰 + 文案说清，而不是点了才报错
-    exportPortrait.disabled = mode === 'protocol' || card === null;
+    exportPortrait.disabled = proto || card === null;
     exportPortrait.textContent = mode === 'protocol'
       ? '按竖版编译卡导出（协议卡只有横版形态，已停用）'
       : '按竖版编译卡导出（当前已是竖版成品空间）';
@@ -942,7 +1086,12 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     return bgOk;
   }
 
-  /** 预览：把当前卡正面画进屏上那张 canvas；顺带把"预览的是哪一张、多大"写在它下面 */
+  /**
+   * 预览：把当前卡**当前面**画进屏上那张 canvas；顺带把"预览的是哪一张、哪一面、多大"写在它下面。
+   *
+   * ★ 2026-10-01：协议卡加正/背切换之后，这里按 `face` 画面（`paint` 的 `side` 分支）；
+   * 竖版编译卡只有正面，`face` 对它没有意义（`facesOf` 只返回 `front`）。
+   */
   async function refreshPreview(): Promise<void> {
     const card = current();
     const seq = ++renderSeq;
@@ -951,18 +1100,20 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
       return;
     }
     const land = isLandscape(card.kind);
+    const side: CardSide = facesOf(card).includes(face) ? face : 'front';
     const w = land ? LAND_W : CARD_W;
     const h = land ? LAND_H : CARD_H;
     // 读数跟着卡走：模式切换之后这里会换成另一套尺寸（测试与 CDP 都读它）
     previewSize.textContent = land
-      ? `预览：横版协议卡 · 设计空间 ${LAND_W}×${LAND_H}`
+      ? `预览：横版协议卡${side === 'back' ? '背面' : '正面'} · 设计空间 ${LAND_W}×${LAND_H}`
       : `预览：竖版编译卡 · 设计空间 ${CARD_W}×${CARD_H}`;
     previewSize.dataset.orientation = land ? 'landscape' : 'portrait';
+    previewSize.dataset.face = side;
     if (canvas.width !== w) canvas.width = w;
     if (canvas.height !== h) canvas.height = h;
     const ctx = getCtx(canvas);
     if (!ctx) return; // 没有 2D 上下文（单测桩）：屏上结构照常，只是看不到卡
-    const ok = await paint(ctx, card, 'front', 1, w, h);
+    const ok = await paint(ctx, card, side, 1, w, h);
     if (seq !== renderSeq) return; // 已经有更新的帧在路上，丢掉这一帧
     if (!ok) say('预览没画出来：这张卡的背景图加载失败（换一张图或点「不使用背景」）。', 'preview-failed', 'error');
   }
@@ -1163,8 +1314,20 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
       }
       if (dataUrl === null) { say('已取消选择 logo：屏上没有任何改动。', 'logo-upload-cancelled', 'info'); return; }
       let small: string;
+      let cutNote = '';
       try {
-        small = await normalizeLogo(dataUrl);
+        if (logoCutBox.checked) {
+          // ★ 2026-10-01：先抠背景（只留形状），再缩到 320px —— 顺序不能反
+          //   （先缩图会把背景与形状混色，边缘判断不准）。
+          const cut = await removeLogoBackground(dataUrl);
+          small = await normalizeLogo(cut.dataUrl);
+          cutNote = cut.removedRatio > 0
+            ? `已把 ${Math.round(cut.removedRatio * 100)}% 的像素（与四边相连的背景）变成透明。`
+            : '这张图没有可去掉的背景（四角本来就是透明的）。';
+        } else {
+          small = await normalizeLogo(dataUrl);
+          cutNote = '按你的选择保留了原图（没有去背景）。';
+        }
       } catch (e) {
         say(`这张 logo 处理不了：${String(e)}`, 'logo-normalize-failed', 'error');
         return;
@@ -1180,7 +1343,7 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
       refreshAssets();
       void refreshPreview();
       scheduleSave(0);
-      say('logo 已上传：卡面上会画成白色并裁剪到六边形。', 'logo-uploaded', 'info');
+      say(`logo 已上传：卡面上会画成白色并裁剪到六边形。${cutNote}`, 'logo-uploaded', 'info');
     })();
   });
 
@@ -1326,6 +1489,11 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     return portrait ? rotateToPortrait(master, dom) : master;
   }
 
+  /**
+   * 导出**当前卡片的当前面**为 PNG：协议卡的双面靠上方的「正面 / 背面」切换决定 ——
+   * **导出的就是预览里正在看的那一面**（所见即所得）。文件名里带上 `-front` / `-back`
+   * 后缀，省得两面同名互相覆盖；想两面都要就切一次面再导一次（每次一个文件，行为可预期）。
+   */
   async function exportCardPng(portrait: boolean): Promise<void> {
     const card = current();
     if (card === null) return;
@@ -1333,12 +1501,14 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
       say('横版协议卡只有横版形态：这一张按竖版导出没有意义，已跳过。', 'export-refused', 'warn');
       return;
     }
+    const side: CardSide = facesOf(card).includes(face) ? face : 'front';
+    const sideSuffix = facesOf(card).length > 1 ? `-${side}` : '';
     say('正在渲染…（导出按 300dpi 的成品尺寸，比屏上预览大一档）', 'export-waiting', 'info');
     try {
-      const master = await renderOffscreen(card, 'front', portrait);
+      const master = await renderOffscreen(card, side, portrait);
       if (master === null) { say('这台设备拿不到 2D 画布，没法导出 PNG。', 'export-unsupported', 'error'); return; }
       const out = toPoker(master);
-      const name = `${safeFileName(deck.title === '' ? card.title : deck.title, 'card')}-${card.id.slice(0, 6)}.png`;
+      const name = `${safeFileName(deck.title === '' ? card.title : deck.title, 'card')}-${card.id.slice(0, 6)}${sideSuffix}.png`;
       await downloadCanvas(out, name, card);
     } catch (e) {
       say(`导出 PNG 失败：${String(e)}`, 'export-failed', 'error');

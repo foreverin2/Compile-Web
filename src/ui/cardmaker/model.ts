@@ -69,17 +69,31 @@ export function hydrateCompileText(src: Partial<CompileText> | null | undefined)
   return Object.assign(defaultCompileText(), src || {});
 }
 
-/** 任意残缺的卡 → 完整（`kind` 只认这两个值，其它一律当竖版卡） */
+/**
+ * 任意残缺的卡 → 完整（`kind` 只认这两个值，其它一律当竖版卡）。
+ *
+ * ★ 2026-10-01（用户要求"协议卡不该顺手带着竖版字段"）：**协议卡身上不保留竖版专属字段**
+ * （`value` / `panelTop` / `panelMid` / `panelBot`）。协议卡的三张分区表
+ * （`PROTOCOL_FRONT` / `PROTOCOL_BACK`）里没有数值位与三段面板，留着它们只会有两个坏处：
+ *  1. 牌组 JSON 里每条协议卡都拖着一串永远不用的空字段（用户第 1 条点名的就是它）；
+ *  2. 一旦值非空（老文件、手改的 JSON），渲染层虽然不画它，但它会**悄悄跟着导出/导入往返**，
+ *     将来真要做"协议卡也带数值"时会分不清"用户填的"与"历史残留"。
+ *
+ * 清成空串（而不是删字段）是有意的：`CardState` 的形状在两种卡之间保持**同一份类型**
+ * （渲染层与表单按 kind 分派，不做可选字段的窄化），省掉一圈 `?.` 与类型体操；
+ * 导出时再由 `serialize.ts` 把它们**从 JSON 里剔除**（那才是"文件里干净"的落点）。
+ */
 export function hydrateCard(src: Partial<CardState> | null | undefined, fallbackId: string): CardState {
   const base = defaultCard(fallbackId, 'compile');
   const st: CardState = Object.assign(base, src || {});
   st.id = typeof st.id === 'string' && st.id !== '' ? st.id : fallbackId;
   st.kind = st.kind === 'protocol' ? 'protocol' : 'compile';
   st.title = typeof st.title === 'string' ? st.title : '';
-  st.value = typeof st.value === 'string' ? st.value : '';
-  st.panelTop = typeof st.panelTop === 'string' ? st.panelTop : '';
-  st.panelMid = typeof st.panelMid === 'string' ? st.panelMid : '';
-  st.panelBot = typeof st.panelBot === 'string' ? st.panelBot : '';
+  const portraitOnly = st.kind === 'compile';
+  st.value = portraitOnly && typeof st.value === 'string' ? st.value : '';
+  st.panelTop = portraitOnly && typeof st.panelTop === 'string' ? st.panelTop : '';
+  st.panelMid = portraitOnly && typeof st.panelMid === 'string' ? st.panelMid : '';
+  st.panelBot = portraitOnly && typeof st.panelBot === 'string' ? st.panelBot : '';
   st.compile = hydrateCompileText(st.compile);
   st.bgOwn = hydrateBg(st.bgOwn);
   st.logoOwn = hydrateLogo(st.logoOwn);
