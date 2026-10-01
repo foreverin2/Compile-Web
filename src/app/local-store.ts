@@ -32,6 +32,9 @@ import {
   writeJson,
   type KeyValueStore,
 } from './storage';
+// ★ 2026-10-01（P0）：语言这个**值的类型**住在零依赖叶子 `src/i18n/lang.ts`（不是
+// `src/i18n/index.ts`）—— 那一层含文案表与 `import.meta.env`，纯层不许依赖它。理由写在那个文件里。
+import type { Lang } from '../i18n/lang';
 
 export type ConsentState = 'unknown' | 'ask' | 'allowed' | 'denied';
 
@@ -156,6 +159,53 @@ export interface DeckRecord {
 
 export interface L1Settings {
   nick: string;
+  /**
+   * ★ 2026-10-01（用户拍板"UI 全量双语"，方案 `docs/2026-10-01-新手引导与教学-方案.md` §2.2）：
+   * **界面语言**。它是 L1 设置对象里的一个**字段**，不是一个新键 —— 于是它与昵称同一份存储、
+   * 同一套授权门控、同一次「清除本机数据」（`clearAllLocalData` 清的就是 `L1_SETTINGS` 这个键）。
+   *
+   * ⚠️ **卡牌文本不在这里**：`src/data/cards*.ts` 的中文是**数据**，被 `npm run texts:check`
+   * 与联机卡文哈希逐字钉住；英文卡面走以后 P4 的显示层翻译表（按 `defId` 映射）。
+   *
+   * 可选（`lang?`）：老的存储里没有这个字段，读出来是 `undefined` ⇒ 用默认中文。
+   */
+  lang?: Lang;
+}
+
+/**
+ * 读设置对象（**读取侧守卫的唯一出口**，`readNickName` / `readLang` 都走它）。
+ *
+ * 三条防线，各管一段（`readNickName` 原来的注释**逐字**保留在这里，别把职责说混）：
+ *  1. **承重的那条是 `readJson` 的 null 归一**（`JSON.parse('null')` 是合法解析）——
+ *     `null.nick` 会抛 `TypeError`，那是 G3 要修的崩溃；去掉归一 ⇒ `readNickName` 的腿
+ *     **立刻变红**（C1 变异实测）。
+ *  2. `typeof s !== 'object' || s === null` + 非数组 是**形状守卫**：`{nick: 42}` / 数组 /
+ *     数字 / 字符串这些"合法 JSON 但不是设置对象"的值一律回空对象（去掉它 ⇒ 变红，C3 变异实测）。
+ *  3. 返回值是**浅拷贝**：写入侧要在它上面摊开（`{ ...prev, nick }`），共享引用会让
+ *     "读一次、改两处"互相污染（`writeNickName` 那条注释里的"垃圾对象"就是这个形态）。
+ */
+function readSettings(store: LocalStore): Record<string, unknown> {
+  const s = readJson<unknown>(store.kv(), L1_SETTINGS, {});
+  // 防御层：在 `readJson` 已归一 `null` 的前提下它**不承重**，但 `readJson` 的契约一旦被
+  // 放宽（或这里换成别的读取函数），它就是最后一道拦住 `null` 解引用的墙。
+  if (typeof s !== 'object' || s === null || Array.isArray(s)) return {};
+  return { ...(s as Record<string, unknown>) };
+}
+
+/**
+ * 写设置对象：读出旧值（走上面**同一套守卫**）再摊开覆盖 `patch` 里那几个字段。
+ *
+ * ⚠️ 写成"读旧值走 `readSettings`"而不是裸的 `readJson(...)`：那会在
+ * "存储里是 `42`/`[1,2]`"时把 `{...42, nick}`、`{...['a'], nick}` 这种垃圾对象写回去
+ * —— 不是崩溃，但是脏数据。
+ *
+ * ⚠️ **已知的窄口径**（G3 实测出来的，明写在这里而不是假装没有）：本函数把"非对象/数组"
+ * 的旧值一律当空对象处理 ⇒ 读取侧回空串、写回后是一个**新对象**（而不是原样保留那个数组）。
+ * 这条只会在"存储被外部手改/污染"时被走到，且两个方向都不丢用户数据（旧值本来就不是设置）。
+ */
+function writeSettings(store: LocalStore, patch: Record<string, unknown>): boolean {
+  const prev = readSettings(store);
+  return writeJson(store.kv(), L1_SETTINGS, { ...prev, ...patch }).ok;
 }
 
 /**
@@ -165,35 +215,45 @@ export interface L1Settings {
  *     （C1 变异实测）。
  *  2. `typeof nick === 'string'` 是**形状守卫**：`{nick: 42}` / 数组 / 数字 / 字符串
  *     这些"合法 JSON 但不是设置对象"的值一律回空串（去掉它 ⇒ 变红，C3 变异实测）。
- *  3. `typeof s !== 'object' || s === null` 是**防御性**的第三层：在当前实现下它**不承重**
- *     （C2 变异实测：删掉它 61 条腿仍全绿 —— 因为 `readJson` 已把 `null` 归一，
- *     而 `42.nick` / `'x'.nick` 在 JS 里只是 `undefined`、不抛）。**保留**它的理由是
- *     `readJson` 的契约一旦被放宽（或这里换成别的读取函数），它就是最后一道拦住
- *     `null` 解引用的墙；它**没有**对应的变异腿，本文件如实说明，不假装它有。
+ *  3. 第三层防御（`typeof s !== 'object' || s === null`）已随读取侧收口搬进 `readSettings`，
+ *     那里写着它为什么不承重、以及为什么仍然保留。
  */
 export function readNickName(store: LocalStore): string {
-  const s = readJson<unknown>(store.kv(), L1_SETTINGS, {});
-  if (typeof s !== 'object' || s === null) return ''; // 防御层（不承重，见上面第 3 条）
-  const nick = (s as Partial<L1Settings>).nick;
-  return typeof nick === 'string' ? nick : '';        // 承重的形状守卫（C3）
+  const nick = readSettings(store).nick;
+  return typeof nick === 'string' ? nick : ''; // 承重的形状守卫（C3）
 }
 
 /**
- * 写昵称。读旧值走的是 `readNickName` 的**同一套守卫**（写成裸的 `readJson(...)` 会在
- * "存储里是 `42`/`[1,2]`"时把 `{...42, nick}`、`{...['a'], nick}` 这种垃圾对象写回去
- * —— 不是崩溃，但是脏数据）。
- *
- * ⚠️ **已知的窄口径**（实测出来的，明写在这里而不是假装没有）：本函数把"非对象/数组"
- * 的旧值一律当空对象处理 ⇒ 读取侧回空串、写回后是一个**新对象**（而不是原样保留那个数组）。
- * 这条只会在"存储被外部手改/污染"时被走到，且两个方向都不丢用户数据（旧值本来就不是设置）。
+ * 写昵称。读旧值走 `readSettings` 的**同一套守卫**（见 `writeSettings` 的说明）。
  */
 export function writeNickName(store: LocalStore, nick: string): boolean {
-  const raw = readJson<unknown>(store.kv(), L1_SETTINGS, {});
-  const prev: Record<string, unknown> =
-    typeof raw === 'object' && raw !== null && !Array.isArray(raw)
-      ? { ...(raw as Record<string, unknown>) }
-      : {};
-  return writeJson(store.kv(), L1_SETTINGS, { ...prev, nick }).ok;
+  return writeSettings(store, { nick });
+}
+
+/**
+ * ★ 2026-10-01（P0）：读界面语言。
+ *
+ * **回 `unknown` 而不是 `Lang`**：形状守卫归 `src/i18n/lang.ts` 的 `isLang()` 一处
+ * （它同时管"存储里是 `'xx'`"与"存储里是 `42`"两种情形）。本函数只负责把设置对象里那个
+ * 字段**原样**取出来 —— 在这一层假装自己认识语言，会让校验出现第二份实现。
+ *
+ * ⚠️ 存储里是坏值时**回 `undefined`**，不抛：缺一个语言偏好不该让游戏打不开
+ * （与 `readNickName` 回空串同一条纪律）。
+ */
+export function readLang(store: LocalStore): unknown {
+  return readSettings(store).lang;
+}
+
+/**
+ * ★ 2026-10-01（P0）：写界面语言。返回值语义与 `writeNickName` **逐字相同**：
+ * `true` = 真的落到 `store.kv()` 了；`false` = 没写进去（配额满 / 隐私模式 / 超上限）。
+ *
+ * ⚠️ **`false` 不等于"这次切换没生效"**：游客模式（`deny`）下 `store.kv()` 是**内存 KV**，
+ * 它会成功（回 `true`），但刷新即丢；只有"后端存在却写不进去"才回 `false`。
+ * 两种情形的提示措辞由宿主（`src/main.ts` 的 `applyLangChange`）分开说，别混成一句。
+ */
+export function writeLang(store: LocalStore, lang: Lang): boolean {
+  return writeSettings(store, { lang });
 }
 
 function isDeckRecord(v: unknown): v is DeckRecord {

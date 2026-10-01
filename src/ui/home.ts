@@ -7,6 +7,9 @@ import { LIB_TAG_GROUPS, LIB_ALL_TAG_IDS, filterLibrary } from '../app/library-f
 import { openZoom, buildCardTextEl, buildProtocolRatingPanel, bindClickOrDouble } from './render';
 import { changelogElement } from './changelog';
 import { FX_SETTINGS, isMetal6StrobeOn, setMetal6Strobe } from './fx-settings';
+// ★ 2026-10-01（P0，用户拍板"UI 全量双语"）：设置小窗是**第一个真实消费者** —— 它的每一条
+// 文案都从 `src/i18n/` 取。中文值与这里原来的字面量逐字一致（既有测试零改动）。
+import { LANGS, getLang, setLang, t, type Lang } from '../i18n';
 
 /**
  * 主界面/掷硬币/图鉴/规则图纸 —— 非对局屏（main.ts 导航）。
@@ -1104,21 +1107,161 @@ function renderCoinHotseat(root: HTMLElement, nav: CoinNav): void {
  *
  * 右上角「关闭」按钮 / 点遮罩空白处 / 按 Esc —— 三条都走 `onClose`，由宿主统一收尾
  * （`main.ts` 的 `openSettings`：移除节点 + 撤掉 keydown 监听 + 焦点还给入口按钮）。
+ *
+ * ## ★ 2026-10-01（P0）：语言项 —— 本屏是 i18n 的第一个真实消费者
+ *
+ * 用户拍板"UI 全量双语"（方案 `docs/2026-10-01-新手引导与教学-方案.md` §6.5），P0 只抽这一屏。
+ * 两条口径：
+ *
+ *  1. **中文值与改动前的字面量逐字一致**（值在 `src/i18n/zh.ts`）—— 既有测试逐字钉住
+ *     `关闭` / `改动只在本次会话有效…`，P0 不许让它们变红。
+ *  2. **切了就立即生效**：`setLang()` 换内存态之后，本屏用 `applyLang()` 把**自己**的每一条
+ *     文案就地改写一遍（不重画整屏 —— 那会丢掉玩家正在看的滚动位置与焦点），再调
+ *     `nav.onLangChange()` 让宿主落盘并重画它背后的那一屏（`src/main.ts` 的 `rerender()` 接缝）。
+ *     ⇒ "立即生效"有两半：小窗自己这一半在这里，宿主那一半在 `main.ts`。
+ *
+ * 语言值**不由本函数读写存储**：它只拿 `nav.lang`（当前值）与 `nav.onLangChange`（切换动作），
+ * 于是本函数仍然可以在无 jsdom 的 node 下用桩真跑（与它原来"只造元素"的纪律一致）。
  * ===================================================================== */
-export function settingsOverlayElement(nav: { readonly onClose: () => void }): HTMLElement {
+export interface SettingsOverlayNav {
+  readonly onClose: () => void;
+  /**
+   * 当前界面语言。**必填**：缺了它小窗就只能瞎猜默认语言，而"猜错"的形态是
+   * 一位英文玩家打开设置看到中文标题 —— 那正是这一步要修的东西。
+   */
+  readonly lang: Lang;
+  /**
+   * 用户选了另一种语言。**由宿主负责**：写进本机设置（`src/app/local-store.ts` 的 `writeLang`）
+   * + 重画当前屏（`src/main.ts` 的 `rerender()` 接缝）。
+   * 本函数在调它**之前**已经把 `setLang()` 的内存态换好、并把自己的文案改写完了。
+   *
+   * 返回**写盘结论**（三态不许折叠，与「本地数据与隐私」屏那几条同款）：
+   *  - `{ ok: true }`：真的落盘了；
+   *  - `{ ok: false, detail }`：**后端存在却写不进去**（隐私模式 / 配额满）⇒ 本屏在小窗里
+   *    如实写一句"本次会话生效、刷新回旧语言 + 真因"，绝不假装保存成功；
+   *  - 宿主抛错也当 `{ ok: false }` 处理（本函数兜 `try/catch`，不让切语言把小窗炸掉）。
+   */
+  readonly onLangChange: (lang: Lang) => { ok: boolean; detail?: string };
+}
+
+export function settingsOverlayElement(nav: SettingsOverlayNav): HTMLElement {
   const overlay = el('div', 'settings-overlay');
   const dialog = el('div', 'settings-panel');
   dialog.setAttribute('role', 'dialog');
   dialog.setAttribute('aria-modal', 'true');
-  dialog.setAttribute('aria-label', '设置');
 
   const head = el('div', 'settings-head');
-  head.appendChild(el('div', 'settings-title', '设置'));
-  const close = button('btn settings-close', '关闭', () => { nav.onClose(); });
+  const title = el('div', 'settings-title', t('settings.title'));
+  head.appendChild(title);
+  const close = button('btn settings-close', t('settings.close'), () => { nav.onClose(); });
   head.appendChild(close);
   dialog.appendChild(head);
 
+  /**
+   * 当前语言（本函数内**唯一**的语言真相）。初值取 `nav.lang`，切换时改写它 ——
+   * 不直接读 `getLang()` 是为了让"宿主给小窗的值"与"小窗用的值"是同一个可见的输入，
+   * 而不是一个没写在签名里的隐式依赖。
+   */
+  let lang: Lang = nav.lang;
+
+  /**
+   * 特效开关那一项的**说明文案**（未勾选时的原文）。
+   *
+   * ⚠️ 这里用 `def.id === 'metal6-strobe'` 的三元把**两个键都写成字面量**，而不是
+   * `t(def.desc)` 传一个变量：缺键扫描腿（`tests/i18n/tables.test.ts`）按**静态第一实参**
+   * 提取键 —— 传变量等于那个键从判据面里消失，"漏翻"就重新变成静默的。
+   * 那条腿是 P3 逐屏抽取期间唯一的机械保障，所以这里为它让一步；新增特效项时照这个形状
+   * 加一个分支即可（两个键都要进两张表）。
+   */
+  const fxDescText = (id: string): string =>
+    id === 'metal6-strobe' ? t('settings.fx.metal6.desc') : id;
+
+  /** 特效开关那一项的**标题**（同上：键写成字面量） */
+  const fxLabelText = (id: string): string =>
+    id === 'metal6-strobe' ? t('settings.fx.metal6.label') : id;
+
+  /**
+   * 开关那一行的说明文案。
+   *
+   * ⚠️ `touched` 这一档是**刻意的行为细节**，不是多余的分支：**没动过**的开关只显示说明原文
+   * （"（当前：开启）"那句只在玩家真的勾过一次之后才出现）。既有腿逐字钉着这个形态 ——
+   * `tests/ui/local-data-screen.test.ts` 第 9 组断言"勾一次之后 = `原说明（当前：关闭）`"，
+   * 若渲染期就先把状态缀上去，那句就变成"缀了两遍"。判据没错，所以这里按它来。
+   */
+  const fxNoteText = (id: string, on: boolean, touched: boolean): string => {
+    const label = fxDescText(id);
+    if (!touched) return label;
+    const state = on ? t('settings.fx.on') : t('settings.fx.off');
+    return t('settings.fx.state', { desc: label, state });
+  };
+
+  /* ── ① 语言（P0 新增的那一项） ── */
+  const langRow = el('div', 'settings-lang-row');
+  const langLabel = el('div', 'mode-toggle-label', t('settings.lang'));
+  langRow.appendChild(langLabel);
+  const langBtns = el('div', 'settings-lang-btns');
+  /**
+   * 语言按钮的文案取 `LANGS` 的 `label`（`中文` / `English`）—— 那是"语言清单的唯一出处"
+   * （`src/i18n/lang.ts`），**刻意不放进文案表**：选项名是给"看不懂当前语言的人"看的，
+   * 它不该跟着当前语言变（否则切到英文后中文选项会写成 "Chinese"，中文玩家就找不回来了）。
+   */
+  const langBtnEls: { readonly id: Lang; readonly btn: HTMLButtonElement }[] = [];
+  /**
+   * 写盘失败时的**就地提示行**（空 = 不占屏）。
+   *
+   * 为什么提示在小窗里、而不是跳去别的屏或弹一个 `window.confirm`（那在 DOM 桩下测不了）：
+   * 玩家切语言失败时人就在这里，提示必须出现在他正在看的那一屏上。文案是**报告**形态
+   * （"失败""本次会话"），不是隐私承诺句 —— 见 `tests/ui/privacy-consumers.test.ts` 的分层判据。
+   */
+  const langStatus = el('div', 'settings-lang-status');
+  langStatus.dataset.role = 'lang-status';
+  for (const def of LANGS) {
+    const b = button('btn settings-lang-btn', def.label, () => {
+      if (def.id === lang) return; // 点当前语言 = 什么都不做（不落盘、不重画）
+      lang = def.id;
+      // ① 先换内存态（`t()` 从下一句起就是新语言）；② 再就地改写本屏；③ 最后交给宿主落盘 + 重画。
+      setLang(def.id);
+      langStatus.textContent = ''; // 先清掉上一次失败的提示（这一次还没结论）
+      applyLang();
+      let out: { ok: boolean; detail?: string };
+      try {
+        out = nav.onLangChange(def.id);
+      } catch (e) {
+        out = { ok: false, detail: e instanceof Error ? e.message : String(e) };
+      }
+      if (!out.ok) {
+        langStatus.textContent = out.detail === undefined
+          ? t('settings.lang.save-failed')
+          : t('settings.lang.save-failed-detail', { detail: out.detail });
+      }
+    });
+    b.dataset.lang = def.id;
+    langBtnEls.push({ id: def.id, btn: b });
+    langBtns.appendChild(b);
+  }
+  langRow.appendChild(langBtns);
+  /**
+   * ⚠️ 类名是 `.settings-lang-hint` 而**不是** `.settings-note`：既有那条腿
+   * （`tests/ui/local-data-screen.test.ts` 第 9 组）用 `oneClass(overlay, 'settings-note')`
+   * 定位"特效开关那一行的说明"并要求**树里唯一** —— 语言这一行再挂一个 `.settings-note`
+   * 会把那个唯一性判据打红。判据与它的对象都没错，错的是这里复用了一个已经被"唯一性"钉住的类名；
+   * 版式在 `styles-local.css` 里与 `.settings-note` 写成同一套声明。
+   */
+  const langHint = el('div', 'settings-lang-hint', t('settings.lang.hint'));
+  langRow.appendChild(langHint);
+  langRow.appendChild(langStatus);
+  dialog.appendChild(langRow);
+
   const list = el('div', 'settings-list');
+  /** 特效开关那一行：`note` / `label` 要留着在语言切换时就地改写，所以每行登记一份 */
+  const fxRows: {
+    readonly def: (typeof FX_SETTINGS)[number];
+    readonly note: HTMLElement;
+    readonly label: HTMLElement;
+    readonly box: HTMLInputElement;
+    /** 玩家勾过至少一次吗（见 `fxNoteText` 的说明：没勾过不显示"当前："那句） */
+    touched: boolean;
+  }[] = [];
   for (const def of FX_SETTINGS) {
     const row = el('label', 'mode-toggle');
     const box = document.createElement('input');
@@ -1127,19 +1270,58 @@ export function settingsOverlayElement(nav: { readonly onClose: () => void }): H
     box.checked = isMetal6StrobeOn();
     box.dataset.fxSetting = def.id;
     // 开关说明（每行一条）：勾选后就地改写它，把当前状态写在屏上（不重画整屏）
-    const note = el('div', 'settings-note', def.desc);
+    const entry = {
+      def,
+      note: el('div', 'settings-note', ''),
+      label: el('span', 'mode-toggle-label', fxLabelText(def.id)),
+      box,
+      touched: false,
+    };
+    entry.note.textContent = fxNoteText(def.id, box.checked, entry.touched);
     box.addEventListener('change', () => {
       if (def.id === 'metal6-strobe') setMetal6Strobe(box.checked);
-      note.textContent = `${def.desc}（当前：${box.checked ? '开启' : '关闭'}）`;
+      entry.touched = true;
+      entry.note.textContent = fxNoteText(def.id, box.checked, entry.touched);
     });
     row.appendChild(box);
-    row.appendChild(el('span', 'mode-toggle-label', def.label));
+    row.appendChild(entry.label);
     list.appendChild(row);
-    list.appendChild(note);
+    list.appendChild(entry.note);
+    fxRows.push(entry);
   }
   dialog.appendChild(list);
-  dialog.appendChild(el('div', 'settings-hint', '改动只在本次会话有效，刷新后回到默认开启。'));
+  const hint = el('div', 'settings-hint', t('settings.hint'));
+  dialog.appendChild(hint);
   overlay.appendChild(dialog);
+
+  /**
+   * 把本屏的**每一条文案**按当前语言重写一遍（就地改写，不重画整屏）。
+   *
+   * ⚠️ 这里是"新增一条文案就补一行"的地方：漏了哪一条，切语言之后它就停在旧语言上 ——
+   * 而屏上其它条目都变了，这种"半张屏"最难被发现。`tests/i18n/settings-overlay.test.ts`
+   * 有一条腿在两种语言下各跑一次并逐条比对，漏改的那一条会当场红。
+   */
+  function applyLang(): void {
+    title.textContent = t('settings.title');
+    // aria-label 是读屏玩家听到的东西，不是装饰：它也要跟着语言走
+    dialog.setAttribute('aria-label', t('settings.aria'));
+    close.textContent = t('settings.close');
+    langLabel.textContent = t('settings.lang');
+    langHint.textContent = t('settings.lang.hint');
+    for (const { id, btn } of langBtnEls) {
+      // 当前语言那一枚标出来（视觉上由 `.settings-lang-btn.on` 承担，属性是给测试与读屏的）
+      const active = id === getLang();
+      btn.classList.toggle('on', active);
+      if (active) btn.setAttribute('aria-current', 'true');
+      else btn.removeAttribute('aria-current');
+    }
+    for (const { def, note, label, box, touched } of fxRows) {
+      note.textContent = fxNoteText(def.id, box.checked, touched);
+      label.textContent = fxLabelText(def.id);
+    }
+    hint.textContent = t('settings.hint');
+  }
+  applyLang();
 
   // 点遮罩空白处关闭（点小窗内部不关：`e.target` 只会在**遮罩本身**上等于 overlay）
   overlay.addEventListener('click', (e) => {

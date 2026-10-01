@@ -328,6 +328,34 @@
 .settings-note { font-size: 12px; line-height: 1.6; color: #8f9ac0; }
 .settings-hint { margin-top: 12px; font-size: 12px; line-height: 1.6; color: #7d86a8; }
 
+/* ---------- ★ 2026-10-01（P0，i18n）：设置小窗里的**语言**一项 ----------
+ * 元素由 `src/ui/home.ts` 的 `settingsOverlayElement()` 造（用户拍板"UI 全量双语"，
+ * 方案 `docs/2026-10-01-新手引导与教学-方案.md` §6.5 / §7 的 P0 行）。
+ *
+ * 四个新类名（`.settings-lang-row` / `.settings-lang-btns` / `.settings-lang-btn` /
+ * `.settings-lang-status`）在 5 张既有 CSS 里**零命中** —— 由
+ * `tests/ui/local-data-screen.test.ts` 那条"styles-local.css 的新类名不与既有 CSS 同名"的
+ * 生成式腿逐条盯着（它采的是 `settings-*` 全集，所以这里加名字会自动进判据面）。
+ *
+ * 选中态用的是**复合类** `.settings-lang-btn.on`：`.on` 这个短名在既有 CSS 里只以
+ * `.draft-filter-chip.on` 这类复合形态出现（没有裸 `.on` 规则），所以这里不会串味；
+ * 但**裸 `.on` 仍然不写** —— 那是"新类名与既有 CSS 零冲突"这条纪律的边界。 */
+.settings-lang-row {
+  margin-top: 8px; padding-bottom: 10px; border-bottom: 1px solid #333a50;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.settings-lang-btns { display: flex; flex-wrap: wrap; gap: 8px; }
+.settings-lang-btn { font-size: 12px; padding: 5px 14px; }
+.settings-lang-btn.on {
+  border-color: #00ffcc; color: #00ffcc; background: rgba(0, 255, 204, 0.08);
+}
+/* 语言那一行的说明与写盘失败提示。
+ * ⚠️ 语言说明**不复用** `.settings-note`：那个类名被既有腿按"树里唯一"钉着（它是特效开关
+ * 那一行的说明）。这里写成与 `.settings-note` 相同的声明，视觉一致、判据不打架。 */
+.settings-lang-hint { font-size: 12px; line-height: 1.6; color: #8f9ac0; }
+/* 写盘失败时的那一句（空字符串时不占屏，所以这里不需要 display:none 那套） */
+.settings-lang-status { font-size: 12px; line-height: 1.6; color: #ffb3b3; }
+
 
 /* ---------- ★ 2026-10-01（用户要求）：「反馈」功能（表单浮层 + 隐藏页） ----------
  * 元素由 `src/ui/feedback-screen.ts` 造，宿主（`src/main.ts` 的 `showHome`）把

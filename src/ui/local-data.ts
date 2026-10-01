@@ -55,11 +55,14 @@ import { CARD_DATA_HASH } from '../app/card-data-hash';
 import {
   clearAllLocalData,
   readDecks,
+  readLang,
   readNickName,
   writeNickName,
   type ConsentState,
   type LocalStore,
 } from '../app/local-store';
+// ★ 2026-10-01（P0）：语言标签的唯一出处（`src/i18n/lang.ts`）—— 本文件不写第二份语言名清单。
+import { DEFAULT_LANG, LANGS, isLang } from '../i18n/lang';
 import type { MatchFile } from '../app/match-file';
 import { privacyLines } from '../app/privacy';
 
@@ -283,6 +286,9 @@ export function renderLocalData(root: HTMLElement, nav: LocalDataNav): void {
     store.reset(); // 回 unknown ⇒ 下次启动会重新问
     refreshConsent();
     refreshStored();
+    // ★ 2026-10-01（P0）：语言跟着 `L1_SETTINGS` 整键被清掉了 ⇒ 这一行要重画回默认语言，
+    //   否则屏上还显示着清除前那个语言（那会让人以为"语言没被清掉"）。
+    refreshLang();
     say(`已清除本机数据（${removed} 项）。下次启动会重新询问是否保存到本机。`, 'clear-ok', 'info');
   };
 
@@ -350,6 +356,56 @@ export function renderLocalData(root: HTMLElement, nav: LocalDataNav): void {
   const storedRow = el('div', 'local-data-row');
   storedRow.dataset.role = 'stored';
   screen.appendChild(storedRow);
+
+  /* ── ②a ★ 2026-10-01（P0）：**语言** ──
+   *
+   * 用户口径（方案 §6「存储与隐私」）：新加的存储**必须**在这屏里可见、可清除。
+   *
+   * ## 核清结论：语言**不在** `clearAllLocalData` 的键表里，但这**不是**漏掉
+   *
+   * ★ 2026-10-01（P0）核清：`lang` 是**既有 `L1_SETTINGS` 键里新增的一个字段**，
+   * 不是一个新的存储键（`L1Settings.lang`，见 `src/app/local-store.ts`）。所以：
+   *  - **可见**：就是下面这一行 —— 读数走 `readLang` 的**同一套守卫**，
+   *    形状不对（存储里是 `'xx'` / `42`）时回默认中文，与 `t()` 的回退同源；
+   *  - **可清除**：`clearAllLocalData` 清的就是 `L1_SETTINGS` 这个整键 ⇒ 语言跟着昵称一起没，
+   *    清完这屏重画时这一行会显示回默认中文（下面 `doClear` 里调了 `refreshStored()`）。
+   *
+   * ⇒ **不需要**动 `clearAllLocalData` 的键表（也没动）；这里补的是"可见"这一半，
+   *   以及"读数"这一半 —— 两者都由 `tests/ui/local-data-screen.test.ts` 第 11 组盯着。
+   *
+   * 版式复用本屏既有的 `.local-data-*` 类（不新增 CSS 类 ⇒ 与 5 张既有 CSS 零冲突那条腿不动）。 */
+  const langRow = el('div', 'local-data-row');
+  langRow.dataset.role = 'lang';
+  langRow.appendChild(el('div', 'local-data-note', '界面语言'));
+  const langLine = el('div', 'local-data-privacy-line');
+  langLine.dataset.role = 'lang-state';
+  langRow.appendChild(langLine);
+  screen.appendChild(langRow);
+
+  /**
+   * 读一次语言并写在屏上。
+   *
+   * ⚠️ 与 `refreshStored` 分开（而不是并进去）的理由：两者的失败形态与刷新时机不同 ——
+   * 语言是**单值**、读失败就该显示"读不出来"；而 `stored` 那一块失败要整块报错。
+   * 混成一处会让"语言读不出来"看起来像"昵称与卡组都读不出来"。
+   *
+   * 标签取 `LANGS` 的**唯一出处**（`src/i18n/lang.ts`），本文件不写第二份语言名清单。
+   */
+  const refreshLang = (): void => {
+    let raw: unknown;
+    try {
+      raw = readLang(store);
+    } catch (e) {
+      langLine.textContent = `界面语言：读取本机数据失败：${describeError(e)}`;
+      return;
+    }
+    const lang = isLang(raw) ? raw : DEFAULT_LANG;
+    const found = LANGS.find((l) => l.id === lang);
+    // 存储里是坏值时**如实说出来**，而不是假装"一直是中文"（那会让玩家以为自己的选择丢了）
+    const tail = isLang(raw) ? '' : '（本机存的不是一个有效值，按默认语言显示）';
+    langLine.textContent = `界面语言：${found?.label ?? lang}${tail}`;
+  };
+  refreshLang();
 
   /* ── ②b ★ 2026-10-01：卡牌制作器存在本机的那一份（可见 + 可清除） ──
    *

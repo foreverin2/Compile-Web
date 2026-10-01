@@ -47,7 +47,12 @@ import type { CoinNetView } from './ui/home';
 // ★ T11-B：硬币屏要的"面"（屏上口径 `1 | 2`）
 import type { CoinSide } from './app/coin';
 // G3 Task 4：L1 授权状态机（纯层）+ 其浏览器后端 + 授权弹窗屏
-import { createLocalStore, readNickName } from './app/local-store';
+import { createLocalStore, readLang, readNickName, writeLang } from './app/local-store';
+// ★ 2026-10-01（P0，用户拍板"UI 全量双语"）：i18n 基建。语言的**值**与文案表在 `src/i18n/`；
+//   本文件只做两件事：① 启动时 `initI18n(readLang(localStore))` 读一次已存的语言（**只读**）；
+//   ② `applyLangChange()` 在用户切语言时落盘 + 重画当前屏。方案见
+//   `docs/2026-10-01-新手引导与教学-方案.md` 的 §6.5 与 §7 的 P0 行。
+import { getLang, initI18n, setLang, type Lang } from './i18n';
 import { openL1Store } from './ui/local-store-browser';
 import { renderLocalConsent, nextConsentStep } from './ui/local-consent';
 import { installHotseatExit } from './ui/hotseat-exit';
@@ -77,6 +82,7 @@ import {
   closeFeedbackOverlay,
   closeHiddenView,
   initFeedbackShortcut,
+  isHomeScreenActive,
   openFeedbackOverlay,
 } from './ui/feedback-screen';
 // G4 Task 4：会话层驱动（热座 = 执行 + 记录；重放 = 只读闸门）与档案重放的接线。
@@ -4849,6 +4855,75 @@ let gameOptions = { ban: false, randomPool: false };
 const localStore = createLocalStore({ persistent: openL1Store() });
 
 /**
+ * ★ 2026-10-01（P0，用户拍板"UI 全量双语"）：**启动时读一次已存的语言**（默认中文）。
+ *
+ * ⚠️ 这**只是读**（`readLang` → `readJson` 的 `get`），与上面那行同一时机、同样在授权弹窗
+ *   之前 ⇒ 红线上"授权之前磁盘零写入"不受影响；语言**写入**只发生在用户在小窗里切语言那一刻
+ *   （`applyLangChange`）。
+ *
+ * ⚠️ 顺序：必须在这之后才画第一屏（`showStartScreen()` 在文件末尾的启动块里），
+ *   否则授权弹窗会以默认中文画出来、再被切一次语言 —— 刷新后弹窗会"闪"一下。
+ *   语言读不出来（存储坏 / 后端抛错）由 `initI18n` 自己兜成默认中文，不抛。
+ */
+initI18n(() => readLang(localStore));
+
+/**
+ * ★ 2026-10-01（P0）：用户在小窗里切了语言 ⇒ 落盘 + 立刻重画当前屏。
+ *
+ * 三件事，缺一不可（顺序也是刻意的）：
+ *  1. **内存态已经换了**：小窗在自己那里先调 `setLang()` 再回调（见 `settingsOverlayElement`
+ *     的注释）—— "立即生效"这一半必须发生在重画**之前**，否则重画出来的还是旧语言。
+ *     这里再 `setLang(next)` 兜一道：将来若有人绕过小窗直接调本函数，内存态也不会落后。
+ *  2. **落盘**：走 `writeLang`（与昵称同一条路径、同一套守卫；游客模式下它写的是内存 KV，
+ *     ⇒ 本次会话生效、**刷新即丢**，且磁盘零写入）。
+ *  3. **重画**：`rerender()` 重画"当前那一屏"（牌桌 / 大厅 / 重放 / 草稿相）。
+ *     首页**不归 `rerender()` 管**（`renderMode` 里根本没有"首页"这一档，它的缺省是 `hotseat`）
+ *     ⇒ 首页要靠 `isHomeScreenActive()` 认出来、显式再画一次 `showHome()`，
+ *     否则玩家看到的是"设置小窗变了、背后那页还是旧语言"。
+ *     设置小窗自己挂在 `document.body` 上，`showHome()` 碰不到它 —— 它留在原地、且已被
+ *     小窗自己就地改写过了，所以玩家不会看到它闪一下。
+ *
+ * ## 返回值 = 写盘结论（**不许折叠成"成功/失败"一句话**）
+ *
+ * 三种情形由调用方（小窗）分别显示，这与「本地数据与隐私」屏那几条三态纪律同款：
+ *  - `{ ok: true }`：真的落盘了（下次启动还是这个语言）；
+ *  - `{ ok: false, detail }`：**后端存在却写不进去**（配额满 / Safari 隐私模式 / 值超上限）
+ *    ⇒ 本次会话仍然生效（内存态已经换了），但刷新就回旧语言 —— 这句话必须说出来，
+ *    不然玩家会以为"我怎么切都保存不上"；
+ *  - 游客模式（`deny`）走的是内存 KV，`writeLang` 会回 `true`：它**不是**失败，
+ *    是"本次会话生效、刷新即丢"的既定口径（与昵称同一条路）。
+ */
+/**
+ * ★ 2026-10-01（P0）：切语言那一次写盘的结论（`applyLangChange` 的返回类型）。
+ *
+ * ⚠️ 刻意写成**命名接口**而不是就地在返回类型标注里写 `{ ok: boolean; detail?: string }`：
+ * 后者会让 `tests/ui/source-text.ts` 的 `functionBody` 把**返回类型标注里的 `{`**
+ * 当成函数体起点（那是它写明的已知局限）⇒ 抽出来的"函数体"只有 70 字符，
+ * 针对它的判据会变成**假绿**。这不是风格偏好，是同文件里 `ArchiveBuild`
+ * （`src/ui/local-data.ts`）与 `NetConnLine` 那几处**同一族**的处置。
+ */
+interface LangWriteResult {
+  readonly ok: boolean;
+  readonly detail?: string;
+}
+
+function applyLangChange(next: Lang): LangWriteResult {
+  setLang(next);
+  let ok = false;
+  let detail: string | undefined;
+  try {
+    ok = writeLang(localStore, next);
+  } catch (e) {
+    // `writeJson` 把 set 的抛错翻成返回值，但 `readSettings` 里的 `get` 仍会外抛 ⇒ 这里也兜一层。
+    detail = e instanceof Error ? e.message : String(e);
+  }
+  // 重画当前屏。**写盘失败也要重画** —— 失败的含义是"下次启动回到旧语言"，不是"这次也别生效"。
+  if (isHomeScreenActive()) showHome();
+  else rerender();
+  return ok ? { ok: true } : { ok: false, detail: detail ?? '本机存储拒绝写入（隐私模式或配额已满）' };
+}
+
+/**
  * 授权状态机的**唯一落点**：reducer（`nextConsentStep`，纯函数）算下一个状态，这里只把它写回 store。
  * 为什么不让调用方直接 `localStore.grant()`：规则（含「show 不把 allowed 打回 ask」）只有一处，
  * 且这一处能被单测真跑（tests/ui/local-consent.test.ts 的 reducer 组）。
@@ -4986,7 +5061,15 @@ function showHome(): void {
         overlay = null;
         trigger?.(); // 点遮罩 / 按 Esc 之后不至于把焦点丢在 body 上
       };
-      overlay = settingsOverlayElement({ onClose: close });
+      overlay = settingsOverlayElement({
+        onClose: close,
+        /**
+         * ★ 2026-10-01（P0）：当前语言 + 切换动作。小窗自己**不碰存储**（它只造元素），
+         * 落盘与"重画当前屏"都在下面那两处。
+         */
+        lang: getLang(),
+        onLangChange: (next) => applyLangChange(next),
+      });
       document.body.appendChild(overlay);
       document.addEventListener('keydown', onKey); // Esc 关闭（用户列的可选项，一并接上）
       document.querySelector<HTMLButtonElement>('.settings-close')?.focus();
