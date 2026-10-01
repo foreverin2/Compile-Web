@@ -54,6 +54,17 @@ import { installHotseatExit } from './ui/hotseat-exit';
 import { installLogToggle } from './ui/log-toggle';
 // G3 Task 7：「本地数据与隐私」屏 + 档案的选择/落盘口（浏览器实现只在 `showLocalData` 里注入）
 import { renderLocalData } from './ui/local-data';
+// ★ 2026-10-01（用户要求）：「反馈」功能的两个宿主接缝 —— `Ctrl+Shift+O` 那条隐藏入口的
+//   挂/撤（`initFeedbackShortcut` / `closeHiddenView`）与"离开首页时的收尾"。
+//   ⚠️ 抓取层（`browserFeedbackFetcher`）也来自这里：**本文件是唯一 import `fetch` 的地方**
+//   （屏自己不碰网络，于是它能在无 jsdom 的 node 里真跑）。
+import {
+  browserFeedbackFetcher,
+  closeFeedbackOverlay,
+  closeHiddenView,
+  initFeedbackShortcut,
+  openFeedbackOverlay,
+} from './ui/feedback-screen';
 // G4 Task 4：会话层驱动（热座 = 执行 + 记录；重放 = 只读闸门）与档案重放的接线。
 // ⚠️ 收口后本文件**不再** import `executeAction`：唯一的「操作 → 引擎」映射住
 // `src/app/match-replay.ts`，唯一的触发入口是 `driver.submit(...)`（腿见
@@ -4845,13 +4856,65 @@ function showStartScreen(): void {
   showHome();
 }
 
+/**
+ * ★ 2026-10-01（用户要求）：首页那条隐藏入口（`Ctrl+Shift+O`）的**卸载函数**。
+ *
+ * 用户要求：「`Ctrl+Shift+O` 只在首页生效……监听器要能撤销/不泄漏（页面切走后不该残留）」。
+ * `showHome()` 每次进首页都把它换成一个新的（`initFeedbackShortcut` 幂等，内部先撤旧的），
+ * 而**离开首页**时由 `leaveHome()` 调它收尾。
+ */
+let homeFeedbackShortcutOff: (() => void) | null = null;
+
+/**
+ * ★ 2026-10-01（用户要求）：**离开首页时的收尾**（撤监听 + 摘掉首页起的那两层浮层）。
+ *
+ * ## 为什么必须有它
+ *
+ * 三样东西都挂在 `document`/`window` 上，`clearRoot(root)` **够不着**它们
+ * （那清的是 `#app`）：
+ *  1. `Ctrl+Shift+O` 的 keydown 监听（不撤就是泄漏，而且会在别的屏上继续等着被按）；
+ *  2. 反馈表单浮层（`document.body` 级遮罩，跟着首页走）；
+ *  3. 隐藏页那一层（同上）。
+ *
+ * 它挂在**每个**离屏入口上（模式选择 / 图鉴 / 规则 / 本地数据 / 大厅 / 硬币屏）。
+ * 另外两道保险仍然在：`isHomeScreenActive()`（离开首页后 `#app` 上没有 `screen-home`，
+ * 快捷键自己就打不开）与 `initFeedbackShortcut` 的幂等（下次进首页先撤旧的）。
+ */
+function leaveHome(): void {
+  homeFeedbackShortcutOff?.();
+  homeFeedbackShortcutOff = null;
+  closeFeedbackOverlay();
+  closeHiddenView();
+}
+
 function showHome(): void {
+  // ★ 2026-10-01（用户要求）：进首页时挂上 `Ctrl+Shift+O`（隐藏页入口）。
+  //   幂等（`initFeedbackShortcut` 会先撤掉上一次那个）⇒ 反复进首页不会叠监听器；
+  //   返回的卸载函数留在 `homeFeedbackShortcutOff`，由上面那个 `leaveHome()` 收尾。
+  homeFeedbackShortcutOff = initFeedbackShortcut({ fetcher: browserFeedbackFetcher });
   renderHome(root, {
-    startGame: () => showModeSelect(),
-    openLibrary: () => renderLibrary(root, showHome),
-    openRules: () => renderRules(root, showHome),
-    // G3 Task 7：本地数据与隐私屏（授权状态可见 + 清除本机数据 + 档案导入导出入口）
+    startGame: () => { leaveHome(); showModeSelect(); },
+    openLibrary: () => { leaveHome(); renderLibrary(root, showHome); },
+    openRules: () => { leaveHome(); renderRules(root, showHome); },
+    /**
+     * G3 Task 7：本地数据与隐私屏（授权状态可见 + 清除本机数据 + 档案导入导出入口）。
+     *
+     * ⚠️ ★ 2026-10-01：这一行是**唯一没有**加 `leaveHome()` 的入口，而且**不加**在这里是
+     * 有意的 —— `tests/ui/local-data-screen.test.ts` 有一条腿逐字钉住这个形态
+     * （`/openLocalData:\s*\(\)\s*=>\s*showLocalData\(\)/`），把箭头体换成块就等于改那条腿的
+     * 判据面（那是另一个任务的文件）。它的收尾由 `showLocalData()` 自己第一行调 `leaveHome()`
+     * 承担 —— 于是"从首页点进去"与"从别处跳进来"两条路都收得干净。
+     */
     openLocalData: () => showLocalData(),
+    /**
+     * ★ 2026-10-01（用户要求）：**「反馈」入口**（首页左上角那个按钮）。
+     *
+     * 用户原话：「首页左上角加一个「反馈」按钮」「点开后有**两种操作**：① 投稿自定义协议
+     * ② bug 反馈」。表单浮层与隐藏页都在 `src/ui/feedback-screen.ts`；这里只把**抓取层**
+     * 交下去（浏览器自带的 `fetch`）—— 屏自己不碰 `fetch`，于是它能在无 jsdom 的 node 里真跑
+     * （与 `showLocalData` 注入 `pickFile`/`saveFile` 同一条理由）。
+     */
+    openFeedback: () => { openFeedbackOverlay({ fetcher: browserFeedbackFetcher }); },
     /**
      * ★ 2026-10-01（用户要求）：「设置」不再是一整屏 ⇒ **浮在首页上面的小窗**。
      *
@@ -5039,6 +5102,13 @@ function showModeSelect(): void {
  * "等待你选择档案文件…"的**不阻塞**提示兜住（本屏不禁用任何按钮）。
  */
 function showLocalData(): void {
+  // ★ 2026-10-01（用户要求）：从首页那条入口进来时，先把首页起的东西收干净
+  //   （`Ctrl+Shift+O` 的监听 + 反馈表单浮层 + 隐藏页那一层）。
+  //   为什么收在这里、而不是像别的入口那样写在 `showHome` 的 nav 实参里：
+  //   `openLocalData: () => showLocalData()` 那一行被 `tests/ui/local-data-screen.test.ts`
+  //   逐字钉住（见 `showHome` 里那条注释），而本屏**只有这一个调用点**（上一条腿也在本文件里）
+  //   ⇒ 收在这里与本屏同进同出，行为一模一样。
+  leaveHome();
   renderLocalData(root, {
     back: showStartScreen,
     store: localStore,

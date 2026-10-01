@@ -1,0 +1,708 @@
+/**
+ * `server/feedback/` 的离线单测（2026-10-01）。
+ *
+ * 这一层只管**不需要真服务器**的那半：
+ *  - 文件名净化：路径分隔符 / `..` / 控制字符 / 重名序号；
+ *  - multipart 解析：多个文件段、空 filename 段（浏览器"没选文件"的形态）、二进制内容里的 CRLF；
+ *  - 字段校验：契约里的 1..80 / 1..40 / 1..5000 / kind 取值；
+ *  - 按 IP 每天的文件额度与登录失败闸（跨天、重启恢复）；
+ *  - 会话：Cookie 形状、过期、无效 token；
+ *  - **路径穿越**：`resolveAttachment` 必须只认清单里已存的 `storedAs`。
+ *
+ * 测试里的密码一律是字面量 `test-password`（占位），**绝不**用线上那个。
+ *
+ * ⚠️ 加载方式照 `tests/data/card-effect-tags.test.ts` 的既成做法：
+ * 被加载的是 `.mjs` 且本仓**没有** `@types/node` / `server/*.d.ts`，
+ * 写成静态 `import … from '../../server/feedback/lib/auth.mjs'` 会直接
+ * `TS7016: implicitly has an 'any' type`（本仓禁止为某处扩 node 类型声明）。
+ * 所以说明符用**运行时拼出来的非字面量**，让 TS 不解析它 —— 运行时行为完全一样。
+ */
+
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+
+/** 服务端模块的真实路径都从测试文件位置算出来（不信 cwd） */
+const MODULES = {
+  auth: ['..', '..', 'server', 'feedback', 'lib', 'auth.mjs'],
+  multipart: ['..', '..', 'server', 'feedback', 'lib', 'multipart.mjs'],
+  naming: ['..', '..', 'server', 'feedback', 'lib', 'naming.mjs'],
+  rateLimit: ['..', '..', 'server', 'feedback', 'lib', 'rate-limit.mjs'],
+  storage: ['..', '..', 'server', 'feedback', 'lib', 'storage.mjs'],
+  validate: ['..', '..', 'server', 'feedback', 'lib', 'validate.mjs'],
+  mime: ['..', '..', 'server', 'feedback', 'lib', 'mime.mjs'],
+  handler: ['..', '..', 'server', 'feedback', 'lib', 'handler.mjs'],
+};
+
+/** 动态 import 一个服务端模块（说明符运行时拼，TS 不解析它） */
+async function load(rel: string[]) {
+  return import(/* @vite-ignore */ rel.join('/'));
+}
+
+const auth = await load(MODULES.auth);
+const multipart = await load(MODULES.multipart);
+const naming = await load(MODULES.naming);
+const rateLimit = await load(MODULES.rateLimit);
+const storage = await load(MODULES.storage);
+const validate = await load(MODULES.validate);
+const mime = await load(MODULES.mime);
+const handler = await load(MODULES.handler);
+
+/** 造一个临时数据目录（数据目录必须是"里面什么都没有"的，所以单独 mkdtemp） */
+type TmpDir = string;
+const dirs: TmpDir[] = [];
+function tempDir(): TmpDir {
+  const d = mkdtempSync(join(tmpdir(), 'feedback-test-'));
+  dirs.push(d);
+  return d;
+}
+afterEach(() => {
+  while (dirs.length > 0) {
+    const d = dirs.pop();
+    if (d !== undefined) rmSync(d, { recursive: true, force: true });
+  }
+});
+
+describe('文件名净化', () => {
+  it('切掉两种路径分隔符，只留 basename', () => {
+    expect(naming.sanitizeFileName('/etc/passwd')).toBe('passwd');
+    expect(naming.sanitizeFileName('C:\\Windows\\win.ini')).toBe('win.ini');
+    expect(naming.sanitizeFileName('../../etc/passwd')).toBe('passwd');
+  });
+
+  it('把 .. 收成一个点并去掉开头的点', () => {
+    expect(naming.sanitizeFileName('..')).not.toContain('..');
+    expect(naming.sanitizeFileName('...')).not.toContain('..');
+    expect(naming.sanitizeFileName('..hidden.png')).toBe('hidden.png');
+    expect(naming.sanitizeFileName('.png')).not.toContain('..');
+  });
+
+  it('去掉控制字符与危险字符，保留中文与常用字符', () => {
+    expect(naming.sanitizeFileName('a\u0000b\nc.png')).toBe('a_b_c.png');
+    expect(naming.sanitizeFileName('a*b?c:d|e"f<g>h.png')).toBe('a_b_c_d_e_f_g_h.png');
+    expect(naming.sanitizeFileName('崩溃日志 2026-10-01.log')).toBe('崩溃日志_2026-10-01.log');
+  });
+
+  it('结果里永远不会出现分隔符、CR/LF 或 ..', () => {
+    for (const raw of ['../../x', 'a/b/c', 'a\\b\\c', 'a\r\nb', '..', '.../...', '....//....']) {
+      const out = naming.sanitizeFileName(raw);
+      expect(out).not.toContain('/');
+      expect(out).not.toContain('\\');
+      expect(out).not.toContain('\n');
+      expect(out).not.toContain('..');
+      expect(out.startsWith('.')).toBe(false);
+    }
+  });
+
+  it('全空输入退到兜底名', () => {
+    expect(naming.sanitizeFileName('')).toBe('file');
+    expect(naming.sanitizeFileName('///')).toBe('file');
+    expect(naming.sanitizeFileName('...')).toBe('file');
+  });
+
+  it('超长名字截断但保留扩展名', () => {
+    const out = naming.sanitizeFileName(`${'x'.repeat(400)}.png`);
+    expect(out.length <= 120).toBe(true);
+    expect(out.endsWith('.png')).toBe(true);
+  });
+
+  it('重名自动加序号', () => {
+    const dir = tempDir();
+    expect(naming.uniqueNameIn(dir, 'a.png')).toBe('a.png');
+    writeFileSync(join(dir, 'a.png'), 'x');
+    expect(naming.uniqueNameIn(dir, 'a.png')).toBe('a-1.png');
+    writeFileSync(join(dir, 'a-1.png'), 'x');
+    expect(naming.uniqueNameIn(dir, 'a.png')).toBe('a-2.png');
+  });
+
+  it('扩展名大小写不敏感，取值是小写', () => {
+    expect(naming.extensionOf('A.PNG')).toBe('png');
+    expect(naming.extensionOf('noext')).toBe('');
+    expect(mime.isAllowedExtension('shot.PNG')).toBe(true);
+    expect(mime.isAllowedExtension('shot.exe')).toBe(false);
+    expect(mime.isAllowedExtension('shot.svg')).toBe(false);
+    expect(mime.isAllowedExtension('shot')).toBe(false);
+    // 白名单就是契约里那 11 个，一个不多一个不少
+    expect([...mime.ALLOWED_EXTS].sort().join(' ')).toBe(
+      'csv gif jpeg jpg json log md pdf png txt webp',
+    );
+  });
+
+  it('id 是可排序的 base36 时间戳 + 随机串，且不含路径字符', () => {
+    const id = naming.newItemId(1759291200000);
+    expect(/^[a-z0-9]+-[0-9a-f]{16}$/.test(id)).toBe(true);
+    expect(id).not.toContain('/');
+    expect(id).not.toContain('.');
+  });
+});
+
+/**
+ * 本地最小 `Buffer` 声明（只为让 `tsc --noEmit` 过）。
+ * 本仓没装 `@types/node`、且明令"不许为某处扩 node 类型声明"，
+ * 所以这里只声明本文件真正用到的四个成员，不碰 `tests/node-types.d.ts`。
+ */
+declare const Buffer: {
+  from(input: string | number[]): LocalBuffer;
+  concat(list: LocalBuffer[]): LocalBuffer;
+  isBuffer(v: unknown): boolean;
+  compare(a: LocalBuffer, b: LocalBuffer): number;
+};
+interface LocalBuffer {
+  readonly length: number;
+  toString(encoding?: string): string;
+  [Symbol.iterator](): { next(): { value: number; done: boolean } };
+}
+
+describe('multipart 解析', () => {
+  const B = '----boundary1234';
+
+  /** 拼一个 multipart 请求体（段头 + 体 + CRLF，最后是收尾分隔行） */
+  function build(parts: Array<{ head: string; data: string | LocalBuffer }>): LocalBuffer {
+    const chunks: LocalBuffer[] = [];
+    for (const p of parts) {
+      chunks.push(Buffer.from(`--${B}\r\n${p.head}\r\n\r\n`));
+      chunks.push(typeof p.data === 'string' ? Buffer.from(p.data) : p.data);
+      chunks.push(Buffer.from('\r\n'));
+    }
+    chunks.push(Buffer.from(`--${B}--\r\n`));
+    return Buffer.concat(chunks);
+  }
+
+  it('从 content-type 里取 boundary（带引号 / 不带引号）', () => {
+    expect(multipart.boundaryOf('multipart/form-data; boundary="abc"')).toBe('abc');
+    expect(multipart.boundaryOf('multipart/form-data; boundary=abc')).toBe('abc');
+    expect(multipart.boundaryOf('application/json')).toBe(null);
+    expect(multipart.boundaryOf(undefined)).toBe(null);
+  });
+
+  it('解析两个字段 + 一个文件（含中文与二进制）', () => {
+    const body = build([
+      { head: 'Content-Disposition: form-data; name="title"', data: '标题' },
+      { head: 'Content-Disposition: form-data; name="kind"', data: 'bug' },
+      {
+        head: 'Content-Disposition: form-data; name="files"; filename="shot.png"\r\nContent-Type: image/png',
+        data: Buffer.from([1, 2, 3, 4]),
+      },
+    ]);
+    const parsed = multipart.parseMultipart(body, B);
+    expect(parsed.parts.length).toBe(3);
+    expect(parsed.parts[0].name).toBe('title');
+    expect(parsed.parts[0].data.toString('utf8')).toBe('标题');
+    expect(parsed.parts[2].filename).toBe('shot.png');
+    expect(parsed.parts[2].contentType).toBe('image/png');
+    expect([...parsed.parts[2].data]).toEqual([1, 2, 3, 4]);
+  });
+
+  it('filename="" 的段（浏览器"没选文件"）规范成 null', () => {
+    const body = build([
+      { head: 'Content-Disposition: form-data; name="files"; filename=""', data: '' },
+    ]);
+    const parsed = multipart.parseMultipart(body, B);
+    expect(parsed.parts.length).toBe(1);
+    expect(parsed.parts[0].filename).toBe(null);
+  });
+
+  it('二进制内容里的 CRLF 与"看着像 boundary"的字节都不破坏解析', () => {
+    const payload = Buffer.concat([
+      Buffer.from(`\r\n--${'x'.repeat(8)}\r\n`),
+      Buffer.from([0x00, 0xff, 0x0d, 0x0a]),
+    ]);
+    const body = build([
+      { head: 'Content-Disposition: form-data; name="files"; filename="a.png"', data: payload },
+      { head: 'Content-Disposition: form-data; name="title"', data: 't' },
+    ]);
+    const parsed = multipart.parseMultipart(body, B);
+    expect(parsed.parts.length).toBe(2);
+    expect(Buffer.compare(parsed.parts[0].data, payload)).toBe(0);
+    expect(parsed.parts[1].data.toString('utf8')).toBe('t');
+  });
+});
+
+describe('投稿字段校验（契约口径）', () => {
+  const config = { titleMax: 80, authorMax: 40, bodyMax: 5000 };
+  const base = { kind: 'bug', title: '闪退', author: '小明', body: '打第三回合时闪退' };
+
+  it('正常的过', () => {
+    const r = validate.validateSubmission(base, 0, config);
+    expect(r.ok).toBe(true);
+    expect(r.title).toBe('闪退');
+  });
+
+  it('kind 只认 protocol / bug', () => {
+    expect(validate.validateSubmission({ ...base, kind: 'other' }, 0, config).status).toBe(400);
+    expect(validate.validateSubmission({ ...base, kind: '' }, 0, config).status).toBe(400);
+    expect(validate.validateSubmission({ ...base, kind: 'protocol' }, 0, config).ok).toBe(true);
+  });
+
+  it('title 去空白后 1..80', () => {
+    expect(validate.validateSubmission({ ...base, title: '   ' }, 0, config).status).toBe(400);
+    expect(validate.validateSubmission({ ...base, title: 'x'.repeat(80) }, 0, config).ok).toBe(true);
+    expect(validate.validateSubmission({ ...base, title: 'x'.repeat(81) }, 0, config).status).toBe(400);
+  });
+
+  it('author 1..40', () => {
+    expect(validate.validateSubmission({ ...base, author: '' }, 0, config).status).toBe(400);
+    expect(validate.validateSubmission({ ...base, author: 'y'.repeat(40) }, 0, config).ok).toBe(true);
+    expect(validate.validateSubmission({ ...base, author: 'y'.repeat(41) }, 0, config).status).toBe(400);
+  });
+
+  it('body 1..5000（空正文也是 400，契约就是 1..5000）', () => {
+    expect(validate.validateSubmission({ ...base, body: '  ' }, 0, config).status).toBe(400);
+    expect(validate.validateSubmission({ ...base, body: 'z'.repeat(5000) }, 0, config).ok).toBe(true);
+    expect(validate.validateSubmission({ ...base, body: 'z'.repeat(5001) }, 0, config).status).toBe(400);
+  });
+
+  it('缺字段（undefined）按空处理 ⇒ 400', () => {
+    expect(validate.validateSubmission({}, 0, config).status).toBe(400);
+    expect(validate.validateSubmission({ kind: 'bug', title: 't' }, 0, config).status).toBe(400);
+  });
+});
+
+describe('按 IP 每天的文件额度', () => {
+  it('额度用满就拒，过了零点再算', () => {
+    const dir = tempDir();
+    const q = new rateLimit.FileQuota({ dir, perDay: 5 });
+    const t0 = new Date(2026, 9, 1, 10, 0, 0).getTime();
+    expect(q.check('1.2.3.4', 5, t0).allowed).toBe(true);
+    q.record('1.2.3.4', 5, t0);
+    const denied = q.check('1.2.3.4', 1, t0);
+    expect(denied.allowed).toBe(false);
+    expect(denied.used).toBe(5);
+    expect(denied.message).toContain('每天最多 5 个文件');
+    // 换个 IP 不受影响
+    expect(q.check('5.6.7.8', 5, t0).allowed).toBe(true);
+    // 第二天重新有额度
+    const t1 = new Date(2026, 9, 2, 0, 30, 0).getTime();
+    expect(q.check('1.2.3.4', 5, t1).allowed).toBe(true);
+    expect(rateLimit.dayKey(t1)).toBe('2026-10-02');
+  });
+
+  it('重启后从磁盘恢复今天的计数（额度不是内存里的）', () => {
+    const dir = tempDir();
+    const t0 = new Date(2026, 9, 1, 10, 0, 0).getTime();
+    const a = new rateLimit.FileQuota({ dir, perDay: 5 });
+    a.record('9.9.9.9', 3, t0);
+    const b = new rateLimit.FileQuota({ dir, perDay: 5 });
+    const v = b.check('9.9.9.9', 2, t0);
+    expect(v.allowed).toBe(true);
+    expect(v.used).toBe(3);
+    expect(b.check('9.9.9.9', 3, t0).allowed).toBe(false);
+  });
+});
+
+describe('登录失败闸', () => {
+  it('5 次失败之后 10 分钟内一律拒，窗口滑过去才放行', () => {
+    const g = new rateLimit.LoginFailures({ max: 5, windowMs: 10 * 60 * 1000 });
+    const t0 = 1759291200000;
+    expect(g.check('1.1.1.1', t0).allowed).toBe(true);
+    for (let i = 0; i < 5; i += 1) g.record('1.1.1.1', t0 + i * 1000);
+    const gate = g.check('1.1.1.1', t0 + 6000);
+    expect(gate.allowed).toBe(false);
+    expect(gate.retryAfterSeconds).toBe(600);
+    expect(g.check('1.1.1.1', t0 + 11 * 60 * 1000).allowed).toBe(true);
+  });
+
+  it('另一个 IP 不受牵连；密码对了会清掉自己的记录', () => {
+    const g = new rateLimit.LoginFailures({ max: 5, windowMs: 600000 });
+    const t0 = 1759291200000;
+    for (let i = 0; i < 5; i += 1) g.record('1.1.1.1', t0);
+    expect(g.check('2.2.2.2', t0).allowed).toBe(true);
+    g.clear('1.1.1.1');
+    expect(g.check('1.1.1.1', t0).allowed).toBe(true);
+  });
+});
+
+describe('会话与 Cookie', () => {
+  it('密码比较：对的就是对的，长度不同也不会抛', () => {
+    expect(auth.safeEqual('abc', 'abc')).toBe(true);
+    expect(auth.safeEqual('abc', 'abd')).toBe(false);
+    expect(auth.safeEqual('abc', 'abcdefgh')).toBe(false);
+    expect(auth.safeEqual('', '')).toBe(true);
+  });
+
+  it('会话发出来能校验，过期就不认了', () => {
+    const s = new auth.Sessions({ ttlSeconds: 43200 });
+    const t0 = 1759291200000;
+    const token = s.issue(t0);
+    expect(/^[0-9a-f]{64}$/.test(token)).toBe(true);
+    expect(s.valid(token, t0 + 1000)).toBe(true);
+    expect(s.valid(token, t0 + 43201 * 1000)).toBe(false);
+    expect(s.valid('deadbeef', t0)).toBe(false);
+    expect(s.valid(null, t0)).toBe(false);
+    expect(s.valid('', t0)).toBe(false);
+  });
+
+  it('Set-Cookie 与契约逐字一致', () => {
+    expect(auth.sessionCookie('tok', 43200)).toBe(
+      'fb_session=tok; HttpOnly; SameSite=Strict; Path=/feedback; Max-Age=43200',
+    );
+    // 线上是 http，不能带 Secure（带了浏览器不存，后台直接登不进去）
+    expect(auth.sessionCookie('tok', 43200)).not.toContain('Secure');
+  });
+
+  it('从 cookie 头里取到我们要的那个，别的 cookie 不干扰', () => {
+    expect(auth.cookieOf('other=1; fb_session=abc; x=2', auth.COOKIE_NAME)).toBe('abc');
+    expect(auth.cookieOf('fb_session=abc', auth.COOKIE_NAME)).toBe('abc');
+    expect(auth.cookieOf('other=1', auth.COOKIE_NAME)).toBe(null);
+    expect(auth.cookieOf(undefined, auth.COOKIE_NAME)).toBe(null);
+  });
+
+  it('会话数超过上限时扔最旧的', () => {
+    const s = new auth.Sessions({ ttlSeconds: 100, max: 3 });
+    const t0 = 1759291200000;
+    const first = s.issue(t0);
+    s.issue(t0 + 1);
+    s.issue(t0 + 2);
+    s.issue(t0 + 3);
+    expect(s.valid(first, t0 + 4)).toBe(false);
+    expect(s.size).toBe(3);
+  });
+});
+
+describe('落盘与路径穿越', () => {
+  it('meta.json 写得出来，列表按 createdAt 倒序', () => {
+    const root = tempDir();
+    const store = new storage.Store({ root, maxFileBytes: 1024 });
+    const mk = (id: string, createdAt: string) => {
+      const dir = store.begin(id);
+      store.saveAttachment(dir, 'a.png', Buffer.from([1]));
+      store.commit(id, {
+        id, kind: 'bug', title: id, author: 'a', body: 'b', createdAt, ip: '1.1.1.1',
+        files: [{ name: 'a.png', size: 1, storedAs: 'a.png' }],
+      });
+    };
+    mk('aaa-1', '2026-10-01T01:00:00.000Z');
+    mk('bbb-2', '2026-10-01T02:00:00.000Z');
+    expect(store.listMetas().map((m: { id: string }) => m.id)).toEqual(['bbb-2', 'aaa-1']);
+    expect(store.readMeta('aaa-1').title).toBe('aaa-1');
+    expect(store.readMeta('nope-1')).toBe(null);
+  });
+
+  it('resolveAttachment 只认清单里的名字，穿越串一律拿不到', () => {
+    const root = tempDir();
+    const store = new storage.Store({ root, maxFileBytes: 1024 });
+    const dir = store.begin('x1-1');
+    store.saveAttachment(dir, 'shot.png', Buffer.from([1, 2]));
+    store.commit('x1-1', {
+      id: 'x1-1', kind: 'bug', title: 't', author: 'a', body: 'b',
+      createdAt: '2026-10-01T00:00:00.000Z', ip: '1.1.1.1',
+      files: [{ name: 'shot.png', size: 2, storedAs: 'shot.png' }],
+    });
+
+    expect(store.resolveAttachment('x1-1', 'shot.png') !== null).toBe(true);
+    const evil = [
+      '../../etc/passwd', '/etc/passwd', 'etc/passwd', '..', '.', '',
+      'shot.png/../../etc/passwd', '..\\..\\windows\\win.ini', 'meta.json',
+    ];
+    for (const name of evil) {
+      expect(store.resolveAttachment('x1-1', name)).toBe(null);
+    }
+    // id 也必须合法：穿越串进不了 items 目录之外
+    expect(store.resolveAttachment('../x1-1', 'shot.png')).toBe(null);
+    expect(store.resolveAttachment('x1-1/../x1-1', 'shot.png')).toBe(null);
+    expect(store.resolveAttachment('..', 'shot.png')).toBe(null);
+  });
+
+  it('同一份投稿里两个同名附件自动加序号，都能取回', () => {
+    const root = tempDir();
+    const store = new storage.Store({ root, maxFileBytes: 1024 });
+    const dir = store.begin('x2-1');
+    const a = store.saveAttachment(dir, 'log.txt', Buffer.from('a'));
+    const b = store.saveAttachment(dir, 'log.txt', Buffer.from('bb'));
+    expect(a.storedAs).toBe('log.txt');
+    expect(b.storedAs).toBe('log-1.txt');
+    store.commit('x2-1', {
+      id: 'x2-1', kind: 'protocol', title: 't', author: 'a', body: 'b',
+      createdAt: '2026-10-01T00:00:00.000Z', ip: '1.1.1.1',
+      files: [
+        { name: 'log.txt', size: a.size, storedAs: a.storedAs },
+        { name: 'log-1.txt', size: b.size, storedAs: b.storedAs },
+      ],
+    });
+    expect(store.resolveAttachment('x2-1', 'log-1.txt').entry.size).toBe(2);
+  });
+});
+
+describe('Content-Type 映射与响应头', () => {
+  it('图片 / PDF / 文本各自给对', () => {
+    expect(mime.contentTypeFor('a.png')).toBe('image/png');
+    expect(mime.contentTypeFor('a.JPEG')).toBe('image/jpeg');
+    expect(mime.contentTypeFor('a.webp')).toBe('image/webp');
+    expect(mime.contentTypeFor('a.pdf')).toBe('application/pdf');
+    expect(mime.contentTypeFor('a.txt')).toContain('text/plain');
+    expect(mime.contentTypeFor('a.json')).toContain('application/json');
+    expect(mime.contentTypeFor('a.csv')).toContain('text/csv');
+    expect(mime.contentTypeFor('a.bin')).toBe('application/octet-stream');
+  });
+
+  it('Content-Disposition 是 inline，中文名另给 filename*', () => {
+    const head = mime.contentDispositionInline('崩溃日志.log');
+    expect(head.startsWith('inline; ')).toBe(true);
+    expect(head).toContain("filename*=UTF-8''");
+    expect(head).not.toContain('\n');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 2026-10-01 追加：隐藏页的"标记已读 / 删除"
+// ---------------------------------------------------------------------------
+
+/** 往 store 里塞一份投稿，返回 id */
+function seed(store: { begin: (id: string) => string; saveAttachment: (d: string, n: string, b: LocalBuffer) => { storedAs: string; size: number }; commit: (id: string, meta: Record<string, unknown>) => string }, id: string, createdAt: string, withFile: boolean) {
+  const dir = store.begin(id);
+  const files = [];
+  if (withFile) {
+    files.push(store.saveAttachment(dir, 'log.txt', Buffer.from('hello')));
+  }
+  store.commit(id, {
+    id, kind: 'bug', title: `标题-${id}`, author: '小明', body: '正文',
+    createdAt, ip: '1.1.1.1', files,
+  });
+  return id;
+}
+
+/**
+ * 直接调 `handleRequest`（不起真 HTTP）。
+ * 会话、限流、store 都是真对象，只有 nowMs / clientIp / body 是字面量 —— 与 turn-cred 的
+ * `handler.mjs` 一个路子：判定要可断言。
+ */
+function rig(root: string) {
+  const store = new storage.Store({ root, maxFileBytes: 1024 * 1024 });
+  const sessions = new auth.Sessions({ ttlSeconds: 43200 });
+  const quota = new rateLimit.FileQuota({ dir: store.rateDir, perDay: 5 });
+  const loginFails = new rateLimit.LoginFailures({ max: 5, windowMs: 600000 });
+  const lines: Array<Record<string, unknown>> = [];
+  const logger = { line: (_level: string, fields: Record<string, unknown>) => lines.push(fields) };
+  const config = {
+    password: 'test-password', passwordSource: 'test', titleMax: 80, authorMax: 40, bodyMax: 5000,
+    maxFilesPerItem: 5, maxFileBytes: 1024 * 1024, filesPerIpPerDay: 5, sessionTtlSeconds: 43200,
+    loginFailMax: 5, loginFailWindowSeconds: 600, bodyBytesCap: 8 * 1024 * 1024, trustProxy: true,
+  };
+  const token = sessions.issue(1759291200000);
+  const call = (over: Record<string, unknown>) => handler.handleRequest({
+    method: 'GET',
+    pathname: '/feedback/list',
+    query: new URLSearchParams(),
+    headers: {},
+    body: null,
+    clientIp: '203.0.113.9',
+    nowMs: 1759291200000,
+    config,
+    sessions,
+    quota,
+    loginFails,
+    store,
+    logger,
+    ...over,
+  });
+  return { store, sessions, quota, loginFails, lines, config, token, call };
+}
+
+/** 造一个带会话 Cookie 的 GET 请求头 */
+function withCookie(token: string, name = auth.COOKIE_NAME) {
+  return { cookie: `${name}=${token}` };
+}
+
+describe('追加需求：已读 / 未读', () => {
+  it('新投稿的 meta.json 里 read=false、readAt=null', () => {
+    const root = tempDir();
+    const store = new storage.Store({ root, maxFileBytes: 1024 });
+    seed(store, 'n1-1', '2026-10-01T00:00:00.000Z', true);
+    const meta = store.readMeta('n1-1');
+    expect(meta.read).toBe(false);
+    expect(meta.readAt).toBe(null);
+  });
+
+  it('老投稿（meta.json 里没有 read 字段）按未读算，不需要回填', () => {
+    const root = tempDir();
+    const store = new storage.Store({ root, maxFileBytes: 1024 });
+    seed(store, 'old-1', '2026-09-30T00:00:00.000Z', false);
+    // 手工抹掉字段，模拟升级前落的那批
+    const p = `${root}/items/old-1/meta.json`;
+    const raw = JSON.parse(String(readFileSync(p)));
+    delete raw.read;
+    delete raw.readAt;
+    writeFileSync(p, JSON.stringify(raw));
+    const meta = store.readMeta('old-1');
+    expect(meta.read).toBe(false);
+    expect(meta.readAt).toBe(null);
+  });
+
+  it('setRead 记下 readAt；标回未读时 readAt 一起清掉', () => {
+    const root = tempDir();
+    const store = new storage.Store({ root, maxFileBytes: 1024 });
+    seed(store, 'r1-1', '2026-10-01T00:00:00.000Z', true);
+    const t = 1759291200000;
+    const on = store.setRead('r1-1', true, t);
+    expect(on.ok).toBe(true);
+    expect(on.read).toBe(true);
+    expect(on.readAt).toBe(new Date(t).toISOString());
+    const back = store.setRead('r1-1', false, t + 1000);
+    expect(back.read).toBe(false);
+    expect(back.readAt).toBe(null);
+    expect(store.setRead('nope-1', true, t).ok).toBe(false);
+  });
+
+  it('list 带回 unread / total，item 带回 read / readAt', () => {
+    const root = tempDir();
+    const g = rig(root);
+    seed(g.store, 'a1-1', '2026-10-01T00:00:00.000Z', true);
+    seed(g.store, 'a2-2', '2026-10-01T01:00:00.000Z', true);
+
+    const before = g.call({ headers: withCookie(g.token) });
+    expect(before.status).toBe(200);
+    expect(before.body.total).toBe(2);
+    expect(before.body.unread).toBe(2);
+    expect(before.body.items[0].read).toBe(false);
+    expect(before.body.items[0].readAt).toBe(null);
+    // 最新的在最前
+    expect(before.body.items.map((i: { id: string }) => i.id)).toEqual(['a2-2', 'a1-1']);
+
+    const marked = g.call({
+      method: 'POST', pathname: '/feedback/read', headers: withCookie(g.token),
+      body: Buffer.from(JSON.stringify({ id: 'a2-2', read: true })),
+    });
+    expect(marked.status).toBe(200);
+    expect(marked.body).toEqual({ ok: true, id: 'a2-2', read: true });
+
+    const after = g.call({ headers: withCookie(g.token) });
+    expect(after.body.unread).toBe(1);
+    expect(after.body.total).toBe(2);
+    expect(after.body.items[0].read).toBe(true);
+    expect(typeof after.body.items[0].readAt).toBe('string');
+
+    const item = g.call({
+      pathname: '/feedback/item', query: new URLSearchParams({ id: 'a2-2' }), headers: withCookie(g.token),
+    });
+    expect(item.body.item.read).toBe(true);
+    expect(typeof item.body.item.readAt).toBe('string');
+  });
+
+  it('read 接口：未登录 401、id 不存在 404、read 不是布尔 400、带路径的 id 400', () => {
+    const root = tempDir();
+    const g = rig(root);
+    seed(g.store, 'x9-9', '2026-10-01T00:00:00.000Z', false);
+
+    const noAuth = g.call({
+      method: 'POST', pathname: '/feedback/read', body: Buffer.from(JSON.stringify({ id: 'x9-9', read: true })),
+    });
+    expect(noAuth.status).toBe(401);
+    expect(noAuth.body).toEqual({ ok: false, error: '未登录' });
+
+    const missing = g.call({
+      method: 'POST', pathname: '/feedback/read', headers: withCookie(g.token),
+      body: Buffer.from(JSON.stringify({ id: 'nope-1', read: true })),
+    });
+    expect(missing.status).toBe(404);
+    expect(missing.body.error).toBe('找不到这条反馈');
+
+    const badRead = g.call({
+      method: 'POST', pathname: '/feedback/read', headers: withCookie(g.token),
+      body: Buffer.from(JSON.stringify({ id: 'x9-9', read: 'yes' })),
+    });
+    expect(badRead.status).toBe(400);
+
+    const badId = g.call({
+      method: 'POST', pathname: '/feedback/read', headers: withCookie(g.token),
+      body: Buffer.from(JSON.stringify({ id: '../../etc/passwd', read: true })),
+    });
+    expect(badId.status).toBe(400);
+
+    const badJson = g.call({
+      method: 'POST', pathname: '/feedback/read', headers: withCookie(g.token), body: Buffer.from('{oops'),
+    });
+    expect(badJson.status).toBe(400);
+  });
+
+  it('所有响应都带 no-store；read 接口 GET 是 405', () => {
+    const root = tempDir();
+    const g = rig(root);
+    const listed = g.call({ headers: withCookie(g.token) });
+    expect(listed.headers['cache-control']).toBe('no-store');
+    const wrong = g.call({ method: 'GET', pathname: '/feedback/read', headers: withCookie(g.token) });
+    expect(wrong.status).toBe(405);
+  });
+});
+
+describe('追加需求：软删除', () => {
+  it('删除把整个目录移进 trash/<id>-<时间戳>/，list 里消失，item / file 404', () => {
+    const root = tempDir();
+    const g = rig(root);
+    seed(g.store, 'd1-1', '2026-10-01T00:00:00.000Z', true);
+    seed(g.store, 'd2-2', '2026-10-01T01:00:00.000Z', true);
+
+    const del = g.call({
+      method: 'POST', pathname: '/feedback/delete', headers: withCookie(g.token),
+      body: Buffer.from(JSON.stringify({ id: 'd2-2' })),
+    });
+    expect(del.status).toBe(200);
+    expect(del.body).toEqual({ ok: true, id: 'd2-2' });
+
+    // 目录真的进了 trash，不是 rm
+    const trash = g.store.trashCount();
+    expect(trash).toBe(1);
+    expect(g.store.trashDir.startsWith(root)).toBe(true);
+
+    // items 里没了 ⇒ list 消失、item 404、file 404
+    const listed = g.call({ headers: withCookie(g.token) });
+    expect(listed.body.items.map((i: { id: string }) => i.id)).toEqual(['d1-1']);
+    expect(listed.body.total).toBe(1);
+
+    const item = g.call({
+      pathname: '/feedback/item', query: new URLSearchParams({ id: 'd2-2' }), headers: withCookie(g.token),
+    });
+    expect(item.status).toBe(404);
+    const file = g.call({
+      pathname: '/feedback/file',
+      query: new URLSearchParams({ id: 'd2-2', name: 'log.txt' }),
+      headers: withCookie(g.token),
+    });
+    expect(file.status).toBe(404);
+  });
+
+  it('trash 里能捞回：目录还在，meta.json 与附件都在（这就是软删除的意义）', () => {
+    const root = tempDir();
+    const g = rig(root);
+    seed(g.store, 'e1-1', '2026-10-01T00:00:00.000Z', true);
+    g.call({
+      method: 'POST', pathname: '/feedback/delete', headers: withCookie(g.token),
+      body: Buffer.from(JSON.stringify({ id: 'e1-1' })),
+    });
+    const names = readdirSync(g.store.trashDir);
+    expect(names.length).toBe(1);
+    expect(names[0].startsWith('e1-1-')).toBe(true);
+    const files = readdirSync(`${g.store.trashDir}/${names[0]}`);
+    expect(files.sort()).toEqual(['log.txt', 'meta.json']);
+    const meta = JSON.parse(String(readFileSync(`${g.store.trashDir}/${names[0]}/meta.json`)));
+    expect(meta.id).toBe('e1-1');
+    expect(meta.body).toBe('正文');
+  });
+
+  it('delete 接口：未登录 401、id 不存在 404、带路径的 id 400 而且没动任何东西', () => {
+    const root = tempDir();
+    const g = rig(root);
+    seed(g.store, 'f1-1', '2026-10-01T00:00:00.000Z', true);
+
+    const noAuth = g.call({ method: 'POST', pathname: '/feedback/delete', body: Buffer.from(JSON.stringify({ id: 'f1-1' })) });
+    expect(noAuth.status).toBe(401);
+
+    const missing = g.call({
+      method: 'POST', pathname: '/feedback/delete', headers: withCookie(g.token),
+      body: Buffer.from(JSON.stringify({ id: 'nope-1' })),
+    });
+    expect(missing.status).toBe(404);
+    expect(missing.body.error).toBe('找不到这条反馈');
+
+    for (const evil of ['../../etc/passwd', '..', 'f1-1/../../x', '/etc/passwd']) {
+      const r = g.call({
+        method: 'POST', pathname: '/feedback/delete', headers: withCookie(g.token),
+        body: Buffer.from(JSON.stringify({ id: evil })),
+      });
+      expect(r.status).toBe(400);
+    }
+    // 那一份投稿还在
+    expect(g.store.readMeta('f1-1') !== null).toBe(true);
+    expect(g.store.trashCount()).toBe(0);
+  });
+});

@@ -28,6 +28,14 @@ export interface HomeNav {
   openLocalData(): void;
   /** ★ 2026-09-30（用户要求）：设置（特效开关；现在只有金属6 频闪一项） */
   openSettings(): void;
+  /**
+   * ★ 2026-10-01（用户要求）：**「反馈」入口**（首页左上角那个按钮）。
+   *
+   * 用户原话：「首页左上角加一个「反馈」按钮」「点开后有**两种操作**：① 投稿自定义协议
+   * ② bug 反馈」。屏与网络都在 `src/ui/feedback-screen.ts`；本文件只负责那个按钮，
+   * 动作交给宿主（它才拿得到抓取层）。
+   */
+  openFeedback(): void;
 }
 
 export interface CoinNav {
@@ -326,6 +334,20 @@ export function renderHome(root: HTMLElement, nav: HomeNav): void {
   }));
   logWrap.appendChild(changelogElement({ onClose: () => { logWrap.classList.remove('changelog-open'); } }));
   screen.appendChild(logWrap);
+
+  /**
+   * ★ 2026-10-01（用户要求）：**左上角「反馈」按钮**。
+   *
+   * 用户原话：「首页左上角加一个「反馈」按钮」。位置与右上角那个「更新日志」对称
+   * （`.changelog-wrap` 是 `top:16px; right:18px`，这里是 `top:16px; left:18px`）。
+   *
+   * 点开之后是 `src/ui/feedback-screen.ts` 的表单浮层（挂到 `document.body`，
+   * 关掉之后首页原样还在，与设置小窗同款）；动作走 `nav.openFeedback`（宿主接缝），
+   * 本文件不 import 那一屏 —— 于是"谁开、开哪一层"这件事在 `main.ts` 一处看得全。
+   */
+  const feedbackWrap = el('div', 'feedback-wrap');
+  feedbackWrap.appendChild(button('btn feedback-open', '反馈', () => { nav.openFeedback(); }));
+  screen.appendChild(feedbackWrap);
 
   root.appendChild(screen);
 }

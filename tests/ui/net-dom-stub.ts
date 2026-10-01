@@ -76,7 +76,19 @@ export interface StubNode {
    * 索引签名里（`unknown`），于是测试侧调用它要写 `as unknown as (…)`。声明出来**运行时零变化**。
    * 语义见 `makeStubEl` 里的实现（冒泡路径 + `target` 字段）。
    */
-  dispatchEvent(ev: { type: string; target?: unknown }): boolean;
+  dispatchEvent(ev: StubEventInit): boolean;
+  /**
+   * ★ **2026-10-01 新增：`replaceChildren(...)`**（改之前桩上**没有**这个方法 ——
+   * 它只存在于索引签名里 ⇒ 调用点 `TypeError: not a function`）。
+   *
+   * 为什么要补：`src/ui/feedback-screen.ts` 用 `replaceChildren()` 做"就地重画一小块"
+   * （隐藏页的列表网格 / 详情正文 / 附件清单），而本仓既有的产出代码（`devmode.ts` 的
+   * `results.replaceChildren()`）也用它 —— 那是"清空 + 挂载"的标准写法。
+   *
+   * ⚠️ 补它**不放宽**任何既有断言：改前它是一个 `TypeError`（没有任何用例依赖
+   * "调用它会抛"）。语义与浏览器一致：先清空全部子节点，再把实参依次挂上。
+   */
+  replaceChildren(...nodes: StubNode[]): void;
   /**
    * **R15 修正补上显式类型**：与上面 `appendChild`/`insertBefore` **同一族问题** ——
    * 它此前只存在于索引签名里，于是任何"读桩矩形"的测试代码拿到的是 `unknown`
@@ -209,6 +221,49 @@ const rectOf = (node: object): StubRect => nodeRects.get(node) ?? stubRect ?? ZE
  */
 const listeners = new WeakMap<object, Map<string, Array<(ev: unknown) => void>>>();
 
+/**
+ * ★ **2026-10-01 新增：桩的"事件对象"（带 `stopPropagation`）**。
+ *
+ * ## 为什么必须补
+ *
+ * `src/ui/feedback-screen.ts` 的卡片里那几个小按钮（标记已读 / 删除 / 确认）必须
+ * `stopPropagation()` —— 卡片本身挂着"点开详情"的监听器，事件从按钮冒到卡片上会顺手把用户
+ * 送进详情页（实测：详情请求真的发了）。而桩此前派发给监听器的是 `{ type, target }` 这个
+ * **临时对象、且没有 `stopPropagation`** ⇒ 产出代码那句"能掐就掐"的守卫在桩上恒假，
+ * 于是"点『标记已读』不该顺带进详情"这条判据在桩上**测不出来**（正是本文件头注反复警告的假绿）。
+ *
+ * ## 实现（最小、与浏览器同义）
+ *
+ * 整条冒泡路径**共用一个**事件对象；`stopPropagation()` 置一个标志，派发循环见到它就停。
+ * 顺带把常用字段也带上（`type` / `target` / `key` / `preventDefault` / `isComposing`），
+ * 这样"在输入框里按 `Ctrl+Shift+O` 不该触发"这类腿可以把真实按键字段喂进来。
+ *
+ * ⚠️ **不放宽任何既有断言**：改前派发的是 `{ type, target }`（没有这些成员），
+ * 旧用例里没有一条读过它们；新对象照样有 `type` / `target`，语义一字不变。
+ */
+export interface StubEvent {
+  type: string;
+  target: unknown;
+  key?: string;
+  code?: string;
+  ctrlKey?: boolean;
+  shiftKey?: boolean;
+  altKey?: boolean;
+  metaKey?: boolean;
+  repeat?: boolean;
+  isComposing?: boolean;
+  defaultPrevented?: boolean;
+  stopPropagation(): void;
+  preventDefault(): void;
+}
+
+/** `dispatchEvent` 的入参：至少给 `type`（其余由调用方按需补） */
+export interface StubEventInit {
+  type: string;
+  target?: unknown;
+  [k: string]: unknown;
+}
+
 /** 造一个桩节点（`appendChild` / `textContent` / `className` 的手写最小语义）。 */
 export function makeStubEl(tag: string): StubNode {
   const set = new Set<string>();
@@ -280,6 +335,18 @@ export function makeStubEl(tag: string): StubNode {
     querySelector: (sel?: string) => queryAllIn(node, String(sel ?? ''))[0] ?? null,
     querySelectorAll: (sel?: string) => queryAllIn(node, String(sel ?? '')) as StubNode[],
     /**
+     * ★ **2026-10-01 新增：`replaceChildren`**（类型与理由见 `StubNode` 上那一段）。
+     * 放在字面量里（不是 `extra`）：产出代码要能在桩上真跑，而"桩有没有这个能力"
+     * 必须在类型层面看得见（否则测试侧读到 `unknown`，只能靠强转，而那会掩盖"桩缺能力"）。
+     */
+    replaceChildren: (...nodes: StubNode[]) => {
+      // 与浏览器同义：先清空（同时解除被移除子节点的父子指针，与 `textContent = ''` 同款），
+      // 再按顺序挂上实参。
+      for (const c of node.children) c.parentElement = null;
+      node.children.length = 0;
+      for (const n of nodes) if (n !== undefined && n !== null) node.appendChild(n);
+    },
+    /**
      * **R19 新增：极简事件派发**（`addEventListener` 的配对物）。
      *
      * 为什么必须加：`render-net.ts` 的卡牌放大框（R19）把交互做成**事件委托**挂在板根上
@@ -291,19 +358,34 @@ export function makeStubEl(tag: string): StubNode {
      *    它没有挂在任何地方，也不需要收到自己的事件）；
      *  - 每个节点上按**注册顺序**调用监听器，`ev.target` 恒为**派发节点**
      *    （与真实 DOM 的 `event.target` 同义 —— 委托方靠它 resolve 出"命中了哪张卡"）；
-     *  - 不实现 `stopPropagation` / `preventDefault` / 捕获阶段 / 事件对象的方法
-     *    （本仓的产出代码不用它们 —— 用了会在桩上抛 TypeError，属**响亮**退化）。
+     *  - ★ **2026-10-01：`stopPropagation()` 真的会停下冒泡**（见 `StubEvent` 的说明；
+     *    改之前监听器只收到一个没有这个方法、也没有 `preventDefault` 的临时对象）；
+     *  - 传进来的 `ev` 上的其它字段（`key` / `ctrlKey` / `isComposing` …）会**原样带到**
+     *    监听器那一侧 —— 键盘那几条腿要的就是这个；
+     *  - 仍然不实现捕获阶段。
      *
      * ⚠️ **它对既有用例零影响**：改之前 `addEventListener` 是 noop、没有任何用例派发过事件 ⇒
      *    新实现只在"测试主动调 `dispatchEvent`"时才有行为。`installStubDom()` 每帧新建节点，
      *    监听表随节点回收（不跨用例）。
      */
-    dispatchEvent: (ev: { type: string; target?: unknown }) => {
+    dispatchEvent: (ev: StubEventInit) => {
+      let stopped = false;
+      const event: StubEvent = {
+        key: undefined, code: undefined, ctrlKey: undefined, shiftKey: undefined,
+        altKey: undefined, metaKey: undefined, repeat: undefined, isComposing: undefined,
+        defaultPrevented: false,
+        ...ev,
+        type: ev.type,
+        target: ev.target ?? node,
+        stopPropagation: () => { stopped = true; },
+        preventDefault: () => { event.defaultPrevented = true; },
+      };
       const path: StubNode[] = [];
       for (let p = node.parentElement; p !== null; p = p.parentElement) path.push(p);
       for (const n of path) {
         for (const fn of [...(listeners.get(n)?.get(ev.type) ?? [])]) {
-          fn({ type: ev.type, target: ev.target ?? node });
+          fn(event);
+          if (stopped) return true;
         }
       }
       return true;
