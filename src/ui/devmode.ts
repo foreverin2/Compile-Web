@@ -82,6 +82,33 @@ export function tryUnlockDevMode(password: string): boolean {
   return true;
 }
 
+/**
+ * ★★ 2026-10-01（用户报的回归）：**收回「本局」的开发者解锁态** —— 把 `passwordUnlocked`
+ * 置回 `false`。由宿主在**整局复位**那一点调用（`src/main.ts` 的 `resetToMainInterface()`：
+ * 胜利返回主界面、热座「← 退出游戏」都走它）。
+ *
+ * ## 为什么必须有它（缺陷本体，不是补丁）
+ *
+ * `passwordUnlocked` 是**模块级会话标记**，而它的语义在 `isDevUnlocked` 与密码框两处的注释里
+ * 一直写着**「本局游戏内」**。可是全仓**只有一处写它**（`tryUnlockDevMode`，只写 `true`）——
+ * 也就是说：解锁一次之后，这个标记活到**整页刷新**为止，跨局、跨屏都不收回。
+ *
+ * 症状（2026-10-01 用户在真浏览器上看到的）：模式选择页那张「单视角预览（仅开发）」卡的闸门
+ * 读的正是它（`main.ts` 的 `renderModeSelect(root, {…}, isDevUnlocked())`）⇒ 解锁过之后，
+ * 打完一局 / 从牌桌点「← 退出游戏」回到**选择游戏模式**页时，那张本该只有开发模式才有的卡
+ * **又出现了**（截图里的清单是 热坐 / 联机 / 单视角预览（仅开发） / 单人 / 三人）。
+ *
+ * ## 边界（只收回寿命，不动任何能力）
+ *
+ * 它**只**改这一个标记，不删不改开发者模式的任何既有能力：`Ctrl+Shift+P` 密码框、指令页、
+ * `get` / `clean` / `Compile` / `/skip` / `视角` 全部照旧 —— 开发者想再用一次，按一次
+ * `Ctrl+Shift+P` + 密码即可（解锁那一刻起又算「新的一局」）。
+ * `overlayOpen`（浮层此刻开没开）不归它管：那是"浮层自己的生命周期"，见那里的注释。
+ */
+export function resetDevUnlock(): void {
+  passwordUnlocked = false;
+}
+
 /** 指令页提示行 */
 const HINT = '指令：get 牌名 / Compile 协议（输入即模糊预览，点列表行执行）· clean（清空当前玩家手牌）'
   + '· /skip（强制推进一格，就是以前那个"跳过"）· 视角 / seat 1|2（远程页切视角；不写数字 = 切换）'

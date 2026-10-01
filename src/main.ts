@@ -111,7 +111,7 @@ import { initDiag } from './ui/diag';
 import { initTouchBridge } from './ui/touch-bridge';
 // G5/T39：手机竖屏 ⇒ 横屏游玩（平板不进来；全屏/方向锁都试过之后才退化成 CSS 旋转）
 import { initPhoneLandscape } from './ui/phone-landscape';
-import { initDevMode, isDevUnlocked } from './ui/devmode';
+import { initDevMode, isDevUnlocked, resetDevUnlock } from './ui/devmode';
 import { gameBus } from './core/events/bus';
 import { pushLog } from './core/log';
 import { trace, stateDigest, initEventTracing } from './core/trace';
@@ -5278,6 +5278,23 @@ function resetToMainInterface(): void {
   clearGen2Fx(); // 2代 瞬态 FX（luck 骰子/烟花/蘑菇云）随局清扫
   closeControlRearrangeModal(); // 控制组件重排模态（body 级）随局清扫
   effectRearrangeKey = null; // 效果内重排窗口的会话键随局清空
+  /**
+   * ── ★ 2026-10-01（用户报的回归）：**开发者解锁态（devmode 的模块态）也随局收回** ──
+   *
+   * 与上面那几份模块态同族：它们都是"跨局会串味"的东西，复位点就是本函数（整局复位）。
+   * 漏掉这一句的症状（用户 2026-10-01 报的）：`isDevUnlocked()` 是 devmode 的**模块级会话
+   * 标记**，全仓**只有解锁那一处写它**（`devmode.ts` 的 `tryUnlockDevMode`）⇒ 解锁过一次之后，
+   * 模式选择页那张「单视角预览（仅开发）」卡的闸门（`showModeSelect` 把 `isDevUnlocked()`
+   * 交给 `renderModeSelect`）就一直是真 ⇒ **打完一局 / 点「← 退出游戏」回到模式页时那张卡又出现**。
+   *
+   * 为什么修在这里而不是"退出按钮那一行"：本函数是**整局复位的唯一点**（胜利横幅的
+   * `onWinReset`、热座的「退出游戏」、重放页出口都走它）—— 修在入口那一行的话，"胜利后回主页
+   * 再进模式页"照旧漏（那条路径也经过本函数，但不经过退出按钮）。
+   *
+   * 为什么收回的是"寿命"而不是"能力"：解密后的语义就是 devmode 注释里那句「本局游戏内」；
+   * 密码框、指令页、`/skip` 一个都没动，开发者再按一次 `Ctrl+Shift+P` + 密码即可（见 `resetDevUnlock`）。
+   */
+  resetDevUnlock();
   resetUiState();
   resetNetUiState(); // 远程页自有模块态（与上一行并排：两页的状态分属两个模块）
   // ── G2 修正 R-F · I-1：**FX 视角座位也必须复位**（与上面两行并排：三种模块态各归各的模块）──
