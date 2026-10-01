@@ -203,15 +203,21 @@ interface Harness {
   /** `startReplay` 收到的档案（G4 Task 5：按**内容**比对，不按引用） */
   replays: MatchFile[];
   /** `back` / `buildArchive()` 的调用计数（导出必须先向宿主取档案，不许自己拼） */
-  counters: { back: number; build: number };
+  counters: { back: number; build: number; readCardmaker: number; clearCardmaker: number };
   setPick(h: PickHandler): void;
   setSave(h: SaveHandler): void;
   /** 换掉宿主的档案来源（默认给一份有记录的档案；`{ reason }` 用来测"没有记录"） */
   setBuild(b: BuildHandler): void;
+  /** ★ 2026-10-01：换掉"制作器本机数据"的读数 / 清除结论（默认：0 张、真删掉） */
+  setCardmakerRead(h: () => Promise<{ count: number | null }>): void;
+  setCardmakerClear(h: () => Promise<{ ok: boolean; removed?: boolean; detail?: string }>): void;
 }
 
 /** 宿主的档案来源（G4 Task 5 的 `LocalDataNav.buildArchive`）。 */
 type BuildHandler = () => { file: MatchFile } | { reason: string };
+/** ★ 2026-10-01：制作器本机数据的两个宿主接缝。 */
+type CardmakerReadHandler = () => Promise<{ count: number | null }>;
+type CardmakerClearHandler = () => Promise<{ ok: boolean; removed?: boolean; detail?: string }>;
 
 function harness(opts: {
   persistent?: KeyValueStore;
@@ -219,6 +225,8 @@ function harness(opts: {
   pick?: PickHandler;
   save?: SaveHandler;
   build?: BuildHandler;
+  cardmakerRead?: CardmakerReadHandler;
+  cardmakerClear?: CardmakerClearHandler;
 } = {}): Harness {
   const persistent = opts.persistent ?? createMemoryStore();
   const store = createLocalStore({ persistent });
@@ -229,11 +237,19 @@ function harness(opts: {
   // （逐字段新造，不共享引用）—— 这样"两次导出逐字节相同"证明的是**序列化确定性**，
   // 而不是"同一个对象被字符串化两次"。
   let buildHandler: BuildHandler = opts.build ?? (() => ({ file: sampleFile() }));
+  /**
+   * ★ 2026-10-01：制作器那两条的缺省值。
+   *
+   * 缺省故意选**"0 张 + 真删掉"**：于是"读回 3 张"那条腿里的数字必然来自宿主，
+   * 而"没东西可删"那条腿必须自己注入 `removed: false`（不会被缺省值蒙对）。
+   */
+  let cardmakerRead: CardmakerReadHandler = opts.cardmakerRead ?? (async () => ({ count: 0 }));
+  let cardmakerClear: CardmakerClearHandler = opts.cardmakerClear ?? (async () => ({ ok: true, removed: true }));
   const pickCalls: Array<{ accept: string[] }> = [];
   const saveCalls: Array<{ suggestedName: string; text: string }> = [];
   const imported: Array<{ file: MatchFile; warnings: string[] }> = [];
   const replays: MatchFile[] = [];
-  const counters = { back: 0, build: 0 };
+  const counters = { back: 0, build: 0, readCardmaker: 0, clearCardmaker: 0 };
   const pickFile: FilePicker = {
     open: async (o) => { pickCalls.push(o); return await pickHandler(o); },
   };
@@ -256,10 +272,14 @@ function harness(opts: {
       onImported: (file, warnings) => { imported.push({ file, warnings }); },
       startReplay: (file) => { replays.push(file); },
       buildArchive: () => { counters.build += 1; return buildHandler(); },
+      readCardmaker: async () => { counters.readCardmaker += 1; return await cardmakerRead(); },
+      clearCardmaker: async () => { counters.clearCardmaker += 1; return await cardmakerClear(); },
     },
     setPick: (h) => { pickHandler = h; },
     setSave: (h) => { saveHandler = h; },
     setBuild: (h) => { buildHandler = h; },
+    setCardmakerRead: (h) => { cardmakerRead = h; },
+    setCardmakerClear: (h) => { cardmakerClear = h; },
   };
 }
 
@@ -359,6 +379,8 @@ describe('渲染（DOM 桩真跑一次）', () => {
     const roles = [
       'status', 'consent', 'consent-state', 'change-consent', 'clear',
       'nick-input', 'nick-save', 'stored', 'privacy', 'archive', 'export', 'import', 'replay', 'back',
+      // ★ 2026-10-01：制作器那两块（本机可见 + 可清除）—— 用户口径要求它必须在这屏上
+      'cardmaker', 'cardmaker-state', 'clear-cardmaker',
     ];
     for (const role of roles) {
       expect(byRole(root, role).length, `屏上缺少 [data-role="${role}"]`).toBe(1);
@@ -1288,5 +1310,122 @@ describe('★ 2026-10-01：设置小窗（落点 + 真跑一次）', () => {
     } finally {
       restore();
     }
+  });
+});
+
+/* ==================================================================== *
+ * 10. ★ 2026-10-01（用户要求）：卡牌制作器的本机数据 —— 可见 + 可清除
+ *
+ * 用户口径：「本仓库有个「本地数据与隐私」屏会列出本机存了什么、能清除 ——
+ * **新加的存储必须在那屏里可见、可清除**，相关测试要跟着更新（按那些测试自带的规程改，
+ * 不许删/放宽断言）」。
+ *
+ * 制作器的牌组住在**独立的 IndexedDB 库**（不是 L1 那两个 localStorage 键：
+ * 自定背景 base64 内嵌之后一个牌组就超过 localStorage 的 ~5MB 配额，理由见
+ * `src/ui/cardmaker/store-idb.ts` 的文件头注），所以它**不在** `clearAllLocalData`
+ * 的键表里 —— 这一组钉的就是"它有自己的读数与自己的清除按钮"。
+ *
+ * 这一组**不动**第 1 组那条生成式隐私腿（`privacyLines()` 的哈希被钉死，
+ * 加一句话要同步两套钉住表 —— 那是另一轮裁决）；这里钉的是**屏上的可见性**。
+ * ==================================================================== */
+
+describe('★ 2026-10-01：卡牌制作器的本机数据（可见 + 可清除）', () => {
+  it('渲染时就向宿主读一次"制作器存了什么"，并把张数写进那一条状态行', async () => {
+    const h = harness({ cardmakerRead: async () => ({ count: 3 }) });
+    const root = render(h);
+    expect(h.counters.readCardmaker, '渲染时没有读一次制作器的本机数据').toBe(1);
+    await flush();
+    const line = one(root, 'cardmaker-state');
+    expect(line.text, '屏上没写"3 张卡"').toContain('3 张卡');
+    // 反向锚点：数字必须来自宿主（缺省是 0），否则"包含 3"可能对任何文案都成立
+    expect(line.text, '反向锚点失效：缺省读数也是 3').not.toContain('0 张卡');
+    const h0 = harness();
+    const r0 = render(h0);
+    await flush();
+    expect(one(r0, 'cardmaker-state').text, '缺省读数（0 张）没显示出来').toContain('0 张卡');
+  });
+
+  it('读不到（count === null）⇒ 如实说"读不到"，**不**显示成"什么都没有"', async () => {
+    const h = harness({ cardmakerRead: async () => ({ count: null }) });
+    const root = render(h);
+    await flush();
+    const text = one(root, 'cardmaker-state').text;
+    expect(text, '读不到时没说"读不到"').toContain('读不到');
+    expect(text, '读不到被显示成"保存了 0 张卡"（不实陈述）').not.toContain('保存了 0 张卡');
+    // 读不到**仍然**给得出清除按钮（读不到不等于没有数据）
+    expect(byRole(root, 'clear-cardmaker').length).toBe(1);
+    expect((one(root, 'clear-cardmaker') as unknown as { disabled?: boolean }).disabled).not.toBe(true);
+  });
+
+  it('读数抛错（宿主炸了）⇒ 状态行如实写失败原因，不静默', async () => {
+    const h = harness({ cardmakerRead: async () => { throw new Error('IndexedDB 被占用'); } });
+    const root = render(h);
+    await flush();
+    expect(one(root, 'cardmaker-state').text, '读数抛错时没把真因写出来').toContain('IndexedDB 被占用');
+  });
+
+  it('点「清除卡牌制作器的本机数据」⇒ 调一次宿主的清除接缝、给出 clear-cardmaker-ok、并重新读一次', async () => {
+    let cards = 2;
+    const h = harness({
+      cardmakerRead: async () => ({ count: cards }),
+      cardmakerClear: async () => { cards = 0; return { ok: true, removed: true }; },
+    });
+    const root = render(h);
+    await flush();
+    expect(one(root, 'cardmaker-state').text).toContain('2 张卡');
+
+    clickRole(root, 'clear-cardmaker');
+    await flush();
+    expect(h.counters.clearCardmaker, '点清除没调宿主的 clearCardmaker').toBe(1);
+    expect(statusCode(root), '清除成功的结论不是 clear-cardmaker-ok').toBe('clear-cardmaker-ok');
+    expect(h.counters.readCardmaker, '清除后没有重新读一次（屏上会留着旧数字）').toBe(2);
+    expect(one(root, 'cardmaker-state').text, '屏上还显示着清除前的张数').toContain('0 张卡');
+  });
+
+  it('本来就没有（removed === false）⇒ 是"没东西可清"，不是失败；删失败才报 failed + 真因', async () => {
+    const empty = harness({ cardmakerClear: async () => ({ ok: true, removed: false }) });
+    const re = render(empty);
+    clickRole(re, 'clear-cardmaker');
+    await flush();
+    expect(statusCode(re), 'removed === false 被说成了失败').toBe('clear-cardmaker-empty');
+    expect(statusText(re), 'removed === false 时出现了"失败"字样').not.toContain('失败');
+
+    const bad = harness({ cardmakerClear: async () => ({ ok: false, detail: '库被别的标签页占着（VersionError）' }) });
+    const rb = render(bad);
+    clickRole(rb, 'clear-cardmaker');
+    await flush();
+    expect(statusCode(rb), '删失败的结论不是 clear-cardmaker-failed').toBe('clear-cardmaker-failed');
+    expect(statusText(rb), '删失败没把真因显示出来').toContain('库被别的标签页占着（VersionError）');
+
+    // 反向：真删成功时**不**走这两个分支（证明上面两条不是"恒真"）
+    const ok = harness();
+    const ro = render(ok);
+    clickRole(ro, 'clear-cardmaker');
+    await flush();
+    expect(statusCode(ro)).toBe('clear-cardmaker-ok');
+  });
+
+  it('清除抛错（宿主假件 reject）⇒ 如实提示，不崩、不假成功', async () => {
+    const h = harness({ cardmakerClear: async () => { throw new Error('删除被系统拒绝'); } });
+    const root = render(h);
+    clickRole(root, 'clear-cardmaker');
+    await flush();
+    expect(statusCode(root)).toBe('clear-cardmaker-failed');
+    expect(statusText(root), '抛错时没把真因写出来').toContain('删除被系统拒绝');
+    expect(textOf(root), '抛错却出现了"已清除"这种假成功').not.toContain('已清除卡牌制作器');
+  });
+
+  it('游客模式（deny）下这一块照常可见可点，且 persistent 零写入（红线 3 不受影响）', async () => {
+    const spy = spyStore();
+    const h = harness({ persistent: spy, granted: false });
+    h.store.deny();
+    const root = render(h);
+    await flush();
+    expect(textOf(one(root, 'consent-state'))).toMatch(/游客/);
+    expect(byRole(root, 'cardmaker').length, '游客模式下这一块整个不见了').toBe(1);
+    clickRole(root, 'clear-cardmaker');
+    await flush();
+    // 制作器走的是它自己的 IndexedDB 库，与 L1 的 persistent KV 无关
+    expect(spy.mutations(), '制作器那一块碰了 L1 的 persistent（红线 3）').toBe(0);
   });
 });

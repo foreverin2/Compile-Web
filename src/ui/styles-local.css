@@ -468,3 +468,89 @@
   font-size: 14px; line-height: 1.7; color: #e6ecf5;
   white-space: pre-wrap; word-break: break-word;
 }
+
+/* ============================================================================
+ * ★ 2026-10-01（用户要求）：「自定义协议与卡牌」屏 —— 卡牌制作器
+ *
+ * 参考项目：**COMPILER · Card Builder**（作者 Albert Blanco，MIT 许可，
+ * https://github.com/albrtbc/compiler）。屏的实现在 `src/ui/cardmaker/page.ts`。
+ *
+ * 纪律与上面几段完全一致：
+ *  - `styles.css` 一行不动；
+ *  - 本段全部类名带 `cardmaker-` 前缀，在那 5 张既有 CSS 里**零命中** ——
+ *    由 `tests/ui/local-data-screen.test.ts` 那条"新类名不冲突"的腿生成式机检；
+ *  - 视觉语言沿用既有那套（深底 + #556 边框 + #00ffcc 主色），不新造一套观感。
+ * ============================================================================ */
+.cardmaker-screen {
+  width: min(1080px, 96vw); margin: 0 auto; padding: 18px 0 60px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.cardmaker-top { display: flex; align-items: center; gap: 14px; }
+.cardmaker-title { flex: 1; font-size: 20px; font-weight: 700; letter-spacing: 1px; color: #00ffcc; }
+.cardmaker-status { min-height: 20px; font-size: 13px; line-height: 1.6; color: #9ab; }
+.cardmaker-status[data-kind='info'] { color: #9fd8ff; }
+.cardmaker-status[data-kind='warn'] { color: #ffd479; }
+.cardmaker-status[data-kind='error'] { color: #ff9a9a; }
+/* 小字说明：与 `.local-data-note` 同款可读性 */
+.cardmaker-note { font-size: 12px; line-height: 1.6; color: #8f9ac0; }
+.cardmaker-hint { font-size: 11px; line-height: 1.5; color: #7d86a8; }
+/* 预览：画布按 CSS 缩到能一屏看全；`height: auto` 保持长宽比 */
+.cardmaker-preview { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.cardmaker-canvas {
+  width: 100%; max-width: 420px; height: auto; cursor: grab;
+  border: 1px solid #4a4a68; border-radius: 8px; background: #0a0c12;
+}
+.cardmaker-grabbing { cursor: grabbing; }
+/* 背景缩放那一行 */
+.cardmaker-adjust {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  padding: 10px 12px; border: 1px solid #4a4a68; border-radius: 10px;
+  background: rgba(24, 24, 48, 0.7);
+}
+.cardmaker-range { flex: 1; min-width: 160px; accent-color: #00ffcc; }
+/* 卡清单 */
+.cardmaker-cards { display: flex; flex-direction: column; gap: 6px; }
+.cardmaker-card-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  padding: 6px 10px; border: 1px solid #333a50; border-radius: 8px;
+  background: rgba(18, 18, 34, 0.7);
+}
+.cardmaker-card-on { border-color: #00ffcc; box-shadow: inset 3px 0 0 0 #00ffcc; }
+/* 表单 */
+.cardmaker-form { display: flex; flex-direction: column; gap: 8px; }
+.cardmaker-field { display: flex; flex-direction: column; gap: 4px; }
+.cardmaker-label { font-size: 13px; color: #9fd8ff; }
+.cardmaker-input, .cardmaker-textarea {
+  width: 100%; padding: 7px 10px; font-size: 14px; color: #e6ecf5;
+  background: rgba(12, 12, 24, 0.9); border: 1px solid #3a3f57; border-radius: 8px;
+  font-family: inherit;
+}
+.cardmaker-input:focus, .cardmaker-textarea:focus { border-color: #00ffcc; outline: none; }
+.cardmaker-textarea { resize: vertical; line-height: 1.55; }
+.cardmaker-input:disabled, .cardmaker-textarea:disabled { opacity: 0.45; }
+/* 背景那一块 */
+.cardmaker-bg {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 10px 12px; border: 1px solid #4a4a68; border-radius: 10px;
+  background: rgba(24, 24, 48, 0.7);
+}
+.cardmaker-presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.cardmaker-thumb { font-size: 12px; padding: 4px 10px; }
+.cardmaker-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.cardmaker-mini { font-size: 12px; padding: 5px 12px; }
+.cardmaker-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  padding: 8px 12px; border: 1px solid #4a4a68; border-radius: 10px;
+  background: rgba(24, 24, 48, 0.7);
+}
+.cardmaker-toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #dfe6ff; }
+.cardmaker-check { accent-color: #00ffcc; }
+/* 署名（用户明确要求：显眼且准确） */
+.cardmaker-credit {
+  margin-top: 18px; padding: 12px 14px; border: 1px solid #4a4a68; border-radius: 10px;
+  background: rgba(18, 18, 34, 0.8);
+}
+.cardmaker-credit-line { margin: 0; font-size: 13px; line-height: 1.7; color: #e6ecf5; }
+.cardmaker-credit-meta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; font-size: 12px; color: #9fd8ff; }
+.cardmaker-credit-link { color: #00ffcc; text-decoration: underline; word-break: break-all; }
+.cardmaker-credit-link:hover { color: #9fd8ff; }

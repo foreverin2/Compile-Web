@@ -54,6 +54,20 @@ import { installHotseatExit } from './ui/hotseat-exit';
 import { installLogToggle } from './ui/log-toggle';
 // G3 Task 7：「本地数据与隐私」屏 + 档案的选择/落盘口（浏览器实现只在 `showLocalData` 里注入）
 import { renderLocalData } from './ui/local-data';
+// ★ 2026-10-01（用户要求）：**卡牌制作器**（「自定义协议与卡牌」屏）的接线。
+//   屏与它的全部逻辑在 `src/ui/cardmaker/`（移植自开源项目 COMPILER · Card Builder，
+//   作者 Albert Blanco，MIT 许可）；本文件只做两件事：
+//     ① `showCardmaker()` 把三个宿主能力（授权门控的存储、文件选择、落盘）注入进去；
+//     ② 首页 nav 的 `openCardmaker` 指向它。
+//   ⚠️ 存储那条路必须**接本仓的授权状态机**（`localStore`）：游客模式下它会退化成内存，
+//      于是"授权前/游客态零写入磁盘"这条红线在制作器上同样成立。
+import { renderCardmaker } from './ui/cardmaker/page';
+import {
+  cardmakerBrowserIO,
+  clearCardmakerBrowserDeck,
+  createCardmakerBrowserStore,
+  readCardmakerBrowserDeckInfo,
+} from './ui/cardmaker/host';
 // ★ 2026-10-01（用户要求）：「反馈」功能的两个宿主接缝 —— `Ctrl+Shift+O` 那条隐藏入口的
 //   挂/撤（`initFeedbackShortcut` / `closeHiddenView`）与"离开首页时的收尾"。
 //   ⚠️ 抓取层（`browserFeedbackFetcher`）也来自这里：**本文件是唯一 import `fetch` 的地方**
@@ -4916,6 +4930,14 @@ function showHome(): void {
      */
     openFeedback: () => { openFeedbackOverlay({ fetcher: browserFeedbackFetcher }); },
     /**
+     * ★ 2026-10-01（用户要求）：**卡牌制作器入口**。
+     *
+     * 与 `openLibrary` / `openRules` 同款：先 `leaveHome()` 收拾首页起的那几样
+     * （`Ctrl+Shift+O` 监听 + body 级浮层），再画目标屏。制作器是**整屏屏**
+     * （`renderCardmaker` 第一句就 `root.textContent = ''`）。
+     */
+    openCardmaker: () => { leaveHome(); showCardmaker(); },
+    /**
      * ★ 2026-10-01（用户要求）：「设置」不再是一整屏 ⇒ **浮在首页上面的小窗**。
      *
      * 用户原话：「我希望设置页面只需要使用小窗即可，而不是目前这样单独放一个页面出来」。
@@ -5137,6 +5159,46 @@ function showLocalData(): void {
       }
     },
     buildArchive: () => buildSessionArchive(),
+    /**
+     * ★ 2026-10-01（用户要求）：制作器的存储**不在 L1 的键表里**（它是独立的 IndexedDB 库），
+     * 所以「清除本机数据」那一屏需要这两个接缝。两者都**只读/删自己的库**，不碰 L1。
+     */
+    readCardmaker: async () => {
+      const info = await readCardmakerBrowserDeckInfo();
+      return { count: info === null ? null : info.cards };
+    },
+    clearCardmaker: async () => {
+      const removedBefore = await readCardmakerBrowserDeckInfo();
+      const out = await clearCardmakerBrowserDeck();
+      if (!out.ok) return { ok: false, detail: out.detail };
+      // `removed === false` 的语义是"本来就没有"：有记录才算真删了一次
+      return { ok: true, removed: removedBefore !== null };
+    },
+  });
+}
+
+/**
+ * ★ 2026-10-01（用户要求）：**「自定义协议与卡牌」屏**（卡牌制作器）。
+ *
+ * ## 这个函数只做接线
+ *
+ * 屏与它的全部逻辑在 `src/ui/cardmaker/`（移植自开源项目 **COMPILER · Card Builder**，
+ * 作者 **Albert Blanco**，MIT 许可，https://github.com/albrtbc/compiler）。这里把三样
+ * **本文件才有**的东西注入进去：
+ *   1. `store`：`createCardmakerBrowserStore(localStore)` —— 存储的持久层开关由本仓的
+ *      **授权状态机**说了算（游客模式 ⇒ 退化成内存，屏上如实提示"刷新就丢"）；
+ *   2. `cardmakerBrowserIO()`：`<input type=file>` 选图 / 选 JSON + `<a download>` 落盘；
+ *   3. `back`：回主页面（`showHome`，与模式选择页那个「返回主页面」同一个落点）。
+ *
+ * 与 `showLocalData()` 同款：进屏先 `leaveHome()` —— 从首页那条入口进来时，把首页起的
+ * 那几样（`Ctrl+Shift+O` 监听 + 两个 body 级浮层）收干净。
+ */
+function showCardmaker(): void {
+  leaveHome();
+  renderCardmaker(root, {
+    back: showHome,
+    store: createCardmakerBrowserStore(localStore),
+    ...cardmakerBrowserIO(),
   });
 }
 

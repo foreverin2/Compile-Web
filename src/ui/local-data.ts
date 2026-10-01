@@ -105,6 +105,28 @@ export interface LocalDataNav {
    * "拼档案"的实现。
    */
   buildArchive(): ArchiveBuild;
+  /**
+   * ★ 2026-10-01（用户要求）：**本机保存的卡牌制作器牌组**。
+   *
+   * 用户原话：「本仓库有个「本地数据与隐私」屏会列出本机存了什么、能清除 ——
+   * **新加的存储必须在那屏里可见、可清除**」。制作器的牌组住在 **IndexedDB**
+   * （不是 L1 那两个 localStorage 键，理由见 `src/ui/cardmaker/store-idb.ts` 的文件头注：
+   * 自定背景 base64 内嵌之后一个牌组就超过 localStorage 的 ~5MB 配额），所以它**不在**
+   * `clearAllLocalData` 的键表里 —— 它需要自己这两个接缝。
+   *
+   * `count === null` = **读不到**（这台设备没有 IndexedDB，或库被别的程序占着）。
+   * 那时屏上显示"读不到"，并**仍然**给出清除按钮（读不到不等于没有数据）。
+   */
+  readCardmaker(): Promise<{ count: number | null }>;
+  /**
+   * 清掉本机保存的制作器牌组。
+   *
+   * 三态（与档案那两条同款纪律，**不许折叠**）：
+   *  - `{ ok: true, removed: true }`：真删掉了；
+   *  - `{ ok: true, removed: false }`：本来就没有（没什么可删，不算失败）；
+   *  - `{ ok: false, detail }`：**删失败**，`detail` 是真因，屏上原样显示。
+   */
+  clearCardmaker(): Promise<{ ok: boolean; removed?: boolean; detail?: string }>;
 }
 
 /* ── 与 `home.ts` 同形的局部助手（见文件头注：刻意不 import 那边的私有函数） ── */
@@ -328,6 +350,70 @@ export function renderLocalData(root: HTMLElement, nav: LocalDataNav): void {
   const storedRow = el('div', 'local-data-row');
   storedRow.dataset.role = 'stored';
   screen.appendChild(storedRow);
+
+  /* ── ②b ★ 2026-10-01：卡牌制作器存在本机的那一份（可见 + 可清除） ──
+   *
+   * 用户口径：新加的存储必须在那屏里可见、可清除。制作器的牌组住在 IndexedDB，
+   * 所以它不在 `clearAllLocalData` 的键表里，走下面这两个 nav 接缝。
+   * 版式复用本屏既有的 `.local-data-*` 类（不新增 CSS 类 ⇒ 与 5 张既有 CSS 零冲突那条腿不动）。 */
+  const makerRow = el('div', 'local-data-row');
+  makerRow.dataset.role = 'cardmaker';
+  makerRow.appendChild(el('div', 'local-data-note', '卡牌制作器（自定义协议与卡牌）'));
+  const makerLine = el('div', 'local-data-privacy-line', '正在读取卡牌制作器的本机数据…');
+  makerLine.dataset.role = 'cardmaker-state';
+  makerRow.appendChild(makerLine);
+  const makerActions = el('div', 'local-data-actions');
+  // 回调先挂一个占位（`button()` 的第三参是必填的），真实处理器在下面定义好之后
+  // 用 `addEventListener` 挂上 —— 这样 `clearCardmakerNow` 不必提到使用点之前
+  // （本仓的 `button()` 是"三参必填"的既有形状，为它破例会动到别的屏）。
+  const makerClear = button('btn', '清除卡牌制作器的本机数据', () => { /* 见下方 addEventListener */ });
+  makerClear.dataset.role = 'clear-cardmaker';
+  makerActions.appendChild(makerClear);
+  makerRow.appendChild(makerActions);
+  screen.appendChild(makerRow);
+
+  /** 读一次"制作器存了什么"；读失败**如实显示**，不显示成"什么都没有"。 */
+  const refreshCardmaker = async (): Promise<void> => {
+    let info: { count: number | null };
+    try {
+      info = await nav.readCardmaker();
+    } catch (e) {
+      makerLine.textContent = `读取卡牌制作器的本机数据失败：${describeError(e)}`;
+      return;
+    }
+    makerLine.textContent = info.count === null
+      ? '卡牌制作器：读不到本机的数据（这台设备可能没有可用的 IndexedDB，或库被别的程序占着）。'
+      : `卡牌制作器：本机保存了 ${info.count} 张卡（含自定背景与 logo 的图片）。`
+      + '它不是上面那两个键，而是单独一个 IndexedDB 库。';
+  };
+  void refreshCardmaker();
+
+  /**
+   * 「清除卡牌制作器的本机数据」。三态**不许折叠**（与档案那两条同款纪律）：
+   *  - 真删掉 ⇒ `clear-cardmaker-ok`；
+   *  - 本来就没有（`removed === false`）⇒ `clear-cardmaker-empty`，**不是失败**；
+   *  - 删失败 / 宿主抛错 ⇒ `clear-cardmaker-failed` + 真因。
+   */
+  const clearCardmakerNow = async (): Promise<void> => {
+    let out: { ok: boolean; removed?: boolean; detail?: string };
+    try {
+      out = await nav.clearCardmaker();
+    } catch (e) {
+      say(`清除卡牌制作器的本机数据失败：${describeError(e)}`, 'clear-cardmaker-failed', 'error');
+      return;
+    }
+    if (!out.ok) {
+      say(`清除卡牌制作器的本机数据失败：${out.detail ?? '宿主没有给出原因'}`, 'clear-cardmaker-failed', 'error');
+      return;
+    }
+    if (out.removed === false) {
+      say('卡牌制作器的本机数据本来就是空的，没有需要清除的东西。', 'clear-cardmaker-empty', 'info');
+    } else {
+      say('已清除卡牌制作器保存在本机的牌组。', 'clear-cardmaker-ok', 'info');
+    }
+    void refreshCardmaker();
+  };
+  makerClear.addEventListener('click', () => { void clearCardmakerNow(); });
 
   /** 刷新"本机已保存"区（昵称输入框 / 卡组列表）；读取失败**如实显示**，不静默成"什么都没有"。 */
   const refreshStored = (): void => {

@@ -36,6 +36,14 @@ export interface HomeNav {
    * 动作交给宿主（它才拿得到抓取层）。
    */
   openFeedback(): void;
+  /**
+   * ★ 2026-10-01（用户要求）：**卡牌制作器**（「自定义协议与卡牌」页面）。
+   *
+   * 移植自开源项目 COMPILER · Card Builder（作者 Albert Blanco，MIT 许可，
+   * https://github.com/albrtbc/compiler）。屏与它的全部逻辑在 `src/ui/cardmaker/`；
+   * 本文件只放那个入口按钮，打开的动作交给宿主（它才拿得到存储与文件能力）。
+   */
+  openCardmaker(): void;
 }
 
 export interface CoinNav {
@@ -311,6 +319,17 @@ export function renderHome(root: HTMLElement, nav: HomeNav): void {
   btns.appendChild(button('btn home-btn', '本地数据与隐私', nav.openLocalData));
   // ★ 2026-09-30（用户要求）：设置入口（现在只有金属6 频闪特效一个开关）
   btns.appendChild(button('btn home-btn', '设置', nav.openSettings));
+  /**
+   * ★ 2026-10-01（用户要求）：**卡牌制作器入口** —— 「自定义协议与卡牌」。
+   *
+   * 用户原话：「你要把一个开源卡牌制作器移植进我们的项目，做成一个**新页面**」+
+   * 「**新增一个入口按钮**（位置你定，别和已有的打架）」。
+   *
+   * 位置：菜单按钮列里紧挨着「设置」**上面**（都在主菜单列内，不与左上角「反馈」/
+   * 右上角「更新日志」那两个绝对定位的角标打架）。屏本身在 `src/ui/cardmaker/page.ts`，
+   * 本文件只负责"谁开"—— 动作走 `nav.openCardmaker`（宿主接缝），与 `openLocalData` 同款。
+   */
+  btns.appendChild(button('btn home-btn', '自定义协议与卡牌', nav.openCardmaker));
   menu.appendChild(btns);
   screen.appendChild(menu);
 
