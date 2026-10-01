@@ -59,8 +59,20 @@ export interface StubNode {
    */
   querySelector(sel: string): StubNode | null;
   querySelectorAll(sel: string): StubNode[];
-  /** 父子指针（由 `appendChild`/`insertBefore`/`textContent=''` 维护；R7 起）。 */
-  parentElement: StubNode | null;
+  /**
+   * 父子指针（由 `appendChild`/`insertBefore`/`textContent=''`/`remove` 维护；R7 起）。
+   *
+   * ★★ **2026-10-01（真机 A 号缺陷的加固）：这里是 `readonly` 的** ——
+   * 真浏览器里 `Node.parentElement` 是**只读 getter**，写它当场抛
+   * （`Cannot set property parentElement of #<Node> which has only a getter`）。
+   * 桩此前把它当普通可写字段 ⇒ 产出代码里那句 `(child as …).parentElement = null`
+   * （`src/ui/home.ts` 的 `clearRoot`）单测全绿、真机每次必炸。
+   *
+   * 现在 `readonly` 由两层保证：**类型层**（`readonly` ⇒ 赋值是编译错误）+
+   * **运行时**（`Object.defineProperty` 只给 getter ⇒ 赋值抛 `TypeError`）。
+   * 夹具要造"挂好的裸节点"请用导出的 `setStubParentFor()`。
+   */
+  readonly parentElement: StubNode | null;
   /**
    * ★ **2026-10-01 新增（默认关闭，见 `setStubConnectedModel`）**：
    * "该节点是否挂在文档里"。**默认不在**（`undefined`）—— 只有主动打开
@@ -264,6 +276,91 @@ export interface StubEventInit {
   [k: string]: unknown;
 }
 
+/**
+ * ★★ 2026-10-01（真机 A 号缺陷的加固）：桩的**内部父子指针**。
+ *
+ * ## 为什么必须单独存一份、而不是直接写 `node.parentElement`
+ *
+ * 真浏览器里 `parentElement` 是**只读 getter**（`Node.parentElement`），写它当场抛
+ * `Cannot set property parentElement of #<Node> which has only a getter`。
+ * 而本仓的桩一直把它当**普通可写字段** ⇒ 产出代码里那句
+ * `(child as …).parentElement = null`（`src/ui/home.ts` 的 `clearRoot`，2026-10-01 的 D2 修法引入）
+ * **在单测里全绿、在真机上必炸**（用户真机报的就是它：离开首页就抛异常，而且被写盘失败提示捎带出去）。
+ *
+ * ⇒ 现在：**内部**用这张 `WeakMap` 维护父子关系（`appendChild` / `insertBefore` / `remove` /
+ * `textContent = ''` / `replaceChildren` 都走它），而 `parentElement` 暴露成**只读访问器**
+ * ——产出代码或测试若去**写**它，桩上就当场抛（与浏览器同款失败模式）。
+ *
+ * 需要"造一个挂在某个父节点下的裸节点"的测试，用导出的 `setStubParentFor()`（显式、唯一入口）。
+ */
+const STUB_PARENT = new WeakMap<object, StubNode | null>();
+
+/**
+ * 当前那一份桩 `document`（`installStubDom()` 装、`restore()` 清）。
+ *
+ * `ownerDocument` 的 getter 读它 —— 与真 DOM 的 `node.ownerDocument` 同义（"这枚节点所属的文档"）。
+ * 在测试之外造的桩节点读到 `null`（旧实现读到 `undefined`，两者的真值判断一致）。
+ *
+ * ⚠️ 用 `var` 风格的模块级 `let` + 函数内读：`ownerDocument` 的 getter 是**调用时**求值的，
+ * 所以不存在"先定义后用"的时序问题（而 `makeStubEl` 的字段初始化表里不需要它）。
+ */
+let currentStubDoc: unknown = null;
+
+/**
+ * 某一枚桩节点的**专属** `ownerDocument` 覆盖（`setStubOwnerDocumentFor()` 写、`restore()` 清）。
+ *
+ * 用途只有一类：**"文档随 parent 一起给"**的模块（`src/ui/replay-bar.ts` 就是：
+ * 它从 `parent.ownerDocument` 拿文档来 `createElement`）。那些用例刻意**摘掉全局 document**
+ * 来证明"不依赖全局"，所以它们必须能给某一枚根节点单独指定文档。
+ *
+ * ⚠️ 与 `parentElement` 同一族纪律：**属性本身只读**，要覆盖请走这个显式接缝
+ * （等价于真 DOM 里"文档就是这么来的"），而不是随手给只读属性赋值。
+ */
+const STUB_OWNER_DOC = new WeakMap<object, unknown>();
+
+/** 桩内部：这枚节点所属的文档 = 最近一个显式覆盖，否则"往上找祖先的覆盖"，最后兜 `currentStubDoc` */
+function stubOwnerDocOf(node: object): unknown {
+  let cur: object | null = node;
+  while (cur !== null) {
+    if (STUB_OWNER_DOC.has(cur)) return STUB_OWNER_DOC.get(cur);
+    cur = stubParentOf(cur);
+  }
+  return currentStubDoc;
+}
+
+/**
+ * 给某一枚桩节点（通常是测试的挂载根）指定 `ownerDocument`。**测试夹具专用**。
+ *
+ * 传 `null` = "它没有所属文档"（`replay-bar.test.ts` 靠这个证明"文档不是全局拿的"）。
+ */
+export function setStubOwnerDocumentFor(node: object, doc: unknown): void {
+  STUB_OWNER_DOC.set(node, doc);
+}
+
+/** 只读属性被赋值时的错误（与 V8 的措辞同源，便于在日志里一眼认出） */
+function readonlyTrap(prop: string): never {
+  throw new TypeError(`Cannot set property ${prop} of #<Node> which has only a getter`);
+}
+
+/**
+ * 桩**内部**设置父子指针（唯一入口）。产出代码不该用它 —— 那是测试夹具的便利接缝。
+ *
+ * 传 `null` 表示"摘下来"（与 `remove()` 同义）。
+ */
+export function setStubParentFor(node: object, parent: StubNode | null): void {
+  STUB_PARENT.set(node, parent);
+}
+
+/** 桩**内部**读父子指针（`isConnected` 的模型用它，避免踩自己的只读守卫） */
+function stubParentOf(node: object): StubNode | null {
+  return STUB_PARENT.get(node) ?? null;
+}
+
+/** 桩**内部**写父子指针的简写（`appendChild` / `remove` / `textContent = ''` 共用一处） */
+function setParent(node: StubNode, parent: StubNode | null): void {
+  setStubParentFor(node, parent);
+}
+
 /** 造一个桩节点（`appendChild` / `textContent` / `className` 的手写最小语义）。 */
 export function makeStubEl(tag: string): StubNode {
   const set = new Set<string>();
@@ -301,10 +398,14 @@ export function makeStubEl(tag: string): StubNode {
     // R7 的证据 2（`.net-bottom` 的父节点必须是 `.net-board`）靠它。
     // ⚠️ **R8-2 修正把它们从 `extra`（索引签名 ⇒ `unknown`）搬进字面量**：接口里已有显式签名，
     //    留在 `extra` 里会让测试侧的 `stub.appendChild(child)` 报 `TS18046`。运行时语义**一字未改**。
-    appendChild: (c: StubNode) => { c.parentElement = node; node.children.push(c); return c; },
-    insertBefore: (c: StubNode) => { c.parentElement = node; node.children.unshift(c); return c; },
-    /** R7：父子指针（由 `appendChild`/`insertBefore`/`textContent=''` 维护） */
-    parentElement: null,
+    appendChild: (c: StubNode) => { setParent(c, node); node.children.push(c); return c; },
+    insertBefore: (c: StubNode) => { setParent(c, node); node.children.unshift(c); return c; },
+    /**
+     * ★ A 号缺陷加固：`parentElement` 在**运行时**定义成只读访问器（见接口上的说明）。
+     * 这里声明一次只为满足类型（`readonly` 成员），真实属性由下面的 `Object.defineProperty`
+     * 覆盖（它 `configurable: true`）—— **内部**写指针一律走 `setParent()`。
+     */
+    get parentElement(): StubNode | null { return stubParentOf(node); },
     /** R15：矩形（按节点覆盖 → 全局常量 → 全 0）。**放在字面量里**是为了让它成为
      *  `StubNode` 接口的**显式成员**（此前它在 `extra` 里 ⇒ 测试侧读到的是 `unknown`）。
      *  闭包引用 `node` 是安全的：它只在这个箭头被**调用**时才求值。 */
@@ -342,7 +443,7 @@ export function makeStubEl(tag: string): StubNode {
     replaceChildren: (...nodes: StubNode[]) => {
       // 与浏览器同义：先清空（同时解除被移除子节点的父子指针，与 `textContent = ''` 同款），
       // 再按顺序挂上实参。
-      for (const c of node.children) c.parentElement = null;
+      for (const c of node.children) setParent(c, null);
       node.children.length = 0;
       for (const n of nodes) if (n !== undefined && n !== null) node.appendChild(n);
     },
@@ -410,7 +511,7 @@ export function makeStubEl(tag: string): StubNode {
       if (parent === null) return;
       const i = parent.children.indexOf(node);
       if (i >= 0) parent.children.splice(i, 1);
-      node.parentElement = null;
+      setParent(node, null);
     },
     /**
      * **R19 修正：`setAttribute` 真的记属性了**（改之前是 noop）。
@@ -537,7 +638,7 @@ export function makeStubEl(tag: string): StubNode {
     set: (v: string) => {
       node.text = String(v);
       // R7：清空时**同时**解除被移除子节点的父子指针（否则它们会指向一个已经不要它们的父节点）
-      for (const c of node.children) c.parentElement = null;
+      for (const c of node.children) setParent(c, null);
       node.children.length = 0;
     },
   });
@@ -545,6 +646,24 @@ export function makeStubEl(tag: string): StubNode {
   // R8-2 修正之前桩的 `querySelector` 恒空，产出代码若走查询会**静默**拿到 null）。
   Object.defineProperty(node, 'lastElementChild', {
     get: () => (node.children.length > 0 ? node.children[node.children.length - 1] : null),
+  });
+  /**
+   * ★★ 2026-10-01（真机 A 号缺陷的加固）：**`parentElement` 是只读访问器**。
+   *
+   * 读侧照旧（`node.parentElement` ⇒ 内部那张 `WeakMap`）；**写侧抛 TypeError**，
+   * 与真浏览器同款失败模式（`Cannot set property parentElement of #<Node> which has only a getter`）。
+   *
+   * 为什么必须这样：产出代码里曾经有一句 `(child as …).parentElement = null`
+   * （`src/ui/home.ts` 的 `clearRoot`）——桩允许写 ⇒ 单测全绿、真机每次必炸。
+   * 把桩改成只读之后，这类缺陷在**单测**里就会现形。
+   *
+   * ⚠️ 桩自己的结构操作不走这条路（它们用 `setParent()` 写内部表），所以这次加固
+   * **不影响任何合法语义**；受影响的只有"依赖写只读属性"的代码（那正是要抓的）。
+   */
+  Object.defineProperty(node, 'parentElement', {
+    configurable: true,
+    get: () => stubParentOf(node),
+    set: () => readonlyTrap('parentElement'),
   });
   /**
    * ★ **2026-10-01 新增（默认关闭，见 `setStubConnectedModel`）**：`isConnected` 的
@@ -574,13 +693,31 @@ export function makeStubEl(tag: string): StubNode {
     Object.defineProperty(node, 'isConnected', {
       configurable: true,
       get: () => {
-        for (let p: StubNode | null = node; p !== null; p = p.parentElement) {
+        // ⚠️ 走**内部**表的读法（`stubParentOf`），不读 `node.parentElement`：
+        //    后者现在是只读访问器，读没问题，但用内部表更直接、也不受将来守卫变化影响。
+        for (let p: StubNode | null = node; p !== null; p = stubParentOf(p)) {
           if (p.tag === 'body') return true;
         }
         return false;
       },
     });
   }
+  /**
+   * ★★ 2026-10-01（A 号缺陷的加固，第二处）：**`ownerDocument` 也是只读访问器**。
+   *
+   * 真浏览器里 `Node.ownerDocument` 同样是只读 getter。本仓有三处测试**刻意覆盖**它
+   * （`tests/ui/g4-closure-guard.test.ts` / `main-driver-wiring.test.ts` / `replay-bar.test.ts`），
+   * 它们用的是 `Object.defineProperty(…, { configurable: true, value: … })` ——
+   * 那是**合法**的注入手法（显式属性定义），与"随手赋值"是两回事：本访问器 `configurable: true`，
+   * 所以那些覆盖照旧生效。
+   *
+   * ⚠️ 与 `parentElement` 同一族：写它当场抛，别让"桩允许写只读属性"这类假象再骗过一条腿。
+   */
+  Object.defineProperty(node, 'ownerDocument', {
+    configurable: true,
+    get: () => stubOwnerDocOf(node),
+    set: () => readonlyTrap('ownerDocument'),
+  });
   return node;
 }
 
@@ -610,6 +747,8 @@ export function installStubDom(): () => void {
     removeEventListener: () => { /* noop */ },
   };
   g.document = doc;
+  // ★ 2026-10-01（A 号缺陷加固）：桩节点的 `ownerDocument` 读这一枚（见那个只读访问器）。
+  currentStubDoc = doc;
   g.window = {
     setTimeout: (fn: () => void, ms?: number) => setTimeout(fn, ms) as unknown as number,
     clearTimeout: (id: number) => clearTimeout(id),
@@ -628,7 +767,7 @@ export function installStubDom(): () => void {
     g.document = prevDoc;
     g.window = prevWin;
     g.requestAnimationFrame = prevRaf ?? (() => 0);
-    setStubRect(null);   // 矩形常量是**本用例**的输入，不许漏到别的用例
+    currentStubDoc = null;   // 同上：桩 document 是**本用例**的输入，不许漏到别的用例    setStubRect(null);   // 矩形常量是**本用例**的输入，不许漏到别的用例
     setStubConnectedModel(false);   // 同上：`isConnected` 模型也是本用例的输入
     // ⚠️ 按节点矩形**不需要**显式清：它是 `WeakMap`，键是**本用例新建的那些桩节点**，
     //    用例结束后键不可达 ⇒ 条目随之回收；`installStubDom()` 每次都用**新的** `body`，

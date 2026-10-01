@@ -46,6 +46,7 @@ import {
   installStubDom,
   makeStubEl,
   queryAllIn,
+  setStubParentFor,
   type StubNode,
 } from './net-dom-stub';
 
@@ -177,7 +178,9 @@ function instrument(el: StubNode, log?: { clicks: number }, onClick?: (el: StubN
     listeners[t] = (listeners[t] ?? []).filter((f) => f !== cb);
   }) as unknown as StubNode['removeEventListener'];
   el.click = (() => { if (log) log.clicks += 1; onClick?.(el); }) as unknown as StubNode['click'];
-  el.remove = (() => { el.parentElement = null; }) as unknown as StubNode['remove'];
+  // ★ 2026-10-01（真机 A 号缺陷的加固）：桩的 `parentElement` 现在是**只读访问器**
+  //   （真 DOM 语义），夹具要改父子指针得走显式接缝 `setStubParentFor()`。
+  el.remove = (() => { setStubParentFor(el, null); }) as unknown as StubNode['remove'];
   (el as unknown as { __listeners: typeof listeners }).__listeners = listeners;
 }
 
@@ -206,7 +209,8 @@ function instrumentedDoc(
       body: {
         appendChild: (n: unknown) => {
           const node = n as StubNode;
-          node.parentElement = node.parentElement ?? null;
+          // ★ 同上：写父子指针走显式接缝（这里是**造假宿主**，不是产出代码）
+          setStubParentFor(node, node.parentElement ?? null);
           children.push(node);
           (node as unknown as { __mounted?: boolean }).__mounted = true;
           return n;

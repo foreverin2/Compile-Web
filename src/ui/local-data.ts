@@ -157,10 +157,10 @@ function button(cls: string, label: string, onClick: () => void): HTMLButtonElem
 /** 授权状态 → 屏上那句人话（`allowed` / `denied` 的措辞对齐 `local-consent.ts` 的基调）。 */
 function consentLabel(state: ConsentState): string {
   switch (state) {
-    case 'allowed': return '当前：允许保存到本机（昵称与卡组会写进你自己的浏览器存储）';
-    case 'denied': return '当前：游客模式（本次会话不写入你的数据，刷新或关闭即丢失）';
-    case 'ask': return '当前：正在等你选择是否保存到本机';
-    default: return '当前：尚未选择（下次启动会先问你）';
+    case 'allowed': return t('local-data.consent.allowed');
+    case 'denied': return t('local-data.consent.denied');
+    case 'ask': return t('local-data.consent.ask');
+    default: return t('local-data.consent.unknown');
   }
 }
 
@@ -169,13 +169,13 @@ function consentLabel(state: ConsentState): string {
  * `describeError` 同形：`Error` / 字符串 / 任意对象三种形状都认，**永不抛**）。
  */
 function describeError(e: unknown): string {
-  if (typeof e === 'string') return e.trim() === '' ? '未知错误（宿主没有给出描述）' : e;
+  if (typeof e === 'string') return e.trim() === '' ? t('local-data.error.unknown') : e;
   if (e instanceof Error) return e.message !== '' ? e.message : e.name;
   try {
     const s = String(e);
-    return s.trim() === '' ? '未知错误（宿主没有给出描述）' : s;
+    return s.trim() === '' ? t('local-data.error.unknown') : s;
   } catch {
-    return '宿主抛出了一个无法描述的对象';
+    return t('local-data.error.indescribable');
   }
 }
 
@@ -185,7 +185,9 @@ function describeError(e: unknown): string {
  *    就是留给这一层合成的）；其余码统一加"导入失败："前缀，`message` 原样透传真因。
  */
 function failureText(o: { code: string; message: string }): string {
-  return o.code === 'read-failed' ? `读取档案失败：${o.message}` : `导入失败：${o.message}`;
+  return o.code === 'read-failed'
+    ? t('local-data.archive.read-failed', { detail: o.message })
+    : t('local-data.archive.import-failed', { detail: o.message });
 }
 
 /* ── 档案的来源：**宿主**（G4 D9 / D13），本屏不再自己拼一份 ───────────────────── */
@@ -229,7 +231,7 @@ export function renderLocalData(root: HTMLElement, nav: LocalDataNav): void {
   const store = nav.store;
 
   const screen = el('div', 'local-data-screen');
-  screen.appendChild(el('h1', 'local-data-title', '本地数据与隐私'));
+  screen.appendChild(el('h1', 'local-data-title', t('local-data.title')));
 
   /* ── 状态区：本屏**唯一**的提示通道（人读 textContent / 机器读 data-code） ── */
   const status = el('div', 'local-data-status');
@@ -258,7 +260,7 @@ export function renderLocalData(root: HTMLElement, nav: LocalDataNav): void {
    * `showStartScreen()` 会直接进主页 ⇒ 那个按钮就成了**死按钮**（点了什么都没发生）。
    * ⚠️ 它**不删除**已保存的数据：删数据是「清除本机数据」的职责，且那条路要求显式确认。
    */
-  const changeBtn = button('btn', '改变选择', () => {
+  const changeBtn = button('btn', t('local-data.change-consent'), () => {
     store.reset();
     nav.back();
   });
@@ -284,7 +286,7 @@ export function renderLocalData(root: HTMLElement, nav: LocalDataNav): void {
       // ⚠️ `clearAllLocalData` **不吞** get/remove 的抛错（storage.ts 的能力边界表）⇒ 这里自己兜。
       removed = clearAllLocalData(store.kv());
     } catch (e) {
-      say(`清除本机数据失败：${describeError(e)}。本机数据可能仍有残留，请稍后再试。`, 'clear-failed', 'error');
+      say(t('local-data.clear-failed', { detail: describeError(e) }), 'clear-failed', 'error');
       return;
     }
     store.reset(); // 回 unknown ⇒ 下次启动会重新问
@@ -293,7 +295,7 @@ export function renderLocalData(root: HTMLElement, nav: LocalDataNav): void {
     // ★ 2026-10-01（P0）：语言跟着 `L1_SETTINGS` 整键被清掉了 ⇒ 这一行要重画回默认语言，
     //   否则屏上还显示着清除前那个语言（那会让人以为"语言没被清掉"）。
     refreshLang();
-    say(`已清除本机数据（${removed} 项）。下次启动会重新询问是否保存到本机。`, 'clear-ok', 'info');
+    say(t('local-data.clear-ok', { n: String(removed) }), 'clear-ok', 'info');
   };
 
   const openClearConfirm = (): void => {
@@ -301,19 +303,19 @@ export function renderLocalData(root: HTMLElement, nav: LocalDataNav): void {
     confirmRow.appendChild(el(
       'div',
       'local-data-note',
-      '清除后，本机保存的昵称与卡组会被删除，并且下次启动会重新询问是否保存到本机。',
+      t('local-data.clear-note'),
     ));
     const acts = el('div', 'local-data-actions');
-    const yes = button('btn', '确认清除', doClear);
+    const yes = button('btn', t('local-data.clear-yes'), doClear);
     yes.dataset.role = 'clear-yes';
-    const no = button('btn', '取消', () => { confirmRow.textContent = ''; });
+    const no = button('btn', t('common.cancel'), () => { confirmRow.textContent = ''; });
     no.dataset.role = 'clear-no';
     acts.appendChild(yes);
     acts.appendChild(no);
     confirmRow.appendChild(acts);
   };
 
-  const clearBtn = button('btn', '清除本机数据', openClearConfirm);
+  const clearBtn = button('btn', t('local-data.clear'), openClearConfirm);
   clearBtn.dataset.role = 'clear';
   consentActions.appendChild(clearBtn);
   consentRow.appendChild(consentActions);
@@ -323,30 +325,30 @@ export function renderLocalData(root: HTMLElement, nav: LocalDataNav): void {
   const nickRow = el('div', 'local-data-row');
   nickRow.dataset.role = 'nick';
   const nickLine = el('div', 'local-data-nick-line');
-  nickLine.appendChild(el('span', 'local-data-note', '昵称'));
+  nickLine.appendChild(el('span', 'local-data-note', t('local-data.nick.label')));
   const nickInput = document.createElement('input');
   nickInput.type = 'text';
   nickInput.className = 'local-data-nick-input';
   nickInput.dataset.role = 'nick-input';
-  nickInput.placeholder = '给自己起个昵称';
+  nickInput.placeholder = t('local-data.nick.placeholder');
   nickLine.appendChild(nickInput);
   nickRow.appendChild(nickLine);
 
   const nickActions = el('div', 'local-data-actions');
-  const nickBtn = button('btn', '保存昵称', () => {
+  const nickBtn = button('btn', t('local-data.nick.save'), () => {
     let ok = false;
     try {
       // `writeJson` 把 `set` 的抛错翻成返回值，但 `readJson` 的 `get` 仍会外抛 ⇒ 这里也兜一层。
       ok = writeNickName(store, nickInput.value);
     } catch (e) {
       ok = false;
-      say(`本机保存失败，本次会话仍可正常游玩。`, 'nick-write-failed', 'error');
+      say(t('local-data.nick.write-failed'), 'nick-write-failed', 'error');
       void e;
       return;
     }
     // 计划 Step 4 的口径：写失败**如实**提示，绝不假装成功（`writeNickName` 的返回值就是判据）
     say(
-      ok ? '昵称已保存到本机。' : '本机保存失败，本次会话仍可正常游玩。',
+      ok ? t('local-data.nick.ok') : t('local-data.nick.write-failed'),
       ok ? 'nick-ok' : 'nick-write-failed',
       ok ? 'info' : 'error',
     );
@@ -444,15 +446,15 @@ export function renderLocalData(root: HTMLElement, nav: LocalDataNav): void {
    * 版式复用本屏既有的 `.local-data-*` 类（不新增 CSS 类 ⇒ 与 5 张既有 CSS 零冲突那条腿不动）。 */
   const makerRow = el('div', 'local-data-row');
   makerRow.dataset.role = 'cardmaker';
-  makerRow.appendChild(el('div', 'local-data-note', '卡牌制作器（自定义协议与卡牌）'));
-  const makerLine = el('div', 'local-data-privacy-line', '正在读取卡牌制作器的本机数据…');
+  makerRow.appendChild(el('div', 'local-data-note', t('local-data.cardmaker.label')));
+  const makerLine = el('div', 'local-data-privacy-line', t('local-data.cardmaker.reading'));
   makerLine.dataset.role = 'cardmaker-state';
   makerRow.appendChild(makerLine);
   const makerActions = el('div', 'local-data-actions');
   // 回调先挂一个占位（`button()` 的第三参是必填的），真实处理器在下面定义好之后
   // 用 `addEventListener` 挂上 —— 这样 `clearCardmakerNow` 不必提到使用点之前
   // （本仓的 `button()` 是"三参必填"的既有形状，为它破例会动到别的屏）。
-  const makerClear = button('btn', '清除卡牌制作器的本机数据', () => { /* 见下方 addEventListener */ });
+  const makerClear = button('btn', t('local-data.cardmaker.clear'), () => { /* 见下方 addEventListener */ });
   makerClear.dataset.role = 'clear-cardmaker';
   makerActions.appendChild(makerClear);
   makerRow.appendChild(makerActions);
@@ -479,19 +481,16 @@ export function renderLocalData(root: HTMLElement, nav: LocalDataNav): void {
     try {
       info = await nav.readCardmaker();
     } catch (e) {
-      makerLine.textContent = `读取卡牌制作器的本机数据失败：${describeError(e)}`;
+      makerLine.textContent = t('local-data.cardmaker.read-failed', { detail: describeError(e) });
       return;
     }
     if (info.count === null) {
-      makerLine.textContent =
-        '卡牌制作器：读不到本机的数据（这台设备可能没有可用的 IndexedDB，'
-        + '或库被别的程序占着）。它单独存在一个 IndexedDB 库里，与上面那两个键无关。';
+      makerLine.textContent = t('local-data.cardmaker.unreadable');
       return;
     }
-    makerLine.textContent = (info.count === 0
-      ? '卡牌制作器：本机还没有保存过牌组。'
-      : `卡牌制作器：本机保存了 ${info.count} 张卡（含自定背景与 logo 的图片）。`)
-      + '它单独存在一个 IndexedDB 库里，与上面那两个键无关。';
+    makerLine.textContent = info.count === 0
+      ? t('local-data.cardmaker.empty')
+      : t('local-data.cardmaker.count', { n: String(info.count) });
   };
   void refreshCardmaker();
 
@@ -506,17 +505,17 @@ export function renderLocalData(root: HTMLElement, nav: LocalDataNav): void {
     try {
       out = await nav.clearCardmaker();
     } catch (e) {
-      say(`清除卡牌制作器的本机数据失败：${describeError(e)}`, 'clear-cardmaker-failed', 'error');
+      say(t('local-data.cardmaker.clear-failed', { detail: describeError(e) }), 'clear-cardmaker-failed', 'error');
       return;
     }
     if (!out.ok) {
-      say(`清除卡牌制作器的本机数据失败：${out.detail ?? '宿主没有给出原因'}`, 'clear-cardmaker-failed', 'error');
+      say(t('local-data.cardmaker.clear-failed', { detail: out.detail ?? t('local-data.error.no-reason') }), 'clear-cardmaker-failed', 'error');
       return;
     }
     if (out.removed === false) {
-      say('卡牌制作器的本机数据本来就是空的，没有需要清除的东西。', 'clear-cardmaker-empty', 'info');
+      say(t('local-data.cardmaker.clear-empty'), 'clear-cardmaker-empty', 'info');
     } else {
-      say('已清除卡牌制作器保存在本机的牌组。', 'clear-cardmaker-ok', 'info');
+      say(t('local-data.cardmaker.clear-ok'), 'clear-cardmaker-ok', 'info');
     }
     void refreshCardmaker();
   };
@@ -531,24 +530,31 @@ export function renderLocalData(root: HTMLElement, nav: LocalDataNav): void {
       nick = readNickName(store);
       decks = readDecks(store);
     } catch (e) {
-      storedRow.appendChild(el('div', 'local-data-note', `读取本机数据失败：${describeError(e)}`));
+      storedRow.appendChild(el('div', 'local-data-note', t('local-data.read-failed', { detail: describeError(e) })));
       return;
     }
     nickInput.value = nick;
     storedRow.appendChild(el(
       'div',
       'local-data-note',
-      `本机已保存：昵称「${nick === '' ? '未设置' : nick}」· 卡组 ${decks.length} 组`,
+      t('local-data.stored', {
+        nick: nick === '' ? t('local-data.nick.unset') : nick,
+        n: String(decks.length),
+      }),
     ));
     for (const d of decks) {
       storedRow.appendChild(el(
         'div',
         'local-data-privacy-line',
-        `卡组「${d.name}」：${d.defIds.length} 张 · 种子 ${d.seed.slice(0, 8)}`,
+        t('local-data.deck-line', {
+          name: d.name,
+          n: String(d.defIds.length),
+          seed: d.seed.slice(0, 8),
+        }),
       ));
     }
     if (decks.length === 0) {
-      storedRow.appendChild(el('div', 'local-data-privacy-line', '本机还没有保存任何卡组。'));
+      storedRow.appendChild(el('div', 'local-data-privacy-line', t('local-data.deck-empty')));
     }
   };
   refreshStored();
@@ -556,7 +562,7 @@ export function renderLocalData(root: HTMLElement, nav: LocalDataNav): void {
   /* ── ③ 隐私说明全文（**生成式**：唯一出处 = privacyLines()） ── */
   const privacyRow = el('div', 'local-data-row');
   privacyRow.dataset.role = 'privacy';
-  privacyRow.appendChild(el('div', 'local-data-note', '隐私说明（完整）'));
+  privacyRow.appendChild(el('div', 'local-data-note', t('local-data.privacy.title')));
   for (const line of privacyLines()) {
     privacyRow.appendChild(el('p', 'local-data-privacy-line', line));
   }
@@ -565,14 +571,11 @@ export function renderLocalData(root: HTMLElement, nav: LocalDataNav): void {
   /* ── ③ 档案：导出 / 导入 ── */
   const archiveRow = el('div', 'local-data-row');
   archiveRow.dataset.role = 'archive';
-  archiveRow.appendChild(el('div', 'local-data-note', '对局档案（导出 / 导入）'));
+  archiveRow.appendChild(el('div', 'local-data-note', t('local-data.archive.title')));
   archiveRow.appendChild(el(
     'div',
     'local-data-privacy-line',
-    '导入的档案会当场校验（格式、版本、卡牌数据指纹与每条操作的形状）；'
-    + '导入成功后点「重放这一局」可以逐步重演。'
-    + '导出的档案是本次会话的真实对局（含每一步操作）；本次会话还没有对局时，导出会被拒绝并说明原因。'
-    + '档案只存在内存与你导出的文件里，下次启动无法找回 —— 需要留存时请自己导出。',
+    t('local-data.archive.blurb'),
   ));
   screen.appendChild(archiveRow);
 
@@ -592,7 +595,7 @@ export function renderLocalData(root: HTMLElement, nav: LocalDataNav): void {
    * 赋值），不是"重新拼一份" —— 后者会与校验通过的那份分叉。
    */
   let lastImported: MatchFile | null = null;
-  const replayBtn = button('btn', '重放这一局', () => {
+  const replayBtn = button('btn', t('local-data.replay'), () => {
     if (lastImported === null) return;
     nav.startReplay(lastImported);
   });
@@ -609,40 +612,39 @@ export function renderLocalData(root: HTMLElement, nav: LocalDataNav): void {
       const build = nav.buildArchive();
       if (!('file' in build)) {
         // 码名与其它导出分支并列（`data-code` 是机器可读出口）；`reason` 由宿主给、本屏原样显示
-        say(`档案没有导出：${build.reason}`, 'export-refused', 'error');
+        say(t('local-data.export.refused', { detail: build.reason }), 'export-refused', 'error');
         return;
       }
       file = build.file;
       pack = archivePack(file);
     } catch (e) {
-      say(`导出档案失败：${describeError(e)}`, 'export-failed', 'error');
+      say(t('local-data.export.failed', { detail: describeError(e) }), 'export-failed', 'error');
       return;
     }
-    say(`正在导出档案：${pack.name}`, 'export-waiting', 'info');
+    say(t('local-data.export.waiting', { name: pack.name }), 'export-waiting', 'info');
     let out: SaveOutcome;
     try {
       out = await nav.saveFile.save({ suggestedName: pack.name, text: pack.text });
     } catch (e) {
       // 契约上 `save()` 永不 reject；这层兜的是宿主假件/将来实现
-      say(`导出档案失败：${describeError(e)}`, 'export-threw', 'error');
+      say(t('local-data.export.failed', { detail: describeError(e) }), 'export-threw', 'error');
       return;
     }
     if (!out.ok) {
       // 三态各说各的：**用户自己点的取消**绝不显示成"保存失败"（假警报）
       if (out.reason === 'cancelled') {
-        say('已取消导出：档案没有写到任何地方。', 'export-cancelled', 'info');
+        say(t('local-data.export.cancelled'), 'export-cancelled', 'info');
         return;
       }
       if (out.reason === 'unsupported') {
-        say('这台设备不支持保存文件，因此无法导出档案。', 'export-unsupported', 'error');
+        say(t('local-data.export.unsupported'), 'export-unsupported', 'error');
         return;
       }
-      say(`导出档案失败：${out.detail}`, 'export-failed', 'error');
+      say(t('local-data.export.failed', { detail: out.detail }), 'export-failed', 'error');
       return;
     }
     say(
-      `档案已导出：${out.name}（${file.actions.length} 步操作）。`
-      + '把这份档案在另一台设备上导入，就能点「重放这一局」逐步重演这一局。',
+      t('local-data.export.ok', { name: out.name, n: String(file.actions.length) }),
       'export-ok',
       'info',
     );
@@ -652,13 +654,13 @@ export function renderLocalData(root: HTMLElement, nav: LocalDataNav): void {
     // ⚠️ 等待态（协调者裁决）：`pickTimeoutMs` **不传**（缺省 0 = 不设窗口）——
     //    给窗口会把"用户慢慢挑文件"误判成取消。代价用"可见且不阻塞"兜住：**不禁用任何按钮**、
     //    不挂永不消失的 spinner；别处的任何操作都会把这条提示替换掉（`say` 是唯一写它的地方）。
-    say('等待你选择档案文件…（选择框里可以取消；下面其它操作仍然可用）', 'import-waiting', 'info');
+    say(t('local-data.import.waiting'), 'import-waiting', 'info');
 
     let picked: PickOutcome;
     try {
       picked = await nav.pickFile.open({ accept: [ARCHIVE_MIME] });
     } catch (e) {
-      say(`导入档案失败：${describeError(e)}`, 'import-threw', 'error');
+      say(t('local-data.archive.import-failed', { detail: describeError(e) }), 'import-threw', 'error');
       return;
     }
 
@@ -666,14 +668,14 @@ export function renderLocalData(root: HTMLElement, nav: LocalDataNav): void {
       // 三态可辨识（`PickOutcome` 的契约）：**不许**把三者折叠成一个值
       if (picked.reason === 'cancelled') {
         // 用户自己点的取消 = 正常路径：屏上不出现任何"失败/不支持"字样
-        say('已取消选择档案：屏上没有任何改动。', 'pick-cancelled', 'info');
+        say(t('local-data.import.cancelled'), 'pick-cancelled', 'info');
         return;
       }
       if (picked.reason === 'unsupported') {
-        say('这台设备不支持导入档案。', 'pick-unsupported', 'error');
+        say(t('local-data.import.unsupported'), 'pick-unsupported', 'error');
         return;
       }
-      say(`导入档案失败：${picked.detail}`, 'pick-failed', 'error');
+      say(t('local-data.archive.import-failed', { detail: picked.detail }), 'pick-failed', 'error');
       return;
     }
 
@@ -682,7 +684,10 @@ export function renderLocalData(root: HTMLElement, nav: LocalDataNav): void {
       say(
         failureText({
           code: 'too-large',
-          message: `档案过大（${picked.file.size} 字节 > 上限 ${MAX_ARCHIVE_BYTES} 字节）：本程序不会读取它`,
+          message: t('local-data.import.too-large', {
+            size: String(picked.file.size),
+            max: String(MAX_ARCHIVE_BYTES),
+          }),
         }),
         'too-large',
         'error',
@@ -698,7 +703,7 @@ export function renderLocalData(root: HTMLElement, nav: LocalDataNav): void {
       //    纯逻辑却永不产出的 `read-failed`（archive-io.ts 的注）：于是 UI 的错误分支只有一处。
       //    绝不许把 reject 吞成空串（那会变成"导入成功但 0 步"的假成功）。
       say(
-        failureText({ code: 'read-failed', message: `无法读取档案内容：${describeError(e)}` }),
+        failureText({ code: 'read-failed', message: t('local-data.import.read-failed', { detail: describeError(e) }) }),
         'read-failed',
         'error',
       );
@@ -714,10 +719,13 @@ export function renderLocalData(root: HTMLElement, nav: LocalDataNav): void {
 
     // 警告**生成式**渲染（一条都不许吞）：它们说的是"卡牌数据可能不同""createdAt 不是 ISO"…
     const warnings = outcome.warnings;
+    // 拼装顺序与改动前**逐字对应**（测试断言的那几句在这三个键里）
     say(
-      `档案已导入并校验通过（${outcome.file.actions.length} 步操作）`
-      + (warnings.length === 0 ? '，没有任何警告' : `，有 ${warnings.length} 条警告：${warnings.join('；')}`)
-      + '。点「重放这一局」可以逐步重演这场对局；本屏不自动开始重放。',
+      t('local-data.import.ok', { n: String(outcome.file.actions.length) })
+      + (warnings.length === 0
+        ? t('local-data.import.no-warnings')
+        : t('local-data.import.warnings', { n: String(warnings.length), list: warnings.join('；') }))
+      + t('local-data.import.ok-tail'),
       'import-ok',
       warnings.length === 0 ? 'info' : 'warn',
     );
@@ -729,11 +737,11 @@ export function renderLocalData(root: HTMLElement, nav: LocalDataNav): void {
   };
 
   const archiveActions = el('div', 'local-data-actions');
-  const exportBtn = button('btn', '导出档案', () => { void doExport(); });
+  const exportBtn = button('btn', t('local-data.export.btn'), () => { void doExport(); });
   exportBtn.dataset.role = 'export';
-  const importBtn = button('btn', '导入档案', () => { void doImport(); });
+  const importBtn = button('btn', t('local-data.import.btn'), () => { void doImport(); });
   importBtn.dataset.role = 'import';
-  const backBtn = button('btn', '← 返回主界面', () => { nav.back(); });
+  const backBtn = button('btn', t('local-data.back'), () => { nav.back(); });
   backBtn.dataset.role = 'back';
   archiveActions.appendChild(exportBtn);
   archiveActions.appendChild(importBtn);

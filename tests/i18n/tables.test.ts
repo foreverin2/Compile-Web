@@ -21,12 +21,24 @@ import {
 import {
   createLocalStore,
   clearAllLocalData as clearLocalData,
+  readFxSettings,
   readLang,
   readNickName,
+  writeFxSettings,
   writeLang,
   writeNickName,
 } from '../../src/app/local-store';
 import { L1_SETTINGS, createMemoryStore, readJson, type KeyValueStore } from '../../src/app/storage';
+import { applyFxSettings, isFxSettingOn, resetFxSettingsForTest } from '../../src/ui/fx-settings';
+
+/** 造一个"存储里已经是这样"的 store（上面的形状守卫腿用它） */
+function storeWith(settings: Record<string, unknown>): ReturnType<typeof createLocalStore> {
+  const kv = createMemoryStore();
+  kv.set(L1_SETTINGS, JSON.stringify(settings));
+  const s = createLocalStore({ persistent: kv });
+  s.grant();
+  return s;
+}
 
 /**
  * 缺键时的 `console.warn` 是**刻意**的（开发态线索），所以本文件里那些"故意缺键"的用例
@@ -535,15 +547,17 @@ describe('`initI18n`：启动时读一次已存语言', () => {
 
 describe('★ P0 硬要求：中文值与改动前的字面量逐字一致（既有测试零改动）', () => {
   it('设置小窗那几条：值与 `home.ts` 改动前的字面量逐字相同', () => {
-    // 这些是**改动前** `src/ui/home.ts` / `src/ui/fx-settings.ts` 里的原文（P0 的验收判据）。
-    // 它们同时出现在既有测试的断言里（`tests/ui/local-data-screen.test.ts` 第 9 组逐字钉住
-    // `关闭` 与 `改动只在本次会话有效，刷新后回到默认开启。`）—— 所以这里写的是**冻结值**，
-    // 不是"从实现里抄一遍"。
+    // 这些是**改动前** `src/ui/home.ts` / `src/ui/fx-settings.ts` 里的原文（P0 的验收判据），
+    // 写在这里的是**冻结值**，不是"从实现里抄一遍"。
+    //
+    // ★ 2026-10-01（用户要求"设置里的选项也要持久化"）：`settings.hint` 这一条**按用户要求改写了**
+    //   —— 旧值「改动只在本次会话有效，刷新后回到默认开启。」现在**不成立**（开关真的落盘了）。
+    //   这是这一组里**唯一**一条被授权的改动，冻结值同步换成新句子；其余各条一字未动。
     const FROZEN: Readonly<Record<string, string>> = {
       'settings.title': '设置',
       'settings.close': '关闭',
       'settings.aria': '设置',
-      'settings.hint': '改动只在本次会话有效，刷新后回到默认开启。',
+      'settings.hint': '改动会保存到本机（与昵称同一份存储），下次进入仍然生效；游客模式下只在本次会话有效。',
       'settings.fx.on': '开启',
       'settings.fx.off': '关闭',
       'settings.fx.state': '{desc}（当前：{state}）',
@@ -551,8 +565,12 @@ describe('★ P0 硬要求：中文值与改动前的字面量逐字一致（既
       'settings.fx.metal6.desc': '手牌里的金属6 牌面会循环渐现一张图。关掉之后不再显示，其它卡牌的特效不受影响。',
     };
     for (const [k, v] of Object.entries(FROZEN)) {
-      expect(ZH[k], `键 ${k} 的中文值与改动前不一致（P0 不许动既有中文文案）`).toBe(v);
+      expect(ZH[k], `键 ${k} 的中文值与冻结值不一致`).toBe(v);
     }
+    // 反向锚点：新口径**必须**说清"保存到本机"，且**不许**再留旧口径那句
+    expect(ZH['settings.hint'], '新口径没说"保存到本机"').toContain('保存到本机');
+    expect(ZH['settings.hint'], '旧口径"只在本次会话有效"还在（那是改动前的错话）')
+      .not.toContain('改动只在本次会话有效');
   });
 
   it('既有测试里逐字钉住的那两句，在 `zh` 表里就是那个形态', () => {
@@ -758,5 +776,131 @@ describe('★ P0：语言的存储口径（L1 设置对象里的一个字段，�
     expect(removed, '清除没清掉设置那个键').toBeGreaterThan(0);
     expect(readLang(s), '清除本机数据之后语言还在（那"可清除"这一半就不成立）').toBe(undefined);
     expect(initI18n(() => readLang(s))).toBe(DEFAULT_LANG);
+  });
+});
+
+/* ============================================================================
+ * 7. ★ B（2026-10-01 用户要求）：**特效开关也落本机**
+ *
+ * 用户原话：「我希望设置里的选项都能够保存为持久化的数据，就和玩家名一样存储至本地，
+ * 下次进入时能够随时响应」。这一组钉住存储侧那一半（界面那一半在
+ * `tests/i18n/settings-overlay.test.ts`）。
+ * ========================================================================== */
+
+describe('★ B：特效开关的存储口径（与昵称/语言同一份设置、同一套门控）', () => {
+  it('开关与昵称/语言**同住 `compile-settings` 那一个键**里（不新增存储键）', () => {
+    const kv = createMemoryStore();
+    const s = createLocalStore({ persistent: kv });
+    s.grant();
+    writeNickName(s, '甲');
+    writeLang(s, 'en');
+    expect(writeFxSettings(s, { 'metal6-strobe': false }).ok).toBe(true);
+    expect(s.kv().keys().sort(), '开关注册出了新键（用户口径是"就和玩家名一样存本机"）')
+      .toEqual(['compile-consent', L1_SETTINGS].sort());
+    expect(readJson<Record<string, unknown>>(kv, L1_SETTINGS, {}))
+      .toEqual({ nick: '甲', lang: 'en', fx: { 'metal6-strobe': false } });
+  });
+
+  it('读侧：默认（没写过）⇒ 空对象；写进去之后读回来就是那个值', () => {
+    const s = createLocalStore({ persistent: createMemoryStore() });
+    s.grant();
+    expect(readFxSettings(s), '没写过时该回空对象（默认值由 fx-settings 那一层兜）').toEqual({});
+    writeFxSettings(s, { 'metal6-strobe': false });
+    expect(readFxSettings(s)).toEqual({ 'metal6-strobe': false });
+    writeFxSettings(s, { 'metal6-strobe': true });
+    expect(readFxSettings(s)).toEqual({ 'metal6-strobe': true });
+  });
+
+  it('★ 写是**读-改-写**：改一项不会抹掉别的项（也不会抹掉昵称/语言）', () => {
+    const s = createLocalStore({ persistent: createMemoryStore() });
+    s.grant();
+    writeNickName(s, '甲');
+    writeLang(s, 'en');
+    writeFxSettings(s, { 'metal6-strobe': false });
+    writeFxSettings(s, { 'future-switch': true }); // 将来的第二项
+    expect(readFxSettings(s), '后写的把先写的抹掉了（读-改-写没做）').toEqual({
+      'metal6-strobe': false, 'future-switch': true,
+    });
+    expect(readNickName(s)).toBe('甲');
+    expect(readLang(s)).toBe('en');
+  });
+
+  it('★ 形状守卫**逐字段**：坏值被丢掉，好值保留（不是"整块回空"）', () => {
+    const kv = createMemoryStore();
+    const s = createLocalStore({ persistent: kv });
+    s.grant();
+    kv.set(L1_SETTINGS, JSON.stringify({ fx: { 'metal6-strobe': false, junk: 'yes', n: 1, z: null } }));
+    expect(readFxSettings(s), '坏字段没被丢掉 / 好字段被误伤').toEqual({ 'metal6-strobe': false });
+    // 反向：整个 `fx` 不是对象（数组 / 字符串 / null）⇒ 回空对象，不抛
+    for (const bad of ['[]', '"x"', 'null', '42']) {
+      kv.set(L1_SETTINGS, JSON.stringify({ fx: JSON.parse(bad) }));
+      expect(() => readFxSettings(s), `fx = ${bad} 把读取炸了`).not.toThrow();
+      expect(readFxSettings(s), `fx = ${bad} 没被丢掉`).toEqual({});
+    }
+    kv.set(L1_SETTINGS, '{oops');
+    expect(readFxSettings(s), '整份设置坏掉时该回空对象（默认值由上面那一层兜）').toEqual({});
+  });
+
+  it('★ 启动读回：`applyFxSettings` 把存储值灌进内存态，坏值/缺项退回**各项目己的默认**', () => {
+    // 这是"下次进入时能够随时响应"那一半：读回之后 `isFxSettingOn` 立刻反映存储值。
+    applyFxSettings(readFxSettings(storeWith({ fx: { 'metal6-strobe': false } })));
+    expect(isFxSettingOn('metal6-strobe'), '存储里是关，读回之后却是开').toBe(false);
+    applyFxSettings(readFxSettings(storeWith({ fx: { 'metal6-strobe': true } })));
+    expect(isFxSettingOn('metal6-strobe')).toBe(true);
+    // 缺项 / 坏值 / 根本没写 ⇒ 默认开启
+    for (const bad of [undefined, {}, { 'metal6-strobe': 'yes' }, 42, null]) {
+      applyFxSettings(bad);
+      expect(isFxSettingOn('metal6-strobe'), `${JSON.stringify(bad)} 没退回默认开启`).toBe(true);
+    }
+    resetFxSettingsForTest();
+  });
+
+  it('★ 游客模式（deny）⇒ 开关只进内存：本次会话读得回来、刷新即丢、persistent 零写入（红线 3）', () => {
+    const spy = spyStore();
+    const s = createLocalStore({ persistent: spy });
+    s.deny();
+    expect(writeFxSettings(s, { 'metal6-strobe': false }).ok, '游客模式下写内存 KV 应成功').toBe(true);
+    expect(readFxSettings(s)).toEqual({ 'metal6-strobe': false });
+    expect(spy.mutations(), '游客模式下拨开关碰了 persistent（红线 3）').toBe(0);
+    const again = createLocalStore({ persistent: spy });
+    expect(readFxSettings(again), '游客模式的开关竟然活过了"刷新"').toEqual({});
+  });
+
+  it('★ 写失败按**结构化原因**回来（与语言同一套 `WriteResult`），不抛', () => {
+    const s = createLocalStore({ persistent: setThrowsFor(L1_SETTINGS) });
+    s.grant();
+    expect(() => writeFxSettings(s, { 'metal6-strobe': false }), '写失败时抛了').not.toThrow();
+    const out = writeFxSettings(s, { 'metal6-strobe': false });
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toBe('write-failed');
+    // 反向：能写的后端回 ok
+    const good = createLocalStore({ persistent: createMemoryStore() });
+    good.grant();
+    expect(writeFxSettings(good, { 'metal6-strobe': false }).ok).toBe(true);
+  });
+
+  it('★ 值超上限 ⇒ `too-large` + 两个数（开关这一路与语言共用同一个结构化结论）', () => {
+    const kv = createMemoryStore();
+    const s = createLocalStore({ persistent: kv });
+    s.grant();
+    kv.set(L1_SETTINGS, JSON.stringify({ nick: 'x'.repeat(70000) }));
+    const out = writeFxSettings(s, { 'metal6-strobe': false });
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.reason).toBe('too-large');
+    if (out.reason === 'too-large') expect(out.bytes).toBeGreaterThan(65536);
+  });
+
+  it('★「清除本机数据」把开关一起清掉（它在 `L1_SETTINGS` 整键里），清完读回空 ⇒ 默认开启', () => {
+    const kv = createMemoryStore();
+    const s = createLocalStore({ persistent: kv });
+    s.grant();
+    writeFxSettings(s, { 'metal6-strobe': false });
+    expect(readFxSettings(s)).toEqual({ 'metal6-strobe': false });
+    expect(clearLocalData(s.kv())).toBeGreaterThan(0);
+    expect(readFxSettings(s), '清除本机数据之后开关还在').toEqual({});
+    applyFxSettings(readFxSettings(s));
+    expect(isFxSettingOn('metal6-strobe'), '清除之后没回到默认开启').toBe(true);
+    resetFxSettingsForTest();
   });
 });

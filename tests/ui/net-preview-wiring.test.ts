@@ -667,11 +667,14 @@ describe('G5 T41 · 模式选择页的开发者闸门（行为腿：真跑 rende
     }
 
     // ── ② 反向：这一组断言不是"把模式页删空"就能满足的 ────────────────────────────
-    // 四张卡仍逐字在源码里，顺序同 DOM 顺序（热坐 → 联机 → 单人 → 三人）
-    const iHot = home.indexOf("mkMode('热坐（双人）'");
-    const iLobby = home.indexOf("'联机对战（两台设备）'");
-    const iSolo = home.indexOf("'单人模式'");
-    const iTrio = home.indexOf("'三人模式'");
+    // 四张卡仍逐字在源码里，顺序同 DOM 顺序（热坐 → 联机 → 单人 → 三人）。
+    // ⚠️ 2026-10-01（C）：卡的**文案**已经走 i18n（`mkMode(t('mode.hotseat.name'), …)`）⇒
+    //    源码里找的是**键**，顺序判据一字未变；"四张卡都在"这件事由下面的键清单保证
+    //    （键对应的中文值另有 `tests/i18n/home-copy.test.ts` 逐字钉住）。
+    const iHot = home.indexOf("mkMode(t('mode.hotseat.name')");
+    const iLobby = home.indexOf("t('mode.online.name')");
+    const iSolo = home.indexOf("mkMode(t('mode.solo.name')");
+    const iTrio = home.indexOf("mkMode(t('mode.trio.name')");
     for (const [what, at] of [['热坐', iHot], ['联机', iLobby], ['单人', iSolo], ['三人', iTrio]] as const) {
       expect(at, `模式页源码里找不到「${what}」那张卡（判据 ① 会因此变成"把页面删空也绿"）`)
         .toBeGreaterThanOrEqual(0);
@@ -679,14 +682,14 @@ describe('G5 T41 · 模式选择页的开发者闸门（行为腿：真跑 rende
     expect(iHot, '热坐卡不在第一张').toBeLessThan(iLobby);
     expect(iLobby, '联机卡不在热坐之后').toBeLessThan(iSolo);
     expect(iSolo, '单人卡不在联机之后').toBeLessThan(iTrio);
-    // 热坐卡的文案与行为**一行未改**（红线：热座观感零变化）
-    expect(home, '热坐卡的文案被改动了（本次改动不得动热座路径）')
-      .toContain("mkMode('热坐（双人）', '两名玩家轮流在同一设备上对战（当前可用）', true, () => {");
+    // 热坐卡的**行为**一行未改（红线：热座观感零变化）；文案现在是文案键
+    expect(home, '热坐卡的文案键被改动了')
+      .toContain("mkMode(t('mode.hotseat.name'), t('mode.hotseat.desc'), true, () => {");
     expect(home, '热坐卡不再调用 nav.startHotseat(banBox.checked, randomBox.checked)')
       .toContain('nav.startHotseat(banBox.checked, randomBox.checked)');
     // ★ G5/T41 第 1 条：**设备体检**按钮（不是模式卡，住在 mode-actions 那一区）仍在
     expect(home, '模式选择页没有「设备体检」按钮（用户 2026-09-27 第 1 条）')
-      .toContain("button('btn mode-probe-btn', '设备体检 / 网络自检', nav.openDeviceCheck)");
+      .toContain("button('btn mode-probe-btn', t('mode.device-check'), nav.openDeviceCheck)");
     // 它不是游戏模式：这一行不许碰 renderMode / state（只跳转）
     expect(home.split('\n').find((l) => l.includes('mode-probe-btn')) ?? '',
       '设备体检按钮那一行碰了 renderMode / state（它不该是游戏模式）')

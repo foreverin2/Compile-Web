@@ -17,11 +17,20 @@ import {
   settingsOverlayElement,
   type LangChangeOutcome,
 } from '../../src/ui/home';
-import { FX_SETTINGS, isMetal6StrobeOn, resetFxSettingsForTest } from '../../src/ui/fx-settings';
+import {
+  FX_SETTINGS,
+  applyFxSettings,
+  isFxSettingOn,
+  isMetal6StrobeOn,
+  resetFxSettingsForTest,
+  setFxSetting,
+} from '../../src/ui/fx-settings';
 import { DEFAULT_LANG, EN, ZH, getLang, initI18n, saveFailedText, setLang, type Lang, type WriteFailure } from '../../src/i18n';
 import {
   createLocalStore,
+  readFxSettings,
   readLang,
+  writeFxSettings,
   writeLang,
 } from '../../src/app/local-store';
 import { L1_SETTINGS, createMemoryStore } from '../../src/app/storage';
@@ -71,9 +80,16 @@ function mount(over: {
   onClose?: () => void;
   lang?: Lang;
   onLangChange?: (l: Lang) => LangChangeOutcome;
-} = {}): { readonly overlay: StubNode; readonly calls: Array<{ lang: Lang } & LangChangeOutcome> } {
+  /** ★ 2026-10-01（B）：开关落盘的回话；缺省 = 成功 */
+  onFxChange?: (id: string, on: boolean) => LangChangeOutcome;
+} = {}): {
+  readonly overlay: StubNode;
+  readonly calls: Array<{ lang: Lang } & LangChangeOutcome>;
+  readonly fxCalls: Array<{ id: string; on: boolean } & LangChangeOutcome>;
+} {
   mountStubDom();
   const calls: Array<{ lang: Lang } & LangChangeOutcome> = [];
+  const fxCalls: Array<{ id: string; on: boolean } & LangChangeOutcome> = [];
   const nav = {
     onClose: over.onClose ?? (() => { /* 本组不用它 */ }),
     lang: over.lang ?? getLang(),
@@ -82,10 +98,15 @@ function mount(over: {
       calls.push({ lang: l, ...out });
       return out;
     },
+    onFxChange: (id: string, on: boolean) => {
+      const out = over.onFxChange === undefined ? LANG_CHANGE_OK : over.onFxChange(id, on);
+      fxCalls.push({ id, on, ...out });
+      return out;
+    },
   };
   const overlay = settingsOverlayElement(nav) as unknown as StubNode;
   document.body.appendChild(overlay as unknown as Node);
-  return { overlay, calls };
+  return { overlay, calls, fxCalls };
 }
 
 /** 树里所有节点的文本（按 DOM 顺序），用于"整屏逐条比对" */
@@ -174,15 +195,36 @@ describe('设置小窗 · 默认中文（与改动前逐字一致）', () => {
   });
 
   it('开关说明的就地改写形态与改动前一致：勾一次 ⇒ `原说明（当前：关闭）`', () => {
-    const { overlay } = mount();
+    // ★ 2026-10-01（B）：勾了之后**内存态由宿主改**（小窗只报事件 + 就地改说明），
+    //   所以这里的假宿主照 `main.ts` 的同一口径做一次（`setFxSetting`），再用真读侧断言。
+    const { overlay, fxCalls } = mount({
+      onFxChange: (id, on) => { setFxSetting(id, on); return LANG_CHANGE_OK; },
+    });
     const notes = classOf(overlay, 'settings-note');
     expect(notes.length, '开关说明应该只有一个（语言那一行用的是 `.settings-lang-hint`）').toBe(1);
     const note = notes[0];
     const box = classOf(overlay, 'mode-check')[0];
     (box as unknown as { checked: boolean }).checked = false;
     fireIn(box, 'change');
-    expect(isMetal6StrobeOn()).toBe(false);
+    expect(fxCalls, '勾一次要通知宿主一次（带 id 与新的值）').toEqual([{ id: 'metal6-strobe', on: false, ok: true }]);
+    expect(isMetal6StrobeOn(), '宿主按同一口径改了内存态之后，读侧应当变了').toBe(false);
     expect(note.text).toBe(`${ZH['settings.fx.metal6.desc']}（当前：${ZH['settings.fx.off']}）`);
+  });
+
+  it('★ B：开关落盘失败 ⇒ 屏上如实说"本次会话生效、下次进入回旧状态"（按原因本地化）', () => {
+    const { overlay, fxCalls } = mount({
+      onFxChange: () => ({ ok: false, reason: 'write-failed', detail: 'QuotaExceededError: x' }),
+    });
+    const box = classOf(overlay, 'mode-check')[0];
+    (box as unknown as { checked: boolean }).checked = false;
+    fireIn(box, 'change');
+    expect(fxCalls).toHaveLength(1);
+    const status = role(overlay, 'lang-status').text;
+    expect(status, '开关写盘失败时没有任何提示').toContain('开关没能保存到本机');
+    // 界面是中文（本用例没切过语言）⇒ 技术细节那句也是中文那一版，系统消息原样带出
+    expect(status, '没带出系统消息').toContain('技术细节：QuotaExceededError: x');
+    // 反向：不许出现"语言"那一档的句子（两个句式不同，混用就是抄错了）
+    expect(status, '开关失败却说了"语言没能保存到本机"').not.toContain('语言没能保存到本机');
   });
 });
 
@@ -506,11 +548,37 @@ describe('★ 宿主接线：切语言 ⇒ 落盘 + 重画当前屏（源码结�
     expect(home, 'renderHome 没有把 root 交给背景构造（复用判据要看父节点）').toMatch(/buildHomeBg\(root\)/);
   });
 
-  it('设置入口把 `lang` 与 `onLangChange` 都交下去了（否则小窗拿不到当前语言）', () => {
+  it('设置入口把 `lang` / `onLangChange` / `onFxChange` 都交下去了', () => {
     const open = functionBody(MAIN_CODE, 'showHome');
     expect(open).toContain('settingsOverlayElement');
     expect(open, '没把当前语言交给小窗').toMatch(/lang:\s*getLang\s*\(\s*\)/);
     expect(open, '没接语言切换的落点').toMatch(/onLangChange/);
+    // ★ B：开关的落盘接缝也要交下去（缺了它勾选就只在内存里）
+    expect(open, '没接开关落盘的落点（B：设置里的选项也要持久化）').toMatch(/onFxChange/);
+  });
+
+  it('★ B：启动时读回特效开关（在画第一屏**之前**，且失败退化成默认值）', () => {
+    // 与 `initI18n` 同一条纪律：**只读**、在启动块之前、读不出来就退化。
+    expect(MAIN_CODE, '启动时没有读回特效开关').toMatch(/applyFxSettings\s*\(\s*readFxSettings\s*\(\s*localStore\s*\)\s*\)/);
+    const readAt = MAIN_CODE.indexOf('applyFxSettings(readFxSettings(localStore))');
+    const firstPaintAt = MAIN_CODE.lastIndexOf('\nshowStartScreen();');
+    expect(readAt, '找不到读回特效开关的落点').toBeGreaterThan(0);
+    expect(readAt, '读回特效开关排在画第一屏之后（牌桌会先按默认值挂上频闪层）').toBeLessThan(firstPaintAt);
+    // 坏存储 / 读抛错时退回默认（catch 里那一次 `applyFxSettings(undefined)`）
+    const body = functionBody(MAIN_CODE, 'applyFxChange');
+    expect(body, 'applyFxChange 没接落盘').toMatch(/writeFxSettings\s*\(\s*localStore/);
+    expect(body, 'applyFxChange 又自己拼了结论（应当走共享映射）').toMatch(/applyWriteResult\s*\(/);
+  });
+
+  it('★ B：真 store 真跑一次 —— 拨开关写的是 `L1_SETTINGS.fx`，读回之后内存态跟着变', () => {
+    const kv = createMemoryStore();
+    const store = createLocalStore({ persistent: kv });
+    store.grant();
+    expect(writeFxSettings(store, { 'metal6-strobe': false }).ok).toBe(true);
+    expect(JSON.parse(kv.get(L1_SETTINGS) ?? 'null'), '落盘的不是 fx 字段').toEqual({ fx: { 'metal6-strobe': false } });
+    applyFxSettings(readFxSettings(store));
+    expect(isFxSettingOn('metal6-strobe'), '读回之后内存态没跟着变（"下次进入随时响应"这一半）').toBe(false);
+    resetFxSettingsForTest();
   });
 
   it('真 store 真跑一次：`applyLangChange` 那条链写的确实是 `L1_SETTINGS` 里的 `lang`', () => {

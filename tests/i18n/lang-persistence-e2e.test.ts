@@ -101,6 +101,7 @@ function boot(ls: FakeStorage): { readonly overlay: StubNode; readonly store: Re
     onClose: () => { /* 本文件不测关闭 */ },
     lang: getLang(),
     onLangChange: (next) => langChangeFor(store)(next),
+    onFxChange: () => LANG_CHANGE_OK,
   }) as unknown as StubNode;
   return { overlay, store };
 }
@@ -153,13 +154,16 @@ describe('★ P0 端到端：切语言 → 落盘 → 刷新之后还在', () =>
     expect(textOf(again.overlay), '刷新之后还留着中文标题').not.toContain('\n设置\n');
   });
 
-  it('中文那一版与"没有 i18n 之前"逐字一致（既有测试零改动的前提）', () => {
+  it('中文那一版与改动前的字面量逐字一致（既有测试零改动的前提）', () => {
     restores.push(installStubDom());
     const { overlay } = boot(fakeStorage());
-    // 这两句是既有测试逐字钉住的（`tests/ui/local-data-screen.test.ts` 第 9 组）
+    // 这几句是既有测试逐字钉住的（`tests/ui/local-data-screen.test.ts` 第 9 组钉 `关闭` 与开关说明）
     expect(descendants(overlay).map((n) => n.text)).toContain('关闭');
-    expect(textOf(overlay)).toContain('改动只在本次会话有效，刷新后回到默认开启。');
     expect(textOf(overlay)).toContain('金属6 频闪特效');
+    // ★ 2026-10-01（用户要求"设置里的选项也要持久化"）：底部那句已按用户要求换口径
+    //   （旧句「改动只在本次会话有效…」不再成立）⇒ 这里断言**新句**，并反向钉住旧句不在。
+    expect(textOf(overlay), '底部提示没按新口径说"保存到本机"').toContain('改动会保存到本机');
+    expect(textOf(overlay), '旧口径「改动只在本次会话有效」还在').not.toContain('改动只在本次会话有效');
   });
 
   it('游客模式（deny）：切语言本次会话生效、磁盘上**一个字节都不写**（红线 3）', () => {
@@ -172,6 +176,7 @@ describe('★ P0 端到端：切语言 → 落盘 → 刷新之后还在', () =>
       onClose: () => { /* 不测关闭 */ },
       lang: getLang(),
       onLangChange: (next) => langChangeFor(store)(next),
+      onFxChange: () => LANG_CHANGE_OK,
     }) as unknown as StubNode;
 
     clickIn(langBtn(overlay, 'en'));

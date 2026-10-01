@@ -45,7 +45,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { stripComments, functionBody, objectBody } from './source-text';
-import { makeStubEl, queryAllIn } from './net-dom-stub';
+import { makeStubEl, queryAllIn, setStubOwnerDocumentFor } from './net-dom-stub';
 import { renderReplayBar, type ReplayBarNav } from '../../src/ui/replay-bar';
 
 const read = (rel: string): string =>
@@ -274,9 +274,9 @@ describe('G4 T7 · FX 守卫与两个待办标志（第 5 条腿只钉了整句�
     expect(body, 'refreshReplayBar 没接装配函数').toContain('renderReplayBar(');
     // 行为侧：装配两次（模拟两帧）后，parent 里 bar/shield 各恰好一个（前提是每帧清了 parent）
     const parent = makeStubEl('div');
-    (parent as unknown as { ownerDocument: { createElement(t: string): unknown } }).ownerDocument = {
-      createElement: (t: string) => makeStubEl(t),
-    };
+    // ★ 2026-10-01（真机 A 号缺陷的加固）：桩的 `ownerDocument` 现在是只读访问器
+    //   ⇒ 指定文档走显式接缝（`replay-bar.ts` 正是从 `parent.ownerDocument` 拿文档的）。
+    setStubOwnerDocumentFor(parent, { createElement: (t: string) => makeStubEl(t) });
     const nav: ReplayBarNav = { pause: () => {}, play: () => {}, next: () => {}, setRate: () => {}, exit: () => {} };
     const frame = (position: number): void => {
       (parent as unknown as { textContent: string }).textContent = '';

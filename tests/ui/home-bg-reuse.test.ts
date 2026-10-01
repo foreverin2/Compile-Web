@@ -1,5 +1,13 @@
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
-import { installStubDom, makeStubEl, descendants, queryAllIn, type StubNode } from './net-dom-stub';
+import {
+  installStubDom,
+  makeStubEl,
+  descendants,
+  queryAllIn,
+  setStubOwnerDocumentFor,
+  setStubParentFor,
+  type StubNode,
+} from './net-dom-stub';
 import { renderHome, type HomeNav } from '../../src/ui/home';
 
 /**
@@ -117,5 +125,78 @@ describe('★ D2：重画首页时复用背景（顺序与动画连续性都靠�
     expect(bgA, '分别渲染出来的两份背景居然相等 ⇒ 上面的 toBe 判据是恒真的').not.toBe(bgB);
     // 且两次的洗牌顺序**不保证相同**（那是 `Math.random()` 的既有行为，本文件不改它）
     expect(descendants(bgA).length).toBe(descendants(bgB).length);
+  });
+});
+
+/* ==================================================================== *
+ * ★★ 2026-10-01（真机 A 号缺陷）：**桩不许再让人写只读属性**
+ *
+ * 现场：D2 那一轮的 `clearRoot` 里有一句 `(child as …).parentElement = null`，
+ * 真浏览器里 `parentElement` 是只读 getter ⇒ **离开首页必炸**
+ * （用户真机报的就是它，而且被写盘失败提示捎带出去）。
+ * 它当时"单测全绿"的原因只有一个：**桩把 `parentElement` 当普通可写字段**。
+ *
+ * 这一组钉住加固本身，免得哪天有人为了"让某个夹具好写"把只读守卫拆掉。
+ * ==================================================================== */
+
+describe('★★ A 号缺陷：DOM 桩把只读属性做成真语义（写它当场抛）', () => {
+  it('写 `parentElement` ⇒ 抛 TypeError（与浏览器的失败模式同款）', () => {
+    const node = makeStubEl('div');
+    expect(() => {
+      (node as unknown as { parentElement: unknown }).parentElement = null;
+    }, '桩允许写 parentElement —— 这正是 A 号缺陷在单测里隐身的原因').toThrow(TypeError);
+    expect(() => {
+      (node as unknown as { parentElement: unknown }).parentElement = makeStubEl('div');
+    }).toThrow(/only a getter/);
+  });
+
+  it('写 `ownerDocument` ⇒ 同样抛（同一族只读访问器）', () => {
+    const node = makeStubEl('div');
+    expect(() => {
+      (node as unknown as { ownerDocument: unknown }).ownerDocument = {};
+    }, '桩允许写 ownerDocument').toThrow(TypeError);
+  });
+
+  it('读侧照旧：`appendChild` / `remove` / `textContent = \'\'` 维护的父子关系一字不变', () => {
+    const parent = makeStubEl('div');
+    const child = makeStubEl('span');
+    parent.appendChild(child);
+    expect(child.parentElement, 'appendChild 之后父指针不对').toBe(parent);
+    expect(parent.children.length).toBe(1);
+    (child as unknown as { remove(): void }).remove();
+    expect(child.parentElement, 'remove 之后父指针没清').toBeNull();
+    expect(parent.children.length).toBe(0);
+
+    const a = makeStubEl('i');
+    const b = makeStubEl('i');
+    parent.appendChild(a);
+    parent.appendChild(b);
+    (parent as unknown as { textContent: string }).textContent = '';
+    expect(a.parentElement, 'textContent = "" 没清父指针').toBeNull();
+    expect(b.parentElement).toBeNull();
+  });
+
+  it('接缝是显式的：`setStubParentFor` / `setStubOwnerDocumentFor` 能给夹具指定父/文档', () => {
+    const parent = makeStubEl('div');
+    const child = makeStubEl('span');
+    setStubParentFor(child, parent);
+    expect(child.parentElement).toBe(parent);
+
+    const doc = { createElement: (t: string) => makeStubEl(t) };
+    setStubOwnerDocumentFor(parent, doc);
+    expect((parent as unknown as { ownerDocument: unknown }).ownerDocument).toBe(doc);
+    // 子节点**继承**最近祖先的覆盖（真 DOM 里同一棵树的节点本就同属一个文档）
+    expect((child as unknown as { ownerDocument: unknown }).ownerDocument).toBe(doc);
+  });
+
+  it('★ 真产出代码在**整条首页重画**里一次都没写过只读属性（写就抛，本用例因此红）', () => {
+    // 判据不是"源码里有没有那串字"（那是文本腿），而是**真跑**：`renderHome` 走两帧
+    // （含 `clearRoot` → `detachLiveBg` → 复用背景那一整条路），只要有人写只读属性，这里当场抛。
+    const root = makeStubEl('div');
+    expect(() => {
+      renderHome(root as unknown as HTMLElement, nav);
+      renderHome(root as unknown as HTMLElement, nav);
+    }, '首页重画路径上有人写了 DOM 只读属性（真机 A 号缺陷就是它）').not.toThrow();
+    expect(queryAllIn(root, '.home-bg').length, '两帧之后背景不在了').toBe(1);
   });
 });

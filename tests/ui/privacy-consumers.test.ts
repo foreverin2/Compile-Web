@@ -266,15 +266,20 @@ const PRIVACY_TEXT = ((): Set<string> => {
  * （⚠️ 这一条是**实测**结论，不是推的：本轮先把它的归类理由写进表里，跑 `privacy-consumers`
  * 当场报"幽灵归类"——表里多一个、候选里没有——才发现它根本不在候选面里。）
  *
- * 另一条纪律不变：它们都**不含**任何绝对句形态（`ABSOLUTE_FORMS` 那条腿与这条独立，
- * 照样盯着）。
+ * ## ★★ 2026-10-01（C）：这张表**清空**了 —— 不是放宽，是判据面搬了家
+ *
+ * 用户要求把「本地数据与隐私」屏的裸中文全部抽进 `src/i18n/`。抽完之后，这一屏的**代码位里
+ * 一条中文字面量都没有**（`src/ui/local-data.ts`）⇒ 上面那两条句子搬到文案表里去了，
+ * 本文件按 `hash64` 索引的归类表自然变成空表。
+ *
+ * ⚠️ **"承诺句只有一个家"这条纪律没有放松，只是家搬了**：
+ *  - 现在那两句住在 `src/i18n/zh.ts`（并排还有英文版）——那是**人工复核过的唯一出处**；
+ *  - 新的手写句子若出现在**任何消费方的代码位里**，仍然会被上面那条"非报告候选 ≠ 空表 ⇒ 报红"抓住
+ *    （见下一条腿：`found` 必须**恰好等于**本表的键集合）；
+ *  - 本屏"代码位零中文"这件事由锚点腿里那条 `cjkLiteralsOf(...) === []` **正面**钉住
+ *    （比原来"候选集合为空"更直接）。
  */
-const CLASSIFIED_NON_REPORT: Readonly<Record<string, string>> = {
-  // 「卡牌制作器：本机保存了 ${info.count} 张卡（含自定背景与 logo 的图片）。」
-  df4ab44e6f62e91c: '卡牌制作器本机数据的读数报告：张数 + 存在哪一个库（用户要求"可见"，必须说清存在哪）',
-  // 「卡牌制作器的本机数据本来就是空的，没有需要清除的东西。」
-  d27c25dc6307d22c: '卡牌制作器清除按钮的空态报告：与既有"还没有"一族同义，只是措辞里带了隐私关键词',
-};
+const CLASSIFIED_NON_REPORT: Readonly<Record<string, string>> = {};
 
 /* ───────────────────────────── 纯判据（可喂合成源码） ───────────────────────────── */
 
@@ -404,9 +409,16 @@ describe('消费方发现的生成式守卫（谁 import 了 privacy.ts 就必�
     const one = SOURCES.find((f) => f.rel === 'src/ui/local-data.ts');
     expect(one, '找不到 local-data.ts（锚点失效）').toBeDefined();
     const lits = stringLiteralsOf(one?.code ?? '');
-    expect(lits, '扫描器没扫到中文标签').toContain('本地数据与隐私');
+    // ★ 2026-10-01（C）：本屏的文案已经**全部抽进 `src/i18n/`**（连屏标题也走 `t()`）⇒
+    //    原来那条"扫到中文标签 `本地数据与隐私`"的锚点改成扫**它的文案键**；
+    //    判据目的（"扫描器真的在扫这个文件"）一字未变。
+    expect(lits, '扫描器没扫到本屏的文案键').toContain('local-data.title');
     expect(lits.some((l) => l.includes('${')), '扫描器没扫到模板串（模板串里的承诺句会漏）').toBe(true);
     expect(lits, '扫描器连 ASCII 管线串都没扫到（扫描面不完整）').toContain('local-data-screen');
+    // ★ 再钉一条"这一屏确实抽干净了"：代码位里**一条中文字面量都不该剩** ——
+    //   它是"逐屏抽取之后不会再有手写承诺句"的**正面证据**（原来靠"候选集合为空"间接表达）。
+    //   ⚠️ 必须用 `stripComments`（本文件的扫描器都先剥注释）：注释里当然还有大量中文说明。
+    //   ⚠️ 直接扫 one.code（读盘时已经 stripComments 过一次），不再二次剥 —— 二次剥会\n    //      把模板串里的 // 当注释切掉，判据反而不可靠。\n    expect(cjkLiteralsOf(one?.code ?? ''), '本屏的代码位里还有中文字面量（抽取漏了？）').toEqual([]);
     // 反向：注释里的中文**不许**进字面量面（`stripComments` 生效）
     expect(
       stringLiteralsOf(stripComments('// 注释里的「本地数据与隐私」不算\nexport const a = 1;')),
@@ -468,11 +480,22 @@ describe('消费方发现的生成式守卫（谁 import 了 privacy.ts 就必�
       return nonReportCandidates(f?.code ?? '').map((text) => ({ rel, text }));
     });
     // 锚点：候选面本身非空（否则"集合相等"可能是两个空集相等 = 废话）
+    // ★ 2026-10-01（C）：`local-data.ts` 抽干净之后，候选面**可能**确实是空的（本仓第一屏全抽完）。
+    //   那种情况下"候选面非空"这条锚点换成一条**更强**的正面证据：这一屏的代码位里
+    //   **一条中文字面量都不剩** —— 有它才说明"空"是"抽干净"而不是"扫描器失效"。
     const candCount = CONSUMERS.flatMap((rel) => {
       const f = SOURCES.find((s) => s.rel === rel);
       return cjkLiteralsOf(f?.code ?? '').filter(isPromiseCandidate);
     }).length;
-    expect(candCount, '一条承诺候选都没有 ⇒ 候选面塌了（关键词/句号判据失效？）').toBeGreaterThan(0);
+    if (candCount === 0) {
+      const dataSrc = SOURCES.find((s) => s.rel === 'src/ui/local-data.ts');
+      expect(
+        cjkLiteralsOf(dataSrc?.code ?? ''),
+        '候选面为空，但本屏的代码位里还有中文字面量 ⇒ 这不是"抽干净"，是扫描器塌了',
+      ).toEqual([]);
+    } else {
+      expect(candCount, '候选面塌了（关键词/句号判据失效？）').toBeGreaterThan(0);
+    }
     const listed = found.map((x) => `${x.rel}：${x.text}`);
     // 两条腿一起看，才是"没有漏网的承诺句"：
     //  ① 每一条候选都必须在归类表里**有理由**（漏一条 = 有人写了新的承诺句没复核）；
@@ -490,7 +513,17 @@ describe('消费方发现的生成式守卫（谁 import 了 privacy.ts 就必�
       'CLASSIFIED_NON_REPORT 与真实的非报告候选集合不一致（多一个 ⇒ 幽灵归类；少一个 ⇒ 上面那条会报）',
     ).toEqual(found.map((x) => hash64(x.text)).sort());
     // 锚点：这两条腿真的跑在非空集合上（否则"全都有理由"是废话）
-    expect(listed.length, '非报告候选一条都没有 ⇒ 上面两条判据在空集上恒真').toBeGreaterThan(0);
+    // ★ 2026-10-01（C）：`local-data.ts` 抽干净之后 `found` **本来就是空的**（表也空）⇒
+    //   "非空"这条锚点换成"抽干净"的**正面证据**：那一屏的代码位里一条中文都没有。
+    if (listed.length === 0) {
+      const dataSrc = SOURCES.find((s) => s.rel === 'src/ui/local-data.ts');
+      expect(
+        cjkLiteralsOf(dataSrc?.code ?? ''),
+        '非报告候选为空，但本屏代码位里还有中文字面量 ⇒ 这不是"抽干净"，是扫描器塌了',
+      ).toEqual([]);
+    } else {
+      expect(listed.length, '上面两条判据跑在空集合上 ⇒ 恒真').toBeGreaterThan(0);
+    }
   });
 
   it('全部消费方零违规（发现器 + 划界 + 绝对句 + 抄写，四条腿一起跑真实树）', () => {

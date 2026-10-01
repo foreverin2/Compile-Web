@@ -6,10 +6,10 @@ import { DEMO_PROTOCOLS, DEMO_CARD_DEFS, protocolImgSrc, cardImgSrc, cardTextPar
 import { LIB_TAG_GROUPS, LIB_ALL_TAG_IDS, filterLibrary } from '../app/library-filter';
 import { openZoom, buildCardTextEl, buildProtocolRatingPanel, bindClickOrDouble } from './render';
 import { changelogElement } from './changelog';
-import { FX_SETTINGS, isMetal6StrobeOn, setMetal6Strobe } from './fx-settings';
+import { FX_SETTINGS, isFxSettingOn } from './fx-settings';
 // ★ 2026-10-01（P0，用户拍板"UI 全量双语"）：设置小窗是**第一个真实消费者** —— 它的每一条
 // 文案都从 `src/i18n/` 取。中文值与这里原来的字面量逐字一致（既有测试零改动）。
-import { LANGS, getLang, saveFailedText, setLang, t, type Lang, type WriteFailure } from '../i18n';
+import { LANGS, getLang, saveFailedSwitchText, saveFailedText, setLang, t, type Lang, type WriteFailure } from '../i18n';
 
 /**
  * 主界面/掷硬币/图鉴/规则图纸 —— 非对局屏（main.ts 导航）。
@@ -139,11 +139,35 @@ export interface CoinNetView {
   reducedMotion?: boolean;
 }
 
-const SET_LABEL: Record<string, string> = {
-  MN01: '1代 基础', AX01: '1代 拓展', MN02: '2代 基础', AX02: '2代 拓展',
-  MN03: '3代 基础', AX03: '3代 拓展',
+/**
+ * 世代标签的**唯一出处**（键表）。
+ *
+ * ★ 2026-10-01（C）：值是**文案键**，屏上由 `setLabel()` 取 —— 原来的中文字面量住在
+ * `src/i18n/zh.ts` 的 `gen.*` 里（值与它逐字相同）。这里的键写成字面量，缺键扫描腿看得见。
+ */
+const SET_LABEL_KEY: Record<string, string> = {
+  MN01: 'gen.1.base', AX01: 'gen.1.extra', MN02: 'gen.2.base', AX02: 'gen.2.extra',
+  MN03: 'gen.3.base', AX03: 'gen.3.extra',
 };
-void SET_LABEL; // 图鉴改显示座右铭后不再直接使用（保留作 chip/调试标签源）
+
+/**
+ * 世代标签（键表 → 当前语言的文案）。
+ *
+ * ⚠️ 与 `fxLabelText()` / `ruleTitleText()` 同一条纪律：**键必须在源码里以字面量出现**
+ * （下面那个 `switch` 就是落点），否则缺键扫描腿看不到它们。
+ */
+function setLabel(set: string): string {
+  switch (SET_LABEL_KEY[set]) {
+    case 'gen.1.base': return t('gen.1.base');
+    case 'gen.1.extra': return t('gen.1.extra');
+    case 'gen.2.base': return t('gen.2.base');
+    case 'gen.2.extra': return t('gen.2.extra');
+    case 'gen.3.base': return t('gen.3.base');
+    case 'gen.3.extra': return t('gen.3.extra');
+    default: return set;
+  }
+}
+void SET_LABEL_KEY; // 图鉴改显示座右铭后不再直接使用（保留作 chip/调试标签源）
 
 /**
  * ★ 2026-09-30（用户要求）：模式页那句"建议 65% 游玩"。
@@ -152,9 +176,10 @@ void SET_LABEL; // 图鉴改显示座右铭后不再直接使用（保留作 chi
  * 第一版我顺手实现了"Ctrl + 滚轮改整页缩放"，用户实测**特效层会错位** —— 那些特效的坐标是按
  * 100% 布局算出来的，整页一缩放就对不上；而且用户的原话是"我只是让你加个建议上去就可以了"。
  * ⇒ 那套实现已整份撤掉（删了 `src/ui/page-zoom.ts` 与它的测试，`main.ts` 的 `installPageZoom()` 也没了）。
+ *
+ * ★ 2026-10-01（C）：文案本身搬进两张表（键 `mode.zoom-hint`），**调用点直接把键写成字面量**
+ * —— 原来那个 `PLAY_SIZE_HINT_KEY` 常量会让缺键扫描腿看不见它（"不许有动态键"那条腿当场红）。
  */
-const PLAY_SIZE_HINT = '建议把画面调到 65% 左右游玩：用浏览器自带的缩放（Ctrl + 滚轮，或 Ctrl 和 +/−）调整。';
-
 function el(tag: string, cls: string, text?: string): HTMLElement {
   const node = document.createElement(tag);
   node.className = cls;
@@ -183,40 +208,46 @@ function showToast(msg: string): void {
 /**
  * 清空根容器（各屏互斥）；退出「整屏主页」模式。
  *
- * ## ★ 2026-10-01（P0 线上验收 D2）：这里有两处**为复用背景而做**的改动
+ * ## ★ 2026-10-01（真机 A 号缺陷）：**绝对不许去写 DOM 的只读属性**
  *
- * 1. **不再把 `liveBgHost` 置空**。原来那句 `liveBgHost = null;` 的意图是"离开首页之后别再
- *    照着一个游离的背景重建"，但它同时抹掉了"上一帧那一份还在、可以复用"这件事 ⇒
- *    每次 `renderHome` 都重建背景（切语言时表现为：顺序哈希变、动画 `currentTime` 归零）。
- *    它想防的那件事由 `takeReusableBg()` 的 `parentElement !== null` 那一档接管。
- * 2. **清空时把整棵子树解绑**（`unlinkTree`）。这不是画蛇添足：本屏的结构是
- *    `root(#app) → .home-screen → .home-bg`，而 `root.textContent = ''` 只解开**直接子节点**
- *    （`.home-screen`）的指针 —— `.home-bg` 的 `parentElement` 仍然指着那个已经被丢弃的
- *    `.home-screen`。于是 `takeReusableBg()` 会看到"背景还挂在别处" ⇒ 判成不可复用 ⇒
- *    **在真浏览器里也一样会重建**（D2 会原样复发）。
- *    ⚠️ 本仓的 DOM 桩把 `textContent = ''` 实现成"只清一层"（与浏览器不同）⇒ 递归解绑同时让
- *    两侧语义一致，D2 的判据才能在桩上真的跑到。
+ * 上一版这里在清空之前先调 `unlinkTree()` —— 它递归地对每个子节点做
+ * `(child as …).parentElement = null`。**`parentElement` 在真浏览器里是只读 getter**
+ * （`Node.parentElement`），赋值当场抛
+ * `Cannot set property parentElement of #<Node> which has only a getter`：
+ *
+ *  - 用户操作路径"切语言 → 进「自定义协议与卡牌」→ 点返回首页"**每次必炸**；
+ *  - 而且它还被写盘失败那条提示捎带出去（`Technical detail: Cannot set property parentElement…`）。
+ *
+ * 当时它"单测全绿"的原因写在 `tests/ui/net-dom-stub.ts` 里：**桩把 `parentElement` 实现成普通可写字段**。
+ * ⇒ 这一轮同时做了两件事：
+ *  1. 本文件改成**显式记账**（`detachLiveBg()` 把"这份背景已经摘下来了"记进模块状态），
+ *     `unlinkTree()` 整个删掉；
+ *  2. 桩把 `parentElement` / `ownerDocument` 改成**真 DOM 语义的只读访问器**（写它当场抛），
+ *     于是这类缺陷在单测里就会现形（那一处加固另有一组腿，见 `tests/ui/home-bg-reuse.test.ts`）。
  */
 function clearRoot(root: HTMLElement): void {
-  unlinkTree(root);
+  // ★ 先把"上一帧那份背景"摘下来记账（本次重画可能还要复用它）——
+  //   `parentElement` 只读，所以只能靠**模块状态**记住这件事，不能靠反查父节点。
+  detachLiveBg(root);
   root.textContent = '';
   root.classList.remove('draft-exit', 'board-enter', 'no-anim', 'screen-home');
 }
 
 /**
- * 把一棵子树的 `parentElement` 全部清空（**不含** `node` 自己）。
+ * 把当前挂在 `root` 里的那份 `.home-bg` 摘下来，并记成"已摘下、可复用"。
  *
- * ⚠️ 只碰这一个字段，且只用于"马上要被丢掉的那棵树"：它是本仓 DOM 桩的语义（桩的
- * `textContent = ''` 与 `remove()` 都写这个字段），在真浏览器里是**冗余但无害**的
- * （`textContent = ''` 已经断开整棵子树）。
- * ⚠️ 写成先递归、后清自己：顺序反过来的话，递归边走边丢指针会漏掉节点。
- * 深度是屏的 DOM 深度（十几层），没有栈风险。
+ * ⚠️ 用 `querySelector` + `remove()`（都是合法的 DOM 操作，不写任何只读属性）；
+ * 找不到（不是首页 / 不是这个 root）就**把记账清空** —— 那种情况下没有可复用的背景。
  */
-function unlinkTree(node: HTMLElement): void {
-  for (const child of Array.from(node.children)) {
-    unlinkTree(child as HTMLElement);
-    (child as { parentElement: unknown }).parentElement = null;
+function detachLiveBg(root: HTMLElement): void {
+  const bg = liveBgHost;
+  if (bg === null || liveBgRoot !== root) {
+    liveBgDetached = false;
+    return;
   }
+  // `remove()` 在"本来就不在文档里"时是 no-op ⇒ 不需要先判 `parentElement`（也不写它）。
+  bg.remove();
+  liveBgDetached = true;
 }
 
 /* =====================================================================
@@ -317,6 +348,16 @@ let liveBgHost: HTMLElement | null = null;
  * 永远走"不复用"那一支（假绿）。记 root 这一枚引用既简单又**能在桩上真跑**。
  */
 let liveBgRoot: HTMLElement | null = null;
+/**
+ * ★ 2026-10-01（真机 A 号缺陷）：「上一帧那份背景**已经被 `clearRoot` 摘下来了**」。
+ *
+ * 这是**显式记账**，不是从 DOM 反查出来的：上一版靠"子节点的 `parentElement` 是不是 null"
+ * 判断能否复用，于是为了"把子节点解绑"去写了一个**只读属性** —— 真浏览器里当场抛异常
+ * （见 `clearRoot` 的注释）。现在这条状态只由 `detachLiveBg()` 与 `registerBgResize()` 维护：
+ *  - `clearRoot` ⇒ `detachLiveBg()` ⇒ `true`（背景已摘、可复用）；
+ *  - `registerBgResize()`（新背景挂上去之后）⇒ `false`（它的父节点就是首页，别重复 remove）。
+ */
+let liveBgDetached = false;
 let bgResizeTimer: number | null = null;
 
 /**
@@ -348,21 +389,14 @@ let bgResizeTimer: number | null = null;
  * 只要它没被 GC、也没有被重新创建，浏览器会**保留它上面的 CSS 动画状态**（`currentTime` 继续走）。
  * 而 `fillBg` 里那句 `innerHTML`/`insertBefore` 造的是**新元素**，那才是"从 0 开始"的来源。
  *
- * ⚠️ 判据是"上一帧是我把它摘下来的，而且这一次还是同一个根"：
- * `live.parentElement === null`（`clearRoot(root)` 刚把上一棵清掉）且 `liveBgRoot === root`。
- * 不用 `isConnected`（那是另一个语义，且本仓的 DOM 桩**默认没有它** —— `undefined` 会让这条
- * 判据在桩上恒假，D2 的行为腿就变成假绿）；也不用 `contains`（桩里恒 false，同样问题）。
- *
- * ⚠️ `clearRoot()` **不再把 `liveBgHost` 置空**（2026-10-01 D2 改）：那一句是"离开首页就别再
- * 重建背景"的旧保险，但它同时把"可以复用"这件事一并抹掉了 —— 于是切语言时必然重建。
- * 它想防的那件事（离开首页之后照着一个游离的背景重建）由 `parentElement !== null` 这一档接管：
- * 那个背景还挂在别处时**照样不复用**，语义更准。
+ * ⚠️ 判据是**三个模块状态**（`liveBgDetached` / `liveBgRoot` / `liveBgHost`），
+ * 一个 DOM 属性都不写、也不反查父节点 —— 这就是 A 号缺陷的修法。
  */
 function takeReusableBg(root: HTMLElement): HTMLElement | null {
   const live = liveBgHost;
-  if (live === null || live.parentElement !== null) return null;
+  if (live === null || !liveBgDetached) return null;
   if (liveBgRoot !== root) return null; // 换了根：跨 root 搬背景没有意义，还会把旧根掏空
-  live.remove();
+  liveBgDetached = false; // 它马上要被挂回首页 ⇒ 不再是"已摘"状态
   return live;
 }
 
@@ -385,6 +419,8 @@ function buildHomeBg(root: HTMLElement): HTMLElement {
 function registerBgResize(root: HTMLElement, bg: HTMLElement): void {
   liveBgHost = bg;
   liveBgRoot = root;
+  // ★ A 号缺陷：这份背景**刚刚挂上首页**（调用点紧接着 `screen.appendChild(bg)`）⇒ 记账为"未摘"。
+  liveBgDetached = false;
   if (bgResizeTimer !== null) return; // 监听只挂一次
   window.addEventListener('resize', () => {
     if (bgResizeTimer !== null) window.clearTimeout(bgResizeTimer);
@@ -401,24 +437,24 @@ export function renderHome(root: HTMLElement, nav: HomeNav): void {
   root.classList.add('screen-home'); // #app 去内边距 → 主页背景铺满整个可视区
   const screen = el('div', 'home-screen');
 
-  // ★ 2026-10-01（D2）：`clearRoot(root)` **之后**才找可复用的背景 —— 摘下来的是上一帧那一棵里的
-  // 那一份，此时它的 `parentElement` 已经被清空（见 `takeReusableBg` 的判据）。
+  // ★ 2026-10-01（D2 + A）：`clearRoot(root)` 已经把上一帧那份背景摘下来并记了账
+  //   （`detachLiveBg`），这里只是把它取回来复用。
   const bg = buildHomeBg(root);
   registerBgResize(root, bg);
   screen.appendChild(bg);
 
   const menu = el('div', 'home-menu');
   menu.appendChild(el('div', 'home-logo', 'Compile'));
-  menu.appendChild(el('div', 'home-sub', '译世界 · 非官方网页版'));
+  menu.appendChild(el('div', 'home-sub', t('home.sub')));
   const btns = el('div', 'home-menu-buttons');
-  btns.appendChild(button('btn home-btn home-btn-primary', '开始游戏', nav.startGame));
-  btns.appendChild(button('btn home-btn', '查看协议及其所属卡牌', nav.openLibrary));
-  btns.appendChild(button('btn home-btn', '新手教程', () => showToast('新手教程：待开发')));
-  btns.appendChild(button('btn home-btn', '查看一/二/三代规则图纸', nav.openRules));
+  btns.appendChild(button('btn home-btn home-btn-primary', t('home.start'), nav.startGame));
+  btns.appendChild(button('btn home-btn', t('home.library'), nav.openLibrary));
+  btns.appendChild(button('btn home-btn', t('home.tutorial'), () => showToast(t('toast.tutorial'))));
+  btns.appendChild(button('btn home-btn', t('home.rules'), nav.openRules));
   // G3（Task 4）：本地数据与隐私入口 —— 授权状态、清除本机数据、档案导入导出（Task 7 落地屏）
-  btns.appendChild(button('btn home-btn', '本地数据与隐私', nav.openLocalData));
+  btns.appendChild(button('btn home-btn', t('home.local-data'), nav.openLocalData));
   // ★ 2026-09-30（用户要求）：设置入口（现在只有金属6 频闪特效一个开关）
-  btns.appendChild(button('btn home-btn', '设置', nav.openSettings));
+  btns.appendChild(button('btn home-btn', t('settings.title'), nav.openSettings));
   /**
    * ★ 2026-10-01（用户要求）：**卡牌制作器入口** —— 「自定义协议与卡牌」。
    *
@@ -429,7 +465,7 @@ export function renderHome(root: HTMLElement, nav: HomeNav): void {
    * 右上角「更新日志」那两个绝对定位的角标打架）。屏本身在 `src/ui/cardmaker/page.ts`，
    * 本文件只负责"谁开"—— 动作走 `nav.openCardmaker`（宿主接缝），与 `openLocalData` 同款。
    */
-  btns.appendChild(button('btn home-btn', '自定义协议与卡牌', nav.openCardmaker));
+  btns.appendChild(button('btn home-btn', t('home.cardmaker'), nav.openCardmaker));
   menu.appendChild(btns);
   screen.appendChild(menu);
 
@@ -437,7 +473,7 @@ export function renderHome(root: HTMLElement, nav: HomeNav): void {
     el(
       'footer',
       'home-footer',
-      'Compile 桌游由原作者 MICHAEL YANG 创作 · 本网页由「我吃吃吃吃」使用 DSH 辅助开发'
+      t('home.footer')
     )
   );
 
@@ -448,7 +484,7 @@ export function renderHome(root: HTMLElement, nav: HomeNav): void {
    * 格式按用户给的：日期 → 每条"问题 / 已修复，解释"，相邻两天之间一条横线，最新在最上面。
    */
   const logWrap = el('div', 'changelog-wrap');
-  logWrap.appendChild(button('btn changelog-open', '更新日志', () => {
+  logWrap.appendChild(button('btn changelog-open', t('common.changelog'), () => {
     logWrap.classList.toggle('changelog-open');
   }));
   logWrap.appendChild(changelogElement({ onClose: () => { logWrap.classList.remove('changelog-open'); } }));
@@ -465,7 +501,7 @@ export function renderHome(root: HTMLElement, nav: HomeNav): void {
    * 本文件不 import 那一屏 —— 于是"谁开、开哪一层"这件事在 `main.ts` 一处看得全。
    */
   const feedbackWrap = el('div', 'feedback-wrap');
-  feedbackWrap.appendChild(button('btn feedback-open', '反馈', () => { nav.openFeedback(); }));
+  feedbackWrap.appendChild(button('btn feedback-open', t('common.feedback'), () => { nav.openFeedback(); }));
   screen.appendChild(feedbackWrap);
 
   root.appendChild(screen);
@@ -521,7 +557,7 @@ export interface ModeSelectNav {
 export function renderModeSelect(root: HTMLElement, nav: ModeSelectNav): void {
   clearRoot(root);
   const screen = el('div', 'mode-screen');
-  screen.appendChild(el('h1', 'mode-title', '选择游戏模式'));
+  screen.appendChild(el('h1', 'mode-title', t('mode.title')));
 
   const list = el('div', 'mode-list');
   const mkMode = (label: string, desc: string, enabled: boolean, onClick: () => void): HTMLElement => {
@@ -535,7 +571,7 @@ export function renderModeSelect(root: HTMLElement, nav: ModeSelectNav): void {
     return card;
   };
   list.appendChild(
-    mkMode('热坐（双人）', '两名玩家轮流在同一设备上对战（当前可用）', true, () => {
+    mkMode(t('mode.hotseat.name'), t('mode.hotseat.desc'), true, () => {
       nav.startHotseat(banBox.checked, randomBox.checked);
     })
   );
@@ -548,9 +584,8 @@ export function renderModeSelect(root: HTMLElement, nav: ModeSelectNav): void {
   //   **第二份**说明。现在只说**这个卡是干什么的**（界面标签），说明一律在大厅里**引用**唯一出处渲染。
   list.appendChild(
     mkMode(
-      '联机对战（两台设备）',
-      '与另一台设备开一局：建房生成邀请码，或粘贴对方发来的邀请码。'
-        + '连接设置与各项说明都在大厅里。',
+      t('mode.online.name'),
+      t('mode.online.desc'),
       true,
       () => {
         nav.startNetLobby();
@@ -558,10 +593,10 @@ export function renderModeSelect(root: HTMLElement, nav: ModeSelectNav): void {
     )
   );
   list.appendChild(
-    mkMode('单人模式', '对战 AI 对手', false, () => showToast('单人模式：开发中'))
+    mkMode(t('mode.solo.name'), t('mode.solo.desc'), false, () => showToast(t('toast.solo')))
   );
   list.appendChild(
-    mkMode('三人模式', '三人同台对战', false, () => showToast('三人模式：开发中'))
+    mkMode(t('mode.trio.name'), t('mode.trio.desc'), false, () => showToast(t('toast.trio')))
   );
   screen.appendChild(list);
 
@@ -572,7 +607,7 @@ export function renderModeSelect(root: HTMLElement, nav: ModeSelectNav): void {
    * 上去就可以了" ⇒ 那套实现整份撤掉（见 `PLAY_SIZE_HINT` 的说明）。这里只渲染这一句，
    * 不挂任何监听器；文案的唯一出处就是上面那个常量。
    */
-  screen.appendChild(el('div', 'zoom-hint', PLAY_SIZE_HINT));
+  screen.appendChild(el('div', 'zoom-hint', t('mode.zoom-hint')));
 
   // 两个开关（默认关闭）+ 圆形问号帮助
   const toggles = el('div', 'mode-toggles');
@@ -592,12 +627,12 @@ export function renderModeSelect(root: HTMLElement, nav: ModeSelectNav): void {
     return { row, box };
   };
   const banToggle = mkToggle(
-    '禁用模式',
-    '开局可禁用部分协议：先掷硬币定先手，后手先禁 2 → 先手选 1 禁 1 → 后手选 2 禁 1 → 先手选 2 禁 2 → 后手选 1（选 6 禁 6）。被禁协议本局不可选，世代筛选仍可用。'
+    t('mode.ban'),
+    t('mode.ban.tip')
   );
   const randomToggle = mkToggle(
-    '随机池模式',
-    '开局随机从全部协议中抽取 12 套作为本局可选池（不再全量可选）。世代筛选仍可用；若同时开启禁用模式，则在 12 套内按禁用模式规则选/禁。'
+    t('mode.random'),
+    t('mode.random.tip')
   );
   const banBox = banToggle.box;
   const randomBox = randomToggle.box;
@@ -610,7 +645,7 @@ export function renderModeSelect(root: HTMLElement, nav: ModeSelectNav): void {
    * 也就是说它是个重复入口；而它排在整页最下面，看着像"对所有模式生效"，玩家会以为联机也走它。
    * ⇒ 去掉这个按钮：开局入口就是那张热座卡（它还带着上面两个开关的当前状态）。
    */
-  actions.appendChild(button('btn', '返回主页面', nav.backHome));
+  actions.appendChild(button('btn', t('common.back-home'), nav.backHome));
   /**
    * G5/T41（用户 2026-09-27 第 1 条）：**设备体检** —— 模式选择页最下方的一个跳转按钮。
    *
@@ -619,7 +654,7 @@ export function renderModeSelect(root: HTMLElement, nav: ModeSelectNav): void {
    * 放在 `mode-actions` 这一区（与「返回主页面」同一行），因为它是"离开这一页"的动作之一，
    * 不占模式卡的位置；用的是既有 `btn` 类，**不动 styles.css**（红线）。
    */
-  actions.appendChild(button('btn mode-probe-btn', '设备体检 / 网络自检', nav.openDeviceCheck));
+  actions.appendChild(button('btn mode-probe-btn', t('mode.device-check'), nav.openDeviceCheck));
   screen.appendChild(actions);
 
   root.appendChild(screen);
@@ -630,14 +665,25 @@ export function renderModeSelect(root: HTMLElement, nav: ModeSelectNav): void {
  * 币面资源：public/assets/coin/coin-1.jpg（素材 1344×560 的左半）、coin-2.jpg（右半）。
  * 「左=正面、右=反面」为位置假设 —— 待用户在 5173 目检确认真实正/反归属后可互换。 
  * ===================================================================== */
-const COIN_FACES: ReadonlyArray<{ side: 1 | 2; name: string; src: string }> = [
-  { side: 1, name: '正面', src: '/assets/coin/coin-1.jpg' },
-  { side: 2, name: '反面', src: '/assets/coin/coin-2.jpg' },
+/**
+ * 币面定义。
+ *
+ * ★ 2026-10-01（C）：**不再自带 `name`** —— 币面名是玩家可见文案，现在由 `coinFaceName()`
+ * 从两张表取（`common.coin.heads` / `common.coin.tails`）。原来那个 `name: '正面'` 字段会
+ * 绕开 i18n 直接进 `img.alt` 与按钮文案（正是"首页英文、里面还是中文"那一类漏网）。
+ */
+const COIN_FACES: ReadonlyArray<{ side: 1 | 2; src: string }> = [
+  { side: 1, src: '/assets/coin/coin-1.jpg' },
+  { side: 2, src: '/assets/coin/coin-2.jpg' },
 ];
 
-/** 币面名（`COIN_FACES` 的**唯一**取值口 —— 屏上几条文案都从它取，不各写一份 find） */
+/**
+ * 币面名（`COIN_FACES` 的**唯一**取值口 —— 屏上几条文案都从它取，不各写一份 find）。
+ *
+ * ⚠️ 名字来自 `src/i18n/` 的两张表（键写成字面量，缺键扫描腿盯着）。
+ */
 function coinFaceName(side: CoinSide): string {
-  return COIN_FACES.find((c) => c.side === side)!.name;
+  return side === 1 ? t('common.coin.heads') : t('common.coin.tails');
 }
 
 /** 币面图（同上：`COIN_FACES` 的唯一取值口） */
@@ -880,7 +926,7 @@ function renderCoinNet(root: HTMLElement, nav: CoinNav, net: CoinNetView): void 
    * "没有结果行"与"结果行已经过去"分不开。属性不占屏、不参与任何判定。
    */
   screen.setAttribute('data-coin-stage', net.coinPhase ?? '');
-  screen.appendChild(button('btn coin-back-btn', '← 返回游戏模式选择', nav.backHome));
+  screen.appendChild(button('btn coin-back-btn', t('common.back-mode'), nav.backHome));
 
   const isCaller = net.role === 'caller';
   /**
@@ -905,16 +951,14 @@ function renderCoinNet(root: HTMLElement, nav: CoinNav, net: CoinNetView): void 
   /** "谁叫了哪一面"整句（读数为空时是 `null` ⇒ 这一格不出现这句话） */
   const callLine: string | null = chosenFace === null
     ? null
-    : `玩家 ${callerSeat + 1} 叫了「${coinFaceName(chosenFace)}」`;
+    : t('coin.net.called', { n: String(callerSeat + 1), face: coinFaceName(chosenFace) });
   // ★ 标题必须说清"由加入方选面"（热座那句「玩家一掷硬币决定先后手」在联机下不成立）
-  screen.appendChild(el('h1', 'coin-title', isCaller ? '加入方选硬币面定先后手（联机）' : '等加入方选硬币面（联机）'));
+  screen.appendChild(el('h1', 'coin-title', isCaller ? t('coin.net.title.caller') : t('coin.net.title.waiter')));
   screen.appendChild(
     el(
       'p',
       'coin-rule',
-      isCaller
-        ? '由加入方选硬币的正/反面。选中的面与掷出的面一致 → 选中方先选协议；否则另一方先选协议。'
-        : '由加入方选硬币的正/反面。对方选完之后，双方都看得到掷出的那一面。'
+      isCaller ? t('coin.net.rule.caller') : t('coin.net.rule.waiter')
     )
   );
   /**
@@ -930,12 +974,12 @@ function renderCoinNet(root: HTMLElement, nav: CoinNav, net: CoinNetView): void 
       'p',
       'coin-rule coin-rule-2',
       settled && net.landed !== null
-        ? `掷出${coinFaceName(net.landed)}。`
+        ? t('coin.net.landed', { face: coinFaceName(net.landed) })
         : callLine !== null
-          ? (tossing ? `${callLine} —— 正在抛硬币…` : `${callLine}，等掷硬币。`)
+          ? (tossing ? t('coin.net.tossing', { call: callLine }) : t('coin.net.await-toss', { call: callLine }))
           : isCaller
-            ? '请选择硬币的正/反面。'
-            : '等对方叫面（对方按下正/反之后，掷硬币才会继续）。'
+            ? t('coin.net.pick')
+            : t('coin.net.waiting')
     )
   );
 
@@ -984,7 +1028,7 @@ function renderCoinNet(root: HTMLElement, nav: CoinNav, net: CoinNetView): void 
    */
   const landedAlready = net.landed !== null;
   COIN_FACES.forEach((face) => {
-    const chip = el('button', 'coin-face-chip', face.name) as HTMLButtonElement;
+    const chip = el('button', 'coin-face-chip', coinFaceName(face.side)) as HTMLButtonElement;
     chip.type = 'button';
     chip.disabled = !isCaller || landedAlready;
     // 叫出去的那一面在落点之前就选中（玩家点完立刻看得到自己叫了什么）
@@ -992,7 +1036,7 @@ function renderCoinNet(root: HTMLElement, nav: CoinNav, net: CoinNetView): void 
     chip.addEventListener('click', () => {
       // ① 不是叫面的一方（等待方）：芯片本来就禁用，这里再兜一层并说明
       if (!isCaller) {
-        sayWhyNot('这一局由对方叫面（你这一侧没有可点的东西）——等对方按下正/反。');
+        sayWhyNot(t('coin.net.other-calls'));
         return;
       }
       // ② 落点已经到手 ⇒ 叫面这件事已经发生过，再点不许改（相位机那边也已经走过去了）
@@ -1006,7 +1050,7 @@ function renderCoinNet(root: HTMLElement, nav: CoinNav, net: CoinNetView): void 
        * 会发生的（禁用态要等重画）。不说的话，玩家看到的就是"我明明点了，屏上没反应"。
        */
       if (net.chosen !== null) {
-        sayWhyNot(`你已经叫过「${coinFaceName(net.chosen)}」了 —— 正在等对端揭示，不用重复点击。`);
+        sayWhyNot(t('coin.net.already-called', { face: coinFaceName(net.chosen) }));
         return;
       }
       // 立刻把"我按了哪一面"画出来（下一次整帧重画之前也要看得见）
@@ -1052,8 +1096,12 @@ function renderCoinNet(root: HTMLElement, nav: CoinNav, net: CoinNetView): void 
       el(
         'div',
         'coin-result-text',
-        `${callLine !== null ? `${callLine} —— ` : ''}掷出 ${coinFaceName(landed)} —— `
-        + `玩家 ${winner + 1} 先选协议 · 玩家 ${2 - winner} 先出牌`
+        t('coin.result', {
+          call: callLine !== null ? t('coin.result.call-prefix', { call: callLine }) : '',
+          face: coinFaceName(landed),
+          n: String(winner + 1),
+          m: String(2 - winner),
+        })
       )
     );
     /**
@@ -1070,16 +1118,16 @@ function renderCoinNet(root: HTMLElement, nav: CoinNav, net: CoinNetView): void 
 function renderCoinHotseat(root: HTMLElement, nav: CoinNav): void {
   const screen = el('div', 'coin-screen');
   // 返回按钮：左上角（回到游戏模式选择）
-  screen.appendChild(button('btn coin-back-btn', '← 返回游戏模式选择', nav.backHome));
-  screen.appendChild(el('h1', 'coin-title', '玩家一掷硬币决定先后手')); // 修改提示词 7：标题文案
+  screen.appendChild(button('btn coin-back-btn', t('common.back-mode'), nav.backHome));
+  screen.appendChild(el('h1', 'coin-title', t('coin.title'))); // 修改提示词 7：标题文案
   screen.appendChild(
     el(
       'p',
       'coin-rule',
-      '玩家一先选择硬币正/反面，再掷硬币：掷出的面与玩家一的选择一致 → 玩家一先选协议；否则玩家二先选协议。'
+      t('coin.rule')
     )
   );
-  screen.appendChild(el('p', 'coin-rule coin-rule-2', '后选择协议的一方在对局中先出牌。'));
+  screen.appendChild(el('p', 'coin-rule coin-rule-2', t('coin.second')));
   /**
    * ★ 种子是热座那条路的**必填**读数：缺了它是用法错误（联机分支不走这里）。
    * 不给"拿空串当种子"的静默降级 —— 那会让硬币结果变成一条与调用方无关的常量。
@@ -1098,7 +1146,7 @@ function renderCoinHotseat(root: HTMLElement, nav: CoinNav): void {
   const disc = el('div', 'coin-disc-big');
   const img = document.createElement('img');
   img.src = COIN_FACES[0].src;
-  img.alt = COIN_FACES[0].name;
+  img.alt = coinFaceName(COIN_FACES[0].side);
   disc.appendChild(img);
   stage.appendChild(disc);
   screen.appendChild(stage);
@@ -1107,7 +1155,7 @@ function renderCoinHotseat(root: HTMLElement, nav: CoinNav): void {
   const pickRow = el('div', 'coin-pick-row');
   const pickEls: HTMLElement[] = [];
   COIN_FACES.forEach((face) => {
-    const chip = el('button', 'coin-face-chip', face.name);
+    const chip = el('button', 'coin-face-chip', coinFaceName(face.side));
     (chip as HTMLButtonElement).type = 'button';
     chip.addEventListener('click', () => {
       if (flipping) return;
@@ -1125,10 +1173,10 @@ function renderCoinHotseat(root: HTMLElement, nav: CoinNav): void {
   screen.appendChild(result);
 
   const actions = el('div', 'coin-actions');
-  const flipBtn = button('btn coin-flip-btn', '掷硬币', () => {
+  const flipBtn = button('btn coin-flip-btn', t('coin.toss'), () => {
     if (flipping) return;
     if (chosen === null) {
-      showToast('请先选择 正面 或 反面');
+      showToast(t('coin.need-pick'));
       return;
     }
     flipping = true;
@@ -1154,17 +1202,17 @@ function renderCoinHotseat(root: HTMLElement, nav: CoinNav): void {
       flipping = false;
       disc.classList.add('settled');
       img.src = COIN_FACES.find((c) => c.side === landed)!.src;
-      const faceName = COIN_FACES.find((c) => c.side === landed)!.name;
+      const faceName = coinFaceName(landed);
       result.style.display = '';
       result.textContent = '';
       result.appendChild(
         el(
           'div',
           'coin-result-text',
-          `掷出 ${faceName} —— 玩家 ${winner + 1} 先选协议 · 玩家 ${2 - winner} 先出牌`
+          t('coin.result', { face: faceName, n: String(winner + 1), m: String(2 - winner) })
         )
       );
-      result.appendChild(button('btn coin-begin-btn', '开始对局', () => nav.beginGame(winner)));
+      result.appendChild(button('btn coin-begin-btn', t('coin.begin'), () => nav.beginGame(winner)));
     }, COIN_TOSS_MS);
   });
   actions.appendChild(flipBtn);
@@ -1241,6 +1289,17 @@ export interface SettingsOverlayNav {
    *  - 宿主抛错也当失败处理（本函数兜 `try/catch`，不让切语言把小窗炸掉）。
    */
   readonly onLangChange: (lang: Lang) => LangChangeOutcome;
+  /**
+   * 用户拨动了某一个**特效开关**（`id` = `FxSettingDef.id`）。
+   *
+   * ★ 2026-10-01（用户要求"设置里的选项也要持久化"）：与 `onLangChange` **同一套形状与语义**
+   * ——宿主负责落盘（`src/app/local-store.ts` 的 `writeFxSettings`，与昵称/语言同一条路）+
+   * 需要时重画；本函数在调它**之前**已经把内存态换好（`setFxSetting`）并把说明就地改写了。
+   *
+   * 返回值同样是 `LangChangeOutcome`（成功 / 没保存上 + 结构化原因）⇒ 失败时的提示复用
+   * `saveFailedText()`，**不新造第二套文案**。
+   */
+  readonly onFxChange: (id: string, on: boolean) => LangChangeOutcome;
 }
 
 /**
@@ -1437,7 +1496,7 @@ export function settingsOverlayElement(nav: SettingsOverlayNav): HTMLElement {
     const box = document.createElement('input');
     box.type = 'checkbox';
     box.className = 'mode-check';
-    box.checked = isMetal6StrobeOn();
+    box.checked = isFxSettingOn(def.id);
     box.dataset.fxSetting = def.id;
     // 开关说明（每行一条）：勾选后就地改写它，把当前状态写在屏上（不重画整屏）
     const entry = {
@@ -1448,10 +1507,26 @@ export function settingsOverlayElement(nav: SettingsOverlayNav): HTMLElement {
       touched: false,
     };
     entry.note.textContent = fxNoteText(def.id, box.checked, entry.touched);
+    /**
+     * ★ 2026-10-01（用户要求"设置里的选项也要持久化"）：**勾了就走宿主落盘**，
+     * 与语言那条路完全同构 —— 本函数不碰存储（它只造元素），只在失败时把话写在屏上。
+     *
+     * 三种情形照旧分开说（与语言那一项同一套 `saveFailedText`）：
+     *  - `{ ok: true }`：真落盘了 ⇒ 清掉提示位；
+     *  - `{ ok: false, … }`：本次会话仍然生效（内存态已经改了），但刷新会回到上次保存的 ⇒ 如实提示；
+     *  - 宿主抛错也当失败（本函数兜 `try/catch`，不让一个开关把小窗炸掉）。
+     */
     box.addEventListener('change', () => {
-      if (def.id === 'metal6-strobe') setMetal6Strobe(box.checked);
       entry.touched = true;
       entry.note.textContent = fxNoteText(def.id, box.checked, entry.touched);
+      langStatus.textContent = ''; // 先清掉上一次的提示（这一次还没结论）
+      let out: LangChangeOutcome;
+      try {
+        out = nav.onFxChange(def.id, box.checked);
+      } catch (e) {
+        out = langChangeThrew(e instanceof Error ? e.message : String(e));
+      }
+      if (!out.ok) langStatus.textContent = saveFailedSwitchText(out);
     });
     row.appendChild(box);
     row.appendChild(entry.label);
@@ -1508,17 +1583,17 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
   clearRoot(root);
   const screen = el('div', 'library-screen');
   const head = el('div', 'subpage-head');
-  head.appendChild(el('h1', 'subpage-title', '协议与卡牌图鉴'));
+  head.appendChild(el('h1', 'subpage-title', t('library.title')));
   head.appendChild(
-    el('div', 'subpage-sub', `${DEMO_PROTOCOLS.length} 套协议 × 6 张指令卡（按代筛选 · 悬停实时预览，点击放大详情）`)
+    el('div', 'subpage-sub', t('library.sub', { n: String(DEMO_PROTOCOLS.length) }))
   );
-  head.appendChild(button('btn', '← 返回主页面', back));
+  head.appendChild(button('btn', t('common.back-home'), back));
   screen.appendChild(head);
 
   // 按代筛选（2026-09-06 用户需求：同协议选择页的世代 chips）
   const LIB_GROUP_LABELS: ReadonlyArray<readonly [string, string]> = [
-    ['MN01', '1代 基础'], ['AX01', '1代 拓展'], ['MN02', '2代 基础'], ['AX02', '2代 拓展'],
-    ['MN03', '3代 基础'], ['AX03', '3代 拓展'],
+    ['MN01', t('gen.1.base')], ['AX01', t('gen.1.extra')], ['MN02', t('gen.2.base')], ['AX02', t('gen.2.extra')],
+    ['MN03', t('gen.3.base')], ['AX03', t('gen.3.extra')],
   ];
   const libEnabled = new Set(LIB_GROUP_LABELS.map(([g]) => g));
   const filter = el('div', 'lib-filter');
@@ -1527,7 +1602,11 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
       const g = chip.dataset.group!;
       const on = libEnabled.has(g);
       chip.classList.toggle('on', on);
-      chip.title = `${chip.textContent}（共 ${DEMO_PROTOCOLS.filter((p) => p.set === g).length} 套）· ${on ? '点击隐藏' : '点击显示'}`;
+      chip.title = t('gen.count-suffix', {
+        name: String(chip.textContent ?? ''),
+        n: String(DEMO_PROTOCOLS.filter((p) => p.set === g).length),
+        action: on ? t('gen.hide') : t('gen.show'),
+      });
     }
   };
   for (const [group, label] of LIB_GROUP_LABELS) {
@@ -1555,7 +1634,7 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
   pText.style.display = 'none';
   pMain.appendChild(pImg);
   pMain.appendChild(pText);
-  const pHint = el('div', 'library-preview-hint', '把鼠标移到左侧的协议或卡牌上\n此处会实时展示');
+  const pHint = el('div', 'library-preview-hint', t('library.preview-hint'));
   const pCap = el('div', 'library-preview-cap');
   preview.appendChild(pMain);
   preview.appendChild(pCap);
@@ -1603,7 +1682,7 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
       const motto = `${proto.name} · ${proto.loadingText}`;
       showPreview(
         protocolImgSrc(defId, compiled),
-        compiled ? `${motto} · 已编译` : motto,
+        compiled ? t('library.compiled', { name: motto }) : motto,
         'landscape',
         buildProtocolRatingPanel(defId)
       );
@@ -1615,7 +1694,7 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
     const proto = DEMO_PROTOCOLS.find((p) => p.defId === c.protocol);
     showPreview(
       cardImgSrc(c.protocol, c.value),
-      `${proto?.name ?? c.protocol} ${c.value} 分指令卡`,
+      t('library.card-caption', { protocol: proto?.name ?? c.protocol, n: String(c.value) }),
       'portrait',
       buildCardTextEl(cardTextParts(c), 'library-preview-text')
     );
@@ -1693,12 +1772,17 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
    */
   const libCheckedTags = new Set<string>(LIB_ALL_TAG_IDS);
   const effectPanel = el('div', 'lib-effect-panel');
-  effectPanel.appendChild(el('div', 'lib-effect-title', '按效果分类筛选'));
+  effectPanel.appendChild(el('div', 'lib-effect-title', t('library.filter')));
   const effectHint = (): void => {
     const r = filterLibrary(libFilterState());
     effectPanelHint.textContent = r.visibleCards.size === 0 && libEnabled.size === 0
-      ? `当前 0 张（${r.totalCards} 张全被排除）`
-      : `${libCheckedTags.size} / ${LIB_ALL_TAG_IDS.length} 类已勾选 · 命中 ${r.visibleCards.size} / ${r.totalCards} 张卡`;
+      ? t('library.count-none', { total: String(r.totalCards) })
+      : t('library.count', {
+        checked: String(libCheckedTags.size),
+        all: String(LIB_ALL_TAG_IDS.length),
+        hit: String(r.visibleCards.size),
+        total: String(r.totalCards),
+      });
   };
   const effectPanelHint = el('div', 'lib-effect-hint');
   // 读数行要挂进面板才看得见（它原来只被写 textContent、没入树 ⇒ 面板上没有"已勾 N / 命中 M 张"）
@@ -1718,8 +1802,8 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
     refreshEffectPanel();
     refreshList();
   };
-  effectPanelActions.appendChild(button('lib-effect-btn lib-effect-all', '全选', () => setAllTags(true)));
-  effectPanelActions.appendChild(button('lib-effect-btn lib-effect-none', '全不选', () => setAllTags(false)));
+  effectPanelActions.appendChild(button('lib-effect-btn lib-effect-all', t('library.all'), () => setAllTags(true)));
+  effectPanelActions.appendChild(button('lib-effect-btn lib-effect-none', t('library.none'), () => setAllTags(false)));
   effectPanel.appendChild(effectPanelActions);
   for (const { group, tags } of LIB_TAG_GROUPS) {
     const groupBox = el('div', 'lib-effect-group');
@@ -1775,7 +1859,7 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
     const r = filterLibrary(libFilterState());
     list.textContent = '';
     if (r.visibleProtocols.size === 0) {
-      list.appendChild(el('div', 'lib-effect-empty', '没有符合当前筛选项的卡牌 —— 勾几个效果分类，或把世代重新打开。'));
+      list.appendChild(el('div', 'lib-effect-empty', t('library.empty')));
       return;
     }
     for (const proto of DEMO_PROTOCOLS) {
@@ -1825,10 +1909,10 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
         const cell = el('div', 'lib-card');
         const cimg = document.createElement('img');
         cimg.src = cardImgSrc(proto.defId, c.value);
-        cimg.alt = `${proto.name} ${c.value} 分`;
+        cimg.alt = t('library.card-alt', { protocol: proto.name, n: String(c.value) });
         cimg.loading = 'lazy';
         cimg.decoding = 'async';
-        cimg.title = `${proto.name} ${c.value} 分指令卡`;
+        cimg.title = t('library.card-caption', { protocol: proto.name, n: String(c.value) });
         cell.appendChild(cimg);
         cell.appendChild(el('div', 'lib-card-value', String(c.value)));
         const cardKey = `card:${c.defId}`;
@@ -1882,21 +1966,57 @@ export function rulePageDir(file: string): string {
   return file.replace(/\.pdf$/, '');
 }
 
+/**
+ * 规则书清单（顺序即屏上顺序）。
+ *
+ * ★ 2026-10-01（C）：`title` / `desc` 改成**文案键**（不再直接是中文），屏上由 `t()` 取 ——
+ * 与 `FX_SETTINGS` 把中文留在字段里的做法不同，理由：这两条**只在渲染时用**，
+ * 而键就在 `renderRules` / `openRulePages` 里以**字面量**出现（缺键扫描腿认的是调用点的字面量）。
+ */
 export const RULES: readonly RuleDoc[] = [
-  { file: 'rule-mn01.pdf', title: '1代说明书', desc: 'Compile MN01（水/火/光/暗/生/死…）', pages: 2 },
-  { file: 'rule-mn02.pdf', title: '2代说明书', desc: 'Compile MN02（冰/明镜/混乱/恐惧…）', pages: 2 },
-  { file: 'rule-mn03.pdf', title: '3代说明书', desc: 'Compile MN03', pages: 2 },
-  { file: 'rule-mn03-solo.pdf', title: '3代单人游玩说明书', desc: '单人规则扩展', pages: 2 },
-  { file: 'rule-faq.pdf', title: '游戏详细FAQ说明书', desc: '官方 FAQ 汇总', pages: 12 },
+  { file: 'rule-mn01.pdf', title: 'rules.gen1', desc: 'rules.gen1.sub', pages: 2 },
+  { file: 'rule-mn02.pdf', title: 'rules.gen2', desc: 'rules.gen2.sub', pages: 2 },
+  { file: 'rule-mn03.pdf', title: 'rules.gen3', desc: 'rules.gen3.sub', pages: 2 },
+  { file: 'rule-mn03-solo.pdf', title: 'rules.gen3.solo', desc: 'rules.gen3.solo.sub', pages: 2 },
+  { file: 'rule-faq.pdf', title: 'rules.faq', desc: 'rules.faq.sub', pages: 12 },
 ];
+
+/**
+ * 规则书的标题 / 说明（键 → 当前语言的文案）。
+ *
+ * ⚠️ 与 `fxLabelText()` 同一条纪律：**键必须写成字面量**（不能用 `t(doc.title)` 那种变量），
+ * 否则缺键扫描腿就看不到它们（本文件里 `t(...)` 的键都在下面的三元里静态写着）。
+ * 新增一本规则书：先往 `RULES` 加一行，再在这个三元里补一个分支（两张表都要有那对键）。
+ */
+function ruleTitleText(doc: RuleDoc): string {
+  switch (doc.title) {
+    case 'rules.gen1': return t('rules.gen1');
+    case 'rules.gen2': return t('rules.gen2');
+    case 'rules.gen3': return t('rules.gen3');
+    case 'rules.gen3.solo': return t('rules.gen3.solo');
+    case 'rules.faq': return t('rules.faq');
+    default: return doc.title;
+  }
+}
+
+function ruleDescText(doc: RuleDoc): string {
+  switch (doc.desc) {
+    case 'rules.gen1.sub': return t('rules.gen1.sub');
+    case 'rules.gen2.sub': return t('rules.gen2.sub');
+    case 'rules.gen3.sub': return t('rules.gen3.sub');
+    case 'rules.gen3.solo.sub': return t('rules.gen3.solo.sub');
+    case 'rules.faq.sub': return t('rules.faq.sub');
+    default: return doc.desc;
+  }
+}
 
 export function renderRules(root: HTMLElement, back: () => void): void {
   clearRoot(root);
   const screen = el('div', 'rules-screen');
   const head = el('div', 'subpage-head');
-  head.appendChild(el('h1', 'subpage-title', '规则图纸'));
-  head.appendChild(el('div', 'subpage-sub', '游戏一/二/三代说明书与 FAQ（点击进入在线阅读）'));
-  head.appendChild(button('btn', '← 返回主页面', back));
+  head.appendChild(el('h1', 'subpage-title', t('rules.title')));
+  head.appendChild(el('div', 'subpage-sub', t('rules.sub')));
+  head.appendChild(button('btn', t('common.back-home'), back));
   screen.appendChild(head);
 
   const grid = el('div', 'rules-grid');
@@ -1905,11 +2025,11 @@ export function renderRules(root: HTMLElement, back: () => void): void {
     const cover = document.createElement('img');
     cover.className = 'rules-cover';
     cover.src = `/assets/rules/covers/${doc.file.replace('.pdf', '.jpg')}`;
-    cover.alt = doc.title;
+    cover.alt = ruleTitleText(doc);
     cover.loading = 'lazy';
     const info = el('div', 'rules-info');
-    info.appendChild(el('div', 'rules-title', doc.title));
-    info.appendChild(el('div', 'rules-desc', doc.desc));
+    info.appendChild(el('div', 'rules-title', ruleTitleText(doc)));
+    info.appendChild(el('div', 'rules-desc', ruleDescText(doc)));
     item.appendChild(cover);
     item.appendChild(info);
     item.addEventListener('click', () => openRulePages(doc));
@@ -1932,11 +2052,12 @@ export function renderRules(root: HTMLElement, back: () => void): void {
  */
 function openRulePages(doc: RuleDoc): void {
   const dir = rulePageDir(doc.file);
+  const title = ruleTitleText(doc);
   const overlay = el('div', 'pdf-overlay');
   const bar = el('div', 'pdf-bar');
-  bar.appendChild(el('div', 'pdf-title', `${doc.title}（共 ${doc.pages} 页）`));
-  bar.appendChild(button('btn', '原版 PDF', () => window.open(`/assets/rules/${doc.file}`, '_blank')));
-  bar.appendChild(button('btn', '关闭', () => overlay.remove()));
+  bar.appendChild(el('div', 'pdf-title', t('rules.pages-title', { title, pages: String(doc.pages) })));
+  bar.appendChild(button('btn', t('rules.pdf'), () => window.open(`/assets/rules/${doc.file}`, '_blank')));
+  bar.appendChild(button('btn', t('common.close'), () => overlay.remove()));
   overlay.appendChild(bar);
 
   const body = el('div', 'rules-pages');
@@ -1944,7 +2065,7 @@ function openRulePages(doc: RuleDoc): void {
     const img = document.createElement('img');
     img.className = 'rules-page';
     img.src = `/assets/rules/pages/${dir}/page-${String(i).padStart(2, '0')}.jpg`;
-    img.alt = `${doc.title} 第 ${i} 页`;
+    img.alt = t('rules.page-alt', { title, n: String(i) });
     img.loading = i <= 2 ? 'eager' : 'lazy'; // 头两页先到，后面的滚到再拉
     body.appendChild(img);
   }

@@ -194,10 +194,12 @@ describe('★ 2026-10-01 · 模式页恒为那四张卡（开发者解锁态再�
     const home = stripComments(read('src/ui/home.ts'));
     const main = stripComments(read('src/main.ts'));
     // ① 造一份"卡片又回来了"的 home.ts：插在单人卡之前（就是它当年待的位置）
+    // ⚠️ 2026-10-01（C）：模式卡的标签已经走 i18n（`mkMode(t('mode.solo.name'), …)`）⇒
+    //    拼接锚点跟着变（原来是 `mkMode('单人模式'`）。判据本身没变。
     const homeWithCard = home.replace(
-      "  list.appendChild(\n    mkMode('单人模式'",
+      "  list.appendChild(\n    mkMode(t('mode.solo.name')",
       `  list.appendChild(\n    mkMode('${PREVIEW_CARD}', '开发者模式专用', true, () => {})\n  );\n`
-        + "  list.appendChild(\n    mkMode('单人模式'",
+        + "  list.appendChild(\n    mkMode(t('mode.solo.name')",
     );
     expect(homeWithCard, '正控构造失败：模式卡的拼接锚点变了（本用例没造出"卡又回来了"那份源码）')
       .not.toBe(home);

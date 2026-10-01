@@ -48,7 +48,9 @@ import type { CoinNetView } from './ui/home';
 // ★ T11-B：硬币屏要的"面"（屏上口径 `1 | 2`）
 import type { CoinSide } from './app/coin';
 // G3 Task 4：L1 授权状态机（纯层）+ 其浏览器后端 + 授权弹窗屏
-import { createLocalStore, readLang, readNickName, writeLang } from './app/local-store';
+import { createLocalStore, readFxSettings, readLang, readNickName, writeFxSettings, writeLang } from './app/local-store';
+// ★ 2026-10-01（用户要求"设置里的选项也要持久化"）：特效开关的内存态由这个模块持有，本文件只负责启动读回。
+import { applyFxSettings } from './ui/fx-settings';
 // ★ 2026-10-01（P0，用户拍板"UI 全量双语"）：i18n 基建。语言的**值**与文案表在 `src/i18n/`；
 //   本文件只做两件事：① 启动时 `initI18n(readLang(localStore))` 读一次已存的语言（**只读**）；
 //   ② `applyLangChange()` 在用户切语言时落盘 + 重画当前屏。方案见
@@ -4869,6 +4871,23 @@ const localStore = createLocalStore({ persistent: openL1Store() });
 initI18n(() => readLang(localStore));
 
 /**
+ * ★ 2026-10-01（用户要求"设置里的选项也要持久化，就和玩家名一样"）：**启动时读回特效开关**。
+ *
+ * 与上面 `initI18n` **同一条纪律**：**只读**（`readFxSettings` → `readJson` 的 `get`），
+ * 跑在授权弹窗之前也合规；写入只发生在用户拨动开关那一刻（`applyFxChange`）。
+ *
+ * 读不出来（存储坏 / 后端抛错 / 值是垃圾）⇒ `readFxSettings` 回空对象 + `applyFxSettings`
+ * 按各项默认值兜 ⇒ 退化成"默认开启"，不抛、不半开半关。
+ * 顺序：也在画第一屏之前 —— 否则牌桌会先按默认值挂上频闪层、再被关掉（闪一下）。
+ */
+try {
+  applyFxSettings(readFxSettings(localStore));
+} catch {
+  // `kv.get` 抛（存储不可用）：退化成默认值，本次会话照常可用（与 `initI18n` 同一条处置）
+  applyFxSettings(undefined);
+}
+
+/**
  * ★ 2026-10-01（P0）：用户在小窗里切了语言 ⇒ 落盘 + 立刻重画当前屏。
  *
  * 三件事，缺一不可（顺序也是刻意的）：
@@ -4940,6 +4959,28 @@ function applyLangChange(next: Lang): LangWriteResult {
    */
   if (isHomeScreenActive()) showHome();
   else rerender();
+  return result;
+}
+
+/**
+ * ★ 2026-10-01（用户要求"设置里的选项也要持久化，就和玩家名一样"）：拨动特效开关 ⇒ 落盘。
+ *
+ * 与 `applyLangChange` **同一条路**（同一套 `WriteResult` → `LangChangeOutcome` 映射、
+ * 同一个 `saveFailedText` 文案、同一套授权门控）：游客模式下 `writeFxSettings` 写的是内存 KV
+ * ⇒ 本次会话有效、刷新即丢、磁盘零写入。
+ *
+ * ⚠️ **内存态在这之前已经换好了**（小窗自己调 `setFxSetting`），失败的含义是"下次进来回到上次保存的"，
+ * 不是"这次也别生效" ⇒ 这里**不**回滚内存态，只把结论交回去让屏上如实说。
+ * ⚠️ 这里**不重画整屏**：开关的就地反馈（说明行 + 勾选态）由小窗自己完成；重画会把小窗连根换掉。
+ *    这与语言那一项**不同** —— 语言影响的是别的屏的文案，所以那边必须重画。
+ */
+function applyFxChange(id: string, on: boolean): LangChangeOutcome {
+  let result: LangChangeOutcome = { ok: false, reason: 'write-failed', detail: '' };
+  try {
+    result = applyWriteResult(writeFxSettings(localStore, { [id]: on }));
+  } catch (e) {
+    result = langChangeThrew(e instanceof Error ? e.message : String(e));
+  }
   return result;
 }
 
@@ -5089,6 +5130,8 @@ function showHome(): void {
          */
         lang: getLang(),
         onLangChange: (next) => applyLangChange(next),
+        // ★ 2026-10-01（用户要求"设置里的选项也要持久化"）：特效开关与语言走同一条落盘路
+        onFxChange: (id, on) => applyFxChange(id, on),
       });
       document.body.appendChild(overlay);
       document.addEventListener('keydown', onKey); // Esc 关闭（用户列的可选项，一并接上）

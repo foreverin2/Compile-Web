@@ -14,7 +14,7 @@ import {
 import { renderLocalData, type LocalDataNav } from '../../src/ui/local-data';
 // ★ 2026-10-01（用户要求）：设置从小窗落地 —— 本文件末尾第 9 组钉它的落点与行为
 import { settingsOverlayElement } from '../../src/ui/home';
-import { FX_SETTINGS, isMetal6StrobeOn, resetFxSettingsForTest } from '../../src/ui/fx-settings';
+import { FX_SETTINGS, isMetal6StrobeOn, resetFxSettingsForTest, setMetal6Strobe } from '../../src/ui/fx-settings';
 // ★ 2026-10-01（P0，i18n）：小窗的 nav 现在带着当前语言，所以这条"真跑一次"的用例要能给出它。
 //   `getLang()` 的缺省是中文 ⇒ 下面那些逐字断言（`关闭` / `…（当前：关闭）`）与改动前一致。
 import { getLang } from '../../src/i18n';
@@ -1282,15 +1282,17 @@ describe('★ 2026-10-01：设置小窗（落点 + 真跑一次）', () => {
     const restore = installStubDom();
     try {
       let closed = 0;
-      // ★ 2026-10-01（P0）：小窗多了两个必填的 nav 成员（`lang` / `onLangChange`）——
-      //   P0 之后它不再是一个"只会造元素"的构造器，而**语言**正是它这一屏新抽出来的那一项。
-      //   本用例的对象是"结构 + 开关 + 三条关闭路径"，语言那一项的行为由
+      // ★ 2026-10-01（P0 / B）：小窗的 nav 多了三个必填成员（`lang` / `onLangChange` / `onFxChange`）
+      //   —— P0 之后它不再是一个"只会造元素"的构造器：**语言**与**开关落盘**都是它新接的活。
+      //   本用例的对象是"结构 + 开关 + 三条关闭路径"，那两项的行为由
       //   `tests/i18n/settings-overlay.test.ts` 自己一组腿兜（不在这条腿里顺手断言，
-      //   免得两处判据漂移）。这里给的是**最小合法**实参：当前语言取默认、切换是空操作。
+      //   免得两处判据漂移）。这里给的是**最小合法**实参：当前语言取默认、写盘一律"成功"。
       const overlay = asStub(settingsOverlayElement({
         onClose: () => { closed += 1; },
         lang: getLang(),
         onLangChange: () => ({ ok: true }),
+        // ★ B：宿主那一侧照 main.ts 的同一口径改内存态（小窗只报事件，不自己改）
+        onFxChange: (id, on) => { setMetal6Strobe(on); return { ok: true }; },
       }));
       // 挂进 `document.body`：桩的 `dispatchEvent` 只沿 `parentElement` 向上冒泡，没挂上去就收不到
       // 遮罩自己的监听器（`document.body` 是桩的节点 ⇒ 这里只能强转，见 `asStub` 的说明）

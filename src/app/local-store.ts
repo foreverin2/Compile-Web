@@ -171,6 +171,16 @@ export interface L1Settings {
    * 可选（`lang?`）：老的存储里没有这个字段，读出来是 `undefined` ⇒ 用默认中文。
    */
   lang?: Lang;
+  /**
+   * ★ 2026-10-01（用户要求"设置里的选项也要持久化，就和玩家名一样"）：
+   * **特效开关**的键值表（键 = `FxSettingDef.id`，值 = 开关状态）。
+   *
+   * 与 `nick` / `lang` 同住一份设置、同一套授权门控、同一次「清除本机数据」（**不新增存储键**）。
+   * 形状守卫在 `readFxSettings()` 里逐字段做（坏值一律退回默认）。
+   *
+   * 可选：老的存储里没有这个字段 ⇒ 用各项的默认值。
+   */
+  fx?: Record<string, boolean>;
 }
 
 /**
@@ -344,6 +354,44 @@ export function readLangPresence(store: LocalStore): 'absent' | 'unset' | 'prese
  */
 export function writeLang(store: LocalStore, lang: Lang): WriteResult {
   return writeSettings(store, { lang });
+}
+
+/**
+ * ★ 2026-10-01（用户要求"设置里的选项也要持久化，就和玩家名一样"）：读**特效开关**。
+ *
+ * ## 形状守卫（逐字段，坏值一律退回默认）
+ *
+ * 返回值是"存储里**确实**是布尔的那些项"，**不含**默认值 —— 缺项/坏项由调用方
+ * （`applyFxSettings`）按各项目己的默认值兜。理由：这一层不认识"有哪些开关、默认是开还是关"
+ * （那是 `src/ui/fx-settings.ts` 的知识），在这一层硬编码默认值会让默认值出现**第二份真相**。
+ *
+ * ⚠️ 读不出来时回**空对象**（不是 `undefined`），调用方按默认值算 —— 与 `readDecks` 回
+ * 空数组同一条纪律：缺一个设置项不该让游戏打不开。
+ * ⚠️ `kv.get` 抛错**原样外抛**（与 `readLang`/`readNickName` 同一条边界），调用方自己兜。
+ */
+export function readFxSettings(store: LocalStore): Record<string, boolean> {
+  const raw = readSettings(store).fx;
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return {};
+  const out: Record<string, boolean> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof v === 'boolean') out[k] = v;
+  }
+  return out;
+}
+
+/**
+ * ★ 2026-10-01：写**特效开关**。
+ *
+ * - `patch` 是"要改的那几项"（读-改-写：不传的项保持存储里的原值）；
+ * - 返回值与 `writeLang` **同一套** `WriteResult`（成功 / `too-large` / `write-failed` + 真因）
+ *   ⇒ 界面按原因给本地化文案，不新造第二套。
+ *
+ * ⚠️ 与语言同一条路：游客模式（`deny`）下 `store.kv()` 是内存 KV ⇒ 本次会话有效、刷新即丢、
+ * 磁盘零写入。
+ */
+export function writeFxSettings(store: LocalStore, patch: Record<string, boolean>): WriteResult {
+  const prev = readFxSettings(store);
+  return writeSettings(store, { fx: { ...prev, ...patch } });
 }
 
 function isDeckRecord(v: unknown): v is DeckRecord {

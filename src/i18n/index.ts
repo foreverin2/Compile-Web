@@ -243,11 +243,7 @@ function num(lang: Lang, value: number): string {
  *  - 系统消息（只有它可能是英文）：`技术细节：{detail}` / `Technical detail: {detail}`
  */
 export function saveFailedText(failure: WriteFailure): string {
-  const head = t('settings.lang.save-failed-detail');
-  const reason = failureReasonText(failure);
-  const detail = (failure.detail ?? '').trim();
-  // 系统消息单独一段（它可能是英文/系统语言，标出来才不会被当成我们写错的文案）
-  return detail === '' ? `${head} ${reason}` : `${head} ${reason} ${t('settings.lang.save-failed-tech', { detail })}`;
+  return `${t('settings.lang.save-failed-detail')} ${failureReasonText(failure)}${systemDetailText((failure.detail ?? '').trim())}`;
 }
 
 /** 失败原因那一句（**本地化**；`too-large` 一定把两个数带出来） */
@@ -259,6 +255,25 @@ function failureReasonText(failure: WriteFailure): string {
     });
   }
   return t('settings.lang.fail.write-rejected');
+}
+
+/** 系统消息那一段（**两种失败共用**；它只可能是系统语言，标出来才不会被当成我们写错的文案） */
+function systemDetailText(detail: string): string {
+  return detail === '' ? '' : ` ${t('settings.lang.save-failed-tech', { detail })}`;
+}
+
+/**
+ * ★ 2026-10-01（用户要求"设置里的选项也要持久化"）：**特效开关**写盘失败 → 屏上那一句。
+ *
+ * 与 `saveFailedText` **同一套形状**（原因那半句 + 系统消息那一段都共用），只有开头半句不同：
+ * 语言失败 ⇒ "刷新后会回到上次保存的**那种**"；开关失败 ⇒ "下次进入时会回到上次保存的**状态**"。
+ *
+ * 为什么不给 `saveFailedText` 加一个"是语言还是开关"的参数：那会把两个键的选择变成运行期
+ * 的字符串拼接，而缺键扫描腿只认**静态字面量**（见 `saveFailedText` 的说明）⇒ 各写一个函数、
+ * 各自在开头用字面量取键，是唯一能保持机检的形式。
+ */
+export function saveFailedSwitchText(failure: WriteFailure): string {
+  return `${t('settings.fx.save-failed-detail')} ${failureReasonText(failure)}${systemDetailText((failure.detail ?? '').trim())}`;
 }
 
 /* ───────────────────────── 启动时读一次已存的语言 ───────────────────────── */

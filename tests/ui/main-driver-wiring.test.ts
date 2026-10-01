@@ -24,7 +24,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { stripComments, functionBody, objectBody } from './source-text';
-import { makeStubEl, queryAllIn, type StubNode } from './net-dom-stub';
+import { makeStubEl, queryAllIn, setStubOwnerDocumentFor, type StubNode } from './net-dom-stub';
 import { renderReplayBar, type ReplayBarNav } from '../../src/ui/replay-bar';
 import {
   createMatchFileRecorder,
@@ -420,9 +420,8 @@ describe('G4 T4 · 重放路由与 settle 的单一重排点', () => {
    */
   it('16. 整帧重建：连点暂停/倍速多次 ⇒ bar/shield 各仍只有一个，每次点击恰好一条回调', () => {
     const parent = makeStubEl('div');
-    (parent as unknown as { ownerDocument: { createElement(t: string): StubNode } }).ownerDocument = {
-      createElement: (t: string) => makeStubEl(t),
-    };
+    // ★ 2026-10-01（真机 A 号缺陷的加固）：桩的 `ownerDocument` 现在是只读访问器 ⇒ 走显式接缝
+    setStubOwnerDocumentFor(parent, { createElement: (t: string) => makeStubEl(t) });
     const calls: string[] = [];
     let paused = false;
     const nav: ReplayBarNav = {

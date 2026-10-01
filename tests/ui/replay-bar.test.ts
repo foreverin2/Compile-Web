@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
-import { makeStubEl, descendants, queryAllIn, type StubNode } from './net-dom-stub';
+import { makeStubEl, descendants, queryAllIn, setStubOwnerDocumentFor, type StubNode } from './net-dom-stub';
 import { renderReplayBar, type ReplayBarNav, type ReplayBarState } from '../../src/ui/replay-bar';
 import { stripComments } from './source-text';
 
@@ -41,15 +41,17 @@ interface StubDoc {
 /**
  * 造一个**带所属文档**的桩根。
  *
- * ⚠️ 这里**不给桩源码加 `ownerDocument`**（`tests/ui/net-dom-stub.ts` 是共用文件，本任务不许改），
- * 而是由**调用方**（本测试）把它交进来 —— 这正是产出代码要的形状：元素从 `parent.ownerDocument`
- * 造，而不是从全局 `document` 造。全局 `document` 在本文件里**从头到尾都是 undefined**。
+ * ⚠️ 桩**现在有** `ownerDocument` 了（2026-10-01 真机 A 号缺陷的加固：`parentElement` /
+ * `ownerDocument` 都改成真 DOM 语义的**只读访问器**），而且它是"最近祖先的覆盖 → 全局桩 document"
+ * 这条链。本文件要证明的仍然是"文档从 `parent.ownerDocument` 来，不从全局 `document` 来"
+ * ⇒ 这里用**显式接缝** `setStubOwnerDocumentFor()` 给这一枚根指定文档（而不是给只读属性赋值）。
+ * 全局 `document` 在本文件里**从头到尾都是 undefined**。
  */
 function mountRoot(): StubNode {
   const root = makeStubEl('div');
-  (root as unknown as { ownerDocument: StubDoc }).ownerDocument = {
+  setStubOwnerDocumentFor(root, {
     createElement: (tag: string) => makeStubEl(tag),
-  };
+  } satisfies StubDoc);
   return root;
 }
 
