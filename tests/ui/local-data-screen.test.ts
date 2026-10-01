@@ -36,6 +36,15 @@ import {
 import { CARD_DATA_HASH } from '../../src/app/card-data-hash';
 import type { FilePicker, FileSink, PickOutcome, SaveOutcome } from '../../src/app/archive-fs';
 import { stripComments, functionBody, objectBody } from './source-text';
+/**
+ * ★ 2026-10-01（线上验收 D1）：第 10 组最后那条"贯通腿"要用**真的** IndexedDB 层 +
+ * **假的 IndexedDB 工厂**，所以从 `cardmaker-entry.test.ts` 借那个假件与两个真函数。
+ * 那两个具名出口是**一态一义**的（`fakeIdb` 造件、`readCardmakerDeckInfo`/`clearCardmakerDeck`
+ * 是产出代码），借过来不会产生"两份会漂移的夹具"。
+ */
+import { fakeIdb, sampleDeck } from './cardmaker-entry.test';
+import { CARDMAKER_DECK_KEY, clearCardmakerDeck, readCardmakerDeckInfo } from '../../src/ui/cardmaker/store-idb';
+import { defaultCard } from '../../src/ui/cardmaker/types';
 
 /**
  * G3 Task 7 守卫 + G4 Task 5 的接线守卫：「本地数据与隐私」屏（`src/ui/local-data.ts`）。
@@ -240,8 +249,14 @@ function harness(opts: {
   /**
    * ★ 2026-10-01：制作器那两条的缺省值。
    *
-   * 缺省故意选**"0 张 + 真删掉"**：于是"读回 3 张"那条腿里的数字必然来自宿主，
-   * 而"没东西可删"那条腿必须自己注入 `removed: false`（不会被缺省值蒙对）。
+   * ⚠️ **桩口径必须与真宿主一致**（线上验收 D1 的另一半就是这里错了）：
+   *  - `readCardmaker` 的缺省 = `{ count: 0 }`：那是**空态**（库开得了、没写过），
+   *    也正是 `src/main.ts` 的 `readCardmaker` 在全新访客下会给的值；
+   *  - `clearCardmaker` 的缺省 = `{ ok: true, removed: true }`。
+   *
+   * 第一版缺省也是 `{ count: 0 }`，但**真宿主**那时把空态回成 `null`（读不到）——
+   * 于是"缺省 0 张"那条断言在桩上恒真、真实现却走的是另一支（桩与实现口径分叉 = 假绿）。
+   * 现在两侧都是三态：`0` = 空、`null` = 读不到、`> 0` = 有东西。
    */
   let cardmakerRead: CardmakerReadHandler = opts.cardmakerRead ?? (async () => ({ count: 0 }));
   let cardmakerClear: CardmakerClearHandler = opts.cardmakerClear ?? (async () => ({ ok: true, removed: true }));
@@ -1337,24 +1352,65 @@ describe('★ 2026-10-01：卡牌制作器的本机数据（可见 + 可清除�
     await flush();
     const line = one(root, 'cardmaker-state');
     expect(line.text, '屏上没写"3 张卡"').toContain('3 张卡');
-    // 反向锚点：数字必须来自宿主（缺省是 0），否则"包含 3"可能对任何文案都成立
-    expect(line.text, '反向锚点失效：缺省读数也是 3').not.toContain('0 张卡');
-    const h0 = harness();
-    const r0 = render(h0);
-    await flush();
-    expect(one(r0, 'cardmaker-state').text, '缺省读数（0 张）没显示出来').toContain('0 张卡');
+    // 反向锚点：数字必须来自宿主（缺省读数见下面那条"空态"腿，两句话不同）
+    expect(line.text, '有 3 张时却显示了空态那句').not.toContain('还没有保存过');
   });
 
-  it('读不到（count === null）⇒ 如实说"读不到"，**不**显示成"什么都没有"', async () => {
+  /* ── ★ 2026-10-01 线上验收 D1：**"空的"与"读不到"是两件事** ──────────────────
+
+   * 缺陷：全新访客、以及**刚点完清除之后**，这一行都显示"读不到本机的数据（这台设备可能
+   * 没有可用的 IndexedDB，或库被别的程序占着）"⇒ 用户会以为刚点的清除把东西弄坏了。
+   * 根因：`readCardmakerDeckInfo` 把"没写过"与"读失败"都回成 `null`，屏上一句折叠了两种状态。
+   * 修法：上游只在**真失败**时回 `null`，"没写过"回 `{ cards: 0 }`；屏上分成两句。
+   *
+   * 下面两条腿逐条钉住这一对，并且**互相做反向锚点**（同一句话不可能同时满足它们）：
+   *  ① 空态（`count === 0`）⇒ 必须说"还没有保存过"，**不许**出现"读不到"；
+   *  ② 读失败（`count === null`）⇒ 必须说"读不到"，**不许**出现"还没有保存过"。
+   * 把实现改回"两种都回 null"（或屏上合并成一句）时，① 会当场红。
+   */
+
+  it('① 全新（库开得了、只是没写过：count === 0）⇒ 说"还没有保存过"，**不**说"读不到"', async () => {
+    const h = harness({ cardmakerRead: async () => ({ count: 0 }) });
+    const root = render(h);
+    await flush();
+    const text = one(root, 'cardmaker-state').text;
+    expect(text, '空态没说"本机还没有保存过牌组"').toContain('还没有保存过');
+    expect(
+      text,
+      '空态被说成"读不到本机的数据"（这正是线上验收 D1：全新访客以为东西坏了）',
+    ).not.toContain('读不到');
+    // 也说清它存在哪（用户要求"可见"这一条的实质）
+    expect(text, '空态没说清它单独存在一个 IndexedDB 库里').toContain('IndexedDB');
+  });
+
+  it('② 读失败（count === null）⇒ 说"读不到"并给出两个常见原因，**不**说"还没有保存过"', async () => {
     const h = harness({ cardmakerRead: async () => ({ count: null }) });
     const root = render(h);
     await flush();
     const text = one(root, 'cardmaker-state').text;
     expect(text, '读不到时没说"读不到"').toContain('读不到');
+    expect(text, '读不到时没给出可排查的原因（没有可用的 IndexedDB / 库被占用）').toContain('IndexedDB');
+    expect(text, '读不到被显示成"还没有保存过"（不实陈述：读不到不等于没有）').not.toContain('还没有保存过');
     expect(text, '读不到被显示成"保存了 0 张卡"（不实陈述）').not.toContain('保存了 0 张卡');
     // 读不到**仍然**给得出清除按钮（读不到不等于没有数据）
     expect(byRole(root, 'clear-cardmaker').length).toBe(1);
     expect((one(root, 'clear-cardmaker') as unknown as { disabled?: boolean }).disabled).not.toBe(true);
+  });
+
+  it('清除之后回到**空态**那句（而不是"读不到"）—— 这是 D1 里用户最容易被吓到的一格', async () => {
+    let cards = 2;
+    const h = harness({
+      cardmakerRead: async () => ({ count: cards }),
+      cardmakerClear: async () => { cards = 0; return { ok: true, removed: true }; },
+    });
+    const root = render(h);
+    await flush();
+    expect(one(root, 'cardmaker-state').text).toContain('2 张卡');
+    clickRole(root, 'clear-cardmaker');
+    await flush();
+    const text = one(root, 'cardmaker-state').text;
+    expect(text, '清除之后没有回到空态那句').toContain('还没有保存过');
+    expect(text, '清除之后显示成"读不到"（用户会以为清除把东西弄坏了）').not.toContain('读不到');
   });
 
   it('读数抛错（宿主炸了）⇒ 状态行如实写失败原因，不静默', async () => {
@@ -1379,7 +1435,9 @@ describe('★ 2026-10-01：卡牌制作器的本机数据（可见 + 可清除�
     expect(h.counters.clearCardmaker, '点清除没调宿主的 clearCardmaker').toBe(1);
     expect(statusCode(root), '清除成功的结论不是 clear-cardmaker-ok').toBe('clear-cardmaker-ok');
     expect(h.counters.readCardmaker, '清除后没有重新读一次（屏上会留着旧数字）').toBe(2);
-    expect(one(root, 'cardmaker-state').text, '屏上还显示着清除前的张数').toContain('0 张卡');
+    // 清除之后是**空态**那句（`{ count: 0 }`），不是"读不到"，也不是还挂着旧张数
+    expect(one(root, 'cardmaker-state').text, '清除后没有回到空态那句').toContain('还没有保存过');
+    expect(one(root, 'cardmaker-state').text, '屏上还显示着清除前的张数').not.toContain('2 张卡');
   });
 
   it('本来就没有（removed === false）⇒ 是"没东西可清"，不是失败；删失败才报 failed + 真因', async () => {
@@ -1427,5 +1485,81 @@ describe('★ 2026-10-01：卡牌制作器的本机数据（可见 + 可清除�
     await flush();
     // 制作器走的是它自己的 IndexedDB 库，与 L1 的 persistent KV 无关
     expect(spy.mutations(), '制作器那一块碰了 L1 的 persistent（红线 3）').toBe(0);
+  });
+
+  /**
+   * ★★ 2026-10-01 贯通腿（线上验收 D1 的"测试为什么没拦住"那一问的**正面回答**）。
+   *
+   * ## 为什么必须有它
+   * D1 漏网的机制是**夹具口径与真宿主口径分叉**：上面那些腿注入的是桩
+   * （`cardmakerRead: async () => ({ count: 0 })`），而**真宿主**那时把"没写过"翻成
+   * `null` ⇒ 屏上的断言在桩上**恒真**。把屏与桩绑在一起测，**无论怎么改上游都发现不了**
+   * （变异实测：只把上游改回 `null` ⇒ 本文件整套 49 条**全绿**）。
+   *
+   * ## 这条腿怎么做
+   * **不用桩**：拿**真的** `readCardmakerDeckInfo` + **假 IndexedDB**
+   * （`fakeIdb` 从 `cardmaker-entry.test.ts` 借，见那里的说明），按
+   * `src/main.ts` 的 `showLocalData` 里那两个 nav 成员的**同一口径**驱动**真的**
+   * `renderLocalData`：`count: info === null ? null : info.cards`、
+   * `removed: before !== null && before.cards > 0`。于是"上游把空态回成 null"这一类改动
+   * 会**当场**在这条腿上红（已实测，见报告的变异 M1+M3）。
+   *
+   * ## 覆盖面（如实声明）
+   * **能**：`store-idb` → `count` → 屏上那两句 这条链在"空 / 有 / 读不到"三态下都对，
+   * 并且清除之后**真的**回到空态那一句。
+   * **不能**：`main.ts` 里那两行与这里的照抄**逐字相同**（那一面由
+   * `cardmaker-entry.test.ts` 的源码结构腿覆盖），也不能证明真实设备上 IndexedDB 的行为。
+   */
+  it('贯通（真 store + 假 IndexedDB + 真屏）：空白 → 有 → 清除回空态；只有真失败才说"读不到"', async () => {
+    const { factory, db } = fakeIdb();
+    /** 按 `main.ts` 的 showLocalData 那两个成员的口径驱动（见上面那段注释） */
+    const realReader = async (): Promise<{ count: number | null }> => {
+      const info = await readCardmakerDeckInfo(factory);
+      return { count: info === null ? null : info.cards };
+    };
+    const h = harness({
+      cardmakerRead: realReader,
+      cardmakerClear: async () => {
+        const before = await readCardmakerDeckInfo(factory);
+        const out = await clearCardmakerDeck(factory);
+        if (!out.ok) return { ok: false, detail: out.detail };
+        return { ok: true, removed: before !== null && before.cards > 0 };
+      },
+    });
+
+    // ① 全新访客：假 IDB 里一个记录都没有 ⇒ **空态**（不是"读不到"）
+    const root = render(h);
+    await flush();
+    expect(one(root, 'cardmaker-state').text, '真 store 口径下"全新"没显示成空态').toContain('还没有保存过');
+    expect(one(root, 'cardmaker-state').text, '真 store 口径下"全新"被显示成"读不到"（D1 的现场）')
+      .not.toContain('读不到');
+
+    // ② 塞一份真记录进去，**重新渲染一帧**（读是渲染期发起的）⇒ 报出张数
+    const deck = sampleDeck();
+    deck.cards = [defaultCard('a', 'compile'), defaultCard('b', 'protocol'), defaultCard('c', 'compile')];
+    db.data.set(CARDMAKER_DECK_KEY, deck);
+    const root2 = render(h);
+    await flush();
+    expect(one(root2, 'cardmaker-state').text, '真 store 口径下没能报出张数').toContain('3 张卡');
+
+    // ③ 点清除（真删一条记录）⇒ 回到**空态**那句，且屏上不说"读不到"
+    clickRole(root2, 'clear-cardmaker');
+    await flush();
+    expect(db.deletes, '真 store 口径下清除没有真的删那条记录').toEqual([CARDMAKER_DECK_KEY]);
+    expect(one(root2, 'cardmaker-state').text, '真 store 口径下清除之后没有回到空态').toContain('还没有保存过');
+    expect(one(root2, 'cardmaker-state').text, '真 store 口径下清除之后显示成"读不到"（D1 的现场）')
+      .not.toContain('读不到');
+
+    // ④ **真读不出来**（没有 IndexedDB）⇒ 才说"读不到"
+    const broken = harness({
+      cardmakerRead: async () => {
+        const info = await readCardmakerDeckInfo(null);
+        return { count: info === null ? null : info.cards };
+      },
+    });
+    const r2 = render(broken);
+    await flush();
+    expect(one(r2, 'cardmaker-state').text, '真读不出来时没说"读不到"').toContain('读不到');
+    expect(one(r2, 'cardmaker-state').text, '真读不出来时反被说成"还没有保存过"').not.toContain('还没有保存过');
   });
 });

@@ -372,7 +372,22 @@ export function renderLocalData(root: HTMLElement, nav: LocalDataNav): void {
   makerRow.appendChild(makerActions);
   screen.appendChild(makerRow);
 
-  /** 读一次"制作器存了什么"；读失败**如实显示**，不显示成"什么都没有"。 */
+  /**
+   * 读一次"制作器存了什么"。
+   *
+   * ## 三态三句话，**"空的"与"读不到"必须分开说**（线上验收 D1，2026-10-01）
+   *
+   *  - `count === 0`：库开得了、只是**没有记录** ⇒ "本机还没有保存过牌组"。
+   *    这一档覆盖**全新访客**与**刚点完清除的人** —— 两种情况都不该显示成"读不到"。
+   *  - `count > 0`：报张数。
+   *  - `count === null`：**真读不出来**（没有 IndexedDB / `open()` 抛错 / 坏记录）⇒ 才是"读不到"。
+   *  - host 抛错：另一个通道，如实写失败原因。
+   *
+   * ⚠️ 第一版把前两档折叠成一句"读不到本机的数据（这台设备可能没有可用的 IndexedDB，
+   * 或库被别的程序占着）"⇒ 全新访客与刚点完清除的用户都会以为**自己刚点的清除把东西弄坏了**。
+   * 判据落在 `nav.readCardmaker()` 的 `count` 上（三态由宿主与
+   * `src/ui/cardmaker/store-idb.ts` 的 `readCardmakerDeckInfo` 一起保证）。
+   */
   const refreshCardmaker = async (): Promise<void> => {
     let info: { count: number | null };
     try {
@@ -381,10 +396,16 @@ export function renderLocalData(root: HTMLElement, nav: LocalDataNav): void {
       makerLine.textContent = `读取卡牌制作器的本机数据失败：${describeError(e)}`;
       return;
     }
-    makerLine.textContent = info.count === null
-      ? '卡牌制作器：读不到本机的数据（这台设备可能没有可用的 IndexedDB，或库被别的程序占着）。'
-      : `卡牌制作器：本机保存了 ${info.count} 张卡（含自定背景与 logo 的图片）。`
-      + '它不是上面那两个键，而是单独一个 IndexedDB 库。';
+    if (info.count === null) {
+      makerLine.textContent =
+        '卡牌制作器：读不到本机的数据（这台设备可能没有可用的 IndexedDB，'
+        + '或库被别的程序占着）。它单独存在一个 IndexedDB 库里，与上面那两个键无关。';
+      return;
+    }
+    makerLine.textContent = (info.count === 0
+      ? '卡牌制作器：本机还没有保存过牌组。'
+      : `卡牌制作器：本机保存了 ${info.count} 张卡（含自定背景与 logo 的图片）。`)
+      + '它单独存在一个 IndexedDB 库里，与上面那两个键无关。';
   };
   void refreshCardmaker();
 

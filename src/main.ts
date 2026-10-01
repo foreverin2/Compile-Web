@@ -5161,18 +5161,38 @@ function showLocalData(): void {
     buildArchive: () => buildSessionArchive(),
     /**
      * ★ 2026-10-01（用户要求）：制作器的存储**不在 L1 的键表里**（它是独立的 IndexedDB 库），
-     * 所以「清除本机数据」那一屏需要这两个接缝。两者都**只读/删自己的库**，不碰 L1。
+     * 所以「本地数据与隐私」屏需要这两个接缝。两者都**只读/删自己的库**，不碰 L1。
+     *
+     * ⚠️ **`count` 的三态不许折叠**（线上验收 D1 的修法，2026-10-01）：
+     *  - `{ count: 0 }` = 库开得了、只是**没有记录**（全新访客 / 刚点完清除）⇒ 屏上说"还没有保存过"；
+     *  - `{ count: n }` = 有 n 张卡；
+     *  - `{ count: null }` = **真读不出来**（没有 IndexedDB / `open()` 抛错 / 坏记录）⇒ 屏上说"读不到"。
+     *
+     * 判据落在 `src/ui/cardmaker/store-idb.ts` 的 `readCardmakerDeckInfo` 上：它现在
+     * 只在**真失败**时回 `null`，"没写过"回 `{ cards: 0 }`。这一句只是把那个区分**原样透传**
+     * （第一版这里写的是 `info === null ? null : info.cards`，而那时上游把两种都回成 `null`
+     * ⇒ 这一句本身没错，错的是上游；现在上游修好了，这一句继续成立）。
      */
     readCardmaker: async () => {
       const info = await readCardmakerBrowserDeckInfo();
       return { count: info === null ? null : info.cards };
     },
     clearCardmaker: async () => {
-      const removedBefore = await readCardmakerBrowserDeckInfo();
+      const before = await readCardmakerBrowserDeckInfo();
       const out = await clearCardmakerBrowserDeck();
       if (!out.ok) return { ok: false, detail: out.detail };
-      // `removed === false` 的语义是"本来就没有"：有记录才算真删了一次
-      return { ok: true, removed: removedBefore !== null };
+      /**
+       * ★ 2026-10-01（线上验收 D1 的连带缺陷）：`removed` 的判据是
+       * **"删之前到底有没有东西"**，不是"读得出来吗"。
+       *
+       * 第一版写的是 `removedBefore !== null` —— 上游把"没写过"也回成 `null` 时，
+       * 全新访客点清除会被报成 `removed: true`（"已清除卡牌制作器保存在本机的牌组"），
+       * 而其实**本来就什么都没有**。上游改成 `{ cards: 0 }` 之后，这一句若不同步改，
+       * 就变成"没写过"时 `removedBefore !== null` 恒真 ⇒ 假成功。
+       * 现在按张数判：`cards > 0` 才算真删了一次；读不出来（`null`）时**不敢断言删了什么**
+       * ⇒ 也回 `removed: false`（屏上那句是"本来就是空的"，比谎称"已清除"诚实）。
+       */
+      return { ok: true, removed: before !== null && before.cards > 0 };
     },
   });
 }

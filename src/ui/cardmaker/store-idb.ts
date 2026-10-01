@@ -194,16 +194,35 @@ export async function clearCardmakerDeck(factory: IdbLike | null): Promise<{ ok:
 /**
  * 本机保存的制作器牌组**概览**（给「本地数据与隐私」屏看：有几张卡、有没有东西）。
  *
- * 只读、绝不写；读不出来时回 `null`（那一屏据此显示"读不到"）。
+ * ## 三态**不许折叠**（2026-10-01 线上验收 D1 的修法）
+ *
+ * 只读、绝不写。返回值必须能被调用方分辨成三件**完全不同**的事：
+ *
+ * | 情况 | 返回 | 屏上该说的话 |
+ * |---|---|---|
+ * | 库开得了、**只是没有记录**（全新访客 / 刚点完清除） | `{ cards: 0 }` | "本机还没有保存过牌组" |
+ * | 库开得了、记录在、形状正常 | `{ cards: n }` | "本机保存了 n 张卡" |
+ * | **真读不出来**（没有 IndexedDB 工厂 / `open()` 抛错 / 记录存在但不是对象） | `null` | "读不到本机的数据（…）" |
+ *
+ * ⚠️ **第一版把前两种都回成 `null`**（"没写过"与"读失败"折叠），于是线上全新访客、
+ * 以及**刚点完清除**的用户看到的都是"读不到本机的数据（这台设备可能没有可用的 IndexedDB，
+ * 或库被别的程序占着）" —— 用户会以为刚点的清除把东西弄坏了。**"空的"不是"坏了"。**
+ *
+ * ⚠️ 最后那一档（记录存在、但不是一个对象）**故意算失败、不算空**：它是"磁盘上有个
+ * 坏记录"，说成"还没有保存过"同样是不实陈述（与 `src/app/storage.ts` 里
+ * `readJson` 对坏 JSON 的处理口径一致：坏数据与不存在的区别要保住）。
  */
 export async function readCardmakerDeckInfo(factory: IdbLike | null): Promise<{ cards: number } | null> {
-  if (factory === null) return null;
+  if (factory === null) return null; // 这台设备没有 IndexedDB：真读不出来
   try {
     const raw = await idbGet(await openCardmakerDB(factory), CARDMAKER_DECK_KEY);
-    if (raw === null || raw === undefined || typeof raw !== 'object') return null;
+    // 没写过（IndexedDB 的 get 对不存在的键回 undefined，有的实现回 null）⇒ **空态**
+    if (raw === null || raw === undefined) return { cards: 0 };
+    // 记录在、但形状不对 ⇒ 坏数据，按"读不到"如实报，不伪装成"空"
+    if (typeof raw !== 'object') return null;
     const deck = hydrateDeck(raw as Partial<Deck>);
     return { cards: deck.cards.length };
   } catch {
-    return null;
+    return null; // open 抛错 / 事务抛错：真读不出来
   }
 }

@@ -1,5 +1,8 @@
 import { describe, it, expect, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { installStubDom, makeStubEl, descendants, type StubNode } from './net-dom-stub';
+import { braceBlock, functionBody, stripComments } from './source-text';
 import { renderHome, type HomeNav } from '../../src/ui/home';
 import { CREDIT, renderCardmaker } from '../../src/ui/cardmaker/page';
 import {
@@ -156,7 +159,7 @@ function fakeRequest(result: unknown, error: unknown = null): FakeRequest {
 }
 
 /** 假事务 */
-interface FakeTx {
+export interface FakeTx {
   objectStore(): {
     get(k: string): FakeRequest;
     put(v: unknown, k: string): void;
@@ -168,7 +171,7 @@ interface FakeTx {
 }
 
 /** 一个"像 IDBDatabase"的东西：只实现本模块用到的那几个方法，外加一本账 */
-interface FakeDb {
+export interface FakeDb {
   objectStoreNames: { contains: (n: string) => boolean };
   createObjectStore: (n: string) => { name: string };
   transaction: (name: string, mode: string) => FakeTx;
@@ -179,7 +182,7 @@ interface FakeDb {
   setTransaction(fn: (name: string, mode: string) => FakeTx): void;
 }
 
-interface FakeIdb {
+export interface FakeIdb {
   factory: IdbLike;
   db: FakeDb;
   openCalls: Array<{ name: string; version: number }>;
@@ -191,7 +194,7 @@ interface FakeIdb {
  * @param opts.openError 非空时 `open()` 直接抛（模拟"存储被策略关掉"）
  * @param opts.holdOpen  为真时打开请求**永不 settle**（模拟"库被别的标签页占着"）
  */
-function fakeIdb(opts: { openError?: Error; holdOpen?: boolean } = {}): FakeIdb {
+export function fakeIdb(opts: { openError?: Error; holdOpen?: boolean } = {}): FakeIdb {
   const data = new Map<string, unknown>();
   const writes: string[] = [];
   const deletes: string[] = [];
@@ -254,7 +257,7 @@ function fakeIdb(opts: { openError?: Error; holdOpen?: boolean } = {}): FakeIdb 
 }
 
 /** 一份内容可辨识的牌组（判据面：读回来的必须与写进去的相同） */
-function sampleDeck(): Deck {
+export function sampleDeck(): Deck {
   const d = defaultDeck();
   d.title = '本机牌组';
   d.shared.compile.bg = { type: 'preset', name: 'Fire', dataUrl: null, transform: { scale: 2, offsetX: 5, offsetY: -5 } };
@@ -396,19 +399,44 @@ describe('制作器存储：不该碰持久层的时候一个字节都不碰', (
  * ==================================================================== */
 
 describe('制作器存储：读概览与清除（本地数据屏的两个接缝）', () => {
-  it('readCardmakerDeckInfo：没写过 ⇒ null；写过 ⇒ 张数正确', async () => {
+  /**
+   * ★ 2026-10-01 线上验收 D1 的**根因腿**：「空的」必须回 `{ cards: 0 }`，**只有真失败**才回 `null`。
+   *
+   * 这一组是 D1 的**上游判据**（屏上那两句由 `tests/ui/local-data-screen.test.ts` 第 10 组钉住）：
+   * 上游若把"没写过"也回成 `null`，两条腿同时红。
+   */
+  it('readCardmakerDeckInfo：**没写过** ⇒ `{ cards: 0 }`（空态，不是读不到）；写过 ⇒ 张数正确', async () => {
     const { factory, db } = fakeIdb();
-    expect(await readCardmakerDeckInfo(factory), '没写过却给出了概览').toBeNull();
+    // 空态：库开得了、只是没有记录 ⇒ **不是** null（第一版这里回 null，就是线上 D1 的根因）
+    expect(await readCardmakerDeckInfo(factory), '没写过被回成了 null（= 屏上会说"读不到"）').toEqual({ cards: 0 });
+    // 反向锚点：真塞一份进去就应当给出真张数（证明上一条不是"永远回 0"）
     const deck = sampleDeck();
     deck.cards = [defaultCard('a', 'compile'), defaultCard('b', 'protocol')];
     db.data.set(CARDMAKER_DECK_KEY, deck);
     expect(await readCardmakerDeckInfo(factory)).toEqual({ cards: 2 });
+    // 把记录删掉（= 刚点完清除）⇒ 又回到空态 `{ cards: 0 }`，**不是** null
+    db.data.delete(CARDMAKER_DECK_KEY);
+    expect(await readCardmakerDeckInfo(factory), '清除之后回成了 null（用户会以为清除把东西弄坏了）')
+      .toEqual({ cards: 0 });
   });
 
-  it('readCardmakerDeckInfo：没有 IndexedDB / 打开失败 ⇒ null（屏上显示"读不到"）', async () => {
-    expect(await readCardmakerDeckInfo(null)).toBeNull();
+  it('readCardmakerDeckInfo：**真读不出来**才回 null —— 没有 IndexedDB / open 抛错 / 记录不是对象', async () => {
+    expect(await readCardmakerDeckInfo(null), '没有 IndexedDB 时没回 null').toBeNull();
     const { factory } = fakeIdb({ openError: new Error('打不开') });
-    expect(await readCardmakerDeckInfo(factory)).toBeNull();
+    expect(await readCardmakerDeckInfo(factory), 'open 抛错时没回 null').toBeNull();
+    // 记录存在但不是一个对象 = 坏数据：按"读不到"报，**不**伪装成"空"
+    const { factory: f2, db: d2 } = fakeIdb();
+    d2.data.set(CARDMAKER_DECK_KEY, 42);
+    expect(await readCardmakerDeckInfo(f2), '坏记录被当成了"空"（那是不实陈述）').toBeNull();
+  });
+
+  it('readCardmakerDeckInfo：库被别的标签页占着（open 永不 settle）时不返回假结论', async () => {
+    const { factory } = fakeIdb({ holdOpen: true });
+    let settled = false;
+    void readCardmakerDeckInfo(factory).then(() => { settled = true; });
+    await new Promise<void>((r) => { setTimeout(r, 5); });
+    // 现状如实钉住：它悬着（本模块没为 open 加超时），而不是回一个编出来的 0/null
+    expect(settled, 'open 挂着时竟然返回了（实现变了？这条腿要重写）').toBe(false);
   });
 
   it('clearCardmakerDeck：真删掉那条记录；没有 IndexedDB 时如实回 ok:false', async () => {
@@ -438,6 +466,48 @@ describe('制作器存储：读概览与清除（本地数据屏的两个接缝�
     expect(out.ok).toBe(false);
     expect(out.detail).not.toBe('');
   });
+
+  /**
+   * ★ 2026-10-01（线上验收 D1 的**连带缺陷**）：宿主那句 `removed` 的判据。
+   *
+   * `src/main.ts` 的 `clearCardmaker` 里原来写的是 `removedBefore !== null`。上游把"没写过"
+   * 也回成 `null` 时，全新访客点清除会被报成 `removed: true`（屏上说"已清除…牌组"），
+   * 而其实**本来就什么都没有**；上游改成 `{ cards: 0 }` 之后，这一句若不同步改就恒真 ⇒ 假成功。
+   *
+   * 这一格（宿主那一句）没有行为缝可注（它读的是真 IndexedDB 的工厂），所以按本仓既有的
+   * **源码结构腿**做法钉住它：判据面 = `showLocalData()` 的函数体（用 `functionBody` 配平，
+   * 不切到文件尾）。⚠️ 如实声明它证明什么：**它证明"判据里出现了张数比较"，
+   * 不证明那个比较在真实设备上的运行结果**；运行结果那一面由上游的
+   * `readCardmakerDeckInfo` 行为腿 + 屏上的两句腿共同覆盖。
+   */
+  it('宿主的 clearCardmaker 按**张数**判"删之前有没有东西"，不是按"读得出来吗"', () => {
+    // 读法与 `local-data-screen.test.ts` / `privacy-consumers.test.ts` 逐字同款
+    // （`tests/node-types.d.ts` 的 `readFileSync` 声明返回一个带 `subarray` 的对象）
+    const raw = readFileSync(fileURLToPath(new URL('../../src/main.ts', import.meta.url)))
+      .subarray(0, 1024 * 1024).toString('utf8');
+    const code = stripComments(raw);
+    const body = functionBody(code, 'showLocalData');
+    expect(body.length, 'functionBody 抽到空片段 ⇒ 本腿假绿').toBeGreaterThan(200);
+    const at = code.indexOf('clearCardmaker:');
+    expect(at, 'main.ts 里找不到 clearCardmaker 这个 nav 成员（结构被改动？）').toBeGreaterThan(0);
+    const clearBody = braceBlock(code, at);
+    expect(clearBody.length, 'braceBlock 抽到空片段 ⇒ 本腿假绿').toBeGreaterThan(80);
+    // 锚点：抽出来的确实是那一支（否则"里面有 cards > 0"可能来自别的成员）
+    expect(clearBody, '抽出来的不是 clearCardmaker 那一支').toContain('clearCardmakerBrowserDeck');
+    expect(clearBody, 'removed 的判据里没有张数比较（`!== null` 那一版会漏掉"本来就没有"）')
+      .toContain('cards > 0');
+    expect(clearBody, 'removed 又退回按"读得出来吗"判了').not.toContain('removedBefore !== null');
+  });
+
+  /*
+   * ⚠️ 这里**没有**"真 store + 假 IndexedDB + 真屏"的那条贯通腿，而且这是有意的：
+   * 它需要 `renderLocalData` 的整套 nav 夹具（住在 `tests/ui/local-data-screen.test.ts`），
+   * 而那个夹具是**模块私有**的。与其把一整份夹具复制到本文件（两份必然漂移 —— 本仓反复
+   * 栽过这个跟头），那条腿落在**它自然的家**：`local-data-screen.test.ts` 第 10 组的最后一条。
+   * 它从本文件 import `fakeIdb` / `readCardmakerDeckInfo` / `clearCardmakerDeck`
+   * （都是导出的、一态一义的具名出口）。
+   */
+
 });
 
 /* ==================================================================== *
