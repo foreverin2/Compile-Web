@@ -1,9 +1,12 @@
 import { describe, it, expect, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import {
   installStubDom,
   makeStubEl,
   descendants,
   queryAllIn,
+  classOf,
   type StubNode,
 } from './net-dom-stub';
 import { CREDIT, renderCardmaker, type CardmakerNav, type CardmakerStore } from '../../src/ui/cardmaker/page';
@@ -201,24 +204,41 @@ describe('渲染与启动', () => {
     expect(queryAllIn(root, 'div.cardmaker-screen').length, '重渲染出现两份屏').toBe(1);
   });
 
-  it('本机上没有牌组时开局给两张卡（竖版 + 横版），且横版卡被选中时的类型对得上', async () => {
+  it('本机上没有牌组时开局给两张卡（竖版 + 横版），清单只列**当前模式**那些卡', async () => {
     const h = harness();
     const root = await renderSettled(h);
-    const rows = byRole(root, 'card-row');
-    expect(rows.length, '开局应当有两张卡').toBe(2);
-    const kinds = rows.map((r) => r.dataset.cardKind).sort();
-    expect(kinds).toEqual(['compile', 'protocol']);
+    /**
+     * ⚠️ 判据面在 2026-10-01 的用户 UI 改动后**收窄了**（如实记下，没有放宽）：
+     * 卡清单现在只列**当前模式**的卡（顶部的「协议卡 / 卡牌」切换决定），所以开局那一屏
+     * 只看得见一张（竖版卡，1 条），而**牌组里仍然是两张** —— 后者由切换过去能看到
+     * 那张横版卡来证明（见"双模式切换"那一组）。旧判据"清单里有 2 行"在新版式下
+     * 与"清单只列当前模式"直接矛盾，属于被判据面变化淘汰，不是放松。
+     */
+    expect(byRole(root, 'card-row').length, '当前模式（竖版）应当只有一张卡').toBe(1);
+    expect(byRole(root, 'card-row')[0].dataset.cardKind).toBe('compile');
+    // 牌组里确实有两种卡：切到协议卡模式就能看见另一张
+    clickRole(root, 'mode-protocol');
+    await flush();
+    expect(byRole(root, 'card-row').length, '整副牌缺少横版协议卡').toBe(1);
+    expect(byRole(root, 'card-row')[0].dataset.cardKind).toBe('protocol');
+    // 反向锚点：再切回竖版，看到的还是竖版那一张（不是"清单永远只有一行"这种恒真）
+    clickRole(root, 'mode-compile');
+    await flush();
+    expect(byRole(root, 'card-row')[0].dataset.cardKind).toBe('compile');
   });
 
-  it('本机有牌组时读回来（张数正确、标题回填、状态码是 loaded）', async () => {
+  it('本机有牌组时读回来（标题回填、状态码是 loaded、当前模式那张卡在）', async () => {
     const deck = defaultDeck();
     deck.title = '我的套牌';
     deck.cards = [defaultCard('p', 'protocol'), defaultCard('c', 'compile')];
     const h = harness({ loaded: deck });
     const root = await renderSettled(h);
     expect(statusCode(root)).toBe('loaded');
-    expect(byRole(root, 'card-row').length).toBe(2);
     expect(valueOf(one(root, 'deck-title'))).toBe('我的套牌');
+    // 开局停在竖版模式 ⇒ 清单里是那张竖版卡（卡 id 来自牌组）
+    expect(byRole(root, 'card-row').length).toBe(1);
+    expect(byRole(root, 'card-row')[0].dataset.cardId).toBe('c');
+    expect(byRole(root, 'card-row')[0].dataset.cardKind).toBe('compile');
   });
 
   it('读本机失败 ⇒ 如实提示（load-failed）并仍然给出一份可用的空牌组', async () => {
@@ -252,17 +272,13 @@ describe('渲染与启动', () => {
     const h = harness();
     const root = await renderSettled(h);
     const canvas = one(root, 'canvas') as unknown as { width: number; height: number };
-    // 第一张卡是竖版（startup 里先加 compile）
+    // 开局停在竖版模式
     expect(canvas.width).toBe(CARD_W);
     expect(canvas.height).toBe(CARD_H);
-    // 换成横版卡（点它的「横版协议卡」按钮）
-    const protoRow = byRole(root, 'card-row').find((r) => r.dataset.cardKind === 'protocol');
-    expect(protoRow, '夹具失败：没有横版卡那一行').toBeTruthy();
-    const openBtn = descendants(protoRow as StubNode).find((n) => n.tag === 'button');
-    expect(openBtn).toBeTruthy();
-    if (openBtn) fire(openBtn, 'click');
+    // 切到协议卡模式 ⇒ 画布换成横版空间
+    clickRole(root, 'mode-protocol');
     await flush();
-    expect(canvas.width, '切换横版卡之后画布宽度没换').toBe(LAND_W);
+    expect(canvas.width, '切到协议卡之后画布宽度没换').toBe(LAND_W);
     expect(canvas.height).toBe(LAND_H);
   });
 });
@@ -317,10 +333,8 @@ describe('编辑文本', () => {
     expect((one(root, 'panel-top') as unknown as { disabled?: boolean }).disabled).toBe(false);
     expect((one(root, 'value') as unknown as { disabled?: boolean }).disabled).toBe(false);
     expect((one(root, 'compile-top') as unknown as { disabled?: boolean }).disabled).toBe(true);
-    // 切到横版
-    const protoRow = byRole(root, 'card-row').find((r) => r.dataset.cardKind === 'protocol');
-    const openBtn = descendants(protoRow as StubNode).find((n) => n.tag === 'button');
-    if (openBtn) fire(openBtn, 'click');
+    // 切到横版（顶部的显式模式切换）
+    clickRole(root, 'mode-protocol');
     expect((one(root, 'panel-top') as unknown as { disabled?: boolean }).disabled, '横版卡的三段面板没关掉').toBe(true);
     expect((one(root, 'value') as unknown as { disabled?: boolean }).disabled, '横版卡的数值没关掉').toBe(true);
     expect((one(root, 'compile-top') as unknown as { disabled?: boolean }).disabled, '横版卡的小字没打开').toBe(false);
@@ -373,33 +387,37 @@ describe('卡的新增 / 删除 / 切换', () => {
   it('「新增竖版编译卡」加一张并切过去；「删除当前卡」把它去掉', async () => {
     const h = harness();
     const root = await renderSettled(h);
-    expect(byRole(root, 'card-row').length).toBe(2);
+    // 当前模式（竖版）开局一张 ⇒ 加一张两张 ⇒ 删一张回一张
+    expect(byRole(root, 'card-row').length).toBe(1);
     clickRole(root, 'add-compile');
-    expect(byRole(root, 'card-row').length).toBe(3);
+    // ⚠️ 结论文案要在**这一刻**读：加卡自己会 `scheduleSave(0)`，写盘落地之后状态行会被
+    //    "已保存到本机" 覆盖（那是**正确**行为）。所以先读结论、再 flush 等写盘。
     expect(statusCode(root)).toBe('card-added');
-    clickRole(root, 'delete-card');
+    await flush();
     expect(byRole(root, 'card-row').length).toBe(2);
+    clickRole(root, 'delete-card');
     expect(statusCode(root)).toBe('card-deleted');
+    await flush();
+    expect(byRole(root, 'card-row').length).toBe(1);
   });
 
   it('第二张横版协议卡加不进来（整副牌只需要一张），结论是 card-add-refused', async () => {
     const h = harness();
     const root = await renderSettled(h);
+    clickRole(root, 'mode-protocol'); // 协议卡模式里开局已经有一张
+    await flush();
     clickRole(root, 'add-protocol');
     expect(statusCode(root)).toBe('card-add-refused');
-    expect(byRole(root, 'card-row').length, '居然真的加进去了').toBe(2);
+    expect(byRole(root, 'card-row').length, '居然真的加进去了').toBe(1);
     expect(one(root, 'status').text).toContain('只需要一张');
   });
 
-  it('只剩一张卡时「删除当前卡」是禁用的（不允许把牌组删空）', async () => {
+  it('只剩一张卡时「删除当前卡」是禁用的（不允许把**当前模式**删空）', async () => {
     const h = harness();
     const root = await renderSettled(h);
-    // 先加一张，免得"剩一张"这个状态与"开局两张"混在一起（开局两张时删一次就已经到底了）
+    // 开局（当前模式）只有一张 ⇒ 一开始就该禁用
+    expect((one(root, 'delete-card') as unknown as { disabled?: boolean }).disabled, '只剩一张时删除按钮没禁用').toBe(true);
     clickRole(root, 'add-compile');
-    await flush();
-    expect(byRole(root, 'card-row').length).toBe(3);
-    expect((one(root, 'delete-card') as unknown as { disabled?: boolean }).disabled, '还剩三张时删除按钮就禁用了').toBe(false);
-    clickRole(root, 'delete-card'); // 3 → 2（仍然不禁用）
     await flush();
     expect(byRole(root, 'card-row').length).toBe(2);
     expect((one(root, 'delete-card') as unknown as { disabled?: boolean }).disabled, '还剩两张时删除按钮就禁用了').toBe(false);
@@ -412,18 +430,28 @@ describe('卡的新增 / 删除 / 切换', () => {
     expect(byRole(root, 'card-row').length, '只剩一张时居然还能删').toBe(1);
   });
 
-  it('点卡清单里的按钮切当前卡（标题输入框跟着换）', async () => {
+  it('点卡清单里的按钮切当前卡（同一模式内两张卡之间切；标题输入框跟着换）', async () => {
     const h = harness();
     const root = await renderSettled(h);
+    const first = byRole(root, 'card-row')[0];
+    const firstId = first.dataset.cardId;
     const compileInput = one(root, 'title');
-    setValue(compileInput, '竖版卡的名字');
+    setValue(compileInput, '竖版卡甲');
     fire(compileInput, 'input');
-    expect(valueOf(one(root, 'title'))).toBe('竖版卡的名字');
+    expect(valueOf(one(root, 'title'))).toBe('竖版卡甲');
 
-    const protoRow = byRole(root, 'card-row').find((r) => r.dataset.cardKind === 'protocol');
-    const openBtn = descendants(protoRow as StubNode).find((n) => n.tag === 'button');
+    clickRole(root, 'add-compile'); // 第二张竖版卡（加完就切过去了，标题是空的）
+    await flush();
+    expect(byRole(root, 'card-row').length).toBe(2);
+    expect(valueOf(one(root, 'title')), '新卡的标题应当为空').toBe('');
+
+    // 点回第一张（清单里按 id 找它那一行的按钮）
+    const backRow = byRole(root, 'card-row').find((r) => r.dataset.cardId === firstId);
+    expect(backRow, '夹具失败：清单里找不到第一张卡那一行').toBeTruthy();
+    const openBtn = descendants(backRow as StubNode).find((n) => n.tag === 'button');
+    expect(openBtn, '那一行里没有切换按钮').toBeTruthy();
     if (openBtn) fire(openBtn, 'click');
-    expect(valueOf(one(root, 'title')), '切卡之后标题没有换').toBe('');
+    expect(valueOf(one(root, 'title')), '切回第一张之后标题没有换回来').toBe('竖版卡甲');
   });
 });
 
@@ -635,17 +663,33 @@ describe('导出与导入', () => {
     expect(one(root, 'status').text).toContain('2D 画布');
   });
 
-  it('对横版协议卡点「按竖版编译卡导出」⇒ 拒绝并说明（横版没有竖版形态）', async () => {
+  it('「按竖版编译卡导出」在协议卡模式下是**置灰 + 文案说清**（不是点了才报错）', async () => {
     const h = harness();
     const root = await renderSettled(h);
-    const protoRow = byRole(root, 'card-row').find((r) => r.dataset.cardKind === 'protocol');
-    const openBtn = descendants(protoRow as StubNode).find((n) => n.tag === 'button');
-    if (openBtn) fire(openBtn, 'click');
+    // 竖版模式下它是可用的，且文案说明"当前已是竖版成品空间"
+    expect((one(root, 'export-portrait') as unknown as { disabled?: boolean }).disabled, '竖版模式下不该禁用').toBe(false);
+    expect(textOf(one(root, 'export-portrait'))).toContain('当前已是竖版成品空间');
+
+    clickRole(root, 'mode-protocol');
+    await flush();
+    const btn = one(root, 'export-portrait') as unknown as { disabled?: boolean };
+    expect(btn.disabled, '协议卡模式下"按竖版导出"没置灰（协议卡只有横版形态）').toBe(true);
+    expect(textOf(one(root, 'export-portrait')), '置灰了但文案没说清为什么').toContain('协议卡只有横版形态，已停用');
+    // 置灰 ⇒ 点了也不该落盘、不该有产出
     clickRole(root, 'export-portrait');
     await flush();
-    expect(statusCode(root)).toBe('export-refused');
-    expect(one(root, 'status').text).toContain('横版形态');
-    expect(h.downloads).toHaveLength(0);
+    expect(h.downloads, '置灰的按钮居然还是导出了').toHaveLength(0);
+  });
+
+  it('「导出当前卡 PNG」的文案跟着模式走（"当前卡"不再指代不明）', async () => {
+    const h = harness();
+    const root = await renderSettled(h);
+    expect(textOf(one(root, 'export-png'))).toContain('竖版 750×1050');
+    expect(textOf(one(root, 'export-png'))).not.toContain('横版 1050×750');
+    clickRole(root, 'mode-protocol');
+    await flush();
+    expect(textOf(one(root, 'export-png'))).toContain('横版 1050×750');
+    expect(textOf(one(root, 'export-png'))).not.toContain('竖版 750×1050');
   });
 
   it('「导出牌组 JSON」⇒ 落盘的文件名以 .cardmaker.json 结尾，内容是能读回来的牌组', async () => {
@@ -723,7 +767,7 @@ describe('导出与导入', () => {
 
     const h = harness();
     const root = await renderSettled(h);
-    expect(byRole(root, 'card-row').length, '前置：开局的卡数应当与 3 不同').toBe(2);
+    expect(byRole(root, 'card-row').length, '前置：开局的卡数应当与 3 不同').toBe(1);
     h.setReadText(text);
     clickRole(root, 'import-json');
     await flush(); // 导入那条路异步等文件（`readTextFile` 是 Promise）
@@ -789,5 +833,257 @@ describe('署名（用户明确要求）', () => {
       '本制作器参考开源项目 COMPILER · Card Builder（作者 Albert Blanco，MIT 许可）制作，'
       + '素材（卡框/背景/卡背/字体）亦来自该项目。',
     );
+  });
+});
+
+/* ==================================================================== *
+ * 8. ★ 2026-10-01（用户要求）：左选项 / 右预览两栏 + 预览栏常驻
+ *
+ * 用户原话：「我希望将自定义协议页面内的预览展示框移至右边保持常驻，其他的选项移到左边」。
+ *
+ * 版式是 CSS 定的，而 DOM 桩**没有布局**（`getBoundingClientRect` 全 0）⇒ 这里**不**断言
+ * 像素，只断言两件能被真正证明的事：
+ *  ① 结构（哪一栏在前、两栏是同一个容器的直接子节点、各栏里有哪些 role）；
+ *  ② 样式表里那几条**承重**声明（`position: sticky` / `overflow: auto` / 桌面档两轨道 /
+ *     窄档单列且预览不 sticky）存在且方向正确。
+ * "浏览器里真的常驻"由无头 Chrome 那条腿证明（滚动左侧后右栏仍在视口内）。
+ * ==================================================================== */
+
+const LOCAL_CSS = readFileSync(fileURLToPath(new URL('../../src/ui/styles-local.css', import.meta.url)))
+  .subarray(0, 512 * 1024).toString('utf8');
+const PAGE_SRC = readFileSync(fileURLToPath(new URL('../../src/ui/cardmaker/page.ts', import.meta.url)))
+  .subarray(0, 512 * 1024).toString('utf8');
+
+/** 取某个类名的**整条规则体**（`{` 到配对的 `}`）；找不到返回 `''` */
+function cssRule(css: string, selector: string): string {
+  const at = css.indexOf(selector);
+  if (at < 0) return '';
+  const open = css.indexOf('{', at);
+  const close = css.indexOf('}', open);
+  if (open < 0 || close < 0) return '';
+  return css.slice(open + 1, close);
+}
+
+describe('★ 2026-10-01：左选项 / 右预览两栏', () => {
+  it('结构：两栏是同一容器的**直接子节点**，顺序是「选项在前、预览在后」', async () => {
+    const h = harness();
+    const root = await renderSettled(h);
+    const layout = one(root, 'layout');
+    expect(layout.children.length, '两栏容器应当恰好有两个直接子节点').toBe(2);
+    expect(layout.children[0].dataset.role, '左栏不是「选项」').toBe('options');
+    expect(layout.children[1].dataset.role, '右栏不是「预览」').toBe('preview-col');
+    // 反向锚点：两栏的角色**互不相同**（否则"顺序对"这句话分辨不出左右）
+    expect(layout.children[0].dataset.role).not.toBe(layout.children[1].dataset.role);
+  });
+
+  it('预览那几件（画布/缩放/读数）全在**右栏**里；选项那几件全在**左栏**里（一个都不许漏）', async () => {
+    const h = harness();
+    const root = await renderSettled(h);
+    const options = one(root, 'options');
+    const previewCol = one(root, 'preview-col');
+    const inOptions = (role: string): boolean => descendants(options).some((n) => n.dataset.role === role);
+    const inPreview = (role: string): boolean => descendants(previewCol).some((n) => n.dataset.role === role);
+
+    for (const role of ['deck-row', 'cards', 'form', 'bg', 'logo', 'io']) {
+      expect(inOptions(role), `[data-role="${role}"] 不在左栏（选项）里`).toBe(true);
+      expect(inPreview(role), `[data-role="${role}"] 出现在右栏（预览）里`).toBe(false);
+    }
+    for (const role of ['canvas', 'adjust', 'zoom', 'preview-size']) {
+      expect(inPreview(role), `[data-role="${role}"] 不在右栏（预览）里`).toBe(true);
+      expect(inOptions(role), `[data-role="${role}"] 出现在左栏（选项）里`).toBe(false);
+    }
+  });
+
+  it('样式表：桌面档是两轨道（左 1fr / 右 460px），右栏 sticky + 自己在溢出时滚动', () => {
+    const layout = cssRule(LOCAL_CSS, '.cardmaker-layout {');
+    expect(layout, 'styles-local.css 里没有 .cardmaker-layout 规则').not.toBe('');
+    expect(layout, '两栏不是 grid（拿什么做左右两栏？）').toContain('display: grid');
+    expect(layout, '桌面档不是"左弹性 + 右固定"两条轨道').toContain('minmax(0, 1fr) 460px');
+    // 反向锚点：单轨道（= 上下排布）**不**满足上面那条（证明这条判据分辨得出两栏与一栏）
+    expect('grid-template-columns: minmax(0, 1fr)').not.toContain('460px');
+
+    const col = cssRule(LOCAL_CSS, '.cardmaker-preview-col {');
+    expect(col, 'styles-local.css 里没有 .cardmaker-preview-col 规则').not.toBe('');
+    expect(col, '右栏没写 sticky（预览会跟着左栏滚走）').toContain('position: sticky');
+    expect(col, 'sticky 没给 top 偏移（贴哪？）').toContain('top: 12px');
+    expect(col, '右栏内容比视口高时没设"自己滚"').toContain('overflow: auto');
+    expect(col, 'sticky 没配 align-self: start（在 grid 里会拉伸失效）').toContain('align-self: start');
+  });
+
+  it('样式表：窄档（<= 900px）回落成单列，且**取消** sticky（免得挡住内容）', () => {
+    const at = LOCAL_CSS.indexOf('@media (max-width: 900px)');
+    expect(at, 'styles-local.css 里没有窄档媒体查询（用户要求窄屏要降级）').toBeGreaterThanOrEqual(0);
+    const block = LOCAL_CSS.slice(at, LOCAL_CSS.indexOf('}', LOCAL_CSS.indexOf('.cardmaker-preview-col', at)) + 1);
+    expect(block, '窄档没把两栏改成单列').toContain('grid-template-columns: minmax(0, 1fr)');
+    expect(block, '窄档没取消 sticky').toContain('position: static');
+    expect(block, '窄档没取消 max-height/overflow（会切掉内容）').toContain('max-height: none');
+    // 反向锚点：这段媒体查询里**不该**再出现 460px（那是桌面档的右栏宽）
+    expect(block, '窄档里还留着桌面档的右栏宽 460px').not.toContain('460px');
+  });
+
+  it('页面源码：右栏里只有预览与缩放，选项一个都没被塞到预览那一边（结构面的反向锚点）', () => {
+    // `previewCol.appendChild` 的调用点**只允许**是预览与缩放这两块
+    const calls = [...PAGE_SRC.matchAll(/previewCol\.appendChild\(([A-Za-z]+)\)/g)].map((m) => m[1]).sort();
+    expect(calls, `右栏被挂了预期之外的东西：${calls.join(',')}`).toEqual(['adjust', 'previewWrap']);
+    // 选项那一边则必须挂上一串（证明"其他选项移到左边"真的发生了，而不是全留在 screen 上）
+    const optionCalls = [...PAGE_SRC.matchAll(/optionsCol\.appendChild\(([A-Za-z]+)\)/g)].map((m) => m[1]);
+    expect(optionCalls.length, '左栏几乎什么都没挂（选项没搬过去）').toBeGreaterThanOrEqual(8);
+    expect(optionCalls).toContain('form');
+    expect(optionCalls).toContain('bgRow');
+  });
+});
+
+/* ==================================================================== *
+ * 9. ★ 2026-10-01（用户要求）：显式的双模式切换（协议卡 / 卡牌）
+ *
+ * 背景（要证据）：用户问"协议卡自定义模式 / 卡牌自定义模式在哪"。**查证结论：原本没有** ——
+ * `协议卡自定义` / `卡牌自定义` 两个词在全仓（src + public）**零命中**，页面上也没有任何
+ * `role="tab"` / `cardmaker-mode*` / 切换按钮；当时只有"点卡清单里那一行"这一条隐式路径。
+ * 这一组钉住补上的显式切换：两向、切完预览尺寸/禁用态/文案都跟着走、且**不丢编辑内容**。
+ * ==================================================================== */
+
+describe('★ 2026-10-01：双模式切换（协议卡 / 卡牌）', () => {
+  it('两个模式按钮都在屏上，role="tablist"/"tab" 齐备，初始停在「卡牌」（竖版）', async () => {
+    const h = harness();
+    const root = await renderSettled(h);
+    expect(one(root, 'modes').cls).toContain('cardmaker-modes');
+    // 两个 tab 都在
+    expect(one(root, 'mode-protocol').text).toContain('协议卡');
+    expect(one(root, 'mode-compile').text).toContain('卡牌');
+    // 桩把 `setAttribute('role', …)` 记在属性表里（非 data-* 属性走 attrs）
+    const readAttr = (n: StubNode, a: string): unknown => (n.getAttribute as unknown as (x: string) => unknown)(a);
+    expect(readAttr(one(root, 'modes'), 'role'), '模式条不是 tablist').toBe('tablist');
+    expect(readAttr(one(root, 'mode-protocol'), 'role')).toBe('tab');
+    expect(readAttr(one(root, 'mode-compile'), 'role')).toBe('tab');
+    // 初始选中态：屏上 data-mode 与按钮 data-active 一致
+    expect(one(root, 'screen').dataset.mode).toBe('compile');
+    expect(one(root, 'mode-compile').dataset.active).toBe('yes');
+    expect(one(root, 'mode-protocol').dataset.active).toBe('no');
+  });
+
+  it('两向切换：协议卡 ⇒ 横版尺寸、小字启用/数值禁用；切回卡牌 ⇒ 全部还原', async () => {
+    const h = harness();
+    const root = await renderSettled(h);
+    const canvas = one(root, 'canvas') as unknown as { width: number; height: number };
+    const dis = (role: string): unknown => (one(root, role) as unknown as { disabled?: boolean }).disabled;
+
+    // 起点：竖版
+    expect(one(root, 'screen').dataset.mode).toBe('compile');
+    expect([canvas.width, canvas.height]).toEqual([CARD_W, CARD_H]);
+    expect(one(root, 'preview-size').dataset.orientation).toBe('portrait');
+    expect(textOf(one(root, 'preview-size'))).toContain(`${CARD_W}×${CARD_H}`);
+    expect(dis('value')).toBe(false);
+    expect(dis('compile-top')).toBe(true);
+
+    // → 协议卡
+    clickRole(root, 'mode-protocol');
+    expect(statusCode(root)).toBe('mode-switched');
+    expect(one(root, 'screen').dataset.mode).toBe('protocol');
+    expect(one(root, 'mode-protocol').dataset.active).toBe('yes');
+    expect(one(root, 'mode-compile').dataset.active).toBe('no');
+    expect([canvas.width, canvas.height], '切到协议卡后画布尺寸没跟着切').toEqual([LAND_W, LAND_H]);
+    expect(one(root, 'preview-size').dataset.orientation).toBe('landscape');
+    expect(textOf(one(root, 'preview-size'))).toContain(`${LAND_W}×${LAND_H}`);
+    expect(dis('value'), '协议卡模式下数值没禁用').toBe(true);
+    expect(dis('compile-top'), '协议卡模式下横版小字没启用').toBe(false);
+    expect(textOf(one(root, 'mode-hint'))).toContain('协议卡');
+
+    // → 切回卡牌
+    clickRole(root, 'mode-compile');
+    expect(one(root, 'screen').dataset.mode).toBe('compile');
+    expect([canvas.width, canvas.height]).toEqual([CARD_W, CARD_H]);
+    expect(one(root, 'preview-size').dataset.orientation).toBe('portrait');
+    expect(dis('value')).toBe(false);
+    expect(dis('compile-top')).toBe(true);
+    expect(textOf(one(root, 'mode-hint'))).toContain('卡牌');
+  });
+
+  it('清单只列当前模式的卡；切过去看到的**是另一张**（两个模式各有一张真卡）', async () => {
+    const h = harness();
+    const root = await renderSettled(h);
+    const compileId = byRole(root, 'card-row')[0].dataset.cardId;
+    clickRole(root, 'mode-protocol');
+    await flush();
+    const protoId = byRole(root, 'card-row')[0].dataset.cardId;
+    expect(byRole(root, 'card-row').length).toBe(1);
+    expect(byRole(root, 'card-row')[0].dataset.cardKind).toBe('protocol');
+    expect(protoId, '两个模式指向了同一张卡（那是"没切换"，不是"切过去了"）').not.toBe(compileId);
+    clickRole(root, 'mode-compile');
+    await flush();
+    expect(byRole(root, 'card-row')[0].dataset.cardId).toBe(compileId);
+  });
+
+  it('★ 切换**不丢**已编辑内容：各模式记住上次看的那一张，切回来内容还在', async () => {
+    const h = harness();
+    const root = await renderSettled(h);
+    // ① 竖版卡改名（并加一张第二张，好让"记住上次看哪一张"有分辨力）
+    setValue(one(root, 'title'), '竖版甲');
+    fire(one(root, 'title'), 'input');
+    clickRole(root, 'add-compile');
+    await flush();
+    setValue(one(root, 'title'), '竖版乙');
+    fire(one(root, 'title'), 'input');
+    expect(valueOf(one(root, 'title'))).toBe('竖版乙');
+
+    // ② 切到协议卡，改它的标题
+    clickRole(root, 'mode-protocol');
+    await flush();
+    setValue(one(root, 'title'), '横版协议');
+    fire(one(root, 'title'), 'input');
+    expect(valueOf(one(root, 'title'))).toBe('横版协议');
+
+    // ③ 切回卡牌 ⇒ 回到**上次看的竖版乙**（不是第一张竖版甲）
+    clickRole(root, 'mode-compile');
+    await flush();
+    expect(valueOf(one(root, 'title')), '切回来没有回到上次看的那一张').toBe('竖版乙');
+
+    // ④ 再切到协议卡 ⇒ 横版的编辑内容也还在
+    clickRole(root, 'mode-protocol');
+    await flush();
+    expect(valueOf(one(root, 'title')), '协议卡那边的编辑内容丢了').toBe('横版协议');
+
+    // ⑤ 交给存储的那份牌组里，两张卡的标题都在（内容真的落在数据里，不只是输入框里）
+    clickRole(root, 'save');
+    await flush();
+    const saved = h.saved[h.saved.length - 1];
+    expect(saved.cards.map((c) => c.title).sort()).toEqual(['横版协议', '竖版乙', '竖版甲']);
+  });
+
+  it('切到还没有卡的模式 ⇒ 按加卡逻辑建一张，并对用户说明（结论码 mode-created-card）', async () => {
+    // 牌组里只有竖版卡 ⇒ 切到协议卡必须现建一张
+    const deck = defaultDeck();
+    deck.cards = [defaultCard('only-compile', 'compile')];
+    const h = harness({ loaded: deck });
+    const root = await renderSettled(h);
+    expect(byRole(root, 'card-row').length).toBe(1);
+    clickRole(root, 'mode-protocol');
+    expect(statusCode(root), '切到空模式时的结论不是 mode-created-card').toBe('mode-created-card');
+    expect(one(root, 'status').text).toContain('建了一张');
+    expect(byRole(root, 'card-row').length).toBe(1);
+    expect(byRole(root, 'card-row')[0].dataset.cardKind).toBe('protocol');
+    // 反向锚点：这时再切回卡牌**不该**建第二张竖版卡（原来那张还在）
+    clickRole(root, 'mode-compile');
+    expect(statusCode(root), '切回去时不该再建卡').toBe('mode-switched');
+    expect(byRole(root, 'card-row').length).toBe(1);
+    expect(byRole(root, 'card-row')[0].dataset.cardId).toBe('only-compile');
+  });
+
+  it('"原本有没有这个切换"的**证据腿**：模式 role 只有这两处，且真的挂 role=tab', () => {
+    /**
+     * 用户问过"协议卡自定义模式 / 卡牌自定义模式在哪"。这条腿把**当时的核对**固化成判据：
+     * 显式切换只能有**一处**定义（`mode-protocol` / `mode-compile` 两个 role 各一次），
+     * 而且它必须真的是 `role="tab"`（无障碍语义）。
+     *
+     * "两个词当年零命中"这件事本身是**历史事实**，没法在今天的源码上断言（它已经被补上了）
+     * —— 它能被钉住的部分是"现在只有这一套入口"：谁再加第二套模式入口，role 就会重复，
+     * 而屏上每个 role 必须唯一（上面的腿用 `one()` 定位，重复会当场抛"实际 N 个"）。
+     */
+    const roles = [...PAGE_SRC.matchAll(/'(mode-protocol|mode-compile)'/g)].map((m) => m[1]);
+    expect(roles.sort(), '模式按钮的 role 定义处不是恰好两处').toEqual(['mode-compile', 'mode-protocol']);
+    expect(PAGE_SRC, '模式按钮没挂 role=tab（无障碍语义）').toContain("setAttribute('role', 'tab')");
+    expect(PAGE_SRC, '模式条没挂 role=tablist').toContain("setAttribute('role', 'tablist')");
+    // 样式表那边也各有一条（否则按钮没有选中态）
+    expect(cssRule(LOCAL_CSS, '.cardmaker-modes {'), '样式表里没有 .cardmaker-modes').not.toBe('');
+    expect(cssRule(LOCAL_CSS, ".cardmaker-mode[data-active='yes'] {"), '样式表里没有选中态规则').not.toBe('');
   });
 });

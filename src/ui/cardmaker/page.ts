@@ -214,6 +214,17 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
 
   const screen = elRole('div', 'cardmaker-screen', 'screen');
   screen.dataset.persistent = nav.store.isPersistent() ? 'yes' : 'no';
+  // 当前编辑的是哪一种卡（「协议卡」/「卡牌」两个模式之一）。初值由启动那一段按牌组里的卡定。
+  let mode: CardKind = 'compile';
+  screen.dataset.mode = mode;
+  /**
+   * **每个模式各自记住上次在看哪一张卡的 id**（用户 2026-10-01 的要求：
+   * "两个模式各自记住上次在看哪一张卡，切换不该丢编辑内容"）。
+   *
+   * 为什么是"按 id 记"而不是"按索引记"：删卡会让索引整体左移，按索引记会把"你在看第 2 张"
+   * 悄悄换成另一张卡。id 是稳定的。
+   */
+  const lastSeenId: Record<CardKind, string> = { compile: '', protocol: '' };
 
   /* ── ① 顶栏 ── */
   const top = el('div', 'cardmaker-top');
@@ -225,6 +236,36 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
   saveBtn.addEventListener('click', () => { void saveNow(); });
   top.appendChild(saveBtn);
   screen.appendChild(top);
+
+  /**
+   * ★ 2026-10-01（用户要求）：**显式的双模式切换**（「协议卡」/「卡牌」）。
+   *
+   * ## 为什么现在才有
+   * 用户问"协议卡自定义模式 / 卡牌自定义模式在哪"。**实测核对：这两个词在全仓零命中，
+   * 页面上也确实没有这个切换** —— 第一版只有"卡清单里点一张卡"这一条隐式路径
+   * （`[data-role^="card-open-"]`）。作为**可见的**入口它不合格：用户找不到，
+   * 而且"我现在在编辑哪一种卡"这件事只能从清单里那张卡的文案反推。
+   *
+   * ## 语义（按用户给的口径）
+   *  - 切到「协议卡」⇒ 当前编辑**横版双面协议卡**（整副只许一张那条规则不变）；
+   *  - 切到「卡牌」⇒ 当前编辑**竖版编译卡**（整副还没有就按现有加卡逻辑建一张）；
+   *  - 两个模式各自记住上次看的那一张（`lastSeenId`），切换**不丢**已编辑内容。
+   */
+  const modeBar = elRole('div', 'cardmaker-modes', 'modes');
+  (modeBar as HTMLElement & { setAttribute(n: string, v: string): void }).setAttribute('role', 'tablist');
+  const modeHint = elRole('span', 'cardmaker-note', 'mode-hint', '');
+  const modeBtns: Record<CardKind, HTMLButtonElement> = {
+    protocol: btnRole('btn cardmaker-mode', 'mode-protocol', '协议卡（横版 · 正/背两面）'),
+    compile: btnRole('btn cardmaker-mode', 'mode-compile', '卡牌（竖版编译卡）'),
+  };
+  (modeBtns.protocol as unknown as { setAttribute(n: string, v: string): void }).setAttribute('role', 'tab');
+  (modeBtns.compile as unknown as { setAttribute(n: string, v: string): void }).setAttribute('role', 'tab');
+  modeBtns.protocol.addEventListener('click', () => { setMode('protocol'); });
+  modeBtns.compile.addEventListener('click', () => { setMode('compile'); });
+  modeBar.appendChild(modeBtns.protocol);
+  modeBar.appendChild(modeBtns.compile);
+  modeBar.appendChild(modeHint);
+  screen.appendChild(modeBar);
 
   /** 状态区：本屏**唯一**的提示通道（人读 `textContent`，机器读 `data-code`） */
   const status = elRole('div', 'cardmaker-status', 'status');
@@ -248,18 +289,38 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     + '导出按标准扑克牌 63.5×88.9mm 的 300dpi 成品尺寸。',
   ));
 
-  /* ── ② 预览 ── */
+  /* ── ② 两栏：左 = 选项，右 = 预览（常驻） ──
+   *
+   * 用户 2026-10-01 的原话：「将自定义协议页面内的预览展示框移至右边保持常驻，
+   * 其他的选项移到左边」。
+   *
+   * 结构就是**两个直接子节点**：`[data-role="options"]` 在前、`[data-role="preview"]` 在后。
+   * 桌面档由 CSS 定成 `grid-template-columns: minmax(0,1fr) 460px`（左选项 / 右预览），
+   * 竖屏窄档回落成单列（预览排在下面，见 `styles-local.css` 的两条 media 规则）。
+   * 右栏 `position: sticky; top: 12px` ⇒ 左栏滚很长时预览**不跑掉**。
+   */
+  const layout = elRole('div', 'cardmaker-layout', 'layout');
+  const optionsCol = elRole('div', 'cardmaker-options', 'options');
+  const previewCol = elRole('div', 'cardmaker-preview-col', 'preview-col');
+  layout.appendChild(optionsCol);
+  layout.appendChild(previewCol);
+  screen.appendChild(layout);
+
   const previewWrap = elRole('div', 'cardmaker-preview', 'preview');
   const canvas = dom.createCanvas();
   canvas.className = 'cardmaker-canvas';
   canvas.dataset.role = 'canvas';
   previewWrap.appendChild(canvas);
+  /** 预览读数：这一栏画的是哪一张、哪一套设计空间（模式切换之后会变，测试与 CDP 读它） */
+  const previewSize = elRole('div', 'cardmaker-note', 'preview-size', `预览：竖版编译卡 · 设计空间 ${CARD_W}×${CARD_H}`);
+  previewSize.dataset.orientation = 'portrait';
+  previewWrap.appendChild(previewSize);
   previewWrap.appendChild(el(
     'div',
     'cardmaker-note',
     '在卡面上拖动 = 平移背景；滚轮 = 以光标为中心缩放背景；在六边形里拖 = 移动 logo。',
   ));
-  screen.appendChild(previewWrap);
+  previewCol.appendChild(previewWrap);
 
   const adjust = elRole('div', 'cardmaker-adjust', 'adjust');
   const zoomLabel = elRole('span', 'cardmaker-note', 'zoom-value', '100%');
@@ -275,9 +336,10 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
   adjust.appendChild(zoomInput);
   adjust.appendChild(zoomLabel);
   adjust.appendChild(resetBtn);
-  screen.appendChild(adjust);
+  // 缩放滑杆跟着**预览**走（它调的是当前卡背景的平移/缩放）
+  previewCol.appendChild(adjust);
 
-  /* ── ③ 牌组名与卡清单 ── */
+  /* ── ③ 牌组名与卡清单（**只列当前模式的那些卡**） ── */
   const deckRow = elRole('div', 'cardmaker-row', 'deck-row');
   const deckTitle = document.createElement('input');
   deckTitle.type = 'text';
@@ -286,10 +348,10 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
   deckTitle.placeholder = '牌组名（用于导出文件名）';
   deckRow.appendChild(el('span', 'cardmaker-note', '牌组名'));
   deckRow.appendChild(deckTitle);
-  screen.appendChild(deckRow);
+  optionsCol.appendChild(deckRow);
 
   const cardsHost = elRole('div', 'cardmaker-cards', 'cards');
-  screen.appendChild(cardsHost);
+  optionsCol.appendChild(cardsHost);
 
   const cardActions = el('div', 'cardmaker-actions');
   const addCompile = btnRole('btn', 'add-compile', '新增竖版编译卡');
@@ -298,11 +360,10 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
   cardActions.appendChild(addCompile);
   cardActions.appendChild(addProtocol);
   cardActions.appendChild(delCard);
-  screen.appendChild(cardActions);
+  optionsCol.appendChild(cardActions);
 
   /* ── ④ 编辑表单（只编辑**当前卡**） ── */
   const form = elRole('div', 'cardmaker-form', 'form');
-
   const field = (role: string, label: string, hint?: string): HTMLInputElement => {
     const row = el('label', 'cardmaker-field');
     row.appendChild(el('span', 'cardmaker-label', label));
@@ -337,10 +398,12 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
   const inCSub = field('compile-subtitle', '横版卡副标题');
   const inCBot = field('compile-bottom', '横版卡底部小字');
   const inCBack = field('compile-back', '横版卡背面那行字');
-  screen.appendChild(form);
+  optionsCol.appendChild(form);
 
   const panelNote = elRole('p', 'cardmaker-note', 'panel-note', PANEL_EMPTY_HINT);
-  screen.appendChild(panelNote);
+  // 面板说明紧贴它描述的那三个输入框（它们是 `form` 里的成员）⇒ 进**同一条 `label`**
+  // 会让点击说明也聚焦输入框；这里保持同级块，按顺序紧跟表单。
+  optionsCol.appendChild(panelNote);
 
   /* ── ⑤ 背景 ── */
   const bgRow = elRole('div', 'cardmaker-bg', 'bg');
@@ -362,7 +425,7 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     presetHost.appendChild(presetBtn);
   }
   bgRow.appendChild(presetHost);
-  screen.appendChild(bgRow);
+  optionsCol.appendChild(bgRow);
 
   /**
    * 「每张卡单独的背景」开关。
@@ -377,7 +440,7 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
   perCardBox.dataset.role = 'per-card-bg';
   perCardRow.appendChild(perCardBox);
   perCardRow.appendChild(el('span', 'cardmaker-note', '每张卡单独的背景（关掉时整副牌共用一套背景）'));
-  screen.appendChild(perCardRow);
+  optionsCol.appendChild(perCardRow);
 
   /* ── ⑥ logo ── */
   const logoRow = elRole('div', 'cardmaker-row', 'logo');
@@ -388,7 +451,7 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
   logoRow.appendChild(logoState);
   logoRow.appendChild(logoUpload);
   logoRow.appendChild(logoClear);
-  screen.appendChild(logoRow);
+  optionsCol.appendChild(logoRow);
 
   /* ── ⑦ 导出 / 导入 ── */
   const ioRow = elRole('div', 'cardmaker-actions', 'io');
@@ -400,7 +463,7 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
   ioRow.appendChild(exportPortrait);
   ioRow.appendChild(exportJson);
   ioRow.appendChild(importJson);
-  screen.appendChild(ioRow);
+  optionsCol.appendChild(ioRow);
 
   /* ── ⑧ 署名（用户明确要求：显眼且准确） ── */
   const credit = elRole('footer', 'cardmaker-credit', 'credit');
@@ -486,8 +549,63 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
   function logoOf(card: CardState): Logo {
     return deck.shared.perCardBg ? card.logoOwn : sharedOf(card.kind).logo;
   }
+  /** 当前模式下的卡（清单只列这些；"当前卡"也只会是其中之一） */
+  function cardsOf(kind: CardKind): CardState[] {
+    return deck.cards.filter((c) => c.kind === kind);
+  }
   function current(): CardState | null {
     return deck.cards.find((c) => c.id === currentId) ?? null;
+  }
+
+  /**
+   * 换模式（用户 2026-10-01 要求的显式双模式切换）。
+   *
+   * 三件事，顺序有讲究：
+   *  1. 记住"现在这张卡属于哪个模式"（`lastSeenId`）—— 下一句会改 `mode`，之后就认不出来了；
+   *  2. 目标模式里**还没有卡**就按现有加卡逻辑建一张（协议卡整副只许一张这条规则照旧）；
+   *  3. 切到该模式上次看的那张（`lastSeenId`），没有就取第一张。
+   *
+   * ⚠️ **已编辑的内容不会丢**：它一直在 `deck` 里，这里只切"在看哪一张"。
+   * 切完必须 `refreshAll()` —— 预览尺寸（744×1039 vs 1039×744）、表单禁用态、
+   * 卡清单、背景面板**全都**跟着模式走。
+   */
+  function setMode(next: CardKind): void {
+    if (next !== mode) {
+      const cur = current();
+      if (cur !== null) lastSeenId[cur.kind] = cur.id;
+    }
+    const created = ensureCardOf(next);
+    mode = next;
+    screen.dataset.mode = mode;
+    const target = cardsOf(next);
+    const remembered = lastSeenId[next];
+    currentId = (remembered !== '' && target.some((c) => c.id === remembered))
+      ? remembered
+      : (target[0]?.id ?? '');
+    refreshAll();
+    if (created) {
+      say(
+        next === 'protocol'
+          ? '已切到「协议卡」：整副牌还没有横版协议卡，按加卡逻辑建了一张。'
+          : '已切到「卡牌」：整副牌还没有竖版编译卡，按加卡逻辑建了一张。',
+        'mode-created-card',
+        'info',
+      );
+    } else {
+      say(
+        next === 'protocol' ? '已切到「协议卡」（横版 · 正/背两面）。' : '已切到「卡牌」（竖版编译卡）。',
+        'mode-switched',
+        'info',
+      );
+    }
+  }
+
+  /** 目标模式里一张卡都没有时建一张；建了返回 true。规则：协议卡整副只许一张。 */
+  function ensureCardOf(kind: CardKind): boolean {
+    if (cardsOf(kind).length > 0) return false;
+    const card = defaultCard(newCardId(), kind);
+    deck.cards = kind === 'protocol' ? [card, ...deck.cards] : [...deck.cards, card];
+    return true;
   }
 
   /* ── 保存（防抖：拖拽/打字时不要每帧写盘） ── */
@@ -515,26 +633,38 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
 
   /* ── 刷新 ───────────────────────────────────────────────────────────── */
 
-  /** 卡清单：一行一张卡，点它切换当前编辑的卡 */
+  /**
+   * 卡清单：只列**当前模式**的那些卡（一行一张，点它切换当前编辑的卡）。
+   *
+   * 只列当前模式是有意的（用户 2026-10-01 的双模式切换）：这样"我在编辑哪一种卡"由
+   * 清单自己说清，而不是从每行的文案反推；另一种卡仍然活在牌组里（导出/保存照旧），
+   * 只是不在这条清单上 —— 切过去就能看到。
+   */
   function refreshCards(): void {
     cardsHost.textContent = '';
-    for (const card of deck.cards) {
+    const list = cardsOf(mode);
+    for (const card of list) {
       const row = elRole('div', 'cardmaker-card-row', 'card-row');
       row.dataset.cardId = card.id;
       row.dataset.cardKind = card.kind;
       if (card.id === currentId) row.classList.add('cardmaker-card-on');
       const open = btnRole('btn cardmaker-mini', `card-open-${card.id}`, card.kind === 'protocol' ? '横版协议卡' : '竖版编译卡');
-      open.addEventListener('click', () => { currentId = card.id; refreshAll(); });
+      open.addEventListener('click', () => {
+        currentId = card.id;
+        lastSeenId[card.kind] = card.id;
+        refreshAll();
+      });
       row.appendChild(open);
       const label = card.title.trim() === '' ? '（未命名）' : card.title.trim();
       const value = card.value.trim() === '' ? '—' : card.value.trim();
       row.appendChild(el('span', 'cardmaker-note', `${label} · 数值 ${value}`));
       cardsHost.appendChild(row);
     }
-    if (deck.cards.length === 0) {
-      cardsHost.appendChild(el('div', 'cardmaker-note', '牌组是空的：用下面的按钮加一张。'));
+    if (list.length === 0) {
+      cardsHost.appendChild(el('div', 'cardmaker-note', '这个模式下还没有卡：用下面的按钮加一张。'));
     }
-    delCard.disabled = current() === null || deck.cards.length <= 1;
+    // 只剩一张时不许删（不允许把这一种卡删空）—— 与第一版同一条规则，只是按**模式**判
+    delCard.disabled = current() === null || cardsOf(mode).length <= 1;
   }
 
   /** 表单 ← 当前卡（只在切换卡 / 导入之后回填；打字时不回填，免得把光标顶跑） */
@@ -561,10 +691,33 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
       : panelSummary(inTop.value, inMid.value, inBot.value);
   }
 
-  /** 背景 / logo 那一块 ← 当前卡 */
+  /** 背景 / logo 那一块 ← 当前卡；顺带同步模式按钮的选中态与导出按钮的文案/可用态 */
   function refreshAssets(): void {
     const card = current();
     perCardBox.checked = deck.shared.perCardBg;
+
+    /* 模式按钮的选中态与读数（`aria-selected` + `data-active`，两个方向都要同步） */
+    for (const kind of ['protocol', 'compile'] as const) {
+      const on = mode === kind;
+      modeBtns[kind].dataset.active = on ? 'yes' : 'no';
+      (modeBtns[kind] as unknown as { setAttribute(n: string, v: string): void })
+        .setAttribute('aria-selected', on ? 'true' : 'false');
+      modeBtns[kind].classList.toggle('cardmaker-mode-on', on);
+    }
+    const count = cardsOf(mode).length;
+    modeHint.textContent = mode === 'protocol'
+      ? `当前模式：协议卡（横版 · 正/背两面）· 整副牌只允许一张，现有 ${count} 张`
+      : `当前模式：卡牌（竖版编译卡）· 现有 ${count} 张`;
+
+    /* 导出按钮的文案/可用态跟着模式走（"当前卡"不许再指代不明） */
+    exportPng.textContent = mode === 'protocol' ? '导出当前协议卡 PNG（横版 1050×750）' : '导出当前卡 PNG（竖版 750×1050）';
+    exportPng.disabled = card === null;
+    // 协议卡只有横版形态 ⇒ 竖版导出它对不上；置灰 + 文案说清，而不是点了才报错
+    exportPortrait.disabled = mode === 'protocol' || card === null;
+    exportPortrait.textContent = mode === 'protocol'
+      ? '按竖版编译卡导出（协议卡只有横版形态，已停用）'
+      : '按竖版编译卡导出（当前已是竖版成品空间）';
+
     if (card === null) {
       bgMode.textContent = '没有可编辑的卡';
       logoState.textContent = '未上传 logo';
@@ -688,13 +841,22 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     return bgOk;
   }
 
-  /** 预览：把当前卡正面画进屏上那张 canvas */
+  /** 预览：把当前卡正面画进屏上那张 canvas；顺带把"预览的是哪一张、多大"写在它下面 */
   async function refreshPreview(): Promise<void> {
     const card = current();
     const seq = ++renderSeq;
-    if (card === null) return;
-    const w = isLandscape(card.kind) ? LAND_W : CARD_W;
-    const h = isLandscape(card.kind) ? LAND_H : CARD_H;
+    if (card === null) {
+      previewSize.textContent = '当前没有可预览的卡';
+      return;
+    }
+    const land = isLandscape(card.kind);
+    const w = land ? LAND_W : CARD_W;
+    const h = land ? LAND_H : CARD_H;
+    // 读数跟着卡走：模式切换之后这里会换成另一套尺寸（测试与 CDP 都读它）
+    previewSize.textContent = land
+      ? `预览：横版协议卡 · 设计空间 ${LAND_W}×${LAND_H}`
+      : `预览：竖版编译卡 · 设计空间 ${CARD_W}×${CARD_H}`;
+    previewSize.dataset.orientation = land ? 'landscape' : 'portrait';
     if (canvas.width !== w) canvas.width = w;
     if (canvas.height !== h) canvas.height = h;
     const ctx = getCtx(canvas);
@@ -984,36 +1146,45 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     scheduleSave(0);
   });
 
-  /* ── 卡的新增 / 删除 ── */
+  /* ── 卡的新增 / 删除（都按**当前模式**那种卡来加，并顺手把模式切过去） ── */
 
   addCompile.addEventListener('click', () => {
     const card = defaultCard(newCardId(), 'compile');
     deck.cards = [...deck.cards, card];
+    mode = 'compile';
+    screen.dataset.mode = mode;
     currentId = card.id;
+    lastSeenId.compile = card.id;
     refreshAll();
     scheduleSave(0);
     say('已加一张竖版编译卡。', 'card-added', 'info');
   });
 
   addProtocol.addEventListener('click', () => {
-    if (deck.cards.some((c) => c.kind === 'protocol')) {
+    if (cardsOf('protocol').length > 0) {
       say('横版协议卡整副牌只需要一张：先删掉现有那张再加。', 'card-add-refused', 'warn');
       return;
     }
     const card = defaultCard(newCardId(), 'protocol');
     deck.cards = [card, ...deck.cards];
+    mode = 'protocol';
+    screen.dataset.mode = mode;
     currentId = card.id;
+    lastSeenId.protocol = card.id;
     refreshAll();
     scheduleSave(0);
     say('已加一张横版协议卡。', 'card-added', 'info');
   });
 
   delCard.addEventListener('click', () => {
-    if (deck.cards.length <= 1) return;
     const card = current();
     if (card === null) return;
+    // 只按**当前模式**判"还能不能删"：删掉一张竖版卡不该被"另一模式还有卡"挡住，
+    // 也不该把当前模式删空（清单与预览都必须始终有东西）
+    if (cardsOf(mode).length <= 1) return;
     deck.cards = deck.cards.filter((c) => c.id !== card.id);
-    currentId = deck.cards[0].id;
+    if (lastSeenId[mode] === card.id) lastSeenId[mode] = '';
+    currentId = cardsOf(mode)[0]?.id ?? '';
     refreshAll();
     scheduleSave(0);
     say('这张卡已删除。', 'card-deleted', 'info');
@@ -1167,7 +1338,15 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
       // 开局给两张卡：两种形态在屏上都看得见（用户要编辑的就是这两种）
       deck.cards = [defaultCard(newCardId(), 'compile'), defaultCard(newCardId(), 'protocol')];
     }
-    currentId = deck.cards[0]?.id ?? '';
+    /**
+     * 开局停在哪个模式：**竖版编译卡**那一档（整副牌做卡的主体）。
+     * 牌组里恰好只有协议卡时（用户手改过的牌组）就停在协议卡，免得开局先给一张空白卡。
+     */
+    mode = cardsOf('compile').length > 0 ? 'compile' : 'protocol';
+    screen.dataset.mode = mode;
+    const startList = cardsOf(mode);
+    currentId = startList[0]?.id ?? '';
+    lastSeenId[mode] = currentId;
     deckTitle.value = deck.title;
     hydrated = true;
     refreshAll();
