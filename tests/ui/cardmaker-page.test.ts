@@ -10,8 +10,9 @@ import {
   type StubNode,
 } from './net-dom-stub';
 import { CREDIT, renderCardmaker, type CardmakerNav, type CardmakerStore } from '../../src/ui/cardmaker/page';
-import { CARD_H, CARD_W, LAND_H, LAND_W, SCALE_MAX, SCALE_MIN } from '../../src/ui/cardmaker/config';
+import { CARD_H, CARD_W, LAND_H, LAND_W, PROTOCOL_BACK, PROTOCOL_FRONT, SCALE_MAX, SCALE_MIN, ZONES } from '../../src/ui/cardmaker/config';
 import { parseDeck, stringifyDeck } from '../../src/ui/cardmaker/serialize';
+import { stripComments } from './source-text';
 import { defaultCard, defaultDeck, type Deck } from '../../src/ui/cardmaker/types';
 
 /**
@@ -326,19 +327,36 @@ describe('编辑文本', () => {
     expect(textOf(one(root, 'panel-note'))).toContain('不会画面板底衬');
   });
 
-  it('横版协议卡：三段面板与数值输入被**关掉**（填了不生效比填不了更坏）', async () => {
+  /**
+   * ⚠️ 判据面在 2026-10-01（用户要求"只显示当前模式那套字段"）之后**换了一族**：
+   * 旧判据是"另一模式的字段**禁用**（`disabled`）"；现在产品口径是**隐藏**
+   * （用户原话「不要显示卡牌的修改选项或者文本框」）⇒ 这里改成断言另一模式那些字段的
+   * **行**（`label.cardmaker-field`，也就是 `[data-role]` 的父节点）带 `hidden`。
+   * 这不是放宽：`hidden` 比"禁用"更强（屏上根本读不到），而且这一组与下面第 10 组
+   * 的逐项点名腿一起覆盖两个方向。
+   */
+  it('按模式开关字段：竖版模式留着三段面板、藏掉横版那几段；切到协议卡反过来', async () => {
     const h = harness();
     const root = await renderSettled(h);
-    // 第一张是竖版：那几个是开着的
-    expect((one(root, 'panel-top') as unknown as { disabled?: boolean }).disabled).toBe(false);
-    expect((one(root, 'value') as unknown as { disabled?: boolean }).disabled).toBe(false);
-    expect((one(root, 'compile-top') as unknown as { disabled?: boolean }).disabled).toBe(true);
-    // 切到横版（顶部的显式模式切换）
+    const rowHidden = (role: string): unknown => (one(root, role).parentElement as unknown as { hidden?: boolean }).hidden;
+    // 竖版模式下：竖版那套露着、横版那套藏着
+    expect(rowHidden('panel-top'), '竖版模式下三段面板被藏了').not.toBe(true);
+    expect(rowHidden('value'), '竖版模式下数值被藏了').not.toBe(true);
+    expect(one(root, 'compile-top').parentElement?.isConnected ?? true).toBe(true); // 节点仍在（只是隐藏）
+    expect(rowHidden('compile-top'), '竖版模式下横版小字没藏').toBe(true);
+    expect(rowHidden('compile-back'), '竖版模式下横版背面那行字没藏').toBe(true);
+    // 切到协议卡：完全反过来
     clickRole(root, 'mode-protocol');
-    expect((one(root, 'panel-top') as unknown as { disabled?: boolean }).disabled, '横版卡的三段面板没关掉').toBe(true);
-    expect((one(root, 'value') as unknown as { disabled?: boolean }).disabled, '横版卡的数值没关掉').toBe(true);
-    expect((one(root, 'compile-top') as unknown as { disabled?: boolean }).disabled, '横版卡的小字没打开').toBe(false);
-    expect(textOf(one(root, 'panel-note'))).toContain('只对竖版编译卡有效');
+    expect(rowHidden('panel-top'), '协议卡模式下三段面板没藏').toBe(true);
+    expect(rowHidden('panel-mid')).toBe(true);
+    expect(rowHidden('panel-bot')).toBe(true);
+    expect(rowHidden('value'), '协议卡模式下数值没藏').toBe(true);
+    expect(rowHidden('compile-top'), '协议卡模式下横版小字没露出来').not.toBe(true);
+    expect(rowHidden('compile-subtitle')).not.toBe(true);
+    expect(rowHidden('compile-bottom')).not.toBe(true);
+    expect(rowHidden('compile-back')).not.toBe(true);
+    // 标题两种模式都用得到 ⇒ 两边都不许藏
+    expect(rowHidden('title'), '标题在协议卡模式下被藏了').not.toBe(true);
   });
 
   it('牌组名改了就写进牌组（导出文件名用它）', async () => {
@@ -961,19 +979,20 @@ describe('★ 2026-10-01：双模式切换（协议卡 / 卡牌）', () => {
     expect(one(root, 'mode-protocol').dataset.active).toBe('no');
   });
 
-  it('两向切换：协议卡 ⇒ 横版尺寸、小字启用/数值禁用；切回卡牌 ⇒ 全部还原', async () => {
+  it('两向切换：协议卡 ⇒ 横版尺寸 + 字段换成协议卡那套；切回卡牌 ⇒ 全部还原', async () => {
     const h = harness();
     const root = await renderSettled(h);
     const canvas = one(root, 'canvas') as unknown as { width: number; height: number };
-    const dis = (role: string): unknown => (one(root, role) as unknown as { disabled?: boolean }).disabled;
+    /** 字段的**行**是否隐藏（2026-10-01 起可见性的唯一开关是 `hidden`，不再是 `disabled`） */
+    const rowHidden = (role: string): unknown => (one(root, role).parentElement as unknown as { hidden?: boolean }).hidden;
 
     // 起点：竖版
     expect(one(root, 'screen').dataset.mode).toBe('compile');
     expect([canvas.width, canvas.height]).toEqual([CARD_W, CARD_H]);
     expect(one(root, 'preview-size').dataset.orientation).toBe('portrait');
     expect(textOf(one(root, 'preview-size'))).toContain(`${CARD_W}×${CARD_H}`);
-    expect(dis('value')).toBe(false);
-    expect(dis('compile-top')).toBe(true);
+    expect(rowHidden('value')).not.toBe(true);
+    expect(rowHidden('compile-top')).toBe(true);
 
     // → 协议卡
     clickRole(root, 'mode-protocol');
@@ -984,8 +1003,8 @@ describe('★ 2026-10-01：双模式切换（协议卡 / 卡牌）', () => {
     expect([canvas.width, canvas.height], '切到协议卡后画布尺寸没跟着切').toEqual([LAND_W, LAND_H]);
     expect(one(root, 'preview-size').dataset.orientation).toBe('landscape');
     expect(textOf(one(root, 'preview-size'))).toContain(`${LAND_W}×${LAND_H}`);
-    expect(dis('value'), '协议卡模式下数值没禁用').toBe(true);
-    expect(dis('compile-top'), '协议卡模式下横版小字没启用').toBe(false);
+    expect(rowHidden('value'), '协议卡模式下数值没藏').toBe(true);
+    expect(rowHidden('compile-top'), '协议卡模式下横版小字没露出来').not.toBe(true);
     expect(textOf(one(root, 'mode-hint'))).toContain('协议卡');
 
     // → 切回卡牌
@@ -993,8 +1012,8 @@ describe('★ 2026-10-01：双模式切换（协议卡 / 卡牌）', () => {
     expect(one(root, 'screen').dataset.mode).toBe('compile');
     expect([canvas.width, canvas.height]).toEqual([CARD_W, CARD_H]);
     expect(one(root, 'preview-size').dataset.orientation).toBe('portrait');
-    expect(dis('value')).toBe(false);
-    expect(dis('compile-top')).toBe(true);
+    expect(rowHidden('value')).not.toBe(true);
+    expect(rowHidden('compile-top')).toBe(true);
     expect(textOf(one(root, 'mode-hint'))).toContain('卡牌');
   });
 
@@ -1085,5 +1104,231 @@ describe('★ 2026-10-01：双模式切换（协议卡 / 卡牌）', () => {
     // 样式表那边也各有一条（否则按钮没有选中态）
     expect(cssRule(LOCAL_CSS, '.cardmaker-modes {'), '样式表里没有 .cardmaker-modes').not.toBe('');
     expect(cssRule(LOCAL_CSS, ".cardmaker-mode[data-active='yes'] {"), '样式表里没有选中态规则').not.toBe('');
+  });
+});
+
+/* ==================================================================== *
+ * 10. ★ 2026-10-01（用户要求）：**只显示当前模式那套字段**
+ *
+ * 用户原话：「如果切换成自定义协议模式，就只显示自定义协议模式相关的修改选项或者文本框，
+ * 不要显示卡牌的修改选项或者文本框，自定义卡牌模式同理」。
+ *
+ * 判据按 **DOM 存在性/`hidden` 属性**断言（不靠 CSS 可见性猜），逐项点名两个方向。
+ * 归属的唯一出处在 `page.ts` 的 `modeFields` 注释表里（依据参考项目的三张分区表）。
+ * ==================================================================== */
+
+/** 本模式**该有**的字段 role（逐项点名，不是"至少有一个"） */
+const COMPILE_FIELD_ROLES = ['value', 'panel-top', 'panel-mid', 'panel-bot'] as const;
+/** 协议卡**该有**的字段 role（逐项点名） */
+const PROTOCOL_FIELD_ROLES = ['compile-top', 'compile-subtitle', 'compile-bottom', 'compile-back'] as const;
+/** 两种模式**共用**的字段 role（不许被一起藏掉） */
+const SHARED_FIELD_ROLES = ['title'] as const;
+
+describe('★ 2026-10-01：只显示当前模式的字段', () => {
+  /**
+   * 某个 role 的**字段行**是否隐藏。
+   *
+   * 两种形态都要认（实现里 `modeFields` 记的就是"那一行"）：
+   *  - 输入框：记的是它外面那层 `label.cardmaker-field` ⇒ 读 `parentElement.hidden`；
+   *  - 独立块（如三面板的说明 `panel-note`）：记的就是它自己 ⇒ 读它自己的 `hidden`。
+   * 不这么写就会有一半字段读到 `undefined` —— 那正是"恒真断言"的来源。
+   */
+  const rowHidden = (root: StubNode, role: string): unknown => {
+    const node = one(root, role) as unknown as { hidden?: boolean; parentElement: StubNode | null };
+    return node.hidden ?? (node.parentElement as unknown as { hidden?: boolean } | null)?.hidden;
+  };
+
+  it('协议卡模式：协议卡字段**全在**，竖版专属字段**全不在**（逐项点名）', async () => {
+    const h = harness();
+    const root = await renderSettled(h);
+    clickRole(root, 'mode-protocol');
+    for (const role of PROTOCOL_FIELD_ROLES) {
+      expect(rowHidden(root, role), `协议卡模式下缺少字段 [data-role="${role}"]`).not.toBe(true);
+    }
+    for (const role of COMPILE_FIELD_ROLES) {
+      expect(rowHidden(root, role), `协议卡模式下仍然显示着竖版字段 [data-role="${role}"]`).toBe(true);
+    }
+    // 竖版专用的面板说明也跟着藏（不给"另一套"留任何提示文字）
+    expect(rowHidden(root, 'panel-note'), '协议卡模式下还留着竖版的面板说明').toBe(true);
+  });
+
+  it('卡牌模式：竖版字段**全在**，协议卡专属字段**全不在**（逐项点名）', async () => {
+    const h = harness();
+    const root = await renderSettled(h);
+    expect(one(root, 'screen').dataset.mode).toBe('compile');
+    for (const role of COMPILE_FIELD_ROLES) {
+      expect(rowHidden(root, role), `卡牌模式下缺少字段 [data-role="${role}"]`).not.toBe(true);
+    }
+    for (const role of PROTOCOL_FIELD_ROLES) {
+      expect(rowHidden(root, role), `卡牌模式下仍然显示着协议卡字段 [data-role="${role}"]`).toBe(true);
+    }
+    expect(rowHidden(root, 'panel-note'), '卡牌模式下竖版的面板说明被藏了').not.toBe(true);
+  });
+
+  it('两种模式**共用**的字段与功能块两边都在（没被一起藏掉）', async () => {
+    const h = harness();
+    const root = await renderSettled(h);
+    /** 两块都该一直在的整块功能（牌组名 / 背景 / 每卡背景开关 / logo / 导出导入 / 卡清单） */
+    const alwaysBlocks = ['deck-row', 'cards', 'bg', 'logo', 'io', 'presets', 'per-card-bg', 'form'];
+    for (const visibleMode of ['compile', 'protocol'] as const) {
+      clickRole(root, `${visibleMode === 'compile' ? 'mode-compile' : 'mode-protocol'}`);
+      for (const role of SHARED_FIELD_ROLES) {
+        expect(rowHidden(root, role), `${visibleMode} 模式下共用的 [data-role="${role}"] 被藏了`).not.toBe(true);
+      }
+      for (const role of alwaysBlocks) {
+        const node = one(root, role);
+        expect((node as unknown as { hidden?: boolean }).hidden, `${visibleMode} 模式下整块 [data-role="${role}"] 被藏了`).not.toBe(true);
+      }
+      // 整块的**行**（label.cardmaker-field）也不该被藏
+      expect((one(root, 'per-card-bg').parentElement as unknown as { hidden?: boolean }).hidden).not.toBe(true);
+    }
+  });
+
+  it('切两次不丢字段：compile → protocol → compile 之后，两边该有的仍然该有（双向复原）', async () => {
+    const h = harness();
+    const root = await renderSettled(h);
+    const snapshot = (): string => {
+      const on = (roles: readonly string[]): string => roles.filter((r) => rowHidden(root, r) !== true).join(',');
+      return `compile[${on(COMPILE_FIELD_ROLES)}] protocol[${on(PROTOCOL_FIELD_ROLES)}] shared[${on(SHARED_FIELD_ROLES)}]`;
+    };
+    const firstCompile = snapshot();
+    clickRole(root, 'mode-protocol');
+    const proto = snapshot();
+    clickRole(root, 'mode-compile');
+    const backToCompile = snapshot();
+    // ① 协议卡模式下：协议卡那套全在、竖版那套全不在
+    expect(proto).toBe(`compile[] protocol[${PROTOCOL_FIELD_ROLES.join(',')}] shared[title]`);
+    // ② 切回来之后与**第一次**一模一样（逐字比对 = 字段一个不多一个不少）
+    expect(backToCompile, '切两次之后字段集合变了（有字段没能复原）').toBe(firstCompile);
+    expect(firstCompile).toBe(`compile[${COMPILE_FIELD_ROLES.join(',')}] protocol[] shared[title]`);
+    // 反向锚点：两次的快照**确实不同**（否则"复原"这件事分辨不出来）
+    expect(proto).not.toBe(firstCompile);
+  });
+
+  it('切字段是**隐藏**而不是"摆着灰掉"：另一模式那些输入框不再有 disabled 分支', async () => {
+    const h = harness();
+    const root = await renderSettled(h);
+    clickRole(root, 'mode-protocol');
+    // 协议卡模式下，竖版的三个面板行是隐藏的，而它们**不是**靠 `disabled` 表达的
+    for (const role of COMPILE_FIELD_ROLES) {
+      expect((one(root, role) as unknown as { disabled?: boolean }).disabled, `[${role}] 还在用 disabled 表达不可用`).not.toBe(true);
+    }
+    // 源码面：第一版那句"只对竖版编译卡有效"的死提示必须已经删干净
+    expect(PAGE_SRC, '源码里还留着"只对竖版编译卡有效"那句死提示').not.toContain('只对竖版编译卡有效');
+    expect(PAGE_SRC, '源码里还在用 disabled 表达"另一模式不可编辑"').not.toContain('inValue.disabled');
+  });
+});
+
+/* ==================================================================== *
+ * 11. ★ 2026-10-01（用户报缺陷）：协议卡默认版图必须与参考项目一致
+ *
+ * 用户原话：「协议卡的默认版图你好像搞错了，请参考那个项目制作标准的出来」。
+ *
+ * 实测根因（两条，都要被这一组钉住）：
+ *  1. `protocol-front/back.png` 是**竖版 744×1039** 素材，参考项目在加载时 `rotate90ccw`
+ *     转成横版再用；我们第一版直接 drawImage 进 1039×744 ⇒ cover 成 744×744 贴中间、
+ *     两侧留黑（用户截图里那个"黑底 + 两侧白色怪形状"）。
+ *  2. "LOADING..." 不是素材自带的，是参考项目 `defaultCompile()` 的占位串，我们照抄了
+ *     ⇒ 新建协议卡卡面正中印着它。
+ * ==================================================================== */
+
+describe('★ 2026-10-01：协议卡默认版图（素材 + 几何 + 层序）', () => {
+  it('协议卡的两张帧是**竖版素材转出来的横版成品帧**（源码面：加载时转一次）', () => {
+    // 唯一出处：`loadAssets()` 里对 protocolFront/Back 调 `rotateAsset90ccw`
+    const load = PAGE_SRC.slice(PAGE_SRC.indexOf('async function loadAssets'), PAGE_SRC.indexOf('/* ── 数据访问'));
+    expect(load.length, 'loadAssets 抽到空片段 ⇒ 本腿假绿').toBeGreaterThan(200);
+    expect(load, '协议卡正面帧没有做"竖版→横版"的旋转').toMatch(/protocolFront\s*=\s*pf\s*===\s*null\s*\?\s*null\s*:\s*rotateAsset90ccw\(pf\)/);
+    expect(load, '协议卡背面帧没有做"竖版→横版"的旋转').toMatch(/protocolBack\s*=\s*pb\s*===\s*null\s*\?\s*null\s*:\s*rotateAsset90ccw\(pb\)/);
+    // 反向锚点：竖版卡框与面板**不该**被转（它们本来就画在 744×1039 里）
+    expect(load, '竖版卡框被误转了').toContain('assets.frame = frame;');
+    expect(load, '竖版面板被误转了').toContain('assets.panels.top = top;');
+    // 旋转函数的实现：逆时针 90°（与参考项目 `rotate90ccw` 同一个变换）
+    const fn = PAGE_SRC.slice(PAGE_SRC.indexOf('function rotateAsset90ccw'), PAGE_SRC.indexOf('async function loadAssets'));
+    expect(fn, '旋转方向不是逆时针 90°').toContain('x.rotate(-Math.PI / 2)');
+    expect(fn, '旋转后的画布尺寸不是"高×宽"互换').toContain('out.width = img.naturalHeight');
+  });
+
+  it('协议卡的两张帧按**横版空间整张**画（不是按竖版尺寸、也不是按别的框）', () => {
+    const paint = PAGE_SRC.slice(PAGE_SRC.indexOf('async function paint'), PAGE_SRC.indexOf('/** 预览：把当前卡正面画进'));
+    expect(paint.length, 'paint 抽到空片段 ⇒ 本腿假绿').toBeGreaterThan(400);
+    expect(paint, '协议卡帧没有按 1039×744 整张画').toMatch(/drawImage\(frame,\s*0,\s*0,\s*w,\s*h\)/);
+    // 层序：背景 → 面板/数值/卡框（竖版）或卡框（横版）→ 文字 → logo
+    const iBg = paint.indexOf('drawBackground(');
+    const iFrame = paint.indexOf('const frame = side === ');
+    const iText = paint.indexOf('drawLine(');
+    const iLogo = paint.indexOf('drawLogoHex(');
+    expect(iBg, 'paint 里找不到背景绘制').toBeGreaterThan(-1);
+    expect(iFrame, 'paint 里找不到卡框选择').toBeGreaterThan(-1);
+    expect(iText, 'paint 里找不到文字绘制').toBeGreaterThan(-1);
+    expect(iLogo, 'paint 里找不到 logo 绘制').toBeGreaterThan(-1);
+    expect(iBg < iFrame && iFrame < iText && iText < iLogo, '层序不是 背景 → 卡框 → 文字 → logo').toBe(true);
+  });
+
+  it('协议卡的文本分区与参考项目 `COMPILE_FRONT` / `COMPILE_BACK` 逐值相同', () => {
+    // 正/背面各自画什么（这是"标准版图"的几何面）
+    expect([PROTOCOL_FRONT.topBar.x, PROTOCOL_FRONT.topBar.y, PROTOCOL_FRONT.topBar.w, PROTOCOL_FRONT.topBar.h]).toEqual([72, 40, 700, 80]);
+    expect([PROTOCOL_FRONT.name.x, PROTOCOL_FRONT.name.y, PROTOCOL_FRONT.name.w, PROTOCOL_FRONT.name.h]).toEqual([60, 256, 930, 200]);
+    expect([PROTOCOL_FRONT.subtitle.x, PROTOCOL_FRONT.subtitle.y, PROTOCOL_FRONT.subtitle.w, PROTOCOL_FRONT.subtitle.h]).toEqual([60, 418, 930, 90]);
+    expect([PROTOCOL_FRONT.bottomBar.x, PROTOCOL_FRONT.bottomBar.y, PROTOCOL_FRONT.bottomBar.w, PROTOCOL_FRONT.bottomBar.h]).toEqual([60, 620, 930, 72]);
+    expect([PROTOCOL_FRONT.hex.x, PROTOCOL_FRONT.hex.y, PROTOCOL_FRONT.hex.w, PROTOCOL_FRONT.hex.h]).toEqual([856, 38, 144, 140]);
+    expect([PROTOCOL_BACK.name.x, PROTOCOL_BACK.name.y, PROTOCOL_BACK.name.w, PROTOCOL_BACK.name.h]).toEqual([78, 592, 510, 128]);
+    expect([PROTOCOL_BACK.backLine.x, PROTOCOL_BACK.backLine.y, PROTOCOL_BACK.backLine.w, PROTOCOL_BACK.backLine.h]).toEqual([652, 626, 356, 84]);
+    // 字体与对齐（这两条决定"像不像参考项目的那张卡"）
+    expect(PROTOCOL_FRONT.name.font).toBe('HackedKerX');
+    expect(PROTOCOL_FRONT.subtitle.font).toBe('MotionControl');
+    expect(PROTOCOL_FRONT.topBar.font).toBe('SupermolotR');
+    expect(PROTOCOL_FRONT.bottomBar.align).toBe('center');
+    expect(PROTOCOL_FRONT.topBar.align).toBe('left');
+    expect(PROTOCOL_BACK.name.align).toBe('left');
+    expect(PROTOCOL_FRONT.hex.pointy).toBe('h');
+    // 反向锚点：协议卡这套**不是**竖版那套（否则"分区对"这件事分辨不出来）
+    expect(PROTOCOL_FRONT.name.w).not.toBe(ZONES.title.w);
+    expect(PROTOCOL_FRONT.hex.x).not.toBe(ZONES.hex.x);
+  });
+
+  it('正/背两面画的东西不同：正面四条横条，背面只有名字 + 背面那行字', () => {
+    const paint = PAGE_SRC.slice(PAGE_SRC.indexOf('async function paint'), PAGE_SRC.indexOf('/** 预览：把当前卡正面画进'));
+    // 正面：topBar / name / subtitle / bottomBar 四行
+    for (const zone of ['PROTOCOL_FRONT.topBar', 'PROTOCOL_FRONT.name', 'PROTOCOL_FRONT.subtitle', 'PROTOCOL_FRONT.bottomBar']) {
+      expect(paint, `正面没有画 ${zone}`).toContain(zone);
+    }
+    // 背面：name（厚底栏那一半）+ backLine，且**不画**正面那四条
+    expect(paint, '背面没有画名字').toContain('PROTOCOL_BACK.name');
+    expect(paint, '背面没有画背面那行字').toContain('PROTOCOL_BACK.backLine');
+    const backBranch = paint.slice(paint.indexOf("if (side === 'back')"), paint.indexOf('} else {'));
+    expect(backBranch, '背面分支里混进了正面才有的分区').not.toContain('PROTOCOL_FRONT');
+  });
+
+  it('★ 回归锚点：默认协议卡不带任何占位文案（"LOADING..." 在制作器源码里零出现）', async () => {
+    // ① 素材面：素材里没有文字（12 张 PNG 只有边框/描边）—— 这一点由 `probe-frames.mjs`
+    //    的像素统计与截图证明，无法在单测里断言，故这里只钉**代码面**。
+    // ② 代码面：`src/ui/cardmaker/**` 里不许再出现那个占位串
+    const files = ['types.ts', 'model.ts', 'page.ts', 'serialize.ts', 'config.ts'];
+    for (const f of files) {
+      const raw = readFileSync(fileURLToPath(new URL(`../../src/ui/cardmaker/${f}`, import.meta.url)))
+        .subarray(0, 1024 * 1024).toString('utf8');
+      // ⚠️ 必须先 `stripComments`：本轮的解释性注释里**写着**这三个字（说明"为什么删掉它"），
+      //    不剥注释的话这条腿会假红在注释上。判据面是**代码位的字符串字面量**。
+      const code = stripComments(raw);
+      const literals = [...code.matchAll(/'([^'\\\n]*)'|"([^"\\\n]*)"|`([^`\\\n]*)`/g)].map((m) => m[1] ?? m[2] ?? m[3] ?? '');
+      const bad = literals.filter((s) => s.includes('LOADING') || s.includes('COMPILED'));
+      expect(bad, `${f} 里还有占位文案字面量：${bad.join(' / ')}`).toEqual([]);
+    }
+    // ③ 行为面：默认（未编辑）协议卡的四个文本字段都是空的 ⇒ 卡面不会画出任何字
+    const deck = defaultDeck();
+    const proto = defaultCard('p', 'protocol');
+    deck.cards = [proto];
+    const h = harness({ loaded: deck });
+    const root = await renderSettled(h);
+    expect(one(root, 'screen').dataset.mode, '只有协议卡的牌组应当直接停在协议卡模式').toBe('protocol');
+    expect(valueOf(one(root, 'title')), '默认协议卡的标题不是空的').toBe('');
+    expect(valueOf(one(root, 'compile-subtitle')), '默认协议卡的副标题不是空的（占位串又回来了？）').toBe('');
+    expect(valueOf(one(root, 'compile-back')), '默认协议卡背面那行字不是空的').toBe('');
+    expect(valueOf(one(root, 'compile-top'))).toBe('');
+    expect(valueOf(one(root, 'compile-bottom'))).toBe('');
+    // 反向锚点：把标题填成 "LOADING" ⇒ 它**会**出现在输入框里（证明上面的"空"不是读错了值）
+    setValue(one(root, 'title'), 'LOADING');
+    fire(one(root, 'title'), 'input');
+    expect(valueOf(one(root, 'title'))).toBe('LOADING');
   });
 });

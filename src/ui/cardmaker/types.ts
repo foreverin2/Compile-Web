@@ -92,8 +92,25 @@ export const defaultBg = (): Bg => ({ type: 'none', name: null, dataUrl: null, t
 
 export const defaultLogo = (): Logo => ({ dataUrl: null, zoom: 1, offsetX: 0, offsetY: 0 });
 
+/**
+ * 竖版/横版卡上那四段"卡自己的"文字。**默认全空**。
+ *
+ * ## ★ 2026-10-01 为什么把两个占位串清掉了
+ *
+ * 参考项目 COMPILER · Card Builder（作者 Albert Blanco，MIT 许可）的
+ * `defaultCompile()` 写的是 `subtitle: "LOADING..."` / `back: "COMPILED"`
+ * （它的 `app.js:38`）。我们第一版照抄了那两个串，用户实测的后果是：
+ * **新建一张协议卡，卡面正中就印着 "LOADING..."** —— 用户看到的"占位图"里那句话是
+ * **我们代码画上去的**，不是素材自带的（素材 `card-frame/*.png` 里没有任何文字；
+ * 实测那 12 张 PNG 只有边框与描边，没有字形）。
+ *
+ * 用户这一轮的验收标准是"默认（未编辑）状态下预览必须是**像样的标准协议卡**"：
+ * 一张**空**的标准协议卡（只有卡框、没有字）就是像样的；印着 "LOADING..." 的不是。
+ * ⇒ 四段一律默认空串。这三个字现在在 `src/ui/cardmaker/**` 里**零出现**
+ * （测试有一条腿钉住这件事）。
+ */
 export const defaultCompileText = (): CompileText => ({
-  top: '', subtitle: 'LOADING...', bottom: '', back: 'COMPILED',
+  top: '', subtitle: '', bottom: '', back: '',
 });
 
 export const defaultCard = (id: string, kind: CardKind): CardState => ({

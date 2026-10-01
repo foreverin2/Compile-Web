@@ -221,7 +221,12 @@ describe('migrateBg / hydrate（移植自 test/bg.test.js）', () => {
     expect(c.id).toBe('fallback');
     expect(c.kind).toBe('compile');
     expect(c.title).toBe('X');
-    expect(c.compile.subtitle).toBe('LOADING...');
+    // ★ 2026-10-01：四段卡文本**默认全空**。参考项目那两个占位串（"LOADING..."/"COMPILED"）
+    //   会在新建协议卡时印在卡面正中（用户实测报过），所以这里逐条钉住"默认是空的"。
+    expect(c.compile.subtitle).toBe('');
+    expect(c.compile.back).toBe('');
+    expect(c.compile.top).toBe('');
+    expect(c.compile.bottom).toBe('');
     expect(hydrateCard({ id: 'abc', kind: 'protocol' }, 'x').kind).toBe('protocol');
     expect(hydrateCard({ id: '' }, 'x').id).toBe('x');
   });

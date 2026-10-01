@@ -362,9 +362,40 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
   cardActions.appendChild(delCard);
   optionsCol.appendChild(cardActions);
 
-  /* ── ④ 编辑表单（只编辑**当前卡**） ── */
+  /* ── ④ 编辑表单（只编辑**当前卡**，而且**只摆当前模式那套字段**） ──
+   *
+   * ★★ 2026-10-01（用户要求）：用户原话「如果切换成自定义协议模式，就只显示自定义协议模式
+   * 相关的修改选项或者文本框，不要显示卡牌的修改选项或者文本框，自定义卡牌模式同理」。
+   *
+   * 所以每个字段的**行**（`label.cardmaker-field`，含标签与提示）都登记在
+   * `modeFields` 里，切换模式时由 `syncModeFields()` 用 `hidden` 逐行开关 ——
+   * **隐藏**（不是"摆着但禁用"）：用户在协议卡模式下**读不到**竖版那三段面板那一套。
+   *
+   * 归属是按**参考项目的几何**定的（`src/config.js` 的 `ZONES` / `COMPILE_FRONT` /
+   * `COMPILE_BACK` 三张分区表），不是"能填就留着"：
+   *  - `ZONES{title,value,panels×3,hex}` = **竖版编译卡**那套（`renderCard` 用它）；
+   *  - `COMPILE_FRONT{topBar,name,subtitle,bottomBar,hex}` + `COMPILE_BACK{name,backLine,hex}`
+   *    = **横版协议卡**那套（`renderCompileLandscape` 用它）。
+   *
+   * 逐字段的归属（**这里就是判据的唯一出处**）：
+   *  | 字段 | 竖版编译卡 | 协议卡 | 依据 |
+   *  |---|---|---|---|
+   *  | 协议名 / 标题 | 有（`ZONES.title` 左上角） | 有（`COMPILE_FRONT.name` 正中大标题） | 两边都在 |
+   *  | 数值 | 有（`ZONES.value` 大号中心数字） | **无** | 协议卡的三张分区表里没有数值位 |
+   *  | 上/中/下三面板 | 有（`ZONES.panels`） | **无** | 横版协议卡只有顶栏/标题/副标题/底栏四条横条 |
+   *  | 横版左上角小字 | **无** | 有（`COMPILE_FRONT.topBar`） | 同上 |
+   *  | 横版副标题 | **无** | 有（`COMPILE_FRONT.subtitle`） | 同上 |
+   *  | 横版底部小字 | **无** | 有（`COMPILE_FRONT.bottomBar`） | 同上 |
+   *  | 横版背面那行字 | **无** | 有（`COMPILE_BACK.backLine`） | 只有协议卡有两个面 |
+   *
+   * 两种模式**都用得到**的东西（牌组名 / 背景 / 每卡背景开关 / logo / 导出导入 / 卡清单 /
+   * 模式切换 / 状态行 / 署名）**照旧一直显示**，不参与这里的开关。
+   */
   const form = elRole('div', 'cardmaker-form', 'form');
-  const field = (role: string, label: string, hint?: string): HTMLInputElement => {
+  /** 每个字段行归属哪种卡（`null` = 两种模式都显示） */
+  const modeFields: Array<{ row: HTMLElement; kind: CardKind | null }> = [];
+  const trackRow = (row: HTMLElement, kind: CardKind | null): void => { modeFields.push({ row, kind }); };
+  const field = (role: string, label: string, kind: CardKind | null, hint?: string): HTMLInputElement => {
     const row = el('label', 'cardmaker-field');
     row.appendChild(el('span', 'cardmaker-label', label));
     const input = document.createElement('input');
@@ -374,9 +405,10 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     row.appendChild(input);
     if (hint) row.appendChild(el('span', 'cardmaker-hint', hint));
     form.appendChild(row);
+    trackRow(row, kind);
     return input;
   };
-  const area = (role: string, label: string, hint?: string): HTMLTextAreaElement => {
+  const area = (role: string, label: string, kind: CardKind | null, hint?: string): HTMLTextAreaElement => {
     const row = el('label', 'cardmaker-field');
     row.appendChild(el('span', 'cardmaker-label', label));
     const input = document.createElement('textarea');
@@ -386,23 +418,26 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     row.appendChild(input);
     if (hint) row.appendChild(el('span', 'cardmaker-hint', hint));
     form.appendChild(row);
+    trackRow(row, kind);
     return input;
   };
 
-  const inTitle = field('title', '协议名 / 标题', '横版卡上是正中大标题；竖版卡上是左上角标题');
-  const inValue = field('value', '数值（大号中心数字）', '只对竖版编译卡有效');
-  const inTop = area('panel-top', '上方面板', '可写 **粗体** 与 __下划线__');
-  const inMid = area('panel-mid', '中部面板', '可写 **粗体** 与 __下划线__');
-  const inBot = area('panel-bot', '下方面板', '可写 **粗体** 与 __下划线__');
-  const inCTop = field('compile-top', '横版卡左上角小字');
-  const inCSub = field('compile-subtitle', '横版卡副标题');
-  const inCBot = field('compile-bottom', '横版卡底部小字');
-  const inCBack = field('compile-back', '横版卡背面那行字');
+  const inTitle = field('title', '协议名 / 标题', null, '协议卡上是正中大标题；竖版编译卡上是左上角标题');
+  const inValue = field('value', '数值（大号中心数字）', 'compile');
+  const inTop = area('panel-top', '上方面板', 'compile', '可写 **粗体** 与 __下划线__');
+  const inMid = area('panel-mid', '中部面板', 'compile', '可写 **粗体** 与 __下划线__');
+  const inBot = area('panel-bot', '下方面板', 'compile', '可写 **粗体** 与 __下划线__');
+  const inCTop = field('compile-top', '协议卡左上角小字', 'protocol');
+  const inCSub = field('compile-subtitle', '协议卡副标题', 'protocol');
+  const inCBot = field('compile-bottom', '协议卡底部小字', 'protocol');
+  const inCBack = field('compile-back', '协议卡背面那行字', 'protocol');
   optionsCol.appendChild(form);
 
   const panelNote = elRole('p', 'cardmaker-note', 'panel-note', PANEL_EMPTY_HINT);
   // 面板说明紧贴它描述的那三个输入框（它们是 `form` 里的成员）⇒ 进**同一条 `label`**
   // 会让点击说明也聚焦输入框；这里保持同级块，按顺序紧跟表单。
+  // ★ 它是**竖版专用**的说明（讲三段面板的），所以跟着竖版那三个字段一起开关。
+  trackRow(panelNote, 'compile');
   optionsCol.appendChild(panelNote);
 
   /* ── ⑤ 背景 ── */
@@ -486,8 +521,12 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
   const assets: {
     frame: HTMLImageElement | null;
     panels: Record<'top' | 'mid' | 'bot', HTMLImageElement | null>;
-    protocolFront: HTMLImageElement | null;
-    protocolBack: HTMLImageElement | null;
+    /**
+     * ★ 协议卡的两张帧：**已经是横版 1039×744 的成品帧**（加载时由 `rotateAsset90ccw`
+     * 从竖版素材 `protocol-front/back.png` 转出来的）。绘制层直接按横版空间整张画。
+     */
+    protocolFront: HTMLCanvasElement | null;
+    protocolBack: HTMLCanvasElement | null;
   } = { frame: null, panels: { top: null, mid: null, bot: null }, protocolFront: null, protocolBack: null };
 
   /**
@@ -512,12 +551,54 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
   }
 
   /**
-   * 六张素材：竖版卡框 + 三条面板 + 横版协议卡的正/背卡框。
+   * 把一张**竖版**素材（744×1039）逆时针转 90° 成横版（1039×744）。
    *
-   * ⚠️ **两张横版卡框用的是素材目录里的 `protocol-front.png` / `protocol-back.png`**
-   * （它们本身就画在 1039×744 的横版空间里），**不是**把竖版 `frame.png` 转 90° ——
-   * 参考项目也是这么做的（它把这层预旋转的结果单独存成文件）。
-   * 导出竖版工作时用的那条逆变换在 `rotateToPortrait()` 里（与这里互逆）。
+   * ## ★★ 2026-10-01（用户报"协议卡默认版图做错了"的根因修法）
+   *
+   * `card-frame/protocol-front.png` / `protocol-back.png` **本身是竖版的 744×1039**
+   * （实测：像素统计里内容纵向占 99.3%，且自然尺寸就是 744×1039）—— 素材目录里
+   * **没有**第二套横版美术，横版卡框就是把竖版那两张转 90° 得到的。
+   * 参考项目在**加载时**就转好（`app.js:3035-3036` 的 `rotate90ccw(cFront)`），
+   * 再按 1039×744 画（`drawImage(frame, 0, 0, LAND_W, LAND_H)`）。
+   *
+   * 我们第一版**漏了这一步**：把竖版帧直接 `drawImage(frame, 0, 0, 1039, 744)`
+   * ⇒ cover 式缩放成 744×744 贴中间，两侧各留 147.5px 黑边 —— 用户截图里那个
+   * "黑底 + 两侧白色怪形状"的矩形就是这个（见 `.superpowers/cardmaker/frame-wrong.png`
+   * 与 `frame-right.png` 两张对照截图）。
+   *
+   * 为什么在**加载时**转（而不是每次绘制转一次）：参考项目也是这么做的，而且它把
+   * "转了 90° 的帧"这件事变成一个**成品素材**，绘制路径里就只剩一条
+   * `drawImage(landFrame, 0, 0, LAND_W, LAND_H)`，没有"这里要不要转"的分支可写错。
+   * 代价是每张帧多一块 1039×744 的离屏画布（两张，约 6MB 显存），可忽略。
+   *
+   * 拿不到 2D 上下文时回 `null`（绘制层当"这一层没有"，不抛）。
+   */
+  function rotateAsset90ccw(img: HTMLImageElement): HTMLCanvasElement | null {
+    const out = dom.createCanvas();
+    out.width = img.naturalHeight || LAND_W;
+    out.height = img.naturalWidth || LAND_H;
+    let ctx: CanvasRenderingContext2D | null = null;
+    try {
+      ctx = out.getContext('2d');
+    } catch {
+      ctx = null;
+    }
+    if (!ctx) return null;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.translate(0, out.height);
+    ctx.rotate(-Math.PI / 2);
+    ctx.drawImage(img, 0, 0);
+    return out;
+  }
+
+  /**
+   * 六张素材：竖版卡框 `frame.png` + 三条面板 + 横版协议卡的正/背卡框。
+   *
+   * ⚠️ **素材目录里那 12 张 PNG 全是竖版 744×1039**（实测逐张确认过），所以
+   * `protocol-front/back` 两张**必须**先在加载时转成横版（`rotateAsset90ccw`）——
+   * 见那个函数上面那一大段（那是本轮用户报的版图缺陷的根因）。
+   * 竖版的 `frame.png` / `panel_*.png` **不需要转**（竖版编译卡就画在 744×1039 里）。
    */
   async function loadAssets(): Promise<void> {
     const base = `${ASSET_BASE}/card-frame`;
@@ -533,8 +614,9 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     assets.panels.top = top;
     assets.panels.mid = mid;
     assets.panels.bot = bot;
-    assets.protocolFront = pf;
-    assets.protocolBack = pb;
+    // ★ 两张协议卡帧：竖版素材 → 转成横版成品帧（参考项目的 `rotate90ccw` 同一件事）
+    assets.protocolFront = pf === null ? null : rotateAsset90ccw(pf);
+    assets.protocolBack = pb === null ? null : rotateAsset90ccw(pb);
   }
 
   /* ── 数据访问：全部经这几个函数，别处不直接挑 `deck.shared` 的字段 ── */
@@ -667,28 +749,47 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     delCard.disabled = current() === null || cardsOf(mode).length <= 1;
   }
 
-  /** 表单 ← 当前卡（只在切换卡 / 导入之后回填；打字时不回填，免得把光标顶跑） */
+  /**
+   * ★ 2026-10-01（用户要求）：按**当前模式**逐行开关字段 —— 另一模式那套字段**隐藏**
+   * （`hidden`，不是"摆着但灰掉"），于是屏上直接**读不到**它。
+   *
+   * 为什么用 `hidden` 而不是"不产出节点"：输入框与它们的监听器是**只建一次**的
+   * （`onText` / `onCompile` 在启动时就挂好了），反复销毁重建会让监听器与 DOM 引用
+   * 对不上（本仓栽过这种"两份真相"的跟头）。`hidden` 是 DOM 属性（不是 CSS），
+   * 在无 jsdom 的桩上也能被断言，且浏览器里等效于不显示。
+   *
+   * ⚠️ 与它配套的是 `formFromCard()` **不再**去设 `disabled` —— 第一版是"两套字段都摆着 +
+   * 另一套灰掉 + 一句说明"，用户明确不要那个形态。所以这里的 `hidden` 是**唯一**的
+   * 可见性开关，`disabled` 那几条分支已经删掉（不留永不出现的死代码/死提示）。
+   */
+  function syncModeFields(): void {
+    for (const f of modeFields) {
+      f.row.hidden = f.kind !== null && f.kind !== mode;
+    }
+  }
+
+  /**
+   * 表单 ← 当前卡（只在切换卡 / 导入 / 换模式之后回填；打字时不回填，免得把光标顶跑）。
+   *
+   * 只回填**当前模式**那几个字段的值，另一模式那几个**不碰**：它们仍旧反映它们那张卡
+   * （切回去时 `syncModeFields` 放行、这一函数再回填一次，内容照旧）。
+   */
   function formFromCard(card: CardState | null): void {
+    syncModeFields();
+    if (mode === 'protocol') {
+      inTitle.value = card ? card.title : '';
+      inCTop.value = card ? card.compile.top : '';
+      inCSub.value = card ? card.compile.subtitle : '';
+      inCBot.value = card ? card.compile.bottom : '';
+      inCBack.value = card ? card.compile.back : '';
+      return;
+    }
     inTitle.value = card ? card.title : '';
     inValue.value = card ? card.value : '';
     inTop.value = card ? card.panelTop : '';
     inMid.value = card ? card.panelMid : '';
     inBot.value = card ? card.panelBot : '';
-    inCTop.value = card ? card.compile.top : '';
-    inCSub.value = card ? card.compile.subtitle : '';
-    inCBot.value = card ? card.compile.bottom : '';
-    inCBack.value = card ? card.compile.back : '';
-    const land = card !== null && isLandscape(card.kind);
-    // 横版协议卡没有"三段面板"与"大号数值"这两样东西 ⇒ 那几个输入框关掉，
-    // 免得用户填了却看不到（填了不生效比"填不了"更坏）
-    inValue.disabled = land;
-    inTop.disabled = land;
-    inMid.disabled = land;
-    inBot.disabled = land;
-    for (const node of [inCTop, inCSub, inCBot, inCBack]) node.disabled = !land;
-    panelNote.textContent = land
-      ? '横版协议卡：三段面板文本只对竖版编译卡有效，所以这里先关掉（大号数值也一样）。'
-      : panelSummary(inTop.value, inMid.value, inBot.value);
+    panelNote.textContent = panelSummary(inTop.value, inMid.value, inBot.value);
   }
 
   /** 背景 / logo 那一块 ← 当前卡；顺带同步模式按钮的选中态与导出按钮的文案/可用态 */
