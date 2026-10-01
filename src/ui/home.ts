@@ -9,7 +9,7 @@ import { changelogElement } from './changelog';
 import { FX_SETTINGS, isMetal6StrobeOn, setMetal6Strobe } from './fx-settings';
 // ★ 2026-10-01（P0，用户拍板"UI 全量双语"）：设置小窗是**第一个真实消费者** —— 它的每一条
 // 文案都从 `src/i18n/` 取。中文值与这里原来的字面量逐字一致（既有测试零改动）。
-import { LANGS, getLang, setLang, t, type Lang } from '../i18n';
+import { LANGS, getLang, saveFailedText, setLang, t, type Lang, type WriteFailure } from '../i18n';
 
 /**
  * 主界面/掷硬币/图鉴/规则图纸 —— 非对局屏（main.ts 导航）。
@@ -180,11 +180,43 @@ function showToast(msg: string): void {
   window.setTimeout(() => t.remove(), 2600);
 }
 
-/** 清空根容器（各屏互斥）；解绑主页背景 resize 重建并退出「整屏主页」模式 */
+/**
+ * 清空根容器（各屏互斥）；退出「整屏主页」模式。
+ *
+ * ## ★ 2026-10-01（P0 线上验收 D2）：这里有两处**为复用背景而做**的改动
+ *
+ * 1. **不再把 `liveBgHost` 置空**。原来那句 `liveBgHost = null;` 的意图是"离开首页之后别再
+ *    照着一个游离的背景重建"，但它同时抹掉了"上一帧那一份还在、可以复用"这件事 ⇒
+ *    每次 `renderHome` 都重建背景（切语言时表现为：顺序哈希变、动画 `currentTime` 归零）。
+ *    它想防的那件事由 `takeReusableBg()` 的 `parentElement !== null` 那一档接管。
+ * 2. **清空时把整棵子树解绑**（`unlinkTree`）。这不是画蛇添足：本屏的结构是
+ *    `root(#app) → .home-screen → .home-bg`，而 `root.textContent = ''` 只解开**直接子节点**
+ *    （`.home-screen`）的指针 —— `.home-bg` 的 `parentElement` 仍然指着那个已经被丢弃的
+ *    `.home-screen`。于是 `takeReusableBg()` 会看到"背景还挂在别处" ⇒ 判成不可复用 ⇒
+ *    **在真浏览器里也一样会重建**（D2 会原样复发）。
+ *    ⚠️ 本仓的 DOM 桩把 `textContent = ''` 实现成"只清一层"（与浏览器不同）⇒ 递归解绑同时让
+ *    两侧语义一致，D2 的判据才能在桩上真的跑到。
+ */
 function clearRoot(root: HTMLElement): void {
-  liveBgHost = null;
+  unlinkTree(root);
   root.textContent = '';
   root.classList.remove('draft-exit', 'board-enter', 'no-anim', 'screen-home');
+}
+
+/**
+ * 把一棵子树的 `parentElement` 全部清空（**不含** `node` 自己）。
+ *
+ * ⚠️ 只碰这一个字段，且只用于"马上要被丢掉的那棵树"：它是本仓 DOM 桩的语义（桩的
+ * `textContent = ''` 与 `remove()` 都写这个字段），在真浏览器里是**冗余但无害**的
+ * （`textContent = ''` 已经断开整棵子树）。
+ * ⚠️ 写成先递归、后清自己：顺序反过来的话，递归边走边丢指针会漏掉节点。
+ * 深度是屏的 DOM 深度（十几层），没有栈风险。
+ */
+function unlinkTree(node: HTMLElement): void {
+  for (const child of Array.from(node.children)) {
+    unlinkTree(child as HTMLElement);
+    (child as { parentElement: unknown }).parentElement = null;
+  }
 }
 
 /* =====================================================================
@@ -277,10 +309,72 @@ function fillBg(bg: HTMLElement): void {
 
 /** 当前挂载中的背景节点（供窗口 resize 重建；离开主页时置空） */
 let liveBgHost: HTMLElement | null = null;
+/**
+ * 上面那一份挂在**哪个根**里（`renderHome` 的 `root`）。
+ *
+ * ⚠️ 用它而不是 `root.contains(live)`：本仓的 DOM 桩把 `contains` 实现成**恒 false**
+ * （见 `tests/ui/net-dom-stub.ts` 的 extra 列表）⇒ 拿它当复用判据会让 D2 的行为腿在桩上
+ * 永远走"不复用"那一支（假绿）。记 root 这一枚引用既简单又**能在桩上真跑**。
+ */
+let liveBgRoot: HTMLElement | null = null;
 let bgResizeTimer: number | null = null;
 
-/** 主页背景容器 */
-function buildHomeBg(): HTMLElement {
+/**
+ * 把已经存在的那一份 `.home-bg` 摘下来复用，返回 `null` 表示"没有可复用的"。
+ *
+ * ★ 2026-10-01（P0 线上验收 **D2**）：**切语言不许重建首页背景**。
+ *
+ * ## 缺陷现场（真浏览器实测）
+ *
+ * 切语言那条路原来直接 `showHome()` ⇒ `renderHome` 从 `clearRoot` 开始重画整棵，
+ * 于是 `buildHomeBg()` 重新洗牌（`bgGroups()` 里的 `Math.random()`）+ 重建全部斜线带：
+ * 608 张 `.bg-plane` 的顺序哈希 `2714029209→1340731705`、band 的 CSS `currentTime` 从 2850
+ * 掉回 350（动画**从头开始**）。玩家看到的是"切个语言，背景整片跳了一下"。
+ *
+ * ## 选了哪种修法，为什么（用户要求两处都说清）
+ *
+ * 两条路都可行：**(a) 让背景节点跨重画保持同一个 DOM 节点与动画连续性**、
+ * **(b) 把洗牌改成固定种子**。这里选 **(a)**，理由按重要性：
+ *
+ *  1. **(a) 同时解决两件事**：(b) 只让"洗出来的顺序"可复现，动画仍然会被重建
+ *     （`fillBg` 造的是新的 `.bg-band-move` 元素 ⇒ 新元素上的 CSS 动画必然从 0 开始），
+ *     而验收口径的第二条正是 `currentTime` **不许回退**；
+ *  2. **(b) 有产品代价**：固定种子 ⇒ **每次打开首页都是同一张背景**（现在每次加载换一个排列）。
+ *     改观感换一个"切语言不跳"的收益，不划算；
+ *  3. **(a) 顺带修掉同族缺陷**：任何"离开首页再回来"（进图鉴/规则/本地数据再返回）现在也
+ *     不重建背景 —— 那是同一个 `renderHome`。
+ *
+ * ⚠️ **真浏览器里为什么"同一个 DOM 节点"就等于"动画不回退"**：把节点从 `#app` 摘下来再挂回去，
+ * 只要它没被 GC、也没有被重新创建，浏览器会**保留它上面的 CSS 动画状态**（`currentTime` 继续走）。
+ * 而 `fillBg` 里那句 `innerHTML`/`insertBefore` 造的是**新元素**，那才是"从 0 开始"的来源。
+ *
+ * ⚠️ 判据是"上一帧是我把它摘下来的，而且这一次还是同一个根"：
+ * `live.parentElement === null`（`clearRoot(root)` 刚把上一棵清掉）且 `liveBgRoot === root`。
+ * 不用 `isConnected`（那是另一个语义，且本仓的 DOM 桩**默认没有它** —— `undefined` 会让这条
+ * 判据在桩上恒假，D2 的行为腿就变成假绿）；也不用 `contains`（桩里恒 false，同样问题）。
+ *
+ * ⚠️ `clearRoot()` **不再把 `liveBgHost` 置空**（2026-10-01 D2 改）：那一句是"离开首页就别再
+ * 重建背景"的旧保险，但它同时把"可以复用"这件事一并抹掉了 —— 于是切语言时必然重建。
+ * 它想防的那件事（离开首页之后照着一个游离的背景重建）由 `parentElement !== null` 这一档接管：
+ * 那个背景还挂在别处时**照样不复用**，语义更准。
+ */
+function takeReusableBg(root: HTMLElement): HTMLElement | null {
+  const live = liveBgHost;
+  if (live === null || live.parentElement !== null) return null;
+  if (liveBgRoot !== root) return null; // 换了根：跨 root 搬背景没有意义，还会把旧根掏空
+  live.remove();
+  return live;
+}
+
+/**
+ * 主页背景容器。
+ *
+ * ★ D2 起它**优先复用**上一帧那一份（`takeReusableBg`），拿不到才新建。
+ * 新建时洗牌照旧（每次加载换一个排列），复用时不洗、不重建 ⇒ 顺序与动画都连续。
+ */
+function buildHomeBg(root: HTMLElement): HTMLElement {
+  const reused = takeReusableBg(root);
+  if (reused !== null) return reused;
   const bg = el('div', 'home-bg');
   bg.setAttribute('aria-hidden', 'true');
   fillBg(bg);
@@ -288,8 +382,9 @@ function buildHomeBg(): HTMLElement {
   return bg;
 }
 
-function registerBgResize(bg: HTMLElement): void {
+function registerBgResize(root: HTMLElement, bg: HTMLElement): void {
   liveBgHost = bg;
+  liveBgRoot = root;
   if (bgResizeTimer !== null) return; // 监听只挂一次
   window.addEventListener('resize', () => {
     if (bgResizeTimer !== null) window.clearTimeout(bgResizeTimer);
@@ -306,8 +401,10 @@ export function renderHome(root: HTMLElement, nav: HomeNav): void {
   root.classList.add('screen-home'); // #app 去内边距 → 主页背景铺满整个可视区
   const screen = el('div', 'home-screen');
 
-  const bg = buildHomeBg();
-  registerBgResize(bg);
+  // ★ 2026-10-01（D2）：`clearRoot(root)` **之后**才找可复用的背景 —— 摘下来的是上一帧那一棵里的
+  // 那一份，此时它的 `parentElement` 已经被清空（见 `takeReusableBg` 的判据）。
+  const bg = buildHomeBg(root);
+  registerBgResize(root, bg);
   screen.appendChild(bg);
 
   const menu = el('div', 'home-menu');
@@ -1137,11 +1234,81 @@ export interface SettingsOverlayNav {
    *
    * 返回**写盘结论**（三态不许折叠，与「本地数据与隐私」屏那几条同款）：
    *  - `{ ok: true }`：真的落盘了；
-   *  - `{ ok: false, detail }`：**后端存在却写不进去**（隐私模式 / 配额满）⇒ 本屏在小窗里
-   *    如实写一句"本次会话生效、刷新回旧语言 + 真因"，绝不假装保存成功；
-   *  - 宿主抛错也当 `{ ok: false }` 处理（本函数兜 `try/catch`，不让切语言把小窗炸掉）。
+   *  - `{ ok: false, reason, detail }`：**写不进去** ⇒ 本屏在小窗里如实写一句
+   *    "本次会话生效、刷新回旧语言 + 真因"，绝不假装保存成功。
+   *    ★ 2026-10-01（线上验收 D3）：`reason` / `detail` 是**结构化**的（不是一句写死的中文兜底）
+   *    ⇒ 提示文案走 `saveFailedText()`（本地化）并原样带上真因（例如字节数）。
+   *  - 宿主抛错也当失败处理（本函数兜 `try/catch`，不让切语言把小窗炸掉）。
    */
-  readonly onLangChange: (lang: Lang) => { ok: boolean; detail?: string };
+  readonly onLangChange: (lang: Lang) => LangChangeOutcome;
+}
+
+/**
+ * 宿主对小窗那一次"切语言"的回话（**用户可见的两态**：成功 / 没保存上）。
+ *
+ * ⚠️ 写成**命名类型**（不是就地在签名里写 `{ … }`）：就地在返回类型标注里写字面量会让
+ * `tests/ui/source-text.ts` 的 `functionBody` 把它当成函数体起点（那是它写明的已知局限），
+ * 而 `settingsOverlayElement` 的判据面正靠 `functionBody` 抽。
+ *
+ * ★ 2026-10-01（线上验收 D3）：载荷是**结构化的**（`reason` + 可选的数值/系统消息），
+ * **不是**拼好的句子。整句由 `saveFailedText()` 按当前语言拼 —— 两种语言下都不夹另一种语言的字。
+ */
+export type LangChangeOutcome =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly reason: WriteFailure['reason']; readonly detail?: string }
+  | { readonly ok: false; readonly reason: 'too-large'; readonly bytes: number; readonly limit: number };
+
+/** 小窗那一次切换的**成功**回话（唯一一处字面量，宿主与测试都引用它，免得各写各的） */
+export const LANG_CHANGE_OK: LangChangeOutcome = { ok: true };
+
+/**
+ * 存储层写盘失败的**结构形状**（与 `src/app/storage.ts` 的 `WriteResult` 失败分支同形）。
+ *
+ * 刻意写成**本地结构类型**（不 import 那一层）：`src/ui/**` 不需要认识存储，
+ * 而这里只要那两个变体的字段形状 —— 与"`src/i18n` 不认识存储"同一口径。
+ * 漂移在编译期就会报（`applyWriteResult` 的实参就是真的 `WriteResult`）。
+ */
+type StorageWriteFailure =
+  | { readonly ok: false; readonly reason: 'too-large'; readonly bytes: number; readonly limit: number }
+  | { readonly ok: false; readonly reason: 'write-failed'; readonly detail: string };
+
+/** 存储层写盘结论的形状（成功 + 两种失败）——只用来给 `applyWriteResult` 的实参定型 */
+type StorageWriteResult = { readonly ok: true } | StorageWriteFailure;
+
+/**
+ * ★ 2026-10-01（P0 线上验收 D3）：把写盘结论翻成小窗要的那个形状 ——
+ * **全局唯一的"结果 → 回话"映射处**。
+ *
+ * ## 为什么它住在这里（而不是 `src/main.ts`）
+ *
+ * 第一版把这段逻辑内联在 `main.ts` 的 `applyLangChange` 里，于是"原因/数值有没有被带出去"
+ * 这件事**在 node 下没有任何腿碰得到**：`applyLangChange` 要 `#app` 与整棵渲染状态机，而
+ * `src/main.ts` 在**模块级**就执行 `document.getElementById('app')!` ⇒ 测试根本 import 不了它。
+ * 变异实测：把 `reason` 丢掉、把 `detail` 换成写死一句，整套测试**全绿**。
+ * ⇒ 挪到这个能在 node 下真跑的模块里，`tests/i18n/settings-overlay.test.ts` 直接喂真的
+ *   `WriteResult` 进去断言。
+ *
+ * ## 两个来源，各自的形状
+ *
+ *  - **存储层**（`writeLang` 的返回值）：`ok` / `too-large`（两个**数**）/ `write-failed`
+ *    （系统消息）⇒ **原样转交**（载荷已经是结构化的，没有可折叠的东西）；
+ *  - **宿主没料到地抛了**：那一路不经过这里，走同文件导出的 `langChangeThrew()`。
+ */
+export function applyWriteResult(w: StorageWriteResult): LangChangeOutcome {
+  return w.ok ? LANG_CHANGE_OK : w;
+}
+
+/**
+ * 宿主没料到地抛了（`writeLang` 自己抛，例如 `kv.get` 抛）⇒ 那一次切换的回话。
+ *
+ * 原因归成 `'threw'`（不是 `write-failed`）：两者的**原因句**一样（后端没写成功），
+ * 但测试与排查要能分辨"后端拒绝"与"宿主抛了"。`detail` 是异常消息本身（系统串，可能是英文）。
+ *
+ * 与 `LANG_CHANGE_OK` 一样是**唯一构造点**：`src/main.ts` 的 catch 分支与测试都用它，
+ * 免得两边各写一份字面量（那正是 D3 修过的病）。
+ */
+export function langChangeThrew(message: string): LangChangeOutcome {
+  return { ok: false, reason: 'threw', detail: message };
 }
 
 export function settingsOverlayElement(nav: SettingsOverlayNav): HTMLElement {
@@ -1223,16 +1390,19 @@ export function settingsOverlayElement(nav: SettingsOverlayNav): HTMLElement {
       setLang(def.id);
       langStatus.textContent = ''; // 先清掉上一次失败的提示（这一次还没结论）
       applyLang();
-      let out: { ok: boolean; detail?: string };
+      let out: LangChangeOutcome;
       try {
         out = nav.onLangChange(def.id);
       } catch (e) {
-        out = { ok: false, detail: e instanceof Error ? e.message : String(e) };
+        // 宿主抛错也走"写失败"那一档：原因 `'threw'` + 异常消息（系统串）。
+        // 措辞仍由 `saveFailedText()` 按语言给 —— 这里只构造**数据**，不碰文案。
+        out = { ok: false, reason: 'threw', detail: e instanceof Error ? e.message : String(e) };
       }
       if (!out.ok) {
-        langStatus.textContent = out.detail === undefined
-          ? t('settings.lang.save-failed')
-          : t('settings.lang.save-failed-detail', { detail: out.detail });
+        // ⚠️ 不走 `t('…')` 字面量而走 `saveFailedText()`：那一句要按**原因**给措辞并带上真因，
+        //    映射只许有一处（`src/i18n/index.ts`）。缺键扫描腿认的是"静态第一实参"，
+        //    所以那两个键在 `saveFailedText` 里是以字面量出现的（同一处集中，不是散开）。
+        langStatus.textContent = saveFailedText(out);
       }
     });
     b.dataset.lang = def.id;

@@ -6,7 +6,8 @@ import { L1_SETTINGS, createMemoryStore, type KeyValueStore } from '../../src/ap
 import { CARD_DATA_HASH } from '../../src/app/card-data-hash';
 import { MATCH_FILE_FORMAT, MATCH_FILE_VERSION, type MatchFile } from '../../src/app/match-file';
 import type { FilePicker, FileSink } from '../../src/app/archive-fs';
-import { LANGS } from '../../src/i18n';
+import { DEFAULT_LANG, LANGS, setLang } from '../../src/i18n';
+import { ZH, EN } from '../../src/i18n';
 
 /**
  * ★ 2026-10-01（P0）：**新存储必须出现在「本地数据与隐私」屏**（可见 + 可清除）。
@@ -153,6 +154,142 @@ describe('★ P0：语言在「本地数据与隐私」屏上**可见**', () => 
     m.redraw();
     expect(m.text('lang-state'), '本机存的是 en，重画之后屏上还显示中文').toContain('English');
     expect(m.text('lang-state')).not.toContain(LANGS[0].label);
+  });
+
+  /* ── ★ 2026-10-01（P0 线上验收 D1）：**五种形态**逐条钉住 ────────────────────
+   *
+   * 缺陷：`isLang(raw) ? '' : tail` 在 `raw === undefined` 时也命中，而 `readLang()` 把
+   * "键不存在"与"值是坏值"**都回成 `undefined`** ⇒ 全新访客与刚点完「清除本机数据」的人
+   * 都看到「（本机存的不是一个有效值，按默认语言显示）」。
+   *
+   * 下面五条一一对应线上实测的那五种形态。**关键的两条**是"缺键"与"坏值"必须给出
+   * **不同**的屏文 —— 只测其中一条的话，"两种形态折叠回一句"这种回归照样能过。
+   */
+  it('D1·形态①（**缺键**：全新访客 / 刚清除完 / 从没切过）⇒ 就一句「界面语言：中文」，**不许**有那句警告', () => {
+    const m = mount(); // 全新：`compile-settings` 这个键根本不存在
+    expect(m.kv.get(L1_SETTINGS), '前置：这条腿要的是"键不存在"').toBeNull();
+    const text = m.text('lang-state');
+    expect(text, '缺键时没显示语言').toContain(`界面语言：${LANGS[0].label}`);
+    expect(text, '缺键时挂了"不是一个有效值"那句（这正是线上验收 D1 的缺陷）')
+      .not.toContain('不是一个有效值');
+    expect(text, '缺键时挂了"无效值"的散文（换个措辞也算同一个缺陷）').not.toContain('有效值');
+  });
+
+  it('D1·形态①b（**刚点完清除**）⇒ 与全新访客同一句话，不许有那句警告', () => {
+    const m = mount();
+    writeLang(m.store, 'en');
+    m.redraw();
+    expect(m.text('lang-state')).toContain('English');
+    m.click('clear');
+    m.click('clear-yes');
+    const text = m.text('lang-state');
+    expect(text, '清除之后没回到默认语言').toContain(`界面语言：${LANGS[0].label}`);
+    expect(text, '清除之后挂了"不是一个有效值"那句（D1 的现场之一）').not.toContain('不是一个有效值');
+  });
+
+  it('D1·形态①c（键在、但**没有 `lang` 字段**：只存过昵称的 `{"nick":"甲"}`）⇒ 不许挂警告', () => {
+    // ★ 用户 2026-10-01 的裁决：那种情况下本机**从来没有**存过语言，
+    //   说"存的不是一个有效值"是不实陈述（与"缺键"是同一件事）。
+    const kv = createMemoryStore();
+    kv.set(L1_SETTINGS, JSON.stringify({ nick: '甲' }));
+    const m = mount(kv);
+    const text = m.text('lang-state');
+    expect(text, '没显示默认语言').toContain(`界面语言：${LANGS[0].label}`);
+    expect(text, '只存过昵称却被告知"不是一个有效值"（用户裁定：不许）').not.toContain('不是一个有效值');
+    // 反向锚点：这份存储**确实**是"有设置、但没有语言"那一档（否则上面那条测的是缺键）
+    expect(m.kv.get(L1_SETTINGS), '前置：这条腿要的是"键在"').not.toBeNull();
+    expect(m.kv.get(L1_SETTINGS)).toContain('甲');
+  });
+
+  it('D1·形态②（`{"lang":"xx"}` 键在、值不是 zh/en）⇒ 默认语言 + **要**挂那句警告', () => {
+    const kv = createMemoryStore();
+    kv.set(L1_SETTINGS, JSON.stringify({ lang: 'xx' }));
+    const m = mount(kv);
+    const text = m.text('lang-state');
+    expect(text, '坏值被静默显示成中文（玩家会以为自己的选择丢了）').toContain('不是一个有效值');
+    expect(text).toContain(LANGS[0].label);
+  });
+
+  it('D1·形态③（坏 JSON）⇒ 默认语言 + **要**挂那句警告', () => {
+    const kv = createMemoryStore();
+    kv.set(L1_SETTINGS, '{oops');
+    const m = mount(kv);
+    const text = m.text('lang-state');
+    // 坏 JSON 是一段**坏数据**（不是"没设置过"）⇒ 要挂那句
+    expect(text, '坏 JSON 时没说"不是一个有效值"').toContain('不是一个有效值');
+    expect(text).toContain(LANGS[0].label);
+  });
+
+  it('D1·非对象（`42` / 数组）⇒ 同"坏数据"一档，也要挂那句', () => {
+    for (const raw of ['42', '"x"', '[1,2]']) {
+      const kv = createMemoryStore();
+      kv.set(L1_SETTINGS, raw);
+      const m = mount(kv);
+      expect(m.text('lang-state'), `${raw} 没按"坏数据"处理`).toContain('不是一个有效值');
+    }
+  });
+
+  it('D1·形态④⑤（`{"lang":"zh"}` / `{"lang":"en"}`）⇒ 各自的标签，**都不许**有那句警告', () => {
+    for (const [id, label] of [['zh', LANGS[0].label], ['en', LANGS[1].label]] as const) {
+      const kv = createMemoryStore();
+      kv.set(L1_SETTINGS, JSON.stringify({ lang: id }));
+      const m = mount(kv);
+      const text = m.text('lang-state');
+      expect(text, `${id} 没显示成 ${label}`).toContain(label);
+      expect(text, `${id} 时挂了"不是一个有效值"那句（有效值不该挂）`).not.toContain('不是一个有效值');
+    }
+  });
+
+  it('D1·反向验证：**缺键 / 没设过语言 / 坏值** 三种屏文两两可分（折叠回两句就红）', () => {
+    // 这一条是那一堆形态腿的灵魂：只测"缺键无警告"或只测"坏值有警告"时，
+    // `isLang(raw) ? '' : tail` 那种写法**仍然可能两边都过**（它恰好对坏值是对的）。
+    // ⇒ 把三种情形的屏文**并排**比一次，并钉住"干净那一句"只有一种写法。
+    const absent = mount(); // 键不存在
+    const kvUnset = createMemoryStore();
+    kvUnset.set(L1_SETTINGS, JSON.stringify({ nick: '甲' }));
+    const unset = mount(kvUnset); // 键在、没有 lang
+    const kvBad = createMemoryStore();
+    kvBad.set(L1_SETTINGS, JSON.stringify({ lang: 'xx' }));
+    const bad = mount(kvBad); // 键在、值是坏值
+
+    const clean = `界面语言：${LANGS[0].label}`;
+    expect(absent.text('lang-state'), '缺键那句该是干净的一句').toBe(clean);
+    expect(unset.text('lang-state'), '「没设过语言」该与缺键同一句').toBe(clean);
+    expect(
+      bad.text('lang-state'),
+      '坏值与"没设过语言"给出了同一句话 ⇒ 判据分不出这两种情形',
+    ).not.toBe(clean);
+    expect(bad.text('lang-state')).toContain('不是一个有效值');
+  });
+
+  it('★ D4：语言这一行走 `t()`（切到英文时它跟着变，中英逐字）', () => {
+    // 这一屏**没有做过 i18n**（只抽了设置小窗）—— 但语言这一行是**语言功能自己的读数**，
+    // 必须双语。判据：切到 en 之后这一行是英文的那一句（逐字），且中文的那些字不许留着。
+    const kv = createMemoryStore();
+    const m = mount(kv);
+    setLang('en');
+    m.redraw();
+    expect(m.text('lang-state'), '切到英文后语言那一行还是中文').toBe('Interface language: 中文');
+    // 标签也在那一块里（`m.text('lang')` 会把标签与读数**拼起来**，这是本夹具的口径）
+    expect(m.text('lang'), '语言那一行的标签没跟着语言走')
+      .toBe('Interface languageInterface language: 中文');
+    // 反向：中文那一版逐字
+    setLang(DEFAULT_LANG);
+    m.redraw();
+    expect(m.text('lang-state')).toBe('界面语言：中文');
+    expect(m.text('lang')).toBe('界面语言界面语言：中文');
+  });
+
+  it('★ D4：英文下**坏值**那句也是英文（不许英文界面夹中文）', () => {
+    const kv = createMemoryStore();
+    kv.set(L1_SETTINGS, JSON.stringify({ lang: 'xx' }));
+    const m = mount(kv);
+    setLang('en');
+    m.redraw();
+    const text = m.text('lang-state');
+    expect(text).toBe('Interface language: 中文 (the value on this device is not valid, so the default is shown)');
+    expect(text, '英文界面的语言那一行夹了中文散文').not.toMatch(/不是一个有效值/);
+    setLang(DEFAULT_LANG);
   });
 
   it('语言与昵称**同住一个键**：屏上"本机已保存"那一行仍然只说昵称与卡组（语言自成一行）', () => {

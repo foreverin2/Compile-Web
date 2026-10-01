@@ -204,6 +204,19 @@ function keyLiterals(code: string): string[] {
 const I18N_PREFIX = 'src/i18n/';
 const CONSUMERS = SOURCES.filter((f) => !f.rel.startsWith(I18N_PREFIX));
 
+/**
+ * **i18n 层自己的代码位**（转出表的两个文件 `zh.ts` / `en.ts` 除外）。
+ *
+ * 为什么要它（线上验收 D3 时实测出来的一个**假红**）：`src/i18n/index.ts` 的
+ * `saveFailedText()` 里有 `t('settings.lang.save-failed-detail')` 这类调用 —— 那是
+ * "原因 → 文案"的唯一映射处，键当然只可能在那里出现一次。若把整个 i18n 层排除在外，
+ * 那几条键会被"没有死键"那条腿判成**没人用**（假红），于是要么删掉真正需要的键、要么放宽那条腿。
+ * ⇒ 反向那条腿的判据面加上这一层；**两张表文件仍然排除**（键在表里出现不算"有人读"）。
+ */
+const I18N_CODE = SOURCES.filter(
+  (f) => f.rel.startsWith(I18N_PREFIX) && f.rel !== 'src/i18n/zh.ts' && f.rel !== 'src/i18n/en.ts',
+);
+
 /** 真树上被 `t()` 静态要过的键（**生成式**） */
 function usedKeys(sources: readonly SourceFile[]): string[] {
   return [...new Set(sources.flatMap((f) => staticTKeys(f.code)))].sort();
@@ -213,6 +226,9 @@ function usedKeys(sources: readonly SourceFile[]): string[] {
  * 真树上"**有人在用**"的键：`t('键')` 的静态调用 **加上** 代码位里出现的键名字面量
  * （后者覆盖 `src/ui/fx-settings.ts` 那种"键存在表里、由 `t(def.label)` 取"的形态）。
  * 只有"两条路都不沾"的键才算死键。
+ *
+ * ⚠️ 传进来的 `sources` 决定判据面：**表文件（`zh.ts` / `en.ts`）绝不许进来** ——
+ * 键在表里当然出现，那会让这条腿恒绿（下面有一条腿专门钉这个边界）。
  */
 function referencedKeys(sources: readonly SourceFile[]): string[] {
   const all = sources.flatMap((f) => [...staticTKeys(f.code), ...keyLiterals(f.code)]);
@@ -221,6 +237,8 @@ function referencedKeys(sources: readonly SourceFile[]): string[] {
 
 const USED = usedKeys(CONSUMERS);
 const REFERENCED = referencedKeys(CONSUMERS);
+/** 反向那条腿的判据面：消费者 + i18n 层自己的代码位（不含两张表） */
+const SELF_REFERENCED = referencedKeys([...CONSUMERS, ...I18N_CODE]);
 
 /* ───────────────────────────────── 夹具 ───────────────────────────────── */
 
@@ -296,15 +314,32 @@ describe('缺键扫描（生成式）：`src/**` 里每个 `t(…)` 的键都必
     expect(missingInEn, `这些键被 t() 调用但 en.ts 里没有：${missingInEn.join(', ')}`).toEqual([]);
   });
 
-  it('反向：表里没有"谁也读不到"的死键（每条键都至少被一个消费者提到）', () => {
+  it('反向：表里没有"谁也读不到"的死键（每条键都至少被一处代码提到）', () => {
     // 单向判据（只查"缺键"）会让表可以无限长草：抽完一屏之后把屏上的调用删掉、键留着 ——
     // 没人报红，而下一个改文案的人会在两张表之间选错一处。这一条把"键必须有人用"也钉住。
     // ⚠️ 它的代价是真的会挡下"先加键、后接屏"的写法：那就**先接屏再加键**，或者把键先删掉。
-    // ⚠️ 判据面是 `REFERENCED`（静态调用 **或** 键名字面量）而不是 `USED`：注册表形态
-    //    （`FX_SETTINGS` 里存键、由 `t(def.label)` 取）是合法的，但它**必须在某个文件里
-    //    以字面量出现**过一次 —— 那条边界正好挡住"键写进表里却谁也没接"。
-    const unused = Object.keys(ZH).filter((k) => !REFERENCED.includes(k)).sort();
+    // ⚠️ **判据面比上面那条宽**（`SELF_REFERENCED` 含 `src/i18n/**` 自己），两类形态都算"有人用"：
+    //    ① 静态调用 / 键名字面量（`REFERENCED`，扫消费者）；
+    //    ② **i18n 层自己的代码位**里的键字面量 —— 例如 `saveFailedText()`（`src/i18n/index.ts`）
+    //       里那几条 `t('settings.lang…')`：它是"原因 → 文案"的唯一映射处，键当然只可能在那里
+    //       出现一次。第一版把整个 i18n 层排除在外 ⇒ 那几条键被判成死键（假红）。
+    //    `src/i18n/zh.ts` / `en.ts` **仍然排除**（它们是表本身，键在那里出现不算"有人读"）。
+    const unused = Object.keys(ZH).filter((k) => !SELF_REFERENCED.includes(k)).sort();
     expect(unused, `这些键在两张表里但 src/** 里没有任何地方提到它：${unused.join(', ')}`).toEqual([]);
+  });
+
+  it('★ 死键的具体形态：两张表不算"有人读"（判据面不许把表文件混进来）', () => {
+    // 这一条钉住上一条的**边界**：`referencedKeys()` 的契约是"传进来的文件里，键是**被读**的"。
+    // **两张表文件绝不能传进来** —— 键在表里当然出现，那会让死键判据恒绿（谁都可以往表里加键）。
+    // 本文件用"表文件**不在**扫描面里"这条纪律守住它（上面 SELF_REFERENCED 的构造就是证明）：
+    const tableFiles = SOURCES.filter((f) => f.rel === 'src/i18n/zh.ts' || f.rel === 'src/i18n/en.ts').map((f) => f.rel);
+    expect(tableFiles, '扫描面里找不到两张表 ⇒ 这条边界没有意义').toEqual(['src/i18n/en.ts', 'src/i18n/zh.ts']);
+    expect(SELF_REFERENCED.length, '判据面为空').toBeGreaterThan(5);
+    // 反向：把表文件混进去会**立刻**把它的键都算成"有人读"（这就是恒绿的形态）
+    const polluted = referencedKeys([SOURCES.find((f) => f.rel === 'src/i18n/zh.ts') as SourceFile]);
+    expect(polluted.length, '表文件里的键居然不算"有人读"？那这条边界写反了').toBeGreaterThan(5);
+    expect(polluted).toContain('settings.title');
+    for (const k of polluted) expect(Object.keys(ZH), `污染样本里的 ${k}`).toContain(k);
   });
 
   it('不许有动态键（`t(variable)` / 模板插值）：那类调用扫不出来，等于漏翻的温床', () => {
@@ -593,7 +628,7 @@ describe('★ P0：语言的存储口径（L1 设置对象里的一个字段，�
     const s = createLocalStore({ persistent: kv });
     s.grant();
     expect(writeNickName(s, '甲')).toBe(true);
-    expect(writeLang(s, 'en')).toBe(true);
+    expect(writeLang(s, 'en').ok).toBe(true);
     // 存储里**恰好**两个键：授权的标记（`grant()` 写的）+ 设置那一个。语言没有自己的键。
     expect(s.kv().keys().sort(), '语言写出了一个新键（用户口径是"塞进既有 L1 设置对象"）')
       .toEqual(['compile-consent', L1_SETTINGS].sort());
@@ -650,24 +685,60 @@ describe('★ P0：语言的存储口径（L1 设置对象里的一个字段，�
     expect(readLang(s), '昵称坏值把语言一起带坏了').toBe('en');
   });
 
-  it('后端写不进去 ⇒ `writeLang` 回 false（不抛）；调用方据此如实提示', () => {
+  it('后端写不进去 ⇒ `writeLang` 回 `{ok:false, reason:"write-failed", detail}`（不抛）；调用方据此如实提示', () => {
     const kv = setThrowsFor(L1_SETTINGS);
     const s = createLocalStore({ persistent: kv });
     s.grant();
-    let ok = true;
-    expect(() => { ok = writeLang(s, 'en'); }, '写失败时抛了（应回 false）').not.toThrow();
-    expect(ok, '写不进去却回了成功').toBe(false);
-    // 反向：换一个能写的后端就回 true（证明上面那条不是"恒 false"）
+    // 先用一条"不抛"的腿钉形状（`writeLang` 的失败形态是**返回值**，不是异常）
+    expect(() => writeLang(s, 'en'), '写失败时抛了（应回结构化结论）').not.toThrow();
+    const out = writeLang(s, 'en');
+    expect(out.ok, '写不进去却回了成功').toBe(false);
+    if (!out.ok && out.reason === 'write-failed') {
+      expect(out.detail, '真因被丢了（D3 的原缺陷）').toContain('写入被拒');
+    }
+    // 反向：换一个能写的后端就回 ok（证明上面那条不是"恒 false"）
     const good = createLocalStore({ persistent: createMemoryStore() });
     good.grant();
-    expect(writeLang(good, 'en')).toBe(true);
+    expect(writeLang(good, 'en').ok).toBe(true);
+  });
+
+  it('★ D3：值超上限 ⇒ `reason` 是 `too-large` + **两个数**（不是中文句子）、盘上零写入', () => {
+    // 造一份已经超大的设置（外部手改 / 别的程序把同一个键写肿了）：`writeJson` 会在**碰 KV
+    // 之前**退回 too-large —— 这正是第一版丢掉的那个原因（它只回布尔，宿主只能猜成"配额已满"）。
+    const kv = createMemoryStore();
+    const s = createLocalStore({ persistent: kv });
+    s.grant();
+    kv.set(L1_SETTINGS, JSON.stringify({ nick: 'x'.repeat(70000) }));
+    const before = kv.get(L1_SETTINGS);
+    const out = writeLang(s, 'en');
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.reason, '值超上限被归类成了 write-failed（宿主会显示成"配额已满"，是错的）').toBe('too-large');
+    if (out.reason !== 'too-large') return;
+    // ★ D3 第二条：纯层给**两个数**，不给拼好的句子（英文界面里出现中文诊断串就是坏的）
+    expect(out.bytes, '实际字节数没带出来').toBeGreaterThan(65536);
+    expect(out.limit, '上限值没带出来').toBe(65536);
+    // 反向：`too-large` 这一档**不许**有 `detail`（有了就说明有人又开始在纯层拼句子）
+    expect('detail' in out, 'too-large 带上了 detail（纯层又开始拼文案了？）').toBe(false);
+    expect(kv.get(L1_SETTINGS), 'too-large 时居然写了盘').toBe(before);
+  });
+
+  it('★ D3：纯层（`src/app/storage.ts`）的代码位里**没有汉字自然语言**（只许原因码与数值）', () => {
+    // 这条是分层纪律的机械形态：玩家可见的措辞只许住在 `src/i18n/` 的表里。
+    // ⚠️ 判据面是**代码位里的字面量**（注释不算）：注释当然要用中文写清楚。
+    const f = SOURCES.find((s) => s.rel === 'src/app/storage.ts');
+    expect(f, '扫描面里没有 storage.ts').toBeDefined();
+    const lits = [...(f?.code ?? '').matchAll(/['"`]([^'"`]*)['"`]/g)].map((m) => m[1]);
+    expect(lits.length, 'storage.ts 的代码位里一个字符串都没有 ⇒ 扫描失效').toBeGreaterThan(10);
+    const cjk = lits.filter((s) => /[\u3400-\u9fff]/.test(s));
+    expect(cjk, `storage.ts 的代码位里出现了中文字符串（玩家文案只许住在 i18n 表里）：${cjk.join(' / ')}`).toEqual([]);
   });
 
   it('游客模式（deny）⇒ 语言只进内存：本次会话读得回来，刷新即丢，且 persistent 零写入（红线 3）', () => {
     const spy = spyStore();
     const s = createLocalStore({ persistent: spy });
     s.deny();
-    expect(writeLang(s, 'en'), '游客模式下写内存 KV 应成功（那是"本次会话有效"的既定口径）').toBe(true);
+    expect(writeLang(s, 'en').ok, '游客模式下写内存 KV 应成功（那是"本次会话有效"的既定口径）').toBe(true);
     expect(readLang(s)).toBe('en');
     expect(spy.mutations(), '游客模式下切语言碰了 persistent（红线 3）').toBe(0);
     // 刷新 = 新开一个 store 读同一份后端：授权没落盘 ⇒ 仍是 unknown，语言当然读不到

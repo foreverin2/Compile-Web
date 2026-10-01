@@ -411,7 +411,11 @@ describe('L1：KV 接口的能力边界（三态 × 每个方法）', () => {
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.reason).toBe('write-failed');
-    expect(r.detail, 'detail 里要能看出真实原因，不能是空串').toContain('QuotaExceededError');
+    // `write-failed` 的 detail 是**后端给的原样消息**（不再是我们拼的中文句子）——
+    // 真因仍然要看得出来（★ 2026-10-01 线上验收 D3：纯层只产出原因码 + 系统消息）
+    if (r.reason === 'write-failed') {
+      expect(r.detail, 'detail 里要能看出真实原因，不能是空串').toContain('QuotaExceededError');
+    }
   });
 
   it('remove 抛错 → 不静默吞掉：原样向外抛', () => {
@@ -539,7 +543,12 @@ describe('L1：JSON 读写的坏数据与上限', () => {
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.reason).toBe('too-large');
-    expect(r.detail.length).toBeGreaterThan(0);
+    // ★ 2026-10-01（线上验收 D3）：`too-large` 的载荷是**两个数**，不是拼好的句子 ——
+    //    纯层只产出数值/原因码，句子由 `src/i18n/` 按语言拼（英文界面里不许出现中文诊断串）。
+    if (r.reason === 'too-large') {
+      expect(r.bytes, '实际字节数没带出来').toBeGreaterThan(L1_VALUE_MAX_BYTES);
+      expect(r.limit, '上限值没带出来').toBe(L1_VALUE_MAX_BYTES);
+    }
     expect(kv.writes).toEqual([]);
   });
 
@@ -583,7 +592,8 @@ describe('L1：JSON 读写的坏数据与上限', () => {
       expect(r.ok, `${label} 该被判成不可写`).toBe(false);
       if (r.ok) continue;
       expect(r.reason, `${label}`).toBe('write-failed');
-      expect(r.detail.length, `${label} 的 detail 不许为空`).toBeGreaterThan(0);
+      // `write-failed` 的 detail 是**系统消息**（`JSON.stringify threw: …`），不是我们写的句子
+      if (r.reason === 'write-failed') expect(r.detail.length, `${label} 的 detail 不许为空`).toBeGreaterThan(0);
       expect(kv.writes, `${label} 必须在**碰 KV 之前**就被拦下`).toEqual([]);
       expect(kv.mutations(), `${label}：set/remove 调用数必须为 0`).toBe(0);
     }

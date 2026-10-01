@@ -41,7 +41,8 @@ import { setFxViewSeat } from './ui/fx-seat';
 import { handCardBox, handFanLead, handFanStep } from './ui/fx-card-size';
 import { handOuterFor } from './ui/fx-seat';
 import { openControlRearrangeModal, closeControlRearrangeModal, refreshControlRearrangeModal, isControlRearrangeOpen, orderChanged, orderToAction, hostsEffectRearrange } from './ui/control-rearrange';
-import { renderHome, renderCoin, renderLibrary, renderRules, renderModeSelect, settingsOverlayElement, COIN_TOSS_MS } from './ui/home';
+import { LANG_CHANGE_OK, applyWriteResult, langChangeThrew, renderHome, renderCoin, renderLibrary, renderRules, renderModeSelect, settingsOverlayElement, COIN_TOSS_MS } from './ui/home';
+import type { LangChangeOutcome } from './ui/home';
 import { linkRecoveryNotice, lobbyCoinViewOf, lobbyLinkText, appendNetTurnLine } from './ui/net-lobby';
 import type { CoinNetView } from './ui/home';
 // ★ T11-B：硬币屏要的"面"（屏上口径 `1 | 2`）
@@ -4894,33 +4895,52 @@ initI18n(() => readLang(localStore));
  *    是"本次会话生效、刷新即丢"的既定口径（与昵称同一条路）。
  */
 /**
- * ★ 2026-10-01（P0）：切语言那一次写盘的结论（`applyLangChange` 的返回类型）。
+ * ★ 2026-10-01（P0）：切语言那一次写盘的结论 —— **直接复用 `src/ui/home.ts` 那个命名类型**。
  *
- * ⚠️ 刻意写成**命名接口**而不是就地在返回类型标注里写 `{ ok: boolean; detail?: string }`：
- * 后者会让 `tests/ui/source-text.ts` 的 `functionBody` 把**返回类型标注里的 `{`**
- * 当成函数体起点（那是它写明的已知局限）⇒ 抽出来的"函数体"只有 70 字符，
- * 针对它的判据会变成**假绿**。这不是风格偏好，是同文件里 `ArchiveBuild`
- * （`src/ui/local-data.ts`）与 `NetConnLine` 那几处**同一族**的处置。
+ * ⚠️ 为什么不让这里另写一个同形的接口：两个"同形"的联合类型在 TS 里**并不互相可赋值**
+ * （`ok: boolean` 的那一侧对不上 `{ ok: true } | { ok: false; … }`），于是"两边字段一致"
+ * 就成了一句注释里的承诺、而不是类型系统保证的东西 —— D3 修的就是这种"两边各写一句"。
  */
-interface LangWriteResult {
-  readonly ok: boolean;
-  readonly detail?: string;
-}
+type LangWriteResult = LangChangeOutcome;
 
+/**
+ * ★ 2026-10-01（P0 线上验收 D3）：切语言 ⇒ **换内存态 + 落盘 + 重画当前屏**。
+ *
+ * 映射写盘结论的那一步走 `src/ui/home.ts` 的 `applyWriteResult()`（**全局唯一**的映射处）：
+ * 它必须能被 node 下的测试真跑 —— 内联在这里的话那一面零覆盖
+ * （`main.ts` 在模块级就 `document.getElementById('app')!`，测试 import 不了它；
+ * 变异实测：把原因/真因丢掉，整套测试全绿）。这里只负责"调它 + 兜异常"。
+ */
 function applyLangChange(next: Lang): LangWriteResult {
   setLang(next);
-  let ok = false;
-  let detail: string | undefined;
+  /**
+   * **写盘的真实结论**（`writeLang` 回**结构化** `WriteResult`：`ok` / `too-large`（两个数）/
+   * `write-failed`（系统消息））。第一版 `writeLang` 只回布尔 ⇒ 这里只能猜一句
+   * "隐私模式或配额已满"，那对"值超上限"是**错的**。
+   */
+  // 初值 = "没写成功"（`writeLang` 抛出的那一瞬）；真正的结论由下面两处之一给出。
+  let result: LangWriteResult = { ok: false, reason: 'write-failed', detail: '' };
   try {
-    ok = writeLang(localStore, next);
+    result = applyWriteResult(writeLang(localStore, next));
   } catch (e) {
     // `writeJson` 把 set 的抛错翻成返回值，但 `readSettings` 里的 `get` 仍会外抛 ⇒ 这里也兜一层。
-    detail = e instanceof Error ? e.message : String(e);
+    // ⚠️ 走 `langChangeThrew()`（**唯一构造点**，与 `LANG_CHANGE_OK` 同款）：原因归成 `'threw'`
+    //    （不是 `write-failed`）—— 原因句一样，但"后端拒绝"与"宿主没料到地抛了"要能分辨。
+    //    `detail` 是异常消息本身（系统串，可能是英文）。
+    result = langChangeThrew(e instanceof Error ? e.message : String(e));
   }
-  // 重画当前屏。**写盘失败也要重画** —— 失败的含义是"下次启动回到旧语言"，不是"这次也别生效"。
+  /**
+   * 重画当前屏。**写盘失败也要重画** —— 失败的含义是"下次启动回到旧语言"，不是"这次也别生效"。
+   *
+   * ⚠️ ★ 2026-10-01（线上验收 D2）：首页那一支**不再重建背景**。`showHome()` 现在会**复用**
+   * 已经挂在 `#app` 上的那一份 `.home-bg`（见 `src/ui/home.ts` 的 `buildHomeBg` / `liveBgHost`），
+   * 于是切语言时 `.bg-plane` 的洗牌顺序与斜线带的 `animation currentTime` 都**不动**。
+   * 第一版直接 `showHome()` ⇒ `clearRoot` 掉整棵、`renderHome` 重新洗牌重建
+   * （实测：608 张牌的顺序哈希 `2714029209→1340731705`、band `currentTime 2850→350`）。
+   */
   if (isHomeScreenActive()) showHome();
   else rerender();
-  return ok ? { ok: true } : { ok: false, detail: detail ?? '本机存储拒绝写入（隐私模式或配额已满）' };
+  return result;
 }
 
 /**

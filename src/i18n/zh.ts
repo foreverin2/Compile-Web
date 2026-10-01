@@ -38,12 +38,27 @@ export const ZH: Readonly<Record<string, string>> = {
   // "Chinese"，中文玩家就找不回来了）。
   'settings.lang': '语言 / Language',
   'settings.lang.hint': '语言会保存到本机，刷新后仍然生效。',
-  // 写盘失败时的两句（玩法不变：本次会话仍然生效，只是刷新会回到上次保存的那种）。
-  // ⚠️ 这两句是**状态/错误报告**形态，不是对玩家的隐私承诺 —— 见
+  // 写盘失败时的那一句（玩法不变：本次会话仍然生效，只是刷新会回到上次保存的那种）。
+  // ⚠️ **只有一个键**（原来那条不带 detail 的 `settings.lang.save-failed` 已删）：第一版留着它，
+  // 但它**没有任何调用链可达** —— 线上验收 D3 判为死文案（"要么删掉、要么让它可达"）。
+  // ⚠️ 这句是**状态/错误报告**形态，不是对玩家的隐私承诺 —— 见
   // `tests/ui/privacy-consumers.test.ts` 的两层判据（它只对 import 了 `privacy.ts` 的
   // 消费方生效，而 `home.ts` 不是消费方；这里如实标注口径，免得以后有人误会）。
-  'settings.lang.save-failed': '语言没能保存到本机。本次会话仍然用这种语言，刷新后会回到上次保存的那种。',
-  'settings.lang.save-failed-detail': '语言没能保存到本机（{detail}）。本次会话仍然用这种语言，刷新后会回到上次保存的那种。',
+  'settings.lang.save-failed-detail': '语言没能保存到本机。本次会话仍然用这种语言，刷新后会回到上次保存的那种。',
+  // 系统给的技术消息单独一段 —— ⚠️ D3 第二条之后它**只可能是系统语言（英文）**：
+  // 纯层（`src/app/storage.ts`）不再拼任何中文句子，这里带出来的就是 `Error.message` 那种原样串。
+  'settings.lang.save-failed-tech': '技术细节：{detail}',
+  // 值超上限：**两个数**由本层按语言格式化后填进来（纯层只给数值，不给句子）
+  'settings.lang.fail.too-large': '{bytes} 字节 > 上限 {limit} 字节。',
+  'settings.lang.fail.write-rejected': '本机存储拒绝了写入（隐私模式或配额已满）。',
+  // ★ 2026-10-01（P0 线上验收 D4）：「本地数据与隐私」屏的**语言那一行**。
+  // `value` 带 `{lang}` 占位（不拼接：缺语言名时好排查）；`invalid` 是"键存在但不是有效值"时
+  // 的如实补充。⚠️ 该屏的**其它文案没有抽取**（P0 只抽了设置小窗）—— 它还登记在
+  // `docs/2026-10-01-i18n-尚未抽取的屏.md` 里，别把它从清单划掉。
+  'local-data.lang.label': '界面语言',
+  'local-data.lang.value': '界面语言：{lang}',
+  'local-data.lang.invalid': '（本机存的不是一个有效值，按默认语言显示）',
+  'local-data.lang.read-failed': '界面语言：读取本机数据失败：{detail}',
   'settings.hint': '改动只在本次会话有效，刷新后回到默认开启。',
   'settings.fx.on': '开启',
   'settings.fx.off': '关闭',

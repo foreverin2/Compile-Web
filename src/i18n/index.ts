@@ -185,6 +185,82 @@ function fill(text: string, params: Readonly<Record<string, string>>): string {
   });
 }
 
+/* ─────────────── 写盘失败：原因 → 本地化文案（线上验收 D3） ─────────────── */
+
+/**
+ * ★ 2026-10-01（P0，线上验收 D3）：写本机设置失败时的**结构化原因** —— 句子归这一层拼。
+ *
+ * ## 为什么是数值/枚举而不是"拼好的句子"（D3 第二条的口径）
+ *
+ * 第一版让纯层（`src/app/storage.ts`）拼一句中文 `detail`（`70021 字节 > 上限 65536 字节`），
+ * 界面层照原样透出去 ⇒ **英文界面里出现汉字串，看起来就是坏的**。
+ * ⇒ 纯层只给**数**（`bytes` / `limit`）与**原因码**，整句在这里按语言拼：
+ *   `70023 字节 > 上限 65536 字节` / `70023 bytes > the 65536-byte limit`。
+ *
+ * ## 三态（多出来的是"宿主没料到地抛了"那一档）
+ *
+ *  - `too-large`：**两个数**（`bytes` / `limit`）必给 ⇒ 两种语言下都能把数字带出来；
+ *  - `write-failed`：`detail` 是**系统/引擎给的原样消息**（`QuotaExceededError: …`）。
+ *    它**不是**我们写的文案，也不翻译（翻了反而丢掉可诊断性）；测试里限定的口径是
+ *    "它只能是系统语言（英文），界面自己那半句必须本地化"；
+ *  - `threw`：`applyLangChange` 里 `writeLang` **自己抛了**（`kv.get` 抛一类）。
+ *    它带的是宿主异常的消息（同样是系统串），原因归类上等同于"后端没写成功"。
+ *
+ * ⚠️ 刻意**不 import** `src/app/storage.ts` 的类型：`src/i18n/**` 不认识存储
+ * （`Lang` 那个叶子是唯一的例外，见 `lang.ts` 的说明），否则这一层没法在 node 下裸跑。
+ * 两侧的字段口径由 `tests/i18n/tables.test.ts` 的一条**赋值方向腿**在编译期钉住。
+ */
+export interface WriteFailure {
+  readonly reason: 'too-large' | 'write-failed' | 'threw';
+  /** 值超上限时**实际**的字节数（`reason === 'too-large'` 时必有） */
+  readonly bytes?: number;
+  /** 值超上限时的单条上限（`reason === 'too-large'` 时必有） */
+  readonly limit?: number;
+  /** **系统给的原样消息**（不是玩家文案、不翻译）；没有就省略 */
+  readonly detail?: string;
+}
+
+/** 各语言按自己的习惯给数字分组（`70023` → `70,023`） */
+function num(lang: Lang, value: number): string {
+  try {
+    return new Intl.NumberFormat(lang === 'zh' ? 'zh-CN' : 'en-US').format(value);
+  } catch {
+    return String(value);
+  }
+}
+
+/**
+ * 写盘失败 → 屏上那一句（**整句本地化**：中文界面零英文字母、英文界面零汉字）。
+ *
+ * 第一版的两条实测缺陷（线上验收 D3）：
+ *  1. 宿主写死一句中文兜底（"本机存储拒绝写入（隐私模式或配额已满）"）⇒ 英文界面夹中文；
+ *  2. 那句对"值超上限"是**错的** —— 真因在 `writeLang` 回布尔的过程中被丢掉了。
+ *
+ * 现在的四条句式（都进两张表）：
+ *  - 开头：`语言没能保存到本机（…）。本次会话仍然用这种语言，刷新后会回到上次保存的那种。`
+ *  - 超上限的原因句：`{bytes} 字节 > 上限 {limit} 字节` / `{bytes} bytes > the {limit}-byte limit`
+ *  - 后端拒绝的原因句：`本机存储拒绝了写入（隐私模式或配额已满）。` / `local storage refused the write (private mode or quota).`
+ *  - 系统消息（只有它可能是英文）：`技术细节：{detail}` / `Technical detail: {detail}`
+ */
+export function saveFailedText(failure: WriteFailure): string {
+  const head = t('settings.lang.save-failed-detail');
+  const reason = failureReasonText(failure);
+  const detail = (failure.detail ?? '').trim();
+  // 系统消息单独一段（它可能是英文/系统语言，标出来才不会被当成我们写错的文案）
+  return detail === '' ? `${head} ${reason}` : `${head} ${reason} ${t('settings.lang.save-failed-tech', { detail })}`;
+}
+
+/** 失败原因那一句（**本地化**；`too-large` 一定把两个数带出来） */
+function failureReasonText(failure: WriteFailure): string {
+  if (failure.reason === 'too-large') {
+    return t('settings.lang.fail.too-large', {
+      bytes: num(current, failure.bytes ?? 0),
+      limit: num(current, failure.limit ?? 0),
+    });
+  }
+  return t('settings.lang.fail.write-rejected');
+}
+
 /* ───────────────────────── 启动时读一次已存的语言 ───────────────────────── */
 
 /**

@@ -243,32 +243,51 @@ export function readJson<T>(kv: KeyValueStore, key: string, fallback: T): T {
 }
 
 
-export type WriteResult = { ok: true } | { ok: false; reason: 'too-large' | 'write-failed'; detail: string };
+/**
+ * 写失败的结构化原因（★ 2026-10-01 线上验收 D3 之后）。
+ *
+ * ## 为什么这里**不许**出现玩家可见文案（分层纪律）
+ *
+ * 第一版把 `detail` 拼成了一句**中文自然语言**（`70023 字节 > 上限 65536 字节`），
+ * 于是它一路透到屏上：英文界面里夹着汉字，看起来就是坏的（验收 D3 第二条）。
+ * ⇒ 纯层只产出**数值与原因码**，句子由 `src/i18n/` 按语言拼（那里的表才是文案的家）：
+ *  - `bytes` / `limit`：值超上限时的两个**数**（`too-large` 一档必给）；
+ *  - `detail`：**系统/引擎给的原样消息**（`Error.message`、`QuotaExceededError: …`），
+ *    只在 `write-failed` 一档出现，且它本来就是技术串、不是我们写的文案。
+ * ⚠️ 本文件（`src/app/**`）里**任何一处**都不许再拼玩家可见句子 —— 这是红线级口径，
+ * `tests/i18n/tables.test.ts` 有一条腿扫本文件的代码位（不许出现汉字自然语言）。
+ */
+export type WriteResult =
+  | { ok: true }
+  | { ok: false; reason: 'too-large'; bytes: number; limit: number }
+  | { ok: false; reason: 'write-failed'; detail: string };
 
 /**
  * 写 JSON。**不抛错**（唯一出口是返回值）：
  *  - 序列化失败 / 超过 `L1_VALUE_MAX_BYTES` → `too-large` 或 `write-failed`，**且不碰 KV**；
- *  - `set` 抛错（隐私模式 / 配额满）→ `write-failed`，detail 里保留真实原因。
- * 调用方（Task 7 的 UI）据此显示"本机保存失败，本次会话仍可正常游玩"。
+ *  - `set` 抛错（隐私模式 / 配额满）→ `write-failed`，`detail` 里保留**原样**的系统消息。
+ *
+ * ⚠️ 返回值是**结构化**的（数值 + 原因码 + 系统消息），**不是**拼好的句子：
+ * 玩家看到的措辞由界面层按语言给（见 `WriteResult` 的说明）。
  */
 export function writeJson(kv: KeyValueStore, key: string, value: unknown): WriteResult {
   let text: string;
   try {
     text = JSON.stringify(value);
   } catch (e) {
-    return { ok: false, reason: 'write-failed', detail: `无法序列化：${String(e)}` };
+    return { ok: false, reason: 'write-failed', detail: `JSON.stringify threw: ${String(e)}` };
   }
   if (typeof text !== 'string') {
-    return { ok: false, reason: 'write-failed', detail: '无法序列化：JSON.stringify 返回了非字符串' };
+    return { ok: false, reason: 'write-failed', detail: 'JSON.stringify returned a non-string' };
   }
   const bytes = utf8Bytes(text);
   if (bytes > L1_VALUE_MAX_BYTES) {
-    return { ok: false, reason: 'too-large', detail: `${bytes} 字节 > 上限 ${L1_VALUE_MAX_BYTES} 字节` };
+    return { ok: false, reason: 'too-large', bytes, limit: L1_VALUE_MAX_BYTES };
   }
   try {
     kv.set(key, text);
   } catch (e) {
-    return { ok: false, reason: 'write-failed', detail: `写入本机存储失败（隐私模式或配额已满）：${String(e)}` };
+    return { ok: false, reason: 'write-failed', detail: String(e) };
   }
   return { ok: true };
 }

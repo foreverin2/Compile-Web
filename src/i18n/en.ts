@@ -29,13 +29,19 @@ export const EN: Readonly<Record<string, string>> = {
   // 不进文案表 —— 它们不该跟着当前语言变。
   'settings.lang': '语言 / Language',
   'settings.lang.hint': 'Your language choice is saved on this device and stays after a reload.',
-  // Shown only when the browser storage refuses the write (private mode / quota).
-  'settings.lang.save-failed':
+  // Only shown when the write fails (value over the size cap / private mode / quota).
+  // ⚠️ There is deliberately **no** detail-less variant: the first version shipped one that no
+  // call path could reach (online review D3 flagged it as dead copy).
+  'settings.lang.save-failed-detail':
     'The language could not be saved on this device. This session still uses it; '
     + 'a reload goes back to the last saved one.',
-  'settings.lang.save-failed-detail':
-    'The language could not be saved on this device ({detail}). This session still uses it; '
-    + 'a reload goes back to the last saved one.',
+  // The system-given message goes on its own line. ⚠️ After D3 it can only be a **system string**
+  // (e.g. `QuotaExceededError: ...`): the pure storage layer no longer builds any sentence.
+  'settings.lang.save-failed-tech': 'Technical detail: {detail}',
+  // Value over the size cap: both numbers are formatted by this layer (the pure layer only
+  // returns `bytes` / `limit` as numbers).
+  'settings.lang.fail.too-large': '{bytes} bytes > the {limit}-byte limit.',
+  'settings.lang.fail.write-rejected': 'local storage refused the write (private mode or quota).',
   'settings.hint': 'Changes last for this session only; a reload turns the flash effect back on.',
   'settings.fx.on': 'on',
   'settings.fx.off': 'off',
@@ -45,4 +51,11 @@ export const EN: Readonly<Record<string, string>> = {
   'settings.fx.metal6.desc':
     'The Metal 6 card in your hand fades a picture in on a loop. Turn this off to hide it; '
     + 'other cards keep their effects.',
+  /* ── Local data & privacy screen: the **language row only** (D4) ──
+   * The rest of that screen is NOT extracted yet; it stays on the
+   * `docs/2026-10-01-i18n-尚未抽取的屏.md` list. */
+  'local-data.lang.label': 'Interface language',
+  'local-data.lang.value': 'Interface language: {lang}',
+  'local-data.lang.invalid': ' (the value on this device is not valid, so the default is shown)',
+  'local-data.lang.read-failed': 'Interface language: reading local data failed: {detail}',
 };

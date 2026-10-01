@@ -2,7 +2,13 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { installStubDom, makeStubEl, descendants, queryAllIn, type StubNode } from '../ui/net-dom-stub';
 import { openL1Store, type StorageLike } from '../../src/ui/local-store-browser';
 import { createLocalStore, readLang, writeLang } from '../../src/app/local-store';
-import { settingsOverlayElement } from '../../src/ui/home';
+import {
+  LANG_CHANGE_OK,
+  applyWriteResult,
+  langChangeThrew,
+  settingsOverlayElement,
+  type LangChangeOutcome,
+} from '../../src/ui/home';
 import { DEFAULT_LANG, getLang, initI18n, setLang, t } from '../../src/i18n';
 
 /**
@@ -102,20 +108,17 @@ function boot(ls: FakeStorage): { readonly overlay: StubNode; readonly store: Re
 /**
  * `applyLangChange` 的**同口径**实现（本文件里唯一的写法，`boot()` 与游客模式那条腿共用）。
  *
- * ⚠️ `detail` 必须是**真因**（`String(e)`），不能写死一句话 —— 第一版写死了
- * `'本机存储拒绝写入'`，于是"小窗有没有把真因显示出来"这条判据在桩上恒真（假绿）。
+ * ★ D3：映射走**共享的** `applyWriteResult()`（`src/ui/home.ts` 里那个纯函数）——
+ * 本文件不自己折叠 `w.ok`/`w.reason`，免得"两边各写一句"再次漂移。
  */
-function langChangeFor(store: ReturnType<typeof createLocalStore>): (next: 'zh' | 'en') => { ok: boolean; detail?: string } {
+function langChangeFor(store: ReturnType<typeof createLocalStore>): (next: 'zh' | 'en') => LangChangeOutcome {
   return (next) => {
     setLang(next);
-    let ok = false;
-    let detail: string | undefined;
     try {
-      ok = writeLang(store, next);
+      return applyWriteResult(writeLang(store, next));
     } catch (e) {
-      detail = e instanceof Error ? e.message : String(e);
+      return langChangeThrew(e instanceof Error ? e.message : String(e));
     }
-    return ok ? { ok: true } : { ok: false, detail: detail ?? '本机存储拒绝写入（配额已满或隐私模式）' };
   };
 }
 
@@ -186,7 +189,7 @@ describe('★ P0 端到端：切语言 → 落盘 → 刷新之后还在', () =>
     // 让 `setItem` 对设置那个键抛（模拟配额满 / Safari 隐私模式）
     const original = ls.setItem;
     ls.setItem = (k: string, v: string): void => {
-      if (k === 'compile-settings') throw new Error('QuotaExceededError（配额已满）');
+      if (k === 'compile-settings') throw new Error('QuotaExceededError: The quota has been exceeded.');
       original(k, v);
     };
     const { overlay } = boot(ls);
@@ -195,7 +198,62 @@ describe('★ P0 端到端：切语言 → 落盘 → 刷新之后还在', () =>
     const status = descendants(overlay).find((n) => n.dataset.role === 'lang-status');
     expect(status, '小窗里没有写盘失败的位置').toBeDefined();
     expect(status?.text, '写失败时没有提示').toContain('could not be saved');
-    expect(status?.text, '没把真因写出来').toContain('配额已满');
+    // ★ D3 第二条：英文界面里**不许有汉字** —— 原因句本地化，系统消息单独一段
+    expect(status?.text, '没把系统消息写出来').toContain('Technical detail');
+    expect(status?.text, '英文界面里夹了汉字').not.toMatch(/[\u3400-\u9fff]/);
     expect(ls.snapshot()['compile-settings'], '写失败却写进去了').toBeUndefined();
+  });
+
+  it('★ D3：值超上限（too-large）⇒ 英文界面**整句零汉字**，两个字节数都在屏上', () => {
+    restores.push(installStubDom());
+    const ls = fakeStorage();
+    // 造一份**已经超大**的设置（模拟外部手改 / 别的程序把同一个键写肿了）：
+    // 这时 `writeJson` 会在碰 KV 之前就退回 `too-large`，且**一个字节都没写**。
+    const huge = 'x'.repeat(70000);
+    ls.setItem('compile-settings', JSON.stringify({ nick: huge }));
+    const { overlay, store } = boot(ls);
+    const before = ls.snapshot()['compile-settings'];
+
+    clickIn(langBtn(overlay, 'en'));
+    const out = writeLang(store, 'en');
+    expect(out.ok, '前置：这份设置居然写得进去？那这条腿测的不是 too-large').toBe(false);
+    if (out.ok) return;
+    expect(out.reason, '原因不是 too-large（D3 要的就是把原因分出来）').toBe('too-large');
+    if (out.reason !== 'too-large') return;
+    // 纯层给的是**两个数**（不是拼好的句子）—— D3 第二条的核心
+    expect(out.bytes, '实际字节数没带出来').toBeGreaterThan(65536);
+    expect(out.limit, '上限值没带出来').toBe(65536);
+
+    const status = descendants(overlay).find((n) => n.dataset.role === 'lang-status');
+    const text = String(status?.text ?? '');
+    // 英文界面：**整句**不许有汉字（这一条是 D3 第二条的验收口径，比上一版严）
+    expect(text, '英文界面里出现了汉字').not.toMatch(/[\u3400-\u9fff]/);
+    expect(text, '英文界面下没有用英文文案').toContain('could not be saved on this device');
+    // 两个数都要在（`Intl.NumberFormat('en-US')` 会给 70,023 这种分组）
+    expect(text, '实际字节数没带到屏上').toContain('70,023');
+    expect(text, '上限没带到屏上').toContain('65,536');
+    expect(text, '没有给出"字节/上限"这层意思').toContain('bytes > the');
+    expect(text, '屏上出现了"配额已满/隐私模式"那句错的归类').not.toContain('quota');
+    expect(ls.snapshot()['compile-settings'], 'too-large 时居然写了盘').toBe(before);
+  });
+
+  it('★ D3：同一份超上限的值在**中文界面**下整句只有中文那一套（零英文单词混杂）', () => {
+    restores.push(installStubDom());
+    const ls = fakeStorage();
+    ls.setItem('compile-settings', JSON.stringify({ nick: 'x'.repeat(70000) }));
+    setLang('zh');
+    const { overlay } = boot(ls);
+    // 先切到英文（提示会是英文那版），再切回中文 ⇒ 提示重画成中文那版
+    clickIn(langBtn(overlay, 'en'));
+    clickIn(langBtn(overlay, 'zh'));
+    expect(getLang()).toBe('zh');
+    const text = String(descendants(overlay).find((n) => n.dataset.role === 'lang-status')?.text ?? '');
+    expect(text, '中文界面下没有用中文文案').toContain('语言没能保存到本机');
+    expect(text, '中文界面下没给出字节数').toContain('70,023');
+    expect(text).toContain('字节 > 上限');
+    expect(text, '中文界面下没给出上限').toContain('65,536');
+    // 反向：中文那套里不许混进英文句式（"bytes > the … limit" 那种）
+    expect(text, '中文界面里混进了英文句式').not.toContain('bytes > the');
+    expect(text, '中文界面里混进了英文技术细节标签').not.toContain('Technical detail');
   });
 });

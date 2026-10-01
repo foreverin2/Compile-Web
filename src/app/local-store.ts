@@ -31,6 +31,7 @@ import {
   readJson,
   writeJson,
   type KeyValueStore,
+  type WriteResult,
 } from './storage';
 // ★ 2026-10-01（P0）：语言这个**值的类型**住在零依赖叶子 `src/i18n/lang.ts`（不是
 // `src/i18n/index.ts`）—— 那一层含文案表与 `import.meta.env`，纯层不许依赖它。理由写在那个文件里。
@@ -202,10 +203,13 @@ function readSettings(store: LocalStore): Record<string, unknown> {
  * ⚠️ **已知的窄口径**（G3 实测出来的，明写在这里而不是假装没有）：本函数把"非对象/数组"
  * 的旧值一律当空对象处理 ⇒ 读取侧回空串、写回后是一个**新对象**（而不是原样保留那个数组）。
  * 这条只会在"存储被外部手改/污染"时被走到，且两个方向都不丢用户数据（旧值本来就不是设置）。
+ *
+ * ★ 2026-10-01（P0，线上验收 D3）：**回 `WriteResult` 而不是布尔** —— 见 `writeLang` 的说明。
+ *   昵称那条路仍然只要"成功/失败"两态，所以 `writeNickName` 在它上面取 `.ok`。
  */
-function writeSettings(store: LocalStore, patch: Record<string, unknown>): boolean {
+function writeSettings(store: LocalStore, patch: Record<string, unknown>): WriteResult {
   const prev = readSettings(store);
-  return writeJson(store.kv(), L1_SETTINGS, { ...prev, ...patch }).ok;
+  return writeJson(store.kv(), L1_SETTINGS, { ...prev, ...patch });
 }
 
 /**
@@ -225,9 +229,14 @@ export function readNickName(store: LocalStore): string {
 
 /**
  * 写昵称。读旧值走 `readSettings` 的**同一套守卫**（见 `writeSettings` 的说明）。
+ *
+ * 返回值**仍然是布尔**（`true` = 真的落盘了）：昵称那一侧的调用方（「本地数据与隐私」屏）
+ * 只需要"成功/失败"两态，它把失败提示写成一句既定的文案
+ * （"本机保存失败，本次会话仍可正常游玩。"，被既有腿逐字钉住）。
+ * 语言那一侧不同 —— 它要按**原因**给不同措辞（见 `writeLang`）。
  */
 export function writeNickName(store: LocalStore, nick: string): boolean {
-  return writeSettings(store, { nick });
+  return writeSettings(store, { nick }).ok;
 }
 
 /**
@@ -239,20 +248,101 @@ export function writeNickName(store: LocalStore, nick: string): boolean {
  *
  * ⚠️ 存储里是坏值时**回 `undefined`**，不抛：缺一个语言偏好不该让游戏打不开
  * （与 `readNickName` 回空串同一条纪律）。
+ *
+ * ⚠️ ★ 2026-10-01（P0，线上验收 D1）：**`undefined` 有两种来源，调用方必须分开**：
+ *  1. **键不存在**（全新访客、刚点完「清除本机数据」、从没切过语言）—— 正常态；
+ *  2. **键存在但值不是 `zh`/`en`**（存储被外部手改 / 换了版本）—— 异常态，要如实说出来。
+ *  本函数只知道"最终取到的是什么"，分不出来源；要分开就得**直接看那个键**
+ *  （`L1_SETTINGS` 的原始 JSON 里有没有 `lang` 这个属性）—— 「本地数据与隐私」屏的
+ *  `readLangPresence()` 就是干这个的（见那里的说明与 `tests/i18n/local-data-lang-row.test.ts`
+ *  的五形态腿）。
  */
 export function readLang(store: LocalStore): unknown {
   return readSettings(store).lang;
 }
 
 /**
- * ★ 2026-10-01（P0）：写界面语言。返回值语义与 `writeNickName` **逐字相同**：
- * `true` = 真的落到 `store.kv()` 了；`false` = 没写进去（配额满 / 隐私模式 / 超上限）。
+ * ★ 2026-10-01（P0，线上验收 D1）：`lang` 这个字段在存储里**到底在不在**（四态）。
  *
- * ⚠️ **`false` 不等于"这次切换没生效"**：游客模式（`deny`）下 `store.kv()` 是**内存 KV**，
- * 它会成功（回 `true`），但刷新即丢；只有"后端存在却写不进去"才回 `false`。
- * 两种情形的提示措辞由宿主（`src/main.ts` 的 `applyLangChange`）分开说，别混成一句。
+ * ## 为什么需要它
+ *
+ * `readLang()` 把下面好几种情形都回成 `undefined`，而它们在屏上必须说不同的话：
+ *
+ * | 情形 | 例子 | 屏上该说 |
+ * |---|---|---|
+ * | 键不存在 | 全新访客 / 刚点完清除 / 从没切过语言 | 就一句「界面语言：中文」 |
+ * | 键在、但没有 `lang` 字段 | 只存过昵称的 `{"nick":"甲"}` | 同上 —— **本机从来没有存过语言**，说"存的不是一个有效值"是不实陈述 |
+ * | 键在、`lang` 是有效值 | `{"lang":"zh"}` | 「界面语言：中文」 |
+ * | 键在、`lang` 不是有效值 | `{"lang":"xx"}` | 默认语言 + 「（本机存的不是一个有效值，按默认语言显示）」 |
+ * | 键在、整份 JSON 坏了 | `{oops` | 同上那半句 —— 它确实是一段**坏数据**，不是"没设置过" |
+ *
+ * 第一版没有这个函数，屏上用 `isLang(raw) ? '' : tail` 判 ⇒ **缺键也挂了那句警告**
+ * （线上验收 D1：全新访客与刚清除完的人都被告知"本机存的不是一个有效值"）。
+ * 第二版按"键在不在"二分 ⇒ `{"nick":"甲"}` 也被挂了那句警告（同一条不实陈述，用户 2026-10-01 裁定改掉）。
+ *
+ * ## 四态（★ 2026-10-01 按用户裁决收成这个形状）
+ *
+ *  - `'absent'`：**键根本不存在** ⇒ 正常态；
+ *  - `'unset'`：键在、JSON 也解析得出来、但那份设置里**没有 `lang` 字段** ⇒ 正常态（"还没设置过语言"）；
+ *  - `'present'`：**`lang` 字段存在**（值可能是 `zh`/`en`，也可能是坏值 —— 那由 `isLang()` 判）
+ *    **或**整份 JSON 解析不出来（坏数据）⇒ 屏上按"能不能用"如实说话；
+ *  - `'unreadable'`：读存储本身抛错（`kv.get` 抛 / 后端不可用），屏上如实报失败原因。
+ *
+ * ⚠️ **坏 JSON 落进 `'present'`**（这是线上验收 D1 的形态③要求的）：`readJson` 在解析失败时
+ *   回 `{}`（它的注释写着这是**故意的**吞 —— 坏数据不该让游戏打不开）⇒ 只看"解析后的对象里
+ *   有没有 `lang`"会把坏 JSON 判成 `'unset'`，于是屏上**不说**"本机存的不是一个有效值"，
+ *   而那份设置确实是坏的、语言确实没读出来。
+ *   ⇒ 判据：先看键在不在（`kv.get`）；键在就再试着解析一次 ——
+ *     解析成功且是对象 ⇒ 看有没有 `lang` 属性（有 = `'present'`，没有 = `'unset'`）；
+ *     解析失败 ⇒ `'present'`（坏数据要说实话）。
  */
-export function writeLang(store: LocalStore, lang: Lang): boolean {
+export function readLangPresence(store: LocalStore): 'absent' | 'unset' | 'present' | 'unreadable' {
+  let raw: string | null;
+  try {
+    raw = store.kv().get(L1_SETTINGS);
+  } catch {
+    // `kv.get` 抛（存储不可用）—— 与 `readJson` 的"坏 JSON 吞掉"是两件事，别混
+    return 'unreadable';
+  }
+  if (raw === null) return 'absent';
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return 'present'; // 坏 JSON：它是一段坏数据，不是"没设置过"
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    // 合法 JSON 但不是设置对象（`42` / `"x"` / `true` / 数组）：与坏 JSON 同档 —— 数据不可用
+    return 'present';
+  }
+  return Object.prototype.hasOwnProperty.call(parsed, 'lang') ? 'present' : 'unset';
+}
+
+/**
+ * ★ 2026-10-01（P0）：写界面语言。
+ *
+ * ## 为什么它回 `WriteResult` 而 `writeNickName` 回布尔（线上验收 D3）
+ *
+ * 第一版回布尔 ⇒ 宿主只能写一句**猜出来的**兜底文案（"本机存储拒绝写入（隐私模式或配额已满）"），
+ * 于是：① 那句对"值超上限"是**错的**（真因是 `70021 字节 > 上限 65536 字节`，被丢掉了）；
+ * ② 它是硬编码中文，英文界面下夹着中文（线上验收 D3 的原话）。
+ * ⇒ 让写侧把**结构化原因**交出来（`too-large` / `write-failed` + 真因 detail），界面按原因
+ *   给**本地化**文案，并把真 detail 原样带上。
+ *
+ * 返回值语义（与 `storage.ts` 的 `writeJson` **同一套**，不另立一套）：
+ *  - `{ ok: true }`：真的落到 `store.kv()` 了；
+ *  - `{ ok: false, reason: 'too-large', detail }`：**拼出来的整份设置**超过 `L1_VALUE_MAX_BYTES`
+ *    ⇒ 一个字节都没写（`writeJson` 在碰 KV 之前就退回）；
+ *  - `{ ok: false, reason: 'write-failed', detail }`：后端拒绝写（隐私模式 / 配额满）。
+ *
+ * ⚠️ **`ok: false` 不等于"这次切换没生效"**：游客模式（`deny`）下 `store.kv()` 是**内存 KV**，
+ * 它会成功（回 `ok: true`），但刷新即丢；只有"后端存在却写不进去"才回 `ok: false`。
+ * 两种情形的提示措辞由宿主（`src/main.ts` 的 `applyLangChange`）分开说，别混成一句。
+ *
+ * ⚠️ 它仍然可能**抛**（`readSettings` 的 `kv.get` 会外抛，与 `writeNickName` 同一条边界）
+ * ⇒ 调用方要自己兜 `try/catch`（`applyLangChange` 兜了，并把它归成 `write-failed` 那一档）。
+ */
+export function writeLang(store: LocalStore, lang: Lang): WriteResult {
   return writeSettings(store, { lang });
 }
 

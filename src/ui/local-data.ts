@@ -56,13 +56,17 @@ import {
   clearAllLocalData,
   readDecks,
   readLang,
+  readLangPresence,
   readNickName,
   writeNickName,
   type ConsentState,
   type LocalStore,
 } from '../app/local-store';
 // ★ 2026-10-01（P0）：语言标签的唯一出处（`src/i18n/lang.ts`）—— 本文件不写第二份语言名清单。
-import { DEFAULT_LANG, LANGS, isLang } from '../i18n/lang';
+import { DEFAULT_LANG, LANGS, isLang, type Lang } from '../i18n/lang';
+// ★ 2026-10-01（P0 线上验收 D4）：**语言那一行**走文案表（它是语言功能自己的读数）。
+//   ⚠️ 这一屏的**其它文案没有抽取**，还登记在 `docs/2026-10-01-i18n-尚未抽取的屏.md` 里。
+import { t } from '../i18n';
 import type { MatchFile } from '../app/match-file';
 import { privacyLines } from '../app/privacy';
 
@@ -373,10 +377,25 @@ export function renderLocalData(root: HTMLElement, nav: LocalDataNav): void {
    * ⇒ **不需要**动 `clearAllLocalData` 的键表（也没动）；这里补的是"可见"这一半，
    *   以及"读数"这一半 —— 两者都由 `tests/ui/local-data-screen.test.ts` 第 11 组盯着。
    *
+   * ## ★ 2026-10-01（P0 线上验收 D1 + D4）
+   *
+   * **D1（真 bug）**：第一版用 `isLang(raw) ? '' : tail` 判"要不要挂那句警告"，而
+   * `readLang()` 把"键不存在"与"值是坏值"**都回成 `undefined`** ⇒ 全新访客与刚点完
+   * 「清除本机数据」的人都被告知「本机存的不是一个有效值」（线上实测 5 种形态：
+   * 键不存在 / `{"lang":"xx"}` / 坏 JSON 都带那句；`zh` / `en` 正常）。
+   * 修法：**分开问"键在不在"** —— `readLangPresence()` 给三态
+   * （`'absent'` / `'present'` / `'unreadable'`），只有 `'present'` 且值不是 `zh`/`en`
+   * 时才挂那句警告；键不存在 ⇒ 就一句「界面语言：中文」。
+   *
+   * **D4（口径纠错）**：这一屏**没有做过 i18n**（P0 只抽了设置小窗）—— 所以这一行
+   * 现在走 `t()`（它是**语言功能自己的读数**，双语是它自己的需求）。**其余文案仍然留在
+   * "尚未抽取的屏"清单里**（`docs/2026-10-01-i18n-尚未抽取的屏.md` 的 A 节，
+   * 这一屏继续登记着，不许划掉）。
+   *
    * 版式复用本屏既有的 `.local-data-*` 类（不新增 CSS 类 ⇒ 与 5 张既有 CSS 零冲突那条腿不动）。 */
   const langRow = el('div', 'local-data-row');
   langRow.dataset.role = 'lang';
-  langRow.appendChild(el('div', 'local-data-note', '界面语言'));
+  langRow.appendChild(el('div', 'local-data-note', t('local-data.lang.label')));
   const langLine = el('div', 'local-data-privacy-line');
   langLine.dataset.role = 'lang-state';
   langRow.appendChild(langLine);
@@ -390,20 +409,31 @@ export function renderLocalData(root: HTMLElement, nav: LocalDataNav): void {
    * 混成一处会让"语言读不出来"看起来像"昵称与卡组都读不出来"。
    *
    * 标签取 `LANGS` 的**唯一出处**（`src/i18n/lang.ts`），本文件不写第二份语言名清单。
+   *
+   * ★ D1 的四态（这是这条腿的核心，别退回"看 `readLang()` 是不是 undefined"）：
+   *  - `'unreadable'`：读存储本身抛错 ⇒ 如实报失败 + 真因；
+   *  - `'present'` 且值**不是** `zh`/`en`（含坏 JSON / 非对象）⇒ 用默认语言 + 挂那句"不是一个有效值"；
+   *  - `'absent'`（键不存在：全新访客 / 刚清除完）与 `'unset'`（键在但**没有 `lang` 字段**，
+   *    例如只存过昵称的 `{"nick":"甲"}`）⇒ **就一句**「界面语言：中文」，**不许**挂警告。
+   *    ⚠️ `'unset'` 这一档是用户 2026-10-01 亲自裁定的：那时本机**从来没有**存过语言，
+   *    说"存的不是一个有效值"是不实陈述（与"缺键"是同一件事）。
    */
   const refreshLang = (): void => {
     let raw: unknown;
+    let presence: ReturnType<typeof readLangPresence>;
     try {
       raw = readLang(store);
+      presence = readLangPresence(store);
     } catch (e) {
-      langLine.textContent = `界面语言：读取本机数据失败：${describeError(e)}`;
+      langLine.textContent = t('local-data.lang.read-failed', { detail: describeError(e) });
       return;
     }
-    const lang = isLang(raw) ? raw : DEFAULT_LANG;
+    const lang: Lang = isLang(raw) ? raw : DEFAULT_LANG;
     const found = LANGS.find((l) => l.id === lang);
-    // 存储里是坏值时**如实说出来**，而不是假装"一直是中文"（那会让玩家以为自己的选择丢了）
-    const tail = isLang(raw) ? '' : '（本机存的不是一个有效值，按默认语言显示）';
-    langLine.textContent = `界面语言：${found?.label ?? lang}${tail}`;
+    const value = t('local-data.lang.value', { lang: found?.label ?? lang });
+    // 只有"`lang` 字段在、但值不是有效语言"（含坏 JSON / 非对象）才挂那句补充
+    const badStoredValue = presence === 'present' && !isLang(raw);
+    langLine.textContent = badStoredValue ? `${value}${t('local-data.lang.invalid')}` : value;
   };
   refreshLang();
 
