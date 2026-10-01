@@ -400,12 +400,20 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
   const cardsHost = elRole('div', 'cardmaker-cards', 'cards');
   optionsCol.appendChild(cardsHost);
 
+  /**
+   * ★ 2026-10-01（用户要求"去掉「新增横版协议卡」按钮"）：这一排现在**只剩两枚**。
+   *
+   * 为什么那枚是多余的（两条都是当时实测的现状）：
+   *  1. 整副牌只允许一张协议卡 —— 它唯一能干的事是"在零张时建一张"，而这件事
+   *     `setMode('protocol')` 已经做了（`ensureCardOf()`，结论码 `mode-created-card`）；
+   *  2. 已经有一张时点它只会得到 `card-add-refused` 警告 ⇒ 它是个**必然失败或必然多余**的按钮。
+   * 所以按钮、它的处理函数、`card-add-refused` 结论码一起删掉，**两种模式里都不留**
+   * （测试里那条"第二张加不进来"的腿改成"这枚按钮根本不存在"的锚点）。
+   */
   const cardActions = el('div', 'cardmaker-actions');
   const addCompile = btnRole('btn', 'add-compile', '新增竖版编译卡');
-  const addProtocol = btnRole('btn', 'add-protocol', '新增横版协议卡');
   const delCard = btnRole('btn', 'delete-card', '删除当前卡');
   cardActions.appendChild(addCompile);
-  cardActions.appendChild(addProtocol);
   cardActions.appendChild(delCard);
   optionsCol.appendChild(cardActions);
 
@@ -864,7 +872,8 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     face = next;
     screen.dataset.face = face;
     refreshAll();
-    say(next === 'back' ? '已切到协议卡**背面**（底栏名字 + 背面那行字）。' : '已切到协议卡**正面**（四条横条）。', 'face-switched', 'info');
+    // ★ 2026-10-01（用户要求改短，逐字就是这两句，别自创第三种说法）
+    say(next === 'back' ? '已切到协议背面' : '已切到协议正面', 'face-switched', 'info');
   }
 
   /* ── 保存（防抖：拖拽/打字时不要每帧写盘） ── */
@@ -902,12 +911,30 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
   function refreshCards(): void {
     cardsHost.textContent = '';
     const list = cardsOf(mode);
-    for (const card of list) {
+    /**
+     * 清单行前缀那个名字：**实时**取当前牌组名（所以 `deckTitle` 的 input 处理器里也调了
+     * `refreshCards()` —— 改完牌组名清单当场就变）。空名时用与导出文件名**同源的缺省名**
+     * `deck`（见 `exportJson` 里的 `safeFileName(deck.title, 'deck')`），
+     * 免得出现一个只有空格的前缀。
+     */
+    const deckLabel = deck.title.trim() === '' ? 'deck' : deck.title.trim();
+    for (let i = 0; i < list.length; i += 1) {
+      const card = list[i];
       const row = elRole('div', 'cardmaker-card-row', 'card-row');
       row.dataset.cardId = card.id;
       row.dataset.cardKind = card.kind;
       if (card.id === currentId) row.classList.add('cardmaker-card-on');
-      const open = btnRole('btn cardmaker-mini', `card-open-${card.id}`, card.kind === 'protocol' ? '横版协议卡' : '竖版编译卡');
+      /**
+       * ★ 2026-10-01（用户要求）：行的正名改成**三段** —— 牌组名 + 这一种的称呼 + 序号。
+       *
+       *  - 「序号」= 这一张在**当前模式清单里的次序**（1 起）⇒ 用户说的"第 X 张"与屏幕对得上；
+       *  - 两种称呼逐字按用户给的：协议卡那行是「协议卡」，竖版那行是「协议所属卡牌」
+       *    （用户原话：「横版协议卡」⇒ 牌组名 + 协议卡 + 序号；「竖版编译卡」⇒
+       *    牌组名 + 协议所属卡牌 + 序号）。
+       */
+      const kindName = card.kind === 'protocol' ? '协议卡' : '协议所属卡牌';
+      const seq = i + 1;
+      const open = btnRole('btn cardmaker-mini', `card-open-${card.id}`, `${deckLabel} ${kindName} ${seq}`);
       open.addEventListener('click', () => {
         currentId = card.id;
         lastSeenId[card.kind] = card.id;
@@ -915,12 +942,24 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
       });
       row.appendChild(open);
       const label = card.title.trim() === '' ? '（未命名）' : card.title.trim();
-      const value = card.value.trim() === '' ? '—' : card.value.trim();
-      row.appendChild(el('span', 'cardmaker-note', `${label} · 数值 ${value}`));
+      /**
+       * ★ 2026-10-01（用户要求）：**协议卡那行不许出现"数值"字样**。
+       *
+       * 协议卡的分区表（`PROTOCOL_FRONT` / `PROTOCOL_BACK`）里根本没有数值位，它在
+       * 数据模型上也不带 `value`（`hydrateCard()` 会把它清空、`packCard()` 连键都剔掉）——
+       * 老文案那句「· 数值 —」既没有信息量，又在暗示一个不存在的功能。
+       * 竖版编译卡照旧带上它（大号中心数字是它专属的字段）。
+       */
+      const note = card.kind === 'protocol'
+        ? label
+        : `${label} · 数值 ${card.value.trim() === '' ? '—' : card.value.trim()}`;
+      row.appendChild(el('span', 'cardmaker-note', note));
       cardsHost.appendChild(row);
     }
     if (list.length === 0) {
-      cardsHost.appendChild(el('div', 'cardmaker-note', '这个模式下还没有卡：用下面的按钮加一张。'));
+      // 防御分支：两种模式在 `ensureCardOf()` / 「删除当前卡」的规则下都到不了"零张"
+      // （只剩一张时删除是禁用的），所以这里**不再指某个具体按钮**（协议那枚已经删了）。
+      cardsHost.appendChild(el('div', 'cardmaker-note', '这个模式下还没有卡。'));
     }
     // 只剩一张时不许删（不允许把这一种卡删空）—— 与第一版同一条规则，只是按**模式**判
     delCard.disabled = current() === null || cardsOf(mode).length <= 1;
@@ -1565,6 +1604,9 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
 
   deckTitle.addEventListener('input', () => {
     deck.title = deckTitle.value;
+    // ★ 2026-10-01（用户要求）：清单行前缀带**实时**牌组名 ⇒ 改名字要当场重画清单
+    //   （不重画的话，用户改完名字清单还挂着旧名 —— 那正是"界面在说假话"）
+    refreshCards();
     scheduleSave();
   });
 
@@ -1587,22 +1629,6 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     refreshAll();
     scheduleSave(0);
     say('已加一张竖版编译卡。', 'card-added', 'info');
-  });
-
-  addProtocol.addEventListener('click', () => {
-    if (cardsOf('protocol').length > 0) {
-      say('横版协议卡整副牌只需要一张：先删掉现有那张再加。', 'card-add-refused', 'warn');
-      return;
-    }
-    const card = defaultCard(newCardId(), 'protocol');
-    deck.cards = [card, ...deck.cards];
-    mode = 'protocol';
-    screen.dataset.mode = mode;
-    currentId = card.id;
-    lastSeenId.protocol = card.id;
-    refreshAll();
-    scheduleSave(0);
-    say('已加一张横版协议卡。', 'card-added', 'info');
   });
 
   delCard.addEventListener('click', () => {

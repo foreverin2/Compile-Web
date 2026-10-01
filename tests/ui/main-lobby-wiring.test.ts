@@ -16,14 +16,15 @@
  *  2. **结构腿按 T12 的新数字**：剥注释后 `driver.submit(` 恰 9 处（8 类动作 + 1 处重排；
  *     T12 加的那一处是 `cb.onDraftPick`，理由见第 5 条腿）、`renderApp(root, state, cb)` 恰 1 处、
  *     `renderMode = 'hotseat'` 恰 2 处、`rerender` 里 `renderMode === 'replay'` 恰 1 处；
- *  3. ★ **实现顺序约束**：新入口排在 `startNetPreview` **之前**（D24；G5/T41 起那条腿的锚点
- *     已换成花括号配平的箭头函数体，见第 2 条里的说明）；
+ *  3. ★ **nav 键顺序**：`startNetLobby` 排在 `startHotseat` 之后（D24 那条实现顺序约束剩下的
+ *     一半；2026-10-01 删掉「单视角预览」那个模式之后，它的右操作数 `startNetPreview` 不存在了,
+ *     见第 2 条里的说明）；
  *  4. 大厅符号**没有**溢进 `cb` / `applyRearrangeSwap` / `runAutoAdvance` 三个函数体。
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { stripComments, functionBody, objectBody, braceBlock } from './source-text';
+import { stripComments, functionBody, objectBody } from './source-text';
 
 const MAIN = stripComments(
   readFileSync(fileURLToPath(new URL('../../src/main.ts', import.meta.url)))
@@ -59,46 +60,35 @@ describe('G5 T8 · main.ts 的四处最小侵入', () => {
     expect(MAIN, 'renderMode 被放宽成了 string（联合类型的判别力没了）').not.toMatch(/let renderMode:\s*string/);
   });
 
-  it('2. 新入口 `startNetLobby` 存在，且**必须排在 `startNetPreview` 之前**（D24 的顺序约束）', () => {
+  it('2. 新入口 `startNetLobby` 存在，排在 `startHotseat` 之后，且只写第四值 `lobby`', () => {
     const mode = functionBody(MAIN, 'showModeSelect');
     expect(mode, 'showModeSelect 里没有 startNetLobby').toContain('startNetLobby');
-    expect(mode, 'showModeSelect 里没有 startNetPreview（预览入口被弄丢了？）').toContain('startNetPreview');
     const iLobby = mode.indexOf('startNetLobby:');
-    const iPreview = mode.indexOf('startNetPreview:');
+    const iHotseat = mode.indexOf('startHotseat:');
     expect(iLobby, '找不到 startNetLobby: 的键（入口写法变了？）').toBeGreaterThanOrEqual(0);
-    expect(iPreview, '找不到 startNetPreview: 的键').toBeGreaterThanOrEqual(0);
+    expect(iHotseat, '找不到 startHotseat: 的键').toBeGreaterThanOrEqual(0);
     /**
-     * ★ 这条就是 D24 那条实现顺序约束。
+     * ★ 这条是原 D24 顺序约束**剩下的那一半**。
      *
-     * **G5/T41 的成组改动（改的是理由，不是松紧）**：原先它存在的唯一理由是"顺序会决定
-     * `net-preview-wiring.test.ts` 那条 `mode.slice(mode.indexOf('startNetPreview:'))` 切片有多长"
-     * —— 排在后面的新入口会被切进"预览那一段"，于是那条腿可能被新入口里的字符串满足（失焦）。
-     * G5/T41 把那条腿的锚点换成**花括号配平的 `startNetPreview` 箭头函数体**
-     * （`source-text.ts` 的 `braceBlock`），切片**不可能**再被后面的东西拉长 ⇒ 失焦风险从根上没了。
+     * ⚠️ **2026-10-01（用户要求）的成组改动**：原先它是「`startNetLobby` 必须排在
+     * `startNetPreview` 之前」，理由是"nav 键顺序与 `home.ts` 源码里的模式卡顺序
+     * （热坐 → 联机 → 预览）一致"。用户要求把「单视角预览（仅开发）」那个模式整个删掉
+     * （入口 / 启动路径 / 死代码一起走）⇒ nav 里**没有** `startNetPreview:` 这个键了，
+     * 那条比较失去右操作数。
      *
-     * 顺序约束**保留**，理由换成现在仍然成立的那一条：`showModeSelect` 的 nav 键顺序与
-     * `home.ts` 里**源码层面**的模式卡顺序（热坐 → 联机 → 预览）一致 —— 读代码 / 改卡片顺序时
-     * 不用两头跳。（那张预览卡只在**开发者路径**下才会被建出来：`dev=false` 时普通玩家的清单是
-     * 「热坐 → 联机 → 单人 → 三人」，所以这里的"卡顺序"说的是源码位置，不是玩家看到的清单。）
-     * 断言**没有放松**：`iLobby < iPreview` 仍逐字保留，且新增一条"预览那一段里不含联机符号"
-     * 的**结构化**下界（比原来那条靠切片长度的间接证据更硬）。
+     * 判据**换成仍然成立的那一条**（不是放宽成"只要存在就行"）：nav 键顺序与 `home.ts`
+     * 里模式卡的顺序一致 ⇒ `startHotseat:` 必须排在 `startNetLobby:` 之前
+     * （热坐是第一张卡、联机是第二张）；区间上界取函数体末尾。
+     * 同一条腿再加一条反空转的存在性判据：**`startNetPreview` 这个键不许再出现**
+     * （它复活时这里当场红，`tests/ui/net-preview-wiring.test.ts` 的锚点腿也会红）。
      */
-    expect(
-      iLobby,
-      'startNetLobby 排在 startNetPreview **之后**：nav 键顺序与 home.ts 源码里的模式卡顺序'
-      + '（热坐 → 联机 → 预览）不一致',
-    ).toBeLessThan(iPreview);
-    // 顺序约束的**外部自证**（G5/T41 换锚点）：真的把预览那一段按花括号配平切出来，
-    // 它里面既不许出现新入口的符号，也不许是空片段（空片段会让上面三条断言假绿）。
-    const previewSlice = braceBlock(mode, iPreview);
-    expect(previewSlice.length, 'startNetPreview 的箭头函数体抽到空片段 ⇒ 本判据假绿')
-      .toBeGreaterThan(80);
-    expect(previewSlice, 'startNetPreview 的函数体里出现了 startNetLobby（锚点被拉长 ⇒ 失焦）')
-      .not.toContain('startNetLobby');
-    expect(mode.slice(iPreview).indexOf('startNetLobby'),
-      'startNetPreview 之后仍出现 startNetLobby（nav 里有两个联机入口？）').toBe(-1);
+    expect(iHotseat, 'startNetLobby 排在 startHotseat **之前**：nav 键顺序与 home.ts 里'
+      + '「热坐 → 联机 → 单人 → 三人」的卡顺序不一致').toBeLessThan(iLobby);
+    // 那条被删掉的预览接线：**不许**在任何地方留下键（留一个没有模式卡的键就是死接线）
+    expect(mode, 'showModeSelect 里又出现了 startNetPreview:（被删掉的预览模式复活了）')
+      .not.toContain('startNetPreview');
     // 新入口只写第四值，**不许**写 `renderMode = 'hotseat'`（那两个字面量点各有腿在数）
-    const lobbySlice = mode.slice(iLobby, iPreview);
+    const lobbySlice = mode.slice(iLobby);
     expect(lobbySlice, '大厅入口里写了 renderMode = hotseat（会撞上那两条计数腿）')
       .not.toMatch(/renderMode\s*=\s*'hotseat'/);
     expect(lobbySlice, "大厅入口没有把 renderMode 切成 'lobby'").toMatch(/renderMode\s*=\s*'lobby'/);
@@ -271,11 +261,13 @@ describe('G5 T8 · D 轮：大厅那份 env 与"造传输用的那一份"是同�
 
 describe('G5 T8 · 正控（防这几条腿恒真）', () => {
   it('9. 分类器与计数器对**合成源码**照样有牙', () => {
-    // ① 顺序判据：造一份"新入口排在预览之后"的合成主干 ⇒ 判据必须能报出它
-    const bad = "const nav = { startNetPreview: () => {}, startNetLobby: () => { renderMode = 'lobby'; } };";
+    // ① 顺序判据：造一份"联机入口排在热坐之前"的合成主干 ⇒ 判据必须能报出它
+    //    （2026-10-01 起右操作数是 `startHotseat:` —— 见第 2 条的说明）
+    const bad = "const nav = { startNetLobby: () => { renderMode = 'lobby'; }, startHotseat: () => {} };";
     const iLobby = bad.indexOf('startNetLobby:');
-    const iPreview = bad.indexOf('startNetPreview:');
-    expect(iLobby, '正控构造失败：合成源码里新入口竟然排在前面').toBeGreaterThan(iPreview);
+    const iHotseat = bad.indexOf('startHotseat:');
+    expect(iLobby, '正控构造失败：合成源码里联机入口竟然排在热坐之后').toBeLessThan(iHotseat);
+    expect(/startNetPreview/.test(bad), '正控构造失败：合成源码里还带着已删掉的预览键').toBe(false);
     // ② 计数判据：往合成源码里多塞一处字面量 ⇒ 计数必须变
     const fake = MAIN + "\nrenderMode = 'hotseat';\n";
     expect(occurrences(fake, "renderMode = 'hotseat'").length, '正控：合成源码里多加的那一处没被数到')

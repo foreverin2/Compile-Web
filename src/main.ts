@@ -29,7 +29,7 @@ import { createGame, getCurrentDrafter, performDraftPick, performDraftUnpick, pe
 import { getCompilableLines } from './core/rules/compile';
 import { collectTriggers } from './core/effects/triggers';
 import { renderApp, renderDraft, resetUiState, setDraftSelfSeat, syncCompiledFxLayers, syncSmokeOverlays, syncScanOverlays, syncPsychicParticles, syncPlagueMists, syncApathyMists, syncApathyMosaics, syncSpirit0Glows, syncSpirit1Cards, syncMetal0Glows, syncMetalPlates, syncMetal6Mans, syncMetal1LineGlows, syncMirror0BatteryGlows, syncClarity0BatteryGlows, syncIceFx, syncSmoke2LineGlows, syncFear0TriGlows, syncWarBlades, syncChainLayerPosition, syncDiversity3Fx, type UiCallbacks } from './ui/render';
-// G2 Task 4：远程对战页（单视角预览）。**本 import 是 render-net.ts 第一次进入 JS 产物** ——
+// G2 Task 4：远程对战页（联机牌桌那一屏）。**本 import 是 render-net.ts 第一次进入 JS 产物** ——
 // 在此之前它没有任何生产代码引用它（Task 3/3F/3F2 改了 700+ 行而产物哈希一字未动），
 // 也就是说 build 那道门此前对整个远程页是瞎的。
 import { renderNetBoard, resetNetUiState } from './ui/render-net';
@@ -111,7 +111,7 @@ import { initDiag } from './ui/diag';
 import { initTouchBridge } from './ui/touch-bridge';
 // G5/T39：手机竖屏 ⇒ 横屏游玩（平板不进来；全屏/方向锁都试过之后才退化成 CSS 旋转）
 import { initPhoneLandscape } from './ui/phone-landscape';
-import { initDevMode, isDevUnlocked, resetDevUnlock } from './ui/devmode';
+import { initDevMode, isDevUnlocked } from './ui/devmode';
 import { gameBus } from './core/events/bus';
 import { pushLog } from './core/log';
 import { trace, stateDigest, initEventTracing } from './core/trace';
@@ -230,21 +230,35 @@ let transitioning = false;
 let resetEpoch = 0;
 
 /**
- * G2 Task 4：**当前页面模式** —— 热座棋盘（默认）或远程页单视角预览。
- * 这是"整帧重渲染该画哪一页"的唯一开关，只由三个入口改写：
- *   - `showModeSelect` 的 `startNetPreview` → `'net'`（单视角预览）；
+ * G2 Task 4：**当前页面模式** —— 热座棋盘（默认）/ 远程页（联机牌桌）/ 重放页 / 联机大厅。
+ * 这是"整帧重渲染该画哪一页"的唯一开关，只由这几个入口改写：
  *   - `showModeSelect` 的 `startHotseat` → `'hotseat'`（显式复位，幂等）；
- *   - `resetToMainInterface` → `'hotseat'`（**必须**，否则"打完一局预览 → 返回主页面 → 开热座"
- *     会渲染成远程页 —— 那是最难自查的一类串味）。
+ *   - `enterNetGame`（联机进牌桌 / 重连换驱动）→ `'net'`；
+ *   - 退大厅（`linkRecoveryNeeded`）→ `'lobby'`、`showModeSelect` 的 `startNetLobby` → `'lobby'`；
+ *   - `startReplayFile` → `'replay'`；
+ *   - `resetToMainInterface` → `'hotseat'`（**必须**，否则"打完一局 → 返回主页面 → 开热座"
+ *     会渲染成上一页 —— 那是最难自查的一类串味）。
+ *
+ * ⚠️ **2026-10-01**：原先还有一条 `showModeSelect` 的 `startNetPreview` → `'net'`
+ * （「单视角预览（仅开发）」那个模式卡），随那个模式一起删了；`'net'` 现在**只剩联机一条来源**。
  *
  * ## G5/T8 补的第四个值：`'lobby'`（联机大厅）
  *
- * **不复用 `'net'`**：那个值已经是**远程页单视角预览**（零联机、从草稿流程进来），而大厅没有
- * `state`（对局还没开始）。让一个字段同时承担"大厅"与"预览"两种语义，正是 D16 那条教训的形态。
+ * **不复用 `'net'`**：`'net'` 是**联机牌桌**（有 `state`、驱动在跑），而大厅没有 `state`
+ * （对局还没开始）。让一个字段同时承担"大厅"与"牌桌"两种语义，正是 D16 那条教训的形态。
  * 大厅也**不写** `renderMode = 'hotseat'`（那两个字面量点各有腿在数）—— 它只写 `'lobby'`。
  */
 let renderMode: 'hotseat' | 'net' | 'replay' | 'lobby' = 'hotseat';
-/** 预览视角座位（**绝对玩家号**；仅 `renderMode === 'net'` 时有意义）。页内工具条可切换。 */
+/**
+ * 本机视角座位（**绝对玩家号**；仅 `renderMode === 'net'` 时有意义）。
+ *
+ * 来源是 `enterNetGame()` 里那句 `netViewSeat = hand.seat`（= 喂给 `createNetDriver` 的本端座位），
+ * 开发者指令 `视角` / `seat 1|2`（`initDevMode` 的 `netSeat` 回调）与解锁后的预览工具条
+ * （`onPreviewChange`）都可以就地改它。
+ *
+ * ⚠️ 2026-10-01 之前它还有一个消费者是「单视角预览」那条本地启动路径（进预览即写 `0`）——
+ * 那个模式删掉之后，它仍然由联机牌桌与 devmode 指令读写，**没有变成死代码**。
+ */
 let netViewSeat: PlayerId = 0;
 /* G2 Task 4F（终审 I-2 + N4）：**这里原先还有一个 `netHandVisibility` 常量，现已删除。**
  * 它承载的"信息遮蔽档位"不是一个用户可选项，因此不该有"量"：本页恒为"自己正面、对手只手牌数量"。
@@ -494,8 +508,7 @@ let netGame: NetMatch | null = null;
  *
  * 草稿期两条分支都画热座那套草稿页（`rerender` 的 `net` 分支带 `state.phase !== 'draft'` 守卫）。
  * 而草稿**打完**那一刻相位变 `'turn'`：留在 `'lobby'` 会让 `rerender()` 去画**联机大厅**
- * （把大厅盖在牌桌上），换成 `'net'` 才是"远程页单视角"那一套。座位口径（哪一侧是自己）
- * 归后续任务：本段只到"进草稿 + 真的选一步"。
+ * （把大厅盖在牌桌上），换成 `'net'` 才走远程页那一套。座位口径（哪一侧是自己）见下面那一段。
  *
  * ## `draftMode` / `draftPool` 两端怎么做到逐字一致（判据：两端状态指纹相等）
  *
@@ -3673,8 +3686,8 @@ async function joinLobbyWithInvite(text: string): Promise<void> {
 /**
  * **整帧重渲染的唯一入口**：按 `renderMode` 路由到当前页面。
  *
- * - `renderMode === 'net' && state.phase !== 'draft'` → `renderNetBoard`（远程页单视角预览）；
- * - 否则 → `renderApp`（热座页；**草稿阶段恒走这里** —— 草稿页在 G2 不分支，预览沿用完整热座流程）。
+ * - `renderMode === 'net' && state.phase !== 'draft'` → `renderNetBoard`（远程页 = 联机牌桌）；
+ * - 否则 → `renderApp`（热座页；**草稿阶段恒走这里** —— 联机草稿页与热座草稿页是同一套）。
  *
  * 为什么必须统一入口：远程页要**可玩**（用户验收第 3 项要求把牌真的打出去看特效），
  * 而热座页的每次状态变更都会 `renderApp(root, state, cb)` 整帧重画 —— 只要有一处漏改，
@@ -5037,21 +5050,16 @@ function showModeSelect(): void {
     /**
      * G5/T8：**联机对战（两台设备）** —— 真正的联机入口（建房 / 加入 / 连接设置）。
      *
-     * **它排在 `startNetPreview` 之前**（计划 §5 T8 的实现顺序约束，D24 补）。G5/T41 之后这条
-     * 顺序约束**只剩一个理由**：`showModeSelect` 的 nav 键顺序与**源码里**的模式卡顺序
-     * （热坐 → 联机 → 预览）一致，读代码 / 改卡片顺序时不用两头跳；它仍由
-     * `tests/ui/main-lobby-wiring.test.ts` 第 2 条钉着。
+     * **它排在原来「单视角预览」那个 nav 键位置之前**（计划 §5 T8 的实现顺序约束，D24 补）：
+     * `showModeSelect` 的 nav 键顺序与**源码里**的模式卡顺序一致，读代码 / 改卡片顺序时不用两头跳；
+     * 它由 `tests/ui/main-lobby-wiring.test.ts` 第 2 条钉着。2026-10-01 用户要求把「单视角预览
+     * （仅开发）」那个模式整个删掉（入口 / 启动路径 / 死代码一起走）之后，两边都是四张卡、逐项一致。
      *
-     * 原先的理由（"别让预览那一段的判据面被排在后面的新入口拉长"）**已经作废**：G5/T41 把
-     * `tests/ui/net-preview-wiring.test.ts` 第 6 条的锚点从
-     * `mode.slice(mode.indexOf('startNetPreview:'))` 换成了**花括号配平**的 `startNetPreview`
-     * 箭头函数体（`source-text.ts` 的 `braceBlock`）⇒ 判据面只剩预览那一段，不可能再被后面的
-     * 入口拉长。注意 `net-preview-wiring.test.ts:210-213` 现在是一条**反空转的长度断言**
-     * （"闸门块不得几乎覆盖整份文件"），与 `startNetPreview` 无关，别再把它当切片锚点的出处。
-     *
-     * 另外注意："模式卡顺序 热坐 → 联机 → 预览"只在**开发者路径**下成立：`dev=false` 时
-     * 预览卡**根本不会被建出来**（`renderModeSelect` 的 `if (devUnlocked)`），普通玩家看到的
-     * 清单是「热坐 → 联机 → 单人 → 三人」。顺序约束说的是**源码里**的卡位置，不是玩家看到的清单。
+     * ⚠️ **2026-10-01 同一次改动**：这里原先还挨着一个 `startNetPreview` 回调（把页面模式切成
+     * `'net'`、落地 `netViewSeat`、复位草稿转场那个闩、调 `showCoin()` 走完整热座流程）——
+     * 那是**仅预览那一个模式可达**的启动路径，已整个删除。联机对局不受影响：进牌桌之后
+     * `renderMode = 'net'` 由 `enterNetGame()` 自己写（本文件两处），`renderMode === 'net'`
+     * 那条渲染分支照旧。
      *
      * 它**不写** `renderMode = 'hotseat'`（那两个字面量点各有腿在数），也不碰 `showCoin()`：
      * 大厅没有 `state`，它只是把页面模式切成第四值。
@@ -5060,44 +5068,7 @@ function showModeSelect(): void {
       renderMode = 'lobby';
       renderLobbyFrame();
     },
-    /**
-     * G2 Task 4：**单视角预览（本地、零联机）** —— 远程对战页的视觉验收入口。
-     *
-     * 设计取舍（为什么不另写一套"直接进对战"的捷径）：预览**沿用完整的热座流程**
-     * （掷硬币 → 草稿页 → 过渡视频 → 对战阶段），只在**对战阶段**把布局换成远程页：
-     *   - 不需要写"自动选完 6 张草稿"的逻辑（那是另一套要维护的状态机）；
-     *   - 不会绕过过渡动画（绕过就等于让"远程页与过渡时序"这条路径永远不被执行）；
-     *   - 切换点由 `rerender()` 的 `state.phase !== 'draft'` 守卫单点决定，规则只有一处。
-     */
-    startNetPreview: (viewSeat, ban, randomPool) => {
-      gameOptions = { ban, randomPool };
-      renderMode = 'net';
-      netViewSeat = viewSeat;
-      /**
-       * ★★ **G5 T19 修复轮 2：预览这条路也要复位"草稿 → 对局转场演过没有"那个闩。**
-       *
-       * 它与 `startHotseat` 同源（两条都调 `showCoin()`），而下面那条注释（"不会绕过过渡动画"）
-       * 说的正是这件事：联机那局打完草稿之后闩已置 `true`，接着点"单视角预览"时闩还留着 ⇒
-       * **预览的草稿 → 对局转场不播**（用户那次抱怨的就是这个观感）。
-       */
-      draftTransitionPlayed = false;
-      transitionPlayed = 0;
-      // 手牌可见性不在这里设：本页无该选项（I-2/N4 已把档位字段删掉，恒为信息遮蔽形态）。
-      showCoin();
-    },
-    /**
-     * G5/T41（用户 2026-09-27 第 2 条）：**开发者模式解锁状态**是"单视角预览"那张模式卡的闸门。
-     *
-     * 用户原话："单视角预览这个模式没有实际作用，仅仅是可以用于测试，所以不要放在游戏模式里面"
-     * ⇒ 普通玩家进这一页时 `isDevUnlocked()` 为 false，那张卡**根本不会被建出来**；
-     * `Ctrl+Shift+P` + 密码（`src/ui/devmode.ts`）解锁后，再次进到这一页就能看见它。
-     * 解锁动作本身**不重画这一页**（devmode 的 `host.render()` 走 `rerender()`，按 `renderMode`
-     * 路由）—— 解锁后要**退出去再进来**一次；这是"闸门读一次"的必然形态，本轮不改。
-     *
-     * 这不放松任何东西：`startNetLobby` / `startNetPreview` 两条接线与 `renderMode === 'net'`
-     * 那条渲染路径一个字未动（`tests/ui/net-preview-wiring.test.ts` 第 6 条仍逐条断言）。
-     */
-  }, isDevUnlocked());
+  });
 }
 
 /**
@@ -5279,22 +5250,15 @@ function resetToMainInterface(): void {
   closeControlRearrangeModal(); // 控制组件重排模态（body 级）随局清扫
   effectRearrangeKey = null; // 效果内重排窗口的会话键随局清空
   /**
-   * ── ★ 2026-10-01（用户报的回归）：**开发者解锁态（devmode 的模块态）也随局收回** ──
+   * ⚠️ **2026-10-01（用户要求）：这里原先还有一句 `resetDevUnlock()`** —— 2026-10-01 早些时候
+   * 为了修"退出热座后模式页多出「单视角预览（仅开发）」那张卡"而加的（把 devmode 的模块级
+   * 解锁标记随整局复位收回）。
    *
-   * 与上面那几份模块态同族：它们都是"跨局会串味"的东西，复位点就是本函数（整局复位）。
-   * 漏掉这一句的症状（用户 2026-10-01 报的）：`isDevUnlocked()` 是 devmode 的**模块级会话
-   * 标记**，全仓**只有解锁那一处写它**（`devmode.ts` 的 `tryUnlockDevMode`）⇒ 解锁过一次之后，
-   * 模式选择页那张「单视角预览（仅开发）」卡的闸门（`showModeSelect` 把 `isDevUnlocked()`
-   * 交给 `renderModeSelect`）就一直是真 ⇒ **打完一局 / 点「← 退出游戏」回到模式页时那张卡又出现**。
-   *
-   * 为什么修在这里而不是"退出按钮那一行"：本函数是**整局复位的唯一点**（胜利横幅的
-   * `onWinReset`、热座的「退出游戏」、重放页出口都走它）—— 修在入口那一行的话，"胜利后回主页
-   * 再进模式页"照旧漏（那条路径也经过本函数，但不经过退出按钮）。
-   *
-   * 为什么收回的是"寿命"而不是"能力"：解密后的语义就是 devmode 注释里那句「本局游戏内」；
-   * 密码框、指令页、`/skip` 一个都没动，开发者再按一次 `Ctrl+Shift+P` + 密码即可（见 `resetDevUnlock`）。
+   * 用户随后要求**把那个模式整个删掉** ⇒ `renderModeSelect` 不再有那个形参、那张卡不存在了，
+   * 收回解锁态的作用面变成空的；而 `isDevUnlocked()` 现在只决定远程页工具条 / `verifyHooks` /
+   * devmode 指令 —— 这几样正是用户要求**保留**的能力，不该在一局结束时被悄悄收回
+   * ⇒ 那一句（连同 `resetDevUnlock()` 本身）一并删除。详见 `src/ui/devmode.ts` 里的说明。
    */
-  resetDevUnlock();
   resetUiState();
   resetNetUiState(); // 远程页自有模块态（与上一行并排：两页的状态分属两个模块）
   // ── G2 修正 R-F · I-1：**FX 视角座位也必须复位**（与上面两行并排：三种模块态各归各的模块）──
@@ -5462,7 +5426,7 @@ initDevMode({
   netSeat: { get: () => netViewSeat, set: (seat) => { netViewSeat = seat; } },
   // G6 T45（用户 2026-09-27 ⑧）：**真的在联机牌桌上**时，会改状态的开发者指令一律拒绝
   // —— 判据是 `netGame !== null`（已经进了联机对局），不是 `renderMode === 'net'`
-  // （后者把本地"单视角预览"也算进去，而预览没有第二个客户端、改状态不会造成分歧）。
+  // （后者只说明"这一屏画的是远程页"，判别力不如"驱动是不是真的在跑"）。
   // eslint 无此规则；这一行只把"是不是联机"这一件事告诉 devmode，不新增任何状态。
   isNetMatch: () => netGame !== null,
 });

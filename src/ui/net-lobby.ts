@@ -18,10 +18,11 @@
  *
  * ## 为什么它是**独立屏**
  *
- * 大厅没有 `GameState`（对局还没开始），而 `'net'` 那个 `renderMode` 值已经是**远程页单视角预览**
- * （零联机、从草稿流程进来）⇒ `rerender()` 里那个 `state.phase !== 'draft'` 的预览分支不可能同时
- * 承担"大厅"与"预览"两种语义。所以 `renderMode` 取第四个值 `'lobby'`，本文件自己清 root，
- * **不**复用 `render.ts` / `render-net.ts` 的棋盘渲染器（判据 12 的划界腿钉这一点）。
+ * 大厅没有 `GameState`（对局还没开始），而 `'net'` 那个 `renderMode` 值已经是**联机牌桌**
+ * （进牌桌之后由 `main.ts` 的 `enterNetGame()` 写，草稿期由 `state.phase !== 'draft'` 守卫挡在
+ * 热座草稿页那一支）⇒ `rerender()` 里那个分支不可能同时承担"大厅"与"牌桌"两种语义。
+ * 所以 `renderMode` 取第四个值 `'lobby'`，本文件自己清 root，**不**复用 `render.ts` /
+ * `render-net.ts` 的棋盘渲染器（判据 12 的划界腿钉这一点）。
  *
  * ## 红线（写在这里，因为它决定了本文件的写法）
  *

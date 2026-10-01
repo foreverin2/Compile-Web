@@ -983,7 +983,7 @@ function bindNetScrollSync(): void {
  * （`buildChoicePickOverlay`）：把 prompt 候选按**真卡面**渲染 —— 其中 `corruption-2` 顶
  * （`core/rules/corruption.ts:69-71`）与 `courage-0` 底（`core/rules/courage.ts:36-37`）的候选
  * **就是对手手牌**（`chooser: foe`）⇒ 遮蔽模式下这些卡的内容会进 DOM。
- * 本机单视角预览**没有第三方受害**（同屏只有你一个人），故 G2 只记 Minor；
+ * 本机席位遮蔽**没有第三方受害**（同屏只有你一个人），故 G2 只记 Minor；
  * **但 G5 必须在会话/传输层按 seat 过滤 prompt 与候选** —— 渲染层挡不住（信息一旦进 DOM 就能被读）。
  * 另一处同族但更轻的遗留（§5-2）：**预览页翻面无动画** —— 热座的翻面动画长在 `renderBoard` 的
  * 内联回调里，本页复用叶子助手不带它，属观感差异而非缺陷。

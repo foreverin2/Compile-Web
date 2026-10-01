@@ -422,15 +422,44 @@ describe('卡的新增 / 删除 / 切换', () => {
     expect(byRole(root, 'card-row').length).toBe(1);
   });
 
-  it('第二张横版协议卡加不进来（整副牌只需要一张），结论是 card-add-refused', async () => {
+  it('★ 「新增横版协议卡」按钮**已经删掉**（协议模式与卡牌模式里都没有）', async () => {
+    /**
+     * 用户 2026-10-01：「去掉「新增横版协议卡」按钮（图 1 那一排里的那个），协议模式与卡牌模式里都不要它」。
+     *
+     * 现状（动手前量的）：整副牌只允许一张协议卡，而切到协议模式时如果一张都没有会自动建一张
+     * （`ensureCardOf()` + 结论码 `mode-created-card`）⇒ 那枚按钮**只在"零张"时有意义**，
+     * 已经有一张时点它只会得到 `card-add-refused` 警告。它是个必然多余或必然失败的按钮。
+     */
     const h = harness();
     const root = await renderSettled(h);
-    clickRole(root, 'mode-protocol'); // 协议卡模式里开局已经有一张
+    /**
+     * 那一排现在还活着的按钮（逐字）：以**「新增竖版编译卡」所在的那个容器**为准 ——
+     * 不能用 `.cardmaker-actions` 这个类名来找（导出那一排 `io` 用的是同一个类名，
+     * 第一版就是这么把 5 枚按钮混在一起、判据假红的）。
+     */
+    const actionButtons = (r: StubNode): string[] => {
+      const row = one(r, 'add-compile').parentElement;
+      return (row?.children ?? []).filter((c) => c.tag === 'button').map((b) => b.text);
+    };
+
+    // ① 卡牌模式（初始模式）
+    expect(byRole(root, 'add-protocol'), '卡牌模式里还有「新增横版协议卡」').toHaveLength(0);
+    expect(actionButtons(root), '卡牌模式下那一排的按钮清单变了').toEqual(['新增竖版编译卡', '删除当前卡']);
+    // ② 协议模式
+    clickRole(root, 'mode-protocol');
     await flush();
-    clickRole(root, 'add-protocol');
-    expect(statusCode(root)).toBe('card-add-refused');
-    expect(byRole(root, 'card-row').length, '居然真的加进去了').toBe(1);
-    expect(one(root, 'status').text).toContain('只需要一张');
+    expect(byRole(root, 'add-protocol'), '协议模式里还有「新增横版协议卡」').toHaveLength(0);
+    expect(actionButtons(root), '协议模式下那一排的按钮清单变了').toEqual(['新增竖版编译卡', '删除当前卡']);
+    // ③ 源码面（剥掉注释）：按钮、role、结论码、文案一个都不许留
+    const code = stripComments(PAGE_SRC);
+    expect(code, "源码里还有 add-protocol 这个 role").not.toContain('add-protocol');
+    expect(code, '源码里还有 card-add-refused 结论码').not.toContain('card-add-refused');
+    expect(code, '源码里还有「新增横版协议卡」这句文案').not.toContain('新增横版协议卡');
+    // ④ 反向锚点：真正留着的那两枚还在（证明上面"清单里没有"不是"整屏没渲染"）
+    expect(actionButtons(root)).toContain('新增竖版编译卡');
+    expect(actionButtons(root)).toContain('删除当前卡');
+    // ⑤ 协议卡仍然拿得到 —— 靠的是模式切换自动建卡，不是那枚按钮（那一条另有专腿）
+    expect(byRole(root, 'card-row').length, '协议模式里应当恰好有一张协议卡').toBe(1);
   });
 
   it('只剩一张卡时「删除当前卡」是禁用的（不允许把**当前模式**删空）', async () => {
@@ -473,6 +502,124 @@ describe('卡的新增 / 删除 / 切换', () => {
     expect(openBtn, '那一行里没有切换按钮').toBeTruthy();
     if (openBtn) fire(openBtn, 'click');
     expect(valueOf(one(root, 'title')), '切回第一张之后标题没有换回来').toBe('竖版卡甲');
+  });
+});
+
+/* ==================================================================== *
+ * 3.5 ★ 2026-10-01（用户要求）：卡清单行的正名 = 牌组名 + 称呼 + 序号
+ *
+ * 用户原话两条：
+ *  - 「横版协议卡」⇒ **牌组的名字 + 协议卡 + 序号数字**
+ *  - 「竖版编译卡」⇒ **牌组的名字 + 协议所属卡牌 + 序号数字**
+ * 序号 = 这一张在**当前模式清单里的次序**（1 起）；名字必须是**实时**的牌组名。
+ * ==================================================================== */
+
+/** 一行清单里那两块文本：切换按钮（正名）与后面那句说明 */
+function rowCells(row: StubNode): { open: string; note: string } {
+  return {
+    open: row.children.find((c) => c.tag === 'button')?.text ?? '（这一行没有按钮）',
+    note: row.children.find((c) => c.cls.includes('cardmaker-note'))?.text ?? '（这一行没有说明）',
+  };
+}
+const listCells = (root: StubNode): Array<{ open: string; note: string }> =>
+  byRole(root, 'card-row').map(rowCells);
+
+describe('★ 2026-10-01：卡清单行的正名（牌组名 + 称呼 + 序号）', () => {
+  it('卡牌模式：逐字「<牌组名> 协议所属卡牌 <序号>」；牌组名为空时用缺省名 deck', async () => {
+    const h = harness();
+    const root = await renderSettled(h);
+    // 开局牌组名是空的（defaultDeck().title === ''）⇒ 用与导出文件同源的缺省名
+    expect(listCells(root), '清单正名不是「deck 协议所属卡牌 1」').toEqual([
+      { open: 'deck 协议所属卡牌 1', note: '（未命名） · 数值 —' },
+    ]);
+    // 改牌组名 ⇒ 清单**当场**跟着变（不重画的话会挂着旧名）
+    setValue(one(root, 'deck-title'), '我的套牌');
+    fire(one(root, 'deck-title'), 'input');
+    expect(listCells(root)[0].open, '改完牌组名清单没跟着变').toBe('我的套牌 协议所属卡牌 1');
+    // 再改一次（不是"只在第一次变"）
+    setValue(one(root, 'deck-title'), '第二版');
+    fire(one(root, 'deck-title'), 'input');
+    expect(listCells(root)[0].open).toBe('第二版 协议所属卡牌 1');
+  });
+
+  it('序号 = 这一张在当前模式清单里的次序（1 起），选中项跟着走', async () => {
+    const h = harness();
+    const root = await renderSettled(h);
+    setValue(one(root, 'deck-title'), 'NEO');
+    fire(one(root, 'deck-title'), 'input');
+    clickRole(root, 'add-compile'); // 第二张竖版卡（加完自动切到它）
+    await flush();
+    expect(listCells(root).map((c) => c.open), '两张卡的序号不对').toEqual([
+      'NEO 协议所属卡牌 1',
+      'NEO 协议所属卡牌 2',
+    ]);
+    // 选中项 = 第二行 ⇒ 高亮的那一行就是"2"那一行
+    const on = byRole(root, 'card-row').filter((r) => r.cls.includes('cardmaker-card-on'));
+    expect(on, '当前选中的行应当恰好一个').toHaveLength(1);
+    expect(rowCells(on[0]).open, '选中第二张时高亮行不是序号 2').toBe('NEO 协议所属卡牌 2');
+    // 点第一行 ⇒ 高亮换到"1"那一行（序号与选中项一致）
+    const first = byRole(root, 'card-row')[0];
+    const openBtn = descendants(first).find((n) => n.tag === 'button');
+    expect(openBtn, '夹具失败：第一行没有切换按钮').toBeTruthy();
+    if (openBtn) fire(openBtn, 'click');
+    const on2 = byRole(root, 'card-row').filter((r) => r.cls.includes('cardmaker-card-on'));
+    expect(rowCells(on2[0]).open, '切到第一张之后高亮行不是序号 1').toBe('NEO 协议所属卡牌 1');
+  });
+
+  it('协议模式：逐字「<牌组名> 协议卡 <序号>」，且那行**不含**「数值」（反向锚点：竖版那行仍含）', async () => {
+    const h = harness();
+    const root = await renderSettled(h);
+    setValue(one(root, 'deck-title'), '我的套牌');
+    fire(one(root, 'deck-title'), 'input');
+    // 竖版那行：仍然带「数值」（大号中心数字是它专属的字段）
+    expect(listCells(root)[0].note, '竖版那行的"数值"不见了').toContain('数值');
+    clickRole(root, 'mode-protocol');
+    await flush();
+    const proto = listCells(root);
+    expect(proto, '协议那行的正名不是「我的套牌 协议卡 1」').toEqual([
+      { open: '我的套牌 协议卡 1', note: '（未命名）' },
+    ]);
+    // ★ 核心判据：协议卡没有"数值"这个东西，那一行不许出现这两个字
+    expect(proto[0].note, '协议那行还在写「数值」').not.toContain('数值');
+    expect(proto[0].open, '协议那行的正名里混进了"数值"').not.toContain('数值');
+    // 填上协议卡的标题 ⇒ 说明那格就是它的标题（没有别的字段混进来）
+    const title = one(root, 'title');
+    setValue(title, 'P-1');
+    fire(title, 'input');
+    expect(listCells(root)[0].note).toBe('P-1');
+    expect(listCells(root)[0].note).not.toContain('数值');
+    // 反向锚点：切回卡牌模式，那行**仍然**有「数值」（证明上面"没有"不是全局都删了）
+    clickRole(root, 'mode-compile');
+    await flush();
+    expect(listCells(root)[0].note, '切回卡牌模式之后"数值"也没了').toContain('数值');
+    // 两种称呼逐字不同（否则"协议卡/协议所属卡牌"这两句分辨不出来）
+    clickRole(root, 'mode-protocol');
+    await flush();
+    const protoName = listCells(root)[0].open;
+    clickRole(root, 'mode-compile');
+    await flush();
+    const compName = listCells(root)[0].open;
+    expect(protoName).not.toBe(compName);
+    expect(protoName).toContain('协议卡 1');
+    expect(compName).toContain('协议所属卡牌 1');
+  });
+
+  it('★ 切面提示语逐字就是那两句（旧的长句一个都不许留）', async () => {
+    const h = harness();
+    const root = await renderSettled(h);
+    clickRole(root, 'mode-protocol');
+    await flush();
+    clickRole(root, 'face-back');
+    expect(one(root, 'status').text, '切到背面的提示语不是新的那句').toBe('已切到协议背面');
+    expect(statusCode(root)).toBe('face-switched');
+    clickRole(root, 'face-front');
+    expect(one(root, 'status').text, '切到正面的提示语不是新的那句').toBe('已切到协议正面');
+    // 源码面：旧长句的字样一个都不许留（免得将来又被"补回去"）
+    const code = stripComments(PAGE_SRC);
+    expect(code, '源码里还留着旧的正/背提示语').not.toContain('四条横条');
+    expect(code, '源码里还留着旧的正/背提示语').not.toContain('底栏名字 + 背面那行字');
+    // 反向锚点：结论码仍然是 face-switched（这条腿测的是文案，不是换了个事件）
+    expect(code).toContain("'face-switched'");
   });
 });
 

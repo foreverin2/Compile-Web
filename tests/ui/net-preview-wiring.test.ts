@@ -187,110 +187,63 @@ describe('G2 Task 4 · 接线：远程页进入产物 + 重渲染路由唯一入
       .toMatch(/applyFxViewSeat\(/);
   });
 
-  it('6. 预览入口：home.ts 的开发者闸门 + main.ts 的 startNetPreview 三件事', () => {
-    const home = stripComments(read('src/ui/home.ts'));
-    expect(home, 'ModeSelectNav 未定义 startNetPreview（宿主无法接上预览入口）')
-      .toMatch(/startNetPreview\s*\(/);
-    // ★ G5/T41：文案从「单视角预览（本地）」改成「单视角预览（仅开发）」，并且**只在开发者模式
-    //   已解锁时才渲染**（用户 2026-09-27："它没有实际作用、只用于测试，不要放在游戏模式里面"）。
-    const PREVIEW_CARD = "'单视角预览（仅开发）'";
-    const countOf = (s: string, needle: string): number => s.split(needle).length - 1;
-    expect(countOf(home, PREVIEW_CARD), '预览卡必须**恰好一张**（模式卡名字面量出现次数不符）').toBe(1);
-    expect(home, '模式卡文案还是"（本地）"那一版 —— 普通玩家会在游戏模式清单里看到它')
-      .not.toContain("'单视角预览（本地）'");
-    // 闸门：卡片必须在 `if (devUnlocked) { … }` 的**花括号体里**。
-    // "同文件里出现过 devUnlocked" 这类弱形态**不算**（它可能只是别处的一句判断）——
-    //    所以这里用 `braceBlock` 把那一段真的切出来，再在里面找卡片。
-    const gateAt = home.indexOf('if (devUnlocked)');
-    expect(gateAt, 'home.ts 里找不到 `if (devUnlocked)` 闸门 —— 预览卡会无条件建给普通玩家')
-      .toBeGreaterThanOrEqual(0);
-    const gateBlock = braceBlock(home, gateAt);
-    expect(gateBlock, '预览卡不在 `if (devUnlocked)` 的块里（闸门是摆设：卡片照样会被建出来）')
-      .toContain(PREVIEW_CARD);
-    // 反空转：切出来的那一块必须**明显小于整份文件** —— 否则"在块里找到卡片"会退化成
-    // "在整份 home.ts 里找到卡片"（配平切错时正是这个形态）
-    expect(home.length - gateBlock.length, '闸门块几乎覆盖整个文件（配平切错了？判据退化）')
-      .toBeGreaterThan(400);
-    // 预览卡在**源码里**排于热坐卡与联机卡之后（源码卡顺序：热坐 → 联机 → 预览；G5/T41 不改它）。
-    // 注意这只说**源码位置**：运行期 `dev=false` 时预览卡不会被建出来，玩家看到的是四张卡
-    // （行为腿第 12 条读的就是那两份清单）。
-    const iPreview = home.indexOf(PREVIEW_CARD);
-    expect(iPreview, '预览卡排在热坐卡之前（模式选择页的层级被改）')
-      .toBeGreaterThan(home.indexOf("mkMode('热坐（双人）'"));
-    expect(iPreview, '预览卡排在联机卡之前（模式选择页的层级被改）')
-      .toBeGreaterThan(home.indexOf("'联机对战（两台设备）'"));
-    // 热坐卡的文案与行为**一行未改**（本任务红线：热座观感零变化）
-    expect(home, '热坐卡的文案被改动了（本任务不得动热座路径）')
-      .toContain("mkMode('热坐（双人）', '两名玩家轮流在同一设备上对战（当前可用）', true, () => {");
-    expect(home, '热坐卡不再调用 nav.startHotseat(banBox.checked, randomBox.checked)')
-      .toContain('nav.startHotseat(banBox.checked, randomBox.checked)');
-    // ★ G5/T41 第 1 条：**设备体检**按钮（不是模式卡，住在 mode-actions 那一区）
-    expect(home, '模式选择页没有「设备体检」按钮（用户 2026-09-27 第 1 条）')
-      .toContain("button('btn mode-probe-btn', '设备体检 / 网络自检', nav.openDeviceCheck)");
-    // 它不是游戏模式：这一行不许碰 renderMode / state（只跳转）
-    expect(home.split('\n').find((l) => l.includes('mode-probe-btn')) ?? '',
-      '设备体检按钮那一行碰了 renderMode / state（它不该是游戏模式）')
-      .not.toMatch(/renderMode|\bstate\b/);
-
+  it('6. 远程页那条渲染支路（`renderMode === net`）仍按开发者闸门喂 `viewSeat` / `verifyHooks`', () => {
     const main = mainSrc();
-    const mode = functionBody(main, 'showModeSelect');
-    // ★ 新锚点（G5/T41）：预览那一段 = **花括号配平**的 `startNetPreview` 箭头函数体。
-    const net = braceBlock(mode, mode.indexOf('startNetPreview:'));
-    expect(net.length, 'startNetPreview 的箭头函数体抽到空片段（锚点配平失败）⇒ 本判据假绿')
-      .toBeGreaterThan(80);
-    expect(net, "startNetPreview 未设 renderMode = 'net'（预览会画成热座棋盘）")
-      .toMatch(/renderMode\s*=\s*'net'/);
-    expect(net, 'startNetPreview 未接收/落地 viewSeat').toMatch(/netViewSeat\s*=\s*viewSeat/);
-    expect(net, 'startNetPreview 未沿用现有掷硬币流程（showCoin）').toMatch(/\bshowCoin\(\)/);
-    // ★ 新锚点的**下界**：预览那一段里不许出现别的入口 —— 旧切片（切到 showModeSelect 末尾）
-    //   正是被"排在预览之后的文本"满足的。
-    expect(net, 'startNetPreview 的函数体里出现了 startNetLobby（锚点被拉长 ⇒ 失焦）')
-      .not.toContain('startNetLobby');
-    expect(net, 'startNetPreview 的函数体里出现了 startHotseat（锚点被拉长 ⇒ 失焦）')
-      .not.toContain('startHotseat');
-    // nav 键顺序仍是「联机 → 预览」（与 home.ts **源码里**的模式卡顺序一致；玩家看到的清算见上一段）
-    const iLobbyKey = mode.indexOf('startNetLobby:');
-    const iPreviewKey = mode.indexOf('startNetPreview:');
-    expect(iLobbyKey, 'showModeSelect 里找不到 startNetLobby:').toBeGreaterThanOrEqual(0);
-    expect(iPreviewKey, 'showModeSelect 里找不到 startNetPreview:').toBeGreaterThanOrEqual(0);
-    expect(iLobbyKey, 'startNetLobby 排在 startNetPreview 之后（nav 键顺序与源码里的模式卡顺序不一致）')
-      .toBeLessThan(iPreviewKey);
-    // ★ G5/T41 的闸门接线：`isDevUnlocked()` 必须当第三个实参交给 `renderModeSelect`
-    //   （漏了它 ⇒ 预览卡对开发者也不出现；写成常量 true ⇒ 对普通玩家也出现）
-    expect(mode, 'showModeSelect 未把 isDevUnlocked() 传给 renderModeSelect'
-      + '（预览卡的闸门接不上：开发者看不到、或普通玩家照样看到）')
-      .toMatch(/renderModeSelect\(root,\s*\{[\s\S]*?\},\s*isDevUnlocked\(\)\)/);
+    const rerender = functionBody(main, 'rerender');
+    /**
+     * ⚠️ **2026-10-01（用户要求）**：本条原先叫「预览入口：home.ts 的开发者闸门 + main.ts 的
+     * `startNetPreview` 三件事」，钉的是「单视角预览（仅开发）」那个模式（模式卡 / `devUnlocked`
+     * 形参 / `startNetPreview` 启动路径）。用户要求把那个模式**整个删掉**
+     * （「单视角预览这个模式可以直接删了，没有用」）⇒ 那三件事的判据**没有放松，而是改判它现在的
+     * 主人**：`renderMode === 'net'` 这条渲染支路是**联机牌桌**在走（进牌桌由 `enterNetGame()`
+     * 写 `renderMode = 'net'`），本条的每一条断言都还逐字钉在这条支路上。
+     * 「那个模式彻底没了」另立一条锚点腿（本文件第 13 条）。
+     */
+    // ★ 判据面 = `rerender` 里那个 `if (renderMode === 'net' && state.phase !== 'draft') { … }`
+    //   的**花括号配平块**（`braceBlock`）。比"整份 main.ts 里出现过这几个词"强，也比
+    //   "从某个键一直切到末尾"稳：这一段里出现的东西就是这个支路自己做的事。
+    const netAt = rerender.indexOf("renderMode === 'net'");
+    expect(netAt, "rerender 里没有 `renderMode === 'net'` 这条支路（联机牌桌画不出来）")
+      .toBeGreaterThanOrEqual(0);
+    const net = braceBlock(rerender, netAt);
+    expect(net.length, 'net 支路抽到空片段（锚点配平失败）⇒ 本判据假绿').toBeGreaterThan(80);
+    // 草稿阶段的守卫必须在：联机沿用热座草稿页（否则草稿期会画远程页）
+    expect(net, "net 支路缺少 state.phase !== 'draft' 守卫（草稿阶段会被画成远程页）")
+      .toMatch(/state\.phase\s*!==\s*'draft'/);
+    // 视角座位与本端座位同源（T21）：渲染器吃到的就是喂给驱动的那一个
+    expect(net, 'net 支路不再把 netViewSeat 交给渲染器').toMatch(/viewSeat:\s*netViewSeat/);
+    // 解锁后会切视角（工具栏 / devmode 的 netSeat 指令都走这条回传）
+    expect(net, 'net 支路不再传 onPreviewChange（解锁后无法切视角）').toMatch(/onPreviewChange/);
+    expect(net, 'net 支路不再设 netViewSeat（onPreviewChange 的回传落不了地）')
+      .toMatch(/netViewSeat\s*=\s*next\.viewSeat/);
     // ── R12-6：工具条与自查**只在开发者模式解锁后**启用（用户："隐藏它，功能内化给开发者模式"）──
     // 判据从"传 verifyHooks: true"改成"**由 `isDevUnlocked()` 闸门**决定" —— 两者都必须查：
     //  · 闸门在（`const dev = isDevUnlocked()` + `verifyHooks: dev`）⇒ 普通对局里页面上没有工具条；
     //  · 功能仍在（`onPreviewChange` / `verifyHooks` 两个键都还在，只是条件展开）。
     // ⚠️ 反面（同一条腿）：**不许**再无条件写 `verifyHooks: true` —— 那正是用户要隐藏的形态。
-    const rerender = functionBody(main, 'rerender');
-    expect(rerender, 'rerender 没有开发者模式闸门（`isDevUnlocked()`）—— 预览工具条会常驻在页面上')
+    expect(net, 'net 支路没有开发者模式闸门（`isDevUnlocked()`）—— 预览工具条会常驻在页面上')
       .toMatch(/isDevUnlocked\(\)/);
-    expect(rerender, 'rerender 未按闸门传 verifyHooks（预览页看不到运行时自查行）')
+    expect(net, 'net 支路未按闸门传 verifyHooks（远程页看不到运行时自查行）')
       .toMatch(/verifyHooks:\s*dev/);
-    expect(rerender, 'rerender 未按闸门传 onPreviewChange（解锁后仍无法切视角 / 看自查行）')
-      .toMatch(/onPreviewChange/);
-    expect(rerender, 'rerender 不再传 onPreviewChange / viewSeat / verifyHooks 之一')
-      .toMatch(/viewSeat:\s*netViewSeat/);
+    // 判据面是**支路本身**（不是整份 main.ts）：`isDevUnlocked()` 只许在这个支路里出现一次
+    //   —— 本文件第 6 条旧版还有一条"`renderModeSelect(root, {…}, isDevUnlocked())`"的闸门接线腿，
+    //   那条随预览卡一起删了（模式页不再读解锁态，见第 13 条锚点腿）。
+    expect((net.match(/isDevUnlocked\(\)/g) ?? []).length,
+      'net 支路里 isDevUnlocked() 的出现次数不是 1（闸门被判了两次？）').toBe(1);
     // ── G2 Task 4F 终审 · Critical C-2（**必须留在这一组里**）──
     // 手牌可见性**按座位**决定：自己 = 'all'（真实卡、可点），对手 = NET_HAND_VIS（数量占位）。
     // 曾经把两处都写成常量 `NET_HAND_VIS`（='count'），而 `renderHand` 的 'count' 分支是
     // **与 isSelf 无关的无条件提前返回** → 自己的手牌也变成「手牌 ×n」占位、一张 `.card` 都没有
-    // → 预览不可玩（而运行时自查照样 ✓）。**判据必须是这个三元映射本身，不能只看出现次数。**
+    // → 联机牌桌不可玩（而运行时自查照样 ✓）。**判据必须是这个三元映射本身，不能只看出现次数。**
     const netSrcAll = stripComments(read('src/ui/render-net.ts'));
     const selfMap = [...netSrcAll.matchAll(/handVisibility:\s*isSelf\s*\?\s*'all'\s*:\s*NET_HAND_VIS/g)].length;
     expect(selfMap, `render-net.ts 里"自己='all' / 对手=数量占位"的映射有 ${selfMap} 处（应为恰好 2 处：P0 与 P1）`)
       .toBe(2);
-    // 草稿阶段的守卫必须在：预览沿用热座草稿页（否则草稿期会画远程页）
-    expect(rerender, "rerender 缺少 state.phase !== 'draft' 守卫（草稿阶段会被画成远程页）")
-      .toMatch(/state\.phase\s*!==\s*'draft'/);
     // ── G2 Task 4F · I-2 + N4 + D-2 ──
     // 信息遮蔽是**唯一**形态，而且**根本不存在"档位"这个量**：
     // Task 4F 终审 N4 指出 `NetViewOpts.handVisibility` 已成死参数（传 `'all'` 静默无效），
     // 于是把 `netHandVisibility` 常量与那个字段**一起删掉** —— 现在既没有可切取值、也没有可传参数，
-    // "预览恒为信息遮蔽"不再依赖"某个 const 恰好等于 'viewSeat'"，而是**结构上不存在别的可能**。
+    // "信息遮蔽恒成立"不再依赖"某个 const 恰好等于 'viewSeat'"，而是**结构上不存在别的可能**。
     // （原来的判据是"它是 const 且只能声明一次"，那仍然留着一个可以被读错的入口；删掉更强。）
     expect(main, 'main.ts 仍有 netHandVisibility 档位常量（N4 之后应已删除 —— 死参数比没有更误导）')
       .not.toMatch(/netHandVisibility/);
@@ -619,14 +572,13 @@ describe('G5 T41 · 模式选择页的开发者闸门（行为腿：真跑 rende
     openDeviceCheck: () => { calls.push('openDeviceCheck'); },
     startHotseat: () => { calls.push('startHotseat'); },
     startNetLobby: () => { calls.push('startNetLobby'); },
-    startNetPreview: () => { calls.push('startNetPreview'); },
   });
 
   /** 真跑一帧模式选择页：返回模式卡文案清单（DOM 顺序）与点击记录 */
-  const run = (dev: boolean): { root: StubNode; names: string[]; calls: string[] } => {
+  const run = (): { root: StubNode; names: string[]; calls: string[] } => {
     const root = makeStubEl('div');
     const calls: string[] = [];
-    renderModeSelect(root as unknown as HTMLElement, navOf(calls), dev);
+    renderModeSelect(root as unknown as HTMLElement, navOf(calls));
     const names = descendants(root).filter((n) => isClass(n, 'mode-card-name')).map((n) => n.text);
     return { root, names, calls };
   };
@@ -638,46 +590,121 @@ describe('G5 T41 · 模式选择页的开发者闸门（行为腿：真跑 rende
     clicker.dispatchEvent({ type: 'click', target: clicker });
   };
 
-  it('12. dev=false 没有预览卡、dev=true 才有；设备体检按钮两条路径都在、点了真回调', () => {
+  /**
+   * ⚠️ **2026-10-01（用户要求）**：本条原先叫「dev=false 没有预览卡、dev=true 才有；设备体检按钮
+   * 两条路径都在、点了真回调」，跑的是**两条路径**（`dev=false` / `dev=true`）。
+   *
+   * 用户要求把「单视角预览（仅开发）」那个模式整个删掉 ⇒ `renderModeSelect` 不再接收任何
+   * "开发者闸门"实参、模式页与解锁态**再无关系** ⇒ 这里只剩**一条**路径可跑。
+   * 判据**没有放松**：仍然是"逐字断言那四张卡 + 逐张点得动 + 点第二张走 startNetLobby"，
+   * 只是不再拿同一个清单去比对第二遍（那第二遍过去测的就是那张已删掉的卡）。
+   * 「那个模式彻底没了」另立一条锚点腿（下面第 13 条）。
+   */
+  it('12. 模式页恒为那四张卡；设备体检按钮在、点了真回调；第二张卡走 startNetLobby', () => {
     restoreDom = installStubDom();
-    const off = run(false);
-    const on = run(true);
+    const off = run();
 
-    // ① 普通路径（没解锁开发者模式）—— 用户要的就是这个：**游戏模式清单里没有它**
-    expect(off.names, `普通路径（dev=false）的模式卡清单：${JSON.stringify(off.names)}`)
+    // ① 用户要的就是这个：**游戏模式清单里没有那张卡，也永远不会有**
+    expect(off.names, `模式卡清单：${JSON.stringify(off.names)}`)
       .not.toContain('单视角预览（仅开发）');
-    expect(off.names, '普通路径的模式卡清单被改动了（热坐/联机/单人/三人应当都在）')
+    expect(off.names, '模式卡清单被改动了（热坐/联机/单人/三人应当都在，且逐字如此）')
       .toEqual(['热坐（双人）', '联机对战（两台设备）', '单人模式', '三人模式']);
 
-    // ② 开发者路径（Ctrl+Shift+P + 密码解锁之后）
-    expect(on.names, `开发者路径（dev=true）的模式卡清单：${JSON.stringify(on.names)}`)
-      .toEqual(['热坐（双人）', '联机对战（两台设备）', '单视角预览（仅开发）', '单人模式', '三人模式']);
+    // ② 设备体检按钮在（它不是模式卡）
+    const btn = descendants(off.root).find((n) => n.tag === 'button' && n.text === '设备体检 / 网络自检');
+    expect(btn, '模式选择页没有「设备体检 / 网络自检」按钮').toBeTruthy();
+    clickInner(btn as StubNode);
+    expect(off.calls, '点了「设备体检」按钮，宿主回调没被调到（或调到了别的东西）')
+      .toEqual(['openDeviceCheck']);
 
-    // ③ 设备体检按钮：**两条路径下都在**（它不是模式卡，开发者闸门管不着它）
-    for (const [label, r] of [['dev=false', off], ['dev=true', on]] as const) {
-      const btn = descendants(r.root).find((n) => n.tag === 'button' && n.text === '设备体检 / 网络自检');
-      expect(btn, `${label}：模式选择页没有「设备体检 / 网络自检」按钮`).toBeTruthy();
-      clickInner(btn as StubNode);
-      expect(r.calls, `${label}：点了「设备体检」按钮，宿主回调没被调到（或调到了别的东西）`)
-        .toEqual(['openDeviceCheck']);
+    // ③ 模式卡真的点得动，且**没有第三条通往那个已删模式的路**
+    const cards = descendants(off.root).filter((n) => isClass(n, 'mode-card'));
+    expect(cards.length, '模式卡数量（应为 4：热坐/联机/单人/三人）').toBe(4);
+    clickInner(cards[1]);
+    expect(off.calls, '点第二张模式卡（联机对战）没有走 startNetLobby')
+      .toEqual(['openDeviceCheck', 'startNetLobby']);
+    const names = descendants(off.root).filter((n) => isClass(n, 'mode-card-name')).map((n) => n.text);
+    expect(names, '第三张模式卡不是"单人模式"（少了一张卡之后顺序错了）')
+      .toEqual(['热坐（双人）', '联机对战（两台设备）', '单人模式', '三人模式']);
+  });
+
+  /**
+   * ★ **2026-10-01 新增锚点腿**：证明「单视角预览」这个模式**在源码里彻底没了**，
+   * 而不只是"模式页运行时没画出来"。
+   *
+   * ## 为什么必须有它（上一条行为腿做不到的事）
+   *
+   * 第 12 条读的是**运行期清单** —— 它证明"今天这四张卡逐字如此"，却证明不了
+   * "那张卡与它专属的启动路径已经被删掉"：有人可能把卡片建在**渲染函数外面**、
+   * 或者在宿主里留一条**没有入口的**启动路径（模式页看不见、但代码还在，下一个人
+   * 顺手给它加个按钮就复活了）。本条的判据面是**源码文本**：
+   * 入口文案、`renderModeSelect` 的第三个形参、`ModeSelectNav.startNetPreview`、
+   * 宿主里那个启动回调、devmode 的收回函数 —— 一处都不许剩。
+   *
+   * ## 判据为什么与注释无关（`stripComments`）
+   *
+   * 本仓的注释里**故意**留了这次删除的说明（`home.ts` / `main.ts` / `devmode.ts` 都写了
+   * "原先还有 …"），所以判据必须作用在**去注释**的源码上：否则那些说明本身就会把断言判红。
+   * 反过来，这也意味着"把卡片加回去"这种变异**一定会**被判据抓住 —— 见文件末的反向验证记录。
+   */
+  it('13. 锚点腿：「单视角预览」在源码里彻底没了，而共用的联机那套仍逐条在', () => {
+    const home = stripComments(read('src/ui/home.ts'));
+    const main = mainSrc();
+    const mode = functionBody(main, 'showModeSelect');
+
+    // ── ① 那张卡的**入口文案**不许在任何源码里出现（去注释之后）────────────────────
+    const ANCHOR = 'src/main.ts:114 附近那一行 import 曾写 `resetDevUnlock`；home.ts:493 一带曾写 '
+      + "'单视角预览（仅开发）'";
+    for (const [what, text, needle] of [
+      ['模式卡文案', home, '单视角预览（仅开发）'],
+      ['模式卡文案（旧版）', home, '单视角预览（本地）'],
+      ['宿主启动回调', main, 'startNetPreview'],
+      ['devmode 收回函数', stripComments(read('src/ui/devmode.ts')), 'resetDevUnlock'],
+      ['开发者闸门形参', home, 'devUnlocked'],
+      ['模式页的宿主第三个实参', mode, 'isDevUnlocked()'],
+    ] as const) {
+      expect(text.includes(needle), `${what}：${needle} 仍然出现在源码里（删干净了吗？${ANCHOR}）`).toBe(false);
     }
 
-    // ④ 反向：模式卡真的点得动，且**普通路径下没有第三条通往预览的路**
-    const off2 = run(false);
-    const off2Cards = descendants(off2.root).filter((n) => isClass(n, 'mode-card'));
-    expect(off2Cards.length, 'dev=false 的模式卡数量（应为 4：热坐/联机/单人/三人）').toBe(4);
-    clickInner(off2Cards[1]);
-    expect(off2.calls, 'dev=false 下点第二张模式卡（联机对战）没有走 startNetLobby')
-      .toEqual(['startNetLobby']);
-    const off2Names = descendants(off2.root).filter((n) => isClass(n, 'mode-card-name')).map((n) => n.text);
-    expect(off2Names, 'dev=false 下第三张模式卡不是"单人模式"（少了一张卡之后顺序错了）')
-      .toEqual(['热坐（双人）', '联机对战（两台设备）', '单人模式', '三人模式']);
+    // ── ② 反向：这一组断言不是"把模式页删空"就能满足的 ────────────────────────────
+    // 四张卡仍逐字在源码里，顺序同 DOM 顺序（热坐 → 联机 → 单人 → 三人）
+    const iHot = home.indexOf("mkMode('热坐（双人）'");
+    const iLobby = home.indexOf("'联机对战（两台设备）'");
+    const iSolo = home.indexOf("'单人模式'");
+    const iTrio = home.indexOf("'三人模式'");
+    for (const [what, at] of [['热坐', iHot], ['联机', iLobby], ['单人', iSolo], ['三人', iTrio]] as const) {
+      expect(at, `模式页源码里找不到「${what}」那张卡（判据 ① 会因此变成"把页面删空也绿"）`)
+        .toBeGreaterThanOrEqual(0);
+    }
+    expect(iHot, '热坐卡不在第一张').toBeLessThan(iLobby);
+    expect(iLobby, '联机卡不在热坐之后').toBeLessThan(iSolo);
+    expect(iSolo, '单人卡不在联机之后').toBeLessThan(iTrio);
+    // 热坐卡的文案与行为**一行未改**（红线：热座观感零变化）
+    expect(home, '热坐卡的文案被改动了（本次改动不得动热座路径）')
+      .toContain("mkMode('热坐（双人）', '两名玩家轮流在同一设备上对战（当前可用）', true, () => {");
+    expect(home, '热坐卡不再调用 nav.startHotseat(banBox.checked, randomBox.checked)')
+      .toContain('nav.startHotseat(banBox.checked, randomBox.checked)');
+    // ★ G5/T41 第 1 条：**设备体检**按钮（不是模式卡，住在 mode-actions 那一区）仍在
+    expect(home, '模式选择页没有「设备体检」按钮（用户 2026-09-27 第 1 条）')
+      .toContain("button('btn mode-probe-btn', '设备体检 / 网络自检', nav.openDeviceCheck)");
+    // 它不是游戏模式：这一行不许碰 renderMode / state（只跳转）
+    expect(home.split('\n').find((l) => l.includes('mode-probe-btn')) ?? '',
+      '设备体检按钮那一行碰了 renderMode / state（它不该是游戏模式）')
+      .not.toMatch(/renderMode|\bstate\b/);
+    // 函数签名回到两个形参（`root` / `nav`），不再是三个
+    expect(home, 'renderModeSelect 的签名还不是"两个形参"'
+      + '（第三个开发者闸门形参没删干净）')
+      .toMatch(/export function renderModeSelect\(root: HTMLElement, nav: ModeSelectNav\): void \{/);
 
-    const on2 = run(true);
-    const on2Cards = descendants(on2.root).filter((n) => isClass(n, 'mode-card'));
-    expect(on2Cards.length, 'dev=true 的模式卡数量（普通 4 张 + 预览 1 张）').toBe(5);
-    clickInner(on2Cards[2]);
-    expect(on2.calls, 'dev=true 下第三张模式卡不是预览卡（点了没进 startNetPreview）')
-      .toEqual(['startNetPreview']);
+    // ── ③ 反向：**共用的联机那套一个字都没少** ───────────────────────────────────
+    // 三个入口仍在 nav 里（删的只有第四个：预览）
+    expect(functionBody(main, 'showModeSelect'), '联机大厅入口不见了（删预览时把共用入口带走了？）')
+      .toContain('startNetLobby:');
+    expect(main, "main.ts 不再把 renderMode 切成 'net'（联机进牌桌画不出远程页）")
+      .toMatch(/renderMode\s*=\s*'net'/);
+    // `renderMode === 'net'` 那条渲染支路与它的四个要素（第 6 条逐条断言）仍在这份源码里
+    for (const needle of ['renderNetBoard(', 'viewSeat: netViewSeat', 'onPreviewChange', 'verifyHooks: dev']) {
+      expect(main.includes(needle), `删预览时把共用渲染路径的一部分带走了：${needle}`).toBe(true);
+    }
   });
 });

@@ -1062,15 +1062,20 @@ describe('G5 T19 · 草稿 → 对局转场：同一次转变只播一次（源�
     expect(functionBody(MAIN, 'startReplayFile'), 'startReplayFile 没有复位闩').toMatch(/draftTransitionPlayed = false;/);
     expect(functionBody(MAIN, 'resetToMainInterface'), 'resetToMainInterface 没有复位闩').toMatch(/draftTransitionPlayed = false;/);
     /**
-     * ★★ **G5 T19 修复轮 2：预览那条入口也要复位**（评审 2 的第二处）。
+     * ★★ **G5 T19 修复轮 2**：`showCoin()` 的每一个调用点都必须配一次"复位闩"。
      *
-     * "单视角预览"与"热座"**都调 `showCoin()`**（`showModeSelect` 的两个回调），而它自己的注释
-     * 写着"不会绕过过渡动画"⇒ 漏了复位会让联机那局留下的闩把预览的草稿→对局转场吃掉。
-     * 用**计数腿**钉住"`showCoin()` 的调用点数 == 复位点数"（多一个入口就得多一次复位）。
+     * 当时有**两个**调用点（热座 + 「单视角预览」那条入口），用**计数腿**钉住
+     * "调用点数 == 复位点数"（多一个入口就得多一次复位）。
+     *
+     * ⚠️ **2026-10-01（用户要求）的成组改动**：预览那条入口整个删了 ⇒ 现在只剩
+     * `showModeSelect().startHotseat` **一个**调用点。判据**不是**放宽成"≥1"，
+     * 而是把等式的两边同时收成 1：`showCoin();` 恰好 1 处，`showModeSelect` 里的复位
+     * 也恰好 1 次（多一处就是"某个入口复位了两次/复位写在了别处"，少一处就是漏复位）。
      */
     const coinCalls = occurrences(MAIN, 'showCoin();');
     const playResets = occurrences(MAIN, 'draftTransitionPlayed = false;');
-    expect(coinCalls.length, `showCoin(); 的调用点有 ${coinCalls.length} 处：\n${coinCalls.join('\n')}`).toBe(2);
+    expect(coinCalls.length, `showCoin(); 的调用点有 ${coinCalls.length} 处（2026-10-01 之后只应剩热座`
+      + `那一个入口；多出来的那处是不是又把预览接回来了？）：\n${coinCalls.join('\n')}`).toBe(1);
     expect(mode.match(/draftTransitionPlayed = false;/g)?.length ?? 0,
       'showModeSelect 里"复位闩"的次数 != `showCoin()` 的调用点数（有一个入口漏复位 ⇒ 那条路的转场不播）')
       .toBe(coinCalls.length);
