@@ -11,12 +11,18 @@
  *
  * 偏好**只在内存里**（用户口径是"默认隐藏"，那就不该为了它往磁盘上写东西）。
  */
+import { t } from '../i18n';
 import { exitButtonFlagsOf, shouldShowExitButton, type ExitButtonFlags } from './hotseat-exit';
 
 export const LOG_TOGGLE_CLASS = 'log-toggle-btn';
 
-const LABEL_SHOW = '显示日志';
-const LABEL_HIDE = '隐藏日志';
+/**
+ * ★ 2026-10-02（i18n 逐屏抽取）：两个按钮文案搬进 `src/i18n/`（键 `log-toggle.show` /
+ * `log-toggle.hide`），中文值**逐字等于改动前**的 `显示日志` / `隐藏日志`。
+ *
+ * ⚠️ 它们在**画按钮时**取（`paint()` 里现调 `t()`），不是模块加载时算一次：
+ * 语言切换之后宿主会重画，而这两个标签必须跟着新语言走。
+ */
 
 let hidden = true; // ★ 用户口径：默认隐藏
 let installed = false;
@@ -60,7 +66,8 @@ export function installLogToggle(): void {
   btn.style.display = 'none';
   document.body.appendChild(btn);
 
-  const paint = (): void => { btn.textContent = hidden ? LABEL_SHOW : LABEL_HIDE; };
+  /** 文案**现调** `t()`：语言换掉之后下一次 `paint()` 就是新语言（见 `LABEL_*` 的注释） */
+  const paint = (): void => { btn.textContent = hidden ? t('log-toggle.show') : t('log-toggle.hide'); };
   const sync = (): void => {
     applyLogHidden();
     btn.style.display = shouldShowLogToggle(exitButtonFlagsOf()) ? '' : 'none';

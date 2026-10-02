@@ -41,33 +41,45 @@
  * 与 `settingsOverlayElement()` / `openRulePages()`（均在 `home.ts`）同款：函数只**造**元素
  * （可单测、不依赖某个宿主），挂到 `document.body` 由本文件的 `openFeedbackOverlay()` /
  * `openHiddenView()` 统一收尾。新版式全部落在 `src/ui/styles-local.css` 的 `feedback-*` 类上。
+ *
+ * ## ★ 2026-10-02（i18n 逐屏抽取）
+ *
+ * 本屏**玩家可见**的文案全部搬进 `src/i18n/`（键 `feedback.*`），中文值**逐字等于改动前**的
+ * 字面量。两条口径写在这里，免得后来者读错：
+ *
+ *  1. **服务端返回的中文原因原样显示**（用户明确要求，尤其 429 那句"今天已达上限"）——
+ *     它走的是 `outcome.text` / `reading.error` 那条路，本文件一个字都不改、也不翻译。
+ *     `serverErrorText()` 只负责把它读出来。
+ *  2. 纯逻辑核（`feedback-core.ts`）里那几张"两档标签"的表改成了**现调 `t()` 的函数**
+ *     （`feedbackKindLabels()` 等）—— 常量表会把语言钉在模块加载那一刻。
  */
+import { t } from '../i18n';
 
 import {
   FEEDBACK_ACCEPT,
-  FEEDBACK_AUTHOR_LABELS,
-  FEEDBACK_BODY_LABELS,
-  FEEDBACK_BODY_PLACEHOLDERS,
   FEEDBACK_ENDPOINTS,
-  FEEDBACK_KIND_BADGES,
-  FEEDBACK_KIND_LABELS,
   FEEDBACK_KINDS,
   FEEDBACK_MAX_FILES,
-  FEEDBACK_OFFLINE_TEXT,
-  FEEDBACK_PASSWORD_FAIL_TEXT,
-  FEEDBACK_READ_FAIL_TEXT,
-  FEEDBACK_SESSION_EXPIRED_TEXT,
-  FEEDBACK_SUBMIT_OK_TEXT,
-  FEEDBACK_SUCCESS_CLOSE_MS,
   buildDeleteBody,
   buildLoginBody,
   buildReadBody,
   buildSubmitForm,
   checkFileSelection,
+  feedbackAuthorLabels,
+  feedbackBodyLabels,
+  feedbackBodyPlaceholders,
   feedbackCountText,
   feedbackFileHref,
   feedbackItemHref,
+  feedbackKindBadges,
+  feedbackKindLabels,
   feedbackMissingText,
+  feedbackOfflineText,
+  feedbackPasswordFailText,
+  feedbackReadFailText,
+  feedbackSessionExpiredText,
+  feedbackSubmitOkText,
+  FEEDBACK_SUCCESS_CLOSE_MS,
   formatBytes,
   formatCreatedAt,
   hasMissing,
@@ -250,18 +262,19 @@ export function feedbackFormElement(nav: {
   const dialog = el('div', 'feedback-panel');
   dialog.setAttribute('role', 'dialog');
   dialog.setAttribute('aria-modal', 'true');
-  dialog.setAttribute('aria-label', '反馈');
+  dialog.setAttribute('aria-label', t('feedback.aria'));
 
   const head = el('div', 'feedback-head');
-  head.appendChild(el('div', 'feedback-title', '反馈'));
-  head.appendChild(button('btn feedback-close', '关闭', () => { requestClose(); }));
+  head.appendChild(el('div', 'feedback-title', t('feedback.title')));
+  head.appendChild(button('btn feedback-close', t('feedback.close'), () => { requestClose(); }));
   dialog.appendChild(head);
 
   /* ── 两种操作（用户原话：① 投稿自定义协议 ② bug 反馈）── */
   const chips = el('div', 'feedback-kind-chips');
   const chipButtons = new Map<FeedbackKind, HTMLButtonElement>();
+  const kindLabels = feedbackKindLabels();
   for (const k of FEEDBACK_KINDS) {
-    const chip = button('draft-filter-chip feedback-chip', FEEDBACK_KIND_LABELS[k], () => { applyKind(k); });
+    const chip = button('draft-filter-chip feedback-chip', kindLabels[k], () => { applyKind(k); });
     role(chip, `kind-${k}`);
     chip.dataset.feedbackKind = k;
     chipButtons.set(k, chip);
@@ -271,18 +284,18 @@ export function feedbackFormElement(nav: {
   const kindHint = el('div', 'feedback-hint', '');
   dialog.appendChild(kindHint);
 
-  const titleLabel = el('div', 'feedback-label', '简要标题');
+  const titleLabel = el('div', 'feedback-label', t('feedback.title-label'));
   const titleInput = document.createElement('input');
   titleInput.className = 'feedback-input';
   role(titleInput, 'title');
   titleInput.setAttribute('type', 'text');
   titleInput.setAttribute('maxlength', '120');
-  titleInput.placeholder = '一句话说清这次反馈是关于什么的';
+  titleInput.placeholder = t('feedback.title-placeholder');
   const titleRow = el('div', 'feedback-field');
   titleRow.appendChild(titleLabel);
   titleRow.appendChild(titleInput);
 
-  const authorLabel = el('div', 'feedback-label', '投稿人');
+  const authorLabel = el('div', 'feedback-label', t('feedback.author.protocol'));
   authorLabel.dataset.feedbackAuthorLabel = '1';
   const authorInput = document.createElement('input');
   authorInput.className = 'feedback-input';
@@ -293,7 +306,7 @@ export function feedbackFormElement(nav: {
   authorRow.appendChild(authorLabel);
   authorRow.appendChild(authorInput);
 
-  const bodyLabel = el('div', 'feedback-label', '协议与卡牌的说明文本');
+  const bodyLabel = el('div', 'feedback-label', t('feedback.body.protocol'));
   bodyLabel.dataset.feedbackBodyLabel = '1';
   const bodyInput = document.createElement('textarea');
   bodyInput.className = 'feedback-textarea';
@@ -311,17 +324,19 @@ export function feedbackFormElement(nav: {
       b.setAttribute('aria-pressed', k === kind ? 'true' : 'false');
     }
     kindHint.textContent = kind === 'protocol'
-      ? '投稿自定义协议：写清协议名、卡牌与效果结算方式。'
-      : 'bug 反馈：写清在哪一屏、点了什么、期望与实际分别是什么。';
-    authorLabel.textContent = FEEDBACK_AUTHOR_LABELS[kind];
-    bodyLabel.textContent = FEEDBACK_BODY_LABELS[kind];
-    authorInput.placeholder = kind === 'protocol' ? '投稿人署名（必填）' : '反馈人署名（必填）';
-    bodyInput.placeholder = FEEDBACK_BODY_PLACEHOLDERS[kind];
+      ? t('feedback.kind-hint.protocol')
+      : t('feedback.kind-hint.bug');
+    authorLabel.textContent = feedbackAuthorLabels()[kind];
+    bodyLabel.textContent = feedbackBodyLabels()[kind];
+    authorInput.placeholder = kind === 'protocol'
+      ? t('feedback.author-placeholder.protocol')
+      : t('feedback.author-placeholder.bug');
+    bodyInput.placeholder = feedbackBodyPlaceholders()[kind];
   }
 
   /* ── 附件（可选；本地预检）── */
   const fileField = el('div', 'feedback-field');
-  fileField.appendChild(el('div', 'feedback-label', '附件（可选）'));
+  fileField.appendChild(el('div', 'feedback-label', t('feedback.files-label')));
   const fileInput = document.createElement('input');
   fileInput.className = 'feedback-file';
   role(fileInput, 'files');
@@ -330,16 +345,12 @@ export function feedbackFormElement(nav: {
   fileInput.setAttribute('accept', FEEDBACK_ACCEPT.join(','));
   fileField.appendChild(fileInput);
   fileField.appendChild(
-    el(
-      'div',
-      'feedback-hint',
-      `常见图片（pdf/jpg/png…）或常见文本（txt/markdown…）；每份 ≤10MB，一次最多 ${FEEDBACK_MAX_FILES} 份。`,
-    ),
+    el('div', 'feedback-hint', t('feedback.files-hint', { max: String(FEEDBACK_MAX_FILES) })),
   );
   const fileList = el('div', 'feedback-files');
   role(fileList, 'file-list');
   fileField.appendChild(fileList);
-  const removeAll = button('btn feedback-remove', '清空附件', () => { files = []; refreshFiles(); });
+  const removeAll = button('btn feedback-remove', t('feedback.files-clear'), () => { files = []; refreshFiles(); });
   role(removeAll, 'file-clear');
   fileField.appendChild(removeAll);
 
@@ -347,14 +358,14 @@ export function feedbackFormElement(nav: {
     fileList.replaceChildren();
     removeAll.hidden = files.length === 0;
     if (files.length === 0) {
-      fileList.appendChild(el('div', 'feedback-hint', '还没有选择附件。'));
+      fileList.appendChild(el('div', 'feedback-hint', t('feedback.files-empty')));
       return;
     }
     files.forEach((f, index) => {
       const row = el('div', 'feedback-file-row');
       row.appendChild(el('span', 'feedback-file-name', f.name));
       row.appendChild(el('span', 'feedback-file-size', formatBytes(f.size)));
-      const del = button('btn feedback-remove', '移除', () => {
+      const del = button('btn feedback-remove', t('feedback.files-remove'), () => {
         files = files.filter((_, i) => i !== index);
         refreshFiles();
       });
@@ -373,7 +384,7 @@ export function feedbackFormElement(nav: {
     status.dataset.kind = level;
   };
 
-  const submit = button('btn feedback-primary', '提交', () => { void doSubmit(); });
+  const submit = button('btn feedback-primary', t('feedback.submit'), () => { void doSubmit(); });
   role(submit, 'submit');
   const submitRow = el('div', 'feedback-actions');
   submitRow.appendChild(submit);
@@ -393,13 +404,13 @@ export function feedbackFormElement(nav: {
     refreshFiles();
     // 预检的话**原样**说给用户（可能同时有"超过 10MB 已跳过"与"超过 5 份"两句）
     if (check.notice !== '') say(check.notice, 'warn');
-    else say(`已选择 ${files.length} 份附件。`, 'info');
+    else say(t('feedback.files-picked', { n: String(files.length) }), 'info');
   });
 
   const setBusy = (on: boolean): void => {
     busy = on;
     submit.disabled = on;
-    submit.textContent = on ? '正在提交…' : '提交';
+    submit.textContent = on ? t('feedback.submitting') : t('feedback.submit');
   };
 
   async function doSubmit(): Promise<void> {
@@ -420,7 +431,7 @@ export function feedbackFormElement(nav: {
     authorRow.classList.remove('feedback-field-bad');
     bodyRow.classList.remove('feedback-field-bad');
     setBusy(true);
-    say('正在提交…', 'info');
+    say(t('feedback.submitting'), 'info');
     const outcome = await requestJson(
       nav.fetcher,
       'POST',
@@ -434,13 +445,13 @@ export function feedbackFormElement(nav: {
       say(outcome.text, 'error');
       return;
     }
-    const reading = readSubmit(outcome.json, FEEDBACK_READ_FAIL_TEXT);
+    const reading = readSubmit(outcome.json, feedbackReadFailText());
     if (!reading.ok) {
       say(reading.error, 'error');
       return;
     }
     // ★ 2026-10-01 用户改口径：状态行先出现「提交成功」（必须含这四个字），随后自动关闭浮层
-    say(`${FEEDBACK_SUBMIT_OK_TEXT}。编号：${reading.id}`, 'ok');
+    say(t('feedback.submit.ok-line', { ok: feedbackSubmitOkText(), id: reading.id }), 'ok');
     // 成功后清掉正文与附件（避免连点两次把同一份内容提交两遍），标题与署名留着
     bodyInput.value = '';
     files = [];
@@ -515,11 +526,11 @@ export function feedbackPasswordPanel(nav: {
   const panel = el('div', 'feedback-prompt');
   panel.setAttribute('role', 'dialog');
   panel.setAttribute('aria-modal', 'true');
-  panel.setAttribute('aria-label', '口令');
+  panel.setAttribute('aria-label', t('feedback.password.aria'));
 
   const head = el('div', 'feedback-head');
-  head.appendChild(el('div', 'feedback-title', '口令'));
-  head.appendChild(button('btn feedback-close', '关闭', () => { nav.onClose(); }));
+  head.appendChild(el('div', 'feedback-title', t('feedback.password.title')));
+  head.appendChild(button('btn feedback-close', t('feedback.close'), () => { nav.onClose(); }));
   panel.appendChild(head);
 
   const input = document.createElement('input');
@@ -527,7 +538,7 @@ export function feedbackPasswordPanel(nav: {
   role(input, 'password');
   input.setAttribute('type', 'password');
   input.setAttribute('autocomplete', 'off');
-  input.placeholder = '输入口令后回车';
+  input.placeholder = t('feedback.password.placeholder');
   panel.appendChild(input);
 
   const status = el('div', 'feedback-status');
@@ -539,7 +550,7 @@ export function feedbackPasswordPanel(nav: {
   }
   panel.appendChild(status);
 
-  const ok = button('btn feedback-primary', '进入', () => { void submit(); });
+  const ok = button('btn feedback-primary', t('feedback.password.enter'), () => { void submit(); });
   role(ok, 'password-ok');
   const row = el('div', 'feedback-actions');
   row.appendChild(ok);
@@ -548,19 +559,19 @@ export function feedbackPasswordPanel(nav: {
   const setBusy = (on: boolean): void => {
     busy = on;
     ok.disabled = on;
-    ok.textContent = on ? '正在验证…' : '进入';
+    ok.textContent = on ? t('feedback.password.checking') : t('feedback.password.enter');
   };
 
   async function submit(): Promise<void> {
     if (busy) return;
     const password = input.value;
     if (password === '') {
-      status.textContent = '请先输入口令。';
+      status.textContent = t('feedback.password.need');
       status.dataset.kind = 'error';
       return;
     }
     setBusy(true);
-    status.textContent = '正在验证…';
+    status.textContent = t('feedback.password.checking');
     status.dataset.kind = 'info';
     const outcome = await requestJson(
       nav.fetcher,
@@ -572,14 +583,14 @@ export function feedbackPasswordPanel(nav: {
     setBusy(false);
     if (!outcome.ok) {
       // 401 的「密码不对」原样显示（服务端给了别的话就用它）；连不上服务时是"没有反馈服务"那句
-      status.textContent = outcome.status === 401 && outcome.text === FEEDBACK_READ_FAIL_TEXT
-        ? FEEDBACK_PASSWORD_FAIL_TEXT
+      status.textContent = outcome.status === 401 && outcome.text === feedbackReadFailText()
+        ? feedbackPasswordFailText()
         : outcome.text;
       status.dataset.kind = 'error';
       return;
     }
     if (!readLoginOk(outcome.json)) {
-      status.textContent = FEEDBACK_PASSWORD_FAIL_TEXT;
+      status.textContent = feedbackPasswordFailText();
       status.dataset.kind = 'error';
       return;
     }
@@ -775,7 +786,7 @@ export class FeedbackHiddenView {
    * 标记已读 / 删除）都汇到这里 —— 一处写，四处一致。
    */
   private expireSession(gen: number): void {
-    this.passwordNotice = FEEDBACK_SESSION_EXPIRED_TEXT;
+    this.passwordNotice = feedbackSessionExpiredText();
     this.goto('password', gen);
   }
 
@@ -816,15 +827,15 @@ export class FeedbackHiddenView {
   private buildListPane(gen: number): HTMLElement {
     const wrap = el('div', 'feedback-sheet');
     const bar = el('div', 'feedback-head');
-    bar.appendChild(el('div', 'feedback-title', '反馈'));
-    const refresh = button('btn feedback-refresh', '刷新', () => { void this.loadList(gen); });
+    bar.appendChild(el('div', 'feedback-title', t('feedback.title')));
+    const refresh = button('btn feedback-refresh', t('feedback.refresh'), () => { void this.loadList(gen); });
     role(refresh, 'refresh');
     bar.appendChild(refresh);
-    bar.appendChild(button('btn feedback-close', '关闭', () => { this.close(); }));
+    bar.appendChild(button('btn feedback-close', t('feedback.close'), () => { this.close(); }));
     wrap.appendChild(bar);
 
     // 顶部读数（★ 2026-10-01 追加：'共 N 条 · 未读 M 条'；标记已读/删除后就地改它）
-    const count = el('div', 'feedback-count', '正在读取…');
+    const count = el('div', 'feedback-count', t('feedback.loading'));
     role(count, 'count');
     this.countEl = count;
     wrap.appendChild(count);
@@ -854,7 +865,7 @@ export class FeedbackHiddenView {
       if (outcome.status === 401) { this.expireSession(gen); return; }
       if (count !== null) count.textContent = '';
       if (status !== null) {
-        status.textContent = outcome.status === 0 ? FEEDBACK_OFFLINE_TEXT : outcome.text;
+        status.textContent = outcome.status === 0 ? feedbackOfflineText() : outcome.text;
         status.dataset.kind = 'error';
       }
       return;
@@ -863,7 +874,7 @@ export class FeedbackHiddenView {
     if (page === null) {
       if (count !== null) count.textContent = '';
       if (status !== null) {
-        status.textContent = FEEDBACK_READ_FAIL_TEXT;
+        status.textContent = feedbackReadFailText();
         status.dataset.kind = 'error';
       }
       return;
@@ -880,7 +891,7 @@ export class FeedbackHiddenView {
     }
     this.refreshCounts();
     if (status !== null) {
-      status.textContent = this.items.length === 0 ? '还没有收到任何反馈。' : '';
+      status.textContent = this.items.length === 0 ? t('feedback.list-empty') : '';
       status.dataset.kind = this.items.length === 0 ? 'info' : 'none';
     }
   }
@@ -904,7 +915,7 @@ export class FeedbackHiddenView {
     card.dataset.feedbackRead = item.read ? 'true' : 'false';
     const readBtn = card.querySelector<HTMLElement>('[data-role="card-read"]');
     if (readBtn !== null) {
-      readBtn.textContent = item.read ? '标为未读' : '标记已读';
+      readBtn.textContent = item.read ? t('feedback.read.mark-unread') : t('feedback.read.mark-read');
       readBtn.dataset.feedbackRead = item.read ? 'true' : 'false';
     }
     const found = card.querySelectorAll<HTMLElement>('.feedback-unread-badge');
@@ -915,7 +926,7 @@ export class FeedbackHiddenView {
     // 只留一颗徽章（`querySelectorAll` 是桩与浏览器都支持的那一个查询形态）
     for (let i = 1; i < found.length; i += 1) found[i].remove();
     if (found.length === 0) {
-      const badge = el('span', 'feedback-unread-badge', '未读');
+      const badge = el('span', 'feedback-unread-badge', t('feedback.unread'));
       const head = card.querySelector<HTMLElement>('.feedback-card-head');
       if (head === null) card.insertBefore(badge, card.firstChild as Node | null);
       else head.insertBefore(badge, head.firstChild as Node | null);
@@ -935,15 +946,15 @@ export class FeedbackHiddenView {
     card.dataset.feedbackRead = item.read ? 'true' : 'false';
     const info = el('div', 'rules-info');
     const top = el('div', 'feedback-card-head');
-    if (!item.read) top.appendChild(el('span', 'feedback-unread-badge', '未读'));
-    top.appendChild(el('span', `feedback-badge feedback-badge-${item.kind}`, FEEDBACK_KIND_BADGES[item.kind]));
-    top.appendChild(el('span', 'feedback-file-count', `附件 ${item.fileCount} 份`));
+    if (!item.read) top.appendChild(el('span', 'feedback-unread-badge', t('feedback.unread')));
+    top.appendChild(el('span', `feedback-badge feedback-badge-${item.kind}`, feedbackKindBadges()[item.kind]));
+    top.appendChild(el('span', 'feedback-file-count', t('feedback.file-count', { n: String(item.fileCount) })));
     info.appendChild(top);
-    info.appendChild(el('div', 'rules-title', item.title === '' ? '（无标题）' : item.title));
+    info.appendChild(el('div', 'rules-title', item.title === '' ? t('feedback.untitled') : item.title));
     info.appendChild(el('div', 'rules-desc', `${item.author} · ${formatCreatedAt(item.createdAt)}`));
 
     const actions = el('div', 'feedback-card-actions');
-    const readBtn = actionButton('btn feedback-mini', item.read ? '标为未读' : '标记已读', () => {
+    const readBtn = actionButton('btn feedback-mini', item.read ? t('feedback.read.mark-unread') : t('feedback.read.mark-read'), () => {
       // ⚠️ ★ 2026-10-01 线上验收抓出的真 bug：这里原来写的是 `!item.read` —— 那个 `item` 是
       // **建卡那一刻**捕获的那一份，而 `applyRead` 是**换一份新对象**放进 `this.items` 的
       // （不原地改旧对象）⇒ 捕获值永远是第一次的值 ⇒ 服务端**永远**收到 `{read:true}`，
@@ -956,7 +967,7 @@ export class FeedbackHiddenView {
     readBtn.dataset.feedbackRead = item.read ? 'true' : 'false';
     actions.appendChild(readBtn);
 
-    const delBtn = actionButton('btn feedback-mini feedback-danger', '删除', () => {
+    const delBtn = actionButton('btn feedback-mini feedback-danger', t('feedback.delete'), () => {
       if (confirmRow.hidden) {
         confirmRow.hidden = false;
         return;
@@ -973,14 +984,14 @@ export class FeedbackHiddenView {
     confirmRow.dataset.role = 'card-confirm';
     confirmRow.dataset.feedbackId = item.id;
     confirmRow.hidden = true;
-    confirmRow.appendChild(el('span', 'feedback-confirm-text', '移入回收站后不能在页面上恢复，确定删除？'));
-    const yes = actionButton('btn feedback-mini feedback-danger', '确认删除', () => {
+    confirmRow.appendChild(el('span', 'feedback-confirm-text', t('feedback.delete.confirm')));
+    const yes = actionButton('btn feedback-mini feedback-danger', t('feedback.delete.yes'), () => {
       void this.deleteItem(item, confirmRow, gen);
     });
     role(yes, 'card-delete-yes');
     yes.dataset.feedbackId = item.id;
     confirmRow.appendChild(yes);
-    const no = actionButton('btn feedback-mini', '取消', () => { confirmRow.hidden = true; });
+    const no = actionButton('btn feedback-mini', t('feedback.delete.no'), () => { confirmRow.hidden = true; });
     role(no, 'card-delete-no');
     no.dataset.feedbackId = item.id;
     confirmRow.appendChild(no);
@@ -1017,10 +1028,10 @@ export class FeedbackHiddenView {
     if (gen !== this.generation || !this.mounted) return;
     if (!outcome.ok) {
       if (outcome.status === 401) { this.expireSession(gen); return; }
-      this.sayListStatus(outcome.status === 0 ? FEEDBACK_OFFLINE_TEXT : outcome.text);
+      this.sayListStatus(outcome.status === 0 ? feedbackOfflineText() : outcome.text);
       return;
     }
-    const reading = readActionOk(outcome.json, FEEDBACK_READ_FAIL_TEXT);
+    const reading = readActionOk(outcome.json, feedbackReadFailText());
     if (!reading.ok) { this.sayListStatus(reading.error); return; }
     this.applyRead(item.id, next);
   }
@@ -1087,10 +1098,10 @@ export class FeedbackHiddenView {
     if (!outcome.ok) {
       if (outcome.status === 401) { this.expireSession(gen); return; }
       confirmRow.hidden = true; // 失败：把确认行收回去，只留状态行那句话
-      this.sayListStatus(outcome.status === 0 ? FEEDBACK_OFFLINE_TEXT : outcome.text);
+      this.sayListStatus(outcome.status === 0 ? feedbackOfflineText() : outcome.text);
       return;
     }
-    const reading = readActionOk(outcome.json, FEEDBACK_READ_FAIL_TEXT);
+    const reading = readActionOk(outcome.json, feedbackReadFailText());
     if (!reading.ok) {
       confirmRow.hidden = true;
       this.sayListStatus(reading.error);
@@ -1111,7 +1122,7 @@ export class FeedbackHiddenView {
       // 详情里删掉的这一条：退回列表（列表那一格按刚更新的数据留白，不重画、不重发请求）
       this.goto('list', gen);
     }
-    this.sayListStatus(`已删除「${item.title === '' ? '（无标题）' : item.title}」（移入回收站）。`, 'ok');
+    this.sayListStatus(t('feedback.delete.done', { title: item.title === '' ? t('feedback.untitled') : item.title }), 'ok');
   }
 
   /** 列表那一格的状态行（就地写一句话；`kind` 缺省是 error） */
@@ -1127,41 +1138,41 @@ export class FeedbackHiddenView {
     this.detailItem = item;
     const wrap = el('div', 'feedback-sheet');
     const bar = el('div', 'feedback-head');
-    const back = button('btn feedback-back', '← 返回列表', () => { this.goto('list', gen); });
+    const back = button('btn feedback-back', t('feedback.back-to-list'), () => { this.goto('list', gen); });
     role(back, 'back');
     bar.appendChild(back);
-    bar.appendChild(el('div', 'feedback-title', '反馈详情'));
+    bar.appendChild(el('div', 'feedback-title', t('feedback.detail.title')));
     // ★ 2026-10-01 追加：详情里也放这两个动作（用户说"详情里更顺手"）
     if (item !== null) {
-      const readBtn = button('btn feedback-mini', item.read ? '标为未读' : '标记已读', () => {
+      const readBtn = button('btn feedback-mini', item.read ? t('feedback.read.mark-unread') : t('feedback.read.mark-read'), () => {
         // ⚠️ 目标状态**点击这一刻现查**（原因与卡片那颗按钮逐字相同，见 `card()` 里的注释）
         void this.toggleRead(item, !this.readStateOf(item.id, item.read), gen);
       });
       role(readBtn, 'detail-read');
       bar.appendChild(readBtn);
-      const delBtn = button('btn feedback-mini feedback-danger', '删除', () => {
+      const delBtn = button('btn feedback-mini feedback-danger', t('feedback.delete'), () => {
         if (confirmRow.hidden) { confirmRow.hidden = false; return; }
         void this.deleteItem(item, confirmRow, gen);
       });
       role(delBtn, 'detail-delete');
       bar.appendChild(delBtn);
     }
-    bar.appendChild(button('btn feedback-close', '关闭', () => { this.close(); }));
+    bar.appendChild(button('btn feedback-close', t('feedback.close'), () => { this.close(); }));
     wrap.appendChild(bar);
 
     // 二次确认行（详情里的那份；与卡片上那个同款文案）
     const confirmRow = el('div', 'feedback-confirm');
     confirmRow.dataset.role = 'detail-confirm';
     confirmRow.hidden = true;
-    confirmRow.appendChild(el('span', 'feedback-confirm-text', '移入回收站后不能在页面上恢复，确定删除？'));
+    confirmRow.appendChild(el('span', 'feedback-confirm-text', t('feedback.delete.confirm')));
     if (item !== null) {
-      const yes = button('btn feedback-mini feedback-danger', '确认删除', () => {
+      const yes = button('btn feedback-mini feedback-danger', t('feedback.delete.yes'), () => {
         void this.deleteItem(item, confirmRow, gen);
       });
       role(yes, 'detail-delete-yes');
       confirmRow.appendChild(yes);
     }
-    const no = button('btn feedback-mini', '取消', () => { confirmRow.hidden = true; });
+    const no = button('btn feedback-mini', t('feedback.delete.no'), () => { confirmRow.hidden = true; });
     role(no, 'detail-delete-no');
     confirmRow.appendChild(no);
     wrap.appendChild(confirmRow);
@@ -1177,7 +1188,7 @@ export class FeedbackHiddenView {
     wrap.appendChild(box);
 
     if (item === null) {
-      status.textContent = '没有选中任何一条反馈。';
+      status.textContent = t('feedback.detail.no-selection');
       status.dataset.kind = 'error';
       return wrap;
     }
@@ -1186,13 +1197,13 @@ export class FeedbackHiddenView {
       if (gen !== this.generation || !this.mounted) return;
       if (!outcome.ok) {
         if (outcome.status === 401) { this.expireSession(gen); return; }
-        status.textContent = outcome.status === 0 ? FEEDBACK_OFFLINE_TEXT : outcome.text;
+        status.textContent = outcome.status === 0 ? feedbackOfflineText() : outcome.text;
         status.dataset.kind = 'error';
         return;
       }
       const detail = readItem(outcome.json);
       if (detail === null) {
-        status.textContent = FEEDBACK_READ_FAIL_TEXT;
+        status.textContent = feedbackReadFailText();
         status.dataset.kind = 'error';
         return;
       }
@@ -1217,7 +1228,7 @@ export class FeedbackHiddenView {
     box.replaceChildren();
     // 读状态变了 ⇒ 那一格顶栏上的按钮文案也要跟着换（就地换字，不重画整页）
     const readBtn = this.root.querySelector<HTMLElement>('[data-role="detail-read"]');
-    if (readBtn !== null) readBtn.textContent = item.read ? '标为未读' : '标记已读';
+    if (readBtn !== null) readBtn.textContent = item.read ? t('feedback.read.mark-unread') : t('feedback.read.mark-read');
     box.appendChild(this.detailBody(item as FeedbackDetail));
   }
 
@@ -1225,17 +1236,17 @@ export class FeedbackHiddenView {
   private detailBody(d: FeedbackDetail): HTMLElement {
     const box = el('div', 'feedback-detail-body');
     const top = el('div', 'feedback-card-head');
-    if (!d.read) top.appendChild(el('span', 'feedback-unread-badge', '未读'));
-    top.appendChild(el('span', `feedback-badge feedback-badge-${d.kind}`, FEEDBACK_KIND_BADGES[d.kind]));
+    if (!d.read) top.appendChild(el('span', 'feedback-unread-badge', t('feedback.unread')));
+    top.appendChild(el('span', `feedback-badge feedback-badge-${d.kind}`, feedbackKindBadges()[d.kind]));
     box.appendChild(top);
-    box.appendChild(el('div', 'feedback-detail-title', d.title === '' ? '（无标题）' : d.title));
+    box.appendChild(el('div', 'feedback-detail-title', d.title === '' ? t('feedback.untitled') : d.title));
     box.appendChild(el('div', 'feedback-meta', `${d.author} · ${formatCreatedAt(d.createdAt)}`));
     box.appendChild(el('div', 'feedback-detail-body-text', d.body));
     if (d.files.length === 0) {
-      box.appendChild(el('div', 'feedback-hint', '这一条没有附件。'));
+      box.appendChild(el('div', 'feedback-hint', t('feedback.detail.no-files')));
       return box;
     }
-    box.appendChild(el('div', 'feedback-label', `附件（${d.files.length} 份）`));
+    box.appendChild(el('div', 'feedback-label', t('feedback.detail.files-label', { n: String(d.files.length) })));
     const list = el('div', 'feedback-files');
     role(list, 'detail-files');
     for (const f of d.files) list.appendChild(fileRow(d.id, f));
@@ -1261,7 +1272,7 @@ function fileRow(id: string, f: FeedbackFileMeta): HTMLElement {
   a.setAttribute('href', feedbackFileHref(id, f.name));
   a.setAttribute('target', '_blank');
   a.setAttribute('rel', 'noopener');
-  a.textContent = f.name === '' ? '（无名附件）' : f.name;
+  a.textContent = f.name === '' ? t('feedback.detail.unnamed-file') : f.name;
   row.appendChild(a);
   row.appendChild(el('span', 'feedback-file-size', formatBytes(f.size)));
   return row;

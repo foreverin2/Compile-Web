@@ -19,7 +19,12 @@
  *
  * `isPersistent()` 的判定**走的是 `LocalStore.isPersistent()`**，不自己探测 ——
  * 授权状态机只有一份真相。
+ *
+ * ★ 2026-10-02（i18n 逐屏抽取）：本文件里那几句玩家可见的失败/降级说明搬进 `src/i18n/`
+ * （键 `cardmaker.store.*`），中文值**逐字等于改动前**的字面量。
+ * ⚠️ 存进 `detail` 的**系统原样消息**（`e.message` / `tx.error.message`）照旧不翻译。
  */
+import { t } from '../../i18n';
 import type { LocalStore } from '../../app/local-store';
 import { hydrateDeck } from './model';
 import type { Deck } from './types';
@@ -62,7 +67,7 @@ function openCardmakerDB(factory: IdbLike): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains(CARDMAKER_DB_STORE)) db.createObjectStore(CARDMAKER_DB_STORE);
     };
     req.onsuccess = () => { resolve(req.result); };
-    req.onerror = () => { reject(req.error ?? new Error('打不开 IndexedDB')); };
+    req.onerror = () => { reject(req.error ?? new Error(t('cardmaker.store.open-failed'))); };
   });
 }
 
@@ -72,7 +77,7 @@ function idbGet(db: IDBDatabase, key: string): Promise<unknown> {
     const tx = db.transaction(CARDMAKER_DB_STORE, 'readonly');
     const r = tx.objectStore(CARDMAKER_DB_STORE).get(key);
     r.onsuccess = () => { resolve(r.result); };
-    r.onerror = () => { reject(r.error ?? new Error('读取 IndexedDB 失败')); };
+    r.onerror = () => { reject(r.error ?? new Error(t('cardmaker.store.read-failed'))); };
   });
 }
 
@@ -81,8 +86,8 @@ function idbPut(db: IDBDatabase, key: string, value: unknown): Promise<void> {
     const tx = db.transaction(CARDMAKER_DB_STORE, 'readwrite');
     tx.objectStore(CARDMAKER_DB_STORE).put(value, key);
     tx.oncomplete = () => { resolve(); };
-    tx.onerror = () => { reject(tx.error ?? new Error('写入 IndexedDB 失败')); };
-    tx.onabort = () => { reject(tx.error ?? new Error('写入 IndexedDB 被中止')); };
+    tx.onerror = () => { reject(tx.error ?? new Error(t('cardmaker.store.write-failed'))); };
+    tx.onabort = () => { reject(tx.error ?? new Error(t('cardmaker.store.write-aborted'))); };
   });
 }
 
@@ -91,7 +96,7 @@ function idbDelete(db: IDBDatabase, key: string): Promise<void> {
     const tx = db.transaction(CARDMAKER_DB_STORE, 'readwrite');
     tx.objectStore(CARDMAKER_DB_STORE).delete(key);
     tx.oncomplete = () => { resolve(); };
-    tx.onerror = () => { reject(tx.error ?? new Error('删除 IndexedDB 记录失败')); };
+    tx.onerror = () => { reject(tx.error ?? new Error(t('cardmaker.store.delete-failed'))); };
   });
 }
 
@@ -161,7 +166,7 @@ export function createCardmakerStore(deps: CardmakerStoreDeps): CardmakerStore {
     async save(deck: Deck): Promise<CardmakerSaveResult> {
       memory.deck = deck; // 内存那一份永远更新（这样降级之后仍然活得下去）
       if (!persistent()) {
-        return { ok: true, detail: '只写进了内存（游客模式或本机存储不可用）' };
+        return { ok: true, detail: t('cardmaker.store.memory-only') };
       }
       try {
         await idbPut(await db(), CARDMAKER_DECK_KEY, deck);
@@ -181,7 +186,7 @@ export function createCardmakerStore(deps: CardmakerStoreDeps): CardmakerStore {
  * `{ ok: false, detail }`，调用方如实提示 —— 绝不静默成"已清除"。
  */
 export async function clearCardmakerDeck(factory: IdbLike | null): Promise<{ ok: boolean; detail: string }> {
-  if (factory === null) return { ok: false, detail: '这台设备没有可用的 IndexedDB' };
+  if (factory === null) return { ok: false, detail: t('cardmaker.store.no-idb') };
   try {
     const db = await openCardmakerDB(factory);
     await idbDelete(db, CARDMAKER_DECK_KEY);

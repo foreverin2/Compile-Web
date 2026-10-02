@@ -43,6 +43,17 @@
  *    不是靠"我记得别调"。
  */
 
+/**
+ * ★ 2026-10-02（i18n 逐屏抽取）：本屏玩家可见文案搬进 src/i18n/（键 net-lobby.*），
+ * 中文值逐字等于改动前的字面量；对端/会话层给的那几句（refusal.detail、needsResyncDetail）
+ * 仍然原样显示、不翻译。
+ *
+ * 取值时机**全部在调用点**（`t(...)` 写在函数体里，不写成模块级常量）—— 唯一的两个例外是
+ * `ERROR_COPY_BOUNDARY` 与 `PASTE_SHAPE_HINT`：它们是**导出的字符串常量**，形状（`string`）
+ * 与导出名被测试与外部钉住，只能在这里求值一次（代价见抽取报告）。
+ */
+
+import { t } from '../i18n';
 import {
   INVITE_FRAGMENT_KEY,
   INVITE_PROTO_VERSION,
@@ -434,19 +445,24 @@ export const DEFAULT_ROOM_GONE_MS = 8_000;
  *    （`validateHello` 的 `HelloRejectReason`）。T8 只**转发**；
  *  - `'room-gone'` ← **大厅自己的 8s 超时读数**。
  */
-const ERROR_COPY: Readonly<Record<Exclude<LobbyErrorKey, 'proto-version'>, string>> = {
-  'card-data-hash':
-    '两端的卡牌数据不是同一份（握手时卡牌指纹对不上）：请确认两台设备装的是同一个版本的卡牌资料，'
-    + '其中一方更新过卡牌资料的话，另一方也要跟着更新。',
-  'room-gone':
-    `等了 ${DEFAULT_ROOM_GONE_MS / 1000} 秒也没连上对端：房间码可能打错了，或者房主已经关掉页面`
-    + '（主机关掉页面就是这一局结束）。可以核对房间码重试，或者改用邀请码（它不需要信令服务）。',
-  busy:
-    '这个房间的玩家位已经满了：G5 一局只有两个玩家位，没有空位可以进来。'
-    + '请让房主确认没有别人先进来，或者另开一个房间。',
-  spectator:
-    '这个版本还不支持观战：观战席还没造出来（**不是**观战席坐满了）。请让对方以玩家身份重新握手。',
-};
+/**
+ * 键 → 文案（**每次读都现取**）。
+ *
+ * ★ 2026-10-02（i18n 逐屏抽取）：这一格原来是模块级的 `const ERROR_COPY = { … }` —— 那样写
+ * 文案会在**模块加载时**定死语言（切语言之后屏上不会变）。现在每个键各自在 `t()` 里用
+ * **字面量键**取（缺键扫描腿只认静态第一实参 ⇒ 键不许由变量拼出来）。
+ *
+ * 它没有导出过（原来是 `const`，不是 `export const`），所以这个形状变化不影响任何调用方。
+ */
+function errorCopyText(key: Exclude<LobbyErrorKey, 'proto-version'>): string {
+  switch (key) {
+    case 'card-data-hash': return t('net-lobby.error.card-data-hash');
+    // `DEFAULT_ROOM_GONE_MS` 是毫秒、屏上说的是秒 ⇒ 除完再交给占位符（值由表里的 `{seconds}` 落位）
+    case 'room-gone': return t('net-lobby.error.room-gone', { seconds: String(DEFAULT_ROOM_GONE_MS / 1000) });
+    case 'busy': return t('net-lobby.error.busy');
+    case 'spectator': return t('net-lobby.error.spectator');
+  }
+}
 
 /**
  * 取一条错误文案。
@@ -460,11 +476,11 @@ export function errorCopy(key: LobbyErrorKey, remoteProto: number = INVITE_PROTO
     if (verdict.ok) {
       // 一致时那个函数**没有**可读真因（它的契约如此）⇒ 这里给一句"这一格今天没被走到"的说明，
       // 而不是返回空串让屏上出现一条没有内容的错误行。
-      return '协议版本与本机一致，所以这一格今天不会被渲染出来（它只在版本不一致时由 protocolVersionCheck 给出）';
+      return t('net-lobby.error.proto-version-consistent');
     }
     return verdict.message;
   }
-  return ERROR_COPY[key];
+  return errorCopyText(key);
 }
 
 /* ------------------------------------------------------------------ *
@@ -532,7 +548,7 @@ export function refusalNotice(refusal: LobbyRefusal): { readonly key: LobbyError
   const detail = refusal.detail.trim();
   // 对方的 `detail` 与那一格的文案重复时不重复拼（`spectator` 那条尤其容易两处同义）
   if (detail.length === 0 || base.includes(detail)) return { key, text: base };
-  return { key, text: `${base}（对端给的理由：${detail}）` };
+  return { key, text: t('net-lobby.error.refusal-with-detail', { base, detail }) };
 }
 
 /**
@@ -548,8 +564,7 @@ export function refusalNotice(refusal: LobbyRefusal): { readonly key: LobbyError
  *
  * 这个边界不是"没做到"，是这条判据**声明的范围**：写成"五条都验过了"才是谎报。
  */
-export const ERROR_COPY_BOUNDARY =
-  '本表钉的是五条文案互不相同、来源可追、且拒绝理由能连到对应那一格；真网络下能否触发属 T9/人工验收。';
+export const ERROR_COPY_BOUNDARY = t('net-lobby.error.boundary');
 
 /* ==================================================================== *
  * 3. "断线 ≠ 刷新"的文案（判据 8）：读数 → 文案，只有这一张表
@@ -593,25 +608,23 @@ export type LobbyLink =
  *
  * `null` = 本会话没注入时钟、窗口**判不了**。"无法判定"与"还在宽限期内"不是同一句话 ——
  * 把它们合并会让玩家读到一个我们并不知道的结论。
+ *
+ * ## ★ 2026-10-02（i18n 逐屏抽取）：为什么每一格是 **getter**
+ *
+ * 这一张表**导出**了，而且调用方是**直接按下标读**的（`tests/ui/net-lobby.test.ts` /
+ * `net-lobby-link-window` 那几条腿把它与屏上的正文逐字比）。所以：
+ *  - 写成 `const X = { k: 值 }` ⇒ 语言在**模块加载时**定死（切语言之后这张表不跟着变）；
+ *  - 改成函数（`lobbyLinkCopy()`）⇒ 导出形状变了，上面那些调用点全要改（判据面也跟着动）。
+ * ⇒ 取 getter：**形状一个字没变**（还是 `Readonly<Record<LobbyLink, string>>`，下标读出来仍是
+ * `string`），而每次读都现调 `t()`（语言跟着 `setLang` 走）。
  */
 export const LOBBY_LINK_COPY: Readonly<Record<LobbyLink, string>> = {
-  online:
-    '对端在线，可以开始这一局。',
-  'offline-window-live':
-    '对端现在不在线（链路断了）。这一局的宽限期还没过：对端若带着同一个会话回来，'
-    + '本地会把这一局追平接着打。注意刷新页面不能让对局回来 —— 刷新只是把手里这份会话丢掉。',
-  'offline-window-expired':
-    '对端离线已经超过了宽限期，这一局不能再接着打了。刷新页面同样不能让对局回来：'
-    + '宽限期是从最后一次收到对端消息算起的，而刷新还会把本地这份状态一并丢掉。',
-  'offline-window-unknown':
-    '对端现在不在线（链路断了）。这一侧判不了宽限期还剩多少（没有可用的时钟读数）——'
-    + '这是"无法判定"，不是"还在宽限期内"。刷新页面同样不能让对局回来。',
-  'resync-handshake':
-    '对端带着同一个会话回来了，正在把这一局追平：等它把缺掉的那几步补齐之后才能继续。',
-  'resync-queue-overflow':
-    '本地跟不上了（入站队列溢出，落后了一大段操作），需要走一次追平。'
-    + '注意：房主这一侧的队列溢出在今天没有自动出路（只有加入方能发追平请求）——'
-    + '如果房主就是这一侧，这一局只能由上层结束，不能继续推进回合。',
+  get online(): string { return t('net-lobby.link.online'); },
+  get 'offline-window-live'(): string { return t('net-lobby.link.offline-window-live'); },
+  get 'offline-window-expired'(): string { return t('net-lobby.link.offline-window-expired'); },
+  get 'offline-window-unknown'(): string { return t('net-lobby.link.offline-window-unknown'); },
+  get 'resync-handshake'(): string { return t('net-lobby.link.resync-handshake'); },
+  get 'resync-queue-overflow'(): string { return t('net-lobby.link.resync-queue-overflow'); },
 };
 
 /* ==================================================================== *
@@ -652,7 +665,9 @@ export function lobbyLinkText(status: PeerStatus): string {
   const base = LOBBY_LINK_COPY[lobbyLinkOf(status)];
   const detail = status.needsResyncDetail;
   if (!status.needsResync || detail === null || detail.length === 0) return base;
-  return `${base}（${detail}）`;
+  // ⚠️ `detail` 是**会话层的读数**（`needsResyncDetail`）⇒ 原样拼进去，不翻译；这一句的
+  //    括号外壳才是本屏的文案（`net-lobby.link.detail-suffix`）。
+  return t('net-lobby.link.detail-suffix', { base, detail });
 }
 
 /**
@@ -691,14 +706,16 @@ export function netTurnText(
     ? draftDrafter === selfSeat
     : turnPlayer === selfSeat;
   if (phase === 'draft') {
+    const n = String(draftRound + 1);
+    const total = String(DRAFT_STEPS);
     return mine
-      ? `轮到你选协议（第 ${draftRound + 1} 步，共 ${DRAFT_STEPS} 步）`
-      : `现在轮到对方选协议（第 ${draftRound + 1} 步，共 ${DRAFT_STEPS} 步）—— 等他选`;
+      ? t('net-lobby.turn.draft-mine', { n, total })
+      : t('net-lobby.turn.draft-peer', { n, total });
   }
   // ★ 2026-10-01（用户要求）：出牌相只说"轮到谁出牌"—— 去掉"或点「下一步」"与"—— 等他动"两截。
   return mine
-    ? '轮到你出牌'
-    : '现在轮到对方出牌';
+    ? t('net-lobby.turn.play-mine')
+    : t('net-lobby.turn.play-peer');
 }
 
 /** 草稿一共几步（屏上那句话里用；`DRAFT_PICK_COUNT = 6` 是引擎的常量，别在这里另写一个数） */
@@ -802,19 +819,9 @@ export function appendNetTurnLine(
  */
 export function linkRecoveryNotice(status: PeerStatus | null): string {
   const expired = status === null ? null : status.windowExpired;
-  if (expired === true) {
-    return '对端离线已经超过了宽限期：按 D8 的规则这一局不能再追平了，'
-      + '但本地这份对局不会被程序自动结束（它只是不再接受追平）。要接着打只能重新开一局：'
-      + '请重新生成邀请码 / 重新加入。';
-  }
-  if (expired === false) {
-    return '这一局的宽限期还没过：请重新生成邀请码 / 重新加入。'
-      + '对方带着同一个会话接上之后，本地会把这一局追平接着打（追平要把缺掉的那几步补齐）'
-      + '—— 这是重新交接一次邀请码，不是后台自己把链路接回来。';
-  }
-  return '这一侧判不了宽限期还剩多少（没有可用的时钟读数）：'
-    + '对端若带着同一个会话回来，可以追平接着打；超过 5 分钟之后再回来就不允许追平、只能重开。'
-    + '请重新生成邀请码 / 重新加入。';
+  if (expired === true) return t('net-lobby.recovery.expired');
+  if (expired === false) return t('net-lobby.recovery.live');
+  return t('net-lobby.recovery.unknown');
 }
 
 /* ==================================================================== *
@@ -851,8 +858,7 @@ export function relayNoticeOf(read: IceServersRead): string | null {
   const state = relayStateOf(read);
   if (state === 'off') return null;
   if (state === 'partial') {
-    return '中继（TURN）只填了一部分，所以这一项没有被用上：URL、用户名、凭据三项必须齐全，'
-      + '缺任何一项的中继在真实网络里都会拒绝连接。补齐之后它才会生效。';
+    return t('net-lobby.relay.partial');
   }
   // ★ `'on'`：那句中继说明的**唯一出处**是 `src/app/privacy.ts:111`。
   // D22 写死了两件事：本文件一个字都不许改写它，也**不许**再加第二句 ——
@@ -1028,7 +1034,7 @@ const FRAGMENT_PREFIX = `#${INVITE_FRAGMENT_KEY}=`;
  * 玩家照做、把整条链接粘进加入方的框里，而那条路当时只吃裸载荷。
  */
 export const PASTE_SHAPE_HINT =
-  `整条链接、链接里 ${FRAGMENT_PREFIX} 后面那一串、或者只粘邀请码本身，三种都可以。`;
+  t('net-lobby.paste.shape-hint', { prefix: FRAGMENT_PREFIX });
 
 /**
  * 粘进来的**是一条链接，但链接里没有 `#invite=…` 那一段**时给邀请码那一侧的文案。
@@ -1036,15 +1042,18 @@ export const PASTE_SHAPE_HINT =
  * 为什么必须与"开头不是整数"分开：那句话是对着**载荷**说的（"这不是本程序产出的邀请码"），
  * 而玩家手上这条链接**是本程序产出的**，只是他少复制了后半截（或者粘成了别的地址）。
  * 拿前一句回答后一种输入，玩家会以为程序坏了。
+ *
+ * ★ 2026-10-02（i18n 逐屏抽取）：两句现在各是一个**函数**（原来是与回示码共用的模块级常量）——
+ * 模块级常量会让文案在加载时定死语言；两个函数只在 `applyInvite` / `submitAnswerCode` 里调。
  */
-const LINK_WITHOUT_FRAGMENT_INVITE_MESSAGE =
-  `你粘的是一条链接，但链接里没有 ${FRAGMENT_PREFIX} 后面那一段；`
-  + '请确认你复制的是整条链接（井号后面那一截也要一起复制），或者只粘邀请码本身。';
+function linkWithoutFragmentInviteMessage(): string {
+  return t('net-lobby.invite.link-without-fragment', { prefix: FRAGMENT_PREFIX });
+}
 
 /** 回示码那一侧的同一件事（形状相同、被粘的东西不同 ⇒ 文案里的名字不同） */
-const LINK_WITHOUT_FRAGMENT_ANSWER_MESSAGE =
-  `你粘的是一条链接，但链接里没有 ${FRAGMENT_PREFIX} 后面那一段；`
-  + '请确认你复制的是整条链接（井号后面那一截也要一起复制），或者只粘对方给你的回示码本身。';
+function linkWithoutFragmentAnswerMessage(): string {
+  return t('net-lobby.answer.link-without-fragment', { prefix: FRAGMENT_PREFIX });
+}
 
 /** 粘贴框里那一串的两种形态（`payload` 那一种是**改动前就有的**那条路） */
 type PastedShape =
@@ -1119,19 +1128,43 @@ export interface LobbyStepsView {
 }
 
 /** 状态 → 小字。**文案只有这一处**（四格两两不同，空的那格是 `''`，不是缺字段） */
-const STEP_TAG: Readonly<Record<LobbyStepState, string>> = {
-  done: '已完成',
-  current: '现在做这一步',
-  waiting: '在对方那边',
-  todo: '',
-};
-
-function step(n: number, title: string, state: LobbyStepState): LobbyStepView {
-  return { n, title, state, tag: STEP_TAG[state] };
+function stepTagOf(state: LobbyStepState): string {
+  // `'todo'` 那一格**故意**是空串（屏上什么都不写）：空串不是"缺一条文案"，所以它不进表
+  // （两张表禁空值）。其余三格每次现调 `t()` —— 写成模块级常量会让语言在加载时定死。
+  if (state === 'done') return t('net-lobby.step.tag.done');
+  if (state === 'current') return t('net-lobby.step.tag.current');
+  if (state === 'waiting') return t('net-lobby.step.tag.waiting');
+  return '';
 }
 
-/** 「已经走完」那一句（两侧同形：交接完了，屏要让位给硬币那一屏） */
-const STEPS_DONE_NOW = '这一局的交接已经走完，往下就交给硬币那一屏了。';
+function step(n: number, title: string, state: LobbyStepState): LobbyStepView {
+  return { n, title, state, tag: stepTagOf(state) };
+}
+
+/* ── 四个步骤的标题（房主 / 加入方各四条；两条是共用文案，只留一个键） ── */
+
+/** 房主第 ①②③④ 步的标题 */
+function hostStepTitles(): readonly [string, string, string, string] {
+  return [
+    t('net-lobby.action.make-invite'),
+    t('net-lobby.step.host.send-invite'),
+    t('net-lobby.step.host.peer-answers'),
+    t('net-lobby.step.host.paste-answer'),
+  ];
+}
+
+/** 加入方第 ①②③④ 步的标题 */
+function guestStepTitles(): readonly [string, string, string, string] {
+  return [
+    t('net-lobby.step.guest.paste-invite'),
+    t('net-lobby.step.guest.show-answer'),
+    t('net-lobby.step.guest.send-answer'),
+    t('net-lobby.step.guest.host-pastes'),
+  ];
+}
+
+/* 「已经走完」那一句（两侧同形：交接完了，屏要让位给硬币那一屏）在 `lobbyStepsOf` 里
+ * 现调 `t('net-lobby.steps.done-now')` —— 原来它是一个模块级常量，那样会把语言定死在加载时。 */
 
 /**
  * ★★ **这一帧该显示哪四步、现在停在哪一步**（T22 的唯一一处）。
@@ -1172,92 +1205,100 @@ export function lobbyStepsOf(s: LobbyState): LobbyStepsView {
     const answered = s.answerApplied !== null;
     const answerOk = s.answerApplied !== null && s.answerApplied.ok === true;
     if (!inviteOk) {
+      const [t1, t2, t3, t4] = hostStepTitles();
       return {
         steps: [
-          step(1, '生成邀请码', 'current'),
-          step(2, '把邀请码发给对方', 'todo'),
-          step(3, '对方回示（对方会产出一条回示码）', 'todo'),
-          step(4, '把回示码贴回来', 'todo'),
+          step(1, t1, 'current'),
+          step(2, t2, 'todo'),
+          step(3, t3, 'todo'),
+          step(4, t4, 'todo'),
         ],
-        now: '现在：点「生成邀请码」。',
+        now: t('net-lobby.steps.now.host-make-invite'),
       };
     }
     if (linked || answerOk) {
+      const [t1, t2, t3, t4] = hostStepTitles();
       return {
         steps: [
-          step(1, '生成邀请码', 'done'),
-          step(2, '把邀请码发给对方', 'done'),
-          step(3, '对方回示（对方会产出一条回示码）', 'done'),
-          step(4, '把回示码贴回来', 'done'),
+          step(1, t1, 'done'),
+          step(2, t2, 'done'),
+          step(3, t3, 'done'),
+          step(4, t4, 'done'),
         ],
-        now: STEPS_DONE_NOW,
+        now: t('net-lobby.steps.done-now'),
       };
     }
     if (answered) {
+      const [t1, t2, t3, t4] = hostStepTitles();
       return {
         steps: [
-          step(1, '生成邀请码', 'done'),
-          step(2, '把邀请码发给对方', 'done'),
-          step(3, '对方回示（对方会产出一条回示码）', 'done'),
-          step(4, '把回示码贴回来', 'current'),
+          step(1, t1, 'done'),
+          step(2, t2, 'done'),
+          step(3, t3, 'done'),
+          step(4, t4, 'current'),
         ],
-        now: '现在：把对方发回的回示码贴到下面那个框里。',
+        now: t('net-lobby.steps.now.host-paste-answer'),
       };
     }
+    const [t1, t2, t3, t4] = hostStepTitles();
     return {
       steps: [
-        step(1, '生成邀请码', 'done'),
-        step(2, '把邀请码发给对方', 'current'),
-        step(3, '对方回示（对方会产出一条回示码）', 'waiting'),
-        step(4, '把回示码贴回来', 'todo'),
+        step(1, t1, 'done'),
+        step(2, t2, 'current'),
+        step(3, t3, 'waiting'),
+        step(4, t4, 'todo'),
       ],
-      now: '现在：把邀请码发给对方（对方贴进去之后才会产出回示码）。',
+      now: t('net-lobby.steps.now.host-send-invite'),
     };
   }
   if (s.role === 'guest') {
     const joinedOk = s.joined !== null && s.joined.ok === true;
     const hasAnswer = s.answerCode !== null;
     if (!joinedOk) {
+      const [t1, t2, t3, t4] = guestStepTitles();
       return {
         steps: [
-          step(1, '把邀请码贴进来', 'current'),
-          step(2, '出示回示码', 'todo'),
-          step(3, '把回示码发回给房主', 'todo'),
-          step(4, '房主贴回来之后接通', 'todo'),
+          step(1, t1, 'current'),
+          step(2, t2, 'todo'),
+          step(3, t3, 'todo'),
+          step(4, t4, 'todo'),
         ],
-        now: '现在：把对方发来的邀请码贴到下面那个框里。',
+        now: t('net-lobby.steps.now.guest-paste-invite'),
       };
     }
     if (linked) {
+      const [t1, t2, t3, t4] = guestStepTitles();
       return {
         steps: [
-          step(1, '把邀请码贴进来', 'done'),
-          step(2, '出示回示码', 'done'),
-          step(3, '把回示码发回给房主', 'done'),
-          step(4, '房主贴回来之后接通', 'done'),
+          step(1, t1, 'done'),
+          step(2, t2, 'done'),
+          step(3, t3, 'done'),
+          step(4, t4, 'done'),
         ],
-        now: STEPS_DONE_NOW,
+        now: t('net-lobby.steps.done-now'),
       };
     }
     if (hasAnswer) {
+      const [t1, t2, t3, t4] = guestStepTitles();
       return {
         steps: [
-          step(1, '把邀请码贴进来', 'done'),
-          step(2, '出示回示码', 'done'),
-          step(3, '把回示码发回给房主', 'current'),
-          step(4, '房主贴回来之后接通', 'waiting'),
+          step(1, t1, 'done'),
+          step(2, t2, 'done'),
+          step(3, t3, 'current'),
+          step(4, t4, 'waiting'),
         ],
-        now: '现在：把上面那条回示码发回给房主（房主贴进去之后链路才会通）。',
+        now: t('net-lobby.steps.now.guest-send-answer'),
       };
     }
+    const [t1, t2, t3, t4] = guestStepTitles();
     return {
       steps: [
-        step(1, '把邀请码贴进来', 'done'),
-        step(2, '出示回示码', 'current'),
-        step(3, '把回示码发回给房主', 'todo'),
-        step(4, '房主贴回来之后接通', 'todo'),
+        step(1, t1, 'done'),
+        step(2, t2, 'current'),
+        step(3, t3, 'todo'),
+        step(4, t4, 'todo'),
       ],
-      now: '现在：点「出示回示码」，再把它发回给房主。',
+      now: t('net-lobby.steps.now.guest-show-answer'),
     };
   }
   return { steps: [], now: '' };
@@ -1286,10 +1327,10 @@ export function lobbyStepsOf(s: LobbyState): LobbyStepsView {
 export function lobbyPlainStatus(s: LobbyState): string | null {
   const p = s.peer;
   if (p === null) return null;
-  if (p.needsResync) return '这一局在追平：等对方把缺掉的那几步补上。';
-  if (p.online && p.handshakeDone) return '两边都接上了。';
+  if (p.needsResync) return t('net-lobby.plain.resyncing');
+  if (p.online && p.handshakeDone) return t('net-lobby.plain.linked');
   if (p.online) return null;
-  return '对端还没接上来。';
+  return t('net-lobby.plain.peer-absent');
 }
 
 /* ==================================================================== *
@@ -1696,7 +1737,7 @@ export function createLobbySessionLink(opts: {
       },
       (e: unknown) => {
         // 面这条路断了（屏抛了 / 玩家没得选）：把真因留在读数里，绝不静默
-        driveRefusal = `要面失败：${e instanceof Error ? e.message : String(e)}`;
+        driveRefusal = t('net-lobby.face.ask-failed', { detail: e instanceof Error ? e.message : String(e) });
       },
     );
   }
@@ -1744,7 +1785,7 @@ export function createLobbySessionLink(opts: {
     const enc = encodeMsg(msg);
     // 编不出来就不发：形状由会话层定，这里没有能修的余地（`decodeMsg`/`encodeMsg` 都不抛）
     if (!enc.ok) {
-      return { ok: false, reason: 'not-initialized', message: '这条消息编不出来，没有发出去。' };
+      return { ok: false, reason: 'not-initialized', message: t('net-lobby.send.encode-failed') };
     }
     // ★ **T8-E：通道由唯一一张表定**（`net-browser.ts` 的 `MESSAGE_CHANNEL`）—— 这里原来是
     //   一句 `msg.t === 'act' ? 'act' : 'beat'`，把整条握手全塞进了不可靠通道（真机实测的堵点）。
@@ -1781,9 +1822,13 @@ export function createLobbySessionLink(opts: {
     if (!r.ok) { driveRefusal = r.message; return false; }
     if (r.output === null) return false; // 相位上没有在途消息 ⇒ 合法的空操作
     const sent = send(r.output.msg);
-    if (!sent.ok) { driveRefusal = sent.message; trace(`redrive失败(${r.output.msg.t}:${sent.reason})`); return false; }
+    if (!sent.ok) {
+      driveRefusal = sent.message;
+      trace(t('net-lobby.trace.redrive-failed', { type: r.output.msg.t, reason: sent.reason }));
+      return false;
+    }
     redriven += 1;
-    trace(`redrive发出(${r.output.msg.t})`);
+    trace(t('net-lobby.trace.redrive-sent', { type: r.output.msg.t }));
     return true;
   }
 
@@ -1811,7 +1856,7 @@ export function createLobbySessionLink(opts: {
       sessionId: opts.sessionId,
       appliedSteps: Number.isInteger(applied) && applied >= 0 ? applied : 0,
     });
-    trace('发出 resync-req');
+    trace(t('net-lobby.trace.resync-req-sent'));
     return true;
   }
 
@@ -1825,14 +1870,21 @@ export function createLobbySessionLink(opts: {
   function applyResync(file: MatchFile, statesAtStep: number): boolean {
     if (session.role !== 'guest') return false;
     const r = session.applyResyncFile(file, statesAtStep);
-    if (!r.ok) { driveRefusal = r.message; trace(`applyResync拒绝(${r.message})`); return false; }
-    trace(`applyResync成功(phase=${r.phase})`);
+    if (!r.ok) {
+      driveRefusal = r.message;
+      trace(t('net-lobby.trace.apply-resync-rejected', { detail: r.message }));
+      return false;
+    }
+    trace(t('net-lobby.trace.apply-resync-ok', { phase: r.phase }));
     // ★ D23 ② 的加入方那一半：追平完成 ⇒ 按相位把"该发而未确认"的那条发出去
     if (r.output !== null) {
       const sent = send(r.output.msg);
       // ★ 修复轮：这一条也**只有真发出去了**才计数（与 `redriveOnce` 同一口径）
       if (sent.ok) redriven += 1;
-      else { driveRefusal = sent.message; trace(`applyResync重发失败(${r.output.msg.t}:${sent.reason})`); }
+      else {
+        driveRefusal = sent.message;
+        trace(t('net-lobby.trace.apply-resync-resend-failed', { type: r.output.msg.t, reason: sent.reason }));
+      }
     }
     return true;
   }
@@ -1872,7 +1924,7 @@ export function createLobbySessionLink(opts: {
     if (!decision.ok) {
       // ★ 诊断（T8-E）：被会话层拒了 —— 把那条消息的**类型**与**可读拒绝理由**记进读数，
       //   否则"两端停在 handshaking"在屏上完全看不出是被拒还是没收到。
-      trace(`accept拒绝(${dec.msg.t}:${decision.message})`);
+      trace(t('net-lobby.trace.accept-rejected', { type: dec.msg.t, detail: decision.message }));
       opts.onInbound?.();
       return true;
     }
@@ -1886,9 +1938,8 @@ export function createLobbySessionLink(opts: {
       const rebuild = opts.onResyncRes;
       const steps = rebuild === undefined ? null : rebuild(file as MatchFile);
       if (steps === null) {
-        driveRefusal = '追平失败：本端没能用这份档案重建状态（原因见屏上那一行提示）；'
-          + '本端状态一个字没动，也不假装已经追平。';
-        trace('追平失败(宿主拒绝)');
+        driveRefusal = t('net-lobby.resync.host-refused');
+        trace(t('net-lobby.trace.resync-host-refused'));
       } else {
         applyResync(file as MatchFile, steps);
       }
@@ -1927,9 +1978,12 @@ export function createLobbySessionLink(opts: {
    *     （吞掉它等于让"没发出去"看起来像"没事发生"）。
    */
   function sendHello(): boolean {
-    if (session.role !== 'guest') { trace(`sendHello:拒绝(role=${String(session.role)})`); return false; }
-    if (helloDone) { trace('sendHello:拒绝(helloDone)'); return false; }
-    trace(`sendHello:交下(status=${opts.transport.status()})`);
+    if (session.role !== 'guest') {
+      trace(t('net-lobby.trace.send-hello-role-rejected', { role: String(session.role) }));
+      return false;
+    }
+    if (helloDone) { trace(t('net-lobby.trace.send-hello-done-rejected')); return false; }
+    trace(t('net-lobby.trace.send-hello-queued', { status: opts.transport.status() }));
     pending = true;
     return flushHello();
   }
@@ -1980,11 +2034,11 @@ export function createLobbySessionLink(opts: {
    */
   function flushHello(): boolean {
     if (!pending || helloDone) {
-      trace(`flush:跳过(pending=${String(pending)},done=${String(helloDone)})`);
+      trace(t('net-lobby.trace.flush-skipped', { pending: String(pending), done: String(helloDone) }));
       return false;
     }
     if (opts.transport.status() !== 'online') {
-      trace(`flush:等状态(status=${opts.transport.status()})`);
+      trace(t('net-lobby.trace.flush-wait-status', { status: opts.transport.status() }));
       return false;
     }
     // ⚠️ 走 `send()`（= `sendIfOpen` + 记发件数）：把失败广播给 `onError` 订阅者这一点在这里是
@@ -1993,15 +2047,15 @@ export function createLobbySessionLink(opts: {
     if (!r.ok) {
       // 传输报 online 却发不出去（通道还没 open / 队列满 / 已关）：记下可读真因，等下一次机会。
       driveRefusal = r.message;
-      trace(`flush:失败(${r.reason})`);
+      trace(t('net-lobby.trace.flush-failed', { reason: r.reason }));
       if (!openHooked) {
         openHooked = true;
-        trace('flush:挂通道open');
-        opts.transport.onChannelOpen?.(() => { trace('channelOpen回调'); flushHello(); });
+        trace(t('net-lobby.trace.flush-hook-open'));
+        opts.transport.onChannelOpen?.(() => { trace(t('net-lobby.trace.channel-open')); flushHello(); });
       }
       return false;
     }
-    trace('flush:成功');
+    trace(t('net-lobby.trace.flush-ok'));
     pending = false;
     helloDone = true;
     return true;
@@ -2834,13 +2888,13 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
     const shape = pasteShapeOf(payload.trim());
     if (shape.kind === 'link-without-fragment') {
       // 看起来是链接却没有那一段 ⇒ 分形态的那句话（**不是**"开头不是整数"，那句是对载荷说的）
-      s.joined = { ok: false, reason: 'bad-base64url', message: LINK_WITHOUT_FRAGMENT_INVITE_MESSAGE };
+      s.joined = { ok: false, reason: 'bad-base64url', message: linkWithoutFragmentInviteMessage() };
       opts.onNotice?.(null);
       return;
     }
     const text = shape.payload.trim();
     if (text.length === 0) {
-      s.joined = { ok: false, reason: 'bad-base64url', message: '邀请码是空的：请把对方发来的整条邀请码完整粘贴进来。' };
+      s.joined = { ok: false, reason: 'bad-base64url', message: t('net-lobby.invite.empty') };
       opts.onNotice?.(null);
       return;
     }
@@ -3122,7 +3176,7 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
       routedIn: linkOf()?.routedIn() ?? 0,
       routedOut: linkOf()?.routedOut() ?? 0,
       helloSent: linkOf()?.helloSent() ?? false,
-      helloDiag: `${linkOf()?.helloDiag?.() ?? '（没有链路）'} | in=${String(linkOf()?.routedIn() ?? -1)}`
+      helloDiag: `${linkOf()?.helloDiag?.() ?? t('net-lobby.hello-diag.no-link')} | in=${String(linkOf()?.routedIn() ?? -1)}`
         + ` out=${String(linkOf()?.routedOut() ?? -1)}`,
       answerCode: s.answerCode,
       answerApplied: s.answerApplied,
@@ -3174,7 +3228,9 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
       }
       // ③ 频道名（唯一出处 `roomChannel`）⇒ 到这里为止**一个网络对象都没构造**
       const ch = roomChannel(norm.code);
-      s.roomCodeGate = ch.ok ? `房间码 ${norm.code} 已规范化；频道 ${String(ch.channel)}。` : ch.message;
+      s.roomCodeGate = ch.ok
+        ? t('net-lobby.room-code.normalized', { code: norm.code, channel: String(ch.channel) })
+        : ch.message;
       s.notice = null;
       s.error = null;
       beginWait();
@@ -3369,16 +3425,16 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
       const refuse = (why: string): false => {
         s.answerStatus = why; s.answerPending = false; return false;
       };
-      if (joined === null) return refuse('还没读到邀请码：把对方那条邀请码完整粘进上面的框，读完再点这个按钮。');
-      if (!joined.ok) return refuse(`这条邀请码读不出来，所以产不了回示码：${joined.message}`);
-      if (build === undefined) return refuse('这一环境没有可用的回示码能力（没有注入产回示码那一步）。');
+      if (joined === null) return refuse(t('net-lobby.answer.no-invite'));
+      if (!joined.ok) return refuse(t('net-lobby.answer.invite-unreadable', { detail: joined.message }));
+      if (build === undefined) return refuse(t('net-lobby.answer.no-capability'));
       /**
        * ★ 同一个动作**只跑一次**：`acceptOffer` 要等 ICE（中继那一档还可能先等凭据），
        * 连点两次会重叠两次协商。这一位同时给屏上一行"正在…"，玩家看得见它在干活。
        */
       if (s.answerPending) return false;
       s.answerPending = true;
-      s.answerStatus = '正在建立回示码（要等本侧 ICE 收集）…';
+      s.answerStatus = t('net-lobby.answer.building');
       const r = await build({ sdp: joined.payload.sdp, ice: joined.payload.ice }, s.answerFormat ?? null);
       s.answerPending = false;
       if (!r.ok) {
@@ -3413,12 +3469,12 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
       if (apply === undefined) return false;
       const shape = pasteShapeOf(code.trim());
       if (shape.kind === 'link-without-fragment') {
-        s.answerApplied = { ok: false, message: LINK_WITHOUT_FRAGMENT_ANSWER_MESSAGE };
+        s.answerApplied = { ok: false, message: linkWithoutFragmentAnswerMessage() };
         return false;
       }
       const text = shape.payload.trim();
       if (text.length === 0) {
-        s.answerApplied = { ok: false, message: '回示码是空的：请把对方发来的整条回示码完整粘贴进来。' };
+        s.answerApplied = { ok: false, message: t('net-lobby.answer.empty') };
         return false;
       }
       // 回示码与邀请码**同形状** ⇒ 共用同一套解码（`decodeInviteText` + 按标记的真解压）
@@ -3432,12 +3488,14 @@ export function createLobbyClient(opts: LobbyClientOptions): LobbyClient {
       if (!isAnswerPayload(dec.payload)) {
         s.answerApplied = {
           ok: false,
-          message: '这条不是对方回示的答案，而更像一条邀请码：请确认你贴的是对方在加入之后给你的那条回示码。',
+          message: t('net-lobby.answer.not-an-answer'),
         };
         return false;
       }
       const r = await apply({ sdp: dec.payload.sdp });
-      s.answerApplied = r.ok ? { ok: true, message: '已经把对方的答案接上了。' } : { ok: false, message: r.message };
+      s.answerApplied = r.ok
+        ? { ok: true, message: t('net-lobby.answer.applied') }
+        : { ok: false, message: r.message };
       return r.ok;
     },
 
@@ -3628,17 +3686,17 @@ export function browserClipboard(): ClipboardWriter | null {
 
 /** 复制成功那一句（短、说人话；`what` 是"邀请码 / 回示码 / 链接"） */
 export function copyOkText(what: string): string {
-  return `已复制${what}。`;
+  return t('net-lobby.copy.ok', { what });
 }
 
 /** 浏览器**明确拒绝**（不给剪贴板权限，或写失败）那一句：如实说 + 给出退路 */
 export function copyDeniedText(): string {
-  return '复制不了（浏览器不给剪贴板权限），请手动全选复制。';
+  return t('net-lobby.copy.denied');
 }
 
 /** 这台浏览器**根本没有**剪贴板接口那一句（非 https / localhost 的页面很常见） */
 export function copyUnavailableText(): string {
-  return '复制不了（这个页面没有剪贴板接口；不是 https 或 localhost 时常见），请手动全选复制。';
+  return t('net-lobby.copy.unavailable');
 }
 
 /**
@@ -3759,7 +3817,7 @@ function textInput(
 function appendSteps(host: HTMLElement, view: LobbyStepsView): void {
   if (view.steps.length === 0) return;
   const box = el('div', 'net-lobby-steps');
-  box.appendChild(el('h2', 'net-lobby-h2 net-lobby-steps-title', '交接步骤'));
+  box.appendChild(el('h2', 'net-lobby-h2 net-lobby-steps-title', t('net-lobby.steps.title')));
   // 「现在」那一行：整条步骤条里最显眼的一句
   box.appendChild(el('p', 'net-lobby-steps-now', view.now));
   const list = el('ol', 'net-lobby-steps-list');
@@ -3889,8 +3947,8 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
   }
   // ★ 2026-10-01（用户要求）：这个「← 返回模式选择」挪到**最前面**（屏的左上角），
   //   与其他页面「← 返回…」的位置保持一致 —— 原来它排在标题下面，看着像标题的附属。
-  screen.appendChild(button('btn-link net-lobby-back', '← 返回模式选择', nav.backHome));
-  screen.appendChild(el('h1', 'net-lobby-title', '联机对战'));
+  screen.appendChild(button('btn-link net-lobby-back', t('net-lobby.nav.back'), nav.backHome));
+  screen.appendChild(el('h1', 'net-lobby-title', t('net-lobby.title')));
 
   /* ── ★★ G5 T22：交接步骤（`role === null` 时不画：那时这一局还没开始） ── */
   if (s.role !== null) appendSteps(screen, lobbyStepsOf(s));
@@ -3914,14 +3972,14 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
      */
     const entries = el('div', 'net-lobby-entries');
     const hostCard = el('div', 'net-lobby-entry');
-    hostCard.appendChild(el('h2', 'net-lobby-entry-title', '我建房'));
-    hostCard.appendChild(el('p', 'net-lobby-entry-desc', '由你生成一条邀请码，把码发给对方。'));
-    hostCard.appendChild(button('btn net-lobby-host', '建房（生成邀请码）', nav.startHost));
+    hostCard.appendChild(el('h2', 'net-lobby-entry-title', t('net-lobby.entry.host.title')));
+    hostCard.appendChild(el('p', 'net-lobby-entry-desc', t('net-lobby.entry.host.desc')));
+    hostCard.appendChild(button('btn net-lobby-host', t('net-lobby.entry.host.btn'), nav.startHost));
     entries.appendChild(hostCard);
     const joinCard = el('div', 'net-lobby-entry');
-    joinCard.appendChild(el('h2', 'net-lobby-entry-title', '我加入'));
-    joinCard.appendChild(el('p', 'net-lobby-entry-desc', '粘贴对方发来的邀请码或整条邀请链接。'));
-    joinCard.appendChild(button('btn net-lobby-join', '加入（粘贴邀请码 / 输 6 位码）', nav.startJoin));
+    joinCard.appendChild(el('h2', 'net-lobby-entry-title', t('net-lobby.entry.guest.title')));
+    joinCard.appendChild(el('p', 'net-lobby-entry-desc', t('net-lobby.entry.guest.desc')));
+    joinCard.appendChild(button('btn net-lobby-join', t('net-lobby.entry.guest.btn'), nav.startJoin));
     entries.appendChild(joinCard);
     pick.appendChild(entries);
     screen.appendChild(pick);
@@ -3930,9 +3988,9 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
   /* ── 2. 房主：邀请码 ───────────────────────────────────────────── */
   if (s.role === 'host') {
     const box = el('div', 'net-lobby-invite');
-    box.appendChild(el('h2', 'net-lobby-h2', '把这条邀请码发给对方'));
+    box.appendChild(el('h2', 'net-lobby-h2', t('net-lobby.invite.h2')));
     if (s.invite === null) {
-      box.appendChild(button('btn net-lobby-make-invite', '生成邀请码', nav.makeInvite));
+      box.appendChild(button('btn net-lobby-make-invite', t('net-lobby.action.make-invite'), nav.makeInvite));
     } else if (!s.invite.ok) {
       // 生成失败的原因来自宿主（压缩能力缺失之类），本文件只转发它
       box.appendChild(line('net-lobby-error', s.invite.message));
@@ -3950,16 +4008,16 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
       const copyStatus = line('net-lobby-copy-status', '');
       box.appendChild(payloadLine);
       const row = el('div', 'net-lobby-copy-row');
-      row.appendChild(copyButton('net-lobby-copy-invite', '复制邀请码', s.invite.payload, '邀请码', copyStatus, payloadLine));
+      row.appendChild(copyButton('net-lobby-copy-invite', t('net-lobby.copy.invite.label'), s.invite.payload, t('net-lobby.what.invite'), copyStatus, payloadLine));
       const linkLine = line('net-lobby-invite-link', s.invite.link);
-      row.appendChild(copyButton('net-lobby-copy-link', '复制链接', s.invite.link, '链接', copyStatus, linkLine));
+      row.appendChild(copyButton('net-lobby-copy-link', t('net-lobby.copy.link.label'), s.invite.link, t('net-lobby.what.link'), copyStatus, linkLine));
       box.appendChild(row);
       box.appendChild(copyStatus);
       // 长度读数**只能**来自 T7 的唯一取值路径（判据 9：本文件里零命中那两个区间数）
       // ★ T22：它是**佐证**（这条码多长、会不会被聊天工具截断）⇒ 退到按钮下面那行小字
       box.appendChild(el('p', 'net-lobby-invite-length', nav.inviteLength(s.invite.payload, s.invite.compact)));
       const more = el('details', 'net-lobby-invite-link-more');
-      more.appendChild(el('summary', 'net-lobby-invite-link-summary', '链接形态（也可以把整条链接发过去）'));
+      more.appendChild(el('summary', 'net-lobby-invite-link-summary', t('net-lobby.invite.link-summary')));
       more.appendChild(linkLine);
       box.appendChild(more);
     }
@@ -3980,7 +4038,7 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
      * 短码那一块退到这一屏的最后（它的提示词仍然**逐字**来自 `NO_ENDPOINT_MESSAGE`）。
      */
     const pasteBox = el('div', 'net-lobby-paste');
-    pasteBox.appendChild(el('h2', 'net-lobby-h2', '粘贴对方发来的邀请码'));
+    pasteBox.appendChild(el('h2', 'net-lobby-h2', t('net-lobby.paste.h2')));
     const pasteInput = textInput(
       'net-lobby-paste-input',
       pasteMem.text,
@@ -4003,8 +4061,8 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
      */
     if (s.joined !== null) {
       pasteBox.appendChild(el('p', 'net-lobby-paste-read', s.joined.ok
-        ? '读到了：这是一条邀请码，接下来会尝试接上对端。'
-        : '没读到可用的邀请码。'));
+        ? t('net-lobby.paste.read-ok')
+        : t('net-lobby.paste.read-none')));
     }
     if (s.joined !== null && !s.joined.ok) {
       pasteBox.appendChild(line('net-lobby-error', s.joined.message));
@@ -4021,7 +4079,7 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
     // 为什么需要这一块：B3 的"回示码"在产出代码里已经能产，但**界面上没有入口**
     // ⇒ 玩家看不到它，那条路等于不存在（T9 任务书作者挖出的结构缺口 ③）。
     const ansBox = el('div', 'net-lobby-answer');
-    ansBox.appendChild(el('h2', 'net-lobby-h2', '把回示码发回给房主'));
+    ansBox.appendChild(el('h2', 'net-lobby-h2', t('net-lobby.step.guest.send-answer')));
     if (s.answerCode === null) {
       /**
        * ★★ **G6/T50：这一段里「出示回示码」旁边必须有一句说明**（"点早了没反应"的真因）。
@@ -4033,11 +4091,11 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
        *  - `joined.ok === true` 而还在接 ⇒ 码解开了，正在建对端连接（这一步里有中继凭据那一等）。
        * 玩家点下去时若还没就绪，得到的是**一句人话**而不是静默（见 `makeAnswer` 的兜底）。
        */
-      ansBox.appendChild(button('btn net-lobby-make-answer', '出示回示码', nav.makeAnswerCode));
+      ansBox.appendChild(button('btn net-lobby-make-answer', t('net-lobby.step.guest.show-answer'), nav.makeAnswerCode));
       if (s.guestJoinPending === true) {
         ansBox.appendChild(line('net-lobby-answer-pending', s.joined === null
-          ? '正在解析对方的邀请码…读完就能出示回示码了（不用重复粘贴）。'
-          : '邀请码已经读到了，正在接上对端…接好就能出示回示码了。'));
+          ? t('net-lobby.answer.pending-parsing')
+          : t('net-lobby.answer.pending-connecting')));
       }
       /**
        * ★ G6/T50：`answerStatus` 是**回示码那条路**自己的读数（点早了 / 正在建 / 失败真因）。
@@ -4056,20 +4114,20 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
       const codeLine = line('net-lobby-answer-code', s.answerCode);
       const ansStatus = line('net-lobby-copy-status', '');
       ansBox.appendChild(codeLine);
-      ansBox.appendChild(copyButton('net-lobby-copy-answer', '复制回示码', s.answerCode, '回示码', ansStatus, codeLine));
+      ansBox.appendChild(copyButton('net-lobby-copy-answer', t('net-lobby.copy.answer.label'), s.answerCode, t('net-lobby.what.answer'), ansStatus, codeLine));
       ansBox.appendChild(ansStatus);
     }
     box.appendChild(ansBox);
 
     // ── 短码那一块（T22 排到这一屏最后：它不是今天能走通的那条路）──────────────
     const codeBox = el('div', 'net-lobby-code');
-    codeBox.appendChild(el('h2', 'net-lobby-h2', '输 6 位房间码'));
+    codeBox.appendChild(el('h2', 'net-lobby-h2', t('net-lobby.room-code.h2')));
     // 输入框与按钮排成一行（窄屏自动换行 —— 见 `.net-lobby-code-row` 那条规则）
     const codeRow = el('div', 'net-lobby-code-row');
     codeRow.appendChild(textInput(
       'net-lobby-code-input', s.roomCodeInput, nav.setRoomCode, () => { nav.submitRoomCode(); },
     ));
-    codeRow.appendChild(button('btn net-lobby-code-submit', '用这个房间码连接', nav.submitRoomCode));
+    codeRow.appendChild(button('btn net-lobby-code-submit', t('net-lobby.room-code.submit'), nav.submitRoomCode));
     codeBox.appendChild(codeRow);
     // ★ 端点为空时的那句提示：**逐字**来自 `NO_ENDPOINT_MESSAGE`（本文件不写第二份）
     if (s.roomCodeGate !== null) codeBox.appendChild(line('net-lobby-code-gate', s.roomCodeGate));
@@ -4080,7 +4138,7 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
   // ── ★ C3：房主那一栏的「粘贴对方的回示码」 ────────────────────────────────
   if (s.role === 'host') {
     const back = el('div', 'net-lobby-answer-back');
-    back.appendChild(el('h2', 'net-lobby-h2', '对方回示之后：粘贴回示码'));
+    back.appendChild(el('h2', 'net-lobby-h2', t('net-lobby.answer-back.h2')));
     const answerInput = textInput(
       'net-lobby-answer-input',
       answerMem.text,
@@ -4106,7 +4164,7 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
   /* ── 4. 连接状态（读数同源） ───────────────────────────────────── */
   if (s.peer !== null) {
     const st = el('div', 'net-lobby-status');
-    st.appendChild(el('h2', 'net-lobby-h2', '连接状态'));
+    st.appendChild(el('h2', 'net-lobby-h2', t('net-lobby.status.h2')));
     /**
      * ★ G5 T22 的顺序：**先说人话**（这一步在等什么）→ 再说 T6 那张表那句（对端什么状态）
      * → 最后才是相位名（调试读数，小字）。人话那一行**不是每格都有**（见 `lobbyPlainStatus`：
@@ -4115,15 +4173,15 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
     const plain = lobbyPlainStatus(s);
     if (plain !== null) st.appendChild(line('net-lobby-status-human', plain));
     st.appendChild(line('net-lobby-link', lobbyLinkText(s.peer)));
-    st.appendChild(line('net-lobby-phase', `会话相位：${s.peer.phase}`));
+    st.appendChild(line('net-lobby-phase', t('net-lobby.status.phase', { phase: s.peer.phase })));
     screen.appendChild(st);
   } else if (s.transport !== 'idle') {
     // ⚠️ `transport.status()` **不是**"对端在线"（D18）：它只报本侧链路。
     // 所以这一格刻意不说"已连上对端"，只说本侧链路到了哪一步。
     const st = el('div', 'net-lobby-status');
-    st.appendChild(el('h2', 'net-lobby-h2', '连接状态'));
-    st.appendChild(line('net-lobby-status-human', '本侧的链路已经建起来了，在等对端接上。'));
-    st.appendChild(line('net-lobby-phase', `本机链路：${s.transport}（这只表示本侧，不代表对端在）`));
+    st.appendChild(el('h2', 'net-lobby-h2', t('net-lobby.status.h2')));
+    st.appendChild(line('net-lobby-status-human', t('net-lobby.status.local-link-up')));
+    st.appendChild(line('net-lobby-phase', t('net-lobby.status.local-link', { transport: s.transport })));
     screen.appendChild(st);
   }
 
@@ -4146,7 +4204,7 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
 
   /* ── 5.「高级 / 连接设置」折叠区（默认折叠 ⇒ 内容不进 DOM） ────── */
   const adv = el('div', 'net-lobby-advanced');
-  const toggle = button('btn-link net-lobby-advanced-toggle', '高级 / 连接设置', nav.toggleAdvanced);
+  const toggle = button('btn-link net-lobby-advanced-toggle', t('net-lobby.advanced.toggle'), nav.toggleAdvanced);
   toggle.setAttribute('aria-expanded', s.advancedOpen ? 'true' : 'false');
   adv.appendChild(toggle);
   if (s.advancedOpen) {
@@ -4156,12 +4214,12 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
     // ★ **零手写信令说明**（修复轮）：端点那两行是 `src/net/invite.ts` 的两个导出常量。
     //   第一版这里手写了"没有它时「输 6 位码」这条路走不了，邀请码不受影响" —— 那是**第二份**
     //   信令说明（评审 §4.2 判 §2 第 6 条违例），现在改成引用。
-    panel.appendChild(el('h3', 'net-lobby-h3', '信令端点'));
+    panel.appendChild(el('h3', 'net-lobby-h3', t('net-lobby.advanced.endpoint.h3')));
     panel.appendChild(el('p', 'net-lobby-endpoint', s.endpoint.length === 0
       ? NO_ENDPOINT_HEADLINE
-      : `已配置信令端点：${s.endpoint}`));
+      : t('net-lobby.advanced.endpoint.configured', { endpoint: s.endpoint })));
     panel.appendChild(el('p', 'net-lobby-endpoint-reason', NO_ENDPOINT_REASON));
-    panel.appendChild(el('h3', 'net-lobby-h3', '中继（TURN）'));
+    panel.appendChild(el('h3', 'net-lobby-h3', t('net-lobby.advanced.relay.h3')));
     /**
      * ★★ **G5 T15：这一小块默认收起**（普通玩家不该看见三个空输入框）。
      *
@@ -4180,9 +4238,7 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
      * 仍然不含任何隐私承诺：中继那句隐私说明的唯一出处是 `src/app/privacy.ts`，
      * 启用/默认生效之后由下面那句 `relayNoticeOf(s.ice)` 原样引用进来（D22）。
      */
-    panel.appendChild(el('p', 'net-lobby-relay-hint', '这一块平时不用管：默认那台中继够用 ——'
-      + '两端能直连时走直连，直连打不通时会自动经它转发。'
-      + '只有你想换成自己的中继，才需要填下面这三项。'));
+    panel.appendChild(el('p', 'net-lobby-relay-hint', t('net-lobby.advanced.relay.hint')));
     const relayToggle = el('label', 'net-lobby-relay-toggle');
     const relayBox = document.createElement('input');
     relayBox.type = 'checkbox';
@@ -4190,15 +4246,15 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
     relayBox.checked = relayShown;
     relayBox.addEventListener('change', () => { nav.toggleRelay(); });
     relayToggle.appendChild(relayBox);
-    relayToggle.appendChild(el('span', 'net-lobby-relay-toggle-label', '改用我自己的中继（TURN）'));
+    relayToggle.appendChild(el('span', 'net-lobby-relay-toggle-label', t('net-lobby.advanced.relay.toggle')));
     panel.appendChild(relayToggle);
     if (relayShown) {
       // 展开之后才渲染那三项（同"默认不渲染"纪律：桩上分不出 `display:none` 与"已展开"）
       panel.appendChild(el('p', 'net-lobby-relay-hint',
-        '要改就得三项齐全（URL、用户名、凭据）；三项填齐之后以你填的为准。'));
+        t('net-lobby.advanced.relay.need-all')));
       appendField(panel, 'net-lobby-turn-url', 'TURN URL', 'turnUrl', nav);
-      appendField(panel, 'net-lobby-turn-user', 'TURN 用户名', 'turnUsername', nav);
-      appendField(panel, 'net-lobby-turn-cred', 'TURN 凭据', 'turnCredential', nav);
+      appendField(panel, 'net-lobby-turn-user', t('net-lobby.advanced.turn.username'), 'turnUsername', nav);
+      appendField(panel, 'net-lobby-turn-cred', t('net-lobby.advanced.turn.credential'), 'turnCredential', nav);
     }
     // ★ 启用（或配了一半）之后让玩家**看见**那句：文案本体逐字来自 `src/app/privacy.ts:111`
     // （D22：本文件一个字都不许改写它，也不许再加第二句）
@@ -4245,9 +4301,12 @@ export function inviteLengthText(chars: number, withinMeasuredRange: boolean): s
    * 区间由 `inviteLengthReport` 按这条码**实际用的档位**选（未压缩变体用它自己的上界）⇒
    * 一条 1826 字符的正常 `-u` 码不会在屏上被说成"可能被截断"（那是最老内核唯一能用的那档）。
    */
-  return `这条邀请码 ${chars} 个字符；${withinMeasuredRange
-    ? '落在这一档的实测区间内。'
-    : '不在这一档的实测区间内（比实测的长或短）—— 仍然可用，但可能被某些聊天工具截断，发送时注意。'}`;
+  return t('net-lobby.invite-length.chars', {
+    chars: String(chars),
+    verdict: withinMeasuredRange
+      ? t('net-lobby.invite-length.within')
+      : t('net-lobby.invite-length.outside'),
+  });
 }
 
 /** 二维码占位说明（`qrPlaceholder()` 的唯一出口；本文件不实现编码器） */
@@ -4263,12 +4322,12 @@ export function qrNote(): string {
 export function protoOfPayload(payload: string): { ok: true; proto: number } | { ok: false; message: string } {
   const dot = payload.indexOf('.');
   if (dot <= 0) {
-    return { ok: false, message: '这不是一条邀请码：它没有"协议版本.压缩段"这个两段结构。' };
+    return { ok: false, message: t('net-lobby.proto.not-invite') };
   }
   const head = payload.slice(0, dot);
   const n = Number(head);
   if (!Number.isInteger(n) || n <= 0) {
-    return { ok: false, message: `邀请码的协议版本段不是一个正整数（读到 ${JSON.stringify(head)}）。` };
+    return { ok: false, message: t('net-lobby.proto.bad-head', { head: JSON.stringify(head) }) };
   }
   return { ok: true, proto: n };
 }

@@ -41,6 +41,7 @@
  * （新增表必须在那份测试里显式归类，而测试文件不在本任务的边界内）⇒ 那句话的样式
  * **写在本模块里用行内 `style` 落地**，一个字节不进任何样式表。
  * ========================================================================== */
+import { t } from '../i18n';
 
 /** 兜底那句话的类名（断言与样式各一处） */
 export const T44_TRANSITION_HINT_CLASS = 't44-transition-hint';
@@ -75,7 +76,9 @@ function decorateOverlay(overlay: Element): void {
   const hint = document.createElement('p');
   hint.className = T44_TRANSITION_HINT_CLASS;
   styleHint(hint);
-  hint.textContent = '正在进入对局……';
+  // ★ 2026-10-02（i18n 逐屏抽取）：文案搬进 `src/i18n/`（键 `t44.transition-hint`），
+  //   中文值**逐字等于改动前**的 `正在进入对局……`。这句是**覆盖层出现时现调**的。
+  hint.textContent = t('t44.transition-hint');
   overlay.appendChild(hint);
 }
 

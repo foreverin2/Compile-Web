@@ -14,7 +14,7 @@ import {
   writeOnboardingSeen,
 } from '../../src/app/local-store';
 import {
-  ONBOARDING_LABELS,
+  onboardingLabels,
   ONBOARDING_STEPS,
   onboardingOverlayElement,
   type OnboardingOutcome,

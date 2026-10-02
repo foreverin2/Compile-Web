@@ -121,17 +121,24 @@ const MANIFEST_FILES: readonly string[] = [
 ].sort();
 
 /**
- * 判为"**已经抽干净**"的例外（P0 只剩这一个）——**必须同时满足**下面两条，缺一条就报红：
+ * 判为"**已经抽干净**"的例外 —— 必须同时满足下面两条，缺一条就报红：
  *
  *  1. 它的文件路径在清单里被**显式标注**为"干净/特例"（本文件用 `CLEAN_DECLARED` 写死，
  *     并在清单 D 节里说明理由）；
  *  2. 它剩下的中文字面量**逐条**都能在 `zh.ts` 的**值**里找到（= 它只是那份文案的
  *     数据源/文档字段，不是散落的第二份中文）。
  *
- * `src/ui/fx-settings.ts` 就是这一档：P0 把它的 label/desc 降级成**文档字段**，
+ * `src/ui/fx-settings.ts` 是这一档的第一个：P0 把它的 label/desc 降级成**文档字段**，
  * 值必须与中文表逐字相同（`tests/i18n/settings-overlay.test.ts` 另有一条腿三方对齐）。
+ *
+ * ★ 2026-10-02（P3 第二批）：`src/ui/cardmaker/page.ts` 也进了这一档。
+ * 它剩下的**三条**中文字面量（`CREDIT.license` / `CREDIT.sentence` / `PANEL_EMPTY_HINT`）
+ * 是**有意留成纯数据的常量**：一旦在模块作用域写 `t()`，语言就被冻在 import 那一刻
+ * （那是个真 bug，本轮实测抓到过）。屏上那三处都走渲染点的 `t('cardmaker.page.…')`
+ * ⇒ 这三条与表里的值逐字相同，**不是**第二份中文。
+ * 上面那条腿同样适用于它：将来 page.ts 里多出**任何**一条新的中文字面量 ⇒ 立刻报红。
  */
-const CLEAN_DECLARED: readonly string[] = ['src/ui/fx-settings.ts'];
+const CLEAN_DECLARED: readonly string[] = ['src/ui/fx-settings.ts', 'src/ui/cardmaker/page.ts'];
 
 /**
  * ★ 2026-10-01（C）：**已经抽干净、但代码位里还剩"非玩家可见"字符串**的文件。
@@ -144,6 +151,16 @@ const CLEAN_DECLARED: readonly string[] = ['src/ui/fx-settings.ts'];
  */
 const DEV_ONLY: Readonly<Record<string, readonly string[]>> = {
   'src/ui/home.ts': ['renderCoin：热座这条路必须给 nav.seed（联机那条路要写 nav.net 分支）。'],
+  /**
+   * ★ 2026-10-02（P3 第二批）：`src/ui/pwa-update.ts` 的**唯一**残留。
+   *
+   * `onCacheIncomplete` 的默认实现往**开发者控制台**报一句 `[PWA] 离线预缓存未完成：…` ——
+   * 它不是屏上的文案（`PwaEnv.onCacheIncomplete` 的注释写着它是"install 失败不静默"的出口），
+   * 所以不进文案表。条目、文件（`pwa-update.ts`）与理由并排列在这里：
+   * 同一文件里**再出现任何新的中文字面量**都会立刻回到"必须登记"的判据面里。
+   * 这一档与 `home.ts` 那条同族（P0 的 `renderCoin` 用法错误）。
+   */
+  'src/ui/pwa-update.ts': ['[PWA] 离线预缓存未完成：${reason}'],
 };
 
 describe('★ 尚未抽取的屏：清单只能变短，不能变长', () => {
@@ -179,12 +196,20 @@ describe('★ 尚未抽取的屏：清单只能变短，不能变长', () => {
   });
 
   it('清单解析自检：真的解析到了那些行（否则下面两条判据在空集合上恒真）', () => {
-    expect(MANIFEST_FILES.length, '清单里一个 src/ui 路径都没解析到').toBeGreaterThan(20);
+    expect(MANIFEST_FILES.length, '清单里一个 src/ui 路径都没解析到').toBeGreaterThan(10);
+    // ★ 2026-10-02（P3 第二批）：`net-lobby.ts` 抽完 ⇒ 锚点换成**还在待办表里**的两屏
+    //   （红线屏 `render.ts` / `render-net.ts`）。前一版的锚点就是 `net-lobby.ts`，
+    //   它抽干净之后按"清单只准变短"的规矩从表里删掉了。
     expect(MANIFEST_FILES).toContain('src/ui/render.ts');
-    expect(MANIFEST_FILES).toContain('src/ui/net-lobby.ts');
+    expect(MANIFEST_FILES).toContain('src/ui/render-net.ts');
     // ★ 2026-10-01（C）：`home.ts` / `local-data.ts` 抽完 ⇒ **已经不在**待办行里（清单只准变短）
     expect(MANIFEST_FILES, '抽完的屏还挂在待办行里').not.toContain('src/ui/home.ts');
     expect(MANIFEST_FILES, '抽完的屏还挂在待办行里').not.toContain('src/ui/local-data.ts');
+    // ★ 2026-10-02（P3 第二批）：这一批抽完的屏同样不许留在待办行里
+    expect(MANIFEST_FILES, '抽完的屏还挂在待办行里').not.toContain('src/ui/net-lobby.ts');
+    expect(MANIFEST_FILES, '抽完的屏还挂在待办行里').not.toContain('src/ui/cardmaker/page.ts');
+    expect(MANIFEST_FILES, '抽完的屏还挂在待办行里').not.toContain('src/ui/feedback-screen.ts');
+    expect(MANIFEST_FILES, '抽完的屏还挂在待办行里').not.toContain('src/ui/onboarding.ts');
     // 反向锚点：那两屏在**文档正文**里仍然被提到（"已完成"记录），所以这个空不是"文档塌了"
     expect(MANIFEST_TEXT, '文档里连"已抽取的两屏"那段都没有了').toContain('已抽取');
   });

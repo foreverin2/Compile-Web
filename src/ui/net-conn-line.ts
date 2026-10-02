@@ -37,13 +37,18 @@
  * 把新那一对的 `candidateType` 读出来 ⇒ 这一行**跟着变**（判据 4）。
  */
 
+import { t } from '../i18n';
 import { readRelayStatsOf, type PeerConnectionLike, type RelayStatsKind } from './net-browser';
 
 /** 这一行在 DOM 上的类名（唯一的产出点与读取口径；真浏览器门按它取屏上原文） */
 export const NET_CONN_LINE_CLASS = 'net-conn-line';
 
 /**
- * 三值 → 屏上那一句**字面**（唯一出处；判据 6 的字符串腿钉的就是这三个）。
+ * 三值 → 屏上那一句（唯一出处；判据 6 的字符串腿钉的就是这三个）。
+ *
+ * ★ 2026-10-02（i18n 逐屏抽取）：三句中文**搬进 `src/i18n/` 的两张表**（键
+ * `net-conn-line.direct` / `.relay` / `.pending`），中文值**逐字等于改动前**那三个字面量，
+ * 英文另给一版。本函数仍在**调用时**取文案（不是模块加载时）⇒ 切语言之后下一次刷新就是新语言。
  *
  * 口径（任务书 §1）：
  *  - `'direct'`：选中的候选对里两边都不是 `relay` ⇒ `当前连接：直连`；
@@ -52,9 +57,9 @@ export const NET_CONN_LINE_CLASS = 'net-conn-line';
  *    —— **拿不到就如实说"建立中"**，不许猜成"直连"。
  */
 export function netConnText(kind: RelayStatsKind): string {
-  if (kind === 'relay') return '当前连接：经中继';
-  if (kind === 'direct') return '当前连接：直连';
-  return '当前连接：建立中…';
+  if (kind === 'relay') return t('net-conn-line.relay');
+  if (kind === 'direct') return t('net-conn-line.direct');
+  return t('net-conn-line.pending');
 }
 
 /** 这一行的行内样式（**不新增样式表**；理由见文件头）。 */

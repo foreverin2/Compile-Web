@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import type { GameState } from '../core/models/types';
 import { getLineValue } from '../core/state/create';
 import { envInfo, formatTrace, stateDetail, traceEntries } from '../core/trace';
@@ -7,6 +8,18 @@ import { envInfo, formatTrace, stateDetail, traceEntries } from '../core/trace';
  * 可导出「错误 + 控制台记录 + 游戏事件日志 + 状态快照」文本文件供开发者分析。
  * 纯函数部分（snapshotState / formatDiagnosticLog）可单测；浏览器 API 部分
  * （initDiag / downloadLog / 自动提示）在 main.ts 装配。
+ *
+ * ## ★ 2026-10-02（i18n 逐屏抽取）：只抽**玩家会看到的那一个浮层**
+ *
+ * 本文件里只有一处是"屏上给玩家看的话"：出错时那个「是否导出诊断日志」的浮层
+ * （`showErrorPrompt()` 的三句）。它们走 `t('diag.*')`，中文值**逐字等于改动前**。
+ *
+ * ⚠️ **导出文件里的那些行不进文案表**（`snapshotState()` / `formatDiagnosticLog()` /
+ * `gen3LayerReport()`：`挂起选择=` / `---- 环境信息 ----` / `层容器总数:` …）：
+ *  - 它们不是屏上的界面文案，而是**导出来的诊断读数**，收件人是开发者；
+ *  - 而且它们**被既有测试逐字钉着**（`tests/diag.test.ts` 钉 `P1: 手牌=0` / `挂起选择=1` /
+ *    `===== Compile 诊断日志 =====` / `---- 环境信息 ----` 等）⇒ 翻译它们等于改那些判据面。
+ *  ⇒ 它们是**开发者可见的诊断读数**，与 `devmode.ts` 同族（那份台账里的口径）。
  */
 
 export interface ConsoleEntry {
@@ -77,7 +90,7 @@ function showErrorPrompt(): void {
   promptEl.textContent = '';
   const title = document.createElement('div');
   title.className = 'diag-prompt-title';
-  title.textContent = '⚠ 发生运行时错误，是否导出诊断日志？';
+  title.textContent = t('diag.prompt.title');
   const msg = document.createElement('div');
   msg.className = 'diag-prompt-msg';
   msg.textContent = last.message;
@@ -85,7 +98,7 @@ function showErrorPrompt(): void {
   bar.className = 'diag-prompt-bar';
   const exportBtn = document.createElement('button');
   exportBtn.className = 'btn';
-  exportBtn.textContent = '导出日志';
+  exportBtn.textContent = t('diag.prompt.export');
   exportBtn.addEventListener('click', () => {
     downloadLog();
     promptEl?.remove();
@@ -93,7 +106,7 @@ function showErrorPrompt(): void {
   });
   const ignoreBtn = document.createElement('button');
   ignoreBtn.className = 'btn';
-  ignoreBtn.textContent = '忽略';
+  ignoreBtn.textContent = t('diag.prompt.ignore');
   ignoreBtn.addEventListener('click', () => {
     promptEl?.remove();
     promptEl = null;

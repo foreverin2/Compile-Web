@@ -25,7 +25,10 @@
  *     "行为腿"覆盖、而不是只有文本腿的原因。
  *  2. **canvas 拿不到 2D 上下文时不抛**：桩上 `getContext()` 返回 `null`。
  *     绘制路径一律在 `ctx === null` 时跳过（屏上结构与编辑逻辑照常可测）。
+ *
+ * ★ 2026-10-02（i18n 逐屏抽取）：本屏玩家可见文案搬进 src/i18n/（键 cardmaker.*），中文值逐字等于改动前的字面量。
  */
+import { t } from '../../i18n';
 import {
   ASSET_BASE,
   CARD_H,
@@ -153,17 +156,29 @@ function btnRole(cls: string, role: string, label: string): HTMLButtonElement {
   return b;
 }
 
-/** 屏上那句署名里的关键事实（测试直接引用这些常量，不手抄一遍文案） */
+/**
+ * 屏上那句署名里的关键事实（测试直接引用这些常量，不手抄一遍文案）。
+ *
+ * ⚠️ **这里是纯数据，不许出现 `t()`**（★ 2026-10-02 i18n 抽取时定的）：模块级对象只在
+ * 模块被 import 的那一刻求值一次，`t()` 写在这儿会把"那一刻的语言"冻住 —— 之后切语言，
+ * 署名那两处就会停在旧语言上。取文案一律在**渲染点**（`creditMeta` / `credit` 那几行）。
+ *
+ * ⚠️ 这几个中文字面量与 `src/i18n/zh.ts` 里对应键的**值逐字相同**（那份值才是屏上真正的
+ * 出处）⇒ 本文件与 `src/ui/fx-settings.ts` 同属"剩下的中文是数据源、不是第二份文案"那一档，
+ * 由 `tests/i18n/unextracted-manifest.test.ts` 的 `CLEAN_DECLARED` 逐条自证。
+ * `sentence` 写成**一整行**就是为了那条自证能逐字比对（两行拼接的同一个串比不出来）。
+ */
 export const CREDIT = {
   project: 'COMPILER · Card Builder',
   author: 'Albert Blanco',
-  license: 'MIT 许可',
+  // ⚠️ 取的是**表里的值**（`t('cardmaker.page.credit.license-value')`）而不是就地写中文字面量：
+  //    于是"屏上那一份许可名"只有表里一个家，本文件剩下的中文都是**数据源**
+  //    （由 `tests/i18n/unextracted-manifest.test.ts` 的 `CLEAN_DECLARED` 逐条自证）。
+  license: t('cardmaker.page.credit.license-value'),
   url: 'https://github.com/albrtbc/compiler',
   /** 许可原文在仓库里的路径（页面底部也写上，用户能照着去翻） */
   licensePath: 'public/assets/cardmaker/LICENSE-COMPILER-Card-Builder.txt',
-  sentence:
-    '本制作器参考开源项目 COMPILER · Card Builder（作者 Albert Blanco，MIT 许可）制作，'
-    + '素材（卡框/背景/卡背/字体）亦来自该项目。',
+  sentence: '本制作器参考开源项目 COMPILER · Card Builder（作者 Albert Blanco，MIT 许可）制作，素材（卡框/背景/卡背/字体）亦来自该项目。',
 } as const;
 
 /** 卡的 id：尽量用浏览器自带的 UUID，老环境回落到"时间戳 + 计数器" */
@@ -183,16 +198,30 @@ function newCardId(): string {
  * 更新说明，中部/下部打字时说明停在旧文案上（测试当场抓到了这个不一致）。
  */
 function panelSummary(top: string, mid: string, bot: string): string {
-  const panels = [top, mid, bot].map((t) => (t || '').replace(/\s+$/g, ''));
-  const filled = panels.filter((t) => t.trim() !== '');
-  if (filled.length === 0) return PANEL_EMPTY_HINT;
-  const paras = filled.reduce((n, t) => n + t.split('\n').length, 0);
-  const marks = filled.some((t) => t.includes('**') || t.includes('__'));
-  return `当前有 ${filled.length} 段面板文本（共 ${paras} 段${marks ? '，含行内标记' : ''}）· `
-    + `行内标记写法：**粗体** 与 __下划线__ · 字号自动在 ${PANEL_MIN}–${PANEL_MAX}px 之间缩放`;
+  // ⚠️ 这三个形参名**不叫 `t`**（★ 2026-10-02 i18n 抽取时改的）：`t` 现在是本文件 import 的
+  // 文案取值函数，用同名局部形参会把它遮住（`panelSummary` 里正要调它取文案）。
+  const panels = [top, mid, bot].map((s) => (s || '').replace(/\s+$/g, ''));
+  const filled = panels.filter((s) => s.trim() !== '');
+  if (filled.length === 0) return t('cardmaker.page.panel.empty-hint');
+  const paras = filled.reduce((n, s) => n + s.split('\n').length, 0);
+  const marksPhrase = filled.some((s) => s.includes('**') || s.includes('__'))
+    ? t('cardmaker.page.panel.marks-phrase')
+    : '';
+  return t('cardmaker.page.panel.summary', {
+    n: String(filled.length),
+    paras: String(paras),
+    marks: marksPhrase,
+    min: String(PANEL_MIN),
+    max: String(PANEL_MAX),
+  });
 }
 
-/** 面板全空的提示（与参考项目一致：没有文字就不画面板底衬） */
+/**
+ * 面板全空的提示（与参考项目一致：没有文字就不画面板底衬）。
+ *
+ * ⚠️ 这是**纯数据常量**，不是取文案的地方：模块级 `t()` 会把 import 那一刻的语言冻住
+ * （理由见 `CREDIT`）。屏上那句由 `t('cardmaker.page.panel.empty-hint')` 在渲染点取。
+ */
 export const PANEL_EMPTY_HINT = '三段面板都没有文字：卡面不会画面板底衬（与参考项目一致）。';
 
 /* ── 屏 ─────────────────────────────────────────────────────────────── */
@@ -244,11 +273,11 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
 
   /* ── ① 顶栏 ── */
   const top = el('div', 'cardmaker-top');
-  const backBtn = btnRole('btn', 'back', '← 返回主页面');
+  const backBtn = btnRole('btn', 'back', t('cardmaker.page.back'));
   backBtn.addEventListener('click', () => { nav.back(); });
   top.appendChild(backBtn);
-  top.appendChild(el('h1', 'cardmaker-title', '自定义协议与卡牌'));
-  const saveBtn = btnRole('btn', 'save', '保存到本机');
+  top.appendChild(el('h1', 'cardmaker-title', t('cardmaker.page.title')));
+  const saveBtn = btnRole('btn', 'save', t('cardmaker.page.save'));
   saveBtn.addEventListener('click', () => { void saveNow(); });
   top.appendChild(saveBtn);
   screen.appendChild(top);
@@ -271,8 +300,8 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
   (modeBar as HTMLElement & { setAttribute(n: string, v: string): void }).setAttribute('role', 'tablist');
   const modeHint = elRole('span', 'cardmaker-note', 'mode-hint', '');
   const modeBtns: Record<CardKind, HTMLButtonElement> = {
-    protocol: btnRole('btn cardmaker-mode', 'mode-protocol', '协议卡（横版 · 正/背两面）'),
-    compile: btnRole('btn cardmaker-mode', 'mode-compile', '卡牌（竖版编译卡）'),
+    protocol: btnRole('btn cardmaker-mode', 'mode-protocol', t('cardmaker.page.mode.protocol')),
+    compile: btnRole('btn cardmaker-mode', 'mode-compile', t('cardmaker.page.mode.compile')),
   };
   (modeBtns.protocol as unknown as { setAttribute(n: string, v: string): void }).setAttribute('role', 'tab');
   (modeBtns.compile as unknown as { setAttribute(n: string, v: string): void }).setAttribute('role', 'tab');
@@ -300,10 +329,10 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
    */
   const faceBar = elRole('div', 'cardmaker-faces', 'faces');
   (faceBar as HTMLElement & { setAttribute(n: string, v: string): void }).setAttribute('role', 'tablist');
-  faceBar.appendChild(el('span', 'cardmaker-note', '这一面：'));
+  faceBar.appendChild(el('span', 'cardmaker-note', t('cardmaker.page.face.which')));
   const faceBtns: Record<CardSide, HTMLButtonElement> = {
-    front: btnRole('btn cardmaker-mini cardmaker-face', 'face-front', '正面'),
-    back: btnRole('btn cardmaker-mini cardmaker-face', 'face-back', '背面'),
+    front: btnRole('btn cardmaker-mini cardmaker-face', 'face-front', t('cardmaker.page.face.front')),
+    back: btnRole('btn cardmaker-mini cardmaker-face', 'face-back', t('cardmaker.page.face.back')),
   };
   (faceBtns.front as unknown as { setAttribute(n: string, v: string): void }).setAttribute('role', 'tab');
   (faceBtns.back as unknown as { setAttribute(n: string, v: string): void }).setAttribute('role', 'tab');
@@ -319,8 +348,8 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
   status.dataset.kind = 'none';
   // 默认文案直接说清"存到哪"，因为两档（允许 / 游客）的后果**不一样**
   status.textContent = nav.store.isPersistent()
-    ? '改动会自动保存到本机（浏览器存储），刷新后仍在。'
-    : '当前是游客模式或本机存储不可用：改动只存在内存里，刷新或关闭页面就会丢。';
+    ? t('cardmaker.page.status.persistent')
+    : t('cardmaker.page.status.memory');
   screen.appendChild(status);
   const say = (msg: string, code: string, kind: 'info' | 'warn' | 'error'): void => {
     status.textContent = msg;
@@ -331,8 +360,13 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
   screen.appendChild(el(
     'p',
     'cardmaker-note',
-    `卡面按参考项目的几何尺寸渲染（竖版设计空间 ${CARD_W}×${CARD_H}，横版 ${LAND_W}×${LAND_H}），`
-    + '导出按标准扑克牌 63.5×88.9mm 的 300dpi 成品尺寸。',
+    t('cardmaker.page.geometry-note', {
+      cw: String(CARD_W),
+      ch: String(CARD_H),
+      lw: String(LAND_W),
+      lh: String(LAND_H),
+    })
+    + t('cardmaker.page.geometry-note.export'),
   ));
 
   /* ── ② 两栏：左 = 选项，右 = 预览（常驻） ──
@@ -358,14 +392,14 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
   canvas.dataset.role = 'canvas';
   previewWrap.appendChild(canvas);
   /** 预览读数：这一栏画的是哪一张、哪一套设计空间（模式切换之后会变，测试与 CDP 读它） */
-  const previewSize = elRole('div', 'cardmaker-note', 'preview-size', `预览：竖版编译卡 · 设计空间 ${CARD_W}×${CARD_H}`);
+  const previewSize = elRole('div', 'cardmaker-note', 'preview-size', t('cardmaker.page.preview.portrait', { w: String(CARD_W), h: String(CARD_H) }));
   previewSize.dataset.orientation = 'portrait';
   previewWrap.appendChild(previewSize);
   previewWrap.appendChild(el(
     'div',
     'cardmaker-note',
-    '在卡面上拖动 = 平移背景；滚轮 = 以光标为中心缩放背景；在六边形里拖 = 移动 logo。'
-    + '背景与标志各自有一条缩放滑杆（左栏「标志缩放」/ 这里下面那条「背景缩放」），互不影响。',
+    t('cardmaker.page.canvas-help')
+    + t('cardmaker.page.canvas-help.sliders'),
   ));
   previewCol.appendChild(previewWrap);
 
@@ -378,8 +412,8 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
   zoomInput.min = String(Math.round(SCALE_MIN * 100));
   zoomInput.max = String(Math.round(SCALE_MAX * 100));
   zoomInput.step = '1';
-  const resetBtn = btnRole('btn cardmaker-mini', 'reset-view', '重置背景');
-  adjust.appendChild(el('span', 'cardmaker-note', '背景缩放'));
+  const resetBtn = btnRole('btn cardmaker-mini', 'reset-view', t('cardmaker.page.bg-reset'));
+  adjust.appendChild(el('span', 'cardmaker-note', t('cardmaker.page.bg-zoom')));
   adjust.appendChild(zoomInput);
   adjust.appendChild(zoomLabel);
   adjust.appendChild(resetBtn);
@@ -392,8 +426,8 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
   deckTitle.type = 'text';
   deckTitle.className = 'cardmaker-input';
   deckTitle.dataset.role = 'deck-title';
-  deckTitle.placeholder = '牌组名（用于导出文件名）';
-  deckRow.appendChild(el('span', 'cardmaker-note', '牌组名'));
+  deckTitle.placeholder = t('cardmaker.page.deck-title.placeholder');
+  deckRow.appendChild(el('span', 'cardmaker-note', t('cardmaker.page.deck-title')));
   deckRow.appendChild(deckTitle);
   optionsCol.appendChild(deckRow);
 
@@ -411,8 +445,8 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
    * （测试里那条"第二张加不进来"的腿改成"这枚按钮根本不存在"的锚点）。
    */
   const cardActions = el('div', 'cardmaker-actions');
-  const addCompile = btnRole('btn', 'add-compile', '新增竖版编译卡');
-  const delCard = btnRole('btn', 'delete-card', '删除当前卡');
+  const addCompile = btnRole('btn', 'add-compile', t('cardmaker.page.card-add'));
+  const delCard = btnRole('btn', 'delete-card', t('cardmaker.page.card-delete'));
   cardActions.appendChild(addCompile);
   cardActions.appendChild(delCard);
   optionsCol.appendChild(cardActions);
@@ -499,18 +533,18 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
    * | 协议卡底部小字 | **无** | 有（`COMPILE_FRONT.bottomBar`） | **无** | 只有正面画 bottomBar |
    * | 协议卡背面那行字 | **无** | **无** | 有（`COMPILE_BACK.backLine`） | 只有背面画 backLine |
    */
-  const inTitle = field('title', '协议名 / 标题', null, null, '协议卡上是正中大标题；竖版编译卡上是左上角标题');
-  const inValue = field('value', '数值（大号中心数字）', 'compile', null);
-  const inTop = area('panel-top', '上方面板', 'compile', null, '可写 **粗体** 与 __下划线__');
-  const inMid = area('panel-mid', '中部面板', 'compile', null, '可写 **粗体** 与 __下划线__');
-  const inBot = area('panel-bot', '下方面板', 'compile', null, '可写 **粗体** 与 __下划线__');
-  const inCTop = field('compile-top', '协议卡左上角小字（正面）', 'protocol', 'front');
-  const inCSub = field('compile-subtitle', '协议卡副标题（正面）', 'protocol', 'front');
-  const inCBot = field('compile-bottom', '协议卡底部小字（正面）', 'protocol', 'front');
-  const inCBack = field('compile-back', '协议卡背面那行字（背面）', 'protocol', 'back');
+  const inTitle = field('title', t('cardmaker.page.field.title'), null, null, t('cardmaker.page.field.title.hint'));
+  const inValue = field('value', t('cardmaker.page.field.value'), 'compile', null);
+  const inTop = area('panel-top', t('cardmaker.page.field.panel-top'), 'compile', null, t('cardmaker.page.field.panel.hint'));
+  const inMid = area('panel-mid', t('cardmaker.page.field.panel-mid'), 'compile', null, t('cardmaker.page.field.panel.hint'));
+  const inBot = area('panel-bot', t('cardmaker.page.field.panel-bot'), 'compile', null, t('cardmaker.page.field.panel.hint'));
+  const inCTop = field('compile-top', t('cardmaker.page.field.compile-top'), 'protocol', 'front');
+  const inCSub = field('compile-subtitle', t('cardmaker.page.field.compile-subtitle'), 'protocol', 'front');
+  const inCBot = field('compile-bottom', t('cardmaker.page.field.compile-bottom'), 'protocol', 'front');
+  const inCBack = field('compile-back', t('cardmaker.page.field.compile-back'), 'protocol', 'back');
   optionsCol.appendChild(form);
 
-  const panelNote = elRole('p', 'cardmaker-note', 'panel-note', PANEL_EMPTY_HINT);
+  const panelNote = elRole('p', 'cardmaker-note', 'panel-note', t('cardmaker.page.panel.empty-hint'));
   // 面板说明紧贴它描述的那三个输入框（它们是 `form` 里的成员）⇒ 进**同一条 `label`**
   // 会让点击说明也聚焦输入框；这里保持同级块，按顺序紧跟表单。
   // ★ 它是**竖版专用**的说明（讲三段面板的），所以跟着竖版那三个字段一起开关。
@@ -519,11 +553,11 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
 
   /* ── ⑤ 背景 ── */
   const bgRow = elRole('div', 'cardmaker-bg', 'bg');
-  const bgMode = elRole('span', 'cardmaker-note', 'bg-mode', '不使用背景');
+  const bgMode = elRole('span', 'cardmaker-note', 'bg-mode', t('cardmaker.page.bg.none'));
   bgRow.appendChild(bgMode);
   const bgActions = el('div', 'cardmaker-actions');
-  const bgUpload = btnRole('btn cardmaker-mini', 'bg-upload', '上传背景图');
-  const bgClear = btnRole('btn cardmaker-mini', 'bg-clear', '不使用背景');
+  const bgUpload = btnRole('btn cardmaker-mini', 'bg-upload', t('cardmaker.page.bg.upload'));
+  const bgClear = btnRole('btn cardmaker-mini', 'bg-clear', t('cardmaker.page.bg.none'));
   bgActions.appendChild(bgUpload);
   bgActions.appendChild(bgClear);
   bgRow.appendChild(bgActions);
@@ -532,7 +566,7 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     const presetBtn = btnRole('btn cardmaker-thumb', `preset-${name}`, name);
     presetBtn.addEventListener('click', () => {
       setBg({ type: 'preset', name, dataUrl: null, transform: { scale: 1, offsetX: 0, offsetY: 0 } });
-      say(`背景已换成预设「${name}」。`, 'bg-preset', 'info');
+      say(t('cardmaker.page.bg.preset-ok', { name }), 'bg-preset', 'info');
     });
     presetHost.appendChild(presetBtn);
   }
@@ -551,16 +585,16 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
   perCardBox.className = 'cardmaker-check';
   perCardBox.dataset.role = 'per-card-bg';
   perCardRow.appendChild(perCardBox);
-  perCardRow.appendChild(el('span', 'cardmaker-note', '每张卡单独的背景（关掉时整副牌共用一套背景）'));
+  perCardRow.appendChild(el('span', 'cardmaker-note', t('cardmaker.page.per-card-bg')));
   optionsCol.appendChild(perCardRow);
 
   /* ── ⑥ logo ── */
   const logoRow = elRole('div', 'cardmaker-row', 'logo');
-  const logoState = elRole('span', 'cardmaker-note', 'logo-state', '未上传 logo');
-  const logoUpload = btnRole('btn cardmaker-mini', 'logo-upload', '上传 logo');
-  const logoClear = btnRole('btn cardmaker-mini', 'logo-clear', '清除 logo');
+  const logoState = elRole('span', 'cardmaker-note', 'logo-state', t('cardmaker.page.logo.none'));
+  const logoUpload = btnRole('btn cardmaker-mini', 'logo-upload', t('cardmaker.page.logo.upload'));
+  const logoClear = btnRole('btn cardmaker-mini', 'logo-clear', t('cardmaker.page.logo.clear'));
   // 行首这句只描述位置，**不再写"白色着色"**：勾与不勾是两种画法，那句话在"原图直上"下是错的
-  logoRow.appendChild(el('span', 'cardmaker-note', '六边形 logo'));
+  logoRow.appendChild(el('span', 'cardmaker-note', t('cardmaker.page.logo.label')));
   logoRow.appendChild(logoState);
   logoRow.appendChild(logoUpload);
   logoRow.appendChild(logoClear);
@@ -581,14 +615,14 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
   logoCutBox.dataset.role = 'logo-cutout';
   logoCutBox.checked = true;
   logoCutRow.appendChild(logoCutBox);
-  logoCutRow.appendChild(el('span', 'cardmaker-note', '去掉 logo 背景（推荐）'));
+  logoCutRow.appendChild(el('span', 'cardmaker-note', t('cardmaker.page.logo.cutout')));
   logoCutRow.appendChild(el(
     'span',
     'cardmaker-hint',
-    '勾选（默认）：只保留图形的形状 —— 把与图片四边相连的背景抠成透明，再把 logo 染成白色'
-    + '（卡面上的 logo 本来就是白色的）。抠不动的时候（整张图几乎都是背景色）不硬抠：'
-    + '直接放原图、也不染白。不勾选：**原图直上**，不抠背景也不染白，原图的颜色与背景原样进卡面。'
-    + '图片本身已经是透明背景时，勾不勾选都一样。上传时生效。',
+    t('cardmaker.page.logo.cutout.hint.1')
+    + t('cardmaker.page.logo.cutout.hint.2')
+    + t('cardmaker.page.logo.cutout.hint.3')
+    + t('cardmaker.page.logo.cutout.hint.4'),
   ));
   optionsCol.appendChild(logoRow);
 
@@ -615,21 +649,20 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
   logoZoom.max = String(Math.round(LOGO_SCALE_MAX * 100));
   // ⚠️ `step` 是**百分比读数上的步进**（5 ⇒ 100 → 105 → 110…），不是 0.05 那个倍数
   logoZoom.step = String(LOGO_SCALE_STEP);
-  (logoZoom as unknown as { setAttribute(n: string, v: string): void }).setAttribute('aria-label', '标志缩放');
+  (logoZoom as unknown as { setAttribute(n: string, v: string): void }).setAttribute('aria-label', t('cardmaker.page.logo.zoom'));
   const logoZoomValue = elRole('span', 'cardmaker-note', 'logo-zoom-value', '100%');
-  const logoZoomReset = btnRole('btn cardmaker-mini', 'logo-zoom-reset', '重置标志缩放');
-  logoZoomRow.appendChild(el('span', 'cardmaker-note', '标志缩放'));
+  const logoZoomReset = btnRole('btn cardmaker-mini', 'logo-zoom-reset', t('cardmaker.page.logo.zoom-reset'));
+  logoZoomRow.appendChild(el('span', 'cardmaker-note', t('cardmaker.page.logo.zoom')));
   logoZoomRow.appendChild(logoZoom);
   logoZoomRow.appendChild(logoZoomValue);
   logoZoomRow.appendChild(logoZoomReset);
   logoZoomRow.appendChild(el(
     'span',
     'cardmaker-hint',
-    `把六边形里的标志按中心放大 / 缩小（${Math.round(LOGO_SCALE_MIN * 100)}%~`
-    + `${Math.round(LOGO_SCALE_MAX * 100)}%，100% = 正好铺满六边形）。`
-    + '放大之后超出六边形的部分会被裁掉，不会溢到卡面别处。'
-    + '这条与右边那条「背景缩放」互不影响；「重置标志缩放」只把倍数拉回 100%，'
-    + '不会动你拖出来的位置偏移。',
+    t('cardmaker.page.logo.zoom-hint.1', { min: String(Math.round(LOGO_SCALE_MIN * 100)), max: String(Math.round(LOGO_SCALE_MAX * 100)) })
+    + t('cardmaker.page.logo.zoom-hint.2')
+    + t('cardmaker.page.logo.zoom-hint.3')
+    + t('cardmaker.page.logo.zoom-hint.4'),
   ));
   optionsCol.appendChild(logoZoomRow);
 
@@ -649,15 +682,15 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
    */
   const ioRow = elRole('div', 'cardmaker-actions', 'io');
   const imgGroup = elRole('div', 'cardmaker-group', 'io-image');
-  imgGroup.appendChild(el('span', 'cardmaker-note', '导出图片'));
+  imgGroup.appendChild(el('span', 'cardmaker-note', t('cardmaker.page.io.image')));
   // 初始文案就直接是**竖版**那一套（`refreshAll()` 之后由 `syncModeFields` 按模式/面重写；
   // 首帧也不许出现"当前卡"这种半截指代 —— 用户上一轮的困惑原话就是"这四个按钮重复了"）
-  const exportPng = btnRole('btn', 'export-png', '导出竖版编译卡 PNG（750×1050）');
+  const exportPng = btnRole('btn', 'export-png', t('cardmaker.page.export-png.portrait'));
   imgGroup.appendChild(exportPng);
   const deckGroup = elRole('div', 'cardmaker-group', 'io-deck');
-  deckGroup.appendChild(el('span', 'cardmaker-note', '牌组存档'));
-  const exportJson = btnRole('btn cardmaker-mini', 'export-json', '导出牌组 JSON');
-  const importJson = btnRole('btn cardmaker-mini', 'import-json', '导入牌组 JSON');
+  deckGroup.appendChild(el('span', 'cardmaker-note', t('cardmaker.page.io.deck')));
+  const exportJson = btnRole('btn cardmaker-mini', 'export-json', t('cardmaker.page.export-json'));
+  const importJson = btnRole('btn cardmaker-mini', 'import-json', t('cardmaker.page.import-json'));
   deckGroup.appendChild(exportJson);
   deckGroup.appendChild(importJson);
   ioRow.appendChild(imgGroup);
@@ -666,17 +699,17 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
 
   /* ── ⑧ 署名（用户明确要求：显眼且准确） ── */
   const credit = elRole('footer', 'cardmaker-credit', 'credit');
-  credit.appendChild(elRole('p', 'cardmaker-credit-line', 'credit-sentence', CREDIT.sentence));
+  credit.appendChild(elRole('p', 'cardmaker-credit-line', 'credit-sentence', t('cardmaker.page.credit.sentence')));
   const creditMeta = el('div', 'cardmaker-credit-meta');
-  creditMeta.appendChild(elRole('span', 'cardmaker-credit-item', 'credit-author', `作者：${CREDIT.author}`));
-  creditMeta.appendChild(elRole('span', 'cardmaker-credit-item', 'credit-license', `许可：${CREDIT.license}`));
+  creditMeta.appendChild(elRole('span', 'cardmaker-credit-item', 'credit-author', t('cardmaker.page.credit.author', { author: CREDIT.author })));
+  creditMeta.appendChild(elRole('span', 'cardmaker-credit-item', 'credit-license', t('cardmaker.page.credit.license-label', { license: CREDIT.license })));
   const creditLink = elRole('a', 'cardmaker-credit-link', 'credit-link', CREDIT.url) as HTMLAnchorElement;
   creditLink.href = CREDIT.url;
   creditLink.target = '_blank';
   creditLink.rel = 'noreferrer';
   creditMeta.appendChild(creditLink);
   credit.appendChild(creditMeta);
-  credit.appendChild(elRole('p', 'cardmaker-note', 'credit-license-path', `许可原文随仓库提供：${CREDIT.licensePath}`));
+  credit.appendChild(elRole('p', 'cardmaker-note', 'credit-license-path', t('cardmaker.page.credit.license-path', { path: CREDIT.licensePath })));
   screen.appendChild(credit);
 
   root.appendChild(screen);
@@ -839,14 +872,14 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     if (created) {
       say(
         next === 'protocol'
-          ? '已切到「协议卡」：整副牌还没有横版协议卡，按加卡逻辑建了一张。'
-          : '已切到「卡牌」：整副牌还没有竖版编译卡，按加卡逻辑建了一张。',
+          ? t('cardmaker.page.mode.created.protocol')
+          : t('cardmaker.page.mode.created.compile'),
         'mode-created-card',
         'info',
       );
     } else {
       say(
-        next === 'protocol' ? '已切到「协议卡」（横版 · 正/背两面）。' : '已切到「卡牌」（竖版编译卡）。',
+        next === 'protocol' ? t('cardmaker.page.mode.switched.protocol') : t('cardmaker.page.mode.switched.compile'),
         'mode-switched',
         'info',
       );
@@ -873,7 +906,7 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     screen.dataset.face = face;
     refreshAll();
     // ★ 2026-10-01（用户要求改短，逐字就是这两句，别自创第三种说法）
-    say(next === 'back' ? '已切到协议背面' : '已切到协议正面', 'face-switched', 'info');
+    say(next === 'back' ? t('cardmaker.page.face.switched.back') : t('cardmaker.page.face.switched.front'), 'face-switched', 'info');
   }
 
   /* ── 保存（防抖：拖拽/打字时不要每帧写盘） ── */
@@ -888,12 +921,12 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     saving = true;
     try {
       const res = await nav.store.save(deck);
-      if (!res.ok) say(`本机保存失败：${res.detail}（本次会话仍可继续编辑）`, 'save-failed', 'error');
-      else if (!nav.store.isPersistent()) say('改动已记在内存里（游客模式）：刷新或关闭页面就会丢。', 'saved-memory', 'warn');
-      else say('已保存到本机。', 'saved', 'info');
+      if (!res.ok) say(t('cardmaker.page.save-failed', { detail: res.detail }), 'save-failed', 'error');
+      else if (!nav.store.isPersistent()) say(t('cardmaker.page.saved-memory'), 'saved-memory', 'warn');
+      else say(t('cardmaker.page.saved'), 'saved', 'info');
     } catch (e) {
       // 契约上 `save()` 不抛；这层兜的是宿主假件 / 将来实现
-      say(`本机保存失败：${String(e)}（本次会话仍可继续编辑）`, 'save-threw', 'error');
+      say(t('cardmaker.page.save-failed', { detail: String(e) }), 'save-threw', 'error');
     } finally {
       saving = false;
     }
@@ -932,7 +965,7 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
        *    （用户原话：「横版协议卡」⇒ 牌组名 + 协议卡 + 序号；「竖版编译卡」⇒
        *    牌组名 + 协议所属卡牌 + 序号）。
        */
-      const kindName = card.kind === 'protocol' ? '协议卡' : '协议所属卡牌';
+      const kindName = card.kind === 'protocol' ? t('cardmaker.page.card.kind.protocol') : t('cardmaker.page.card.kind.compile');
       const seq = i + 1;
       const open = btnRole('btn cardmaker-mini', `card-open-${card.id}`, `${deckLabel} ${kindName} ${seq}`);
       open.addEventListener('click', () => {
@@ -941,7 +974,7 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
         refreshAll();
       });
       row.appendChild(open);
-      const label = card.title.trim() === '' ? '（未命名）' : card.title.trim();
+      const label = card.title.trim() === '' ? t('cardmaker.page.card.untitled') : card.title.trim();
       /**
        * ★ 2026-10-01（用户要求）：**协议卡那行不许出现"数值"字样**。
        *
@@ -952,14 +985,14 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
        */
       const note = card.kind === 'protocol'
         ? label
-        : `${label} · 数值 ${card.value.trim() === '' ? '—' : card.value.trim()}`;
+        : t('cardmaker.page.card.note', { label, value: card.value.trim() === '' ? t('cardmaker.page.card.value-empty') : card.value.trim() });
       row.appendChild(el('span', 'cardmaker-note', note));
       cardsHost.appendChild(row);
     }
     if (list.length === 0) {
       // 防御分支：两种模式在 `ensureCardOf()` / 「删除当前卡」的规则下都到不了"零张"
       // （只剩一张时删除是禁用的），所以这里**不再指某个具体按钮**（协议那枚已经删了）。
-      cardsHost.appendChild(el('div', 'cardmaker-note', '这个模式下还没有卡。'));
+      cardsHost.appendChild(el('div', 'cardmaker-note', t('cardmaker.page.card.none')));
     }
     // 只剩一张时不许删（不允许把这一种卡删空）—— 与第一版同一条规则，只是按**模式**判
     delCard.disabled = current() === null || cardsOf(mode).length <= 1;
@@ -1044,8 +1077,8 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     }
     const count = cardsOf(mode).length;
     modeHint.textContent = mode === 'protocol'
-      ? `当前模式：协议卡（横版 · 正/背两面）· 整副牌只允许一张，现有 ${count} 张`
-      : `当前模式：卡牌（竖版编译卡）· 现有 ${count} 张`;
+      ? t('cardmaker.page.mode-hint.protocol', { n: String(count) })
+      : t('cardmaker.page.mode-hint.compile', { n: String(count) });
 
     /* ★ 正/背那一组只在**协议卡模式**下出现（竖版编译卡没有第二个面） */
     const proto = mode === 'protocol';
@@ -1061,13 +1094,13 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
 
     /* 唯一那个图片导出按钮的文案跟着模式/面走（"当前卡"这种半截指代不许出现） */
     exportPng.textContent = proto
-      ? `导出协议卡${face === 'back' ? '背面' : '正面'} PNG（横版 1050×750）`
-      : '导出竖版编译卡 PNG（750×1050）';
+      ? (face === 'back' ? t('cardmaker.page.export-png.protocol-back') : t('cardmaker.page.export-png.protocol-front'))
+      : t('cardmaker.page.export-png.portrait');
     exportPng.disabled = card === null;
 
     if (card === null) {
-      bgMode.textContent = '没有可编辑的卡';
-      logoState.textContent = '未上传 logo';
+      bgMode.textContent = t('cardmaker.page.bg.no-card');
+      logoState.textContent = t('cardmaker.page.logo.none');
       zoomInput.value = '100';
       zoomLabel.textContent = '100%';
       zoomInput.disabled = true;
@@ -1080,10 +1113,10 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     }
     const bg = bgOf(card);
     bgMode.textContent = bg.type === 'none'
-      ? '不使用背景'
+      ? t('cardmaker.page.bg.none')
       : bg.type === 'preset'
-        ? `预设背景：${bg.name ?? '（名字丢了）'}`
-        : '自定背景：已上传的图片';
+        ? t('cardmaker.page.bg.preset', { name: bg.name ?? t('cardmaker.page.bg.name-lost') })
+        : t('cardmaker.page.bg.custom');
     const pct = Math.round(clampScale(bg.transform.scale) * 100);
     zoomInput.value = String(pct);
     zoomLabel.textContent = `${pct}%`;
@@ -1095,10 +1128,10 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
      */
     const lg = logoOf(card);
     logoState.textContent = !lg.dataUrl
-      ? '未上传 logo'
+      ? t('cardmaker.page.logo.none')
       : lg.whiten === false
-        ? 'logo：已上传（原图直上，未染白）'
-        : 'logo：已上传（已抠背景 + 白色着色）';
+        ? t('cardmaker.page.logo.set-raw')
+        : t('cardmaker.page.logo.set-cut');
     /**
      * 开关回显**当前 logo 实际用的处理方式**：切卡/读存档之后，勾选框必须与卡面上的那个 logo
      * 一致 —— 否则用户看到"勾着去背景"，卡上却是一张原图，又一次"界面在说假话"。
@@ -1228,7 +1261,7 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     const card = current();
     const seq = ++renderSeq;
     if (card === null) {
-      previewSize.textContent = '当前没有可预览的卡';
+      previewSize.textContent = t('cardmaker.page.preview.none');
       return;
     }
     const land = isLandscape(card.kind);
@@ -1237,8 +1270,10 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     const h = land ? LAND_H : CARD_H;
     // 读数跟着卡走：模式切换之后这里会换成另一套尺寸（测试与 CDP 都读它）
     previewSize.textContent = land
-      ? `预览：横版协议卡${side === 'back' ? '背面' : '正面'} · 设计空间 ${LAND_W}×${LAND_H}`
-      : `预览：竖版编译卡 · 设计空间 ${CARD_W}×${CARD_H}`;
+      ? (side === 'back'
+        ? t('cardmaker.page.preview.landscape-back', { w: String(LAND_W), h: String(LAND_H) })
+        : t('cardmaker.page.preview.landscape-front', { w: String(LAND_W), h: String(LAND_H) }))
+      : t('cardmaker.page.preview.portrait', { w: String(CARD_W), h: String(CARD_H) });
     previewSize.dataset.orientation = land ? 'landscape' : 'portrait';
     previewSize.dataset.face = side;
     if (canvas.width !== w) canvas.width = w;
@@ -1247,7 +1282,7 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     if (!ctx) return; // 没有 2D 上下文（单测桩）：屏上结构照常，只是看不到卡
     const ok = await paint(ctx, card, side, 1, w, h);
     if (seq !== renderSeq) return; // 已经有更新的帧在路上，丢掉这一帧
-    if (!ok) say('预览没画出来：这张卡的背景图加载失败（换一张图或点「不使用背景」）。', 'preview-failed', 'error');
+    if (!ok) say(t('cardmaker.page.preview-failed'), 'preview-failed', 'error');
   }
 
   function refreshAll(): void {
@@ -1379,32 +1414,32 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
 
   bgClear.addEventListener('click', () => {
     setBg({ type: 'none', name: null, dataUrl: null, transform: { scale: 1, offsetX: 0, offsetY: 0 } });
-    say('已把背景设为「不使用」：卡面只剩底色与卡框。', 'bg-cleared', 'info');
+    say(t('cardmaker.page.bg.cleared'), 'bg-cleared', 'info');
   });
 
   bgUpload.addEventListener('click', () => {
     void (async () => {
       const card = current();
       if (card === null) return;
-      say('等待你选择一张图片…（选择框里可以取消）', 'bg-waiting', 'info');
+      say(t('cardmaker.page.bg.waiting'), 'bg-waiting', 'info');
       let dataUrl: string | null;
       try {
         dataUrl = await nav.uploadDataUrl('bg');
       } catch (e) {
-        say(`读取图片失败：${String(e)}`, 'bg-upload-failed', 'error');
+        say(t('cardmaker.page.bg.read-failed', { detail: String(e) }), 'bg-upload-failed', 'error');
         return;
       }
-      if (dataUrl === null) { say('已取消选择图片：屏上没有任何改动。', 'bg-upload-cancelled', 'info'); return; }
+      if (dataUrl === null) { say(t('cardmaker.page.bg.cancelled'), 'bg-upload-cancelled', 'info'); return; }
       let small: string;
       try {
         // 缩到 2000px 再内嵌：牌组 JSON 要装得下（取舍见 images.ts 的说明）
         small = await normalizeImage(dataUrl);
       } catch (e) {
-        say(`这张图片处理不了：${String(e)}`, 'bg-normalize-failed', 'error');
+        say(t('cardmaker.page.bg.normalize-failed', { detail: String(e) }), 'bg-normalize-failed', 'error');
         return;
       }
       setBg({ type: 'custom', name: null, dataUrl: small, transform: { scale: 1, offsetX: 0, offsetY: 0 } });
-      say('背景已换成你上传的图片（已自动缩到 2000px 以内，好让牌组 JSON 装得下）。', 'bg-uploaded', 'info');
+      say(t('cardmaker.page.bg.uploaded'), 'bg-uploaded', 'info');
     })();
   });
 
@@ -1427,7 +1462,7 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     refreshAssets();
     void refreshPreview();
     scheduleSave(0);
-    say('背景平移与缩放已重置。', 'bg-reset', 'info');
+    say(t('cardmaker.page.bg.reset-ok'), 'bg-reset', 'info');
   });
 
   /* ── logo ── */
@@ -1436,15 +1471,15 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     void (async () => {
       const card = current();
       if (card === null) return;
-      say('等待你选择一张 logo 图片…（选择框里可以取消）', 'logo-waiting', 'info');
+      say(t('cardmaker.page.logo.waiting'), 'logo-waiting', 'info');
       let dataUrl: string | null;
       try {
         dataUrl = await nav.uploadDataUrl('logo');
       } catch (e) {
-        say(`读取 logo 失败：${String(e)}`, 'logo-upload-failed', 'error');
+        say(t('cardmaker.page.logo.read-failed', { detail: String(e) }), 'logo-upload-failed', 'error');
         return;
       }
-      if (dataUrl === null) { say('已取消选择 logo：屏上没有任何改动。', 'logo-upload-cancelled', 'info'); return; }
+      if (dataUrl === null) { say(t('cardmaker.page.logo.cancelled'), 'logo-upload-cancelled', 'info'); return; }
       /**
        * ★ 2026-10-01（用户要求把语义改死）：
        *  - **未勾选** ⇒ **原图直上**：不抠背景、不上白、不做任何处理
@@ -1467,19 +1502,19 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
           cutRejected = cut.rejected;
           small = await normalizeLogo(cut.dataUrl);
           note = cut.rejected
-            ? `这张图的背景占得太多（约 ${Math.round(cut.removedRatio * 100)}%），抠下去会把图形本身也洗掉，`
-              + '所以这次**没有抠背景**，直接放原图（保留它自己的颜色；染白会变成一整块白，所以也没染）。'
-              + '想要一开始就不做任何处理，取消勾选。'
+            ? t('cardmaker.page.logo.cut.rejected', { pct: String(Math.round(cut.removedRatio * 100)) })
+              + t('cardmaker.page.logo.cut.rejected.2')
+              + t('cardmaker.page.logo.cut.rejected.3')
             : cut.removedRatio > 0
-              ? `已把与四边相连的背景抠掉（约 ${Math.round(cut.removedRatio * 100)}% 的像素），再染成白色。`
-              : '这张图没有可去掉的背景（四角本来就是透明的），直接染成白色。';
+              ? t('cardmaker.page.logo.cut.done', { pct: String(Math.round(cut.removedRatio * 100)) })
+              : t('cardmaker.page.logo.cut.none');
         } else {
           // 原图直上：只做一次尺寸压缩（为了存得下），颜色与背景一个像素都不动
           small = await normalizeLogo(dataUrl);
-          note = '按你的选择**原图直上**：没有抠背景、没有染白，卡面上就是这张图原来的颜色与背景。';
+          note = t('cardmaker.page.logo.cut.off');
         }
       } catch (e) {
-        say(`这张 logo 处理不了：${String(e)}`, 'logo-normalize-failed', 'error');
+        say(t('cardmaker.page.logo.normalize-failed', { detail: String(e) }), 'logo-normalize-failed', 'error');
         return;
       }
       /**
@@ -1508,7 +1543,7 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
       refreshAssets();
       void refreshPreview();
       scheduleSave(0);
-      say(`logo 已上传：${note}`, 'logo-uploaded', 'info');
+      say(t('cardmaker.page.logo.uploaded', { note }), 'logo-uploaded', 'info');
     })();
   });
 
@@ -1524,7 +1559,7 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     refreshAssets();
     void refreshPreview();
     scheduleSave(0);
-    say('logo 已清除。', 'logo-cleared', 'info');
+    say(t('cardmaker.page.logo.cleared'), 'logo-cleared', 'info');
   });
 
   /**
@@ -1563,7 +1598,7 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     refreshAssets();
     void refreshPreview();
     scheduleSave(0);
-    say('标志缩放已重置为 100%（位置偏移没动）。', 'logo-zoom-reset', 'info');
+    say(t('cardmaker.page.logo.zoom-reset-ok'), 'logo-zoom-reset', 'info');
   });
 
   /* ── 文本编辑（写回当前卡 → 重画预览 → 排一次保存） ── */
@@ -1628,7 +1663,7 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     lastSeenId.compile = card.id;
     refreshAll();
     scheduleSave(0);
-    say('已加一张竖版编译卡。', 'card-added', 'info');
+    say(t('cardmaker.page.card.added'), 'card-added', 'info');
   });
 
   delCard.addEventListener('click', () => {
@@ -1642,7 +1677,7 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     currentId = cardsOf(mode)[0]?.id ?? '';
     refreshAll();
     scheduleSave(0);
-    say('这张卡已删除。', 'card-deleted', 'info');
+    say(t('cardmaker.page.card.deleted'), 'card-deleted', 'info');
   });
 
   /* ── 导出 PNG ── */
@@ -1694,15 +1729,15 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
     if (card === null) return;
     const side: CardSide = facesOf(card).includes(face) ? face : 'front';
     const sideSuffix = facesOf(card).length > 1 ? `-${side}` : '';
-    say('正在渲染…（导出按 300dpi 的成品尺寸，比屏上预览大一档）', 'export-waiting', 'info');
+    say(t('cardmaker.page.export.waiting'), 'export-waiting', 'info');
     try {
       const master = await renderOffscreen(card, side);
-      if (master === null) { say('这台设备拿不到 2D 画布，没法导出 PNG。', 'export-unsupported', 'error'); return; }
+      if (master === null) { say(t('cardmaker.page.export.no-2d'), 'export-unsupported', 'error'); return; }
       const out = toPoker(master);
       const name = `${safeFileName(deck.title === '' ? card.title : deck.title, 'card')}-${card.id.slice(0, 6)}${sideSuffix}.png`;
       await downloadCanvas(out, name, card);
     } catch (e) {
-      say(`导出 PNG 失败：${String(e)}`, 'export-failed', 'error');
+      say(t('cardmaker.page.export.failed', { detail: String(e) }), 'export-failed', 'error');
     }
   }
 
@@ -1712,8 +1747,8 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
       const finish = (blob: Blob): void => {
         nav.download(name, blob);
         say(
-          `已导出 ${name}（${cnv.width}×${cnv.height}）`
-          + `—— ${card.kind === 'protocol' ? '横版协议卡' : '竖版编译卡'}。`,
+          t('cardmaker.page.export.ok', { name, w: String(cnv.width), h: String(cnv.height) })
+          + t('cardmaker.page.export.ok.kind', { kind: card.kind === 'protocol' ? t('cardmaker.page.card.kind.landscape') : t('cardmaker.page.card.kind.portrait') }),
           'export-ok',
           'info',
         );
@@ -1723,7 +1758,7 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
         if (typeof cnv.toBlob === 'function') {
           cnv.toBlob((blob) => {
             if (blob) { finish(blob); return; }
-            say('画布导出失败（浏览器没有给出图片数据）。', 'export-failed', 'error');
+            say(t('cardmaker.page.export.canvas-failed'), 'export-failed', 'error');
             resolve();
           }, 'image/png');
           return;
@@ -1733,10 +1768,10 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
       }
       try {
         const url = typeof cnv.toDataURL === 'function' ? cnv.toDataURL('image/png') : '';
-        if (url === '') { say('这台设备不支持导出 PNG。', 'export-unsupported', 'error'); resolve(); return; }
+        if (url === '') { say(t('cardmaker.page.export.unsupported'), 'export-unsupported', 'error'); resolve(); return; }
         finish(dataUrlToBlob(url));
       } catch (e) {
-        say(`导出 PNG 失败：${String(e)}`, 'export-failed', 'error');
+        say(t('cardmaker.page.export.failed', { detail: String(e) }), 'export-failed', 'error');
         resolve();
       }
     });
@@ -1751,27 +1786,27 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
       const text = stringifyDeck(deck);
       const name = `${safeFileName(deck.title, 'deck')}.cardmaker.json`;
       nav.download(name, new Blob([text], { type: 'application/json' }));
-      say(`已导出 ${name}（自定图以 base64 内嵌，预设背景按名字引用）。`, 'export-json-ok', 'info');
+      say(t('cardmaker.page.export-json.ok', { name }), 'export-json-ok', 'info');
     } catch (e) {
-      say(`导出牌组失败：${String(e)}`, 'export-json-failed', 'error');
+      say(t('cardmaker.page.export-json.failed', { detail: String(e) }), 'export-json-failed', 'error');
     }
   });
 
   importJson.addEventListener('click', () => {
     void (async () => {
-      say('等待你选择牌组 JSON…（选择框里可以取消）', 'import-waiting', 'info');
+      say(t('cardmaker.page.import.waiting'), 'import-waiting', 'info');
       let text: string | null;
       try {
         text = await nav.readTextFile('.json,application/json');
       } catch (e) {
-        say(`读取文件失败：${String(e)}`, 'import-read-failed', 'error');
+        say(t('cardmaker.page.import.read-failed', { detail: String(e) }), 'import-read-failed', 'error');
         return;
       }
-      if (text === null) { say('已取消导入：屏上没有任何改动。', 'import-cancelled', 'info'); return; }
+      if (text === null) { say(t('cardmaker.page.import.cancelled'), 'import-cancelled', 'info'); return; }
       const parsed = parseDeck(text);
       if (!parsed.ok) {
         // 四类失败各自可辨识：选错文件 / 文件坏了 / 版本不认识 / 形状不对
-        say(`导入失败：${parsed.message}`, `import-${parsed.code}`, 'error');
+        say(t('cardmaker.page.import.failed', { detail: parsed.message }), `import-${parsed.code}`, 'error');
         return;
       }
       deck = parsed.deck;
@@ -1779,7 +1814,7 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
       deckTitle.value = deck.title;
       refreshAll();
       void saveNow();
-      say(`已导入 ${deck.cards.length} 张卡。`, 'import-ok', 'info');
+      say(t('cardmaker.page.import.ok', { n: String(deck.cards.length) }), 'import-ok', 'info');
     })();
   });
 
@@ -1790,10 +1825,10 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
       const saved = await nav.store.load();
       if (saved !== null) {
         deck = hydrateDeck(saved);
-        say(`已从本机读回保存的牌组（${deck.cards.length} 张卡）。`, 'loaded', 'info');
+        say(t('cardmaker.page.loaded', { n: String(deck.cards.length) }), 'loaded', 'info');
       }
     } catch (e) {
-      say(`读取本机保存的牌组失败：${String(e)}（先用一份空牌组继续）`, 'load-failed', 'error');
+      say(t('cardmaker.page.load-failed', { detail: String(e) }), 'load-failed', 'error');
     }
     if (deck.cards.length === 0) {
       // 开局给两张卡：两种形态在屏上都看得见（用户要编辑的就是这两种）

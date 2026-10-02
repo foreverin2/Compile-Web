@@ -19,6 +19,13 @@ import {
   UPLOAD_JPEG_QUALITY,
   UPLOAD_MAX_DIM,
 } from './config';
+import { t } from '../../i18n';
+
+/**
+ * ★ 2026-10-02（i18n 逐屏抽取）：解不开图 / 拿不到画布那五句搬进 `src/i18n/`
+ * （键 `cardmaker.images.*`），中文值**逐字等于改动前**的字面量。这几句都是 `Error.message`，
+ * 由 `page.ts` 原样写进状态行 ⇒ 是玩家可见文案。
+ */
 
 /** 能被 canvas 直接绘制的位图（三档解码都归到这个形状） */
 export type DrawableImage = CanvasImageSource & { width: number; height: number };
@@ -48,7 +55,7 @@ export async function loadImage(src: string): Promise<DrawableImage> {
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.onload = () => { resolve(img as unknown as DrawableImage); };
-    img.onerror = () => { reject(new Error(`图片加载失败：${src}`)); };
+    img.onerror = () => { reject(new Error(t('cardmaker.images.load-failed', { src }))); };
     img.src = src;
   });
 }
@@ -138,13 +145,13 @@ export function normalizeImage(
       c.width = w;
       c.height = h;
       const cx = c.getContext('2d');
-      if (!cx) { reject(new Error('这台设备拿不到 2D 画布，无法处理上传的图片')); return; }
+      if (!cx) { reject(new Error(t('cardmaker.images.no-canvas-normalize'))); return; }
       cx.imageSmoothingEnabled = true;
       cx.imageSmoothingQuality = 'high';
       cx.drawImage(img, 0, 0, w, h);
       resolve(c.toDataURL(mime, quality));
     };
-    img.onerror = () => { reject(new Error('这张图片解不开（格式不支持或文件损坏）')); };
+    img.onerror = () => { reject(new Error(t('cardmaker.images.bad-image'))); };
     img.src = dataUrl;
   });
 }
@@ -414,7 +421,7 @@ export function removeLogoBackground(dataUrl: string, tol = 42): Promise<LogoCut
         c.width = img.width;
         c.height = img.height;
         const cx = c.getContext('2d');
-        if (!cx) { reject(new Error('这台设备拿不到 2D 画布，无法去掉 logo 背景')); return; }
+        if (!cx) { reject(new Error(t('cardmaker.images.no-canvas-logo'))); return; }
         cx.drawImage(img, 0, 0);
         const src = cx.getImageData(0, 0, c.width, c.height);
         const cut = cutoutBackground(src.data, c.width, c.height, tol);
@@ -435,7 +442,7 @@ export function removeLogoBackground(dataUrl: string, tol = 42): Promise<LogoCut
         reject(e instanceof Error ? e : new Error(String(e)));
       }
     };
-    img.onerror = () => { reject(new Error('这张 logo 解不开（格式不支持或文件损坏）')); };
+    img.onerror = () => { reject(new Error(t('cardmaker.images.bad-logo'))); };
     img.src = dataUrl;
   });
 }

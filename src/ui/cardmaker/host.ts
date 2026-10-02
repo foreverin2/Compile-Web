@@ -6,7 +6,11 @@
  *
  * 本文件是唯一碰浏览器 API（`Image` / `FileReader` / `URL` / `input[type=file]`）的地方 ——
  * `page.ts` 通过 `CardmakerNav` 收下这几个能力，于是它能在无 jsdom 的 DOM 桩上真跑。
+ *
+ * ★ 2026-10-02（i18n 逐屏抽取）：本文件里唯一一句玩家可见的文案（读文件失败）
+ * 搬进 `src/i18n/`（键 `cardmaker.host.*`），中文值**逐字等于改动前**的字面量。
  */
+import { t } from '../../i18n';
 import type { CardmakerStore, CardmakerNav } from './page';
 import { createCardmakerStore, clearCardmakerDeck, readCardmakerDeckInfo, type IdbLike } from './store-idb';
 import type { LocalStore } from '../../app/local-store';
@@ -39,8 +43,14 @@ export function readCardmakerBrowserDeckInfo(): Promise<{ cards: number } | null
 
 /* ── ② 文件：选图 / 读文本 / 落盘 ─────────────────────────────────────── */
 
-/** 造一个隐藏的 `<input type=file>`，`change` 之后解出结果并把自己摘掉 */
-function pickFileOnce(accept: string, read: (file: File) => Promise<string | null>): Promise<string | null> {
+/**
+ * 造一个隐藏的 `<input type=file>`，`change` 之后解出结果并把自己摘掉。
+ *
+ * ⚠️ 回调形参名**不叫 `t`**（★ 2026-10-02 i18n 抽取时改的）：本文件现在 import 了
+ * `t`（文案取值函数），用同名局部变量会把它遮住 —— 那种遮蔽在"这一处只是忘了用 t()"
+ * 与"这一处取不到文案"之间看不出区别，所以直接换个名字。
+ */
+function pickFileOnce(accept: string, run: (file: File) => Promise<string | null>): Promise<string | null> {
   return new Promise((resolve, reject) => {
     let input: HTMLInputElement;
     try {
@@ -63,7 +73,7 @@ function pickFileOnce(accept: string, read: (file: File) => Promise<string | nul
       const file = input.files?.[0] ?? null;
       // 用户在系统选择框里按了取消：大多数浏览器**不触发 change**；这条是给"清空选择"那一档
       if (file === null) { settle(null); return; }
-      void read(file).then(settle, (e: unknown) => {
+      void run(file).then(settle, (e: unknown) => {
         if (settled) return;
         settled = true;
         input.remove();
@@ -80,7 +90,7 @@ function readAsDataUrl(file: File): Promise<string | null> {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
     r.onload = () => { resolve(typeof r.result === 'string' ? r.result : null); };
-    r.onerror = () => { reject(r.error ?? new Error('读取文件失败')); };
+    r.onerror = () => { reject(r.error ?? new Error(t('cardmaker.host.read-failed'))); };
     r.readAsDataURL(file);
   });
 }
@@ -89,7 +99,7 @@ function readAsText(file: File): Promise<string | null> {
   return new Promise((resolve, reject) => {
     const r = new FileReader();
     r.onload = () => { resolve(typeof r.result === 'string' ? r.result : null); };
-    r.onerror = () => { reject(r.error ?? new Error('读取文件失败')); };
+    r.onerror = () => { reject(r.error ?? new Error(t('cardmaker.host.read-failed'))); };
     r.readAsText(file);
   });
 }

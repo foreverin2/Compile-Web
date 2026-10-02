@@ -24,6 +24,7 @@
  *  不能：真实浏览器里 SW 到底注册成功没有、断网后页面是否真的打得开 —— 那要 https/127.0.0.1
  *      下的真 SW，属**用户验收**（计划「用户验收」第 4 项）。
  */
+import { t } from '../i18n';
 
 /* ── SW 的最小结构型接口（只声明本模块**用到**的成员，不照抄 DOM 类型） ───────── */
 
@@ -194,10 +195,17 @@ function realEnv(): PwaEnv {
   };
 }
 
-/** 更新条的元素类名与文案（唯一出处）。对玩家的离线说明在 Task 5 的隐私文案里。 */
+/**
+ * 更新条的元素类名（唯一出处）。对玩家的离线说明在 Task 5 的隐私文案里。
+ *
+ * ★ 2026-10-02（i18n 逐屏抽取）：更新条那两句**搬到 `src/i18n/`**（键 `pwa.update.*`），
+ * 中文值**逐字等于改动前**的 `有新版本可用` / `立即更新`。原来的两个导出常量
+ * `UPDATE_BAR_TEXT` / `UPDATE_BAR_BUTTON` 删掉了 —— 它们只在本文件里被读一次
+ * （`mountUpdateBar`），留着就是"同一句话两个家"。
+ * ⚠️ 那两句是**插更新条时现调 `t()`** 的：条子是懒插的（每次"有更新"都确认一次），
+ * 现调才跟得上当时的语言。
+ */
 export const UPDATE_BAR_CLASS = 'pwa-update-bar';
-export const UPDATE_BAR_TEXT = '有新版本可用';
-export const UPDATE_BAR_BUTTON = '立即更新';
 
 /** 点了"立即更新"之后等新 controller 接管的时间上限（到点仍没接管也要刷新，不能卡住用户） */
 export const RELOAD_FALLBACK_MS = 1500;
@@ -220,11 +228,11 @@ function mountUpdateBar(ui: PwaUiLike, onClick: () => void): void {
   const bar = ui.make('div');
   bar.className = UPDATE_BAR_CLASS;
   const text = ui.make('span');
-  text.textContent = UPDATE_BAR_TEXT;
+  text.textContent = t('pwa.update.text');
   const btn = ui.make('button');
   btn.type = 'button';
   btn.className = 'btn';
-  btn.textContent = UPDATE_BAR_BUTTON;
+  btn.textContent = t('pwa.update.button');
   btn.addEventListener('click', onClick);
   bar.appendChild(text);
   bar.appendChild(btn);

@@ -53,7 +53,11 @@ describe('日志开关：注入实现', () => {
     expect(src).toContain("btn.style.position = 'fixed'");
     expect(src).toContain("btn.style.right = '12px'");
     expect(src).toContain("btn.style.top = '10px'");
-    expect(src).toContain("hidden ? LABEL_SHOW : LABEL_HIDE");
+    // ★ 2026-10-02（i18n 逐屏抽取）：这一条原来钉的是 `hidden ? LABEL_SHOW : LABEL_HIDE`
+    //   （两个模块级中文常量）。那两个常量搬进 `src/i18n/` 之后，判据面改成**钉两个文案键**
+    //   —— 比原来更紧：原来只钉"用了哪两个常量名"（值还可能被改），现在连**键名与分支顺序**
+    //   一起钉住（键名写错、两个分支对调都当场红）。
+    expect(src).toContain("hidden ? t('log-toggle.show') : t('log-toggle.hide')");
     expect(src).toContain('new MutationObserver(sync).observe(app, { childList: true, subtree: true })');
     expect(src).toContain('applyLogHidden();');
   });

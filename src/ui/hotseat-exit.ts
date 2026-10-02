@@ -20,6 +20,8 @@
  * `#app` 每帧都会被整棵换掉（`clearRoot` + 重新 append），所以按钮必须**在每次换完之后重新摆**。
  * 观察 `#app` 的子树与 `body` 的 class 就够了；宿主那边只在启动时给一个回调。
  */
+import { t } from '../i18n';
+
 export const HOTSEAT_EXIT_CLASS = 'hotseat-exit-btn';
 
 export interface ExitButtonFlags {
@@ -49,8 +51,11 @@ export function exitButtonFlagsOf(
   };
 }
 
-const LABEL = '← 退出游戏';
-
+/**
+ * ★ 2026-10-02（i18n 逐屏抽取）：按钮文案搬进 `src/i18n/`（键 `hotseat-exit.label`），
+ * 中文值**逐字等于改动前**的 `← 退出游戏`。在装按钮那一刻取一次 —— 这个按钮只在启动时装一次
+ * （`installed` 幂等），换语言时的重画不会重装它，所以文案跟着"装它的那一刻"的语言走。
+ */
 let installed = false;
 
 /**
@@ -63,7 +68,7 @@ export function installHotseatExit(nav: { readonly onExit: () => void }): void {
   const btn = document.createElement('button');
   btn.className = `btn ${HOTSEAT_EXIT_CLASS}`;
   btn.type = 'button';
-  btn.textContent = LABEL;
+  btn.textContent = t('hotseat-exit.label');
   // 行内样式：左上角固定浮层（不新增样式表、不碰 styles.css 红线）
   btn.style.position = 'fixed';
   btn.style.left = '12px';

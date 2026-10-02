@@ -73,12 +73,19 @@ import { LANGS, getLang, setLang, t, type Lang } from '../i18n';
  * 于是本文件代码位里的中文字面量**恰好两条**（`startTutorial` / `skipTutorial`）——
  * 它们不承诺任何事（只是第 3 步两个按钮上的字），仍未进 `src/i18n/`（P2 会把教学模式整屏一起抽），
  * 所以本文件照实登记在 `docs/2026-10-01-i18n-尚未抽取的屏.md` 里。
+ *
+ * ★ 2026-10-02（P3 第三批）：**这两条也进表了**（键 `onboarding.tutorial.start` /
+ * `onboarding.tutorial.skip`，中文值逐字等于用户原话）⇒ 本文件代码位里**零中文**，
+ * 已按"清单只准变短"的规矩从待办表里删掉。
+ * 形态：`ONBOARDING_LABELS` 那个导出对象改成**现调 `t()` 的函数** `onboardingLabels()` ——
+ * 对象字面量在模块加载那一刻就把语言钉死了，而这两个按钮必须跟着第 1 步选的语言走。
  */
-export const ONBOARDING_LABELS = {
-  /** 第 3 步两个选项（用户原话） */
-  startTutorial: '开始教学',
-  skipTutorial: '我玩过，直接跳过',
-} as const;
+export function onboardingLabels(): { readonly startTutorial: string; readonly skipTutorial: string } {
+  return {
+    startTutorial: t('onboarding.tutorial.start'),
+    skipTutorial: t('onboarding.tutorial.skip'),
+  };
+}
 
 /**
  * 第 2 步那几条**授权界面文字**的取值口（`t()` 的键以字面量写在这里 —— 缺键扫描腿要看得见）。
@@ -343,8 +350,8 @@ export function onboardingOverlayElement(
     if (startTutorial) nav.startTutorial?.(outcome);
     nav.onFinish(outcome);
   };
-  const startBtn = button('btn onboarding-start-tutorial', ONBOARDING_LABELS.startTutorial, () => finish(true));
-  const skipBtn = button('btn onboarding-skip-tutorial', ONBOARDING_LABELS.skipTutorial, () => finish(false));
+  const startBtn = button('btn onboarding-start-tutorial', onboardingLabels().startTutorial, () => finish(true));
+  const skipBtn = button('btn onboarding-skip-tutorial', onboardingLabels().skipTutorial, () => finish(false));
   s3Actions.appendChild(startBtn);
   s3Actions.appendChild(skipBtn);
   step3.appendChild(s3Question);

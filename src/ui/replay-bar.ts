@@ -34,6 +34,8 @@
  * 测试腿按"**每个**回调都有控件 + 每次点击**恰好**触发一条回调 + 点遍全部控件覆盖全部回调"
  * 生成式写（比"五个控件"的字面更强，不是放宽）。
  */
+import { t } from '../i18n';
+
 export interface ReplayBarNav {
   pause(): void;
   play(): void;
@@ -58,14 +60,15 @@ export interface ReplayBarState {
 /** 倍速按钮的档位（`0` 不在这里：暂停由切换控件承担，见文件头注的 D8 那一条）。 */
 const RATES = [1, 2, 4] as const;
 
-const LABEL_PAUSE = '暂停';
-const LABEL_PLAY = '继续';
-const LABEL_NEXT = '单步';
-const LABEL_EXIT = '退出重放';
-/** 恒在的只读说明（D3：重放页"不可操作"必须**看得见**）。 */
-const READONLY_NOTE = '重放中不可操作（只读）';
-/** 完成态文案（D8 逐字要求"重放结束停在终局状态并**显示「已重放完」**"）。 */
-const DONE_NOTE = '已重放完';
+/**
+ * ★ 2026-10-02（i18n 逐屏抽取）：六句文案搬进 `src/i18n/`（键 `replay.*`），
+ * 中文值**逐字等于改动前**那六个字面量（`暂停` / `继续` / `单步` / `退出重放` /
+ * `重放中不可操作（只读）` / `已重放完`）。
+ *
+ * ⚠️ 一律**在 `renderReplayBar()` 里现调 `t()`**（不是模块加载时算一次）：这一条控制条
+ * 每帧重建、语言换了由宿主重画，现调才跟得上；而且它刻意**没有模块态**（见文件头注第 1 条），
+ * 模块级的文案常量会让"没有模块态"这条纪律出现一个例外。
+ */
 
 /** 建一个带类名的元素（文档由调用方的 parent 提供，见文件头注第 2 条）。 */
 function el(doc: Document, tag: string, cls: string): HTMLElement {
@@ -131,14 +134,14 @@ export function renderReplayBar(
     doc,
     state.paused ? 'replay-btn replay-play' : 'replay-btn replay-pause',
     state.paused ? 'replay-play' : 'replay-pause',
-    state.paused ? LABEL_PLAY : LABEL_PAUSE,
+    state.paused ? t('replay.play') : t('replay.pause'),
     () => { if (state.paused) nav.play(); else nav.pause(); },
   );
   toggle.disabled = state.done;
   controls.appendChild(toggle);
 
   // 单步：无视倍速走一步（D8）；`done` 后禁用。
-  const next = ctrl(doc, 'replay-btn replay-next', 'replay-next', LABEL_NEXT, () => nav.next());
+  const next = ctrl(doc, 'replay-btn replay-next', 'replay-next', t('replay.next'), () => nav.next());
   next.disabled = state.done;
   controls.appendChild(next);
 
@@ -150,7 +153,7 @@ export function renderReplayBar(
     controls.appendChild(b);
   }
 
-  controls.appendChild(ctrl(doc, 'replay-btn replay-exit', 'replay-exit', LABEL_EXIT, () => nav.exit()));
+  controls.appendChild(ctrl(doc, 'replay-btn replay-exit', 'replay-exit', t('replay.exit'), () => nav.exit()));
 
   // 完成态文案（D8 逐字要求"重放结束停在终局状态并**显示「已重放完」**"）。
   // ⚠️ 与下面的只读说明**并列**（不是替代它）：结束后仍然不可操作，D3 那句话必须继续在屏上。
@@ -159,14 +162,14 @@ export function renderReplayBar(
   if (state.done) {
     const done = el(doc, 'div', 'replay-done-note');
     done.dataset.role = 'replay-done-note';
-    done.textContent = DONE_NOTE;
+    done.textContent = t('replay.done');
     bar.appendChild(done);
   }
 
   // 恒在的只读说明（判据 7 的"恒"字由测试在 运行/暂停/结束/错误 四种状态上都断言）。
   const note = el(doc, 'div', 'replay-readonly-note');
   note.dataset.role = 'replay-readonly-note';
-  note.textContent = READONLY_NOTE;
+  note.textContent = t('replay.readonly');
   bar.appendChild(note);
 
   return { bar, shield };

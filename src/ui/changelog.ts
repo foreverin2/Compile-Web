@@ -35,7 +35,18 @@
  * }
  * ```
  * `fix` 必须**以"已修复"开头**（`tests/ui/changelog.test.ts` 会钉这条格式）。
+ *
+ * ## ★ 2026-10-02（i18n 逐屏抽取）：抽的是**面板外壳**，条目正文一个字都没动
+ *
+ * 用户铁律（本文件头注第 1 条）是"我告诉你加什么你就加什么" ⇒ **更新日志的条目正文
+ * （`problem` / `fix`）不许翻译**：它们只有中文一份，英文界面下照旧显示中文。
+ * 这是**已知缺口**，登记在 `docs/2026-10-01-i18n-尚未抽取的屏.md` 的 F 节。
+ *
+ * 走 `t()` 的只有**面板自己的壳**：标题、关闭按钮、aria-label、上面那句"最新的在最上面…"、
+ * 空态那句。它们的中文值**逐字等于改动前**的字面量。
  */
+import { t } from '../i18n';
+
 export interface ChangelogItem {
   /** 玩家视角的问题（一句话说清现象） */
   readonly problem: string;
@@ -158,8 +169,19 @@ export const CHANGELOG: readonly ChangelogDay[] = [
  */
 export const CHANGELOG_BLANK_LINES = 3;
 
-/** 列表为空时面板上显示的那一句（不是"没有日志"这种冷话，给清楚下一步） */
-export const CHANGELOG_EMPTY_NOTE = '还没有写进来的更新记录。给我内容，我按你的格式加。';
+/**
+ * 列表为空时面板上显示的那一句（不是"没有日志"这种冷话，给清楚下一步）。
+ *
+ * ★ 2026-10-02（i18n）：它是**面板的壳**（不是用户口述的条目），所以搬进 `src/i18n/`
+ * （键 `changelog.empty`），中文值**逐字等于改动前**的字面量。
+ *
+ * ⚠️ 形态由"导出的字符串常量"改成"**现调 `t()` 的函数**"：常量在模块加载时就把语言钉死了，
+ * 而空态那一句必须跟着当前语言走。`tests/ui/changelog.test.ts` 里那条"空态那句不是空的"
+ * 相应从读常量改成**调这个函数** —— 判据面（那句话的取值）逐字未变。
+ */
+export function changelogEmptyNote(): string {
+  return t('changelog.empty');
+}
 
 /** 最小的建节点工具（本文件自带，不引 `home.ts` 的私有 helper，也不新增样式表） */
 function el(tag: string, cls: string, text?: string): HTMLElement {
@@ -190,22 +212,22 @@ export function changelogText(days: readonly ChangelogDay[] = CHANGELOG): string
 export function changelogElement(nav: { readonly onClose: () => void } = { onClose: () => {} }): HTMLElement {
   const panel = el('div', 'changelog-panel');
   panel.setAttribute('role', 'dialog');
-  panel.setAttribute('aria-label', '更新日志');
+  panel.setAttribute('aria-label', t('changelog.aria'));
 
   const head = el('div', 'changelog-head');
-  head.appendChild(el('div', 'changelog-title', '更新日志'));
-  const close = el('button', 'btn changelog-close', '关闭');
+  head.appendChild(el('div', 'changelog-title', t('changelog.title')));
+  const close = el('button', 'btn changelog-close', t('changelog.close'));
   close.setAttribute('type', 'button');
   close.addEventListener('click', () => { nav.onClose(); });
   head.appendChild(close);
   panel.appendChild(head);
 
   if (CHANGELOG.length === 0) {
-    panel.appendChild(el('div', 'changelog-empty', CHANGELOG_EMPTY_NOTE));
+    panel.appendChild(el('div', 'changelog-empty', changelogEmptyNote()));
     return panel;
   }
 
-  panel.appendChild(el('div', 'changelog-hint', '最新的在最上面，往下翻是更早的。'));
+  panel.appendChild(el('div', 'changelog-hint', t('changelog.hint')));
   CHANGELOG.forEach((day, index) => {
     if (index > 0) {
       // ★ 2026-09-30：两天之间是**空三行**（用户口径），所以这里放一个空占位，不写任何字符

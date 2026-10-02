@@ -62,6 +62,7 @@
  * "`src/ui` 的样式表全集 == 收录 ∪ 排除"，新增一张表必须在那份测试里显式归类，
  * 而测试文件不在本任务的边界内 ⇒ 那个提示的样式由 `t44-video-fallback.ts` 行内落地。
  * ========================================================================== */
+import { t } from '../i18n';
 import { initTransitionHint } from './t44-video-fallback';
 
 /** 检测读数（夹具判据 ④ 逐档读它）。 */
@@ -401,18 +402,22 @@ function onBoardScreen(): boolean {
 }
 
 function buildGate(): HTMLElement {
+  /**
+   * ★ 2026-10-02（i18n 逐屏抽取）：门上这三句搬进 `src/i18n/`（键 `phone-landscape.gate.*`），
+   * 中文值**逐字等于改动前**那三个字面量。门是**这一刻现建**的 ⇒ 建的时候取一次就够。
+   */
   const box = document.createElement('div');
   box.className = GATE_CLASS;
   const title = document.createElement('p');
   title.className = 't39-gate-title';
-  title.textContent = '请把设备横过来';
+  title.textContent = t('phone-landscape.gate.title');
   const hint = document.createElement('p');
   hint.className = 't39-gate-hint';
-  hint.textContent = '这个界面按横屏排版。点下面的按钮直接横屏；如果这台设备不支持全屏或方向锁，页面会自己转 90 度。';
+  hint.textContent = t('phone-landscape.gate.hint');
   const btn = document.createElement('button');
   btn.type = 'button';
   btn.className = GATE_BTN_CLASS;
-  btn.textContent = '横屏游玩';
+  btn.textContent = t('phone-landscape.gate.button');
   btn.addEventListener('click', () => {
     void press();
   });
@@ -1090,7 +1095,7 @@ function syncPanHint(on: boolean): void {
   if (panHint === null || !panHint.isConnected) {
     panHint = document.createElement('div');
     panHint.className = PAN_HINT_CLASS;
-    panHint.textContent = '在空白处单指拖动，查看画面其余部分';
+    panHint.textContent = t('phone-landscape.pan-hint');
     document.body.appendChild(panHint);
   }
   panHint.classList.toggle('is-on', on);

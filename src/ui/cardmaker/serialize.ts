@@ -14,11 +14,28 @@
  *
  * 为什么图片要"池化"（`imgs` + `img:<key>` 引用）：一张图被正/背两面或"整副牌共用背景"
  * 引用多次时，逐份内嵌会把文件撑成 N 倍。池化之后同一份 base64 只出现一次。
+ *
+ * ★ 2026-10-02（i18n 逐屏抽取）：**四类导入失败的那几句**搬进 `src/i18n/`
+ * （键 `cardmaker.serialize.*`），中文值**逐字等于改动前**的字面量。
+ * ⚠️ 它们只在这里产出（`parseDeck` 的 `message`），屏上由 `page.ts` 原样写进状态行。
  */
+import { t } from '../../i18n';
 import { DECK_FORMAT, DECK_VERSION } from './config';
 import { hydrateDeck } from './model';
 import { hashStr } from './rng';
 import { isLandscape, type Bg, type CardState, type Deck, type DeckShared, type Logo } from './types';
+
+/**
+ * 一个来路不明的值 → 屏上那条消息里能写出来的字面形态。
+ *
+ * 为什么不用裸 `JSON.stringify(v)`：它对 `undefined` / 函数 / symbol 回的是 `undefined`
+ * （**不是字符串**），塞进模板串会变成 `undefined` 这几个字母，塞进 `t()` 的占位替换
+ * 则要求 `string` 类型 ⇒ `npx tsc --noEmit` 直接报红。这里统一兜成 `'undefined'`，
+ * 形态与改动前**逐字一致**（改动前模板串插值 `undefined` 打出来也是 `undefined`）。
+ */
+function jsOf(v: unknown): string {
+  return JSON.stringify(v) ?? 'undefined';
+}
 
 /** 兜底卡 id 用的短哈希（同一份内容 ⇒ 同一把 id，重复导入不会产生两套 id） */
 function shortHash(s: string): string {
@@ -160,28 +177,34 @@ export function parseDeck(text: string): DeckParseResult {
   try {
     raw = JSON.parse(text);
   } catch (e) {
-    return { ok: false, code: 'not-json', message: `这不是一个 JSON 文件：${String(e)}` };
+    return { ok: false, code: 'not-json', message: t('cardmaker.serialize.not-json', { detail: String(e) }) };
   }
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    return { ok: false, code: 'not-a-deck', message: '文件的顶层不是一个对象（不像是本制作器导出的牌组）' };
+    return { ok: false, code: 'not-a-deck', message: t('cardmaker.serialize.not-an-object') };
   }
   const obj = raw as Partial<DeckPayload>;
   if (obj.format !== DECK_FORMAT) {
     return {
       ok: false,
       code: 'not-a-deck',
-      message: `文件里没有本制作器的格式标记（期望 format = ${DECK_FORMAT}，实际 ${JSON.stringify(obj.format)}）`,
+      message: t('cardmaker.serialize.no-format-mark', {
+        expected: DECK_FORMAT,
+        actual: jsOf(obj.format),
+      }),
     };
   }
   if (obj.version !== DECK_VERSION) {
     return {
       ok: false,
       code: 'bad-version',
-      message: `牌组版本不认识（期望 ${DECK_VERSION}，实际 ${JSON.stringify(obj.version)}）`,
+      message: t('cardmaker.serialize.bad-version', {
+        expected: String(DECK_VERSION),
+        actual: jsOf(obj.version),
+      }),
     };
   }
   if (typeof obj.deck !== 'object' || obj.deck === null) {
-    return { ok: false, code: 'bad-shape', message: '文件里有格式标记，但没有牌组内容（deck 字段）' };
+    return { ok: false, code: 'bad-shape', message: t('cardmaker.serialize.no-deck') };
   }
   const imgs = obj.imgs;
   const index: ImageIndex = new Map();

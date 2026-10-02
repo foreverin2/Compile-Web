@@ -31,7 +31,21 @@
  * 「预检」「提示文案」「测试」三处各出现一次，改一处就漂。
  *
  * 本文件**不引任何浏览器 API**，因此能在 vitest（node 环境）里直接 import。
+ *
+ * ★ 2026-10-02（i18n 逐屏抽取）：本文件里**玩家可见的那几句**搬进 `src/i18n/`（键 `feedback.*`），
+ * 中文值**逐字等于改动前**的字面量。形态上分了两种，都是有意的：
+ *
+ *  1. **两档切换的标签**（`FEEDBACK_KIND_LABELS` / `..._BADGES` / `..._AUTHOR_LABELS` /
+ *     `..._BODY_LABELS` / `..._BODY_PLACEHOLDERS`）：由**导出的常量表**改成**现调 `t()` 的函数**
+ *     （`feedbackKindLabels()` …）。常量表在模块加载时就把语言钉死了，而屏上那两档必须跟着
+ *     当前语言走；函数形态同时让"值只有一个家"这条纪律成立（表里没有第二份中文）。
+ *  2. **纯函数里拼出来的句子**（必填提示 / 附件预检 / 读数）：本来就在函数体里，直接把字面量
+ *     换成 `t('…')` 即可。
+ *
+ * ⚠️ **服务端给的中文原因不进表**（`serverErrorText()` 只负责"读出来"）：那是服务端的读数，
+ * 用户明确要求**原样显示**（`tests/ui/feedback-screen.test.ts` 有一条腿钉着"一个字符都不改"）。
  */
+import { t } from '../i18n';
 
 /** 两种操作的机器值（与服务端契约 `kind` 字段逐字对齐：`protocol` | `bug`） */
 export type FeedbackKind = 'protocol' | 'bug';
@@ -39,38 +53,38 @@ export type FeedbackKind = 'protocol' | 'bug';
 /** `kind` 的两档（顺序 = 屏上两个切换按钮的顺序，也是测试遍历的来源） */
 export const FEEDBACK_KINDS: readonly FeedbackKind[] = ['protocol', 'bug'];
 
-/** 两档在屏上的中文名（用户原话：「投稿自定义协议」「bug 反馈」） */
-export const FEEDBACK_KIND_LABELS: Readonly<Record<FeedbackKind, string>> = {
-  protocol: '投稿自定义协议',
-  bug: 'bug 反馈',
-};
+/**
+ * 两档在屏上的名字（用户原话：「投稿自定义协议」「bug 反馈」）。
+ *
+ * ★ 2026-10-02（i18n）：**现调 `t()` 的函数**（原来是导出的常量表）—— 理由见文件头注第 1 条。
+ * 中文值在 `zh.ts` 里**逐字等于改动前**的 `投稿自定义协议` / `bug 反馈`。
+ */
+export function feedbackKindLabels(): Readonly<Record<FeedbackKind, string>> {
+  return { protocol: t('feedback.kind.protocol'), bug: t('feedback.kind.bug') };
+}
 
-/** 卡片上那个小徽章的文案（比按钮文案短一档，卡里放得下） */
-export const FEEDBACK_KIND_BADGES: Readonly<Record<FeedbackKind, string>> = {
-  protocol: '协议投稿',
-  bug: 'bug 反馈',
-};
+/** 卡片上那个小徽章的文案（比按钮文案短一档，卡里放得下）。★ 2026-10-02：现调 `t()` */
+export function feedbackKindBadges(): Readonly<Record<FeedbackKind, string>> {
+  return { protocol: t('feedback.badge.protocol'), bug: t('feedback.badge.bug') };
+}
 
 /**
  * 「投稿人」这个字段在两档下的**标题**（用户原话：投稿自定义协议叫"投稿人"，bug 反馈叫"反馈人"）。
- * 字段名在契约里是同一个 `author`，只有屏上那行标签换字。
+ * 字段名在契约里是同一个 `author`，只有屏上那行标签换字。★ 2026-10-02：现调 `t()`
  */
-export const FEEDBACK_AUTHOR_LABELS: Readonly<Record<FeedbackKind, string>> = {
-  protocol: '投稿人',
-  bug: '反馈人',
-};
+export function feedbackAuthorLabels(): Readonly<Record<FeedbackKind, string>> {
+  return { protocol: t('feedback.author.protocol'), bug: t('feedback.author.bug') };
+}
 
-/** 「说明文本」那个多行框在两档下的标题（用户原话：协议与卡牌的说明文本 / 具体的 bug 现象或反馈意见） */
-export const FEEDBACK_BODY_LABELS: Readonly<Record<FeedbackKind, string>> = {
-  protocol: '协议与卡牌的说明文本',
-  bug: '具体的 bug 现象或反馈意见',
-};
+/** 「说明文本」那个多行框在两档下的标题（用户原话：协议与卡牌的说明文本 / 具体的 bug 现象或反馈意见）。★ 现调 `t()` */
+export function feedbackBodyLabels(): Readonly<Record<FeedbackKind, string>> {
+  return { protocol: t('feedback.body.protocol'), bug: t('feedback.body.bug') };
+}
 
-/** 多行框里的灰字提示（与上面那行标签配套） */
-export const FEEDBACK_BODY_PLACEHOLDERS: Readonly<Record<FeedbackKind, string>> = {
-  protocol: '协议名、卡牌名、效果怎么结算……写清楚便于复现与评估。',
-  bug: '在哪一屏、点了什么、期望看到什么、实际看到什么。',
-};
+/** 多行框里的灰字提示（与上面那行标签配套）。★ 2026-10-02：现调 `t()` */
+export function feedbackBodyPlaceholders(): Readonly<Record<FeedbackKind, string>> {
+  return { protocol: t('feedback.body-placeholder.protocol'), bug: t('feedback.body-placeholder.bug') };
+}
 
 /**
  * 附件选择框的 `accept`：常见图片（含 pdf）+ 常见文本。
@@ -101,11 +115,13 @@ export const FEEDBACK_MAX_FILES = 5;
 /**
  * 提交成功后状态行里那句结论的**前四个字**（用户 2026-10-01 改口径时的原话：「显示「提交成功」」）。
  *
- * 单独抽成常量、而不是把整句写死在一处：屏上的整句是
- * `${FEEDBACK_SUBMIT_OK_TEXT}。编号：${id}`（编号有没有都能满足"必须含「提交成功」"），
- * 而测试与将来可能的文案调整都读这一个出口。
+ * ★ 2026-10-02（i18n）：改成**现调 `t()` 的函数**（原来是导出常量）。
+ * 屏上的整句是 `${FEEDBACK_SUBMIT_OK_TEXT}。编号：${id}` —— 那个句号与"编号："也进表了
+ * （键 `feedback.submit.ok-tail`），所以屏上那句话现在是两段拼的，**没有第二份中文**。
  */
-export const FEEDBACK_SUBMIT_OK_TEXT = '提交成功';
+export function feedbackSubmitOkText(): string {
+  return t('feedback.submit.ok');
+}
 
 /**
  * 提交成功后**停留多久再自动关闭浮层**（毫秒）。
@@ -153,11 +169,11 @@ export function hasMissing(m: FeedbackMissing): boolean {
  */
 export function feedbackMissingText(m: FeedbackMissing): string {
   const names: string[] = [];
-  if (m.title) names.push('标题');
-  if (m.author) names.push('投稿人/反馈人');
-  if (m.body) names.push('说明文本');
+  if (m.title) names.push(t('feedback.missing.title'));
+  if (m.author) names.push(t('feedback.missing.author'));
+  if (m.body) names.push(t('feedback.missing.body'));
   if (names.length === 0) return '';
-  return `还有必填项没写：${names.join('、')}。`;
+  return t('feedback.missing.line', { names: names.join(t('feedback.missing.sep')) });
 }
 
 /** 本地预检要看的最小文件信息（`File` 与测试夹具都满足它） */
@@ -201,14 +217,20 @@ export function checkFileSelection<T extends FeedbackFileInfo>(
 
   const lines: string[] = [];
   if (rejected.length > 0) {
-    const names = rejected.map((f) => f.name).join('、');
-    lines.push(`已跳过超过 10MB 的附件：${names}（每份不能超过 10MB）。`);
+    const names = rejected.map((f) => f.name).join(t('feedback.attach.sep'));
+    lines.push(t('feedback.attach.too-large', {
+      names,
+      // ⚠️ 这里写的是**玩家读到的那个形态**（`10MB`），与 `formatBytes()` 的 `10.0 MB` 不同：
+      //    改动前那句字面量就是 `10MB`（既有测试逐字钉着它），所以它按"文案"住在表里，
+      //    而**上限这个数**仍然只有一个出处（`FEEDBACK_MAX_FILE_BYTES`，`formatBytes` 那条腿钉它）。
+      size: '10MB',
+    }));
   }
   if (dropped.length > 0) {
-    lines.push(
-      `一次最多带 ${FEEDBACK_MAX_FILES} 份附件，多出来的 ${dropped.length} 份没有加上；`
-      + '需要的话请分几次提交。',
-    );
+    lines.push(t('feedback.attach.over-count', {
+      max: String(FEEDBACK_MAX_FILES),
+      dropped: String(dropped.length),
+    }));
   }
   return { kept: finalKept, rejected, notice: lines.join(' '), droppedCount: dropped.length };
 }
@@ -219,7 +241,7 @@ export function checkFileSelection<T extends FeedbackFileInfo>(
  * 1024 进制，保留一位小数（`10.0 MB` 这种）；小于 1KB 直接给字节数 —— 不写"0.0 KB"。
  */
 export function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 0) return '未知大小';
+  if (!Number.isFinite(bytes) || bytes < 0) return t('feedback.bytes.unknown');
   if (bytes < 1024) return `${bytes} B`;
   const units = ['KB', 'MB', 'GB'];
   let v = bytes / 1024;
@@ -246,7 +268,7 @@ export interface FeedbackAttachment {
  * 两种都认；都不认就**原样回显**（宁可显示一串看不懂的，也不要显示空白或 "Invalid Date"）。
  */
 export function formatCreatedAt(raw: string | number | null | undefined): string {
-  if (raw === null || raw === undefined || raw === '') return '时间未知';
+  if (raw === null || raw === undefined || raw === '') return t('feedback.time.unknown');
   const d = typeof raw === 'number' ? new Date(raw) : new Date(raw);
   if (Number.isNaN(d.getTime())) return String(raw);
   const pad = (n: number): string => String(n).padStart(2, '0');
@@ -442,9 +464,9 @@ export function readActionOk(json: unknown, fallback: string): ActionReading {
   return { ok: false, error: serverErrorText(json, fallback) };
 }
 
-/** 顶部那句读数："共 N 条 · 未读 M 条"（唯一出处；标记已读/删除后就地改它） */
+/** 顶部那句读数："共 N 条 · 未读 M 条"（唯一出处；标记已读/删除后就地改它）。★ 2026-10-02：现调 `t()` */
 export function feedbackCountText(page: { readonly total: number; readonly unread: number }): string {
-  return `共 ${page.total} 条 · 未读 ${page.unread} 条`;
+  return t('feedback.count', { total: String(page.total), unread: String(page.unread) });
 }
 
 /** 读 `{ ok: true, item: {...} }`；不认的形状返回 `null` */
@@ -498,12 +520,17 @@ function normalizeListItem(raw: Record<string, unknown>): FeedbackListItem {
  *
  * 用户要求"不依赖服务端也能给出可读的失败信息……提示'当前环境没有反馈服务'这类人话，
  * 不要抛未捕获异常"⇒ 网络层的 `TypeError`（fetch 拒连）与"响应不是 JSON"都归到这一句。
+ *
+ * ★ 2026-10-02（i18n）：由**导出的常量**改成**现调 `t()` 的函数**（理由见文件头注第 1 条）。
  */
-export const FEEDBACK_OFFLINE_TEXT = '当前环境没有反馈服务（或网络不通）：请稍后再试，'
-  + '本地开发环境没有这个服务是正常的。';
+export function feedbackOfflineText(): string {
+  return t('feedback.offline');
+}
 
-/** `GET` 失败（非 401）时给用户看的那句默认话（服务端给了中文原因时优先用它的） */
-export const FEEDBACK_READ_FAIL_TEXT = '读取失败：服务端没有返回预期内容。';
+/** `GET` 失败（非 401）时给用户看的那句默认话（服务端给了中文原因时优先用它的）。★ 现调 `t()` */
+export function feedbackReadFailText(): string {
+  return t('feedback.read-fail');
+}
 
 /**
  * **会话过期（401）**时退回口令框、写在口令框状态行上的那句话。
@@ -511,11 +538,16 @@ export const FEEDBACK_READ_FAIL_TEXT = '读取失败：服务端没有返回预�
  * ★ 2026-10-01 追加。为什么需要它：`401` 的四条通路（列表 / 详情 / 标记已读 / 删除）都是
  * "正在看列表，突然变成让我输口令"——没有这句的话用户不知道发生了什么。
  * 服务端在 401 上给的是 `未登录`（三个字，太干），屏上另写一句人话更好读。
+ * ★ 2026-10-02（i18n）：现调 `t()`。
  */
-export const FEEDBACK_SESSION_EXPIRED_TEXT = '登录已过期，请重新输入口令。';
+export function feedbackSessionExpiredText(): string {
+  return t('feedback.session-expired');
+}
 
-/** 口令不对时的默认话（服务端 401 给的是「密码不对」，原样优先） */
-export const FEEDBACK_PASSWORD_FAIL_TEXT = '密码不对';
+/** 口令不对时的默认话（服务端 401 给的是「密码不对」，原样优先）。★ 2026-10-02：现调 `t()` */
+export function feedbackPasswordFailText(): string {
+  return t('feedback.password-fail');
+}
 
 /**
  * 一次请求的结果：要么拿到 `json`，要么带着一句**给用户看的话**。
@@ -547,7 +579,7 @@ export async function requestJson(
   try {
     res = await fetcher.fetch(method, url, body, 'same-origin', info);
   } catch {
-    return { ok: false, status: 0, text: FEEDBACK_OFFLINE_TEXT };
+    return { ok: false, status: 0, text: feedbackOfflineText() };
   }
   let json: unknown = null;
   let parsed = false;
@@ -560,12 +592,12 @@ export async function requestJson(
   if (!parsed) {
     const status = typeof res.status === 'number' ? res.status : 0;
     const text = status > 0
-      ? `${FEEDBACK_READ_FAIL_TEXT}（HTTP ${status}）`
-      : FEEDBACK_READ_FAIL_TEXT;
+      ? t('feedback.read-fail-http', { status: String(status) })
+      : feedbackReadFailText();
     return { ok: false, status, text };
   }
   if (!res.ok) {
-    return { ok: false, status: res.status, text: serverErrorText(json, FEEDBACK_READ_FAIL_TEXT) };
+    return { ok: false, status: res.status, text: serverErrorText(json, feedbackReadFailText()) };
   }
   return { ok: true, status: res.status, json };
 }

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   CHANGELOG,
   CHANGELOG_BLANK_LINES,
-  CHANGELOG_EMPTY_NOTE,
+  changelogEmptyNote,
   changelogText,
   type ChangelogDay,
 } from '../../src/ui/changelog';
@@ -53,7 +53,10 @@ describe('首页「更新日志」：版式机器（用户 2026-09-29 给的格�
 
   it('空列表 ⇒ 空串（面板另有那句空态提示，别把空白当成日志）', () => {
     expect(changelogText([])).toBe('');
-    expect(CHANGELOG_EMPTY_NOTE.trim().length, '空态那句是空的？').toBeGreaterThan(0);
+    // ★ 2026-10-02（i18n 逐屏抽取）：空态那句的**形态**由"导出的字符串常量"改成
+    //   "现调 `t()` 的函数"（常量会把语言钉在模块加载那一刻）。
+    //   判据面逐字未变：仍然是"这句话非空"（原来读 `CHANGELOG_EMPTY_NOTE.trim().length`）。
+    expect(changelogEmptyNote().trim().length, '空态那句是空的？').toBeGreaterThan(0);
   });
 });
 
