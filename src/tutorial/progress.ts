@@ -31,7 +31,7 @@ export interface TutProgressView {
   readonly done: readonly TutLevelId[];
   /** 下次进来从哪一关开始 */
   readonly current: TutLevelId;
-  /** 四关是不是都完成了 */
+  /** 全部关卡（当前 14 关）是不是都完成了 */
   readonly allDone: boolean;
 }
 

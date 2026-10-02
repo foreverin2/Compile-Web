@@ -58,6 +58,18 @@ export interface TutLevel {
    *    两类都是 **UI 状态差分**，不是"点了下一步就算过"。
    */
   readonly interaction: 'engine' | 'ui';
+  /**
+   * ★ 2026-10-02（P7）**本关要不要保留引擎自己的"步"**（缺省 false ⇒ 教学屏在每次动作之后
+   * 把回合交还玩家 0 并回到行动步，那是 T4 那批"连着做几个动作"的关卡需要的沙盒规则）。
+   *
+   * 只有 **T10（控制权）** 需要它：控制权的判定发生在 **`check-control` 这一步**
+   * （`src/core/game.ts:293` 的 `performAdvance`），而玩家必须**点一次「推进」**才会走到那一步
+   * （`getLegalActions` 在 `step === 'check-control'` 时只出 `advance`）。
+   * 教学屏原来那条"动作后强制回到 `action`"的规则会**把这一步跳过去** ⇒ 这一关就永远过不了。
+   * ⇒ T10 开局就摆在 `check-control`，并声明 `keepStep: true`：那一次 `advance` 之后
+   * `checkControl()` 真的跑（与真对局同一条代码路径），判据读 `s.control`。
+   */
+  readonly keepStep?: boolean;
   /** T0 专用：要点一遍的四个区域（链路 / 协议 / 阈值 / 控制权） */
   readonly spots?: readonly TutSpot[];
   /**
@@ -87,10 +99,12 @@ export interface TutLevel {
 }
 
 /**
- * 十关。**顺序就是玩的顺序**（进度里的"当前关"按这个数组的序号推）。
+ * 十四关。**顺序就是玩的顺序**（进度里的"当前关"按这个数组的序号推）。
  *
  * ★ 2026-10-02（P6）**编号再动一次**：`T7` 从"编译与阈值"变成"默认目标规则"、
  * 编译挪到 `T8`、新增 `T9`「打出 vs 露出」。理由与老进度的代价写在方案 §7.11。
+ * ★ 2026-10-02（P7）**追加最后四关** T10~T13（控制权 / 触发时机 / 删除·免疫·加成 / 迷你对局）——
+ * 这一次只是往后加，老进度的 id 没有被重新指向（方案 §7.13）。
  */
 export const TUT_LEVELS: readonly TutLevel[] = [
   {
@@ -318,6 +332,99 @@ export const TUT_LEVELS: readonly TutLevel[] = [
     ],
     observe: () => t('tutorial.T9.observe'),
     allowKinds: ['play', 'effect-choice'],
+    interaction: 'engine',
+  },
+  {
+    id: 'T10',
+    // ★ 2026-10-02（P7）：控制权 —— 怎么拿到、拿到有什么用
+    //   实现口径（**文案必须按这个写**，见方案 §7.13）：`checkControl()`（`src/core/rules/control.ts:35-52`）
+    //   只看**当前行动玩家自己**：他在**至少 2 条**线路上的总值高于对手 ⇒ 获得控制组件。
+    //   ⚠️ 上一轮有人把"编译门槛"讲成"差 5"被自己的腿抓到；这里同理，文案写"两条线都高过对手"。
+    title: () => t('tutorial.T10.title'),
+    goal: () => t('tutorial.T10.goal'),
+    teach: [
+      () => t('tutorial.T10.teach.0'),
+      () => t('tutorial.T10.teach.1'),
+      () => t('tutorial.T10.teach.2'),
+      () => t('tutorial.T10.teach.3'),
+    ],
+    scenario: () => t('tutorial.T10.scenario'),
+    guidedSteps: [
+      () => t('tutorial.T10.steps.0'),
+      () => t('tutorial.T10.steps.1'),
+      () => t('tutorial.T10.steps.2'),
+    ],
+    observe: () => t('tutorial.T10.observe'),
+    // 本关唯一的动作就是"推进一格"（引擎在 check-control 这一步判定控制权）
+    allowKinds: ['advance'],
+    // ★ 这一关必须让引擎的"步"真的走一格（否则 check-control 被跳过去）—— 见 TutLevel.keepStep
+    keepStep: true,
+    interaction: 'engine',
+  },
+  {
+    id: 'T11',
+    // ★ 2026-10-02（P7）：触发时机 —— 打出后 / 被盖住前 / 结束，三种各用一张真卡演示一次
+    title: () => t('tutorial.T11.title'),
+    goal: () => t('tutorial.T11.goal'),
+    teach: [
+      () => t('tutorial.T11.teach.0'),
+      () => t('tutorial.T11.teach.1'),
+      () => t('tutorial.T11.teach.2'),
+      () => t('tutorial.T11.teach.3'),
+    ],
+    scenario: () => t('tutorial.T11.scenario'),
+    guidedSteps: [
+      () => t('tutorial.T11.steps.0'),
+      () => t('tutorial.T11.steps.1'),
+      () => t('tutorial.T11.steps.2'),
+      () => t('tutorial.T11.steps.3'),
+    ],
+    observe: () => t('tutorial.T11.observe'),
+    // play = 盖住 fire-0；effect-choice = ice-1 让对手弃牌那次应答；resolve-trigger = 结束阶段点「结算触发」
+    allowKinds: ['play', 'effect-choice', 'resolve-trigger'],
+    interaction: 'engine',
+  },
+  {
+    id: 'T12',
+    // ★ 2026-10-02（P7）：删除 / 免疫 / 加成
+    title: () => t('tutorial.T12.title'),
+    goal: () => t('tutorial.T12.goal'),
+    teach: [
+      () => t('tutorial.T12.teach.0'),
+      () => t('tutorial.T12.teach.1'),
+      () => t('tutorial.T12.teach.2'),
+      () => t('tutorial.T12.teach.3'),
+    ],
+    scenario: () => t('tutorial.T12.scenario'),
+    guidedSteps: [
+      () => t('tutorial.T12.steps.0'),
+      () => t('tutorial.T12.steps.1'),
+      () => t('tutorial.T12.steps.2'),
+      () => t('tutorial.T12.steps.3'),
+    ],
+    observe: () => t('tutorial.T12.observe'),
+    allowKinds: ['play', 'effect-choice'],
+    interaction: 'engine',
+  },
+  {
+    id: 'T13',
+    // ★ 2026-10-02（P7）：迷你对局 —— 用三条线打一小局到终局（`s.winner !== null`）
+    title: () => t('tutorial.T13.title'),
+    goal: () => t('tutorial.T13.goal'),
+    teach: [
+      () => t('tutorial.T13.teach.0'),
+      () => t('tutorial.T13.teach.1'),
+      () => t('tutorial.T13.teach.2'),
+      () => t('tutorial.T13.teach.3'),
+    ],
+    scenario: () => t('tutorial.T13.scenario'),
+    guidedSteps: [
+      () => t('tutorial.T13.steps.0'),
+      () => t('tutorial.T13.steps.1'),
+      () => t('tutorial.T13.steps.2'),
+    ],
+    observe: () => t('tutorial.T13.observe'),
+    allowKinds: ['compile'],
     interaction: 'engine',
   },
 ];

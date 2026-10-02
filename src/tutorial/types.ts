@@ -37,8 +37,20 @@ import type { Card } from '../core/models/types';
  *
  * 同样：老进度里的 `T7` 以前是"编译与阈值"、现在是"默认目标规则"，清一次本机数据即恢复。
  * 登记在方案 §7.11。
+ *
+ * ⚠️★ 2026-10-02（P7）**补完最后四关**（用户口径见方案 §5.2 的表 + §7.13）：
+ *
+ * | 现编号 | 教什么 |
+ * |---|---|
+ * | T0~T9 | 未动 |
+ * | **T10** | **控制权**（怎么拿到、拿到有什么用） |
+ * | **T11** | **触发时机**（打出后 / 被盖住前 / 结束，三种各演示一次） |
+ * | **T12** | **删除 / 免疫 / 加成** |
+ * | **T13** | **迷你对局**（用三条线打一小局到终局） |
+ *
+ * 与 P5/P6 那两次不同：这次**只是往后追加**，老进度的 id 没有被重新指向（不用清本机数据）。
  */
-export type TutLevelId = 'T0' | 'T1' | 'T2' | 'T3' | 'T4' | 'T5' | 'T6' | 'T7' | 'T8' | 'T9';
+export type TutLevelId = 'T0' | 'T1' | 'T2' | 'T3' | 'T4' | 'T5' | 'T6' | 'T7' | 'T8' | 'T9' | 'T10' | 'T11' | 'T12' | 'T13';
 
 /** T0 要点一遍的四个界面区域（链路 / 协议 / 阈值 / 控制权） */
 export type TutSpot = 'link' | 'protocol' | 'threshold' | 'control';
@@ -126,6 +138,55 @@ export function canPeekFaceDown(
   phase: string,
 ): boolean {
   return card.faceUp || phase === 'gameover' || (isSelfSlot && card.secret !== true);
+}
+
+/**
+ * ★ 2026-10-02（P7）T11「触发时机」里**用日志观测**的两种触发（被盖住前 / 结束）。
+ *
+ * 为什么它们要从**引擎日志**里读：这两种触发的机械形态是"引擎在某个时点把一张卡的某一段
+ * 文本入栈并结算"，而结算完之后**状态里只剩间接痕迹**（手牌多了、牌进了弃牌堆）。用户口径要的是
+ * "三条触发真的各出现过一次"，最接近这件事的证据就是引擎自己那条 `[阶段] 卡：…` 日志
+ * （`src/core/log.ts:23` 的 `pushEffectLog`，`stageLabel()` 给出中文阶段名）。
+ *
+ * ⚠️★ **第三种（`after-play`，打出后）不在这条通道里** —— 这是本轮实测抓到的一件事：
+ * `after-play` 走的是**定向触发** `fireDirectedTop()`（`src/core/effects/resolve.ts:70-94`），
+ * 它**只把效果入栈、不调 `pushEffectLog`** ⇒ 日志里**永远没有** `[连锁·出牌后]` 这一行
+ * （`stageLabel('after-play')` 因此是一条**当前不可达**的标签）。所以 T11 的"打出后"那一路
+ * 由**状态**证明：对手那张牌真的进了**对手的弃牌堆**（见 `judge.ts` 的 T11 分支）。
+ * 这条如实登记在方案 §7.13，免得后来者又去日志里找一个不存在的字符串。
+ *
+ * ⚠️ 它们**不是第二份真相**：下面 `triggersSeen()` 逐字读的是 `stageLabel()` 的返回值，
+ * `tests/tutorial/levels.test.ts` 有一条腿把两边钉在一起（只改一边就红）。
+ */
+export type TutTrigger = 'before-covered' | 'end';
+
+/**
+ * 两种触发各自的**日志标记**（与 `src/core/log.ts` 的 `stageLabel()` 逐字对应）：
+ *
+ * | kind | `stageLabel()` | 出处（实测，见方案 §7.13） |
+ * |---|---|---|
+ * | `before-covered` | `被盖前` | `fire-0` 底「被盖住前：先抽1张牌并翻转另1张牌」 |
+ * | `end` | `结束` | `life-0` 顶「结束：若此卡被覆盖，则移除此卡」 |
+ */
+const TRIGGER_LABEL: Readonly<Record<TutTrigger, string>> = {
+  'before-covered': '被盖前',
+  'end': '结束',
+};
+
+/**
+ * 从引擎日志里读"这两种触发各出现过没有（各出现过几次）"。
+ *
+ * 判据只关心"出现过"，所以返回值是每个 kind 的次数（`0` 就是没出现）。
+ * ⚠️ 日志是**单调增长**的（教学里 `openLevel()` 重建 state 时才清空）⇒ 这个读数只会变大，
+ * 正是判据要的语义（做过一次就算做过）——与 `judge.ts` 的 `revealSeen()` 同一口径。
+ */
+export function triggersSeen(log: readonly string[]): Readonly<Record<TutTrigger, number>> {
+  const text = log.join('\n');
+  const count = (kind: TutTrigger): number => text.split(`[${TRIGGER_LABEL[kind]}]`).length - 1;
+  return {
+    'before-covered': count('before-covered'),
+    'end': count('end'),
+  };
 }
 
 /** 进度（存 `L1_SETTINGS.tutorial`，零新增存储键） */

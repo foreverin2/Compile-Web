@@ -99,6 +99,11 @@ function controlledGame(seed: string, lineProtocols: readonly [string, string, s
  * （`spirit-*` → 线 0、`water-4` → 线 1、`darkness-4` → 线 2），玩家打出时不用猜线。
  */
 export function buildLevelState(id: TutLevelId): GameState {
+  // ★ P7 的后四关（T10~T13）单独一段：它们的局面各有"不这么摆跑不通"的取舍，
+  //   注释与摆法都收在 `buildLevelStateP7` 里，免得把上面那十关读成一片。
+  if (id === 'T10' || id === 'T11' || id === 'T12' || id === 'T13') {
+    return buildLevelStateP7(id);
+  }
   if (id === 'T0') {
     // T0 只看界面：给一个"有牌可看"的空场，手牌 1 张，免得玩家以为可以打
     const s = controlledGame('tutorial-T0', ['spirit', 'water', 'darkness']);
@@ -285,6 +290,145 @@ export function buildLevelState(id: TutLevelId): GameState {
     card('t9h-pay', 'spirit-3', 0, 'hand', true),
   ];
   s.players[0].deck = [];
+  return s;
+}
+
+/**
+ * ★ 2026-10-02（P7）**后四关**的受控局面。
+ *
+ * 四关的摆法各有一处"不这么摆就跑不通"的取舍，逐条写在下面（都是本轮的实测结论，
+ * 原始读数在方案 §7.13）：
+ */
+function buildLevelStateP7(id: 'T10' | 'T11' | 'T12' | 'T13'): GameState {
+  if (id === 'T10') {
+    /**
+     * T10 控制权：**直接在 `check-control` 这一步开局**（`step: 'check-control'`）。
+     *
+     * 为什么不是 `action`：控制权只在**这一步**判定（`src/core/game.ts:293` 的
+     * `performAdvance` → `checkControl()`），而这台引擎里"走一步"是玩家的一次真实动作
+     * （`getLegalActions` 在 `check-control` 只出 `advance`）。所以这一关的"亲自动手"
+     * 就是**点一次推进**，判据读 `s.control`。
+     *
+     * 局面按**实现口径**摆：`checkControl()`（`src/core/rules/control.ts:35-52`）只检查
+     * **当前行动玩家自己**——他在**至少 2 条**线上的总值高于对手就拿到控制组件。
+     * 这里线 1 = 3:1、线 2 = 3:0 ⇒ 正好两条（**不是**"差 5"，上一轮有人在编译那一课
+     * 栽过同款跟头，见方案 §7.9）。
+     * ⚠️ 线 2 对手是 0 分：`getLineValue` 对空栈给 0 ⇒ 3 > 0 成立。
+     */
+    const s = controlledGame('tutorial-T10', ['spirit', 'water', 'darkness']);
+    s.step = 'check-control';
+    s.players[0].hand = [];
+    s.players[0].deck = [];
+    s.players[0].stacks[0] = [card('t10f-a', 'spirit-3', 0, 'field', true, 0, 0)];
+    s.players[0].stacks[1] = [card('t10f-b', 'water-3', 0, 'field', true, 1, 0)];
+    // 对手只有线 1 有牌（1 分）⇒ 线 2 对手 0 分，线 3 双方 0:0（不算"高过"）
+    s.players[1].stacks[0] = [card('t10o1', 'spirit-1', 1, 'field', true, 0, 0)];
+    return s;
+  }
+  if (id === 'T11') {
+    /**
+     * T11 触发时机：**三种触发各摆一处**，三处互不干扰（三张被触发的卡分别在三条线上）。
+     *
+     * | 触发 | 卡 | 谁把它弄出来 | 实测日志（方案 §7.13） |
+     * |---|---|---|---|
+     * | 打出后 | `ice-1`（**对手侧**，线 1） | **对手**在我的 `ice-1` 那条线打一张牌 | `P2 选择：ice-5` / `弃置 ice-5` |
+     * | 被盖住前 | `fire-0`（我方线 2） | **我自己**反面盖一张到它上面 | `[被盖前] fire-0` + `P1 抽 1 张牌` |
+     * | 结束 | `life-0`（我方线 3，**已被盖住**） | 结束阶段点它的「结算触发」 | `[结束] life-0：由 P1 结算` + `删除 life-0` |
+     *
+     * 三处各有一条"不这么摆不行"的理由：
+     *  1. `ice-1` 的 `after-play` 是**定向触发**：它查的是**打出者的对手**那一侧同线顶卡
+     *     （`resolve.ts:1062` 的 `fireDirectedTop(…, actor === 0 ? 1 : 0, …)`）⇒ 必须是**对手**
+     *     在**这条线**上出牌，我自己出牌不会触发它；
+     *  2. `fire-0` 的 `before-covered` 只查**该线顶卡**（`resolve.ts:1041`）⇒ 它必须是那一条线上
+     *     唯一/最上面那张，而玩家得**自己**去盖（引擎不拦"盖自己的牌"）；
+     *  3. `life-0` 的「结束」是**顶命令**（`top: true`）且带 `cond: !isUncovered`（`life.ts:83`）
+     *     ⇒ 它**只有被盖住**时才会在结束阶段被收集出来 ⇒ 局面里就要先盖好一张
+     *     （`t11c-cover` = 生命5），玩家在结束阶段点一下「结算触发」。
+     *
+     * ⚠️ 手牌里那张 `water-0` 是"盖住 fire-0"用的：**反面打出不看协议**，所以随便哪张都行；
+     * 特意挑一张 0 分且无文本的，免得它自己再触发别的效果把这一课搅浑。
+     * ⚠️ 对手手里两张冰牌都**没有中指令**（`ice-4` 的"不可被翻转"由引擎守卫实现、不注册效果；
+     * `ice-5` 的中指令是弃牌，只有它被 `ice-1` 的效果弃掉时才走一次）⇒ 这条链上只有
+     * `ice-1` 那一次选择请求，玩家的操作是确定的。
+     */
+    const s = controlledGame('tutorial-T11', ['ice', 'fire', 'life']);
+    s.players[0].hand = [];
+    s.players[0].deck = [];
+    // 打出后：自己线 1 摆 ice-1（对手会在这条线出牌）
+    s.players[0].stacks[0] = [card('t11f-a', 'ice-1', 0, 'field', true, 0, 0)];
+    // 被盖住前：自己线 2 摆 fire-0，手里一张 water-0 用来反面盖它
+    s.players[0].stacks[1] = [card('t11f-b', 'fire-0', 0, 'field', true, 1, 0)];
+    // 结束：自己线 3 摆"被盖住的 life-0"
+    s.players[0].stacks[2] = [
+      card('t11f-c', 'life-0', 0, 'field', true, 2, 0),
+      card('t11c-cover', 'life-5', 0, 'field', true, 2, 1),
+    ];
+    s.players[0].hand = [card('t11h-cover', 'water-0', 0, 'hand', true)];
+    // 对手：线 1 打一张牌（触发 ice-1），手里再留一张给它弃
+    s.players[1].hand = [card('t11o1', 'ice-4', 1, 'hand', true), card('t11o2', 'ice-5', 1, 'hand', true)];
+    s.players[1].deck = [];
+    return s;
+  }
+  if (id === 'T12') {
+    /**
+     * T12 删除 / 免疫 / 加成：三条线 = **火焰 / 明晰 / 死板**，手牌三张正好各演示一样。
+     *
+     * | 演示 | 卡（真卡） | 文本 | 判据读什么 |
+     * |---|---|---|---|
+     * | 删除 | `fire-1` 打到线 1 | 中「弃1张牌。如果弃了，删除1张牌。」 | 对手那张 `t12o1` 进了**对手弃牌堆** |
+     * | 加成 | `clarity-0` 打到线 2 | 顶「此链路中，你每有1张牌，总阈值就加1。」 | 线 2 的**总值**从 0 变成 1 |
+     * | 免疫 | `rigidity-1` 打到线 3 | 中「翻转对手1张正面朝上的牌。」 | 对手那张 `t12f-rigid`（**死板7**）底「此牌不能被翻转或偏转。」 |
+     *
+     * ⚠️ **被保护的那张必须摆在对手那条线上**：`rigidity-1` 的候选只看**对手**的顶卡
+     * （`rigidity.ts:18` 的 `owner: opp(ctx.player)`）⇒ 摆在自己场上时候选里根本没有它，
+     * 「免疫」就演示不出来（第一版就是这么摆的，探针里候选只剩别的牌）。
+     * ⚠️ 手牌里那张 `water-0` 只是"弃1张牌"那一步的弃料（0 分、无文本，弃了不心疼）。
+     * ⚠️ 三条线各自挂的协议就是那三张牌的协议（正面牌只能进自己协议那条线）。
+     */
+    const s = controlledGame('tutorial-T12', ['fire', 'clarity', 'rigidity']);
+    s.players[0].hand = [
+      card('t12h-del', 'fire-1', 0, 'hand', true),
+      card('t12h-buff', 'clarity-0', 0, 'hand', true),
+      card('t12h-flip', 'rigidity-1', 0, 'hand', true),
+      card('t12h-fodder', 'water-0', 0, 'hand', true),
+    ];
+    s.players[0].deck = [];
+    // 线 1：对手一张正面牌（要被删除的那张）
+    s.players[1].stacks[0] = [card('t12o1', 'life-2', 1, 'field', true, 0, 0)];
+    // 线 3：对手一张**死板7**（它底「此牌不能被翻转或偏转」= 免疫；正因如此它才挡得住 rigidity-1）
+    s.players[1].stacks[2] = [card('t12f-rigid', 'rigidity-7', 1, 'field', true, 2, 0)];
+    return s;
+  }
+  /**
+   * T13 迷你对局：**三条线里已经编译两条**，玩家把第三条编译掉 ⇒ 三条协议全已编译 ⇒ 终局。
+   *
+   * 引擎口径（`src/core/rules/compile-body.ts:131`）：`p.protocols.every((pr) => pr.compiled)`
+   * ⇒ `s.winner = player`、`s.phase = 'gameover'`。所以"打到终局"这件事的判据就是
+   * `s.winner !== null`（也正是用户口径与方案 §5.2 那一格的字面要求）。
+   *
+   * 摆法：
+   *  - 线 1、线 2：我方协议**已编译**（线 1 上还留着对手一张反面牌 —— 让"编译过的线"看得见）；
+   *  - 线 3：黑暗线上我方 10 分（黑1+黑4+黑5）、对手 2 分 ⇒ 满足「自己 ≥10 且高于对手」，
+   *    编译按钮真的亮着（`getLegalActions` 会给出 `compile:2`）；
+   *  - 对手的协议也标成已编译前两条：这是**对手的战果**，用来交代"他也在打这一局"
+   *    （胜负只看**我方**三条协议是否全部编译，`compile-body.ts:131`）。
+   */
+  const s = controlledGame('tutorial-T13', ['spirit', 'water', 'darkness']);
+  s.step = 'check-compile';
+  s.players[0].hand = [];
+  s.players[0].deck = [];
+  s.players[0].protocols[0] = { defId: 'spirit', compiled: true };
+  s.players[0].protocols[1] = { defId: 'water', compiled: true };
+  s.players[1].protocols[0] = { defId: 'spirit', compiled: true };
+  s.players[1].protocols[1] = { defId: 'water', compiled: true };
+  // 线 3（黑暗）：我方 10 分（1 + 4 + 5），对手 2 分（反面牌不算分）
+  s.players[0].stacks[2] = [
+    card('t13b1', 'darkness-1', 0, 'field', true, 2, 0),
+    card('t13b2', 'darkness-4', 0, 'field', true, 2, 1),
+    card('t13b3', 'darkness-5', 0, 'field', true, 2, 2),
+  ];
+  s.players[1].stacks[0] = [card('t13o1', 'spirit-4', 1, 'field', false, 0, 0)];
+  s.players[1].stacks[2] = [card('t13o2', 'darkness-4', 1, 'field', false, 2, 0)];
   return s;
 }
 

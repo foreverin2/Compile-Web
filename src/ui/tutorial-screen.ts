@@ -27,13 +27,15 @@
 import { createLocalDriver, type MatchDriver } from '../app/match-driver';
 import type { LocalStore } from '../app/local-store';
 import type { GameState, Line, PlayerId } from '../core/models/types';
+import { findCard } from '../core/effects/context';
+import { getLineValue } from '../core/state/create';
 import { renderApp, resetUiState, setDraftSelfSeat, type UiCallbacks } from './render';
 import { TUT_LEVELS, levelAt, levelById, levelIndex, TUT_SPOTS, type TutLevel } from '../tutorial/levels';
 import { buildLevelState } from '../tutorial/setup';
 import { isLevelComplete, offTrackKeyFor, observedOps, revealSeen, snapshot, type TutSnap } from '../tutorial/judge';
 import { advance, readProgress, restart } from '../tutorial/progress';
 import type { TutChoiceSeen, TutLevelId, TutOp, TutSpot, TutUiSeen } from '../tutorial/types';
-import { TUT_UI_NONE } from '../tutorial/types';
+import { TUT_UI_NONE, triggersSeen } from '../tutorial/types';
 import { onLangChange, t } from '../i18n';
 
 /** 退出教程（回首页）；由宿主注入 —— 屏自己不认识首页 */
@@ -394,9 +396,39 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
         ? t('tutorial.T9.hint.both')
         : seen.flipped ? t('tutorial.T9.hint.reveal') : t('tutorial.T9.hint.flip');
     }
+    /**
+     * ★ 2026-10-02（P7）后四关的提示：按"这一关观测量到了没有"给一句"下一步干什么"。
+     *
+     * 每一档都读**判据用的同一份读数**（`triggersSeen` / `getLineValue` / 纯状态），
+     * 不另算一遍 —— 「提示说做到了、判据不给过」那种漂移就是第二份真相当场的样子。
+     */
+    if (level.id === 'T10') {
+      hintBox.textContent = state.control === 0 ? t('tutorial.T10.hint.got') : t('tutorial.T10.hint.go');
+    }
+    if (level.id === 'T11') {
+      // 三档读数与判据**同一份来源**：被盖前 / 结束 读日志（`triggersSeen`），
+      // "打出后"读状态（对手那张 `t11o2` 进了对手弃牌堆 —— 为什么它不能读日志见 judge.ts）
+      const seen = triggersSeen(state.log);
+      const lines: string[] = [];
+      if (!state.players[1].trash.some((c) => c.uid === 't11o2')) lines.push(t('tutorial.T11.hint.after-play'));
+      if (seen['before-covered'] < 1) lines.push(t('tutorial.T11.hint.before-covered'));
+      if (seen.end < 1) lines.push(t('tutorial.T11.hint.end'));
+      hintBox.textContent = lines.length > 0 ? lines.join(' ') : t('tutorial.T11.hint.done');
+    }
+    if (level.id === 'T12') {
+      const lines: string[] = [];
+      if (!state.players[1].trash.some((c) => c.uid === 't12o1')) lines.push(t('tutorial.T12.hint.delete'));
+      if (getLineValue(state, 0, 1) === 0) lines.push(t('tutorial.T12.hint.buff'));
+      const imm = findCard(state, 't12f-rigid');
+      if (imm === undefined || imm.faceUp !== true) lines.push(t('tutorial.T12.hint.immune'));
+      hintBox.textContent = lines.length > 0 ? lines.join(' ') : t('tutorial.T12.hint.done');
+    }
+    if (level.id === 'T13') {
+      hintBox.textContent = state.winner !== null ? t('tutorial.T13.hint.done') : t('tutorial.T13.hint.compile');
+    }
     if (cleared) hintBox.textContent = t('tutorial.cleared');
 
-    // 进度：四关各一枚 chip，已完成的加 `.on`
+    // 进度：每一关各一枚 chip，已完成的加 `.on`（关卡数由 TUT_LEVELS 决定，屏上不写死）
     progressRow.textContent = '';
     const progress = readProgress(store);
     for (const l of TUT_LEVELS) {
@@ -486,6 +518,23 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
             ok = driver.submit(state, {
               player, kind: 'compile', args: { line: (a.line ?? 0) as Line },
             }).ok;
+          } else if (a.kind === 'resolve-trigger') {
+            /**
+             * ★ 2026-10-02（P7）T11 的第三种触发（「结束」）走这里：结束阶段棋盘上会给出
+             * 「结算触发」按钮（`render.ts` 按 `getLegalActions` 的 `resolve-trigger` 画），
+             * 玩家点它就是`resolve-trigger` 这个 kind。
+             * `cardUid` 就是那张待结算的卡（红线那边传上来的），原样转给引擎。
+             */
+            ok = driver.submit(state, {
+              player, kind: 'resolve-trigger', args: { cardUid: a.cardUid ?? '' },
+            }).ok;
+          } else if (a.kind === 'advance') {
+            /**
+             * ★ 2026-10-02（P7）T10 的"亲自动手"就是这一步：`getLegalActions` 在
+             * `check-control` 这一步只出 `advance` ⇒ 玩家点「推进」，引擎在
+             * `performAdvance` 里调 `checkControl()`（`src/core/game.ts:293`）—— 与真对局同一条路。
+             */
+            ok = driver.submit(state, { player, kind: 'advance', args: {} }).ok;
           } else {
             // 别的动作种类（本轮的关卡不会走到）：如实拒绝，不给"看起来发生了"的假象
             hintBox.textContent = t('tutorial.off.wrong-kind');
@@ -542,6 +591,15 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
    */
   function handBackTurn(): void {
     if (state.phase !== 'turn') return;
+    /**
+     * ★ 2026-10-02（P7）：**T10 例外**（`level.keepStep`）。
+     *
+     * 控制权只在 `check-control` 这一步判定（`src/core/game.ts:293` 的 `performAdvance`），
+     * 而 T10 的开局就摆在那一步 ⇒ 若还是按下面那条沙盒规则"强制回到 action"，
+     * 那一次 `advance` 会被就地抹掉、`checkControl()` 永远跑不到 —— 这一关就死在这一步上了。
+     * 所以 T10 声明 `keepStep: true`：**让引擎自己的步真的走一格**（与真对局同一条路）。
+     */
+    if (currentLevel().keepStep === true) return;
     if (state.turnPlayer !== 0) {
       state.turnPlayer = 0;
       state.step = 'action';
@@ -571,7 +629,7 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
     nav.saveProgress(after);
     renderPanel();
     paint();
-    // 最后一关：停在原地（提示"四关都过了"），不自动跳走
+    // 最后一关：停在原地（提示"所有关卡都过了"），不自动跳走
     if (levelIndex(level.id) >= TUT_LEVELS.length - 1) {
       hintBox.textContent = t('tutorial.cleared-all');
       return;

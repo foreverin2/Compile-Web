@@ -279,6 +279,54 @@ describe('★ T7 的两条观察通道（候选集合 / 点了被压暗的牌）
   });
 });
 
+/**
+ * ★ 2026-10-02（P7）：后四关在屏上的两处接线（源码腿；动作链由 `levels.test.ts` 真跑引擎覆盖）。
+ *
+ * 这两条都是"漏了就不会有人发现"的地方：
+ *  1. **T10 必须让引擎的步真的走一格**（`keepStep`）—— 少这一句，T10 永远过不了，
+ *     而在无 jsdom 的 node 下屏跑不起来 ⇒ 只有源码腿看得见；
+ *  2. **两个新动作 kind**（`advance` / `resolve-trigger`）必须真的转给 `driver.submit` ——
+ *     少哪一支，T10 / T11 的棋盘按钮点了没反应。
+ */
+describe('★ P7 后四关的屏上接线（源码腿）', () => {
+  it('T10 的「保留引擎步」规则真的接在 `handBackTurn` 上（`keepStep` 那条早退）', () => {
+    const body = bodyOf(SCREEN, 'handBackTurn');
+    expect(body, 'handBackTurn 没有读 keepStep ⇒ T10 的那次 advance 会被就地抹掉，这一关永远过不了')
+      .toMatch(/currentLevel\(\)\.keepStep\s*===\s*true/);
+    // 早退必须在那句"强制回到 action"**之前**（否则抹掉之后再早退就没意义了）
+    expect(body.indexOf('keepStep'), 'keepStep 的早退排在"强制回到 action"之后')
+      .toBeLessThan(body.indexOf("state.step = 'action'"));
+    // 数据层：只有 T10 声明它（别的关卡的沙盒规则一个字节不变）
+    const keep = TUT_LEVELS.filter((l) => l.keepStep === true).map((l) => l.id);
+    expect(keep, '声明 keepStep 的关卡不是"只有 T10"').toEqual(['T10']);
+  });
+
+  it('两个新动作 kind（advance / resolve-trigger）都转给了 `driver.submit`', () => {
+    const body = bodyOf(SCREEN, 'tutorialCallbacks');
+    expect(body, "advance 没有转给 driver（T10 的「下一步」点了没反应）")
+      .toMatch(/a\.kind === 'advance'[\s\S]{0,900}?kind: 'advance'/);
+    expect(body, "resolve-trigger 没有转给 driver（T11 的「结算触发」点了没反应）")
+      .toMatch(/a\.kind === 'resolve-trigger'[\s\S]{0,900}?kind: 'resolve-trigger'/);
+    // 白名单：这两个 kind 分别只对 T10 / T11 放行
+    expect(TUT_LEVELS.filter((l) => l.allowKinds.includes('advance')).map((l) => l.id)).toEqual(['T10']);
+    expect(TUT_LEVELS.filter((l) => l.allowKinds.includes('resolve-trigger')).map((l) => l.id)).toEqual(['T11']);
+  });
+
+  it('后四关的提示区读数与判据同源（`triggersSeen` / `getLineValue` / 纯状态）', () => {
+    const body = bodyOf(SCREEN, 'renderPanel');
+    expect(body, '屏上没有用 triggersSeen 给 T11 的读数').toContain('triggersSeen(state.log)');
+    expect(body, 'T12 的加成读数没有用引擎的 getLineValue（自己重算就是第二份真相）')
+      .toMatch(/getLineValue\(state, 0, 1\)/);
+    // 四条提示键都逐字写在这里（缺键扫描腿也看得见）
+    for (const k of [
+      'tutorial.T10.hint.go', 'tutorial.T11.hint.done',
+      'tutorial.T12.hint.done', 'tutorial.T13.hint.compile',
+    ]) {
+      expect(body, `renderPanel 里没有 ${k}`).toContain(`t('${k}')`);
+    }
+  });
+});
+
 describe('★ 版式（源码腿）：浮层不挡住棋盘、类名不打架', () => {  it('`.tutorial-overlay` **不吃点击**（教学要玩家去操作棋盘）', () => {
     const at = CSS.indexOf('.tutorial-overlay {');
     expect(at, 'styles-local.css 里没有 .tutorial-overlay').toBeGreaterThan(0);

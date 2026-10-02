@@ -17,8 +17,9 @@
  */
 import type { Card, GameState, PlayerId } from '../core/models/types';
 import { findCard, isUncovered } from '../core/effects/context';
+import { getLineValue } from '../core/state/create';
 import type { TutLevelId, TutOp, TutSpot, TutUiSeen } from './types';
-import { TUT_UI_NONE } from './types';
+import { TUT_UI_NONE, triggersSeen } from './types';
 import type { TutLevel } from './levels';
 
 /** 一张卡在快照里的样子（只留判定要用的字段） */
@@ -232,13 +233,84 @@ export function isLevelComplete(level: TutLevel, state: GameState, input: TutJud
    *  - 对手那张速度0 现在**正面**（翻正那一步的状态差分）；
    *  - 我方那张速度0 现在**未被覆盖**（`isUncovered`，引擎自己的判据）。
    */
-  const seen = revealSeen(state);
-  const ours = findCard(state, 't9f-ours');
-  const opp = findCard(state, 't9f-opp');
-  return seen.flipped
-    && seen.revealed
-    && opp !== undefined && opp.faceUp === true
-    && ours !== undefined && ours.zone === 'field' && isUncovered(state, ours);
+  if (level.id === 'T9') {
+    const seen = revealSeen(state);
+    const ours = findCard(state, 't9f-ours');
+    const opp = findCard(state, 't9f-opp');
+    return seen.flipped
+      && seen.revealed
+      && opp !== undefined && opp.faceUp === true
+      && ours !== undefined && ours.zone === 'field' && isUncovered(state, ours);
+  }
+  /**
+   * ★ 2026-10-02（P7）T10「控制权」：玩家**真的把控制权拿到手**了。
+   *
+   * 判据是 `s.control === 0`（用户口径原话："按引导真的把控制权拿到手"）。
+   * 控制权的判定发生在 `check-control`（`src/core/game.ts:293` 的 `performAdvance`），
+   * 而 T10 的局面就摆在那一步：玩家点一次「推进」才会走到判定 ⇒ `control` 从 `-1` 变成 `0`。
+   * 局面上开局 `control` 是 `-1`（`controlledGame` 置中立）⇒ **零操作不算过**。
+   */
+  if (level.id === 'T10') {
+    return state.control === 0;
+  }
+  /**
+   * ★ 2026-10-02（P7）T11「触发时机」：打出后 / 被盖住前 / 结束**三种各出现过一次**。
+   *
+   * 三路证据（**两条从日志、一条从状态** —— 为什么这么分，见下面那条 ⚠️）：
+   *  - **被盖住前**、**结束**：日志里出现 `[被盖前]` / `[结束]` 这两条引擎自己写的阶段标题
+   *    （`triggersSeen()`，逐字出处写在 `types.ts` 的 `TRIGGER_LABEL` 上）；
+   *  - **打出后**：对手那张 `t11o2` 真的进了**对手的弃牌堆** —— 它是因为**我的**冰1 被触发
+   *    才被弃的，这一关里没有第二个能把它推进弃牌堆的东西；
+   *  - **再加一条状态断言**：`life-0` 那张牌现在**不在场上**（"结束"那一支真的把它移除了）。
+   *
+   * ⚠️★ **为什么"打出后"不能读日志**（本轮实测抓到，登记在方案 §7.13）：
+   * `after-play` 是**定向触发**（`src/core/effects/resolve.ts:70-94` 的 `fireDirectedTop()`）——
+   * 它只把效果入栈，**不调 `pushEffectLog`** ⇒ 日志里**根本没有** `[连锁·出牌后]` 这一行
+   * （第一版判据就是去找这个不存在的字符串，被自己的腿当场判红）。同一个 `after-*` 家族里
+   * `after-return` 也一样。要让它有日志得改 `src/core/**`（红线）⇒ 不改，改用状态证明。
+   */
+  if (level.id === 'T11') {
+    const seen = triggersSeen(state.log);
+    const life0 = findCard(state, 't11f-c');
+    const life0Gone = life0 === undefined || life0.zone !== 'field';
+    const afterPlayHit = state.players[1].trash.some((c) => c.uid === 't11o2');
+    return afterPlayHit && seen['before-covered'] >= 1 && seen.end >= 1 && life0Gone;
+  }
+  /**
+   * ★ 2026-10-02（P7）T12「删除 / 免疫 / 加成」：三样各一条**状态/数值断言**。
+   *
+   *  - **删除**：对手那张 `t12o1` 已经离开场上（进了对手的弃牌堆）——
+   *    删除 op 把它推进 `trash`（不是回手、不是偏转），所以断言"它在 trash 里"比"它不在场上"
+   *    更贴近"删除"这件事；
+   *  - **加成**：线 2 的总值**真的变了**（0 → 1）。用真引擎算（`getLineValue`，
+   *    它含 `valueModifier` 那一层）而不自己重算 `clarity-0` 的规则 —— 重算就是第二份真相；
+   *    这里不比"等于几"，而是比"与开局不同"（加成的数值口径以后若变，这一课不用跟着改）；
+   *  - **免疫**：那张**死板7**「此牌不能被翻转或偏转」仍然是**正面**，而且引擎日志里有
+   *    那句 `rigidity-7 不可被翻转，跳过`（`resolve.ts:442`）。
+   *    ⚠️ 两条缺一不可的实测依据：只读状态时"玩家压根没选它"也会成立；
+   *    只读日志时"日志里出现过"不等价于"它真的还在场上"。
+   */
+  if (level.id === 'T12') {
+    const deleted = state.players[1].trash.some((c) => c.uid === 't12o1');
+    const buffed = getLineValue(state, 0, 1) !== 0;
+    const imm = findCard(state, 't12f-rigid');
+    const immune = imm !== undefined && imm.zone === 'field' && imm.faceUp === true
+      && state.log.some((l) => l.includes('rigidity-7 不可被翻转，跳过'));
+    return deleted && buffed && immune;
+  }
+  if (level.id === 'T13') {
+    /**
+     * ★ 2026-10-02（P7）T13「迷你对局」：**打到终局**（用户口径 / 方案 §5.2："`s.winner !== null`"）。
+     *
+     * ⚠️ 只读 `winner !== null` 就够，**不要**再自己数"编译了几条线"：胜负判定住在引擎里
+     * （`compile-body.ts:131` 的 `p.protocols.every((pr) => pr.compiled)`），重数一遍就是
+     * 第二份真相（而且"对手编译了几条"与胜负无关，数错就漂）。
+     * 局面上开局 `winner === null`（`controlledGame` 置空）⇒ 零操作不算过。
+     */
+    return state.winner !== null;
+  }
+  // 穷尽性兜底：将来加了新关卡而这里漏了分支 ⇒ 它永远不过（比"静默恒真"安全）
+  return false;
 }
 
 /**
