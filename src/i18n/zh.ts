@@ -1109,4 +1109,49 @@ export const ZH: Readonly<Record<string, string>> = {
   'net-browser.ice.partial.tail': '这些候选已经写进这条邀请码里了。同一台机器上的两个窗口、同一个局域网里的两台设备，用它们通常能直接连上；跨网络（两边不在同一个局域网）能不能连上，现在还不知道 —— 那要拿到公网映射或者中继地址才行，这一次没拿全。',
   'net-browser.ice.no-candidate-timeout': '等了 {sec} 秒，这台设备这一次一个 ICE 候选都没有收集到（本机候选也没有）。一个候选都没有的连接描述发出去也连不上，所以这条邀请码不生成。下一步：确认浏览器没有被扩展 / 企业策略关掉 WebRTC（本程序只用它做直连），然后重试一次；若还是一个候选都没有，请把这一行原样记下来。',
   'net-browser.ice.no-candidate-now': 'ICE 收集已经结束，但这台设备这一次一个候选都没有（本机候选也没有），这样的连接描述发出去也连不上，所以这条邀请码不生成。下一步：确认浏览器没有被扩展 / 企业策略关掉 WebRTC（本程序只用它做直连），然后重试一次；若还是一个候选都没有，请把这一行原样记下来。',
+
+  /* ── ★ 2026-10-02（P3 第三批）：首启授权弹窗（`src/ui/local-consent.ts`）的 4 个**界面标签** ──
+   *
+   * 值 = `src/ui/local-consent.ts` 的 `CONSENT_COPY` 里那 4 个字面量的**原文**，一个字都没改
+   * （已抽走，那里现在只剩 `t('consent.*')`）。它们是**界面标签**（标题与三个按钮上的字），
+   * 不承诺任何事 ⇒ 与授权正文分开：正文（`body` 三段 / `denyHint`）的唯一出处仍是
+   * `src/app/privacy.ts`（被 `tests/app/privacy.test.ts` 的整句哈希钉死），本轮**没有**动它。
+   *
+   * ⚠️ 三个标签的中文值与 `onboarding.consent.{title,grant,deny,privacy}` 逐字相同
+   *   （同一个旧弹窗并进了向导第 2 步），那四条由 `tests/i18n/onboarding.test.ts` 钉住
+   *   "中文值逐字等于 `CONSENT_COPY` 的对应字段" —— 两组键**各有各的落点**，别合并。
+   */
+  'consent.title': '要不要在这台设备上记住你的设置？',
+  'consent.grant': '允许，保存在这台设备',
+  'consent.deny': '不用，本次不保存',
+  'consent.privacy-link': '隐私说明',
+
+  /* ── ★ 2026-10-02（P3 第三批）：`src/ui/render.ts` 的**棋盘 chrome**（台账 G.1 那 8 处） ──
+   *
+   * 值 = 抽取前 `src/ui/render.ts` 里那些字面量/模板串的原文，**一个字都没改**
+   * （含空格与全角括号；`{n}` 那种占位符对应原来的 `${…}` 插值）。
+   * 这一族是热座牌桌、教学模式、重放页共用的那一层；`src/ui/render-net.ts` 与它同构，
+   * 联机页那几处**没有**复用这批键（它是第二份文案，另有自己的键，见 render-net 的抽取轮）。
+   *
+   * ⚠️ `玩家 {n}` 这一个键是**热座**的座位号；联机页那条横幅另有 `render-net.*`（不许拿来顶替）。
+   */
+  'render.player-info.title': '玩家 {n}',
+  'render.player-info.operating': '（请操作！）',
+  'render.player-info.active': '（回合中）',
+  'render.meta.deck': '牌库 {n}',
+  'render.meta.trash': '弃牌堆 {n}',
+  'render.meta.hand': '手牌 {n}',
+  'render.trash.label': '弃牌堆',
+  'render.trash.view': '查看弃牌堆',
+  'render.deck.gameover-title': '对局结束：查看牌库剩余牌及抽取顺序',
+  'render.refresh-hand': '刷新手牌',
+  'render.step': '步骤: {step}',
+  'render.control.neutral': '控制权: 中立',
+  'render.control.player': '控制权: 玩家 {n}',
+  // 手牌挡板上的张数（与 `render.meta.hand` **值逐字相同**，但落点不同：一个是信息条、
+  // 一个是挡板；两份键都留着是因为它们在屏上是两处，将来要分别改也不至于互相牵连）
+  'render.hand-shield.count': '手牌 {n}',
+  'render.next-step': '下一步',
+  'render.diag.export': '导出日志',
+  'render.diag.export-title': '导出诊断日志（错误 + 控制台记录 + 事件日志 + 状态快照）',
 };

@@ -167,7 +167,12 @@ describe('★ 尚未抽取的屏：清单只能变短，不能变长', () => {
   it('锚点：扫描器真的在工作（既扫得到中文，也不把注释算进去）', () => {
     const withChinese = UI_FILES.filter((f) => f.literals.length > 0).map((f) => f.rel);
     expect(UI_FILES.length, 'src/ui 下一个 .ts 都没读到 ⇒ 路径写错').toBeGreaterThan(40);
-    expect(withChinese.length, '一个含中文的 ui 文件都没扫到 ⇒ 扫描器失效').toBeGreaterThan(20);
+    // ★ 2026-10-02（P3 第三批）：`local-consent.ts` 抽完 ⇒ 含中文的 ui 文件从 21 掉到 20。
+    //   判据的意图（"扫描器真的扫得到中文"）没变，只是**下界**跟着实测数走；反向锚点仍然在
+    //   下面（`home.ts` 那条开发者异常消息必须被扫到 ⇒ 扫描器不是恒空）。
+    expect(withChinese.length, '一个含中文的 ui 文件都没扫到 ⇒ 扫描器失效').toBeGreaterThan(15);
+    // ★ 这一屏抽完之后**不许**再出现在"含中文"的名单里（否则"抽干净了"是自我声明）
+    expect(withChinese, 'local-consent.ts 的代码位里又出现中文字面量了').not.toContain('src/ui/local-consent.ts');
     // 抽过的那一屏必须**不再**出现裸中文：设置小窗原来是"造元素时直接写中文字面量"，
     // P0 之后它的每一条都从表里取 ⇒ 这里断言"构造器体内不再有中文字面量"。
     const homeSrc = readFileSync(join(REPO, 'src', 'ui', 'home.ts')).subarray(0, 4 * 1024 * 1024).toString('utf8');

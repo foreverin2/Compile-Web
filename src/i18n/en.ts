@@ -1033,4 +1033,33 @@ export const EN: Readonly<Record<string, string>> = {
   'net-browser.ice.partial.tail': 'These candidates have been written into this invite code. Two windows on the same machine, or two devices on the same local network, can usually connect with them; whether it works across networks (the two sides not on the same local network) is not known yet - that needs a public mapping or a relay address, and this round did not get all of them.',
   'net-browser.ice.no-candidate-timeout': 'Waited {sec} seconds and this device gathered no ICE candidate at all this time (not even a local one). A connection description with no candidate cannot connect even if it is sent, so this invite code is not generated. Next step: check that a browser extension or an enterprise policy has not turned WebRTC off (this program only uses it for direct connections), then try again; if there is still no candidate, please copy this line down as it is.',
   'net-browser.ice.no-candidate-now': 'ICE gathering has finished, but this device has no candidate at all this time (not even a local one); such a connection description cannot connect even if it is sent, so this invite code is not generated. Next step: check that a browser extension or an enterprise policy has not turned WebRTC off (this program only uses it for direct connections), then try again; if there is still no candidate, please copy this line down as it is.',
+
+  /* ── ★ 2026-10-02（P3 第三批）：the 4 interface labels of the first-run consent screen ──
+   * Same labels as `onboarding.consent.{title,grant,deny,privacy}`; the wording below matches
+   * those keys word for word. The consent body (three paragraphs + `denyHint`) still comes from
+   * `src/app/privacy.ts` and is pinned by whole-sentence hashes, so it stays Chinese for now. */
+  'consent.title': 'Remember your settings on this device?',
+  'consent.grant': 'Yes, save them on this device',
+  'consent.deny': 'No, not this time',
+  'consent.privacy-link': 'Privacy notes',
+
+  /* ── ★ 2026-10-02（P3 第三批）：board chrome of `src/ui/render.ts` ── */
+  'render.player-info.title': 'Player {n}',
+  // 原文是「（请操作！）」/「（回合中）」两个**后缀**，直接接到标题后面（英文用逗号分隔更好读）
+  'render.player-info.operating': ' (your move!)',
+  'render.player-info.active': ' (turn)',
+  'render.meta.deck': 'Deck {n}',
+  'render.meta.trash': 'Discard {n}',
+  'render.meta.hand': 'Hand {n}',
+  'render.trash.label': 'Discard',
+  'render.trash.view': 'View discard pile',
+  'render.deck.gameover-title': 'Game over: view the cards left in the deck and the draw order',
+  'render.refresh-hand': 'Refresh hand',
+  'render.step': 'Step: {step}',
+  'render.control.neutral': 'Control: neutral',
+  'render.control.player': 'Control: player {n}',
+  'render.hand-shield.count': 'Hand {n}',
+  'render.next-step': 'Next',
+  'render.diag.export': 'Export log',
+  'render.diag.export-title': 'Export a diagnostic log (errors + console output + event log + state snapshot)',
 };

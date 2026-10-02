@@ -50,6 +50,10 @@ import { fxRotDegOf } from './fx-orient';
 // （`tests/ui/spirit-chain-geom.test.ts`）。除此之外本文件不许出现 `fxViewSeat()`。
 import { FX_TRACK_EDGE_PCT, FX_TRACK_EDGE_PCT_Y, fxViewSeat } from './fx-seat';
 import type { FxViewSeat } from './fx-seat';
+// ★ 2026-10-02（P3 第三批）：棋盘 chrome 的文案走文案表（键 `render.*`；值 = 改动前那些
+//   字面量/模板串的**原文**，一个字未改）。⚠️ 只在**渲染点**调 `t()`（模块顶层的 `t()` 会把
+//   语言冻在 import 那一刻，`tests/i18n/module-scope-t.test.ts` 有腿）。`t()` 实参一律字面量。
+import { t } from '../i18n';
 
 export interface UiCallbacks {
   onAction(a: LegalAction): void;
@@ -1802,17 +1806,17 @@ export function renderPlayerInfo(
   const alignCls = opts.align ? ` ${opts.align === 'right' ? 'p2' : 'p1'}` : ` p${player + 1}`;
   // 修改提示词 17：效果挂起等待该玩家操作 → 额外 operator 高亮（醒目提示操作者）
   const info = el('div', `player-info${alignCls}${active ? ' active' : ''}${opts.isSelf ? ' self' : ''}${opts.operator ? ' operator' : ''}`);
-  info.appendChild(el('div', 'area-title', `${opts.label ?? `玩家 ${player + 1}`}${opts.operator ? '（请操作！）' : active ? '（回合中）' : ''}`));
+  info.appendChild(el('div', 'area-title', `${opts.label ?? t('render.player-info.title', { n: String(player + 1) })}${opts.operator ? t('render.player-info.operating') : active ? t('render.player-info.active') : ''}`));
 
   const meta = el('div', 'meta-row');
-  meta.appendChild(el('span', 'deck-count', `牌库 ${p.deck.length}`));
-  meta.appendChild(el('span', 'trash-count', `弃牌堆 ${p.trash.length}`));
-  meta.appendChild(el('span', 'hand-count', `手牌 ${p.hand.length}`));
+  meta.appendChild(el('span', 'deck-count', t('render.meta.deck', { n: String(p.deck.length) })));
+  meta.appendChild(el('span', 'trash-count', t('render.meta.trash', { n: String(p.trash.length) })));
+  meta.appendChild(el('span', 'hand-count', t('render.meta.hand', { n: String(p.hand.length) })));
   info.appendChild(meta);
 
   // 弃牌堆查看按钮：P1 贴信息条最右端；P2（内容右对齐）贴最左端（CSS align-self 覆写）。
   // 点击打开弃牌堆查看遮罩（公开信息：全部正面展示）。
-  const trashBtn = el('button', 'btn trash-view-btn', '查看弃牌堆');
+  const trashBtn = el('button', 'btn trash-view-btn', t('render.trash.view'));
   trashBtn.addEventListener('click', () => openTrashViewer(s, player));
   info.appendChild(trashBtn);
   return info;
@@ -1835,7 +1839,7 @@ export function renderDeck(s: GameState, player: PlayerId): HTMLElement {
   // 修改提示词 14：对局结束（gameover 复盘）→ 点击牌库展开查看剩余牌及抽取顺序
   // （牌库顶 = 下一张要抽的；自上而下展示全部卡正面）
   if (s.phase === 'gameover') {
-    deck.title = '对局结束：查看牌库剩余牌及抽取顺序';
+    deck.title = t('render.deck.gameover-title');
     deck.addEventListener('click', () => openDeckOrderViewer(s, player));
   }
   return deck;
@@ -1858,8 +1862,8 @@ export function renderTrash(s: GameState, player: PlayerId): HTMLElement {
     trash.appendChild(el('span', 'trash-pile-count empty', '0'));
   }
   // 顶部小标签区分「牌库 / 弃牌堆」；点击打开弃牌堆查看遮罩
-  trash.appendChild(el('span', 'trash-label', '弃牌堆'));
-  trash.title = '查看弃牌堆';
+  trash.appendChild(el('span', 'trash-label', t('render.trash.label')));
+  trash.title = t('render.trash.view');
   trash.addEventListener('click', () => openTrashViewer(s, player));
   return trash;
 }
@@ -1867,7 +1871,7 @@ export function renderTrash(s: GameState, player: PlayerId): HTMLElement {
 /** 刷新手牌按钮：位于手牌扇形下方（.hand-refresh-wrap 内、居中于手牌之下），
  *  仅在刷新是合法动作（refreshAction 非空）时渲染，点击派发 refresh */
 export function renderRefreshButton(action: LegalAction, cb: UiCallbacks): HTMLElement {
-  const btn = el('button', 'shield-refresh-btn', '刷新手牌');
+  const btn = el('button', 'shield-refresh-btn', t('render.refresh-hand'));
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
     cb.onAction(action);
@@ -2110,7 +2114,7 @@ function renderShield(s: GameState, player: PlayerId, enabled: boolean, hand: HT
   shield.style.width = `${w}px`;
   if (w <= 0) shield.classList.add('retracted');
   shield.appendChild(el('div', 'shield-handle'));
-  shield.appendChild(el('div', 'shield-count', `手牌 ${s.players[player].hand.length}`));
+  shield.appendChild(el('div', 'shield-count', t('render.hand-shield.count', { n: String(s.players[player].hand.length) })));
   if (enabled) {
     bindShieldDrag(shield, player, hand);
   } else {
@@ -2308,8 +2312,8 @@ export function renderControlModule(s: GameState, opts?: ControlTrackOpts): HTML
   //    （`endPlayers`，缺省 `[0, 1]` ⇒ 热座逐字不变）。理由见 `ControlTrackOpts.endPlayers`：
   //    竖排的端是**座位**语义，"自己端在下"，默认视角下写死会把两端文案写反。
   const ends = opts?.endPlayers ?? ([0, 1] as const);
-  track.appendChild(el('span', `control-track-label ${vertical ? 'top' : 'left'}`, `玩家 ${ends[0] + 1}`));
-  track.appendChild(el('span', `control-track-label ${vertical ? 'bottom' : 'right'}`, `玩家 ${ends[1] + 1}`));
+  track.appendChild(el('span', `control-track-label ${vertical ? 'top' : 'left'}`, t('render.player-info.title', { n: String(ends[0] + 1) })));
+  track.appendChild(el('span', `control-track-label ${vertical ? 'bottom' : 'right'}`, t('render.player-info.title', { n: String(ends[1] + 1) })));
   track.appendChild(el('span', 'control-center-tick'));
   const img = document.createElement('img');
   img.className = 'control-slider-img';
@@ -2328,7 +2332,7 @@ export function renderControlModule(s: GameState, opts?: ControlTrackOpts): HTML
   controlSliderPos = target;
   track.appendChild(img);
   ctrl.appendChild(track);
-  ctrl.appendChild(el('div', 'control-label', `控制权: ${neutral ? '中立' : `玩家 ${holder + 1}`}`));
+  ctrl.appendChild(el('div', 'control-label', neutral ? t('render.control.neutral') : t('render.control.player', { n: String(holder + 1) })));
   return ctrl;
 }
 
@@ -5297,7 +5301,7 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   if (s.turnPlayer === 0 && refreshAction) p1Wrap.appendChild(renderRefreshButton(refreshAction, cb));
   p1Side.appendChild(p1Wrap);
   handStrip.appendChild(p1Side);
-  handStrip.appendChild(el('div', 'step-indicator', `步骤: ${s.step}`));
+  handStrip.appendChild(el('div', 'step-indicator', t('render.step', { step: String(s.step) })));
   const p2Side = el('div', 'hand-side p2');
   const p2Wrap = el('div', 'hand-refresh-wrap');
   p2Wrap.appendChild(
@@ -5368,7 +5372,7 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
         el('span', 'hint', selectedUid ? '已选择卡牌 — 拖拽到高亮的线路打出（可先点「翻面」切换朝向）' : '拖拽手牌卡到高亮的线路打出（双击放大，点击选择）')
       );
     }
-    const nextBtn = el('button', 'btn next-btn', '下一步');
+    const nextBtn = el('button', 'btn next-btn', t('render.next-step'));
     nextBtn.addEventListener('click', () => cb.onAction(nextAction));
     nextBlock.appendChild(nextBtn);
     actionBar.appendChild(nextBlock);
@@ -5523,8 +5527,8 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   wrap.appendChild(log);
 
   // 导出日志按钮：页面最底部（简要日志下方）
-  const diagBtn = el('button', 'btn diag-btn', '导出日志');
-  diagBtn.title = '导出诊断日志（错误 + 控制台记录 + 事件日志 + 状态快照）';
+  const diagBtn = el('button', 'btn diag-btn', t('render.diag.export'));
+  diagBtn.title = t('render.diag.export-title');
   diagBtn.addEventListener('click', () => downloadLog(s));
   wrap.appendChild(diagBtn);
 

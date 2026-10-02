@@ -19,7 +19,7 @@ import {
   onboardingOverlayElement,
   type OnboardingOutcome,
 } from '../../src/ui/onboarding';
-import { CONSENT_COPY } from '../../src/ui/local-consent';
+import { consentCopy } from '../../src/ui/local-consent';
 import {
   CONSENT_ALLOW_NOTE,
   CONSENT_DENY_HINT,
@@ -359,18 +359,18 @@ describe('第 2 步 = 旧授权弹窗并进来的那一步（界面文字双语 
      * 一个字都不许漂 —— 漂了这条腿当场红（下面四条第 2 组锚点也一样）。
      */
     expect(one(b.overlay, '.onboarding-consent-title').text, '授权标题与旧弹窗那句漂了')
-      .toBe(CONSENT_COPY.title);
+      .toBe(consentCopy().title);
     expect(descendants(one(b.overlay, '.onboarding-grant')).map((n) => n.text), '「允许」按钮文案漂了')
-      .toEqual([CONSENT_COPY.grant]);
+      .toEqual([consentCopy().grant]);
     expect(descendants(one(b.overlay, '.onboarding-deny')).map((n) => n.text), '「不用」按钮文案漂了')
-      .toEqual([CONSENT_COPY.deny]);
+      .toEqual([consentCopy().deny]);
     expect(descendants(one(b.overlay, '.onboarding-privacy')).map((n) => n.text), '「隐私说明」按钮文案漂了')
-      .toEqual([CONSENT_COPY.privacyLink]);
-    // 中文下「不用之后」那一句：`onboarding.consent.deny-note` 的中文值**逐字等于** `CONSENT_COPY.denyHint`
+      .toEqual([consentCopy().privacyLink]);
+    // 中文下「不用之后」那一句：`onboarding.consent.deny-note` 的中文值**逐字等于** `consentCopy().denyHint`
     //   （★ 它管的是"不用之后的后果 + 出路"，与第 2 步那条**指引**是两句不同的话 —— D2 的教训）
     expect(one(b.overlay, '[data-role="deny-note"]').text,
       '「不用之后」那一句漂了').toBe(ZH['onboarding.consent.deny-note']);
-    expect(ZH['onboarding.consent.deny-note'], '「不用之后」那一句与旧弹窗那句漂了').toBe(CONSENT_COPY.denyHint);
+    expect(ZH['onboarding.consent.deny-note'], '「不用之后」那一句与旧弹窗那句漂了').toBe(consentCopy().denyHint);
     // ⚠️ 键名/内容都要与 D2 新增的那条指引分得开（合并过一次是缺陷，别再合并）
     expect(ZH['onboarding.consent.deny-note'], '「不用之后」与第 2 步的指引撞成同一句了')
       .not.toBe(ZH['onboarding.consent.local-hint']);
@@ -379,7 +379,7 @@ describe('第 2 步 = 旧授权弹窗并进来的那一步（界面文字双语 
       readFileSync(fileURLToPath(new URL('../../src/ui/onboarding.ts', import.meta.url)))
         .subarray(0, 1024 * 1024).toString('utf8'),
     );
-    for (const sentence of [CONSENT_COPY.title, CONSENT_COPY.grant, CONSENT_COPY.deny, CONSENT_COPY.privacyLink]) {
+    for (const sentence of [consentCopy().title, consentCopy().grant, consentCopy().deny, consentCopy().privacyLink]) {
       expect(code, `onboarding.ts 里手写了「${sentence}」（应当走 t('onboarding.consent.*')）`).not.toContain(sentence);
     }
     // 中文帧里的提示也不许是"改/清除"那一句（两句别撞车）
@@ -401,13 +401,20 @@ describe('第 2 步 = 旧授权弹窗并进来的那一步（界面文字双语 
     expect(one(b.overlay, '[data-role="local-hint"]').text).toBe(t('onboarding.consent.local-hint'));
     expect(one(b.overlay, '[data-role="deny-note"]').text).toBe(t('onboarding.consent.deny-note'));
     // 反向：英文下这一组里**不许**再出现那些中文原句
-    for (const sentence of [CONSENT_COPY.title, CONSENT_COPY.grant, CONSENT_COPY.deny, CONSENT_COPY.privacyLink]) {
+    // ★ 2026-10-02（P3 第三批）：那 4 条现在取自 `consentCopy()` ⇒ **跟着当前语言走**
+    //   （这正是我们要的：抽进文案表之后它才会变）。所以这里取的是**中文表**里的静态值
+    //   （`ZH` 不跟语言走），否则拿到的是英文值、这条腿会变成恒真。
+    const zhChromeLabels = [
+      ZH['onboarding.consent.title'], ZH['onboarding.consent.grant'],
+      ZH['onboarding.consent.deny'], ZH['onboarding.consent.privacy'],
+    ];
+    for (const sentence of zhChromeLabels) {
       expect(text, `英文界面下第 2 步还留着中文「${sentence}」`).not.toContain(sentence);
     }
-    // 反向自证：`t()` 现在给的是英文（当前语言），中文表里那一条**逐字等于** `CONSENT_COPY`
+    // 反向自证：`t()` 现在给的是英文（当前语言），中文表里那一条**逐字等于**旧弹窗那一份
     //   —— 用的是静态表 `ZH`（不是 `t()`，它跟着当前语言走）
-    expect(ZH['onboarding.consent.title'], '中文表里那一条与 `CONSENT_COPY.title` 漂了')
-      .toBe(CONSENT_COPY.title);
+    expect(ZH['onboarding.consent.title'], '中文表里那一条与旧弹窗的标题漂了')
+      .toBe(ZH['consent.title']);
     // ★ 生成式：`onboarding.consent.*` 这一族**每一条**的两语言值都必须真的不同
     //   （否则"翻译"是抄了一遍中文，英文界面上照样是中文 —— 那正是这一轮修的那个 bug 的形态）
     const consentKeys = Object.keys(ZH).filter((k) => k.startsWith('onboarding.consent.'));
@@ -416,7 +423,7 @@ describe('第 2 步 = 旧授权弹窗并进来的那一步（界面文字双语 
     expect(same, `这些键的英文值与中文逐字相同（等于没翻）：${same.join(', ')}`).toEqual([]);
   });
 
-  it('第 2 步的**正文恰好三段**，且逐句等于旧授权弹窗那份 `CONSENT_COPY.body`', () => {
+  it('第 2 步的**正文恰好三段**，且逐句等于旧授权弹窗那份 `consentCopy().body`', () => {
     restores.push(installStubDom());
     const b = boot(fakeStorage(), 'zh');
     clickIn(one(b.overlay, '.onboarding-lang-btn[data-lang="zh"]'));
@@ -428,7 +435,7 @@ describe('第 2 步 = 旧授权弹窗并进来的那一步（界面文字双语 
     // 逐句等于旧授权弹窗的正文 —— 而那一份自己又被 `local-consent.test.ts` 钉着"必须来自 privacy.ts"
     //   （`body[0]` / `body[2]` 是 `privacy.ts` 的两个 `CONSENT_*_NOTE`、`body[1]` 是
     //   `PRIVACY_COPY.noServerStorage[0]`）：于是"隐私措辞只有一个家"这条链在两份测试之间**接力**。
-    expect(lines, '第 2 步的正文与旧授权弹窗那份漂了').toEqual([...CONSENT_COPY.body]);
+    expect(lines, '第 2 步的正文与旧授权弹窗那份漂了').toEqual([...consentCopy().body]);
     // 反向锚点：这三句**不是**随手写的 —— 逐句都能追到那三个（唯一的）常量出处
     const allowed = [CONSENT_ALLOW_NOTE, PRIVACY_COPY.noServerStorage[0], CONSENT_DENY_NOTE];
     for (const l of lines) {
@@ -492,10 +499,10 @@ describe('第 2 步 = 旧授权弹窗并进来的那一步（界面文字双语 
     expect(attrOf(one(b.overlay, '.onboarding-privacy'), 'aria-expanded'), 'aria-expanded 没跟上')
       .toBe('true');
     const lines = queryAllIn(b.overlay, '.onboarding-privacy-line').map((p) => p.text);
-    // ⚠️ 「隐私说明」按钮展开的是**授权那三段**（与旧弹窗同口径：`CONSENT_COPY.body`），
+    // ⚠️ 「隐私说明」按钮展开的是**授权那三段**（与旧弹窗同口径：`consentCopy().body`），
     //   不是「本地数据与隐私」整屏的十三句。两份都由 `privacy.ts` 那份唯一出处派生，
     //   但**用途不同** ⇒ 这里断言的是三段那一份（写死段数，免得"两件事混成一件"）。
-    expect(lines, '展开的说明不是旧弹窗那份三段（授权正文）').toEqual([...CONSENT_COPY.body]);
+    expect(lines, '展开的说明不是旧弹窗那份三段（授权正文）').toEqual([...consentCopy().body]);
     expect(lines.length, '展开的说明段数不是 3').toBe(3);
     // 反向锚点：这一份与"第 2 步正文那一段"是**同一份**（同一个注入函数），不是第二份手写文案
     const step2Lines = queryAllIn(b.overlay, '.onboarding-consent-line').map((p) => p.text);
@@ -863,7 +870,8 @@ describe('版式与宿主契约：遮罩占满整屏、类名与既有 CSS 零�
     // 与 `local-consent.ts` 同一条纪律：一切读写都经 `nav` 由宿主做
     expect(code, '屏里出现了存储实现（它只许造元素）').not.toMatch(/localStorage|indexedDB|writeJson|writeSettings/);
     expect(code, '屏自己去挂 document.body 了（挂载是宿主的活）').not.toMatch(/document\.body/);
-    // ⚠️ 它**引用了** `CONSENT_COPY`（唯一出处那条链），但**没有**直接 import privacy.ts：
+    // ⚠️ 它**引用了**旧授权弹窗那份文案的**取值函数**（`consentCopy()`，唯一出处那条链），
+    //    但**没有**直接 import privacy.ts：
     //    隐私说明全文由宿主注入（`privacyLinesOf`），于是这个屏能在 node 下喂合成行真跑。
     expect(code, '屏直接 import 了 privacy.ts（说明全文应当由宿主注入）').not.toMatch(/from '\.\.\/app\/privacy'/);
     expect(code, '屏没有用 `t()` 取文案（那它就不是双语的）').toMatch(/\bt\('onboarding\./);

@@ -333,7 +333,12 @@ describe('R16 · 接线腿（谁给位置、谁给归属）', () => {
     expect(src, '位置的另一端不再由 `end` 决定').toMatch(/else if \(end === 1\) target = 100 - edge;/);
     expect(src, '归属类名不再用**绝对玩家号** holder（配色会跟着"端"走）')
       .toMatch(/held-\$\{holder\}/);
-    expect(src, '归属文案不再用**绝对玩家号** holder').toMatch(/玩家 \$\{holder \+ 1\}/);
+    // ★ 2026-10-02（P3 第三批）：归属文案抽进文案表（键 `render.control.*`）之后，判据从
+    //   "源码里写着 `玩家 ${holder + 1}`"改成"**取词的那一处**把绝对玩家号 holder 交给那个键"
+    //   —— 判的是同一件事（文案的数字来源是 holder，不是 end），没有放宽：`{ n: … holder … }`
+    //   之外的形态（例如改传 `end`）照样报红。中文值本身由 `tests/i18n/tables.test.ts` 钉住。
+    expect(src, '归属文案不再用**绝对玩家号** holder').toMatch(/t\('render\.control\.player', \{ n: String\(holder \+ 1\) \}\)/);
+    expect(src, '中立那一档没有走文案键（英文界面下会留下中文）').toMatch(/t\('render\.control\.neutral'\)/);
   });
 
   it('`render-net.ts`：归属传绝对号 `s.control`、位置端传按座位算的 `netControlEnd`', () => {

@@ -12,8 +12,10 @@
  *     `body[0]` / `body[2]` / `denyHint` 取自 `CONSENT_ALLOW_NOTE` / `CONSENT_DENY_NOTE` /
  *     `CONSENT_DENY_HINT`（都是 `privacy.ts` 的导出常量），Task 9 有"两处不得分叉"的守卫。
  *     ⚠️ 修复轮 3 起这条纪律**有机检**：`tests/ui/local-consent.test.ts` 的结构性腿扫本文件的
- *     **代码位字面量**，任何新写的玩家可见串（中文或含空白）都会报红 ——
- *     判据形态是**闭集**（"字面量清单恰好是那 4 个界面标签"），不是黑名单。
+ *     **代码位字面量**，任何新写的玩家可见串（中文或含空白）都会报红。
+ *     ★ 2026-10-02（P3 第三批）：那 4 个**界面标签**（`title` / `grant` / `deny` / `privacyLink`）
+ *     也从字面量改成了 `t('consent.*')` ⇒ 本文件代码位里的**玩家可见字面量现在是空集**
+ *     （比原来的"恰好 4 个"更严）；它们的值由 `src/i18n/{zh,en}.ts` 出，整句哈希仍就地钉死。
  *     屏上「隐私说明」按钮**就地展开**的那份完整说明同样**生成式**取自 `privacyLines()`
  *     （一条都不手写、不截断），见 `renderPrivacyDetail`。
  *  4. 「隐私说明」按钮**不许是死胡同**（阶段一评审：可点但毫无反应）—— 它必须当场展开
@@ -31,6 +33,7 @@ import {
   PRIVACY_COPY,
   privacyLines,
 } from '../app/privacy';
+import { t } from '../i18n';
 
 export interface ConsentNav {
   /** 用户点「允许」：此后才允许落盘（`main.ts` 的 `consentStep('grant')`） */
@@ -61,25 +64,36 @@ export interface ConsentCopy {
 /**
  * 文案。基调按用户裁决 #6 =**中性陈述 + 明确后果**。
  *
+ * ★ 2026-10-02（P3 第三批）：**4 个界面标签改了形态 —— 从模块级常量对象变成取值函数**。
+ *
+ * 原来这里是 `export const CONSENT_COPY: ConsentCopy = { … }`，那 4 个界面标签是**中文字面量**。
+ * 抽进文案表之后如果继续写在模块作用域（`title: t('consent.title')`），`t()` 会在**模块被
+ * import 的那一刻**求值 —— 而 `initI18n()` 是之后才跑的，语言就被冻在默认中文上，
+ * 切到英文时这一屏照旧是中文（`tests/i18n/module-scope-t.test.ts` 就是为这一族缺陷加的腿）。
+ * ⇒ 改成函数：**渲染点现调**，每次拿到的都是当前语言的值。行为一字未变（同一批字符串、
+ * 同一批回调、同一套元素顺序）。
+ *
  * ⚠️ **四条承诺/说明全部是引用**，本文件里只剩 4 个**界面标签**（`title` / `grant` / `deny` /
- * `privacyLink`）是字面量 —— 它们不承诺任何事，只是按钮与标题上的字。玩家可见的**隐私措辞**
- * 只允许有一个出处（`src/app/privacy.ts`，它同时对齐设计稿 §0.4 红线 1 与 §5.9）：
- * `body[1]` ← `PRIVACY_COPY.noServerStorage[0]`；`body[0]` / `body[2]` / `denyHint` ←
+ * `privacyLink`），它们的值现在走 `t('consent.*')`（`src/i18n/` 里的唯一出处）。
+ * 玩家可见的**隐私措辞**只允许有一个出处（`src/app/privacy.ts`，它同时对齐设计稿 §0.4 红线 1
+ * 与 §5.9）：`body[1]` ← `PRIVACY_COPY.noServerStorage[0]`；`body[0]` / `body[2]` / `denyHint` ←
  * `CONSENT_ALLOW_NOTE` / `CONSENT_DENY_NOTE` / `CONSENT_DENY_HINT`。
  * 手写第二份措辞会让"不实陈述"在两处之间悄悄分叉，而门禁全绿（修复轮 3 的阻断项就是这么发生的）。
  */
-export const CONSENT_COPY: ConsentCopy = {
-  title: '要不要在这台设备上记住你的设置？',
-  body: [
-    CONSENT_ALLOW_NOTE,
-    PRIVACY_COPY.noServerStorage[0],
-    CONSENT_DENY_NOTE,
-  ],
-  grant: '允许，保存在这台设备',
-  deny: '不用，本次不保存',
-  denyHint: CONSENT_DENY_HINT,
-  privacyLink: '隐私说明',
-};
+export function consentCopy(): ConsentCopy {
+  return {
+    title: t('consent.title'),
+    body: [
+      CONSENT_ALLOW_NOTE,
+      PRIVACY_COPY.noServerStorage[0],
+      CONSENT_DENY_NOTE,
+    ],
+    grant: t('consent.grant'),
+    deny: t('consent.deny'),
+    denyHint: CONSENT_DENY_HINT,
+    privacyLink: t('consent.privacy-link'),
+  };
+}
 
 /**
  * 授权状态机的**纯 reducer**（`main.ts` 的 `consentStep()` 只负责把结果落回 `LocalStore`，
@@ -128,17 +142,19 @@ function renderPrivacyDetail(host: HTMLElement, expanded: boolean): void {
  */
 export function renderLocalConsent(root: HTMLElement, nav: ConsentNav): void {
   root.textContent = '';
+  // 文案在**渲染点**取一次（见 `consentCopy()` 的说明：写在模块作用域会把语言冻在 import 那一刻）
+  const copy = consentCopy();
   const screen = document.createElement('div');
   screen.className = 'consent-screen';
 
   const h = document.createElement('h1');
   h.className = 'consent-title';
-  h.textContent = CONSENT_COPY.title;
+  h.textContent = copy.title;
   screen.appendChild(h);
 
   const body = document.createElement('div');
   body.className = 'consent-body';
-  for (const line of CONSENT_COPY.body) {
+  for (const line of copy.body) {
     const p = document.createElement('p');
     p.textContent = line;
     body.appendChild(p);
@@ -147,7 +163,7 @@ export function renderLocalConsent(root: HTMLElement, nav: ConsentNav): void {
 
   const hint = document.createElement('p');
   hint.className = 'consent-hint';
-  hint.textContent = CONSENT_COPY.denyHint;
+  hint.textContent = copy.denyHint;
   screen.appendChild(hint);
 
   const actions = document.createElement('div');
@@ -156,14 +172,14 @@ export function renderLocalConsent(root: HTMLElement, nav: ConsentNav): void {
   const grant = document.createElement('button');
   grant.type = 'button';
   grant.className = 'btn consent-grant';
-  grant.textContent = CONSENT_COPY.grant;
+  grant.textContent = copy.grant;
   grant.addEventListener('click', () => nav.onGrant());
   actions.appendChild(grant);
 
   const deny = document.createElement('button');
   deny.type = 'button';
   deny.className = 'btn consent-deny';
-  deny.textContent = CONSENT_COPY.deny;
+  deny.textContent = copy.deny;
   deny.addEventListener('click', () => nav.onDeny());
   actions.appendChild(deny);
 
@@ -176,7 +192,7 @@ export function renderLocalConsent(root: HTMLElement, nav: ConsentNav): void {
   const link = document.createElement('button');
   link.type = 'button';
   link.className = 'btn-link consent-privacy';
-  link.textContent = CONSENT_COPY.privacyLink;
+  link.textContent = copy.privacyLink;
   link.setAttribute('aria-expanded', 'false');
 
   let expanded = false;
