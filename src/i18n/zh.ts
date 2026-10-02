@@ -1110,6 +1110,91 @@ export const ZH: Readonly<Record<string, string>> = {
   'net-browser.ice.no-candidate-timeout': '等了 {sec} 秒，这台设备这一次一个 ICE 候选都没有收集到（本机候选也没有）。一个候选都没有的连接描述发出去也连不上，所以这条邀请码不生成。下一步：确认浏览器没有被扩展 / 企业策略关掉 WebRTC（本程序只用它做直连），然后重试一次；若还是一个候选都没有，请把这一行原样记下来。',
   'net-browser.ice.no-candidate-now': 'ICE 收集已经结束，但这台设备这一次一个候选都没有（本机候选也没有），这样的连接描述发出去也连不上，所以这条邀请码不生成。下一步：确认浏览器没有被扩展 / 企业策略关掉 WebRTC（本程序只用它做直连），然后重试一次；若还是一个候选都没有，请把这一行原样记下来。',
 
+  /* ── ★ 2026-10-02（P3 第五批）：`src/ui/net-browser.ts` **剩下的 80 条**全部抽完 ──
+   *
+   * 值 = 抽取前 `src/ui/net-browser.ts` 里那些字面量/模板串的**原文**，一个字都没改
+   * （含全角括号与感叹/问号；`{xxx}` 对应原文的 `${…}` 插值）。
+   * 逐字守恒由 `.superpowers/i18n-net-browser/check-verbatim.mjs` 机检（从 `git show HEAD:`
+   * 抓原文逐条比对）。这一批的**分类口径**见台账 G.2：抽的全是**玩家可见的失败原因/读数**
+   * （压缩能力探测与降级链、信令端点、ICE 收集、getStats、offer/answer、传输层 send）。
+   *
+   * ⚠️ **`throw` 的开发者异常不在这里**：本文件的 `throw new Error('这台设备没有压缩流能力（缺少
+   * CompressionStream，格式 …）。')` 与 `throw new Error('这台设备缺少把字节喂进压缩流所需的两个
+   * 内置对象。')` / `throw new Error('这台设备拿不到随机源（安全上下文才提供它），无法生成房间码。')`
+   * 三条是**调用方违约**那一类（`defaultEnv()` 里被上层的 `try` 接住、`browserRandomness` 是
+   * 开发者的用法错误），与 `home.ts` 的 `renderCoin` 用法错误、`pwa-update.ts` 的控制台串同族
+   * ⇒ 有意留中文，登记在 `DEV_ONLY`。它们**不是**屏上的文案。
+   */
+  'net-browser.relay.unavailable-why': '这一轮没有中继可用{why}，只能试直连：同一个局域网里一般能直接连上，跨网络就不一定了。过一会儿再点一次试试。',
+  'net-browser.relay.unavailable-plain': '这一轮没有中继可用，只能试直连：同一个局域网里一般能直接连上，跨网络就不一定了。',
+  'net-browser.candidate.none': '一个都没有',
+  'net-browser.candidate.kind.host': '本机（host）',
+  'net-browser.candidate.kind.srflx': '公网映射（srflx）',
+  'net-browser.candidate.kind.prflx': '对端映射（prflx）',
+  'net-browser.candidate.kind.relay': '中继（relay）',
+  'net-browser.candidate.kind.other': '类型认不出的',
+  'net-browser.candidate.count': '{label} {n} 个',
+  'net-browser.compress.probe-no-stream': '这台设备的浏览器没有压缩流能力（CompressionStream 缺失）。',
+  'net-browser.compress.readable.no-probe': '这台设备的压缩能力探测没有给出结果，邀请码没能生成。请刷新页面再试一次。',
+  'net-browser.compress.readable.all-failed': '这台设备的浏览器不支持本程序用到的任何一种压缩方式（{formats}），连"不压缩"那条兜底路也没走通。请换一个较新的浏览器打开本页再试。',
+  'net-browser.compress.readable.some-failed': '这台设备编不出邀请码：可用的压缩方式里，{failed} 这一档用不了，而不压缩那条兜底路也没走通（{ok} 虽然探测通过，但没有产出可用的字节）。请刷新页面再试一次；如果一直这样，换一个较新的浏览器打开本页。',
+  'net-browser.compress.format.unavailable': '这一档压缩方式（{format}）在这台设备上不可用，改用下一档。',
+  'net-browser.compress.no-stream': '这台设备的浏览器没有压缩流能力，邀请码生成不了（对端仍可用"输 6 位码"那条路）。',
+  'net-browser.compress.note.no-stream': '压缩流能力缺失（CompressionStream / DecompressionStream 不存在）。',
+  'net-browser.compress.format.no-bytes': '这一档压缩方式（{format}）没有产出可用的字节，改用下一档。',
+  'net-browser.compress.prefer.used': '按调用方指定的档位（{kind}）产出（不再走降级链）。',
+  'net-browser.compress.prefer.unusable': '调用方指定的档位（{kind}）在这台设备上用不了，回退到降级链。',
+  'net-browser.compress.fallback.from': '降级链从这里开始可用（前面跳过了 {skipped}）。',
+  'net-browser.compress.roundtrip-failed': '压得出但解不回来（{reason}），继续降级。',
+  'net-browser.compress.prepare-failed': '邀请码没能生成：这台设备在准备压缩能力时出错了。请刷新页面再试一次；如果一直这样，换一个较新的浏览器打开本页。',
+  'net-browser.decompress.format-failed': '这台设备的浏览器解不开这一档压缩（{format}）：{detail}',
+  'net-browser.decompress.no-stream': '这台设备的浏览器没有解压流能力，这条邀请码打不开。',
+  'net-browser.decompress.empty-segment': '这条邀请码的压缩段是空的。',
+  'net-browser.decompress.empty-result': '这条邀请码解压之后没有任何内容。',
+  'net-browser.decompress.corrupt': '这条邀请码的压缩段解不开（内容被改动或截断过）。',
+  'net-browser.invite.bad-marker-segment': '邀请码的压缩段带了一个本程序不认得的编码标记（"{marker}"）：这不是本程序产出的邀请码。',
+  'net-browser.invite.not-base64url': '压缩段不是 base64url，解不出字节。',
+  'net-browser.address-bar.no-invite': '地址栏里没有邀请码（这不是错误，只是没有可读的东西）。',
+  'net-browser.signal.bad-endpoint': '设置里的信令端点不是一个信令地址：它要以 wss:// 或 ws:// 开头。请到「高级 / 连接设置」里改成对端给你的那个地址。',
+  'net-browser.signal.unreachable': '这些信令端点一个都没连上。可以改用邀请码（邀请码这条路不需要信令端点，两端直接把连接描述交给对方；在默认配置下，直连打不通时会经那台默认中继转发），或换一个端点再试。',
+  'net-browser.signal.no-capability': '这台设备没有可用的信令连接能力，短码这条路走不了。请改用邀请码。',
+  'net-browser.signal.closed': '信令已经关了。',
+  'net-browser.signal.not-open': '信令还没连上，这条消息没有发出去。',
+  'net-browser.signal.send-failed': '信令发送失败：{detail}',
+  'net-browser.ice.no-description': '本侧还没有连接描述可发（`setLocalDescription` 没成功，或实现没把它暴露出来）。',
+  'net-browser.ice.no-ticker': '这台设备没有可用的计时能力，所以判不了"ICE 收集等多久算超时"；为了不静默挂住，这一轮不生成邀请码（请重试）。',
+  'net-browser.ice.no-connection': '这条连接还不存在（`pc` 还没建）。',
+  'net-browser.ice.no-getstats': '这条连接不提供 `getStats()`，读不出走没走中继。',
+  'net-browser.ice.stats-failed': '读连接统计失败：{detail}',
+  'net-browser.ice.stats-not-iterable': '`getStats()` 没有回一份可遍历的报告。',
+  'net-browser.ice.no-nominated-pair': '还没有"被提名且已成功"的候选对（链路还在建立），所以这一刻读不出直连还是经中继。',
+  'net-browser.offer.no-set-remote': '这台设备的连接实现不接受"对端描述"（`setRemoteDescription` 缺失），所以产不出 answer。',
+  'net-browser.offer.no-create-answer': '这台设备的连接实现不会产 answer（`createAnswer` 缺失），所以这条邀请码答不回去。',
+  'net-browser.offer.no-offer-sdp': '这条邀请码里没有可用的连接描述（sdp 是空的）。',
+  'net-browser.offer.set-remote-failed': '收不下对端的连接描述：{detail}',
+  'net-browser.offer.answer-failed': '本侧没能产出 answer：{detail}',
+  'net-browser.offer.set-local-failed': '本侧的 answer 没能落到连接上：{detail}',
+  'net-browser.answer.no-set-remote': '这台设备的连接实现不接受"对端描述"（`setRemoteDescription` 缺失）。',
+  'net-browser.answer.no-sdp': '这条回示码里没有可用的连接描述（sdp 是空的）。',
+  'net-browser.answer.set-remote-failed': '收不下对端的 answer：{detail}',
+  'net-browser.transport.peer-online': '对端已连上（这条读数只来自状态事件；init() 的 ok 不代表它）。',
+  'net-browser.transport.peer-offline': '与对端的连接断了（这条读数只来自状态事件，不看 init()）。',
+  'net-browser.transport.no-peer-connection': '这台设备没有可用的对端连接能力（需要安全上下文），联机这条路走不了。',
+  'net-browser.transport.connecting': '正在建立本侧链路（本端 {self}，对端 {peer}）。',
+  'net-browser.transport.probe-restored-peer': '探针恢复：对手重建了通道。',
+  'net-browser.transport.probe-cut': '探针掐线：数据通道被关掉（这一侧真的发不出去了）。',
+  'net-browser.transport.probe-restored': '探针恢复：通道已重建。',
+  'net-browser.transport.offer-failed': '本侧连接描述没有建起来：{detail}',
+  'net-browser.transport.not-initialized-sdp': '本侧链路还没建立（init 还没成功），现在没有连接描述。',
+  'net-browser.transport.no-gather': '本侧没有在等 ICE 收集（这条实现不给连接描述）。',
+  'net-browser.transport.closed': '这一局已经结束了，发不出去。',
+  'net-browser.transport.not-initialized-send': '本侧链路还没建立（init 还没成功），这条消息没有发出去。',
+  'net-browser.transport.no-channel': '通道 {channel} 还没建出来。',
+  'net-browser.transport.queue-full': '待发队列积压太多，这一帧先不发了（等它排空再试）。',
+  'net-browser.transport.peer-unreachable': '对端不可达，这条消息没有发出去（这是传输层的读数，不是"这局结束了"）。',
+  'net-browser.transport.send-failed': '发送失败：{detail}',
+  'net-browser.transport.closed-final': '这一局已经结束（closed 不可逆，不能再连）。',
+
   /* ── ★ 2026-10-02（P3 第三批）：首启授权弹窗（`src/ui/local-consent.ts`）的 4 个**界面标签** ──
    *
    * 值 = `src/ui/local-consent.ts` 的 `CONSENT_COPY` 里那 4 个字面量的**原文**，一个字都没改

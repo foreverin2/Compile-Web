@@ -161,6 +161,26 @@ const DEV_ONLY: Readonly<Record<string, readonly string[]>> = {
    * 这一档与 `home.ts` 那条同族（P0 的 `renderCoin` 用法错误）。
    */
   'src/ui/pwa-update.ts': ['[PWA] 离线预缓存未完成：${reason}'],
+  /**
+   * ★ 2026-10-02（P3 第五批）：`src/ui/net-browser.ts` 抽完 80 条之后剩的**三条**。
+   *
+   * 它们全是 `throw new Error(...)`，即**调用方违约**那一类**开发者异常**，不是玩家可见文案：
+   *  1. `defaultEnv().compressionStream.run()` 里"这台设备没有压缩流能力（缺少 CompressionStream…）"
+   *     —— 缺省实现**故意不吞**构造/运行异常（见那里的注释），它由 `probeCompressionFormat` /
+   *     `compressBytesWithFormat` / `decompressBytes` 各自的 `try` 接住并翻成人话；
+   *  2. 同一处的"这台设备缺少把字节喂进压缩流所需的两个内置对象。"（同上）；
+   *  3. `browserRandomness()` 的"这台设备拿不到随机源（安全上下文才提供它），无法生成房间码。"
+   *     —— 没有随机源就**抛错**是刻意的（不许悄悄退化成一个可预测的码），
+   *     而"宿主没给 crypto"是接线错误、不是屏上的状态。
+   *
+   * 与 `home.ts` 的 `renderCoin` 用法错误、`pwa-update.ts` 的控制台串同族 ⇒ 有意留中文。
+   * 同一文件里**再出现任何新的中文字面量**都会立刻回到"必须登记"的判据面里。
+   */
+  'src/ui/net-browser.ts': [
+    '这台设备没有压缩流能力（缺少 CompressionStream，格式 ${read.format}）。',
+    '这台设备缺少把字节喂进压缩流所需的两个内置对象。',
+    '这台设备拿不到随机源（安全上下文才提供它），无法生成房间码。',
+  ],
 };
 
 describe('★ 尚未抽取的屏：清单只能变短，不能变长', () => {

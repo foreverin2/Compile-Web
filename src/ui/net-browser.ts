@@ -904,10 +904,9 @@ export function relayUnavailableNoteOf(read: IceServersRead): string | null {
   if (read.relayUnavailableReason === 'credential-unavailable') {
     const why = read.relayCredentialFailure === undefined
       ? '' : `（${describeTurnCredentialFailure(read.relayCredentialFailure)}）`;
-    return `这一轮没有中继可用${why}，只能试直连：同一个局域网里一般能直接连上，`
-      + '跨网络就不一定了。过一会儿再点一次试试。';
+    return t('net-browser.relay.unavailable-why', { why });
   }
-  return '这一轮没有中继可用，只能试直连：同一个局域网里一般能直接连上，跨网络就不一定了。';
+  return t('net-browser.relay.unavailable-plain');
 }
 
 /** 三项连接设置长什么样（`settingsAreDefault` 要与它逐字比） */
@@ -1198,7 +1197,7 @@ export async function probeCompressionFormat(format: CompressionFormat, env?: Ne
   try {
     const s = resolved.compressionStream?.(format) ?? null;
     if (s === null) {
-      return { format, supported: false, note: '这台设备的浏览器没有压缩流能力（CompressionStream 缺失）。' };
+      return { format, supported: false, note: t('net-browser.compress.probe-no-stream') };
     }
     // ★ 真构造一次（缺省实现在这一句里才 `new Ctor(format)`）
     await s.run(PROBE_INPUT);
@@ -1228,15 +1227,12 @@ export function readableCompressionFailureText(probes: readonly CompressionProbe
   const failed = probes.filter((p) => !p.supported).map((p) => p.format);
   const ok = probes.filter((p) => p.supported).map((p) => p.format);
   if (failed.length === 0) {
-    return '这台设备的压缩能力探测没有给出结果，邀请码没能生成。请刷新页面再试一次。';
+    return t('net-browser.compress.readable.no-probe');
   }
   if (ok.length === 0 && failed.length === COMPRESSION_FALLBACK.length) {
-    return `这台设备的浏览器不支持本程序用到的任何一种压缩方式（${failed.join('、')}），`
-      + '连"不压缩"那条兜底路也没走通。请换一个较新的浏览器打开本页再试。';
+    return t('net-browser.compress.readable.all-failed', { formats: failed.join('、') });
   }
-  return `这台设备编不出邀请码：可用的压缩方式里，${failed.join('、')} 这一档用不了，`
-    + `而不压缩那条兜底路也没走通（${ok.join('、')} 虽然探测通过，但没有产出可用的字节）。`
-    + '请刷新页面再试一次；如果一直这样，换一个较新的浏览器打开本页。';
+  return t('net-browser.compress.readable.some-failed', { failed: failed.join('、'), ok: ok.join('、') });
 }
 
 /** 原始异常 → 诊断用的一行字（**只进读数、不进界面**） */
@@ -1264,7 +1260,7 @@ export async function compressBytesWithFormat(
     return {
       ok: false,
       reason: 'unsupported',
-      message: `这一档压缩方式（${format}）在这台设备上不可用，改用下一档。`,
+      message: t('net-browser.compress.format.unavailable', { format }),
       probes: [{ format, supported: false, note: rawErrorText(e) }],
     };
   }
@@ -1272,8 +1268,8 @@ export async function compressBytesWithFormat(
     return {
       ok: false,
       reason: 'unsupported',
-      message: '这台设备的浏览器没有压缩流能力，邀请码生成不了（对端仍可用"输 6 位码"那条路）。',
-      probes: [{ format, supported: false, note: '压缩流能力缺失（CompressionStream / DecompressionStream 不存在）。' }],
+      message: t('net-browser.compress.no-stream'),
+      probes: [{ format, supported: false, note: t('net-browser.compress.note.no-stream') }],
     };
   }
   let out: Uint8Array;
@@ -1289,7 +1285,7 @@ export async function compressBytesWithFormat(
     return {
       ok: false,
       reason: 'failed',
-      message: `这一档压缩方式（${format}）没有产出可用的字节，改用下一档。`,
+      message: t('net-browser.compress.format.no-bytes', { format }),
       probes: [{ format, supported: false, note: rawErrorText(e) }],
     };
   }
@@ -1342,14 +1338,14 @@ export async function compressBytesWithFallback(
       probes.push({
         format: formatOfKind(preferKind) as CompressionFormat,
         supported: true,
-        note: `按调用方指定的档位（${preferKind}）产出（不再走降级链）。`,
+        note: t('net-browser.compress.prefer.used', { kind: preferKind }),
       });
       return { ...c, probes };
     }
     probes.push({
       format: (formatOfKind(preferKind) ?? 'deflate-raw') as CompressionFormat,
       supported: false,
-      note: `调用方指定的档位（${preferKind}）在这台设备上用不了，回退到降级链。`,
+      note: t('net-browser.compress.prefer.unusable', { kind: preferKind }),
     });
   }
   for (const format of COMPRESSION_FALLBACK) {
@@ -1364,11 +1360,11 @@ export async function compressBytesWithFallback(
           supported: true,
           ...(skipped.length === 0
             ? {}
-            : { note: `降级链从这里开始可用（前面跳过了 ${skipped.join('、')}）。` }),
+            : { note: t('net-browser.compress.fallback.from', { skipped: skipped.join('、') }) }),
         });
         return { ...c, probes };
       }
-      probes.push({ format, supported: true, note: `压得出但解不回来（${back.reason}），继续降级。` });
+      probes.push({ format, supported: true, note: t('net-browser.compress.roundtrip-failed', { reason: back.reason }) });
       continue;
     }
     // ★ 这一档不可用：把 `compressBytesWithFormat` 交回的**原始异常串**留在读数里
@@ -1467,24 +1463,27 @@ export async function decompressBytes(
     return {
       ok: false,
       reason: 'unsupported',
-      message: `这台设备的浏览器解不开这一档压缩（${format}）：${readableCompressionFailureText([{ format, supported: false, note: rawErrorText(e) }])}`,
+      message: t('net-browser.decompress.format-failed', {
+        format,
+        detail: readableCompressionFailureText([{ format, supported: false, note: rawErrorText(e) }]),
+      }),
     };
   }
   if (stream === null) {
-    return { ok: false, reason: 'unsupported', message: '这台设备的浏览器没有解压流能力，这条邀请码打不开。' };
+    return { ok: false, reason: 'unsupported', message: t('net-browser.decompress.no-stream') };
   }
   if (compressed.length === 0) {
-    return { ok: false, reason: 'decompress-failed', message: '这条邀请码的压缩段是空的。' };
+    return { ok: false, reason: 'decompress-failed', message: t('net-browser.decompress.empty-segment') };
   }
   try {
     const bytes = await stream.run(compressed);
     if (bytes.length === 0) {
-      return { ok: false, reason: 'decompress-failed', message: '这条邀请码解压之后没有任何内容。' };
+      return { ok: false, reason: 'decompress-failed', message: t('net-browser.decompress.empty-result') };
     }
     return { ok: true, bytes };
   } catch {
     // 解压器对坏输入是 reject（不是返回空）—— 收成结果对象就是判据 4 的 ② 类
-    return { ok: false, reason: 'decompress-failed', message: '这条邀请码的压缩段解不开（内容被改动或截断过）。' };
+    return { ok: false, reason: 'decompress-failed', message: t('net-browser.decompress.corrupt') };
   }
 }
 
@@ -1639,8 +1638,7 @@ export async function createInvite(
     return {
       ok: false,
       reason: 'compress-failed',
-      message: '邀请码没能生成：这台设备在准备压缩能力时出错了。请刷新页面再试一次；'
-        + '如果一直这样，换一个较新的浏览器打开本页。',
+      message: t('net-browser.compress.prepare-failed'),
       probes: [{ format: 'deflate-raw', supported: false, note: rawErrorText(e) }],
     };
   }
@@ -1755,7 +1753,7 @@ export async function decodeInvitePayload(
     return {
       ok: false,
       reason: 'bad-base64url',
-      message: `邀请码的压缩段带了一个本程序不认得的编码标记（"${seg.marker}"）：这不是本程序产出的邀请码。`,
+      message: t('net-browser.invite.bad-marker-segment', { marker: seg.marker }),
     };
   }
   /**
@@ -1793,7 +1791,7 @@ export async function decompressBase64(
 ): Promise<DecompressResult> {
   const pre = decodeBase64Url(b64);
   if (pre === null) {
-    return { ok: false, reason: 'bad-base64url', message: '压缩段不是 base64url，解不出字节。' };
+    return { ok: false, reason: 'bad-base64url', message: t('net-browser.invite.not-base64url') };
   }
   return decompressBytes(pre, env, kind);
 }
@@ -1809,7 +1807,7 @@ export async function decodeInviteFromAddressBar(
 ): Promise<InviteDecodeResult | { ok: false; reason: 'no-fragment'; message: string }> {
   const payload = readInviteFromAddressBar(env);
   if (payload === null) {
-    return { ok: false, reason: 'no-fragment', message: '地址栏里没有邀请码（这不是错误，只是没有可读的东西）。' };
+    return { ok: false, reason: 'no-fragment', message: t('net-browser.address-bar.no-invite') };
   }
   return decodeInvitePayload(payload, env);
 }
@@ -1873,9 +1871,7 @@ export function signalEndpointOf(raw: string | null | undefined): EndpointShape 
     return {
       ok: false,
       reason: 'bad-endpoint',
-      message:
-        '设置里的信令端点不是一个信令地址：它要以 wss:// 或 ws:// 开头。' +
-        '请到「高级 / 连接设置」里改成对端给你的那个地址。',
+      message: t('net-browser.signal.bad-endpoint'),
     };
   }
   return { ok: true, url: gate.endpoint };
@@ -1944,8 +1940,7 @@ export async function discoverSignalingEndpoint(
   return {
     ok: false,
     reason: 'unreachable',
-    message: '这些信令端点一个都没连上。可以改用邀请码（邀请码这条路不需要信令端点，'
-      + '两端直接把连接描述交给对方；在默认配置下，直连打不通时会经那台默认中继转发），或换一个端点再试。',
+    message: t('net-browser.signal.unreachable'),
   };
 }
 
@@ -1982,7 +1977,7 @@ export function createSignalingSession(
     return {
       ok: false,
       reason: 'unsupported',
-      message: '这台设备没有可用的信令连接能力，短码这条路走不了。请改用邀请码。',
+      message: t('net-browser.signal.no-capability'),
     };
   }
   let status: TransportStatus = 'idle';
@@ -1994,15 +1989,15 @@ export function createSignalingSession(
       return { ok: true };
     },
     sendText: (text: string): SendResult => {
-      if (status === 'closed') return { ok: false, reason: 'closed', message: '信令已经关了。' };
+      if (status === 'closed') return { ok: false, reason: 'closed', message: t('net-browser.signal.closed') };
       if (ws.readyState !== WS_OPEN) {
-        return { ok: false, reason: 'offline', message: '信令还没连上，这条消息没有发出去。' };
+        return { ok: false, reason: 'offline', message: t('net-browser.signal.not-open') };
       }
       try {
         ws.send(text);
         return { ok: true };
       } catch (e) {
-        return { ok: false, reason: 'offline', message: `信令发送失败：${String(e)}` };
+        return { ok: false, reason: 'offline', message: t('net-browser.signal.send-failed', { detail: String(e) }) };
       }
     },
     close: () => {
@@ -2194,22 +2189,28 @@ export function enoughCandidatesForInvite(ice: readonly string[], relayConfigure
  */
 export const ICE_HOST_ONLY_GRACE_MS = 1_500;
 
-/** 种类的中文名（只写在这一处：屏上与报告都从它取，免得两处各说各话） */
-const KIND_LABELS: Readonly<Record<keyof CandidateKinds, string>> = {
-  host: '本机（host）',
-  srflx: '公网映射（srflx）',
-  prflx: '对端映射（prflx）',
-  relay: '中继（relay）',
-  other: '类型认不出的',
-};
+/**
+ * 种类的名字（只写在这一处：屏上与报告都从它取，免得两处各说各话）。
+ *
+ * ★ 2026-10-02（P3 第五批）：从模块级常量改成**取值函数** —— 常量表会把语言冻在
+ * import 那一刻（`tests/i18n/module-scope-t.test.ts` 钉这条），而这一族会随语言变。
+ * 键名（`host` / `srflx` …）是**候选类型的原文**，不翻译；被翻的是它旁边那截人话。
+ */
+function kindLabel(k: keyof CandidateKinds): string {
+  if (k === 'host') return t('net-browser.candidate.kind.host');
+  if (k === 'srflx') return t('net-browser.candidate.kind.srflx');
+  if (k === 'prflx') return t('net-browser.candidate.kind.prflx');
+  if (k === 'relay') return t('net-browser.candidate.kind.relay');
+  return t('net-browser.candidate.kind.other');
+}
 
 /** 把一份候选清单说成一句人话（例：`本机（host）2 个、公网映射（srflx）1 个`） */
 export function describeCandidates(ice: readonly string[]): string {
-  if (ice.length === 0) return '一个都没有';
+  if (ice.length === 0) return t('net-browser.candidate.none');
   const kinds = candidateKindsOf(ice);
   const parts: string[] = [];
   for (const k of ['host', 'srflx', 'prflx', 'relay', 'other'] as const) {
-    if (kinds[k] > 0) parts.push(`${KIND_LABELS[k]} ${String(kinds[k])} 个`);
+    if (kinds[k] > 0) parts.push(t('net-browser.candidate.count', { label: kindLabel(k), n: String(kinds[k]) }));
   }
   return parts.join('、');
 }
@@ -2337,7 +2338,7 @@ export function waitForIceGathering(
   const noDescription = (): IceGatherResult => ({
     ok: false,
     reason: 'no-description',
-    message: '本侧还没有连接描述可发（`setLocalDescription` 没成功，或实现没把它暴露出来）。',
+    message: t('net-browser.ice.no-description'),
   });
   /**
    * ★★ 取结论（**候选数在这里定生死**，见上面那段）：
@@ -2393,8 +2394,7 @@ export function waitForIceGathering(
     return Promise.resolve({
       ok: false,
       reason: 'unsupported',
-      message: '这台设备没有可用的计时能力，所以判不了"ICE 收集等多久算超时"；'
-        + '为了不静默挂住，这一轮不生成邀请码（请重试）。',
+      message: t('net-browser.ice.no-ticker'),
     });
   }
   return new Promise<IceGatherResult>((resolve) => {
@@ -2588,25 +2588,25 @@ export async function readRelayStatsOf(
   pc: PeerConnectionLike | null | undefined,
 ): Promise<{ readonly read: RelayStatsRead; readonly note: string | null }> {
   if (pc === null || pc === undefined) {
-    return { read: pendingRelayRead(), note: '这条连接还不存在（`pc` 还没建）。' };
+    return { read: pendingRelayRead(), note: t('net-browser.ice.no-connection') };
   }
   if (typeof pc.getStats !== 'function') {
-    return { read: pendingRelayRead(), note: '这条连接不提供 `getStats()`，读不出走没走中继。' };
+    return { read: pendingRelayRead(), note: t('net-browser.ice.no-getstats') };
   }
   let raw: RTCStatsReportLike;
   try {
     raw = await pc.getStats();
   } catch (e) {
-    return { read: pendingRelayRead(), note: `读连接统计失败：${rawErrorText(e)}` };
+    return { read: pendingRelayRead(), note: t('net-browser.ice.stats-failed', { detail: rawErrorText(e) }) };
   }
   if (typeof (raw as { forEach?: unknown } | null)?.forEach !== 'function') {
-    return { read: pendingRelayRead(), note: '`getStats()` 没有回一份可遍历的报告。' };
+    return { read: pendingRelayRead(), note: t('net-browser.ice.stats-not-iterable') };
   }
   const read = readRelayStats(raw);
   return {
     read,
     note: read.kind === 'pending'
-      ? '还没有"被提名且已成功"的候选对（链路还在建立），所以这一刻读不出直连还是经中继。'
+      ? t('net-browser.ice.no-nominated-pair')
       : null,
   };
 }
@@ -2670,37 +2670,37 @@ export async function acceptOffer(
     return {
       ok: false,
       reason: 'unsupported',
-      message: '这台设备的连接实现不接受"对端描述"（`setRemoteDescription` 缺失），所以产不出 answer。',
+      message: t('net-browser.offer.no-set-remote'),
     };
   }
   if (pc.createAnswer === undefined) {
     return {
       ok: false,
       reason: 'unsupported',
-      message: '这台设备的连接实现不会产 answer（`createAnswer` 缺失），所以这条邀请码答不回去。',
+      message: t('net-browser.offer.no-create-answer'),
     };
   }
   if (typeof offer.sdp !== 'string' || offer.sdp.length === 0) {
-    return { ok: false, reason: 'set-remote-failed', message: '这条邀请码里没有可用的连接描述（sdp 是空的）。' };
+    return { ok: false, reason: 'set-remote-failed', message: t('net-browser.offer.no-offer-sdp') };
   }
   try {
     // ① 对端描述（修复轮之前从未被调用的那一步）
     await pc.setRemoteDescription({ type: 'offer', sdp: offer.sdp });
   } catch (e) {
-    return { ok: false, reason: 'set-remote-failed', message: `收不下对端的连接描述：${String(e)}` };
+    return { ok: false, reason: 'set-remote-failed', message: t('net-browser.offer.set-remote-failed', { detail: String(e) }) };
   }
   let answer: { readonly sdp?: string; readonly type: string };
   try {
     // ② 产 answer
     answer = await pc.createAnswer();
   } catch (e) {
-    return { ok: false, reason: 'answer-failed', message: `本侧没能产出 answer：${String(e)}` };
+    return { ok: false, reason: 'answer-failed', message: t('net-browser.offer.answer-failed', { detail: String(e) }) };
   }
   try {
     // ③ 把它落在本侧
     await pc.setLocalDescription({ type: 'answer', sdp: answer.sdp });
   } catch (e) {
-    return { ok: false, reason: 'answer-failed', message: `本侧的 answer 没能落到连接上：${String(e)}` };
+    return { ok: false, reason: 'answer-failed', message: t('net-browser.offer.set-local-failed', { detail: String(e) }) };
   }
   // ④ 等 ICE 收集（非 trickle：候选必须已经在 SDP 里）
   //    ★ T16：上界到点时手上已经有候选 ⇒ 也在这里放行（`note` 由调用方写到屏上）
@@ -2732,15 +2732,15 @@ export async function applyAnswer(
   answer: { readonly sdp: string },
 ): Promise<TransportActionResult> {
   if (pc.setRemoteDescription === undefined) {
-    return { ok: false, reason: 'unsupported', message: '这台设备的连接实现不接受"对端描述"（`setRemoteDescription` 缺失）。' };
+    return { ok: false, reason: 'unsupported', message: t('net-browser.answer.no-set-remote') };
   }
   if (typeof answer.sdp !== 'string' || answer.sdp.length === 0) {
-    return { ok: false, reason: 'bad-answer', message: '这条回示码里没有可用的连接描述（sdp 是空的）。' };
+    return { ok: false, reason: 'bad-answer', message: t('net-browser.answer.no-sdp') };
   }
   try {
     await pc.setRemoteDescription({ type: 'answer', sdp: answer.sdp });
   } catch (e) {
-    return { ok: false, reason: 'set-remote-failed', message: `收不下对端的 answer：${String(e)}` };
+    return { ok: false, reason: 'set-remote-failed', message: t('net-browser.answer.set-remote-failed', { detail: String(e) }) };
   }
   return { ok: true };
 }
@@ -2895,13 +2895,13 @@ export function createBrowserTransport(env?: NetBrowserEnv): NetTransport {
   const onPeerState = (raw: string): void => {
     if (raw === 'connected') {
       peerOnline = true;
-      emitStatus('online', '对端已连上（这条读数只来自状态事件；init() 的 ok 不代表它）。');
+      emitStatus('online', t('net-browser.transport.peer-online'));
       return;
     }
     if (raw === 'disconnected' || raw === 'failed') {
       if (peerOnline) {
         peerOnline = false;
-        emitStatus('offline', '与对端的连接断了（这条读数只来自状态事件，不看 init()）。');
+        emitStatus('offline', t('net-browser.transport.peer-offline'));
       }
       // 重连：切回前台那条路还会再叫一次 restartIce()
       pc?.restartIce?.();
@@ -2924,7 +2924,7 @@ export function createBrowserTransport(env?: NetBrowserEnv): NetTransport {
         return {
           ok: false,
           reason: 'unsupported',
-          message: '这台设备没有可用的对端连接能力（需要安全上下文），联机这条路走不了。',
+          message: t('net-browser.transport.no-peer-connection'),
         };
       }
       pc = conn;
@@ -2935,7 +2935,7 @@ export function createBrowserTransport(env?: NetBrowserEnv): NetTransport {
       TRANSPORT_PC.set(transport, conn);
       conn.addEventListener('iceconnectionstatechange', () => onPeerState(String(conn.iceConnectionState ?? '')));
       conn.addEventListener('connectionstatechange', () => onPeerState(String(conn.connectionState ?? '')));
-      emitStatus('connecting', `正在建立本侧链路（本端 ${init.selfId}，对端 ${init.peerId}）。`);
+      emitStatus('connecting', t('net-browser.transport.connecting', { self: init.selfId, peer: init.peerId }));
       /** 通道登记 / 认领的**唯一一处**：出 offer 方建、加入方认领，两边共用这一份接线 */
       const registerChannel = (label: NetChannel, dc: DataChannelLike): void => {
         channels.set(label, dc);
@@ -2976,7 +2976,7 @@ export function createBrowserTransport(env?: NetBrowserEnv): NetTransport {
           // ★ T13 探针：掐线之后对手重建通道 ⇒ 本侧认领齐了两条 ⇒ 如实报 online（见 installProbeCut）
           if (probeCut) {
             const all = CHANNEL_SPECS.every((sp) => channels.get(sp.channel)?.readyState === 'open');
-            if (all) { probeCut = false; emitStatus('online', '探针恢复：对手重建了通道。'); }
+            if (all) { probeCut = false; emitStatus('online', t('net-browser.transport.probe-restored-peer')); }
           }
         });
       }
@@ -3003,7 +3003,7 @@ export function createBrowserTransport(env?: NetBrowserEnv): NetTransport {
         g.__g5LinkCut = () => {
           for (const dc of channels.values()) dc.close();
           probeCut = true;
-          emitStatus('offline', '探针掐线：数据通道被关掉（这一侧真的发不出去了）。');
+          emitStatus('offline', t('net-browser.transport.probe-cut'));
           return 'cut';
         };
         g.__g5LinkRestore = () => {
@@ -3013,7 +3013,7 @@ export function createBrowserTransport(env?: NetBrowserEnv): NetTransport {
               registerChannel(spec.channel, conn.createDataChannel(spec.channel, dataChannelInit(spec.channel)));
             }
             probeCut = false;
-            emitStatus('online', '探针恢复：通道已重建。');
+            emitStatus('online', t('net-browser.transport.probe-restored'));
           }
           return 'restore';
         };
@@ -3042,7 +3042,7 @@ export function createBrowserTransport(env?: NetBrowserEnv): NetTransport {
           const offer = await conn.createOffer();
           await conn.setLocalDescription(offer);
         } catch (e) {
-          return { ok: false, reason: 'offer-failed', message: `本侧连接描述没有建起来：${String(e)}` };
+          return { ok: false, reason: 'offer-failed', message: t('net-browser.transport.offer-failed', { detail: String(e) }) };
         }
         // ★ **B2**：`setLocalDescription` 之后 ICE 收集才刚开始 ⇒ 此刻 `localDescription.sdp` 里
         //   还没有候选。这里把"等它收完"排下来（带上界），但**不 await**（`init()` 只等本侧，D18）。
@@ -3097,10 +3097,10 @@ export function createBrowserTransport(env?: NetBrowserEnv): NetTransport {
       }
     > {
       if (!initDone) {
-        return { ok: false, reason: 'not-initialized', message: '本侧链路还没建立（init 还没成功），现在没有连接描述。' };
+        return { ok: false, reason: 'not-initialized', message: t('net-browser.transport.not-initialized-sdp') };
       }
       if (gather === null) {
-        return { ok: false, reason: 'unsupported', message: '本侧没有在等 ICE 收集（这条实现不给连接描述）。' };
+        return { ok: false, reason: 'unsupported', message: t('net-browser.transport.no-gather') };
       }
       const g = await gather;
       if (!g.ok) return { ok: false, reason: g.reason, message: g.message };
@@ -3115,27 +3115,27 @@ export function createBrowserTransport(env?: NetBrowserEnv): NetTransport {
 
     send(channel: NetChannel, text: string): SendResult {
       if (status === 'closed') {
-        return { ok: false, reason: 'closed', message: '这一局已经结束了，发不出去。' };
+        return { ok: false, reason: 'closed', message: t('net-browser.transport.closed') };
       }
       if (!initDone) {
         return {
           ok: false,
           reason: 'not-initialized',
-          message: '本侧链路还没建立（init 还没成功），这条消息没有发出去。',
+          message: t('net-browser.transport.not-initialized-send'),
         };
       }
       const dc = channels.get(channel);
       if (dc === undefined) {
-        return { ok: false, reason: 'not-initialized', message: `通道 ${channel} 还没建出来。` };
+        return { ok: false, reason: 'not-initialized', message: t('net-browser.transport.no-channel', { channel }) };
       }
       if ((dc.bufferedAmount ?? 0) > MAX_BUFFERED_BYTES) {
-        return { ok: false, reason: 'queue-full', message: '待发队列积压太多，这一帧先不发了（等它排空再试）。' };
+        return { ok: false, reason: 'queue-full', message: t('net-browser.transport.queue-full') };
       }
       if (dc.readyState !== 'open') {
         return {
           ok: false,
           reason: 'offline',
-          message: '对端不可达，这条消息没有发出去（这是传输层的读数，不是"这局结束了"）。',
+          message: t('net-browser.transport.peer-unreachable'),
         };
       }
       try {
@@ -3143,7 +3143,7 @@ export function createBrowserTransport(env?: NetBrowserEnv): NetTransport {
         sent += 1;
         return { ok: true };
       } catch (e) {
-        return { ok: false, reason: 'offline', message: `发送失败：${String(e)}` };
+        return { ok: false, reason: 'offline', message: t('net-browser.transport.send-failed', { detail: String(e) }) };
       }
     },
 
@@ -3174,7 +3174,7 @@ export function createBrowserTransport(env?: NetBrowserEnv): NetTransport {
       pc = null;
       initDone = false;
       peerOnline = false;
-      emitStatus('closed', '这一局已经结束（closed 不可逆，不能再连）。');
+      emitStatus('closed', t('net-browser.transport.closed-final'));
       return { ok: true };
     },
 
