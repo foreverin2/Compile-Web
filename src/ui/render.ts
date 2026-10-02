@@ -53,7 +53,7 @@ import type { FxViewSeat } from './fx-seat';
 // ★ 2026-10-02（P3 第三批）：棋盘 chrome 的文案走文案表（键 `render.*`；值 = 改动前那些
 //   字面量/模板串的**原文**，一个字未改）。⚠️ 只在**渲染点**调 `t()`（模块顶层的 `t()` 会把
 //   语言冻在 import 那一刻，`tests/i18n/module-scope-t.test.ts` 有腿）。`t()` 实参一律字面量。
-import { engineActionButtonText, enginePromptTitle, t } from '../i18n';
+import { engineActionButtonText, enginePromptTitle, getLang, t } from '../i18n';
 
 export interface UiCallbacks {
   onAction(a: LegalAction): void;
@@ -5915,8 +5915,17 @@ interface ZoomState {
 let zoomState: ZoomState | null = null;
 
 /** 卡牌中文效果面板构建（放大查看/图鉴展示共用）：rootCls 控制容器尺寸/底色（zoom-text 或
- *  library-preview-text），内部结构类固定 card-text-*。 */
-export function buildCardTextEl(parts: CardTextParts, rootCls: string): HTMLElement {
+ *  library-preview-text），内部结构类固定 card-text-*。
+ *
+ *  ★ P4（用户 2026-10-01 拍板）：**语言为 `en` 时这一层不产出** —— 返回 `null`，调用方
+ *  一个节点都不追加。理由是卡面原图的原文本来就是英文（卡文数据一个字不动，见
+ *  `docs/2026-10-01-新手引导与教学-方案.md` §6.5 第 2 条）。
+ *
+ *  判定只有**这一处**：三个产出口（`openZoom` 的放大查看遮罩、`home.ts` 的图鉴展示框、
+ *  `render-net.ts` 的联机牌桌放大框）共用本函数 ⇒ 不存在"漏了一个出口"的形态；
+ *  `zh` 走的就是原路（本函数唯一新增的分支是 `=== 'en'` 早退）⇒ 中文屏构造上不可能回归。 */
+export function buildCardTextEl(parts: CardTextParts, rootCls: string): HTMLElement | null {
+  if (getLang() === 'en') return null;
   const box = el('div', rootCls);
   box.appendChild(el('div', 'card-text-title', parts.title));
   for (const seg of parts.segs) {
@@ -5961,11 +5970,12 @@ export function openZoom(defId: string, faceUp: boolean, isProtocol: boolean, co
     rotFrame.appendChild(img);
   }
   // 中文效果文本栏：仅卡牌（非协议）且正面显示时可见；peek 翻面联动显隐
+  // （P4：语言为 en 时 `buildCardTextEl` 回 null ⇒ 这一层根本不产出，下面 `if (textEl)` 已守）
   let textEl: HTMLElement | null = null;
   if (!isProtocol) {
     try {
       textEl = buildCardTextEl(cardTextParts(getCardDef(defId)), 'zoom-text');
-      textEl.style.display = showingFace ? '' : 'none';
+      if (textEl) textEl.style.display = showingFace ? '' : 'none';
     } catch {
       textEl = null;
     }
