@@ -93,6 +93,11 @@ import type {
 import { canonicalMatchFile } from '../app/match-file';
 import type { MatchFile } from '../app/match-file';
 import type { PlayerId } from '../core/models/types';
+// ★ 2026-10-02（P3 第八批）：拒绝原因（`refusal.message` / `verdict.message` / `SendResult.message`）
+// **进表**。它们在 `src/ui/net-lobby.ts` 里被逐字透传给玩家，而写这些话的是**我们自己**
+// （与服务端返回的中文错误不是一回事，后者按设计不翻）。加这一行只换字符串来源，
+// 逻辑一个字没动。方向是 net → i18n（`src/i18n/**` 不认识 `src/net/**`，没有环）。
+import { t } from '../i18n';
 
 /* ------------------------------------------------------------------ *
  * 1. 注入能力：HashLike（D15，全仓只此一处定义）
@@ -613,15 +618,7 @@ function requireHash(hash: HashLike, ...parts: readonly string[]): string {
   const out = hash(...parts);
   if (typeof out !== 'string' || out.length === 0) {
     throw new Error(
-      'session.ts 的哈希注入（HashLike）没有返回可用的哈希串：' +
-        `收到 ${typeof out === 'string' ? '空字符串' : String(out)}。` +
-        '本模块不做异步（D15）：要同步用就注入一个同步实现；' +
-        // 这条文案里**刻意不写**那个哈希 API 的名字（连注释里都尽量少写）：
-        // `tests/net/net-purity.test.ts` 的浏览器 API 判据是**裸词面**匹配，而剥注释**不剥字符串**
-        // ⇒ 报错文案里出现那个名字（`…哈希 API…`）会让守卫把这条纯字符串判成"调用了浏览器 API"。
-        // 实测：T2 的评审人自建镜像时，本文件的这句文案就把守卫的"浏览器 API 零命中"那条腿打红了。
-        // 说的是同一件事，换个说法即可："异步封装（真实实现住 src/ui/net-browser.ts，T7）"。
-        '异步封装（真实实现住 src/ui/net-browser.ts，T7）算出来的是一个 Promise，不算哈希串。',
+      t('session.hash.bad', { got: typeof out === 'string' ? t('session.hash.empty-string') : String(out) }),
     );
   }
   return out;
@@ -631,7 +628,7 @@ function requireHash(hash: HashLike, ...parts: readonly string[]): string {
 function requireNonEmpty(what: string, v: unknown): string {
   if (typeof v !== 'string' || v.length === 0) {
     throw new Error(
-      `session.ts 的 ${what} 必须是非空字符串（收到 ${JSON.stringify(v)}）；这是调用方违约，不是网络输入。`,
+      t('session.caller.not-non-empty-string', { what, v: JSON.stringify(v) }),
     );
   }
   return v;
@@ -647,21 +644,24 @@ function requireNonEmpty(what: string, v: unknown): string {
  * 说什么、不说什么：
  *  - 说：**为什么**必须先选面（硬币是种子的纯函数 ⇒ 先看到种子就能反推结果），以及下一步做什么。
  *  - 不说：任何"本程序保证公平"的话。种子是房主自己选的，承诺钉不住"事前磨种子"（见文件头）。
+ *
+ * ★ 2026-10-02（P3 第八批）：形态从**模块级常量**改成**取值函数** —— 模块顶层求值 `t()`
+ * 会把语言冻在 import 那一刻（`tests/i18n/module-scope-t.test.ts` 钉这条）。
+ * 值（`session.refuse.seed-before-face`）与改动前的字面量**逐字相同**。
  */
-export const REVEAL_SEED_BEFORE_FACE_MESSAGE =
-  '拒绝了过早到达的 reveal-seed：加入方还没有提交正/反的承诺（commit-face）。' +
-  '硬币结果是种子的纯函数，先拿到种子的一方可以先算出结果、再挑对自己有利的那一面，' +
-  '所以选面必须先于种子公开（设计稿 §5.3）。这一局请让对端先发 commit-face；' +
-  '本程序不会替它补一个承诺。';
+export function revealSeedBeforeFaceMessage(): string {
+  return t('session.refuse.seed-before-face');
+}
 
 /** 判据 4：G5 不支持观战的那一句。**与 `spectator-slots-full` 的文案刻意不同**（G7 要分得清） */
-export const SPECTATOR_UNSUPPORTED_MESSAGE =
-  '这个版本（G5）还不支持观战：观战席还没造出来，不是坐满了。两张牌桌只留给两位玩家，' +
-  '请让对方以玩家身份重发握手；观战会在后续版本里单独做。';
+export function spectatorUnsupportedMessage(): string {
+  return t('session.refuse.spectator-unsupported');
+}
 
 /** 观战回绝的 `busy.detail`：一句话点明"是不支持，不是位满" */
-export const SPECTATOR_UNSUPPORTED_DETAIL =
-  'G5 不支持观战（注意：这不是"观战席已满"）：本版本只有两张玩家位，观战要等后续版本。';
+export function spectatorUnsupportedDetail(): string {
+  return t('session.refuse.spectator-unsupported-detail');
+}
 
 /**
  * 重连窗口的缺省长度（毫秒）。300_000 = 300s（设计稿 `:505`"窗口长度可配置、默认 300s"；
@@ -681,11 +681,14 @@ export const DEFAULT_RECONNECT_WINDOW_MS = 300_000;
  * 为什么**不**在没档案时回一份空的 `resync-res`：那是一份**假的**追平凭据 ——
  * 加入方会拿它把状态重建成"开局"，而它自己以为追平成功了。本仓对这类"动作发生了、
  * 语义没发生"的形态一律 fail-closed（见 D1 的代价一栏）。
+ *
+ * ★ 2026-10-02（P3 第八批）：形态从**模块级常量**改成**取值函数** —— 模块顶层求值 `t()`
+ * 会把语言冻在 import 那一刻（`tests/i18n/module-scope-t.test.ts` 钉这条）。
+ * 值（`session.resync.not-wired`）与改动前的字面量**逐字相同**。
  */
-export const RESYNC_NOT_WIRED_MESSAGE =
-  '收到了 resync-req，但本端这一侧没有可发的档案（调用方没有接上"当前档案"的来源，' +
-  '或来源此刻是空的），所以发不出 resync-res。这不是"追平已完成"——请检查接线时' +
-  '是否把当前档案的读取口喂给了本会话（房主持有重连凭据，加入方不持有）。';
+export function resyncNotWiredMessage(): string {
+  return t('session.resync.not-wired');
+}
 
 /* ------------------------------------------------------------------ *
  * 10. 对外 API（按角色分叉）
@@ -1017,23 +1020,22 @@ function mayRevealSeed(phase: SessionPhase): boolean {
 }
 
 /** 判据 1 的三句不同的话：安全那条与"重复/重放"两条分开报，免得把重发误读成作弊 */
-function seedRefusal(phase: SessionPhase, side: '房主' | '加入方'): { reason: SessionRejectReason; message: string } {
+function seedRefusal(phase: SessionPhase, side: string): { reason: SessionRejectReason; message: string } {
   if (phase === 'seed-revealed') {
     return {
       reason: 'seed-duplicate',
       message:
-        `${side}已经见过一次 reveal-seed 了，不重复接受：同一条承诺只揭示一次种子。` +
-        '对端若没收到，请让它重发 commit-ack，而不是再揭示一遍。',
+        t('session.refuse.duplicate-reveal-seed', { side }),
     };
   }
   if (phase === 'reveal-salt-sent' || phase === 'complete') {
     return {
       reason: 'seed-not-expected',
       message:
-        '这局已经走完承诺流程（种子与盐都揭示过），此时再来一条 reveal-seed 只可能是对端把流程重放了一遍；拒绝。',
+        t('session.refuse.reveal-seed-after-complete'),
     };
   }
-  return { reason: 'seed-before-face', message: REVEAL_SEED_BEFORE_FACE_MESSAGE };
+  return { reason: 'seed-before-face', message: revealSeedBeforeFaceMessage() };
 }
 
 function ok<T extends object>(extra: T): { ok: true } & T {
@@ -1051,7 +1053,7 @@ function outbound<K extends NetMsgType>(msg: Extract<NetMsg, { t: K }>): Session
 
 /** `reveal-salt` 形状失败的那一句（**只此一处**：形状检查与加入方的事后处理都要用它） */
 function badSaltFailure(): { ok: false; reason: SessionRejectReason; message: string } {
-  return { ok: false, reason: 'bad-salt', message: '收到的 reveal-salt 没有可用的 salt（空串 / 缺失 / 不是字符串）；拒绝。' };
+  return { ok: false, reason: 'bad-salt', message: t('session.refuse.bad-salt') };
 }
 
 /**
@@ -1093,9 +1095,7 @@ function mayIntakeSalt(phase: SessionPhase): { ok: true } | { ok: false; reason:
     ok: false,
     reason: 'unexpected-message',
     message:
-      `当前相位是 ${phase}，此时收到 reveal-salt：` +
-      '盐是**对局结束后、由房主**揭示的，本方还没有揭示过种子（或握手都还没完成），' +
-      '所以这条消息只可能是对端搞错了方向或提前重放；拒绝，且不改变任何状态。',
+      t('session.refuse.early-salt', { phase }),
   };
 }
 
@@ -1128,17 +1128,18 @@ function mayRevealSalt(phase: SessionPhase): { ok: true } | { ok: false; reason:
     ok: false,
     reason: 'unexpected-message',
     message:
-      `当前相位是 ${phase}，还不能揭示盐：盐要在**收到对端的 reveal-face 之后**才发` +
-      '（那时这一局才算"结束"，设计稿 §5.3 最后一步）。先发盐会把相位推到 `complete`，' +
-      '而那时 `reveal-face` 已经进不来了 —— 房主会永远拿不到对端选的面，所以本端不接受那种顺序。',
+      t('session.refuse.salt-before-face', { phase }),
   };
 }
 
 /** 从（可能来自网络的）unknown 里取一个**给人看**的消息类型串（诊断与文案用，不参与分支） */
 function whatOf(msg: unknown): string {
-  if (!isObj(msg)) return '非对象的消息';
-  const t = msg.t;
-  return typeof t === 'string' ? t : '没有 t 字段的消息';
+  if (!isObj(msg)) return t('session.refuse.non-object-message');
+  // ★ 2026-10-02（P3 第八批）：这个局部量原来叫 `t`，与文案取值函数 `t()` **重名**
+  // （`const t = msg.t` 会把 import 的 `t` 遮住 ⇒ 下面那处 `t('session…')` 会去调一个字符串）。
+  // 只改**局部变量名**，语义一个字没动。
+  const kind = msg.t;
+  return typeof kind === 'string' ? kind : t('session.refuse.missing-t');
 }
 
 /** 非负整数（`resync-req.appliedSteps` / `applyResyncFile` 的 `statesAtStep` 的形态） */
@@ -1424,7 +1425,7 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
         message,
         phase: s.phase,
         emit: false,
-        busy: { t: 'busy', reason: 'unsupported', detail: `${detail}（形状不合法，本端不向外发包）` },
+        busy: { t: 'busy', reason: 'unsupported', detail: t('session.internal.bad-outbound-shape', { detail }) },
       };
     }
     return { ok: false, reason, message, phase: s.phase, emit: true, busy: { t: 'busy', reason: busyReason, detail } };
@@ -1449,18 +1450,18 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
   function refuseLateHello(what: string, extra = ''): HelloRejection {
     const why =
       s.phase === 'rejected'
-        ? '这次握手已经被本端回绝过了'
-        : '握手已经成功过（这一局已经在承诺流程里）';
+        ? t('session.hello.already-refused')
+        : t('session.hello.already-established');
     return {
       ok: false,
       reason: 'unexpected-message',
       message:
-        `${what}：${why}，当前相位是 ${s.phase} —— 本端**忽略**它，会话状态一点都没动。` +
+        t('session.refuse.guard-ignored', { what, why, phase: s.phase }) +
         extra +
-        '已经完成的步骤不会因为你重发握手就退回去；若确实要开新的一局，请换一个新的 sessionId 重新握手。',
+        t('session.hello.already-done'),
       phase: s.phase,
       emit: false,
-      busy: { t: 'busy', reason: 'unsupported', detail: '这条 hello 来得太晚，被忽略（会话未改动）。' },
+      busy: { t: 'busy', reason: 'unsupported', detail: t('session.hello.too-late') },
     };
   }
 
@@ -1484,11 +1485,10 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
         ok: false,
         reason: 'unexpected-message',
         message:
-          `收到了一条 ${JSON.stringify(whatOf(msg))}：hello 只能由**加入方**发给房主，本端是加入方，` +
-          '这条消息方向反了，本端忽略它且不改动任何状态（本端要等的是 hello-ack）。',
+          t('session.hello.direction-reversed', { what: JSON.stringify(whatOf(msg)) }),
         phase: s.phase,
         emit: false,
-        busy: { t: 'busy', reason: 'unsupported', detail: 'hello 的方向反了（本端是加入方），已忽略。' },
+        busy: { t: 'busy', reason: 'unsupported', detail: t('session.hello.direction-reversed-detail') },
       };
     }
     /**
@@ -1514,7 +1514,7 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
      */
     const late = s.phase !== 'handshaking';
     if (late && !(looksLikeResumingHello(msg) && s.phase !== 'rejected')) {
-      return refuseLateHello('重复/迟到的 hello');
+      return refuseLateHello(t('session.hello.duplicate'));
     }
     // D13：校验顺序与文案全在 `protocol.ts` 的 `validateHello` 里（那是**唯一出处**，
     // 本模块不再判一遍 —— 两处判定迟早会漂移）。
@@ -1528,8 +1528,8 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     if (!v.ok) {
       if (late) {
         return refuseLateHello(
-          '一条重连握手（hello.resuming === true）没通过握手校验',
-          `校验给出的原因是：${v.message}`,
+          t('session.hello-resume.bad-handshake'),
+          t('session.hello-resume.bad-handshake-why', { message: v.message }),
         );
       }
       // `validateHello` 的四条（含 `'bad-shape'`）原样透传：同一件事不在两处各给一句话。
@@ -1542,15 +1542,15 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     // ---- D5：观战是合法值，但 G5 明确回绝（**在四步校验之后**，理由见 `SessionHelloReason`）----
     if (hello.role === 'spectator') {
       if (late) {
-        return refuseLateHello('一条重连握手（hello.resuming === true）自称观战', SPECTATOR_UNSUPPORTED_MESSAGE);
+        return refuseLateHello(t('session.hello-resume.claims-spectator'), spectatorUnsupportedMessage());
       }
       return rejectHello(
         'unsupported-spectator',
-        SPECTATOR_UNSUPPORTED_MESSAGE,
+        spectatorUnsupportedMessage(),
         // `BusyMsg.reason` 的类型只认 `HelloRejectReason | 'unsupported'`；G5 用 `'unsupported'`
         // 承载"这个版本不支持观战"，而**区分它与人满了**靠的是这句 detail（与观战席满了那句不同）。
         'unsupported',
-        SPECTATOR_UNSUPPORTED_DETAIL,
+        spectatorUnsupportedDetail(),
       );
     }
 
@@ -1596,8 +1596,7 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
       resyncNeeded = true;
       resyncCause = 'resuming-handshake';
       resyncDetail =
-        '对端带着同一个 sessionId 回来握手（hello.resuming === true）：本端保留当前对局，' +
-        '等它请求追平（resync-req）；这一局在追平完成之前不再推进。';
+        t('session.hello-resume.waiting-for-resync');
     } else {
       s.phase = 'awaiting-commit-face';
     }
@@ -1633,7 +1632,7 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
   function acceptHelloAck(msg: unknown): SessionDecision {
     if (role !== 'guest') {
       return {
-        ...fail('unexpected-message', 'hello-ack 只能由房主发出、由加入方接收；本端是房主，收到的方向反了。'),
+        ...fail('unexpected-message', t('session.hello-ack.direction-reversed')),
         phase: s.phase,
       };
     }
@@ -1644,7 +1643,7 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
       (msg.seat !== 0 && msg.seat !== 1)
     ) {
       return {
-        ...fail('unexpected-message', '收到的 hello-ack 形状不对（缺 sessionId / peerNick / seat）；拒绝，状态不动。'),
+        ...fail('unexpected-message', t('session.hello-ack.bad-shape')),
         phase: s.phase,
       };
     }
@@ -1663,7 +1662,7 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     // 文案与 `validateHello` 的第 1 步逐字同源（同一件事不给第二种说法）。
     if (typeof msg.protoVersion !== 'number') {
       return {
-        ...fail('unexpected-message', '收到的 hello-ack 里 protoVersion 不是数字；拒绝，状态不动。'),
+        ...fail('unexpected-message', t('session.hello-ack.bad-proto-version')),
         phase: s.phase,
       };
     }
@@ -1671,7 +1670,7 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
       return {
         ...fail(
           'unexpected-message',
-          `游戏版本不一致，请双方都更新到最新版（对端协议 v${msg.protoVersion}，本机 v${opts.localProtoVersion}）。`,
+          t('session.hello-ack.version-mismatch', { theirVersion: String(msg.protoVersion), localVersion: String(opts.localProtoVersion) }),
         ),
         phase: s.phase,
       };
@@ -1689,14 +1688,13 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
       return {
         ...fail(
           'unexpected-message',
-          `收到的 hello-ack 属于另一局（对端回的 sessionId 是 ${JSON.stringify(msg.sessionId)}，` +
-            `本端这一局是 ${JSON.stringify(opts.sessionId)}）；拒绝，状态不动。`,
+          t('session.hello-ack.not-ours', { sessionId: JSON.stringify(msg.sessionId), theirSession: JSON.stringify(opts.sessionId) }),
         ),
         phase: s.phase,
       };
     }
     if (s.phase !== 'handshaking' && s.phase !== 'resuming') {
-      return { ...fail('unexpected-message', `当前相位是 ${s.phase}，不接受第二条 hello-ack。`), phase: s.phase };
+      return { ...fail('unexpected-message', t('session.hello-ack.duplicate', { phase: s.phase })), phase: s.phase };
     }
     // D7：座位是**房主**的决定 —— 以 ack 里的座位为准（本端自报的只是初值）。
     s.selfSeat = msg.seat;
@@ -1715,8 +1713,7 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     if (s.phase !== 'awaiting-commit-face') {
       return fail(
         'unexpected-message',
-        `当前相位是 ${s.phase}，还不能发 commit：承诺要先于整个承诺流程（设计稿 §5.3 第 2 步），` +
-          '而它只在握手成功之后才谈得上。',
+        t('session.commit.not-yet', { phase: s.phase }),
       );
     }
     const hash = requireHash(opts.hash, sd, st);
@@ -1733,14 +1730,14 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
   function acceptCommitFace(msg: unknown): SessionDecision {
     const hash = strField(msg, 'hash');
     if (!isHashString(hash)) {
-      return { ...fail('bad-hash', '收到的 commit-face 没有可用的 hash（空串 / 缺失 / 不是字符串）；承诺不成立，拒绝。'), phase: s.phase };
+      return { ...fail('bad-hash', t('session.commit.bad-hash')), phase: s.phase };
     }
     if (s.phase !== 'awaiting-commit-face') {
       return {
         ...fail(
           'unexpected-message',
-          `当前相位是 ${s.phase}，此时收到 commit-face：` +
-            (s.phase === 'handshaking' ? '握手还没完成。' : '这条承诺已经收到过了。'),
+          t('session.refuse.commit-face-wrong-phase', { phase: s.phase }) +
+            (s.phase === 'handshaking' ? t('session.refuse.handshake-incomplete') : t('session.refuse.commit-already-received')),
         ),
         phase: s.phase,
       };
@@ -1759,10 +1756,10 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     // 是调用方在错误的时刻问了一件错事，本该走 `'seed-before-face'` 的结果对象。
     // 内部不变式只在**允许揭示的那个相位**下才谈得上：那时房主必然已经 `sendCommit` 过。
     if (mayRevealSeed(s.phase) && s.seed === null) {
-      throw new Error('session.ts 内部不一致：相位已经是 face-committed 但还没有种子（sendCommit 没设上？）。');
+      throw new Error(t('session.internal.phase-without-seed'));
     }
     if (!mayRevealSeed(s.phase)) {
-      const refusal = seedRefusal(s.phase, '房主');
+      const refusal = seedRefusal(s.phase, t('session.side.host'));
       return fail(refusal.reason, refusal.message);
     }
     // 到这里 `s.seed` 必非 null（上面那条不变式 + `mayRevealSeed` 为真）
@@ -1774,11 +1771,11 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
 
   function acceptRevealFace(msg: unknown): SessionDecision {
     if (!isObj(msg) || (msg.face !== 0 && msg.face !== 1)) {
-      return { ...fail('bad-face', '收到的 reveal-face 的 face 不是 0/1；拒绝。'), phase: s.phase };
+      return { ...fail('bad-face', t('session.reveal-face.bad-face')), phase: s.phase };
     }
     const nonce = strField(msg, 'faceNonce');
     if (!isNonEmptyString(nonce)) {
-      return { ...fail('bad-face', '收到的 reveal-face 没有可用的 faceNonce（空串 / 缺失）；拒绝。'), phase: s.phase };
+      return { ...fail('bad-face', t('session.reveal-face.bad-nonce')), phase: s.phase };
     }
     // ★ **D23 ① 的 B1 格（房主侧）**：本端**已经验过并通过**这条揭示，而这条消息与记下的
     // `face` + `faceNonce` **逐字相同** ⇒ 幂等无操作。
@@ -1798,12 +1795,12 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     }
     if (s.phase !== 'seed-revealed') {
       return {
-        ...fail('unexpected-message', `当前相位是 ${s.phase}，此时收到 reveal-face（承诺流程的次序不对）；拒绝。`),
+        ...fail('unexpected-message', t('session.refuse.reveal-face-wrong-phase', { phase: s.phase })),
         phase: s.phase,
       };
     }
     if (guestFaceHash === null) {
-      throw new Error('session.ts 内部不一致：相位到了 seed-revealed 却没有加入方的承诺哈希。');
+      throw new Error(t('session.internal.phase-without-commit'));
     }
     const face: 0 | 1 = msg.face;
     const actual = requireHash(opts.hash, String(face), nonce);
@@ -1819,8 +1816,7 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
       return {
         ...fail(
           'face-hash-mismatch',
-          '加入方揭示的 face 与它此前的承诺对不上：收到的 hash(face, faceNonce) 与 commit-face 里的 hash 不同。' +
-            '这说明它现在给出的面不是承诺时定下的那一个；请结束这一局并如实记录。',
+          t('session.reveal-face.hash-mismatch'),
         ),
         phase: s.phase,
       };
@@ -1850,7 +1846,7 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
    */
   function sendRevealSalt(): SessionResult<{ output: SessionOutbound; salt: string }> {
     if (s.salt === null) {
-      throw new Error('session.ts 内部不一致：还没发过 commit 就要揭示盐（sendCommit 没设上？）。');
+      throw new Error(t('session.internal.salt-without-commit'));
     }
     if (saltMadePublic) {
       // 幂等出口（B-1 的修法带来的必要一位）：`mayRevealSalt` 现在也认 `complete`，
@@ -1860,7 +1856,7 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
       // 它的文案说的是"同一条承诺只揭示一次**种子**"；拿它报盐会让 T5/T8 按码分支时读到假话。
       // 为盐单独造一个码要考虑 `SessionRejectReason` 的闭合表与 T5/T8 的分支，收益不抵成本 ——
       // 第二次揭示盐本来就属于"此刻不该发这条"。
-      return fail('unexpected-message', '这条 reveal-salt 已经发过一次了，不重复发：同一条承诺只揭示一次盐。');
+      return fail('unexpected-message', t('session.salt.already-revealed'));
     }
     const guard = mayRevealSalt(s.phase);
     if (!guard.ok) return fail(guard.reason, guard.message);
@@ -1874,7 +1870,7 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
   function acceptCommit(msg: unknown): SessionDecision {
     const hash = strField(msg, 'hash');
     if (!isHashString(hash)) {
-      return { ...fail('bad-hash', '收到的 commit 没有可用的 hash（空串 / 缺失 / 不是字符串）；拒绝。'), phase: s.phase };
+      return { ...fail('bad-hash', t('session.commit.no-hash')), phase: s.phase };
     }
     // ★★ **D23 ① 的 B1 格（★ 变异 M6(ii) 的锚点，只此一处）**：
     // 本端**已经记下同一份承诺**、**且当前相位正是这条消息产生的那一格**（`seed-committed`），
@@ -1918,7 +1914,7 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
       return {
         ...fail(
           'unexpected-message',
-          `当前相位是 ${s.phase}，此时不接受 commit（要么握手还没完成，要么这条是重复的）。`,
+          t('session.refuse.commit-wrong-phase', { phase: s.phase }),
         ),
         phase: s.phase,
       };
@@ -1934,7 +1930,7 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     if (s.phase !== 'seed-committed') {
       return fail(
         'unexpected-message',
-        `当前相位是 ${s.phase}，还不能回 commit-ack：先收到房主的 commit 再确认（设计稿 §5.3 第 3 步）。`,
+        t('session.commit-ack.not-yet', { phase: s.phase }),
       );
     }
     // 加入方发过 ack 之后等的是**自己**发出 `commit-face` —— 那与"房主在等对方的承诺"、
@@ -1945,7 +1941,7 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
   }
   function commitFace(face: 0 | 1, faceNonce: string): SessionResult<{ output: SessionOutbound; hash: string }> {
     if (face !== 0 && face !== 1) {
-      throw new Error(`session.ts 的 commitFace 收到越界的 face ${String(face)}（契约是 0 | 1）；这是调用方违约。`);
+      throw new Error(t('session.caller.face-out-of-range', { face: String(face) }));
     }
     const nonce = requireNonEmpty('faceNonce', faceNonce);
     // `commitFace()` 的**唯一**合法相位：本方已经回过 `commit-ack`（`'awaiting-commit-ack'`）。
@@ -1954,10 +1950,10 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     if (s.phase !== 'awaiting-commit-ack') {
       return fail(
         'unexpected-message',
-        `当前相位是 ${s.phase}，还不能提交 commit-face：` +
+        t('session.reveal-face.not-yet', { phase: s.phase }) +
           (s.phase === 'handshaking' || s.phase === 'awaiting-commit'
-            ? '先收到房主的 commit（否则面的承诺会早于种子承诺）。'
-            : '这条承诺已经提交过了。'),
+            ? t('session.reveal-face.await-host-commit')
+            : t('session.reveal-face.already-submitted')),
       );
     }
     const hash = requireHash(opts.hash, String(face), nonce);
@@ -1971,7 +1967,7 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
   function acceptRevealSeed(msg: unknown): SessionDecision {
     const seed = strField(msg, 'seed');
     if (!isNonEmptyString(seed)) {
-      return { ...fail('bad-seed', '收到的 reveal-seed 没有可用的 seed（空串 / 缺失 / 不是字符串）；拒绝。'), phase: s.phase };
+      return { ...fail('bad-seed', t('session.reveal-seed.bad-seed')), phase: s.phase };
     }
     // ★★ 判据 1 的守卫点（加入方这一侧）。
     // 只有相位 `'face-committed'`（= 本方已经 `commitFace`）才接受种子，而 `commitFace` 又只能在
@@ -1979,7 +1975,7 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     // `'awaiting-commit-face'`）。⇒ 加入方**结构上**不可能在看种子之前
     // 不承诺，也不可能先看种子再挑面。
     if (!mayRevealSeed(s.phase)) {
-      const refusal = seedRefusal(s.phase, '加入方');
+      const refusal = seedRefusal(s.phase, t('session.side.guest'));
       return { ...fail(refusal.reason, refusal.message), phase: s.phase };
     }
     s.seed = seed;
@@ -1990,12 +1986,12 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
 
   function sendRevealFace(): SessionResult<{ output: SessionOutbound }> {
     if (s.face === null || s.faceNonce === null) {
-      throw new Error('session.ts 内部不一致：还没提交 commit-face 就要揭示面。');
+      throw new Error(t('session.internal.face-without-commit'));
     }
     if (s.phase !== 'seed-revealed') {
       return fail(
         'unexpected-message',
-        `当前相位是 ${s.phase}，还不能揭示面：先收到房主的 reveal-seed（设计稿 §5.3 第 4 步）。`,
+        t('session.reveal-face.await-seed', { phase: s.phase }),
       );
     }
     s.phase = 'reveal-salt-sent';
@@ -2023,7 +2019,7 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     if (s.seed === null || s.seedHash === null) {
       // 不变式：走到这里必须"已经拿到种子与承诺"。**上面的守卫保证了这一点**（它只放行
       // `seed-revealed` / `reveal-salt-sent`，而这两个相位都蕴含 seed 与 seedHash 已置）。
-      throw new Error('session.ts 内部不一致：还没拿到种子/承诺就要验盐（收盐守卫被放宽了？）。');
+      throw new Error(t('session.internal.verify-salt-too-early'));
     }
     const actual = requireHash(opts.hash, s.seed, shape.salt);
     s.salt = shape.salt;
@@ -2043,8 +2039,7 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
       return {
         ...fail(
           'salt-hash-mismatch',
-          '房主揭示的 salt 与它此前的承诺对不上：收到的 hash(seed, salt) 与 commit 里的 hash 不同。' +
-            '这说明现在这一对 (seed, salt) 不是承诺时定下的那一对；请如实记录，不要把它当成一次正常的开局。',
+          t('session.salt.hash-mismatch'),
         ),
         phase: s.phase,
       };
@@ -2061,8 +2056,7 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     if (s.phase !== 'handshaking') {
       return fail(
         'unexpected-message',
-        `当前相位是 ${s.phase}，不能把它标成重连：这一局已经在承诺流程里，` +
-          '"变成重连"只对还没握完手的加入方有意义。',
+        t('session.resync.cannot-mark', { phase: s.phase }),
       );
     }
     s.phase = 'resuming';
@@ -2070,8 +2064,7 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     resyncNeeded = true;
     resyncCause = 'resuming-handshake';
     resyncDetail =
-      '本端显式声明这是一次重连（markResuming）：等房主的 hello-ack，然后发 resync-req 要档案。' +
-      '在 applyResyncFile 成功之前，本端的引擎状态还没有追平。';
+      t('session.resync.marked');
     // 成功面带 `phase`（第四阶段复验：原先是空成功面，调用方得猜；带上它就与
     // `SessionDecision` 同一口径 —— 调用方能直接读到"现在在哪个相位"）。
     return ok({ phase: s.phase });
@@ -2105,15 +2098,14 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
    */
   function acceptResyncReq(msg: unknown): SessionDecision {
     if (!isObj(msg)) {
-      return { ...fail('bad-resync', '收到的 resync-req 不是对象；拒绝，且不改变任何状态。'), phase: s.phase };
+      return { ...fail('bad-resync', t('session.resync.req-not-object')), phase: s.phase };
     }
     const sessionId = strField(msg, 'sessionId');
     if (sessionId === null || sessionId !== opts.sessionId) {
       return {
         ...fail(
           'bad-resync',
-          `收到的 resync-req 不属于本局（它报的 sessionId 是 ${JSON.stringify(msg.sessionId)}，` +
-            `本局是 ${JSON.stringify(opts.sessionId)}）；拒绝，且不回任何档案。`,
+          t('session.resync.req-not-ours', { sessionId: JSON.stringify(msg.sessionId), theirSession: JSON.stringify(opts.sessionId) }),
         ),
         phase: s.phase,
       };
@@ -2122,8 +2114,7 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
       return {
         ...fail(
           'bad-resync',
-          '收到的 resync-req 里 appliedSteps 不是非负整数（协议形状在解码那一层已经挡过一次，' +
-            '这里是直接喂进 accept 的那条路上的第二道）；拒绝，且不回任何档案。',
+          t('session.resync.bad-applied-steps'),
         ),
         phase: s.phase,
       };
@@ -2132,14 +2123,14 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     // 就能把"这一局已经没戏了"变成一个还在传档案的会话）。
     if (s.phase === 'rejected') {
       return {
-        ...fail('bad-resync', '本会话的这一局已经被回绝（相位 rejected），不再接受重连请求，也不回档案。'),
+        ...fail('bad-resync', t('session.resync.already-rejected')),
         phase: s.phase,
       };
     }
     const file = opts.resyncSource === undefined ? null : opts.resyncSource();
     if (file === null) {
       // fail-closed：没有真档案就明说，不编一份空的
-      return { ...fail('resync-not-wired', RESYNC_NOT_WIRED_MESSAGE), phase: s.phase };
+      return { ...fail('resync-not-wired', resyncNotWiredMessage()), phase: s.phase };
     }
     const built = buildResyncRes(file);
     if (!built.ok) return { ...built, phase: s.phase };
@@ -2168,8 +2159,7 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     if (canonical === null) {
       return fail(
         'bad-resync',
-        '本端手里的档案形状不可用（缺 setup / actions / players / 指纹那几个字段），发不出 resync-res；' +
-          '请检查档案来源给的是不是一份 MatchFile。',
+        t('session.resync.bad-local-file'),
       );
     }
     return ok({ output: outbound({ t: 'resync-res', file: canonical }) });
@@ -2188,7 +2178,7 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
   function acceptResyncRes(msg: unknown): SessionDecision {
     if (!isObj(msg) || !isObj(msg.file)) {
       return {
-        ...fail('bad-resync', '收到的 resync-res 形状不对（缺 file，或 file 不是对象）；拒绝，状态不动。'),
+        ...fail('bad-resync', t('session.resync.res-bad-shape')),
         phase: s.phase,
       };
     }
@@ -2196,8 +2186,7 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
       return {
         ...fail(
           'unexpected-message',
-          `当前相位是 ${s.phase}，而本端**没有在等追平**（needsResync === false）：` +
-            '一份不在等档案的会话收到 resync-res，只可能是对端搞错了对象或在重放；拒绝，状态不动。',
+          t('session.resync.res-not-awaited', { phase: s.phase }),
         ),
         phase: s.phase,
       };
@@ -2240,24 +2229,21 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
     if (s.phase !== 'resync-pending') {
       return fail(
         'bad-resync',
-        `当前相位是 ${s.phase}，此时不能应用档案：追平必须先在 acceptResyncRes 里收下 resync-res` +
-          '（那一步问的是"本端在不在等档案"，这一步问的是"档案对不对得上"）。',
+        t('session.resync.apply-wrong-phase', { phase: s.phase }),
       );
     }
     const canonical = canonicalResyncFile(file);
     if (canonical === null) {
       return fail(
         'bad-resync',
-        '要应用的档案形状不可用（缺 setup / actions / players / 指纹那几个字段）；拒绝，且相位与 needsResync 都不动。',
+        t('session.resync.apply-bad-shape'),
       );
     }
     // ★★ M1 的锚点（全模块只此一处"自报步数 vs 档案长度"的比较）
     if (!Number.isInteger(statesAtStep) || statesAtStep !== canonical.actions.length) {
       return fail(
         'resync-step-mismatch',
-        `调用方自报已追平到第 ${statesAtStep} 步，而这份档案有 ${canonical.actions.length} 条操作：` +
-          '两者必须**恰好**相等。少一步或多一步都拒绝（`stateAtStep` 对越界是抛错不夹紧，' +
-          '夹紧会把"对端比我多走了几步"静默变成一个看起来同步的状态）；本端状态一点没动。',
+        t('session.resync.step-count-mismatch', { statesAtStep: String(statesAtStep), count: String(canonical.actions.length) }),
       );
     }
     const before = phaseBeforeResyncApply;
@@ -2339,7 +2325,7 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
    */
   function accept(req: SessionInbound): HelloDecision | SessionDecision {
     const wrongWay = (what: string): SessionDecision => ({
-      ...fail('unexpected-message', `${what} 的发送方向与本端角色（${s.role === 'host' ? '房主' : '加入方'}）不符；拒绝。`),
+      ...fail('unexpected-message', t('session.device-direction-mismatch', { what, role: s.role === 'host' ? t('session.side.host') : t('session.side.guest') })),
       phase: s.phase,
     });
     switch (req.t) {
@@ -2374,7 +2360,7 @@ function createSession(role: 'host' | 'guest', opts: NetSessionOptions): NetSess
         // 写它是为了让函数在所有分支上都有返回值（TS 看不出 switch 是穷尽的）。
         const never: never = req;
         return {
-          ...fail('unexpected-message', `session.ts 不认得的入站消息 ${JSON.stringify((never as { t?: unknown }).t)}。`),
+          ...fail('unexpected-message', t('session.refuse.bogus-inbound', { what: JSON.stringify((never as { t?: unknown }).t) })),
           phase: s.phase,
         };
       }

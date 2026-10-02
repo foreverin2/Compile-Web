@@ -26,6 +26,9 @@
  * **永不覆盖**。`overwrite` 必须由用户显式选择（UI 侧的一次确认），`skip` 用于"我就要这一份"。
  */
 import { parseMatchFile, stringifyMatchFile, type MatchFile, type MatchFileErrorCode } from './match-file';
+// ★ 2026-10-02（P3 第八批）：导入失败/警告那几句**进表**（玩家在「本地数据与隐私」屏的档案区看得见）。
+// 方向是 app → i18n（`src/i18n/**` 不认识 `src/app/**`，没有环）；整句按当前语言取。
+import { t } from '../i18n';
 
 /**
  * 单份档案的**字节**上限 = 8 MiB。
@@ -158,13 +161,13 @@ export type ImportOutcome =
  * 给出安全名，因此这里没有任何理由拒绝整份档案。
  */
 export function importArchive(text: string, opts: { currentHash: string }): ImportOutcome {
-  if (text.trim().length === 0) return { ok: false, code: 'empty', message: '档案文件是空的' };
+  if (text.trim().length === 0) return { ok: false, code: 'empty', message: t('archive-io.empty') };
   const bytes = new TextEncoder().encode(text).length;
   if (bytes > MAX_ARCHIVE_BYTES) {
     return {
       ok: false,
       code: 'too-large',
-      message: `档案过大（${bytes} 字节 > 上限 ${MAX_ARCHIVE_BYTES} 字节）：本程序不会读取它`,
+      message: t('archive-io.too-large', { bytes: String(bytes), limit: String(MAX_ARCHIVE_BYTES) }),
     };
   }
   const r = parseMatchFile(text, opts);
@@ -172,8 +175,7 @@ export function importArchive(text: string, opts: { currentHash: string }): Impo
   const warnings = r.warnings.slice();
   if (typeof r.file.createdAt !== 'string' || !ISO_INSTANT_SHAPE.test(r.file.createdAt)) {
     warnings.push(
-      `档案的 createdAt 不是合法 ISO 时刻（${JSON.stringify(r.file.createdAt)}）：` +
-        `导出的文件名会退化成含 "${FALLBACK_STAMP}" 的可预期形式。这不影响重放，档案仍会打开。`,
+      t('archive-io.bad-created-at', { createdAt: JSON.stringify(r.file.createdAt), stamp: FALLBACK_STAMP }),
     );
   }
   return { ok: true, file: r.file, warnings, raw: text };

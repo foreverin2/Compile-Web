@@ -6,11 +6,13 @@ import { stripComments, codePositions } from '../ui/source-text';
 import {
   createGuestSession,
   createHostSession,
-  REVEAL_SEED_BEFORE_FACE_MESSAGE,
-  RESYNC_NOT_WIRED_MESSAGE,
-  SPECTATOR_UNSUPPORTED_MESSAGE,
 } from '../../src/net/session';
 import type { GuestSession, HostSession, SessionInbound, SessionRejectReason } from '../../src/net/session';
+// ★ 2026-10-02（P3 第八批）：那三句拒绝对话已经**抽进文案表**（`session.refuse.*` /
+// `session.resync.not-wired`）⇒ 下面三处断言的口径从"钉源码里的导出常量"改成
+// "**钉键 + 钉值**"：调用点仍取那个键（`t('…')`），而那句中文**逐字冻在断言里**。
+// 判据没有放宽：值漂一个字符、或调用点换了键，两半都有会红的地方。
+import { t } from '../../src/i18n';
 import { CARD_DATA_HASH } from '../../src/app/card-data-hash';
 import { MATCH_FILE_FORMAT, MATCH_FILE_VERSION } from '../../src/app/match-file';
 import type { MatchFile } from '../../src/app/match-file';
@@ -1244,7 +1246,17 @@ describe('判据 3：版本不符与卡牌指纹不符各给一句设计稿口�
     // 安全那一条的文案必须是**专门**的那一句（不是从别的理由借来的）
     const sbf = messages.find((m) => m.reason === 'seed-before-face');
     expect(sbf, '没有构造出 seed-before-face 这一条').toBeDefined();
-    expect(sbf!.message).toBe(REVEAL_SEED_BEFORE_FACE_MESSAGE);
+    // ★ 2026-10-02（P3 第八批）：钉键 + 钉值（值 = 抽表前源码字面量的原文，逐字）
+    expect(
+      t('session.refuse.seed-before-face'),
+      'seed-before-face 那句的中文值与冻结值不一致',
+    ).toBe(
+      '拒绝了过早到达的 reveal-seed：加入方还没有提交正/反的承诺（commit-face）。'
+      + '硬币结果是种子的纯函数，先拿到种子的一方可以先算出结果、再挑对自己有利的那一面，'
+      + '所以选面必须先于种子公开（设计稿 §5.3）。这一局请让对端先发 commit-face；'
+      + '本程序不会替它补一个承诺。',
+    );
+    expect(sbf!.message).toBe(t('session.refuse.seed-before-face'));
   });
 });
 
@@ -1264,7 +1276,15 @@ describe('判据 4：观战者被明确回绝，原因可读且与 spectator-slo
     expect('emit' in r, '这不是一条握手回绝（测试自己的夹具问题）').toBe(true);
     if (!('emit' in r)) throw new Error('unreachable');
     expect(r.reason).toBe('unsupported-spectator');
-    expect(r.message).toBe(SPECTATOR_UNSUPPORTED_MESSAGE);
+    // ★ 2026-10-02（P3 第八批）：钉键 + 钉值（同上）
+    expect(
+      t('session.refuse.spectator-unsupported'),
+      '观战回绝那句的中文值与冻结值不一致',
+    ).toBe(
+      '这个版本（G5）还不支持观战：观战席还没造出来，不是坐满了。两张牌桌只留给两位玩家，'
+      + '请让对方以玩家身份重发握手；观战会在后续版本里单独做。',
+    );
+    expect(r.message).toBe(t('session.refuse.spectator-unsupported'));
     expect(r.message).toContain('观战');
     expect(r.phase).toBe('rejected');
 
@@ -2210,7 +2230,16 @@ describe('会话身份（D2）与重连（D8/T6 的接口）', () => {
     expect(r.ok).toBe(false);
     if (r.ok) throw new Error('unreachable');
     expect(r.reason).toBe('resync-not-wired');
-    expect(r.message).toBe(RESYNC_NOT_WIRED_MESSAGE);
+    // ★ 2026-10-02（P3 第八批）：钉键 + 钉值（同上）
+    expect(
+      t('session.resync.not-wired'),
+      '"追平还没接上"那句的中文值与冻结值不一致',
+    ).toBe(
+      '收到了 resync-req，但本端这一侧没有可发的档案（调用方没有接上"当前档案"的来源，'
+      + '或来源此刻是空的），所以发不出 resync-res。这不是"追平已完成"——请检查接线时'
+      + '是否把当前档案的读取口喂给了本会话（房主持有重连凭据，加入方不持有）。',
+    );
+    expect(r.message).toBe(t('session.resync.not-wired'));
   });
 
   it('peerStatus 在流程上如实反映"承诺/种子/可收操作"三件事', () => {

@@ -208,6 +208,8 @@ import { PROTO_VERSION } from './net/protocol';
 // ★ G5 T15：「生成邀请码」等链路就绪那一步要读传输自己的类型（`transport()` 的返回面）
 import type { NetTransport } from './net/transport';
 import { answerPayloadFields, COMPACT_PAYLOAD_VERSION } from './net/invite';
+// ★ 2026-10-02（P3 第八批）：联机交接提示（`client.showNotice(...)` 那一族）**进表** ——
+// 键在这里取；`t` 的 import 在文件开头（P0 就有了），这里不重复引。
 
 const root = document.getElementById('app')!;
 // 启动时注入运行期 nonce（G0）：使任何未显式传 seed 的 createGame() 也不会跨重启重复同一牌序
@@ -981,9 +983,7 @@ function applyResyncToGame(file: MatchFile): number | null {
   if (local > n) {
     // 两端都动过、而且本端比档案还多 ⇒ 分叉，不是落后（判据 3：给可读失败，不许静默覆盖）
     client?.showNotice(
-      `追平失败：本端已经走到第 ${local} 步，而对方的档案只有 ${n} 步 —— `
-      + '这说明两端各自走过不同的操作（分叉）。本端状态一个字都没动：'
-      + '覆盖它只会把分叉藏起来，而这一局已经不可能与对方一致了，请结束这一局并如实记录。',
+      t('main.notice.resync-fork', { local: String(local), n: String(n) }),
     );
     return null;
   }
@@ -991,7 +991,7 @@ function applyResyncToGame(file: MatchFile): number | null {
   try {
     rebuilt = stateAtStep(file, n);
   } catch (e) {
-    client?.showNotice(`追平失败：用对方的档案重放不出状态（${e instanceof Error ? e.message : String(e)}）；本端状态没动。`);
+    client?.showNotice(t('main.notice.resync-replay-failed', { detail: e instanceof Error ? e.message : String(e) }));
     return null;
   }
   state = rebuilt;
@@ -2966,8 +2966,7 @@ function attachLobbyReconnect(client: LobbyClient): void {
         lobbyRestartNeeded = true;
         client.invalidateHandshakeArtifacts();
         client.showNotice(
-          '连接断了，这一局还没开始：请重新生成邀请码 / 重新加入。'
-          + '（这一次断线没有可续的对局进度 —— 不是"接上了"，也不是"续上了"。）',
+          t('main.notice.link-dead-before-start'),
         );
         renderLobbyFrame();
       } else {
@@ -3154,7 +3153,7 @@ function startLobby(role: 'host' | 'guest'): void {
         const tr = lobbyClient?.transport() ?? null;
         const pc = tr === null ? null : peerConnectionOf(tr);
         if (pc === null) {
-          return { ok: false, message: '本机还没有建起用来传消息的那条对端连接（先让链路起来再产回示码）。' };
+          return { ok: false, message: t('main.lobby-link.no-peer-conn-answer') };
         }
         const r = await acceptOffer(pc, { sdp: offer.sdp }, lobbyEnv());
         if (!r.ok) return { ok: false, message: r.message };
@@ -3191,7 +3190,7 @@ function startLobby(role: 'host' | 'guest'): void {
       applyAnswer: async (answer: { sdp: string }) => {
         const pc = hostPeerConnection;
         if (pc === null) {
-          return { ok: false as const, message: '本机还没有建起对端连接（先「建房」生成邀请码，再把回示码粘回来）。' };
+          return { ok: false as const, message: t('main.lobby-link.no-peer-conn-apply') };
         }
         const r = await applyAnswer(pc, { sdp: answer.sdp });
         return r.ok ? { ok: true as const } : { ok: false as const, message: r.message };
@@ -3446,14 +3445,12 @@ function lobbyLinkFailureText(
   initMessage: string | null,
 ): string {
   const cause = initMessage !== null && initMessage.length > 0
-    ? `${message} 失败原因：${initMessage}`
+    ? t('main.lobby-link.cause-with-init', { message, initMessage })
     : message;
   const state = status === 'idle'
-    ? '（传输此刻的状态是 idle：它连本侧连接都还没造出来，也就是 init() 没有成功。）'
-    : `（传输此刻的状态是 ${status}：本侧连接已经造出来了，但连接描述这一刻还取不到。）`;
-  return `${cause}${state}`
-    + '下一步：再点一次「生成邀请码」重试；重试仍然失败时，请把这一整行连同"失败原因"里那句话记下来'
-    + '（它就是这个问题的真因，不是猜测）。';
+    ? t('main.lobby-link.state-idle')
+    : t('main.lobby-link.state-other', { status });
+  return t('main.lobby-link.next-step', { cause, state });
 }
 
 /**
@@ -3540,7 +3537,7 @@ async function makeLobbyInvite(): Promise<void> {
      * 的事，不在这里），而"等不到"这件事本身要被说出来而不是无限等。
      */
     if (!lobbyLinkReadyNow(client)) {
-      client.showNotice('正在建立链路…（好了会自动接着生成邀请码，不用再点）');
+      client.showNotice(t('main.notice.link-building-invite'));
       renderLobbyFrame();
       const ready = await waitLobbyLinkReady(client, LOBBY_LINK_READY_TIMEOUT_MS);
       if (!ready.ok) {
@@ -3548,8 +3545,7 @@ async function makeLobbyInvite(): Promise<void> {
         const diag = client.linkInitDiagnostic();
         client.showNotice(lobbyLinkFailureText(
           diag !== null && !diag.ok ? diag.reason : 'not-initialized',
-          `等了 ${String(Math.round(ready.waitedMs / 1000))} 秒，本侧链路还没有建立起来`
-            + '（init 至今没有成功，所以没有连接描述可给）。',
+          t('main.lobby-link.wait-timeout-invite', { seconds: String(Math.round(ready.waitedMs / 1000)) }),
           ready.status,
           diag === null ? null : diag.message,
         ));
@@ -3571,10 +3567,10 @@ async function makeLobbyInvite(): Promise<void> {
      */
     const initDiag = client.linkInitDiagnostic();
     const initMessage = initDiag !== null && !initDiag.ok
-      ? `init 返回 ${initDiag.reason}：${initDiag.message}`
-      : (stBefore.notice !== null && !stBefore.notice.startsWith('正在建立链路') ? stBefore.notice : null);
+      ? t('main.lobby-link.init-returned', { reason: initDiag.reason, initMessage: initDiag.message })
+      : (stBefore.notice !== null && !stBefore.notice.startsWith(t('main.notice.link-building-prefix')) ? stBefore.notice : null);
     if (transport?.localDescription === undefined) {
-      client.showNotice('这条实现不给连接描述（没有 `localDescription`），所以生成不了邀请码。');
+      client.showNotice(t('main.notice.no-local-description-invite'));
       renderLobbyFrame();
       return;
     }
@@ -3584,7 +3580,7 @@ async function makeLobbyInvite(): Promise<void> {
       // 邀请码这一轮不生成
       client.showNotice(lobbyLinkFailureText(
         desc.ok ? 'no-description' : desc.reason,
-        desc.ok ? '本侧没有可用的连接描述，生成不了邀请码。' : desc.message,
+        desc.ok ? t('main.lobby-link.no-usable-description') : desc.message,
         client.state().transport,
         initMessage,
       ));
@@ -3617,7 +3613,7 @@ async function makeLobbyInvite(): Promise<void> {
      * ★★ **G5 T15：这里原来是空的**（调用点是 `void makeLobbyInvite()`）⇒ `connect()` 若抛，
      * 玩家只得到一条没人看的未捕获拒绝。现在如实写出来，并且**只说发生了什么**。
      */
-    client.showNotice(`生成邀请码这一步抛了一个错误，没有生成出邀请码：${e instanceof Error ? e.message : String(e)}`);
+    client.showNotice(t('main.notice.invite-threw', { detail: e instanceof Error ? e.message : String(e) }));
     renderLobbyFrame();
   }
 }
@@ -3661,15 +3657,14 @@ async function makeLobbyAnswerCode(): Promise<void> {
    * ⇒ 这里**有界地等链路就绪**（与「生成邀请码」那条路同一个判据、同一个上界），再产码。
    */
   if (client.state().joined?.ok === true && !lobbyLinkReadyNow(client)) {
-    client.showNotice('正在建立链路…（好了会自动接着出示回示码，不用再点）');
+    client.showNotice(t('main.notice.link-building-answer'));
     renderLobbyFrame();
     const ready = await waitLobbyLinkReady(client, LOBBY_LINK_READY_TIMEOUT_MS);
     if (!ready.ok) {
       const diag = client.linkInitDiagnostic();
       client.showNotice(lobbyLinkFailureText(
         diag !== null && !diag.ok ? diag.reason : 'not-initialized',
-        `等了 ${String(Math.round(ready.waitedMs / 1000))} 秒，本侧链路还没有建立起来`
-          + '（init 至今没有成功，所以产不了回示码）。',
+        t('main.lobby-link.wait-timeout-answer', { seconds: String(Math.round(ready.waitedMs / 1000)) }),
         ready.status,
         diag === null ? null : diag.message,
       ));
@@ -4055,7 +4050,7 @@ function replayStep(): void {
     // 停机：只在**第一次**留诊断（否则每次都重写，日志与屏上都是噪音）。注意重放到这一步
     // 之前可能已经有 FX 在飞 —— 停机之后 `pause()` 会取消在飞时钟，不会再自动重试。
     if (replayHostError === null) {
-      replayHostError = '重放已停在这一步：档案里的下一条没有被接受（重放状态与档案不同步）。';
+      replayHostError = t('main.notice.replay-stopped');
       drv.pause();
       rerender();
     }
@@ -4259,7 +4254,7 @@ function buildSessionArchive(): SessionArchive {
   const rec = localDriver.recorder();
   if (rec && rec.actions().length > 0) return { file: rec.toMatchFile(matchFileMeta(state)) };
   if (lastArchive) return { file: lastArchive };
-  return { reason: '本次会话还没有对局记录：先打完一局再来导出。' };
+  return { reason: t('main.notice.no-match-record') };
 }
 
 /**
@@ -4329,7 +4324,7 @@ function syncRearrangeModalForEffect(): void {
     openControlRearrangeModal({
       getState: () => state,
       title: prompt.title,
-      submitLabel: '完成重排',
+      submitLabel: t('main.rearrange.commit-label'),
       mode: 'draft',
       sides: [side],
       sessionKey: effectRearrangeKey,
@@ -4341,7 +4336,7 @@ function syncRearrangeModalForEffect(): void {
        * `momentum-4` 是必选（`optional: false`）⇒ 不给这两个字段，窗口里不会多出「跳过」。
        */
       ...(prompt.optional ? {
-        skipLabel: '跳过',
+        skipLabel: t('main.rearrange.skip-label'),
         onSkip: () => cb.onAction({ kind: 'effect-choice', promptId: top.id, choice: [] }),
       } : {}),
       onCommit: (order) => commitEffectRearrange(top.id, order),

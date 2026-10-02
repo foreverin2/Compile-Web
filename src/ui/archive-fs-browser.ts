@@ -47,6 +47,10 @@ import type {
   SaveOutcome,
 } from '../app/archive-fs';
 import { ARCHIVE_EXT, ARCHIVE_MIME } from '../app/archive-io';
+// ★ 2026-10-02（P3 第八批，A 表余下的两处之一）：导入/导出的**失败原因**进表 ——
+// 它们是「本地数据与隐私」屏档案区状态行上玩家真的会读到的正文（`reason` 是码，`detail` 是话）。
+// 中文值逐字守恒由 `.superpowers/i18n-src-all/check-verbatim.mjs` 机检。
+import { t } from '../i18n';
 
 /* ── 最小结构型接口（只声明本模块**用到**的成员，不照抄 DOM 类型） ────────────── */
 
@@ -194,7 +198,7 @@ function realArchiveEnv(): ArchiveBrowserEnv {
  * 这正是"两侧共用同一个失败联合"在代码上的形态（谁把某一侧的分支改成自己的形状，`tsc` 会红）。
  */
 function failure(reason: IoFailureReason, detail: string): IoFailure {
-  return { ok: false, reason, detail: detail.trim() === '' ? '未知错误（宿主没有给出描述）' : detail };
+  return { ok: false, reason, detail: detail.trim() === '' ? t('archive-fs-browser.error.unknown') : detail };
 }
 
 /**
@@ -213,10 +217,10 @@ function describeError(e: unknown): string {
     try {
       s = String(e);
     } catch {
-      s = '宿主抛出了一个无法描述的对象';
+      s = t('archive-fs-browser.error.undescribable');
     }
   }
-  return s.trim() === '' ? '未知错误（宿主没有给出描述）' : s;
+  return s.trim() === '' ? t('archive-fs-browser.error.unknown') : s;
 }
 
 /**
@@ -257,7 +261,7 @@ function fsaUsable(env: ArchiveBrowserEnv): boolean {
 function fsaTypes(accept: readonly string[]): unknown[] {
   const mimes: Record<string, string[]> = {};
   for (const a of accept) mimes[a] = [ARCHIVE_EXT];
-  return [{ description: 'Compile 对局档案', accept: mimes }];
+  return [{ description: t('archive-fs-browser.archive-description'), accept: mimes }];
 }
 
 interface ChangeEventLike {
@@ -292,10 +296,10 @@ function toPickedFile(raw: unknown, fallbackName: string, fallbackSize: number):
  */
 function toPickOutcome(raw: unknown, fallbackName: string, fallbackSize: number): PickOutcome {
   if (typeof raw !== 'object' || raw === null) {
-    return failure('failed', '宿主没有给出文件对象（拿到的不是对象）');
+    return failure('failed', t('archive-fs-browser.pick.not-an-object'));
   }
   if (typeof (raw as { text?: unknown }).text !== 'function') {
-    return failure('failed', '选中的文件对象没有可调用的 text()：本程序无法读取它');
+    return failure('failed', t('archive-fs-browser.pick.no-text-method'));
   }
   return { ok: true, file: toPickedFile(raw, fallbackName, fallbackSize) };
 }
@@ -310,7 +314,7 @@ async function pickViaFsa(env: ArchiveBrowserEnv, accept: string[]): Promise<Pic
   const pick = env.showOpenFilePicker as NonNullable<FsaLike['showOpenFilePicker']>;
   const handles = await pick({ multiple: false, types: fsaTypes(accept), excludeAcceptAllOption: false });
   const h = Array.isArray(handles) ? handles[0] : undefined;
-  if (!h) return failure('cancelled', '用户没有选择文件（对话框返回了空列表）');
+  if (!h) return failure('cancelled', t('archive-fs-browser.pick.empty-dialog'));
   const raw = typeof h.getFile === 'function' ? await h.getFile() : h;
   return toPickOutcome(raw, typeof h.name === 'string' && h.name !== '' ? h.name : `archive${ARCHIVE_EXT}`, typeof h.size === 'number' ? h.size : 0);
 }
@@ -331,7 +335,7 @@ function pickViaInput(env: ArchiveBrowserEnv, accept: string[]): Promise<PickOut
   const doc = env.document;
   if (!doc) {
     return Promise.resolve(
-      failure('unsupported', '这台设备的浏览器不支持导入档案（没有 showOpenFilePicker，也没有可用的 document）'),
+      failure('unsupported', t('archive-fs-browser.unsupported.import')),
     );
   }
   let el: InputLike;
@@ -344,7 +348,7 @@ function pickViaInput(env: ArchiveBrowserEnv, accept: string[]): Promise<PickOut
     doc.body?.appendChild(el);
   } catch (e) {
     // WebView / 沙箱 iframe 里 `createElement` 或 `appendChild` 可能直接抛
-    return Promise.resolve(failure('failed', `无法创建文件选择框：${describeError(e)}`));
+    return Promise.resolve(failure('failed', t('archive-fs-browser.input.create-failed', { detail: describeError(e) })));
   }
 
   // ⚠️ `el` 在上面的 try 里赋值，TS 无法证明它已初始化 ⇒ 用一个**局部常量**承接（下面的闭包要用）。
@@ -375,22 +379,22 @@ function pickViaInput(env: ArchiveBrowserEnv, accept: string[]): Promise<PickOut
       try {
         files = (ev as ChangeEventLike | undefined)?.target?.files ?? input.files;
       } catch (e) {
-        finish(failure('failed', `读取选择结果失败：${describeError(e)}`));
+        finish(failure('failed', t('archive-fs-browser.input.read-result-failed', { detail: describeError(e) })));
         return;
       }
       const raw = files && files.length > 0 ? files[0] : null;
       // `change` 里没有文件 = 用户点了取消（某些浏览器仍会派发 `change`）
-      finish(raw === null ? failure('cancelled', '用户没有选择文件') : toPickOutcome(raw, `archive${ARCHIVE_EXT}`, 0));
+      finish(raw === null ? failure('cancelled', t('archive-fs-browser.pick.none')) : toPickOutcome(raw, `archive${ARCHIVE_EXT}`, 0));
     };
     // `cancel` 事件目前只有部分浏览器派发；有它就用它（比超时更快更准），没有就靠超时/等待。
-    const onCancel = (): void => finish(failure('cancelled', '用户取消了导入'));
+    const onCancel = (): void => finish(failure('cancelled', t('archive-fs-browser.pick.cancelled')));
     // ⚠️ **顺序不能换**：监听必须在 `click()` 之前挂上（F1）。
     input.addEventListener('change', onChange);
     input.addEventListener('cancel', onCancel);
     try {
       input.click();
     } catch (e) {
-      finish(failure('failed', `无法打开文件选择框：${describeError(e)}`));
+      finish(failure('failed', t('archive-fs-browser.fsa.open-failed', { detail: describeError(e) })));
       return;
     }
     // 宿主在 `click()` 里**同步**派发了 change/cancel ⇒ 这里已经 settle，别再挂定时器。
@@ -404,7 +408,7 @@ function pickViaInput(env: ArchiveBrowserEnv, accept: string[]): Promise<PickOut
     const tick = (): void => {
       if (done) return;
       if (clock() - started >= ms) {
-        finish(failure('cancelled', `等待用户选择超过 ${ms} 毫秒，按取消处理`));
+        finish(failure('cancelled', t('archive-fs-browser.input.timeout', { ms: String(ms) })));
         return;
       }
       timer = schedule(tick, 10);
@@ -421,7 +425,7 @@ export function buildArchiveFilePicker(overrides: Partial<ArchiveBrowserEnv> = {
       try {
         env = { ...realArchiveEnv(), ...overrides };
       } catch (e) {
-        return failure('failed', `无法准备文件选择环境：${describeError(e)}`);
+        return failure('failed', t('archive-fs-browser.input.prepare-failed', { detail: describeError(e) }));
       }
       let fsaDetail = '';
       try {
@@ -429,7 +433,7 @@ export function buildArchiveFilePicker(overrides: Partial<ArchiveBrowserEnv> = {
           try {
             return await pickViaFsa(env, opts.accept);
           } catch (e) {
-            if (isAbortError(e)) return failure('cancelled', '用户取消了选择'); // **终态**，不再弹第二个框
+            if (isAbortError(e)) return failure('cancelled', t('archive-fs-browser.pick.selection-cancelled')); // **终态**，不再弹第二个框
             fsaDetail = describeError(e); // 其它错误（SecurityError / NotAllowedError / 策略禁用…）⇒ 降级
           }
         }
@@ -445,13 +449,13 @@ export function buildArchiveFilePicker(overrides: Partial<ArchiveBrowserEnv> = {
         // ⚠️ 三态语义**不变**：`cancelled` 仍然只在"用户取消"时出现，且取消的 `detail` 里
         //    **不带**任何 FSA 真因（取消不是错误，不该被写成一句"文件系统选择失败：…"）。
         if (fsaDetail !== '' && viaInput.ok === false && viaInput.reason !== 'cancelled') {
-          const inputDetail = viaInput.detail.trim() === '' ? '（输入框那条路没有给出描述）' : viaInput.detail;
-          return failure('failed', `文件系统选择失败：${fsaDetail}；文件选择框也失败：${inputDetail}`);
+          const inputDetail = viaInput.detail.trim() === '' ? t('archive-fs-browser.input.no-description') : viaInput.detail;
+          return failure('failed', t('archive-fs-browser.select.both-failed', { fsaDetail, inputDetail }));
         }
         return viaInput;
       } catch (e) {
         // 兜底：任何漏网的宿主抛错都以返回值表达，**绝不 reject**（契约在 `src/app/archive-fs.ts`）
-        return failure('failed', `选择档案失败：${describeError(e)}`);
+        return failure('failed', t('archive-fs-browser.select.threw', { detail: describeError(e) }));
       }
     },
   };
@@ -548,7 +552,7 @@ export function buildArchiveFileSink(overrides: Partial<ArchiveBrowserEnv> = {})
       try {
         env = { ...realArchiveEnv(), ...overrides };
       } catch (e) {
-        return failure('failed', `无法准备保存环境：${describeError(e)}`);
+        return failure('failed', t('archive-fs-browser.save.prepare-failed', { detail: describeError(e) }));
       }
       let fsaDetail = '';
       try {
@@ -557,7 +561,7 @@ export function buildArchiveFileSink(overrides: Partial<ArchiveBrowserEnv> = {})
             return await saveViaFsa(env, opts.suggestedName, opts.text);
           } catch (e) {
             // 用户取消 = **终态**（绝不能落到 `<a download>`：那会再下载一份用户刚拒绝的文件）
-            if (isAbortError(e)) return failure('cancelled', '用户取消了保存');
+            if (isAbortError(e)) return failure('cancelled', t('archive-fs-browser.save.cancelled'));
             fsaDetail = describeError(e);
             // 非取消错误 ⇒ 降级（FSA 被策略禁用、权限被撤、跨源 iframe 里不可用…）
           }
@@ -569,21 +573,21 @@ export function buildArchiveFileSink(overrides: Partial<ArchiveBrowserEnv> = {})
           const d = describeError(e);
           return failure(
             'failed',
-            fsaDetail !== '' ? `文件系统写入失败：${fsaDetail}；下载降级也失败：${d}` : `下载降级失败：${d}`,
+            fsaDetail !== '' ? t('archive-fs-browser.save.fsa-and-download-failed', { fsaDetail, detail: d }) : t('archive-fs-browser.save.download-failed', { detail: d }),
           );
         }
         if (written) return { ok: true, name: opts.suggestedName, mode: 'download' };
         if (fsaDetail !== '') {
           // 两条路都不可用：报**真因**（FSA 的错），而不是笼统的"不支持"
-          return failure('failed', `文件系统写入失败：${fsaDetail}`);
+          return failure('failed', t('archive-fs-browser.save.fsa-failed', { fsaDetail }));
         }
         return failure(
           'unsupported',
-          '这台设备的浏览器不支持保存文件（没有 showSaveFilePicker，也没有可用的 document/URL）',
+          t('archive-fs-browser.unsupported.save'),
         );
       } catch (e) {
         // 兜底：**永不 reject**（宿主 `createElement` / `Blob` / `click()` 抛错都走这里或上面的分支）
-        return failure('failed', `保存失败：${describeError(e)}`);
+        return failure('failed', t('archive-fs-browser.save.failed', { detail: describeError(e) }));
       }
     },
   };

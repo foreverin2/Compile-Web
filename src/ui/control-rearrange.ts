@@ -1,5 +1,8 @@
 import type { GameState, Line, PlayerId } from '../core/models/types';
 import { protocolImgSrc } from '../data/demo';
+// ★ 2026-10-02（P3 第八批，A 表余下的两处之一）：重排浮层的界面文案**进表**
+// （卡牌效果触发时打开的窗口，玩家可见）。t() 都在函数体内（模块顶层求值会把语言冻住）。
+import { t } from '../i18n';
 
 /**
  * 控制组件重排模态（2026-09 基础规则补全 + 2026-09-13 用户清单 #10 扩展为三态）：
@@ -165,10 +168,10 @@ function renderModal(): void {
       'div',
       'rearrange-hint',
       draft
-        ? (o.hint ?? '点击两张协议交换位置（可多次）；摆好后点「完成重排」一次性生效（未改动则按钮不可用）。')
+        ? (o.hint ?? t('control-rearrange.hint.draft'))
         : lockedSide !== null
-          ? `已锁定重排【玩家 ${lockedSide + 1}】的协议：先点一张、再点另一张即交换，可多次交换；另一名玩家的协议不再可操作。`
-          : '点击要重排的玩家协议（先点一张、再点另一张即交换）；完成第 1 次交换后锁定该玩家，不可换侧。'
+          ? t('control-rearrange.hint.locked', { side: String(lockedSide + 1) })
+          : t('control-rearrange.hint.pick')
     )
   );
 
@@ -183,7 +186,7 @@ function renderModal(): void {
         (sides.length === 1 ? ' solo' : '')
     );
     side.dataset.side = String(pid);
-    const who = pid === 0 ? '玩家 1' : '玩家 2';
+    const who = pid === 0 ? t('control-rearrange.player-1') : t('control-rearrange.player-2');
     side.appendChild(el('div', 'rearrange-side-label', activeSide === pid ? `▼ ${who}` : who));
     const protos = el('div', 'rearrange-protos');
     for (const line of [0, 1, 2] as Line[]) {
@@ -202,10 +205,10 @@ function renderModal(): void {
       img.src = protocolImgSrc(pr.defId, pr.compiled);
       img.alt = pr.defId;
       btn.appendChild(img);
-      btn.appendChild(el('span', 'proto-line-tag', `线 ${line + 1}`));
-      if (pr.compiled) btn.appendChild(el('span', 'proto-compiled-tag', '已编译'));
+      btn.appendChild(el('span', 'proto-line-tag', t('control-rearrange.line-tag', { line: String(line + 1) })));
+      if (pr.compiled) btn.appendChild(el('span', 'proto-compiled-tag', t('control-rearrange.compiled-tag')));
       // draft：标出这张协议原本属于哪条线（换位后仍能对上号）
-      if (draft && src !== line) btn.appendChild(el('span', 'proto-moved-tag', `原线 ${src + 1}`));
+      if (draft && src !== line) btn.appendChild(el('span', 'proto-moved-tag', t('control-rearrange.moved-tag', { line: String(src + 1) })));
       btn.addEventListener('click', () => onProtoClick(pid, line));
       protos.appendChild(btn);
     }

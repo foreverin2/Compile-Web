@@ -7,8 +7,10 @@ import {
   createGuestSession,
   createHostSession,
   DEFAULT_RECONNECT_WINDOW_MS,
-  RESYNC_NOT_WIRED_MESSAGE,
 } from '../../src/net/session';
+// ★ 2026-10-02（P3 第八批）：`RESYNC_NOT_WIRED_MESSAGE` 常量已经改成取值函数并**进表**
+// （键 `session.resync.not-wired`）⇒ 下面那处断言改成"**钉键 + 钉值**"（值逐字冻在断言里）。
+import { t } from '../../src/i18n';
 import type {
   ClockLike,
   GuestSession,
@@ -1370,7 +1372,16 @@ describe('resync-req 形状那条：sessionId 不符 / appliedSteps 不是非负
     const r = host.accept({ t: 'resync-req', msg: overWire({ t: 'resync-req', sessionId: SESSION_ID, appliedSteps: 0 }) });
     expect(r.ok).toBe(false);
     expect(r.ok ? null : r.reason).toBe('resync-not-wired');
-    expect(r.ok ? null : r.message).toBe(RESYNC_NOT_WIRED_MESSAGE);
+    // ★ 2026-10-02（P3 第八批）：钉键 + 钉值（值 = 抽表前源码字面量的原文，逐字）
+    expect(
+      t('session.resync.not-wired'),
+      '"追平还没接上"那句的中文值与冻结值不一致',
+    ).toBe(
+      '收到了 resync-req，但本端这一侧没有可发的档案（调用方没有接上"当前档案"的来源，'
+      + '或来源此刻是空的），所以发不出 resync-res。这不是"追平已完成"——请检查接线时'
+      + '是否把当前档案的读取口喂给了本会话（房主持有重连凭据，加入方不持有）。',
+    );
+    expect(r.ok ? null : r.message).toBe(t('session.resync.not-wired'));
     expect(host.phase(), '被拒的 resync-req 改动了相位').toBe('awaiting-commit-face');
   });
 });

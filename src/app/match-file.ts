@@ -19,6 +19,9 @@ import type { ActionKind } from '../core/game';
 import type { PlayerId } from '../core/models/types';
 import { hash64, stableStringify } from '../core/fingerprint';
 import { getProtocolDef } from '../data/demo';
+// ★ 2026-10-02（P3 第八批）：档案解析失败原因**进表**（玩家导入档案失败时在状态行看得见；
+// 联机追平那条路也会透传它）。方向是 app → i18n（没有环）。
+import { t } from '../i18n';
 
 export const MATCH_FILE_FORMAT = 'compile-match';
 export const MATCH_FILE_VERSION = 1;
@@ -268,9 +271,9 @@ function isStrArray(v: unknown): v is string[] {
  * 不要在后续轮次把这条"能通过"当缺陷修掉。
  */
 function checkAction(a: unknown, i: number): MatchFileParseError | null {
-  if (!isObj(a)) return { code: 'bad-action', message: `第 ${i} 条操作不是对象` };
+  if (!isObj(a)) return { code: 'bad-action', message: t('match-file.bad-action.not-object', { i: String(i) }) };
   if (typeof a.seq !== 'number' || !Number.isInteger(a.seq) || a.seq < 0) {
-    return { code: 'bad-action', message: `第 ${i} 条操作的 seq 不是非负整数` };
+    return { code: 'bad-action', message: t('match-file.bad-action.seq-not-integer', { i: String(i) }) };
   }
   // §3.1「seq 单调递增、从 0 开始」的**严格**读法：seq 必须等于数组下标（0,1,2,…）。
   //
@@ -284,25 +287,25 @@ function checkAction(a: unknown, i: number): MatchFileParseError | null {
   if (a.seq !== i) {
     return {
       code: 'bad-action',
-      message: `第 ${i} 条操作的 seq=${a.seq} 与位置不符（§3.1 要求从 0 起单调递增且连续）`,
+      message: t('match-file.bad-action.seq-mismatch', { i: String(i), seq: String(a.seq) }),
     };
   }
-  if (!isPlayerId(a.player)) return { code: 'bad-action', message: `第 ${i} 条操作的 player 不是 0/1` };
+  if (!isPlayerId(a.player)) return { code: 'bad-action', message: t('match-file.bad-action.bad-player', { i: String(i) }) };
   if (typeof a.kind !== 'string' || !KINDS.includes(a.kind as AppActionKind)) {
-    return { code: 'bad-action', message: `第 ${i} 条操作的 kind 未知：${String(a.kind)}` };
+    return { code: 'bad-action', message: t('match-file.bad-action.unknown-kind', { i: String(i), kind: String(a.kind) }) };
   }
   if (a.via !== undefined && !VIA_VALUES.includes(a.via as ActionRecord['via'])) {
-    return { code: 'bad-action', message: `第 ${i} 条操作的 via 未知：${String(a.via)}` };
+    return { code: 'bad-action', message: t('match-file.bad-action.unknown-via', { i: String(i), via: String(a.via) }) };
   }
   const need = ARGS_REQUIRED[a.kind as AppActionKind];
   const args = a.args;
   if (need.length === 0) {
-    if (args !== undefined) return { code: 'bad-action', message: `第 ${i} 条 ${a.kind} 不该带 args` };
+    if (args !== undefined) return { code: 'bad-action', message: t('match-file.bad-action.unexpected-args', { i: String(i), kind: a.kind }) };
     return null;
   }
-  if (!isObj(args)) return { code: 'bad-action', message: `第 ${i} 条 ${a.kind} 缺 args` };
+  if (!isObj(args)) return { code: 'bad-action', message: t('match-file.bad-action.missing-args', { i: String(i), kind: a.kind }) };
   for (const k of need) {
-    if (args[k] === undefined) return { code: 'bad-action', message: `第 ${i} 条 ${a.kind} 的 args 缺 ${k}` };
+    if (args[k] === undefined) return { code: 'bad-action', message: t('match-file.bad-action.missing-arg-key', { i: String(i), kind: a.kind, k }) };
   }
   return null;
 }
@@ -330,18 +333,18 @@ function isClockSeconds(v: unknown): v is number {
 }
 
 function checkSetup(v: unknown): MatchFileParseError | null {
-  if (!isObj(v)) return { code: 'bad-shape', message: 'setup 不是对象' };
-  if (v.draftMode !== 'normal' && v.draftMode !== 'ban') return { code: 'bad-shape', message: 'setup.draftMode 非法' };
-  if (!isPlayerId(v.draftStarter)) return { code: 'bad-shape', message: 'setup.draftStarter 非法' };
-  if (!isPlayerId(v.firstToPlay)) return { code: 'bad-shape', message: 'setup.firstToPlay 非法' };
-  if (!isStrArray(v.draftPool)) return { code: 'bad-shape', message: 'setup.draftPool 非法' };
-  if (!isStrArray(v.draftPicks)) return { code: 'bad-shape', message: 'setup.draftPicks 非法' };
-  if (!isStrArray(v.bannedProtocols)) return { code: 'bad-shape', message: 'setup.bannedProtocols 非法' };
+  if (!isObj(v)) return { code: 'bad-shape', message: t('match-file.bad-shape.setup-not-object') };
+  if (v.draftMode !== 'normal' && v.draftMode !== 'ban') return { code: 'bad-shape', message: t('match-file.bad-shape.draft-mode') };
+  if (!isPlayerId(v.draftStarter)) return { code: 'bad-shape', message: t('match-file.bad-shape.draft-starter') };
+  if (!isPlayerId(v.firstToPlay)) return { code: 'bad-shape', message: t('match-file.bad-shape.first-to-play') };
+  if (!isStrArray(v.draftPool)) return { code: 'bad-shape', message: t('match-file.bad-shape.draft-pool') };
+  if (!isStrArray(v.draftPicks)) return { code: 'bad-shape', message: t('match-file.bad-shape.draft-picks') };
+  if (!isStrArray(v.bannedProtocols)) return { code: 'bad-shape', message: t('match-file.bad-shape.banned-protocols') };
   if (v.clock !== undefined) {
-    if (!isObj(v.clock)) return { code: 'bad-shape', message: 'setup.clock 非法' };
+    if (!isObj(v.clock)) return { code: 'bad-shape', message: t('match-file.bad-shape.clock') };
     for (const k of ['decisionSec', 'draftSec', 'maxSkips'] as const) {
       if (!isClockSeconds(v.clock[k])) {
-        return { code: 'bad-shape', message: `setup.clock.${k} 非法（必须是有限数字）` };
+        return { code: 'bad-shape', message: t('match-file.bad-shape.clock-field', { k }) };
       }
     }
   }
@@ -357,21 +360,21 @@ function checkSetup(v: unknown): MatchFileParseError | null {
  */
 function checkResult(v: unknown): MatchFileParseError | null {
   if (v === undefined) return null;
-  if (!isObj(v)) return { code: 'bad-shape', message: 'result 不是对象' };
+  if (!isObj(v)) return { code: 'bad-shape', message: t('match-file.bad-shape.result-not-object') };
   if (v.winner !== null && !isPlayerId(v.winner)) {
-    return { code: 'bad-shape', message: `result.winner 非法：${JSON.stringify(v.winner)}（必须是 0 / 1 / null）` };
+    return { code: 'bad-shape', message: t('match-file.bad-shape.result-winner', { winner: JSON.stringify(v.winner) }) };
   }
   if (typeof v.reason !== 'string') {
-    return { code: 'bad-shape', message: `result.reason 非法：${JSON.stringify(v.reason)}` };
+    return { code: 'bad-shape', message: t('match-file.bad-shape.result-reason', { reason: JSON.stringify(v.reason) }) };
   }
   return null;
 }
 
 function checkPlayers(v: unknown): MatchFileParseError | null {
-  if (!Array.isArray(v) || v.length !== 2) return { code: 'bad-shape', message: 'players 必须是长度 2 的数组' };
+  if (!Array.isArray(v) || v.length !== 2) return { code: 'bad-shape', message: t('match-file.bad-shape.players-not-pair') };
   for (let i = 0; i < 2; i += 1) {
     const p = v[i];
-    if (!isObj(p) || typeof p.nick !== 'string') return { code: 'bad-shape', message: `players[${i}].nick 非法` };
+    if (!isObj(p) || typeof p.nick !== 'string') return { code: 'bad-shape', message: t('match-file.bad-shape.player-nick', { i: String(i) }) };
   }
   return null;
 }
@@ -400,14 +403,14 @@ type MigrateResult =
 function migrate(raw: Record<string, unknown>): MigrateResult {
   let v = raw.version as number;
   if (!Number.isInteger(v) || v < 1) {
-    return { kind: 'error', error: { code: 'bad-version-type', message: `档案 version 非法：${String(raw.version)}` } };
+    return { kind: 'error', error: { code: 'bad-version-type', message: t('match-file.bad-version.unknown', { version: String(raw.version) }) } };
   }
   if (v > MATCH_FILE_VERSION) {
     return {
       kind: 'error',
       error: {
         code: 'too-new',
-        message: `档案来自更新版本的游戏（档案 v${v}，当前支持 v${MATCH_FILE_VERSION}）。请更新游戏，本程序不会猜测如何读取它。`,
+        message: t('match-file.too-new', { v: String(v), currentVersion: String(MATCH_FILE_VERSION) }),
       },
     };
   }
@@ -416,7 +419,7 @@ function migrate(raw: Record<string, unknown>): MigrateResult {
     const step = MIGRATIONS[v];
     if (!step) {
       // 到不了（v < 当前且无迁移项 = 版本表与迁移链不同步）
-      return { kind: 'error', error: { code: 'too-new', message: `缺少 v${v} → v${v + 1} 的迁移步骤` } };
+      return { kind: 'error', error: { code: 'too-new', message: t('match-file.missing-migration', { v: String(v), next: String(v + 1) }) } };
     }
     cur = step(cur);
     v += 1;
@@ -444,13 +447,13 @@ export function parseMatchFile(text: string, opts: { currentHash: string }): Mat
   try {
     raw = JSON.parse(text);
   } catch {
-    return { ok: false, error: { code: 'not-json', message: '档案不是合法 JSON（文件可能已损坏）' } };
+    return { ok: false, error: { code: 'not-json', message: t('match-file.not-json') } };
   }
-  if (!isObj(raw)) return { ok: false, error: { code: 'not-a-match-file', message: '档案顶层不是对象' } };
+  if (!isObj(raw)) return { ok: false, error: { code: 'not-a-match-file', message: t('match-file.not-object') } };
   if (raw.format !== MATCH_FILE_FORMAT) {
     return {
       ok: false,
-      error: { code: 'not-a-match-file', message: `不是 Compile 对局档案（format=${String(raw.format)}）` },
+      error: { code: 'not-a-match-file', message: t('match-file.bad-format', { format: String(raw.format) }) },
     };
   }
   const migrated = migrate(raw);
@@ -458,10 +461,10 @@ export function parseMatchFile(text: string, opts: { currentHash: string }): Mat
   const m = migrated.raw;
 
   if (typeof m.seed !== 'string' || m.seed.length === 0) {
-    return { ok: false, error: { code: 'bad-shape', message: 'seed 非法（必须是非空字符串：重放全靠它）' } };
+    return { ok: false, error: { code: 'bad-shape', message: t('match-file.bad-seed') } };
   }
   if (typeof m.cardDataHash !== 'string') {
-    return { ok: false, error: { code: 'bad-shape', message: 'cardDataHash 非法' } };
+    return { ok: false, error: { code: 'bad-shape', message: t('match-file.bad-card-data-hash') } };
   }
   const setupErr = checkSetup(m.setup);
   if (setupErr) return { ok: false, error: setupErr };
@@ -469,7 +472,7 @@ export function parseMatchFile(text: string, opts: { currentHash: string }): Mat
   if (playersErr) return { ok: false, error: playersErr };
   const resultErr = checkResult(m.result);
   if (resultErr) return { ok: false, error: resultErr };
-  if (!Array.isArray(m.actions)) return { ok: false, error: { code: 'bad-shape', message: 'actions 不是数组' } };
+  if (!Array.isArray(m.actions)) return { ok: false, error: { code: 'bad-shape', message: t('match-file.bad-actions') } };
   for (let i = 0; i < m.actions.length; i += 1) {
     const err = checkAction(m.actions[i], i);
     if (err) return { ok: false, error: err };
@@ -478,7 +481,7 @@ export function parseMatchFile(text: string, opts: { currentHash: string }): Mat
   const warnings: string[] = [];
   if (m.cardDataHash !== opts.currentHash) {
     warnings.push(
-      `卡牌数据与本机不同（档案 ${m.cardDataHash}，本机 ${opts.currentHash}）：同一串操作可能得到不同结果。可以继续打开，但联机时会被拒绝。`,
+      t('match-file.card-data-mismatch', { archiveHash: m.cardDataHash, currentHash: opts.currentHash }),
     );
   }
 
@@ -503,7 +506,7 @@ export function matchFileToCreateOptions(f: MatchFile): CreateGameOptions {
     try {
       return getProtocolDef(defId);
     } catch {
-      throw new Error(`档案里的协议 defId 在本机不存在：${defId}（卡牌数据版本不一致？）`);
+      throw new Error(t('match-file.unknown-protocol', { defId }));
     }
   });
   return {

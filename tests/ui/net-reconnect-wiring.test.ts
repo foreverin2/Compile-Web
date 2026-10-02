@@ -33,6 +33,9 @@ import { browserHash } from '../../src/ui/net-browser';
 import { PROTO_VERSION } from '../../src/net/protocol';
 import { CARD_DATA_HASH } from '../../src/app/card-data-hash';
 import { stripComments, functionBody } from './source-text';
+// ★ 2026-10-02（P3 第八批）：那一句结论已经抽进文案表（键 `main.notice.link-dead-before-start`）
+// ⇒ 这条源码腿的口径从"源码里逐字有那半句"改成"**钉键 + 钉值**"（判据没放宽，见下面 ①）。
+import { ZH } from '../../src/i18n/zh';
 
 /* ==================================================================== *
  * 夹具：两个真客户端 + 一条真（假件）传输对
@@ -347,13 +350,21 @@ describe('★★ G5 T13-A 开局期掉线：不假装续上、给可读结论、
       readFileSync(fileURLToPath(new URL('../../src/main.ts', import.meta.url))).subarray(0, 8 * 1024 * 1024).toString('utf8'),
     );
     const body = functionBody(src, 'attachLobbyReconnect');
-    // ① 那条如实结论逐字在（玩家能读到"这一局还没开始"与两条退路）
-    expect(body, '没有"这一局还没开始"这句结论').toContain('这一局还没开始');
-    expect(body, '结论里没让玩家重新生成邀请码').toContain('重新生成邀请码');
-    expect(body, '结论里没让玩家重新加入').toContain('重新加入');
-    // ② 反向：不许写成"重连可用"
+    // ① ★ 2026-10-02（P3 第八批）：那一句结论**抽进文案表**了 ⇒ 口径改成"**钉键 + 钉值**"：
+    //    源码那一支必须真的取那个键（`t('main.notice.link-dead-before-start')`），
+    //    而那句中文的三段逐字留在 `zh.ts` 的**值**里。判据**没有放宽**：原来钉的是源码字面量，
+    //    现在钉的是"键接了 + 值逐字"，两半都得成立（少了"钉键"那一半就成了恒真的空判据）。
+    expect(body, '开局期那一支没把结论从文案表里取（键没接上）')
+      .toContain("t('main.notice.link-dead-before-start')");
+    const notice = ZH['main.notice.link-dead-before-start'] ?? '';
+    expect(notice, '那一句中文从表里消失了').not.toBe('');
+    expect(notice, '没有"这一局还没开始"这句结论').toContain('这一局还没开始');
+    expect(notice, '结论里没让玩家重新生成邀请码').toContain('重新生成邀请码');
+    expect(notice, '结论里没让玩家重新加入').toContain('重新加入');
+    // ② 反向：不许写成"重连可用"（源码那一支与表里的值**两处**都不许出现）
     for (const bad of ['已经接上', '已经续上', '自动重连', '已经续上这一局']) {
       expect(body, `那一行把开局期这条路写成了"${bad}"`).not.toContain(bad);
+      expect(notice, `表里那句把开局期这条路写成了"${bad}"`).not.toContain(bad);
     }
     // ③ 开局期那一支里**不许**调 `client.reconnect()`（新传输永远连不上，见本块头注）
     const guard = body.indexOf('if (netGame === null) {');
