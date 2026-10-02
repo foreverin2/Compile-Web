@@ -5028,8 +5028,7 @@ function consentStep(action: 'show' | 'grant' | 'deny' | 'reset'): void {
  *  2. **昵称**：留空就**不写**（缺省显示名由别处给，写空串会把已有昵称抹掉）。
  *  3. **"只出现一次"的标记**：`writeOnboardingSeen`。游客模式（deny）下它写的是内存 KV
  *     ⇒ 刷新即丢、**向导会再出现**（如实的边界，不是缺陷）。
- *  4. 去首页。第 3 步选「开始教学」时只是**提示待开发**：教学模式是 P2 的事，
- *     本文件不实现它，首页那个「新手教程」按钮仍然指向"待开发"。
+ *  4. 去首页，并按第 3 步的选择给**一句**提示（两句的键与文案见下面 ④ 的注释）。
  */
 function finishOnboarding(outcome: OnboardingOutcome): void {
   // ① 语言：现在是"已经同意保存"之后了 ⇒ 可以写盘（游客模式下它自己会退化成内存）
@@ -5046,11 +5045,39 @@ function finishOnboarding(outcome: OnboardingOutcome): void {
   try {
     applyWriteResult(writeOnboardingSeen(localStore, true));
   } catch { /* 同上 */ }
-  // ④ 去首页。选「开始教学」的人本轮到不了教学模式 ⇒ 给一句"待开发"，入口仍走首页那个按钮。
-  //    ⚠️ 这句话必须**交给首页在画完之后发**（`showHome(initialToast)`）：本函数后面紧接着
-  //      `showHome()` 会 `clearRoot` 重画，先提示会被同一 tick 闪掉。文案与首页那个
-  //      「新手教程」按钮**逐字同一句**（`toast.tutorial`），不另造。
-  showHome(outcome.startTutorial ? t('toast.tutorial') : undefined);
+  /**
+   * ④ 去首页，并按第 3 步的选择给**一句**提示 —— 两支各自该说什么，见下。
+   *
+   * ⚠️ **2026-10-02 修正（线上真机验收 D1）**：第一版这里写反了 —— 三元判的是
+   * `outcome.startTutorial`，于是提示被发给了**「开始教学」那一支**，而用户口径是
+   * "若选择『我玩过，直接跳过』就提示之后还可以在首页再次进入教学模式"
+   * ⇒ **跳过那一支**才是该出提示的那一支（用户实测：跳过之后 1.5s 内 `.home-toast` 为空、
+   * 而点「开始教学」立刻弹出首页那个"待开发"提示）。
+   * 同时用户要的那句文案在线上 bundle 里**根本不存在**（搜"再次进入"命中 0）⇒ 不只是分支反了，
+   * 那句话也从来没被写出来过。
+   *
+   * 现在的口径（两支都**如实**，不再拿"待开发"冒充跳过的反馈）：
+   *  - **跳过**（`startTutorial === false`）⇒ 键 `onboarding.after-skip`：
+   *    「以后想学的时候，在首页点「新手教程」就能进入教学模式。」——**教学模式还没做**，
+   *    所以这句说的是"怎么找到入口"，不是"教学已经能玩"（已登记为已知缺口，见方案 §7.6）；
+   *  - **开始教学**（`startTutorial === true`）⇒ 键 `onboarding.after-start`：
+   *    「教学模式还在开发中；做好之前，在首页点「新手教程」也能看到入口。」
+   *    —— 本轮到不了那一屏（P2 才做），所以给一句如实的话，**不**假装已经进了教学。
+   *
+   * ⚠️ **2026-10-02 第二次修正（同一次线上验收 D1 的收尾）**：上面这句的写法**再改了一次** ——
+   * 第一版是 `showHome(t(outcome.startTutorial ? 'after-start' : 'after-skip'))`（判反 + 借首页那句），
+   * 第二版修成 `showHome(t(!outcome.startTutorial ? 'after-skip' : 'after-start'))` ——
+   * **分支对了，但键写进了 `t()` 的实参里成了动态键**。那会让两条机检腿当场红：
+   *  ① `tables.test.ts` 的"不许有动态键"腿（`t()` 的实参不是字面量 ⇒ 扫描器看不见它）；
+   *  ② 同文件"死键"腿（看不见 ⇒ `onboarding.after-skip` / `after-start` 变成"谁也读不到"）。
+   * ⇒ 现在把三元放到 `t()` **外面**，**每个 `t()` 的实参都是字面量**（缺键扫描腿与死键腿都看得见）。
+   *
+   * ⚠️ 提示必须**交给首页在画完之后发**（`showHome(initialToast)`）：本函数紧接着调用
+   * `showHome()`，它会 `clearRoot` 重画；先提示会被同一 tick 闪掉（这一条也有腿钉着）。
+   * ⚠️ 本注释里**不要再出现"t 加左括号"那种调用写法**（哪怕只是举例）：`bodyOf()` 抽函数体时
+   * 保留注释，源码腿取"第一处提示调用"时会锚到注释里的举例上（写这一轮时当场踩过一次）。
+   */
+  showHome(outcome.startTutorial ? t('onboarding.after-start') : t('onboarding.after-skip'));
 }
 
 /**

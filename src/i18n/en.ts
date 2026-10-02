@@ -160,6 +160,21 @@ export const EN: Readonly<Record<string, string>> = {
   'onboarding.nick.placeholder': 'Pick a nickname for yourself',
   'onboarding.tutorial.question': 'Want to learn how to play first?',
   /**
+   * Step 2's guidance line (★ 2026-10-02, live-acceptance D2). The first version reused the
+   * old consent popup's `CONSENT_DENY_HINT`, which only mentioned "changing this choice" —
+   * the user's wording asks for **editing the nickname** and **clearing local data** to be
+   * named explicitly. Kept separate from `onboarding.consent.deny-note` (that one must stay
+   * a verbatim copy of the pinned consent sentence).
+   */
+  'onboarding.consent.local-hint':
+    'You can change your nickname later under Local data and privacy on the home screen, and clear local data there too.',
+  /**
+   * Step 3's two outcomes (★ 2026-10-02, live-acceptance D1). Both are honest: the tutorial
+   * mode itself is not built yet, so neither branch pretends it already opened.
+   */
+  'onboarding.after-skip': 'Whenever you want to learn, tap "Tutorial" on the home screen to enter tutorial mode.',
+  'onboarding.after-start': 'Tutorial mode is still being built; until then, tap "Tutorial" on the home screen to see the entry.',
+  /**
    * Step 2's consent chrome (★ 2026-10-01). The Chinese values are **verbatim** the
    * corresponding `CONSENT_COPY` fields (pinned by `tests/i18n/onboarding.test.ts`);
    * the consent **body paragraphs** still come from `privacy.ts` and stay Chinese —
@@ -168,7 +183,9 @@ export const EN: Readonly<Record<string, string>> = {
   'onboarding.consent.title': 'Remember your settings on this device?',
   'onboarding.consent.grant': 'Allow and save on this device',
   'onboarding.consent.deny': 'No thanks, keep this session only',
-  'onboarding.consent.hint': "You can change this choice any time under Local data and privacy.",
+  // Renamed from `onboarding.consent.hint` on 2026-10-02: it is the old popup's
+  // "what happens if you decline" line, not the step-2 guidance (see D2 above).
+  'onboarding.consent.deny-note': 'You can change this choice any time under Local data and privacy.',
   'onboarding.consent.privacy': 'Privacy notes',
 
   /* ── Shared generation labels (library chips + rules titles) ── */

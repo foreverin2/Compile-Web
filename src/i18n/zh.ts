@@ -178,8 +178,35 @@ export const ZH: Readonly<Record<string, string>> = {
   'onboarding.lang.hint': '之后可以在首页的「设置」里更改语言。',
   'onboarding.nick.label': '昵称（可留空）',
   'onboarding.nick.placeholder': '给自己起个昵称',
-  // 第 3 步（教学入口本轮到不了：宿主给"待开发"提示）
+  // 第 3 步（教学模式是 P2 才做 ⇒ 宿主按选择给一句如实的提示，见 `onboarding.after-*`）
   'onboarding.tutorial.question': '要不要先学着怎么玩？',
+  /**
+   * 第 2 步的那句**指引**（★ 2026-10-02 线上真机验收 **D2** 修法）。
+   *
+   * 第一版这里直接用的是旧授权弹窗那句 `CONSENT_DENY_HINT`（「你随时可以在主界面的
+   * 「本地数据与隐私」里改变这个选择。」）⇒ 真机实测：那句话只说"改变选择"，
+   * **没说昵称能改、也没说本机数据能清**，而用户口径是
+   * 「提示后续可在首页的本地数据与隐私中进行更改」（方案 §3 另写着"也能清除本机数据"）。
+   * 现在这一条把那两件事都点出来，且**逐字点名入口路径**。
+   *
+   * ⚠️ 与之并存的 `onboarding.consent.deny-note` 是**旧弹窗那句**（"不用之后"的后果 + 出路），
+   * 它必须与 `CONSENT_COPY.denyHint` 逐字一致（有腿钉住）；两者**不是**同一句，别合并。
+   */
+  'onboarding.consent.local-hint': '之后可以在首页的「本地数据与隐私」里修改昵称，也可以在那里清除本机数据。',
+  /**
+   * 第 3 步两个分支的**结果提示**（★ 2026-10-02 D1 修法）。
+   *
+   * D1 的缺陷是双重的：① `finishOnboarding` 的三元判反了（提示发给了「开始教学」那一支）；
+   * ② 用户要的那句"以后还能再进教学模式"**从来没被写出来过**（线上 bundle 里"再次进入"命中 0）。
+   *
+   * 现在两支各说各的、都不撒谎：
+   *  - `after-skip`（「我玩过，直接跳过」）：告诉他**入口在哪**（教学模式本身还没做，
+   *    所以措辞是"想学的时候…就能进入"，不是"教学已经能玩"）；
+   *  - `after-start`（「开始教学」）：**如实说还在开发中**，并给出同一个入口，
+   *    不假装已经进了教学（本轮到不了那一屏，P2 才做）。
+   */
+  'onboarding.after-skip': '以后想学的时候，在首页点「新手教程」就能进入教学模式。',
+  'onboarding.after-start': '教学模式还在开发中；做好之前，在首页点「新手教程」也能看到入口。',
   /**
    * 第 2 步的**授权那一组**（★ 2026-10-01，P1 的第二次修法）。
    *
@@ -196,7 +223,10 @@ export const ZH: Readonly<Record<string, string>> = {
   'onboarding.consent.title': '要不要在这台设备上记住你的设置？',
   'onboarding.consent.grant': '允许，保存在这台设备',
   'onboarding.consent.deny': '不用，本次不保存',
-  'onboarding.consent.hint': '你随时可以在主界面的「本地数据与隐私」里改变这个选择。',
+  // ⚠️ 键名 2026-10-02 由 `onboarding.consent.hint` 改成 `onboarding.consent.deny-note`：
+  //   它承载的是**旧弹窗那句**"不用之后的后果 + 出路"，与上面那条新指引不是同一句，
+  //   同名会让后来者以为它们是同一个东西（D2 的教训）。
+  'onboarding.consent.deny-note': '你随时可以在主界面的「本地数据与隐私」里改变这个选择。',
   'onboarding.consent.privacy': '隐私说明',
 
   /* ── 共用的世代标签（图鉴筛选 chip 与规则页的标题都用它） ── */

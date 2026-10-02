@@ -297,7 +297,7 @@ describe('向导三步：顺序、可见性、文案逐字（中英各一遍）'
     expect(enText, '英文帧里还留着中文提示').not.toContain('之后可以在首页的「设置」里更改语言。');
   });
 
-  it('第 2 步的两条提示逐字（用户口径）：语言提示在**设置**、改/清除提示在**本地数据与隐私**', () => {
+  it('第 2 步的指引逐字（用户口径）：**改昵称** + **清除本机数据**，入口是「本地数据与隐私」', () => {
     restores.push(installStubDom());
     const b = boot(fakeStorage(), 'zh');
     // 第 1 步那句：之后可在「首页 → 设置」更改
@@ -305,17 +305,32 @@ describe('向导三步：顺序、可见性、文案逐字（中英各一遍）'
       '第 1 步的提示不是用户要的那一句').toBe('之后可以在首页的「设置」里更改语言。');
     expect(one(b.overlay, 'section.onboarding-step[data-step="1"] .onboarding-hint').text,
       '第 1 步的提示没指向设置').toContain('设置');
-    // 第 2 步那句：之后可在「首页 → 本地数据与隐私」更改/清除
-    //   ⚠️ 上一步刚把语言切成 English ⇒ 这里第 2 步是**英文**的，所以断言英文那一句。
-    //      （中文那一句的逐字值由下一组的"中文下"那条腿钉住，两条腿各管一种语言。）
+    /**
+     * 第 2 步那句（★ 2026-10-02 线上真机验收 **D2**）：用户口径要的是**两件事都说到** ——
+     * 能在那儿**改昵称**、能**清除本机数据**，入口是「首页 → 本地数据与隐私」。
+     * 第一版用的是旧弹窗那句 `CONSENT_DENY_HINT`，只说"改变这个选择" ⇒ 用户实测这两件事都没提到。
+     */
+    const localHint = one(b.overlay, '[data-role="local-hint"]');
+    expect(localHint.text, '第 2 步的指引不是表里那一条').toBe(ZH['onboarding.consent.local-hint']);
+    expect(localHint.text, '第 2 步的指引没点名「本地数据与隐私」').toContain('本地数据与隐私');
+    expect(localHint.text, '第 2 步的指引没说能**改昵称**').toContain('修改昵称');
+    expect(localHint.text, '第 2 步的指引没说能**清除本机数据**').toContain('清除本机数据');
+    // ⚠️ 它与"不用之后那句"必须**不是**同一句（第一版就是把两件事合成了一句，才漏掉用户要的两点）
+    expect(ZH['onboarding.consent.local-hint'], '第 2 步的指引与旧弹窗那句撞了（两件事混成一件）')
+      .not.toBe(ZH['onboarding.consent.deny-note']);
+    expect(one(b.overlay, '[data-role="deny-note"]').text, '「不用之后」那句没保留下来')
+      .toBe(ZH['onboarding.consent.deny-note']);
+    // 英文那一版：同样两点都要在（语言切过去之后同一条腿复查）
     clickIn(one(b.overlay, '.onboarding-lang-btn[data-lang="en"]'));
     const step2 = queryAllIn(b.overlay, 'section.onboarding-step[data-step="2"]')[0];
-    expect(one(b.overlay, 'section.onboarding-step[data-step="2"] .onboarding-hint').text,
-      '第 2 步的提示不是英文版').toBe(EN['onboarding.consent.hint']);
-    expect(textOf(step2), '第 2 步的英文提示没指向「本地数据与隐私」').toContain('Local data and privacy');
+    const enHint = one(b.overlay, '[data-role="local-hint"]').text;
+    expect(enHint, '第 2 步的指引不是英文版').toBe(EN['onboarding.consent.local-hint']);
+    expect(enHint, '英文指引没点名 Local data and privacy').toContain('Local data and privacy');
+    expect(enHint.toLowerCase(), '英文指引没说能改昵称').toContain('nickname');
+    expect(enHint.toLowerCase(), '英文指引没说能清除本机数据').toContain('clear local data');
     // 反向：中文那一句此刻**不在**屏上（证明"真的换了语言"而不是两句并存）
-    expect(textOf(step2), '英文帧里还留着第 2 步的中文提示').not.toContain('本地数据与隐私');
-    // 第 3 步那句：随时可以在首页点「新手教程」再次进入
+    expect(textOf(step2), '英文帧里还留着第 2 步的中文指引').not.toContain('修改昵称');
+    // 第 3 步：两个按钮是用户原话（各自该说什么提示由宿主那一侧的两条腿钉住）
     clickIn(one(b.overlay, '.onboarding-grant'));
     const step3 = queryAllIn(b.overlay, 'section.onboarding-step[data-step="3"]')[0];
     expect(descendants(one(b.overlay, '.onboarding-skip-tutorial')).map((n) => n.text),
@@ -351,13 +366,14 @@ describe('第 2 步 = 旧授权弹窗并进来的那一步（界面文字双语 
       .toEqual([CONSENT_COPY.deny]);
     expect(descendants(one(b.overlay, '.onboarding-privacy')).map((n) => n.text), '「隐私说明」按钮文案漂了')
       .toEqual([CONSENT_COPY.privacyLink]);
-    // 中文下「不用之后」的提示：与 `onboarding.consent.hint` 的中文值**逐字等于** `CONSENT_COPY.denyHint`
-    //   （★ P1 第二次修法：这一条走表了，所以中文值必须与旧弹窗那句一致 —— 见下面的英文组）
-    expect(one(b.overlay, 'section.onboarding-step[data-step="2"] .onboarding-hint').text,
-      '「不用」之后的提示漂了').toBe(ZH['onboarding.consent.hint']);
-    expect(ZH['onboarding.consent.hint'], '「不用」之后的提示与旧弹窗那句漂了').toBe(CONSENT_COPY.denyHint);
-    expect(one(b.overlay, 'section.onboarding-step[data-step="2"] .onboarding-hint').text,
-      '「不用」之后的提示没指向本地数据与隐私屏').toContain('本地数据与隐私');
+    // 中文下「不用之后」那一句：`onboarding.consent.deny-note` 的中文值**逐字等于** `CONSENT_COPY.denyHint`
+    //   （★ 它管的是"不用之后的后果 + 出路"，与第 2 步那条**指引**是两句不同的话 —— D2 的教训）
+    expect(one(b.overlay, '[data-role="deny-note"]').text,
+      '「不用之后」那一句漂了').toBe(ZH['onboarding.consent.deny-note']);
+    expect(ZH['onboarding.consent.deny-note'], '「不用之后」那一句与旧弹窗那句漂了').toBe(CONSENT_COPY.denyHint);
+    // ⚠️ 键名/内容都要与 D2 新增的那条指引分得开（合并过一次是缺陷，别再合并）
+    expect(ZH['onboarding.consent.deny-note'], '「不用之后」与第 2 步的指引撞成同一句了')
+      .not.toBe(ZH['onboarding.consent.local-hint']);
     // 反向锚点：那五句中文真的**不在**本文件的字面量面里（走的是表，不是第二份手写）
     const code = stripComments(
       readFileSync(fileURLToPath(new URL('../../src/ui/onboarding.ts', import.meta.url)))
@@ -371,18 +387,20 @@ describe('第 2 步 = 旧授权弹窗并进来的那一步（界面文字双语 
       .not.toBe(t('onboarding.lang.hint'));
   });
 
-  it('★ 英文下：那五条**全部换成英文**（真机实测过的那种"半张屏"不许再出现）', () => {
+  it('★ 英文下：第 2 步那一组界面文字**全部换成英文**（真机实测过的那种"半张屏"不许再出现）', () => {
     restores.push(installStubDom());
     const b = boot(fakeStorage(), 'zh');
     clickIn(one(b.overlay, '.onboarding-lang-btn[data-lang="en"]'));
     const step2 = queryAllIn(b.overlay, 'section.onboarding-step[data-step="2"]')[0];
     const text = textOf(step2);
-    // 五个字段逐个断言（不是"整段有英文就行" —— 那样漏一条也看不出来）
+    // 六个字段逐个断言（不是"整段有英文就行" —— 那样漏一条也看不出来）
     expect(one(b.overlay, '.onboarding-consent-title').text).toBe(t('onboarding.consent.title'));
     expect(one(b.overlay, '.onboarding-grant').text).toBe(t('onboarding.consent.grant'));
     expect(one(b.overlay, '.onboarding-deny').text).toBe(t('onboarding.consent.deny'));
     expect(one(b.overlay, '.onboarding-privacy').text).toBe(t('onboarding.consent.privacy'));
-    // 反向：英文下这五条里**不许**再出现那五句中文
+    expect(one(b.overlay, '[data-role="local-hint"]').text).toBe(t('onboarding.consent.local-hint'));
+    expect(one(b.overlay, '[data-role="deny-note"]').text).toBe(t('onboarding.consent.deny-note'));
+    // 反向：英文下这一组里**不许**再出现那些中文原句
     for (const sentence of [CONSENT_COPY.title, CONSENT_COPY.grant, CONSENT_COPY.deny, CONSENT_COPY.privacyLink]) {
       expect(text, `英文界面下第 2 步还留着中文「${sentence}」`).not.toContain(sentence);
     }
@@ -393,7 +411,7 @@ describe('第 2 步 = 旧授权弹窗并进来的那一步（界面文字双语 
     // ★ 生成式：`onboarding.consent.*` 这一族**每一条**的两语言值都必须真的不同
     //   （否则"翻译"是抄了一遍中文，英文界面上照样是中文 —— 那正是这一轮修的那个 bug 的形态）
     const consentKeys = Object.keys(ZH).filter((k) => k.startsWith('onboarding.consent.'));
-    expect(consentKeys.length, '`onboarding.consent.*` 一条都没有 ⇒ 下面那条判据恒真').toBeGreaterThanOrEqual(5);
+    expect(consentKeys.length, '`onboarding.consent.*` 一条都没有 ⇒ 下面那条判据恒真').toBeGreaterThanOrEqual(6);
     const same = consentKeys.filter((k) => EN[k] === ZH[k] || EN[k] === undefined);
     expect(same, `这些键的英文值与中文逐字相同（等于没翻）：${same.join(', ')}`).toEqual([]);
   });
@@ -607,21 +625,30 @@ const MAIN_CODE = stripComments(
     .subarray(0, 4 * 1024 * 1024).toString('utf8'),
 );
 
-/** 某个函数的函数体（从 `function <名>(` 起，用大括号配平切到闭合那一行） */
+/**
+ * 某个函数的函数体（从 `function <名>(` 起，用大括号配平切到闭合那一行）。
+ *
+ * ★ 2026-10-02：**这里再剥一次注释**（幂等）。为什么必须：
+ * `finishOnboarding` 的 JSDoc 里写了两个**反例调用**（D1 那两次写错的 `showHome(...)` 形态），
+ * 而下面有几条腿是"按符号找落点"（比如"每一处 `t(` 的实参都必须是字面量"）。
+ * 注释里留着反例就会把锚点抢走或造成假红 —— 写这一轮时当场踩过一次。
+ * 于是 `bodyOf` 只返回**代码位**：注释里写多少反例都不影响判据。
+ */
 function bodyOf(code: string, name: string): string {
-  const at = code.indexOf(`function ${name}(`);
+  const clean = stripComments(code);
+  const at = clean.indexOf(`function ${name}(`);
   expect(at, `main.ts 里找不到 function ${name}(`).toBeGreaterThan(0);
-  let i = code.indexOf('{', at);
+  let i = clean.indexOf('{', at);
   const start = i;
   let depth = 0;
-  for (; i < code.length; i += 1) {
-    if (code[i] === '{') depth += 1;
-    else if (code[i] === '}') {
+  for (; i < clean.length; i += 1) {
+    if (clean[i] === '{') depth += 1;
+    else if (clean[i] === '}') {
       depth -= 1;
       if (depth === 0) break;
     }
   }
-  return code.slice(start, i + 1);
+  return clean.slice(start, i + 1);
 }
 
 /* ───────────────────────── 1. 三步的顺序与可见性 ───────────────────────── */
@@ -665,9 +692,93 @@ describe('★ 宿主接线：启动门 → 向导（源码结构腿）', () => {
     expect(body.indexOf('writeNickName('), '昵称落盘排在标记之后').toBeLessThan(body.indexOf('writeOnboardingSeen('));
     // 昵称留空不许写（别把已有昵称抹成空串）
     expect(body, '昵称没有"留空就不写"的守卫').toMatch(/outcome\.nick\.trim\(\)\s*!==\s*''/);
-    // 最后去首页；「开始教学」只给一句"待开发"（教学模式是 P2 的事）
+    // 最后去首页（提示交给它画完之后发）
     expect(body, '走完向导没有去首页').toMatch(/showHome\s*\(/);
-    expect(body, '「开始教学」没有给出"待开发"的提示').toMatch(/toast\.tutorial/);
+  });
+
+  /**
+   * ★ 2026-10-02（线上真机验收 **D1**）：第 3 步那两个分支**各自传的是哪个键**。
+   *
+   * ## 为什么上一轮没拦住它（这条腿存在的理由）
+   *
+   * 上一轮只有一条腿写着 `expect(body).toMatch(/toast\.tutorial/)` —— 它只证明"函数体里
+   * **出现过**某个提示"，完全不区分**哪一支**发它。于是
+   * `showHome(outcome.startTutorial ? t('toast.tutorial') : undefined)`（判反了）
+   * 照样全绿：符号在、分支反了、玩家在"跳过"那一支什么也看不到。
+   *
+   * ## ★ 第二版修法又踩了一个坑（2026-10-02 晚，被 `tables.test.ts` 抓到）
+   *
+   * 第二版写成了 `showHome(t(!outcome.startTutorial ? 'after-skip' : 'after-start'))` ——
+   * **分支对了，但键成了 `t()` 的动态实参**，于是：
+   *  - `tables.test.ts` 的"不许有动态键"腿当场红（扫描器看不见这种调用 ⇒ 等于漏翻的温床）；
+   *  - 同文件"死键"腿跟着红（看不见 ⇒ 那两个键成了"谁也读不到"）。
+   * ⇒ 现在的形状是**三元在 `t()` 外面、每个 `t()` 的实参都是字面量**，
+   * 本组有两条腿分别钉这两件事（形状腿 + 动态键禁令腿）。
+   */
+  it('★ D1：提示发在**「我玩过，直接跳过」那一支**，键是 `onboarding.after-skip`', () => {
+    const body = bodyOf(MAIN_CODE, 'finishOnboarding');
+    /**
+     * 形状判据（**整条语句**一把钉住，含"实参是字面量"这件事）：
+     *   `showHome(outcome.startTutorial ? t('<开始教学那支>') : t('<跳过那支>'))`
+     * 反过来说：三元**不许**出现在 `t(` 里面 —— 那种写法会被下面那条动态键禁令腿抓住，
+     * 这里先从形状上挡住。
+     */
+    const call = /showHome\(\s*outcome\s*\.\s*startTutorial\s*\?\s*t\('([^']+)'\)\s*:\s*t\('([^']+)'\)\s*\)/
+      .exec(body);
+    expect(call, '找不到 `showHome(outcome.startTutorial ? t(\'…\') : t(\'…\'))` 这个形状'
+      + '（换了写法？请按新形状重写这几条判据）').not.toBeNull();
+    // ② 真值那一支 = 「开始教学」
+    expect(call?.[1], '`?` 那一支（真值 = 「开始教学」）传的键不对').toBe('onboarding.after-start');
+    // ③ 假值那一支 = 「我玩过，直接跳过」—— **这一条就是 D1 的判据**
+    expect(call?.[2], '`:` 那一支（假值 = 「我玩过，直接跳过」）不是 after-skip：D1 就是这里反的')
+      .toBe('onboarding.after-skip');
+    // 两支的键必须**不同**（相同 = 分支白写）
+    expect(call?.[1], '两支发了同一句话 ⇒ 分支等于没写').not.toBe(call?.[2]);
+    // ④ 退化写法也不许放过：那一支又拿"待开发"那句当反馈（D1 的原形态）
+    expect(body, '提示那一支又拿 `toast.tutorial` 当反馈了')
+      .not.toMatch(/startTutorial\s*\?[^\n]*toast\.tutorial/);
+  });
+
+  it('★ 动态键禁令（本函数的代码位）：每一处 `t(` 的实参都必须是**字面量**', () => {
+    // 这条腿的由来：第二版把键写进了三元里（`t(cond ? 'a' : 'b')`）⇒ 缺键扫描腿看不见它们，
+    // `tables.test.ts` 的两条腿（动态键 / 死键）当场红。这里在**本文件**把它变成一条**局部**腿，
+    // 让"改这一行的人"在跑自己这摊测试时就撞上，而不是等到全量测试才发现。
+    const body = bodyOf(MAIN_CODE, 'finishOnboarding');
+    const calls = [...body.matchAll(/\bt\(/g)];
+    expect(calls.length, '`finishOnboarding` 里一处 `t(` 都没有 ⇒ 这条腿在空集合上恒真')
+      .toBeGreaterThan(0);
+    const dynamic = calls.filter((m, idx) => {
+      const rest = body.slice((m.index ?? 0) + 2).trimStart();
+      // 实参不许以引号以外的东西开头（`'` / `"` / 反引号都算字面量形态；这里只要求 `'`）
+      return !(rest.startsWith("'") || rest.startsWith('"') || rest.startsWith('`'));
+    });
+    expect(dynamic, '`finishOnboarding` 里出现了动态键（`t()` 的实参不是字面量）—— '
+      + '那类调用缺键扫描腿看不见，等于漏翻的温床。把三元放到 `t()` 外面，'
+      + `每个 t() 各带一个字面量键。`).toEqual([]);
+  });
+
+  it('★ D1：那两句提示在两张表里都在，且都点名「新手教程」这个入口', () => {
+    for (const key of ['onboarding.after-skip', 'onboarding.after-start'] as const) {
+      expect(ZH[key], `${key} 不在中文表里`).toBeTruthy();
+      expect(EN[key], `${key} 不在英文表里`).toBeTruthy();
+      expect(EN[key], `${key} 的英文值与中文逐字相同（等于没翻）`).not.toBe(ZH[key]);
+    }
+    // 文案本身要对得上用户口径：告诉玩家"以后想学还能进"（教学模式的入口在首页）
+    expect(ZH['onboarding.after-skip'], '「跳过」那句没说「新手教程」这个入口')
+      .toContain('新手教程');
+    expect(ZH['onboarding.after-skip'], '「跳过」那句没说"以后还能再进"')
+      .toContain('以后');
+    // 「开始教学」那一支必须**如实**说教学模式还没做（不许假装已经进了教学）
+    expect(ZH['onboarding.after-start'], '「开始教学」那句没如实说"还在开发中"')
+      .toContain('开发中');
+    expect(EN['onboarding.after-start'], '英文那句没如实说还在开发中').toMatch(/still being built/i);
+    expect(EN['onboarding.after-skip'], '英文那句没点名 Tutorial 入口').toContain('Tutorial');
+    // 反向锚点：这两句**真在屏上出现过**（不是表里躺着的死键）—— 由宿主那条三元腿保证引用，
+    //   这里再证明"不是被 `toast.tutorial` 顶掉了"
+    expect(ZH['toast.tutorial'], '前置：`toast.tutorial` 还是首页按钮那句（没被这两句挤掉）')
+      .toBe('新手教程：待开发');
+    expect([ZH['onboarding.after-skip'], ZH['onboarding.after-start']], '两句提示里出现了那句"待开发"')
+      .not.toContain(ZH['toast.tutorial']);
   });
 
   it('首页那条"待发提示"接缝：由首页在**画完之后**发（先提示会被 clearRoot 闪掉）', () => {

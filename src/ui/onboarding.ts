@@ -11,6 +11,12 @@
  *                          └─ 若「我玩过，直接跳过」⇒ 提示：随时可以在首页点「新手教程」再次进入
  * ```
  *
+ * ⚠️ 第 3 步那两句提示**不在本文件里**：屏只把 `startTutorial` 交给宿主，文案由
+ * `src/main.ts` 的 `finishOnboarding` 按选择发（键 `onboarding.after-skip` /
+ * `onboarding.after-start`，走首页的"画完之后再发"接缝）。
+ * ★ 2026-10-02 线上真机验收 **D1** 的修法就在这里：第一版把提示发给了「开始教学」那一支
+ * （与上面这段用户口径反了），而且"以后还能再进教学模式"那句话从来没被写出来过。
+ *
  * ## 形态（照 `settingsOverlayElement` / `feedback-screen` 那套）
  *
  * 一个**挂到 `document.body` 上的整屏遮罩**（`.onboarding-overlay`），版式全部落在
@@ -75,16 +81,23 @@ export const ONBOARDING_LABELS = {
 } as const;
 
 /**
- * 第 2 步那两句**授权界面文字**的取值口（`t()` 的键以字面量写在这里 —— 缺键扫描腿要看得见）。
+ * 第 2 步那几条**授权界面文字**的取值口（`t()` 的键以字面量写在这里 —— 缺键扫描腿要看得见）。
  *
  * ⚠️ 写成函数而不是常量：文案要跟着语言走，而语言在向导运行期会变（第 1 步就能变）。
+ *
+ * 五个 `which` 的落点（**别弄混**，D1/D2 的教训就在这里）：
+ *  - `title` / `grant` / `deny` / `privacy`：授权那一组（中文值逐字等于 `CONSENT_COPY`）；
+ *  - `deny-note`：**旧弹窗那句**"不用之后的后果 + 出路"（与 `CONSENT_COPY.denyHint` 逐字一致）；
+ *  - `local-hint`：第 2 步的**指引**（"以后能改昵称、能清本机数据"）—— 2026-10-02 D2 新增，
+ *    它与 `deny-note` 是**两句不同的话**，合并过一次是缺陷，别再合并。
  */
-function consentText(which: 'title' | 'grant' | 'deny' | 'hint' | 'privacy'): string {
+function consentText(which: 'title' | 'grant' | 'deny' | 'deny-note' | 'local-hint' | 'privacy'): string {
   switch (which) {
     case 'title': return t('onboarding.consent.title');
     case 'grant': return t('onboarding.consent.grant');
     case 'deny': return t('onboarding.consent.deny');
-    case 'hint': return t('onboarding.consent.hint');
+    case 'deny-note': return t('onboarding.consent.deny-note');
+    case 'local-hint': return t('onboarding.consent.local-hint');
     default: return t('onboarding.consent.privacy');
   }
 }
@@ -236,7 +249,7 @@ export function onboardingOverlayElement(
 
   /* ── 第 2 步：同意保存 + 取名字（旧授权弹窗并进来的那一步） ──
    *
-   * ⚠️ 标题 / 允许 / 不用 / 提示 / 隐私说明这五条走 `t()`（见 `consentText` 的头注）：
+   * ⚠️ 标题 / 允许 / 不用 / 提示 / 隐私说明这几条走 `t()`（见 `consentText` 的头注）：
    * 它们是**界面文字**，必须跟着第 1 步选的语言变（真机实测抓到过"英文界面下第 2 步仍是中文"）。
    * 正文三段（`s2Body`）仍引用 `privacyLines()` 的原句 —— 那是**隐私承诺**，只有一个家。 */
   const step2 = el('section', 'onboarding-step');
@@ -244,7 +257,20 @@ export function onboardingOverlayElement(
   const s2ConsentTitle = el('h2', 'onboarding-consent-title', consentText('title'));
   const s2Body = el('div', 'onboarding-consent-body');
   for (const line of privacyLinesOf()) s2Body.appendChild(el('p', 'onboarding-consent-line', line));
-  const s2DenyHint = el('p', 'onboarding-hint', consentText('hint'));
+  /**
+   * ★ 2026-10-02（线上真机验收 **D2**）：第 2 步的**指引**与"不用之后的后果"是**两句不同的话**。
+   *
+   * 第一版只有一条 `onboarding-hint`，内容用的是旧授权弹窗那句 `CONSENT_DENY_HINT`
+   * （"你随时可以…改变这个选择"）⇒ 用户口径要的两件事（**改昵称**、**清除本机数据**）都没说到。
+   * 现在分成两条，各有自己的 `data-role` 与位置：
+   *  - `s2LocalHint`（`data-role='local-hint'`，紧跟昵称那一行）：用户口径那句"以后能改昵称 / 能清数据"；
+   *  - `s2DenyNote`（`data-role='deny-note'`，靠近两个按钮）：旧弹窗那句如实保留
+   *    （与 `CONSENT_COPY.denyHint` 逐字一致，有腿钉住）。
+   */
+  const s2LocalHint = el('p', 'onboarding-hint', consentText('local-hint'));
+  s2LocalHint.dataset.role = 'local-hint';
+  const s2DenyNote = el('p', 'onboarding-hint', consentText('deny-note'));
+  s2DenyNote.dataset.role = 'deny-note';
 
   const s2Nick = el('div', 'onboarding-nick');
   const s2NickLabel = el('span', 'onboarding-label');
@@ -254,6 +280,8 @@ export function onboardingOverlayElement(
   nickInput.dataset.role = 'nick-input';
   s2Nick.appendChild(s2NickLabel);
   s2Nick.appendChild(nickInput);
+  // 指引紧跟在昵称那一行后面（它说的正是"这个昵称以后在哪改"）
+  s2Nick.appendChild(s2LocalHint);
 
   const s2Actions = el('div', 'onboarding-actions');
   const grantBtn = button('btn onboarding-grant', consentText('grant'), () => {
@@ -290,8 +318,8 @@ export function onboardingOverlayElement(
 
   step2.appendChild(s2ConsentTitle);
   step2.appendChild(s2Body);
-  step2.appendChild(s2DenyHint);
-  step2.appendChild(s2Nick);
+  step2.appendChild(s2Nick);       // 昵称那一行里紧跟着"以后能改昵称 / 能清数据"的指引
+  step2.appendChild(s2DenyNote);   // 旧弹窗那句"不用之后"的后果 + 出路（逐字保留）
   step2.appendChild(s2Actions);
   step2.appendChild(privacyLink);
   step2.appendChild(privacyDetail);
@@ -363,11 +391,12 @@ export function onboardingOverlayElement(
     s2NickLabel.textContent = t('onboarding.nick.label');
     nickInput.placeholder = t('onboarding.nick.placeholder');
 
-    // ★ 授权那一组（P1 第二次修法）：五条**界面文字**都要跟着语言重写 ——
+    // ★ 授权那一组（P1 第二次修法）：**每一条**界面文字都要跟着语言重写 ——
     //   第一版它们引用 `CONSENT_COPY`（整份中文），真机实测"第 1 步选 English → 第 2 步仍是中文"。
     //   正文三段的**内容**来自 `privacyLines()`（与语言无关的冻结中文），这里不重写它们。
     s2ConsentTitle.textContent = consentText('title');
-    s2DenyHint.textContent = consentText('hint');
+    s2LocalHint.textContent = consentText('local-hint');
+    s2DenyNote.textContent = consentText('deny-note');
     grantBtn.textContent = consentText('grant');
     denyBtn.textContent = consentText('deny');
     privacyLink.textContent = consentText('privacy');
