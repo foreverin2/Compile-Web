@@ -30,9 +30,10 @@ import type { GameState, Line, PlayerId } from '../core/models/types';
 import { renderApp, resetUiState, setDraftSelfSeat, type UiCallbacks } from './render';
 import { TUT_LEVELS, levelAt, levelById, levelIndex, TUT_SPOTS, type TutLevel } from '../tutorial/levels';
 import { buildLevelState } from '../tutorial/setup';
-import { isLevelComplete, offTrackKeyFor, observedOps, snapshot, type TutSnap } from '../tutorial/judge';
+import { isLevelComplete, offTrackKeyFor, observedOps, revealSeen, snapshot, type TutSnap } from '../tutorial/judge';
 import { advance, readProgress, restart } from '../tutorial/progress';
-import type { TutLevelId, TutOp, TutSpot } from '../tutorial/types';
+import type { TutChoiceSeen, TutLevelId, TutOp, TutSpot, TutUiSeen } from '../tutorial/types';
+import { TUT_UI_NONE } from '../tutorial/types';
 import { onLangChange, t } from '../i18n';
 
 /** 退出教程（回首页）；由宿主注入 —— 屏自己不认识首页 */
@@ -90,6 +91,93 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
   let opsSeen: TutOp[] = [];
   /** T0 点过的热点 */
   const spotsDone = new Set<TutSpot>();
+  /**
+   * ★ 2026-10-02（用户追加两课）：**屏上观察到的**事实（详情放大视图那一路）。
+   *
+   * T1（卡牌详情）与 T6（反面牌可视规则）教的是**界面行为**：引擎状态一模一样，
+   * 所以判据只能看"玩家打开了什么"。观察点是 `render.ts` 造的真元素：
+   *  - `.zoom-overlay` 出现一次 = 打开过一次详情；
+   *  - 里面有 `.zoom-peek-btn` = 这张反面牌**能看**（`render.ts:418` 的 peek 实参为真）；
+   *  - 里面没有那个按钮、且大图是卡背（`Cardback`）= 这张反面牌**不能看**。
+   */
+  let uiSeen: TutUiSeen = TUT_UI_NONE;
+
+  /** 观察到一次"详情被打开"（由下面的 MutationObserver 调用） */
+  function noteZoomOpened(): void {
+    const btn = document.querySelector('.zoom-peek-btn');
+    const img = document.querySelector('.zoom-img');
+    const src = img ? String((img as HTMLImageElement).src) : '';
+    const hasPeek = btn !== null;
+    const showsBack = src.includes('Cardback');
+    uiSeen = {
+      ...uiSeen,
+      detailsOpened: uiSeen.detailsOpened + 1,
+      // 有「查看正面」按钮 ⇒ 这张反面牌能看（正面卡本来就没有这个按钮，所以不置）
+      peekAvailable: uiSeen.peekAvailable || hasPeek,
+      // 没有按钮**且**大图是卡背 ⇒ 这一次就是"不能看的反面牌"那个对照
+      peekBlocked: uiSeen.peekBlocked || (!hasPeek && showsBack),
+    };
+    // 打开详情不算引擎动作，所以这里也要判一次（否则 T1/T6 永远不会过关）
+    judgeAndAdvance();
+  }
+
+  /**
+   * ★ 2026-10-02（P6 任务 A.1）：把当前挂着的 `select` 请求的**候选集合**记一笔。
+   *
+   * T7（默认目标规则）教的不是"状态变成了什么"，而是"引擎把哪些牌列成了候选"
+   * —— 默认档只列双方场上未被覆盖的顶卡（`listCandidates`，`context.ts:64`），
+   * 文本明写「被覆盖的牌」时才走 `covered: true` 那一支（`:86`）。
+   * 候选集合只存在于 `PendingEffect.prompt` 上（`ChoiceRequest.candidates`），
+   * 所以屏在每次动作之后扫一遍挂起的效果，把 `sourceDefId + 候选 uid` 记下来。
+   *
+   * ⚠️ 去重按"效果源 + 候选集合"两样一起比：同一次选择被扫到两次不会记两条，
+   * 而同一个效果源在不同局面下弹出**不同**的候选集合时会各记一条（那正是要分辨的）。
+   */
+  function recordChoices(): void {
+    const seen: TutChoiceSeen[] = [...(uiSeen.choices ?? [])];
+    for (const pe of state.pendingEffects) {
+      const prompt = pe.prompt;
+      if (prompt === null || prompt.kind !== 'select') continue;
+      const uids = prompt.candidates.map((c) => c.uid);
+      const dup = seen.some((c) => c.source === pe.sourceDefId && c.uids.join(',') === uids.join(','));
+      if (!dup) seen.push({ source: pe.sourceDefId, uids });
+    }
+    uiSeen = { ...uiSeen, choices: seen };
+  }
+
+  /**
+   * ★ 2026-10-02（P6 任务 A.1）：玩家点了**不在候选里、被压暗**的那张牌。
+   *
+   * 红线上那一层（`render.ts:5415-5417`）给非候选卡加 `.choice-dim` 且**不绑任何点击**
+   * —— 点下去什么都不会发生，所以"试着点被盖住的牌"这一下只有教学屏自己盯得住。
+   * 捕获阶段挂在 `document` 上（棋盘在 `#app` 里，不在本屏的浮层里），
+   * 命中就记一笔并把提示区换成那句解释。**不改红线**：只是读了一个既有类名。
+   */
+  function onDocClickCapture(ev: Event): void {
+    const target = ev.target;
+    if (!(target instanceof Element)) return;
+    if (target.closest('.card.choice-dim') === null) return;
+    if (uiSeen.blockedPickTried === true) return;
+    uiSeen = { ...uiSeen, blockedPickTried: true };
+    renderPanel();
+  }
+  document.addEventListener('click', onDocClickCapture, true);
+
+  /**
+   * 盯着 `document.body` 的新增子节点：`.zoom-overlay` 一出现就记一笔。
+   *
+   * ⚠️ 用 MutationObserver 而不是给卡牌绑 dblclick：放大查看有**多条入口**
+   * （场上卡 `render.ts:417`、手牌 `:1979`、对手手牌 `:1990`、协议卡 `:202`、弃牌堆 `:5820`…），
+   * 只盯结果（遮罩出现了）才不会漏。这也是本仓处理 body 级浮层的既有做法。
+   */
+  const zoomWatcher = new MutationObserver((records) => {
+    for (const rec of records) {
+      for (const node of Array.from(rec.addedNodes)) {
+        if (node instanceof HTMLElement && node.classList.contains('zoom-overlay')) { noteZoomOpened(); return; }
+      }
+    }
+  });
+  zoomWatcher.observe(document.body, { childList: true });
   /** 讲解逐句进度（数字 = 已看过几句；到 `teachKeys.length` 就不再显示讲解块） */
   let teachAt = 0;
   /** 本关是否已判定通过（通过之后不再重复提示） */
@@ -127,6 +215,38 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
   teachBox.appendChild(teachLine);
   teachBox.appendChild(teachNext);
   panel.appendChild(teachBox);
+
+  /**
+   * ★ 2026-10-02（P6，用户 2026-10-01 追加的硬要求）：**四件套的三段**。
+   *
+   * 用户原话：「我希望**所有的教程中都要有我举的这种以实战场举例子并引导玩家的教学方式**」
+   * ⇒ 每一关都要有 **实战例子 → 引导步骤 → 观察点**，且判据依赖玩家真的动手做过一次。
+   * 三段的数据住在 `TutLevel`（`scenario` / `guidedSteps` / `observe`），这里只负责显示；
+   * 缺一段的关卡由 `tests/tutorial/levels.test.ts` 的生成式腿当场判红（不是靠自觉）。
+   *
+   * 为什么放在讲解块**之后**、提示块**之前**：讲解是"为什么"，这三段是"现在做什么"，
+   * 玩家的视线从上往下走正好落到第三段末尾的那句提示上。
+   */
+  const scenarioBox = el('div', 'tutorial-scenario');
+  const scenarioLabel = el('div', 'tutorial-section-label');
+  const scenarioText = el('p', 'tutorial-scenario-text');
+  scenarioBox.appendChild(scenarioLabel);
+  scenarioBox.appendChild(scenarioText);
+  panel.appendChild(scenarioBox);
+
+  const stepsBox = el('div', 'tutorial-steps');
+  const stepsLabel = el('div', 'tutorial-section-label');
+  const stepsList = el('ol', 'tutorial-steps-list');
+  stepsBox.appendChild(stepsLabel);
+  stepsBox.appendChild(stepsList);
+  panel.appendChild(stepsBox);
+
+  const observeBox = el('div', 'tutorial-observe');
+  const observeLabel = el('div', 'tutorial-section-label');
+  const observeText = el('p', 'tutorial-observe-text');
+  observeBox.appendChild(observeLabel);
+  observeBox.appendChild(observeText);
+  panel.appendChild(observeBox);
 
   const hintBox = el('p', 'tutorial-hint');
   panel.appendChild(hintBox);
@@ -229,9 +349,50 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
       teachBox.hidden = true;
     }
 
-    // 提示区：T0 还没点完 → 那句"点亮着的框"；已点过的热点 → 该区域的说明
+    // ★ P6 四件套的三段：例子 → 步骤 → 观察点（数据全部来自 TutLevel，这里只填字）
+    scenarioLabel.textContent = t('tutorial.scenario.label');
+    scenarioText.textContent = level.scenario();
+    stepsLabel.textContent = t('tutorial.steps.label');
+    stepsList.textContent = '';
+    for (const stepText of level.guidedSteps) {
+      stepsList.appendChild(el('li', 'tutorial-step-item', stepText()));
+    }
+    observeLabel.textContent = t('tutorial.observe.label');
+    observeText.textContent = level.observe();
+
+    // 提示区：按关卡给"下一步做什么"（T0 的四个热点 / T1 双击看卡 / T6 两个对照 / T7 两档候选 /
+    // T9 两条露出途径）
     if (level.id === 'T0' && spotsDone.size === 0) {
       hintBox.textContent = t('tutorial.spot.hint');
+    }
+    if (level.id === 'T1') {
+      hintBox.textContent = uiSeen.detailsOpened === 0 ? t('tutorial.zoom.hint') : t('tutorial.zoom.opened');
+    }
+    if (level.id === 'T6') {
+      const lines: string[] = [];
+      if (!uiSeen.peekAvailable) lines.push(t('tutorial.peek.yes'));
+      if (!uiSeen.peekBlocked) lines.push(t('tutorial.peek.no'));
+      hintBox.textContent = lines.length > 0 ? lines.join(' ') : t('tutorial.peek.done');
+    }
+    if (level.id === 'T7') {
+      /**
+       * 三档提示，按"玩家已经做到哪一步"给（三档文案各不相同）：
+       *  1. 还没试过点那张被压住的 ⇒ 先按引导步骤去点（`tutorial.T7.hint.try`）；
+       *  2. 点过了、而这次选择**还没结束** ⇒ 给出那句**走偏解释**（`tutorial.choice.blocked`：
+       *     为什么它不在候选里）。这一档正是任务书要的"尝试选被盖住的牌 ⇒ 不在候选里 ⇒ 走偏提示"；
+       *  3. 这次选择结束了 ⇒ 换成"现在用明写「被覆盖」的那张"（`tutorial.T7.hint.pick`）。
+       */
+      const choosing = state.pendingEffects.some((pe) => pe.sourceDefId === 'spirit-2' && pe.prompt !== null);
+      hintBox.textContent = uiSeen.blockedPickTried !== true
+        ? t('tutorial.T7.hint.try')
+        : choosing ? t('tutorial.choice.blocked') : t('tutorial.T7.hint.pick');
+    }
+    if (level.id === 'T9') {
+      // 两条露出途径各有一条读数（`revealSeen()` 读的是日志差分，与判据同一个来源）
+      const seen = revealSeen(state);
+      hintBox.textContent = seen.flipped && seen.revealed
+        ? t('tutorial.T9.hint.both')
+        : seen.flipped ? t('tutorial.T9.hint.reveal') : t('tutorial.T9.hint.flip');
     }
     if (cleared) hintBox.textContent = t('tutorial.cleared');
 
@@ -268,10 +429,10 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
   /**
    * 走偏提示的**取文案口**（键 → 句子）。
    *
-   * ⚠️ 写成 switch（每个 	() 的实参都是**字面量**）而不是 	(key)：
-   * 	() 的实参一旦是变量就是**动态键** —— 缺键扫描器看不见它（等于漏翻的温床），
-   * 而 	ests/i18n/tables.test.ts 与 	ests/tutorial/screen.test.ts 都有腿当场判红。
-   * 本仓既有同款写法：home.ts 的 setLabel / coinFaceName / uleTitleText。
+   * ⚠️ 写成 switch（每个 t() 的实参都是**字面量**）而不是 t(key)：
+   * t() 的实参一旦是变量就是**动态键** —— 缺键扫描器看不见它（等于漏翻的温床），
+   * 而 tests/i18n/tables.test.ts 与 tests/tutorial/screen.test.ts 都有腿当场判红。
+   * 本仓既有同款写法：home.ts 的 setLabel / coinFaceName / ruleTitleText。
    */
   function offTrackText(key: string): string {
     switch (key) {
@@ -397,8 +558,10 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
       for (const op of observedOps(snap, next)) if (!opsSeen.includes(op)) opsSeen.push(op);
     }
     snap = next;
+    // ★ P6：把当前挂着的选择请求的候选集合记一笔（T7 的判据要它）
+    recordChoices();
 
-    const done = isLevelComplete(level, state, { spotsDone: [...spotsDone], opsSeen });
+    const done = isLevelComplete(level, state, { spotsDone: [...spotsDone], opsSeen, ui: uiSeen });
     if (!done) { renderPanel(); paint(); return; }
 
     cleared = true;
@@ -424,6 +587,7 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
     snap = snapshot(state);
     opsSeen = [];
     spotsDone.clear();
+    uiSeen = TUT_UI_NONE;
     teachAt = 0;
     cleared = false;
     hintBox.textContent = currentLevel().id === 'T0' ? t('tutorial.spot.hint') : '';
@@ -440,6 +604,8 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
 
   return {
     close() {
+      zoomWatcher.disconnect();
+      document.removeEventListener('click', onDocClickCapture, true);
       offLang();
       overlay.remove();
       // render.ts 的模块态与 body 级常驻层由它自己的复位口清（本屏不改 render.ts）

@@ -454,7 +454,9 @@ export function writeOnboardingSeen(store: LocalStore, seen: boolean): WriteResu
  * `src/app/**` 是纯层，不许 import UI/教学那一层（那条依赖方向反过来会让纯层跑不起来）。
  * 两份"漂了"的风险由 `tests/tutorial/progress.test.ts` 的一条腿兜住（它同时 import 两边比对）。
  */
-const TUTORIAL_LEVEL_IDS: readonly string[] = ['T0', 'T1', 'T2', 'T3'];
+const TUTORIAL_LEVEL_IDS: readonly string[] = [
+  'T0', 'T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8', 'T9',
+];
 
 /** 教学进度的形状（对外只暴露这个） */
 export interface StoredTutorialProgress {
