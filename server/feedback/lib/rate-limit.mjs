@@ -60,6 +60,8 @@ export class SubmitQuota {
     /** @type {Map<string, Record<string, number>>} 日期键 -> { ip: 已提交份数 } */
     this.cache = new Map();
     this.lastPruneMs = 0;
+    /** 旧的 `files-*.json` 被无视这件事，**每个进程最多在日志里说一次**（见 `readDayFromDisk`） */
+    this.warnedLegacy = false;
     try {
       mkdirSync(this.dir, { recursive: true, mode: 0o700 });
     } catch (e) {
@@ -84,22 +86,41 @@ export class SubmitQuota {
 
   /** 读一整天份的记账（进程启动时调；读坏了**不抛**，只记一条并当作空表） */
   reload(day) {
-    const file = this.fileFor(day);
-    if (!existsSync(file)) {
-      this.cache.set(day, {});
-      return;
-    }
-    try {
-      const parsed = JSON.parse(readFileSync(file, 'utf8'));
-      const table = parsed && typeof parsed === 'object' ? parsed : {};
-      this.cache.set(day, table);
-    } catch (e) {
-      this.cache.set(day, {});
-      this.log('rate-file-unreadable', { file, error: String(e && e.message ? e.message : e) });
-    }
+    this.cache.set(day, this.readDayFromDisk(day));
     try {
       this.prune();
     } catch { /* 清理失败不影响服务 */ }
+  }
+
+  /**
+   * 从盘上读某一天的记账。**读不到 / 读坏了都返回空表且不抛**。
+   *
+   * ★ 2026-10-02 补的一道：从 **冷缓存** 走这条路的语义必须是"盘上没有就是 0"，
+   * 而不是"缓存里没有就当 0"。两者的区别在**跨天**那一瞬间（见 `tableFor` 的注释），
+   * 也在单测里"造一个全新实例（模拟重启）再问额度"这种用法上 —— 后者曾经是红的。
+   */
+  readDayFromDisk(day) {
+    const file = this.fileFor(day);
+    if (!existsSync(file)) {
+      // 旧口径（`files-<日期>.json`）**不读**（单位是"文件个数"，与"份数"不能换算，见文件头注）。
+      // 但要让运维看得见"这儿有个旧文件被无视了"，否则升级当天会有人纳闷额度为什么是满的。
+      if (!this.warnedLegacy && this.legacyFiles().length > 0) {
+        this.warnedLegacy = true;
+        this.log('legacy-rate-file-ignored', {
+          note: 'rate/ 下的 files-*.json 是改口径之前的记账（按附件个数），本次不读；'
+            + '额度只认 submits-*.json。确认不再需要对账可用 rm -f rate/files-*.json 清掉。',
+          legacy: this.legacyFiles(),
+        });
+      }
+      return {};
+    }
+    try {
+      const parsed = JSON.parse(readFileSync(file, 'utf8'));
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (e) {
+      this.log('rate-file-unreadable', { file, error: String(e && e.message ? e.message : e) });
+      return {};
+    }
   }
 
   /** 删掉两天前的记账文件（留着今天的和昨天的，方便对账） */
@@ -128,10 +149,12 @@ export class SubmitQuota {
     }
   }
 
+  /** 取某一天的记账表（内存缓存） */
   tableFor(day) {
     let table = this.cache.get(day);
     if (table === undefined) {
-      table = {};
+      // ★★ 缓存 miss **必须去盘上读一次**，绝不能直接 `{}`（2026-10-02 修，见 `readDayFromDisk` 的注释）
+      table = this.readDayFromDisk(day);
       this.cache.set(day, table);
       // 跨天第一次用到：顺手把旧文件清一清
       try {

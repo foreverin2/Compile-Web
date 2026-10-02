@@ -47,6 +47,17 @@ export interface HomeNav {
    * 本文件只放那个入口按钮，打开的动作交给宿主（它才拿得到存储与文件能力）。
    */
   openCardmaker(): void;
+  /**
+   * ★ 2026-10-01（P1）：**进首页时立刻要说的一句话**（选填）。
+   *
+   * 唯一用途：首启向导第 3 步选「开始教学」的人落到首页时要看到
+   * `toast.tutorial`（"新手教程：待开发"）—— 教学模式是 P2 的事，本轮只给入口占位。
+   *
+   * 为什么不是宿主自己 `showToast` 一下：那个 toast 挂在 `document.body` 上，
+   * 而 `renderHome` 第一句就是 `clearRoot(root)` 重画 —— 宿主先提示再进首页，
+   * 提示会被同一 tick 里的重画闪掉。所以口径是"**交给首页，画完再发**"。
+   */
+  initialToast?: string;
 }
 
 export interface CoinNav {
@@ -505,6 +516,15 @@ export function renderHome(root: HTMLElement, nav: HomeNav): void {
   screen.appendChild(feedbackWrap);
 
   root.appendChild(screen);
+
+  /**
+   * ★ 2026-10-01（P1）：这一屏**画完之后**再发"进首页时要说的一句话"（`nav.initialToast`）。
+   *
+   * 落点必须在 `root.appendChild(screen)` 之后：`showToast` 挂的是 `document.body`，
+   * 而本函数第一句 `clearRoot(root)` 会把 `#app` 清空重画 —— 画完再发才不会被同一 tick 闪掉。
+   * 平时的首页没有这个字段（`undefined`）⇒ 一行也不发。
+   */
+  if (nav.initialToast !== undefined) showToast(nav.initialToast);
 }
 
 /* =====================================================================

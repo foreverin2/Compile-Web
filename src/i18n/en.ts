@@ -150,6 +150,27 @@ export const EN: Readonly<Record<string, string>> = {
   'rules.faq': 'Detailed FAQ',
   'rules.faq.sub': 'Official FAQ collection',
 
+  /* ── ★ 2026-10-01（P1）: first-run onboarding wizard (three steps) ── */
+  'onboarding.title': 'Getting started',
+  'onboarding.aria': 'Getting started',
+  'onboarding.step': 'Step {n} of {total}',
+  'onboarding.lang.label': 'Choose your language',
+  'onboarding.lang.hint': 'You can change the language later under Settings on the home screen.',
+  'onboarding.nick.label': 'Nickname (optional)',
+  'onboarding.nick.placeholder': 'Pick a nickname for yourself',
+  'onboarding.tutorial.question': 'Want to learn how to play first?',
+  /**
+   * Step 2's consent chrome (★ 2026-10-01). The Chinese values are **verbatim** the
+   * corresponding `CONSENT_COPY` fields (pinned by `tests/i18n/onboarding.test.ts`);
+   * the consent **body paragraphs** still come from `privacy.ts` and stay Chinese —
+   * that boundary is documented in the plan doc §7.6 and the manifest's section D.
+   */
+  'onboarding.consent.title': 'Remember your settings on this device?',
+  'onboarding.consent.grant': 'Allow and save on this device',
+  'onboarding.consent.deny': 'No thanks, keep this session only',
+  'onboarding.consent.hint': "You can change this choice any time under Local data and privacy.",
+  'onboarding.consent.privacy': 'Privacy notes',
+
   /* ── Shared generation labels (library chips + rules titles) ── */
   'gen.1.base': 'Gen 1 base',
   'gen.1.extra': 'Gen 1 extra',

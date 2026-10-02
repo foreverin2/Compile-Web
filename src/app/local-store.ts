@@ -181,6 +181,19 @@ export interface L1Settings {
    * 可选：老的存储里没有这个字段 ⇒ 用各项的默认值。
    */
   fx?: Record<string, boolean>;
+  /**
+   * ★ 2026-10-01（P1）：**首启向导走完了吗**（"只出现一次"的标记）。
+   *
+   * 与 `nick` / `lang` / `fx` 同住一份设置、同一套授权门控、同一次「清除本机数据」
+   * （**不新增存储键**）。清除本机数据之后这个字段一起没 ⇒ **向导重新出现一次**（这正是想要的）。
+   *
+   * ⚠️ **游客模式下它写不进磁盘**（`kv()` 是内存 KV）⇒"只出现一次"在游客模式里**不成立**：
+   * 刷新之后向导会再出现。这是**如实的**行为，不是缺陷 —— 用户没同意保存，本机就不该记住任何东西。
+   * 文档与屏上的措辞都不许假装它是"永久只出现一次"。
+   *
+   * 可选：老的存储里没有这个字段 ⇒ 当作"还没走过"。
+   */
+  onboardingSeen?: boolean;
 }
 
 /**
@@ -392,6 +405,31 @@ export function readFxSettings(store: LocalStore): Record<string, boolean> {
 export function writeFxSettings(store: LocalStore, patch: Record<string, boolean>): WriteResult {
   const prev = readFxSettings(store);
   return writeSettings(store, { fx: { ...prev, ...patch } });
+}
+
+/**
+ * ★ 2026-10-01（P1）：**首启向导走完了吗**（"只出现一次"的标记）。
+ *
+ * 形状守卫与 `readNickName` 同款：**只认 `true`**（`typeof !== 'boolean'` 一律 `false`）。
+ * 于是"存储被外部手改 / 别的程序写了同键"永远退化成"还没走过" ⇒ 向导**再出现一次**，
+ * 而不是"被垃圾值锁住再也看不到"。方向是**安全**的那一边（多问一次 vs 永远不问）。
+ *
+ * ⚠️ 读不出来（键不存在 / 坏 JSON / `kv.get` 抛）⇒ `false`（与"没走过"同义），不抛。
+ */
+export function readOnboardingSeen(store: LocalStore): boolean {
+  return readSettings(store).onboardingSeen === true;
+}
+
+/**
+ * ★ 2026-10-01（P1）：写下"向导走完了"这个标记。
+ *
+ * 与昵称/语言/开关**同一条路**（同一份设置、同一套授权门控）：游客模式下它写的是内存 KV
+ * ⇒ 本次会话有效、刷新即丢、磁盘零写入（红线 3）—— 这正是"游客模式下向导刷新后会再出现"的机制。
+ *
+ * 返回值与 `writeLang` 同一套 `WriteResult`（成功 / `too-large` / `write-failed` + 真因）。
+ */
+export function writeOnboardingSeen(store: LocalStore, seen: boolean): WriteResult {
+  return writeSettings(store, { onboardingSeen: seen });
 }
 
 function isDeckRecord(v: unknown): v is DeckRecord {

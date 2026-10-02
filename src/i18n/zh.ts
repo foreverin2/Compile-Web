@@ -168,6 +168,37 @@ export const ZH: Readonly<Record<string, string>> = {
   'rules.faq': '游戏详细FAQ说明书',
   'rules.faq.sub': '官方 FAQ 汇总',
 
+  /* ── ★ 2026-10-01（P1）：**新玩家首启向导**（三步）── */
+  'onboarding.title': '首次使用引导',
+  'onboarding.aria': '首次使用引导',
+  // 第 N 步 / 共 3 步
+  'onboarding.step': '第 {n} 步 / 共 {total} 步',
+  'onboarding.lang.label': '选择界面语言',
+  // 第 1 步之后的那句指引（用户口径：之后可在「首页 → 设置」更改）
+  'onboarding.lang.hint': '之后可以在首页的「设置」里更改语言。',
+  'onboarding.nick.label': '昵称（可留空）',
+  'onboarding.nick.placeholder': '给自己起个昵称',
+  // 第 3 步（教学入口本轮到不了：宿主给"待开发"提示）
+  'onboarding.tutorial.question': '要不要先学着怎么玩？',
+  /**
+   * 第 2 步的**授权那一组**（★ 2026-10-01，P1 的第二次修法）。
+   *
+   * 用户要求"UI 全量双语 + 新玩家只被问一次"，而第一版向导第 2 步直接引用了
+   * `CONSENT_COPY`（`src/ui/local-consent.ts`，整份中文）⇒ 真机实测：第 1 步选了 English，
+   * 第 2 步的标题与两个按钮**仍是中文**（半张屏两种语言，正是用户抱怨的那一类观感）。
+   *
+   * ⇒ 授权那一组的**界面文字**改成走这里（中文值**逐字等于** `CONSENT_COPY` 的对应字段，
+   * 由 `tests/i18n/onboarding.test.ts` 的一条腿钉住不许漂）；
+   * ⚠️ **正文三段仍然引用** `privacy.ts` 的 `privacyLines()` 原句（那种"隐私承诺句只有一个家"
+   * 的纪律不许在这里破）⇒ 英文界面下那段正文仍是中文，这是**如实登记的边界**，
+   * 不是漏了（见方案 §7.6 与清单文档 D 节）。
+   */
+  'onboarding.consent.title': '要不要在这台设备上记住你的设置？',
+  'onboarding.consent.grant': '允许，保存在这台设备',
+  'onboarding.consent.deny': '不用，本次不保存',
+  'onboarding.consent.hint': '你随时可以在主界面的「本地数据与隐私」里改变这个选择。',
+  'onboarding.consent.privacy': '隐私说明',
+
   /* ── 共用的世代标签（图鉴筛选 chip 与规则页的标题都用它） ── */
   'gen.1.base': '1代 基础',
   'gen.1.extra': '1代 拓展',

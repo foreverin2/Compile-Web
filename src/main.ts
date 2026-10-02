@@ -48,20 +48,39 @@ import type { CoinNetView } from './ui/home';
 // ★ T11-B：硬币屏要的"面"（屏上口径 `1 | 2`）
 import type { CoinSide } from './app/coin';
 // G3 Task 4：L1 授权状态机（纯层）+ 其浏览器后端 + 授权弹窗屏
-import { createLocalStore, readFxSettings, readLang, readNickName, writeFxSettings, writeLang } from './app/local-store';
+// ★ 2026-10-01（P1）：首启向导的"只出现一次"标记就存在**同一个** `L1_SETTINGS` 里
+//   （`onboardingSeen`，没有新存储键）；"清除本机数据"把它一并清掉 ⇒ 向导会再出现。
+import { createLocalStore, readFxSettings, readLang, readNickName, readOnboardingSeen, writeFxSettings, writeLang, writeNickName, writeOnboardingSeen } from './app/local-store';
 // ★ 2026-10-01（用户要求"设置里的选项也要持久化"）：特效开关的内存态由这个模块持有，本文件只负责启动读回。
 import { applyFxSettings } from './ui/fx-settings';
 // ★ 2026-10-01（P0，用户拍板"UI 全量双语"）：i18n 基建。语言的**值**与文案表在 `src/i18n/`；
 //   本文件只做两件事：① 启动时 `initI18n(readLang(localStore))` 读一次已存的语言（**只读**）；
 //   ② `applyLangChange()` 在用户切语言时落盘 + 重画当前屏。方案见
 //   `docs/2026-10-01-新手引导与教学-方案.md` 的 §6.5 与 §7 的 P0 行。
-import { getLang, initI18n, setLang, type Lang } from './i18n';
+import { getLang, initI18n, setLang, t, type Lang } from './i18n';
 import { openL1Store } from './ui/local-store-browser';
 import { renderLocalConsent, nextConsentStep } from './ui/local-consent';
+/**
+ * ★ 2026-10-01（P1，用户口径）：**新玩家首启向导**（三步：选语言 → 同意保存 + 取名字 →
+ * 是否开始教学）。屏在 `src/ui/onboarding.ts`（只造元素），本文件负责挂载 + 落盘 + 收尾。
+ *
+ * 与旧授权弹窗的关系：向导**把弹窗并进去了**（第 2 步就是那个授权问题），
+ * 于是新玩家只被问一次。`renderLocalConsent` 那条路只在"向导走过了、授权却还是 unknown"
+ * （中途关标签页 / 标记被清掉）时才走，不会再出现"弹窗 + 向导"两连问。
+ */
+import { onboardingOverlayElement, type OnboardingOutcome } from './ui/onboarding';
 import { installHotseatExit } from './ui/hotseat-exit';
 import { installLogToggle } from './ui/log-toggle';
 // G3 Task 7：「本地数据与隐私」屏 + 档案的选择/落盘口（浏览器实现只在 `showLocalData` 里注入）
 import { renderLocalData } from './ui/local-data';
+/**
+ * ★ 2026-10-01（P1）：首启向导第 2 步的**三段授权正文** —— 逐字取自 `privacy.ts`
+ * 的三个导出常量（顺序 = 旧授权弹窗 `CONSENT_COPY.body` 的同一条）。
+ *
+ * ⚠️ 本 import 让 `src/main.ts` 成为 `privacy.ts` 的**第三个消费方**（生成式发现，
+ * 见 `tests/ui/privacy-consumers.test.ts`）：本文件的代码位里因此不许手写任何隐私承诺句。
+ */
+import { CONSENT_ALLOW_NOTE, CONSENT_DENY_NOTE, PRIVACY_COPY } from './app/privacy';
 // ★ 2026-10-01（用户要求）：**卡牌制作器**（「自定义协议与卡牌」屏）的接线。
 //   屏与它的全部逻辑在 `src/ui/cardmaker/`（移植自开源项目 COMPILER · Card Builder，
 //   作者 Albert Blanco，MIT 许可）；本文件只做两件事：
@@ -4998,10 +5017,62 @@ function consentStep(action: 'show' | 'grant' | 'deny' | 'reset'): void {
 }
 
 /**
- * 启动门（**全应用最外层的分支**）：没表过态就先问；表过态（allowed/denied）直接进主页。
- * 红线 3：本函数在 `showHome()` 之前**不调用任何** writeNickName / writeDecks —— 同意前零写入。
+ * ★ 2026-10-01（P1，用户口径）：**新玩家首启向导**的三步落盘与收尾。
+ *
+ * 三步（`src/ui/onboarding.ts`）：选语言 → 同意保存 + 取名字 → 是否开始教学。
+ * 本函数是**宿主那一半**（屏自己不碰存储）：
+ *
+ *  1. **第 2 步的语言一起落盘**（`outcome.lang`）：第 1 步选语言时还没同意保存 ⇒ 那一刻只
+ *     `setLang` 了内存态；到这里才真正写盘。**不写就会"选英文 → 同意保存 → 刷新回中文"**
+ *     （这是 P1 必须补的边角，有一条专门的腿）。
+ *  2. **昵称**：留空就**不写**（缺省显示名由别处给，写空串会把已有昵称抹掉）。
+ *  3. **"只出现一次"的标记**：`writeOnboardingSeen`。游客模式（deny）下它写的是内存 KV
+ *     ⇒ 刷新即丢、**向导会再出现**（如实的边界，不是缺陷）。
+ *  4. 去首页。第 3 步选「开始教学」时只是**提示待开发**：教学模式是 P2 的事，
+ *     本文件不实现它，首页那个「新手教程」按钮仍然指向"待开发"。
+ */
+function finishOnboarding(outcome: OnboardingOutcome): void {
+  // ① 语言：现在是"已经同意保存"之后了 ⇒ 可以写盘（游客模式下它自己会退化成内存）
+  try {
+    applyWriteResult(writeLang(localStore, outcome.lang));
+  } catch { /* 写不进去不影响向导走完（语言的内存态已经生效） */ }
+  // ② 昵称：留空不写（别把已有昵称抹成空串）
+  if (outcome.nick.trim() !== '') {
+    try {
+      writeNickName(localStore, outcome.nick);
+    } catch { /* 同上：写失败只是"本次会话有效" */ }
+  }
+  // ③ "只出现一次"的标记（游客模式下只进内存 ⇒ 刷新后会再出现，见函数头注）
+  try {
+    applyWriteResult(writeOnboardingSeen(localStore, true));
+  } catch { /* 同上 */ }
+  // ④ 去首页。选「开始教学」的人本轮到不了教学模式 ⇒ 给一句"待开发"，入口仍走首页那个按钮。
+  //    ⚠️ 这句话必须**交给首页在画完之后发**（`showHome(initialToast)`）：本函数后面紧接着
+  //      `showHome()` 会 `clearRoot` 重画，先提示会被同一 tick 闪掉。文案与首页那个
+  //      「新手教程」按钮**逐字同一句**（`toast.tutorial`），不另造。
+  showHome(outcome.startTutorial ? t('toast.tutorial') : undefined);
+}
+
+/**
+ * 启动门（**全应用最外层的分支**）。
+ *
+ * ★ 2026-10-01（P1）改成分两级：
+ *  1. **首启向导**（三步）—— 只在"还没走过"时出现（标记 = `L1_SETTINGS.onboardingSeen`）；
+ *  2. 走完向导之后就落到**同一个授权状态机**上：向导第 2 步点「允许」⇒ `allowed` ⇒ 直接进首页；
+ *     点「不用」⇒ `denied`（游客模式）⇒ 也进首页。
+ *
+ * 为什么要留下面那条旧分支（`renderLocalConsent`）：**向导中途关掉标签页**的人、
+ * 以及"标记被清掉但授权还在"的人，仍需要一个能问的地方 —— 但那条路只在
+ * `consent === 'unknown'` **并且向导已经走过**时才走（否则就成了"弹窗 + 向导"两连问，
+ * 那正是用户要消掉的东西）。
+ *
+ * 红线 3：本函数在 `showHome()` 之前**只**做向导那一套（它的写盘全在"用户点了允许/走完"之后）。
  */
 function showStartScreen(): void {
+  if (localStore.consent() === 'unknown' && !readOnboardingSeen(localStore)) {
+    showOnboarding();
+    return;
+  }
   if (localStore.consent() === 'unknown') {
     consentStep('show');
     renderLocalConsent(root, {
@@ -5017,6 +5088,46 @@ function showStartScreen(): void {
     return;
   }
   showHome();
+}
+
+/**
+ * 首启向导第 2 步要显示的三段**授权正文**。
+ *
+ * ⚠️ **必须逐字取自 `privacy.ts`**（那三个导出常量），不是自己拼的句子 ——
+ * "隐私承诺句只有一个家"那条纪律（`tests/ui/privacy-consumers.test.ts` 生成式盯着）在这里同样成立：
+ * 本文件只是把**已有的三句**按旧授权弹窗（`src/ui/local-consent.ts` 的 `CONSENT_COPY.body`）
+ * **同一个顺序**挑出来而已。
+ *
+ * ⚠️ 为什么不是 `privacyLines()`（那一份会多出十几句）：它是「本地数据与隐私」**整屏**用的全文，
+ * 不是授权弹窗那三段。第一版这里传了 `privacyLines()`，真机实测向导第 2 步把整份隐私说明
+ * 都铺了出来（与旧弹窗的形态不一致）—— 这段注释就是用来挡住那个回归的。
+ * 判据在 `tests/i18n/onboarding.test.ts`：正文**恰好三段**，且逐句都在 `privacyLines()` 里。
+ */
+function consentBodyLines(): readonly string[] {
+  return [CONSENT_ALLOW_NOTE, PRIVACY_COPY.noServerStorage[0], CONSENT_DENY_NOTE];
+}
+
+/**
+ * 把首启向导挂到 `document.body`（**整屏遮罩**，走完/关掉时移除）。
+ *
+ * 与 `openSettings` 的分工同款：屏只**造**元素（`onboardingOverlayElement`），
+ * 挂载与收尾在宿主这一侧。向导**没有** Esc / 点遮罩关闭 —— 它是必须走完的一步
+ * （关掉它的唯一办法是关标签页或刷新，那种情况下标记没写 ⇒ 下次还会出现）。
+ */
+function showOnboarding(): void {
+  document.querySelector('.onboarding-overlay')?.remove(); // 幂等：连点两次不留第二层
+  consentStep('show'); // 授权状态机进 `ask`（屏上还没问，只是"等用户点"）
+  const close = (): void => {
+    overlay?.remove();
+    overlay = null;
+  };
+  let overlay: HTMLElement | null = onboardingOverlayElement({
+    onGrant: () => { consentStep('grant'); },
+    onDeny: () => { consentStep('deny'); },
+    openPrivacy: () => { /* 换页接缝：说明已就地展开（同 local-consent） */ },
+    onFinish: (outcome) => { close(); finishOnboarding(outcome); },
+  }, () => consentBodyLines());
+  document.body.appendChild(overlay);
 }
 
 /**
@@ -5050,12 +5161,18 @@ function leaveHome(): void {
   closeHiddenView();
 }
 
-function showHome(): void {
+function showHome(initialToast?: string): void {
   // ★ 2026-10-01（用户要求）：进首页时挂上 `Ctrl+Shift+O`（隐藏页入口）。
   //   幂等（`initFeedbackShortcut` 会先撤掉上一次那个）⇒ 反复进首页不会叠监听器；
   //   返回的卸载函数留在 `homeFeedbackShortcutOff`，由上面那个 `leaveHome()` 收尾。
   homeFeedbackShortcutOff = initFeedbackShortcut({ fetcher: browserFeedbackFetcher });
   renderHome(root, {
+    /**
+     * ★ 2026-10-01（P1）：向导第 3 步选「开始教学」的人，落到首页要说一句
+     * `toast.tutorial`（"新手教程：待开发"）—— 与首页那个「新手教程」按钮**逐字同一句**。
+     * 提示交给首页在画完之后发（见 `HomeNav.initialToast`）；平时这里是 `undefined`。
+     */
+    initialToast,
     startGame: () => { leaveHome(); showModeSelect(); },
     openLibrary: () => { leaveHome(); renderLibrary(root, showHome); },
     openRules: () => { leaveHome(); renderRules(root, showHome); },

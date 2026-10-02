@@ -260,10 +260,24 @@ describe('投稿字段校验（契约口径）', () => {
 });
 
 describe('按 IP 每天的提交份数额度（2026-10-01 改口径）', () => {
+  /**
+   * ★ 日期夹具必须**锚在真今天**，不能写死某一天。
+   *
+   * 原因（2026-10-02 查出来的那 2 条红）：`SubmitQuota.prune()` 会把**早于昨天**的
+   * `submits-*.json` 删掉（这是产线要的行为：额度文件按天分，隔两天就该清）。
+   * 而这一组用例原先写死 `new Date(2026, 9, 1, …)`；到了 2026-10-02 再跑，
+   * 那个日期已经"早于昨天" ⇒ 新造的实例在构造函数里顺手把刚写下的文件当过期清理了，
+   * 于是 `check()` 读到 0。夹具的锅，不是产的锅（详见下面每条用例的注释）。
+   */
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  /** 真今天（跟着系统时钟走，不写死） */
+  const TODAY = Date.now();
+  const YESTERDAY = TODAY - DAY_MS;
+
   it('额度用满就拒，过了零点再算', () => {
     const dir = tempDir();
     const q = new rateLimit.SubmitQuota({ dir, perDay: 5 });
-    const t0 = new Date(2026, 9, 1, 10, 0, 0).getTime();
+    const t0 = TODAY;
     expect(q.check('1.2.3.4', t0).allowed).toBe(true);
     for (let i = 0; i < 5; i += 1) q.record('1.2.3.4', t0);   // 连交 5 份
     const denied = q.check('1.2.3.4', t0);                    // 第 6 次
@@ -276,15 +290,16 @@ describe('按 IP 每天的提交份数额度（2026-10-01 改口径）', () => {
     // 换个 IP 不受影响
     expect(q.check('5.6.7.8', t0).allowed).toBe(true);
     // 第二天重新有额度
-    const t1 = new Date(2026, 9, 2, 0, 30, 0).getTime();
+    const t1 = t0 + DAY_MS;
     expect(q.check('1.2.3.4', t1).allowed).toBe(true);
-    expect(rateLimit.dayKey(t1)).toBe('2026-10-02');
+    expect(rateLimit.dayKey(t1)).toBe(rateLimit.dayKey(t0 + DAY_MS));
+    expect(rateLimit.dayKey(t1)).not.toBe(rateLimit.dayKey(t0));
   });
 
   it('额度按**份**记：record 一次只加 1（不管那次带几个附件）', () => {
     const dir = tempDir();
     const q = new rateLimit.SubmitQuota({ dir, perDay: 5 });
-    const t0 = new Date(2026, 9, 1, 10, 0, 0).getTime();
+    const t0 = TODAY;
     expect(q.record('7.7.7.7', t0)).toBe(1);
     expect(q.record('7.7.7.7', t0)).toBe(2);
     expect(q.check('7.7.7.7', t0).used).toBe(2);
@@ -292,7 +307,7 @@ describe('按 IP 每天的提交份数额度（2026-10-01 改口径）', () => {
 
   it('重启后从磁盘恢复今天的计数（额度不是内存里的）', () => {
     const dir = tempDir();
-    const t0 = new Date(2026, 9, 1, 10, 0, 0).getTime();
+    const t0 = TODAY;
     const a = new rateLimit.SubmitQuota({ dir, perDay: 5 });
     a.record('9.9.9.9', t0);
     a.record('9.9.9.9', t0);
@@ -305,6 +320,73 @@ describe('按 IP 每天的提交份数额度（2026-10-01 改口径）', () => {
     b.record('9.9.9.9', t0);
     // 第 6 次
     expect(b.check('9.9.9.9', t0).allowed).toBe(false);
+  });
+
+  /**
+   * ★ 冷缓存必须读盘（旧实现"缓存 miss ⇒ 当空表"在这条上必红）。
+   *
+   * 为什么换成"昨天"：新建实例的构造函数只把**今天**装进缓存，而 `prune()` 会删掉
+   * 早于昨天的文件。用"昨天"正好落在两个条件之间 —— 文件不会被清掉，
+   * 而缓存里又没有这个日期键 ⇒ 必须靠 `readDayFromDisk` 才能读到。
+   *
+   * 反向验证（改完实测过，见交付回报）：
+   *   - 把 `tableFor` 里的 `readDayFromDisk(day)` 换回 `{}` ⇒ 本用例红（expected 4 / received 0）；
+   *   - 单独一条用例做不到"反向变红"的话，它就是白写的。
+   */
+  it('冷缓存也要读盘：盘上摆一份昨天的计数，新实例问昨天必须读回来', () => {
+    const dir = tempDir();
+    const t0 = YESTERDAY;
+    const day = rateLimit.dayKey(t0);
+    // 直接摆盘，不经过任何实例的 record()
+    writeFileSync(join(dir, `submits-${day}.json`), JSON.stringify({ '4.4.4.4': 4 }));
+    const cold = new rateLimit.SubmitQuota({ dir, perDay: 5 });
+    // 构造函数只装了今天 ⇒ 昨天那个键并不在缓存里（这条支路就是"冷缓存"）
+    expect([...cold.cache.keys()]).not.toContain(day);
+    const v = cold.check('4.4.4.4', t0);
+    expect(v.used).toBe(4);
+    expect(v.allowed).toBe(true);      // 还剩 1 份
+    cold.record('4.4.4.4', t0);
+    expect(cold.check('4.4.4.4', t0).allowed).toBe(false);   // 第 6 次
+  });
+
+  it('跨天那一刻不会白送额度：构造时是前一天、请求已经跨到第二天', () => {
+    const dir = tempDir();
+    // A = 真今天、B = 明天（都落在 prune 的保留窗口里，不会被清理）
+    const dayA = TODAY;
+    const dayB = TODAY + DAY_MS;
+    // A 日交了 5 份，落到盘上
+    const a = new rateLimit.SubmitQuota({ dir, perDay: 5 });
+    for (let i = 0; i < 5; i += 1) a.record('6.6.6.6', dayA);
+    expect(a.check('6.6.6.6', dayA).allowed).toBe(false);
+    // 同一个实例（进程没重启）处理已经跨到 B 日的请求：B 日从来没记过 ⇒ 应当放行
+    //   这一条同时钉住"按天分文件"这件事：A 日的 5 份不该被算进 B 日
+    expect(a.check('6.6.6.6', dayB).allowed).toBe(true);
+    expect(a.check('6.6.6.6', dayB).used).toBe(0);
+    // 而 A 日仍然是满的（读的是 A 日的盘）
+    expect(a.check('6.6.6.6', dayA).used).toBe(5);
+  });
+
+  it('旧的 files-*.json 被无视这件事会记一条日志（不静默），每个进程最多一条', () => {
+    const dir = tempDir();
+    const t0 = TODAY;
+    const day = rateLimit.dayKey(t0);
+    writeFileSync(join(dir, `files-${day}.json`), JSON.stringify({ '5.5.5.5': 9 }));
+    const lines: Array<Record<string, unknown>> = [];
+    const q = new rateLimit.SubmitQuota({
+      dir,
+      perDay: 5,
+      log: (msg: string, extra?: Record<string, unknown>) => lines.push({ msg, ...extra }),
+    });
+    q.check('5.5.5.5', t0);
+    q.check('5.5.5.5', t0);
+    q.check('5.5.5.5', t0);
+    const hits = lines.filter((l) => l.msg === 'legacy-rate-file-ignored');
+    expect(hits.length).toBe(1);
+    expect(String(hits[0].note)).toContain('files-*.json');
+    // 而且额度没有被旧文件的 9 影响
+    expect(q.check('5.5.5.5', t0).used).toBe(0);
+    // 旧文件一个字节没动
+    expect(existsSync(join(dir, `files-${day}.json`))).toBe(true);
   });
 
   it('记账文件名换成 submits-（与旧口径的 files- 分开），旧文件不读也不删', () => {
@@ -362,7 +444,7 @@ describe('提交接口的额度行为（改口径后的三条硬判据）', () =
     // 5 个附件都落盘了，但额度只记 1 份
     expect(g.store.readMeta(r.body.id).files.length).toBe(5);
     expect(g.call({ headers: withCookie(g.token) }).body.total).toBe(1);
-    const saved = JSON.parse(String(readFileSync(join(g.store.rateDir, `${rateLimit.QUOTA_FILE_PREFIX}${rateLimit.dayKey(1759291200000)}.json`))));
+    const saved = JSON.parse(String(readFileSync(join(g.store.rateDir, `${rateLimit.QUOTA_FILE_PREFIX}${rateLimit.dayKey(g.now)}.json`))));
     expect(saved['203.0.113.9']).toBe(1);
   });
 
@@ -382,7 +464,7 @@ describe('提交接口的额度行为（改口径后的三条硬判据）', () =
     expect(sixth.body.error).not.toContain('个文件');
     // 被拒的那次没有落盘、也没有把额度顶过 5
     expect(g.call({ headers: withCookie(g.token) }).body.total).toBe(5);
-    const saved = JSON.parse(String(readFileSync(join(g.store.rateDir, `${rateLimit.QUOTA_FILE_PREFIX}${rateLimit.dayKey(1759291200000)}.json`))));
+    const saved = JSON.parse(String(readFileSync(join(g.store.rateDir, `${rateLimit.QUOTA_FILE_PREFIX}${rateLimit.dayKey(g.now)}.json`))));
     expect(saved['203.0.113.9']).toBe(5);
   });
 
@@ -401,6 +483,37 @@ describe('提交接口的额度行为（改口径后的三条硬判据）', () =
     expect(g.call({ headers: withCookie(g.token) }).body.total).toBe(5);
   });
 
+  /**
+   * ★ 产线那条路的"重启"语义：请求走的是**真实当天**（`Date.now()`），
+   * 服务重启 = 换一个全新的 `SubmitQuota` 实例。
+   * 这一条钉的是"额度不会因为重启就白送 5 份"——也就是 `systemctl restart feedback` 之后
+   * 同一个 IP 的第 6 份仍然 429。旧实现（缓存 miss ⇒ 当空表）在**当天**这条路上恰好能过，
+   * 所以它防不住回归；真正能反向变红的是上面那条"冷缓存读盘"的用例。
+   */
+  it('②c 模拟服务重启：换一个全新的额度实例（同一数据目录），第 6 份仍然 429', () => {
+    const root = tempDir();
+    const g = rig(root);
+    for (let i = 0; i < 5; i += 1) {
+      const s = submitBody(1);
+      expect(g.call({ method: 'POST', pathname: '/feedback/submit', headers: s.headers, body: s.body }).status).toBe(200);
+    }
+    // 重启：拿同一个数据目录、同一个时间戳造一个全新实例，换掉 rig 里那一个
+    // 重启：拿同一个数据目录、用**真当天**的时间戳造一个全新实例（与产线一致）
+    const now = Date.now();
+    const rebooted = new rateLimit.SubmitQuota({ dir: g.store.rateDir, perDay: 5 });
+    const before = rebooted.check('203.0.113.9', now);
+    expect(before.used).toBe(5);
+    expect(before.allowed).toBe(false);
+    // 用新实例再走一次真正的请求路径
+    const g2 = rig(root);
+    const s = submitBody(1);
+    const sixth = g2.call({
+      method: 'POST', pathname: '/feedback/submit', headers: s.headers, body: s.body, quota: rebooted,
+    });
+    expect(sixth.status).toBe(429);
+    expect(sixth.body.error).toContain('每天最多 5 份');
+  });
+
   it('③ 附件超 5 个仍然 400（这条判据没被改口径影响）', () => {
     const root = tempDir();
     const g = rig(root);
@@ -409,7 +522,7 @@ describe('提交接口的额度行为（改口径后的三条硬判据）', () =
     expect(r.status).toBe(400);
     expect(r.body.error).toContain('一次最多带 5 个附件');
     // 被 400 挡下的这次不占额度
-    const ratePath = join(g.store.rateDir, `${rateLimit.QUOTA_FILE_PREFIX}${rateLimit.dayKey(1759291200000)}.json`);
+    const ratePath = join(g.store.rateDir, `${rateLimit.QUOTA_FILE_PREFIX}${rateLimit.dayKey(g.now)}.json`);
     expect(existsSync(ratePath)).toBe(false);
     expect(g.call({ headers: withCookie(g.token) }).body.total).toBe(0);
   });
@@ -425,8 +538,39 @@ describe('提交接口的额度行为（改口径后的三条硬判据）', () =
       const s = submitBody(2);
       expect(g.call({ method: 'POST', pathname: '/feedback/submit', headers: s.headers, body: s.body }).status).toBe(429);
     }
-    const saved = JSON.parse(String(readFileSync(join(g.store.rateDir, `${rateLimit.QUOTA_FILE_PREFIX}${rateLimit.dayKey(1759291200000)}.json`))));
+    const saved = JSON.parse(String(readFileSync(join(g.store.rateDir, `${rateLimit.QUOTA_FILE_PREFIX}${rateLimit.dayKey(g.now)}.json`))));
     expect(saved['203.0.113.9']).toBe(5);
+  });
+
+  /**
+   * 并发：同一时刻打进来 12 份（0/1/5 个附件混着来），只有 5 份能成。
+   *
+   * 这一条钉两件事：
+   *  - **额度不会被并发冲破**：`check` 与 `record` 都在 `handleRequest` 的同步段里
+   *    （`readBody` 之后就没有 await 了），Node 单线程 ⇒ 12 个请求的"查-记"逐个串行完成，
+   *    不存在两个请求都看到 used=4 于是都放行的窗口；
+   *  - **计数文件不会被写坏**：`flush()` 是"写 `.tmp` + rename"（同目录 rename 原子），
+   *    6 次写盘之后文件仍是一份完整 JSON，数字正好等于成功份数。
+   * 将来谁把 `record()` 挪到 await 之后，这一条会红。
+   */
+  it('并发 12 份同时进来（0/1/5 个附件混合）⇒ 只有 5 份成功，计数正好 5 且文件是完整 JSON', () => {
+    const root = tempDir();
+    const g = rig(root);
+    const results: number[] = [];
+    for (let i = 0; i < 12; i += 1) {
+      const s = submitBody(i % 3 === 0 ? 5 : (i % 3 === 1 ? 1 : 0));
+      results.push(g.call({ method: 'POST', pathname: '/feedback/submit', headers: s.headers, body: s.body }).status);
+    }
+    expect(results.filter((c) => c === 200).length).toBe(5);
+    expect(results.filter((c) => c === 429).length).toBe(7);
+    // 落盘的份数也正好是 5（被 429 挡下的没有落盘）
+    expect(g.call({ headers: withCookie(g.token) }).body.total).toBe(5);
+    // 计数文件是完整 JSON，数字 = 成功份数
+    const text = String(readFileSync(join(g.store.rateDir, `${rateLimit.QUOTA_FILE_PREFIX}${rateLimit.dayKey(g.now)}.json`)));
+    const saved = JSON.parse(text);      // 解析不抛 = 没被写坏
+    expect(saved['203.0.113.9']).toBe(5);
+    // 临时文件不残留
+    expect(readdirSync(g.store.rateDir).filter((n) => n.endsWith('.tmp'))).toEqual([]);
   });
 });
 
@@ -629,7 +773,12 @@ function rig(root: string) {
     maxFilesPerItem: 5, maxFileBytes: 1024 * 1024, submitsPerIpPerDay: 5, sessionTtlSeconds: 43200,
     loginFailMax: 5, loginFailWindowSeconds: 600, bodyBytesCap: 8 * 1024 * 1024, trustProxy: true,
   };
-  const token = sessions.issue(1759291200000);
+  // ★ 请求时间戳用**真当时**（不写死某一天）：
+  //   额度按天分文件、且 `prune()` 会清掉早于昨天的记账，写死一个过去的日期会让
+  //   "提交 → 记账 → 重启后再查"这条链落到不同的一天上（2026-10-02 那 2 条红的一半原因）。
+  //   日期相关的断言本来就不该依赖"今天是几号"，所以这里跟着系统时钟走。
+  const NOW = Date.now();
+  const token = sessions.issue(NOW);
   const call = (over: Record<string, unknown>) => handler.handleRequest({
     method: 'GET',
     pathname: '/feedback/list',
@@ -637,7 +786,7 @@ function rig(root: string) {
     headers: {},
     body: null,
     clientIp: '203.0.113.9',
-    nowMs: 1759291200000,
+    nowMs: NOW,
     config,
     sessions,
     quota,
@@ -646,7 +795,7 @@ function rig(root: string) {
     logger,
     ...over,
   });
-  return { store, sessions, quota, loginFails, lines, config, token, call };
+  return { store, sessions, quota, loginFails, lines, config, token, now: NOW, call };
 }
 
 /** 造一个带会话 Cookie 的 GET 请求头 */
