@@ -36,8 +36,11 @@
  *
  * ## 三条不变量（`tests/i18n/engine-prompt-title.test.ts` 逐条钉住）
  *
- *  1. **覆盖**：`src/core/effects/cards/**` 里每一个 prompt 标题（含带运行期参数的那 10 条模式）
- *     都必须在模式表里命中；新出现 / 改了字面的标题 ⇒ 报红并点名文件:行。
+ *  1. **覆盖**：扫描面（★ 2026-10-02 起 = **`src/core/**`**，原先是 `src/core/effects/**`）
+ *     里每一个 prompt 标题（含带运行期参数的那 17 条模式）都必须在模式表里命中；
+ *     新出现 / 改了字面的标题 ⇒ 报红并点名文件:行。
+ *     ⚠️ 扩面的原因见 `tests/i18n/engine-prompt-title.test.ts` 的头注：`src/core/game.ts`
+ *     的**清理缓存**提示（`engine.prompt.p204`）原来是扫描面之外的漏网项。
  *  2. **英文侧零汉字**：命中之后拼出来的英文里**不许有汉字**（有腿）。万一运行期参数带了中文
  *     （例如将来 `chaos1Session` 多了一个中文标签），这里**退回引擎原文**而不是把半截中文端上去。
  *  3. **中文侧逐字不变**：`lang === 'zh'` 时返回值与入参**逐字节相同**。
@@ -461,6 +464,8 @@ export const ENGINE_PROMPT_KEYS: readonly string[] = [
   'engine.prompt.p202',
   // unity：翻转1张牌或抽取1张牌
   'engine.prompt.p203',
+  // 清理缓存：弃{n}张牌（手牌超过 5 张上限）
+  'engine.prompt.p204',
 /* ENGINE-PROMPT-KEYS-END */
 ];
 

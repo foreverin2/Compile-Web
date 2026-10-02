@@ -1858,6 +1858,8 @@ export const EN: Readonly<Record<string, string>> = {
   'engine.prompt.p202': 'Unity: flip 1 card',
   // unity：翻转1张牌或抽取1张牌
   'engine.prompt.p203': 'Unity: flip 1 card or draw 1 card',
+  // 清理缓存：弃{n}张牌（手牌超过 5 张上限）
+  'engine.prompt.p204': 'Clear cache: discard {n} cards (hand over the 5-card limit)',
 /* ENGINE-PROMPT-END */
   /* ───── 选择条**动作按钮**的显示层替换（P5；键同 `zh.ts`，注释行是引擎的 action id） ───── */
   /* ENGINE-ACTION-KEYS-BEGIN */
@@ -1884,4 +1886,10 @@ export const EN: Readonly<Record<string, string>> = {
   'engine.action.rearrange_player': 'rearrange player {who}\'s protocols',
   'engine.action.rearrange_player_locked': 'rearrange player {who}\'s protocols (locked)',
   /* ENGINE-ACTION-KEYS-END */
+  /* ───── 3 代控制权族特效的文字（键同 `zh.ts`；那一族是不是"标记串"见那里的说明） ───── */
+  'gen3.control.check-caption': 'Control check · {who}',
+  'gen3.control.gained': 'Gained the control component',
+  'gen3.control.not-met': 'Not met (leading by {wins} lines, 2 needed)',
+  'gen3.control.borrow': 'borrowed {n}',
+  'gen3.control.wrath-cull': 'Top tier culled',
 };

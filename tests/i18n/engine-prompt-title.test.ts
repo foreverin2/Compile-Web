@@ -3,15 +3,15 @@
  *
  * ## 被钉住的是什么
  *
- * `src/core/effects/**` 里 `yield` 的选择请求带的 `prompt.title` 是**引擎文案**
+ * `src/core/**` 里 `yield` 的选择请求带的 `prompt.title` 是**引擎文案**
  * （`life-1：翻转1张牌` 那种），它是红线（联机两端逐字一致 + 大量测试逐字钉着它）。
  * 英文化只能在**显示层**做：`src/i18n/engine-prompt.ts` 的 `enginePromptTitle()`
  * —— 中文逐字回原文，英文命中模式表则英文，**命中不了回退引擎原文**。
  *
- * 本文件是那件事的**机检判据面**。腿⑤（覆盖）是**生成式**的：它把
- * `src/core/effects/**` 里每一个 prompt 标题从**源码**重新抽一遍（口径与探路脚本
- * `.superpowers/engine-prompt/extract.mjs` 同源：剥注释 → 找 `kind: 'select*'` 的对象 →
- * 读它的 `title`），再逐条喂给**真产出函数** `enginePromptTitle()`：
+ * 本文件是那件事的**机检判据面**。腿⑤（覆盖）是**生成式**的：它把扫描面里每一个
+ * prompt 标题从**源码**重新抽一遍（口径与探路脚本 `.superpowers/engine-prompt/extract.mjs`
+ * 同源：剥注释 → 找 `kind: 'select*'` 的对象 → 读它的 `title`），再逐条喂给**真产出函数**
+ * `enginePromptTitle()`：
  *
  *  - 抽出来的标题**必须**命中模式表（英文侧零汉字），否则报红并**点名标题 + 出处文件:行**；
  *    确有意保留中文的，逐条登记进 `RETAINED_ENGINE_TITLES` 并写明理由（**只准变短**）。
@@ -19,6 +19,30 @@
  *    参数名 ⇒ 报红（否则它会带着中文原样拼进英文句子）。
  *  - 反向：模式表里的每一条**都必须**有标题能命中它（先加模式后接引擎 ⇒ 红）。
  *  - 反向：`RETAINED_ENGINE_TITLES` 里不许留"其实已经能命中"的陈旧条目。
+ *
+ * ## ★ 2026-10-02（收官走查的漏网修复）：扫描面从 `src/core/effects/**` 扩到 `src/core/**`
+ *
+ * 原来这条腿只扫 `src/core/effects/**` —— 那是 P5 当时的边界（效果卡都在那里）。
+ * 代价在收官走查里被实测到：`src/core/game.ts:348` 的**清理缓存**提示
+ * （`清理缓存：弃 ${excess} 张牌（手牌超过 5 张上限）`，真机 J4 帧上可见）**没有任何腿盯着**
+ * —— `enginePromptTitle()` 命中不了就按设计回退引擎原文，于是它一直是中文，
+ * 而所有生成式腿都在空集上恒绿。
+ * ⇒ 扫描面改成 `src/core/**`（覆盖 `game.ts` / `actions/**` / `rules/**` /
+ * `engine/**` / `state/**` / `models/**` 与 `effects/**`），口径不变（还是"剥注释 →
+ * `kind: 'select*'` 对象 → 它的 `title`"）。
+ *
+ * ## 这一条腿**覆盖不到什么**（如实声明）
+ *
+ *  - 只认**字面量/模板串**直接写在 `title:` 上的标题；`title: someVar` 这类间接赋值、
+ *    三元里非字面量的分支、以及 `prompt.title = …` 这种**事后改写**都抽不到
+ *    （`splitTernary` 只认三元链上的字符串字面量分支）；
+ *  - 只认 `kind: 'select' | 'select-line' | 'select-action'` 这**三种**对象里紧挨着的 `title:`；
+ *    将来若多一种 `kind` 或把标题放到别的字段名上，这里会静默漏掉（那时要跟着改口径）；
+ *  - **不认运行期拼出来的标题**：两个字符串相加（`'甲' + '乙'`）或从数据表里读来的中文
+ *    都抽不到；
+ *  - 它只保证"命中模式表 ⇒ 英文侧零汉字"，**不保证**屏上那一句真的走了
+ *    `enginePromptTitle()`（那是 `src/ui/render.ts` / `render-net.ts` / `src/main.ts`
+ *    三个来源点的接线条，`tests/i18n/choice-bar-en.test.ts` 与真机走查各钉了一半）。
  *
  * ## 为什么"覆盖"这条腿必须从源码抽，而不是手写一张标题清单
  *
@@ -39,7 +63,12 @@ import { EN } from '../../src/i18n/en';
 import { ZH } from '../../src/i18n/zh';
 
 const REPO = fileURLToPath(new URL('../../', import.meta.url));
-const EFFECTS = join(REPO, 'src', 'core', 'effects');
+/**
+ * ★ 2026-10-02（收官走查的漏网修复）：扫描面 = **整个 `src/core/**`**（原来只有 `effects/**`）。
+ * `EFFECTS` 留着，只给"读某一张卡的源码"这类按目录取文件的腿用（例如 `chaos.ts`）。
+ */
+const CORE = join(REPO, 'src', 'core');
+const EFFECTS = join(CORE, 'effects');
 
 afterEach(() => {
   setLang('zh');
@@ -251,7 +280,7 @@ interface RawTitle {
 
 function collectRawTitles(): RawTitle[] {
   const out: RawTitle[] = [];
-  for (const abs of walk(EFFECTS)) {
+  for (const abs of walk(CORE)) {
     const rel = abs.slice(REPO.length).split('\\').join('/');
     const code = stripComments(readFileSync(abs).subarray(0, 4 * 1024 * 1024).toString('utf8'));
     for (const m of code.matchAll(/kind:\s*'(select|select-line|select-action)'/g)) {
@@ -275,7 +304,15 @@ function collectRawTitles(): RawTitle[] {
       const info = literalText(propText(body, 'title') ?? '');
       const branches = info === null ? splitTernary(propText(body, 'title') ?? '').slice(1) : [];
       if (info !== null) {
-        out.push({ rel, line: code.slice(0, b).split('\n').length, kind: m[1], text: info.text, exprs: info.exprs });
+        // ⚠️ 行号报的是 **`title:` 那一行**（不是对象 `{` 那一行）：多行对象（如
+        //    `src/core/game.ts` 的 `cacheClearGen`）靠它才能被一眼定位。
+        out.push({
+          rel,
+          line: titleAt < 0 ? code.slice(0, b).split('\n').length : code.slice(0, b + 1 + titleAt).split('\n').length,
+          kind: m[1],
+          text: info.text,
+          exprs: info.exprs,
+        });
         continue;
       }
       for (const br of branches) {
@@ -299,7 +336,7 @@ const CHAOS_LABELS: readonly string[] = ['你的', '对手的'];
  */
 function verbSamples(): string[] {
   const out = new Set<string>();
-  for (const abs of walk(EFFECTS)) {
+  for (const abs of walk(CORE)) {
     const code = stripComments(readFileSync(abs).subarray(0, 4 * 1024 * 1024).toString('utf8'));
     for (const m of code.matchAll(/controlRearrangeFlow\((?:[^()]|\([^()]*\))*?'([^']+)'\s*\)/g)) out.add(m[1]);
   }
@@ -348,7 +385,7 @@ const SAMPLES: readonly Sample[] = (() => {
 /**
  * 英文模式下**有意保留中文**的引擎标题（逐条写理由）。
  *
- * 现在是**空的** —— 204 条模式把 `src/core/effects/**` 里 304 个 prompt 站点全盖住了。
+ * 现在是**空的** —— 204 条模式把扫描面（`src/core/**`）里的 prompt 站点全盖住了。
  * 这一张表留着是为了"将来确实做不了"时有地方登记：登记即意味着**屏上仍是中文**，
  * 所以每条都必须写理由，而且只准变短（已经能命中的条目留着 ⇒ 报红）。
  */
@@ -357,12 +394,23 @@ const RETAINED_ENGINE_TITLES: ReadonlyMap<string, string> = new Map<string, stri
 /* ══════════════════════ 3. 腿 ══════════════════════ */
 
 describe('★ P5：引擎 prompt.title 的显示层本地化（生成式）', () => {
-  it('扫描面自检：真的从 src/core/effects/** 抽到了 prompt 标题与取样（否则下面每条腿都在空集上恒真）', () => {
+  it('扫描面自检：真的从 `src/core/**` 抽到了 prompt 标题与取样（否则下面每条腿都在空集上恒真）', () => {
     expect(RAW.length, '一个 prompt 标题都没抽到 ⇒ 抽取器或路径写错').toBeGreaterThan(250);
     expect(SAMPLES.length, '取样条数太少 ⇒ 参数实例化塌了').toBeGreaterThan(250);
     expect(RAW.some((r) => r.rel.includes('/cards/')), '没扫到 cards/**').toBe(true);
     expect(RAW.some((r) => r.rel.includes('control-rearrange-flow.ts')), '没扫到共用流程那三条').toBe(true);
     expect(verbSamples().length, 'controlRearrangeFlow 的动词取样是空的').toBeGreaterThan(0);
+    // ★ 2026-10-02（收官走查的漏网修复）：扫描面必须真的扩到了 `effects/**` **之外** ——
+    //   否则"扩面"只是自我声明，`src/core/game.ts` 那条又会回到"没人盯"的状态。
+    expect(RAW.some((r) => r.rel === 'src/core/game.ts'), '扫描面没扩到 `src/core/game.ts`（清理缓存那条提示又没人盯了）').toBe(true);
+    // 反向锚点：`effects/**` 之外**确实有**标题被抽到（不是"恰好一条都没有"）
+    expect(RAW.filter((r) => !r.rel.startsWith('src/core/effects/')).length, '`src/core/effects/**` 之外一条标题都没抽到 ⇒ 扩面没生效')
+      .toBeGreaterThan(0);
+    // 扩面之后 `actions/**` / `rules/**` 也在扫描面里（当前它们**一条 select 标题都没有** ——
+    // 这条腿钉的是"路径真的走到了那两个目录"，不是"它们一定有标题"）
+    for (const dir of ['src/core/actions/', 'src/core/rules/']) {
+      expect(walk(join(REPO, dir)).length, `${dir} 下一个 .ts 都没读到 ⇒ 扩面的路径写错`).toBeGreaterThan(0);
+    }
   });
 
   it('参数来源全都认识（冒出一个新参数名 ⇒ 报红并点名文件:行）', () => {
@@ -465,6 +513,11 @@ describe('★ P5：引擎 prompt.title 的显示层本地化（生成式）', ()
     );
     expect(enginePromptTitle('inertia-1：对手弃3张牌')).toBe('inertia-1: opponent discards 3 cards');
     expect(enginePromptTitle('luck-0：宣告1个数字（0-6）')).toBe('luck-0: declare a number (0-6)');
+    // ★ 2026-10-02（收官走查的漏网修复）：`src/core/game.ts:348` 的清理缓存提示 ——
+    //    引擎原文逐字照抄那一条模板串（`${excess}` 取 3），不许"顺口改成更顺的句子"。
+    expect(enginePromptTitle('清理缓存：弃 3 张牌（手牌超过 5 张上限）')).toBe(
+      'Clear cache: discard 3 cards (hand over the 5-card limit)',
+    );
     // ⚠️ 这条的前缀是**引擎的真实措辞**：`chaos.ts` 的 `chaos1Session(ctx, player, '你的')`
     //    拼出来就是 `重新排列你的的协议`（两个「的」）—— 锚点照抄引擎，不照抄"应该长什么样"。
     expect(enginePromptTitle('chaos-1：重新排列你的的协议（可多次交换，直到满意）')).toBe(

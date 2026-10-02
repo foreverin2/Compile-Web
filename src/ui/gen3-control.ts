@@ -21,6 +21,12 @@ import { fxOuterForSeat, fxTrackEndPos, fxTrackFallbackPct, fxViewSeat } from '.
 // 长寿命 FX 的「跟随」注册表（`render.ts` 每帧 + `main.ts` 的滚动/缩放 rAF 各调一次 `syncFollowers`）。
 // C4 判定的条/数值/金圈是 body 级 `position: fixed` 层，坐标只在创建那一帧算一次 ⇒ 必须挂进来。
 import { registerFollow } from './fx-follow';
+// ★ 2026-10-02（收官走查的漏网修复）：本文件里**玩家可见的文字**改从 `src/i18n/` 取。
+// 这一族一共 5 条（`控制权判定 · P{who}` / `获得控制组件` / `未满足（领先 {wins} 条，需 2 条）` /
+// 嫉妒0 的 `借 {n}` / 暴怒0 的 `最高档剔除`），键族 `gen3.control.*`。
+// ⚠️ 值一律在**函数体里现调** `t()`（模块顶层调会把语言冻在 import 那一刻，
+//    `tests/i18n/module-scope-t.test.ts` 盯着这条）。
+import { t } from '../i18n';
 
 /* ============================== 小工具 ============================== */
 
@@ -237,7 +243,7 @@ function placeEnvy0(
   if (mark) place(mark, sr ? (visibleRectOf(s, sourceUid) ?? sr) : null, 3);
   const borrow = node.querySelector<HTMLElement>('.g3sync-envy0-borrow');
   if (borrow && sr) {
-    borrow.textContent = `借 ${bestV}`;
+    borrow.textContent = t('gen3.control.borrow', { n: String(bestV) });
     borrow.style.left = `${sr.left + sr.width - 6}px`;
     borrow.style.top = `${sr.bottom - 4}px`;
   }
@@ -287,7 +293,7 @@ export function syncWrath0Cull(s: GameState): string[] {
         rec.node.appendChild(band);
       }
       rec.node.appendChild(el('i', 'g3sync-wrath0-seam'));
-      rec.node.appendChild(el('i', 'g3sync-wrath0-chip', '最高档剔除'));
+      rec.node.appendChild(el('i', 'g3sync-wrath0-chip', t('gen3.control.wrath-cull')));
     }
     for (const c of culled) {
       const band = rec.node.querySelector<HTMLElement>(`[data-band="${c.uid}"]`);
@@ -1137,11 +1143,15 @@ export function gen3ControlCheckFx(
     ? controlCheckLabelPoint(mr, CONTROL_CHECK_LABEL_H, window.innerHeight)
     : { x: window.innerWidth / 2, captionY: 40, resultY: 40 };
   const capX = cap.x;
-  const caption = el('div', 'g3ctrl-caption', `控制权判定 · P${p.player + 1}`);
+  const caption = el('div', 'g3ctrl-caption', t('gen3.control.check-caption', { who: `P${p.player + 1}` }));
   caption.style.left = `${capX}px`;
   caption.style.top = `${cap.captionY}px`;
   l.appendChild(caption);
-  const result = el('div', `g3ctrl-result ${p.gained ? 'ok' : 'no'}`, p.gained ? '获得控制组件' : `未满足（领先 ${p.wins} 条，需 2 条）`);
+  const result = el(
+    'div',
+    `g3ctrl-result ${p.gained ? 'ok' : 'no'}`,
+    p.gained ? t('gen3.control.gained') : t('gen3.control.not-met', { wins: String(p.wins) }),
+  );
   result.style.left = `${capX}px`;
   result.style.top = `${cap.resultY}px`;
   result.style.animationDelay = '620ms';

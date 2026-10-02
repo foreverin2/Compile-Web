@@ -1979,6 +1979,10 @@ export const ZH: Readonly<Record<string, string>> = {
   'engine.prompt.p202': 'unity：翻转1张牌',
   // unity：翻转1张牌或抽取1张牌（无 <defId> 前缀的整标题）
   'engine.prompt.p203': 'unity：翻转1张牌或抽取1张牌',
+  // 清理缓存：弃{n}张牌（手牌超过 5 张上限）（无 <defId> 前缀的整标题；★ 2026-10-02 补：
+  // 出处是 `src/core/game.ts` 的 `cacheClearGen`，不是 `src/core/effects/**` ⇒ 原来那条
+  // 生成式腿扫不到它，按设计回退成了中文。见 `tests/i18n/engine-prompt-title.test.ts` 的扫描面）
+  'engine.prompt.p204': '清理缓存：弃 {n} 张牌（手牌超过 5 张上限）',
 /* ENGINE-PROMPT-END */
   /* ───── 选择条**动作按钮**的显示层替换（P5；值是**引擎的 action id**，不是屏上那句中文） ─────
    * 屏上中文一律来自 `src/core/log.ts` 的 `actionCn()`（红线，一个字未改）；
@@ -2030,4 +2034,23 @@ export const ZH: Readonly<Record<string, string>> = {
   // 重排玩家{who}的协议（已锁定）
   'engine.action.rearrange_player_locked': '重排玩家{who}的协议（已锁定）',
   /* ENGINE-ACTION-KEYS-END */
+  /* ───── 3 代控制权族特效的文字（★ 2026-10-02 收官走查的漏网修复） ─────
+   * 出处 `src/ui/gen3-control.ts`（不是红线文件，已按同一套规矩抽进这张表）。
+   * 这一族 5 条**全是玩家可见文案**，不是"匹配用的标记串"：
+   *  - `控制权判定 · P{who}`：C4 判定特效的标题（`g3ctrl-caption`）；
+   *  - `获得控制组件` / `未满足（领先 {wins} 条，需 2 条）`：同一特效的结果句（`g3ctrl-result`）；
+   *  - `借 {n}`：嫉妒0 常驻层挂在**对手那张被借走阈值的卡**上的文字标（`g3sync-envy0-borrow`）；
+   *  - `最高档剔除`：暴怒0 中缝上的文字标（`g3sync-wrath0-chip`）。
+   * 2026-10-02 收官走查的 J2 帧实测可见前三条里的两条（`控制权判定 · P1` / `未满足（…）`）；
+   * 后两条是同一族（同一屏、同一套常驻层的文字标），真机那一轮没走到嫉妒0 / 暴怒0 的帧。 */
+  // 控制权判定 · P{who}
+  'gen3.control.check-caption': '控制权判定 · {who}',
+  // 获得控制组件
+  'gen3.control.gained': '获得控制组件',
+  // 未满足（领先 {wins} 条，需 2 条）
+  'gen3.control.not-met': '未满足（领先 {wins} 条，需 2 条）',
+  // 借 {n}
+  'gen3.control.borrow': '借 {n}',
+  // 最高档剔除
+  'gen3.control.wrath-cull': '最高档剔除',
 };
