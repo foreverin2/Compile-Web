@@ -51,7 +51,7 @@ export interface HomeNav {
    * ★ 2026-10-02（P2，用户口径）：**「新手教程」入口** —— 真的进教学屏。
    *
    * 到 P1 为止这个按钮只弹一句 `toast.tutorial`（"新手教程：待开发"），那是占位。
-   * 现在它进 `src/ui/tutorial-screen.ts` 的教学屏（T0~T3）；开屏的动作交给宿主
+   * 现在它进 `src/ui/tutorial-screen.ts` 的教学屏（十四关，T0~T13）；开屏的动作交给宿主
    * （屏要的存储与退出接缝都由宿主注入，本文件只放这一个按钮）。
    *
    * ⚠️ `toast.tutorial` 那个键**保留**（向导与"技能没到"时的兜底话术仍然可能用它）；
@@ -473,7 +473,7 @@ export function renderHome(root: HTMLElement, nav: HomeNav): void {
   btns.appendChild(button('btn home-btn home-btn-primary', t('home.start'), nav.startGame));
   btns.appendChild(button('btn home-btn', t('home.library'), nav.openLibrary));
   // ★ 2026-10-02（P2）：这一枚从"弹一句待开发"改成**真的进教学模式**（用户口径：
-  //   首页点「新手教程」就能进教学屏；T0~T3 四关，可中断续玩）
+  //   首页点「新手教程」就能进教学屏；十四关（T0~T13），可中断续玩）
   btns.appendChild(button('btn home-btn', t('home.tutorial'), nav.openTutorial));
   btns.appendChild(button('btn home-btn', t('home.rules'), nav.openRules));
   // G3（Task 4）：本地数据与隐私入口 —— 授权状态、清除本机数据、档案导入导出（Task 7 落地屏）
@@ -1243,7 +1243,10 @@ function renderCoinHotseat(root: HTMLElement, nav: CoinNav): void {
         el(
           'div',
           'coin-result-text',
-          t('coin.result', { face: faceName, n: String(winner + 1), m: String(2 - winner) })
+          // ⚠️ 热座这条路上**没有**"谁叫了哪一面"那一截（叫面是联机才有的步骤）⇒ `call` 传空串。
+          //    2026-10-02 实测的占位符回归：这里原来一个参数都没传 `call`，而键的值以 `{call}` 开头
+          //    ⇒ 屏上写着 `{call}掷出 正面 —— …`（中英都坏）。空串正是改动前那句的字面形态。
+          t('coin.result', { call: '', face: faceName, n: String(winner + 1), m: String(2 - winner) })
         )
       );
       result.appendChild(button('btn coin-begin-btn', t('coin.begin'), () => nav.beginGame(winner)));

@@ -390,6 +390,30 @@ let lobbyClient: LobbyClient | null = null;
 let lobbyMode: 'host' | 'guest' | null = null;
 
 /**
+ * ★ 2026-10-02（英文模式真机走查的 C）：**入口那一屏的「高级 / 连接设置」是否展开**。
+ *
+ * ## 为什么需要一个宿主侧的位置（这是一个真缺陷的修法，不是新状态）
+ *
+ * 走查实测：在**选角色那一格**（`role === null`）点 `.net-lobby-advanced-toggle`，`aria-expanded`
+ * 仍然是 `false`、面板也不进 DOM；进了房主/加入那一格再点就正常。
+ * 根因：那一刻 `lobbyClient` 还是 `null`，而开关的接线是
+ * `lobbyClient?.toggleAdvanced()`（`?.` 把整件事吞成了空操作），渲染用的
+ * `lobbyEntryState()` 又把 `advancedOpen` 硬写成 `false` ⇒ 点一百次也没反应。
+ *
+ * ## 为什么"修好"而不是"这一屏不显示它"
+ *
+ * 入口那一屏本身就挂着 `NO_ENDPOINT_REASON`（"6 位房间码需要一台中间服务器…而本程序默认
+ * 没有配置信令端点"）—— 那个面板**正是**解决这句话的地方（填信令端点 / 配中继）。
+ * 把唯一入口藏掉，等于让玩家看着一句"没配端点"却找不到配的地方。所以这里如实做一个
+ * 宿主侧的折叠位：`lobbyClient` 还没建时它是唯一的状态源，建了之后照旧归客户端。
+ *
+ * ⚠️ 它**不是第二份真相**：`LobbyClient` 那边的 `advancedOpen` 初值仍然是
+ * `false`（`net-lobby.ts` 里那条"初值恰好一处"，由 `tests/ui/net-lobby.test.ts` 钉着），
+ * 选了角色之后这一位就不再被读（渲染走 `client.state()`）。复位点跟着 `leaveLobbyModule()`。
+ */
+let lobbyEntryAdvancedOpen = false;
+
+/**
  * ★★ **G6/T49**：这一局的邀请码 / 回示码带哪一档载荷（`'compact'` = v3 最小必要集，缺省）。
  *
  * 它是**探针面**（`#g5probe=1` 的 `__g5Match.setInviteFormat()`）为了做"同一次会话里
@@ -2278,7 +2302,7 @@ function lobbyEntryState(): LobbyState {
       turnSettingsAreDefault(),
       turnCredentialRead(),
     ),
-    advancedOpen: false,
+    advancedOpen: lobbyEntryAdvancedOpen,
     waitExpired: null,
     error: null,
     notice: null,
@@ -2755,7 +2779,13 @@ function renderLobbyFrame(): void {
       renderLobbyFrame();
     },
     joinWithInvite: (text: string) => { void joinLobbyWithInvite(text); },
-    toggleAdvanced: () => { lobbyClient?.toggleAdvanced(); renderLobbyFrame(); },
+    toggleAdvanced: () => {
+      // ★ 2026-10-02（走查 C）：`lobbyClient` 还没建（选角色那一格）时不能吞掉这一下 ——
+      //   入口那一屏的折叠位住在宿主侧（见 `lobbyEntryAdvancedOpen` 的说明）。
+      if (lobbyClient === null) lobbyEntryAdvancedOpen = !lobbyEntryAdvancedOpen;
+      else lobbyClient.toggleAdvanced();
+      renderLobbyFrame();
+    },
     // ★ G5 T15：区里那一小块 TURN（三项输入框默认不渲染，由这个开关展开）
     toggleRelay: () => { lobbyClient?.toggleRelay(); renderLobbyFrame(); },
     settingsValue: (key) => netSettings[key],
@@ -2999,6 +3029,8 @@ function leaveLobbyModule(): void {
   lobbyClient?.dispose();
   lobbyClient = null;
   lobbyMode = null;
+  // ★ 2026-10-02（走查 C）：入口那一屏的折叠位跟着一起复位 —— 下次进大厅从"收起"开始
+  lobbyEntryAdvancedOpen = false;
   invitedCodeFormat = null;
   lobbyCoinShown = null;
   lobbyRestartNeeded = false;

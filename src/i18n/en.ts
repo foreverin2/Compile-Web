@@ -764,8 +764,11 @@ export const EN: Readonly<Record<string, string>> = {
   'cardmaker.page.credit.sentence': 'This maker was built by referencing the open-source project COMPILER · Card Builder (by Albert Blanco, MIT license); its assets (card frames/backgrounds/card backs/fonts) also come from that project.',
   'cardmaker.page.credit.author': 'Author: {author}',
   'cardmaker.page.credit.license-label': 'License: {license}',
-  // `CREDIT.license` is plain data (no module-scope `t()`); this value must match it verbatim.
-  'cardmaker.page.credit.license-value': 'MIT 许可',
+  // `CREDIT.license` is plain data (a Chinese constant in `src/ui/cardmaker/page.ts`, unchanged);
+  // the *English* screen shows this value. The zh value must stay verbatim equal to that data
+  // constant (pinned by `CLEAN_DECLARED` in `tests/i18n/unextracted-manifest.test.ts`), while the
+  // en value is real English — 2026-10-02 walkthrough: English mode showed `License: MIT 许可`.
+  'cardmaker.page.credit.license-value': 'MIT License',
   'cardmaker.page.credit.license-path': 'The full license text ships with the repository: {path}',
   'cardmaker.page.mode.created.protocol': 'Switched to “Protocol card”: the deck had no landscape protocol card, so one was created by the add-card logic.',
   'cardmaker.page.mode.created.compile': 'Switched to “Card”: the deck had no portrait compiled card, so one was created by the add-card logic.',
@@ -958,4 +961,76 @@ export const EN: Readonly<Record<string, string>> = {
   'net-lobby.invite-length.outside': 'it falls outside the measured range for this tier (longer or shorter than measured) - it still works, but some chat tools may truncate it, so take care when sending.',
   'net-lobby.proto.not-invite': 'This is not an invite code: it does not have the two-part "protocol version.compressed segment" structure.',
   'net-lobby.proto.bad-head': 'The protocol version part of the invite code is not a positive integer (read {head}).',
+
+  /* ── ★ 2026-10-02（英文模式真机走查 B）：`src/net/invite.ts` 的玩家可见文案 ──
+   *
+   * 中文值在 `zh.ts` 里逐字等于改动前的字面量；这里是英文。
+   *
+   * ⚠️ `net.invite.newer-version-hint` 的英文值**以空格开头**、
+   * `net.invite.no-endpoint.headline` / `no-endpoint.reason` 的英文值**以空格结尾** ——
+   * 这三段是**拼接用的片段**（中文句号后面不空格，英文句号后面必须空一格，
+   * 而中文值不许动）。`tests/net/invite.test.ts` 有一条腿钉着"英文拼出来不许
+   * 出现 `configured.A 6-digit` 这种粘在一起的形态"。
+   */
+  'net.invite.no-candidates-in-sdp': 'no a=candidate: line in this side SDP yet (come back after ICE gathering finishes)',
+  'net.invite.unknown-candidate-line': 'candidate line not recognised: {line}',
+  'net.invite.bad-promise': 'Both promise strings must be non-empty and must not contain separators.',
+  'net.invite.compress-unsupported': 'This device cannot produce the compressed stream an invite code needs (compression support is missing).',
+  'net.invite.compress-failed': 'The compressed result could not be decompressed again (this compression step produced no usable bytes).',
+  'net.invite.round-trip-bad': 'The compressed result did not decode back into a usable payload ({reason}): {message}',
+  'net.invite.compact-rebuild-incomplete': 'The SDP rebuilt from the compact form is missing ICE credentials or the DTLS fingerprint: this tier is unusable, fall back to the tier that carries the whole SDP.',
+  'net.invite.compact-missing': 'This code cannot use the compact form (missing {missing}): fall back to the tier that carries the whole SDP.',
+  'net.invite.compact-unknown-candidate': 'This code cannot use the compact form (candidate line not recognised: {line}): fall back to the tier that carries the whole SDP.',
+  'net.invite.compact-no-candidates': 'This code cannot use the compact form ({reason}): fall back to the tier that carries the whole SDP.',
+  'net.invite.newer-version-hint': ' (Also ask the other side to confirm they are on the newest version: this code may come from a newer format that an older front end cannot read - have them refresh the page and generate a new one, or update this device to the newest version.)',
+  'net.invite.bad-utf8': 'The bytes behind this invite code are not valid UTF-8 text; it may have been truncated or altered.',
+  'net.invite.bad-json': 'What came out of this invite code is not JSON text (it may be a broken stream that was half decompressed). Ask the other side to copy the invite code again.',
+  'net.invite.compact-missing-version': 'The invite code has no format version (item 1 is not an integer): this is not a complete invite code.',
+  'net.invite.version-mismatch': 'This invite code has format version {ver}, while this program only accepts {min} (or {compact} for the compact form): the two sides are on different versions, so ask the other side to generate one with the same version.',
+  'net.invite.missing-session': 'The invite code has no host session id (sessionId) for this match: without it the host cannot be matched and the handshake is rejected on the spot.',
+  'net.invite.compact-material-shape': 'The connection material in this compact invite code is not 4 items (ufrag / pwd / fingerprint / candidates): the payload is incomplete.',
+  'net.invite.compact-missing-ice-cred': 'This compact invite code is missing ICE credentials (a=ice-ufrag / a=ice-pwd): neither can be left out, so the payload is incomplete.',
+  'net.invite.compact-missing-fingerprint': 'This compact invite code is missing the DTLS fingerprint (a=fingerprint:sha-256): without it the other side cannot be verified, so this invite code cannot be accepted.',
+  'net.invite.compact-candidates-not-array': 'The candidates in this compact invite code are not an array: the payload is incomplete.',
+  'net.invite.compact-candidate-shape': 'One candidate in this compact invite code is not 4 items (type / address / port / local preference).',
+  'net.invite.compact-candidate-type': 'The candidate type in this compact invite code is not recognised (read {prefix}).',
+  'net.invite.compact-candidate-address': 'One candidate in this compact invite code has an illegal address or port (the port must be an integer from 1 to 65535).',
+  'net.invite.compact-candidate-local-pref': 'One candidate in this compact invite code has a local preference that is not an integer from 0 to 255.',
+  'net.invite.compact-no-candidate': 'This compact invite code has no candidates at all: without a usable candidate no connection can be built, so the payload is incomplete.',
+  'net.invite.compact-spare': 'In this compact invite code the item after the local material must be an empty array today (it is a spare slot): the payload is incomplete or was altered.',
+  'net.invite.compact-setup': 'The a=setup value in this compact invite code is not recognised (read {setup}).',
+  'net.invite.compact-missing-promise': 'This compact invite code is missing the promise slots: the payload is incomplete.',
+  'net.invite.compact-rebuilt-candidate': 'A candidate line rebuilt from this compact invite code is illegal (the address or port contains characters that do not belong).',
+  'net.invite.bad-shape': 'The contents of this invite code are not the shape this program produces (it is not a positional array): the payload is incomplete or was altered.',
+  'net.invite.compact-payload-incomplete': 'The payload of this compact invite code is incomplete (session id / material / setup / promise slots have missing items).',
+  'net.invite.tuple-len': 'This invite code has only {got} items while this program needs {want}: the payload is missing fields, so even accepting it could not start a match.',
+  'net.invite.missing-sdp': 'The invite code has no connection description (sdp): the payload is incomplete, so even accepting it could not build a connection.',
+  'net.invite.ice-not-array': 'The candidate list (ice) in this invite code is not an array of strings: the payload is incomplete.',
+  'net.invite.missing-host-promise': 'The invite code has no host seed promise: without it the shuffle cannot be verified, so this invite code cannot be accepted.',
+  'net.invite.missing-guest-promise': 'The invite code has no guest side-choice promise: the payload is incomplete.',
+  'net.invite.empty': 'The invite code is empty: there is nothing in that part of the address bar or in what you pasted. Please copy the whole thing again.',
+  'net.invite.no-structure': 'This is not an invite code: it does not have the two-part "protocol version.compressed segment" structure (either that part is missing or it was cut off). Please make sure you copied the whole thing, with nothing extra before or after it.',
+  'net.invite.bad-version-head': 'The protocol version at the start of this invite code is not an integer (read "{head}"): this invite code was not produced by this program.',
+  'net.invite.bad-marker': 'The compressed part of this invite code carries an encoding marker this program does not recognise ("{marker}"): this invite code was not produced by this program.',
+  'net.invite.bad-chars': 'This invite code contains characters that are not part of base64url (the legal characters are A-Z a-z 0-9 - _; there is no + / =). The usual cause is that a chat app truncated it or replaced a character, so please copy the whole thing again.',
+  'net.invite.decompress-unsupported': 'This invite code uses a compression method this device cannot open (the code is a compressed tier and this device lacks the matching decompression support). Open this page in a newer browser on this device, or have the other side generate a new invite code on your device.',
+  'net.invite.decompress-failed': 'The compressed part of this invite code cannot be decompressed (its contents were altered or cut off). Ask the other side to copy the whole invite code again, and do not change any character by hand.',
+  'net.invite.proto-newer': 'This invite code comes from a newer version (the other side is on protocol version {remote}, this device is on {local}): this device may not understand what the other side sends. Update this device to the same version, or have the other side generate a new invite code with the version this device runs.',
+  'net.invite.proto-older': 'This invite code comes from an older version (the other side is on protocol version {remote}, this device is on {local}): the other side may not understand what this device sends. Ask the other side to update to the version this device runs.',
+  'net.invite.no-endpoint.headline': 'The 6-digit room code path does not work right now: this device has no signaling endpoint configured. ',
+  'net.invite.no-endpoint.reason': 'A 6-digit room code needs a middle server to bring the two sides together, and this program has no signaling endpoint configured by default. ',
+  'net.invite.no-endpoint.next-steps': 'Use an invite code instead: copy the whole code to the other side and have them paste it in. To use the 6-digit code, first enter a server address under "Advanced / Connection settings".',
+  'net.invite.qr-note': 'The QR form carries the same payload as the link form (the return value of encodeInvite); the encoder is a separate task scheduled after T7 (D17), so this task only leaves the interface in place and draws no graphics.',
+
+  /* ── ★ 2026-10-02（走查 B）：`src/ui/net-browser.ts` 里**走查实测到的那几处** ── */
+  'net-browser.invite.empty': 'The invite code is empty: there is nothing in that part. Please copy the whole thing again.',
+  'net-browser.invite.no-structure': 'This is not an invite code: it does not have the two-part "protocol version.compressed segment" structure (either that part is missing or it was cut off).',
+  'net-browser.ice.early-enough.relay': 'Local candidates and a relay address are in hand - that is enough, so we are not waiting for the rest.',
+  'net-browser.ice.early-enough.srflx': 'Local candidates and a public mapping are in hand - that is enough, so we are not waiting for the rest.',
+  'net-browser.ice.partial.only-host': 'Waited {sec} seconds and got no public mapping (srflx) at all; only local candidates were gathered: {candidates}.',
+  'net-browser.ice.partial.incomplete': 'Waited {sec} seconds and ICE gathering did not finish; what is in hand: {candidates}.',
+  'net-browser.ice.partial.relay-missing': 'You configured a relay, but no relay address arrived this round either.',
+  'net-browser.ice.partial.tail': 'These candidates have been written into this invite code. Two windows on the same machine, or two devices on the same local network, can usually connect with them; whether it works across networks (the two sides not on the same local network) is not known yet - that needs a public mapping or a relay address, and this round did not get all of them.',
+  'net-browser.ice.no-candidate-timeout': 'Waited {sec} seconds and this device gathered no ICE candidate at all this time (not even a local one). A connection description with no candidate cannot connect even if it is sent, so this invite code is not generated. Next step: check that a browser extension or an enterprise policy has not turned WebRTC off (this program only uses it for direct connections), then try again; if there is still no candidate, please copy this line down as it is.',
+  'net-browser.ice.no-candidate-now': 'ICE gathering has finished, but this device has no candidate at all this time (not even a local one); such a connection description cannot connect even if it is sent, so this invite code is not generated. Next step: check that a browser extension or an enterprise policy has not turned WebRTC off (this program only uses it for direct connections), then try again; if there is still no candidate, please copy this line down as it is.',
 };

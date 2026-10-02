@@ -28,10 +28,10 @@ import {
 } from './net-dom-stub';
 import { stripComments } from './source-text';
 import {
-  LOBBY_ERROR_KEYS, LOBBY_LINK_COPY, PASTE_SHAPE_HINT, copyDeniedText, copyOkText, copyTextWithStatus,
+  LOBBY_ERROR_KEYS, LOBBY_LINK_COPY, copyDeniedText, copyOkText, copyTextWithStatus,
   copyUnavailableText, createLobbyClient, createLobbySessionLink,
   errorCopy,
-  errorKeyOfRejection, inviteLengthText, lobbyLinkOf, lobbyLinkText, protoOfPayload, qrNote, refusalNotice,
+  errorKeyOfRejection, inviteLengthText, lobbyLinkOf, lobbyLinkText, pasteShapeHint, protoOfPayload, qrNote, refusalNotice,
   relayNoticeOf, relayStateOf, renderNetLobby,
   type LobbyClient, type LobbyErrorKey, type LobbyRenderNav, type LobbyState, type SettingKey,
 } from '../../src/ui/net-lobby';
@@ -54,13 +54,15 @@ import type { NetTransport } from '../../src/net/transport';
 import { CARD_DATA_HASH } from '../../src/app/card-data-hash';
 import { makeFakePc } from './fake-peer-connection';
 import {
-  ANSWER_PROMISE_PLACEHOLDER, INVITE_CHARS_MAX, INVITE_CHARS_MAX_UNCOMPRESSED, NO_ENDPOINT_HEADLINE,
-  NO_ENDPOINT_MESSAGE, NO_ENDPOINT_REASON,
+  ANSWER_PROMISE_PLACEHOLDER, INVITE_CHARS_MAX, INVITE_CHARS_MAX_UNCOMPRESSED,
   answerPayloadFields, bytesToBase64Url, inviteFragmentOf, inviteLinkOf, isAnswerPayload,
+  noEndpointHeadline, noEndpointMessage, noEndpointReason,
   roomCodeEntryReachability, utf8Encode,
   type CompressionKind,
 } from '../../src/net/invite';
 import { browserHash } from '../../src/ui/net-browser';
+// ★ 2026-10-02（走查 B6）：粘贴提示那条腿要能把语言切到英文再切回来（模块级 `t()` 的冻结形态）。
+import { DEFAULT_LANG, setLang } from '../../src/i18n';
 
 /* ==================================================================== *
  * 夹具 0：DOM 桩与文本读取
@@ -528,6 +530,41 @@ describe('判据 7 · 「高级 / 连接设置」默认折叠，启用后才让�
     expect(queryAllIn(h.root, 'div.net-lobby-advanced-panel').length, '展开之后面板没进 DOM').toBe(1);
   });
 
+  it('★ 2026-10-02（走查 C）：**选角色那一格**上的折叠开关也要能开（行为由 `state.advancedOpen` 决定）', () => {
+    /**
+     * 走查实测的缺陷：选角色那一格点那个开关**没反应**（`aria-expanded` 仍 false、面板不进 DOM），
+     * 进了房主/加入那一格才正常。根因在**宿主侧接线**（`main.ts` 的 `lobbyClient?.toggleAdvanced()`
+     * 把动作吞了，见 `tests/ui/main-lobby-wiring.test.ts` 的同名腿）。
+     *
+     * 这一条钉的是**渲染这一半的可判定性**：`role === null` 时那扇门完全由 `state.advancedOpen`
+     * 决定 —— 关着就不进 DOM、开着就进 DOM 且 `aria-expanded=true`。
+     * 于是"宿主把那一格翻对/翻错"这件事在屏上是**可判定的**，不会出现"点了没反应也看不出来"。
+     */
+    const closed = mountLobby({ role: null, advancedOpen: false });
+    closed.render();
+    expect(queryAllIn(closed.root, 'button.net-lobby-advanced-toggle').length,
+      '选角色那一格上没有折叠开关（那玩家就没有配置端点的入口）').toBe(1);
+    // ⚠️ 桩的 `getAttribute` 只存在于索引签名里（`unknown`）⇒ 按本仓既有的写法局部收窄
+    //    （见 `tests/ui/feedback-screen.test.ts` / `coin-screen-net.test.ts`）。
+    const ariaOf = (sel: string, root: StubNode): unknown =>
+      (oneOf(root, sel).getAttribute as (n: string) => unknown)('aria-expanded');
+    expect(String(ariaOf('button.net-lobby-advanced-toggle', closed.root)),
+      '关着的时候 aria-expanded 不是 false').toBe('false');
+    expect(queryAllIn(closed.root, 'div.net-lobby-advanced-panel').length,
+      '关着的时候面板已经进了 DOM').toBe(0);
+
+    const open = mountLobby({ role: null, advancedOpen: true, endpoint: '' });
+    open.render();
+    expect(String(ariaOf('button.net-lobby-advanced-toggle', open.root)),
+      '开着的时候 aria-expanded 不是 true').toBe('true');
+    expect(queryAllIn(open.root, 'div.net-lobby-advanced-panel').length,
+      '选角色那一格开着的时候面板没进 DOM（走查 C 的缺陷形状）').toBe(1);
+    // 打开之后那一格真的能看到"端点这件事的当下读数"（那一屏挂着的正是"没有配置信令端点"那句）
+    expect(queryAllIn(open.root, 'p.net-lobby-endpoint').length,
+      '打开面板之后没有端点读数那一行').toBe(1);
+    expect(textOf(open.root), '打开之后看不到"还没有配置信令端点"那句').toContain(noEndpointHeadline());
+  });
+
   it('点开折叠区：**TURN 三项默认不出现**（要再点一下开关），收起时那一句说的是"默认已配好"', () => {
     const h = mountLobby({ role: 'guest' });
     h.render();
@@ -684,19 +721,19 @@ describe('判据 7 · 「高级 / 连接设置」默认折叠，启用后才让�
  * ==================================================================== */
 
 describe('判据 5 · 端点为空：可读提示逐字来自唯一出处，且一个请求都不发', () => {
-  it('★ 端点为空时提交短码：屏上出现 `NO_ENDPOINT_MESSAGE` 的**完整正文**', () => {
+  it('★ 端点为空时提交短码：屏上出现 `noEndpointMessage()` 的**完整正文**', () => {
     // 走**真判定**（`roomCodeEntryReachability`，纯层唯一出处）算出门上那句话，
     // 再交给渲染（这与 `LobbyClient.submitRoomCode()` 的第一步是同一条路）
     const gate = roomCodeEntryReachability('');
     expect(gate.ok, '夹具失败：空端点竟然判成可用').toBe(false);
     if (gate.ok) return;
     expect(gate.message, '纯层那句提示与浏览器层的转发出口不一致')
-      .toBe(NO_ENDPOINT_MESSAGE);
+      .toBe(noEndpointMessage());
     const h = mountLobby({ role: 'guest', roomCodeInput: 'ABCDEF', roomCodeGate: gate.message, notice: gate.message });
     h.render();
     const text = textOf(h.root);
     // 逐字比对（含 `&&` 与标点）：整句都要在
-    expect(text, '屏上没有 `NO_ENDPOINT_MESSAGE` 的完整正文').toContain(NO_ENDPOINT_MESSAGE);
+    expect(text, '屏上没有 `noEndpointMessage()` 的完整正文').toContain(noEndpointMessage());
     // ③ 屏上**没有**任何"已连接 / 正在连接 / 已发送"字样的状态行（防"提示画了、还装作在连"）
     for (const claim of ['已连接', '正在连接', '已发送', '已连上对端']) {
       expect(text.includes(claim), `端点为空时屏上出现了「${claim}」—— 它在装作正在连`).toBe(false);
@@ -709,7 +746,7 @@ describe('判据 5 · 端点为空：可读提示逐字来自唯一出处，且�
     const entry = roomCodeEntry(env);
     expect(entry.ok, '夹具失败：空端点竟然给出可用').toBe(false);
     // 通过式（不是抛错）—— 说明那是一条**正常返回**的路
-    if (!entry.ok) expect(entry.message).toBe(NO_ENDPOINT_MESSAGE);
+    if (!entry.ok) expect(entry.message).toBe(noEndpointMessage());
     expect(ledger.fetched, '端点为空时发生了 fetch（§8.1：端点为空就不该有任何网络动作）').toEqual([]);
     expect(ledger.wsUrls, '端点为空时构造了 WebSocket').toEqual([]);
     // ⚠️ 记账假件**确实接上了**：同一份假件喂给一条真网络动作必须记账 > 0
@@ -725,7 +762,7 @@ describe('判据 5 · 端点为空：可读提示逐字来自唯一出处，且�
     const filled = roomCodeEntryReachability('wss://x.invalid');
     expect(empty.ok, '空端点没被拒').toBe(false);
     expect(filled.ok, '非空端点被拒了（判定写反了？）').toBe(true);
-    if (!empty.ok) expect(empty.message, '空端点给的提示不是唯一出处那句').toBe(NO_ENDPOINT_MESSAGE);
+    if (!empty.ok) expect(empty.message, '空端点给的提示不是唯一出处那句').toBe(noEndpointMessage());
     // 提示只在**空**那一侧出现：非空那侧没有 message 字段可用（类型上就没有）
     expect('message' in filled, '非空端点的读数里带了 message（那会让"配好了却也提示"成为可能）').toBe(false);
   });
@@ -734,11 +771,15 @@ describe('判据 5 · 端点为空：可读提示逐字来自唯一出处，且�
     const code = stripComments(
       readFileSync(fileURLToPath(new URL('../../src/ui/net-lobby.ts', import.meta.url))).subarray(0, 8 * 1024 * 1024).toString('utf8'),
     );
-    expect(code.includes('6 位房间码需要一台中间服务器把两端牵上线'), '大厅里手写了那句提示的正文（唯一出处是 net/invite.ts）')
+    expect(code.includes('6 位房间码需要一台中间服务器把两端牵上线'), '大厅里手写了那句提示的正文（唯一出处是 i18n/zh.ts）')
       .toBe(false);
-    // 反空转：那个片段在真树别处确实存在
+    // 反空转：那个片段在真树别处确实存在 —— ★ 2026-10-02（走查 B）起它是文案表里的一条
+    const zh = readFileSync(fileURLToPath(new URL('../../src/i18n/zh.ts', import.meta.url))).subarray(0, 8 * 1024 * 1024).toString('utf8');
+    expect(zh.includes('6 位房间码需要一台中间服务器把两端牵上线'), '夹具失败：zh.ts 里没有那个片段').toBe(true);
+    // 反向：产出代码（纯层那个"唯一出处"模块）里**一个字都不许再写它**
     const invite = readFileSync(fileURLToPath(new URL('../../src/net/invite.ts', import.meta.url))).subarray(0, 8 * 1024 * 1024).toString('utf8');
-    expect(invite.includes('6 位房间码需要一台中间服务器把两端牵上线'), '夹具失败：invite.ts 里没有那个片段').toBe(true);
+    expect(invite.includes('6 位房间码需要一台中间服务器把两端牵上线'),
+      'invite.ts 里又写了一遍那句正文（应当只调 noEndpointReason()）').toBe(false);
   });
 });
 
@@ -1963,19 +2004,22 @@ describe('★ 修复轮 · D22 的第二份信令说明（评审 §4.2 的违例
         expect(code.includes(b), `${name} 里手写了「${b}」（第二份信令说明，§2 第 6 条违例）`).toBe(false);
       }
     }
-    // ② 大厅确实**引用**了那两个常量（不是把那句话删了了事）
-    expect(lobby.includes('NO_ENDPOINT_REASON'), '大厅没有引用 `NO_ENDPOINT_REASON`（说明被删了而不是改成引用）')
+    // ② 大厅确实**引用**了那两个取值函数（不是把那句话删了了事）
+    //    ★ 2026-10-02（走查 B）：形状从"引用常量"改成"引用取值函数"（常量会把语言冻住）。
+    expect(lobby.includes('noEndpointReason()'), '大厅没有引用 `noEndpointReason()`（说明被删了而不是改成引用）')
       .toBe(true);
-    expect(lobby.includes('NO_ENDPOINT_HEADLINE'), '大厅没有引用 `NO_ENDPOINT_HEADLINE`').toBe(true);
+    expect(lobby.includes('noEndpointHeadline()'), '大厅没有引用 `noEndpointHeadline()`').toBe(true);
+    expect(lobby.includes('NO_ENDPOINT_REASON('), '大厅还在调旧的常量名（那是个 `t()` 冻在中文本的常量）').toBe(false);
     // ③ 反空转：那句话确实在唯一出处里（否则上面两条是在扫不存在的串）
     //    ★ T38：出处里那句的正文已按新事实改过（不再断言"不向任何服务器发请求"）
-    const invite = readFileSync(fileURLToPath(new URL('../../src/net/invite.ts', import.meta.url)))
+    //    ★ 走查 B：出处从 `invite.ts` 的常量搬进了文案表
+    const zh = readFileSync(fileURLToPath(new URL('../../src/i18n/zh.ts', import.meta.url)))
       .subarray(0, 8 * 1024 * 1024).toString('utf8');
-    expect(invite.includes('默认没有配置信令端点'), '唯一出处里没有那句话（词表过时了）').toBe(true);
-    // ④ 整句仍然逐字可拼（`NO_ENDPOINT_MESSAGE` 的正文一字未变）
-    expect(NO_ENDPOINT_HEADLINE + NO_ENDPOINT_REASON, 'HEADLINE+REASON 不再是原句的前两段')
-      .toBe(NO_ENDPOINT_MESSAGE.slice(0, (NO_ENDPOINT_HEADLINE + NO_ENDPOINT_REASON).length));
-    expect(NO_ENDPOINT_MESSAGE, '整句里少了"否则既有的那条文本腿会红"的那一段')
+    expect(zh.includes('默认没有配置信令端点'), '唯一出处里没有那句话（词表过时了）').toBe(true);
+    // ④ 整句仍然逐字可拼（三段拼成整句的形状一字未变）
+    expect(noEndpointHeadline() + noEndpointReason(), 'HEADLINE+REASON 不再是原句的前两段')
+      .toBe(noEndpointMessage().slice(0, (noEndpointHeadline() + noEndpointReason()).length));
+    expect(noEndpointMessage(), '整句里少了"否则既有的那条文本腿会红"的那一段')
       .toContain('6 位房间码需要一台中间服务器把两端牵上线');
   });
 
@@ -1983,16 +2027,16 @@ describe('★ 修复轮 · D22 的第二份信令说明（评审 §4.2 的违例
     const h = mountLobby({ role: 'guest', advancedOpen: true, endpoint: '' });
     h.render();
     const text = textOf(h.root);
-    expect(text, '屏上没有 `NO_ENDPOINT_REASON` 的正文').toContain(NO_ENDPOINT_REASON);
-    expect(text, '屏上没有 `NO_ENDPOINT_HEADLINE` 的正文').toContain(NO_ENDPOINT_HEADLINE);
+    expect(text, '屏上没有 `noEndpointReason()` 的正文').toContain(noEndpointReason());
+    expect(text, '屏上没有 `noEndpointHeadline()` 的正文').toContain(noEndpointHeadline());
     // 反证：端点**配好了**的时候不该再说"还没有配置"
     const h2 = mountLobby({ role: 'guest', advancedOpen: true, endpoint: 'wss://x.invalid' });
     h2.render();
     const text2 = textOf(h2.root);
-    expect(text2.includes(NO_ENDPOINT_HEADLINE), '端点已配置却还说"还没有配置信令端点"').toBe(false);
+    expect(text2.includes(noEndpointHeadline()), '端点已配置却还说"还没有配置信令端点"').toBe(false);
     expect(text2, '端点配好了却没把它显示出来').toContain('wss://x.invalid');
     // 而"端点默认状态"那半句**两种情况都在**（它说的是端点这件事的设计，不是当前配置）
-    expect(text2, '端点配好之后少了"默认没有配置信令端点"那半句').toContain(NO_ENDPOINT_REASON);
+    expect(text2, '端点配好之后少了"默认没有配置信令端点"那半句').toContain(noEndpointReason());
   });
 });
 
@@ -3483,18 +3527,39 @@ describe('★★ G5/T17 · 粘贴框先判形态：整条链接、`#invite=` 片
     const h = mountLobby({ role: 'guest' });
     h.render();
     const hint = oneOf(h.root, '.net-lobby-paste-hint');
-    expect(hint.text, '粘贴框旁边那句提示不是 `PASTE_SHAPE_HINT` 的正文').toBe(PASTE_SHAPE_HINT);
+    /**
+     * ★ 2026-10-02（走查 B6）：这句原来是**模块级常量**（`PASTE_SHAPE_HINT`）——
+     * `t()` 在 import 那一刻求值 ⇒ 英文模式下屏上照旧是中文（键与英文值都在，所以没有腿抓得到）。
+     * 现在它是**取值函数** `pasteShapeHint()`，渲染点现调。这条腿因此：
+     *  ① 屏上那句话必须等于**现调**拿到的值（不是"某个常量"）；
+     *  ② 值的形状（三种形态点名、无表情符号）照旧钉住。
+     */
+    expect(hint.text, '粘贴框旁边那句提示不是 `pasteShapeHint()` 现调的结果').toBe(pasteShapeHint());
     // 三种形态都要点名（否则等于没说）
     for (const word of ['链接', '#invite=', '邀请码']) {
-      expect(PASTE_SHAPE_HINT.includes(word), `那句提示里没有「${word}」`).toBe(true);
+      expect(pasteShapeHint().includes(word), `那句提示里没有「${word}」`).toBe(true);
     }
     // 反空转：它是**加入方**那一屏的东西，别处不出现（房主那屏没有粘贴框）
     const host = mountLobby({ role: 'host' });
     host.render();
     expect(queryAllIn(host.root, '.net-lobby-paste-hint').length, '房主那屏上也出现了粘贴提示').toBe(0);
     // 本仓纪律：任何玩家可见文本不许带表情符号
-    expect(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(PASTE_SHAPE_HINT), '那句提示里带了表情符号')
+    expect(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(pasteShapeHint()), '那句提示里带了表情符号')
       .toBe(false);
+    // ★ 反向：屏上那句话必须**跟着语言走**（这正是 B6 那个缺陷的判据面）。
+    //   它在 `setLang('en')` 之后必须变成英文值，且不再是那句中文。
+    const zhText = pasteShapeHint();
+    setLang('en');
+    try {
+      const h2 = mountLobby({ role: 'guest' });
+      h2.render();
+      const enText = oneOf(h2.root, '.net-lobby-paste-hint').text;
+      expect(enText, '英文模式下粘贴提示还是那句中文（模块级 t() 的语言冻结回来了）').not.toBe(zhText);
+      expect(/[\u4e00-\u9fff]/.test(enText), `英文模式下粘贴提示里还有汉字：${enText}`).toBe(false);
+      expect(enText).toBe(pasteShapeHint());
+    } finally {
+      setLang(DEFAULT_LANG);
+    }
   });
 });
 

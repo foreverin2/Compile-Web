@@ -15,13 +15,16 @@ import {
   INVITE_FRAGMENT_KEY,
   INVITE_PAYLOAD_VERSION,
   INVITE_PROTO_VERSION,
-  NO_ENDPOINT_MESSAGE,
   base64UrlToBytes,
   bytesToBase64Url,
   decodeInvite,
   decodeInviteText,
   encodeInvite,
   markerOfKind,
+  noEndpointHeadline,
+  noEndpointMessage,
+  noEndpointNextSteps,
+  noEndpointReason,
   readInviteSegment,
   inviteFragmentOf,
   inviteLinkOf,
@@ -33,6 +36,8 @@ import {
   utf8Encode,
   type InviteFields,
 } from '../../src/net/invite';
+// ★ 2026-10-02（走查 B）：那句提示的正文搬进了文案表 ⇒ 这条腿要能切语言（中英文各拼一遍）。
+import { DEFAULT_LANG, setLang } from '../../src/i18n';
 
 /* ============================================================================
  * G5 T7 的**纯层**判据（`src/net/invite.ts`）
@@ -457,20 +462,46 @@ describe('端点判定与那句提示（判据 5 的文案本体，判据 14 的
       expect(g.ok, `${JSON.stringify(v)} 被判成"配了端点"`).toBe(false);
       if (!g.ok) {
         expect(g.reason).toBe('no-endpoint');
-        expect(g.message).toBe(NO_ENDPOINT_MESSAGE);
+        expect(g.message).toBe(noEndpointMessage());
       }
     }
   });
 
   it('★ 那句提示能看出真因：提到"信令端点"与"6 位码"，并给出下一步（邀请码 / 高级设置）', () => {
-    expect(NO_ENDPOINT_MESSAGE).toContain('信令端点');
-    expect(NO_ENDPOINT_MESSAGE).toContain('6 位码');
-    expect(NO_ENDPOINT_MESSAGE).toContain('邀请码');
-    expect(NO_ENDPOINT_MESSAGE).toContain('高级 / 连接设置');
+    expect(noEndpointMessage()).toContain('信令端点');
+    expect(noEndpointMessage()).toContain('6 位码');
+    expect(noEndpointMessage()).toContain('邀请码');
+    expect(noEndpointMessage()).toContain('高级 / 连接设置');
     // ★★ G5/T38：原句"默认不向任何服务器发请求"**不再成立**（默认 ICE 就要联系 STUN/TURN），
     //    所以这句提示改成说**端点这件事**的默认状态。这条腿的意图没变：那句话必须自己说清
     //    "为什么短码走不了"，而不是只给一个"不可用"。
-    expect(NO_ENDPOINT_MESSAGE).toContain('默认没有配置信令端点');
+    expect(noEndpointMessage()).toContain('默认没有配置信令端点');
+  });
+
+  it('★ 2026-10-02（走查 B）：三段拼成整句的**形状**没变，且英文拼出来不许粘在一起', () => {
+    /**
+     * 这一条钉的是"常量 → 取值函数"这次改动**没有顺手改变句子的组装方式**：
+     * 整句仍然是 `① + ② + ③`（大厅在「高级 / 连接设置」区单独渲染 ①②）。
+     */
+    for (const lang of ['zh', 'en'] as const) {
+      setLang(lang);
+      expect(noEndpointMessage()).toBe(noEndpointHeadline() + noEndpointReason() + noEndpointNextSteps());
+      // 三段各自非空（少一段就不是那句提示了）
+      for (const [name, part] of [
+        ['headline', noEndpointHeadline()], ['reason', noEndpointReason()], ['next-steps', noEndpointNextSteps()],
+      ] as const) {
+        expect(part.length, `${lang} 的 ${name} 是空的`).toBeGreaterThan(10);
+      }
+    }
+    setLang('en');
+    /**
+     * ⚠️ **英文的句号后面必须空一格**：中文句号后面不空格（中文值逐字保留），英文不加空格
+     * 会拼成 `configured.A 6-digit`。收尾/前导空格住在 `en.ts` 的两个值里（见那里的注释），
+     * 这条腿就是防"有人顺手 trim 掉"。
+     */
+    expect(noEndpointMessage(), '英文那句拼出了 `句号紧跟字母` 的粘在一起形态')
+      .not.toMatch(/\.[A-Za-z]/);
+    setLang(DEFAULT_LANG);
   });
 
   it('端点非空 ⇒ 通过，且**原样**带回（不在这里做 URL 校验：那是浏览器层的事）', () => {
@@ -482,10 +513,18 @@ describe('端点判定与那句提示（判据 5 的文案本体，判据 14 的
   it('判据 14 的**反向**：文案本体在 `invite.ts`，`net-browser.ts` 只转发、不另写一份', () => {
     const netBrowser = readSrc(fileURLToPath(new URL('../../src/ui/net-browser.ts', import.meta.url)));
     const code = stripComments(netBrowser);
-    // 它导出的是同一个常量（转发），而不是一段新写的字符串
-    expect(code).toContain('export const NO_SIGNALING_ENDPOINT_MESSAGE = NO_ENDPOINT_MESSAGE;');
+    /**
+     * ★ 2026-10-02（走查 B）：形状从"转发常量"改成"转发函数"（常量会把语言冻在 import 那一刻）。
+     * 判据的意图没变：**这里不许新写一句**，只许把纯层那个唯一出口转出去。
+     */
+    expect(code).toContain('export function noSignalingEndpointMessage(): string {');
+    expect(code, '转发出口没有调用纯层的那个唯一出口').toMatch(/return\s+noEndpointMessage\(\);/);
     // 那句提示的正文**不许**在 net-browser.ts 里再出现一次（各写一份就是同一概念两个家）
     expect(code.includes('6 位房间码需要一台中间服务器把两端牵上线'), 'net-browser.ts 里复制了那句提示的正文').toBe(false);
+    // 反向：那句话的**唯一出处**现在是文案表（`src/i18n/zh.ts`），产出代码里一个字都没有
+    const inviteSrc = stripComments(readSrc(fileURLToPath(new URL('../../src/net/invite.ts', import.meta.url))));
+    expect(inviteSrc.includes('6 位房间码需要一台中间服务器把两端牵上线'),
+      'invite.ts 里又写了一遍那句正文（应当只调 noEndpointReason()）').toBe(false);
   });
 });
 

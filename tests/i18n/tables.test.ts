@@ -904,3 +904,342 @@ describe('★ B：特效开关的存储口径（与昵称/语言同一份设置�
     resetFxSettingsForTest();
   });
 });
+
+/* ============================================================================
+ * 8. ★ 2026-10-02（英文模式真机走查 A）：**占位符不许漏传**（生成式）
+ *
+ * 走查抓到的缺陷形状：一句话被抽成**多个键**（`…zoom-hint.1` / `.2` / `.3` / `.4`），
+ * 而 `{max}` 住在 `.2` 里、参数却只传给了 `.1` ⇒ 屏上留着 `(50%~{max}%…`，
+ * **中英文都坏**。既有那几条腿全都抓不到它：键都在表里、值都非空、语言也对。
+ *
+ * ## 这条腿问的是什么（不是"表里有没有占位符"）
+ *
+ * `t()` 的契约是"**缺的参数保留占位原文**"（不静默变空串，屏上看得见）—— 那对排查是对的，
+ * 但它意味着**漏传参数不会报错、只会把 `{max}` 印在屏上**。所以判据必须落在**调用点**上：
+ *
+ *   > 对**每一个**含 `{xxx}` 的键（两张表的值合并起来看），
+ *   > **每一处**静态调用点（`t('键', …)`）都必须把那个键值里出现的**每一个**占位符
+ *   > 作为自己的属性名给出来。
+ *
+ * ## 覆盖面的三条边界（如实声明）
+ *
+ *  - 只认**静态第一实参**（`t('a.b', …)`）：动态键另有腿（"不许有动态键"）当场报红；
+ *  - 第二实参必须是**对象字面量**：变量 / 展开（`…rest`）**判不了** ⇒ 报红并要求改成字面量
+ *    （与"动态键"同一条口径：宁可窄而响，不做静默放行）。当前真树零命中；
+ *  - 它不判断传进来的**值**对不对（那是各屏自己的事），只判断"名字给全了没有"。
+ *
+ * ## 反向验证
+ *
+ * 把 `src/ui/cardmaker/page.ts` 里 `.2` 那处的 `{ max: … }` 删掉 ⇒ 这条腿当场红
+ * （报告里贴了实测）。同理，`coin.result` 在热座那条路上漏 `call` 时它也会红 ——
+ * 那正是同一次走查里**同一族**的第二处（`{call}掷出…`）。
+ * ========================================================================== */
+
+/** 一处 `t(…)` 调用的**静态**读数（只收第一实参是字面量的那些） */
+interface TCallSite {
+  /** 第一实参的字面量（键） */
+  readonly key: string;
+  /** 第二实参原文（没给就是 `null`） */
+  readonly arg1: string | null;
+  /** 仓库相对路径 + 行号（报错里人读） */
+  readonly at: string;
+}
+
+/**
+ * 一条 `t(…)` 调用的**全部顶层实参**原文。
+ *
+ * 与 `tArgTexts()` 同源（同一套"括号配平 + 字面量整段跳过"的扫描），区别只是它**不止步于
+ * 第一个逗号** —— 占位符那条腿需要第二实参。两份实现放在同一个文件里，改口径时一起改。
+ */
+function tCallArgsAt(code: string, from: number): { readonly args: string[]; readonly end: number } {
+  const args: string[] = [];
+  let depth = 0;
+  let j = from;
+  let buf = '';
+  for (; j < code.length; j += 1) {
+    const c = code[j];
+    if (c === "'" || c === '"' || c === '`') {
+      const q = c;
+      buf += c;
+      j += 1;
+      for (; j < code.length; j += 1) {
+        if (code[j] === '\\') { buf += code[j]; j += 1; if (j < code.length) buf += code[j]; continue; }
+        buf += code[j];
+        if (code[j] === q) break;
+      }
+      continue;
+    }
+    if (c === '(' || c === '[' || c === '{') { depth += 1; if (depth > 1) buf += c; continue; }
+    if (c === ')' || c === ']' || c === '}') {
+      depth -= 1;
+      if (depth === 0) { args.push(buf.trim()); break; }
+      buf += c;
+      continue;
+    }
+    if (c === ',' && depth === 1) { args.push(buf.trim()); buf = ''; continue; }
+    buf += c;
+  }
+  return { args, end: j };
+}
+
+function tCallSites(f: SourceFile): TCallSite[] {
+  const out: TCallSite[] = [];
+  const code = f.code;
+  for (let i = 0; i < code.length; i += 1) {
+    if (code[i] !== 't' || code[i + 1] !== '(') continue;
+    const prev = i === 0 ? '' : code[i - 1];
+    if (/[A-Za-z0-9_$.]/.test(prev)) continue;
+    const { args, end } = tCallArgsAt(code, i + 1);
+    const m = /^(?:'([^'\\$]*)'|"([^"\\$]*)"|`([^`\\$]*)`)$/.exec(args[0] ?? '');
+    if (m === null) continue; // 动态键：由"不许有动态键"那条腿负责
+    const line = code.slice(0, i).split('\n').length;
+    out.push({
+      key: m[1] ?? m[2] ?? m[3],
+      arg1: args.length > 1 ? args[1] : null,
+      at: `${f.rel}:${line}`,
+    });
+    i = end; // 跳过这一次调用的实参表（防嵌套 `t()` 被当成两处）
+  }
+  return out;
+}
+
+/**
+ * 一个对象字面量的**顶层属性名**（可以当成占位符来源的那些）。
+ *
+ * 为什么只取**顶层**：`t('k', { x: { max: 1 } })` 里那个嵌套的 `max` **不是**给 `{max}` 用的
+ * —— 把它算成"给了"就是这条腿的假绿形态。做法是按**深度 0 的逗号**切段，每段取第一个
+ * 深度 0 的 `:` 之前那一截。
+ */
+function objectParamNames(arg1: string): { readonly names: string[]; readonly spread: boolean; readonly literal: boolean } {
+  const src = arg1.trim();
+  if (!src.startsWith('{')) return { names: [], spread: false, literal: false };
+  const inner = src.slice(1, src.endsWith('}') ? src.length - 1 : src.length);
+  const names: string[] = [];
+  let spread = false;
+  let depth = 0;
+  let buf = '';
+  const take = (seg: string): void => {
+    const s = seg.trim();
+    if (s === '') return;
+    if (s.startsWith('...')) { spread = true; return; }
+    const colon = topLevelColon(s);
+    const name = (colon < 0 ? s : s.slice(0, colon)).trim();
+    if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) names.push(name);
+  };
+  for (let i = 0; i < inner.length; i += 1) {
+    const c = inner[i];
+    if (c === "'" || c === '"' || c === '`') {
+      const q = c;
+      i += 1;
+      while (i < inner.length) {
+        if (inner[i] === '\\') { i += 2; continue; }
+        if (inner[i] === q) break;
+        i += 1;
+      }
+      continue;
+    }
+    if (c === '(' || c === '[' || c === '{') { depth += 1; buf += c; continue; }
+    if (c === ')' || c === ']' || c === '}') { depth -= 1; buf += c; continue; }
+    if (c === ',' && depth === 0) { take(buf); buf = ''; continue; }
+    buf += c;
+  }
+  take(buf);
+  return { names, spread, literal: true };
+}
+
+/** 段里**深度 0** 的第一个 `:` 的下标（`{ a: b ? c : d }` 的那个 `?` 三元不在这里，本仓用不到） */
+function topLevelColon(seg: string): number {
+  let depth = 0;
+  for (let i = 0; i < seg.length; i += 1) {
+    const c = seg[i];
+    if (c === "'" || c === '"' || c === '`') {
+      const q = c;
+      i += 1;
+      while (i < seg.length) {
+        if (seg[i] === '\\') { i += 2; continue; }
+        if (seg[i] === q) break;
+        i += 1;
+      }
+      continue;
+    }
+    if (c === '(' || c === '[' || c === '{') { depth += 1; continue; }
+    if (c === ')' || c === ']' || c === '}') { depth -= 1; continue; }
+    if (c === ':' && depth === 0) return i;
+  }
+  return -1;
+}
+
+/** 一个值里出现的占位符名（`{max}` ⇒ `max`） */
+function placeholderNamesOf(value: string): string[] {
+  return [...value.matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g)].map((m) => m[1]);
+}
+
+/** 判据面：消费者 **+ i18n 层自己的代码位**（`saveFailedText()` 那几条键住在 `src/i18n/index.ts`） */
+const PLACEHOLDER_SITES = [...CONSUMERS, ...I18N_CODE];
+
+/** 键 → 它在**两张表**的值里出现过的全部占位符（并集：英文表多一个占位符也要被抓到） */
+const KEY_PLACEHOLDERS: ReadonlyMap<string, readonly string[]> = (() => {
+  const m = new Map<string, Set<string>>();
+  for (const table of [ZH, EN]) {
+    for (const [k, v] of Object.entries(table)) {
+      const ph = placeholderNamesOf(v);
+      if (ph.length === 0) continue;
+      const set = m.get(k) ?? new Set<string>();
+      for (const p of ph) set.add(p);
+      m.set(k, set);
+    }
+  }
+  return new Map([...m].map(([k, v]) => [k, [...v].sort()]));
+})();
+
+/**
+ * 判据本体：返回"漏了占位符 / 判不了"的那些调用点（人读的字符串）。空数组 = 绿。
+ *
+ * 抽成函数是为了**正控**能用合成源码喂它（见下面的自证腿）。
+ */
+function placeholderViolations(sites: readonly TCallSite[]): string[] {
+  const out: string[] = [];
+  for (const s of sites) {
+    const need = KEY_PLACEHOLDERS.get(s.key);
+    if (need === undefined) continue;
+    if (s.arg1 === null) {
+      out.push(`${s.at}：t('${s.key}') 没给第二实参，而值里有占位符 {${need.join('} {')}}`);
+      continue;
+    }
+    const { names, spread, literal } = objectParamNames(s.arg1);
+    if (!literal) {
+      out.push(`${s.at}：t('${s.key}') 的第二实参不是对象字面量（静态判不了它给了哪些占位符）`);
+      continue;
+    }
+    if (spread) {
+      out.push(`${s.at}：t('${s.key}') 的第二实参里有展开（…），静态判不了它给了哪些占位符`);
+      continue;
+    }
+    const lack = need.filter((n) => !names.includes(n));
+    if (lack.length > 0) out.push(`${s.at}：t('${s.key}') 没传 {${lack.join('} {')}}`);
+  }
+  return out;
+}
+
+describe('★ 占位符不许漏传（生成式：扫每一个含 {xxx} 的键的每一处静态调用点）', () => {
+  it('扫描面自检：真的扫到了调用点与含占位符的键（否则下面每条判据在空集上恒真）', () => {
+    const sites = PLACEHOLDER_SITES.flatMap((f) => tCallSites(f));
+    expect(sites.length, '一处静态 t() 调用都没扫到 ⇒ 路径/扫描器写错').toBeGreaterThan(200);
+    expect(KEY_PLACEHOLDERS.size, '表里一个含占位符的键都没有 ⇒ 这条腿没在防任何东西').toBeGreaterThan(50);
+    // 锚点：这次修的那条腿的键必须真的在判据面里（它是缺陷的原始现场）
+    expect([...KEY_PLACEHOLDERS.keys()]).toContain('cardmaker.page.logo.zoom-hint.2');
+    expect(sites.some((s) => s.key === 'cardmaker.page.logo.zoom-hint.2'),
+      '原始现场那个键没有调用点 ⇒ 判据面错了').toBe(true);
+  });
+
+  it('每一处调用点都把该键值里的占位符给全了（少一个就报红，逐处点名）', () => {
+    const bad = placeholderViolations(PLACEHOLDER_SITES.flatMap((f) => tCallSites(f)));
+    expect(
+      bad,
+      '这些调用点漏传了占位符 —— 屏上会原样印出 `{xxx}`（中英文都坏）：\n' + bad.join('\n'),
+    ).toEqual([]);
+  });
+
+  it('★ 正控：合成源码里漏一个参数 / 不给参数 / 给展开 ⇒ 都必须被报出来', () => {
+    // ① 漏一个（就是走查抓到的那一处：`{min}` 给了、`{max}` 没给）
+    const missingOne: TCallSite = { key: 'cardmaker.page.logo.zoom-hint.2', arg1: '{ min: "50" }', at: 'synth.ts:1' };
+    expect(placeholderViolations([missingOne]), '漏了一个占位符没被报出来').not.toEqual([]);
+    // ② 一个参数都不给
+    const none: TCallSite = { key: 'cardmaker.page.logo.zoom-hint.2', arg1: null, at: 'synth.ts:2' };
+    expect(placeholderViolations([none])).not.toEqual([]);
+    // ③ 展开（静态判不了）
+    const spread: TCallSite = { key: 'cardmaker.page.logo.zoom-hint.2', arg1: '{ ...base }', at: 'synth.ts:3' };
+    expect(placeholderViolations([spread])).not.toEqual([]);
+    // ④ 反向锚点：给全了就是绿的（否则上面三条可能是"恒红"）
+    const ok: TCallSite = { key: 'cardmaker.page.logo.zoom-hint.2', arg1: '{ max: "200" }', at: 'synth.ts:4' };
+    expect(placeholderViolations([ok]), '给全了还被判红 ⇒ 这条腿恒红，等于没在判').toEqual([]);
+  });
+
+  it('★ 判据自证：`objectParamNames()` 只认顶层属性名（嵌套的对象不许冒充）', () => {
+    expect(objectParamNames('{ min: f(1, 2), max: "200" }').names.sort()).toEqual(['max', 'min']);
+    // 简写形态（`settings.lang.fail.too-large` 那一处就是 `{ bytes, limit }`）
+    expect(objectParamNames('{ bytes, limit }').names.sort()).toEqual(['bytes', 'limit']);
+    // ★ 嵌套：`{ x: { max: 1 } }` 里的 `max` **不算**给 `{max}` 用
+    expect(objectParamNames('{ x: { max: 1 } }').names).toEqual(['x']);
+    expect(objectParamNames('{ ...rest, max }').spread, '展开没被认出来').toBe(true);
+    expect(objectParamNames('params').literal, '变量实参被当成了对象字面量').toBe(false);
+  });
+});
+
+/* ============================================================================
+ * 9. ★ 2026-10-02（英文模式真机走查 B7）：**英文表里不许出现汉字**
+ *
+ * 走查抓到的缺陷形状：`en.ts` 的 `'cardmaker.page.credit.license-value'` 写的是 `'MIT 许可'`
+ * —— 键在、两表同步、占位符也对、连"值非空"都过，**但英文模式下屏上就是半句中文**。
+ * 那一条的成因是"照抄数据常量"（`CREDIT.license` 是纯数据、值必须是中文），照抄时把中文
+ * 一起带进了英文表。
+ *
+ * ## 白名单是**逐条列出 + 逐条给理由**的
+ *
+ * 出现汉字**必须**登记；反过来，登记了却不再出现汉字也报红（白名单不许长草）。
+ * ========================================================================== */
+
+/**
+ * 英文表里允许出现汉字的地方 —— 每一条都说清**为什么**。
+ *
+ * 口径：`en` 值是"英文玩家看到的东西"，出现汉字必须是**有意的**（人名、双语标签、
+ * 或引用了不翻译的原文），不能是"漏翻 / 照抄了中文"。
+ */
+const EN_CJK_ALLOW: Readonly<Record<string, string>> = {
+  'settings.lang':
+    '语言这一行是**双语标签**（`语言 / Language`）：只会英文的玩家第一次进设置也得认得出'
+    + '哪一行管语言。这是语言功能自己的读数，设计如此（`tests/i18n/settings-overlay.test.ts` 钉着）。',
+  'home.footer':
+    '页脚署名里的 `「我吃吃吃吃」` 是**专有名词**（用户名），中英同款、不翻译。'
+    + '走查也把它判成"干净（人名）"。',
+  'tutorial.T9.observe':
+    '同上：引用了引擎日志原文（`[中部] speed-0：原因：翻正` / `被揭开`）。',
+  'tutorial.T10.observe':
+    '引用了**引擎日志的原文**（`P1 控制阶段：2 条线总值高于对手 → 获得控制组件`）。'
+    + '引擎日志住在 `src/core/**`（红线），本轮不抽 ⇒ 教学里引用的那一行无论界面语言都得是中文。'
+    + '这条与上下两条同族，属已知缺口（见 `docs/2026-10-01-i18n-尚未抽取的屏.md` 的 F 节）。',
+  'tutorial.T11.observe':
+    '同上：引用了引擎日志原文（`[被盖前] fire-0` / `[结束] life-0：由 P1 结算`）。',
+  'tutorial.T12.observe':
+    '同上：引用了引擎日志原文（`rigidity-7 不可被翻转，跳过`）。',
+};
+
+describe('★ 英文表里不许出现汉字（白名单逐条列出并说明理由）', () => {
+  it('`en` 的每一个值里都没有汉字，除非在 `EN_CJK_ALLOW` 里逐条登记过', () => {
+    const hits = Object.keys(EN)
+      .filter((k) => /[\u3400-\u9fff]/.test(EN[k]))
+      .sort();
+    const unregistered = hits.filter((k) => EN_CJK_ALLOW[k] === undefined);
+    expect(
+      unregistered,
+      '英文表里这些值是中文（英文界面下会直接显示出来）：\n'
+      + unregistered.map((k) => `  - ${k}: ${EN[k]}`).join('\n')
+      + '\n处置：改成真的英文；确实要留汉字（人名 / 双语标签 / 引用不翻译的原文）就登记进 EN_CJK_ALLOW 并写明理由。',
+    ).toEqual([]);
+  });
+
+  it('反向：白名单里不许留"已经不含汉字"的陈旧条目（它只准变短）', () => {
+    const stale = Object.keys(EN_CJK_ALLOW).filter((k) => !/[\u3400-\u9fff]/.test(EN[k] ?? ''));
+    expect(stale, `这些键已经不含汉字了，把它们从白名单里删掉：${stale.join(', ')}`).toEqual([]);
+  });
+
+  it('白名单自证：每条都真的在英文表里、且理由非空（不是一张空壳）', () => {
+    const keys = Object.keys(EN_CJK_ALLOW);
+    expect(keys.length, '白名单是空的 ⇒ 上面那条"逐条登记"没有判据面').toBeGreaterThan(0);
+    for (const k of keys) {
+      expect(EN[k], `白名单里的 ${k} 不在英文表里（幽灵条目）`).toBeTypeOf('string');
+      expect(EN_CJK_ALLOW[k].length, `${k} 的理由写得太短（等于没写）`).toBeGreaterThan(20);
+    }
+    // 正控：合成一份"英文值里写了中文"的表 ⇒ 判据必须能报出来
+    const synth: Readonly<Record<string, string>> = { ...EN, 'synth.zh-in-en': '这条是中文' };
+    const hits = Object.keys(synth).filter((k) => /[\u3400-\u9fff]/.test(synth[k])).sort();
+    expect(hits, '正控：合成的那条中文没被扫出来').toContain('synth.zh-in-en');
+    expect(hits.filter((k) => EN_CJK_ALLOW[k] === undefined), '正控：未登记的汉字没被判红').toContain('synth.zh-in-en');
+  });
+
+  it('★ 走查抓到的那一条的现状：`cardmaker.page.credit.license-value` 的英文值是 `MIT License`', () => {
+    expect(EN['cardmaker.page.credit.license-value']).toBe('MIT License');
+    // 中文值**必须**与数据常量 `CREDIT.license` 逐字相同（`CLEAN_DECLARED` 那条腿钉着）
+    expect(ZH['cardmaker.page.credit.license-value']).toBe('MIT 许可');
+  });
+});

@@ -48,22 +48,30 @@
  * 中文值逐字等于改动前的字面量；对端/会话层给的那几句（refusal.detail、needsResyncDetail）
  * 仍然原样显示、不翻译。
  *
- * 取值时机**全部在调用点**（`t(...)` 写在函数体里，不写成模块级常量）—— 唯一的两个例外是
- * `ERROR_COPY_BOUNDARY` 与 `PASTE_SHAPE_HINT`：它们是**导出的字符串常量**，形状（`string`）
- * 与导出名被测试与外部钉住，只能在这里求值一次（代价见抽取报告）。
+ * 取值时机**全部在调用点**（`t(...)` 写在函数体里，不写成模块级常量）。
+ *
+ * ★ 2026-10-02（英文模式真机走查的 B6）：原本唯一的两个例外是 `ERROR_COPY_BOUNDARY` 与
+ * `PASTE_SHAPE_HINT` —— 它们是**导出的字符串常量**，`t()` 在**模块加载那一刻**求值，
+ * 早于 `src/main.ts` 的 `initI18n(...)` ⇒ 语言被冻在默认中文上：占位符腿、两张表的键、
+ * 英文值全都没问题，**英文模式下屏上那半句仍然是中文**（走查实测：`.net-lobby-paste-hint`
+ * 显示的是那句中文，而同屏其它文案都是英文）。这是最难查的一族 i18n 缺陷。
+ *
+ * ⇒ 两个都改成**取值函数**（`errorCopyBoundary()` / `pasteShapeHint()`），调用点现调。
+ * 机检：`tests/i18n/module-scope-t.test.ts` 扫 `src/**`（排除 `src/i18n/**`）的**模块顶层**
+ * 的 `t(` —— 出现即红。
  */
 
 import { t } from '../i18n';
 import {
   INVITE_FRAGMENT_KEY,
   INVITE_PROTO_VERSION,
-  NO_ENDPOINT_HEADLINE,
-  NO_ENDPOINT_REASON,
   base64UrlToBytes,
   decodeInviteText,
   inviteFragmentOf,
   inviteLinkOf,
   isAnswerPayload,
+  noEndpointHeadline,
+  noEndpointReason,
   protocolVersionCheck,
   qrPlaceholder,
   readInviteSegment,
@@ -564,7 +572,9 @@ export function refusalNotice(refusal: LobbyRefusal): { readonly key: LobbyError
  *
  * 这个边界不是"没做到"，是这条判据**声明的范围**：写成"五条都验过了"才是谎报。
  */
-export const ERROR_COPY_BOUNDARY = t('net-lobby.error.boundary');
+export function errorCopyBoundary(): string {
+  return t('net-lobby.error.boundary');
+}
 
 /* ==================================================================== *
  * 3. "断线 ≠ 刷新"的文案（判据 8）：读数 → 文案，只有这一张表
@@ -1032,9 +1042,13 @@ const FRAGMENT_PREFIX = `#${INVITE_FRAGMENT_KEY}=`;
  *
  * 它存在的理由就是用户真机实测的那个事故：房主屏上写的是"把这条**邀请链接**发给对方"，
  * 玩家照做、把整条链接粘进加入方的框里，而那条路当时只吃裸载荷。
+ *
+ * ★ 2026-10-02（走查 B6）：**取值函数**，不是模块级常量 —— 后者会把语言冻在模块加载那一刻
+ * （详见文件头注）。调用点只有渲染那一处（`renderNetLobby` 里的 `.net-lobby-paste-hint`）。
  */
-export const PASTE_SHAPE_HINT =
-  t('net-lobby.paste.shape-hint', { prefix: FRAGMENT_PREFIX });
+export function pasteShapeHint(): string {
+  return t('net-lobby.paste.shape-hint', { prefix: FRAGMENT_PREFIX });
+}
 
 /**
  * 粘进来的**是一条链接，但链接里没有 `#invite=…` 那一段**时给邀请码那一侧的文案。
@@ -3962,7 +3976,7 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
     //   （判据 1 的引用纪律；`defaultTurnShape` 那类"默认值对照物"与本屏无关，本文件也不碰）。
     //   ⚠️ T38：那句的正文已经改过一轮（原先写的是"默认不向任何服务器发请求"，带上默认中继
     //   之后不成立）。这里**只引用、不追写**：本文件一个字都不许再描述出网行为。
-    pick.appendChild(el('p', 'net-lobby-note', NO_ENDPOINT_REASON));
+    pick.appendChild(el('p', 'net-lobby-note', noEndpointReason()));
     /**
      * ★★ **G5 T22：两条路各占一张卡**（用户反馈原话："双方建房或者加入的页面以及交互方式都太潦草了"）。
      *
@@ -4052,7 +4066,7 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
     );
     pasteBox.appendChild(pasteInput);
     // ★ G5/T17：三种形态都能粘的那句短提示（正文只有 `PASTE_SHAPE_HINT` 一处）
-    pasteBox.appendChild(el('p', 'net-lobby-paste-hint', PASTE_SHAPE_HINT));
+    pasteBox.appendChild(el('p', 'net-lobby-paste-hint', pasteShapeHint()));
     /**
      * ★★ **G5 T22：粘完之后立刻说"读到了什么"**（成败两态都如实）。
      *
@@ -4216,9 +4230,9 @@ export function renderNetLobby(root: HTMLElement, nav: LobbyRenderNav): void {
     //   信令说明（评审 §4.2 判 §2 第 6 条违例），现在改成引用。
     panel.appendChild(el('h3', 'net-lobby-h3', t('net-lobby.advanced.endpoint.h3')));
     panel.appendChild(el('p', 'net-lobby-endpoint', s.endpoint.length === 0
-      ? NO_ENDPOINT_HEADLINE
+      ? noEndpointHeadline()
       : t('net-lobby.advanced.endpoint.configured', { endpoint: s.endpoint })));
-    panel.appendChild(el('p', 'net-lobby-endpoint-reason', NO_ENDPOINT_REASON));
+    panel.appendChild(el('p', 'net-lobby-endpoint-reason', noEndpointReason()));
     panel.appendChild(el('h3', 'net-lobby-h3', t('net-lobby.advanced.relay.h3')));
     /**
      * ★★ **G5 T15：这一小块默认收起**（普通玩家不该看见三个空输入框）。

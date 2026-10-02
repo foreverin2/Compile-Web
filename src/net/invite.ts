@@ -29,8 +29,26 @@
  * **同一个 `throw`**（抛的是给内部用的 `InviteDecodeError`，带 `reason` / `message`），
  * 三类的区分靠 `reason` 字段，不靠三个 `return`。谁把那个 `throw` 改成 `return {}`，
  * 三类输入的腿会**同时**红（判据 4）。
+ *
+ * ## ★ 2026-10-02（英文模式真机走查 B）：文案改成**现调 `t()`**
+ *
+ * 本文件曾经自己拼中文句子（编/解码失败、端点为空那几句）。英文模式下那些句子**每一句都会
+ * 上屏**（大厅的 `.net-lobby-note` / `.net-lobby-error` / `.net-lobby-notice` /
+ * `.net-lobby-code-gate` / `.net-lobby-endpoint*` 全是本文件的出口）⇒ 中文值搬进
+ * `src/i18n/zh.ts`（`net.invite.*`，逐字保留），英文值同期补上。
+ *
+ * ⚠️ **一律现调，不写模块级常量**：`t()` 在模块加载那一刻求值会把语言冻在默认中文上
+ * （走查抓到的 B6 就是那个形态）。所以 `noEndpointHeadline()` / `noEndpointReason()` /
+ * `noEndpointNextSteps()` 是**取值函数**；`NO_CANDIDATES_IN_SDP` 与
+ * `INVITE_NEWER_VERSION_HINT` 这两个片段同理，是 `noCandidatesInSdp()` /
+ * `newerVersionHint()`。机检：`tests/i18n/module-scope-t.test.ts`。
+ *
+ * ⚠️ **仍留在中文的只有 `throw` 出来的"调用方违约"异常**（`encodeInvite` 收到空 SDP /
+ * 空 sessionId、`decodeInviteText` 收到非字符串、`inviteLinkOf` 收到空载荷）—— 那些是
+ * 开发者控制台里的编程错误，不是玩家可见文案，与 `src/ui/home.ts` 的 `renderCoin` 用法错误同族。
  */
 
+import { t } from '../i18n';
 import { PROTO_VERSION } from './protocol';
 
 /* ------------------------------------------------------------------ *
@@ -511,8 +529,15 @@ export function compactCandidateOfLine(line: string): CompactCandidate | null {
   return { type: m[7], address: m[5], port, localPref };
 }
 
-/** `sdp` 里一条 `a=candidate:` 行都找不到（调用方据此退回 v2） */
-export const NO_CANDIDATES_IN_SDP = '此端这一份 SDP 里没有 a=candidate: 行（等 ICE 收集完成之后再来）';
+/**
+ * `sdp` 里一条 `a=candidate:` 行都找不到（调用方据此退回 v2）。
+ *
+ * ★ 2026-10-02（走查 B）：**取值函数**而不是常量 —— 它是拼进玩家可见那句里的一段，
+ * 模块级 `t()` 会把语言冻在 import 那一刻（见文件头注）。
+ */
+export function noCandidatesInSdp(): string {
+  return t('net.invite.no-candidates-in-sdp');
+}
 
 /**
  * ★★ **整段 SDP → 紧凑载荷字段**（本文件里唯一做这件事的地方）。
@@ -534,10 +559,10 @@ export function sdpToCompact(fields: InviteFields): CompactExtractResult {
     if (!line.startsWith('a=candidate:')) continue;
     const c = compactCandidateOfLine(line);
     // 认不出的候选行**不跳过**：跳掉它等于悄悄少给对端一条路 ⇒ 退回 v2 更诚实
-    if (c === null) return { ok: false, missing: `认不出的候选行：${line.slice(0, 60)}` };
+    if (c === null) return { ok: false, missing: t('net.invite.unknown-candidate-line', { line: line.slice(0, 60) }) };
     candidates.push(c);
   }
-  if (candidates.length === 0) return { ok: false, missing: NO_CANDIDATES_IN_SDP };
+  if (candidates.length === 0) return { ok: false, missing: noCandidatesInSdp() };
   return {
     ok: true,
     fields: {
@@ -761,10 +786,13 @@ export const INVITE_PAYLOAD_VERSION = 2;
  *
  * ⚠️ 它**只挂在"形状不对"那一族失败上**（不是所有失败）：压缩段解不开 / base64url 不合法
  * 是"码被改坏了"，那时候说"版本旧"会把人带偏。
+ *
+ * ★ 2026-10-02（走查 B）：从模块级常量改成**取值函数**（`newerVersionHint()`）——
+ * 它是一段拼进玩家可见句子的后缀，常量会把语言冻在 import 那一刻（见文件头注）。
  */
-export const INVITE_NEWER_VERSION_HINT =
-  '（也请对方确认他用的是最新版本：这条码可能是更新的版本产出的格式，旧版本的前端读不懂 —— '
-  + '让对方刷新页面之后重新生成一条，或把本机更新到最新版本。）';
+export function newerVersionHint(): string {
+  return t('net.invite.newer-version-hint');
+}
 
 /**
  * 把一份**完整**载荷编成**定长位置**的 JSON 数组字节（**压缩的对象就是它**）。
@@ -890,7 +918,7 @@ export function encodeInvite(
   }
   if (!PROMISE_TEXT.test(fields.hostPromise) || !PROMISE_TEXT.test(fields.guestPromise)) {
     // 形状校验：两个承诺串必须是非空且不含分隔符 / 换行的文本（它们会进载荷）
-    return { ok: false, reason: 'bad-promise', message: '两个承诺串必须是非空、且不含分隔符的文本。' };
+    return { ok: false, reason: 'bad-promise', message: t('net.invite.bad-promise') };
   }
   /** 压的对象：紧凑档是 v3 那一份（最小必要集），否则是 v2 那一份（整段 SDP） */
   const prepared = rawBytesForInvite(fields, payload);
@@ -898,7 +926,7 @@ export function encodeInvite(
   const raw = prepared.bytes;
   const compressed = compress(raw);
   if (compressed === null || compressed.length === 0) {
-    return { ok: false, reason: 'compress-unsupported', message: '这台设备压不出邀请码要用的压缩流（压缩能力缺失）。' };
+    return { ok: false, reason: 'compress-unsupported', message: t('net.invite.compress-unsupported') };
   }
   // ★ 自洽检查（两道）：压出来的东西**必须**（a）解得动、（b）解出来还是那份载荷。
   //   它挡住的是"压缩与编码各走各的"这一类缝（压的是别的内容、或者压完被截断）。
@@ -907,14 +935,14 @@ export function encodeInvite(
     ? decompress(compressed)
     : (decompress[kind as 'raw' | 'deflate' | 'gzip']?.(bytesToBase64Url(compressed)) ?? null);
   if (back === null || back.length === 0) {
-    return { ok: false, reason: 'compress-failed', message: '压缩结果解不回来（压缩这一步没有产出可用的字节）。' };
+    return { ok: false, reason: 'compress-failed', message: t('net.invite.compress-failed') };
   }
   const roundTrip = decodeInvite(back);
   if (!roundTrip.ok) {
     return {
       ok: false,
       reason: 'compress-failed',
-      message: `压缩结果解出来不是一份可用的载荷（${roundTrip.reason}）：${roundTrip.message}`,
+      message: t('net.invite.round-trip-bad', { reason: roundTrip.reason, message: roundTrip.message }),
     };
   }
   /**
@@ -929,7 +957,7 @@ export function encodeInvite(
       return {
         ok: false,
         reason: 'compact-rebuild-incomplete',
-        message: '紧凑格式重建出来的 SDP 缺 ICE 凭据或 DTLS 指纹：这一档不可用，请退回带整段 SDP 的那一档。',
+        message: t('net.invite.compact-rebuild-incomplete'),
       };
     }
   }
@@ -990,7 +1018,7 @@ export function rawBytesForInvite(
     return {
       ok: false,
       reason: 'compact-unavailable',
-      message: `这条码没法用紧凑格式（缺 ${missing}）：请退回带整段 SDP 的那一档。`,
+      message: t('net.invite.compact-missing', { missing }),
     };
   }
   const candidates: CompactCandidate[] = [];
@@ -1002,7 +1030,7 @@ export function rawBytesForInvite(
       return {
         ok: false,
         reason: 'compact-unavailable',
-        message: `这条码没法用紧凑格式（认不出的候选行：${line.slice(0, 60)}）：请退回带整段 SDP 的那一档。`,
+        message: t('net.invite.compact-unknown-candidate', { line: line.slice(0, 60) }),
       };
     }
     candidates.push(c);
@@ -1011,7 +1039,7 @@ export function rawBytesForInvite(
     return {
       ok: false,
       reason: 'compact-unavailable',
-      message: `这条码没法用紧凑格式（${NO_CANDIDATES_IN_SDP}）：请退回带整段 SDP 的那一档。`,
+      message: t('net.invite.compact-no-candidates', { reason: noCandidatesInSdp() }),
     };
   }
   return {
@@ -1065,7 +1093,7 @@ export function decodeInvite(bytes: Uint8Array): ParsedInviteResult {
   try {
     const text = utf8Decode(bytes);
     if (text === null) {
-      throw new InviteDecodeError('bad-json', '邀请码解压后的字节不是合法的 UTF-8 文本，可能被截断或改坏了。');
+      throw new InviteDecodeError('bad-json', t('net.invite.bad-utf8'));
     }
     let raw: unknown;
     try {
@@ -1073,7 +1101,7 @@ export function decodeInvite(bytes: Uint8Array): ParsedInviteResult {
     } catch {
       throw new InviteDecodeError(
         'bad-json',
-        '邀请码解压后的内容不是 JSON 文本（可能是压缩流坏掉后被半解出来的）。请让对端重新复制一次邀请码。',
+        t('net.invite.bad-json'),
       );
     }
     return parseInvitePayload(raw);
@@ -1158,69 +1186,72 @@ const REBUILT_CANDIDATE_LINE = /^a=candidate:[A-Za-z0-9+/-]+ [0-9]+ udp [0-9]+ \
 function readCompactInvite(raw: readonly unknown[]): { readonly payload: InvitePayload; readonly sdp: string } {
   const ver = raw[AT_VERSION];
   if (typeof ver !== 'number' || !Number.isInteger(ver)) {
-    throw new InviteDecodeError('bad-payload', '邀请码里缺少格式版本（第 1 项不是整数）：这不是一份完整的邀请码。');
+    throw new InviteDecodeError('bad-payload', t('net.invite.compact-missing-version'));
   }
   if (ver !== COMPACT_PAYLOAD_VERSION) {
     throw new InviteDecodeError(
       'version-mismatch',
-      `邀请码的格式版本是 ${String(ver)}，本程序只认 ${INVITE_PAYLOAD_VERSION}（或紧凑格式的 ${COMPACT_PAYLOAD_VERSION}）：`
-        + '两端版本不一致，请让对端用同一个版本重新生成。',
+      t('net.invite.version-mismatch', {
+        ver: String(ver),
+        min: String(INVITE_PAYLOAD_VERSION),
+        compact: String(COMPACT_PAYLOAD_VERSION),
+      }),
     );
   }
   if (!nonEmptyString(raw[AT_SESSION_ID])) {
-    throw new InviteDecodeError('bad-payload', '邀请码里缺少这一局的房主会话号（sessionId）：没有它对不上房主，握手会被当场拒掉。');
+    throw new InviteDecodeError('bad-payload', t('net.invite.missing-session'));
   }
   const material = raw[COMPACT_AT_MATERIAL];
   if (!Array.isArray(material) || material.length !== 4) {
-    throw new InviteDecodeError('bad-payload', '紧凑邀请码里的连接材料不是 4 项（ufrag / pwd / 指纹 / 候选）：这份载荷不完整。');
+    throw new InviteDecodeError('bad-payload', t('net.invite.compact-material-shape'));
   }
   const [ufrag, pwd, fingerprint, rawCandidates] = material as readonly unknown[];
   if (!nonEmptyString(ufrag) || !nonEmptyString(pwd)) {
     throw new InviteDecodeError(
       'bad-payload',
-      '紧凑邀请码里缺少 ICE 凭据（a=ice-ufrag / a=ice-pwd）：这两样一个都不能省，这份载荷不完整。',
+      t('net.invite.compact-missing-ice-cred'),
     );
   }
   if (!nonEmptyString(fingerprint)) {
     throw new InviteDecodeError(
       'bad-payload',
-      '紧凑邀请码里缺少 DTLS 指纹（a=fingerprint:sha-256）：没有它就验不了对端身份，不能收下这份邀请码。',
+      t('net.invite.compact-missing-fingerprint'),
     );
   }
   if (!Array.isArray(rawCandidates)) {
-    throw new InviteDecodeError('bad-payload', '紧凑邀请码里的候选不是数组：这份载荷不完整。');
+    throw new InviteDecodeError('bad-payload', t('net.invite.compact-candidates-not-array'));
   }
   const candidates: CompactCandidate[] = [];
   for (const item of rawCandidates) {
     if (!Array.isArray(item) || item.length !== 4) {
-      throw new InviteDecodeError('bad-payload', '紧凑邀请码里有一条候选不是 4 项（类型 / 地址 / 端口 / 本机优先级）。');
+      throw new InviteDecodeError('bad-payload', t('net.invite.compact-candidate-shape'));
     }
     const [prefix, address, port, localPref] = item as readonly unknown[];
     const type = typeof prefix === 'string' ? candidateTypeOfPrefix(prefix) : null;
     if (type === null) {
-      throw new InviteDecodeError('bad-payload', `紧凑邀请码里的候选类型认不出（读到 ${JSON.stringify(prefix)}）。`);
+      throw new InviteDecodeError('bad-payload', t('net.invite.compact-candidate-type', { prefix: JSON.stringify(prefix) }));
     }
     if (!nonEmptyString(address) || typeof port !== 'number' || !Number.isSafeInteger(port) || port <= 0 || port > 65535) {
-      throw new InviteDecodeError('bad-payload', '紧凑邀请码里有一条候选的地址或端口不合法（端口要 1-65535 的整数）。');
+      throw new InviteDecodeError('bad-payload', t('net.invite.compact-candidate-address'));
     }
     if (typeof localPref !== 'number' || !Number.isSafeInteger(localPref) || localPref < 0 || localPref > 255) {
-      throw new InviteDecodeError('bad-payload', '紧凑邀请码里有一条候选的本机优先级不是 0-255 的整数。');
+      throw new InviteDecodeError('bad-payload', t('net.invite.compact-candidate-local-pref'));
     }
     candidates.push({ type, address, port, localPref });
   }
   if (candidates.length === 0) {
-    throw new InviteDecodeError('bad-payload', '紧凑邀请码里一条候选都没有：没有可用候选就建不起连接，这份载荷不完整。');
+    throw new InviteDecodeError('bad-payload', t('net.invite.compact-no-candidate'));
   }
   const spare = raw[COMPACT_AT_SPARE];
   if (!Array.isArray(spare) || spare.length !== 0) {
-    throw new InviteDecodeError('bad-payload', '紧凑邀请码里本端材料之后那一项今天必须是空数组（备用位）：这份载荷不完整或被改过。');
+    throw new InviteDecodeError('bad-payload', t('net.invite.compact-spare'));
   }
   const setup = raw[COMPACT_AT_SETUP];
   if (setup !== 'a' && setup !== 'p') {
-    throw new InviteDecodeError('bad-payload', `紧凑邀请码里的 a=setup 认不出（读到 ${JSON.stringify(setup)}）。`);
+    throw new InviteDecodeError('bad-payload', t('net.invite.compact-setup', { setup: JSON.stringify(setup) }));
   }
   if (!nonEmptyString(raw[COMPACT_AT_HOST_PROMISE]) || !nonEmptyString(raw[COMPACT_AT_GUEST_PROMISE])) {
-    throw new InviteDecodeError('bad-payload', '紧凑邀请码里缺少承诺位：这份载荷不完整。');
+    throw new InviteDecodeError('bad-payload', t('net.invite.compact-missing-promise'));
   }
   const sdp = sdpOfCompactPayload(
     { ufrag, pwd, fingerprint, candidates },
@@ -1230,7 +1261,7 @@ function readCompactInvite(raw: readonly unknown[]): { readonly payload: InviteP
   //   空串都会在这里露出来 ⇒ 宁可当场拒，也不把一串畸形 SDP 交给 setRemoteDescription）
   const rebuilt = sdp.split('\r\n').filter((l) => l.startsWith('a=candidate:'));
   if (rebuilt.length !== candidates.length || !rebuilt.every((l) => REBUILT_CANDIDATE_LINE.test(l))) {
-    throw new InviteDecodeError('bad-payload', '紧凑邀请码重建出来的候选行不合法（地址或端口里有不该有的字符）。');
+    throw new InviteDecodeError('bad-payload', t('net.invite.compact-rebuilt-candidate'));
   }
   return {
     sdp,
@@ -1286,50 +1317,49 @@ export function parseInvitePayload(raw: unknown): ParsedInviteResult {
   }
 
   if (!Array.isArray(raw)) {
-    miss('bad-payload', '邀请码里的内容不是本程序产出的形状（它不是一个位置数组）：这份载荷不完整或被改过。'
-      + INVITE_NEWER_VERSION_HINT);
+    miss('bad-payload', t('net.invite.bad-shape') + newerVersionHint());
   } else if (typeof ver !== 'number' || !Number.isInteger(ver)) {
-    miss('bad-payload', '邀请码里缺少格式版本（第 1 项不是整数）：这不是一份完整的邀请码。'
-      + INVITE_NEWER_VERSION_HINT);
+    miss('bad-payload', t('net.invite.compact-missing-version') + newerVersionHint());
   } else if (ver === COMPACT_PAYLOAD_VERSION && raw.length === COMPACT_TUPLE_LEN) {
     /**
      * v3：形状与逐字段校验都在 `readCompactInvite()` 里（它的失败已经收在 `compactFail`）。
      * ⚠️ v3 这一支的**所有**失败都是"这份要紧载荷缺项 / 被改过"⇒ 一律带上那句版本提示
      * （它正是"旧版前端读到新版码"最可能落到的那一格）。
      */
-    if (compactFail !== null) miss(compactFail.reason, compactFail.message + INVITE_NEWER_VERSION_HINT);
+    if (compactFail !== null) miss(compactFail.reason, compactFail.message + newerVersionHint());
     else if (compact === null) {
-      miss('bad-payload', '紧凑邀请码的载荷不完整（会话号 / 材料 / setup / 承诺位有缺项）。'
-        + INVITE_NEWER_VERSION_HINT);
+      miss('bad-payload', t('net.invite.compact-payload-incomplete') + newerVersionHint());
     }
   } else if (ver !== INVITE_PAYLOAD_VERSION) {
     miss(
       'version-mismatch',
-      `邀请码的格式版本是 ${String(ver)}，本程序只认 ${INVITE_PAYLOAD_VERSION}（或紧凑格式的 ${COMPACT_PAYLOAD_VERSION}）：` +
-        '两端版本不一致，请让对端用同一个版本重新生成。' + INVITE_NEWER_VERSION_HINT,
+      t('net.invite.version-mismatch', {
+        ver: String(ver),
+        min: String(INVITE_PAYLOAD_VERSION),
+        compact: String(COMPACT_PAYLOAD_VERSION),
+      }) + newerVersionHint(),
     );
   } else if (raw.length !== TUPLE_LEN) {
     miss(
       'bad-payload',
-      `邀请码里只有 ${raw.length} 项，本程序需要 ${TUPLE_LEN} 项：这份载荷缺字段，收下也没法开局。`
-        + INVITE_NEWER_VERSION_HINT,
+      t('net.invite.tuple-len', { got: String(raw.length), want: String(TUPLE_LEN) }) + newerVersionHint(),
     );
   } else {
     if (!nonEmptyString(raw[AT_SESSION_ID])) {
-      miss('bad-payload', '邀请码里缺少这一局的房主会话号（sessionId）：没有它对不上房主，握手会被当场拒掉。');
+      miss('bad-payload', t('net.invite.missing-session'));
     }
     if (!nonEmptyString(raw[AT_SDP])) {
-      miss('bad-payload', '邀请码里缺少连接描述（sdp）：这份载荷不完整，收下也没法建立连接。');
+      miss('bad-payload', t('net.invite.missing-sdp'));
     }
     const ice = raw[AT_ICE];
     if (!Array.isArray(ice) || !ice.every((x) => typeof x === 'string')) {
-      miss('bad-payload', '邀请码里的候选列表（ice）不是字符串数组：这份载荷不完整。');
+      miss('bad-payload', t('net.invite.ice-not-array'));
     }
     if (!nonEmptyString(raw[AT_HOST_PROMISE])) {
-      miss('bad-payload', '邀请码里缺少房主的种子承诺：没有它就验不了洗牌的可信度，不能收下这份邀请码。');
+      miss('bad-payload', t('net.invite.missing-host-promise'));
     }
     if (!nonEmptyString(raw[AT_GUEST_PROMISE])) {
-      miss('bad-payload', '邀请码里缺少加入方的选面承诺：这份载荷不完整。');
+      miss('bad-payload', t('net.invite.missing-guest-promise'));
     }
   }
 
@@ -1344,7 +1374,9 @@ export function parseInvitePayload(raw: unknown): ParsedInviteResult {
     return { ok: true, payload: { ...compact.payload, p: -1 } };
   }
 
-  const t = raw as readonly unknown[];
+  // ⚠️ 这个局部名**不能叫 `t`**：本文件现在从 `../i18n` import 了 `t()`（2026-10-02 走查 B），
+  //    同名局部变量会把那一层遮住 —— 而且只在**这个函数体里**遮住，编译器与测试都不会报。
+  const arr = raw as readonly unknown[];
   return {
     ok: true,
     payload: {
@@ -1352,12 +1384,12 @@ export function parseInvitePayload(raw: unknown): ParsedInviteResult {
       // `p` **不在压缩段里**（见 `payloadBytesOf` 的注释）：解析这一步只填一个占位值，
       // 真正的协议版本由 `decodeInviteText` 从明文段读进来覆盖。
       p: -1,
-      sessionId: t[AT_SESSION_ID] as string,
-      sdp: t[AT_SDP] as string,
+      sessionId: arr[AT_SESSION_ID] as string,
+      sdp: arr[AT_SDP] as string,
       // 空候选在载荷里写成 `[""]`，这里换回空数组（位置数组的下标必须固定，见 `payloadBytesOf`）
-      ice: (t[AT_ICE] as string[]).filter((x) => x.length > 0),
-      hostPromise: t[AT_HOST_PROMISE] as string,
-      guestPromise: t[AT_GUEST_PROMISE] as string,
+      ice: (arr[AT_ICE] as string[]).filter((x) => x.length > 0),
+      hostPromise: arr[AT_HOST_PROMISE] as string,
+      guestPromise: arr[AT_GUEST_PROMISE] as string,
     },
   };
 }
@@ -1407,7 +1439,7 @@ export function decodeInviteText(
     return {
       ok: false,
       reason: 'bad-base64url',
-      message: '邀请码是空的：地址栏里那一段或粘进来的那一串什么都没有。请重新完整复制一次。',
+      message: t('net.invite.empty'),
     };
   }
   const dot = text.indexOf('.');
@@ -1415,9 +1447,7 @@ export function decodeInviteText(
     return {
       ok: false,
       reason: 'bad-base64url',
-      message:
-        '这不是一条邀请码：它没有"协议版本.压缩段"这个两段结构（要么少了那一段，要么被截断了）。' +
-        '请确认整条都复制到了，前后没有多出别的字。',
+      message: t('net.invite.no-structure'),
     };
   }
   const protoText = text.slice(0, dot);
@@ -1427,7 +1457,7 @@ export function decodeInviteText(
     return {
       ok: false,
       reason: 'bad-base64url',
-      message: `邀请码开头的协议版本不是整数（收到 "${protoText}"）：这不是本程序产出的邀请码。`,
+      message: t('net.invite.bad-version-head', { head: protoText }),
     };
   }
   /**
@@ -1443,7 +1473,7 @@ export function decodeInviteText(
     return {
       ok: false,
       reason: 'bad-base64url',
-      message: `邀请码的压缩段带了一个本程序不认得的编码标记（"${seg.marker}"）：这不是本程序产出的邀请码。`,
+      message: t('net.invite.bad-marker', { marker: seg.marker }),
     };
   }
   const compressed = seg.body;
@@ -1452,9 +1482,7 @@ export function decodeInviteText(
     return {
       ok: false,
       reason: 'bad-base64url',
-      message:
-        '邀请码里有不属于 base64url 的字符（合法字符是 A-Z a-z 0-9 - _，没有 + / =）。' +
-        '常见原因是复制时被聊天软件截断或替换成了别的符号，请重新完整复制一次。',
+      message: t('net.invite.bad-chars'),
     };
   }
   const format: InviteFormatRead = { kind, marker: seg.marker, compressedChars: compressed.length };
@@ -1481,9 +1509,7 @@ export function decodeInviteText(
       return {
         ok: false,
         reason: 'decompress-unsupported',
-        message:
-          '这条邀请码用的是一种本机解不开的压缩方式（这条码是压缩档，而本机没有对应的解压能力）。' +
-          '请把这台设备换成较新的浏览器打开本页，或让对方在你这台设备上重新生成一条邀请码。',
+        message: t('net.invite.decompress-unsupported'),
       };
     }
     decoded = fn(compressed);
@@ -1492,9 +1518,7 @@ export function decodeInviteText(
     return {
       ok: false,
       reason: 'decompress-failed',
-      message:
-        '邀请码的压缩段解不开（内容被改动或截断过）。请让对端重新复制一次完整的邀请码，' +
-        '不要手工改动其中任何字符。',
+      message: t('net.invite.decompress-failed'),
     };
   }
   const r = decodeInvite(decoded);
@@ -1550,18 +1574,14 @@ export function protocolVersionCheck(
       ok: false,
       remote,
       local,
-      message:
-        `这条邀请码来自更新的版本（对方协议版本 ${remote}，本机 ${local}）：` +
-        '本机可能读不懂对端发来的消息。请把本机更新到同一个版本，或让对方用本机这个版本重新生成邀请码。',
+      message: t('net.invite.proto-newer', { remote: String(remote), local: String(local) }),
     };
   }
   return {
     ok: false,
     remote,
     local,
-    message:
-      `这条邀请码来自更旧的版本（对方协议版本 ${remote}，本机 ${local}）：` +
-      '对方可能读不懂本机发去的消息。请让对方更新到本机这个版本。',
+    message: t('net.invite.proto-older', { remote: String(remote), local: String(local) }),
   };
 }
 
@@ -1636,7 +1656,7 @@ export function inviteFragmentOf(url: string): string | null {
 export function roomCodeEntryReachability(endpoint: string | null | undefined): EndpointGate {
   const trimmed = typeof endpoint === 'string' ? endpoint.trim() : '';
   if (trimmed.length === 0) {
-    return { ok: false, reason: 'no-endpoint', message: NO_ENDPOINT_MESSAGE };
+    return { ok: false, reason: 'no-endpoint', message: noEndpointMessage() };
   }
   return { ok: true, endpoint: trimmed };
 }
@@ -1659,32 +1679,42 @@ export type EndpointGate =
  * （它有一个「高级 / 连接设置」区，那两句分别落在不同位置）。修复轮之前，大厅把后者**手写**
  * 了一遍（评审 §4.2 判为 §2 第 6 条的违例：同一件事有两个家）。
  *
- * ⇒ 处置是把那两句提成**导出常量**，本整句由它们拼成 —— 于是：
- *  - **唯一出处还是一个**（大厅渲染的是这两个常量本身，不是新写的一句）；
+ * ⇒ 处置是把那两句提成**导出取值函数**，本整句由它们拼成 —— 于是：
+ *  - **唯一出处还是一个**（大厅渲染的是这三个取值函数本身，不是新写的一句）；
  *  - 判据 1 的"引用而不是复制"照旧成立。
  *
- * ## ★★ G5/T38：`NO_ENDPOINT_REASON` 的正文改了（**越界改动，已如实登记**）
+ * ## ★ 2026-10-02（英文模式真机走查 B）：**常量 → 取值函数**
  *
- * 原句是"…而本程序默认不向任何服务器发请求。" —— **T38 起这句不再成立**：默认 ICE 就要联系
- * `8.130.97.243` 的 STUN/TURN（`src/ui/net-browser.ts` 的 `DEFAULT_ICE_SERVERS`）。
- * 任务书 §2 要求"凡这类句子都要按事实改"，而这句话的**唯一出处就在本文件**
- * ⇒ 不改它就没法满足判据 4。改后说的是**端点这件事**的默认状态（仍然是真的），
- * 不再对本程序的出网行为下一个已经不成立的断言。
+ * 这三个原来是模块级 `const`，里面的 `t()` 在**模块加载那一刻**求值 ⇒ 语言被冻在默认中文上：
+ * 英文模式下大厅 `.net-lobby-note` 与高级区那两行**照旧是中文**（键与英文值都在表里、
+ * 占位符也对 —— 所以没有一条既有腿抓得到它）。现在一律**现调**：
+ * `noEndpointHeadline()` / `noEndpointReason()` / `noEndpointNextSteps()`。
+ *
+ * ⚠️ 三段的**拼接形态没变**（整句仍是 ①+②+③）。中文句号后面不空格、英文句号后面要空格，
+ * 所以**英文值里那两处收尾空格是刻意的**（见 `en.ts` 的注释与
+ * `tests/net/invite.test.ts` 里那条"英文拼出来不许粘在一起"的腿）。
+ *
+ * ⚠️ 正文本身最后一次改动是 **G5/T38**（原文"…而本程序默认不向任何服务器发请求"在默认
+ * ICE 要联系 STUN/TURN 之后不成立，改成说"端点这件事"的默认状态）—— 那句话没有变，
+ * 只是从常量搬进了 `zh.ts` 的同名键（值逐字相同）。详见 `git log -p` 里 T38 那一提交。
  */
-export const NO_ENDPOINT_HEADLINE =
-  '输 6 位码这条路暂时走不通：这台设备还没有配置信令端点。';
+export function noEndpointHeadline(): string {
+  return t('net.invite.no-endpoint.headline');
+}
 
 /** "为什么短码要端点" + "默认没有信令端点"（大厅的「高级 / 连接设置」区单独渲染它） */
-export const NO_ENDPOINT_REASON =
-  '6 位房间码需要一台中间服务器把两端牵上线，而本程序默认没有配置信令端点。';
+export function noEndpointReason(): string {
+  return t('net.invite.no-endpoint.reason');
+}
 
 /** 两条可行的下一步（贴邀请码 / 去「高级 / 连接设置」填端点） */
-export const NO_ENDPOINT_NEXT_STEPS =
-  '请改用邀请码：把整条码复制给对方、让他粘贴进来就行。' +
-  '想用 6 位码的话，先在「高级 / 连接设置」里填一台服务器地址。';
+export function noEndpointNextSteps(): string {
+  return t('net.invite.no-endpoint.next-steps');
+}
 
-export const NO_ENDPOINT_MESSAGE =
-  NO_ENDPOINT_HEADLINE + NO_ENDPOINT_REASON + NO_ENDPOINT_NEXT_STEPS;
+export function noEndpointMessage(): string {
+  return noEndpointHeadline() + noEndpointReason() + noEndpointNextSteps();
+}
 
 /* ------------------------------------------------------------------ *
  * 10. 二维码形态：**只留占位**（D17；本任务不实现编码器）
@@ -1701,9 +1731,7 @@ export const NO_ENDPOINT_MESSAGE =
 export function qrPlaceholder(): { readonly implemented: false; readonly note: string } {
   return {
     implemented: false,
-    note:
-      '二维码形态的载荷与链接形态同一条（encodeInvite 的返回值）；编码器另开任务、排在 T7 之后（D17），' +
-      '本任务只留这个接口，不生成任何图形。',
+    note: t('net.invite.qr-note'),
   };
 }
 

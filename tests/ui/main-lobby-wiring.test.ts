@@ -24,7 +24,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { stripComments, functionBody, objectBody } from './source-text';
+import { stripComments, functionBody, objectBody, braceBlock } from './source-text';
 
 const MAIN = stripComments(
   readFileSync(fileURLToPath(new URL('../../src/main.ts', import.meta.url)))
@@ -259,8 +259,75 @@ describe('G5 T8 · D 轮：大厅那份 env 与"造传输用的那一份"是同�
   });
 });
 
-describe('G5 T8 · 正控（防这几条腿恒真）', () => {
-  it('9. 分类器与计数器对**合成源码**照样有牙', () => {
+/* ============================================================================
+ * ★ 2026-10-02（英文模式真机走查 C）：选角色那一格上「高级 / 连接设置」点不开
+ *
+ * ## 缺陷（走查实测）
+ *
+ * 在**选角色那一格**（`role === null`）点 `.net-lobby-advanced-toggle`：`aria-expanded` 仍是
+ * `false`、面板也不进 DOM；进了房主/加入那一格再点就正常。根因是那一刻 `lobbyClient` 还是
+ * `null`，而接线写的是 `lobbyClient?.toggleAdvanced()`（`?.` 把整件事吞成空操作），
+ * 渲染用的 `lobbyEntryState()` 又把 `advancedOpen` 硬写成 `false`。
+ *
+ * ## 修法与判据
+ *
+ * 入口那一屏的折叠位改住**宿主侧**（`lobbyEntryAdvancedOpen`）：`lobbyClient` 还没建时它是
+ * 唯一的状态源，建了之后照旧归客户端（`createLobbyClient` 里的初值仍是 `false`，
+ * 那条"初值恰好一处"的腿在 `tests/ui/net-lobby.test.ts` 里不动）。
+ *
+ * `main.ts` 是应用入口（import 它等于把整个游戏跑起来，见文件头注）⇒ 这里**仍然是文本腿**：
+ * 它钉的是"那条接线真的有一个 `null` 分支、且渲染读的是那一位"。**行为**那一半在
+ * `tests/ui/net-lobby.test.ts`（`role === null` + `advancedOpen: true` ⇒ 面板进 DOM）。
+ * ========================================================================== */
+
+describe('★ 2026-10-02（走查 C）：入口那一屏的「高级 / 连接设置」不再是死开关', () => {
+  const body = functionBody(MAIN, 'lobbyEntryState');
+
+  it('`lobbyEntryState()` 的 `advancedOpen` 读的是那一份宿主侧折叠位（不再是字面量 false）', () => {
+    expect(body.length, 'lobbyEntryState 抽到空片段 ⇒ 本判据假绿').toBeGreaterThan(50);
+    expect(body, '入口那一屏的 advancedOpen 又写成了字面量 false（走查 C 的缺陷形状）')
+      .not.toMatch(/advancedOpen:\s*false/);
+    expect(body, '入口那一屏没有读那份宿主侧折叠位').toContain('advancedOpen: lobbyEntryAdvancedOpen,');
+  });
+
+  it('`toggleAdvanced` 的接线有 `lobbyClient === null` 分支（否则选角色时又被 `?.` 吞掉）', () => {
+    const at = MAIN.indexOf('toggleAdvanced:');
+    expect(at, '找不到 toggleAdvanced 的接线').toBeGreaterThanOrEqual(0);
+    const block = braceBlock(MAIN, at);
+    expect(block.length, 'toggleAdvanced 的块抽到空片段 ⇒ 本判据假绿').toBeGreaterThan(50);
+    expect(block, '接线里没有 "客户端还没建" 这一支').toMatch(/if\s*\(\s*lobbyClient\s*===\s*null\s*\)/);
+    expect(block, '那一支没有翻转宿主侧折叠位').toContain('lobbyEntryAdvancedOpen = !lobbyEntryAdvancedOpen');
+    expect(block, '客户端已建的那一支没走它自己的 toggleAdvanced()').toContain('lobbyClient.toggleAdvanced()');
+    // 反向：不许再退回"整个动作被 `?.` 吞掉"的那个形状
+    expect(block, '接线退回了 `lobbyClient?.toggleAdvanced()`（选角色时点它还是没反应）')
+      .not.toContain('lobbyClient?.toggleAdvanced()');
+  });
+
+  it('那份折叠位**只声明一处**、且在离开大厅时复位（下一局从"收起"开始）', () => {
+    const decls = occurrences(MAIN, 'let lobbyEntryAdvancedOpen');
+    expect(decls.length, `lobbyEntryAdvancedOpen 被声明了 ${decls.length} 处：\n${decls.join('\n')}`).toBe(1);
+    const leave = functionBody(MAIN, 'leaveLobbyModule');
+    expect(leave, 'leaveLobbyModule 没有复位那份折叠位（下次进大厅会带着上一局的展开态）')
+      .toContain('lobbyEntryAdvancedOpen = false;');
+  });
+
+  it('正控：把接线改回"被 `?.` 吞掉"的形状 ⇒ 上面第二条腿必须能报出来', () => {
+    const broken = MAIN.replace(
+      /if \(lobbyClient === null\) lobbyEntryAdvancedOpen = !lobbyEntryAdvancedOpen;\s*\n\s*else lobbyClient\.toggleAdvanced\(\);/,
+      'lobbyClient?.toggleAdvanced();',
+    );
+    expect(broken, '正控构造失败：没有把接线改回缺陷形状').not.toBe(MAIN);
+    const at = broken.indexOf('toggleAdvanced:');
+    const block = braceBlock(broken, at);
+    expect(/if\s*\(\s*lobbyClient\s*===\s*null\s*\)/.test(block), '正控：改回缺陷形状之后判据居然是绿的').toBe(false);
+    // 另一条：把 lobbyEntryState 的字段改回字面量 false ⇒ 第一条腿必须能报出来
+    const broken2 = MAIN.replace('advancedOpen: lobbyEntryAdvancedOpen,', 'advancedOpen: false,');
+    expect(broken2, '正控构造失败：没有把 advancedOpen 改回字面量').not.toBe(MAIN);
+    expect(broken2.includes('advancedOpen: lobbyEntryAdvancedOpen,')).toBe(false);
+  });
+});
+
+describe('G5 T8 · 正控（防这几条腿恒真）', () => {  it('9. 分类器与计数器对**合成源码**照样有牙', () => {
     // ① 顺序判据：造一份"联机入口排在热坐之前"的合成主干 ⇒ 判据必须能报出它
     //    （2026-10-01 起右操作数是 `startHotseat:` —— 见第 2 条的说明）
     const bad = "const nav = { startNetLobby: () => { renderMode = 'lobby'; }, startHotseat: () => {} };";

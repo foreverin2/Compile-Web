@@ -26,7 +26,6 @@ import {
   COMPACT_INVITE_CHARS_MIN,
   COMPACT_PAYLOAD_VERSION,
   INVITE_CHARS_MAX_UNCOMPRESSED,
-  INVITE_NEWER_VERSION_HINT,
   base64UrlToBytes,
   compactCandidateOfLine,
   compactFoundationOf,
@@ -37,6 +36,7 @@ import {
   encodeInvite,
   icePwdOfSessionId,
   iceUfragOfSessionId,
+  newerVersionHint,
   parseInvitePayload,
   rawBytesForInvite,
   utf8Decode,
@@ -613,15 +613,20 @@ describe('★★ T49：解不开一条"结构上比本机新"的载荷时，人�
   });
 
   /**
-   * ★★ **评审 P1.5**：这一条是**真的**在查"唯一出处"，不是只查常量非空。
+   * ★★ **评审 P1.5**：这一条是**真的**在查"唯一出处"，不是只查取值非空。
    *
    * 口径：把 `src/**` 生成式扫一遍（剥注释），那一句人话的**正文片段**
-   * （`'刷新页面之后重新生成一条'`）只许出现在 `src/net/invite.ts` 一处；
-   * 屏上那条路径（`src/ui/net-lobby.ts`）**引用的必须是常量名**，不许把那句话抄一遍。
+   * （`'刷新页面之后重新生成一条'`）只许出现在**一处**；屏上那条路径
+   * （`src/ui/net-lobby.ts`）**引用取值函数**，不许把那句话抄一遍。
+   *
+   * ★ 2026-10-02（英文模式真机走查 B）：唯一出处从 `src/net/invite.ts` 搬到了
+   * `src/i18n/zh.ts`（键 `net.invite.newer-version-hint`）—— 那句中文不再是源码里的字面量，
+   * 而是文案表里的一条。判据的**意图没变**（同一句话只有一个家），只是那个家换了地方：
+   * 现在**全仓只有 `zh.ts` 一处**写着它，`invite.ts` 只调 `newerVersionHint()`。
    */
-  it('那条提示的唯一出处是一个导出常量，且 `src/**` 里只有一处写它的正文', () => {
-    expect(INVITE_NEWER_VERSION_HINT).toContain('刷新页面');
-    expect(INVITE_NEWER_VERSION_HINT).toContain('版本');
+  it('那条提示的唯一出处是一个取值函数 + 文案表一条，且 `src/**` 里只有一处写它的正文', () => {
+    expect(newerVersionHint()).toContain('刷新页面');
+    expect(newerVersionHint()).toContain('版本');
     const srcDir = fileURLToPath(new URL('../../src/', import.meta.url));
     const files = walkTs(srcDir);
     expect(files.length, 'src 下一个 .ts 都没扫到（路径写错？）').toBeGreaterThan(50);
@@ -640,13 +645,16 @@ describe('★★ T49：解不开一条"结构上比本机新"的载荷时，人�
     const hits = files
       .filter((f) => stripComments(read(f)).includes(fragment))
       .map((f) => f.slice(srcDir.length).split('\\').join('/'));
-    expect(hits, `那句提示的正文出现在多处（应当只有 src/net/invite.ts 一处）：${hits.join('、')}`)
-      .toEqual(['net/invite.ts']);
-    // 大厅那条路是**引用常量**（这一条防"把话抄一份到渲染层"）
+    expect(hits, `那句提示的正文出现在多处（应当只有 src/i18n/zh.ts 一处）：${hits.join('、')}`)
+      .toEqual(['i18n/zh.ts']);
+    // 大厅那条路是**引用取值函数**（这一条防"把话抄一份到渲染层"）
     const lobby = stripComments(read(join(srcDir, 'ui', 'net-lobby.ts')));
-    expect(lobby.includes(fragment), '大厅里把那句提示抄了一遍（应当引用常量）').toBe(false);
-    // 反控：片段本身确实在 invite.ts 里（否则上面那条可能是"文件没扫到"造成的恒真）
-    expect(stripComments(read(join(srcDir, 'net', 'invite.ts')))).toContain(fragment);
+    expect(lobby.includes(fragment), '大厅里把那句提示抄了一遍（应当引用取值函数）').toBe(false);
+    // 反向：写它的那一层**不许**是产出代码（`invite.ts` 里已经一个字都没有了）
+    expect(stripComments(read(join(srcDir, 'net', 'invite.ts'))).includes(fragment),
+      'invite.ts 里又写了一遍那句正文（应当只调 newerVersionHint()）').toBe(false);
+    // 反控：片段本身确实在 zh.ts 里（否则上面那条可能是"文件没扫到"造成的恒真）
+    expect(stripComments(read(join(srcDir, 'i18n', 'zh.ts')))).toContain(fragment);
   });
 });
 

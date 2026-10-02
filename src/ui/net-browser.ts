@@ -48,6 +48,9 @@ import {
 import { roomCodeFromRandom } from '../net/protocol';
 import type { NetMsgType } from '../net/protocol';
 import type { HashLike } from '../net/session';
+// ★ 2026-10-02（英文模式真机走查 B）：本文件的玩家可见文案也走 `t()`（键 `net-browser.*`）——
+//   一律**现调**，不写模块级常量（那会把语言冻在 import 那一刻，见 `src/net/invite.ts` 的头注）。
+import { t } from '../i18n';
 import {
   DEFAULT_TURN_CRED_SETTINGS,
   describeTurnCredentialFailure,
@@ -66,7 +69,6 @@ import {
   INVITE_CHARS_MAX,
   INVITE_CHARS_MAX_UNCOMPRESSED,
   INVITE_CHARS_MIN,
-  NO_ENDPOINT_MESSAGE,
   base64UrlToBytes,
   bytesToBase64Url,
   decodeInvite,
@@ -78,6 +80,7 @@ import {
   inviteLinkOf,
   kindOfMarker,
   markerOfKind,
+  noEndpointMessage,
   payloadBytesOf,
   rawBytesForInvite,
   readInviteSegment,
@@ -1734,14 +1737,14 @@ export async function decodeInvitePayload(
   env?: NetBrowserEnv,
 ): Promise<InviteDecodeResult> {
   if (payload.length === 0) {
-    return { ok: false, reason: 'bad-base64url', message: '邀请码是空的：那一段什么都没有。请重新完整复制一次。' };
+    return { ok: false, reason: 'bad-base64url', message: t('net-browser.invite.empty') };
   }
   const dot = payload.indexOf('.');
   if (dot <= 0 || dot === payload.length - 1) {
     return {
       ok: false,
       reason: 'bad-base64url',
-      message: '这不是一条邀请码：它没有"协议版本.压缩段"这个两段结构（要么少了那一段，要么被截断了）。',
+      message: t('net-browser.invite.no-structure'),
     };
   }
   const body = payload.slice(dot + 1);
@@ -1899,7 +1902,7 @@ export function signalingEndpointSetting(env?: NetBrowserEnv): string {
 /**
  * ★ "输 6 位码"这条路的**唯一入口**（§8.1 / D17 / 判据 5）。
  *
- * 端点为空 ⇒ 返回一条**可读提示**（文案本体在 `src/net/invite.ts` 的 `NO_ENDPOINT_MESSAGE`，
+ * 端点为空 ⇒ 返回一条**可读提示**（文案本体在 `src/net/invite.ts` 的 `noEndpointMessage()`，
  * 唯一出处，T8 只渲染不重写），并且**不构造任何网络对象**：
  * 本函数在端点为空的那一支里**没有**任何 `webSocket()` / `fetch()` 调用 —— 这是判据 5 的
  * "零请求"腿。反证腿（防这条恒绿）：同一份假件用在端点非空的配置上时，
@@ -2227,13 +2230,11 @@ function partialGatherNote(ice: readonly string[], timeoutMs: number, relayConfi
   const kinds = candidateKindsOf(ice);
   const onlyHost = kinds.srflx === 0 && kinds.prflx === 0 && kinds.relay === 0 && kinds.other === 0;
   const head = onlyHost
-    ? `等了 ${String(sec)} 秒，公网映射（srflx）一个都没收到，只收集到本机候选：${describeCandidates(ice)}。`
-    : `等了 ${String(sec)} 秒，ICE 候选没有收集完；已经拿到的：${describeCandidates(ice)}。`;
+    ? t('net-browser.ice.partial.only-host', { sec: String(sec), candidates: describeCandidates(ice) })
+    : t('net-browser.ice.partial.incomplete', { sec: String(sec), candidates: describeCandidates(ice) });
   return head
-    + (relayConfigured && kinds.relay === 0 ? '你配了中继，但这一轮中继地址也没收到。' : '')
-    + '这些候选已经写进这条邀请码里了。同一台机器上的两个窗口、同一个局域网里的两台设备，'
-    + '用它们通常能直接连上；跨网络（两边不在同一个局域网）能不能连上，现在还不知道'
-    + ' —— 那要拿到公网映射或者中继地址才行，这一次没拿全。';
+    + (relayConfigured && kinds.relay === 0 ? t('net-browser.ice.partial.relay-missing') : '')
+    + t('net-browser.ice.partial.tail');
 }
 
 /**
@@ -2246,24 +2247,21 @@ function partialGatherNote(ice: readonly string[], timeoutMs: number, relayConfi
  *  - **够用就收工** ⇒ `stoppedEarly: true`、`note:` 就是这一句（短、说人话，不带术语）。
  */
 function earlyEnoughNote(kinds: CandidateKinds): string {
-  const head = kinds.relay > 0 ? '本机候选和中继地址都拿到了' : '本机候选和公网映射都拿到了';
-  return `${head}，够用，不再等剩下的候选。`;
+  // ⚠️ 三元写在 `t()` **外面**（两个实参都是字面量）：`t(cond ? 'a' : 'b')` 是**动态键**，
+  //    会被 `tests/i18n/tables.test.ts` 的"不许有动态键"腿当场报红（D1 那一轮实测踩过）。
+  return kinds.relay > 0
+    ? t('net-browser.ice.early-enough.relay')
+    : t('net-browser.ice.early-enough.srflx');
 }
 
 /** ★★ **G5 T16：上界到点时一个候选都没有** ⇒ 硬失败。理由只说本侧的事实，不猜对端 */
 function noCandidateTimeoutMessage(timeoutMs: number): string {
-  return `等了 ${String(timeoutMs / 1000)} 秒，这台设备这一次一个 ICE 候选都没有收集到（本机候选也没有）。`
-    + '一个候选都没有的连接描述发出去也连不上，所以这条邀请码不生成。'
-    + '下一步：确认浏览器没有被扩展 / 企业策略关掉 WebRTC（本程序只用它做直连），然后重试一次；'
-    + '若还是一个候选都没有，请把这一行原样记下来。';
+  return t('net-browser.ice.no-candidate-timeout', { sec: String(timeoutMs / 1000) });
 }
 
 /** ★★ **G5 T16：收集已经"结束"了却一个候选都没有** ⇒ 同样硬失败（发出去也连不上） */
 function noCandidateNowMessage(): string {
-  return 'ICE 收集已经结束，但这台设备这一次一个候选都没有（本机候选也没有），'
-    + '这样的连接描述发出去也连不上，所以这条邀请码不生成。'
-    + '下一步：确认浏览器没有被扩展 / 企业策略关掉 WebRTC（本程序只用它做直连），然后重试一次；'
-    + '若还是一个候选都没有，请把这一行原样记下来。';
+  return t('net-browser.ice.no-candidate-now');
 }
 
 /**
@@ -3242,8 +3240,17 @@ export function createBrowserTransport(env?: NetBrowserEnv): NetTransport {
  * 10. 转发出口（T8 取这些，不许自己再写一份）
  * ================================================================== */
 
-/** 纯层给的"没有配置信令端点"那句提示的**转发出口** */
-export const NO_SIGNALING_ENDPOINT_MESSAGE = NO_ENDPOINT_MESSAGE;
+/**
+ * 纯层给的"没有配置信令端点"那句提示的**转发出口**。
+ *
+ * ★ 2026-10-02（走查 B）：从模块级常量改成**转发函数** —— 常量形态下 `noEndpointMessage()`
+ * 会在**模块加载那一刻**求值，语言被冻在默认中文上（见 `src/net/invite.ts` 的头注与
+ * `tests/i18n/module-scope-t.test.ts`）。导出名与形状（返回 `string`）不变，
+ * 调用点从 `NO_SIGNALING_ENDPOINT_MESSAGE` 改成 `noSignalingEndpointMessage()`。
+ */
+export function noSignalingEndpointMessage(): string {
+  return noEndpointMessage();
+}
 
 /**
  * 量一条载荷的长度并给出区间判定（判据 7 与 T8 的提示共用这一处）。

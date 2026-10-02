@@ -171,10 +171,17 @@ function btnRole(cls: string, role: string, label: string): HTMLButtonElement {
 export const CREDIT = {
   project: 'COMPILER · Card Builder',
   author: 'Albert Blanco',
-  // ⚠️ 取的是**表里的值**（`t('cardmaker.page.credit.license-value')`）而不是就地写中文字面量：
-  //    于是"屏上那一份许可名"只有表里一个家，本文件剩下的中文都是**数据源**
-  //    （由 `tests/i18n/unextracted-manifest.test.ts` 的 `CLEAN_DECLARED` 逐条自证）。
-  license: t('cardmaker.page.credit.license-value'),
+  /**
+   * ⚠️ **这里是数据，不是屏上那份文案**（`t()` 在渲染点取：见下面 `credit-license` 那一行）。
+   *
+   * ★ 2026-10-02（英文模式真机走查）：这一格**原来写的是 `t('cardmaker.page.credit.license-value')`**
+   * —— 而 `CREDIT` 是**模块级对象**，那个 `t()` 在**模块被 import 的那一刻**求值 ⇒ 语言被冻住
+   * （英文模式下屏上照旧是中文的 `MIT 许可`，正是走查报的那半张屏）。
+   * 与文件头那段"不许出现 `t()`"的自律**直接矛盾**，是抽取那一轮自己写歪的一处。
+   * ⇒ 值改回纯数据（与 `zh.ts` 同键的值逐字相同，由 `CLEAN_DECLARED` 自证），
+   * 屏上那一份在渲染点现调 —— 机检：`tests/i18n/module-scope-t.test.ts`。
+   */
+  license: 'MIT 许可',
   url: 'https://github.com/albrtbc/compiler',
   /** 许可原文在仓库里的路径（页面底部也写上，用户能照着去翻） */
   licensePath: 'public/assets/cardmaker/LICENSE-COMPILER-Card-Builder.txt',
@@ -659,8 +666,11 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
   logoZoomRow.appendChild(el(
     'span',
     'cardmaker-hint',
-    t('cardmaker.page.logo.zoom-hint.1', { min: String(Math.round(LOGO_SCALE_MIN * 100)), max: String(Math.round(LOGO_SCALE_MAX * 100)) })
-    + t('cardmaker.page.logo.zoom-hint.2')
+    // ⚠️ 这一句是**四个片段**拼的，占位符**跨片段**：`{min}` 在 `.1`、`{max}` 在 `.2`。
+    //    2026-10-02 实测的回归就是"参数只传给了 `.1`"⇒ 屏上留着 `(50%~{max}%…`（中英都坏）。
+    //    两个片段各自拿全自己那份参数；`tests/i18n/tables.test.ts` 的生成式占位符腿钉着这件事。
+    t('cardmaker.page.logo.zoom-hint.1', { min: String(Math.round(LOGO_SCALE_MIN * 100)) })
+    + t('cardmaker.page.logo.zoom-hint.2', { max: String(Math.round(LOGO_SCALE_MAX * 100)) })
     + t('cardmaker.page.logo.zoom-hint.3')
     + t('cardmaker.page.logo.zoom-hint.4'),
   ));
@@ -702,7 +712,8 @@ export function renderCardmaker(root: HTMLElement, nav: CardmakerNav, dom: Cardm
   credit.appendChild(elRole('p', 'cardmaker-credit-line', 'credit-sentence', t('cardmaker.page.credit.sentence')));
   const creditMeta = el('div', 'cardmaker-credit-meta');
   creditMeta.appendChild(elRole('span', 'cardmaker-credit-item', 'credit-author', t('cardmaker.page.credit.author', { author: CREDIT.author })));
-  creditMeta.appendChild(elRole('span', 'cardmaker-credit-item', 'credit-license', t('cardmaker.page.credit.license-label', { license: CREDIT.license })));
+  // ⚠️ 许可名在**渲染点**现调（`CREDIT.license` 是数据源，不能在模块作用域调 `t()`）
+  creditMeta.appendChild(elRole('span', 'cardmaker-credit-item', 'credit-license', t('cardmaker.page.credit.license-label', { license: t('cardmaker.page.credit.license-value') })));
   const creditLink = elRole('a', 'cardmaker-credit-link', 'credit-link', CREDIT.url) as HTMLAnchorElement;
   creditLink.href = CREDIT.url;
   creditLink.target = '_blank';

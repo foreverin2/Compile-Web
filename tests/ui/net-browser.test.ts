@@ -16,10 +16,10 @@ import {
   INVITE_CHARS_MAX,
   INVITE_CHARS_MAX_UNCOMPRESSED,
   INVITE_CHARS_MIN,
-  NO_ENDPOINT_MESSAGE,
   bytesToBase64Url,
   decodeInviteText,
   inviteFragmentOf,
+  noEndpointMessage,
   payloadBytesOf,
   utf8Encode,
 } from '../../src/net/invite';
@@ -375,7 +375,7 @@ describe('判据 5：端点为空时"输 6 位码"给可读提示且零网络请
     expect(r.ok, '端点为空时居然说这条路通').toBe(false);
     if (r.ok) return;
     expect(r.reason).toBe('no-endpoint');
-    expect(r.message).toBe(NO_ENDPOINT_MESSAGE);
+    expect(r.message).toBe(noEndpointMessage());
     expect(r.message).toContain('信令端点');
     expect(r.message).toContain('6 位码');
   });
@@ -1363,10 +1363,15 @@ describe('判据 14：行为面在 T7、渲染与接线在 T8', () => {
     expect(code, "rerender 里没有 'lobby' 分支（大厅进不去那一帧）").toMatch(/renderMode === 'lobby'/);
   });
 
-  it('那句提示的**唯一出处**在 `src/net/invite.ts`：全仓只有一处带它的正文', () => {
+  it('那句提示的**唯一出处**现在是文案表：全仓只有 `zh.ts` 一处带它的正文', () => {
+    /**
+     * ★ 2026-10-02（走查 B）：正文从 `src/net/invite.ts` 搬进了 `src/i18n/zh.ts`
+     * （键 `net.invite.no-endpoint.reason`）—— 判据的意图没变：同一句话只有一个家，
+     * 产出代码（含 `invite.ts` / `net-browser.ts`）一行都不许再写它。
+     */
     const files = walkTs(SRC);
     const withBody = files.filter((f) => readSrc(f).includes('6 位房间码需要一台中间服务器把两端牵上线'));
-    expect(withBody.map(rel)).toEqual(['net/invite.ts']);
+    expect(withBody.map(rel)).toEqual(['i18n/zh.ts']);
   });
 });
 

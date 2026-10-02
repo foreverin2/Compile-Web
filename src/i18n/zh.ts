@@ -1030,4 +1030,83 @@ export const ZH: Readonly<Record<string, string>> = {
   'net-lobby.invite-length.outside': '不在这一档的实测区间内（比实测的长或短）—— 仍然可用，但可能被某些聊天工具截断，发送时注意。',
   'net-lobby.proto.not-invite': '这不是一条邀请码：它没有"协议版本.压缩段"这个两段结构。',
   'net-lobby.proto.bad-head': '邀请码的协议版本段不是一个正整数（读到 {head}）。',
+
+  /* ── ★ 2026-10-02（英文模式真机走查 B）：`src/net/invite.ts` 的玩家可见文案 ──
+   *
+   * 那一层原来自己拼中文句子（编/解码失败、端点为空…），英文模式下**每一句都会上屏**
+   * （大厅的 `.net-lobby-note` / `.net-lobby-error` / `.net-lobby-notice` /
+   * `.net-lobby-code-gate` / `.net-lobby-endpoint*` 全是它的出口）。现在整层走 `t()`，
+   * 中文值**逐字**等于改动前的字面量（既有测试里那些 `toContain('…')` 判据因此一条都不用改）。
+   *
+   * ⚠️ **一个键都不是模块级常量**：`t()` 写在函数体里现调 —— `noEndpointHeadline()` /
+   * `noEndpointReason()` / `noEndpointNextSteps()` 是**取值函数**，不是常量（模块级 `t()`
+   * 会把语言冻在 import 那一刻，见 `tests/i18n/module-scope-t.test.ts`）。
+   */
+  'net.invite.no-candidates-in-sdp': '此端这一份 SDP 里没有 a=candidate: 行（等 ICE 收集完成之后再来）',
+  'net.invite.unknown-candidate-line': '认不出的候选行：{line}',
+  'net.invite.bad-promise': '两个承诺串必须是非空、且不含分隔符的文本。',
+  'net.invite.compress-unsupported': '这台设备压不出邀请码要用的压缩流（压缩能力缺失）。',
+  'net.invite.compress-failed': '压缩结果解不回来（压缩这一步没有产出可用的字节）。',
+  'net.invite.round-trip-bad': '压缩结果解出来不是一份可用的载荷（{reason}）：{message}',
+  'net.invite.compact-rebuild-incomplete': '紧凑格式重建出来的 SDP 缺 ICE 凭据或 DTLS 指纹：这一档不可用，请退回带整段 SDP 的那一档。',
+  'net.invite.compact-missing': '这条码没法用紧凑格式（缺 {missing}）：请退回带整段 SDP 的那一档。',
+  'net.invite.compact-unknown-candidate': '这条码没法用紧凑格式（认不出的候选行：{line}）：请退回带整段 SDP 的那一档。',
+  'net.invite.compact-no-candidates': '这条码没法用紧凑格式（{reason}）：请退回带整段 SDP 的那一档。',
+  'net.invite.newer-version-hint': '（也请对方确认他用的是最新版本：这条码可能是更新的版本产出的格式，旧版本的前端读不懂 —— 让对方刷新页面之后重新生成一条，或把本机更新到最新版本。）',
+  'net.invite.bad-utf8': '邀请码解压后的字节不是合法的 UTF-8 文本，可能被截断或改坏了。',
+  'net.invite.bad-json': '邀请码解压后的内容不是 JSON 文本（可能是压缩流坏掉后被半解出来的）。请让对端重新复制一次邀请码。',
+  'net.invite.compact-missing-version': '邀请码里缺少格式版本（第 1 项不是整数）：这不是一份完整的邀请码。',
+  'net.invite.version-mismatch': '邀请码的格式版本是 {ver}，本程序只认 {min}（或紧凑格式的 {compact}）：两端版本不一致，请让对端用同一个版本重新生成。',
+  'net.invite.missing-session': '邀请码里缺少这一局的房主会话号（sessionId）：没有它对不上房主，握手会被当场拒掉。',
+  'net.invite.compact-material-shape': '紧凑邀请码里的连接材料不是 4 项（ufrag / pwd / 指纹 / 候选）：这份载荷不完整。',
+  'net.invite.compact-missing-ice-cred': '紧凑邀请码里缺少 ICE 凭据（a=ice-ufrag / a=ice-pwd）：这两样一个都不能省，这份载荷不完整。',
+  'net.invite.compact-missing-fingerprint': '紧凑邀请码里缺少 DTLS 指纹（a=fingerprint:sha-256）：没有它就验不了对端身份，不能收下这份邀请码。',
+  'net.invite.compact-candidates-not-array': '紧凑邀请码里的候选不是数组：这份载荷不完整。',
+  'net.invite.compact-candidate-shape': '紧凑邀请码里有一条候选不是 4 项（类型 / 地址 / 端口 / 本机优先级）。',
+  'net.invite.compact-candidate-type': '紧凑邀请码里的候选类型认不出（读到 {prefix}）。',
+  'net.invite.compact-candidate-address': '紧凑邀请码里有一条候选的地址或端口不合法（端口要 1-65535 的整数）。',
+  'net.invite.compact-candidate-local-pref': '紧凑邀请码里有一条候选的本机优先级不是 0-255 的整数。',
+  'net.invite.compact-no-candidate': '紧凑邀请码里一条候选都没有：没有可用候选就建不起连接，这份载荷不完整。',
+  'net.invite.compact-spare': '紧凑邀请码里本端材料之后那一项今天必须是空数组（备用位）：这份载荷不完整或被改过。',
+  'net.invite.compact-setup': '紧凑邀请码里的 a=setup 认不出（读到 {setup}）。',
+  'net.invite.compact-missing-promise': '紧凑邀请码里缺少承诺位：这份载荷不完整。',
+  'net.invite.compact-rebuilt-candidate': '紧凑邀请码重建出来的候选行不合法（地址或端口里有不该有的字符）。',
+  'net.invite.bad-shape': '邀请码里的内容不是本程序产出的形状（它不是一个位置数组）：这份载荷不完整或被改过。',
+  'net.invite.compact-payload-incomplete': '紧凑邀请码的载荷不完整（会话号 / 材料 / setup / 承诺位有缺项）。',
+  'net.invite.tuple-len': '邀请码里只有 {got} 项，本程序需要 {want} 项：这份载荷缺字段，收下也没法开局。',
+  'net.invite.missing-sdp': '邀请码里缺少连接描述（sdp）：这份载荷不完整，收下也没法建立连接。',
+  'net.invite.ice-not-array': '邀请码里的候选列表（ice）不是字符串数组：这份载荷不完整。',
+  'net.invite.missing-host-promise': '邀请码里缺少房主的种子承诺：没有它就验不了洗牌的可信度，不能收下这份邀请码。',
+  'net.invite.missing-guest-promise': '邀请码里缺少加入方的选面承诺：这份载荷不完整。',
+  'net.invite.empty': '邀请码是空的：地址栏里那一段或粘进来的那一串什么都没有。请重新完整复制一次。',
+  'net.invite.no-structure': '这不是一条邀请码：它没有"协议版本.压缩段"这个两段结构（要么少了那一段，要么被截断了）。请确认整条都复制到了，前后没有多出别的字。',
+  'net.invite.bad-version-head': '邀请码开头的协议版本不是整数（收到 "{head}"）：这不是本程序产出的邀请码。',
+  'net.invite.bad-marker': '邀请码的压缩段带了一个本程序不认得的编码标记（"{marker}"）：这不是本程序产出的邀请码。',
+  'net.invite.bad-chars': '邀请码里有不属于 base64url 的字符（合法字符是 A-Z a-z 0-9 - _，没有 + / =）。常见原因是复制时被聊天软件截断或替换成了别的符号，请重新完整复制一次。',
+  'net.invite.decompress-unsupported': '这条邀请码用的是一种本机解不开的压缩方式（这条码是压缩档，而本机没有对应的解压能力）。请把这台设备换成较新的浏览器打开本页，或让对方在你这台设备上重新生成一条邀请码。',
+  'net.invite.decompress-failed': '邀请码的压缩段解不开（内容被改动或截断过）。请让对端重新复制一次完整的邀请码，不要手工改动其中任何字符。',
+  'net.invite.proto-newer': '这条邀请码来自更新的版本（对方协议版本 {remote}，本机 {local}）：本机可能读不懂对端发来的消息。请把本机更新到同一个版本，或让对方用本机这个版本重新生成邀请码。',
+  'net.invite.proto-older': '这条邀请码来自更旧的版本（对方协议版本 {remote}，本机 {local}）：对方可能读不懂本机发去的消息。请让对方更新到本机这个版本。',
+  'net.invite.no-endpoint.headline': '输 6 位码这条路暂时走不通：这台设备还没有配置信令端点。',
+  'net.invite.no-endpoint.reason': '6 位房间码需要一台中间服务器把两端牵上线，而本程序默认没有配置信令端点。',
+  'net.invite.no-endpoint.next-steps': '请改用邀请码：把整条码复制给对方、让他粘贴进来就行。想用 6 位码的话，先在「高级 / 连接设置」里填一台服务器地址。',
+  'net.invite.qr-note': '二维码形态的载荷与链接形态同一条（encodeInvite 的返回值）；编码器另开任务、排在 T7 之后（D17），本任务只留这个接口，不生成任何图形。',
+
+  /* ── ★ 2026-10-02（走查 B）：`src/ui/net-browser.ts` 里**走查实测到的那几处** ──
+   *
+   * 这一屏（`.net-lobby-notice` / `.net-lobby-error` / 邀请码框）原来自己拼中文句子。
+   * ⚠️ 本文件整体仍是"尚未抽取"（`docs/2026-10-01-i18n-尚未抽取的屏.md` 的 A 表里登记着 97 条：
+   * WebRTC 描述失败、getStats、中继结论那些读数）—— 这一批只抽**走查在真机上看到的那几处**
+   * 与它们同槽位的兄弟句，剩下的仍按登记口径留在原处。
+   */
+  'net-browser.invite.empty': '邀请码是空的：那一段什么都没有。请重新完整复制一次。',
+  'net-browser.invite.no-structure': '这不是一条邀请码：它没有"协议版本.压缩段"这个两段结构（要么少了那一段，要么被截断了）。',
+  'net-browser.ice.early-enough.relay': '本机候选和中继地址都拿到了，够用，不再等剩下的候选。',
+  'net-browser.ice.early-enough.srflx': '本机候选和公网映射都拿到了，够用，不再等剩下的候选。',
+  'net-browser.ice.partial.only-host': '等了 {sec} 秒，公网映射（srflx）一个都没收到，只收集到本机候选：{candidates}。',
+  'net-browser.ice.partial.incomplete': '等了 {sec} 秒，ICE 候选没有收集完；已经拿到的：{candidates}。',
+  'net-browser.ice.partial.relay-missing': '你配了中继，但这一轮中继地址也没收到。',
+  'net-browser.ice.partial.tail': '这些候选已经写进这条邀请码里了。同一台机器上的两个窗口、同一个局域网里的两台设备，用它们通常能直接连上；跨网络（两边不在同一个局域网）能不能连上，现在还不知道 —— 那要拿到公网映射或者中继地址才行，这一次没拿全。',
+  'net-browser.ice.no-candidate-timeout': '等了 {sec} 秒，这台设备这一次一个 ICE 候选都没有收集到（本机候选也没有）。一个候选都没有的连接描述发出去也连不上，所以这条邀请码不生成。下一步：确认浏览器没有被扩展 / 企业策略关掉 WebRTC（本程序只用它做直连），然后重试一次；若还是一个候选都没有，请把这一行原样记下来。',
+  'net-browser.ice.no-candidate-now': 'ICE 收集已经结束，但这台设备这一次一个候选都没有（本机候选也没有），这样的连接描述发出去也连不上，所以这条邀请码不生成。下一步：确认浏览器没有被扩展 / 企业策略关掉 WebRTC（本程序只用它做直连），然后重试一次；若还是一个候选都没有，请把这一行原样记下来。',
 };
