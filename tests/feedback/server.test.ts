@@ -389,6 +389,37 @@ describe('按 IP 每天的提交份数额度（2026-10-01 改口径）', () => {
     expect(existsSync(join(dir, `files-${day}.json`))).toBe(true);
   });
 
+  /**
+   * ★ 上线后实测抓到的一处自己的疏漏（2026-10-02）：把"旧文件被无视"这条日志写在
+   * `readDayFromDisk` 的"今天的 submits 文件不存在"早退分支里 ⇒ **今天一旦已经有过成功投稿，
+   * 这条提示就永远不出现**（正好是最该看到它的时候）。
+   * 这条用例故意让 `submits-<今天>.json` 先存在，再放旧文件：
+   *   - 旧写法（日志在早退分支里）⇒ hits=0，本用例红；
+   *   - 现在（构造函数里统一报一次）⇒ hits=1。
+   */
+  it('旧文件提示不能只在"今天还没投过"时才出现：今天已有 submits 文件时也要报', () => {
+    const dir = tempDir();
+    const t0 = TODAY;
+    const day = rateLimit.dayKey(t0);
+    // 先让今天"已经投过 2 份"（submits 文件存在），再放一个旧口径文件
+    writeFileSync(join(dir, `submits-${day}.json`), JSON.stringify({ '8.8.8.8': 2 }));
+    writeFileSync(join(dir, `files-${day}.json`), JSON.stringify({ '8.8.8.8': 7 }));
+    const lines: Array<Record<string, unknown>> = [];
+    const q = new rateLimit.SubmitQuota({
+      dir,
+      perDay: 5,
+      log: (msg: string, extra?: Record<string, unknown>) => lines.push({ msg, ...extra }),
+    });
+    const hits = lines.filter((l) => l.msg === 'legacy-rate-file-ignored');
+    expect(hits.length).toBe(1);
+    expect(hits[0].legacy).toEqual([`files-${day}.json`]);
+    // 额度读的是 submits 里的 2，不是旧文件的 7
+    expect(q.check('8.8.8.8', t0).used).toBe(2);
+    // 再问几次也不会重复报（每个进程一条）
+    q.check('8.8.8.8', t0);
+    expect(lines.filter((l) => l.msg === 'legacy-rate-file-ignored').length).toBe(1);
+  });
+
   it('记账文件名换成 submits-（与旧口径的 files- 分开），旧文件不读也不删', () => {
     const dir = tempDir();
     const t0 = new Date(2026, 9, 1, 10, 0, 0).getTime();

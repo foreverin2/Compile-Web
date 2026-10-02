@@ -60,7 +60,7 @@ export class SubmitQuota {
     /** @type {Map<string, Record<string, number>>} 日期键 -> { ip: 已提交份数 } */
     this.cache = new Map();
     this.lastPruneMs = 0;
-    /** 旧的 `files-*.json` 被无视这件事，**每个进程最多在日志里说一次**（见 `readDayFromDisk`） */
+    /** 旧的 `files-*.json` 被无视这件事，**每个进程最多在日志里说一次**（见 `reportLegacyFilesOnce`） */
     this.warnedLegacy = false;
     try {
       mkdirSync(this.dir, { recursive: true, mode: 0o700 });
@@ -68,6 +68,28 @@ export class SubmitQuota {
       this.log('rate-dir-create-failed', { error: String(e && e.message ? e.message : e) });
     }
     this.reload(dayKey(Date.now()));
+    this.reportLegacyFilesOnce();
+  }
+
+  /**
+   * 启动时把"旧口径文件被无视"这件事报一次（**与今天的 submits 文件在不在无关**）。
+   *
+   * ★ 2026-10-02 部署后实测发现的一处自己的疏漏：这行日志原先写在 `readDayFromDisk`
+   * 的"今天的文件不存在"那条早退分支里 ⇒ 只要今天已经有过一次成功投稿
+   * （`submits-<今天>.json` 存在），重启后直接进读取分支，**这条提示永远不出现**。
+   * 而运维最需要看到它的时候恰恰是"升级完、额度看着是满的、不知道该不该清旧文件"。
+   * 现在挪到构造函数里、每个进程一次，与读写路径彻底解耦。
+   */
+  reportLegacyFilesOnce() {
+    if (this.warnedLegacy) return;
+    const legacy = this.legacyFiles();
+    if (legacy.length === 0) return;
+    this.warnedLegacy = true;
+    this.log('legacy-rate-file-ignored', {
+      note: 'rate/ 下的 files-*.json 是改口径之前的记账（按附件个数），本次不读；'
+        + '额度只认 submits-*.json。确认不再需要对账可用 rm -f rate/files-*.json 清掉。',
+      legacy,
+    });
   }
 
   /** 某个日期键对应的记账文件（单位是**份**） */
@@ -103,15 +125,8 @@ export class SubmitQuota {
     const file = this.fileFor(day);
     if (!existsSync(file)) {
       // 旧口径（`files-<日期>.json`）**不读**（单位是"文件个数"，与"份数"不能换算，见文件头注）。
-      // 但要让运维看得见"这儿有个旧文件被无视了"，否则升级当天会有人纳闷额度为什么是满的。
-      if (!this.warnedLegacy && this.legacyFiles().length > 0) {
-        this.warnedLegacy = true;
-        this.log('legacy-rate-file-ignored', {
-          note: 'rate/ 下的 files-*.json 是改口径之前的记账（按附件个数），本次不读；'
-            + '额度只认 submits-*.json。确认不再需要对账可用 rm -f rate/files-*.json 清掉。',
-          legacy: this.legacyFiles(),
-        });
-      }
+      // "旧文件被无视"这件事在构造函数里统一报一次（见 `reportLegacyFilesOnce`），
+      // **不放在这个早退分支里** —— 放这儿的话，今天已经有 submits 文件时就永远不会报。
       return {};
     }
     try {
