@@ -21,6 +21,9 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { installStubDom, makeStubEl } from './net-dom-stub';
 import { functionBody, stripComments } from './source-text';
+import { EN } from '../../src/i18n/en';
+import { ZH } from '../../src/i18n/zh';
+import { setLang, t } from '../../src/i18n';
 import {
   RELAY_CANDIDATE_TYPE,
   pendingRelayRead,
@@ -36,6 +39,9 @@ let restoreDom: (() => void) | null = null;
 afterEach(() => {
   restoreDom?.();
   restoreDom = null;
+  // 语言是模块级内存态（与 `tests/i18n/tables.test.ts` 同款纪律）：本文件有一处切到英文
+  // 验证"那一句真的跟着语言走"，用完必须切回默认中文，免得污染同文件后面的用例。
+  setLang('zh');
 });
 
 /* ==================================================================== *
@@ -374,7 +380,17 @@ describe('★★ G6 T46 · 宿主那一半（`src/main.ts`，node 里 import 不
     for (const forbidden of ['netConnText', 'net-conn-line', 'NET_CONN_LINE_CLASS', '当前连接：']) {
       expect(RENDER, `render.ts（红线）里出现了本轮的东西「${forbidden}」`).not.toContain(forbidden);
     }
-    // 反空集合：那一屏的横幅仍在它手里（说明我们没"顺手"把它搬走）
-    expect(RENDER, 'render.ts 的草稿横幅不见了（红线文件被改了？）').toContain('选择协议 · 本轮还可选');
+    // 反空集合：那一屏的横幅仍在它手里（说明我们没"顺手"把它搬走）。
+    // ★ 2026-10-02（P3 第四批，用户授权动 render.ts 抽文案）：`选择协议 · 本轮还可选` 这句
+    //   从裸字面量搬进了文案表（键 `render.draft.verb-pick`），所以这里钉**键 + 值**两件：
+    //   键必须还在 render.ts 的渲染点里（横幅没被搬走）、值必须逐字还是改动前那句
+    //   （没被顺手润色）。两件都钉 ⇒ 比原来只钉一句裸中文**更严**，不是放宽。
+    expect(RENDER, 'render.ts 的草稿横幅不见了（红线文件被改了？）')
+      .toContain("t('render.draft.verb-pick'");
+    expect(ZH['render.draft.verb-pick'], '草稿横幅的中文值被改了').toBe('选择协议 · 本轮还可选 {n} 个');
+    setLang('en');
+    expect(t('render.draft.verb-pick', { n: '2' }), '这一句没有跟着语言走')
+      .toBe(EN['render.draft.verb-pick'].replace('{n}', '2'));
+    setLang('zh');
   });
 });

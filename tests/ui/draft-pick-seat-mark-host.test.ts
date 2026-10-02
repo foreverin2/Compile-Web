@@ -23,6 +23,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { functionBody, stripComments } from './source-text';
+import { ZH } from '../../src/i18n/zh';
 
 const read = (rel: string): string =>
   readFileSync(fileURLToPath(new URL(rel, import.meta.url)))
@@ -58,9 +59,14 @@ describe('★★ 2026-10-01 · 产出半边（`src/ui/render.ts` 的守卫与转
     const fn = functionBody(RENDER, 'renderPickColumn');
     expect(fn.length, '`renderPickColumn` 抽到的函数体太短 ⇒ 这条腿假绿').toBeGreaterThan(400);
     expect(fn, '没有"没给座位就不标"的守卫（热座页会被标上"你"）').toContain('selfSeat !== undefined');
-    for (const text of ['（你）', '（对方）']) {
-      expect(fn, `标记文案「${text}」不在 \`renderPickColumn\` 里（产出点换了地方？）`).toContain(text);
+    // ★ 2026-10-02（P3 第四批，用户授权动 render.ts 抽文案）：两句标记文案从裸字面量搬进了
+    //   文案表（键 `render.draft.seat-{self,foe}`）。判据改成"钉键 + 钉值"：键必须落在这个
+    //   函数体里（两处不同的键 —— 两侧标成同一句仍然报红），值必须逐字是改动前那两句。
+    for (const key of ['render.draft.seat-self', 'render.draft.seat-foe']) {
+      expect(fn, `标记文案的键 \`${key}\` 不在 \`renderPickColumn\` 里（产出点换了地方？）`).toContain(`t('${key}')`);
     }
+    expect(ZH['render.draft.seat-self'], '「（你）」的中文值被改了').toBe('（你）');
+    expect(ZH['render.draft.seat-foe'], '「（对方）」的中文值被改了').toBe('（对方）');
     // 标记必须是**标题的子节点**（挂在列上会让 CSS 的 flex 排布错位）
     expect(fn, '标记没有挂到标题上（`title.appendChild(mark)` 不见了）').toContain('title.appendChild(mark)');
   });
@@ -74,8 +80,12 @@ describe('★★ 2026-10-01 · 产出半边（`src/ui/render.ts` 的守卫与转
   });
 
   it('反空集合：两侧列标题的座位号**仍在**（本轮只加标记，不搬走用户已经认得的那句话）', () => {
-    expect(RENDER.includes('`玩家 ${player + 1} 已选`'),
-      'render.ts 里那句"玩家 N 已选"不见了（若这是有意的搬迁，请同时改本腿与 draft-fit 的预算）').toBe(true);
+    // ★ 2026-10-02（P3 第四批）：那一句从裸模板串搬进了文案表（键 `render.draft.picks-title`）。
+    //   这里钉**调用的形状**（键 + 实参仍是 `String(player + 1)` —— 座位号没有从"这一列的玩家"
+    //   变成写死的数）与**值**（`玩家 {n} 已选`，仍是改动前的原文）。
+    expect(RENDER.includes("t('render.draft.picks-title', { n: String(player + 1) })"),
+      'render.ts 里那句"玩家 N 已选"的产出变了（若这是有意的搬迁，请同时改本腿与 draft-fit 的预算）').toBe(true);
+    expect(ZH['render.draft.picks-title'], '「玩家 N 已选」的中文值被改了').toBe('玩家 {n} 已选');
     expect(RENDER.includes('draft-picks-title'),
       'render.ts 里连标题类名都不见了（判据面被整体改掉）').toBe(true);
   });

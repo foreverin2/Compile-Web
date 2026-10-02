@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { stripComments, functionBody, objectBody, braceBlock } from './source-text';
 import { descendants, installStubDom, isClass, makeStubEl, type StubNode } from './net-dom-stub';
 import { renderModeSelect, type ModeSelectNav } from '../../src/ui/home';
+import { EN } from '../../src/i18n/en';
+import { ZH } from '../../src/i18n/zh';
 
 /**
  * G2 Task 4 守卫：**接线**（`src/main.ts` 的页面路由 + 预览入口 + 重置）与**契约配套**。
@@ -526,8 +528,15 @@ describe('G2 Task 4 · 接线：远程页进入产物 + 重渲染路由唯一入
     const bar = functionBody(netSrc, 'renderPreviewToolbar');
     const btns = [...bar.matchAll(/net-preview-btn/g)].length;
     expect(btns, `工具条里有 ${btns} 个 net-preview-btn（I-2 之后应恰好 1 个：视角开关）`).toBe(1);
+    // ★ 2026-10-02（P3 第四批，用户授权动 render-net.ts 抽文案）：那两句从裸字面量搬进文案表。
+    //   这里钉**形状**（还是"viewSeat === 0 时取 A、否则取 B"这一个三元）**加**两句的**值**
+    //   （逐字还是改动前那两行 `视角：我 = P1 ⇄ P2` / `视角：我 = P2 ⇄ P1`）。
+    //   两件都钉 ⇒ 比原来只钉半句裸中文**更严**：键写错、或者值被顺手改字，都会红。
     expect(bar, '工具条不再有视角开关（无法推进对手回合 / 无法检查我是 P2 时的布局）')
-      .toMatch(/viewSeat === 0 \? '视角：我 = P1/);
+      .toMatch(/viewSeat === 0\s*\?\s*t\('render-net\.preview\.seat-1'\)\s*:\s*t\('render-net\.preview\.seat-2'\)/);
+    expect(ZH['render-net.preview.seat-1'], 'P1 视角那一句被改了').toBe('视角：我 = P1 ⇄ P2');
+    expect(ZH['render-net.preview.seat-2'], 'P2 视角那一句被改了').toBe('视角：我 = P2 ⇄ P1');
+    expect(EN['render-net.preview.seat-1'], 'P1 视角那一句没有英文').not.toBe(ZH['render-net.preview.seat-1']);
     // 旧的第二个开关必须**彻底消失**（按钮、提示文案、事件绑定）
     expect(bar, '工具条里仍有"对手手牌：…全部可见"的开关或文案（I-2 未修净）')
       .not.toContain('全部可见');

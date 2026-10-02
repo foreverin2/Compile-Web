@@ -28,6 +28,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { ZH } from '../../src/i18n/zh';
 import {
   descendants, installStubDom, makeStubEl, queryAllIn, type StubNode,
 } from './net-dom-stub';
@@ -195,8 +196,15 @@ describe('★★ G5 T14 源码腿：宿主那一半（`src/main.ts`，node 里 i
       readFileSync(fileURLToPath(new URL('../../src/ui/render.ts', import.meta.url)))
         .subarray(0, 16 * 1024 * 1024).toString('utf8'),
     );
-    // 这一行（`玩家 ${activePlayer + 1}`）是"座位号横幅"的唯一产出点：它还在原处
-    expect(RENDER, 'render.ts 那条座位号横幅不见了（红线文件被改了？）').toContain('`玩家 ${activePlayer + 1}`');
+    // 这一行（`玩家 ${activePlayer + 1}`）是"座位号横幅"的唯一产出点。
+    // ★ 2026-10-02（P3 第四批，用户授权动 render.ts 抽文案）：字面量换成取值函数
+    //   `playerLabel(activePlayer)`，键是**上一批就已经在表里**的 `render.player-info.title`。
+    //   ⇒ 这里钉的东西一件没少：调用点仍在、实参仍是 `activePlayer`（不是写死的座位号）、
+    //   中文值仍逐字是 `玩家 {n}`（改动前那句模板串的原文）。判据改成"钉键 + 钉值"，
+    //   不是放宽 —— 它现在同时证明"键存在"与"值没被顺手改字"。
+    expect(RENDER, 'render.ts 取座位号那一处不见了（红线文件被改了？）').toContain('playerLabel(activePlayer)');
+    expect(RENDER, '座位号不再来自 `render.player-info.title`').toContain("t('render.player-info.title'");
+    expect(ZH['render.player-info.title'], '座位号的中文值被改了').toBe('玩家 {n}');
     // 本轮的产出**不许**出现在 render.ts 里（"不碰 render.ts"这条纪律的机检）
     for (const forbidden of ['netTurnText', 'net-turn-line', '轮到你出牌']) {
       expect(RENDER, `render.ts 里出现了本轮的东西「${forbidden}」（越界改红线文件）`)

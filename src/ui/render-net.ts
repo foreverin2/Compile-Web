@@ -166,6 +166,13 @@ import { getLegalActions, type LegalAction } from '../core/game';
 import { getLineValue } from '../core/state/create';
 import { actionCn } from '../core/log';
 import { downloadLog } from './diag';
+// ★ 2026-10-02（P3 第四批，用户授权动渲染器文案）：本页的界面文案走文案表。
+//   键分两族：与热座同句的**复用** `render.*`（值逐字相同，见 `src/i18n/zh.ts` 的说明），
+//   本页特有的走 `render-net.*`。⚠️ 只在**渲染点**调 `t()`（模块顶层会把语言冻在
+//   import 那一刻，`tests/i18n/module-scope-t.test.ts` 有腿）；实参一律字面量。
+//   ⚠️ **刻意不抽**：运行时自查那一大族（`verifyPageHooks` 的 `约束 N：…` 读数与
+//   `[render-net] …` 控制台串）—— 它们是开发者诊断读数、被结构腿逐字钉着，不是玩家文案。
+import { t } from '../i18n';
 // ── **R19：卡牌放大框的取图 / 取值出口** ──
 // 卡图 src 与"卡牌中文效果分段"的**唯一**实现都在 `data/demo.ts`（`render.ts` 也是从那里取的）。
 // 本页**不复制**这两段算式：`cardImgSrc(protocol, value)` 与 `cardTextParts(getCardDef(defId))`
@@ -1037,7 +1044,7 @@ function isTurn(s: GameState, player: PlayerId): boolean {
  *  它是"本页到底是本地预览还是真联机"唯一的页面内反馈，**不是**装饰：删掉它，用户在预览页
  *  就无从判断对局是不是真的联上了（真实联机时 G5 会把这段文本换成会话状态）。 */
 function renderConnectionBadge(): HTMLElement {
-  return el('span', 'net-conn net-conn-local', '● 本地预览（未联机）');
+  return el('span', 'net-conn net-conn-local', t('render-net.conn.local-preview'));
 }
 
 /**
@@ -1264,7 +1271,7 @@ function renderLaneMid(s: GameState, line: Line): HTMLElement {
     side.appendChild(el('b', 'net-lane-points', String(getLineValue(s, p, line))));
     mid.appendChild(side);
   }
-  mid.appendChild(el('span', 'net-lane-name', `线 ${line + 1}`));
+  mid.appendChild(el('span', 'net-lane-name', t('render-net.lane.name', { n: String(line + 1) })));
   return mid;
 }
 
@@ -1312,7 +1319,7 @@ function renderLaneColumn(s: GameState, line: Line, viewSeat: PlayerId, cb: UiCa
 
 /** 「跳过」按钮（可选 prompt 的空应答）。 */
 function choiceSkipBtn(promptId: string, cb: UiCallbacks): HTMLElement {
-  const skip = el('button', 'btn choice-skip', '跳过');
+  const skip = el('button', 'btn choice-skip', t('render.choice.skip'));
   skip.addEventListener('click', () => {
     setChoiceSelection([], null);
     cb.onAction({ kind: 'effect-choice', promptId, choice: [] });
@@ -1354,8 +1361,8 @@ function mountChoiceBar(wrap: HTMLElement, who: PlayerId, bar: HTMLElement): voi
 
 /** 选择条共用的操作者标签（改动提示词 17 的横幅 + 标题）。 */
 function appendOperatorHeader(bar: HTMLElement, who: PlayerId, title: string): void {
-  bar.appendChild(el('div', 'operator-banner', `请 玩家 ${who + 1} 操作`));
-  bar.appendChild(el('div', 'choice-title', `P${who + 1} 操作 — ${title}`));
+  bar.appendChild(el('div', 'operator-banner', t('render-net.choice.operator', { n: String(who + 1) })));
+  bar.appendChild(el('div', 'choice-title', t('render.choice.title', { who: `P${who + 1}`, title })));
 }
 
 function renderChoiceUi(
@@ -1482,10 +1489,12 @@ function renderChoiceUi(
     const bar = el('div', 'choice-bar');
     appendOperatorHeader(bar, who, prompt.title);
     const chosen = getChoiceSelection();
-    bar.appendChild(el('span', 'choice-count',
-      `已选 ${chosen.length}/${prompt.max === Infinity ? prompt.candidates.length : prompt.max}`));
+    bar.appendChild(el('span', 'choice-count', t('render.choice.count', {
+      n: String(chosen.length),
+      max: String(prompt.max === Infinity ? prompt.candidates.length : prompt.max),
+    })));
     const canConfirm = chosen.length >= prompt.min && chosen.length <= prompt.max;
-    const confirm = el('button', 'btn choice-confirm' + (canConfirm ? '' : ' disabled'), '确认');
+    const confirm = el('button', 'btn choice-confirm' + (canConfirm ? '' : ' disabled'), t('render.choice.confirm'));
     confirm.addEventListener('click', () => {
       if (!canConfirm) return;
       const choice = getChoiceSelection();
@@ -1515,7 +1524,7 @@ function renderChoiceUi(
         });
       }
     }
-    const bar = choiceBar(top, prompt, cb, '点击高亮的线路选择目标线');
+    const bar = choiceBar(top, prompt, cb, t('render.choice.hint-line'));
     if (prompt.optional) bar.appendChild(choiceSkipBtn(top.id, cb));
     // R11-3：同上（select-line 的"确认"由整条带的点击承担，但**跳过**按钮在这里，
     // 而它必须落在操作方那一侧 —— 非 optional 的 select-line 只能靠这条带上的点击应答）。
@@ -1543,8 +1552,7 @@ function renderChoiceUi(
   }
   if (prompt.rearrangeSide !== undefined) {
     // 效果内重排（动量4）由 body 级重排窗口承接（main.ts 的 syncRearrangeModalForEffect）
-    bar.appendChild(el('div', 'choice-note',
-      '请在「重排协议」窗口中点击两张协议交换位置，摆好后点「完成重排」。'));
+    bar.appendChild(el('div', 'choice-note', t('render.choice.note-rearrange')));
   } else {
     for (const act of prompt.actions ?? []) {
       const btn = el('button', 'btn choice-action-btn', actionCn(act, top.sourceDefId));
@@ -1583,9 +1591,9 @@ function renderNetActionBar(s: GameState, cb: UiCallbacks): HTMLElement {
   for (const a of legal) {
     if (a.kind === 'play' || a.kind === 'refresh' || a.kind === 'advance') continue;
     const label = a.kind === 'compile'
-      ? `编译线 ${(a.line ?? 0) + 1}`
-      : a.kind === 'resolve-trigger' ? `结算触发：${a.defId ?? ''}`
-      : a.kind === 'clear-cache' ? '清理缓存'
+      ? t('render-net.action.compile-line', { n: String((a.line ?? 0) + 1) })
+      : a.kind === 'resolve-trigger' ? t('render.action.resolve-trigger', { defId: a.defId ?? '' })
+      : a.kind === 'clear-cache' ? t('render.action.clear-cache')
       : a.kind;
     const btn = el('button', 'btn', label);
     btn.addEventListener('click', () => cb.onAction(a));
@@ -1599,9 +1607,9 @@ function renderNetActionBar(s: GameState, cb: UiCallbacks): HTMLElement {
     // "点击手牌选择，再点链路槽打出（双击放大查看）"是**不换行的长句**，单靠它就把信息块
     // 撑到 ~270px 宽（比牌堆、按钮都宽）。缩短 + 允许换行（styles-net.css 的 `.hint` 覆盖）。
     block.appendChild(el('span', 'hint', uid
-      ? '已选牌 → 点高亮链路槽打出'
-      : '点选手牌 → 点链路槽打出（双击放大）'));
-    const btn = el('button', 'btn next-btn', '下一步');
+      ? t('render-net.hand.hint-selected')
+      : t('render-net.hand.hint-idle')));
+    const btn = el('button', 'btn next-btn', t('render.next-step'));
     btn.addEventListener('click', () => cb.onAction(next));
     block.appendChild(btn);
     bar.appendChild(block);
@@ -1690,7 +1698,7 @@ function renderInfoBlock(
   const info = renderPlayerInfo(s, player, {
     isSelf,
     operator: operator === player,
-    label: isSelf ? '自己（你）' : '对手',
+    label: isSelf ? t('render-net.info.seat-self') : t('render-net.info.seat-foe'),
     align: 'left',
   });
   info.appendChild(renderPiles(s, player));
@@ -1728,7 +1736,7 @@ function decorateHand(s: GameState, player: PlayerId, hand: HTMLElement, o: NetH
   if (!o.isSelf) {
     // 对手手牌只剩数量占位：补一行小标签说明"这块是什么"
     // ⚠️ 这一行被 CSS 隐藏（第 7 节），位置语义由"它嵌在对手信息块里"承担。
-    area.appendChild(el('div', 'net-hand-label', `对手手牌 ×${s.players[player].hand.length}`));
+    area.appendChild(el('div', 'net-hand-label', t('render-net.hand.foe-count', { n: String(s.players[player].hand.length) })));
   }
   area.appendChild(hand);
   return area;
@@ -2175,17 +2183,17 @@ export function netZoomContentFor(
   if (inSubtree('hand-count-only')) {
     const hand = target.closest?.<HTMLElement>('.hand');
     const n = hand?.getAttribute('data-hand-count') ?? hand?.dataset?.handCount ?? null;
-    const label = n === null ? '对手手牌（内容未公开）' : `对手手牌 ×${n}（内容未公开）`;
+    const label = n === null ? t('render-net.zoom.foe-hand-unknown') : t('render-net.zoom.foe-hand-count', { n });
     return {
       key: 'unknown',
       kind: 'unknown',
-      title: '对手手牌',
+      title: t('render-net.zoom.foe-hand-title'),
       render: (box) => {
         box.dataset.state = 'unknown';
         box.dataset.kind = 'unknown';
         const fig = el('div', 'net-zoom-box-fig');
         fig.dataset.kind = 'unknown';
-        fig.textContent = '未公开';
+        fig.textContent = t('render-net.zoom.unknown');
         const text = el('div', 'net-zoom-box-text');
         text.appendChild(el('div', 'net-zoom-box-none', label));
         const body = el('div', 'net-zoom-box-body');
@@ -2208,7 +2216,7 @@ export function netZoomContentFor(
       return {
         key: `proto:${defId}:${compiled ? 1 : 0}`,
         kind: 'protocol',
-        title: `${getProtocolDef(defId).name}${compiled ? '（已编译）' : ''}`,
+        title: `${getProtocolDef(defId).name}${compiled ? t('render-net.zoom.compiled-suffix') : ''}`,
         render: (box) => {
           box.dataset.state = 'protocol';
           box.dataset.kind = 'protocol';
@@ -2276,7 +2284,7 @@ export function netZoomContentFor(
     return {
       key: 'back',
       kind: 'back',
-      title: '未公开',
+      title: t('render-net.zoom.unknown'),
       render: (box) => {
         box.dataset.state = 'back';
         box.dataset.kind = 'back';
@@ -2292,7 +2300,7 @@ export function netZoomContentFor(
         fig.appendChild(back);
         body.appendChild(fig);
         const text = el('div', 'net-zoom-box-text');
-        text.appendChild(el('div', 'net-zoom-box-none', '未公开：这张牌背面朝上（内容在对手翻开前不可见）'));
+        text.appendChild(el('div', 'net-zoom-box-none', t('render-net.zoom.back-note')));
         body.appendChild(text);
         box.appendChild(body);
       },
@@ -2316,14 +2324,13 @@ export function renderNetZoomBox(): HTMLElement {
 /** 往框里填一个条目（**唯一的填充出口** —— 空态 / 三类内容都经它，机检只需看它）。 */
 export function fillNetZoomBox(box: HTMLElement, item: NetZoomItem | null): void {
   box.textContent = '';
-  box.appendChild(el('div', 'net-zoom-box-head', item === null ? '卡牌放大框' : item.title));
+  box.appendChild(el('div', 'net-zoom-box-head', item === null ? t('render-net.zoom.box-title') : item.title));
   if (item === null) {
     box.dataset.state = 'empty';
     box.dataset.kind = '';
     box.dataset.pinned = currentPinnedKey === null ? '0' : '1';
     box.classList.remove('pinned');
-    box.appendChild(el('div', 'net-zoom-box-hint',
-      '把鼠标移到卡牌 / 协议上：此处实时放大并显示中文文本；单击固定'));
+    box.appendChild(el('div', 'net-zoom-box-hint', t('render-net.zoom.box-hint')));
     return;
   }
   item.render(box);
@@ -2425,10 +2432,10 @@ export function bindNetZoomBox(
  */
 function previewActingHint(s: GameState, operator: PlayerId | null, viewSeat: PlayerId): string {
   if (operator !== null && operator !== viewSeat) {
-    return `轮到对手（P${operator + 1}）应答 —— 本页只显示信息、不显示按钮；切「视角」后可操作`;
+    return t('render-net.preview.hint-answer', { n: String(operator + 1) });
   }
   if (s.turnPlayer !== viewSeat) {
-    return `轮到对手（P${s.turnPlayer + 1}）行动 —— 本页只显示信息、不显示按钮；切「视角」后可操作`;
+    return t('render-net.preview.hint-act', { n: String(s.turnPlayer + 1) });
   }
   return '';
 }
@@ -2439,11 +2446,10 @@ function renderPreviewToolbar(
   hint: string,
 ): HTMLElement {
   const bar = el('div', 'net-preview-bar');
-  bar.appendChild(el('span', 'net-preview-title', '预览工具条'));
+  bar.appendChild(el('span', 'net-preview-title', t('render-net.preview.title')));
   const seatBtn = el('button', 'btn net-preview-btn',
-    opts.viewSeat === 0 ? '视角：我 = P1 ⇄ P2' : '视角：我 = P2 ⇄ P1');
-  seatBtn.title = '切换到对方视角：切过去后"自己"就是对手（手牌正面且可点），'
-    + '这是推进对手回合、把一局打完的正确做法（对手手牌只手牌数量那一档是不可点的）。';
+    opts.viewSeat === 0 ? t('render-net.preview.seat-1') : t('render-net.preview.seat-2'));
+  seatBtn.title = t('render-net.preview.seat-tip');
   seatBtn.addEventListener('click', () => onChange({ viewSeat: opts.viewSeat === 0 ? 1 : 0 }));
   bar.appendChild(seatBtn);
   // R11-3 的操作提示（轮到对手时为空串 ⇒ 由 CSS 的 `:empty` 收掉）
@@ -2636,8 +2642,8 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
   // ⚠️ 这个按钮在 `styles.css` 里是 `position: fixed; right: 16px; bottom: 18px`（**照旧**）——
   //    它因此落在 `#app` 的 110px 底部内边距里、**不占**本页任何行；旧代码给它写的
   //    `grid-row: 2` 是**死声明**（fixed 元素不参与 grid 布局），R12-1 已删除以免误导。
-  const diagBtn = el('button', 'btn diag-btn', '导出日志');
-  diagBtn.title = '导出诊断日志（错误 + 控制台记录 + 事件日志 + 状态快照）';
+  const diagBtn = el('button', 'btn diag-btn', t('render.diag.export'));
+  diagBtn.title = t('render.diag.export-title');
   diagBtn.addEventListener('click', () => downloadLog(s));
   wrap.appendChild(diagBtn);
 
@@ -2646,7 +2652,7 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
   if (opts.onPreviewChange) {
     const onChange = opts.onPreviewChange;
     wrap.appendChild(renderPreviewToolbar(opts, (next) => {
-      netPreviewNote = `已切视角：我 = P${(next.viewSeat ?? opts.viewSeat) + 1}`;
+      netPreviewNote = t('render-net.preview.note', { n: String((next.viewSeat ?? opts.viewSeat) + 1) });
       onChange(next);
     }, previewActingHint(s, operator, viewSeat)));
   }

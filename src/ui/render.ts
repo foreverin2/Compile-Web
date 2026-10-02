@@ -80,6 +80,18 @@ export function el(tag: string, cls: string, text?: string): HTMLElement {
   return node;
 }
 
+/**
+ * ★ 2026-10-02（P3 第四批）：座位号的**取值函数**（`玩家 1` / `玩家 2`）。
+ *
+ * 为什么是函数而不是常量：写在模块顶层会把语言冻在 import 那一刻
+ * （`tests/i18n/module-scope-t.test.ts`）。取值点全部在渲染函数体内。
+ * 值复用 `render.player-info.title`（`玩家 {n}`）—— 与改动前的字面量逐字相同，
+ * 且与上一轮抽的那一族**同一个键**（它们在屏上本来就是同一句话）。
+ */
+function playerLabel(player: PlayerId): string {
+  return t('render.player-info.title', { n: String(player + 1) });
+}
+
 /** 卡牌 defId 形如 'fire-3'：协议段 + 分值段即官方图片资源路径的两段 */
 export function splitDefId(defId: string): [string, string] {
   const sep = defId.indexOf('-');
@@ -1930,7 +1942,7 @@ export function renderHand(
     // 契约名写作 `data-hand-count`（docs/4代-FX DOM 契约.md / G2 硬约束 5），这里就**逐字**写属性名：
     // `dataset.handCount` 与它等价，但源码守卫与本文件的行为约定用的是前者，写真实名字免得两处漂移。
     hand.setAttribute('data-hand-count', String(cards.length));
-    hand.appendChild(el('div', 'hand-count-placeholder', `手牌 ×${cards.length}`));
+    hand.appendChild(el('div', 'hand-count-placeholder', t('render.hand.count', { n: String(cards.length) })));
     return hand;
   }
   // 点 4：手牌从左到右按数值升序显示（P1/P2 一致）。
@@ -2002,7 +2014,7 @@ export function renderHand(
     // 始终居中于卡面顶部中央（.play-btns left:50% + translateX(-50%)）。
     if (isSelected && s.step === 'action' && opts.onToggleFaceUp) {
       const group = el('div', 'play-btns');
-      const flip = el('button', 'btn play-btn', '翻面');
+      const flip = el('button', 'btn play-btn', t('render.hand.flip'));
       flip.addEventListener('click', (e) => {
         e.stopPropagation();
         opts.onToggleFaceUp!();
@@ -4569,16 +4581,16 @@ export function renderPickColumn(
   selfSeat?: PlayerId,
 ): HTMLElement {
   const col = el('div', `draft-picks p${player + 1}${drafter === player ? ' active' : ''}`);
-  const title = el('div', 'draft-picks-title', `玩家 ${player + 1} 已选`);
+  const title = el('div', 'draft-picks-title', t('render.draft.picks-title', { n: String(player + 1) }));
   if (selfSeat !== undefined) {
     const mine = player === selfSeat;
     const mark = el('span', mine ? 'draft-picks-seat-self' : 'draft-picks-seat-foe',
-      mine ? '（你）' : '（对方）');
+      mine ? t('render.draft.seat-self') : t('render.draft.seat-foe'));
     mark.setAttribute('style',
       'font-size: 0.78em; font-weight: normal; color: ' + (mine ? '#7fe3c0' : '#c8a2ff') + ';');
     title.appendChild(mark);
   }
-  if (drafter === player) title.appendChild(el('span', 'draft-picks-turn', '● 轮选'));
+  if (drafter === player) title.appendChild(el('span', 'draft-picks-turn', t('render.draft.picks-turn')));
   col.appendChild(title);
   const list = el('div', 'draft-picks-list');
   const picks = picksOf(s, player);
@@ -4590,7 +4602,7 @@ export function renderPickColumn(
   for (let i = 0; i < 3; i++) {
     const pick = picks[i];
     if (!pick) {
-      list.appendChild(el('div', 'draft-pick-empty', '尚未选择'));
+      list.appendChild(el('div', 'draft-pick-empty', t('render.draft.pick-empty')));
       continue;
     }
     const card = el('div', 'draft-pick-card' + (newest && newest.defId === pick.defId ? ' new' : ''));
@@ -4613,7 +4625,7 @@ export function renderPickColumn(
     if (drafter === player && currentTurnPicks.has(pick.defId)) {
       // 本回合已选、可取消：拖出选择框取消选择（卡上提示可拖出）
       card.classList.add('unpickable');
-      card.title = '拖出选择框可取消本回合选择';
+      card.title = t('render.draft.unpick-hint');
       bindDraftUnpick(card, cb, pick.defId, player);
     }
     list.appendChild(card);
@@ -4649,8 +4661,8 @@ function renderDraftPool(s: GameState, cb: UiCallbacks, banStep: boolean, active
     const pinView = (): void => pinDraftPreview(activePlayer, proto.defId);
     if (banStep) {
       card.dataset.defId = proto.defId;
-      card.title = `点击禁用「${proto.name}」（本局不可选；共需禁用 ${DRAFT_BAN_TOTAL} 个）`;
-      card.appendChild(el('span', 'draft-ban-badge', '禁用'));
+      card.title = t('render.draft.ban-tip', { name: proto.name, n: String(DRAFT_BAN_TOTAL) });
+      card.appendChild(el('span', 'draft-ban-badge', t('render.draft.ban-badge')));
       // 禁用前先把协议固定显示到操作者侧（禁用后卡移出池，展示框仍保留详情供查看）
       bindClickOrDouble(
         card,
@@ -4829,14 +4841,33 @@ function bindDraftUnpick(node: HTMLElement, cb: UiCallbacks, defId: string, play
  * 仅给非阻塞提示）。新局由 resetUiState 复位为全开。
  */
 const DRAFT_GROUP_LABELS: ReadonlyArray<readonly [string, string]> = [
-  ['MN01', '1代 基础'],
-  ['AX01', '1代 拓展'],
-  ['MN02', '2代 基础'],
-  ['AX02', '2代 拓展'],
-  ['MN03', '3代 基础'],
-  ['AX03', '3代 拓展'],
+  ['MN01', 'render.draft.group.mn01'],
+  ['AX01', 'render.draft.group.ax01'],
+  ['MN02', 'render.draft.group.mn02'],
+  ['AX02', 'render.draft.group.ax02'],
+  ['MN03', 'render.draft.group.mn03'],
+  ['AX03', 'render.draft.group.ax03'],
 ];
 let draftEnabledGroups: Set<string> = new Set(DRAFT_GROUP_LABELS.map(([g]) => g));
+
+/**
+ * 世代筛选 chip 的**显示名**（`1代 基础` …）。
+ *
+ * ★ 2026-10-02（P3 第四批）：`DRAFT_GROUP_LABELS` 里那一格从**字面量**换成了**键名**
+ * （它原来既是数据又是屏上文案，两用 ⇒ 只能拆开）。取值放在**函数**里、在渲染点调，
+ * 不能写成模块级常量 —— 那会把语言冻在 import 那一刻（`tests/i18n/module-scope-t.test.ts`）。
+ * 这个函数同时被草稿页的 chip 与协议放大框的世代标注（`1代` / `2代` / `3代`）用。
+ */
+function draftGroupLabel(key: string): string {
+  switch (key) {
+    case 'render.draft.group.mn01': return t('render.draft.group.mn01');
+    case 'render.draft.group.ax01': return t('render.draft.group.ax01');
+    case 'render.draft.group.mn02': return t('render.draft.group.mn02');
+    case 'render.draft.group.ax02': return t('render.draft.group.ax02');
+    case 'render.draft.group.mn03': return t('render.draft.group.mn03');
+    default: return t('render.draft.group.ax03');
+  }
+}
 
 /* ===== 2026-10-01：选协议那一屏的"我是几号"（联机局/单机预览才有的座位） =====
  *
@@ -4883,8 +4914,8 @@ export function buildProtocolRatingPanel(defId: string): HTMLElement {
   titleRow.appendChild(el('div', 'draft-preview-name', proto.name));
   titleRow.appendChild(el('div', 'draft-preview-motto', proto.loadingText));
   box.appendChild(titleRow);
-  if (rating && rating.position) box.appendChild(el('div', 'draft-preview-position', `定位：${rating.position}`));
-  box.appendChild(el('div', 'draft-preview-commands', `关键词：${proto.commands.join(' · ')}`));
+  if (rating && rating.position) box.appendChild(el('div', 'draft-preview-position', t('render.preview.position', { position: rating.position })));
+  box.appendChild(el('div', 'draft-preview-commands', t('render.preview.commands', { commands: proto.commands.join(' · ') })));
   if (rating) {
     const scoreRow = el('div', 'draft-preview-scores');
     for (const [k, v] of Object.entries(rating.scores)) {
@@ -4894,13 +4925,13 @@ export function buildProtocolRatingPanel(defId: string): HTMLElement {
     if (rating.review) box.appendChild(el('div', 'draft-preview-review', rating.review));
     if (rating.pairs.length > 0) {
       const seg = el('div', 'draft-preview-seg');
-      seg.appendChild(el('div', 'draft-preview-seg-label', '推荐搭配协议'));
+      seg.appendChild(el('div', 'draft-preview-seg-label', t('render.preview.pairs-label')));
       for (const p of rating.pairs) seg.appendChild(el('div', 'draft-preview-item', p));
       box.appendChild(seg);
     }
     if (rating.styles.length > 0) {
       const seg = el('div', 'draft-preview-seg');
-      seg.appendChild(el('div', 'draft-preview-seg-label', '推荐流派'));
+      seg.appendChild(el('div', 'draft-preview-seg-label', t('render.preview.styles-label')));
       for (const st of rating.styles) seg.appendChild(el('div', 'draft-preview-item', st));
       box.appendChild(seg);
     }
@@ -4932,7 +4963,7 @@ function resetPreviewToHint(player: PlayerId): void {
   if (!host) return;
   host.textContent = '';
   host.dataset.empty = '1';
-  host.appendChild(el('div', 'draft-preview-hint', '点击中间协议卡\n在此固定查看详情'));
+  host.appendChild(el('div', 'draft-preview-hint', t('render.preview.hint')));
 }
 
 /** 点击固定：当前操作者侧展示框显示该协议详情；再次点击【同一张】已固定的卡 → 取消固定
@@ -4989,7 +5020,7 @@ function buildDraftPreviewBox(player: PlayerId, showPinned: { player: PlayerId; 
     renderToPreview(player, showPinned.defId);
   } else {
     box.appendChild(
-      el('div', 'draft-preview-hint', '点击中间协议卡\n在此固定查看详情')
+      el('div', 'draft-preview-hint', t('render.preview.hint'))
     );
   }
   document.body.appendChild(box);
@@ -5022,13 +5053,13 @@ export function renderDraft(
     'div',
     'draft-turn-banner' + (banStep ? ' ban' : '') + ` p${activePlayer + 1}`
   );
-  const badge = el('span', 'turn-badge', `玩家 ${activePlayer + 1}`);
+  const badge = el('span', 'turn-badge', playerLabel(activePlayer));
   const verb = el(
     'span',
     'turn-verb',
     banStep && action
-      ? `禁用协议 · 本阶段还需禁用 ${draftBanBlockRemaining(s)} 个（共 ${DRAFT_BAN_TOTAL} 个）`
-      : `选择协议 · 本轮还可选 ${draftTurnPicksRemaining(s)} 个`
+      ? t('render.draft.verb-ban', { n: String(draftBanBlockRemaining(s)), total: String(DRAFT_BAN_TOTAL) })
+      : t('render.draft.verb-pick', { n: String(draftTurnPicksRemaining(s)) })
   );
   banner.appendChild(badge);
   banner.appendChild(verb);
@@ -5039,7 +5070,9 @@ export function renderDraft(
     el(
       'span',
       'draft-progress-text',
-      `第 ${Math.min(s.draftRound + 1, DRAFT_PICK_COUNT)} / ${DRAFT_PICK_COUNT} 次选择${banStep ? ' · 禁用阶段' : ''}`
+      banStep
+        ? t('render.draft.progress-ban', { n: String(Math.min(s.draftRound + 1, DRAFT_PICK_COUNT)), total: String(DRAFT_PICK_COUNT) })
+        : t('render.draft.progress-pick', { n: String(Math.min(s.draftRound + 1, DRAFT_PICK_COUNT)), total: String(DRAFT_PICK_COUNT) })
     )
   );
   const track = el('div', 'draft-step-track');
@@ -5058,12 +5091,16 @@ export function renderDraft(
   // 允许可用池 <6 套）；若当前可用池不足以完成剩余选/禁动作，下方给一行非阻塞提示。
   const filter = el('div', 'draft-filter');
   const visiblePool = (): number => poolDefs.filter((p) => draftEnabledGroups.has(p.set)).length;
-  for (const [group, label] of DRAFT_GROUP_LABELS) {
+  for (const [group, labelKey] of DRAFT_GROUP_LABELS) {
     const count = poolDefs.filter((p) => p.set === group).length;
     const on = draftEnabledGroups.has(group);
-    const chip = el('button', 'draft-filter-chip' + (on ? ' on' : ''), label);
+    const chip = el('button', 'draft-filter-chip' + (on ? ' on' : ''), draftGroupLabel(labelKey));
     chip.setAttribute('type', 'button');
-    chip.title = `${label}（本局池内 ${count} 套）· ${on ? '点击隐藏' : '点击显示'}`;
+    chip.title = t('render.draft.filter-tip', {
+      name: draftGroupLabel(labelKey),
+      n: String(count),
+      action: on ? t('render.draft.filter-hide') : t('render.draft.filter-show'),
+    });
     chip.addEventListener('click', () => {
       if (on) {
         draftEnabledGroups.delete(group);
@@ -5081,7 +5118,7 @@ export function renderDraft(
       el(
         'div',
         'draft-mode-note',
-        `本局为随机池：从全部 ${DEMO_PROTOCOLS.length} 套协议中随机抽取 ${s.draftPool.length} 套可选（世代筛选仍可用）`
+        t('render.draft.random-pool-note', { total: String(DEMO_PROTOCOLS.length), n: String(s.draftPool.length) })
       )
     );
   }
@@ -5091,7 +5128,7 @@ export function renderDraft(
       el(
         'div',
         'draft-mode-note',
-        '禁用模式：后手先禁 2 → 先手选 1 禁 1 → 后手选 2 禁 1 → 先手选 2 禁 2 → 后手选 1'
+        t('render.draft.ban-mode-note')
       )
     );
   }
@@ -5105,7 +5142,7 @@ export function renderDraft(
       el(
         'div',
         'draft-filter-hint',
-        `当前可见协议 ${Math.max(available, 0)} 套，还需完成 ${actionsLeft} 次选/禁动作——请重新开启被隐藏的世代组。`
+        t('render.draft.filter-hint', { n: String(Math.max(available, 0)), left: String(actionsLeft) })
       )
     );
   }
@@ -5162,9 +5199,9 @@ export function showWinOverlay(winner: PlayerId, cb: UiCallbacks): void {
   winOverlayShown = true;
   const banner = el('div', 'win-banner');
   const panel = el('div', 'win-panel');
-  const title = el('div', 'win-title', `玩家 ${winner + 1} 获胜！`);
-  const sub = el('div', 'win-sub', '本局结束 · 可继续查看场上布局复盘');
-  const btn = el('button', 'btn win-confirm-btn', '返回主界面');
+  const title = el('div', 'win-title', t('render.win.title', { n: String(winner + 1) }));
+  const sub = el('div', 'win-sub', t('render.win.sub'));
+  const btn = el('button', 'btn win-confirm-btn', t('render.win.back'));
   btn.addEventListener('click', () => {
     banner.remove();
     cb.onWinReset?.();
@@ -5356,9 +5393,13 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
     if (a.kind === 'play' || a.kind === 'refresh' || a.kind === 'advance') continue;
     const label =
       a.kind === 'compile'
-        ? `编译线 ${(a.line ?? 0) + 1}（${getLineValue(s, s.turnPlayer, a.line ?? 0)} vs ${getLineValue(s, s.turnPlayer === 0 ? 1 : 0, a.line ?? 0)}）`
-        : a.kind === 'resolve-trigger' ? `结算触发：${a.defId ?? ''}` // 修改提示词 28：按钮带触发来源卡牌
-        : a.kind === 'clear-cache' ? `清理缓存`
+        ? t('render.action.compile-line', {
+            n: String((a.line ?? 0) + 1),
+            a: String(getLineValue(s, s.turnPlayer, a.line ?? 0)),
+            b: String(getLineValue(s, s.turnPlayer === 0 ? 1 : 0, a.line ?? 0)),
+          })
+        : a.kind === 'resolve-trigger' ? t('render.action.resolve-trigger', { defId: a.defId ?? '' }) // 修改提示词 28：按钮带触发来源卡牌
+        : a.kind === 'clear-cache' ? t('render.action.clear-cache')
         : a.kind;
     const btn = el('button', 'btn', label);
     btn.addEventListener('click', () => cb.onAction(a));
@@ -5369,7 +5410,7 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
     if (s.step === 'action') {
       // 拖拽打牌（DnD）：拖拽手牌卡到高亮的线路直接打出；点击选择 + 翻面仍可用
       nextBlock.appendChild(
-        el('span', 'hint', selectedUid ? '已选择卡牌 — 拖拽到高亮的线路打出（可先点「翻面」切换朝向）' : '拖拽手牌卡到高亮的线路打出（双击放大，点击选择）')
+        el('span', 'hint', selectedUid ? t('render.hand.hint-selected') : t('render.hand.hint-idle'))
       );
     }
     const nextBtn = el('button', 'btn next-btn', t('render.next-step'));
@@ -5431,14 +5472,20 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
       }
       const bar = el('div', 'choice-bar');
       // 修改提示词 17：操作者提示横幅（顶部玩家栏已高亮 operator，此处底部操作条再醒目提示）
-      const opName = (prompt.chooser ?? topEffect.player) === 0 ? '玩家 1' : '玩家 2';
-      bar.appendChild(el('div', 'operator-banner', `请 ${opName} 操作`));
+      const opName = playerLabel(prompt.chooser ?? topEffect.player);
+      bar.appendChild(el('div', 'operator-banner', t('render.choice.operator', { name: opName })));
       // 归属者标签：出选择请求的效果属主（PendingEffect.player，非 prompt 自身；chooser 覆盖）
-      bar.appendChild(el('div', 'choice-title', `${(prompt.chooser ?? topEffect.player) === 0 ? 'P1' : 'P2'} 操作 — ${prompt.title}`));
-      const count = el('span', 'choice-count', `已选 ${choiceSelected.length}/${prompt.max === Infinity ? prompt.candidates.length : prompt.max}`);
+      bar.appendChild(el('div', 'choice-title', t('render.choice.title', {
+        who: (prompt.chooser ?? topEffect.player) === 0 ? 'P1' : 'P2',
+        title: prompt.title,
+      })));
+      const count = el('span', 'choice-count', t('render.choice.count', {
+        n: String(choiceSelected.length),
+        max: String(prompt.max === Infinity ? prompt.candidates.length : prompt.max),
+      }));
       bar.appendChild(count);
       const canConfirm = choiceSelected.length >= prompt.min && choiceSelected.length <= prompt.max;
-      const confirmBtn = el('button', 'btn choice-confirm' + (canConfirm ? '' : ' disabled'), '确认');
+      const confirmBtn = el('button', 'btn choice-confirm' + (canConfirm ? '' : ' disabled'), t('render.choice.confirm'));
       confirmBtn.addEventListener('click', () => {
         if (!canConfirm) return;
         choicePromptId = null;
@@ -5446,7 +5493,7 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
       });
       bar.appendChild(confirmBtn);
       if (prompt.optional) {
-        const skipBtn = el('button', 'btn choice-skip', '跳过');
+        const skipBtn = el('button', 'btn choice-skip', t('render.choice.skip'));
         skipBtn.addEventListener('click', () => {
           choicePromptId = null;
           cb.onAction({ kind: 'effect-choice', promptId: topEffect.id, choice: [] });
@@ -5466,10 +5513,10 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
           });
         }
       }
-      const bar = choiceBar(topEffect, prompt, cb, '点击高亮的线路选择目标线');
+      const bar = choiceBar(topEffect, prompt, cb, t('render.choice.hint-line'));
       if (prompt.optional) {
         // 可选 select-line（如 darkness-1 的可选偏转）：跳过 = 空应答
-        const skipBtn = el('button', 'btn choice-skip', '跳过');
+        const skipBtn = el('button', 'btn choice-skip', t('render.choice.skip'));
         skipBtn.addEventListener('click', () => {
           choicePromptId = null;
           cb.onAction({ kind: 'effect-choice', promptId: topEffect.id, choice: [] });
@@ -5479,9 +5526,12 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
       wrap.appendChild(bar);
     } else if (prompt.kind === 'select-action') {
       const bar = el('div', 'choice-bar');
-      const opName = (prompt.chooser ?? topEffect.player) === 0 ? '玩家 1' : '玩家 2'; // 修改提示词 17
-      bar.appendChild(el('div', 'operator-banner', `请 ${opName} 操作`));
-      bar.appendChild(el('div', 'choice-title', `${(prompt.chooser ?? topEffect.player) === 0 ? 'P1' : 'P2'} 操作 — ${prompt.title}`));
+      const opName = playerLabel(prompt.chooser ?? topEffect.player); // 修改提示词 17
+      bar.appendChild(el('div', 'operator-banner', t('render.choice.operator', { name: opName })));
+      bar.appendChild(el('div', 'choice-title', t('render.choice.title', {
+        who: (prompt.chooser ?? topEffect.player) === 0 ? 'P1' : 'P2',
+        title: prompt.title,
+      })));
       // 2代 luck 宣告 prompt（luck-0 宣告数字 / luck-3 宣告协议）：宣告卡（效果源卡）中心
       // 出现骰子持续转动（startLuckDiceFx 幂等：choice-bar 每帧重渲染重复调用只重定位）；
       // 用户选择后 luck:roll 事件（fx-gen2 订阅）停骰并播成功/失败结果。
@@ -5496,7 +5546,7 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
       // （点击两张协议交换 → 完成时回填 action:order:XYZ）→ 这里不渲染 5 个布局按钮，
       // 只给一行提示；窗口由 main.ts 的 syncRearrangeModalForEffect 按栈顶请求打开/关闭。
       if (prompt.rearrangeSide !== undefined) {
-        bar.appendChild(el('div', 'choice-note', '请在「重排协议」窗口中点击两张协议交换位置，摆好后点「完成重排」。'));
+        bar.appendChild(el('div', 'choice-note', t('render.choice.note-rearrange')));
         wrap.appendChild(bar);
         grid.querySelector('.hand-strip')?.classList.add('choice-mode');
       } else {
@@ -5506,7 +5556,7 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
         bar.appendChild(b);
       }
       if (prompt.optional) {
-        const skip = el('button', 'btn choice-skip', '跳过');
+        const skip = el('button', 'btn choice-skip', t('render.choice.skip'));
         skip.addEventListener('click', () => { choicePromptId = null; cb.onAction({ kind: 'effect-choice', promptId: topEffect.id, choice: [] }); });
         bar.appendChild(skip);
       }
@@ -5764,9 +5814,12 @@ export function resetUiState(): void {
 export function choiceBar(pe: PendingEffect, prompt: ChoiceRequest, cb: UiCallbacks, hint: string): HTMLElement {
   const bar = el('div', 'choice-bar');
   // 修改提示词 17：操作者提示横幅
-  const opName = (prompt.chooser ?? pe.player) === 0 ? '玩家 1' : '玩家 2';
-  bar.appendChild(el('div', 'operator-banner', `请 ${opName} 操作`));
-  bar.appendChild(el('div', 'choice-title', `${(prompt.chooser ?? pe.player) === 0 ? 'P1' : 'P2'} 操作 — ${prompt.title}`));
+  const opName = playerLabel(prompt.chooser ?? pe.player);
+  bar.appendChild(el('div', 'operator-banner', t('render.choice.operator', { name: opName })));
+  bar.appendChild(el('div', 'choice-title', t('render.choice.title', {
+    who: (prompt.chooser ?? pe.player) === 0 ? 'P1' : 'P2',
+    title: prompt.title,
+  })));
   bar.appendChild(el('div', 'choice-hint', hint));
   return bar;
 }
@@ -5788,9 +5841,9 @@ export function buildChoicePickOverlay(
   const overlay = el('div', 'choice-pick-overlay');
   const panel = el('div', 'choice-pick-panel');
   const who = (prompt.chooser ?? pe.player) === 0 ? 'P1' : 'P2';
-  panel.appendChild(el('div', 'choice-pick-title', `${who} 操作 — ${prompt.title}`));
+  panel.appendChild(el('div', 'choice-pick-title', t('render.choice.title', { who, title: prompt.title })));
   panel.appendChild(
-    el('div', 'choice-pick-hint', '单击选择 / 再点取消，双击放大查看；选好后点「确认」'),
+    el('div', 'choice-pick-hint', t('render.choice.pick-hint')),
   );
   const grid = el('div', 'choice-pick-grid');
   for (const c of cards) {
@@ -5828,7 +5881,10 @@ export function buildChoicePickOverlay(
   }
   panel.appendChild(grid);
   panel.appendChild(
-    el('div', 'choice-pick-count', `已选 ${sel.size}/${prompt.max === Infinity ? cards.length : prompt.max}`),
+    el('div', 'choice-pick-count', t('render.choice.pick-count', {
+      n: String(sel.size),
+      max: String(prompt.max === Infinity ? cards.length : prompt.max),
+    })),
   );
   overlay.appendChild(panel);
   return overlay;
@@ -5913,21 +5969,21 @@ export function openZoom(defId: string, faceUp: boolean, isProtocol: boolean, co
       const box = el('div', 'zoom-text protocol-zoom-text');
       box.appendChild(el('div', 'card-text-title', proto.name));
       const setLabel =
-        proto.set === 'MN01' || proto.set === 'AX01' ? '1代' :
-        proto.set === 'MN02' || proto.set === 'AX02' ? '2代' : '3代';
+        proto.set === 'MN01' || proto.set === 'AX01' ? t('render.draft.gen-1') :
+        proto.set === 'MN02' || proto.set === 'AX02' ? t('render.draft.gen-2') : t('render.draft.gen-3');
       const meta = el('div', 'card-text-seg');
       meta.appendChild(el('span', 'card-text-seg-label', `${setLabel} · ${proto.defId}`));
       box.appendChild(meta);
       const motto = el('div', 'card-text-seg');
-      motto.appendChild(el('span', 'card-text-seg-label', '座右铭：'));
+      motto.appendChild(el('span', 'card-text-seg-label', t('render.zoom.motto-label')));
       motto.appendChild(document.createTextNode(proto.loadingText));
       box.appendChild(motto);
       const kw = el('div', 'card-text-seg');
-      kw.appendChild(el('span', 'card-text-seg-label', '关键词：'));
+      kw.appendChild(el('span', 'card-text-seg-label', t('render.zoom.keywords-label')));
       kw.appendChild(document.createTextNode(proto.commands.join(' · ')));
       box.appendChild(kw);
       const state = el('div', 'card-text-seg');
-      state.appendChild(el('span', 'card-text-seg-label', compiled ? '已编译' : '未编译'));
+      state.appendChild(el('span', 'card-text-seg-label', compiled ? t('render.zoom.compiled') : t('render.zoom.uncompiled')));
       box.appendChild(state);
       textEl = box;
     } catch {
@@ -5942,12 +5998,12 @@ export function openZoom(defId: string, faceUp: boolean, isProtocol: boolean, co
     const faceSrc = cardImgSrc(proto, value);
     const backSrc = '/assets/Cardback.jpg';
     const stage = el('div', 'zoom-stage');
-    const peekBtn = el('button', 'btn zoom-peek-btn', showingFace ? '查看背面' : '查看正面');
+    const peekBtn = el('button', 'btn zoom-peek-btn', showingFace ? t('render.zoom.view-back') : t('render.zoom.view-front'));
     peekBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       showingFace = !showingFace;
       img.src = showingFace ? faceSrc : backSrc;
-      peekBtn.textContent = showingFace ? '查看背面' : '查看正面';
+      peekBtn.textContent = showingFace ? t('render.zoom.view-back') : t('render.zoom.view-front');
       if (textEl) textEl.style.display = showingFace ? '' : 'none';
     });
     // 按钮先于图像 append：flex column 首子节点在上 → 「查看背面」按钮位于图像上方
@@ -6020,11 +6076,11 @@ function openTrashViewer(s: GameState, player: PlayerId): void {
   if (trashViewerOverlay) closeTrashViewer();
   const overlay = el('div', 'zoom-overlay');
   const panel = el('div', 'trash-viewer');
-  panel.appendChild(el('div', 'trash-viewer-title', `玩家 ${player + 1} 的弃牌堆`));
+  panel.appendChild(el('div', 'trash-viewer-title', t('render.trash-viewer.title', { n: String(player + 1) })));
   const grid = el('div', 'trash-viewer-grid');
   const trash = s.players[player].trash;
   if (trash.length === 0) {
-    grid.appendChild(el('div', 'trash-viewer-empty', '弃牌堆为空'));
+    grid.appendChild(el('div', 'trash-viewer-empty', t('render.trash-viewer.empty')));
   } else {
     for (const card of trash) {
       const node = renderCardFace({ defId: card.defId, faceUp: true, uid: card.uid });
@@ -6059,18 +6115,18 @@ function openDeckOrderViewer(s: GameState, player: PlayerId): void {
   if (deckOrderOverlay) closeDeckOrderViewer();
   const overlay = el('div', 'zoom-overlay');
   const panel = el('div', 'deck-order-viewer');
-  panel.appendChild(el('div', 'deck-order-title', `玩家 ${player + 1} 的牌库（对局结束 · 自上而下 = 抽取顺序）`));
+  panel.appendChild(el('div', 'deck-order-title', t('render.deck-order.title', { n: String(player + 1) })));
   const grid = el('div', 'deck-order-grid');
   const deck = s.players[player].deck;
   if (deck.length === 0) {
-    grid.appendChild(el('div', 'trash-viewer-empty', '牌库为空'));
+    grid.appendChild(el('div', 'trash-viewer-empty', t('render.deck-order.empty')));
   } else {
     // deck 数组约定：索引 0 = 牌库底，末位 = 牌库顶（下一张抽）→ 倒序展示「顶在前」
     for (let i = deck.length - 1; i >= 0; i--) {
       const card = deck[i];
       const cell = el('div', 'deck-order-cell');
       cell.appendChild(renderCardFace({ defId: card.defId, faceUp: true, uid: card.uid }));
-      cell.appendChild(el('div', 'deck-order-tag', i === deck.length - 1 ? '下一张' : `${deck.length - i} 张后`));
+      cell.appendChild(el('div', 'deck-order-tag', i === deck.length - 1 ? t('render.deck-order.next') : t('render.deck-order.after', { n: String(deck.length - i) })));
       grid.appendChild(cell);
     }
   }

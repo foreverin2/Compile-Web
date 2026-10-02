@@ -1154,4 +1154,116 @@ export const ZH: Readonly<Record<string, string>> = {
   'render.next-step': '下一步',
   'render.diag.export': '导出日志',
   'render.diag.export-title': '导出诊断日志（错误 + 控制台记录 + 事件日志 + 状态快照）',
+
+  /* ── ★ 2026-10-02（P3 第四批）：`src/ui/render.ts` 的**选择条 / 草稿页 / 遮罩 chrome** ──
+   *
+   * 值 = 抽取前 `src/ui/render.ts` 里那些字面量/模板串的原文，**一个字都没改**
+   * （含空格、全角括号与 `—` / `·` / `→`；`{n}` 那种占位符对应原来的 `${…}` 插值）。
+   * 三处**刻意不动**（`t()` 的实参不是文案、只负责匹配，改了会改行为）：
+   *   `透彻：从牌库中选择` / `luck-0：宣告` / `luck-3：宣告` —— 它们是引擎给的
+   *   `prompt.title` 的**前缀**（`src/core/effects/cards/*.ts` 的中文，属红线数据层）。
+   */
+  'render.hand.count': '手牌 ×{n}',
+  'render.hand.flip': '翻面',
+  'render.hand.hint-selected': '已选择卡牌 — 拖拽到高亮的线路打出（可先点「翻面」切换朝向）',
+  'render.hand.hint-idle': '拖拽手牌卡到高亮的线路打出（双击放大，点击选择）',
+  // 动作行那三个按钮（`advance` 走 `render.next-step`）
+  'render.action.compile-line': '编译线 {n}（{a} vs {b}）',
+  'render.action.resolve-trigger': '结算触发：{defId}',
+  'render.action.clear-cache': '清理缓存',
+  // 选择条（`.choice-bar` 那一族）
+  'render.choice.operator': '请 {name} 操作',
+  'render.choice.title': '{who} 操作 — {title}',
+  'render.choice.count': '已选 {n}/{max}',
+  'render.choice.pick-count': '已选 {n}/{max}',
+  'render.choice.confirm': '确认',
+  'render.choice.skip': '跳过',
+  'render.choice.hint-line': '点击高亮的线路选择目标线',
+  'render.choice.pick-hint': '单击选择 / 再点取消，双击放大查看；选好后点「确认」',
+  'render.choice.note-rearrange': '请在「重排协议」窗口中点击两张协议交换位置，摆好后点「完成重排」。',
+  // 草稿页 chrome（协议池卡名 / 命令词 / 评分内容是**数据**，一格不动）
+  'render.draft.picks-title': '玩家 {n} 已选',
+  'render.draft.seat-self': '（你）',
+  'render.draft.seat-foe': '（对方）',
+  'render.draft.picks-turn': '● 轮选',
+  'render.draft.pick-empty': '尚未选择',
+  'render.draft.unpick-hint': '拖出选择框可取消本回合选择',
+  'render.draft.ban-tip': '点击禁用「{name}」（本局不可选；共需禁用 {n} 个）',
+  'render.draft.ban-badge': '禁用',
+  'render.draft.group.mn01': '1代 基础',
+  'render.draft.group.ax01': '1代 拓展',
+  'render.draft.group.mn02': '2代 基础',
+  'render.draft.group.ax02': '2代 拓展',
+  'render.draft.group.mn03': '3代 基础',
+  'render.draft.group.ax03': '3代 拓展',
+  'render.draft.gen-1': '1代',
+  'render.draft.gen-2': '2代',
+  'render.draft.gen-3': '3代',
+  'render.draft.verb-pick': '选择协议 · 本轮还可选 {n} 个',
+  'render.draft.verb-ban': '禁用协议 · 本阶段还需禁用 {n} 个（共 {total} 个）',
+  // 两件**不同**的句子（不是同一个键的两种取值）：普通轮的进度条与禁用阶段的进度条
+  'render.draft.progress-pick': '第 {n} / {total} 次选择',
+  'render.draft.progress-ban': '第 {n} / {total} 次选择 · 禁用阶段',
+  'render.draft.filter-tip': '{name}（本局池内 {n} 套）· {action}',
+  'render.draft.filter-hide': '点击隐藏',
+  'render.draft.filter-show': '点击显示',
+  'render.draft.random-pool-note': '本局为随机池：从全部 {total} 套协议中随机抽取 {n} 套可选（世代筛选仍可用）',
+  'render.draft.ban-mode-note': '禁用模式：后手先禁 2 → 先手选 1 禁 1 → 后手选 2 禁 1 → 先手选 2 禁 2 → 后手选 1',
+  'render.draft.filter-hint': '当前可见协议 {n} 套，还需完成 {left} 次选/禁动作——请重新开启被隐藏的世代组。',
+  'render.preview.position': '定位：{position}',
+  'render.preview.commands': '关键词：{commands}',
+  'render.preview.pairs-label': '推荐搭配协议',
+  'render.preview.styles-label': '推荐流派',
+  'render.preview.hint': '点击中间协议卡\n在此固定查看详情',
+  // 胜负结算与遮罩（热座 / 联机 / 重放共用）
+  'render.win.title': '玩家 {n} 获胜！',
+  'render.win.sub': '本局结束 · 可继续查看场上布局复盘',
+  'render.win.back': '返回主界面',
+  'render.zoom.motto-label': '座右铭：',
+  'render.zoom.keywords-label': '关键词：',
+  'render.zoom.compiled': '已编译',
+  'render.zoom.uncompiled': '未编译',
+  'render.zoom.view-back': '查看背面',
+  'render.zoom.view-front': '查看正面',
+  'render.trash-viewer.title': '玩家 {n} 的弃牌堆',
+  'render.trash-viewer.empty': '弃牌堆为空',
+  'render.deck-order.title': '玩家 {n} 的牌库（对局结束 · 自上而下 = 抽取顺序）',
+  'render.deck-order.empty': '牌库为空',
+  'render.deck-order.next': '下一张',
+  'render.deck-order.after': '{n} 张后',
+
+  /* ── ★ 2026-10-02（P3 第四批）：`src/ui/render-net.ts`（联机牌桌）本页特有的界面文案 ──
+   *
+   * 值 = 抽取前 `src/ui/render-net.ts` 里那些字面量/模板串的原文，**一个字都没改**。
+   * 与热座同句的那几处**复用** `render.*`（`render.choice.{title,count,confirm,skip,
+   * hint-line,note-rearrange}` / `render.action.{resolve-trigger,clear-cache}` /
+   * `render.next-step` / `render.diag.{export,export-title}`）—— 值逐字相同，不另开键。
+   * ⚠️ `render-net.action.compile-line` **与** `render.action.compile-line` **值不同**：
+   *   热座那句带 `（己方值 vs 对方值）`，本页那句没有 ⇒ 两条键（不许拿来互相顶替）。
+   * ⚠️ `render-net.choice.operator` 的值里 `请` 与 `玩家` 之间**有一个空格**（原文如此）。
+   */
+  'render-net.conn.local-preview': '● 本地预览（未联机）',
+  'render-net.lane.name': '线 {n}',
+  'render-net.choice.operator': '请 玩家 {n} 操作',
+  'render-net.info.seat-self': '自己（你）',
+  'render-net.info.seat-foe': '对手',
+  'render-net.action.compile-line': '编译线 {n}',
+  'render-net.hand.hint-selected': '已选牌 → 点高亮链路槽打出',
+  'render-net.hand.hint-idle': '点选手牌 → 点链路槽打出（双击放大）',
+  'render-net.hand.foe-count': '对手手牌 ×{n}',
+  'render-net.zoom.foe-hand-title': '对手手牌',
+  'render-net.zoom.foe-hand-unknown': '对手手牌（内容未公开）',
+  'render-net.zoom.foe-hand-count': '对手手牌 ×{n}（内容未公开）',
+  'render-net.zoom.unknown': '未公开',
+  'render-net.zoom.back-note': '未公开：这张牌背面朝上（内容在对手翻开前不可见）',
+  'render-net.zoom.compiled-suffix': '（已编译）',
+  'render-net.zoom.box-title': '卡牌放大框',
+  'render-net.zoom.box-hint': '把鼠标移到卡牌 / 协议上：此处实时放大并显示中文文本；单击固定',
+  'render-net.preview.title': '预览工具条',
+  'render-net.preview.seat-1': '视角：我 = P1 ⇄ P2',
+  'render-net.preview.seat-2': '视角：我 = P2 ⇄ P1',
+  'render-net.preview.seat-tip': '切换到对方视角：切过去后"自己"就是对手（手牌正面且可点），这是推进对手回合、把一局打完的正确做法（对手手牌只手牌数量那一档是不可点的）。',
+  'render-net.preview.hint-answer': '轮到对手（P{n}）应答 —— 本页只显示信息、不显示按钮；切「视角」后可操作',
+  'render-net.preview.hint-act': '轮到对手（P{n}）行动 —— 本页只显示信息、不显示按钮；切「视角」后可操作',
+  'render-net.preview.note': '已切视角：我 = P{n}',
 };
