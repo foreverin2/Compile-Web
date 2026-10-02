@@ -1125,7 +1125,7 @@ export const ZH: Readonly<Record<string, string>> = {
    * 开发者的用法错误），与 `home.ts` 的 `renderCoin` 用法错误、`pwa-update.ts` 的控制台串同族
    * ⇒ 有意留中文，登记在 `DEV_ONLY`。它们**不是**屏上的文案。
    */
-  'net-browser.relay.unavailable-why': '这一轮没有中继可用{why}，只能试直连：同一个局域网里一般能直接连上，跨网络就不一定了。过一会儿再点一次试试。',
+  'net-browser.relay.unavailable-why': '这一轮没有中继可用（{why}），只能试直连：同一个局域网里一般能直接连上，跨网络就不一定了。过一会儿再点一次试试。',
   'net-browser.relay.unavailable-plain': '这一轮没有中继可用，只能试直连：同一个局域网里一般能直接连上，跨网络就不一定了。',
   'net-browser.candidate.none': '一个都没有',
   'net-browser.candidate.kind.host': '本机（host）',
@@ -1194,6 +1194,33 @@ export const ZH: Readonly<Record<string, string>> = {
   'net-browser.transport.peer-unreachable': '对端不可达，这条消息没有发出去（这是传输层的读数，不是"这局结束了"）。',
   'net-browser.transport.send-failed': '发送失败：{detail}',
   'net-browser.transport.closed-final': '这一局已经结束（closed 不可逆，不能再连）。',
+
+  /* ── ★ 2026-10-02（P3 第七批）：`src/ui/turn-cred.ts` 那 7 条裸中文 ──
+   *
+   * 值 = 抽取前 `src/ui/turn-cred.ts` 里那些字面量/模板串的**原文**，一个字都没改
+   * （`{ms}` 对应原文的 `${String(settings.timeoutMs)}`）。逐字守恒由
+   * `.superpowers/i18n-turn-cred/check-verbatim.mjs` 机检（从 `git show HEAD:` 抓原文逐条比对）。
+   *
+   * 分类口径：`turn-cred.reason.*` 四条是**玩家能看见**的那半句 —— 它们进
+   * `net-browser.relay.unavailable-why` 的 `{why}`（英文界面下曾经因此夹中文，见台账 G.3 第 1 条，
+   * 本轮已收口）。`turn-cred.detail.*` 两条与 `turn-cred.error.no-fetch` 一条落在这份读数的
+   * `detail` 字段上（`lastFailure()` / `#g5probe=1` 的诊断读数），**不是**屏上那句的一半，
+   * 但它们同样是这一层自己写的中文 ⇒ 一起搬，不再给"英文界面里夹中文串"留一条缝。
+   *
+   * ⚠️ `net-browser.relay.unavailable-why` 的中文值这一轮**多了一对全角括号**（值从
+   *   `这一轮没有中继可用{why}，…` 变成 `这一轮没有中继可用（{why}），…`）：那对括号原来写死在
+   *   `net-browser.ts` 的拼接里（`` `（${describeTurnCredentialFailure(…)}）` ``）。
+   *   括号是**这句文案的一部分**，原文就带它们 ⇒ 移进表里之后：
+   *   ① 中文渲染结果**逐字不变**（机检：`check-verbatim.mjs` 证据③ 把整句与 HEAD 的渲染结果比）；
+   *   ② 英文那半边不再是"英文句子夹全角括号"（英文值用半角括号）。
+   */
+  'turn-cred.reason.timeout': '凭据服务没有及时回应',
+  'turn-cred.reason.rejected': '凭据服务拒绝了这次请求',
+  'turn-cred.reason.malformed': '凭据服务回的格式读不懂',
+  'turn-cred.reason.unreachable': '凭据服务连不上',
+  'turn-cred.detail.timeout': '等了 {ms} 毫秒没有回应',
+  'turn-cred.detail.malformed': '回应里缺字段或字段形状不对',
+  'turn-cred.error.no-fetch': '这台设备没有 fetch 能力',
 
   /* ── ★ 2026-10-02（P3 第三批）：首启授权弹窗（`src/ui/local-consent.ts`）的 4 个**界面标签** ──
    *

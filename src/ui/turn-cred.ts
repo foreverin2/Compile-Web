@@ -19,7 +19,25 @@
  * 屏上要如实说"这一轮没有中继可用"，而"为什么没有"是玩家能懂的那句的一部分
  * （签发服务没回应 / 回了一句读不懂的东西 / 回了个错）。`null` 表达不了这件事，
  * 于是它是一份**带 reason 的读数** —— 与 `IceGatherResult` 的失败形态同款。
+ *
+ * ## ★ 2026-10-02（P3 第七批）：7 条裸中文搬进 `src/i18n/`
+ *
+ * 这一层原来有 7 条裸中文（`describeTurnCredentialFailure` 的 4 条 + 2 条 `detail` +
+ * `defaultFetch` 的 1 条 reject 消息）。前 4 条是**玩家能看见**的：它们的落点是
+ * `net-browser.ts` 的 `relayUnavailableNoteOf`（那一句的 `{why}`），英文界面下曾经夹着中文
+ * （台账 G.3 第 1 条）。这一批按逐屏抽取的同一套规矩搬到 `turn-cred.*` 键：
+ * **中文值逐字守恒**（逐字由 `.superpowers/i18n-turn-cred/check-verbatim.mjs` 从 `git show HEAD:`
+ * 抓原文机检），**只换字符串来源、不改任何一条行为**（分支、超时、缓存、读数形状一字未动）。
+ *
+ * ⚠️ 全部 7 处都是**现调 `t()`**（都在函数体内）：模块顶层调 `t()` 会把语言冻在 import
+ * 那一刻（`tests/i18n/module-scope-t.test.ts` 钉这条）。`t()` 读的是**调用那一刻**的语言 ——
+ * 这一点对 `describeTurnCredentialFailure` 尤其重要：它的调用方（渲染那一刻的
+ * `relayUnavailableNoteOf`）与它同语言 ⇒ 屏上那句整句一致。
  */
+
+// 玩家可见的那几句走文案表（`turn-cred.*`）。这一层是 `src/ui/**` ⇒ 与其它屏同一口径：
+// 只 import `t`，**不在模块顶层调它**（语言是模块级内存态，顶层调用会冻在 import 那一刻）。
+import { t } from '../i18n';
 
 /** 一份**换到手的**凭据（服务端 `GET /turn-cred` 的字段，见 `server/turn-cred/lib/handler.mjs`） */
 export interface TurnCredential {
@@ -151,7 +169,7 @@ function defaultFetch(
   url: string, init: TurnCredFetchInitLike,
 ): Promise<TurnCredFetchResponseLike> {
   const f = (globalThis as { fetch?: (u: string, i: unknown) => Promise<TurnCredFetchResponseLike> }).fetch;
-  if (typeof f !== 'function') return Promise.reject(new Error('这台设备没有 fetch 能力'));
+  if (typeof f !== 'function') return Promise.reject(new Error(t('turn-cred.error.no-fetch')));
   return f(url, init);
 }
 
@@ -248,12 +266,12 @@ export function createTurnCredentialStore(env?: TurnCredentialStoreEnv): TurnCre
         ? { method: 'GET', cache: 'no-store' }
         : { method: 'GET', cache: 'no-store', signal });
       const res = await Promise.race([racing, timeout]);
-      if (res === 'timeout') return fail('timeout', `等了 ${String(settings.timeoutMs)} 毫秒没有回应`);
+      if (res === 'timeout') return fail('timeout', t('turn-cred.detail.timeout', { ms: String(settings.timeoutMs) }));
       if (!res.ok) return fail('rejected', `HTTP ${String(res.status)}`);
       let body: unknown;
       try { body = await res.json(); } catch (e) { return fail('malformed', String(e)); }
       const parsed = parseCredential(body);
-      if (parsed === null) return fail('malformed', '回应里缺字段或字段形状不对');
+      if (parsed === null) return fail('malformed', t('turn-cred.detail.malformed'));
       const lifeMs = Math.max(1_000, parsed.ttlSeconds * 1000 - TURN_CRED_RENEW_MARGIN_MS);
       current = { credential: parsed, expiresAtMs: clock() + lifeMs };
       failure = null;
@@ -285,10 +303,15 @@ export function createTurnCredentialStore(env?: TurnCredentialStoreEnv): TurnCre
   };
 }
 
-/** 把失败原因翻成**玩家能懂**的一句（屏上那句"没有中继可用"的一半就来自它） */
+/**
+ * 把失败原因翻成**玩家能懂**的一句（屏上那句"没有中继可用"的一半就来自它）。
+ *
+ * ★ 2026-10-02（P3 第七批）：四条文案搬进 `turn-cred.reason.*`；**现调 `t()`**
+ * （调用方在渲染那一刻取，语言因此与整句一致）。行为一字未改：仍是四条 `if` + 一个兜底。
+ */
 export function describeTurnCredentialFailure(reason: TurnCredentialFailure): string {
-  if (reason === 'timeout') return '凭据服务没有及时回应';
-  if (reason === 'rejected') return '凭据服务拒绝了这次请求';
-  if (reason === 'malformed') return '凭据服务回的格式读不懂';
-  return '凭据服务连不上';
+  if (reason === 'timeout') return t('turn-cred.reason.timeout');
+  if (reason === 'rejected') return t('turn-cred.reason.rejected');
+  if (reason === 'malformed') return t('turn-cred.reason.malformed');
+  return t('turn-cred.reason.unreachable');
 }

@@ -898,12 +898,17 @@ export type RelayUnavailableReason = 'credential-unavailable' | 'not-configured'
  *
  * 措辞纪律（照 `privacy.ts` 那条）：说事实、给出下一步，不用内部标识符。中继那句隐私说明的
  * 唯一出处仍是 `src/app/privacy.ts`（这一句只在**没有中继**时说，与它不冲突）。
+ *
+ * ★ 2026-10-02（P3 第七批）：那对**全角括号**原来在本函数里拼（`` `（${…}）` ``），现在跟
+ * 原因那半句一起住进文案表（`net-browser.relay.unavailable-why` 的 zh 值）—— 中文渲染结果
+ * 逐字不变，英文那半边则不再"英文句子夹全角括号"。原因那半句由 `turn-cred.ts` 的
+ * `describeTurnCredentialFailure` 按**当前语言**现取（`turn-cred.reason.*`）。
  */
 export function relayUnavailableNoteOf(read: IceServersRead): string | null {
   if (read.relayUnavailableReason === undefined) return null;
   if (read.relayUnavailableReason === 'credential-unavailable') {
     const why = read.relayCredentialFailure === undefined
-      ? '' : `（${describeTurnCredentialFailure(read.relayCredentialFailure)}）`;
+      ? '' : describeTurnCredentialFailure(read.relayCredentialFailure);
     return t('net-browser.relay.unavailable-why', { why });
   }
   return t('net-browser.relay.unavailable-plain');

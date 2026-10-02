@@ -117,16 +117,15 @@ function pcLike(extra: Partial<PeerConnectionLike> = {}): PeerConnectionLike {
  *
  * `key` 必须是**字面量**（`tests/i18n/tables.test.ts` 的缺键腿与占位符腿都只认静态键）。
  *
- * `allowCjk`（**只在一条腿上用，并且写明理由**）：那条串里有一段来自**另一个文件名下**
- * 仍未抽取的中文（`turn-cred.ts` 的 `describeTurnCredentialFailure`，登记在台账 G.2）。
- * 这一轮的判据面是 `net-browser.ts` 自己的字，不该把那条边界判成假红 —— 但要显式写出来，
- * 不能靠"少断言一句"糊过去。
+ * ★ 2026-10-02（P3 第七批）：这里原来有一个 `allowCjk` 口子，只给一条腿用 ——
+ * 那条串里有一段来自**另一个文件名下**当时仍未抽取的中文（`turn-cred.ts` 的
+ * `describeTurnCredentialFailure`）。本轮把那 7 条抽完了 ⇒ **口子删掉**，判据恢复成
+ * "英文值里零汉字"（`en` 与"剔掉实参之后"两级都查）。台账 G.3 第 1 条据此收口。
  */
 function expectLocalized(
   actual: string,
   key: string,
   params: Readonly<Record<string, string>> = {},
-  opts: { readonly allowCjk?: true } = {},
 ): void {
   setLang('zh');
   const zh = t(key, params);
@@ -134,14 +133,11 @@ function expectLocalized(
   const en = t(key, params);
   setLang('zh');
   expect(actual, `${key} 的英文产出与英文表不一致：实际=${JSON.stringify(actual)} 英文表=${JSON.stringify(en)}`).toBe(en);
-  // `en` 里面**这个键自己的字**是英文：`allowCjk` 只放行"参数带进来的中文"，
-  // 做法是把实参值从英文整句里剔掉之后再看还有没有汉字。
+  // `en` 里面**这个键自己的字**是英文：做法是把实参值从英文整句里剔掉之后再看还有没有汉字。
   const stripped = Object.values(params).reduce((acc, v) => acc.split(v).join(''), en);
   expect(/[\u3400-\u9fff]/.test(stripped),
     `${key} 的英文值里有汉字（把实参剔掉之后仍有汉字 ⇒ 是键自己的字没翻）：${en}`).toBe(false);
-  if (opts.allowCjk !== true) {
-    expect(/[\u3400-\u9fff]/.test(en), `${key} 的英文值里有汉字：${en}`).toBe(false);
-  }
+  expect(/[\u3400-\u9fff]/.test(en), `${key} 的英文值里有汉字：${en}`).toBe(false);
   expect(zh, `${key} 的中英值一样 ⇒ 上面两条判据恒真`).not.toBe(en);
 }
 
@@ -204,31 +200,54 @@ describe('★ P3 第五批：`net-browser.ts` 那 80 条在英文下的形态', 
     }
   });
 
-  it('`relayUnavailableNoteOf` 那两支在英文下与表一致', () => {
+  it('`relayUnavailableNoteOf` 那两支在英文下与表一致（★ 台账 G.3 第 1 条收口：整句零汉字）', () => {
     const withWhy = (): string | null => relayUnavailableNoteOf({
       relayUnavailableReason: 'credential-unavailable',
       relayCredentialFailure: 'timeout',
     } as never);
-    // `{why}` 那一段来自 `turn-cred.ts`（它自己也跟着语言走）⇒ 拿中文整句把那段抠出来
+    const plain = (): string | null => relayUnavailableNoteOf({ relayUnavailableReason: 'not-configured' } as never);
+
+    /**
+     * 中文帧：整句**逐字等于改动前的原文**。
+     *
+     * 为什么这一句要逐字钉在这里：那对全角括号原来写在 `net-browser.ts` 的拼接里
+     * （`` `（${describeTurnCredentialFailure(…)}）` ``），本轮跟着原因那半句一起搬进了
+     * `net-browser.relay.unavailable-why` 的 zh 值 ⇒ "中文渲染结果一字未变"这件事必须由
+     * **整句**的逐字比对来证明（只有逐段比对的话，括号搬家这种改动会漏过去）。
+     */
     setLang('zh');
     const zhWith = withWhy() ?? '';
-    const innerZh = zhWith.slice('这一轮没有中继可用'.length, zhWith.indexOf('，只能试直连'));
-    expect(innerZh.length, '夹具失败：从中文整句里抠不出 why 那一段').toBeGreaterThan(0);
-    const zhPlain = relayUnavailableNoteOf({ relayUnavailableReason: 'not-configured' } as never) ?? '';
+    expect(zhWith, '「中继不可用 + 带原因」那一句的中文与改动前不一致（括号那半句是从拼接里搬进表的）')
+      .toBe('这一轮没有中继可用（凭据服务没有及时回应），只能试直连：'
+        + '同一个局域网里一般能直接连上，跨网络就不一定了。过一会儿再点一次试试。');
+    expect(zhWith, '中文整句里没有 `turn-cred.ts` 那半句（说明它不是从文案表里来的）')
+      .toContain(ZH['turn-cred.reason.timeout']);
+    const zhPlain = plain() ?? '';
     expect(zhPlain, '不带原因那一支的中文与改动前不一致')
       .toBe('这一轮没有中继可用，只能试直连：同一个局域网里一般能直接连上，跨网络就不一定了。');
+
+    /**
+     * 英文帧（**新口径**）：`{why}` 那一段现在自己也跟着语言走（`turn-cred.reason.*`）
+     * ⇒ 整句**零汉字**，而且逐字等于英文表填上英文的那段原因。
+     *
+     * ⚠️ 这一条原来是**反过来**的：本轮之前 `describeTurnCredentialFailure` 是 7 条裸中文，
+     * 那条腿**正面断言**"英文整句里仍有汉字"（`allowCjk`），并写明"`turn-cred.ts` 抽了之后
+     * 它会红、逼着改台账"。它这一轮真的红了 ⇒ 按台账 G.3 第 1 条的记录换成现在的口径，
+     * 那个 `allowCjk` 口子**删掉**（不是放宽）。
+     */
     setLang('en');
     const enWith = withWhy() ?? '';
-    const enPlain = relayUnavailableNoteOf({ relayUnavailableReason: 'not-configured' } as never) ?? '';
+    const enPlain = plain() ?? '';
+    const enWhy = t('turn-cred.reason.timeout');
     setLang('zh');
-    expectLocalized(enWith, 'net-browser.relay.unavailable-why', { why: innerZh }, { allowCjk: true });
+    expect(/[\u3400-\u9fff]/.test(enWhy), '夹具失败：`{why}` 那一段在英文下仍是中文').toBe(false);
+    expect(enWhy, '夹具失败：`{why}` 那一段在英文下与中文表同值（那整句的零汉字判据会恒真）')
+      .not.toBe(ZH['turn-cred.reason.timeout']);
+    expect(/[\u3400-\u9fff]/.test(enWith),
+      `英文界面下"中继不可用 + 带原因"那一整句里仍有汉字：${enWith}`).toBe(false);
+    expect(enWith).toContain(enWhy);
+    expectLocalized(enWith, 'net-browser.relay.unavailable-why', { why: enWhy });
     expectLocalized(enPlain, 'net-browser.relay.unavailable-plain');
-    // ⚠️ **如实记一条边界**：`allowCjk` 那一条不是"放宽"，是把**另一个文件名下**仍未抽取的
-    // 中文显式点出来 —— `why` 那一段来自 `turn-cred.ts` 的 `describeTurnCredentialFailure`，
-    // 它在英文模式下**仍然返回中文**（7 条裸中文，登记在台账 A 表的 `turn-cred.ts` 行）。
-    // 所以这一句在英文界面下会夹一段中文；本文件把它钉成**已知项**，而不是假装它是英文。
-    setLang('en');
-    expect(/[\u3400-\u9fff]/.test(enWith), '`why` 那一段在英文下已经不是中文了 ⇒ 把 allowCjk 删掉、并更新台账').toBe(true);
     setLang('zh');
     expect(/[\u3400-\u9fff]/.test(enPlain), '不带原因那一支英文下不该有汉字').toBe(false);
   });

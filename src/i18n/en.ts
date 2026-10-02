@@ -1169,7 +1169,7 @@ export const EN: Readonly<Record<string, string>> = {
    * `src/ui/net-browser.ts` (compression probes / fallback chain, signaling endpoint,
    * ICE gathering, getStats, offer/answer, transport send). The developer-only `throw`
    * messages of that file stay Chinese on purpose (registered in the manifest's DEV_ONLY). */
-  'net-browser.relay.unavailable-why': 'No relay is available this round{why}, so only a direct connection can be tried: inside one local network that usually connects directly, across networks it may not. Try again in a moment.',
+  'net-browser.relay.unavailable-why': 'No relay is available this round ({why}), so only a direct connection can be tried: inside one local network that usually connects directly, across networks it may not. Try again in a moment.',
   'net-browser.relay.unavailable-plain': 'No relay is available this round, so only a direct connection can be tried: inside one local network that usually connects directly, across networks it may not.',
   'net-browser.candidate.none': 'none at all',
   'net-browser.candidate.kind.host': 'local (host)',
@@ -1238,4 +1238,25 @@ export const EN: Readonly<Record<string, string>> = {
   'net-browser.transport.peer-unreachable': 'The peer is unreachable, so this message was not sent (this is a transport-layer reading, not "the game is over").',
   'net-browser.transport.send-failed': 'Send failed: {detail}',
   'net-browser.transport.closed-final': 'This game is over (closed is irreversible, it cannot be reconnected).',
+
+  /* ── 2026-10-02 (P3 batch 7): the 7 bare-Chinese strings of `src/ui/turn-cred.ts`.
+   *
+   * `turn-cred.reason.*` is the half a player really sees: it lands in the `{why}` slot of
+   * `net-browser.relay.unavailable-why`. Before this batch that slot stayed Chinese under
+   * `lang=en` (ledger G.3 item 1) — that gap is now closed: the whole sentence is CJK-free.
+   * `turn-cred.detail.*` / `turn-cred.error.no-fetch` ride the `detail` field of the same
+   * reading (the `lastFailure()` / `#g5probe=1` diagnostics), not the on-screen sentence;
+   * they are moved too so that no Chinese string of this layer can leak into an English UI.
+   *
+   * ⚠️ The full-width parentheses around the reason used to be hardcoded in `net-browser.ts`;
+   * they moved into the zh value of `net-browser.relay.unavailable-why` (the rendered Chinese
+   * sentence is byte-identical), so the English side now reads `... this round (reason), so ...`
+   * with half-width parentheses. */
+  'turn-cred.reason.timeout': 'the credential service did not answer in time',
+  'turn-cred.reason.rejected': 'the credential service refused this request',
+  'turn-cred.reason.malformed': 'the reply from the credential service could not be read',
+  'turn-cred.reason.unreachable': 'the credential service could not be reached',
+  'turn-cred.detail.timeout': 'waited {ms} ms with no reply',
+  'turn-cred.detail.malformed': 'the reply is missing fields or has the wrong shape',
+  'turn-cred.error.no-fetch': 'This device has no fetch capability',
 };
