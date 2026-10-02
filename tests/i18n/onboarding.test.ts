@@ -715,70 +715,70 @@ describe('★ 宿主接线：启动门 → 向导（源码结构腿）', () => {
    * ⇒ 现在的形状是**三元在 `t()` 外面、每个 `t()` 的实参都是字面量**，
    * 本组有两条腿分别钉这两件事（形状腿 + 动态键禁令腿）。
    */
-  it('★ D1：提示发在**「我玩过，直接跳过」那一支**，键是 `onboarding.after-skip`', () => {
+  it('★ D1 + P2：「跳过」那一支发 after-skip 提示；「开始教学」那一支**进教学屏**', () => {
     const body = bodyOf(MAIN_CODE, 'finishOnboarding');
     /**
-     * 形状判据（**整条语句**一把钉住，含"实参是字面量"这件事）：
-     *   `showHome(outcome.startTutorial ? t('<开始教学那支>') : t('<跳过那支>'))`
-     * 反过来说：三元**不许**出现在 `t(` 里面 —— 那种写法会被下面那条动态键禁令腿抓住，
-     * 这里先从形状上挡住。
+     * 这一条腿经了三个阶段，形状改过两次（都写在正文注释里，别删）：
+     *  1. **D1 第一版**：三元判反、借首页那句"待开发" ⇒ 跳过那支什么都不发；
+     *  2. **D1 第二版**：三元在 `t()` 里 ⇒ 动态键，被 `tables.test.ts` 两条腿抓红；
+     *  3. **P2（现在）**：「开始教学」直接 `showTutorial()`（教学模式做出来了），
+     *     所以**只剩跳过那一支**需要提示 —— 形状从三元变成"提前 return + 一句 showHome"。
+     *
+     * 判据（逐条都是"改坏了会红"的）：
+     *  ① 真值分支（`outcome.startTutorial`）里必须是 `showTutorial()`；
+     *  ② 它必须**提前 return**（否则会继续往下走、把首页也画一遍）；
+     *  ③ 剩下那一支（跳过）必须是 `showHome(t('onboarding.after-skip'))`；
+     *  ④ 提示不许再借首页那个"待开发"的说法（D1 的原形态）。
      */
-    const call = /showHome\(\s*outcome\s*\.\s*startTutorial\s*\?\s*t\('([^']+)'\)\s*:\s*t\('([^']+)'\)\s*\)/
-      .exec(body);
-    expect(call, '找不到 `showHome(outcome.startTutorial ? t(\'…\') : t(\'…\'))` 这个形状'
-      + '（换了写法？请按新形状重写这几条判据）').not.toBeNull();
-    // ② 真值那一支 = 「开始教学」
-    expect(call?.[1], '`?` 那一支（真值 = 「开始教学」）传的键不对').toBe('onboarding.after-start');
-    // ③ 假值那一支 = 「我玩过，直接跳过」—— **这一条就是 D1 的判据**
-    expect(call?.[2], '`:` 那一支（假值 = 「我玩过，直接跳过」）不是 after-skip：D1 就是这里反的')
-      .toBe('onboarding.after-skip');
-    // 两支的键必须**不同**（相同 = 分支白写）
-    expect(call?.[1], '两支发了同一句话 ⇒ 分支等于没写').not.toBe(call?.[2]);
-    // ④ 退化写法也不许放过：那一支又拿"待开发"那句当反馈（D1 的原形态）
-    expect(body, '提示那一支又拿 `toast.tutorial` 当反馈了')
-      .not.toMatch(/startTutorial\s*\?[^\n]*toast\.tutorial/);
+    const startAt = body.indexOf('outcome.startTutorial');
+    expect(startAt, '提示那一支没有看 `outcome.startTutorial`').toBeGreaterThan(0);
+    const branch = body.slice(startAt, startAt + 200);
+    expect(branch, '「开始教学」那一支没有进教学屏').toMatch(/showTutorial\s*\(\s*\)/);
+    expect(branch, '「开始教学」那一支没有提前 return（会顺手把首页也画一遍）')
+      .toMatch(/showTutorial\s*\(\s*\)\s*;\s*return\s*;/);
+    // ③ 跳过那一支：唯一一句提示
+    expect(body, '跳过那一支没有发 after-skip 那句')
+      .toMatch(/showHome\s*\(\s*t\('onboarding\.after-skip'\)\s*\)/);
+    // ④ 退化写法：不许再出现"待开发"那个键（P2 起它已从两张表里删掉，这里再钉一次）
+    expect(body, '提示里又出现了"待开发"那句').not.toContain('toast.tutorial');
+    // 反向锚点：跳过那一支真的**还在这条路上**（不是被我删了）
+    expect(body, '整个函数里没有 showHome ⇒ 跳过那一支没有落点').toMatch(/showHome\s*\(/);
   });
 
   it('★ 动态键禁令（本函数的代码位）：每一处 `t(` 的实参都必须是**字面量**', () => {
-    // 这条腿的由来：第二版把键写进了三元里（`t(cond ? 'a' : 'b')`）⇒ 缺键扫描腿看不见它们，
+    // 这条腿的由来：D1 第二版把键写进了三元里（`t(cond ? 'a' : 'b')`）⇒ 缺键扫描腿看不见它们，
     // `tables.test.ts` 的两条腿（动态键 / 死键）当场红。这里在**本文件**把它变成一条**局部**腿，
     // 让"改这一行的人"在跑自己这摊测试时就撞上，而不是等到全量测试才发现。
     const body = bodyOf(MAIN_CODE, 'finishOnboarding');
     const calls = [...body.matchAll(/\bt\(/g)];
     expect(calls.length, '`finishOnboarding` 里一处 `t(` 都没有 ⇒ 这条腿在空集合上恒真')
       .toBeGreaterThan(0);
-    const dynamic = calls.filter((m, idx) => {
+    const dynamic = calls.filter((m) => {
       const rest = body.slice((m.index ?? 0) + 2).trimStart();
-      // 实参不许以引号以外的东西开头（`'` / `"` / 反引号都算字面量形态；这里只要求 `'`）
-      return !(rest.startsWith("'") || rest.startsWith('"') || rest.startsWith('`'));
+      // 实参不许以引号以外的东西开头（只认单引号：本仓文案键一律单引号）
+      return !rest.startsWith("'");
     });
-    expect(dynamic, '`finishOnboarding` 里出现了动态键（`t()` 的实参不是字面量）—— '
-      + '那类调用缺键扫描腿看不见，等于漏翻的温床。把三元放到 `t()` 外面，'
-      + `每个 t() 各带一个字面量键。`).toEqual([]);
+    expect(dynamic.map((m) => body.slice(m.index ?? 0, (m.index ?? 0) + 20)),
+      '`finishOnboarding` 里出现了动态键（`t()` 的实参不是字面量）—— '
+      + '那类调用缺键扫描腿看不见，等于漏翻的温床。每个 t() 各带一个字面量键。').toEqual([]);
   });
 
-  it('★ D1：那两句提示在两张表里都在，且都点名「新手教程」这个入口', () => {
-    for (const key of ['onboarding.after-skip', 'onboarding.after-start'] as const) {
-      expect(ZH[key], `${key} 不在中文表里`).toBeTruthy();
-      expect(EN[key], `${key} 不在英文表里`).toBeTruthy();
-      expect(EN[key], `${key} 的英文值与中文逐字相同（等于没翻）`).not.toBe(ZH[key]);
-    }
+  it('★ D1 + P2：跳过那句在两张表里都在，且点名「新手教程」这个入口', () => {
+    const key = 'onboarding.after-skip';
+    expect(ZH[key], `${key} 不在中文表里`).toBeTruthy();
+    expect(EN[key], `${key} 不在英文表里`).toBeTruthy();
+    expect(EN[key], `${key} 的英文值与中文逐字相同（等于没翻）`).not.toBe(ZH[key]);
     // 文案本身要对得上用户口径：告诉玩家"以后想学还能进"（教学模式的入口在首页）
-    expect(ZH['onboarding.after-skip'], '「跳过」那句没说「新手教程」这个入口')
-      .toContain('新手教程');
-    expect(ZH['onboarding.after-skip'], '「跳过」那句没说"以后还能再进"')
-      .toContain('以后');
-    // 「开始教学」那一支必须**如实**说教学模式还没做（不许假装已经进了教学）
-    expect(ZH['onboarding.after-start'], '「开始教学」那句没如实说"还在开发中"')
-      .toContain('开发中');
-    expect(EN['onboarding.after-start'], '英文那句没如实说还在开发中').toMatch(/still being built/i);
-    expect(EN['onboarding.after-skip'], '英文那句没点名 Tutorial 入口').toContain('Tutorial');
-    // 反向锚点：这两句**真在屏上出现过**（不是表里躺着的死键）—— 由宿主那条三元腿保证引用，
-    //   这里再证明"不是被 `toast.tutorial` 顶掉了"
-    expect(ZH['toast.tutorial'], '前置：`toast.tutorial` 还是首页按钮那句（没被这两句挤掉）')
-      .toBe('新手教程：待开发');
-    expect([ZH['onboarding.after-skip'], ZH['onboarding.after-start']], '两句提示里出现了那句"待开发"')
-      .not.toContain(ZH['toast.tutorial']);
+    expect(ZH[key], '「跳过」那句没说「新手教程」这个入口').toContain('新手教程');
+    expect(ZH[key], '「跳过」那句没说"以后还能再进"').toContain('以后');
+    expect(EN[key], '英文那句没点名 Tutorial 入口').toContain('Tutorial');
+    /**
+     * ★ P2 收尾：`onboarding.after-start` 与 `toast.tutorial` **已从两张表里删除**
+     * （"开始教学"直接进教学屏了，首页按钮也不再弹"待开发"）。
+     * 这两条断言是**反向**的：删掉之后它们不该再复活 —— 复活就说明有人把旧口径又抄回来了。
+     */
+    expect(ZH['onboarding.after-start'], 'after-start 又回来了（P2 起不再需要）').toBeUndefined();
+    expect(ZH['toast.tutorial'], 'toast.tutorial 又回来了（首页按钮已改成进教学屏）').toBeUndefined();
   });
 
   it('首页那条"待发提示"接缝：由首页在**画完之后**发（先提示会被 clearRoot 闪掉）', () => {

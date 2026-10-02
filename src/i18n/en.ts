@@ -173,7 +173,6 @@ export const EN: Readonly<Record<string, string>> = {
    * mode itself is not built yet, so neither branch pretends it already opened.
    */
   'onboarding.after-skip': 'Whenever you want to learn, tap "Tutorial" on the home screen to enter tutorial mode.',
-  'onboarding.after-start': 'Tutorial mode is still being built; until then, tap "Tutorial" on the home screen to see the entry.',
   /**
    * Step 2's consent chrome (★ 2026-10-01). The Chinese values are **verbatim** the
    * corresponding `CONSENT_COPY` fields (pinned by `tests/i18n/onboarding.test.ts`);
@@ -187,6 +186,58 @@ export const EN: Readonly<Record<string, string>> = {
   // "what happens if you decline" line, not the step-2 guidance (see D2 above).
   'onboarding.consent.deny-note': 'You can change this choice any time under Local data and privacy.',
   'onboarding.consent.privacy': 'Privacy notes',
+
+  /* ── ★ 2026-10-02 (P2): tutorial mode (levels T0~T3 + coach overlay) ── */
+  'tutorial.aria': 'Tutorial',
+  'tutorial.step': 'Level {n} of {total}',
+  'tutorial.exit': 'Leave tutorial',
+  'tutorial.next': 'Continue',
+  'tutorial.skip-teach': 'Start doing it',
+  'tutorial.restart': 'Restart from level 1',
+  'tutorial.restart-level': 'Restart this level',
+  'tutorial.cleared': 'Level cleared.',
+  'tutorial.cleared-all': 'All four levels cleared. Tap "Restart from level 1" to practise again.',
+  'tutorial.spot.hint': 'Tap the glowing boxes — all four of them.',
+  'tutorial.spot.link': 'This is a line. Cards you play stack up in this column.',
+  'tutorial.spot.protocol': 'This is a protocol card. One sits above each line and decides how that line scores.',
+  'tutorial.spot.threshold': 'This is the threshold. When the two sides differ by 5, the line can be compiled.',
+  'tutorial.spot.control': 'This is control. Hold it and you get to rearrange protocols when compiling.',
+  'tutorial.spot.done': 'All four areas seen — level cleared.',
+  'tutorial.goal.label': 'What to do here:',
+
+  'tutorial.T0.title': 'Meet the screen',
+  'tutorial.T0.goal': 'Tap all four glowing areas.',
+  'tutorial.T0.teach.0': 'A game has three lines; these three columns in the middle are them.',
+  'tutorial.T0.teach.1': 'One protocol card sits above each line and decides how that line scores.',
+  'tutorial.T0.teach.2': 'When the two sides differ by 5 the line can be compiled — that number is the threshold.',
+  'tutorial.T0.teach.3': 'Whoever holds control gets to rearrange protocols while compiling.',
+
+  'tutorial.T1.title': 'Play your first card',
+  'tutorial.T1.goal': 'Drag a face-up card from your hand onto its own line.',
+  'tutorial.T1.teach.0': 'Your hand is at the bottom. Each card shows which protocol it belongs to.',
+  'tutorial.T1.teach.1': 'Played face up, a card must go on its own protocol line.',
+  'tutorial.T1.teach.2': 'Drag it onto that line and let go — that is your first card played.',
+
+  'tutorial.T2.title': 'Face up or face down',
+  'tutorial.T2.goal': 'Play one card face up and one face down.',
+  'tutorial.T2.teach.0': 'Face up: only on its own protocol line, and its value counts toward that line.',
+  'tutorial.T2.teach.1': 'Face down: any line, value does not count — usually used to cover an opponent card.',
+  'tutorial.T2.teach.2': 'Hold the right button (or press R) while dragging to flip the card. Play one of each.',
+
+  'tutorial.T3.title': 'The five basic moves',
+  'tutorial.T3.goal': 'With the five cards in hand, do each move once: flip, shift, draw, discard, return.',
+  'tutorial.T3.teach.0': 'Each of these five cards has one of those moves as its middle command; the engine will ask which card to use it on.',
+  'tutorial.T3.teach.1': 'Flip turns a card over. Shift moves a card to another line.',
+  'tutorial.T3.teach.2': 'Draw takes cards from the deck. Discard drops a hand card. Return takes a field card back to hand.',
+  'tutorial.T3.teach.3': 'Play all five and this level is cleared.',
+
+  'tutorial.off.wrong-kind': 'That is not part of this level. Follow the line above.',
+  'tutorial.off.face-down': 'This level plays face-up cards: do not flip while dragging.',
+  'tutorial.off.rejected': 'That card cannot go on that line. A face-up card only goes on its own protocol line.',
+
+  'local-data.tutorial.label': 'Tutorial progress',
+  'local-data.tutorial': '{n} of {total} levels cleared. Clearing local data restarts the tutorial from level 1.',
+  'local-data.tutorial.none': 'The tutorial has not been started. Clearing local data starts it from level 1.',
 
   /* ── Shared generation labels (library chips + rules titles) ── */
   'gen.1.base': 'Gen 1 base',
@@ -210,7 +261,6 @@ export const EN: Readonly<Record<string, string>> = {
   'common.coin.tails': 'Tails',
 
   /* ── "not built yet" toasts on the mode select page ── */
-  'toast.tutorial': 'Tutorial: not built yet',
   'toast.solo': 'Single player: in development',
   'toast.trio': 'Three players: in development',
 

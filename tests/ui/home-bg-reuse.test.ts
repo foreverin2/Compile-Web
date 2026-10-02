@@ -55,6 +55,7 @@ const nav: HomeNav = {
   openSettings: () => { /* 不测 */ },
   openFeedback: () => { /* 不测 */ },
   openCardmaker: () => { /* 不测 */ },
+    openTutorial: () => { /* 不测 */ },
 };
 
 function one(root: StubNode, cls: string): StubNode {

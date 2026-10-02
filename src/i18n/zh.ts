@@ -194,19 +194,17 @@ export const ZH: Readonly<Record<string, string>> = {
    */
   'onboarding.consent.local-hint': '之后可以在首页的「本地数据与隐私」里修改昵称，也可以在那里清除本机数据。',
   /**
-   * 第 3 步两个分支的**结果提示**（★ 2026-10-02 D1 修法）。
+   * 第 3 步「我玩过，直接跳过」那支的结果提示（★ 2026-10-02 D1 定稿 + P2 收尾）。
    *
    * D1 的缺陷是双重的：① `finishOnboarding` 的三元判反了（提示发给了「开始教学」那一支）；
    * ② 用户要的那句"以后还能再进教学模式"**从来没被写出来过**（线上 bundle 里"再次进入"命中 0）。
    *
-   * 现在两支各说各的、都不撒谎：
-   *  - `after-skip`（「我玩过，直接跳过」）：告诉他**入口在哪**（教学模式本身还没做，
-   *    所以措辞是"想学的时候…就能进入"，不是"教学已经能玩"）；
-   *  - `after-start`（「开始教学」）：**如实说还在开发中**，并给出同一个入口，
-   *    不假装已经进了教学（本轮到不了那一屏，P2 才做）。
+   * ★ P2 起：**「开始教学」那一支直接进教学屏**了，所以它不再需要一句提示 ⇒
+   * `onboarding.after-start`（"教学模式还在开发中…"）**已删除** —— 不是随手删的，
+   * 是 `tables.test.ts` 的"死键"腿在 P2 收尾时报出来的（那一轮它确实不再被任何代码引用）。
+   * 留下的这一条是跳过那支的提示，措辞照用户口径。
    */
   'onboarding.after-skip': '以后想学的时候，在首页点「新手教程」就能进入教学模式。',
-  'onboarding.after-start': '教学模式还在开发中；做好之前，在首页点「新手教程」也能看到入口。',
   /**
    * 第 2 步的**授权那一组**（★ 2026-10-01，P1 的第二次修法）。
    *
@@ -228,6 +226,68 @@ export const ZH: Readonly<Record<string, string>> = {
   //   同名会让后来者以为它们是同一个东西（D2 的教训）。
   'onboarding.consent.deny-note': '你随时可以在主界面的「本地数据与隐私」里改变这个选择。',
   'onboarding.consent.privacy': '隐私说明',
+
+  /* ── ★ 2026-10-02（P2）：**教学模式**（T0~T3 四关 + 教练浮层） ──
+   *
+   * 纪律：文案**短、说人话**（仓库口径）；每一句都是玩家在屏上真的会看到的字，
+   * 键名与 `src/tutorial/levels.ts` 的 `*Key` 字段一一对应（那边一个中文都不写）。
+   * 关卡标题带序号（`T0` 那种代号不写给玩家看：玩家看到的是"第 1 关"）。 */
+  'tutorial.aria': '新手教程',
+  'tutorial.step': '第 {n} 关 / 共 {total} 关',
+  'tutorial.exit': '退出教程',
+  'tutorial.next': '继续',
+  'tutorial.skip-teach': '开始动手',
+  'tutorial.restart': '从第一关重来',
+  'tutorial.restart-level': '重开这一关',
+  'tutorial.cleared': '这一关过了。',
+  'tutorial.cleared-all': '四关都过了。想再练一遍就点「从第一关重来」。',
+  'tutorial.spot.hint': '点亮着的框，四个都要点一遍。',
+  'tutorial.spot.link': '这里是链路：牌打出来就叠在这一列上。',
+  'tutorial.spot.protocol': '这里是协议卡：每条链路上面挂一张，它决定这条线的分怎么算。',
+  'tutorial.spot.threshold': '这里是阈值：两边点数之差到 5 就能编译这条线。',
+  'tutorial.spot.control': '这里是控制权：拿到手就能在编译时重排协议。',
+  'tutorial.spot.done': '四个区域都看过了，这一关过了。',
+  'tutorial.goal.label': '这一关要做的：',
+
+  // T0：界面扫盲
+  'tutorial.T0.title': '先认认界面',
+  'tutorial.T0.goal': '点一遍四个亮起来的区域。',
+  'tutorial.T0.teach.0': '一局游戏有三条链路，中间这三列就是。',
+  'tutorial.T0.teach.1': '每条链路上面挂一张协议卡，它决定这条线的分怎么算。',
+  'tutorial.T0.teach.2': '两边点数差到 5，就能编译这条线；这个数字就是阈值。',
+  'tutorial.T0.teach.3': '编译时谁拿到控制权，谁就能重排协议。',
+
+  // T1：打出第一张牌
+  'tutorial.T1.title': '打出第一张牌',
+  'tutorial.T1.goal': '把手里一张正面牌拖到它自己的那条链路上。',
+  'tutorial.T1.teach.0': '手牌在下面。每张牌的左上角写着它属于哪套协议。',
+  'tutorial.T1.teach.1': '正面打出时，这张牌必须放在它自己协议的那条链路上。',
+  'tutorial.T1.teach.2': '拖到那条链路上松手，就打出第一张牌了。',
+
+  // T2：正面与反面
+  'tutorial.T2.title': '正面还是反面',
+  'tutorial.T2.goal': '打出一张正面、一张反面。',
+  'tutorial.T2.teach.0': '正面打出：只能进自己协议那条线，点数算进这条线。',
+  'tutorial.T2.teach.1': '反面打出：哪条线都能放，点数不算，通常用来盖住别人的牌。',
+  'tutorial.T2.teach.2': '拖动时按住右键（或按 R）可以换朝向，两种各打一张。',
+
+  // T3：五个基础动作
+  'tutorial.T3.title': '五个基础动作',
+  'tutorial.T3.goal': '用手里五张牌，各做一次翻转、偏转、抽牌、弃牌、回手。',
+  'tutorial.T3.teach.0': '这五张牌的中指令分别就是这五个动作，打出来引擎会问你选哪张。',
+  'tutorial.T3.teach.1': '翻转：正面变反面、反面变正面。偏转：把一张牌换到别的链路。',
+  'tutorial.T3.teach.2': '抽牌：从牌库拿牌进手牌。弃牌：把手牌丢进弃牌堆。回手：把场上的牌拿回手里。',
+  'tutorial.T3.teach.3': '五张都打完，这一关就过了。',
+
+  // 走偏提示（引擎自己会拒的那种另算：见 tutorial.off.rejected）
+  'tutorial.off.wrong-kind': '这一关先不学这个。照着上面那句提示做。',
+  'tutorial.off.face-down': '这一关要打的是正面牌：拖的时候别换朝向。',
+  'tutorial.off.rejected': '这张牌放不进那条链路。正面牌只能进自己协议那条线。',
+
+  // 「本地数据与隐私」屏：教学进度那一行（方案 §6：新存储必须可见 + 可清除）
+  'local-data.tutorial.label': '新手教程进度',
+  'local-data.tutorial': '已完成 {n} 关（共 {total} 关）。清掉之后教程从第一关重新开始。',
+  'local-data.tutorial.none': '还没开始玩教程。清掉本机数据之后教程从第一关开始。',
 
   /* ── 共用的世代标签（图鉴筛选 chip 与规则页的标题都用它） ── */
   'gen.1.base': '1代 基础',
@@ -254,7 +314,6 @@ export const ZH: Readonly<Record<string, string>> = {
   'common.coin.tails': '反面',
 
   /* ── 只在模式选择页弹的"开发中/待开发"提示（原来是写死的 toast） ── */
-  'toast.tutorial': '新手教程：待开发',
   'toast.solo': '单人模式：开发中',
   'toast.trio': '三人模式：开发中',
 

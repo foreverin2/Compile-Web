@@ -47,6 +47,7 @@ const homeNav: HomeNav = {
   openSettings: () => { /* 不测 */ },
   openFeedback: () => { /* 不测 */ },
   openCardmaker: () => { /* 不测 */ },
+    openTutorial: () => { /* 不测 */ },
 };
 
 const modeNav: ModeSelectNav = {

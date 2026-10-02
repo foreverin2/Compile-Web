@@ -194,6 +194,21 @@ export interface L1Settings {
    * 可选：老的存储里没有这个字段 ⇒ 当作"还没走过"。
    */
   onboardingSeen?: boolean;
+  /**
+   * ★ 2026-10-02（P2）：**教学模式的进度**（已完成关卡 + 当前关）。
+   *
+   * 与 `nick` / `lang` / `fx` / `onboardingSeen` 同住一份设置、同一套授权门控、
+   * 同一次「清除本机数据」（**不新增存储键**）。清除之后进度清空 ⇒ 教学从 T0 重新开始
+   * （方案 §6："清除本机数据后…教学进度清空（这正是想要的）"）。
+   *
+   * 形状守卫在 `readTutorialProgress()` 里**逐字段**做（坏值一律退回"没玩过"）——
+   * 与 `readFxSettings()` 同一套口径。存的是 `{ done: string[], current: string }`，
+   * 读侧只认**合法关卡 id**（`T0`~`T3`）：别的值一律当没玩过，防止外部手改把教学锁死在一关出不来的地方。
+   *
+   * ⚠️ 游客模式下写不进磁盘（`kv()` 是内存 KV）⇒ 本次会话有效、刷新即丢。
+   * 这是**如实的**行为（与语言/向导标记同一条口径），不是缺陷。
+   */
+  tutorial?: { done?: readonly string[]; current?: string };
 }
 
 /**
@@ -430,6 +445,70 @@ export function readOnboardingSeen(store: LocalStore): boolean {
  */
 export function writeOnboardingSeen(store: LocalStore, seen: boolean): WriteResult {
   return writeSettings(store, { onboardingSeen: seen });
+}
+
+/**
+ * ★ 2026-10-02（P2）：**教学进度**的合法关卡 id（纯层不认识 `src/tutorial/`，所以自己列一份）。
+ *
+ * ⚠️ 与 `src/tutorial/levels.ts` 的 `TUT_LEVELS` 是**两份**清单，这是分层的代价：
+ * `src/app/**` 是纯层，不许 import UI/教学那一层（那条依赖方向反过来会让纯层跑不起来）。
+ * 两份"漂了"的风险由 `tests/tutorial/progress.test.ts` 的一条腿兜住（它同时 import 两边比对）。
+ */
+const TUTORIAL_LEVEL_IDS: readonly string[] = ['T0', 'T1', 'T2', 'T3'];
+
+/** 教学进度的形状（对外只暴露这个） */
+export interface StoredTutorialProgress {
+  readonly done: readonly string[];
+  readonly current: string;
+}
+
+/**
+ * ★ 2026-10-02（P2）：读教学进度。
+ *
+ * 形状守卫**逐字段**做（与 `readFxSettings` 同款）：
+ *  - `done` 只收**合法关卡 id**、去重、按输入顺序保留；`current` 不是合法 id ⇒ 回 `'T0'`；
+ *  - 整个字段缺失 / 不是对象 / `done` 不是数组 ⇒ 回"没玩过"（`{ done: [], current: 'T0' }`）。
+ *
+ * ⇒ 外部手改存储最多让玩家**从 T0 重看**（安全的那一边），不会把教学卡在一关出不来。
+ * 读不出来（键不存在 / 坏 JSON / `kv.get` 抛）也回"没玩过"，不抛。
+ */
+export function readTutorialProgress(store: LocalStore): StoredTutorialProgress {
+  const raw = readSettings(store).tutorial;
+  const fallback: StoredTutorialProgress = { done: [], current: 'T0' };
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return fallback;
+  const rec = raw as Record<string, unknown>;
+  const doneRaw = Array.isArray(rec.done) ? rec.done : [];
+  const done: string[] = [];
+  for (const v of doneRaw) {
+    if (typeof v === 'string' && TUTORIAL_LEVEL_IDS.includes(v) && !done.includes(v)) done.push(v);
+  }
+  const current = typeof rec.current === 'string' && TUTORIAL_LEVEL_IDS.includes(rec.current)
+    ? rec.current
+    : 'T0';
+  return { done, current };
+}
+
+/**
+ * ★ 2026-10-02（P2）：写教学进度（**整份替换**，不是打补丁）。
+ *
+ * 与语言/昵称/开关/向导标记**同一条路**（同一份设置、同一套授权门控）：游客模式下写进内存 KV
+ * ⇒ 本次会话有效、刷新即丢、磁盘零写入（红线 3）。
+ *
+ * ⚠️ 写之前**把 `done` 过滤一遍**（只留合法 id、去重）：这一层的出口只有这一个，
+ * 在这里归一，读侧与「本地数据与隐私」屏就不必各自再防一次。
+ *
+ * 返回值与 `writeLang` 同一套 `WriteResult`（成功 / `too-large` / `write-failed` + 真因）。
+ */
+export function writeTutorialProgress(
+  store: LocalStore,
+  progress: StoredTutorialProgress,
+): WriteResult {
+  const done: string[] = [];
+  for (const v of progress.done) {
+    if (typeof v === 'string' && TUTORIAL_LEVEL_IDS.includes(v) && !done.includes(v)) done.push(v);
+  }
+  const current = TUTORIAL_LEVEL_IDS.includes(progress.current) ? progress.current : 'T0';
+  return writeSettings(store, { tutorial: { done, current } });
 }
 
 function isDeckRecord(v: unknown): v is DeckRecord {

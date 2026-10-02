@@ -58,6 +58,7 @@ import {
   readLang,
   readLangPresence,
   readNickName,
+  readTutorialProgress,
   writeNickName,
   type ConsentState,
   type LocalStore,
@@ -69,6 +70,9 @@ import { DEFAULT_LANG, LANGS, isLang, type Lang } from '../i18n/lang';
 import { t } from '../i18n';
 import type { MatchFile } from '../app/match-file';
 import { privacyLines } from '../app/privacy';
+// ★ 2026-10-02（P2）：教学进度那一行要显示"共几关"—— 关卡的**唯一出处**是 src/tutorial/levels.ts，
+//   这里 import 它的长度，不写第二份"4"（两份清单漂了会让屏上的读数说谎）。
+import { TUT_LEVELS } from '../tutorial/levels';
 
 /**
  * 宿主交给本屏的"本次会话的档案"（G4 D9）。
@@ -295,6 +299,7 @@ export function renderLocalData(root: HTMLElement, nav: LocalDataNav): void {
     // ★ 2026-10-01（P0）：语言跟着 `L1_SETTINGS` 整键被清掉了 ⇒ 这一行要重画回默认语言，
     //   否则屏上还显示着清除前那个语言（那会让人以为"语言没被清掉"）。
     refreshLang();
+    refreshTutorial();
     say(t('local-data.clear-ok', { n: String(removed) }), 'clear-ok', 'info');
   };
 
@@ -438,6 +443,36 @@ export function renderLocalData(root: HTMLElement, nav: LocalDataNav): void {
     langLine.textContent = badStoredValue ? `${value}${t('local-data.lang.invalid')}` : value;
   };
   refreshLang();
+
+  /* ── ②c ★ 2026-10-02（P2）：**新手教程的进度**（可见 + 可清除） ──
+   *
+   * 方案 §6 的硬要求："新增的存储每一个都要出现在「本地数据与隐私」屏（可见 + 可清除）"。
+   * 教程进度住在 `L1_SETTINGS.tutorial`（**不新增存储键**），所以它**跟着这一屏既有的
+   * 「清除本机数据」一起清** —— 这里补的是"可见"那一半，外加清完之后这一行要重画回"还没开始"。
+   *
+   * 版式复用本屏既有的 `.local-data-*` 类（不新增 CSS 类）。 */
+  const tutRow = el('div', 'local-data-row');
+  tutRow.dataset.role = 'tutorial';
+  tutRow.appendChild(el('div', 'local-data-note', t('local-data.tutorial.label')));
+  const tutLine = el('div', 'local-data-privacy-line');
+  tutLine.dataset.role = 'tutorial-state';
+  tutRow.appendChild(tutLine);
+  screen.appendChild(tutRow);
+
+  /** 读一次教程进度并写在屏上（清除本机数据之后要重画回"还没开始"）。 */
+  const refreshTutorial = (): void => {
+    let done = 0;
+    try {
+      done = readTutorialProgress(store).done.length;
+    } catch (e) {
+      tutLine.textContent = t('local-data.read-failed', { detail: describeError(e) });
+      return;
+    }
+    tutLine.textContent = done === 0
+      ? t('local-data.tutorial.none')
+      : t('local-data.tutorial', { n: String(done), total: String(TUT_LEVELS.length) });
+  };
+  refreshTutorial();
 
   /* ── ②b ★ 2026-10-01：卡牌制作器存在本机的那一份（可见 + 可清除） ──
    *

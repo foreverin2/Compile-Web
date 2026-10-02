@@ -77,6 +77,7 @@ function homeNav(): { nav: HomeNav; calls: Record<string, number> } {
     openSettings: () => { /* noop */ },
     openFeedback: () => { /* noop */ },
     openCardmaker: () => { calls.cardmaker += 1; },
+    openTutorial: () => { calls.tutorial += 1; },
   };
   return { nav, calls };
 }

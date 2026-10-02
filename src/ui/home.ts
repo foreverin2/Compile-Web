@@ -48,10 +48,22 @@ export interface HomeNav {
    */
   openCardmaker(): void;
   /**
+   * ★ 2026-10-02（P2，用户口径）：**「新手教程」入口** —— 真的进教学屏。
+   *
+   * 到 P1 为止这个按钮只弹一句 `toast.tutorial`（"新手教程：待开发"），那是占位。
+   * 现在它进 `src/ui/tutorial-screen.ts` 的教学屏（T0~T3）；开屏的动作交给宿主
+   * （屏要的存储与退出接缝都由宿主注入，本文件只放这一个按钮）。
+   *
+   * ⚠️ `toast.tutorial` 那个键**保留**（向导与"技能没到"时的兜底话术仍然可能用它）；
+   * 首页这个按钮**不再**用它。
+   */
+  openTutorial(): void;
+  /**
    * ★ 2026-10-01（P1）：**进首页时立刻要说的一句话**（选填）。
    *
-   * 唯一用途：首启向导第 3 步选「开始教学」的人落到首页时要看到
-   * `toast.tutorial`（"新手教程：待开发"）—— 教学模式是 P2 的事，本轮只给入口占位。
+   * 唯一用途：首启向导第 3 步选「开始教学」的人落到首页时要看到一句提示。
+   * ⚠️ 2026-10-02（P2）起那一支**直接进教学屏**（不再落到首页 + 提示），所以现在用它的
+   * 只有"教学暂时打不开"那种兜底路径；`src/main.ts` 的 `finishOnboarding` 里写着这段历史。
    *
    * 为什么不是宿主自己 `showToast` 一下：那个 toast 挂在 `document.body` 上，
    * 而 `renderHome` 第一句就是 `clearRoot(root)` 重画 —— 宿主先提示再进首页，
@@ -460,7 +472,9 @@ export function renderHome(root: HTMLElement, nav: HomeNav): void {
   const btns = el('div', 'home-menu-buttons');
   btns.appendChild(button('btn home-btn home-btn-primary', t('home.start'), nav.startGame));
   btns.appendChild(button('btn home-btn', t('home.library'), nav.openLibrary));
-  btns.appendChild(button('btn home-btn', t('home.tutorial'), () => showToast(t('toast.tutorial'))));
+  // ★ 2026-10-02（P2）：这一枚从"弹一句待开发"改成**真的进教学模式**（用户口径：
+  //   首页点「新手教程」就能进教学屏；T0~T3 四关，可中断续玩）
+  btns.appendChild(button('btn home-btn', t('home.tutorial'), nav.openTutorial));
   btns.appendChild(button('btn home-btn', t('home.rules'), nav.openRules));
   // G3（Task 4）：本地数据与隐私入口 —— 授权状态、清除本机数据、档案导入导出（Task 7 落地屏）
   btns.appendChild(button('btn home-btn', t('home.local-data'), nav.openLocalData));

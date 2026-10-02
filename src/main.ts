@@ -50,7 +50,7 @@ import type { CoinSide } from './app/coin';
 // G3 Task 4：L1 授权状态机（纯层）+ 其浏览器后端 + 授权弹窗屏
 // ★ 2026-10-01（P1）：首启向导的"只出现一次"标记就存在**同一个** `L1_SETTINGS` 里
 //   （`onboardingSeen`，没有新存储键）；"清除本机数据"把它一并清掉 ⇒ 向导会再出现。
-import { createLocalStore, readFxSettings, readLang, readNickName, readOnboardingSeen, writeFxSettings, writeLang, writeNickName, writeOnboardingSeen } from './app/local-store';
+import { createLocalStore, readFxSettings, readLang, readNickName, readOnboardingSeen, writeFxSettings, writeLang, writeNickName, writeOnboardingSeen, writeTutorialProgress } from './app/local-store';
 // ★ 2026-10-01（用户要求"设置里的选项也要持久化"）：特效开关的内存态由这个模块持有，本文件只负责启动读回。
 import { applyFxSettings } from './ui/fx-settings';
 // ★ 2026-10-01（P0，用户拍板"UI 全量双语"）：i18n 基建。语言的**值**与文案表在 `src/i18n/`；
@@ -69,6 +69,8 @@ import { renderLocalConsent, nextConsentStep } from './ui/local-consent';
  * （中途关标签页 / 标记被清掉）时才走，不会再出现"弹窗 + 向导"两连问。
  */
 import { onboardingOverlayElement, type OnboardingOutcome } from './ui/onboarding';
+// ★ 2026-10-02（P2）：教学模式（T0~T3）的屏；进度写盘走既有那一条 writeSettings 出口。
+import { mountTutorial } from './ui/tutorial-screen';
 import { installHotseatExit } from './ui/hotseat-exit';
 import { installLogToggle } from './ui/log-toggle';
 // G3 Task 7：「本地数据与隐私」屏 + 档案的选择/落盘口（浏览器实现只在 `showLocalData` 里注入）
@@ -5076,8 +5078,21 @@ function finishOnboarding(outcome: OnboardingOutcome): void {
    * `showHome()`，它会 `clearRoot` 重画；先提示会被同一 tick 闪掉（这一条也有腿钉着）。
    * ⚠️ 本注释里**不要再出现"t 加左括号"那种调用写法**（哪怕只是举例）：`bodyOf()` 抽函数体时
    * 保留注释，源码腿取"第一处提示调用"时会锚到注释里的举例上（写这一轮时当场踩过一次）。
+   *
+   * ★ **2026-10-02（P2）第三次改口径**：教学模式**做出来了**（T0~T3），所以
+   * 「开始教学」那一支**直接进教学屏**，不再落到首页说一句"还在开发中"。
+   *  - **开始教学** ⇒ `showTutorial()`（进教学；进度从上次那一关继续）；
+   *  - **跳过** ⇒ 落到首页 + `onboarding.after-skip` 那句话（**不变**：用户口径是
+   *    "若选择『我玩过，直接跳过』就提示之后还可以在首页再次进入教学模式"）。
+   *
+   * ⚠️ 顺序仍是"先落盘（语言/昵称/标记）再决定去哪一屏"：教学屏读的是同一份设置里的进度，
+   * 而 `writeOnboardingSeen` / `writeLang` 都排在前面 ⇒ 教学屏看到的是**已经写好**的那一份。
    */
-  showHome(outcome.startTutorial ? t('onboarding.after-start') : t('onboarding.after-skip'));
+  if (outcome.startTutorial) {
+    showTutorial();
+    return;
+  }
+  showHome(t('onboarding.after-skip'));
 }
 
 /**
@@ -5132,6 +5147,37 @@ function showStartScreen(): void {
  */
 function consentBodyLines(): readonly string[] {
   return [CONSENT_ALLOW_NOTE, PRIVACY_COPY.noServerStorage[0], CONSENT_DENY_NOTE];
+}
+
+/**
+ * ★ 2026-10-02（P2，用户口径）：**进教学模式**（首页「新手教程」与向导「开始教学」共用这一个入口）。
+ *
+ * 屏在 `src/ui/tutorial-screen.ts`（它自己持有受控局面与 `UiCallbacks`，见方案 §7.8 的探路结论）；
+ * 本函数只做三件宿主的事：
+ *  1. **收拾首页**（与 `openLibrary` / `openCardmaker` 同款：`leaveHome()` 撤掉首页起的东西）；
+ *  2. **注入存储与退出接缝**：进度读写走同一个 `localStore`（与昵称/语言/向导标记是同一份设置），
+ *     进度写失败时按既有那套结构化口径**本地化**提示（`applyWriteResult`，不新造第二套）；
+ *  3. **收尾**：退出时把屏卸掉并回首页（`tutorial.close()` 里还负责清 `render.ts` 的模块态）。
+ *
+ * ⚠️ 幂等：连点两次不留第二屏（与 `showOnboarding` / 设置小窗同款）。
+ */
+function showTutorial(): void {
+  document.querySelector('.tutorial-overlay')?.remove();
+  leaveHome();
+  const handle = mountTutorial(root, localStore, {
+    exit: () => {
+      handle.close();
+      showHome();
+    },
+    saveProgress: (progress) => {
+      try {
+        applyWriteResult(writeTutorialProgress(localStore, {
+          done: progress.done,
+          current: progress.current,
+        }));
+      } catch { /* 写不进去不影响继续玩：本次会话的进度仍在内存里（与语言/昵称同一条口径） */ }
+    },
+  });
 }
 
 /**
@@ -5230,6 +5276,11 @@ function showHome(initialToast?: string): void {
      * （`renderCardmaker` 第一句就 `root.textContent = ''`）。
      */
     openCardmaker: () => { leaveHome(); showCardmaker(); },
+    /**
+     * ★ 2026-10-02（P2）：首页「新手教程」⇒ **真的进教学屏**（T0~T3，可中断续玩）。
+     * ⚠️ 它与向导第 3 步的「开始教学」共用同一个入口 showTutorial()。
+     */
+    openTutorial: () => { showTutorial(); },
     /**
      * ★ 2026-10-01（用户要求）：「设置」不再是一整屏 ⇒ **浮在首页上面的小窗**。
      *

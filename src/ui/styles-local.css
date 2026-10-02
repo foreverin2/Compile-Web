@@ -701,3 +701,55 @@
 .cardmaker-credit-meta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; font-size: 12px; color: #9fd8ff; }
 .cardmaker-credit-link { color: #00ffcc; text-decoration: underline; word-break: break-all; }
 .cardmaker-credit-link:hover { color: #9fd8ff; }
+
+/* ---------- ★ 2026-10-02（P2）：**教学模式**（教练浮层 + T0 的四个热点） ----------
+ * 元素由 `src/ui/tutorial-screen.ts` 造，宿主（`src/main.ts` 的 `showTutorial()`）挂载。
+ * 新类名（`.tutorial-*`）在**其余** CSS 里零命中（`styles.css` 一行不动）；
+ * 判据由 `tests/tutorial/screen.test.ts` 的"类名不冲突"腿盯着（生成式扫 `src/ui/*.css`）。
+ *
+ * ⚠️ 浮层**不铺满整屏、也不吃点击**（`pointer-events: none`）：教学要玩家去**操作棋盘**，
+ * 盖住棋盘就等于把这一屏废掉。只有面板与热点自己吃点击（两者各自 `pointer-events: auto`）。
+ * 这与首启向导那张 `inset:0` 的整屏遮罩**正好相反**，别抄错。 */
+.tutorial-overlay {
+  position: fixed; inset: 0; z-index: 11000;
+  pointer-events: none; /* 棋盘照旧可点：本屏的教学全靠玩家真的去拖牌 */
+}
+.tutorial-panel {
+  position: absolute; top: 12px; left: 12px;
+  width: min(380px, 92vw); max-height: calc(100vh - 24px); box-sizing: border-box;
+  overflow-y: auto; overscroll-behavior: contain;
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 14px 16px 16px; pointer-events: auto;
+  border: 1px solid #4a4a68; border-radius: 12px;
+  background: rgba(18, 18, 36, 0.96);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.55);
+  color: #eef;
+}
+.tutorial-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px; }
+.tutorial-title { font-size: 17px; font-weight: 700; color: #00ffcc; }
+.tutorial-step { font-size: 12px; color: #8f9ac0; }
+.tutorial-exit { margin-left: auto; font-size: 12px; padding: 4px 10px; }
+.tutorial-goal { display: flex; flex-wrap: wrap; gap: 6px; font-size: 13px; line-height: 1.7; }
+.tutorial-goal-label { color: #9fd8ff; }
+.tutorial-goal-text { color: #eef; font-weight: 600; }
+.tutorial-teach { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.tutorial-teach[hidden] { display: none; } /* 作者样式会压掉 UA 的 [hidden]（本仓栽过两次） */
+.tutorial-teach-line { margin: 0; font-size: 13px; line-height: 1.75; color: #dfe6ff; }
+.tutorial-hint { margin: 0; min-height: 1.4em; font-size: 12px; line-height: 1.7; color: #ffd479; }
+.tutorial-progress { display: flex; flex-wrap: wrap; gap: 6px; }
+.tutorial-chip {
+  font-size: 11px; padding: 2px 8px; border-radius: 999px;
+  border: 1px solid #3a3f57; color: #8f9ac0;
+}
+.tutorial-chip.on { border-color: #00ffcc; color: #00ffcc; }
+.tutorial-chip.now { background: rgba(0, 255, 204, 0.12); color: #eef; }
+/* T0 的四个热点：盖在棋盘对应区域上的虚线框（点过之后实线 + 打勾色） */
+.tutorial-spots { position: absolute; inset: 0; pointer-events: none; }
+.tutorial-spots[hidden] { display: none; }
+.tutorial-spot {
+  position: absolute; pointer-events: auto; cursor: pointer;
+  border: 2px dashed #00ffcc; border-radius: 10px;
+  background: rgba(0, 255, 204, 0.07); color: transparent;
+}
+.tutorial-spot:hover { background: rgba(0, 255, 204, 0.16); }
+.tutorial-spot.on { border-style: solid; background: rgba(0, 255, 204, 0.18); }
