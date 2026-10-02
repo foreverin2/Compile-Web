@@ -296,6 +296,33 @@ export interface NetViewOpts {
    *  留着字段只会让人以为传 `'all'` 有用。**推进对手回合的正确做法：切 `viewSeat`**
    *  （切过去后对手变 self ⇒ 正面 + 可点）。字段删除记录见 `.superpowers/sdd/G2-final-review-2.md`（N4）。 */
   onPreviewChange?(next: { viewSeat?: 0 | 1 }): void;
+  /**
+   * ★ **2026-10-02 修复：本帧是不是「本地预览」**（一个人在看这一屏、**没有真对端**）？
+   *
+   * 它**只**决定一件事：对手信息块底部那个「本地预览（未联机）」徽标
+   * （`.net-conn.net-conn-local`）挂不挂 —— 缺省 `false` = **真联机**（联机局、有对端）⇒ 不挂。
+   * 别的渲染行为一个字都不看它（布局 / 类名 / 其余节点与它无关）。
+   *
+   * ## 为什么必须由**宿主**说这一句
+   *
+   * 渲染器手里只有 `GameState`，而两端各跑一份引擎、逐字节相同 ⇒ 它**看不出**这一屏有没有对端。
+   * "有没有联机局"是 `main.ts` 的事实（`netGame === null`）⇒ 由调用点如实交进来。
+   * 改之前本文件**无条件**追加那个徽标（`if (!isSelf)`），于是真联机牌桌上也写着「未联机」
+   * —— 2026-10-02 真机实测：两端 `.net-conn` 的 className 都是 `net-conn net-conn-local`。
+   *
+   * ## ⚠️ 判据的边界（两条都是踩过的坑）
+   *
+   *  1. **不许**拿 `onPreviewChange` 当这条判据：那是**开发者工具条**的开关，dev 解锁后
+   *     **真联机对局也会传**（`main.ts` 的 `const dev = isDevUnlocked()` 那一段）⇒ 会错挂；
+   *  2. 缺省是 `false`（**不产出**）是**故意**的方向：忘传的后果是"少一句真话"，
+   *     而不是"在真联机局里说一句假话"（后者正是本轮要修的那个缺陷）。
+   *
+   * ⚠️ 2026-10-01 起「单视角预览」那个模式卡已删 ⇒ `renderMode === 'net'` **只剩联机一条来源**，
+   * 生产路径上本字段恒为 `false`（真机读数见 `.superpowers/2026-10-02-net-conn-badge/`）。
+   * 留着它是因为**渲染器**仍然要能表达"本地预览"这一态（桩帧 / 将来若有预览入口），
+   * 而且"未联机"这句话在联机牌桌上**必须**消失 —— 删字段就只能靠"调用方记得别调"。
+   */
+  localPreview?: boolean;
   /** 诊断：渲染后**真的去 DOM 里查**一遍 `NET_PAGE_HOOKS`（真实产出力的运行时证据）。
    *  默认关（真实联机零开销）；预览入口可在开发时打开。不通过时只 warning，不改变渲染结果。 */
   verifyHooks?: boolean;
@@ -1038,11 +1065,31 @@ function isTurn(s: GameState, player: PlayerId): boolean {
   return turn === player;
 }
 
-/** 连接状态占位（真实联机由 G5 提供；本阶段恒为「本地预览」）。
+/**
+ * 连接状态占位：**「本地预览（未联机）」**。
  *
- *  R6：它原来挂在**顶部**对手条上（那条已取消）→ 移到**对手信息块**里（底部行右块的最下方）。
- *  它是"本页到底是本地预览还是真联机"唯一的页面内反馈，**不是**装饰：删掉它，用户在预览页
- *  就无从判断对局是不是真的联上了（真实联机时 G5 会把这段文本换成会话状态）。 */
+ * R6：它原来挂在**顶部**对手条上（那条已取消）→ 移到**对手信息块**里（底部行右块的最下方）。
+ *
+ * ## ★ 2026-10-02 修复：它**只在本地预览**时才挂（改之前是"无条件追加"）
+ *
+ * 改之前的写法把这一句挂在**每一帧**真联机牌桌上（2026-10-02 真机实测：两端
+ * `document.querySelector('.net-conn').className === 'net-conn net-conn-local'`），
+ * 而那时两端明明已经握手、硬币、打完草稿进了牌桌 ⇒ 屏上那句「未联机」是**错误标签**。
+ *
+ * 判据是 `NetViewOpts.localPreview`（**有没有真对端**是宿主才有的事实，见那个字段的说明）：
+ *  - `false` / 缺省 = **真联机**（联机局、有对端）⇒ 本节点**一个都不产出**；
+ *  - `true` = 本地预览（一个人在看这一屏、没有对端）⇒ 才产出，文案照旧。
+ *
+ * ⚠️ **与 `src/ui/net-conn-line.ts` 的三档不是同一份信息**（别把两者当同源）：
+ *  · 本徽标只有两态（本地预览 / 不产出），来源是**宿主说的一句话**（`localPreview`）；
+ *  ·「当前连接：直连 / 经中继 / 建立中…」是**真读数**（会话层 `peerStatus()` → `relayKindOf()`
+ *    → `netConnText()`），由 `main.ts` 追加在**草稿屏**上，且**在线时不产出**。
+ *  ⇒ 本徽标**不承担**真联机的连接状态（它答不了，也不该冒充）；真联机那一格由那一行答。
+ *
+ * ⚠️ **`opts.onPreviewChange` 不能当这条判据**：那是开发者工具条的开关，dev 解锁后
+ * **真联机对局也会传**（`main.ts` 的 `const dev = isDevUnlocked()` 那一段）⇒ 拿它当"本地预览"
+ * 会在真联机局里错挂这个徽标。
+ */
 function renderConnectionBadge(): HTMLElement {
   return el('span', 'net-conn net-conn-local', t('render-net.conn.local-preview'));
 }
@@ -1689,7 +1736,7 @@ function renderPiles(s: GameState, player: PlayerId): HTMLElement {
  */
 function renderInfoBlock(
   s: GameState, player: PlayerId, side: NetBottomSide, operator: PlayerId | null,
-  cb: UiCallbacks,
+  cb: UiCallbacks, localPreview: boolean,
 ): HTMLElement {
   const isSelf = side === 'self';
   const block = el('div', 'net-info-block net-info-' + side);
@@ -1702,9 +1749,10 @@ function renderInfoBlock(
     align: 'left',
   });
   info.appendChild(renderPiles(s, player));
-  // 连接状态占位只挂在对手那块（R6 之前它在顶部对手条上）：它是"本页是本地预览还是真联机"
-  // 唯一的页面内反馈；真实联机由 G5 换成会话状态。
-  if (!isSelf) info.appendChild(renderConnectionBadge());
+  // ── ★ 2026-10-02 修复：连接状态占位**只在本地预览时**挂（R6 之前它在顶部对手条上）──
+  // 改之前这一句是 `if (!isSelf)`（无条件）⇒ 真联机局里也在对手信息块底部写上「本地预览（未联机）」
+  // （2026-10-02 真机实测，两端都是）。判据与理由见 `renderConnectionBadge` 的头注。
+  if (!isSelf && localPreview) info.appendChild(renderConnectionBadge());
   block.appendChild(info);
   // ── R11-3：行动区**只**挂在自己那一侧，且**只**在自己是行动方时 ──
   // 两处调用（每侧一块）里最多一处命中 ⇒ "对手那一侧一个按钮都没有"是**构造性**的。
@@ -1905,12 +1953,12 @@ function mountFoeHandInto(block: HTMLElement, foeSlot: HTMLElement): void {
  * 不再靠位置猜。`tests/ui/net-dock.test.ts` 的 G-15 是它的行为腿。
  */
 function buildBottomRow(
-  s: GameState, viewSeat: PlayerId, cb: UiCallbacks, operator: PlayerId | null,
+  s: GameState, viewSeat: PlayerId, cb: UiCallbacks, operator: PlayerId | null, localPreview: boolean,
 ): { row: HTMLElement; hands: HTMLElement; selfSlot: HTMLElement; foeSlot: HTMLElement } {
   const row = el('div', 'net-bottom');
   row.dataset.viewSeat = String(viewSeat);
   const blockOf = (side: NetBottomSide): HTMLElement =>
-    renderInfoBlock(s, bottomPlayerOf(side, viewSeat), side, operator, cb);
+    renderInfoBlock(s, bottomPlayerOf(side, viewSeat), side, operator, cb, localPreview);
   // ⚠️ 两块信息块的**产出顺序**仍由 `NET_BOTTOM_SIDES` 决定（改常量必须同时改测试的腿）
   const infoBlocks = NET_BOTTOM_SIDES.map((side) => blockOf(side));
   for (const b of infoBlocks) row.appendChild(b);
@@ -1955,11 +2003,11 @@ function buildBottomRow(
  * 两个座位下都成立。⚠️ 判据：RAIL-1a 同时钉"DOM 顺序"与"两条 `order`"——**少任何一条都会红**。
  */
 function buildLeftRail(
-  s: GameState, viewSeat: PlayerId, cb: UiCallbacks, operator: PlayerId | null,
+  s: GameState, viewSeat: PlayerId, cb: UiCallbacks, operator: PlayerId | null, localPreview: boolean,
 ): { rail: HTMLElement; hands: HTMLElement } {
   const rail = el('div', 'net-left-rail');
   const pair = el('div', 'net-info-pair');
-  const { row, hands, selfSlot, foeSlot } = buildBottomRow(s, viewSeat, cb, operator);
+  const { row, hands, selfSlot, foeSlot } = buildBottomRow(s, viewSeat, cb, operator, localPreview);
   // ① 对手手牌块嵌进**对手信息块内部**（用户 R21 的核心裁决）
   const foeBlock = row.querySelector<HTMLElement>(".net-info-block[data-net-seat='foe']");
   if (foeBlock !== null) mountFoeHandInto(foeBlock, foeSlot);
@@ -2581,7 +2629,11 @@ export function renderNetBoard(root: HTMLElement, s: GameState, cb: UiCallbacks,
   // **直接交出来**（R11-4：旧写法 `bottom.lastElementChild` 拿到的是**对手信息块** —— 见
   // `buildBottomRow` 头注）。对手手牌块由 `buildLeftRail` 内部嵌进对手信息块（`mountFoeHandInto`）。
   const zoomBox = renderNetZoomBox();
-  const { rail: leftRail, hands } = buildLeftRail(s, viewSeat, cb, operator);
+  // ── ★ 2026-10-02：把"本帧是不是本地预览"从**入口**一路交给信息块（唯一消费方是那个徽标）──
+  // 只有 `opts` 是权威来源（本文件不保留"上一帧是什么"的模块态，见本函数头注）；缺省 `false`
+  // 的语义与理由见 `NetViewOpts.localPreview`。传下去的三个函数各自只把它原样转交。
+  const localPreview = opts.localPreview === true;
+  const { rail: leftRail, hands } = buildLeftRail(s, viewSeat, cb, operator, localPreview);
   const rightRail = buildRightRail(zoomBox);
 
   // ⚠️ C-1：grid **必须先挂进 wrap**，选择模式才能找到候选节点 —— `renderChoiceUi` 内部

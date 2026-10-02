@@ -1770,6 +1770,25 @@ function exposeMatchProbe(): void {
      * **不上报失败**，看起来像"驱动坏了"）。
      */
     finishDraft: () => {
+      /**
+       * ★★ **2026-10-02 修复：没有联机局就**什么都不做**（早退）。**
+       *
+       * 前提：本端已经在联机局里（`enterNetGame()` 跑过）。否则 `driver` 还是热座的
+       * `localDriver`（它的 `acceptsInput` 恒真、`submit` 不看座位也不看轮次，
+       * `src/app/match-driver.ts`），于是下面那一圈会把**本端连续的那一段草稿在本地走完**
+       * （实测一次调用 6 手、`seat === -1`），两端各播一次转场 —— 而那时 `renderMode` 还是
+       * `'lobby'`、没有牌桌可画。2026-10-02 上一轮那次误读（"转场跑完 phase 却退回 draft"）
+       * 就是这么来的：硬币闸放行后 `enterNetGame()` 才第一次真正跑，把那一局从头重开。
+       *
+       * ⚠️ **对真机零影响**：产品路径上这个口只在 `#g5probe=1` 下可达，而门禁（大厅门 ③.8）
+       * 调它时两端都已经在草稿屏上（`netGame !== null`）。这一句挡掉的是"在联机局外调它"这一种
+       * 用法 —— 那种用法**只会**产出假象，没有任何正当用途。
+       *
+       * ⚠️ **返回 `steps: -1` 而不是 `0`**：与紧邻的 `rebootDraft()` 同款 —— `-1` = "本方法
+       * 一步都没走（前提不成立，什么都没做）"，`0` 分不清它和"草稿本来就打完了"。
+       * `state` 照常交回此刻的规范串（调用方可以据此直接比"状态有没有变"）。
+       */
+      if (netGame === null) return { steps: -1, state: stableStringify(state) };
       let n = 0;
       while (state.phase === 'draft') {
         // 不是本端回合就**停手**（那一轮由对端提交、本端等帧）。判据与驱动用的是同一个
@@ -3864,6 +3883,20 @@ function rerender(): void {
     if (probeOn) renderNetBoardCalls += 1;
     renderNetBoard(root, state, cb, {
       viewSeat: netViewSeat,
+      /**
+       * ★ **2026-10-02 修复**：把"这一屏有没有真对端"如实交给渲染器 —— 它只决定对手信息块
+       * 底部那个「本地预览（未联机）」徽标挂不挂（`render-net.ts` 的 `NetViewOpts.localPreview`）。
+       *
+       * 值就是 `netGame === null`，**不写死 `false`**：这一支（`renderMode === 'net'`）目前只有
+       * `enterNetGame()` 一个入口，而它必在 `netGame` 就绪之后才写 `renderMode` ⇒ 这里恒 `false`
+       * （= 真联机、有对端）。写死 `false` 会让"这个判定来自哪个事实"从源码里消失；写成这个
+       * 表达式之后，万一将来多一个 `renderMode === 'net'` 的入口而它不建联机局，徽标会**自己**
+       * 跟着变对，而不是继续撒谎。
+       *
+       * 改之前的形态是"渲染器无条件追加那个徽标" ⇒ 真联机牌桌上两端都写着「未联机」
+       * （2026-10-02 真机实测，见 `.superpowers/2026-10-02-net-conn-badge/`）。
+       */
+      localPreview: netGame === null,
       ...(dev ? {
         onPreviewChange: (next: { viewSeat?: 0 | 1 }) => {
           if (next.viewSeat !== undefined) netViewSeat = next.viewSeat;

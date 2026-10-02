@@ -15,6 +15,10 @@
  *  1. 英文帧里这些节点都存在，且逐字等于 `EN[...]`（`{n}` 用夹具里的真值填）；
  *  2. 同一帧里**这几处**一个汉字都没有；
  *  3. 反向锚点：每一条的中英**不同值**（否则判据在"两表同值"上恒真）。
+ *
+ * ⚠️ **2026-10-02 联动**：`.net-conn`（「本地预览（未联机）」）从今天起**只在本地预览时才产出**
+ * —— 见 `renderFrame` 里那一段与 `tests/ui/render-net-conn-badge.test.ts`。
+ * 本帧是桩、没有会话 ⇒ 显式声明 `localPreview: true`，判据本身一条没动。
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { installStubDom, makeStubEl, descendants, isClass, type StubNode } from '../ui/net-dom-stub';
@@ -65,7 +69,15 @@ function renderFrame(s: S, viewSeat: PlayerId): StubNode {
   renderNetBoard(root as unknown as HTMLElement, s, {
     onAction: noop, onRendered: noop, rerender: noop, onDraftPick: noop, onDraftUnpick: noop,
     onDraftBan: noop, onWinReset: noop,
-  } as never, { viewSeat });
+  } as never, {
+    viewSeat,
+    // ── ★ 2026-10-02 修复的联动（**不是放宽判据**）──
+    // 「本地预览（未联机）」那个徽标（`.net-conn`）从今天起**只在本地预览时才产出**
+    // （真联机牌桌上它是错标，修法与理由见 `tests/ui/render-net-conn-badge.test.ts`）。
+    // 本帧是手写桩、没有会话 ⇒ 语义上就是"本地预览"，所以这里**显式**声明这个前提，
+    // 好让下面那两条"这个节点的英文逐字是什么"的断言仍然有一个真的被产出的节点可读。
+    localPreview: true,
+  });
   return root;
 }
 
