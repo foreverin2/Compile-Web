@@ -22,6 +22,11 @@
  *     `.choice-hint` / `.operator-banner` 都**存在**且**逐字等于 `EN[...]` 填完占位符的值**；
  *  2. 同一帧里这些节点**一个汉字都没有**（`[\u3400-\u9fff]` 不命中）；
  *  3. 切回中文，同一帧逐字等于 `ZH[...]`（证明这条腿不是在"英文表恰好等于中文表"上恒真）。
+ *
+ * ★ 2026-10-02（P5）：`choice-title` **进了"英文帧零汉字"的判据面**（原来它带着引擎给的
+ * `prompt.title` 中文，属登记的豁免面）。见 `src/i18n/engine-prompt.ts`：引擎文案一个字没动，
+ * 显示层按模式表出英文；未命中就回退引擎原文（`engine-prompt-title.test.ts` 有回退腿）。
+ * 这一处是**收紧**（豁免删掉、判据面变大），不是放宽。
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { installStubDom, makeStubEl, descendants, isClass, type StubNode } from '../ui/net-dom-stub';
@@ -114,20 +119,25 @@ describe('★ P3 第四批：选择条的英文帧（真产出函数 + 真文案
       expect(textOf(root, 'operator-banner'), '没有 operator-banner').toBe(
         EN['render-net.choice.operator'].replace('{n}', '1'));
       expect(textOf(root, 'choice-title'), '没有 choice-title').toBe(
-        EN['render.choice.title'].replace('{who}', 'P1').replace('{title}', 'speed-5：偏转到哪条链路'));
+        EN['render.choice.title'].replace('{who}', 'P1').replace('{title}', 'speed-5: which line to shift to'));
       expect(textOf(root, 'choice-hint'), '没有 choice-hint').toBe(EN['render.choice.hint-line']);
       expect(textOf(root, 'choice-skip'), '没有 choice-skip').toBe(EN['render.choice.skip']);
-      // 判据 ②：**界面外壳**那几处一个汉字都没有。
-      // ⚠️ `choice-title` **不进这一组**：它的值里带着**引擎给的 `prompt.title`**
-      //    （`speed-5：偏转到哪条链路`），那是 `src/core/**` 的中文、属红线数据层、
-      //    本轮有意不翻（台账里登记着）⇒ 拿它当"英文帧零汉字"的判据是**假红**。
-      //    它的"外壳是英文"由上面那一条逐字比对（`P1 — …`）单独钉住。
-      for (const cls of ['operator-banner', 'choice-hint', 'choice-skip']) {
+      // 判据 ②：**整个选择条**一个汉字都没有。
+      // ★ 2026-10-02（P5）：`choice-title` 这一轮**从豁免面挪进了判据面** —— 上一版它带着
+      //    引擎给的 `prompt.title`（`speed-5：偏转到哪条链路`，红线数据层）所以"有意保留中文"，
+      //    本轮的显示层替换（`enginePromptTitle()`）之后它**必须是英文**。
+      //    这是一次**收紧**，不是放宽：豁免面被删掉了，判据面反而变大。
+      for (const cls of ['operator-banner', 'choice-title', 'choice-hint', 'choice-skip']) {
         expect(CJK.test(textOf(root, cls) ?? ''), `${cls} 的英文帧里出现了汉字：${String(textOf(root, cls))}`)
           .toBe(false);
       }
-      // 反向锚点：`choice-title` 里**确实**还有引擎标题的中文 ⇒ 上面那三条不是"恒空"
-      expect(CJK.test(textOf(root, 'choice-title') ?? ''), '夹具里引擎标题应当仍是中文').toBe(true);
+      // 反向锚点：同一句在**中文**模式下仍是引擎原文（证明上面那条不是因为"夹具根本没渲染标题"）
+      setLang('zh');
+      const zhState = baseState(chooser);
+      withSelectLine(zhState, chooser, 'speed-5：偏转到哪条链路');
+      const zhRoot = renderFrame(zhState, chooser);
+      expect(textOf(zhRoot, 'choice-title'), '中文帧里引擎标题应当逐字仍是引擎原文').toBe(
+        ZH['render.choice.title'].replace('{who}', 'P1').replace('{title}', 'speed-5：偏转到哪条链路'));
       expect(EN['render.choice.skip'], '英文的「跳过」与中文一样 ⇒ 这条腿恒真').not.toBe(ZH['render.choice.skip']);
     } finally {
       restore();
@@ -174,9 +184,9 @@ describe('★ P3 第四批：选择条的英文帧（真产出函数 + 真文案
         EN['render.choice.count'].replace('{n}', '0').replace('{max}', '1'));
       expect(textOf(root, 'choice-confirm'), '没有 choice-confirm').toBe(EN['render.choice.confirm']);
       expect(textOf(root, 'choice-title'), '没有 choice-title').toBe(
-        EN['render.choice.title'].replace('{who}', 'P1').replace('{title}', 'speed-5：弃1张牌'));
-      expect(CJK.test(`${String(textOf(root, 'choice-count'))}${String(textOf(root, 'choice-confirm'))}`),
-        '英文帧的计数/确认里出现汉字').toBe(false);
+        EN['render.choice.title'].replace('{who}', 'P1').replace('{title}', 'speed-5: discard 1 card'));
+      expect(CJK.test(`${String(textOf(root, 'choice-count'))}${String(textOf(root, 'choice-confirm'))}${String(textOf(root, 'choice-title'))}`),
+        '英文帧的计数/确认/标题里出现汉字').toBe(false);
       // 反向锚点：确认/计数这两条中英**不同值** ⇒ 上面那两条不是在"中英同值"上恒真
       expect(ZH['render.choice.confirm'], '英文的「确认」与中文一样').not.toBe(EN['render.choice.confirm']);
       expect(ZH['render.choice.count'], '英文的计数与中文一样').not.toBe(EN['render.choice.count']);

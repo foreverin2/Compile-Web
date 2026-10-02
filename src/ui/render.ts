@@ -53,7 +53,7 @@ import type { FxViewSeat } from './fx-seat';
 // ★ 2026-10-02（P3 第三批）：棋盘 chrome 的文案走文案表（键 `render.*`；值 = 改动前那些
 //   字面量/模板串的**原文**，一个字未改）。⚠️ 只在**渲染点**调 `t()`（模块顶层的 `t()` 会把
 //   语言冻在 import 那一刻，`tests/i18n/module-scope-t.test.ts` 有腿）。`t()` 实参一律字面量。
-import { t } from '../i18n';
+import { engineActionButtonText, enginePromptTitle, t } from '../i18n';
 
 export interface UiCallbacks {
   onAction(a: LegalAction): void;
@@ -5477,7 +5477,10 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
       // 归属者标签：出选择请求的效果属主（PendingEffect.player，非 prompt 自身；chooser 覆盖）
       bar.appendChild(el('div', 'choice-title', t('render.choice.title', {
         who: (prompt.chooser ?? topEffect.player) === 0 ? 'P1' : 'P2',
-        title: prompt.title,
+        // ★ P5：标题**只在这里换来源** —— 引擎的 `prompt.title` 是红线（联机逐字一致），
+        //    英文模式下由 `enginePromptTitle()` 按模式表出英文、命中不了回退引擎原文；
+        //    中文模式下它是恒等函数。`prompt.title` 本身（以及下面那些 `startsWith` 判别）一个字没动。
+        title: enginePromptTitle(prompt.title),
       })));
       const count = el('span', 'choice-count', t('render.choice.count', {
         n: String(choiceSelected.length),
@@ -5530,7 +5533,10 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
       bar.appendChild(el('div', 'operator-banner', t('render.choice.operator', { name: opName })));
       bar.appendChild(el('div', 'choice-title', t('render.choice.title', {
         who: (prompt.chooser ?? topEffect.player) === 0 ? 'P1' : 'P2',
-        title: prompt.title,
+        // ★ P5：标题**只在这里换来源** —— 引擎的 `prompt.title` 是红线（联机逐字一致），
+        //    英文模式下由 `enginePromptTitle()` 按模式表出英文、命中不了回退引擎原文；
+        //    中文模式下它是恒等函数。`prompt.title` 本身（以及下面那些 `startsWith` 判别）一个字没动。
+        title: enginePromptTitle(prompt.title),
       })));
       // 2代 luck 宣告 prompt（luck-0 宣告数字 / luck-3 宣告协议）：宣告卡（效果源卡）中心
       // 出现骰子持续转动（startLuckDiceFx 幂等：choice-bar 每帧重渲染重复调用只重定位）；
@@ -5551,7 +5557,9 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
         grid.querySelector('.hand-strip')?.classList.add('choice-mode');
       } else {
       for (const act of prompt.actions ?? []) {
-        const b = el('button', 'btn choice-action-btn', actionCn(act, topEffect.sourceDefId)); // 修改提示词 8：动作按钮中文（翻转/抽牌/正面打出…；shift 用词随世代）
+        // ★ P5：按钮文字的**来源**换成显示层：英文模式下按 `action:<id>` 出英文，
+        //    没有条目（以及**中文模式**）就逐字回退引擎的 `actionCn()` —— 中文屏上一个字没变。
+        const b = el('button', 'btn choice-action-btn', engineActionButtonText(act) || actionCn(act, topEffect.sourceDefId)); // 修改提示词 8：动作按钮中文（翻转/抽牌/正面打出…；shift 用词随世代）
         b.addEventListener('click', () => { choicePromptId = null; cb.onAction({ kind: 'effect-choice', promptId: topEffect.id, choice: [act] }); });
         bar.appendChild(b);
       }
@@ -5818,7 +5826,7 @@ export function choiceBar(pe: PendingEffect, prompt: ChoiceRequest, cb: UiCallba
   bar.appendChild(el('div', 'operator-banner', t('render.choice.operator', { name: opName })));
   bar.appendChild(el('div', 'choice-title', t('render.choice.title', {
     who: (prompt.chooser ?? pe.player) === 0 ? 'P1' : 'P2',
-    title: prompt.title,
+    title: enginePromptTitle(prompt.title),
   })));
   bar.appendChild(el('div', 'choice-hint', hint));
   return bar;
@@ -5841,7 +5849,7 @@ export function buildChoicePickOverlay(
   const overlay = el('div', 'choice-pick-overlay');
   const panel = el('div', 'choice-pick-panel');
   const who = (prompt.chooser ?? pe.player) === 0 ? 'P1' : 'P2';
-  panel.appendChild(el('div', 'choice-pick-title', t('render.choice.title', { who, title: prompt.title })));
+  panel.appendChild(el('div', 'choice-pick-title', t('render.choice.title', { who, title: enginePromptTitle(prompt.title) })));
   panel.appendChild(
     el('div', 'choice-pick-hint', t('render.choice.pick-hint')),
   );

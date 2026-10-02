@@ -39,6 +39,9 @@
  */
 import { EN } from './en';
 import { ZH } from './zh';
+// ★ 2026-10-02（P5）：引擎 `prompt.title` 的**显示层**替换表（红线不动，只在渲染时换句子）。
+// 这一层只认两张表与语言值，不认识本模块的内存态 ⇒ 语言由下面的 `enginePromptTitle()` 注入，不成环。
+import { ENGINE_ACTION_KEYS, ENGINE_PROMPT_KEYS, engineActionText, enginePromptText } from './engine-prompt';
 // 语言这个值本身的类型与清单住在纯叶子 `lang.ts` 里（理由见那个文件）：`src/app/local-store.ts`
 // 也要用它，而纯层不许依赖这一层。这里**转出去**，让消费者只用 import 一个模块。
 import { DEFAULT_LANG, isLang, type Lang } from './lang';
@@ -184,6 +187,38 @@ function fill(text: string, params: Readonly<Record<string, string>>): string {
     return v === undefined ? whole : v;
   });
 }
+
+/* ───────────────────── 引擎文案的显示层替换（P5，2026-10-02） ───────────────────── */
+
+/**
+ * 引擎给的 `prompt.title` → **显示层**文案。
+ *
+ *  - 中文：**逐字节返回入参**（引擎原文，构造上不可能回归）；
+ *  - 英文：命中模式表（键 `engine.prompt.*`）则输出英文，否则**回退引擎原文**。
+ *
+ * 这就是"红线不许改引擎文案"与"英文界面不该出现中文"之间的那条缝：
+ * 只换**屏幕上的来源**，不改 `state`、不改日志、不改联机指纹。
+ * 完整口径（为什么键按语义组织、漂移怎么报红）见 `./engine-prompt` 的头注。
+ */
+export function enginePromptTitle(title: string): string {
+  return enginePromptText(title, current);
+}
+
+/** 模式表的键（顺序即匹配顺序）—— 给"完整性腿"用；键集与两张表逐条对应 */
+export { ENGINE_PROMPT_KEYS } from './engine-prompt';
+
+/**
+ * 选择条**动作按钮**的文字（`act` = 引擎给的 `action:<id>`）。
+ *
+ * 返回 `''` = "这一层没有对应条目，用引擎原文" —— 调用点据此回退 `actionCn(act, defId)`
+ * （中文模式下**恒为 `''`**，所以中文屏上那半个字都没变）。键族见 `ENGINE_ACTION_KEYS`。
+ */
+export function engineActionButtonText(act: string): string {
+  return engineActionText(act, current);
+}
+
+/** 动作族的键（顺序即匹配顺序）；键集与两张表逐条对应 */
+export { ENGINE_ACTION_KEYS } from './engine-prompt';
 
 /* ─────────────── 写盘失败：原因 → 本地化文案（线上验收 D3） ─────────────── */
 

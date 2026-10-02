@@ -172,7 +172,7 @@ import { downloadLog } from './diag';
 //   import 那一刻，`tests/i18n/module-scope-t.test.ts` 有腿）；实参一律字面量。
 //   ⚠️ **刻意不抽**：运行时自查那一大族（`verifyPageHooks` 的 `约束 N：…` 读数与
 //   `[render-net] …` 控制台串）—— 它们是开发者诊断读数、被结构腿逐字钉着，不是玩家文案。
-import { t } from '../i18n';
+import { engineActionButtonText, enginePromptTitle, t } from '../i18n';
 // ── **R19：卡牌放大框的取图 / 取值出口** ──
 // 卡图 src 与"卡牌中文效果分段"的**唯一**实现都在 `data/demo.ts`（`render.ts` 也是从那里取的）。
 // 本页**不复制**这两段算式：`cardImgSrc(protocol, value)` 与 `cardTextParts(getCardDef(defId))`
@@ -1409,7 +1409,7 @@ function mountChoiceBar(wrap: HTMLElement, who: PlayerId, bar: HTMLElement): voi
 /** 选择条共用的操作者标签（改动提示词 17 的横幅 + 标题）。 */
 function appendOperatorHeader(bar: HTMLElement, who: PlayerId, title: string): void {
   bar.appendChild(el('div', 'operator-banner', t('render-net.choice.operator', { n: String(who + 1) })));
-  bar.appendChild(el('div', 'choice-title', t('render.choice.title', { who: `P${who + 1}`, title })));
+  bar.appendChild(el('div', 'choice-title', t('render.choice.title', { who: `P${who + 1}`, title: enginePromptTitle(title) })));
 }
 
 function renderChoiceUi(
@@ -1602,7 +1602,8 @@ function renderChoiceUi(
     bar.appendChild(el('div', 'choice-note', t('render.choice.note-rearrange')));
   } else {
     for (const act of prompt.actions ?? []) {
-      const btn = el('button', 'btn choice-action-btn', actionCn(act, top.sourceDefId));
+      // ★ P5：与热座同一套"显示层优先、否则回退 `actionCn()`"（中文模式恒回退 ⇒ 中文屏未变）。
+      const btn = el('button', 'btn choice-action-btn', engineActionButtonText(act) || actionCn(act, top.sourceDefId));
       btn.addEventListener('click', () => {
         setChoiceSelection([], null);
         cb.onAction({ kind: 'effect-choice', promptId: top.id, choice: [act] });

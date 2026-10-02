@@ -1449,4 +1449,439 @@ export const EN: Readonly<Record<string, string>> = {
   'archive-fs-browser.save.fsa-failed': 'The file-system write failed: {fsaDetail}',
   'archive-fs-browser.unsupported.save': 'This device\'s browser does not support saving files (no showSaveFilePicker and no usable document/URL).',
   'archive-fs-browser.save.failed': 'Saving failed: {detail}',
+  /* ───────── 引擎 `prompt.title` 的显示层替换（P5；见 src/i18n/engine-prompt.ts 的头注） ─────────
+   * 键与 `zh.ts` 逐条对应；注释行是**中文模式下的引擎原文**（= 匹配用的模式串）。 */
+  /* ENGINE-PROMPT-BEGIN */
+  // 弃1张牌
+  'engine.prompt.p001': 'discard 1 card',
+  // 你弃置1张牌
+  'engine.prompt.p002': 'you discard 1 card',
+  // 偏转到哪条链路
+  'engine.prompt.p003': 'which line to shift to',
+  // 翻转1张牌
+  'engine.prompt.p004': 'flip 1 card',
+  // 对手弃{n}张牌
+  'engine.prompt.p005': 'opponent discards {n} cards',
+  // 对手弃1张牌
+  'engine.prompt.p006': 'opponent discards 1 card',
+  // 反面打出到任意线
+  'engine.prompt.p007': 'play face down to any line',
+  // 偏转目标线
+  'engine.prompt.p008': 'target line to shift to',
+  // 删除1张牌
+  'engine.prompt.p009': 'delete 1 card',
+  // 对手弃置1张牌
+  'engine.prompt.p010': 'opponent discards 1 card',
+  // 翻转另1张牌
+  'engine.prompt.p011': 'flip another card',
+  // 你可以弃1张牌
+  'engine.prompt.p012': 'you may discard 1 card',
+  // 弃置1张牌
+  'engine.prompt.p013': 'discard 1 card',
+  // 选择目标列
+  'engine.prompt.p014': 'choose the target line',
+  // 把该牌偏转进此列
+  'engine.prompt.p015': 'shift that card into this line',
+  // 此牌被覆盖，你可以偏转它
+  'engine.prompt.p016': 'this card is covered, you may shift it',
+  // 对手弃2张牌
+  'engine.prompt.p017': 'opponent discards 2 cards',
+  // 对手在此链路反面打出1张牌
+  'engine.prompt.p018': 'opponent plays 1 card face down in this line',
+  // 翻转1张你的反面朝下的牌
+  'engine.prompt.p019': 'flip 1 of your face-down cards',
+  // 回手1张其他牌
+  'engine.prompt.p020': 'return 1 other card to your hand',
+  // 你可以翻转此牌
+  'engine.prompt.p021': 'you may flip this card',
+  // 你可以将弃牌堆洗入牌库
+  'engine.prompt.p022': 'you may shuffle your discard pile into your deck',
+  // 你可以偏转此牌
+  'engine.prompt.p023': 'you may shift this card',
+  // 你可以弃置1张牌
+  'engine.prompt.p024': 'you may discard 1 card',
+  // 弃1张或更多张牌
+  'engine.prompt.p025': 'discard 1 or more cards',
+  // 若你这么做，翻转1张牌
+  'engine.prompt.p026': 'if you do, flip 1 card',
+  // 选择要交换的第2个位置
+  'engine.prompt.p027': 'choose the 2nd position to swap',
+  // 在链路 {n} 反面打出1张牌
+  'engine.prompt.p028': 'play 1 card face down in line {n}',
+  // 正面打出（须匹配协议线）
+  'engine.prompt.p029': 'play face up (must match the protocol line)',
+  // {verb}：{who} 持有控制组件（已归还中立）——可重排一名玩家的协议
+  'engine.prompt.p030': '{verb}: {who} holds the control component (returned to neutral) - you may rearrange one player\'s protocols',
+  // {verb}：选择要交换的第2个位置
+  'engine.prompt.p031': '{verb}: choose the 2nd position to swap',
+  // {verb}：重排玩家{who}的协议——选择要交换的第1个位置
+  'engine.prompt.p032': '{verb}: rearrange player {who}\'s protocols - choose the 1st position to swap',
+  // 把1张反面牌偏转进此列
+  'engine.prompt.p033': 'shift 1 face-down card into this line',
+  // 把1张牌偏转进或偏转出此列
+  'engine.prompt.p034': 'shift 1 card into or out of this line',
+  // 把覆盖者偏转到哪条链路
+  'engine.prompt.p035': 'which line to shift the covering card to',
+  // 把该牌偏转出此列
+  'engine.prompt.p036': 'shift that card out of this line',
+  // 此牌被反面牌覆盖——你可以偏转那张牌
+  'engine.prompt.p037': 'this card is covered by a face-down card - you may shift that card',
+  // 此牌将被覆盖——先翻转1张正面朝上的牌
+  'engine.prompt.p038': 'this card is about to be covered - first flip 1 face-up card',
+  // 从弃牌堆打出1张牌
+  'engine.prompt.p039': 'play 1 card from your discard pile',
+  // 打出1张牌
+  'engine.prompt.p040': 'play 1 card',
+  // 打出朝向
+  'engine.prompt.p041': 'choose the orientation to play',
+  // 第2个位置
+  'engine.prompt.p042': 'the 2nd position',
+  // 对手抽牌，你可以删除1张卡牌
+  'engine.prompt.p043': 'the opponent draws - you may delete 1 card',
+  // 对手打出1张牌
+  'engine.prompt.p044': 'the opponent plays 1 card',
+  // 对手弃牌，你可以反面打出1张卡牌
+  'engine.prompt.p045': 'the opponent discards - you may play 1 card face down',
+  // 对手删除1张对手的反面牌
+  'engine.prompt.p046': 'the opponent deletes 1 of their face-down cards',
+  // 对手刷新——你弃置任意数目的卡牌
+  'engine.prompt.p047': 'the opponent refreshes - you discard any number of cards',
+  // 对手选择抽1张牌或打出1张牌
+  'engine.prompt.p048': 'the opponent chooses to draw 1 card or play 1 card',
+  // 对手已编译的协议更多——翻转1张牌
+  'engine.prompt.p049': 'the opponent has more compiled protocols - flip 1 card',
+  // 对手拥有控制权——你可以翻转1张牌
+  'engine.prompt.p050': 'the opponent holds control - you may flip 1 card',
+  // 对手在此链路出牌后，他要弃置1张牌
+  'engine.prompt.p051': 'after the opponent plays in this line, they must discard 1 card',
+  // 翻转1张被覆盖的卡牌
+  'engine.prompt.p052': 'flip 1 covered card',
+  // 翻转1张此链路中正面朝上的卡牌
+  'engine.prompt.p053': 'flip 1 face-up card in this line',
+  // 翻转1张对手的正面牌
+  'engine.prompt.p054': 'flip 1 of the opponent\'s face-up cards',
+  // 翻转1张你被覆盖的牌
+  'engine.prompt.p055': 'flip 1 of your covered cards',
+  // 翻转1张你对手的牌
+  'engine.prompt.p056': 'flip 1 of your opponent\'s cards',
+  // 翻转1张阈值大于你手牌数({n})的卡牌
+  'engine.prompt.p057': 'flip 1 card with threshold greater than your hand size ({n})',
+  // 翻转1张阈值小于{n}的卡牌
+  'engine.prompt.p058': 'flip 1 card with threshold less than {n}',
+  // 翻转1张阈值小于此链路牌数的牌
+  'engine.prompt.p059': 'flip 1 card with threshold less than the number of cards in this line',
+  // 翻转1张正面朝上的牌
+  'engine.prompt.p060': 'flip 1 face-up card',
+  // 翻转对手1张正面朝上的牌
+  'engine.prompt.p061': 'flip 1 of the opponent\'s face-up cards',
+  // 翻转对手阈值最高的被覆盖的牌
+  'engine.prompt.p062': 'flip the opponent\'s covered card with the highest threshold',
+  // 翻转或偏转你的1张牌
+  'engine.prompt.p063': 'flip or shift 1 of your cards',
+  // 翻转另1条链路中的牌——选择链路
+  'engine.prompt.p064': 'flip a card in another line - choose the line',
+  // 翻转你的1张卡牌
+  'engine.prompt.p065': 'flip 1 of your cards',
+  // 翻转你的1张牌
+  'engine.prompt.p066': 'flip 1 of your cards',
+  // 翻转这张被覆盖的卡牌
+  'engine.prompt.p067': 'flip this covered card',
+  // 翻转这张正面朝上的牌
+  'engine.prompt.p068': 'flip this face-up card',
+  // 反面打出1张卡牌
+  'engine.prompt.p069': 'play 1 card face down',
+  // 反面打出1张牌
+  'engine.prompt.p070': 'play 1 card face down',
+  // 反面打出到哪条链路
+  'engine.prompt.p071': 'which line to play face down into',
+  // 反面打出牌库顶到任意线
+  'engine.prompt.p072': 'play the top of your deck face down to any line',
+  // 复制对手1张牌的中央效果
+  'engine.prompt.p073': 'copy the middle effect of 1 of the opponent\'s cards',
+  // 覆盖着新星牌——你可以重排你的协议
+  'engine.prompt.p074': 'it is covering a nova card - you may rearrange your protocols',
+  // 回手1张你的牌
+  'engine.prompt.p075': 'return 1 of your cards to your hand',
+  // 回手1张牌
+  'engine.prompt.p076': 'return 1 card to your hand',
+  // 回手或偏转1张牌
+  'engine.prompt.p077': 'return or shift 1 card',
+  // 回手这张牌
+  'engine.prompt.p078': 'return this card to your hand',
+  // 将对手的1张正面朝下的卡牌加入手牌
+  'engine.prompt.p079': 'take 1 of the opponent\'s face-down cards into your hand',
+  // 将牌库顶的牌反面打在对手的哪一侧
+  'engine.prompt.p080': 'which of the opponent\'s sides to play your deck top face down on',
+  // 将其正面朝下打出到其它链路
+  'engine.prompt.p081': 'play it face down into another line',
+  // 将随机揭示的那张牌反面打出在对手的哪一侧
+  'engine.prompt.p082': 'which of the opponent\'s sides to play the randomly revealed card face down on',
+  // 交换你的2个协议——第1个位置
+  'engine.prompt.p083': 'swap 2 of your protocols - the 1st position',
+  // 交换协议位置——选择第1个位置
+  'engine.prompt.p084': 'swap protocol positions - choose the 1st position',
+  // 揭示1张反面牌
+  'engine.prompt.p085': 'reveal 1 face-down card',
+  // 揭示1张你的手牌
+  'engine.prompt.p086': 'reveal 1 card from your hand',
+  // 揭示1张阈值={n}的牌
+  'engine.prompt.p087': 'reveal 1 card with threshold {n}',
+  // 控制权持有者（P{n}）选择要交换的第1个协议位（新星方）
+  'engine.prompt.p088': 'the controller (P{n}) chooses the 1st protocol position to swap (nova side)',
+  // 命中！删除1张牌
+  'engine.prompt.p089': 'hit! delete 1 card',
+  // 你把1张手牌给对手
+  'engine.prompt.p090': 'you give 1 card from your hand to the opponent',
+  // 你可以把1张手牌给对手
+  'engine.prompt.p091': 'you may give 1 card from your hand to the opponent',
+  // 你可以抽1张牌
+  'engine.prompt.p092': 'you may draw 1 card',
+  // 你可以抽2张牌（若这么做翻转此牌）
+  'engine.prompt.p093': 'you may draw 2 cards (if you do, flip this card)',
+  // 你可以打出这张牌
+  'engine.prompt.p094': 'you may play this card',
+  // 你可以打入1张非多元协议的卡牌到此链路
+  'engine.prompt.p095': 'you may play 1 non-diversity card into this line',
+  // 你可以翻转1张被覆盖的正面朝上的卡牌
+  'engine.prompt.p096': 'you may flip 1 covered face-up card',
+  // 你可以翻转1张此列的反面牌
+  'engine.prompt.p097': 'you may flip 1 face-down card in this line',
+  // 你可以翻转1张反面牌
+  'engine.prompt.p098': 'you may flip 1 face-down card',
+  // 你可以翻转1张你的被盖住的正面牌
+  'engine.prompt.p099': 'you may flip 1 of your covered face-up cards',
+  // 你可以翻转1张牌
+  'engine.prompt.p100': 'you may flip 1 card',
+  // 你可以翻转1张正面朝上的卡牌
+  'engine.prompt.p101': 'you may flip 1 face-up card',
+  // 你可以回手1张对手的牌
+  'engine.prompt.p102': 'you may return 1 of the opponent\'s cards to your hand',
+  // 你可以回手1张你的牌（含此牌自身）
+  'engine.prompt.p103': 'you may return 1 of your cards to your hand (including this card itself)',
+  // 你可以将对手1张被覆盖的牌偏转到此链路
+  'engine.prompt.p104': 'you may shift 1 of the opponent\'s covered cards into this line',
+  // 你可以将手牌中的1张牌放回牌库底端
+  'engine.prompt.p105': 'you may put 1 card from your hand on the bottom of your deck',
+  // 你可以偏转1张你的牌
+  'engine.prompt.p106': 'you may shift 1 of your cards',
+  // 你可以偏转此牌到另一列
+  'engine.prompt.p107': 'you may shift this card to another line',
+  // 你可以偏转此牌进入对手总阈值最大的链路
+  'engine.prompt.p108': 'you may shift this card into the opponent\'s line with the highest total threshold',
+  // 你可以偏转或翻转那张牌
+  'engine.prompt.p109': 'you may shift or flip that card',
+  // 你可以偏转那张牌
+  'engine.prompt.p110': 'you may shift that card',
+  // 你可以偏转这张牌
+  'engine.prompt.p111': 'you may shift this card',
+  // 你可以弃置你的手牌
+  'engine.prompt.p112': 'you may discard your hand',
+  // 你可以弃置牌库顶端的卡牌
+  'engine.prompt.p113': 'you may discard the top card of your deck',
+  // 你可以失去控制权
+  'engine.prompt.p114': 'you may give up control',
+  // 你弃置1张牌或删除此牌
+  'engine.prompt.p115': 'you discard 1 card or delete this card',
+  // 你拥有控制权——你可以将对手1张牌偏转到此链路
+  'engine.prompt.p116': 'you hold control - you may shift 1 of the opponent\'s cards into this line',
+  // 你拥有控制权——偏转1张其他牌
+  'engine.prompt.p117': 'you hold control - shift 1 other card',
+  // 你重排协议后——你可以偏转1张反面朝下的牌
+  'engine.prompt.p118': 'after you rearrange your protocols - you may shift 1 face-down card',
+  // 偏转1张被覆盖的正面朝下的卡牌
+  'engine.prompt.p119': 'shift 1 covered face-down card',
+  // 偏转1张对手的反面牌
+  'engine.prompt.p120': 'shift 1 of the opponent\'s face-down cards',
+  // 偏转1张对手的牌
+  'engine.prompt.p121': 'shift 1 of the opponent\'s cards',
+  // 偏转1张对手在此链路的卡牌
+  'engine.prompt.p122': 'shift 1 of the opponent\'s cards in this line',
+  // 偏转1张反面牌
+  'engine.prompt.p123': 'shift 1 face-down card',
+  // 偏转1张你的被覆盖的卡牌
+  'engine.prompt.p124': 'shift 1 of your covered cards',
+  // 偏转1张你的牌（含此牌自身）
+  'engine.prompt.p125': 'shift 1 of your cards (including this card itself)',
+  // 偏转1张你对手的被盖住的牌
+  'engine.prompt.p126': 'shift 1 of your opponent\'s covered cards',
+  // 偏转1张牌
+  'engine.prompt.p127': 'shift 1 card',
+  // 偏转1张其它牌
+  'engine.prompt.p128': 'shift 1 other card',
+  // 偏转1张阈值小于此链路牌数的牌
+  'engine.prompt.p129': 'shift 1 card with threshold less than the number of cards in this line',
+  // 偏转此牌到另一列
+  'engine.prompt.p130': 'shift this card to another line',
+  // 偏转对手的1张牌
+  'engine.prompt.p131': 'shift 1 of the opponent\'s cards',
+  // 偏转对手的1张牌，或交换你的2个协议
+  'engine.prompt.p132': 'shift 1 of the opponent\'s cards, or swap 2 of your protocols',
+  // 偏转或翻转1张卡牌
+  'engine.prompt.p133': 'shift or flip 1 card',
+  // 偏转另1张你的牌
+  'engine.prompt.p134': 'shift another 1 of your cards',
+  // 偏转你阈值最低的被覆盖的牌
+  'engine.prompt.p135': 'shift your covered card with the lowest threshold',
+  // 偏转你在此链路中1张被覆盖的牌
+  'engine.prompt.p136': 'shift 1 of your covered cards in this line',
+  // 偏转这张牌
+  'engine.prompt.p137': 'shift this card',
+  // 弃3张牌
+  'engine.prompt.p138': 'discard 3 cards',
+  // 弃置1张牌到对手的弃牌堆
+  'engine.prompt.p139': 'discard 1 card into the opponent\'s discard pile',
+  // 弃置2张牌
+  'engine.prompt.p140': 'discard 2 cards',
+  // 清缓存后——选择牌库顶反打到的链路
+  'engine.prompt.p141': 'after clearing the cache - choose the line to play your deck top face down into',
+  // 任意玩家清缓存后——删除1张牌
+  'engine.prompt.p142': 'after any player clears the cache - delete 1 card',
+  // 任意玩家重排协议后——弃1张牌
+  'engine.prompt.p143': 'after any player rearranges protocols - discard 1 card',
+  // 删除1张0分或1分的牌
+  'engine.prompt.p144': 'delete 1 card worth 0 or 1',
+  // 删除1张反面牌
+  'engine.prompt.p145': 'delete 1 face-down card',
+  // 删除1张阈值={n}的卡牌（可含被覆盖）
+  'engine.prompt.p146': 'delete 1 card with threshold {n} (covered cards allowed)',
+  // 删除此列分值最低的被盖住的牌
+  'engine.prompt.p147': 'delete the covered card with the lowest value in this line',
+  // 删除对手的1张牌
+  'engine.prompt.p148': 'delete 1 of the opponent\'s cards',
+  // 删除对手分值最高的牌
+  'engine.prompt.p149': 'delete the opponent\'s card with the highest value',
+  // 删除对手阈值最低的被覆盖的牌
+  'engine.prompt.p150': 'delete the opponent\'s covered card with the lowest threshold',
+  // 删除该列1张牌
+  'engine.prompt.p151': 'delete 1 card in that line',
+  // 删除另1张牌
+  'engine.prompt.p152': 'delete another card',
+  // 删除你分值最高的牌
+  'engine.prompt.p153': 'delete your card with the highest value',
+  // 失去控制权——对手弃{n}张牌
+  'engine.prompt.p154': 'give up control - the opponent discards {n} cards',
+  // 失去控制权——删除1张正面朝上的牌
+  'engine.prompt.p155': 'give up control - delete 1 face-up card',
+  // 手牌恰好2张——删除对手1张牌
+  'engine.prompt.p156': 'exactly 2 cards in hand - delete 1 of the opponent\'s cards',
+  // 手牌为0——对手弃{n}张牌
+  'engine.prompt.p157': '0 cards in hand - the opponent discards {n} cards',
+  // 手牌为0——对手弃1张牌
+  'engine.prompt.p158': '0 cards in hand - the opponent discards 1 card',
+  // 透彻：从牌库中选择1张阈值为{n}的卡牌抽取
+  'engine.prompt.p159': 'Clarity: choose 1 card with threshold {n} from your deck and draw it',
+  // 宣告1个数字（0-6）
+  'engine.prompt.p160': 'declare a number (0-6)',
+  // 宣告1个协议
+  'engine.prompt.p161': 'declare a protocol',
+  // 选1列删除其中所有1分和2分的牌
+  'engine.prompt.p162': 'choose 1 line and delete all cards worth 1 or 2 in it',
+  // 选择1条对手总阈值更大的链路
+  'engine.prompt.p163': 'choose a line where the opponent\'s total threshold is higher',
+  // 选择1条链路
+  'engine.prompt.p164': 'choose a line',
+  // 选择1条你恰好有5张牌的链路
+  'engine.prompt.p165': 'choose a line where you have exactly 5 cards',
+  // 选择1条要翻开盖牌的链路
+  'engine.prompt.p166': 'choose a line whose covered cards to flip',
+  // 选择1条有正面朝下卡牌的链路
+  'engine.prompt.p167': 'choose a line with face-down cards',
+  // 选择1张手牌反面打出
+  'engine.prompt.p168': 'choose 1 card from your hand to play face down',
+  // 选择1张未被覆盖的新星牌
+  'engine.prompt.p169': 'choose 1 uncovered nova card',
+  // 选择第1个要交换的链路
+  'engine.prompt.p170': 'choose the 1st line to swap',
+  // 选择第2个协议位
+  'engine.prompt.p171': 'choose the 2nd protocol position',
+  // 选择第2个要交换的链路
+  'engine.prompt.p172': 'choose the 2nd line to swap',
+  // 选择目标卡牌
+  'engine.prompt.p173': 'choose the target card',
+  // 选择目标线路
+  'engine.prompt.p174': 'choose the target line',
+  // 选择你的1张牌（含此牌自身）
+  'engine.prompt.p175': 'choose 1 of your cards (including this card itself)',
+  // 选择牌最多的1条链路
+  'engine.prompt.p176': 'choose the line with the most cards',
+  // 选择偏转目标线
+  'engine.prompt.p177': 'choose the line to shift to',
+  // 选择要编译的链路
+  'engine.prompt.p178': 'choose the line to compile',
+  // 选择要打出的列
+  'engine.prompt.p179': 'choose the line to play into',
+  // 选择要删除1张牌的第二列
+  'engine.prompt.p180': 'choose the 2nd line to delete a card from',
+  // 选择要删除1张牌的第一列
+  'engine.prompt.p181': 'choose the 1st line to delete a card from',
+  // 选择要删除所有牌的列（该列双方合计≥8张）
+  'engine.prompt.p182': 'choose the line to delete all cards from (8 or more cards from both sides combined)',
+  // 要么弃1张牌，要么翻转此牌
+  'engine.prompt.p183': 'either discard 1 card or flip this card',
+  // 以正面还是反面打出
+  'engine.prompt.p184': 'play it face up or face down',
+  // 再翻转1张牌
+  'engine.prompt.p185': 'flip 1 more card',
+  // 再删除1张牌
+  'engine.prompt.p186': 'delete 1 more card',
+  // 在此牌正下方反面打出1张牌
+  'engine.prompt.p187': 'play 1 card face down directly below this card',
+  // 在另一列反面打出牌堆顶
+  'engine.prompt.p188': 'play the top of your deck face down in another line',
+  // 在同一链路翻转对手的1张牌
+  'engine.prompt.p189': 'flip 1 of the opponent\'s cards in the same line',
+  // 召回1张卡牌
+  'engine.prompt.p190': 'recall 1 card',
+  // 召回对手的1张牌
+  'engine.prompt.p191': 'recall 1 of the opponent\'s cards',
+  // 重排对手协议——选择第1个位置
+  'engine.prompt.p192': 'rearrange the opponent\'s protocols - choose the 1st position',
+  // 重排你的协议
+  'engine.prompt.p193': 'rearrange your protocols',
+  // 重排协议：选择要交换的第1个位置
+  'engine.prompt.p194': 'rearrange protocols: choose the 1st position to swap',
+  // 重排协议：选择要交换的第2个位置
+  'engine.prompt.p195': 'rearrange protocols: choose the 2nd position to swap',
+  // 重新排列{label}的协议——选择要交换的第1个位置
+  'engine.prompt.p196': 'rearrange {label} protocols - choose the 1st position to swap',
+  // 重新排列{label}的协议——选择要交换的第2个位置
+  'engine.prompt.p197': 'rearrange {label} protocols - choose the 2nd position to swap',
+  // 重新排列{label}的协议（可多次交换，直到满意）
+  'engine.prompt.p198': 'rearrange {label} protocols (swap as many times as you like, until you are satisfied)',
+  // clarity：打出这张牌（朝向）
+  'engine.prompt.p199': 'Clarity: play this card (orientation)',
+  // clarity：反面打出到任意线
+  'engine.prompt.p200': 'Clarity: play face down to any line',
+  // clarity：正面打出（须匹配协议线）
+  'engine.prompt.p201': 'Clarity: play face up (must match the protocol line)',
+  // unity：翻转1张牌
+  'engine.prompt.p202': 'Unity: flip 1 card',
+  // unity：翻转1张牌或抽取1张牌
+  'engine.prompt.p203': 'Unity: flip 1 card or draw 1 card',
+/* ENGINE-PROMPT-END */
+  /* ───── 选择条**动作按钮**的显示层替换（P5；键同 `zh.ts`，注释行是引擎的 action id） ───── */
+  /* ENGINE-ACTION-KEYS-BEGIN */
+  'engine.action.flip': 'flip',
+  'engine.action.draw': 'draw',
+  'engine.action.discard': 'discard',
+  'engine.action.delete': 'delete',
+  'engine.action.shift': 'shift',
+  'engine.action.return': 'return to hand',
+  'engine.action.face_up': 'play face up',
+  'engine.action.face_down': 'play face down',
+  'engine.action.skip': 'skip',
+  'engine.action.shuffle': 'shuffle',
+  'engine.action.swap': 'swap',
+  'engine.action.play': 'play',
+  'engine.action.rearrange_swap': 'keep swapping positions',
+  'engine.action.rearrange_done': 'finish this player\'s rearrangement',
+  'engine.action.keep': 'do not rearrange, continue',
+  'engine.action.give_up_control': 'give up control',
+  'engine.action.discard_hand': 'discard your hand',
+  'engine.action.order': 'layout {layout}',
+  'engine.action.num': '{n}',
+  'engine.action.proto': '{proto}',
+  'engine.action.rearrange_player': 'rearrange player {who}\'s protocols',
+  'engine.action.rearrange_player_locked': 'rearrange player {who}\'s protocols (locked)',
+  /* ENGINE-ACTION-KEYS-END */
 };

@@ -57,7 +57,7 @@ import { applyFxSettings } from './ui/fx-settings';
 //   本文件只做两件事：① 启动时 `initI18n(readLang(localStore))` 读一次已存的语言（**只读**）；
 //   ② `applyLangChange()` 在用户切语言时落盘 + 重画当前屏。方案见
 //   `docs/2026-10-01-新手引导与教学-方案.md` 的 §6.5 与 §7 的 P0 行。
-import { getLang, initI18n, setLang, t, type Lang } from './i18n';
+import { enginePromptTitle, getLang, initI18n, setLang, t, type Lang } from './i18n';
 import { openL1Store } from './ui/local-store-browser';
 import { renderLocalConsent, nextConsentStep } from './ui/local-consent';
 /**
@@ -4356,7 +4356,7 @@ function syncRearrangeModalForEffect(): void {
     effectRearrangeKey = `effect:${top.id}`;
     openControlRearrangeModal({
       getState: () => state,
-      title: prompt.title,
+      title: enginePromptTitle(prompt.title),
       submitLabel: t('main.rearrange.commit-label'),
       mode: 'draft',
       sides: [side],
