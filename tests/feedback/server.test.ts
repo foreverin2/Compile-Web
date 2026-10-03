@@ -422,7 +422,11 @@ describe('按 IP 每天的提交份数额度（2026-10-01 改口径）', () => {
 
   it('记账文件名换成 submits-（与旧口径的 files- 分开），旧文件不读也不删', () => {
     const dir = tempDir();
-    const t0 = new Date(2026, 9, 1, 10, 0, 0).getTime();
+    // ★ 2026-10-03：这里原先写死 `new Date(2026, 9, 1, …)`，与上面那一组同一个坑
+    // （`prune()` 会删掉早于昨天的 `submits-*.json`，写死的日期一过期就被当垃圾清掉，
+    // `q2.check()` 于是读到 0）。这条用例只关心**文件名口径与旧文件不被误读**，
+    // 与具体哪一天无关 ⇒ 夹具锚到真今天。
+    const t0 = TODAY;
     const day = rateLimit.dayKey(t0);
     const q = new rateLimit.SubmitQuota({ dir, perDay: 5 });
     q.record('1.1.1.1', t0);
