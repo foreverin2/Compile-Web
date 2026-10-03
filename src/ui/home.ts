@@ -68,6 +68,11 @@ export interface HomeNav {
    * 为什么不是宿主自己 `showToast` 一下：那个 toast 挂在 `document.body` 上，
    * 而 `renderHome` 第一句就是 `clearRoot(root)` 重画 —— 宿主先提示再进首页，
    * 提示会被同一 tick 里的重画闪掉。所以口径是"**交给首页，画完再发**"。
+   *
+   * ⚠️ ★ 2026-10-03：这个字段**只收字符串**（`renderHome` 与 `showToast` 各自还有一道
+   * 类型守卫）。原因是它曾经被一个**事件对象**顶替过：图鉴页的「返回主页」把 `back`
+   * 直接挂成点击监听器，点击事件顺着形参流到这里 ⇒ 屏上出现 `[object PointerEvent]`。
+   * 调用点已修（见 `renderLibrary`），但"这里只认字符串"这条口径留着。
    */
   initialToast?: string;
 }
@@ -219,8 +224,24 @@ function button(cls: string, label: string, onClick: () => void): HTMLButtonElem
   return b;
 }
 
-/** 简易 toast（提示条） */
+/**
+ * 简易 toast（提示条）。
+ *
+ * ## ★ 2026-10-03（用户 2026-10-02 报的缺陷）第二层：**第一形参只认字符串**
+ *
+ * 这个函数现在被本文件约十处调用，而它唯一的输入就是"要显示的那句话"。只要有一处调用
+ * 传进来的不是字符串，玩家屏幕上就会长出垃圾（真实缺陷：`showToast(PointerEvent)`
+ * ⇒ 棕色气泡里写着 `[object PointerEvent]`；见 `renderLibrary` 那一处的完整因果链）。
+ *
+ * 所以这里把住唯一入口：**不是字符串（或空串）就什么都不显示，并且静默返回**
+ * （不抛异常 —— 一条提示的显示不该把整帧渲染打断）。这一层是**兜底**，
+ * 真正该修的是调用点（本文件里已经各自包了一层箭头函数）；两边都要有腿。
+ *
+ * 为什么不"安全地渲染成空字符串"：那会留下一个空框（`.home-toast` 有边框与内边距），
+ * 屏上多一个说不清来历的小方块 —— "不显示"才是正确外观。
+ */
 function showToast(msg: string): void {
+  if (typeof msg !== 'string' || msg === '') return;
   const old = document.querySelector('.home-toast');
   if (old) old.remove();
   const t = el('div', 'home-toast', msg);
@@ -537,8 +558,14 @@ export function renderHome(root: HTMLElement, nav: HomeNav): void {
    * 落点必须在 `root.appendChild(screen)` 之后：`showToast` 挂的是 `document.body`，
    * 而本函数第一句 `clearRoot(root)` 会把 `#app` 清空重画 —— 画完再发才不会被同一 tick 闪掉。
    * 平时的首页没有这个字段（`undefined`）⇒ 一行也不发。
+   *
+   * ★ 2026-10-03：**只认字符串**。`initialToast` 的静态类型是 `string | undefined`，
+   * 但那拦不住运行期从 JS 侧传进来的东西 —— 真实缺陷就是这么发生的：某个"返回主页"的
+   * 按钮把回调直接挂成点击监听器，于是**事件对象**流到了这个形参上。
+   * 宿主那一侧（`src/main.ts` 的 `showHome`）也有同一道守卫，两处都在，是因为
+   * `renderHome` 是**对外导出的入口**（别的屏可以直接调它）。
    */
-  if (nav.initialToast !== undefined) showToast(nav.initialToast);
+  if (typeof nav.initialToast === 'string' && nav.initialToast !== '') showToast(nav.initialToast);
 }
 
 /* =====================================================================
@@ -679,7 +706,11 @@ export function renderModeSelect(root: HTMLElement, nav: ModeSelectNav): void {
    * 也就是说它是个重复入口；而它排在整页最下面，看着像"对所有模式生效"，玩家会以为联机也走它。
    * ⇒ 去掉这个按钮：开局入口就是那张热座卡（它还带着上面两个开关的当前状态）。
    */
-  actions.appendChild(button('btn', t('common.back-home'), nav.backHome));
+  // ★ 2026-10-03：同样**包一层**。宿主把 `backHome` 接成 `showHome`（见 `src/main.ts`
+  //   的 `showModeSelect`），直传回调的话这一下点击同样会把事件对象送到 `showHome` 的第一个
+  //   形参上 —— 与图鉴 / 规则那两处是**同一条因果链**，只是入口不同（详见 `renderLibrary`
+  //   里那一段说明）。
+  actions.appendChild(button('btn', t('common.back-home'), () => { nav.backHome(); }));
   /**
    * G5/T41（用户 2026-09-27 第 1 条）：**设备体检** —— 模式选择页最下方的一个跳转按钮。
    *
@@ -1624,7 +1655,20 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
   head.appendChild(
     el('div', 'subpage-sub', t('library.sub', { n: String(DEMO_PROTOCOLS.length) }))
   );
-  head.appendChild(button('btn', t('common.back-home'), back));
+  /**
+   * ★ 2026-10-03（用户 2026-10-02 报的缺陷）：**这里必须包一层箭头函数**。
+   *
+   * 改之前这一行是 `button('btn', t('common.back-home'), back)` —— 而 `button()` 把回调
+   * **原样**挂成点击监听器（`b.addEventListener('click', onClick)`），于是那一次点击把
+   * **事件对象**当成第一个实参传给了 `back`。宿主给 `renderLibrary` 的 `back` 是
+   * `showHome(initialToast?)`（见 `src/main.ts` 的 `openLibrary`）⇒ 事件对象成了
+   * `initialToast` ⇒ 首页画完之后 `showToast(event)` ⇒ 顶上弹出棕色气泡、里面写着
+   * `[object PointerEvent]`。
+   *
+   * 「返回上屏」这件事**本来就不该弹任何提示**（`back()` 不带参数 ⇒ `initialToast`
+   * 落到缺省值 `undefined`）⇒ 这里包一层、什么都不传，而不是"传一句对的文案"。
+   */
+  head.appendChild(button('btn', t('common.back-home'), () => { back(); }));
   screen.appendChild(head);
 
   // 按代筛选（2026-09-06 用户需求：同协议选择页的世代 chips）
@@ -2053,7 +2097,9 @@ export function renderRules(root: HTMLElement, back: () => void): void {
   const head = el('div', 'subpage-head');
   head.appendChild(el('h1', 'subpage-title', t('rules.title')));
   head.appendChild(el('div', 'subpage-sub', t('rules.sub')));
-  head.appendChild(button('btn', t('common.back-home'), back));
+  // ★ 2026-10-03：与 `renderLibrary` 那一处**同一个缺陷、同一个修法**（包一层，不把
+  //   点击事件当第一个实参传下去）。两条返回路径同形，改一条漏一条就是留着同一个坑。
+  head.appendChild(button('btn', t('common.back-home'), () => { back(); }));
   screen.appendChild(head);
 
   const grid = el('div', 'rules-grid');

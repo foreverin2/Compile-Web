@@ -5295,6 +5295,17 @@ function leaveHome(): void {
 }
 
 function showHome(initialToast?: string): void {
+  /**
+   * ★ 2026-10-03（修用户 2026-10-02 报的缺陷）：**这一行是那个"把事件当文案"缺陷的最后一道闸**。
+   *
+   * 缺陷现场：图鉴页的「返回主页」把 `back` 直接挂成了点击监听器 ⇒ 点击事件对象顺着
+   * `renderLibrary` 的 `back` 流回本函数，成了 `initialToast` ⇒ 首页顶上弹出棕色气泡
+   * `[object PointerEvent]`。调用点已经各自包了一层箭头函数（见 `src/ui/home.ts` 的
+   * `renderLibrary` / `renderRules` / `renderModeSelect`），这里再按**类型**把住一次：
+   * 只有字符串才往下传。`typeof` 判据在运行期有效，即使将来又有人把某个事件回调接到
+   * `showHome` 上，最坏也只是"少了一句提示"，不会在玩家屏幕上印出 `[object Xxx]`。
+   */
+  const toast = typeof initialToast === 'string' && initialToast !== '' ? initialToast : undefined;
   // ★ 2026-10-01（用户要求）：进首页时挂上 `Ctrl+Shift+O`（隐藏页入口）。
   //   幂等（`initFeedbackShortcut` 会先撤掉上一次那个）⇒ 反复进首页不会叠监听器；
   //   返回的卸载函数留在 `homeFeedbackShortcutOff`，由上面那个 `leaveHome()` 收尾。
@@ -5305,7 +5316,7 @@ function showHome(initialToast?: string): void {
      * `toast.tutorial`（"新手教程：待开发"）—— 与首页那个「新手教程」按钮**逐字同一句**。
      * 提示交给首页在画完之后发（见 `HomeNav.initialToast`）；平时这里是 `undefined`。
      */
-    initialToast,
+    initialToast: toast,
     startGame: () => { leaveHome(); showModeSelect(); },
     openLibrary: () => { leaveHome(); renderLibrary(root, showHome); },
     openRules: () => { leaveHome(); renderRules(root, showHome); },
