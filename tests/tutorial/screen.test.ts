@@ -1,9 +1,12 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { stripComments } from '../ui/source-text';
 import { EN, ZH } from '../../src/i18n';
 import { TUT_LEVELS } from '../../src/tutorial/levels';
+import type { TutSpot } from '../../src/tutorial/types';
+import { placeSpotBoxes, spotBoxStyle, unionRect } from '../../src/ui/tutorial-screen';
+import { installStubDom, makeStubEl, setStubRectFor, type StubNode } from '../ui/net-dom-stub';
 
 /**
  * ★ 2026-10-02（P2）：教学屏的**源码结构腿**与**文案腿**。
@@ -370,3 +373,193 @@ describe('★ 版式（源码腿）：浮层不挡住棋盘、类名不打架', 
     expect(SCREEN, '屏里出现了存储实现').not.toMatch(/localStorage|indexedDB|writeJson/);
   });
 });
+
+/**
+ * ★ 2026-10-02（**用户当天报的视觉缺陷**）：T0 的四个热点"搞错了 + 粘在上面"。
+ *
+ * 用户原话：「你看看教程页面的这个特效，是不是搞错了，另外这个特效也是**粘在上面**的」。
+ * 原实现是一张写死**视口百分比**的 `SPOT_BOX` 表（`position: fixed` 浮层上的绝对定位）：
+ *  1. 四个框与它们要标的元素（链路槽 / 协议卡 / 能量槽 / 控制组件）没有几何关系
+ *     —— 实测 T0@1584×1305："控制权"那个框落在棋盘右下角，"链路"那个框压在协议格中段；
+ *  2. 只在创建那一帧算一次 ⇒ 棋盘滚动、改窗口尺寸、整块缩放（触屏设备上
+ *     `phone-landscape.ts` 给 `#app` 挂 `transform: scale(k)`）之后，四个框仍钉在视口原处。
+ *
+ * 下面五条腿：几何出处（实测矩形 + 纯函数）、跟随的三档触发、**反向**（不许再出现百分比）、
+ * 以及"教学棋盘别带着首页那套内边距画"（那会让能量槽整块跑到视口外，"总值"没有可见目标）。
+ * 真的几何读数在真机上另测（CDP：四个热点 rect 与目标 rect 逐边偏差 ≤ 0.02px，含 1280×900 /
+ * 1920×940 / 1584×1305 三档换窗与滚动 400px 之后）。
+ */
+describe('★ T0 四个热点：几何量出来 + 跟着棋盘（用户 2026-10-02 报的缺陷）', () => {
+  it('热点位置不再写视口百分比（反向腿：把百分比写回去 ⇒ 当场红）', () => {
+    expect(SCREEN, '`SPOT_BOX` 那张百分比表又回来了').not.toContain('SPOT_BOX');
+    expect(SCREEN, '还在往热点上写百分比').not.toMatch(/style\.(left|top|width|height)\s*=\s*[^;\n]*%/);
+    // 正向锚点：几何必须从**实测矩形**出发（否则上面那条"不含百分比"可以靠"什么都不写"满足）
+    expect(SCREEN, '没有量目标的实测矩形').toMatch(/getBoundingClientRect\s*\(/);
+  });
+
+  it('四个热点各自指向真元素：亮着框的链路槽 / 协议卡格 / 能量槽 / 控制组件', () => {
+    const at = SCREEN.indexOf('const SPOT_TARGETS');
+    expect(at, '找不到 SPOT_TARGETS').toBeGreaterThan(0);
+    const block = SCREEN.slice(at, SCREEN.indexOf('};', at));
+    expect(block, '链路热点没有指向链路槽').toContain("'.stack-slot.self'");
+    expect(block, '协议热点没有指向协议格').toContain("'.protocol-cell'");
+    expect(block, '总值热点没有指向能量槽').toContain("'.battery'");
+    expect(block, '控制权热点没有指向控制组件').toContain("'.control-module'");
+    // 并集 / 换算必须走那两个纯函数（另写一遍就是第二份几何真相）
+    expect(SCREEN, '没有用并集纯函数').toMatch(/unionRect\(/);
+    expect(SCREEN, '没有用换算纯函数').toMatch(/spotBoxStyle\(/);
+  });
+
+  it('跟随走既有注册表（`registerFollow`，与 C4 对比条同一条路）+ 三档触发都在', () => {
+    expect(SCREEN, '热点层没有挂进跟随注册表').toMatch(/registerFollow\s*\(\s*spotLayer/);
+    expect(SCREEN, "没有从既有跟随模块 import").toMatch(/from '\.\/fx-follow'/);
+    // 触发档 ①：跟随管线本身由 render.ts 每帧 + main.ts 的滚动/缩放 rAF 驱动（不在本文件里）
+    // 触发档 ②：内容尺寸自己变了（图片加载把棋盘撑高）——实测首帧 226.67/行 → 290/行
+    expect(SCREEN, '没有盯内容尺寸变化（图片加载那一路会漏）').toMatch(/new ResizeObserver\(/);
+    expect(SCREEN, '内容尺寸观察者没有真的盯上 #app（只 new 不 observe 等于没接）')
+      .toMatch(/spotResize\?\.observe\(\s*root\s*\)/);
+    // 触发档 ③：整块缩放/平移（fit 改写 <html> 的 --t39-*，不改布局盒 ⇒ ResizeObserver 看不见）
+    expect(SCREEN, '没有盯 fit 缩放/平移').toMatch(/new MutationObserver\(/);
+    expect(SCREEN, 'fit 观察者没有真的盯上 <html> 的 style/class（只 new 不 observe 等于没接）')
+      .toMatch(/spotFitWatch\?\.observe\(\s*document\.documentElement\s*,\s*\{\s*attributes:\s*true\s*,\s*attributeFilter:\s*\[\s*'style'\s*,\s*'class'\s*\]\s*\}\s*\)/);
+    // 两个观察者都要在退出时断开（否则退出教程之后还在盯）
+    expect(SCREEN, '退出时没有断开内容尺寸观察者').toMatch(/spotResize\?\.disconnect\(\)/);
+    expect(SCREEN, '退出时没有断开 fit 观察者').toMatch(/spotFitWatch\?\.disconnect\(\)/);
+  });
+
+  it('教学屏不留首页的 `screen-home`（否则能量槽整块在视口外，"总值"热点没有可见目标）', () => {
+    expect(SCREEN, '没有摘掉首页那个类').toMatch(/classList\.remove\(\s*'screen-home'\s*\)/);
+  });
+});
+
+describe('★ 热点几何的纯函数（真跑，不是文本腿）', () => {
+  it('并集罩住每一个目标；空集与零面积 ⇒ null（调用方据此保持原位）', () => {
+    const a = { left: 0, top: 145, right: 567, bottom: 435 };
+    const b = { left: 0, top: 445, right: 567, bottom: 735 };
+    const c = { left: 0, top: 745, right: 567, bottom: 1035 };
+    expect(unionRect([a, b, c]), '三个链路槽的并集不对').toEqual({ left: 0, top: 145, right: 567, bottom: 1035 });
+    expect(unionRect([]), '空集没有回 null').toBeNull();
+    expect(unionRect([{ left: 5, top: 5, right: 5, bottom: 5 }]), '零面积（未布局/隐藏）没有回 null').toBeNull();
+    // 反向：只取第一个（或只取"最后一个"）都必须红 —— 这条把"并集"与"挑一个"分开
+    expect(unionRect([a, b, c])).not.toEqual(a);
+  });
+
+  it('换算成相对热点层的 px（两位小数；层有内边距/边框时也不会静默错位）', () => {
+    const base = { left: 0, top: 0, right: 1584, bottom: 1305 };
+    expect(spotBoxStyle({ left: 100, top: 157, right: 567, bottom: 1047 }, base))
+      .toEqual({ left: '100.00px', top: '157.00px', width: '467.00px', height: '890.00px' });
+    // 层自己偏了 12px（浮层一旦有内边距/边框），热点要跟着减掉
+    const shifted = { left: 12, top: 12, right: 1596, bottom: 1317 };
+    const shiftedStyle = spotBoxStyle({ left: 112, top: 169, right: 579, bottom: 1059 }, shifted);
+    expect(shiftedStyle, '层偏移时不该回 null').not.toBeNull();
+    expect(shiftedStyle?.left).toBe('100.00px');
+    expect(spotBoxStyle(null, base), '无效盒子必须回 null（调用方保持原位）').toBeNull();
+  });
+});
+
+/**
+ * ★ 几何**行为腿**（`tests/ui/net-dom-stub` 的桩 DOM 真跑 `placeSpotBoxes`）。
+ *
+ * 为什么必须有：上面那两条是纯函数腿，"屏真的把实测矩形写进热点"这一层是**接线**，
+ * 只有真跑一次才能证明（本仓没有 jsdom ⇒ 用桩；桩的边界见 `net-dom-stub.ts` 头注：
+ * 矩形是**测试喂的常量**，不校验它与树的任何关系）。真浏览器里的读数另见 CDP。
+ */
+describe('★ 几何行为腿（桩 DOM 真跑 placeSpotBoxes）', () => {
+  let restore: (() => void) | null = null;
+  let body: StubNode;
+  let layer: StubNode;
+  const spots = new Map<TutSpot, StubNode>();
+
+  beforeEach(() => {
+    restore = installStubDom();
+    body = document.body as unknown as StubNode;
+    const el = (cls: string, rect: { left: number; top: number; width: number; height: number }): StubNode => {
+      const n = makeStubEl('div');
+      n.className = cls;
+      setStubRectFor(n, rect);
+      body.appendChild(n);
+      return n;
+    };
+    // 三条自己侧的链路槽（与真机 1584×1305 的读数同形：x 100…567、行高 290、行距 300）
+    el('stack-slot self', { left: 100, top: 157, width: 467, height: 290 });
+    el('stack-slot self', { left: 100, top: 457, width: 467, height: 290 });
+    el('stack-slot self', { left: 100, top: 757, width: 467, height: 290 });
+    // 六格协议卡
+    for (const top of [157, 457, 757]) {
+      el('protocol-cell', { left: 577, top, width: 210, height: 290 });
+      el('protocol-cell', { left: 797, top, width: 210, height: 290 });
+    }
+    // 自己侧三个能量槽（另外一侧刻意放一个更靠右的，验证"只取亮着框那一侧"）
+    el('battery', { left: -18, top: 165, width: 92, height: 274 });
+    el('battery', { left: -18, top: 465, width: 92, height: 274 });
+    el('battery', { left: -18, top: 765, width: 92, height: 274 });
+    el('battery', { left: 1511, top: 164, width: 92, height: 276 });
+    const mod = el('control-module', { left: 512, top: 14, width: 560, height: 127 });
+    mod.classList.add('neutral');
+    layer = el('tutorial-spots', { left: 0, top: 0, width: 1584, height: 1305 });
+    for (const spot of ['link', 'protocol', 'threshold', 'control'] as TutSpot[]) {
+      const n = makeStubEl('button');
+      n.className = 'tutorial-spot';
+      n.dataset.spot = spot;
+      layer.appendChild(n);
+      spots.set(spot, n);
+    }
+    // 自己侧能量槽/链路槽要带上 data-player（`spotNodes` 按它挑"亮着框那一侧"）
+    for (const n of body.children) if (n.classList.contains('battery')) n.dataset.player = n.dataset.player ?? '0';
+    for (const n of body.children) if (n.classList.contains('stack-slot')) n.dataset.player = '0';
+    // 右侧那个能量槽属于对手
+    const bats = body.children.filter((n) => n.classList.contains('battery'));
+    bats[bats.length - 1].dataset.player = '1';
+  });
+
+  afterEach(() => { restore?.(); restore = null; spots.clear(); });
+
+  /** 把热点写出来的内联 px 读成四个数（缺一个就当 NaN，测试里立刻炸出来）。 */
+  const box = (spot: TutSpot): [number, number, number, number] => {
+    const s = spots.get(spot)!.style as Record<string, string>;
+    return [Number.parseFloat(s.left), Number.parseFloat(s.top), Number.parseFloat(s.width), Number.parseFloat(s.height)];
+  };
+
+  it('四个热点分别落在各自目标的并集上（逐边偏差 ≤ 0.02px）', () => {
+    placeSpotBoxes(layer as unknown as HTMLElement, spots as unknown as Map<TutSpot, HTMLElement>);
+    expect(box('link'), '链路热点没有罩住三个链路槽的并集').toEqual([100, 157, 467, 890]);
+    expect(box('protocol'), '协议热点没有罩住六格协议卡的并集').toEqual([577, 157, 430, 890]);
+    // 只取自己侧（−18…74）：把对手侧那个也算进来会让框横跨整块棋盘、压住另外两个热点
+    expect(box('threshold'), '总值热点没有只取亮着框那一侧的能量槽').toEqual([-18, 165, 92, 874]);
+    expect(box('control'), '控制权热点没有罩住控制组件').toEqual([512, 14, 560, 127]);
+  });
+
+  it('目标整体平移 ⇒ 热点跟着平移同一个量（"不粘在屏幕上"的机检形态）', () => {
+    placeSpotBoxes(layer as unknown as HTMLElement, spots as unknown as Map<TutSpot, HTMLElement>);
+    const before = box('link');
+    // 模拟"棋盘被滚动/缩放了"：所有目标的矩形一起平移（真实浏览器里就是 getBoundingClientRect
+    // 读数的整体变化 —— 跟随管线每帧重跑这一段，所以热点必须跟着走）
+    const dx = 37;
+    const dy = -220;
+    for (const n of body.children) {
+      const r = (n as unknown as { getBoundingClientRect(): { left: number; top: number; width: number; height: number } }).getBoundingClientRect();
+      if (n.classList.contains('stack-slot') || n.classList.contains('protocol-cell')
+        || n.classList.contains('battery') || n.classList.contains('control-module')) {
+        setStubRectFor(n, { left: r.left + dx, top: r.top + dy, width: r.width, height: r.height });
+      }
+    }
+    placeSpotBoxes(layer as unknown as HTMLElement, spots as unknown as Map<TutSpot, HTMLElement>);
+    const after = box('link');
+    expect([after[0] - before[0], after[1] - before[1]], '热点没有跟着目标平移同一个量')
+      .toEqual([dx, dy]);
+    expect(after[2], '平移不该改变宽高').toBe(before[2]);
+  });
+
+  it('目标取不到（重画中途 / 这一族元素不在）⇒ 保持上一次的位置，不清零', () => {
+    placeSpotBoxes(layer as unknown as HTMLElement, spots as unknown as Map<TutSpot, HTMLElement>);
+    const before = box('control');
+    // 把控制组件从树里摘掉（重画中途就是这种状态）：桩的 `remove()` 真的会从父节点摘掉自己。
+    // ⚠️ 强转形状与 `tests/ui/net-conn-line.test.ts:281` 同款（桩的 `remove` 在接口上是 `unknown`）。
+    const mod = body.children.find((n) => n.classList.contains('control-module'))!;
+    (mod as unknown as { remove(): void }).remove();
+    expect(body.children.includes(mod), '桩的 remove() 没把它摘下来 ⇒ 这条腿会假绿').toBe(false);
+    placeSpotBoxes(layer as unknown as HTMLElement, spots as unknown as Map<TutSpot, HTMLElement>);
+    expect(box('control'), '目标没了就把热点清零/跳到左上角了').toEqual(before);
+  });
+});
+

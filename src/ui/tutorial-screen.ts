@@ -37,6 +37,10 @@ import { advance, readProgress, restart } from '../tutorial/progress';
 import type { TutChoiceSeen, TutLevelId, TutOp, TutSpot, TutUiSeen } from '../tutorial/types';
 import { TUT_UI_NONE, triggersSeen } from '../tutorial/types';
 import { onLangChange, t } from '../i18n';
+// ★ 2026-10-02（用户当天报的缺陷）：T0 的四个热点改走本仓既有的**跟随注册表**
+// （`render.ts` 每帧 + `main.ts` 的滚动/缩放 rAF 各调一次 `syncFollowers()`）。
+// 与 `gen3-control.ts` 的 C4 对比条同一套做法，不新造第二套定时/重定位管线。
+import { registerFollow } from './fx-follow';
 
 /** 退出教程（回首页）；由宿主注入 —— 屏自己不认识首页 */
 export interface TutorialNav {
@@ -49,6 +53,144 @@ export interface TutorialNav {
 /** 屏的返回值：卸载（撤监听 + 摘浮层 + 清 render.ts 的模块态） */
 export interface TutorialHandle {
   close(): void;
+}
+
+/* ─────────────────── T0 的四个热点：几何（量出来，不是猜出来） ─────────────────── */
+
+/**
+ * ★ 2026-10-02（**用户当天报的视觉缺陷**，原话：「你看看教程页面的这个特效，是不是搞错了，
+ * 另外这个特效也是**粘在上面**的」）：四个热点改成**按目标元素的实测矩形**摆。
+ *
+ * ## 原实现错在哪
+ *
+ * 原来是一张 `SPOT_BOX` 表：`left/top/width/height` 四个**写死的视口百分比**，挂在
+ * `.tutorial-overlay`（`position: fixed; inset: 0`）上。两个后果，正是用户说的那两句：
+ *  1. **"是不是搞错了"**：百分比是照某一次窗口尺寸目测的，与协议卡 / 链路槽 / 能量槽（总值）/
+ *     控制组件的真实矩形**没有任何关系**。实测（T0，1584×1305，无缩放）：
+ *      · 链路槽实测 (0,145)–(567,1035)，而"链路"热点在 (601.9,339.3) 380.2×522 —— 罩的是
+ *        协议格那一列的中段；
+ *      · 协议格实测 (577,145)–(1007,1035)，而"协议卡"热点只有 117.4 高，只压住第一行的下半截；
+ *      · 控制组件实测 (569.6,2)–(1350.3,129)，而"控制权"热点在 (997.9,522) —— 棋盘右下角；
+ *      · 能量槽（"这条线的总值"）实测在 x=−118 与 x=1611（都在视口外），而"总值"热点在 (997.9,339.3)。
+ *  2. **"粘在上面"**：fixed 浮层里的百分比点位**不跟棋盘走**。棋盘一动就错位，最狠的一档是
+ *     `#app` 被整块缩放（触屏设备上 `phone-landscape.ts` 的 `t44-fit-wide` 会给 `#app` 挂
+ *     `transform: translate(tx,ty) scale(k)`）—— 实测 1520×752 粗指针下 k≈0.769、ty≈−194，
+ *     棋盘整块缩到中间，而热点仍按视口百分比钉在原处（用户截图里那几个"罩住 SPIRIT 卡 /
+ *     向右延展到 WATER 两列"的框，就是这么来的）。
+ *
+ * ## 现在怎么算
+ *
+ * 每个热点给出它**要罩住的真元素**（选择器按顺序取第一组非空的命中），`placeSpotBoxes()`
+ * 每次重画 / 滚动 / 缩放都重量一遍 `getBoundingClientRect()`、取并集包围盒写内联 px，
+ * 并经 `registerFollow` 挂进既有跟随管线。
+ */
+const SPOT_TARGETS: Readonly<Record<TutSpot, readonly string[]>> = {
+  /** 链路：牌打出来叠的那一块（亮着框的链路槽；拿不到 `.self` 就退回全部槽） */
+  link: ['.stack-slot.self', '.stack-slot'],
+  /** 协议卡：每条链路挂着的那两张 */
+  protocol: ['.protocol-cell'],
+  /** 总值：这条线的能量槽（10 格 = 10 分） */
+  threshold: ['.battery'],
+  /** 控制权：顶部那条控制轨/控制组件 */
+  control: ['.control-module', '.control-track'],
+};
+
+/**
+ * 某个热点当前要罩住的元素：`SPOT_TARGETS` 里**第一组非空**的选择器命中集。
+ *
+ * ⚠️ `threshold` 多一道筛：只取**亮着框那一侧**的能量槽（与 `link` 同一侧）。
+ * 双方六个能量槽的并集**横跨整块棋盘**（实测 x=−118…2039），那样画出来的框会把
+ * `link` / `protocol` 两个热点整块压住 —— 两个都点不到，T0 直接卡死。
+ */
+function spotNodes(spot: TutSpot): HTMLElement[] {
+  const pick = (...selectors: readonly string[]): HTMLElement[] => {
+    for (const sel of selectors) {
+      const hit = [...document.querySelectorAll<HTMLElement>(sel)];
+      if (hit.length > 0) return hit;
+    }
+    return [];
+  };
+  if (spot !== 'threshold') return pick(...SPOT_TARGETS[spot]);
+  const all = pick(...SPOT_TARGETS.threshold);
+  const side = document.querySelector<HTMLElement>('.stack-slot.self')?.dataset.player;
+  const mine = side === undefined ? [] : all.filter((node) => node.dataset.player === side);
+  return mine.length > 0 ? mine : all;
+}
+
+/** 视口坐标下的矩形（`getBoundingClientRect()` 的四边；只取用得到的四个字段） */
+export interface SpotRect {
+  readonly left: number;
+  readonly top: number;
+  readonly right: number;
+  readonly bottom: number;
+}
+
+/**
+ * 一组矩形的**并集包围盒**（导出：几何是纯函数，能在 node 下单测 —— 本仓没有 jsdom）。
+ *
+ * 空数组、或全是零面积（未布局 / `display:none`）⇒ `null`：调用方据此**保持上一次的位置**，
+ * 不清零、不跳到 (0,0)（跳到左上角会在棋盘重画的那一帧闪一下）。
+ */
+export function unionRect(rects: readonly SpotRect[]): SpotRect | null {
+  let left = Infinity;
+  let top = Infinity;
+  let right = -Infinity;
+  let bottom = -Infinity;
+  let n = 0;
+  for (const r of rects) {
+    if (!(r.right > r.left) || !(r.bottom > r.top)) continue;
+    left = Math.min(left, r.left);
+    top = Math.min(top, r.top);
+    right = Math.max(right, r.right);
+    bottom = Math.max(bottom, r.bottom);
+    n += 1;
+  }
+  return n === 0 ? null : { left, top, right, bottom };
+}
+
+/**
+ * 把并集盒换算成**相对热点层**（`base`）的内联样式（px）。
+ *
+ * 为什么减去 `base`：热点是热点层里的 `position: absolute` 子元素，`getBoundingClientRect()`
+ * 给的是视口坐标。热点层现在恒等于视口（`inset: 0` 的 fixed 浮层），但减去它是**免费的**，
+ * 而且浮层一旦有了内边距/边框就不会静默错位。
+ */
+export function spotBoxStyle(
+  box: SpotRect | null,
+  base: SpotRect,
+): { left: string; top: string; width: string; height: string } | null {
+  if (box === null) return null;
+  return {
+    left: `${(box.left - base.left).toFixed(2)}px`,
+    top: `${(box.top - base.top).toFixed(2)}px`,
+    width: `${(box.right - box.left).toFixed(2)}px`,
+    height: `${(box.bottom - box.top).toFixed(2)}px`,
+  };
+}
+
+/**
+ * 把四个热点摆到各自目标的**实测矩形**上。
+ *
+ * 调用时机 = 本仓既有的跟随管线（`registerFollow`）：`renderApp` 每帧末尾、以及
+ * `main.ts` 的滚动/缩放 rAF 各调一次 `syncFollowers()`。所以滚动、改窗口尺寸、
+ * 棋盘重画（换关 / 动作后重画）之后它都会重跑 —— 这正是"不再粘在屏幕上"的那一半。
+ *
+ * 导出是为了让几何有**真跑的行为腿**（`tests/tutorial/screen.test.ts` 用本仓的 DOM 桩
+ * 喂一组矩形，断言写出来的四个 px 值），不是给别的调用方用的。
+ */
+export function placeSpotBoxes(layer: HTMLElement, spots: ReadonlyMap<TutSpot, HTMLElement>): void {
+  // 热点层在非 T0 关卡是 `[hidden]`（`display:none`）：此时量出来的目标矩形没有意义，直接跳过。
+  if (layer.hidden) return;
+  const base = layer.getBoundingClientRect();
+  for (const [spot, node] of spots) {
+    const style = spotBoxStyle(unionRect(spotNodes(spot).map((el) => el.getBoundingClientRect())), base);
+    // 目标还没渲染出来（重画中途）/ 这一关没有这一族元素 ⇒ 保持上一次的位置
+    if (style === null) continue;
+    node.style.left = style.left;
+    node.style.top = style.top;
+    node.style.width = style.width;
+    node.style.height = style.height;
+  }
 }
 
 function el(tag: string, cls: string, text?: string): HTMLElement {
@@ -67,14 +209,6 @@ function button(cls: string, label: string, onClick: () => void): HTMLButtonElem
   return b;
 }
 
-/** T0 热点在浮层上的位置（百分比；`left/top` 是左上角，`w/h` 是宽高） */
-const SPOT_BOX: Readonly<Record<TutSpot, { left: string; top: string; w: string; h: string }>> = {
-  link: { left: '38%', top: '26%', w: '24%', h: '40%' },
-  protocol: { left: '38%', top: '16%', w: '24%', h: '9%' },
-  threshold: { left: '63%', top: '26%', w: '12%', h: '12%' },
-  control: { left: '63%', top: '40%', w: '12%', h: '12%' },
-};
-
 /**
  * 挂载教学屏。
  *
@@ -83,6 +217,17 @@ const SPOT_BOX: Readonly<Record<TutSpot, { left: string; top: string; w: string;
  * @param nav 宿主接缝（退出 / 进度落盘）
  */
 export function mountTutorial(root: HTMLElement, store: LocalStore, nav: TutorialNav): TutorialHandle {
+  /**
+   * ★ 2026-10-02（同一次缺陷的连带修复）：**别带着首页那套内边距画棋盘**。
+   *
+   * 教学屏用的是真对局那一块棋盘（`renderApp`），但本屏是从首页点进来的 —— 那一刻 `#app`
+   * 上还留着首页的 `screen-home`（`styles.css` 的 `#app.screen-home { padding: 0 }`）。
+   * 内边距一清零，链路槽最外侧的**能量槽**（"这条线的总值"）整块跑到视口之外：实测 1584 宽
+   * 时六个 `.battery` 分别在 x=−118 与 x=1611（视口是 0…1584）⇒ **一个都看不见**，
+   * 于是"总值"这个热点在屏上根本没有可见目标可罩（真对局里它们是可见的：`#app` 有
+   * `padding: 0 100px`，能量槽只探出去 20px）。这一行让教学棋盘与真对局棋盘同一套版面。
+   */
+  root.classList.remove('screen-home');
   /** 本次进入从哪一关开始（进度里那一关；「从头开始」会就地改它并重开本屏） */
   let levelId: TutLevelId = readProgress(store).current;
   /** 当前这局的引擎状态 */
@@ -287,15 +432,11 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
   const spotLayer = el('div', 'tutorial-spots');
   const spotEls = new Map<TutSpot, HTMLElement>();
   for (const spot of TUT_SPOTS) {
-    const box = SPOT_BOX[spot];
     const b = document.createElement('button');
     b.className = 'tutorial-spot';
     b.type = 'button';
     b.dataset.spot = spot;
-    b.style.left = box.left;
-    b.style.top = box.top;
-    b.style.width = box.w;
-    b.style.height = box.h;
+    // 位置**不在这里写**：由 `placeSpotBoxes()` 按目标的实测矩形每帧摆（见本文件顶部那段说明）
     b.addEventListener('click', () => {
       spotsDone.add(spot);
       // 点过之后提示区显示**这个区域是什么**（四个区域各一句）
@@ -309,6 +450,42 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
   overlay.appendChild(spotLayer);
   overlay.appendChild(panel);
   document.body.appendChild(overlay);
+  /**
+   * 挂进跟随注册表：`renderApp` 每帧末尾与 `main.ts` 的滚动/缩放 rAF 都会调 `syncFollowers()`
+   * ⇒ 重画、滚动、改窗口尺寸之后热点都在它目标的**当前位置**上（不再"粘在屏幕上"）。
+   * 注册一次即可；层被 `close()` 摘掉之后 `syncFollowers()` 自己会把它剔出注册表。
+   */
+  registerFollow(spotLayer, (node) => { placeSpotBoxes(node, spotEls); });
+  /**
+   * ★ 2026-10-02（同一处缺陷的第二个触发条件）：**版面自己变了也要重量一次**。
+   *
+   * 跟随管线只认"重画 / 滚动 / 缩放"，可是**图片加载**会把棋盘撑高：实测第一次进教学时，
+   * 首帧量到的三行行高是 **226.67**（协议卡图还没落地），图一加载完就长到 **290**
+   * ⇒ 只在那帧量过的热点会**短 210px**；而 T0 这一屏在整关期间不重画、玩家也没滚动，
+   * 于是那个错就一直挂着（实测：不滚一下就一直是 680px 高，滚动一次才补成 890px）。
+   *
+   * `ResizeObserver` 盯 `#app` 的外框：内容尺寸一变就重新量。窗口尺寸那一路仍由
+   * `main.ts` 的滚动/缩放 rAF 管（两条都留着，互不替代）。老浏览器没有这个 API 就退化成
+   * 只有跟随管线那一档（进入教学前的那次加载通常已经完成，退化档也能对上）。
+   */
+  const spotResize = typeof ResizeObserver === 'function'
+    ? new ResizeObserver(() => { placeSpotBoxes(spotLayer, spotEls); })
+    : null;
+  spotResize?.observe(root);
+  /**
+   * ★ 2026-10-02（同一处缺陷的第三个触发条件）：**整块棋盘被缩放/平移**。
+   *
+   * 触屏设备上 `phone-landscape.ts` 的 `t44-fit-wide` 会给 `#app` 挂
+   * `transform: translate(tx,ty) scale(k)`（写成 `<html>` 上的 `--t39-k/-tx/-ty`
+   * 与那个类），把棋盘整块缩到中间。**transform 不改布局盒** ⇒ `ResizeObserver` 看不见它，
+   * 而这一刻既没有重画也没有滚动 —— 实测（1520×752 粗指针）：热点会停在未缩放的位置上
+   * （偏差最大 444.8px），一直要到玩家滚一下才补正。
+   * 所以再盯一眼 `<html>` 的 `style`/`class`：fit 一变就重新量（拖动平移也走这一路）。
+   */
+  const spotFitWatch = typeof MutationObserver === 'function'
+    ? new MutationObserver(() => { placeSpotBoxes(spotLayer, spotEls); })
+    : null;
+  spotFitWatch?.observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'class'] });
 
   /** 热点被点之后显示哪一句（四个区域各一句） */
   function spotText(spot: TutSpot): string {
@@ -663,6 +840,8 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
   return {
     close() {
       zoomWatcher.disconnect();
+      spotResize?.disconnect();
+      spotFitWatch?.disconnect();
       document.removeEventListener('click', onDocClickCapture, true);
       offLang();
       overlay.remove();
