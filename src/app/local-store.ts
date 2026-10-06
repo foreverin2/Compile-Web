@@ -515,9 +515,12 @@ export function writePoolPreset(store: LocalStore, choice: PoolChoice): WriteRes
  * ⚠️ 与 `src/tutorial/levels.ts` 的 `TUT_LEVELS` 是**两份**清单，这是分层的代价：
  * `src/app/**` 是纯层，不许 import UI/教学那一层（那条依赖方向反过来会让纯层跑不起来）。
  * 两份"漂了"的风险由 `tests/tutorial/levels.test.ts` 的一条腿兜住（它同时 import 两边比对）。
+ *
+ * ★ 2026-10-06：`T7a`（牌能盖牌）插在 `T6` 与 `T7` 之间 —— 与 `TUT_LEVELS` 的**顺序**一致；
+ * 它是个新 id，所以老进度里的 `current` / `done` 照旧指向原来那几课。
  */
 const TUTORIAL_LEVEL_IDS: readonly string[] = [
-  'S0', 'T0', 'T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8', 'T9', 'T10', 'T11', 'T12', 'T13',
+  'S0', 'T0', 'T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7a', 'T7', 'T8', 'T9', 'T10', 'T11', 'T12', 'T13',
 ];
 
 /**

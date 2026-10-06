@@ -29,6 +29,13 @@ const gameCore = read('core/game.ts');
 const resolveCore = read('core/effects/resolve.ts');
 const renderTs = read('ui/render.ts');
 const mainTs = read('main.ts');
+/**
+ * ★ 2026-10-06：常驻 FX 层"滚动/缩放重定位"的清单从 `main.ts` 内联搬到了
+ * `src/ui/fx-persistent-sync.ts`（**唯一一份**：main.ts 的 rAF 与教学屏的 onViewportMove 都调它，
+ * 否则教学屏里 `render.ts` 那一族没人重定位 —— 用户报的"冰1 滑一下就没了"就是那么来的）。
+ * 下面两条源码腿的判据面跟着搬，守的还是同一件事："这一族真的接进了滚动/缩放那一趟"。
+ */
+const fxSyncTs = read('ui/fx-persistent-sync.ts');
 const effectsTs = read('ui/effects/index.ts');
 
 describe('批次 D 守卫：控制权族 + 常驻层', () => {
@@ -54,7 +61,11 @@ describe('批次 D 守卫：控制权族 + 常驻层', () => {
   it('常驻 sync 已接进每帧渲染管线 + 随滚动重定位 + 随局清理', () => {
     expect(renderTs, 'render.ts 未调用 syncGen3Persistent').toContain('syncGen3Persistent(s);');
     expect(renderTs, 'resetUiState 未清理 3代常驻层').toContain('clearGen3Persistent();');
-    expect(mainTs, '滚动/缩放重定位未带 3代常驻层').toContain('syncGen3Persistent(state);');
+    // ★ 2026-10-06：滚动/缩放那一趟的清单在 `fx-persistent-sync.ts`（唯一一份）
+    expect(fxSyncTs, '滚动/缩放重定位未带 3代常驻层').toContain('syncGen3Persistent(s);');
+    // 而"喂哪一份局面"在 main.ts：声明过本屏局面就喂它（教学屏那一路；没声明时逐字退回 state）
+    expect(mainTs, 'main.ts 的滚动/缩放 rAF 没有经过局面声明口（教学屏的层会被按外来局面删掉）')
+      .toContain('syncPersistentFx(boardStateOf(state))');
     // 统一 prune：各 sync 返回自己的 active 键（否则会互相删层）
     expect(controlTs).toMatch(/syncEnvy0Absorb\(s\),\s*\.\.\.syncWrath0Cull\(s\)/);
     expect(controlTs).toContain('pruneAll(active)');
@@ -227,7 +238,8 @@ describe('批次 D 守卫：控制权族 + 常驻层', () => {
     expect(controlTs, 'sloth0 的覆盖者连线仍按 rect 条件创建').not.toMatch(/if \(cr\) rec\.node\.appendChild\(el\('i', 'g3sync-sloth0-link'\)\)/);
     expect(controlTs, 'inertia0 的栅格仍按 rect 条件创建').not.toMatch(/if \(!r\) continue;\s*const grid = el\('i', 'g3sync-inertia0-grid'\)/);
     // ② 多元3 常驻层（body 级 fixed）此前只在 renderApp 里同步 → 滚动/缩放时粘在旧坐标
-    expect(mainTs, 'syncDiversity3Fx 未接进滚动/缩放重定位').toMatch(/syncWarBlades\(state\);[\s\S]{0,400}syncDiversity3Fx\(state\);/);
+    //    ★ 2026-10-06：清单在 `fx-persistent-sync.ts`（唯一一份，教学屏也调它）
+    expect(fxSyncTs, 'syncDiversity3Fx 未接进滚动/缩放重定位').toMatch(/syncWarBlades\(s\);[\s\S]{0,400}syncDiversity3Fx\(s\);/);
     // ③ 联合1 编译光柱不得回退到"文档里第一个 .protocol-holder"（会锚到不相干的协议）
     expect(read('ui/fx-gen2.ts'), 'fx-gen2 仍有 .protocol-holder 全局回退').not.toContain("?? document.querySelector<HTMLElement>('.protocol-holder')");
   });

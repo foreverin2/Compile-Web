@@ -42,7 +42,9 @@ import { DEMO_PROTOCOLS } from '../data/demo';
 import type { Card, GameState, Line, PlayerId } from '../core/models/types';
 // ★ 2026-10-06：T9 那两张演示牌的 defId 与判据共用一处定义（理由见 `judge.ts` 的常量注释）——
 //   两处各写一遍字符串，改了一边另一边会静默失配（`revealSeen()` 是按逐字日志匹配的）。
-import { T9_FLIP_DEF, T9_REVEAL_DEF } from './judge';
+//   同一条纪律也用在 T6 的"生产未公开信息"那张牌上（`T6_SECRET_*_UID`）与 T7a 那两张
+//   （`T7A_*_UID`，判据要按 uid 认"谁被盖住了"）。
+import { T6_SECRET_DECK_UID, T6_SECRET_HAND_UID, T7A_OVER_UID, T7A_UNDER_UID, T9_FLIP_DEF, T9_REVEAL_DEF } from './judge';
 import type { TutLevelId } from './types';
 
 /** 造一张卡（与 `tests/helpers.ts` 的 `makeCard` 同形；本模块不 import 测试代码） */
@@ -280,21 +282,72 @@ export function buildLevelState(id: TutLevelId): GameState {
   }
   if (id === 'T6') {
     /**
-     * T6 反面牌可视规则：**两个对照就摆在自己场上的线 0 与线 1**。
+     * T6 反面牌可视规则。
      *
-     *  - 线 0：`secret` **未置**（= 从手牌打出的反面牌 / 已公开过的）⇒ **能看正面**；
-     *  - 线 1：`secret: true`（= 被效果从牌库召唤到场上的反面牌）⇒ **不能看正面**。
+     * ★ 2026-10-06（**用户口径**：「第八关只教了玩家区分公开信息与未公开信息的查看规则，
+     * 没有教什么情况下会导致未公开信息的产生，请你先指挥玩家打出对应的卡牌，使场上能够出现
+     * 未公开信息的卡牌，然后再让玩家去区分」）⇒ 这一关现在是**两步**：
      *
-     * 判据读的是"详情里有没有 `.zoom-peek-btn`"（`render.ts:418` 的 `peek` 实参决定），
-     * 纯函数镜像见 `types.ts` 的 `canPeekFaceDown()`（有源码腿与 `render.ts` 逐字比对）。
+     *  1. **先造出"未公开信息"**：玩家自己打出 `water-1`（中指令「在另两列各以反面打出你牌堆顶
+     *     的牌」，`water.ts:16-22`），它的 op 是 `playTopDeck`（`resolve.ts:578-590`：
+     *     `card.faceUp = false`、`card.secret = true`）⇒ 场上**真的出现一张** `secret` 反面牌；
+     *  2. **再去看两个对照**：线 1 那张（牌库来源、`secret`）**不能看**，线 3 那张（从手牌反面
+     *     打出、`secret` 未置）**能看**。
+     *
+     * ## 摆法的两处取舍（都是实测读数，不是随手放的）
+     *
+     *  - **牌库只留一张**：`water-1` 的循环对"另两列"逐列 `deckTopAvailable` 守卫
+     *    （`water.ts:19`：牌库空 ⇒ 剩余线 fizzle）⇒ 只落一张，而且落的是**第一列 = 线 1**
+     *    （`[0,1,2].filter(l => l !== 源线)` 的第一个）。实测：打在线 2 之后，线 1 拿到那张
+     *    `spirit-4`（`faceUp:false` + `secret:true`），线 3 原样不动。
+     *  - **源线选线 2（流水协议线）**：正面打出只能进自己协议那条线（`isPlayableFaceUp`）
+     *    ⇒ `water-1` 必须打在线 2，于是"另两列"正好是线 1 与线 3 —— 两张对照牌一条线上各一张，
+     *    都能双击到（不互相压住）。
+     *
+     * 判据读的是两样东西（少一样都不算过，`judge.ts` 的 T6 分支）：
+     *  - **状态差分**：那张牌库顶的卡真的落在线 1、反面、`secret === true`；
+     *  - **UI 差分**：详情里有/没有 `.zoom-peek-btn`（`render.ts:418` 的 `peek` 实参决定），
+     *    纯函数镜像见 `types.ts` 的 `canPeekFaceDown()`（有源码腿与 `render.ts` 逐字比对）。
      */
     const s = controlledGame('tutorial-T6', ['spirit', 'water', 'darkness']);
-    s.players[0].hand = [];
+    // 能看的那张：反面、非 secret（从手牌打出的反面牌就是这个形态）—— 线 3（黑暗协议线）
+    s.players[0].stacks[2] = [card('t6f-open', 'darkness-3', 0, 'field', false, 2, 0)];
+    // 手里那张"生产未公开信息"的牌：流水1（打出 ⇒ 牌库顶那张反面出场、带上 secret）
+    s.players[0].hand = [card(T6_SECRET_HAND_UID, 'water-1', 0, 'hand', true)];
+    // 牌库只有这一张 ⇒ 它的中指令只落一列（线 1），线 3 因此保得住那个"能看"的对照
+    s.players[0].deck = [card(T6_SECRET_DECK_UID, 'spirit-4', 0, 'deck', false)];
+    return s;
+  }
+  if (id === 'T7a') {
+    /**
+     * ★ 2026-10-06（用户口径）T7a「牌能盖牌」：**只用己方场上的例子**讲覆盖。
+     *
+     * 用户原话：「先要通过己方场上的例子告诉玩家卡牌之间的覆盖效果，然后才进入第二个小关卡」。
+     *
+     * ## 摆法（两张牌就够，实测读数见下）
+     *
+     *  - 线 1（精神协议线）上摆一张**正面** `spirit-3`：开局它是这条线的顶卡
+     *    （`isUncovered()` 为真）；
+     *  - 手里一张 `spirit-5`：玩家把它**翻成反面**再拖到线 1 的 `spirit-3` 上面
+     *    （反面打出不看协议 —— `base.ts:66` 的落线守卫只守正面；这里连协议都是对的，更整齐）。
+     *
+     * 实测（本轮探针，真引擎）：打完那一手之后 ——
+     *  - `t7a-under`（精神3）：`zone:'field'`、`faceUp:true`、**`isUncovered() === false`**（被覆盖）；
+     *  - `t7a-over`（精神5）：`zone:'field'`、`faceUp:false`、`isUncovered() === true`（新顶卡）、
+     *    `secret` 未置（从手牌反面打出 = 公开信息，不是牌库来源）；
+     *  - 两张都还在场上（`stacks[0]` 长度 2）⇒ "被覆盖 ≠ 消失"这句话在状态上成立；
+     *  - 这条线的总值 3 → 5（`stackValue` 对叠里每张都求和，反面按 2 算）—— 这一课**不**讲点数，
+     *    文案里一个数字都没写，免得与"覆盖会怎样"混在一起。
+     *
+     * ⚠️ 这一课刻意**不用**效果、不弹任何选择（`spirit-5` 只有顶/底指令，中指令是空的；
+     * 这里连顶/底都用不上）⇒ 动作链只有"打出一张牌"这一步，判据读的就是那一步的状态差分。
+     */
+    const s = controlledGame('tutorial-T7a', ['spirit', 'water', 'darkness']);
+    // 线 1：一张正面精神3（开局 = 这条线的顶卡，未被覆盖）
+    s.players[0].stacks[0] = [card(T7A_UNDER_UID, 'spirit-3', 0, 'field', true, 0, 0)];
+    // 手里：精神5（反面盖上去 ⇒ 它成为顶卡，精神3 变成被覆盖）
+    s.players[0].hand = [card(T7A_OVER_UID, 'spirit-5', 0, 'hand', true)];
     s.players[0].deck = [];
-    // 能看：反面、非 secret（从手牌打出的反面牌就是这个形态）
-    s.players[0].stacks[0] = [card('t6f-open', 'spirit-3', 0, 'field', false, 0, 0)];
-    // 不能看：反面 + secret（牌库来源的反面打出 = 非公开信息）
-    s.players[0].stacks[1] = [card('t6f-secret', 'water-2', 0, 'field', false, 1, 0, true)];
     return s;
   }
   if (id === 'T7') {

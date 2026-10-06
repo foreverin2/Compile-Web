@@ -46,10 +46,17 @@ describe('长寿命 FX 跟随注册表', () => {
     expect(calls).toBe(0);
   });
 
-  it('接线：render.ts 每帧 + main.ts 滚动/缩放都调用 syncFollowers，三处长寿命 FX 都注册了', () => {
+  it('接线：render.ts 每帧 + 滚动/缩放那一趟都调用 syncFollowers，三处长寿命 FX 都注册了', () => {
     expect(read('ui/render.ts'), 'render.ts 每帧未同步跟随层').toContain('syncFollowers();');
-    const mainTs = read('main.ts');
-    expect(mainTs, 'main.ts 的滚动/缩放 rAF 未同步跟随层').toMatch(/syncGen3Persistent\(state\);[\s\S]{0,200}syncFollowers\(\);/);
+    /**
+     * ★ 2026-10-06：滚动/缩放那一趟的清单搬去了 `src/ui/fx-persistent-sync.ts`
+     * （唯一一份；`main.ts` 的 rAF 与教学屏的 `onViewportMove` 都调它）⇒ 判据跟着搬到那里。
+     * 本句守的仍然是同一件事：**滚动/缩放重定位那一趟真的会同步跟随层**。
+     */
+    const syncTs = read('ui/fx-persistent-sync.ts');
+    expect(syncTs, '滚动/缩放那一趟未同步跟随层').toMatch(/syncGen3Persistent\(s\);[\s\S]{0,200}syncFollowers\(\);/);
+    expect(read('main.ts'), 'main.ts 的滚动/缩放 rAF 不再走那一趟（跟随层会粘在旧坐标）')
+      .toMatch(/syncPersistentFx\(boardStateOf\(state\)\)/);
     // 三处 >1.6s 的层必须注册（迷雾卡框灰光 / 透彻落点眼 / 爱意牌库光芒）
     const gen2 = read('ui/fx-gen2.ts');
     expect(gen2, '迷雾卡框灰光（2s）未注册跟随').toMatch(/glow\.className = 'fx-smoke-cardglow'[\s\S]{0,900}registerFollow\(glow/);

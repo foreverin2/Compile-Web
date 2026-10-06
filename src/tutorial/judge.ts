@@ -151,6 +151,63 @@ export function revealSeen(state: GameState): { readonly flipped: boolean; reado
 }
 
 /**
+ * ★ 2026-10-06（T6 拆成两步）：这一关"**生产未公开信息**"那张牌的两个 uid ——
+ * 判据与局面**共用这一处定义**（理由与 `T9_FLIP_DEF` 那两条一样：两边各写一遍字符串的话，
+ * 改了一边另一边会静默失配，判据永远是 `false`、玩家卡在那一关）。
+ *
+ *  - `T6_SECRET_HAND_UID`：手里那张「流水1」（打出它会走 `playTopDeck`）；
+ *  - `T6_SECRET_DECK_UID`：牌库里唯一那张 —— 它的中指令会把它**反面**打到场上并带上 `secret`。
+ */
+export const T6_SECRET_HAND_UID = 't6h-play';
+export const T6_SECRET_DECK_UID = 't6d1';
+
+/**
+ * ★ 2026-10-06（T6 的**状态差分**那一半）：牌库顶那张真的"反面出场、成为未公开信息"了吗。
+ *
+ * 判据三个字段一起看，缺一个都不算（`resolve.ts:587-590` 的 `playTopDeck` 就是这三件事）：
+ *  - `zone === 'field'` —— 它**离开了牌库**（开局它在 `deck` 里 ⇒ 零操作时这一条不成立）；
+ *  - `faceUp === false` —— 它是**反面**打出来的；
+ *  - `secret === true` —— 它是**未公开信息**（`secret` 的唯一写入点之一就在这里）。
+ *
+ * ⚠️ 不自己推"是不是从牌库来的"（数牌库张数那种）；直接读引擎写下的那个标记。
+ */
+export function secretFromDeckPlayed(state: GameState): boolean {
+  const c = findCard(state, T6_SECRET_DECK_UID);
+  return c !== undefined && c.zone === 'field' && c.owner === 0 && c.faceUp === false && c.secret === true;
+}
+
+/**
+ * ★ 2026-10-06（T7a「牌能盖牌」）：那两张牌的 uid —— 判据、局面与屏上提示**共用这一处**。
+ *
+ *  - `T7A_UNDER_UID`：**被盖住**的那张（开局是这条线的顶卡）；
+ *  - `T7A_OVER_UID`：**盖上去**的那张（打完它之后成为新的顶卡）。
+ */
+export const T7A_UNDER_UID = 't7a-under';
+export const T7A_OVER_UID = 't7a-over';
+
+/**
+ * ★ 2026-10-06（T7a 的**状态差分**）：玩家真的把自己的牌盖到自己的牌上了吗。
+ *
+ * 三条都是**引擎自己的判据**（`isUncovered`，`context.ts:31`：就是"是不是这一叠的顶卡"），
+ * 一条都不自己重算：
+ *  1. 原来那张 `spirit-3` **还在场上**、而且**不再是顶卡** ⇒ 它被覆盖了；
+ *  2. 新打那张 `spirit-5` **在同一叠里**、而且是**新的顶卡** ⇒ 覆盖关系成立（谁盖住谁）；
+ *  3. 两张都 `zone === 'field'` ⇒ "被覆盖 ≠ 消失"这句话在状态上成立。
+ *
+ * ⚠️ 零操作时第 1 条不成立（开局 `spirit-3` 就是顶卡）⇒ 这条判据不是恒真。
+ * ⚠️ 判据与屏上的提示（`tutorial-screen.ts` 的 T7a 那一支）读的是**同一个函数**，
+ * 不另算一遍 —— 否则会出现"提示说盖上了、判据不给过"的漂移。
+ */
+export function ownCardCovered(state: GameState): boolean {
+  const under = findCard(state, T7A_UNDER_UID);
+  const over = findCard(state, T7A_OVER_UID);
+  if (under === undefined || over === undefined) return false;
+  if (under.zone !== 'field' || over.zone !== 'field') return false;
+  if (under.line === null || over.line !== under.line) return false;
+  return !isUncovered(state, under) && isUncovered(state, over);
+}
+
+/**
  * 本关"做完了没有"。
  *
  * 每一关的判据都有反向变异（`p2-mutate.mjs` / `p5-mutate.mjs` / `p6-mutate.mjs`）：
@@ -217,16 +274,32 @@ export function isLevelComplete(level: TutLevel, state: GameState, input: TutJud
   }
   if (level.id === 'T6') {
     /**
-     * 反面牌可视规则：**两个对照都要看过**。
+     * ★ 2026-10-06（用户口径）反面牌可视规则：**先造出未公开信息，再讲怎么看**。
      *
-     *  - `peekAvailable`：看过一张"能看"的反面牌（详情里有「查看正面」按钮）；
-     *  - `peekBlocked`：看过一张"不能看"的反面牌（详情里**没有**那个按钮）。
+     * 判据两半，少一样都不算过：
+     *  1. **状态差分**（`secretFromDeckPlayed()`）：玩家真的打出了「流水1」，它的中指令
+     *     （`playTopDeck`）把牌库顶那张**反面**打到了场上、并带上 `secret = true`
+     *     —— 这就是"未公开信息"的机械形态（`resolve.ts:587-590`）。开局那张还在**牌库**里
+     *     （`zone === 'deck'`、没有 `secret`）⇒ **零操作时这一条不成立**；
+     *  2. **两个对照都见过**：`peekAvailable`（能看的反面牌，详情里有「查看正面」按钮）
+     *     与 `peekBlocked`（不能看的反面牌，详情里只有卡背）。
      *
-     * ⚠️ 只要求"两个都见过"，不要求顺序 —— 顺序不是这条规则的一部分。
+     * ⚠️ 第 2 条里的两个布尔**本身就是"两个对照各见过一次"**（一次放大只可能置其中一个）
+     * ⇒ 不再叠一条 `detailsOpened >= 2` 的冗余计数（那条只会掩盖"其实只见过一个"）。
+     * ⚠️ 顺序不要求：先看哪一张不是这条规则的一部分。
      */
-    return ui.detailsOpened >= (level.ui?.detailsAtLeast ?? 2)
+    return secretFromDeckPlayed(state)
       && (level.ui?.needPeekAvailable !== true || ui.peekAvailable)
       && (level.ui?.needPeekBlocked !== true || ui.peekBlocked);
+  }
+  if (level.id === 'T7a') {
+    /**
+     * ★ 2026-10-06（用户口径）T7a「牌能盖牌」：玩家真的把自己的牌盖到自己的牌上了吗。
+     *
+     * 判据本体在 `ownCardCovered()`（那里写了三条理由）；这里只转发一层，好在 `isLevelComplete`
+     * 这个"每关一支"的骨架里保持形状一致。
+     */
+    return ownCardCovered(state);
   }
   if (level.id === 'T7') {
     /**

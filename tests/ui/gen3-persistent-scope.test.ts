@@ -10,12 +10,12 @@ import { createMemoryStore } from '../../src/app/storage';
 import { mountTutorial } from '../../src/ui/tutorial-screen';
 import {
   renderBoard, resetUiState,
-  syncCompiledFxLayers, syncSmokeOverlays, syncScanOverlays, syncPsychicParticles, syncPlagueMists,
-  syncApathyMists, syncApathyMosaics, syncSpirit0Glows, syncSpirit1Cards, syncMetal0Glows, syncMetalPlates,
-  syncMetal6Mans, syncMetal1LineGlows, syncMirror0BatteryGlows, syncClarity0BatteryGlows, syncIceFx,
-  syncSmoke2LineGlows, syncFear0TriGlows, syncWarBlades, syncDiversity3Fx, syncChainLayerPosition,
+  syncChainLayerPosition,
 } from '../../src/ui/render';
-import { clearGen3Persistent, setGen3BoardState, syncGen3Persistent } from '../../src/ui/gen3-control';
+/** ★ 2026-10-06 第二轮：常驻 FX 层滚动/缩放重定位的**唯一清单**（main.ts 的 rAF 与教学屏都调它） */
+import { syncPersistentFx } from '../../src/ui/fx-persistent-sync';
+import { clearGen3Persistent, syncGen3Persistent } from '../../src/ui/gen3-control';
+import { boardStateOf, setBoardState } from '../../src/ui/board-scope';
 import { syncFollowers } from '../../src/ui/fx-follow';
 import {
   installStubDom, makeStubEl, setStubRectFor, descendants, classOf, isClass, type StubNode,
@@ -82,34 +82,18 @@ function bodyOf(code: string, name: string): string {
 }
 
 /**
- * **逐字照抄 `main.ts:5906-5931`** 的主循环滚动/缩放同步（那一趟喂的是主循环自己那份 `state`）。
- * ⚠️ 它是**主循环那一侧的镜像**：`main.ts` 改了清单，这里要跟着改 —— 所以本文件另有一条源码腿
- * 数 `main.ts` 里那一串 `sync*` 的条数，免得清单悄悄长出一条而这里没跟上。
+ * **滚动/缩放那一趟**：与 `main.ts` 的 rAF 回调**逐字同参**（`syncPersistentFx(boardStateOf(state))`）。
+ *
+ * ⚠️ 2026-10-06 第二轮：这一趟原来在本文件里**手工镜像** `main.ts:5906-5931` 那张 23 条清单
+ * （镜像一旦漂了就是一条假腿）。现在清单搬去 `src/ui/fx-persistent-sync.ts`（**唯一一份**，
+ * 教学屏的 `onViewportMove` 也调它）⇒ 本函数直接**调那个真出处**，不再手工抄。
+ * 判据面因此比原来更强：这里跑的就是生产代码那一趟。
+ *
+ * ⚠️ `boardStateOf(state)` 也照抄 `main.ts`：声明过本屏局面就喂它（教学屏那一路），
+ * 没声明就逐字退回入参（热座/远程页/重放）。
  */
 function mainScrollSync(s: GameState): void {
-  syncCompiledFxLayers();
-  syncSmokeOverlays(s);
-  syncScanOverlays(s);
-  syncPsychicParticles(s);
-  syncPlagueMists(s);
-  syncApathyMists(s);
-  syncApathyMosaics(s);
-  syncSpirit0Glows(s);
-  syncSpirit1Cards(s);
-  syncMetal0Glows(s);
-  syncMetalPlates(s);
-  syncMetal6Mans(s);
-  syncMetal1LineGlows(s);
-  syncMirror0BatteryGlows(s);
-  syncClarity0BatteryGlows(s);
-  syncIceFx(s);
-  syncSmoke2LineGlows(s);
-  syncFear0TriGlows(s);
-  syncWarBlades(s);
-  syncDiversity3Fx(s);
-  syncGen3Persistent(s);
-  syncFollowers();
-  syncChainLayerPosition();
+  syncPersistentFx(boardStateOf(s));
 }
 
 let restore: (() => void) | null = null;
@@ -124,7 +108,7 @@ afterEach(() => {
     restore = null;
   }
   clearGen3Persistent();
-  setGen3BoardState(null);
+  setBoardState(null);
 });
 
 /** 装桩 DOM + 一个装棋盘的根；返回 body（层都挂在它下面） */
@@ -196,7 +180,7 @@ describe('★ 缺陷 1（2026-10-06 用户报的「死板7 移动过页面后特
     expect(bodyLayers(body, /g3sync-rig7/).length, 'T12 开局就该有一层死板7 护壁').toBe(1);
 
     // 不声明 ⇒ 是改动前的行为：主循环那一趟按**外来局面**重算，教学屏的键不在 active 里
-    setGen3BoardState(null);
+    setBoardState(null);
     mainScrollSync(createGame({ seed: 'foreign-hotseat' }));
 
     const after = bodyLayers(body, /g3sync-rig7/);
@@ -210,7 +194,7 @@ describe('★ 缺陷 1（2026-10-06 用户报的「死板7 移动过页面后特
 
   it('★ 修法：声明了棋盘局面 ⇒ 外来局面那一趟整趟早退（层既不被删、也不被改）', () => {
     const { body, s } = renderT12();
-    setGen3BoardState(s); // 教学屏在每次 openLevel() 里做的就是这个
+    setBoardState(s); // 教学屏在每次 openLevel() 里做的就是这个
 
     const before = boxOf(mazeOf(body));
     mainScrollSync(createGame({ seed: 'foreign-hotseat' }));
@@ -223,7 +207,7 @@ describe('★ 缺陷 1（2026-10-06 用户报的「死板7 移动过页面后特
 
   it('★ 跟随（用户第二半句"特效并没有继续持续跟随卡牌"）：本屏按自己的局面重同步 ⇒ 层跟着卡走', () => {
     const { body, s, card } = renderT12();
-    setGen3BoardState(s);
+    setBoardState(s);
     // 滚动 = 卡牌实测矩形整体平移（主循环那一趟先跑，它整趟早退；本屏随后按自己的局面重定位）
     const dx = 37;
     const dy = -220;
@@ -237,7 +221,7 @@ describe('★ 缺陷 1（2026-10-06 用户报的「死板7 移动过页面后特
 
   it('★ 反向：声明**不会**把 prune 变成空操作 —— 同一份局面上条件真的消失时，层照旧被删', () => {
     const { body, s } = renderT12();
-    setGen3BoardState(s);
+    setBoardState(s);
     // 死板7 的常驻条件是"正面 + 未被覆盖 + 底框可用"（= 引擎 rigidity7Immune，守卫腿在
     // `tests/ui/gen3-control-fx.test.ts`）⇒ 在它上面再盖一张牌，条件就不成立了。
     s.players[1].stacks[2] = [
@@ -253,48 +237,64 @@ describe('★ 缺陷 1（2026-10-06 用户报的「死板7 移动过页面后特
   it('★ 逐关真跑：声明了棋盘局面 ⇒ 15 关 × 外来局面那一趟，3代常驻层一个都不丢', () => {
     const foreign = createGame({ seed: 'foreign-hotseat' });
     const lines: string[] = [];
+    let totalLayers = 0; // 反空集合：这一族在扫面里真的建出过层
     for (const l of TUT_LEVELS) {
       const body = mountBoardRoot();
       const s = buildLevelState(l.id);
       renderBoard(boardRoot(body), s, cb);
-      setGen3BoardState(s);
+      setBoardState(s);
       const before = bodyLayers(body, /g3sync-|g3fx-layer/).map((n) => n.cls);
+      totalLayers += before.length;
       mainScrollSync(foreign);
       const lost = before.filter((cls) => !bodyLayers(body, /g3sync-|g3fx-layer/).some((n) => n.cls === cls));
-      lines.push(`${l.id}:${lost.length === 0 ? 'ok' : lost.join('|')}`);
+      lines.push(`${l.id}:${before.length}层${lost.length === 0 ? 'ok' : '丢' + lost.join('|')}`);
       expect(lost, `${l.id} 的3代常驻层被外来局面那一趟删掉了：${lost.join(', ')}`).toEqual([]);
       // 逐关换夹具：先撤声明（否则下一关 `renderBoard` 那一趟会被当成"外来局面"而整趟早退），
       // 清模块态 + 拆桩（`restore()` 必须在桩还在时先把 `resetUiState()` 走完）
-      setGen3BoardState(null);
+      setBoardState(null);
       resetUiState();
       restore?.(); restore = null;
     }
     // 锚点：扫描面真的覆盖到有层的关卡（否则上面那条可以在"全都没有层"上恒真）
-    expect(lines.filter((x) => x.endsWith(':ok')).length).toBe(TUT_LEVELS.length);
+    expect(lines.filter((x) => x.endsWith('ok')).length).toBe(TUT_LEVELS.length);
+    expect(totalLayers, '15 关一张 3 代常驻层都没建出来 ⇒ 上面那条是空集上的恒真').toBeGreaterThan(0);
   });
 
   it('★ 反向锚点：声明口**没被谁偷偷设成永远有主** —— 热座/远程页/重放那几档一律不声明', () => {
-    // `setGen3BoardState` 的调用点全仓只有教学屏（正反两处）+ 本文件的用例
-    const calls = [...RENDER.matchAll(/setGen3BoardState\(/g)].length
-      + [...MAIN.matchAll(/setGen3BoardState\(/g)].length;
-    expect(calls, 'render.ts / main.ts 里出现了声明口（那两个文件不该知道教学屏这件事）').toBe(0);
-    // 教学屏里成对的两处 + import 那一行（import 里是 `setGen3BoardState,` 不带左括号 ⇒ 不计）
-    expect(SCREEN.match(/setGen3BoardState\(/g)?.length, '教学屏没有成对地"声明 + 撤销"').toBe(2);
-    expect(SCREEN, '声明口没有在 openLevel 里设上').toContain('setGen3BoardState(state)');
-    expect(SCREEN, '声明口没有在 close() 里撤掉').toContain('setGen3BoardState(null)');
+    // `setBoardState` / 它的旧名 `setGen3BoardState` 的调用点全仓只有教学屏（正反两处）+ 本文件
+    const calls = [...RENDER.matchAll(/set(BoardState|Gen3BoardState)\(/g)].length
+      + [...MAIN.matchAll(/set(BoardState|Gen3BoardState)\(/g)].length;
+    expect(calls, 'render.ts / main.ts 里出现了声明口（那两个文件不该知道"教学屏画的哪一份"这件事）').toBe(0);
+    // 教学屏里成对的两处 + import 那一行（import 里不带左括号 ⇒ 不计）
+    expect(SCREEN.match(/setBoardState\(/g)?.length, '教学屏没有成对地"声明 + 撤销"').toBe(2);
+    expect(SCREEN, '声明口没有在 openLevel 里设上').toContain('setBoardState(state)');
+    expect(SCREEN, '声明口没有在 close() 里撤掉').toContain('setBoardState(null)');
     // 声明口只能由本屏闭包里那份 state 发起（不是外面随手塞一份）
-    expect(GEN3, 'syncGen3Persistent 里没有"外来局面整趟早退"那一句')
-      .toMatch(/if \(boardState !== null && s !== boardState\) return;/);
+    expect(GEN3, 'syncGen3Persistent 里没有"外来局面不许碰"那一句')
+      .toContain('if (!isBoardState(s)) return;');
+    // 判据本体必须是那个唯一出处（`board-scope.ts`），不是本文件里另写一份
+    expect(read('src/ui/gen3-control.ts'), 'gen3-control 自己又造了一份局面状态（应当只从 board-scope 读）')
+      .toContain("from './board-scope'");
+    expect(read('src/ui/board-scope.ts'), 'board-scope 的"没声明时逐字返回入参"那一句不在了')
+      .toMatch(/return declared \?\? main;/);
   });
 
-  it('源码腿：主循环那一侧**一个字没动**（清单逐项仍在 main.ts，本修法靠声明口早退）', () => {
-    // 主循环的滚动 rAF 仍然拿它自己那份 state 同步（教学屏靠声明口让那一趟变成空操作）
-    expect(MAIN, 'main.ts 的滚动 rAF 不再同步3代常驻层了 —— 那热座/远程页就不跟随了')
-      .toMatch(/syncGen3Persistent\(state\);[\s\S]{0,200}syncFollowers\(\);/);
-    // 本文件的 `mainScrollSync` 是那一趟的镜像：条数对不上说明镜像漂了
-    const mainList = MAIN.slice(MAIN.indexOf('const syncPersistentFx'), MAIN.indexOf("window.addEventListener('scroll'"));
-    const names = [...mainList.matchAll(/^\s*(sync[A-Za-z0-9]+)\(/gm)].map((m) => m[1]);
-    expect(names.length, `main.ts 的滚动同步清单条数变了（镜像要跟着改）：${names.join(', ')}`).toBe(23);
+  it('源码腿：滚动/缩放那一趟喂的是**局面声明口**，清单只有一份（教学屏与主循环共用）', () => {
+    // ① 主循环的滚动/缩放 rAF 喂 `boardStateOf(state)`（声明过本屏局面就喂它，否则逐字是 state）
+    expect(MAIN, 'main.ts 的滚动 rAF 没走局面声明口 —— 教学屏的层又会被按外来局面删掉')
+      .toMatch(/syncPersistentFx\(boardStateOf\(state\)\)/);
+    // ② 清单只有一份：`fx-persistent-sync.ts`（教学屏的 onViewportMove 调的是同一个）
+    const syncTs = read('src/ui/fx-persistent-sync.ts');
+    const names = [...syncTs.matchAll(/^\s*(sync[A-Za-z0-9]+)\(/gm)].map((m) => m[1]);
+    expect(names.length, `常驻 FX 清单条数变了（清单是承重的，改这里要连带核 23 条都还在）：${names.join(', ')}`).toBe(23);
+    // 锚点：清单里必须真的含"用户报的那两条"所依赖的两个 sync（否则上面那条可以在"清单被删空"上恒真）
+    expect(names, '清单里没有 syncIceFx（冰1 的线冻结没人重定位）').toContain('syncIceFx');
+    expect(names, '清单里没有 syncGen3Persistent（死板7 护壁没人重定位）').toContain('syncGen3Persistent');
+    // ③ 反向：`main.ts` 里不许再出现"裸喂 state"的那一串（两份清单必然漂）
+    expect(MAIN, 'main.ts 里又长出了一串 sync*(state)（清单漂了）')
+      .not.toMatch(/syncIceFx\(state\)/);
+    expect(SCREEN, '教学屏自己又列了一份清单（应调 syncPersistentFx(state)）')
+      .toContain('syncPersistentFx(state)');
   });
 });
 
@@ -378,8 +378,8 @@ describe('★ 缺陷 2（2026-10-06 用户报的「从第 15 关跳回第十四�
     expect(iReset < iBuild, 'resetUiState 排在重建局面之后（清单里那一批层会跟着旧局面被清掉？顺序反了）').toBe(true);
     expect(iBuild < iPaint, 'paint() 排在重建局面之前').toBe(true);
     // 声明口跟着新局面换（缺陷 1 那一半）
-    expect(body.indexOf('setGen3BoardState(state)'), 'openLevel 没有把新局面的棋盘声明下去').toBeGreaterThan(iBuild);
-    expect(body.indexOf('setGen3BoardState(state)'), '声明排在了 paint() 之后（这一帧的同步会走错门）').toBeLessThan(iPaint);
+    expect(body.indexOf('setBoardState(state)'), 'openLevel 没有把新局面的棋盘声明下去').toBeGreaterThan(iBuild);
+    expect(body.indexOf('setBoardState(state)'), '声明排在了 paint() 之后（这一帧的同步会走错门）').toBeLessThan(iPaint);
     // 四个入口都经它：退出教程 / 重开这一关 / chip 跳关 / 倒计时换关
     expect(bodyOf(SCREEN, 'restartLevel'), 'chip 跳关没有走 openLevel').toContain('openLevel()');
     expect(bodyOf(SCREEN, 'gotoNextLevel'), '倒计时到点换关没有走 openLevel').toContain('openLevel()');
@@ -407,7 +407,7 @@ describe('★ 缺陷 2（2026-10-06 用户报的「从第 15 关跳回第十四�
     expect(closeAt, '找不到 close()').toBeGreaterThan(0);
     const close = SCREEN.slice(closeAt, closeAt + 1600);
     expect(close, '退出教程没有撤销"棋盘是这个局面"的声明（热座那边的3代常驻层会永远不更新）')
-      .toContain('setGen3BoardState(null)');
+      .toContain('setBoardState(null)');
     expect(close, '退出教程没有摘掉 scroll 监听').toMatch(/removeEventListener\('scroll',\s*onViewportMove/);
     expect(close, '退出教程没有摘掉 resize 监听').toMatch(/removeEventListener\('resize',\s*onViewportMove/);
     // add/remove 用的是同一个函数对象（写第二个箭头函数撤不掉）
@@ -422,9 +422,14 @@ describe('★ 缺陷 2（2026-10-06 用户报的「从第 15 关跳回第十四�
     expect(at, '找不到 onViewportMove').toBeGreaterThan(0);
     const fn = SCREEN.slice(at, SCREEN.indexOf('window.addEventListener(\'resize\', onViewportMove', at));
     expect(fn, '没有 rAF 节流（滚动事件一秒能来上百次）').toMatch(/requestAnimationFrame\(/);
-    expect(fn, '重定位没有走 syncGen3Persistent').toContain('syncGen3Persistent(state)');
+    /**
+     * ★ 2026-10-06 第二轮：本屏不再只同步 3 代那一族，改调**唯一清单**
+     * `syncPersistentFx(state)`（`main.ts` 的滚动 rAF 调的也是它）—— 上一版只同步
+     * `syncGen3Persistent`，`render.ts` 那一族（冰1 的线冻结）因此没人替本屏重定位。
+     */
+    expect(fn, '重定位没有走常驻 FX 的唯一清单').toContain('syncPersistentFx(state)');
     expect(fn, '用的是别的局面（本屏那份 state 是闭包里那个 let，换关时会被就地换掉）')
-      .not.toMatch(/syncGen3Persistent\((?!state\))/);
+      .not.toMatch(/syncPersistentFx\((?!state\))/);
   });
 });
 
@@ -438,7 +443,7 @@ describe('★ 「正常情况下是否也是这样」：热座/远程页那份 s
       const body = mountBoardRoot();
       const s = buildLevelState(l.id);
       renderBoard(boardRoot(body), s, cb);
-      setGen3BoardState(s);
+      setBoardState(s);
       const before = descendants(body)
         .filter((n) => n.parentElement === body && n.cls !== '')
         .map((n) => n.cls)
@@ -451,7 +456,7 @@ describe('★ 「正常情况下是否也是这样」：热座/远程页那份 s
       expect(after, `${l.id} 按自己的局面滚一趟丢了层：${before.filter((c) => !after.includes(c)).join(', ')}`)
         .toEqual(before);
       // 逐关换夹具：先撤声明（否则下一关 `renderBoard` 那一趟会被当成"外来局面"而整趟早退）
-      setGen3BoardState(null);
+      setBoardState(null);
       resetUiState();
       restore?.(); restore = null;
     }
@@ -465,7 +470,7 @@ describe('★ 「正常情况下是否也是这样」：热座/远程页那份 s
      */
     const one = (declare: boolean): { box: [number, number, number, number]; dropped: boolean } => {
       const { body, s } = renderT12();
-      if (declare) setGen3BoardState(s);
+      if (declare) setBoardState(s);
       const box = boxOf(mazeOf(body));
       // 条件消失（被盖住）⇒ 同一份局面下一趟必须把层收掉
       s.players[1].stacks[2] = [
@@ -574,30 +579,149 @@ describe('★ 缺陷 2 端到端（真跑教学屏）：从 T13 点 chip 跳回 
       restoreObservers();
     }
   });
+  it('★ 远程页那一趟（render-net）也喂"这一帧画的那份局面"（同族查漏：那是另一条渲染路）', () => {
+    /**
+     * 远程页**不复用** `renderBoard` 本体（设计稿 §6.1），它自己那一趟也把 22 条 sync 全调了一遍
+     * （`renderNetBoard` 的入口副作用）。它喂的是它自己那个形参 `s` —— 也就是"这一帧画的那份
+     * 局面"。本腿钉住这件事：那一处**不许**改成从别的地方另取一份（否则远程页会重演教学屏那个
+     * "按别人的局面把层剪掉"的缺陷）。
+     */
+    const net = read('src/ui/render-net.ts');
+    expect(net, 'renderNetBoard 的常驻 FX 那一趟不再喂它自己的形参 s').toContain('syncIceFx(s);');
+    expect(net, 'renderNetBoard 的常驻 FX 那一趟喂了别的局面')
+      .not.toMatch(/syncIceFx\((?!s\))/);
+    // 远程页的滚动监听只做两条（环 + 锁链），**不**跑常驻 FX 那一趟 —— 别在那一处另喂一份局面
+    const bindAt = net.indexOf('function bindNetScrollSync');
+    const bind = net.slice(bindAt, bindAt + 1400);
+    expect(bind, '远程页的滚动监听没有重定位已编译环（协议环会粘在旧坐标）').toContain('syncCompiledFxLayers()');
+    expect(bind, '远程页的滚动监听里出现了常驻 FX 那一趟（两份清单会漂；那一趟由 main.ts 的滚动监听统一发起）')
+      .not.toContain('syncIceFx(');
+  });
 });
 
 /* ============================================================================
- * 已知限制（红线未修，任务报告登记）：render.ts 那一批常驻注册表
+ * 缺陷 3（2026-10-06 第二轮，用户复报）：`render.ts` 那一批常驻注册表（冰1 的线冻结）
  * ========================================================================== */
 
-describe('★ 已知限制（如实登记）：`render.ts` 那一批常驻注册表够不着这次那个声明口', () => {
+describe('★ 缺陷 3（用户复报的「冰1 的场上持续特效滑一下/缩放一下就没了」）：render.ts 那一批也走同一个声明口', () => {
   /**
-   * ⚠️ 这一条**不是在守一个正确行为**，而是把"已知还没修的那一格"钉成机检事实：
-   * `render.ts` 里 `smokeOverlays` / `psychicParticles` / `iceLineFreezes` … 的 prune 写在
-   * **红线文件**里（`syncIceFx` 的收尾分支 `render.ts:1291-1293`），本轮的修法只在
-   * `gen3-control.ts` 落了声明口 ⇒ 教学关里靠**状态判据**（而不是靠 DOM 查询）决定去留的层
-   * 仍会被主循环那一趟（外来局面）删掉。实测只有 T11 命中（`ice-1` 顶卡 → 对手线冰面）。
+   * T11 是"教学里唯一命中 `render.ts` 那一族"的一关：对手（p1）线 1 顶卡是正面 `ice-1`
+   * ⇒ 引擎口径下**我方（p0）线 1** 被铺 30% 深蓝冰面（`syncIceFx` 的 `iceLineFreezes`，
+   * key `${owner}-${line}` = `1-1`，层类名 `.fx-ice-linefreeze`）。
    *
-   * **render.ts 拿到同一个接缝（或者 `main.ts` 改成喂"这一屏正在画的局面"）之后，这条腿应当删掉。**
+   * 为什么它是这一类缺陷的判据：`syncIceFx` 的收尾是"本帧 `activeFreezes` 里没有这个 key
+   * 就 `remove()`"——**纯状态判据**，喂错局面（主循环那份外来局面里没有 `ice-1`）就当场删层。
+   * 这正是用户说的"上下滑动/缩放一下就消失了"。
    */
-  it('T11 的 `fx-ice-linefreeze` 仍会被外来局面那一趟删掉（红线未修）', () => {
+  const ICE = /fx-ice-linefreeze/;
+
+  /** T11 的棋盘 + 那条冰面层的桩矩形（冰面按**对手链路槽**定位：p0 线 1） */
+  function renderT11(slot = { left: 40, top: 300, width: 300, height: 290 }): {
+    body: StubNode; s: GameState; slot: { left: number; top: number; width: number; height: number };
+  } {
     const body = mountBoardRoot();
     const s = buildLevelState('T11');
     renderBoard(boardRoot(body), s, cb);
-    expect(bodyLayers(body, /fx-ice-linefreeze/).length, 'T11 开局该有一条对手线冰面（锚点）').toBe(1);
-    setGen3BoardState(s); // 声明口只挡得住3代那一族
+    expect(s.players[1].stacks[1].some((c) => c.defId === 'ice-1' && c.faceUp),
+      'T11 的夹具变了（对手线 1 不再是正面 ice-1）⇒ 本组腿失去前提').toBe(true);
+    const slotNode = descendants(body).find(
+      (n) => n.dataset.player === '0' && n.dataset.line === '1' && (n.cls ?? '').includes('stack-slot')
+    );
+    expect(slotNode, '棋盘上没有画出 p0 线 1 的链路槽（夹具与局面脱节）').toBeTruthy();
+    setStubRectFor(slotNode!, slot);
+    syncPersistentFx(s); // 这一帧按**本屏局面**建层（= renderBoard 末尾那一趟等价）
+    return { body, s, slot };
+  }
+
+  const iceBox = (body: StubNode): [number, number, number, number] => {
+    const layers = bodyLayers(body, ICE);
+    expect(layers.length, '屏上没有 .fx-ice-linefreeze（冰1 的线冻结层没建出来？）').toBe(1);
+    return boxOf(layers[0]);
+  };
+
+  it('★ 复现读数（反向腿）：**不声明**棋盘局面 ⇒ 外来局面那一趟真的把冰面层删掉（就是用户看到的那一幕）', () => {
+    const { body, s } = renderT11();
+    expect(iceBox(body), '锚点：T11 开局该有一条对手线冰面').toEqual([40, 300, 300, 290]);
+
+    // 不声明 ⇒ 是改动前的行为：滚动/缩放那一趟按**外来局面**重算，T11 的 `1-1` 不在 active 里
+    setBoardState(null);
     mainScrollSync(createGame({ seed: 'foreign-hotseat' }));
-    expect(bodyLayers(body, /fx-ice-linefreeze/).length,
-      '冰面层活下来了 —— 说明 render.ts 那一族也修好了：请删掉这条腿并更新报告').toBe(0);
+
+    expect(bodyLayers(body, ICE).length, '冰面层被整个摘掉了').toBe(0);
+    // 局面本身没变（变的只是"谁来同步"）
+    expect(s.players[1].stacks[1].some((c) => c.defId === 'ice-1' && c.faceUp)).toBe(true);
+  });
+
+  it('★ 修法真跑：声明了棋盘局面 ⇒ 外来局面那一趟按**本屏局面**同步（冰面层活着且几何不变）', () => {
+    const { body, s } = renderT11();
+    setBoardState(s); // 教学屏在每次 openLevel() 里做的就是这个
+
+    const before = iceBox(body);
+    mainScrollSync(createGame({ seed: 'foreign-hotseat' })); // ← 主循环的滚动 rAF
+
+    expect(bodyLayers(body, ICE).length, '冰面层没了（声明口没喂到 render.ts 那一族）').toBe(1);
+    expect(iceBox(body), '外来局面那一趟改动了这一屏的层几何').toEqual(before);
+  });
+
+  it('★ 跟随（同一半句"特效没有继续跟随"）：滚动 = 槽位矩形平移 ⇒ 冰面层跟着平移同一个量', () => {
+    const { body, s, slot } = renderT11();
+    setBoardState(s);
+    const dx = -55;
+    const dy = 120;
+    const moved = { left: slot.left + dx, top: slot.top + dy, width: slot.width, height: slot.height };
+    const slotNode = descendants(body).find(
+      (n) => n.dataset.player === '0' && n.dataset.line === '1' && (n.cls ?? '').includes('stack-slot')
+    )!;
+    setStubRectFor(slotNode, moved);
+    mainScrollSync(boardStateOf(s)); // ← 主循环那一趟（声明过 ⇒ 喂本屏局面）
+
+    expect(iceBox(body), '冰1 的冰面层没有跟着链路槽平移同一个量')
+      .toEqual([moved.left, moved.top, moved.width, moved.height]);
+  });
+
+  it('★ 反向：声明**不会**把 prune 变成空操作 —— 同一份局面上条件真的消失时，冰面层照旧被删', () => {
+    const { body, s } = renderT11();
+    setBoardState(s);
+    // 把对手线 1 顶卡翻成反面 ⇒ `ice-1` 底命令的守卫不再成立（顶层 `faceUp` 判据）
+    s.players[1].stacks[1] = s.players[1].stacks[1].map((c) => ({ ...c, faceUp: false }));
+    syncPersistentFx(s);
+    expect(bodyLayers(body, ICE).length, '条件消失之后冰面层还留着（prune 被判据挡住了 = 修法过宽）').toBe(0);
+  });
+
+  it('★ 逐关真跑：15 关 × 声明本屏局面 × 滚动那一趟 ⇒ **一条常驻层都不丢**（含 T11 的冰面）', () => {
+    const lines: string[] = [];
+    let totalLayers = 0; // 反空集合：真的建出过层（否则"一条都没丢"可以在"一条都没有"上恒真）
+    for (const l of TUT_LEVELS) {
+      const body = mountBoardRoot();
+      const s = buildLevelState(l.id);
+      renderBoard(boardRoot(body), s, cb);
+      setBoardState(s);
+      // 把所有链路槽/电池/手牌区都配上非零矩形 —— 常驻层的"建不建"全按实测矩形判
+      for (const n of descendants(body)) {
+        if (/stack-slot|battery|hand/.test(n.cls ?? '')) {
+          setStubRectFor(n, { left: 100, top: 200, width: 200, height: 280 });
+        }
+      }
+      syncPersistentFx(s);
+      const before = descendants(body)
+        .filter((n) => n.parentElement === body && n.cls !== '')
+        .map((n) => n.cls)
+        .sort();
+      totalLayers += before.length;
+      mainScrollSync(s);
+      const after = descendants(body)
+        .filter((n) => n.parentElement === body && n.cls !== '')
+        .map((n) => n.cls)
+        .sort();
+      const lost = before.filter((c) => !after.includes(c));
+      lines.push(`${l.id}:${before.length}层${lost.length === 0 ? 'ok' : '丢' + lost.join('|')}`);
+      expect(lost, `${l.id} 按本屏局面滚一趟丢了层：${lost.join(', ')}`).toEqual([]);
+      setBoardState(null);
+      resetUiState();
+      restore?.(); restore = null;
+    }
+    // 锚点：扫描面真的覆盖到有层的关卡（否则上面那条可以在"全都没有层"上恒真）
+    expect(lines.filter((x) => x.endsWith('ok')).length).toBe(TUT_LEVELS.length);
+    expect(totalLayers, '15 关一张常驻层都没建出来 ⇒ 上面那条是空集上的恒真').toBeGreaterThan(10);
   });
 });

@@ -171,19 +171,24 @@ export function clearGen3Persistent(): void {
  * 声明之后那一屏还得自己把"跟随"接上（主循环那一趟已经早退、不再替它重定位）——
  * 教学屏自己挂了一个滚动/缩放的 rAF（见 `tutorial-screen.ts` 的 `onViewportMove`）。
  *
- * ⚠️ 与它**同族但改不动**的一处（如实登记，免得以后有人以为这套已经全覆盖）：
- * `render.ts` 里那一批常驻注册表（`smokeOverlays` / `psychicParticles` / `iceLineFreezes` …）
- * 的 sync 也吃主循环那份 `state`，而它们的 prune 写在 `render.ts`（红线）里，
- * 本文件这套声明口够不着 ⇒ 教学关里凡是靠**状态判据**（不是靠 DOM 查询）决定去留的层
- * 仍会被主循环那一趟删掉。实测只有 T11 的 `fx-ice-linefreeze` 命中这一类
- * （见 `tests/ui/gen3-persistent-scope.test.ts` 的逐关读数与任务报告）。
+ * ★ 2026-10-06（**第二轮，用户复报"死板7 还是没好"**）：这份私有实现**已并入全仓唯一出处**
+ * `src/ui/board-scope.ts`。为什么必须并：原来那个 `boardState` 只挡得住本文件的
+ * `syncGen3Persistent`，而 `render.ts` 里那一批常驻注册表（`smokeOverlays` / `psychicParticles`
+ * / `iceLineFreezes` …）走**另一条路**（`main.ts` 的滚动 rAF 逐条喂它自己那份 `state`），
+ * 本文件的声明口够不着 ⇒ 冰1 的 `fx-ice-linefreeze` 仍是坏的。现在两条路读**同一个判据**：
+ *  - 3 代这一族：本文件 `syncGen3Persistent` 里的守卫 + `main.ts` 那一趟改成喂
+ *    `boardStateOf(state)`（两道防线，见下）；
+ *  - `render.ts` 那一族：`main.ts` 那一趟同样喂 `boardStateOf(state)`（这一句就是修冰1）。
  */
-let boardState: GameState | null = null;
+import { isBoardState, setBoardState as setScopeBoardState } from './board-scope';
 
-/** 声明"这一屏的棋盘 = 这一份局面"（`null` = 不声明，所有调用一视同仁）。返回值给测试/排查用。 */
+/**
+ * 声明"这一屏的棋盘 = 这一份局面"（`null` = 不声明，所有调用一视同仁）。返回值给测试/排查用。
+ *
+ * ⚠️ 本函数是 `board-scope.ts` 那个唯一出处的**薄转发**（保留旧名字，教学屏与既有测试还在用）。
+ */
 export function setGen3BoardState(s: GameState | null): GameState | null {
-  boardState = s;
-  return boardState;
+  return setScopeBoardState(s);
 }
 
 /** 把层定位到某个矩形（每次渲染都调用；层本身不重建） */
@@ -743,10 +748,14 @@ export function syncGreed1Stack(s: GameState): string[] {
 /** 每次渲染末尾调用（render.ts）：全部 3代 常驻层 */
 export function syncGen3Persistent(s: GameState): void {
   /**
-   * ★ 2026-10-06：**外来局面一个层都不许碰**（既不建也不删 —— 理由与复现读数见 `boardState`）。
+   * ★ 2026-10-06：**外来局面一个层都不许碰**（既不建也不删 —— 理由与复现读数见 `board-scope.ts`）。
    * 判据是**对象身份**：这一屏声明了"棋盘是哪一份局面"，就只认那一份。
+   *
+   * 2026-10-06 第二轮：`main.ts` 的滚动/缩放那一趟已经改成喂 `boardStateOf(state)`
+   * ⇒ 正常路径上根本不会带外来局面进来。这一句留着是**第二道防线**：将来谁再往这里塞一份
+   * 别的局面（新屏 / 新入口），这里会整趟早退而不是把别人的层剪掉。
    */
-  if (boardState !== null && s !== boardState) return;
+  if (!isBoardState(s)) return;
   const active = new Set<string>([
     ...syncEnvy0Absorb(s),
     ...syncWrath0Cull(s),

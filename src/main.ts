@@ -28,7 +28,7 @@ import './ui/styles-touch.css';
 import { createGame, getCurrentDrafter, performDraftPick, performDraftUnpick, performDraftBan, randomPoolFromSeed, setSeedNonce, getDraftPool } from './core/state/create';
 import { getCompilableLines } from './core/rules/compile';
 import { collectTriggers } from './core/effects/triggers';
-import { renderApp, renderDraft, resetUiState, setDraftSelfSeat, syncCompiledFxLayers, syncSmokeOverlays, syncScanOverlays, syncPsychicParticles, syncPlagueMists, syncApathyMists, syncApathyMosaics, syncSpirit0Glows, syncSpirit1Cards, syncMetal0Glows, syncMetalPlates, syncMetal6Mans, syncMetal1LineGlows, syncMirror0BatteryGlows, syncClarity0BatteryGlows, syncIceFx, syncSmoke2LineGlows, syncFear0TriGlows, syncWarBlades, syncChainLayerPosition, syncDiversity3Fx, type UiCallbacks } from './ui/render';
+import { renderApp, renderDraft, resetUiState, setDraftSelfSeat, type UiCallbacks } from './ui/render';
 // G2 Task 4：远程对战页（联机牌桌那一屏）。**本 import 是 render-net.ts 第一次进入 JS 产物** ——
 // 在此之前它没有任何生产代码引用它（Task 3/3F/3F2 改了 700+ 行而产物哈希一字未动），
 // 也就是说 build 那道门此前对整个远程页是瞎的。
@@ -147,9 +147,15 @@ import { initEffects, initCompileFx, initRearrangeFx, initGen3StackSwapFx, initS
 import {
   subscribeDraws, drainDraws, resetDraws, playDrawSequence, playDrawAnimation as playDrawAnimationFx,
 } from './ui/main-draw-fx';
-import { gen3ClearCacheFx, gen3ControlChangedFx, gen3ControlCheckFx, syncGen3Persistent } from './ui/gen3-control';
+import { gen3ClearCacheFx, gen3ControlChangedFx, gen3ControlCheckFx } from './ui/gen3-control';
 import { gen3FulcrumSwapFx, gen3ProtocolSwapFx } from './ui/fx-gen3-swap';
-import { syncFollowers } from './ui/fx-follow';
+// ★★ 2026-10-06（**用户报的缺陷**）：「场上持续特效（冰1 / 死板7 那一族）上下滑动/缩放之后就
+// 消失了」—— 常驻 FX 层那一批 sync 的**唯一清单**（`./ui/fx-persistent-sync`）；教学屏自己那几个
+// 滚动/缩放监听调的是**同一个**函数，所以 `render.ts` 那一族（冰1 的线冻结在里面）不会再没人管。
+import { syncPersistentFx } from './ui/fx-persistent-sync';
+// ★★ 2026-10-06：`boardStateOf(state)` 是"这一屏正在画的是哪一份局面"的唯一出处（教学屏声明、
+// 这里读）；没声明时**逐字返回入参**，热座/远程页零变化。
+import { boardStateOf } from './ui/board-scope';
 import { initGen2Fx, clearGen2Fx } from './ui/fx-gen2';
 import { initDiag } from './ui/diag';
 // G5/T39：触屏 → 鼠标手势桥（红线 `render.ts` 一个字节不改；只在触摸指针上启用）
@@ -5898,40 +5904,37 @@ showStartScreen();
 // rAF 节流（同帧合并多次事件）+ passive + capture（覆盖任意可滚动容器）；sync 函数
 // 幂等且廉价（只读 rect 重写坐标）。在初始渲染之后注册（注册表已就绪）。
 let fxSyncScheduled = false;
-const syncPersistentFx = (): void => {
+
+/**
+ * ★★ 2026-10-06（**用户报的缺陷**）：「场上持续特效（冰1 / 死板7 那一族）上下滑动或缩放一下
+ * 屏幕之后就消失了」。**常驻 FX 层的滚动/缩放重定位只有这一个出口**。
+ *
+ * ## 原来错在哪
+ *
+ * 这 22 条 sync 一律按"**这一屏正在画的那份局面**"重算层的去留与几何。原来这里直接写
+ * `sync*(state)` —— `state` 是**主循环自己那一份**。热座 / 远程页 / 重放页上两者是同一个对象，
+ * 所以一直没暴露；**教学屏画的是它自己那份受控局面**（`tutorial-screen.ts` 的 `buildLevelState`），
+ * 与主循环那份毫无关系 ⇒ 教学里一滚动，这一趟就按一份不相干的局面把教学屏的层 `remove()` 了
+ * （`render.ts` 的 `syncIceFx` 收尾、`gen3-control.ts` 的 `pruneAll` 都是"本帧 active 里没有就删"）。
+ * 实测命中：**T12 的死板7 护壁** 与 **T11 的 ice-1 线冻结**。
+ *
+ * ## 修法与形状
+ *
+ * 清单搬去 `./ui/fx-persistent-sync`（**全仓唯一一份**，教学屏的 `onViewportMove` 调的是同一个
+ * 函数），这里只负责"喂哪一份局面"：`boardStateOf(state)` —— **画那一屏的人**（目前只有教学屏）
+ * 声明过局面就喂它，没声明就逐字退回主循环那份。
+ *  - 热座 / 远程页 / 重放 / 起始屏：没人声明 ⇒ **逐字是改动前的行为**（构造性零变化）；
+ *  - 教学屏：这一趟变成"按教学自己的局面重定位"，正是它需要的跟随那一半。
+ */
+const schedulePersistentFxSync = (): void => {
   if (fxSyncScheduled) return;
   fxSyncScheduled = true;
   requestAnimationFrame(() => {
     fxSyncScheduled = false;
-    syncCompiledFxLayers();
-    syncSmokeOverlays(state);
-    syncScanOverlays(state);
-    syncPsychicParticles(state);
-    syncPlagueMists(state);
-    syncApathyMists(state);
-    syncApathyMosaics(state);
-    syncSpirit0Glows(state);
-    syncSpirit1Cards(state);
-    syncMetal0Glows(state);
-    syncMetalPlates(state);
-    syncMetal6Mans(state);
-    syncMetal1LineGlows(state);
-    syncMirror0BatteryGlows(state);
-    syncClarity0BatteryGlows(state);
-    syncIceFx(state);
-    syncSmoke2LineGlows(state);
-    syncFear0TriGlows(state);
-    syncWarBlades(state);
-    // 2026-09-13（审计补漏）：多元3 卡面框光/能量槽流光的同步此前**只在 renderApp 里调用**
-    // → 滚动/缩放（以及胜利后不再渲染）时这两个 body 级 fixed 层会粘在陈旧视口坐标
-    // （与用户实测的"特效粘在屏幕上"同一类 bug）。
-    syncDiversity3Fx(state);
-    syncGen3Persistent(state); // 3代（批次 D）常驻层随滚动/缩放重定位
-    syncFollowers(); // 长寿命 FX（>1.5s 的卡框光/落点光）随滚动/缩放跟随
-    syncChainLayerPosition();
+    syncPersistentFx(boardStateOf(state));
   });
-};window.addEventListener('scroll', syncPersistentFx, { passive: true, capture: true });
-window.addEventListener('resize', syncPersistentFx, { passive: true });
+};window.addEventListener('scroll', schedulePersistentFxSync, { passive: true, capture: true });
+window.addEventListener('resize', schedulePersistentFxSync, { passive: true });
 
 
 

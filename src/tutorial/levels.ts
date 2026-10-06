@@ -117,11 +117,14 @@ export interface TutLevel {
 }
 
 /**
- * 十五关。**顺序就是玩的顺序**（进度里的"当前关"按这个数组的序号推）。
+ * 十六关。**顺序就是玩的顺序**（进度里的"当前关"按这个数组的序号推）。
  *
  * ★ 2026-10-06（用户要求）：**最前面插一关 `S0`（序章）** —— 先讲背景故事、再讲清"这一局
  * 怎么算赢"，然后才进原来的 `T0`（界面扫盲）。`T0`~`T13` 的 id **一个都没动**
  * （已存进度仍指向原来那几课），只是没玩过的人从 `S0` 开始。
+ * ★ 2026-10-06（同一轮用户第二条口径）：**在 `T7` 之前插一关 `T7a`（牌能盖牌）** ——
+ * 先讲"卡牌之间可以互相覆盖"，再进「默认目标规则」那一课（它才是这一课的第二关）。
+ * 同样是**只插 id、不重排**（见 `types.ts` 的那张表）。
  *
  * ★ 2026-10-02（P6）**编号再动一次**：`T7` 从"编译与阈值"变成"默认目标规则"、
  * 编译挪到 `T8`、新增 `T9`「打出 vs 露出」。理由与老进度的代价写在方案 §7.11。
@@ -291,6 +294,9 @@ export const TUT_LEVELS: readonly TutLevel[] = [
   {
     id: 'T6',
     // ★ 用户 2026-10-02 追加：场上的反面牌什么时候能看正面（由 T5 的"揭开"引出）
+    // ★ 2026-10-06（用户口径）：这一关**先造出未公开信息，再讲怎么看** ⇒ 现在是两步，
+    //   第一步是**真引擎动作**（打出「流水1」⇒ 牌库顶那张反面出场、`secret = true`），
+    //   第二步才是双击两个对照。局面与逐条理由写在 `setup.ts` 的 T6 段。
     title: () => t('tutorial.T6.title'),
     goal: () => t('tutorial.T6.goal'),
     teach: [
@@ -303,13 +309,67 @@ export const TUT_LEVELS: readonly TutLevel[] = [
     guidedSteps: [
       () => t('tutorial.T6.steps.0'),
       () => t('tutorial.T6.steps.1'),
+      () => t('tutorial.T6.steps.2'),
     ],
     observe: () => t('tutorial.T6.observe'),
-    // 本关也只看卡不动牌（两个对照全靠双击放大）
-    allowKinds: [],
-    ui: { detailsAtLeast: 2, needPeekAvailable: true, needPeekBlocked: true },
-    // 四件套第 4 件：真实操作 = 双击两张反面牌做对照（**UI 状态差分**）
-    interaction: 'ui',
+    // ★ 2026-10-06：玩家要**真的打出**那张生产"未公开信息"的牌（`play`）—— 这一关不再是"只看卡不动牌"
+    allowKinds: ['play'],
+    /**
+     * ★ 2026-10-06：判据的两半 —— 一半是**状态差分**（那张 `secret` 反面牌真的出现在场上），
+     * 一半是**两个对照都见过**（`needPeekAvailable` / `needPeekBlocked`）。
+     *
+     * ⚠️ `detailsAtLeast` 拿掉了：它是"打开过几次"的计数，而"两个对照都见过"这件事本身
+     * 已经蕴含至少打开过两次（一次放大只可能置 `peekAvailable`、`peekBlocked` 里的一个）
+     * ⇒ 留着它只是一条恒真的冗余子句。四件套那条生成式腿要求"引擎动作类的判据不能是纯 UI 计数"
+     * （`ui?.detailsAtLeast === undefined`），拿掉它之后这一关才诚实地算"引擎动作类"。
+     */
+    ui: { needPeekAvailable: true, needPeekBlocked: true },
+    interaction: 'engine',
+  },
+  {
+    id: 'T7a',
+    /**
+     * ★ 2026-10-06（**用户当天口径**）：在「效果能选谁」（默认目标规则）**之前**插一关，
+     * 先用**己方场上**的例子讲清"卡牌之间可以互相覆盖"。
+     *
+     * 用户原话：「另外第七关的重点是让玩家理解卡牌之间可覆盖的效果，你现在做的这一关应该为
+     * 该关卡的第二关才对，先要通过己方场上的例子告诉玩家卡牌之间的覆盖效果，然后才进入第二个
+     * 小关卡懂我意思吗」。
+     *
+     * ## 它和 T5（盖住别人的牌）的分工
+     *
+     *  - **T5**：把牌打到**对手**线上，学的是"覆盖能用来拆对手的顶卡"（还带一张特殊卡 `corruption-0`）；
+     *  - **T7a**：把牌盖到**自己**线上，只学覆盖这件事本身 —— 谁在上面、谁变成被覆盖、
+     *    被覆盖的牌**还在场上**。两关都不涉及"效果能选谁"，那一课紧跟在后面（T7）。
+     *
+     * ## 判据（`judge.ts` 的 T7a 分支，读的都是引擎自己的状态）
+     *
+     *  - 那张 `spirit-3` 真的被盖住了：`isUncovered() === false`（引擎口径的"被覆盖"）；
+     *  - 盖上去那张 `spirit-5` 在同一叠里、是**新的未覆盖顶卡**（`isUncovered() === true`）；
+     *  - 两张都还在场上（被覆盖 ≠ 消失）。
+     *  ⇒ 零操作时 `spirit-3` 是顶卡（`isUncovered` 为真）⇒ 判据不成立。
+     *
+     * ⚠️ id 是 `T7a`（**不重排**既有的 `T0`~`T13`）：老进度里的 id 不被重新指向；屏上的
+     * chip 显示的是**序号**不是 id（`levelIndex()` 是唯一出处）。
+     */
+    title: () => t('tutorial.T7a.title'),
+    goal: () => t('tutorial.T7a.goal'),
+    teach: [
+      () => t('tutorial.T7a.teach.0'),
+      () => t('tutorial.T7a.teach.1'),
+      () => t('tutorial.T7a.teach.2'),
+      () => t('tutorial.T7a.teach.3'),
+    ],
+    scenario: () => t('tutorial.T7a.scenario'),
+    guidedSteps: [
+      () => t('tutorial.T7a.steps.0'),
+      () => t('tutorial.T7a.steps.1'),
+      () => t('tutorial.T7a.steps.2'),
+    ],
+    observe: () => t('tutorial.T7a.observe'),
+    // 这一关的亲自动手 = 一次**真出牌**（把自己的牌盖到自己线上；反面打出不看协议）
+    allowKinds: ['play'],
+    interaction: 'engine',
   },
   {
     id: 'T7',

@@ -33,19 +33,25 @@ import { renderApp, resetUiState, setDraftSelfSeat, type UiCallbacks } from './r
 // ★ 2026-10-06（**用户当天报的缺陷**）：「教程里的死板7在移动过页面后的场上持续特效会消失，
 // 而特效并没有继续持续跟随卡牌而显示」。
 // 常驻层（3代那一族，`rigidity-7` 的护壁就在里面）的"跟随"由 `main.ts` 的滚动/缩放 rAF 驱动，
-// 而那一路永远拿**主循环自己那一份 state** 去同步；教学屏画的是**它自己那份受控局面**
+// 而那一路原来永远拿**主循环自己那一份 state** 去同步；教学屏画的是**它自己那份受控局面**
 // ⇒ 一滚动，教学屏的层就被按一份不相干的局面 prune 掉（层当场淡出、320ms 后移除）。
-// 修法两半都在本文件 + `gen3-control.ts`（不动 `main.ts` / `render.ts`）：
-//  1. `setGen3BoardState(state)` 声明"这一屏的棋盘是这个局面"⇒ 主循环那一趟整趟早退；
-//  2. 本屏自己挂一个滚动/缩放的 rAF（`onViewportMove`）用**自己的** state 重定位，
-//     把"跟随"这一半接回来（主循环已经不替本屏做了）。
-import { setGen3BoardState, syncGen3Persistent } from './gen3-control';
+//
+// 修法两半（2026-10-06 第二轮起走**同一个出口**，不再各造一套）：
+//  1. `setBoardState(state)` 声明"这一屏的棋盘是这个局面"⇒ 滚动/缩放那一趟自己就会拿它去同步
+//     （`main.ts` 的 `syncPersistentFx` 里每条 sync 都喂 `boardStateOf(state)`）；
+//  2. 本屏自己那两个滚动/缩放监听（`onViewportMove`）复用 `main.ts` 导出的**同一个** `syncPersistentFx`
+//     —— 同一份清单、同一个判据，`render.ts` 那一族（冰1 的线冻结就在里面）也一并跟上。
+import { setBoardState } from './board-scope';
+// ⚠️ 常驻 FX 的滚动/缩放同步清单**只能有一份**（两份清单必然漂），那一份住在
+// `./fx-persistent-sync`（`main.ts` 的滚动 rAF 调的也是它）。本屏不再自己列清单 ——
+// 上一版只同步 3 代那一族，`render.ts` 那一族（冰1 的线冻结就在里面）因此没人替它重定位。
+import { syncPersistentFx } from './fx-persistent-sync';
 // ★ 2026-10-06（同一族查漏）：2代那一批**瞬态** body 级 FX 的清扫口（`main.ts` 的两处整局复位
 // 已经在用它）。换关同样是"换局面"，上一关那个播到一半的层不该悬在下一关上 —— 见 `openLevel()`。
 import { clearGen2Fx } from './fx-gen2';
 import { TUT_LEVELS, levelAt, levelById, levelIndex, TUT_SPOTS, type TutLevel } from '../tutorial/levels';
 import { buildLevelState } from '../tutorial/setup';
-import { isLevelComplete, offTrackKeyFor, observedOps, revealSeen, snapshot, type TutSnap } from '../tutorial/judge';
+import { isLevelComplete, offTrackKeyFor, observedOps, ownCardCovered, revealSeen, secretFromDeckPlayed, snapshot, type TutSnap } from '../tutorial/judge';
 import { advance, readProgress, restart } from '../tutorial/progress';
 import type { TutChoiceSeen, TutLevelId, TutOp, TutSpot, TutUiSeen } from '../tutorial/types';
 import { TUT_UI_NONE, triggersSeen } from '../tutorial/types';
@@ -311,20 +317,26 @@ export function applyNextButtonVisibility(root: ParentNode, allowAdvance: boolea
  * ★ 2026-10-06（**用户当天要求**）：**点已解锁关卡下面那个小数字，就跳回那一关重玩**。
  *
  * 用户原话：「我希望点击已解锁关卡下方的小数字能够跳到对应的关卡并重新游玩该关卡」。
+ * ★★ 2026-10-06 第二轮（**用户当天报的缺陷**）：「当我已经解锁了下一关并自动跳到下一关之后，
+ * 我点击下方的数字回到上一关，下一关的跳转按钮会变灰并且无法跳回去，从第一关重来的按钮也会
+ * 这样，请修复」——那是这一版的解锁口径写窄了，症状与根因见下面 §解锁口径。
  *
  * ## 解锁口径（这里就是它的唯一出处）
  *
- * `done` 里的关卡 **+ 当前这一关** 可点，其余不可点。两条理由：
- *  1. `done` 是"玩家真的过过这一关"的唯一凭证（`src/tutorial/progress.ts` 只写它），
- *     玩家对它的记忆就是"我能回去看看那一课"；
- *  2. 当前这一关也算 —— 面板上那颗「重开这一关」本来就是干这件事的，把它一起解锁不会
- *     引入任何**新**语义，只是多给一个入口（少一次"为什么我脚下这关点不动"）。
- * 以后面的关卡（`done` 与 `current` 之外）**不可点**：那是还没学到的东西，点进去等于跳课。
+ * **到过的最远处以及它之前的每一关都可点**。"到过的最远处"（下面的 `frontier`，0 起序号）取
+ * 两样里较远的那个：
+ *  1. **最后过掉的那一关的下一关**（`done` 里序号最大的那一关 + 1）—— 自动跳到下一关之后，
+ *     那一关**还没进 `done`**（过完才会写进去），而它正是玩家脚下这一关；
+ *  2. **面板上当前这一关**（`current`）。
  *
- * ## 返回什么
+ * ⚠️ 上一版只认 `done ∪ {当前这一关}`，于是"跳回去"这个动作会把 `current` 变小 ⇒
+ * **自动跳过去的那一关当场被锁上**：`done` 里没有它（还没过完）、`current` 也不是它
+ * ⇒ chip 变灰（`.tutorial-chip-locked`，`disabled`），点不回去；「从第一关重来」那条路
+ * 同理（老进度里 `S0` 不在 `done` 时，第一枚 chip 也会被锁上）。根因不是"哪个控件被禁用"，
+ * 而是**解锁面跟着"正在看哪一关"缩水**，而它本该只增不减。
  *
- * 返回**要重开的那一关**（`id`）；返回 `null` = 这一枚不可点。
- * 当前关（也是可点的那一档）返回自己 —— 与「重开这一关」同一条路（换 `levelId` + 清判定状态）。
+ * ⚠️ 序号一律用 `all.indexOf()` 算（`done` 里可能有本表不认识的 id —— 坏 dataset / 幽灵关，
+ * `indexOf` 给 -1，`+1` 之后就是 0，天然无害），不调 `levelIndex()`（它对未知 id 会抛）。
  *
  * ⚠️ 它**只算目标**：不写进度、不改 `done`、不改 `current`。跳回去看一遍不会把没过的标成过，
  * 也不会把过过的退回去（`advance()` 是唯一写进度的口，本函数不碰它）。
@@ -344,8 +356,21 @@ export function chipJumpTarget(
   all: readonly string[],
 ): string | null {
   if (!all.includes(clicked)) return null;
-  const unlocked = done.includes(clicked) || clicked === current;
+  const unlocked = all.indexOf(clicked) <= chipFrontier(current, done, all);
   return unlocked ? clicked : null;
+}
+
+/**
+ * 已解锁的最远**序号**（含）：`done` 里序号最大的那一关的**下一关**，与"当前这一关"取较远者。
+ *
+ * 空 `done` ⇒ `-1 + 1 = 0` ⇒ 只有第一关可点（没玩过的人面前只有第一关 —— 不放开任何跳课）。
+ * ⚠️ 与 `chipJumpTarget` 共用一处：`chipA11y()` 也读它，屏上那两处（`disabled` 与 title）
+ * 因此不可能各判各的。
+ */
+function chipFrontier(current: string, done: readonly string[], all: readonly string[]): number {
+  let frontier = all.indexOf(current);
+  for (const id of done) frontier = Math.max(frontier, all.indexOf(id) + 1);
+  return frontier;
 }
 
 /** 一枚 chip 的可点状态与无障碍标注（`aria-*` 的取值只有这一处出） */
@@ -358,9 +383,18 @@ export interface ChipA11y {
   readonly done: boolean;
 }
 
-/** 一枚 chip 的可点状态与无障碍标注（**纯函数**：逐关过一遍就是"解锁口径"的机检形态） */
-export function chipA11y(clicked: string, current: string, done: readonly string[]): ChipA11y {
-  return { enabled: done.includes(clicked) || clicked === current, current: clicked === current, done: done.includes(clicked) };
+/**
+ * 一枚 chip 的可点状态与无障碍标注（**纯函数**：逐关过一遍就是"解锁口径"的机检形态）。
+ *
+ * ⚠️ `enabled` 直接复用 `chipJumpTarget()` 的结论 —— 只有一处口径，屏上不会出现
+ * "能点但画成灰的 / 画成可点但点不动"这种两份真相。
+ */
+export function chipA11y(clicked: string, current: string, done: readonly string[], all: readonly string[]): ChipA11y {
+  return {
+    enabled: chipJumpTarget(clicked, current, done, all) !== null,
+    current: clicked === current,
+    done: done.includes(clicked),
+  };
 }
 /**
    * 教学自己的 `UiCallbacks`。
@@ -838,19 +872,19 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
    * ★★ 2026-10-06（**用户当天报的缺陷**）：「教程里的死板7……持续特效会消失，
    * 而特效并没有继续持续跟随卡牌而显示」——修法的**第二半：跟随**。
    *
-   * 3代常驻层是 `position: fixed` 的 body 级层，坐标只在同步那一刻按实测矩形算一次
-   * ⇒ 滚动/缩放必须有人重新算（见 `gen3-control.ts` 的 `boardState` 那段：教学屏已经
-   * 声明了棋盘局面，主循环那一趟会**整趟早退**，所以它不再替本屏重定位）。
+   * 常驻层是 `position: fixed` 的 body 级层，坐标只在同步那一刻按实测矩形算一次
+   * ⇒ 滚动/缩放必须有人重新算。这一趟原来只喂 3 代那一族（`syncGen3Persistent`），
+   * 而 `render.ts` 里那一批注册表（黑烟 / 扫描线 / **寒冰 ice-1·4·6** / 金属 / 恐惧 / 战争…）
+   * 的 prune 写在 `render.ts` 里，没人替本屏重定位 —— 用户的「冰1」就在那一批里。
    *
-   * 形态照本仓既有那一套（`main.ts:5900` 的滚动/缩放 rAF）：rAF 节流 + passive + capture
-   * （覆盖任意可滚动容器）。两点与主循环那一路**刻意不同**：
-   *  - 用的是**本屏自己的 `state`**（闭包里那个 `let`，换关时 `openLevel()` 会就地换掉它）；
-   *  - 只同步3代常驻层。其余常驻层（黑烟/扫描/冰封…）是 `render.ts` 里的注册表，
-   *    它们的同步函数吃的那份局面在教学屏里无从替换（那一路必须改红线才能修，
-   *    实测只有 T11 的 `fx-ice-linefreeze` 受影响，见任务报告与
-   *    `tests/ui/gen3-persistent-scope.test.ts` 的逐关读数）。
-   * ⚠️ 与主循环那一趟的**先后**：两个监听都在同一个事件里排 rAF，主循环那个先排
-   *    ⇒ 它先跑，但它整趟早退；本屏这一趟随后按自己的局面重定位。两侧都不改对方的层。
+   * 修法（2026-10-06 第二轮）：**不再自己列清单**，改调 `main.ts` 导出的 `syncPersistentFx()`
+   * —— 与主循环滚动那一趟**逐条同一个函数、同一个判据**（它内部每条 sync 都喂
+   * `boardStateOf(state)`，本屏已经用 `setBoardState(state)` 声明过局面 ⇒ 喂的就是本屏那份）。
+   *
+   * 形态照本仓既有那一套（`main.ts` 的滚动/缩放 rAF）：rAF 节流 + passive + capture
+   * （覆盖任意可滚动容器）。
+   * ⚠️ 与主循环那一趟的**先后**：两个监听都在同一个事件里排各自的 rAF，主循环那个先排
+   *    ⇒ 它先跑（现在它喂的也是本屏那份局面，与后一趟结论一致）。两侧都不清对方的层。
    */
   let viewportSyncScheduled = false;
   const onViewportMove = (): void => {
@@ -858,7 +892,7 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
     viewportSyncScheduled = true;
     requestAnimationFrame(() => {
       viewportSyncScheduled = false;
-      syncGen3Persistent(state);
+      syncPersistentFx(state);
     });
   };
   window.addEventListener('scroll', onViewportMove, { passive: true, capture: true });
@@ -930,9 +964,23 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
       hintBox.textContent = uiSeen.detailsOpened === 0 ? t('tutorial.zoom.hint') : t('tutorial.zoom.opened');
     }
     if (level.id === 'T6') {
+      /**
+       * ★ 2026-10-06（用户口径）：这一关分两步 —— **先造出未公开信息，再讲怎么看**。
+       *
+       * 所以提示区也分两档：
+       *  1. 还没打出那张"生产未公开信息"的牌 ⇒ 只给第一步那一句（`tutorial.peek.make`）；
+       *  2. 打出来了 ⇒ 才轮到两个对照那两句（`tutorial.peek.yes` / `tutorial.peek.no`）。
+       *
+       * ⚠️ 这两档读的是**判据用的同一份读数**（`secretFromDeckPlayed()` 读状态、`uiSeen` 读界面观察）
+       * —— 不另算一遍，否则会出现"提示说做到了、判据不给过"的漂移。
+       */
       const lines: string[] = [];
-      if (!uiSeen.peekAvailable) lines.push(t('tutorial.peek.yes'));
-      if (!uiSeen.peekBlocked) lines.push(t('tutorial.peek.no'));
+      if (!secretFromDeckPlayed(state)) {
+        lines.push(t('tutorial.peek.make'));
+      } else {
+        if (!uiSeen.peekAvailable) lines.push(t('tutorial.peek.yes'));
+        if (!uiSeen.peekBlocked) lines.push(t('tutorial.peek.no'));
+      }
       hintBox.textContent = lines.length > 0 ? lines.join(' ') : t('tutorial.peek.done');
     }
     /**
@@ -943,6 +991,13 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
      */
     if (level.id === 'S0' && state.step === 'check-compile') {
       hintBox.textContent = t('tutorial.T13.hint.compile');
+    }
+    if (level.id === 'T7a') {
+      /**
+       * ★ 2026-10-06（用户口径）T7a「牌能盖牌」：两档提示，读的是**判据用的同一个函数**
+       * （`ownCardCovered()`，`judge.ts`）—— 不另算一遍，免得"提示说盖上了、判据不给过"。
+       */
+      hintBox.textContent = ownCardCovered(state) ? t('tutorial.T7a.hint.done') : t('tutorial.T7a.hint.go');
     }
     if (level.id === 'T7') {
       /**
@@ -1019,7 +1074,7 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
        * 没解锁的用 `disabled`（`<button>` 天然带键盘可达性与禁用语义）+ `.tutorial-chip-locked` 压暗。
        */
       const to = chipJumpTarget(l.id, level.id, progress.done, TUT_LEVELS.map((x) => x.id));
-      const a11y = chipA11y(l.id, level.id, progress.done);
+      const a11y = chipA11y(l.id, level.id, progress.done, TUT_LEVELS.map((x) => x.id));
       const chip = button('tutorial-chip', String(levelIndex(l.id) + 1), () => { restartLevel(l.id); });
       chip.dataset.level = l.id;
       if (a11y.done) chip.classList.add('on');
@@ -1330,7 +1385,7 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
     clearGen2Fx();
     state = buildLevelState(levelId);
     // ★ 2026-10-06：换的是**新的一份局面对象** ⇒ 声明口跟着换（见 `onViewportMove` 那段说明）
-    setGen3BoardState(state);
+    setBoardState(state);
     snap = snapshot(state);
     opsSeen = [];
     spotsDone.clear();
@@ -1404,10 +1459,10 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
       setDraftSelfSeat(null);
       /**
        * ★ 2026-10-06：**撤销"这一屏的棋盘"的声明**（放在 `resetUiState()` 之后）。
-       * 留着它 = 主循环（热座/远程页那一路）之后所有 `syncGen3Persistent(state)` 都被判成
-       * "外来局面"而整趟早退 ⇒ 退出教程之后所有3代常驻层**永远不更新**（既不能建也不能删）。
+       * 留着它 = 主循环（热座/远程页那一路）之后所有常驻层同步都被替换成"这一份早已下线的
+       * 教学局面"（既不能建也不能删，还会按它重定位）⇒ 退出教程之后热座那些层永远不更新。
        */
-      setGen3BoardState(null);
+      setBoardState(null);
     },
   };
 }

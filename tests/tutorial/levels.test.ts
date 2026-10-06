@@ -2,7 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { buildLevelState } from '../../src/tutorial/setup';
-import { observedOps, snapshot, isLevelComplete, offTrackKeyFor, revealSeen, T9_FLIP_DEF, T9_REVEAL_DEF } from '../../src/tutorial/judge';
+import {
+  observedOps, snapshot, isLevelComplete, offTrackKeyFor, revealSeen, secretFromDeckPlayed, ownCardCovered,
+  T9_FLIP_DEF, T9_REVEAL_DEF, T6_SECRET_HAND_UID, T6_SECRET_DECK_UID, T7A_UNDER_UID, T7A_OVER_UID,
+} from '../../src/tutorial/judge';
 import { levelById, TUT_LEVELS, levelAt, levelIndex, TUT_LEVEL_COUNT } from '../../src/tutorial/levels';
 import { TUT_UI_NONE, canPeekFaceDown, triggersSeen } from '../../src/tutorial/types';
 import { createLocalDriver } from '../../src/app/match-driver';
@@ -328,33 +331,78 @@ describe('T5：覆盖与揭开（把对手线 0 那张压在下面）', () => {
   });
 });
 
-describe('★ T6：场上的反面牌能不能看（两个对照都要看过）', () => {
-  it('走对：看过"能看的" + "不能看的" ⇒ 过；只看一个 ⇒ 不过', () => {
-    const level = levelById('T6');
+/**
+ * ★ T6：场上的反面牌能不能看。
+ *
+ * ★ 2026-10-06（**用户口径**）：「第八关只教了玩家区分公开信息与未公开信息的查看规则，
+ * 没有教什么情况下会导致未公开信息的产生，请你先指挥玩家打出对应的卡牌，使场上能够出现
+ * 未公开信息的卡牌，然后再让玩家去区分」⇒ 这一关现在是**两步**，判据也分两半：
+ *  1. **状态差分**（`secretFromDeckPlayed`）：那张牌库顶的牌真的"反面出场"了（离开牌库 +
+ *     反面 + `secret === true`）；
+ *  2. **两个对照都见过**（`peekAvailable` / `peekBlocked`）。
+ * 下面每一条都按这两半分开钉，且**零操作 / 只做一半都不算过**。
+ */
+describe('★ T6：场上的反面牌能不能看（先造出未公开信息，再对比两个对照）', () => {
+  /** 把 T6 的第一步真跑一遍（打出「流水1」），返回打完之后的局面 */
+  function runT6Flow(): GameState {
     const s = buildLevelState('T6');
-    expect(isLevelComplete(level, s, { ui: TUT_UI_NONE }), '一个都没看就算过').toBe(false);
+    expect(secretFromDeckPlayed(s), '开局就被当成"未公开信息已经产生"（那张还在牌库里）').toBe(false);
+    expect(drive(s, 'play', { cardUid: T6_SECRET_HAND_UID, faceUp: true, line: 1 }), '引擎拒了「流水1」').toBe(true);
+    return s;
+  }
+
+  it('走对：先打出「流水1」造出未公开信息，两个对照都看过 ⇒ 过；只做一半 / 零操作 ⇒ 不过', () => {
+    const level = levelById('T6');
+    // ① 零操作：两个对照"看过"也不算过 —— 未公开信息还没产生
+    expect(
+      isLevelComplete(level, buildLevelState('T6'), { ui: { detailsOpened: 2, peekAvailable: true, peekBlocked: true } }),
+      '还没打出那张牌就判过关 —— 这一关的第一步（把未公开信息造出来）没被要求',
+    ).toBe(false);
+    const s = runT6Flow();
+    // ② 只打了牌、一个对照都没看
+    expect(isLevelComplete(level, s, { ui: TUT_UI_NONE }), '只打了牌、一个对照都没看就判过关').toBe(false);
+    // ③ 只看过"能看的"那张
     expect(
       isLevelComplete(level, s, { ui: { detailsOpened: 2, peekAvailable: true, peekBlocked: false } }),
       '只看过"能看的"那张就判过关',
     ).toBe(false);
+    // ④ 只看过"不能看的"那张
     expect(
       isLevelComplete(level, s, { ui: { detailsOpened: 2, peekAvailable: false, peekBlocked: true } }),
       '只看过"不能看的"那张就判过关',
     ).toBe(false);
+    // ⑤ 两个对照都看过 ⇒ 过
     expect(
       isLevelComplete(level, s, { ui: { detailsOpened: 2, peekAvailable: true, peekBlocked: true } }),
       '两个对照都看过却没判过关',
     ).toBe(true);
   });
 
-  it('★ 两个对照的局面**真的摆出来了**：线 0 非 secret（能看）、线 1 secret（不能看）', () => {
-    const s = buildLevelState('T6');
-    const open = s.players[0].stacks[0][0];
-    const secret = s.players[0].stacks[1][0];
-    expect(open.faceUp, '线 0 那张不是反面 ⇒ 这一关的"对照"不成立').toBe(false);
-    expect(secret.faceUp, '线 1 那张不是反面').toBe(false);
+  it('★ 第一步的状态差分：那张牌真的"反面出场"了（离开牌库 + 反面 + secret）', () => {
+    const s0 = buildLevelState('T6');
+    const before = findCard(s0, T6_SECRET_DECK_UID);
+    expect(before?.zone, '那张牌开局不在牌库里 ⇒ 这不是"从牌库顶打出"的形态').toBe('deck');
+    expect(before?.secret, '牌库里的牌就被打上了 secret').not.toBe(true);
+
+    const s = runT6Flow();
+    const c = findCard(s, T6_SECRET_DECK_UID);
+    expect(c?.zone, '打出「流水1」之后那张牌没落到场上').toBe('field');
+    expect(c?.line, '它没落在线 1（`water-1` 的"另两列"里的第一列）').toBe(0);
+    expect(c?.faceUp, '它不是反面出场的').toBe(false);
+    expect(c?.secret, '它是牌库来源的反面牌，应该带 secret（= 未公开信息）').toBe(true);
+    expect(secretFromDeckPlayed(s), '判据的状态差分读数没认出来').toBe(true);
+    // 反向：另一个对照（那张"能看"的）**没有** secret ⇒ 同一份读数不是恒真
+    expect(findCard(s, 't6f-open')?.secret, '那个"能看"的对照被打上了 secret').not.toBe(true);
+  });
+
+  it('★ 两个对照的局面**真的摆出来了**：线 1 secret（不能看）、线 3 非 secret（能看）', () => {
+    const s = runT6Flow();
+    const secret = s.players[0].stacks[0][0];
+    const open = s.players[0].stacks[2][0];
+    expect(secret.faceUp, '线 1 那张不是反面 ⇒ 这一关的"对照"不成立').toBe(false);
+    expect(open.faceUp, '线 3 那张不是反面').toBe(false);
     // ★ 这就是"已公开 vs 未公开"的机械形态：靠 `Card.secret`（types.ts:48）
-    expect(open.secret, '线 0 那张被打了 secret（它应当是"已公开"的那一边）').not.toBe(true);
+    expect(open.secret, '线 3 那张被打了 secret（它应当是"已公开"的那一边）').not.toBe(true);
     expect(secret.secret, '线 1 那张没有 secret 标记（它应当是"牌库来源、未公开"的那一边）').toBe(true);
     // 判据的纯函数镜像：与 render.ts:418 的 peek 实参同口径
     expect(canPeekFaceDown(open, true, 'turn'), '「已公开的自己反面牌」被判成不能看').toBe(true);
@@ -379,8 +427,109 @@ describe('★ T6：场上的反面牌能不能看（两个对照都要看过）'
     expect(render.slice(at - 120, at), 'peek 判据不在 openZoom 调用点上').toContain('openZoom(');
   });
 
-  it('它是"看卡"关：不放任何引擎动作', () => {
-    expect(levelById('T6').allowKinds, 'T6 竟然放行了引擎动作').toEqual([]);
+  it('★ 它是"真出牌"关：放行 play，别的一律走偏（这一课不再是"只看卡不动牌"）', () => {
+    expect(levelById('T6').allowKinds, 'T6 的白名单变了 —— 第一步要玩家真的打出那张牌').toEqual(['play']);
+    expect(offTrackKeyFor(levelById('T6'), { kind: 'compile' })).toBe('tutorial.off.wrong-kind');
+    // 正向：白名单里那一个动作真的走得通（真引擎，不是看白名单字面量）
+    const s = buildLevelState('T6');
+    expect(drive(s, 'play', { cardUid: T6_SECRET_HAND_UID, faceUp: true, line: 1 }), '白名单放行的 play 被引擎拒了').toBe(true);
+  });
+
+  it('★ 判据声明：两个对照都要求（少一个就从声明上放水了）', () => {
+    expect(levelById('T6').ui?.needPeekAvailable, 'T6 没声明"要见过能看的反面牌"').toBe(true);
+    expect(levelById('T6').ui?.needPeekBlocked, 'T6 没声明"要见过不能看的反面牌"').toBe(true);
+    // 声明与判据一致（真跑一遍两档）
+    const s = runT6Flow();
+    expect(isLevelComplete(levelById('T6'), s, { ui: { detailsOpened: 2, peekAvailable: true, peekBlocked: false } })).toBe(false);
+    expect(isLevelComplete(levelById('T6'), s, { ui: { detailsOpened: 2, peekAvailable: false, peekBlocked: true } })).toBe(false);
+  });
+});
+
+/**
+ * ★ 2026-10-06（**用户当天口径**）：T7a「牌能盖牌」。
+ *
+ * 用户原话：「第七关的重点是让玩家理解卡牌之间可覆盖的效果，你现在做的这一关应该为该关卡的第二关
+ * 才对，先要通过己方场上的例子告诉玩家卡牌之间的覆盖效果，然后才进入第二个小关卡懂我意思吗」
+ * ⇒ 在「效果能选谁」（T7）**之前**插这一关，只用**己方场上**的例子讲覆盖。
+ *
+ * 判据是**状态差分**（引擎自己的 `isUncovered`）：原来那张不再是顶卡（被覆盖）、盖上去那张
+ * 成为新的顶卡，而且两张都还在场上。零操作时原来那张就是顶卡 ⇒ 判据不成立。
+ */
+describe('★ T7a：牌能盖牌（己方场上的覆盖）', () => {
+  it('走对：把自己的精神5 反面盖到精神3 上 ⇒ 精神3 变成被覆盖 ⇒ 过', () => {
+    const s = buildLevelState('T7a');
+    const level = levelById('T7a');
+    expect(isLevelComplete(level, s), '开局就算过（精神3 还是这条线的顶卡）').toBe(false);
+    expect(ownCardCovered(s), '开局就被判成"已经盖住了"').toBe(false);
+    expect(drive(s, 'play', { cardUid: T7A_OVER_UID, faceUp: false, line: 0 }), '引擎拒了这次盖牌').toBe(true);
+    expect(isLevelComplete(level, s), '盖上去之后没判过关').toBe(true);
+    expect(ownCardCovered(s), '判据的读数没认出来').toBe(true);
+  });
+
+  it('★ 状态差分（逐条）：谁盖住谁、被盖住的那张还在不在', () => {
+    const s = buildLevelState('T7a');
+    const under0 = findCard(s, T7A_UNDER_UID);
+    expect(under0?.zone, '那张要当靶子的精神3 不在场上').toBe('field');
+    expect(under0?.faceUp, '它是正面牌（这一课的对照要看"正面被盖住"）').toBe(true);
+    expect(isUncovered(s, under0!), '开局它不是这条线的顶卡 ⇒ 这一课的起点不成立').toBe(true);
+
+    expect(drive(s, 'play', { cardUid: T7A_OVER_UID, faceUp: false, line: 0 })).toBe(true);
+    const under = findCard(s, T7A_UNDER_UID)!;
+    const over = findCard(s, T7A_OVER_UID)!;
+    // ① 被盖住的那张：还在场上、但**不再是顶卡**
+    expect(under.zone, '被盖住的牌"消失"了 —— 这一课讲的是"被覆盖 ≠ 消失"').toBe('field');
+    expect(isUncovered(s, under), '它还是顶卡 ⇒ 覆盖关系没成立').toBe(false);
+    // ② 盖上去的那张：同一叠里、是新的顶卡
+    expect(over.zone, '盖上去的牌不在场上').toBe('field');
+    expect(over.line, '盖上去的牌落在了别的线上（这一课是"盖在自己的牌上"）').toBe(under.line);
+    expect(isUncovered(s, over), '盖上去的牌不是新的顶卡').toBe(true);
+    // ③ 这一关**只用己方场上**的例子：对手那边一张牌都不该有
+    expect(s.players[1].stacks.flat(), '对手场上摆着牌 —— 用户要的是"己方场上的例子"').toEqual([]);
+  });
+
+  it('走偏：把精神5 打到别的线上（不盖它）⇒ 不过', () => {
+    const s = buildLevelState('T7a');
+    expect(drive(s, 'play', { cardUid: T7A_OVER_UID, faceUp: false, line: 1 }), '引擎拒了这次出牌').toBe(true);
+    expect(isLevelComplete(levelById('T7a'), s), '没盖到那张牌上也判过关').toBe(false);
+    expect(ownCardCovered(s), '没盖到那张牌上，读数却是真的').toBe(false);
+  });
+
+  it('★ 反向：把那张靶子牌移走（不在场上）⇒ 判据不成立（不是"看一眼就过"）', () => {
+    const s = buildLevelState('T7a');
+    expect(drive(s, 'play', { cardUid: T7A_OVER_UID, faceUp: false, line: 0 })).toBe(true);
+    // 把被盖的那张"弄没"（模拟：它不在场上了）⇒ 判据必须回 false
+    s.players[0].stacks[0] = s.players[0].stacks[0].filter((c) => c.uid !== T7A_UNDER_UID);
+    expect(ownCardCovered(s), '靶子牌都不在场上了，判据还是 true').toBe(false);
+    expect(isLevelComplete(levelById('T7a'), s), '靶子牌都不在场上了，还算过关').toBe(false);
+  });
+
+  it('★ 反向（机制腿）：压在上面那张必须**是它**（把打出的那张塞到靶子下面 ⇒ 不算覆盖）', () => {
+    /**
+     * ⚠️ 这一条是**伪造局面**的机制腿，不是"走偏腿"：这一关的白名单里只有一次 `play`，
+     * 能让 `t7a-under` 不再是顶卡的唯一途径就是把 `t7a-over` 打上去 ⇒ 下面这个形态
+     * （打出的那张在靶子**下面**、上面压着别的牌）在真实操作里走不出来。
+     * 它的用处是给判据里那句 `isUncovered(state, over)` 一条**有齿的腿**：
+     * 变异实测（把那句删掉）之前，删掉之后所有腿仍然全绿 —— 那说明它当时只是一句没人看的冗余。
+     */
+    const s = buildLevelState('T7a');
+    expect(drive(s, 'play', { cardUid: T7A_OVER_UID, faceUp: false, line: 0 })).toBe(true);
+    // 把栈改成 [over, under, X]：under 仍不是顶卡、over 也在同一栈里，但压在上面的不是它
+    const under = findCard(s, T7A_UNDER_UID)!;
+    const over = findCard(s, T7A_OVER_UID)!;
+    const extra = rawCard('t7a-extra', 'spirit-0', 0, 'field', true, 0, 2);
+    s.players[0].stacks[0] = [over, under, extra];
+    expect(isUncovered(s, under), '前置：靶子在伪造之后仍不是顶卡').toBe(false);
+    expect(ownCardCovered(s), '压在上面那张不是打出的那张，判据却给了过').toBe(false);
+    expect(isLevelComplete(levelById('T7a'), s), '伪造局面下判过关').toBe(false);
+  });
+
+  it('放行范围：T7a 只放行 play；判定门槛与实现口径一致（不许"差 5"那种口径）', () => {
+    expect(levelById('T7a').allowKinds).toEqual(['play']);
+    expect(offTrackKeyFor(levelById('T7a'), { kind: 'compile' })).toBe('tutorial.off.wrong-kind');
+    // 这一关不放行 effect-choice：盖牌那一步**不弹任何选择**（实测：pendingEffects 为空）
+    const s = buildLevelState('T7a');
+    expect(drive(s, 'play', { cardUid: T7A_OVER_UID, faceUp: false, line: 0 })).toBe(true);
+    expect(s.pendingEffects.length, '盖牌那一步弹了选择 —— 这一关的动作链就不止一步了').toBe(0);
   });
 });
 
@@ -1237,8 +1386,8 @@ describe('★ T13：迷你对局（打到终局 s.winner !== null）', () => {
  *     "只念文字 / 点下一步就算过"直接钉死。
  */
 describe('★ 教学设计四件套（生成式：以后新增关卡自动受约束）', () => {
-  it('锚点：十五关（S0 + T0~T13）、引擎动作类与 UI 交互类**都存在**（否则下面每条腿在空集上恒真）', () => {
-    expect(TUT_LEVELS.length, '关卡数不是 15（S0 + T0~T13）').toBe(15);
+  it('锚点：十六关（S0 + T0~T6 + T7a + T7~T13）、引擎动作类与 UI 交互类**都存在**（否则下面每条腿在空集上恒真）', () => {
+    expect(TUT_LEVELS.length, '关卡数不是 16（S0 + T0~T13，外加插在 T7 之前的 T7a）').toBe(16);
     expect(TUT_LEVELS.filter((l) => l.interaction === 'engine').length, '一个引擎动作类关卡都没有').toBeGreaterThan(0);
     expect(TUT_LEVELS.filter((l) => l.interaction === 'ui').length, '一个 UI 交互类关卡都没有').toBeGreaterThan(0);
   });
@@ -1269,13 +1418,20 @@ describe('★ 教学设计四件套（生成式：以后新增关卡自动受约
         expect(l.ui?.detailsAtLeast, `${l.id} 声明走引擎动作，判据却是纯 UI 计数`).toBeUndefined();
       } else {
         uiIds.push(l.id);
-        // UI 交互类：有 UI 状态差分的落点（T0 的四个热点 / T1、T6 的详情遮罩真的打开过）
+        // UI 交互类：有 UI 状态差分的落点（T0 的四个热点 / T1 的详情遮罩真的打开过）
         const uiEvidence = (l.spots?.length ?? 0) > 0 || (l.ui?.detailsAtLeast ?? 0) > 0;
         expect(uiEvidence, `${l.id} 声明走 UI 交互，却没有 UI 状态差分的落点`).toBe(true);
       }
     }
-    // 两类的"存在性"再锚一次：UI 交互类正好是 T0/T1/T6（看卡与点热点那三关）
-    expect(uiIds, 'UI 交互类关卡变了 —— 请确认新那一关的"真实操作"是什么').toEqual(['T0', 'T1', 'T6']);
+    /**
+     * 两类的"存在性"再锚一次：UI 交互类正好是 T0/T1（点热点与看卡那两关）。
+     *
+     * ⚠️★ 2026-10-06：**T6 从这一档搬走了** —— 用户要求"先指挥玩家打出对应的卡牌，使场上能够
+     * 出现未公开信息的卡牌，然后再让玩家去区分" ⇒ 它有了一次**真引擎动作**（`allowKinds:['play']`），
+     * 判据也不再是纯 UI 计数（还要 `secretFromDeckPlayed()` 那条状态差分）。它现在诚实地算
+     * "引擎动作类"（上面那一支会替它检查 `ui?.detailsAtLeast === undefined`）。
+     */
+    expect(uiIds, 'UI 交互类关卡变了 —— 请确认新那一关的"真实操作"是什么').toEqual(['T0', 'T1']);
     expect(engineIds.length + uiIds.length).toBe(TUT_LEVELS.length);
   });
 
@@ -1314,7 +1470,7 @@ describe('★ 受控局面：双方协议两两不重名（已编译特效的 de
   const overlap = (mine: readonly string[], foe: readonly string[]): string[] =>
     mine.filter((d) => foe.includes(d));
 
-  it('十五关逐关检查：双方协议 defId 的交集为空', () => {
+  it('十六关逐关检查：双方协议 defId 的交集为空', () => {
     for (const l of TUT_LEVELS) {
       const s = buildLevelState(l.id);
       const mine = s.players[0].protocols.map((p) => p.defId);
@@ -1376,18 +1532,22 @@ describe('★ 受控局面：双方协议两两不重名（已编译特效的 de
 });
 
 describe('关卡数据本身（顺序 / 序号 / 钳位）', () => {
-  it('十五关的 id 与顺序就是 S0 + T0~T13（S0 插在最前面，其余 id 一个都没动）', () => {
+  it('十六关的 id 与顺序就是 S0 + T0~T6 + T7a + T7~T13（插进来的两个 id 不重排既有的）', () => {
     expect(TUT_LEVELS.map((l) => l.id)).toEqual([
-      'S0', 'T0', 'T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8', 'T9', 'T10', 'T11', 'T12', 'T13',
+      'S0', 'T0', 'T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7a', 'T7', 'T8', 'T9', 'T10', 'T11', 'T12', 'T13',
     ]);
-    // ★ 2026-10-06：S0 插在**最前面** ⇒ 原来每一关的**序号**往后挪一格，但 **id 没变**
-    //   （已存进度里的 current/done 仍指向原来那几课 —— 这是"不重新编号"的代价与好处）
+    // ★ 2026-10-06：S0 插在**最前面**、T7a 插在 T6 与 T7 之间 ⇒ 后面那些关的**序号**往后挪，
+    //   但 **id 一个都没变**（已存进度里的 current/done 仍指向原来那几课 —— 这是"不重新编号"的
+    //   代价与好处；T7a 是新 id，不存在"老进度指向了另一课"的问题）
     expect(levelIndex('S0'), 'S0 不在最前面').toBe(0);
     expect(levelIndex('T0'), 'T0 被 S0 顶到第 2 位').toBe(1);
-    expect(levelIndex('T9')).toBe(10);
+    expect(levelIndex('T6')).toBe(7);
+    expect(levelIndex('T7a'), 'T7a 不在 T6 与 T7 之间').toBe(8);
+    expect(levelIndex('T7'), 'T7 不在 T7a 之后').toBe(9);
+    expect(levelIndex('T9')).toBe(11);
     // ★ P7：后四关是**追加**上去的（老 id 没有被重新指向，不用清本机数据 —— 与 P5/P6 两次不同）
-    expect(levelIndex('T10'), 'T10 不在 T9 之后').toBe(11);
-    expect(levelIndex('T13')).toBe(14);
+    expect(levelIndex('T10'), 'T10 不在 T9 之后').toBe(12);
+    expect(levelIndex('T13')).toBe(15);
     expect(levelAt(1)).toBe('T0');
     expect(levelAt(2)).toBe('T1');
   });
@@ -1397,12 +1557,14 @@ describe('关卡数据本身（顺序 / 序号 / 钳位）', () => {
     // 方案 §7.10 ③ 要求"默认目标规则"也放在"覆盖与揭开"之后（本仓摆在反面牌可视之后、
     // 编译之前），"打出 vs 露出"排在最后（它讲触发途径，是最"效果向"的一课）。
     // ⚠️ 2026-10-06：S0 插到最前面 ⇒ 这里每一条的**下标**都往后挪 1（断言的是 id，不是"第几关"）
+    // ⚠️★ 2026-10-06 第二轮：T7a（牌能盖牌）插在 T6 与 T7 之间 ⇒ T7 起再往后挪一格
     expect(TUT_LEVELS[1].id, '界面扫盲（T0）不在序章之后').toBe('T0');
     expect(TUT_LEVELS[2].id, '「查看卡牌详情」不在 T0 之后').toBe('T1');
     expect(levelIndex('T5'), '「覆盖与揭开」的位置变了').toBe(6);
     expect(TUT_LEVELS[7].id, '「反面牌可视规则」不在「覆盖与揭开」之后').toBe('T6');
-    expect(TUT_LEVELS[8].id, '「默认目标规则」不在「反面牌可视」之后').toBe('T7');
-    expect(TUT_LEVELS[10].id, '「打出 vs 露出」不是最后一关').toBe('T9');
+    expect(TUT_LEVELS[8].id, '「牌能盖牌」（T7a）不在反面牌可视之后').toBe('T7a');
+    expect(TUT_LEVELS[9].id, '「默认目标规则」不是「牌能盖牌」之后的那一关').toBe('T7');
+    expect(TUT_LEVELS[11].id, '「打出 vs 露出」不是最后一关').toBe('T9');
   });
 
   it('序号越界钳到两端（通关之后再进教学停在最后一关，不是崩）', () => {
