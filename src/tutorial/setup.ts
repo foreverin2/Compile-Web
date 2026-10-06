@@ -186,7 +186,11 @@ export function buildLevelState(id: TutLevelId): GameState {
       card('s0f1', 'light-4', 0, 'field', true, 2, 0),
       card('s0f2', 'light-5', 0, 'field', true, 2, 1),
     ];
-    s.players[1].stacks[2] = [card('s0o1', 'light-2', 1, 'field', true, 2, 0)];
+    // ★ 2026-10-03（用户第二轮口径：**每一侧的牌都要属于那一侧自己那条线的协议**）：
+    //   对手线 3 挂的是他自己的**生命**协议 ⇒ 这张靶子牌原来是 `light-2`（明光），
+    //   摆在他那条生命线上就是"不属于这个协议的卡牌"。换成 `life-2`：**分值仍是 2**
+    //   （这一关的线值是"我 10 / 敌 2"，判据与文案都不看这张牌是什么）。
+    s.players[1].stacks[2] = [card('s0o1', 'life-2', 1, 'field', true, 2, 0)];
     s.players[0].hand = [card('s0h1', 'light-1', 0, 'hand', true)];
     return s;
   }
@@ -249,7 +253,9 @@ export function buildLevelState(id: TutLevelId): GameState {
     s.players[0].stacks[0] = [card('t4f-up', 'spirit-3', 0, 'field', true, 0, 0)];
     s.players[0].stacks[1] = [card('t4f-down', 'water-2', 0, 'field', false, 1, 0)];
     // 对手线 0 一张正面牌：让"阈值/控制权"两个读数有东西可显示
-    s.players[1].stacks[0] = [card('t4o-up', 'spirit-2', 1, 'field', true, 0, 0)];
+    // ★ 2026-10-03（用户第二轮口径）：对手线 1 挂的是他自己的**火焰**协议 ⇒ 这张牌从
+    //   `spirit-2` 换成 `fire-2`（**分值仍是 2**：它只用来让"阈值/控制权"两个读数有东西可显示）。
+    s.players[1].stacks[0] = [card('t4o-up', 'fire-2', 1, 'field', true, 0, 0)];
     return s;
   }
   if (id === 'T5') {
@@ -422,7 +428,9 @@ function buildLevelStateP7(id: 'T10' | 'T11' | 'T12' | 'T13'): GameState {
     s.players[0].stacks[0] = [card('t10f-a', 'spirit-3', 0, 'field', true, 0, 0)];
     s.players[0].stacks[1] = [card('t10f-b', 'water-3', 0, 'field', true, 1, 0)];
     // 对手只有线 1 有牌（1 分）⇒ 线 2 对手 0 分，线 3 双方 0:0（不算"高过"）
-    s.players[1].stacks[0] = [card('t10o1', 'spirit-1', 1, 'field', true, 0, 0)];
+    // ★ 2026-10-03（用户第二轮口径）：对手线 1 挂的是他自己的**火焰**协议 ⇒ 从 `spirit-1`
+    //   换成 `fire-1`（**分值仍是 1**：控制权比的是三条线的总值，改协议不改分）。
+    s.players[1].stacks[0] = [card('t10o1', 'fire-1', 1, 'field', true, 0, 0)];
     return s;
   }
   if (id === 'T11') {
@@ -501,28 +509,38 @@ function buildLevelStateP7(id: 'T10' | 'T11' | 'T12' | 'T13'): GameState {
      * |---|---|---|---|
      * | 删除 | `fire-1` 打到线 1 | 中「弃1张牌。如果弃了，删除1张牌。」 | 对手那张 `t12o1` 进了**对手弃牌堆** |
      * | 加成 | `clarity-0` 打到线 2 | 顶「此链路中，你每有1张牌，总阈值就加1。」 | 线 2 的**总值**从 0 变成 1 |
-     * | 免疫 | `rigidity-1` 打到线 3 | 中「翻转对手1张正面朝上的牌。」 | 对手那张 `t12f-rigid`（**死板7**）底「此牌不能被翻转或偏转。」 |
+     * | 免疫 | `darkness-1` 打到线 3 | 中「翻转1张你对手的牌。你可以偏转那张牌。」 | 对手那张 `t12f-rigid`（**死板7**）底「此牌不能被翻转或偏转。」 |
      *
-     * ⚠️ **被保护的那张必须摆在对手那条线上**：`rigidity-1` 的候选只看**对手**的顶卡
-     * （`rigidity.ts:18` 的 `owner: opp(ctx.player)`）⇒ 摆在自己场上时候选里根本没有它，
-     * 「免疫」就演示不出来（第一版就是这么摆的，探针里候选只剩别的牌）。
+     * ⚠️ **被保护的那张必须摆在对手那条线上**：翻转类效果的候选只看**对手**的场牌
+     * （`darkness.ts` 的 `ctx.candidates({ zone: 'field' }).filter((c) => c.owner !== ctx.player)`）
+     * ⇒ 摆在自己场上时候选里根本没有它，「免疫」就演示不出来（第一版就是这么摆的，探针里候选只剩别的牌）。
+     *
+     * ★ 2026-10-03（用户第二轮口径："每一侧的牌都要属于那一侧自己那条线的协议"）：
+     * 这一关原来三条线是 `fire / clarity / rigidity`，而**死板7 是对手的牌**（免疫那一课的教学对象，
+     * 全仓只有它有「此牌不能被翻转或偏转」这句）⇒ 要让"对手的牌落在他自己那条死板线上"，
+     * 那条线的**对手协议**必须是 `rigidity`；而双方协议不许重名（compiledFx 的 defId 键前提），
+     * 所以**我方**那条线不能再挂死板。改法：我方线 3 挂 `darkness`，把"翻对手牌"的那张从
+     * `rigidity-1` 换成 `darkness-1`（同一件事：翻转对手一张牌，被死板7 挡住时引擎写同一条
+     * 「rigidity-7 不可被翻转，跳过」日志）⇒ 双方各自的牌都落在自己的协议线上。
+     * 另：线 1 的靶子牌仍是 `water-2`（对手线 1 协议是 `water`）。
+     *
      * ⚠️ 手牌里那张 `water-0` 只是"弃1张牌"那一步的弃料（0 分、无文本，弃了不心疼）。
      * ⚠️ 三条线各自挂的协议就是那三张牌的协议（正面牌只能进自己协议那条线）。
      */
-    const s = controlledGame('tutorial-T12', ['fire', 'clarity', 'rigidity']);
+    const s = controlledGame('tutorial-T12', ['fire', 'clarity', 'darkness'], ['water', 'light', 'rigidity']);
     s.players[0].hand = [
       card('t12h-del', 'fire-1', 0, 'hand', true),
       card('t12h-buff', 'clarity-0', 0, 'hand', true),
-      card('t12h-flip', 'rigidity-1', 0, 'hand', true),
+      card('t12h-flip', 'darkness-1', 0, 'hand', true),
       card('t12h-fodder', 'water-0', 0, 'hand', true),
     ];
     s.players[0].deck = [];
     // 线 1：对手一张正面牌（要被删除的那张）
-    // ★ 2026-10-03（用户报的缺陷）：这张**正面**牌（删除那一步的靶子）原来摆的是 `life-2`，
-    //   而线 1 的双方协议是 我 fire / 敌 water ⇒ 一张生命牌摆在火焰线上。改成 `water-2`：
-    //   **分值不变**（这一课只关心"那张牌被删掉"，不关心它是什么牌），而且落在对手自己的水线上。
+    // ★ 2026-10-03：这张**正面**牌（删除那一步的靶子）原来摆的是 `life-2`，而线 1 的双方协议是
+    //   我 fire / 敌 water ⇒ 一张生命牌摆在火焰线上。改成 `water-2`：**分值不变**（这一课只关心
+    //   "那张牌被删掉"，不关心它是什么牌），而且落在对手自己的水线上。
     s.players[1].stacks[0] = [card('t12o1', 'water-2', 1, 'field', true, 0, 0)];
-    // 线 3：对手一张**死板7**（它底「此牌不能被翻转或偏转」= 免疫；正因如此它才挡得住 rigidity-1）
+    // 线 3：对手一张**死板7**（它底「此牌不能被翻转或偏转」= 免疫；正因如此它才挡得住 darkness-1）
     s.players[1].stacks[2] = [card('t12f-rigid', 'rigidity-7', 1, 'field', true, 2, 0)];
     return s;
   }

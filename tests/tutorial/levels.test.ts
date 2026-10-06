@@ -1142,34 +1142,39 @@ describe('★ 受控局面：双方协议两两不重名（已编译特效的 de
   });
 
   /**
-   * ★ 2026-10-03（**用户报的缺陷**）：**场上每一张正面牌都必须落在"本线协议包含它"的线上**。
+   * ★ 2026-10-03（**用户报的缺陷**）：**场上每一张正面牌都必须属于"它自己那一侧"那条线的协议**。
    *
-   * 用户原话：「将教程内的场上卡牌换成对应的协议卡牌…导致目前场上有部分卡牌是不属于那个协议的
-   * 卡牌的」。判据就是引擎自己的落线规则（`src/core/actions/base.ts:33-37` 的 `isPlayableFaceUp`）：
-   * 一张**正面**牌能落在某条线上 ⟺ 它的协议 == **我**在这条线的协议 **或** == **对手**在这条线的协议。
-   * **反面牌不看协议**（`base.ts:66` 只守正面）⇒ 反面牌一律跳过。
+   * 用户原话（第二轮，明确纠正了我第一版放宽的口径）：
+   * 「关于教学场上的卡牌改成本线协议的牌，你有一点搞错了，就是我说的范围还包括，例如**第一关的那个
+   *   生命协议场上的明光2**，我希望将其换成生命协议的卡牌，懂我意思吗」。
    *
-   * 改之前实测有 4 关对不上（T7 对手线 1 的 `water-2`、T9 我方线 2 的 `speed-0`、
-   * T11 对手线 2 的 `ice-1`、T12 对手线 1 的 `life-2`），四处都已按"换卡或换那条线的协议"修掉：
-   *   · T7 / T12：靶子牌换成该线协议的牌（**分值不变**）；
-   *   · T9：把那条线的协议换成 `speed`（那张正面速度0 是这一课的教学对象，不能换卡）；
-   *   · T11：对手线 2 的 `ice-1`「打出后」是这一课的教学对象 ⇒ 显式给对手一套 `[light, ice, darkness]`。
+   * ⚠️ 这条比**引擎的落线规则**更严，两者别混：
+   *  - 引擎（`src/core/actions/base.ts:33-37` 的 `isPlayableFaceUp`）：正面牌的协议 == **本线我方协议
+   *    或本线对手协议**——任一即可（这是真规则，改不得）；
+   *  - 本条（**教学局面的可读性口径**）：`协议 == 该牌所有者在这条线的协议`。理由就是用户那句
+   *    "生命协议场上摆着一张明光2"：对手那条线挂着他自己的生命协议，他压在那条线上的牌就该是生命牌。
+   * **反面牌不看协议**（`base.ts:66` 只守正面）⇒ 一律跳过。
+   *
+   * 实测（改之前）：按严格口径有 4 关对不上 —— S0 对手线 3 的 `light-2`（他自己那条线是 life）、
+   * T4 对手线 1 的 `spirit-2`（fire）、T10 对手线 1 的 `spirit-1`（fire）、T12 对手线 3 的
+   * `rigidity-7`（darkness）。前三条换了靶子牌（**分值不变**）；T12 那条是教学对象不能换卡，
+   * 于是把那条线的**对手协议**设成 `rigidity`、我方线 3 改挂 `darkness` 并把"翻对手牌"那张
+   * 从 `rigidity-1` 换成 `darkness-1`（同一件事，被死板7 挡住时引擎写同一条日志）。
    */
-  it('★ 场上每一张正面牌都属于它所在那条线的协议（反面牌不看协议）', () => {
+  it('★ 场上每一张正面牌都属于**它自己那一侧**那条线的协议（反面牌不看协议）', () => {
     const protocolOf = (defId: string): string => defId.replace(/-\d+$/, '');
     for (const l of TUT_LEVELS) {
       const s = buildLevelState(l.id);
-      const mine = s.players[0].protocols.map((p) => p.defId);
-      const foe = s.players[1].protocols.map((p) => p.defId);
       for (const pid of [0, 1] as const) {
+        const own = s.players[pid].protocols.map((p) => p.defId);
         for (const line of [0, 1, 2] as const) {
           for (const c of s.players[pid].stacks[line]) {
             if (!c.faceUp) continue; // 反面牌不看协议
             expect(
-              [mine[line], foe[line]],
-              `${l.id}: 正面牌 ${c.defId}（玩家 ${pid + 1} 的第 ${line + 1} 条线）不属于这条线的协议`
-              + `（我 ${mine[line]} / 敌 ${foe[line]}）—— 屏上就是"一张不属于这个协议的卡牌"`,
-            ).toContain(protocolOf(c.defId));
+              protocolOf(c.defId),
+              `${l.id}: 正面牌 ${c.defId}（玩家 ${pid + 1} 的第 ${line + 1} 条线）不属于**他自己**那条线的协议`
+              + `（他这条线挂的是 ${own[line]}）—— 屏上就是"一张不属于这个协议的卡牌"`,
+            ).toBe(own[line]);
           }
         }
       }
