@@ -764,3 +764,74 @@
 }
 .tutorial-spot:hover { background: rgba(0, 255, 204, 0.16); }
 .tutorial-spot.on { border-style: solid; background: rgba(0, 255, 204, 0.18); }
+/* =====================================================================
+ * ★ 2026-10-03（用户要求）：「自定义协议池」—— 模式选择页那一行 + 协议挑选屏
+ *   （`src/ui/home.ts` 的第三个开关行 / `src/ui/pool-picker.ts` 的整屏）
+ *
+ * 只带本任务**新增**的类名：`.mode-toggle-row` / `.mode-toggle-row-off` / `.mode-pool-*` / `.pool-*`。
+ * `.mode-toggle` / `.mode-check` / `.mode-toggle-label` / `.mode-help` 四个类**照旧复用**
+ * `styles.css` 里那一套，本文件一个字都不重定义（头注那条"绝不同名"的纪律）。
+ * ===================================================================== */
+
+/* 第三个开关行：`<label class="mode-toggle">` 与右边那个「选择协议」按钮各占一格。
+   ⚠️ 按钮必须在 `<label>` **外面** —— label 会把自身区域内的点击转给它的表单控件。 */
+.mode-toggle-row { display: flex; align-items: stretch; gap: 8px; }
+.mode-toggle-row .mode-toggle { flex: 1 1 auto; min-width: 0; }
+/* 「现在不能勾」的视觉：整行压暗（勾选框本身另有原生 disabled 的灰） */
+.mode-toggle-row-off .mode-toggle { opacity: 0.55; }
+.mode-toggle-row-off .mode-toggle:hover { border-color: #3d4166; }
+.mode-toggle-row-off .mode-check:hover { border-color: #5a6088; }
+.mode-pool-count { font-size: 12px; color: #8f9ac0; white-space: nowrap; }
+.mode-pool-btn {
+  flex: 0 0 auto; min-width: 92px; padding: 0 12px; font-size: 13px;
+  background: rgba(30, 30, 58, 0.78); color: #cfe9ff;
+  border: 1px solid #556; border-radius: 12px; cursor: pointer;
+}
+.mode-pool-btn:hover { border-color: #00ffcc; color: #00ffcc; }
+
+/* ── 协议挑选屏（整屏，与 .consent-screen 同款铺满） ── */
+.pool-screen {
+  width: 100%; min-height: 100vh; box-sizing: border-box;
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+  padding: 28px 18px 40px;
+  background: radial-gradient(120% 90% at 50% 0%, #141430 0%, #0b0b16 62%, #07070f 100%);
+  color: #eef;
+}
+.pool-title { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: 0.5px; }
+.pool-sub { max-width: min(900px, 94vw); text-align: center; font-size: 13px; color: #9aa4c8; }
+.pool-bar {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 10px;
+  width: min(1100px, 96vw);
+}
+.pool-gens { display: flex; gap: 6px; }
+.pool-gen-chip {
+  font-size: 12px; padding: 4px 12px; border-radius: 999px; cursor: pointer;
+  background: rgba(20, 22, 44, 0.8); border: 1px solid #3a3f57; color: #8f9ac0;
+}
+.pool-gen-chip-on { border-color: #00ffcc; color: #00ffcc; background: rgba(0, 255, 204, 0.08); }
+.pool-count { font-size: 13px; color: #dde; }
+/* 「还差 N 套」跟着「完成」按钮（它就在 `.pool-actions` 那一行里，两个按钮的左边） */
+.pool-need {
+  flex: 0 0 auto; align-self: center; margin-right: auto;
+  min-height: 1.2em; font-size: 12px; color: #ffd479;
+}
+.pool-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 10px;
+  width: min(1100px, 96vw);
+}
+.pool-card {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 8px 6px; cursor: pointer;
+  background: rgba(24, 24, 48, 0.85); border: 1px solid #4a4a68; border-radius: 12px;
+  color: #dde; transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.pool-card:hover { border-color: #5c628f; }
+.pool-card-on { border-color: #00ffcc; box-shadow: inset 0 0 0 1px rgba(0, 255, 204, 0.18); }
+.pool-card-thumb { width: 84px; height: 62px; object-fit: contain; border-radius: 6px; }
+.pool-card-name { font-size: 12px; }
+.pool-actions { display: flex; gap: 10px; width: min(560px, 92vw); margin-top: 6px; }
+.pool-actions .btn {
+  flex: 1 1 auto; min-height: 44px;
+  display: inline-flex; align-items: center; justify-content: center; font-size: 15px;
+}
+.pool-done:disabled { opacity: 0.45; cursor: not-allowed; }

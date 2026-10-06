@@ -441,21 +441,26 @@ describe('G5 T11-B · `main.ts` 的接线形状（文本腿；`main.ts` 不能 i
       .toContain('createMatchFileRecorder()');
     // ④ 递状态：`arm(state)` 逐字在，且排在 `rerender()` 之前
     expect(body, '没有 arm(state)（对端帧会烂在队列里）').toContain('netDriver.arm(state);');
-    // ⑤ 草稿设置两端逐字一致：常量模式 + 不传池（协议里没有传设置的消息）
+    // ⑤ 草稿设置两端逐字一致：常量模式 + 池从**握手那粒种子**解（协议里没有传设置的消息）
     expect(flat, 'draftMode 不是常量 normal（两端会不一致）').toContain("draftMode: 'normal',");
     /**
-     * ★★ **G5 T21 同步了这一条**（用户真机反馈 1：联机草稿只给了 12 套协议）。
+     * ★★ **2026-10-03 同步了这一条**（用户要求：联机的池子由房主的预设决定，加入方覆盖不了）。
      *
-     * 原判据断言联机这一条里有 `draftPool: randomPoolFromSeed(seed, 12),`。T21 把它改成
-     * **不传池**（`createGame` 落回全量默认池 `create.ts:77`，与热座默认一致）⇒ 这一格从
-     * "值等于某个随机池"换成"**显式不传**"：那一个字面量在 `enterNetGame` 里必须不在，
-     * 否则联机的池又被限成 12 套（这正是本轮修掉的那个缺陷）。两端一致这条判据没变 ——
-     * 全量池是常量，比"同种子派生的池"更不依赖本地读数。
+     * 判据面从 G5 T21 的"**显式不传池**"换成"**池从 `hand.seed` 解出来**"：
+     *  - `poolFromSeed(seed)` 的入参就是握手交出来的那一粒种子（房主在 `startLobby` 里把自己挑的
+     *    defId 编进它，见 `main.ts` 的 `poolEncodedSeed`）⇒ 两端同一个入参、同一个纯函数
+     *    ⇒ 数组逐项相同；
+     *  - 种子里**没有**那段编码时它回 `null` ⇒ `undefined` ⇒ `createGame` 落回全部协议
+     *    （`create.ts:77`）＝ G5 T21 那一档，逐字节成立；
+     *  - **它不许读本机预设**（`readPoolPreset` 在这个函数体里零命中）—— 否则加入方的本地选择
+     *    就会影响这一局，而那正是用户点名不许发生的事。
      */
-    expect(flat, 'enterNetGame 又给联机传了 12 套随机池（本轮修掉的缺陷回来了）')
+    expect(flat, 'enterNetGame 又给联机传了 12 套随机池（G5 T21 修掉的缺陷回来了）')
       .not.toContain('randomPoolFromSeed(');
-    expect(flat, 'enterNetGame 没有显式不传 draftPool（两端会各自落回不同的默认？）')
-      .toContain('draftPool: undefined,');
+    expect(flat, 'enterNetGame 的 draftPool 不是从握手那粒种子解出来的')
+      .toContain('draftPool: poolFromSeed(seed) ?? undefined,');
+    expect(flat, 'enterNetGame 读了本机预设（加入方的本地选择会顶掉房主的预设）')
+      .not.toContain('readPoolPreset');
   });
 
   /**

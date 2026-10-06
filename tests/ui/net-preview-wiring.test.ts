@@ -581,6 +581,12 @@ describe('G5 T41 · 模式选择页的开发者闸门（行为腿：真跑 rende
     openDeviceCheck: () => { calls.push('openDeviceCheck'); },
     startHotseat: () => { calls.push('startHotseat'); },
     startNetLobby: () => { calls.push('startNetLobby'); },
+    // ★ 2026-10-03（用户要求）：自定义协议池那一行的三个接缝。
+    //   第 12 条只数模式卡与设备体检按钮、第 13 条只读源码 ⇒ 这里给不记名的空实现即可
+    //   （点了「选择协议」不该出现在 `calls` 里，免得搅乱那两条判据的期望数组）。
+    openPoolPicker: () => { /* 不测 */ },
+    readPoolPreset: () => ({ enabled: false, ids: [] }),
+    setPoolEnabled: () => { /* 不测 */ },
   });
 
   /** 真跑一帧模式选择页：返回模式卡文案清单（DOM 顺序）与点击记录 */

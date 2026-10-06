@@ -36,6 +36,9 @@ import {
 // ★ 2026-10-01（P0）：语言这个**值的类型**住在零依赖叶子 `src/i18n/lang.ts`（不是
 // `src/i18n/index.ts`）—— 那一层含文案表与 `import.meta.env`，纯层不许依赖它。理由写在那个文件里。
 import type { Lang } from '../i18n/lang';
+// ★ 2026-10-03：「自定义协议池」这份选择的**形状**住在 `src/app/pool-choice.ts`（纯层叶子，
+// 零依赖）。这里只转出去一个类型，不重复定义第二份（两份形状一旦漂移，存储与屏就会各说各话）。
+import type { PoolChoice } from './pool-choice';
 
 export type ConsentState = 'unknown' | 'ask' | 'allowed' | 'denied';
 
@@ -209,6 +212,21 @@ export interface L1Settings {
    * 这是**如实的**行为（与语言/向导标记同一条口径），不是缺陷。
    */
   tutorial?: { done?: readonly string[]; current?: string };
+  /**
+   * ★ 2026-10-03（用户要求）：**自定义协议池的预设**（勾没勾 + 挑了哪几套）。
+   *
+   * 与 `nick` / `lang` / `fx` / `onboardingSeen` / `tutorial` 同住一份设置、同一套授权门控、
+   * 同一次「清除本机数据」（**不新增存储键**）。清除之后这个字段一起没 ⇒ 模式选择页上
+   * 「自定义协议池」回落成未勾选（那正是"本机存的选择丢了"这条兜底要的行为）。
+   *
+   * 形状守卫在 `readPoolPreset()` 里逐字段做（`ids` 只留字符串、`enabled` 只认 `true`）；
+   * "哪些 defId 现在还认、顺序怎么排、够不够 12 套"**不在这里判** —— 那是
+   * `src/app/pool-choice.ts` 的事（这一层不认识协议数据集）。
+   *
+   * ⚠️ 游客模式下写不进磁盘（`kv()` 是内存 KV）⇒ 本次会话有效、刷新即丢。
+   * 这是**如实的**行为（与语言/向导标记同一条口径），不是缺陷。
+   */
+  pool?: { ids?: readonly string[]; enabled?: boolean };
 }
 
 /**
@@ -448,6 +466,50 @@ export function writeOnboardingSeen(store: LocalStore, seen: boolean): WriteResu
 }
 
 /**
+ * ★ 2026-10-03（用户要求）：读**自定义协议池的预设**。
+ *
+ * ## 形状守卫（与 `readOnboardingSeen` / `readTutorialProgress` 同一条口径）
+ *
+ *  - `enabled` **只认 `true`**（`=== true`）：存储被外部手改 / 别的程序写了同键 ⇒ 退化成
+ *    "没勾"，玩家最多重新勾一次（安全的那一边），不会因为一个垃圾值打不开模式页；
+ *  - `ids` 只留**字符串**、按输入顺序保留（去重、认不认这个 defId、排成常量顺序都在
+ *    `src/app/pool-choice.ts` 里做 —— 那一层才认识协议数据集）；
+ *  - 整个字段缺失 / 不是对象（数组、字符串、`42`、`null`）/ `kv.get` 抛错 ⇒ 回
+ *    `{ enabled: false, ids: [] }`，**不抛**（缺一个预设不该让游戏打不开）。
+ *
+ * ⚠️ `kv.get` 抛错**原样外抛**的是 `readSettings` 那条边界（与 `readLang` / `readFxSettings`
+ * 一致）；本函数不额外包一层 `try`，调用方（`src/main.ts` 的渲染路径）自己按"读不出来当没勾"处理。
+ */
+export function readPoolPreset(store: LocalStore): PoolChoice {
+  const raw = readSettings(store).pool;
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return { enabled: false, ids: [] };
+  }
+  const rec = raw as Record<string, unknown>;
+  const list = Array.isArray(rec.ids) ? rec.ids : [];
+  const ids: string[] = [];
+  for (const v of list) if (typeof v === 'string' && v !== '') ids.push(v);
+  return { enabled: rec.enabled === true, ids };
+}
+
+/**
+ * ★ 2026-10-03（用户要求）：写**自定义协议池的预设**（勾选框状态 + 挑好的 defId）。
+ *
+ * 与语言/开关**同一条路**（同一份设置、同一套授权门控、读-改-写）：
+ * 写这一项不会抹掉昵称/语言/特效开关/教学进度。
+ *
+ * ⚠️ 写之前把 `ids` 过滤一遍（只留非空字符串）：出口只有一个，在这里归一，
+ * 读侧与挑选屏就不必各自再防一次形状（与 `writeTutorialProgress` 同一做法）。
+ *
+ * 返回值与 `writeLang` 同一套 `WriteResult`（成功 / `too-large` / `write-failed` + 真因）。
+ */
+export function writePoolPreset(store: LocalStore, choice: PoolChoice): WriteResult {
+  const ids: string[] = [];
+  for (const v of choice.ids) if (typeof v === 'string' && v !== '') ids.push(v);
+  return writeSettings(store, { pool: { ids, enabled: choice.enabled === true } });
+}
+
+/**
  * ★ 2026-10-02（P2）：**教学进度**的合法关卡 id（纯层不认识 `src/tutorial/`，所以自己列一份）。
  *
  * ⚠️ 与 `src/tutorial/levels.ts` 的 `TUT_LEVELS` 是**两份**清单，这是分层的代价：
@@ -455,8 +517,16 @@ export function writeOnboardingSeen(store: LocalStore, seen: boolean): WriteResu
  * 两份"漂了"的风险由 `tests/tutorial/levels.test.ts` 的一条腿兜住（它同时 import 两边比对）。
  */
 const TUTORIAL_LEVEL_IDS: readonly string[] = [
-  'T0', 'T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8', 'T9', 'T10', 'T11', 'T12', 'T13',
+  'S0', 'T0', 'T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8', 'T9', 'T10', 'T11', 'T12', 'T13',
 ];
+
+/**
+ * 教学的第一关 —— **这一份清单的第 0 项**（不另写一个字面量，免得两处漂）。
+ *
+ * ★ 2026-10-03：`S0`（序章）插到最前面 ⇒ "没玩过 / 坏值 / 从头开始"都回它，
+ * 而不是老的 `'T0'`（否则新玩家永远看不到序章，那一关等于死内容）。
+ */
+const TUTORIAL_FIRST_LEVEL = TUTORIAL_LEVEL_IDS[0];
 
 /** 教学进度的形状（对外只暴露这个） */
 export interface StoredTutorialProgress {
@@ -468,15 +538,16 @@ export interface StoredTutorialProgress {
  * ★ 2026-10-02（P2）：读教学进度。
  *
  * 形状守卫**逐字段**做（与 `readFxSettings` 同款）：
- *  - `done` 只收**合法关卡 id**、去重、按输入顺序保留；`current` 不是合法 id ⇒ 回 `'T0'`；
- *  - 整个字段缺失 / 不是对象 / `done` 不是数组 ⇒ 回"没玩过"（`{ done: [], current: 'T0' }`）。
+ *  - `done` 只收**合法关卡 id**、去重、按输入顺序保留；`current` 不是合法 id ⇒ 回第一关
+ *    （`TUTORIAL_FIRST_LEVEL`，2026-10-03 起是 `S0`）；
+ *  - 整个字段缺失 / 不是对象 / `done` 不是数组 ⇒ 回"没玩过"（`{ done: [], current: TUTORIAL_FIRST_LEVEL }`）。
  *
- * ⇒ 外部手改存储最多让玩家**从 T0 重看**（安全的那一边），不会把教学卡在一关出不来。
+ * ⇒ 外部手改存储最多让玩家**从第一关重看**（安全的那一边），不会把教学卡在一关出不来。
  * 读不出来（键不存在 / 坏 JSON / `kv.get` 抛）也回"没玩过"，不抛。
  */
 export function readTutorialProgress(store: LocalStore): StoredTutorialProgress {
   const raw = readSettings(store).tutorial;
-  const fallback: StoredTutorialProgress = { done: [], current: 'T0' };
+  const fallback: StoredTutorialProgress = { done: [], current: TUTORIAL_FIRST_LEVEL };
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return fallback;
   const rec = raw as Record<string, unknown>;
   const doneRaw = Array.isArray(rec.done) ? rec.done : [];
@@ -486,7 +557,7 @@ export function readTutorialProgress(store: LocalStore): StoredTutorialProgress 
   }
   const current = typeof rec.current === 'string' && TUTORIAL_LEVEL_IDS.includes(rec.current)
     ? rec.current
-    : 'T0';
+    : TUTORIAL_FIRST_LEVEL;
   return { done, current };
 }
 
@@ -509,7 +580,7 @@ export function writeTutorialProgress(
   for (const v of progress.done) {
     if (typeof v === 'string' && TUTORIAL_LEVEL_IDS.includes(v) && !done.includes(v)) done.push(v);
   }
-  const current = TUTORIAL_LEVEL_IDS.includes(progress.current) ? progress.current : 'T0';
+  const current = TUTORIAL_LEVEL_IDS.includes(progress.current) ? progress.current : TUTORIAL_FIRST_LEVEL;
   return writeSettings(store, { tutorial: { done, current } });
 }
 

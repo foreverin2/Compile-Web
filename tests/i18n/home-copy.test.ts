@@ -4,7 +4,10 @@ import { fileURLToPath } from 'node:url';
 import { stripComments, functionBody } from '../ui/source-text';
 import { installStubDom, makeStubEl, descendants, queryAllIn, type StubNode } from '../ui/net-dom-stub';
 import { renderHome, renderModeSelect, renderRules, type HomeNav, type ModeSelectNav } from '../../src/ui/home';
-import { DEFAULT_LANG, EN, ZH, setLang } from '../../src/i18n';
+import { DEFAULT_LANG, EN, ZH, setLang, t } from '../../src/i18n';
+// ★ 2026-10-03（用户要求）：第三个开关「自定义协议池」的 tip 里带 `{min}` —— 判据要用同一个常量
+//   拼出期望值（不写死 12，免得最小套数改一处、这里再改一处）。
+import { POOL_MIN } from '../../src/app/pool-choice';
 
 /**
  * ★ 2026-10-01（C，用户明确抱怨）：**首页那一屏的 i18n**。
@@ -55,6 +58,11 @@ const modeNav: ModeSelectNav = {
   openDeviceCheck: () => { /* 不测 */ },
   startHotseat: () => { /* 不测 */ },
   startNetLobby: () => { /* 不测 */ },
+  // ★ 2026-10-03（用户要求）：自定义协议池那一行的三个接缝（这一组只读屏上的文案）。
+  //   预设回"没勾、一套都没挑" ⇒ 那一行按"未选择"画（屏上文案仍然是表里的值）。
+  openPoolPicker: () => { /* 不测 */ },
+  readPoolPreset: () => ({ enabled: false, ids: [] }),
+  setPoolEnabled: () => { /* 不测 */ },
 };
 
 /** 树里所有节点的文本（按 DOM 顺序） */
@@ -89,19 +97,22 @@ describe('★ C：首页那一屏的中文与 `zh.ts` 逐字一致', () => {
     }
   });
 
-  it('模式选择页：标题 / 四张卡 / 两个开关与它们的帮助文本 / 缩放提示 / 设备体检', () => {
+  it('模式选择页：标题 / 四张卡 / 三个开关与它们的帮助文本 / 缩放提示 / 设备体检', () => {
     const root = drawMode();
     const shown = texts(root);
     for (const k of ['mode.title', 'mode.hotseat.name', 'mode.hotseat.desc',
       'mode.online.name', 'mode.online.desc', 'mode.solo.name', 'mode.solo.desc',
       'mode.trio.name', 'mode.trio.desc', 'mode.ban', 'mode.random',
+      'mode.pool', 'mode.pool.pick', 'mode.pool.none',
       'mode.zoom-hint', 'mode.device-check', 'common.back-home'] as const) {
       expect(shown, `屏上没有「${k}」那一句（zh 表：${ZH[k]}）`).toContain(ZH[k]);
     }
-    // 两个开关的**帮助文本**挂在 `data-tip` 上（不是 textContent），单独断言
+    // 三个开关的**帮助文本**挂在 `data-tip` 上（不是 textContent），单独断言
+    // ★ 2026-10-03（用户要求）：第三个是「自定义协议池」那一行（它的 tip 里带 `{min}`）
     const tips = descendants(root).filter((n) => n.tag === 'span' && n.cls.includes('mode-help'))
       .map((n) => n.dataset.tip);
-    expect(tips, '开关的帮助文本没带 zh 表里的那两句').toEqual([ZH['mode.ban.tip'], ZH['mode.random.tip']]);
+    expect(tips, '开关的帮助文本没带 zh 表里的那三句')
+      .toEqual([ZH['mode.ban.tip'], ZH['mode.random.tip'], t('mode.pool.tip', { min: String(POOL_MIN) })]);
   });
 
   it('规则页：标题 / 副标题 / 五本规则书（标题 + 说明）都来自表', () => {
@@ -147,18 +158,19 @@ describe('★★ C：切到英文之后，首页那一屏**当场**是英文', (
     expect(menuBtns.filter((t) => t.includes('⟪')), '首页出现了缺键回退').toEqual([]);
   });
 
-  it('模式选择页：四张卡与两个开关的说明都变英文，并且一个⟪⟫都没有', () => {
+  it('模式选择页：四张卡与三个开关的说明都变英文，并且一个⟪⟫都没有', () => {
     setLang('en');
     const root = drawMode();
     const shown = texts(root);
     for (const k of ['mode.title', 'mode.hotseat.name', 'mode.hotseat.desc',
       'mode.online.name', 'mode.online.desc', 'mode.solo.name', 'mode.trio.name',
-      'mode.ban', 'mode.random', 'mode.device-check', 'common.back-home'] as const) {
+      'mode.ban', 'mode.random', 'mode.pool', 'mode.pool.pick',
+      'mode.device-check', 'common.back-home'] as const) {
       expect(shown, `英文界面下没有「${EN[k]}」`).toContain(EN[k]);
     }
     const tips = descendants(root).filter((n) => n.tag === 'span' && n.cls.includes('mode-help'))
       .map((n) => n.dataset.tip);
-    expect(tips).toEqual([EN['mode.ban.tip'], EN['mode.random.tip']]);
+    expect(tips).toEqual([EN['mode.ban.tip'], EN['mode.random.tip'], t('mode.pool.tip', { min: String(POOL_MIN) })]);
     expect(shown.filter((t) => t.includes('⟪'))).toEqual([]);
   });
 

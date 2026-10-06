@@ -5,7 +5,7 @@ import { stripComments } from '../ui/source-text';
 import { EN, ZH } from '../../src/i18n';
 import { TUT_LEVELS } from '../../src/tutorial/levels';
 import type { TutSpot } from '../../src/tutorial/types';
-import { placeSpotBoxes, spotBoxStyle, unionRect } from '../../src/ui/tutorial-screen';
+import { placeSpotBoxes, spotBoxStyle, unionRect, applyNextButtonVisibility } from '../../src/ui/tutorial-screen';
 import { installStubDom, makeStubEl, setStubRectFor, type StubNode } from '../ui/net-dom-stub';
 
 /**
@@ -299,9 +299,9 @@ describe('★ P7 后四关的屏上接线（源码腿）', () => {
     // 早退必须在那句"强制回到 action"**之前**（否则抹掉之后再早退就没意义了）
     expect(body.indexOf('keepStep'), 'keepStep 的早退排在"强制回到 action"之后')
       .toBeLessThan(body.indexOf("state.step = 'action'"));
-    // 数据层：只有 T10 声明它（别的关卡的沙盒规则一个字节不变）
+    // 数据层：只有需要"让引擎的步真的走"的关卡声明它（T10 控制权 / T11 结束阶段）
     const keep = TUT_LEVELS.filter((l) => l.keepStep === true).map((l) => l.id);
-    expect(keep, '声明 keepStep 的关卡不是"只有 T10"').toEqual(['T10']);
+    expect(keep, '声明 keepStep 的关卡不是 T10/T11').toEqual(['T10', 'T11']);
   });
 
   it('两个新动作 kind（advance / resolve-trigger）都转给了 `driver.submit`', () => {
@@ -310,8 +310,9 @@ describe('★ P7 后四关的屏上接线（源码腿）', () => {
       .toMatch(/a\.kind === 'advance'[\s\S]{0,900}?kind: 'advance'/);
     expect(body, "resolve-trigger 没有转给 driver（T11 的「结算触发」点了没反应）")
       .toMatch(/a\.kind === 'resolve-trigger'[\s\S]{0,900}?kind: 'resolve-trigger'/);
-    // 白名单：这两个 kind 分别只对 T10 / T11 放行
-    expect(TUT_LEVELS.filter((l) => l.allowKinds.includes('advance')).map((l) => l.id)).toEqual(['T10']);
+    // 白名单：需要它的正是 T10（控制权判定）与 T11（推进到结束阶段）
+    expect(TUT_LEVELS.filter((l) => l.allowKinds.includes('advance')).map((l) => l.id),
+      '放行 advance 的关卡变了').toEqual(['T10', 'T11']);
     expect(TUT_LEVELS.filter((l) => l.allowKinds.includes('resolve-trigger')).map((l) => l.id)).toEqual(['T11']);
   });
 
@@ -560,6 +561,151 @@ describe('★ 几何行为腿（桩 DOM 真跑 placeSpotBoxes）', () => {
     expect(body.children.includes(mod), '桩的 remove() 没把它摘下来 ⇒ 这条腿会假绿').toBe(false);
     placeSpotBoxes(layer as unknown as HTMLElement, spots as unknown as Map<TutSpot, HTMLElement>);
     expect(box('control'), '目标没了就把热点清零/跳到左上角了').toEqual(before);
+  });
+});
+
+/**
+ * ★ 2026-10-03（**用户当天报的缺陷**）：「别总是在每一次阶段中间都显示名为「下一步」的按钮，
+ * 虽然按不了，但是会让玩家觉得困惑，由于这个是测试时才会用到的按钮，所以不要暴露给玩家」。
+ *
+ * 这一组同时给两层证据：
+ *  1. **真跑的行为腿**（桩 DOM）：`applyNextButtonVisibility()` 在"不放行 advance"的关卡上
+ *     真的把那颗按钮藏了、在放行的关卡上原样留着，而且**只藏按钮本身**（那句手牌提示还在）；
+ *  2. **源码腿**：屏在每次 `paint()` 之后都做这一手、判据取自本关的 `allowKinds`。
+ */
+describe('★ 2026-10-03：棋盘的「下一步」不该露给玩家（.next-btn）', () => {
+  let restore: (() => void) | null = null;
+  beforeEach(() => { restore = installStubDom(); });
+  afterEach(() => { restore?.(); restore = null; });
+
+  /** 造一棵 `.action-bar > .next-block > (.hint + button.next-btn)` 的桩树 */
+  function nextBlockTree(): { root: StubNode; block: StubNode; hint: StubNode; btn: StubNode } {
+    const root = makeStubEl('div');
+    const bar = makeStubEl('div');
+    bar.className = 'action-bar';
+    const block = makeStubEl('div');
+    block.className = 'next-block';
+    const hint = makeStubEl('span');
+    hint.className = 'hint';
+    hint.textContent = '拖一张牌到亮着的链路';
+    const btn = makeStubEl('button');
+    btn.className = 'btn next-btn';
+    btn.textContent = '下一步';
+    block.appendChild(hint);
+    block.appendChild(btn);
+    bar.appendChild(block);
+    root.appendChild(bar);
+    return { root, block, hint, btn };
+  }
+  const displayOf = (n: StubNode): unknown => (n.style as Record<string, unknown>).display;
+
+  it('★ 真跑：不放行 advance ⇒ 按钮被藏；放行 ⇒ 原样（且只藏按钮，不碰那块与那句提示）', () => {
+    const off = nextBlockTree();
+    applyNextButtonVisibility(off.root as unknown as ParentNode, false);
+    expect(displayOf(off.btn), '不放行 advance 的关卡上那颗「下一步」没被藏掉').toBe('none');
+    expect(displayOf(off.hint), '把同一块里的手牌提示也藏了（只该藏按钮本身）').toBeUndefined();
+    expect(displayOf(off.block), '把整块 .next-block 都藏了').toBeUndefined();
+    expect(off.block.children.includes(off.btn), '按钮被摘出树了（只该藏，不该摘）').toBe(true);
+
+    const on = nextBlockTree();
+    applyNextButtonVisibility(on.root as unknown as ParentNode, true);
+    expect(displayOf(on.btn), '放行 advance 的关卡（T10/T11）上那颗按钮被藏了').toBeUndefined();
+  });
+
+  it('★ 真跑：逐关按白名单过一遍 —— 藏/露与 `allowKinds.includes(\'advance\')` 完全一致', () => {
+    const shown: string[] = [];
+    for (const l of TUT_LEVELS) {
+      const t = nextBlockTree();
+      applyNextButtonVisibility(t.root as unknown as ParentNode, l.allowKinds.includes('advance'));
+      const visible = displayOf(t.btn) === undefined;
+      expect(visible, `${l.id} 的 .next-btn 可见性与 allowKinds 不一致`).toBe(l.allowKinds.includes('advance'));
+      if (visible) shown.push(l.id);
+    }
+    // 锚点：只有真的要用它的两关露出来（否则上面那条可以在"全藏"上恒真）
+    expect(shown, '会露出「下一步」的关卡不是 T10/T11').toEqual(['T10', 'T11']);
+  });
+
+  it('源码腿：每次 `paint()` 之后都按本关白名单做这一手（换关/动作后/切语言都覆盖）', () => {
+    const paintBody = bodyOf(SCREEN, 'paint');
+    expect(paintBody, 'paint() 里没有 renderApp').toContain('renderApp(');
+    expect(paintBody, 'paint() 之后没有做「下一步」的可见性收尾（重画就把按钮带回来了）')
+      .toContain('hideNextButton()');
+    const hideBody = bodyOf(SCREEN, 'hideNextButton');
+    expect(hideBody, 'hideNextButton 没有按本关白名单判').toMatch(/allowKinds\.includes\(\s*'advance'\s*\)/);
+    expect(hideBody, 'hideNextButton 没有走那个可被真跑的导出函数').toContain('applyNextButtonVisibility(');
+    // 反向锚点：那颗按钮的类名来自红线（render.ts:5416），屏这一侧只读它、不改它
+    const impl = bodyOf(SCREEN, 'applyNextButtonVisibility');
+    expect(impl, '没有按 `.next-btn` 这个既有类名定位那颗按钮').toContain(".next-btn");
+    expect(impl, '没有把它藏掉').toMatch(/style\.display\s*=\s*'none'/);
+    expect(impl, '放行时不该动它').toMatch(/if\s*\(\s*allowAdvance\s*\)\s*return/);
+    expect(SCREEN, '屏里出现了对 render.ts 的内部改写（红线）').not.toContain('next-btn.addEventListener');
+  });
+});
+
+/**
+ * ★ 2026-10-03：**序章 S0 在屏上的接线**（源码腿 —— 无 jsdom，`mountTutorial` 跑不起来）。
+ *
+ * 三条都是"漏了就没有人发现"的地方：
+ *  1. 打完那张补分的牌之后要把步交回 `check-compile`（引擎的真实编译判定那一步），
+ *     否则玩家补到 10 分之后**没有任何按钮**可点；
+ *  2. 赢下之后那一帧要**停一会儿**再换关（否则玩家一帧都看不到"赢"）；
+ *  3. 换关之前要把 render.ts 挂出来的胜利横幅收掉（它压在下一关 T0 要玩家点的那一片上）。
+ */
+describe('★ S0（序章）的屏上接线（源码腿）', () => {
+  it('打完牌之后把步交回 check-compile（`toCompileStepAfterPlay` 那条规则）', () => {
+    const body = bodyOf(SCREEN, 'handBackTurn');
+    expect(body, 'handBackTurn 没有读 toCompileStepAfterPlay ⇒ 补到 10 分之后玩家没有可点的按钮')
+      .toMatch(/currentLevel\(\)\.toCompileStepAfterPlay\s*===\s*true/);
+    expect(body, "没有把 step 摆回 'check-compile'").toMatch(/state\.step\s*=\s*'check-compile'/);
+    // 数据层：只有序章声明它（别的关卡的时序一个字不动）
+    expect(TUT_LEVELS.filter((l) => l.toCompileStepAfterPlay === true).map((l) => l.id)).toEqual(['S0']);
+    // 提示区：等引擎真的要求编译那一步时，复用 T13 那条"点线 3 的编译"文案给玩家指路
+    const panel = bodyOf(SCREEN, 'renderPanel');
+    expect(panel, 'S0 在 check-compile 那一步没有给"点编译"的提示（定稿没有这一步的文案，复用 T13 那条）')
+      .toMatch(/level\.id === 'S0'[\s\S]{0,120}?state\.step === 'check-compile'[\s\S]{0,120}?t\('tutorial\.T13\.hint\.compile'\)/);
+  });
+
+  it('★ handBackTurn 必须**无条件**交还 action 步（多动作关卡全靠它）', () => {
+    const body = bodyOf(SCREEN, 'handBackTurn');
+    // 反向：不许再有 `if (state.turnPlayer !== 0) { … step = 'action' }` 那个 guard
+    expect(body, 'handBackTurn 又把"交还 action 步"关回 `turnPlayer !== 0` 里了 ⇒ T3/T4/T7/T9/T12 做完第一个动作就再也出不了第二张牌')
+      .not.toMatch(/turnPlayer\s*!==\s*0\s*\)\s*\{[\s\S]{0,120}?step\s*=\s*'action'/);
+    expect(body, "没有无条件写 state.step = 'action'").toMatch(/state\.step\s*=\s*'action'/);
+    expect(body, '没有无条件写 turnPlayer = 0').toMatch(/state\.turnPlayer\s*=\s*0/);
+    // 例外只有两处：S0 那一支（更早 return）与 keepStep（T10/T11）
+    const iS0 = body.indexOf('toCompileStepAfterPlay');
+    const iKeep = body.indexOf('keepStep');
+    const iAction = body.indexOf("state.step = 'action'");
+    expect(iS0, 'toCompileStepAfterPlay 那一支不在前面').toBeLessThan(iKeep);
+    expect(iKeep, 'keepStep 的早退排在"交还 action 步"之后').toBeLessThan(iAction);
+  });
+
+  it('赢下之后停一会儿再换关，并且换关前收掉 render.ts 的胜利横幅', () => {
+    const body = bodyOf(SCREEN, 'judgeAndAdvance');
+    expect(body, '判过关之后没有走 gotoNextLevel').toContain('gotoNextLevel()');
+    expect(body, '没有为 S0 单独留出"看完再走"的那一段').toMatch(/level\.id\s*===\s*'S0'/);
+    expect(body, 'S0 那一支没有延后换关（立刻换关的话玩家一帧都看不到"赢"）').toMatch(/nextLevelTimer\s*=\s*setTimeout/);
+    // ★ 反向：只许排**一个**定时器 —— judgeAndAdvance 会被重复调用（双击放大也走它），
+    //   不设 guard 的话第二次 gotoNextLevel 会把 T0 直接跳过去
+    expect(body, 'S0 那一支没有"只排一个定时器"的 guard（重复进判定会连跳两关）')
+      .toMatch(/nextLevelTimer\s*===\s*null[\s\S]{0,80}?setTimeout\(/);
+    const goto = bodyOf(SCREEN, 'gotoNextLevel');
+    expect(goto, '换关前没有收胜利横幅（它会压在下一关 T0 要玩家点的那一片上）').toContain('dismissWinBanner()');
+    expect(goto, '换关没有推进 levelId').toMatch(/levelAt\(levelIndex\(levelId\)\s*\+\s*1\)/);
+    const dismiss = bodyOf(SCREEN, 'dismissWinBanner');
+    expect(dismiss, '没有走 render.ts 自己那颗「返回主界面」').toContain('.win-confirm-btn');
+    // 定时器要能被收掉（退出教程 / 重开这一关）
+    expect(SCREEN, '退出时没有清掉那个延后换关的定时器').toMatch(/clearTimeout\(nextLevelTimer\)/);
+    expect(bodyOf(SCREEN, 'openLevel'), '重开这一关时没有作废上一关的延后换关')
+      .toMatch(/clearTimeout\(nextLevelTimer\)/);
+  });
+
+  it('chip 显示的是 1 起的序号，id 留在 dataset.level（S0 插进来不会排出「S0 T0 …」）', () => {
+    const body = bodyOf(SCREEN, 'renderPanel');
+    expect(body, 'chip 的文本又写回关卡 id 了（屏上会出现 S0 T0 T1… 的混排）')
+      .not.toMatch(/el\(\s*'span'\s*,\s*'tutorial-chip'\s*,\s*l\.id\s*\)/);
+    expect(body, 'chip 的文本不是 1 起的序号').toMatch(/tutorial-chip'\s*,\s*String\(levelIndex\(l\.id\)\s*\+\s*1\)/);
+    expect(body, 'chip 上没有留 dataset.level（既有探针读的就是它）').toContain('chip.dataset.level = l.id');
   });
 });
 

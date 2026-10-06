@@ -217,7 +217,11 @@ describe('T4：翻转 / 偏转 / 抽牌 / 弃牌 / 回手 各一次', () => {
     const seen: TutOp[] = [];
     /** 教学屏那一条沙盒规则的**同口径**（见 `tutorial-screen.ts` 的 `handBackTurn()`） */
     const handBack = (): void => {
-      if (s.phase === 'turn' && s.turnPlayer !== 0) {
+      // ⚠️ 2026-10-03：这里是**教学屏 `handBackTurn()` 的同口径**（沙盒规则）。
+      //    它去掉了原来那个 `turnPlayer !== 0` 的 guard —— 引擎在一次 play 之后只推进到
+      //    `check-cache` **且回合没换人**，而 render.ts 的落点判定写死了 `s.step === 'action'`
+      //    ⇒ 带着那个 guard 的话"多动作关卡"在真界面上做完第一个动作就再也出不了第二张牌。
+      if (s.phase === 'turn') {
         s.turnPlayer = 0;
         s.step = 'action';
         s.compiledThisTurn = false;
@@ -714,27 +718,38 @@ describe('★ T10：控制权（s.control === 自己）', () => {
 });
 
 describe('★ T11：触发时机（打出后 / 被盖住前 / 结束 各一次）', () => {
-  it('走对：三处各做一次 ⇒ 三条触发都出现、生命0 真的被移除 ⇒ 过', () => {
+  /**
+   * ★ 2026-10-03（**本轮实测重写**）：这一关的棋盘与三步动作链都改了，腿跟着改。
+   *
+   * 旧摆法（冰1 在我方线 1，靠"对手出牌"触发「打出后」）在教学屏里**走不通**：
+   * 那一步要求玩家去打**对手手牌**，而教学屏只会在 `state.turnPlayer` 那一侧提交
+   * （render.ts 也只把当前行动方的手牌做成可拖拽物）⇒ 判据里的"打出后"永远不成立。
+   * 现在：冰1 摆在**对手**那条线（`t11o-ice1`），我在**自己同一条线**上盖火焰0 的那一次
+   * 出牌同时打响两处（`fireDirectedTop` 查的正是"打出者的对手同线顶卡"）。
+   * 实测读数（`.superpowers/2026-10-03-S0-序章/step.probe.test.ts`）：
+   * `① 盖牌后 step=action pending=2` ⇒ 应答后 `step=check-cache` ⇒ 推进 ⇒ `step=end` ⇒ 结算 ⇒ 判据 true。
+   */
+  it('走对：盖火焰0（同时响两处）→ 推进到结束 → 结算生命0 ⇒ 三条触发都出现 ⇒ 过', () => {
     const s = buildLevelState('T11');
     const level = levelById('T11');
     expect(isLevelComplete(level, s), '开局就算过').toBe(false);
 
-    // —— ① 打出后：让**对手**在冰1 那条线上打一张牌（ice-1 的 after-play 是定向触发） ——
-    s.turnPlayer = 1; // 教学屏里没有"对手回合"这个概念；这一步是**对手的动作**，测试里手动换手
-    expect(drive(s, 'play', { cardUid: 't11o1', faceUp: true, line: 0 }), '引擎拒了对手那张冰4').toBe(true);
-    // 冰1 的底命令要求持有者弃 1 张 —— 由**对手**选，测试里替他选（与屏上的选择浮层同一条路）
+    // —— ① 反面盖住自己的火焰0：同一次出牌里「被盖住前」与「打出后」都响 ——
+    expect(drive(s, 'play', { cardUid: 't11h-cover', faceUp: false, line: 1 }), '引擎拒了这次反面盖牌').toBe(true);
+    expect(isUncovered(s, s.players[0].stacks[1][0]), '前置：火焰0 应当已经被盖住').toBe(false);
+    expect(triggersSeen(s.log)['before-covered'], '日志里没有「被盖前」那条触发').toBeGreaterThanOrEqual(1);
+    // 冰1 的底命令罚的是**往那条线出牌的人**（`ice1AfterPlay`：`foe = opp(ctx.player)`）⇒ 这次是我弃牌
     const discardPick = pending(s);
-    expect(discardPick.uids, '冰1 让对手弃牌时没有候选').toEqual(['t11o2']);
-    expect(driveChoice(s, discardPick.id, ['t11o2']), '对手弃牌被拒').toBe(true);
-    s.turnPlayer = 0;
+    expect(discardPick.uids, '冰1 的「打出后」没有给出候选（或候选不是手里那张弃料）').toEqual(['t11h-fodder']);
+    expect(driveChoice(s, discardPick.id, ['t11h-fodder']), '弃牌被拒').toBe(true);
     /**
      * ★ 实测：`after-play` 是**定向触发**（`resolve.ts:70-94` 的 `fireDirectedTop`），它
      * **不写阶段日志**（`pushEffectLog` 只在 `fireReactive` 那一支）⇒ 日志里没有
      * `[连锁·出牌后]` 这一行（`stageLabel('after-play')` 因此是一条**当前不可达**的标签）。
-     * 所以这一路的证据是**状态**：对手那张 `t11o2` 是被**我的**冰1 触发才弃掉的
-     * （这一关里没有第二个能把它推进弃牌堆的东西），而且关卡文案里**不许**让玩家去日志里找它。
+     * 所以这一路的证据是**状态**：那张 `t11h-fodder` 只可能因为这次弃牌进我的弃牌堆
+     * （出牌只把 `t11h-cover` 放到场上）—— 而且关卡文案里**不许**让玩家去日志里找它。
      */
-    expect(s.players[1].trash.some((c) => c.uid === 't11o2'), '冰1 的「打出后」没有让对手弃掉那张牌').toBe(true);
+    expect(s.players[0].trash.some((c) => c.uid === 't11h-fodder'), '冰1 的「打出后」没有让我弃掉那张牌').toBe(true);
     expect(s.log.some((l) => l.includes('[连锁·出牌后]')),
       '日志里竟然出现了 [连锁·出牌后]（那说明 fireDirectedTop 开始写日志了 —— 请把判据改回日志通道，'
       + '并同步 types.ts 的 TRIGGER_LABEL）').toBe(false);
@@ -743,16 +758,14 @@ describe('★ T11：触发时机（打出后 / 被盖住前 / 结束 各一次�
       expect(obs, `${lang} 的 T11 观察点让玩家去日志里找一条不存在的记录`).not.toContain('连锁·出牌后');
       expect(obs, `${lang} 的 T11 观察点没写那两条真的会出现的日志标题`).toContain('[被盖前]');
     }
-    expect(isLevelComplete(level, s), '只做到"打出后"就判过关').toBe(false);
+    expect(isLevelComplete(level, s), '只做到两处触发就判过关').toBe(false);
 
-    // —— ② 被盖住前：自己把一张**反面**牌盖到火焰0 上 ——
-    expect(drive(s, 'play', { cardUid: 't11h-cover', faceUp: false, line: 1 }), '引擎拒了这次反面盖牌').toBe(true);
-    expect(isUncovered(s, s.players[0].stacks[1][0]), '前置：火焰0 应当已经被盖住').toBe(false);
-    expect(triggersSeen(s.log)['before-covered'], '日志里没有「被盖前」那条触发').toBeGreaterThanOrEqual(1);
-    expect(isLevelComplete(level, s), '只做到"被盖住前"就判过关').toBe(false);
+    // —— ② 推进到结束阶段（教学屏的 allowKinds 里有 advance；这一步是玩家点棋盘上的「下一步」） ——
+    expect(getLegalActions(s, 0).map((a) => a.kind), '前置：这一步应当只剩「推进」可点').toEqual(['advance']);
+    expect(drive(s, 'advance', {}), '引擎拒了这次推进').toBe(true);
+    expect(s.step, '推进之后没到结束阶段').toBe('end');
 
     // —— ③ 结束：点那张被盖住的生命0 的「结算触发」 ——
-    s.step = 'end'; // 教学屏里由玩家点「下一步」推进到这一步；测试里直接摆到这一步（引擎口径不变）
     expect(getLegalActions(s, 0).some((a) => a.kind === 'resolve-trigger' && a.cardUid === 't11f-c'),
       '结束阶段没有给出生命0 的结算按钮 ⇒ 这一课做不出来').toBe(true);
     expect(drive(s, 'resolve-trigger', { cardUid: 't11f-c' }), '引擎拒了这次结算').toBe(true);
@@ -762,27 +775,28 @@ describe('★ T11：触发时机（打出后 / 被盖住前 / 结束 各一次�
     expect(isLevelComplete(level, s), '三种触发都出现了却没判过关').toBe(true);
   });
 
-  it('★ 三路证据缺一不可：逐样改坏 ⇒ 各有一条腿红', () => {    /**
+  it('★ 三路证据缺一不可：逐样改坏 ⇒ 各有一条腿红', () => {
+    /**
      * T11 的判据有四样（打出后 / 被盖住前 / 结束 / 生命0 真的离开场上），
      * 这里用"伪造局面 + 逐样改坏"把它们**逐条**钉住（T7 那一组是同款手法）：
      * 光有"整条正路跑通"那一条腿时，把任意一路改成恒真都**不会红**（实测见 `.superpowers/p7-verify/`
      * 的 M7~M10）—— 那说明那条腿只证明了"走得通"，没证明"缺了不行"。
+     * ⚠️ 2026-10-03 跟着判据改方向：证据那张牌是**我方**的 `t11h-fodder`（理由见 judge.ts）。
      */
     const build = (mut: (s: GameState) => void): GameState => {
       const s = buildLevelState('T11');
-      // 造一份"三路证据都成立"的伪造局面：生命0 不在场上、对手那张进了弃牌堆、两条日志都在
+      // 造一份"三路证据都成立"的伪造局面：生命0 不在场上、我方那张弃料进了弃牌堆、两条日志都在
       s.players[0].stacks[2] = [rawCard('t11c-cover', 'life-5', 0, 'field', true, 2, 0)];
-      s.players[1].stacks[0] = [rawCard('t11o1', 'ice-4', 1, 'field', true, 0, 0)];
-      s.players[1].trash = [rawCard('t11o2', 'ice-5', 1, 'trash', true)];
+      s.players[0].trash = [rawCard('t11h-fodder', 'ice-5', 0, 'trash', true)];
       s.log = ['[被盖前] fire-0', '[结束] life-0：由 P1 结算'];
       mut(s);
       return s;
     };
     const level = levelById('T11');
     expect(isLevelComplete(level, build(() => { /* 什么都不改 */ })), '三路证据齐了却没判过关').toBe(true);
-    // ① 打出后：对手那张没进弃牌堆
-    expect(isLevelComplete(level, build((s) => { s.players[1].trash = []; })),
-      '对手没弃牌也算过「打出后」').toBe(false);
+    // ① 打出后：那张弃料没进弃牌堆
+    expect(isLevelComplete(level, build((s) => { s.players[0].trash = []; })),
+      '没弃牌也算过「打出后」').toBe(false);
     // ② 被盖住前：日志里没有那一条
     expect(isLevelComplete(level, build((s) => { s.log = ['[结束] life-0：由 P1 结算']; })),
       '日志里没有被盖前也算过').toBe(false);
@@ -794,26 +808,95 @@ describe('★ T11：触发时机（打出后 / 被盖住前 / 结束 各一次�
       '那张生命0 还在场上也算过').toBe(false);
   });
 
-  it('走偏：只做「打出后」那一路 ⇒ 不过', () => {
+  it('走偏：只盖住火焰0（不推进、不结算）⇒ 不过（一条触发顶不了三条）', () => {
     const s = buildLevelState('T11');
-    s.turnPlayer = 1;
-    drive(s, 'play', { cardUid: 't11o1', faceUp: true, line: 0 });
-    driveChoice(s, pending(s).id, ['t11o2']);
-    s.turnPlayer = 0;
+    drive(s, 'play', { cardUid: 't11h-cover', faceUp: false, line: 1 });
+    driveChoice(s, pending(s).id, ['t11h-fodder']);
+    expect(triggersSeen(s.log)['before-covered'], '前置：被盖前那一路应当成立').toBeGreaterThanOrEqual(1);
     expect(isLevelComplete(levelById('T11'), s), '只做一种触发就判过关').toBe(false);
   });
 
-  it('放行范围：T11 放行 play / effect-choice / resolve-trigger', () => {
-    expect(levelById('T11').allowKinds).toEqual(['play', 'effect-choice', 'resolve-trigger']);
+  it('放行范围：T11 放行 play / effect-choice / advance / resolve-trigger（advance 是 2026-10-03 补的）', () => {
+    expect(levelById('T11').allowKinds).toEqual(['play', 'effect-choice', 'advance', 'resolve-trigger']);
     expect(offTrackKeyFor(levelById('T11'), { kind: 'compile' })).toBe('tutorial.off.wrong-kind');
+    // ★ 这一关的三种触发跨了三步（action → check-cache → end）⇒ 必须让引擎自己的步真的走
+    expect(levelById('T11').keepStep, 'T11 没有声明 keepStep ⇒ 玩家永远到不了结束阶段').toBe(true);
   });
 
   it('局面本身：三张被触发的卡与各自的位置都对（这一关的三种时机真的摆出来了）', () => {
     const s = buildLevelState('T11');
-    expect(s.players[0].stacks[0][0].defId, '线 1 上不是冰1').toBe('ice-1');
-    expect(s.players[0].stacks[1][0].defId, '线 2 上不是火焰0').toBe('fire-0');
+    expect(s.players[1].stacks[1].map((c) => c.defId), '对手线 2 上不是冰1（打出后的触发源）').toEqual(['ice-1']);
+    expect(s.players[0].stacks[1][0].defId, '我方线 2 上不是火焰0').toBe('fire-0');
     expect(s.players[0].stacks[2].map((c) => c.defId), '线 3 上不是"被盖住的生命0"').toEqual(['life-0', 'life-5']);
     expect(isUncovered(s, s.players[0].stacks[2][0]), '前置：生命0 应当已经被盖住').toBe(false);
+    // 冰1 的「打出后」罚的是"往那条线出牌的人" ⇒ 我手里必须留一张可弃的牌（否则那条效果静默 fizzle，
+    // 判据里的"打出后"就永远不成立 —— 第一版就是这么摆的，被上面那条正路腿当场抓到）
+    expect(s.players[0].hand.map((c) => c.uid), '手里没有留给「打出后」弃的那张牌').toContain('t11h-fodder');
+  });
+});
+
+/**
+ * ★ 2026-10-03（用户要求「再加上一关，用于先告诉玩家背景故事，然后再给玩家详细解释，
+ * 这个游戏的胜利条件是什么，然后再是介绍界面」）：**序章 S0** 的腿。
+ *
+ * 这一关的判据就是"真打赢这一局"（`s.winner === 0`）⇒ 腿必须**真驱动引擎**把那一局打完
+ * （打出补分的牌 ⇒ 编译 ⇒ 终局），而不是拿一份伪造的状态去问判据。
+ */
+describe('★ S0：序章（背景故事 + 胜利条件；玩家亲手打赢这一局）', () => {
+  it('走对：打出那张 1 分牌（线 3 到 10 且高于对手）⇒ 编译 ⇒ 三条协议全编译 ⇒ winner=0 ⇒ 过', () => {
+    const s = buildLevelState('S0');
+    const level = levelById('S0');
+    expect(isLevelComplete(level, s), '开局就算过').toBe(false);
+    expect(s.winner, '局面没摆对：开局就有赢家').toBeNull();
+    // 前置①：三条协议里**两条**已经编译过（"决胜那一步"这个局面）
+    expect(s.players[0].protocols.map((p) => p.compiled), '局面不是"两条已编译 + 一条没编译"')
+      .toEqual([true, true, false]);
+    // 前置②：第 3 条链路差 1 分到 10，而且**高于对手**（编译条件自己算一遍：own >= 10 && own > opp）
+    expect(getLineValue(s, 0, 2), '局面没摆对：我方线 3 不是 9 分').toBe(9);
+    expect(getLineValue(s, 1, 2), '局面没摆对：对手线 3 不是 2 分').toBe(2);
+    expect(getLegalActions(s, 0).some((a) => a.kind === 'compile'), '局面没摆对：这条线现在就能编译').toBe(false);
+    // 前置③：手里那张牌真的能打进第 3 条链路（正面打出的协议匹配）
+    expect(drive(s, 'play', { cardUid: 's0h1', faceUp: true, line: 2 }), '引擎拒了那张补分的牌').toBe(true);
+    expect(getLineValue(s, 0, 2), '打完之后这条链路没到 10').toBe(10);
+    expect(getLineValue(s, 0, 2) > getLineValue(s, 1, 2), '打完之后不高过对手').toBe(true);
+    expect(isLevelComplete(level, s), '只补到 10 分就判过关（协议还没编译）').toBe(false);
+    // 引擎的真实次序是"编译判定在自己回合开头"⇒ 教学屏把步摆回 check-compile（见 TutLevel.toCompileStepAfterPlay）
+    s.step = 'check-compile';
+    expect(getLegalActions(s, 0).map((a) => a.kind), '补到 10 分之后引擎没给出编译（那一步不是强制的？）')
+      .toEqual(['compile']);
+    expect(drive(s, 'compile', { line: 2 }), '引擎拒了这次编译').toBe(true);
+    // 真终局：三条协议全编译 + 赢家 + gameover（`compile-body.ts:131`）
+    expect(s.players[0].protocols.every((pr) => pr.compiled), '三条协议没全部编译').toBe(true);
+    expect(s.winner, '编译完之后没有赢家').toBe(0);
+    expect(s.phase, '没有进入终局结算').toBe('gameover');
+    expect(isLevelComplete(level, s), '打赢了却没判过关').toBe(true);
+  });
+
+  it('走偏：什么都不做 ⇒ 不过；只打牌不编译 ⇒ 不过（判据不是"打了一张牌"）', () => {
+    const s = buildLevelState('S0');
+    expect(isLevelComplete(levelById('S0'), s), '什么都没做就判过关').toBe(false);
+    drive(s, 'play', { cardUid: 's0h1', faceUp: true, line: 2 });
+    expect(isLevelComplete(levelById('S0'), s), '只打出牌、没编译就判过关').toBe(false);
+    // 反向锚点：这一关**不是**"编译一条线就算过"（那是 T8）—— 必须三条全编译 + 赢
+    expect(s.players[0].protocols.filter((p) => p.compiled).length, '前置：这时只有两条已编译').toBe(2);
+  });
+
+  it('放行范围：S0 放行 play 与 compile（补分与编译这两步真的需要）', () => {
+    const level = levelById('S0');
+    expect(level.allowKinds).toEqual(['play', 'compile']);
+    expect(level.ui?.detailsAtLeast, '这一关的判据不是纯 UI 读数').toBeUndefined();
+    // ★ 它靠 `toCompileStepAfterPlay` 把步交回 check-compile（引擎真实的编译判定那一步）
+    expect(level.toCompileStepAfterPlay, 'S0 没有声明 toCompileStepAfterPlay').toBe(true);
+    expect(offTrackKeyFor(level, { kind: 'advance' })).toBe('tutorial.off.wrong-kind');
+  });
+
+  it('★ 它是"四件套"齐全的**序章**：实战例子 / 引导步骤 / 观察点都不是缺键回退形态', () => {
+    const l = levelById('S0');
+    expect(l.scenario(), '没有实战例子').not.toContain('⟪');
+    expect(l.guidedSteps.length, '没有引导步骤').toBe(2);
+    expect(l.observe(), '没有观察点').not.toContain('⟪');
+    // 文案逐句取自官方规则书页图（定稿与出处见 .superpowers/2026-10-03-S0-序章/S0-copy.md）
+    expect(l.title(), '标题不是定稿那句').toBe('序章：你是谁，怎么算赢');
   });
 });
 
@@ -961,8 +1044,8 @@ describe('★ T13：迷你对局（打到终局 s.winner !== null）', () => {
  *     "只念文字 / 点下一步就算过"直接钉死。
  */
 describe('★ 教学设计四件套（生成式：以后新增关卡自动受约束）', () => {
-  it('锚点：十四关、引擎动作类与 UI 交互类**都存在**（否则下面每条腿在空集上恒真）', () => {
-    expect(TUT_LEVELS.length, '关卡数不是 14（T0~T13）').toBe(14);
+  it('锚点：十五关（S0 + T0~T13）、引擎动作类与 UI 交互类**都存在**（否则下面每条腿在空集上恒真）', () => {
+    expect(TUT_LEVELS.length, '关卡数不是 15（S0 + T0~T13）').toBe(15);
     expect(TUT_LEVELS.filter((l) => l.interaction === 'engine').length, '一个引擎动作类关卡都没有').toBeGreaterThan(0);
     expect(TUT_LEVELS.filter((l) => l.interaction === 'ui').length, '一个 UI 交互类关卡都没有').toBeGreaterThan(0);
   });
@@ -1015,30 +1098,37 @@ describe('★ 教学设计四件套（生成式：以后新增关卡自动受约
 });
 
 describe('关卡数据本身（顺序 / 序号 / 钳位）', () => {
-  it('十四关的 id 与顺序就是 T0~T13', () => {
+  it('十五关的 id 与顺序就是 S0 + T0~T13（S0 插在最前面，其余 id 一个都没动）', () => {
     expect(TUT_LEVELS.map((l) => l.id)).toEqual([
-      'T0', 'T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8', 'T9', 'T10', 'T11', 'T12', 'T13',
+      'S0', 'T0', 'T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8', 'T9', 'T10', 'T11', 'T12', 'T13',
     ]);
-    expect(levelIndex('T9')).toBe(9);
+    // ★ 2026-10-03：S0 插在**最前面** ⇒ 原来每一关的**序号**往后挪一格，但 **id 没变**
+    //   （已存进度里的 current/done 仍指向原来那几课 —— 这是"不重新编号"的代价与好处）
+    expect(levelIndex('S0'), 'S0 不在最前面').toBe(0);
+    expect(levelIndex('T0'), 'T0 被 S0 顶到第 2 位').toBe(1);
+    expect(levelIndex('T9')).toBe(10);
     // ★ P7：后四关是**追加**上去的（老 id 没有被重新指向，不用清本机数据 —— 与 P5/P6 两次不同）
-    expect(levelIndex('T10'), 'T10 不在 T9 之后').toBe(10);
-    expect(levelIndex('T13')).toBe(13);
-    expect(levelAt(1)).toBe('T1');
+    expect(levelIndex('T10'), 'T10 不在 T9 之后').toBe(11);
+    expect(levelIndex('T13')).toBe(14);
+    expect(levelAt(1)).toBe('T0');
+    expect(levelAt(2)).toBe('T1');
   });
 
   it('★ 追加两课的**编排位置**：详情紧跟 T0、反面牌可视与默认目标规则在"覆盖与揭开"之后', () => {
     // 用户要求："查看卡牌详情"紧随界面扫盲；"反面牌可视规则"放在"覆盖与揭开"之后；
     // 方案 §7.10 ③ 要求"默认目标规则"也放在"覆盖与揭开"之后（本仓摆在反面牌可视之后、
     // 编译之前），"打出 vs 露出"排在最后（它讲触发途径，是最"效果向"的一课）。
-    expect(TUT_LEVELS[1].id, '「查看卡牌详情」不在 T0 之后').toBe('T1');
-    expect(levelIndex('T5'), '「覆盖与揭开」的位置变了').toBe(5);
-    expect(TUT_LEVELS[6].id, '「反面牌可视规则」不在「覆盖与揭开」之后').toBe('T6');
-    expect(TUT_LEVELS[7].id, '「默认目标规则」不在「反面牌可视」之后').toBe('T7');
-    expect(TUT_LEVELS[9].id, '「打出 vs 露出」不是最后一关').toBe('T9');
+    // ⚠️ 2026-10-03：S0 插到最前面 ⇒ 这里每一条的**下标**都往后挪 1（断言的是 id，不是"第几关"）
+    expect(TUT_LEVELS[1].id, '界面扫盲（T0）不在序章之后').toBe('T0');
+    expect(TUT_LEVELS[2].id, '「查看卡牌详情」不在 T0 之后').toBe('T1');
+    expect(levelIndex('T5'), '「覆盖与揭开」的位置变了').toBe(6);
+    expect(TUT_LEVELS[7].id, '「反面牌可视规则」不在「覆盖与揭开」之后').toBe('T6');
+    expect(TUT_LEVELS[8].id, '「默认目标规则」不在「反面牌可视」之后').toBe('T7');
+    expect(TUT_LEVELS[10].id, '「打出 vs 露出」不是最后一关').toBe('T9');
   });
 
   it('序号越界钳到两端（通关之后再进教学停在最后一关，不是崩）', () => {
-    expect(levelAt(-5)).toBe('T0');
+    expect(levelAt(-5)).toBe('S0');
     expect(levelAt(99)).toBe('T13');
   });
 
@@ -1075,14 +1165,17 @@ describe('进度存取（住在既有 L1_SETTINGS 里，零新增键）', () => 
     return createLocalStore({ persistent: createMemoryStore() });
   }
 
-  it('没玩过 ⇒ T0 + 空 done；过一关 ⇒ 记进 done 且当前关推到下一关', () => {
+  it('没玩过 ⇒ 第一关（S0）+ 空 done；过一关 ⇒ 记进 done 且当前关推到下一关', () => {
     const s = store();
     s.grant();
-    expect(readProgress(s)).toEqual({ done: [], current: 'T0', allDone: false });
+    // ★ 2026-10-03：第一关是 S0（序章）—— 没玩过的人从它开始，不是从 T0
+    expect(readProgress(s)).toEqual({ done: [], current: 'S0', allDone: false });
+    writeTutorialProgress(s, advance(s, 'S0'));
+    expect(readProgress(s), '过完 S0 之后没有推到 T0').toEqual({ done: ['S0'], current: 'T0', allDone: false });
     writeTutorialProgress(s, advance(s, 'T0'));
-    expect(readProgress(s), '过完 T0 之后没有推到 T1').toEqual({ done: ['T0'], current: 'T1', allDone: false });
+    expect(readProgress(s), '过完 T0 之后没有推到 T1').toEqual({ done: ['S0', 'T0'], current: 'T1', allDone: false });
     writeTutorialProgress(s, advance(s, 'T1'));
-    expect(readProgress(s)).toEqual({ done: ['T0', 'T1'], current: 'T2', allDone: false });
+    expect(readProgress(s)).toEqual({ done: ['S0', 'T0', 'T1'], current: 'T2', allDone: false });
   });
 
   it('最后一关过完停在最后一关（不会被钳到别处）', () => {
@@ -1093,8 +1186,9 @@ describe('进度存取（住在既有 L1_SETTINGS 里，零新增键）', () => 
     expect(readProgress(s).done).toEqual(['T13']);
   });
 
-  it('★ P7 追加四关之后：老进度里的当前关**照旧有效**（不像 P5/P6 那样要清本机数据）', () => {
-    // P5/P6 两次是"插入新关卡 ⇒ 老 id 指向另一课"，这次是往后追加 ⇒ 老进度的语义没变。
+  it('★ 2026-10-03 插序章之后：老进度里的当前关**照旧有效**（S0 是插进来的，id 没重排）', () => {
+    // P5/P6 两次是"插入新关卡 ⇒ 老 id 指向另一课"，P7 是往后追加，这一次是**往前**插一关 ——
+    // 三种都不动既有 id ⇒ 老进度的语义没变（代价：老进度不会补看序章，要看得点「从头开始」）。
     const s = store();
     s.grant();
     s.kv().set('compile-settings', JSON.stringify({ tutorial: { done: ['T0', 'T1'], current: 'T9' } }));
@@ -1104,27 +1198,27 @@ describe('进度存取（住在既有 L1_SETTINGS 里，零新增键）', () => 
     expect(readProgress(s).current).toBe('T10');
   });
 
-  it('「从头开始」清空 done 与当前关（**不动**昵称/语言那些设置）', () => {
+  it('「从头开始」清空 done 与当前关（**不动**昵称/语言那些设置），当前关回到第一关 S0', () => {
     const s = store();
     s.grant();
     writeTutorialProgress(s, advance(s, 'T0'));
     s.kv().set('compile-settings', JSON.stringify({ nick: '甲', lang: 'en', tutorial: { done: ['T0'], current: 'T1' } }));
     restart(s);
     const raw = JSON.parse(String(s.kv().get('compile-settings'))) as Record<string, unknown>;
-    expect(raw.tutorial).toEqual({ done: [], current: 'T0' });
+    expect(raw.tutorial).toEqual({ done: [], current: 'S0' });
     expect(raw.nick, '「从头开始」把昵称也清了').toBe('甲');
     expect(raw.lang, '「从头开始」把语言也清了').toBe('en');
   });
 
-  it('坏值 / 坏 JSON ⇒ 退回"没玩过"（不抛、不把进度卡在非法状态）', () => {
+  it('坏值 / 坏 JSON ⇒ 退回"没玩过"（当前关 = 第一关 S0；不抛、不把进度卡在非法状态）', () => {
     const s = store();
     s.grant();
     s.kv().set('compile-settings', JSON.stringify({ tutorial: { done: ['TX', 42, 'T0'], current: 'TX' } }));
-    expect(readTutorialProgress(s), '非法值没有被过滤').toEqual({ done: ['T0'], current: 'T0' });
+    expect(readTutorialProgress(s), '非法值没有被过滤').toEqual({ done: ['T0'], current: 'S0' });
     s.kv().set('compile-settings', '{"tutorial":');
-    expect(readTutorialProgress(s), '坏 JSON 时应当退回"没玩过"').toEqual({ done: [], current: 'T0' });
+    expect(readTutorialProgress(s), '坏 JSON 时应当退回"没玩过"').toEqual({ done: [], current: 'S0' });
     s.kv().set('compile-settings', JSON.stringify({ tutorial: 'nope' }));
-    expect(readTutorialProgress(s), '不是对象时应当退回"没玩过"').toEqual({ done: [], current: 'T0' });
+    expect(readTutorialProgress(s), '不是对象时应当退回"没玩过"').toEqual({ done: [], current: 'S0' });
   });
 
   it('★ 纯层那份关卡 id 清单与本模块的 TUT_LEVELS **一致**（两份清单不许漂）', () => {

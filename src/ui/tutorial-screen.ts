@@ -42,6 +42,18 @@ import { onLangChange, t } from '../i18n';
 // 与 `gen3-control.ts` 的 C4 对比条同一套做法，不新造第二套定时/重定位管线。
 import { registerFollow } from './fx-follow';
 
+/**
+ * ★ 2026-10-03（S0）：**赢下之后停在终局画面上多久**，再自动进下一关。
+ *
+ * 为什么需要它：S0 的过关形态就是"赢下这一局"，而赢的那一帧 `renderApp` 会在 body 上挂出
+ * 胜利横幅、并把第三条协议画成「已编译」面、把那条链路清空 —— 这些正是这一课要玩家**看到**的
+ * 东西。别的关卡过关之后是同步换关（一帧都不停留，那是刻意的：那些关卡的"过"只是一个读数），
+ * 这里若也同步换关，玩家一帧都看不到"赢"。
+ *
+ * 取 2.2 秒：够看清横幅 + 协议翻面 + 清线，又不至于让想继续的人等太久（到点自动换关）。
+ */
+const S0_WIN_HOLD_MS = 2200;
+
 /** 退出教程（回首页）；由宿主注入 —— 屏自己不认识首页 */
 export interface TutorialNav {
   /** 点「退出教程」 */
@@ -210,6 +222,29 @@ function button(cls: string, label: string, onClick: () => void): HTMLButtonElem
 }
 
 /**
+ * ★ 2026-10-03（**用户当天报的缺陷**）：**「下一步」那颗按钮不该露给玩家**。
+ *
+ * 用户原话：「别总是在每一次阶段中间都显示名为「下一步」的按钮，虽然按不了，但是会让玩家觉得
+ * 困惑，由于这个是测试时才会用到的按钮，所以不要暴露给玩家」。
+ *
+ * 根因（已核源码）：红线上那颗按钮（`render.ts:5416` 的 `el('button', 'btn next-btn', …)`）
+ * 在 `getLegalActions` 给出 `advance` 时就渲染，而教学屏的 `allowedBy()` 只放行本关
+ * `allowKinds` 里的动作 ⇒ 除 T10/T11 之外的关卡里它**按不动**（点了只给一句走偏提示、
+ * 引擎里什么都没发生）。所以：**本关不放行 `advance` ⇒ 画完棋盘就把它藏掉**。
+ *
+ * 只藏**按钮本身**：同一块 `.next-block` 里那句手牌提示（`.hint`）照旧留着。
+ * ⚠️ 改的是教学屏自己这一侧 —— `render.ts` / `styles.css` 是红线，一个字节都不许改。
+ *
+ * 导出是为了让这条判据有**真跑的行为腿**（`tests/tutorial/screen.test.ts` 用本仓的 DOM 桩
+ * 造一棵树、按每一关的白名单真调一遍），不是给别的调用方用的。
+ */
+export function applyNextButtonVisibility(root: ParentNode, allowAdvance: boolean): void {
+  if (allowAdvance) return;
+  const btn = root.querySelector<HTMLElement>('.next-btn');
+  if (btn !== null) btn.style.display = 'none';
+}
+
+/**
  * 挂载教学屏。
  *
  * @param root 主容器（`#app`；棋盘画在这里）
@@ -329,6 +364,11 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
   let teachAt = 0;
   /** 本关是否已判定通过（通过之后不再重复提示） */
   let cleared = false;
+  /**
+   * ★ 2026-10-03（S0）："赢下之后停一会儿再换关"的那个定时器（见 `judgeAndAdvance`）。
+   * 退出教程 / 重开本关时都要作废 —— 否则退出之后它还会在后台把关卡切走。
+   */
+  let nextLevelTimer: ReturnType<typeof setTimeout> | null = null;
 
   /* ───────────────────────── 教练浮层 ───────────────────────── */
 
@@ -420,7 +460,8 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
    */
   const restartAllBtn = button('btn tutorial-restart', t('tutorial.restart'), () => {
     restart(store);
-    levelId = 'T0';
+    // ⚠️ 不能写死 `'T0'`：2026-10-03 起第一关是 `S0`（序章）—— 从进度里读回来才是唯一出处
+    levelId = readProgress(store).current;
     openLevel();
   });
   panel.appendChild(restartAllBtn);
@@ -553,6 +594,15 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
       if (!uiSeen.peekBlocked) lines.push(t('tutorial.peek.no'));
       hintBox.textContent = lines.length > 0 ? lines.join(' ') : t('tutorial.peek.done');
     }
+    /**
+     * ★ 2026-10-03（S0 序章）：补完那一分之后，引擎会**强制**要求编译线 3（`check-compile` 那一步）
+     * —— 那句话写在这里**复用 T13 那条既有文案**（同一件事：点线 3 的编译，这一局就结束了），
+     * 不为这一关新造一句（序章的九条文案是定稿，见 `.superpowers/2026-10-03-S0-序章/S0-copy.md`）。
+     * 只在"引擎真的在等这一步"时显示（`state.step`）—— 开局还没打牌时不该让玩家去找编译按钮。
+     */
+    if (level.id === 'S0' && state.step === 'check-compile') {
+      hintBox.textContent = t('tutorial.T13.hint.compile');
+    }
     if (level.id === 'T7') {
       /**
        * 三档提示，按"玩家已经做到哪一步"给（三档文案各不相同）：
@@ -609,7 +659,15 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
     progressRow.textContent = '';
     const progress = readProgress(store);
     for (const l of TUT_LEVELS) {
-      const chip = el('span', 'tutorial-chip', l.id);
+      /**
+       * ★ 2026-10-03：chip 上写的是**1 起的序号**，不再是关卡 id。
+       *
+       * 为什么改：id 是内部标识（`S0`/`T0`/…/`T13`），2026-10-03 在最前面插了一关 `S0`
+       * 之后，照旧写 id 就会在屏上排出「S0 T0 T1 …」这种混排。id 仍留在 `dataset.level`
+       * 上（既有探针与测试读的就是它）。抬头那句「第 N 关 / 共 M 关」本来按序号算，
+       * 不受影响（`levelIndex()` 是唯一的序号出处）。
+       */
+      const chip = el('span', 'tutorial-chip', String(levelIndex(l.id) + 1));
       chip.dataset.level = l.id;
       if (progress.done.includes(l.id)) chip.classList.add('on');
       if (l.id === level.id) chip.classList.add('now');
@@ -751,6 +809,18 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
   /** 画棋盘（唯一出口：`renderApp` + 本屏的 `cb`） */
   function paint(): void {
     renderApp(root, state, tutorialCallbacks());
+    // ★ 每次重画都要重做（`renderApp` 每次都重建节点）：把不该露的「下一步」藏掉
+    hideNextButton();
+  }
+
+  /**
+   * ★ 2026-10-03（**用户当天报的缺陷**）：**「下一步」那颗按钮不该露给玩家**。
+   *
+   * 判据与做法写在导出的 `applyNextButtonVisibility()` 上（那里有用户原话与根因）；
+   * 这里只负责"拿本关的白名单调它"。⚠️ 每次 `paint()` 都要重做（`renderApp` 每次都重建节点）。
+   */
+  function hideNextButton(): void {
+    applyNextButtonVisibility(root, currentLevel().allowKinds.includes('advance'));
   }
 
   /**
@@ -769,6 +839,28 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
   function handBackTurn(): void {
     if (state.phase !== 'turn') return;
     /**
+     * ★ 2026-10-03（S0「序章」）：**打完那张补分的牌之后，把步交回「检查编译」**。
+     *
+     * 引擎的真实次序（`STEP_ORDER`，`src/core/engine/turn.ts:4`）是
+     * `start → check-control → check-compile → action → check-cache → end` —— 编译判定在
+     * **自己回合的开头**，而"把一条链路打到 10 分"发生在 `action` 步：`play` 之后引擎
+     * 只推进到 `check-cache`（`src/core/game.ts:162`）。真对局里这两步隔着一整轮，
+     * 而 S0 要连着演示"补分 ⇒ 必须编译 ⇒ 赢" ⇒ 这里把 `step` 摆回 `check-compile`
+     * （压缩的**只是时序**：编译仍然是引擎自己的 `executeCompile`，见 `TutLevel.toCompileStepAfterPlay`）。
+     *
+     * 打偏了（那张牌没进第 3 条链路）⇒ 这一步没有可编译的线，`getLegalActions` 只会给
+     * 一颗「下一步」——它在教学里被藏掉了（见 `hideNextButton`），玩家点面板上的
+     * 「重开这一关」即可（与 T3 那条死胡同同一个出口）。
+     */
+    if (currentLevel().toCompileStepAfterPlay === true) {
+      // ⚠️ 判断里**只认关卡声明**、不认 `state.step`：`judgeAndAdvance()` 不只由动作触发，
+      //    双击放大卡牌（`noteZoomOpened`）也会走它 —— 若这里把"非 check-cache"的情况让给下面
+      //    那条无条件规则，玩家在补完分之后再双击看一眼卡，`step` 就会被抹回 `action`，
+      //    编译按钮当场消失（而这一关的手牌已经打完，只剩一条死路）。所以这一支**一步都不动**。
+      if (state.step === 'check-cache') state.step = 'check-compile';
+      return;
+    }
+    /**
      * ★ 2026-10-02（P7）：**T10 例外**（`level.keepStep`）。
      *
      * 控制权只在 `check-control` 这一步判定（`src/core/game.ts:293` 的 `performAdvance`），
@@ -777,11 +869,25 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
      * 所以 T10 声明 `keepStep: true`：**让引擎自己的步真的走一格**（与真对局同一条路）。
      */
     if (currentLevel().keepStep === true) return;
-    if (state.turnPlayer !== 0) {
-      state.turnPlayer = 0;
-      state.step = 'action';
-      state.compiledThisTurn = false;
-    }
+    /**
+     * ★ 2026-10-03（**本轮实测抓到的缺陷**）：这条沙盒规则必须**无条件**执行，
+     * 不能只在"回合易主"时执行。
+     *
+     * 原实现是 `if (state.turnPlayer !== 0) { turnPlayer = 0; step = 'action'; }` —— 而引擎在
+     * 一次 `play` 之后**只推进到 `check-cache` 且回合没换人**（`src/core/game.ts:162` 的
+     * `advanceStep`，实测读数：T3 打完第一张 ⇒ `step=check-cache turn=0 legal=[advance]`）。
+     * 于是"没有换人"那一支**根本不会执行**，而 render.ts 的落点判定写死了
+     * `if (s.step !== 'action') return`（`playToLine`；拖拽那边同一句 `s.step === 'action'`）
+     * ⇒ **凡是要连着做两个动作的关卡，玩家做完第一个就再也出不了第二张牌**
+     * （实测：T3 只打得出 1 张、T4 只打得出 1 张、T7 打完精神2 就停了、T9/T12 同理）。
+     * 这与他打算教的东西直接矛盾（T4 明写"五个动作各做一次"），而 `keepStep` 那两个例外
+     * （T10/T11）不受影响 —— 它们本来就要让引擎的步真的走。
+     * ⇒ 去掉那个 guard：**每次动作之后都把沙盒交还玩家 0 的 `action` 步**（与这段注释的
+     * 原意一致，见下面 `judgeAndAdvance` 的说明）。
+     */
+    if (state.turnPlayer !== 0) state.compiledThisTurn = false;
+    state.turnPlayer = 0;
+    state.step = 'action';
   }
 
   function judgeAndAdvance(): void {
@@ -811,13 +917,52 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
       hintBox.textContent = t('tutorial.cleared-all');
       return;
     }
-    // 下一关：换局面、重置本关的判定状态
-    levelId = levelAt(levelIndex(level.id) + 1);
+    /**
+     * ★ 2026-10-03（S0）：这一关的过关形态就是**赢下这一局** —— 上面那次 `paint()` 会在
+     * body 上挂出 render.ts 的胜利横幅（`.win-banner`）。若照别的关卡那样**同步**换关，
+     * 那一帧立刻被下一关的棋盘盖掉，玩家一帧都看不到"赢"（而"赢"正是这一课要演示的东西）。
+     * ⇒ 停 `S0_WIN_HOLD_MS` 毫秒再进下一关（到点由 `gotoNextLevel()` 收掉横幅并换关）。
+     */
+    if (level.id === 'S0') {
+      /**
+       * ⚠️ **只排一个**：`judgeAndAdvance()` 会被**重复**调用（玩家在这 2.2 秒里双击放大一张卡
+       * 也会走它 —— `noteZoomOpened`），不设这个 guard 的话两个定时器都会到点，
+       * 第二次 `gotoNextLevel()` 会**再往下跳一关**（把 T0 直接跳过去）。
+       */
+      if (nextLevelTimer === null) nextLevelTimer = setTimeout(gotoNextLevel, S0_WIN_HOLD_MS);
+      return;
+    }
+    gotoNextLevel();
+  }
+
+  /** 换到下一关（`judgeAndAdvance` 的正常出口；S0 那一支延后调它，见 `S0_WIN_HOLD_MS`） */
+  function gotoNextLevel(): void {
+    if (nextLevelTimer !== null) { clearTimeout(nextLevelTimer); nextLevelTimer = null; }
+    dismissWinBanner();
+    levelId = levelAt(levelIndex(levelId) + 1);
     openLevel();
+  }
+
+  /**
+   * 收起 render.ts 在终局时挂到 body 上的**胜利横幅**。
+   *
+   * 为什么教学要主动收：S0 打赢之后要换到下一关（`T0`），而那条横幅（`.win-banner`，
+   * `z-index: 10000`）会**留在屏上** —— 不收掉的话，下一关一开局就带着上一局的"玩家 1 获胜！"
+   * （它画在顶部中央，正好压在 T0 里玩家要点的那一带：控制组件/「控制权」热点）。
+   * 层序上教学浮层是 `z-index: 11000`（`.tutorial-overlay`）⇒ 按层序它**不该**吃掉那一下点击，
+   * 但这条**没有真机读数**（本轮不许起浏览器）⇒ 直接收掉，把这个可能性一起排除。
+   * 走它自己那颗「返回主界面」（`.win-confirm-btn`）而不是 `element.remove()`：
+   * 那是 render.ts 设计的收场路径（`banner.remove()` + `onWinReset`，教学里的 `onWinReset` 是空实现）。
+   * ⚠️ 只读它的类名，不改 `render.ts`。
+   */
+  function dismissWinBanner(): void {
+    document.querySelector<HTMLElement>('.win-confirm-btn')?.click();
   }
 
   /** 开（或重开）当前 `levelId` 那一关：新局面 + 清判定状态 + 重画 */
   function openLevel(): void {
+    // 上一关的"延后换关"作废（例如 S0 赢下之后玩家抢先点了「重开这一关」）
+    if (nextLevelTimer !== null) { clearTimeout(nextLevelTimer); nextLevelTimer = null; }
     state = buildLevelState(levelId);
     snap = snapshot(state);
     opsSeen = [];
@@ -839,6 +984,7 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
 
   return {
     close() {
+      if (nextLevelTimer !== null) { clearTimeout(nextLevelTimer); nextLevelTimer = null; }
       zoomWatcher.disconnect();
       spotResize?.disconnect();
       spotFitWatch?.disconnect();

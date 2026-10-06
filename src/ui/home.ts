@@ -4,6 +4,10 @@ import { coinLanding, draftStarterFor } from '../app/coin';
 import type { CoinSide } from '../app/coin';
 import { DEMO_PROTOCOLS, DEMO_CARD_DEFS, protocolImgSrc, cardImgSrc, cardTextParts } from '../data/demo';
 import { LIB_TAG_GROUPS, LIB_ALL_TAG_IDS, filterLibrary } from '../app/library-filter';
+// ★ 2026-10-03（用户要求）：「自定义协议池」的纯逻辑（最小套数 / 归一 / 本局池）。
+//   屏只读 `POOL_MIN` 与 `normalizePoolIds` —— "够不够数、哪些还认、怎么排序"全在那一层。
+import { POOL_MIN, normalizePoolIds } from '../app/pool-choice';
+import type { PoolChoice } from '../app/pool-choice';
 import { openZoom, buildCardTextEl, buildProtocolRatingPanel, bindClickOrDouble } from './render';
 import { changelogElement } from './changelog';
 import { FX_SETTINGS, isFxSettingOn } from './fx-settings';
@@ -570,7 +574,9 @@ export function renderHome(root: HTMLElement, nav: HomeNav): void {
 
 /* =====================================================================
  * 游戏模式选择页（2026-09-03）：热坐（双人，可玩）/ 联机对战（两台设备）/ 单人 / 三人（开发中）；
- * 两个默认关闭的开关：禁用模式（开局按规则禁用协议）、随机池模式（随机抽 12 套）；
+ * 三个默认关闭的开关：禁用模式（开局按规则禁用协议）、随机池模式（随机抽 12 套）、
+ * 自定义协议池（2026-10-03 用户要求：本局只用玩家自己在 `src/ui/pool-picker.ts` 里挑的那些协议，
+ * 至少 12 套；与随机池互斥）；
  * 开关左侧带圆形「?」帮助图标（hover 显示说明）。两种模式下草稿页世代筛选仍可用。
  *
  * 2026-10-01（用户要求）：「单视角预览（仅开发）」那张卡（以及它专属的 `devUnlocked` 形参与
@@ -601,6 +607,32 @@ export interface ModeSelectNav {
    * （入口、启动路径、死代码一起走）之后，nav 键顺序与模式卡顺序**逐项一致**了。
    */
   startNetLobby(): void;
+  /**
+   * ★ 2026-10-03（用户要求）：**打开协议挑选屏**（`src/ui/pool-picker.ts`）。
+   *
+   * 它是「自定义协议池」那一行**右边的那个按钮**的动作。⚠️ 那个按钮**不在** `<label>` 里
+   * ——`<label class="mode-toggle">` 会把自身区域内的点击转给它的表单控件，按钮放进去会变成
+   * "点一下按钮，旁边那个勾选框也跟着翻转"（这一行因此包了一层 `.mode-toggle-row` 做 flex 排布）。
+   */
+  openPoolPicker(): void;
+  /**
+   * ★ 2026-10-03（用户要求）：**读本机存的「自定义协议池」预设**。
+   *
+   * 屏上要用它回答两件事：① 那个勾选框这一刻该不该是勾上的（`enabled` **且**选择够数）；
+   * ② 那一行右边显示「已选 N 套」还是「未选择」。数组不在这里归一（归一是纯层
+   * `src/app/pool-choice.ts` 的 `normalizePoolIds`）。
+   *
+   * 为什么要读存储而不是屏上自己记：清除本机数据 / 换一台设备之后，存储里那份选择就没了 ——
+   * 屏必须**照着存储重画**，于是"选择丢了 ⇒ 勾选框回落成未勾选"是自然结果，不是特判。
+   */
+  readPoolPreset(): PoolChoice;
+  /**
+   * ★ 2026-10-03（用户要求）：**勾上 / 取消「自定义协议池」**（落本机）。
+   *
+   * 三个调用点：玩家自己点那个勾选框；随机池被勾上时把它取消（两者互斥）；
+   * 没有合法选择时它本来就勾不上（勾选框 `disabled`，宿主那侧另有一道开局复核）。
+   */
+  setPoolEnabled(on: boolean): void;
 }
 
 /**
@@ -670,7 +702,7 @@ export function renderModeSelect(root: HTMLElement, nav: ModeSelectNav): void {
    */
   screen.appendChild(el('div', 'zoom-hint', t('mode.zoom-hint')));
 
-  // 两个开关（默认关闭）+ 圆形问号帮助
+  // 三个开关（默认关闭）+ 圆形问号帮助（第三个「自定义协议池」的写法见下面那一大段说明）
   const toggles = el('div', 'mode-toggles');
   const mkToggle = (label: string, tip: string): { row: HTMLElement; box: HTMLInputElement } => {
     const row = el('label', 'mode-toggle');
@@ -697,6 +729,96 @@ export function renderModeSelect(root: HTMLElement, nav: ModeSelectNav): void {
   );
   const banBox = banToggle.box;
   const randomBox = randomToggle.box;
+  /**
+   * ★ 2026-10-03（用户要求）：**第三个开关行「自定义协议池」**（默认不勾选，右边带一个按钮）。
+   *
+   * ## 为什么这一行不是 `mkToggle` 造出来的
+   *
+   * `<label class="mode-toggle">` 会把**自身区域内**的点击转给它里面的表单控件
+   * ⇒ 「选择协议」那个按钮**不能**放进 `<label>` 里，否则点按钮会顺带把勾选框翻一下。
+   * 所以这一行包了一层 `.mode-toggle-row`：`<label>` 与新按钮各占一格（flex 排布），
+   * 而 `.mode-toggle` / `.mode-check` / `.mode-toggle-label` / `.mode-help` 四个类
+   * **照旧复用**（它们是 `styles.css` 里的，只读复用；本行只多外层包裹与新屏自己的类名）。
+   *
+   * ## 勾选框这一刻该不该勾上：**照存储算**，不是屏上自己记
+   *
+   * `enabled && 够数` 两个条件缺一不可。于是"玩家清了本机数据 / 那份选择丢了 / 只剩 8 套"
+   * 这些情形在屏上自然表现为**未勾选且勾不上**（`disabled`）—— 不需要为它们各写一条特判，
+   * 也不会出现"勾着但开局用不了"的中间态（宿主那一侧另有一道同判据的开局复核）。
+   */
+  const preset = nav.readPoolPreset();
+  const presetIds = normalizePoolIds(preset.ids);
+  const poolReady = presetIds.length >= POOL_MIN;
+  const poolRow = el('div', 'mode-toggle-row');
+  const poolLabel = el('label', 'mode-toggle');
+  const poolHelp = el('span', 'mode-help', '?');
+  poolHelp.dataset.tip = t('mode.pool.tip', { min: String(POOL_MIN) });
+  const poolBox = document.createElement('input');
+  poolBox.type = 'checkbox';
+  poolBox.className = 'mode-check';
+  poolBox.checked = preset.enabled && poolReady;
+  poolLabel.appendChild(poolHelp);
+  poolLabel.appendChild(poolBox);
+  poolLabel.appendChild(el('span', 'mode-toggle-label', t('mode.pool')));
+  poolLabel.appendChild(
+    el(
+      'span',
+      'mode-pool-count',
+      // 有一套就报数（哪怕还没勾、或不足 12 套 —— 报出来玩家才知道该再去挑几套）；
+      // 一套都没有才写「未选择」。
+      presetIds.length > 0
+        ? t('mode.pool.count', { n: String(presetIds.length) })
+        : t('mode.pool.none')
+    )
+  );
+  poolRow.appendChild(poolLabel);
+  // ★ 按钮是**这一行的第二个孩子**（在 `<label>` 之外）—— 见上面那段说明。
+  poolRow.appendChild(button('btn mode-pool-btn', t('mode.pool.pick'), () => { nav.openPoolPicker(); }));
+  toggles.appendChild(poolRow);
+
+  /**
+   * 同步这一行的可用性（**互斥的唯一落点**）。
+   *
+   * 两条判据合在一个函数里，且每个改变它的入口（勾随机池 / 勾自定义池 / 首次渲染）都调它一次：
+   *  1. **随机池勾上 ⇒ 自定义勾不上**（`disabled`，并保持未勾选；外层加 `.mode-toggle-row-off`
+   *     让"现在不能勾"在屏上看得出来）；
+   *  2. **没有合法选择（< 12 套）⇒ 也勾不上** —— 这就要求玩家先走一趟「选择协议」。
+   *
+   * 禁用协议（ban）与这两者**无关**：它是另一行，本文一个字都不碰它。
+   */
+  const syncPoolRow = (): void => {
+    if (randomBox.checked) poolBox.checked = false;
+    const off = randomBox.checked || !poolReady;
+    poolBox.disabled = off;
+    poolRow.classList.toggle('mode-toggle-row-off', off);
+  };
+  /**
+   * 勾上随机池 ⇒ 自定义池**当场取消**（用户口径：两者任何时候都不许同时勾上）。
+   * 存也一起写掉（`setPoolEnabled(false)`）：屏是照存储画的，只改 DOM 不写存储的话，
+   * 下一次重画会把这一下取消又"忘掉"。
+   */
+  randomBox.addEventListener('change', () => {
+    if (randomBox.checked) nav.setPoolEnabled(false);
+    syncPoolRow();
+  });
+  poolBox.addEventListener('change', () => {
+    /**
+     * ⚠️ 随机池开着时**什么都不写**（连"勾上"都不许落盘）。
+     *
+     * 正常情况下走不到这一格：那时勾选框是 `disabled`，浏览器不会派发 `change`。
+     * 留着这一句是因为"能不能勾"的唯一防线不该只有 HTML 属性那一层 —— 万一将来有人把
+     * `disabled` 去掉、或者用脚本直接把 `checked` 置真再派发事件，这里也必须是"取消掉、不写盘"，
+     * 而不是把"两个都勾上了"存进本机（那正是用户点名不许出现的状态）。
+     */
+    if (randomBox.checked) {
+      poolBox.checked = false;
+      syncPoolRow();
+      return;
+    }
+    nav.setPoolEnabled(poolBox.checked);
+    syncPoolRow();
+  });
+  syncPoolRow();
   screen.appendChild(toggles);
 
   const actions = el('div', 'mode-actions');

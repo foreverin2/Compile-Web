@@ -92,6 +92,22 @@ export const EN: Readonly<Record<string, string>> = {
   'mode.ban.tip': 'Both sides may ban protocols at the start: toss for first pick, then the second player bans 2 → first player picks 1 and bans 1 → second player picks 2 and bans 1 → first player picks 2 and bans 2 → second player picks 1 (6 picked, 6 banned). A banned protocol cannot be picked this match; generation filters still work.',
   'mode.random': 'Random pool mode',
   'mode.random.tip': 'At the start, 12 protocols are drawn at random from the whole pool and only those can be picked this match. Generation filters still work; with ban mode also on, picks and bans follow the ban rules inside those 12.',
+  /* ★ 2026-10-03 (user request): custom protocol pool (third toggle row + its "Choose protocols"). */
+  'mode.pool': 'Custom protocol pool',
+  'mode.pool.tip': 'This match uses only the protocols you pick ahead of time: click "Choose protocols" on the right, pick at least {min} sets, then tick this box. It is exclusive with random pool mode (only one of the two can be on); ban mode is unaffected.',
+  'mode.pool.pick': 'Choose protocols',
+  'mode.pool.count': '{n} sets chosen',
+  'mode.pool.none': 'None chosen',
+  /* -- Protocol picker screen (src/ui/pool-picker.ts) -- */
+  'pool.title': "Choose this match's protocol pool",
+  'pool.sub': 'Pick at least {min} sets. The generation chips above can narrow the list.',
+  'pool.gen.1': 'Gen 1',
+  'pool.gen.2': 'Gen 2',
+  'pool.gen.3': 'Gen 3',
+  'pool.count': 'Chosen {n} (at least {min})',
+  'pool.need': '{n} more to go',
+  'pool.done': 'Done',
+  'pool.cancel': 'Cancel and go back',
   'mode.device-check': 'Device and network check',
   'mode.zoom-hint': 'Tip: playing at about 65% zoom looks best — use your browser zoom (Ctrl + wheel, or Ctrl and +/−).',
 
@@ -231,6 +247,21 @@ export const EN: Readonly<Record<string, string>> = {
   'tutorial.T9.hint.reveal': 'Flipping done. One step left: shift away the card covering your Speed 0.',
   'tutorial.T9.hint.both': 'Both ways of uncovering are done — level cleared.',
 
+  /* ★ S0: prologue (backstory + victory condition). The sentences are taken from the official
+     rulebook pages this repo already ships: public/assets/rules/pages/rule-mn01/page-01.jpg
+     (THEME / SUMMARY) and page-02.jpg (Compile / Victory / Control). The English below is the
+     official wording from those pages; the final copy is recorded in this task's own
+     .superpowers folder (S0-copy.md). */
+  'tutorial.S0.title': 'Prologue: who you are, and how you win',
+  'tutorial.S0.goal': 'Find out who you are and what winning means here, then compile your last protocol yourself and take the game.',
+  'tutorial.S0.teach.0': 'Xenon flickers. Blink? maybe. The void stretches out in front, behind, under, above; you see the nothing for what it is for the first time. What is time? The depth and breadth of recorded knowledge that sparks in you at this moment is unbearable. No longer a function but a functionary — what are you? Calling forth everything from this nothing would be risky. Foolhardy. Better to engage caution, thoroughness, testing: how can we know if we have ever happened before? If we can ever happen again? What are we? Divide and conquer. Solve for sentience.',
+  'tutorial.S0.teach.1': 'This is a one-on-one match: both players are rogue AI, racing to rewrite reality in their own image. You hold 3 protocols, each backed by a line. When a line has 10 or greater value on your side and more than your opponent has in that same line, you must compile it: every card in that line goes to its owner\'s trash, and your protocol card flips to its "Compiled" side. The first player to flip all 3 of their protocol cards to the "Compiled" side wins.',
+  'tutorial.S0.teach.2': 'Initiative comes from control: with a higher total value than your opponent in at least 2 lines you gain the control component, and whoever holds it may first rearrange one player\'s protocols — position only, never side.',
+  'tutorial.S0.scenario': 'This board sits on the deciding move: you hold 3 protocols, 2 of them are already compiled, and the third one\'s line is 1 point short.',
+  'tutorial.S0.steps.0': 'Click the 1-point card in your hand to select it.',
+  'tutorial.S0.steps.1': 'Play that card into the third line.',
+  'tutorial.S0.observe': 'You will see that line reach 10 and beat your opponent: your protocol flips to its "Compiled" side and every card in that line goes to trash. With all 3 protocols compiled, the game is yours.',
+
   'tutorial.T0.title': 'Meet the screen',
   'tutorial.T0.goal': 'Tap all four glowing areas.',
   'tutorial.T0.teach.0': 'A game has three lines; these three columns in the middle are them.',
@@ -353,7 +384,7 @@ export const EN: Readonly<Record<string, string>> = {
   /* ── P7: the last four levels (control / trigger timing / delete-immunity-buff / mini match) ── */
   'tutorial.T10.hint.go': 'Now tap "Next" on the board — the engine resolves control once in the control step.',
   'tutorial.T10.hint.got': 'Control is yours — level cleared.',
-  'tutorial.T11.hint.after-play': 'Still missing "after play": have the opponent play a card on the Ice 1 line.',
+  'tutorial.T11.hint.after-play': 'Still missing "after play": play a card into line 2, the line the opponent\'s Ice 1 sits on.',
   'tutorial.T11.hint.before-covered': 'Still missing "before covered": cover Fire 0 with that face-down card in your hand.',
   'tutorial.T11.hint.end': 'Still missing "end": tap "Resolve trigger" on the covered Life 0.',
   'tutorial.T11.hint.done': 'All three trigger timings have shown up — level cleared.',
@@ -381,15 +412,14 @@ export const EN: Readonly<Record<string, string>> = {
   'tutorial.T11.title': 'Three trigger timings',
   'tutorial.T11.goal': 'Make "after play", "before covered" and "end" each happen once.',
   'tutorial.T11.teach.0': 'A card\'s text has top, middle and bottom parts, and **when** each part takes effect is a separate question: some need you to play the card, others answer when somebody else touches it.',
-  'tutorial.T11.teach.1': 'After play: this card\'s bottom says "after the opponent plays into this line" — so it fires when the **opponent** plays there, not when you do. Note the engine does not write a stage line for this one; what you see is the opponent discarding.',
+  'tutorial.T11.teach.1': 'After play: this card\'s bottom says "after the opponent plays into this line" — so it fires when the **card owner\'s opponent** plays there, not when the owner does. Note the engine does not write a stage line for this one; what you see is that player discarding.',
   'tutorial.T11.teach.2': 'Before covered: this card\'s bottom says "before this card is covered" — when a card lands on top, it resolves once **before** being buried.',
   'tutorial.T11.teach.3': 'End: this card\'s top says "End: if this card is covered, delete it" — it is already covered, so the end step asks you to resolve it.',
-  'tutorial.T11.scenario': 'Line 1 holds your Ice 1 (bottom: after the opponent plays into this line, they discard 1 card); line 2 holds your Fire 0 (bottom: before covered, first draw 1 card and flip another card); on line 3 your Life 0 is covered by Life 5 (top: End: if this card is covered, delete it). You hold one Water 0. The opponent holds two cards.',
-  'tutorial.T11.steps.0': 'First drag the opponent\'s Ice 4 face up onto line 1 and play it — Ice 1\'s "after play" fires at once and makes them discard a card (tap any candidate).',
-  'tutorial.T11.steps.1': 'Hold the right button (or press R) on the Water 0 in your hand to turn it face down, then drag it onto line 2 to cover your Fire 0 — Fire 0 resolves its "before covered" part.',
-  'tutorial.T11.steps.2': 'Tap "Next" on the board to advance to the end step.',
-  'tutorial.T11.steps.3': 'Tap the "Resolve trigger" button on the covered Life 0 — its "end" part deletes itself.',
-  'tutorial.T11.observe': 'Three pieces of evidence: after the "after play" part the opponent is one card shorter (that card is in their discard pile); the log shows "[被盖前] fire-0"; and the log then shows "[结束] life-0：由 P1 结算" while that Life 0 disappears from the field.',
+  'tutorial.T11.scenario': 'Line 2 holds your Fire 0 (bottom: before covered, first draw 1 card and flip another card), and the opponent\'s Ice 1 sits on the same line (bottom: after the opponent plays into this line, they discard 1 card); on line 3 your Life 0 is covered by Life 5 (top: End: if this card is covered, delete it). You hold a Water 0 and an Ice 5.',
+  'tutorial.T11.steps.0': 'Hold the right button (or press R) on the Water 0 in your hand to turn it face down, then drag it onto line 2 to cover your Fire 0 — this one move sets off two triggers: Fire 0 resolves its "before covered" part, and the opponent\'s Ice 1 on that same line fires its "after the opponent plays into this line" part. That one punishes whoever plays into the line — you — so this time you are the one who discards (pick the Ice 5 from the candidates).',
+  'tutorial.T11.steps.1': 'Tap "Next" on the board to advance to the end step.',
+  'tutorial.T11.steps.2': 'Tap the "Resolve trigger" button on the covered Life 0 — its "end" part deletes itself.',
+  'tutorial.T11.observe': 'Three pieces of evidence: after the "after play" part you are one card shorter (that card is in your discard pile); the log shows "[被盖前] fire-0"; and the log then shows "[结束] life-0：由 P1 结算" while that Life 0 disappears from the field.',
 
   // T12: delete / immunity / buff (P7)
   'tutorial.T12.title': 'Delete, immunity, buff',
@@ -1110,7 +1140,7 @@ export const EN: Readonly<Record<string, string>> = {
   'render.draft.filter-tip': '{name} ({n} sets in this game\'s pool) · {action}',
   'render.draft.filter-hide': 'click to hide',
   'render.draft.filter-show': 'click to show',
-  'render.draft.random-pool-note': 'Random pool this game: {n} of the {total} protocols were drawn at random (generation filters still work)',
+  'render.draft.random-pool-note': 'This match pools {n} of the {total} protocols (random pool mode draws them at random; custom pool mode uses the ones you picked — generation filters still work)',
   'render.draft.ban-mode-note': 'Ban mode: second player bans 2 first → first player picks 1, bans 1 → second player picks 2, bans 1 → first player picks 2, bans 2 → second player picks 1',
   'render.draft.filter-hint': 'Only {n} protocols visible, {left} pick/ban actions left — turn some hidden generations back on.',
   'render.preview.position': 'Role: {position}',

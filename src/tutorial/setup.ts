@@ -104,6 +104,44 @@ export function buildLevelState(id: TutLevelId): GameState {
   if (id === 'T10' || id === 'T11' || id === 'T12' || id === 'T13') {
     return buildLevelStateP7(id);
   }
+  // ★ 2026-10-03（用户要求）：S0「序章」—— 先讲背景故事与胜利条件，再**亲手打赢一局**。
+  //   注释与摆法收在这一段里（这一关的每一处都有理由，别把它读成随手摆的牌）。
+  if (id === 'S0') {
+    /**
+     * S0 的棋盘 = **决胜那一步**：三条协议里前两条已经编译过，第三条只差 1 分。
+     *
+     * | 位置 | 摆什么 | 为什么 |
+     * |---|---|---|
+     * | 线 0 / 线 1 | 双方协议都标成 `compiled: true`（链路上不放牌） | 交代"已经编译了两条"，也是"对手也在打这一局"；胜负只看**我方**三条（`compile-body.ts:131`） |
+     * | 线 2（明光） | 我方 `light-4` + `light-5` = **9 分**，对手 `light-2` = **2 分** | 手里那张 1 分牌打进来正好 **10 分 > 2 分** ⇒ 满足编译条件（`compile.ts:16` 的 `own >= 10 && own > opp`） |
+     * | 手牌 | 只有 `light-1`（1 分） | 它**没有中指令**（只有底部「结束：抽1张牌。」，而这一关走不到结束阶段）⇒ 打出去不会弹任何选择，动作链是确定的 |
+     *
+     * 三条"不这么摆就跑不通"的取舍：
+     *  1. **必须是 1 分的牌**：线值差 1 分才叫"决胜那一步"（`light-1` 是本仓 1 分牌里少数没有中指令的
+     *     一张 —— 别的 1 分牌（`water-1`/`darkness-1`/`spirit-1`…）打出去都会挂起选择请求）；
+     *  2. **协议必须挂成明光**：正面牌只能进自己协议那条线（`isPlayableFaceUp`），所以要给 `light-1`
+     *     留一条明光线（T7 那一课同款理由）；
+     *  3. **开局停在 `action` 步**：玩家先打出那张补分的牌（真实 `play`），
+     *     之后由 `TutLevel.toCompileStepAfterPlay` 把步交回 `check-compile`，玩家再点「编译」
+     *     （真实 `executeCompile`）⇒ 协议翻面 + `s.winner = 0` + `phase = 'gameover'`。
+     *     引擎的真实次序是"编译判定在自己回合开头"，所以这两步在真对局里隔着一整轮 ——
+     *     教学把时序压缩到同一关里，编译本身一个字都没绕过。
+     */
+    const s = controlledGame('tutorial-S0', ['spirit', 'water', 'light']);
+    s.players[0].hand = [];
+    s.players[0].deck = [];
+    s.players[0].protocols[0] = { defId: 'spirit', compiled: true };
+    s.players[0].protocols[1] = { defId: 'water', compiled: true };
+    s.players[1].protocols[0] = { defId: 'spirit', compiled: true };
+    s.players[1].protocols[1] = { defId: 'water', compiled: true };
+    s.players[0].stacks[2] = [
+      card('s0f1', 'light-4', 0, 'field', true, 2, 0),
+      card('s0f2', 'light-5', 0, 'field', true, 2, 1),
+    ];
+    s.players[1].stacks[2] = [card('s0o1', 'light-2', 1, 'field', true, 2, 0)];
+    s.players[0].hand = [card('s0h1', 'light-1', 0, 'hand', true)];
+    return s;
+  }
   if (id === 'T0') {
     // T0 只看界面：给一个"有牌可看"的空场，手牌 1 张，免得玩家以为可以打
     const s = controlledGame('tutorial-T0', ['spirit', 'water', 'darkness']);
@@ -327,18 +365,25 @@ function buildLevelStateP7(id: 'T10' | 'T11' | 'T12' | 'T13'): GameState {
   }
   if (id === 'T11') {
     /**
-     * T11 触发时机：**三种触发各摆一处**，三处互不干扰（三张被触发的卡分别在三条线上）。
+     * T11 触发时机：**三种触发各摆一处**。
      *
-     * | 触发 | 卡 | 谁把它弄出来 | 实测日志（方案 §7.13） |
+     * ★ 2026-10-03（本轮实测抓到的缺陷，改法记在这里）：
+     *
+     * | 触发 | 卡 | 谁把它弄出来 | 实测证据 |
      * |---|---|---|---|
-     * | 打出后 | `ice-1`（**对手侧**，线 1） | **对手**在我的 `ice-1` 那条线打一张牌 | `P2 选择：ice-5` / `弃置 ice-5` |
-     * | 被盖住前 | `fire-0`（我方线 2） | **我自己**反面盖一张到它上面 | `[被盖前] fire-0` + `P1 抽 1 张牌` |
-     * | 结束 | `life-0`（我方线 3，**已被盖住**） | 结束阶段点它的「结算触发」 | `[结束] life-0：由 P1 结算` + `删除 life-0` |
+     * | 打出后 | `ice-1`（**对手侧**，线 2） | **我**在自己线 2 出牌（盖火焰0 的那一张） | P1 手里那张进了 P1 的弃牌堆 |
+     * | 被盖住前 | `fire-0`（我方线 2） | **我自己**反面盖一张到它上面 | 日志 `[被盖前] fire-0` |
+     * | 结束 | `life-0`（我方线 3，**已被盖住**） | 结束阶段点它的「结算触发」 | 日志 `[结束] life-0：由 P1 结算` |
      *
      * 三处各有一条"不这么摆不行"的理由：
-     *  1. `ice-1` 的 `after-play` 是**定向触发**：它查的是**打出者的对手**那一侧同线顶卡
-     *     （`resolve.ts:1062` 的 `fireDirectedTop(…, actor === 0 ? 1 : 0, …)`）⇒ 必须是**对手**
-     *     在**这条线**上出牌，我自己出牌不会触发它；
+     *  1. `ice-1` 的 `after-play` 是**定向触发**：它查的是**打出者的对手**那一侧的同线顶卡
+     *     （`resolve.ts:1062` 的 `fireDirectedTop(…, actor === 0 ? 1 : 0, …)`）⇒ 冰1 必须摆在
+     *     **对手**那条线上，触发它的是**我**的出牌。
+     *     ⚠️ 旧摆法（冰1 在我方线 1、靠"对手出牌"触发）**在教学屏里做不到**：那要求玩家去
+     *     打**对手手牌**，而教学屏只会在 `state.turnPlayer` 那一侧提交（render.ts 也只把手牌
+     *     做成当前行动方的可拖拽物）⇒ 玩家永远走不出那一步（判据里的"打出后"永远不成立）。
+     *     现在把冰1 放到对手线 2、和自己的火焰0 **同一条线**：**一次盖牌**同时打出
+     *     「被盖住前」与「打出后」两处证据（方向没变，仍然是"对手在我的这条线上被出牌"）。
      *  2. `fire-0` 的 `before-covered` 只查**该线顶卡**（`resolve.ts:1041`）⇒ 它必须是那一条线上
      *     唯一/最上面那张，而玩家得**自己**去盖（引擎不拦"盖自己的牌"）；
      *  3. `life-0` 的「结束」是**顶命令**（`top: true`）且带 `cond: !isUncovered`（`life.ts:83`）
@@ -347,25 +392,31 @@ function buildLevelStateP7(id: 'T10' | 'T11' | 'T12' | 'T13'): GameState {
      *
      * ⚠️ 手牌里那张 `water-0` 是"盖住 fire-0"用的：**反面打出不看协议**，所以随便哪张都行；
      * 特意挑一张 0 分且无文本的，免得它自己再触发别的效果把这一课搅浑。
-     * ⚠️ 对手手里两张冰牌都**没有中指令**（`ice-4` 的"不可被翻转"由引擎守卫实现、不注册效果；
-     * `ice-5` 的中指令是弃牌，只有它被 `ice-1` 的效果弃掉时才走一次）⇒ 这条链上只有
-     * `ice-1` 那一次选择请求，玩家的操作是确定的。
+     * ⚠️ 手牌里那张 `ice-5`（`t11h-fodder`）是留给"打出后"那一下弃的：`ice-1` 的
+     * 「对手在此链路出牌后：**他要弃置1张牌**」罚的是**往那条线出牌的人**（`ice1AfterPlay`：
+     * `foe = opp(ctx.player)`，候选就是出牌者自己的手牌）—— 冰1 在对手那边、出牌的是我，
+     * 所以这一下**弃的是我手里的牌**，判据读的也是它进我的弃牌堆。只留这一张候选 ⇒ 玩家
+     * 在候选里没有选错的空间。
+     * ⚠️ 本关的三种触发**跨了引擎的三步**（action → check-cache → end）⇒ 声明 `keepStep: true`，
+     * 让引擎自己的步真的走（否则教学屏那条沙盒规则会把 step 打回 action，玩家永远到不了结束阶段）。
      */
     const s = controlledGame('tutorial-T11', ['ice', 'fire', 'life']);
     s.players[0].hand = [];
     s.players[0].deck = [];
-    // 打出后：自己线 1 摆 ice-1（对手会在这条线出牌）
-    s.players[0].stacks[0] = [card('t11f-a', 'ice-1', 0, 'field', true, 0, 0)];
-    // 被盖住前：自己线 2 摆 fire-0，手里一张 water-0 用来反面盖它
+    // 打出后：**对手**线 2 摆冰1（顶卡、正面）—— 我在自己线 2 出牌时它的「打出后」响
+    s.players[1].stacks[1] = [card('t11o-ice1', 'ice-1', 1, 'field', true, 1, 0)];
+    // 被盖住前：自己线 2 摆火焰0，手里一张 water-0 用来反面盖它
     s.players[0].stacks[1] = [card('t11f-b', 'fire-0', 0, 'field', true, 1, 0)];
     // 结束：自己线 3 摆"被盖住的 life-0"
     s.players[0].stacks[2] = [
       card('t11f-c', 'life-0', 0, 'field', true, 2, 0),
       card('t11c-cover', 'life-5', 0, 'field', true, 2, 1),
     ];
-    s.players[0].hand = [card('t11h-cover', 'water-0', 0, 'hand', true)];
-    // 对手：线 1 打一张牌（触发 ice-1），手里再留一张给它弃
-    s.players[1].hand = [card('t11o1', 'ice-4', 1, 'hand', true), card('t11o2', 'ice-5', 1, 'hand', true)];
+    s.players[0].hand = [
+      card('t11h-cover', 'water-0', 0, 'hand', true),
+      card('t11h-fodder', 'ice-5', 0, 'hand', true),
+    ];
+    s.players[1].hand = [];
     s.players[1].deck = [];
     return s;
   }

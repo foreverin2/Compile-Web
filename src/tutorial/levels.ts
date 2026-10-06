@@ -70,6 +70,24 @@ export interface TutLevel {
    * `checkControl()` 真的跑（与真对局同一条代码路径），判据读 `s.control`。
    */
   readonly keepStep?: boolean;
+  /**
+   * ★ 2026-10-03（S0「序章」）**打完一张牌之后把引擎的步交回「检查编译」那一步**。
+   *
+   * 为什么需要它（**引擎的真实次序**，不是编的）：`STEP_ORDER`（`src/core/engine/turn.ts:4`）
+   * 是 `start → check-control → check-compile → action → check-cache → end` —— 编译判定在
+   * **自己回合的开头**，而"把一条链路打到 10 分"发生在 `action` 步（`play` 之后
+   * `game.ts:162` 只推进到 `check-cache`）。所以真对局里"补上第 10 分"与"被要求编译"
+   * **隔着一整轮**（要等对手打完自己回合、再回到你的 `check-compile`）。
+   *
+   * S0 要连着演示这两步（补分 ⇒ 必须编译 ⇒ 赢），⇒ 声明它：本关在一次成功的动作之后，
+   * 若引擎停在 `check-cache`，屏把 `step` 摆回 `check-compile`（`tutorial-screen.ts` 的
+   * `handBackTurn()`，与那条"动作后强制回到 `action`"的沙盒规则同一处）。
+   *
+   * ⚠️ 压缩的**只是时序**：编译仍然是引擎自己的 `executeCompile`（`check-compile` 那一步
+   * 的合法动作），`compile is mandatory` 那条守卫、线值判定（`compile-body.ts:42`）与
+   * 胜负判定（`:131`）一个字都没绕过。
+   */
+  readonly toCompileStepAfterPlay?: boolean;
   /** T0 专用：要点一遍的四个区域（链路 / 协议 / 阈值 / 控制权） */
   readonly spots?: readonly TutSpot[];
   /**
@@ -99,7 +117,11 @@ export interface TutLevel {
 }
 
 /**
- * 十四关。**顺序就是玩的顺序**（进度里的"当前关"按这个数组的序号推）。
+ * 十五关。**顺序就是玩的顺序**（进度里的"当前关"按这个数组的序号推）。
+ *
+ * ★ 2026-10-03（用户要求）：**最前面插一关 `S0`（序章）** —— 先讲背景故事、再讲清"这一局
+ * 怎么算赢"，然后才进原来的 `T0`（界面扫盲）。`T0`~`T13` 的 id **一个都没动**
+ * （已存进度仍指向原来那几课），只是没玩过的人从 `S0` 开始。
  *
  * ★ 2026-10-02（P6）**编号再动一次**：`T7` 从"编译与阈值"变成"默认目标规则"、
  * 编译挪到 `T8`、新增 `T9`「打出 vs 露出」。理由与老进度的代价写在方案 §7.11。
@@ -107,6 +129,41 @@ export interface TutLevel {
  * 这一次只是往后加，老进度的 id 没有被重新指向（方案 §7.13）。
  */
 export const TUT_LEVELS: readonly TutLevel[] = [
+  {
+    id: 'S0',
+    /**
+     * ★ 2026-10-03（用户原话）：「再加上一关，用于先告诉玩家背景故事，然后再给玩家详细解释，
+     * 这个游戏的胜利条件是什么，然后再是介绍界面」。
+     *
+     * 文案**逐句取自**本仓在发的官方规则书页图（`public/assets/rules/pages/rule-mn01/`
+     * 的 `page-01.jpg` THEME/SUMMARY 与 `page-02.jpg` Compile/Victory/Control），
+     * 英文直接用官方原文；定稿与出处见 `.superpowers/2026-10-03-S0-序章/S0-copy.md`。
+     *
+     * 四件套：`scenario`（决胜那一步的棋盘）/ `guidedSteps`（选中那张 1 分牌 → 打进第 3 条链路）/
+     * `observe`（链路到 10 ⇒ 协议翻面、清线 ⇒ 3 张全编译就是赢）。
+     *
+     * 判据（`judge.ts` 的 S0 分支）读的是**引擎自己的胜负结论** `s.winner === 0` ——
+     * 这一关的过关形态就是"真打赢一局"，不是"点下一步"。
+     */
+    title: () => t('tutorial.S0.title'),
+    goal: () => t('tutorial.S0.goal'),
+    teach: [
+      () => t('tutorial.S0.teach.0'),
+      () => t('tutorial.S0.teach.1'),
+      () => t('tutorial.S0.teach.2'),
+    ],
+    scenario: () => t('tutorial.S0.scenario'),
+    guidedSteps: [
+      () => t('tutorial.S0.steps.0'),
+      () => t('tutorial.S0.steps.1'),
+    ],
+    observe: () => t('tutorial.S0.observe'),
+    // 两个引擎动作，都是这一关真的需要的：打出那张补分的牌（play）⇒ 引擎要求编译（compile）
+    allowKinds: ['play', 'compile'],
+    // ★ 打完牌之后把步交回 check-compile（引擎的编译判定那一步）—— 理由见 TutLevel.toCompileStepAfterPlay
+    toCompileStepAfterPlay: true,
+    interaction: 'engine',
+  },
   {
     id: 'T0',
     title: () => t('tutorial.T0.title'),
@@ -373,15 +430,33 @@ export const TUT_LEVELS: readonly TutLevel[] = [
       () => t('tutorial.T11.teach.3'),
     ],
     scenario: () => t('tutorial.T11.scenario'),
+    /**
+     * ★ 2026-10-03：三步（原来四步）—— 旧 `steps.0`（"先把对手那张寒冰4 打到线 1"）在教学屏里
+     * 做不到（那要求玩家去打**对手手牌**，见 `setup.ts` 的 T11 段），已按新的棋盘改成
+     * "反面盖住自己线 2 的火焰0"这一步；同时删掉 `tutorial.T11.steps.3` 那条键
+     * （步骤重编号，旧键在两张表里都已移除 —— 留着会变成"谁也读不到的死键"）。
+     */
     guidedSteps: [
       () => t('tutorial.T11.steps.0'),
       () => t('tutorial.T11.steps.1'),
       () => t('tutorial.T11.steps.2'),
-      () => t('tutorial.T11.steps.3'),
     ],
     observe: () => t('tutorial.T11.observe'),
-    // play = 盖住 fire-0；effect-choice = ice-1 让对手弃牌那次应答；resolve-trigger = 结束阶段点「结算触发」
-    allowKinds: ['play', 'effect-choice', 'resolve-trigger'],
+    /**
+     * play = 反面盖住火焰0（同一次出牌里「被盖住前」与「打出后」都响）；effect-choice = 冰1 让
+     * 对手弃牌那次应答；advance = 把步推进到结束阶段；resolve-trigger = 结束阶段点「结算触发」。
+     *
+     * ★ 2026-10-03 补上 `advance`（用户当天报的缺陷）：这一关的判据要求日志里出现 `[结束]`，
+     * 而"结束"只发生在 `end` 步 —— 不推进一步就到不了（旧白名单里没有它，玩家点了「下一步」
+     * 只会被判成走偏）。
+     */
+    allowKinds: ['play', 'effect-choice', 'advance', 'resolve-trigger'],
+    /**
+     * ★ 2026-10-03：这一关的三种触发**跨引擎的三步**（action → check-cache → end）⇒ 与 T10 同款，
+     * 声明 `keepStep` 让引擎自己的步真的走（否则教学屏那条"动作后交还 action 步"的沙盒规则
+     * 会把 step 打回 action，玩家永远到不了结束阶段）。
+     */
+    keepStep: true,
     interaction: 'engine',
   },
   {

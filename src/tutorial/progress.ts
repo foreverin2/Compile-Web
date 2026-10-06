@@ -10,7 +10,7 @@
  *
  *  - **当前关** = 存储里的 `current`（合法就照用，非法由纯层回 `T0`）；
  *  - **过了一关** ⇒ 把它记进 `done`，并**把当前关推到下一关**（最后一关就停在最后一关）；
- *  - **"从头开始"** ⇒ `done` 清空、`current = 'T0'`（**不清别的设置**：昵称/语言/向导标记都不动）；
+ *  - **"从头开始"** ⇒ `done` 清空、`current = TUT_LEVELS[0]`（**不清别的设置**：昵称/语言/向导标记都不动）；
  *  - **清除本机数据** ⇒ 整个 `L1_SETTINGS` 被清掉 ⇒ 这里读回 `T0` + 空 `done`（方案 §6 要的正是这个）。
  *
  * ⚠️ 游客模式下这些写都只在内存（`LocalStore` 的口径）⇒ 刷新即丢，屏上不假装它持久。
@@ -41,11 +41,16 @@ function asLevelId(v: string): TutLevelId | null {
   return hit === undefined ? null : hit.id;
 }
 
-/** 读进度（读不出来 = 没玩过 ⇒ `T0` + 空 `done`） */
+/** 教学的第一关（**唯一出处** = `TUT_LEVELS[0]`）——2026-10-03 起是 `S0`（序章） */
+const FIRST_LEVEL: TutLevelId = TUT_LEVELS[0].id;
+
+/** 读进度（读不出来 = 没玩过 ⇒ 第一关 + 空 `done`） */
 export function readProgress(store: LocalStore): TutProgressView {
   const raw = readTutorialProgress(store);
   const done = raw.done.map(asLevelId).filter((x): x is TutLevelId => x !== null);
-  const current = asLevelId(raw.current) ?? 'T0';
+  // ⚠️ 纯层（`src/app/local-store.ts`）对"没玩过 / 坏值"回的是它自己那份清单的第一关；
+  //    这里再兜一次是为了**不依赖**纯层那份默认值（两份清单只保证 id 集合一致，见 levels.test.ts）
+  const current = asLevelId(raw.current) ?? FIRST_LEVEL;
   return { done, current, allDone: done.length === TUT_LEVELS.length };
 }
 
@@ -75,5 +80,5 @@ export function advance(
 
 /** 「从头开始」：进度清空（**不动**昵称/语言/向导标记那些设置） */
 export function restart(store: LocalStore): WriteResult {
-  return writeProgress(store, { done: [], current: 'T0' });
+  return writeProgress(store, { done: [], current: FIRST_LEVEL });
 }

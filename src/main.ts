@@ -50,7 +50,14 @@ import type { CoinSide } from './app/coin';
 // G3 Task 4：L1 授权状态机（纯层）+ 其浏览器后端 + 授权弹窗屏
 // ★ 2026-10-01（P1）：首启向导的"只出现一次"标记就存在**同一个** `L1_SETTINGS` 里
 //   （`onboardingSeen`，没有新存储键）；"清除本机数据"把它一并清掉 ⇒ 向导会再出现。
-import { createLocalStore, readFxSettings, readLang, readNickName, readOnboardingSeen, writeFxSettings, writeLang, writeNickName, writeOnboardingSeen, writeTutorialProgress } from './app/local-store';
+import { createLocalStore, readFxSettings, readLang, readNickName, readOnboardingSeen, readPoolPreset, writeFxSettings, writeLang, writeNickName, writeOnboardingSeen, writePoolPreset, writeTutorialProgress } from './app/local-store';
+// ★ 2026-10-03（用户要求）：「自定义协议池」的纯逻辑。
+//   - `poolDefsOf`：热座那一支用它把**本机存的预设**变成 `createGame({ draftPool })`；
+//   - `poolFromSeed` / `encodePoolIntoSeed`：联机那一支用它们把房主的预设**编码进对局种子**、
+//     两端再从**同一个种子**解出同一份池子（`src/net/**` 冻结，握手消息里只有 `seed` 是既有字段）。
+import { encodePoolIntoSeed, poolDefsOf, poolFromSeed } from './app/pool-choice';
+// ★ 2026-10-03（用户要求）：协议挑选屏（模式选择页那一行右边的「选择协议」）。
+import { renderPoolPicker } from './ui/pool-picker';
 // ★ 2026-10-01（用户要求"设置里的选项也要持久化"）：特效开关的内存态由这个模块持有，本文件只负责启动读回。
 import { applyFxSettings } from './ui/fx-settings';
 // ★ 2026-10-01（P0，用户拍板"UI 全量双语"）：i18n 基建。语言的**值**与文案表在 `src/i18n/`；
@@ -572,11 +579,15 @@ let netGame: NetMatch | null = null;
  * **构造性**得到的那一份值：
  *  - `draftMode` 取**常量** `'normal'`（热座那个勾选框是本地偏好，联机下没有传它的路，
  *    取"假设两端勾的一样"就是判据 3 会红的那种"大概一样"）；
- *  - `draftPool` **不传**（`undefined`）⇒ `createGame` 落回 `opts.draftPool ?? [...DEMO_PROTOCOLS]`
- *    （`src/core/state/create.ts:77`）—— 两端读的是**同一份常量协议全集**，与种子、
- *    与任何本地读数都无关 ⇒ 逐字一致。**G5 T21 起**这条从"同种子派生的 12 套随机池"
- *    换成"全部协议"（用户真机反馈：联机只给了 12 套，而热座默认是全部）——
- *    一致性的**理由换了，判据没换**（两端仍必然相等，且这次连"房主离线磨种子"都不相关）。
+ *  - `draftPool` = `poolFromSeed(hand.seed)`（**2026-10-03 起**）—— 房主勾了「自定义协议池」时
+ *    把挑好的 defId 编进它生成的那粒种子（`poolEncodedSeed`），两端从**同一串**种子纯函数地
+ *    解出**逐项相同**的数组；没编码 / 解出来不够 `POOL_MIN` 套 ⇒ `null` ⇒ `createGame` 落回
+ *    `opts.draftPool ?? [...DEMO_PROTOCOLS]`（`src/core/state/create.ts:77`）＝全部协议。
+ *    **G5 T21 的历史形态**（"不传池 = 全部协议"，用户真机反馈：联机只给了 12 套而热座默认全部）
+ *    是这条路的**默认档**，今天仍然逐字节成立 —— 只是多了一个"房主显式挑了池子"的档。
+ *    两端一致这条判据没变：池的来源只有种子一个，任何本地读数都不参与。
+ *  - ⚠️ **加入方的本地选择在这条路上不参与**（它自己的 `matchSeed` 从不发出去）——
+ *    用户口径是"由开房间的玩家的预设决定"。
  *
  * ## 视角座位（G5 T21 加；用户真机反馈 2）
  *
@@ -772,12 +783,26 @@ function enterNetGame(): NetDriver | null {
     draftStarter,
     firstToPlay: (1 - draftStarter) as PlayerId,
     draftMode: 'normal',
-    // ★★ G5 T21：**不传池 = 全部协议**（用户真机反馈 1）。原来是 `randomPoolFromSeed(seed, 12)`
-    //   ⇒ 联机草稿被限成 12 套，而热座默认（`showCoin` 那条 `gameOptions.randomPool ? … : undefined`）
-    //   是全部 ⇒ 联机与热座"池子大小不一样"。两端一致这条判据一个字都没变：池的**来源**从
-    //   "同一粒种子派生的随机池"换成"同一份常量协议全集"（`create.ts:77` 的
-    //   `opts.draftPool ?? [...DEMO_PROTOCOLS]`），两端都不依赖任何本地读数 ⇒ 仍逐字一致。
-    draftPool: undefined,
+    /**
+     * ★★ **2026-10-03（用户要求）：本局协议池 = 从 `hand.seed` 解出来的那一份。**
+     *
+     * 上文（G5 T21）那句"不传池 = 全部协议"是**当时**的形态；用户随后要求"自定义协议池
+     * 也要在联机里生效，且由房主的预设决定"。`src/net/**` 冻结 ⇒ 池子只能搭在种子上：
+     * 房主在 `startLobby` 那一刻把自己挑的 defId 编进它生成的种子（`poolEncodedSeed`），
+     * 两端拿到的 `hand.seed` 是**同一串** ⇒ 同一个纯函数 `poolFromSeed` ⇒ 数组**逐项相同**。
+     *
+     * 三种情形都落在这一句上，而且都不需要本地读数：
+     *  - 房主没勾自定义池 ⇒ 种子里没有那段编码 ⇒ `poolFromSeed` 回 `null` ⇒ `undefined`
+     *    ⇒ `createGame` 回落成**全部协议**（与改动前的联机行为逐字节一致）；
+     *  - 房主勾了、但解码后不足 `POOL_MIN` 套（存储被手改等）⇒ 同样回 `null` ⇒ 全部协议
+     *    （**绝不用一个不足数的池子开局**，且两端同时这么判 ⇒ 仍一致）；
+     *  - 正常情形 ⇒ 恰好是房主挑的那几套，按 `DEMO_PROTOCOLS` 常量顺序。
+     *
+     * ⚠️ **加入方的本地选择在这条路上一次都没被读**（本函数里 `readPoolPreset` 零命中，
+     * 那句只出现在热座那一支 `showCoin` 与房主种子那一处 `poolEncodedSeed` 里）——
+     * 这一条由 `tests/ui/mode-pool-choice.test.ts` 的源码腿与行为腿各钉一半。
+     */
+    draftPool: poolFromSeed(seed) ?? undefined,
   });
   /**
    * ★★ **G5 T19：新开一局 ⇒ 这一局的草稿 → 对局转场还没演过**（`createGame` 之后相位必是
@@ -3057,6 +3082,33 @@ function leaveLobbyModule(): void {
   faceChosen = false;
 }
 
+/**
+ * ★ 2026-10-03（用户要求）：**这一局联机的种子**（房主把自己挑的协议池编进去）。
+ *
+ * ## 为什么池子非得走种子（而不是加一条握手消息）
+ *
+ * 用户口径：「双人远程游玩时：由**开房间的玩家**的预设决定，而不是加入房间的玩家选择的」。
+ * 而 `src/net/**`（含 `protocol.ts`）本阶段**冻结**，握手消息里"房主发给加入方的既有字段"
+ * 只有 `seed` 一个 —— 池子没有第二条路可走。种子本来就是"两端唯一共享的对局设置来源"
+ * （洗牌、硬币、随机池全由它派生），所以把 defId 列表编进去是**顺着既有形状**做的扩展。
+ *
+ * ## 两端的形状（判据：两端 `draftPool` 逐项相同）
+ *
+ *  - **房主**：这里把 `encodePoolIntoSeed(种子, 本机预设)` 的结果交给大厅，它在 `sendCommit`
+ *    那一刻把这一串提交并（在加入方叫面之后）原样揭示；
+ *  - **加入方**：它自己也有一份 `matchSeed`，但**从来不会发出去**（它只收房主揭示的种子）
+ *    ⇒ "加入方自己的本地选择"在这条路上**没有任何入口**。
+ *
+ * `poolEncodedSeed` 因此只读本机预设，且**只在勾了时才编码**（没勾就不加那一段标记
+ * ⇒ 对面 `poolFromSeed` 解出 `null` ⇒ 两端都回落成"全部协议"，与改动前的联机行为一致）。
+ * 勾了但归一后不足 `POOL_MIN` 套时这里照样编，而**两端**的 `poolFromSeed` 都判它不够数 ⇒
+ * 同样回 `null`、同样落回全部协议（判据是同一个纯函数，两端不会一个用一个不用）。
+ */
+function poolEncodedSeed(seed: string): string {
+  const preset = readPoolPreset(localStore);
+  return preset.enabled ? encodePoolIntoSeed(seed, preset.ids) : seed;
+}
+
 function startLobby(role: 'host' | 'guest'): void {
   lobbyMode = role;
   /**
@@ -3084,7 +3136,9 @@ function startLobby(role: 'host' | 'guest'): void {
       //   修正前大厅把两者写成 `seed-${sessionId}` / `nonce-${sessionId}`（模板串），而
       //   `sessionId` 明文写在邀请码里 ⇒ 加入方能在叫面之前算出种子（I-5）。
       //   `newMatchSeed()` 与 `newRandomToken` 都只从 `src/ui/match-seed.ts` 出熵（全项目唯一口子）。
-      matchSeed: newMatchSeed(),
+      // ★ 2026-10-03：外面套一层 `poolEncodedSeed(…)` —— 房主勾了「自定义协议池」时，把挑好的
+      //   defId 列表编进这一粒种子（见那个函数的说明：这是"房主预设决定两端池子"的唯一通路）。
+      matchSeed: poolEncodedSeed(newMatchSeed()),
       randomToken: () => newRandomToken(),
       /**
        * ★★ **T11-B：要面**（唯一的那一个入口，D27 把硬币屏插在握手中间）。
@@ -5480,6 +5534,62 @@ function showModeSelect(): void {
       renderMode = 'lobby';
       renderLobbyFrame();
     },
+    /**
+     * ★ 2026-10-03（用户要求）：**「选择协议」** —— 模式选择页「自定义协议池」那一行右边的按钮。
+     *
+     * 它与上面的模式卡是两回事：不开局、不碰 `gameOptions`、不掷硬币，只是**换一屏**
+     * （`src/ui/pool-picker.ts`）。改动的落点在挑选屏自己那两个动作上（见 `showPoolPicker`）。
+     */
+    openPoolPicker: () => { showPoolPicker(); },
+    /**
+     * ★ 2026-10-03（用户要求）：模式页要的**本机预设读数**（勾没勾 + 挑了哪几套）。
+     *
+     * 屏按它决定"勾选框画成勾上还是没勾""右边写「已选 N 套」还是「未选择」"。
+     * 读失败（存储不可用 / 坏值）时 `readPoolPreset` 自己回"没勾、空列表"⇒ 屏上表现为未勾选，
+     * 不抛、不空白（缺一个预设不该让模式页打不开）。
+     */
+    readPoolPreset: () => readPoolPreset(localStore),
+    /**
+     * ★ 2026-10-03（用户要求）：**勾上 / 取消「自定义协议池」**（落本机）。
+     *
+     * 返回值**刻意不接**：这个写入要么落盘、要么落在内存 KV（游客模式）—— 两种情形下
+     * "本机预设"这次会话内都读得回来，屏上立刻是对的。写失败（配额满一类）时下一次重画会
+     * 回到上一次保存的值（勾选框看起来"弹回去"），这是**如实的**表现，本任务不为它另造一套提示。
+     */
+    setPoolEnabled: (on) => {
+      writePoolPreset(localStore, { ids: readPoolPreset(localStore).ids, enabled: on });
+    },
+  });
+}
+
+/**
+ * ★ 2026-10-03（用户要求）：**协议挑选屏**（`src/ui/pool-picker.ts`）的宿主接线。
+ *
+ * ## 两个动作分别落到哪
+ *
+ *  - `back`（「取消并返回」）：**什么都不写**，直接把模式页重画一遍（玩家看到的是"这次改动
+ *    丢了"，而本机存的那份选择一个字没动）；
+ *  - `done`（「完成」）：`writePoolPreset(…, { ids, enabled: true })` —— 保存这份选择**并顺手
+ *    勾上**那个开关（用户口径：挑完就该是勾着的状态，屏上那一行随即显示「已选 N 套」），
+ *    然后回模式页。写进去的 `ids` 已经由挑选屏**归一**过（现有协议、去重、常量顺序）。
+ *
+ * ## 为什么 `initialSelected` 要读本机
+ *
+ * 玩家可能中途退出再进来（或挑完再点一次「选择协议」）：再打开时应当看到**上次挑的那一份**
+ * 仍然是勾中的。这一条与"模式页照着存储重画"是同一个口径：**存储是唯一真相源**，
+ * 屏上不自己记第二份。
+ *
+ * ⚠️ 它**不设** `renderMode`、不碰 `state` —— 挑选屏与"这一局是什么模式"无关，
+ * 从模式页进来、回模式页去（`renderMode` 保持调用前的值）。
+ */
+function showPoolPicker(): void {
+  renderPoolPicker(root, {
+    initialSelected: readPoolPreset(localStore).ids,
+    back: showModeSelect,
+    done: (defIds) => {
+      writePoolPreset(localStore, { ids: defIds, enabled: true });
+      showModeSelect();
+    },
   });
 }
 
@@ -5620,7 +5730,20 @@ function showCoin(): void {
         draftStarter: starter,
         firstToPlay: (1 - starter) as PlayerId,
         draftMode: gameOptions.ban ? 'ban' : 'normal',
-        draftPool: gameOptions.randomPool ? randomPoolFromSeed(seed, 12) : undefined,
+        /**
+         * ★ 2026-10-03（用户要求）：三档，**随机池那一支保持原样**（`randomPoolFromSeed(seed, 12)`），
+         * 新加的只有中间那一档「自定义协议池」：`poolDefsOf(本机预设)`。
+         *
+         *  - `poolDefsOf` 自己把住两条：**没勾 ⇒ `null`**、**归一之后不足 12 套 ⇒ `null`**
+         *    ⇒ 传下去的就是 `undefined` ⇒ `createGame` 落回全部协议。
+         *    这条复核是**承重**的：存储可能被外部手改，也可能是"上次勾了、这次数据被清了"，
+         *    而"开局不许用一个不足数的池子"是用户点名的口径；
+         *  - 两档同时为真在屏上不可能（勾了随机池就勾不上自定义池），这里的先后只是兜底：
+         *    随机池优先（与改动前的行为一致）。
+         */
+        draftPool: gameOptions.randomPool
+          ? randomPoolFromSeed(seed, 12)
+          : (poolDefsOf(readPoolPreset(localStore)) ?? undefined),
       });
       rerender();
     },
