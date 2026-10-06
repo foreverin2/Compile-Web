@@ -69,7 +69,7 @@ const navOf = (calls: string[]): ModeSelectNav => ({
   openDeviceCheck: () => { calls.push('openDeviceCheck'); },
   startHotseat: () => { calls.push('startHotseat'); },
   startNetLobby: () => { calls.push('startNetLobby'); },
-  // ★ 2026-10-03（用户要求）：自定义协议池那一行的三个接缝（本文件只数模式卡，故一律空实现）
+  // ★ 2026-10-06（用户要求）：自定义协议池那一行的三个接缝（本文件只数模式卡，故一律空实现）
   openPoolPicker: () => { calls.push('openPoolPicker'); },
   readPoolPreset: () => ({ enabled: false, ids: [] }),
   setPoolEnabled: () => { calls.push('setPoolEnabled'); },

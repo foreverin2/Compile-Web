@@ -43,7 +43,7 @@ import { onLangChange, t } from '../i18n';
 import { registerFollow } from './fx-follow';
 
 /**
- * ★ 2026-10-03（S0）：**赢下之后停在终局画面上多久**，再自动进下一关。
+ * ★ 2026-10-06（S0）：**赢下之后停在终局画面上多久**，再自动进下一关。
  *
  * 为什么需要它：S0 的过关形态就是"赢下这一局"，而赢的那一帧 `renderApp` 会在 body 上挂出
  * 胜利横幅、并把第三条协议画成「已编译」面、把那条链路清空 —— 这些正是这一课要玩家**看到**的
@@ -222,7 +222,7 @@ function button(cls: string, label: string, onClick: () => void): HTMLButtonElem
 }
 
 /**
- * ★ 2026-10-03（**用户当天报的缺陷**）：**「下一步」那颗按钮不该露给玩家**。
+ * ★ 2026-10-06（**用户当天报的缺陷**）：**「下一步」那颗按钮不该露给玩家**。
  *
  * 用户原话：「别总是在每一次阶段中间都显示名为「下一步」的按钮，虽然按不了，但是会让玩家觉得
  * 困惑，由于这个是测试时才会用到的按钮，所以不要暴露给玩家」。
@@ -365,7 +365,7 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
   /** 本关是否已判定通过（通过之后不再重复提示） */
   let cleared = false;
   /**
-   * ★ 2026-10-03（S0）："赢下之后停一会儿再换关"的那个定时器（见 `judgeAndAdvance`）。
+   * ★ 2026-10-06（S0）："赢下之后停一会儿再换关"的那个定时器（见 `judgeAndAdvance`）。
    * 退出教程 / 重开本关时都要作废 —— 否则退出之后它还会在后台把关卡切走。
    */
   let nextLevelTimer: ReturnType<typeof setTimeout> | null = null;
@@ -460,7 +460,7 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
    */
   const restartAllBtn = button('btn tutorial-restart', t('tutorial.restart'), () => {
     restart(store);
-    // ⚠️ 不能写死 `'T0'`：2026-10-03 起第一关是 `S0`（序章）—— 从进度里读回来才是唯一出处
+    // ⚠️ 不能写死 `'T0'`：2026-10-06 起第一关是 `S0`（序章）—— 从进度里读回来才是唯一出处
     levelId = readProgress(store).current;
     openLevel();
   });
@@ -595,9 +595,9 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
       hintBox.textContent = lines.length > 0 ? lines.join(' ') : t('tutorial.peek.done');
     }
     /**
-     * ★ 2026-10-03（S0 序章）：补完那一分之后，引擎会**强制**要求编译线 3（`check-compile` 那一步）
+     * ★ 2026-10-06（S0 序章）：补完那一分之后，引擎会**强制**要求编译线 3（`check-compile` 那一步）
      * —— 那句话写在这里**复用 T13 那条既有文案**（同一件事：点线 3 的编译，这一局就结束了），
-     * 不为这一关新造一句（序章的九条文案是定稿，见 `.superpowers/2026-10-03-S0-序章/S0-copy.md`）。
+     * 不为这一关新造一句（序章的九条文案是定稿，见 `.superpowers/2026-10-06-S0-序章/S0-copy.md`）。
      * 只在"引擎真的在等这一步"时显示（`state.step`）—— 开局还没打牌时不该让玩家去找编译按钮。
      */
     if (level.id === 'S0' && state.step === 'check-compile') {
@@ -660,9 +660,9 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
     const progress = readProgress(store);
     for (const l of TUT_LEVELS) {
       /**
-       * ★ 2026-10-03：chip 上写的是**1 起的序号**，不再是关卡 id。
+       * ★ 2026-10-06：chip 上写的是**1 起的序号**，不再是关卡 id。
        *
-       * 为什么改：id 是内部标识（`S0`/`T0`/…/`T13`），2026-10-03 在最前面插了一关 `S0`
+       * 为什么改：id 是内部标识（`S0`/`T0`/…/`T13`），2026-10-06 在最前面插了一关 `S0`
        * 之后，照旧写 id 就会在屏上排出「S0 T0 T1 …」这种混排。id 仍留在 `dataset.level`
        * 上（既有探针与测试读的就是它）。抬头那句「第 N 关 / 共 M 关」本来按序号算，
        * 不受影响（`levelIndex()` 是唯一的序号出处）。
@@ -814,7 +814,7 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
   }
 
   /**
-   * ★ 2026-10-03（**用户当天报的缺陷**）：**「下一步」那颗按钮不该露给玩家**。
+   * ★ 2026-10-06（**用户当天报的缺陷**）：**「下一步」那颗按钮不该露给玩家**。
    *
    * 判据与做法写在导出的 `applyNextButtonVisibility()` 上（那里有用户原话与根因）；
    * 这里只负责"拿本关的白名单调它"。⚠️ 每次 `paint()` 都要重做（`renderApp` 每次都重建节点）。
@@ -839,7 +839,7 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
   function handBackTurn(): void {
     if (state.phase !== 'turn') return;
     /**
-     * ★ 2026-10-03（S0「序章」）：**打完那张补分的牌之后，把步交回「检查编译」**。
+     * ★ 2026-10-06（S0「序章」）：**打完那张补分的牌之后，把步交回「检查编译」**。
      *
      * 引擎的真实次序（`STEP_ORDER`，`src/core/engine/turn.ts:4`）是
      * `start → check-control → check-compile → action → check-cache → end` —— 编译判定在
@@ -870,7 +870,7 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
      */
     if (currentLevel().keepStep === true) return;
     /**
-     * ★ 2026-10-03（**本轮实测抓到的缺陷**）：这条沙盒规则必须**无条件**执行，
+     * ★ 2026-10-06（**本轮实测抓到的缺陷**）：这条沙盒规则必须**无条件**执行，
      * 不能只在"回合易主"时执行。
      *
      * 原实现是 `if (state.turnPlayer !== 0) { turnPlayer = 0; step = 'action'; }` —— 而引擎在
@@ -918,7 +918,7 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
       return;
     }
     /**
-     * ★ 2026-10-03（S0）：这一关的过关形态就是**赢下这一局** —— 上面那次 `paint()` 会在
+     * ★ 2026-10-06（S0）：这一关的过关形态就是**赢下这一局** —— 上面那次 `paint()` 会在
      * body 上挂出 render.ts 的胜利横幅（`.win-banner`）。若照别的关卡那样**同步**换关，
      * 那一帧立刻被下一关的棋盘盖掉，玩家一帧都看不到"赢"（而"赢"正是这一课要演示的东西）。
      * ⇒ 停 `S0_WIN_HOLD_MS` 毫秒再进下一关（到点由 `gotoNextLevel()` 收掉横幅并换关）。

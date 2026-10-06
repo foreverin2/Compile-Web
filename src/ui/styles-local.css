@@ -702,7 +702,7 @@
 .cardmaker-credit-link { color: #00ffcc; text-decoration: underline; word-break: break-all; }
 .cardmaker-credit-link:hover { color: #9fd8ff; }
 
-/* ---------- ★ 2026-10-03（用户要求）：去掉"已编译协议"右上角那个绿色对勾 ----------
+/* ---------- ★ 2026-10-06（用户要求）：去掉"已编译协议"右上角那个绿色对勾 ----------
  * 用户原话：「去掉已编译协议右上角的绿色勾」。
  *
  * 那个对勾由 `src/ui/render.ts:216` 造（`el('span','protocol-check','✓')`），样式原本在
@@ -728,7 +728,7 @@
   pointer-events: none; /* 棋盘照旧可点：本屏的教学全靠玩家真的去拖牌 */
 }
 .tutorial-panel {
-  /* ★ 2026-10-03（用户要求）：教练面板挪到**右下角**。
+  /* ★ 2026-10-06（用户要求）：教练面板挪到**右下角**。
    * 用户原话：「我希望能够将教程中的引导位置换到右下角，因为现在的位置会挡住己方查看场上信息」。
    * 原来钉在左上角（`top:12px; left:12px`），正压着玩家自己那半场 —— 教学要玩家一边看自己场上的
    * 数与牌、一边照着做，挡住就等于把这一屏废掉。改成右下角之后：
@@ -787,7 +787,7 @@
 .tutorial-spot:hover { background: rgba(0, 255, 204, 0.16); }
 .tutorial-spot.on { border-style: solid; background: rgba(0, 255, 204, 0.18); }
 /* =====================================================================
- * ★ 2026-10-03（用户要求）：「自定义协议池」—— 模式选择页那一行 + 协议挑选屏
+ * ★ 2026-10-06（用户要求）：「自定义协议池」—— 模式选择页那一行 + 协议挑选屏
  *   （`src/ui/home.ts` 的第三个开关行 / `src/ui/pool-picker.ts` 的整屏）
  *
  * 只带本任务**新增**的类名：`.mode-toggle-row` / `.mode-toggle-row-off` / `.mode-pool-*` / `.pool-*`。
@@ -850,7 +850,7 @@
 .pool-card:hover { border-color: #5c628f; }
 .pool-card-on { border-color: #00ffcc; box-shadow: inset 0 0 0 1px rgba(0, 255, 204, 0.18); }
 /*
- * ★ 2026-10-03（用户报的缺陷）：协议图**横着放**（与「选协议」那一屏同款）。
+ * ★ 2026-10-06（用户报的缺陷）：协议图**横着放**（与「选协议」那一屏同款）。
  *
  * 图源是竖版（`/assets/protocols/<defId>/protocol-loading.*` 实测 750×1050，1/2/3 代都一样），
  * 草稿页的解法是「1.4:1 的容器 + 图 rotate(-90deg) 且宽高按 1:1.4 反过来撑满」

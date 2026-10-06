@@ -138,7 +138,7 @@ const txtAll = [
 const report = { cardDiffs: [], protoDiffs: [], missing: [], extra: [], knownTxtErrors: [] };
 
 /**
- * ★ 2026-10-03（**用户报的缺陷**）：**外部 txt 里已知的转写错误**（逐条列出，带理由与出处）。
+ * ★ 2026-10-06（**用户报的缺陷**）：**外部 txt 里已知的转写错误**（逐条列出，带理由与出处）。
  *
  * 与 `EXPECTED_RENAMES` 的分工：改名表管"同一个东西两个名字"，这张表管"外部文本本身写错了"。
  * 命中这张表的卡**整张跳过比对**（并在输出里印一行，不静默）。
@@ -156,7 +156,7 @@ const KNOWN_TXT_ERRORS = {
    *   中部 `Play the top card of your deck face-down in each line where you have a card.`
    * 引擎（`src/core/effects/cards/life.ts` 的 life0 顶指令）也按"顶指令、结束阶段"实现
    * （T11 那一课读的 `[结束] life-0` 就是它写的）⇒ 段落位置与触发时机都以卡面为准。
-   * 用户 2026-10-03 原话：「生命0的效果的位置文本信息错了，底部的文本效果应该是在上部的」。
+   * 用户 2026-10-06 原话：「生命0的效果的位置文本信息错了，底部的文本效果应该是在上部的」。
    */
   'life-0': 'txt 把顶指令「结束：若此卡被覆盖，则删除此卡。」转写成第三段（底部）；以卡面与引擎实现为准',
 };
@@ -216,7 +216,7 @@ for (const { file, data } of txtAll) {
     const defId = nameToDefId.get(toDisplayName(tc.protoName));
     if (!defId) continue; // 协议名映射缺失已在上面报告
     const key = `${defId}-${tc.value}`;
-    // ★ 2026-10-03：外部 txt 已知写错的卡**整张跳过**（逐条登记在 KNOWN_TXT_ERRORS，输出里会印一行）
+    // ★ 2026-10-06：外部 txt 已知写错的卡**整张跳过**（逐条登记在 KNOWN_TXT_ERRORS，输出里会印一行）
     if (KNOWN_TXT_ERRORS[key] !== undefined) {
       report.knownTxtErrors.push({ file, defId: key, why: KNOWN_TXT_ERRORS[key] });
       continue;

@@ -140,7 +140,7 @@ export function revealSeen(state: GameState): { readonly flipped: boolean; reado
 export function isLevelComplete(level: TutLevel, state: GameState, input: TutJudgeInput = {}): boolean {
   const ui = input.ui ?? TUT_UI_NONE;
   /**
-   * ★ 2026-10-03（S0「序章」）：**这一关的过关形态就是"真打赢这一局"**。
+   * ★ 2026-10-06（S0「序章」）：**这一关的过关形态就是"真打赢这一局"**。
    *
    * 判据只读**引擎自己的胜负结论** `s.winner === 0`（用户口径："让玩家亲手打出一张牌、
    * 真的编译掉最后一条链路、真的赢下这一局"）。`winner` 在本仓的**唯一写入点**是
@@ -287,7 +287,7 @@ export function isLevelComplete(level: TutLevel, state: GameState, input: TutJud
     const life0 = findCard(state, 't11f-c');
     const life0Gone = life0 === undefined || life0.zone !== 'field';
     /**
-     * ⚠️★ **2026-10-03 改过方向**（原来读的是"对手那张 `t11o2` 进了对手弃牌堆"）：
+     * ⚠️★ **2026-10-06 改过方向**（原来读的是"对手那张 `t11o2` 进了对手弃牌堆"）：
      * `ice-1` 的「对手在此链路出牌后：**他要弃置1张牌**」罚的是**往那条线出牌的人**
      * （`ice1AfterPlay`：`foe = opp(ctx.player)`，候选取的是**出牌者**的手牌）——
      * 冰1 在**对手**那边、出牌的是我 ⇒ 这一下弃的是**我手里**那张弃料。

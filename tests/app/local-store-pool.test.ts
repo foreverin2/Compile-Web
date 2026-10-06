@@ -14,7 +14,7 @@ import { POOL_MIN } from '../../src/app/pool-choice';
 import { L1_SETTINGS, createMemoryStore, readJson, type KeyValueStore } from '../../src/app/storage';
 
 /**
- * ★ 2026-10-03（用户要求）：「自定义协议池」预设的**存储口径**。
+ * ★ 2026-10-06（用户要求）：「自定义协议池」预设的**存储口径**。
  *
  * 它住在既有那份设置对象（`L1_SETTINGS`）的一个新字段 `pool` 里 —— 与昵称/语言/特效开关
  * 同一份存储、同一套授权门控、同一次「清除本机数据」（**不新增存储键**）。

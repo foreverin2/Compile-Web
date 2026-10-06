@@ -26,7 +26,7 @@ import { createMemoryStore } from '../../src/app/storage';
 import { DEFAULT_LANG, ZH, setLang, t } from '../../src/i18n';
 
 /**
- * ★ 2026-10-03（用户要求）：**模式选择页第三个开关行「自定义协议池」**的接线与行为。
+ * ★ 2026-10-06（用户要求）：**模式选择页第三个开关行「自定义协议池」**的接线与行为。
  *
  * ## 这一组证什么（分四段）
  *

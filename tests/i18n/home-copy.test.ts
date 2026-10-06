@@ -5,7 +5,7 @@ import { stripComments, functionBody } from '../ui/source-text';
 import { installStubDom, makeStubEl, descendants, queryAllIn, type StubNode } from '../ui/net-dom-stub';
 import { renderHome, renderModeSelect, renderRules, type HomeNav, type ModeSelectNav } from '../../src/ui/home';
 import { DEFAULT_LANG, EN, ZH, setLang, t } from '../../src/i18n';
-// ★ 2026-10-03（用户要求）：第三个开关「自定义协议池」的 tip 里带 `{min}` —— 判据要用同一个常量
+// ★ 2026-10-06（用户要求）：第三个开关「自定义协议池」的 tip 里带 `{min}` —— 判据要用同一个常量
 //   拼出期望值（不写死 12，免得最小套数改一处、这里再改一处）。
 import { POOL_MIN } from '../../src/app/pool-choice';
 
@@ -58,7 +58,7 @@ const modeNav: ModeSelectNav = {
   openDeviceCheck: () => { /* 不测 */ },
   startHotseat: () => { /* 不测 */ },
   startNetLobby: () => { /* 不测 */ },
-  // ★ 2026-10-03（用户要求）：自定义协议池那一行的三个接缝（这一组只读屏上的文案）。
+  // ★ 2026-10-06（用户要求）：自定义协议池那一行的三个接缝（这一组只读屏上的文案）。
   //   预设回"没勾、一套都没挑" ⇒ 那一行按"未选择"画（屏上文案仍然是表里的值）。
   openPoolPicker: () => { /* 不测 */ },
   readPoolPreset: () => ({ enabled: false, ids: [] }),
@@ -108,7 +108,7 @@ describe('★ C：首页那一屏的中文与 `zh.ts` 逐字一致', () => {
       expect(shown, `屏上没有「${k}」那一句（zh 表：${ZH[k]}）`).toContain(ZH[k]);
     }
     // 三个开关的**帮助文本**挂在 `data-tip` 上（不是 textContent），单独断言
-    // ★ 2026-10-03（用户要求）：第三个是「自定义协议池」那一行（它的 tip 里带 `{min}`）
+    // ★ 2026-10-06（用户要求）：第三个是「自定义协议池」那一行（它的 tip 里带 `{min}`）
     const tips = descendants(root).filter((n) => n.tag === 'span' && n.cls.includes('mode-help'))
       .map((n) => n.dataset.tip);
     expect(tips, '开关的帮助文本没带 zh 表里的那三句')

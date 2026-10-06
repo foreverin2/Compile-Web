@@ -66,7 +66,7 @@ function protocols(a: string, b: string, c: string): GameState['players'][0]['pr
 }
 
 /**
- * ★ 2026-10-03（**用户报的缺陷：教程里"只有一边的协议会亮已编译特效"**）：
+ * ★ 2026-10-06（**用户报的缺陷：教程里"只有一边的协议会亮已编译特效"**）：
  * **对手（座位 1）拿这三套协议** —— 从 `DEMO_PROTOCOLS` 里按常量顺序取**前三个不属于我方**的。
  *
  * ## 为什么必须与玩家不重名（这是本函数存在的唯一理由）
@@ -82,7 +82,7 @@ function protocols(a: string, b: string, c: string): GameState['players'][0]['pr
  *   · 两侧都已编译时，层被摆到最后处理的那个 holder 上。
  * 两种都表现为"只有一边亮"。
  *
- * 用户 2026-10-03 的裁决：**不做"双方共用同一协议"的玩法**（这条永远不出现），所以正确的处置
+ * 用户 2026-10-06 的裁决：**不做"双方共用同一协议"的玩法**（这条永远不出现），所以正确的处置
  * 是让教学的局面也满足那条前提（不去动红线 `render.ts`）。改完之后 15 关双方的协议**两两不重名**，
  * 由 `tests/tutorial/levels.test.ts` 的一条腿钉住（重名 ⇒ 红）。
  *
@@ -104,7 +104,7 @@ function controlledGame(
   seed: string,
   lineProtocols: readonly [string, string, string],
   /**
-   * ★ 2026-10-03（用户报的"场上有不属于那个协议的卡牌"）：**对手那三套协议可以显式指定**。
+   * ★ 2026-10-06（用户报的"场上有不属于那个协议的卡牌"）：**对手那三套协议可以显式指定**。
    *
    * 缺省走 `opponentProtocols()`（"不属于我方的前三套"）。需要显式给的情形只有一种：
    * **对手场上摆着一张正面牌，而那条线的协议必须是那张牌的协议**（例如 T11 对手线上的
@@ -131,7 +131,7 @@ function controlledGame(
   s.players[0].protocols = protocols(...lineProtocols);
   /**
    * 对手（座位 1）也要有协议：阈值/控制权两处要用它算，缺了渲染器会画出空线。
-   * ★ 2026-10-03：**但与玩家不重名**（理由见 `opponentProtocols` 的说明）——
+   * ★ 2026-10-06：**但与玩家不重名**（理由见 `opponentProtocols` 的说明）——
    * 改之前这里写的是 `protocols(...lineProtocols)`（双方同一组）。
    */
   s.players[1].protocols = protocols(...(foeProtocols ?? opponentProtocols(lineProtocols)));
@@ -150,7 +150,7 @@ export function buildLevelState(id: TutLevelId): GameState {
   if (id === 'T10' || id === 'T11' || id === 'T12' || id === 'T13') {
     return buildLevelStateP7(id);
   }
-  // ★ 2026-10-03（用户要求）：S0「序章」—— 先讲背景故事与胜利条件，再**亲手打赢一局**。
+  // ★ 2026-10-06（用户要求）：S0「序章」—— 先讲背景故事与胜利条件，再**亲手打赢一局**。
   //   注释与摆法收在这一段里（这一关的每一处都有理由，别把它读成随手摆的牌）。
   if (id === 'S0') {
     /**
@@ -186,7 +186,7 @@ export function buildLevelState(id: TutLevelId): GameState {
       card('s0f1', 'light-4', 0, 'field', true, 2, 0),
       card('s0f2', 'light-5', 0, 'field', true, 2, 1),
     ];
-    // ★ 2026-10-03（用户第二轮口径：**每一侧的牌都要属于那一侧自己那条线的协议**）：
+    // ★ 2026-10-06（用户第二轮口径：**每一侧的牌都要属于那一侧自己那条线的协议**）：
     //   对手线 3 挂的是他自己的**生命**协议 ⇒ 这张靶子牌原来是 `light-2`（明光），
     //   摆在他那条生命线上就是"不属于这个协议的卡牌"。换成 `life-2`：**分值仍是 2**
     //   （这一关的线值是"我 10 / 敌 2"，判据与文案都不看这张牌是什么）。
@@ -253,7 +253,7 @@ export function buildLevelState(id: TutLevelId): GameState {
     s.players[0].stacks[0] = [card('t4f-up', 'spirit-3', 0, 'field', true, 0, 0)];
     s.players[0].stacks[1] = [card('t4f-down', 'water-2', 0, 'field', false, 1, 0)];
     // 对手线 0 一张正面牌：让"阈值/控制权"两个读数有东西可显示
-    // ★ 2026-10-03（用户第二轮口径）：对手线 1 挂的是他自己的**火焰**协议 ⇒ 这张牌从
+    // ★ 2026-10-06（用户第二轮口径）：对手线 1 挂的是他自己的**火焰**协议 ⇒ 这张牌从
     //   `spirit-2` 换成 `fire-2`（**分值仍是 2**：它只用来让"阈值/控制权"两个读数有东西可显示）。
     s.players[1].stacks[0] = [card('t4o-up', 'fire-2', 1, 'field', true, 0, 0)];
     return s;
@@ -318,7 +318,7 @@ export function buildLevelState(id: TutLevelId): GameState {
       card('t7f-buried', 'spirit-3', 0, 'field', true, 0, 0),
       card('t7f-cover', 'spirit-5', 0, 'field', true, 0, 1),
     ];
-    // ★ 2026-10-03（用户报的缺陷）：这张**正面**牌必须落在"本线协议包含它"的线上
+    // ★ 2026-10-06（用户报的缺陷）：这张**正面**牌必须落在"本线协议包含它"的线上
     //   （`base.ts:33-37`：正面牌的落线条件是"协议 == 我这条线的 或 == 对手这条线的"）。
     //   原来摆的是 `water-2`，而线 1 的双方协议是 我 sprit / 敌 fire ⇒ 一张流水牌摆在精神线上，
     //   看着就是"不属于这个协议的卡牌"。改成 `fire-2`：**分值不变**（这张牌只是"让默认档的
@@ -373,7 +373,7 @@ export function buildLevelState(id: TutLevelId): GameState {
    * 两个 `buildLevelState` 之外的前提，都在测试腿里正面钉住（`tests/tutorial/levels.test.ts` 的 T9 组）。
    */
   /**
-   * ★ 2026-10-03（用户报的缺陷）：线 2 挂 `speed`（原来挂 `water`）。
+   * ★ 2026-10-06（用户报的缺陷）：线 2 挂 `speed`（原来挂 `water`）。
    *
    * 这一关的"第二种露出途径"要在**我方线 2 上摆一张正面的速度0**（`t9f-ours`），而正面牌的
    * 落线条件是"协议 == 这条线的双方协议之一"（`base.ts:33-37`）⇒ 那条线的协议必须是 `speed`，
@@ -428,7 +428,7 @@ function buildLevelStateP7(id: 'T10' | 'T11' | 'T12' | 'T13'): GameState {
     s.players[0].stacks[0] = [card('t10f-a', 'spirit-3', 0, 'field', true, 0, 0)];
     s.players[0].stacks[1] = [card('t10f-b', 'water-3', 0, 'field', true, 1, 0)];
     // 对手只有线 1 有牌（1 分）⇒ 线 2 对手 0 分，线 3 双方 0:0（不算"高过"）
-    // ★ 2026-10-03（用户第二轮口径）：对手线 1 挂的是他自己的**火焰**协议 ⇒ 从 `spirit-1`
+    // ★ 2026-10-06（用户第二轮口径）：对手线 1 挂的是他自己的**火焰**协议 ⇒ 从 `spirit-1`
     //   换成 `fire-1`（**分值仍是 1**：控制权比的是三条线的总值，改协议不改分）。
     s.players[1].stacks[0] = [card('t10o1', 'fire-1', 1, 'field', true, 0, 0)];
     return s;
@@ -437,7 +437,7 @@ function buildLevelStateP7(id: 'T10' | 'T11' | 'T12' | 'T13'): GameState {
     /**
      * T11 触发时机：**三种触发各摆一处**。
      *
-     * ★ 2026-10-03（本轮实测抓到的缺陷，改法记在这里）：
+     * ★ 2026-10-06（本轮实测抓到的缺陷，改法记在这里）：
      *
      * | 触发 | 卡 | 谁把它弄出来 | 实测证据 |
      * |---|---|---|---|
@@ -471,7 +471,7 @@ function buildLevelStateP7(id: 'T10' | 'T11' | 'T12' | 'T13'): GameState {
      * 让引擎自己的步真的走（否则教学屏那条沙盒规则会把 step 打回 action，玩家永远到不了结束阶段）。
      */
     /**
-     * ★ 2026-10-03（用户报的"场上有不属于那个协议的卡牌"）：两条协议都动过 ——
+     * ★ 2026-10-06（用户报的"场上有不属于那个协议的卡牌"）：两条协议都动过 ——
      *
      *  - **我方线 1 的协议从 `ice` 换成 `water`**：这一关我方场上现在只有火焰0（线 2）与
      *    生命0+生命5（线 3），线 1 是空的；手里那张 `ice-5` 只用来被弃（不打出）⇒ 线 1 挂什么
@@ -515,7 +515,7 @@ function buildLevelStateP7(id: 'T10' | 'T11' | 'T12' | 'T13'): GameState {
      * （`darkness.ts` 的 `ctx.candidates({ zone: 'field' }).filter((c) => c.owner !== ctx.player)`）
      * ⇒ 摆在自己场上时候选里根本没有它，「免疫」就演示不出来（第一版就是这么摆的，探针里候选只剩别的牌）。
      *
-     * ★ 2026-10-03（用户第二轮口径："每一侧的牌都要属于那一侧自己那条线的协议"）：
+     * ★ 2026-10-06（用户第二轮口径："每一侧的牌都要属于那一侧自己那条线的协议"）：
      * 这一关原来三条线是 `fire / clarity / rigidity`，而**死板7 是对手的牌**（免疫那一课的教学对象，
      * 全仓只有它有「此牌不能被翻转或偏转」这句）⇒ 要让"对手的牌落在他自己那条死板线上"，
      * 那条线的**对手协议**必须是 `rigidity`；而双方协议不许重名（compiledFx 的 defId 键前提），
@@ -536,7 +536,7 @@ function buildLevelStateP7(id: 'T10' | 'T11' | 'T12' | 'T13'): GameState {
     ];
     s.players[0].deck = [];
     // 线 1：对手一张正面牌（要被删除的那张）
-    // ★ 2026-10-03：这张**正面**牌（删除那一步的靶子）原来摆的是 `life-2`，而线 1 的双方协议是
+    // ★ 2026-10-06：这张**正面**牌（删除那一步的靶子）原来摆的是 `life-2`，而线 1 的双方协议是
     //   我 fire / 敌 water ⇒ 一张生命牌摆在火焰线上。改成 `water-2`：**分值不变**（这一课只关心
     //   "那张牌被删掉"，不关心它是什么牌），而且落在对手自己的水线上。
     s.players[1].stacks[0] = [card('t12o1', 'water-2', 1, 'field', true, 0, 0)];

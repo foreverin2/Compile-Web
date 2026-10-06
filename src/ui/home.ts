@@ -4,7 +4,7 @@ import { coinLanding, draftStarterFor } from '../app/coin';
 import type { CoinSide } from '../app/coin';
 import { DEMO_PROTOCOLS, DEMO_CARD_DEFS, protocolImgSrc, cardImgSrc, cardTextParts } from '../data/demo';
 import { LIB_TAG_GROUPS, LIB_ALL_TAG_IDS, filterLibrary } from '../app/library-filter';
-// ★ 2026-10-03（用户要求）：「自定义协议池」的纯逻辑（最小套数 / 归一 / 本局池）。
+// ★ 2026-10-06（用户要求）：「自定义协议池」的纯逻辑（最小套数 / 归一 / 本局池）。
 //   屏只读 `POOL_MIN` 与 `normalizePoolIds` —— "够不够数、哪些还认、怎么排序"全在那一层。
 import { POOL_MIN, normalizePoolIds } from '../app/pool-choice';
 import type { PoolChoice } from '../app/pool-choice';
@@ -575,7 +575,7 @@ export function renderHome(root: HTMLElement, nav: HomeNav): void {
 /* =====================================================================
  * 游戏模式选择页（2026-09-03）：热坐（双人，可玩）/ 联机对战（两台设备）/ 单人 / 三人（开发中）；
  * 三个默认关闭的开关：禁用模式（开局按规则禁用协议）、随机池模式（随机抽 12 套）、
- * 自定义协议池（2026-10-03 用户要求：本局只用玩家自己在 `src/ui/pool-picker.ts` 里挑的那些协议，
+ * 自定义协议池（2026-10-06 用户要求：本局只用玩家自己在 `src/ui/pool-picker.ts` 里挑的那些协议，
  * 至少 12 套；与随机池互斥）；
  * 开关左侧带圆形「?」帮助图标（hover 显示说明）。两种模式下草稿页世代筛选仍可用。
  *
@@ -608,7 +608,7 @@ export interface ModeSelectNav {
    */
   startNetLobby(): void;
   /**
-   * ★ 2026-10-03（用户要求）：**打开协议挑选屏**（`src/ui/pool-picker.ts`）。
+   * ★ 2026-10-06（用户要求）：**打开协议挑选屏**（`src/ui/pool-picker.ts`）。
    *
    * 它是「自定义协议池」那一行**右边的那个按钮**的动作。⚠️ 那个按钮**不在** `<label>` 里
    * ——`<label class="mode-toggle">` 会把自身区域内的点击转给它的表单控件，按钮放进去会变成
@@ -616,7 +616,7 @@ export interface ModeSelectNav {
    */
   openPoolPicker(): void;
   /**
-   * ★ 2026-10-03（用户要求）：**读本机存的「自定义协议池」预设**。
+   * ★ 2026-10-06（用户要求）：**读本机存的「自定义协议池」预设**。
    *
    * 屏上要用它回答两件事：① 那个勾选框这一刻该不该是勾上的（`enabled` **且**选择够数）；
    * ② 那一行右边显示「已选 N 套」还是「未选择」。数组不在这里归一（归一是纯层
@@ -627,7 +627,7 @@ export interface ModeSelectNav {
    */
   readPoolPreset(): PoolChoice;
   /**
-   * ★ 2026-10-03（用户要求）：**勾上 / 取消「自定义协议池」**（落本机）。
+   * ★ 2026-10-06（用户要求）：**勾上 / 取消「自定义协议池」**（落本机）。
    *
    * 三个调用点：玩家自己点那个勾选框；随机池被勾上时把它取消（两者互斥）；
    * 没有合法选择时它本来就勾不上（勾选框 `disabled`，宿主那侧另有一道开局复核）。
@@ -730,7 +730,7 @@ export function renderModeSelect(root: HTMLElement, nav: ModeSelectNav): void {
   const banBox = banToggle.box;
   const randomBox = randomToggle.box;
   /**
-   * ★ 2026-10-03（用户要求）：**第三个开关行「自定义协议池」**（默认不勾选，右边带一个按钮）。
+   * ★ 2026-10-06（用户要求）：**第三个开关行「自定义协议池」**（默认不勾选，右边带一个按钮）。
    *
    * ## 为什么这一行不是 `mkToggle` 造出来的
    *

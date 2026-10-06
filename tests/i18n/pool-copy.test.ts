@@ -4,7 +4,7 @@ import { POOL_MIN } from '../../src/app/pool-choice';
 import { DEMO_PROTOCOLS } from '../../src/data/demo';
 
 /**
- * ★ 2026-10-03（用户要求）：自定义协议池那几句文案的**双语纪律**。
+ * ★ 2026-10-06（用户要求）：自定义协议池那几句文案的**双语纪律**。
  *
  * ## 这一组钉什么
  *

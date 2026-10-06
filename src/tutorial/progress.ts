@@ -41,7 +41,7 @@ function asLevelId(v: string): TutLevelId | null {
   return hit === undefined ? null : hit.id;
 }
 
-/** 教学的第一关（**唯一出处** = `TUT_LEVELS[0]`）——2026-10-03 起是 `S0`（序章） */
+/** 教学的第一关（**唯一出处** = `TUT_LEVELS[0]`）——2026-10-06 起是 `S0`（序章） */
 const FIRST_LEVEL: TutLevelId = TUT_LEVELS[0].id;
 
 /** 读进度（读不出来 = 没玩过 ⇒ 第一关 + 空 `done`） */

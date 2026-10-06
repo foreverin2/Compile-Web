@@ -64,7 +64,7 @@ export interface ChangelogDay {
 export const CHANGELOG: readonly ChangelogDay[] = [
 
   /**
-   * ★ 2026-10-03：用户点名要加的 5 条（他的原话：
+   * ★ 2026-10-06：用户点名要加的 5 条（他的原话：
    * 「1 调整了教学关卡的部分效果，修复了教学关卡的部分bug / 2 新增了可选的自定义协议池功能 /
    *   3 修复了缩放比例无法跟随到下一个页面的bug / 4 修复了生命0卡牌的文本错误 /
    *   5 去掉了已编译协议右上角的绿色对勾效果」）。
@@ -75,7 +75,7 @@ export const CHANGELOG: readonly ChangelogDay[] = [
    * 若它指的是某个代码缺陷，需要用户给出复现步骤之后再改。
    */
   {
-    date: '2026-10-03',
+    date: '2026-10-06',
     items: [
       {
         problem: '教学关卡里有几处效果不对，还有几个 bug。',

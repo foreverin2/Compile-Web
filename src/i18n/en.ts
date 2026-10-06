@@ -92,7 +92,7 @@ export const EN: Readonly<Record<string, string>> = {
   'mode.ban.tip': 'Both sides may ban protocols at the start: toss for first pick, then the second player bans 2 → first player picks 1 and bans 1 → second player picks 2 and bans 1 → first player picks 2 and bans 2 → second player picks 1 (6 picked, 6 banned). A banned protocol cannot be picked this match; generation filters still work.',
   'mode.random': 'Random pool mode',
   'mode.random.tip': 'At the start, 12 protocols are drawn at random from the whole pool and only those can be picked this match. Generation filters still work; with ban mode also on, picks and bans follow the ban rules inside those 12.',
-  /* ★ 2026-10-03 (user request): custom protocol pool (third toggle row + its "Choose protocols"). */
+  /* ★ 2026-10-06 (user request): custom protocol pool (third toggle row + its "Choose protocols"). */
   'mode.pool': 'Custom protocol pool',
   'mode.pool.tip': 'This match uses only the protocols you pick ahead of time: click "Choose protocols" on the right, pick at least {min} sets, then tick this box. It is exclusive with random pool mode (only one of the two can be on); ban mode is unaffected.',
   'mode.pool.pick': 'Choose protocols',

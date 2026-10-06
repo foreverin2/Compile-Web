@@ -334,7 +334,7 @@ const DEV_ONLY: Readonly<Record<string, readonly string[]>> = {
     '阶段变化：${lastPhase} → ${state.phase} | ${stateDigest(state)}',
   ],
   /**
-   * ★ 2026-10-03：`src/tutorial/setup.ts` 的**唯一**一条中文残留。
+   * ★ 2026-10-06：`src/tutorial/setup.ts` 的**唯一**一条中文残留。
    *
    * `opponentProtocols()` 里那句 `throw new Error('DEMO_PROTOCOLS 里凑不出三套与玩家不重名的协议')`
    * —— 它是**调用方/数据违约**那一类开发者异常（数据集中凑不出三套不重名的协议才会走到），

@@ -36,7 +36,7 @@ import {
 // ★ 2026-10-01（P0）：语言这个**值的类型**住在零依赖叶子 `src/i18n/lang.ts`（不是
 // `src/i18n/index.ts`）—— 那一层含文案表与 `import.meta.env`，纯层不许依赖它。理由写在那个文件里。
 import type { Lang } from '../i18n/lang';
-// ★ 2026-10-03：「自定义协议池」这份选择的**形状**住在 `src/app/pool-choice.ts`（纯层叶子，
+// ★ 2026-10-06：「自定义协议池」这份选择的**形状**住在 `src/app/pool-choice.ts`（纯层叶子，
 // 零依赖）。这里只转出去一个类型，不重复定义第二份（两份形状一旦漂移，存储与屏就会各说各话）。
 import type { PoolChoice } from './pool-choice';
 
@@ -213,7 +213,7 @@ export interface L1Settings {
    */
   tutorial?: { done?: readonly string[]; current?: string };
   /**
-   * ★ 2026-10-03（用户要求）：**自定义协议池的预设**（勾没勾 + 挑了哪几套）。
+   * ★ 2026-10-06（用户要求）：**自定义协议池的预设**（勾没勾 + 挑了哪几套）。
    *
    * 与 `nick` / `lang` / `fx` / `onboardingSeen` / `tutorial` 同住一份设置、同一套授权门控、
    * 同一次「清除本机数据」（**不新增存储键**）。清除之后这个字段一起没 ⇒ 模式选择页上
@@ -466,7 +466,7 @@ export function writeOnboardingSeen(store: LocalStore, seen: boolean): WriteResu
 }
 
 /**
- * ★ 2026-10-03（用户要求）：读**自定义协议池的预设**。
+ * ★ 2026-10-06（用户要求）：读**自定义协议池的预设**。
  *
  * ## 形状守卫（与 `readOnboardingSeen` / `readTutorialProgress` 同一条口径）
  *
@@ -493,7 +493,7 @@ export function readPoolPreset(store: LocalStore): PoolChoice {
 }
 
 /**
- * ★ 2026-10-03（用户要求）：写**自定义协议池的预设**（勾选框状态 + 挑好的 defId）。
+ * ★ 2026-10-06（用户要求）：写**自定义协议池的预设**（勾选框状态 + 挑好的 defId）。
  *
  * 与语言/开关**同一条路**（同一份设置、同一套授权门控、读-改-写）：
  * 写这一项不会抹掉昵称/语言/特效开关/教学进度。
@@ -523,7 +523,7 @@ const TUTORIAL_LEVEL_IDS: readonly string[] = [
 /**
  * 教学的第一关 —— **这一份清单的第 0 项**（不另写一个字面量，免得两处漂）。
  *
- * ★ 2026-10-03：`S0`（序章）插到最前面 ⇒ "没玩过 / 坏值 / 从头开始"都回它，
+ * ★ 2026-10-06：`S0`（序章）插到最前面 ⇒ "没玩过 / 坏值 / 从头开始"都回它，
  * 而不是老的 `'T0'`（否则新玩家永远看不到序章，那一关等于死内容）。
  */
 const TUTORIAL_FIRST_LEVEL = TUTORIAL_LEVEL_IDS[0];
@@ -539,7 +539,7 @@ export interface StoredTutorialProgress {
  *
  * 形状守卫**逐字段**做（与 `readFxSettings` 同款）：
  *  - `done` 只收**合法关卡 id**、去重、按输入顺序保留；`current` 不是合法 id ⇒ 回第一关
- *    （`TUTORIAL_FIRST_LEVEL`，2026-10-03 起是 `S0`）；
+ *    （`TUTORIAL_FIRST_LEVEL`，2026-10-06 起是 `S0`）；
  *  - 整个字段缺失 / 不是对象 / `done` 不是数组 ⇒ 回"没玩过"（`{ done: [], current: TUTORIAL_FIRST_LEVEL }`）。
  *
  * ⇒ 外部手改存储最多让玩家**从第一关重看**（安全的那一边），不会把教学卡在一关出不来。

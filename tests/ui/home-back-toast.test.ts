@@ -254,7 +254,7 @@ describe('★ 产品真实路径：退出热座 → 模式选择页 →「返回
       openDeviceCheck: () => { /* 不测 */ },
       startHotseat: () => { /* 不测 */ },
       startNetLobby: () => { /* 不测 */ },
-      // ★ 2026-10-03（用户要求）：自定义协议池那一行的三个接缝（本文件只测返回主页面那条路）
+      // ★ 2026-10-06（用户要求）：自定义协议池那一行的三个接缝（本文件只测返回主页面那条路）
       openPoolPicker: () => { /* 不测 */ },
       readPoolPreset: () => ({ enabled: false, ids: [] }),
       setPoolEnabled: () => { /* 不测 */ },

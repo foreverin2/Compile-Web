@@ -105,13 +105,13 @@ describe('G5 T24 判据 1：生成物与生成器逐字一致', () => {
    * 其余 24 张只是 `refs` 多了"闭包展开到的函数名"，标签一个字节没动）。
    * 基线**继续有效**：它守的是"以后有人再动解析而不说一声"。
    *
-   * ★ **2026-10-03 第二次重设基线**（同样留了证据，别当成"有人偷偷覆盖了基线"）：
+   * ★ **2026-10-06 第二次重设基线**（同样留了证据，别当成"有人偷偷覆盖了基线"）：
    * 用户报「生命0的效果的位置文本信息错了，底部的文本效果应该是在上部的」⇒ `src/data/cards.ts`
    * 的 `life-0` 从 `bottom` 挪到 `top`（以**卡面** `public/assets/protocols/life/card-0.png`
    * 为准：卡面印的是顶部 `End: If this card is covered, delete this card.`，引擎也一直按顶指令实现）。
    * **工具（解析行为）一个字没改**，变的是被解析的数据；这条腿比的是整份索引 ⇒ 它会红。
-   * 逐卡差异（`node .superpowers/2026-10-03-life0-slot/rebaseline.mjs` 的输出，
-   * 落盘在 `.superpowers/2026-10-03-life0-slot/rebaseline.txt`）：**只有 1 张卡变了** ——
+   * 逐卡差异（`node .superpowers/2026-10-06-life0-slot/rebaseline.mjs` 的输出，
+   * 落盘在 `.superpowers/2026-10-06-life0-slot/rebaseline.txt`）：**只有 1 张卡变了** ——
    * `life-0`: `dir-bottom` → `dir-top`（其余标签一字未动，`trig-end` / `op-delete` 本来就在）。
    */
   it('无参数输出与升级前同源（把新增的 cardTexts 摘掉之后逐字相同）', () => {
@@ -197,7 +197,7 @@ describe('G5 T24 判据 2：标签目录与覆盖率', () => {
     expect(count('trig-before-flip'), 'before-flip 只有 metal-6').toBe(1);
     expect(count('misc-declare'), '宣告只有幸运那两张').toBe(2);
     // 与分类文档 §2 的口径对齐（把那 4 张持续型算进去的 270 张口径）
-    // ★ 2026-10-03：`dir-top` 49 → **50**、`dir-bottom` 66 → **65**（`life-0` 从底部挪到顶部，
+    // ★ 2026-10-06：`dir-top` 49 → **50**、`dir-bottom` 66 → **65**（`life-0` 从底部挪到顶部，
     //   用户报的"生命0 位置文本错了"，以卡面为准；逐卡差异见上面那条基线腿的注释）。`dir-middle` 未动。
     expect(count('dir-top')).toBe(50);
     expect(count('dir-middle')).toBe(222);

@@ -1,5 +1,5 @@
 /**
- * 「自定义协议池」的**挑选屏**（2026-10-03，用户要求）。
+ * 「自定义协议池」的**挑选屏**（2026-10-06，用户要求）。
  *
  * ## 玩家看到的
  *
@@ -155,7 +155,7 @@ export function renderPoolPicker(root: HTMLElement, nav: PoolPickerNav): void {
       card.setAttribute('type', 'button');
       card.dataset.defId = def.defId;
       /**
-       * ★ 2026-10-03（用户报的缺陷）：**协议图要横着放**，与「选协议」那一屏同款。
+       * ★ 2026-10-06（用户报的缺陷）：**协议图要横着放**，与「选协议」那一屏同款。
        *
        * 图本身是竖版（`/assets/protocols/<defId>/protocol-loading.*` 实测 750×1050，
        * 1、2、3 代都是），草稿页的做法是给一个 `aspect-ratio: 1.4/1` 的容器、把图

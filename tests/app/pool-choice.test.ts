@@ -16,7 +16,7 @@ import { DEMO_PROTOCOLS } from '../../src/data/demo';
 import { stripComments } from '../ui/source-text';
 
 /**
- * ★ 2026-10-03（用户要求）：「自定义协议池」的**纯逻辑**。
+ * ★ 2026-10-06（用户要求）：「自定义协议池」的**纯逻辑**。
  *
  * ## 这一组钉什么
  *
