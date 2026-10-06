@@ -215,7 +215,10 @@ export function renderProtocol(
   // 有一条反向腿：全仓不许再出现它）。
   if (p.compiled) box.appendChild(el('span', 'protocol-check', '✓'));
   // 双击协议卡放大查看（协议无单击动作，直接 dblclick 即可；协议图横向展示）
-  box.addEventListener('dblclick', () => openZoom(p.defId, true, true, p.compiled));
+  // ★ 2026-10-06（用户要求）：右键同效（协议也是"卡牌"，同样看详情）
+  const openDetail = (): void => openZoom(p.defId, true, true, p.compiled);
+  box.addEventListener('dblclick', openDetail);
+  bindRightClickDetail(box, openDetail);
   return box;
 }
 
@@ -2085,7 +2088,10 @@ export function renderHand(
       gNode.appendChild(el('div', 'fx-clarity-eye'));
     }
     // 双击放大（直接 dblclick，不经过 bindClickOrDouble 的单击延迟——幽灵无单击动作）
-    gNode.addEventListener('dblclick', () => openZoom(ghost.defId, true, false, false));
+    // ★ 2026-10-06（用户要求）：右键同效
+    const openGhost = (): void => openZoom(ghost.defId, true, false, false);
+    gNode.addEventListener('dblclick', openGhost);
+    bindRightClickDetail(gNode, openGhost);
     hand.appendChild(gNode);
     nodes.push(gNode); // 加入扇形：悬停展开/复位同样作用于幽灵牌
   }
@@ -6150,7 +6156,10 @@ function openTrashViewer(s: GameState, player: PlayerId): void {
   } else {
     for (const card of trash) {
       const node = renderCardFace({ defId: card.defId, faceUp: true, uid: card.uid });
-      node.addEventListener('dblclick', () => openZoom(card.defId, true, false, false));
+      // ★ 2026-10-06（用户要求）：右键同效（弃牌堆查看器里也是卡牌）
+      const openTrashCard = (): void => openZoom(card.defId, true, false, false);
+      node.addEventListener('dblclick', openTrashCard);
+      bindRightClickDetail(node, openTrashCard);
       grid.appendChild(node);
     }
   }
@@ -6215,12 +6224,47 @@ function closeDeckOrderViewer(): void {
 }
 
 /**
+ * ★★ **2026-10-06（用户要求）：右键 = 打开卡牌详情**（与双击同一条路）。
+ *
+ * 用户原话：「将游玩过程中的双击触发展示卡牌详细信息新增一种触发方式，右键卡牌即可触发展示
+ * 卡牌详细信息」。
+ *
+ * ## 它做什么 / 不做什么
+ *
+ *  - **只**替玩家省一次双击：回调就是原来那条双击回调（`openZoom(...)` 那一族），
+ *    所以"能不能看正面"（`peek` / `canPeekFaceDown` 的判据）、协议的已编译面、
+ *    候选卡的置灰这些都**逐字沿用**，不新造第二条详情路径；
+ *  - `preventDefault()` 吃掉浏览器右键菜单 —— 卡上这一格已经有详情可看，系统菜单在这里
+ *    没有意义（也就不会出现"右键一下弹出保存图片"那种打断）。**只吃掉卡这一格**：
+ *    棋盘空白处、面板、按钮上的右键照旧是浏览器默认行为（没有全局 contextmenu 监听）；
+ *  - `stopPropagation`（与单击/双击同一个开关）保持与 `bindClickOrDouble` 同形：
+ *    草案/图鉴/候选卡这些**嵌在可点容器里**的卡必须掐断冒泡，免得一次右键同时触发外层。
+ *
+ * ⚠️ 右键**不换朝向**：换朝向仍然只有卡上缘的「翻面」按钮这一条路（教学文案里那句
+ * "右键 / 按 R 换朝向"在 2026-10-06 已经删掉，别因为这条新触发方式把它写回去 ——
+ * `tests/tutorial/screen.test.ts` 有腿钉着）。
+ * ⚠️ 触摸设备上长按可能触发 `contextmenu`：那等于"长按看详情"，是合理副作用；
+ * 触摸的点击/拖拽路径不受影响（`bindCardDrag` 只认左键，右键连拖拽都不会启动）。
+ */
+export function bindRightClickDetail(node: HTMLElement, open: () => void, stopPropagation = false): void {
+  node.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    if (stopPropagation) e.stopPropagation();
+    open();
+  });
+}
+
+/**
  * 单击/双击判别：300ms 窗口内两次点击视为双击（double），否则延迟执行单击（single）。
  * 单击延迟 320ms 严格大于双击窗口 300ms：窗口内的第二次点击必然先于延迟的单击触发
  * 并取消它，保证「双击永不触发单击」；窗口之外的点击各自成为独立的单击。
  */
 /** 单击/双击判别（320ms 窗口内第二次点击 = 双击）：单击 single、双击 double。
- *  导出供图鉴页复用（草稿/图鉴同款：单击固定展示、双击放大）。 */
+ *  导出供图鉴页复用（草稿/图鉴同款：单击固定展示、双击放大）。
+ *  ★ 2026-10-06（用户要求）：同一个 `double`（= 打开详情）也挂在 `contextmenu` 上 ⇒
+ *  **右键卡牌**与双击等价（见 `bindRightClickDetail`）。
+ *  ⚠️ 这里**只**加 `contextmenu`、**不加** `dblclick`：双击是上面那个 300ms 窗口自己判的，
+ *  再挂一个原生 `dblclick` 会让一次双击开两次详情（两条路各触发一次）。 */
 export function bindClickOrDouble(node: HTMLElement, single: () => void, double: () => void, stopPropagation: boolean): void {
   let timer: number | undefined;
   let last = 0;
@@ -6237,6 +6281,7 @@ export function bindClickOrDouble(node: HTMLElement, single: () => void, double:
       timer = window.setTimeout(() => { timer = undefined; single(); }, 320);
     }
   });
+  bindRightClickDetail(node, double, stopPropagation);
 }
 
 /* ===== 拖拽打牌（Drag & Drop，手牌卡 → 线路槽） =====

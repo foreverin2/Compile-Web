@@ -1042,7 +1042,8 @@ describe('★ 2026-10-06：过关之后中间数 5 秒再进下一关（统一�
  * 鼠标移上去才显 —— 这是用户 2026-10-06 当天第二条口径）。这条腿在桩 DOM 上真开一局 T3、
  * 真的点一下选中、真的找那个按钮，缺了它这半句话就是**照着一个不存在的控件写的**。
  *
- * ⚠️ 顺带钉住"右键 / 按 R"这条路**当前不成立**：全仓 `contextmenu` 零命中，
+ * ⚠️ 顺带钉住"右键 / 按 R **换朝向**"这条路**不成立**：换朝向只有卡上缘的「翻面」按钮
+ * （右键在 2026-10-06 之后确实存在，但它做的是**打开详情**，见下面那条腿的新口径）。
  * `bindCardDrag` 的 `keydown` 只认 `Escape`（`render.ts:6390`）⇒ T3 那两句不能再让玩家去按右键。
  */
 describe('★ 2026-10-06：T3 的换朝向文案以真实 UI 为准（翻面按钮）', () => {
@@ -1121,10 +1122,29 @@ describe('★ 2026-10-06：T3 的换朝向文案以真实 UI 为准（翻面按�
     }
   });
 
-  it('★ 反向：全仓没有"右键 / 按 R 换朝向"这条路（文案再写它就是让玩家按空）', () => {
+  it('★ 反向：全仓没有"右键 / 按 R **换朝向**"这条路（文案再写它就是让玩家按空）', () => {
     const render = stripComments(readFileSync(`${REPO}src/ui/render.ts`).subarray(0, 4 * 1024 * 1024).toString('utf8'));
-    expect(render, 'render.ts 里出现了 contextmenu（那说明右键那条路真的存在，文案要跟着改）').not.toContain('contextmenu');
-    // 拖拽期间的键盘监听只认 Escape（`render.ts:6390` 那条）
+    /**
+     * ★ 2026-10-06 第二条口径之后本条改口径：右键**现在真的存在了**，但它做的是
+     * **打开卡牌详情**（与双击同一条路），**不是换朝向**。所以原来的"`contextmenu` 零命中"
+     * 不再成立，换成两条更准的：
+     *  1. `contextmenu` 只出现在那个"打开详情"的绑定里（`bindRightClickDetail`），
+     *     而且它调的是传进来的 `open`（= 双击那条路），不是朝向/选择那两条；
+     *  2. 教学文案里依旧不许出现"右键 / 按 R"—— 换朝向只有卡上缘的「翻面」按钮这一条路。
+     */
+    expect(render, '右键那条路没了（用户 2026-10-06 要求"右键卡牌也能看详情"）')
+      .toContain("node.addEventListener('contextmenu'");
+    expect(render, 'contextmenu 的监听不在 `bindRightClickDetail` 里（多了一处自己写的右键处理？）')
+      .toMatch(/export function bindRightClickDetail\(node: HTMLElement, open: \(\) => void, stopPropagation = false\): void \{[\s\S]{0,400}?node\.addEventListener\('contextmenu'/);
+    expect(render, '右键没有 preventDefault（浏览器菜单会盖在详情上）')
+      .toMatch(/addEventListener\('contextmenu', \(e\) => \{\s*e\.preventDefault\(\);/);
+    // `bindClickOrDouble` 里右键挂在**同一个 double** 上（= 详情），不是 single（= 选择/固定展示）
+    const cod = render.slice(render.indexOf('export function bindClickOrDouble('));
+    expect(cod.slice(0, 1400), 'bindClickOrDouble 没有把右键接到 `double`（详情）上')
+      .toMatch(/bindRightClickDetail\(node, double, stopPropagation\);/);
+    expect(cod.slice(0, 1400), 'bindClickOrDouble 里另挂了原生 dblclick ⇒ 一次双击会开两次详情')
+      .not.toContain("addEventListener('dblclick'");
+    // 拖拽期间的键盘监听只认 Escape（`render.ts` 那条）
     expect(render, '拖拽键盘监听不止认 Escape 了 —— 请复核 T3 的文案').toContain("if (ev.key === 'Escape') cleanup();");
     /**
      * ⚠️ 2026-10-06（用户要求「要一起改」）：判据面从 T3 那两句**扩到两张表的全部 `tutorial.*` 键**
