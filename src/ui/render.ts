@@ -5658,12 +5658,19 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
   for (const entry of s.log.slice(-60)) {
     /**
      * ★ 2026-10-06（**用户要求**）：「把战斗日志改为纯英文 + 带对应触发卡牌/协议的小图片」。
+     * ★ 同日第二处用户要求：「将日志中的卡牌图片大小加大，另外记得将协议的图片调整成正常的横置」。
      *
      * 文本与缩略图都来自显示层（`src/ui/log-line.ts`）：中文模式文本**逐字**是引擎原文
      * （缩略图照给），英文模式走 `src/i18n/engine-log.ts` 的形状表。
      * 缩略图：卡用 `cardImgSrc(协议, 分值)`、协议用 `protocolImgSrc(defId, false)`，
      * 都与棋盘上用的是同一张官方图（浏览器缓存复用）；`loading=lazy` + 固定小尺寸，
      * 免得一屏 60 条日志把几十张卡图一起拉下来。
+     *
+     * **协议图必须套一层容器**：协议卡的源图是**竖着存的横置卡**（实测 750×1050，内容转了
+     * 90°）⇒ 直接塞进竖着的小格里显示出来是躺倒的。套一层横置容器、图在容器里逆时针转 90°，
+     * 与草稿页 `.draft-preview-fig` / 自定义协议池 `.pool-card-thumb-wrap` 同一套几何。
+     * 卡图不套容器（本来就是竖版，直接当 flex 项）。`data-thumb-kind` / `data-thumb-def-id`
+     * 两种都留在 `img.log-thumb` 上（既有腿按这两个属性认图）。
      */
     const view = logEntryView(entry);
     const row = el('div', 'log-entry');
@@ -5681,7 +5688,13 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
       img.alt = '';
       img.loading = 'lazy';
       img.decoding = 'async';
-      row.appendChild(img);
+      if (view.thumb.kind === 'protocol') {
+        const box = el('span', 'log-thumb-box');
+        box.appendChild(img);
+        row.appendChild(box);
+      } else {
+        row.appendChild(img);
+      }
     }
     // 缩进（`pushLog` 写进文本的那些空格）由 `.log-text` 的 `white-space: pre-wrap` 保
     row.appendChild(el('span', 'log-text', view.text));
