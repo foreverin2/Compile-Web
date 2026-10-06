@@ -466,6 +466,31 @@ export function writeOnboardingSeen(store: LocalStore, seen: boolean): WriteResu
 }
 
 /**
+ * ★ 2026-10-06（用户要求）：读**「选牌即确定」**这一项（设置里的新开关，**默认关闭**）。
+ *
+ * 用户原话：「在设置中加上一个选择项，默认关闭，打开后，玩家在触发需要选择卡牌后按下确定键
+ * 才能确定将效果作用于该卡时，其操作会变为无需按下确定键就能确定将效果作用于选择的卡牌，
+ * 即点击即触发，但注意，这个设置只会影响到不可选择跳过或是其他效果的卡牌效果，那些具有
+ * 可选的卡牌不受其影响」。范围口径（用户 2026-10-06 当场裁决）：**只有"只选 1 张"的自动确定**，
+ * 多选（弃2张/弃3张、"1张或更多"）保持原样仍要按确定键。
+ *
+ * 形状守卫与 `readOnboardingSeen` 同款：**只认 `true`**（其它一律 `false`）——
+ * 存储被外部手改 / 别的程序写了同键 ⇒ 退化成"关闭"（玩家最多重新开一次），
+ * 而不是因为一个垃圾值就把"少按一次确定"变成默认行为。
+ *
+ * ⚠️ 它住在同一个 `L1_SETTINGS`（`compile-settings`）对象里的字段 `instantChoice`，
+ * **不新增键**（与 `nick` / `lang` / `fx` / `tutorial` 同住一份设置）。
+ */
+export function readInstantChoice(store: LocalStore): boolean {
+  return readSettings(store).instantChoice === true;
+}
+
+/** 写下「选牌即确定」。与语言/特效开关**同一条路**（同一份设置、同一套授权门控与 `WriteResult`）。 */
+export function writeInstantChoice(store: LocalStore, on: boolean): WriteResult {
+  return writeSettings(store, { instantChoice: on });
+}
+
+/**
  * ★ 2026-10-06（用户要求）：读**自定义协议池的预设**。
  *
  * ## 形状守卫（与 `readOnboardingSeen` / `readTutorialProgress` 同一条口径）

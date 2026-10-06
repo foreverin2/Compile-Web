@@ -1490,6 +1490,20 @@ export interface SettingsOverlayNav {
    * `saveFailedText()`，**不新造第二套文案**。
    */
   readonly onFxChange: (id: string, on: boolean) => LangChangeOutcome;
+  /**
+   * ★ 2026-10-06（用户要求）：设置里的第二类开关 —— **「选牌即确定」**（默认关闭）。
+   *
+   * 与 `onFxChange` **同一套形状与语义**：本函数在调它之前已经把内存态换好
+   * （`setInstantChoice`）并把那一行的说明就地改写；宿主负责落盘
+   * （`src/app/local-store.ts` 的 `writeInstantChoice`）与需要时的重画。
+   * 返回值同样是 `LangChangeOutcome` ⇒ 失败提示复用 `saveFailedText()` / `saveFailedSwitchText()`。
+   */
+  readonly onInstantChoiceChange: (on: boolean) => LangChangeOutcome;
+  /**
+   * 「选牌即确定」现在的值（小窗开出来时勾没勾）。与 `lang` 同一条口径：**必填**，
+   * 不由本函数去读存储（它只造元素 ⇒ 仍能在无 jsdom 的 node 下用桩真跑）。
+   */
+  readonly instantChoice: boolean;
 }
 
 /**
@@ -1725,6 +1739,61 @@ export function settingsOverlayElement(nav: SettingsOverlayNav): HTMLElement {
     fxRows.push(entry);
   }
   dialog.appendChild(list);
+
+  /**
+   * ★ 2026-10-06（**用户要求**）：第二类开关 —— **「选牌即确定」**（默认关闭）。
+   *
+   * 用户原话：「在设置中加上一个选择项，默认关闭，打开后，玩家在触发需要选择卡牌后按下确定键
+   * 才能确定将效果作用于该卡时，其操作会变为无需按下确定键就能确定将效果作用于选择的卡牌，
+   * 即点击即触发，但注意，这个设置只会影响到不可选择跳过或是其他效果的卡牌效果，那些具有
+   * 可选的卡牌不受其影响」。
+   *
+   * 形态与上面那一组特效开关**逐字同款**（`label` + `.mode-check` 复选框 + 说明行 + 勾了就交给
+   * 宿主落盘 + 失败就地提示），只有三点不同，都是**承重**的：
+   *  1. **不放进 `FX_SETTINGS`**：它不是特效开关（`onFxChange` 会把值写进设置里的 `fx` 字段，
+   *     语义就错了）⇒ 自己一条 `onInstantChoiceChange` + 自己那两行文案；
+   *  2. **说明行用新类名 `.settings-instant-note`**，**不能**复用 `.settings-note` ——
+   *     既有腿（`tests/ui/local-data-screen.test.ts` 第 9 组）用 `oneClass(overlay, 'settings-note')`
+   *     要求树里**唯一**；版式在 `styles-local.css` 里与 `.settings-note` 写成同一套声明；
+   *  3. **不显示"（当前：开启/关闭）"那种缀句**？——不，照旧显示（勾过一次之后），
+   *     与特效开关同一个 `settings.fx.state` 模板，玩家能一眼看见当前状态。
+   */
+  const instantRow = el('label', 'mode-toggle');
+  const instantBox = document.createElement('input');
+  instantBox.type = 'checkbox';
+  instantBox.className = 'mode-check';
+  instantBox.checked = nav.instantChoice;
+  instantBox.dataset.playPref = 'instant-choice';
+  const instantLabel = el('span', 'mode-toggle-label', t('settings.instant.label'));
+  const instantNote = el('div', 'settings-instant-note', '');
+  /** 勾过一次之后才把"当前：…"缀上去（与 `fxNoteText` 同一条口径） */
+  let instantTouched = false;
+  const instantNoteText = (): string => {
+    const desc = t('settings.instant.desc');
+    if (!instantTouched) return desc;
+    const state = instantBox.checked ? t('settings.fx.on') : t('settings.fx.off');
+    return t('settings.fx.state', { desc, state });
+  };
+  instantNote.textContent = instantNoteText();
+  instantBox.addEventListener('change', () => {
+    instantTouched = true;
+    instantNote.textContent = instantNoteText();
+    langStatus.textContent = ''; // 先清掉上一次的提示（这一次还没结论）
+    let out: LangChangeOutcome;
+    try {
+      out = nav.onInstantChoiceChange(instantBox.checked);
+    } catch (e) {
+      out = langChangeThrew(e instanceof Error ? e.message : String(e));
+    }
+    if (!out.ok) langStatus.textContent = saveFailedSwitchText(out);
+  });
+  instantRow.appendChild(instantBox);
+  instantRow.appendChild(instantLabel);
+  // ⚠️ 挂在 `list`（`.settings-list`，flex column + gap 4px）里，与特效开关那几行**同一条列表**
+  //   —— 挂到 dialog 上会掉出那个 gap 体系，两行之间的间距与上面几行对不齐。
+  list.appendChild(instantRow);
+  list.appendChild(instantNote);
+
   const hint = el('div', 'settings-hint', t('settings.hint'));
   dialog.appendChild(hint);
   overlay.appendChild(dialog);
@@ -1754,6 +1823,9 @@ export function settingsOverlayElement(nav: SettingsOverlayNav): HTMLElement {
       note.textContent = fxNoteText(def.id, box.checked, touched);
       label.textContent = fxLabelText(def.id);
     }
+    // ★ 2026-10-06：「选牌即确定」那一行（与上面那一组同款：文案 + "当前：…"那句都要跟着语言走）
+    instantLabel.textContent = t('settings.instant.label');
+    instantNote.textContent = instantNoteText();
     hint.textContent = t('settings.hint');
   }
   applyLang();

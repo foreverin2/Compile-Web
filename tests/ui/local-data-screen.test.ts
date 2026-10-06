@@ -1293,6 +1293,8 @@ describe('★ 2026-10-01：设置小窗（落点 + 真跑一次）', () => {
         onLangChange: () => ({ ok: true }),
         // ★ B：宿主那一侧照 main.ts 的同一口径改内存态（小窗只报事件，不自己改）
         onFxChange: (id, on) => { setMetal6Strobe(on); return { ok: true }; },
+      instantChoice: false,
+      onInstantChoiceChange: () => ({ ok: true }),
       }));
       // 挂进 `document.body`：桩的 `dispatchEvent` 只沿 `parentElement` 向上冒泡，没挂上去就收不到
       // 遮罩自己的监听器（`document.body` 是桩的节点 ⇒ 这里只能强转，见 `asStub` 的说明）
@@ -1309,8 +1311,10 @@ describe('★ 2026-10-01：设置小窗（落点 + 真跑一次）', () => {
       expect(closeBtn.text, '右上角那个按钮的文案不是「关闭」').toBe('关闭');
 
       // 开关：默认按 isMetal6StrobeOn() 落子，并且真的写进了 fx-settings 的内存态
-      const boxes = classOf(overlay, 'mode-check');
-      expect(boxes.length, '小窗里的开关数 = FX_SETTINGS 的条目数').toBe(FX_SETTINGS.length);
+      // ⚠️ 2026-10-06：小窗里现在还有一个**非特效**开关（「选牌即确定」，`data-play-pref`）
+      //    ⇒ 这条腿按 `data-fx-setting` 收窄（它问的是"特效开关有几条"，不该被那个新开关算进来）
+      const boxes = classOf(overlay, 'mode-check', (n) => n.dataset.fxSetting !== undefined);
+      expect(boxes.length, '小窗里的**特效**开关数 = FX_SETTINGS 的条目数').toBe(FX_SETTINGS.length);
       const box = boxes[0];
       expect(box.tag, '开关不是 <input>').toBe('input');
       expect(box.dataset.fxSetting, '开关没带 data-fx-setting（测试与调试都靠它定位）').toBe('metal6-strobe');

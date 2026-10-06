@@ -1058,3 +1058,11 @@
  * ⚠️ 只放开 `.net-*` 作用域：热座页那条 `.hand-strip.choice-mode …`（`styles.css`）一行未动。
  */
 .net-board.choice-mode .card:not(.choice-target) { pointer-events: auto; }
+/*
+ * ★ 2026-10-06（用户要求）：设置里新增的那一项「选牌即确定」的说明行。
+ * 版式与 `.settings-note`（特效开关那一行的说明）**逐字同一套声明**，只是类名必须不同 ——
+ * 既有腿（`tests/ui/local-data-screen.test.ts` 第 9 组）用 `oneClass(overlay, 'settings-note')`
+ * 要求树里唯一；复用那个类名会把那条"唯一性"判据打红（与语言那一行的 `.settings-lang-hint`
+ * 同一条理由）。样式仍落在 `styles-local.css`：`styles.css` 是红线，一行不动。
+ */
+.settings-instant-note { font-size: 12px; line-height: 1.6; color: #8f9ac0; }

@@ -53,6 +53,11 @@ export const EN: Readonly<Record<string, string>> = {
   'settings.fx.metal6.desc':
     'The Metal 6 card in your hand fades a picture in on a loop. Turn this off to hide it; '
     + 'other cards keep their effects.',
+  // ★ 2026-10-06 (user's request): the new "pick to confirm" option (default off).
+  'settings.instant.label': 'Pick to confirm',
+  'settings.instant.desc':
+    'For effects that need exactly one card and cannot be skipped: one click on the card '
+    + 'confirms it, with no "Confirm" press. Skippable effects and multi-card picks stay as they are.',
   /* ── Local data & privacy screen: the **language row only** (D4) ──
    * The rest of that screen is NOT extracted yet; it stays on the
    * `docs/2026-10-01-i18n-尚未抽取的屏.md` list. */

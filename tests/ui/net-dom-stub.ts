@@ -266,6 +266,8 @@ export interface StubEvent {
   isComposing?: boolean;
   defaultPrevented?: boolean;
   stopPropagation(): void;
+  /** ★ 2026-10-06：掐断**本节点**剩余监听器（与 `stopPropagation` 的"只停冒泡"分开，见 dispatchEvent） */
+  stopImmediatePropagation?(): void;
   preventDefault(): void;
 }
 
@@ -471,6 +473,20 @@ export function makeStubEl(tag: string): StubNode {
      */
     dispatchEvent: (ev: StubEventInit) => {
       let stopped = false;
+      /**
+       * ★ 2026-10-06 修正：`stopPropagation()` 的语义对齐**真实 DOM** —— 它只停"往上冒泡"，
+       * **同一个节点上**后面那些监听器照旧要跑（真正掐断同节点剩余监听器的是
+       * `stopImmediatePropagation()`）。
+       *
+       * 改之前这里是一句 `if (stopped) return true;` **在同一个节点的循环里**：于是
+       * "某张卡上第一个监听器调了 `stopPropagation`"就等于**该卡后面所有监听器都不跑**。
+       * 那比浏览器严，而且严的正是本仓真实存在的一种形态：**同一张候选卡上同时挂着
+       * "手牌自己的点击"（`renderHand` 的 `onSelect`，`stopPropagation: true`）与
+       * "选择模式的点击"（`renderChoiceUi` 加的候选响应）**。真浏览器里两条都跑（手那条被
+       * `choicePromptId` 拦），桩上却只剩第一条能跑 ⇒ 任何"点候选卡"的腿都测不到选择逻辑
+       * （`tests/ui/instant-choice.test.ts` 第一版腿就是因此恒红）。
+       */
+      let immediate = false;
       const event: StubEvent = {
         key: undefined, code: undefined, ctrlKey: undefined, shiftKey: undefined,
         altKey: undefined, metaKey: undefined, repeat: undefined, isComposing: undefined,
@@ -479,15 +495,18 @@ export function makeStubEl(tag: string): StubNode {
         type: ev.type,
         target: ev.target ?? node,
         stopPropagation: () => { stopped = true; },
+        stopImmediatePropagation: () => { stopped = true; immediate = true; },
         preventDefault: () => { event.defaultPrevented = true; },
       };
       const path: StubNode[] = [];
       for (let p = node.parentElement; p !== null; p = p.parentElement) path.push(p);
       for (const n of path) {
+        immediate = false; // 每个节点重置：`stopImmediatePropagation` 只掐**本节点**剩下的那些
         for (const fn of [...(listeners.get(n)?.get(ev.type) ?? [])]) {
           fn(event);
-          if (stopped) return true;
+          if (immediate) break;
         }
+        if (stopped) return true;
       }
       return true;
     },

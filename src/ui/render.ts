@@ -14,6 +14,8 @@ import type { CardTextParts } from '../data/demo';
 import { COMPILED_PROTOCOL_COLORS, protocolColorOf, hexToRgba } from './protocol-colors';
 import { PROTOCOL_RATINGS } from '../data/protocolRatings';
 import { isMetal6StrobeOn } from './fx-settings';
+// ★ 2026-10-06（用户要求）：「选牌即确定」这一项的判据（纯函数，唯一出处；远程页读同一个）。
+import { instantChoiceApplies } from './play-prefs';
 import { actionCn } from '../core/log';
 import { cardCommandDisabled } from '../core/effects/context';
 import { downloadLog } from './diag';
@@ -5504,6 +5506,23 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
           bindClickOrDouble(
             node,
             () => {
+              /**
+               * ★ 2026-10-06（**用户要求**）：设置里的「选牌即确定」开着时，**没有跳过 且 只选 1 张**
+               * 的效果点一下就提交 —— 与下面那个「确定」按钮**同一条派发路**（同一个 `cb.onAction`）。
+               * 判据是纯函数 `instantChoiceApplies`（唯一出处，远程页读同一个）。
+               *
+               * ⚠️ **刻意不在这里 `choicePromptId = null`**（「确定」按钮那条路是清的）：这一手是
+               * 在 `bindClickOrDouble` 的**延迟单击**里跑的（320ms），而**同一张卡**上还挂着
+               * 手牌自己那条延迟单击（`renderHand` 的 `onSelect`，靠 `choicePromptId` 拦）。
+               * 两条定时器同一时刻排队、手牌那条先跑（先注册）⇒ 它被拦住；随后这一条才提交。
+               * 若在这里提前把 id 清成 null，将来任何"提交之后、下一帧之前"的点击都会掉进
+               * 手牌选中那条路（联机那一路还要等对端帧回来）。id 由渲染器下一帧统一对账
+               * （有新 prompt ⇒ 换成新 id；没有 ⇒ 那里会清成 null），所以不清是**更安全**的一边。
+               */
+              if (instantChoiceApplies(prompt)) {
+                cb.onAction({ kind: 'effect-choice', promptId: topEffect.id, choice: [uid] });
+                return;
+              }
               if (sel.has(uid)) { sel.delete(uid); choiceSelected = choiceSelected.filter((x) => x !== uid); }
               else if (choiceSelected.length < prompt.max) { choiceSelected.push(uid); }
               renderApp(root, s, cb);
@@ -5926,6 +5945,15 @@ export function buildChoicePickOverlay(
     bindClickOrDouble(
       cell,
       () => {
+        /**
+         * ★ 2026-10-06（用户要求）：「选牌即确定」开着 + 没有跳过 + 只选 1 张 ⇒ 点一下就提交
+         * （与那个「确定」按钮同一条派发路）。判据与棋盘候选那一处共用同一个纯函数。
+         * ⚠️ 同样**不在这里**清 `choicePromptId`（理由见棋盘候选那一处的长注释）。
+         */
+        if (instantChoiceApplies(prompt)) {
+          cb.onAction({ kind: 'effect-choice', promptId: pe.id, choice: [c.uid] });
+          return;
+        }
         if (sel.has(c.uid)) {
           sel.delete(c.uid);
           choiceSelected = choiceSelected.filter((x) => x !== c.uid);

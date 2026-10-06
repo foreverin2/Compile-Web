@@ -261,6 +261,8 @@ import {
   splitDefId,
   type UiCallbacks,
 } from './render';
+// ★ 2026-10-06（用户要求）：「选牌即确定」的判据（纯函数；热座页读**同一个** —— 两页不各写一份）。
+import { instantChoiceApplies } from './play-prefs';
 
 /* ============================================================================
  * 接口
@@ -1519,6 +1521,21 @@ function renderChoiceUi(
         bindClickOrDouble(
           node,
           () => {
+            /**
+             * ★ 2026-10-06（**用户要求**）：设置里的「选牌即确定」开着时，**没有跳过 且 只选 1 张**
+             * 的效果点一下就提交 —— 与下面那个「确定」按钮**同一条派发路**（同一个 `cb.onAction`）。
+             * 判据是 `render.ts` 那个纯函数（唯一出处），远程页与热座页读同一个。
+             *
+             * ⚠️ **刻意不在这里 `setChoiceSelection([], null)`**（「确定」按钮那条路是清的）：
+             * 这一手跑在**延迟单击**里，而同一张卡上还挂着手牌自己那条延迟单击
+             * （`onSelect`，靠 `choicePromptId` 拦）—— 两条同一时刻排队、手牌那条先跑且被拦住。
+             * 提前清 id 会让"提交之后、对端帧回来之前"的点击掉进手牌选中那条路。
+             * id 由 `renderChoiceUi` 下一帧统一对账（有新 prompt ⇒ 换新 id；没有 ⇒ 清成 null）。
+             */
+            if (instantChoiceApplies(prompt)) {
+              cb.onAction({ kind: 'effect-choice', promptId: top.id, choice: [uid] });
+              return;
+            }
             const next = getChoiceSelection();
             if (next.includes(uid)) setChoiceSelection(next.filter((x) => x !== uid));
             else if (next.length < prompt.max) setChoiceSelection([...next, uid]);

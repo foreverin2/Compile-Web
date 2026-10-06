@@ -82,14 +82,21 @@ function mount(over: {
   onLangChange?: (l: Lang) => LangChangeOutcome;
   /** ★ 2026-10-01（B）：开关落盘的回话；缺省 = 成功 */
   onFxChange?: (id: string, on: boolean) => LangChangeOutcome;
+  /** ★ 2026-10-06（用户要求）：「选牌即确定」的初值（缺省 = 关闭，与真默认值一致） */
+  instantChoice?: boolean;
+  /** ★ 2026-10-06（用户要求）：「选牌即确定」落盘的回话；缺省 = 成功 */
+  onInstantChoiceChange?: (on: boolean) => LangChangeOutcome;
 } = {}): {
   readonly overlay: StubNode;
   readonly calls: Array<{ lang: Lang } & LangChangeOutcome>;
   readonly fxCalls: Array<{ id: string; on: boolean } & LangChangeOutcome>;
+  /** ★ 2026-10-06：小窗拨动「选牌即确定」时收到的那些调用 */
+  readonly prefCalls: Array<{ on: boolean } & LangChangeOutcome>;
 } {
   mountStubDom();
   const calls: Array<{ lang: Lang } & LangChangeOutcome> = [];
   const fxCalls: Array<{ id: string; on: boolean } & LangChangeOutcome> = [];
+  const prefCalls: Array<{ on: boolean } & LangChangeOutcome> = [];
   const nav = {
     onClose: over.onClose ?? (() => { /* 本组不用它 */ }),
     lang: over.lang ?? getLang(),
@@ -103,10 +110,17 @@ function mount(over: {
       fxCalls.push({ id, on, ...out });
       return out;
     },
+    // ★ 2026-10-06（用户要求）：「选牌即确定」那一项（默认关闭；假宿主照 main.ts 的口径改内存态）
+    instantChoice: over.instantChoice === true,
+    onInstantChoiceChange: (on: boolean) => {
+      const out = over.onInstantChoiceChange === undefined ? LANG_CHANGE_OK : over.onInstantChoiceChange(on);
+      prefCalls.push({ on, ...out });
+      return out;
+    },
   };
   const overlay = settingsOverlayElement(nav) as unknown as StubNode;
   document.body.appendChild(overlay as unknown as Node);
-  return { overlay, calls, fxCalls };
+  return { overlay, calls, fxCalls, prefCalls };
 }
 
 /** 树里所有节点的文本（按 DOM 顺序），用于"整屏逐条比对" */
@@ -209,6 +223,38 @@ describe('设置小窗 · 默认中文（与改动前逐字一致）', () => {
     expect(fxCalls, '勾一次要通知宿主一次（带 id 与新的值）').toEqual([{ id: 'metal6-strobe', on: false, ok: true }]);
     expect(isMetal6StrobeOn(), '宿主按同一口径改了内存态之后，读侧应当变了').toBe(false);
     expect(note.text).toBe(`${ZH['settings.fx.metal6.desc']}（当前：${ZH['settings.fx.off']}）`);
+  });
+
+  it('★ 2026-10-06（用户要求）：「选牌即确定」这一项 —— 默认关闭、有落点、拨动就通知宿主、说明就地改写', () => {
+    // ① 默认关闭（`nav.instantChoice` 缺省 false）：复选框不勾，说明只有原文
+    const { overlay, prefCalls } = mount();
+    const box = classOf(overlay, 'mode-check', (n) => n.dataset.playPref === 'instant-choice')[0];
+    expect(box, '设置里没有「选牌即确定」那一项（少了 data-play-pref）').toBeDefined();
+    expect(box.tag, '它不是 <input>').toBe('input');
+    expect((box as unknown as { checked: boolean }).checked, '默认不是关闭（用户明确要求默认关闭）').toBe(false);
+    const note = classOf(overlay, 'settings-instant-note')[0];
+    expect(note, '那一项没有说明行（用的是 `.settings-instant-note`，不许复用 `.settings-note`）').toBeDefined();
+    expect(note.text, '没勾过就显示了"当前："那句').toBe(ZH['settings.instant.desc']);
+    expect(textsOf(overlay), '屏上没画出这一项的标题').toContain(ZH['settings.instant.label']);
+
+    // ② 拨动 ⇒ 通知宿主一次（带新值）+ 说明就地改写（不重画整屏）
+    (box as unknown as { checked: boolean }).checked = true;
+    fireIn(box, 'change');
+    expect(prefCalls, '拨动没有通知宿主（那就白拨了）').toEqual([{ on: true, ok: true }]);
+    expect(note.text, '说明没就地改成"当前：开启"')
+      .toBe(`${ZH['settings.instant.desc']}（当前：${ZH['settings.fx.on']}）`);
+
+    // ③ 落盘失败 ⇒ 同一个提示位如实说（复用特效开关那一套文案，不新造）
+    const second = mount({ onInstantChoiceChange: () => ({ ok: false, reason: 'write-failed', detail: 'X' }) });
+    const box2 = classOf(second.overlay, 'mode-check', (n) => n.dataset.playPref === 'instant-choice')[0];
+    (box2 as unknown as { checked: boolean }).checked = true;
+    fireIn(box2, 'change');
+    expect(role(second.overlay, 'lang-status').text, '拨动落盘失败时没有任何提示').toContain('开关没能保存到本机');
+
+    // ④ 初值由 `nav` 决定（开着的玩家再打开设置，看到的应当是勾上的）
+    const on = mount({ instantChoice: true });
+    const box3 = classOf(on.overlay, 'mode-check', (n) => n.dataset.playPref === 'instant-choice')[0];
+    expect((box3 as unknown as { checked: boolean }).checked, 'nav 给了 true 却没勾上').toBe(true);
   });
 
   it('★ B：开关落盘失败 ⇒ 屏上如实说"本次会话生效、下次进入回旧状态"（按原因本地化）', () => {
@@ -453,7 +499,12 @@ describe('文案键的唯一性：`FX_SETTINGS` 的文档字段 = 中文表的�
 
   it('`FX_SETTINGS` 每一条都必须在屏上有落点（`data-fx-setting`）—— 新增条目不会静默漏画', () => {
     const { overlay } = mount();
-    const boxes = classOf(overlay, 'mode-check');
+    /**
+     * ⚠️ 2026-10-06：判据面从"全部 `.mode-check`"收成"带 `data-fx-setting` 的那些" ——
+     * 设置小窗里现在还有**第二个**复选框（「选牌即确定」，`data-play-pref`），它不属于
+     * `FX_SETTINGS`。不收窄就会把那个新开关也算进来（本腿第一次跑就是这么红的）。
+     */
+    const boxes = classOf(overlay, 'mode-check', (b) => b.dataset.fxSetting !== undefined);
     expect(boxes.map((b) => b.dataset.fxSetting)).toEqual(FX_SETTINGS.map((d) => d.id));
   });
 });
