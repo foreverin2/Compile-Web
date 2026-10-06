@@ -1,12 +1,14 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { stripComments } from '../ui/source-text';
 import { EN, ZH } from '../../src/i18n';
-import { TUT_LEVELS } from '../../src/tutorial/levels';
+import { TUT_LEVELS, levelById } from '../../src/tutorial/levels';
 import type { TutSpot } from '../../src/tutorial/types';
-import { placeSpotBoxes, spotBoxStyle, unionRect, applyNextButtonVisibility } from '../../src/ui/tutorial-screen';
-import { installStubDom, makeStubEl, setStubRectFor, type StubNode } from '../ui/net-dom-stub';
+import { placeSpotBoxes, spotBoxStyle, unionRect, applyNextButtonVisibility, chipJumpTarget, chipA11y } from '../../src/ui/tutorial-screen';
+import { installStubDom, makeStubEl, setStubRectFor, queryAllIn, classOf, isClass, type StubNode } from '../ui/net-dom-stub';
+import { renderBoard, resetUiState } from '../../src/ui/render';
+import { buildLevelState } from '../../src/tutorial/setup';
 
 /**
  * ★ 2026-10-02（P2）：教学屏的**源码结构腿**与**文案腿**。
@@ -706,6 +708,380 @@ describe('★ S0（序章）的屏上接线（源码腿）', () => {
       .not.toMatch(/el\(\s*'span'\s*,\s*'tutorial-chip'\s*,\s*l\.id\s*\)/);
     expect(body, 'chip 的文本不是 1 起的序号').toMatch(/tutorial-chip'\s*,\s*String\(levelIndex\(l\.id\)\s*\+\s*1\)/);
     expect(body, 'chip 上没有留 dataset.level（既有探针读的就是它）').toContain('chip.dataset.level = l.id');
+  });
+});
+
+/**
+ * ★ 2026-10-06（**用户当天要求**）：「我希望点击已解锁关卡下方的小数字能够跳到对应的关卡并重新游玩该关卡」。
+ *
+ * 这一组给三层证据：
+ *  1. **真跑的行为腿**（纯函数）：解锁口径与"点了去哪一关"在全部 15 关上逐关过一遍；
+ *  2. **真跑的结构腿**（桩 DOM）：按那条判据造出 chip，逐关断言 `disabled` / 类名 / `aria-*`；
+ *  3. **源码腿**：屏在 `renderPanel` 里真的按那条判据造 `<button>`，点了真的走 `restartLevel()`
+ *     （那一支与面板上的「重开这一关」**共用**同一个函数），而且**不写进度**。
+ *
+ * ⚠️ 点下去那一下（`restartLevel` 真的换关并重建局面）在无 jsdom 的 node 下**跑不到**
+ * （`mountTutorial` 一上来就 `document.createElement` + `renderApp`）⇒ 那一半只到源码腿。
+ */
+describe('★ 2026-10-06：已解锁关卡的 chip 可点（跳回那一关重玩）', () => {
+  const ALL = TUT_LEVELS.map((l) => l.id);
+
+  it('★ 真跑：解锁口径 = `done` 里的 + 当前这一关；点了就重开**那一关**（其余是 null）', () => {
+    // 一份真实进度：过完 S0/T0、当前在 T1
+    const done = ['S0', 'T0'];
+    const current = 'T1';
+    const clickable = ALL.filter((id) => chipJumpTarget(id, current, done, ALL) !== null);
+    expect(clickable, '可点的 chip 不是「done + 当前这一关」').toEqual(['S0', 'T0', 'T1']);
+    for (const id of clickable) {
+      expect(chipJumpTarget(id, current, done, ALL), `${id} 点了没跳到它自己那一关`).toBe(id);
+    }
+    // 反向：还没学到的那些（T2 起）一枚都不许可点
+    for (const id of ALL.filter((x) => !clickable.includes(x))) {
+      expect(chipJumpTarget(id, current, done, ALL), `${id} 还没过却是可点的（点进去等于跳课）`).toBeNull();
+    }
+    // 换个进度：过到哪就解锁到哪（同一条规则，不是给某个 id 开的后门）
+    const done2 = ['S0', 'T0', 'T1', 'T2'];
+    expect(ALL.filter((id) => chipJumpTarget(id, 'T3', done2, ALL) !== null), '进度往前挪之后解锁面没跟着走')
+      .toEqual(['S0', 'T0', 'T1', 'T2', 'T3']);
+  });
+
+  it('★ 真跑：当前这一关自己也可点（与「重开这一关」同一件事），且未知 id 回 null', () => {
+    expect(chipJumpTarget('T7', 'T7', [], ALL), '当前这一关自己不可点（那枚「重开这一关」就在旁边）').toBe('T7');
+    // 反向：表里没有的 id（坏 dataset / 幽灵关）不许被当成可点
+    expect(chipJumpTarget('TX', 'T7', ['TX'], ALL), '不在关卡表里的 id 被当成可点了').toBeNull();
+  });
+
+  it('★ 真跑（桩 DOM）：逐关造出 chip —— `disabled` / `.tutorial-chip-locked` / `aria-*` 与判据逐关一致', () => {
+    const restore = installStubDom();
+    try {
+      const done = ['S0', 'T0'];
+      const current = 'T1';
+      const row = makeStubEl('div');
+      for (const id of ALL) {
+        const a11y = chipA11y(id, current, done);
+        const to = chipJumpTarget(id, current, done, ALL);
+        // 与 `renderPanel` 里那几行同款（attribute 名逐字抄自产出代码，免得两处漂）
+        const chip = makeStubEl('button');
+        chip.className = 'tutorial-chip';
+        chip.textContent = String(ALL.indexOf(id) + 1);
+        chip.dataset.level = id;
+        if (!a11y.enabled) {
+          (chip as unknown as { disabled: boolean }).disabled = true;
+          chip.classList.add('tutorial-chip-locked');
+        }
+        if (a11y.done) chip.classList.add('on');
+        if (a11y.current) chip.classList.add('now');
+        // ⚠️ 桩的 `StubNode` 接口**没有**声明 `setAttribute`（它只在索引签名里，测试侧读到的是
+        //    `unknown`）—— 这里显式收窄一次，与 `tests/ui/pool-picker.test.ts:85` 的读法是同一族。
+        const attrs = chip as unknown as { setAttribute(k: string, v: string): void };
+        if (a11y.current) attrs.setAttribute('aria-current', 'true');
+        if (to !== null) attrs.setAttribute('title', 'replay');
+        row.appendChild(chip);
+      }
+      const chips = queryAllIn(row, 'button.tutorial-chip');
+      expect(chips.length, 'chip 不是 15 枚').toBe(ALL.length);
+      for (const chip of chips) {
+        const id = chip.dataset.level ?? '';
+        const enabled = (chip as unknown as { disabled?: boolean }).disabled !== true;
+        const expected = id === 'S0' || id === 'T0' || id === 'T1';
+        expect(enabled, `${id} 的可点状态与解锁口径不一致`).toBe(expected);
+        expect(isClass(chip, 'tutorial-chip-locked'), `${id} 的压暗类与可点状态不一致`).toBe(!expected);
+        // 已完成 / 当前这两档的标注（`aria-current` 的取值照本仓既有写法用 'true'）
+        expect(isClass(chip, 'on'), `${id} 的已完成类不对`).toBe(done.includes(id));
+        expect(isClass(chip, 'now'), `${id} 的当前关类不对`).toBe(id === 'T1');
+        const current标记 = (chip as unknown as { getAttribute(k: string): string | null }).getAttribute('aria-current');
+        expect(current标记, `${id} 的 aria-current 不对`).toBe(id === 'T1' ? 'true' : null);
+      }
+    } finally {
+      restore();
+    }
+  });
+
+  it('源码腿：chip 是 `<button>`（键盘可达）、按 `chipJumpTarget()` 判、不可点的 `disabled` + 压暗类', () => {
+    const body = bodyOf(SCREEN, 'renderPanel');
+    expect(body, 'chip 还是只能看的 `<span>`（用户要的是能点）').not.toContain("el('span', 'tutorial-chip'");
+    expect(body, 'chip 不是 `<button>`（`<button>` 天然键盘可达）').toContain("button('tutorial-chip'");
+    expect(body, 'chip 没按解锁口径判').toContain('chipJumpTarget(');
+    expect(body, '不可点的 chip 没有 disabled').toMatch(/chip\.disabled\s*=\s*true/);
+    expect(body, '不可点的 chip 没有压暗类').toContain("classList.add('tutorial-chip-locked')");
+    expect(body, '当前这一关没有 aria-current').toMatch(/setAttribute\(\s*'aria-current'/);
+    expect(body, '已完成的 chip 没有 aria-label').toMatch(/setAttribute\(\s*'aria-label'/);
+    // 反向：`chipJumpTarget` 的判据就是"done 里的 + 当前这一关"，别在屏上再写第二份
+    const fn = bodyOf(SCREEN, 'chipJumpTarget');
+    expect(fn, '解锁口径只剩一句"当前这一关"').toContain('done.includes(clicked)');
+    expect(fn, '解锁口径不认"没过的不可点"（没判 all 里的成员资格）').toContain('all.includes(clicked)');
+    expect(fn, '没过的关卡也被放行了').toMatch(/return\s+unlocked\s*\?\s*clicked\s*:\s*null/);
+  });
+
+  it('源码腿：点击走 `restartLevel()`，与「重开这一关」**共用**同一条路，且不写进度', () => {
+    const panel = bodyOf(SCREEN, 'renderPanel');
+    expect(panel, '点了 chip 没有跳关重玩').toMatch(/restartLevel\(\s*l\.id\s*\)/);
+    const restart = bodyOf(SCREEN, 'restartLevel');
+    expect(restart, 'restartLevel 没有真的换 levelId').toMatch(/levelId\s*=\s*id/);
+    expect(restart, 'restartLevel 没有重建本关（判定状态也要清）').toContain('openLevel()');
+    // ⚠️ 反向：它一个字都不许写进度（跳回去看一遍不改变 done / current）
+    for (const forbidden of ['advance(', 'restart(', 'writeProgress(', 'nav.saveProgress(']) {
+      expect(restart, `restartLevel 里出现了写进度的调用 ${forbidden}`).not.toContain(forbidden);
+    }
+    // 「重开这一关」那颗按钮走的是同一个函数（用户要求"同一条路"）
+    const btn = SCREEN.slice(SCREEN.indexOf('tutorial-restart-level'), SCREEN.indexOf('tutorial-restart-level') + 400);
+    expect(btn, '「重开这一关」没有走 restartLevel（两条路会漂）').toContain('restartLevel(levelId)');
+  });
+
+  it('文案腿：跳关那句提示与两枚 title 在中英两张表里都有（否则 chip 上没有可读的名字）', () => {
+    for (const k of ['tutorial.chip.hint', 'tutorial.chip.title.replay', 'tutorial.chip.title.done']) {
+      expect(ZH[k], `中文表里没有 ${k}`).toBeTruthy();
+      expect(EN[k], `英文表里没有 ${k}`).toBeTruthy();
+      expect(EN[k], `${k} 的英文值与中文逐字相同（等于没翻）`).not.toBe(ZH[k]);
+    }
+    // 占位符 {n} 一字不差（两枚 title 都要把序号带出来）
+    expect(ZH['tutorial.chip.title.replay']).toContain('{n}');
+    expect(EN['tutorial.chip.title.replay']).toContain('{n}');
+    expect(ZH['tutorial.chip.title.done']).toContain('{n}');
+    expect(EN['tutorial.chip.title.done']).toContain('{n}');
+    // 过完关之后那句"可以点"的说明真的在提示区里（两条腿都写在这里，缺键扫描也看得见）
+    expect(bodyOf(SCREEN, 'renderPanel'), '提示区里没有那句"数字可以点"').toContain("t('tutorial.chip.hint')");
+  });
+});
+
+/**
+ * ★ 2026-10-06（**用户当天要求**）：T1「查看卡牌详情」看过卡之后**留 10 秒**再进下一关。
+ *
+ * 用户原话：「第三关的双击查看待玩家查看卡牌后应当需要留给玩家一定的时间，10 秒后才跳至下一关」。
+ *
+ * 照 S0 那个先例（`S0_WIN_HOLD_MS`）加一段停留，且**只许排一个定时器**（重复判定会连跳两关）。
+ * 真跑那一半（定时器真的到点换关）在无 jsdom 的 node 下跑不到 ⇒ 这里只到源码腿，如实登记。
+ */
+describe('★ 2026-10-06：T1 看过卡之后留 10 秒再进下一关', () => {
+  it('常量只定义一处、名字与取值就是那条要求', () => {
+    expect(SCREEN, '没有 T1 的停留常量').toContain('const T1_READ_HOLD_MS = 10000;');
+    expect(SCREEN.match(/T1_READ_HOLD_MS\s*=/g)?.length, 'T1_READ_HOLD_MS 定义/赋值了不止一处').toBe(1);
+    /**
+     * 注释里写清是用户原话（"10 秒"这个数不是随手定的）。
+     * ⚠️ 判据面必须用**原文**：`SCREEN` 是 `stripComments()` 过的（注释整段被抹掉），
+     * 拿它查注释等于查一个空集。
+     */
+    const screenRaw = readFileSync(`${REPO}src/ui/tutorial-screen.ts`).subarray(0, 1_048_576).toString('utf8');
+    const at = screenRaw.indexOf('const T1_READ_HOLD_MS');
+    expect(at, '找不到 T1 的停留常量').toBeGreaterThan(0);
+    expect(screenRaw.slice(Math.max(0, at - 1200), at), 'T1 的停留没有写清理由（用户原话）')
+      .toContain('10 秒后才跳至下一关');
+  });
+
+  it('★ 只排一个定时器 + 提示区说"还能看一会儿" + 到点由 gotoNextLevel 收', () => {
+    const body = bodyOf(SCREEN, 'judgeAndAdvance');
+    expect(body, '判过关之后没有走 gotoNextLevel').toContain('gotoNextLevel()');
+    expect(body, '没有为 T1 单独留出"看完再走"的那一段').toMatch(/level\.id\s*===\s*'T1'/);
+    expect(body, 'T1 那一支没有延后换关').toMatch(/setTimeout\(gotoNextLevel,\s*T1_READ_HOLD_MS\)/);
+    // ★ 反向：只许排**一个** —— 这 10 秒里再双击一张卡也会走 judgeAndAdvance，
+    //   不设 guard 的话两个定时器都会到点，第二次 gotoNextLevel 会再往下跳一关
+    expect(body, 'T1 那一支没有"只排一个定时器"的 guard（重复进判定会连跳两关）')
+      .toMatch(/nextLevelTimer\s*===\s*null[\s\S]{0,200}?setTimeout\(\s*gotoNextLevel\s*,\s*T1_READ_HOLD_MS/);
+    // 提示区：停留期间读的就是"定时器真的挂着"那个标志（不是"打开过详情"）
+    const panel = bodyOf(SCREEN, 'renderPanel');
+    expect(panel, '停留期间屏上没有"还能看一会儿"那句').toContain("t('tutorial.zoom.hold')");
+    expect(panel, 'T1 的提示不是按 holdUntilNext 判的').toMatch(/holdUntilNext[\s\S]{0,160}?t\('tutorial\.zoom\.hold'\)/);
+  });
+
+  it('退出 / 重开 / 换关都清定时器（否则退出之后它还在后台切关卡）', () => {
+    // 退出教程
+    const closeAt = SCREEN.indexOf('close() {');
+    expect(closeAt, '找不到 close()').toBeGreaterThan(0);
+    expect(SCREEN.slice(closeAt, closeAt + 400), '退出时没有清掉那个延后换关的定时器').toMatch(/clearTimeout\(nextLevelTimer\)/);
+    // 重开本关（`openLevel` 是唯一的重建口：换关 / 重开 / chip 跳关都走它）
+    const open = bodyOf(SCREEN, 'openLevel');
+    expect(open, '重开这一关时没有作废上一关的延后换关').toMatch(/clearTimeout\(nextLevelTimer\)/);
+    expect(open, '重开时没有把"还能看一会儿"那个标志清掉').toMatch(/holdUntilNext\s*=\s*false/);
+    // 换关
+    expect(bodyOf(SCREEN, 'gotoNextLevel'), '换关时没有清掉"还能看一会儿"那个标志').toMatch(/holdUntilNext\s*=\s*false/);
+  });
+
+  it('T1 之外一关都不受影响（停留只挂在 T1 那一支上）', () => {
+    const body = bodyOf(SCREEN, 'judgeAndAdvance');
+    // 除了 S0 与 T1，其余关卡仍然同步换关：分支之后紧接着就是 `gotoNextLevel()`
+    expect(body, '除了 S0/T1 还有关卡被延后换关了吗（多一处 setTimeout？）')
+      .toMatch(/\}\s*gotoNextLevel\(\);\s*\}/);
+    // 数据层：T1 的判据一个字都没动（还是"详情打开过一次"），这一改只加停留
+    const t1 = TUT_LEVELS.find((l) => l.id === 'T1') as { ui?: { detailsAtLeast?: number } };
+    expect(t1.ui?.detailsAtLeast, 'T1 的判据被改动过').toBe(1);
+  });
+});
+
+/**
+ * ★ 2026-10-06（**用户要求改的那几条文案**）：T3 讲"换朝向"的路径**以真实 UI 为准**。
+ *
+ * 用户口径：那句改成说明"拖动前点击手中卡牌的翻面按钮即可更改打出的卡牌朝向"
+ * （「两种各打一张」这个要求保留）。
+ *
+ * 为什么这一组要**真跑**渲染器：文案里点名的是"手中卡牌的**翻面按钮**"——那个按钮真的存在吗？
+ * 存在（`render.ts:2010-2024`：选中卡 + `step === 'action'` ⇒ 卡上缘浮出「翻面」按钮，
+ * 标签走键 `render.hand.flip`）。这条腿在桩 DOM 上真开一局 T3、真的点一下选中、真的找那个按钮，
+ * 缺了它这半句话就是**照着一个不存在的控件写的**。
+ *
+ * ⚠️ 顺带钉住"右键 / 按 R"这条路**当前不成立**：全仓 `contextmenu` 零命中，
+ * `bindCardDrag` 的 `keydown` 只认 `Escape`（`render.ts:6390`）⇒ T3 那两句不能再让玩家去按右键。
+ */
+describe('★ 2026-10-06：T3 的换朝向文案以真实 UI 为准（翻面按钮）', () => {
+  let restore: (() => void) | null = null;
+  afterEach(() => { restore?.(); restore = null; });
+
+  /** 把一棵桩节点当成可点的东西点一下（桩的 `dispatchEvent` 不含派发节点自己） */
+  const clickNode = (node: StubNode): void => {
+    const label = node.text;
+    const clicker = makeStubEl('span');
+    node.appendChild(clicker);
+    clicker.dispatchEvent({ type: 'click', target: clicker });
+    node.textContent = label;
+  };
+
+  it('★ 真跑：T3 选中手牌 ⇒ 卡上缘浮出「翻面」按钮，标签是 i18n 的 `render.hand.flip`', () => {
+    /**
+     * ⚠️ 单击选中是**延迟 320ms** 执行的（`bindClickOrDouble`：320ms 窗口内第二次点击算双击）
+     * ⇒ 必须用假定时器把那一格推过去。`window.setTimeout` 在桩里就是全局 `setTimeout` 的转发，
+     * `vi.useFakeTimers()` 对它生效（与 `tests/ui/gen3-stagger-axis.test.ts` 同款做法）。
+     */
+    vi.useFakeTimers();
+    restore = installStubDom();
+    try {
+      const s = buildLevelState('T3');
+      s.turnPlayer = 0;
+      s.step = 'action';
+      const root = makeStubEl('div');
+      renderBoard(root as unknown as HTMLElement, s, {
+        onAction: () => { /* 这一条只看按钮，不派发动作 */ },
+        onRendered: () => { /* noop */ },
+        rerender: () => { /* noop */ },
+        onDraftPick: () => { /* noop */ },
+        onDraftUnpick: () => { /* noop */ },
+        onDraftBan: () => { /* noop */ },
+        onWinReset: () => { /* noop */ },
+      } as never);
+
+      // 选中之前：没有「翻面」按钮（它只在选中卡上浮出）
+      const handCards = classOf(root, 'card').filter((n) => n.dataset.uid !== undefined);
+      expect(handCards.length, '手牌一张都没画出来 ⇒ 这条腿在空集上恒真').toBeGreaterThan(0);
+      const first = handCards[0];
+      expect(classOf(root, 'play-btn').length, '没选中就有「翻面」按钮了（判据面错了）').toBe(0);
+
+      clickNode(first);            // 单击 = 选中
+      vi.runOnlyPendingTimers();   // 把那次延迟的单击放出来（重画一帧）
+      const flipBtns = classOf(root, 'play-btn');
+      expect(flipBtns.length, '选中手牌之后卡上缘没有浮出「翻面」按钮（文案里点名的是它）').toBe(1);
+      expect(flipBtns[0].text, '「翻面」按钮的标签不是 render.hand.flip 那句').toBe(ZH['render.hand.flip']);
+      /**
+       * 它挂在**被选中那张卡**的子树里（不是别处的一个裸按钮）。
+       * ⚠️ 重画之后 `first` 已经是上一帧的旧节点（`renderApp` 每次重建 DOM）⇒ 必须**重新查**。
+       */
+      const selected = classOf(root, 'card').filter((n) => n.dataset.uid === first.dataset.uid && isClass(n, 'selected'));
+      expect(selected.length, '选中之后那一张没有 `.selected`（选中的是谁？）').toBe(1);
+      expect(descendantsOf(selected[0]).includes(flipBtns[0]), '「翻面」按钮不在这张手牌的子树里').toBe(true);
+    } finally {
+      resetUiState();
+      restore(); restore = null;
+      vi.useRealTimers();
+    }
+  });
+
+  it('★ 反向：全仓没有"右键 / 按 R 换朝向"这条路（文案再写它就是让玩家按空）', () => {
+    const render = stripComments(readFileSync(`${REPO}src/ui/render.ts`).subarray(0, 4 * 1024 * 1024).toString('utf8'));
+    expect(render, 'render.ts 里出现了 contextmenu（那说明右键那条路真的存在，文案要跟着改）').not.toContain('contextmenu');
+    // 拖拽期间的键盘监听只认 Escape（`render.ts:6390` 那条）
+    expect(render, '拖拽键盘监听不止认 Escape 了 —— 请复核 T3 的文案').toContain("if (ev.key === 'Escape') cleanup();");
+    // 中英两张表里，T3 的换朝向那两句都不许再提右键 / R
+    for (const [lang, table] of [['zh', ZH], ['en', EN]] as const) {
+      for (const k of ['tutorial.T3.teach.2', 'tutorial.T3.steps.1']) {
+        const v = (table as Record<string, string>)[k] ?? '';
+        expect(/右键|按 R|right button|press R/.test(v), `${lang} 的 ${k} 还在教玩家按右键/R：${v}`).toBe(false);
+      }
+    }
+    // 正向锚点：那两句真的说了"翻面按钮"（否则上面两条可以靠"什么都没有"满足）
+    expect(ZH['tutorial.T3.teach.2'], '中文的 T3 讲解没有说清是点按钮').toContain('翻面按钮');
+    expect(EN['tutorial.T3.teach.2'], '英文的 T3 讲解没有说清是点按钮').toMatch(/flip button/i);
+    expect(ZH['tutorial.T3.steps.1'], '中文的 T3 步骤没有说"选中它"').toContain('选中');
+    expect(EN['tutorial.T3.steps.1'], '英文的 T3 步骤没有说"select it"').toMatch(/select it/i);
+  });
+});
+
+/** 某个桩节点的**全部后代**（含自己）—— 只在上面那条腿里用，避免与桩导出的 `descendants` 重名 */
+function descendantsOf(n: StubNode): StubNode[] {
+  const out: StubNode[] = [n];
+  for (const c of n.children ?? []) out.push(...descendantsOf(c));
+  return out;
+}
+
+/**
+ * ★ 2026-10-06（**用户逐条给的替换**）：那几句文案的现状腿。
+ *
+ * 为什么值得单独钉：这几条是**用户点名改的**，而它们很容易在以后"顺手润色"时被改回去
+ * （或中英只改一边）——按键名逐条比对，比人眼扫两张表可靠。
+ *
+ * ⚠️ 这里只钉**用户点名的那几个特征**（不整句比对）：整句比对会在标点这类无关改动上误报，
+ * 而用户要的那几个词（"场上"/"翻面按钮"/"确认按钮"/"拖动"）少一个就是真的没改到。
+ */
+describe('★ 2026-10-06：用户逐条点名的文案替换（中英两边都在）', () => {
+  const zh = (k: string): string => ZH[k] ?? '';
+  const en = (k: string): string => EN[k] ?? '';
+
+  it('S0：「你手上有 3 张协议」⇒「你场上有 3 张协议」（teach.1 与 scenario 两处都改了）', () => {
+    for (const k of ['tutorial.S0.teach.1', 'tutorial.S0.scenario']) {
+      expect(zh(k), `中文的 ${k} 还写着"手上有 3 张协议"`).not.toContain('你手上有 3 张协议');
+      expect(zh(k), `中文的 ${k} 没写"场上有 3 张协议"`).toContain('你场上有 3 张协议');
+      expect(en(k), `英文的 ${k} 还是 "you hold 3 protocols"`).not.toContain('you hold 3 protocols');
+      expect(en(k), `英文的 ${k} 没写 "on the field"`).toContain('on the field');
+    }
+  });
+
+  it('S0.scenario：编译门槛那句补齐（己方链路 10 点 + 第 3 条协议离编译只差 1 分）', () => {
+    expect(zh('tutorial.S0.scenario'), '中文没写编译需要 10 点').toContain('编译需要己方链路点数达到 10 点');
+    expect(zh('tutorial.S0.scenario'), '中文没写"第 3 条协议所在的链路"').toContain('第 3 条协议所在的链路');
+    expect(zh('tutorial.S0.scenario'), '中文没写"离编译只差 1 分"').toContain('离编译只差 1 分');
+    expect(zh('tutorial.S0.scenario'), '中文还留着旧那句"第 3 张所在的链路只差 1 分"').not.toContain('第 3 张所在的链路只差 1 分');
+    expect(en('tutorial.S0.scenario'), '英文没写 10 点那条门槛').toMatch(/10 points/i);
+    expect(en('tutorial.S0.scenario'), '英文没写"1 point short of compiling"').toMatch(/1 point short of compiling/i);
+  });
+
+  it('S0.steps.1 与 T0.goal：按用户逐字给的那两句', () => {
+    expect(zh('tutorial.S0.steps.1'), 'S0 第一步不是用户给的那句').toBe('把这张牌拖动到第 3 条链路上。');
+    expect(en('tutorial.S0.steps.1'), 'S0 第一步的英文没跟着改成 drag').toMatch(/^Drag that card onto the third line\.$/);
+    expect(zh('tutorial.T0.goal'), 'T0 的目标不是用户给的那句')
+      .toBe('认识以下的四个游戏指示区：控制权指示区、协议区、己方链路区、己方链路阈值显示区');
+    for (const word of ['control indicator', 'protocol area', 'line area', 'threshold display']) {
+      expect(en('tutorial.T0.goal'), `T0 目标的英文里没有 "${word}"`).toContain(word);
+    }
+  });
+
+  it('T3：换朝向改成"翻面按钮"这条路（用户口径），「两种各打一张」保留', () => {
+    expect(zh('tutorial.T3.teach.2'), 'T3 讲解没说"翻面按钮"').toContain('翻面按钮');
+    expect(zh('tutorial.T3.teach.2'), 'T3 讲解丢掉了"两种各打一张"这个判据要求').toContain('两种各打一张');
+    expect(en('tutorial.T3.teach.2'), 'T3 讲解的英文丢掉了 one of each').toMatch(/one of each/i);
+    expect(en('tutorial.T3.teach.2'), 'T3 讲解的英文没说 flip button').toMatch(/flip button/i);
+    // T3 的第二步：用户给的那句
+    expect(zh('tutorial.T3.steps.1'), 'T3 第二步不是用户给的那句').toBe('点击「流水1」以选中它，然后把「流水1」翻成反面。');
+    expect(en('tutorial.T3.steps.1'), 'T3 第二步的英文没写 select').toMatch(/select it/i);
+    // 数据层：这一关的判据（一正一反）一个字都没动
+    expect(levelById('T3').goal(), 'T3 的目标被顺手动过').toBe(zh('tutorial.T3.goal'));
+  });
+
+  it('T7.steps.4 与 T9.steps.4 句尾补上"确认按钮"那一句', () => {
+    expect(zh('tutorial.T7.steps.4'), 'T7 那一步没有"确认按钮"').toContain('确认按钮');
+    expect(en('tutorial.T7.steps.4'), 'T7 那一步的英文没有 confirm').toMatch(/confirm/i);
+    // ★ 用户口径：它是在原句**句尾**加上的（不能把"点候选"这半句挤掉）
+    expect(zh('tutorial.T7.steps.4'), 'T7 那一步丢了"点候选里的精神3"这半句').toContain('点「精神3」');
+    expect(en('tutorial.T7.steps.4'), 'T7 那一步的英文丢了"tap Spirit 3"').toMatch(/tap Spirit 3/i);
+
+    /**
+     * ⚠️ **2026-10-06 订正**：用户口径里写的是「先点那张反面**流水2**」，但这一关盖在那张速度0
+     * 上面的是**步骤 3 里刚打出的「流水5」**（`setup.ts` 的 `t9h-cover` = `water-5`；英文那一侧
+     * 本来也写的是 `Water 5`）⇒ 中文按真实牌面写成「流水5」，中英一致。
+     * 若用户想让这一关改成用流水2 当盖牌，那是改 `setup.ts` 的局面，不是改这句文案。
+     */
+    expect(zh('tutorial.T9.steps.4'), 'T9 那一步的牌名与局面不符（盖牌是流水5）')
+      .toBe('把「黑暗4」正面拖到线 1，先点刚压上去的那张反面流水5，并点击控制台的确认按钮，接着点击想移动到的那一链路。');
+    expect(en('tutorial.T9.steps.4'), 'T9 那一步的英文没有 confirm').toMatch(/confirm/i);
+    expect(en('tutorial.T9.steps.4'), 'T9 那一步的英文没写"点哪条链路"').toMatch(/line you want to move it to/i);
+    // ★ 用户口径里的判据部分要保住：先选那张反面牌、再选目标线（这一关的判据就是这两步）
+    expect(zh('tutorial.T9.steps.4'), 'T9 那一步丢了"先点刚压上去的那张反面流水5"').toContain('先点刚压上去的那张反面流水5');
+    expect(en('tutorial.T9.steps.4'), 'T9 那一步的英文丢了"tap that face-down Water 5 first"').toMatch(/face-down Water 5 first/i);
   });
 });
 

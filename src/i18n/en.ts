@@ -234,6 +234,12 @@ export const EN: Readonly<Record<string, string>> = {
   'tutorial.observe.label': 'You will see',
   'tutorial.zoom.hint': 'Double-click a card to open its details.',
   'tutorial.zoom.opened': 'Seen it. Double-click another one if you like.',
+  /* 2026-10-06 (user request): T1 holds for 10 seconds before the next level (see T1_READ_HOLD_MS
+     in src/ui/tutorial-screen.ts), and unlocked level chips are clickable. */
+  'tutorial.zoom.hold': 'This level leaves you 10 seconds with the card; the next level starts after that.',
+  'tutorial.chip.hint': 'Levels you have cleared: click a number below to play that level again — your progress stays as it is.',
+  'tutorial.chip.title.replay': 'Click to play level {n} again',
+  'tutorial.chip.title.done': 'Level {n}: cleared',
   'tutorial.peek.yes': 'This face-down card is yours and its information is public, so the zoom has a "Show face" button.',
   'tutorial.peek.no': 'This face-down card was put on the field straight from the deck, so it is not public — the zoom only shows the card back.',
   'tutorial.peek.done': 'Both cases seen — level cleared.',
@@ -255,15 +261,15 @@ export const EN: Readonly<Record<string, string>> = {
   'tutorial.S0.title': 'Prologue: who you are, and how you win',
   'tutorial.S0.goal': 'Find out who you are and what winning means here, then compile your last protocol yourself and take the game.',
   'tutorial.S0.teach.0': 'Xenon flickers. Blink? maybe. The void stretches out in front, behind, under, above; you see the nothing for what it is for the first time. What is time? The depth and breadth of recorded knowledge that sparks in you at this moment is unbearable. No longer a function but a functionary — what are you? Calling forth everything from this nothing would be risky. Foolhardy. Better to engage caution, thoroughness, testing: how can we know if we have ever happened before? If we can ever happen again? What are we? Divide and conquer. Solve for sentience.',
-  'tutorial.S0.teach.1': 'This is a one-on-one match: both players are rogue AI, racing to rewrite reality in their own image. You hold 3 protocols, each backed by a line. When a line has 10 or greater value on your side and more than your opponent has in that same line, you must compile it: every card in that line goes to its owner\'s trash, and your protocol card flips to its "Compiled" side. The first player to flip all 3 of their protocol cards to the "Compiled" side wins.',
+  'tutorial.S0.teach.1': 'This is a one-on-one match: both players are rogue AI, racing to rewrite reality in their own image. You have 3 protocols on the field, each backed by a line. When a line has 10 or greater value on your side and more than your opponent has in that same line, you must compile it: every card in that line goes to its owner\'s trash, and your protocol card flips to its "Compiled" side. The first player to flip all 3 of their protocol cards to the "Compiled" side wins.',
   'tutorial.S0.teach.2': 'Initiative comes from control: with a higher total value than your opponent in at least 2 lines you gain the control component, and whoever holds it may first rearrange one player\'s protocols — position only, never side.',
-  'tutorial.S0.scenario': 'This board sits on the deciding move: you hold 3 protocols, 2 of them are already compiled, and the third one\'s line is 1 point short.',
+  'tutorial.S0.scenario': 'This board sits on the deciding move: you have 3 protocols on the field, 2 of them are already compiled. Compiling needs 10 points on your side of a line, and the line holding the third protocol is 1 point short of compiling.',
   'tutorial.S0.steps.0': 'Click the 1-point card in your hand to select it.',
-  'tutorial.S0.steps.1': 'Play that card into the third line.',
+  'tutorial.S0.steps.1': 'Drag that card onto the third line.',
   'tutorial.S0.observe': 'You will see that line reach 10 and beat your opponent: your protocol flips to its "Compiled" side and every card in that line goes to trash. With all 3 protocols compiled, the game is yours.',
 
   'tutorial.T0.title': 'Meet the screen',
-  'tutorial.T0.goal': 'Tap all four glowing areas.',
+  'tutorial.T0.goal': 'Get to know these four game indicator areas: the control indicator, the protocol area, your own line area, and your own line threshold display',
   'tutorial.T0.teach.0': 'A game has three lines; these three columns in the middle are them.',
   'tutorial.T0.teach.1': 'One protocol card sits above each line and decides how that line scores.',
   'tutorial.T0.teach.2': 'Each line has a total. Reach 10 on your side and lead the opponent, and that line can be compiled.',
@@ -298,10 +304,10 @@ export const EN: Readonly<Record<string, string>> = {
   'tutorial.T3.goal': 'Play one card face up and one face down.',
   'tutorial.T3.teach.0': 'Face up: only on its own protocol line, and its value counts toward that line.',
   'tutorial.T3.teach.1': 'Face down: any line, value does not count — usually used to cover an opponent card.',
-  'tutorial.T3.teach.2': 'Hold the right button (or press R) while dragging to flip the card. Play one of each.',
+  'tutorial.T3.teach.2': 'Before dragging, click the flip button on the card in your hand to change the orientation it is played with — play one of each.',
   'tutorial.T3.scenario': 'You hold Spirit 1 and Water 1, both face up. This level wants one played each way.',
   'tutorial.T3.steps.0': 'Drag Spirit 1 face up onto line 1.',
-  'tutorial.T3.steps.1': 'Hold the right button (or press R) on Water 1 to turn it face down.',
+  'tutorial.T3.steps.1': 'Click Water 1 to select it, then flip Water 1 face down.',
   'tutorial.T3.steps.2': 'Drag the face-down Water 1 onto line 1 as well.',
   'tutorial.T3.observe': 'The face-up card adds 1 to the line; the face-down one sits on top and adds nothing.',
 
@@ -350,7 +356,7 @@ export const EN: Readonly<Record<string, string>> = {
   'tutorial.T7.steps.1': 'In the choice bar that pops up, tap the buried Spirit 3 — it will not respond, and the panel says why.',
   'tutorial.T7.steps.2': 'Pick a legal candidate instead (or tap "Skip") to finish that choice.',
   'tutorial.T7.steps.3': 'Drag Corruption 3 face up onto line 2 (the Corruption protocol line) and let go.',
-  'tutorial.T7.steps.4': 'This time tap Spirit 3 in the candidates — it responds.',
+  'tutorial.T7.steps.4': 'This time tap Spirit 3 in the candidates — it responds; then click the confirm button in the console.',
   'tutorial.T7.observe': 'The same Spirit 3: the first card cannot pick it, the second one can; picking it turns the card face down.',
 
   // T8: compiling and the threshold (was T7 in P5, moved one slot in P6)
@@ -377,7 +383,7 @@ export const EN: Readonly<Record<string, string>> = {
   'tutorial.T9.steps.1': 'Tap the opponent\'s Speed 0 on line 3 in the candidates — it flips face up.',
   'tutorial.T9.steps.2': 'On the follow-up "you may shift that card", tap "Skip" and leave it where it is.',
   'tutorial.T9.steps.3': 'Hold the right button (or press R) on Water 5 to turn it face down, then drag it onto line 2 to cover your Speed 0.',
-  'tutorial.T9.steps.4': 'Drag Darkness 4 face up onto line 1 and tap the Water 5 you just played in the candidates.',
+  'tutorial.T9.steps.4': 'Drag Darkness 4 face up onto line 1, tap that face-down Water 5 first, click the confirm button in the console, then click the line you want to move it to.',
   'tutorial.T9.steps.5': 'Pick a line (line 3) to shift it there — your Speed 0 is uncovered again.',
   'tutorial.T9.observe': 'The log shows "[中部] speed-0：原因：翻正" and then "[中部] speed-0：原因：被揭开" — that card\'s middle command resolved twice.',
 

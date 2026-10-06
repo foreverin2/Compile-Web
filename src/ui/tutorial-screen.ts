@@ -54,6 +54,23 @@ import { registerFollow } from './fx-follow';
  */
 const S0_WIN_HOLD_MS = 2200;
 
+/**
+ * ★ 2026-10-06（**用户当天要求**）：T1「查看卡牌详情」在玩家查看过卡牌之后，**再留 10 秒**才进下一关。
+ *
+ * 用户原话：「第三关的双击查看待玩家查看卡牌后应当需要留给玩家一定的时间，10 秒后才跳至下一关」。
+ *
+ * 为什么需要它：这一关教的就是"双击放大看清楚一张牌的效果"，判据也只要求"详情打开过一次"
+ * （`ui.detailsAtLeast: 1`）—— 照别的关卡那样**判据一满足就换关**，玩家刚把大图点开，
+ * 下一关的棋盘就顶上来，那张卡一个字形都没看清。
+ *
+ * 取 10 秒：用户点名的数。与 S0 那条 `S0_WIN_HOLD_MS`（2.2 秒）不是一回事 —— 那条要的是
+ * "看得见赢"，这条要的是"有工夫读卡"。
+ *
+ * ⚠️ **只排一个定时器**：`judgeAndAdvance()` 会被重复调用（这 10 秒里玩家再双击一张卡也会走它），
+ * 不设 guard 的话两个定时器都会到点，第二次 `gotoNextLevel()` 会**再往下跳一关**。
+ */
+const T1_READ_HOLD_MS = 10000;
+
 /** 退出教程（回首页）；由宿主注入 —— 屏自己不认识首页 */
 export interface TutorialNav {
   /** 点「退出教程」 */
@@ -245,6 +262,62 @@ export function applyNextButtonVisibility(root: ParentNode, allowAdvance: boolea
 }
 
 /**
+ * ★ 2026-10-06（**用户当天要求**）：**点已解锁关卡下面那个小数字，就跳回那一关重玩**。
+ *
+ * 用户原话：「我希望点击已解锁关卡下方的小数字能够跳到对应的关卡并重新游玩该关卡」。
+ *
+ * ## 解锁口径（这里就是它的唯一出处）
+ *
+ * `done` 里的关卡 **+ 当前这一关** 可点，其余不可点。两条理由：
+ *  1. `done` 是"玩家真的过过这一关"的唯一凭证（`src/tutorial/progress.ts` 只写它），
+ *     玩家对它的记忆就是"我能回去看看那一课"；
+ *  2. 当前这一关也算 —— 面板上那颗「重开这一关」本来就是干这件事的，把它一起解锁不会
+ *     引入任何**新**语义，只是多给一个入口（少一次"为什么我脚下这关点不动"）。
+ * 以后面的关卡（`done` 与 `current` 之外）**不可点**：那是还没学到的东西，点进去等于跳课。
+ *
+ * ## 返回什么
+ *
+ * 返回**要重开的那一关**（`id`）；返回 `null` = 这一枚不可点。
+ * 当前关（也是可点的那一档）返回自己 —— 与「重开这一关」同一条路（换 `levelId` + 清判定状态）。
+ *
+ * ⚠️ 它**只算目标**：不写进度、不改 `done`、不改 `current`。跳回去看一遍不会把没过的标成过，
+ * 也不会把过过的退回去（`advance()` 是唯一写进度的口，本函数不碰它）。
+ *
+ * 导出是为了让"哪几枚能点、点了去哪一关"有**真跑的行为腿**（`tests/tutorial/screen.test.ts`
+ * 真调它逐关过一遍），不是给别的调用方用的。
+ *
+ * @param clicked 被点的那一枚的关卡 id（`chip.dataset.level`）
+ * @param current 面板上"当前这一关"（也是可点的那一档）
+ * @param done 进度里已完成的那几关
+ * @param all 全部关卡（顺序即屏上 chip 的顺序；只有在这张表里的 id 才算数）
+ */
+export function chipJumpTarget(
+  clicked: string,
+  current: string,
+  done: readonly string[],
+  all: readonly string[],
+): string | null {
+  if (!all.includes(clicked)) return null;
+  const unlocked = done.includes(clicked) || clicked === current;
+  return unlocked ? clicked : null;
+}
+
+/** 一枚 chip 的可点状态与无障碍标注（`aria-*` 的取值只有这一处出） */
+export interface ChipA11y {
+  /** 可点吗（不可点的那些画成 `disabled` 按钮 + `.tutorial-chip-locked`） */
+  readonly enabled: boolean;
+  /** 当前这一关（`aria-current`，与 `onboarding.ts:417` 同款写法） */
+  readonly current: boolean;
+  /** 已经过过的关卡（屏上也读得出来：`.on` + 这句 `aria-label`） */
+  readonly done: boolean;
+}
+
+/** 一枚 chip 的可点状态与无障碍标注（**纯函数**：逐关过一遍就是"解锁口径"的机检形态） */
+export function chipA11y(clicked: string, current: string, done: readonly string[]): ChipA11y {
+  return { enabled: done.includes(clicked) || clicked === current, current: clicked === current, done: done.includes(clicked) };
+}
+
+/**
  * 挂载教学屏。
  *
  * @param root 主容器（`#app`；棋盘画在这里）
@@ -366,9 +439,16 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
   let cleared = false;
   /**
    * ★ 2026-10-06（S0）："赢下之后停一会儿再换关"的那个定时器（见 `judgeAndAdvance`）。
+   * ★ 2026-10-06（T1）：**同一个定时器**也管"看过卡之后停 10 秒再换关"（`T1_READ_HOLD_MS`）
+   * —— 两关都只在**延后换关**这一件事上用它，同一时刻只可能有一关在跑，不必造第二个变量。
    * 退出教程 / 重开本关时都要作废 —— 否则退出之后它还会在后台把关卡切走。
    */
   let nextLevelTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * ★ 2026-10-06（T1）：那 10 秒**还挂着**吗 —— 提示区据此说一句"还能看一会儿"（见 `renderPanel`）。
+   * 只作废不清零的地方都不该有：它跟着 `nextLevelTimer` 一起被清（`openLevel` / 到点换关 / 退出）。
+   */
+  let holdUntilNext = false;
 
   /* ───────────────────────── 教练浮层 ───────────────────────── */
 
@@ -447,7 +527,8 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
    * 同一枚按钮也兜住"走偏到死胡同"的一切形态（例如把唯一的目标牌打没了）。
    */
   const restartLevelBtn = button('btn tutorial-restart-level', t('tutorial.restart-level'), () => {
-    openLevel();
+    // ★ 2026-10-06：与 chip 那一条路**共用** `restartLevel()`（用户要求"同一条路"）
+    restartLevel(levelId);
   });
   panel.appendChild(restartLevelBtn);
 
@@ -586,7 +667,14 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
       hintBox.textContent = t('tutorial.spot.hint');
     }
     if (level.id === 'T1') {
-      hintBox.textContent = uiSeen.detailsOpened === 0 ? t('tutorial.zoom.hint') : t('tutorial.zoom.opened');
+      /**
+       * ★ 2026-10-06（用户要求）：这 10 秒里让玩家知道"还能看一会儿"。
+       * 判据取 `holdUntilNext`（那个延后换关的定时器真的挂着），不是"打开过详情"——
+       * 到点换关之后这句就不该再挂着（换关时它与定时器一起被清）。
+       */
+      hintBox.textContent = holdUntilNext
+        ? t('tutorial.zoom.hold')
+        : uiSeen.detailsOpened === 0 ? t('tutorial.zoom.hint') : t('tutorial.zoom.opened');
     }
     if (level.id === 'T6') {
       const lines: string[] = [];
@@ -653,7 +741,12 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
     if (level.id === 'T13') {
       hintBox.textContent = state.winner !== null ? t('tutorial.T13.hint.done') : t('tutorial.T13.hint.compile');
     }
-    if (cleared) hintBox.textContent = t('tutorial.cleared');
+    /**
+     * ★ 2026-10-06（T1）：那 10 秒**还挂着** ⇒ 提示区说"还能看一会儿"，不显示通用的"这一关过了"。
+     * （顺序：它排在最后，所以压得住上面那几句。）
+     */
+    if (holdUntilNext) hintBox.textContent = t('tutorial.zoom.hold');
+    else if (cleared) hintBox.textContent = t('tutorial.cleared');
 
     // 进度：每一关各一枚 chip，已完成的加 `.on`（关卡数由 TUT_LEVELS 决定，屏上不写死）
     progressRow.textContent = '';
@@ -666,13 +759,38 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
        * 之后，照旧写 id 就会在屏上排出「S0 T0 T1 …」这种混排。id 仍留在 `dataset.level`
        * 上（既有探针与测试读的就是它）。抬头那句「第 N 关 / 共 M 关」本来按序号算，
        * 不受影响（`levelIndex()` 是唯一的序号出处）。
+       *
+       * ★ 2026-10-06（用户要求「点击已解锁关卡下方的小数字能够跳到对应的关卡并重新游玩该关卡」）：
+       * chip 从 `<span>` 改成 `<button>` —— 解锁的那些真的能点，点了就**重开那一关**
+       * （`restartLevel`，与面板上的「重开这一关」同一条路：换 `levelId` + 清本关判定状态）。
+       * 解锁口径与"不碰进度"的保证都写在 `chipJumpTarget()` 上（那里是唯一出处）。
+       * 没解锁的用 `disabled`（`<button>` 天然带键盘可达性与禁用语义）+ `.tutorial-chip-locked` 压暗。
        */
-      const chip = el('span', 'tutorial-chip', String(levelIndex(l.id) + 1));
+      const to = chipJumpTarget(l.id, level.id, progress.done, TUT_LEVELS.map((x) => x.id));
+      const a11y = chipA11y(l.id, level.id, progress.done);
+      const chip = button('tutorial-chip', String(levelIndex(l.id) + 1), () => { restartLevel(l.id); });
       chip.dataset.level = l.id;
-      if (progress.done.includes(l.id)) chip.classList.add('on');
-      if (l.id === level.id) chip.classList.add('now');
+      if (a11y.done) chip.classList.add('on');
+      if (a11y.current) chip.classList.add('now');
+      if (!a11y.enabled) {
+        chip.disabled = true;
+        chip.classList.add('tutorial-chip-locked');
+      }
+      /**
+       * 无障碍：当前这一关与"已经过过"各标一处（`aria-current` 的取值照本仓既有写法
+       * `onboarding.ts:417` 用 `'true'`）。可点的那些给一句会说清"点了干什么"的名字。
+       */
+      if (a11y.current) chip.setAttribute('aria-current', 'true');
+      if (a11y.done) chip.setAttribute('aria-label', t('tutorial.chip.title.done', { n: String(levelIndex(l.id) + 1) }));
+      if (to !== null) chip.title = t('tutorial.chip.title.replay', { n: String(levelIndex(l.id) + 1) });
       progressRow.appendChild(chip);
     }
+    /**
+     * ★ 2026-10-06（用户要求「点击已解锁关卡下方的小数字…」）：过关之后给一句说明
+     * —— 那一排数字从"只能看"变成了"可以点"，不告诉玩家的话没人会去点它。
+     * ⚠️ 只在**过完这一关**、且**没有挂着的延后换关**时显示（S0/T1 那两句更要紧，别顶掉它们）。
+     */
+    if (cleared && !holdUntilNext) hintBox.textContent = t('tutorial.chip.hint');
 
     // T0 热点：点过的标成已看
     spotLayer.hidden = level.id !== 'T0';
@@ -932,12 +1050,29 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
       if (nextLevelTimer === null) nextLevelTimer = setTimeout(gotoNextLevel, S0_WIN_HOLD_MS);
       return;
     }
+    /**
+     * ★ 2026-10-06（**用户当天要求**）：T1「查看卡牌详情」看过卡之后**留 10 秒**再进下一关。
+     * 理由、取数与"只排一个定时器"的 guard 都写在 `T1_READ_HOLD_MS` 上（那里是唯一出处）。
+     *
+     * 与 S0 那一支同款，只多一件事：`holdUntilNext` 让提示区在这 10 秒里说"还能看一会儿"
+     * （`renderPanel` 读它）。到点由 `gotoNextLevel()` 收掉它（`openLevel` 里清）。
+     */
+    if (level.id === 'T1') {
+      if (nextLevelTimer === null) {
+        holdUntilNext = true;
+        nextLevelTimer = setTimeout(gotoNextLevel, T1_READ_HOLD_MS);
+        // 让"还能看一会儿"这一句当场出现（上面那次 renderPanel 已经跑过了）
+        renderPanel();
+      }
+      return;
+    }
     gotoNextLevel();
   }
 
-  /** 换到下一关（`judgeAndAdvance` 的正常出口；S0 那一支延后调它，见 `S0_WIN_HOLD_MS`） */
+  /** 换到下一关（`judgeAndAdvance` 的正常出口；S0/T1 那两支延后调它，见两条 HOLD 常量） */
   function gotoNextLevel(): void {
     if (nextLevelTimer !== null) { clearTimeout(nextLevelTimer); nextLevelTimer = null; }
+    holdUntilNext = false;
     dismissWinBanner();
     levelId = levelAt(levelIndex(levelId) + 1);
     openLevel();
@@ -963,6 +1098,7 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
   function openLevel(): void {
     // 上一关的"延后换关"作废（例如 S0 赢下之后玩家抢先点了「重开这一关」）
     if (nextLevelTimer !== null) { clearTimeout(nextLevelTimer); nextLevelTimer = null; }
+    holdUntilNext = false;
     state = buildLevelState(levelId);
     snap = snapshot(state);
     opsSeen = [];
@@ -973,6 +1109,23 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
     hintBox.textContent = currentLevel().id === 'T0' ? t('tutorial.spot.hint') : '';
     renderPanel();
     paint();
+  }
+
+  /**
+   * ★ 2026-10-06（**用户当天要求**）：「重开**指定**那一关」—— 面板上那颗「重开这一关」与
+   * chip 那一条路**共用这一处**（用户要求的是"与面板上「重开这一关」同一条路"）。
+   *
+   * 做两件事，顺序是刻意的：
+   *  1. `levelId = id`（跳关。不可点的 id 到不了这里 —— chip 那侧由 `chipJumpTarget()` 拦过）；
+   *  2. `openLevel()`（新局面 + 清本关判定状态 + 重画）。
+   *
+   * ⚠️ **一个字都不写进度**：`done` 与 `current` 保持原样（跳回去看一遍既不把没过的标成过，
+   * 也不把过过的退回去）——`advance()` / `restart()` 才是写进度的口，这里不碰它们。
+   * ⚠️ 也不是"从头开始"（`restart(store)` 会清 `done`）：那是另一枚按钮的事。
+   */
+  function restartLevel(id: TutLevelId): void {
+    levelId = id;
+    openLevel();
   }
 
   /** 切语言：**就地**重画浮层（棋盘不动 —— 它上面没有文案，卡面是图片） */

@@ -715,6 +715,66 @@
  * 只解 `left/top`，与这里的 `display` 无关。 */
 .protocol-check { display: none; }
 
+/* ---------- ★ 2026-10-06（用户要求）：**「继续」按钮要有特别颜色与高光** ----------
+ * 用户原话：「将教程的『继续』按钮加上一些特别的颜色与高光，目前看起来很不显眼」。
+ *
+ * 它原来是裸 `.btn`（`styles.css` 里 `.btn` 是透明底 + 透明边框 —— 用户 2026-10-01 统一按钮
+ * 风格时定的）⇒ 混在一段段讲解文字里几乎看不出那是个按钮。这里给它一套**只属于它**的观感：
+ * 青色渐变底 + 外发光 + 轻微呼吸；hover 抬一下、active 落回去。
+ *
+ * 纪律：这是 `.tutorial-*` 自己的类名（新增规则，`styles.css` 一行不改）；`@keyframes`
+ * 名字 `tutorial-next-glow` 在其余 CSS 里零命中。用户开「减少动态效果」时不呼吸（留静态高光）。
+ */
+.tutorial-next {
+  align-self: center;
+  min-width: 132px;
+  padding: 8px 18px;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  color: #04121a;
+  background: linear-gradient(180deg, #86ffe9 0%, #00ffcc 55%, #00c9a0 100%);
+  border: 1px solid #b8fff0;
+  border-radius: 10px;
+  box-shadow:
+    0 0 0 1px rgba(0, 255, 204, 0.35),
+    0 0 14px rgba(0, 255, 204, 0.55),
+    0 6px 16px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.35);
+  transition: transform 0.12s ease, box-shadow 0.18s ease, filter 0.18s ease;
+  animation: tutorial-next-glow 1.8s ease-in-out infinite;
+}
+.tutorial-next:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+  box-shadow:
+    0 0 0 1px rgba(0, 255, 204, 0.5),
+    0 0 22px rgba(0, 255, 204, 0.8),
+    0 8px 20px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+.tutorial-next:active { transform: translateY(0); }
+@keyframes tutorial-next-glow {
+  0%, 100% {
+    box-shadow:
+      0 0 0 1px rgba(0, 255, 204, 0.35),
+      0 0 12px rgba(0, 255, 204, 0.45),
+      0 6px 16px rgba(0, 0, 0, 0.45),
+      inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px rgba(0, 255, 204, 0.55),
+      0 0 24px rgba(0, 255, 204, 0.85),
+      0 6px 16px rgba(0, 0, 0, 0.45),
+      inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tutorial-next { animation: none; }
+}
+
 /* ---------- ★ 2026-10-02（P2）：**教学模式**（教练浮层 + T0 的四个热点） ----------
  * 元素由 `src/ui/tutorial-screen.ts` 造，宿主（`src/main.ts` 的 `showTutorial()`）挂载。
  * 新类名（`.tutorial-*`）在**其余** CSS 里零命中（`styles.css` 一行不动）；
@@ -773,9 +833,24 @@
 .tutorial-chip {
   font-size: 11px; padding: 2px 8px; border-radius: 999px;
   border: 1px solid #3a3f57; color: #8f9ac0;
+  /*
+   * ★ 2026-10-06（用户要求）：「点击已解锁关卡下方的小数字能够跳到对应的关卡并重新游玩该关卡」。
+   *
+   * chip 从 `<span>` 变成了 `<button>`（可点 = 键盘天然可达），所以这里要把它压回胶囊的观感
+   * ——`styles.css` 里没有任何一条规则命中 `.tutorial-chip`（`.btn` 才是按钮的样子，chip 不挂 `.btn`），
+   * 于是这一族样式只在本文件里定义（与"绝不同名"那条纪律一致）。
+   * `font-family: inherit`：按钮不吃继承，不写就会出现系统 UI 字体（与整块面板不同族）。
+   */
+  font-family: inherit; line-height: 1.5;
+  background: transparent; cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
 }
 .tutorial-chip.on { border-color: #00ffcc; color: #00ffcc; }
 .tutorial-chip.now { background: rgba(0, 255, 204, 0.12); color: #eef; }
+/* 可点的那些悬停时给一点回应（不然它看着还是"只能看"） */
+.tutorial-chip:hover:not(:disabled) { border-color: #9fd8ff; color: #eef; }
+/* 不可点的那些：压暗 + 禁用光标（`<button disabled>` 自带禁用语义，这里只补观感） */
+.tutorial-chip-locked { opacity: 0.45; cursor: not-allowed; }
 /* T0 的四个热点：盖在棋盘对应区域上的虚线框（点过之后实线 + 打勾色） */
 .tutorial-spots { position: absolute; inset: 0; pointer-events: none; }
 .tutorial-spots[hidden] { display: none; }
