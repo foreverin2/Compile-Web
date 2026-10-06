@@ -982,3 +982,55 @@
   display: inline-flex; align-items: center; justify-content: center; font-size: 15px;
 }
 .pool-done:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/*
+ * ★ 2026-10-06（用户口径①）：「翻面」按钮改成**鼠标移到手牌上就显示**，不再要求先选中那张卡。
+ *
+ * 产出侧在 `render.ts` 的 `renderHand()`：action 步骤下每一张自己的手牌都带 `.play-btns`
+ * 浮出组；**未选中**那些额外挂 `.play-btns-hover`，选中那张不挂（常显）。这里只做"藏/显"：
+ *   - 默认藏：`opacity: 0` + `visibility: hidden`（连同 tab 序一起移出）+ `pointer-events: none`
+ *     （隐藏态绝不能吃掉卡面或相邻元素上的点击 —— 那一带在卡的上缘之外）。
+ *   - `:hover` 显形 —— 按钮是**卡牌子节点**，指针移到按钮上时仍在卡盒子树内 ⇒ `.card:hover`
+ *     保持为真，穿过卡↔按钮的那 34px 间隙不会闪掉。
+ * Touch：不用 `@media (hover: none)` 兜 —— 点一下手牌本来就会选中它（`bindClickOrDouble` 的
+ * 320ms 延迟单击），选中那张**不带** `.play-btns-hover` ⇒ 触屏上这个按钮照旧常显、照旧能点。
+ * 为什么放在 `styles-local.css`：`styles.css` 是红线（本文件在主样式之后加载，
+ * 特异性也更高，覆盖是确定的）。
+ */
+.hand .card > .play-btns.play-btns-hover {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+.hand .card:hover > .play-btns.play-btns-hover,
+.hand .card.selected > .play-btns.play-btns-hover {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+/* 翻面动画期间照旧藏起来（与 `styles.css` 的 `.card.hand-flipping .play-btns` 同义；
+   那条特异性(0,3,0) 压不过上面的显形规则，所以这里逐字补一条更具体的） */
+.hand .card.hand-flipping > .play-btns.play-btns-hover {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/*
+ * ★ 2026-10-06（用户口径②）：腐化0（`corruption-0`，可无视协议打在**任意一方**任意链路）
+ * 拿在手里被选中时，**对方那 3 条链路**也要亮成落点。
+ *
+ * 原来对方槽只带 `.interactable`（`styles.css:75/84`：`cursor: pointer` + **悬停**才亮），
+ * 玩家看不出"手里这张牌能打到对面"。这里给"当前真的能落上去"的对方槽补一个常驻强调，
+ * 与 `.stack-slot.self` 那一套（自己侧可打链路）视觉一致。
+ * 产出侧：`render.ts` 的链路循环 —— 判据与 `interactable` 是同一个 `selectedCanPlayToOpp`。
+ * ⚠️ 没有复刻 `.stack-slot.self` 那条规则本身：`.self` 在 `renderStackSlot` 里还兼任
+ * "本槽反面牌可查看正面"的判据，点亮对方槽会泄露对手的未公开信息。
+ */
+.stack-slot.drop-ok {
+  border-color: rgba(79, 240, 255, 0.9);
+  border-width: 2px;
+  background: rgba(79, 240, 255, 0.06);
+  box-shadow: 0 0 12px rgba(79, 240, 255, 0.35), inset 0 0 12px rgba(79, 240, 255, 0.08);
+}

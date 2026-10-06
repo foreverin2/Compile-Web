@@ -2017,16 +2017,39 @@ export function renderHand(
         true
       );
     }
-    // ITEM 1: 选中卡且处于 action 步骤 → 卡上缘上方浮动「翻面」按钮。
-    // 按钮是卡牌子节点：悬停按钮时指针始终位于卡牌子树内，hover-pop 保持不消失
-    // （复位只挂在手牌容器 mouseleave 上，穿过卡↔按钮间隙也不会触发复位）。
-    // 按钮仅一个「翻面」：点击切换 selectedFaceUp（正面↔背面），不占用卡面宽度；
-    // 始终居中于卡面顶部中央（.play-btns left:50% + translateX(-50%)）。
-    if (isSelected && s.step === 'action' && opts.onToggleFaceUp) {
+    /**
+     * ITEM 1: action 步骤下**每一张自己的手牌**都带卡上缘浮动的「翻面」按钮。
+     *
+     * ★ 2026-10-06（**用户口径**）：「翻面按钮应该是我鼠标移动到卡牌上就显示，而不是我选中
+     * 这张卡之后才显示」⇒ 旧条件里的 `isSelected &&` 拿掉，改由**外观**分两档：
+     * 未选中那些挂 `.play-btns-hover`（默认藏起来、`:hover` 才显形；规则落在
+     * `src/ui/styles-local.css`，`styles.css` 一行不动），选中那张不带这个类 ⇒ 常显。
+     * 三处刻意如此：
+     *  1. **触屏仍走得通** —— 点一下手牌就选中（`bindClickOrDouble` 的 320ms 延迟单击），
+     *     选中那张常显 ⇒ 不是"只有鼠标能用"。
+     *  2. 未选中的卡上点「翻面」= **先选中它再翻到反面**：先走选中的唯一出口 `opts.onSelect`，
+     *     再走 `opts.onToggleFaceUp`。否则那一下会落在"当前选中的牌"或空选上 ⇒ 玩家看到
+     *     "点了没反应"。
+     *  3. 按钮是卡牌子节点：悬停按钮时指针始终位于卡牌子树内，hover-pop 与 `:hover` 都不消失
+     *     （复位只挂在手牌容器 mouseleave 上）；隐藏态带 `pointer-events: none`（见 local 样式），
+     *     不会挡住卡面或相邻元素上的点击。
+     * 按钮仅一个「翻面」：点击切换 selectedFaceUp（正面↔背面），不占用卡面宽度；
+     * 始终居中于卡面顶部中央（.play-btns left:50% + translateX(-50%)）。
+     *
+     * ⚠️ 条件里那两半 `opts.isSelf && s.turnPlayer === player` = **"轮到这一侧"**，
+     * 是旧条件 `isSelected` 里隐含的那一个（选中态只在轮到的这一侧才被写进 `opts.selected`：
+     * 热座 `s.turnPlayer === 0 ? selectedUid : null`、远程页 `isTurn(s, 0) ? uid : null`）。
+     * 显式写出来才不会在**对手回合**里给自己的手牌浮出一个点了没用的「翻面」。
+     */
+    if (opts.onToggleFaceUp && s.step === 'action' && opts.isSelf && s.turnPlayer === player) {
       const group = el('div', 'play-btns');
+      if (!isSelected) group.classList.add('play-btns-hover');
       const flip = el('button', 'btn play-btn', t('render.hand.flip'));
       flip.addEventListener('click', (e) => {
         e.stopPropagation();
+        // 未选中那张被点：先选中它（唯一出口），再翻面 —— 热座那条实现会同步重画一帧，
+        // 随后的 onToggleFaceUp 拿到的已经是新 DOM（它按 selectedUid 查节点做翻面动画）。
+        if (!isSelected) opts.onSelect(card.uid);
         opts.onToggleFaceUp!();
       });
       group.appendChild(flip);
@@ -5278,24 +5301,39 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
     const row = el('div', 'lane-row');
     // 线编号：select-line 选择模式据此高亮并即答 ['line:N']
     row.dataset.line = String(line);
-    row.appendChild(
-      renderStackSlot(
-        s, 0, line,
-        s.turnPlayer === 0 ? selectedUid : null,
-        s.turnPlayer === 0 ? (l) => playToLine(s, cb, l, 0) : selectedCanPlayToOpp && oppSlot === 0 ? (l) => playToLine(s, cb, l, 0) : () => {},
-        s.turnPlayer === 0 || (selectedCanPlayToOpp && oppSlot === 0)
-      )
+    const slot0 = renderStackSlot(
+      s, 0, line,
+      s.turnPlayer === 0 ? selectedUid : null,
+      s.turnPlayer === 0 ? (l) => playToLine(s, cb, l, 0) : selectedCanPlayToOpp && oppSlot === 0 ? (l) => playToLine(s, cb, l, 0) : () => {},
+      s.turnPlayer === 0 || (selectedCanPlayToOpp && oppSlot === 0)
     );
+    const slot1 = renderStackSlot(
+      s, 1, line,
+      s.turnPlayer === 1 ? selectedUid : null,
+      s.turnPlayer === 1 ? (l) => playToLine(s, cb, l, 1) : selectedCanPlayToOpp && oppSlot === 1 ? (l) => playToLine(s, cb, l, 1) : () => {},
+      s.turnPlayer === 1 || (selectedCanPlayToOpp && oppSlot === 1)
+    );
+    /**
+     * ★ 2026-10-06（**用户口径**）：「腐化0 拿在手里的时候，**双方 6 条链路**都该亮出来
+     * （现在只有自己那 3 条亮、对面 3 条什么都没有）」。
+     *
+     * 自己那 3 条本来就带 `.self` 常驻强调（`renderStackSlot` 的 `isSelfSlot` 缺省值）；
+     * 对方那 3 条此前**只有 `.interactable`** —— 那条规则只给 `cursor: pointer` 与**悬停**态
+     * （`styles.css:75/84`）⇒ 玩家看不出"手里这张牌能打到对面"。这里给"当前真的能落上去的
+     * 对方槽"补一个 `.drop-ok`，样式落在 `src/ui/styles-local.css`（与 `.stack-slot.self`
+     * 同一种常驻强调；`styles.css` 一行不动）。
+     *
+     * ⚠️ **不复用 `isSelfSlot`**：那个参数在 `renderStackSlot` 里还兼任"本槽的反面牌允许查看
+     * 正面"（`render.ts` 的 peek 判据 `isSelfSlot && !card.secret`）⇒ 拿它点亮对方槽会把
+     * 对手的反面牌变成可查阅（信息泄露）。
+     * ⚠️ 判据与 `interactable` 是**同一个** `selectedCanPlayToOpp`：亮起来的必然是能落上去的
+     * 槽，不会亮出假落点；没选中牌 / 选中的是不能打对方场的牌 ⇒ 一个都不亮（反空集合腿）。
+     */
+    if (selectedCanPlayToOpp) (oppSlot === 0 ? slot0 : slot1).classList.add('drop-ok');
+    row.appendChild(slot0);
     row.appendChild(renderProtocolCell(s, 0, line));
     row.appendChild(renderProtocolCell(s, 1, line));
-    row.appendChild(
-      renderStackSlot(
-        s, 1, line,
-        s.turnPlayer === 1 ? selectedUid : null,
-        s.turnPlayer === 1 ? (l) => playToLine(s, cb, l, 1) : selectedCanPlayToOpp && oppSlot === 1 ? (l) => playToLine(s, cb, l, 1) : () => {},
-        s.turnPlayer === 1 || (selectedCanPlayToOpp && oppSlot === 1)
-      )
-    );
+    row.appendChild(slot1);
     grid.appendChild(row);
   }
 

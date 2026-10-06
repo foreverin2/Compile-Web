@@ -1037,9 +1037,10 @@ describe('★ 2026-10-06：过关之后中间数 5 秒再进下一关（统一�
  * （「两种各打一张」这个要求保留）。
  *
  * 为什么这一组要**真跑**渲染器：文案里点名的是"手中卡牌的**翻面按钮**"——那个按钮真的存在吗？
- * 存在（`render.ts:2010-2024`：选中卡 + `step === 'action'` ⇒ 卡上缘浮出「翻面」按钮，
- * 标签走键 `render.hand.flip`）。这条腿在桩 DOM 上真开一局 T3、真的点一下选中、真的找那个按钮，
- * 缺了它这半句话就是**照着一个不存在的控件写的**。
+ * 存在（`render.ts` 的 `renderHand()`：action 步骤 + 轮到这一侧 ⇒ **每一张**自己的手牌上缘都带
+ * 「翻面」浮出组，标签走键 `render.hand.flip`；未选中那些挂 `.play-btns-hover`，默认藏、
+ * 鼠标移上去才显 —— 这是用户 2026-10-06 当天第二条口径）。这条腿在桩 DOM 上真开一局 T3、
+ * 真的点一下选中、真的找那个按钮，缺了它这半句话就是**照着一个不存在的控件写的**。
  *
  * ⚠️ 顺带钉住"右键 / 按 R"这条路**当前不成立**：全仓 `contextmenu` 零命中，
  * `bindCardDrag` 的 `keydown` 只认 `Escape`（`render.ts:6390`）⇒ T3 那两句不能再让玩家去按右键。
@@ -1057,7 +1058,7 @@ describe('★ 2026-10-06：T3 的换朝向文案以真实 UI 为准（翻面按�
     node.textContent = label;
   };
 
-  it('★ 真跑：T3 选中手牌 ⇒ 卡上缘浮出「翻面」按钮，标签是 i18n 的 `render.hand.flip`', () => {
+  it('★ 真跑：T3 每一张手牌上缘都带「翻面」按钮（未选中的默认藏、选中那张常显），标签是 i18n 的 `render.hand.flip`', () => {
     /**
      * ⚠️ 单击选中是**延迟 320ms** 执行的（`bindClickOrDouble`：320ms 窗口内第二次点击算双击）
      * ⇒ 必须用假定时器把那一格推过去。`window.setTimeout` 在桩里就是全局 `setTimeout` 的转发，
@@ -1080,24 +1081,39 @@ describe('★ 2026-10-06：T3 的换朝向文案以真实 UI 为准（翻面按�
         onWinReset: () => { /* noop */ },
       } as never);
 
-      // 选中之前：没有「翻面」按钮（它只在选中卡上浮出）
-      const handCards = classOf(root, 'card').filter((n) => n.dataset.uid !== undefined);
+      // ★ 2026-10-06（**用户口径**）：不再"选中之后才浮出" —— action 步骤下**每一张自己的手牌**
+      //   都带「翻面」浮出组；未选中那些挂 `.play-btns-hover`（默认藏起来、`:hover` 才显形，
+      //   规则在 `src/ui/styles-local.css`），选中那张不带这个类 ⇒ 常显（触屏点一下仍拿得到）。
+      const hand = classOf(root, 'hand', (n) => n.dataset.player === '0')[0];
+      expect(hand, '找不到 P1 的手牌容器（渲染结构被改了？）').toBeDefined();
+      const handCards = classOf(hand, 'card').filter((n) => n.dataset.uid !== undefined);
       expect(handCards.length, '手牌一张都没画出来 ⇒ 这条腿在空集上恒真').toBeGreaterThan(0);
       const first = handCards[0];
-      expect(classOf(root, 'play-btn').length, '没选中就有「翻面」按钮了（判据面错了）').toBe(0);
+      const groups = classOf(hand, 'play-btns');
+      expect(groups.length,
+        '「翻面」浮出组的数量不等于手牌张数 —— 旧口径（只给选中那张）会让没选中的卡上什么都没有'
+      ).toBe(handCards.length);
+      for (const g of groups) {
+        expect(classOf(g, 'play-btn')[0]?.text, '「翻面」按钮的标签不是 render.hand.flip 那句')
+          .toBe(ZH['render.hand.flip']);
+        expect(isClass(g, 'play-btns-hover'),
+          '未选中那张的浮出组没有 `play-btns-hover` ⇒ 它会常显（用户要的是"移上去才显示"）').toBe(true);
+      }
 
       clickNode(first);            // 单击 = 选中
       vi.runOnlyPendingTimers();   // 把那次延迟的单击放出来（重画一帧）
-      const flipBtns = classOf(root, 'play-btn');
-      expect(flipBtns.length, '选中手牌之后卡上缘没有浮出「翻面」按钮（文案里点名的是它）').toBe(1);
-      expect(flipBtns[0].text, '「翻面」按钮的标签不是 render.hand.flip 那句').toBe(ZH['render.hand.flip']);
       /**
        * 它挂在**被选中那张卡**的子树里（不是别处的一个裸按钮）。
        * ⚠️ 重画之后 `first` 已经是上一帧的旧节点（`renderApp` 每次重建 DOM）⇒ 必须**重新查**。
        */
       const selected = classOf(root, 'card').filter((n) => n.dataset.uid === first.dataset.uid && isClass(n, 'selected'));
       expect(selected.length, '选中之后那一张没有 `.selected`（选中的是谁？）').toBe(1);
-      expect(descendantsOf(selected[0]).includes(flipBtns[0]), '「翻面」按钮不在这张手牌的子树里').toBe(true);
+      const selGroups = classOf(selected[0], 'play-btns');
+      expect(selGroups.length, '选中之后卡上缘没有浮出「翻面」按钮（文案里点名的是它）').toBe(1);
+      expect(isClass(selGroups[0], 'play-btns-hover'),
+        '选中那张仍带 `play-btns-hover` ⇒ 触屏（没有 hover）上这个按钮会看不见').toBe(false);
+      expect(classOf(root, 'play-btns').filter((g) => !isClass(g, 'play-btns-hover')).length,
+        '重画之后"常显"的浮出组不止选中那一张').toBe(1);
     } finally {
       resetUiState();
       restore(); restore = null;
@@ -1128,8 +1144,9 @@ describe('★ 2026-10-06：T3 的换朝向文案以真实 UI 为准（翻面按�
     }
     expect(ZH['tutorial.T9.steps.3'], 'zh 的 T9.steps.3 没写"翻成反面"').toContain('翻成反面');
     // 正向锚点：那两句真的说了"翻面按钮"（否则上面两条可以靠"什么都没有"满足）
-    expect(ZH['tutorial.T3.teach.2'], '中文的 T3 讲解没有说清是点按钮').toContain('翻面按钮');
-    expect(EN['tutorial.T3.teach.2'], '英文的 T3 讲解没有说清是点按钮').toMatch(/flip button/i);
+    // ⚠️ 用正则而不是字面量：按钮名在本仓写成「翻面」（带书名号），英文写成 "Flip"
+    expect(ZH['tutorial.T3.teach.2'], '中文的 T3 讲解没有说清是点按钮').toMatch(/翻面」?按钮/);
+    expect(EN['tutorial.T3.teach.2'], '英文的 T3 讲解没有说清是点按钮').toMatch(/"?flip"? button/i);
     expect(ZH['tutorial.T3.steps.1'], '中文的 T3 步骤没有说"选中它"').toContain('选中');
     expect(EN['tutorial.T3.steps.1'], '英文的 T3 步骤没有说"select it"').toMatch(/select it/i);
   });
@@ -1184,15 +1201,37 @@ describe('★ 2026-10-06：用户逐条点名的文案替换（中英两边都�
   });
 
   it('T3：换朝向改成"翻面按钮"这条路（用户口径），「两种各打一张」保留', () => {
-    expect(zh('tutorial.T3.teach.2'), 'T3 讲解没说"翻面按钮"').toContain('翻面按钮');
+    expect(zh('tutorial.T3.teach.2'), 'T3 讲解没说"翻面按钮"').toMatch(/翻面」?按钮/);
     expect(zh('tutorial.T3.teach.2'), 'T3 讲解丢掉了"两种各打一张"这个判据要求').toContain('两种各打一张');
     expect(en('tutorial.T3.teach.2'), 'T3 讲解的英文丢掉了 one of each').toMatch(/one of each/i);
-    expect(en('tutorial.T3.teach.2'), 'T3 讲解的英文没说 flip button').toMatch(/flip button/i);
-    // T3 的第二步：用户给的那句
-    expect(zh('tutorial.T3.steps.1'), 'T3 第二步不是用户给的那句').toBe('点击「流水1」以选中它，然后把「流水1」翻成反面。');
-    expect(en('tutorial.T3.steps.1'), 'T3 第二步的英文没写 select').toMatch(/select it/i);
+    expect(en('tutorial.T3.teach.2'), 'T3 讲解的英文没说 flip button').toMatch(/"?flip"? button/i);
+    // T3 的第二步：把鼠标移到那张牌上、点它上缘的「翻面」
+    // （★ 2026-10-06 第二条口径：按钮是"移上去就有"的，不再要求先点选中）
+    expect(zh('tutorial.T3.steps.1'), 'T3 第二步不是"移上去点翻面"那条路')
+      .toBe('把鼠标移到「流水1」上，点它上缘的「翻面」把它翻成反面（触屏设备：先点一下这张牌选中它）。');
+    expect(en('tutorial.T3.steps.1'), 'T3 第二步的英文没写 "Move the mouse"').toMatch(/move the mouse/i);
     // 数据层：这一关的判据（一正一反）一个字都没动
     expect(levelById('T3').goal(), 'T3 的目标被顺手动过').toBe(zh('tutorial.T3.goal'));
+  });
+
+  it('★ 生成式：凡是教玩家点「翻面」的教学句，都要说明"鼠标移到牌上"这条路（用户 2026-10-06 口径）', () => {
+    /**
+     * 用户当天第二条口径：「翻面按钮应该是我鼠标移动到卡牌上就显示，而不是我选中这张卡之后才显示」。
+     * 按钮改了，**所有教玩家点它的句子**就得跟着改 —— 否则文案还在教"先点一下选中"那套旧流程。
+     * 键清单是**生成式**的（扫两张表），不写手写清单：以后新加的句子自动被这条腿管住。
+     */
+    const zhKeys = Object.entries(ZH as Record<string, string>)
+      .filter(([k]) => k.startsWith('tutorial.'))
+      .filter(([, v]) => v.includes('翻面'))
+      .map(([k]) => k);
+    expect(zhKeys.length, '中文表里一句提「翻面」的教学文案都没有 ⇒ 这条生成式腿是空集')
+      .toBeGreaterThanOrEqual(4);
+    const bad = zhKeys.filter((k) => !(ZH[k] ?? '').includes('鼠标移到'));
+    expect(bad, `这几句还在教玩家点「翻面」却没说鼠标要移到哪张牌上：${bad.join(', ')}`).toEqual([]);
+    // 英文那一边按**同一批键**比对（免得靠关键词筛英文时漏一句）
+    for (const k of zhKeys) {
+      expect(EN[k] ?? '', `英文的 ${k} 没写 "move the mouse"（中英只改了一边）`).toMatch(/move the mouse/i);
+    }
   });
 
   it('T7.steps.4 与 T9.steps.4 句尾补上"确认按钮"那一句', () => {
