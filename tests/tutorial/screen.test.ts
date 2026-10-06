@@ -5,10 +5,16 @@ import { stripComments } from '../ui/source-text';
 import { EN, ZH } from '../../src/i18n';
 import { TUT_LEVELS, levelById } from '../../src/tutorial/levels';
 import type { TutSpot } from '../../src/tutorial/types';
-import { placeSpotBoxes, spotBoxStyle, unionRect, applyNextButtonVisibility, chipJumpTarget, chipA11y } from '../../src/ui/tutorial-screen';
+import {
+  placeSpotBoxes, spotBoxStyle, unionRect, applyNextButtonVisibility, chipJumpTarget, chipA11y,
+  countdownLabel, countdownOverlayElement, countdownSecondsOf,
+  COUNTDOWN_TICK_MS, LEVEL_CLEAR_COUNTDOWN_MS,
+} from '../../src/ui/tutorial-screen';
 import { installStubDom, makeStubEl, setStubRectFor, queryAllIn, classOf, isClass, type StubNode } from '../ui/net-dom-stub';
 import { renderBoard, resetUiState } from '../../src/ui/render';
 import { buildLevelState } from '../../src/tutorial/setup';
+import { observedOps, snapshot } from '../../src/tutorial/judge';
+import { createLocalDriver } from '../../src/app/match-driver';
 
 /**
  * ★ 2026-10-02（P2）：教学屏的**源码结构腿**与**文案腿**。
@@ -682,24 +688,23 @@ describe('★ S0（序章）的屏上接线（源码腿）', () => {
     expect(iKeep, 'keepStep 的早退排在"交还 action 步"之后').toBeLessThan(iAction);
   });
 
-  it('赢下之后停一会儿再换关，并且换关前收掉 render.ts 的胜利横幅', () => {
+  it('赢下之后换关前收掉 render.ts 的胜利横幅（S0 的 2.2 秒专属停留已并进统一倒计时）', () => {
     const body = bodyOf(SCREEN, 'judgeAndAdvance');
-    expect(body, '判过关之后没有走 gotoNextLevel').toContain('gotoNextLevel()');
-    expect(body, '没有为 S0 单独留出"看完再走"的那一段').toMatch(/level\.id\s*===\s*'S0'/);
-    expect(body, 'S0 那一支没有延后换关（立刻换关的话玩家一帧都看不到"赢"）').toMatch(/nextLevelTimer\s*=\s*setTimeout/);
-    // ★ 反向：只许排**一个**定时器 —— judgeAndAdvance 会被重复调用（双击放大也走它），
-    //   不设 guard 的话第二次 gotoNextLevel 会把 T0 直接跳过去
-    expect(body, 'S0 那一支没有"只排一个定时器"的 guard（重复进判定会连跳两关）')
-      .toMatch(/nextLevelTimer\s*===\s*null[\s\S]{0,80}?setTimeout\(/);
+    expect(body, '判过关之后没有起那套统一倒计时').toContain('startLevelCountdown()');
+    /**
+     * ★ 反向（2026-10-06 用户第二次口径）：S0 那 2.2 秒的**专属**停留已经并进统一倒计时
+     * ——「每一关完成后中间都要有5秒倒计时」⇒ 常量 `S0_WIN_HOLD_MS` 不该再存在。
+     */
+    expect(SCREEN, 'S0 的专属停留常量又回来了（用户要求所有关卡统一走 5 秒倒计时）')
+      .not.toContain('S0_WIN_HOLD_MS');
     const goto = bodyOf(SCREEN, 'gotoNextLevel');
     expect(goto, '换关前没有收胜利横幅（它会压在下一关 T0 要玩家点的那一片上）').toContain('dismissWinBanner()');
     expect(goto, '换关没有推进 levelId').toMatch(/levelAt\(levelIndex\(levelId\)\s*\+\s*1\)/);
     const dismiss = bodyOf(SCREEN, 'dismissWinBanner');
     expect(dismiss, '没有走 render.ts 自己那颗「返回主界面」').toContain('.win-confirm-btn');
-    // 定时器要能被收掉（退出教程 / 重开这一关）
-    expect(SCREEN, '退出时没有清掉那个延后换关的定时器').toMatch(/clearTimeout\(nextLevelTimer\)/);
-    expect(bodyOf(SCREEN, 'openLevel'), '重开这一关时没有作废上一关的延后换关')
-      .toMatch(/clearTimeout\(nextLevelTimer\)/);
+    // 定时器要能被收掉（退出教程 / 重开这一关都经 clearCountdown）
+    expect(bodyOf(SCREEN, 'clearCountdown'), '没有清掉那个倒计时定时器').toMatch(/clearTimeout\(nextLevelTimer\)/);
+    expect(bodyOf(SCREEN, 'openLevel'), '重开这一关时没有作废那个倒计时').toContain('clearCountdown()');
   });
 
   it('chip 显示的是 1 起的序号，id 留在 dataset.level（S0 插进来不会排出「S0 T0 …」）', () => {
@@ -845,65 +850,133 @@ describe('★ 2026-10-06：已解锁关卡的 chip 可点（跳回那一关重�
 });
 
 /**
- * ★ 2026-10-06（**用户当天要求**）：T1「查看卡牌详情」看过卡之后**留 10 秒**再进下一关。
+ * ★ 2026-10-06（**用户当天要求**）：「每一关完成后中间都要有5秒倒计时自动进入下一关的效果，
+ * 而不是直接进入下一关，第三关的10秒等待改为5秒」。
  *
- * 用户原话：「第三关的双击查看待玩家查看卡牌后应当需要留给玩家一定的时间，10 秒后才跳至下一关」。
+ * 这一组给三层证据：
+ *  1. **真跑的行为腿**：`countdownSecondsOf()` 从 5000 一路减下去就是 5/4/3/2/1；
+ *     `countdownLabel()` 把 `{n}` 填成两张表里那两句；`countdownOverlayElement()` 在桩 DOM 上
+ *     真的造出那一层（类名是这一族、初始藏着、读数挂在里面）。
+ *  2. **源码腿**：5 这个数只定义一处；过关之后统一走 `startLevelCountdown()`；末关（T13）
+ *     不倒计时；退出 / 重开本关 / chip 跳关 / 到点换关四处都清。
+ *  3. **反向腿**：T1 那 10 秒与 S0 那 2.2 秒的专属常量、`holdUntilNext`、旧键
+ *     `tutorial.zoom.hold` 都不许再出现。
  *
- * 照 S0 那个先例（`S0_WIN_HOLD_MS`）加一段停留，且**只许排一个定时器**（重复判定会连跳两关）。
- * 真跑那一半（定时器真的到点换关）在无 jsdom 的 node 下跑不到 ⇒ 这里只到源码腿，如实登记。
+ * ⚠️ `mountTutorial` 那一层（定时器真的到点换关）在无 jsdom 的 node 下**跑不到** ——
+ * 桩 DOM 里没有 `MutationObserver` / `ResizeObserver`（屏一上来就 `new`）⇒ 那半截只到源码腿，如实登记。
  */
-describe('★ 2026-10-06：T1 看过卡之后留 10 秒再进下一关', () => {
-  it('常量只定义一处、名字与取值就是那条要求', () => {
-    expect(SCREEN, '没有 T1 的停留常量').toContain('const T1_READ_HOLD_MS = 10000;');
-    expect(SCREEN.match(/T1_READ_HOLD_MS\s*=/g)?.length, 'T1_READ_HOLD_MS 定义/赋值了不止一处').toBe(1);
+describe('★ 2026-10-06：过关之后中间数 5 秒再进下一关（统一倒计时）', () => {
+  it('★ 真跑：5 秒、一秒一格 —— 5000/4000/3000/2000/1000 ⇒ 5/4/3/2/1', () => {
+    const seen: number[] = [];
+    for (let left = LEVEL_CLEAR_COUNTDOWN_MS; left > 0; left -= COUNTDOWN_TICK_MS) {
+      seen.push(countdownSecondsOf(left));
+    }
+    expect(seen, '倒计时读到的秒数不是 5→4→3→2→1').toEqual([5, 4, 3, 2, 1]);
+    // 锚点：这几个数就是用户点名的那个常量算出来的（不是测试自己写死的一串）
+    expect(LEVEL_CLEAR_COUNTDOWN_MS, '倒计时不是 5 秒').toBe(5000);
+    expect(COUNTDOWN_TICK_MS, '倒计时不是一秒一跳').toBe(1000);
+    // 反向：最后一帧不显示 0（到点那一帧由 gotoNextLevel 接手）
+    expect(countdownSecondsOf(0), '到点那一帧显示了 0').toBe(1);
+  });
+
+  it('★ 真跑：浮层上那句读数走 i18n 键 `tutorial.countdown`（中英各一条，{n} 就是秒数）', () => {
+    for (const ms of [5000, 4000, 3000, 2000, 1000]) {
+      const n = String(countdownSecondsOf(ms));
+      expect(countdownLabel(ms), `剩余 ${ms}ms 时那句读数不对`)
+        .toBe(ZH['tutorial.countdown'].replace('{n}', n));
+    }
+    expect(ZH['tutorial.countdown'], '中文表里没有 tutorial.countdown').toBeTruthy();
+    expect(EN['tutorial.countdown'], '英文表里没有 tutorial.countdown').toBeTruthy();
+    expect(EN['tutorial.countdown'], '中英两条一样（等于没翻）').not.toBe(ZH['tutorial.countdown']);
+    expect(ZH['tutorial.countdown'], '中文那条没有占位符 {n}').toContain('{n}');
+    expect(EN['tutorial.countdown'], '英文那条没有占位符 {n}（两端要一致）').toContain('{n}');
     /**
-     * 注释里写清是用户原话（"10 秒"这个数不是随手定的）。
+     * ★ 反向：T1 那 10 秒的旧键 `tutorial.zoom.hold` **已经删掉**（用户把等待改成 5 秒）——
+     * 留着既没人读（死键腿会红）也会让人以为"这 10 秒还在"。
+     */
+    expect(ZH['tutorial.zoom.hold'], '旧的 tutorial.zoom.hold 还在中文表里').toBeUndefined();
+    expect(EN['tutorial.zoom.hold'], '旧的 tutorial.zoom.hold 还在英文表里').toBeUndefined();
+  });
+
+  it('★ 真跑（桩 DOM）：倒计时浮层真的造出来了 —— 类名是这一族、初始藏着、读数挂在里面', () => {
+    const restore = installStubDom();
+    try {
+      const { box, text } = countdownOverlayElement();
+      expect(box.className, '浮层的类名不是 .tutorial-countdown').toContain('tutorial-countdown');
+      expect(text.className, '读数那一条的类名不是 .tutorial-countdown-text').toContain('tutorial-countdown-text');
+      expect((box as unknown as { hidden?: boolean }).hidden, '浮层不是初始藏着的（一进关就压在棋盘中上').toBe(true);
+      expect(Array.from(box.children).includes(text), '读数没有挂在浮层里（那层就是个空壳）').toBe(true);
+      // 反向：它**不是** `.tutorial-overlay` 那一族（倒计时单开一层，别跟热点层搅在一起）
+      expect(box.className, '倒计时层与教学主浮层混在一层里了').not.toContain('tutorial-overlay');
+    } finally {
+      restore();
+    }
+  });
+
+  it('源码腿：`.tutorial-countdown` 不吃点击、压得住胜利横幅、`[hidden]` 有显式兜底', () => {
+    const at = CSS.indexOf('.tutorial-countdown {');
+    expect(at, 'styles-local.css 里没有 .tutorial-countdown').toBeGreaterThan(0);
+    const block = CSS.slice(at, CSS.indexOf('}', at));
+    expect(block, '倒计时浮层没有 pointer-events: none ⇒ 这 5 秒里点不动 chip / 退出')
+      .toMatch(/pointer-events:\s*none/);
+    expect(block, '倒计时浮层不是 fixed 定位').toMatch(/position:\s*fixed/);
+    // S0 打赢那一局的胜利横幅是 z-index:10000，倒计时要在它上面（否则被压住半截）
+    expect(block, '倒计时浮层没有压在胜利横幅（10000）之上').toMatch(/z-index:\s*1[1-9]\d\d\d/);
+    // 本仓栽过两次"作者样式压掉 hidden"：这一层自己是 display:flex，必须显式兜底
+    expect(CSS, '缺这条兜底规则 ⇒ 倒计时收起来之后真浏览器里还占着位置')
+      .toMatch(/\.tutorial-countdown\[hidden\]\s*\{[^}]*display:\s*none/);
+  });
+
+  it('源码腿：5 这个数只定义一处、过关之后走的就是它（末关 T13 除外）', () => {
+    expect(SCREEN, '没有那条"5 秒"的常量').toContain('const LEVEL_CLEAR_COUNTDOWN_MS = 5000;');
+    expect(SCREEN.match(/LEVEL_CLEAR_COUNTDOWN_MS\s*=/g)?.length, '5 这个数被定义/赋值了不止一处').toBe(1);
+    /**
+     * 注释里写清这个数的出处（用户原话）。
      * ⚠️ 判据面必须用**原文**：`SCREEN` 是 `stripComments()` 过的（注释整段被抹掉），
      * 拿它查注释等于查一个空集。
      */
     const screenRaw = readFileSync(`${REPO}src/ui/tutorial-screen.ts`).subarray(0, 1_048_576).toString('utf8');
-    const at = screenRaw.indexOf('const T1_READ_HOLD_MS');
-    expect(at, '找不到 T1 的停留常量').toBeGreaterThan(0);
-    expect(screenRaw.slice(Math.max(0, at - 1200), at), 'T1 的停留没有写清理由（用户原话）')
-      .toContain('10 秒后才跳至下一关');
-  });
+    const at = screenRaw.indexOf('const LEVEL_CLEAR_COUNTDOWN_MS');
+    expect(at, '找不到那条倒计时常量').toBeGreaterThan(0);
+    expect(screenRaw.slice(Math.max(0, at - 1600), at), '倒计时没有写清理由（用户原话）')
+      .toContain('每一关完成后中间都要有5秒倒计时自动进入下一关的效果');
 
-  it('★ 只排一个定时器 + 提示区说"还能看一会儿" + 到点由 gotoNextLevel 收', () => {
     const body = bodyOf(SCREEN, 'judgeAndAdvance');
-    expect(body, '判过关之后没有走 gotoNextLevel').toContain('gotoNextLevel()');
-    expect(body, '没有为 T1 单独留出"看完再走"的那一段').toMatch(/level\.id\s*===\s*'T1'/);
-    expect(body, 'T1 那一支没有延后换关').toMatch(/setTimeout\(gotoNextLevel,\s*T1_READ_HOLD_MS\)/);
-    // ★ 反向：只许排**一个** —— 这 10 秒里再双击一张卡也会走 judgeAndAdvance，
-    //   不设 guard 的话两个定时器都会到点，第二次 gotoNextLevel 会再往下跳一关
-    expect(body, 'T1 那一支没有"只排一个定时器"的 guard（重复进判定会连跳两关）')
-      .toMatch(/nextLevelTimer\s*===\s*null[\s\S]{0,200}?setTimeout\(\s*gotoNextLevel\s*,\s*T1_READ_HOLD_MS/);
-    // 提示区：停留期间读的就是"定时器真的挂着"那个标志（不是"打开过详情"）
-    const panel = bodyOf(SCREEN, 'renderPanel');
-    expect(panel, '停留期间屏上没有"还能看一会儿"那句').toContain("t('tutorial.zoom.hold')");
-    expect(panel, 'T1 的提示不是按 holdUntilNext 判的').toMatch(/holdUntilNext[\s\S]{0,160}?t\('tutorial\.zoom\.hold'\)/);
+    expect(body, '过关之后没有起倒计时').toContain('startLevelCountdown()');
+    // ★ 末关例外：那句"所有关卡都过了"的早退必须**排在起倒计时之前**（T13 没有下一关）
+    const iAll = body.indexOf('cleared-all');
+    expect(iAll, '末关那句收尾不在 judgeAndAdvance 里').toBeGreaterThan(0);
+    expect(iAll, '末关（T13）也会起倒计时 —— 它没有下一关').toBeLessThan(body.indexOf('startLevelCountdown()'));
+
+    // ★ 反向：S0/T1 那两处旧停留的痕迹一个都不许留
+    for (const gone of ['S0_WIN_HOLD_MS', 'T1_READ_HOLD_MS', 'holdUntilNext', 'tutorial.zoom.hold']) {
+      expect(SCREEN, `旧的"延后换关 / 读卡停留"痕迹 ${gone} 还在屏里`).not.toContain(gone);
+    }
   });
 
-  it('退出 / 重开 / 换关都清定时器（否则退出之后它还在后台切关卡）', () => {
-    // 退出教程
+  it('源码腿：只排一个定时器 + 四个入口都清掉它并把浮层摘掉', () => {
+    const start = bodyOf(SCREEN, 'startLevelCountdown');
+    expect(start, '没有"只排一个"的 guard（重复进判定会连跳两关）')
+      .toMatch(/nextLevelTimer\s*!==\s*null\s*\)\s*return/);
+    expect(start, '没有把浮层显示出来').toMatch(/countdownBox\.hidden\s*=\s*false/);
+    expect(start, '没有按剩余秒数刷那句读数').toContain('renderCountdown()');
+    expect(start, '没有一秒一跳（没排那一格定时器）')
+      .toMatch(/nextLevelTimer\s*=\s*setTimeout\(\s*step\s*,\s*COUNTDOWN_TICK_MS\s*\)/);
+    expect(start, '到点没有换关').toContain('gotoNextLevel()');
+
+    const clear = bodyOf(SCREEN, 'clearCountdown');
+    expect(clear, '清倒计时没有作废定时器').toMatch(/clearTimeout\(nextLevelTimer\)/);
+    expect(clear, '清倒计时没有把浮层摘掉（hidden）').toMatch(/countdownBox\.hidden\s*=\s*true/);
+    // 到点换关
+    expect(bodyOf(SCREEN, 'gotoNextLevel'), '到点换关没有清倒计时（留残影）').toContain('clearCountdown()');
+    // 重开本关（chip 跳关与「重开这一关」都经它）
+    expect(bodyOf(SCREEN, 'openLevel'), '重开本关没有清倒计时').toContain('clearCountdown()');
+    expect(bodyOf(SCREEN, 'restartLevel'), 'chip 跳关没有走 openLevel（那样就不会清倒计时）').toContain('openLevel()');
+    // 退出教程：清定时器 + 把 body 上那一层摘掉
     const closeAt = SCREEN.indexOf('close() {');
     expect(closeAt, '找不到 close()').toBeGreaterThan(0);
-    expect(SCREEN.slice(closeAt, closeAt + 400), '退出时没有清掉那个延后换关的定时器').toMatch(/clearTimeout\(nextLevelTimer\)/);
-    // 重开本关（`openLevel` 是唯一的重建口：换关 / 重开 / chip 跳关都走它）
-    const open = bodyOf(SCREEN, 'openLevel');
-    expect(open, '重开这一关时没有作废上一关的延后换关').toMatch(/clearTimeout\(nextLevelTimer\)/);
-    expect(open, '重开时没有把"还能看一会儿"那个标志清掉').toMatch(/holdUntilNext\s*=\s*false/);
-    // 换关
-    expect(bodyOf(SCREEN, 'gotoNextLevel'), '换关时没有清掉"还能看一会儿"那个标志').toMatch(/holdUntilNext\s*=\s*false/);
-  });
-
-  it('T1 之外一关都不受影响（停留只挂在 T1 那一支上）', () => {
-    const body = bodyOf(SCREEN, 'judgeAndAdvance');
-    // 除了 S0 与 T1，其余关卡仍然同步换关：分支之后紧接着就是 `gotoNextLevel()`
-    expect(body, '除了 S0/T1 还有关卡被延后换关了吗（多一处 setTimeout？）')
-      .toMatch(/\}\s*gotoNextLevel\(\);\s*\}/);
-    // 数据层：T1 的判据一个字都没动（还是"详情打开过一次"），这一改只加停留
-    const t1 = TUT_LEVELS.find((l) => l.id === 'T1') as { ui?: { detailsAtLeast?: number } };
-    expect(t1.ui?.detailsAtLeast, 'T1 的判据被改动过').toBe(1);
+    expect(SCREEN.slice(closeAt, closeAt + 400), '退出教程没有清掉倒计时并把浮层摘掉')
+      .toMatch(/clearCountdown\(\)[\s\S]{0,120}?countdownBox\.remove\(\)/);
   });
 });
 
@@ -1092,6 +1165,133 @@ describe('★ 2026-10-06：用户逐条点名的文案替换（中英两边都�
     // ★ 用户口径里的判据部分要保住：先选那张反面牌、再选目标线（这一关的判据就是这两步）
     expect(zh('tutorial.T9.steps.4'), 'T9 那一步丢了"先点刚压上去的那张反面流水5"').toContain('先点刚压上去的那张反面流水5');
     expect(en('tutorial.T9.steps.4'), 'T9 那一步的英文丢了"tap that face-down Water 5 first"').toMatch(/face-down Water 5 first/i);
+  });
+});
+
+/**
+ * ★ 2026-10-06（**用户第二批逐条点名改的文案**）：中英两侧**逐字**钉住。
+ *
+ * 与上一组的分工：上一组钉的是"那几个词在不在"（用户第一次口述时只给了特征词），
+ * 这一组是用户**整句给全**的 ⇒ 直接比对整句（标点也算），任何一侧漂了当场红。
+ *
+ * ⚠️ 两处"用户记错、按真实局面订正"的地方（都写在这里，免得以后有人"照用户原话改回去"）：
+ *  1. 用户把这一步记成了 `T4.steps.0` 那句（原文「打出「精神2」，在弹出的候选里挑一张场上的牌。」）
+ *     —— 那一串**逐字就是 `tutorial.T4.steps.0`**（不是 T7 的哪一步，T7 的牌被压在下面、
+ *     根本没有"对方的火焰2"这个候选），所以改在 T4.steps.0 上；
+ *  2. `T5` 手里那张是 **`corruption-0`（腐化0）**，不是用户口述的「瘟疫0」——
+ *     `src/tutorial/setup.ts` 的 T5 分支是唯一出处（下面有一条**真跑**的腿钉住它）。
+ */
+describe('★ 2026-10-06（第二批）：用户逐字给的 10 条文案，中英逐句比对', () => {
+  const zh = (k: string): string => ZH[k] ?? '';
+  const en = (k: string): string => EN[k] ?? '';
+
+  it('1. T0 那两步：按用户给的那句（左/中的位置口径 + 两个区的名字）', () => {
+    expect(zh('tutorial.T0.steps.0'), 'T0 第一步不是用户给的那句')
+      .toBe('点一下左边己方亮着的三条链路。');
+    expect(zh('tutorial.T0.steps.1'), 'T0 第二步不是用户给的那句')
+      .toBe('再点击中间 6 张协议卡的区域，以及左边的「己方链路阈值区」和上方的「控制权指向区」两个框。');
+    for (const k of ['tutorial.T0.steps.0', 'tutorial.T0.steps.1']) {
+      expect(en(k), `英文的 ${k} 里没有 six protocol cards 那一族说法`).toMatch(/six protocol cards|three glowing lines|threshold area|control direction area/);
+      expect(zh(k), `中文的 ${k} 还写着"中间那三列"`).not.toContain('中间那三列');
+    }
+  });
+
+  it('2. T4 的目标：原句 + 末尾那段"只有未被覆盖的牌能选中"的规则说明', () => {
+    expect(zh('tutorial.T4.goal'), 'T4 的目标不是"原句 + 补的那段"')
+      .toBe('用手里五张牌，各做一次翻转、偏转、抽牌、弃牌、回手。（一般翻转、偏转、回手这些指向场上卡牌的效果只能作用于未被覆盖的卡牌，已经被覆盖的卡牌不能被选中，除非卡牌效果中有明确说明是「所有卡牌」才行）');
+    expect(zh('tutorial.T4.goal'), '原句那半截被挤掉了').toContain('用手里五张牌，各做一次翻转、偏转、抽牌、弃牌、回手。');
+    expect(en('tutorial.T4.goal'), '英文没有跟上一句').toMatch(/not covered/i);
+    expect(en('tutorial.T4.goal'), '英文丢了 all cards 那个例外').toMatch(/all cards/i);
+  });
+
+  it('3. T4 第一步：点名选对手那张火焰2 + 确认按钮（局面里真有这张牌）', () => {
+    expect(zh('tutorial.T4.steps.0'), 'T4 第一步不是用户给的那句')
+      .toBe('打出「精神2」，选择场上对方的火焰2卡牌，并点击控制台上的确认按钮。');
+    expect(en('tutorial.T4.steps.0'), '英文没写 Fire 2').toMatch(/Fire 2/i);
+    expect(en('tutorial.T4.steps.0'), '英文没写 confirm').toMatch(/confirm/i);
+    // ★ 真跑：这一步点名的目标真的在 T4 开局局面上（对手线 1 那张 `fire-2`）
+    const t4 = buildLevelState('T4');
+    expect(t4.players[1].stacks[0]?.[0]?.defId, 'T4 对手线 1 那张不是火焰2（文案点名的目标不存在）').toBe('fire-2');
+    expect(t4.players[0].hand.some((c) => c.defId === 'spirit-2'), 'T4 手里没有精神2').toBe(true);
+  });
+
+  it('3b. ★ 真跑（引擎）：照那句做一遍 —— 打出精神2、选对手那张火焰2、确认 ⇒ 判据记到 flip', () => {
+    /**
+     * 文案点名了一个**具体目标**，那就要证明"照它做真的能过关"：走一遍引擎的真链路
+     * （`driver.submit`，与屏上 `cb.onAction` 同一套调用面），然后问 `observedOps`。
+     */
+    const s = buildLevelState('T4');
+    const driver = createLocalDriver();
+    const before = snapshot(s);
+    expect(driver.submit(s, {
+      player: s.turnPlayer, kind: 'play',
+      args: { cardUid: 't4h-flip', faceUp: true, line: 0 },
+    } as never).ok, '打出「精神2」被引擎拒了').toBe(true);
+    const top = s.pendingEffects[s.pendingEffects.length - 1];
+    expect(top?.prompt?.kind, '打出「精神2」之后没有弹出选择（文案说的"选择卡牌"没有落点）').toBe('select');
+    expect((top?.prompt?.candidates ?? []).some((c) => c.uid === 't4o-up'),
+      '候选里没有文案点名的"对方的火焰2"').toBe(true);
+    const chooser = top?.prompt?.chooser ?? top?.player ?? s.turnPlayer;
+    expect(driver.submit(s, {
+      player: chooser, kind: 'effect-choice',
+      args: { promptId: top?.id ?? '', choice: ['t4o-up'] },
+    } as never).ok, '选「对方的火焰2」被引擎拒了').toBe(true);
+    expect(observedOps(before, snapshot(s)), '照文案做完这一遍，判据（T4 的五个动作之一）没记到 flip')
+      .toContain('flip');
+  });
+
+  it('5. T4 第三步：回手那半句改成"选择一张卡牌进行回手"', () => {
+    expect(zh('tutorial.T4.steps.2'), 'T4 第三步不是用户给的那句')
+      .toBe('接着打出「精神1」（抽牌）、「精神5」（弃牌，挑那张 0 分的）、「流水4」（回手，选择一张卡牌进行回手）。');
+    expect(zh('tutorial.T4.steps.2'), '还留着旧那半句"点线 1 那张"').not.toContain('点线 1 那张');
+    expect(en('tutorial.T4.steps.2'), '英文还写着 take the card on line 1').not.toMatch(/take the card on line 1/i);
+    expect(en('tutorial.T4.steps.2'), '英文没写 pick a card to return').toMatch(/pick a card to return/i);
+  });
+
+  it('6. T5 的目标：按用户那句写，但牌名按**真实局面**订正为「腐化0」', () => {
+    expect(zh('tutorial.T5.goal'), 'T5 的目标不是用户给的那句（牌名已按局面订正）')
+      .toBe('正常情况每回合只能出一张牌（部分卡牌效果能够让你出多张牌），现在把你手中的腐化0打出到对手线 链路1的那张牌上面（腐化0是一张特殊的卡牌，能够打出至对方链路中，正常情况下是不能打出至对方链路中的）');
+    // 用户口述的牌名是「瘟疫0」，但这一关手里那张是 corruption-0 —— 下面这条真跑钉住局面
+    expect(zh('tutorial.T5.goal'), '还留着用户口述的"瘟疫0"（与局面不符）').not.toContain('瘟疫0');
+    expect(en('tutorial.T5.goal'), '英文没写 Corruption 0').toMatch(/Corruption 0/);
+    expect(en('tutorial.T5.goal'), '英文没写 one card per turn').toMatch(/one card per turn/i);
+    const t5 = buildLevelState('T5');
+    expect(t5.players[0].hand.map((c) => c.defId), 'T5 手里那张不是腐化0（文案的牌名要跟着它）')
+      .toEqual(['corruption-0']);
+  });
+
+  it('7/8/9/10. T7 的四句：按用户逐字给的那四句', () => {
+    expect(zh('tutorial.T7.steps.1'), 'T7 第二步不是用户给的那句')
+      .toBe('卡牌效果中没写明效果的指向对象无法作用于被覆盖的卡牌，卡牌效果中有写明「被覆盖」的卡牌效果能够作用于被覆盖的卡牌。');
+    expect(zh('tutorial.T7.teach.1'), 'T7 讲解不是用户给的那句')
+      .toBe('卡牌效果中有写明「所有牌」才能够作用于场上无论是否被覆盖的卡牌；写了「被覆盖的牌」才计算进被覆盖的卡牌。');
+    expect(zh('tutorial.T7.steps.2'), 'T7 第三步不是用户给的那句')
+      .toBe('换成选择场上亮着的卡牌后，然后点击控制台中确认按钮即可触发该效果（或者点「跳过」，把这次选择结束掉。）');
+    expect(zh('tutorial.T7.steps.4'), 'T7 第五步不是用户给的那句')
+      .toBe('这次在弹出的候选里点「精神3」，并点击控制台的确认按钮—— 你会发现该卡牌的效果能够选中被覆盖的卡牌。');
+    // 英文两侧都要跟到位（逐条给出关键特征词，防"只改中文"）
+    expect(en('tutorial.T7.steps.1'), '英文的 T7 第二步没写 covered').toMatch(/covered/i);
+    expect(en('tutorial.T7.teach.1'), '英文的 T7 讲解丢了 all cards').toMatch(/all cards/i);
+    expect(en('tutorial.T7.steps.2'), '英文的 T7 第三步没写 confirm').toMatch(/confirm/i);
+    expect(en('tutorial.T7.steps.4'), '英文的 T7 第五步没写 confirm').toMatch(/confirm/i);
+  });
+
+  it('11. T8 的目标：把"编译会发生什么"写全（清线 + 协议翻到已编译面）', () => {
+    expect(zh('tutorial.T8.goal'), 'T8 的目标不是用户给的那句')
+      .toBe('编译己方链路1的精神协议，编译后该条链路中双方的卡牌都会立即被移至弃牌堆中，同时对应的协议会翻转至已编译面');
+    expect(zh('tutorial.T8.goal'), 'T8 的目标还留着旧那句"把线 1 编译掉"').not.toBe('把线 1 编译掉。');
+    expect(en('tutorial.T8.goal'), '英文没写 goes to its owner\'s trash').toMatch(/trash/i);
+    expect(en('tutorial.T8.goal'), '英文没写 compiled side').toMatch(/compiled side/i);
+    // 数据层：这一关的判据（编译线 1）一个字都没动
+    expect(levelById('T8').goal(), 'T8 的目标被顺手动过').toBe(zh('tutorial.T8.goal'));
+  });
+
+  it('★ 边界：第 4 条（T9 那一步）本次**没动** —— 它在并行会话的范围里', () => {
+    // 只钉"这里不是我们改的现场"：T9 那几步的键仍在、值非空，不比对内容
+    for (const k of ['tutorial.T9.steps.0', 'tutorial.T9.steps.4', 'tutorial.T9.teach.4']) {
+      expect(ZH[k], `中文表里没有 ${k}`).toBeTruthy();
+      expect(EN[k], `英文表里没有 ${k}`).toBeTruthy();
+    }
   });
 });
 

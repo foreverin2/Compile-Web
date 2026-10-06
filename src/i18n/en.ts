@@ -234,9 +234,11 @@ export const EN: Readonly<Record<string, string>> = {
   'tutorial.observe.label': 'You will see',
   'tutorial.zoom.hint': 'Double-click a card to open its details.',
   'tutorial.zoom.opened': 'Seen it. Double-click another one if you like.',
-  /* 2026-10-06 (user request): T1 holds for 10 seconds before the next level (see T1_READ_HOLD_MS
-     in src/ui/tutorial-screen.ts), and unlocked level chips are clickable. */
-  'tutorial.zoom.hold': 'The next level starts in 10 seconds.',
+  /* ★ 2026-10-06 (user request): the countdown shown in the middle of the screen once a level is
+     cleared — 5 seconds, then the next level starts. `{n}` is filled in by the screen with the
+     seconds left. The old `tutorial.zoom.hold` key went away with the 10-second hold on T1. */
+  'tutorial.countdown': 'Next level in {n}',
+  /* 2026-10-06: unlocked level chips are clickable. */
   'tutorial.chip.hint': 'Levels you have cleared: click a number below to play that level again — your progress stays as it is.',
   'tutorial.chip.title.replay': 'Click to play level {n} again',
   'tutorial.chip.title.done': 'Level {n}: cleared',
@@ -249,8 +251,11 @@ export const EN: Readonly<Record<string, string>> = {
   // ★ P6: shown when the player taps a card that is dimmed (not a candidate)
   'tutorial.choice.blocked': 'That card is not a candidate. Unless the text says "covered cards", an effect may only pick uncovered cards on either side of the field.',
   // T9 (play vs. uncover): a readout of how far along the two demos are
-  'tutorial.T9.hint.flip': 'One step left: flip the opponent\'s face-down Speed 0 face up.',
-  'tutorial.T9.hint.reveal': 'Flipping done. One step left: shift away the card covering your Speed 0.',
+  // ★ 2026-10-06: the example changed (it used to be two Speed 0 cards) ⇒ these two lines
+  //   no longer name a card, they just say "the opponent's face-down card" / "the card
+  //   covering yours" (there is exactly one of each on this board).
+  'tutorial.T9.hint.flip': 'One step left: flip the opponent\'s face-down card face up.',
+  'tutorial.T9.hint.reveal': 'Flipping done. One step left: shift away the card covering yours.',
   'tutorial.T9.hint.both': 'Both ways of uncovering are done — level cleared.',
 
   /* ★ S0: prologue (backstory + victory condition). The sentences are taken from the official
@@ -275,8 +280,8 @@ export const EN: Readonly<Record<string, string>> = {
   'tutorial.T0.teach.2': 'Each line has a total. Reach 10 on your side and lead the opponent, and that line can be compiled.',
   'tutorial.T0.teach.3': 'Whoever holds control gets to rearrange protocols while compiling.',
   'tutorial.T0.scenario': 'A freshly started game: all three lines are still empty and you hold one Spirit 1.',
-  'tutorial.T0.steps.0': 'Tap the glowing line among the three columns in the middle.',
-  'tutorial.T0.steps.1': 'Then tap the protocol card above it, and the "Total" and "Control" boxes on the right.',
+  'tutorial.T0.steps.0': 'Tap the three glowing lines on your own side on the left.',
+  'tutorial.T0.steps.1': 'Then click the area of the six protocol cards in the middle, plus the "your line threshold area" on the left and the "control direction area" at the top.',
   'tutorial.T0.steps.2': 'All four boxes — tapping every one is what clears this level.',
   'tutorial.T0.observe': 'Each box you tap adds a line to the panel explaining what that area does.',
 
@@ -312,20 +317,20 @@ export const EN: Readonly<Record<string, string>> = {
   'tutorial.T3.observe': 'The face-up card adds 1 to the line; the face-down one sits on top and adds nothing.',
 
   'tutorial.T4.title': 'The five basic moves',
-  'tutorial.T4.goal': 'With the five cards in hand, do each move once: flip, shift, draw, discard, return.',
+  'tutorial.T4.goal': 'With the five cards in hand, do each move once: flip, shift, draw, discard, return. (Normally, effects that point at a card on the field — flip, shift and return — only work on cards that are not covered; a card that is already covered cannot be picked, unless the card text explicitly says "all cards".)',
   'tutorial.T4.teach.0': 'Each of these five cards has one of those moves as its middle command; the engine will ask which card to use it on.',
   'tutorial.T4.teach.1': 'Flip turns a card over. Shift moves a card to another line.',
   'tutorial.T4.teach.2': 'Draw takes cards from the deck. Discard drops a hand card. Return takes a field card back to hand.',
   'tutorial.T4.teach.3': 'Play all five and this level is cleared.',
   'tutorial.T4.scenario': 'Your hand is Spirit 2, Darkness 4, Spirit 1, Spirit 5 and Water 4 — their middle commands are exactly those five moves. Line 1 holds a face-up Spirit 3, line 2 a face-down Water 2.',
-  'tutorial.T4.steps.0': 'Play Spirit 2 and pick a card from the candidates that pop up.',
+  'tutorial.T4.steps.0': 'Play Spirit 2, pick the opponent\'s Fire 2 on the field, then click the confirm button in the console.',
   'tutorial.T4.steps.1': 'Play Darkness 4, pick the face-down Water 2, then pick a target line.',
-  'tutorial.T4.steps.2': 'Then play Spirit 1 (draw), Spirit 5 (discard — take the 0-value card) and Water 4 (return — take the card on line 1).',
+  'tutorial.T4.steps.2': 'Then play Spirit 1 (draw), Spirit 5 (discard — take the 0-value card) and Water 4 (return — pick a card to return).',
   'tutorial.T4.steps.3': 'All five moves done once, and the level is cleared.',
   'tutorial.T4.observe': 'After each move the log on the right gains one more entry for it (flip / shift / draw / discard / return).',
 
   'tutorial.T5.title': 'Covering a card',
-  'tutorial.T5.goal': 'Play your card on top of the opponent card on line 1.',
+  'tutorial.T5.goal': 'Normally you may play only one card per turn (some card effects let you play more), so play your Corruption 0 onto the opponent\'s card on line 1 (Corruption 0 is a special card that may be played into the opponent\'s line; normally a card cannot be played there).',
   'tutorial.T5.teach.0': 'The opponent has a card on line 1. Play a card on the same line and you bury it.',
   'tutorial.T5.teach.1': 'A buried card is "covered": its middle value and its top/bottom commands stop working.',
   'tutorial.T5.teach.2': 'Once your card is flipped face up or moved away, the card below is uncovered and works again.',
@@ -349,19 +354,19 @@ export const EN: Readonly<Record<string, string>> = {
   'tutorial.T7.title': 'Who an effect may pick',
   'tutorial.T7.goal': 'First try a card whose text says nothing about targets, then use one that says "covered".',
   'tutorial.T7.teach.0': 'Unless the card text says otherwise, an effect may only pick **uncovered** cards on either side of the field — a buried card cannot be picked at all.',
-  'tutorial.T7.teach.1': 'Only text saying "all cards" opens everything up; text saying "covered cards" is what brings buried cards in.',
+  'tutorial.T7.teach.1': 'Only a card effect that explicitly says "all cards" can affect cards on the field whether they are covered or not; text saying "covered cards" is what counts covered cards in.',
   'tutorial.T7.teach.2': 'Spirit 3 on line 1 is buried under Spirit 5. Try picking it with Spirit 2 (middle command: "you may flip 1 card") — it will not respond.',
   'tutorial.T7.scenario': 'Spirit 3 on line 1 is buried under Spirit 5. You hold Spirit 2 ("you may flip 1 card") and Corruption 3 ("you may flip 1 covered face-up card").',
   'tutorial.T7.steps.0': 'Drag Spirit 2 face up onto line 1 (the Spirit protocol line) and let go.',
-  'tutorial.T7.steps.1': 'In the choice bar that pops up, tap the buried Spirit 3 — it will not respond, and the panel says why.',
-  'tutorial.T7.steps.2': 'Pick a legal candidate instead (or tap "Skip") to finish that choice.',
+  'tutorial.T7.steps.1': 'An effect whose text does not say what it may point at cannot affect a covered card; an effect whose text says "covered" can affect a covered card.',
+  'tutorial.T7.steps.2': 'Pick a glowing card on the field instead, then click the confirm button in the console to trigger that effect (or tap "Skip" to finish this choice).',
   'tutorial.T7.steps.3': 'Drag Corruption 3 face up onto line 2 (the Corruption protocol line) and let go.',
-  'tutorial.T7.steps.4': 'This time tap Spirit 3 in the candidates — it responds; then click the confirm button in the console.',
+  'tutorial.T7.steps.4': 'This time tap Spirit 3 in the candidates, then click the confirm button in the console — you will see that this card\'s effect can pick a covered card.',
   'tutorial.T7.observe': 'The same Spirit 3: the first card cannot pick it, the second one can; picking it turns the card face down.',
 
   // T8: compiling and the threshold (was T7 in P5, moved one slot in P6)
   'tutorial.T8.title': 'Compiling a line',
-  'tutorial.T8.goal': 'Compile line 1.',
+  'tutorial.T8.goal': 'Compile the Spirit protocol on your line 1. Once compiled, every card on both sides of that line goes to its owner\'s trash right away, and the protocol card flips to its compiled side.',
   'tutorial.T8.teach.0': 'A line needs 10 or more on your side and more than the opponent — only then can it be compiled.',
   'tutorial.T8.teach.1': 'On line 1 you have 10 and the opponent has 0, so it is enough — the compile button is available.',
   'tutorial.T8.teach.2': 'Compiling flips that line protocol card to compiled, and the line locks up.',
@@ -370,22 +375,29 @@ export const EN: Readonly<Record<string, string>> = {
   'tutorial.T8.steps.1': 'Tap the "Compile" button for that line.',
   'tutorial.T8.observe': 'Line 1\'s protocol card flips to compiled, and the line locks up for the rest of the game.',
 
-  // ★ T9: playing vs. uncovering (user asked for this level on 2026-10-02)
+  /* ★ T9: playing vs. uncovering (user asked for this level on 2026-10-02).
+     ★ 2026-10-06: the example was replaced after a user report — it used to show the *same*
+     card, Speed 0, twice (one copy on each side), and the opponent's copy sat on a line whose
+     protocol had nothing to do with it. Now the two demo cards are two different defIds, each
+     on its own side and its own protocol line: the opponent's Speed 1 (face down, uncovered by
+     a flip) and your Momentum 3 (covered, then uncovered by shifting the coverer away). Both
+     cards' middle command is **only** "draw 2 cards", so the copy below can quote it verbatim.
+     The board and every reason behind it live in the T9 branch of `src/tutorial/setup.ts`. */
   'tutorial.T9.title': 'Playing and uncovering',
-  'tutorial.T9.goal': 'Use two copies of Speed 0 to show both ways of uncovering: flipping and shifting.',
+  'tutorial.T9.goal': 'Watch two **different** cards: neither middle command resolves because the card was played — both resolve because the card was **uncovered**, one by a flip, one by removing its cover.',
   'tutorial.T9.teach.0': 'A middle command fires along two routes: when the card is **played** from hand, and when it is **uncovered** (the moment it goes from hidden to shown).',
   'tutorial.T9.teach.1': 'There are two kinds of uncovering: a face-down card being **flipped face up**, and the card above a buried face-up top card being moved away so it becomes the uncovered top card again.',
-  'tutorial.T9.teach.2': 'Both cards here are Speed 0, whose middle command is "play 1 card" — the effect itself is quiet, but the log records that it was resolved again.',
-  'tutorial.T9.teach.3': 'First: play Darkness 1 ("flip 1 card of your opponent. You may shift that card.") to flip the opponent\'s face-down Speed 0 face up.',
-  'tutorial.T9.teach.4': 'Second: play Darkness 4 ("shift 1 face-down card") to shift away the card **covering** your Speed 0.',
-  'tutorial.T9.scenario': 'The opponent has a face-down Speed 0 on line 3; you have a face-up Speed 0 on line 2, not yet covered. Your hand is Darkness 1, Water 5, Darkness 4 and Spirit 3.',
+  'tutorial.T9.teach.2': 'The two cards in this level (the opponent\'s Speed 1 and your Momentum 3) each have exactly one middle command: "draw 2 cards" — the effect itself is quiet, but the log records each one, with the reason "flipped face up" or "uncovered" rather than "played".',
+  'tutorial.T9.teach.3': 'First: play Darkness 1 ("flip 1 card of your opponent. You may shift that card.") to flip the opponent\'s face-down Speed 1 — the one on **his own Speed protocol line** — face up.',
+  'tutorial.T9.teach.4': 'Second: play Darkness 4 ("shift 1 face-down card") to shift away the card **covering** your Momentum 3.',
+  'tutorial.T9.scenario': 'The opponent has a face-down Speed 1 on line 3 (his own Speed protocol line); you have a face-up Momentum 3 on line 2 (your Momentum protocol line), not yet covered. Your hand is Darkness 1, Water 5 and Darkness 4.',
   'tutorial.T9.steps.0': 'Drag Darkness 1 face up onto line 1 (the Darkness protocol line) and let go.',
-  'tutorial.T9.steps.1': 'Tap the opponent\'s Speed 0 on line 3 in the candidates — it flips face up.',
+  'tutorial.T9.steps.1': 'Tap the opponent\'s face-down Speed 1 on line 3 in the candidates — it flips face up and its middle command resolves: the opponent draws 2 cards.',
   'tutorial.T9.steps.2': 'On the follow-up "you may shift that card", tap "Skip" and leave it where it is.',
-  'tutorial.T9.steps.3': 'Click Water 5 to select it, flip it face down, then drag it onto line 2 to cover your Speed 0.',
+  'tutorial.T9.steps.3': 'Click Water 5 to select it, flip it face down, then drag it onto line 2 to cover your Momentum 3.',
   'tutorial.T9.steps.4': 'Drag Darkness 4 face up onto line 1, tap that face-down Water 5 first, click the confirm button in the console, then click the line you want to move it to.',
-  'tutorial.T9.steps.5': 'Pick a line (line 3) to shift it there — your Speed 0 is uncovered again.',
-  'tutorial.T9.observe': 'The log shows "[中部] speed-0：原因：翻正" and then "[中部] speed-0：原因：被揭开" — that card\'s middle command resolved twice.',
+  'tutorial.T9.steps.5': 'Pick a line (line 3) to shift it there — your Momentum 3 is uncovered again and its middle command resolves too: this time you draw 2 cards.',
+  'tutorial.T9.observe': 'The log shows "[中部] speed-1：原因：翻正" and then "[中部] momentum-3：原因：被揭开" — each card\'s middle command resolved once, and neither reason is "played".',
 
   /* ── P7: the last four levels (control / trigger timing / delete-immunity-buff / mini match) ── */
   'tutorial.T10.hint.go': 'Now tap "Next" on the board — the engine resolves control once in the control step.',

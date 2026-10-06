@@ -49,33 +49,60 @@ import { registerFollow } from './fx-follow';
 import { subscribeDraws, drainDraws, resetDraws, playDrawSequence } from './main-draw-fx';
 
 /**
- * ★ 2026-10-06（S0）：**赢下之后停在终局画面上多久**，再自动进下一关。
+ * ★ 2026-10-06（**用户当天要求**）：**每一关**判定通过之后，在**屏幕中间**显示这个毫秒数的
+ * 倒计时，到点再自动进下一关。
  *
- * 为什么需要它：S0 的过关形态就是"赢下这一局"，而赢的那一帧 `renderApp` 会在 body 上挂出
- * 胜利横幅、并把第三条协议画成「已编译」面、把那条链路清空 —— 这些正是这一课要玩家**看到**的
- * 东西。别的关卡过关之后是同步换关（一帧都不停留，那是刻意的：那些关卡的"过"只是一个读数），
- * 这里若也同步换关，玩家一帧都看不到"赢"。
+ * 用户原话：「每一关完成后中间都要有5秒倒计时自动进入下一关的效果，而不是直接进入下一关，
+ * 第三关的10秒等待改为5秒」。
  *
- * 取 2.2 秒：够看清横幅 + 协议翻面 + 清线，又不至于让想继续的人等太久（到点自动换关）。
+ * ## 这一条把原来那两处"延后换关"合并了
+ *
+ *  - S0 的 `S0_WIN_HOLD_MS`（2200ms，为的是看清胜利横幅）；
+ *  - T1 的 `T1_READ_HOLD_MS`（10000ms，为的是读完那张卡；用户这次把它点名改成 5 秒）。
+ *
+ * 现在**所有关卡**（最后一关除外，它没有下一关）走的是同一条路：过关 ⇒ 中间数 5 秒 ⇒ 换关。
+ * 那两个常量已删除 —— 5 这个数**只在本行定义一处**，浮层初值、每秒递减、到点换关全读它。
+ *
+ * ⚠️ **只排一个定时器**（`startLevelCountdown()` 里那个 `nextLevelTimer === null` 的 guard）：
+ * `judgeAndAdvance()` 会被**重复**调用（倒计时里玩家再双击一张卡、或再动一下棋盘都会走它），
+ * 不设 guard 的话两条链都会到点，第二次 `gotoNextLevel()` 会**再往下跳一关**。
  */
-const S0_WIN_HOLD_MS = 2200;
+export const LEVEL_CLEAR_COUNTDOWN_MS = 5000;
+
+/** 倒计时**每秒跳一格**（屏上那几个数就是 `LEVEL_CLEAR_COUNTDOWN_MS` 除以它） */
+export const COUNTDOWN_TICK_MS = 1000;
 
 /**
- * ★ 2026-10-06（**用户当天要求**）：T1「查看卡牌详情」在玩家查看过卡牌之后，**再留 10 秒**才进下一关。
+ * 倒计时浮层上的秒数：剩余毫秒 ⇒ 那个整数（5 → 4 → 3 → 2 → 1）。
  *
- * 用户原话：「第三关的双击查看待玩家查看卡牌后应当需要留给玩家一定的时间，10 秒后才跳至下一关」。
- *
- * 为什么需要它：这一关教的就是"双击放大看清楚一张牌的效果"，判据也只要求"详情打开过一次"
- * （`ui.detailsAtLeast: 1`）—— 照别的关卡那样**判据一满足就换关**，玩家刚把大图点开，
- * 下一关的棋盘就顶上来，那张卡一个字形都没看清。
- *
- * 取 10 秒：用户点名的数。与 S0 那条 `S0_WIN_HOLD_MS`（2.2 秒）不是一回事 —— 那条要的是
- * "看得见赢"，这条要的是"有工夫读卡"。
- *
- * ⚠️ **只排一个定时器**：`judgeAndAdvance()` 会被重复调用（这 10 秒里玩家再双击一张卡也会走它），
- * 不设 guard 的话两个定时器都会到点，第二次 `gotoNextLevel()` 会**再往下跳一关**。
+ * 导出是为了让"5 秒、一秒一格"这件事有**真跑的行为腿**（`tests/tutorial/screen.test.ts`
+ * 从 `LEVEL_CLEAR_COUNTDOWN_MS` 一路减下去，断言 5/4/3/2/1）—— 本仓没有 jsdom，
+ * `mountTutorial` 那一层跑不起来（见那个测试文件的头注），而这一段是纯算术，能真跑。
  */
-const T1_READ_HOLD_MS = 10000;
+export function countdownSecondsOf(msLeft: number): number {
+  // `max(1, …)` 只为兜住"剩余不足一格"的最后一帧（到点那一帧由 `gotoNextLevel()` 接手，不显示 0）
+  return Math.max(1, Math.ceil(msLeft / COUNTDOWN_TICK_MS));
+}
+
+/** 倒计时那条文案（浮层上明写的那句）。键 `tutorial.countdown`：中英各一条，占位符 `{n}` */
+export function countdownLabel(msLeft: number): string {
+  return t('tutorial.countdown', { n: String(countdownSecondsOf(msLeft)) });
+}
+
+/**
+ * 造那个**屏幕中间**的倒计时浮层（body 级，样式在 `src/ui/styles-local.css` 的 `.tutorial-countdown`）。
+ *
+ * 一开始是 `hidden`：只有过关之后那 5 秒里才显示（`startLevelCountdown()`）。
+ * 导出同 `placeSpotBoxes` / `applyNextButtonVisibility`：只为让"浮层真的造出来了、类名是这一族、
+ * 初始是藏着的"这几条有**真跑的行为腿**（桩 DOM），不是给别的调用方用的。
+ */
+export function countdownOverlayElement(): { box: HTMLElement; text: HTMLElement } {
+  const box = el('div', 'tutorial-countdown');
+  const text = el('div', 'tutorial-countdown-text');
+  box.hidden = true;
+  box.appendChild(text);
+  return { box, text };
+}
 
 /** 退出教程（回首页）；由宿主注入 —— 屏自己不认识首页 */
 export interface TutorialNav {
@@ -605,17 +632,19 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
   /** 本关是否已判定通过（通过之后不再重复提示） */
   let cleared = false;
   /**
-   * ★ 2026-10-06（S0）："赢下之后停一会儿再换关"的那个定时器（见 `judgeAndAdvance`）。
-   * ★ 2026-10-06（T1）：**同一个定时器**也管"看过卡之后停 10 秒再换关"（`T1_READ_HOLD_MS`）
-   * —— 两关都只在**延后换关**这一件事上用它，同一时刻只可能有一关在跑，不必造第二个变量。
-   * 退出教程 / 重开本关时都要作废 —— 否则退出之后它还会在后台把关卡切走。
+   * ★ 2026-10-06（统一倒计时）：过关之后那个"5 秒后进下一关"的定时器（见
+   * `LEVEL_CLEAR_COUNTDOWN_MS` 与 `startLevelCountdown()`）。
+   *
+   * 它是**唯一**一个倒计时定时器：每跳一格都把下一格重排给自己（链式 `setTimeout`），
+   * 所以"同一时刻只有一个挂着的定时器"这件事是结构性的，不靠自觉。
+   * 退出教程 / 重开本关 / 点 chip 跳关 / 到点换关，四处都要清掉它并摘掉浮层（`clearCountdown()`）。
    */
   let nextLevelTimer: ReturnType<typeof setTimeout> | null = null;
   /**
-   * ★ 2026-10-06（T1）：那 10 秒**还挂着**吗 —— 提示区据此说一句"还能看一会儿"（见 `renderPanel`）。
-   * 只作废不清零的地方都不该有：它跟着 `nextLevelTimer` 一起被清（`openLevel` / 到点换关 / 退出）。
+   * 倒计时的**剩余毫秒**（浮层上那个数 = 它除以 `COUNTDOWN_TICK_MS`）。
+   * 只被 `startLevelCountdown()` 的链与 `renderCountdown()` 读写 —— 切语言时重画浮层用的就是它。
    */
-  let holdUntilNext = false;
+  let countdownLeft = 0;
 
   /* ───────────────────────── 教练浮层 ───────────────────────── */
 
@@ -740,6 +769,22 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
   overlay.appendChild(panel);
   document.body.appendChild(overlay);
   /**
+   * ★ 2026-10-06（**用户当天要求**）：过关之后那个**屏幕中间**的倒计时浮层。
+   *
+   * 用户原话：「每一关完成后中间都要有5秒倒计时自动进入下一关的效果，而不是直接进入下一关」。
+   *
+   * 形态照本屏既有那一套（`settingsOverlayElement` / `.tutorial-overlay`）：
+   * **body 级浮层** + 新类名 `.tutorial-countdown`（只落 `src/ui/styles-local.css`，
+   * `styles.css` 一行不动）+ `pointer-events: none`（**不吃点击** —— 教学全程要玩家去操作棋盘）。
+   * 它**单开一层**、不塞进 `.tutorial-overlay`：那一层里还有 T0 的热点层（`inset: 0`），
+   * 两个绝对定位的层放一起，将来谁动一下定位就会互相牵连。
+   *
+   * 一开始是 `hidden`（`[hidden]` 的兜底 `display: none` 写在 CSS 里 —— 本仓栽过两次
+   * "作者样式压掉 hidden"）：只有 `startLevelCountdown()` 到点前的那 5 秒里它才在屏上。
+   */
+  const { box: countdownBox, text: countdownText } = countdownOverlayElement();
+  document.body.appendChild(countdownBox);
+  /**
    * 挂进跟随注册表：`renderApp` 每帧末尾与 `main.ts` 的滚动/缩放 rAF 都会调 `syncFollowers()`
    * ⇒ 重画、滚动、改窗口尺寸之后热点都在它目标的**当前位置**上（不再"粘在屏幕上"）。
    * 注册一次即可；层被 `close()` 摘掉之后 `syncFollowers()` 自己会把它剔出注册表。
@@ -835,13 +880,11 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
     }
     if (level.id === 'T1') {
       /**
-       * ★ 2026-10-06（用户要求）：这 10 秒里让玩家知道"还能看一会儿"。
-       * 判据取 `holdUntilNext`（那个延后换关的定时器真的挂着），不是"打开过详情"——
-       * 到点换关之后这句就不该再挂着（换关时它与定时器一起被清）。
+       * ★ 2026-10-06（用户要求，当天晚些时候又改了口径）：T1 看完卡之后**不再**留 10 秒
+       * （那句 `tutorial.zoom.hold` 与 `holdUntilNext` 已随统一倒计时一起删掉）——
+       * 现在过关之后跟别关一样，中间数 5 秒再走，屏上那句读数由倒计时浮层自己给。
        */
-      hintBox.textContent = holdUntilNext
-        ? t('tutorial.zoom.hold')
-        : uiSeen.detailsOpened === 0 ? t('tutorial.zoom.hint') : t('tutorial.zoom.opened');
+      hintBox.textContent = uiSeen.detailsOpened === 0 ? t('tutorial.zoom.hint') : t('tutorial.zoom.opened');
     }
     if (level.id === 'T6') {
       const lines: string[] = [];
@@ -909,11 +952,10 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
       hintBox.textContent = state.winner !== null ? t('tutorial.T13.hint.done') : t('tutorial.T13.hint.compile');
     }
     /**
-     * ★ 2026-10-06（T1）：那 10 秒**还挂着** ⇒ 提示区说"还能看一会儿"，不显示通用的"这一关过了"。
-     * （顺序：它排在最后，所以压得住上面那几句。）
+     * ★ 2026-10-06（统一倒计时）：过关之后提示区就一句"这一关过了"——
+     * "还有几秒进下一关"那个读数在中间那层浮层上（`renderCountdown()`），不在这里重复一遍。
      */
-    if (holdUntilNext) hintBox.textContent = t('tutorial.zoom.hold');
-    else if (cleared) hintBox.textContent = t('tutorial.cleared');
+    if (cleared) hintBox.textContent = t('tutorial.cleared');
 
     // 进度：每一关各一枚 chip，已完成的加 `.on`（关卡数由 TUT_LEVELS 决定，屏上不写死）
     progressRow.textContent = '';
@@ -955,9 +997,9 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
     /**
      * ★ 2026-10-06（用户要求「点击已解锁关卡下方的小数字…」）：过关之后给一句说明
      * —— 那一排数字从"只能看"变成了"可以点"，不告诉玩家的话没人会去点它。
-     * ⚠️ 只在**过完这一关**、且**没有挂着的延后换关**时显示（S0/T1 那两句更要紧，别顶掉它们）。
+     * ⚠️ 只在**过完这一关**时显示（没过完就没有"点回去重玩"这回事）。
      */
-    if (cleared && !holdUntilNext) hintBox.textContent = t('tutorial.chip.hint');
+    if (cleared) hintBox.textContent = t('tutorial.chip.hint');
 
     // T0 热点：点过的标成已看
     spotLayer.hidden = level.id !== 'T0';
@@ -1100,49 +1142,78 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
     nav.saveProgress(after);
     renderPanel();
     paint();
-    // 最后一关：停在原地（提示"所有关卡都过了"），不自动跳走
+    /**
+     * ★ 2026-10-06（**用户当天要求**）：最后一关（T13）**没有下一关** ⇒ 不倒计时、不自动跳，
+     * 保持原来那句"所有关卡都过了"的收尾。
+     */
     if (levelIndex(level.id) >= TUT_LEVELS.length - 1) {
       hintBox.textContent = t('tutorial.cleared-all');
       return;
     }
     /**
-     * ★ 2026-10-06（S0）：这一关的过关形态就是**赢下这一局** —— 上面那次 `paint()` 会在
-     * body 上挂出 render.ts 的胜利横幅（`.win-banner`）。若照别的关卡那样**同步**换关，
-     * 那一帧立刻被下一关的棋盘盖掉，玩家一帧都看不到"赢"（而"赢"正是这一课要演示的东西）。
-     * ⇒ 停 `S0_WIN_HOLD_MS` 毫秒再进下一关（到点由 `gotoNextLevel()` 收掉横幅并换关）。
-     */
-    if (level.id === 'S0') {
-      /**
-       * ⚠️ **只排一个**：`judgeAndAdvance()` 会被**重复**调用（玩家在这 2.2 秒里双击放大一张卡
-       * 也会走它 —— `noteZoomOpened`），不设这个 guard 的话两个定时器都会到点，
-       * 第二次 `gotoNextLevel()` 会**再往下跳一关**（把 T0 直接跳过去）。
-       */
-      if (nextLevelTimer === null) nextLevelTimer = setTimeout(gotoNextLevel, S0_WIN_HOLD_MS);
-      return;
-    }
-    /**
-     * ★ 2026-10-06（**用户当天要求**）：T1「查看卡牌详情」看过卡之后**留 10 秒**再进下一关。
-     * 理由、取数与"只排一个定时器"的 guard 都写在 `T1_READ_HOLD_MS` 上（那里是唯一出处）。
+     * ★ 2026-10-06（**用户当天要求**）：其余**每一关**都走同一套 —— 屏幕中间数 5 秒 ⇒ 换关。
      *
-     * 与 S0 那一支同款，只多一件事：`holdUntilNext` 让提示区在这 10 秒里说"还能看一会儿"
-     * （`renderPanel` 读它）。到点由 `gotoNextLevel()` 收掉它（`openLevel` 里清）。
+     * 用户原话：「每一关完成后中间都要有5秒倒计时自动进入下一关的效果，而不是直接进入下一关，
+     * 第三关的10秒等待改为5秒」。
+     *
+     * 原来这里分三支（S0 停 2.2 秒看胜利横幅 / T1 停 10 秒读卡 / 其余同步换关），现在合成一处：
+     *  - S0 那次 `paint()` 挂出来的胜利横幅**仍然**要收（`gotoNextLevel()` 里的 `dismissWinBanner()`），
+     *    倒计时这 5 秒也正好让玩家看清"赢"；
+     *  - T1 那 10 秒取消（`T1_READ_HOLD_MS` 与 `tutorial.zoom.hold` 已删），玩家读卡的工夫由倒计时给。
+     *
+     * ⚠️ "只排一个定时器"的 guard 在 `startLevelCountdown()` 里（那里是唯一出处）——
+     * `judgeAndAdvance()` 会被**重复**调用，没有它就会连跳两关。
      */
-    if (level.id === 'T1') {
-      if (nextLevelTimer === null) {
-        holdUntilNext = true;
-        nextLevelTimer = setTimeout(gotoNextLevel, T1_READ_HOLD_MS);
-        // 让"还能看一会儿"这一句当场出现（上面那次 renderPanel 已经跑过了）
-        renderPanel();
-      }
-      return;
-    }
-    gotoNextLevel();
+    startLevelCountdown();
   }
 
-  /** 换到下一关（`judgeAndAdvance` 的正常出口；S0/T1 那两支延后调它，见两条 HOLD 常量） */
-  function gotoNextLevel(): void {
+  /**
+   * ★ 2026-10-06（**用户当天要求**）：过关之后那 5 秒倒计时（浮层 + 定时器）。
+   *
+   * 形态：屏幕中间那个 `.tutorial-countdown` 浮层上先出现 `LEVEL_CLEAR_COUNTDOWN_MS / 1000` = 5，
+   * 每秒减一，到点（一共 5 秒）由 `gotoNextLevel()` 摘掉浮层并换关。
+   *
+   * ⚠️ **只许有一个定时器**：重复进判定（这 5 秒里玩家再双击一张卡 / 再动一下棋盘都会走
+   * `judgeAndAdvance()`）时直接返回 —— 否则两条链都会到点，第二次 `gotoNextLevel()` 会再跳一关。
+   * 定时器是**链式**的（每跳一格把下一格重排给自己），所以"同一时刻只有一个挂着的"是结构性的。
+   */
+  function startLevelCountdown(): void {
+    if (nextLevelTimer !== null) return;
+    countdownLeft = LEVEL_CLEAR_COUNTDOWN_MS;
+    countdownBox.hidden = false;
+    renderCountdown();
+    const step = (): void => {
+      countdownLeft -= COUNTDOWN_TICK_MS;
+      // 到点：换关那一支自己会清定时器 + 摘浮层（`clearCountdown()`）
+      if (countdownLeft <= 0) { gotoNextLevel(); return; }
+      renderCountdown();
+      nextLevelTimer = setTimeout(step, COUNTDOWN_TICK_MS);
+    };
+    nextLevelTimer = setTimeout(step, COUNTDOWN_TICK_MS);
+  }
+
+  /**
+   * 把浮层上的数字刷成当前剩余秒数。文案走 i18n 新键 `tutorial.countdown`（中英各一条，
+   * 占位符 `{n}` 两端一致）—— 切语言时重画浮层也走这里（见 `onLangChange` 那一支）。
+   */
+  function renderCountdown(): void {
+    countdownText.textContent = countdownLabel(countdownLeft);
+  }
+
+  /**
+   * 清掉倒计时：**作废定时器 + 把浮层摘掉**（`hidden` ⇒ CSS 里的 `display: none`）。
+   *
+   * 四个入口都走它：退出教程（`close()`）/ 重开本关（`openLevel()`，chip 跳关与「重开这一关」
+   * 都经它）/ 到点换关（`gotoNextLevel()`）。少一处就会留残影或让后台的定时器把关卡切走。
+   */
+  function clearCountdown(): void {
     if (nextLevelTimer !== null) { clearTimeout(nextLevelTimer); nextLevelTimer = null; }
-    holdUntilNext = false;
+    countdownBox.hidden = true;
+  }
+
+  /** 换到下一关（倒计时到点那一下的唯一出口） */
+  function gotoNextLevel(): void {
+    clearCountdown();
     dismissWinBanner();
     levelId = levelAt(levelIndex(levelId) + 1);
     openLevel();
@@ -1166,9 +1237,11 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
 
   /** 开（或重开）当前 `levelId` 那一关：新局面 + 清判定状态 + 重画 */
   function openLevel(): void {
-    // 上一关的"延后换关"作废（例如 S0 赢下之后玩家抢先点了「重开这一关」）
-    if (nextLevelTimer !== null) { clearTimeout(nextLevelTimer); nextLevelTimer = null; }
-    holdUntilNext = false;
+    /**
+     * ★ 2026-10-06（统一倒计时）：上一关那个倒计时作废（例如倒计时里玩家抢先点了
+     * 「重开这一关」/点了 chip 跳关）—— 不清的话它到点会把关卡再切走，还会留一层残影。
+     */
+    clearCountdown();
     state = buildLevelState(levelId);
     snap = snapshot(state);
     opsSeen = [];
@@ -1201,8 +1274,15 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
     openLevel();
   }
 
-  /** 切语言：**就地**重画浮层（棋盘不动 —— 它上面没有文案，卡面是图片） */
-  const offLang = onLangChange(() => { renderPanel(); });
+  /**
+   * 切语言：**就地**重画浮层（棋盘不动 —— 它上面没有文案，卡面是图片）。
+   * ★ 2026-10-06（统一倒计时）：倒计时浮层上那句"还有几秒"也是文案 ⇒ 一起重画
+   * （只在它真的挂着时；没挂就不用管）。
+   */
+  const offLang = onLangChange(() => {
+    renderPanel();
+    if (!countdownBox.hidden) renderCountdown();
+  });
 
   /* ───────────────────────── 收尾 ───────────────────────── */
 
@@ -1210,7 +1290,12 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
 
   return {
     close() {
-      if (nextLevelTimer !== null) { clearTimeout(nextLevelTimer); nextLevelTimer = null; }
+      /**
+       * ★ 2026-10-06（统一倒计时）：退出教程 = 那个"5 秒后进下一关"的倒计时立刻作废，
+       * 浮层也从 body 上摘掉（它挂在 body 上，不摘的话退出之后还在屏上留一层）。
+       */
+      clearCountdown();
+      countdownBox.remove();
       zoomWatcher.disconnect();
       spotResize?.disconnect();
       spotFitWatch?.disconnect();

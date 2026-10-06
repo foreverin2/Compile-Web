@@ -861,6 +861,30 @@
 }
 .tutorial-spot:hover { background: rgba(0, 255, 204, 0.16); }
 .tutorial-spot.on { border-style: solid; background: rgba(0, 255, 204, 0.18); }
+
+/* ---------- ★ 2026-10-06（用户要求）：过关之后**屏幕中间**那个「N 秒后进入下一关」的倒计时 ----------
+ * 用户原话：「每一关完成后中间都要有5秒倒计时自动进入下一关的效果，而不是直接进入下一关」。
+ * 元素由 `src/ui/tutorial-screen.ts` 的 `startLevelCountdown()` 造（body 级浮层，单开一层）。
+ *
+ * 三条规矩与 `.tutorial-overlay` 同款：
+ *  · `pointer-events: none` —— **不吃点击**：倒计时这 5 秒里玩家照旧能点 chip 跳关、
+ *    「重开这一关」、退出教程（这三条路都会立刻作废倒计时并摘掉本层）；
+ *  · `z-index: 11500` —— 压在 `.tutorial-overlay`（11000）与 render.ts 的胜利横幅（10000）之上，
+ *    否则 S0 打赢那一局的倒计时会被横幅压住半截；
+ *  · `[hidden]` 的兜底 `display: none` **必须显式写**：`.tutorial-countdown` 自己是 `display: flex`，
+ *    作者样式会压掉 UA 的 `[hidden]`（本仓在这上面栽过两次，见 `.tutorial-teach[hidden]`）。 */
+.tutorial-countdown {
+  position: fixed; inset: 0; z-index: 11500;
+  display: flex; align-items: center; justify-content: center;
+  pointer-events: none;
+}
+.tutorial-countdown[hidden] { display: none; }
+.tutorial-countdown-text {
+  padding: 10px 22px; border-radius: 12px;
+  border: 1px solid #4a4a68; background: rgba(18, 18, 36, 0.92);
+  color: #00ffcc; font-size: 22px; font-weight: 700; letter-spacing: 0.5px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+}
 /* =====================================================================
  * ★ 2026-10-06（用户要求）：「自定义协议池」—— 模式选择页那一行 + 协议挑选屏
  *   （`src/ui/home.ts` 的第三个开关行 / `src/ui/pool-picker.ts` 的整屏）

@@ -106,6 +106,22 @@ export interface TutJudgeInput {
 }
 
 /**
+ * ★ 2026-10-06（T9 换例子）：这一关**两张演示牌的 defId** —— 判据与局面共用这一处定义。
+ *
+ * 为什么要有这两个常量：`revealSeen()` 是按**逐字日志**匹配的（`[中部] <defId>：原因：翻正`），
+ * 而摆牌面的是 `setup.ts` —— 两边各写一遍字符串的话，改了一边另一边会**静默失配**
+ * （判据永远是 false，玩家卡在那一关）。所以 defId 只此一处，`setup.ts` 从这里 import。
+ *
+ * 两张都是**中指令只有「抽2张牌」**的牌（`speed-1` / `momentum-3`，后者连顶/底指令都没有）——
+ * 这一课教的是**触发途径**，效果越无关紧要越好读，文案也能逐字引用它的中指令。
+ *
+ *  - `T9_FLIP_DEF`：对手那边被**翻正**的那张（速度1）；
+ *  - `T9_REVEAL_DEF`：我方那张被盖住后**重新露出**的（动量3）。
+ */
+export const T9_FLIP_DEF = 'speed-1';
+export const T9_REVEAL_DEF = 'momentum-3';
+
+/**
  * ★ 2026-10-02（P6 任务 A.2）：**日志差分**的两条读数（T9「打出 vs 露出」的判据用它）。
  *
  * 为什么这里读日志而不是读状态：T9 教的是"中部指令**又被结算了一次**"，而"结算过"这件事
@@ -113,11 +129,13 @@ export interface TutJudgeInput {
  * `[中部] <defId>：原因：<翻正|被揭开|打出>`（`src/core/log.ts:23` 的 `pushEffectLog`，
  * 由 `resolve.ts:132` 一处统一发出）⇒ 那是这个问题**最近**的一份证据。
  *
- * 两条的出处（逐字比对，改一边就红，见 `tests/tutorial/levels.test.ts` 的 T9 组）：
- *  - `[中部] speed-0：原因：翻正` —— `resolve.ts:469` 的 `pushMiddle(…, '翻正')`
+ * ★ 2026-10-06：两张演示牌现在是**两个不同的 defId**（原来是同一张 `speed-0` 出现两次 ——
+ * 那正是用户报的误导）。因此两条读数各认各的牌，互不覆盖：
+ *  - `[中部] speed-1：原因：翻正` —— `resolve.ts:469` 的 `pushMiddle(…, '翻正')`
  *    （前置：`card.faceUp && isUncovered(s, card) && !op.noMiddle`）；
- *  - `[中部] speed-0：原因：被揭开` + `[揭示] speed-0 被揭开（其上卡被移除）`
- *    —— `resolve.ts:1104` 的 `pushMiddle(…, '被揭开')` 与 `:1103` 的 `pushLog`。
+ *  - `[揭示] momentum-3 被揭开（其上卡被移除）` + `[中部] momentum-3：原因：被揭开`
+ *    —— `resolve.ts:1103` 的 `pushLog` 与 `:1104` 的 `pushMiddle(…, '被揭开')`
+ *    （由偏转走**盖着它的那张**顶卡那一支的 `revealAfterRemoval` 触发）。
  *
  * ⚠️ 日志是**单调增长**的（关内不重置；`openLevel()` 重建 state 时才清空），所以这两个
  * 布尔只会"变真"，不会回退 —— 这正是判据要的语义（做过一次就算做过）。
@@ -125,9 +143,10 @@ export interface TutJudgeInput {
 export function revealSeen(state: GameState): { readonly flipped: boolean; readonly revealed: boolean } {
   const text = state.log.join('\n');
   return {
-    flipped: text.includes('[中部] speed-0：原因：翻正'),
+    flipped: text.includes(`[中部] ${T9_FLIP_DEF}：原因：翻正`),
     // 两条都要：`[揭示]` 那条证明"是新顶被揭开"，`[中部]` 那条才证明"中部指令真的又入栈了"
-    revealed: text.includes('[揭示] speed-0 被揭开') && text.includes('[中部] speed-0：原因：被揭开'),
+    revealed: text.includes(`[揭示] ${T9_REVEAL_DEF} 被揭开`)
+      && text.includes(`[中部] ${T9_REVEAL_DEF}：原因：被揭开`),
   };
 }
 
@@ -241,10 +260,11 @@ export function isLevelComplete(level: TutLevel, state: GameState, input: TutJud
    * ★ 2026-10-02（P6 任务 A.2）T9「打出 vs 露出」：两条露出途径**各做到一次**。
    *
    * 判据全是**日志差分 + 状态差分**（用户口径：例："牌库数变化 + 出现
-   * `[中部] speed-0：原因：翻正/被揭开`"）：
-   *  - 两条 `[中部] speed-0：原因：…` 各出现一次（`revealSeen()`，逐字出处写在它的注释里）；
-   *  - 对手那张速度0 现在**正面**（翻正那一步的状态差分）；
-   *  - 我方那张速度0 现在**未被覆盖**（`isUncovered`，引擎自己的判据）。
+   * `[中部] <defId>：原因：翻正/被揭开`"）：
+   *  - 两条 `[中部] <defId>：原因：…` 各出现一次（`revealSeen()`，逐字出处写在它的注释里；
+   *    两张演示牌是**两个不同的 defId**，见 `T9_FLIP_DEF` / `T9_REVEAL_DEF`）；
+   *  - 对手那张 `t9f-opp`（速度1）现在**正面**（翻正那一步的状态差分）；
+   *  - 我方那张 `t9f-ours`（动量3）现在**未被覆盖**（`isUncovered`，引擎自己的判据）。
    */
   if (level.id === 'T9') {
     const seen = revealSeen(state);

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { buildLevelState } from '../../src/tutorial/setup';
-import { observedOps, snapshot, isLevelComplete, offTrackKeyFor, revealSeen } from '../../src/tutorial/judge';
+import { observedOps, snapshot, isLevelComplete, offTrackKeyFor, revealSeen, T9_FLIP_DEF, T9_REVEAL_DEF } from '../../src/tutorial/judge';
 import { levelById, TUT_LEVELS, levelAt, levelIndex, TUT_LEVEL_COUNT } from '../../src/tutorial/levels';
 import { TUT_UI_NONE, canPeekFaceDown, triggersSeen } from '../../src/tutorial/types';
 import { createLocalDriver } from '../../src/app/match-driver';
@@ -11,7 +11,8 @@ import { advance, readProgress, restart } from '../../src/tutorial/progress';
 import { createMemoryStore } from '../../src/app/storage';
 import { getLegalActions } from '../../src/core/game';
 import { createGame, getLineValue } from '../../src/core/state/create';
-import { isUncovered } from '../../src/core/effects/context';
+import { isUncovered, findCard } from '../../src/core/effects/context';
+import { getCardDef, getProtocolDef } from '../../src/data/demo';
 import { ZH, EN } from '../../src/i18n';
 import { stripComments } from '../ui/source-text';
 import type { Card, GameState, Line, PlayerId } from '../../src/core/models/types';
@@ -538,26 +539,44 @@ describe('★ T7：默认目标规则（默认档点不到、明写「被覆盖�
  * ★ 2026-10-02（P6 任务 A.2）：T9「打出 vs 露出」。
  *
  * 判据是**日志差分 + 状态差分**（用户口径），两条露出途径各做到一次：
- *  - 翻正露出：`[中部] speed-0：原因：翻正`（`resolve.ts:469`）；
- *  - 被揭开露出：`[揭示] speed-0 被揭开（其上卡被移除）` + `[中部] speed-0：原因：被揭开`
+ *  - 翻正露出：`[中部] speed-1：原因：翻正`（`resolve.ts:469`）；
+ *  - 被揭开露出：`[揭示] momentum-3 被揭开（其上卡被移除）` + `[中部] momentum-3：原因：被揭开`
  *    （`resolve.ts:1103/1104`，由 `shift` 顶卡那一支的 `revealAfterRemoval` 触发）。
+ *
+ * ★ 2026-10-06（**用户报的缺陷 → 换例子**）：两张演示牌原来是**同一张 `speed-0` 出现两次**
+ * （我方线 2 一张正面、对手线 3 一张反面），而对手那条线的协议还不是 speed ⇒ 既像"同一张牌能
+ * 出现两次"，又像"速度牌能打到明光协议上"。现在是**两个不同的 defId**（我方动量3 / 对手速度1），
+ * 各自摆在自己那一侧、自己那条协议的线上。局面与逐条理由写在 `setup.ts` 的 T9 段。
  */
 describe('★ T9：打出 vs 露出（两条露出途径各一次）', () => {
-  it('走对：翻正对手那张 + 偏转走盖着自己那张 ⇒ 过；中途每一步都不算过', () => {
+  /**
+   * T9 的完整正路（两条途径各一次）。抽出来给"两个 defId 各一次"与"每一张牌都属于自己协议"
+   * 那两条腿共用；`after` 回调用来在**中途**插断言（正向那条腿靠它确认"还没做完就不算过"）。
+   *
+   * ⚠️ 中途那两个点只到「被揭开」**之前**（flipped / covered）—— 被揭开那一下四样就齐了，
+   * 它是"过关"，不是"还没过"。
+   */
+  function runT9Flow(after?: (phase: 'flipped' | 'covered', s: GameState) => void): GameState {
     const s = buildLevelState('T9');
-    const level = levelById('T9');
-    expect(isLevelComplete(level, s), '开局就算过').toBe(false);
+    const oppDeckBefore = s.players[1].deck.length;
+    const oppHandBefore = s.players[1].hand.length;
 
-    // —— 第一种：翻正露出 ——
+    // —— 第一种：翻正露出（把对手那张反面「速度1」翻正）——
     expect(drive(s, 'play', { cardUid: 't9h-flip', faceUp: true, line: 0 }), '引擎拒了黑暗1').toBe(true);
     const flipPick = pending(s);
     expect(flipPick.title, '黑暗1 的第一问不是"翻转1张你对手的牌"').toContain('翻转1张你对手的牌');
-    expect(flipPick.uids, '对手场上唯一的顶卡不在候选里').toContain('t9f-opp');
+    // 对手场上只留这一张 ⇒ 候选唯一（多一张就会让玩家有选错的机会）
+    expect(flipPick.uids, '对手场上唯一那张顶卡不在候选里').toEqual(['t9f-opp']);
     expect(driveChoice(s, flipPick.id, ['t9f-opp']), '选中对手那张被拒').toBe(true);
-    expect(s.players[1].stacks[2][0].faceUp, '对手那张速度0 没被翻正（状态差分）').toBe(true);
-    expect(revealSeen(s).flipped, '日志里没有 [中部] speed-0：原因：翻正').toBe(true);
+
+    expect(s.players[1].stacks[2][0].faceUp, '对手那张速度1 没被翻正（状态差分）').toBe(true);
+    expect(revealSeen(s).flipped, `日志里没有 [中部] ${T9_FLIP_DEF}：原因：翻正`).toBe(true);
     expect(revealSeen(s).revealed, '翻正那一步就把"被揭开"也算上了').toBe(false);
-    expect(isLevelComplete(level, s), '只做到翻正就判过关').toBe(false);
+    // 中部指令**真的结算了**：翻正立刻让它「抽2张牌」——对手牌库少 2 张、手牌多 2 张。
+    // （只读日志的腿证明不了这件事；这一条把"结算"钉在状态上。）
+    expect(s.players[1].deck.length, '翻正没有结算对手那张的中指令（牌库没少 2 张）').toBe(oppDeckBefore - 2);
+    expect(s.players[1].hand.length, '对手那张的中指令没有把牌抽进手牌').toBe(oppHandBefore + 2);
+    after?.('flipped', s);
 
     // 黑暗1 的第二问（可选偏转）：跳过
     const flipOptional = pending(s);
@@ -565,10 +584,12 @@ describe('★ T9：打出 vs 露出（两条露出途径各一次）', () => {
     expect(driveChoice(s, flipOptional.id, []), '跳过可选偏转被拒').toBe(true);
     expect(s.pendingEffects.length, '跳过后还有挂起的效果').toBe(0);
 
-    // —— 第二种：把盖着自己那张速度0 的牌偏转走 ⇒ 被揭开 ——
+    // —— 第二种：把盖着自己那张「动量3」的牌偏转走 ⇒ 被揭开 ——
+    const myDeckBefore = s.players[0].deck.length;
     expect(drive(s, 'play', { cardUid: 't9h-cover', faceUp: false, line: 1 }), '反面盖住被拒').toBe(true);
-    expect(isUncovered(s, s.players[0].stacks[1][0]), '前置：那张速度0 还没被盖住').toBe(false);
-    expect(isLevelComplete(level, s), '只盖住还没揭开就判过关').toBe(false);
+    expect(isUncovered(s, s.players[0].stacks[1][0]), '前置：动量3 还没被盖住').toBe(false);
+    expect(revealSeen(s).revealed, '只是盖住（还没移走覆盖者）就算"被揭开"了').toBe(false);
+    after?.('covered', s);
 
     expect(drive(s, 'play', { cardUid: 't9h-shift', faceUp: true, line: 0 }), '引擎拒了黑暗4').toBe(true);
     const shiftPick = pending(s);
@@ -576,26 +597,194 @@ describe('★ T9：打出 vs 露出（两条露出途径各一次）', () => {
     expect(shiftPick.uids, '盖着那张不在候选里').toEqual(['t9h-cover']);
     expect(driveChoice(s, shiftPick.id, ['t9h-cover']), '选中盖着那张被拒').toBe(true);
     const shiftLine = pending(s);
-    expect(shiftLine.lines, '偏转目标线不含线 2').toContain(2);
+    expect(shiftLine.lines, '偏转目标线不含线 3').toContain(2);
     expect(driveChoice(s, shiftLine.id, ['line:2']), '选目标线被拒').toBe(true);
 
-    expect(isUncovered(s, s.players[0].stacks[1][0]), '速度0 没被揭开').toBe(true);
-    expect(revealSeen(s).revealed, '日志里没有 [揭示]/[中部] speed-0：原因：被揭开').toBe(true);
-
-    // 被揭开之后，速度0 的中部「打出1张牌」接着结算（手里那张精神3 是唯一候选）
-    const payPick = pending(s);
-    expect(payPick.title, '被揭开后的中部不是"打出1张牌"').toContain('打出1张牌');
-    expect(payPick.uids, '手牌里唯一那张不在候选里').toEqual(['t9h-pay']);
-    expect(driveChoice(s, payPick.id, ['t9h-pay']), '选中精神3 被拒').toBe(true);
-    const payFace = pending(s);
-    expect(payFace.title, '没有问"以正面还是反面打出"').toContain('以正面还是反面打出');
-    expect(driveChoice(s, payFace.id, ['action:face-up']), '选正面被拒').toBe(true);
-    const payLine = pending(s);
-    expect(payLine.lines, '精神3 正面打不出去（线 2 不是精神协议线）').toContain(2);
-    expect(driveChoice(s, payLine.id, ['line:2']), '选线 2 被拒').toBe(true);
+    expect(s.players[0].stacks[1][0].uid, '线 2 的顶卡换人了').toBe('t9f-ours');
+    expect(isUncovered(s, s.players[0].stacks[1][0]), '动量3 没被揭开').toBe(true);
+    expect(revealSeen(s).revealed, `日志里没有 [揭示]/[中部] ${T9_REVEAL_DEF}：原因：被揭开`).toBe(true);
+    expect(s.players[0].deck.length, '被揭开没有结算它的中指令（我的牌库没少 2 张）').toBe(myDeckBefore - 2);
     expect(s.pendingEffects.length, '结算完还有挂起的效果').toBe(0);
+    return s;
+  }
 
+  it('走对：翻正对手那张 + 偏转走盖着自己那张 ⇒ 过；中途每一步都不算过', () => {
+    const level = levelById('T9');
+    expect(isLevelComplete(level, buildLevelState('T9')), '开局就算过').toBe(false);
+    const s = runT9Flow((phase, st) => {
+      expect(isLevelComplete(level, st), `只做到 ${phase} 就判过关`).toBe(false);
+    });
     expect(isLevelComplete(level, s), '两条露出都做到了却没判过关').toBe(true);
+  });
+
+  it('★ 两张演示牌是**两个不同的 defId**，而且都是各自协议里真实存在的牌', () => {
+    // 用户报的那条误导就是"同一个 defId 出现了两次" ⇒ 这一条正面钉住"它们不是同一张"
+    expect(T9_FLIP_DEF, '两张演示牌是同一个 defId（那正是用户报的问题）').not.toBe(T9_REVEAL_DEF);
+    const s = buildLevelState('T9');
+    expect(findCard(s, 't9f-opp')?.defId, '对手那张不是 T9_FLIP_DEF').toBe(T9_FLIP_DEF);
+    expect(findCard(s, 't9f-ours')?.defId, '我方那张不是 T9_REVEAL_DEF').toBe(T9_REVEAL_DEF);
+    // 两张都得有**注册过的中部指令**（没有注册的效果 `pushMiddle` 直接 return，日志里不会有那条）
+    for (const defId of [T9_FLIP_DEF, T9_REVEAL_DEF]) {
+      expect(getCardDef(defId).middle, `${defId} 没有中部指令 ⇒ 这一课演示不了"中部再结算一次"`).toBeTruthy();
+    }
+  });
+
+  it('★ 本关没有重复 defId（场上/手牌/牌库/弃牌堆加起来；用户报的"同一张牌出现两次"）', () => {
+    const collect = (st: GameState): string[] => {
+      const out: string[] = [];
+      for (const p of st.players) {
+        for (const line of [0, 1, 2] as Line[]) out.push(...p.stacks[line].map((c) => c.defId));
+        out.push(...p.hand.map((c) => c.defId), ...p.deck.map((c) => c.defId), ...p.trash.map((c) => c.defId));
+      }
+      return out;
+    };
+    const cases: readonly (readonly [string, GameState])[] = [['开局', buildLevelState('T9')], ['打完之后', runT9Flow()]];
+    for (const [phase, st] of cases) {
+      const ids = collect(st);
+      expect(ids.length, `${phase}：一张牌都没收到 ⇒ 这条腿在空集上恒真`).toBeGreaterThan(0);
+      const dup = [...new Set(ids.filter((d, i) => ids.indexOf(d) !== i))];
+      expect(dup, `${phase}：这些 defId 出现了两次（${dup.join('、')}）—— 真对局里不会出现`).toEqual([]);
+    }
+  });
+
+  it('★ 两位玩家的每一张牌都属于**他们自己**的三套协议（含反面牌、手牌与牌库）', () => {
+    /**
+     * 用户口径的严格读法："对手手里/场上的牌不能是**我方协议**的牌；反之亦然"。
+     * 通用那条腿只管**场上正面牌**，这一条把本关的每一张牌（含反面牌与牌库）都过一遍 ——
+     * 本关刚好做得到（连那张盖牌流水5 最后都偏转回了流水线），所以不留例外。
+     */
+    const protocolOf = (defId: string): string => defId.replace(/-\d+$/, '');
+    const check = (st: GameState, phase: string): void => {
+      for (const pid of [0, 1] as const) {
+        const own = st.players[pid].protocols.map((p) => p.defId);
+        for (const line of [0, 1, 2] as const) {
+          for (const c of st.players[pid].stacks[line]) {
+            expect(own, `${phase}：玩家 ${pid + 1} 的第 ${line + 1} 条线上摆着 ${c.defId}，不属于他自己的三套协议`)
+              .toContain(protocolOf(c.defId));
+          }
+        }
+        for (const zone of ['hand', 'deck', 'trash'] as const) {
+          for (const c of st.players[pid][zone]) {
+            expect(own, `${phase}：玩家 ${pid + 1} 的 ${zone} 里有 ${c.defId}，不属于他自己的三套协议`)
+              .toContain(protocolOf(c.defId));
+          }
+        }
+      }
+    };
+    check(buildLevelState('T9'), '开局');
+    check(runT9Flow(), '打完之后');
+  });
+
+  it('★ 打完之后再按"正面牌必须属于本侧本线的协议"查一遍（翻正之后那张才成为正面牌）', () => {
+    // 通用那条腿跑的是**开局**状态，而对手那张此时还是反面（反面牌不看协议）⇒ 翻正之后
+    // 它落在哪条线上是这一课新摆出来的事实，必须在这里补一次。
+    const s = runT9Flow();
+    const protocolOf = (defId: string): string => defId.replace(/-\d+$/, '');
+    let checked = 0;
+    for (const pid of [0, 1] as const) {
+      const own = s.players[pid].protocols.map((p) => p.defId);
+      for (const line of [0, 1, 2] as const) {
+        for (const c of s.players[pid].stacks[line]) {
+          if (!c.faceUp) continue;
+          checked += 1;
+          expect(protocolOf(c.defId), `${c.defId}（玩家 ${pid + 1} 的第 ${line + 1} 条线）不属于他自己那条线的协议`)
+            .toBe(own[line]);
+        }
+      }
+    }
+    // 反向锚点：真的查过牌（否则上面那段可以在空集上恒真）
+    expect(checked, '一张正面牌都没查到 ⇒ 这条腿是空的').toBe(4);
+  });
+
+  it('★ 四样证据缺一不可：逐样改坏 ⇒ 各有一条腿红', () => {
+    /**
+     * 判据是**四样** AND 起来的（两条日志 + 两个状态）。光有"整条正路跑通"那一条腿时，
+     * 把其中任意一样改成恒真都**不会红**（T7/T11 那两组是同款结论）—— 那说明那条腿只证明了
+     * "走得通"，没证明"缺了不行"。这里拿跑完的局面上逐样改坏（改日志 / 改朝向 / 再盖一张），
+     * 每一处**只**影响一样，所以哪一条红了就能反推是哪一样坏了。
+     */
+    const level = levelById('T9');
+    expect(isLevelComplete(level, runT9Flow()), '四样齐了却没判过关').toBe(true);
+
+    // ① 日志里"翻正"那一条没了（其余三样都还在）
+    const noFlipLog = runT9Flow();
+    noFlipLog.log = noFlipLog.log.filter((l) => !l.includes(`[中部] ${T9_FLIP_DEF}：原因：翻正`));
+    expect(isLevelComplete(level, noFlipLog), '日志里没有"翻正"那一条也算过').toBe(false);
+
+    // ② 日志里"被揭开"那一条没了（`[揭示]` 还在，缺的是 `[中部] …：原因：被揭开`）
+    const noRevealLog = runT9Flow();
+    noRevealLog.log = noRevealLog.log.filter((l) => !l.includes('：原因：被揭开'));
+    expect(isLevelComplete(level, noRevealLog), '日志里没有"被揭开"那一条也算过').toBe(false);
+
+    // ③ 对手那张又变回反面（"翻正"的状态差分不成立）
+    const oppDown = runT9Flow();
+    oppDown.players[1].stacks[2][0].faceUp = false;
+    expect(isLevelComplete(level, oppDown), '对手那张还是反面也算过').toBe(false);
+
+    // ④ 我方那张又被盖住（`isUncovered` 不成立）
+    const oursCovered = runT9Flow();
+    oursCovered.players[0].stacks[1].push(rawCard('t9x-cover', 'water-1', 0, 'field', false, 1, 1));
+    expect(isLevelComplete(level, oursCovered), '我方那张又被盖住也算过').toBe(false);
+  });
+
+  it('★ revealSeen 的两条读数逐字认日志（认错一个字就红，两条各认各的牌）', () => {
+    /**
+     * 判据读的是**引擎日志的原文**，所以这里把它的匹配面整条钉住 —— 四行日志、四种读数：
+     *  - 只有 `[中部] …：原因：翻正` ⇒ 只算"翻正"；
+     *  - 只有 `[中部] …：原因：被揭开`（没有 `[揭示]` 那一行）⇒ **两条都不算**：
+     *    `[揭示]` 那条证的是"新顶被揭开"，单有 `[中部]` 不足以说明走的是"露出"这条路；
+     *  - `[揭示]` + `[中部] …：原因：被揭开` ⇒ 算"被揭开"；
+     *  - **旧那张牌（`speed-0`）的日志不算数** —— 局面换过牌，判据必须跟着换（否则它会去
+     *    匹配一条永远不会出现的字符串）。
+     */
+    const s = buildLevelState('T9');
+    s.log = [`[中部] ${T9_FLIP_DEF}：原因：翻正`];
+    expect(revealSeen(s), '只有翻正那条日志时的读数不对').toEqual({ flipped: true, revealed: false });
+
+    s.log = [`[中部] ${T9_REVEAL_DEF}：原因：被揭开`];
+    expect(revealSeen(s), '缺了 [揭示] 那一行也算"被揭开"了').toEqual({ flipped: false, revealed: false });
+
+    s.log = [`[揭示] ${T9_REVEAL_DEF} 被揭开（其上卡被移除）`, `[中部] ${T9_REVEAL_DEF}：原因：被揭开`];
+    expect(revealSeen(s), '两条日志都齐了却没算"被揭开"').toEqual({ flipped: false, revealed: true });
+
+    s.log = ['[中部] speed-0：原因：翻正', '[揭示] speed-0 被揭开（其上卡被移除）'];
+    expect(revealSeen(s), '旧那张演示牌（speed-0）的日志还被判据认着 —— 判据没跟着换例子')
+      .toEqual({ flipped: false, revealed: false });
+  });
+
+  it('★ T9 文案里点到的牌名都在局面上（用户报过"文案里的牌名与局面不符"）', () => {
+    /**
+     * 用户上一轮抓到的就是这一类：文案念着一张牌，局面上摆的却是另一张（或压根没有）。
+     * 这一条把 T9 的**全部文案**（标题/目标/讲解/局面/引导步骤/观察点）过一遍：
+     *  - 凡是「」里写成牌名（`协议名+分值`，如「动量3」）的，局面上必须真有那张牌；
+     *  - 反向：两张演示牌的名字必须在文案里出现过（换了牌却忘了改文案 ⇒ 这里红）。
+     */
+    const level = levelById('T9');
+    const s = buildLevelState('T9');
+    const nameOf = (defId: string): string => {
+      const def = getCardDef(defId);
+      return `${getProtocolDef(def.protocol).name}${def.value}`;
+    };
+    const defIds: string[] = [];
+    for (const p of s.players) {
+      for (const line of [0, 1, 2] as Line[]) defIds.push(...p.stacks[line].map((c) => c.defId));
+      defIds.push(...p.hand.map((c) => c.defId), ...p.deck.map((c) => c.defId));
+    }
+    const onBoard = new Set(defIds.map(nameOf));
+
+    const copy = [
+      level.title(), level.goal(), level.scenario(), level.observe(),
+      ...level.teach.map((f) => f()), ...level.guidedSteps.map((f) => f()),
+    ].join('\n');
+    const quoted = [...copy.matchAll(/「([^」]+)」/g)].map((m) => m[1]).filter((x) => /^[\u4e00-\u9fff]+\d+$/.test(x));
+    expect(quoted.length, '文案里一个牌名都没有 ⇒ 这条腿在空集上恒真').toBeGreaterThan(0);
+    for (const name of quoted) {
+      expect(onBoard.has(name), `文案里点了「${name}」，但这张牌不在 T9 的局面里`).toBe(true);
+    }
+    for (const defId of [T9_FLIP_DEF, T9_REVEAL_DEF]) {
+      expect(quoted, `演示牌 ${defId}（${nameOf(defId)}）在 T9 文案里一次都没出现 —— 换了牌却没改文案？`)
+        .toContain(nameOf(defId));
+    }
   });
 
   it('走偏：只翻正不动盖子那张 ⇒ 不过（一条途径不顶两条）', () => {
@@ -626,9 +815,12 @@ describe('★ T9：打出 vs 露出（两条露出途径各一次）', () => {
     /**
      * 这一条是"不要照着直觉改文案"的机械保障：用户口径里的"偏转把被覆盖的卡变为未被覆盖"
      * 有两种读法，其中**偏转被盖住的那张自己**走的是 `completeShift` 的落地重估
-     * （`resolve.ts:1091`，只对 `diversity-0`/`unity-1` 开）⇒ speed-0 的中部**不会**触发。
+     * （`resolve.ts:1091`，只对 `diversity-0`/`unity-1` 开）⇒ 这张牌的中部**不会**触发。
      * 课上演示用的是另一条（偏转**盖着它的那张**，走 `revealAfterRemoval`）。
      * 两条都实测过；这条腿把"后者成立、前者不成立"钉死，免得以后有人把课改成错的。
+     *
+     * ⚠️ 2026-10-06：被偏转的那张改用 `T9_REVEAL_DEF`（本关演示"被揭开"的那张牌）——
+     * 这样 `revealSeen().revealed` 在这里是**真的**在判"它没被揭开"，换成别的牌就恒为假了。
      */
     const s = createGame({ seed: 't9-shift-covered', draftStarter: 0, firstToPlay: 0 });
     s.phase = 'turn';
@@ -642,12 +834,13 @@ describe('★ T9：打出 vs 露出（两条露出途径各一次）', () => {
     s.pendingPlay = [];
     s.pendingShift = [];
     s.players[0].protocols = [{ defId: 'spirit', compiled: false }, { defId: 'water', compiled: false }, { defId: 'darkness', compiled: false }];
-    s.players[1].protocols = [{ defId: 'spirit', compiled: false }, { defId: 'water', compiled: false }, { defId: 'darkness', compiled: false }];
-    // 对手线 0：speed-0（正面、**被盖住**）＋ 一张正面顶卡
-    s.players[1].stacks[0] = [rawCard('b0', 'speed-0', 1, 'field', true, 0, 0), rawCard('b-cover', 'water-1', 1, 'field', true, 0, 1)];
+    // 对手那三套跟着被偏转的那张牌走（momentum）：这是裸局面夹具，只为把"偏转被覆盖者"这条路走通
+    s.players[1].protocols = [{ defId: 'momentum', compiled: false }, { defId: 'fire', compiled: false }, { defId: 'light', compiled: false }];
+    // 对手线 1：这张演示牌（正面、**被盖住**）＋ 一张正面顶卡
+    s.players[1].stacks[0] = [rawCard('b0', T9_REVEAL_DEF, 1, 'field', true, 0, 0), rawCard('b-cover', 'momentum-0', 1, 'field', true, 0, 1)];
     s.players[0].hand = [rawCard('h-dark0', 'darkness-0', 0, 'hand', true)];
     s.players[0].deck = [rawCard('e1', 'water-2', 0, 'deck'), rawCard('e2', 'water-3', 0, 'deck'), rawCard('e3', 'water-4', 0, 'deck')];
-    expect(isUncovered(s, s.players[1].stacks[0][0]), '前置：speed-0 应当是被盖住的').toBe(false);
+    expect(isUncovered(s, s.players[1].stacks[0][0]), '前置：那张演示牌应当是被盖住的').toBe(false);
 
     // 黑暗0 的中指令：抽 3 张 → 偏转 1 张**对手被盖住的**牌（`allowCovered: true`）
     expect(drive(s, 'play', { cardUid: 'h-dark0', faceUp: true, line: 2 }), '引擎拒了黑暗0').toBe(true);
@@ -664,7 +857,7 @@ describe('★ T9：打出 vs 露出（两条露出途径各一次）', () => {
     expect(moved?.line, 'b0 的目标线不是 1').toBe(1);
     expect(isUncovered(s, moved as Card), '前置：b0 在目标线应当是未覆盖的顶卡').toBe(true);
     expect(revealSeen(s).revealed, '偏转被覆盖者竟然触发了"被揭开"那一路').toBe(false);
-    expect(s.log.some((l) => l.includes('[中部] speed-0')), '偏转被覆盖者竟然触发了中部指令（与 §7.10 的实测相反）').toBe(false);
+    expect(s.log.some((l) => l.includes(`[中部] ${T9_REVEAL_DEF}`)), '偏转被覆盖者竟然触发了中部指令（与 §7.10 的实测相反）').toBe(false);
   });
 
   it('放行范围：T9 放行 play 与 effect-choice', () => {
