@@ -1116,4 +1116,57 @@ describe('G5 T19 · 草稿 → 对局转场：同一次转变只播一次（源�
     expect(functionBody(MAIN, 'wakeCoinPhase'), 'wakeCoinPhase 里没有 stale 计数（那条链没有证伪位）')
       .toMatch(/if \(due <= performance\.now\(\)\) coinWakeStaleScheduled \+= 1;/);
   });
+
+  /**
+   * ★★ **2026-10-06（用户裁决：修两处"换局面不清 FX"的入口）**。
+   *
+   * 这两处是**换掉这一屏画的局面**、但此前没有清 FX 模块态/常驻层的入口：
+   *   1. `enterNetGame()` 的**新开一局**那一支（下面那句 `state = createGame({...})`）；
+   *   2. `showCoin()` 的 `beginGame` 回调（热座真正开新局那一刻）。
+   * 症状与同族缺陷一样：上一局的已编译环 / 黑烟 / 冰面 / 控制轨层悬在新局上
+   * （教学那条路已经在 `tutorial-screen.ts` 的 `openLevel()` 里修过）。
+   *
+   * 判据是"三句都在、且在换局面之前、且只出现一次"：
+   *  - 少任何一句 = 有一边的模块态/视角座位会被上一局带着走
+   *    （`resetUiState` 清 render.ts、`resetNetUiState` 清远程页、`setFxViewSeat(null)` 清 FX 座位，
+   *     三边互不覆盖 —— 这三句的职责划分写在 `resetToMainInterface` 的注释里）；
+   *  - 位置在 `createGame` **之后** = 存在"新局已在状态里、旧层还在屏上"的中间态；
+   *  - 出现两次 = 有人又写了一处（同一件事两份会漂）。
+   *
+   * ⚠️ 能力边界：`main.ts` 一 import 就把整局跑起来（本仓无 jsdom）⇒ 这两条只能是**源码腿**。
+   * 行为侧的证据是"这两条路都是开新局、而复位函数本身有行为腿"（`tests/ui/*reset*` 一族）。
+   */
+  it('★ 换局面的两处入口（联机新开一局 / 热座开新局）都清了 FX（三句在、在 createGame 之前、各一处）', () => {
+    const THREE = ['resetUiState();', 'resetNetUiState();', 'setFxViewSeat(null);'];
+
+    // ① 联机：新开一局那一支（重连那一支沿用同一份 state，不需要清）
+    const enter = functionBody(MAIN, 'enterNetGame');
+    expect(enter.length, '抽到空片段（enterNetGame 被改名了？）⇒ 本判据假绿').toBeGreaterThan(200);
+    const guardAt = enter.indexOf('hand.session === null');
+    const newGameAt = enter.indexOf('state = createGame(');
+    expect(guardAt, 'enterNetGame 里找不到"握手没交齐就 return"那句守卫（判据的锚点漂了）').toBeGreaterThan(0);
+    expect(newGameAt, 'enterNetGame 里找不到新开一局那句 `state = createGame(`').toBeGreaterThan(0);
+    for (const call of THREE) {
+      expect(enter.split(call).length - 1, `enterNetGame 里 \`${call}\` 不是恰好 1 处`).toBe(1);
+      const at = enter.indexOf(call);
+      expect(at, `enterNetGame 新开一局没有 \`${call}\`（换局面不清 FX）`).toBeGreaterThan(guardAt);
+      expect(at, `\`${call}\` 排在新开一局之后 —— "新局已在状态里、旧层还在屏上"的中间态`).toBeLessThan(newGameAt);
+    }
+
+    // ② 热座：`showCoin().beginGame`（开新局那一刻）
+    const coin = functionBody(MAIN, 'showCoin');
+    const beginAt = coin.indexOf('beginGame:');
+    const coinNewGameAt = coin.indexOf('state = createGame(');
+    expect(beginAt, 'showCoin 里找不到 beginGame 回调').toBeGreaterThan(0);
+    expect(coinNewGameAt, 'showCoin 的 beginGame 里找不到 `state = createGame(`').toBeGreaterThan(0);
+    for (const call of THREE) {
+      expect(coin.split(call).length - 1, `showCoin 里 \`${call}\` 不是恰好 1 处`).toBe(1);
+      const at = coin.indexOf(call);
+      expect(at, `热座开新局没有 \`${call}\`（换局面不清 FX）`).toBeGreaterThan(beginAt);
+      expect(at, 'FX 复位排在 `state = createGame(` 之后（中间态）').toBeLessThan(coinNewGameAt);
+    }
+    // 反向锚点：这一处不是"把闩也搬进来了"（那个闩按既有守卫必须留在调用方）
+    expect(coin, 'showCoin 里出现了 draftTransitionPlayed（那条闩的复位点约定在 startHotseat）')
+      .not.toContain('draftTransitionPlayed');
+  });
 });

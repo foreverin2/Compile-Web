@@ -309,13 +309,15 @@ export const EN: Readonly<Record<string, string>> = {
   'tutorial.T3.title': 'Face up or face down',
   'tutorial.T3.goal': 'Play one card face up and one face down.',
   'tutorial.T3.teach.0': 'Face up: only on its own protocol line, and its value counts toward that line.',
-  'tutorial.T3.teach.1': 'Face down: any line, value does not count — usually used to cover an opponent card.',
+  // ★ 2026-10-06 (ruling: "change the copy"): a face-down card's value counts as 2, not 0
+  //   (`create.ts` stackValue: "face-down card = 2"; design doc §1 "printed value is fixed at 2").
+  'tutorial.T3.teach.1': 'Face down: any line, and its printed value counts as 2 points toward that line (not 0) — usually used to cover an opponent card.',
   'tutorial.T3.teach.2': 'Before dragging, move the mouse onto a card in your hand and click the "Flip" button above it to change the orientation it is played with (on touch: tap the card to select it first) — play one of each.',
   'tutorial.T3.scenario': 'You hold Spirit 1 and Water 1, both face up. This level wants one played each way.',
   'tutorial.T3.steps.0': 'Drag Spirit 1 face up onto line 1.',
   'tutorial.T3.steps.1': 'Move the mouse onto Water 1 and click the "Flip" button above it to turn it face down (on touch: tap the card to select it first).',
   'tutorial.T3.steps.2': 'Drag the face-down Water 1 onto line 1 as well.',
-  'tutorial.T3.observe': 'The face-up card adds 1 to the line; the face-down one sits on top and adds nothing.',
+  'tutorial.T3.observe': 'The face-up card adds 1 point and the face-down one on top counts 2 points — 3 points in total (a face-down card is always worth 2).',
 
   'tutorial.T4.title': 'The five basic moves',
   'tutorial.T4.goal': 'With the five cards in hand, do each move once: flip, shift, draw, discard, return. (Normally, effects that point at a card on the field — flip, shift and return — only work on cards that are not covered; a card that is already covered cannot be picked, unless the card text explicitly says "all cards".)',
@@ -333,12 +335,16 @@ export const EN: Readonly<Record<string, string>> = {
   'tutorial.T5.title': 'Covering a card',
   'tutorial.T5.goal': 'Normally you may play only one card per turn (some card effects let you play more), so play your Corruption 0 onto the opponent\'s card on line 1 (Corruption 0 is a special card that may be played into the opponent\'s line; normally a card cannot be played there).',
   'tutorial.T5.teach.0': 'The opponent has a card on line 1. Play a card on the same line and you bury it.',
-  'tutorial.T5.teach.1': 'A buried card is "covered": its middle value and its top/bottom commands stop working.',
-  'tutorial.T5.teach.2': 'Once your card is flipped face up or moved away, the card below is uncovered and works again.',
+  // ★ 2026-10-06 (ruling: "change the copy"): "covered" affects targetability, not the card's own
+  //   commands (`lineTopCommandActive`: a face-up covered card's top command still applies), and a
+  //   face-down card has no commands at all — its orientation, not the covering, is why.
+  'tutorial.T5.teach.1': 'A buried card is "covered": effects cannot pick it by default (only text that says "all cards" or "covered cards" reaches it); it stays on the field and still counts its points. This card is face down, and a face-down card has no commands at all.',
+  'tutorial.T5.teach.2': 'Once your card is flipped face up or moved away, the card below is uncovered again — it is no longer "covered" and effects can pick it once more.',
   'tutorial.T5.scenario': 'A face-down Spirit 1 sits on the opponent\'s line 1, and your only card is Corruption 0 — "this card may be played on any protocol of either side".',
   'tutorial.T5.steps.0': 'Drag Corruption 0 face up onto the opponent\'s card on line 1 and let go.',
-  'tutorial.T5.steps.1': 'Once it lands on top and that opponent card stops scoring, the level is cleared.',
-  'tutorial.T5.observe': 'Corruption 0 stacks on top, and the opponent\'s line 1 total drops by that card\'s value.',
+  'tutorial.T5.steps.1': 'Once it lands on top and that opponent card is covered, the level is cleared.',
+  // ★ 2026-10-06 (ruling: "change the copy"): the total does NOT drop — a covered face-down card still counts 2.
+  'tutorial.T5.observe': 'Corruption 0 stacks on top and the opponent\'s line 1 total does not change — still 2 points: the covered face-down card still counts 2 (covered does not mean gone, and it loses no points).',
 
   'tutorial.T6.title': 'Can you look at a face-down card?',
   'tutorial.T6.goal': 'First play Water 1 so the top card of your deck lands face down — that is where non-public information comes from — then double-click the face-down cards on line 1 and line 3 and compare which one you can look at.',

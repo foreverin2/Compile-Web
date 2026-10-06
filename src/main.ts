@@ -784,6 +784,26 @@ function enterNetGame(): NetDriver | null {
     return netDriver;
   }
   if (hand.seed === null || hand.draftStarter === null || hand.session === null) return null;
+  /**
+   * ★★ **2026-10-06（用户裁决：修两处"换局面不清 FX"的入口之一）**。
+   *
+   * 这一支是**新开一局**：下面那句 `state = createGame({...})` 会把这一屏画的局面整个换掉，
+   * 而 `render.ts` / `render-net.ts` / `fx-seat.ts` 三边的模块态与 body 级常驻层**都不跟着换**
+   * —— 上一局留下的已编译环、黑烟、冰面、控制轨层会悬在新局上（同族缺陷的另一半见
+   * `resetToMainInterface` / `startReplayFile` 的说明）。
+   *
+   * 为什么这三句就够（三条各自的职责写在 `resetToMainInterface` 那段注释里）：
+   *  - `resetUiState()`：render.ts 的全部 UI 模块态 + body 级常驻层/遮罩；
+   *  - `resetNetUiState()`：远程页自有模块态（两页的状态分属两个模块，谁都不清对方的）；
+   *  - `setFxViewSeat(null)`：FX 层的视角座位（`resetUiState` **不碰** `fx-seat`）。
+   * 位置放在 `createGame` **之前**：先清干净再换局面，不存在"新局已在状态里、旧层还在屏上"
+   * 的中间态（`resetToMainInterface` 的注释里对这条顺序有完整理由）。
+   *
+   * ⚠️ 这一支与**上面那条重连支路**不同：重连沿用同一份 `state`（牌桌不变），所以那里不清 FX。
+   */
+  resetUiState();
+  resetNetUiState();
+  setFxViewSeat(null);
   const seed = hand.seed;
   const draftStarter = hand.draftStarter;
   state = createGame({
@@ -5597,6 +5617,24 @@ function showCoin(): void {
     // ★ 2026-09-30：热座与联机共用同一段抛硬币动画 ⇒ 动态偏好也从同一个唯一出处传下去
     reducedMotion: reducedMotion(),
     beginGame: (starter) => {
+      /**
+       * ★★ **2026-10-06（用户裁决：修两处"换局面不清 FX"的入口之二）**。
+       *
+       * 这一句回调是热座**真正开新局**的那一刻（`state = createGame({...})` 就在下面），
+       * 上一局的常驻 FX（已编译环 / 黑烟 / 冰面 / 死板7 护壁 …）与两页的 UI 模块态都不跟着换
+       * ⇒ 上一局打完回模式选择、再开一局时，旧层会悬在新局上。三句各自的职责见
+       * `resetToMainInterface` 与 `enterNetGame` 里那段同款注释（render.ts 模块态 / 远程页模块态 /
+       * FX 视角座位，三边互不覆盖）。放在 `createGame` **之前**：先清干净再换局面。
+       *
+       * ⚠️ 与 `showCoin` 里那条"草稿转场闩"（`draftTransitionPlayed`）**刻意不同位置**：
+       * 那个闩写在调用方 `showModeSelect().startHotseat`（`tests/ui/main-driver-wiring.test.ts`
+       * 按"showCoin 的调用点数 == 复位点数"钉着）。本句是 FX 复位，判据落点是**换局面的那一处**，
+       * 所以写在这里；`main-driver-wiring.test.ts` 对 `showCoin` 的断言只认 `draftTransitionPlayed`
+       * 这个 token，本次改动不碰它。
+       */
+      resetUiState();
+      resetNetUiState();
+      setFxViewSeat(null);
       state = createGame({
         seed,
         draftStarter: starter,
