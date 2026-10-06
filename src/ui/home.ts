@@ -14,6 +14,10 @@ import { FX_SETTINGS, isFxSettingOn } from './fx-settings';
 // ★ 2026-10-01（P0，用户拍板"UI 全量双语"）：设置小窗是**第一个真实消费者** —— 它的每一条
 // 文案都从 `src/i18n/` 取。中文值与这里原来的字面量逐字一致（既有测试零改动）。
 import { LANGS, getLang, saveFailedSwitchText, saveFailedText, setLang, t, type Lang, type WriteFailure } from '../i18n';
+// ★ 2026-10-06（用户要求）：协议的显示名/座右铭/关键词按语言取（判据只有那一处）
+import { protocolKeywords, protocolMotto, protocolName } from './protocol-text';
+// ★ 2026-10-06（用户要求）：图鉴「按效果分类筛选」的标签/分组名按语言取（判据只有那一处）
+import { effectTagGroupLabel, effectTagLabel } from './library-labels';
 
 /**
  * 主界面/掷硬币/图鉴/规则图纸 —— 非对局屏（main.ts 导航）。
@@ -1954,7 +1958,7 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
       const compiled = compiledS === '1';
       const proto = DEMO_PROTOCOLS.find((p) => p.defId === defId);
       if (!proto) return;
-      const motto = `${proto.name} · ${proto.loadingText}`;
+      const motto = `${protocolName(proto)} · ${protocolMotto(proto)}`;
       showPreview(
         protocolImgSrc(defId, compiled),
         compiled ? t('library.compiled', { name: motto }) : motto,
@@ -1969,7 +1973,7 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
     const proto = DEMO_PROTOCOLS.find((p) => p.defId === c.protocol);
     showPreview(
       cardImgSrc(c.protocol, c.value),
-      t('library.card-caption', { protocol: proto?.name ?? c.protocol, n: String(c.value) }),
+      t('library.card-caption', { protocol: proto ? protocolName(proto) : c.protocol, n: String(c.value) }),
       'portrait',
       buildCardTextEl(cardTextParts(c), 'library-preview-text')
     );
@@ -2082,7 +2086,7 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
   effectPanel.appendChild(effectPanelActions);
   for (const { group, tags } of LIB_TAG_GROUPS) {
     const groupBox = el('div', 'lib-effect-group');
-    groupBox.appendChild(el('div', 'lib-effect-group-name', group));
+    groupBox.appendChild(el('div', 'lib-effect-group-name', effectTagGroupLabel(group)));
     const tagList = el('div', 'lib-effect-tags');
     for (const tag of tags) {
       const row = el('label', 'lib-effect-tag');
@@ -2100,7 +2104,7 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
         refreshList();
       });
       row.appendChild(box);
-      row.appendChild(el('span', 'lib-effect-label', tag.label));
+      row.appendChild(el('span', 'lib-effect-label', effectTagLabel(tag)));
       effectCheckboxes.set(tag.id, box);
       tagList.appendChild(row);
     }
@@ -2139,7 +2143,7 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
     }
     for (const proto of DEMO_PROTOCOLS) {
       if (!r.visibleProtocols.has(proto.defId)) continue; // 协议全被排除 ⇒ 这一组连框都不建
-      const motto = `${proto.name} · ${proto.loadingText}`; // 座右铭（去「X代 基础/拓展」代号）
+      const motto = `${protocolName(proto)} · ${protocolMotto(proto)}`; // 座右铭（去「X代 基础/拓展」代号）
       const group = el('div', 'lib-group');
       const headRow = el('div', 'lib-proto');
 
@@ -2174,7 +2178,7 @@ export function renderLibrary(root: HTMLElement, back: () => void): void {
 
       const meta = el('div', 'lib-proto-meta');
       meta.appendChild(el('div', 'lib-proto-name', motto));
-      meta.appendChild(el('div', 'lib-proto-commands', proto.commands.join(' · ')));
+      meta.appendChild(el('div', 'lib-proto-commands', protocolKeywords(proto)));
       headRow.appendChild(meta);
       group.appendChild(headRow);
 

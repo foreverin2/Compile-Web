@@ -25,6 +25,8 @@
  *  - 只新建元素、只读 DOM，不写任何只读属性（`tests/ui/net-dom-stub.ts` 的桩会当场抛）。
  */
 import { DEMO_PROTOCOLS, protocolImgSrc } from '../data/demo';
+// ★ 2026-10-06（用户要求）：协议的显示名按语言取（判据只有 protocol-text.ts 一处）
+import { protocolName } from './protocol-text';
 import { POOL_MIN, normalizePoolIds } from '../app/pool-choice';
 import { t } from '../i18n';
 
@@ -169,7 +171,7 @@ export function renderPoolPicker(root: HTMLElement, nav: PoolPickerNav): void {
       img.src = protocolImgSrc(def.defId, false);
       img.alt = '';
       wrap.appendChild(img);
-      const name = el('span', 'pool-card-name', def.name);
+      const name = el('span', 'pool-card-name', protocolName(def));
       card.appendChild(wrap);
       card.appendChild(name);
       const paint = (): void => {

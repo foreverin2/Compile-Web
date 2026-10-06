@@ -25,6 +25,7 @@ import { buildTornadoFx } from './fx-tornado';
 // 被拖的是**手牌卡**（`bindCardDrag` 的 `node`），而幽灵挂在 `document.body` 上
 // ⇒ `.net-hands .card` 那条覆盖规则**命不中它**（见 `bindCardDrag` 里 beginDrag 的注释）。
 import { handCardBox } from './fx-card-size';
+import { protocolKeywords, protocolMotto, protocolName } from './protocol-text';
 import { appendGen3CompiledFx, type Gen3FxApi } from './compiled-gen3';
 import { clearGen3Persistent, syncGen3Persistent } from './gen3-control';
 import { syncFollowers } from './fx-follow';
@@ -4691,11 +4692,11 @@ function renderDraftPool(s: GameState, cb: UiCallbacks, banStep: boolean, active
     const img = document.createElement('img');
     img.className = 'draft-card-img';
     img.src = protocolImgSrc(proto.defId, false);
-    img.alt = proto.name;
+    img.alt = protocolName(proto);
     wrap.appendChild(img);
     card.appendChild(wrap);
-    card.appendChild(el('div', 'draft-card-name', proto.name));
-    card.appendChild(el('div', 'draft-card-commands', proto.commands.join(' · ')));
+    card.appendChild(el('div', 'draft-card-name', protocolName(proto)));
+    card.appendChild(el('div', 'draft-card-commands', protocolKeywords(proto)));
     // 悬浮即时预览：移入协议卡 → 操作者侧展示框显示该协议；移出整池恢复固定/提示。
     // 点击（单击）→ 固定显示到操作者侧（再点其它卡切换）；双击仍放大查看（不冲突）。
     card.addEventListener('mouseenter', () => hoverDraftPreview(activePlayer, proto.defId));
@@ -4952,11 +4953,11 @@ export function buildProtocolRatingPanel(defId: string): HTMLElement {
   const proto = getProtocolDef(defId);
   const rating = PROTOCOL_RATINGS.find((r) => r.defId === defId);
   const titleRow = el('div', 'draft-preview-head');
-  titleRow.appendChild(el('div', 'draft-preview-name', proto.name));
-  titleRow.appendChild(el('div', 'draft-preview-motto', proto.loadingText));
+  titleRow.appendChild(el('div', 'draft-preview-name', protocolName(proto)));
+  titleRow.appendChild(el('div', 'draft-preview-motto', protocolMotto(proto)));
   box.appendChild(titleRow);
   if (rating && rating.position) box.appendChild(el('div', 'draft-preview-position', t('render.preview.position', { position: rating.position })));
-  box.appendChild(el('div', 'draft-preview-commands', t('render.preview.commands', { commands: proto.commands.join(' · ') })));
+  box.appendChild(el('div', 'draft-preview-commands', t('render.preview.commands', { commands: protocolKeywords(proto) })));
   if (rating) {
     const scoreRow = el('div', 'draft-preview-scores');
     for (const [k, v] of Object.entries(rating.scores)) {
@@ -6067,7 +6068,7 @@ export function openZoom(defId: string, faceUp: boolean, isProtocol: boolean, co
     try {
       const proto = getProtocolDef(defId);
       const box = el('div', 'zoom-text protocol-zoom-text');
-      box.appendChild(el('div', 'card-text-title', proto.name));
+      box.appendChild(el('div', 'card-text-title', protocolName(proto)));
       const setLabel =
         proto.set === 'MN01' || proto.set === 'AX01' ? t('render.draft.gen-1') :
         proto.set === 'MN02' || proto.set === 'AX02' ? t('render.draft.gen-2') : t('render.draft.gen-3');
@@ -6076,11 +6077,11 @@ export function openZoom(defId: string, faceUp: boolean, isProtocol: boolean, co
       box.appendChild(meta);
       const motto = el('div', 'card-text-seg');
       motto.appendChild(el('span', 'card-text-seg-label', t('render.zoom.motto-label')));
-      motto.appendChild(document.createTextNode(proto.loadingText));
+      motto.appendChild(document.createTextNode(protocolMotto(proto)));
       box.appendChild(motto);
       const kw = el('div', 'card-text-seg');
       kw.appendChild(el('span', 'card-text-seg-label', t('render.zoom.keywords-label')));
-      kw.appendChild(document.createTextNode(proto.commands.join(' · ')));
+      kw.appendChild(document.createTextNode(protocolKeywords(proto)));
       box.appendChild(kw);
       const state = el('div', 'card-text-seg');
       state.appendChild(el('span', 'card-text-seg-label', compiled ? t('render.zoom.compiled') : t('render.zoom.uncompiled')));

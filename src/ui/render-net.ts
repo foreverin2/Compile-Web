@@ -263,6 +263,7 @@ import {
 } from './render';
 // ★ 2026-10-06（用户要求）：「选牌即确定」的判据（纯函数；热座页读**同一个** —— 两页不各写一份）。
 import { instantChoiceApplies } from './play-prefs';
+import { protocolKeywords, protocolMotto, protocolName } from './protocol-text';
 
 /* ============================================================================
  * 接口
@@ -2282,7 +2283,7 @@ export function netZoomContentFor(
       return {
         key: `proto:${defId}:${compiled ? 1 : 0}`,
         kind: 'protocol',
-        title: `${getProtocolDef(defId).name}${compiled ? t('render-net.zoom.compiled-suffix') : ''}`,
+        title: `${protocolName(getProtocolDef(defId))}${compiled ? t('render-net.zoom.compiled-suffix') : ''}`,
         render: (box) => {
           box.dataset.state = 'protocol';
           box.dataset.kind = 'protocol';
@@ -2292,7 +2293,7 @@ export function netZoomContentFor(
           const pimg = document.createElement('img');
           pimg.className = 'net-zoom-box-img';
           pimg.src = protocolImgSrc(defId, compiled);
-          pimg.alt = getProtocolDef(defId).name;
+          pimg.alt = protocolName(getProtocolDef(defId));
           fig.appendChild(pimg);
           body.appendChild(fig);
           // 协议详情面板（`buildProtocolRatingPanel` 的根**就是**「文本列」——
