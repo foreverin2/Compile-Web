@@ -715,7 +715,16 @@
   pointer-events: none; /* 棋盘照旧可点：本屏的教学全靠玩家真的去拖牌 */
 }
 .tutorial-panel {
-  position: absolute; top: 12px; left: 12px;
+  /* ★ 2026-10-03（用户要求）：教练面板挪到**右下角**。
+   * 用户原话：「我希望能够将教程中的引导位置换到右下角，因为现在的位置会挡住己方查看场上信息」。
+   * 原来钉在左上角（`top:12px; left:12px`），正压着玩家自己那半场 —— 教学要玩家一边看自己场上的
+   * 数与牌、一边照着做，挡住就等于把这一屏废掉。改成右下角之后：
+   *   · 自己那半场（左/中）整片露出来；
+   *   · T0 的四个热点（链路在左、协议在中、总值在最左、控制权在顶部中央）一个都不被盖住
+   *     （原来左上角那块正压着「链路」热点的左上角）；
+   *   · 面板内容长时向上生长（`max-height` 仍是一屏内），不越出视口。
+   */
+  position: absolute; right: 12px; bottom: 12px;
   width: min(380px, 92vw); max-height: calc(100vh - 24px); box-sizing: border-box;
   overflow-y: auto; overscroll-behavior: contain;
   display: flex; flex-direction: column; gap: 10px;
@@ -827,7 +836,33 @@
 }
 .pool-card:hover { border-color: #5c628f; }
 .pool-card-on { border-color: #00ffcc; box-shadow: inset 0 0 0 1px rgba(0, 255, 204, 0.18); }
-.pool-card-thumb { width: 84px; height: 62px; object-fit: contain; border-radius: 6px; }
+/*
+ * ★ 2026-10-03（用户报的缺陷）：协议图**横着放**（与「选协议」那一屏同款）。
+ *
+ * 图源是竖版（`/assets/protocols/<defId>/protocol-loading.*` 实测 750×1050，1/2/3 代都一样），
+ * 草稿页的解法是「1.4:1 的容器 + 图 rotate(-90deg) 且宽高按 1:1.4 反过来撑满」
+ * （`styles.css:1518-1535` 的 `.draft-card-img-wrap` / `.draft-card-img`）。这里照抄那条几何，
+ * 只换类名（`styles.css` 是红线，一行不动）：
+ *   容器宽 W、高 W/1.4；图宽 W/1.4、高 W（= 容器高 × 1.4），旋转 90° 后视觉正好 W × W/1.4。
+ * 容器用 aspect-ratio 定高，百分比高度才有参照（与草稿页同一个前提）。
+ */
+.pool-card-thumb-wrap {
+  width: 100%;
+  aspect-ratio: 1.4 / 1;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+  background: #17172c;
+  border-radius: 6px;
+}
+.pool-card-thumb {
+  width: calc(100% / 1.4);
+  height: calc(100% * 1.4);
+  flex-shrink: 0;
+  object-fit: cover;
+  transform: rotate(-90deg); /* 逆时针 90°：竖版协议图横置展示 */
+  border-radius: 4px;
+  pointer-events: none; user-select: none; -webkit-user-drag: none;
+}
 .pool-card-name { font-size: 12px; }
 .pool-actions { display: flex; gap: 10px; width: min(560px, 92vw); margin-top: 6px; }
 .pool-actions .btn {

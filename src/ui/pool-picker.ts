@@ -154,12 +154,23 @@ export function renderPoolPicker(root: HTMLElement, nav: PoolPickerNav): void {
       const card = el('button', 'pool-card');
       card.setAttribute('type', 'button');
       card.dataset.defId = def.defId;
+      /**
+       * ★ 2026-10-03（用户报的缺陷）：**协议图要横着放**，与「选协议」那一屏同款。
+       *
+       * 图本身是竖版（`/assets/protocols/<defId>/protocol-loading.*` 实测 750×1050，
+       * 1、2、3 代都是），草稿页的做法是给一个 `aspect-ratio: 1.4/1` 的容器、把图
+       * `rotate(-90deg)` 且宽高按 1:1.4 反过来撑满（`styles.css` 的 `.draft-card-img-wrap`
+       * / `.draft-card-img`）。这里照同一条几何（容器 + 旋转）做，类名用自己的
+       * `.pool-card-thumb-wrap` / `.pool-card-thumb`（版式在 `styles-local.css`）。
+       */
+      const wrap = el('div', 'pool-card-thumb-wrap');
       const img = document.createElement('img');
       img.className = 'pool-card-thumb';
       img.src = protocolImgSrc(def.defId, false);
       img.alt = '';
+      wrap.appendChild(img);
       const name = el('span', 'pool-card-name', def.name);
-      card.appendChild(img);
+      card.appendChild(wrap);
       card.appendChild(name);
       const paint = (): void => {
         const on = selected.has(def.defId);
