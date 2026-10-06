@@ -1066,3 +1066,24 @@
  * 同一条理由）。样式仍落在 `styles-local.css`：`styles.css` 是红线，一行不动。
  */
 .settings-instant-note { font-size: 12px; line-height: 1.6; color: #8f9ac0; }
+/*
+ * ★ 2026-10-06（用户要求）：战斗日志那一行的**小图片**（对应触发的卡牌或协议）。
+ *
+ * 结构由 `render.ts` 的日志循环产出：`.log-entry` 里可选的 `img.log-thumb` + 一个
+ * `.log-text`。两点是承重的：
+ *  - `.log-entry` 改成 flex 行：图在左、文本在右，且 `align-items: flex-start`（多行文本时
+ *    图不被拉高）；
+ *  - `.log-text` 保留 `white-space: pre-wrap`：`pushLog` 把"效果栈深度"写成**行首空格**，
+ *    换行与缩进都靠它（`.log` 上原本那条 pre-wrap 是继承不到的 —— 文本节点被 flex 变成
+ *    匿名项，显式写在 `.log-text` 上更稳）。
+ */
+.log-entry { display: flex; align-items: flex-start; gap: 4px; }
+.log-thumb {
+  flex: 0 0 auto;
+  width: 20px; height: 26px;
+  object-fit: cover;
+  border-radius: 2px;
+  border: 1px solid #4ff0ff44;
+  margin-top: 1px;
+}
+.log-text { white-space: pre-wrap; }

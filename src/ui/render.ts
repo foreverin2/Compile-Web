@@ -14,6 +14,8 @@ import type { CardTextParts } from '../data/demo';
 import { COMPILED_PROTOCOL_COLORS, protocolColorOf, hexToRgba } from './protocol-colors';
 import { PROTOCOL_RATINGS } from '../data/protocolRatings';
 import { isMetal6StrobeOn } from './fx-settings';
+// ★ 2026-10-06（用户要求）：战斗日志的显示层（纯英文 + 对应卡牌/协议的小图片）
+import { logEntryView } from './log-line';
 // ★ 2026-10-06（用户要求）：「选牌即确定」这一项的判据（纯函数，唯一出处；远程页读同一个）。
 import { instantChoiceApplies } from './play-prefs';
 import { actionCn } from '../core/log';
@@ -5654,7 +5656,36 @@ export function renderBoard(root: HTMLElement, s: GameState, cb: UiCallbacks): v
 
   const log = el('div', 'log');
   for (const entry of s.log.slice(-60)) {
-    log.appendChild(el('div', 'log-entry', entry));
+    /**
+     * ★ 2026-10-06（**用户要求**）：「把战斗日志改为纯英文 + 带对应触发卡牌/协议的小图片」。
+     *
+     * 文本与缩略图都来自显示层（`src/ui/log-line.ts`）：中文模式文本**逐字**是引擎原文
+     * （缩略图照给），英文模式走 `src/i18n/engine-log.ts` 的形状表。
+     * 缩略图：卡用 `cardImgSrc(协议, 分值)`、协议用 `protocolImgSrc(defId, false)`，
+     * 都与棋盘上用的是同一张官方图（浏览器缓存复用）；`loading=lazy` + 固定小尺寸，
+     * 免得一屏 60 条日志把几十张卡图一起拉下来。
+     */
+    const view = logEntryView(entry);
+    const row = el('div', 'log-entry');
+    if (view.thumb !== null) {
+      const img = document.createElement('img');
+      img.className = 'log-thumb';
+      img.dataset.thumbKind = view.thumb.kind;
+      img.dataset.thumbDefId = view.thumb.defId;
+      if (view.thumb.kind === 'card') {
+        const [protocol, value] = splitDefId(view.thumb.defId);
+        img.src = cardImgSrc(protocol, value);
+      } else {
+        img.src = protocolImgSrc(view.thumb.defId, false);
+      }
+      img.alt = '';
+      img.loading = 'lazy';
+      img.decoding = 'async';
+      row.appendChild(img);
+    }
+    // 缩进（`pushLog` 写进文本的那些空格）由 `.log-text` 的 `white-space: pre-wrap` 保
+    row.appendChild(el('span', 'log-text', view.text));
+    log.appendChild(row);
   }
   wrap.appendChild(log);
 

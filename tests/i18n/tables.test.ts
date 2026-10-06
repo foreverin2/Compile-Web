@@ -1192,18 +1192,17 @@ const EN_CJK_ALLOW: Readonly<Record<string, string>> = {
   'home.footer':
     '页脚署名里的 `「我吃吃吃吃」` 是**专有名词**（用户名），中英同款、不翻译。'
     + '走查也把它判成"干净（人名）"。',
-  'tutorial.T9.observe':
-    '同上：引用了引擎日志原文（`[中部] speed-1：原因：翻正` / `[中部] momentum-3：原因：被揭开`）。'
-    + '⚠️ 2026-10-06：这一关的演示牌换过（原来是两张 `speed-0`，会误导"同一张牌出现两次"），'
-    + '白名单本身仍然需要（值里就是引擎写的日志原文），只是理由里的牌名跟着换了。',
-  'tutorial.T10.observe':
-    '引用了**引擎日志的原文**（`P1 控制阶段：2 条线总值高于对手 → 获得控制组件`）。'
-    + '引擎日志住在 `src/core/**`（红线），本轮不抽 ⇒ 教学里引用的那一行无论界面语言都得是中文。'
-    + '这条与上下两条同族，属已知缺口（见 `docs/2026-10-01-i18n-尚未抽取的屏.md` 的 F 节）。',
-  'tutorial.T11.observe':
-    '同上：引用了引擎日志原文（`[被盖前] fire-0` / `[结束] life-0：由 P1 结算`）。',
-  'tutorial.T12.observe':
-    '同上：引用了引擎日志原文（`rigidity-7 不可被翻转，跳过`）。',
+  /**
+   * ★ 2026-10-06：原来这里还登记着 4 条（`tutorial.T9/T10/T11/T12.observe`），
+   * 理由是"它们引用了引擎日志原文，而日志住在红线 `src/core/**`、本轮不抽，所以界面语言是英文时
+   * 引用的那一行也必须是中文"。
+   *
+   * 现在日志有了**显示层**（`src/i18n/engine-log.ts` + `src/ui/log-line.ts`：英文模式下把日志
+   * 翻成英文），那 4 条英文文案里的引用也跟着换成了英文（`[middle] speed-1: reason: flipped
+   * face up` / `P1 control step: …` / `[before covered] fire-0` / `[end] life-0: resolved by P1` /
+   * `rigidity-7 cannot be flipped, skipping`）⇒ **白名单条目按"不许长草"删掉**。
+   * 引用与日志措辞的一致性由 `tests/i18n/engine-log.test.ts` 的一条腿钉住（改日志措辞 ⇒ 那里红）。
+   */
 };
 
 describe('★ 英文表里不许出现汉字（白名单逐条列出并说明理由）', () => {

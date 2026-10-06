@@ -17,6 +17,7 @@ import { createGame, getLineValue } from '../../src/core/state/create';
 import { isUncovered, findCard } from '../../src/core/effects/context';
 import { getCardDef, getProtocolDef } from '../../src/data/demo';
 import { ZH, EN } from '../../src/i18n';
+import { engineLogText } from '../../src/i18n/engine-log';
 import { stripComments } from '../ui/source-text';
 import type { Card, GameState, Line, PlayerId } from '../../src/core/models/types';
 import type { TutChoiceSeen, TutOp } from '../../src/tutorial/types';
@@ -1098,7 +1099,15 @@ describe('★ T11：触发时机（打出后 / 被盖住前 / 结束 各一次�
     for (const [lang, table] of [['zh', ZH], ['en', EN]] as const) {
       const obs = (table as Record<string, string>)['tutorial.T11.observe'] ?? '';
       expect(obs, `${lang} 的 T11 观察点让玩家去日志里找一条不存在的记录`).not.toContain('连锁·出牌后');
-      expect(obs, `${lang} 的 T11 观察点没写那两条真的会出现的日志标题`).toContain('[被盖前]');
+      /**
+       * ★ 文案里引用的那条日志要**跟着日志显示层走**：`obs` 里必须出现玩家真会在日志里看到的
+       * 那串字。所以判据不写死中文标签，而是拿 `engineLogText` 现算一遍（zh 恒等、en 走规则表）。
+       * 这样日志层的措辞一变，这里立刻红，而不是等到玩家发现文案对不上。
+       */
+      const beforeCovered = engineLogText('[被盖前] fire-0', lang);
+      expect(obs, `${lang} 的 T11 观察点没写那两条真的会出现的日志标题`).toContain(beforeCovered);
+      const endLine = engineLogText('[结束] life-0：由 P1 结算', lang);
+      expect(obs, `${lang} 的 T11 观察点没写「结束」那条日志`).toContain(endLine);
     }
     expect(isLevelComplete(level, s), '只做到两处触发就判过关').toBe(false);
 

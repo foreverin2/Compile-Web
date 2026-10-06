@@ -425,7 +425,7 @@ export const EN: Readonly<Record<string, string>> = {
   'tutorial.T9.steps.3': 'Move the mouse onto Water 5 and click the "Flip" button above it to turn it face down (on touch: tap the card to select it first), then drag it onto line 2 to cover your Momentum 3.',
   'tutorial.T9.steps.4': 'Drag Darkness 4 face up onto line 1, tap that face-down Water 5 first, click the confirm button in the console, then click the line you want to move it to.',
   'tutorial.T9.steps.5': 'Pick a line (line 3) to shift it there — your Momentum 3 is uncovered again and its middle command resolves too: this time you draw 2 cards.',
-  'tutorial.T9.observe': 'The log shows "[中部] speed-1：原因：翻正" and then "[中部] momentum-3：原因：被揭开" — each card\'s middle command resolved once, and neither reason is "played".',
+  'tutorial.T9.observe': 'The log shows "[middle] speed-1: reason: flipped face up" and then "[middle] momentum-3: reason: was revealed" — each card\'s middle command resolved once, and neither reason is "played".',
 
   /* ── P7: the last four levels (control / trigger timing / delete-immunity-buff / mini match) ── */
   'tutorial.T10.hint.go': 'Now tap "Next" on the board — the engine resolves control once in the control step.',
@@ -452,7 +452,7 @@ export const EN: Readonly<Record<string, string>> = {
   'tutorial.T10.steps.0': 'Look at the totals on the right of lines 1 and 2 and confirm you beat the opponent on both.',
   'tutorial.T10.steps.1': 'Tap "Next" on the board to let the engine advance one step — it resolves this control step for you.',
   'tutorial.T10.steps.2': 'Check the control component column on the right and confirm it is yours now.',
-  'tutorial.T10.observe': 'The log shows "P1 控制阶段：2 条线总值高于对手 → 获得控制组件", and the control column switches from neutral to yours.',
+  'tutorial.T10.observe': 'The log shows "P1 control step: 2 line(s) beat the opponent → gains the control component", and the control column switches from neutral to yours.',
 
   // T11: trigger timing (P7)
   'tutorial.T11.title': 'Three trigger timings',
@@ -465,7 +465,7 @@ export const EN: Readonly<Record<string, string>> = {
   'tutorial.T11.steps.0': 'Move the mouse onto the Water 0 in your hand and click the "Flip" button above it to turn it face down (on touch: tap the card to select it first), then drag it onto line 2 to cover your Fire 0 — this one move sets off two triggers: Fire 0 resolves its "before covered" part, and the opponent\'s Ice 1 on that same line fires its "after the opponent plays into this line" part. That one punishes whoever plays into the line — you — so this time you are the one who discards (pick the Ice 5 from the candidates).',
   'tutorial.T11.steps.1': 'Tap "Next" on the board to advance to the end step.',
   'tutorial.T11.steps.2': 'Tap the "Resolve trigger" button on the covered Life 0 — its "end" part deletes itself.',
-  'tutorial.T11.observe': 'Three pieces of evidence: after the "after play" part you are one card shorter (that card is in your discard pile); the log shows "[被盖前] fire-0"; and the log then shows "[结束] life-0：由 P1 结算" while that Life 0 disappears from the field.',
+  'tutorial.T11.observe': 'Three pieces of evidence: after the "after play" part you are one card shorter (that card is in your discard pile); the log shows "[before covered] fire-0"; and the log then shows "[end] life-0: resolved by P1" while that Life 0 disappears from the field.',
 
   // T12: delete / immunity / buff (P7)
   'tutorial.T12.title': 'Delete, immunity, buff',
@@ -479,7 +479,7 @@ export const EN: Readonly<Record<string, string>> = {
   'tutorial.T12.steps.1': 'Play Clarity 0 face up onto line 2 and watch that line\'s total go from 0 to 1.',
   'tutorial.T12.steps.2': 'Play Darkness 1 face up onto line 3 and tap the opponent\'s Rigidity 7 in the candidates.',
   'tutorial.T12.steps.3': 'Read the log: the engine says it "cannot be flipped, skipping", and Rigidity 7 is still face up. (That is because of Rigidity 7\'s bottom command.)',
-  'tutorial.T12.observe': 'The opponent\'s Water 2 goes to the discard pile, line 2 gains 1 point, and Rigidity 7 will not flip — the log says "rigidity-7 不可被翻转，跳过".',
+  'tutorial.T12.observe': 'The opponent\'s Water 2 goes to the discard pile, line 2 gains 1 point, and Rigidity 7 will not flip — the log says "rigidity-7 cannot be flipped, skipping".',
 
   // T13: mini match (P7)
   'tutorial.T13.title': 'Play a small game',
