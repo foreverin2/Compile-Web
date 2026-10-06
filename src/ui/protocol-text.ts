@@ -22,6 +22,7 @@
 
 import { getLang } from '../i18n';
 import { PROTOCOL_EN } from '../i18n/protocol-en';
+import { PROTOCOL_RATINGS_EN, SCORE_KEYS_EN } from '../i18n/protocol-ratings-en';
 
 /** 协议显示名：中文模式 = `proto.name`；英文模式 = 卡面上的英文名（Water / Rigid） */
 export function protocolName(proto: { readonly defId: string; readonly name: string }): string {
@@ -44,4 +45,42 @@ export function protocolKeywords(proto: { readonly defId: string; readonly comma
     if (en !== undefined && en.length > 0) return en.join(' · ');
   }
   return proto.commands.join(' · ');
+}
+
+/**
+ * 评分面板的四段正文 + 六维键名（2026-10-06 补的最后一处英文缺口）。
+ *
+ * 中文事实表是自动生成的 `src/data/protocolRatings.ts`（`review` / `pairs` / `styles` / `position`
+ * 都是整段中文），英文显示串在 `src/i18n/protocol-ratings-en.ts`（用户让外部翻的）。
+ * 与上面三个助手同一套契约：**中文模式逐字返回中文**；英文模式有英文就用、没有就回退中文。
+ *
+ * `table` 只给测试用（同 `play-prefs.ts` 的 `instantChoiceApplies(prompt, on?)`）：
+ * 表里没有"空值条目"可用，不回退那一条分支就只能靠注入一张假表来真跑。
+ */
+type RatingsTable = typeof PROTOCOL_RATINGS_EN;
+
+export function ratingPosition(defId: string, zh: string, table: RatingsTable = PROTOCOL_RATINGS_EN): string {
+  if (getLang() !== 'en') return zh;
+  const en = table[defId]?.position;
+  return en !== undefined && en.trim() !== '' ? en : zh;
+}
+
+export function ratingReview(defId: string, zh: string, table: RatingsTable = PROTOCOL_RATINGS_EN): string {
+  if (getLang() !== 'en') return zh;
+  const en = table[defId]?.review;
+  return en !== undefined && en.trim() !== '' ? en : zh;
+}
+
+/** `which` 只区分推荐搭配与推荐流派两张表 */
+export function ratingList(defId: string, zh: readonly string[], which: 'pairs' | 'styles', table: RatingsTable = PROTOCOL_RATINGS_EN): readonly string[] {
+  if (getLang() !== 'en') return zh;
+  const en = table[defId]?.[which];
+  return en !== undefined && en.length > 0 ? en : zh;
+}
+
+/** 六维键名（上手/强度/…）会直接画在评分条上 ⇒ 英文模式换成 Ease/Strength/… */
+export function ratingScoreKey(zhKey: string, table: Readonly<Record<string, string>> = SCORE_KEYS_EN): string {
+  if (getLang() !== 'en') return zhKey;
+  const en = table[zhKey];
+  return en !== undefined && en.trim() !== '' ? en : zhKey;
 }

@@ -27,7 +27,7 @@ import { buildTornadoFx } from './fx-tornado';
 // 被拖的是**手牌卡**（`bindCardDrag` 的 `node`），而幽灵挂在 `document.body` 上
 // ⇒ `.net-hands .card` 那条覆盖规则**命不中它**（见 `bindCardDrag` 里 beginDrag 的注释）。
 import { handCardBox } from './fx-card-size';
-import { protocolKeywords, protocolMotto, protocolName } from './protocol-text';
+import { protocolKeywords, protocolMotto, protocolName, ratingList, ratingPosition, ratingReview, ratingScoreKey } from './protocol-text';
 import { appendGen3CompiledFx, type Gen3FxApi } from './compiled-gen3';
 import { clearGen3Persistent, syncGen3Persistent } from './gen3-control';
 import { syncFollowers } from './fx-follow';
@@ -4958,25 +4958,25 @@ export function buildProtocolRatingPanel(defId: string): HTMLElement {
   titleRow.appendChild(el('div', 'draft-preview-name', protocolName(proto)));
   titleRow.appendChild(el('div', 'draft-preview-motto', protocolMotto(proto)));
   box.appendChild(titleRow);
-  if (rating && rating.position) box.appendChild(el('div', 'draft-preview-position', t('render.preview.position', { position: rating.position })));
+  if (rating && rating.position) box.appendChild(el('div', 'draft-preview-position', t('render.preview.position', { position: ratingPosition(rating.defId, rating.position) })));
   box.appendChild(el('div', 'draft-preview-commands', t('render.preview.commands', { commands: protocolKeywords(proto) })));
   if (rating) {
     const scoreRow = el('div', 'draft-preview-scores');
     for (const [k, v] of Object.entries(rating.scores)) {
-      scoreRow.appendChild(el('span', 'draft-score-chip', `${k} ${v}`));
+      scoreRow.appendChild(el('span', 'draft-score-chip', `${ratingScoreKey(k)} ${v}`));
     }
     box.appendChild(scoreRow);
-    if (rating.review) box.appendChild(el('div', 'draft-preview-review', rating.review));
+    if (rating.review) box.appendChild(el('div', 'draft-preview-review', ratingReview(rating.defId, rating.review)));
     if (rating.pairs.length > 0) {
       const seg = el('div', 'draft-preview-seg');
       seg.appendChild(el('div', 'draft-preview-seg-label', t('render.preview.pairs-label')));
-      for (const p of rating.pairs) seg.appendChild(el('div', 'draft-preview-item', p));
+      for (const p of ratingList(rating.defId, rating.pairs, 'pairs')) seg.appendChild(el('div', 'draft-preview-item', p));
       box.appendChild(seg);
     }
     if (rating.styles.length > 0) {
       const seg = el('div', 'draft-preview-seg');
       seg.appendChild(el('div', 'draft-preview-seg-label', t('render.preview.styles-label')));
-      for (const st of rating.styles) seg.appendChild(el('div', 'draft-preview-item', st));
+      for (const st of ratingList(rating.defId, rating.styles, 'styles')) seg.appendChild(el('div', 'draft-preview-item', st));
       box.appendChild(seg);
     }
   }
