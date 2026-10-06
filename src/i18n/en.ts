@@ -109,7 +109,7 @@ export const EN: Readonly<Record<string, string>> = {
   'pool.done': 'Done',
   'pool.cancel': 'Cancel and go back',
   'mode.device-check': 'Device and network check',
-  'mode.zoom-hint': 'Tip: playing at about 65% zoom looks best — use your browser zoom (Ctrl + wheel, or Ctrl and +/−).',
+  'mode.zoom-hint': 'Tip: playing at about 67% zoom looks best — use your browser zoom (Ctrl + wheel, or Ctrl and +/−).',
 
   /* ── Coin toss, hotseat path (`renderCoinHotseat`) ── */
   'coin.title': 'Player 1 tosses to decide who goes first',

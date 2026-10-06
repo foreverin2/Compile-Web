@@ -123,7 +123,7 @@ export const ZH: Readonly<Record<string, string>> = {
   'pool.done': '完成',
   'pool.cancel': '取消并返回',
   'mode.device-check': '设备体检 / 网络自检',
-  'mode.zoom-hint': '建议把画面调到 65% 左右游玩：用浏览器自带的缩放（Ctrl + 滚轮，或 Ctrl 和 +/−）调整。',
+  'mode.zoom-hint': '建议把画面调到 67% 左右游玩：用浏览器自带的缩放（Ctrl + 滚轮，或 Ctrl 和 +/−）调整。',
 
   /* ── 掷硬币页（`renderCoin` 的热座那一路） ── */
   'coin.title': '玩家一掷硬币决定先后手',

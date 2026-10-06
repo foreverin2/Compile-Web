@@ -180,7 +180,7 @@ export type TutTrigger = 'before-covered' | 'end';
  * | kind | `stageLabel()` | 出处（实测，见方案 §7.13） |
  * |---|---|---|
  * | `before-covered` | `被盖前` | `fire-0` 底「被盖住前：先抽1张牌并翻转另1张牌」 |
- * | `end` | `结束` | `life-0` 顶「结束：若此卡被覆盖，则移除此卡」 |
+ * | `end` | `结束` | `life-0` 顶「结束：若此卡被覆盖，则删除此卡」 |
  */
 const TRIGGER_LABEL: Readonly<Record<TutTrigger, string>> = {
   'before-covered': '被盖前',
