@@ -340,7 +340,8 @@ export const ZH: Readonly<Record<string, string>> = {
 
   // T1：查看卡牌详情（用户 2026-10-02 追加）
   'tutorial.T1.title': '怎么看一张卡',
-  'tutorial.T1.goal': '双击任意一张卡，打开它的详情。',
+  // ★ 2026-10-06（用户要求）：右键也能打开详情 ⇒ 这一句补上"（或右键）"
+  'tutorial.T1.goal': '双击任意一张卡（或右键），打开它的详情。',
   'tutorial.T1.teach.0': '想知道一张牌到底干什么，就双击它。',
   'tutorial.T1.teach.1': '双击之后会弹出一个大图，右边写着这张牌的中文效果：顶部、中部、底部三段。',
   'tutorial.T1.teach.2': '再点一下空白处就关掉。手牌、场上的牌、协议卡都可以这样看。',

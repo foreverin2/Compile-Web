@@ -287,7 +287,7 @@ export const EN: Readonly<Record<string, string>> = {
   'tutorial.T0.observe': 'Each box you tap adds a line to the panel explaining what that area does.',
 
   'tutorial.T1.title': 'Looking at a card',
-  'tutorial.T1.goal': 'Double-click any card to open its details.',
+  'tutorial.T1.goal': 'Double-click any card (or right-click) to open its details.',
   'tutorial.T1.teach.0': 'To find out what a card actually does, double-click it.',
   'tutorial.T1.teach.1': 'A big picture pops up, with the card text on the right: top, middle and bottom commands.',
   'tutorial.T1.teach.2': 'Tap anywhere outside to close it. Works for hand cards, field cards and protocol cards.',

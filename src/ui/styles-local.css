@@ -1034,3 +1034,27 @@
   background: rgba(79, 240, 255, 0.06);
   box-shadow: 0 0 12px rgba(79, 240, 255, 0.35), inset 0 0 12px rgba(79, 240, 255, 0.08);
 }
+/*
+ * ★ 2026-10-06（**用户报的缺陷**）：「双人远程游玩模式中，当有卡牌触发了一些需要选择其他卡牌
+ * 来触发的效果时，鼠标悬浮在变暗的不可选择的卡牌上时，右边的卡牌详细展示屏不会被触发」。
+ *
+ * 根因是**选择模式那把指针锁**：`styles-net.css` 第 6 节有两条镜像规则
+ * （`.net-board.choice-mode .card:not(.choice-target)` 与 `.net-hands.choice-mode …`）把
+ * **非候选卡**设成 `pointer-events: none` ⇒ 鼠标悬浮根本到不了卡上 ⇒ 板根上的 `pointerover`
+ * 委托（`render-net.ts` 的 `bindNetZoomBox`）拿到的 `ev.target` 是底下的链路带而不是卡
+ * ⇒ `netZoomContentFor` 返回 `null` ⇒ 右边放大框不更新。候选卡（`.choice-target`）不在锁里，
+ * 所以只有"变暗的那些"没反应 —— 与用户描述逐字吻合。
+ *
+ * 修法：只把**指针目标**放开（看详情是只读的）。那把锁真正要防的三件事在代码里各自有闸门，
+ * 与本节无关：
+ *   - **不能打牌 / 不能选中**：`render.ts` 的 `choicePromptId` 闸门（手牌单击那条在
+ *     `renderHand` 的 `onSelect` 里、拖拽在 `bindCardDrag` 第一句），而它由
+ *     `render-net.ts` 的 `renderChoiceUi` 每帧用 `setChoiceSelection(…, top.id)` 重申；
+ *   - **不能落牌**：`playToLine` 要求 `s.step === 'action'` **且**该落点出现在
+ *     `getLegalActions(...)` 里，而选择挂起时它是空表（`pendingEffects.length > 0` ⇒ `[]`）；
+ *   - **不能拖拽**：同上第一条的 `choicePromptId` 闸门。
+ * ⚠️ 特异性：两条锁各是 4 个类（`:not()` 计入其参数），本规则同为 4 个类且本文件在
+ * `styles-net.css` **之后**加载 ⇒ 覆盖是确定的（真机读数见交付说明里的 CDP 检查）。
+ * ⚠️ 只放开 `.net-*` 作用域：热座页那条 `.hand-strip.choice-mode …`（`styles.css`）一行未动。
+ */
+.net-board.choice-mode .card:not(.choice-target) { pointer-events: auto; }

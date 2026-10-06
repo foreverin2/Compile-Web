@@ -1147,15 +1147,26 @@ describe('★ 2026-10-06：T3 的换朝向文案以真实 UI 为准（翻面按�
     // 拖拽期间的键盘监听只认 Escape（`render.ts` 那条）
     expect(render, '拖拽键盘监听不止认 Escape 了 —— 请复核 T3 的文案').toContain("if (ev.key === 'Escape') cleanup();");
     /**
-     * ⚠️ 2026-10-06（用户要求「要一起改」）：判据面从 T3 那两句**扩到两张表的全部 `tutorial.*` 键**
-     * —— 右键 / 按 R 这条路在本仓根本不存在，任何一句教学文案再提它都是在教玩家按空。
+     * ★ 2026-10-06 **第二轮**（用户要求右键也能看详情）：判据从"右键零命中"收窄成两条 ——
+     *  1. 「按 R」仍然零命中（那个键在本仓不存在）；
+     *  2. 提「右键 / right-click」的句子**必须是在讲看详情**，不许把它写成换朝向那条路
+     *     （换朝向只有卡上缘的「翻面」按钮）。
      */
     for (const [lang, table] of [['zh', ZH], ['en', EN]] as const) {
-      const strays = Object.entries(table as Record<string, string>)
-        .filter(([k]) => k.startsWith('tutorial.'))
-        .filter(([, v]) => /右键|按 R|right button|press R|right-click/i.test(v))
-        .map(([k, v]) => `${k}=${v.slice(0, 40)}`);
-      expect(strays, `${lang} 表里还有教学文案在教玩家按右键/R`).toEqual([]);
+      const entries = Object.entries(table as Record<string, string>)
+        .filter(([k]) => k.startsWith('tutorial.'));
+      const rKey = entries.filter(([, v]) => /按 R|press R(?!ight)/i.test(v)).map(([k]) => k);
+      expect(rKey, `${lang} 表里还有教学文案在教玩家按 R（那个键在本仓不存在）`).toEqual([]);
+      const rightClick = entries.filter(([, v]) => /右键|right-click/i.test(v));
+      expect(rightClick.length,
+        `${lang} 表里一条"右键"都没有 ⇒ 下面那条判据是空集（T1 那句「（或右键）」被删了？）`)
+        .toBeGreaterThan(0);
+      for (const [k, v] of rightClick) {
+        expect(v, `${lang} 的 ${k} 提了右键，但它说的不是"看详情"`)
+          .toMatch(lang === 'zh' ? /详情|查看|看/ : /detail|view|open/i);
+        expect(v, `${lang} 的 ${k} 把右键写成了换朝向那条路（换朝向只有「翻面」按钮）`)
+          .not.toMatch(lang === 'zh' ? /右键[^。]{0,12}(翻面|朝向)/ : /right-click[^.]{0,20}(flip|orientation)/i);
+      }
     }
     // 点名那四句（T3/T9/T11）逐条确认已经改成"点按钮 / 点选中"
     for (const k of ['tutorial.T3.steps.1', 'tutorial.T9.steps.3', 'tutorial.T11.steps.0']) {
