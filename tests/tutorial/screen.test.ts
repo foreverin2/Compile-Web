@@ -987,13 +987,23 @@ describe('★ 2026-10-06：T3 的换朝向文案以真实 UI 为准（翻面按�
     expect(render, 'render.ts 里出现了 contextmenu（那说明右键那条路真的存在，文案要跟着改）').not.toContain('contextmenu');
     // 拖拽期间的键盘监听只认 Escape（`render.ts:6390` 那条）
     expect(render, '拖拽键盘监听不止认 Escape 了 —— 请复核 T3 的文案').toContain("if (ev.key === 'Escape') cleanup();");
-    // 中英两张表里，T3 的换朝向那两句都不许再提右键 / R
+    /**
+     * ⚠️ 2026-10-06（用户要求「要一起改」）：判据面从 T3 那两句**扩到两张表的全部 `tutorial.*` 键**
+     * —— 右键 / 按 R 这条路在本仓根本不存在，任何一句教学文案再提它都是在教玩家按空。
+     */
     for (const [lang, table] of [['zh', ZH], ['en', EN]] as const) {
-      for (const k of ['tutorial.T3.teach.2', 'tutorial.T3.steps.1']) {
-        const v = (table as Record<string, string>)[k] ?? '';
-        expect(/右键|按 R|right button|press R/.test(v), `${lang} 的 ${k} 还在教玩家按右键/R：${v}`).toBe(false);
-      }
+      const strays = Object.entries(table as Record<string, string>)
+        .filter(([k]) => k.startsWith('tutorial.'))
+        .filter(([, v]) => /右键|按 R|right button|press R|right-click/i.test(v))
+        .map(([k, v]) => `${k}=${v.slice(0, 40)}`);
+      expect(strays, `${lang} 表里还有教学文案在教玩家按右键/R`).toEqual([]);
     }
+    // 点名那四句（T3/T9/T11）逐条确认已经改成"点按钮 / 点选中"
+    for (const k of ['tutorial.T3.steps.1', 'tutorial.T9.steps.3', 'tutorial.T11.steps.0']) {
+      expect(ZH[k], `zh 的 ${k} 没写"选中"`).toContain('选中');
+      expect(EN[k], `en 的 ${k} 没写 select`).toMatch(/select/i);
+    }
+    expect(ZH['tutorial.T9.steps.3'], 'zh 的 T9.steps.3 没写"翻成反面"').toContain('翻成反面');
     // 正向锚点：那两句真的说了"翻面按钮"（否则上面两条可以靠"什么都没有"满足）
     expect(ZH['tutorial.T3.teach.2'], '中文的 T3 讲解没有说清是点按钮').toContain('翻面按钮');
     expect(EN['tutorial.T3.teach.2'], '英文的 T3 讲解没有说清是点按钮').toMatch(/flip button/i);

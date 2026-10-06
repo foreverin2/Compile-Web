@@ -271,9 +271,19 @@ export function renderBattery(s: GameState, player: PlayerId, line: Line): HTMLE
   }
   shell.appendChild(cells);
   battery.appendChild(shell);
-  // 点数 > 10（能量槽 10 格无法显示）→ 在电池左/右侧用数字直接显示当前链路点数
-  // （P1 槽靠左、P2 槽靠右——见 styles.css .battery-overflow 的 data-player 定位）
-  if (points > 10) {
+  /**
+   * 点数**超出 10 格量程**（`> 10` 或 `< 0`）→ 在电池左/右侧用数字直接显示当前链路点数
+   * （P1 槽靠左、P2 槽靠右 —— 见 `styles.css` 的 `.battery-overflow` 按 `.stack-slot.pN`
+   * 定位；远程页由 `styles-net.css` 用 `order: -1` 排在壳左边）。
+   *
+   * ★ 2026-10-06（**用户报的缺陷 + 用户授权的红线改动**）：原来这一行只判 `points > 10`，
+   * 于是**负阈值什么都不显示**（10 格填不满、也没有数字，屏上只剩一个空壳）。用户原话：
+   * 「修改能量阈值的显示功能，使己方链路在阈值为负值的时候能够和点数超出10点时一样，
+   *   显示当前负值点数」，并要求远程页同样如此 —— 而**两个牌桌共用本函数**
+   * （`render-net.ts:198` 就 import 它，`renderSide` 里调用）⇒ 改成"两端超出量程都显示"，
+   * 一处生效、两页一致。
+   */
+  if (points > 10 || points < 0) {
     const num = document.createElement('span');
     num.className = 'battery-overflow';
     num.textContent = String(points);

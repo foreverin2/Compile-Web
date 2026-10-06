@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createGame } from '../../src/core/state/create';
-import { syncScanOverlays } from '../../src/ui/render';
+import { syncScanOverlays, renderBattery } from '../../src/ui/render';
 import { NET_BOTTOM_SIDES, NET_PAGE_CLASS, renderNetBoard, verifyPageHooks } from '../../src/ui/render-net';
 import { setFxViewSeat } from '../../src/ui/fx-seat';
 import { stripComments } from './source-text';
@@ -1626,6 +1626,56 @@ describe('R8-2 收尾 · C-1 溢流数字 / I-1 横扫链 / I-4 防弹衣', () =
       }
     } finally {
       await drainRaf();
+      restore();
+    }
+  });
+
+  it('G-5b2. ★ 点数 < 0（负阈值）时同样产出溢流数字并写出负值文本（用户 2026-10-06 要求）', () => {
+    /**
+     * 用户原话：「修改能量阈值的显示功能，使己方链路在阈值为负值的时候能够和点数超出 10 点时
+     * 一样，显示当前负值点数」，并要求远程页同样如此。判据（`render.ts` 的 `renderBattery`）：
+     * `points > 10 || points < 0` 才挂 `.battery-overflow`，文本 = 线值。
+     *
+     * **负阈值在真对局里可达**（不是编的）：`metal-0` 的 `valueModifier` 是 `total - 2`
+     * （`src/core/effects/cards/metal.ts:9`），目标是 `opponent-line` ⇒ 对手那条线原本 0 分时
+     * 被减成 **-2**。这条腿就用这个真实效果造局面（不自己搓分数）。
+     */
+    const restore = installDom();
+    try {
+      const s = createGame({ seed: 'battery-negative', draftStarter: 0, firstToPlay: 1 });
+      s.players[0].protocols = [
+        { defId: 'fire-0', compiled: false },
+        { defId: 'ice-0', compiled: false },
+        { defId: 'light-0', compiled: false },
+      ] as never;
+      s.players[1].protocols = [
+        { defId: 'metal-0', compiled: false },
+        { defId: 'ice-0', compiled: false },
+        { defId: 'light-0', compiled: false },
+      ] as never;
+      (s as { phase: string }).phase = 'turn';
+      // 对手（座位 1）线 0 上一张**正面**的 metal-0；我方线 0 空着 ⇒ 我方线 0 值 = 0 - 2 = -2
+      s.players[1].stacks[0] = [{
+        uid: 'foe-metal0', defId: 'metal-0', faceUp: true, owner: 1, zone: 'field', line: 0, pos: 0,
+      }] as never;
+
+      const bat = renderBattery(s as never, 0, 0) as unknown as StubNode;
+      // ① 前置：这条线真的是负的（否则这条腿在"正数"上恒真）
+      expect(bat.dataset.points, '局面没造出负阈值（metal-0 的 -2 没生效？）').toBe('-2');
+      // ② 负值必须和 >10 一样挂出溢流数字，且文本就是那个负值
+      const nums = descendants(bat).filter((n) => isClass(n, 'battery-overflow'));
+      expect(nums.length, '负阈值没有产出 `.battery-overflow`（只有 >10 才显示 ⇒ 用户报的就是这个）').toBe(1);
+      expect(nums[0].text, '溢流数字必须写出负值本身').toBe('-2');
+      // ③ 10 格一个都不亮（负值不能填格）
+      expect(descendants(bat).filter((n) => isClass(n, 'battery-cell') && isClass(n, 'filled')).length,
+        '负阈值却点亮了格子').toBe(0);
+      // ④ 反向锚点：把那一列的值"抬"回 0（摘掉 metal-0）⇒ 溢流数字必须消失
+      s.players[1].stacks[0] = [];
+      const zero = renderBattery(s as never, 0, 0) as unknown as StubNode;
+      expect(zero.dataset.points).toBe('0');
+      expect(descendants(zero).filter((n) => isClass(n, 'battery-overflow')).length,
+        '0 分不该有溢流数字（判据不是"每次都挂"）').toBe(0);
+    } finally {
       restore();
     }
   });

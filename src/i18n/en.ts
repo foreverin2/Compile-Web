@@ -236,7 +236,7 @@ export const EN: Readonly<Record<string, string>> = {
   'tutorial.zoom.opened': 'Seen it. Double-click another one if you like.',
   /* 2026-10-06 (user request): T1 holds for 10 seconds before the next level (see T1_READ_HOLD_MS
      in src/ui/tutorial-screen.ts), and unlocked level chips are clickable. */
-  'tutorial.zoom.hold': 'This level leaves you 10 seconds with the card; the next level starts after that.',
+  'tutorial.zoom.hold': 'The next level starts in 10 seconds.',
   'tutorial.chip.hint': 'Levels you have cleared: click a number below to play that level again — your progress stays as it is.',
   'tutorial.chip.title.replay': 'Click to play level {n} again',
   'tutorial.chip.title.done': 'Level {n}: cleared',
@@ -382,7 +382,7 @@ export const EN: Readonly<Record<string, string>> = {
   'tutorial.T9.steps.0': 'Drag Darkness 1 face up onto line 1 (the Darkness protocol line) and let go.',
   'tutorial.T9.steps.1': 'Tap the opponent\'s Speed 0 on line 3 in the candidates — it flips face up.',
   'tutorial.T9.steps.2': 'On the follow-up "you may shift that card", tap "Skip" and leave it where it is.',
-  'tutorial.T9.steps.3': 'Hold the right button (or press R) on Water 5 to turn it face down, then drag it onto line 2 to cover your Speed 0.',
+  'tutorial.T9.steps.3': 'Click Water 5 to select it, flip it face down, then drag it onto line 2 to cover your Speed 0.',
   'tutorial.T9.steps.4': 'Drag Darkness 4 face up onto line 1, tap that face-down Water 5 first, click the confirm button in the console, then click the line you want to move it to.',
   'tutorial.T9.steps.5': 'Pick a line (line 3) to shift it there — your Speed 0 is uncovered again.',
   'tutorial.T9.observe': 'The log shows "[中部] speed-0：原因：翻正" and then "[中部] speed-0：原因：被揭开" — that card\'s middle command resolved twice.',
@@ -422,7 +422,7 @@ export const EN: Readonly<Record<string, string>> = {
   'tutorial.T11.teach.2': 'Before covered: this card\'s bottom says "before this card is covered" — when a card lands on top, it resolves once **before** being buried.',
   'tutorial.T11.teach.3': 'End: this card\'s top says "End: if this card is covered, delete it" — it is already covered, so the end step asks you to resolve it.',
   'tutorial.T11.scenario': 'Line 2 holds your Fire 0 (bottom: before covered, first draw 1 card and flip another card), and the opponent\'s Ice 1 sits on the same line (bottom: after the opponent plays into this line, they discard 1 card); on line 3 your Life 0 is covered by Life 5 (top: End: if this card is covered, delete it). You hold a Water 0 and an Ice 5.',
-  'tutorial.T11.steps.0': 'Hold the right button (or press R) on the Water 0 in your hand to turn it face down, then drag it onto line 2 to cover your Fire 0 — this one move sets off two triggers: Fire 0 resolves its "before covered" part, and the opponent\'s Ice 1 on that same line fires its "after the opponent plays into this line" part. That one punishes whoever plays into the line — you — so this time you are the one who discards (pick the Ice 5 from the candidates).',
+  'tutorial.T11.steps.0': 'Click the Water 0 in your hand to select it, flip it face down, then drag it onto line 2 to cover your Fire 0 — this one move sets off two triggers: Fire 0 resolves its "before covered" part, and the opponent\'s Ice 1 on that same line fires its "after the opponent plays into this line" part. That one punishes whoever plays into the line — you — so this time you are the one who discards (pick the Ice 5 from the candidates).',
   'tutorial.T11.steps.1': 'Tap "Next" on the board to advance to the end step.',
   'tutorial.T11.steps.2': 'Tap the "Resolve trigger" button on the covered Life 0 — its "end" part deletes itself.',
   'tutorial.T11.observe': 'Three pieces of evidence: after the "after play" part you are one card shorter (that card is in your discard pile); the log shows "[被盖前] fire-0"; and the log then shows "[结束] life-0：由 P1 结算" while that Life 0 disappears from the field.',
