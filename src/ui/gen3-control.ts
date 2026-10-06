@@ -137,6 +137,55 @@ export function clearGen3Persistent(): void {
   greed1Stack.clear();
 }
 
+/**
+ * ★★ 2026-10-06（**用户报的缺陷**：「教程里的死板7在移动过页面后的场上持续特效会消失，
+ * 而特效并没有继续持续跟随卡牌而显示」）：**"这一屏的棋盘是哪一份局面"的声明口**。
+ *
+ * ## 它修的是什么（先复现，再修）
+ *
+ * 常驻层（`layerRecs`）的每帧同步**只由两个地方**发起：
+ *  1. 渲染器每帧末尾（`render.ts` 的 `syncGen3Persistent(s)` —— s 就是这一帧画的局面）；
+ *  2. `main.ts` 的滚动/缩放 rAF（`main.ts:5929` 的 `syncGen3Persistent(state)`）——
+ *     那里读的是**主循环自己那一份 `state`**。
+ *
+ * 热座 / 远程页 / 重放页上这两份是**同一个对象**，所以一直是"条件不成立就 prune"。
+ * 但教学屏画的是**它自己那份受控局面**（`buildLevelState()`，`tutorial-screen.ts`），
+ * 而主循环那份 `state` 与它毫无关系（进教学时宿主不动自己的 state —— `main.ts:5144`）。
+ * ⇒ 教学屏里**一滚动**，主循环那一趟就按一份**不相干的局面**把所有常驻层重算一遍：
+ * 教学屏那些键（例如 `rig7-<uid>`）在新局面的 `active` 里当然没有 ⇒ `pruneAll` 把它们
+ * **全部 drop 掉**（淡出 + 320ms 后移除）。实测（`tests/ui/gen3-persistent-scope.test.ts`
+ * 真跑桩 DOM）：T12 的 `g3sync-rig7 g3fx-layer` 在"外来局面的滚动同步"之后被加上
+ * `g3sync-out`，也就是用户看到的"滚动一下特效就没了、也不再跟着卡走"。
+ *
+ * 同一趟同步还会**凭空建层**：外来局面里恰好生效、而卡牌节点不在这一屏 DOM 上的键
+ * 依然会被 `ensure()` 建出来（子件按签名无条件 append）⇒ 别人的棋盘右上角冒出与本局
+ * 无关的装饰。所以判据必须挡在**整趟同步**之前，而不是只挡 prune。
+ *
+ * ## 判据
+ *
+ * 声明了口（非 `null`）⇒ **只有那一份局面**能发起常驻层同步；别的局面整趟早退（不建、不删、
+ * 不重定位）。没声明（热座 / 远程页 / 重放 / 起始屏）⇒ 判据恒假，**逐字是改动前的行为**。
+ *
+ * ⚠️ 声明与撤销都由**画那一屏的人**负责：`tutorial-screen.ts` 在每次 `openLevel()`（开屏 /
+ * 重开这一关 / chip 跳关 / 倒计时换关）里声明新局面，在 `close()` 里撤成 `null`。
+ * 声明之后那一屏还得自己把"跟随"接上（主循环那一趟已经早退、不再替它重定位）——
+ * 教学屏自己挂了一个滚动/缩放的 rAF（见 `tutorial-screen.ts` 的 `onViewportMove`）。
+ *
+ * ⚠️ 与它**同族但改不动**的一处（如实登记，免得以后有人以为这套已经全覆盖）：
+ * `render.ts` 里那一批常驻注册表（`smokeOverlays` / `psychicParticles` / `iceLineFreezes` …）
+ * 的 sync 也吃主循环那份 `state`，而它们的 prune 写在 `render.ts`（红线）里，
+ * 本文件这套声明口够不着 ⇒ 教学关里凡是靠**状态判据**（不是靠 DOM 查询）决定去留的层
+ * 仍会被主循环那一趟删掉。实测只有 T11 的 `fx-ice-linefreeze` 命中这一类
+ * （见 `tests/ui/gen3-persistent-scope.test.ts` 的逐关读数与任务报告）。
+ */
+let boardState: GameState | null = null;
+
+/** 声明"这一屏的棋盘 = 这一份局面"（`null` = 不声明，所有调用一视同仁）。返回值给测试/排查用。 */
+export function setGen3BoardState(s: GameState | null): GameState | null {
+  boardState = s;
+  return boardState;
+}
+
 /** 把层定位到某个矩形（每次渲染都调用；层本身不重建） */
 function place(node: HTMLElement | null, r: DOMRect | null, pad = 0): void {
   if (!node || !r) return;
@@ -693,6 +742,11 @@ export function syncGreed1Stack(s: GameState): string[] {
 
 /** 每次渲染末尾调用（render.ts）：全部 3代 常驻层 */
 export function syncGen3Persistent(s: GameState): void {
+  /**
+   * ★ 2026-10-06：**外来局面一个层都不许碰**（既不建也不删 —— 理由与复现读数见 `boardState`）。
+   * 判据是**对象身份**：这一屏声明了"棋盘是哪一份局面"，就只认那一份。
+   */
+  if (boardState !== null && s !== boardState) return;
   const active = new Set<string>([
     ...syncEnvy0Absorb(s),
     ...syncWrath0Cull(s),

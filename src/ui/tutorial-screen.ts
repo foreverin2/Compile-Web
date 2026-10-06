@@ -30,6 +30,19 @@ import type { GameState, Line, PlayerId } from '../core/models/types';
 import { findCard } from '../core/effects/context';
 import { getLineValue } from '../core/state/create';
 import { renderApp, resetUiState, setDraftSelfSeat, type UiCallbacks } from './render';
+// ★ 2026-10-06（**用户当天报的缺陷**）：「教程里的死板7在移动过页面后的场上持续特效会消失，
+// 而特效并没有继续持续跟随卡牌而显示」。
+// 常驻层（3代那一族，`rigidity-7` 的护壁就在里面）的"跟随"由 `main.ts` 的滚动/缩放 rAF 驱动，
+// 而那一路永远拿**主循环自己那一份 state** 去同步；教学屏画的是**它自己那份受控局面**
+// ⇒ 一滚动，教学屏的层就被按一份不相干的局面 prune 掉（层当场淡出、320ms 后移除）。
+// 修法两半都在本文件 + `gen3-control.ts`（不动 `main.ts` / `render.ts`）：
+//  1. `setGen3BoardState(state)` 声明"这一屏的棋盘是这个局面"⇒ 主循环那一趟整趟早退；
+//  2. 本屏自己挂一个滚动/缩放的 rAF（`onViewportMove`）用**自己的** state 重定位，
+//     把"跟随"这一半接回来（主循环已经不替本屏做了）。
+import { setGen3BoardState, syncGen3Persistent } from './gen3-control';
+// ★ 2026-10-06（同一族查漏）：2代那一批**瞬态** body 级 FX 的清扫口（`main.ts` 的两处整局复位
+// 已经在用它）。换关同样是"换局面"，上一关那个播到一半的层不该悬在下一关上 —— 见 `openLevel()`。
+import { clearGen2Fx } from './fx-gen2';
 import { TUT_LEVELS, levelAt, levelById, levelIndex, TUT_SPOTS, type TutLevel } from '../tutorial/levels';
 import { buildLevelState } from '../tutorial/setup';
 import { isLevelComplete, offTrackKeyFor, observedOps, revealSeen, snapshot, type TutSnap } from '../tutorial/judge';
@@ -821,6 +834,36 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
     : null;
   spotFitWatch?.observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'class'] });
 
+  /**
+   * ★★ 2026-10-06（**用户当天报的缺陷**）：「教程里的死板7……持续特效会消失，
+   * 而特效并没有继续持续跟随卡牌而显示」——修法的**第二半：跟随**。
+   *
+   * 3代常驻层是 `position: fixed` 的 body 级层，坐标只在同步那一刻按实测矩形算一次
+   * ⇒ 滚动/缩放必须有人重新算（见 `gen3-control.ts` 的 `boardState` 那段：教学屏已经
+   * 声明了棋盘局面，主循环那一趟会**整趟早退**，所以它不再替本屏重定位）。
+   *
+   * 形态照本仓既有那一套（`main.ts:5900` 的滚动/缩放 rAF）：rAF 节流 + passive + capture
+   * （覆盖任意可滚动容器）。两点与主循环那一路**刻意不同**：
+   *  - 用的是**本屏自己的 `state`**（闭包里那个 `let`，换关时 `openLevel()` 会就地换掉它）；
+   *  - 只同步3代常驻层。其余常驻层（黑烟/扫描/冰封…）是 `render.ts` 里的注册表，
+   *    它们的同步函数吃的那份局面在教学屏里无从替换（那一路必须改红线才能修，
+   *    实测只有 T11 的 `fx-ice-linefreeze` 受影响，见任务报告与
+   *    `tests/ui/gen3-persistent-scope.test.ts` 的逐关读数）。
+   * ⚠️ 与主循环那一趟的**先后**：两个监听都在同一个事件里排 rAF，主循环那个先排
+   *    ⇒ 它先跑，但它整趟早退；本屏这一趟随后按自己的局面重定位。两侧都不改对方的层。
+   */
+  let viewportSyncScheduled = false;
+  const onViewportMove = (): void => {
+    if (viewportSyncScheduled) return;
+    viewportSyncScheduled = true;
+    requestAnimationFrame(() => {
+      viewportSyncScheduled = false;
+      syncGen3Persistent(state);
+    });
+  };
+  window.addEventListener('scroll', onViewportMove, { passive: true, capture: true });
+  window.addEventListener('resize', onViewportMove, { passive: true });
+
   /** 热点被点之后显示哪一句（四个区域各一句） */
   function spotText(spot: TutSpot): string {
     switch (spot) {
@@ -1235,14 +1278,59 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
     document.querySelector<HTMLElement>('.win-confirm-btn')?.click();
   }
 
-  /** 开（或重开）当前 `levelId` 那一关：新局面 + 清判定状态 + 重画 */
+  /** 开（或重开）当前 `levelId` 那一关：新局面 + 清判定状态 + 清上一关的常驻 FX + 重画 */
   function openLevel(): void {
     /**
      * ★ 2026-10-06（统一倒计时）：上一关那个倒计时作废（例如倒计时里玩家抢先点了
      * 「重开这一关」/点了 chip 跳关）—— 不清的话它到点会把关卡再切走，还会留一层残影。
      */
     clearCountdown();
+    /**
+     * ★★ 2026-10-06（**用户当天报的缺陷**）：「第十四关（= T12）不知道怎么回事突然就显示出了
+     * 精神协议的已编译特效……原因是我刚刚从第 15 关重新跳到了第十四关，而这个特效似乎没被清除」。
+     *
+     * 根因：换关只重建了**引擎局面**（下面那句 `buildLevelState`），而 `render.ts` 里那一大批
+     * **body 级常驻注册表是模块态、跨帧存活**，它们的清理口只有 `resetUiState()` 一处。
+     * 之前只有 `close()`（退出教程）走过它 ⇒ 关与关之间什么都不清：
+     *  - `compiledFx` 以 **defId** 为键，而"某格没编译就删同 defId 的层"只写在
+     *    `renderProtocol()` 的 `else` 分支里 ⇒ 新关卡**根本没有**那个 defId 的协议格时，
+     *    旧层**没有任何人去删**。实测（桩 DOM 真跑 T13→T12）：T13 我方 `spirit`/`water` 两张
+     *    已编译环里，`water` 在 T12 有格子（会走 else 被删）、**`spirit` 一个格子都没有 ⇒
+     *    留在屏上** —— 这正是用户截图里那一圈精神已编译特效。
+     *
+     * 修法：把"清 FX"这一手挪到**每一次换关/跳关/重开**的最前面（重建局面**之前**）——
+     * 它就是 `close()` 与 `main.ts` 那两处整局复位用的**同一个口**，不新造第二套。
+     *
+     * ⚠️ 顺序是承重的：**必须排在 `paint()` 之前**，否则清掉的会是刚画出来的这一关的层。
+     * ⚠️ 它**不碰**教学自己要的页级设置：`#app` 上那个 `screen-home` 摘除是**类名**上的事
+     * （`resetUiState()` 不动根容器的类名）、座位 `draftSelfSeat` 它自己就写成 `null`
+     * （教学没有座位概念，与 `close()` 里那句同一口径）⇒ 换关之后不需要补任何设置。
+     * 本关自己的判定状态（`snap` / `opsSeen` / `spotsDone` / `uiSeen` / `teachAt` / `cleared`）
+     * 不住在 render.ts 里，下面照旧逐个复位。
+     */
+    resetUiState();
+    /**
+     * ★ 2026-10-06（**同一族查漏**）：**胜利横幅也是"上一关的浮层"**。
+     *
+     * `resetUiState()` 会把 `winOverlayShown` 复位，但**不摘**那面 `.win-banner`
+     * （`render.ts:5207` 的 `showWinOverlay` 只有它自己那颗「返回主界面」会 `banner.remove()`）
+     * ⇒ S0（序章）打赢之后那 5 秒倒计时里点 chip 跳关 / 点「重开这一关」，横幅会一直压在屏上
+     * （"玩家 1 获胜！"），而玩家已经在打下一关了。这里显式收一次 —— 走的就是 `gotoNextLevel()`
+     * 已经用的那个口（`dismissWinBanner()`），不新造第二套。
+     */
+    dismissWinBanner();
+    /**
+     * ★ 2026-10-06（**同一族查漏**）：2代那一批**瞬态** FX（幸运骰子/烟花/蘑菇云/和平鸽/混沌漩涡…
+     * 见 `fx-gen2.ts` 的 `clearGen2Fx()`）也是 body 级层，它们的清理口同样只有 `main.ts` 的
+     * `resetToMainInterface` / `startReplayFile` 两处 ⇒ 换关时也没人清。教学屏的每一关都会真的
+     * 过一次引擎（打出/覆盖/编译/结算触发），这些层由 `gameBus` 事件驱动（宿主订阅），
+     * 在上一关里播到一半就换关的话，它会**悬在下一关上**继续播完。
+     * ⚠️ 与上面 `resetUiState()` 的清扫面**不重叠**：那一份只扫 `render.ts` 自己那几个类名。
+     */
+    clearGen2Fx();
     state = buildLevelState(levelId);
+    // ★ 2026-10-06：换的是**新的一份局面对象** ⇒ 声明口跟着换（见 `onViewportMove` 那段说明）
+    setGen3BoardState(state);
     snap = snapshot(state);
     opsSeen = [];
     spotsDone.clear();
@@ -1299,6 +1387,13 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
       zoomWatcher.disconnect();
       spotResize?.disconnect();
       spotFitWatch?.disconnect();
+      /**
+       * ★ 2026-10-06：本屏自己挂的那两个滚动/缩放监听随屏一起摘掉（与上面两个观察者同一条纪律：
+       * 退出教程之后不该还在替这一屏重定位）。`removeEventListener` 的实参必须与 add 那一侧
+       * **同一个函数对象**（`onViewportMove` 是本屏闭包里那一个常量）—— 写第二个箭头函数撤不掉。
+       */
+      window.removeEventListener('scroll', onViewportMove, { capture: true });
+      window.removeEventListener('resize', onViewportMove);
       document.removeEventListener('click', onDocClickCapture, true);
       // ★ 2026-10-06：退订抽牌事件（`gameBus` 是全仓单例；不退订 = 退出教程后这一屏还在收事件）
       offDraws();
@@ -1307,6 +1402,12 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
       // render.ts 的模块态与 body 级常驻层由它自己的复位口清（本屏不改 render.ts）
       resetUiState();
       setDraftSelfSeat(null);
+      /**
+       * ★ 2026-10-06：**撤销"这一屏的棋盘"的声明**（放在 `resetUiState()` 之后）。
+       * 留着它 = 主循环（热座/远程页那一路）之后所有 `syncGen3Persistent(state)` 都被判成
+       * "外来局面"而整趟早退 ⇒ 退出教程之后所有3代常驻层**永远不更新**（既不能建也不能删）。
+       */
+      setGen3BoardState(null);
     },
   };
 }

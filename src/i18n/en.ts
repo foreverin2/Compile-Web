@@ -450,7 +450,7 @@ export const EN: Readonly<Record<string, string>> = {
   'tutorial.T12.steps.0': 'Play Fire 1 face up onto line 1, discard the spare Water 0 first, then tap the opponent\'s Water 2 in the candidates — it is deleted.',
   'tutorial.T12.steps.1': 'Play Clarity 0 face up onto line 2 and watch that line\'s total go from 0 to 1.',
   'tutorial.T12.steps.2': 'Play Darkness 1 face up onto line 3 and tap the opponent\'s Rigidity 7 in the candidates.',
-  'tutorial.T12.steps.3': 'Read the log: the engine says it "cannot be flipped, skipping", and Rigidity 7 is still face up.',
+  'tutorial.T12.steps.3': 'Read the log: the engine says it "cannot be flipped, skipping", and Rigidity 7 is still face up. (That is because of Rigidity 7\'s bottom command.)',
   'tutorial.T12.observe': 'The opponent\'s Water 2 goes to the discard pile, line 2 gains 1 point, and Rigidity 7 will not flip — the log says "rigidity-7 不可被翻转，跳过".',
 
   // T13: mini match (P7)
