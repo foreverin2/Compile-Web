@@ -41,6 +41,12 @@ import { onLangChange, t } from '../i18n';
 // （`render.ts` 每帧 + `main.ts` 的滚动/缩放 rAF 各调一次 `syncFollowers()`）。
 // 与 `gen3-control.ts` 的 C4 对比条同一套做法，不新造第二套定时/重定位管线。
 import { registerFollow } from './fx-follow';
+// ★ 2026-10-06（**用户当天报的缺陷**：「第六关（= T4）里打出『精神1』的抽牌特效没有了」）：
+// 抽牌飞入特效的**唯一出处**（累加器 + `.draw-ghost` 动画）搬到了 `./main-draw-fx`。
+// 本屏原先**没有**这一段收尾代码 —— `tutorialCallbacks().onAction` 只做 `driver.submit` +
+// `judgeAndAdvance()`，而累加器原先只被 `main.ts` 的 `cb.onAction` 读 ⇒ 教学这条路上牌抽到了、
+// 动画一次都不播（详见 `main-draw-fx.ts` 的文件头注）。
+import { subscribeDraws, drainDraws, resetDraws, playDrawSequence } from './main-draw-fx';
 
 /**
  * ★ 2026-10-06（S0）：**赢下之后停在终局画面上多久**，再自动进下一关。
@@ -316,6 +322,160 @@ export interface ChipA11y {
 export function chipA11y(clicked: string, current: string, done: readonly string[]): ChipA11y {
   return { enabled: done.includes(clicked) || clicked === current, current: clicked === current, done: done.includes(clicked) };
 }
+/**
+   * 教学自己的 `UiCallbacks`。
+   *
+   * ⚠️ 这里**只实现**教学用得上的那几个；其余回调留空 —— 它们对应的是草稿/结算/重放那些
+   * 教学不走的路径（教学跳过草稿，见 `setup.ts`）。
+   *
+   * ★ 2026-10-06（本次任务的接线段）：本函数**搬到了模块层**（原来在 `mountTutorial` 内部），
+   * 依赖改成显式入参 ⇒ 从"闭包里长出来的一段"变成可以**真跑**的纯接线。
+   * `tests/ui/main-draw-fx.test.ts` 用桩 DOM + 假 driver 真调它，钉住本次缺陷的两件事：
+   *  ① 没有抽牌时**同步**继续 `judgeAndAdvance()`；
+   *  ② 有抽牌时 `playDrawSequence(draws, () => judgeAndAdvance())`（幽灵落地后才判定/换关）。
+   * 参数值就是原先闭包里那几个（`state` / `driver` / `hintBox` / `judgeAndAdvance` / `paint` /
+   * `currentLevel`），语义一个字没动。
+   *
+   * ⚠️ **导出只为测试**（与同文件的 `placeSpotBoxes` / `chipJumpTarget` 同款：那些也是
+   * "导出 + 由测试真跑"）。生产路径上唯一的调用点是 `paint()`。
+   */
+export function tutorialCallbacks(deps: TutorialCallbackDeps): UiCallbacks {
+  const { state, driver, hintBox, judgeAndAdvance, repaint: paint, currentLevel } = deps;
+    return {
+      onRendered() { /* 每帧之后什么都不用做（本屏没有动画驱动） */ },
+      onWinReset() { /* 教学里不会出现"胜利重置"那条路 */ },
+      rerender() { paint(); },
+      onDraftPick() { /* 教学跳过草稿：这条不该被调到（调到了也不动，免得改坏局面） */ },
+      onDraftUnpick() { /* 同上 */ },
+      onDraftBan() { /* 同上 */ },
+      onAction(a) {
+        const level = currentLevel();
+        const key = allowedBy(level, a);
+        if (key !== null) {
+          // ★ 走偏：**不提交**（引擎里什么都没发生），只给一句提示
+          hintBox.textContent = offTrackText(key);
+          return;
+        }
+        if (state.phase === 'gameover') return;
+        const player = state.turnPlayer;
+        // ⚠️ 走 `driver.submit`（**不是**直接 `applyRecordedAction`）：它是收口后唯一能触发
+        //    状态迁移的入口，`seq` 之类的记账由它自己管（手搓 ActionRecord 会漏字段）。
+        let ok = false;
+        try {
+          if (a.kind === 'play') {
+            ok = driver.submit(state, {
+              player, kind: 'play',
+              args: { cardUid: a.cardUid ?? '', faceUp: a.faceUp ?? true, line: (a.line ?? 0) as Line, target: a.target as PlayerId | undefined },
+            }).ok;
+          } else if (a.kind === 'effect-choice') {
+            const top = state.pendingEffects[state.pendingEffects.length - 1];
+            const chooser = top?.prompt?.chooser ?? top?.player ?? player;
+            ok = driver.submit(state, {
+              player: chooser, kind: 'effect-choice',
+              args: { promptId: a.promptId ?? '', choice: a.choice ?? [] },
+            }).ok;
+          } else if (a.kind === 'compile') {
+            ok = driver.submit(state, {
+              player, kind: 'compile', args: { line: (a.line ?? 0) as Line },
+            }).ok;
+          } else if (a.kind === 'resolve-trigger') {
+            /**
+             * ★ 2026-10-02（P7）T11 的第三种触发（「结束」）走这里：结束阶段棋盘上会给出
+             * 「结算触发」按钮（`render.ts` 按 `getLegalActions` 的 `resolve-trigger` 画），
+             * 玩家点它就是`resolve-trigger` 这个 kind。
+             * `cardUid` 就是那张待结算的卡（红线那边传上来的），原样转给引擎。
+             */
+            ok = driver.submit(state, {
+              player, kind: 'resolve-trigger', args: { cardUid: a.cardUid ?? '' },
+            }).ok;
+          } else if (a.kind === 'advance') {
+            /**
+             * ★ 2026-10-02（P7）T10 的"亲自动手"就是这一步：`getLegalActions` 在
+             * `check-control` 这一步只出 `advance` ⇒ 玩家点「推进」，引擎在
+             * `performAdvance` 里调 `checkControl()`（`src/core/game.ts:293`）—— 与真对局同一条路。
+             */
+            ok = driver.submit(state, { player, kind: 'advance', args: {} }).ok;
+          } else {
+            // 别的动作种类（本轮的关卡不会走到）：如实拒绝，不给"看起来发生了"的假象
+            hintBox.textContent = t('tutorial.off.wrong-kind');
+            return;
+          }
+        } catch {
+          // 引擎抛了（例如效果守卫不满足）：状态可能已半改，给一句如实的提示并重画回真状态
+          hintBox.textContent = t('tutorial.off.rejected');
+          paint();
+          return;
+        }
+        // 引擎拒了（例如正面牌打到不匹配的线）：状态没变 ⇒ 一句如实的提示，不推进判定
+        if (!ok) {
+          hintBox.textContent = t('tutorial.off.rejected');
+          paint();
+          return;
+        }
+        /**
+         * ★ 2026-10-06（**用户报的缺陷，本次任务的核心判据**）：效果触发的抽牌飞入动画。
+         *
+         * 位置是刻意的：**走偏早退（上面那两处 `return`）之后、`judgeAndAdvance()` 之前**。
+         *  - 早退那些分支引擎里什么都没发生 ⇒ 累加器是空的，不必（也不该）走到这里；
+         *  - 放在 `judgeAndAdvance()` 之前 ⇒ 与热座**同一个时序**（`playDrawSequence` 的
+         *    完成回调里才 `afterFx()` → 重渲染）。教学里对应的是"幽灵先飞、落地后
+         *    `judgeAndAdvance()` 才换关重画" —— 若反过来，幽灵会飞向已经重画好的新手牌。
+         *
+         * ⚠️ **没有抽牌时必须仍走原来的同步 `judgeAndAdvance()`**（不许凭空插一帧等待）：
+         * 教学绝大多数关卡根本不抽牌，`drainDraws()` 恒空 ⇒ 那条路逐字不变。
+         * `playDrawSequence` 对空数组也是同步 `done()`，但这里显式分开，读起来更直白。
+         */
+        const draws = drainDraws();
+        if (draws.length === 0) {
+          judgeAndAdvance();
+        } else {
+          playDrawSequence(draws, () => { judgeAndAdvance(); });
+        }
+      },
+  };
+}
+
+/**
+ * `tutorialCallbacks` 的依赖面（全是"原先闭包里那几个"：状态、驱动、提示区元素、
+ * 判定推进口、重画口、当前关卡口）。显式传进来之后那个函数就能被测试真跑。
+ */
+interface TutorialCallbackDeps {
+  state: GameState;
+  driver: MatchDriver;
+  hintBox: HTMLElement;
+  judgeAndAdvance: () => void;
+  repaint: () => void;
+  currentLevel: () => TutLevel;
+}
+
+/**
+ * 走偏提示的**取文案口**（键 → 句子）。
+ *
+ * ⚠️ 写成 switch（每个 `t()` 的实参都是**字面量**）而不是 `t(key)`：
+ * `t()` 的实参一旦是变量就是**动态键** —— 缺键扫描器看不见它（等于漏翻的温床），
+ * 而 `tests/i18n/tables.test.ts` 与 `tests/tutorial/screen.test.ts` 都有腿当场判红。
+ * 本仓既有同款写法：home.ts 的 setLabel / coinFaceName / ruleTitleText。
+ */
+function offTrackText(key: string): string {
+  switch (key) {
+    case 'tutorial.off.wrong-kind': return t('tutorial.off.wrong-kind');
+    case 'tutorial.off.face-down': return t('tutorial.off.face-down');
+    default: return t('tutorial.off.rejected');
+  }
+}
+
+/**
+ * 这个动作**该不该放行**。
+ *
+ * 返回 `null` = 放行；返回一个 i18n 键 = 拒收并显示那句话。
+ * 规则本身在 `src/tutorial/judge.ts`（纯函数，能在 node 下真跑）。
+ */
+function allowedBy(level: TutLevel, a: { kind: string; faceUp?: boolean }): string | null {
+  if (!level.allowKinds.includes(a.kind)) return offTrackKeyFor(level, a);
+  if (level.id === 'T1' && a.kind === 'play' && a.faceUp === false) return offTrackKeyFor(level, a);
+  return null;
+}
+
 
 /**
  * 挂载教学屏。
@@ -417,7 +577,14 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
     renderPanel();
   }
   document.addEventListener('click', onDocClickCapture, true);
-
+  /**
+   * ★ 2026-10-06：**接上抽牌飞入特效**（用户报的 "T4 打出精神1 没有抽牌特效"）。
+   *
+   * 订阅 `gameBus` 的 `card:drawn`（累加器在 `./main-draw-fx`，与热座**同一份实现**），
+   * 动作结算完在 `onAction` 里 drain 一次并播飞入。退订在 `close()` 里
+   *（`gameBus` 是全仓单例：不退订的话退出教程之后这一屏还会往累加器里塞东西）。
+   */
+  const offDraws = subscribeDraws();
   /**
    * 盯着 `document.body` 的新增子节点：`.zoom-overlay` 一出现就记一笔。
    *
@@ -812,121 +979,24 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
   const driver: MatchDriver = createLocalDriver();
 
   /**
-   * 走偏提示的**取文案口**（键 → 句子）。
+   * 本屏的 `UiCallbacks`（接线口）。
    *
-   * ⚠️ 写成 switch（每个 t() 的实参都是**字面量**）而不是 t(key)：
-   * t() 的实参一旦是变量就是**动态键** —— 缺键扫描器看不见它（等于漏翻的温床），
-   * 而 tests/i18n/tables.test.ts 与 tests/tutorial/screen.test.ts 都有腿当场判红。
-   * 本仓既有同款写法：home.ts 的 setLabel / coinFaceName / ruleTitleText。
+   * ⚠️ **实现本体在模块层的 `tutorialCallbacks`**（上面那个导出的函数）：它原先就长在这里，
+   * 2026-10-06 把它的六个依赖提成显式入参搬到了模块层，为的是让 `tests/ui/main-draw-fx.test.ts`
+   * 能真跑它（钉住本次缺陷的接线：抽牌动画的 `done` 回调接 `judgeAndAdvance`、无抽牌时同步继续）。
+   * 这里只剩"把闭包里那六个值喂进去"这一句，语义与原先逐字相同。
    */
-  function offTrackText(key: string): string {
-    switch (key) {
-      case 'tutorial.off.wrong-kind': return t('tutorial.off.wrong-kind');
-      case 'tutorial.off.face-down': return t('tutorial.off.face-down');
-      default: return t('tutorial.off.rejected');
-    }
-  }
-
-  /**
-   * 教学自己的 `UiCallbacks`。
-   *
-   * ⚠️ 这里**只实现**教学用得上的那几个；其余回调留空 —— 它们对应的是草稿/结算/重放那些
-   * 教学不走的路径（教学跳过草稿，见 `setup.ts`）。
-   */
-  function tutorialCallbacks(): UiCallbacks {
-    return {
-      onRendered() { /* 每帧之后什么都不用做（本屏没有动画驱动） */ },
-      onWinReset() { /* 教学里不会出现"胜利重置"那条路 */ },
-      rerender() { paint(); },
-      onDraftPick() { /* 教学跳过草稿：这条不该被调到（调到了也不动，免得改坏局面） */ },
-      onDraftUnpick() { /* 同上 */ },
-      onDraftBan() { /* 同上 */ },
-      onAction(a) {
-        const level = currentLevel();
-        const key = allowedBy(level, a);
-        if (key !== null) {
-          // ★ 走偏：**不提交**（引擎里什么都没发生），只给一句提示
-          hintBox.textContent = offTrackText(key);
-          return;
-        }
-        if (state.phase === 'gameover') return;
-        const player = state.turnPlayer;
-        // ⚠️ 走 `driver.submit`（**不是**直接 `applyRecordedAction`）：它是收口后唯一能触发
-        //    状态迁移的入口，`seq` 之类的记账由它自己管（手搓 ActionRecord 会漏字段）。
-        let ok = false;
-        try {
-          if (a.kind === 'play') {
-            ok = driver.submit(state, {
-              player, kind: 'play',
-              args: { cardUid: a.cardUid ?? '', faceUp: a.faceUp ?? true, line: (a.line ?? 0) as Line, target: a.target as PlayerId | undefined },
-            }).ok;
-          } else if (a.kind === 'effect-choice') {
-            const top = state.pendingEffects[state.pendingEffects.length - 1];
-            const chooser = top?.prompt?.chooser ?? top?.player ?? player;
-            ok = driver.submit(state, {
-              player: chooser, kind: 'effect-choice',
-              args: { promptId: a.promptId ?? '', choice: a.choice ?? [] },
-            }).ok;
-          } else if (a.kind === 'compile') {
-            ok = driver.submit(state, {
-              player, kind: 'compile', args: { line: (a.line ?? 0) as Line },
-            }).ok;
-          } else if (a.kind === 'resolve-trigger') {
-            /**
-             * ★ 2026-10-02（P7）T11 的第三种触发（「结束」）走这里：结束阶段棋盘上会给出
-             * 「结算触发」按钮（`render.ts` 按 `getLegalActions` 的 `resolve-trigger` 画），
-             * 玩家点它就是`resolve-trigger` 这个 kind。
-             * `cardUid` 就是那张待结算的卡（红线那边传上来的），原样转给引擎。
-             */
-            ok = driver.submit(state, {
-              player, kind: 'resolve-trigger', args: { cardUid: a.cardUid ?? '' },
-            }).ok;
-          } else if (a.kind === 'advance') {
-            /**
-             * ★ 2026-10-02（P7）T10 的"亲自动手"就是这一步：`getLegalActions` 在
-             * `check-control` 这一步只出 `advance` ⇒ 玩家点「推进」，引擎在
-             * `performAdvance` 里调 `checkControl()`（`src/core/game.ts:293`）—— 与真对局同一条路。
-             */
-            ok = driver.submit(state, { player, kind: 'advance', args: {} }).ok;
-          } else {
-            // 别的动作种类（本轮的关卡不会走到）：如实拒绝，不给"看起来发生了"的假象
-            hintBox.textContent = t('tutorial.off.wrong-kind');
-            return;
-          }
-        } catch {
-          // 引擎抛了（例如效果守卫不满足）：状态可能已半改，给一句如实的提示并重画回真状态
-          hintBox.textContent = t('tutorial.off.rejected');
-          paint();
-          return;
-        }
-        // 引擎拒了（例如正面牌打到不匹配的线）：状态没变 ⇒ 一句如实的提示，不推进判定
-        if (!ok) {
-          hintBox.textContent = t('tutorial.off.rejected');
-          paint();
-          return;
-        }
-        judgeAndAdvance();
-      },
-    };
-  }
-
-  /**
-   * 这个动作**该不该放行**。
-   *
-   * 返回 `null` = 放行；返回一个 i18n 键 = 拒收并显示那句话。
-   * 规则本身在 `src/tutorial/judge.ts`（纯函数，能在 node 下真跑）。
-   */
-  function allowedBy(level: TutLevel, a: { kind: string; faceUp?: boolean }): string | null {
-    if (!level.allowKinds.includes(a.kind)) return offTrackKeyFor(level, a);
-    if (level.id === 'T1' && a.kind === 'play' && a.faceUp === false) return offTrackKeyFor(level, a);
-    return null;
+  function makeTutorialCallbacks(): UiCallbacks {
+    return tutorialCallbacks({
+      state, driver, hintBox, judgeAndAdvance, repaint: paint, currentLevel,
+    });
   }
 
   /* ───────────────────────── 判定与推进 ───────────────────────── */
 
   /** 画棋盘（唯一出口：`renderApp` + 本屏的 `cb`） */
   function paint(): void {
-    renderApp(root, state, tutorialCallbacks());
+    renderApp(root, state, makeTutorialCallbacks());
     // ★ 每次重画都要重做（`renderApp` 每次都重建节点）：把不该露的「下一步」藏掉
     hideNextButton();
   }
@@ -1106,6 +1176,9 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
     uiSeen = TUT_UI_NONE;
     teachAt = 0;
     cleared = false;
+    // ★ 2026-10-06：本关开局把抽牌累加器清空（上一条动作若还有没 drain 的残留，
+    // 不该飞进这一关）。与 `main.ts` 那两处整局复位调的是同一个 `resetDraws()`。
+    resetDraws();
     hintBox.textContent = currentLevel().id === 'T0' ? t('tutorial.spot.hint') : '';
     renderPanel();
     paint();
@@ -1142,6 +1215,8 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
       spotResize?.disconnect();
       spotFitWatch?.disconnect();
       document.removeEventListener('click', onDocClickCapture, true);
+      // ★ 2026-10-06：退订抽牌事件（`gameBus` 是全仓单例；不退订 = 退出教程后这一屏还在收事件）
+      offDraws();
       offLang();
       overlay.remove();
       // render.ts 的模块态与 body 级常驻层由它自己的复位口清（本屏不改 render.ts）

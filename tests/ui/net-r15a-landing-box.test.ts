@@ -256,13 +256,16 @@ describe('R15-A 判据自身的健全性（防止"在截断片段上假绿"）',
     expect(b.length, `函数体长度只有 ${b.length} 字符 —— 像是被返回类型里的 { 截断了`).toBeGreaterThan(150);
   });
   it('bodyOf 对普通函数返回正确边界（不含后续函数）', () => {
-    const b = bodyOf(MAIN, 'playDrawAnimation');
-    expect(b).toContain('function playDrawAnimation(player: PlayerId');
+    // ⚠️ 2026-10-06：`playDrawAnimation` 从 `src/main.ts` 搬到了 `src/ui/main-draw-fx.ts`
+    //    （抽牌飞入特效抽成单一出处，好让教学屏也调同一份实现）。判据的内容不变，
+    //    只是读的文件跟着搬；下面 `R15-A A1` 那个 describe 同理。
+    const b = bodyOf(DBL, 'playDrawAnimation');
+    expect(b).toContain('function playDrawAnimation(');
     expect(b.trimEnd().endsWith('}')).toBe(true);
     expect(b, '不许把后面的函数也吃进来').not.toContain('function playDraftToGameTransition');
   });
   it('bodyOf 对不存在的函数**抛错**（响亮，而不是返回空串让上层假绿）', () => {
-    expect(() => bodyOf(MAIN, 'noSuchFunctionXyz')).toThrow();
+    expect(() => bodyOf(DBL, 'noSuchFunctionXyz')).toThrow();
   });
 });
 
@@ -356,15 +359,19 @@ function bodyOf(src: string, name: string): string {
   throw new Error(`function ${name} 的花括号不配平`);
 }
 
-const MAIN = srcOf('../../src/main.ts');
+/** 抽牌飞入特效的**新家**（2026-10-06 从 `main.ts` 搬出来：教学屏与热座共用同一份实现） */
+const DBL = srcOf('../../src/ui/main-draw-fx.ts');
 const EFF = srcOf('../../src/ui/effects/index.ts');
 const GEN2 = srcOf('../../src/ui/fx-gen2.ts');
 const TORNADO = srcOf('../../src/ui/fx-tornado.ts');
 const RENDER = srcOf('../../src/ui/render.ts');
 const HOT_CSS = srcOf('../../src/ui/styles.css');
 
-describe('R15-A A1：抽牌幽灵（main.ts playDrawAnimation）', () => {
-  const fn = bodyOf(MAIN, 'playDrawAnimation');
+describe('R15-A A1：抽牌幽灵（src/ui/main-draw-fx.ts playDrawAnimation）', () => {
+  // ⚠️ 2026-10-06：函数体从 `MAIN` 搬到 `DBL`（同一个函数，逐字搬的）——
+  //    判据本身（幽灵盒来自 `handCardBox()` / 步距来自 `handFanStep()` / 方向按容器排列方向）
+  //    一个字都没放宽。**这里必须跟着搬**：留在 `MAIN` 上 `bodyOf` 会当场抛错。
+  const fn = bodyOf(DBL, 'playDrawAnimation');
   it('尺寸与步距来自 handCardBox()/handFanStep()（不再是 GHOST_W/GHOST_H/102）', () => {
     expect(fn, '幽灵盒必须来自 handCardBox()').toContain('const ghostBox = ghostCardBox();');
     expect(fn, '扇形步距必须来自 handFanStep()').toContain('const fanStep = handFanSpacing();');

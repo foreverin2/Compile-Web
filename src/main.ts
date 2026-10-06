@@ -38,7 +38,9 @@ import { renderNetBoard, resetNetUiState } from './ui/render-net';
 import { setFxViewSeat } from './ui/fx-seat';
 // G2 修正 R15-A：抽牌幽灵的盒尺寸/扇形步距按**页**取值（热座 130×178.8 / 102；
 // 远程页 100.572×137.601 / 78.909），方向按**容器排列方向**取值。出处见 `./ui/fx-card-size`。
-import { handCardBox, handFanLead, handFanStep } from './ui/fx-card-size';
+// ★ 2026-10-06：取尺寸的三处（`handCardBox` / `handFanLead` / `handFanStep`）随抽牌动画一起
+// 搬进了 `./ui/main-draw-fx`（那里是唯一的使用者），本文件不再直接 import 它们。
+// ⚠️ `handOuterFor` 留下：它还有别的用处（见下面 `./ui/fx-seat`）。
 import { handOuterFor } from './ui/fx-seat';
 import { openControlRearrangeModal, closeControlRearrangeModal, refreshControlRearrangeModal, isControlRearrangeOpen, orderChanged, orderToAction, hostsEffectRearrange } from './ui/control-rearrange';
 import { LANG_CHANGE_OK, applyWriteResult, langChangeThrew, renderHome, renderCoin, renderLibrary, renderRules, renderModeSelect, settingsOverlayElement, COIN_TOSS_MS } from './ui/home';
@@ -138,7 +140,13 @@ import { renderReplayBar, type ReplayBarNav } from './ui/replay-bar';
 import { openArchivePicker, openArchiveSink } from './ui/archive-fs-browser';
 import { newMatchSeed, newRandomToken } from './ui/match-seed';
 import { resetControlIfHeld } from './core/rules/control';
-import { initEffects, initCompileFx, initRearrangeFx, initGen3StackSwapFx, initShuffleFx, playRevealFly, buildLoveHeart, playSpeedDrawExtra, SPEED_TOTAL_MS } from './ui/effects';
+import { initEffects, initCompileFx, initRearrangeFx, initGen3StackSwapFx, initShuffleFx, playRevealFly } from './ui/effects';
+// ★ 2026-10-06：抽牌飞入特效（累加器 + 幽灵卡动画）已抽成 `src/ui/main-draw-fx.ts` 的**单一出处**
+// —— 教学屏（`tutorial-screen.ts`）与这里的 `cb.onAction` 两处都调它。原先这段只写在 `cb.onAction`
+// 函数体内部，教学屏那条路**没有任何消费者**（用户报的「T4 打出精神1 没有抽牌特效」）。
+import {
+  subscribeDraws, drainDraws, resetDraws, playDrawSequence, playDrawAnimation as playDrawAnimationFx,
+} from './ui/main-draw-fx';
 import { gen3ClearCacheFx, gen3ControlChangedFx, gen3ControlCheckFx, syncGen3Persistent } from './ui/gen3-control';
 import { gen3FulcrumSwapFx, gen3ProtocolSwapFx } from './ui/fx-gen3-swap';
 import { syncFollowers } from './ui/fx-follow';
@@ -244,18 +252,12 @@ let drawAnimBusy = false;
  *  `styles-net.css:91-97`），比热座小 29%；抽牌幽灵与扇形步进必须跟着它，
  *  否则幽灵比真卡大一圈、抽 2 张以上每张多偏 23.09px（102 vs 78.909）。
  *  ⚠️ 值本身仍是热座的 130 / 178.8 / 102（`fx-card-size.ts` 的出口在热座页**构造性**
- *  返回这三个数：探针选择器都带 `.net-board` 前缀，热座页没有该类 ⇒ 永不命中）。 */
-const ghostCardBox = (): { w: number; h: number } => handCardBox();
-const handFanSpacing = (): number => handFanStep();
-/** 效果触发的抽牌累计（card:drawn 事件 → 本次行动结算完成后统一播抽牌特效）。
- *  love 标志：该次抽牌是否由 love 协议触发（love-1/2/6 及 love 刷新——含对手抽），
- *  播放抽牌飞入动画时给 draw-ghost 卡背挂粉红爱心 + 边框粉红光（FX-4）。
- *  speed 标志：该次抽牌是否由 speed 协议触发（speed-1 顶「清理缓存后抽1张」）——
- *  播放抽牌动画时【先播 speed 专属飓风】（牌库区 → 手牌末尾），基础 draw-ghost 飞入
- *  顺延到专属完成后（FX-R1 时序修复：不再基础先播、专属后播）。
- *  fromOpp：从【对手】牌库抽（同化1/爱1 效果 fromOpponentDeck）——起点 = 对手牌库侧
- *  （修改提示词 31：该抽牌要有基础动画，来源视觉上是对手牌库而非自己牌库）。 */
-let pendingDraws: { player: PlayerId; count: number; love: boolean; speed: boolean; fromOpp: boolean }[] = [];
+ *  返回这三个数：探针选择器都带 `.net-board` 前缀，热座页没有该类 ⇒ 永不命中）。
+ *
+ *  ★ 2026-10-06：`pendingDraws` 的声明与下面这两个取尺寸的 helper 已随抽牌动画一起搬进
+ *  `src/ui/main-draw-fx.ts`（它们只被抽牌动画用）。本文件不再持有累加器 —— 判据见
+ *  `tests/ui/main-draw-fx.test.ts`（"累加器不在 main.ts 里重复声明"）与
+ *  `tests/ui/tutorial-draw-wiring.test.ts`（教学屏那条接线）。 */
 /** 效果触发的揭示累计（card:revealed 事件 → 本次行动结算完成后按序播揭示飞行：
  *  幽灵从被揭示方手牌末尾逐张飞入接收方手牌末尾，全部落地后再重渲染） */
 let pendingReveals: { owner: PlayerId; shownTo: PlayerId; defId: string; triggerProtocol: string }[] = [];
@@ -4255,7 +4257,8 @@ function startReplayFile(file: MatchFile): void {
   //   每局闩，与 `transitioning` 并排复位 —— 漏了它会让重放之后开的新局不播转场）
   draftTransitionPlayed = false;
   transitionPlayed = 0;
-  pendingDraws = [];
+  // ★ 2026-10-06：抽牌累加器已在 `src/ui/main-draw-fx.ts`（`resetDraws()` = 原先的 `pendingDraws = []`）
+  resetDraws();
   pendingReveals = [];
   clearGen2Fx();
   closeControlRearrangeModal();
@@ -4699,8 +4702,14 @@ const cb: UiCallbacks = {
     // effect-choice：getLegalActions 不产生，由 UI 选择栏应答后经 onAction 分发（chooser 可能是对手）
     // 效果触发的抽牌（card:drawn 事件，如 fire-0/fire-4）与揭示（card:revealed 事件，如
     // light-2/light-4）在本次行动结算期间累计，统一播新抽牌特效 + 揭示飞行序列
-    const effectDraws = pendingDraws;
-    pendingDraws = [];
+    //
+    // ★ 2026-10-06：抽牌那一条的累加器搬进了 `src/ui/main-draw-fx.ts`（`drainDraws()` 逐字等于
+    //   原先的 `const effectDraws = pendingDraws; pendingDraws = [];`）。**为什么必须搬**：
+    //   这段收尾原先只写在 `cb.onAction` 函数体内部，而教学屏用的是自己的 `UiCallbacks`
+    //   （`tutorial-screen.ts` 的 `tutorialCallbacks()`）⇒ 教学那条路上累加器没人读，
+    //   T4 打出精神1 抽到了牌却一次动画都不播（用户报的缺陷）。搬出去之后两处调同一份实现。
+    //   揭示那一条（`pendingReveals`）教学里没有关卡会触发，**本次不动**。
+    const effectDraws = drainDraws();
     const effectReveals = pendingReveals;
     pendingReveals = [];
     // 揭示飞行在重渲染前完成：幽灵不提前出现在接收方手牌中，飞入后才随重渲染落地显示
@@ -4735,7 +4744,7 @@ const cb: UiCallbacks = {
     if (drawAnimCount > 0) {
       drawAnimBusy = true;
       // 刷新按钮抽牌（非效果触发）：love 协议不参与（refresh 动作不产生 card:drawn 事件）→ love=false
-      playDrawAnimation(player, drawAnimCount, false, false, () => {
+      playDrawAnimationFx(player, drawAnimCount, false, false, () => {
         drawAnimBusy = false;
         if (epoch !== resetEpoch) return; // 重置发生：放弃后续渲染（幽灵已在动画内清理）
         afterFx();
@@ -4752,51 +4761,6 @@ const cb: UiCallbacks = {
     }
   },
 };
-
-/**
- * 效果触发的抽牌序列：按玩家合并计数后逐人播放抽牌飞入动画（同一玩家多次抽牌合并为一次，
- * 幽灵卡依次落到手牌末尾；任一抽牌由 love 触发 → 合并结果带 love 标志 → draw-ghost 挂爱心；
- * 任一抽牌由 speed 触发 → 合并结果带 speed 标志 → 【先播 speed 专属飓风】（牌库区 → 手牌
- * 末尾，effects.playSpeedDrawExtra），基础 draw-ghost 飞入顺延到专属完成后（SPEED_TOTAL_MS）
- * ——修复"基础抽牌先播、speed 专属后播"的时序错误）。全部播完调用 done()。
- */
-function playDrawSequence(
-  draws: { player: PlayerId; count: number; love: boolean; speed: boolean; fromOpp: boolean }[],
-  done: () => void,
-): void {
-  const merged: { player: PlayerId; count: number; love: boolean; speed: boolean; fromOpp: boolean }[] = [];
-  for (const d of draws) {
-    const found = merged.find((m) => m.player === d.player);
-    if (found) {
-      found.count += d.count;
-      found.love = found.love || d.love;
-      found.speed = found.speed || d.speed;
-      found.fromOpp = found.fromOpp || d.fromOpp; // 混合来源按从对手抽处理（起点视觉不统一时取对手侧）
-    } else {
-      merged.push({ ...d });
-    }
-  }
-  const first = merged[0];
-  if (!first) {
-    done();
-    return;
-  }
-  const next = (): void => {
-    const rest = merged.slice(1);
-    if (rest.length === 0) done();
-    else playDrawSequence(rest, done);
-  };
-  if (first.speed) {
-    // speed 抽牌：先播专属飓风（牌库区 → 手牌末尾，SPEED_TOTAL_MS ≈ 2.26s 完成），
-    // 基础 draw-ghost 飞入顺延到专属完成后（DOM 在 renderApp 前始终为旧布局，落点仍正确）
-    playSpeedDrawExtra({ player: first.player, count: first.count, triggerProtocol: 'speed' });
-    window.setTimeout(() => {
-      playDrawAnimation(first.player, first.count, first.love, first.fromOpp, next);
-    }, SPEED_TOTAL_MS);
-  } else {
-    playDrawAnimation(first.player, first.count, first.love, first.fromOpp, next);
-  }
-}
 
 /**
  * 效果触发的揭示飞行序列：逐张播揭示飞行（每张 ~400ms，上一张落地即起飞下一张），
@@ -4820,104 +4784,6 @@ function playRevealFlySequence(
   step(0);
 }
 
-/**
- * 刷新手牌抽牌飞入动画：drawn 张卡背幽灵卡从牌库区外侧（P1 从牌库左侧、P2 从牌库右侧，
- * 与手牌生长方向一致）依次飞入，每张间隔 120ms。
- * - 起点 = 牌库区 rect 外侧（牌库元素缺失时回退到手牌区外侧，即原行为）
- * - 终点 = 当前手牌末尾（现有末卡之后逐张按扇形步进延伸），而非固定点
- * - 幽灵卡尺寸与正常手牌卡一致（130×178.8，见 .draw-ghost）
- * - love（FX-4）：抽出的卡边框粉红光芒（.fx-love-cardglow）+ 卡背粉红爱心跳动
- *   （.fx-love-heart 子元素，快速 pulse）——随幽灵飞行，落地后随幽灵清理；
- *   牌库区粉红光芒 / 落点爱心由 effects 层 playLoveDrawExtra 独立播放（持续 2s）
- * 全部落地后移除幽灵卡并调用 done()（由调用方触发重渲染）。
- */
-function playDrawAnimation(player: PlayerId, count: number, love: boolean, fromOpp: boolean, done: () => void): void {
-  const hands = document.querySelectorAll<HTMLElement>('.hand');
-  const hand = hands[player];
-  if (!hand) {
-    done();
-    return;
-  }
-  const rect = hand.getBoundingClientRect();
-  const cy = rect.top + rect.height / 2;
-  // 抽牌起点：普通抽 = 自己牌库区外侧；fromOpp（修改提示词 31：从对手牌库抽，同化1/爱1）
-  // = 对端牌库区外侧——卡从对手牌库方向飞入自己手牌（来源视觉正确）
-  const deckSel = `.deck[data-player="${player}"]`;
-  const deck = document.querySelector<HTMLElement>(deckSel);
-  const fromDeck = fromOpp
-    ? document.querySelector<HTMLElement>(`.deck[data-player="${player === 0 ? 1 : 0}"]`)
-    : deck;
-  const deckRect = (fromDeck ?? deck) ? (fromDeck ?? deck)!.getBoundingClientRect() : null;
-  // G2 修正 R15-A：幽灵盒尺寸与扇形步距改成**按页取值**（远程页 100.572×137.601 / 78.909）。
-  // ⚠️ 每帧只取一次（下面所有张共用），避免同一批幽灵量到不同基准（页面正在切页时）。
-  const ghostBox = ghostCardBox();
-  const fanStep = handFanSpacing();
-  // 生长方向：**容器自己的排列方向**，不是绝对玩家号（`handOuterFor` 的判据）。
-  // ⚠️ 热座逐字同值：热座 P0 手牌 `reversed:false` ⇒ 'end'（左起右排，与原 `player === 0` 同）；
-  //    热座 P1 `reversed:true` ⇒ 'start'（原 `player === 0 ? … : …` 的 else 支同）。
-  //    远程页两条手牌**都**是 `reversed:false`（`render-net.ts:1500/1523`）⇒ 两座位都给 'end'，
-  //    这正是修 "P1 的幽灵飞到末卡左边而真卡出现在右端" 的那一处（R3 已把落点判据换过，
-  //    本函数当时漏改，是同一族里最后一条绝对玩家号判据）。
-  const fromLeft = handOuterFor(hand) === 'end';
-  const startX = deckRect ? (fromLeft ? deckRect.left - 90 : deckRect.right + 90)
-    : (fromLeft ? rect.left - 90 : rect.right + 90);
-  // 现有末卡（正排 = 最右 / row-reverse = 最左；排除揭示幽灵牌）；空手牌时回退到手牌区起点
-  const cards = hand.querySelectorAll<HTMLElement>('.card:not(.reveal-ghost)');
-  const last = cards[cards.length - 1];
-  const lastRect = last ? last.getBoundingClientRect() : null;
-  const ghosts: HTMLElement[] = [];
-  for (let i = 0; i < count; i++) {
-    let targetX: number;
-    // 扇形重叠量（= 步距与卡宽之差；热座 28）—— **单一出处**：`handFanLead()` 由
-    // "卡宽 − 步距"推出，这里与下面的空手牌内缩共用它，不再各写一遍减法。
-    const overlap = handFanLead();
-    if (lastRect) {
-      // 扇形步进：新卡中心距 = 卡宽 − 重叠量（热座 130 − 28 = 102；远程页 100.572 × 0.7846 = 78.909）
-      // 正排：新卡 1 左缘 = 末卡右缘 − 重叠（中心 = 右缘 + 卡宽/2 − 重叠）；row-reverse 反向镜像
-      // ⚠️ 原句写死 `+ 37`（= 130/2 − 28）—— 37 是**热座卡宽**的一半减重叠，必须跟着卡宽走，
-      //    否则远程页中心点偏 5.7px（100.572/2 − 21.66 = 28.63 ≠ 37）。
-      // 热座：`handFanLead()` = 130 − 102 = 28 ⇒ 130/2 − 28 = 37 —— 与原句**逐位相等**。
-      const lead = ghostBox.w / 2 - overlap;
-      targetX = fromLeft ? lastRect.right + lead + fanStep * i : lastRect.left - lead - fanStep * i;
-    } else {
-      // 空手牌：正排落在左 padding 内、row-reverse 落在右 padding 内，逐张按扇形步进向后延伸
-      // （热座 `overlap = 28`，与被替换掉的那个字面量 `28` 逐位相等）
-      targetX = fromLeft
-        ? rect.left + overlap + ghostBox.w / 2 + fanStep * i
-        : rect.right - overlap - ghostBox.w / 2 - fanStep * i;
-    }
-    const ghost = document.createElement('div');
-    ghost.className = 'draw-ghost';
-    ghost.style.left = `${startX}px`;
-    // 幽灵卡 top 用函数出口的 h（与 .draw-ghost 高度同源）：元素未 appendChild 前 offsetHeight 恒为 0
-    ghost.style.top = `${cy - ghostBox.h / 2}px`;
-    // G2 修正 R15-A：内联宽高**必须**写 —— `styles.css:1740-1741` 的 `.draw-ghost` 写死
-    // `130px / 178.8px`（热座值），而本元素挂在 `document.body` 上（**不在 `.net-board` 里**）
-    // ⇒ styles-net.css 的 `.net-hands .card` 那条规则**命不中它**，只能在这里内联覆盖。
-    ghost.style.width = `${ghostBox.w}px`;
-    ghost.style.height = `${ghostBox.h}px`;
-    // FX-4 love 抽牌：卡背粉红爱心（跳动）+ 边框粉红光芒（.fx-love-heart 子元素居中于卡背，
-    // 与 .draw-ghost 自身的 transform 平移过渡不冲突——动画在子元素上）
-    if (love) {
-      ghost.classList.add('fx-love-cardglow');
-      ghost.appendChild(buildLoveHeart());
-    }
-    document.body.appendChild(ghost);
-    ghosts.push(ghost);
-    // 以幽灵卡中心对准落点
-    const dx = targetX - (startX + ghostBox.w / 2);
-    // 依次起飞：首张 30ms（保证初始位置已被绘制一帧）后每 120ms 起飞下一张
-    window.setTimeout(() => {
-      ghost.style.transform = `translateX(${dx}px)`;
-    }, 30 + i * 120);
-  }
-  // 最后一张落地（起飞 30ms + 飞行 250ms）后再留 50ms，清理幽灵并重渲染
-  const total = 30 + (count - 1) * 120 + 250 + 50;
-  window.setTimeout(() => {
-    for (const g of ghosts) g.remove();
-    done();
-  }, total);
-}
 
 /**
  * 草案 → 游玩过渡：① 草案界面渐进离场（淡出+微缩+模糊）→
@@ -5779,7 +5645,8 @@ function resetToMainInterface(): void {
   drawAnimBusy = false;
   revealFlyBusy = false;
   transitioning = false;
-  pendingDraws = [];
+  // ★ 2026-10-06：同上（`pendingDraws = []` → `resetDraws()`，累加器搬去 main-draw-fx.ts）
+  resetDraws();
   pendingReveals = [];
   clearGen2Fx(); // 2代 瞬态 FX（luck 骰子/烟花/蘑菇云）随局清扫
   closeControlRearrangeModal(); // 控制组件重排模态（body 级）随局清扫
@@ -5932,6 +5799,14 @@ initRearrangeFx();
 initGen3StackSwapFx(); // 3代（批次 E）：支点1「交换左右堆叠」整堆沿弧线互换
 initShuffleFx(); // 修改提示词 4：洗牌/切洗/弃牌堆洗入牌库动画（deck:shuffled 事件）
 initGen2Fx(); // 2代 协议专属特效（luck 宣告骰子等；事件驱动订阅）
+// 效果触发的抽牌：累计 card:drawn 事件（love 协议触发 → love 标志 → 抽牌动画挂爱心），
+// 行动结算后统一播新抽牌特效
+//
+// ★ 2026-10-06：订阅体与累加器搬进了 `src/ui/main-draw-fx.ts`（那里是**唯一出处**）。
+//   ⚠️ 这一句只在这里调**一次**（进程级）：教学屏进屏时也会调同一个 `subscribeDraws()`，
+//   而去重就写在它内部（`gameBus` 是全仓单例，叠加订阅会让同一次抽牌入队两条）
+//   —— 原先 main.ts 的"订阅只写一次"这个可观测行为因此逐字不变。
+subscribeDraws();
 // 全量追踪（2026-09-12 用户需求「日志要记录所有信息」）：订阅全局事件总线，把每个语义事件 +
 // payload + 当时的步骤/回合写入追踪缓冲区（不进 UI 日志面板，由导出日志全文包含）。
 initEventTracing();
@@ -5964,19 +5839,6 @@ initDevMode({
   // （后者只说明"这一屏画的是远程页"，判别力不如"驱动是不是真的在跑"）。
   // eslint 无此规则；这一行只把"是不是联机"这一件事告诉 devmode，不新增任何状态。
   isNetMatch: () => netGame !== null,
-});
-// 效果触发的抽牌：累计 card:drawn 事件（love 协议触发 → love 标志 → 抽牌动画挂爱心），
-// 行动结算后统一播新抽牌特效
-gameBus.subscribe((e) => {
-  if (e.type !== 'card:drawn') return;
-  const p = e.payload as { player: PlayerId; count: number; triggerProtocol?: string; fromOpponentDeck?: boolean };
-  pendingDraws.push({
-    player: p.player,
-    count: p.count,
-    love: p.triggerProtocol === 'love',
-    speed: p.triggerProtocol === 'speed',
-    fromOpp: p.fromOpponentDeck === true,
-  });
 });
 // 效果触发的揭示：累计 card:revealed 事件，行动结算后按序播揭示飞行
 // （source = 被揭示卡持有者手牌末尾，shownTo = 接收方手牌末尾；triggerProtocol 决定
