@@ -702,6 +702,19 @@
 .cardmaker-credit-link { color: #00ffcc; text-decoration: underline; word-break: break-all; }
 .cardmaker-credit-link:hover { color: #9fd8ff; }
 
+/* ---------- ★ 2026-10-03（用户要求）：去掉"已编译协议"右上角那个绿色对勾 ----------
+ * 用户原话：「去掉已编译协议右上角的绿色勾」。
+ *
+ * 那个对勾由 `src/ui/render.ts:216` 造（`el('span','protocol-check','✓')`），样式原本在
+ * `styles.css:737`。**两张都是红线表/红线文件，一个字节都不动** —— 这里用后加载的这张表把它
+ * 隐掉：`main.ts` 的 CSS import 顺序里 `styles-local.css`（第 9 行）在 `styles.css` 之后
+ * ⇒ 同特异性下后加载的胜。
+ *
+ * ⚠️ 这不是本仓第一次从另一张表覆写 `.protocol-check`：`styles-net.css:976` 早就这么干过
+ * （远程页里把它钉到横躺卡的右上角）。判据面（`tests/ui/net-r15.test.ts` 的 CSS 解算腿）
+ * 只解 `left/top`，与这里的 `display` 无关。 */
+.protocol-check { display: none; }
+
 /* ---------- ★ 2026-10-02（P2）：**教学模式**（教练浮层 + T0 的四个热点） ----------
  * 元素由 `src/ui/tutorial-screen.ts` 造，宿主（`src/main.ts` 的 `showTutorial()`）挂载。
  * 新类名（`.tutorial-*`）在**其余** CSS 里零命中（`styles.css` 一行不动）；

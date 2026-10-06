@@ -1140,6 +1140,41 @@ describe('★ 受控局面：双方协议两两不重名（已编译特效的 de
     expect(overlap(same, same), '判据认不出重名 ⇒ 上面那条腿是假的').toEqual(same);
     expect(overlap(['spirit', 'water', 'darkness'], ['fire', 'light', 'life']), '判据把不重名也算成重名了').toEqual([]);
   });
+
+  /**
+   * ★ 2026-10-03（**用户报的缺陷**）：**场上每一张正面牌都必须落在"本线协议包含它"的线上**。
+   *
+   * 用户原话：「将教程内的场上卡牌换成对应的协议卡牌…导致目前场上有部分卡牌是不属于那个协议的
+   * 卡牌的」。判据就是引擎自己的落线规则（`src/core/actions/base.ts:33-37` 的 `isPlayableFaceUp`）：
+   * 一张**正面**牌能落在某条线上 ⟺ 它的协议 == **我**在这条线的协议 **或** == **对手**在这条线的协议。
+   * **反面牌不看协议**（`base.ts:66` 只守正面）⇒ 反面牌一律跳过。
+   *
+   * 改之前实测有 4 关对不上（T7 对手线 1 的 `water-2`、T9 我方线 2 的 `speed-0`、
+   * T11 对手线 2 的 `ice-1`、T12 对手线 1 的 `life-2`），四处都已按"换卡或换那条线的协议"修掉：
+   *   · T7 / T12：靶子牌换成该线协议的牌（**分值不变**）；
+   *   · T9：把那条线的协议换成 `speed`（那张正面速度0 是这一课的教学对象，不能换卡）；
+   *   · T11：对手线 2 的 `ice-1`「打出后」是这一课的教学对象 ⇒ 显式给对手一套 `[light, ice, darkness]`。
+   */
+  it('★ 场上每一张正面牌都属于它所在那条线的协议（反面牌不看协议）', () => {
+    const protocolOf = (defId: string): string => defId.replace(/-\d+$/, '');
+    for (const l of TUT_LEVELS) {
+      const s = buildLevelState(l.id);
+      const mine = s.players[0].protocols.map((p) => p.defId);
+      const foe = s.players[1].protocols.map((p) => p.defId);
+      for (const pid of [0, 1] as const) {
+        for (const line of [0, 1, 2] as const) {
+          for (const c of s.players[pid].stacks[line]) {
+            if (!c.faceUp) continue; // 反面牌不看协议
+            expect(
+              [mine[line], foe[line]],
+              `${l.id}: 正面牌 ${c.defId}（玩家 ${pid + 1} 的第 ${line + 1} 条线）不属于这条线的协议`
+              + `（我 ${mine[line]} / 敌 ${foe[line]}）—— 屏上就是"一张不属于这个协议的卡牌"`,
+            ).toContain(protocolOf(c.defId));
+          }
+        }
+      }
+    }
+  });
 });
 
 describe('关卡数据本身（顺序 / 序号 / 钳位）', () => {

@@ -171,7 +171,7 @@ export const CARD_EFFECT_TAGS_BY_CARD: Readonly<Record<string, readonly string[]
   'inertia-3': ['dir-middle', 'trig-play', 'op-play', 'misc-opp-choice'],
   'inertia-4': ['dir-middle', 'trig-play', 'op-discard'],
   'inertia-5': ['dir-middle', 'trig-play', 'op-discard'],
-  'life-0': ['dir-middle', 'dir-bottom', 'trig-play', 'trig-end', 'trig-hidden-top', 'trig-conditional', 'op-delete', 'op-play'],
+  'life-0': ['dir-top', 'dir-middle', 'trig-play', 'trig-end', 'trig-hidden-top', 'trig-conditional', 'op-delete', 'op-play'],
   'life-1': ['dir-middle', 'trig-play', 'op-flip'],
   'life-2': ['dir-middle', 'trig-play', 'op-flip', 'op-draw'],
   'life-3': ['dir-bottom', 'trig-before-covered', 'op-play'],

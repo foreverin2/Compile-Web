@@ -135,7 +135,31 @@ const txtAll = [
   { file: 'compile3文本.txt', data: 'cards3.ts' },
 ];
 
-const report = { cardDiffs: [], protoDiffs: [], missing: [], extra: [] };
+const report = { cardDiffs: [], protoDiffs: [], missing: [], extra: [], knownTxtErrors: [] };
+
+/**
+ * ★ 2026-10-03（**用户报的缺陷**）：**外部 txt 里已知的转写错误**（逐条列出，带理由与出处）。
+ *
+ * 与 `EXPECTED_RENAMES` 的分工：改名表管"同一个东西两个名字"，这张表管"外部文本本身写错了"。
+ * 命中这张表的卡**整张跳过比对**（并在输出里印一行，不静默）。
+ *
+ * 为什么允许这样：`compile{1,2,3}文本.txt` 是**转写稿**，而**卡面**才是这个游戏在发的东西
+ * （本程序把卡面图直接发给玩家看）。两者冲突、且引擎的实现与卡面一致时以卡面为准，
+ * 并把这条差异登记在这里 —— 于是 `texts:check` 仍是"0 差异"，同时"我们有意偏离了 txt 哪几条、
+ * 为什么"是**可查**的，而不是靠一句没人看的注释。
+ */
+const KNOWN_TXT_ERRORS = {
+  /**
+   * `life-0`（生命0）：txt 把它写成 `空/中部/被盖住前：先删除此牌。`（第三段 = 底部），
+   * 而卡面 `public/assets/protocols/life/card-0.png` 印的是
+   *   顶部 `End: If this card is covered, delete this card.`
+   *   中部 `Play the top card of your deck face-down in each line where you have a card.`
+   * 引擎（`src/core/effects/cards/life.ts` 的 life0 顶指令）也按"顶指令、结束阶段"实现
+   * （T11 那一课读的 `[结束] life-0` 就是它写的）⇒ 段落位置与触发时机都以卡面为准。
+   * 用户 2026-10-03 原话：「生命0的效果的位置文本信息错了，底部的文本效果应该是在上部的」。
+   */
+  'life-0': 'txt 把顶指令「结束：若此卡被覆盖，则删除此卡。」转写成第三段（底部）；以卡面与引擎实现为准',
+};
 
 for (const { file, data } of txtAll) {
   const txt = parseTxt(join(TXT_DIR, file));
@@ -192,6 +216,11 @@ for (const { file, data } of txtAll) {
     const defId = nameToDefId.get(toDisplayName(tc.protoName));
     if (!defId) continue; // 协议名映射缺失已在上面报告
     const key = `${defId}-${tc.value}`;
+    // ★ 2026-10-03：外部 txt 已知写错的卡**整张跳过**（逐条登记在 KNOWN_TXT_ERRORS，输出里会印一行）
+    if (KNOWN_TXT_ERRORS[key] !== undefined) {
+      report.knownTxtErrors.push({ file, defId: key, why: KNOWN_TXT_ERRORS[key] });
+      continue;
+    }
     const dc = dat.cards.get(key);
     if (!dc) {
       report.missing.push(`[${file}] 文本卡牌 ${key} 在 ${data} 中缺少`);
@@ -225,6 +254,11 @@ console.log(
   `卡牌文本差异 ${report.cardDiffs.length} 处；协议元数据差异 ${report.protoDiffs.length} 处；缺失/映射问题 ${report.missing.length} 处`
 );
 console.log('');
+if (report.knownTxtErrors.length > 0) {
+  console.log(`---- 已登记的「外部 txt 写错、以卡面为准」${report.knownTxtErrors.length} 处（不是待同步差异） ----`);
+  for (const k of report.knownTxtErrors) console.log(`[${k.file}] ${k.defId}：${k.why}`);
+  console.log('');
+}
 if (report.missing.length > 0) {
   console.log('---- 缺失/映射问题 ----');
   for (const m of report.missing) console.log(m);

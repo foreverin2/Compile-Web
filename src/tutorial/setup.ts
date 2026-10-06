@@ -100,7 +100,19 @@ function opponentProtocols(mine: readonly string[]): [string, string, string] {
  * 草稿期的一切（`draftPicks` / `draftRound` / `draftPool`）都清干净：教学**不玩草稿**
  * （方案 §5.1："跳过草稿"），留着它们只会让渲染器画出不该有的草稿态。
  */
-function controlledGame(seed: string, lineProtocols: readonly [string, string, string]): GameState {
+function controlledGame(
+  seed: string,
+  lineProtocols: readonly [string, string, string],
+  /**
+   * ★ 2026-10-03（用户报的"场上有不属于那个协议的卡牌"）：**对手那三套协议可以显式指定**。
+   *
+   * 缺省走 `opponentProtocols()`（"不属于我方的前三套"）。需要显式给的情形只有一种：
+   * **对手场上摆着一张正面牌，而那条线的协议必须是那张牌的协议**（例如 T11 对手线上的
+   * `ice-1` —— 它的「打出后」是这一课要演示的东西，不能换卡，只能把对手那条线的协议设成 `ice`）。
+   * 这时调用方自己保证"与我方三套不重名"（上面那条不变量腿会逐关检查）。
+   */
+  foeProtocols?: readonly [string, string, string],
+): GameState {
   const s = createGame({ seed, draftStarter: 0, firstToPlay: 0 });
   s.phase = 'turn';
   s.step = 'action';
@@ -122,7 +134,7 @@ function controlledGame(seed: string, lineProtocols: readonly [string, string, s
    * ★ 2026-10-03：**但与玩家不重名**（理由见 `opponentProtocols` 的说明）——
    * 改之前这里写的是 `protocols(...lineProtocols)`（双方同一组）。
    */
-  s.players[1].protocols = protocols(...opponentProtocols(lineProtocols));
+  s.players[1].protocols = protocols(...(foeProtocols ?? opponentProtocols(lineProtocols)));
   return s;
 }
 
@@ -300,7 +312,12 @@ export function buildLevelState(id: TutLevelId): GameState {
       card('t7f-buried', 'spirit-3', 0, 'field', true, 0, 0),
       card('t7f-cover', 'spirit-5', 0, 'field', true, 0, 1),
     ];
-    s.players[1].stacks[0] = [card('t7o1', 'water-2', 1, 'field', true, 0, 0)];
+    // ★ 2026-10-03（用户报的缺陷）：这张**正面**牌必须落在"本线协议包含它"的线上
+    //   （`base.ts:33-37`：正面牌的落线条件是"协议 == 我这条线的 或 == 对手这条线的"）。
+    //   原来摆的是 `water-2`，而线 1 的双方协议是 我 sprit / 敌 fire ⇒ 一张流水牌摆在精神线上，
+    //   看着就是"不属于这个协议的卡牌"。改成 `fire-2`：**分值不变**（这张牌只是"让默认档的
+    //   候选集合非空"用的靶子），而且正好落在对手自己的火线上。
+    s.players[1].stacks[0] = [card('t7o1', 'fire-2', 1, 'field', true, 0, 0)];
     return s;
   }
   if (id === 'T8') {
@@ -349,7 +366,16 @@ export function buildLevelState(id: TutLevelId): GameState {
    *
    * 两个 `buildLevelState` 之外的前提，都在测试腿里正面钉住（`tests/tutorial/levels.test.ts` 的 T9 组）。
    */
-  const s = controlledGame('tutorial-T9', ['darkness', 'water', 'spirit']);
+  /**
+   * ★ 2026-10-03（用户报的缺陷）：线 2 挂 `speed`（原来挂 `water`）。
+   *
+   * 这一关的"第二种露出途径"要在**我方线 2 上摆一张正面的速度0**（`t9f-ours`），而正面牌的
+   * 落线条件是"协议 == 这条线的双方协议之一"（`base.ts:33-37`）⇒ 那条线的协议必须是 `speed`，
+   * 否则屏上就是"一张速度牌摆在流水线上"。改协议不影响任何一步：
+   *   · 手里那张 `t9h-cover`（流水5）是**反面**打出去的 —— 反面不看协议（`base.ts:66` 只守正面）；
+   *   · 另外三张牌（黑暗1 / 黑暗4 → 线 1，精神3 → 线 3）各自仍打在自己协议的线上。
+   */
+  const s = controlledGame('tutorial-T9', ['darkness', 'speed', 'spirit']);
   // 对手手牌留空：对手那张速度0 被翻正时，它的中部指令「打出1张牌」没有候选 ⇒ 空转
   // （日志里那句 `[中部] speed-0：原因：翻正` 照样会有 —— 判据读的就是它）
   s.players[1].hand = [];
@@ -436,7 +462,18 @@ function buildLevelStateP7(id: 'T10' | 'T11' | 'T12' | 'T13'): GameState {
      * ⚠️ 本关的三种触发**跨了引擎的三步**（action → check-cache → end）⇒ 声明 `keepStep: true`，
      * 让引擎自己的步真的走（否则教学屏那条沙盒规则会把 step 打回 action，玩家永远到不了结束阶段）。
      */
-    const s = controlledGame('tutorial-T11', ['ice', 'fire', 'life']);
+    /**
+     * ★ 2026-10-03（用户报的"场上有不属于那个协议的卡牌"）：两条协议都动过 ——
+     *
+     *  - **我方线 1 的协议从 `ice` 换成 `water`**：这一关我方场上现在只有火焰0（线 2）与
+     *    生命0+生命5（线 3），线 1 是空的；手里那张 `ice-5` 只用来被弃（不打出）⇒ 线 1 挂什么
+     *    都行。腾出 `ice` 是为了下面那一条。
+     *  - **对手那三套显式给成 `[light, ice, darkness]`**：对手线 2 上摆着**正面**的 `ice-1`
+     *    （它的「打出后」正是这一课要演示的东西，**不能换卡**），而正面牌的落线条件是
+     *    "协议 == 这条线的双方协议之一" ⇒ 对手线 2 的协议必须是 `ice`。
+     *    两边合起来仍满足"双方协议两两不重名"（{water,fire,life} ∩ {light,ice,darkness} = ∅）。
+     */
+    const s = controlledGame('tutorial-T11', ['water', 'fire', 'life'], ['light', 'ice', 'darkness']);
     s.players[0].hand = [];
     s.players[0].deck = [];
     // 打出后：**对手**线 2 摆冰1（顶卡、正面）—— 我在自己线 2 出牌时它的「打出后」响
@@ -481,7 +518,10 @@ function buildLevelStateP7(id: 'T10' | 'T11' | 'T12' | 'T13'): GameState {
     ];
     s.players[0].deck = [];
     // 线 1：对手一张正面牌（要被删除的那张）
-    s.players[1].stacks[0] = [card('t12o1', 'life-2', 1, 'field', true, 0, 0)];
+    // ★ 2026-10-03（用户报的缺陷）：这张**正面**牌（删除那一步的靶子）原来摆的是 `life-2`，
+    //   而线 1 的双方协议是 我 fire / 敌 water ⇒ 一张生命牌摆在火焰线上。改成 `water-2`：
+    //   **分值不变**（这一课只关心"那张牌被删掉"，不关心它是什么牌），而且落在对手自己的水线上。
+    s.players[1].stacks[0] = [card('t12o1', 'water-2', 1, 'field', true, 0, 0)];
     // 线 3：对手一张**死板7**（它底「此牌不能被翻转或偏转」= 免疫；正因如此它才挡得住 rigidity-1）
     s.players[1].stacks[2] = [card('t12f-rigid', 'rigidity-7', 1, 'field', true, 2, 0)];
     return s;

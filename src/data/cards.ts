@@ -66,7 +66,20 @@ export const ALL_CARD_DEFS: CardDef[] = [
   { defId: 'darkness-5', protocol: 'darkness', value: 5, middle: '弃1张牌。' },
 
   // 生——勃勃生机
-  { defId: 'life-0', protocol: 'life', value: 0, middle: '在你有牌的每一列以反面打出你牌堆顶的牌。', bottom: '被盖住前：先删除此牌。' },
+  /**
+   * ⚠️★ 2026-10-03（**用户报的缺陷**）：生命0 的卡文**位置**原来转写错了 ——
+   * 外部 txt（`正版compile/compile1文本.txt`）把它写成 `空/在你有牌的每一列…/被盖住前：先删除此牌`，
+   * 本文件照着把「被盖住前：先删除此牌」放进了 `bottom`。**卡面**（本程序正在发的那张
+   * `public/assets/protocols/life/card-0.png`）印的是：
+   *   顶部 `End: If this card is covered, delete this card.`
+   *   中部 `Play the top card of your deck face-down in each line where you have a card.`
+   * 而且引擎本来就是按"**顶指令**、结束阶段、被覆盖则删自己"实现的（`src/core/effects/cards/life.ts`
+   * 的 life0 顶指令，会写 `[结束] life-0` 那条日志）⇒ 与卡面一致 ⇒ 以卡面为准：
+   * `top` 有值、`bottom` 为空。
+   * 这条与 txt 的差异**逐条登记**在 `tools/sync-card-texts.mjs` 的 `KNOWN_TXT_ERRORS` 里
+   * （否则 `npm run texts:check` 会把它当成一处待同步的差异报出来）。
+   */
+  { defId: 'life-0', protocol: 'life', value: 0, top: '结束：若此卡被覆盖，则删除此卡。', middle: '在你有牌的每一列以反面打出你牌堆顶的牌。' },
   { defId: 'life-1', protocol: 'life', value: 1, middle: '翻转1张牌。再翻转1张牌。' },
   { defId: 'life-2', protocol: 'life', value: 2, middle: '抽1张牌。你可以翻转1张反面牌。' },
   { defId: 'life-3', protocol: 'life', value: 3, bottom: '被盖住前：先在另一列以反面打出你牌堆顶的牌。' },
