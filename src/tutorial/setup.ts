@@ -37,6 +37,7 @@
  *    哪条线为什么挂什么协议）—— 那些都是"不这么摆就跑不通"的实测结论，不是随手放的。
  */
 import { createGame } from '../core/state/create';
+import { DEMO_PROTOCOLS } from '../data/demo';
 import type { Card, GameState, Line, PlayerId } from '../core/models/types';
 import type { TutLevelId } from './types';
 
@@ -65,6 +66,35 @@ function protocols(a: string, b: string, c: string): GameState['players'][0]['pr
 }
 
 /**
+ * ★ 2026-10-03（**用户报的缺陷：教程里"只有一边的协议会亮已编译特效"**）：
+ * **对手（座位 1）拿这三套协议** —— 从 `DEMO_PROTOCOLS` 里按常量顺序取**前三个不属于我方**的。
+ *
+ * ## 为什么必须与玩家不重名（这是本函数存在的唯一理由）
+ *
+ * `src/ui/render.ts:2384` 的已编译协议持久特效层注册表 `compiledFx` 是**以 defId 为键**的，
+ * 它依赖一条前提，代码自己写在 `render.ts:170-171`：
+ * 「每玩家 3 协议 defId 互不相同、双方亦不共享（草案池每 defId 只出现一次）→ 以 defId 为键安全」。
+ *
+ * 真对局里这条前提**成立**（`getDraftPool` 会把已被挑走的 defId 滤掉，`src/core` 里也没有任何
+ * 地方改写 `protocols` 的 defId），而**教学这批局面是手摆的** —— 改之前 `controlledGame` 给双方
+ * 摆的是**同一组**协议（用户看到的正是这个）。后果是同一个 defId 的两格共用一个层：
+ *   · 一侧已编译、另一侧同名未编译时，未编译那支会把已建好的层 `remove()` 掉（谁后跑谁赢）；
+ *   · 两侧都已编译时，层被摆到最后处理的那个 holder 上。
+ * 两种都表现为"只有一边亮"。
+ *
+ * 用户 2026-10-03 的裁决：**不做"双方共用同一协议"的玩法**（这条永远不出现），所以正确的处置
+ * 是让教学的局面也满足那条前提（不去动红线 `render.ts`）。改完之后 15 关双方的协议**两两不重名**，
+ * 由 `tests/tutorial/levels.test.ts` 的一条腿钉住（重名 ⇒ 红）。
+ *
+ * ⚠️ 判据是"我方协议组里的三套" —— 只排除它们，不排除"我方线上摆着的卡"（卡与协议无关）。
+ */
+function opponentProtocols(mine: readonly string[]): [string, string, string] {
+  const rest = DEMO_PROTOCOLS.map((p) => p.defId).filter((id) => !mine.includes(id));
+  if (rest.length < 3) throw new Error('DEMO_PROTOCOLS 里凑不出三套与玩家不重名的协议');
+  return [rest[0], rest[1], rest[2]];
+}
+
+/**
  * 把 `createGame()` 的草稿局**就地改成**一局"轮到玩家 0 行动"的受控局。
  *
  * 草稿期的一切（`draftPicks` / `draftRound` / `draftPool`）都清干净：教学**不玩草稿**
@@ -87,8 +117,12 @@ function controlledGame(seed: string, lineProtocols: readonly [string, string, s
   s.pendingPlay = [];
   s.pendingShift = [];
   s.players[0].protocols = protocols(...lineProtocols);
-  // 对手（座位 1）也要有协议：阈值/控制权两处要用它算，缺了渲染器会画出空线
-  s.players[1].protocols = protocols(...lineProtocols);
+  /**
+   * 对手（座位 1）也要有协议：阈值/控制权两处要用它算，缺了渲染器会画出空线。
+   * ★ 2026-10-03：**但与玩家不重名**（理由见 `opponentProtocols` 的说明）——
+   * 改之前这里写的是 `protocols(...lineProtocols)`（双方同一组）。
+   */
+  s.players[1].protocols = protocols(...opponentProtocols(lineProtocols));
   return s;
 }
 
@@ -132,8 +166,10 @@ export function buildLevelState(id: TutLevelId): GameState {
     s.players[0].deck = [];
     s.players[0].protocols[0] = { defId: 'spirit', compiled: true };
     s.players[0].protocols[1] = { defId: 'water', compiled: true };
-    s.players[1].protocols[0] = { defId: 'spirit', compiled: true };
-    s.players[1].protocols[1] = { defId: 'water', compiled: true };
+    // 对手那两条也是"已编译的战果"——但用的是**他自己的**协议（双方协议不重名，见
+    // `opponentProtocols` 的说明：重名会让已编译特效的 defId 键撞在一起，只有一边亮）
+    s.players[1].protocols[0].compiled = true;
+    s.players[1].protocols[1].compiled = true;
     s.players[0].stacks[2] = [
       card('s0f1', 'light-4', 0, 'field', true, 2, 0),
       card('s0f2', 'light-5', 0, 'field', true, 2, 1),
@@ -470,8 +506,10 @@ function buildLevelStateP7(id: 'T10' | 'T11' | 'T12' | 'T13'): GameState {
   s.players[0].deck = [];
   s.players[0].protocols[0] = { defId: 'spirit', compiled: true };
   s.players[0].protocols[1] = { defId: 'water', compiled: true };
-  s.players[1].protocols[0] = { defId: 'spirit', compiled: true };
-  s.players[1].protocols[1] = { defId: 'water', compiled: true };
+  // 对手那两条同样是"已编译的战果"，但用**他自己的**协议（不与我方重名 —— 见
+  // `opponentProtocols`：重名会让已编译特效的 defId 键撞在一起，只有一边亮）
+  s.players[1].protocols[0].compiled = true;
+  s.players[1].protocols[1].compiled = true;
   // 线 3（黑暗）：我方 10 分（1 + 4 + 5），对手 2 分（反面牌不算分）
   s.players[0].stacks[2] = [
     card('t13b1', 'darkness-1', 0, 'field', true, 2, 0),

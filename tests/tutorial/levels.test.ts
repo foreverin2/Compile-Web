@@ -1097,6 +1097,51 @@ describe('★ 教学设计四件套（生成式：以后新增关卡自动受约
   });
 });
 
+/**
+ * ★ 2026-10-03（**用户报的缺陷 → 用户裁决的修法**）：**教学受控局面里，双方协议不许重名**。
+ *
+ * ## 为什么这是一条必须钉住的纪律（不是洁癖）
+ *
+ * `src/ui/render.ts:2384` 的已编译协议**持久特效层注册表** `compiledFx` 是**以 defId 为键**的，
+ * 它依赖一条前提，代码自己写在 `render.ts:170-171`：
+ * 「每玩家 3 协议 defId 互不相同、双方亦不共享（草案池每 defId 只出现一次）→ 以 defId 为键安全」。
+ * 真对局里这条前提成立（`getDraftPool` 滤掉已挑走的 defId，`src/core` 也没有任何地方改写
+ * `protocols` 的 defId），而教学这批局面是**手摆的**：改之前 `controlledGame` 给双方摆的是
+ * **同一组**协议（15/15 关都重名）⇒ 同一个 defId 的两格共用一层：
+ *   · 一侧已编译、另一侧同名未编译时，未编译那支把已建好的层 `remove()` 掉（谁后跑谁赢）；
+ *   · 两侧都已编译时，层被摆到最后处理的那个 holder 上。
+ * 两种都表现为**只有一边亮已编译特效**（用户 2026-10-03 报的就是这个）。
+ *
+ * 用户当天的裁决：**不做"双方共用同一协议"的玩法**（永远不出现）⇒ 正确处置是让教学的局面也
+ * 满足那条前提（`setup.ts` 的 `opponentProtocols()`），**不去动红线 `render.ts`**。
+ * 这条腿就是那个裁决的守卫：以后哪一关手摆出重名，这里当场红。
+ */
+describe('★ 受控局面：双方协议两两不重名（已编译特效的 defId 键前提）', () => {
+  /** 两份协议列表的交集（判据本体；下面那条反向锚点证明它不是恒空） */
+  const overlap = (mine: readonly string[], foe: readonly string[]): string[] =>
+    mine.filter((d) => foe.includes(d));
+
+  it('十五关逐关检查：双方协议 defId 的交集为空', () => {
+    for (const l of TUT_LEVELS) {
+      const s = buildLevelState(l.id);
+      const mine = s.players[0].protocols.map((p) => p.defId);
+      const foe = s.players[1].protocols.map((p) => p.defId);
+      expect(mine.length, `${l.id} 我方协议不是三条`).toBe(3);
+      expect(foe.length, `${l.id} 对手协议不是三条`).toBe(3);
+      expect(overlap(mine, foe), `${l.id} 双方协议重名 —— 已编译特效会撞 defId 键（只有一边亮）`).toEqual([]);
+      // 顺带：一侧内部也不许重名（同一位玩家对同一协议最多一张，这是"以 defId 为键"的另一半前提）
+      expect(new Set(mine).size, `${l.id} 我方自己两条线挂了同一个协议`).toBe(3);
+      expect(new Set(foe).size, `${l.id} 对手自己两条线挂了同一个协议`).toBe(3);
+    }
+  });
+
+  it('反向锚点：把"同一组协议"喂给同一个判据 ⇒ 它必须报出重名（否则上面那条在空集上恒真）', () => {
+    const same = ['spirit', 'water', 'darkness'];
+    expect(overlap(same, same), '判据认不出重名 ⇒ 上面那条腿是假的').toEqual(same);
+    expect(overlap(['spirit', 'water', 'darkness'], ['fire', 'light', 'life']), '判据把不重名也算成重名了').toEqual([]);
+  });
+});
+
 describe('关卡数据本身（顺序 / 序号 / 钳位）', () => {
   it('十五关的 id 与顺序就是 S0 + T0~T13（S0 插在最前面，其余 id 一个都没动）', () => {
     expect(TUT_LEVELS.map((l) => l.id)).toEqual([
