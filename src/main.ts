@@ -52,7 +52,7 @@ import type { CoinSide } from './app/coin';
 // G3 Task 4：L1 授权状态机（纯层）+ 其浏览器后端 + 授权弹窗屏
 // ★ 2026-10-01（P1）：首启向导的"只出现一次"标记就存在**同一个** `L1_SETTINGS` 里
 //   （`onboardingSeen`，没有新存储键）；"清除本机数据"把它一并清掉 ⇒ 向导会再出现。
-import { createLocalStore, readFxSettings, readInstantChoice, readLang, readNickName, readOnboardingSeen, readPoolPreset, writeFxSettings, writeInstantChoice, writeLang, writeNickName, writeOnboardingSeen, writePoolPreset, writeTutorialProgress } from './app/local-store';
+import { createLocalStore, readFxSettings, readHandDrawOrder, readInstantChoice, readLang, readNickName, readOnboardingSeen, readPoolPreset, writeFxSettings, writeHandDrawOrder, writeInstantChoice, writeLang, writeNickName, writeOnboardingSeen, writePoolPreset, writeTutorialProgress } from './app/local-store';
 // ★ 2026-10-06（用户要求）：「自定义协议池」的纯逻辑。
 //   - `poolDefsOf`：热座那一支用它把**本机存的预设**变成 `createGame({ draftPool })`；
 //   - `poolFromSeed` / `encodePoolIntoSeed`：联机那一支用它们把房主的预设**编码进对局种子**、
@@ -65,6 +65,9 @@ import { applyFxSettings } from './ui/fx-settings';
 // ★ 2026-10-06（用户要求）：设置里的「选牌即确定」—— 内存态由 `play-prefs.ts` 持有
 //   （与 `fx-settings.ts` 同构），本文件只负责启动读回 + 拨动时落盘。
 import { applyInstantChoice, isInstantChoiceOn, setInstantChoice } from './ui/play-prefs';
+// ★ 2026-10-06（用户要求）：设置里的「手牌按抽牌顺序」—— 内存态由 `hand-order-pref.ts` 持有
+//   （与 `play-prefs.ts` 同构），本文件只负责启动读回 + 拨动时落盘。
+import { applyHandDrawOrder, isHandDrawOrderOn, setHandDrawOrder } from './ui/hand-order-pref';
 // ★ 2026-10-01（P0，用户拍板"UI 全量双语"）：i18n 基建。语言的**值**与文案表在 `src/i18n/`；
 //   本文件只做两件事：① 启动时 `initI18n(readLang(localStore))` 读一次已存的语言（**只读**）；
 //   ② `applyLangChange()` 在用户切语言时落盘 + 重画当前屏。方案见
@@ -4931,6 +4934,19 @@ try {
 }
 
 /**
+ * ★ 2026-10-06（用户要求）：**启动时读回「手牌按抽牌顺序」**（设置里的新一项，默认关闭）。
+ *
+ * 与上面 `applyInstantChoice` **逐字同一条纪律**：只读、写入只发生在用户拨动开关那一刻
+ * （`applyHandDrawOrderChange`）。读不出来 / 值是垃圾 ⇒ 只认 `true` + 退默认 ⇒ 关闭（按分值排），
+ * 与改动前的行为一致，不抛。
+ */
+try {
+  applyHandDrawOrder(readHandDrawOrder(localStore));
+} catch {
+  applyHandDrawOrder(undefined);
+}
+
+/**
  * ★ 2026-10-01（P0）：用户在小窗里切了语言 ⇒ 落盘 + 立刻重画当前屏。
  *
  * 三件事，缺一不可（顺序也是刻意的）：
@@ -5040,6 +5056,24 @@ function applyInstantChoiceChange(on: boolean): LangChangeOutcome {
   let result: LangChangeOutcome = { ok: false, reason: 'write-failed', detail: '' };
   try {
     result = applyWriteResult(writeInstantChoice(localStore, on));
+  } catch (e) {
+    result = langChangeThrew(e instanceof Error ? e.message : String(e));
+  }
+  return result;
+}
+
+/**
+ * ★ 2026-10-06（用户要求）：**「手牌按抽牌顺序」拨动时落盘**（设置里的新一项，默认关闭）。
+ *
+ * 与 `applyInstantChoiceChange` **逐字同构**：内存态已由小窗自己换好（`setHandDrawOrder`），
+ * 这里再兜一道；失败不回滚内存态（"本次会话仍生效、下次进来回到上次保存的"），也不重画整屏
+ * （就地反馈由小窗完成）。
+ */
+function applyHandDrawOrderChange(on: boolean): LangChangeOutcome {
+  setHandDrawOrder(on);
+  let result: LangChangeOutcome = { ok: false, reason: 'write-failed', detail: '' };
+  try {
+    result = applyWriteResult(writeHandDrawOrder(localStore, on));
   } catch (e) {
     result = langChangeThrew(e instanceof Error ? e.message : String(e));
   }
@@ -5382,6 +5416,9 @@ function showHome(initialToast?: string): void {
         // ★ 2026-10-06（用户要求）：第二类开关「选牌即确定」（默认关闭）—— 同一条落盘路
         instantChoice: isInstantChoiceOn(),
         onInstantChoiceChange: (on) => applyInstantChoiceChange(on),
+        // ★ 2026-10-06（用户要求）：第三类开关「手牌按抽牌顺序」（默认关闭）—— 同一条落盘路
+        handDrawOrder: isHandDrawOrderOn(),
+        onHandDrawOrderChange: (on) => applyHandDrawOrderChange(on),
       });
       document.body.appendChild(overlay);
       document.addEventListener('keydown', onKey); // Esc 关闭（用户列的可选项，一并接上）

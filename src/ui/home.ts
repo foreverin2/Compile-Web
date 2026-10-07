@@ -1508,6 +1508,15 @@ export interface SettingsOverlayNav {
    * 不由本函数去读存储（它只造元素 ⇒ 仍能在无 jsdom 的 node 下用桩真跑）。
    */
   readonly instantChoice: boolean;
+  /**
+   * ★ 2026-10-06（用户要求）：设置里的第三类开关 —— **「手牌按抽牌顺序」**（默认关闭）。
+   *
+   * 语义与 `onInstantChoiceChange` **逐字同款**：小窗自己把内存态换好（`setHandDrawOrder`）
+   * 并就地改写那一行的说明，宿主负责落盘（`writeHandDrawOrder`）与需要时的重画。
+   */
+  readonly onHandDrawOrderChange: (on: boolean) => LangChangeOutcome;
+  /** 「手牌按抽牌顺序」现在的值（小窗开出来时勾没勾）。同上：必填、不由本函数读存储。 */
+  readonly handDrawOrder: boolean;
 }
 
 /**
@@ -1798,6 +1807,53 @@ export function settingsOverlayElement(nav: SettingsOverlayNav): HTMLElement {
   list.appendChild(instantRow);
   list.appendChild(instantNote);
 
+  /**
+   * ★ 2026-10-06（**用户要求**）：第三类开关 —— **「手牌按抽牌顺序」**（默认关闭）。
+   *
+   * 用户原话：「在设置中添加上一个开关，默认关闭，打开后，抽到的牌就不会自动按照顺序进行排列了」。
+   * 起因是玩家反馈"手牌排序故障"（手里 1 2 3 4 5，打出 2 后抽到的新牌插在第 2 格）：
+   * 引擎没问题，是**显示层**按卡面分值升序重排造成的；关着 = 保持改动前那套（按分值），
+   * 打开 = 按入手顺序（新牌在最右）。查证记录见 `.superpowers/2026-10-06-hand-order/REPORT.md`，
+   * 判据在 `src/ui/hand-order-pref.ts`（`handShownCards`，热座与远程页共用）。
+   *
+   * 形态与上面「选牌即确定」那一行**逐字同款**，只有两处类名/属性名不同（都是承重的）：
+   *  - 说明行用 `.settings-hand-order-note`（`.settings-instant-note` 一样不能复用
+   *    `.settings-note`：既有腿要求 `.settings-note` 在树里唯一；两条说明行各用各的类名）；
+   *  - 复选框的属性是 `data-play-pref="hand-draw-order"`（`instant-choice` 那一枚是另一项的锚点）。
+   */
+  const handOrderRow = el('label', 'mode-toggle');
+  const handOrderBox = document.createElement('input');
+  handOrderBox.type = 'checkbox';
+  handOrderBox.className = 'mode-check';
+  handOrderBox.checked = nav.handDrawOrder;
+  handOrderBox.dataset.playPref = 'hand-draw-order';
+  const handOrderLabel = el('span', 'mode-toggle-label', t('settings.hand-order.label'));
+  const handOrderNote = el('div', 'settings-hand-order-note', '');
+  let handOrderTouched = false;
+  const handOrderNoteText = (): string => {
+    const desc = t('settings.hand-order.desc');
+    if (!handOrderTouched) return desc;
+    const state = handOrderBox.checked ? t('settings.fx.on') : t('settings.fx.off');
+    return t('settings.fx.state', { desc, state });
+  };
+  handOrderNote.textContent = handOrderNoteText();
+  handOrderBox.addEventListener('change', () => {
+    handOrderTouched = true;
+    handOrderNote.textContent = handOrderNoteText();
+    langStatus.textContent = ''; // 先清掉上一次的提示（这一次还没结论）
+    let out: LangChangeOutcome;
+    try {
+      out = nav.onHandDrawOrderChange(handOrderBox.checked);
+    } catch (e) {
+      out = langChangeThrew(e instanceof Error ? e.message : String(e));
+    }
+    if (!out.ok) langStatus.textContent = saveFailedSwitchText(out);
+  });
+  handOrderRow.appendChild(handOrderBox);
+  handOrderRow.appendChild(handOrderLabel);
+  list.appendChild(handOrderRow);
+  list.appendChild(handOrderNote);
+
   const hint = el('div', 'settings-hint', t('settings.hint'));
   dialog.appendChild(hint);
   overlay.appendChild(dialog);
@@ -1830,6 +1886,9 @@ export function settingsOverlayElement(nav: SettingsOverlayNav): HTMLElement {
     // ★ 2026-10-06：「选牌即确定」那一行（与上面那一组同款：文案 + "当前：…"那句都要跟着语言走）
     instantLabel.textContent = t('settings.instant.label');
     instantNote.textContent = instantNoteText();
+    // ★ 2026-10-06：「手牌按抽牌顺序」那一行（同上）
+    handOrderLabel.textContent = t('settings.hand-order.label');
+    handOrderNote.textContent = handOrderNoteText();
     hint.textContent = t('settings.hint');
   }
   applyLang();

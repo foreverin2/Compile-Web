@@ -86,17 +86,24 @@ function mount(over: {
   instantChoice?: boolean;
   /** ★ 2026-10-06（用户要求）：「选牌即确定」落盘的回话；缺省 = 成功 */
   onInstantChoiceChange?: (on: boolean) => LangChangeOutcome;
+  /** ★ 2026-10-06（用户要求）：「手牌按抽牌顺序」的初值（缺省 = 关闭，与真默认值一致） */
+  handDrawOrder?: boolean;
+  /** ★ 2026-10-06（用户要求）：「手牌按抽牌顺序」落盘的回话；缺省 = 成功 */
+  onHandDrawOrderChange?: (on: boolean) => LangChangeOutcome;
 } = {}): {
   readonly overlay: StubNode;
   readonly calls: Array<{ lang: Lang } & LangChangeOutcome>;
   readonly fxCalls: Array<{ id: string; on: boolean } & LangChangeOutcome>;
   /** ★ 2026-10-06：小窗拨动「选牌即确定」时收到的那些调用 */
   readonly prefCalls: Array<{ on: boolean } & LangChangeOutcome>;
+  /** ★ 2026-10-06：小窗拨动「手牌按抽牌顺序」时收到的那些调用 */
+  readonly handOrderCalls: Array<{ on: boolean } & LangChangeOutcome>;
 } {
   mountStubDom();
   const calls: Array<{ lang: Lang } & LangChangeOutcome> = [];
   const fxCalls: Array<{ id: string; on: boolean } & LangChangeOutcome> = [];
   const prefCalls: Array<{ on: boolean } & LangChangeOutcome> = [];
+  const handOrderCalls: Array<{ on: boolean } & LangChangeOutcome> = [];
   const nav = {
     onClose: over.onClose ?? (() => { /* 本组不用它 */ }),
     lang: over.lang ?? getLang(),
@@ -117,10 +124,17 @@ function mount(over: {
       prefCalls.push({ on, ...out });
       return out;
     },
+    // ★ 2026-10-06（用户要求）：「手牌按抽牌顺序」（默认关闭；假宿主照 main.ts 的口径改内存态）
+    handDrawOrder: over.handDrawOrder === true,
+    onHandDrawOrderChange: (on: boolean) => {
+      const out = over.onHandDrawOrderChange === undefined ? LANG_CHANGE_OK : over.onHandDrawOrderChange(on);
+      handOrderCalls.push({ on, ...out });
+      return out;
+    },
   };
   const overlay = settingsOverlayElement(nav) as unknown as StubNode;
   document.body.appendChild(overlay as unknown as Node);
-  return { overlay, calls, fxCalls, prefCalls };
+  return { overlay, calls, fxCalls, prefCalls, handOrderCalls };
 }
 
 /** 树里所有节点的文本（按 DOM 顺序），用于"整屏逐条比对" */
@@ -254,6 +268,40 @@ describe('设置小窗 · 默认中文（与改动前逐字一致）', () => {
     // ④ 初值由 `nav` 决定（开着的玩家再打开设置，看到的应当是勾上的）
     const on = mount({ instantChoice: true });
     const box3 = classOf(on.overlay, 'mode-check', (n) => n.dataset.playPref === 'instant-choice')[0];
+    expect((box3 as unknown as { checked: boolean }).checked, 'nav 给了 true 却没勾上').toBe(true);
+  });
+
+  it('★ 2026-10-06（用户要求）：「手牌按抽牌顺序」这一项 —— 默认关闭、有落点、拨动就通知宿主、说明就地改写', () => {
+    // ① 默认关闭（`nav.handDrawOrder` 缺省 false）：复选框不勾，说明只有原文
+    const { overlay, handOrderCalls } = mount();
+    const box = classOf(overlay, 'mode-check', (n) => n.dataset.playPref === 'hand-draw-order')[0];
+    expect(box, '设置里没有「手牌按抽牌顺序」那一项（少了 data-play-pref）').toBeDefined();
+    expect(box.tag, '它不是 <input>').toBe('input');
+    expect((box as unknown as { checked: boolean }).checked, '默认不是关闭（用户明确要求默认关闭）').toBe(false);
+    const note = classOf(overlay, 'settings-hand-order-note')[0];
+    expect(note, '那一项没有说明行（用的是 `.settings-hand-order-note`）').toBeDefined();
+    expect(note.text, '没勾过就显示了"当前："那句').toBe(ZH['settings.hand-order.desc']);
+    expect(textsOf(overlay), '屏上没画出这一项的标题').toContain(ZH['settings.hand-order.label']);
+    // 反向：两条说明行各用各的类名（复用同一个类名 = 一条腿会读错行）
+    expect(classOf(overlay, 'settings-instant-note').length, '「选牌即确定」的说明行不见了').toBe(1);
+
+    // ② 拨动 ⇒ 通知宿主一次（带新值）+ 说明就地改写（不重画整屏）
+    (box as unknown as { checked: boolean }).checked = true;
+    fireIn(box, 'change');
+    expect(handOrderCalls, '拨动没有通知宿主（那就白拨了）').toEqual([{ on: true, ok: true }]);
+    expect(note.text, '说明没就地改成"当前：开启"')
+      .toBe(`${ZH['settings.hand-order.desc']}（当前：${ZH['settings.fx.on']}）`);
+
+    // ③ 落盘失败 ⇒ 同一个提示位如实说（复用特效开关那一套文案，不新造）
+    const second = mount({ onHandDrawOrderChange: () => ({ ok: false, reason: 'write-failed', detail: 'X' }) });
+    const box2 = classOf(second.overlay, 'mode-check', (n) => n.dataset.playPref === 'hand-draw-order')[0];
+    (box2 as unknown as { checked: boolean }).checked = true;
+    fireIn(box2, 'change');
+    expect(role(second.overlay, 'lang-status').text, '拨动落盘失败时没有任何提示').toContain('开关没能保存到本机');
+
+    // ④ 初值由 `nav` 决定（开着的玩家再打开设置，看到的应当是勾上的）
+    const on = mount({ handDrawOrder: true });
+    const box3 = classOf(on.overlay, 'mode-check', (n) => n.dataset.playPref === 'hand-draw-order')[0];
     expect((box3 as unknown as { checked: boolean }).checked, 'nav 给了 true 却没勾上').toBe(true);
   });
 

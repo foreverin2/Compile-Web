@@ -58,6 +58,11 @@ export const EN: Readonly<Record<string, string>> = {
   'settings.instant.desc':
     'For effects that need exactly one card and cannot be skipped: one click on the card '
     + 'confirms it, with no "Confirm" press. Skippable effects and multi-card picks stay as they are.',
+  // ★ 2026-10-06 (user's request): the third option, "hand in draw order" (default off).
+  'settings.hand-order.label': 'Hand in draw order',
+  'settings.hand-order.desc':
+    'Off: your hand is sorted by card value, smallest on the left. On: your hand stays in the '
+    + 'order you drew it, newest on the right — those rightmost cards are the ones Clear Cache discards.',
   /* ── Local data & privacy screen: the **language row only** (D4) ──
    * The rest of that screen is NOT extracted yet; it stays on the
    * `docs/2026-10-01-i18n-尚未抽取的屏.md` list. */

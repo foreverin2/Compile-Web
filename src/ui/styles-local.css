@@ -1067,6 +1067,12 @@
  */
 .settings-instant-note { font-size: 12px; line-height: 1.6; color: #8f9ac0; }
 /*
+ * ★ 2026-10-06（用户要求第二项设置）：「手牌按抽牌顺序」那一行的说明。
+ * 与 `.settings-instant-note` / `.settings-note` **逐字同一套声明**，类名必须另起一个 ——
+ * 既有腿要求 `.settings-note` 在树里唯一，三条说明行各占各的类名（同 `.settings-lang-hint`）。
+ */
+.settings-hand-order-note { font-size: 12px; line-height: 1.6; color: #8f9ac0; }
+/*
  * ★ 2026-10-06（用户要求）：战斗日志那一行的**小图片**（对应触发的卡牌或协议）。
  *
  * 结构由 `render.ts` 的日志循环产出：`.log-entry` 里可选的 `img.log-thumb`（卡）或

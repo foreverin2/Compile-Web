@@ -491,6 +491,26 @@ export function writeInstantChoice(store: LocalStore, on: boolean): WriteResult 
 }
 
 /**
+ * ★ 2026-10-06（用户要求）：读**「手牌按抽牌顺序」**这一项（默认关闭）。
+ *
+ * 用户原话：「在设置中添加上一个开关，默认关闭，打开后，抽到的牌就不会自动按照顺序进行排列了」
+ * —— 关着的时候是改动前那套"手牌按分值升序显示"，打开后按入手顺序（新抽到的牌在最右）。
+ * 起因与查证见 `src/ui/hand-order-pref.ts` 的头注。
+ *
+ * 形状守卫与 `readInstantChoice` **逐字同款**：**只认 `true`**，其余一律 `false`
+ * （存储被手改 / 写了垃圾值 ⇒ 退回默认的"按分值排列"，与 `applyHandDrawOrder` 同一口径）。
+ * 字段 `handDrawOrder` 住在同一个 `L1_SETTINGS`（`compile-settings`）对象里，**不新增键**。
+ */
+export function readHandDrawOrder(store: LocalStore): boolean {
+  return readSettings(store).handDrawOrder === true;
+}
+
+/** 写下「手牌按抽牌顺序」。与语言/特效开关**同一条路**（同一份设置、同一套授权门控与 `WriteResult`）。 */
+export function writeHandDrawOrder(store: LocalStore, on: boolean): WriteResult {
+  return writeSettings(store, { handDrawOrder: on });
+}
+
+/**
  * ★ 2026-10-06（用户要求）：读**自定义协议池的预设**。
  *
  * ## 形状守卫（与 `readOnboardingSeen` / `readTutorialProgress` 同一条口径）

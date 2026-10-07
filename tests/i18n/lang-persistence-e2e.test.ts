@@ -105,6 +105,9 @@ function boot(ls: FakeStorage): { readonly overlay: StubNode; readonly store: Re
     // ★ 2026-10-06（用户要求）：「选牌即确定」这一项（本文件只测语言持久化，值恒 false、回调不算）
     instantChoice: false,
     onInstantChoiceChange: () => LANG_CHANGE_OK,
+    // ★ 2026-10-06（用户要求）：「手牌按抽牌顺序」这一项（同上）
+    handDrawOrder: false,
+    onHandDrawOrderChange: () => LANG_CHANGE_OK,
   }) as unknown as StubNode;
   return { overlay, store };
 }
@@ -183,6 +186,9 @@ describe('★ P0 端到端：切语言 → 落盘 → 刷新之后还在', () =>
       // ★ 2026-10-06（用户要求）：「选牌即确定」这一项（本文件只测语言持久化）
       instantChoice: false,
       onInstantChoiceChange: () => LANG_CHANGE_OK,
+      // ★ 2026-10-06（用户要求）：「手牌按抽牌顺序」这一项（同上）
+      handDrawOrder: false,
+      onHandDrawOrderChange: () => LANG_CHANGE_OK,
     }) as unknown as StubNode;
 
     clickIn(langBtn(overlay, 'en'));

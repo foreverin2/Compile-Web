@@ -18,6 +18,7 @@ import { isMetal6StrobeOn } from './fx-settings';
 import { logEntryView } from './log-line';
 // ★ 2026-10-06（用户要求）：「选牌即确定」这一项的判据（纯函数，唯一出处；远程页读同一个）。
 import { instantChoiceApplies } from './play-prefs';
+import { handShownCards } from './hand-order-pref';
 import { actionCn } from '../core/log';
 import { cardCommandDisabled } from '../core/effects/context';
 import { downloadLog } from './diag';
@@ -1963,14 +1964,19 @@ export function renderHand(
     hand.appendChild(el('div', 'hand-count-placeholder', t('render.hand.count', { n: String(cards.length) })));
     return hand;
   }
-  // 点 4：手牌从左到右按数值升序显示（P1/P2 一致）。
-  // 数值取 defId 后缀（'fire-3' → 3）。排序仅影响显示顺序，引擎 hand 数组不变。
-  // P1 渲染升序（index 0 最左=最小）；P2 为 row-reverse（index 0 在最右），
-  // 故渲染降序使视觉上最左=最小、向右递增。
-  const byValue = [...cards].sort(
-    (a, b) => parseInt(splitDefId(a.defId)[1], 10) - parseInt(splitDefId(b.defId)[1], 10)
-  );
-  const shown = (reversed ? [...byValue].reverse() : byValue).slice(0, 15);
+  /**
+   * 点 4：手牌从左到右按数值升序显示（P1/P2 一致）。
+   * 数值取 defId 后缀（'fire-3' → 3）。排序仅影响显示顺序，引擎 hand 数组不变。
+   * P1 渲染升序（index 0 最左=最小）；P2 为 row-reverse（index 0 在最右），
+   * 故渲染降序使视觉上最左=最小、向右递增。
+   *
+   * ★ 2026-10-06（用户要求）：这一套现在是**设置里「手牌按抽牌顺序」关着时**的行为。
+   *   玩家反馈"打出 2 后抽到的新牌插进了中间"（引擎顺序没问题，是这里的排序造成的），
+   *   用户裁决加一个默认关闭的开关：打开后按引擎的**入手顺序**显示（新抽到的牌在最右，
+   *   也正是清缓存会弃掉的那几张）。判据在 `handShownCards`（`hand-order-pref.ts`，
+   *   唯一出处；本函数只负责调用与裁长度）。
+   */
+  const shown = handShownCards(cards, reversed).slice(0, 15);
   const nodes: HTMLElement[] = [];
   for (const card of shown) {
     const i = nodes.length;

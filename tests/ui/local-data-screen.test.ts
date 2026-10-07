@@ -1295,6 +1295,9 @@ describe('★ 2026-10-01：设置小窗（落点 + 真跑一次）', () => {
         onFxChange: (id, on) => { setMetal6Strobe(on); return { ok: true }; },
       instantChoice: false,
       onInstantChoiceChange: () => ({ ok: true }),
+      // ★ 2026-10-06（用户要求）：「手牌按抽牌顺序」那一项也是最小合法实参（默认关闭）
+      handDrawOrder: false,
+      onHandDrawOrderChange: () => ({ ok: true }),
       }));
       // 挂进 `document.body`：桩的 `dispatchEvent` 只沿 `parentElement` 向上冒泡，没挂上去就收不到
       // 遮罩自己的监听器（`document.body` 是桩的节点 ⇒ 这里只能强转，见 `asStub` 的说明）
