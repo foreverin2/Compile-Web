@@ -1073,6 +1073,21 @@
  */
 .settings-instant-note { font-size: 12px; line-height: 1.6; color: #8f9ac0; }
 /*
+ * ★ 2026-10-07（用户要求）：首页页脚那一行**工信部备案**（备案号 + 查询链接）。
+ *
+ * ⚠️ 父级 `.home-footer` 住在 `styles.css`（**红线，一行不动**）里，并且写着
+ * `pointer-events: none`（那是给署名用的：页脚不该挡住底下的背景）⇒ 链接必须**自己把指针事件
+ * 打开**，否则键盘能到、**鼠标点不动**（"看着能点其实点不动"这种形态在本仓栽过好几次）。
+ */
+.home-icp {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  justify-content: center; align-items: baseline;
+  margin-top: 2px;
+}
+.home-icp-no { pointer-events: auto; user-select: text; }
+.home-icp-link { pointer-events: auto; color: #7fe9ff; text-decoration: underline; }
+.home-icp-link:hover { color: #b9f6ff; }
+/*
  * ★ 2026-10-06（用户要求第二项设置）：「手牌按抽牌顺序」那一行的说明。
  * 与 `.settings-instant-note` / `.settings-note` **逐字同一套声明**，类名必须另起一个 ——
  * 既有腿要求 `.settings-note` 在树里唯一，三条说明行各占各的类名（同 `.settings-lang-hint`）。

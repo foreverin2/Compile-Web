@@ -87,6 +87,11 @@ export const EN: Readonly<Record<string, string>> = {
   'home.rules': 'Rulebooks for gen 1 / 2 / 3',
   'home.local-data': 'Local data and privacy',
   'home.cardmaker': 'Custom protocols and cards',
+  // ★ 2026-10-07 (user's request): the ICP filing footer. The filing number is a legal
+  // identifier, identical in both languages (registered in `EN_CJK_ALLOW`); only the link
+  // text is UI copy.
+  'home.icp.no': '湘ICP备2026009738号-2',
+  'home.icp.link': 'MIIT filing lookup',
 
   /* ── Mode select (`renderModeSelect`) ── */
   'mode.title': 'Choose a game mode',

@@ -523,13 +523,34 @@ export function renderHome(root: HTMLElement, nav: HomeNav): void {
   menu.appendChild(btns);
   screen.appendChild(menu);
 
-  screen.appendChild(
-    el(
-      'footer',
-      'home-footer',
-      t('home.footer')
-    )
-  );
+  /**
+   * ★ 2026-10-07（**用户要求**）：页脚加一行**工信部备案**。
+   *
+   * 用户给的格式：「湘ICP备2026009738号-2<a href="https://beian.miit.gov.cn/"
+   * target="_blank">工信部备案查询</a>」—— 即"备案号 + 指向工信部备案系统的链接"。
+   *
+   * 三个细节是承重的：
+   *  1. **备案号与链接文字都在 i18n 表里**（`home.icp.no` / `home.icp.link`）：本文件是
+   *     "代码位零中文"的文件（`tests/i18n/unextracted-manifest.test.ts` 那个桶），
+   *     编号本身是**法定标识**，中英共用同一个值（EN 那份在 `EN_CJK_ALLOW` 里登记）；
+   *  2. `target="_blank"` 必须配 `rel="noopener noreferrer"`：新开页拿不到 `window.opener`
+   *     （否则被打开的页面能把本页导航走）；
+   *  3. 链接是**外站**，与站内按钮不同类 —— 用 `<a>`（键盘/中键/右键"新标签打开"都天然可用），
+   *     不套 `.btn`。
+   */
+  const footer = el('footer', 'home-footer');
+  footer.appendChild(el('div', 'home-footer-credit', t('home.footer')));
+  const icpRow = el('div', 'home-icp');
+  icpRow.appendChild(el('span', 'home-icp-no', t('home.icp.no')));
+  const icpLink = document.createElement('a');
+  icpLink.className = 'home-icp-link';
+  icpLink.href = 'https://beian.miit.gov.cn/';
+  icpLink.target = '_blank';
+  icpLink.rel = 'noopener noreferrer';
+  icpLink.textContent = t('home.icp.link');
+  icpRow.appendChild(icpLink);
+  footer.appendChild(icpRow);
+  screen.appendChild(footer);
 
   /**
    * ★ 2026-09-29（用户要求）：**右上角"更新日志"入口**。

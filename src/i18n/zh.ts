@@ -106,6 +106,18 @@ export const ZH: Readonly<Record<string, string>> = {
   'home.cardmaker': '自定义协议与卡牌',
   // 页脚署名：作者名与署名「我吃吃吃吃」是**专名**，两种语言都不翻（只翻框架句）
   'home.footer': 'Compile 桌游由原作者 MICHAEL YANG 创作 · 本网页由「我吃吃吃吃」使用 DSH 辅助开发',
+  /**
+   * ★ 2026-10-07（用户要求）：页脚的**工信部备案号** + 查询入口。
+   *
+   * 用户原话：「帮我把图中的这个按照『湘ICP备2026009738号-2<a href="https://beian.miit.gov.cn/"
+   * target="_blank">工信部备案查询</a>』的类似的格式加上去」。
+   *
+   * ⚠️ 备案号是**法定标识**（域名备案的唯一编号）⇒ 两种语言共用同一个值、不许翻译
+   * （`en.ts` 那条在 `tests/i18n/tables.test.ts` 的 `EN_CJK_ALLOW` 里登记，理由同 `home.footer`
+   * 的专名）。链接文字才是界面文案，中英各一条。
+   */
+  'home.icp.no': '湘ICP备2026009738号-2',
+  'home.icp.link': '工信部备案查询',
 
   /* ── 模式选择页（`renderModeSelect`） ── */
   'mode.title': '选择游戏模式',

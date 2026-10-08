@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { stripComments, functionBody } from '../ui/source-text';
-import { installStubDom, makeStubEl, descendants, queryAllIn, type StubNode } from '../ui/net-dom-stub';
+import { installStubDom, makeStubEl, descendants, queryAllIn, isClass, type StubNode } from '../ui/net-dom-stub';
 import { renderHome, renderModeSelect, renderRules, type HomeNav, type ModeSelectNav } from '../../src/ui/home';
 import { DEFAULT_LANG, EN, ZH, setLang, t } from '../../src/i18n';
 // ★ 2026-10-06（用户要求）：第三个开关「自定义协议池」的 tip 里带 `{min}` —— 判据要用同一个常量
@@ -94,6 +94,30 @@ describe('★ C：首页那一屏的中文与 `zh.ts` 逐字一致', () => {
       'home.rules', 'home.local-data', 'home.cardmaker', 'home.footer',
       'common.changelog', 'common.feedback'] as const) {
       expect(shown, `屏上没有「${k}」那一句（zh 表：${ZH[k]}）`).toContain(ZH[k]);
+    }
+  });
+
+  it('★ 2026-10-07（用户要求）：页脚的**工信部备案号 + 查询链接**（中英都在，链接属性齐全）', () => {
+    for (const [lang, table] of [['zh', ZH], ['en', EN]] as const) {
+      setLang(lang);
+      const root = drawHome();
+      const shown = texts(root);
+      // ① 备案号两种语言都是同一个（法定标识，不许翻译）
+      expect(shown, `${lang} 下页脚没有备案号`).toContain(table['home.icp.no']);
+      expect(table['home.icp.no'], `${lang} 下备案号被翻了`).toBe('湘ICP备2026009738号-2');
+      // ② 链接文字跟着语言走
+      expect(shown, `${lang} 下页脚没有查询链接的文字`).toContain(table['home.icp.link']);
+      // ③ 链接节点：外站 + 新标签打开 + rel 齐全（拿不到 window.opener）
+      const link = descendants(root).filter((n) => isClass(n, 'home-icp-link'));
+      expect(link.length, `${lang} 下页脚没有那枚 <a>`).toBe(1);
+      expect(link[0].tag, '那不是 <a>（外站链接用按钮会丢掉中键/右键新标签那些原生能力）').toBe('a');
+      const href = (link[0].getAttribute as unknown as (n: string) => string | null)('href');
+      expect(href, '链接没有指向工信部备案系统').toBe('https://beian.miit.gov.cn/');
+      expect((link[0].getAttribute as unknown as (n: string) => string | null)('target'), '链接不是新标签打开').toBe('_blank');
+      expect((link[0].getAttribute as unknown as (n: string) => string | null)('rel'), '缺少 noopener noreferrer')
+        .toBe('noopener noreferrer');
+      // ④ 页脚那一格本体还在（署名没被这行挤掉）
+      expect(shown, `${lang} 下页脚署名不见了`).toContain(table['home.footer']);
     }
   });
 
