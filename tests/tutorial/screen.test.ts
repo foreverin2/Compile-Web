@@ -9,6 +9,8 @@ import {
   placeSpotBoxes, spotBoxStyle, unionRect, applyNextButtonVisibility, chipJumpTarget, chipA11y,
   countdownLabel, countdownOverlayElement, countdownSecondsOf,
   COUNTDOWN_TICK_MS, LEVEL_CLEAR_COUNTDOWN_MS,
+  // ★ 2026-10-07（用户要求）：那句「建议 67%」只在第一关显示的**纯判据**（语义那半真跑）
+  showsZoomHint,
 } from '../../src/ui/tutorial-screen';
 import { installStubDom, makeStubEl, setStubRectFor, queryAllIn, classOf, isClass, type StubNode } from '../ui/net-dom-stub';
 import { renderBoard, resetUiState } from '../../src/ui/render';
@@ -672,6 +674,32 @@ describe('★ S0（序章）的屏上接线（源码腿）', () => {
     const panel = bodyOf(SCREEN, 'renderPanel');
     expect(panel, 'S0 在 check-compile 那一步没有给"点编译"的提示（定稿没有这一步的文案，复用 T13 那条）')
       .toMatch(/level\.id === 'S0'[\s\S]{0,120}?state\.step === 'check-compile'[\s\S]{0,120}?t\('tutorial\.T13\.hint\.compile'\)/);
+  });
+
+  it('★ 2026-10-07（用户要求）：「建议 67%」那句只在序章 S0 的面板上，且复用模式页那条文案', () => {
+    // ① **真跑**判据本身（纯函数）：只有第一关为真，其余每一关都是假
+    expect(showsZoomHint('S0'), '序章 S0 上不显示那句缩放提示').toBe(true);
+    expect(TUT_LEVELS.filter((l) => showsZoomHint(l.id)).map((l) => l.id),
+      '显示缩放提示的关卡不止第一关（或不止一关）').toEqual(['S0']);
+    for (const l of TUT_LEVELS) {
+      if (l.id !== 'S0') expect(showsZoomHint(l.id), `${l.id} 上也显示缩放提示`).toBe(false);
+    }
+    // ② 接线（源码腿）：面板按它切换，而且真的造了那个节点
+    expect(SCREEN, '面板里没有造 `.tutorial-zoom-hint` 那个节点')
+      .toMatch(/el\('p',\s*'tutorial-zoom-hint'\)/);
+    const panel = bodyOf(SCREEN, 'renderPanel');
+    expect(panel, '面板没走那个纯判据（判据分叉成第二处了）').toMatch(/showsZoomHint\(level\.id\)/);
+    expect(panel, '缩放提示没有按判据隐藏').toMatch(/zoomHint\.hidden\s*=\s*!isFirstLevel/);
+    // ③ 措辞复用模式页那一条（改一处三处同步，不新写第二份）
+    expect(panel, '缩放提示没走 `mode.zoom-hint` 那条共享文案')
+      .toMatch(/zoomHint\.textContent\s*=\s*t\('mode\.zoom-hint'\)/);
+    expect(SCREEN, '教学屏里手写了第二份 67% 文案（应当复用 `mode.zoom-hint`）').not.toMatch(/67%/);
+    // ④ 文案本身 = 用户 2026-10-07 给的那句（中英都在，且都点名滚轮）
+    expect(ZH['mode.zoom-hint'], '中文那句不是用户给的措辞').toContain('67%');
+    expect(ZH['mode.zoom-hint'], '中文那句没点名鼠标滚轮').toContain('鼠标滚轮');
+    expect(EN['mode.zoom-hint'], '英文那句没跟着统一').toContain('mouse wheel');
+    // ⑤ 版式：那一行有样式（没有样式它就是贴着面板边缘的一段裸文本）
+    expect(CSS, '缺 `.tutorial-zoom-hint` 的样式').toMatch(/\.tutorial-zoom-hint\s*\{[^}]*font-size/);
   });
 
   it('★ handBackTurn 必须**无条件**交还 action 步（多动作关卡全靠它）', () => {

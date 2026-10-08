@@ -123,6 +123,19 @@ export function countdownOverlayElement(): { box: HTMLElement; text: HTMLElement
   return { box, text };
 }
 
+/**
+ * ★ 2026-10-07（**用户要求**）：那句「建议把画面调到 67% 左右游玩…」是不是该在这一关显示。
+ *
+ * 判据只有一条：**第一关（序章 S0）显示，别的关卡不显示**（新手进教学关卡前看到它一眼就够了，
+ * 后面的关卡面板要留给讲解）。抽成导出的纯函数有两个好处：
+ *  1. `renderPanel` 里只剩"照它写文案 / 照它切换 `hidden`"，不存在第二处判据；
+ *  2. 这一屏在无 jsdom 的 node 下**跑不起来**（源码腿那一族写在 `tests/tutorial/screen.test.ts`），
+ *     而它是纯函数 ⇒ 语义那半可以**真跑**（S0 为真、其余全假），源码腿只钉接线。
+ */
+export function showsZoomHint(levelId: TutLevelId): boolean {
+  return levelIndex(levelId) === 0;
+}
+
 /** 退出教程（回首页）；由宿主注入 —— 屏自己不认识首页 */
 export interface TutorialNav {
   /** 点「退出教程」 */
@@ -716,6 +729,20 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
   goalRow.appendChild(goalText);
   panel.appendChild(goalRow);
 
+  /**
+   * ★ 2026-10-07（**用户要求**，原话）：「『建议把画面调到 67% 左右游玩：用浏览器自带的
+   * ctrl + 鼠标滚轮调整』的这句话放进新手进入教程关卡前的提示里」。
+   *
+   * 位置：**只在第一关（序章 S0）**显示，摆在目标那一行下面（新手从上往下读，进关卡前先看到它）。
+   * 措辞**复用模式页那条原文**（键 `mode.zoom-hint`，中英两表都有）——不新写第二份，改一处三处同步。
+   *
+   * ⚠️ 本程序**不许**自己去改页面缩放：那次"应用内 Ctrl+滚轮改整页缩放"因为特效坐标是**按 100%
+   * 布局算的**、一缩就错位而被整份撤掉（教训与用户原话记在 `src/ui/home.ts` 的 `mode.zoom-hint`
+   * 那段注释里）⇒ 这里只是**提示**，一个 zoom 相关的东西都不碰。
+   */
+  const zoomHint = el('p', 'tutorial-zoom-hint');
+  panel.appendChild(zoomHint);
+
   const teachBox = el('div', 'tutorial-teach');
   const teachLine = el('p', 'tutorial-teach-line');
   const teachNext = button('btn tutorial-next', t('tutorial.next'), () => {
@@ -928,6 +955,14 @@ export function mountTutorial(root: HTMLElement, store: LocalStore, nav: Tutoria
     restartAllBtn.textContent = t('tutorial.restart');
     goalLabel.textContent = t('tutorial.goal.label');
     goalText.textContent = level.goal();
+    /**
+     * ★ 2026-10-07（用户要求）：那句「建议 67%」只在**第一关（序章 S0）**出现 ——
+     * 它是"新手进教学关卡前"的那一眼；后面的关卡（T0 起）面板上不再重复，免得占掉讲解的位置。
+     * 判据在导出的纯函数 `showsZoomHint` 里（语义那半由 `tests/tutorial/screen.test.ts` 真跑）。
+     */
+    const isFirstLevel = showsZoomHint(level.id);
+    zoomHint.hidden = !isFirstLevel;
+    if (isFirstLevel) zoomHint.textContent = t('mode.zoom-hint');
 
     if (teachAt < level.teach.length) {
       teachBox.hidden = false;

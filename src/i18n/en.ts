@@ -119,7 +119,9 @@ export const EN: Readonly<Record<string, string>> = {
   'pool.done': 'Done',
   'pool.cancel': 'Cancel and go back',
   'mode.device-check': 'Device and network check',
-  'mode.zoom-hint': 'Tip: playing at about 67% zoom looks best — use your browser zoom (Ctrl + wheel, or Ctrl and +/−).',
+  // ★ 2026-10-07 (user's wording): unified to Ctrl + mouse wheel only — shared by the mode
+  // screen, onboarding step 3 and the first tutorial level's panel.
+  'mode.zoom-hint': 'Tip: playing at about 67% zoom looks best — use your browser zoom (Ctrl + mouse wheel).',
 
   /* ── Coin toss, hotseat path (`renderCoinHotseat`) ── */
   'coin.title': 'Player 1 tosses to decide who goes first',

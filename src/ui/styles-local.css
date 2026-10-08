@@ -829,6 +829,12 @@
 .tutorial-step-item { margin: 0; }
 .tutorial-observe-text { margin: 0; font-size: 13px; line-height: 1.75; color: #ffd479; }
 .tutorial-hint { margin: 0; min-height: 1.4em; font-size: 12px; line-height: 1.7; color: #ffd479; }
+/*
+ * ★ 2026-10-07（用户要求）：「建议把画面调到 67% 左右游玩…」那句 —— 只出现在教学第一关
+ * （序章 S0）的面板上，摆在"目标"那一行下面。与 `.tutorial-hint`（每关的动态提示，暖黄）
+ * 刻意不同色：它是**一次性**的环境提示（青灰），不跟关卡进度走。
+ */
+.tutorial-zoom-hint { margin: 0; font-size: 12px; line-height: 1.7; color: #9fd8ff; }
 .tutorial-progress { display: flex; flex-wrap: wrap; gap: 6px; }
 .tutorial-chip {
   font-size: 11px; padding: 2px 8px; border-radius: 999px;
