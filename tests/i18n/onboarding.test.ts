@@ -526,6 +526,22 @@ describe('第 2 步 = 旧授权弹窗并进来的那一步（界面文字双语 
     expect(offenders, `英文模式下向导里还有中文：${offenders.slice(0, 5).join(' | ')}`).toEqual([]);
   });
 
+  it('★ 2026-10-07：第 3 步有「建议 67%」提示，且跟着语言走（不改缩放，只提示）', () => {
+    restores.push(installStubDom());
+    const b = boot(fakeStorage(), 'zh');
+    clickIn(one(b.overlay, '.onboarding-lang-btn[data-lang="zh"]'));
+    clickIn(one(b.overlay, '.onboarding-grant'));
+    const hint = one(b.overlay, '[data-role="zoom-hint"]');
+    expect(hint.text, '第 3 步没有那句缩放提示').toBe(ZH['mode.zoom-hint']);
+    // 那句必须点名 67% 与"浏览器自带的缩放"（否则玩家不知道该怎么调）
+    expect(hint.text, '提示里没说 67%').toContain('67%');
+    expect(hint.text, '提示里没说用浏览器自带的缩放').toContain('浏览器');
+    // 切英文 ⇒ 同一条变成英文那一份
+    clickIn(one(b.overlay, '.onboarding-lang-btn[data-lang="en"]'));
+    expect(one(b.overlay, '[data-role="zoom-hint"]').text, '英文下缩放提示没跟着换')
+      .toBe(EN['mode.zoom-hint']);
+  });
+
   it('宿主注入的那三句与正文一致（`main.ts` 的 `consentBodyLines` 不许换成整份隐私全文）', () => {
     // 生成式读取：从 `main.ts` 里抽出那个函数体，断言它挑的就是那三句
     // （换成 `privacyLines()` 会让真机上第 2 步铺出十几段 —— 真机实测抓到过这个形态）

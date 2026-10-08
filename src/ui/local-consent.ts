@@ -33,7 +33,9 @@ import {
   PRIVACY_COPY,
   privacyLines,
 } from '../app/privacy';
-import { t } from '../i18n';
+import { t, getLang } from '../i18n';
+// ★ 2026-10-07（用户要求）：隐私说明全文的英文显示层（中文那一份仍是 `privacy.ts`，一个字未改）
+import { localizedPrivacyLines } from '../i18n/privacy-en';
 
 export interface ConsentNav {
   /** 用户点「允许」：此后才允许落盘（`main.ts` 的 `consentStep('grant')`） */
@@ -129,7 +131,8 @@ export function nextConsentStep(s: ConsentState, action: 'show' | 'grant' | 'den
 function renderPrivacyDetail(host: HTMLElement, expanded: boolean): void {
   host.textContent = '';
   if (!expanded) return;
-  for (const line of privacyLines()) {
+  // ★ 2026-10-07（用户要求）：英文模式下换成显示层那一份（中文仍是 `privacyLines()` 的原句）
+  for (const line of localizedPrivacyLines(privacyLines(), getLang())) {
     const p = document.createElement('p');
     p.textContent = line;
     host.appendChild(p);

@@ -323,16 +323,21 @@ describe('源码腿：授权弹窗不得自带存储写入', () => {
        * `../i18n` 是**取文案**的那一层（它自己不认识 `LocalStore`，见 `src/i18n/index.ts` 的头注），
        * 与"存储层"是两回事。⇒ 白名单仍然**恰好三条**（多一条都要在这个正则里显式写出来），
        * 存储层的 import 照样一条都不许有（下面那条腿另钉 `localStorage`/`indexedDB` 调用形态）。
+       *
+       * ★ 2026-10-07（用户要求）：白名单里的 `../i18n` 放开成 `../i18n` 或 `../i18n/<模块>` ——
+       * 完整隐私说明的英文改成走显示层 `src/i18n/privacy-en.ts`，它**仍然是文案那一层**
+       * （与 `../i18n` 同一个目录、同一个性质，不是存储层）⇒ 判据面没变：
+       * 存储层的 import 依旧一条都不许进（下面那三条反向锚点照旧钉着）。
        */
       expect(
-        /from\s+'(\.\.\/app\/(privacy|local-store)|\.\.\/i18n)'/.test(stmt),
+        /from\s+'(\.\.\/app\/(privacy|local-store)|\.\.\/i18n(\/[A-Za-z0-9_-]+)?)'/.test(stmt),
         `local-consent.ts 出现了不该有的 import：${stmt.trim()}`,
       ).toBe(true);
     }
     // 反向锚点：白名单没有变成"什么都放行" —— 存储实现的模块名必须仍然被拒
     for (const bad of ["import { createLocalStore } from '../app/local-store-impl';",
       "import { readJson } from '../app/storage';", "import { x } from './render';"]) {
-      expect(/from\s+'(\.\.\/app\/(privacy|local-store)|\.\.\/i18n)'/.test(bad), `白名单放行了 ${bad}`).toBe(false);
+      expect(/from\s+'(\.\.\/app\/(privacy|local-store)|\.\.\/i18n(\/[A-Za-z0-9_-]+)?)'/.test(bad), `白名单放行了 ${bad}`).toBe(false);
     }
   });
 });

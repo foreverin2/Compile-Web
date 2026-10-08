@@ -67,9 +67,11 @@ import {
 import { DEFAULT_LANG, LANGS, isLang, type Lang } from '../i18n/lang';
 // ★ 2026-10-01（P0 线上验收 D4）：**语言那一行**走文案表（它是语言功能自己的读数）。
 //   ⚠️ 这一屏的**其它文案没有抽取**，还登记在 `docs/2026-10-01-i18n-尚未抽取的屏.md` 里。
-import { t } from '../i18n';
+import { t, getLang } from '../i18n';
 import type { MatchFile } from '../app/match-file';
 import { privacyLines } from '../app/privacy';
+// ★ 2026-10-07（用户要求）：隐私说明全文的英文显示层（中文那一份仍是 `privacy.ts`，一个字未改）
+import { localizedPrivacyLines } from '../i18n/privacy-en';
 // ★ 2026-10-02（P2）：教学进度那一行要显示"共几关"—— 关卡的**唯一出处**是 src/tutorial/levels.ts，
 //   这里 import 它的长度，不写第二份"4"（两份清单漂了会让屏上的读数说谎）。
 import { TUT_LEVELS } from '../tutorial/levels';
@@ -594,11 +596,11 @@ export function renderLocalData(root: HTMLElement, nav: LocalDataNav): void {
   };
   refreshStored();
 
-  /* ── ③ 隐私说明全文（**生成式**：唯一出处 = privacyLines()） ── */
+  /* ── ③ 隐私说明全文（**生成式**：唯一出处 = privacyLines()；英文模式走显示层 `privacy-en.ts`） ── */
   const privacyRow = el('div', 'local-data-row');
   privacyRow.dataset.role = 'privacy';
   privacyRow.appendChild(el('div', 'local-data-note', t('local-data.privacy.title')));
-  for (const line of privacyLines()) {
+  for (const line of localizedPrivacyLines(privacyLines(), getLang())) {
     privacyRow.appendChild(el('p', 'local-data-privacy-line', line));
   }
   screen.appendChild(privacyRow);

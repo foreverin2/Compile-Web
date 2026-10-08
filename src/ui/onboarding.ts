@@ -354,8 +354,20 @@ export function onboardingOverlayElement(
   const skipBtn = button('btn onboarding-skip-tutorial', onboardingLabels().skipTutorial, () => finish(false));
   s3Actions.appendChild(startBtn);
   s3Actions.appendChild(skipBtn);
+  /**
+   * ★ 2026-10-07（用户要求，选的是"什么都不自动改，只把 67% 提示说清楚"这一档）：
+   * 新玩家在大厅页之前**不一定**见过模式页那句"建议 67% 游玩"，而教学正是画面最满的一屏 ⇒
+   * 把**同一句**（键 `mode.zoom-hint`，中英两表都有，一个字都没新写）摆到第 3 步按钮下面。
+   *
+   * ⚠️ 本程序**不许**自己去改页面缩放（理由与那次教训写在 `src/ui/home.ts:208-218`：
+   * 整页缩放会让按 100% 布局算坐标的特效层错位，那套实现当时被整份撤掉了）⇒ 这里只提示、
+   * 一个 zoom 相关的东西都不碰，特效与玩家自己的浏览器缩放都不受影响。
+   */
+  const s3ZoomHint = el('p', 'onboarding-hint onboarding-zoom-hint');
+  s3ZoomHint.dataset.role = 'zoom-hint';
   step3.appendChild(s3Question);
   step3.appendChild(s3Actions);
+  step3.appendChild(s3ZoomHint);
 
   body.appendChild(step1);
   body.appendChild(step2);
@@ -424,6 +436,8 @@ export function onboardingOverlayElement(
      */
     startBtn.textContent = t('onboarding.tutorial.start');
     skipBtn.textContent = t('onboarding.tutorial.skip');
+    // ★ 2026-10-07：第 3 步的"建议 67%"提示（与上面两条同一条纪律：跟着语言重写）
+    s3ZoomHint.textContent = t('mode.zoom-hint');
 
     for (const { id, btn } of langButtons) {
       // 当前语言那一枚标出来（视觉上是 `.onboarding-lang-btn.on`，属性给测试与读屏）
