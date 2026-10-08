@@ -400,7 +400,13 @@ export function onboardingOverlayElement(
 
     // ★ 授权那一组（P1 第二次修法）：**每一条**界面文字都要跟着语言重写 ——
     //   第一版它们引用 `CONSENT_COPY`（整份中文），真机实测"第 1 步选 English → 第 2 步仍是中文"。
-    //   正文三段的**内容**来自 `privacyLines()`（与语言无关的冻结中文），这里不重写它们。
+    //
+    // ★ 2026-10-07（**用户报的缺陷**）：正文三段原来只在建屏那一刻填一次（那时语言还是默认中文），
+    //   于是"第 1 步选 English"之后这一段停在中文（用户截图 1）。宿主的 `privacyLinesOf()`
+    //   现在**按语言取**（中文仍是 `privacy.ts` 那三句，英文取 `src/i18n/consent-en.ts`），
+    //   这里每次重画时清空重填 —— 与同屏其它条目同一条纪律。
+    s2Body.textContent = '';
+    for (const line of privacyLinesOf()) s2Body.appendChild(el('p', 'onboarding-consent-line', line));
     s2ConsentTitle.textContent = consentText('title');
     s2LocalHint.textContent = consentText('local-hint');
     s2DenyNote.textContent = consentText('deny-note');
@@ -409,6 +415,15 @@ export function onboardingOverlayElement(
     privacyLink.textContent = consentText('privacy');
 
     s3Question.textContent = t('onboarding.tutorial.question');
+    /**
+     * ★ 2026-10-07（**用户报的缺陷**）：第 3 步那两个按钮**原来是在建屏那一刻写死文案的**
+     * （`button(..., onboardingLabels().startTutorial, ...)`）⇒ 建屏时语言还是默认的中文，
+     * 于是"第 1 步选 English"之后，整屏都变了、**只有这两个按钮停在中文**（用户截图 2 就是它们）。
+     * 修法：与同屏其它条目一样，在 `render()` 里按当前语言重写 —— 键本来就存在
+     * （`onboarding.tutorial.start` / `.skip`，中英都有），缺的只是这一次重写。
+     */
+    startBtn.textContent = t('onboarding.tutorial.start');
+    skipBtn.textContent = t('onboarding.tutorial.skip');
 
     for (const { id, btn } of langButtons) {
       // 当前语言那一枚标出来（视觉上是 `.onboarding-lang-btn.on`，属性给测试与读屏）

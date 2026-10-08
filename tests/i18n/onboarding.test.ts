@@ -29,6 +29,8 @@ import {
 } from '../../src/app/privacy';
 import { clearAllLocalData } from '../../src/app/storage';
 import { DEFAULT_LANG, EN, getLang, initI18n, resetMissingKeysForTest, setLang, t, ZH } from '../../src/i18n';
+// ★ 2026-10-07（用户要求）：向导第 2 步三段正文的英文显示层（中文仍是 privacy.ts，一个字未改）
+import { CONSENT_BODY_EN } from '../../src/i18n/consent-en';
 
 /**
  * ★ 2026-10-01（P1，用户口径）：**新玩家首启向导**（三步）的腿。
@@ -143,9 +145,14 @@ function visibleStep(root: StubNode): string {
  * 第 2 步那三段**授权正文** —— 与 `src/main.ts` 的 `consentBodyLines()` **逐句同口径**
  * （同样三个常量、同样顺序）。本文件不 import `main.ts`（它有副作用），所以在这里照写一遍；
  * "两边不许漂"由第 2 组那条 `consentBodyLines` 源码腿盯着（它从 `main.ts` 里抽出函数体比对符号面）。
+ *
+ * ★ 2026-10-07（用户要求）：宿主那一侧改成**按语言取**（英文模式取 `CONSENT_BODY_EN`，其余回中文）
+ * ⇒ 这份照写也跟着同口径，真跑才能真正覆盖"英文模式下这三段是英文"这条腿。
  */
 function consentBodyLines(): readonly string[] {
-  return [CONSENT_ALLOW_NOTE, PRIVACY_COPY.noServerStorage[0], CONSENT_DENY_NOTE];
+  const zh = [CONSENT_ALLOW_NOTE, PRIVACY_COPY.noServerStorage[0], CONSENT_DENY_NOTE];
+  if (getLang() === 'en' && CONSENT_BODY_EN.length === zh.length) return CONSENT_BODY_EN;
+  return zh;
 }
 
 /**
@@ -330,16 +337,33 @@ describe('向导三步：顺序、可见性、文案逐字（中英各一遍）'
     expect(enHint.toLowerCase(), '英文指引没说能清除本机数据').toContain('clear local data');
     // 反向：中文那一句此刻**不在**屏上（证明"真的换了语言"而不是两句并存）
     expect(textOf(step2), '英文帧里还留着第 2 步的中文指引').not.toContain('修改昵称');
-    // 第 3 步：两个按钮是用户原话（各自该说什么提示由宿主那一侧的两条腿钉住）
+    // 第 3 步：两个按钮**跟着语言走**（各自该说什么提示由宿主那一侧的两条腿钉住）
     clickIn(one(b.overlay, '.onboarding-grant'));
     const step3 = queryAllIn(b.overlay, 'section.onboarding-step[data-step="3"]')[0];
+    /**
+     * ★ 2026-10-07（用户报的缺陷）：这一条腿**原来钉的是缺陷** —— 那时两个按钮的文案是建屏
+     * 那一刻写死的（`onboardingLabels()` 在 `setLang` 之前求值）⇒ 第 1 步选了 English，
+     * 整屏都变了、只有这两个按钮停在中文，而这条腿当时恰好断言"此刻是中文"。
+     * 现在按 `render()` 重写：**此刻（en）必须是英文那一份**，中文原文在切回 zh 之后再钉。
+     */
     expect(descendants(one(b.overlay, '.onboarding-skip-tutorial')).map((n) => n.text),
-      '第 3 步「跳过」按钮不是用户原话').toEqual(['我玩过，直接跳过']);
+      '第 3 步「跳过」按钮此刻不是英文那一份').toEqual([EN['onboarding.tutorial.skip']]);
     expect(descendants(one(b.overlay, '.onboarding-start-tutorial')).map((n) => n.text),
-      '第 3 步「开始教学」按钮不是用户原话').toEqual(['开始教学']);
+      '第 3 步「开始教学」按钮此刻不是英文那一份').toEqual([EN['onboarding.tutorial.start']]);
+    // 反向：英文帧里不许再出现中文原话（"真的换了"而不是两句并存）
+    expect(textOf(step3), '英文帧里第 3 步还留着中文按钮').not.toContain('开始教学');
+    expect(textOf(step3), '英文帧里第 3 步还留着中文按钮').not.toContain('我玩过，直接跳过');
     // 反向锚点：第 3 步那一段**不是空的**（否则上面两条断言是在空集合上跑）
     expect(textOf(step3).trim().length, '第 3 步整段是空的 ⇒ 上面那条断言没意义').toBeGreaterThan(0);
     expect(one(b.overlay, '.onboarding-question').text, '第 3 步没有问句').toBe(t('onboarding.tutorial.question'));
+    // 切回中文 ⇒ 两个按钮逐字是用户原话（中文那一份由 zh 表钉住，与改动前一字不差）
+    clickIn(one(b.overlay, '.onboarding-lang-btn[data-lang="zh"]'));
+    expect(descendants(one(b.overlay, '.onboarding-skip-tutorial')).map((n) => n.text),
+      '第 3 步「跳过」按钮的中文原话漂了').toEqual([ZH['onboarding.tutorial.skip']]);
+    expect(descendants(one(b.overlay, '.onboarding-start-tutorial')).map((n) => n.text),
+      '第 3 步「开始教学」按钮的中文原话漂了').toEqual([ZH['onboarding.tutorial.start']]);
+    expect(ZH['onboarding.tutorial.start'], '中文那份不是用户原话').toBe('开始教学');
+    expect(ZH['onboarding.tutorial.skip'], '中文那份不是用户原话').toBe('我玩过，直接跳过');
   });
 });
 
@@ -451,6 +475,57 @@ describe('第 2 步 = 旧授权弹窗并进来的那一步（界面文字双语 
       .toBeGreaterThan(0);
   });
 
+  it('★ 2026-10-07（用户报的缺陷）：英文模式下这三段正文**也是英文**（原来是冻结中文）', () => {
+    restores.push(installStubDom());
+    // ① 中文帧：逐字仍是 `privacy.ts` 那三句（一个字都不许漂 —— 隐私承诺句的唯一家）
+    const zh = boot(fakeStorage(), 'zh');
+    clickIn(one(zh.overlay, '.onboarding-lang-btn[data-lang="zh"]'));
+    const zhLines = queryAllIn(zh.overlay, '.onboarding-consent-line').map((p) => p.text);
+    expect(zhLines, '中文帧的三段正文漂了').toEqual([CONSENT_ALLOW_NOTE, PRIVACY_COPY.noServerStorage[0], CONSENT_DENY_NOTE]);
+
+    // ② 英文帧：三段都换成英文那一份（同一棵树上就地重画）
+    clickIn(one(zh.overlay, '.onboarding-lang-btn[data-lang="en"]'));
+    const enLines = queryAllIn(zh.overlay, '.onboarding-consent-line').map((p) => p.text);
+    expect(enLines.length, '英文帧的正文不是三段').toBe(3);
+    expect(enLines, '英文帧的三段正文不是 `CONSENT_BODY_EN`').toEqual([...CONSENT_BODY_EN]);
+    // 判据：英文帧里一个汉字都不许有（用户截图 1 报的就是这里还在显示中文）
+    const CJK = /[\u3400-\u9fff]/;
+    const zhLeft = enLines.filter((l) => CJK.test(l));
+    expect(zhLeft, `英文模式下第 2 步正文还有中文：${zhLeft.slice(0, 2).join(' / ')}`).toEqual([]);
+    // 反向：中文那三句此刻**不在**屏上（"真的换了"而不是两段并存）
+    for (const l of zhLines) expect(enLines, '英文帧里还留着中文正文').not.toContain(l);
+  });
+
+  it('英文那份正文的形态：恰好三段、非空、零汉字、逐位对应中文（不新增也不减少承诺）', () => {
+    expect(CONSENT_BODY_EN.length, '英文正文不是三段（条数必须与中文逐位对应）').toBe(3);
+    const CJK = /[\u3400-\u9fff]/;
+    for (const [i, l] of CONSENT_BODY_EN.entries()) {
+      expect(l.trim().length, `英文正文第 ${i + 1} 段是空的`).toBeGreaterThan(0);
+      expect(CJK.test(l), `英文正文第 ${i + 1} 段里有汉字`).toBe(false);
+    }
+    // 逐位的语义锚点（不许换序：① 允许后存哪 ② 没有后端服务器 ③ 不允许也能玩 + 关掉即丢）
+    expect(CONSENT_BODY_EN[0].toLowerCase(), '第 1 段没说"允许之后才保存"').toContain('once you allow');
+    expect(CONSENT_BODY_EN[1].toLowerCase(), '第 2 段没说"没有后端服务器"').toContain('no backend server');
+    expect(CONSENT_BODY_EN[2].toLowerCase(), '第 3 段没说"不允许也能玩全部内容"').toContain('play everything');
+  });
+
+  it('★ 2026-10-07：英文模式下**整屏**零汉字（唯一例外是两个语言按钮本身）', () => {
+    restores.push(installStubDom());
+    const b = boot(fakeStorage(), 'en');
+    clickIn(one(b.overlay, '.onboarding-lang-btn[data-lang="en"]'));
+    // 三级都用同一棵树走一遍（第 3 步的按钮原来就漏在重写之外）
+    clickIn(one(b.overlay, '.onboarding-grant'));
+    const CJK = /[\u3400-\u9fff]/;
+    const langBtns = new Set(descendants(one(b.overlay, '.onboarding-lang-btns')));
+    const offenders: string[] = [];
+    for (const n of descendants(b.overlay)) {
+      if (langBtns.has(n)) continue;                 // 「中文 / English」是**刻意**双语的
+      if (typeof n.text !== 'string' || n.text.trim() === '') continue;
+      if (CJK.test(n.text)) offenders.push(`${n.cls}: ${n.text.slice(0, 40)}`);
+    }
+    expect(offenders, `英文模式下向导里还有中文：${offenders.slice(0, 5).join(' | ')}`).toEqual([]);
+  });
+
   it('宿主注入的那三句与正文一致（`main.ts` 的 `consentBodyLines` 不许换成整份隐私全文）', () => {
     // 生成式读取：从 `main.ts` 里抽出那个函数体，断言它挑的就是那三句
     // （换成 `privacyLines()` 会让真机上第 2 步铺出十几段 —— 真机实测抓到过这个形态）
@@ -460,6 +535,12 @@ describe('第 2 步 = 旧授权弹窗并进来的那一步（界面文字双语 
       expect(body, `宿主挑正文时漏了 ${name}`).toContain(name);
     }
     expect(body, '宿主把整份隐私全文（privacyLines()）当成了授权正文').not.toMatch(/privacyLines\s*\(/);
+    /**
+     * ★ 2026-10-07（用户要求）：英文模式下这三段要换成英文 ⇒ 宿主那个函数体里必须出现
+     * `CONSENT_BODY_EN`（英文显示层）与一个语言判断，否则"英文模式下仍是中文"会悄悄回来。
+     */
+    expect(body, '宿主挑正文时没有英文那一份（`CONSENT_BODY_EN`）').toContain('CONSENT_BODY_EN');
+    expect(body, '宿主挑正文时没有按语言分岔').toMatch(/getLang\s*\(/);
     // 反向自证：那三句常量确实是"承诺句"（不是随便一个字符串常量）
     expect(CONSENT_ALLOW_NOTE, 'CONSENT_ALLOW_NOTE 不是以句号收尾的承诺句').toMatch(/。$/);
     expect(CONSENT_DENY_NOTE, 'CONSENT_DENY_NOTE 不是以句号收尾的承诺句').toMatch(/。$/);

@@ -98,6 +98,8 @@ import { renderLocalData } from './ui/local-data';
  * 见 `tests/ui/privacy-consumers.test.ts`）：本文件的代码位里因此不许手写任何隐私承诺句。
  */
 import { CONSENT_ALLOW_NOTE, CONSENT_DENY_NOTE, PRIVACY_COPY } from './app/privacy';
+// ★ 2026-10-07（用户要求）：向导第 2 步那三段正文的**英文显示层**（中文仍是 `privacy.ts`，见上面那行）
+import { CONSENT_BODY_EN } from './i18n/consent-en';
 // ★ 2026-10-01（用户要求）：**卡牌制作器**（「自定义协议与卡牌」屏）的接线。
 //   屏与它的全部逻辑在 `src/ui/cardmaker/`（移植自开源项目 COMPILER · Card Builder，
 //   作者 Albert Blanco，MIT 许可）；本文件只做两件事：
@@ -5221,7 +5223,14 @@ function showStartScreen(): void {
  * 判据在 `tests/i18n/onboarding.test.ts`：正文**恰好三段**，且逐句都在 `privacyLines()` 里。
  */
 function consentBodyLines(): readonly string[] {
-  return [CONSENT_ALLOW_NOTE, PRIVACY_COPY.noServerStorage[0], CONSENT_DENY_NOTE];
+  const zh = [CONSENT_ALLOW_NOTE, PRIVACY_COPY.noServerStorage[0], CONSENT_DENY_NOTE];
+  /**
+   * ★ 2026-10-07（用户要求）：英文模式下这三段**也要是英文**（原话：「你看，这两个地方有中文
+   * 没有处理完」，截图 1 就是这里）。中文仍是上面那三个常量（隐私承诺句的唯一家，一个字不动）；
+   * 英文取自显示层 `src/i18n/consent-en.ts`。条数对不上就回退中文 —— 宁可中文，不留空洞。
+   */
+  if (getLang() === 'en' && CONSENT_BODY_EN.length === zh.length) return CONSENT_BODY_EN;
+  return zh;
 }
 
 /**
