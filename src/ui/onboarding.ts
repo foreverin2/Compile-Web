@@ -250,9 +250,26 @@ export function onboardingOverlayElement(
     s1Btns.appendChild(b);
   }
   const s1Hint = el('p', 'onboarding-hint');
+  // ★ 2026-10-09：第 1 步现在有**两句**提示（语言那句 + 新加的 67% 那句）⇒ 给这一句一个 data-role，
+  //   让"按步取那一条"的判据（`tests/i18n/onboarding.test.ts`）不必靠"本步只有一条 hint"这个巧合。
+  s1Hint.dataset.role = 'lang-hint';
+  /**
+   * ★ 2026-10-09（**用户要求**，原话）：「我希望在新人玩家进入的最开始加上建议 67% 大小的提示」。
+   *
+   * 所以那句「建议把画面调到 67% 左右游玩…」放在**第 1 步**（新玩家打开游戏看到的**第一屏**：
+   * 选语言那一屏），措辞复用模式页那条原文（键 `mode.zoom-hint`，中英两表都有，改一处三处同步）。
+   *
+   * ⚠️ 这**不是**"某一步专属"的提示，而是见面第一眼就说的环境提示 ⇒ 与第 1 步的
+   * `s1Hint`（"之后可以在设置里改语言"）分开两行：一句说语言、一句说画面大小。
+   * ⚠️ 本程序**不许**自己去改页面缩放（那次"应用内 Ctrl+滚轮改整页缩放"因为特效层错位被整份撤掉，
+   * 教训记在 `src/ui/home.ts` 的 `mode.zoom-hint` 那段注释里）⇒ 这里只提示，不碰任何 zoom。
+   */
+  const s1ZoomHint = el('p', 'onboarding-hint onboarding-zoom-hint');
+  s1ZoomHint.dataset.role = 'zoom-hint';
   step1.appendChild(s1Label);
   step1.appendChild(s1Btns);
   step1.appendChild(s1Hint);
+  step1.appendChild(s1ZoomHint);
 
   /* ── 第 2 步：同意保存 + 取名字（旧授权弹窗并进来的那一步） ──
    *
@@ -355,19 +372,13 @@ export function onboardingOverlayElement(
   s3Actions.appendChild(startBtn);
   s3Actions.appendChild(skipBtn);
   /**
-   * ★ 2026-10-07（用户要求，选的是"什么都不自动改，只把 67% 提示说清楚"这一档）：
-   * 新玩家在大厅页之前**不一定**见过模式页那句"建议 67% 游玩"，而教学正是画面最满的一屏 ⇒
-   * 把**同一句**（键 `mode.zoom-hint`，中英两表都有，一个字都没新写）摆到第 3 步按钮下面。
-   *
-   * ⚠️ 本程序**不许**自己去改页面缩放（理由与那次教训写在 `src/ui/home.ts:208-218`：
-   * 整页缩放会让按 100% 布局算坐标的特效层错位，那套实现当时被整份撤掉了）⇒ 这里只提示、
-   * 一个 zoom 相关的东西都不碰，特效与玩家自己的浏览器缩放都不受影响。
+   * ★ 2026-10-09（用户要求「在新人玩家进入的最开始加上建议 67% 大小的提示」）：
+   * 那句提示**已经从这一屏挪到第 1 步**（见 `s1ZoomHint` 上面那段注释）——
+   * 同一个三步向导里说两遍是噪音，而"最开始"那一屏才是用户要的位置。
+   * 第 3 步保留的仍是它本来的三件东西：问句 + 两个按钮。
    */
-  const s3ZoomHint = el('p', 'onboarding-hint onboarding-zoom-hint');
-  s3ZoomHint.dataset.role = 'zoom-hint';
   step3.appendChild(s3Question);
   step3.appendChild(s3Actions);
-  step3.appendChild(s3ZoomHint);
 
   body.appendChild(step1);
   body.appendChild(step2);
@@ -436,8 +447,8 @@ export function onboardingOverlayElement(
      */
     startBtn.textContent = t('onboarding.tutorial.start');
     skipBtn.textContent = t('onboarding.tutorial.skip');
-    // ★ 2026-10-07：第 3 步的"建议 67%"提示（与上面两条同一条纪律：跟着语言重写）
-    s3ZoomHint.textContent = t('mode.zoom-hint');
+    // ★ 2026-10-09：那句「建议 67%」现在挂在**第 1 步**（新玩家看到的第一屏），同样跟着语言重写
+    s1ZoomHint.textContent = t('mode.zoom-hint');
 
     for (const { id, btn } of langButtons) {
       // 当前语言那一枚标出来（视觉上是 `.onboarding-lang-btn.on`，属性给测试与读屏）

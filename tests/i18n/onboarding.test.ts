@@ -279,7 +279,7 @@ describe('向导三步：顺序、可见性、文案逐字（中英各一遍）'
     expect(one(cn.overlay, '.onboarding-progress').text).toBe('第 1 步 / 共 3 步');
     expect(textOf(one(cn.overlay, 'section.onboarding-step[data-step="1"] .onboarding-label')))
       .toContain(t('onboarding.lang.label'));
-    expect(one(cn.overlay, 'section.onboarding-step[data-step="1"] .onboarding-hint').text)
+    expect(one(cn.overlay, 'section.onboarding-step[data-step="1"] [data-role="lang-hint"]').text)
       .toBe(t('onboarding.lang.hint'));
     // 语言选项的标签**不跟着语言变**（只会英文的玩家第一次进来也得认得出）
     expect(descendants(one(cn.overlay, '.onboarding-lang-btns')).map((n) => n.text).filter((s) => s !== ''),
@@ -308,9 +308,11 @@ describe('向导三步：顺序、可见性、文案逐字（中英各一遍）'
     restores.push(installStubDom());
     const b = boot(fakeStorage(), 'zh');
     // 第 1 步那句：之后可在「首页 → 设置」更改
-    expect(one(b.overlay, 'section.onboarding-step[data-step="1"] .onboarding-hint').text,
+    // ★ 2026-10-09：改按 `[data-role="lang-hint"]` 取 —— 第 1 步现在有**两句**提示
+    //   （语言那句 + 新人第一眼的 67% 那句），"本步只有一条 .onboarding-hint"这个巧合不再成立。
+    expect(one(b.overlay, 'section.onboarding-step[data-step="1"] [data-role="lang-hint"]').text,
       '第 1 步的提示不是用户要的那一句').toBe('之后可以在首页的「设置」里更改语言。');
-    expect(one(b.overlay, 'section.onboarding-step[data-step="1"] .onboarding-hint').text,
+    expect(one(b.overlay, 'section.onboarding-step[data-step="1"] [data-role="lang-hint"]').text,
       '第 1 步的提示没指向设置').toContain('设置');
     /**
      * 第 2 步那句（★ 2026-10-02 线上真机验收 **D2**）：用户口径要的是**两件事都说到** ——
@@ -526,20 +528,27 @@ describe('第 2 步 = 旧授权弹窗并进来的那一步（界面文字双语 
     expect(offenders, `英文模式下向导里还有中文：${offenders.slice(0, 5).join(' | ')}`).toEqual([]);
   });
 
-  it('★ 2026-10-07：第 3 步有「建议 67%」提示，且跟着语言走（不改缩放，只提示）', () => {
+  it('★ 2026-10-09：「建议 67%」在**第 1 步**（新人第一眼），且第 3 步不重复', () => {
     restores.push(installStubDom());
     const b = boot(fakeStorage(), 'zh');
-    clickIn(one(b.overlay, '.onboarding-lang-btn[data-lang="zh"]'));
-    clickIn(one(b.overlay, '.onboarding-grant'));
+    // ① 第 1 步（**还没点任何东西**）就有它 —— 用户要的是"新人玩家进入的最开始"
     const hint = one(b.overlay, '[data-role="zoom-hint"]');
-    expect(hint.text, '第 3 步没有那句缩放提示').toBe(ZH['mode.zoom-hint']);
-    // 那句必须点名 67% 与"浏览器自带的缩放"（否则玩家不知道该怎么调）
+    expect(hint.text, '第 1 步没有那句缩放提示').toBe(ZH['mode.zoom-hint']);
     expect(hint.text, '提示里没说 67%').toContain('67%');
     expect(hint.text, '提示里没说用浏览器自带的缩放').toContain('浏览器');
-    // 切英文 ⇒ 同一条变成英文那一份
+    const step1 = queryAllIn(b.overlay, 'section.onboarding-step[data-step="1"]')[0];
+    expect(descendants(step1).some((n) => n === hint), '那句提示不在第 1 步里').toBe(true);
+    // ② 它跟着语言走（同一棵树上就地重画）
     clickIn(one(b.overlay, '.onboarding-lang-btn[data-lang="en"]'));
     expect(one(b.overlay, '[data-role="zoom-hint"]').text, '英文下缩放提示没跟着换')
       .toBe(EN['mode.zoom-hint']);
+    // ③ 反向锚点：**第 3 步不再重复**同一句（同一个三步向导里说两遍是噪音；要恢复的话改这条腿）
+    clickIn(one(b.overlay, '.onboarding-grant'));
+    const step3 = queryAllIn(b.overlay, 'section.onboarding-step[data-step="3"]')[0];
+    expect(descendants(step3).some((n) => n === hint), '第 3 步又出现了一次那句提示').toBe(false);
+    expect(textOf(step3), '第 3 步那一段里还留着 67% 那句').not.toContain('67%');
+    // 反向锚点 2：那一屏不是空的（否则上面两条断言在空集合上跑）
+    expect(textOf(step1).trim().length, '第 1 步整段是空的').toBeGreaterThan(0);
   });
 
   it('宿主注入的那三句与正文一致（`main.ts` 的 `consentBodyLines` 不许换成整份隐私全文）', () => {
