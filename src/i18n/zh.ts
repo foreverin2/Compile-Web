@@ -660,6 +660,16 @@ export const ZH: Readonly<Record<string, string>> = {
   'common.cancel': '取消',
   'common.feedback': '反馈',
   'common.changelog': '更新日志',
+  /**
+   * ★ 2026-10-07（用户要求）：首页右上角「玩家群」（更新日志下方那一个）—— 点开显示 QQ 群二维码。
+   * 四条文案：按钮 / 面板标题 / 图片 alt / 面板里那句提示（带群号）。
+   * ⚠️ 二维码**图片本身**是用户给的素材，图上那几行字英文界面下也是中文（不重画）⇒
+   * 提示句必须把"这是什么、群号多少"说全，英文界面下才读得懂。
+   */
+  'common.qqgroup': '玩家群',
+  'qqgroup.title': '加入玩家群',
+  'qqgroup.alt': '玩家群二维码',
+  'qqgroup.hint': '用手机 QQ 扫一扫上面的二维码即可加入群聊（群号：{no}）。',
   'common.coin.heads': '正面',
   'common.coin.tails': '反面',
 

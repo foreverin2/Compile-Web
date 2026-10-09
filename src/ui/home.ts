@@ -10,6 +10,8 @@ import { POOL_MIN, normalizePoolIds } from '../app/pool-choice';
 import type { PoolChoice } from '../app/pool-choice';
 import { openZoom, buildCardTextEl, buildProtocolRatingPanel, bindClickOrDouble } from './render';
 import { changelogElement } from './changelog';
+// ★ 2026-10-07（用户要求）：首页右上角「玩家群」（更新日志下方）—— 点开显示 QQ 群二维码
+import { qqGroupElement } from './qq-group';
 import { FX_SETTINGS, isFxSettingOn } from './fx-settings';
 // ★ 2026-10-01（P0，用户拍板"UI 全量双语"）：设置小窗是**第一个真实消费者** —— 它的每一条
 // 文案都从 `src/i18n/` 取。中文值与这里原来的字面量逐字一致（既有测试零改动）。
@@ -564,6 +566,24 @@ export function renderHome(root: HTMLElement, nav: HomeNav): void {
   }));
   logWrap.appendChild(changelogElement({ onClose: () => { logWrap.classList.remove('changelog-open'); } }));
   screen.appendChild(logWrap);
+
+  /**
+   * ★ 2026-10-07（**用户要求**）：**更新日志下方**再加一个「玩家群」入口 —— 点开显示 QQ 群二维码。
+   *
+   * 用户原话：「我希望在首页右上角的更新日志下方再添加上一个按钮，点击后用于展示 qq 群的进群二维码，
+   * 就是我给的这个图片」。
+   *
+   * 形态与上面那个**逐字同款**（wrapper + 按钮切类名 + 抽屉自己管关闭），只有两点不同：
+   *  1. 类名是 `qqgroup-*`（内容与版式在 `src/ui/qq-group.ts`，本文件只管开合）；
+   *  2. 位置由 `styles-local.css` 的 `.qqgroup-wrap { top: 60px }` 压在更新日志那一枚**下面**
+   *     （更新日志是 `top:16px`，两者 right 都是 18px）。
+   */
+  const qqWrap = el('div', 'qqgroup-wrap');
+  qqWrap.appendChild(button('btn qqgroup-open', t('common.qqgroup'), () => {
+    qqWrap.classList.toggle('qqgroup-open');
+  }));
+  qqWrap.appendChild(qqGroupElement({ onClose: () => { qqWrap.classList.remove('qqgroup-open'); } }));
+  screen.appendChild(qqWrap);
 
   /**
    * ★ 2026-10-01（用户要求）：**左上角「反馈」按钮**。

@@ -532,6 +532,13 @@ export const EN: Readonly<Record<string, string>> = {
   'common.cancel': 'Cancel',
   'common.feedback': 'Feedback',
   'common.changelog': 'Changelog',
+  // ★ 2026-10-07 (user's request): the "player group" entry under the changelog (QQ group QR code).
+  // NOTE: the QR image itself is the user's own artwork and stays Chinese; these strings carry the
+  // "what is this / what is the group number" part so English players still know what to do.
+  'common.qqgroup': 'Player group',
+  'qqgroup.title': 'Join the player group',
+  'qqgroup.alt': 'Player group QR code',
+  'qqgroup.hint': 'Scan the QR code above with mobile QQ to join the group chat (group no. {no}).',
   'common.coin.heads': 'Heads',
   'common.coin.tails': 'Tails',
 

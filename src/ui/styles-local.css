@@ -1088,6 +1088,34 @@
 .home-icp-link { pointer-events: auto; color: #7fe9ff; text-decoration: underline; }
 .home-icp-link:hover { color: #b9f6ff; }
 /*
+ * ★ 2026-10-07（用户要求）：首页右上角**「玩家群」**入口 —— 点开显示 QQ 群二维码。
+ *
+ * 位置：与更新日志**同一个右上角**、`top` 压在它下面（用户原话：「在首页右上角的更新日志下方」）。
+ * 更新日志那一枚是 `top:16px; right:18px`（`.changelog-wrap`），它的按钮高 ≈31px ⇒ 这里取 60px
+ * 留出 ~13px 间隙。几何与开合方式**照抄更新日志那一套**（wrapper 上的类名开合 + 右侧整屏抽屉），
+ * 只换类名前缀（`qqgroup-*`），免得两套抽屉的定位规则分叉。
+ */
+.qqgroup-wrap { position: absolute; top: 60px; right: 18px; z-index: 40; }
+.qqgroup-open { font-size: 13px; padding: 7px 14px; }
+.qqgroup-panel {
+  display: none;
+  position: fixed; top: 0; right: 0; z-index: 60;
+  width: min(380px, 94vw); height: 100vh; box-sizing: border-box;
+  overflow-y: auto; overscroll-behavior: contain;
+  background: rgba(9, 11, 20, 0.97); border-left: 1px solid #2a3140;
+  padding: 18px 22px 48px; color: #dde;
+}
+.qqgroup-wrap.qqgroup-open .qqgroup-panel { display: block; }
+.qqgroup-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.qqgroup-title { font-size: 18px; font-weight: 700; color: #00ffcc; letter-spacing: 1px; }
+.qqgroup-close { font-size: 12px; padding: 5px 12px; }
+/* 二维码本体：等比缩放、白底（图本身带圆角卡片，白底让它在深色面板上不"浮"） */
+.qqgroup-img {
+  display: block; width: 100%; max-width: 320px; height: auto;
+  margin: 14px auto 0; border-radius: 10px; background: #fff;
+}
+.qqgroup-hint { margin: 12px 0 0; font-size: 12px; line-height: 1.7; color: #7d86a8; text-align: center; }
+/*
  * ★ 2026-10-06（用户要求第二项设置）：「手牌按抽牌顺序」那一行的说明。
  * 与 `.settings-instant-note` / `.settings-note` **逐字同一套声明**，类名必须另起一个 ——
  * 既有腿要求 `.settings-note` 在树里唯一，三条说明行各占各的类名（同 `.settings-lang-hint`）。
